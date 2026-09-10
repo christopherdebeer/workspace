@@ -11,10 +11,6 @@ import type {
 export const clamp = (v: number, lo: number, hi: number): number =>
   v < lo ? lo : v > hi ? hi : v;
 
-export function validPackedLine(points: PackedXZ, minimumPoints = 2): boolean {
-  return points.length >= minimumPoints * 2 && points.length % 2 === 0;
-}
-
 export function featureBounds(feature: HydroFeature): WorldBounds {
   const out = { minX: Infinity, minZ: Infinity, maxX: -Infinity, maxZ: -Infinity };
   const note = (p: PackedXZ): void => {
@@ -117,22 +113,6 @@ export function distanceToRing(x: number, z: number, ring: PackedXZ): number {
     best = Math.min(best, Math.hypot(x - (ax + dx * t), z - (az + dz * t)));
   }
   return best;
-}
-
-/** Positive inside water, negative outside, with holes correctly signed. */
-export function signedDistanceToArea(
-  x: number,
-  z: number,
-  geometry: Extract<HydroGeometry, { type: 'area' }>,
-): number {
-  let distance = Infinity;
-  let inside = false;
-  for (const polygon of geometry.polygons) {
-    distance = Math.min(distance, distanceToRing(x, z, polygon.outer));
-    for (const hole of polygon.holes) distance = Math.min(distance, distanceToRing(x, z, hole));
-    if (pointInPolygon(x, z, polygon)) inside = true;
-  }
-  return inside ? distance : -distance;
 }
 
 export function sampleElevation(

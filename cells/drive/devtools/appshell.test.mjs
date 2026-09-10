@@ -45,7 +45,18 @@ for (const path of shell) {
 // not a broken install — it is an icon that is simply missing from an
 // installed app when the network is off, which is harder to notice and just as
 // wrong.
+// …EXCEPT WHAT IS FETCHED ON DEMAND, BY DESIGN. The globe's base texture is
+// 317KB the planet section of CLAUDE.md says is "fetched on the first wide
+// chart and never at boot" — a cost nobody driving should pay, and an install
+// is a boot. It is served from static/ and deliberately not precached; the
+// check here is the other way round, so it cannot creep into the shell list
+// without the design being revisited.
+const ON_DEMAND = new Set(['/globe-base.png']);
 for (const path of assets) {
+  if (ON_DEMAND.has(path)) {
+    check(`on demand, not precached: ${path}`, !shell.includes(path), shell);
+    continue;
+  }
   check(`precached: ${path}`, shell.includes(path), shell);
 }
 

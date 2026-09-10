@@ -36,6 +36,22 @@ export interface MissionCard {
   ok?: boolean;
 }
 export interface ToastCard { kicker: string; head: string; body: string }
+/**
+ * THE ROUTE, AS A THING YOU CAN PUT DOWN. A goal set from a site card drove
+ * the truck with nothing on the glass that said so, and nothing to take hold
+ * of to stop it — the plan was a line on the chart and a fact in a probe.
+ * Now it is a chip on the same top-left row as an active task, in the plan's
+ * own mint, that opens to a card with the one action a plan needs: CANCEL.
+ * The chart keeps the dotted line; the seat gets the chip.
+ */
+export interface RouteCard {
+  name: string;
+  /** What is left to drive, and by what — "12.3KM BY ROAD", "800M DIRECT". */
+  body: string;
+  /** Collapsed to the chip (the default); expanded shows the card. */
+  minimized: boolean;
+  chip: string;
+}
 
 /**
  * A STATION'S TERMINAL — the one screen in the game that belongs to the world
@@ -71,12 +87,16 @@ export interface SiteCard {
   rows: Array<[string, string]>;
   /** The relocation's label — absent when the site is not somewhere to go. */
   go?: string;
+  /** The second action: make this place the drive's goal. Absent when the
+   *  site has no position worth steering to. */
+  goal?: string;
   /** One line under the action: what the gesture already did for you. */
   note?: string;
 }
 
 export interface Overlays {
   mission(m: MissionCard | null): void;
+  route(r: RouteCard | null): void;
   toast(t: ToastCard | null): void;
   /** The in-range chip that opens the terminal; null when out of range. */
   prompt(label: string | null): void;
@@ -97,6 +117,10 @@ export function createOverlays(
   onWake: () => void,
   onSiteGo: () => void,
   onSiteClose: () => void,
+  onSiteGoal: () => void,
+  onRouteExpand: () => void,
+  onRouteCollapse: () => void,
+  onRouteCancel: () => void,
 ): Overlays {
   const C = colors;
   const style = document.createElement('style');
@@ -165,6 +189,31 @@ export function createOverlays(
     padding: 4px 9px 3px; font: inherit; font-family: inherit; font-size: 10px;
     letter-spacing: 1px; display: none; }
   #ov-task .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
+  /* THE ROUTE'S CHIP shares the task's row and sits under it when both are
+     up: --route-dy is set by the renderer, not the stylesheet, because only
+     it knows whether the task chip is showing. Mint, the plan's colour. */
+  #ov-route { top: calc(env(safe-area-inset-top, 0px) + var(--rail-b, 160px) + var(--route-dy, 0px));
+    left: 10px; cursor: pointer;
+    color: ${C.good}; border: 1px solid ${C.dim}; --bk: ${C.good};
+    background-color: rgba(8,20,23,0.78);
+    padding: 4px 9px 3px; font: inherit; font-family: inherit; font-size: 10px;
+    letter-spacing: 1px; display: none; }
+  #ov-route .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
+  /* THE GOAL'S BANNER SITS IN THE TOP THIRD, on the message rail's own line —
+     a compact centred plate, not a full-width slab that grows down into the
+     middle of the road. With the rail free it hangs UPWARD off that line, so
+     it occupies roughly the 22-33% band and leaves the road clear; with the
+     task card already on the rail it drops below it instead. Either way the
+     offset is --rcard-dy, set by the renderer, because only it knows what
+     else is up and how tall the two plates measure. */
+  #ov-routecard { top: calc(env(safe-area-inset-top, 0px) + var(--msg-y, 88px) + var(--rcard-dy, 0px));
+    left: 50%; transform: translateX(-50%); width: max-content;
+    max-width: min(92vw, 400px); text-align: center;
+    padding: 6px 12px 8px; border: 1px solid ${C.good}; background: rgba(8,20,23,0.86); display: none; }
+  #ov-routecard .cancel { margin: 7px auto 0; padding: 4px 18px 3px; cursor: pointer; display: block;
+    color: ${C.bad}; border: 1px solid ${C.bad}; background-color: rgba(220,90,80,0.08);
+    font: inherit; font-family: inherit; font-size: 11px; font-weight: 700;
+    letter-spacing: 2px; width: 100%; }
   /* The terminal prompt sits low-centre, above the stick's reach — a door,
      not a dialog. */
   #ov-term-go { bottom: calc(env(safe-area-inset-bottom, 0px) + 168px); left: 50%;
@@ -252,6 +301,32 @@ export function createOverlays(
   chip.append(chipIco, chipLab);
   chip.addEventListener('click', onExpand);
   document.body.appendChild(chip);
+  // THE ROUTE: its chip and its card, the same two states as the task.
+  const rchip = document.createElement('button');
+  rchip.id = 'ov-route';
+  rchip.className = 'ov ui bkt';
+  const rchipIco = document.createElement('span');
+  rchipIco.className = 'ico';
+  rchipIco.textContent = ICON.road;
+  const rchipLab = document.createElement('span');
+  rchip.append(rchipIco, rchipLab);
+  rchip.addEventListener('click', onRouteExpand);
+  document.body.appendChild(rchip);
+  const rc = card('ov-routecard');
+  rc.kicker.textContent = 'ROUTE';
+  rc.head.style.color = C.good;
+  const rx = document.createElement('div');
+  rx.className = 'x';
+  rx.textContent = 'X';
+  rx.addEventListener('click', (e) => { e.stopPropagation(); onRouteCollapse(); });
+  rc.root.appendChild(rx);
+  const rcancel = document.createElement('button');
+  rcancel.className = 'cancel bkt';
+  rcancel.style.setProperty('--bk', C.bad);
+  rcancel.textContent = 'CANCEL ROUTE';
+  rcancel.addEventListener('click', (e) => { e.stopPropagation(); onRouteCancel(); });
+  rc.root.appendChild(rcancel);
+  let rKey = '';
   const t = card('ov-toast');
   t.kicker.textContent = 'SURVEYED';
   t.head.style.color = C.good;
@@ -298,13 +373,18 @@ export function createOverlays(
   const sRows = document.createElement('div'); sRows.className = 't-rows';
   const sGo = document.createElement('button'); sGo.className = 't-go';
   sGo.addEventListener('click', (e) => { e.stopPropagation(); onSiteGo(); });
+  // The second action, under the first: RELOCATE puts you there, DRIVE TO
+  // makes it the thing the road is chosen for. Same button treatment, so
+  // neither reads as the safer one.
+  const sGoal = document.createElement('button'); sGoal.className = 't-go';
+  sGoal.addEventListener('click', (e) => { e.stopPropagation(); onSiteGoal(); });
   const sNote = document.createElement('div'); sNote.className = 't-note';
   const sx = document.createElement('div');
   sx.className = 'x';
   sx.style.display = 'block';
   sx.textContent = 'X';
   sx.addEventListener('click', (e) => { e.stopPropagation(); onSiteClose(); });
-  site.append(sName, sSub, sStatus, sRows, sGo, sNote, sx);
+  site.append(sName, sSub, sStatus, sRows, sGo, sGoal, sNote, sx);
   document.body.appendChild(site);
 
   let mKey = '', tKey = '', mReady = false, gKey = '', teKey = '', siKey = '';
@@ -334,6 +414,37 @@ export function createOverlays(
       mab.style.display = mc.canSetAside ? 'block' : 'none';
       mok.style.display = mc.ok ? 'block' : 'none';
       m.root.style.display = 'block';
+    },
+    route(r) {
+      const taskUp = chip.style.display === 'block';
+      const cardUp = m.root.style.display === 'block';
+      const key = r ? `${r.name}|${r.body}|${r.minimized}|${r.chip}|${taskUp}|${cardUp}` : '';
+      if (key === rKey) return;
+      rKey = key;
+      if (!r) { rc.root.style.display = 'none'; rchip.style.display = 'none'; return; }
+      // Under the task's chip when that is up, on its row when it is not.
+      rchip.style.setProperty('--route-dy', taskUp ? '30px' : '0px');
+      if (r.minimized) {
+        rc.root.style.display = 'none';
+        rchipLab.textContent = r.chip;
+        rchip.style.display = 'block';
+        return;
+      }
+      rchip.style.display = 'none';
+      rc.head.textContent = r.name;
+      rc.body.textContent = r.body;
+      // THE X HAS TO BE TURNED ON. `.ov .x` ships hidden and each card opts in
+      // — the task card does it through `dismissable` — so this one was built,
+      // wired and invisible: the banner could be cancelled and not put away,
+      // which is the opposite of the two actions' weights.
+      rx.style.display = 'block';
+      // Measured after it is shown, because a plate has no height until it is
+      // drawn: hang it off the rail (its own height up) when the rail is free,
+      // and below the task card when that owns the line.
+      rc.root.style.setProperty('--rcard-dy', '0px');
+      rc.root.style.display = 'block';
+      rc.root.style.setProperty('--rcard-dy',
+        cardUp ? `${m.root.offsetHeight + 8}px` : `${-rc.root.offsetHeight}px`);
     },
     toast(tc) {
       const key = tc ? `${tc.head}|${tc.body}` : '';
@@ -378,7 +489,7 @@ export function createOverlays(
     },
     site(sc) {
       const key = sc
-        ? `${sc.name}|${sc.status}|${sc.go}|${sc.note}|${sc.rows.map((r) => r.join('=')).join('|')}`
+        ? `${sc.name}|${sc.status}|${sc.go}|${sc.goal}|${sc.note}|${sc.rows.map((r) => r.join('=')).join('|')}`
         : '';
       if (key === siKey) return;
       siKey = key;
@@ -398,6 +509,8 @@ export function createOverlays(
       }));
       sGo.textContent = sc.go ?? '';
       sGo.style.display = sc.go ? 'block' : 'none';
+      sGoal.textContent = sc.goal ?? '';
+      sGoal.style.display = sc.goal ? 'block' : 'none';
       sNote.textContent = sc.note ?? '';
       sNote.style.display = sc.note ? 'block' : 'none';
       site.style.display = 'block';

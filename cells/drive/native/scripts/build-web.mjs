@@ -2,6 +2,7 @@ import { build } from 'esbuild';
 import { cp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { OFFLINE_ALIASES } from '../../devtools/offline-deps.mjs';
 
 const NATIVE = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CELL = resolve(NATIVE, '..');
@@ -47,6 +48,8 @@ const result = await build({
   metafile: true,
   alias: {
     three: join(NATIVE, 'node_modules/three/build/three.module.js'),
+    // esm.sh-only packages (client/imports.json) stood in for, offline.
+    ...OFFLINE_ALIASES,
   },
   define: {
     __DRIVE_PACKAGED__: 'true',

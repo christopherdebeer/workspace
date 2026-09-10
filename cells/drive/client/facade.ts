@@ -119,6 +119,26 @@ export const MARK_TUNING: MarkTuning = {
 // every wall in the world — a per-material copy would tune one building.
 const uMarkA = { value: new THREE.Vector4() };
 const uMarkB = { value: new THREE.Vector4() };
+/**
+ * ── NIGHT, AND WHAT A BUILDING IS AFTER DARK ──
+ *
+ * x = how much night (1 − dayF), y = what share of the openings are lit.
+ *
+ * Measured before this existed: at `?time=NIGHT` a Suresnes wall renders at
+ * sRGB 13 and a linear luminance of 0.0052, against ground beside it at 0.13.
+ * A building was a PURE BLACK SILHOUETTE — a hole in the frame with no wall,
+ * no edge and not one lit window anywhere in the world, because the only thing
+ * standing in for the missing bounce is `bldSkylit`'s emissive lift and that is
+ * scaled by daylight, correctly, to nothing.
+ *
+ * A lit window is the cheapest realism in the game: per-fragment work is the
+ * abundant resource here (the frame is ~148x320) and this is a hash, a step and
+ * an add. It is also the one thing that makes a town read as INHABITED, which
+ * no amount of daytime surface detail does.
+ *
+ * Written by main.ts beside the skylight lift, where dayF already lives.
+ */
+export const uFacNight = { value: new THREE.Vector2(0, 0.34) };
 const uMarksU = { value: markAtlas };
 const uMarkTinsU = { value: markTins };
 function pushTuning(): void {
@@ -144,6 +164,7 @@ export function facade(mat: THREE.Material): void {
     sh.uniforms.uMarkTins = uMarkTinsU;
     sh.uniforms.uMarkA = uMarkA;
     sh.uniforms.uMarkB = uMarkB;
+    sh.uniforms.uFacNight = uFacNight;
     // THE BASE RIDES IN AS A VERTEX ATTRIBUTE, not off the model matrix.
     // Buildings batch per tile now (see flushBuildings), so one mesh carries
     // hundreds of them and modelMatrix[3][1] — the old source of "this
@@ -162,7 +183,7 @@ export function facade(mat: THREE.Material): void {
       .replace('#include <common>', `#include <common>
         varying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark;
         uniform sampler2D uMarks; uniform sampler2D uMarkTins;
-        uniform vec4 uMarkA; uniform vec4 uMarkB;
+        uniform vec4 uMarkA; uniform vec4 uMarkB; uniform vec2 uFacNight;
         float fah(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 41.31); return fract(p.x * p.y); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
       {
@@ -181,13 +202,51 @@ export function facade(mat: THREE.Material): void {
           float ground = step(vFacH, 3.1);
           float open = mix(win, mix(win * step(0.52, f.y), door, step(r, 0.36)), ground);
           open *= step(r, 0.76);                    // the rest are bricked up
-          // Glass: mostly dark voids, a few catching the low sun.
-          vec3 glass = mix(vec3(0.05, 0.055, 0.07), vec3(0.13, 0.15, 0.17), fah(idc + vec2(2.7)));
+          // ── GLASS IS A DARKENING OF THE WALL, NOT AN ABSOLUTE COLOUR ──
+          //
+          // These were fixed values — 0.05 to 0.17 — on the assumption that the
+          // paint around them is pale limewash. Measured against the walls the
+          // world actually builds, that assumption fails in two common cases and
+          // INVERTS the façade when it does: on a face turned away from the sun,
+          // and on any dark paint (oxide-red barns, brick, stained timber), the
+          // wall renders below the glass and every window reads as a pale PANEL
+          // stuck on the building rather than as an opening. Photographed at
+          // Camps Bay as three beige rectangles on a red wall, and at Suresnes
+          // as the brightest thing on a shaded gable.
+          //
+          // A window is a hole: whatever the wall is doing, the opening is
+          // darker. So the void is a fraction OF the wall, with a small absolute
+          // term so pure-black paint still shows an opening at all. That is one
+          // multiply and it cannot invert.
+          float shade = 0.20 + 0.16 * fah(idc + vec2(2.7));
+          vec3 glass = diffuseColor.rgb * shade + vec3(0.012, 0.014, 0.020);
+          // A few catch the low sun. Still absolute, and rightly so — a
+          // reflection is the SKY's brightness, not the wall's.
           glass = mix(glass, vec3(0.62, 0.44, 0.2), step(0.94, fah(idc + vec2(11.3, 5.7))) * 0.75);
           diffuseColor.rgb = mix(diffuseColor.rgb, glass, open * 0.9);
           // A one-pixel lintel/sill so the opening has an edge, not just a hole.
           float lint = step(0.86, f.y) * step(0.2, f.x) * step(f.x, 0.8) * (1.0 - ground);
           diffuseColor.rgb *= 1.0 - lint * 0.25;
+          // ── SOMEBODY IS IN ──
+          //
+          // A share of the openings carry a light after dark. Per BAY, from the
+          // bay's own hash, so a building lights up in a scatter rather than all
+          // at once and the pattern is stable — a window that flickered as the
+          // truck drove past would be worse than a dark town.
+          //
+          // BINARY, like every other hard-edged thing here: the composite
+          // quantises to fourteen levels and dithers, so a soft falloff inside
+          // the pane becomes noise rather than a softer light. It goes to
+          // EMISSIVE and not to the diffuse colour, because at night the diffuse
+          // is multiplied by almost no light — tinting it would change nothing,
+          // which is the trap that makes this look like it is not working.
+          //
+          // Deliberately above the 0.62 bright-pass cut: a lit window at night
+          // SHOULD bloom, the way the cat's eyes and the retroreflective signs
+          // already do. Scaled by uFacNight.x so it is absent by day.
+          float litBay = step(fah(idc + vec2(23.1, 6.7)), uFacNight.y);
+          totalEmissiveRadiance += vec3(1.0, 0.74, 0.38) * 0.72
+            * open * litBay * uFacNight.x;
           // IVY. Whole columns of wall get claimed, thickest at the base and
           // thinning as it climbs — which is what makes a ruin read as reclaimed
           // rather than merely dirty.

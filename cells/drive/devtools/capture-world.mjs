@@ -402,3 +402,61 @@ for (const t of demReport) {
 }
 console.log(`  cover   ${CN}x${CN} @ ${cstep.toFixed(1)}m  classes ${[...new Set(cover)].sort((a, b) => a - b).join(',')}`);
 console.log(`  -> ${path}  (${(JSON.stringify(out).length / 1024).toFixed(0)}KB)`);
+
+// ── THE ECOREGION, PRINTED RATHER THAN STORED ────────────────────────────
+//
+// A capture cannot ASK for its region at run time: `ecoAt` refuses to fetch on
+// a fixture, because on the authored worlds that would pull the real ecology of
+// a synthetic crossroads' coordinates. So the region is declared in
+// CAPTURE_INDEX, and this is where the value comes from — one lookup at the
+// box's own centre, printed as the line to paste. It is not written into the
+// JSON: the JSON is the three world FETCHES and nothing else, and a fourth
+// source hiding in it is how a fixture stops being a record of what the game
+// would have streamed.
+//
+// A point answer for the whole box is honest at this scale: an ecoregion
+// boundary is not real to five kilometres and a capture is one or two.
+try {
+  const ez = 5, en = 2 ** ez;
+  const er = (lat * Math.PI) / 180;
+  const etx = Math.floor(((lon + 180) % 360 + 360) % 360 / 360 * en);
+  const ety = Math.floor((1 - Math.log(Math.tan(er) + 1 / Math.cos(er)) / Math.PI) / 2 * en);
+  const res = await fetch(`${CELL_BASE}/~/eco/v1/${ez}/${etx}/${ety}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const { regions = [] } = await res.json();
+  // The same even-odd test `client/eco.ts` ships, inline — this devtool has no
+  // build step and importing a .ts would need one.
+  const inRing = (ring) => {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > lat) === (yj > lat)) continue;
+      if (lon < xi + ((lat - yi) / (yj - yi)) * (xj - xi)) inside = !inside;
+    }
+    return inside;
+  };
+  let hit = null;
+  for (const reg of regions) {
+    const g = reg.g;
+    if (!g) continue;
+    const polys = g.type === 'MultiPolygon' ? g.coordinates : [g.coordinates];
+    for (const rings of polys) {
+      if (!rings?.[0] || !inRing(rings[0])) continue;
+      if (rings.slice(1).some(inRing)) continue;
+      hit = reg;
+      break;
+    }
+    if (hit) break;
+  }
+  if (hit) {
+    console.log(`  eco     ${hit.name} [biome ${hit.biome}, ${hit.realm}]`);
+    console.log('  PASTE INTO CAPTURE_INDEX (world-fixtures.ts), beside this capture:');
+    console.log(`    eco: { id: ${hit.id}, biome: ${hit.biome}, `
+      + `name: '${hit.name.replace(/'/g, "\\'")}', realm: '${hit.realm}' },`);
+  } else {
+    console.log('  eco     NO TERRESTRIAL ECOREGION here — leave `eco` off the card.');
+  }
+} catch (err) {
+  console.log(`  eco     lookup failed (${err.message}) — the capture is fine;`);
+  console.log('          add `eco:` by hand or re-run this for the line to paste.');
+}

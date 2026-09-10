@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { HydroBodyRegistry } from './body-registry';
 import { analyseHydroTile, buildHydroTile, type HydroTileAnalysis } from './build-tile';
-import { clamp } from './geometry';
+import { clamp, sampleElevation } from './geometry';
+import { sampleFieldSurface } from './field-sample';
 import {
   createHydroFrameUniforms,
   createHydroMaterial,
@@ -11,6 +12,7 @@ import {
   type HydroFrameUniforms,
   type HydroTileGpuBinding,
   type HydroTileTextures,
+  type SceneShade,
 } from './material';
 import {
   DEFAULT_HYDRO_BUILD,
@@ -35,6 +37,9 @@ export interface HydroSystemOptions extends Partial<HydroBuildOptions> {
   rebuildsPerFrame?: number;
   /** Replace with a worker bridge without changing the public lifecycle. */
   scheduleBuild?: (job: () => HydroTileField) => Promise<HydroTileField>;
+  /** The scene's own darkening of a lit surface — the cloud deck's shadow —
+   *  so the water shades where the ground beside it shades. */
+  sceneShade?: SceneShade;
 }
 
 export interface HydroTileBinding extends HydroTileGpuBinding {
@@ -52,6 +57,14 @@ export interface HydroStats {
 
 export interface HydroSystem {
   readonly object3d: THREE.Object3D;
+  /** How many fields have been installed. The sward's ground revision adds
+   *  it, so reed and mineral banks (client/shoreline.ts) re-sweep when the
+   *  water they stand beside is built or rebuilt — started by another agent
+   *  as a placeholder, made to count here. */
+  readonly bankRevision: number;
+  /** The built field under a point, for the bank sampler — undefined until
+   *  the tile has built or where there is no tile. */
+  fieldAt(x: number, z: number): HydroTileField | undefined;
   upsertTile(input: HydroTileInput): Promise<void>;
   removeTile(key: TileKey): void;
   setOceanLevelM(elevationM: number): void;
@@ -60,7 +73,15 @@ export interface HydroSystem {
   getTuning(): Readonly<HydroTuning>;
   update(frame: HydroFrame): void;
   getTileBinding(key: TileKey): HydroTileBinding | undefined;
-  sampleRestingSurface(x: number, z: number): HydroSample | undefined;
+  /**
+   * Sample the field at a caller-owned coverage cut. The default preserves
+   * the field's canonical 0.5 classification; rendering/physics callers pass
+   * the same world-space shoreline cut used by the shader.
+   */
+  sampleRestingSurface(x: number, z: number, coverageCut?: number): HydroSample | undefined;
+  /** Everything that decided the surface at a point: the texel, the bodies
+   *  the tile holds and how each one's level was modelled. */
+  debugAt(x: number, z: number): Record<string, unknown> | null;
   stats(): HydroStats;
   /** Per-tile fed-versus-held truth for the harness — see the implementation. */
   debugTiles(): Array<Record<string, unknown>>;
@@ -82,8 +103,7 @@ interface TileRecord {
   chain: Promise<void>;
   field?: HydroTileField;
   textures?: HydroTileTextures;
-  /** Up to two: the standing cells and the flowing cells, each under its own
-   *  material variant. See waterGeometry. */
+  /** Standing, flowing, and (for coastal tiles) a narrow swash overlay. */
   parts: TilePart[];
   binding?: HydroTileBinding;
 }
@@ -130,6 +150,8 @@ const immediateBuild = async (job: () => HydroTileField): Promise<HydroTileField
 interface WaterGeometries {
   standing?: THREE.BufferGeometry;
   flowing?: THREE.BufferGeometry;
+  /** Coastal cells only, locally subdivided for connected swash/run-up. */
+  surf?: THREE.BufferGeometry;
 }
 function waterGeometry(field: HydroTileField, segments: number): WaterGeometries {
   const rect = field.waterBounds ?? field.bounds;
@@ -161,6 +183,11 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
   // 0 dry, 1 standing water, 2 flowing water (any flowing texel claims the
   // cell — see the regime note above).
   const keep = new Uint8Array(segmentsX * segmentsZ);
+  const fallKeep = new Uint8Array(segmentsX * segmentsZ);
+  // The surf strip is independent of the broad water cull: it is allowed into
+  // the one-texel dry margin around waterBounds, but only where the propagated
+  // body class is ocean/lagoon and signed distance says this is truly shore.
+  const surfKeep = new Uint8Array(segmentsX * segmentsZ);
   for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
     const x0 = rect.minX + (i / segmentsX) * rectSpanX;
     const x1 = rect.minX + ((i + 1) / segmentsX) * rectSpanX;
@@ -171,35 +198,77 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     const iz0 = Math.max(0, Math.floor(fieldIz(z0)) - 1);
     const iz1 = Math.min(field.height - 1, Math.ceil(fieldIz(z1)) + 1);
     let regime = 0;
-    for (let iz = iz0; iz <= iz1 && regime < 2; iz++) {
+    let coastalShore = false;
+    for (let iz = iz0; iz <= iz1; iz++) {
       for (let ix = ix0; ix <= ix1; ix++) {
         const t = iz * field.width + ix;
-        if (field.geometry[t * 4] <= 0.005) continue;
+        const coverage = field.geometry[t * 4];
+        const kind = field.material[t * 4];
+        const signedShore = field.geometry[t * 4 + 1];
+        if ((kind === 1 || kind === 2) && Math.abs(signedShore) <= 96) {
+          coastalShore = true;
+        }
+        if (coverage <= 0.005) continue;
+        if (field.waterfalls && (field.waterfalls[t * 4] > 0.01 || field.waterfalls[t * 4 + 2] > 0.05))
+          fallKeep[j * segmentsX + i] = 1;
         regime = (field.material[t * 4 + 3] & HydroFlags.Flowing) !== 0 ? 2
           : Math.max(regime, 1);
-        if (regime === 2) break;
       }
     }
-    keep[j * segmentsX + i] = regime;
+    const cell = j * segmentsX + i;
+    keep[cell] = regime;
+    surfKeep[cell] = coastalShore ? 1 : 0;
   }
   const build = (regime: number): THREE.BufferGeometry | undefined => {
     const pos: number[] = [], uvs: number[] = [], idx: number[] = [];
-    const vert = new Map<number, number>();
+    // Only connected drops and their landing regions need the fine grid.
+    // Coarse neighbours stitch to fine edges, so this saving creates no
+    // T-junctions whose displaced midpoint could open a crack.
+    const subdivision = regime === 2 ? Math.min(4, Math.max(1, Math.ceil(Math.max(
+      rectSpanX / segmentsX / (spanX / (field.resolution - 1)),
+      rectSpanZ / segmentsZ / (spanZ / (field.resolution - 1)),
+    )))) : 1;
+    const fineX = segmentsX * subdivision, fineZ = segmentsZ * subdivision;
+    const vert = new Map<string, number>();
     const at = (i: number, j: number): number => {
-      const k = j * (segmentsX + 1) + i;
+      const k = i + ':' + j;
       let v = vert.get(k);
       if (v === undefined) {
         v = pos.length / 3;
-        pos.push(i / segmentsX - 0.5, 0, j / segmentsZ - 0.5);
-        uvs.push(i / segmentsX, 1 - j / segmentsZ);
+        pos.push(i / fineX - 0.5, 0, j / fineZ - 0.5);
+        uvs.push(i / fineX, 1 - j / fineZ);
         vert.set(k, v);
       }
       return v;
     };
     for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
       if (keep[j * segmentsX + i] !== regime) continue;
-      const a = at(i, j), b = at(i + 1, j), c = at(i, j + 1), d = at(i + 1, j + 1);
-      idx.push(a, c, b, b, c, d);
+      const x = i * subdivision, z = j * subdivision;
+      const fine = (a: number, b: number): boolean => regime === 2
+        && a >= 0 && b >= 0 && a < segmentsX && b < segmentsZ
+        && keep[b * segmentsX + a] === 2 && fallKeep[b * segmentsX + a] !== 0;
+      if (fine(i, j)) {
+        for (let dz = 0; dz < subdivision; dz++) for (let dx = 0; dx < subdivision; dx++) {
+          const a = at(x + dx, z + dz), b = at(x + dx + 1, z + dz);
+          const c = at(x + dx, z + dz + 1), d = at(x + dx + 1, z + dz + 1);
+          idx.push(a, c, b, b, c, d);
+        }
+      } else if (subdivision > 1 && (fine(i - 1, j) || fine(i + 1, j) || fine(i, j - 1) || fine(i, j + 1))) {
+        const rim: number[] = [];
+        const edge = (ax: number, az: number, bx: number, bz: number, split: boolean): void => {
+          const n = split ? subdivision : 1;
+          for (let k = 0; k < n; k++) rim.push(at(ax + (bx - ax) * k / n, az + (bz - az) * k / n));
+        };
+        edge(x, z, x, z + subdivision, fine(i - 1, j));
+        edge(x, z + subdivision, x + subdivision, z + subdivision, fine(i, j + 1));
+        edge(x + subdivision, z + subdivision, x + subdivision, z, fine(i + 1, j));
+        edge(x + subdivision, z, x, z, fine(i, j - 1));
+        const centre = at(x + subdivision / 2, z + subdivision / 2);
+        for (let k = 0; k < rim.length; k++) idx.push(centre, rim[k], rim[(k + 1) % rim.length]);
+      } else {
+        const a = at(x, z), b = at(x + subdivision, z), c = at(x, z + subdivision), d = at(x + subdivision, z + subdivision);
+        idx.push(a, c, b, b, c, d);
+      }
     }
     if (!idx.length) return undefined;
     const geo = new THREE.BufferGeometry();
@@ -209,7 +278,46 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     geo.computeBoundingSphere();
     return geo;
   };
-  return { standing: build(1), flowing: build(2) };
+
+  // A production coastal cell is about 75m wide. Eight local subdivisions
+  // bring only the swash cells down to about 9m without tessellating the open
+  // ocean. Vertices are shared across neighbouring parent cells.
+  const buildSurf = (): THREE.BufferGeometry | undefined => {
+    const subdivision = 8;
+    const fineX = segmentsX * subdivision;
+    const fineZ = segmentsZ * subdivision;
+    const pos: number[] = [], uvs: number[] = [], idx: number[] = [];
+    const vert = new Map<number, number>();
+    const at = (i: number, j: number): number => {
+      const k = j * (fineX + 1) + i;
+      let v = vert.get(k);
+      if (v === undefined) {
+        v = pos.length / 3;
+        pos.push(i / fineX - 0.5, 0, j / fineZ - 0.5);
+        uvs.push(i / fineX, 1 - j / fineZ);
+        vert.set(k, v);
+      }
+      return v;
+    };
+    for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
+      if (!surfKeep[j * segmentsX + i]) continue;
+      const x0 = i * subdivision, z0 = j * subdivision;
+      for (let sj = 0; sj < subdivision; sj++) for (let si = 0; si < subdivision; si++) {
+        const x = x0 + si, z = z0 + sj;
+        const a = at(x, z), b = at(x + 1, z);
+        const c = at(x, z + 1), d = at(x + 1, z + 1);
+        idx.push(a, c, b, b, c, d);
+      }
+    }
+    if (!idx.length) return undefined;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(idx);
+    geo.computeBoundingSphere();
+    return geo;
+  };
+  return { standing: build(1), flowing: build(2), surf: buildSurf() };
 }
 
 function worldToUv(field: HydroTileField): THREE.Matrix3 {
@@ -225,17 +333,43 @@ function worldToUv(field: HydroTileField): THREE.Matrix3 {
   );
 }
 
+export { sampleFieldSurface } from './field-sample';
+
 class DefaultHydroSystem implements HydroSystem {
   readonly object3d = new THREE.Group();
+  private bankRev = 0;
+  get bankRevision(): number { return this.bankRev; }
+  /** The last tile answered, because the sward asks texel after texel. */
+  private fieldAtLast: TileRecord | null = null;
+  fieldAt(x: number, z: number): HydroTileField | undefined {
+    const inside = (r: TileRecord): boolean => {
+      const b = r.input.bounds;
+      return x >= b.minX && x < b.maxX && z >= b.minZ && z < b.maxZ;
+    };
+    const last = this.fieldAtLast;
+    if (last && last.field && inside(last) && this.records.get(last.input.key) === last) return last.field;
+    for (const r of this.records.values()) {
+      if (r.field && inside(r)) { this.fieldAtLast = r; return r.field; }
+    }
+    return undefined;
+  }
   private readonly records = new Map<TileKey, TileRecord>();
   private readonly registry: HydroBodyRegistry;
   private readonly frameUniforms: HydroFrameUniforms = createHydroFrameUniforms();
   private readonly buildOptions: HydroBuildOptions;
   private readonly meshSegments: number;
   private readonly scheduleBuild: (job: () => HydroTileField) => Promise<HydroTileField>;
+  private readonly sceneShade: SceneShade | undefined;
   private readonly rebuildsPerFrame: number;
   private disposed = false;
   private tuning: HydroTuning = { ...DEFAULT_HYDRO_TUNING };
+  private rigTrail: Array<{
+    x: number;
+    z: number;
+    born: number;
+    strength: number;
+  }> = [];
+  private wasWading = false;
 
   constructor(options: HydroSystemOptions = {}) {
     this.buildOptions = {
@@ -247,6 +381,7 @@ class DefaultHydroSystem implements HydroSystem {
     };
     this.registry = new HydroBodyRegistry(this.buildOptions.oceanLevelM);
     this.scheduleBuild = options.scheduleBuild ?? immediateBuild;
+    this.sceneShade = options.sceneShade;
     this.rebuildsPerFrame = Math.max(1, Math.floor(options.rebuildsPerFrame ?? 1));
     this.meshSegments = Math.max(4, Math.floor(options.meshResolution ?? 32));
     this.object3d.name = 'hydro-system';
@@ -307,12 +442,20 @@ class DefaultHydroSystem implements HydroSystem {
       rippleStrength: finite(patch.rippleStrength, this.tuning.rippleStrength),
       foamStrength: finite(patch.foamStrength, this.tuning.foamStrength),
       shoreFade: finite(patch.shoreFade, this.tuning.shoreFade),
+      shallowBedStrength: finite(patch.shallowBedStrength, this.tuning.shallowBedStrength),
+      riverEdgeStrength: finite(patch.riverEdgeStrength, this.tuning.riverEdgeStrength),
+      turbulenceStrength: finite(patch.turbulenceStrength, this.tuning.turbulenceStrength),
+      eddyStrength: finite(patch.eddyStrength, this.tuning.eddyStrength),
     };
     this.frameUniforms.uWaveAmplitude.value = this.tuning.waveAmplitude;
     this.frameUniforms.uWaveLength.value = this.tuning.waveLength;
     this.frameUniforms.uRippleStrength.value = this.tuning.rippleStrength;
     this.frameUniforms.uFoamStrength.value = this.tuning.foamStrength;
     this.frameUniforms.uShoreFade.value = this.tuning.shoreFade;
+    this.frameUniforms.uShallowBedStrength.value = this.tuning.shallowBedStrength;
+    this.frameUniforms.uRiverEdgeStrength.value = this.tuning.riverEdgeStrength;
+    this.frameUniforms.uTurbulenceStrength.value = this.tuning.turbulenceStrength;
+    this.frameUniforms.uEddyStrength.value = this.tuning.eddyStrength;
   }
 
   getTuning(): Readonly<HydroTuning> { return { ...this.tuning }; }
@@ -331,6 +474,11 @@ class DefaultHydroSystem implements HydroSystem {
     const rig = frame.rig;
     this.frameUniforms.uRig.value.set(rig?.x ?? 0, rig?.z ?? 0, rig?.vx ?? 0, rig?.vz ?? 0);
     this.frameUniforms.uRigWade.value = Math.max(0, rig?.wadeM ?? 0);
+    this.updateRigTrail(frame.timeSeconds, rig);
+    const tf = frame.terrainField;
+    this.frameUniforms.uSwardCol.value = tf?.texture ? (tf.texture as THREE.Texture) : null;
+    this.frameUniforms.uSwardOrg.value.set(tf?.originX ?? 0, tf?.originZ ?? 0);
+    this.frameUniforms.uSwardW.value = tf?.texture ? Math.max(0, tf.widthM) : 0;
     if (frame.sunDirection) {
       this.frameUniforms.uSunDirection.value
         .set(frame.sunDirection.x, frame.sunDirection.y, frame.sunDirection.z)
@@ -340,6 +488,15 @@ class DefaultHydroSystem implements HydroSystem {
       this.frameUniforms.uSkyColour.value.setRGB(
         frame.skyColour.r, frame.skyColour.g, frame.skyColour.b,
       );
+    }
+    if (frame.sceneLight) {
+      this.frameUniforms.uSceneLight.value.set(frame.sceneLight.r, frame.sceneLight.g, frame.sceneLight.b);
+    }
+    if (frame.groundGain) {
+      this.frameUniforms.uGroundGain.value.set(frame.groundGain.r, frame.groundGain.g, frame.groundGain.b);
+    }
+    if (frame.zenithColour) {
+      this.frameUniforms.uZenith.value.setRGB(frame.zenithColour.r, frame.zenithColour.g, frame.zenithColour.b);
     }
     if (frame.terrainColour) {
       this.frameUniforms.uTerrainColour.value.setRGB(
@@ -362,14 +519,89 @@ class DefaultHydroSystem implements HydroSystem {
     }
   }
 
+  /**
+   * Eight points are enough to leave roughly 20–35m of broken wake without
+   * introducing a render target or a simulation texture. The newest live
+   * vehicle position is uploaded separately from the retained samples, so
+   * the first segment follows the truck continuously while older points keep
+   * ageing after it leaves the water.
+   */
+  private updateRigTrail(
+    time: number,
+    rig: HydroFrame['rig'],
+  ): void {
+    const wading = !!rig && rig.wadeM > 0.02;
+    this.rigTrail = this.rigTrail.filter((p) => time - p.born < 14);
+
+    if (wading && rig) {
+      const speed = Math.hypot(rig.vx, rig.vz);
+      const strength = clamp(rig.wadeM / 0.55, 0, 1)
+        * clamp(0.38 + speed * 0.09, 0.38, 1);
+      const latest = this.rigTrail[0];
+      const gap = latest ? Math.hypot(rig.x - latest.x, rig.z - latest.z) : Infinity;
+
+      // A fresh ford far from the previous one must not draw a segment across
+      // dry land. The old trail is discarded only in that discontinuous case.
+      if (!this.wasWading && latest && gap > 18) this.rigTrail = [];
+      if (!this.rigTrail.length || gap >= 3.2) {
+        this.rigTrail.unshift({ x: rig.x, z: rig.z, born: time, strength });
+      }
+    } else if (this.wasWading && rig) {
+      // Freeze the exit point into history. It remains visible while the
+      // vehicle climbs the bank instead of snapping away with uRigWade.
+      this.rigTrail.unshift({
+        x: rig.x,
+        z: rig.z,
+        born: time,
+        strength: this.rigTrail[0]?.strength ?? 0.45,
+      });
+    }
+    this.wasWading = wading;
+    this.rigTrail.length = Math.min(this.rigTrail.length, wading ? 7 : 8);
+
+    const upload = this.frameUniforms.uRigTrail.value;
+    let count = 0;
+    if (wading && rig) {
+      const speed = Math.hypot(rig.vx, rig.vz);
+      upload[count++].set(
+        rig.x, rig.z, 0,
+        clamp(rig.wadeM / 0.55, 0, 1) * clamp(0.38 + speed * 0.09, 0.38, 1),
+      );
+    }
+    for (const point of this.rigTrail) {
+      if (count >= upload.length) break;
+      upload[count++].set(point.x, point.z, Math.max(0, time - point.born), point.strength);
+    }
+    for (let i = count; i < upload.length; i++) upload[i].set(0, 0, 99, 0);
+    this.frameUniforms.uRigTrailCount.value = count;
+  }
+
   getTileBinding(key: TileKey): HydroTileBinding | undefined {
     return this.records.get(key)?.binding;
   }
 
-  sampleRestingSurface(x: number, z: number): HydroSample | undefined {
+  sampleRestingSurface(x: number, z: number, coverageCut = 0.5): HydroSample | undefined {
     // Active rings are small. If this grows, index records by the world tile
     // key already known to the caller rather than introducing another grid.
     for (const record of this.records.values()) {
+      const field = record.field;
+      if (!field || x < field.bounds.minX || x > field.bounds.maxX
+        || z < field.bounds.minZ || z > field.bounds.maxZ) continue;
+      return sampleFieldSurface(field, x, z, coverageCut);
+    }
+    return undefined;
+  }
+
+  /**
+   * WHY THE WATER IS WHERE IT IS. `sampleRestingSurface` answers what the
+   * field holds; this answers who put it there — the body, its kind, and
+   * whether its level is one flat number for the whole footprint, a river
+   * profile, or the ocean datum. A surface standing over the valley floor
+   * is nearly always a `flat` body on sloping ground, and that is only
+   * visible from here.
+   */
+  debugAt(x: number, z: number): Record<string, unknown> | null {
+    for (const [key, record] of this.records) {
       const field = record.field;
       if (!field || x < field.bounds.minX || x > field.bounds.maxX
         || z < field.bounds.minZ || z > field.bounds.maxZ) continue;
@@ -378,25 +610,34 @@ class DefaultHydroSystem implements HydroSystem {
       const ix = clamp(Math.round(field.gutter + u * (field.resolution - 1)), 0, field.width - 1);
       const iz = clamp(Math.round(field.gutter + v * (field.resolution - 1)), 0, field.height - 1);
       const i = iz * field.width + ix;
-      const coverage = field.geometry[i * 4];
-      if (coverage < 0.5) continue;
-      const kindId = field.material[i * 4];
-      const kind = HYDRO_ID_KIND[kindId];
-      if (!kind) continue;
-      const flag = field.material[i * 4 + 3];
+      const bodies = this.registry.bodiesForTile(key).map((b) => ({
+        id: b.id, kind: b.kind, level: b.level.type,
+        elevationM: b.level.type === 'profile' ? null : +b.level.elevationM.toFixed(2),
+        stations: b.level.type === 'profile' ? b.level.stations.length / 3 : 0,
+        flow: [+b.flow[0].toFixed(2), +b.flow[1].toFixed(2)],
+      }));
+      const obs = record.analysis.observations.map((o) => ({
+        id: o.id, kind: o.kind,
+        cand: o.candidateLevelM === undefined ? null : +o.candidateLevelM.toFixed(2),
+        tagged: o.taggedLevelM === undefined ? null : +o.taggedLevelM.toFixed(2),
+        stations: o.profile ? o.profile.length / 3 : 0,
+      }));
+      // The raster the build levelled against, at this very point — the one
+      // number that separates "the profile smoothed it" from "the field's
+      // ground and the drawn ground disagree here".
+      const rb = sampleElevation(record.input.elevation, record.input.bounds, x, z);
       return {
-        kind,
-        coverage,
-        restingLevelM: field.elevationBaseM + field.geometry[i * 4 + 2],
-        shoreDistanceM: field.geometry[i * 4 + 1],
-        depthM: field.geometry[i * 4 + 3],
-        flow: [field.dynamics[i * 4], field.dynamics[i * 4 + 1]],
-        fetchM: field.dynamics[i * 4 + 2],
-        intermittent: (flag & HydroFlags.Intermittent) !== 0,
-        tidal: (flag & HydroFlags.Tidal) !== 0,
+        key,
+        rasterBedM: Number.isFinite(rb) ? +rb.toFixed(2) : null,
+        coverage: +field.geometry[i * 4].toFixed(2),
+        kind: HYDRO_ID_KIND[field.material[i * 4]] ?? null,
+        restingLevelM: +(field.elevationBaseM + field.geometry[i * 4 + 2]).toFixed(2),
+        fieldDepthM: +field.geometry[i * 4 + 3].toFixed(2),
+        elevationBaseM: +field.elevationBaseM.toFixed(2),
+        bodies, obs,
       };
     }
-    return undefined;
+    return null;
   }
 
   stats(): HydroStats {
@@ -433,7 +674,8 @@ class DefaultHydroSystem implements HydroSystem {
         built: !!field, hasWater: field?.hasWater ?? null,
         touched, wet, maxCov: +max.toFixed(3),
         mesh: record.parts.length > 0,
-        flowingMesh: record.parts.some((p) => p.mesh.name.endsWith(':flowing')),
+        flowingMesh: record.parts.some((p) => p.mesh.name.includes(':flowing')),
+        surfMesh: record.parts.some((p) => p.mesh.name.endsWith(':surf')),
         dirty: record.dirty, building: record.building,
       });
     }
@@ -496,12 +738,13 @@ class DefaultHydroSystem implements HydroSystem {
   private installField(record: TileRecord, field: HydroTileField): void {
     this.releaseGpu(record);
     record.field = field;
+    this.bankRev++;
     if (!field.hasWater) return;
     // The cull first: a tile can report water and still keep no cell, when the
     // coverage is a sliver the lattice cannot resolve. Building the textures
     // before finding that out would leak the float RGBA uploads per tile.
     const geometries = waterGeometry(field, this.meshSegments);
-    if (!geometries.standing && !geometries.flowing) return;
+    if (!geometries.standing && !geometries.flowing && !geometries.surf) return;
     const textures = createHydroTextures(field);
     // ── THE MESH COVERS THE WATER, NOT THE TILE ──
     //
@@ -523,8 +766,12 @@ class DefaultHydroSystem implements HydroSystem {
     const spanX = rect.maxX - rect.minX;
     const spanZ = rect.maxZ - rect.minZ;
     const origin = this.frameUniforms.uWorldOrigin.value;
-    const install = (geometry: THREE.BufferGeometry, flowing: boolean): void => {
-      const material = createHydroMaterial(field, textures, this.frameUniforms, flowing);
+    const install = (
+      geometry: THREE.BufferGeometry,
+      flowing: boolean,
+      surf = false,
+    ): void => {
+      const material = createHydroMaterial(field, textures, this.frameUniforms, flowing, surf, this.sceneShade);
       const mesh = new THREE.Mesh(geometry, material);
       mesh.scale.set(spanX, 1, spanZ);
       mesh.position.set(
@@ -536,13 +783,14 @@ class DefaultHydroSystem implements HydroSystem {
       // streamed ring is already the culling structure, so do not let a flat
       // unit plane incorrectly cull a mountain lake.
       mesh.frustumCulled = false;
-      mesh.renderOrder = 2;
-      mesh.name = `hydro-tile:${field.key}${flowing ? ':flowing' : ''}`;
+      mesh.renderOrder = surf ? 3 : 2;
+      mesh.name = `hydro-tile:${field.key}${flowing ? ':flowing' : ''}${surf ? ':surf' : ''}`;
       this.object3d.add(mesh);
       record.parts.push({ mesh, geometry, material });
     };
     if (geometries.standing) install(geometries.standing, false);
     if (geometries.flowing) install(geometries.flowing, true);
+    if (geometries.surf) install(geometries.surf, false, true);
     const base = hydroBinding(field, textures);
     record.textures = textures;
     record.binding = {

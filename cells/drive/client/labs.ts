@@ -54,10 +54,28 @@ export const LABS: readonly LabEntry[] = [
     start: () => import('./roads-lab').then((m) => m.startRoadsLab()),
   },
   {
+    slug: 'infrastructure',
+    label: 'INFRASTRUCTURE',
+    note: 'Deterministic bridge, tunnel and conduit families: feasibility gates, culture scopes, canonical supports and safety fallbacks.',
+    start: () => import('./infrastructure-lab').then((m) => m.startInfrastructureLab()),
+  },
+  {
     slug: 'flora',
     label: 'FLORA',
-    note: 'The climate ladder on one screen — biome mix at a point and a column through the altitudes, with the treeline walking as you turn the latitude.',
+    note: 'What grows at a real place and what it looks like: the site sampler, the ecoregion, the guild and the baked skeletons the world actually draws — with the climate ladder beside them as the A/B.',
     start: () => import('./flora-lab').then((m) => m.startFloraLab()),
+  },
+  {
+    slug: 'flora-ez',
+    label: 'FLORA · EZ CANDIDATE',
+    note: 'Shipping silhouettes against one aggressively reduced, shared and instanced EZ-Tree skeleton — with the geometry bill on the glass.',
+    start: () => import('./flora-ez-lab').then((m) => m.startEzFloraLab()),
+  },
+  {
+    slug: 'sound',
+    label: 'SOUND',
+    note: 'The mixer with no world: every voice on a dial, every one-shot on a button, a level meter per tap, the gravel and the rattle as an A/B, and the decibel targets as sliders that COPY as the engine literal.',
+    start: () => import('./sound-lab').then((m) => m.startSoundLab()),
   },
   {
     slug: 'weather',
@@ -149,6 +167,15 @@ function renderIndex(unknown?: string): void {
 function clearShell(): void {
   document.getElementById('boot')?.remove();
   document.getElementById('scene')?.remove();
+  // …AND SO DOES ITS LAYOUT. The shell styles html and body for a fullscreen
+  // canvas — height 100%, overflow hidden — and a lab that is a document (the
+  // index, the world lab) could not scroll under it: the fixture list ran off
+  // the bottom of the phone and there was no way down. Undone here, once, for
+  // every lab; a canvas lab that wants the fullscreen box says so in its own
+  // stylesheet, which comes after this one and wins.
+  const style = document.createElement('style');
+  style.textContent = 'html, body { height: auto; min-height: 100%; overflow: auto; }';
+  document.head.appendChild(style);
 }
 
 /** Run whatever this URL asked for. Returns false when the URL is the game's,

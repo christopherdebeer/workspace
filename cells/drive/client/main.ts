@@ -15,13 +15,29 @@
  * backend.
  */
 import * as THREE from 'three';
-import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLift, climPick, climPickRow,
-  krummholz, swardLift, treelineAt, type ClimateSample } from './climate';
-import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, bedrockAt, buildLookAt, paintFor, roadLookAt,
-  seedAt, snowLoad, stoneWalls, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
+import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, GROUND_RAMPS, altBandAt, aspectLift, climPick,
+  climPickRow, krummholz, siteAt, swardLift, treelineAt, type ClimateSample, type SiteClimate } from './climate';
+import { createAudio, type ImpactKind } from './audio';
+import { coastKm } from './coast';
+import { clamp } from './num';
+import { nearestStable, squareRings, uploadPrefix } from './render-work';
+import { WATERLINE_CUT, bankHabitat, sampleBankField, BANK_GLSL } from './shoreline';
+import { URL_OWNED, qs, qsHas, qsOn, switchRows } from './switches';
+import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
+import { guildAt, guildKind, pickMix, type Guild } from './guild';
+import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
+  seedAt, snowLoad, stoneWalls, unitN, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
+import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } from './infrastructure';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
 import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
-import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSystem, type OceanCoverage } from './hydro';
+import { smoothChartZoom, wrapLongitude } from './globe-navigation';
+import { bitmapStats, withDecodedBitmap } from './decode-telemetry';
+import { GLOBE_R, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, globeEast, globeNorth, subsolar } from './globe';
+import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSystem, type OceanCoverage } from './hydro';
+import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipment';
+import { createRigModel, OVERLAND, RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
+import { createWireMaterialPolicy } from './wire-material';
+import { createWildlifeWire } from './wildlife-wire';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -31,23 +47,35 @@ import {
   solveChain as solveProfile,
 } from './roadprofile';
 import { RoadProfileWorker } from './roadprofile-worker';
-import { createOverlays } from './overlays';
-import { createSplash } from './splash';
+import { inlandComponents, inlandMask, maskSignature } from './inland-water';
+import { pointInPolygon } from './hydro/geometry';
+import { HYDRO_BUILD_PROF } from './hydro/build-tile';
+import type { SceneShade } from './hydro/material';
+import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
+import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-worker';
+// THE TERRAIN KERNEL, instantiated once for the synchronous path and the
+// probes; the worker builds its own from the same source (terrain-worker.ts).
+const K = createTerrainKernel();
+const { BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX, refineCost, plainCost, carveCost, stripFloor, mmKey, mmIndex, mmNear, onTileEdge, plainLattice, cellTable } = K;
+import { createOverlays, type RouteCard } from './overlays';
+import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
-import { facade } from './facade';
+import { facade, uFacNight } from './facade';
 import { startLab } from './labs';
+import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
 import { LANDMARKS, type Landmark } from './landmarks';
 import { ATTRACT_TAPES, type AttractTape } from './tapes';
+import { REEL_DRIVES, type ReelDrive } from './reel-drives';
 import { autoDrive, autoMem, AUTO, type AutoOut, type Ground as AutoGround } from './autopilot';
 import { mkField, buildField, recenter as wxRecenter, wxAt, puddleAt, seedWet, WXF_N, WXF_SPAN } from './weatherfield';
 import { grainFx, grainU } from './grain';
 import {
   DEADWOOD, FOLIAGE_BANDS, STONE, STONE_MIX_ROWS, STONY, TRUNKED, VEG_CAP, VEG_MIX,
   VEG_SIZE, VEG_TREES, bandKind, coverKind as floraCoverKind, trunkReach,
-  acaciaGeo, broadleaf, bushGeo, cactusGeo, conifer, faceTone, fernGeo, grassGeo, logGeo,
+  acaciaGeo, broadleaf, bushGeo, cactusGeo, shrubGeo, conifer, faceTone, fernGeo, grassGeo, logGeo, swayWeight,
   makeSapling, mergeGeos, palm, plantLook, promoteAnchor, rockGeo, snag, spireGeo, standTone,
   type VegKind, type VegSite, type VegTone,
 } from './flora';
@@ -111,6 +139,34 @@ const TERRAIN_Z = 14;         // terrarium tile zoom (~2.4km/cos(lat), ~9.5m/px 
 // too big a difference to decide on someone else's behalf — so it is a dial,
 // starting where it always was.
 let terrainSeg = 128;
+/** THE LAST ERRORS, FOR THE DUMP. A shader that fails to link on a phone
+ *  says so only in a console nobody can open there; the world simply has a
+ *  hole in it. The last eight errors — window errors, rejected promises and
+ *  what three logs through console.error — ride the telemetry text and
+ *  `__errors()`. A shader log is thousands of lines of source; only its
+ *  first line and the lines that say ERROR are kept. */
+const errRing: string[] = [];
+function noteErr(kind: string, msg: string): void {
+  const lines = String(msg).split('\n');
+  const keep = [lines[0], ...lines.slice(1).filter((l) => /error/i.test(l)).slice(0, 4)];
+  const line = `${kind}: ${keep.join(' | ').replace(/\s+/g, ' ').slice(0, 500)}`;
+  if (errRing[errRing.length - 1] === line) return;
+  errRing.push(line);
+  if (errRing.length > 8) errRing.shift();
+}
+addEventListener('error', (e) => noteErr('error', `${e.message} @${(e.filename ?? '').split('/').pop()}:${e.lineno}`));
+addEventListener('unhandledrejection', (e) => {
+  const r = (e as PromiseRejectionEvent).reason as { message?: string } | string | undefined;
+  noteErr('reject', String(typeof r === 'object' && r ? r.message ?? r : r));
+});
+{
+  const ce = console.error.bind(console);
+  console.error = (...a: unknown[]): void => {
+    noteErr('console', a.map((v) => (v instanceof Error ? v.message : typeof v === 'string' ? v : (() => { try { return JSON.stringify(v); } catch { return String(v); } })())).join(' '));
+    ce(...a);
+  };
+}
+(window as unknown as { __errors?: object }).__errors = (): string[] => [...errRing];
 const OSM_Z = 16;             // overpass tile zoom (~600m — keeps per-query weight low)
 const OSM_RING = 1;           // load a (2R+1)² neighbourhood of vector tiles
 const TERRAIN_RING = 2;       // wider ring at the finer zoom keeps the horizon populated
@@ -126,7 +182,10 @@ const CAR = { accel: 16, brake: 26, maxRev: 9, wheelbase: 2.9, steerMax: 0.6 };
 // because the zoom ceiling is DERIVED from it (see ZOOM_MAX): the widest
 // useful zoom is a fact about the frustum, and two copies of the number would
 // let the ceiling drift away from the lens it was computed for.
-const CAM = { base: 175, perKmh: 1.1, tilt: 70, fov: 55 };
+// `perKmh` was here — the chart's speed retreat — and is retired rather than
+// left at zero: see `chartDist`, which is now the one place the chart's stand-off
+// is computed. A constant nobody reads is the thing this file keeps warning about.
+const CAM = { base: 175, tilt: 70, fov: 55 };
 // 44 put the camera 6.8km up over a 4.8×8.3km view — a regional chart, but
 // only just, and the streaming never followed it out there. 260 reaches ~40km
 // across, which is a whole mountain range, a coastline, or the far end of a
@@ -144,29 +203,91 @@ const CAM = { base: 175, perKmh: 1.1, tilt: 70, fov: 55 };
  * then keep pulling against is worse than a lower one that means something.
  *
  * So the reach is the number that is chosen, and the ceiling is derived from
- * it. 300km is picked against the shell's own ladder: `farLevelFor` drops to
- * z7 past ~196km, and a 5x5 ring of z7 tiles spans 626km at the equator — room
- * to spare. Tiles shrink with cos(latitude), so the ring still covers 300km
- * out to about 61 degrees and falls short of it beyond, which is the same
- * honest degradation SIGHT_M documents for the near shell rather than a new
- * kind of failure.
+ * it. 300km was picked against the shell's own ladder: `farLevelFor` drops to
+ * z7 past ~196km, and a 5x5 ring of z7 tiles spans 783km at the equator, so
+ * the ring covered 300km out to about 67 degrees of latitude. DOUBLED to
+ * 600km, asked for from the seat: the same z7 ring reaches 600km only below
+ * about 40 degrees, which leaves out most of Europe and North America, so the
+ * shell's ladder gained a z6 rung — the same tile count at the same 128
+ * segments, since `farSeg` already clamps there at z7 — and covers 600km out
+ * to 67 degrees again. The chart's road layer follows with a z7 rung that the
+ * cell now serves (motorways and trunks only at that scale, see
+ * `overviewQuery`); beyond the latitude a level's ring reaches, the outer
+ * frame is the same honest degradation SIGHT_M documents for the near shell
+ * rather than a new kind of failure.
  */
-const SIGHT_MAX = 300000;
-const ZOOM_MIN = 0.25;
+//
+// …AND TO 1,500km, WITH A GLOBE IN VIEW. Asked for from the seat: zoom out to
+// the whole world, at dramatically lower detail. This is the first of two
+// steps and it is the cheap one — the tangent plane stretched as far as it
+// honestly goes. Three things were checked before the number moved:
+//
+// - the cell serves cover at z4 and z5 and terrarium serves DEM at z4 and z5
+//   (curled, 200s, 256² PNGs), so the ladders below can gain their rungs;
+// - the top camera's far plane is `dist * 4`, 8,000km at the new ceiling, and
+//   `farSeg` clamps at 128 segments from z7 down, so a z5 tile costs what a
+//   z7 tile does;
+// - the curvature drop is d²/2R: 28km at 600km, 177km at 1,500km, 700km at
+//   3,000km. The shell sinks that far at the frame's edge and the tilt
+//   compensation is first-order, which holds to about 1,500km and not much
+//   past it.
+//
+// WHAT BREAKS FIRST IS THE PROJECTION, and it is the reason there is a
+// second step. `toLocal` is equirectangular scaled by cos(origin.lat): a
+// z5 tile ten degrees north of the truck is drawn with the truck's cosine,
+// which at 30° is 8% too wide, and everything on it — roads, cover, coast —
+// is stretched with it, so the map stays internally consistent and becomes,
+// smoothly, a plate carrée centred where you stand. At 1,500km that is a
+// mild distortion at the frame's edge. At 3,000km it is a lie, and the honest
+// answer past it is not a wider plane but a SPHERE: a globe with a baked
+// base, the Natural Earth coast and trunks, and the truck as a pin, which
+// `GLOBE_FROM_M` marks the hand-over to. It is the ceiling for now — the
+// plane runs right up to it — and lowering it is how the globe arrives.
+const SIGHT_MAX = 1500000;
+/** Where the tangent plane stops being honest and a globe takes over. Not
+ *  read by anything yet: the second step's hook, placed beside the number it
+ *  will divide. See the note above. */
+const GLOBE_FROM_M = SIGHT_MAX;
+/**
+ * THE NEAR END, DOUBLED WITH THE FAR ONE. 0.25 put the chart camera 44m over
+ * the truck; 0.125 puts it 22m up, a frame about 23m across — the whole of a
+ * junction and its corners, which is the scale the joins are judged at from
+ * the chart. Nothing in the chart stands within 8% of the orbit distance
+ * (`setNear`), so the near plane simply follows it in to 1.75m.
+ */
+const ZOOM_MIN = 0.125;
 /**
  * The zoom at which the frustum's ground radius reaches SIGHT_MAX — the same
  * arithmetic `viewRadius` does, run backwards, at a standstill. Derived and
  * not typed in, so raising the reach raises the ceiling with it and the two
  * cannot come apart again.
  */
-const ZOOM_MAX = SIGHT_MAX / (CAM.base
+const ZOOM_PLANE_MAX = SIGHT_MAX / (CAM.base
   * Math.tan(((CAM.fov / 2) * Math.PI) / 180)
-  * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180))
+  * Math.max(1, 1 / Math.cos(((89.9 - CAM.tilt) * Math.PI) / 180))
   * 1.35);
+/**
+ * …AND THE PLANET'S CEILING IS ABOVE THE PLANE'S, WHICH RETIRES THE ARGUMENT
+ * THAT DERIVED IT.
+ *
+ * `ZOOM_PLANE_MAX` exists because a ceiling past the streamed disc bought
+ * nothing: "identical readings at zoom 458, 800 and 1600 — the clamp had
+ * saturated and the remaining 3.5x of ceiling bought nothing but empty frame".
+ * That premise held for as long as the frame past the disc was EMPTY. It is
+ * not any more: past it there is a planet, and more zoom buys more of it.
+ *
+ * The number is an altitude rather than a zoom. Earth's angular radius from
+ * height h is asin(R/(R+h)), and the chart's half-fov is 27.5°, so the whole
+ * disc first fits at h = 1.166R ≈ 7,430km. 20,000km is that with sky around
+ * it — the planet as an object you are looking at rather than one you are
+ * pressed against.
+ */
+const GLOBE_ALT_MAX = 20000000;
+const ZOOM_MAX = Math.max(ZOOM_PLANE_MAX, GLOBE_ALT_MAX / CAM.base);
 const CAR_R = 2.4;            // collision circle — a real car's half-diagonal plus a whisker
 
 // ── geo helpers (local metres around the spawn; x=east, z=south) ───
-const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+
 const M_LAT = 111320;
 let origin = { lat: 0, lon: 0, mLon: M_LAT };
 const toLocal = (lat: number, lon: number): [number, number] => [
@@ -210,8 +331,8 @@ const tileCentreLocal = (x: number, y: number): [number, number] => {
 // which proves nothing about the thing that ships — and giving the real one a
 // world it can be judged against. See world-fixtures.ts.
 const FIXTURE: WorldFixture | null =
-  fixtureById(new URLSearchParams(location.search).get('fixture'));
-const FIXTURE_TUNE: FixtureTune = decodeTune(new URLSearchParams(location.search).get('ft'));
+  fixtureById(qs('fixture'));
+const FIXTURE_TUNE: FixtureTune = decodeTune(qs('ft'));
 /** One flat projection for the whole fixture, taken at its own origin.
  *  Deliberately NOT `toLocal`: that is relative to the SPAWN, which moves when
  *  the world rebases, and an authored world must not move with it. */
@@ -387,15 +508,14 @@ async function findSpawn(): Promise<{ lat: number; lon: number; name: string | n
   // An authored world starts where it was authored to start — every fixture
   // puts a road through its own origin, so the rig lands on tarmac.
   if (FIXTURE) return { lat: FIXTURE.spawn.lat, lon: FIXTURE.spawn.lon, name: FIXTURE.label };
-  const p = new URLSearchParams(location.search);
-  const qlat = parseFloat(p.get('lat') ?? ''), qlon = parseFloat(p.get('lon') ?? '');
+  const qlat = parseFloat(qs('lat') ?? ''), qlon = parseFloat(qs('lon') ?? '');
   if (Number.isFinite(qlat) && Number.isFinite(qlon)) return { lat: qlat, lon: qlon, name: null };
   // Default: the TOP OF EL CAPITAN, rig parked on the rim looking down the
   // valley — the splash frames the truck against that vista in chase cam, so
   // the first thing a new arrival sees is the game's whole pitch. Still a
   // KNOWN start (testing/demos want determinism); random-anywhere stays the
   // deliberate gesture: ELSEWHERE (?random=1) or a hand-typed param.
-  if (!p.has('random')) return { lat: 37.7351, lon: -119.637, name: 'El Capitan, Yosemite' };
+  if (!qsHas('random')) return { lat: 37.7351, lon: -119.637, name: 'El Capitan, Yosemite' };
   for (let i = 0; i < 4; i++) {
     // Uniform over the sphere (asin), clipped to the inhabited belt.
     const lat = clamp((Math.asin(Math.random() * 2 - 1) * 180) / Math.PI, -50, 66);
@@ -418,8 +538,6 @@ async function placeName(lat: number, lon: number): Promise<string | null> {
   } catch { return null; }
 }
 
-// ── terrain: terrarium heightfields → displaced, slope-shaded mesh ─
-interface HeightTile { tx: number; ty: number; xs: number; zs: number; w: number; h: number; data: Float32Array }
 const heightTiles = new Map<string, HeightTile>();
 let baseElev = 0;
 // One texel on the GLOBAL z-level pixel grid; overflowing pixel coords walk
@@ -489,7 +607,8 @@ const RAW_BITMAP: ImageBitmapOptions = { colorSpaceConversion: 'none', premultip
 /** Takes a Blob rather than the Response it came from: the raster cache stores
  *  bytes, and a cached tile must decode through exactly this path. */
 async function decodeTerrarium(blob: Blob, px: number): Promise<Float32Array> {
-  const bmp = await createImageBitmap(blob, RAW_BITMAP);
+  return withDecodedBitmap(blob, RAW_BITMAP, (bmp) => {
+  const t0 = performance.now();
   const cv = typeof OffscreenCanvas !== 'undefined'
     ? new OffscreenCanvas(px, px)
     : Object.assign(document.createElement('canvas'), { width: px, height: px });
@@ -499,7 +618,9 @@ async function decodeTerrarium(blob: Blob, px: number): Promise<Float32Array> {
   const d = cx.getImageData(0, 0, px, px).data;
   const out = new Float32Array(px * px);
   for (let i = 0; i < px * px; i++) out[i] = d[i * 4] * 256 + d[i * 4 + 1] + d[i * 4 + 2] / 256 - 32768;
+  profAdd('tileDecode', t0);
   return out;
+  });
 }
 // ── MAPTERHORN: the same encoding, better ground ───────────────────
 // AWS's terrarium mosaic is unmaintained and, under this project's own tiles,
@@ -718,6 +839,15 @@ const COVER_Z = 12;   // ~9.8km per tile; the source pyramid has a level at 37m/
 const COVER_PX = 38;
 const COVER = { tree: 10, shrub: 20, grass: 30, crop: 40, built: 50, bare: 60,
   snow: 70, water: 80, wetland: 90, mangrove: 95, moss: 100 } as const;
+/** Pixels a decode moved off a valid class, session-wide. Non-zero is the
+ *  tell that this browser colour-manages the raster (iOS Safari does). */
+let coverSnapped = 0;
+const COVER_CLASSES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100];
+function snapCoverClass(v: number): number {
+  let best = v, dist = 3;                    // further than 2 off is not a shifted class
+  for (const c of COVER_CLASSES) { const d = Math.abs(c - v); if (d < dist) { dist = d; best = c; } }
+  return best;
+}
 const COVER_NAME: Record<number, string> = {
   10: 'FOREST', 20: 'SCRUB', 30: 'GRASS', 40: 'FARMLAND', 50: 'URBAN', 60: 'BARREN',
   70: 'ICE', 80: 'WATER', 90: 'WETLAND', 95: 'MANGROVE', 100: 'TUNDRA',
@@ -751,7 +881,8 @@ async function coverRaster(z: number, x: number, y: number): Promise<Uint8Array>
     blob = await res.blob();
   }
   try {
-    const bmp = await createImageBitmap(blob, RAW_BITMAP);
+    return await withDecodedBitmap(blob, RAW_BITMAP, (bmp) => {
+    const t0 = performance.now();
     const cv = typeof OffscreenCanvas !== 'undefined'
       ? new OffscreenCanvas(256, 256)
       : Object.assign(document.createElement('canvas'), { width: 256, height: 256 });
@@ -760,12 +891,27 @@ async function coverRaster(z: number, x: number, y: number): Promise<Uint8Array>
     cx.drawImage(bmp, 0, 0);
     const d = cx.getImageData(0, 0, 256, 256).data;
     const data = new Uint8Array(256 * 256);
-    for (let i = 0; i < data.length; i++) data[i] = d[i * 4];   // red channel IS the class
+    // THE CLASS IS SNAPPED, because iOS colour-manages it anyway. RAW_BITMAP
+    // asks for no colour-space conversion and Safari still applies one — with
+    // DITHER — so a tile of class 10 came back as a mix of 9 and 10 (a field
+    // query at George read "CLASS 9 ×6, FOREST ×3" off one raster that holds
+    // nothing but exact classes: verified byte for byte through the cache).
+    // Every reader compares exactly (`coverWater` is `=== 80`), so a dithered
+    // 79 was dry land. The nearest valid class is the truth; the count of
+    // pixels that needed it is in `__cover().snapped`.
+    for (let i = 0; i < data.length; i++) {
+      const v = d[i * 4];
+      const snapped = snapCoverClass(v);
+      if (snapped !== v) coverSnapped++;
+      data[i] = snapped;
+    }
+    profAdd('coverDecode', t0);
     // Kept only now the pixels are real. The cell computes this tile out of
     // WorldCover COGs and can answer 200 with an error document; storing that
     // would turn one bad minute upstream into a permanently blank ecology.
     if (!fromDisk) writeRaster(url, blob);
     return data;
+    });
   } catch (e) {
     // Bytes off the disk that will not decode are a permanent hole otherwise:
     // the caller waits twenty seconds and re-reads the same bad bytes for the
@@ -784,10 +930,12 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
     const b = tileBounds(x, y, COVER_Z);
     const [wx0, wz0] = toLocal(b.latN, b.lonW);
     const [wx1, wz1] = toLocal(b.latS, b.lonE);
-    coverTiles.set(key, {
+    const ctile: CoverTile = {
       xs: Math.min(wx0, wx1), zs: Math.min(wz0, wz1),
       w: Math.abs(wx1 - wx0), h: Math.abs(wz1 - wz0), data,
-    });
+    };
+    coverTiles.set(key, ctile);
+    tworker?.mirrorCover(key, ctile);
     // New evidence: every climate corner that had none gets one more chance.
     climField.noteCover();
     // Terrain built before this arrived was coloured from a guess and, more
@@ -922,7 +1070,11 @@ function sampleCoverRaw(ex: number, ez: number): number | undefined {
 // leave the outer half of the widest view blind again for want of one more
 // rung. z6 covers 1,296km. The cell serves every one of these (measured z5
 // through z12, all 200, 2-15KB, 3-4s cold and cached for ever after).
-const COVER_WIDE_LEVELS = [10, 8, 6];
+// z4 is the 1,500km rung: a z5 shell ring is 2,710km across at 30°, and a z6
+// cover ring reaches 1,565 — two thirds of the shell blind at the ceiling
+// without it. A z4 cover tile is 2,504km on a side at 9.8km a pixel, which
+// at that zoom is a pixel and a half of chart.
+const COVER_WIDE_LEVELS = [10, 8, 6, 4];
 const COVER_WIDE_RING = 2;            // 5x5 tiles at whichever level is current
 let coverWideZ = 0;                   // 0 until the view is wide enough to want one
 const coverWide = new Map<string, CoverTile>();
@@ -1034,6 +1186,24 @@ function coverPaint(ex: number, ez: number): number | null {
   const j = COVER_PX * 0.55;
   const alt = sampleCover(ex + (h1 - 0.5) * j, ez + (h2 - 0.5) * j);
   return alt === null || alt === COVER.water ? truth : alt;
+}
+/** THE BANK'S PAINT UNDER THE WATER. The sward's colour field is what the
+ *  water shader now reads as the ground's colour at the fragment, and inside
+ *  a river polygon the palette's own answer is the class-80 water paint —
+ *  so the shallows took the colour of a pale riverbed rather than of the
+ *  bank they lie against. A texel classed water paints as the nearest
+ *  non-water class on a ring around it, grass failing that. */
+function bankPaint(ex: number, ez: number): number | null {
+  const truth = sampleCover(ex, ez);
+  if (truth !== COVER.water) return coverPaint(ex, ez);
+  for (const r of [30, 60, 100]) {
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const c = sampleCover(ex + Math.sin(a) * r, ez + Math.cos(a) * r);
+      if (c !== null && c !== COVER.water) return c;
+    }
+  }
+  return COVER.grass;
 }
 /** Is there any elevation data under this point at all? sampleHeight answers
  *  0 where there is none — "spawn level" — which is a fiction anything built
@@ -1189,7 +1359,7 @@ const BIOMES: Record<string, Biome> = {
     name: 'arid',
     zenith: [0.055, 0.135, 0.30], horizon: [0.55, 0.48, 0.36], sunDisc: [1.0, 0.86, 0.55], below: [0.30, 0.26, 0.22],
     hazeBase: [0.24, 0.21, 0.17], hazeSun: [0.50, 0.35, 0.17],
-    ramp: [[0.5, [0.07, 0.30, 0.35]], [60, [0.44, 0.37, 0.22]], [300, [0.41, 0.33, 0.19]], [900, [0.37, 0.27, 0.15]], [1800, [0.33, 0.28, 0.23]], [1e9, [0.62, 0.63, 0.65]]],
+    ramp: GROUND_RAMPS.arid,
     ...FOLIAGE_BANDS.arid,
     sun: 0xffe0b0, sunI: 1.5, hemiSky: 0xbcd2ee, hemiGnd: 0x6a5a3c, hemiI: 0.95,
   },
@@ -1197,7 +1367,7 @@ const BIOMES: Record<string, Biome> = {
     name: 'tropical',
     zenith: [0.05, 0.14, 0.26], horizon: [0.40, 0.46, 0.38], sunDisc: [1.0, 0.92, 0.70], below: [0.16, 0.20, 0.16],
     hazeBase: [0.20, 0.24, 0.20], hazeSun: [0.42, 0.40, 0.22],
-    ramp: [[0.5, [0.06, 0.26, 0.30]], [60, [0.14, 0.27, 0.14]], [300, [0.13, 0.24, 0.13]], [900, [0.16, 0.24, 0.14]], [1800, [0.24, 0.26, 0.20]], [1e9, [0.60, 0.62, 0.64]]],
+    ramp: GROUND_RAMPS.tropical,
     ...FOLIAGE_BANDS.tropical,
     sun: 0xfff0cc, sunI: 1.35, hemiSky: 0xa8c8dc, hemiGnd: 0x2c4426, hemiI: 1.0,
   },
@@ -1205,7 +1375,7 @@ const BIOMES: Record<string, Biome> = {
     name: 'temperate',
     zenith: [0.05, 0.12, 0.28], horizon: [0.46, 0.44, 0.40], sunDisc: [1.0, 0.88, 0.62], below: [0.22, 0.22, 0.20],
     hazeBase: [0.22, 0.22, 0.20], hazeSun: [0.46, 0.36, 0.20],
-    ramp: [[0.5, [0.07, 0.28, 0.33]], [60, [0.25, 0.29, 0.17]], [300, [0.24, 0.27, 0.16]], [900, [0.28, 0.26, 0.17]], [1800, [0.31, 0.29, 0.25]], [1e9, [0.66, 0.67, 0.69]]],
+    ramp: GROUND_RAMPS.temperate,
     ...FOLIAGE_BANDS.temperate,
     sun: 0xffe6c2, sunI: 1.4, hemiSky: 0xb4ccea, hemiGnd: 0x4c5238, hemiI: 0.9,
   },
@@ -1213,7 +1383,7 @@ const BIOMES: Record<string, Biome> = {
     name: 'boreal',
     zenith: [0.05, 0.11, 0.27], horizon: [0.40, 0.44, 0.48], sunDisc: [1.0, 0.84, 0.62], below: [0.20, 0.22, 0.24],
     hazeBase: [0.20, 0.23, 0.26], hazeSun: [0.42, 0.36, 0.26],
-    ramp: [[0.5, [0.06, 0.24, 0.31]], [60, [0.18, 0.25, 0.19]], [300, [0.17, 0.23, 0.18]], [900, [0.21, 0.23, 0.19]], [1800, [0.30, 0.31, 0.30]], [1e9, [0.74, 0.76, 0.78]]],
+    ramp: GROUND_RAMPS.boreal,
     ...FOLIAGE_BANDS.boreal,
     sun: 0xffe2cc, sunI: 1.25, hemiSky: 0xaec6e4, hemiGnd: 0x3a4438, hemiI: 0.95,
   },
@@ -1221,7 +1391,7 @@ const BIOMES: Record<string, Biome> = {
     name: 'alpine',
     zenith: [0.04, 0.10, 0.30], horizon: [0.52, 0.54, 0.58], sunDisc: [1.0, 0.94, 0.80], below: [0.26, 0.27, 0.29],
     hazeBase: [0.26, 0.28, 0.31], hazeSun: [0.48, 0.44, 0.36],
-    ramp: [[0.5, [0.08, 0.28, 0.36]], [60, [0.28, 0.30, 0.24]], [300, [0.30, 0.30, 0.26]], [900, [0.34, 0.33, 0.30]], [1800, [0.44, 0.45, 0.46]], [1e9, [0.86, 0.88, 0.90]]],
+    ramp: GROUND_RAMPS.alpine,
     ...FOLIAGE_BANDS.alpine,
     sun: 0xfff2e0, sunI: 1.6, hemiSky: 0xc4d8f2, hemiGnd: 0x5a5e58, hemiI: 1.05,
   },
@@ -1231,12 +1401,12 @@ let biome: Biome = BIOMES.temperate;
  *  climate field, not merely the sky — otherwise forcing `arid` would still
  *  blend a green valley through the middle of the desert it was asked for. */
 const biomeForced: Biome | null =
-  BIOMES[new URLSearchParams(location.search).get('biome') ?? ''] ?? null;
+  BIOMES[qs('biome') ?? ''] ?? null;
 /** The latitude guess. It is a poor one — it gives a whole world ONE palette,
  *  so the Sahara and the Nile delta came out identical — but it is what stands
  *  in until real land cover arrives, and cover is never guaranteed. */
 function pickBiome(lat: number, elevAbs: number): Biome {
-  const q = new URLSearchParams(location.search).get('biome');
+  const q = qs('biome');
   if (q && BIOMES[q]) return BIOMES[q];
   if (elevAbs > 1500) return BIOMES.alpine;
   const a = Math.abs(lat);
@@ -1249,7 +1419,7 @@ function pickBiome(lat: number, elevAbs: number): Biome {
  *  the ground around you. Latitude still breaks the ties a cover class cannot —
  *  forest is boreal at 60° and jungle at 5°, and the pixel says only "trees". */
 function biomeFromCover(lat: number, elevAbs: number): Biome | null {
-  if (new URLSearchParams(location.search).get('biome')) return null;  // art direction wins
+  if (qs('biome')) return null;  // art direction wins
   const hist = new Map<number, number>();
   let n = 0;
   for (let dz = -2400; dz <= 2400; dz += 200) {
@@ -1344,6 +1514,219 @@ const climEnv = {
 };
 const climField = new ClimateField(climEnv);
 /**
+ * ── THE SITE: THE SAME WORLD, ASKED A HARDER QUESTION ──
+ *
+ * `climField` answers "which of five biomes", which is what the sky, the light
+ * and the ground ramp need and is far too coarse to choose a plant with: it
+ * puts fynbos, chaparral, savanna, steppe and monsoon forest in one box, and
+ * it reads the LAND COVER, so its verdict is partly the vegetation predicting
+ * the vegetation.
+ *
+ * `siteAt` is the layer under it. It classifies nothing — it reports the
+ * physical facts a plant responds to (heat, the annual range, frost, water and
+ * WHEN the water arrives, continentality, rain shadow, height against the
+ * treeline, and the local slope/hollow/salt terms) and leaves the choosing to
+ * whatever sits on top. It reads no cover at all, so it is not circular.
+ *
+ * Three inputs the biome field never needed, and each is a different scale:
+ * the SIGNED latitude (a slope faces the sun the other way in the south), the
+ * COARSE distance to salt water in kilometres (baked and bundled — see
+ * coast.ts, it has to answer at 400km and nothing streamed reaches that), and
+ * the LOCAL distance to salt water in metres, which is a different question
+ * with a different answer and gets its own sampler below.
+ */
+/** METRES to the nearest sea, or null where no cover tile has judged this
+ *  point at all. Read only by `salt`, whose whole reach is nine hundred
+ *  metres, so the search stops there and a farther sea is the same as none.
+ *
+ *  `oceanAt` cannot say "I do not know" — it answers false both for dry land
+ *  and for a point no cover tile covers — so the two are separated here by
+ *  asking the tile index directly. That distinction is the entire reason this
+ *  returns `number | null`: an unevidenced coast must not read as an interior,
+ *  and a mangrove is not the fallback for a world that has not streamed. */
+const SEA_NEAR_MAX = 1000;
+function seaNearAt(ex: number, ez: number): number | null {
+  // THE GLOBAL FIELD REJECTS THE INTERIOR FOR FREE, and most of the world is
+  // the interior. A half-degree cell is 55km across, so a point the baked
+  // coastline puts 60km from salt water cannot be within a kilometre of it —
+  // and that verdict needs no cover tile, no mask build and no ring walk. It
+  // is also STRONGER than the cover raster could be: the raster reaches 28km
+  // and would have to say "not in my ring" where this says "not on Earth".
+  const [la, lo] = localToLatLon(ex, ez);
+  if (Number.isFinite(la) && Number.isFinite(lo) && coastKm(la, lo) > 60) return 1e9;
+  let covered = false;
+  for (const [, t] of coverTiles) {
+    if (ex >= t.xs && ez >= t.zs && ex < t.xs + t.w && ez < t.zs + t.h) { covered = true; break; }
+  }
+  if (!covered) return null;
+  if (oceanAt(ex, ez)) return 0;
+  // Rings outward at the resolution the TERM can use, and no finer. `salt` is
+  // `1 - seaM/900`, so a hundred metres of distance is a tenth of the answer
+  // and sixteen samples put one every 39m of arc at the outer ring. The first
+  // cut walked 818 samples for one site — 60m steps with the ring count
+  // growing — which is a mask read per sample through every loaded cover tile,
+  // paid on every INLAND site since the early-out above did not exist yet.
+  for (let r = 100; r <= SEA_NEAR_MAX; r += 100) {
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      if (oceanAt(ex + Math.cos(a) * r, ez + Math.sin(a) * r)) return r;
+    }
+  }
+  return 1e9;   // covered, and the sea is not within reach of the term
+}
+const siteEnv = {
+  ...climEnv,
+  latAt: (x: number, z: number) => localToLatLon(x, z)[0],
+  coastKmAt: (x: number, z: number) => {
+    const [la, lo] = localToLatLon(x, z);
+    return Number.isFinite(la) && Number.isFinite(lo) ? coastKm(la, lo) : null;
+  },
+  seaNearAt,
+};
+/** A site costs roughly twenty ground reads — four for the slope, eight for
+ *  the hollow ring, six along the upwind line — so it is memoised on a 250m
+ *  cell and thrown away whenever the terrain has been rebuilt. The stamp
+ *  matters more than the cell: a site sampled before the DEM arrived is all
+ *  fallbacks, and it must not outlive the ground that would correct it. */
+const siteMemo = new Map<string, { s: SiteClimate; stamp: number }>();
+const SITE_CELL = 250;
+function siteNow(ex: number, ez: number): SiteClimate {
+  const k = `${Math.round(ex / SITE_CELL)}/${Math.round(ez / SITE_CELL)}`;
+  const held = siteMemo.get(k);
+  if (held && held.stamp === terrainBuilds) return held.s;
+  const s = siteAt(siteEnv, ex, ez);
+  siteMemo.set(k, { s, stamp: terrainBuilds });
+  // Insertion order is eviction order: the country behind you goes first.
+  while (siteMemo.size > 96) siteMemo.delete(siteMemo.keys().next().value as string);
+  return s;
+}
+/**
+ * ── AND THE ONE THING NO CLIMATE CAN DERIVE ──
+ *
+ * RESOLVE Ecoregions, through the same read-through tile cache as everything
+ * else. One coarse zoom (z5, ~1250km a tile) because ecoregion boundaries are
+ * not real to five kilometres, let alone to five hundred metres, and a pyramid
+ * over data this coarse would multiply the traffic to say the same thing.
+ *
+ * The decode and the point test are in `client/eco.ts` and are pure, so they
+ * are tested in node over the real payloads (`devtools/eco.test.mjs`). What
+ * lives here is only the wiring: which tile, when to ask, and what a caller
+ * sees while the answer is in flight — which is `null`, the same as the true
+ * answer over the ocean, because a caller that must not guess and a caller
+ * that must wait want the same thing from this.
+ */
+const ecoTiles = new Map<string, EcoRegion[]>();
+const ecoAsked = new Set<string>();
+const ecoFail = new Map<string, number>();
+const ECO_RETRY_MS = 30000;
+let ecoInFlight = 0;
+async function loadEcoTile(tx: number, ty: number): Promise<void> {
+  const key = `${tx}/${ty}`;
+  if (ecoAsked.has(key)) return;
+  const cold = ecoFail.get(key);
+  if (cold !== undefined && (cold === Infinity || performance.now() - cold < ECO_RETRY_MS)) return;
+  ecoAsked.add(key);
+  ecoInFlight++;
+  try {
+    const res = await fetch(`${CELL_BASE}/~/eco/v1/${ECO_Z}/${tx}/${ty}`);
+    if (!res.ok) throw new Error(`eco HTTP ${res.status}`);
+    ecoTiles.set(key, decodeEcoTile(await res.json()));
+    ecoFail.delete(key);
+    // A z5 tile is a twelve-hundred-kilometre square: a session that drove for
+    // a week would hold a handful. The cap is against the attract reel, which
+    // hops continents on a timer and would otherwise accumulate the planet.
+    while (ecoTiles.size > 24) ecoTiles.delete(ecoTiles.keys().next().value as string);
+  } catch (err) {
+    ecoAsked.delete(key);
+    // A 4xx is permanent — the route refuses anything but z5 and the tile
+    // index cannot change under us — so it is never asked again.
+    const hard = /HTTP 4\d\d/.test(String((err as Error).message ?? err));
+    ecoFail.set(key, hard ? Infinity : performance.now());
+  } finally {
+    ecoInFlight--;
+  }
+}
+/** Which ecoregion holds this point, or null while the tile is in flight, over
+ *  the sea, or on a fixture — where asking would fetch the REAL ecology of the
+ *  authored crossroads' coordinates, which is the trap `loadOvTile` and
+ *  `loadPeakTile` already wear a gate for. */
+function ecoAt(ex: number, ez: number): EcoHit | null {
+  // A FIXTURE DECLARES ITS REGION RATHER THAN ASKING FOR ONE. Fetching here
+  // would pull the REAL ecology of the fixture's coordinates — for the authored
+  // worlds that is the country above Geneva, which is the trap `loadOvTile` and
+  // `loadPeakTile` already wear a gate for. But returning a flat null left the
+  // guild untestable on the only worlds that are deterministic and need no
+  // network, so a fixture that knows where it is says so (world-fixtures.ts,
+  // `WorldFixture.eco`); an authored one is nowhere and still answers null.
+  if (FIXTURE) return FIXTURE.eco ?? null;
+  const [la, lo] = localToLatLon(ex, ez);
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) return null;
+  const [tx, ty] = ecoTileOf(la, lo);
+  const regs = ecoTiles.get(`${tx}/${ty}`);
+  if (!regs) { void loadEcoTile(tx, ty); return null; }
+  return ecoLookup(regs, lo, la);
+}
+/**
+ * ── AND THE GUILD, WHICH IS WHAT ANY OF THIS WAS FOR ──
+ *
+ * `client/guild.ts` turns a site and an ecoregion into weights over the
+ * archetypes the game already has. This is the seam: the memo, the switch, and
+ * the one thing the pure module cannot decide — what to do when there is no
+ * answer yet.
+ *
+ * `?guild=0` is the exact A/B. It restores the shipping climate path
+ * completely, which matters because this changes the vegetation of every
+ * landscape in the game and "it looks different" is not a measurement.
+ */
+const GUILD_ON = qs('guild') !== '0';
+const guildMemo = new Map<string, { g: Guild | null; stamp: number; eco: number }>();
+// ONE ENTRY IN FRONT OF THE MAP. `guildNow` is asked once per vegetation
+// CANDIDATE and once per planted site — tens of thousands of times in a seed
+// burst — and almost every one of those is the same 250m cell as the last,
+// because a veg cell is 220m. Without this the map lookup is fine and the
+// STRING KEY is not: it is an allocation per call, in the hottest loop the
+// vegetation has, in a session whose profiler already reads 27% gap.
+let guildLastX = NaN, guildLastZ = NaN, guildLastStamp = -1, guildLastEco = -1;
+let guildLast: Guild | null = null;
+function guildNow(ex: number, ez: number): Guild | null {
+  if (!GUILD_ON) return null;
+  const cx = Math.round(ex / SITE_CELL), cz = Math.round(ez / SITE_CELL);
+  if (cx === guildLastX && cz === guildLastZ
+    && guildLastStamp === terrainBuilds && guildLastEco === ecoTiles.size) return guildLast;
+  const k = `${cx}/${cz}`;
+  const held = guildMemo.get(k);
+  // Stamped on the ECO TILE COUNT as well as the terrain, because a guild
+  // reached before the region arrived is the climate fallback and must be
+  // replaced the moment there is a real answer — the veg cells that already
+  // seeded under it are held off separately (see `ecoPending` in seedCell).
+  const g = held && held.stamp === terrainBuilds && held.eco === ecoTiles.size
+    ? held.g
+    : guildAt(siteNow(ex, ez), ecoAt(ex, ez));
+  if (!held || held.stamp !== terrainBuilds || held.eco !== ecoTiles.size) {
+    guildMemo.set(k, { g, stamp: terrainBuilds, eco: ecoTiles.size });
+    while (guildMemo.size > 96) guildMemo.delete(guildMemo.keys().next().value as string);
+  }
+  guildLastX = cx; guildLastZ = cz;
+  guildLastStamp = terrainBuilds; guildLastEco = ecoTiles.size;
+  guildLast = g;
+  return g;
+}
+/** Is the ecoregion for this point still coming? A veg cell that seeds now
+ *  would plant the climate's guess and never revisit it, so `seedCell` waits —
+ *  the same bargain it already strikes with a cover tile, and for the same
+ *  reason: vegetation that changes species while you look at it is worse than
+ *  vegetation that arrives a second late. */
+function ecoPending(ex: number, ez: number): boolean {
+  if (FIXTURE || !GUILD_ON) return false;
+  const [la, lo] = localToLatLon(ex, ez);
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) return false;
+  const [tx, ty] = ecoTileOf(la, lo);
+  const key = `${tx}/${ty}`;
+  if (ecoTiles.has(key)) return false;
+  // A tile that has permanently refused is not pending — it is an answer.
+  return ecoFail.get(key) !== Infinity;
+}
+/**
  * ── THE HYDRO SEAM (stage 1: it answers, it does not draw) ──
  *
  * `?hydro=1` only. Nothing here is added to the scene, nothing existing reads
@@ -1391,6 +1774,82 @@ const climField = new ClimateField(climEnv);
  */
 const waterFromDials = (rec: Record<string, number>): boolean =>
   ((rec['v'] ?? 1) < 4 ? true : rec['water'] !== 0);
+/** The shoreline pass as one switch, for the A/B: the water's local
+ *  terrain colour and the sward's mineral and reed banks. `shore=0` is the
+ *  frame colour and hillside grass to the waterline, as it was. */
+const SHORE_ON = qsOn('shore', true);
+/**
+ * ── A DEVTOOLS PANEL FOR A PHONE ──
+ *
+ * Every fault this file records from the seat was found on a device with no
+ * console: the telemetry paste, the probe-module route in index.ts and the
+ * status lines in SETTINGS all exist because there is no way to READ a phone
+ * from the phone. eruda is that way — console, network, elements, storage
+ * and resources in a panel on the page — loaded only when asked, never at
+ * boot (half a megabyte nobody driving should pay for), from a pinned build
+ * on jsdelivr; script-src carries the host, see CSP in index.ts.
+ *
+ * WHAT IT CANNOT DO HERE, and it is on purpose: the page forbids eval, so
+ * typing an expression into eruda's prompt fails. Reading what the game
+ * logged, fetched and stored is the value; running code on the phone is the
+ * probe module's job, which does it without a CSP hole.
+ */
+const ERUDA_SRC = 'https://cdn.jsdelivr.net/npm/eruda@3.4.3/eruda.js';
+/** Whether THIS load asked for the console, which is the only kind the cell
+ *  serves with 'unsafe-eval' (CSP_EVAL in index.ts) — so it is also whether
+ *  the console's prompt can run what is typed into it. Reported from the seat
+ *  on the first build, which loaded the console under the locked policy:
+ *  "Refused to evaluate a string as JavaScript". */
+const ERUDA_EVAL = qsOn('eruda', false);
+/** Whether this page MAY evaluate a string — asked of the browser by page
+ *  script, once, at boot, which is the only honest way to ask. A probe run
+ *  through the DevTools protocol (`page.evaluate` in the harness) is exempt
+ *  from the policy's eval rule and reports yes under any header; eruda's
+ *  prompt is page script and gets the real answer, which the seat reported. */
+const ERUDA_EVAL_OK = ((): boolean => {
+  try { new Function('return 1'); return true; } catch { return false; }
+})();
+const erudaUp = (): string => (ERUDA_EVAL_OK
+  ? 'DEV CONSOLE IS UP — THE ICON IS BOTTOM RIGHT; ITS PROMPT RUNS CODE ON THIS LOAD'
+  : 'DEV CONSOLE IS UP — READ-ONLY: ITS PROMPT CANNOT RUN CODE ON THIS LOAD. RELOAD WITH CONSOLE FOR THAT');
+let erudaState: 'off' | 'loading' | 'on' | 'failed' = 'off';
+function loadEruda(status?: (s: string, bad?: boolean) => void): void {
+  const w = window as unknown as { eruda?: { init(): void; show?(): void } };
+  if (w.eruda) { erudaState = 'on'; w.eruda.show?.(); status?.(erudaUp()); return; }
+  if (erudaState === 'loading') { status?.('LOADING THE DEV CONSOLE…'); return; }
+  erudaState = 'loading';
+  status?.('LOADING THE DEV CONSOLE…');
+  const tag = document.createElement('script');
+  tag.src = ERUDA_SRC;
+  tag.async = true;
+  tag.onload = () => {
+    if (!w.eruda) { erudaState = 'failed'; status?.('THE SCRIPT LOADED AND LEFT NO CONSOLE — NOT THE BUILD EXPECTED', true); return; }
+    w.eruda.init();
+    w.eruda.show?.();
+    erudaState = 'on';
+    status?.(erudaUp());
+  };
+  // A script the CSP refuses fires error, not load, exactly as a dead network
+  // does — the message names both, because from the seat they look the same.
+  tag.onerror = () => {
+    erudaState = 'failed';
+    status?.('COULD NOT LOAD THE DEV CONSOLE — OFFLINE, OR THIS PAGE\'S CSP DOES NOT ALLOW CDN.JSDELIVR.NET', true);
+  };
+  document.head.appendChild(tag);
+}
+/** Leave with the console: the same place, `?eruda=1` added, so the page
+ *  comes back under the policy that lets the prompt run. The unload flush
+ *  (pagehide) writes the survey, the marks and the docket first, so what a
+ *  reload costs is the streamed world, not the record. */
+function reloadWithConsole(status?: (s: string, bad?: boolean) => void): void {
+  const u = new URL(location.href);
+  u.searchParams.set('eruda', '1');
+  status?.('RELOADING WITH THE CONSOLE — ITS PROMPT WILL RUN CODE ON THAT LOAD…');
+  setTimeout(() => location.assign(u.toString()), 150);
+}
+if (ERUDA_EVAL) loadEruda();
+(window as unknown as { __eruda?: object }).__eruda = (): object =>
+  ({ state: erudaState, evalOn: ERUDA_EVAL, evalAllowed: ERUDA_EVAL_OK, src: ERUDA_SRC, present: !!(window as unknown as { eruda?: unknown }).eruda });
 const HYDRO_ON = ((): boolean => {
   const q = /[?&]hydro=([01])/.exec(location.search);
   if (q) return q[1] === '1';
@@ -1413,6 +1872,178 @@ const oceanMasks = new Map<string, { grid: MaskGrid; stats: MaskStats; datum: nu
    *  means the answer is final; anything else means ask again as ground
    *  arrives — see the cache test in `oceanMaskFor`. */
   unknown: number; tiles: number }>();
+/**
+ * ── INLAND WATER FOR HYDRO, FROM THE COVER ──
+ *
+ * The terrain painter knew more water than the hydro field. It paints every
+ * WorldCover class-80 pixel; hydro was handed OSM ways and the ocean mask,
+ * which refuses every class-80 pixel above the sea datum or landward of the
+ * coastline — and an estuary is landward by definition. At George (measured
+ * through the cell's cache) the OSM tiles held one river centreline with no
+ * width while the cover held a band 110–270 m wide; the drawn river was the
+ * centreline buffered by a class default.
+ *
+ * Every time a cover tile's ocean mask is (re)built, the class-80 pixels the
+ * flood refused are traced into polygons (client/inland-water.ts) and
+ * registered as `landcover` features, one per connected component: a `lake`,
+ * or a `river` when a flowing OSM line runs through it, in which case hydro
+ * grades its surface along that centreline's profile (build-tile). The
+ * registry keys bodies by feature id, so a component keeps one level across
+ * the terrain tiles it spans; a body split by a COVER tile edge is two ids,
+ * which is the known seam (cover tiles are ~10 km, so rare).
+ *
+ * The mask signature skips the retrace when nothing changed; a rebuild that
+ * changes it replaces the tile's features and dirties the terrain tiles they
+ * touch, exactly as an OSM way arriving does.
+ */
+const COVER_WATER_MIN_PX = 4;                    // a lone 38 m pixel is a shadow, not a pond
+interface CoverHydroRec { slots: string[]; sig: number; pixels: number }
+/** A component's id is its SHAPE, not its position in the trace: a retrace
+ *  that leaves a lake alone keeps its feature, its body and its level, and
+ *  dirties nothing. Without this every mask rebuild (each DEM tile that
+ *  lands moves the flood a little) replaced every feature of the cover tile
+ *  and rebuilt every hydro tile under it. */
+const coverCompId = (key: string, c: { minX: number; minY: number; maxX: number; maxY: number; pixels: number }): string =>
+  `landcover:${key}:${c.minX},${c.minY},${c.maxX},${c.maxY},${c.pixels}`;
+const coverHydro = new Map<string, CoverHydroRec>();
+let coverHydroTraceMs = 0, coverHydroTraces = 0;
+const FLOWING_KINDS = new Set<string>(['river', 'stream', 'canal']);
+function hydroDirtyBox(minX: number, minZ: number, maxX: number, maxZ: number): void {
+  for (const [k, h] of heightTiles) {
+    if (maxX < h.xs || minX > h.xs + h.w || maxZ < h.zs || minZ > h.zs + h.h) continue;
+    if (hydroRev.has(k)) hydroDirty.add(k);
+  }
+}
+/** Does a flowing OSM line already in the store run through this polygon? */
+function coverFlowingCrosses(outer: Float64Array, minX: number, minZ: number, maxX: number, maxZ: number): boolean {
+  const poly = { outer, holes: [] as Float64Array[] };
+  for (const e of hydroFeats.values()) {
+    const f = e.f;
+    if (f.geometry.type !== 'line' || !FLOWING_KINDS.has(f.kind)) continue;
+    if (e.maxX < minX || e.minX > maxX || e.maxZ < minZ || e.minZ > maxZ) continue;
+    const p = f.geometry.points;
+    for (let i = 0; i + 1 < p.length; i += 6) if (pointInPolygon(p[i], p[i + 1], poly)) return true;
+  }
+  return false;
+}
+function coverWaterFeed(key: string, t: CoverTile, ocean: MaskGrid, elevation?: Float32Array): void {
+  if (!HYDRO_ON) return;
+  const mask = inlandMask(t.data, ocean.data, 256 * 256);
+  // The signature carries how much of the water the DEM answers for: a lake
+  // with no ground under it yet is skipped below, and must come back when
+  // its tiles land even though the inland mask itself has not changed.
+  let known = 0;
+  if (elevation) for (let i = 0; i < mask.length; i++) if (mask[i] && Number.isFinite(elevation[i])) known++;
+  const sig = (maskSignature(mask) ^ Math.imul(known, 7919)) | 0;
+  const had = coverHydro.get(key);
+  if (had && had.sig === sig) return;
+  const t0 = performance.now();
+  const drop = (rec: CoverHydroRec, keep?: Set<string>): void => {
+    for (const slot of rec.slots) {
+      if (keep?.has(slot)) continue;
+      const e = hydroFeats.get(slot);
+      if (!e) continue;
+      hydroFeats.delete(slot);
+      hydroDirtyBox(e.minX, e.minZ, e.maxX, e.maxZ);
+    }
+  };
+  // Cover tiles that left the ring take their water with them.
+  for (const [k, rec] of coverHydro) if (k !== key && !coverTiles.has(k)) { drop(rec); coverHydro.delete(k); }
+  const comps = inlandComponents(mask, 256, 256, COVER_WATER_MIN_PX, 200, elevation);
+  const wanted = new Set<string>();
+  for (const c of comps) if (!(elevation && c.known === 0)) wanted.add(`cover:${coverCompId(key, c)}`);
+  if (had) drop(had, wanted);
+  const toX = (px: number): number => t.xs + (px / 256) * t.w;
+  const toZ = (pz: number): number => t.zs + (pz / 256) * t.h;
+  const ring = (r: number[]): Float64Array => {
+    const out = new Float64Array(r.length);
+    for (let i = 0; i < r.length; i += 2) { out[i] = toX(r[i]); out[i + 1] = toZ(r[i + 1]); }
+    return out;
+  };
+  const slots: string[] = [];
+  let pixels = 0;
+  for (let i = 0; i < comps.length; i++) {
+    if (hydroFeats.size >= HYDRO_FEAT_CAP) { hydroFeatsFull++; break; }
+    const c = comps[i];
+    if (elevation && c.known === 0) continue;         // no DEM under it yet: nothing to build on
+    const id = coverCompId(key, c);
+    const slot = `cover:${id}`;
+    if (hydroFeats.has(slot)) { slots.push(slot); pixels += c.pixels; continue; }   // unchanged: keep it, dirty nothing
+    const outer = ring(c.outer), holes = c.holes.map(ring);
+    const minX = toX(c.minX), maxX = toX(c.maxX + 1), minZ = toZ(c.minY), maxZ = toZ(c.maxY + 1);
+    if (coverOsmFraction({ outer, holes }, minX, minZ, maxX, maxZ) >= COVER_OSM_COVERED) continue;   // OSM draws this water
+    const kind = coverFlowingCrosses(outer, minX, minZ, maxX, maxZ) ? 'river' : 'lake';
+    const f: HydroFeature = {
+      id, source: 'landcover', kind, intermittent: false, tidal: false,
+      geometry: { type: 'area', polygons: [{ outer, holes }] },
+    };
+    hydroFeats.set(slot, { f, minX, minZ, maxX, maxZ });
+    slots.push(slot);
+    pixels += c.pixels;
+    hydroDirtyBox(minX, minZ, maxX, maxZ);
+  }
+  coverHydro.set(key, { slots, sig, pixels });
+  coverHydroTraceMs += performance.now() - t0; coverHydroTraces++;
+}
+/** HOW MUCH OF A COVER BODY OSM ALREADY DRAWS. Where an OSM water outline
+ *  covers most of a cover component, the component is the same water at 38 m
+ *  and with bank in it, and it is dropped: the outline is the better body,
+ *  and the cover's version stood above it — the Aare at the Hunzikenbrücke
+ *  had both, the cover's 3.3 m higher, flooding the bridge. Sampled on a
+ *  grid over the component's box, points inside the component only; a
+ *  specific OSM feature can be asked about, or every OSM area in the store. */
+const COVER_OSM_COVERED = 0.6;
+function coverOsmFraction(poly: { outer: Float64Array; holes: readonly Float64Array[] }, minX: number, minZ: number, maxX: number, maxZ: number,
+  only?: HydroFeature): number {
+  const areas: Array<Extract<HydroFeature['geometry'], { type: 'area' }>> = [];
+  if (only) { if (only.geometry.type === 'area') areas.push(only.geometry); }
+  else for (const e of hydroFeats.values()) {
+    if (e.f.source !== 'osm' || e.f.geometry.type !== 'area') continue;
+    if (e.maxX < minX || e.minX > maxX || e.maxZ < minZ || e.minZ > maxZ) continue;
+    areas.push(e.f.geometry);
+  }
+  if (!areas.length) return 0;
+  const N = 7;
+  let inside = 0, covered = 0;
+  for (let iz = 0; iz < N; iz++) for (let ix = 0; ix < N; ix++) {
+    const x = minX + ((ix + 0.5) / N) * (maxX - minX), z = minZ + ((iz + 0.5) / N) * (maxZ - minZ);
+    if (!pointInPolygon(x, z, poly)) continue;
+    inside++;
+    for (const a of areas) if (pointInArea(x, z, a)) { covered++; break; }
+  }
+  if (inside < 3) {
+    // A sliver: judge it by its own ring instead.
+    const r = poly.outer;
+    for (let i = 0; i + 1 < r.length; i += 4) { inside++; for (const a of areas) if (pointInArea(r[i], r[i + 1], a)) { covered++; break; } }
+  }
+  return inside ? covered / inside : 0;
+}
+/** An OSM water outline that arrived after the cover: the cover bodies it
+ *  draws over are dropped, exactly as they would have been skipped had it
+ *  come first. */
+function coverWaterSuperseded(f: HydroFeature, minX: number, minZ: number, maxX: number, maxZ: number): void {
+  for (const [slot, e] of hydroFeats) {
+    if (e.f.source !== 'landcover' || e.f.geometry.type !== 'area') continue;
+    if (e.maxX < minX || e.minX > maxX || e.maxZ < minZ || e.minZ > maxZ) continue;
+    if (coverOsmFraction(e.f.geometry.polygons[0], e.minX, e.minZ, e.maxX, e.maxZ, f) < COVER_OSM_COVERED) continue;
+    hydroFeats.delete(slot);
+    hydroDirtyBox(e.minX, e.minZ, e.maxX, e.maxZ);
+  }
+}
+/** A river line that arrived after the cover: the lake it crosses is a reach. */
+function coverWaterReclassify(points: Float64Array, minX: number, minZ: number, maxX: number, maxZ: number): void {
+  for (const e of hydroFeats.values()) {
+    const f = e.f;
+    if (f.source !== 'landcover' || f.kind !== 'lake' || f.geometry.type !== 'area') continue;
+    if (e.maxX < minX || e.minX > maxX || e.maxZ < minZ || e.minZ > maxZ) continue;
+    const poly = f.geometry.polygons[0];
+    let inside = false;
+    for (let i = 0; i + 1 < points.length && !inside; i += 6) inside = pointInPolygon(points[i], points[i + 1], poly);
+    if (!inside) continue;
+    f.kind = 'river';
+    hydroDirtyBox(e.minX, e.minZ, e.maxX, e.maxZ);
+  }
+}
 function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskStats } {
   const datum = seaSurfaceAbs();
   const got = oceanMasks.get(key);
@@ -1547,6 +2178,7 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
   const rec = { ...built, datum, coasts: coastSegs.size >> 6, unknown, tiles: heightTiles.size };
   if (oceanMasks.size > 64) oceanMasks.clear();
   oceanMasks.set(key, rec);
+  coverWaterFeed(key, t, built.grid, elevation);
   // A mask that reaches its border with ocean can vouch for a blank
   // neighbour: drop any cached neighbour that found NO ocean while holding
   // unjudged pixels, so its next query rebuilds with this seed available.
@@ -1725,9 +2357,16 @@ const HYDRO_PROJECT = { project: (x: number, z: number): readonly [number, numbe
 /** One decoded OSM way, normalised and stored. Cheap enough to call from the
  *  decode loop: a bbox, a map write, and a scan of the ~18 live height tiles. */
 function noteHydroWay(id: string | number, tags: Record<string, string>,
-                      pts: Array<[number, number]>, key: string): void {
+                      pts: Array<[number, number]>, key: string,
+                      rings?: OsmWay['rings']): void {
   if (!HYDRO_ON) return;
-  for (const f of extractOsmHydro([{ id, tags, geometry: pts }], HYDRO_PROJECT)) {
+  // A relation's rings, in local metres already — the projection below is
+  // the identity, so what it is handed must be what the world uses.
+  const polygons = rings?.map((r) => ({
+    outer: r.outer.map(([la, lo]) => toLocal(la, lo)),
+    holes: r.holes.map((h) => h.map(([la, lo]) => toLocal(la, lo))),
+  }));
+  for (const f of extractOsmHydro([{ id, tags, geometry: pts, polygons }], HYDRO_PROJECT)) {
     // ── ONE WAY ARRIVES IN PIECES; KEEP THEM ALL ──
     //
     // Overpass clips a way at every vector-tile edge, so a river reaches
@@ -1775,6 +2414,11 @@ function noteHydroWay(id: string | number, tags: Record<string, string>,
       if (maxX < t.xs || minX > t.xs + t.w || maxZ < t.zs || minZ > t.zs + t.h) continue;
       if (hydroRev.has(key)) hydroDirty.add(key);
     }
+    if (f.geometry.type === 'line' && FLOWING_KINDS.has(f.kind)) {
+      coverWaterReclassify(f.geometry.points, minX, minZ, maxX, maxZ);
+    } else if (f.geometry.type === 'area') {
+      coverWaterSuperseded(f, minX, minZ, maxX, maxZ);
+    }
   }
 }
 /** Forget a feature and wake every fed tile it painted, so the water leaves
@@ -1817,21 +2461,100 @@ const hydroRev = new Map<string, number>();
  * tile anyway, so there is nothing on screen to see it happen to.
  */
 const hydroFrameOrigin = { x: 0, y: 0, z: 0 };
+const hydroFrameSky = { r: 0, g: 0, b: 0 };
+const hydroFrameTerrain = { r: 0, g: 0, b: 0 };
+/** THE LIGHT THE GROUND GETS, for the water (HydroFrame.sceneLight). The
+ *  ground is a Lambert surface: sun colour × intensity × its cosine, plus
+ *  the sky fill, plus the moon — and every one of those the sky update
+ *  already scales by hour, cloud and biome. The water shader used a curve
+ *  of its own that saturated at any sun over thirty degrees and knew nothing
+ *  of cloud, so under a hazy morning the valley halved and the river did
+ *  not. This is that irradiance on a flat surface as a ratio to THIS
+ *  biome's clear noon (the sun at 53°, cosine 0.8, on the flat) — 1 where the
+ *  palette was drawn, and the ground's own fraction everywhere else. */
+const hydroFrameLight = { r: 1, g: 1, b: 1 };
+const hydroFrameZenith = { r: 0.05, g: 0.12, b: 0.28 };
+/** The ground's gain at the reference noon — E_ref / π — see HydroFrame.groundGain. */
+const hydroFrameGain = { r: 0.49, g: 0.46, b: 0.43 };
+const hydroRefSun = new THREE.Color(), hydroRefSky = new THREE.Color();
+function hydroLightFeed(): void {
+  hydroRefSun.setHex(biome.sun); hydroRefSky.setHex(biome.hemiSky);
+  const up = Math.max(0, LIGHT_DIR.y);
+  const mUp = Math.max(0, moon.position.y) / (moon.position.length() || 1);
+  const ch = (k: 'r' | 'g' | 'b'): number => {
+    const ref = biome.sunI * 0.8 * hydroRefSun[k] + biome.hemiI * hydroRefSky[k];
+    const now = sun.color[k] * sun.intensity * up + hemi.color[k] * hemi.intensity
+      + moon.color[k] * moon.intensity * mUp;
+    hydroFrameGain[k] = ref / Math.PI;
+    return now / Math.max(ref, 1e-3);
+  };
+  hydroFrameLight.r = ch('r'); hydroFrameLight.g = ch('g'); hydroFrameLight.b = ch('b');
+  const z = skyMat.uniforms.uZenith.value as THREE.Vector3;
+  hydroFrameZenith.r = z.x; hydroFrameZenith.g = z.y; hydroFrameZenith.b = z.z;
+}
 /** The world's wind, written where the sky and the grass already agree on it.
  *  12km/h is the calm-day default the deck drift uses. */
 const worldWind = { dirX: 0, dirZ: 1, kmh: 12 };
+/**
+ * A WIND YOU CAN ASK FOR. Live weather decides the real one and a calm day is
+ * the common case, which makes anything wind-driven nearly impossible to judge
+ * from the seat and impossible to assert in a harness. `?wind=60&winddir=200`
+ * overrides the speed and the bearing for the session, `__windset(kmh, deg)`
+ * does it live, and either with `null` hands the sky back to the weather.
+ * Read by every consumer of the one wind — the field, the deck, the swell, the
+ * grass and now the trees — so a forced gale cannot make two of them disagree.
+ * Nothing in the game sets it.
+ */
+let windForce: number | null = null;
+let windForceDeg: number | null = null;
+{
+  const k = Number(qs('wind'));
+  if (qsHas('wind') && Number.isFinite(k)) windForce = Math.max(0, k);
+  const d = Number(qs('winddir'));
+  if (qsHas('winddir') && Number.isFinite(d)) windForceDeg = d;
+}
+const windKmhNow = (): number => windForce ?? (live.on ? live.windKmh : 12);
+const windDegNow = (): number => windForceDeg ?? (live.on ? live.windDeg : 250);
+(window as unknown as { __windset?: object }).__windset = (kmh?: number | null, deg?: number | null): object => {
+  if (kmh !== undefined) windForce = kmh === null ? null : Math.max(0, kmh);
+  if (deg !== undefined) windForceDeg = deg === null ? null : deg;
+  return { forced: windForce, dir: windForceDeg, kmh: windKmhNow(), deg: windDegNow() };
+};
 /** Per frame: the clock, the datum, the weather and the sun. Cheap — the system
  *  writes a handful of uniforms and admits at most one rebuild. */
 function hydroTick(nowMs: number): void {
   if (!HYDRO_ON || !hydroSys) return;
   hydroFrameOrigin.y = baseElev;
   const w = wxAt(wxField, state.x, state.z);
+  // Hydro already exposes environmental colours, but leaving them absent made
+  // every body reflect its fixed cool-day fallbacks through dusk, night and a
+  // change of biome. The puddle colour is the scene's existing reflection
+  // answer (horizon toward zenith); groundTint is memoised on a 3m cell, so it
+  // is a cached read per frame and recomputes only as the rig crosses a cell.
+  // Persistent records keep this completion out of the frame's allocation path.
+  hydroLightFeed();
+  const sky = wxU.uPudSky.value;
+  const terrain = groundTint(state.x, state.z);
+  hydroFrameSky.r = sky.x; hydroFrameSky.g = sky.y; hydroFrameSky.b = sky.z;
+  hydroFrameTerrain.r = terrain[0]; hydroFrameTerrain.g = terrain[1]; hydroFrameTerrain.b = terrain[2];
   hydroSys.update({
     timeSeconds: nowMs / 1000,
     worldOrigin: hydroFrameOrigin,
     wind: { x: worldWind.dirX, z: worldWind.dirZ, speedMps: worldWind.kmh / 3.6 },
     rain: w?.rain ?? 0,
-    sunDirection: { x: LIGHT_DIR.x, y: LIGHT_DIR.y, z: LIGHT_DIR.z },
+    // Colour follows the TRUE solar altitude. LIGHT_DIR is deliberately lifted
+    // above the horizon at night to rake the terrain with moonlight; feeding it
+    // here made hydro interpret midnight as daylight and stay cyan-white.
+    sunDirection: { x: SUN_DIR.x, y: SUN_DIR.y, z: SUN_DIR.z },
+    skyColour: hydroFrameSky,
+    sceneLight: hydroFrameLight,
+    zenithColour: hydroFrameZenith,
+    groundGain: hydroFrameGain,
+    terrainColour: hydroFrameTerrain,
+    // The ground's colour AT THE FRAGMENT, from the grass's own field (see
+    // HydroFrame.terrainField): the shallows at a crossing wore the road's
+    // tint from under the truck, forty metres from the bank they lay on.
+    terrainField: { texture: swardColT, originX: swardFX, originZ: swardFZ, widthM: swardFieldReady && SHORE_ON ? SWARD_FW : 0 },
     rig: {
       x: state.x, z: state.z,
       vx: Math.sin(state.heading) * state.speed,
@@ -1855,13 +2578,28 @@ function hydroTick(nowMs: number): void {
  * enough to check: it is the same order as the roadGrid scan immediately above
  * every call site.
  *
- * `sampleRestingSurface` returns undefined below half coverage, so this is the
- * classification answer and not the shoreline's soft edge. That is right for
- * "may the truck drive here" and wrong for shading, which is why the shader
- * reads a signed distance instead.
+ * The caller-owned coverage cut is the shader's shared stationary bank patch,
+ * so the truck and the visible inland waterline agree on the same fragment.
  */
+function drawnHydroAt(x: number, z: number): HydroSample | undefined {
+  const wet = hydroSys?.sampleRestingSurface(x, z, 0.38);
+  return wet && wet.coverage >= WATERLINE_CUT(x, z, wet.kind) ? wet : undefined;
+}
 function hydroWet(x: number, z: number): boolean {
-  return HYDRO_ON && !!hydroSys?.sampleRestingSurface(x, z);
+  if (!HYDRO_ON || !hydroSys) return false;
+  const wet = drawnHydroAt(x, z);
+  if (!wet) return false;
+  // ── AND THE WATER HAS TO BE ABOVE THE GROUND ──
+  //
+  // Coverage says a body is here; it does not say the body's surface is
+  // where the wheels are. A river's profile can put its resting level metres
+  // UNDER the DEM along a reach the DEM never resolved (the Senqu: −2.7 to
+  // −3.5 m at texels the field calls wet), and the mesh drawn there is
+  // hidden by the ground — so the seat saw WATER on the readout, felt the
+  // wade, and drove on grass. Reported as "registers on water near water".
+  // The drawn water is the water: the truck is in it only where the resting
+  // level clears the ground it stands on.
+  return !hasHeight(x, z) || wet.restingLevelM > sampleHeight(x, z) + baseElev + 0.02;
 }
 /**
  * ── THE OCEAN MASK, RESAMPLED INTO THE TILE'S OWN FRAME ──
@@ -1973,10 +2711,85 @@ function oceanCoverageFor(t: HeightTile): OceanCoverage {
  *  filled or scanned it and missed. */
 const hydroFeedLog: Array<{ at: number; key: string; rev: number; store: number; fed: number }> = [];
 (window as unknown as { __hydrofeeds?: object }).__hydrofeeds = (): object => hydroFeedLog.slice(-120);
-function hydroFeed(t: HeightTile): void {
+/** The hydro system's elevation raster side — see hydroFeed. */
+const HYDRO_EN = 132;
+const HYDRO_SKIP = qs('hydroskip') !== '0';
+/** What each tile was last fed, so an identical feed can end without a build. */
+const hydroFedInputs = new Map<string, { elev: Float32Array; sig: string }>();
+function sameRaster(a: Float32Array, b: Float32Array): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+/** The features by id and size, and the ocean's answer by status and mask. */
+function hydroInputSig(feats: readonly HydroFeature[], ocean: OceanCoverage): string {
+  const ids: string[] = [];
+  for (const f of feats) {
+    let n = 0;
+    for (const v of Object.values(f.geometry as unknown as Record<string, unknown>)) {
+      if (Array.isArray(v) || ArrayBuffer.isView(v)) n += (v as ArrayLike<unknown>).length;
+    }
+    ids.push(`${f.id}:${n}`);
+  }
+  ids.sort();
+  // The coverage is a status, a grid (its mask hashed) and bounds — walked
+  // two levels down so the grid's array is seen, not its wrapper.
+  let oceanSig = '';
+  const walk = (o: Record<string, unknown>, depth: number): void => {
+    for (const [k, v] of Object.entries(o)) {
+      if (ArrayBuffer.isView(v)) {
+        const arr = v as unknown as ArrayLike<number>;
+        let h = 0;
+        for (let i = 0; i < arr.length; i++) h = (h + Math.imul(arr[i] + 1, i + 1)) | 0;
+        oceanSig += `${k}=${arr.length}/${h};`;
+      } else if (v && typeof v === 'object') { if (depth < 2) walk(v as Record<string, unknown>, depth + 1); }
+      else oceanSig += `${k}=${String(v)};`;
+    }
+  };
+  walk(ocean as unknown as Record<string, unknown>, 0);
+  return `${oceanSig}|${ids.join(',')}`;
+}
+/** THE CLOUD DECK'S SHADOW, HANDED TO THE WATER — the same function the
+ *  terrain shades by (terrainFx), the same uniforms shared by reference, so
+ *  a cloud's shadow crosses a river instead of stopping at its bank. The
+ *  names are prefixed because hydro's own `uWind` is a vec3 of direction and
+ *  speed and the deck's drift is a vec2; one program cannot hold both. */
+function hydroSceneShade(): SceneShade {
+  return {
+    head: `${CLOUD_GLSL}
+      uniform sampler2D uCsTex; uniform vec2 uCsMin; uniform float uCsInv; uniform float uCsOn;
+      uniform vec2 uCsDrift; uniform vec2 uCsSkew; uniform float uCsDeckY; uniform float uCsScale;
+      uniform float uCsMpp;
+      float sceneShade(vec3 p) {
+        if (uCsOn < 0.005) return 1.0;
+        vec2 hit = p.xz + uCsSkew * max(uCsDeckY - p.y, 0.0);
+        // The same edge and the same alias rule as the ground (terrainFx),
+        // or a river on the wide chart would keep the cross its banks lost.
+        vec2 wuv = (hit - uCsMin) * uCsInv;
+        float covL = mix(uCsOn, texture2D(uCsTex, wuv).r, clInLattice(wuv));
+        float wide = 1.0 - smoothstep(15.0, 60.0, uCsMpp);
+        float cs = clCov(clfbm(hit * uCsScale + uCsDrift), covL);
+        return 1.0 - min(covL * 1.4, 1.0) * cs * 0.5 * wide;
+      }`,
+    uniforms: {
+      uCsTex: wxU.uWxTex, uCsMin: wxU.uWxMin, uCsInv: wxU.uWxInv, uCsOn: envU.uCloudS,
+      uCsDrift: envU.uWind, uCsSkew: envU.uSunSkew, uCsDeckY: envU.uDeckY, uCsScale: envU.uCloudScale,
+      uCsMpp: envU.uMpp,
+    },
+  };
+}
+function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
   if (!HYDRO_ON) return;
   if (!hydroSys) {
-    hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs() });
+    // The tile build itself is scheduled through us, so its time is a number
+    // in the worker ledger (it runs on the main thread in a promise job,
+    // where no frame-loop timer can see it).
+    // …and it runs from OUR queue, one a frame at most, never in the same
+    // frame as a terrain apply: measured 13ms a tile (max 41), which stacked
+    // on the apply's 7ms in the promise job right behind it.
+    hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs(), sceneShade: hydroSceneShade(), scheduleBuild: (job) =>
+      new Promise((resolve, reject) => { hydroJobs.push({ job, resolve, reject }); }) });
     hydroSys.setDebugView(hydroView);
     worldGroup.add(hydroSys.object3d);
     // THE OLD PLANE STANDS DOWN, rather than being deleted. Two renderers for
@@ -1991,9 +2804,7 @@ function hydroFeed(t: HeightTile): void {
   // rather than only at construction.
   hydroSys.setOceanLevelM(seaSurfaceAbs());
   const key = `${t.tx}/${t.ty}`;
-  hydroDirty.delete(key);           // whatever made it stale is about to be fed
-  const rev = (hydroRev.get(key) ?? 0) + 1;
-  hydroRev.set(key, rev);
+  const wasDirty = hydroDirty.delete(key);   // whatever made it stale is about to be fed
   // ── THE WATER READS THE GROUND THE PLAYER SEES ──
   //
   // t.data is the raw DEM; the terrain MESH is built from sampleHeight, which
@@ -2006,22 +2817,21 @@ function hydroFeed(t: HeightTile): void {
   // Lattice points, not texel centres: the module's sampler puts grid point 0
   // AT minX and point N-1 AT maxX, so sampling anywhere else would shift every
   // bed half a texel sideways.
-  const EN = 132;
+  const EN = HYDRO_EN;
   const n = EN;
-  const elevation = new Float32Array(EN * EN);
-  for (let iz = 0; iz < EN; iz++) {
-    const ez = t.zs + (iz / (EN - 1)) * t.h;
-    for (let ix = 0; ix < EN; ix++) {
-      const ex = t.xs + (ix / (EN - 1)) * t.w;
-      elevation[iz * EN + ix] = hasHeight(ex, ez) ? sampleHeight(ex, ez) + baseElev : NaN;
-    }
-  }
+  // The worker samples this raster with the build (terrain-kernel's
+  // hydroElevation); only a refeed with no build behind it samples here.
+  const elevation = ready && ready.length === EN * EN ? ready : K.hydroElevation(kStore, t, EN);
   // THE WATER THIS TILE STANDS UNDER. A bbox test against the store, not a
   // clip: `buildHydroTile` already bounds each feature to its own pixel range,
   // so handing it a river that mostly runs off the edge costs the pixels the
   // river actually covers here and nothing for the rest. Overlap is what is
   // wanted, too — a feature must reach every tile it touches or the body
   // registry cannot reconcile one lake across four of them.
+  // The mask first: building it is what registers the cover's inland water
+  // (coverWaterFeed), and those features must be in the store before the
+  // gather below or the first feed of every tile misses its own lakes.
+  const ocean = oceanCoverageFor(t);
   const feats: HydroFeature[] = [];
   // ── AND THE GUTTER COUNTS ──
   //
@@ -2040,15 +2850,39 @@ function hydroFeed(t: HeightTile): void {
     if (e.maxZ < t.zs - pad || e.minZ > t.zs + t.h + pad) continue;
     feats.push(e.f);
   }
+  // ── A FEED THAT CHANGES NOTHING IS NOT A BUILD ──
+  //
+  // Every terrain apply re-feeds its tile's water in full: a corridor
+  // refinement, a border audit, a road update — and the field is rebuilt,
+  // 15 ms a tile, 35 ms for a river tile, whether or not anything the water
+  // reads has moved. Measured on the phone at Yosemite: 345 hydro builds in
+  // 52 s for 35 tiles, the top contributor to slow frames. The water reads
+  // exactly three things — the elevation raster it is handed, the features
+  // that overlap the tile, and the ocean's answer — so when all three are
+  // what they were last time, the field it would build is the field it has,
+  // and the feed ends here. A tile made stale by a BODY change elsewhere
+  // (hydroDirty) is fed regardless: its inputs are the same, its answer is
+  // not. ?hydroskip=0 turns the skip off for an A/B.
+  workerLedger.hydroFeeds++;
+  const sig = hydroInputSig(feats, ocean);
+  const prev = hydroFedInputs.get(key);
+  if (HYDRO_SKIP && !wasDirty && prev && prev.sig === sig && sameRaster(prev.elev, elevation)) {
+    workerLedger.hydroSkips++;
+    return;
+  }
+  hydroFedInputs.set(key, { elev: elevation, sig });
+  const rev = (hydroRev.get(key) ?? 0) + 1;
+  hydroRev.set(key, rev);
   hydroFeedLog.push({ at: Math.round(performance.now()), key, rev,
     store: hydroFeats.size, fed: feats.length });
   if (hydroFeedLog.length > 400) hydroFeedLog.splice(0, 200);
   void hydroSys.upsertTile({
     key, revision: rev,
+    channelInvertM: channelInvertAt,
     bounds: { minX: t.xs, minZ: t.zs, maxX: t.xs + t.w, maxZ: t.zs + t.h },
     elevation: { width: n, height: n, data: elevation, verticalDatum: 'absolute-m' },
     features: feats,
-    oceanCoverage: oceanCoverageFor(t),
+    oceanCoverage: ocean,
   }).catch((e) => console.warn('[hydro]', e));
 }
 
@@ -2253,7 +3087,7 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 // nothing downstream can hold. A dial, because it is the one addition here that
 // costs a whole extra scene pass and a phone that cannot afford it should be
 // able to say so.
-renderer.shadowMap.enabled = new URLSearchParams(location.search).get('shadows') !== '0';
+renderer.shadowMap.enabled = qs('shadows') !== '0';
 renderer.shadowMap.type = THREE.BasicShadowMap;
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const scene = new THREE.Scene();
@@ -2283,7 +3117,7 @@ const camera = new THREE.PerspectiveCamera(CAM.fov, 1, 1, 30000);
  * is worth more than one that has been removed: it stops the next person
  * deriving this theory again from the same true-looking algebra.
  */
-let nearLock = Math.max(0, Number(new URLSearchParams(location.search).get('near') ?? 0) || 0);
+let nearLock = Math.max(0, Number(qs('near') ?? 0) || 0);
 function setNear(n: number, far = 30000): void {
   if (nearLock) n = nearLock;
   if (Math.abs(camera.near - n) < n * 0.02 && camera.far === far) return;
@@ -2372,13 +3206,21 @@ const CLOUD_GLSL = `
   // reads as solid overhead is solid on the ground too.
   float clCov(float n, float cover){
     return smoothstep(0.60 - cover * 0.40, 0.90 - cover * 0.28, n);
-  }`;
+  }
+  // THE LATTICE HAS AN EDGE. The weather field is 48 cells of 256m centred on
+  // the truck — 12.3km — and its texture clamps to its edge texel, so a read
+  // past the edge is the edge's value for ever. 1 inside, 0 outside, blended
+  // over the last few percent so the hand-over is a fade and not a line.
+  float clInLattice(vec2 uv){ vec2 e = abs(uv - 0.5) * 2.0; return 1.0 - smoothstep(0.92, 1.0, max(e.x, e.y)); }`;
 const skyMat = new THREE.ShaderMaterial({
   side: THREE.BackSide,
   depthWrite: false,
   uniforms: {
     sunDir: { value: SUN_DIR },
     uZenith: { value: new THREE.Vector3() },
+    /** How far the chart has left the atmosphere behind: see the mix at the
+     *  end of the fragment, and `stepGlobe`'s caller for the ramp. */
+    uSpace: { value: 0 },
     uHorizon: { value: new THREE.Vector3() },
     uSunDisc: { value: new THREE.Vector3() },
     // ── REAL ANGULAR SIZES, FROM THE REAL EPHEMERIS ──
@@ -2417,7 +3259,7 @@ const skyMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform vec3 sunDir; uniform vec3 uZenith; uniform vec3 uHorizon;
     uniform vec3 uSunDisc; uniform vec3 uBelow; uniform vec3 uHazeB;
-    uniform float uCloud; uniform float uTime;
+    uniform float uCloud; uniform float uTime; uniform float uSpace;
     uniform float uSunCos1; uniform float uSunCos0;
     uniform float uMoonCos1; uniform float uMoonCos0; uniform float uMoonSin;
     uniform float uLow; uniform vec3 uDusk; uniform float uNight; uniform vec3 moonDir;
@@ -2552,6 +3394,11 @@ const skyMat = new THREE.ShaderMaterial({
       // tile edges; hunted with the pick grid, which found dome-only rays
       // under every block.
       col = mix(mix(uBelow, uHazeB, 0.8), col, smoothstep(-0.06, 0.02, d.y));
+      // ABOVE THE PLANET THERE IS NO SKY. The dome is a 20km shell about the
+      // eye; from twenty thousand kilometres up it is a fiction, and what
+      // belongs around the limb is space. Mixed rather than switched, because
+      // the one thing a backdrop must not do is pop.
+      col = mix(col, vec3(0.012, 0.016, 0.030), uSpace);
       gl_FragColor = vec4(col, 1.0);
     }`,
 });
@@ -2731,7 +3578,7 @@ let shadowMaskPatched = false;
  * nested block in here silently truncates the loop and the shader stops
  * compiling. Everything is expressions.
  */
-const SHADOW_FADE = new URLSearchParams(location.search).get('shfade') !== '0';
+const SHADOW_FADE = qs('shfade') !== '0';
 let shadowFadePatched = false;
 /** What the chunk ACTUALLY said, when the patch could not find its anchor. A
  *  failed replace is silent and looks exactly like a feature that does not
@@ -2816,7 +3663,7 @@ let shadowLitSaw = '';
 // same symbol, and a patch that failed to find its anchor would otherwise take
 // the march down with it.
 THREE.ShaderChunk.common = `#define SHADOW_DARKNESS 1.000\n${SHADOW_COMMON}`;
-const shadowsWanted = new URLSearchParams(location.search).get('shadows') !== '0';
+const shadowsWanted = qs('shadows') !== '0';
 sun.castShadow = shadowsWanted;
 /** Re-cut the sun's box. The map has to be DISPOSED by hand when its size
  *  changes or three keeps rendering into the old one at the old resolution. */
@@ -2848,35 +3695,29 @@ sun.shadow.bias = -0.0008;
 sun.shadow.normalBias = 0.25;
 scene.add(sun.target);
 /**
- * ── A SHADOW MAP THAT SLIDES UNDER THE WORLD IS A SHADOW MAP THAT CRAWLS ──
+ * TRANSPORT THE SHADOW GRID, DON'T KEEP ROTATING IT ABOUT WORLD ZERO.
  *
- * The box is re-centred on the truck every frame at whatever position the
- * physics produced, so its texel grid moves CONTINUOUSLY across ground that is
- * not moving. At MED that grid is 0.21m per texel: drive at 25m/s and every
- * shadow edge in the world is re-quantised onto a different lattice a hundred
- * times a second. Each edge steps back and forth by a texel, in no particular
- * order, and the whole scene appears to boil. Reported from the seat as
- * swimming, and it is the oldest artefact in shadow mapping.
+ * Absolute-coordinate texel snapping stabilises translation with a fixed sun,
+ * but a moving sun rotates that lattice around the world origin. A parked rig
+ * 10km out then crosses fractions of texels every frame although the centre's
+ * snap residual is zero. The seat confirmed that pinning TIME stops the crawl.
  *
- * The fix is equally old: move the box in WHOLE TEXELS. Project the centre
- * onto the light's own two lateral axes, round each to a multiple of the texel
- * size, and put it back. The box still follows you — it just arrives one texel
- * at a time, so a shadow edge that has not moved in the world does not move on
- * the map either.
+ * Use the PREVIOUS SNAPPED CENTRE as the next lattice anchor. Only the delta
+ * to the requested centre is quantised in the current light basis. With a
+ * fixed light, all lateral moves remain whole texels, just as before. With a
+ * turning light, rotation is about a point within half a texel per lateral
+ * axis of the rig, not one kilometres away. No angle quantisation, frozen
+ * shadow map, extra render pass or filter change: sunlight still moves freely.
  *
- * THE BASIS HAS TO BE THE ONE three ACTUALLY USES or the rounding is to the
- * wrong grid and buys nothing: Matrix4.lookAt takes z = eye − target (which is
- * SUN_DIR), x = up x z, y = z x x, with the degenerate nudge for a sun at the
- * zenith copied from the same function.
- *
- * The height matters too, and that is why this snaps in three dimensions
- * rather than two: the centre's y comes from sampleHeight under the truck, so
- * it wobbles with every metre of ground — and with the sun anywhere but
- * straight overhead, a vertical wobble is a LATERAL move on the shadow map.
+ * The depth component follows continuously; moving along the light direction
+ * does not change shadow UVs. The basis matches three's lookAt, including its
+ * zenith fallback. All positions/heights remain in world metres.
  */
-let SHADOW_SNAP = new URLSearchParams(location.search).get('shsnap') !== '0';
+let SHADOW_SNAP = qs('shsnap') !== '0';
 const shadowAt = new THREE.Vector3();
 const shX = new THREE.Vector3(), shY = new THREE.Vector3(), shZ = new THREE.Vector3();
+const shadowAnchor = new THREE.Vector3(), shadowDelta = new THREE.Vector3();
+let shadowAnchored = false;
 let shadowPhase = 0;
 function snapShadowCentre(c: THREE.Vector3): void {
   shZ.copy(SUN_DIR).normalize();
@@ -2885,20 +3726,56 @@ function snapShadowCentre(c: THREE.Vector3): void {
   shX.normalize();
   shY.copy(shZ).cross(shX);
   const t = (2 * shadowSpan) / sun.shadow.mapSize.x;
-  const ax = c.dot(shX), ay = c.dot(shY);
+  if (!shadowAnchored) { shadowAnchor.copy(c); shadowAnchored = true; }
+  shadowDelta.copy(c).sub(shadowAnchor);
+  const ax = shadowDelta.dot(shX), ay = shadowDelta.dot(shY);
   const dx = Math.round(ax / t) * t - ax, dy = Math.round(ay / t) * t - ay;
   if (SHADOW_SNAP) c.addScaledVector(shX, dx).addScaledVector(shY, dy);
-  // MEASURED AFTER, NOT BEFORE. How far the centre that will actually be USED
-  // sits from the texel grid, in texels: uniform in [0, 0.7] while the snap is
-  // off and identically zero while it is on. Reporting the pre-snap residual
-  // instead would have been a restatement of the input — and was, for one run.
-  // Recomputed rather than assumed, so a basis that does not match the one
-  // three builds shows up here instead of silently buying nothing.
-  const bx = c.dot(shX), by = c.dot(shY);
+  // A LOCAL step residual now. __shadowmotion measures the actual matrix's
+  // fractional phase separately; zero here alone cannot prove a stable image.
+  shadowDelta.copy(c).sub(shadowAnchor);
+  const bx = shadowDelta.dot(shX), by = shadowDelta.dot(shY);
   shadowPhase = Math.hypot(bx / t - Math.round(bx / t), by / t - Math.round(by / t));
+  shadowAnchor.copy(c);
 }
 /** Every shadow-relevant object goes through here, so "what casts" is one list
  *  rather than a flag repeated at a dozen construction sites. */
+// Shadow diagnosis only: read the matrix AFTER rendering has updated it.
+// Compare the SAME world point in both grids, then remove whole-texel shifts:
+// a texel-snapped translation is harmless, whereas fractional phase changes
+// re-rasterise an unmoving silhouette. No light/pose/filter changes here.
+const shadowMotion = { samples: 0, phaseMax: 0, sunDegMax: 0, poseCmMax: 0, poseDegMax: 0 };
+const shadowPrev = { at: 0, ready: false, parked: false, matrix: new THREE.Matrix4(),
+  pos: new THREE.Vector3(), quat: new THREE.Quaternion(), dir: new THREE.Vector3() };
+const shadowP0 = new THREE.Vector3(), shadowP1 = new THREE.Vector3();
+function sampleShadowMotion(now: number): void {
+  if (now - shadowPrev.at < 100) return;
+  const on = renderer.shadowMap.enabled && sun.castShadow;
+  const parked = Math.abs(state.speed) < 0.05;
+  if (on && shadowPrev.ready && parked && shadowPrev.parked && now - shadowPrev.at < 1000) {
+    shadowP0.copy(car.position).applyMatrix4(shadowPrev.matrix);
+    shadowP1.copy(car.position).applyMatrix4(sun.shadow.matrix);
+    const dx = (shadowP1.x - shadowP0.x) * sun.shadow.mapSize.x;
+    const dy = (shadowP1.y - shadowP0.y) * sun.shadow.mapSize.y;
+    shadowMotion.samples++;
+    shadowMotion.phaseMax = Math.max(shadowMotion.phaseMax,
+      Math.hypot(dx - Math.round(dx), dy - Math.round(dy)));
+    shadowMotion.sunDegMax = Math.max(shadowMotion.sunDegMax,
+      SUN_DIR.angleTo(shadowPrev.dir) * 180 / Math.PI);
+    shadowMotion.poseCmMax = Math.max(shadowMotion.poseCmMax, car.position.distanceTo(shadowPrev.pos) * 100);
+    shadowMotion.poseDegMax = Math.max(shadowMotion.poseDegMax, car.quaternion.angleTo(shadowPrev.quat) * 180 / Math.PI);
+  }
+  shadowPrev.at = now; shadowPrev.ready = on; shadowPrev.parked = parked;
+  shadowPrev.matrix.copy(sun.shadow.matrix); shadowPrev.pos.copy(car.position);
+  shadowPrev.quat.copy(car.quaternion); shadowPrev.dir.copy(SUN_DIR);
+}
+(window as unknown as { __shadowmotion?: object }).__shadowmotion = (reset = false): object => {
+  const result = { ...shadowMotion, timeMode: TIME_MODES[timeMode], solarHour: solarHour(),
+    caster: sun.castShadow ? 'sun' : headSpot.castShadow ? 'headlight' : 'none',
+    map: sun.shadow.mapSize.x, span: shadowSpan, snap: SHADOW_SNAP };
+  if (reset) { Object.assign(shadowMotion, { samples: 0, phaseMax: 0, sunDegMax: 0, poseCmMax: 0, poseDegMax: 0 }); shadowPrev.ready = false; }
+  return result;
+};
 const shadowy = (o: THREE.Object3D, cast: boolean, receive: boolean): void => {
   o.castShadow = cast; o.receiveShadow = receive;
 };
@@ -2935,7 +3812,7 @@ const castIfSolid = (o: THREE.Object3D): void => {
 // lightings where a landscape's own shadows are either absent or invisible.
 // Nine and fifteen are where a dune has a lit face and a dark one.
 let SUN_ALT_FORCE: number | null = (() => {
-  const v = new URLSearchParams(location.search).get('sunalt');
+  const v = qs('sunalt');
   return v === null || v === '' || !Number.isFinite(Number(v)) ? null : clamp(Number(v), -20, 89);
 })();
 /**
@@ -2965,14 +3842,14 @@ const TIME_MODES_V1 = ['CYCLE', 'LIVE', 'DAWN', 'NOON', 'DUSK', 'NIGHT'];
 // as well, or half the difference between the pictures is the time of day.
 // Overridden below by a saved dial only when the URL says nothing.
 let timeMode = (() => {
-  const v = (new URLSearchParams(location.search).get('time') ?? '').toUpperCase();
+  const v = (qs('time') ?? '').toUpperCase();
   const i = TIME_MODES.indexOf(v as typeof TIME_MODES[number]);
   return i < 0 ? 0 : i;
 })();
 // Read here, APPLIED AFTER the dials load — see the boot sequence. A dial that
 // remembers itself in localStorage will otherwise stamp on the query parameter.
 const timeFromUrl = TIME_MODES.indexOf(
-  ((new URLSearchParams(location.search).get('t') ?? '').toUpperCase()) as typeof TIME_MODES[number]);
+  ((qs('t') ?? '').toUpperCase()) as typeof TIME_MODES[number]);
 if (timeFromUrl >= 0) timeMode = timeFromUrl;
 const cycleT0 = Date.now();
 /**
@@ -2981,7 +3858,33 @@ const cycleT0 = Date.now();
  * thumb on the clock is the most direct statement of intent this world gets
  * about its own light. Cleared by tapping the clock again.
  */
-let clockHeld: number | null = null;
+/**
+ * ── A SCRUB IS AN OFFSET, NOT A FREEZE ──
+ *
+ * This was `clockHeld`, an absolute hour, and `solarHour` returned it before
+ * it looked at anything else — so dragging the clock in CYCLE (the default,
+ * which runs the day at 24x) STOPPED THE DAY. Reported from the seat:
+ * "dragging should change the time as it does, but in cycle it should not
+ * stop it from ticking." Held as hours ADDED to whatever the mode's own
+ * clock says, the drag moves the sun and the mode keeps running underneath
+ * it — the day still turns from wherever you put it, LIVE still tracks the
+ * real sun, and a fixed hour (NOON, DUSK) behaves exactly as the old hold
+ * did, because its base does not move. Cleared by tapping the clock.
+ */
+let clockShift: number | null = null;
+/**
+ * ── AND A TAP RAMPS, IT DOES NOT CUT ──
+ *
+ * Tapping the clock steps the TIME dial to its next preset, which used to
+ * put the sun somewhere else between one frame and the next: dawn to noon is
+ * six hours of sky, shadow and colour arriving as a jump cut. The tap still
+ * changes the mode instantly — the dial is the dial — but the DISPLAYED hour
+ * eases from where the sun was to where the new mode wants it, by the short
+ * way round the face. The mechanism is the splash's golden-hour lean one
+ * paragraph down, which has eased the same number for months.
+ */
+const CLOCK_RAMP_MS = 1600;
+let clockRamp: { from: number; at: number } | null = null;
 /**
  * THE SPLASH LEANS INTO GOLDEN LIGHT. While the hub is open the displayed
  * hour eases toward the nearer golden hour — the world behind the menu is the
@@ -3004,8 +3907,8 @@ const hubBand = { t: 0.34, at: 0 };
 const hubBandFrac = (now: number): number => {
   if (now - hubBand.at > 1000) {
     hubBand.at = now;
-    const rule = document.querySelector('#menu .m-rule');
-    const nav = document.querySelector('#menu .m-nav');
+    const rule = document.querySelector('#menu .m-hero-head') || document.querySelector('#menu .m-rule');
+    const nav = document.querySelector('#menu .m-rig-controls') || document.querySelector('#menu .m-nav');
     if (rule && nav) {
       const top = rule.getBoundingClientRect().bottom;
       const bot = nav.getBoundingClientRect().top;
@@ -3021,8 +3924,10 @@ const hourDelta = (a: number, b: number): number => ((b - a + 36) % 24) - 12;
 /** The LOCAL SOLAR HOUR the world is living in right now — the one number the
  *  sun, the sky and the HUD clock must all agree on, so it is computed once
  *  and read three times rather than derived three ways. */
-function solarHour(): number {
-  if (clockHeld !== null) return clockHeld;
+/** The hour the MODE alone says — before a scrub, a ramp or the splash's
+ *  lean. Split out so a drag can be an offset from it and a ramp can ease
+ *  toward it while it moves. */
+function clockBase(): number {
   const mode = TIME_MODES[timeMode];
   // LIVE is the real sun at the real moment: real UTC plus the longitude.
   const base = mode === 'LIVE' ? ((Date.now() % 86400000) / 3600000 + origin.lon / 15 + 24) % 24
@@ -3034,6 +3939,39 @@ function solarHour(): number {
     : mode === 'CYCLE'
       ? (5.2 + ((Date.now() - cycleT0) / 3600000) * 24) % 24
       : TIME_HOUR[mode];
+  return base;
+}
+/**
+ * The hour the CLOCK says — the mode's own base, moved by a scrub and eased by
+ * a ramp — and deliberately NOT the splash's golden lean, which is applied on
+ * top of this by `solarHour`.
+ *
+ * THE SPLIT IS LOAD-BEARING AND WAS MEASURED. The tap's ramp first captured
+ * `solarHour()`, so the lean was inside the captured hour AND applied again to
+ * the blend's output: measured with a synchronous read either side of a tap,
+ * the sun moved 0.34h backwards in the instant the mode changed — a cut, which
+ * is the exact thing the ramp exists to prevent. A gesture captures THIS.
+ */
+function clockHour(): number {
+  // The mode's clock, moved by however far the thumb dragged it. The shift is
+  // constant, so a ticking mode goes on ticking from where it was put.
+  let base = clockBase();
+  if (clockShift !== null) base = (base + clockShift + 24) % 24;
+  // …and eased toward it from wherever the sun stood when the preset changed.
+  // Blending toward the LIVE base rather than a captured target is what lets a
+  // ramp into CYCLE land on a clock that has been running the whole time.
+  if (clockRamp !== null) {
+    const t = (performance.now() - clockRamp.at) / CLOCK_RAMP_MS;
+    if (t >= 1) clockRamp = null;
+    else {
+      const e = t * t * (3 - 2 * t);
+      base = (clockRamp.from + hourDelta(clockRamp.from, base) * e + 24) % 24;
+    }
+  }
+  return base;
+}
+function solarHour(): number {
+  const base = clockHour();
   if (splashGold < 0.003) { splashGoldH = null; return base; }
   // Chosen ONCE per approach, from whichever golden hour is nearer — and kept,
   // so the target cannot flip mid-ease and swing the sun across the sky.
@@ -3042,7 +3980,7 @@ function solarHour(): number {
   return (base + hourDelta(base, splashGoldH) * splashGold + 24) % 24;
 }
 function worldNow(): Date {
-  if (TIME_MODES[timeMode] === 'LIVE' && clockHeld === null) return new Date();
+  if (TIME_MODES[timeMode] === 'LIVE' && clockShift === null && clockRamp === null) return new Date();
   const now = new Date();
   const h = solarHour();
   // Local solar hour → UTC. Longitude is the whole of the conversion: the sun
@@ -3239,6 +4177,96 @@ const fogTex = new THREE.CanvasTexture(fogCanvas);
 // sharp -> blurred -> haze by how far and how unexplored that point is:
 // distance genuinely blurs and dims, and the haze warms toward the sun.
 const QUAD_VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+/**
+ * ── THE DITHER, IN ONE PLACE ──
+ *
+ * This was copy-pasted into TWO shaders — the composite and the vehicle bay's
+ * copy pass, which exists precisely so the truck in the bay ends on the same
+ * grade and palette as the world. Both carried their own `bayer2/4/8` and their
+ * own five-way pattern selector, so a sixth pattern would have landed in one and
+ * not the other and the bay would have quietly stopped matching the world it is
+ * supposed to match. One string, injected into both.
+ *
+ * Everything here is closed-form and free of array indexing, because GLSL ES
+ * 1.00 forbids indexing a uniform array with a non-constant expression in a
+ * fragment shader — the restriction that already cost this codebase every
+ * building's windows once (see markTins in facade.ts).
+ *
+ * ── WHAT CANNOT GO HERE ──
+ *
+ * ERROR DIFFUSION — Floyd–Steinberg, Atkinson, Sierra — is not expressible in a
+ * fragment shader at all, and it is the family anyone asking for "more dither
+ * algorithms" usually has in mind. It is sequential by definition: each pixel's
+ * error is pushed into neighbours that have not been quantised yet, so pixel N
+ * depends on N−1. A fragment shader has no ordering and no neighbour feedback.
+ * Doing it properly needs either a serial pass on the CPU over a 148×320 buffer
+ * (feasible — 47k pixels — but a readback and an upload every frame, and the
+ * readback is the thing this renderer just spent a change making ASYNCHRONOUS
+ * for the luma map) or a multi-pass approximation whose artefacts do not look
+ * like error diffusion anyway. So the honest set is ORDERED patterns and NOISE,
+ * and this file should not pretend otherwise.
+ */
+const DITHER_GLSL = `
+    // Recursive 2x2 -> 16x16. bayer2 is the checkerboard on its own.
+    float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
+    float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+    float bayer8(vec2 a){ return bayer4(0.5 * a) * 0.25 + bayer2(a); }
+    float bayer16(vec2 a){ return bayer8(0.5 * a) * 0.25 + bayer2(a); }
+    float whiteNoise(vec2 a){ return fract(sin(dot(a, vec2(12.9898, 78.233))) * 43758.5453); }
+    // INTERLEAVED GRADIENT NOISE (Jimenez). The one closed-form pattern whose
+    // spectrum is close to blue noise: no repeating tile to read as a texture
+    // the way Bayer does, and none of white noise's clumping. Three constants
+    // and a fract, so it costs what the hash costs.
+    float ign(vec2 a){ return fract(52.9829189 * fract(dot(floor(a), vec2(0.06711056, 0.00583715)))); }
+    // TRIANGULAR PDF NOISE. Uniform noise added to a quantiser modulates with
+    // the signal — flat areas get the full noise floor and the grain visibly
+    // swims. Two independent uniform draws summed give a triangular
+    // distribution, which is the standard audio-dither answer and looks like
+    // finer grain for the same amplitude. Remapped back to 0..1.
+    float tpdf(vec2 a){ return (whiteNoise(a) + whiteNoise(a + vec2(37.0, 17.0))) * 0.5; }
+    // CLUSTERED DOT — a halftone rosette rather than a dispersed weave. Ink
+    // gathers into growing dots instead of scattering, which is a printing press
+    // and not a CRT. Pairs with the MONO inks; on a 14-level colour palette it
+    // is loud, and that is the point of having it on a dial.
+    float halftone(vec2 a){
+      vec2 p = a * 0.7853981634;                       // pi/4: the rosette angle
+      return (sin(p.x + p.y) * sin(p.x - p.y) + 1.0) * 0.5;
+    }
+    /** One threshold in 0..1 for a pixel of the LOW-RES grid. */
+    float ditherPat(vec2 dp, float kind){
+      return kind < 0.5 ? bayer4(dp)
+        : kind < 1.5 ? bayer8(dp)
+        : kind < 2.5 ? bayer2(dp)
+        : kind < 3.5 ? whiteNoise(dp)
+        : kind < 4.5 ? fract(dp.y * 0.25)
+        : kind < 5.5 ? bayer16(dp)
+        : kind < 6.5 ? ign(dp)
+        : kind < 7.5 ? tpdf(dp)
+        : halftone(dp);
+    }
+    /**
+     * THE QUANTISER, AND WHETHER THE CHANNELS AGREE.
+     *
+     * One scalar threshold added to all three channels means every channel
+     * crosses its level boundary on the same pixel, so the dither can only ever
+     * move a pixel along the grey axis — fourteen levels stay fourteen levels.
+     * Decorrelating the channels lets a pixel land on a MIXTURE of two palette
+     * entries, which is how a 14-level palette can carry more apparent colour
+     * without adding a level. It also trades the clean weave for a hint of
+     * chroma fringing on a ramp, which is exactly the sort of thing that has to
+     * be looked at rather than argued about — hence the dial.
+     *
+     * The offsets are small integers so an ordered pattern lands on a genuinely
+     * different cell of its own tile rather than a near-identical one.
+     */
+    vec3 ditherQuant(vec3 enc, vec2 dp, float kind, float amt, float bias, float levels, float chan){
+      float p0 = ditherPat(dp, kind);
+      vec3 p = mix(vec3(p0),
+        vec3(p0, ditherPat(dp + vec2(2.0, 1.0), kind), ditherPat(dp + vec2(1.0, 3.0), kind)),
+        chan);
+      vec3 d = (p - 0.5) * amt;
+      return clamp(floor(enc * levels + d + bias) / levels, 0.0, 1.0);
+    }`;
 const rtType = renderer.extensions.has('EXT_color_buffer_float') || renderer.extensions.has('EXT_color_buffer_half_float')
   ? THREE.HalfFloatType
   : THREE.UnsignedByteType;
@@ -3355,7 +4383,38 @@ const lumaMat = new THREE.ShaderMaterial({
 });
 const lumaPx = new Uint8Array(LUMA_W * LUMA_H * 4);
 let lumaNext = 0, lumaFar = 62000, lumaPrimed = false;
+/** THE READBACK IS ASYNCHRONOUS. `readRenderTargetPixels` is a synchronous
+ *  glReadPixels: the CPU waits for the GPU to finish everything queued before
+ *  it — the whole frame — eight times a second, streaming or not. On WebGL2
+ *  the pixels go into a pixel-pack buffer with a fence behind them and are
+ *  collected on a later frame once the fence has signalled; the luma is
+ *  120ms old by design, so one more frame changes nothing it feeds. WebGL1,
+ *  or any failure, falls back to the synchronous read. */
+let lumaPending: { pbo: WebGLBuffer; sync: WebGLSync; far: number } | null = null;
+let lumaAsync = qs('lumasync') !== '1';   // ?lumasync=1: the old read, for an A/B on a device
+const lumaStat = { async: 0, sync: 0, waits: 0 };
+function lumaCollect(gl: WebGL2RenderingContext): boolean {
+  const p = lumaPending;
+  if (!p) return true;
+  const st = gl.clientWaitSync(p.sync, 0, 0);
+  if (st === gl.TIMEOUT_EXPIRED || st === gl.WAIT_FAILED) { lumaStat.waits++; return false; }
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, p.pbo);
+  gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, lumaPx);
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+  gl.deleteSync(p.sync);
+  gl.deleteBuffer(p.pbo);
+  lumaPending = null;
+  lumaFar = p.far;
+  lumaPrimed = true;
+  lumaStat.async++;
+  return true;
+}
 function stepLuma(now: number): void {
+  const gl = renderer.getContext();
+  const gl2 = lumaAsync && typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext ? gl : null;
+  // A read in flight is collected first; while it is still in flight there is
+  // no point issuing another.
+  if (gl2 && !lumaCollect(gl2)) return;
   if (now < lumaNext) return;
   lumaNext = now + 120;
   lumaMat.uniforms.src.value = rtScene.texture;
@@ -3363,11 +4422,33 @@ function stepLuma(now: number): void {
   (lumaMat.uniforms.uNear as { value: number }).value = camera.near;
   (lumaMat.uniforms.uFar as { value: number }).value = camera.far;
   runPass(lumaMat, lumaRT);
+  if (gl2) {
+    try {
+      renderer.setRenderTarget(lumaRT);                      // binds the target's framebuffer
+      const pbo = gl2.createBuffer();
+      if (!pbo) throw new Error('no pbo');
+      gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, pbo);
+      gl2.bufferData(gl2.PIXEL_PACK_BUFFER, lumaPx.byteLength, gl2.STREAM_READ);
+      gl2.readPixels(0, 0, LUMA_W, LUMA_H, gl2.RGBA, gl2.UNSIGNED_BYTE, 0);
+      gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, null);
+      const sync = gl2.fenceSync(gl2.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      if (!sync) throw new Error('no fence');
+      gl2.flush();
+      lumaPending = { pbo, sync, far: camera.far };
+      renderer.setRenderTarget(null);
+      return;
+    } catch {
+      lumaAsync = false;                                    // this context will not do it: the old path from here on
+      lumaPending = null;
+    }
+  }
   renderer.readRenderTargetPixels(lumaRT, 0, 0, LUMA_W, LUMA_H, lumaPx);
   renderer.setRenderTarget(null);
   lumaFar = camera.far;
   lumaPrimed = true;
+  lumaStat.sync++;
 }
+(window as unknown as { __lumastat?: object }).__lumastat = (): object => ({ ...lumaStat, async: lumaStat.async, on: lumaAsync, pending: !!lumaPending, primed: lumaPrimed });
 const depVec = new THREE.Vector3();
 /** Is a world point in front of everything the frame actually DREW? A ray
  *  cast answered by the depth buffer at the luma map's resolution — coarse,
@@ -3429,6 +4510,8 @@ function depthVisible(px3: number, py3: number, pz3: number): boolean {
 // truck is actually colliding with, not the paint over it.
 let xrayMode = 0;
 let xrayWireOn = false, xrayWireAt = 0;
+const wildlifeWire = createWildlifeWire();
+const wireMaterials = createWireMaterialPolicy();
 function xrayWire(now: number): void {
   const want = xrayMode === 2;
   if (!want && !xrayWireOn) return;
@@ -3442,29 +4525,30 @@ function xrayWire(now: number): void {
   // solid stays solid where lines would lie: the dome IS the light, and the
   // truck and its through-terrain silhouette are the subject.
   const keep = new Set<THREE.Object3D>([skyDome, car, xray, moon]);
+  // Protection follows shared materials too; traversal order must not let
+  // another mesh turn a vegetation material back into wire.
+  const solidMaterials = new Set<THREE.Material>();
+  scene.traverse((o) => {
+    if (!o.name.startsWith('veg') && o.name !== 'sward') return;
+    const material = (o as THREE.Mesh).material;
+    if (material) for (const m of Array.isArray(material) ? material : [material]) solidMaterials.add(m);
+  });
   scene.traverse((o) => {
     for (let p: THREE.Object3D | null = o; p; p = p.parent) if (keep.has(p)) return;
     if (!(o as THREE.Mesh).isMesh) return;
-    // VEGETATION STAYS SOLID. Its billboarded card kinds cut their leaf
-    // shape in the fragment shader — no alphaTest flag to test for — and
-    // wireframing them painted the raw quads as black boxes over Val
-    // Müstair twice (hunt3, both rounds: standing veg down deleted every
-    // box). Solid plants over a wireframed world still read; black cards
-    // do not.
-    if (o.name === 'veg') return;
-    const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+    // Keep the actual animated triangles, but avoid flat-shading derivatives
+    // on lines. Restore the exact shared lit material when WIRE stands down.
+    if (o.name === 'birds' || o.name === 'herds') {
+      wildlifeWire.apply(o as THREE.Mesh, want);
+      return;
+    }
+    // The vegetation family includes EZ near/far trees and shrubs, not just
+    // the older 'veg' mesh. Sward silhouettes also live in shader code.
+    const keepSolid = o.name.startsWith('veg') || o.name === 'sward';
+    const m = (o as THREE.Mesh).material;
     if (!m) return;
-    for (const mm of Array.isArray(m) ? m : [m]) {
-      if (!('wireframe' in mm)) continue;
-      // A CUTOUT KEEPS ITS CUTOUT. The leaf cards' shape lives in the
-      // fragment discard, not the geometry — wireframed they lose it and
-      // render as their raw quads, which the user photographed as solid
-      // black boxes over Val Müstair (hunt3: standing veg down deleted
-      // them). Alpha-tested and blended materials stay solid; trunks,
-      // rocks, critters and the ground strip to honest triangles.
-      const mt = mm as THREE.Material;
-      if (mt.alphaTest > 0 || mt.transparent) continue;
-      (mm as THREE.MeshBasicMaterial).wireframe = want;
+    for (const material of Array.isArray(m) ? m : [m]) {
+      wireMaterials.apply(material, want, keepSolid || solidMaterials.has(material));
     }
   });
 }
@@ -3634,6 +4718,11 @@ let mblurPrimed = false;
 // argue about, and the yaw is the term that dominates in a corner.
 let mblurStepM = 0, mblurStepYaw = 0, mblurPrevYaw = 0;
 const camYaw = (): number => Math.atan2(-camera.matrixWorld.elements[8], -camera.matrixWorld.elements[10]);
+/** Metres of ground per art pixel on the chart, 0 from the seat — ONE object
+ *  held by reference by the composite, the terrain, the water and the far
+ *  shell, written once a frame beside the sun skew. Declared here because the
+ *  composite is built before `envU` is. */
+const mppU = { value: 0 };
 const compMat = new THREE.ShaderMaterial({
   uniforms: {
     sceneTex: { value: null },
@@ -3663,6 +4752,9 @@ const compMat = new THREE.ShaderMaterial({
     // evening.
     uHazeE: { value: 1400 },
     uHazeAmt: { value: 0.3 },
+    // Metres a pixel on the chart (shared by reference): what the aerial
+    // perspective fades on past the fine world. See `deep` below.
+    uMpp: mppU,
     /**
      * ── WHERE THE SKY BEGINS, IN METRES, NOT IN DEPTH ──
      *
@@ -3704,6 +4796,18 @@ const compMat = new THREE.ShaderMaterial({
     /** Which threshold pattern the dither reads: 0 bayer4 · 1 bayer8 ·
      *  2 bayer2 (checker) · 3 hash grain · 4 line etch. */
     uDPat: { value: 0 },
+    /** THE WIDE CHART'S OWN PATTERN, and whether it takes over. Past the fine
+     *  ring a tiled threshold spreads into blobs (see the note at the quantise
+     *  call); 6 is interleaved gradient noise, the closed-form blue noise the
+     *  rack already carries. `?widedither=0` keeps the dial's pattern out
+     *  there too, which is the A/B. */
+    uDPatWide: { value: 6 },
+    uDWide: { value: qsOn('widedither', true) ? 1 : 0 },
+    /** 0 = one threshold for all three channels (the shipped truth: the dither
+     *  can then only ever move a pixel along the grey axis). 1 = a threshold per
+     *  channel, so a pixel can land on a MIXTURE of two palette entries and
+     *  fourteen levels carry more apparent colour than fourteen. */
+    uDChan: { value: 0 },
     /** The quantiser's rounding constant — 0.5 is round-to-nearest; lower
      *  floods ink, higher lifts to paper. THE threshold, on the 1-bit looks. */
     uBias: { value: 0.5 },
@@ -3723,6 +4827,7 @@ const compMat = new THREE.ShaderMaterial({
     uniform float uLevels; uniform float uFow; uniform float uFlare;
     uniform float uDither; uniform float uMono;
     uniform float uDPat; uniform float uBias; uniform float uCon; uniform vec3 uTint;
+    uniform float uDChan; uniform float uDPatWide; uniform float uDWide;
     uniform float uFlash; uniform vec2 uSunUv; uniform float uSunVis;
     uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos; uniform float span;
     uniform vec2 sunXZ; uniform vec2 uPix; uniform vec3 uHazeBase; uniform vec3 uHazeSun; varying vec2 vUv;
@@ -3730,14 +4835,10 @@ const compMat = new THREE.ShaderMaterial({
     // cab and it moves when I look around" says the cause is in VIEW SPACE,
     // and the haze is the only thing here that is. 1 kills the view-angle
     // term, 2 kills the haze outright, 3 kills the sun lobe. See __haze.
-    uniform float uHazeDbg; uniform float uHazeWarm;
+    uniform float uHazeDbg; uniform float uHazeWarm; uniform float uMpp;
     uniform float uHazeE; uniform float uHazeAmt; uniform float uSkyD;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
-    // Ordered (Bayer) dither, computed without array indexing so it compiles
-    // on GLSL ES 1.0. Recursive 2x2 → 4x4.
-    float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
-    float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
-    float bayer8(vec2 a){ return bayer4(0.5 * a) * 0.25 + bayer2(a); }
+${DITHER_GLSL}
     // The warm argument is HOW MUCH OF THE SUNWARD LOBE THIS CALLER WANTS. The sky wants
     // all of it — that warm side is the sunset, and it was built on purpose.
     // Ground aerial perspective wants much less, and the reason is a measured
@@ -3776,7 +4877,10 @@ const compMat = new THREE.ShaderMaterial({
     uniform float uFogTop; uniform float uFogAmt; uniform vec3 uFogC; uniform float uFogDeck;
     float wxFogD(vec3 pw){
       vec4 wxs = texture2D(uWxTex, (pw.xz - uWxMin) * uWxInv);
-      float slab = wxs.b * smoothstep(uFogTop, uFogTop - 55.0, pw.y);
+      // Broad terrain-space pockets keep a fog bank from reading as a slab.
+      // The weather field owns its travel; this detail adds no ray samples.
+      float pockets = 1.0 + sin(pw.x * 0.007 + sin(pw.z * 0.004)) * 0.23;
+      float slab = wxs.b * (1.0 - smoothstep(uFogTop - 55.0, uFogTop, pw.y)) * pockets;
       float cbase = smoothstep(0.55, 0.85, wxs.r) * smoothstep(uFogDeck - 180.0, uFogDeck, pw.y);
       return slab + cbase * 0.85 + wxs.g * 0.20;
     }
@@ -3822,7 +4926,17 @@ const compMat = new THREE.ShaderMaterial({
         // keeps its haze. (Fog-of-war hiding is m-driven and unaffected.)
         float vFac = clamp(1.4 - abs(dir.y) * 1.3, 0.15, 1.0);
         if (uHazeDbg > 0.5 && uHazeDbg < 1.5) vFac = 1.0;
-        float deep = (1.0 - exp(-t / uHazeE)) * vFac * step(uHazeDbg, 1.5);
+        // …AND NONE OF IT ON A CHART WIDER THAN THE FINE WORLD. The floor of
+        // 0.15 was written for a survey view looking STRAIGHT down; the chart
+        // is tilted 70°, so its top edge looks 47° off vertical and takes
+        // three times the haze of its bottom edge — measured as a 7-luma
+        // gradient down the frame under ?wx=haze at a 250km view, absent
+        // under a clear sky. Aerial perspective at 500m is a fact; at 330km
+        // it is a smear over a map. The owner's rule, the same as the cloud
+        // shadows': off past the fine ring. uMpp is 0 from the seat, so the
+        // horizon keeps its haze.
+        float deep = (1.0 - exp(-t / uHazeE)) * vFac * step(uHazeDbg, 1.5)
+          * (1.0 - smoothstep(15.0, 60.0, uMpp));
         // THE BLUR IS PART OF THE AIR, so it answers to the same dial. It did
         // not: the dim term took uHazeAmt and this kept a hardcoded 0.3, so
         // HAZE OFF removed the milk and left the far field just as SOFT — a
@@ -3849,7 +4963,9 @@ const compMat = new THREE.ShaderMaterial({
           + wxFogD(camPos + dir * (tf * 0.55))
           + wxFogD(camPos + dir * (tf * 0.9))) / 3.0;
         float fogF = (1.0 - exp(-tf * fd * 0.0075)) * uFogAmt;
-        col = mix(col, uFogC, min(fogF, 0.965));
+        // Mist receives the same broad solar tint as the distant air.
+        vec3 mistColour = mix(uFogC, hazeAt(dir, uHazeWarm), 0.24);
+        col = mix(col, mistColour, min(fogF, 0.965));
       }
       // Never hand a negative (or NaN) to pow(): one bad fragment upstream
       // must not be able to punch a black hole through the finished frame.
@@ -3927,16 +5043,35 @@ const compMat = new THREE.ShaderMaterial({
       // Contrast about mid-grey BEFORE the quantiser — at one or two steps the
       // midtones have to pick a side, and this is the dial that makes them.
       enc = (enc - 0.5) * uCon + 0.5;
-      vec2 dp = floor(vUv * uPix);
-      float pat = uDPat < 0.5 ? bayer4(dp)
-        : uDPat < 1.5 ? bayer8(dp)
-        : uDPat < 2.5 ? bayer2(dp)
-        : uDPat < 3.5 ? fract(sin(dot(dp, vec2(12.9898, 78.233))) * 43758.5453)
-        : fract(dp.y * 0.25);
-      float d = (pat - 0.5) * uDither;
       // uBias is the rounding constant — 0.5 rounds to nearest; the THRESHOLD
       // dial moves it, which on the 1-bit looks is the ink point itself.
-      enc = clamp(floor(enc * uLevels + d + uBias) / uLevels, 0.0, 1.0);
+      // ── THE WEAVE PAST THE FINE RING ──
+      //
+      // An ordered dither puts its pattern on every pixel whose value falls
+      // BETWEEN two levels. Measured on an undithered wide chart at 11,000m an
+      // art pixel: 57% of the terrain pane, and that share is the same at every
+      // zoom — it is what makes the look work. What changes with zoom is the
+      // SIZE of each such patch, which is one palette step divided by the
+      // signal's gradient. From the seat the ground crosses a step in a pixel
+      // or two and the weave is a thin band that reads as texture. Out where
+      // the shell's colour has been averaged into a ramp a few steps deep
+      // across the whole frame, the same weave spreads over regions measured
+      // at 12 to 63 art pixels across — 33 to 166 screen pixels on a phone —
+      // and a 4x4 tile magnified 2.6x over a patch that size is not texture,
+      // it is a blob. Reported from the seat as "larger dither circles" over
+      // Europe; four composites over ONE scene render (devtools/far-circles.mjs)
+      // put every one of them in this line and none in the terrain: 256 levels
+      // with the amplitude at zero is smooth, 14 levels with it at zero is the
+      // same patches posterised, and the shipped pair is those patches woven.
+      //
+      // So past the fine ring the tile gives way to a pattern with no period to
+      // read. 60m a pixel is the boundary the cloud shadows and the mottle
+      // already stand down at (terrainFx), so the chart changes its rules in
+      // one place; and uMpp is 0 from the seat, which is the whole of the
+      // "does this touch the drive" question. The bay's copy pass keeps the
+      // dial's pattern — it is never a wide chart.
+      float wPat = (uDWide > 0.5 && uMpp > 60.0) ? uDPatWide : uDPat;
+      enc = ditherQuant(enc, floor(vUv * uPix), wPat, uDither, uBias, uLevels, uDChan);
       // Phosphor tint AFTER the quantise: tinting first would quantise the
       // channels apart and break the exact-N-tone promise the dial makes.
       enc *= mix(vec3(1.0), uTint, uMono);
@@ -4044,6 +5179,14 @@ function reveal(ex: number, ez: number): void {
 // and the world is never dissolved at all.
 const envU = {
   uCloudS: { value: 0 },                       // cover, for cloud shadows
+  // METRES OF GROUND PER ART PIXEL, on the chart; 0 from the seat. What the
+  // world's fine terms — the 600m cloud noise, the 30-80m mottle — fade on
+  // once a pixel outspans them, because a term narrower than a pixel does not
+  // draw detail, it draws aliasing. A uniform rather than fwidth(): the chart
+  // looks straight down from one distance so one number is exact for the
+  // whole frame, it needs no derivatives extension on WebGL1, and from the
+  // seat nothing is ever wider than a pixel at the range the shell begins.
+  uMpp: mppU,
   uWind: { value: new THREE.Vector2() },       // the deck's drift, shared with the sky
   // How far a point on the ground has to travel HORIZONTALLY to reach the deck,
   // per metre of altitude, going toward the sun: sunDir.xz / sunDir.y. Near
@@ -4271,6 +5414,39 @@ const SUNM_GLSL = `
   }`;
 // (Pattern per SimonDev's "customizing materials": extend the built-ins by
 // splicing GLSL into their chunk includes rather than rewriting materials.)
+/**
+ * ── THE WET-DEBUG OVERLAY: EVERY INPUT TO "IS THE TRUCK IN WATER", ON THE GROUND ──
+ *
+ * The readout said WATER on grass. Five things can say water here — a
+ * carriageway's absence, a carved channel, the ocean mask, the hydro field's
+ * coverage, the cover raster's class 80 — and the hydro draws by a sixth
+ * (coverage past the shader's cut, AND the resting level above the ground).
+ * Nothing showed them side by side, so a disagreement between what the
+ * wheels felt and what the eye saw could only be argued about. This paints
+ * them, one colour each, over the 768 m around the truck, and the terrain
+ * shader mixes it in after everything else. Off, it costs one uniform read.
+ *
+ *   blue     drawn water, and the truck would be in it
+ *   orange   drawn water under a carriageway — a bridge or causeway deck
+ *   magenta  the field is wet here but its surface is UNDER the ground
+ *   yellow   the waterline band, where the shader's cut and the physics' 0.5 may part
+ *   cyan     a carved channel with no hydro water
+ *   navy     the ocean mask
+ *   grey     cover class 80 with no water built
+ *   red      the physics says water and none of the above explains it
+ */
+const WETDBG_N = 128;
+const wetDbgCv = document.createElement('canvas');
+wetDbgCv.width = wetDbgCv.height = WETDBG_N;
+const wetDbgCtx = wetDbgCv.getContext('2d') as CanvasRenderingContext2D;
+const wetDbgT = new THREE.CanvasTexture(wetDbgCv);
+wetDbgT.flipY = false; wetDbgT.minFilter = wetDbgT.magFilter = THREE.NearestFilter;
+const wetDbgU = {
+  uDbgWet: { value: wetDbgT as THREE.Texture }, uDbgOrg: { value: new THREE.Vector2() },
+  uDbgW: { value: 768 }, uDbgOn: { value: 0 },
+};
+let wetDbgOn = qsOn('wetdebug', false);
+let wetDbgAt = -1e9, wetDbgMs = 0;
 function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
   // THE SHADOW MAP HAS TO SEE THE FACES YOU CAN SEE. three's default for a
   // FrontSide material is to render BACK faces into the depth map — sound for a
@@ -4294,13 +5470,34 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
   mat.onBeforeCompile = function (sh, renderer) {
     prev?.call(mat, sh, renderer);
     sh.uniforms.uCloudS = envU.uCloudS;
+    sh.uniforms.uMpp = envU.uMpp;
     sh.uniforms.uWind = envU.uWind;
     sh.uniforms.uWxTex = wxU.uWxTex;
     sh.uniforms.uWxMin = wxU.uWxMin;
     sh.uniforms.uWxInv = wxU.uWxInv;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;')
-      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      // ── AND IT HAS TO KNOW WHERE THE INSTANCE IS ──
+      //
+      // This read `modelMatrix * transformed` and skipped `instanceMatrix`,
+      // which is only correct for a mesh drawn once. Every plant and every
+      // rock in the world is an InstancedMesh added straight to the scene, so
+      // for all of them `vWorldP` was the vertex's position in the GEOMETRY —
+      // a couple of metres from the origin, the same couple of metres for a
+      // tree here and a tree forty kilometres away. Both things this varying
+      // feeds were therefore answering the wrong question everywhere at once:
+      // the cloud shadow sampled one point of the sky for the entire flora
+      // pool (so a front crossing the valley darkened the ground and left the
+      // trees standing in it lit), and `sunMarch` tested a ridge line against
+      // the origin rather than against the plant. Three's own `worldpos_vertex`
+      // has had the instancing branch all along; this line simply never copied
+      // it.
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+        vec4 fxWp = vec4(transformed, 1.0);
+        #ifdef USE_INSTANCING
+          fxWp = instanceMatrix * fxWp;
+        #endif
+        vWorldP = (modelMatrix * fxWp).xyz;`);
     sh.uniforms.uSunSkew = envU.uSunSkew;
     sh.uniforms.uDeckY = envU.uDeckY;
     sh.uniforms.uCloudScale = envU.uCloudScale;
@@ -4309,10 +5506,13 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
     sh.uniforms.uSunMW = envU.uSunMW;
     sh.uniforms.uSunMOn = envU.uSunMOn;
     sh.uniforms.uSunL = envU.uSunL;
+    sh.uniforms.uDbgWet = wetDbgU.uDbgWet; sh.uniforms.uDbgOrg = wetDbgU.uDbgOrg;
+    sh.uniforms.uDbgW = wetDbgU.uDbgW; sh.uniforms.uDbgOn = wetDbgU.uDbgOn;
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vWorldP;
-        uniform float uCloudS; uniform vec2 uWind;
+        uniform sampler2D uDbgWet; uniform vec2 uDbgOrg; uniform float uDbgW; uniform float uDbgOn;
+        uniform float uCloudS; uniform vec2 uWind; uniform float uMpp;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
         uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
         ${CLOUD_GLSL}
@@ -4338,18 +5538,44 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         // LOCAL cover at the hit, from the same field the dome reads — the
         // dark ground under the arriving front is the front, not the mean.
         // uCloudS keeps only its dial job: a gate, opened by any cover at all.
-        float covL = texture2D(uWxTex, (hit - uWxMin) * uWxInv).r;
+        //
+        // …INSIDE THE LATTICE. Beyond its 12km the texture clamps to its edge
+        // texel, and on a 570km chart that painted the whole backdrop with
+        // the lattice's four corners and four edge rows: four flat quadrants
+        // and a cross of strips through the truck, reported from the seat as
+        // "checker/cross". Past the edge the honest value is the region's
+        // mean, which is what uCloudS is.
+        vec2 wuv = (hit - uWxMin) * uWxInv;
+        float covL = mix(uCloudS, texture2D(uWxTex, wuv).r, clInLattice(wuv));
+        // AND NONE OF IT PAST THE FINE WORLD. The owner's rule: a chart wider
+        // than the fine ring shows no cloud shadow at all — not the noise,
+        // which is sub-pixel there, and not its mean either. uMpp is metres a
+        // pixel on the chart and 0 from the seat; 15m is a 3km view (the
+        // junction chart, where a cloud crossing the road is still a thing
+        // you watch) and 60m a 12km one, the fine ring's edge and the
+        // lattice's, so the term is gone before any pixel outspans a patch.
+        float wide = 1.0 - smoothstep(15.0, 60.0, uMpp);
         float cs = clCov(clfbm(hit * uCloudScale + uWind), covL);
-        gl_FragColor.rgb *= 1.0 - min(covL * 1.4, 1.0) * cs * 0.5;
+        gl_FragColor.rgb *= 1.0 - min(covL * 1.4, 1.0) * cs * 0.5 * wide;
+      }
+      if (uDbgOn > 0.5) {
+        vec2 duv = (vWorldP.xz - uDbgOrg) / uDbgW;
+        if (duv.x > 0.0 && duv.x < 1.0 && duv.y > 0.0 && duv.y < 1.0) {
+          vec4 dc = texture2D(uDbgWet, duv);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, dc.rgb, dc.a * 0.8);
+        }
       }`);
     if (opts.detail) {
       // World-space mottle (~30–80m blobs) breaks the flat-shaded banding of
       // the vertex-colored terrain without any texture upload.
+      // …and it is gone where a pixel outspans it. 30-80m blobs at a survey
+      // zoom of hundreds of metres a pixel are aliasing, not texture, and the
+      // far shell wears this material at exactly those zooms.
       sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
       {
         vec2 gp = vWorldP.xz;
         float gn = sin(gp.x * 0.131 + sin(gp.y * 0.093) * 2.0) * sin(gp.y * 0.117 + sin(gp.x * 0.071) * 2.0);
-        diffuseColor.rgb *= 0.955 + 0.045 * gn;
+        diffuseColor.rgb *= 0.955 + 0.045 * gn * (1.0 - smoothstep(15.0, 60.0, uMpp));
       }`);
     }
   };
@@ -4494,7 +5720,45 @@ farClip(farMat);
  * layers are lit by one law and differ only in outline.
  */
 const farMats = new Map<string, THREE.MeshLambertMaterial>();
-function farMatFor(data: Float32Array, w: number, key: string): THREE.MeshLambertMaterial {
+/**
+ * THE MAP WAS WRITTEN WITH +Y UP, AND ON A SPHERE UP IS THE RADIAL.
+ *
+ * The kernel's normal map is object-space — its x east, y up, z south, the
+ * flat frame's axes — and three reads it straight through normalMatrix. Across
+ * a 990km z5 tile the radial swings 8.9 degrees, so a map read as-is lights
+ * every tile with a vignette: the sun's cosine drifts ±4.5 degrees from one
+ * edge to the other, about ±5% of the direct term. So the fragment rebuilds
+ * the vertex's own east/up/north from its position — the frame latLonToUnit
+ * defines, east from the radial's x/z, north as up × east, which the mirrored
+ * frame makes a rotation — and reads the map in that. `uTileC` is the tile's
+ * centre in the planet's frame, the vector the RTC vertices are relative to.
+ *
+ * A DISTINCT CACHE KEY from farMat's, or three hands the fallback material
+ * (a tangent-space map, no vObjP) this program and the shell goes black.
+ */
+function sphereNormal(mat: THREE.MeshLambertMaterial, centre: THREE.Vector3): void {
+  const base = mat.onBeforeCompile;
+  const u = { uTileC: { value: centre } };
+  mat.onBeforeCompile = function (sh, renderer) {
+    base.call(this, sh, renderer);
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vObjP;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvObjP = transformed;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vObjP; uniform vec3 uTileC;')
+      .replace('#include <normal_fragment_maps>', `
+        {
+          vec3 mN = texture2D(normalMap, vNormalMapUv).xyz * 2.0 - 1.0;
+          vec3 uR = normalize(vObjP + uTileC);
+          vec3 eR = normalize(vec3(uR.z, 0.0, -uR.x));
+          vec3 nR = cross(uR, eR);
+          normal = normalize(normalMatrix * (mN.x * eR + mN.y * uR - mN.z * nR));
+        }`);
+  };
+  mat.customProgramCacheKey = () => 'terrain-far-sphere';
+}
+function farMatFor(data: Float32Array, w: number, key: string, centre: THREE.Vector3): THREE.MeshLambertMaterial {
   const old = farMats.get(key);
   if (old) { old.normalMap?.dispose(); old.dispose(); }
   // A quarter-megabyte of texture per tile, and the ring is 25 of them; a level
@@ -4519,6 +5783,7 @@ function farMatFor(data: Float32Array, w: number, key: string): THREE.MeshLamber
   m.normalMapType = THREE.ObjectSpaceNormalMap;
   terrainFx(m, { detail: true });
   farClip(m);
+  sphereNormal(m, centre);
   farMats.set(key, m);
   return m;
 }
@@ -4590,84 +5855,7 @@ let farClipOff = false;
 // `normal` tiles for the same ground, this agrees to a mean 13.0° at Big Sur
 // and 7.9° at Chapman's Peak — the residual being estimator convention, not
 // information, which is why the extra download is not worth making.
-const NRM_SCALE = Number(new URLSearchParams(location.search).get('nscale') ?? 0.35);
-// OBJECT SPACE, not tangent space. A tangent-space map would need the handedness
-// of three's UVs against PlaneGeometry's winding to come out right, and getting
-// that wrong inverts the shading of every north-facing slope in a way that is
-// easy to stare past. The terrain mesh carries no rotation, so its object space
-// IS world space, and the vector to store is simply the world normal — which is
-// checkable against the heightfield rather than against a rendering. See
-// __nrmcheck.
-//
-// The one mapping still to get right is which texel a world point lands on.
-// PlaneGeometry's uv.y grows with local +Y, and the geometry is rotated -90°
-// about X, so uv.y grows toward world -Z. A DataTexture does not flip, so v=0
-// is buffer row 0 — which therefore sits at MAX z, while the tile's own data
-// row 0 sits at MIN z. The rows are stored reversed for exactly that reason.
-function terrainNormalTex(t: { w: number; data: Float32Array; xs?: number; zs?: number; h?: number }): THREE.DataTexture {
-  const W = 256;
-  const mpp = t.w / W;
-  const buf = new Uint8Array(W * W * 4);
-  // THE EDGE ROWS READ THE NEIGHBOUR. The one-sided difference at a tile's
-  // border lit its edge pixels differently from the interior — a seam along
-  // every tile boundary. At the border the sample beyond the edge is taken
-  // from the field, which has the neighbouring tile when it is loaded.
-  // IN THE RASTER'S FRAME. `t.data` is absolute elevation and `sampleHeight`
-  // is local (minus baseElev); the first version mixed them, so every border
-  // pixel got a gradient the size of the base elevation and the tile edges
-  // drew as black lines at close zoom — the exact seam this exists to remove,
-  // inverted (Senqu, live, with the tile debug lines to correlate against).
-  const beyond = (i: number, j: number): number | null => {
-    if (t.xs === undefined || t.zs === undefined || t.h === undefined) return null;
-    // The raster's samples sit at xs + i·w/255 — 256 of them spanning the
-    // tile edge to edge, as the colour pass reads them — not at pixel
-    // centres on a w/256 pitch, and half a pixel of misplacement is a
-    // quarter of the slope in the edge gradient.
-    const ex = t.xs + i * (t.w / (W - 1)), ez = t.zs + j * (t.h / (W - 1));
-    return hasHeight(ex, ez) ? sampleHeightRaw(ex, ez) + baseElev : null;
-  };
-  for (let j = 0; j < W; j++) {
-    const j0 = Math.max(0, j - 1) * W, j1 = Math.min(W - 1, j + 1) * W;
-    const dj = (Math.min(W - 1, j + 1) - Math.max(0, j - 1)) * mpp;
-    for (let i = 0; i < W; i++) {
-      const i0 = Math.max(0, i - 1), i1 = Math.min(W - 1, i + 1);
-      const di = (i1 - i0) * mpp;
-      let dzdx = (t.data[j * W + i1] - t.data[j * W + i0]) / di;
-      let dzdz = (t.data[j1 + i] - t.data[j0 + i]) / dj;
-      if (i === 0 || i === W - 1) {
-        const a = i === 0 ? beyond(-1, j) : t.data[j * W + i - 1];
-        const b = i === W - 1 ? beyond(W, j) : t.data[j * W + i + 1];
-        if (a !== null && b !== null) dzdx = (b - a) / (2 * mpp);
-      }
-      if (j === 0 || j === W - 1) {
-        const a = j === 0 ? beyond(i, -1) : t.data[(j - 1) * W + i];
-        const b = j === W - 1 ? beyond(i, W) : t.data[(j + 1) * W + i];
-        if (a !== null && b !== null) dzdz = (b - a) / (2 * mpp);
-      }
-      // World normal of the heightfield: y is up, and the surface falls away
-      // from the gradient in x and z.
-      // FLATTENED TOWARD UP by NRM_SCALE. Taken raw, a 9.5m/px gradient on a
-      // sea cliff is a near-horizontal normal, and Chapman's rock faces went
-      // black under a high sun — physically defensible and much worse to look
-      // at than the smoothed mesh facets they replaced. Easing the gradient
-      // keeps the ridges and gullies the mesh cannot hold without pretending
-      // the whole cliff faces the camera.
-      const nx = -dzdx * NRM_SCALE, ny = 1, nz = -dzdz * NRM_SCALE;
-      const l = Math.hypot(nx, ny, nz) || 1;
-      const o = ((W - 1 - j) * W + i) * 4;     // rows reversed — see above
-      buf[o] = Math.round((nx / l * 0.5 + 0.5) * 255);
-      buf[o + 1] = Math.round((ny / l * 0.5 + 0.5) * 255);
-      buf[o + 2] = Math.round((nz / l * 0.5 + 0.5) * 255);
-      buf[o + 3] = 255;
-    }
-  }
-  const tex = new THREE.DataTexture(buf, W, W, THREE.RGBAFormat);
-  tex.needsUpdate = true;
-  return tex;
-}
-/** One material per terrain tile, because each carries its own normal map.
- *  Retired with the mesh it belonged to — a DataTexture per tile is 256KB, and
- *  the streamer rebuilds tiles constantly. */
+const NRM_SCALE = Number(qs('nscale') ?? 0.35);
 const terrainMats = new Map<string, THREE.MeshLambertMaterial>();
 /**
  * THE NORMAL MAP OUTLIVES THE REBUILD THAT ASKED FOR IT.
@@ -4690,10 +5878,10 @@ const terrainMats = new Map<string, THREE.MeshLambertMaterial>();
  * rebuild of the same tile.
  */
 const terrainNormals = new Map<string, THREE.DataTexture>();
-function terrainNormalFor(t: HeightTile, key: string): THREE.DataTexture {
+function terrainNormalFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.DataTexture {
   const had = terrainNormals.get(key);
   if (had) return had;
-  const tex = terrainNormalTex(t);
+  const tex = terrainNormalTex(t, bytes);
   terrainNormals.set(key, tex);
   // Bounded for the same reason the materials are, and kept LOOSER than them:
   // a texture whose material has already been evicted is exactly the one worth
@@ -4711,7 +5899,7 @@ function terrainNormalFor(t: HeightTile, key: string): THREE.DataTexture {
   }
   return tex;
 }
-function terrainMatFor(t: HeightTile, key: string): THREE.MeshLambertMaterial {
+function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.MeshLambertMaterial {
   const old = terrainMats.get(key);
   if (old) old.dispose();
   // A quarter-megabyte of texture per tile, and nothing prunes the tile maps —
@@ -4731,7 +5919,7 @@ function terrainMatFor(t: HeightTile, key: string): THREE.MeshLambertMaterial {
   }
   const m = new THREE.MeshLambertMaterial({
     vertexColors: true,
-    normalMap: terrainNormalFor(t, key),
+    normalMap: terrainNormalFor(t, key, bytes),
   });
   // Set after construction: three's Lambert PARAMETERS type omits
   // `normalMapType` even though the material carries it and the shader honours
@@ -4747,216 +5935,306 @@ function terrainMatFor(t: HeightTile, key: string): THREE.MeshLambertMaterial {
 // ── terrain meshes ─────────────────────────────────────────────────
 const terrainReady = new Map<string, Promise<void>>(); // per-tile load promise
 const terrainMeshes = new Map<string, THREE.Mesh>();
+
+// ── THE TERRAIN KERNEL'S WINDOW ONTO THIS WORLD ───────────────────
+// The build itself lives in terrain-kernel.ts, over plain arrays and this
+// store; here is what a mesh needs from a renderer, and the store's answers.
+// Getters, because the store is declared long before most of these are.
+const kStore: TerrainStore = {
+  get heights() { return heightTiles; },
+  hasHeight: (x, z) => hasHeight(x, z),
+  sampleHeight: (x, z) => sampleHeight(x, z),
+  sampleHeightRaw: (x, z) => sampleHeightRaw(x, z),
+  sampleCover: (x, z) => sampleCover(x, z),
+  coverPaint: (x, z) => coverPaint(x, z),
+  coverWater: (x, z) => coverWater(x, z),
+  get cover() { return { water: COVER.water, built: COVER.built }; },
+  seaAbs: () => seaSurfaceAbs(),
+  get baseElev() { return baseElev; },
+  get strips() { return cutCells as Map<string, StripLike[]>; },
+  get cutL() { return cutL; },
+  get channels() { return channelGrid as Map<string, StripLike[]>; },
+  get grid() { return GRID; },
+  onRoad: (x, z) => onCarriageway(x, z, 0.6).road,
+  palette: (elevAbs, slope, cover, x, z) => terrainPalette(elevAbs, slope, cover, x, z),
+  areaTint: (x, z) => areaTintAt(x, z),
+  get borders() { return refinedBorders; },
+  get nrmScale() { return NRM_SCALE; },
+  get cutWash() { return CUT_WASH; },
+  get cprobe() { return CPROBE; },
+  get carveLog() { return carveLog; },
+  get cutRelief() { return CUT_RELIEF; },
+};
+const chanSet = new Set<Seg>();
+function channelsNear(x: number, z: number, into: Set<Seg>): void { K.channelsNear(kStore, x, z, into as Set<StripLike>); }
+/** Every tile's border row, world x, z, y in threes — written by the kernel,
+ *  read here by the probes. */
+const refinedBorders = new Map<string, Float64Array>();
+function borderShared(t: HeightTile, nk: string): boolean { return K.borderShared(kStore, t, nk); }
+function roadFloorHard(x: number, z: number, wash = CUT_WASH): number | null { return K.roadFloorHard(kStore, x, z, wash); }
+function corridorH(x: number, z: number, N: number, cands?: Iterable<Seg>): { h: number; k: number } { return K.corridorH(kStore, x, z, N, cands); }
+const cellTrisCache = new WeakMap<THREE.BufferGeometry, CellTris>();
+/** The cell table of a terrain geometry: registered by the build, rebuilt
+ *  from the arrays for anything else. */
+function cellTrisOf(geo: THREE.BufferGeometry, SEG: number): CellTris {
+  const hit = cellTrisCache.get(geo);
+  if (hit && hit.seg === SEG) return hit;
+  const pos = (geo.attributes.position as THREE.BufferAttribute).array as Float32Array;
+  const idx = (geo.index as THREE.BufferAttribute).array as Uint32Array | Uint16Array;
+  const ct = cellTable(pos, idx, SEG);
+  cellTrisCache.set(geo, ct);
+  return ct;
+}
+function terrainNormalTex(t: { w: number; data: Float32Array; xs?: number; zs?: number; h?: number }, bytes?: Uint8Array): THREE.DataTexture {
+  const tex = new THREE.DataTexture((bytes ?? K.normalMapBytes(kStore, t)) as Uint8Array<ArrayBuffer>, 256, 256, THREE.RGBAFormat);
+  tex.needsUpdate = true;
+  return tex;
+}
 function buildTerrainMesh(t: HeightTile): void {
   const key = `${t.tx}/${t.ty}`;
   const SEG = terrainSeg;
   // THE CORRIDOR IS IN THE GEOMETRY where a road comes near — see
   // refineTileGeometry. A tile with no road keeps the plain grid.
   const nearTruck = Math.max(0, Math.abs(state.x - (t.xs + t.w / 2)) - t.w / 2, Math.abs(state.z - (t.zs + t.h / 2)) - t.h / 2) <= REFINE_R;
-  // …AND ONLY ONCE THE ROADS HAVE STOPPED ARRIVING. Every way that lands
-  // dirties the tiles it crosses, so during a stream the four in-range tiles
-  // rebuild a dozen times each — measured at Vélizy as 209 builds for 30
-  // tiles, 350ms a corridor build in that density. While the stream is busy
-  // a tile builds plain (the old carve, at the old price) and the quiet path
-  // gives it its corridor exactly once, when nothing more is coming.
+  // …AND ONLY ONCE THE ROADS HAVE STOPPED ARRIVING — see osmStreamQuiet.
+  // While the stream is busy a tile builds plain and the quiet path gives it
+  // its corridor exactly once, when nothing more is coming.
   const corridor = REFINE && nearTruck && osmStreamQuiet();
-  const refined = REFINE ? refineTileGeometry(t, SEG, corridor) : null;
-  const geo = refined ? refined.geo : new THREE.PlaneGeometry(t.w, t.h, SEG, SEG);
-  if (!refined) { geo.rotateX(-Math.PI / 2); (geo.userData as { seg?: number }).seg = SEG; }
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  const colors = new Float32Array(pos.count * 3);
-  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
-  const cell = t.w / SEG;
-  // PASS ONE: the ground as the world says it is. The road corridor is carved
-  // afterwards, per triangle, because the constraint it has to satisfy is
-  // about the interpolated SURFACE at a deck point and not about any one
-  // vertex — see carveCorridors. Colour comes last, off the carved heights.
-  // A refined tile arrives with its heights set and its corridor built in.
-  for (let i = 0; i < (refined ? 0 : pos.count); i++) {
-    const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
-    const cv = sampleCover(ex, ez);
-    // The exact edge where the field has a tile, inside this one where it
-    // does not — see refineTileGeometry's fieldAt.
-    let elev = hasHeight(ex, ez) ? sampleHeight(ex, ez)
-      : sampleHeight(clamp(ex, t.xs + 1e-4, t.xs + t.w - 1e-4), clamp(ez, t.zs + 1e-4, t.zs + t.h - 1e-4));
-    // GIVE THE SEA A FLOOR. The elevation source carries no bathymetry: it
-    // fills the ocean with a flat plate AT the waterline, so once the water
-    // plane was placed correctly the Pacific rendered as a 40cm lagoon over
-    // its own bed — measured 0.4m deep for two kilometres straight out. Where
-    // cover says water, the bed drops to a depth that reads as sea. It only
-    // ever lowers ground, and the step at the shoreline is itself underwater.
-    //
-    // ONLY THE SEA GETS A FLOOR. Cover calls mountain rivers and tarns water
-    // too, and they run hundreds of metres above sea level — cutting those to
-    // the waterline carves a chasm down the hillside they sit on, and leaves
-    // whatever escaped the cut standing over it as a slab. So the cut applies
-    // only where the ground is ALREADY at the water: within two metres of the
-    // sea surface, which is precisely the flat ocean plate the DEM draws and
-    // nothing else. That also makes it safe against a bad sea datum, which is
-    // the failure that found this.
-    if (cv === COVER.water) {
-      const seaLocal = seaSurfaceAbs() - baseElev;
-      if (elev <= seaLocal + 2) elev = Math.min(elev, seaLocal - SEA_BED);
-    }
-    pos.setY(i, elev);
-  }
-  // A stitched plain tile still carves — its own roads are the old grid's —
-  // but never the vertices pinned to a refined neighbour's border (the carve
-  // only lowers, and a pinned border vertex is already where it must be, so
-  // the carve is simply run on the plain lattice and the border re-pinned).
-  if (!refined || !corridor) carveCorridors(t, geo, SEG);
-  carveChannels(t, geo, SEG);
-  // The west and north edges take the owners' rows, after everything that
-  // digs — for every build (a corridor build pinned them itself, and the
-  // channel carve only lowers where a river is).
-  if (!refined || !corridor) {
-    const pinned = refinedBorderPins(t, geo);
-    for (const [v, y] of pinned) pos.setY(v, y);
-  }
-  storeBorder(t, geo);
-  // PASS TWO: colour, off the heights the carve settled on.
-  const kinds = refined ? refined.kinds : null;
-  for (let i = 0; i < pos.count; i++) {
-    const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
-    const elevAbs = pos.getY(i) + baseElev;
-    const u = clamp(Math.round(((ex - t.xs) / t.w) * 255), 0, 255);
-    const v = clamp(Math.round(((ez - t.zs) / t.h) * 255), 0, 255);
-    // THE SLOPE READS ACROSS THE TILE EDGE. A forward difference clamped
-    // inside the tile gave the last column and row of every tile a slope of
-    // zero, so they took no shade darkening and drew a one-vertex bright line
-    // along two edges of each tile — the cross through the truck on every
-    // chart frame (Colcha K, Walter Sisulu). Central difference on the field
-    // itself, which knows the neighbouring tile; where no tile is loaded the
-    // in-tile one-sided read stands in, so the world's edge is not shaded as
-    // a cliff down to sea level.
-    let du: number, dv: number;
-    if (hasHeight(ex + cell, ez) && hasHeight(ex - cell, ez) && hasHeight(ex, ez + cell) && hasHeight(ex, ez - cell)) {
-      du = (sampleHeight(ex + cell, ez) - sampleHeight(ex - cell, ez)) / 2;
-      dv = (sampleHeight(ex, ez + cell) - sampleHeight(ex, ez - cell)) / 2;
-    } else {
-      du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + Math.max(0, u - (u === 255 ? 1 : 0))];
-      dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[Math.max(0, v - (v === 255 ? 1 : 0)) * 256 + u];
-    }
-    // coverPaint, not sampleCover: this is the one consumer that only decides a
-    // COLOUR, so it takes the dithered read and the 38m block edges dissolve
-    // into a ragged boundary at vertex resolution. See coverPaint.
-    // A cut face is steeper than any DEM slope and is fresh earth; a bank is
-    // as steep and grassed. Both shade by their own slope, the face wears
-    // the earth the batter strip used to.
-    const kind = kinds ? kinds[i] : 0;
-    let slope = Math.hypot(du, dv) / Math.max(cell, 1);
-    if (kind === 2) slope = Math.max(slope, CUTF_K); else if (kind === 3) slope = Math.max(slope, BANK_K);
-    let [r, g, bb] = terrainPalette(elevAbs, slope, coverPaint(ex, ez), ex, ez);
-    if (kind === 2) { r += (EARTH_T[0] - r) * 0.6; g += (EARTH_T[1] - g) * 0.6; bb += (EARTH_T[2] - bb) * 0.6; }
-    // …and then whoever actually drew this ground. The 38m raster says what is
-    // growing across a landscape; an OSM area says where a particular wood
-    // STOPS, which is the thing the raster cannot resolve. Applied after it,
-    // and only part of the way, for the same reason the raster is: the ramp is
-    // where the art direction lives.
-    const at2 = areaTintAt(ex, ez);
-    if (at2) {
-      r += (at2[0] - r) * AREA_MIX; g += (at2[1] - g) * AREA_MIX; bb += (at2[2] - bb) * AREA_MIX;
-    }
-    colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geo.computeVertexNormals();
+  const b = K.buildTile(kStore, t, SEG, corridor, REFINE);
+  const p7 = performance.now();
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(b.pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(b.uv, 2));
+  geo.setAttribute('color', new THREE.BufferAttribute(b.colors, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(b.normals, 3));
+  geo.setIndex(new THREE.BufferAttribute(b.idx, 1));
+  cellTrisCache.set(geo, b.cellTris);
+  (geo.userData as { seg?: number }).seg = SEG;
   const old = terrainMeshes.get(key);
   if (old) { worldGroup.remove(old); old.geometry.dispose(); }
   const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key) : terrainMat);
-  // Terrain RECEIVES shadows and no longer throws them into the map. The old
-  // rationale — "a ridge shading the valley is most of what a low sun is FOR"
-  // — is served better by the sun march now (R54): field-to-field to 2.7km,
-  // where the shadow box's texels went blocky past a few hundred metres. What
-  // the map is FOR is objects: buildings, vegetation and the truck landing
-  // their shadows on this ground, and they all still cast. The saving is the
-  // whole terrain re-transformed into the shadow pass every frame — 819k
-  // triangles at COARSE, 3.3M at FINEST, 78-94% of the pass.
+  // Terrain RECEIVES shadows and no longer throws them into the map — the sun
+  // march does the ridge-over-valley job; objects on the ground still cast.
   shadowy(mesh, false, true);
-  mesh.position.set(cxm, 0, czm);
+  mesh.position.set(t.xs + t.w / 2, 0, t.zs + t.h / 2);
   // INTENT, not outcome: a corridor build that found no break lines (every
-  // road at grade) is still done, or the quiet path would dirty it on every
-  // visit for ever — five rebuilds a second of a tile that never changes.
+  // road at grade) is still done, or the quiet path would dirty it for ever.
   (mesh.userData as { corridor?: boolean }).corridor = corridor;
+  if (corridor) dropBatterFor(key);
   terrainMeshes.set(key, mesh);
   worldGroup.add(mesh);
   // THE FOLLOWERS. This tile owns its east and its south edge; a neighbour
-  // there that was built before this row existed, or against an older one,
-  // is rebuilt to take it. ONLY when its border differs — dirtying all four
-  // neighbours on every rebuild ran Vélizy to 212 builds for 30 tiles.
+  // there built against an older row is rebuilt to take it — only when its
+  // border differs.
   for (const [dx, dy] of [[1, 0], [0, 1]]) {
     const nk = `${t.tx + dx}/${t.ty + dy}`;
     if (terrainMeshes.has(nk) && !borderShared(t, nk)) { terrainDirty.add(nk); dirtyWhy.set(nk, `owner:${key}`); }
   }
-  buildLog.push({ key, why: dirtyWhy.get(key) ?? 'load', corridor, refined: !!refined, at: Math.round(performance.now()) });
+  plainCost.mesh += performance.now() - p7;
+  buildLog.push({ key, why: dirtyWhy.get(key) ?? 'load', corridor, refined: b.refined, at: Math.round(performance.now()) });
+  noteBuild(key, dirtyWhy.get(key) ?? 'load');
   if (buildLog.length > 400) buildLog.shift();
   dirtyWhy.delete(key);
 }
-/** Every tile's border row, world x, z, y in threes, stored as it was built
- *  — what a follower pins to and what `borderShared` compares. */
-function storeBorder(t: HeightTile, geo: THREE.BufferGeometry): void {
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
-  const b: number[] = [];
-  for (let v = 0; v < pos.count; v++) {
-    const x = pos.getX(v) + cxm, z = pos.getZ(v) + czm;
-    if (onTileEdge(t, x, z)) b.push(x, z, pos.getY(v));
-  }
-  refinedBorders.set(`${t.tx}/${t.ty}`, Float64Array.from(b));
-}
-/** Does the tile at `nk` already carry every point of `t`'s border along
- *  their shared edge, at the same heights? */
-function borderShared(t: HeightTile, nk: string): boolean {
-  const mine = refinedBorders.get(`${t.tx}/${t.ty}`), theirs = refinedBorders.get(nk);
-  if (!mine) return true;
-  if (!theirs) return false;
-  const nt = heightTiles.get(nk);
-  if (!nt) return true;
-  const have = mmIndex(theirs);
-  for (let i = 0; i < mine.length; i += 3) {
-    const x = mine[i], z = mine[i + 1];
-    // On the shared edge: inside the neighbour's box (with slack) and on ours.
-    if (x < nt.xs - 1e-3 || x > nt.xs + nt.w + 1e-3 || z < nt.zs - 1e-3 || z > nt.zs + nt.h + 1e-3) continue;
-    const p = mmNear(have, x, z);
-    if (!p || Math.abs(p[2] - mine[i + 2]) > 0.02) return false;
-  }
-  return true;
-}
-/** The vertices of a plain tile that lie on a refined neighbour's border,
- *  with the neighbour's heights — re-applied after the carve. */
-function refinedBorderPins(t: HeightTile, geo: THREE.BufferGeometry): Array<[number, number]> {
-  const out: Array<[number, number]> = [];
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
-  const want = new Map<string, MmPt>();
-  for (const [dx, dy] of [[-1, 0], [0, -1]]) {                 // the owners of this tile's west and north edges
-    const nb = refinedBorders.get(`${t.tx + dx}/${t.ty + dy}`);
-    if (!nb) continue;
-    for (let i = 0; i < nb.length; i += 3) {
-      const x = nb[i], z = nb[i + 1];
-      if (!onTileEdge(t, x, z)) continue;                       // the owner's OTHER edges are not ours
-      want.set(mmKey(x, z), [x, z, nb[i + 2]]);
+
+// ── THE TERRAIN WORKER ─────────────────────────────────────────────
+// The same kernel, off the main thread: a build is posted as a self-contained
+// job and its arrays come back to be wrapped in a mesh. One in flight at a
+// time — the queue and its owners-first order stay here for now (see
+// docs/terrain-worker.md, step 4). ?tworker=0 keeps every build synchronous.
+const TWORKER = qs('tworker') !== '0';
+const tworker: TerrainWorker | null = TWORKER ? new TerrainWorker() : null;
+let buildInFlight: string | null = null;
+/** Milliseconds between worker posts: 3× the last build's main-thread cost, clamped. */
+let workerGap = 100;
+/** A terrain apply landed since the last frame: the hydro drain skips one. */
+let appliedThisFrame = false;
+const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0, hydroBuildMs: 0, hydroBuilds: 0, hydroBuildMax: 0, lastHydroMs: 0, hydroFeeds: 0, hydroSkips: 0 };
+/** Everything a build reads that is not a raster, packed for the worker. */
+function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<TerrainJob, 'id'>; transfer: Transferable[] } {
+  const flatten = (grid: Map<string, Seg[]>, cell: number, margin: number): { flat: Float64Array; cells: Array<[string, number[]]> } => {
+    const ids = new Map<Seg, number>(); const cells: Array<[string, number[]]> = [];
+    for (let cx = Math.floor((t.xs - margin) / cell); cx <= Math.floor((t.xs + t.w + margin) / cell); cx++) {
+      for (let cz = Math.floor((t.zs - margin) / cell); cz <= Math.floor((t.zs + t.h + margin) / cell); cz++) {
+        const arr = grid.get(`${cx},${cz}`);
+        if (!arr || !arr.length) continue;
+        cells.push([`${cx},${cz}`, arr.map((s) => { let i = ids.get(s); if (i === undefined) { i = ids.size; ids.set(s, i); } return i; })]);
+      }
+    }
+    const flat = new Float64Array(ids.size * 13);
+    for (const [s, i] of ids) {
+      const o = i * 13;
+      flat[o] = s.ax; flat[o + 1] = s.az; flat[o + 2] = s.bx; flat[o + 3] = s.bz; flat[o + 4] = s.hw;
+      flat[o + 5] = s.ya ?? NaN; flat[o + 6] = s.yb ?? NaN; flat[o + 7] = s.tk ? 1 : 0; flat[o + 8] = s.tn ? 1 : 0;
+      flat[o + 9] = s.ca ?? NaN; flat[o + 10] = s.cb ?? NaN; flat[o + 11] = s.pc ?? NaN; flat[o + 12] = NaN;
+    }
+    return { flat, cells };
+  };
+  const st = flatten(cutCells, cutL, TOE_REACH + cutL);
+  const ch = flatten(channelGrid, GRID, GRID * 2);
+  const areas: Array<{ pts: Array<[number, number]>; tint: Rgb; x0: number; z0: number; x1: number; z1: number }> = [];
+  const seenA = new Set<AreaPatch>();
+  for (let cx = Math.floor(t.xs / AREA_CELL); cx <= Math.floor((t.xs + t.w) / AREA_CELL); cx++) {
+    for (let cz = Math.floor(t.zs / AREA_CELL); cz <= Math.floor((t.zs + t.h) / AREA_CELL); cz++) {
+      for (const p of areaGrid.get(`${cx},${cz}`) ?? []) {
+        if (seenA.has(p)) continue; seenA.add(p);
+        if (p.x1 < t.xs || p.x0 > t.xs + t.w || p.z1 < t.zs || p.z0 > t.zs + t.h) continue;
+        areas.push({ pts: p.pts, tint: p.tint, x0: p.x0, z0: p.z0, x1: p.x1, z1: p.z1 });
+      }
     }
   }
-  if (!want.size) return out;
-  for (let v = 0; v < pos.count; v++) {
-    const x = pos.getX(v) + cxm, z = pos.getZ(v) + czm;
-    if (!onTileEdge(t, x, z)) continue;
-    const p = mmNear(want, x, z);
-    if (p) out.push([v, p[2]]);
+  const pads = new Float64Array(landmarksLive.length * 4);
+  landmarksLive.forEach((lm, i) => {
+    if (lm.padEle === null) lm.padEle = landmarkPadEle(lm);
+    pads[i * 4] = lm.x; pads[i * 4 + 1] = lm.z; pads[i * 4 + 2] = lm.def.pad ?? lm.def.base * 1.1; pads[i * 4 + 3] = lm.padEle;
+  });
+  // The climate field, sampled on a grid over the tile: the palette blends
+  // the biome ramps by these weights, and the field is smooth at this scale.
+  const N = 17, KW = BIOME_LIST.length;
+  const clim = new Float32Array(N * N * KW);
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const x = t.xs + (i / (N - 1)) * t.w, z = t.zs + (j / (N - 1)) * t.h;
+    const w = climateAt(x, z, sampleHeight(x, z) + baseElev).w;
+    for (let k = 0; k < KW; k++) clim[(j * N + i) * KW + k] = w[k];
   }
-  return out;
+  const data = t.data.slice();
+  const job: Omit<TerrainJob, 'id'> = {
+    epoch: worldEpoch, key: `${t.tx}/${t.ty}`,
+    tile: { tx: t.tx, ty: t.ty, xs: t.xs, zs: t.zs, w: t.w, h: t.h, data },
+    seg: SEG, corridor, refine: REFINE, hydroN: HYDRO_ON ? HYDRO_EN : 0,
+    baseElev, seaAbs: seaSurfaceAbs(), seaOn, dryAt: !!dryAt,
+    nrmScale: NRM_SCALE, cutWash: CUT_WASH, cprobe: CPROBE, cutRelief: CUT_RELIEF,
+    cutL, grid: GRID, water: COVER.water, built: COVER.built, waterTilt: WATER_TILT, coverPx: COVER_PX,
+    origin: { lat: origin.lat, lon: origin.lon, mLon: origin.mLon },
+    strips: st.flat, stripCells: st.cells, channels: ch.flat, chanCells: ch.cells, areas, pads,
+    clim, climN: N, climK: KW,
+    ramp: biome.ramp, ramps: BIOME_LIST.map((b) => b.ramp), coverTint: COVER_TINT, coverMix: COVER_MIX,
+  };
+  return { job, transfer: [data.buffer, st.flat.buffer, ch.flat.buffer, pads.buffer, clim.buffer] as unknown as Transferable[] };
 }
-// Rebuilds are not free — 16.6k vertices, each sampling the heightfield and
-// asking the road grid whether it is in a cutting. A tile arriving used to
-// rebuild all eight neighbours SYNCHRONOUSLY, and roads now want rebuilds too,
-// so they queue instead and the main loop spends one per frame on them.
+/** The worker's arrays become the tile's mesh — what buildTerrainMesh does
+ *  after its kernel call, with the rows and the followers from the reply. */
+function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string): void {
+  const SEG = terrainSeg;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(r.pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(r.uv, 2));
+  geo.setAttribute('color', new THREE.BufferAttribute(r.colors, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(r.normals, 3));
+  geo.setIndex(new THREE.BufferAttribute(r.idx, 1));
+  cellTrisCache.set(geo, { seg: SEG, offs: r.cellOffs, tris: r.cellTris });
+  (geo.userData as { seg?: number }).seg = SEG;
+  const old = terrainMeshes.get(key);
+  if (old) { worldGroup.remove(old); old.geometry.dispose(); }
+  const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key, r.normalMap) : terrainMat);
+  shadowy(mesh, false, true);
+  mesh.position.set(t.xs + t.w / 2, 0, t.zs + t.h / 2);
+  (mesh.userData as { corridor?: boolean }).corridor = r.corridor;
+  if (r.corridor) dropBatterFor(key);
+  terrainMeshes.set(key, mesh);
+  worldGroup.add(mesh);
+  refinedBorders.set(key, r.border);
+  if (r.carveLog) carveLog.set(key, r.carveLog);
+  Object.assign(refineCost, r.refineCost); Object.assign(plainCost, r.plainCost); Object.assign(carveCost, r.carveCost);
+  for (const nk of r.followers) {
+    if (terrainMeshes.has(nk)) { terrainDirty.add(nk); dirtyWhy.set(nk, `owner:${key}`); }
+  }
+  buildLog.push({ key, why, corridor: r.corridor, refined: r.refined, at: Math.round(performance.now()) });
+  noteBuild(key, why);
+  if (buildLog.length > 400) buildLog.shift();
+}
+/** Post a tile's build to the worker; the reply lands as a mesh and runs the
+ *  post-steps, exactly as the synchronous slot does. */
+function postTerrainBuild(t: HeightTile, key: string): void {
+  const w = tworker as TerrainWorker;
+  const SEG = terrainSeg;
+  const nearTruck = Math.max(0, Math.abs(state.x - (t.xs + t.w / 2)) - t.w / 2, Math.abs(state.z - (t.zs + t.h / 2)) - t.h / 2) <= REFINE_R;
+  const corridor = REFINE && nearTruck && osmStreamQuiet();
+  const why = dirtyWhy.get(key) ?? 'load';
+  dirtyWhy.delete(key);
+  const t0 = performance.now();
+  const { job, transfer } = terrainJob(t, SEG, corridor);
+  const prep = performance.now() - t0;
+  workerLedger.prepMs += prep; workerLedger.posts++;
+  buildInFlight = key;
+  w.build(job, transfer).then((r) => {
+    buildInFlight = null;
+    // The next tile goes out after `workerGap` — see flushTerrain.
+    if (r.epoch !== worldEpoch || heightTiles.get(key) !== t) { workerLedger.dropped++; return; }
+    const t1 = performance.now();
+    applyTileBuild(t, key, r, why);
+    const t2 = performance.now();
+    terrainBuilds++;
+    reseatBuildings(t); const t3 = performance.now();
+    redrape(t); const t4 = performance.now();
+    hydroFeed(t, r.hydroElev); const t5 = performance.now();
+    flushBatter(t); const t6 = performance.now();
+    flushCulverts(t); const t7 = performance.now();
+    terrainMs = t7 - t1 + prep;
+    workerGap = clamp(3 * (terrainMs + workerLedger.lastHydroMs), 100, 400);
+    appliedThisFrame = true;
+    workerLedger.applied++; workerLedger.applyMs += t2 - t1; workerLedger.postMs += t7 - t2;
+    workerLedger.reseatMs += t3 - t2; workerLedger.redrapeMs += t4 - t3; workerLedger.hydroMs += t5 - t4; workerLedger.batterMs += t6 - t5; workerLedger.culvertMs += t7 - t6;
+    workerLedger.postMax = Math.max(workerLedger.postMax, t7 - t2);
+    profAdd('terrainApply', t1);
+    if (buildLog.length) { const b = buildLog[buildLog.length - 1]; b.ms = Math.round(terrainMs); b.bms = Math.round(t2 - t1 + prep); }
+  }, (error: Error) => {
+    // The worker is disabled by its own failure; the tile goes back on the
+    // queue and the synchronous slot takes it.
+    buildInFlight = null;
+    console.warn('terrain worker:', error.message);
+    terrainDirty.add(key); dirtyWhy.set(key, why);
+  });
+}
+/** ONE HEAVY JOB A FRAME. The budgeted jobs — a hydro build, a road slice, a
+ *  terrain apply, a sward step — each kept their own budget and landed
+ *  together: the first sectioned device report's slow frames read "sward 20
+ *  + hydro 13 + gap 19", forty-one of them in forty seconds. This is what
+ *  the frame has already paid, so the next job can stand down. */
+const FRAME_HEAVY_MS = 4;
+function frameHeavyMs(): number {
+  return (curFrame.get('hydroBuild') ?? 0) + (curFrame.get('terrainApply') ?? 0) + (curFrame.get('roadBuild') ?? 0) + (curFrame.get('swardFrame') ?? 0);
+}
+/** The hydro system's tile builds, run one a frame from the frame loop. */
+const hydroJobs: Array<{ job: () => unknown; resolve: (v: never) => void; reject: (e: Error) => void }> = [];
+let hydroJobAt = 0;
+function drainHydroJobs(now: number, applied: boolean): void {
+  if (!hydroJobs.length) return;
+  // Not in a frame that already carried a terrain apply — unless the queue
+  // is backing up or the last build is 200ms behind us. One a frame at 60Hz
+  // is sixty a second; at the harness's two seconds a frame the skip alone
+  // starved water to three builds in ninety seconds (measured), so the
+  // budget is time, not frames.
+  if ((applied || frameHeavyMs() >= FRAME_HEAVY_MS) && hydroJobs.length <= 2 && now - hydroJobAt < 200) return;
+  // …and never faster than half the terrain posts' floor: a hydro build is
+  // the largest single piece of a build's main-thread share.
+  if (now - hydroJobAt < workerGap * 0.5) return;
+  const j = hydroJobs.shift() as { job: () => unknown; resolve: (v: never) => void; reject: (e: Error) => void };
+  hydroJobAt = now;
+  const t0 = performance.now();
+  try { j.resolve(j.job() as never); } catch (e) { j.reject(e instanceof Error ? e : new Error(String(e))); }
+  const d = performance.now() - t0;
+  workerLedger.hydroBuildMs += d; workerLedger.hydroBuilds++; if (d > workerLedger.hydroBuildMax) workerLedger.hydroBuildMax = d;
+  workerLedger.lastHydroMs = d;
+  profAdd('hydroBuild', t0);
+}
+/** A refeed with no build behind it: the hydro raster alone, off the worker.
+ *  Falls back to sampling here when the worker is off or busy. */
+function hydroRefeed(t: HeightTile, key: string): void {
+  if (!tworker || tworker.disabled || buildInFlight) { hydroFeed(t); return; }
+  const { job, transfer } = terrainJob(t, terrainSeg, false);
+  buildInFlight = key;
+  workerLedger.posts++;
+  tworker.build({ ...job, hydroOnly: true }, transfer).then((r) => {
+    buildInFlight = null;
+    if (r.epoch !== worldEpoch || heightTiles.get(key) !== t) { workerLedger.dropped++; return; }
+    const t0 = performance.now(); hydroFeed(t, r.hydroElev); profAdd('hydroRefeed', t0);
+  }, () => { buildInFlight = null; const t0 = performance.now(); hydroFeed(t); profAdd('hydroRefeed', t0); });
+}
+(window as unknown as { __tworker?: object }).__tworker = (): object =>
+  tworker ? { on: !tworker.disabled, ...tworker.stats, inFlight: buildInFlight, gap: Math.round(workerGap), ...workerLedger } : { on: false };
+
 const terrainDirty = new Set<string>();
-/** How far under the surface the seabed is dropped where cover says water.
- *  Deep enough to read as open sea through the water shader, shallow enough
- *  that the shelf at the shoreline stays a shelf rather than a trench. */
-const SEA_BED = 6;
-/** Every built terrain tile overlapping a world rectangle, marked for rebuild. */
 function coverDirtiedTerrain(xs: number, zs: number, w: number, h: number): void {
   for (const [key, t] of heightTiles) {
     if (t.xs > xs + w || t.zs > zs + h || t.xs + t.w < xs || t.zs + t.h < zs) continue;
@@ -4964,25 +6242,79 @@ function coverDirtiedTerrain(xs: number, zs: number, w: number, h: number): void
   }
 }
 function markTerrainDirty(key: string, why = 'mark'): void {
-  if (terrainMeshes.has(key)) { terrainDirty.add(key); dirtyWhy.set(key, why); }
+  if (!terrainMeshes.has(key)) return;
+  if (!terrainDirty.has(key)) dirtyAt.set(key, performance.now());
+  terrainDirty.add(key); dirtyWhy.set(key, why);
+}
+/** When each dirty tile was FIRST dirtied — the hold below reads it. */
+const dirtyAt = new Map<string, number>();
+/**
+ * A WAY-DIRTIED TILE WAITS A BREATH DURING A STREAM. In a city every vector
+ * tile that lands carries hundreds of ways, each of which dirties the terrain
+ * it crosses, and the tile rebuilt the instant the first landed was rebuilt
+ * again for the second, and the third — measured on the device over the CBD:
+ * 260 builds for 26 tiles in 85 s, a rebuild every third of a second, each
+ * 58 ms of main thread. Held for WAY_HOLD_MS after the FIRST way dirtied it,
+ * a tile collects everything that lands in that breath and builds once for
+ * all of it; when the stream is quiet nothing waits. Only `way` is held —
+ * a freshly loaded tile, a cover arrival, a border owner's rebuild and the
+ * corridor scan all build as before.
+ */
+const WAY_HOLD_MS = 1500;
+function heldWay(key: string, now: number): boolean {
+  return dirtyWhy.get(key) === 'way' && !osmStreamQuiet() && now - (dirtyAt.get(key) ?? 0) < WAY_HOLD_MS;
+}
+/** Builds per tile and per reason since boot, and the order tiles were first
+ *  fetched and first built — the stream audit's ledger (__streamAudit). */
+const buildCount = new Map<string, number>();
+const buildWhy: Record<string, number> = {};
+const firstBuilt: Array<{ key: string; at: number; x: number; z: number }> = [];
+const firstFetched: Array<{ key: string; at: number; x: number; z: number }> = [];
+const firstBuiltKeys = new Set<string>();
+function noteBuild(key: string, why: string): void {
+  buildCount.set(key, (buildCount.get(key) ?? 0) + 1);
+  const w = why.split(':')[0];
+  buildWhy[w] = (buildWhy[w] ?? 0) + 1;
+  if (firstBuiltKeys.has(key)) return;
+  const t = heightTiles.get(key);
+  if (!t) return;
+  firstBuiltKeys.add(key);
+  firstBuilt.push({ key, at: Math.round(performance.now()), x: t.xs + t.w / 2, z: t.zs + t.h / 2 });
 }
 /** Why each dirty tile was dirtied, and the last hundred builds — the
  *  instrument for a rebuild loop, which is invisible to a dirty-count poll. */
 const dirtyWhy = new Map<string, string>();
-const buildLog: Array<{ key: string; why: string; corridor: boolean; refined: boolean; at: number; ms?: number }> = [];
+/** …`ms` is the whole slot, `bms` the mesh build alone; the rest is the
+ *  post-steps (reseat, redrape, hydro, batter, culverts). */
+const buildLog: Array<{ key: string; why: string; corridor: boolean; refined: boolean; at: number; ms?: number; bms?: number }> = [];
 // Every terrain tile a run of road passes through, plus a margin for the cut.
 // Sampled, not exhaustive: terrain tiles are ~2km across and road vertices are
 // 12m apart, so walking every one of them would ask the same question a hundred
 // times per tile.
+//
+// THE TILES IT CROSSES, AND A NEIGHBOUR ONLY WHERE THE CUT REACHES ONE. This
+// marked a 3×3 of terrain tiles around every sample — nine tiles of two
+// kilometres, a six-kilometre box, for a road twelve metres wide whose
+// earthworks reach thirty. Every way that landed anywhere near the ring
+// dirtied the whole ring, so in a city the whole ring rebuilt for every vector
+// tile: 25 of 26 tiles dirty at once in the CBD telemetry, 260 builds in 85 s.
+// A way now dirties the tile under each sample and the neighbour across an
+// edge only when the sample stands within the corridor's reach of that edge.
 function dirtyTerrainAround(pts: Array<[number, number]>): void {
-  for (let i = 0; i < pts.length; i += 8) {
-    const [x, z] = pts[i];
+  const M = TOE_REACH + cutL;
+  const mark = (x: number, z: number): void => {
     const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) markTerrainDirty(`${tx + dx}/${ty + dy}`, 'way');
-  }
-  const [lx, lz] = pts[pts.length - 1];
-  const [tx, ty] = tileAt(origin.lat - lz / M_LAT, origin.lon + lx / origin.mLon, TERRAIN_Z);
-  markTerrainDirty(`${tx}/${ty}`, 'way');
+    markTerrainDirty(`${tx}/${ty}`, 'way');
+    const t = heightTiles.get(`${tx}/${ty}`);
+    if (!t) return;
+    const w = x - t.xs < M ? -1 : t.xs + t.w - x < M ? 1 : 0;
+    const n = z - t.zs < M ? -1 : t.zs + t.h - z < M ? 1 : 0;
+    if (w) markTerrainDirty(`${tx + w}/${ty}`, 'way');
+    if (n) markTerrainDirty(`${tx}/${ty + n}`, 'way');
+    if (w && n) markTerrainDirty(`${tx + w}/${ty + n}`, 'way');
+  };
+  for (let i = 0; i < pts.length; i += 8) mark(pts[i][0], pts[i][1]);
+  mark(pts[pts.length - 1][0], pts[pts.length - 1][1]);
 }
 // One rebuild at a time, and never two in the same fifth of a second. A tile is
 // ~9400 vertices, each sampling the heightfield and asking the road grid about
@@ -5009,7 +6341,15 @@ let terrainBuilds = 0;
  *  and sweeping early would build the bank against a half-loaded hillside. */
 const BATTER_STRAND_MS = 6000;
 function flushTerrain(now: number): void {
-  if (now - terrainAt < 200) return;
+  // THE WORKER PATH KEEPS A FLOOR TOO. Posting the next tile on the next frame
+  // (the reply zeroed `terrainAt`) made every frame of a stream carry a
+  // build's main-thread share — packing, apply, the hydro analysis and the
+  // hydro tile build, ~25ms here and three times that on a phone — which is
+  // under 10fps for as long as tiles are dirty, as reported from the device.
+  // The floor is three times the last build's own main-thread cost, never
+  // under 100ms: ten builds a second on a desktop, about five on a phone,
+  // the build itself still off the thread.
+  if (now - terrainAt < (tworker && !tworker.disabled ? workerGap : 200)) return;
   // ── WATER MAY NOT WAIT FOR THE LAST ROAD ──
   //
   // The hydro drain below sits on the quiet path, and during a heavy stream
@@ -5023,15 +6363,47 @@ function flushTerrain(now: number): void {
     const key = hydroDirty.values().next().value as string;
     hydroDirty.delete(key);
     const t = heightTiles.get(key);
-    if (t) { terrainAt = now; hydroFeed(t); return; }
+    if (t) { terrainAt = now; hydroRefeed(t, key); return; }
   }
-  for (const key of terrainDirty) {
+  // NEAREST AND AHEAD FIRST, OWNER BEFORE FOLLOWER. This built the dirty set
+  // in raster order — row then column, so the north-west-most tile first —
+  // which is the cheapest way to build each owner before its followers (a
+  // follower built first takes a row its owner is about to replace and
+  // builds twice). It is also a build order that knows nothing about the
+  // truck: photographed over the CBD facing south, the ring filled from Table
+  // Bay northward while the tile under the wheels and the peninsula ahead
+  // waited in a queue of 29. The pick is the dirty tile cheapest in the
+  // stream's own wedge (wedgeCost: ahead is cheap, behind is dear), and then
+  // walks to its west or north owner while that owner is dirty too — the
+  // ownership rule kept locally, so the near tile builds within a hop or two
+  // rather than after the whole sea.
+  if (tworker && !tworker.disabled && buildInFlight) return;
+  while (terrainDirty.size) {
+    let key = '', best = Infinity, heldN = 0;
+    for (const k of terrainDirty) {
+      if (heldWay(k, now)) { heldN++; continue; }
+      const t = heightTiles.get(k);
+      if (!t) { key = k; break; }
+      const c = wedgeCost(t.xs + t.w / 2, t.zs + t.h / 2);
+      if (c < best) { best = c; key = k; }
+    }
+    if (!key) { if (heldN) return; break; }
+    for (let hop = 0; hop < 2; hop++) {
+      const i = key.indexOf('/');
+      const tx = Number(key.slice(0, i)), ty = Number(key.slice(i + 1));
+      const west = `${tx - 1}/${ty}`, north = `${tx}/${ty - 1}`;
+      if (terrainDirty.has(west) && !heldWay(west, now)) key = west;
+      else if (terrainDirty.has(north) && !heldWay(north, now)) key = north;
+      else break;
+    }
     terrainDirty.delete(key);
     const t = heightTiles.get(key);
     if (t) {
       terrainAt = now;
+      if (tworker && !tworker.disabled) { postTerrainBuild(t, key); return; }
       const t0 = performance.now();
       buildTerrainMesh(t);
+      const t1 = performance.now();
       // The ground under this tile just moved; anything standing on it follows.
       terrainBuilds++;
       reseatBuildings(t);
@@ -5040,7 +6412,7 @@ function flushTerrain(now: number): void {
       flushBatter(t);
       flushCulverts(t);
       terrainMs = performance.now() - t0;
-      if (buildLog.length) buildLog[buildLog.length - 1].ms = Math.round(terrainMs);
+      if (buildLog.length) { const b = buildLog[buildLog.length - 1]; b.ms = Math.round(terrainMs); b.bms = Math.round(t1 - t0); }
       return;
     }
   }
@@ -5060,7 +6432,7 @@ function flushTerrain(now: number): void {
     const key = hydroDirty.values().next().value as string;
     hydroDirty.delete(key);
     const t = heightTiles.get(key);
-    if (t) { terrainAt = now; hydroFeed(t); return; }
+    if (t) { terrainAt = now; hydroRefeed(t, key); return; }
   }
   // A TILE THAT CAME INTO RANGE, or was built plain while roads were still
   // streaming, takes its corridor now — one per quiet visit, so a drive into
@@ -5126,6 +6498,11 @@ function loadTerrainTile(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
   const existing = terrainReady.get(key);
   if (existing) return existing;
+  {
+    const b = tileBounds(x, y, TERRAIN_Z);
+    const [cx, cz] = toLocal((b.latN + b.latS) / 2, (b.lonW + b.lonE) / 2);
+    firstFetched.push({ key, at: Math.round(performance.now()), x: cx, z: cz });
+  }
   const p = loadTerrainTileInner(x, y);
   terrainReady.set(key, p);
   return p;
@@ -5142,14 +6519,16 @@ async function loadTerrainTileInner(x: number, y: number): Promise<void> {
   const [wx1, wz1] = toLocal(b.latS, b.lonE);
   const tile: HeightTile = { tx: x, ty: y, xs: Math.min(wx0, wx1), zs: Math.min(wz0, wz1), w: Math.abs(wx1 - wx0), h: Math.abs(wz1 - wz0), data };
   heightTiles.set(key, tile);
-  buildTerrainMesh(tile);
+  tworker?.mirrorHeight(key, tile);
+  if (tworker && !tworker.disabled) { terrainDirty.add(key); dirtyWhy.set(key, 'load'); }
+  else buildTerrainMesh(tile);
   // A tile built before its neighbour arrived clamped its border strip.
   // Rebuild the loaded neighbours so both sides of every edge sample the
   // same cross-tile field — this is what stitches the seams shut.
-  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-    if (!dx && !dy) continue;
-    markTerrainDirty(`${x + dx}/${y + dy}`, `tile:${key}`);
-  }
+  // The four edge neighbours only: a diagonal shares a corner, which the
+  // border rows carry, and the slope shade reads one cell along x or z. The
+  // eight-neighbour cascade was 24 of 89 builds in a Camps Bay stream.
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) markTerrainDirty(`${x + dx}/${y + dy}`, `tile:${key}`);
 }
 
 // ── OSM vectors ────────────────────────────────────────────────────
@@ -5304,6 +6683,27 @@ function mulberry32(seed: number): () => number {
   };
 }
 type Rng = () => number;
+/** ROAD TEXTURES ARE FILTERED ANISOTROPICALLY. A road ahead of the truck is
+ *  seen at a grazing angle: one screen pixel covers a texel's width across
+ *  the carriageway and dozens of texels along it, and isotropic mipmapping
+ *  picks the mip from the LONG axis — so a few hundred metres out the tar
+ *  patches and the markings were the coarse mip's blocks, nearest-sampled,
+ *  each the width of the road. Reported from the seat as "LOD reduction
+ *  ahead of the vehicle" at PIXEL FULL, unchanged by `?refr=2000`, which
+ *  ruled out every ring the world actually has. Anisotropic sampling takes
+ *  its taps along the long axis and picks the mip from the short one, so
+ *  the surface ahead keeps its detail until the texels really are
+ *  sub-pixel; the mip blend (trilinear) removes the level boundaries that
+ *  nearest-within-mip drew as steps. Magnification stays NEAREST: crisp
+ *  texels close up are half the pixel look. `?aniso=0` is the old filter,
+ *  `?aniso=N` a cap; `__texfilter()` says what is in effect. */
+const TEX_ANISO = ((): number => {
+  const max = renderer.capabilities.getMaxAnisotropy();
+  const ask = qs('aniso');
+  return ask === null ? Math.min(8, max) : clamp(Number(ask) || 0, 0, max);
+})();
+(window as unknown as { __texfilter?: () => object }).__texfilter = () =>
+  ({ anisotropy: TEX_ANISO, max: renderer.capabilities.getMaxAnisotropy(), minFilter: TEX_ANISO > 1 ? 'LinearMipmapLinear' : 'NearestMipmapNearest' });
 function canvasTex(size: number, repeatX: number, repeatY: number, seed: number, draw: (c: CanvasRenderingContext2D, s: number, r: Rng) => void): THREE.Texture {
   const cv = document.createElement('canvas');
   cv.width = cv.height = size;
@@ -5314,7 +6714,8 @@ function canvasTex(size: number, repeatX: number, repeatY: number, seed: number,
   // ON (nearest-within-mip) or distant surfaces shimmer as texels fall below
   // the pixel grid — the classic failure of naive pixel-art 3D.
   t.magFilter = THREE.NearestFilter;
-  t.minFilter = THREE.NearestMipmapNearestFilter;
+  t.minFilter = TEX_ANISO > 1 ? THREE.LinearMipmapLinearFilter : THREE.NearestMipmapNearestFilter;
+  if (TEX_ANISO > 1) t.anisotropy = TEX_ANISO;
   t.repeat.set(repeatX, repeatY);
   return t;
 }
@@ -5481,7 +6882,6 @@ function roadTexture(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.
   roadTexCache.set(key, tex);
   return tex;
 }
-const ROAD_TEX = new Map(ROAD_CULTURES.map((rc) => [rc.key, roadTexture(rc, DEFAULT_LOOK)]));
 
 // The junction mouth's own surface: the same tarmac with NO lines — a host's
 // painted edge line must not run across a turning, and it lives in a
@@ -6265,7 +7665,9 @@ const MAT = {
   // river read as strewn with paper. Whitewater belongs in the surface shader,
   // where it is already river-aligned, already shaded, and already keyed to the
   // same gradient the rocks are.
-  boulder: new THREE.MeshLambertMaterial({ color: 0x7d7a72, flatShading: true, vertexColors: true }),
+  // Vertex colours now carry the district's actual stone family; white keeps
+  // that colour intact instead of multiplying every rapid back toward one grey.
+  boulder: new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true }),
   // A RIVER IS NOT A LAKE. Same look, different shader — see `riverize`.
   river: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }),
   // (There was a `green` here, for landuse drapes. There are no landuse drapes
@@ -6380,6 +7782,29 @@ for (const m of Object.values(MAT)) {
 // line up per building no matter what the terrain under it is doing.
 /** Wall materials that take the skylight lift below. */
 const bldSkylit: THREE.MeshLambertMaterial[] = [];
+/**
+ * ── AND THE ROOFS, BECAUSE A SOFFIT IS NOT A VOID ──
+ *
+ * Roof materials were left out of the lift, which did not show while 99% of the
+ * world wore a flat cap nobody could see the underside of. With pitched roofs
+ * on most of the stock it shows immediately: the eave overhang is a hard PURE
+ * BLACK band along every gable, photographed at Suresnes.
+ *
+ * The mechanism is already written down in this file for the ribbons (see the
+ * DS note): DoubleSide flips the shading normal toward the VIEWER, so a surface
+ * seen from below has its normal pointing away from the sun, Lambert clamps the
+ * diffuse to zero, and near-black is the correct output of what was asked for.
+ * The ribbons could answer it by CULLING — the underside of a road is never
+ * meant to be seen — and a soffit cannot, because looking up at the eave from
+ * the street is the normal way to see a house.
+ *
+ * So it takes the same stand-in for bounce the walls take, at a fraction of it:
+ * enough that a soffit reads as shaded timber rather than as a hole in the
+ * world, which the rendering doctrine forbids for the same reason it forbids
+ * the void through a terrain crack. Half, because a roof also goes square-on to
+ * a high sun and is the building surface nearest the bright-pass cut.
+ */
+const bldRoofSkylit: THREE.MeshLambertMaterial[] = [];
 // Building tints vary per way id so a block reads as parcels, not one slab.
 // Extrude material slots: [0]=caps (roof), [1]=side walls (darker).
 // WORN PAINT, not four shades of mud. The old set was four colours a few
@@ -6420,15 +7845,17 @@ const B_MATS = [
   const wall = new THREE.MeshLambertMaterial({ color: side, map: wallTexes[i % wallTexes.length], side: DS });
   facade(wall);
   bldSkylit.push(wall);
-  return [
-    // A roof is tile or felt, not paint, and it is the one surface that goes
-    // square-on to a high sun — so it takes the darkening the wall used to.
-    new THREE.MeshLambertMaterial({ color: new THREE.Color(c).multiplyScalar(0.78), map: roofTex, side: DS }),
-    wall,
-  ] as [THREE.Material, THREE.Material];
+  // A roof is tile or felt, not paint, and it is the one surface that goes
+  // square-on to a high sun — so it takes the darkening the wall used to.
+  const roof = new THREE.MeshLambertMaterial({ color: new THREE.Color(c).multiplyScalar(0.78), map: roofTex, side: DS });
+  bldRoofSkylit.push(roof);
+  return [roof, wall] as [THREE.Material, THREE.Material];
 });
 // Ruins carry their weathering in vertex colours instead of a map, so every
 // wall segment can rot at its own rate.
+/** The stand-in for the average of a ruin's vertex colours — see the skylight
+ *  lift, which cannot read them and would otherwise light a ruin white. */
+const RUIN_SKYLIT = new THREE.Color(0x6b6257);
 const ruinMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: DS });
 facade(ruinMat);
 // The far side of the ruin LOD: identical weathering, FRONT faces only.
@@ -6880,14 +8307,6 @@ const GRASS_BANDS: Array<[number, number]> = [[40, 1.0], [82, 1.9], [140, 3.4]];
 const GRASS_SIGHT = 140;     // the outermost band; past this the ground texture works
 /** Density and reach multiplier from the RIG dial. */
 let grassScale = 1;
-/** Per-kind draw distance. Grass is ankle height: at 50m it is a pixel of
- *  noise the terrain colour already provides, so drawing it there is pure
- *  cost. Everything else keeps the old full-field range. */
-const VEG_SIGHT: Partial<Record<VegKind, number>> = { grass: GRASS_SIGHT,
-  // A frond and a fallen log are ankle-and-knee work: past a couple of hundred
-  // metres they are a pixel of noise the ground colour already supplies, so
-  // the instances are better spent on the things that break the skyline.
-  fern: 190, log: 330 };
 /** A stable 0..1 from a lattice slot. Same slot, same tuft, forever — which is
  *  what lets grass be regenerated every second instead of remembered. */
 function hash2(a: number, b: number): number {
@@ -6912,9 +8331,45 @@ function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number): T
   scene.add(m);
   return m;
 }
+/**
+ * The shipped pools stay small; the SETTINGS tree rack is allowed to be
+ * ridiculous. Grow only when a dial asks for more so ordinary boot pays
+ * neither the RAM nor upload cost of the experimental ceilings.
+ */
+function ensureVegCapacity(m: THREE.InstancedMesh, need: number): void {
+  const have = m.instanceMatrix.count;
+  if (need <= have) return;
+  const cap = Math.ceil(Math.max(need, have * 1.6) / 128) * 128;
+  // WebGLRenderer does not expose its attribute cache. The old optional
+  // `renderer.attributes` access did nothing, retaining GPU buffers whenever
+  // a pool grew. InstancedMesh.dispose releases just its instance buffers;
+  // the shared geometry/material survive and three reattaches on the next draw.
+  m.dispose();
+  m.instanceMatrix = new THREE.InstancedBufferAttribute(new Float32Array(cap * 16), 16);
+  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
+}
 // White base colours: every plant's hue arrives through instanceColor, and the
 // baked tone rides underneath it (three multiplies the two).
 const leafMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true });
+// THE ARCHETYPES AND THE UNDERSTOREY LEAN TOO — palms, acacias, bushes, the
+// sward's shrubs, and the whole archetype set under ?ez=0. They reach the wind
+// by a different route from the skeletons: no `aWood` to separate crown from
+// timber (the crown IS the geometry, standing on a trunk mesh of its own), and
+// no unit-height bake, so `swayWeight` carries the normalised rise per vertex
+// and the plant's own stiffness with it. The trunk under them stays rigid,
+// which is what a palm actually does.
+// FIRST IN THE CHAIN, so terrainFx and grainFx find it and call it — see the
+// note on those: one slot, three helpers, and the grass lost its wind for
+// months to a hook assigned straight over the top of another.
+leafMat.onBeforeCompile = (sh) => {
+  sh.uniforms.uTime = windU.uTime;
+  sh.uniforms.uGust = windU.uGust;
+  sh.uniforms.uWindK = windU.uWindK;
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', `#include <common>\nattribute float aSway;\n${FOLIAGE_WIND_UNIFORMS}`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>\n${foliageWind('aSway', 'aSway')}`);
+};
 const woodMat = new THREE.MeshLambertMaterial({ color: 0x4a3826, flatShading: true, vertexColors: true });
 const stoneMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true });
 terrainFx(leafMat);
@@ -6951,7 +8406,23 @@ grainFx(woodMat, 'grain-wood', 0.95, 2.6);
 // blades for nothing. Sway scales with height above the tuft's own base, so
 // the roots stay planted, and the phase is seeded from the instance's world
 // position so a field ripples rather than pulsing as one.
-const windU = { uTime: { value: 0 }, uGust: { value: new THREE.Vector2(0, 0) } };
+/**
+ * THE ONE WIND, and now the trees read it too. `uGust` is direction times
+ * amplitude in METRES OF TIP TRAVEL PER METRE of blade — the grass's own unit,
+ * and far too much for timber: a field lays flat in a gale and a poplar does
+ * not. `uWindK` is the whole of the difference, the fraction of the grass's
+ * lean a tree takes, so the crown of a 20m tree moves about 15cm on a normal
+ * day and about 60cm in a blow. Zero is an exact A/B (`?treewind=0`), which is
+ * the only honest way to judge whether a moving wood is better than a still
+ * one.
+ */
+const TREE_WIND_K = 0.085;
+const treeWindUrl = qs('treewind');
+const windU = {
+  uTime: { value: 0 },
+  uGust: { value: new THREE.Vector2(0, 0) },
+  uWindK: { value: treeWindUrl === null ? TREE_WIND_K : Math.max(0, Number(treeWindUrl) || 0) },
+};
 const grassMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, side: THREE.DoubleSide });
 grassMat.onBeforeCompile = (sh) => {
   sh.uniforms.uTime = windU.uTime;
@@ -6973,17 +8444,23 @@ const vegMeshes: Record<VegKind, THREE.InstancedMesh> = {
   // faceTone on every geometry these three materials draw — vertexColors is on
   // now, and a material asking for a `color` attribute a geometry does not
   // carry reads it as black.
-  broadleaf: vegMesh(faceTone(broadleaf()), leafMat, VEG_CAP.broadleaf),
-  conifer: vegMesh(faceTone(conifer(), 0.16, 0.3), leafMat, VEG_CAP.conifer),
-  palm: vegMesh(faceTone(palm(), 0.22, 0.1), leafMat, VEG_CAP.palm),
+  // STIFFNESS IS THE PLANT'S, and it is the whole reason the weight is baked
+  // per geometry rather than computed from `y` in one shared line: a palm
+  // crown is mostly wind and a saguaro is a post. The numbers are ratios of
+  // the base lean, which is itself a fraction of the grass's.
+  broadleaf: vegMesh(swayWeight(faceTone(broadleaf())), leafMat, VEG_CAP.broadleaf),
+  conifer: vegMesh(swayWeight(faceTone(conifer(), 0.16, 0.3), 0.7), leafMat, VEG_CAP.conifer),
+  palm: vegMesh(swayWeight(faceTone(palm(), 0.22, 0.1), 1.6), leafMat, VEG_CAP.palm),
   snag: vegMesh(faceTone(snag(), 0.14, 0.34), woodMat, VEG_CAP.snag),
-  bush: vegMesh(faceTone(bushGeo(), 0.24, 0.28), leafMat, VEG_CAP.bush),
+  bush: vegMesh(swayWeight(faceTone(bushGeo(), 0.24, 0.28), 1.1), leafMat, VEG_CAP.bush),
   // Stone gets the widest facet spread and the deepest foot — it is the kind
   // you drive up to, and the one whose old flat lump the eye kept naming.
   rock: vegMesh(faceTone(rockGeo(), 0.34, 0.3), stoneMat, VEG_CAP.rock),
   grass: vegMesh(grassGeo(), grassMat, VEG_CAP.grass),
-  acacia: vegMesh(faceTone(acaciaGeo(), 0.18, 0.12), leafMat, VEG_CAP.acacia),
-  cactus: vegMesh(faceTone(cactusGeo(), 0.2, 0.22), leafMat, VEG_CAP.cactus),
+  acacia: vegMesh(swayWeight(faceTone(acaciaGeo(), 0.18, 0.12), 1.2), leafMat, VEG_CAP.acacia),
+  // A saguaro in a gale is a saguaro. Not zero — an arm does flex — but a
+  // fifteenth of a palm, which at this scale is a couple of centimetres.
+  cactus: vegMesh(swayWeight(faceTone(cactusGeo(), 0.2, 0.22), 0.1), leafMat, VEG_CAP.cactus),
   // The fern takes the SWARD's material, so the understorey leans in the same
   // wind as the grass around it — two layers of one ground cover, not a stiff
   // plastic frond standing in a moving field.
@@ -6995,6 +8472,186 @@ const trunkGeo2 = new THREE.CylinderGeometry(0.14, 0.2, 1, 5);
 trunkGeo2.translate(0, 0.5, 0);
 faceTone(trunkGeo2, 0.16, 0.36);
 const trunks = vegMesh(trunkGeo2, woodMat, 3600);
+
+/**
+ * ── THE SKELETONS: EVERY TREE, EVERY DISTANCE ──
+ *
+ * The flora-ez lab's verdict (see CLAUDE.md, "EZ-Tree: what the flora-ez lab
+ * found"): a procedural skeleton cut down hard, wearing Drive's OWN crowns,
+ * reads better than the 20-triangle archetype — a lobed, branching broadleaf
+ * beside the lollipop, a whorled spruce beside the cone, a dead tree beside
+ * the post. The first build gave only the nearest trees a skeleton and the
+ * verdict from the seat was immediate: a tree that changes shape as you
+ * drive at it looks worse than either shape. So there is no tier and no
+ * archetype for these three kinds any more: every broadleaf, conifer and
+ * snag in VEG_RANGE wears a skeleton, priced for the whole population — the
+ * bake's LEAN recipe is 160–250 triangles a tree against the archetype's 20,
+ * ten times the plants' bill, and the VEGETATION dial is the lever if a
+ * device cannot carry it.
+ *
+ * The skeletons are baked (devtools/bake-ez-flora.mjs → flora-ez-baked.ts),
+ * K variants a family, each ONE InstancedMesh: wood and crown share the
+ * draw, the crown in the site's colour and the wood in bark (ezMaterial).
+ * A site keeps its variant across refreshes (a hash of where it stands).
+ * ?ez=0 brings the archetypes back, for an A/B on the device.
+ */
+const EZ_ON = ((): boolean => { const ask = qs('ez'); return ask !== '0' && ask !== 'off'; })();
+/**
+ * THE TREE BUDGET. The recipes are the lab's, pasted, and a recipe the eye
+ * likes is a thousand triangles a tree; sixteen hundred broadleaf of those
+ * is more than the whole scene was. So the three tree caps are scaled
+ * together to fit this many triangles, and because the placement walks
+ * rings outward and stops at the cap, what a richer recipe costs is the far
+ * wood thinning — never a slower frame. ?treetris=900000 tries a larger
+ * budget on the device; the VEGETATION dial multiplies on top.
+ */
+const TREE_TRI_STEPS = [300000, 1000000, 2400000, 6000000, 15000000, 40000000, 100000000] as const;
+const TREE_RANGE_STEPS = [350, 700, 1400, 2100, 2800] as const;
+const TREE_POP_STEPS = [0.25, 0.5, 1, 2, 4, 8, 16] as const;
+const TREE_SIZE_STEPS = [0.5, 1, 1.5, 2, 3, 4] as const;
+const TREE_FORM_STEPS = [0, 1, 1.75, 3, 5] as const;
+const TREE_BEND_STEPS = [0, 0.08, 0.18, 0.35, 0.65, 1.1] as const;
+const TREE_VARIANT_STEPS = [1, 2, 4, Number.MAX_SAFE_INTEGER] as const;
+const treeTriUrl = Number(qs('treetris'));
+let treeTriBudget = Number.isFinite(treeTriUrl) && treeTriUrl > 0 ? treeTriUrl : 2400000;
+/**
+ * THE TREE RACK'S TWO BIGGEST STOPS, ALSO AS URL OVERRIDES.
+ *
+ * The rack lives in SETTINGS and persists, which is right for a player and
+ * wrong for a bench: the device report that put `treeRefresh` at 9% of session
+ * CPU was taken at `range 2800m · pop 2x`, and a measurement of a cut made
+ * only at the shipped defaults is a measurement taken where the cost is not.
+ * `?treerange=` and `?treepop=` are exact and unsaved, exactly as `?treetris=`
+ * already is, so a harness run can stand the world up at the stops without
+ * driving the panel or writing to the player's own rack.
+ */
+let treeRange = 700;
+let treePopulationScale = 1;
+{
+  const r = Number(qs('treerange'));
+  if (Number.isFinite(r) && r > 0) treeRange = clamp(r, 100, 6000);
+  const p = Number(qs('treepop'));
+  if (Number.isFinite(p) && p > 0) treePopulationScale = clamp(p, 0.05, 32);
+}
+let treeSizeScale = 1;
+let treeFormScale = 1;
+let treeVariantCap: number = Number.MAX_SAFE_INTEGER;
+/** Shared by every baked skeleton; zero preserves the previous frame exactly. */
+const treeBendU = { value: 0 };
+const TREE_KINDS = ['broadleaf', 'conifer', 'palm', 'snag', 'acacia'] as const;
+const isTreeKind = (k: VegKind): boolean => (TREE_KINDS as readonly VegKind[]).includes(k);
+const isEzKind = (k: VegKind): k is EzFamily => (EZ_FAMILIES as string[]).includes(k);
+/**
+ * Population says how much forest may exist; TRI CAP says how much baked
+ * geometry may reach the GPU. Keeping them independent makes the upper stops
+ * honest stress instruments instead of labels over a silently fixed pool.
+ */
+function ezCapScale(): number {
+  let atCap = 0;
+  for (const fam of EZ_FAMILIES) {
+    atCap += VEG_CAP[fam] * vegScale * treePopulationScale * ezMeanTris(fam);
+  }
+  return atCap > 0 ? clamp(treeTriBudget / atCap, 0, 1) : 1;
+}
+const ezCapFor = (fam: EzFamily): number =>
+  Math.floor(VEG_CAP[fam] * vegScale * treePopulationScale * ezCapScale());
+
+/**
+ * ── WHICH SILHOUETTE THIS TREE IS ──
+ *
+ * The seam between `flora-ez`'s two-scale palette and the world's own sense of
+ * place. The district decides which few silhouettes this country grows and the
+ * stand decides which of them this thicket is; both seeds come from
+ * `culture.ts`, so they are stable under a world rebase and do not reroll as
+ * you drive — the same guarantee the bedrock families already rely on.
+ *
+ * `?ezstand=0` is the exact A/B: the old per-position hash, which is what
+ * every wood in the game looked like until now.
+ */
+const EZ_STAND_ON = qs('ezstand') !== '0';
+function ezVariantAt(fam: EzFamily, x: number, z: number): number {
+  if (!EZ_STAND_ON) return ezVariantFor(fam, x, z, treeVariantCap);
+  // THE GUILD'S PREFERENCE, WHICH ONLY NOW MEANS ANYTHING. Until the bake had
+  // two forms in one family this filter could only return everything or
+  // nothing; with a columnar broadleaf beside six round ones it is the
+  // difference between a poplar on a French roadside and a poplar in the
+  // Amazon. Unsatisfiable preferences are ignored inside `ezPalette` — asking
+  // for `round` must not empty the conifers.
+  const pal = ezPalette(fam, seedAt(cultEnv, x, z, 'district'), treeVariantCap, guildNow(x, z)?.forms);
+  return ezPickVariant(pal, seedAt(cultEnv, x, z, 'stand'));
+}
+
+/**
+ * TWO MESHES A VARIANT, ONE SHAPE. The shadow map reaches `shadowSpan` metres
+ * (80–150 by quality); an instanced mesh is not culled per instance, so every
+ * tree in range was drawn into the depth pass, a million triangles of wood
+ * whose shadow lands outside the map. A tree inside the span goes in the
+ * mesh that casts, the rest in its twin that does not — the same geometry
+ * and material, so nothing about a tree changes with distance but whether
+ * the GPU spends a depth pass on it.
+ */
+/** What a tier is BORN with. `ensureVegCapacity` rounds to 128 and grows by
+ *  1.6x, so this only has to be small enough not to waste and large enough
+ *  that a sparse family never reallocates at all. */
+const EZ_TIER_SEED = 64;
+interface EzTier { near: THREE.InstancedMesh; far: THREE.InstancedMesh; tris: number; n: number; nNear: number; nFar: number }
+const ezTiers: Record<EzFamily, EzTier[]> = ezRecord(() => [] as EzTier[]);
+const ezMat = ezMaterial(0x4a3826, { bend: treeBendU, wind: windU });
+// ── THE SURFACE, WITH ITS OWN EXACT A/B ──
+// Bark on the wood and the fade on a card seen edge-on: both were reported
+// from the flora lab at windscreen height, and both change the look of every
+// tree in the game, so both get a switch that costs nothing to try from the
+// seat. `?ezbark=0` is the flat prism the trunks were; `?ezedge=1` is the
+// bright one-pixel line a grazing card used to draw.
+{
+  const bk = Number(qs('ezbark'));
+  if (qsHas('ezbark') && Number.isFinite(bk)) ezLookU.uEzBark.value = clamp(bk, 0, 2);
+  const ed = Number(qs('ezedge'));
+  if (qsHas('ezedge') && Number.isFinite(ed)) ezLookU.uEzEdge.value = clamp(ed, 0, 1);
+}
+// THE SKELETONS STAND IN THE SAME WEATHER AS EVERYTHING ELSE. They were the
+// one thing in the landscape outside `terrainFx` — no cloud shadow, no terrain
+// self-shadowing — while the archetypes they replaced, the sward, the stones
+// and the ground itself all took it. Since the skeletons are now EVERY
+// broadleaf, conifer and snag, that left a front crossing the valley darkening
+// the grass and the rocks and leaving the whole wood lit. Ordered as leafMat's
+// is: the wind's hook first (set inside ezMaterial), then this, then the
+// grain, each chaining the last.
+terrainFx(ezMat);
+grainFx(ezMat, 'grain-ez', 0.95, 2.2);
+if (EZ_ON) {
+  for (const fam of EZ_FAMILIES) {
+    for (const v of ezVariants(fam)) {
+      // ── ALLOCATED SMALL, GROWN ON DEMAND ──
+      //
+      // Each tier used to be born holding the whole FAMILY's cap, on the
+      // reasoning that worst case every site lands on one variant. True, and
+      // it means the boot allocation is the cap times the number of variants:
+      // nineteen variants over five families, two meshes each, came to 40,600
+      // instance slots — about 3 MB of matrices and colours — of which at most
+      // a family's cap is ever in use at once.
+      //
+      // `refreshVeg` already computes the true per-variant need (`ezNeed`) and
+      // already calls `ensureVegCapacity` on both meshes with it, every
+      // refresh, before a single tree is placed. So the up-front cap bought
+      // nothing the growth path was not going to provide, and it made the
+      // atlas expensive to extend — which is the opposite of what a bake with
+      // a vocabulary is for. It matters more now that the palette exists: a
+      // district uses two silhouettes of a family's six, so four tiers stand
+      // empty at any moment and used to be empty AND fully allocated.
+      const near = vegMesh(v.geometry, ezMat, EZ_TIER_SEED);
+      near.name = 'veg-ez';
+      const far = vegMesh(v.geometry, ezMat, EZ_TIER_SEED);
+      far.name = 'veg-ez-far';
+      shadowy(far, false, false);
+      ezTiers[fam].push({ near, far, tris: v.tris, n: 0, nNear: 0, nFar: 0 });
+    }
+  }
+}
+/** What the last refresh stood up, for the harness. */
+let ezPlaced: Array<Record<string, number | string>> = [];
+/** The admitted edge per family last refresh, metres. */
+let ezEdgeLast: Record<EzFamily, number> = ezRecord(() => 0);
 
 /**
  * WHAT BLOOMS WHERE. The sward's colour so far has been the ground's own —
@@ -7137,12 +8794,23 @@ const COVER_VEG: Record<number, number> = {
  *  biome's own mix still supplies the character, so a boreal forest is
  *  conifers and a tropical one is palms without cover having to say so. */
 function coverKind(cover: number | null, r: () => number, x: number, z: number): VegKind {
+  // THE GUILD FIRST, WHERE THERE IS ONE. `guild.ts` narrows the same cover
+  // class against what actually grows in this ecoregion; with no region (the
+  // sea, a fixture, a tile still in flight) it returns null and the shipping
+  // climate path below runs unchanged. That fallback is deliberate and total:
+  // a half-guild would be a landscape that changes species under the player.
+  const g = guildNow(x, z);
+  if (g) return guildKind(g, cover, r);
   // The rule itself lives in flora.ts, so /lab/flora can turn COVER CLASS and
   // get the same answer this does. All the world contributes is the climate
   // blend at this point.
   return floraCoverKind(cover, climateAt(x, z).w, r);
 }
 function pickKind(r: () => number, x: number, z: number): VegKind {
+  // The interloper in a clump — one member in six — comes from the same guild
+  // as its neighbours, or a fynbos thicket gets a boreal conifer in it.
+  const g = guildNow(x, z);
+  if (g) return pickMix(g.mix, r) ?? 'bush';
   return climPick(VEG_MIX, climateAt(x, z).w, r) ?? VEG_MIX.temperate[0][0];
 }
 /** WHAT GROWS HERE, taking the STAND rather than just the pixel — the same
@@ -7224,6 +8892,17 @@ function pushSite(
     biomeW: () => climateAt(x, z).w,
     krummK: () => krummholz(elevEffAt(x, z), climateAt(x, z).treeline),
   }, BIOME_LIST);
+  // ── AND THE GUILD SETS THE HEIGHT ──
+  //
+  // A proportion is only half of what makes a landscape read: fynbos is not a
+  // sparse wood, it is a dense stand of waist-high shrubs, and the same
+  // `bush` archetype at 0.6 scale and at 1.0 is those two different places.
+  // Applied here rather than inside `plantLook` so flora.ts keeps its one
+  // question — what does this plant look like — and the world keeps its own:
+  // how big is it here. STONE IS EXEMPT: a boulder's size is the mountain's
+  // business, not the vegetation's.
+  const gScale = guildNow(x, z)?.scale ?? 1;
+  if (gScale !== 1 && !STONY.includes(kind)) site.s *= gScale;
   if (role === 'fringe') makeSapling(site);
   // AN ANCHOR IS A PROMOTION, NOT A SITE. Its decision comes from world
   // coordinates rather than this clump's RNG stream, so promoting one tree
@@ -7348,6 +9027,12 @@ const freshVegSeedStats = (): VegSeedStats => ({
 function seedCell(gx: number, gz: number): void {
   const key = `${gx},${gz}`;
   if (vegSeeded.has(key)) return;
+  // THE BUDGET IS CHECKED BEFORE ANYTHING ELSE, and deliberately does not
+  // touch `vegDeferredAt`: that clock belongs to the cover and ecoregion
+  // waits, which are decisions about EVIDENCE, and this is a decision about
+  // TIME. Starting their 30s ceiling here would make a busy frame look like a
+  // missing tile.
+  if (vegSeedLeft <= 0) { vegSeedDeferred++; return; }
   const mx = gx * VEG_CELL + VEG_CELL / 2, mz = gz * VEG_CELL + VEG_CELL / 2;
   // WHAT GROWS HERE IS A FACT, not a guess. The biome ceiling below stands in
   // only until WorldCover has this ground: it is one number for a whole world,
@@ -7363,6 +9048,17 @@ function seedCell(gx: number, gz: number): void {
       vegDeferredAt.set(key, t0);
       if (performance.now() - t0 < 30000) return;   // the fact is seconds away — wait for it
     }
+  }
+  // …AND THE SAME BARGAIN WITH THE ECOREGION. A cell that seeds before its
+  // region has landed plants the climate's guess and is never revisited, so
+  // a continent's worth of vegetation would be decided by whichever cells
+  // happened to seed in the first second of a session. One z5 tile covers
+  // twelve hundred kilometres and arrives in about a second; the same 30s
+  // ceiling applies, after which the climate path is the honest answer.
+  if (ecoPending(mx, mz)) {
+    const t0 = vegDeferredAt.get(key) ?? performance.now();
+    vegDeferredAt.set(key, t0);
+    if (performance.now() - t0 < 30000) return;
   }
   vegDeferredAt.delete(key);
   vegSeeded.add(key);
@@ -7380,7 +9076,11 @@ function seedCell(gx: number, gz: number): void {
     const cv = sampleCover(x, z);
     const ceiling = vegCeilingAt(x, z, cv);
     if (ceiling <= 0) { stats.rejectedCover++; continue; }
-    const dens = vegDensity(x, z);
+    // THE GUILD SETS HOW MUCH GROUND IS COVERED. A desert is mostly bare and
+    // a rainforest is mostly not, and until now both were the same field with
+    // a different species list on it. Clamped, because `dens` also sizes the
+    // clump below and the field's own callers assume 0..1.
+    const dens = clamp(vegDensity(x, z) * (guildNow(x, z)?.density ?? 1), 0, 1);
     if (c.accept >= vegetationClumpChance(ceiling, dens)) continue;
     const role = vegetationClumpRole(dens, c.role);
     if (!role) continue;
@@ -7410,7 +9110,7 @@ function seedCell(gx: number, gz: number): void {
     const x = (gx + c.u) * VEG_CELL, z = (gz + c.v) * VEG_CELL;
     const cv = sampleCover(x, z);
     if (vegCeilingAt(x, z, cv) <= 0) { stats.rejectedCover++; continue; }
-    const dens = vegDensity(x, z);
+    const dens = clamp(vegDensity(x, z) * (guildNow(x, z)?.density ?? 1), 0, 1);
     const habitat = vegetationHabitatAt(x, z, cv);
     if (c.accept >= vegetationLivingChance(habitat, dens)) continue;
     const r = mulberry32(c.seed);
@@ -7440,6 +9140,9 @@ function seedCell(gx: number, gz: number): void {
       k, r, tone, 'ground-event', stats, false)) stats.groundEvents++;
   }
   stats.ms = performance.now() - t0;
+  vegSeedLeft -= stats.ms;
+  vegSeedNow++;
+  vegSeedMsNow += stats.ms;
   vegSeedStats.set(key, stats);
 }
 
@@ -7590,6 +9293,26 @@ let swardFieldMs = 0;
  * once the streaming settles it stops rebuilding on its own.
  */
 let swardRoadSeen = -1, swardGroundSeen = -1, swardFieldAt = 0, swardMaskMs = 0;
+/** True once a sweep has landed: before that the colour field is zeros and
+ *  the water must not sample it. */
+let swardFieldReady = false;
+/** THE BANK, ON THE GROUND SIDE. The water shader draws its last wet metre
+ *  as damp sediment and gravel; the ground beside it grew the same grass
+ *  as the hillside, so the two met on a line. The sward mixes toward the
+ *  bank's mineral where the habitat says mineral, and reeds thicken a
+ *  sheltered, shallow margin at REED_M2 a square metre. */
+const BANK_REED: [number, number, number] = [0.40, 0.44, 0.20];
+/** THE BANK'S MINERAL, FROM THE GROUND IT IS IN. A fixed gravel tan drew a
+ *  beach around a grassland river in the chart; wet mineral ground is the
+ *  local palette a fifth darker and a fifth greyer — the rule the water
+ *  shader's `wetGround` applies to the bed, so the two meet in one colour
+ *  at the waterline instead of each bringing its own sand. */
+const bankMineralOf = (r: number, g: number, b: number): [number, number, number] => {
+  const l = (r + g + b) / 3;
+  return [(r + (l - r) * 0.22) * 0.78, (g + (l - g) * 0.22) * 0.78, (b + (l - b) * 0.22) * 0.78];
+};
+// This is before SWARD_LUSH: tall stalks need fewer slots than short grass.
+const REED_M2 = 0.14;
 /**
  * Roads: the mask's clock — AND IT HAS TO TICK ON THE GEOMETRY, NOT THE FETCH.
  *
@@ -7613,7 +9336,7 @@ let swardRoadSeen = -1, swardGroundSeen = -1, swardFieldAt = 0, swardMaskMs = 0;
  */
 const swardRoadRev = (): number => osmDone.size + roadGrid.size + waterPolys.size;
 /** Ground shape: the heights' clock — rebuilds, not tiles. See flushTerrain. */
-const swardGroundRev = (): number => terrainBuilds;
+const swardGroundRev = (): number => terrainBuilds + (hydroSys?.bankRevision ?? 0);
 const swardU = {
   uField: { value: swardField }, uSwardCol: { value: swardColT }, uSwardMask: { value: swardMaskT },
   uFieldOrg: { value: new THREE.Vector2() }, uFieldW: { value: SWARD_FW },
@@ -7708,6 +9431,7 @@ const SWARD_ROWS = 8;
 const swardScratchF = new Float32Array(SWARD_F * SWARD_F * 4);
 const swardScratchC = new Uint8Array(SWARD_F * SWARD_F * 4);
 let swardRow = -1;                    // -1 idle, else the next row to fill
+let swardSweepRev = -1;
 let swardPendX = 0, swardPendZ = 0;   // origin the scratch is being built for
 function swardRows(from: number, to: number): void {
   for (let j = from; j < to; j++) {
@@ -7732,12 +9456,42 @@ function swardRows(from: number, to: number): void {
       // ASPECT-ADJUSTED one, the shaded wall of a valley goes bare while the
       // sunny side opposite is still meadow.
       const eEff = elevEffAt(wx, wz);
-      const lift = swardLift(eEff, climateAt(wx, wz, eEff).treeline);
-      swardScratchF[k + 1] = seaOn && h + baseElev < seaSurfaceAbs() - SWARD_SHALLOW
+      const cl = climateAt(wx, wz, eEff);
+      const lift = swardLift(eEff, cl.treeline);
+      let density = seaOn && h + baseElev < seaSurfaceAbs() - SWARD_SHALLOW
         ? 0
         : (cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3)) * lift;
       const slope = Math.abs(groundAt(wx + SWARD_FM, wz) - h) / SWARD_FM;
-      const [pr, pg, pb] = terrainPalette(h + baseElev, slope, coverPaint(wx, wz), wx, wz);
+      let [pr, pg, pb] = terrainPalette(h + baseElev, slope, bankPaint(wx, wz), wx, wz);
+      // B/A were spare floats. They carry reed/mineral suitability on the
+      // existing texture; the shader changes the nine-vertex tuft's form.
+      // Query the cached hydro tile even beside lakes: a channel-only gate
+      // misses every dry lake bank whose cover is grass rather than water.
+      swardScratchF[k + 2] = 0; swardScratchF[k + 3] = 0;
+      if (SHORE_ON && hydroSys && cv !== null) {
+        const f = hydroSys.fieldAt(wx, wz);
+        const bs = f ? sampleBankField(f, wx, wz, 12) : undefined;
+        const wetCover = cv === COVER.wetland || cv === COVER.mangrove;
+        if (bs || wetCover) {
+          // A north/south bank must be as steep as an east/west one.
+          // Pay the second ground read only in bank/wetland texels.
+          const bankSlope = Math.hypot(slope, (groundAt(wx, wz + SWARD_FM) - h) / SWARD_FM);
+          const hab = bankHabitat(cv, cl.moisture, cl.tempC, bankSlope, wetCover,
+            h + baseElev, bs);
+          swardScratchF[k + 2] = hab.reeds;
+          swardScratchF[k + 3] = hab.mineral;
+          // Signed density distinguishes submerged slots without another field:
+          // only emergents/minerals may occupy them, never ordinary grass.
+          const bankRate = hab.reeds * REED_M2 * lift + hab.mineral * 0.06;
+          density = hab.submerged ? -(bankRate + 0.00001)
+            : density * (1 - hab.mineral * 0.65) + bankRate;
+          const mk = hab.mineral * 0.75, rk = hab.reeds * 0.5;
+          const [mr, mg, mb] = bankMineralOf(pr, pg, pb);
+          pr += (mr - pr) * mk; pg += (mg - pg) * mk; pb += (mb - pb) * mk;
+          pr += (BANK_REED[0] - pr) * rk; pg += (BANK_REED[1] - pg) * rk; pb += (BANK_REED[2] - pb) * rk;
+        }
+      }
+      swardScratchF[k + 1] = density;
       swardScratchC[k] = Math.round(clamp(pr, 0, 1) * 255);
       swardScratchC[k + 1] = Math.round(clamp(pg, 0, 1) * 255);
       swardScratchC[k + 2] = Math.round(clamp(pb, 0, 1) * 255);
@@ -7749,30 +9503,64 @@ function swardRows(from: number, to: number): void {
     }
   }
 }
+/** THE SWEEP YIELDS TO THE FRAME. A step was eight rows whatever the frame
+ *  had already paid — 768 texels of ground, cover, climate, palette and
+ *  context each — and on the phone that was 15–26 ms a frame for twelve
+ *  frames straight: the top contributor to slow frames in the first
+ *  sectioned device report (17 of 41), in the same frames as a hydro build.
+ *  A step is now bounded by time, and it stands down in a frame that has
+ *  already carried a heavy job — unless the sweep has waited so long the
+ *  field would lag the truck. The sweep takes more frames and costs the
+ *  same; what changes is that no single frame pays for it. */
+/** The step's budget follows the frame: a sixth of it, so a 60 fps frame
+ *  gives up 3 ms and a 30 fps frame 5, and the harness's two-second frames
+ *  still take the old eight rows at once. */
+const swardStepMs = (): number => clamp(frameMs / 6, 3, 40);
+const SWARD_LAG_MS = 1500;
+let swardSweepAt = 0;
+const swardLedger = { sweeps: 0, steps: 0, stepMs: 0, stepMax: 0, deferred: 0, masks: 0, maskMs: 0, maskMax: 0 };
+function swardMayStep(now: number): boolean {
+  if (now - swardSweepAt > SWARD_LAG_MS || frameHeavyMs() < FRAME_HEAVY_MS) return true;
+  swardLedger.deferred++;
+  return false;
+}
 /** Begin a height sweep for wherever the truck is now. */
 function swardStart(cx = state.x, cz = state.z): void {
   swardPendX = Math.round(cx / SWARD_FM) * SWARD_FM - SWARD_FW / 2;
   swardPendZ = Math.round(cz / SWARD_FM) * SWARD_FM - SWARD_FW / 2;
   swardRow = 0;
+  swardSweepRev = swardGroundRev();
   swardFieldMs = 0;
+  swardSweepAt = performance.now();
+  swardLedger.sweeps++;
 }
 /** Advance a started sweep; swaps the scratch in when the last row lands. */
 function swardStep(sync = false): void {
   if (swardRow < 0) return;
   const t0 = performance.now();
-  const to = sync ? SWARD_F : Math.min(SWARD_F, swardRow + SWARD_ROWS);
-  swardRows(swardRow, to);
-  swardRow = to;
-  swardFieldMs += performance.now() - t0;
+  if (sync) { swardRows(swardRow, SWARD_F); swardRow = SWARD_F; }
+  else {
+    // Row by row until the step's time is spent — at least one, so a slow
+    // device still finishes — and never more than the old eight.
+    const from = swardRow, budget = swardStepMs();
+    do { swardRows(swardRow, swardRow + 1); swardRow++; }
+    while (swardRow < SWARD_F && swardRow - from < SWARD_ROWS && performance.now() - t0 < budget);
+  }
+  const d = performance.now() - t0;
+  swardFieldMs += d;
+  swardLedger.steps++; swardLedger.stepMs += d; if (d > swardLedger.stepMax) swardLedger.stepMax = d;
   if (swardRow < SWARD_F) return;
   swardFieldData.set(swardScratchF);
   swardColData.set(swardScratchC);
   swardField.needsUpdate = true;
   swardColT.needsUpdate = true;
   swardFX = swardPendX; swardFZ = swardPendZ;
+  swardFieldReady = true;
   swardU.uFieldOrg.value.set(swardFX, swardFZ);
   swardRow = -1;
-  swardGroundSeen = swardGroundRev();
+  // A hydro build during this sweep still needs a follow-up; recording the
+  // completion revision would falsely claim the early rows saw the new water.
+  swardGroundSeen = swardSweepRev;
   refreshSwardField(false);           // the mask belongs to the new origin
   for (const b of swardBands) b.mesh.visible = true;
 }
@@ -7882,6 +9670,7 @@ function refreshSwardField(full = true): void {
   swardRoadSeen = swardRoadRev();
   swardFieldAt = performance.now();
   swardMaskMs = performance.now() - t0;
+  swardLedger.masks++; swardLedger.maskMs += swardMaskMs; if (swardMaskMs > swardLedger.maskMax) swardLedger.maskMax = swardMaskMs;
 }
 /** One band of the sward: a lattice of `side²` slots at `step` metres. */
 interface SwardBand { mesh: THREE.Mesh; side: number; step: number; reach: number;
@@ -7892,7 +9681,7 @@ interface SwardBand { mesh: THREE.Mesh; side: number; step: number; reach: numbe
   /** Where this band takes over from the one inside it, and hands on to the one
    *  outside: (in0,in1,out0,out1) metres. See the partition note in the shader. */
   uBlend: { value: THREE.Vector4 } }
-const SWARD_GLSL = `
+const SWARD_GLSL = BANK_GLSL + `
   // ── NOT fract(sin(...)), AND NOT ON WORLD METRES ──
   //
   // The sin hash is fine near the origin and falls apart away from it: sin's
@@ -8082,7 +9871,11 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
           : sCtx > 0.5 ? uFlowerStrayWood
           : uFlowerStrayOpen;
         float sFlowerChance = max(sPatchChance, sStrayChance);
-        bool sIsFlower = sH4 < sFlowerChance;
+        float sBankPatch = (sF.b + sF.a > 0.02) ? bankPatch(sP) : 0.5;
+        bool sIsReed = sH4 < sF.b * smoothstep(0.40, 0.70, sBankPatch) * 0.85;
+        bool sIsStone = !sIsReed && sH4 > 1.0 - sF.a
+          * (1.0 - smoothstep(0.30, 0.62, sBankPatch)) * 0.75;
+        bool sIsFlower = !sIsReed && !sIsStone && sH4 < sFlowerChance;
         bool sIsStrayFlower = sIsFlower && sH4 >= sPatchChance;
         // ONE SPECIES PER PATCH, not per blade — a drift of buttercups reads
         // as a drift because every blade in it agrees on the flower, and the
@@ -8112,7 +9905,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // under its own one-tuft-per-cell ceiling, which is what the three
         // rings were. See SWARD_FALL.
         float sG = pow(uSwardNear / max(sD, uSwardNear), uSwardFall);
-        float sKeep = sF.g * uStep * uStep * uDens * sW * sG;
+        float sKeep = abs(sF.g) * uStep * uStep * uDens * sW * sG;
         // ── BLADES THIN OUT, THEY DO NOT BLINK OUT ──
         //
         // Reported from the seat: blades visibly jump around at walking pace
@@ -8133,6 +9926,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         if (uSwardDbg == 2.0 || uSwardDbg == 3.0) sAlive = 1.0;
         bool sMaskOk = sBlocked < 0.5 || uSwardDbg == 1.0 || uSwardDbg == 3.0;
         bool sLive = sAlive > 0.01 && sMaskOk && sD < uGReach
+          && (sF.g >= 0.0 || sIsReed || sIsStone)
           && sUv.x > 0.002 && sUv.x < 0.998 && sUv.y > 0.002 && sUv.y < 0.998;
         float sT = clamp(sD / uGReach, 0.0, 1.0);
         float sAng = sH2 * 6.28318;
@@ -8166,6 +9960,20 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // is the same nine vertices either way: nothing is added, the cards
         // are simply put somewhere else when a flower is standing there.
         vec3 sPosL = position;
+        if (sIsReed) {
+          // Upright sedge/reed leaves with less lean; retain three distinct stalks.
+          sPosL.xz *= 0.42;
+          sPosL.y *= 1.9 + sSpecies * 0.20;
+        } else if (sIsStone) {
+          // Three triangular faces share a buried base and one raised apex.
+          // Same nine vertices as grass, with no extra mesh or instance buffer.
+          float a = aBlade * 2.0943951 + 0.7;
+          vec2 axis = vec2(cos(a), sin(a)), tangent = vec2(-axis.y, axis.x);
+          float side = dot(position.xz, tangent) > 0.0 ? 1.0 : -1.0;
+          sPosL = position.y > 0.01 ? vec3(0.025, 0.13, -0.018)
+            : vec3(axis.x*0.11 + tangent.x*side*0.190526, -0.015,
+                axis.y*0.11 + tangent.y*side*0.190526);
+        }
         if (sIsFlower) {
           float sTip = step(0.01, position.y);
           if (aBlade < 0.5) {
@@ -8192,7 +10000,10 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // take some of it back — a blade at two hundred metres drawn four times
         // the size subtends what a near one does, which is the whole reason an
         // eye accepts a thinner field out there.
-        vec3 sLp = sPosL * (0.45 + sSize * 1.30) * (1.0 + 3.2 * pow(sT, 0.75)) * sAlive;
+        // Reeds cannot grow into trees, nor gravel into boulders in the far band.
+        float sRangeScale = sIsStone ? 1.0 : sIsReed ? (1.0 + 0.35 * sT)
+          : (1.0 + 3.2 * pow(sT, 0.75));
+        vec3 sLp = sPosL * (0.45 + sSize * 1.30) * sRangeScale * sAlive;
         sLp.xz = vec2(sCa * sLp.x - sSa * sLp.z, sSa * sLp.x + sCa * sLp.z);
         // Wind, from the blade's WORLD position so a gust crosses the field as
         // one front rather than every tuft nodding on its own clock.
@@ -8207,7 +10018,8 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         float sGm = length(uGust);
         vec2 sGd = sGm > 1e-4 ? uGust / sGm : vec2(0.0, 1.0);
         float sPhase = dot(sP, sGd) * 0.42;
-        sLp.xz += uGust * (sLp.y * (0.55 + 0.45 * sin(uTime * 1.9 + sPhase)));
+        sLp.xz += uGust * (sIsStone ? 0.0 : (sIsReed ? 0.38 : 1.0))
+          * (sLp.y * (0.55 + 0.45 * sin(uTime * 1.9 + sPhase)));
         // A dead slot collapses to a point: zero area, so it costs its vertices
         // and not one fragment. Cheaper than a branch around the whole shader.
         vec3 transformed = sLive ? vec3(sP.x, sF.r, sP.y) + sLp : vec3(sP.x, sF.r, sP.y);
@@ -8249,6 +10061,12 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         vec3 sMixed = mix(mix(uSwardTint, sGround, uSwardMatch), sGround, sMix);
         vSward = mix(vec3(1.0), (0.82 + 0.36 * sV)
           * vec3(0.96 + 0.08 * sWarm, 1.0, 0.92 + 0.12 * (1.0 - sWarm)), uSwardVary) * sMixed;
+        // Root shade anchors stalks in their neighbours without extra geometry.
+        // Flower heads receive their own colour below and remain clear.
+        vSward *= mix(0.76, 1.0, smoothstep(0.0, 0.32, position.y));
+        if (sIsReed) vSward = mix(vSward, sGround * vec3(0.82,0.95,0.68), 0.45);
+        if (sIsStone) vSward = sGround * (0.80 + 0.26 * sSize)
+          * (0.84 + aBlade * 0.10);
         // FLOWER COLOUR, AND ONLY ON THE HEAD. sIsFlower, sCtx and sSpecies
         // were decided up at sD because the geometry above needed them too.
         //
@@ -8403,7 +10221,7 @@ const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
   return band;
 });
 /** GPU sward on? `?sward=cpu` goes back to the old lattice. */
-let swardGpu = new URLSearchParams(location.search).get('sward') !== 'cpu';
+let swardGpu = qs('sward') !== 'cpu';
 /** Per-frame: the lattice origins, the eye, the tint, the density. All uniform
  *  writes — there is no per-blade work left on this side of the wire. */
 /**
@@ -8450,17 +10268,17 @@ function swardFrame(): void {
   const fz = camMode === 'top' ? state.z + panZ : state.z;
   const now2 = performance.now();
   // A sweep already under way finishes before another is considered.
-  if (swardRow >= 0) { swardStep(); return; }
+  if (swardRow >= 0) { if (swardMayStep(now2)) swardStep(); return; }
   const moved = Number.isNaN(swardFX)
     || Math.hypot(fx - (swardFX + SWARD_FW / 2), fz - (swardFZ + SWARD_FW / 2)) > SWARD_REBUILD;
   if (moved) {
     swardStart(fx, fz);
-    swardStep();
+    if (swardMayStep(now2)) swardStep();
   } else if (swardGroundSeen !== swardGroundRev() && now2 - swardFieldAt > 2000) {
     // Terrain was rebuilt — a road was cut into it, or the DEM landed — so the
     // heights this field is standing its grass on are stale. Sweep again.
     swardStart(fx, fz);
-    swardStep();
+    if (swardMayStep(now2)) swardStep();
   } else if (swardRoadSeen !== swardRoadRev() && now2 - swardFieldAt > 1200) {
     // Roads arrived with no rebuild behind them yet: redraw the mask so nothing
     // grows through the new carriageway, and leave the heights alone.
@@ -8603,6 +10421,61 @@ function refreshSward(): void {
 // slow tick — the field only needs to change as fast as you drive through it.
 let vegAt = 0, swardAt = 0;
 let vegMs = 0;
+/**
+ * WHERE refreshVeg's MILLISECONDS GO.
+ *
+ * The device telemetry put `treeRefresh` at 9% of session CPU with a mean of
+ * 93 ms a call, and `vegMs` is one number for a function that walks a ring of
+ * cells TWICE, sorts every tree by distance, and composes a matrix per plant.
+ * One number cannot say which of those to cut, and the two obvious suspects
+ * have both already turned out to be wrong when measured — the variant choice
+ * costs 1.5 ms of the 93, and the seeding has its own clock.
+ */
+const vegPhase: Record<string, number> = {};
+const vegPhaseTotals = new Map<string, { ms: number; n: number; max: number }>();
+let vegPhaseAt = 0;
+/** Cells seeded during THIS refresh, and what they cost. `__vegdist().ms.seedTotal`
+ *  is a running total over the cells in the debug window and cannot say what a
+ *  single call paid — which is the whole question, because seeding is a
+ *  FIRST-VISIT cost and a refresh that seeds nothing is a different animal
+ *  from one that seeds twenty cells. */
+let vegSeedNow = 0;
+let vegSeedMsNow = 0;
+/**
+ * ── SEEDING IS A FIRST-VISIT COST, AND IT ARRIVED ALL AT ONCE ──
+ *
+ * `seedCell` runs once per 220m cell, from inside `refreshVeg`, and a settled
+ * world seeds nothing at all — so `treeRefresh`'s reported 93 ms mean was never
+ * the refresh loop. Measured on the Camps Bay fixture, sampling every refresh
+ * from the first frame rather than after quiet: **median 5.5 ms, worst 104 ms,
+ * of which 94 ms was seeding EIGHTY-ONE CELLS IN ONE CALL.** The whole ring
+ * arrives together at boot and on every world hop, which the attract reel does
+ * on a timer.
+ *
+ * So a refresh may spend `VEG_SEED_MS` seeding and no more. The ring is
+ * already walked outward from the truck, so what gets deferred is the FAR
+ * country and the ground you are standing on is dressed first — the same
+ * bargain the terrain and the roads already strike.
+ *
+ * AND IT CATCHES UP FAST. Deferring inside a 900ms cadence would fill a
+ * hop's ring over a quarter of a minute; a refresh that had to defer asks for
+ * the next one in `VEG_SEED_CATCHUP` instead, so the cost is spread over
+ * frames without being spread over seconds. `?vegseed=0` is the exact A/B.
+ */
+const VEG_SEED_MS = 8;
+const VEG_SEED_CATCHUP = 120;
+const VEG_SEED_BUDGET = qs('vegseed') !== '0';
+let vegSeedLeft = 0;
+let vegSeedDeferred = 0;
+const vegMark = (name: string): void => {
+  const now = performance.now();
+  const ms = now - vegPhaseAt;
+  vegPhase[name] = (vegPhase[name] ?? 0) + ms;
+  const total = vegPhaseTotals.get(name);
+  if (total) { total.ms += ms; total.n++; total.max = Math.max(total.max, ms); }
+  else vegPhaseTotals.set(name, { ms, n: 1, max: ms });
+  vegPhaseAt = now;
+};
 const emptyVegRoles = (): Record<VegetationRole, number> =>
   ({ interior: 0, fringe: 0, 'living-stray': 0, 'ground-event': 0, polygon: 0 });
 let vegActiveRoles = emptyVegRoles();
@@ -8616,28 +10489,192 @@ const VEG_ROLE_COL: Record<VegetationRole | 'anchor', THREE.Color> = {
   polygon: new THREE.Color(0x8a6bd8),
   anchor: new THREE.Color(0xffffff),
 };
+/**
+ * ── THE SWARD'S SHRUB LAYER ──
+ *
+ * The sward stopped at flowers: blades that bloom where the habitat class
+ * says so, out to 140 m. Between those and the trees there was nothing
+ * knee-high, so the near field read as a lawn with trees standing in it.
+ * This band is the next rung of the same ladder — small shrubs on a 5 m
+ * lattice inside the grass's own reach, standing where the sward's field
+ * says grass grows, at a rate the habitat sets: sparse in an open meadow,
+ * thick on a wood's floor and a water's edge, next to none on a cliff or a
+ * ruin's rubble. It reads the SAME field the GPU sward reads (height, rate,
+ * ground colour and habitat class per 8 m texel), so shrubs and blades agree
+ * about where the ground is bare, and it slides toward the ground colour
+ * with distance the way the tufts do. Rebuilt with the vegetation every
+ * 900 ms; the lattice is world-snapped, so a shrub never moves — it appears
+ * at the edge, where it is a pixel. Without the GPU sward there is no field,
+ * and no shrubs.
+ */
+const SHRUB_SIGHT = 140;
+const SHRUB_STEP = 5;
+const SHRUB_CAP = 1200;
+/** Shrubs per slot by habitat class, before the sward's own rate. */
+const SHRUB_RATE: Record<SwardCtx, number> = {
+  [SwardCtx.Open]: 0.34, [SwardCtx.Wood]: 0.6, [SwardCtx.Water]: 0.5, [SwardCtx.Cliff]: 0.05, [SwardCtx.Ruin]: 0.15,
+};
+/** ?shrub=0 for an A/B on the device. */
+const SHRUB_ON = qs('shrub') !== '0';
+const shrubs = vegMesh(swayWeight(faceTone(shrubGeo(), 0.24, 0.3), 1.3), leafMat, SHRUB_CAP);
+shrubs.name = 'veg-shrub';
+const shrubCol = new THREE.Color();
+let shrubN = 0, shrubNear = 0;
+function refreshShrubs(): void {
+  shrubs.visible = camMode !== 'top';
+  if (!SHRUB_ON || Number.isNaN(swardFX) || vegScale <= 0 || grassScale <= 0) { shrubs.count = 0; shrubN = 0; shrubNear = 0; return; }
+  let near = 0;
+  const cap = Math.min(SHRUB_CAP, Math.floor(SHRUB_CAP * vegScale * Math.min(1, grassScale)));
+  const reach = SHRUB_SIGHT * Math.min(1.6, 0.55 + grassScale * 0.6);
+  const R2 = reach * reach;
+  const x0 = Math.floor((state.x - reach) / SHRUB_STEP), x1 = Math.ceil((state.x + reach) / SHRUB_STEP);
+  const z0 = Math.floor((state.z - reach) / SHRUB_STEP), z1 = Math.ceil((state.z + reach) / SHRUB_STEP);
+  let n = 0;
+  for (let ix = x0; ix <= x1 && n < cap; ix++) {
+    for (let iz = z0; iz <= z1 && n < cap; iz++) {
+      const sx = ix * SHRUB_STEP, sz = iz * SHRUB_STEP;
+      const dx = sx - state.x, dz = sz - state.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > R2) continue;
+      // The sward's own field: the texel this slot stands in.
+      const fi = Math.floor((sx - swardFX) / SWARD_FM), fj = Math.floor((sz - swardFZ) / SWARD_FM);
+      if (fi < 0 || fj < 0 || fi >= SWARD_F || fj >= SWARD_F) continue;
+      const k = (fj * SWARD_F + fi) * 4;
+      const rate = swardFieldData[k + 1];
+      if (rate <= 0.05) continue;
+      const ctx = swardColData[k + 3] as SwardCtx;
+      const h1 = hash2(ix * 17 + 5, iz * 3 + 1);
+      const t = Math.sqrt(d2) / reach;
+      // Dithered like the tufts: whole shrubs dropped on a hash, the
+      // survivors full size, thinning outward.
+      if (h1 > (SHRUB_RATE[ctx] ?? 0.1) * Math.min(1, rate) * (0.25 + 0.75 * (1 - t) * (1 - t))) continue;
+      const h2 = hash2(ix + 771, iz + 12007);
+      const wx = sx + (h2 - 0.5) * SHRUB_STEP * 0.9;
+      const wz = sz + (hash2(ix + 31, iz + 9973) - 0.5) * SHRUB_STEP * 0.9;
+      if (roadGrid.has(gkey(wx, wz)) && surfaceAt(wx, wz) !== 'ground') continue;
+      vegDummy.position.set(wx, swardGround(wx, wz), wz);
+      vegDummy.rotation.set(0, h2 * 6.283, 0);
+      // Knee to waist high; a wood's floor grows them taller.
+      const size = 0.55 + h1 * 0.9 + (ctx === SwardCtx.Wood ? 0.3 : 0);
+      vegDummy.scale.set(size * (0.85 + hash2(ix, iz + 77) * 0.3), size, size);
+      vegDummy.updateMatrix();
+      shrubs.setMatrixAt(n, vegDummy.matrix);
+      // The sward's green, DARKER — a shrub is a shadow in the grass before
+      // it is a shape — and varied bush to bush, sliding toward the ground's
+      // own colour over the outer half as the tufts do.
+      const v = 0.42 + hash2(ix + 5, iz + 5) * 0.28;
+      if (d2 < 1600) near++;
+      const fm = clamp((t - 0.45) / 0.55, 0, 1);
+      const mix = fm * fm * 0.8;
+      const gr = swardColData[k] / 255, gg = swardColData[k + 1] / 255, gb = swardColData[k + 2] / 255;
+      shrubCol.setRGB(
+        grassTint.r * v + (gr - grassTint.r * v) * mix,
+        grassTint.g * v + (gg - grassTint.g * v) * mix,
+        grassTint.b * v + (gb - grassTint.b * v) * mix,
+      );
+      shrubs.setColorAt(n, shrubCol);
+      n++;
+    }
+  }
+  shrubs.count = n;
+  shrubN = n;
+  shrubNear = near;
+  shrubs.instanceMatrix.needsUpdate = true;
+  if (shrubs.instanceColor) shrubs.instanceColor.needsUpdate = true;
+}
+(window as unknown as { __shrubs?: object }).__shrubs = (): object => ({ on: SHRUB_ON, n: shrubN, within40m: shrubNear, cap: SHRUB_CAP, step: SHRUB_STEP, sight: SHRUB_SIGHT, field: !Number.isNaN(swardFX) });
 function refreshVeg(): void {
   const t0 = performance.now();
+  for (const k of Object.keys(vegPhase)) delete vegPhase[k];
+  vegPhaseAt = t0;
+  vegSeedNow = 0;
+  vegSeedMsNow = 0;
+  vegSeedDeferred = 0;
+  // What the FRAME has already spent on other heavy work comes out of the
+  // budget, so a refresh that lands on a terrain apply or a hydro build seeds
+  // little or nothing rather than stacking on top of it.
+  vegSeedLeft = VEG_SEED_BUDGET ? Math.max(0, VEG_SEED_MS - frameHeavyMs()) : Infinity;
   const counts: Record<string, number> = { broadleaf: 0, conifer: 0, palm: 0, snag: 0, bush: 0, rock: 0, grass: 0,
     acacia: 0, cactus: 0, fern: 0, log: 0, spire: 0 };
   const activeRoles = emptyVegRoles();
   let activeAnchors = 0;
   let trunkN = 0;
   const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
-  const reach = Math.ceil(VEG_RANGE / VEG_CELL);
-  const r2 = VEG_RANGE * VEG_RANGE;
+  const reach = Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL);
+  const vegR2 = VEG_RANGE * VEG_RANGE;
+  const treeR2 = treeRange * treeRange;
   // NEAREST FIRST. Walk cells in rings outward from the truck, so when a pool
   // fills it is the far plants that get dropped — visiting the grid in raster
   // order let distant thickets eat the caps and leave the ground you are
   // actually looking at bare.
-  const ring: Array<[number, number]> = [];
-  for (let d = 0; d <= reach; d++) {
-    for (let gx = cx - d; gx <= cx + d; gx++) {
-      for (let gz = cz - d; gz <= cz + d; gz++) {
-        if (Math.max(Math.abs(gx - cx), Math.abs(gz - cz)) === d) ring.push([gx, gz]);
+  const ring = squareRings(cx, cz, reach);
+  const ezCounts: Record<EzFamily, number> = ezRecord(() => 0);
+  const ezVariant = new WeakMap<PlacedVegSite, number>();
+  const ezNeed: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
+  const ezNeedNear: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
+  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) { t.n = 0; t.nNear = 0; t.nFar = 0; }
+  ezPlaced = [];
+  vegMark('ring');
+  // ── THE TREES ARE ADMITTED BY DISTANCE, NOT BY CELL ──
+  //
+  // The tree budget scales the tree caps to a few hundred, so in any wood
+  // the cap binds — and a cap that binds in RING order is a cap that
+  // rerolls: the rings are square, 220 m a step, cells within a ring come in
+  // grid order and sites within a cell in seed order, so crossing a cell
+  // boundary re-centred the rings and admitted a different subset of trees.
+  // Seen from the seat as vegetation popping in and out and rerolling as
+  // you drive. The tree kinds are gathered first and the nearest N of each
+  // admitted by true distance, so the admitted set changes only at its far
+  // edge, and the crowns fade toward the ground over the last third of that
+  // edge so a tree is a smudge before it is gone.
+  const ezAdmit = new Set<PlacedVegSite>();
+  const ezEdge: Record<EzFamily, number> = ezRecord(() => treeRange);
+  if (EZ_ON) {
+    const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = ezRecord(() => [] as Array<[number, PlacedVegSite]>);
+    for (const [gx, gz] of ring) {
+      seedCell(gx, gz);
+      const cell = vegGrid.get(`${gx},${gz}`);
+      if (!cell) continue;
+      for (const v of cell) {
+        if (!isEzKind(v.k)) continue;
+        const dx = v.x - state.x, dz = v.z - state.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 < treeR2) cand[v.k].push([d2, v]);
       }
     }
+    vegMark('ezGather');
+    for (const fam of EZ_FAMILIES) {
+      let list = cand[fam];
+      const cap = ezCapFor(fam);
+      if (list.length > cap) {
+        list = nearestStable(list, cap, p => p[0]);
+        ezEdge[fam] = cap > 0 ? Math.sqrt(list[cap - 1][0]) : 0;
+      }
+      for (const [d2, v] of list) {
+        ezAdmit.add(v);
+        const vi = ezVariantAt(fam, v.x, v.z);
+        ezVariant.set(v, vi);
+        ezNeed[fam][vi] = (ezNeed[fam][vi] ?? 0) + 1;
+        if (d2 < shadowSpan * shadowSpan) ezNeedNear[fam][vi]++;
+      }
+      ezTiers[fam].forEach((t, vi) => {
+        const need = ezNeed[fam][vi] ?? 0;
+        // These are disjoint populations, not two copies of the whole wood.
+        // Road vetoes can only reduce the admitted counts below these needs.
+        const nearNeed = ezNeedNear[fam][vi] ?? 0;
+        ensureVegCapacity(t.near, nearNeed);
+        ensureVegCapacity(t.far, need - nearNeed);
+      });
+    }
   }
+  vegMark('ezAdmit');
+  // Archetype trees (?ez=0, plus palms/acacias) and their trunks use the same
+  // real population ceiling. Pools only grow when an upper stop needs them.
+  for (const k of TREE_KINDS) {
+    if (EZ_ON && isEzKind(k)) continue;
+    ensureVegCapacity(vegMeshes[k], Math.ceil(VEG_CAP[k] * vegScale * treePopulationScale));
+  }
+  ensureVegCapacity(trunks, Math.ceil(3600 * vegScale * treePopulationScale));
   for (const [gx, gz] of ring) {
     {
       seedCell(gx, gz);
@@ -8646,7 +10683,14 @@ function refreshVeg(): void {
       for (const v of cell) {
         const dx = v.x - state.x, dz = v.z - state.z;
         const d2v = dx * dx + dz * dz;
-        if (d2v > r2) continue;
+        const tree = isTreeKind(v.k);
+        if (d2v > (tree ? treeR2 : vegR2)) continue;
+        // Admission and full pools already rule these sites out. Test before
+        // querying streamed roads: road clearance still runs for every site
+        // that can be drawn, including after new road data arrives.
+        if (EZ_ON && isEzKind(v.k)) {
+          if (!ezAdmit.has(v)) continue;
+        } else if (counts[v.k] >= VEG_CAP[v.k] * vegScale * (tree ? treePopulationScale : 1)) continue;
         // NOTHING GROWS ON THE TARMAC. `pushSite` already refuses a site on a
         // carriageway, but a cell is seeded ONCE and the roads through it
         // stream in afterwards — so every cell seeded before its own road
@@ -8664,13 +10708,61 @@ function refreshVeg(): void {
           if (v.k !== 'rock') continue;
           if ((((v.x * 73856093) ^ (v.z * 19349663)) >>> 0) % 4 !== 0) continue;
         }
+        if (EZ_ON && isEzKind(v.k)) {
+          // A skeleton instead of the archetype and its trunk, stood at the
+          // height the archetype would have reached, crown included. The
+          // kind's cap and the far dissolve are the archetype's own.
+          const fam = v.k;
+          if (!ezAdmit.has(v)) continue;
+          const vi = ezVariant.get(v) ?? ezVariantAt(fam, v.x, v.z);
+          const tier = ezTiers[fam][vi];
+          if (!tier) continue;
+          const y = groundAt(v.x, v.z);
+          const formSy = clamp(1 + ((v.sy ?? 1) - 1) * treeFormScale, 0.18, 4.5);
+          const formSw = clamp(1 + ((v.sw ?? 1) - 1) * treeFormScale, 0.18, 4.5);
+          const total = EZ_M_PER_SCALE[fam] * v.s * formSy * treeSizeScale;
+          const H = total / (1 + ezCrownReach(fam));
+          vegDummy.position.set(v.x, y, v.z);
+          vegDummy.rotation.set((v.tl ?? 0) * treeFormScale, v.rot, 0);
+          vegDummy.scale.set(H * formSw, H, H * formSw);
+          vegDummy.updateMatrix();
+          const casts = d2v < shadowSpan * shadowSpan;
+          const mesh = casts ? tier.near : tier.far;
+          const slot = casts ? tier.nNear++ : tier.nFar++;
+          mesh.setMatrixAt(slot, vegDummy.matrix);
+          // Distance over the ADMITTED edge, not the plant range: the budget's
+          // edge is where a tree vanishes, so that is where it must fade.
+          const tt = Math.sqrt(d2v) / Math.max(120, ezEdge[fam]);
+          if (vegRoleDebug) {
+            mesh.setColorAt(slot, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
+          } else if (tt > 0.66) {
+            const fmv = Math.min(1, (tt - 0.66) / 0.34);
+            const mixv = fmv * 0.7;
+            const [tr, tg, tb] = terrainPalette(y + baseElev, 0, sampleCover(v.x, v.z), v.x, v.z);
+            swardCol.setRGB(v.c.r + (tr - v.c.r) * mixv, v.c.g + (tg - v.c.g) * mixv, v.c.b + (tb - v.c.b) * mixv);
+            mesh.setColorAt(slot, swardCol);
+          } else mesh.setColorAt(slot, v.c);
+          tier.n++;
+          ezCounts[fam]++;
+          if (ezPlaced.length < 600) ezPlaced.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +formSy.toFixed(2), sw: +formSw.toFixed(2), variant: vi, H: +H.toFixed(2), casts: casts ? 1 : 0 });
+          activeRoles[v.role]++;
+          if (v.anchor) activeAnchors++;
+          continue;
+        }
         const mesh = vegMeshes[v.k];
         const i = counts[v.k];
-        if (i >= VEG_CAP[v.k] * vegScale) continue;
+        const kindScale = tree ? treePopulationScale : 1;
+        if (i >= VEG_CAP[v.k] * vegScale * kindScale) continue;
         const y = groundAt(v.x, v.z);
-        vegDummy.position.set(v.x, y + v.h, v.z);
-        vegDummy.rotation.set(v.tl ?? 0, v.rot, 0);
-        vegDummy.scale.set(v.s * (v.sw ?? 1), v.s * (v.sy ?? 1), v.s);
+        const size = tree ? treeSizeScale : 1;
+        const form = tree ? treeFormScale : 1;
+        const siteS = v.s * size;
+        const siteH = v.h * size;
+        const formSy = clamp(1 + ((v.sy ?? 1) - 1) * form, 0.18, 4.5);
+        const formSw = clamp(1 + ((v.sw ?? 1) - 1) * form, 0.18, 4.5);
+        vegDummy.position.set(v.x, y + siteH, v.z);
+        vegDummy.rotation.set((v.tl ?? 0) * form, v.rot, 0);
+        vegDummy.scale.set(siteS * formSw, siteS * formSy, siteS);
         vegDummy.updateMatrix();
         mesh.setMatrixAt(i, vegDummy.matrix);
         activeRoles[v.role]++;
@@ -8681,7 +10773,7 @@ function refreshVeg(): void {
         // of alpha, which sorts badly and reads as ghosts). Tall kinds keep
         // more of themselves — a distant conifer is seen against the terrain
         // BEHIND it, not under it.
-        const tt = Math.sqrt(d2v) / VEG_RANGE;
+        const tt = Math.sqrt(d2v) / (tree ? treeRange : VEG_RANGE);
         if (vegRoleDebug) {
           mesh.setColorAt(i, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
         } else if (tt > 0.5) {
@@ -8699,28 +10791,43 @@ function refreshVeg(): void {
           mesh.setColorAt(i, swardCol);
         } else mesh.setColorAt(i, v.c);
         counts[v.k] = i + 1;
-        if (v.h > 0 && trunkN < 3600) {
+        if (v.h > 0 && trunkN < trunks.instanceMatrix.count) {
           vegDummy.position.set(v.x, y, v.z);
           vegDummy.rotation.set(0, 0, 0);
           // The trunk wears its crown's width, or a spreading acacia stands on
           // a sapling's stem and a slender fir on a fencepost.
-          vegDummy.scale.set(v.s * 0.42 * (v.sw ?? 1), trunkReach(v.k, v.h, v.s), v.s * 0.42 * (v.sw ?? 1));
+          vegDummy.scale.set(siteS * 0.42 * formSw, trunkReach(v.k, siteH, siteS), siteS * 0.42 * formSw);
           vegDummy.updateMatrix();
           trunks.setMatrixAt(trunkN++, vegDummy.matrix);
         }
       }
     }
   }
+  vegMark('place');
   for (const k of Object.keys(vegMeshes) as VegKind[]) {
     if (k === 'grass') continue;              // the sward keeps its own clock
     const m = vegMeshes[k];
     m.count = counts[k];
-    m.instanceMatrix.needsUpdate = true;
-    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    uploadPrefix(m.instanceMatrix, m.count);
+    uploadPrefix(m.instanceColor, m.count);
   }
   trunks.count = trunkN;
-  trunks.instanceMatrix.needsUpdate = true;
+  uploadPrefix(trunks.instanceMatrix, trunkN);
+  for (const fam of EZ_FAMILIES) {
+    for (const t of ezTiers[fam]) {
+      t.near.count = t.nNear;
+      uploadPrefix(t.near.instanceMatrix, t.nNear);
+      uploadPrefix(t.near.instanceColor, t.nNear);
+      t.far.count = t.nFar;
+      uploadPrefix(t.far.instanceMatrix, t.nFar);
+      uploadPrefix(t.far.instanceColor, t.nFar);
+    }
+  }
+  vegMark('upload');
   vegActiveRoles = activeRoles;
+  ezEdgeLast = ezRecord((f) => Math.round(ezEdge[f]));
+  refreshShrubs();
+  vegMark('shrubs');
   vegActiveAnchors = activeAnchors;
   vegMs = performance.now() - t0;
   // Forget buckets far behind so a long drive cannot grow the site list
@@ -9548,8 +11655,18 @@ function surfaceAt(x: number, z: number): Surface {
     if (seg.tk) track = Math.max(track, seg.sq ?? Q_TRACK);
     else road = Math.max(road, seg.sq ?? Q_ROAD);
   }
-  if (road >= 0) { surfQ = road; return 'road'; }
-  if (track >= 0) { surfQ = track; return 'track'; }
+  // ── A ROAD UNDER WATER IS A FORD ──
+  //
+  // "A road over a channel is a culvert's deck or a bridge, and you are on
+  // it, not in the water under it" — true of a bridge, and a bridge's deck
+  // is built above the water. A gravel road that crosses the Joggemspruit
+  // at grade (no bridge tag, the hydro resting level 0.7 m over the deck)
+  // read as road, and the truck crossed a river with no splash, no wash and
+  // no wake, reported from the seat. The deck's height against the water's
+  // resting level is the whole test: over it you are on a bridge, under it
+  // you are wading, and the tag never has to be right.
+  if (road >= 0) { surfQ = road; return fordDepthAt(x, z) > FORD_MIN_M ? 'water' : 'road'; }
+  if (track >= 0) { surfQ = track; return fordDepthAt(x, z) > FORD_MIN_M ? 'water' : 'track'; }
   surfQ = Q_GROUND;
   {
     // The mask says "a water polygon is somewhere in this cell"; the polygons
@@ -9640,6 +11757,795 @@ function wayAt(x: number, z: number): { name: string; on: boolean } | null {
  * follow through junctions, and an unnamed track through a field is exactly
  * where a driver reads the ground instead of a pace note.
  */
+/**
+ * ── THE GOAL: A PLACE THE DRIVE IS TRYING TO REACH ──
+ *
+ * A mission carries an AUTHORED route and the autopilot follows it. Anything
+ * else the world knows about — a survey fix, a station, a town — was
+ * somewhere you could be teleported to and nothing you could drive to, so an
+ * autopilot with a destination in mind still just held whatever road it woke
+ * up on. A goal is the smallest thing that fixes that: a named point, set
+ * from the site card, that the road chain steers toward at every junction
+ * (see AHEAD_GOAL_W) and that clears itself when the truck arrives.
+ *
+ * Kept in LAT/LON, because a world hop rebases every local metre and a goal
+ * held in metres would end up in the sea; x,z is the projection, refreshed
+ * whenever the origin moves, exactly as the mission route is.
+ */
+interface Goal { name: string; lat: number; lon: number; x: number; z: number }
+let goal: Goal | null = null;
+let goalAt = '';
+let goalDone: { name: string; at: number; shortM?: number } | null = null;
+/** Arrived, for a place with no other arrival rule of its own. */
+const GOAL_WITHIN = 28;
+/** How near the course has to pass the goal before the drive treats it as
+ *  the end of the run rather than something to keep steering toward. */
+const GOAL_REACH = 45;
+/**
+ * ── THE ROUTE TO THE GOAL, SOLVED ──
+ *
+ * The junction bias (AHEAD_GOAL_W) steers toward a goal one turn at a time,
+ * which is a driver with a compass and no map: it takes the branch that
+ * points at the target and will follow it into a dead end, a river bank or a
+ * cul-de-sac that happens to face the right way. This is the map. Dijkstra
+ * over the streamed carriageway — nodes are segment ENDPOINTS quantised to
+ * half a metre so two ways that meet share one, edges are the segments —
+ * from the deck under the truck to the deck nearest the goal.
+ *
+ * WHAT IT COSTS is length times a penalty for narrowness: a lane is not
+ * worth the same metre as a road, and without that the route cuts every
+ * corner through farm tracks. Nothing else — no turn cost, no one-way, no
+ * surface. Those are refinements; a route that exists at all is the feature.
+ *
+ * WHAT BOUNDS IT is the world that has actually streamed. A goal beyond the
+ * loaded roads has no path and the answer is honestly null, which is why the
+ * junction bias STAYS: it is what drives while the map fills in.
+ */
+const GOAL_SOLVE_MS = 2500;
+/** A metre of the narrowest track costs this much more than a metre of road. */
+const GOAL_NARROW = 2.2;
+/** Give up rather than walk the whole continent. Back down from the 60000 the
+ *  coarse tier was given: with the admissible bound in the walk this is a
+ *  backstop rather than the working limit, and 60000 nodes of a real city's
+ *  streamed network is a second of frozen frame. */
+const GOAL_MAX_NODES = 24000;
+/** What a metre of driving is worth against a metre of getting closer. Small,
+ *  so the route will happily drive a kilometre to halve the walk-in, and will
+ *  not drive ten to shave a hundred metres. */
+const GOAL_DETOUR = 0.06;
+/** How far the road's closest approach leaves you from the goal itself. */
+let goalShortM = 0;
+/**
+ * TWO SEGMENTS MEET WHEN THEIR ENDS ARE WITHIN A METRE AND A HALF — which is
+ * the tolerance the chain walk has always used, and it has to be the same one
+ * here or the graph disagrees with the road. Quantising instead (a half-metre
+ * key) looked equivalent and was not: two ends 0.9m and 1.1m either side of a
+ * bucket boundary land in different nodes, the junction never joins, and the
+ * solver reports "no path" across a road you can see. Measured at the Senqu:
+ * 646 nodes, the truck's own component 477 of them, and a target 1.9km away
+ * unreachable along a road that plainly connects.
+ *
+ * So ends are MATCHED, through a coarse hash, against nodes already placed.
+ * Height is part of the match because a bridge deck and the road under it
+ * pass within a metre of each other in plan and are not the same place.
+ */
+const NODE_SNAP = 1.5;
+const NODE_CELL = 4;
+const NODE_DY = 4;
+/** A tiny binary heap. The frontier is thousands of nodes and a linear scan
+ *  of it is what turns a 6ms solve into a 400ms one. */
+class MinHeap {
+  private k: number[] = [];
+  private v: string[] = [];
+  get size(): number { return this.k.length; }
+  push(cost: number, id: string): void {
+    this.k.push(cost); this.v.push(id);
+    let i = this.k.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (this.k[p] <= this.k[i]) break;
+      [this.k[p], this.k[i]] = [this.k[i], this.k[p]];
+      [this.v[p], this.v[i]] = [this.v[i], this.v[p]];
+      i = p;
+    }
+  }
+  pop(): { cost: number; id: string } | null {
+    if (!this.k.length) return null;
+    const cost = this.k[0], id = this.v[0];
+    const lk = this.k.pop() as number, lv = this.v.pop() as string;
+    if (this.k.length) {
+      this.k[0] = lk; this.v[0] = lv;
+      let i = 0;
+      for (;;) {
+        const l = i * 2 + 1, r = l + 1;
+        let m = i;
+        if (l < this.k.length && this.k[l] < this.k[m]) m = l;
+        if (r < this.k.length && this.k[r] < this.k[m]) m = r;
+        if (m === i) break;
+        [this.k[m], this.k[i]] = [this.k[i], this.k[m]];
+        [this.v[m], this.v[i]] = [this.v[i], this.v[m]];
+        i = m;
+      }
+    }
+    return { cost, id };
+  }
+}
+/**
+ * ── TWO TIERS, BECAUSE THE WORLD HAS TWO ──
+ *
+ * The fine survey stops around five kilometres out; the chart's overview
+ * vectors carry the trunk network for tens more. A goal past the fine ring had
+ * no path at all — the search was never the problem, the graph was — so the
+ * coarse ways go in too, and the two have to be made to meet.
+ *
+ * WHERE THEY MEET IS THE SAME LINE THE CHART ALREADY DRAWS. `osmRingR * 0.8`
+ * is where the ribbons start fading up because the fine world is giving out;
+ * coarse ways enter the graph at exactly that radius, so the router's handover
+ * and the ink's handover are one decision rather than two that can drift.
+ *
+ * THEY ARE JOINED BY PORTALS, NOT BY GEOMETRY. A z10 polyline is simplified:
+ * it can sit fifty to a hundred metres off the surveyed centreline of the same
+ * road, so matching ends at NODE_SNAP's metre and a half would never fire once
+ * between the tiers and the coarse network would float, connected to nothing.
+ * Instead a coarse node near a fine one gets a synthetic edge to it, priced at
+ * the straight line between them and then some. That is honest about what is
+ * actually known — these are within a hundred metres of each other, and the
+ * exact junction is not in the data at this zoom — and it degrades the right
+ * way: where a real road exists the router prefers it, because the portal is
+ * deliberately the more expensive metre.
+ */
+const OV_ROUTE_IN = 0.8;
+/** Simplification cuts corners, so a coarse metre is really a bit more than
+ *  one. Without this the router would rather take the smoothed line. */
+const OV_COARSE_K = 1.15;
+/** How far a portal will reach, and what its metres cost.
+ *
+ *  MEASURED WIDER THAN IT LOOKS. The two tiers are not two samplings of the
+ *  same points: the survey ends at the ring and the coarse layer begins at 0.8
+ *  of it, and in between they are the same ROADS described by different data —
+ *  so the nearest coarse node to the last surveyed one is routinely a few
+ *  hundred metres along it rather than a few tens. At 140m a rural handover
+ *  made no portals at all (measured: 126 fine nodes, 272 coarse, zero joins),
+ *  which left the coarse network floating and every distant goal unreachable.
+ *  The length is priced, so a long portal is expensive and a short one cheap
+ *  and the router sorts it out; the radius only has to be generous enough that
+ *  the join EXISTS. */
+const PORTAL_R = 420;
+const PORTAL_K = 1.8;
+/** No more than this many, so a dense handover annulus cannot explode. */
+const PORTAL_MAX = 64;
+interface GraphNode { x: number; z: number; y: number; c: boolean; to: Array<{ id: string; cost: number }> }
+/**
+ * ── THE GRAPH IS BUILT ONCE PER WORLD, NOT ONCE PER SOLVE ──
+ *
+ * Measured on the device and not in the harness, which is the whole lesson:
+ * 286 solves at a mean of 493ms and a worst of 1237ms — 17% of the session's
+ * entire CPU, the largest single cost in the game, and a 797ms frame with 732
+ * of it in here. The bench that passed had 349 nodes; a real phone driving
+ * Chapman's Peak has 72,084 road cells and thirty kilometres of coarse network
+ * behind them, and this function walked every one of them from scratch every
+ * two and a half seconds to rebuild a graph that had not changed.
+ *
+ * It changes for exactly three reasons: another fine tile streamed
+ * (`osmDone.size`), another coarse tile landed (`ovWayV`), or the truck has
+ * moved far enough that the handover radius means something different. Nothing
+ * else, and none of them every frame.
+ */
+let graphCache: { g: Map<string, GraphNode>; key: string; x: number; z: number } | null = null;
+/** How far the truck may move before the handover is re-measured. A quarter of
+ *  a kilometre changes the 85th percentile hardly at all, and the solve is
+ *  throttled to 2.5s anyway. */
+const GRAPH_MOVE = 250;
+/**
+ * ── THE SOLVE IS SLICED ──
+ *
+ * Measured on the Chapman's Peak run from the seat: ninety-nine solves in
+ * eight minutes, 141 ms each on average and 405 at worst, every one of them
+ * a frozen frame, and the top phase in fifty-one of the run's slow frames.
+ * The graph was cached and the walk was bounded, and it was still a stall,
+ * because "cheap for a solve" and "cheap for a frame" are different budgets:
+ * a solve is allowed a hundred milliseconds; a frame at forty a second has
+ * twenty-five for everything.
+ *
+ * So the solve is a JOB that runs in slices. The graph build (the survey's
+ * segments, the coarse tier past the handover, the portals across it) and
+ * the Dijkstra walk are each resumable: the job holds the iterator, the
+ * heap, the frontier, and `routeJobStep` runs it until a few milliseconds of
+ * the frame are spent, then hands the frame back. The route the truck is
+ * driving stays in force until the new one lands whole — a plan half-built
+ * is not a plan — and the graph it built is cached for the next job exactly
+ * as before. `solveGoalRoute` is the same job run to completion in one call,
+ * for the probe and the bench.
+ */
+const ROUTE_SLICE_MS = 3;
+interface RouteJob {
+  key: string; name: string; gx: number; gz: number;
+  /** Where the truck stood when the job began — the graph's handover frame. */
+  sx: number; sz: number;
+  phase: 'fine' | 'coarse' | 'portals' | 'walk' | 'done';
+  g: Map<string, GraphNode>; hash: Map<string, string[]>; seen: Set<Seg>; next: number;
+  cellIt: Iterator<Seg[]> | null; cell: Seg[] | null; si: number;
+  fineN: number; inner: number; budget: number; coarse: string[];
+  wayIt: Iterator<OvWay[]> | null; list: OvWay[] | null; wi: number; pi: number; pk: string | null;
+  chash: Map<string, string[]> | null; nodeIt: Iterator<[string, GraphNode]> | null; made: number;
+  walkOn: boolean; from: string | null; dist: Map<string, number>; prev: Map<string, string>;
+  done: Set<string>; heap: MinHeap; bestId: string | null; bestScore: number; bestGap: number;
+  cpuMs: number; graphMs: number; slices: number; maxSliceMs: number; startedAt: number; fromCache: boolean;
+}
+let routeJob: RouteJob | null = null;
+/** The node at this end, matched against one already placed or created. */
+function jobNode(j: RouteJob, x: number, z: number, y: number, coarse = false): string {
+  const cx = Math.floor(x / NODE_CELL), cz = Math.floor(z / NODE_CELL);
+  for (let ax = cx - 1; ax <= cx + 1; ax++) {
+    for (let az = cz - 1; az <= cz + 1; az++) {
+      for (const id of j.hash.get(`${ax},${az}`) ?? []) {
+        const n = j.g.get(id) as GraphNode;
+        // ACROSS THE TIERS TOO. When a coarse end really does land on a
+        // surveyed one it is the same junction and joining it is free and
+        // exact; the portals below exist for the ordinary case where the
+        // simplification has moved it a hundred metres.
+        if (Math.hypot(n.x - x, n.z - z) <= NODE_SNAP && Math.abs(n.y - y) <= NODE_DY) return id;
+      }
+    }
+  }
+  const id = `n${j.next++}`;
+  j.g.set(id, { x, z, y, c: coarse, to: [] });
+  const k = `${cx},${cz}`;
+  const arr = j.hash.get(k);
+  if (arr) arr.push(id); else j.hash.set(k, [id]);
+  return id;
+}
+function routeJobStart(): RouteJob {
+  // The graph probes (`__farnode`, `__ovroads`) build a graph with no goal
+  // set; the walk is never run for them, so the goal fields are inert.
+  const gl = goal ?? { name: '', x: 0, z: 0 };
+  const key = `${osmDone.size}|${ovWayV}`;
+  const c = graphCache;
+  const cached = !!c && c.key === key && Math.hypot(c.x - state.x, c.z - state.z) < GRAPH_MOVE;
+  if (cached) graphStat.cached = (graphStat.cached ?? 0) + 1;
+  return {
+    key: `${gl.name}|${osmDone.size}|${ovWayV}`, name: gl.name, gx: gl.x, gz: gl.z,
+    sx: state.x, sz: state.z,
+    phase: cached ? 'walk' : 'fine',
+    g: cached ? (c as { g: Map<string, GraphNode> }).g : new Map(), hash: new Map(), seen: new Set(), next: 0,
+    cellIt: null, cell: null, si: 0,
+    fineN: 0, inner: Infinity, budget: Infinity, coarse: [],
+    wayIt: null, list: null, wi: 0, pi: 0, pk: null,
+    chash: null, nodeIt: null, made: 0,
+    walkOn: false, from: null, dist: new Map(), prev: new Map(), done: new Set(), heap: new MinHeap(),
+    bestId: null, bestScore: Infinity, bestGap: Infinity,
+    cpuMs: 0, graphMs: 0, slices: 0, maxSliceMs: 0, startedAt: performance.now(), fromCache: cached,
+  };
+}
+/** The fine survey: every drivable segment in the road grid, one node per
+ *  matched end. Iterated live — a cell that gains segments after the
+ *  iterator has passed it is the next solve's business. */
+function jobFine(j: RouteJob, deadline: number): boolean {
+  if (!j.cellIt) j.cellIt = roadGrid.values();
+  let n = 0;
+  for (;;) {
+    if (!j.cell) { const r = j.cellIt.next(); if (r.done) return true; j.cell = r.value; j.si = 0; }
+    while (j.si < j.cell.length) {
+      const sg = j.cell[j.si++];
+      if (j.seen.has(sg) || sg.ya === undefined) continue;   // a wall is not a road
+      j.seen.add(sg);
+      const len = Math.hypot(sg.bx - sg.ax, sg.bz - sg.az);
+      if (len < 0.05) continue;
+      const ak = jobNode(j, sg.ax, sg.az, sg.ya ?? 0), bk = jobNode(j, sg.bx, sg.bz, sg.yb ?? sg.ya ?? 0);
+      if (ak === bk) continue;
+      const cost = len * (1 + (GOAL_NARROW - 1) * clamp((5 - sg.hw) / 4, 0, 1));
+      (j.g.get(ak) as GraphNode).to.push({ id: bk, cost });
+      (j.g.get(bk) as GraphNode).to.push({ id: ak, cost });
+      if ((++n & 63) === 0 && performance.now() > deadline) return false;
+    }
+    j.cell = null;
+  }
+}
+/** WHERE THE SURVEY ENDS IS A FACT, NOT A BUDGET. The handover was
+ *  `osmRingR * 0.8` — the radius the tile queue is WILLING to stream to — and
+ *  the roads it has actually got are another matter entirely. Measured: a
+ *  budget of 1541m over a surveyed network that petered out around 400m, so
+ *  the coarse tier began a kilometre beyond anything it could be joined to,
+ *  floated unreachable, and a 26km goal solved to a 380m route that was
+ *  25.7km short. That is not a rare case: it is every session's first minute,
+ *  and every sparsely mapped corner of the world.
+ *
+ *  So the handover follows the data and comes in to meet it. The 85th
+ *  percentile rather than the farthest node, because a single motorway spur
+ *  streamed along the corridor reaches much further than the coverage does
+ *  and would drag the handover out behind it. Where the survey is healthy
+ *  this lands on the budget and nothing changes; where it is thin the coarse
+ *  map arrives closer, which is the right way round — the less you know
+ *  finely, the sooner you should be reading the chart.
+ *
+ *  AND NO FLOOR UNDER IT. A floor was the obvious guard — do not put the
+ *  chart's roads under the wheels in a world that has streamed almost
+ *  nothing — and it broke the one property that makes this work. The edge
+ *  is a PERCENTILE, so fifteen per cent of the surveyed nodes lie beyond it
+ *  by construction and there is always something to portal from. A fixed
+ *  250m does not: measured on a network whose whole extent was inside that,
+ *  it put the handover past every node in the graph, left nothing on the
+ *  survey side of it, and made zero portals for the third run running. The
+ *  percentile is its own floor — a network three kilometres across puts the
+ *  edge at two and a half, not at a hundred metres — and where the survey
+ *  really is only a car park, the chart's roads are better than nothing.
+ *
+ *  The percentile comes off a ten-metre histogram, not a sort: sorting fifty
+ *  thousand distances is a ten-millisecond slice on a phone by itself. */
+function jobHandover(j: RouteJob): void {
+  j.fineN = j.g.size;
+  j.budget = osmRingR * OV_ROUTE_IN;
+  j.inner = j.budget;
+  if (Number.isFinite(j.budget) && j.fineN > 8) {
+    const BIN = 10, NB = 1024;
+    const hist = new Uint32Array(NB);
+    for (const n of j.g.values()) hist[Math.min(NB - 1, (Math.hypot(n.x - osmCarX, n.z - osmCarZ) / BIN) | 0)]++;
+    let acc = 0, edge = NB * BIN;
+    for (let b = 0; b < NB; b++) { acc += hist[b]; if (acc >= j.fineN * 0.85) { edge = (b + 1) * BIN; break; } }
+    j.inner = Math.min(j.budget, edge);
+  }
+}
+/** The coarse tier, and only where the fine one has given out. */
+function jobCoarse(j: RouteJob, deadline: number): boolean {
+  if (!Number.isFinite(j.inner)) return true;
+  if (!j.wayIt) j.wayIt = ovWays.values();
+  let n = 0;
+  for (;;) {
+    if (!j.list) { const r = j.wayIt.next(); if (r.done) return true; j.list = r.value; j.wi = 0; j.pi = 0; j.pk = null; }
+    while (j.wi < j.list.length) {
+      const w = j.list[j.wi];
+      const narrow = 1 + (GOAL_NARROW - 1) * clamp((5 - w.hw) / 4, 0, 1);
+      while (j.pi < w.pts.length) {
+        const [px, pz] = w.pts[j.pi++];
+        // Segment by segment against the handover, not way by way: a trunk
+        // road running from under the truck to the horizon belongs to the
+        // coarse graph for its far half and to the survey for its near one.
+        const out = Math.hypot(px - osmCarX, pz - osmCarZ) > j.inner;
+        if (!out) { j.pk = null; continue; }
+        const k = jobNode(j, px, pz, 0, true);
+        if (j.g.get(k)?.c) j.coarse.push(k);
+        if (j.pk && j.pk !== k) {
+          const q = j.g.get(j.pk) as GraphNode, nd = j.g.get(k) as GraphNode;
+          const cost = Math.hypot(nd.x - q.x, nd.z - q.z) * narrow * OV_COARSE_K;
+          if (cost > 0) { q.to.push({ id: k, cost }); nd.to.push({ id: j.pk, cost }); }
+        }
+        j.pk = k;
+        if ((++n & 63) === 0 && performance.now() > deadline) return false;
+      }
+      j.wi++; j.pi = 0; j.pk = null;
+    }
+    j.list = null;
+  }
+}
+/** ── the portals, built FROM THE SURVEY'S EDGE ──
+ *
+ *  The first cut walked the coarse nodes looking for a fine one nearby and
+ *  made none. Two things wrong with that. It scanned the shared 4m hash, so
+ *  a 420m reach is a 105-cell span and a hundred thousand lookups a node.
+ *  And the question was the wrong way round: what has to be joined is the
+ *  place the SURVEY runs out. Every fine node past the handover is a road
+ *  that, as far as the graph is concerned, ends in the middle of nowhere,
+ *  and each of those is exactly one portal's worth of question — where does
+ *  the coarse network pick this up? There are far fewer of them, and asking
+ *  from that side puts the join on the boundary rather than wherever the
+ *  two tiers happened to sample near each other. */
+function jobPortals(j: RouteJob, deadline: number): boolean {
+  if (!Number.isFinite(j.inner)) {
+    graphStat = { fine: j.fineN, coarse: 0, portals: 0, inner: 0, budget: 0, cached: graphStat.cached };
+    return true;
+  }
+  const cellR = Math.max(NODE_CELL, PORTAL_R / 2);
+  if (!j.chash) {
+    j.chash = new Map();
+    for (const ck of j.coarse) {
+      const n = j.g.get(ck) as GraphNode;
+      const k = `${Math.floor(n.x / cellR)},${Math.floor(n.z / cellR)}`;
+      const arr = j.chash.get(k);
+      if (arr) arr.push(ck); else j.chash.set(k, [ck]);
+    }
+    j.nodeIt = j.g.entries();
+  }
+  const it = j.nodeIt as Iterator<[string, GraphNode]>;
+  let n = 0;
+  while (j.made < PORTAL_MAX) {
+    // The budget is checked BEFORE the next node is drawn from the iterator:
+    // a node pulled and then abandoned for the frame would never be seen
+    // again, and the portal it might have made would be missing.
+    if ((++n & 255) === 0 && performance.now() > deadline) return false;
+    const r = it.next();
+    if (r.done) break;
+    const [fk, f] = r.value;
+    if (f.c) continue;
+    // Inside the handover the survey IS the map, and a portal there would let
+    // the router leave a road it can see for a smoothed line it cannot.
+    if (Math.hypot(f.x - osmCarX, f.z - osmCarZ) < j.inner) continue;
+    if (f.to.some((e) => (j.g.get(e.id) as GraphNode).c)) continue;    // already joined
+    let best: string | null = null, bd = PORTAL_R * PORTAL_R;
+    const cx = Math.floor(f.x / cellR), cz = Math.floor(f.z / cellR);
+    for (let ax = cx - 1; ax <= cx + 1; ax++) {
+      for (let az = cz - 1; az <= cz + 1; az++) {
+        for (const id of j.chash.get(`${ax},${az}`) ?? []) {
+          const nd = j.g.get(id) as GraphNode;
+          const d = (nd.x - f.x) ** 2 + (nd.z - f.z) ** 2;
+          if (d < bd) { bd = d; best = id; }
+        }
+      }
+    }
+    if (!best) continue;
+    const c = j.g.get(best) as GraphNode;
+    const cost = Math.sqrt(bd) * PORTAL_K;
+    f.to.push({ id: best, cost }); c.to.push({ id: fk, cost });
+    j.made++;
+  }
+  graphStat = { fine: j.fineN, coarse: j.g.size - j.fineN, portals: j.made,
+    inner: Math.round(j.inner), budget: Math.round(j.budget), cached: graphStat.cached };
+  return true;
+}
+/** ── AS CLOSE AS THE ROADS GET ──
+ *
+ *  Most places worth driving to are not ON the network. A trig point is up a
+ *  hillside, a lake's name sits in the middle of the water, a fix is dropped
+ *  wherever the thumb landed, and while the world streams even a town's pin
+ *  can be a kilometre from the nearest loaded road. Demanding a node within
+ *  some radius of the goal makes all of those unroutable, which is the same
+ *  failure as having no router at all.
+ *
+ *  So there is no target: the walk settles the whole reachable component
+ *  (bounded) and the best node is the one that gets CLOSEST to the goal,
+ *  with a light penalty on the drive itself so a hundred metres of gain is
+ *  not bought with ten kilometres of road. The last stretch is the driver's
+ *  — which is honest, because it is not a road.
+ *
+ *  ── AND IT STOPS WHEN NOTHING FURTHER CAN WIN ──
+ *
+ *  "Settle the whole reachable component" was affordable while the component
+ *  was a five-kilometre ring. With thirty kilometres of trunk road behind it
+ *  that is tens of thousands of nodes for every solve, and it is what put a
+ *  1237ms worst case on the device.
+ *
+ *  The bound is exact rather than a heuristic, and it has to be: the walk's
+ *  whole contract is that it finds the CLOSEST the roads get, so a prune that
+ *  can drop the winner is a wrong answer, not a slower one.
+ *
+ *  The score is `gap + cost·DETOUR`. Dijkstra pops in increasing cost, so
+ *  every node still unsettled has cost at least the popped node's c; and no
+ *  gap is ever negative. So no unsettled node can score below `c·DETOUR`, and
+ *  once that floor reaches the best score found the frontier holds nothing
+ *  that can win.
+ *
+ *  (The tempting tighter form — `DETOUR·(c + g)`, on the grounds that
+ *  reaching the goal from here costs at least g more — is NOT sound: the next
+ *  node need not lie beyond this one, and may sit on another branch already
+ *  nearer the goal. This one is weaker and true.)
+ *
+ *  It tightens as the answer improves, and it tightens where the waste was.
+ *  Twenty-six kilometres out with the goal still unreached the floor is far
+ *  below the best score and nothing is pruned; the moment a node lands 225m
+ *  from the goal, the floor is 1560 against a best of 1785 and four more
+ *  kilometres of driving is all that is left to explore. */
+function jobWalk(j: RouteJob, deadline: number): boolean {
+  if (!j.walkOn) {
+    j.walkOn = true;
+    // THE TRUCK STARTS ON THE SURVEY. Its nearest node has to be a fine one:
+    // beginning a route on a simplified line would hand the autopilot a first
+    // leg that is nowhere near the road it is actually standing on. And it is
+    // where the truck is NOW, not where it stood when the job began — a slow
+    // job lands on a truck that has driven on.
+    j.from = nearestNode(j.g, state.x, state.z, 120, true);
+    if (!j.from) return true;
+    j.dist.set(j.from, 0);
+    j.heap.push(0, j.from);
+  }
+  let n = 0;
+  while (j.heap.size && j.done.size < GOAL_MAX_NODES) {
+    const top = j.heap.pop() as { cost: number; id: string };
+    if (j.done.has(top.id)) continue;
+    j.done.add(top.id);
+    const nd = j.g.get(top.id);
+    if (!nd) continue;
+    const gap = Math.hypot(nd.x - j.gx, nd.z - j.gz);
+    const score = gap + top.cost * GOAL_DETOUR;
+    if (score < j.bestScore) { j.bestScore = score; j.bestId = top.id; j.bestGap = gap; }
+    if (top.cost * GOAL_DETOUR >= j.bestScore) break;
+    // Standing on it: nothing further can be closer.
+    if (gap < 4) break;
+    for (const e of nd.to) {
+      if (j.done.has(e.id)) continue;
+      const d2 = top.cost + e.cost;
+      if (d2 < (j.dist.get(e.id) ?? Infinity)) {
+        j.dist.set(e.id, d2); j.prev.set(e.id, top.id); j.heap.push(d2, e.id);
+      }
+    }
+    if ((++n & 127) === 0 && performance.now() > deadline) return false;
+  }
+  return true;
+}
+/** Run the job until the budget is spent or it is done. */
+function routeJobStep(j: RouteJob, budgetMs: number): void {
+  const t0 = performance.now();
+  const deadline = t0 + budgetMs;
+  j.slices++;
+  for (;;) {
+    if (j.phase === 'fine') {
+      if (!jobFine(j, deadline)) break;
+      jobHandover(j);
+      j.phase = 'coarse';
+    } else if (j.phase === 'coarse') {
+      if (!jobCoarse(j, deadline)) break;
+      j.phase = 'portals';
+    } else if (j.phase === 'portals') {
+      if (!jobPortals(j, deadline)) break;
+      graphCache = { g: j.g, key: `${osmDone.size}|${ovWayV}`, x: j.sx, z: j.sz };
+      j.graphMs = j.cpuMs + (performance.now() - t0);
+      j.phase = 'walk';
+    } else if (j.phase === 'walk') {
+      if (!jobWalk(j, deadline)) break;
+      j.phase = 'done';
+    } else break;
+  }
+  const ms = performance.now() - t0;
+  j.cpuMs += ms;
+  if (ms > j.maxSliceMs) j.maxSliceMs = ms;
+}
+/** The graph the last solve walked — for the probe and the harness. */
+function roadGraph(): Map<string, GraphNode> {
+  const key = `${osmDone.size}|${ovWayV}`;
+  const c = graphCache;
+  if (c && c.key === key && Math.hypot(c.x - state.x, c.z - state.z) < GRAPH_MOVE) return c.g;
+  const j = routeJobStart();
+  for (;;) {
+    if (j.phase === 'fine') { jobFine(j, Infinity); jobHandover(j); j.phase = 'coarse'; }
+    else if (j.phase === 'coarse') { jobCoarse(j, Infinity); j.phase = 'portals'; }
+    else if (j.phase === 'portals') { jobPortals(j, Infinity); break; }
+    else break;
+  }
+  graphCache = { g: j.g, key, x: state.x, z: state.z };
+  return j.g;
+}
+/** What the last graph was made of — read by __route. `inner` is where the
+ *  handover actually fell and `budget` where the tile queue would have put it;
+ *  the two differ exactly when the survey is thinner than its allowance.
+ *  `cached` counts the solves that reused a graph rather than building one. */
+let graphStat: { fine: number; coarse: number; portals: number; inner: number;
+  budget: number; cached?: number; ms?: number } =
+  { fine: 0, coarse: 0, portals: 0, inner: 0, budget: 0, cached: 0, ms: 0 };
+/** The node nearest a place, or null when the roads do not reach it. */
+function nearestNode(g: Map<string, GraphNode>, x: number, z: number, r: number,
+  fineOnly = false): string | null {
+  let best: string | null = null, bd = r * r;
+  for (const [k, n] of g) {
+    if (fineOnly && n.c) continue;
+    const d = (n.x - x) ** 2 + (n.z - z) ** 2;
+    if (d < bd) { bd = d; best = k; }
+  }
+  return best;
+}
+/** The solved line, and which tier each point came from: 0 the fine survey,
+ *  1 the chart's coarse network. The tier is not decoration — the autopilot is
+ *  only allowed to STEER on the fine half (see goalAhead). */
+let goalRoute: Array<[number, number, number]> | null = null;
+let goalSolveAt = 0;
+let goalSolveFor = '';
+/** `graphMs` against `ms` is the question the device telemetry asked and this
+ *  could not answer: whether a half-second solve was the graph being rebuilt
+ *  or the walk being unbounded. `walked` is how many nodes the walk actually
+ *  settled, which is the other half of it. The totals, the slices and the
+ *  tile books are what the telemetry dump prints, so the next paste from a
+ *  device attributes the solver in one line. */
+const goalSolveStat = { runs: 0, ms: 0, graphMs: 0, walked: 0, nodes: 0, found: 0, failed: 0, last: '',
+  totalMs: 0, graphTotalMs: 0, maxMs: 0, slices: 0, maxSliceMs: 0, spanMs: 0, tilesSkipped: 0, tilesHit: 0 };
+/** The job has run its course: read the plan out of it. */
+function routeJobFinish(j: RouteJob): void {
+  goalSolveStat.runs++;
+  goalSolveStat.ms = j.cpuMs;
+  goalSolveStat.graphMs = j.fromCache ? 0 : j.graphMs;
+  goalSolveStat.totalMs += j.cpuMs;
+  goalSolveStat.graphTotalMs += j.fromCache ? 0 : j.graphMs;
+  if (j.cpuMs > goalSolveStat.maxMs) goalSolveStat.maxMs = j.cpuMs;
+  goalSolveStat.slices += j.slices;
+  if (j.maxSliceMs > goalSolveStat.maxSliceMs) goalSolveStat.maxSliceMs = j.maxSliceMs;
+  goalSolveStat.spanMs = performance.now() - j.startedAt;
+  goalSolveStat.nodes = j.g.size;
+  goalSolveStat.walked = j.done.size;
+  goalSolveFor = j.key;
+  if (!j.from) {
+    goalRoute = null;
+    goalSolveStat.failed++;
+    goalSolveStat.last = 'no road under the truck';
+    return;
+  }
+  const to = j.bestId;
+  if (!to || to === j.from) {
+    goalRoute = null;
+    goalShortM = j.bestGap;
+    goalSolveStat.failed++;
+    goalSolveStat.last = to ? 'already as close as the road gets' : `no path (${j.done.size} nodes)`;
+    return;
+  }
+  goalShortM = j.bestGap;
+  const out: Array<[number, number, number]> = [];
+  for (let k: string | undefined = to; k !== undefined; k = j.prev.get(k)) {
+    const n = j.g.get(k);
+    if (n) out.push([n.x, n.z, n.c ? 1 : 0]);
+    if (k === j.from) break;
+  }
+  out.reverse();
+  goalRoute = out.length >= 2 ? out : null;
+  goalSolveStat.found++;
+  const cn = out.filter((p) => p[2]).length;
+  goalSolveStat.last = `${out.length} nodes (${cn} coarse), ${Math.round(j.bestGap)}m short`;
+}
+/** The whole solve in one call — the probe's and the bench's path. */
+function solveGoalRoute(): void {
+  routeJob = null;
+  if (!goal) { goalRoute = null; goalSolveFor = ''; return; }
+  const j = routeJobStart();
+  routeJobStep(j, Infinity);
+  routeJobFinish(j);
+}
+/**
+ * ── ONLY WHEN IT CAN MATTER ──
+ *
+ * The re-solve key carried the count of streamed tiles, so every tile that
+ * landed anywhere in the ring — behind the truck, across the bay, a suburb
+ * off to one side — re-solved a route that was under the wheels and going
+ * nowhere new. (And the key it was compared against was written without the
+ * coarse tier's version, so the two never matched and the solve ran on
+ * every tick of the timer regardless. Ninety-nine in eight minutes.)
+ *
+ * A tile can change the plan only where the plan is: on it, ahead of the
+ * truck where the coarse half is waiting to become fine, or at its far end.
+ * So each finished tile is noted with its centre, and a route that is still
+ * under the truck is re-solved for new survey only when one of those tiles
+ * comes within a corridor of the line. A new goal, a swapped coarse tier and
+ * a truck off its line are re-solved at once, as before.
+ */
+const ROUTE_CORRIDOR_M = 250;
+const osmFresh: Array<[number, number, number]> = [];
+function noteOsmDone(x: number, y: number): void {
+  const b = tileBounds(x, y, OSM_Z);
+  const [cx, cz] = toLocal((b.latN + b.latS) / 2, (b.lonW + b.lonE) / 2);
+  const half = Math.max((b.latN - b.latS) * M_LAT, (b.lonE - b.lonW) * M_LAT * Math.cos((b.latN * Math.PI) / 180)) / 2;
+  osmFresh.push([cx, cz, half]);
+}
+/** Does any tile finished since the last solve lie on the plan's corridor? */
+function freshTilesTouchRoute(): boolean {
+  const rt = goalRoute;
+  if (!rt || !osmFresh.length) return true;   // nothing recorded: be conservative
+  const tiles = osmFresh.splice(0);
+  for (const [tx, tz, half] of tiles) {
+    const reach = half + ROUTE_CORRIDOR_M;
+    for (let i = 1; i < rt.length; i++) {
+      const ax = rt[i - 1][0], az = rt[i - 1][1], bx = rt[i][0], bz = rt[i][1];
+      const dx = bx - ax, dz = bz - az;
+      const t = clamp(((tx - ax) * dx + (tz - az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+      if (Math.hypot(tx - (ax + dx * t), tz - (az + dz * t)) < reach) { goalSolveStat.tilesHit++; return true; }
+    }
+    goalSolveStat.tilesSkipped++;
+  }
+  return false;
+}
+/** Where we are on the solved route and what is left of it — the same shape
+ *  `routeAhead` hands the autopilot for a mission leg. */
+function goalAhead(x: number, z: number, reach: number): Array<[number, number]> | null {
+  const rt = goalRoute;
+  if (!rt || rt.length < 2) return null;
+  let bi = 1, bt = 0, bd = Infinity;
+  for (let i = 1; i < rt.length; i++) {
+    // ONLY THE SURVEYED HALF IS A LINE TO DRIVE. A coarse leg is a z10
+    // polyline: right about which valley the road goes up, wrong by fifty to a
+    // hundred metres about where it is, and following one would steer the
+    // truck off the tarmac with complete confidence. So the search for "where
+    // am I on the route" never lands on a coarse leg either — the nearest
+    // point on one is not a position on anything the truck can drive.
+    if (rt[i][2] || rt[i - 1][2]) continue;
+    const dx = rt[i][0] - rt[i - 1][0], dz = rt[i][1] - rt[i - 1][1];
+    const t = clamp(((x - rt[i - 1][0]) * dx + (z - rt[i - 1][1]) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const px = rt[i - 1][0] + dx * t, pz = rt[i - 1][1] + dz * t;
+    const d = Math.hypot(x - px, z - pz);
+    if (d < bd) { bd = d; bi = i; bt = t; }
+  }
+  // Off the solved line by more than a road's width: it is not what we are
+  // driving, so say nothing and let the chain carry on. The re-solve catches
+  // up on its own timer.
+  if (bd > 26) return null;
+  const pts: Array<[number, number]> = [[
+    rt[bi - 1][0] + (rt[bi][0] - rt[bi - 1][0]) * bt,
+    rt[bi - 1][1] + (rt[bi][1] - rt[bi - 1][1]) * bt,
+  ]];
+  let run = 0;
+  for (let i = bi; i < rt.length && run < reach; i++) {
+    // AND THE DRIVING LINE STOPS WHERE THE SURVEY DOES. Past the handover the
+    // plan is still a plan — the chart draws the whole of it, and that is most
+    // of the point — but the autopilot gets a shorter horizon and the junction
+    // bias carries it the rest of the way, which is exactly what that bias was
+    // built for: driving while the map fills in.
+    if (rt[i][2]) break;
+    run += Math.hypot(rt[i][0] - pts[pts.length - 1][0], rt[i][1] - pts[pts.length - 1][1]);
+    pts.push([rt[i][0], rt[i][1]]);
+  }
+  return pts.length >= 2 ? pts : null;
+}
+
+function goalRebase(): void {
+  if (!goal) { goalAt = ''; return; }
+  const at = `${origin.lat.toFixed(4)},${origin.lon.toFixed(4)}`;
+  if (at === goalAt) return;
+  goalAt = at;
+  const [gx, gz] = toLocal(goal.lat, goal.lon);
+  goal.x = gx; goal.z = gz;
+}
+/** THE ROUTE ON THE GLASS — see overlays.ts RouteCard. A chip by default;
+ *  the card on a tap; CANCEL is the one action. The distance is what is left
+ *  along the plan where there is one, straight-line where there is not, and
+ *  the walk-in past the road's end is said separately. Memoised: the plan is
+ *  hundreds of points and the chip does not need it every frame. */
+let routeMin = true;
+let routeDistAt = -1e9, routeDistM = 0;
+function routeRemainingM(now: number): number {
+  if (!goal) return 0;
+  if (now - routeDistAt < 500) return routeDistM;
+  routeDistAt = now;
+  const rt = goalRoute;
+  if (rt && rt.length >= 2) {
+    let bi = 1, bt = 0, bd = Infinity;
+    for (let i = 1; i < rt.length; i++) {
+      const dx = rt[i][0] - rt[i - 1][0], dz = rt[i][1] - rt[i - 1][1];
+      const t = clamp(((state.x - rt[i - 1][0]) * dx + (state.z - rt[i - 1][1]) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+      const d = Math.hypot(state.x - (rt[i - 1][0] + dx * t), state.z - (rt[i - 1][1] + dz * t));
+      if (d < bd) { bd = d; bi = i; bt = t; }
+    }
+    let px = rt[bi - 1][0] + (rt[bi][0] - rt[bi - 1][0]) * bt, pz = rt[bi - 1][1] + (rt[bi][1] - rt[bi - 1][1]) * bt;
+    let run = bd;
+    for (let i = bi; i < rt.length; i++) { run += Math.hypot(rt[i][0] - px, rt[i][1] - pz); px = rt[i][0]; pz = rt[i][1]; }
+    routeDistM = run;
+  } else routeDistM = Math.hypot(goal.x - state.x, goal.z - state.z);
+  return routeDistM;
+}
+function routeCard(now: number): RouteCard {
+  const g = goal as Goal;
+  const d = routeRemainingM(now);
+  const byRoad = !!goalRoute && goalRoute.length >= 2;
+  const walk = byRoad && goalShortM > GOAL_WITHIN ? ` · ${fmtDist(goalShortM)} ON FOOT` : '';
+  return { name: g.name, minimized: routeMin,
+    body: `${fmtDist(d)} ${byRoad ? 'BY ROAD' : 'DIRECT'}${walk}`,
+    chip: `${g.name} · ${fmtDist(d)}` };
+}
+/** Put the plan down: no goal, no route, no job in flight, and the autopilot
+ *  falls back to the chain on its next frame. */
+function cancelRoute(): void {
+  goal = null; goalRoute = null; goalSolveFor = ''; routeJob = null; goalDone = null;
+  routeMin = true;
+}
+/** The route's card from a test: read it, or 'expand' | 'collapse' | 'cancel'. */
+(window as unknown as { __routecard?: object }).__routecard = (act?: 'expand' | 'collapse' | 'cancel'): object | null => {
+  if (act === 'expand') routeMin = false; else if (act === 'collapse') routeMin = true; else if (act === 'cancel') cancelRoute();
+  return goal ? routeCard(performance.now()) : null;
+};
+function setGoal(name: string, x: number, z: number): void {
+  const [la, lo] = localToLatLon(x, z);
+  goal = { name, lat: la, lon: lo, x, z };
+  goalAt = `${origin.lat.toFixed(4)},${origin.lon.toFixed(4)}`;
+  // THE BANNER IS THE RECEIPT. Choosing a destination is a decision worth one
+  // sentence back — what it is, how far by road, and how much of the last of
+  // it is on foot — so the card opens on select and the X puts it away. It is
+  // the chip from then on, and only CANCEL ROUTE drops the goal itself.
+  routeMin = false;
+}
+/**
+ * How square a join may be and still be a candidate at all: about 83 degrees,
+ * which is what this walk always allowed. It is deliberately LOOSE and the
+ * score decides — a hairpin's apex is a single vertex with most of a right
+ * angle in it (Trollstigen, Stelvio), and a gate tight enough to mean
+ * "a turning, not this road" would end the chain in the middle of every
+ * switchback. What keeps a side road from hijacking the chain is that a
+ * straighter candidate scores higher, not that the turn was refused.
+ */
+const AHEAD_MIN_DOT = 0.12;
+/** What a goal is worth against alignment when the two disagree. Enough to
+ *  take a real turning toward the target, not enough to leave a road for a
+ *  farm track that happens to point at it. */
+const AHEAD_GOAL_W = 0.6;
 interface NavBend { dist: number; ang: number; left: boolean }
 const NAV_REACH = 350;              // how far ahead the co-driver reads
 const NAV_WIN = 30;                 // metres a "corner" is allowed to span
@@ -9677,9 +12583,32 @@ function wayAhead(
   }
   if (!cur) return null;
   const name = cur.nm, hw = cur.hw;
-  /** What counts as "the same road" at a junction. */
-  const same = (s2: Seg): boolean =>
-    (name ? s2.nm === name : !s2.nm && Math.abs(s2.hw - hw) < 1.5);
+  /**
+   * ── A ROAD IS A LINE ON THE GROUND, NOT A NAME ──
+   *
+   * This used to refuse any segment whose name differed from the one under
+   * the wheels, which breaks a long drive in two ways, both reported from the
+   * seat. A through road that CHANGES NAME at a parish boundary — the
+   * commonest thing in OSM — ended the chain dead, so the autopilot's course
+   * simply stopped and the truck braked for nothing. And at a junction where
+   * the through road changes name while a spur keeps it, the only candidate
+   * the filter allowed was the spur: the drive turned off.
+   *
+   * So continuity decides and the name only votes. A candidate must first be
+   * a plausible continuation at all (`AHEAD_MIN_DOT`, about 55 degrees — past
+   * that it is a turning, not this road), and then the best score wins:
+   * alignment, plus a bonus for keeping the name, less a penalty for a step
+   * change in width, so a farm track cannot hijack a highway even when it
+   * lines up better. The co-driver asks with `namedOnly` and gets a heavier
+   * name bonus, because a pace note wants one road's identity — but even it
+   * follows a rename now rather than falling silent.
+   */
+  const NAME_BONUS = namedOnly ? 0.5 : 0.22;
+  const chainScore = (s2: Seg, dot: number): number => {
+    const named = name !== undefined && s2.nm === name;
+    const width = Math.min(0.3, Math.abs((s2.hw ?? hw) - hw) / 6);
+    return dot + (named ? NAME_BONUS : 0) - width;
+  };
   // Travel direction: whichever way along the seg the heading points.
   const hx = Math.sin(heading), hz = -Math.cos(heading);
   const fwd = (cur.bx - cur.ax) * hx + (cur.bz - cur.az) * hz >= 0;
@@ -9703,9 +12632,10 @@ function wayAhead(
   const used = new Set<Seg>([cur]);
   let total = leg;
   for (let hop = 0; hop < maxHops && total < reach; hop++) {
-    let nxt: Seg | null = null, fromA = false, best = 0.1;
+    let nxt: Seg | null = null, fromA = false, best = -Infinity;
     for (const seg of roadGrid.get(gkey(ex, ez)) ?? []) {
-      if (used.has(seg) || !same(seg)) continue;
+      if (used.has(seg) || seg.ya === undefined) continue;
+      if (namedOnly && !seg.nm) continue;
       for (const a of [true, false]) {
         const jx = a ? seg.ax : seg.bx, jz = a ? seg.az : seg.bz;
         if (Math.hypot(jx - ex, jz - ez) > 1.5) continue;
@@ -9713,7 +12643,23 @@ function wayAhead(
         let vz = a ? seg.bz - seg.az : seg.az - seg.bz;
         const l = Math.hypot(vx, vz) || 1; vx /= l; vz /= l;
         const dot = vx * dirX + vz * dirZ;
-        if (dot > best) { best = dot; nxt = seg; fromA = a; }
+        if (dot < AHEAD_MIN_DOT) continue;          // not a continuation at all
+        // ── AND WHERE YOU ARE TRYING TO GET TO, IF ANYWHERE ──
+        // With a goal set, the branch that closes on it wins over the one
+        // that merely lines up: this is the difference between an autopilot
+        // that drives to a place and one that holds whatever road it woke up
+        // on. Scaled by how much of the leg is progress, so a slight bend
+        // toward the goal beats a hard turn away from it and never the
+        // reverse.
+        let bias = 0;
+        if (goal) {
+          const ax2 = a ? seg.bx : seg.ax, az2 = a ? seg.bz : seg.az;
+          const was = Math.hypot(ex - goal.x, ez - goal.z);
+          const now = Math.hypot(ax2 - goal.x, az2 - goal.z);
+          bias = AHEAD_GOAL_W * clamp((was - now) / Math.max(1, l), -1, 1);
+        }
+        const sc = chainScore(seg, dot) + bias;
+        if (sc > best) { best = sc; nxt = seg; fromA = a; }
       }
     }
     if (!nxt) break;
@@ -9888,7 +12834,6 @@ const solver = new RoadSolver({
 });
 const juncGrid = solver.junctions;
 const juncStats = solver.stats;
-const noteJunction = (x: number, z: number): void => solver.noteJunction(x, z);
 /**
  * Is this stretch of road the mouth of a turning?
  *
@@ -9911,7 +12856,7 @@ const noteJunction = (x: number, z: number): void => solver.noteJunction(x, z);
  * failure the rail exists to prevent.
  */
 function roadMeetsHere(
-  ax: number, az: number, bx: number, bz: number, hw: number, y: number, fid: number, name?: string,
+  ax: number, az: number, bx: number, bz: number, hw: number, y: number, fid: number, name?: string, dk?: string,
 ): { p: boolean; m: boolean } {
   const L = Math.hypot(bx - ax, bz - az);
   // Reach a little past each end, so the gap opens wide enough to drive through
@@ -9937,6 +12882,33 @@ function roadMeetsHere(
   };
   const seen = new Set<Seg>();
   const steps = Math.max(1, Math.ceil(rl / (GRID / 2)));
+  // THE TOPOLOGY FIRST. A node where this way meets another drivable way is
+  // a turning whether or not the other way has built or the planner has
+  // pinned it — see juncNodeGrid. The side is read a little way down the arm
+  // that leaves, and an arm running along this bay (the way's own
+  // continuation, or a road merging in parallel) is not a turning.
+  if (dk !== undefined) {
+    const seenN = new Set<JuncNode>();
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      const qx = x0 + (x1 - x0) * t, qz = z0 + (z1 - z0) * t;
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+        for (const n of juncNodeGrid.get(`${Math.floor(qx / GRID) + i},${Math.floor(qz / GRID) + j}`) ?? []) {
+          if (seenN.has(n)) continue;
+          seenN.add(n);
+          if (n.arms.length < 3 || ptSegDist(n.x, n.z, x0, z0, x1, z1) >= hw + 2) continue;
+          let others = 0;
+          for (const a of n.arms) if (a.dk !== dk) others++;
+          if (!others || others === n.arms.length) continue;
+          for (const a of n.arms) {
+            if (a.dk === dk || Math.abs(a.ux * ux + a.uz * uz) > 0.82) continue;
+            claim(n.x + a.ux * (hw + 1), n.z + a.uz * (hw + 1));
+            if (out.p && out.m) return out;
+          }
+        }
+      }
+    }
+  }
   for (let s = 0; s <= steps; s++) {
     const t = s / steps;
     const qx = x0 + (x1 - x0) * t, qz = z0 + (z1 - z0) * t;
@@ -10029,65 +13001,6 @@ function roadHeightAt(x: number, z: number, margin = 0.8): number | null {
   return best;
 }
 
-// ── the road corridor: a volume, not a decal ───────────────────────
-// A ribbon draped on the heightfield is a zero-thickness surface, and the
-// terrain MESH is not the heightfield: it carries one vertex every ~21m and
-// interpolates flat between them, while the ribbon samples the bilinear field
-// every 12m and again at both kerbs. On any curved hillside the two disagree
-// by metres, and the road either floats or is swallowed. Two halves fix it:
-//
-//   DOWN — every carriageway is extruded into a solid (see `apron` below), so
-//          the gap under a floating road is filled with earth instead of sky.
-//   UP   — the terrain is cut back out of the corridor, so nothing stands in
-//          the road's airspace. The cut is graded outward into a bank rather
-//          than left as a wall.
-// The ceiling sits BELOW the tarmac across the carriageway and rises beyond
-// the kerb — but NOT at the batter straight away, and the reason is the
-// terrain mesh's own sampling. The cut lives in a FIELD; the mesh samples it
-// at terrainSeg vertices per tile (~16m apart) and draws straight triangles
-// between them. A ceiling that rises 32° from the kerb permits a vertex 10m
-// out to stand 6m over the road, and the chord from there to the far side
-// bridges clean over the corridor: Natural Bridge Road measured 5.6% of its
-// length under such chords, the truck roof-deep in a hillside that the field
-// said was cut. So the ceiling holds a near-flat BENCH (a 1.7° wash, enough
-// to shed the dead-level look) out to the mesh cell diagonal — every corner
-// of every triangle a road can pass through is inside that distance, so no
-// chord can stand higher than wash·slack ≈ 0.7m below the road surface — and
-// only beyond the bench does the 32° batter climb away.
-// ── THE VERTICAL BUDGET, in one place ──────────────────────────────
-// The visible daylight between tarmac and ground on FLAT land is exactly
-// CUT_CLEAR + the road lift: the cut lowers the ground to profile−CUT_CLEAR
-// and the deck is drawn at profile+lift. Measured before this was named:
-// 0.55m median at Noordhoek, Big Sur AND dead-flat Death Valley.
-// Was 0.12, which with the old 0.18 lift guaranteed 0.30m of daylight at every
-// kerb on dead-flat ground — a kerb, systematically, on every paved road in the
-// world. Safe to cut now for a reason that did not hold before: `groundAt` IS
-// the carved mesh, so this no longer has to cover a disagreement between the
-// closed form and the surface actually drawn. Measured at Rio before the
-// change: the ground never came within 0.31m of the tarmac at the 95th
-// percentile, so the whole budget was unused headroom.
-const CUT_CLEAR = 0.04;    // how far below the deck floor the cut plane sits
-// ── the cut, as a raster of where carriageways actually are ────────
-// This replaces a 22m flat bench, a 14m graded tail, a 32° batter, a "bed"
-// and a "hard" layer — five mechanisms that were all compensating for one
-// fact: the terrain mesh draws straight chords between vertices a cell
-// apart, so any triangle a road passes through must have ALL THREE corners
-// held below the deck or the chord over the road stands proud of it.
-//
-// The old answer clamped every point within a cell-diagonal of every kerb to
-// a flat terrace, and took the MIN across all roads in reach — which planed
-// whole junctions down to their lowest carriageway and carved a canyon
-// either side of every road (measured at Noordhoek: ground 9.5m below
-// natural, 34m from a 7m road).
-//
-// The new answer marks the lattice cells the carriageway strip actually
-// crosses, with the LOCAL deck floor of the strip in that cell. A consumer
-// asks the 3×3 neighbourhood around its point, which is precisely "could a
-// triangle through my point be crossed by that strip" — so the guarantee
-// (no chord over a deck) survives, while the clamp reaches at most two
-// cells past the kerb instead of a bench plus a tail, and the value it
-// clamps to is the nearest strip's own height rather than the minimum of
-// every road within forty metres.
 let cutL = 16;                                 // lattice spacing = the mesh cell
 const cutCells = new Map<string, Seg[]>();     // cell → the strips that cross it
 /** Mark every lattice cell a segment's carriageway strip touches. The cell
@@ -10140,40 +13053,6 @@ function rebuildCut(): void {
     if (!seen.has(sg)) { seen.add(sg); rasterizeCut(sg); }
   }
 }
-/** The deck FLOOR of a strip at the point of it nearest (x,z): profile minus
- *  the cross-fall (the tilted kerb is the lowest thing ground must respect),
- *  and the plan distance to the strip's edge. */
-function stripFloor(s: Seg, x: number, z: number): { y: number; out: number } {
-  const dx = s.bx - s.ax, dz = s.bz - s.az;
-  const t = clamp(((x - s.ax) * dx + (z - s.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
-  const px = s.ax + dx * t, pz = s.az + dz * t;
-  // THE CUT FOLLOWS THE CAMBER. This used to take `ya − |cross-fall|` — the
-  // LOWER kerb — for the whole width, which is safe and leaves a step exactly
-  // twice the cross-fall along the high side of every cambered road. Measured
-  // in flat Rio it was the largest term left in the kerb lip by some way, worth
-  // a median 0.68m against the 0.08m vertical budget. Reading the same tilted
-  // plane the deck was built on removes it and cannot expose anything: where
-  // the deck is higher, the ground under it is allowed to be higher too.
-  const l = Math.hypot(dx, dz) || 1;
-  const side = clamp(((x - px) * (-dz / l) + (z - pz) * (dx / l)) / (s.hw || 1), -1, 1);
-  const cross = ((s.ca ?? 0) + ((s.cb ?? 0) - (s.ca ?? 0)) * t) * side;
-  const fA = (s.ya as number) + (s.pc ?? 0), fB = (s.yb as number) + (s.pc ?? 0);
-  return {
-    y: fA + (fB - fA) * t + cross,
-    out: Math.hypot(x - px, z - pz) - (s.hw + 0.6),
-  };
-}
-// TWO CONSUMERS, TWO RULES — because they need different things from the
-// same raster, and the first version of this used one rule and measured the
-// consequence. The MESH needs the hard rule: every vertex within one cell of
-// a crossed cell clamps flat to that cell's deck floor, which is what makes
-// "no chord over a deck" provable, and measured ZERO breaches at four sites
-// where the old bench had six. The WHEELS need a continuous rule: the hard
-// one steps by the whole cut depth at every cell boundary, and the suspension
-// read that as a 32m teleport beside a Bormio hairpin stack. So the field
-// version grades away from the marked cells at a cut-face slope instead —
-// same raster, same values, continuous everywhere, and equal to the hard rule
-// inside the cells where the guarantee actually binds.
 const CUT_FACE = 0.62;     // rise per metre off the kerb — a ~32° cut face
 /** Gather the distinct strips indexed in the (2R+1)² cells around a point. */
 function stripsNear(x: number, z: number, R: number, into: Set<Seg>): void {
@@ -10216,10 +13095,10 @@ const cutSet = new Set<Seg>();
 // dug more than half a metre below natural within 6m of the kerb fall 61.1% to
 // 48.6%. Still a knob (`?wash=0`) — this is a judgement about looks, and looks
 // change when anything else on the verge does.
-const CUT_WASH = Number(new URLSearchParams(location.search).get('wash') ?? 0.1);
+const CUT_WASH = Number(qs('wash') ?? 0.1);
 /** The relief pass, switchable, so its cost and its benefit can both be
  *  measured against the behaviour it replaces rather than argued about. */
-const CUT_RELIEF = new URLSearchParams(location.search).get('relief') !== '0';
+const CUT_RELIEF = qs('relief') !== '0';
 /**
  * HOW BURIED IS BURIED ENOUGH TO DIG FOR.
  *
@@ -10236,7 +13115,6 @@ const CUT_RELIEF = new URLSearchParams(location.search).get('relief') !== '0';
  * So the threshold is the criterion, written as a number: below this, leave
  * the wash alone and let the ground kiss the tarmac.
  */
-const RELIEF_MIN = 0.06;
 /**
  * ── THE SLIP: erosion as PAINT, now that it is no longer geometry ──
  *
@@ -10261,26 +13139,7 @@ const RELIEF_MIN = 0.06;
  * this is trying to answer. The grit is hashed from quantised world XZ, so it
  * is stuck to the road: drive past it and it holds still, exactly like dirt.
  */
-const SLIP_K = Math.max(0, Number(new URLSearchParams(location.search).get('slip') ?? 1) || 0);
-function roadFloorHard(x: number, z: number, wash = CUT_WASH): number | null {
-  cutSet.clear();
-  stripsNear(x, z, 2, cutSet);
-  let best: number | null = null;
-  for (const sg of cutSet) {
-    const f = stripFloor(sg, x, z);
-    // A WASH, not a plane. Dead flat out to the limit of reach planes a ~21m
-    // shelf either side of every road — the mesh cell is that wide, so a kerb
-    // sample drags corners that far out — and the road then reads as a plinth
-    // with the country stepping up away from it. A gentle rise lets the ground
-    // beyond the shoulder keep its own height while the corners that actually
-    // hold the carriageway still come all the way down.
-    const y = f.y + Math.max(0, f.out) * wash;
-    if (best === null || y < best) best = y;
-  }
-  return best === null ? null : best - CUT_CLEAR;
-}
-/** The FIELD's ceiling: the same strips, graded off the kerb at the face
- *  slope so nothing the tyres ride is discontinuous. */
+const SLIP_K = Math.max(0, Number(qs('slip') ?? 1) || 0);
 function roadCeiling(x: number, z: number): number | null {
   cutSet.clear();
   stripsNear(x, z, 2, cutSet);
@@ -10315,626 +13174,20 @@ function roadCeiling(x: number, z: number): number | null {
 //
 // `?refine=0` builds the old grid and carves it, so the two can be measured
 // against each other.
-const REFINE = new URLSearchParams(location.search).get('refine') !== '0';
-const BANK_K = 0.6;         // a fill bank falls this much per metre out from the crest
-const CUTF_K = 0.62;        // a cut face rises this much per metre out — the carve's own slope
-const CUT_REACH_M = 8;      // past this an unmet cut face steps up to the hill: a wall
-const TOE_REACH = 16;       // how far out a bank or a face is looked for at all
-const DECK_GAP_T = 3;       // a crest this far above the ground is a structure: no bank
-const EARTH_T: Rgb = [0.42, 0.34, 0.26];
-/** The corridor is built into tiles this close to the truck; further out a
- *  tile keeps the plain grid and the carve, and STITCHES to any refined
- *  neighbour along their shared border. A tile that comes into range while
- *  plain is rebuilt — see flushTerrain. */
-const REFINE_R = Number(new URLSearchParams(location.search).get('refr') ?? 1100);
-/** Every tile's border vertices, world x, z, y in threes, so a neighbour can
- *  take the same points on the shared edge and no crack opens. Float64: a
- *  Float32 world x at 3.4km from the origin steps by 0.24mm, and two tiles'
- *  copies of one point rounded to different millimetre keys — no point of
- *  the owner's row matched, nothing pinned, and the audit rebuilt the
- *  follower five times a second for ever (Camps Bay, 9026/9834). */
-const refinedBorders = new Map<string, Float64Array>();
-/** A point's millimetre cell. */
-const mmKey = (x: number, z: number): string => `${Math.round(x * 1000)},${Math.round(z * 1000)}`;
-type MmPt = [number, number, number];
-/** A border row indexed by millimetre cell, and the lookup that finds a
- *  point WITHIN a millimetre rather than in exactly its cell: a world
- *  position recovered from a Float32 local one carries up to 6e-5 of error,
- *  so the same point can sit either side of a cell boundary. */
-function mmIndex(row: ArrayLike<number>): Map<string, MmPt> {
-  const m = new Map<string, MmPt>();
-  for (let i = 0; i + 2 < row.length; i += 3) m.set(mmKey(row[i], row[i + 1]), [row[i], row[i + 1], row[i + 2]]);
-  return m;
-}
-function mmNear(idx: Map<string, MmPt>, x: number, z: number, tol = 1.5e-3): MmPt | undefined {
-  const kx = Math.round(x * 1000), kz = Math.round(z * 1000);
-  const exact = idx.get(`${kx},${kz}`);
-  if (exact && Math.abs(exact[0] - x) <= tol && Math.abs(exact[1] - z) <= tol) return exact;
-  let best: MmPt | undefined, bd = tol * tol;
-  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
-    const p = idx.get(`${kx + dx},${kz + dz}`);
-    if (!p) continue;
-    const d = (p[0] - x) * (p[0] - x) + (p[1] - z) * (p[1] - z);
-    if (d < bd) { bd = d; best = p; }
-  }
-  return best;
-}
-/** Is (x, z) on the tile's boundary — one of its four edges, within it? */
-function onTileEdge(t: HeightTile, x: number, z: number): boolean {
-  const e = 1e-3;
-  if (x < t.xs - e || x > t.xs + t.w + e || z < t.zs - e || z > t.zs + t.h + e) return false;
-  return Math.abs(x - t.xs) < e || Math.abs(x - (t.xs + t.w)) < e || Math.abs(z - t.zs) < e || Math.abs(z - (t.zs + t.h)) < e;
-}
-/** Where the quiet-path border audit is in its round of the tiles. */
+const REFINE = qs('refine') !== '0';
+const REFINE_R = Number(qs('refr') ?? 1100);
 let borderAuditAt = 0;
 /** Is the road stream quiet — nothing in flight and no road landed for a
  *  breath? Not "nothing queued": a tile waiting on a retry backoff would
  *  hold every corridor off for as long as it kept failing. */
 let osmLastLand = 0;
 function osmStreamQuiet(): boolean { return osmInFlight === 0 && performance.now() - osmLastLand > 2500; }
-/** Cost of the refinement, for `__refine`. */
-const refineCost = { tiles: 0, cells: 0, tris: 0, ms: 0, plainTris: 0, verts: 0, msLines: 0, msSplit: 0, msHeights: 0, msGeo: 0 };
-
-/** How far out along (ox,oz) from a crest point (cx,cz) whose floor is y the
- *  wedge meets the ground: 0 at the crest already, CUT_REACH_M for a wall,
- *  -1 where the road stands clear of the ground (a structure: no bank). */
-function toeOut(cx: number, cz: number, ox: number, oz: number, y: number): number {
-  const N0 = sampleHeight(cx, cz);
-  if (y - N0 > DECK_GAP_T) return -1;
-  if (Math.abs(N0 - y) < 0.25) return 0;
-  const cut = N0 > y;
-  let pd = 0, pg = Math.abs(N0 - y);
-  for (let d = 0.5; d <= TOE_REACH + 1e-6; d += 0.5) {
-    const N = sampleHeight(cx + ox * d, cz + oz * d);
-    const w = cut ? y + d * CUTF_K : y - d * BANK_K;
-    const g = cut ? N - w : w - N;                 // positive while still off the ground
-    if (g <= 0) return pd + (d - pd) * (pg / (pg - g || 1));
-    if (cut && d >= CUT_REACH_M) return CUT_REACH_M;
-    pd = d; pg = g;
-  }
-  return cut ? CUT_REACH_M : -1;
-}
-interface BreakLine { ax: number; az: number; bx: number; bz: number }
-/** The break lines a strip adds to the terrain: its crest (the shoulder's
- *  outer edge) and its toe, on both sides. */
-function stripBreakLines(s: Seg): BreakLine[] {
-  if (s.bl) return s.bl;
-  const out: BreakLine[] = [];
-  s.bl = out;
-  s.reach = s.hw + 0.6;
-  if (s.tk || s.tn || s.ya === undefined || s.yb === undefined) return out;
-  const dx = s.bx - s.ax, dz = s.bz - s.az, l = Math.hypot(dx, dz);
-  if (l < 0.5) return out;
-  const nx = -dz / l, nz = dx / l;
-  const r = s.hw + 0.6;
-  // Not until the ground is there: a toe marched over a missing DEM tile is
-  // marched over zero, and it would be cached for the strip's whole life.
-  for (const side of [-1, 1]) {
-    if (!hasHeight(s.ax + nx * side * r, s.az + nz * side * r) || !hasHeight(s.bx + nx * side * r, s.bz + nz * side * r)) { s.bl = undefined; return out; }
-  }
-  // AT GRADE, NO LINES. Where the shoulder's edge meets the ground within a
-  // decimetre at both ends on both sides there is no face and no bank, and
-  // the grid corners the profile sets to the floor already hold the
-  // carriageway within that decimetre. A town's flat streets cost nothing.
-  let flat = true;
-  const crest: Array<[number, number, number, number, number, number]> = [];
-  for (const side of [-1, 1]) {
-    const ox = nx * side, oz = nz * side;
-    const cax = s.ax + ox * r, caz = s.az + oz * r, cbx = s.bx + ox * r, cbz = s.bz + oz * r;
-    const ya = stripFloor(s, cax, caz).y - CUT_CLEAR, yb = stripFloor(s, cbx, cbz).y - CUT_CLEAR;
-    if (Math.abs(ya - sampleHeight(cax, caz)) > 0.12 || Math.abs(yb - sampleHeight(cbx, cbz)) > 0.12) flat = false;
-    crest.push([cax, caz, cbx, cbz, ya, yb]);
-  }
-  if (flat) return out;
-  let far = 0;
-  for (let i = 0; i < 2; i++) {
-    const side = i === 0 ? -1 : 1, ox = nx * side, oz = nz * side;
-    const [cax, caz, cbx, cbz, ya, yb] = crest[i];
-    out.push({ ax: cax, az: caz, bx: cbx, bz: cbz });
-    const ta = toeOut(cax, caz, ox, oz, ya), tb = toeOut(cbx, cbz, ox, oz, yb);
-    if (ta < 0 || tb < 0) continue;
-    far = Math.max(far, ta, tb);
-    if (ta > 0.3 || tb > 0.3) out.push({ ax: cax + ox * ta, az: caz + oz * ta, bx: cbx + ox * tb, bz: cbz + oz * tb });
-  }
-  s.reach = r + far + 0.5;
-  return out;
-}
-/** The corridor profile at a point: the height the terrain takes there and
- *  what it is — 0 ground, 1 floor, 2 cut face, 3 fill bank. */
-function corridorH(x: number, z: number, N: number, cands?: Iterable<Seg>): { h: number; k: number } {
-  if (!cands) {
-    cutSet.clear();
-    stripsNear(x, z, Math.ceil(TOE_REACH / Math.max(1, cutL)) + 1, cutSet);
-    cands = cutSet;
-  }
-  let floor = Infinity;
-  let near: Seg | null = null, nearOut = Infinity, nearY = 0;
-  for (const s of cands) {
-    if (s.tk || s.tn || s.ya === undefined || s.yb === undefined) continue;
-    const f = stripFloor(s, x, z);
-    if (f.out <= 0) floor = Math.min(floor, f.y - CUT_CLEAR);
-    if (f.out < nearOut) { nearOut = f.out; near = s; nearY = f.y - CUT_CLEAR; }
-  }
-  if (near === null) return { h: N, k: 0 };
-  // A structure stands clear of the ground: the crest of the nearest strip,
-  // at the foot of this point, against the ground there.
-  const dx = near.bx - near.ax, dz = near.bz - near.az, l2 = dx * dx + dz * dz || 1;
-  const tt = clamp(((x - near.ax) * dx + (z - near.az) * dz) / l2, 0, 1);
-  const px = near.ax + dx * tt, pz = near.az + dz * tt, l = Math.sqrt(l2);
-  const sgn = ((x - px) * (-dz / l) + (z - pz) * (dx / l)) >= 0 ? 1 : -1;
-  const r = near.hw + 0.6;
-  const crestN = sampleHeight(px + (-dz / l) * sgn * r, pz + (dx / l) * sgn * r);
-  const structure = nearY - crestN > DECK_GAP_T;
-  if (floor < Infinity) {
-    // Under a carriageway or its shoulder: the floor. Dug to it where the
-    // ground stands above, raised to it where the ground falls away so an
-    // embankment is solid — unless the road stands clear, or this is water.
-    if (N >= floor) return { h: floor, k: 1 };
-    return structure || coverWater(x, z) ? { h: N, k: 0 } : { h: floor, k: 1 };
-  }
-  const out = nearOut;
-  if (N > nearY) {
-    const face = nearY + out * CUTF_K;
-    if (out >= CUT_REACH_M && N > face) return { h: N, k: 0 };
-    return face < N ? { h: face, k: 2 } : { h: N, k: 0 };
-  }
-  if (structure || coverWater(x, z)) return { h: N, k: 0 };
-  const bank = nearY - out * BANK_K;
-  return bank > N ? { h: bank, k: 3 } : { h: N, k: 0 };
-}
-/** The triangles of each lattice cell of a terrain geometry: `offs[c]..offs[c+1]`
- *  index triples into `tris`. Two per cell on a plain grid, any number on a
- *  refined one. Built once per geometry. */
-interface CellTris { seg: number; offs: Int32Array; tris: Int32Array }
-const cellTrisCache = new WeakMap<THREE.BufferGeometry, CellTris>();
-function cellTrisOf(geo: THREE.BufferGeometry, SEG: number): CellTris {
-  const hit = cellTrisCache.get(geo);
-  if (hit && hit.seg === SEG) return hit;
-  const idx = geo.index as THREE.BufferAttribute;
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), z = pos.getZ(i);
-    if (x < minX) minX = x; if (x > maxX) maxX = x;
-    if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-  }
-  const cw = (maxX - minX) / SEG || 1, ch = (maxZ - minZ) / SEG || 1;
-  const nT = idx.count / 3;
-  const cellOf = new Int32Array(nT);
-  const counts = new Int32Array(SEG * SEG);
-  for (let f = 0; f < nT; f++) {
-    const a = idx.getX(f * 3), b = idx.getX(f * 3 + 1), c = idx.getX(f * 3 + 2);
-    const mx = (pos.getX(a) + pos.getX(b) + pos.getX(c)) / 3 - minX;
-    const mz = (pos.getZ(a) + pos.getZ(b) + pos.getZ(c)) / 3 - minZ;
-    const ix = clamp(Math.floor(mx / cw), 0, SEG - 1), iz = clamp(Math.floor(mz / ch), 0, SEG - 1);
-    const k = iz * SEG + ix;
-    cellOf[f] = k; counts[k]++;
-  }
-  const offs = new Int32Array(SEG * SEG + 1);
-  for (let k = 0; k < SEG * SEG; k++) offs[k + 1] = offs[k] + counts[k];
-  const fill = new Int32Array(SEG * SEG);
-  const tris = new Int32Array(nT * 3);
-  for (let f = 0; f < nT; f++) {
-    const k = cellOf[f];
-    const o = (offs[k] + fill[k]++) * 3;
-    tris[o] = idx.getX(f * 3); tris[o + 1] = idx.getX(f * 3 + 1); tris[o + 2] = idx.getX(f * 3 + 2);
-  }
-  const out = { seg: SEG, offs, tris };
-  cellTrisCache.set(geo, out);
-  return out;
-}
-/** The lattice resolution a terrain geometry was built at. */
 function segOf(geo: THREE.BufferGeometry): number {
   const s = (geo.userData as { seg?: number }).seg;
   if (s) return s;
   const pos = geo.attributes.position as THREE.BufferAttribute;
   return Math.round(Math.sqrt(pos.count)) - 1;
 }
-type Poly = Array<[number, number]>;
-/** Split a convex polygon by the infinite line through a break line. Points
- *  that land on a cell boundary are recomputed from the line and the boundary
- *  coordinate, so the neighbouring cell — split by the same line, from its own
- *  pieces — arrives at the same point bit for bit. */
-function splitPoly(poly: Poly, L: BreakLine, x0: number, x1: number, z0: number, z1: number, eps: number): Poly[] {
-  const ax = L.ax, az = L.az, dx = L.bx - ax, dz = L.bz - az;
-  const n = poly.length;
-  const sd = new Float64Array(n);
-  let pos = false, neg = false;
-  for (let i = 0; i < n; i++) {
-    sd[i] = (poly[i][0] - ax) * dz - (poly[i][1] - az) * dx;
-    if (sd[i] > eps) pos = true; else if (sd[i] < -eps) neg = true;
-  }
-  if (!pos || !neg) return [poly];
-  const left: Poly = [], right: Poly = [];
-  const onX = (x: number): boolean => Math.abs(x - x0) < 1e-7 || Math.abs(x - x1) < 1e-7;
-  const onZ = (z: number): boolean => Math.abs(z - z0) < 1e-7 || Math.abs(z - z1) < 1e-7;
-  for (let i = 0; i < n; i++) {
-    const p = poly[i], q = poly[(i + 1) % n], sp = sd[i], sq = sd[(i + 1) % n];
-    if (sp >= -eps) left.push(p);
-    if (sp <= eps) right.push(p);
-    if ((sp > eps && sq < -eps) || (sp < -eps && sq > eps)) {
-      const f = sp / (sp - sq);
-      let ix = p[0] + (q[0] - p[0]) * f, iz = p[1] + (q[1] - p[1]) * f;
-      if (onX(p[0]) && onX(q[0]) && Math.abs(p[0] - q[0]) < 1e-7 && Math.abs(dx) > 1e-9) {
-        ix = p[0]; iz = az + (ix - ax) * (dz / dx);
-      } else if (onZ(p[1]) && onZ(q[1]) && Math.abs(p[1] - q[1]) < 1e-7 && Math.abs(dz) > 1e-9) {
-        iz = p[1]; ix = ax + (iz - az) * (dx / dz);
-      }
-      left.push([ix, iz]); right.push([ix, iz]);
-    }
-  }
-  const out: Poly[] = [];
-  if (left.length >= 3) out.push(left);
-  if (right.length >= 3) out.push(right);
-  return out;
-}
-/** Does a segment touch an axis-aligned box? (Liang–Barsky.) */
-function segTouchesBox(L: BreakLine, x0: number, x1: number, z0: number, z1: number): boolean {
-  const dx = L.bx - L.ax, dz = L.bz - L.az;
-  let t0 = 0, t1 = 1;
-  const clip = (p: number, q: number): boolean => {
-    if (Math.abs(p) < 1e-12) return q >= 0;
-    const r = q / p;
-    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; }
-    else { if (r < t0) return false; if (r < t1) t1 = r; }
-    return true;
-  };
-  return clip(-dx, L.ax - x0) && clip(dx, x1 - L.ax) && clip(-dz, L.az - z0) && clip(dz, z1 - L.az);
-}
-interface RefinedTile { geo: THREE.BufferGeometry; kinds: Uint8Array; cells: number; tris: number }
-/** A terrain tile with the road corridors built into its geometry, or null
- *  where no strip comes near it (a plain grid is the right answer there). */
-function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): RefinedTile | null {
-  const t0 = performance.now();
-  const cw = t.w / SEG, ch = t.h / SEG;
-  const near = new Set<Seg>();
-  const m = TOE_REACH + cutL;
-  for (let cx = Math.floor((t.xs - m) / cutL); cx <= Math.floor((t.xs + t.w + m) / cutL); cx++) {
-    for (let cz = Math.floor((t.zs - m) / cutL); cz <= Math.floor((t.zs + t.h + m) / cutL); cz++) {
-      const arr = cutCells.get(`${cx},${cz}`);
-      if (arr) for (const s of arr) if (corridor && !s.tk && !s.tn && s.ya !== undefined && s.yb !== undefined) near.add(s);
-    }
-  }
-  // THE NEIGHBOURS' BORDERS. A refined tile next door has vertices on the
-  // shared edge that this tile must share too, at its heights.
-  // A BORDER HAS ONE OWNER. Two corridor tiles computing the same border
-  // row from their own raster edges and their own line sets disagreed by up
-  // to 0.91m with 41 points missing (Vélizy, north edge) — the crack that
-  // drew as a dark line. The west and the north tile own a shared border; a
-  // corridor tile follows only the owners of its west and north edges, a
-  // plain tile follows every refined neighbour.
-  // Every tile — plain or corridor — follows the owners of its west and
-  // north edges. Reading the field "a hair inside" each tile made the two
-  // sides of a plain border read two different rasters, a DEM pixel apart,
-  // and on a Lesotho hillside that is a wall of metres along every seam
-  // (measured live at Senqu from the drone). The owner reads its own raster;
-  // the follower takes the owner's row.
-  const seeds: Array<[number, number, number]> = [];
-  let extraSeed = false;
-  for (const [dx, dy] of [[-1, 0], [0, -1]]) {
-    const nk = `${t.tx + dx}/${t.ty + dy}`;
-    const nb = refinedBorders.get(nk);
-    if (!nb) continue;
-    for (let i = 0; i < nb.length; i += 3) {
-      const x = nb[i], z = nb[i + 1];
-      // ON ONE OF MY EDGES — within my box, not merely on the edge's line.
-      // The line test took the north owner's whole east column as seeds:
-      // phantom vertices a hundred metres outside the tile, pinned, stored
-      // as this tile's border, and fanned into the corner cell's ring.
-      if (!onTileEdge(t, x, z)) continue;
-      seeds.push([x, z, nb[i + 2]]);
-      const ix = Math.round((x - t.xs) / cw), iz = Math.round((z - t.zs) / ch);
-      if (Math.abs(x - (t.xs + ix * cw)) > 1e-3 || Math.abs(z - (t.zs + iz * ch)) > 1e-3) extraSeed = true;
-    }
-  }
-  // Lattice-only seeds are pins the plain path applies itself; only a
-  // neighbour's extra edge points need the ring machinery.
-  if (!near.size && !extraSeed) return null;
-  // The break lines, and the cells each one crosses. A cell within reach of
-  // any strip is `close`: its vertices take the corridor profile, the rest
-  // take the ground and never pay for the lookup.
-  const lines: BreakLine[] = [];
-  const ordered = [...near].sort((a, b) => b.hw - a.hw);
-  for (const s of ordered) for (const L of stripBreakLines(s)) lines.push(L);
-  const cellLines = new Map<number, number[]>();
-  const close = new Uint8Array(SEG * SEG);
-  for (const s of near) {
-    const mm = (s.reach ?? s.hw + 0.6 + TOE_REACH) + 1;
-    const ix0 = Math.max(0, Math.floor((Math.min(s.ax, s.bx) - mm - t.xs) / cw)), ix1 = Math.min(SEG - 1, Math.floor((Math.max(s.ax, s.bx) + mm - t.xs) / cw));
-    const iz0 = Math.max(0, Math.floor((Math.min(s.az, s.bz) - mm - t.zs) / ch)), iz1 = Math.min(SEG - 1, Math.floor((Math.max(s.az, s.bz) + mm - t.zs) / ch));
-    for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) close[iz * SEG + ix] = 1;
-  }
-  for (let li = 0; li < lines.length; li++) {
-    const L = lines[li];
-    const ix0 = Math.max(0, Math.floor((Math.min(L.ax, L.bx) - t.xs) / cw) - 1), ix1 = Math.min(SEG - 1, Math.floor((Math.max(L.ax, L.bx) - t.xs) / cw) + 1);
-    const iz0 = Math.max(0, Math.floor((Math.min(L.az, L.bz) - t.zs) / ch) - 1), iz1 = Math.min(SEG - 1, Math.floor((Math.max(L.az, L.bz) - t.zs) / ch) + 1);
-    if (ix1 < 0 || iz1 < 0 || ix0 > SEG - 1 || iz0 > SEG - 1) continue;
-    for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) {
-      const x0 = t.xs + ix * cw, z0 = t.zs + iz * ch;
-      if (!segTouchesBox(L, x0 - 1e-6, x0 + cw + 1e-6, z0 - 1e-6, z0 + ch + 1e-6)) continue;
-      const k = iz * SEG + ix;
-      const arr = cellLines.get(k);
-      if (arr) { if (arr.length < 16) arr.push(li); } else cellLines.set(k, [li]);
-    }
-  }
-  if (!cellLines.size && !extraSeed) return null;
-  const t1 = performance.now();
-  // The strips within reach of each cell, indexed once per tile, so the
-  // height of a vertex asks a short list rather than the world's raster.
-  const cellStrips = new Map<number, Seg[]>();
-  for (const s of near) {
-    const mm = (s.reach ?? s.hw + 0.6 + TOE_REACH) + 1;
-    const ix0 = Math.max(0, Math.floor((Math.min(s.ax, s.bx) - mm - t.xs) / cw)), ix1 = Math.min(SEG - 1, Math.floor((Math.max(s.ax, s.bx) + mm - t.xs) / cw));
-    const iz0 = Math.max(0, Math.floor((Math.min(s.az, s.bz) - mm - t.zs) / ch)), iz1 = Math.min(SEG - 1, Math.floor((Math.max(s.az, s.bz) + mm - t.zs) / ch));
-    for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) {
-      const k = iz * SEG + ix;
-      const arr = cellStrips.get(k);
-      if (arr) arr.push(s); else cellStrips.set(k, [s]);
-    }
-  }
-  // The vertex pool: the grid corners first, in lattice order, then whatever
-  // the splits add, deduplicated on a millimetre key so a point two cells
-  // both produce is one vertex.
-  const px: number[] = [], pz: number[] = [];
-  const pool = new Map<string, number>();
-  // …and within a millimetre, not only in the same cell: a seed comes back
-  // from the owner's Float32 geometry up to 6e-5 off the point this tile's
-  // own split lands on, and a pair a hair apart — one pinned, one solved —
-  // is a vertical sliver with a height step, a crack along the seam.
-  const vtx = (x: number, z: number): number => {
-    const kx = Math.round(x * 1000), kz = Math.round(z * 1000);
-    const k = `${kx},${kz}`;
-    let i = pool.get(k);
-    if (i !== undefined) return i;
-    let bd = 1.5e-3 * 1.5e-3;
-    for (let dx = -1; dx <= 1 && i === undefined; dx++) for (let dz = -1; dz <= 1; dz++) {
-      if (!dx && !dz) continue;
-      const j = pool.get(`${kx + dx},${kz + dz}`);
-      if (j === undefined) continue;
-      const d = (px[j] - x) * (px[j] - x) + (pz[j] - z) * (pz[j] - z);
-      if (d < bd) { bd = d; i = j; }
-    }
-    if (i === undefined) { i = px.length; pool.set(k, i); px.push(x); pz.push(z); }
-    return i;
-  };
-  for (let iz = 0; iz <= SEG; iz++) for (let ix = 0; ix <= SEG; ix++) vtx(t.xs + ix * cw, t.zs + iz * ch);
-  const corner = (ix: number, iz: number): number => iz * (SEG + 1) + ix;
-  const pinned = new Map<number, number>();                 // vertex → the neighbour's height
-  // Extra points on cell edges, by edge, so a plain neighbour can pick them up.
-  const edgePts = new Map<string, number[]>();
-  const noteEdge = (ix: number, iz: number, x: number, z: number, x0: number, z0: number, v: number): void => {
-    const onL = Math.abs(x - x0) < 1e-6, onR = Math.abs(x - (x0 + cw)) < 1e-6;
-    const onT = Math.abs(z - z0) < 1e-6, onB = Math.abs(z - (z0 + ch)) < 1e-6;
-    if ((onL || onR) && (onT || onB)) return;                 // a corner
-    let key: string | null = null;
-    if (onL) key = `v${ix}_${iz}`; else if (onR) key = `v${ix + 1}_${iz}`;
-    else if (onT) key = `h${iz}_${ix}`; else if (onB) key = `h${iz + 1}_${ix}`;
-    if (!key) return;
-    const arr = edgePts.get(key);
-    if (arr) { if (!arr.includes(v)) arr.push(v); } else edgePts.set(key, [v]);
-  };
-  // The owners' rows along each followed edge, sorted along the edge, so a
-  // follower's OWN extra points on that edge (its lines' crossings the owner
-  // does not have) can be pinned onto the owner's polyline rather than
-  // solved apart from it — a point standing off the neighbour's straight
-  // edge by even a decimetre is a hairline of sky.
-  const ownerRows = new Map<string, Array<[number, number]>>();   // edge → [along, y]
-  const edgeOf = (x: number, z: number): string | null =>
-    Math.abs(x - t.xs) < 1e-3 ? 'W' : Math.abs(x - (t.xs + t.w)) < 1e-3 ? 'E' : Math.abs(z - t.zs) < 1e-3 ? 'N' : Math.abs(z - (t.zs + t.h)) < 1e-3 ? 'S' : null;
-  for (const [x, z, y] of seeds) {
-    const e = edgeOf(x, z);
-    if (!e) continue;
-    const arr = ownerRows.get(e) ?? ownerRows.set(e, []).get(e) as Array<[number, number]>;
-    arr.push([e === 'W' || e === 'E' ? z : x, y]);
-  }
-  for (const arr of ownerRows.values()) arr.sort((a, b) => a[0] - b[0]);
-  const ownerY = (x: number, z: number): number | undefined => {
-    const e = edgeOf(x, z);
-    if (!e) return undefined;
-    const arr = ownerRows.get(e);
-    if (!arr || arr.length < 2) return undefined;
-    const a = e === 'W' || e === 'E' ? z : x;
-    if (a < arr[0][0] - 1e-3 || a > arr[arr.length - 1][0] + 1e-3) return undefined;
-    let lo = 0, hi = arr.length - 1;
-    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (arr[mid][0] <= a) lo = mid; else hi = mid; }
-    const span = arr[hi][0] - arr[lo][0];
-    return span < 1e-9 ? arr[lo][1] : arr[lo][1] + ((a - arr[lo][0]) / span) * (arr[hi][1] - arr[lo][1]);
-  };
-  for (const [x, z, y] of seeds) {
-    // Snapped to the lattice along the border, exactly as the neighbour's
-    // own splits were, so the key matches; a lattice corner is pinned too.
-    const v = vtx(x, z);
-    pinned.set(v, y);
-    const ix = clamp(Math.round((x - t.xs) / cw), 0, SEG), iz = clamp(Math.round((z - t.zs) / ch), 0, SEG);
-    const isCorner = Math.abs(x - (t.xs + ix * cw)) < 1e-3 && Math.abs(z - (t.zs + iz * ch)) < 1e-3;
-    if (isCorner) continue;
-    if (Math.abs(x - t.xs) < 1e-3) { const jz = clamp(Math.floor((z - t.zs) / ch), 0, SEG - 1); const k = `v0_${jz}`; (edgePts.get(k) ?? edgePts.set(k, []).get(k) as number[]).push(v); }
-    else if (Math.abs(x - (t.xs + t.w)) < 1e-3) { const jz = clamp(Math.floor((z - t.zs) / ch), 0, SEG - 1); const k = `v${SEG}_${jz}`; (edgePts.get(k) ?? edgePts.set(k, []).get(k) as number[]).push(v); }
-    else if (Math.abs(z - t.zs) < 1e-3) { const jx = clamp(Math.floor((x - t.xs) / cw), 0, SEG - 1); const k = `h0_${jx}`; (edgePts.get(k) ?? edgePts.set(k, []).get(k) as number[]).push(v); }
-    else if (Math.abs(z - (t.zs + t.h)) < 1e-3) { const jx = clamp(Math.floor((x - t.xs) / cw), 0, SEG - 1); const k = `h${SEG}_${jx}`; (edgePts.get(k) ?? edgePts.set(k, []).get(k) as number[]).push(v); }
-  }
-  const TA: number[] = [], TB: number[] = [], TC: number[] = [], TK: number[] = [];
-  const tri = (a: number, b: number, c: number, k: number): void => {
-    // Wound so the normal points up: (b-a) x (c-a) has a positive y.
-    const cy = (pz[b] - pz[a]) * (px[c] - px[a]) - (px[b] - px[a]) * (pz[c] - pz[a]);
-    if (Math.abs(cy) < 1e-4) return;                            // a sliver
-    if (cy > 0) { TA.push(a); TB.push(b); TC.push(c); } else { TA.push(a); TB.push(c); TC.push(b); }
-    TK.push(k);
-  };
-  let refinedCells = 0;
-  const done = new Uint8Array(SEG * SEG);
-  const cellPolys = new Map<number, number[][]>();          // cell → polygons as vertex ids
-  for (const [k, lis] of cellLines) {
-    const ix = k % SEG, iz = (k - ix) / SEG;
-    const x0 = t.xs + ix * cw, z0 = t.zs + iz * ch, x1 = x0 + cw, z1 = z0 + ch;
-    let polys: Poly[] = [[[x0, z0], [x1, z0], [x1, z1], [x0, z1]]];
-    const eps = 1e-6 * cw;
-    for (const li of lis) {
-      const L = lines[li];
-      const next: Poly[] = [];
-      for (const p of polys) for (const q of splitPoly(p, L, x0, x1, z0, z1, eps)) next.push(q);
-      polys = next;
-    }
-    const idPolys: number[][] = [];
-    for (const p of polys) {
-      const ids = p.map(([x, z]) => vtx(x, z));
-      for (let i = 0; i < p.length; i++) noteEdge(ix, iz, p[i][0], p[i][1], x0, z0, ids[i]);
-      idPolys.push(ids);
-    }
-    cellPolys.set(k, idPolys);
-    done[k] = 1;
-    refinedCells++;
-  }
-  // T-JUNCTION REPAIR. A cell's line list is capped, and the cell next door
-  // may have kept a line this one dropped — or lie in the next tile — so a
-  // point can stand on the shared edge for one side only. Measured at
-  // Vélizy as black dashes along the horizon. Every point any neighbour put
-  // on one of this cell's edges is inserted into the side of the polygon it
-  // lies on, and the fan then gives it a triangle.
-  const onSide = (ax: number, az: number, bx: number, bz: number, x: number, z: number): boolean => {
-    const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz;
-    if (l2 < 1e-12) return false;
-    const u = ((x - ax) * dx + (z - az) * dz) / l2;
-    if (u <= 1e-6 || u >= 1 - 1e-6) return false;
-    return Math.abs((x - ax) * dz - (z - az) * dx) / Math.sqrt(l2) < 2e-3;
-  };
-  for (const [k, idPolys] of cellPolys) {
-    const ix = k % SEG, iz = (k - ix) / SEG;
-    const have = new Set<number>();
-    for (const ids of idPolys) for (const v of ids) have.add(v);
-    for (const key of [`h${iz}_${ix}`, `h${iz + 1}_${ix}`, `v${ix}_${iz}`, `v${ix + 1}_${iz}`]) {
-      const pts = edgePts.get(key);
-      if (!pts) continue;
-      for (const v of pts) {
-        if (have.has(v)) continue;
-        let placed = false;
-        for (const ids of idPolys) {
-          for (let i = 0; i < ids.length; i++) {
-            const a = ids[i], b = ids[(i + 1) % ids.length];
-            if (onSide(px[a], pz[a], px[b], pz[b], px[v], pz[v])) { ids.splice(i + 1, 0, v); placed = true; break; }
-          }
-          if (placed) break;
-        }
-        if (placed) have.add(v);
-      }
-    }
-    for (const ids of idPolys) {
-      // FROM THE CENTROID, not a vertex, where a side carries a collinear
-      // point: a fan from any vertex drops the points on its own two sides
-      // out of every triangle — a T-junction on the edge the neighbour has
-      // them on. The centroid of a convex polygon is interior, so every side
-      // is an edge of exactly one triangle and every point on it a vertex of
-      // one. A polygon whose every vertex is a true corner fans from one of
-      // them at half the triangles. Judged on the FINAL ring, after repair.
-      if (ids.length === 3) { tri(ids[0], ids[1], ids[2], k); continue; }
-      let flat = false;
-      for (let i = 0; i < ids.length && !flat; i++) {
-        const a = ids[(i + ids.length - 1) % ids.length], b = ids[i], c = ids[(i + 1) % ids.length];
-        if (Math.abs((px[b] - px[a]) * (pz[c] - pz[a]) - (pz[b] - pz[a]) * (px[c] - px[a])) < 1e-3) flat = true;
-      }
-      if (!flat) { for (let i = 1; i + 1 < ids.length; i++) tri(ids[0], ids[i], ids[i + 1], k); continue; }
-      let mx = 0, mz = 0;
-      for (const v of ids) { mx += px[v]; mz += pz[v]; }
-      const cc = vtx(mx / ids.length, mz / ids.length);
-      for (let i = 0; i < ids.length; i++) tri(cc, ids[i], ids[(i + 1) % ids.length], k);
-    }
-  }
-  // The plain cells: two triangles, or a fan round a ring that takes in
-  // whatever points its neighbours put on the shared edges.
-  const along = (key: string): number[] => {
-    const arr = edgePts.get(key);
-    if (!arr) return [];
-    const horiz = key[0] === 'h';
-    return arr.slice().sort((a, b) => (horiz ? px[a] - px[b] : pz[a] - pz[b]));
-  };
-  for (let iz = 0; iz < SEG; iz++) for (let ix = 0; ix < SEG; ix++) {
-    const k = iz * SEG + ix;
-    if (done[k]) continue;
-    const c00 = corner(ix, iz), c10 = corner(ix + 1, iz), c11 = corner(ix + 1, iz + 1), c01 = corner(ix, iz + 1);
-    const top = along(`h${iz}_${ix}`), right = along(`v${ix + 1}_${iz}`), bottom = along(`h${iz + 1}_${ix}`), left = along(`v${ix}_${iz}`);
-    if (!top.length && !right.length && !bottom.length && !left.length) {
-      tri(c00, c10, c11, k); tri(c00, c11, c01, k);
-      continue;
-    }
-    const ring = [c00, ...top, c10, ...right, c11, ...bottom.reverse(), c01, ...left.reverse()];
-    // From the cell's centre, for the same reason the polygons fan from theirs.
-    const cc = vtx(t.xs + (ix + 0.5) * cw, t.zs + (iz + 0.5) * ch);
-    for (let i = 0; i < ring.length; i++) tri(cc, ring[i], ring[(i + 1) % ring.length], k);
-  }
-  const t2 = performance.now();
-  // Heights and kinds: the corridor profile where a strip is close, the
-  // ground elsewhere. The sea floor rule is the same one the plain build uses.
-  const n = px.length;
-  const pos = new Float32Array(n * 3), uv = new Float32Array(n * 2);
-  const kinds = new Uint8Array(n);
-  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
-  const seaLocal = seaSurfaceAbs() - baseElev;
-  const candsAt = (x: number, z: number): Seg[] | null => {
-    const ix = clamp(Math.floor((x - t.xs) / cw), 0, SEG - 1), iz = clamp(Math.floor((z - t.zs) / ch), 0, SEG - 1);
-    if (!close[iz * SEG + ix]) return null;
-    return cellStrips.get(iz * SEG + ix) ?? null;
-  };
-  // THE FIELD, READ INSIDE THIS TILE'S OWN BOX. A vertex exactly on the
-  // border is outside the tile's half-open box, so `sampleHeight` looks to the
-  // neighbour — and answers ZERO while the neighbour's DEM has not loaded.
-  // Stored as this tile's border, pinned into the neighbour when it built,
-  // and taken back as a seed when this tile rebuilt, that zero lived for
-  // ever: measured at Vélizy as border vertices 18m and 89m off the field
-  // with the row inside within 3m, and drawn as the dark line along every
-  // tile edge. Clamped a hair inside, the read is this tile's raster, which
-  // is loaded by construction.
-  // …BUT AT THE EXACT EDGE WHERE THE FIELD HAS A TILE. Clamping inside
-  // unconditionally made the two sides of a plain border read two rasters a
-  // DEM pixel apart — a wall of metres along every seam on a hillside (Senqu,
-  // from the drone). The half-open tile box hands a border point to ONE
-  // raster for both sides; only where that raster is missing does the read
-  // fall back inside this tile, and the owner's row then pins the follower.
-  const fieldAt = (x: number, z: number): number => hasHeight(x, z) ? sampleHeight(x, z)
-    : sampleHeight(clamp(x, t.xs + 1e-4, t.xs + t.w - 1e-4), clamp(z, t.zs + 1e-4, t.zs + t.h - 1e-4));
-  for (let i = 0; i < n; i++) {
-    const x = px[i], z = pz[i];
-    let N = fieldAt(x, z);
-    if (sampleCover(x, z) === COVER.water && N <= seaLocal + 2) N = Math.min(N, seaLocal - SEA_BED);
-    let h = N, k = 0;
-    const pin = pinned.get(i) ?? ownerY(x, z);
-    if (pin !== undefined) h = pin;
-    else {
-      const cands = candsAt(x, z);
-      if (cands) { const c = corridorH(x, z, N, cands); h = c.h; k = c.k; }
-    }
-    pos[i * 3] = x - cxm; pos[i * 3 + 1] = h; pos[i * 3 + 2] = z - czm;
-    uv[i * 2] = 0.5 + (x - cxm) / t.w; uv[i * 2 + 1] = 0.5 - (z - czm) / t.h;
-    kinds[i] = k;
-  }
-  const t3 = performance.now();
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  const idx = new Uint32Array(TA.length * 3);
-  for (let f = 0; f < TA.length; f++) { idx[f * 3] = TA[f]; idx[f * 3 + 1] = TB[f]; idx[f * 3 + 2] = TC[f]; }
-  geo.setIndex(new THREE.BufferAttribute(idx, 1));
-  // The cell table, straight from the emitter — no need to rediscover it.
-  const counts = new Int32Array(SEG * SEG);
-  for (let f = 0; f < TK.length; f++) counts[TK[f]]++;
-  const offs = new Int32Array(SEG * SEG + 1);
-  for (let k = 0; k < SEG * SEG; k++) offs[k + 1] = offs[k] + counts[k];
-  const fill = new Int32Array(SEG * SEG), tris = new Int32Array(TK.length * 3);
-  for (let f = 0; f < TK.length; f++) {
-    const o = (offs[TK[f]] + fill[TK[f]]++) * 3;
-    tris[o] = TA[f]; tris[o + 1] = TB[f]; tris[o + 2] = TC[f];
-  }
-  cellTrisCache.set(geo, { seg: SEG, offs, tris });
-  (geo.userData as { seg?: number }).seg = SEG;
-  const t4 = performance.now();
-  refineCost.tiles++; refineCost.cells += refinedCells; refineCost.tris += TA.length; refineCost.verts += n;
-  refineCost.plainTris += SEG * SEG * 2; refineCost.ms += t4 - t0;
-  refineCost.msLines += t1 - t0; refineCost.msSplit += t2 - t1; refineCost.msHeights += t3 - t2; refineCost.msGeo += t4 - t3;
-  return { geo, kinds, cells: refinedCells, tris: TA.length };
-}
-/** A tile's normal map along its four edges against the row just inside:
- *  the mean angle between them, degrees. A seam in the lighting is a number
- *  here before it is a line on the chart. Also the vertex colour on the
- *  border against one lattice row in. */
 (window as unknown as { __nrmEdge?: object }).__nrmEdge = (x?: number, z?: number): object | null => {
   const px = x ?? state.x, pz = z ?? state.z;
   const [tx, ty] = tileAt(origin.lat - pz / M_LAT, origin.lon + px / origin.mLon, TERRAIN_Z);
@@ -11069,8 +13322,72 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
   }
   return out;
 };
-(window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost });
+/** The kernel's lattice against THREE's PlaneGeometry, and a build scanned
+ *  for non-finite numbers — the two ways the split could silently break. */
+(window as unknown as { __kernelCheck?: object }).__kernelCheck = (): object => {
+  const t = heightTiles.get(`${tileAt(origin.lat - state.z / M_LAT, origin.lon + state.x / origin.mLon, TERRAIN_Z).join('/')}`) ?? [...heightTiles.values()][0];
+  if (!t) return { err: 'no tile' };
+  const SEG = terrainSeg;
+  const g = new THREE.PlaneGeometry(t.w, t.h, SEG, SEG); g.rotateX(-Math.PI / 2);
+  const L = plainLattice(t, SEG);
+  const gp = (g.attributes.position as THREE.BufferAttribute).array as Float32Array, gi = (g.index as THREE.BufferAttribute).array;
+  let dp = 0; for (let i = 0; i < gp.length; i++) dp = Math.max(dp, Math.abs(gp[i] - L.pos[i]));
+  let di = 0; for (let i = 0; i < gi.length; i++) if (gi[i] !== L.idx[i]) di++;
+  const gu = (g.attributes.uv as THREE.BufferAttribute).array as Float32Array; let du = 0; for (let i = 0; i < gu.length; i++) du = Math.max(du, Math.abs(gu[i] - L.uv[i]));
+  const b = K.buildTile(kStore, t, SEG, false, REFINE);
+  const bad = (a: Float32Array): number => { let n = 0; for (let i = 0; i < a.length; i++) if (!Number.isFinite(a[i])) n++; return n; };
+  const mesh = terrainMeshes.get(`${t.tx}/${t.ty}`);
+  const mp = mesh ? (mesh.geometry.attributes.position as THREE.BufferAttribute).array as Float32Array : null;
+  return { key: `${t.tx}/${t.ty}`, seg: SEG, nPlane: gp.length / 3, nLattice: L.pos.length / 3, maxPosDiff: dp, idxDiffs: di, maxUvDiff: du, idxLen: [gi.length, L.idx.length],
+    nanPos: bad(b.pos), nanCol: bad(b.colors), nanNrm: bad(b.normals), nanUv: bad(b.uv), meshNan: mp ? bad(mp) : null, meshN: mp ? mp.length / 3 : null,
+    y0: b.pos[1], yMid: b.pos[Math.floor(b.pos.length / 6) * 3 + 1], ground: groundAt(state.x, state.z), meshAt: meshSurfaceAt(state.x, state.z),
+    state: [state.x, state.z, state.heading, state.speed].map((v) => Number.isFinite(v) ? +v.toFixed(2) : String(v)), builds: terrainBuilds };
+};
+/** Where the first non-finite number comes from: the ground reads at a
+ *  finite point, every layer of the fallback separately. */
+(window as unknown as { __nanWhere?: object }).__nanWhere = (x = 0, z = 0): object => {
+  const f = (v: unknown): unknown => typeof v === 'number' ? (Number.isFinite(v) ? +v.toFixed(3) : String(v)) : v;
+  return { has: hasHeight(x, z), sh: f(sampleHeight(x, z)), shRaw: f(sampleHeightRaw(x, z)), ceiling: f(roadCeiling(x, z)), floorHard: f(roadFloorHard(x, z)),
+    mesh: f(meshSurfaceAt(x, z)), ground: f(groundAt(x, z)), baseElev: f(baseElev), sea: f(seaSurfaceAbs()), cutL: f(cutL), grid: f(GRID),
+    tiles: heightTiles.size, meshes: terrainMeshes.size, strips: cutCells.size, cover: sampleCover(x, z), water: coverWater(x, z),
+    corridorH: f(corridorH(x, z, 0).h), tint: areaTintAt(x, z), pal: terrainPalette(0, 0, null, x, z).map(f),
+    edge: (() => { const e = roadEdge(x, z); return e ? { y: f(e.y), out: f(e.out), track: e.track } : null; })(), surf: surfaceAt(x, z), rough: f(roughNoise(x, z)),
+    tyre: f(tyreHeight(x, z, surfaceAt(x, z), groundAt(x, z))), depth: f(waterInfoAt(x, z).depth), seaY: f(seaLevelY()), lift: f(SURFACE.ground.lift) };
+};
+(window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost, plain: { ...plainCost } });
 (window as unknown as { __buildLog?: object }).__buildLog = (): object => buildLog.slice();
+/**
+ * THE STREAM, LAYER BY LAYER: what each asked for and in what order against
+ * the truck's distance and heading, how many times each terrain tile has
+ * been built and why, and what the last build's re-drape had to visit. The
+ * instrument for "did it load the sea before the road ahead" — the overlay
+ * shows the picture, this gives the ranks.
+ */
+(window as unknown as { __streamAudit?: object }).__streamAudit = (): object => {
+  const dist = (x: number, z: number): number => Math.round(Math.hypot(x - state.x, z - state.z));
+  const aheadOf = (x: number, z: number): boolean => (x - state.x) * osmFwdX + (z - state.z) * osmFwdZ > 0;
+  const order = (l: Array<{ key: string; at: number; x: number; z: number }>): object[] =>
+    l.map((f) => ({ key: f.key, at: f.at, d: dist(f.x, f.z), ahead: aheadOf(f.x, f.z) }));
+  const now = performance.now();
+  return {
+    terrain: {
+      tiles: terrainMeshes.size, builds: terrainBuilds, byWhy: { ...buildWhy },
+      perTile: [...buildCount].map(([key, n]) => ({ key, n })).sort((a, b) => b.n - a.n).slice(0, 10),
+      firstOrder: order(firstBuilt), fetchOrder: order(firstFetched),
+      dirty: terrainDirty.size, held: [...terrainDirty].filter((k) => heldWay(k, now)).length,
+    },
+    osm: {
+      ask: osmAsk.map((a) => {
+        const i = a.k.indexOf('/');
+        const [cx, cz] = tileCentreLocal(Number(a.k.slice(0, i)), Number(a.k.slice(i + 1)));
+        return { k: a.k, d: dist(cx, cz), ahead: a.ahead, cost: Math.round(wedgeCost(cx, cz)) };
+      }),
+      done: osmDone.size, inFlight: osmInFlight, queued: osmQueue.length,
+    },
+    far: { level: farZ, tiles: farMeshes.size, asked: farTiles.size, fetchOrder: order(farFetched) },
+    drapes: { drapes: terrainScan.drapes, ofDrapes: terrainScan.ofDrapes },
+  };
+};
 /** borderShared, shown its working: the neighbour's box, how many of this
  *  tile's points fell in it, and the first point that failed. */
 (window as unknown as { __bs?: object }).__bs = (key: string, nk: string): object | null => {
@@ -11139,237 +13456,7 @@ let NODRAW = /[?&]nodraw=1/.test(location.search);
  *  drawing, and the frames it does paint are the ones it keeps. */
 (window as unknown as { __draw?: object }).__draw = (on: boolean): boolean => { NODRAW = !on; return !NODRAW; };
 // s = [px, pz, tgt, meshBefore, field, offsetIndex]; v = [x, z, yBefore, yAfter]
-interface CarveLog { s: number[][]; v: number[][] }
 const carveLog = new Map<string, CarveLog>();
-/** Rolling carve cost, so the relief pass's price is a number and not a shrug:
- *  [tiles carved, total ms, tiles that needed relief]. */
-const carveCost = { tiles: 0, ms: 0, relieved: 0 };
-function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): void {
-  const t0 = performance.now();
-  const cell = t.w / SEG;
-  const ct = cellTrisOf(geo, SEG);
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  // Strips overlapping the tile. cutL IS the mesh cell, so the raster's own
-  // index is the right thing to walk — no geometry test needed to gather.
-  const near = new Set<Seg>();
-  const cx0 = Math.floor(t.xs / cutL) - 1, cx1 = Math.floor((t.xs + t.w) / cutL) + 1;
-  const cz0 = Math.floor(t.zs / cutL) - 1, cz1 = Math.floor((t.zs + t.h) / cutL) + 1;
-  for (let cx = cx0; cx <= cx1; cx++) {
-    for (let cz = cz0; cz <= cz1; cz++) {
-      const arr = cutCells.get(`${cx},${cz}`);
-      if (arr) for (const s of arr) near.add(s);
-    }
-  }
-  if (!near.size) return;
-  // HOW DEEP THIS VERTEX IS ALLOWED TO BE DUG.
-  //
-  // The carve satisfies a constraint at a point INSIDE a triangle by lowering
-  // all three corners, and a mesh cell is ~21m while a road is 7m wide — so
-  // corners far out in the field were being dragged down to hold a kerb sample.
-  // Measured beside the road in flat Rio: the deck sat 0.04m over natural
-  // ground (i.e. flush, its lift and no more) while the MESH sat 0.63m under
-  // it. All of the kerb step was excavation, none of it was the road.
-  //
-  // A vertex may be taken down to the DECK FLOOR of the road it is serving —
-  // `roadFloorHard`, the corridor rule without the batter's climb — and never
-  // below the ground the world put there. Not `roadCeiling`: that lets the
-  // ground rise away from the kerb, which is right for a field and disastrous
-  // as a digging limit, because the chord from a vertex standing proud bridges
-  // the carriageway. Computed lazily: only the handful of vertices a deck
-  // sample actually touches ever need it.
-  const lim = new Float32Array(pos.count);
-  const limDone = new Uint8Array(pos.count);
-  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
-  const limBase = (v: number): number => {
-    if (!limDone[v]) {
-      limDone[v] = 1;
-      const c = roadFloorHard(pos.getX(v) + cxm, pos.getZ(v) + czm);
-      lim[v] = c === null ? -Infinity : Math.min(pos.getY(v), c);
-    }
-    return lim[v];
-  };
-  // ── THE WASH YIELDS TO THE ROAD ────────────────────────────────────
-  //
-  // CUT_WASH lets the floor climb away from the kerb so a road is not a flat
-  // 21m shelf, and it was tuned at Noordhoek with the cost written down and
-  // accepted: "terrain through the tarmac 13.5%, p95 0.09m — pokes that are
-  // centimetres, which do not read at all". That reasoning is sound on gentle
-  // ground and fails completely on steep, and the failure is arithmetic rather
-  // than bad luck. The wash's cap on a corner is its LEVER ARM times 0.1, the
-  // lever arm is set by the mesh cell (~21m, fixed) and not by the terrain, and
-  // the drop a corner needs is set by the RELIEF. Flat country needs almost no
-  // drop so the cap never binds; a road cut into a hillside needs a metre and
-  // the cap forbids 0.9 of it. Measured on the Wadi Rum road the report came
-  // from: 19 of 36 samples with ground through the tarmac by 8–24cm, and all
-  // three corners of every offending triangle sitting exactly on their limit.
-  // The carve was not undershooting. It was caged.
-  //
-  // So the wash stops being a floor and becomes a PREFERENCE. The normal
-  // passes respect it; if they finish with the deck still buried, a relief
-  // pass re-runs with the wash removed — the bare deck floor, which is what
-  // this limit was before the wash existed. Only vertices that would otherwise
-  // bury a road move, so ground that never needed the excavation never gets
-  // it, and Noordhoek's verge is untouched.
-  const lim2 = new Float32Array(pos.count);
-  const lim2Done = new Uint8Array(pos.count);
-  let relief = false;
-  const limOf = (v: number): number => {
-    const base = limBase(v);
-    if (!relief) return base;
-    if (!lim2Done[v]) {
-      lim2Done[v] = 1;
-      const c = roadFloorHard(pos.getX(v) + cxm, pos.getZ(v) + czm, 0);
-      // NEVER ABOVE THE BASE LIMIT. limOf is used through Math.max, so a limit
-      // that came out higher than the vertex would RAISE ground — and `base`
-      // already carries the "no deeper than natural" rule that keeps a sea bed
-      // a sea bed.
-      lim2[v] = c === null ? base : Math.min(base, c);
-    }
-    return lim2[v];
-  };
-  let recPass = 0, recOff = 0;
-  /** Did the last pass leave a deck buried? The relief pass is only worth its
-   *  cost where it has something to do, which on gentle ground is nowhere. */
-  let buried = false;
-  const log: CarveLog | null = CPROBE ? { s: [], v: [] } : null;
-  if (log) carveLog.set(`${t.tx}/${t.ty}`, log);
-  const enforce = (px: number, pz: number, tgt: number): void => {
-    const fx = (px - t.xs) / cell, fz = (pz - t.zs) / cell;
-    if (fx < 0 || fz < 0 || fx >= SEG || fz >= SEG) return;
-    const kc = Math.floor(fz) * SEG + Math.floor(fx);
-    for (let h = ct.offs[kc]; h < ct.offs[kc + 1]; h++) {
-      const a = ct.tris[h * 3], b = ct.tris[h * 3 + 1], c = ct.tris[h * 3 + 2];
-      // Barycentric in the XZ plane. Local coords, so shift the sample too.
-      const ax = pos.getX(a) + t.xs + t.w / 2, az = pos.getZ(a) + t.zs + t.h / 2;
-      const bx = pos.getX(b) + t.xs + t.w / 2, bz = pos.getZ(b) + t.zs + t.h / 2;
-      const cx = pos.getX(c) + t.xs + t.w / 2, cz = pos.getZ(c) + t.zs + t.h / 2;
-      const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
-      if (Math.abs(d) < 1e-9) continue;
-      const w1 = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / d;
-      const w2 = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / d;
-      const w3 = 1 - w1 - w2;
-      if (w1 < -1e-6 || w2 < -1e-6 || w3 < -1e-6) continue;   // not this half
-      const cur = w1 * pos.getY(a) + w2 * pos.getY(b) + w3 * pos.getY(c);
-      // Recorded on the first pass only, and BEFORE the early-out, so the
-      // samples that needed nothing are counted too — the denominator is the
-      // whole point.
-      if (log && recPass === 0) log.s.push([px, pz, tgt, cur, sampleHeight(px, pz), recOff]);
-      const over = cur - tgt;
-      if (over <= (relief ? RELIEF_MIN : 0)) return;
-      // WHICH CORNER PAYS. Any set of drops with Σ wᵢ·dropᵢ = over satisfies the
-      // constraint exactly; the family dropᵢ = over·wᵢᵏ / Σwᵢᵏ⁺¹ does so for
-      // every k, and k picks how the bill is split. k=1 is least squares — the
-      // smallest total movement — and it is what spread the excavation into the
-      // field: a mesh cell is ~16m and a road 7m, so a corner ten metres out in
-      // the grass carries a real share of every kerb sample and takes a real
-      // share of every correction. Measured at Noordhoek under k=1: vertices
-      // 5–12m past the kerb dropped a median 0.19m and 12–25m out up to 1.3m,
-      // and the ground half a metre outside the tarmac ended 0.45m below the
-      // height the world gives it — which is not a road on a plinth, it is a
-      // trench around a road that never moved.
-      //
-      // k=2 bills by wᵢ² instead. A corner under the carriageway pays more, a
-      // corner out in the field pays almost nothing, and the constraint is
-      // satisfied just as exactly. Digging deeper next to the road is free: the
-      // tarmac and its apron cover it, and `limOf` still refuses to take any
-      // vertex below the deck floor it is serving, so concentrating the drop
-      // cannot dig a pit — it just stops the hole reaching the grass.
-      const norm = w1 * w1 * w1 + w2 * w2 * w2 + w3 * w3 * w3;
-      if (norm < 1e-9) return;
-      if (relief) {
-        // GREEDY, NEAREST CORNER FIRST — not the w² share.
-        //
-        // Relief lifts the wash cap, and spreading the bill by w² then let
-        // every corner of the triangle take some of it uncapped: measured at
-        // Noordhoek, the ground beside the road went from 0.05m under natural
-        // to 0.25m (p95 0.47m to 1.19m), which is the excavated bench the wash
-        // was introduced to kill. The share rule is right for the normal pass,
-        // where the cap bounds the damage; with the cap gone it is the damage.
-        //
-        // So relief bills the corner with the LARGEST weight — the one under
-        // the carriageway, where tarmac and apron cover the hole — until it is
-        // exhausted, and only then spills outward. Σwᵢ·dropᵢ = over still holds
-        // exactly whenever the capacity is there; what changes is that a corner
-        // out in the grass is paid last instead of first.
-        let rem = over;
-        const ord: Array<[number, number]> = [[a, w1], [b, w2], [c, w3]];
-        ord.sort((p, q) => q[1] - p[1]);
-        for (const [v, w] of ord) {
-          if (rem <= 1e-6 || w <= 1e-6) break;
-          const can = Math.min(rem / w, pos.getY(v) - limOf(v));
-          if (can > 0) { pos.setY(v, pos.getY(v) - can); rem -= can * w; }
-        }
-        return;
-      }
-      pos.setY(a, Math.max(limOf(a), pos.getY(a) - (over * w1 * w1) / norm));
-      pos.setY(b, Math.max(limOf(b), pos.getY(b) - (over * w2 * w2) / norm));
-      pos.setY(c, Math.max(limOf(c), pos.getY(c) - (over * w3 * w3) / norm));
-      // DID IT ACTUALLY LAND? The drops are clamped by limOf, so a caged corner
-      // silently pays less than its share and the deck stays buried. Asking the
-      // residual is exact and costs three lookups — the alternative, treating
-      // "some sample was over at the start of the last pass" as the signal,
-      // fires on every road that merely needed two passes.
-      if (recPass === 2
-        && w1 * pos.getY(a) + w2 * pos.getY(b) + w3 * pos.getY(c) - tgt > RELIEF_MIN) buried = true;
-      return;
-    }
-  };
-  // Three passes now, not two: a vertex shared by several deck samples wants
-  // the deepest of them, and with the floor above a corner that hits its limit
-  // cannot take its share of a correction — so the remainder has to find its
-  // way onto the corners that still can, which takes another sweep.
-  const y0 = CPROBE ? Float32Array.from({ length: pos.count }, (_, i) => pos.getY(i)) : null;
-  // Three normal passes, then — only where they were not enough — two more
-  // with the wash lifted. Five in the worst case and three in the common one.
-  for (let pass = 0; pass < 5; pass++) {
-    if (pass === 3) {
-      if (!buried || !CUT_RELIEF) break;
-      relief = true;
-    }
-    recPass = pass;
-    for (const s of near) {
-      const len = Math.hypot(s.bx - s.ax, s.bz - s.az);
-      const steps = Math.max(1, Math.ceil(len / (cell * 0.3)));
-      const ux = (s.bx - s.ax) / (len || 1), uz = (s.bz - s.az) / (len || 1);
-      for (let i = 0; i <= steps; i++) {
-        const u = i / steps;
-        const px = s.ax + (s.bx - s.ax) * u, pz = s.az + (s.bz - s.az) * u;
-        const f = stripFloor(s, px, pz);
-        const tgt = f.y - CUT_CLEAR;
-        // Centreline and both kerbs, plus a touch beyond, so the shoulder the
-        // apron sits on is held down too.
-        const offs = [0, -s.hw, s.hw, -(s.hw + 0.6), s.hw + 0.6];
-        for (let o = 0; o < offs.length; o++) {
-          recOff = o;
-          enforce(px - uz * offs[o], pz + ux * offs[o], tgt);
-        }
-      }
-    }
-  }
-  if (y0 && log) {
-    for (let i = 0; i < pos.count; i++) {
-      if (y0[i] - pos.getY(i) > 1e-4) {
-        log.v.push([pos.getX(i) + cxm, pos.getZ(i) + czm, y0[i], pos.getY(i)]);
-      }
-    }
-  }
-  carveCost.tiles++;
-  carveCost.ms += performance.now() - t0;
-  if (relief) carveCost.relieved++;
-}
-/**
- * THE RENDERED SURFACE, read analytically from the triangles it was built from.
- *
- * The same barycentric lookup `carveCorridors` uses to enforce its constraint,
- * run in reverse: locate the tile, the lattice cell, the half of that cell, and
- * interpolate. `meshHeightAt` answers the same question with a raycast against
- * every terrain mesh in the world, which is fine for a probe and hopeless on a
- * path the sward walks thousands of times a pass.
- */
-/** The three corners of the terrain triangle under a point, in world coords —
- *  the same lattice walk meshSurfaceAt does, stopping one step earlier. Probe
- *  only: a proud vertex is a claim about a TRIANGLE, and answering it with an
- *  interpolated height cannot say which corner is at fault or why. */
 function meshTriAt(x: number, z: number): Array<{ x: number; y: number; z: number }> | null {
   const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
   const key = `${tx}/${ty}`;
@@ -11452,6 +13539,29 @@ function meshSurfaceAt(x: number, z: number): number | null {
  * closed form remains as the fallback for ground no mesh has been built for
  * yet — beyond the near tiles, or in the moment before a dirtied tile rebuilds.
  */
+/** meshSurfaceAt, showing its working — for the NaN tracer. */
+function meshDiag(x: number, z: number): Record<string, unknown> {
+  const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
+  const key = `${tx}/${ty}`;
+  const mesh = terrainMeshes.get(key), t = heightTiles.get(key);
+  if (!mesh || !t) return { key, mesh: !!mesh, tile: !!t };
+  const geo = mesh.geometry;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const SEG = segOf(geo);
+  const cell = t.w / SEG, cellH = t.h / SEG;
+  const fx = (x - t.xs) / cell, fz = (z - t.zs) / cellH;
+  const ct = cellTrisOf(geo, SEG);
+  const kc = Math.floor(fz) * SEG + Math.floor(fx);
+  const ox = t.xs + t.w / 2, oz = t.zs + t.h / 2;
+  const tris: number[] = [], pts: number[] = [], ds: number[] = [];
+  for (let h = ct.offs[kc]; h < ct.offs[kc + 1]; h++) {
+    const a = ct.tris[h * 3], b = ct.tris[h * 3 + 1], c = ct.tris[h * 3 + 2];
+    tris.push(a, b, c);
+    pts.push(pos.getX(a) + ox, pos.getZ(a) + oz, pos.getY(a), pos.getX(b) + ox, pos.getZ(b) + oz, pos.getY(b), pos.getX(c) + ox, pos.getZ(c) + oz, pos.getY(c));
+    ds.push((pos.getZ(b) + oz - (pos.getZ(c) + oz)) * (pos.getX(a) + ox - (pos.getX(c) + ox)) + (pos.getX(c) + ox - (pos.getX(b) + ox)) * (pos.getZ(a) + oz - (pos.getZ(c) + oz)));
+  }
+  return { key, dirty: terrainDirty.has(key), seg: SEG, count: pos.count, fx, fz, kc, offs: [ct.offs[kc], ct.offs[kc + 1]], offsLen: ct.offs.length, trisLen: ct.tris.length, tris, pts, ds, arr: pos.array.constructor.name, arrLen: pos.array.length };
+}
 function groundAt(x: number, z: number): number {
   const m = meshSurfaceAt(x, z);
   if (m !== null) {
@@ -11493,16 +13603,40 @@ const apron = {
  * once the ribbons stand, and each node boxed once.
  */
 interface JuncArm { ux: number; uz: number; hw: number; dk: string }
-const juncNodes = new Map<string, { x: number; z: number; arms: JuncArm[] }>();
+interface JuncNode { x: number; z: number; arms: JuncArm[] }
+const juncNodes = new Map<string, JuncNode>();
+/**
+ * …AND KEPT WHERE A KERB BAY CAN FIND THEM. `juncNodes` is cleared with each
+ * batch; this grid keeps every node ever registered, by cell, because the
+ * parapet rule (roadMeetsHere) asks "is there a turning here" at the moment
+ * the HOST's bay is built — which is before a narrower joiner in the same
+ * batch has built (a batch builds widest first), before the planner has
+ * pinned the node (a crumb has no chain, and a chain solves asynchronously),
+ * and sometimes a batch earlier. Measured at Simon's Town: four parapets
+ * across the mouths of Flagship Road, Living Waters Close, Church Street and
+ * Blacks Lane — each the host's own kerb rail run in from both sides to meet
+ * in the middle of the turning — three at nodes the planner never pinned and
+ * one it pinned after Runciman Drive had built. OSM's topology said there was
+ * a turning before any of it built; this is where that is kept.
+ */
+const juncNodeGrid = new Map<string, JuncNode[]>();
 const juncBoxed = new Set<string>();
 const spanStats = {
-  piers: 0, arches: 0, railM: 0, deckM: 0, signs: 0, signRefused: 0, maxDaylight: 0, cats: 0, posts: 0,
+  piers: 0, pierRefused: 0, arches: 0, archRefused: 0, galleryRefused: 0,
+  recipes: {} as Record<string, number>,
+  railM: 0, deckM: 0, signs: 0, signRefused: 0, maxDaylight: 0, cats: 0, posts: 0,
   // Why a kerb quad did or did not get a batter — one counter per branch, so
   // "the fill stops halfway along this road" is attributable rather than argued.
   fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillCap: 0,
   /** Kerbs the stranded sweep rescued: parked against a tile that was
    *  already settled and would never have rebuilt to collect them. */
   fillStranded: 0,
+  /** Kerbs on a tile that carries its corridor — the wedge is the mesh, so no
+   *  strip — and strips taken down when their tile took its corridor. */
+  fillCorridor: 0, fillDropped: 0,
+  /** Bays parked because the ground beyond their kerb is not loaded yet —
+   *  see the unknown-ground rule in flushBatter. Counted per attempt. */
+  fillUnknown: 0,
   /** Worst mitre stretch on the carriageway, as a multiple of the nominal
    *  half-width — how far the drawn kerb runs outside `Seg.hw` at the sharpest
    *  corner in the world. 1 is a straight road; the mitre is capped at 2.4. */
@@ -11556,7 +13690,12 @@ interface Batter { ax: number; az: number; bx: number; bz: number;
   /** Nothing adjoins this end — the run starts or stops here, so the earth
    *  needs a face rather than an open edge. */
   capA: boolean; capB: boolean;
-  fid: number; nm?: string; rail: boolean }
+  fid: number; nm?: string; rail: boolean;
+  /** The first step out from the kerb that had NO HEIGHT TILE under it, and
+   *  how many height tiles the world held when that was found — the bay is
+   *  parked on that point and only looked at again once a tile has landed
+   *  somewhere. See the unknown-ground rule in flushBatter. */
+  waitX?: number; waitZ?: number; waitTiles?: number }
 const pendingBatter: Batter[] = [];
 /**
  * WHAT HAPPENED AT EVERY KERB, so "batter or rail, consistently" is a claim
@@ -11666,6 +13805,52 @@ function preEdge(x: number, z: number, notKey?: string): { out: number; track: b
   }
   return best;
 }
+
+/**
+ * THE ROAD'S AIRSPACE IS RESERVED BEFORE STRUCTURES ARE DECORATED.
+ *
+ * A flyover's deck clearance was solved against lower roads, but its supports
+ * were placed later from a blind 26m counter. At an interchange that counter
+ * could put a pier on the lower carriageway; the arch hung between consecutive
+ * piers just as blindly. Galleries repeated the same fault with their open-side
+ * columns. Checking only roadGrid is not enough: higher layers deliberately
+ * build first, so the road underneath may not exist there yet. preRoadGrid
+ * contains every way in this batch before any of them builds and makes the veto
+ * independent of build order.
+ *
+ * This is deliberately a PLANAR veto. A support occupying a road corridor is
+ * refused whatever the layers claim; there is no useful case where a solid
+ * column through a carriageway becomes correct because another deck is higher.
+ * The current way is excluded by stable way identity (and fragment id for the
+ * built grid), because every legitimate support necessarily stands beneath it.
+ */
+function structureFootprintClear(x: number, z: number, radius: number, ownFid?: number, ownKey?: string): boolean {
+  for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
+    if (ownFid !== undefined && seg.fd === ownFid) continue;
+    if (ownKey !== undefined && seg.wid === ownKey) continue;
+    const [cx, cz] = closestOnSeg(x, z, seg);
+    if (Math.hypot(x - cx, z - cz) <= seg.hw + 0.8 + radius) return false;
+  }
+  for (const seg of preRoadGrid.get(gkey(x, z)) ?? []) {
+    if (ownKey !== undefined && seg.dks === ownKey) continue;
+    const [cx, cz] = closestOnSeg(x, z, seg);
+    if (Math.hypot(x - cx, z - cz) <= seg.hw + 0.8 + radius) return false;
+  }
+  return true;
+}
+
+/** Does a whole support/spandrel run stay out of every other road corridor? */
+function structureSpanClear(
+  ax: number, az: number, bx: number, bz: number, radius: number, ownFid?: number, ownKey?: string,
+): boolean {
+  const len = Math.hypot(bx - ax, bz - az);
+  const steps = Math.max(1, Math.ceil(len / 2));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    if (!structureFootprintClear(ax + (bx - ax) * t, az + (bz - az) * t, radius, ownFid, ownKey)) return false;
+  }
+  return true;
+}
 /** Two triangles into a vertex/uv pair. `ribbon` has its own local `quad`, and
  *  the only `quad` in scope out here is a THREE.Mesh — which the stub types are
  *  happy to let you call, and which would have thrown on the first shoulder. */
@@ -11711,8 +13896,37 @@ interface Draped { geo: THREE.BufferGeometry; lift: number;
    * So a mesh may carry a mask, one byte per vertex, saying which of its
    * vertices were seated on ground at build time. Absent, everything follows,
    * which is what every existing drape wants. */
-  seat?: Uint8Array }
+  seat?: Uint8Array;
+  /** A batter strip's mesh and the tile it was flushed for, so a corridor
+   *  build of that tile can take the strip down — see dropBatterFor. */
+  mesh?: THREE.Mesh; tile?: string }
 const drapedWays: Draped[] = [];
+/**
+ * THE STRIPS OF A TILE THAT HAS JUST TAKEN ITS CORRIDOR, GONE. A tile builds
+ * plain while the roads are still landing and gets its corridor on the quiet
+ * path afterwards; its kerbs were flushed against the plain build, and those
+ * strips stood on as pictures over a mesh that now carries the wedge itself —
+ * agreeing with it nowhere in particular, and at a terrace or a corner
+ * standing a metre and more off it. flushBatter parks nothing new on a
+ * refined tile; this removes what was parked before it was one.
+ */
+function dropBatterFor(key: string): void {
+  for (let i = drapedWays.length - 1; i >= 0; i--) {
+    const d = drapedWays[i];
+    if (d.tile !== key) continue;
+    drapedWays.splice(i, 1);
+    for (const k of boxCells(d.x0, d.z0, d.x1, d.z1)) {
+      const a = drapeGrid.get(k);
+      if (!a) continue;
+      const j = a.indexOf(d);
+      if (j >= 0) a.splice(j, 1);
+    }
+    const w = drapeWide.indexOf(d);
+    if (w >= 0) drapeWide.splice(w, 1);
+    if (d.mesh) { worldGroup.remove(d.mesh); d.geo.dispose(); }
+    spanStats.fillDropped++;
+  }
+}
 /**
  * WHERE THE DRAPES ARE, so a rebuild does not have to ask all of them.
  *
@@ -11788,7 +14002,10 @@ function redrape(t: HeightTile): void {
       if (d.seat !== undefined && d.seat[i] !== 1) continue;   // welded, not seated
       const x = pos.getX(i), z = pos.getZ(i);
       if (x < t.xs || z < t.zs || x >= tx1 || z >= tz1) continue;
-      pos.setY(i, groundAt(x, z) + d.lift);
+      // Compare the stored float, not a double that rounds to the same float.
+      const y = Math.fround(groundAt(x, z) + d.lift);
+      if (pos.getY(i) === y) continue;
+      pos.setY(i, y);
       touched = true;
     }
     if (touched) {
@@ -11927,7 +14144,25 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       pendingBatter[kept++] = b;         // not this tile — keep waiting
       continue;
     }
+    // A bay parked on unknown ground is not tried again until a height tile
+    // has landed somewhere and the point it stopped at has ground under it.
+    // Cheap by design: thousands of bays wait at the edge of the loaded ring,
+    // and the sweep visits every one of them many times a second.
+    if (b.waitTiles !== undefined && (heightTiles.size === b.waitTiles || !hasHeight(b.waitX as number, b.waitZ as number))) {
+      pendingBatter[kept++] = b;
+      continue;
+    }
     if (stranded) spanStats.fillStranded++;
+    // ON A REFINED TILE THE WEDGE IS THE MESH. The strip would draw the same
+    // bank or face a second time, from the kerb's own numbers rather than the
+    // corridor's, and where two roads' wedges overlap the two answers part —
+    // the picture the truck drove into at Simon's Town. Nothing is drawn; the
+    // kernel's union of wedges (corridorH) is what the eye and the wheels get.
+    const under = mine ? t : heightTileAt(mx, mz);
+    if (under && (terrainMeshes.get(`${under.tx}/${under.ty}`)?.userData as { corridor?: boolean } | undefined)?.corridor) {
+      spanStats.fillCorridor++;
+      continue;
+    }
     // [left distance, right distance, left height, right height, left seated?, right seated?, left ground, right ground]
     const pts: Array<[number, number, number, number, number, number, number, number]> = [];
     // …and the tint at each end of each step, parallel to `pts`.
@@ -11940,7 +14175,7 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     // every turning. Now the step is clipped to the last clear distance and the
     // batter is drawn up to it.
     let lim = REACH, clipped = false;
-    let met = false, wet = false;
+    let met = false, wet = false, unknown = false;
     let toe0 = -1, toe1 = -1;
     for (const d0 of STEPS) {
       let d = d0;
@@ -11961,6 +14196,28 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       const f = d / 2.2;                 // nx/nz carry 2.2m of reach
       const qx0 = b.ax + b.nxA * f, qz0 = b.az + b.nzA * f;
       const qx1 = b.bx + b.nxB * f, qz1 = b.bz + b.nzB * f;
+      // ── THE GROUND HAS TO BE THERE TO BE READ ──
+      //
+      // Where no height tile is loaded, `groundAt` answers the field's zero
+      // fallback: relative height 0, which is the ORIGIN'S elevation, not this
+      // hillside's. A step landing on that is a step landing wherever the
+      // player started, and the wedge is drawn to it: a face climbing to a
+      // hill a hundred metres up, or a bank falling to a valley that is not
+      // there. Reported from the cab at Glencairn as a dark sheet from the
+      // verge into the sky over a hillside that was fine underneath — a bay
+      // flushed while its neighbour tile was on a retry. Measured with
+      // __stripAudit at the same spot: strips with vertices standing on no
+      // tile at all, spanning tens of metres. The stranded sweep guards the
+      // bay's OWN point; the steps reach thirty metres past it. A run that
+      // reaches unknown ground before it has met anything is parked on that
+      // point and tried again only when a tile has landed; nothing is drawn,
+      // and the kerb's own fascia keeps the road edge closed meanwhile, as it
+      // does for every bay still waiting.
+      if (!hasHeight(qx0, qz0) || !hasHeight(qx1, qz1)) {
+        b.waitX = hasHeight(qx0, qz0) ? qx1 : qx0;
+        b.waitZ = hasHeight(qx0, qz0) ? qz1 : qz0;
+        unknown = true; break;
+      }
       // EARTH STOPS AT THE WATER. Letting the bank run all the way to the bed
       // turns every river crossing into a causeway — measured at Noordhoek, the
       // longer reach did exactly that to the Silvermine outflow, filling the
@@ -12041,6 +14298,16 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       if (on0 && on1) { met = true; break; }
       if (clipped) break;                // ran out of room, not out of slope
     }
+    // Unknown ground before the run met anything: parked, not drawn. A run
+    // that had already met the ground, or stopped against tarmac or water,
+    // broke out above and never gets here with `unknown` set.
+    if (unknown) {
+      b.waitTiles = heightTiles.size;
+      spanStats.fillUnknown++;
+      pendingBatter[kept++] = b;
+      continue;
+    }
+    b.waitTiles = undefined;
     const reached = pts.length ? Math.max(pts[pts.length - 1][0], pts[pts.length - 1][1]) : 0;
     // Logged with what was actually DRAWN, not with what was computed. Once a
     // run that never met anything stopped being emitted, `pts.length > 0` was
@@ -12120,7 +14387,8 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(U), 2));
   g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(C), 3));
   g.computeVertexNormals();
-  worldGroup.add(new THREE.Mesh(g, MAT.batter));
+  const strip = new THREE.Mesh(g, MAT.batter);
+  worldGroup.add(strip);
   // ── AND IT RE-SEATS FROM NOW ON ──
   //
   // A batter was a static mesh built against the ground as it stood at that
@@ -12134,7 +14402,7 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   // metres outboard of the kerb line, and a box drawn round the kerbs alone
   // would exclude the very vertices that need re-seating.
   const seat = new Uint8Array(S);
-  const d2: Draped = { geo: g, lift: 0, seat,
+  const d2: Draped = { geo: g, lift: 0, seat, mesh: strip, tile: t ? `${t.tx}/${t.ty}` : undefined,
     x0: bx0 - REACH, z0: bz0 - REACH, x1: bx1 + REACH, z1: bz1 + REACH };
   drapedWays.push(d2); indexDrape(d2);
 }
@@ -12173,12 +14441,31 @@ function flushJunctions(): void {
     for (let i = corners.length - 1; i >= 0; i--) { const p = corners[i]; while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop(); upper.push(p); }
     const hull = lower.slice(0, -1).concat(upper.slice(0, -1));
     if (hull.length < 3) continue;
-    const hy = (x: number, z: number): number => (roadHeightAt(x, z, 1.5) ?? y0) + SURFACE.road.lift + 0.008;
+    const hy = (x: number, z: number): number | null => { const y = roadHeightAt(x, z, 1.5); return y === null ? null : y + SURFACE.road.lift + 0.008; };
     const cy = y0 + SURFACE.road.lift + 0.008;
+    // THE HULL'S EDGES FOLLOW THE ROADS, NOT THE CORNERS. A hull edge runs
+    // from one arm's kerb corner to the next arm's, and on a hillside those two
+    // corners can stand well apart: at Simon's Town a box corner on Queens
+    // Road (falling at 11%) and the next on a side road climbing at 16% were
+    // 1.6m apart in height, so one triangle spanned the gap as a tilted slab
+    // that Queens Road's own ribbon came up through — measured as `twist` by
+    // __nodes, seen from the seat as roads that do not meet on one plane. Each
+    // edge is walked in short steps and every step takes the height of the
+    // road it stands on; a step on no road takes the edge's own line between
+    // its corners, which is where the two ribbons' kerbs actually run.
     for (let i = 0; i < hull.length; i++) {
       const a = hull[i], b = hull[(i + 1) % hull.length];
-      apron.boV.push(node.x, cy, node.z, a[0], hy(a[0], a[1]), a[1], b[0], hy(b[0], b[1]), b[1]);
-      apron.boUV.push(node.x / 12, node.z / 12, a[0] / 12, a[1] / 12, b[0] / 12, b[1] / 12);
+      const ya = hy(a[0], a[1]) ?? cy, yb = hy(b[0], b[1]) ?? cy;
+      const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 1.5));
+      let px = a[0], pz = a[1], py = ya;
+      for (let k = 1; k <= n; k++) {
+        const t = k / n;
+        const qx = a[0] + (b[0] - a[0]) * t, qz = a[1] + (b[1] - a[1]) * t;
+        const qy = k === n ? yb : (hy(qx, qz) ?? ya + (yb - ya) * t);
+        apron.boV.push(node.x, cy, node.z, px, py, pz, qx, qy, qz);
+        apron.boUV.push(node.x / 12, node.z / 12, px / 12, pz / 12, qx / 12, qz / 12);
+        px = qx; pz = qz; py = qy;
+      }
     }
     // Give-way lines on the minor arms, just outside the box.
     for (const a of node.arms) {
@@ -12188,7 +14475,7 @@ function flushJunctions(): void {
       const p = (d: number, s: number): [number, number] => [node.x + a.ux * d + nx * s, node.z + a.uz * d + nz * s];
       const [ax, az] = p(d0, a.hw - 0.2), [bx, bz] = p(d0, -a.hw + 0.2);
       const [cx, cz] = p(d1, a.hw - 0.2), [dx, dz] = p(d1, -a.hw + 0.2);
-      const ya = hy(ax, az) + 0.004, yb = hy(bx, bz) + 0.004, yc = hy(cx, cz) + 0.004, yd = hy(dx, dz) + 0.004;
+      const ya = (hy(ax, az) ?? cy) + 0.004, yb = (hy(bx, bz) ?? cy) + 0.004, yc = (hy(cx, cz) ?? cy) + 0.004, yd = (hy(dx, dz) ?? cy) + 0.004;
       const uw = (a.hw * 2) / 1.6;
       apron.gwV.push(ax, ya, az, bx, yb, bz, cx, yc, cz, bx, yb, bz, dx, yd, dz, cx, yc, cz);
       apron.gwUV.push(0, 0, uw, 0, 0, 1, uw, 0, uw, 1, 0, 1);
@@ -12401,10 +14688,9 @@ async function solveChainPlanned(
 // The hint store, the junction registry and the chain assembly all moved to
 // `roadsolve.ts` — they never needed a renderer, and having them in here meant
 // every question about them cost a headless browser at two frames a second.
-// These aliases keep the call sites in this file reading as they did.
-const profileHints = solver.hints;
-const hintedWays = solver.hinted;
-const writeHints = (dense: Array<[number, number]>, alg: number[]): void => solver.writeHints(dense, alg);
+// The alias that is left keeps this file's call sites reading as they did;
+// the store, the registry and the write path went with the code and their
+// aliases went with the call sites, three releases after the comment above.
 const hintAt = (x: number, z: number, reach = 6, layer?: number): number | null => solver.hintAt(x, z, reach, layer);
 /**
  * ── RIBBON DECKS BATCH PER TILE (R57) ──
@@ -12520,7 +14806,7 @@ function flushRibbons(): void {
     }
   }
 }
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string, layer = 0): void {
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string, layer = 0, wayTags?: Record<string, string>): void {
   const name_ = name;
   const fid = ++ribbonSeq;
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
@@ -12871,7 +15157,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // walk already dodged must not become phantom tunnels.
   const prof = alg.slice();
   const runs: Array<[number, number]> = [];
-  if (mode !== 'none' && n > 4 && !canopy) {
+  // A COVERED BRIDGE IS STILL A BRIDGE. `canopy` (covered=yes, or an
+  // avalanche gallery) means "profile on the ground and wear a roof", which
+  // is right for Chapman's galleries and wrong for a roofed footbridge: the
+  // covered footway over the A6 at Rubigen skipped the chord and the lift
+  // here, and its roof and walls stood across both carriageways at grade —
+  // the obstruction reported from the seat. The chord and the lift run for
+  // every bridge; the roof then rides the lifted deck.
+  if (mode !== 'none' && n > 4 && (!canopy || mode === 'bridge')) {
     if (mode === 'tunnel' || mode === 'bridge') runs.push([0, n - 1]);
     else {
       const avg = (src: number[]): number[] => src.map((_, i) => {
@@ -12912,6 +15205,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         }
       }
     }
+    stage('2d-chord', prof);
     // ── A FLYOVER CLEARS THE ROAD IT CROSSES ──
     //
     // The chord above is portal to portal, and the portals anchor to the
@@ -12954,9 +15248,33 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // span to scan and keeps its chord, which is right for a culvert.
       const chord = prof.slice();
       for (const [a, b] of runs) {
-        for (let i = a + 1; i <= b - 1; i++) {
-          const below = solver.deckBelow(dense[i][0], dense[i][1], layer, width / 2 + 1.5);
-          if (below !== null && below + BRIDGE_CLEAR > prof[i]) prof[i] = below + BRIDGE_CLEAR;
+        // ALONG THE SPAN, NOT ONLY AT ITS STATIONS. A bridge's own stations
+        // are twelve metres apart too, so the crossing over the road beneath
+        // fell between them for anything narrow: the decks are read every
+        // three metres along each leg and the higher answer holds both ends.
+        // …and never within PORTAL_R of a portal, where the only lower deck
+        // is the bridge's own approach: sampled up to the portal, the
+        // Hunzikenbrücke — a river bridge with nothing beneath it — lifted
+        // 8.6 m off its own abutments.
+        const PORTAL_R = 8;
+        const [pax, paz] = dense[a], [pbx, pbz] = dense[b];
+        const nearPortal = (x: number, z: number): boolean =>
+          Math.hypot(x - pax, z - paz) < PORTAL_R || Math.hypot(x - pbx, z - pbz) < PORTAL_R;
+        for (let i = a + 1; i <= b; i++) {
+          const [x0, z0] = dense[i - 1], [x1, z1] = dense[i];
+          const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 3));
+          let below: number | null = null;
+          for (let k = 0; k <= steps; k++) {
+            const t = k / steps;
+            const x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+            if (nearPortal(x, z)) continue;
+            const v = solver.deckBelow(x, z, layer, width / 2 + 1.5);
+            if (v !== null && (below === null || v > below)) below = v;
+          }
+          if (below === null) continue;
+          const want = below + BRIDGE_CLEAR;
+          if (i - 1 > a && want > prof[i - 1]) prof[i - 1] = want;
+          if (i < b && want > prof[i]) prof[i] = want;
         }
         for (let i = a + 1; i <= b; i++) {
           const d = Math.max(0.1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
@@ -12995,6 +15313,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // turns the run into a tunnel. The ENDS are pinned to the raw samples:
     // fragments smooth independently, and two one-sided averages disagreeing
     // at a shared tile-boundary vertex would step the deck mid-street.
+    stage('2e-lift', prof);
     if (mode === 'auto' && n > 8) {
       const wide = (src: number[]): number[] => src.map((_, i) => {
         let s = 0, c = 0;
@@ -13358,6 +15677,87 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const daylight = apronOn
     ? dense.map((_, i) => (flat ? prof[i] : elev[i]) + lift - elev[i])
     : [];
+
+  // ── CONTEXTUAL INFRASTRUCTURE GRAMMAR ─────────────────────────────
+  // Facts are sampled once per complete ribbon, never per bay. The recipe is
+  // therefore coherent across the structure and independent of draw order.
+  // Explicit OSM structure/material tags are passed straight through and win
+  // inside the pure planner.
+  const maxDaylight = daylight.length ? Math.max(0, ...daylight) : 0;
+  // Cumulative station along the ribbon, for the recipe's span and the
+  // support stations below (the end-weld block above has its own copy in
+  // its own scope).
+  const arc = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) arc[i] = arc[i - 1] + Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
+  const total = arc[n - 1] || 1;
+  let infraRecipe: StructureRecipe | null = null;
+  if (drivable && apronOn && (mode === 'bridge' || mode === 'tunnel' || canopy || maxDaylight > DECK_GAP)) {
+    const mi = n >> 1;
+    const [mx, mz] = dense[mi];
+    const cc = climateAt(mx, mz, prof[mi] + baseElev);
+    const [pa, pb] = [dense[Math.max(0, mi - 1)], dense[Math.min(n - 1, mi + 1)]];
+    const tx = pb[0] - pa[0], tz = pb[1] - pa[1], tl = Math.hypot(tx, tz) || 1;
+    const px = -tz / tl, pz = tx / tl;
+    const sideSlope = Math.abs(sampleHeight(mx + px * 14, mz + pz * 14)
+      - sampleHeight(mx - px * 14, mz - pz * 14)) / 28;
+    const tags = wayTags ?? {};
+    const yearMatch = /(?:18|19|20)\d{2}/.exec(tags.start_date ?? '');
+    const tier = (width >= 11 ? 3 : width >= 8 ? 2 : width >= 6 ? 1 : 0) as 0 | 1 | 2 | 3;
+    infraRecipe = pickInfrastructureRecipe({
+      key: wayKey ?? `road:${name ?? ''}`,
+      kind: canopy || mode === 'tunnel' ? 'tunnel' : 'bridge',
+      lengthM: total, spanM: Math.min(total, Math.max(12, total * (maxDaylight > 20 ? 0.62 : 0.34))),
+      roadWidthM: width, tier, lanes: Number(tags.lanes) || undefined, layer,
+      taggedFamily: tags['bridge:structure'] ?? tags['tunnel:type'] ?? tags.tunnel,
+      taggedStructure: tags['bridge:structure'] ?? tags['bridge:support'],
+      taggedMaterial: tags['bridge:material'] ?? tags['tunnel:lining'] ?? tags.material,
+      startYear: yearMatch ? Number(yearMatch[0]) : undefined,
+      climate: cc.w, temperatureC: cc.tempC, moisture: cc.moisture,
+      snow: snowLoad(cc.w, cc.elevAbs), reliefM: maxDaylight, sideSlope,
+      coverM: mode === 'tunnel' ? Math.max(0, ...elev.map((y, j) => y - prof[j])) : 0,
+      daylightM: maxDaylight, waterWidthM: 0, urbanity: tier >= 2 && width >= 9 ? 0.55 : 0.15,
+      bedrock: 'unknown',
+      regionSeed: seedAt(cultEnv, mx, mz, 'region'),
+      districtSeed: seedAt(cultEnv, mx, mz, 'district'),
+      settlementSeed: seedAt(cultEnv, mx, mz, 'settlement'),
+      availableClearanceM: 99,
+    });
+    const rk = `${infraRecipe.kind}:${infraRecipe.family}:${infraRecipe.material}`;
+    spanStats.recipes[rk] = (spanStats.recipes[rk] ?? 0) + 1;
+  }
+
+  // Absolute projected phase: moving a clip edge changes the local station
+  // numbers but not the world positions selected for supports. Canonical
+  // endpoint order makes reversed OSM geometry choose the same sequence.
+  const supportAt = (s: number): [number, number] => {
+    let j = 0;
+    while (j + 1 < arc.length && arc[j + 1] < s) j++;
+    const d = Math.max(1e-6, arc[Math.min(j + 1, arc.length - 1)] - arc[j]);
+    const f = clamp((s - arc[j]) / d, 0, 1);
+    return [dense[j][0] + (dense[Math.min(j + 1, n - 1)][0] - dense[j][0]) * f,
+      dense[j][1] + (dense[Math.min(j + 1, n - 1)][1] - dense[j][1]) * f];
+  };
+  let pierStations: number[] = [];
+  if (infraRecipe?.kind === 'bridge' && infraRecipe.supportSpacingM > 0 && total > 4) {
+    const [lla, llb] = [localToLatLon(dense[0][0], dense[0][1]), localToLatLon(dense[n - 1][0], dense[n - 1][1])];
+    const [aa, bb] = [absMetres(lla[0], lla[1]), absMetres(llb[0], llb[1])];
+    const reverse = aa[0] > bb[0] || (aa[0] === bb[0] && aa[1] > bb[1]);
+    const ca = reverse ? bb : aa, cb = reverse ? aa : bb;
+    const ux = (cb[0] - ca[0]) / (Math.hypot(cb[0] - ca[0], cb[1] - ca[1]) || 1);
+    const uz = (cb[1] - ca[1]) / (Math.hypot(cb[0] - ca[0], cb[1] - ca[1]) || 1);
+    const offset = ca[0] * ux + ca[1] * uz;
+    const planned = planSupportStations({
+      key: wayKey ?? `road:${name ?? ''}`, lengthM: total,
+      spacingM: infraRecipe.supportSpacingM, endClearanceM: 1.5, stationOffsetM: offset,
+      clearAt: (canonicalS) => {
+        const localS = reverse ? total - canonicalS : canonicalS;
+        const [x, z] = supportAt(localS);
+        return structureFootprintClear(x, z, infraRecipe!.supportRadiusM, fid, wayKey);
+      },
+    });
+    spanStats.pierRefused += planned.refused;
+    pierStations = planned.accepted.map((q) => reverse ? total - q.stationM : q.stationM).sort((a, b) => a - b);
+  }
   // WHERE THE RAIL GOES, decided for the whole way before any of it is drawn.
   // Emitting per quad left holes: one 12m step whose drop dipped under the
   // threshold — the inside of a bend, a bench in the slope — opened a gap you
@@ -13978,7 +16378,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
   }
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
-  let pierRun = PIER_SPAN;  // so the first bay of a span gets one
+  let nextPier = 0;
   // The last pier stood, for the arch back to it. Cleared whenever the deck
   // run breaks, so an arch never leaps a stretch where the road is on ground.
   let prevPier: { x: number; z: number; top: number; bot: number } | null = null;
@@ -14259,7 +16659,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // removed the twist that motivated that exemption; the ordinary
         // junction logic, now sided, is the whole rule again.
         const meet = (railHere || Math.max(ey0 - b0, ey1 - b1) > 1.2)
-          ? roadMeetsHere(x0, z0, x1, z1, width / 2, (ey0 + ey1) / 2, fid, name)
+          ? roadMeetsHere(x0, z0, x1, z1, width / 2, (ey0 + ey1) / 2, fid, name, wayKey)
           : { p: false, m: false };
         const open = sgn > 0 ? meet.p : meet.m;
         if (open) juncStats.opened++;
@@ -14450,14 +16850,29 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           [0, uA, 0, uB, width / 4, uA, width / 4, uB]);
         // And hold it up. Otherwise the road is simply hanging there, which is
         // what a thirty-metre span over a lake looked like.
-        pierRun += len;
-        if (daylight[i] > PIER_AT && pierRun >= PIER_SPAN) {
-          pierRun = 0;
-          const top = (bot[0] + bot[2]) / 2 + 0.05;
-          const base = Math.min(elevMin[i], sampleHeight(x0, z0)) - 1.2;
-          pier(x0, z0, dx, dz, top, base, width * 0.32);
-          const cur = { x: x0, z: z0, top, bot: base };
-          if (prevPier) arch(prevPier, cur, width * 0.3);
+        // Canonical station, interpolated inside this bay. The plan has
+        // already tried deterministic shifts around every crossed road and
+        // omitted candidates for which no safe footprint exists.
+        while (nextPier < pierStations.length && pierStations[nextPier] <= arc[i + 1] + 1e-4) {
+          const s = pierStations[nextPier++];
+          if (s < arc[i] - 1e-4) continue;
+          const f = clamp((s - arc[i]) / len, 0, 1);
+          const dl = daylight[i] + (daylight[Math.min(i + 1, daylight.length - 1)] - daylight[i]) * f;
+          if (dl <= PIER_AT) continue;
+          const cx = x0 + dx * f, cz = z0 + dz * f;
+          const halfPier = Math.max(width * 0.22, (infraRecipe?.supportRadiusM ?? width * 0.32) / 1.22);
+          const top0 = (bot[0] + bot[2]) / 2, top1 = (bot[1] + bot[3]) / 2;
+          const top = top0 + (top1 - top0) * f + 0.05;
+          const base = Math.min(elevMin[i] + (elevMin[i + 1] - elevMin[i]) * f, sampleHeight(cx, cz)) - 1.2;
+          pier(cx, cz, dx, dz, top, base, halfPier);
+          const cur = { x: cx, z: cz, top, bot: base };
+          // Arches are a selected family, never a universal decoration.
+          if (prevPier && infraRecipe?.family === 'arch') {
+            if (structureSpanClear(
+              prevPier.x, prevPier.z, cur.x, cur.z, width * 0.3 + 0.35, fid, wayKey,
+            )) arch(prevPier, cur, width * 0.3);
+            else spanStats.archRefused++;
+          }
           prevPier = cur;
         }
       } else prevPier = null;
@@ -14697,7 +17112,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // hill — visible to `__buried` instead of dressed up as a feature.
         const s2 = s + 1, e2 = e - 1;
         if (e2 - s2 >= 2 && mode === 'tunnel') {
-          tunnelTube(dense, prof, elevMin, s2, e2, width, lift);
+          tunnelTube(dense, prof, elevMin, s2, e2, width, lift, infraRecipe ?? undefined);
           for (let k = s2; k < e2 && k < segsOf.length; k++) {
             if (k === s2 || k === e2 - 1) segsOf[k].pc = TUNNEL_H + 1.6;
             else segsOf[k].tn = true;
@@ -14742,7 +17157,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // segment rasterized before its tunnel flag lands would trench the hill it
   // is buried in.
   for (const sg of segsOf) rasterizeCut(sg);
-  if (canopy && n > 2) canopyRun(dense, prof, width, lift);
+  if (canopy && n > 2) canopyRun(dense, prof, width, lift, fid, wayKey);
   if (drivable) { dirtyTerrainAround(dense); osmLastLand = performance.now(); }
 }
 /**
@@ -14792,7 +17207,10 @@ function mitreOffsets(dense: Array<[number, number]>, a: number, b: number, hw: 
 // view: a slab overhead, a solid wall against the mountain, columns over the
 // drop. The uphill side is measured, not tagged — the wall goes where the
 // ground is.
-function canopyRun(dense: Array<[number, number]>, prof: number[], width: number, lift: number): void {
+function canopyRun(
+  dense: Array<[number, number]>, prof: number[], width: number, lift: number,
+  ownFid?: number, ownKey?: string,
+): void {
   const n = dense.length;
   const mid = n >> 1;
   const [mxa, mza] = dense[Math.max(0, mid - 1)], [mxb, mzb] = dense[Math.min(n - 1, mid + 1)];
@@ -14828,10 +17246,16 @@ function canopyRun(dense: Array<[number, number]>, prof: number[], width: number
     // columns on the open side, thin crossed fins
     colAcc += len;
     if (colAcc >= 9) {
-      colAcc = 0;
       const cx2 = x0 - uax, cz2 = z0 - uaz;
-      quad([cx2 - 0.3, yA, cz2], [cx2 + 0.3, yA, cz2], [cx2 - 0.3, rA, cz2], [cx2 + 0.3, rA, cz2]);
-      quad([cx2, yA, cz2 - 0.3], [cx2, yA, cz2 + 0.3], [cx2, rA, cz2 - 0.3], [cx2, rA, cz2 + 0.3]);
+      // The open side routinely crosses side roads at a gallery mouth. Leave
+      // that bay open instead of planting a crossed pair of fins in the
+      // carriageway; do not reset the accumulator, so the rhythm resumes at
+      // the first clear station rather than losing a column altogether.
+      if (structureFootprintClear(cx2, cz2, 0.5, ownFid, ownKey)) {
+        colAcc = 0;
+        quad([cx2 - 0.3, yA, cz2], [cx2 + 0.3, yA, cz2], [cx2 - 0.3, rA, cz2], [cx2 + 0.3, rA, cz2]);
+        quad([cx2, yA, cz2 - 0.3], [cx2, yA, cz2 + 0.3], [cx2, rA, cz2 - 0.3], [cx2, rA, cz2 + 0.3]);
+      } else spanStats.galleryRefused++;
     }
   }
   const geo = new THREE.BufferGeometry();
@@ -14858,7 +17282,6 @@ function canopyRun(dense: Array<[number, number]>, prof: number[], width: number
 // only ever descends. Where that puts the water under the ground, the water is
 // in a culvert, and the ground it is under is usually a road.
 const CULV_MAX = 9;        // deepest a culvert goes before we call the DEM wrong
-const CULV_MIN = 0.7;      // burial past which a run earns a bore rather than a dip
 const CULV_CLR = 0.35;     // headroom from invert to soffit on a plain pipe
 const CULV_RIG = 3.2;      // …and the bore height that fits a rig, where there is room
 // Slab and cover between a culvert's soffit and the carriageway over it. The
@@ -14883,76 +17306,6 @@ const culvertStats = { ways: 0, runs: 0, rigSized: 0, m: 0, deepest: 0, uphillFi
   // largest rise between consecutive stations IN FLOW ORDER, over every
   // watercourse built. Monotone by construction, so anything but 0 is a bug.
   worstRise: 0 };
-/** Every channel indexed near a point, from the 3×3 cells around it. */
-function channelsNear(x: number, z: number, into: Set<Seg>): void {
-  const cx = Math.floor(x / GRID), cz = Math.floor(z / GRID);
-  for (let ax = cx - 1; ax <= cx + 1; ax++) {
-    for (let az = cz - 1; az <= cz + 1; az++) {
-      const arr = channelGrid.get(`${ax},${az}`);
-      if (arr) for (const c of arr) into.add(c);
-    }
-  }
-}
-const chanSet = new Set<Seg>();
-/**
- * THE BED, as a ceiling on the terrain — but never under a carriageway.
- *
- * A watercourse cuts its own channel, or it is a blue stripe lying on top of
- * the countryside. The exception is the whole point of a culvert: where a road
- * passes over, the ground must stay up to hold the road, and the water goes
- * through the bore instead. So this returns null on tarmac, which leaves an
- * open channel on each side and a plug of earth between them for the road to
- * sit on and the bore to pass through.
- */
-function channelFloorAt(x: number, z: number, ceiling: number): number | null {
-  chanSet.clear();
-  channelsNear(x, z, chanSet);
-  let best: number | null = null;
-  for (const c of chanSet) {
-    const dx = c.bx - c.ax, dz = c.bz - c.az;
-    const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
-    const px = c.ax + dx * t, pz = c.az + dz * t;
-    const out = Math.hypot(x - px, z - pz) - c.hw;
-    if (out > 3) continue;
-    // Banks, not a trench: the bed at the middle, rising away at 1:1.
-    const y = (c.ya as number) + ((c.yb as number) - (c.ya as number)) * t + Math.max(0, out);
-    if (best === null || y < best) best = y;
-  }
-  // ORDER MATTERS FOR COST, not just for correctness. `onCarriageway` is a road
-  // grid walk, and asking it of every vertex a river passes near — before
-  // knowing whether the bed is even below the ground there — put twelve tiles
-  // behind on the rebuild queue at Chapman's, where before there were none.
-  // The vertex is only interesting if the bed would actually lower it, and that
-  // is a handful of arithmetic; the walk is asked of those alone.
-  if (best === null || best >= ceiling) return null;
-  if (onCarriageway(x, z, 0.6).road) return null;   // the road's plug of earth
-  return best;
-}
-/**
- * WHAT THE WATER HERE IS DOING — depth and current, for the physics.
- *
- * The truck used to know one fact about water: that it was in some. A ford, a
- * lake margin, mid-river and open sea were the same three numbers, and the
- * flow field the shader had been reading all along pushed nothing. This is the
- * physics' one window onto all of it:
- *
- *   RIVERS — the nearest channel segment answers. Direction is toward the
- *   lower invert (the same monotone solve the ribbon was built from), speed by
- *   the same sqrt-of-slope law the shader shades with, so what shoves the
- *   truck is exactly what the eye says should. Depth from the channel's
- *   width: the carve is raster-limited, so class width is the honest proxy —
- *   a stream wets the rims, a river floats the doors.
- *
- *   SEA — depth is real: surface minus seabed, which the terrain build
- *   actually dropped. No current; the wind's work on the truck is not worth
- *   modelling at this scale.
- *
- *   LAKES & PONDS — cover says water, nothing says how much. Half a metre:
- *   wadeable, honest for the tarns and margins this mostly is.
- */
-/** Is this point inside a watercourse's own water — within the channel's half
- *  width of its centreline? Allocation-free, because `surfaceAt` asks this for
- *  every wheel every frame and for every ring point of a vegetation pass. */
 function channelAt(x: number, z: number): Seg | null {
   if (!channelGrid.size) return null;
   const cx = Math.floor(x / GRID), cz = Math.floor(z / GRID);
@@ -14969,8 +17322,67 @@ function channelAt(x: number, z: number): Seg | null {
   }
   return null;
 }
+/**
+ * THE INVERT OF THE CARVED CHANNEL at a point, absolute metres, or NaN where
+ * no watercourse has been dug. `channelAt` finds the segment whose half width
+ * covers the point; `ya`/`yb` are the same monotone invert the terrain kernel
+ * lowered the ground to (less its 0.15m), so a river levelled on this stands
+ * in the channel the player can see rather than on the raster's bank.
+ */
+function channelInvertAt(x: number, z: number): number {
+  if (!channelGrid.size) return NaN;
+  // THE LOWEST CHANNEL, NOT THE FIRST. `channelAt` returns whichever segment
+  // the 3x3 walk meets first, and in a steep valley that is as likely to be a
+  // tributary hanging on the wall as the river in the floor — measured above
+  // Obergoms as an invert six metres over the drawn ground, which put the
+  // surface there with it. The terrain's own carve takes the lowest bed for
+  // exactly this reason (channelFloorAt); so does this.
+  const cx = Math.floor(x / GRID), cz = Math.floor(z / GRID);
+  let best = NaN;
+  for (let ax = cx - 1; ax <= cx + 1; ax++) {
+    for (let az = cz - 1; az <= cz + 1; az++) {
+      const arr = channelGrid.get(`${ax},${az}`);
+      if (!arr) continue;
+      for (const c of arr) {
+        if (c.ya === undefined || c.yb === undefined) continue;
+        const dx = c.bx - c.ax, dz = c.bz - c.az;
+        const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+        if (Math.hypot(x - (c.ax + dx * t), z - (c.az + dz * t)) > c.hw) continue;
+        const y = (c.ya as number) + ((c.yb as number) - (c.ya as number)) * t;
+        if (Number.isNaN(best) || y < best) best = y;
+      }
+    }
+  }
+  return Number.isNaN(best) ? NaN : best + 0.15 + baseElev;
+}
 const wiSet = new Set<Seg>();
-function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: number; speed: number } {
+/**
+ * `wet` IS NOT `depth > 0`, AND THE AMBIENCE BED LEARNED THAT THE HARD WAY.
+ *
+ * Every branch below answers a caller who has ALREADY established there is
+ * water here — the physics asks after `surfaceAt` has said `water`, the wheel
+ * sink asks inside the water branch — so the last line returns half a metre as
+ * a sensible default rather than as a claim. The ambience ring was the first
+ * caller to use this function as the DETECTOR, testing `depth > 0.06` around a
+ * six-point ring, and every dry probe came back 0.5: measured at the Vélizy
+ * interchange, four hundred kilometres from the sea and with no water in the
+ * capture at all, `__mix().river` read 0.16 — the river channel at its full
+ * level, everywhere on earth that has no hydro body, no channel and no ocean.
+ * `wet` is the honest answer to "is there water here"; `depth` keeps its
+ * default so no existing caller changes behaviour.
+ */
+/** Metres of water over the carriageway here, or 0: the resting level of
+ *  the hydro body against the road deck (surfaceAt's ford test). */
+const FORD_MIN_M = 0.12;
+function fordDepthAt(x: number, z: number): number {
+  if (!HYDRO_ON || !hydroSys) return 0;
+  const wet = drawnHydroAt(x, z);
+  if (!wet) return 0;
+  const e = roadEdge(x, z);
+  const deck = e ? e.y : hasHeight(x, z) ? sampleHeight(x, z) : NaN;
+  return Number.isFinite(deck) ? wet.restingLevelM - (deck + baseElev) : 0;
+}
+function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: number; speed: number; wet: boolean } {
   // ── THE DRAWN WATER IS THE WATER ──
   //
   // This used to answer entirely from the CHANNEL grid — the carved ribbon a
@@ -14986,16 +17398,20 @@ function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: num
   // resting level and a depth at every texel of every body, ocean included.
   // Ask it first. The channel model stays as the fallback for water that has
   // a carved bed but no built field yet — a tile mid-stream, or a culvert.
-  const wet = hydroSys?.sampleRestingSurface(x, z);
+  const wet = drawnHydroAt(x, z);
   if (wet) {
-    const bed = hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
+    // THE FLOOR IS THE DECK ON A FORD: the wheels stand on the carriageway,
+    // not on the bed the road was laid over, so that is what the water is
+    // deep against.
+    const e = roadEdge(x, z);
+    const bed = e && e.out <= 0 ? e.y + baseElev : hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
     // The field's own depth channel is floored at the build's minimumDepth, so
     // prefer the honest level-minus-ground where the ground is known.
     const d = Number.isFinite(bed) ? wet.restingLevelM - bed : wet.depthM;
     const fx = wet.flow[0], fz = wet.flow[1];
     const fl = Math.hypot(fx, fz);
     return {
-      depth: clamp(d, 0.05, 4),
+      depth: clamp(d, 0.05, 4), wet: true,
       fx: fl > 0.01 ? fx / fl : 0,
       fz: fl > 0.01 ? fz / fl : 0,
       // Standing water does not push. A river's own energy rides the field's
@@ -15019,7 +17435,7 @@ function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: num
     const drop = (best.ya as number) - (best.yb as number);   // + means it flows a→b
     const s = Math.sign(drop) || 1;
     return {
-      depth: clamp(0.3 + best.hw * 0.09, 0.3, 1.4),
+      depth: clamp(0.3 + best.hw * 0.09, 0.3, 1.4), wet: true,
       fx: (dx / len) * s,
       fz: (dz / len) * s,
       speed: clamp(0.4 + 4.5 * Math.sqrt(Math.abs(drop) / len), 0.4, 3.2),
@@ -15028,52 +17444,10 @@ function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: num
   const sl = seaLevelY();
   if (sl !== null) {
     const d = sl - groundAt(x, z);
-    if (d > 0.05) return { depth: d, fx: 0, fz: 0, speed: 0 };
+    if (d > 0.05) return { depth: d, fx: 0, fz: 0, speed: 0, wet: true };
   }
-  return { depth: 0.5, fx: 0, fz: 0, speed: 0 };
+  return { depth: 0.5, fx: 0, fz: 0, speed: 0, wet: false };
 }
-/** Dig the watercourse beds inside a tile. Runs after `carveCorridors`, and
- *  only ever lowers, so it cannot lift ground back over a road.
- *
- *  Driven from the CHANNELS, not from the vertices. Asking all 16k vertices of
- *  a tile whether a river runs past them is a grid walk and a set allocation
- *  each, on a path that already costs a tile rebuild; walking the handful of
- *  channels instead and touching only the lattice under each one's bounding box
- *  does the same work for the length of river actually present. */
-function carveChannels(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): void {
-  if (!channelGrid.size) return;
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  const cell = t.w / SEG;
-  const seen = new Set<Seg>();
-  const cx0 = Math.floor(t.xs / GRID) - 1, cx1 = Math.floor((t.xs + t.w) / GRID) + 1;
-  const cz0 = Math.floor(t.zs / GRID) - 1, cz1 = Math.floor((t.zs + t.h) / GRID) + 1;
-  for (let gx = cx0; gx <= cx1; gx++) for (let gz = cz0; gz <= cz1; gz++) {
-    for (const c of channelGrid.get(`${gx},${gz}`) ?? []) seen.add(c);
-  }
-  if (!seen.size) return;
-  // By position, not by lattice index: a refined tile's vertices are not on
-  // the lattice. The boxes are few and the vertices are walked once.
-  const boxes: number[][] = [];
-  for (const c of seen) {
-    const m = c.hw + 3 + cell;
-    boxes.push([Math.min(c.ax, c.bx) - m, Math.max(c.ax, c.bx) + m, Math.min(c.az, c.bz) - m, Math.max(c.az, c.bz) + m]);
-  }
-  const touched = new Set<number>();
-  const ox = t.xs + t.w / 2, oz = t.zs + t.h / 2;
-  for (let v = 0; v < pos.count; v++) {
-    const x = pos.getX(v) + ox, z = pos.getZ(v) + oz;
-    for (const b of boxes) if (x >= b[0] && x <= b[1] && z >= b[2] && z <= b[3]) { touched.add(v); break; }
-  }
-  for (const v of touched) {
-    const x = pos.getX(v) + t.xs + t.w / 2, z = pos.getZ(v) + t.zs + t.h / 2;
-    const f = channelFloorAt(x, z, pos.getY(v));
-    if (f !== null) pos.setY(v, f);
-  }
-}
-/**
- * A WATERCOURSE: solved profile, carved bed, and a bore wherever it runs under
- * something. Replaces the plain drape the river used to be.
- */
 const builtRuns = new Map<string, Set<number>>();
 function waterway(pts: Array<[number, number]>, width: number, name?: string, key?: string): void {
   const dense = densifyPts(pts);
@@ -15354,9 +17728,23 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
    */
   if (rocks.length) {
     const rv: number[] = [], rc: number[] = [];
+    // One reach, one geology. Hillside boulders and stone buildings already use
+    // this district-scale family; rapid rocks were the last global grey left in
+    // the landscape. Individual stones vary inside the family's authored spans.
+    const rockAt = dense[n >> 1];
+    const rockClimate = climateAt(rockAt[0], rockAt[1]);
+    const rockFamily = STONE[bedrockAt(cultEnv, rockAt[0], rockAt[1],
+      STONE_MIX_ROWS, rockClimate.w)];
+    const rapidRockColour = new THREE.Color();
     for (const rk of rocks) {
       const [x0, z0] = dense[rk.st];
       const sides = 6;
+      const familyPick = clamp((rk.tone - 0.72) / 0.30, 0, 1) - 0.5;
+      rapidRockColour.setHSL(
+        rockFamily[0] + familyPick * rockFamily[1],
+        clamp(rockFamily[2] + (rnd(x0, z0, rk.k + 57) - 0.5) * rockFamily[3], 0, 1),
+        clamp(rockFamily[4] + familyPick * rockFamily[5], 0.04, 0.78),
+      );
       // A lump: one apex over a ragged ring. Flat-shaded, so this is enough.
       for (let e = 0; e < sides; e++) {
         const a0 = rk.spin + (e / sides) * Math.PI * 2, a1 = rk.spin + ((e + 1) / sides) * Math.PI * 2;
@@ -15365,7 +17753,13 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
         rv.push(rk.cx, rk.top, rk.cz,
           rk.cx + Math.cos(a0) * r0, rk.base, rk.cz + Math.sin(a0) * r0,
           rk.cx + Math.cos(a1) * r1, rk.base, rk.cz + Math.sin(a1) * r1);
-        for (let q = 0; q < 3; q++) rc.push(rk.tone, rk.tone * 0.99, rk.tone * 0.94);
+        // The submerged ring is darker than the dry crown, giving the rock a
+        // wet contact without another material or transparency pass.
+        rc.push(
+          rapidRockColour.r * 1.04, rapidRockColour.g * 1.04, rapidRockColour.b * 1.02,
+          rapidRockColour.r * 0.76, rapidRockColour.g * 0.78, rapidRockColour.b * 0.80,
+          rapidRockColour.r * 0.76, rapidRockColour.g * 0.78, rapidRockColour.b * 0.80,
+        );
       }
       // …and into the collision buckets. Something SOLID is in the river, and
       // the truck now knows it the way it knows a hillside boulder: a bite of
@@ -15495,12 +17889,38 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   }
   if (!isFinite(cover)) return;
   const room = cover;
-  // No room at all is a real answer: the water passes at grade and there is
-  // nothing to build. Drawing a bore anyway is what put concrete in the road.
-  if (room < 0.2) { culvertStats.tooTight++; return; }
+  // No usable room is a real answer: the water passes at grade and there is
+  // nothing to build. The old 0.2m rejection sat BELOW CULV_CLR, then clamp
+  // enlarged a 0.2–0.35m gap to a 0.35m bore — geometry larger than the room
+  // that sized it. A clearance calculation may only shrink geometry.
+  if (room < CULV_CLR) { culvertStats.tooTight++; return; }
+
+  const ci = Math.floor((core0 + core1) / 2);
+  const [cx, cz] = dense[ci];
+  const cclim = climateAt(cx, cz, inv[ci] + baseElev);
+  const [clat, clon] = localToLatLon(cx, cz);
+  const conduitKey = `conduit:${Math.round(clat * 1e6)}:${Math.round(clon * 1e6)}`;
+  const conduitRecipe = pickInfrastructureRecipe({
+    key: conduitKey, kind: 'conduit', lengthM: Math.max(1, b - a) * 12,
+    spanM: width, roadWidthM: width, tier: 1,
+    climate: cclim.w, temperatureC: cclim.tempC, moisture: cclim.moisture,
+    snow: snowLoad(cclim.w, cclim.elevAbs), reliefM: 0, sideSlope: 0,
+    coverM: room, daylightM: 0, waterWidthM: width, urbanity: 0.15,
+    bedrock: 'unknown',
+    regionSeed: seedAt(cultEnv, cx, cz, 'region'),
+    districtSeed: seedAt(cultEnv, cx, cz, 'district'),
+    settlementSeed: seedAt(cultEnv, cx, cz, 'settlement'),
+    availableClearanceM: room,
+  });
+  const crk = `conduit:${conduitRecipe.family}:${conduitRecipe.material}`;
+  spanStats.recipes[crk] = (spanStats.recipes[crk] ?? 0) + 1;
+  // Ford/none are intentionally geometry-free fallbacks: water continues at
+  // grade and no procedural solid can intrude into the deck above.
+  if (!conduitRecipe.feasible || conduitRecipe.family === 'ford') return;
+
   const rig = room >= CULV_RIG;
-  const H = rig ? CULV_RIG : clamp(room, CULV_CLR, 1.8);
-  const W = Math.max(width, rig ? 4.4 : 1.6);
+  const H = rig ? CULV_RIG : Math.min(room, conduitRecipe.family === 'pipe' ? 1.45 : 1.8);
+  const W = Math.max(width, rig ? 4.4 : conduitRecipe.family === 'pipe' ? 1.6 : 2.2);
   culvertStats.runs++;
   if (rig) culvertStats.rigSized++;
   const tv: number[] = [];
@@ -15518,6 +17938,11 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     push(x0 + ax2, yA, z0 + az2, x1 + bx2, yB, z1 + bz2, x0 + ax2, cA, z0 + az2, x1 + bx2, cB, z1 + bz2);
     push(x0 - ax2, yA, z0 - az2, x1 - bx2, yB, z1 - bz2, x0 - ax2, cA, z0 - az2, x1 - bx2, cB, z1 - bz2);
     push(x0 + ax2, cA, z0 + az2, x1 + bx2, cB, z1 + bz2, x0 - ax2, cA, z0 - az2, x1 - bx2, cB, z1 - bz2);
+    // Twin-cell is the same safe outer envelope with a central divider, so the
+    // visual family changes without changing the clearance calculation.
+    if (conduitRecipe.family === 'twin-cell') {
+      push(x0, yA, z0, x1, yB, z1, x0, cA, z0, x1, cB, z1);
+    }
     // NOTHING GOES IN THE WALL GRID. A road tunnel's walls are solid because
     // you drive BETWEEN them; a culvert is buried, and the only thing near
     // enough to hit its walls is the traffic on the road over the top. Putting
@@ -15552,14 +17977,18 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     const hdeck = deckOver(px, pz, 1.5);
     const hi = hdeck === null ? Infinity : hdeck - CULV_UNDER;
     const top = Math.min(inv[end] + H + 0.7, hi);
-    const hh = Math.max(0.4, top - (inv[end] - 0.4));
+    const bottom = inv[end] - 0.4;
+    const hh = top - bottom;
+    // Do not force a decorative minimum back through the deck ceiling. Where
+    // even a thin headwall will not fit, the safe visual is no headwall.
+    if (hh < 0.15) continue;
     const wall = new THREE.Mesh(new THREE.BoxGeometry(W + 2.4, hh, 0.7), MAT.portal);
-    wall.position.set(px, inv[end] - 0.4 + hh / 2, pz);
+    wall.position.set(px, bottom + hh / 2, pz);
     wall.rotation.y = ang + Math.PI / 2;
     worldGroup.add(wall);
   }
 }
-function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number[], a: number, b: number, width: number, lift: number): void {
+function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number[], a: number, b: number, width: number, lift: number, recipe?: StructureRecipe): void {
   // Belt and braces: the ceiling can never poke out through the hillside —
   // EXCEPT at the mouths, which wear a straight collar at tube height. The
   // mouth stations used to cap under the RAW terrain, but the portal-throat
@@ -15603,13 +18032,17 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
   // not the DEM's.
   {
     const lv: number[] = [];
-    let run = 9;                                  // first lamp a few metres in
+    // Lighting is part of the deterministic recipe. Rural raw-rock bores stay
+    // sparse; major segmental/cut-cover tubes carry a continuous rhythm.
+    const lampEvery = recipe?.lighting === 'none' ? Infinity
+      : recipe?.lighting === 'portal' ? 36 : recipe?.lighting === 'continuous' ? 12 : 24;
+    let run = lampEvery * 0.5;
     for (let i = a; i < b; i++) {
       const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
       const dx = x1 - x0, dz = z1 - z0;
       const len = Math.hypot(dx, dz) || 1;
       run += len;
-      if (run < 18) continue;
+      if (run < lampEvery) continue;
       run = 0;
       const ux = dx / len, uz = dz / len;         // along
       const px2 = -uz * 0.4, pz2 = ux * 0.4;      // across, an 0.8m panel
@@ -15637,7 +18070,10 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
     const i0 = end === a ? a : b - 1, i1 = end === a ? a + 1 : b;
     const [x0, z0] = dense[i0], [x1, z1] = dense[i1];
     const ang = Math.atan2(z1 - z0, x1 - x0);
-    const lintel = new THREE.Mesh(new THREE.BoxGeometry(width + 3, 1.6, 1.2), MAT.portal);
+    const rawPortal = recipe?.family === 'rock' || recipe?.family === 'gallery';
+    const lintel = new THREE.Mesh(new THREE.BoxGeometry(
+      width + (rawPortal ? 1.8 : 3), rawPortal ? 0.9 : 1.6, rawPortal ? 0.8 : 1.2,
+    ), MAT.portal);
     const [px, pz] = dense[end];
     lintel.position.set(px, ceil(end) + 0.3, pz);
     lintel.rotation.y = ang + Math.PI / 2; // across the road, not along it
@@ -15750,7 +18186,26 @@ function claimSolid(pts: Array<[number, number]>, top: number, rubble = false): 
 // the low-rise stock is an open shell: walls chewed down to varying heights,
 // whole bays collapsed, no roof, and something growing in the middle of it.
 // Towers stay intact — a twenty-storey open shell reads as a modelling bug.
-const buildStats = { intact: 0, ruin: 0, ruins: [] as Array<[number, number]> };
+/**
+ * `hist` and `roofs` are the MASSING instruments, and they exist because the
+ * counts above cannot see the thing that was wrong. A world where every
+ * building is 6.2m tall and a world with a range of heights report the same
+ * `intact` and the same `ruin`; the defect is in the DISTRIBUTION, so the
+ * distribution is what a probe has to answer. Heights in 3m buckets, and the
+ * roof shape actually chosen — including how many got none, which was 99%.
+ */
+const buildStats = {
+  intact: 0, ruin: 0, ruins: [] as Array<[number, number]>,
+  hist: [] as number[], roofs: {} as Record<string, number>,
+};
+/** One building's height and roof, for the massing histogram. */
+function noteMass(height: number, roof: string | undefined): void {
+  const b = Math.min(11, Math.floor(height / 3));
+  while (buildStats.hist.length < 12) buildStats.hist.push(0);
+  buildStats.hist[b]++;
+  const k = roof ?? 'flat';
+  buildStats.roofs[k] = (buildStats.roofs[k] ?? 0) + 1;
+}
 /** Which paint this building wears. HASHED, not `id % n`: OSM ids are handed
  *  out in creation order, so a terrace surveyed in one sitting has consecutive
  *  ids and the modulo painted it as a repeating stripe of the same few
@@ -15807,6 +18262,7 @@ function registerPaint(col: number): number | null {
   facade(wall);
   bldSkylit.push(wall);
   const roof = new THREE.MeshLambertMaterial({ color: side.clone().multiplyScalar(0.78), map: roofTex, side: DS });
+  bldRoofSkylit.push(roof);
   const paint = B_MATS_FLAT.length / 2;
   B_MATS_FLAT.push(roof, wall);
   extraPaint.set(col, paint);
@@ -15842,6 +18298,7 @@ function registerCulturePaint(wallCol: number, roofCol: number, wt: WallTex, rt:
   // brighter of the two surfaces.
   const roof = new THREE.MeshLambertMaterial({
     color: new THREE.Color(roofCol).multiplyScalar(0.78), map: ROOF_TEX[rt], side: DS });
+  bldRoofSkylit.push(roof);
   const paint = B_MATS_FLAT.length / 2;
   B_MATS_FLAT.push(roof, wall);
   culturePaint.set(key, paint);
@@ -16211,6 +18668,119 @@ function markForBuilding(x: number, z: number, kind: string): number {
   const look: MarkLook = markLookAt(cultEnv, x, z, climateAt(x, z).w, people);
   return packMark(look);
 }
+/**
+ * ── HOW TALL A BUILDING IS WHEN NOBODY SAID, WHICH IS ALMOST ALWAYS ──
+ *
+ * The estimate was `building:levels || 2`, times 3.1m. MEASURED over the three
+ * captures this game ships — 5,120 footprints between Suresnes, Camps Bay and
+ * Simon's Town — that default is what almost the whole world gets:
+ *
+ *   tag              Suresnes   Camps Bay   Simon's Town
+ *   building:levels        6%        0.3%        0.2%
+ *   height              0.05%          0%          0%
+ *   roof:shape           1.4%          0%          0%
+ *   building=yes          80%         89%         90%
+ *
+ * So ~94% of every town was EXACTLY 6.2 metres tall. That is the flat, one-value
+ * skyline the building review photographed, and no amount of surface detail
+ * fixes it: massing is what a town reads as from more than fifty metres away.
+ * The R55 note above this file's tag work was measured on Freiburg, which is an
+ * unusually well-surveyed city; everywhere else the vocabulary simply is not
+ * there, and a renderer that only varies where a surveyor typed something will
+ * be flat wherever anyone actually drives.
+ *
+ * The rule, then, is to SYNTHESISE from what is always present — the footprint
+ * itself, where it stands, and what the culture builds like — while still
+ * deferring completely to a real tag wherever one exists.
+ *
+ * ── WHY THE STAND SEED AND NOT JUST A HASH ──
+ *
+ * This is the lesson the tree atlas already paid for ("a wood is one wood"):
+ * hashing each building's own position gives every one an independent draw,
+ * which is not variety, it is noise — a terrace of houses at six different
+ * heights reads as broken data. Real streets are coherent at two scales, so the
+ * STAND (32m, about one terrace) sets a local norm and the building's own draw
+ * moves it by up to half a storey either way. Neighbours agree; the next block
+ * along does not.
+ *
+ * `builtUpAt` — road length in the neighbourhood, the same proxy the marks
+ * already use for how many people pass — is what separates a village from a
+ * city centre without needing a population raster.
+ *
+ * Deliberately NOT read: nothing here consults the ruin roll's generator. It
+ * gets its own, seeded off the same id by a different constant, so which
+ * buildings are ruins is byte-identical before and after this change and an
+ * A/B of the two is a comparison of MASSING alone.
+ */
+const MASS_CANOPY = new Set(['roof', 'carport']);
+const MASS_OUT = new Set(['shed', 'hut', 'garage', 'garages', 'cabin', 'stable',
+  'cowshed', 'greenhouse', 'bunker', 'container', 'kiosk', 'boathouse', 'sty']);
+const MASS_HALL = new Set(['barn', 'farm_auxiliary', 'warehouse', 'hangar', 'industrial',
+  'manufacture', 'works', 'depot', 'silo', 'storage_tank', 'sports_hall', 'supermarket']);
+const MASS_BLOCK = new Set(['apartments', 'flats', 'commercial', 'office', 'retail',
+  'hotel', 'school', 'hospital', 'civic', 'public', 'university', 'college',
+  'government', 'dormitory', 'residential']);
+/** The footprint's area and the short side of its oriented box — the two facts
+ *  about a plan that say what sort of building can stand on it. */
+function footprintSize(pts: Array<[number, number]>): { area: number; short: number } {
+  let a2 = 0, bi = 0, bl = -1;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, z1] = pts[i], [x2, z2] = pts[(i + 1) % pts.length];
+    a2 += x1 * z2 - x2 * z1;
+    const l = (x2 - x1) ** 2 + (z2 - z1) ** 2;
+    if (l > bl) { bl = l; bi = i; }
+  }
+  const area = Math.abs(a2) / 2;
+  const [ex1, ez1] = pts[bi], [ex2, ez2] = pts[(bi + 1) % pts.length];
+  const el = Math.hypot(ex2 - ex1, ez2 - ez1) || 1;
+  const ux = (ex2 - ex1) / el, uz = (ez2 - ez1) / el;
+  let v0 = Infinity, v1 = -Infinity;
+  for (const [x, z] of pts) {
+    const v = x * -uz + z * ux;
+    if (v < v0) v0 = v; if (v > v1) v1 = v;
+  }
+  return { area, short: Math.max(1, Math.min(el, v1 - v0)) };
+}
+function massHeight(
+  kind: string, pts: Array<[number, number]>, x: number, z: number, look: BuildLook, id: number,
+): number {
+  const { area, short } = footprintSize(pts);
+  const rm = mulberry32((Math.imul(id, 0x9e3779b1) ^ 0x5bf03635) >>> 0);
+  rm();                                     // the first draw off a hashed seed is poor
+  const norm = unitN(seedAt(cultEnv, x, z, 'stand'), 3);   // this terrace's own norm
+  const dens = builtUpAt(x, z);
+  const storey = look.culture.storeyM;
+  // A CANOPY IS NOT A BUILDING. `building=roof` is a bus shelter, a filling
+  // station, a lean-to over a yard — 37 of Simon's Town's 666 footprints — and
+  // every one of them was a six-metre windowless box.
+  if (MASS_CANOPY.has(kind)) return 2.4 + 0.9 * rm();
+  // An outbuilding is one low storey, and never taller than it is wide: a 3m
+  // garage at 3.5m is a tower.
+  if (MASS_OUT.has(kind)) return Math.min(2.5 + 1.1 * rm(), short * 1.15 + 1.4);
+  // A hall is ONE tall volume, not floors — and a farm's sheds agree with each
+  // other, so the stand norm carries more weight here than the individual draw.
+  if (MASS_HALL.has(kind)) return 5.4 + 4.6 * norm + 1.2 * (rm() - 0.5);
+  // Somewhere between one and three storeys, the stand deciding which.
+  const houseSt = 1 + (norm > 0.52 ? 1 : 0) + (rm() > 0.82 ? 1 : 0);
+  if (MASS_BLOCK.has(kind)) {
+    // A block's floor count follows its PLAN and its neighbourhood: a big
+    // footprint in a dense place is the one combination that means "tall".
+    const big = clamp((area - 140) / 420, 0, 1);
+    const st = clamp(2 + norm * 1.4 + dens * 2.6 + big * 2.4 + (rm() - 0.5) * 1.2, 2, 9);
+    return st * storey;
+  }
+  if (kind !== 'yes') return houseSt * storey;
+  // ── THE UNTYPED EIGHTY PER CENT ──
+  //
+  // `building=yes` is most of the planet and says nothing at all, so the plan
+  // has to answer for it. Under about 55m² nothing has floors — that is the
+  // garden shed, the garage, the outhouse — and the step is deliberately sharp,
+  // because in life it is: a shed is not a short house.
+  if (area < 55) return Math.min(2.6 + 1.1 * rm(), short * 1.2 + 1.5);
+  const big = clamp((area - 130) / 460, 0, 1);
+  const st = clamp(1 + norm * 1.5 + dens * 2.3 + big * 1.9 + (rm() - 0.5) * 1.1, 1, 9);
+  return st * storey;
+}
 function building(pts: Array<[number, number]>, id: number, tags: Record<string, string>): void {
   // Inside a landmark pad the authored geometry is the building. OSM's own
   // polygon for a pyramid extrudes into a flat-roofed prism through ours.
@@ -16223,7 +18793,11 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     if (pts.length && inLandmarkPad(ctrX, ctrZ)) return;
   }
   const kind = tags.building ?? 'yes';
-  const levels = parseFloat(tags['building:levels'] ?? '') || 2;
+  const levels = parseFloat(tags['building:levels'] ?? '') || 0;
+  // THE LOOK IS NEEDED BEFORE THE HEIGHT NOW, because a storey is a property of
+  // the culture (see BuildCulture.storeyM) rather than a global 3.1m. It is a
+  // cached lookup on position and has no dependency on anything below.
+  const look = buildLook(ctrX, ctrZ);
   // ON THE LINE, nothing out here is intact. The Covers are where the built
   // world went — everything the domes did not take has stood empty since the
   // Leaving, so the campaign's world ruins every building outside a shell
@@ -16231,7 +18805,14 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // mid-rise first: the ruin path's ragged-bay walls were designed around
   // low-rise stock, and a ninety-metre open shell reads as a bug, not a ruin.
   const surveyed = parseMetres(tags.height) ?? parseMetres(tags['building:height']);
-  const height = clamp(surveyed ?? levels * 3.1, 3, lineOn ? 26 : 90);
+  // THE DATA WINS WHEREVER THERE IS ANY. A surveyed height first, then a levels
+  // count at the culture's own storey — and only where OSM says nothing at all
+  // does massHeight synthesise one from the footprint. The floor is 2.2m rather
+  // than 3 so a canopy and a garage can actually be low; a building is still
+  // never shorter than a person can walk under.
+  const height = clamp(
+    surveyed ?? (levels > 0 ? levels * look.culture.storeyM : massHeight(kind, pts, ctrX, ctrZ, look, id)),
+    2.2, lineOn ? 26 : 90);
   const r = mulberry32((id * 2654435761) >>> 0);
   r(); // first draw off a hashed seed is poorly distributed
   // WHAT OSM SAYS FELL DOWN STAYS DOWN. Giza's home town maps 94% of its
@@ -16240,15 +18821,14 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   const forceRuin = kind === 'ruins' || kind === 'collapsed' || kind === 'construction';
   // Intact buildings hand their extrusion to the tile batch instead of
   // standing up a mesh each — see flushBuildings for why.
-  const intactSink = (paint: number, roof?: string) =>
+  const intactSink = (paint: number, roof?: string, ridge?: number) =>
     (geo: THREE.BufferGeometry, base: number, top: number): void => {
       const batch = openBldBatch();
       const arr = batch.intact.get(paint) ?? [];
       const mark = markForBuilding(ctrX, ctrZ, kind);
       arr.push({ geo, base, mark, pts });
       if (roof) {
-        const rg = roofGeo(pts, roof, top,
-          clamp(parseFloat(tags['roof:levels'] ?? '') * 2.6 || 0, 0, 9) || undefined);
+        const rg = roofGeo(pts, roof, top, ridge);
         if (rg) arr.push({ geo: rg, base, mark, pts });
       }
       batch.intact.set(paint, arr);
@@ -16274,7 +18854,6 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // null once the material array is full, and a null paint index would put
   // `new Mesh(geo, undefined)` back in the scene — the unlit white slab that
   // cost half the world's buildings once already.
-  const look = buildLook(ctrX, ctrZ);
   const cultural = registerCulturePaint(
     paintFor(cultEnv, look, ctrX, ctrZ), look.roofCol, look.culture.wallTex, look.culture.roofTex);
   const paint = mapped ?? (TYPO_COL[kind] !== undefined ? registerPaint(TYPO_COL[kind]) : null)
@@ -16282,16 +18861,74 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // The roof. Explicit shape wins; a small house-shaped thing defaults to a
   // gable, which is what most of the world's housing stock wears whether or
   // not anyone typed it in.
+  //
+  // ── AND THE DEFAULT HAD TO STOP BEING A KIND STRING ──
+  //
+  // `roof:shape` is on 1.4% of Suresnes and 0% of the other two captures, so
+  // the default IS the roof for practically every building — and it was keyed
+  // on `building=` matching a list of house words, which is a tag that says
+  // `yes` 80-90% of the time. Result: 99% of the world wore a flat extrusion
+  // cap, which is the flat-topped skyline the review photographed.
+  //
+  // A pitch is a statement about the PLAN, and roofGeo already refuses plans
+  // that cannot carry one (rectangularity, span, ≤1400m² — "houses, not
+  // malls"). So the gate here is not "is this word a house", it is the two
+  // things the word cannot tell you: does this TRADITION pitch its roofs, and
+  // is this thing short enough to be roofed rather than capped.
   const roofShape = (() => {
     const rs = tags['roof:shape'];
     if (rs === 'gabled' || rs === 'hipped' || rs === 'pyramidal' || rs === 'skillion') return rs;
     if (rs) return undefined;                     // flat, dome, … — extrusion as-is
-    return /^(house|residential|detached|semidetached_house|bungalow|farm|barn|terrace|hut|cabin)$/.test(kind)
-      ? 'gabled' : undefined;
+    // THE CULTURE'S PITCH IS FINALLY LOAD-BEARING. It has been computed, snow-
+    // biased and reported by __culture since the cultures shipped, and consumed
+    // by nothing at all. Near zero it means a flat-roofed tradition — an adobe
+    // town's flat silhouette is the thing that says "somewhere hot" before any
+    // colour registers, and it was only ever arriving by accident of the kind
+    // regex above not matching.
+    if (look.pitch < 0.2) return undefined;
+    // A canopy is a sheet on posts and has no attic to roof.
+    if (MASS_CANOPY.has(kind)) return undefined;
+    const { area, short } = footprintSize(pts);
+    // Its own generator, seeded off the id by a constant nothing else uses, so
+    // the choice cannot shift the ruin roll or the massing draw and an A/B of
+    // any one of the three is a comparison of that one thing.
+    const rr = mulberry32((Math.imul(id, 0x85ebca6b) ^ 0x9e3779b9) >>> 0);
+    rr();
+    // ── MEASURED, AND THE FIRST CUT OVERSHOT ──
+    //
+    // Gating only on the culture's pitch and a height ceiling put a pitched roof
+    // on 98.7% of Suresnes — 1,474 hipped against 679 gabled and 28 flat — which
+    // is as wrong as the 99% flat it replaced, just in the other direction, and
+    // hipped is not even the common shape. Flat roofs are real and specific:
+    // they are what outbuildings, apartment blocks and commercial sheds wear.
+    //
+    // A LEAN-TO IS WHAT A SMALL OUTBUILDING WEARS. Not a hip — a hipped roof on
+    // a 6m² garden shed is a doll's house.
+    if (MASS_OUT.has(kind) || area < 55) return rr() < 0.55 ? 'skillion' : undefined;
+    // A barn is a long gable, and that is most of its silhouette.
+    if (MASS_HALL.has(kind)) return 'gabled';
+    // A BLOCK IS FLAT-TOPPED once it is genuinely a block. Below that a small
+    // "apartments" is a converted house and still wears a roof.
+    const block = MASS_BLOCK.has(kind) || height > 18
+      || (kind === 'yes' && area > 300 && builtUpAt(ctrX, ctrZ) > 0.5);
+    if (block) return area > 300 || height > 14 ? undefined : (rr() < 0.5 ? 'hipped' : 'gabled');
+    // A square plan CAN hip; a long one gables. Hipping stays the minority
+    // choice even where the plan allows it, because a street of hips reads as
+    // stamped — the squareness test comes free off the box roofGeo is about to
+    // compute anyway.
+    return area / (short * short) < 1.5 && area > 90 && rr() < 0.45 ? 'hipped' : 'gabled';
   })();
+  // THE RIDGE FOLLOWS THE TRADITION, NOT THE FOOTPRINT'S SIZE. `min(du,dv)*0.45`
+  // gave a 40°-ish roof to every building on earth regardless of where it stood;
+  // the pitch an alpine slate roof needs to shed snow and the pitch a Provençal
+  // pantile roof wants are genuinely different numbers, and snowLoad has already
+  // worked out which this is. `roof:levels` still wins where it exists.
+  const ridgeM = clamp(parseFloat(tags['roof:levels'] ?? '') * 2.6 || 0, 0, 9)
+    || clamp((footprintSize(pts).short / 2) * look.pitch, 1.2, 7);
   if (!lineOn && !forceRuin && (height > 24 || r() > 0.42 || TYPO_COL[kind] !== undefined || mapped !== null)) {
     buildStats.intact++;
-    polygon(pts, B_MATS[0], 0.9, height, 'solid', intactSink(paint, roofShape));
+    noteMass(height, roofShape);
+    polygon(pts, B_MATS[0], 0.9, height, 'solid', intactSink(paint, roofShape, ridgeM));
     // A house of worship grows its tower: a square campanile off the ring's
     // first corner, batched like any other footprint, wearing a pyramid.
     if ((kind === 'church' || kind === 'cathedral' || kind === 'chapel'
@@ -16991,6 +19628,9 @@ function synthRing(set: Set<string>): Array<[number, number]> | null {
 // IndexedDB gets an origin quota in the hundreds of MB.
 interface OsmWay {
   id: number; tags?: Record<string, string>; geometry: Array<{ lat: number; lon: number }>;
+  /** A water multipolygon's rings (v4 tiles), [lat, lon] pairs; `geometry`
+   *  is then the first outer ring. Relations carry NEGATIVE ids. */
+  rings?: Array<{ outer: Array<[number, number]>; holes: Array<Array<[number, number]>> }>;
   /** Dedupe key. A way clipped across several vector tiles arrives once per
    *  tile under the SAME id, so the id alone would render the first piece and
    *  silently drop the rest. */
@@ -17011,7 +19651,12 @@ const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterwa
   // keep the road's own grade under a canopy, and the rest are weak-but-real
   // signals (cut side, fill, mapped grade, clearance) held for when the
   // vertical alignment learns to consume them.
-  'covered', 'cutting', 'embankment', 'incline', 'maxheight'];
+  'covered', 'cutting', 'embankment', 'incline', 'maxheight',
+  // Hydro's vocabulary: kind, width, level and regime of a water body.
+  'water', 'width', 'intermittent', 'seasonal', 'tidal', 'water_level',
+  // Infrastructure grammar: explicit facts always outrank procedural context.
+  'bridge:structure', 'bridge:support', 'bridge:material', 'tunnel:type',
+  'tunnel:lining', 'material', 'start_date', 'lanes', 'width', 'diameter'];
 let osmDb: IDBDatabase | null = null;
 let osmDbHow = 'pending';
 /**
@@ -17053,7 +19698,7 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
 });
 // Free the shared origin quota from the failed localStorage era.
 try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
-const osmCacheKey = (x: number, y: number): string => `5/${OSM_Z}/${x}/${y}`; // v5: nodes, rivers, rails
+const osmCacheKey = (x: number, y: number): string => `6/${OSM_Z}/${x}/${y}`; // v6: water relations (v4 tiles)
 async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
   // THE FIXTURE IS THE CACHE. Answering here as well as at the proxy is what
   // gives renderGated its halo — so an authored road solves its profile
@@ -17085,7 +19730,7 @@ function writeTileCache(x: number, y: number, els: OsmWay[]): void {
     // is because no coastline arrived or because the branch never fired. This
     // separates the two.
     if (e.tags?.natural === 'coastline') osmCoastSeen++;
-    return { id: e.id, tags, geometry: e.geometry };
+    return { id: e.id, tags, geometry: e.geometry, ...(e.rings ? { rings: e.rings } : {}) };
   });
   try {
     osmDb.transaction('osm', 'readwrite').objectStore('osm').put({ ts: Date.now(), ways }, osmCacheKey(x, y));
@@ -17599,7 +20244,6 @@ const AREA_TAG = (t: Record<string, string>): boolean =>
  * place is not worth more than a soft edge in the right one.
  */
 const AREA_CELL = 192;              // metres per registration cell — a forest is not a kerb
-const AREA_MIX = 0.5;               // how far the ramp is pulled, after the raster's own tint
 const AREA_CAP = 3000;              // patches held; past this the paint stops asking
 interface AreaPatch {
   pts: Array<[number, number]>; tint: Rgb;
@@ -17857,6 +20501,7 @@ async function buildBreath(): Promise<void> {
   const held = now - (buildUntil - BUILD_MS);
   if (held > buildCost.longestMs) buildCost.longestMs = +held.toFixed(1);
   buildCost.yields++;
+  profAdd('roadBuild', now - held);                 // the slice that just ran, for __frameprof
   await yieldTask();
   buildUntil = performance.now() + BUILD_MS;
 }
@@ -17917,12 +20562,24 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
         const [px, pz] = pts[i];
         const key = `${Math.round(px * 2)},${Math.round(pz * 2)}`;
         let node = juncNodes.get(key);
-        if (!node) juncNodes.set(key, node = { x: px, z: pz, arms: [] });
+        if (!node) {
+          // The same vertex registered by an earlier batch — the way clipped
+          // into the next tile, or a neighbour's stub — is one node, not two.
+          const gk = gkey(px, pz);
+          let cell = juncNodeGrid.get(gk);
+          if (!cell) juncNodeGrid.set(gk, cell = []);
+          node = cell.find((n) => Math.hypot(n.x - px, n.z - pz) < 0.5);
+          if (!node) cell.push(node = { x: px, z: pz, arms: [] });
+          juncNodes.set(key, node);
+        }
         for (const j of [i - 1, i + 1]) {
           if (j < 0 || j >= pts.length) continue;
           const dx = pts[j][0] - px, dz = pts[j][1] - pz, l = Math.hypot(dx, dz);
           if (l < 0.5) continue;
-          node.arms.push({ ux: dx / l, uz: dz / l, hw: w / 2, dk });
+          const ux = dx / l, uz = dz / l;
+          // Re-registered across batches: the arm is already here.
+          if (node.arms.some((a) => a.dk === dk && a.ux * ux + a.uz * uz > 0.99)) continue;
+          node.arms.push({ ux, uz, hw: w / 2, dk });
         }
       }
     }
@@ -18039,10 +20696,16 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       // normally and wears a roof, a wall on the uphill side, and columns
       // over the drop — which is what the real Chapman's overhang is.
       const canopy = tags.tunnel === 'avalanche_protector' || (!!tags.covered && tags.covered !== 'no');
-      const mode: RoadMode = track || stairs ? 'none'
+      // A FOOTBRIDGE IS A BRIDGE. Tracks took 'none' whatever their tags said,
+      // so a footway tagged bridge=yes layer=1 over the A6 at Rubigen was a
+      // draped ribbon at grade — a slab across both carriageways, seen from
+      // the seat — and a footway tunnel under a road ran over it. A track
+      // keeps 'none' only where it carries no structure tag: it has no chain
+      // and no profile to solve, and 'auto' would ask for one.
+      const mode: RoadMode = stairs ? 'none'
         : !canopy && tags.tunnel && tags.tunnel !== 'no' ? 'tunnel'
         : tags.bridge && tags.bridge !== 'no' ? 'bridge'
-        : 'auto';
+        : track ? 'none' : 'auto';
       const wq = wayQuality(tags, track);
       // The carriageway wears its REGION's convention — yellow centre line or
       // white, edge lines or none, fresh bitumen or bleached chip seal. Picked
@@ -18055,7 +20718,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
         GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk,
         // Which level OSM says this way is on — see layerOf. The planner pins and
         // the per-way hints stay on it; the end weld deliberately does not.
-        layerOf(tags));
+        layerOf(tags), tags);
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
@@ -18098,7 +20761,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       // the physics — `polygon(..., 'water')` is what fills `waterPolys` — so
       // this branch hands the surface AND the wading answer over together,
       // which is why `surfaceAt` grew a hydro sample in the same change.
-      noteHydroWay(el.id, tags, pts, dk);
+      noteHydroWay(el.id, tags, pts, dk, el.rings);
       if (!HYDRO_ON) polygon(pts, MAT.water, 0.025, 0, 'water');
     } else if (AREA_TAG(tags)) {
       // NOT A MESH — see noteArea. The ground wears it; the scatter stands on it.
@@ -18360,6 +21023,7 @@ function stepSurvey(now: number): void {
   // above: passing a course point on the far carriageway, or on the service
   // road beside the old N20, is still driving the line.
   buildRoute(mission);
+  goalRebase();
   stepRoute(now, prev);
   if (routeFor !== obsFor) { obsFor = routeFor; buildObs(mission); }
   stepObs(now);
@@ -18465,19 +21129,23 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
   const ctl = new AbortController();
   const bail = setTimeout(() => ctl.abort(), TILE_WAIT_MS);
   try {
-    const res = await fetch(`${CELL_BASE}/~/osm/v3/${OSM_Z}/${x}/${y}`, { signal: ctl.signal });
+    const res = await fetch(`${CELL_BASE}/~/osm/v4/${OSM_Z}/${x}/${y}`, { signal: ctl.signal });
     // 503 is the cell telling us Overpass just failed IT — a real answer, and a
     // reason to retry this tile later, not to abandon the proxy.
     if (res.status === 503) throw new Error('fill failed');
     if (!res.ok) { tileProxyOk = false; return null; }
-    const json = await res.json() as { ways?: Array<{ id: number; tags?: Record<string, string>; geometry?: Array<[number, number]> }> };
+    const json = await res.json() as { ways?: Array<{ id: number; tags?: Record<string, string>; geometry?: Array<[number, number]>; rings?: OsmWay['rings'] }> };
     // Stored as [lat, lon] pairs — a third of the bytes of {lat, lon} objects,
     // and the renderer wants the object shape, so widen on the way in.
-    return (json.ways ?? []).map((w) => ({
+    const t0 = performance.now();
+    const ways = (json.ways ?? []).map((w) => ({
       id: w.id,
       tags: w.tags,
       geometry: (w.geometry ?? []).map(([lat, lon]) => ({ lat, lon })),
+      ...(w.rings ? { rings: w.rings } : {}),
     })) as OsmWay[];
+    profAdd('osmParse', t0);
+    return ways;
   } finally { clearTimeout(bail); }
   // NOTE: no catch. A timeout or a network blip is THIS TILE failing, and the
   // caller's backoff already handles that; swallowing it here dropped the
@@ -18504,7 +21172,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     await renderGated(x, y, cached);
     noteTileRender(key, 'cache', cached.length, unbuilt - before);
     if (unbuilt !== before) setTimeout(() => osmLoaded.delete(key), 3000);
-    else osmDone.add(key);
+    else { osmDone.add(key); noteOsmDone(x, y); }
     return;
   }
   osmNote(1);
@@ -18560,7 +21228,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     // be requested again once the elevation it needed has landed, or the road
     // is simply missing for the rest of the session.
     if (unbuilt !== before) setTimeout(() => osmLoaded.delete(key), 3000);
-    else osmDone.add(key);
+    else { osmDone.add(key); noteOsmDone(x, y); }
   } catch {
     if (++osmFails >= 2) osmDown = true;
     osmFailedAt.set(key, performance.now());
@@ -18624,16 +21292,224 @@ const tileMetres = (z: number): number =>
 // is how this was found. 24km keeps z11 out to about 61 degrees — the whole of
 // the line, and then some — while the ring still reaches 34-41km on the ground.
 const SIGHT_M = 24000;
+/**
+ * HOW FAR THE CHART'S EYE STANDS OFF, AND IT IS THE ZOOM AND NOTHING ELSE.
+ *
+ * It used to carry `CAM.perKmh` — 1.1 metres of retreat per km/h — so a chart
+ * held at one zoom stood at a different height depending on how fast the truck
+ * was rolling under it. Reported from the seat as the chase camera's speed
+ * pull-back leaking into the chart; it is not that (chase has no such term —
+ * see the note by `fovKick`, which replaced the chase retreat with a lens kick
+ * precisely because backing away KILLS the sense of speed). This was the chart's
+ * own, and it was wrong on its own terms:
+ *
+ * - it broke ZOOM_MIN's promise. That constant exists to put the eye 22m over
+ *   the truck — "a frame about 23m across, the whole of a junction and its
+ *   corners, which is the scale the joins are judged at from the chart". At
+ *   100km/h the same zoom stood at 132m and at 180km/h at 220m, so the one
+ *   thing the minimum zoom is FOR was unreachable whenever the truck moved.
+ * - it broke ZOOM_MAX's derivation, which runs this arithmetic backwards and
+ *   says in its own docstring that it does so "at a standstill". Any speed at
+ *   the ceiling overshot SIGHT_MAX and was swallowed by the clamp in
+ *   `viewRadius` — the exact "the clamp saturated and the extra ceiling bought
+ *   nothing" failure SIGHT_MAX's note was written to end.
+ * - and the four places that computed it by hand did not agree: this one
+ *   exempted a flying drone, the streaming budget, the pan scale and the tap
+ *   unproject did not, so with the drone up and the truck moving the camera
+ *   stood at one distance while the map's own arithmetic believed another.
+ *
+ * One function now, so the frame, the tiles it streams, a drag across it and a
+ * tap into it cannot come apart again. A zoom is a distance; that is all.
+ */
+function chartDist(): number { return CAM.base * zoomCur; }
+/**
+ * METRES OF GROUND PER ART PIXEL on the chart, 0 from the seat.
+ *
+ * DERIVED ON DEMAND rather than read from `envU.uMpp`, which is written once a
+ * frame: the camera step, the streaming step and the tilt all want it, and
+ * which of them runs before the write is not a thing worth knowing. It is two
+ * multiplies and a tangent.
+ */
+function chartMpp(): number {
+  return camMode === 'top'
+    ? (2 * chartDist() * Math.tan(((camera.fov / 2) * Math.PI) / 180)) / Math.max(2, pixSize.y)
+    : 0;
+}
+/**
+ * ── THE CHART'S SCALE, AS A MAP WOULD STATE IT ──
+ *
+ * Three numbers a map carries and this one did not: a bar of a round length,
+ * the representative fraction, and — because the layers are named by it — the
+ * Web-Mercator zoom the frame is equivalent to. All three are the scale AT THE
+ * FRAME'S CENTRE, which is the honest statement for a tilted perspective: the
+ * near edge is larger and the far edge smaller, and at 89.9 degrees the
+ * difference is under a pixel.
+ *
+ * The fraction is ground metres per metre of GLASS, and the glass is the CSS
+ * reference pixel — 1/96 of an inch, which is what a phone reports whatever
+ * its panel's density — so 1:15M on this chart means what 1:15M means on
+ * paper held at reading distance. `chartMpp` is metres per ART pixel; the art
+ * is magnified innerHeight/pixSize.y times onto the glass, so the PIXEL dial
+ * moves the art's scale and not the map's.
+ *
+ * The zoom is the fractional slippy zoom at the centre latitude: the z at
+ * which a 256px tile's texel is one CSS pixel here. It is what MAP z13 and
+ * FAR Z5 in the tile-debug line are measured against — a view at Z9.4 drawing
+ * a z8 overview ring is one rung coarser than the glass could show, which is
+ * the ladder's own margin and now a number on the glass.
+ */
+function chartScale(): { mppArt: number; mppCss: number; ratio: number; zoom: number;
+  barM: number; barPx: number; bar: string; label: string } {
+  const mppArt = chartMpp();
+  const cssPerArt = Math.max(1, innerHeight / Math.max(2, pixSize.y));
+  const mppCss = mppArt / cssPerArt;
+  const ratio = mppCss / (0.0254 / 96);
+  const [lat] = localToLatLon(viewX() + panX, viewZ() + panZ);
+  const zoom = Math.log2((40075016.686 * Math.cos((lat * Math.PI) / 180)) / (256 * Math.max(1e-9, mppCss)));
+  // A round length — 1, 2, 5 × 10^k metres — that lands under two fifths of
+  // the HUD's width, chosen from the top so the bar is as long as it may be.
+  const mPerHud = mppCss * hudS;
+  const maxPx = Math.round(HW * 0.42);
+  let barM = 1;
+  outer: for (let k = 7; k >= 0; k--) for (const m of [5, 2, 1]) {
+    const L = m * 10 ** k;
+    if (L / mPerHud <= maxPx) { barM = L; break outer; }
+  }
+  const barPx = Math.max(1, Math.round(barM / mPerHud));
+  const short = (v: number): string => (v >= 10 ? String(Math.round(v)) : v.toFixed(1));
+  const bar = barM >= 1000 ? `${barM / 1000} KM` : `${barM} M`;
+  const rf = ratio < 1000 ? String(Math.round(ratio)) : ratio < 1e6 ? `${short(ratio / 1e3)}K` : `${short(ratio / 1e6)}M`;
+  return { mppArt, mppCss, ratio, zoom, barM, barPx, bar, label: `${bar} · 1:${rf} · z${zoom.toFixed(1)}` };
+}
+(window as unknown as { __scale?: object }).__scale = (): object => chartScale();
+/** How much of the frame the planet owns: 0 while the streamed world fills it,
+ *  1 once the chart is looking at a globe. The one ramp the wide view's terms
+ *  are keyed on. */
+// Camera geometry uses metres, not art pixels: changing PIXEL must not tilt
+// the camera or change which gesture a finger owns.
+const GLOBE_TILT_LO = 750000, GLOBE_TILT_HI = 2750000;
+function globeOn(): number {
+  if (camMode !== 'top') return 0;
+  const t = clamp((chartDist() - GLOBE_TILT_LO) / (GLOBE_TILT_HI - GLOBE_TILT_LO), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+/**
+ * HOW FREE THE PLANET IS TO BE TURNED — 0 while the far shell still covers the
+ * frame, 1 once the planet owns it outright.
+ *
+ * This is NOT `globeOn`, and the difference is the whole reason it exists.
+ * `globeOn` is a LOOK ramp: it eases the tilt toward straight down and hands
+ * the sky over to space while both backdrops are still on screen, and neither
+ * of those can make the two disagree. A SPIN can. The far shell is the
+ * streamed world's own coarse ground, fixed under the truck; the globe is a
+ * texture on a sphere. Turn the sphere while the shell is drawn beside it and
+ * the two carry different places through neighbouring pixels — precisely the
+ * disagreement the backdrop design exists to avoid.
+ *
+ * So the spin is keyed on exactly the test the hand-over uses — the coarse
+ * ring's width against the frame's diagonal — and the top-camera branch's
+ * `shellOn` is now this returning 0, so the two cannot drift apart. Below it a
+ * drag pans the chart as it always has; above it a drag turns the Earth.
+ *
+ * ── AND IT IS A STEP, WHICH THE FIRST CUT WAS NOT ──
+ *
+ * A ramp over the band above the hand-over is the obvious shape and is wrong,
+ * measured: at the chart's z40,000 it stood at 0.801, so a drag asking the
+ * Earth for ten degrees turned it eight. `globeDegPerPx` is already exact —
+ * it is the arc the frame's own ground covers, which is what makes the place
+ * under the thumb keep up — and scaling an exact rate by a second ramp breaks
+ * that contract by a factor that changes with the zoom. There is nothing left
+ * for the ramp to soften either: the shell it exists to agree with is a hard
+ * switch itself, and above the hand-over the shell is OFF, so there is no
+ * second backdrop for a partial spin to half-agree with.
+ *
+ * The step is invisible where it happens, and that is not luck: the frame it
+ * fires on is the one where the ring covers the frame corner to corner, so the
+ * planet snapping home is behind the shell that has just been drawn over it.
+ *
+ * Zero wherever there is no planet to turn — a fixture, or the texture never
+ * arriving — because the shell keeps drawing there and a spin would have
+ * nothing to show for itself.
+ */
+function globeFree(): number {
+  if (camMode !== 'top' || !globeMesh.visible) return 0;
+  // The final shell's reach is stable; the currently downloading LOD is not.
+  // Using farZ could change gesture ownership underneath a held finger.
+  const ringM = (2 * FAR_RING_MAX + 1) * tileMetres(farLevelFor(SIGHT_MAX));
+  const frameM = 2 * chartDist() * Math.tan(camera.fov * Math.PI / 360)
+    * Math.hypot(innerWidth, innerHeight) / Math.max(2, innerHeight);
+  return frameM > ringM ? 1 : 0;
+}
+/**
+ * DEGREES OF ARC PER SCREEN PIXEL OF DRAG, at the point the sphere is tangent.
+ *
+ * `chartMpp` is metres per ART pixel — the 148x320 buffer everything about the
+ * look is keyed on — and a finger is on SCREEN pixels, so this divides by the
+ * frame's own height instead. Ground metres over the Earth's radius is the
+ * angle the surface turns through, which makes the place you grabbed follow
+ * your thumb exactly as it does on the flat chart: the same bargain
+ * `chartPlaneAt` strikes for the pan, one projection further out.
+ *
+ * It is a TANGENT-PLANE rate, so a drag from the centre of the disc to its
+ * limb turns the Earth by about 115 degrees rather than 180. That is the
+ * honest linear reading of a grab, and it is what makes a small drag near the
+ * middle of the planet feel like the same gesture as a small drag on the flat
+ * chart one zoom step below.
+ */
+function globeDegPerPx(): number {
+  const m = (2 * chartDist() * Math.tan(((camera.fov / 2) * Math.PI) / 180))
+    / Math.max(2, innerHeight);
+  return (m / GLOBE_R) * (180 / Math.PI);
+}
+/**
+ * THE CHART'S TILT, WHICH IS NO LONGER A CONSTANT.
+ *
+ * 70° is an oblique look at a map, and it is right for one: it gives the
+ * ground some depth and keeps the truck's surroundings legible. It is wrong
+ * for a planet — a globe seen at 70° is a globe seen from underneath, with the
+ * pole you are standing near swung out of frame. So it eases toward straight
+ * down as the planet takes over.
+ *
+ * ── 89.9° AND NOT 90°, AND THE TENTH OF A DEGREE IS LOAD-BEARING ──
+ *
+ * The camera's sideways stand-off is `dist * cos(tilt)`. At exactly 90° that
+ * is 4e-10 metres, and the target it is added to is millions of metres from
+ * the origin — so the offset lands BELOW the ULP of a Float64 at that
+ * magnitude and is silently rounded away. What goes with it is the MAP
+ * ROTATION, because the rotation is carried entirely by which way that offset
+ * points: `lookAt` then falls into three's own degenerate guard, which nudges
+ * the look axis by a fixed 0.0001 that knows nothing about `mapRot`.
+ *
+ * MEASURED, swept over eight bearings at two magnitudes, and HOW WRONG it
+ * goes depends on how far the chart has browsed — which is the tell that this
+ * is rounding and not geometry. With the target at (1.2e6, −3.4e6) the two
+ * coordinates have ULPs a factor of two apart, so the offset's bearing is
+ * quantised: 45° drew 27°, 135° drew 153°, 225° drew 207°, 315° drew 333°,
+ * exact only on the four axes where one component is a clean zero. Browsed
+ * out to (1.1e7, −7.8e6) it is worse and simpler — the x component rounds
+ * away entirely and 45° draws 0°, the rotation gone. At 89.9° and at 89°
+ * every bearing is exact at both. `devtools/globe-navigation.test.cjs` holds
+ * the sweep, and it holds it AT THE WIDE TILT ON A BROWSED CHART, because
+ * either mistake makes it pass on the broken value.
+ *
+ * So the value is the largest one that still resolves: 89.9° stands the camera
+ * 12km to one side at planet zoom, which is 0.15% of an 8,000km frame and well
+ * under an art pixel, and it is a tenth of a degree away from the face-on
+ * globe view the ramp is reaching for. Every reader of the tilt takes this —
+ * the camera's own placement, `viewRadius`'s horizon stretch and the tap
+ * unproject — or they would disagree about where the ground under a finger is.
+ */
+function chartTilt(): number { return CAM.tilt + (89.9 - CAM.tilt) * globeOn(); }
 function viewRadius(): number {
   if (camMode !== 'top') return 900;
-  const dist = CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh;
+  const dist = chartDist();
   const halfV = Math.tan(((camera.fov / 2) * Math.PI) / 180);
   // The far edge of a tilted frustum reaches further than the near edge; the
   // /cos term is that stretch, capped so a near-horizon tilt cannot ask for
   // the whole planet. SIGHT_MAX is that cap, and ZOOM_MAX is derived from it —
   // so the clamp is now reached exactly at the ceiling instead of a third of
   // the way to it.
-  return Math.min(SIGHT_MAX, dist * halfV * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180)) * 1.35);
+  return Math.min(SIGHT_MAX, dist * halfV * Math.max(1, 1 / Math.cos(((90 - chartTilt()) * Math.PI) / 180)) * 1.35);
 }
 // Two budgets, and they are budgets rather than radii because the cost of the
 // two layers is nothing alike. A terrain tile is a PNG and a mesh; an OSM tile
@@ -18694,9 +21570,9 @@ const RETRY_WINDOW = 20000;
  * Cached for 200ms: the HUD asks every frame and the answer cannot change
  * faster than a fetch completes.
  */
-interface WorldWord { rank: number; hud: string; vectors: string; world: string }
+interface WorldWord { rank: number; hud: string; vectors: string; world: string; map: string }
 let worldWordAt = -1e9;
-let worldWord: WorldWord = { rank: 0, hud: '', vectors: 'LOADED', world: 'LOADED' };
+let worldWord: WorldWord = { rank: 0, hud: '', vectors: 'LOADED', world: 'LOADED', map: '' };
 function worldStatus(): WorldWord {
   const now = performance.now();
   if (now - worldWordAt < 200) return worldWord;
@@ -18742,8 +21618,22 @@ function worldStatus(): WorldWord {
   if (ahead) bits.push(`${ahead} AHEAD`);
   if (around + loose) bits.push(`${around + loose} AROUND`);
   if (retry) bits.push(`${retry} RETRY`);
+  // ── AND THE CHART'S OWN LAYER, WHICH HAD NO WORD AT ALL ──
+  //
+  // Three numbers and nothing derived: the level the zoom band chose, how many
+  // of this pass's ring have BUILT, and how many are on the wire. Empty once
+  // the ring is home, so the line disappears the moment it stops being news.
+  // A level change empties both sets by construction (setOvLevel), so zooming
+  // through a band reads as a fresh count rather than as a stall — which is
+  // the truth: the old level is still on screen, sunk, until the new one lands.
+  const ovHome = ovMeshes.size;
+  let ovRetry = 0;
+  for (const t of ovFailedAt.values()) if (now - t < OV_RETRY_MS) ovRetry++;
+  const map = !ovWant || ovHome >= ovWant ? ''
+    : `MAP z${ovZ} · ${ovHome}/${ovWant}`
+      + (ovInFlight ? ` · ${ovInFlight} ON THE WIRE` : ovRetry ? ` · ${ovRetry} RETRY` : '');
   worldWord = {
-    rank, hud,
+    rank, hud, map,
     vectors: osmDown
       ? `${osmDone.size ? `${osmDone.size} TILES · ` : 'NONE · '}${osmFails} FAILS · RETRYING${route}`
       : bits.length ? bits.join(' · ') + route
@@ -18766,10 +21656,15 @@ function streamWorld(ex: number, ez: number): void {
   // zoom 44 alike — so the chart was an aerial photograph of a 1.5km disc of
   // roads adrift in blank hillside.
   const tRing = clamp(Math.ceil(r / tileMetres(TERRAIN_Z)), TERRAIN_RING, TERRAIN_RING_MAX);
+  // RINGS OUTWARD, not raster order: forty-nine fetches leave together and
+  // the DEM gate serves them in the order asked, so a corner of the box was
+  // arriving before the ground under the wheels.
   if (FIXTURE) for (const [x, y] of fixtureTiles(TERRAIN_Z)) void loadTerrainTile(x, y);
   else {
-    for (let dx = -tRing; dx <= tRing; dx++)
-      for (let dy = -tRing; dy <= tRing; dy++) void loadTerrainTile(tx + dx, ty + dy);
+    for (let d = 0; d <= tRing; d++)
+      for (let dx = -d; dx <= d; dx++)
+        for (let dy = -d; dy <= d; dy++)
+          if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadTerrainTile(tx + dx, ty + dy);
   }
   // Land cover, over the FULL terrain footprint rather than the road ring: it
   // paints the ground and plants the vegetation, so it has to reach as far as
@@ -18980,7 +21875,7 @@ function streamWorld(ex: number, ez: number): void {
     // there. The stream pass refires every ~1.2s, so a pan starts filling on
     // the next tick.
     const [cLat, cLon] = camMode === 'top' && (panX !== 0 || panZ !== 0)
-      ? localToLatLon(ex + panX, ez + panZ) : [lat, lon];
+      ? localToLatLon(viewX() + panX, viewZ() + panZ) : [lat, lon];
     // THE BACKDROP STOPS WHERE THE FIXTURE DOES. A fixture answers the height
     // fetch from a formula or a clamped grid, so the coarse ring would happily
     // build 80km of extrapolated edge row and present it as a horizon — a
@@ -18990,10 +21885,14 @@ function streamWorld(ex: number, ez: number): void {
     setFarLevel(FIXTURE ? FAR_LEVELS[0] : farLevelFor(sight));
     const [fx, fy] = tileAt(cLat, cLon, farZ);
     const fRing = clamp(Math.ceil(sight / tileMetres(farZ)), 1, FAR_RING_MAX);
+    // Rings outward here too: the shell's four-at-a-time gate is a FIFO, and
+    // raster order put the far corner of the sky ahead of the horizon.
     if (FIXTURE) for (const [x, y] of fixtureTiles(farZ)) void loadFarTile(x, y);
     else {
-      for (let dx = -fRing; dx <= fRing; dx++)
-        for (let dy = -fRing; dy <= fRing; dy++) void loadFarTile(fx + dx, fy + dy);
+      for (let d = 0; d <= fRing; d++)
+        for (let dx = -d; dx <= d; dx++)
+          for (let dy = -d; dy <= d; dy++)
+            if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadFarTile(fx + dx, fy + dy);
     }
     // …and the cover to PAINT it, once the shell has grown past the fine
     // raster's own 7x7 ring. Below that the fine tiles already cover every
@@ -19031,9 +21930,17 @@ function streamWorld(ex: number, ez: number): void {
       setOvLevel(ovLevelFor(r));
       const [vx, vy] = tileAt(cLat, cLon, ovZ);
       const vRing = clamp(Math.ceil(r / tileMetres(ovZ)), 1, OV_RING_MAX);
+      // WHAT THIS PASS ASKED FOR, so the chart can say how much of it is home.
+      // Reported from the seat: "I open the chart and zoom out and it is not
+      // clear if or when the overview will load." It was not clear because
+      // nothing said — the fine vector layer has had a status line for years
+      // and this layer, which is the one the chart actually draws, streamed in
+      // silence behind a backdrop that looks the same empty as it does cold.
+      ovWant = (vRing * 2 + 1) ** 2;
+      ovAskedAt = performance.now();
       for (let dx = -vRing; dx <= vRing; dx++)
         for (let dy = -vRing; dy <= vRing; dy++) void loadOvTile(vx + dx, vy + dy);
-    }
+    } else ovWant = 0;
   }
   // ── the summits ──
   // OUTSIDE the view gates above — a mountain is a landmark from the driver's
@@ -19095,6 +22002,16 @@ function streamWorld(ex: number, ez: number): void {
     }
     if (best) void loadPeakTile(best[1], best[2]);
   }
+  // ONE TILE, AND ONLY THE ONE UNDER THE TRUCK. An ecoregion tile is twelve
+  // hundred kilometres square, so a ring of them would be the whole hemisphere
+  // to answer a question about the ground under the wheels. Asked here rather
+  // than left to `ecoAt`'s own lazy fetch so the answer is already in hand the
+  // first time anything asks — a guild that changed its mind a second after
+  // the plants were placed would be worse than one that never knew.
+  if (!FIXTURE && ecoInFlight === 0) {
+    const [ex, ey] = ecoTileOf(lat, lon);
+    if (!ecoTiles.has(`${ex}/${ey}`)) void loadEcoTile(ex, ey);
+  }
 }
 
 // ── the far shell: coarse terrain for the wide view ────────────────
@@ -19121,7 +22038,15 @@ function streamWorld(ex: number, ez: number): void {
 // just driving visibly changed shape. z13 holds the first band (out to ~10km)
 // at ~60m cells, so fidelity steps down through the levels instead of falling
 // off a cliff at the edge of the fine ring.
-const FAR_LEVELS = [13, 11, 9, 7];
+// z6 is the 600km rung: a z7 ring falls short of SIGHT_MAX above ~40 degrees
+// of latitude, and z6 (1,565km at the equator) carries it to 67. Same cost
+// as z7 — `farSeg` clamps both at 128 segments — so the shell never grows
+// past the triangle budget the ladder was sized to.
+// z5 is the 1,500km rung. At 30° a z6 ring reaches 1,355km and the ceiling
+// asks for 1,500; z5's reaches 2,710. Same 25 tiles at the same 128 segments,
+// and a z5 raster is 4.2km a pixel — the terrain is a relief map by then, and
+// that is the honest degradation, not a new kind of failure.
+const FAR_LEVELS = [13, 11, 9, 7, 6, 5];
 let farZ = FAR_LEVELS[0];
 const FAR_RING_MAX = 2;       // 5×5 coarse tiles at whichever level is current
 // METRES PER VERTEX, not segments, is what decides whether a massif has a
@@ -19162,9 +22087,17 @@ let farRetired: THREE.Mesh[] = [];
 function setFarLevel(z: number): void {
   if (z === farZ) return;
   farZ = z;
-  for (const m of farMeshes.values()) { m.position.y -= 18; farRetired.push(m); }
+  // Sunk RADIALLY: the mesh's position is its centre point on the sphere, so
+  // scaling it toward the planet's centre is the 18m the flat drop used to be.
+  for (const m of farMeshes.values()) { m.position.multiplyScalar(1 - 18 / GLOBE_R); farRetired.push(m); }
   farMeshes.clear();
   farTiles.clear();
+  // The retired level's bake records go with it. They were kept, and they
+  // are keyed by level so nothing collided — but `__far().cover` and `.tint`
+  // aggregate over the whole map, so a z7 shell reported z11's twenty-five
+  // records beside its own nine, and the first reading of the bake-level mix
+  // on the wide chart said "two levels on screen" about tiles that were not.
+  farCoverHit.clear(); farTint.clear(); farBakeZ.clear();
 }
 function dropRetiredFar(): void {
   for (const m of farRetired) { farGroup.remove(m); m.geometry.dispose(); }
@@ -19180,32 +22113,17 @@ function dropRetiredFar(): void {
 const EARTH_R = 6371000;
 const curveDrop = (dx: number, dz: number): number => (dx * dx + dz * dz) / (2 * EARTH_R);
 /**
- * …AND THE CURVE IS MEASURED FROM WHERE YOU ARE STANDING.
+ * …AND THE CURVE IS NOT A TERM ANY MORE.
  *
- * The shell bakes its drop from the world ORIGIN, which is geometrically
- * correct against the tangent plane at the spawn — and disagrees with the
- * FINE world, which is built dead flat at every distance. Standing at the
- * spawn the two agree. Thirty kilometres down the road they do not: the shell
- * is 70m low, the fine ring ends in a cliff, and 70m of it is real geometry
- * doing exactly what it was told.
- *
- * Rebaking every mesh as the truck moves is not affordable. It is also not
- * necessary, because the difference between the two drops is LINEAR in
- * position — (2·p·c − |c|²)/2R for a viewer at c — and a linear ramp over a
- * rigid body is a tilt plus a lift. So the shell is tilted by |c|/R about the
- * horizontal axis across the direction of travel and dropped by |c|²/2R,
- * which is the same statement as "the world tips as you go over the curve".
- * Exact to first order, two numbers a frame, and it keeps the horizon level
- * under the truck wherever the truck has got to.
+ * The shell used to bake its drop from the world ORIGIN (d²/2R, the sphere to
+ * second order) and then be re-seated every frame — tilted by |c|/R from the
+ * seat, sheared under the browsed focus on the chart — because a paraboloid
+ * baked at one place is wrong everywhere else: 70m low thirty kilometres down
+ * the road, 44km off the sphere at 3,000km, half a radius off at a quarter
+ * turn. Its tiles are built ON the sphere now, in the planet's own frame (see
+ * planetGroup and sphereRTC), and `stepGlobe` places that frame under the
+ * view. There is nothing left to align: the curve is the geometry.
  */
-const farAxis = new THREE.Vector3();
-function alignFarShell(): void {
-  const cx = viewX(), cz = viewZ();
-  const d = Math.hypot(cx, cz);
-  if (d < 1) { farGroup.rotation.set(0, 0, 0); farGroup.position.y = 0; return; }
-  farGroup.setRotationFromAxisAngle(farAxis.set(-cz / d, 0, cx / d), d / EARTH_R);
-  farGroup.position.y = -(d * d) / (2 * EARTH_R);
-}
 const farTiles = new Set<string>();
 const farMeshes = new Map<string, THREE.Mesh>();
 /** Per far tile, the fraction of its vertices that had a cover class at bake,
@@ -19214,6 +22132,48 @@ const farMeshes = new Map<string, THREE.Mesh>();
  *  tone, the player sees a join. */
 const farCoverHit = new Map<string, number>();
 const farTint = new Map<string, [number, number, number]>();
+/** Which wide-cover LEVEL (coverWideZ, 0 for none) each shell tile was baked
+ *  under. A tile that read a full raster at one level reports hit 1.0 for ever,
+ *  and `hit` alone cannot tell it from a tile baked under the next level — so
+ *  two neighbours can both be "fully covered" from rasters four times apart in
+ *  resolution and disagree about the colour of the same country. */
+const farBakeZ = new Map<string, number>();
+/**
+ * ── THE COARSE GROUND, KEPT AS DATA ──
+ *
+ * A far tile arrives as a 256x256 height raster and used to survive only as
+ * the mesh built from it — a lattice of `farSeg` quads that CHORDS across
+ * every valley between its vertices, which is why the peak occlusion test
+ * refused to use it and stopped at the fine ring. The raster itself has no
+ * such problem: at z13 it is 19m of ground a pixel, at z11 76m. Kept here it
+ * answers "how high is the land there" anywhere the shell reaches, which is
+ * as far as anything is drawn.
+ */
+interface FarRaster { xs: number; zs: number; w: number; h: number; data: Float32Array }
+const farRasters = new Map<string, FarRaster>();
+/** Absolute ground at a world point from the coarse rasters, or null out of
+ *  reach. Bilinear, because a peak's sight line grazes ridges and a nearest
+ *  sample steps by a whole pixel across one. */
+function farRasterAt(wx: number, wz: number): number | null {
+  for (const r of farRasters.values()) {
+    if (wx < r.xs || wx > r.xs + r.w || wz < r.zs || wz > r.zs + r.h) continue;
+    const u = clamp(((wx - r.xs) / r.w) * 255, 0, 255);
+    const v = clamp(((wz - r.zs) / r.h) * 255, 0, 255);
+    const u0 = Math.floor(u), v0 = Math.floor(v);
+    const u1 = Math.min(255, u0 + 1), v1 = Math.min(255, v0 + 1);
+    const fu = u - u0, fv = v - v0;
+    const a00 = r.data[v0 * 256 + u0], a10 = r.data[v0 * 256 + u1];
+    const a01 = r.data[v1 * 256 + u0], a11 = r.data[v1 * 256 + u1];
+    return (a00 * (1 - fu) + a10 * fu) * (1 - fv) + (a01 * (1 - fu) + a11 * fu) * fv;
+  }
+  return null;
+}
+/** Metres of ground one coarse pixel spans — the scale of the error the
+ *  raster can still be making, and so the margin a blocker has to beat. */
+function farPixelM(): number {
+  const r = farRasters.values().next().value as FarRaster | undefined;
+  return r ? r.w / 256 : 250;
+}
 /**
  * A cover tile landed. Throw away any shell tile whose colour it invalidates,
  * so the streamer fetches and re-bakes it.
@@ -19229,31 +22189,310 @@ function coverDirtiedFar(modeMoved: boolean, x: number, z: number, w: number, h:
     const mesh = farMeshes.get(key);
     if (!mesh) continue;
     if (!modeMoved) {
-      const b = mesh.geometry.boundingBox ?? (mesh.geometry.computeBoundingBox(), mesh.geometry.boundingBox);
-      if (!b) continue;
-      const x0 = b.min.x + mesh.position.x, x1 = b.max.x + mesh.position.x;
-      const z0 = b.min.z + mesh.position.z, z1 = b.max.z + mesh.position.z;
-      if (x1 < x || x0 > x + w || z1 < z || z0 > z + h) continue;
+      // The tile's FLAT box is the raster's, kept beside it; the mesh's own
+      // bounds are on the sphere now and say nothing in these coordinates.
+      const r = farRasters.get(key);
+      if (!r) continue;
+      if (r.xs + r.w < x || r.xs > x + w || r.zs + r.h < z || r.zs > z + h) continue;
     }
     farGroup.remove(mesh); mesh.geometry.dispose();
     farMeshes.delete(key); farTiles.delete(key);
-    farCoverHit.delete(key); farTint.delete(key);
+    farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key); farBakeZ.delete(key);
   }
 }
+/**
+ * ── THE PLANET, AS A FRAME ──
+ *
+ * One node, tangent under the view, that everything past the fine ring is a
+ * child of: the globe mesh, its pin, the far shell and the overview vectors.
+ * The children are built in the PLANET'S OWN FRAME — `latLonToUnit` times a
+ * radius, relative to each tile's centre point — so they lie on one sphere by
+ * construction and the node's transform (set once a frame in `stepGlobe`) is
+ * the only thing that decides where that sphere stands. Before this the shell
+ * carried a paraboloid baked from the origin, the chart sheared it under the
+ * browsed focus, the seat tilted it by |c|/R to first order, and the globe was
+ * a second sphere the shell was asked to agree with: three approximations of
+ * one surface, and the arithmetic in CLAUDE.md's planet section for how far
+ * apart they get — 44km at 3,000km, half a radius at a quarter turn.
+ *
+ * The fine world stays a flat tangent patch at the rig: two metres of sag at
+ * its edge and a fifth of a millimetre of foreshortening, which is what every
+ * planet renderer does, and this one already rebases on a hop.
+ */
+const planetGroup = new THREE.Group();
+planetGroup.name = 'planet';
+worldGroup.add(planetGroup);
+/**
+ * A point on the planet, in its frame, RELATIVE TO A TILE'S OWN CENTRE.
+ *
+ * Float32 holds half a metre at 6.4e6; it holds three centimetres across a
+ * 990km tile and half a millimetre across a 5km one. So every vertex is the
+ * tile's size and not the Earth's, the mesh's position is the centre point
+ * itself (a JS double), and three composes matrixWorld and modelViewMatrix in
+ * doubles before anything is uploaded — nothing at a planet's magnitude ever
+ * meets a Float32. `y` is height over the datum in the flat frame's sense,
+ * elev − baseElev plus whatever sink the layer takes, so the radius is R + y
+ * and the sphere's top under the view is the flat frame's y = 0.
+ */
+function sphereRTC(lat: number, lon: number, y: number, centre: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
+  return latLonToUnit(lat, lon, out).multiplyScalar(GLOBE_R + y).sub(centre);
+}
+/** A planet-frame vector back to lat/lon and height over the datum — the
+ *  inverse of `sphereRTC`, for the probes that read a far vertex and then ask
+ *  the flat world about the ground there. */
+function sphereLatLon(p: THREE.Vector3): [number, number, number] {
+  const r = p.length();
+  return [(Math.asin(clamp(p.y / r, -1, 1)) * 180) / Math.PI, (Math.atan2(-p.z, p.x) * 180) / Math.PI, r - GLOBE_R];
+}
+const sphV = new THREE.Vector3();
 const farGroup = new THREE.Group();
 farGroup.name = 'far';
 farGroup.visible = false;
-worldGroup.add(farGroup);
+planetGroup.add(farGroup);
+
+/**
+ * ── THE PLANET, UNDER EVERYTHING ──
+ *
+ * See client/globe.ts for why this is a backdrop rather than a mode. Two
+ * rules here are load-bearing:
+ *
+ * THE BACKDROP WRITES NO DEPTH, so the shell wins by ORDER and never by
+ * geometry. The far shell is built on this very sphere (see planetGroup) at
+ * R + elev − baseElev − FAR_DROP: its radius carries the RIG'S elevation, so
+ * browsed from a rig at 2,300m (Mariposa) the shell over India's plains stands
+ * 2.2km INSIDE the sphere and over the sea floor 6km inside it. The first
+ * answer was to sink the globe mesh a fixed 800m under the frame — right
+ * where the shell is at the rig's own height, and wrong everywhere lower than
+ * the rig by more than that: the 160×80 lattice chords 1.2km between its
+ * vertices, so the sphere stood through the shell in a disc around every
+ * vertex and sagged back under it at the cell centres — dark circles on a
+ * 2.25° lattice with four-pointed stars of shell between them over India, and
+ * bands along the parallels over Alberta, where the longitude chord is short
+ * and only the latitude one sags. Measured off the seat's frames by
+ * autocorrelation: 126 px, which is 2.25° of longitude at 20°N at the bar's
+ * own scale. No sink is right for every elevation the shell can carry, and
+ * none is needed: the globe is painted first, without depth, and everything
+ * streamed is painted over it wherever it exists. What the depth buffer used
+ * to do for the pin and the labels — hide the far side — is a near-cap test
+ * now (`onNearCap`).
+ *
+ * RENDER ORDER −5, between the sky dome's −10 and the world's 0: the dome
+ * paints first with no depth write, the globe over it (no depth write either),
+ * the streamed world over that. The same sandwich the sky and the world have
+ * always been.
+ */
+/**
+ * IS A POINT ON THE SPHERE ON THE NEAR CAP — in view of the eye and not
+ * behind the planet? From height h the cap reaches exactly R/(R+h), and the
+ * closed form is one dot product: a surface point P is visible from eye E
+ * about centre C iff (P−C)·(E−C) ≥ R². Exact at every altitude, and it is
+ * the test the labels and the pin need now that the backdrop writes no depth:
+ * a far-side point is still in FRONT of the camera, so the z test passed it,
+ * and a perspective projection of the far hemisphere lands INSIDE the disc,
+ * mirrored — every US city drawn over India with east and west swapped, from
+ * a rig at Mariposa, California being 163° of longitude from the Deccan. The
+ * point is in the PLANET's frame (the pin's position, a place's `sp`); the eye
+ * is taken back into that frame rather than the point out of it, so one
+ * transform serves the whole label loop.
+ */
+const capEye = new THREE.Vector3();
+const capQ = new THREE.Quaternion();
+function capEyeUpdate(): void {
+  capEye.copy(camera.position).sub(planetGroup.position)
+    .applyQuaternion(capQ.copy(planetGroup.quaternion).invert());
+}
+function onNearCap(p: THREE.Vector3): boolean {
+  return p.dot(capEye) >= GLOBE_R * GLOBE_R;
+}
+/** Wide enough that the planet could be seen at all. Below it the streamed
+ *  shell covers the frame and 16k triangles would draw for nothing. */
+const GLOBE_MPP_ON = 500;
+const globeU = {
+  uBase: { value: null as THREE.Texture | null },
+  uSun: { value: new THREE.Vector3(1, 0, 0) },
+  uNight: { value: 0.14 },
+};
+const globeMesh = new THREE.Mesh(globeGeometry(160, 80), globeMaterial(globeU));
+globeMesh.name = 'globe';
+globeMesh.renderOrder = -5;
+// A sphere the size of the Earth, centred a planet's radius below the camera,
+// is outside every bounding test three would like to do — and it is never off
+// screen when it is on at all.
+globeMesh.frustumCulled = false;
+/**
+ * THE PIN, BECAUSE A SPUN GLOBE IS A GLOBE YOU CAN GET LOST ON.
+ *
+ * Unspun, the truck is at the top of the sphere and therefore at the centre of
+ * the frame, and a marker there says nothing. The moment a drag turns the
+ * Earth it is the only thing that does: it rides round with the surface, goes
+ * over the limb with it, and is put away past the limb by the near-cap test
+ * (`onNearCap`) — the backdrop writes no depth, so nothing occludes it.
+ *
+ * SIZED IN ART PIXELS, not in metres. A marker at a fixed ground size is a
+ * continent at one zoom and invisible at the next; this one is `GLOBE_PIN_PX`
+ * across at every altitude, which is what a locator is for. The lift clears
+ * the sphere's own faceting — a 160-segment lattice chords 1.2km below the
+ * true surface at the equator, so a pin ON the radius would sink into its own
+ * planet — and 0.1% of R is 6.4km, under half an art pixel at any zoom the pin
+ * is drawn at.
+ */
+const GLOBE_PIN_PX = 4.5, GLOBE_PIN_LIFT = 1.001;
+const globePin = new THREE.Mesh(
+  new THREE.OctahedronGeometry(1, 0),
+  // Unlit and flat: this is an instrument, not a thing in the world, and it
+  // has to read against a sunlit ocean and a night side alike. The rig's own
+  // gold, so the chart names the truck in one colour everywhere.
+  new THREE.MeshBasicMaterial({ color: 0xf5c453, depthWrite: false }),
+);
+globePin.name = 'globe-pin';
+globePin.renderOrder = -4;       // after the planet, still under the world
+globeMesh.visible = false;
+// The mesh sits AT the planet's centre: no sink, see the note above. Two
+// sinks came before it and both are worth remembering. `position.y =
+// -GLOBE_SINK` sank it along the POLE axis (the mesh's position is in the
+// planet's frame), 584m down at Romoos and 400m UP at Letsemeng, where every
+// lattice vertex stood through the Karoo shell as a diamond every 2.25
+// degrees; a sink along the focus's radial fixed that hemisphere and left the
+// same lattice standing through every country lower than the rig.
+planetGroup.add(globeMesh);
+planetGroup.add(globePin);
+let globeAsked = false, globeFailed = false;
+/**
+ * WHERE THE PLANET IS TURNED TO, IN DEGREES OFF THE TRUCK'S OWN POINT.
+ *
+ * Degrees, and NOT accumulated into `panX/panZ` — which is the first thing
+ * tried and is a trap. Pan is metres in the tangent plane, and at planet zoom
+ * one drag across the glass is thousands of kilometres: nine million metres of
+ * `panX`, which the moment you zoomed back in would put the chart's camera
+ * nine thousand kilometres from the truck, over a fine world that has none of
+ * it streamed and never will. A spin is not a pan. It is the same view of a
+ * different part of the sphere, and it has to be its own state.
+ *
+ * The globe's POSITION never moves for it either: the sphere stays tangent
+ * under the truck and only its orientation changes, so what turns is the Earth
+ * under a fixed eye rather than the eye around the Earth. That is what keeps
+ * the hand-over honest — see `globeFree`, which scales this to nothing
+ * wherever the shell is still drawn.
+ */
+let globeSpinLat = 0, globeSpinLon = 0;
+/**
+ * HOW FAR NORTH OR SOUTH THE VIEW MAY BE TURNED — a latitude the view reaches,
+ * NOT an offset the spin may hold, and the difference is a whole hemisphere.
+ *
+ * The first cut clamped the stored offset symmetrically at ±85, which sounds
+ * like the same thing and is not: the offset is measured from the TRUCK, so a
+ * rig in the Karoo at −30° could reach +55° and no further. Cape Town could
+ * not be used to look at the Arctic, which is most of the point of being able
+ * to turn the planet at all. The bound belongs on `gLat + spin`.
+ *
+ * 85 rather than 90 because the tangent-point cosine that scales a horizontal
+ * drag goes to zero at the pole, and a chart looking straight down on one has
+ * no meaningful east to drag along.
+ */
+const GLOBE_SPIN_LAT_MAX = 85;
+/** The spin's own bounds at this moment, which depend on where the chart is
+ *  focused. THE DRAG NO LONGER COMES THROUGH HERE: a drag writes the retained
+ *  focus directly (see `dragGlobe`), and `setChartFocus` does its own clamping,
+ *  so this now serves `__globespin` alone — the console's way of asking for a
+ *  place without a finger. Kept because that probe still has to be bounded. */
+function globeSpinLatRange(): [number, number] {
+  const [tLat] = localToLatLon(viewX() + panX, viewZ() + panZ);
+  return [-GLOBE_SPIN_LAT_MAX - tLat, GLOBE_SPIN_LAT_MAX - tLat];
+}
+/** Fetched once, on the first wide chart — not at boot. 317KB is not a cost
+ *  anyone driving should pay, and the ez-tree lesson in CLAUDE.md is what
+ *  happens when a wide-view asset lands in the boot path. */
+function globeTexture(): void {
+  if (globeAsked) return;
+  globeAsked = true;
+  new THREE.TextureLoader().load(`${CELL_BASE}/globe-base.png`, (t) => {
+    // flipY OFF, because the bake's first row is +90° and the geometry's v=0
+    // is the north pole. With three's default the planet arrives upside down
+    // with every coastline still at the right coordinate, which is the sort of
+    // wrong that survives a coordinate check and not a glance.
+    t.flipY = false;
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = THREE.RepeatWrapping;          // or the dateline is a seam
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.anisotropy = TEX_ANISO;
+    t.needsUpdate = true;
+    globeU.uBase.value = t;
+  }, undefined, () => { globeFailed = true; });
+}
+/** Where the planet is tangent, how it is turned, and where its sun stands. */
+function stepGlobe(): void {
+  // ── THE PLANET IS PLACED EVERY FRAME, IN EVERY CAMERA ──
+  //
+  // It used to be placed only while the globe was drawn, because the globe was
+  // the only thing standing on it. The far shell and the overview vectors are
+  // its children now, built on the sphere in its own frame, so wherever THEY
+  // are drawn the planet has to be where they were built to stand: tangent
+  // under the chart's FOCUS on the chart, and under the POV from the seat —
+  // where alignFarShell used to tilt the shell by |c|/R to first order, and
+  // was 70m low thirty kilometres down the road. A fixture has no globe and
+  // still has a shell, so the placement does not stand down with the mesh.
+  //
+  // Spin is a change of chart focus, never a disposable offset. The rig stays
+  // where it is; the existing overview streamer follows panX/panZ.
+  if (camMode === 'top' && (globeSpinLat || globeSpinLon)) {
+    const [lat, lon] = localToLatLon(viewX() + panX, viewZ() + panZ);
+    setChartFocus(lat + globeSpinLat, lon + globeSpinLon);
+    globeSpinLat = globeSpinLon = 0;
+  }
+  const vx = camMode === 'top' ? viewX() + panX : viewX();
+  const vz = camMode === 'top' ? viewZ() + panZ : viewZ();
+  const [gLat, gLon] = localToLatLon(vx, vz);
+  // The centre is exactly one radius under the focus: the sphere's top is the
+  // flat frame's y = 0 there, so a far vertex built at R + elev - baseElev
+  // lands at the height the fine world gives the same ground. The globe MESH
+  // carries its own sink beneath it (GLOBE_SINK).
+  planetGroup.position.set(vx, -GLOBE_R, vz);
+  globeOrientation(clamp(gLat, -89.9, 89.9), gLon, planetGroup.quaternion);
+  const on = camMode === 'top' && chartDist() > 150000 && !FIXTURE;
+  if (on) globeTexture();
+  globeMesh.visible = on && globeU.uBase.value !== null && !hideSet.has('globe');
+  // The pin marks the truck's TRUE point on the sphere, which is the top of it
+  // only while the chart is home. Hidden below the hand-over, where it would
+  // be a gold diamond sitting on the frame's centre saying what the whole
+  // chart already says.
+  globePin.visible = globeMesh.visible && globeFree() > 0.001;
+  if (globePin.visible) {
+    const [rigLat, rigLon] = localToLatLon(viewX(), viewZ());
+    latLonToUnit(rigLat, rigLon, globePin.position).multiplyScalar(GLOBE_R * GLOBE_PIN_LIFT);
+    globePin.scale.setScalar(GLOBE_PIN_PX * chartMpp());
+    // Past the limb it is behind the planet, and the planet writes no depth
+    // to hide it: the cap test does, off last frame's eye — a frame of lag on
+    // a limb crossing and nothing else.
+    capEyeUpdate();
+    globePin.visible = onNearCap(globePin.position);
+  }
+  if (!globeMesh.visible) return;
+  // THE SUN IS THE CLOCK'S, NOT THE WALL'S. `clockHour` is local solar time at
+  // the origin's meridian — the same number the sky and the shadows are built
+  // from — so the terminator moves when the time dial is dragged and holds
+  // when the clock is pinned. At the truck the globe's lighting and the
+  // world's agree by construction: the tangent frame's up IS the sphere's
+  // normal there.
+  const ss = subsolar(clockHour(), origin.lon);
+  latLonToUnit(ss.lat, ss.lon, globeU.uSun.value);
+}
 // Four at a time. Asking for a whole ring at once is a thundering herd against
 // one S3 bucket: a measured 49-tile request landed 9 meshes and left the rest
 // racing each other for sockets.
 let farInFlight = 0;
 const farQueue: Array<() => void> = [];
+const farFetched: Array<{ key: string; at: number; x: number; z: number }> = [];
 async function loadFarTile(x: number, y: number): Promise<void> {
   const z = farZ;
   const key = `${z}/${x}/${y}`;
   if (farTiles.has(key)) return;
   farTiles.add(key);
+  {
+    const b = tileBounds(x, y, z);
+    const [cx, cz] = toLocal((b.latN + b.latS) / 2, (b.lonW + b.lonE) / 2);
+    farFetched.push({ key, at: Math.round(performance.now()), x: cx, z: cz });
+  }
   if (farInFlight >= 4) await new Promise<void>((go) => farQueue.push(go));
   farInFlight++;
   const data = await fetchHeights(x, y, z).finally(() => {
@@ -19269,10 +22508,17 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   const w = Math.abs(wx1 - wx0), h = Math.abs(wz1 - wz0);
   const seg = farSeg(z);
   let hit = 0, tr = 0, tg = 0, tb = 0;
+  // The lattice is still laid out flat — its u/v index the raster and its
+  // flat x/z give each vertex its lat/lon through the same equirectangular
+  // map every layer is placed by — and then every vertex is moved onto the
+  // sphere, relative to the tile's centre point (see sphereRTC). Nothing
+  // about the bake changes: the same pixel, the same slope, the same colour.
   const geo = new THREE.PlaneGeometry(w, h, seg, seg);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
+  const [cLat, cLon] = localToLatLon(xs + w / 2, zs + h / 2);
+  const centre = latLonToUnit(cLat, cLon).multiplyScalar(GLOBE_R);
   // SLOPE IS SHADED PER TEXEL, NOT PER VERTEX. du/dv are the rise across one
   // heightfield pixel, so the divisor has to be a pixel's ground width — and
   // the fine builder happens to use twice that. Dividing by this layer's own
@@ -19281,17 +22527,13 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   // rectangle of "real" terrain around the car on the wide chart.
   const cell = w / 128;
   for (let i = 0; i < pos.count; i++) {
+    const lx = pos.getX(i), lz = pos.getZ(i);
     // Sampled from THIS tile's own pixels — no cross-tile bilinear, no road
     // grid, no cut. A seam of a few metres between coarse tiles is invisible
     // from the only altitude this layer is ever seen at.
-    const u = clamp(Math.round(((pos.getX(i) + w / 2) / w) * 255), 0, 255);
-    const v = clamp(Math.round(((pos.getZ(i) + h / 2) / h) * 255), 0, 255);
+    const u = clamp(Math.round(((lx + w / 2) / w) * 255), 0, 255);
+    const v = clamp(Math.round(((lz + h / 2) / h) * 255), 0, 255);
     const raw = data[v * 256 + u];
-    // World position of this vertex, so the curve is measured from the ORIGIN
-    // rather than from the tile — the drop has to be continuous across the
-    // whole shell or every tile edge becomes a step.
-    pos.setY(i, raw - baseElev - FAR_DROP
-      - curveDrop(xs + w / 2 + pos.getX(i), zs + h / 2 + pos.getZ(i)));
     const du = data[v * 256 + Math.min(255, u + 1)] - raw;
     const dv = data[Math.min(255, v + 1) * 256 + u] - raw;
     // THE SAME PALETTE AS THE FINE WORLD. This called terrainPalette with no
@@ -19302,7 +22544,15 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     // escarpment at Senqu, where the shell stands up to 38m ABOVE the fine
     // ground and paints over it. Cover is null out past the loaded raster,
     // which is exactly the old behaviour, so the far horizon is unchanged.
-    const fwx = xs + w / 2 + pos.getX(i), fwz = zs + h / 2 + pos.getZ(i);
+    const fwx = xs + w / 2 + lx, fwz = zs + h / 2 + lz;
+    // ONTO THE SPHERE. The height is the flat frame's — elev over the datum,
+    // less the drop that keeps the fine world on top where both exist — and
+    // the curve is no longer a term: it is the sphere.
+    {
+      const [vLat, vLon] = localToLatLon(fwx, fwz);
+      sphereRTC(vLat, vLon, raw - baseElev - FAR_DROP, centre, sphV);
+      pos.setXYZ(i, sphV.x, sphV.y, sphV.z);
+    }
     // The SHELL sampler: the fine raster where it reaches, the coarse ladder
     // beyond it. `hit` counts either, which is what makes __far().cover the
     // measurement of "is this tile wearing real cover or a guess".
@@ -19310,18 +22560,32 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     if (cv !== null) hit++;
     // …and where the raster does not reach, the average of what it does say
     // rather than nothing at all. See coverMode.
-    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1), cv ?? coverMode, fwx, fwz);
+    //
+    // EXCEPT AT SEA. WorldCover is a LAND map: its tiles stop a few tens of
+    // kilometres off the coast and answer 0 beyond, which sampleCoverShell
+    // reads as "no cover". So every shell vertex over open ocean took the
+    // modal class of the country — grassland at the Cape — and the Atlantic
+    // was painted olive from about 40km out, at either ceiling. Measured on
+    // the chart at 600km: the same pixel row read sea-blue at 30km west of
+    // Simon's Town and grassland at 60. The coarse DEM carries bathymetry,
+    // so a vertex below the sea datum with no cover to say otherwise is
+    // water, whatever the mode is. `hit` still counts only real cover, so
+    // __far().cover keeps reporting how much of the raster the tile had.
+    const cvv = cv ?? (raw < seaSurfaceAbs() ? 80 : coverMode);
+    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1), cvv, fwx, fwz);
     colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
     tr += r; tg += g; tb += bb;
   }
   // WHAT THIS TILE KNEW WHEN IT WAS BAKED, and what it came out looking like.
   farCoverHit.set(key, hit / Math.max(1, pos.count));
   farTint.set(key, [tr / pos.count, tg / pos.count, tb / pos.count]);
+  farBakeZ.set(key, coverWideZ);
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? farMatFor(data, w, key) : farMat);
-  mesh.position.set(xs + w / 2, 0, zs + h / 2);
+  const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? farMatFor(data, w, key, centre) : farMat);
+  mesh.position.copy(centre);
   farMeshes.set(key, mesh);
+  farRasters.set(key, { xs, zs, w, h, data });
   farGroup.add(mesh);
   // Last fetch of the batch home? The new level covers the frame now.
   if (farInFlight === 0 && farQueue.length === 0) dropRetiredFar();
@@ -19350,7 +22614,13 @@ const FAR_DROP = 12;
 // cost of a rung is now a one-off rather than per-player. The query already
 // narrows itself for these: at z<=10 it asks for motorway/trunk/primary,
 // coastline, rivers, cities and towns, and nothing else.
-const OV_LEVELS = [13, 12, 11, 10, 9, 8];
+// z7 is served by the cell as motorway and trunk only (see `overviewQuery`
+// in index.ts): at 313km a tile it is the rung that keeps roads on the chart
+// past the z8 ring's ~390km, which the doubled SIGHT_MAX looks well beyond.
+// z6 and z5 come from the same Natural Earth bake as z7-z9 (`ne-wide.ts`):
+// scalerank ≤ 3 and ≤ 2, the trunk network of a subcontinent, and the
+// capitals. The asset already held them; the rungs are two entries.
+const OV_LEVELS = [13, 12, 11, 10, 9, 8, 7, 6, 5];
 const OV_RING_MAX = 2;        // 5×5 tiles at whichever level is current
 /** How long the CHART waits, which is not how long the CELL takes. See the
  *  note in loadOvTile: an abandoned request still banks its tile. */
@@ -19362,11 +22632,35 @@ let ovRetired: THREE.Mesh[] = [];
 /** Overview tiles that arrived with vectors but no heights to lay them on. */
 let ovDemless = 0;
 let ovInFlight = 0;
+/** How many tiles the last chart stream pass asked its ring for, and when —
+ *  the denominator of the MAP status word and of `__ov()`. Zero off the chart:
+ *  this layer is only ever streamed for the top camera. */
+let ovWant = 0, ovAskedAt = 0;
+/**
+ * ── A REFUSED OVERVIEW TILE BACKS OFF, AS THE FINE LAYER'S ALREADY DOES ──
+ *
+ * `loadOvTile` cleared its key on any failure so the next stream pass would
+ * retry — right for a cold tile filling behind the edge, and a request storm
+ * for a tile the route cannot answer at all. Measured against the live cell
+ * at Cape Town: z13, z12 and z11 return in 0.4–0.6s from the bank, while
+ * z10, z9 and z8 return 502 at the CloudFront edge's ~15.5s on EVERY ask,
+ * including after waiting past the Lambda's own 50s budget — so those tiles
+ * never bank and never will until the cell's query changes. Against that,
+ * the chart was re-asking a 25-tile ring every 1.2s for ever, four at a time,
+ * each burning an 11s abort: a permanent load on a route that cannot answer,
+ * and a status line that could never settle.
+ *
+ * The fine layer solved this years ago with `osmFailedAt` and RETRY_WINDOW.
+ * Same shape here, longer window, because an overview tile is cached for a
+ * week once it does land and there is nothing urgent about the retry.
+ */
+const ovFailedAt = new Map<string, number>();
+const OV_RETRY_MS = 45000;
 const ovQueue: Array<() => void> = [];
 const ovGroup = new THREE.Group();
 ovGroup.name = 'overview';
 ovGroup.visible = false;
-worldGroup.add(ovGroup);
+planetGroup.add(ovGroup);
 /**
  * THE BACKDROP HAS TO KNOW IT IS ONE.
  *
@@ -19430,38 +22724,66 @@ const ovInkU = { uInkOn: { value: 1 } };
  *
  * So the geometry is a centreline plus a unit normal (aOff, carrying the
  * class's relative weight), and the width arrives as one uniform in metres,
- * recomputed each frame from the chart camera: OV_PX art pixels wide, whatever
+ * recomputed each frame from the chart camera: the rung's base width in art
+ * pixels (see the ladder below), whatever
  * the zoom. No rebuild, no per-class uniform, no CPU work per way.
  */
-const ovWU = { uOvW: { value: 40 } };
-/** Base ribbon width in the pixels the world is actually RENDERED at (PIX_H
- *  lines, magnified after). The class multipliers run 0.5–1.3 around it, so
- *  the thinnest chart line still lands a pixel wide and a motorway reads as
- *  the trunk it is. */
-const OV_PX = 2.0;
+/**
+ * …AND A LINE'S WEIGHT IS RELATIVE TO THE FRAME IT IS IN.
+ *
+ * "Importance does not change when you pinch" held the ribbons at one art
+ * width across every rung of the ladder, and the seat's five frames from the
+ * Afsluitdijk say where that stops being true: the same two and a half
+ * pixels of saturated gold that annotate a district out-ink a continent. At
+ * the wide rungs the frame is about the landform and the player's plan, and
+ * a road network drawn at the district's weight is the loudest thing on it.
+ *
+ * So the ladder has a WEIGHT and an INK per rung, and what stays constant is
+ * the hierarchy — motorway 1.3 × primary 1.0 × the rest 0.72 — not the
+ * absolute weight. The base width falls from two art pixels at the street
+ * rungs to one at the country's; every class is floored at one pixel (a
+ * sub-pixel ribbon is a dotted ghost, the fault this design replaced); and
+ * the ink is an alpha the composite dithers toward the ground, full at the
+ * street rungs and half at the continent. The route line, the mission's via,
+ * the pins and the truck's marker are drawn on the HUD and take none of
+ * this: THE BASE MAP RECEDES AS THE FRAME WIDENS; THE PLAN DOES NOT. Labels
+ * keep their own rank gate. Measured on the Afsluitdijk stand, see the
+ * chart section of CLAUDE.md.
+ */
+const OV_PX_BY_Z: Record<number, number> = { 13: 2.0, 12: 2.0, 11: 2.0, 10: 1.7, 9: 1.4, 8: 1.2, 7: 1.0, 6: 1.0, 5: 1.0 };
+const OV_INK_BY_Z: Record<number, number> = { 13: 1, 12: 1, 11: 1, 10: 0.9, 9: 0.8, 8: 0.7, 7: 0.6, 6: 0.5, 5: 0.5 };
+const ovPxFor = (z: number): number => OV_PX_BY_Z[z] ?? 1.0;
+const ovInkFor = (z: number): number => OV_INK_BY_Z[z] ?? 0.5;
+/** Metres per ART pixel at the chart's centre (`uOvMpp`), the rung's base
+ *  width in art pixels (`uOvPx`) and its ink (`uOvInk`) — set once a frame. */
+const ovWU = { uOvMpp: { value: 20 }, uOvPx: { value: 2 }, uOvInk: { value: 1 } };
 ovMat.onBeforeCompile = (sh: { vertexShader: string; fragmentShader: string; uniforms: Record<string, unknown> }) => {
   Object.assign(sh.uniforms, ovU, ovInkU, ovWU);
   sh.vertexShader = sh.vertexShader
     .replace('#include <common>', `#include <common>
       varying vec2 vOvW; attribute float aInk; varying float vInk;
-      attribute vec2 aOff; uniform float uOvW;`)
+      attribute vec3 aOff; uniform float uOvMpp; uniform float uOvPx;`)
     // BEFORE project_vertex, which is what consumes `transformed`. The ribbon
-    // has no width in the buffer at all — it is a centreline until here.
+    // has no width in the buffer at all — it is a centreline until here. The
+    // push is a vector in the tile's tangent plane (see buildOvTile) whose
+    // length is the class's relative half-width; each side is that times the
+    // rung's base, floored at half a pixel so no class thins below one.
     .replace('#include <begin_vertex>', `#include <begin_vertex>
-      transformed.xz += aOff * uOvW;`)
+      float ovHw = length(aOff);
+      transformed += (ovHw > 0.0 ? aOff / ovHw : vec3(0.0)) * max(ovHw * uOvPx, 0.5) * uOvMpp;`)
     .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
       vOvW = (modelMatrix * vec4(transformed, 1.0)).xz;
       vInk = aInk;`);
   sh.fragmentShader = sh.fragmentShader
     .replace('#include <common>', `#include <common>
       varying vec2 vOvW; uniform vec2 uOvC; uniform vec2 uOvR;
-      varying float vInk; uniform float uInkOn;`)
+      varying float vInk; uniform float uInkOn; uniform float uOvInk;`)
     .replace('#include <dithering_fragment>', `#include <dithering_fragment>
       // UNSURVEYED IS ABSENT, not faint: a ghost road is a road you would
       // steer by, and the whole point of the gate is that the Service has not
       // been told about this one yet.
       if (uInkOn > 0.5 && vInk < 0.5) discard;
-      gl_FragColor.a *= smoothstep(uOvR.x, uOvR.y, distance(vOvW, uOvC));`);
+      gl_FragColor.a *= smoothstep(uOvR.x, uOvR.y, distance(vOvW, uOvC)) * uOvInk;`);
 };
 /** Ways built but not yet lit, with the vertex range each owns. Entries leave
  *  the list the moment they light — the walk is over what is still dark. */
@@ -19512,8 +22834,41 @@ function ovInkRefresh(): void {
   ovDark = keep;
 }
 /** A place the chart can write on the land: rank 0 city … 3 hamlet, 4 peak. */
-interface OvPlace { name: string; x: number; z: number; y: number; rank: number }
+/** `x/z/y` in the flat frame, for whoever asks the flat world about the
+ *  place; `sp` its point in the PLANET'S frame, which is what draws it. */
+interface OvPlace { name: string; x: number; z: number; y: number; sp: THREE.Vector3; rank: number }
 const ovPlaces = new Map<string, OvPlace>();
+/** The names the chart drew last frame, for `__ov().labels` — a test cannot
+ *  read the HUD canvas back, and "is San Francisco written over India" is a
+ *  question about what was DRAWN, not about what the table holds. */
+const ovLabelsDrawn: string[] = [];
+/**
+ * ── THE COARSE ROAD NETWORK, KEPT ──
+ *
+ * The overview tiles have always arrived as tagged polylines and been spent
+ * on ribbons: "a backdrop nothing samples", in the layer's own words. That was
+ * true of the picture and false of the need. The router's graph is built from
+ * `roadGrid`, which is the FINE ring and stops around five kilometres out, so
+ * a goal thirty kilometres away had no path — not because the search failed
+ * but because the only roads that go there were drawn and thrown away.
+ *
+ * So the drivable ones are kept, in world metres, exactly as `ovPlaces` keeps
+ * the names. Raw geometry rather than the clipped pieces the ribbons use: a
+ * way crossing three tiles arrives three times and the node matcher collapses
+ * the shared ends (they are the same OSM nodes, to the metre), which is what
+ * makes the network continuous across a tile boundary instead of a row of
+ * disconnected stubs.
+ */
+interface OvWay { pts: Array<[number, number]>; hw: number; name: string }
+const ovWays = new Map<string, OvWay[]>();
+/** Bumped whenever the coarse network changes, so a solve can tell. */
+let ovWayV = 0;
+/** A half-width in metres per class, standing in for the fine survey's `hw` so
+ *  one cost model serves both tiers: a trunk road is not a lane. */
+const OV_HW: Record<string, number> = {
+  motorway: 7, trunk: 6.5, primary: 5.5, secondary: 4.5, tertiary: 4,
+  motorway_link: 4, trunk_link: 4, primary_link: 4, unclassified: 3.5, residential: 3.5,
+};
 const OV_RANK: Record<string, number> = { city: 0, town: 1, village: 2, hamlet: 3 };
 /** The finest overview level whose 5×5 ring still fills the view. */
 function ovLevelFor(radius: number): number {
@@ -19526,9 +22881,10 @@ function setOvLevel(z: number): void {
   // The outgoing level holds the frame while the new one streams, exactly as
   // the terrain shell does — sunk a little so the incoming level wins where
   // both exist, dropped when the new ring has landed.
-  for (const m of ovMeshes.values()) { m.position.y -= 15; ovRetired.push(m); }
+  for (const m of ovMeshes.values()) { m.position.multiplyScalar(1 - 15 / GLOBE_R); ovRetired.push(m); }
   ovMeshes.clear();
   ovTiles.clear();
+  ovWays.clear(); ovWayV++;    // the level swapped; the coarse graph is stale
 }
 function dropRetiredOv(): void {
   for (const m of ovRetired) { ovGroup.remove(m); m.geometry.dispose(); }
@@ -19554,6 +22910,8 @@ async function loadOvTile(x: number, y: number): Promise<void> {
   const z = ovZ;
   const key = `${z}/${x}/${y}`;
   if (ovTiles.has(key)) return;
+  const failed = ovFailedAt.get(key);
+  if (failed !== undefined && performance.now() - failed < OV_RETRY_MS) return;
   ovTiles.add(key);
   if (ovInFlight >= 4) await new Promise<void>((go) => ovQueue.push(go));
   ovInFlight++;
@@ -19576,9 +22934,13 @@ async function loadOvTile(x: number, y: number): Promise<void> {
     if (!res.ok) throw new Error(`ov HTTP ${res.status}`);
     const data = (await res.json()) as { ways?: Array<{ tags: Record<string, string>; geometry: Array<[number, number]> }> };
     if (z !== ovZ) { ovTiles.delete(key); return; }
+    ovFailedAt.delete(key);
     buildOvTile(key, x, y, z, data.ways ?? [], dem);
   } catch {
-    ovTiles.delete(key);      // a 503 is a cold tile filling; the next stream pass retries
+    // A 503 is a cold tile filling and a 502 is the edge giving up on one that
+    // may never fill; neither is worth asking again on the next 1.2s pass.
+    ovTiles.delete(key);
+    ovFailedAt.set(key, performance.now());
   } finally {
     clearTimeout(bail);
     ovInFlight--;
@@ -19619,11 +22981,21 @@ function buildOvTile(key: string, x: number, y: number, z: number,
     if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
     return;
   }
-  const yAt = (la: number, lo: number, wx: number, wz: number): number => {
+  // Height over the datum in the flat frame's sense; the curve is the sphere
+  // the vertex is put on (sphereRTC), not a term here any more.
+  const yAt = (la: number, lo: number): number => {
     const u = clamp(Math.round(((lo - b.lonW) / (b.lonE - b.lonW)) * 255), 0, 255);
     const v = clamp(Math.round(((b.latN - la) / (b.latN - b.latS)) * 255), 0, 255);
-    return dem[v * 256 + u] - baseElev - FAR_DROP - curveDrop(wx, wz) + lift;
+    return dem[v * 256 + u] - baseElev - FAR_DROP + lift;
   };
+  // THE TILE'S OWN FRAME ON THE SPHERE: its centre point, which the vertices
+  // are relative to, and the east/north there, which the ribbon's push is
+  // written in. One frame for the whole tile — at z7 the frame turns 2.8
+  // degrees edge to edge, and what it turns is a two-pixel ribbon's width.
+  const [cLat, cLon] = [(b.latN + b.latS) / 2, (b.lonW + b.lonE) / 2];
+  const centre = latLonToUnit(cLat, cLon).multiplyScalar(GLOBE_R);
+  const eC = globeEast(cLat, cLon), nC = globeNorth(cLat, cLon);
+  const vA = new THREE.Vector3(), vB = new THREE.Vector3();
   /**
    * EVERY TILE DRAWS ITS OWN PIECE OF A WAY, AND NOBODY ELSE'S.
    *
@@ -19692,12 +23064,22 @@ function buildOvTile(key: string, x: number, y: number, z: number,
       // one place it leaked.
       if (underCover(la, lo, 1)) continue;
       const [px, pz] = toLocal(la, lo);
-      ovPlaces.set(name, { name, x: px, z: pz, y: yAt(la, lo, px, pz),
+      ovPlaces.set(name, { name, x: px, z: pz, y: yAt(la, lo),
+        sp: latLonToUnit(la, lo).multiplyScalar(GLOBE_R + yAt(la, lo)),
         rank: t.place ? OV_RANK[t.place] ?? 3 : 4 });
       continue;
     }
     const style = OV_STYLE.find(([match]) => match(t));
     if (!style || w.geometry.length < 2) continue;
+    // KEPT FOR THE ROUTER, not for the picture — see ovWays. Drivable only: a
+    // railway and a coastline are drawn by the same layer and are not roads.
+    if (t.highway && !/^(path|footway|cycleway|steps|track|bridleway|construction|proposed)$/.test(t.highway)) {
+      const pts: Array<[number, number]> = w.geometry.map(([wla, wlo]) => toLocal(wla, wlo));
+      const arr = ovWays.get(key);
+      const one = { pts, hw: OV_HW[t.highway] ?? 3, name: t.name ?? '' };
+      if (arr) arr.push(one); else ovWays.set(key, [one]);
+      ovWayV++;
+    }
     // ON THE LINE the far chart holds the minimap's rule: a road appears once
     // the survey has ANY of it, or the docket runs through it. Rail, coastline
     // and the waterways are terrain's infrastructure — chart, not survey — and
@@ -19726,14 +23108,17 @@ function buildOvTile(key: string, x: number, y: number, z: number,
       const dx = bx - ax, dz = bz - az;
       const len = Math.hypot(dx, dz) || 1;
       const px2 = (-dz / len) * hw, pz2 = (dx / len) * hw;
-      const ay = yAt(aLa, aLo, ax, az), by = yAt(bLa, bLo, bx, bz);
+      sphereRTC(aLa, aLo, yAt(aLa, aLo), centre, vA);
+      sphereRTC(bLa, bLo, yAt(bLa, bLo), centre, vB);
+      // The push, in the tangent plane: the flat frame's z is SOUTH.
+      const ox = px2 * eC.x - pz2 * nC.x, oy = px2 * eC.y - pz2 * nC.y, oz = px2 * eC.z - pz2 * nC.z;
       // Six vertices on the CENTRELINE, six normals that push them apart in
       // the vertex shader. Same triangle count, same ink ranges, and a width
       // that is a decision about the camera rather than about the tile.
-      verts.push(ax, ay, az, bx, by, bz, ax, ay, az,
-        bx, by, bz, bx, by, bz, ax, ay, az);
-      offs.push(px2, pz2, px2, pz2, -px2, -pz2,
-        px2, pz2, -px2, -pz2, -px2, -pz2);
+      verts.push(vA.x, vA.y, vA.z, vB.x, vB.y, vB.z, vA.x, vA.y, vA.z,
+        vB.x, vB.y, vB.z, vB.x, vB.y, vB.z, vA.x, vA.y, vA.z);
+      offs.push(ox, oy, oz, ox, oy, oz, -ox, -oy, -oz,
+        ox, oy, oz, -ox, -oy, -oz, -ox, -oy, -oz);
       for (let q = 0; q < 6; q++) cols.push(col[0], col[1], col[2]);
     }
     }
@@ -19750,7 +23135,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
   geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cols), 3));
-  geo.setAttribute('aOff', new THREE.BufferAttribute(new Float32Array(offs), 2));
+  geo.setAttribute('aOff', new THREE.BufferAttribute(new Float32Array(offs), 3));
   // Everything is lit unless a run says otherwise — rail, water and coastline
   // never enter inkRuns at all, so they are simply on.
   const ink = new Float32Array(verts.length / 3).fill(1);
@@ -19766,6 +23151,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   // after the world's own transparents (water, rain) rather than under
   // whichever happened to sort nearer that frame.
   mesh.renderOrder = 40;
+  mesh.position.copy(centre);
   for (const r of inkRuns) if (!r.lit) ovDark.push({ mesh, name: r.name, la: r.la, lo: r.lo, from: r.from, to: r.to });
   ovMeshes.set(key, mesh);
   ovGroup.add(mesh);
@@ -19941,6 +23327,15 @@ async function loadPeakTile(x: number, y: number): Promise<void> {
  * marked and the draw pass ghosts it, which is the same law the POI pins
  * already follow for a place behind a ridge.
  */
+/** Is the earth's own bulge in front of this summit? See the gate above. */
+function peakUnderCurve(p: Peak, d: number, eyeY: number, vx: number, vz: number): boolean {
+  const gy = hasHeight(vx, vz) ? groundAt(vx, vz) : eyeY - 2;
+  const h = Math.max(0.5, eyeY - gy);          // eye over the ground it stands on
+  const horizon = Math.sqrt(2 * EARTH_R * h);
+  if (d <= horizon) return false;              // inside the horizon nothing is under the curve
+  const sight = ((d - horizon) ** 2) / (2 * EARTH_R);
+  return (p.ele - baseElev) - gy < sight;
+}
 function peakLook(p: Peak, vx: number, vz: number, eyeY: number): { d: number; rise: number; app: number } {
   const d = Math.hypot(p.x - vx, p.z - vz) || 1;
   const rise = (p.ele - baseElev) - curveDrop(p.x - vx, p.z - vz) - eyeY;
@@ -19961,30 +23356,70 @@ function peakLook(p: Peak, vx: number, vz: number, eyeY: number): { d: number; r
  * are in, the ridge across it — and because that is where this world actually
  * holds ground it can answer with.
  *
- * FINE TERRAIN ONLY, and deliberately. The coarse shell would extend the reach
- * to tens of kilometres, but it samples the DEM every 250m and CHORDS over
- * every valley between — so it stands above the true ground exactly where a
- * distant peak would be seen through a gap, and would hide summits that are
- * plainly in view. Missing a blocker beyond the fine ring leaves a label on a
- * peak you cannot quite see; inventing one removes a peak you can. The first
- * is a smaller lie, so the test only ever speaks where it has real ground.
+ * THE FINE RING IS NOT ENOUGH, AND THE SHELL'S MESH WAS THE WRONG WITNESS.
+ * This used to march 4.2km of fine terrain only, on the grounds that the
+ * coarse shell's MESH chords over every valley between its vertices and so
+ * invents ridges where a peak is really seen through a gap. That is true of
+ * the mesh and not of the RASTER it is built from, which is 19m of ground a
+ * pixel at z13 and 76m at z11 (see farRasters). Photographed in the Senqu:
+ * THABA-NTSO at 25.3km and QUTHING DISTRICT HIGH POINT at 47.1km both
+ * labelled over a hillside that plainly hides them, because every blocker
+ * between them and the camera stood beyond four kilometres.
+ *
+ * So the line is walked as far as the summit's own flank, on whatever ground
+ * the world can honestly answer with: the fine mesh where it reaches (the
+ * carved one, which is what the player is looking at), the coarse raster
+ * beyond it. The raster still smooths — a spire comes out shorter and a notch
+ * shallower than the real land — so a coarse blocker must beat the sight line
+ * by a margin of its own pixel size before it is believed, where fine ground
+ * needs only PEAK_CLEAR. Past the shell there is no ground and nothing is
+ * claimed: a label on a peak you cannot quite see is a smaller lie than a
+ * peak removed from a view that holds it.
  */
-const PEAK_CLEAR = 15;            // metres of daylight the sight line must keep
+/**
+ * METRES OF DAYLIGHT THE SIGHT LINE MUST KEEP — and it was 15, which is more
+ * slop than the ground it is measured against. The fine mesh and the field's
+ * own raster disagree by about 3m at a point (measured), so 15 buys nothing
+ * but indecision: Thaba-Ntšo's blocker measured 16m over the line in one
+ * session and 13m in the next as the corridor refined under it, and the
+ * label blinked on and off between sessions at a ridge that hides it in
+ * both. Five is clear of the noise and decisive about a ridge — and a summit
+ * peeking five metres over one at a kilometre is a sliver, not a view.
+ */
+const PEAK_CLEAR = 5;
+/** …and what a COARSE sample must beat, being a smoothed answer: its own
+ *  pixel, so a gap the raster half-filled cannot kill a visible summit. */
+const peakCoarseClear = (): number => Math.max(45, farPixelM() * 0.8);
+/** Samples along the line. Logarithmic, because a blocker is usually near —
+ *  but the far half now has to be walked too, so there are more of them. */
+const PEAK_MARCH = 26;
 /** Where the march starts. Inside this the "terrain" is the verge, the cut
  *  face and the batter beside the wheels — a metre of kerb is not a mountain,
  *  and a camera sitting low in a cutting would otherwise be blind. */
 const PEAK_NEAR = 250;
 const peakBlockMemo = new Map<string, boolean>();
 let peakMemoX = NaN, peakMemoZ = NaN;
-function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number, d: number): boolean {
+/** …and the memo is stale when the GROUND changes, not only when the truck
+ *  does. A verdict reached before the ridge in front of you had loaded said
+ *  "nothing in the way" and survived every frame until you had driven forty
+ *  metres — which is how a summit behind a hill keeps its label for as long
+ *  as you sit still and watch the hill arrive. */
+let peakMemoBuilds = -1;
+interface PeakStep { d: number; src: string; ground: number; line: number; over: number }
+function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number, d: number,
+                     out?: PeakStep[]): boolean {
   // The answer is a property of WHERE YOU STAND, so it survives until you have
-  // moved far enough for a ridge line to have changed.
-  if (!(Math.abs(vx - peakMemoX) < 40 && Math.abs(vz - peakMemoZ) < 40)) {
-    peakMemoX = vx; peakMemoZ = vz;
-    peakBlockMemo.clear();
+  // moved far enough for a ridge line to have changed. A caller asking for the
+  // PROFILE wants the walk itself, so it skips the memo both ways.
+  if (!out) {
+    if (!(Math.abs(vx - peakMemoX) < 40 && Math.abs(vz - peakMemoZ) < 40) || peakMemoBuilds !== terrainBuilds) {
+      peakMemoX = vx; peakMemoZ = vz;
+      peakMemoBuilds = terrainBuilds;
+      peakBlockMemo.clear();
+    }
+    const memo = peakBlockMemo.get(p.name);
+    if (memo !== undefined) return memo;
   }
-  const memo = peakBlockMemo.get(p.name);
-  if (memo !== undefined) return memo;
   // 0.72, NOT 0.9: the last stretch of the ray is the mountain's own flank,
   // and marching it let a summit block ITSELF — the DEM smears a spire below
   // its OSM elevation, so the rim of the very mesa it stands on rose over the
@@ -19992,25 +23427,70 @@ function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number
   // Monument Valley: The Setting Hen in the middle of the frame, unnamed. A
   // real blocker — the wall of the valley you are in — is near by nature and
   // still well inside the shortened march.
-  const reach = Math.min(d * 0.72, 4200);
+  const reach = d * 0.72;
   let hit = false;
   if (reach > PEAK_NEAR) {
-    for (let i = 1; i <= 12 && !hit; i++) {
-      const sd = PEAK_NEAR * Math.pow(reach / PEAK_NEAR, i / 12);
+    for (let i = 1; i <= PEAK_MARCH && !hit; i++) {
+      const sd = PEAK_NEAR * Math.pow(reach / PEAK_NEAR, i / PEAK_MARCH);
       const f = sd / d;
       const sx = vx + (p.x - vx) * f, sz = vz + (p.z - vz) * f;
-      if (!hasHeight(sx, sz)) continue;
+      const line = eyeY + rise * f;
+      if (!hasHeight(sx, sz)) {
+        // BEYOND THE FINE RING, THE COARSE RASTER — the only ground the world
+        // holds out here, and the reason a ridge at ten kilometres can now
+        // hide the mountain behind it.
+        const coarse = farRasterAt(sx, sz);
+        if (coarse === null) { out?.push({ d: Math.round(sd), src: 'none', ground: 0, line: +line.toFixed(0), over: 0 }); continue; }
+        const cg = coarse - baseElev - curveDrop(sx - vx, sz - vz);
+        if (cg > line + peakCoarseClear()) hit = true;
+        out?.push({ d: Math.round(sd), src: 'coarse', ground: +cg.toFixed(0), line: +line.toFixed(0), over: +(cg - line).toFixed(0) });
+        continue;
+      }
       // groundAt, NOT sampleHeight: the raw heightfield still holds the
       // hillside that was CARVED AWAY for the road, so from inside a cutting
       // every summit is behind a hill that is not there any more. The carved
       // mesh is what the player is looking at, and it is what gets to occlude.
       const ground = groundAt(sx, sz) - curveDrop(sx - vx, sz - vz);
-      if (ground > eyeY + rise * f + PEAK_CLEAR) hit = true;
+      if (ground > line + PEAK_CLEAR) hit = true;
+      out?.push({ d: Math.round(sd), src: 'fine', ground: +ground.toFixed(0), line: +line.toFixed(0), over: +(ground - line).toFixed(0) });
     }
   }
-  peakBlockMemo.set(p.name, hit);
+  if (!out) peakBlockMemo.set(p.name, hit);
   return hit;
 }
+/**
+ * WHY A SUMMIT IS OR IS NOT ON THE GLASS — the sight line, sample by sample.
+ *
+ * The one question the label cannot answer for itself: was there a hill in the
+ * way, how far out, and on whose word — the carved fine mesh, the coarse
+ * raster, or nothing at all. `worst` is the sample that came closest to the
+ * line, so a peak that survives by ten metres is visible in the same table as
+ * one blocked by four hundred.
+ */
+/** The coarse ground under a world point, and whether the fine world also
+ *  answers there — the two sources the sight line walks on. */
+(window as unknown as { __farat?: object }).__farat = (x: number, z: number): object => ({
+  coarse: farRasterAt(x, z), fine: hasHeight(x, z) ? +(groundAt(x, z) + baseElev).toFixed(1) : null,
+  pixelM: Math.round(farPixelM()), tiles: farRasters.size,
+  boxes: [...farRasters.entries()].map(([k, r]) => ({ k, x0: Math.round(r.xs), x1: Math.round(r.xs + r.w), z0: Math.round(r.zs), z1: Math.round(r.zs + r.h) })),
+});
+(window as unknown as { __peakwhy?: object }).__peakwhy = (match = ''): object[] => {
+  const eyeY = camera.position.y;
+  const rows: object[] = [];
+  for (const p of peaks.values()) {
+    if (match && !p.name.toLowerCase().includes(match.toLowerCase())) continue;
+    const l = peakLook(p, state.x, state.z, eyeY);
+    const steps: PeakStep[] = [];
+    const blocked = peakBlocked(p, state.x, state.z, eyeY, l.rise, l.d, steps);
+    const worst = steps.length ? steps.reduce((a, b) => (a.over > b.over ? a : b)) : null;
+    rows.push({ name: p.name, ele: p.ele, km: +(l.d / 1000).toFixed(1), rise: Math.round(l.rise),
+      blocked, fine: steps.filter((q) => q.src === 'fine').length,
+      coarse: steps.filter((q) => q.src === 'coarse').length,
+      blind: steps.filter((q) => q.src === 'none').length,
+      worst, clear: { fine: PEAK_CLEAR, coarse: Math.round(peakCoarseClear()) } });
+  }
+  return rows.sort((a, b) => (a as { km: number }).km - (b as { km: number }).km);
+};
 // What the chart's coarse layer is holding, for the tools.
 //
 // `float` is the one that matters: how far the drawn ribbon sits ABOVE the
@@ -20027,12 +23507,13 @@ function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number
   for (const m of ovMeshes.values()) {
     const p = m.geometry.getAttribute('position');
     for (let i = 0; i < p.count && fl.length + wet.length < 900; i += 37) {
-      const x = p.getX(i), z = p.getZ(i);
+      const [la, lo, yv] = sphereLatLon(sphV.set(p.getX(i), p.getY(i), p.getZ(i)).add(m.position));
+      const [x, z] = toLocal(la, lo);
       if (!hasHeight(x, z)) continue;          // only where the FINE world exists
       const g = sampleHeight(x, z);
       const overSea = seaOn && g < sea.position.y;
       const surface = overSea ? sea.position.y : g;
-      (overSea ? wet : fl).push(p.getY(i) + m.position.y - surface);
+      (overSea ? wet : fl).push(yv - surface);
     }
   }
   wet.sort((a, b) => a - b);
@@ -20043,7 +23524,7 @@ function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number
     viewR: Math.round(viewRadius()), zoom: +zoomCur.toFixed(1),
     // The ribbon in BOTH currencies: the metres it happens to occupy right
     // now, and the art pixels it is meant to hold at every zoom.
-    ribbonW: +ovWU.uOvW.value.toFixed(1), ribbonPx: OV_PX, pixH: pixSize.y,
+    ribbonMpp: +ovWU.uOvMpp.value.toFixed(2), ribbonPx: ovWU.uOvPx.value, ink: ovWU.uOvInk.value, pixH: pixSize.y,
     // Where the layer is allowed to start showing at all, against the fine
     // ring it is meant to be standing in for.
     fineR: Math.round(osmRingR), fade: [Math.round(ovU.uOvR.value.x), Math.round(ovU.uOvR.value.y)],
@@ -20076,9 +23557,9 @@ function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number
 // Everything the wheels touch follows from clearance: the lowest hull part
 // sits exactly on the axle plane, so GROUND CLEARANCE *is* the wheel radius,
 // and overall height is the hull top plus that radius.
-const SX = 0.7, SY = 0.8;
+const SX = OVERLAND.scaleX, SY = OVERLAND.scaleY;
 // WHEEL_R drives the physics (contact plane, spin rate); WHEEL_W is cosmetic.
-const WHEEL_R = 0.45, WHEEL_W = 0.36, TRACK = 1.18 * SX, AXLE = 1.55;
+const WHEEL_R = OVERLAND.wheelRadius, WHEEL_W = OVERLAND.wheelWidth, TRACK = OVERLAND.trackHalf, AXLE = OVERLAND.axleHalf;
 // Local wheel anchors [x, z] — FL, FR, RL, RR (forward is -z).
 const WHEELS: Array<[number, number]> = [[-TRACK, -AXLE], [TRACK, -AXLE], [-TRACK, AXLE], [TRACK, AXLE]];
 // ── bodywork ───────────────────────────────────────────────────────
@@ -20134,191 +23615,25 @@ function bodywork(mat: THREE.Material, amount: number): void {
       }`).replace(/SHARE/g, amount.toFixed(3));
   };
 }
-let bodyMat: THREE.MeshLambertMaterial | null = null;
-const tailMat = new THREE.MeshBasicMaterial({ color: 0x8e1a12 }); // brightens under braking
-const car = new THREE.Group();
-car.name = 'car';
-car.rotation.order = 'YXZ'; // yaw first, then pitch/roll about the CAR's axes
-const wheelPivots: THREE.Group[] = [];
-const wheelMeshes: THREE.Mesh[] = [];
-// The truck's own materials, collected so the cab view can ghost the shell —
-// CAR-LOCAL ONLY. woodMat/leafMat are shared with the world's vegetation, and
-// ghosting those would fade every tree in the game with the bonnet.
-const cabMats: THREE.MeshLambertMaterial[] = [];
-{
-  // Built against the reference: a boxy overland 4x4 — glasshouse cab set
-  // back, short bonnet, open rear tub, fender flares tying the wheels to the
-  // body, and the gear an expedition truck actually carries. Every part is a
-  // slab or a cylinder; the silhouette does the work at pixel resolution.
-  const RED = 0xc4402c, DARK = 0x1b1f26, STEEL = 0x2a2f36, TAN = 0x6b6250;
-  // DoubleSide: the extruded wheel arches are the one part whose winding is
-  // not under our control, and a flipped face there renders as a black hole.
-  const redMat = new THREE.MeshLambertMaterial({ color: RED, flatShading: true, side: DS });
-  const glassMat = new THREE.MeshLambertMaterial({ color: DARK, flatShading: true });
-  const steelMat = new THREE.MeshLambertMaterial({ color: STEEL, flatShading: true });
-  const cargoMat = new THREE.MeshLambertMaterial({ color: TAN, flatShading: true });
-  bodyMat = redMat;
-  bodywork(redMat, 1);
-  bodywork(steelMat, 0.35);
-  bodywork(cargoMat, 0.5);
-  const panelMat = new THREE.MeshLambertMaterial({ color: 0x14304e, emissive: 0x060f1c, flatShading: true });
-  // Dark trim: arch lips, shut lines, handles. Unweathered — these are the
-  // rubber-and-plastic parts, and the paint shader would only muddy them.
-  const trimMat = new THREE.MeshLambertMaterial({ color: 0x241f1c, flatShading: true, side: DS });
-  const tireMat = new THREE.MeshLambertMaterial({ color: 0x14171c, flatShading: true });
-  const hubMat = new THREE.MeshLambertMaterial({ color: 0x8f8574, flatShading: true });
-  cabMats.push(redMat, glassMat, steelMat, cargoMat, panelMat, trimMat, tireMat, hubMat);
-  // Every hull part sits DROP metres lower than its written y. The suspension
-  // geometry wants the group origin on the axle plane, but hanging the body
-  // where that put it left 1.3m of daylight under the tub and the truck walked
-  // on stilts. One offset here beats re-deriving thirty numbers.
-  const DROP = 0.3;
-  // Both the geometry and its placement go through the spec-sheet squeeze, so
-  // the authored numbers below stay readable and the sheet is honoured in
-  // exactly one place. Every geometry handed in here is freshly built, so
-  // scaling it in place is safe.
-  // Placement is baked into the GEOMETRY, not carried on the mesh. The bodywork
-  // shader below reads `position` straight out of the vertex buffer and needs
-  // it in CAR space — with the offset on the mesh instead, every part would
-  // have been centred on its own origin and the panel lines, dust gradient and
-  // camo would have restarted on each box.
-  // `rx` rakes a panel (windscreen, bonnet, solar) about its own centre, so it
-  // has to happen after the squeeze and before the translate.
-  const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, rx = 0): THREE.Mesh => {
-    geo.scale(SX, SY, 1);
-    if (rx) geo.rotateX(rx);
-    geo.translate(x * SX, (y - DROP) * SY, z);
-    const m = new THREE.Mesh(geo, mat);
-    car.add(m);
-    return m;
-  };
-  const box = (w: number, h: number, d: number): THREE.BoxGeometry => new THREE.BoxGeometry(w, h, d);
-  // ── hull ──
-  add(box(1.95, 0.85, 4.2), redMat, 0, 0.9, 0);                 // body tub
-  add(box(1.35, 0.24, 3.4), steelMat, 0, 0.42, 0);              // exposed frame rails
-  // ── the nose is not a brick ──
-  // The bonnet falls away toward the grille and the leading edge is chamfered,
-  // so the front three-quarter reads as a vehicle rather than a shipping crate.
-  add(box(1.7, 0.34, 1.05), redMat, 0, 1.52, -1.46, -0.11);     // bonnet, sloping down
-  add(box(1.66, 0.2, 0.4), redMat, 0, 1.4, -1.98, -0.34);        // chamfer into the grille
-  for (const sx of [-0.8, 0.8]) add(box(0.16, 0.3, 1.0), redMat, sx, 1.5, -1.48, -0.11); // wing tops
-  // The cab is RED with a dark GLASS BAND through it, not a black block. That
-  // banding — red waist, black glass, red header and roof — is what makes the
-  // reference read as one painted truck instead of a cargo pod on a chassis.
-  add(box(1.7, 0.78, 1.62), redMat, 0, 1.7, -0.31);             // cab shell
-  add(box(1.74, 0.34, 1.66), glassMat, 0, 1.86, -0.31);         // side glazing
-  // RAKED WINDSCREEN. A vertical pane is the single most box-like thing about
-  // the old hull; the reference leans it back over the bonnet. Sitting proud of
-  // the cab on its own tilt, it also gives the roofline something to end on.
-  add(box(1.66, 0.52, 0.1), glassMat, 0, 1.88, -1.2, 0.42);
-  for (const px of [-0.85, 0.85]) add(box(0.14, 0.56, 0.13), redMat, px, 1.88, -1.2, 0.42); // A-pillars, on the rake
-  // B and C pillars split the side glass into windows. They sit ON the glass
-  // face (x = 0.87, the band's own half-width), not inboard of it: at 0.8 they
-  // were buried inside it and invisible from the side elevation.
-  for (const pz of [-0.4, 0.42]) {
-    for (const px of [-0.87, 0.87]) add(box(0.16, 0.36, 0.15), redMat, px, 1.86, pz);
-  }
-  add(box(1.74, 0.14, 1.78), redMat, 0, 2.14, -0.39);           // roof cap
-  add(box(1.7, 0.13, 0.3), redMat, 0, 2.11, -1.32, 0.3);        // roof leading edge, faired down
-  // ── rear tub: side rails and a tailgate, so the back reads as open cargo ──
-  for (const sx of [-0.92, 0.92]) add(box(0.11, 0.34, 1.7), redMat, sx, 1.5, 1.2);
-  add(box(1.9, 0.34, 0.12), redMat, 0, 1.5, 2.02);
-  // Sand ladders strapped along the tub — pure silhouette texture at 320p.
-  for (const sx of [-1.0, 1.0]) add(box(0.07, 0.3, 1.45), cargoMat, sx, 1.5, 1.2);
-  // ── wheel arches: ARCHES ──
-  // Four rectangles over four round tyres was the most obviously wrong thing on
-  // the side elevation. These are extruded annulus sectors, so the flare
-  // actually follows the tyre. They are built in FINAL metres and added
-  // directly — pushing a circle through the SX/SY squeeze would turn it into an
-  // ellipse while the tyre beside it stayed round.
-  {
-    const arch = (r0: number, r1: number, wid: number, mat: THREE.Material): void => {
-      const shape = new THREE.Shape();
-      shape.absarc(0, 0, r1, 0.12, Math.PI - 0.12, false);
-      shape.absarc(0, 0, r0, Math.PI - 0.12, 0.12, true);
-      const proto = new THREE.ExtrudeGeometry(shape, { depth: wid, bevelEnabled: false });
-      proto.rotateY(Math.PI / 2);        // arch plane → the truck's flank
-      proto.translate(-wid / 2, 0, 0);   // and centre it on the wheel
-      for (const [fx, fz] of WHEELS) {
-        const g = proto.clone();
-        g.translate(fx, 0, fz);
-        car.add(new THREE.Mesh(g, mat));
-      }
-      proto.dispose();
-    };
-    const R1 = WHEEL_R + 0.07;
-    // Body-coloured flare, then a dark trim lip WRAPPING its outer edge. Red on
-    // red, the flare vanished into the flank; every 4x4 that has flares this
-    // wide has them edged in something that isn't paint.
-    arch(R1, R1 + 0.16, WHEEL_W + 0.08, redMat);
-    arch(R1 + 0.13, R1 + 0.22, WHEEL_W + 0.14, trimMat);
-  }
-  // ── door cuts and handles ──
-  // The shader's panel grid is regular by nature; a door is not. These are the
-  // shut lines an eye actually looks for on a flank.
-  for (const sx of [-0.99, 0.99]) {
-    for (const dz of [-1.12, 0.02, 0.5]) add(box(0.05, 0.62, 0.05), trimMat, sx, 1.34, dz);
-    add(box(0.05, 0.05, 1.1), trimMat, sx, 1.63, -0.55);        // waist line
-    for (const dz of [-0.72, 0.3]) add(box(0.06, 0.06, 0.2), trimMat, sx, 1.5, dz); // handles
-  }
-  // ── protection: bull bar, winch, rock sills, tow points ──
-  add(box(2.0, 0.26, 0.2), steelMat, 0, 0.95, -2.2);
-  add(box(0.52, 0.24, 0.28), steelMat, 0, 1.0, -2.34);          // winch drum
-  for (const sx of [-0.62, 0.62]) add(box(0.12, 0.5, 0.12), steelMat, sx, 1.2, -2.2);
-  for (const sx of [-1.03, 1.03]) add(box(0.13, 0.13, 2.5), steelMat, sx, 0.52, 0);
-  add(box(1.7, 0.22, 0.16), steelMat, 0, 0.95, 2.16);
-  // ── roof rack, solar array, cargo ──
-  add(box(1.66, 0.07, 2.6), steelMat, 0, 2.26, -0.1);
-  for (const [px, pz] of [[-0.74, 1.08], [0.74, 1.08], [-0.74, -1.28], [0.74, -1.28]]) {
-    add(box(0.09, 0.16, 0.09), steelMat, px, 2.18, pz);
-  }
-  for (const cz of [-1.0, 0, 1.0]) add(box(1.62, 0.05, 0.09), steelMat, 0, 2.31, cz);
-  // SIX panels in a 2x3 array, framed by the rack showing through the gaps —
-  // the plan view of two big slabs read as one undifferentiated blue mass.
-  for (const px of [-0.4, 0.4]) for (const pz of [-1.06, -0.24, 0.58]) {
-    add(box(0.72, 0.05, 0.74), panelMat, px, 2.33, pz, -0.05);
-  }
-  for (const px of [-0.5, 0.5]) add(box(0.28, 0.38, 0.2), cargoMat, px, 2.48, 1.16); // jerry cans
-  add(box(1.2, 0.12, 0.14), steelMat, 0, 2.35, -1.42);           // light bar
-  for (const px of [-0.38, 0.38]) {
-    add(box(0.2, 0.15, 0.08), new THREE.MeshBasicMaterial({ color: 0xfff1cf }), px, 2.35, -1.5);
-  }
-  // ── spare on a swing-out carrier, ladder opposite, snorkel up the A-pillar ──
-  // OFF-CENTRE and smaller: dead-centre and full size it was a black hole where
-  // the back of the truck should be, and it buried both tail lights.
-  const spareGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.28, 10);
-  spareGeo.rotateX(Math.PI / 2);
-  add(spareGeo, new THREE.MeshLambertMaterial({ color: 0x1c2026, flatShading: true }), 0.52, 1.42, 2.26);
-  const spareHub = new THREE.CylinderGeometry(0.19, 0.19, 0.32, 8);
-  spareHub.rotateX(Math.PI / 2);
-  add(spareHub, hubMat, 0.52, 1.42, 2.26);                       // pale centre, so it isn't a void
-  for (const sx of [-0.72, -0.3]) add(box(0.07, 0.95, 0.07), steelMat, sx, 1.75, 2.22); // ladder rails
-  for (const ry of [1.42, 1.76, 2.1]) add(box(0.5, 0.06, 0.06), steelMat, -0.51, ry, 2.22);
-  add(box(0.13, 1.15, 0.13), steelMat, 0.86, 1.75, -1.2);
-  add(box(0.13, 0.13, 0.42), steelMat, 0.86, 2.28, -1.36);
-  // ── the face ── grille between the lamps, so the nose is not a blank slab.
-  add(box(1.12, 0.34, 0.1), glassMat, 0, 1.28, -2.1);
-  for (const gy of [1.18, 1.3, 1.42]) add(box(1.06, 0.05, 0.13), steelMat, 0, gy, -2.11);
-  // ── lamps ── small and set into the corners; big ones bloom into blobs.
-  const headMat2 = new THREE.MeshBasicMaterial({ color: 0xfff1cf });
-  for (const sx of [-0.66, 0.66]) add(box(0.3, 0.2, 0.1), headMat2, sx, 1.08, -2.13);
-  for (const sx of [-0.78, 0.78]) add(box(0.22, 0.26, 0.08), tailMat, sx, 1.1, 2.12);
-  // ── wheels ──
-  for (const [wx, wz] of WHEELS) {
-    const pivot = new THREE.Group();
-    pivot.position.set(wx, 0, wz);
-    const tireGeo = new THREE.CylinderGeometry(WHEEL_R, WHEEL_R, WHEEL_W, 12);
-    tireGeo.rotateZ(Math.PI / 2);
-    const wheel = new THREE.Mesh(tireGeo, tireMat);
-    const hubGeo = new THREE.CylinderGeometry(WHEEL_R * 0.42, WHEEL_R * 0.42, WHEEL_W + 0.08, 8);
-    hubGeo.rotateZ(Math.PI / 2);
-    wheel.add(new THREE.Mesh(hubGeo, hubMat));
-    pivot.add(wheel);
-    car.add(pivot);
-    wheelPivots.push(pivot);
-    wheelMeshes.push(wheel);
-  }
-}
+// The host keeps a stable physical root. Swapping the body never moves the
+// truck, discards a route, resets suspension, or touches campaign progress.
+let rigModelId: RigModelId = 'ranger';
+let rigLoadoutId: RigLoadoutId = 'expedition';
+let rigEquipment: RigEquipmentId[] = equipmentFor(rigLoadoutId);
+let rigPlateAt = 0;
+try {
+  const saved = JSON.parse(localStorage.getItem('drive.rig-model') || '{}');
+  if (RIG_MODELS.includes(saved.model)) rigModelId = saved.model;
+  if (RIG_LOADOUTS.includes(saved.loadout)) rigLoadoutId = saved.loadout;
+  rigEquipment = Array.isArray(saved.equipment) ? cleanEquipment(saved.equipment) : equipmentFor(rigLoadoutId);
+} catch { /* A unavailable or old preference must not prevent driving. */ }
+let rigModel = createRigModel(rigModelId, rigLoadoutId, bodywork, rigEquipment);
+const car = rigModel.root;
+let bodyMat: THREE.MeshLambertMaterial | null = rigModel.bodyMat;
+let tailMat = rigModel.tailMat;
+const wheelPivots = [...rigModel.wheelPivots];
+const wheelMeshes = [...rigModel.wheelMeshes];
+const cabMats = [...rigModel.cabMats];
 // ── beams ──────────────────────────────────────────────────────────
 // Front is -z. The BEAMS are additive cones that fade along their length, and
 // one real spotlight throws a pool down the road. Parented to the car, so
@@ -20363,7 +23678,7 @@ for (const sx of [-0.62, 0.62]) {
   // visible beam cones off them.
   const beam = new THREE.Mesh(beamGeo, beamMat);
   // Hung off the hull lamps, so it takes the same spec-sheet squeeze they do.
-  beam.position.set(sx * SX, 0.78 * SY, -2.05);
+  beam.position.copy(rigModel.anchors.lamps[beams.length]);
   // Aimed properly DOWN at the tarmac: a shallow beam ran level to the
   // horizon and read as two searchlights pointing at the sky over the roof.
   beam.rotation.x = -0.11;
@@ -20443,7 +23758,8 @@ xrayMat.onBeforeCompile = (sh) => {
 };
 const xray = new THREE.Group();
 xray.visible = false;
-{
+function rebuildRigSilhouette(): void {
+  xray.clear();
   car.updateMatrixWorld(true);
   const carInv = new THREE.Matrix4().copy(car.matrixWorld).invert();
   car.traverse((o) => {
@@ -20463,6 +23779,7 @@ xray.visible = false;
     xray.add(g);
   });
 }
+rebuildRigSilhouette();
 scene.add(xray);
 // ── the rig marks itself out of the shutter ────────────────────────
 // THE MASK RIDES IN rtScene's ALPHA, which nothing downstream reads: the blur,
@@ -20560,6 +23877,7 @@ const vehCopyMat = new THREE.ShaderMaterial({
     uDither: { value: 1 },
     uMono: { value: 0 },
     uDPat: { value: 0 },
+    uDChan: { value: 0 },
     uBias: { value: 0.5 },
     uCon: { value: 1 },
     uTint: { value: new THREE.Vector3(1, 1, 1) },
@@ -20572,10 +23890,9 @@ const vehCopyMat = new THREE.ShaderMaterial({
     uniform sampler2D src; uniform vec2 uPix; uniform float uLevels; varying vec2 vUv;
     uniform float uDither; uniform float uMono;
     uniform float uDPat; uniform float uBias; uniform float uCon; uniform vec3 uTint;
+    uniform float uDChan;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
-    float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
-    float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
-    float bayer8(vec2 a){ return bayer4(0.5 * a) * 0.25 + bayer2(a); }
+${DITHER_GLSL}
     void main(){
       vec3 enc = srgb(max(texture2D(src, vUv).rgb, 0.0));
       float l = dot(enc, vec3(0.299, 0.587, 0.114));
@@ -20588,14 +23905,7 @@ const vehCopyMat = new THREE.ShaderMaterial({
       // a plain backdrop, which is nothing BUT shallow ramps.
       enc = mix(enc, vec3(dot(enc, vec3(0.299, 0.587, 0.114))), uMono);
       enc = (enc - 0.5) * uCon + 0.5;
-      vec2 dp = floor(vUv * uPix);
-      float pat = uDPat < 0.5 ? bayer4(dp)
-        : uDPat < 1.5 ? bayer8(dp)
-        : uDPat < 2.5 ? bayer2(dp)
-        : uDPat < 3.5 ? fract(sin(dot(dp, vec2(12.9898, 78.233))) * 43758.5453)
-        : fract(dp.y * 0.25);
-      float d = (pat - 0.5) * uDither;
-      enc = clamp(floor(enc * uLevels + d + uBias) / uLevels, 0.0, 1.0);
+      enc = ditherQuant(enc, floor(vUv * uPix), uDPat, uDither, uBias, uLevels, uDChan);
       enc *= mix(vec3(1.0), uTint, uMono);
       gl_FragColor = vec4(enc, 1.0);
     }`,
@@ -20710,19 +24020,19 @@ const WX_LIVE = { cloud: 0 };
 // screenshot of the rain. Beats both the live feed and the synthetic chain.
 /** ?fixdt=<seconds> — see the note at its use in the tick. 0 is off. */
 const FIX_DT = Math.max(0, Math.min(0.05,
-  Number(new URLSearchParams(location.search).get('fixdt') ?? 0) || 0));
+  Number(qs('fixdt') ?? 0) || 0));
 const WX_PIN = ((): Sky | null => {
-  const v = new URLSearchParams(location.search).get('wx');
+  const v = qs('wx');
   return v === 'clear' || v === 'haze' || v === 'rain' || v === 'storm' ? v : null;
 })();
 /** ?fog=0..1 pins the regional mist the way ?wx pins the sky, and ?wet=0..1
  *  floods the ground — a puddle screenshot must not wait out a storm. */
 const WX_FOG = ((): number | null => {
-  const v = new URLSearchParams(location.search).get('fog');
+  const v = qs('fog');
   return v === null ? null : clamp(Number(v) || 0, 0, 1);
 })();
 const WX_WET = ((): number | null => {
-  const v = new URLSearchParams(location.search).get('wet');
+  const v = qs('wet');
   return v === null ? null : clamp(Number(v) || 0, 0, 1);
 })();
 function rollWeather(now: number): void {
@@ -20768,9 +24078,9 @@ function stepWeather(now: number, dt: number): void {
   } else if (wx.next !== 'storm') wxWarnFor = '';
   // ── the field: spread the regional sky over the ground ──
   {
-    const toDeg = (live.on ? live.windDeg : 250) + 180;   // FROM → toward
+    const toDeg = windDegNow() + 180;   // FROM → toward
     const tw = (toDeg * Math.PI) / 180;
-    wxWind.kmh = live.on ? live.windKmh : 12;
+    wxWind.kmh = windKmhNow();
     const ms = wxWind.kmh / 3.6;
     // Compass bearing to world axes: +x east, −z north.
     wxWind.x = Math.sin(tw) * ms;
@@ -20885,8 +24195,28 @@ function stepWeather(now: number, dt: number): void {
   // missing bounce. Scaled by daylight so nothing glows at night, and sized
   // against the measured budget: a sunlit wall reaches ~0.6 x 0.85 = 0.51 and
   // this adds ~0.06, still clear of the 0.62 bright-pass cut.
-  const lift = 0.075 * dayF * (1 - wx.cloud * 0.3);
+  // AND A WALL MUST NOT GO TO NOTHING AFTER DARK. Measured at Suresnes with
+  // ?time=NIGHT: a wall at linear luminance 0.0052 (sRGB 13) against the ground
+  // beside it at 0.13 — twenty-five times darker than the dirt, which is not a
+  // dark building, it is a hole in the frame. The lift was `0.075 * dayF`, so
+  // the one term standing in for the missing bounce left entirely at dusk while
+  // the ground kept its moonlight response. A night floor is a quarter of a
+  // palette step: enough that a wall has a value and an edge, far below the 0.62
+  // bright-pass cut, and nothing about it glows.
+  const lift = (0.075 * dayF + 0.020 * (1 - dayF)) * (1 - wx.cloud * 0.3);
   for (const w of bldSkylit) w.emissive.copy(w.color).multiplyScalar(lift);
+  for (const rf of bldRoofSkylit) rf.emissive.copy(rf.color).multiplyScalar(lift * 0.5);
+  // RUINS COULD NEVER JOIN bldSkylit, and went black with nothing to catch it.
+  // They are 42% of Suresnes' stock and 37% of Camps Bay's, and they carry their
+  // weathering in VERTEX COLOURS — so `material.color` is plain white and
+  // `emissive.copy(color)` would light every ruin in the world at full white.
+  // A mid weathered tone stands in for the average of those vertex colours,
+  // which is what the wall materials get from their own paint.
+  const ruinLift = RUIN_SKYLIT.clone().multiplyScalar(lift);
+  ruinMat.emissive.copy(ruinLift);
+  ruinMatFar.emissive.copy(ruinLift);
+  // The façade's night term: how much night, and how many windows are lit.
+  uFacNight.value.x = 1 - dayF;
   // THE DIAL IS THE BASE; THE WEATHER ONLY MODULATES IT.
   //
   // This line used to ASSIGN the bloom, every frame, from the weather and the
@@ -20918,15 +24248,18 @@ function stepWeather(now: number, dt: number): void {
     const k = clamp(1 / sy, 0, 4);
     envU.uSunSkew.value.set(-SUN_DIR.x * k, -SUN_DIR.z * k);
   }
+  // The chart's ground scale: the frame's height in metres at the stand-off
+  // over its height in art pixels. `chartDist` is the one stand-off now.
+  envU.uMpp.value = chartMpp();
   // ONE WIND, and it is the real one. Open-Meteo reports the direction the air
   // is coming FROM, so the deck travels toward bearing+180; the sample offset
   // runs the other way again, because shifting a noise field moves what you see
   // in the opposite direction. Both the sky deck and the shadows it throws on
   // the ground read this, so they can never drift apart.
   {
-    const toDeg = (live.on ? live.windDeg : 250) + 180;
+    const toDeg = windDegNow() + 180;
     const t = (toDeg * Math.PI) / 180;
-    const spd = (live.on ? live.windKmh : 12) * 0.0005;   // 12km/h ≈ the old fixed drift
+    const spd = windKmhNow() * 0.0005;   // 12km/h ≈ the old fixed drift
     const wxv = -Math.sin(t) * spd, wzv = Math.cos(t) * spd;
     // ONE OFFSET, in the deck's own units, read by both shaders. The sky used
     // to multiply a velocity by uTime while the ground was handed a
@@ -20938,7 +24271,7 @@ function stepWeather(now: number, dt: number): void {
     // The same wind leans the grass. Amplitude in METRES of tip travel per
     // metre of blade, so a stiff breeze lays a field over and a calm day
     // barely stirs it; the gust term rides on top of the steady lean.
-    const kmh = live.on ? live.windKmh : 12;
+    const kmh = windKmhNow();
     // THE SAME NUMBER, ONE MORE CONSUMER. The note below insists the swell and
     // the clouds must never disagree about which way the air is going; the
     // hydro surface is now a third thing that must agree, so it reads the wind
@@ -21426,12 +24759,79 @@ const SPLASH_BODY: Record<string, number> = {
   pond: 0x6f9888, basin: 0x6f9888, river: 0x6d9890, stream: 0x6d9890,
   canal: 0x6d9490, wetland: 0x7a8c70,
 };
-/** Is there DRAWN water here, and what is it — the one gate every splash
- *  passes through, and the tint it comes out with. */
-function splashWet(x: number, z: number): { levelM: number; depthM: number; kind: string } | null {
-  const w = hydroSys?.sampleRestingSurface(x, z);
-  if (!w) return null;
-  return { levelM: w.restingLevelM, depthM: w.depthM, kind: w.kind };
+/**
+ * ── A WATER EFFECT IS DRAWN ON WATER THE TRUCK IS IN, OR NOT AT ALL ──
+ *
+ * Every sheet and every droplet stands on `restingLevelM` — the surface of
+ * whatever body the field holds at that x,z — and nothing used to ask
+ * WHERE that surface was. Two ways that goes wrong, both photographed at
+ * Obergoms at midnight: a body whose resolved level sits above the road (a
+ * river in a steep valley, a level carried in from another tile) hangs the
+ * splash in the sky above the truck; and a bridge over a river answers with
+ * the water fifteen metres below, so a puddle on the deck sprays down
+ * there. The sheets were the right size — two metres — in the wrong place,
+ * which is why they read as a curtain.
+ *
+ * So the gate is geometric, and it is the only one: there must be real
+ * water here (a surface standing above the ground, not merely a covered
+ * texel — the field's own depth channel is floored at the build's minimum,
+ * so it cannot answer this), and the truck must be IN it — the waterline
+ * within a hull's reach of the chassis, above the wheels and below the
+ * roof. Water the truck is not in is somebody else's water, and nothing is
+ * thrown off it.
+ */
+const WETFX_MIN_DEPTH = 0.03;   // a surface this far over the bed is water
+const WETFX_LIFT = 1.3;         // waterline at most this far ABOVE the chassis: a deep ford
+const WETFX_DROP = 1.6;         // and at most this far below it: wheels in the shallows
+const WETFX_ROOF = 1.7;         // the truck's own roof over the chassis reference
+/** The most water a truck throws: a metre of sheet over the line it stands on. */
+const WETFX_SHEET_MAX = 1.1;
+/** The chassis rides its springs, so a sheet fitted to the roof at the top of
+ *  a bob pokes over it once the truck settles — measured at 14cm mid-ford.
+ *  The fit keeps this much back, against the waterline, which does not bob. */
+const WETFX_BOB = 0.2;
+interface WetFx { levelM: number; levelY: number; depthM: number; kind: string }
+let wetfxWhy = 'idle';
+function splashWet(x: number, z: number): WetFx | null {
+  const w = drawnHydroAt(x, z);
+  if (!w) { wetfxWhy = 'no-field'; return null; }
+  const levelY = w.restingLevelM - baseElev;
+  // Level over the DRAWN ground, the same honest depth waterInfoAt prefers.
+  const bed = hasHeight(x, z) ? sampleHeight(x, z) : NaN;
+  const depthM = Number.isFinite(bed) ? levelY - bed : w.depthM;
+  if (depthM < WETFX_MIN_DEPTH) { wetfxWhy = 'dry'; return null; }
+  if (levelY > bodyY + WETFX_LIFT) { wetfxWhy = 'perched'; return null; }
+  if (levelY < bodyY - WETFX_DROP) { wetfxWhy = 'below'; return null; }
+  wetfxWhy = 'wet';
+  return { levelM: w.restingLevelM, levelY, depthM, kind: w.kind };
+}
+/** THE RULE, MEASURED: where the gate stands, and whether any live sheet is
+ *  over the roof of the truck that threw it or off the water it stands on. */
+(window as unknown as { __wetfx?: object }).__wetfx = (): object => {
+  const roof = bodyY + WETFX_ROOF;
+  const sheets = splash.peek();
+  const w = splashWet(state.x, state.z);
+  // The RAW answer beside the verdict: a refusal has to say what it refused,
+  // or 'perched' and 'no water here at all' look the same from the seat.
+  const raw = hydroSys?.sampleRestingSurface(state.x, state.z);
+  const bed = hasHeight(state.x, state.z) ? sampleHeight(state.x, state.z) : NaN;
+  return {
+    why: wetfxWhy, wade: +rigWadeM.toFixed(3), bodyY: +bodyY.toFixed(2), roof: +roof.toFixed(2),
+    raw: raw ? { level: +(raw.restingLevelM - baseElev).toFixed(2), bed: Number.isFinite(bed) ? +bed.toFixed(2) : null,
+      over: Number.isFinite(bed) ? +(raw.restingLevelM - baseElev - bed).toFixed(2) : null,
+      fieldDepth: +raw.depthM.toFixed(2), kind: raw.kind } : null,
+    level: w ? +w.levelY.toFixed(2) : null, depth: w ? +w.depthM.toFixed(2) : null, kind: w?.kind ?? null,
+    sheets: sheets.length,
+    maxTop: sheets.length ? +Math.max(...sheets.map((p) => p.top)).toFixed(2) : null,
+    overRoof: sheets.filter((p) => p.top > roof + 0.01).length,
+    aboveTruck: sheets.filter((p) => p.y > roof).length,
+  };
+};
+/** A sheet standing on `levelY` may not reach over the truck's roof. */
+function splashFit(size: number, levelY: number): number {
+  const ceiling = Math.min(bodyY + WETFX_ROOF, levelY + WETFX_SHEET_MAX);
+  const headroom = Math.max(0.15, ceiling - levelY - WETFX_BOB);
+  return Math.min(size, headroom / SPLASH_TALL_MAX);
 }
 /** The body's own water, lit by the sky. A sheet thrown at midnight is dark
  *  water — the same rule the foam in the water shader lives by, and the same
@@ -21462,10 +24862,10 @@ function splashEntry(impulse: number, depthM: number): void {
   for (const side of [-1, 1]) {
     splash.emit({
       x: state.x + cosH * 1.9 + sinH * side * 1.05,
-      y: w.levelM - baseElev,
+      y: w.levelY,
       z: state.z + sinH * 1.9 - cosH * side * 1.05,
       dx: cosH * 0.4 + sinH * side, dz: sinH * 0.4 - cosH * side,
-      size: clamp(0.45 + impulse * 0.85 + depthM * 0.35, 0.45, 1.5),
+      size: splashFit(clamp(0.45 + impulse * 0.85 + depthM * 0.35, 0.45, 1.5), w.levelY),
       lean: 0.35,
       tint,
       life: 0.3 + Math.random() * 0.1,
@@ -21495,12 +24895,12 @@ function splashBow(now: number, speed: number, depthM: number): void {
   const power = clamp((v * v) / 90 * clamp(depthM / 0.5, 0.25, 1.6), 0.1, 1.6);
   splash.emit({
     x: state.x + cosH * 1.7 + sinH * side * 1.15,
-    y: w.levelM - baseElev,
+    y: w.levelY,
     z: state.z + sinH * 1.7 - cosH * side * 1.15,
     // Out and slightly forward: the sheet peels away from the hull.
     dx: sinH * side * 0.85 + cosH * 0.5,
     dz: -cosH * side * 0.85 + sinH * 0.5,
-    size: clamp(0.35 + power * 0.75, 0.35, 1.15),
+    size: splashFit(clamp(0.35 + power * 0.75, 0.35, 1.15), w.levelY),
     lean: 1,
     tint,
     life: 0.3 + Math.random() * 0.12,
@@ -21617,7 +25017,7 @@ const real = {
  * cable. The gyro plus the receiver's own course covers the same ground without
  * either problem.
  */
-const IMU_OFF = new URLSearchParams(location.search).get('imu') === '0';
+const IMU_OFF = qs('imu') === '0';
 const imu = {
   on: false,
   err: 'NOT STARTED',
@@ -22121,13 +25521,43 @@ function tapeRestoreDials(prior: Record<string, number>): void {
     if (d && d.at !== at) { d.at = at; d.apply(at); }
   }
 }
-// A LOT longer than the original 12s/2.6s (owner-asked): the hub sits half a
-// minute before the reel presumes, and a finished drive holds its country for
-// twenty seconds of orbit — the dwell doubling as the priming window.
-const ATTRACT_IDLE_MS = 30000;
-const ATTRACT_DWELL_MS = 20000;
+// ── HOW LONG THE REEL WAITS, AND HOW LONG IT STAYS ──
+//
+// Twice now the answer has been "much longer" (12s/2.6s → 30s/20s → this).
+// The instinct that keeps getting it wrong is treating the reel as a
+// screensaver, something to fill a gap before the player does anything. It is
+// not: it is the game showing you places, and a place needs LOOKING at. Ninety
+// seconds of hub before it presumes to travel, and a minute and a half of
+// orbit over the finished drive — long enough that the postcard is the point
+// rather than the transition between postcards.
+//
+// The dwell also does double duty as the priming window (see stepAttract), so
+// stretching it makes every hop land on warmer caches than the last.
+//
+// AND THEY ARE TUNABLE FROM THE SEAT, because the right number is a judgement
+// nobody can make from a source file: `?reelidle=45&reeldwell=120`, in
+// SECONDS. The same lever every other taste knob in this world has.
+//
+// WHAT THESE CANNOT FIX, and it is the more useful half: the reel is two
+// recordings — NOORDHOEK ROAD at 21.2s and ROMSDALEN at 18.9s — so forty
+// seconds of actual driving is the whole programme, and everything past that
+// is the camera orbiting a parked truck. Stretching the dwell makes the reel
+// LONGER without making it show MORE. Longer drives are a recording job (the
+// game has a recorder), not a constant.
+const reelSecs = (k: 'reelidle' | 'reeldwell', d: number): number => {
+  const v = Number(qs(k));
+  return Number.isFinite(v) && v > 0 ? v * 1000 : d;
+};
+const ATTRACT_IDLE_MS = reelSecs('reelidle', 90000);
+const ATTRACT_DWELL_MS = reelSecs('reeldwell', 90000);
 const ATTRACT_RET_KEY = 'drive.attract.ret';
-const attract = { on: false, i: 0, idleAt: 0, doneAt: 0, showAt: 0, dials: {} as Record<string, number> };
+const attract = {
+  on: false, i: 0, idleAt: 0, doneAt: 0, showAt: 0, dials: {} as Record<string, number>,
+  /** The driven slot, where this one is a place-and-goal rather than a tape. */
+  drive: null as ReelDrive | null,
+  /** When the slot started, and when the rig was last actually moving. */
+  driveAt: 0, driveStill: 0,
+};
 const b64ToBytes = (s: string): Uint8Array => {
   const bin = atob(s);
   const out = new Uint8Array(bin.length);
@@ -22158,7 +25588,11 @@ const attractBoot = ((): { i: number; lat: number; lon: number; h: number } | nu
     if (!raw) return null;
     sessionStorage.removeItem(ATTRACT_GO_KEY);
     const v = JSON.parse(raw) as { i: number; lat: number; lon: number; h: number };
-    return ATTRACT_TAPES[v.i] ? v : null;
+    // EITHER BUNDLE CAN BE RE-ARMED FROM. The reload fallback re-enters at an
+    // INDEX, so the index has to exist in whichever list this boot's reel is
+    // going to build — drives when there are any, tapes otherwise, which is
+    // exactly what `reelList` decides.
+    return (REEL_DRIVES.length ? REEL_DRIVES[v.i] : ATTRACT_TAPES[v.i]) ? v : null;
   } catch { return null; }
 })();
 // THE HELD FRAME. The cycle still travels by reload — the world origin is
@@ -22260,9 +25694,9 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // are SHARED and never touched.
     dropRetiredFar(); dropRetiredOv();
     for (const m of farMeshes.values()) { farGroup.remove(m); m.geometry.dispose(); }
-    farMeshes.clear(); farTiles.clear(); farCoverHit.clear(); farTint.clear();
+    farMeshes.clear(); farTiles.clear(); farCoverHit.clear(); farTint.clear(); farRasters.clear(); farBakeZ.clear();
     for (const m of ovMeshes.values()) { ovGroup.remove(m); m.geometry.dispose(); }
-    ovMeshes.clear(); ovTiles.clear(); ovPlaces.clear();
+    ovMeshes.clear(); ovTiles.clear(); ovPlaces.clear(); ovWays.clear(); ovWayV++;
     for (const child of [...worldGroup.children]) {
       if (child === farGroup || child === ovGroup) continue;
       worldGroup.remove(child);
@@ -22286,6 +25720,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     terrainMats.clear(); terrainNormals.clear();
     coverTiles.clear(); coverAsked.clear(); coverWaterMemo.clear();
     cutCells.clear(); cutSet.clear(); carveLog.clear(); refinedBorders.clear();
+    tworker?.reset(); buildInFlight = null;
     preRoadGrid.clear(); crumbDefer.clear();
     osmLoaded.clear(); osmActive.clear(); osmFailedAt.clear(); osmPinned.clear();
     osmCorridor.clear(); osmDone.clear(); seenWays.clear();
@@ -22308,7 +25743,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // the hop intact, so rebuilding the whole system would throw away a
     // compiled program to change some bounds.
     for (const key of hydroRev.keys()) hydroSys?.removeTile(key);
-    hydroRev.clear(); hydroDirty.clear(); hydroFeats.clear(); hydroFeatsFull = 0;
+    hydroRev.clear(); hydroDirty.clear(); hydroFedInputs.clear(); hydroFeats.clear(); hydroFeatsFull = 0; coverHydro.clear();
     coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear(); sideCaches.clear();
     // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
     // spatially keyed, so the last postcard's road left an elevation under
@@ -22394,7 +25829,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
  */
 const runBoot = ((): { user: string; id: string } | null => {
   try {
-    const m = (new URLSearchParams(location.search).get('run') ?? '')
+    const m = (qs('run') ?? '')
       .match(/^([a-z0-9_.-]{1,40})\/(\d{10,16})$/);
     return m ? { user: m[1], id: m[2] } : null;
   } catch { return null; }
@@ -22539,10 +25974,87 @@ function attractArmTape(w: { head: TapeHead; steps: string; keys: string }, i: n
   car.visible = false;
   attract.showAt = performance.now() + 25000;
 }
+/**
+ * ── ARMING A DRIVEN SLOT ──
+ *
+ * No tape, no checkpoints, no drift correction: the goal is set, the autopilot
+ * is switched on, and the sim drives. Everything else — the hidden rig waiting
+ * for its ground, the orbit, the dwell — is the tape path's, unchanged.
+ *
+ * THE AUTOPILOT IS NOT ENGAGED HERE. It needs a road graph, and at the first
+ * frame after a hop there is none: engaging into an empty survey makes the rig
+ * sit still while the orbit circles it, which is the exact failure the reel
+ * exists to avoid. `attractDriveTick` engages once roads have actually
+ * streamed, and gives up on the slot if they never do.
+ */
+function attractArmDrive(d: ReelDrive, i: number): void {
+  tapePlay.armed = false; tapePlay.on = false;
+  attract.on = true; attract.i = i; attract.doneAt = 0;
+  attract.dials = {};
+  attract.drive = d;
+  attract.driveAt = 0;
+  attract.driveStill = 0;
+  const [gx, gz] = toLocal(d.goal.lat, d.goal.lon);
+  setGoal(d.goal.name, gx, gz);
+  goalDone = null;
+  streamWorld(state.x, state.z);
+  car.visible = false;
+  attract.showAt = performance.now() + 25000;
+}
 /** The authored-index arm, kept for the boot/fallback-reload path. */
 function attractArm(i: number): void {
+  // MIRRORS `reelList`'s OWN RULE and does not consult `reelNow`: this runs at
+  // BOOT, from the reload fallback, before the cycle has ever called
+  // `reelSnap`, so the snapshot is empty and reading it would arm a tape on a
+  // world the drive list was going to fill.
+  if (REEL_DRIVES.length) {
+    const d = REEL_DRIVES[i];
+    if (d) attractArmDrive(d, i);
+    return;
+  }
   const t = ATTRACT_TAPES[i];
   if (t) attractArmTape(t, i);
+}
+/**
+ * ── AND THE THREE WAYS A DRIVEN SLOT ENDS ──
+ *
+ * A tape ends because it runs out. A drive has to be told, and all three of
+ * these have to be honoured or the reel stalls on one postcard for ever:
+ *
+ *   ARRIVED  `goalDone` fired. The rare one, and the nicest.
+ *   CAPPED   the slot's own seconds ran out. THE COMMON ONE, by design — the
+ *            goal is a direction, not an appointment.
+ *   STUCK    the rig has not moved for `ATTRACT_STILL_S`. An autopilot with no
+ *            road under it, a goal on the wrong side of a river, a spawn in a
+ *            cul-de-sac. Without this the orbit circles a parked truck until
+ *            the player gives up on the game, which is worse than a short slot.
+ */
+const ATTRACT_DRIVE_S = 150;
+const ATTRACT_STILL_S = 22;
+/** How long the roads get to arrive before the slot is written off. */
+const ATTRACT_ROADS_S = 40;
+function attractDriveTick(now: number): boolean {
+  const d = attract.drive;
+  if (!d) return false;
+  if (!attract.driveAt) attract.driveAt = now;
+  const elapsed = (now - attract.driveAt) / 1000;
+  // ── ENGAGE ONCE THERE IS A ROAD TO DRIVE ON ──
+  if (!auto.on) {
+    if (roadGrid.size > 0) {
+      auto.on = true;
+      auto.out = null;
+      auto.mem = autoMem();
+      auto.mem.lastHeading = state.heading;
+      attract.driveStill = now;      // the stall clock starts when the driving does
+    } else if (elapsed > ATTRACT_ROADS_S) {
+      return true;                   // no survey ever arrived; take the next postcard
+    }
+    return false;
+  }
+  if (Math.abs(state.speed) > 0.8) attract.driveStill = now;
+  if (goalDone) return true;
+  if (now - attract.driveStill > ATTRACT_STILL_S * 1000) return true;
+  return elapsed > (d.cap ?? ATTRACT_DRIVE_S);
 }
 /**
  * ── THE REEL'S PROGRAMME (R66) ──
@@ -22554,6 +26066,7 @@ function attractArm(i: number): void {
  */
 type ReelTape =
   | { src: 'authored'; lat: number; lon: number; h: number; t: AttractTape }
+  | { src: 'drive'; lat: number; lon: number; h: number; d: ReelDrive }
   | { src: 'banked'; lat: number; lon: number; h: number; user: string; id: string };
 const reelWire = new Map<string, { head: TapeHead; steps: string; keys: string } | null>();
 let reelNow: ReelTape[] = [];
@@ -22565,6 +26078,14 @@ function reelList(): ReelTape[] {
     return shelf.slice(0, 8).map((t) => (
       { src: 'banked' as const, lat: t.lat, lon: t.lon, h: 0, user, id: t.id }));
   }
+  // THE HOUSE PROGRAMME IS DRIVEN, NOT PLAYED. `ATTRACT_TAPES` stays — the
+  // recorder writes them, a banked run IS one, and the reload fallback below
+  // still re-arms from it — but the cold-account reel is `REEL_DRIVES` now,
+  // because forty seconds of authored tape was the whole show and every extra
+  // minute had to be driven by hand and pasted in as base64.
+  if (REEL_DRIVES.length) {
+    return REEL_DRIVES.map((d) => ({ src: 'drive' as const, lat: d.lat, lon: d.lon, h: d.h, d }));
+  }
   return ATTRACT_TAPES.map((t) => ({ src: 'authored' as const, lat: t.lat, lon: t.lon, h: t.h, t }));
 }
 /** The programme for THIS sitting — snapshotted so a mid-reel sync cannot
@@ -22573,7 +26094,11 @@ function reelSnap(now: number): ReelTape[] {
   if (!reelNow.length || now - reelAt > 60000) { reelNow = reelList(); reelAt = now; }
   return reelNow;
 }
+/** A drive has no wire: there is nothing recorded to fetch. Callers must ask
+ *  `e.src === 'drive'` before reaching for one — the null here means "this
+ *  slot is dead", and a drive is very much alive. */
 async function reelWireFor(e: ReelTape): Promise<{ head: TapeHead; steps: string; keys: string } | null> {
+  if (e.src === 'drive') return null;
   if (e.src === 'authored') return e.t;
   if (!reelWire.has(e.id)) reelWire.set(e.id, await runFetchWire(e.user, e.id));
   return reelWire.get(e.id) ?? null;
@@ -22627,11 +26152,17 @@ let attractGoI: number | null = null;
 function attractGo(i: number): void {
   if (reelNow[i]) attractGoI = i;
 }
+/** WHY THE LAST GO DID NOT ARM. The hop runs in a detached async block whose
+ *  catch falls back to a reload, so a failure here is invisible from outside:
+ *  the pending index is consumed, nothing arms, and no error reaches the page.
+ *  Two rounds of the reel test read `drive: null` and could not say more. */
+let attractWhy = '';
 function attractGoNow(): void {
   const i = attractGoI as number;
   attractGoI = null;
+  attractWhy = 'started';
   const e = reelNow[i];
-  if (!e) return;
+  if (!e) { attractWhy = `no entry at ${i} of ${reelNow.length}`; return; }
   // The parting shot bridges the hop either way — held over the in-place
   // rebuild, or banked across the reload if the hop has to fall back.
   let shot: string | null = null;
@@ -22639,16 +26170,30 @@ function attractGoNow(): void {
   attractHoldShow(shot);
   void (async () => {
     try {
+      // A DRIVE HAS NOWHERE TO FETCH FROM. It is the entry itself: hop to the
+      // place and point the autopilot at the goal. No wire, so no cold-fetch
+      // latency and no dead-blob case either — the commonest way a slot used
+      // to be skipped cannot happen to one.
+      if (e.src === 'drive') {
+        attractWhy = 'hopping';
+        await worldHop(e.lat, e.lon, e.h);
+        attractWhy = 'arming';
+        attractArmDrive(e.d, i);
+        attractWhy = 'armed';
+        return;
+      }
       // Primed cycles find the wire already cached; a cold one fetches here.
       const w = await reelWireFor(e);
       if (!w) { attractHoldDrop(); return; }   // a dead blob skips its slot
       await worldHop(w.head.lat, w.head.lon, w.head.hdg);
       attractArmTape(w, i);
-    } catch {
-      // The in-place road failed under this cycle; travel the old way —
-      // which only the authored tapes can, since a fresh boot re-arms from
-      // ATTRACT_TAPES. A banked entry just stands down until the next idle.
-      if (e.src !== 'authored') { attractHoldDrop(); return; }
+    } catch (err) {
+      attractWhy = `threw at ${attractWhy}: ${String((err as Error)?.message ?? err).slice(0, 120)}`;
+      // The in-place road failed under this cycle; travel the old way — which
+      // a bundled entry can, since a fresh boot re-arms from the bundle. A
+      // banked entry has nothing to re-arm FROM after a reload, so it stands
+      // down until the next idle.
+      if (e.src === 'banked') { attractHoldDrop(); return; }
       try {
         sessionStorage.setItem(ATTRACT_GO_KEY, JSON.stringify({ i, lat: e.lat, lon: e.lon, h: e.h }));
         if (shot) sessionStorage.setItem(ATTRACT_SHOT_KEY, shot);
@@ -22657,12 +26202,63 @@ function attractGoNow(): void {
     }
   })();
 }
+/** BACK TO THE PLAYER'S OWN SPOT — the first stop on the carousel, and the
+ *  only one that is not a recording. Named rather than inlined in the menu's
+ *  context because the dot strip and the old RETURN row are two callers of one
+ *  behaviour, and a second copy of a hop-or-reload fallback is a second place
+ *  for it to drift. */
+function goHome(): void {
+  try {
+    const ret = sessionStorage.getItem(ATTRACT_RET_KEY);
+    if (!ret) return;
+    sessionStorage.removeItem(ATTRACT_RET_KEY);
+    // Home is a HOP, not a navigation — and when the hop cannot run (mid-hop,
+    // a GPS drive, the line) the reload REPLACES the entry: travel never
+    // leaves a history trail to back-button through.
+    const q = new URL(ret, location.href).searchParams;
+    const la = parseFloat(q.get('lat') ?? ''), lo = parseFloat(q.get('lon') ?? '');
+    const hh = parseFloat(q.get('h') ?? '0');
+    if (Number.isFinite(la) && Number.isFinite(lo) && !real.on && !lineOn && !hopping) {
+      attractStop();
+      void worldHop(la, lo, Number.isFinite(hh) ? hh : 0, { mission: q.get('m') ?? undefined })
+        .then(() => { history.replaceState(null, '', ret); })
+        .catch(() => { location.replace(ret); });
+      return;
+    }
+    location.replace(ret);
+  } catch { /* fine */ }
+}
+/** Go to a stop on the strip: -1 is home, 0..n-1 the reel's own. */
+function reelGoAt(i: number): void {
+  if (i < 0) { goHome(); return; }
+  if (hopping || real.on || lineOn) return;
+  // The way home has to EXIST before the first hop, or a player who taps
+  // straight into the reel has nothing to come back to. stepAttract banks it
+  // on the auto path; this is the same bank on the deliberate one.
+  try {
+    if (!sessionStorage.getItem(ATTRACT_RET_KEY)) sessionStorage.setItem(ATTRACT_RET_KEY, location.href);
+  } catch { /* private mode: the reel still runs, RETURN just cannot */ }
+  reelSnap(performance.now());
+  attract.idleAt = performance.now();
+  attractGo(i);
+}
 function attractStop(): void {
   car.visible = true;
   attractHoldDrop();
   attractGoI = null;
   if (!attract.on) return;
   attract.on = false;
+  // GIVE THE WHEEL BACK. A reel that leaves the autopilot on and a goal set
+  // hands the player a truck that drives itself to Noordhoek — and `travelTo`
+  // calls this on every tap, so it is the one place that has to be right.
+  if (attract.drive) {
+    auto.on = false;
+    auto.out = null;
+    goal = null;
+    goalRoute = null;
+    goalDone = null;
+    attract.drive = null;
+  }
   tapeRestoreDials(attract.dials);
   attract.dials = {};
   tapeEnd();
@@ -22682,8 +26278,13 @@ function stepAttract(now: number): void {
     return;
   }
   if (attract.on) {
-    if (tapePlay.on || now > attract.showAt) { car.visible = true; attractHoldDrop(); }
-    if (!tapePlay.on && !tapePlay.armed) {
+    if (tapePlay.on || attract.drive || now > attract.showAt) { car.visible = true; attractHoldDrop(); }
+    // A DRIVEN SLOT IS FINISHED BY ITS OWN RULE, not by a tape running out —
+    // and until it is, it is emphatically not done, so the dwell must not
+    // start. `attractDriveTick` also does the engaging, so it runs every
+    // frame of the slot and not only at the end of it.
+    if (attract.drive && !attract.doneAt && !attractDriveTick(now)) return;
+    if (attract.drive || (!tapePlay.on && !tapePlay.armed)) {
       // The tape ran out. THE DWELL IS THE SHOW (owner-asked: "wait a lot
       // longer before cycling") — the orbit keeps circling the parked rig in
       // the finished country for a good while, and the pause is when the
@@ -22805,6 +26406,52 @@ function tapeKeep(): string {
   return { x: Math.round(state.x), z: Math.round(state.z),
     fromOrigin: Math.round(Math.hypot(state.x, state.z)) };
 };
+/** KICK THE SPRUNG BODY UPWARD, in m/s — the only repeatable way to put the
+ *  truck in the air. A ramp depends on finding one; this is the launch itself,
+ *  so what comes after it is purely the fall, and a harness can check that the
+ *  fall is gravity's and nobody else's. */
+(window as unknown as { __launch?: object }).__launch = (vy = 12): object => {
+  vBodyY = vy;
+  return { vBodyY, bodyY: +bodyY.toFixed(2) };
+};
+/** The reel's programme, for a test that wants to know what the dot strip is
+ *  drawing and cannot ask the DOM what it MEANS. */
+(window as unknown as { __reel?: object }).__reel = (i?: number): object => {
+  const list = reelNow.length ? reelNow : reelList();
+  let home = false;
+  try { home = !!sessionStorage.getItem(ATTRACT_RET_KEY); } catch { /* private mode */ }
+  const out = { n: list.length, at: attract.on ? attract.i : -1, home,
+    idleMs: ATTRACT_IDLE_MS, dwellMs: ATTRACT_DWELL_MS,
+    src: list[0]?.src ?? null,
+    names: list.map((e) => (e.src === 'drive' ? e.d.name : e.src === 'authored' ? e.t.name : e.id)),
+    // The driven slot, which is the only kind with anything to watch: whether
+    // the autopilot has found a road yet, how long it has been driving, how
+    // far it still is from the goal, and which of the three end conditions is
+    // approaching. A reel that stalls is diagnosed from this line.
+    drive: attract.drive ? {
+      id: attract.drive.id, name: attract.drive.name,
+      goal: goal?.name ?? null,
+      auto: auto.on, src: auto.src, roads: roadGrid.size,
+      secs: attract.driveAt ? +((performance.now() - attract.driveAt) / 1000).toFixed(1) : 0,
+      cap: attract.drive.cap ?? ATTRACT_DRIVE_S,
+      stillS: attract.driveStill ? +((performance.now() - attract.driveStill) / 1000).toFixed(1) : 0,
+      speed: +state.speed.toFixed(1),
+      goalM: goal ? Math.round(Math.hypot(goal.x - state.x, goal.z - state.z)) : null,
+      arrived: !!goalDone,
+    } : null,
+    // WHY A GO WAS REFUSED. `reelGoAt` stands down silently while the world is
+    // hopping or the session is on the line or a GPS drive, which is right for
+    // a tap and opaque to a test: the first cut of the reel test read `drive:
+    // null` six times and could not say whether the arm had failed or never
+    // been attempted.
+    busy: { hopping, real: real.on, line: lineOn, pending: attractGoI, quiet: worldQuiet(), why: attractWhy } };
+  if (i !== undefined) reelGoAt(i);
+  (out as { pendingAfter?: number | null }).pendingAfter = attractGoI;
+  return out;
+};
+/** The switch table with what this session is running — the same rows the
+ *  SETTINGS panel draws, so a test can assert the panel without a pointer. */
+(window as unknown as { __switches?: object }).__switches = (): object => switchRows();
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 (window as unknown as { __coverAt?: (x: number, z: number) => number | null }).__coverAt = sampleCover;
 /** Camera mode and the double-tap state behind it — so a test can see WHY a
@@ -22902,7 +26549,7 @@ function tapeKeep(): string {
 (window as unknown as { __vegdist?: object }).__vegdist = (debug?: boolean): object => {
   if (debug !== undefined) { vegRoleDebug = debug; refreshVeg(); }
   const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
-  const reach = Math.ceil(VEG_RANGE / VEG_CELL);
+  const reach = Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL);
   const sum = freshVegSeedStats();
   const roles = emptyVegRoles();
   const byKind: Record<string, number> = {};
@@ -22938,9 +26585,15 @@ function tapeKeep(): string {
     seeded: { sites, roles, perCell: cells ? +(sites / cells).toFixed(2) : 0 },
     active: { total: activeTotal, roles: vegActiveRoles, trunks: trunks.count },
     byKind,
-    budget: { range: VEG_RANGE, cell: VEG_CELL, caps: VEG_CAP,
-      capTotal: Object.values(VEG_CAP).reduce((a, b) => a + b, 0) },
-    ms: { seedTotal: +sum.ms.toFixed(1), refresh: +vegMs.toFixed(1) },
+    budget: { range: { vegetation: VEG_RANGE, trees: treeRange }, cell: VEG_CELL, caps: VEG_CAP,
+      treePopulationScale, capTotal: Object.values(VEG_CAP).reduce((a, b) => a + b, 0) },
+    // `seedTotal` is the SEEDING, which happens inside `ring`/`ezGather` and
+    // `place` — subtract it before blaming either. The phases are the last
+    // refresh only; `refresh` is its total.
+    ms: { seedTotal: +sum.ms.toFixed(1), refresh: +vegMs.toFixed(1),
+      phase: Object.fromEntries(Object.entries(vegPhase).map(([k, v]) => [k, +v.toFixed(2)])),
+      seededNow: vegSeedNow, seedMsNow: +vegSeedMsNow.toFixed(2),
+      seedDeferred: vegSeedDeferred, seedBudget: VEG_SEED_BUDGET ? VEG_SEED_MS : 0 },
   };
 };
 /**
@@ -22953,6 +26606,75 @@ function tapeKeep(): string {
  * after it, and nothing on screen says so. Comparing this before and after a
  * forced re-seed is the assertion.
  */
+/** The skeleton tier's bill: how many of each family wear one, per variant, and the triangles. */
+(window as unknown as { __ez?: object }).__ez = (): object => {
+  const out: Record<string, unknown> = {
+    on: EZ_ON,
+    budget: treeTriBudget,
+    capScale: +ezCapScale().toFixed(3),
+    edge: ezEdgeLast,
+    caps: Object.fromEntries(EZ_FAMILIES.map((f) => [f, ezCapFor(f)])),
+    meanTris: Object.fromEntries(EZ_FAMILIES.map((f) => [f, ezMeanTris(f)])),
+    tuning: {
+      range: treeRange,
+      population: treePopulationScale,
+      size: treeSizeScale,
+      form: treeFormScale,
+      bend: treeBendU.value,
+      variantCap: treeVariantCap >= 1000 ? 'ALL' : treeVariantCap,
+    },
+  };
+  let tris = 0;
+  // EVERY INSTANCE SLOT ALLOCATED, near and far, over every variant of every
+  // family — the number that says what the atlas costs to HOLD rather than to
+  // draw. Tiers are born at EZ_TIER_SEED and grown from the measured need, so
+  // this should track what is standing rather than the sum of the caps.
+  let slots = 0;
+  for (const fam of EZ_FAMILIES) {
+    for (const t of ezTiers[fam]) slots += t.near.instanceMatrix.count + t.far.instanceMatrix.count;
+  }
+  out.slots = slots;
+  out.slotsIfCapped = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].length * 2 * VEG_CAP[f], 0);
+  for (const fam of EZ_FAMILIES) {
+    const per = ezTiers[fam].map((t) => t.n);
+    const variants = ezTiers[fam].length;
+    out[fam] = {
+      placed: per.reduce((p, q) => p + q, 0),
+      perVariant: per,
+      variants,
+      activeVariants: Math.min(variants, treeVariantCap),
+      capacity: ezTiers[fam].map((t) => t.near.instanceMatrix.count),
+      casting: ezTiers[fam].reduce((p, t) => p + t.nNear, 0),
+      mPerScale: EZ_M_PER_SCALE[fam],
+    };
+    for (const t of ezTiers[fam]) tris += t.n * t.tris;
+  }
+  out.tris = tris;
+  out.placed = ezPlaced;
+  return out;
+};
+
+/** Every decoded variant's extent, for the harness: a bad bake shows here. */
+(window as unknown as { __ezgeo?: object }).__ezgeo = (): object[] => {
+  const rows: object[] = [];
+  for (const fam of EZ_FAMILIES) {
+    ezTiers[fam].forEach((t, i) => {
+      for (const [part, g] of [['tree', t.near.geometry]] as Array<[string, THREE.BufferGeometry | undefined]>) {
+        if (!g) continue;
+        g.computeBoundingBox();
+        const p = g.getAttribute('position') as THREE.BufferAttribute;
+        let nan = 0;
+        for (let k = 0; k < p.count * 3; k++) if (!Number.isFinite((p.array as Float32Array)[k])) nan++;
+        const bb = g.boundingBox;
+        rows.push({ fam, i, part, n: p.count, idx: g.index ? g.index.count : 0, nan,
+          min: bb ? [+bb.min.x.toFixed(2), +bb.min.y.toFixed(2), +bb.min.z.toFixed(2)] : null,
+          max: bb ? [+bb.max.x.toFixed(2), +bb.max.y.toFixed(2), +bb.max.z.toFixed(2)] : null,
+          count: t.near.count + t.far.count });
+      }
+    });
+  }
+  return rows;
+};
 (window as unknown as { __vegsites?: object }).__vegsites = (gx: number, gz: number): object[] =>
   (vegGrid.get(`${gx},${gz}`) ?? []).map((v) => ({
     role: v.role, anchor: !!v.anchor, k: v.k,
@@ -23028,6 +26750,15 @@ function tapeKeep(): string {
 (window as unknown as { __cam?: object }).__cam = (m?: string): object => {
   if (m === 'cab' || m === 'chase' || m === 'drone' || m === 'top') setCam(m);
   return { mode: camMode, stick: !!stick, zoom: +zoomCur.toFixed(1),
+    // THE STAND-OFF, because the chart's speed retreat was invisible to every
+    // probe for as long as it existed: `__cam` reported the zoom, and the zoom
+    // was exactly the half of the distance that was behaving. A reading here
+    // at two speeds with the zoom held is the witness that it is gone.
+    dist: camMode === 'top' ? Math.round(chartDist()) : null,
+    // Metres of ground per art pixel on the chart — what the alias fades on
+    // cloud noise and the mottle key off. 0 from the seat, by design.
+    mpp: +envU.uMpp.value.toFixed(1),
+    kmh: Math.round(Math.abs(state.speed) * 3.6),
     // The lens, because a flight between rigs interpolates it and a pop there
     // is the one part of a crossing you cannot see in a position trace.
     fov: +camera.fov.toFixed(2), fly: +camFly.t.toFixed(3),
@@ -23255,8 +26986,30 @@ function roadEdge(x: number, z: number, notFid?: number, notNm?: string): { out:
  * a smoothstep, which is what a real shoulder is anyway.
  */
 const KERB_FAIR = 2.2;
+/**
+ * THE GROUND A WHEEL READS, WHICH IS NOT ALWAYS THE MESH.
+ *
+ * On a refined tile the corridor's earthworks ARE the mesh, and the mesh is
+ * the answer. On a plain tile — beyond REFINE_R, or built while the road
+ * stream was still landing — the mesh is the carved lattice and the
+ * earthworks are a batter STRIP drawn over it, and the wheels read the mesh,
+ * so the strip was a picture: a cut face the truck drove into, a bank it fell
+ * through. Reported from Simon's Town as exactly that, and measured there
+ * with __batterLine: a strip standing 1.4m over the ground under the wheels.
+ * On a plain tile the wheel now takes the corridor kernel's own wedge about
+ * the DRAWN ground — the same rule the strip is built from at the kerb, so the
+ * picture and the ground agree — and never less than the mesh. Where the tile
+ * has its corridor the mesh already says all of this and the kernel is not
+ * asked; the two must not be summed, or a refined bank would be read twice.
+ */
+function wheelGround(x: number, z: number): number {
+  const g = groundAt(x, z);
+  const t = heightTileAt(x, z);
+  if (t && (terrainMeshes.get(`${t.tx}/${t.ty}`)?.userData as { corridor?: boolean } | undefined)?.corridor) return g;
+  return Math.max(g, corridorH(x, z, g).h);
+}
 function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
-  const gnd = groundAt(x, z) + SURFACE.ground.lift;
+  const gnd = wheelGround(x, z) + SURFACE.ground.lift;
   if (sk === 'water') {
     let g = groundAt(x, z);
     const sl = seaLevelY();
@@ -23580,7 +27333,7 @@ function applyHidden(): void {
     }
   }
   return { hidden: [...hideSet],
-    layers: ['drape', 'synth', 'far', 'ov', 'sea', 'veg', 'terrain', 'critters', 'sward'],
+    layers: ['drape', 'synth', 'far', 'ov', 'globe', 'sea', 'veg', 'terrain', 'critters', 'sward'],
     counts: { drapes: drapes.length, synth: synthBodies.length, terrain: terrainMeshes.size } };
 };
 /**
@@ -23674,8 +27427,19 @@ function applyHidden(): void {
 (window as unknown as { __waterinfo?: object }).__waterinfo = (x?: number, z?: number): object => {
   const px = x ?? state.x, pz = z ?? state.z;
   const wi = waterInfoAt(px, pz);
-  return { surface: surfaceAt(px, pz), depth: +wi.depth.toFixed(2), speed: +wi.speed.toFixed(2),
-    fx: +wi.fx.toFixed(2), fz: +wi.fz.toFixed(2) };
+  return { surface: surfaceAt(px, pz), wet: wi.wet, depth: +wi.depth.toFixed(2), speed: +wi.speed.toFixed(2),
+    fx: +wi.fx.toFixed(2), fz: +wi.fz.toFixed(2), fordM: +fordDepthAt(px, pz).toFixed(2) };
+};
+/** Every term of the ford test at a point — the hydro sample, the road deck,
+ *  the datum — because "is this a ford" took more than one round to answer. */
+(window as unknown as { __ford?: object }).__ford = (x?: number, z?: number): object => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const wet = hydroSys?.sampleRestingSurface(px, pz);
+  const e = roadEdge(px, pz);
+  return { hydroOn: HYDRO_ON, surface: surfaceAt(px, pz),
+    wet: wet ? { kind: wet.kind, resting: +wet.restingLevelM.toFixed(2), depthM: +wet.depthM.toFixed(2), shore: +wet.shoreDistanceM.toFixed(1), coverage: +wet.coverage.toFixed(2) } : null,
+    edge: e ? { y: +e.y.toFixed(2), out: +e.out.toFixed(2), track: e.track } : null,
+    base: +baseElev.toFixed(2), ground: +sampleHeight(px, pz).toFixed(2), fordM: +fordDepthAt(px, pz).toFixed(2) };
 };
 (window as unknown as { __contact?: object }).__contact = (x: number, z: number): object => {
   const sk = surfaceAt(x, z);
@@ -23976,6 +27740,15 @@ function truckSpec(): Record<string, number> {
 /** One point, in world metres: is the field's water here. The grid probe above
  *  is truck-centred; this lets a caller anchor its own grid to a fixed lat/lon
  *  and so compare two runs from different spawns cell for cell. */
+/** WHY THE WATER STANDS WHERE IT DOES at a point, with the DRAWN ground
+ *  beside it — the pair that tells a lake from a slab hanging over a valley. */
+(window as unknown as { __hydrowhy?: object }).__hydrowhy = (x = state.x, z = state.z): object => {
+  const d = hydroSys?.debugAt(x, z) ?? null;
+  const bed = hasHeight(x, z) ? sampleHeight(x, z) + baseElev : null;
+  const level = d ? (d.restingLevelM as number) : null;
+  return { x: Math.round(x), z: Math.round(z), bed: bed === null ? null : +bed.toFixed(2),
+    over: bed !== null && level !== null ? +(level - bed).toFixed(2) : null, ...(d ?? {}) };
+};
 (window as unknown as { __hydroat?: object }).__hydroat = (x: number, z: number): boolean =>
   !!hydroSys?.sampleRestingSurface(x, z);
 (window as unknown as { __hydromap?: object }).__hydromap = (halfM = 1200, n = 41): string[] => {
@@ -23997,6 +27770,82 @@ function truckSpec(): Record<string, number> {
  *  offers; called with nothing it reports the view without changing it. The
  *  harness needs this to photograph what the field believes, which is the one
  *  question a screenshot of the surface cannot answer. */
+/** One letter per point: what says water here, and whether the eye would
+ *  see it. The overlay and `__wetmap` share this so they cannot disagree. */
+type WetClass = 'W' | 'D' | 'U' | 'E' | 'F' | 'C' | 'O' | 'c' | 'X' | '.';
+function wetClassAt(x: number, z: number): WetClass {
+  const surf = surfaceAt(x, z);
+  // Ask below either possible shoreline cut so the overlay can show the
+  // whole transition band, including fragments the ragged cut admits below
+  // the canonical 0.5 field classification.
+  const wet = HYDRO_ON ? hydroSys?.sampleRestingSurface(x, z, 0.005) : undefined;
+  const ground = hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
+  const above = !!wet && (!Number.isFinite(ground) || wet.restingLevelM > ground + 0.02);
+  const cut = WATERLINE_CUT(x, z, wet?.kind);
+  const drawn = !!wet && above && wet.coverage >= cut;
+  const onDeck = surf === 'road' || surf === 'track';
+  if (wet && Math.abs(wet.coverage - cut) < 0.12 && above) return 'E';
+  if (drawn) return onDeck ? 'D' : surf === 'water' ? 'W' : 'X';
+  if (wet && !above) return 'U';
+  if (surf === 'water' && fordDepthAt(x, z) > FORD_MIN_M && onDeck) return 'F';
+  if (surf === 'water' && channelAt(x, z)) return 'C';
+  if (surf === 'water' && oceanAt(x, z)) return 'O';
+  if (surf === 'water') return 'X';
+  if (sampleCover(x, z) === COVER.water) return 'c';
+  return '.';
+}
+const WET_RGBA: Record<WetClass, string> = {
+  W: 'rgba(40,110,255,0.75)', D: 'rgba(255,150,30,0.8)', U: 'rgba(230,40,220,0.8)', E: 'rgba(250,230,40,0.7)',
+  F: 'rgba(30,220,255,0.85)', C: 'rgba(60,220,220,0.7)', O: 'rgba(20,30,140,0.7)', c: 'rgba(160,170,190,0.55)',
+  X: 'rgba(255,40,40,0.9)', '.': 'rgba(0,0,0,0)',
+};
+/** Repaint the overlay around the truck: 16k classifications, about 40 ms,
+ *  once a second and only while the switch is on. */
+function repaintWetDebug(): void {
+  const t0 = performance.now();
+  // surfaceAt writes surfQ as a side effect; sixteen thousand calls must
+  // not leave the truck standing on the last texel's quality.
+  const surfQWas = surfQ;
+  const half = wetDbgU.uDbgW.value / 2, step = wetDbgU.uDbgW.value / WETDBG_N;
+  const ox = state.x - half, oz = state.z - half;
+  wetDbgCtx.clearRect(0, 0, WETDBG_N, WETDBG_N);
+  for (let j = 0; j < WETDBG_N; j++) for (let i = 0; i < WETDBG_N; i++) {
+    const k = wetClassAt(ox + (i + 0.5) * step, oz + (j + 0.5) * step);
+    if (k === '.') continue;
+    wetDbgCtx.fillStyle = WET_RGBA[k];
+    wetDbgCtx.fillRect(i, j, 1, 1);
+  }
+  surfQ = surfQWas;
+  wetDbgU.uDbgOrg.value.set(ox, oz);
+  wetDbgT.needsUpdate = true;
+  wetDbgU.uDbgOn.value = 1;
+  wetDbgMs = performance.now() - t0;
+}
+/** The overlay, from a script or the address bar: `__wetdebug(true)`. */
+(window as unknown as { __wetdebug?: object }).__wetdebug = (on?: boolean): object => {
+  if (on !== undefined) { wetDbgOn = on; if (!on) wetDbgU.uDbgOn.value = 0; else wetDbgAt = -1e9; }
+  return { on: wetDbgOn, repaintMs: +wetDbgMs.toFixed(1), legend: 'W drawn water · D deck over water · U wet under the ground · E waterline band · F ford · C channel · O ocean · c cover-80 only · X unexplained' };
+};
+/** The same classes as an ASCII map for the harness, truck at @. */
+(window as unknown as { __wetmap?: object }).__wetmap = (halfM = 120, n = 25): string[] => {
+  const out: string[] = [];
+  for (let iz = 0; iz < n; iz++) {
+    let row = '';
+    for (let ix = 0; ix < n; ix++) {
+      const x = state.x - halfM + (ix / (n - 1)) * halfM * 2, z = state.z - halfM + (iz / (n - 1)) * halfM * 2;
+      row += ix === (n >> 1) && iz === (n >> 1) ? '@' : wetClassAt(x, z);
+    }
+    out.push(row);
+  }
+  return out;
+};
+/** Zero one look term at a time to find which one paints a thing —
+ *  `__hydrotune({ shallowBedStrength: 0 })` — the chart's cream rim was
+ *  argued about for a unit before anyone could turn its candidates off. */
+(window as unknown as { __hydrotune?: object }).__hydrotune = (patch?: Parameters<NonNullable<typeof hydroSys>['setTuning']>[0]): object => {
+  if (patch && hydroSys) hydroSys.setTuning(patch);
+  return { ok: !!hydroSys, light: { ...hydroFrameLight }, gain: { ...hydroFrameGain }, zenith: { ...hydroFrameZenith }, terrain: { ...hydroFrameTerrain } };
+};
 (window as unknown as { __hydroview?: object }).__hydroview = (name?: HydroDebugView): string => {
   if (name) { hydroView = name; hydroSys?.setDebugView(name); }
   return hydroView;
@@ -24064,6 +27913,23 @@ function truckSpec(): Record<string, number> {
     // `fedMax: 0` has a store filling and a feed that never sees it, which
     // looks identical from the seat to having no rivers at all.
     feats: hydroFeats.size, featsFull: hydroFeatsFull, hydroDirty: hydroDirty.size,
+    buildProf: (() => {
+      const P = HYDRO_BUILD_PROF, b = Math.max(1, P.builds);
+      const ms = (v: number): number => +(v / b).toFixed(1);
+      return { builds: P.builds, meanMs: ms(P.total), maxMs: Math.round(P.max), ocean: ms(P.ocean), analyse: ms(P.analyse), raster: ms(P.raster), texels: ms(P.texels), search: ms(P.search), sources: ms(P.sources), rest: ms(P.rest),
+        itemsPerBuild: +(P.items / b).toFixed(1), areaItems: +(P.areaItems / b).toFixed(1), flowingAreas: +(P.flowingAreas / b).toFixed(1), searchTexels: Math.round(P.searchTexels / b), paints: Math.round(P.paints / b) };
+    })(),
+    landcover: (() => {
+      let feats = 0, pixels = 0, rivers = 0, pts = 0, maxPts = 0;
+      for (const rec of coverHydro.values()) { feats += rec.slots.length; pixels += rec.pixels; }
+      for (const e of hydroFeats.values()) {
+        if (e.f.source !== 'landcover' || e.f.geometry.type !== 'area') continue;
+        if (e.f.kind === 'river') rivers++;
+        let n = 0; for (const poly of e.f.geometry.polygons) { n += poly.outer.length >> 1; for (const h of poly.holes) n += h.length >> 1; }
+        pts += n; if (n > maxPts) maxPts = n;
+      }
+      return { tiles: coverHydro.size, feats, rivers, pixels, pts, maxPts, traces: coverHydroTraces, traceMs: Math.round(coverHydroTraceMs) };
+    })(),
     maskBuilds, covResamples, terrainTiles: heightTiles.size,
     // What the water actually costs to rasterise. A full-tile lattice is
     // 2*segments^2 triangles per tile (2048 at the default 32); the cull keeps
@@ -24176,6 +28042,83 @@ function truckSpec(): Record<string, number> {
  *  question, over many rolls of the seeded RNG per point so a probabilistic
  *  pick (coverKind falls through with its own weights) shows its spread
  *  rather than one lucky draw. */
+/**
+ * WHAT IS ACTUALLY STANDING, as opposed to what the rules would choose.
+ *
+ * `__vegkind` rolls the chooser and is the right instrument for a rule; it
+ * cannot see DENSITY or HEIGHT, and a guild changes both. This walks the
+ * placed sites — the things with geometry on them — and reports the count per
+ * kind, the mean scale per kind, and the population per hectare, which is the
+ * number that says whether a savanna is open and a fynbos is closed.
+ */
+(window as unknown as { __stand?: object }).__stand = (r = 300): object => {
+  const counts: Record<string, number> = {};
+  const scale: Record<string, number> = {};
+  let n = 0;
+  const r2 = r * r;
+  for (const [, cell] of vegGrid) {
+    for (const v of cell) {
+      const dx = v.x - state.x, dz = v.z - state.z;
+      if (dx * dx + dz * dz > r2) continue;
+      counts[v.k] = (counts[v.k] ?? 0) + 1;
+      scale[v.k] = (scale[v.k] ?? 0) + v.s;
+      n++;
+    }
+  }
+  const meanS: Record<string, number> = {};
+  for (const k of Object.keys(counts)) meanS[k] = +(scale[k] / counts[k]).toFixed(2);
+  return {
+    n, r,
+    perHa: +(n / (Math.PI * r * r / 10000)).toFixed(1),
+    counts, meanScale: meanS,
+    guild: guildNow(state.x, state.z)?.name ?? null,
+    ...ezStandReport(r),
+  };
+};
+/**
+ * WHICH SILHOUETTES ARE ACTUALLY STANDING, and how mixed each thicket is.
+ *
+ * The number that says whether the confetti is gone is `perStand`: the mean
+ * count of DISTINCT silhouettes inside one 32m culture stand. A wood of one
+ * species reads 1.0; the old per-position hash reads whatever the family has.
+ * Reported beside the landscape's own spread, because a world where every
+ * stand is coherent AND every stand is identical is the other failure.
+ */
+function ezStandReport(r: number): object {
+  const r2 = r * r;
+  const byStand = new Map<string, Set<number>>();
+  const forms: Record<string, number> = {};
+  const variants: Record<string, number> = {};
+  let trees = 0;
+  for (const [, cell] of vegGrid) {
+    for (const v of cell) {
+      if (!isEzKind(v.k)) continue;
+      const dx = v.x - state.x, dz = v.z - state.z;
+      if (dx * dx + dz * dz > r2) continue;
+      const vi = ezVariantAt(v.k, v.x, v.z);
+      const rec = ezVariants(v.k)[vi];
+      if (!rec) continue;
+      trees++;
+      forms[rec.form] = (forms[rec.form] ?? 0) + 1;
+      variants[rec.name] = (variants[rec.name] ?? 0) + 1;
+      // The stand cell the culture layer would put this tree in — quantised
+      // the same way, so the grouping is the one the palette actually used.
+      const k = `${v.k}/${Math.floor(v.x / 32)}/${Math.floor(v.z / 32)}`;
+      (byStand.get(k) ?? byStand.set(k, new Set()).get(k) as Set<number>).add(vi);
+    }
+  }
+  let sum = 0;
+  for (const [, set] of byStand) sum += set.size;
+  return {
+    trees,
+    forms,
+    variants,
+    stands: byStand.size,
+    perStand: byStand.size ? +(sum / byStand.size).toFixed(2) : 0,
+    paletteN: EZ_PALETTE_N,
+    standOn: EZ_STAND_ON,
+  };
+}
 (window as unknown as { __vegkind?: object }).__vegkind = (r = 200, step = 24, rolls = 20): object => {
   const seen: Record<string, number> = {};
   let n = 0;
@@ -24191,10 +28134,97 @@ function truckSpec(): Record<string, number> {
   }
   return { n, counts: seen };
 };
+/**
+ * ONE WIND, AND WHO IS ACTUALLY READING IT.
+ *
+ * The complaint that started this — the sward moves and the trees do not —
+ * was invisible to every probe there was: nothing reported which layers were
+ * consuming `worldWind`, so a material that had silently never been patched
+ * looked exactly like one that had. `lean` is the sward's tip travel per metre
+ * of blade and `treeLean` the tree's, both in metres, beside the crown throw a
+ * tree of a given height would actually show — which is the number to argue
+ * with when it looks wrong from the seat.
+ */
+/**
+ * THE SITE UNDER A POINT — the physics, the ecoregion, and the biome field's
+ * own verdict beside them so the three can be compared in one read.
+ *
+ * Defaults to the truck. `__site` was taken years ago by the place card, and
+ * renaming that would break every session note that mentions it, so this is
+ * `__siteclim` — ugly, and cheaper than the ambiguity.
+ */
+(window as unknown as { __siteclim?: object }).__siteclim = (x?: number, z?: number): object => {
+  const ex = x ?? state.x, ez = z ?? state.z;
+  const s = siteNow(ex, ez);
+  const eco = ecoAt(ex, ez);
+  const g = guildNow(ex, ez);
+  const [la, lo] = localToLatLon(ex, ez);
+  const clim = climateAt(ex, ez);
+  const [tx, ty] = ecoTileOf(la, lo);
+  return {
+    at: [+la.toFixed(5), +lo.toFixed(5)],
+    heatC: +s.heatC.toFixed(1), summerC: +s.summerC.toFixed(1), winterC: +s.winterC.toFixed(1),
+    rangeC: +s.rangeC.toFixed(1), frostDays: Math.round(s.frostDays),
+    waterMm: Math.round(s.waterMm),
+    summerDry: +s.summerDry.toFixed(2), winterDry: +s.winterDry.toFixed(2),
+    contin: +s.contin.toFixed(2), hadCoast: s.hadCoast,
+    coastKm: +(siteEnv.coastKmAt(ex, ez) ?? -1).toFixed(1),
+    seaM: seaNearAt(ex, ez),
+    rainShadow: +s.rainShadow.toFixed(2),
+    elevAbs: Math.round(s.elevAbs), treelineDelta: Math.round(s.treelineDelta),
+    insolation: +s.insolation.toFixed(2), wetness: +s.wetness.toFixed(2),
+    salt: +s.salt.toFixed(2), exposure: +s.exposure.toFixed(2),
+    // The five-way field, for the comparison that is the whole point of this.
+    biome: clim.dom.name,
+    eco: eco ? { ...eco, biomeName: ecoBiomeName(eco.biome) } : null,
+    ecoTile: `${ECO_Z}/${tx}/${ty}`,
+    ecoState: FIXTURE ? 'fixture' : ecoTiles.has(`${tx}/${ty}`) ? 'loaded'
+      : ecoInFlight ? 'asking' : ecoFail.has(`${tx}/${ty}`) ? 'failed' : 'unasked',
+    ecoRegions: ecoTiles.get(`${tx}/${ty}`)?.length ?? 0,
+    memo: siteMemo.size,
+    // THE GUILD IS THE ANSWER; everything above it is the working. `mix` comes
+    // back as a plain object of weights because that is the thing to argue
+    // with — a landscape that looks wrong is a row in here that is wrong.
+    guild: g ? {
+      name: g.name, biome: g.biome, scale: +g.scale.toFixed(2), density: +g.density.toFixed(2),
+      mix: Object.fromEntries(g.mix.map(([k, w]) => [k, +w.toFixed(2)])),
+      trees: g.trees.map(([k]) => k),
+      why: g.why,
+    } : null,
+    guildOn: GUILD_ON,
+  };
+};
+/** THE PLACE CARD'S OWN ROWS, which is what a player actually reads on a tap.
+ *  Its own probe rather than a field on `__siteclim`, because the card also
+ *  counts cover, samples the hydro field and reads the tile books — none of
+ *  which belongs in a call a test uses to time the site memo. (`__field` is a
+ *  different readout entirely: the LINE's tile-pipeline record. A test that
+ *  reached for it looking for the site found nothing, and was right to.) */
+(window as unknown as { __sitecard?: object }).__sitecard = (x?: number, z?: number): object =>
+  siteRecord(x ?? state.x, z ?? state.z, 'PROBE').rows;
+(window as unknown as { __wind?: object }).__wind = (h = 20): object => {
+  const amp = windU.uGust.value.length();
+  const k = windU.uWindK.value;
+  return {
+    kmh: +worldWind.kmh.toFixed(1),
+    // The bearing the air is GOING, not the one it is from — which is the
+    // convention `toDeg` set upstream and the one the gust vector is in.
+    toward: +(((Math.atan2(-worldWind.dirX, worldWind.dirZ) * 180) / Math.PI + 360) % 360).toFixed(0),
+    live: live.on,
+    lean: +amp.toFixed(3),
+    treeK: k,
+    treeLean: +(amp * k).toFixed(4),
+    // Steady lean is 0.55 of the amplitude and the gust rides ±0.45 on top,
+    // so a crown's throw is the pair, not the peak.
+    crownM: [+(h * amp * k * 0.1).toFixed(2), +(h * amp * k).toFixed(2)],
+    swayS: +(6.2832 / (12 / Math.sqrt(Math.max(1, h)))).toFixed(2),
+    readers: (window as unknown as { __fxchain: () => Record<string, string[]> }).__fxchain(),
+  };
+};
 (window as unknown as { __fxchain?: object }).__fxchain = (): object => {
   const out: Record<string, string[]> = {};
   const mats: Record<string, THREE.Material> = {
-    grass: grassMat, leaf: leafMat, stone: stoneMat, terrain: terrainMat, far: farMat };
+    grass: grassMat, leaf: leafMat, ez: ezMat, wood: woodMat, stone: stoneMat, terrain: terrainMat, far: farMat };
   for (const [name, m] of Object.entries(mats)) {
     const sh = {
       uniforms: {} as Record<string, unknown>,
@@ -24205,6 +28235,12 @@ function truckSpec(): Record<string, number> {
     const has: string[] = [];
     if (/uGust/.test(sh.vertexShader)) has.push('wind');
     if (/vWorldP/.test(sh.vertexShader)) has.push('terrainFx');
+    // …AND WHETHER IT KNOWS WHERE THE INSTANCE IS. `vWorldP` fed the cloud
+    // shadow and the sun march from `modelMatrix * transformed` for years,
+    // which is the vertex's position in the GEOMETRY — the same two metres
+    // from the origin for every plant in the world. Present and wrong looked
+    // exactly like present and right, so the audit now says which.
+    if (/fxWp = instanceMatrix/.test(sh.vertexShader)) has.push('worldInst');
     if (/vGrainP/.test(sh.vertexShader)) has.push('grain');
     out[name] = has;
   }
@@ -24752,6 +28788,180 @@ function truckSpec(): Record<string, number> {
   }
   return rows;
 };
+/**
+ * WHERE ARMS MEET, READ FROM WHAT WAS BUILT. One row per junction within r of
+ * a point (the truck by default), carrying the things the Simon's Town report
+ * names, measured: how far apart the arms' decks stand at the node (a shared
+ * plane is a spread of zero); whether a parapet lies across any arm's
+ * carriageway within reach of the node; and what the kerb ledger says about
+ * the earth beside the join. A node is a cluster of fragment ENDS — ribbon
+ * stations of profiled roads, merged within 1.5m — with three or more arms
+ * from two or more ways: `juncNodes`' own rule, read back off the road grid
+ * AFTER the build rather than off the batch before it, so it counts what a
+ * driver meets and not what OSM promised. `boxed` says whether flushJunctions
+ * put its box here. A node with a spread and a box is a box fanned from
+ * corners that disagree; a node with a rail across an arm is a mis-join the
+ * parapet rule (`roadMeetsHere`, GRADE_SEP) let through.
+ */
+(window as unknown as { __nodes?: object }).__nodes = (r = 400, px?: number, pz?: number, top = 12): object => {
+  const cx0 = px ?? state.x, cz0 = pz ?? state.z;
+  interface End { x: number; z: number; y: number; g: number; ux: number; uz: number; hw: number; nm: string; fd: number; wid: string }
+  const seen = new Set<Seg>();
+  const ends: End[] = [];
+  const c = Math.ceil(r / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    for (const s of roadGrid.get(`${Math.floor(cx0 / GRID) + cx},${Math.floor(cz0 / GRID) + cz}`) ?? []) {
+      if (seen.has(s) || s.tk || s.ya === undefined || s.yb === undefined) continue;
+      seen.add(s);
+      const dx = s.bx - s.ax, dz = s.bz - s.az, l = Math.hypot(dx, dz) || 1;
+      // Each end's direction points INTO its own segment: away from the node.
+      // …and its grade along that direction, so a corner read L metres down
+      // a 30% arm is judged against where THAT arm's deck stands there.
+      const both: Array<[number, number, number, number, number, number]> = [
+        [s.ax, s.az, s.ya, (s.yb - s.ya) / l, dx / l, dz / l], [s.bx, s.bz, s.yb, (s.ya - s.yb) / l, -dx / l, -dz / l]];
+      for (const [ex, ez, ey, g, ux, uz] of both) {
+        if (Math.hypot(ex - cx0, ez - cz0) > r) continue;
+        ends.push({ x: ex, z: ez, y: ey, g, ux, uz, hw: s.hw, nm: s.nm ?? '?', fd: s.fd ?? -1, wid: s.wid ?? '' });
+      }
+    }
+  }
+  // Ends within MERGE of a seed end are one node: a 1.5m hash and a walk over
+  // the neighbouring cells, so a node straddling a cell edge is still one node.
+  // NOT transitive — the first cut grew a cluster from each member, and a
+  // tightly stationed bend (a car-park loop at 1.4m a station) chained into
+  // one "node" twenty metres long whose "spread" was the road's own grade.
+  const MERGE = 1.5;
+  const cells = new Map<string, End[]>();
+  for (const e of ends) {
+    const k = `${Math.floor(e.x / MERGE)},${Math.floor(e.z / MERGE)}`;
+    const a = cells.get(k); if (a) a.push(e); else cells.set(k, [e]);
+  }
+  const taken = new Set<End>();
+  const clusters: End[][] = [];
+  for (const e0 of ends) {
+    if (taken.has(e0)) continue;
+    const cl: End[] = [e0]; taken.add(e0);
+    const gx = Math.floor(e0.x / MERGE), gz = Math.floor(e0.z / MERGE);
+    for (let ix = -1; ix <= 1; ix++) for (let iz = -1; iz <= 1; iz++) {
+      for (const f of cells.get(`${gx + ix},${gz + iz}`) ?? []) {
+        if (taken.has(f) || Math.hypot(f.x - e0.x, f.z - e0.z) > MERGE) continue;
+        taken.add(f); cl.push(f);
+      }
+    }
+    clusters.push(cl);
+  }
+  interface Row { x: number; z: number; arms: number; ways: number; boxed: boolean; pinned: boolean; spread: number; twist: number; twistAt: object | null; roadY: number | null;
+    decks: object[]; rails: object[]; kerbs: number; met: number; clipNone: number; bare: number }
+  const rows: Row[] = [];
+  for (const cl of clusters) {
+    const fds = new Set(cl.map((e) => e.fd));
+    if (cl.length < 3 || fds.size < 2) continue;
+    const nx = cl.reduce((a, e) => a + e.x, 0) / cl.length, nz = cl.reduce((a, e) => a + e.z, 0) / cl.length;
+    const ys = cl.map((e) => e.y);
+    const maxHw = Math.max(...cl.map((e) => e.hw));
+    // The key `juncNodes` used, from the OSM vertex on a half-metre grid; a
+    // built end can round into the neighbouring cell, so the eight around it
+    // are checked too.
+    let boxed = false;
+    for (let i = -1; i <= 1 && !boxed; i++) for (let j = -1; j <= 1 && !boxed; j++) {
+      if (juncBoxed.has(`${Math.round(nx * 2) + i},${Math.round(nz * 2) + j}`)) boxed = true;
+    }
+    // Did the PLANNER know this was a junction? `juncGrid` is what the parapet
+    // rule reads for a road that has not built yet; a node the planner never
+    // pinned — a crumb joiner has no chain — is one the host's rail decided
+    // about with only the built grid to go on.
+    let pinned = false;
+    for (let i = -1; i <= 1 && !pinned; i++) for (let j = -1; j <= 1 && !pinned; j++) {
+      for (const [jx, jz] of juncGrid.get(`${Math.floor(nx / GRID) + i},${Math.floor(nz / GRID) + j}`) ?? []) {
+        if (Math.hypot(jx - nx, jz - nz) <= 3) { pinned = true; break; }
+      }
+    }
+    // The box's own plane: each arm's two kerb corners at L along it, read
+    // back through `roadHeightAt` exactly as flushJunctions fans them, against
+    // that arm's deck at the node. A corner that lands on another arm's deck
+    // is a box fanned from the wrong road.
+    let twist = 0, twistAt: object | null = null;
+    {
+      const L = maxHw + 0.5;
+      for (const e of cl) {
+        const px2 = -e.uz, pz2 = e.ux;
+        for (const s of [1, -1]) {
+          const cx2 = nx + e.ux * L + px2 * e.hw * s, cz2 = nz + e.uz * L + pz2 * e.hw * s;
+          const hy = roadHeightAt(cx2, cz2, 1.5);
+          if (hy === null) continue;
+          const want = e.y + e.g * L;
+          if (Math.abs(hy - want) > twist) {
+            twist = Math.abs(hy - want);
+            // Whose deck the corner actually landed on, so a twist can be read
+            // as "the corner is on the other arm" rather than argued about.
+            const on = roadEdge(cx2, cz2);
+            twistAt = { arm: e.nm, fd: e.fd, side: s, at: [+cx2.toFixed(1), +cz2.toFixed(1)], hy: +hy.toFixed(2), want: +want.toFixed(2),
+              grade: +(e.g * 100).toFixed(0), on: on ? { nm: on.nm ?? '?', fd: on.fd ?? -1, out: +on.out.toFixed(2), y: +on.y.toFixed(2) } : null };
+          }
+        }
+      }
+    }
+    // A parapet across an arm: a wall the ribbon marked `sl`, not parallel to
+    // the arm, lying inside the arm's carriageway within maxHw + 8 of the node.
+    // A parapet along the arm's own kerb is parallel and never counts; one on
+    // the host's kerb that stops at the mouth's edge stands a half-width off
+    // the centreline and does not count either. What counts is a barrier the
+    // truck turning here would hit.
+    const rails: object[] = [];
+    const L2 = maxHw + 8;
+    for (const e of cl) {
+      const qx = nx + e.ux * L2, qz = nz + e.uz * L2;
+      const wseen = new Set<Seg>();
+      const mx = (nx + qx) / 2, mz = (nz + qz) / 2;
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+        for (const w of wallGrid.get(`${Math.floor(mx / GRID) + i},${Math.floor(mz / GRID) + j}`) ?? []) {
+          if (!w.sl || wseen.has(w)) continue;
+          wseen.add(w);
+          const wdx = w.bx - w.ax, wdz = w.bz - w.az, wl = Math.hypot(wdx, wdz) || 1;
+          if (Math.abs((wdx / wl) * e.ux + (wdz / wl) * e.uz) > 0.82) continue;
+          if (segSegDist(nx, nz, qx, qz, w.ax, w.az, w.bx, w.bz) > Math.max(0.3, e.hw - 0.3)) continue;
+          rails.push({ arm: e.nm, fd: e.fd, at: [+((w.ax + w.bx) / 2).toFixed(1), +((w.az + w.bz) / 2).toFixed(1)],
+            len: +wl.toFixed(1), over: +((w.ya ?? 0) - e.y).toFixed(2) });
+        }
+      }
+    }
+    // The kerb ledger within reach of the node: bays that met the ground,
+    // bays that ran into another carriageway and drew nothing (the bare
+    // apron), and bays that are a drop with nothing on them.
+    const R2 = maxHw + 7;
+    let kerbs = 0, met = 0, clipNone = 0, bare = 0;
+    for (const g of edgeLog) {
+      if (Math.abs(g.x - nx) > R2 || Math.abs(g.z - nz) > R2 || Math.hypot(g.x - nx, g.z - nz) > R2) continue;
+      kerbs++;
+      if (g.met) met++;
+      else if (g.clip && !g.batter) clipNone++;
+      else if (!g.rail && !g.clip && !g.batter) bare++;
+    }
+    rows.push({ x: +nx.toFixed(1), z: +nz.toFixed(1), arms: cl.length, ways: fds.size, boxed, pinned,
+      spread: +(Math.max(...ys) - Math.min(...ys)).toFixed(2), twist: +twist.toFixed(2), twistAt,
+      roadY: (() => { const y = roadHeightAt(nx, nz, 1.2); return y === null ? null : +y.toFixed(2); })(),
+      decks: cl.map((e) => ({ nm: e.nm, fd: e.fd, wid: e.wid, y: +e.y.toFixed(2), hw: e.hw, dir: [+e.ux.toFixed(3), +e.uz.toFixed(3)] })),
+      rails, kerbs, met, clipNone, bare });
+  }
+  rows.sort((a, b) => b.spread - a.spread);
+  const withRails = rows.filter((n) => n.rails.length);
+  const gaps = rows.filter((n) => n.bare > 0 || n.clipNone > 0)
+    .sort((a, b) => (b.bare * 3 + b.clipNone) - (a.bare * 3 + a.clipNone));
+  return {
+    nodes: rows.length, boxed: rows.filter((n) => n.boxed).length,
+    spreadOver10cm: rows.filter((n) => n.spread > 0.1).length,
+    spreadOver30cm: rows.filter((n) => n.spread > 0.3).length,
+    worstSpread: rows.length ? rows[0].spread : 0,
+    railsAcross: withRails.length,
+    unpinned: rows.filter((n) => !n.pinned).length,
+    twistOver30cm: rows.filter((n) => n.twist > 0.3).length,
+    worstTwist: rows.reduce((a, n) => Math.max(a, n.twist), 0),
+    joinsDrewNothing: rows.filter((n) => n.clipNone > 0).length,
+    joinsBare: rows.filter((n) => n.bare > 0).length,
+    worst: rows.slice(0, top), rails: withRails.slice(0, top), gaps: gaps.slice(0, top),
+    twisted: rows.slice().sort((a, b) => b.twist - a.twist).slice(0, top),
+  };
+};
 (window as unknown as { __kerbseams?: object }).__kerbseams = (r = 260): object => {
   interface End { x: number; z: number; y: number; ca: number; tx: number; tz: number; hw: number; nm: string; fd: number; wid: string }
   const seen = new Set<Seg>();
@@ -25085,6 +29295,10 @@ function truckSpec(): Record<string, number> {
     wheelMu: wheelMu.map((m) => +m.toFixed(2)),
     rackYaw: +((steerCur * CAR.steerMax * v) / CAR.wheelbase).toFixed(3),
     slipL: +wheelSlipL.toFixed(3), slipAngDeg: +((slipAng * 180) / Math.PI).toFixed(2),
+    // THE PARKING BRAKE and the slope it is holding against, both in degrees:
+    // `slopeDeg` under `maxDeg` is a truck that will not move, and the gap
+    // between them is how much grade the surface has left before it does.
+    park: dbgPark, air: +airS.toFixed(2), grounded: wasGrounded,
   };
 };
 // The road corridor at a point: the raw heightfield, what the cut allows, and
@@ -25419,10 +29633,98 @@ function meshHeightAt(x: number, z: number): number | null {
 // `__meshAt` (meshSurfaceAt) or `__vtxAt`; this is the raycast, for what a
 // raycast is for.
 (window as unknown as { __meshRay?: object }).__meshRay = meshHeightAt;
+/**
+ * A TRANSECT ACROSS A VERGE, for "does the batter act like terrain". At n+1
+ * points from (x0,z0) to (x1,z1): the drawn batter strip's surface (a raycast
+ * through every batter mesh, topmost hit), the terrain mesh the wheels read
+ * (`groundAt`), the natural field, the corridor kernel's own wedge and kind
+ * (0 ground, 1 floor, 2 cut face, 3 bank), and where a tyre would sit
+ * (`tyreHeight`, the suspension's own expression). `sink` is strip minus
+ * tyre: positive is a strip standing above the wheels — the truck drives into
+ * a picture — and negative is a strip the wheels fall through. Null where no
+ * strip is drawn, which on a refined tile is the healthy answer, because
+ * there the wedge IS the mesh.
+ */
+/**
+ * EVERY BATTER STRIP, AGAINST THE GROUND IT CLAIMS TO STAND ON. Per strip: how
+ * many of its vertices have NO height tile under them at all (a bank or a
+ * face built or re-seated against the field's zero fallback, which is the
+ * origin's own elevation — the sheet to the sky reported from Glencairn),
+ * how far its worst vertex stands off the mesh, and its vertical span. A
+ * strip is a wedge a few metres tall; one spanning tens of metres is not
+ * earthworks, it is a picture of a number that was never ground.
+ */
+(window as unknown as { __stripAudit?: object }).__stripAudit = (r = 800, top = 8): object => {
+  const rows: object[] = [];
+  let strips = 0, verts = 0, noTile = 0, off5 = 0, tall = 0, air5 = 0;
+  for (const d of drapedWays) {
+    if (!d.mesh) continue;
+    const mx = (d.x0 + d.x1) / 2, mz = (d.z0 + d.z1) / 2;
+    if (Math.hypot(mx - state.x, mz - state.z) > r) continue;
+    strips++;
+    const pos = d.geo.attributes.position as THREE.BufferAttribute;
+    let nt = 0, worst = 0, air = 0, lo = Infinity, hi = -Infinity;
+    let worstAt: number[] | null = null, airAt: number[] | null = null;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      verts++;
+      lo = Math.min(lo, y); hi = Math.max(hi, y);
+      if (!hasHeight(x, z)) { nt++; continue; }
+      // ABOVE the mesh is a sheet in the air; below it is buried and unseen.
+      // The first cut took the absolute and could not tell a cliff face
+      // standing in front of the hill from one lying inside it.
+      const dy = y - groundAt(x, z);
+      if (Math.abs(dy) > worst) { worst = Math.abs(dy); worstAt = [+x.toFixed(1), +z.toFixed(1), +y.toFixed(1)]; }
+      if (dy > air) { air = dy; airAt = [+x.toFixed(1), +z.toFixed(1), +y.toFixed(1)]; }
+    }
+    noTile += nt;
+    if (worst > 5) off5++;
+    if (air > 5) air5++;
+    if (hi - lo > 25) tall++;
+    rows.push({ tile: d.tile ?? null, verts: pos.count, noTile: nt, worstOff: +worst.toFixed(1), worstAt,
+      inAir: +air.toFixed(1), airAt,
+      span: +(hi - lo).toFixed(1), box: [Math.round(d.x0), Math.round(d.z0), Math.round(d.x1), Math.round(d.z1)] });
+  }
+  rows.sort((p, q) => (q as { inAir: number }).inAir - (p as { inAir: number }).inAir);
+  return { strips, verts, vertsWithoutGround: noTile, stripsOffGroundOver5m: off5, stripsInAirOver5m: air5, stripsSpanningOver25m: tall,
+    fill: { drawn: spanStats.fillDrawn, unmet: spanStats.fillUnmet, corridor: spanStats.fillCorridor, dropped: spanStats.fillDropped, stranded: spanStats.fillStranded,
+      unknown: spanStats.fillUnknown, waiting: pendingBatter.filter((b) => b.waitTiles !== undefined).length, pending: pendingBatter.length },
+    tallest: rows.slice(0, top) };
+};
+(window as unknown as { __batterLine?: object }).__batterLine = (x0: number, z0: number, x1: number, z1: number, n = 24): object[] => {
+  const strips = worldGroup.children.filter((m) => (m as THREE.Mesh).material === MAT.batter);
+  const len = Math.hypot(x1 - x0, z1 - z0);
+  const rows: object[] = [];
+  for (let i = 0; i <= n; i++) {
+    const t = n ? i / n : 0;
+    const x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+    meshRayO.set(x, 4000, z); meshRay.set(meshRayO, meshRayD);
+    const hits = meshRay.intersectObjects(strips, false);
+    const bat = hits.length ? 4000 - hits[0].distance : null;
+    const g = groundAt(x, z), N = sampleHeight(x, z);
+    const ch = corridorH(x, z, N);
+    const e = roadEdge(x, z);
+    const ty = tyreHeight(x, z, 'ground', roadHeightAt(x, z, 3) ?? g);
+    rows.push({ d: +(len * t).toFixed(2), x: +x.toFixed(2), z: +z.toFixed(2),
+      batter: bat === null ? null : +bat.toFixed(2), ground: +g.toFixed(2), natural: +N.toFixed(2),
+      corridor: +ch.h.toFixed(2), kind: ch.k, tyre: +ty.toFixed(2),
+      out: e ? +e.out.toFixed(2) : null, deck: e ? +e.y.toFixed(2) : null,
+      sink: bat === null ? null : +(bat - ty).toFixed(2) });
+  }
+  return rows;
+};
 /** The sky's whole case file: where the sun is, what hour the world thinks it
  *  is, and whether the weather is a measurement or the synthetic chain. */
 (window as unknown as { __sky?: object }).__sky = (): object => ({
   time: TIME_MODES[timeMode],
+  // THE HOUR THE WORLD IS LIVING IN, beside the mode that chose it and the two
+  // things a thumb can do to it. Without these the clock's gesture contract —
+  // a drag that offsets a running day, a tap that eases to the next preset —
+  // could only be judged by eye on a device.
+  hour: +solarHour().toFixed(4),
+  base: +clockBase().toFixed(4),
+  shift: clockShift === null ? null : +clockShift.toFixed(4),
+  ramping: clockRamp !== null,
   utc: worldNow().toISOString(),
   sunAltDeg: +((sunAlt * 180) / Math.PI).toFixed(1),
   sunAzDeg: +((((sunAz * 180) / Math.PI) % 360 + 360) % 360).toFixed(0),
@@ -25514,6 +29816,37 @@ function heightsOf(): number[] {
 /** What the world is actually made of around the car, straight off WorldCover.
  *  The class under the wheels, and the mix over a radius — which is the number
  *  the biome is chosen from, so it is the one worth being able to read. */
+/** WHY A COVER RIVER IS NOT WATER. The tracer's components on every loaded
+ *  cover tile, and for each the reasons the feed keeps or drops it — the
+ *  Senqu from above was a cream sheet because the feed built nothing from a
+ *  tile whose cover plainly carries class 80, and that took more than one
+ *  round to see. */
+(window as unknown as { __coverwater?: object }).__coverwater = (): object => {
+  const tiles: object[] = [];
+  for (const [key, t] of coverTiles) {
+    const ocean = oceanMasks.get(key)?.grid.data ?? null;
+    const mask = inlandMask(t.data, ocean, 256 * 256);
+    let maskPx = 0;
+    for (let i = 0; i < mask.length; i++) maskPx += mask[i];
+    const comps = inlandComponents(mask, 256, 256, COVER_WATER_MIN_PX, 200);
+    const toX = (px: number): number => t.xs + (px / 256) * t.w;
+    const toZ = (pz: number): number => t.zs + (pz / 256) * t.h;
+    const ring = (r: number[]): Float64Array => {
+      const out = new Float64Array(r.length);
+      for (let i = 0; i < r.length; i += 2) { out[i] = toX(r[i]); out[i + 1] = toZ(r[i + 1]); }
+      return out;
+    };
+    tiles.push({ key, maskPx, comps: comps.length, oceanPx: oceanMasks.get(key)?.stats.ocean ?? null, fed: coverHydro.get(key) ?? null,
+      top: comps.slice(0, 8).map((c) => {
+        const outer = ring(c.outer), holes = c.holes.map(ring);
+        const minX = toX(c.minX), maxX = toX(c.maxX + 1), minZ = toZ(c.minY), maxZ = toZ(c.maxY + 1);
+        return { px: c.pixels, onEdge: c.onEdge, known: c.known, box: [Math.round(minX - state.x), Math.round(minZ - state.z), Math.round(maxX - state.x), Math.round(maxZ - state.z)],
+          osmFrac: +coverOsmFraction({ outer, holes }, minX, minZ, maxX, maxZ).toFixed(2),
+          flowing: coverFlowingCrosses(outer, minX, minZ, maxX, maxZ), slot: hydroFeats.has(`cover:${coverCompId(key, c)}`) };
+      }) });
+  }
+  return { tiles, feats: hydroFeats.size, traces: coverHydroTraces };
+};
 (window as unknown as { __cover?: object }).__cover = (radius = 3000, step = 120): object => {
   const here = sampleCover(state.x, state.z);
   const hist = new Map<number, number>();
@@ -25534,6 +29867,7 @@ function heightsOf(): number[] {
     wide: { level: coverWideZ, tiles: coverWide.size, asked: coverWideAsked.size },
     here: here === null ? null : `${here} ${COVER_NAME[here] ?? '?'}`,
     samples: n,
+    snapped: coverSnapped,
     mix: [...hist.entries()].sort((a, b) => b[1] - a[1])
       .map(([c, k]) => `${COVER_NAME[c] ?? c} ${((k / Math.max(1, n)) * 100).toFixed(0)}%`),
   };
@@ -25558,6 +29892,9 @@ function heightsOf(): number[] {
 });
 (window as unknown as { __tstats?: object }).__tstats = (): object => ({
   heightTiles: heightTiles.size, meshes: terrainMeshes.size, dirty: terrainDirty.size, builds: terrainBuilds,
+  // What the terrain costs the GPU right now: live triangles and vertices,
+  // and how many of the meshes are corridor builds.
+  ...(() => { let tris = 0, verts = 0, corridor = 0; for (const m of terrainMeshes.values()) { const g = m.geometry; tris += (g.index ? g.index.count : (g.attributes.position?.count ?? 0)) / 3; verts += g.attributes.position?.count ?? 0; if ((m.userData as { corridor?: boolean }).corridor) corridor++; } return { terrainTris: Math.round(tris), terrainVerts: verts, corridorMeshes: corridor }; })(),
   roadCells: roadGrid.size, seenWays: seenWays.size, unbuilt,
   osmDone: osmDone.size, inFlight: osmInFlight, queued: osmQueue.length,
 });
@@ -25821,7 +30158,10 @@ function heightsOf(): number[] {
  *  passed a 'draw calls live' check. This counts ticks — read it twice. */
 (window as unknown as { __ticks?: object }).__ticks = (): number => tickN;
 (window as unknown as { __origin?: object }).__origin = (): object =>
-  ({ lat: +origin.lat.toFixed(5), lon: +origin.lon.toFixed(5) });
+  // baseElev is the datum every height in the flat frame is relative to — and
+  // the number the far shell carries in its radius on the sphere, which is why
+  // a rig at 2,300m browsing a plain at 100m matters (see the globe mesh).
+  ({ lat: +origin.lat.toFixed(5), lon: +origin.lon.toFixed(5), baseElev: +baseElev.toFixed(1), farDrop: FAR_DROP });
 /** What is actually STORED, as opposed to what is loaded — the two differ by
  *  every road whose tiles have not streamed in, which is the whole point of
  *  keeping the store separate from `survey`. */
@@ -25878,6 +30218,83 @@ function heightsOf(): number[] {
   return { meshes, up, down, side, total: tot,
     downPct: tot ? +((down / tot) * 100).toFixed(2) : 0 };
 };
+/**
+ * THE SAME QUESTION FOR THE BUILDINGS, and it has never been asked.
+ *
+ * `__ribbonwind` exists because DoubleSide flips the shading normal toward the
+ * VIEWER, so a face whose stored normal points the wrong way is not a geometry
+ * bug — it is a surface that Lambert correctly clamps to near-black. Every
+ * building material is `side: DS` on the claim (in the DS comment) that "the
+ * rotate+mirror extrusion leaves face orientation mixed", and that claim was
+ * measured for the ribbons and found FALSE there. Nobody measured it here,
+ * which matters now that the flat roofs are being read as black: a roof cap
+ * whose normal points down is exactly what that would look like.
+ *
+ * Split by class, because a wall and a cap are different questions — a wall
+ * SHOULD be sideways and a roof cap should point up.
+ */
+(window as unknown as { __bldwind?: object }).__bldwind = (): object => {
+  const tally = (): { up: number; down: number; side: number } => ({ up: 0, down: 0, side: 0 });
+  const out: Record<string, { up: number; down: number; side: number }> = {
+    building: tally(), ruin: tally(),
+  };
+  let meshes = 0;
+  worldGroup.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    const first = mats[0];
+    const kind = first === ruinMat || first === ruinMatFar ? 'ruin'
+      : B_MATS_FLAT.includes(first as THREE.Material) ? 'building' : null;
+    if (!kind) return;
+    const n = m.geometry.getAttribute('normal') as THREE.BufferAttribute | undefined;
+    if (!n) return;
+    meshes++;
+    // Per TRIANGLE, off its first vertex: a flat-shaded cap shares one normal
+    // across its three, and counting vertices would weight a fan by its size.
+    for (let i = 0; i < n.count; i += 3) {
+      const y = n.getY(i);
+      if (y > 0.35) out[kind].up++; else if (y < -0.35) out[kind].down++; else out[kind].side++;
+    }
+  });
+  const pct = (t: { up: number; down: number; side: number }): object => {
+    const s = t.up + t.down + t.side;
+    return { ...t, total: s, downPct: s ? +((t.down / s) * 100).toFixed(2) : 0 };
+  };
+  return { meshes, building: pct(out.building), ruin: pct(out.ruin) };
+};
+/**
+ * WHAT A BUILDING'S COLOUR IS ACTUALLY MULTIPLIED BY.
+ *
+ * `colour x map` renders at the map's MEAN, and this is the third time that
+ * has mattered here: it is why the batter strip drew dark sheets beside every
+ * desert road (see batterMean, which divides it back out) and it is the first
+ * thing to rule out when a roof reads too dark. A white-based canvas with
+ * speckle, course shadows, cracks and moss drawn over it is NOT 1.0, and the
+ * surfaces a roof is judged against — terrain, sward — carry no map at all.
+ *
+ * Read off the source canvases, once, because a mean asserted from the drawing
+ * code is a reading of the drawing code.
+ */
+let texMeanCache: Record<string, number> | null = null;
+(window as unknown as { __texmean?: object }).__texmean = (): object => {
+  if (texMeanCache) return texMeanCache;
+  const mean = (t: THREE.Texture): number => {
+    const cv = t.image as HTMLCanvasElement | undefined;
+    const ctx = cv?.getContext?.('2d');
+    if (!cv || !ctx) return -1;
+    const d = ctx.getImageData(0, 0, cv.width, cv.height).data;
+    let s = 0;
+    for (let i = 0; i < d.length; i += 4) s += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+    return +(s / ((d.length / 4) * 255)).toFixed(4);
+  };
+  const out: Record<string, number> = {};
+  for (const [k, t] of Object.entries(WALL_TEX)) out[`wall:${k}`] = mean(t);
+  for (const [k, t] of Object.entries(ROOF_TEX)) out[`roof:${k}`] = mean(t);
+  out['wall:limewash0'] = mean(wallTexes[0]);
+  out['wall:limewash1'] = mean(wallTexes[1]);
+  return (texMeanCache = out);
+};
 (window as unknown as { __rewind?: object }).__rewind = (
   cmd?: 'begin' | 'show' | 'commit' | 'cancel', back = 0,
 ): object => {
@@ -25915,12 +30332,76 @@ function heightsOf(): number[] {
     // not a census — a shell full of motorway would show in any sample.
     for (let i = 0; i < a.count; i += 8) {
       totalPts++;
-      const [la, lo] = localToLatLon(a.getX(i), a.getZ(i));
+      const [la, lo] = sphereLatLon(sphV.set(a.getX(i), a.getY(i), a.getZ(i)).add(m.position));
       if (underCover(la, lo, 1)) wayPts++;
     }
   }
   return { places, wayPts, total, totalPts, meshes: ovMeshes.size, shells: coverBuilt.size };
 };
+/** The planet: whether it is up, where it is tangent, where its sun stands,
+ *  and the two ramps the wide chart is keyed on. */
+(window as unknown as { __globe?: object }).__globe = (): object => {
+  const [gLat, gLon] = localToLatLon(viewX(), viewZ());
+  const ss = subsolar(clockHour(), origin.lon);
+  return {
+    shown: globeMesh.visible, tex: globeU.uBase.value !== null, asked: globeAsked, failed: globeFailed,
+    mpp: +chartMpp().toFixed(1), on: +globeOn().toFixed(3), tilt: +chartTilt().toFixed(1),
+    space: +(skyMat.uniforms.uSpace as { value: number }).value.toFixed(3),
+    // THE RIG AND THE PLACE ARE NO LONGER THE SAME POINT. Since the chart
+    // retains a browsed focus, the sphere is tangent under `focus` while the
+    // pin stands at `rig` — reporting one number for both is how a browsed
+    // chart would look identical to a chart that had quietly moved the truck.
+    rig: [+gLat.toFixed(3), +gLon.toFixed(3)],
+    focus: localToLatLon(viewX() + panX, viewZ() + panZ).map((v) => +v.toFixed(3)),
+    remote: chartRemote(),
+    sun: { lat: +ss.lat.toFixed(2), lon: +ss.lon.toFixed(2) },
+    // The sun's height in the sky AT THE TRUCK, from the globe's own vectors.
+    // It is the one number that can be checked against the world's `__sky`,
+    // and if the two ever part it is this frame that is wrong.
+    sunAlt: +(Math.asin(clamp(latLonToUnit(gLat, gLon).dot(globeU.uSun.value), -1, 1)) * 180 / Math.PI).toFixed(2),
+    // Whether the streamed backdrop still covers the frame, which is what
+    // decides who draws it — see the hand-over in the top-camera branch.
+    shell: farGroup.visible,
+    // How free the planet is to be turned, and how far it has been. `spin` is
+    // what a drag banks; `applied` is what the frame actually drew, which is
+    // the product — read the pair, because a spin held while the shell is back
+    // is stored and shown nowhere, and that is the design rather than a fault.
+    free: +globeFree().toFixed(3),
+    spin: [+globeSpinLat.toFixed(2), +globeSpinLon.toFixed(2)],
+    applied: [+(globeSpinLat * globeFree()).toFixed(2), +(globeSpinLon * globeFree()).toFixed(2)],
+    degPerPx: +globeDegPerPx().toFixed(4),
+    // DRAWN, not merely flagged. `stepGlobe` returns early once the planet is
+    // off, so `globePin.visible` keeps whatever it last held — a stale `true`
+    // under a hidden group, which reads from outside exactly like a pin left
+    // on the glass. The group's own visibility is half the answer.
+    pin: globePin.visible,
+    ringKm: Math.round(((2 * FAR_RING_MAX + 1) * tileMetres(farZ)) / 1000),
+    frameKm: Math.round((chartMpp() * Math.hypot(pixSize.x, pixSize.y)) / 1000),
+    alt: Math.round(chartDist()), far: Math.round(camera.far),
+    horizon: Math.round(Math.sqrt(chartDist() * chartDist() + 2 * GLOBE_R * chartDist())),
+  };
+};
+/**
+ * TURN THE PLANET FROM THE CONSOLE. The gesture is a drag, and a drag is the
+ * one thing a harness whose frames are seconds apart cannot make convincingly
+ * — so the state it writes is writable directly, exactly as `__windset` exists
+ * because a calm day is the common case. Degrees off the truck's own point;
+ * no arguments reads it back.
+ *
+ * It writes the STORED spin, not the applied one: below the hand-over
+ * `globeFree` is 0 and the planet will not move, which is the design and is
+ * what `__globe().applied` is there to show.
+ */
+(window as unknown as { __globespin?: object }).__globespin = (lat?: number, lon?: number): object => {
+  if (lat !== undefined) { const [lo, hi] = globeSpinLatRange(); globeSpinLat = clamp(lat, lo, hi); }
+  if (lon !== undefined) globeSpinLon = lon;
+  return { lat: +globeSpinLat.toFixed(3), lon: +globeSpinLon.toFixed(3), free: +globeFree().toFixed(3) };
+};
+/** Where a screen pixel lands ON THE PLANET, in world metres — null off the
+ *  globe or where the planet is not in charge. The tap gesture's own answer,
+ *  so a test can ask it without dispatching a double tap. */
+(window as unknown as { __globeat?: object }).__globeat =
+  (px: number, py: number): [number, number] | null => globeTapAt(px, py);
 (window as unknown as { __zoom?: object }).__zoom = (z: number): void => { zoomT = clamp(z, ZOOM_MIN, ZOOM_MAX); };
 /** How much GROUND the camera actually covers, by unprojecting the screen
  *  corners onto the car's ground plane. The honest answer to "how far out can
@@ -25956,6 +30437,32 @@ function heightsOf(): number[] {
 };
 (window as unknown as { __far?: object }).__far = (): object =>
   ({ tiles: farMeshes.size, asked: farTiles.size, inFlight: farInFlight, queued: farQueue.length,
+    // ON THE SPHERE, AS A NUMBER. Over a sample of every tile's vertices: the
+    // vertex's height over the datum (its planet radius less R) against the
+    // raster's own height at that lat/lon less the drop — zero by construction
+    // (sphereRTC), and the witness that stays. The raster is read at both
+    // pixels a rounded coordinate could land on, so a half-texel does not
+    // report a pixel's relief as an error.
+    sphere: (() => {
+      let worst = 0, n = 0;
+      for (const [key, m] of farMeshes) {
+        const r = farRasters.get(key);
+        if (!r) continue;
+        const p = m.geometry.getAttribute('position') as THREE.BufferAttribute;
+        for (let i = 0; i < p.count; i += 97) {
+          const [la, lo, h] = sphereLatLon(sphV.set(p.getX(i), p.getY(i), p.getZ(i)).add(m.position));
+          const [x, z] = toLocal(la, lo);
+          const fu = ((x - r.xs) / r.w) * 255, fv = ((z - r.zs) / r.h) * 255;
+          let best = Infinity;
+          for (const u of [Math.floor(fu), Math.ceil(fu)]) for (const v of [Math.floor(fv), Math.ceil(fv)]) {
+            const want = r.data[clamp(v, 0, 255) * 256 + clamp(u, 0, 255)] - baseElev - FAR_DROP;
+            best = Math.min(best, Math.abs(h - want));
+          }
+          worst = Math.max(worst, best); n++;
+        }
+      }
+      return { n, worstM: +worst.toFixed(3) };
+    })(),
     retired: farRetired.length, shown: farGroup.visible, radius: Math.round(viewRadius()),
     sight: SIGHT_M, level: farZ, farPlane: camera.far,
     // How much land-cover each shell tile had when it was baked. A shell tile
@@ -25978,6 +30485,54 @@ function heightsOf(): number[] {
         spread = Math.max(spread, Math.max(...v.map((t) => t[c])) - Math.min(...v.map((t) => t[c])));
       }
       return { n: v.length, spread: +spread.toFixed(3) };
+    })(),
+    // PER TILE, because the aggregate could not see the fault it was built for:
+    // every tile at hit 1.0 and the spread wide is two cover LEVELS on one
+    // frame, and only the bake level says which tile came from which.
+    perTile: [...farTint.entries()].map(([key, t]) => ({ key,
+      hit: +(farCoverHit.get(key) ?? 0).toFixed(2), coverZ: farBakeZ.get(key) ?? null,
+      tint: t.map((c) => Math.round(c * 255)) })),
+    coverZ: coverWideZ,
+    // THE SEAMS THEMSELVES. A global tint spread mixes real land variation
+    // (the Karoo is not the Highveld) with the defect (two tiles disagreeing
+    // where the land does not), and only the shared edges can tell them apart:
+    // for every pair of adjacent shell tiles at the current level, the mean
+    // vertex colour of the outermost row on each side of the border. A step
+    // there with the same ground under both is a bake disagreeing with itself.
+    seams: (() => {
+      const out: Array<{ a: string; b: string; d: number; edge: string }> = [];
+      const rowMean = (mesh: THREE.Mesh, side: 'E' | 'W' | 'N' | 'S'): [number, number, number] | null => {
+        const g = mesh.geometry;
+        const pos = g.getAttribute('position'), col = g.getAttribute('color');
+        if (!pos || !col) return null;
+        const bb = g.boundingBox ?? (g.computeBoundingBox(), g.boundingBox);
+        if (!bb) return null;
+        const acc = [0, 0, 0]; let n = 0;
+        const tol = Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) / 512;
+        for (let i = 0; i < pos.count; i++) {
+          const x = pos.getX(i), z = pos.getZ(i);
+          const on = side === 'E' ? bb.max.x - x < tol : side === 'W' ? x - bb.min.x < tol
+            : side === 'S' ? bb.max.z - z < tol : z - bb.min.z < tol;
+          if (!on) continue;
+          acc[0] += col.getX(i); acc[1] += col.getY(i); acc[2] += col.getZ(i); n++;
+        }
+        return n ? [acc[0] / n, acc[1] / n, acc[2] / n] : null;
+      };
+      for (const [key, mesh] of farMeshes) {
+        const [z, x, y] = key.split('/').map(Number);
+        if (z !== farZ) continue;
+        for (const [dx, dy, mine, theirs, edge] of [[1, 0, 'E', 'W', 'E'], [0, 1, 'S', 'N', 'S']] as Array<[number, number, 'E' | 'S', 'W' | 'N', string]>) {
+          const nk = `${z}/${x + dx}/${y + dy}`;
+          const nm = farMeshes.get(nk);
+          if (!nm) continue;
+          const a = rowMean(mesh, mine), b = rowMean(nm, theirs);
+          if (!a || !b) continue;
+          const d = Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]));
+          out.push({ a: key, b: nk, d: +d.toFixed(3), edge });
+        }
+      }
+      out.sort((p, q) => q.d - p.d);
+      return { n: out.length, worst: out[0] ?? null, over05: out.filter((o) => o.d > 0.05).length, top: out.slice(0, 4) };
     })(),
     // THE SEAM, as a number: the fine ring's own height beside the shell's,
     // sampled just outside where the fine world gives out. A cliff here is
@@ -27281,6 +31836,61 @@ function noteTags(t: Record<string, string>): void {
  * drawn mesh through `meshSurfaceAt` and got nothing at all — that samples the
  * TERRAIN mesh, and the deck's cross-width heights exist nowhere else.
  */
+/**
+ * ── DRIVE THE DITHER, AND RE-COMPOSITE ON ONE SCENE RENDER ──
+ *
+ * The whole reason `composite()` was lifted out of the frame loop: a probe can
+ * run it again over whatever is already sitting in rtScene, so two pictures
+ * differ by the post chain and by NOTHING ELSE. Comparing dither patterns any
+ * other way is hopeless — this world's clouds, sward, wildlife, suspension and
+ * still-arriving tiles move more pixels between two frames than a threshold
+ * pattern ever will, which is a mistake this file has already recorded once for
+ * the shutter.
+ *
+ * So: `__draw(false)` to stop the loop drawing, then `__dither({pat})` per
+ * pattern, screenshotting between. The scene underneath is frozen.
+ *
+ * Named for the patterns rather than numbered, because `uDPat: 6` in a test log
+ * says nothing a year later.
+ */
+const DITHER_PATS = ['bayer4', 'bayer8', 'check', 'grain', 'lines', 'bayer16', 'ign', 'tpdf', 'halftone'];
+(window as unknown as { __dither?: object }).__dither = (patch?: {
+  pat?: number | string; amt?: number; chan?: number; levels?: number; bias?: number; con?: number;
+  patWide?: number | string; wide?: number;
+}): object => {
+  const u = compMat.uniforms as Record<string, { value: number }>;
+  if (patch) {
+    if (patch.pat !== undefined) {
+      const i = typeof patch.pat === 'string' ? DITHER_PATS.indexOf(patch.pat) : patch.pat;
+      if (i >= 0) u.uDPat.value = i;
+    }
+    if (patch.amt !== undefined) u.uDither.value = patch.amt;
+    if (patch.chan !== undefined) u.uDChan.value = patch.chan;
+    if (patch.levels !== undefined) u.uLevels.value = patch.levels;
+    if (patch.bias !== undefined) u.uBias.value = patch.bias;
+    if (patch.con !== undefined) u.uCon.value = patch.con;
+    if (patch.patWide !== undefined) {
+      const i = typeof patch.patWide === 'string' ? DITHER_PATS.indexOf(patch.patWide) : patch.patWide;
+      if (i >= 0) u.uDPatWide.value = i;
+    }
+    if (patch.wide !== undefined) u.uDWide.value = patch.wide;
+    // Re-run the post chain over the scene already in rtScene, so the change
+    // is on the glass immediately even with the frame loop stood down.
+    composite(mblurAmt);
+  }
+  return {
+    pat: DITHER_PATS[u.uDPat.value] ?? u.uDPat.value,
+    pats: DITHER_PATS,
+    amt: u.uDither.value, chan: u.uDChan.value, levels: u.uLevels.value,
+    bias: +u.uBias.value.toFixed(3), con: u.uCon.value, mono: u.uMono.value,
+    // The wide chart's pattern, whether the swap is armed, and whether THIS
+    // frame is past the line it swaps at — so a test can tell "IGN because the
+    // chart is wide" from "IGN because the dial says so".
+    patWide: DITHER_PATS[u.uDPatWide.value] ?? u.uDPatWide.value, wide: u.uDWide.value,
+    wideNow: u.uDWide.value > 0.5 && envU.uMpp.value > 60,
+    pix: [pixSize.x, pixSize.y],
+  };
+};
 /** How many full-screen passes the last frame ran, and what is on. */
 (window as unknown as { __passes?: object }).__passes = (): object => ({
   lastFrame: passCount.last,
@@ -27434,6 +32044,15 @@ let lift: { id: number; y0: number; dy: number } | null = null;
 // wheel zooms on desktop. Chase keeps the appear-where-the-thumb-lands stick
 // with second-finger brake.
 let panX = 0, panZ = 0, zoomT = 1, zoomCur = 1;
+function setChartFocus(lat: number, lon: number): void {
+  const [x, z] = toLocal(clamp(lat, -85, 85), wrapLongitude(lon));
+  panX = x - viewX(); panZ = z - viewZ();
+}
+/** Remote browsing never silently becomes driving or springs back to the rig. */
+function chartRemote(): boolean { return Math.hypot(panX, panZ) > 10000; }
+function chartGround(x: number, z: number): number {
+  return heightTileAt(x, z) ? sampleHeight(x, z) : (farRasterAt(x, z) ?? baseElev) - baseElev;
+}
 /** The height of the ground the current drag took hold of — the plane the pan
  *  resolves against. Null between gestures. */
 let panY: number | null = null;
@@ -27499,6 +32118,7 @@ const setStickFrom = (e: PointerEvent): void => {
 };
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (fpsDown(e)) return;
   if (autoDown(e)) return;
   if (poiDown(e)) return;
   if (rewindDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
@@ -27518,7 +32138,8 @@ canvas.addEventListener('pointerdown', (e) => {
     // the "janky" — not a dropped frame, a swallowed gesture. Tightened to the
     // truck itself, and the ring is SHOWN while it is held so a grab that lands
     // on it explains itself instead of just failing.
-    if (!stick && Math.hypot(e.clientX - h.x, e.clientY - h.y) <= STICK_R * 0.62) {
+    if (!stick && !panPtrs.size && zoomCur < 8 && !chartRemote()
+      && Math.hypot(e.clientX - h.x, e.clientY - h.y) <= STICK_R * 0.62) {
       stick = { id: e.pointerId, x0: h.x, y0: h.y, dx: 0, dy: 0, ax: 0, ay: 0 };
       stickBase.style.display = stickNub.style.display = 'block';
       stickBase.style.left = stickNub.style.left = `${h.x}px`;
@@ -27534,8 +32155,11 @@ canvas.addEventListener('pointerdown', (e) => {
       // grabbed ground ~74m out from under the finger. Taken under the finger
       // instead it is right by construction — and sampled ONCE, so the plane
       // cannot wobble mid-drag as the ray crosses a cliff.
-      const [gx, gz] = chartToWorld(e.clientX, e.clientY);
-      panY = groundAt(gx, gz);
+      if (panPtrs.size === 1) {
+        const [gx, gz] = globeFree() ? [viewX() + panX, viewZ() + panZ]
+          : chartToWorld(e.clientX, e.clientY);
+        panY = chartGround(gx, gz);
+      }
     }
     return;
   }
@@ -27559,6 +32183,30 @@ canvas.addEventListener('pointermove', (e) => {
   if (!prev || camMode !== 'top') return;
   const cur = { x: e.clientX, y: e.clientY };
   if (panPtrs.size === 1) {
+    // ── ABOVE THE HAND-OVER, A DRAG TURNS THE EARTH ──
+    //
+    // Below it this is a map and a drag slides it. Above it there is no map to
+    // slide: the streamed world is a point, the frame is a planet, and the
+    // only thing a finger can usefully do to a planet is roll it. So the same
+    // gesture spins the sphere, and `globeFree` is what decides which regime
+    // is in force — the very test the backdrop hand-over uses, so the gesture
+    // changes at the frame where the shell stops being drawn and never while
+    // both are on screen.
+    //
+    // The screen delta goes through the SAME rotation the flat pan applies
+    // below, so a turned chart drags identically in both regimes; only the
+    // units differ. The east component is divided by the cosine of the tangent
+    // latitude, which is what makes the ground keep up with the thumb as the
+    // view climbs toward a pole — the spherical form of the same "is the
+    // ground you grabbed still under your finger" rule `chartPlaneAt` answers
+    // for the flat chart. Floored at 0.25 (about 76 degrees) because that
+    // cosine goes to zero and an unfloored drag would run away in the last few
+    // degrees rather than merely being fast.
+    if (globeFree() > 0) {
+      dragGlobe(prev.x, prev.y, cur.x, cur.y);
+      panPtrs.set(e.pointerId, cur);
+      return;
+    }
     // THE GROUND UNDER THE FINGER, BEFORE AND AFTER — no metres-per-pixel
     // guess at all. The old form scaled the drag by one constant for the whole
     // screen, and the chart is tilted 70 degrees: a pixel near the top of the
@@ -27582,7 +32230,7 @@ canvas.addEventListener('pointermove', (e) => {
       return;
     }
     // metres per screen px at the current viewing distance
-    const k = (CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh) / innerHeight;
+    const k = chartDist() / innerHeight;
     // A DRAG IS A SCREEN GESTURE. On a turned chart the world axes are no
     // longer the screen's, so the finger's delta is put through the same
     // rotation the view is drawn with — otherwise dragging left walks the map
@@ -27604,7 +32252,24 @@ canvas.addEventListener('pointermove', (e) => {
     if (other) {
       const d0 = Math.hypot(prev.x - other.x, prev.y - other.y);
       const d1 = Math.hypot(cur.x - other.x, cur.y - other.y);
-      if (d0 > 12 && d1 > 12) zoomT = clamp(zoomT * (d0 / d1), ZOOM_MIN, ZOOM_MAX); // survey a whole region
+      if (d0 > 12 && d1 > 12) {
+        const target = clamp(zoomT * d0 / d1, ZOOM_MIN, ZOOM_MAX);
+        const ratio = target / zoomT;
+        const mx0 = (prev.x + other.x) / 2, my0 = (prev.y + other.y) / 2;
+        const mx1 = (cur.x + other.x) / 2, my1 = (cur.y + other.y) / 2;
+        // Include the pinch midpoint's translation. On the plane, projecting
+        // the new midpoint back through the zoom ratio also keeps an off-centre
+        // pinch anchored, rather than pulling everything towards screen centre.
+        const px = innerWidth / 2 + (mx1 - innerWidth / 2) * ratio;
+        const py = innerHeight / 2 + (my1 - innerHeight / 2) * ratio;
+        if (globeFree()) dragGlobe(mx0, my0, px, py);
+        else {
+          const y = panY ?? chartGround(viewX() + panX, viewZ() + panZ);
+          const a = chartPlaneAt(mx0, my0, y), b = chartPlaneAt(px, py, y);
+          if (a && b) { panX += a[0] - b[0]; panZ += a[1] - b[1]; }
+        }
+        zoomT = target;
+      }
     }
   }
   panPtrs.set(e.pointerId, cur);
@@ -27634,7 +32299,8 @@ let tapAt = 0, tapX = 0, tapY = 0, tapSeen = 0;
 (window as unknown as { __chartat?: object }).__chartat =
   (px: number, py: number): [number, number] => chartToWorld(px, py);
 (window as unknown as { __pan?: object }).__pan = (): object =>
-  ({ x: +panX.toFixed(2), z: +panZ.toFixed(2), rot: +mapRot().toFixed(4), headingUp: mapHeadingUp });
+  ({ x: +panX.toFixed(2), z: +panZ.toFixed(2), rot: +mapRot().toFixed(4), headingUp: mapHeadingUp,
+    focus: localToLatLon(viewX() + panX, viewZ() + panZ), remote: chartRemote() });
 // endStick is bound to the canvas AND to the window, so one release runs it
 // twice with the SAME event object. Without this the second run sees a tap
 // zero milliseconds old at zero distance and teleports on a single tap.
@@ -27650,13 +32316,57 @@ let lastUp: Event | null = null;
  * Null when the ray cannot get there: aimed at or above the horizon, or so
  * shallow that the intersection flies off to somewhere the drag should not go.
  */
+/** The two rays see the same globe orientation. Their geographic difference
+ * moves the grabbed place to the new finger position, including a turned map.
+ * Near the limb a ray becomes ill-conditioned, so cap the step to a small
+ * multiple of the centre rate; off-disc drags retain that bounded rate. */
+function dragGlobe(x0: number, y0: number, x1: number, y1: number): void {
+  const at = (x: number, y: number) => {
+    const ray = new THREE.Vector3(x / innerWidth * 2 - 1, 1 - y / innerHeight * 2, 0.5)
+      .unproject(camera).sub(camera.position).normalize();
+    return globeHit(camera.position, ray, planetGroup.position, planetGroup.quaternion);
+  };
+  const a = at(x0, y0), b = at(x1, y1);
+  const [lat, lon] = localToLatLon(viewX() + panX, viewZ() + panZ);
+  const dpp = globeDegPerPx(), mr = mapRot();
+  const dx = -(x1 - x0) * dpp, dy = -(y1 - y0) * dpp;
+  const cs = Math.max(0.087, Math.cos(lat * Math.PI / 180));
+  const maxStep = Math.hypot(x1 - x0, y1 - y0) * dpp * 3;
+  const dLat = a && b ? clamp(a.lat - b.lat, -maxStep, maxStep)
+    : -(dx * Math.sin(mr) + dy * Math.cos(mr));
+  const dLon = a && b ? clamp(wrapLongitude(a.lon - b.lon), -maxStep / cs, maxStep / cs)
+    : (dx * Math.cos(mr) - dy * Math.sin(mr)) / cs;
+  setChartFocus(lat + dLat, lon + dLon);
+}
 function chartPlaneAt(px: number, py: number, y0: number): [number, number] | null {
   const ray = new THREE.Vector3((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1, 0.5)
     .unproject(camera).sub(camera.position).normalize();
   if (ray.y > -1e-3) return null;
   const t = (y0 - camera.position.y) / ray.y;
-  if (!Number.isFinite(t) || t <= 0 || t > 1e6) return null;
+  if (!Number.isFinite(t) || t <= 0 || t > camera.far) return null;
   return [camera.position.x + ray.x * t, camera.position.z + ray.z * t];
+}
+/**
+ * WHERE A CHART TAP LANDS WHEN THE CHART IS A PLANET.
+ *
+ * `chartToWorld` unprojects onto the tangent plane and marches the
+ * heightfield, both of which stop meaning anything past the plane's own honest
+ * reach (see `SIGHT_MAX` and the note in globe.ts). Above the hand-over the
+ * ray is intersected with the sphere instead and the answer converted back
+ * through `toLocal` — which is the SAME equirectangular convention every other
+ * layer on the chart is placed by, so the mark, its record and its RELOCATE
+ * all agree with each other and with the pin the tap landed on.
+ *
+ * Null where the planet is not in charge, and null for a tap on space beside
+ * the limb: a rim tap is not a place, and clamping it onto the edge would drop
+ * a mark somewhere nobody pointed at.
+ */
+function globeTapAt(px: number, py: number): [number, number] | null {
+  if (globeFree() <= 0) return null;
+  const dir = new THREE.Vector3((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1, 0.5)
+    .unproject(camera).sub(camera.position).normalize();
+  const hit = globeHit(camera.position, dir, planetGroup.position, planetGroup.quaternion);
+  return hit ? toLocal(hit.lat, hit.lon) : null;
 }
 function chartToWorld(px: number, py: number): [number, number] {
   // Through the ACTUAL camera, not a metres-per-pixel guess about the screen
@@ -27757,8 +32467,8 @@ function chartToWorld(px: number, py: number): [number, number] {
     }
     return [camera.position.x + bx * FIX_REACH, camera.position.z + bz * FIX_REACH];
   }
-  const k = (CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh) / innerHeight;
-  const cz = Math.cos((CAM.tilt * Math.PI) / 180);
+  const k = chartDist() / innerHeight;
+  const cz = Math.cos((chartTilt() * Math.PI) / 180);
   return [
     state.x + panX + (px - innerWidth / 2) * k,
     state.z + panZ + (py - innerHeight / 2) * k / Math.max(0.2, cz),
@@ -27848,6 +32558,21 @@ function siteRecord(ex: number, ez: number, name: string): SiteRecord {
     : 'NO RASTER';
   const clim = climateAt(ex, ez, elevAbs ?? undefined);
   const band = ALT_BAND_NAMES[altBandAt(elevEffAt(ex, ez), clim.treeline)];
+  // The site sampler and the ecoregion, side by side with the biome field, so
+  // the three can be argued with from the seat rather than from a probe. They
+  // deliberately disagree: BIOME is the five-way ramp the sky and the ground
+  // read, SITE is the physics under it, and ECO is the history neither can
+  // derive. A site whose three lines tell the same story is one the vegetation
+  // rules have nothing to add to.
+  const site = siteNow(ex, ez);
+  const eco = ecoAt(ex, ez);
+  const guild = guildNow(ex, ez);
+  // WHEN the rain arrives, which separates chaparral from monsoon forest at
+  // the same latitude and the same annual total.
+  const season = site.summerDry > 0.45 ? `SUMMER-DRY ${site.summerDry.toFixed(2)}`
+    : site.winterDry > 0.45 ? `WINTER-DRY ${site.winterDry.toFixed(2)}`
+      : 'EVEN';
+  const tlDelta = Math.round(site.treelineDelta);
   const surf = surfaceAt(ex, ez);
   const wet = hydroSys?.sampleRestingSurface(ex, ez) ?? null;
   const dx = ex - state.x, dz = ez - state.z;
@@ -27861,8 +32586,22 @@ function siteRecord(ex: number, ez: number, name: string): SiteRecord {
     ['BIOME', `${clim.dom.name.toUpperCase()} ${(clim.w[clim.domIdx] * 100).toFixed(0)}%`],
     ['CLIMATE', `${clim.tempC.toFixed(0)}°C · MOIST ${(clim.moisture * 100).toFixed(0)}%`],
     ['BAND', `${band.toUpperCase()} · TREELINE ${Math.round(clim.treeline)}M`],
+    ['SITE', `${site.heatC.toFixed(0)}°C ±${(site.rangeC / 2).toFixed(0)} · ${Math.round(site.waterMm)}MM · ${season}`],
+    ['LOCAL', `SUN ${site.insolation.toFixed(2)} · WET ${site.wetness.toFixed(2)}`
+      + `${site.salt > 0.02 ? ` · SALT ${site.salt.toFixed(2)}` : ''}`
+      + ` · ${tlDelta >= 0 ? `${tlDelta}M ABOVE` : `${-tlDelta}M BELOW`} TREELINE`],
+    ['ECO', eco ? `${eco.name.toUpperCase()} · ${ecoBiomeName(eco.biome).toUpperCase()}`
+      : FIXTURE ? 'FIXTURE' : ecoInFlight ? 'ASKING…' : 'NO REGION'],
+    ['GROWS', guild
+      ? `${guild.name.toUpperCase()} · ${guild.mix.slice(0, 3).map(([k]) => k.toUpperCase()).join(' ')}`
+        + ` · ×${guild.scale.toFixed(2)} AT ${(guild.density * 100).toFixed(0)}%`
+      : GUILD_ON ? 'BY CLIMATE' : 'BY CLIMATE (GUILDS OFF)'],
     ['GROUND', surf.toUpperCase()],
-    ['WATER', wet ? `${wet.kind.toUpperCase()} · ${wet.depthM.toFixed(1)}M DEEP` : oceanAt(ex, ez) ? 'OCEAN' : 'DRY'],
+    ['WATER', wet
+      ? (elevAbs !== null && wet.restingLevelM < elevAbs + 0.02
+        ? `${wet.kind.toUpperCase()} · ${(elevAbs - wet.restingLevelM).toFixed(1)}M UNDER GROUND`
+        : `${wet.kind.toUpperCase()} · ${wet.depthM.toFixed(1)}M DEEP`)
+      : oceanAt(ex, ez) ? 'OCEAN' : 'DRY'],
     ['RANGE', `${rangeText} ${compass8(dx, dz)}`],
     ['TILE', `${tile.tx}·${tile.ty} ${tile.st.toUpperCase()}`],
   ];
@@ -27873,6 +32612,23 @@ function siteRecord(ex: number, ez: number, name: string): SiteRecord {
     biome: { dom: clim.dom.name, w: Object.fromEntries(BIOME_ORDER.map((n, i) => [n, +clim.w[i].toFixed(3)])),
       tempC: +clim.tempC.toFixed(1), moisture: +clim.moisture.toFixed(2),
       treeline: Math.round(clim.treeline), band },
+    site: {
+      heatC: +site.heatC.toFixed(1), summerC: +site.summerC.toFixed(1), winterC: +site.winterC.toFixed(1),
+      rangeC: +site.rangeC.toFixed(1), frostDays: Math.round(site.frostDays),
+      waterMm: Math.round(site.waterMm),
+      summerDry: +site.summerDry.toFixed(2), winterDry: +site.winterDry.toFixed(2),
+      contin: +site.contin.toFixed(2), rainShadow: +site.rainShadow.toFixed(2),
+      treelineDelta: Math.round(site.treelineDelta),
+      insolation: +site.insolation.toFixed(2), wetness: +site.wetness.toFixed(2),
+      salt: +site.salt.toFixed(2), exposure: +site.exposure.toFixed(2), hadCoast: site.hadCoast,
+    },
+    eco: eco ? { ...eco, biomeName: ecoBiomeName(eco.biome) } : null,
+    guild: guild ? {
+      name: guild.name, biome: guild.biome,
+      scale: +guild.scale.toFixed(2), density: +guild.density.toFixed(2),
+      mix: Object.fromEntries(guild.mix.map(([k, w]) => [k, +w.toFixed(2)])),
+      why: guild.why,
+    } : null,
     surface: surf, water: wet ? { kind: wet.kind, depthM: +wet.depthM.toFixed(2),
       levelM: +wet.restingLevelM.toFixed(1), flow: wet.flow.map((v) => +v.toFixed(2)) } : null,
     ocean: oceanAt(ex, ez), rangeM: Math.round(range),
@@ -27887,13 +32643,40 @@ function siteRecord(ex: number, ez: number, name: string): SiteRecord {
 }
 /** The open site card, and the fix it belongs to (null for a spot with no
  *  mark — the record can be read without one). */
-let siteOpen: { rec: SiteRecord; fix: string | null } | null = null;
+let siteOpen: { rec: SiteRecord; fix: string | null; x: number; z: number } | null = null;
 /** Open the record for a spot, with the clipboard copy THE LINE's field query
  *  already gives — the write has to happen inside the gesture or the
  *  permission model refuses it, which is why this is called from the handler
  *  rather than from the frame. */
+/**
+ * THE PIN UNDER THE TAP, if the tap landed on one.
+ *
+ * A double tap on the chart used to drop a NEW fix wherever it landed —
+ * including squarely on top of a pin that already names that place, which
+ * buries the thing you were pointing at under a fresh mark called something
+ * else. A pin is a record already; tapping it should open THAT.
+ *
+ * The radius is in world metres and scales with the chart's zoom, because a
+ * thumb is a thumb: at a wide zoom the pins are close together on the glass
+ * and the tap has to mean the nearest one, at a tight zoom it must not grab a
+ * pin half a kilometre away.
+ */
+/** How near the tap has to land, in world metres, to count as ON a pin:
+ *  about eight millimetres of glass at whatever the chart is showing, so the
+ *  gesture means the same thing at every zoom. */
+function chartTapR(): number {
+  return clamp(viewRadius() * 0.05, 12, 900);
+}
+function poiUnder(wx: number, wz: number, r: number): { name: string; x: number; z: number } | null {
+  let best: { name: string; x: number; z: number } | null = null, bd = r * r;
+  for (const p of pois.values()) {
+    const d = (p.x - wx) ** 2 + (p.z - wz) ** 2;
+    if (d < bd) { bd = d; best = { name: p.name, x: p.x, z: p.z }; }
+  }
+  return best;
+}
 function openSite(ex: number, ez: number, name: string, fix: string | null): void {
-  siteOpen = { rec: siteRecord(ex, ez, name), fix };
+  siteOpen = { rec: siteRecord(ex, ez, name), fix, x: ex, z: ez };
   try { void navigator.clipboard?.writeText(siteOpen.rec.json); } catch { /* the card still answers */ }
 }
 function teleportTo(x: number, z: number): void {
@@ -27963,22 +32746,46 @@ const endStick = (e: PointerEvent): void => {
         // mark dropped on a place you know nothing about is half a gesture.
         // The record carries the relocation, so marking and travelling stay
         // two deliberate acts while the middle one stops being blind.
-        const [wx, wz] = chartToWorld(e.clientX, e.clientY);
-        const fix = dropFix(wx, wz);
-        openSite(wx, wz, fix.name, fix.name);
+        //
+        // AND ON THE PLANET IT IS A DIFFERENT SUM. `globeTapAt` intersects the
+        // sphere where the tangent plane has stopped meaning anything; a null
+        // from it with the planet in charge is a tap on SPACE beside the limb,
+        // which is not a place and gets no mark.
+        const g = globeTapAt(e.clientX, e.clientY);
+        if (g || globeFree() <= 0) {
+          const [wx, wz] = g ?? chartToWorld(e.clientX, e.clientY);
+          // A PIN IS A RECORD ALREADY. Landing on one opens it rather than
+          // burying it under a new mark of its own.
+          const pin = poiUnder(wx, wz, chartTapR());
+          if (pin) { openSite(pin.x, pin.z, pin.name, null); }
+          else {
+            const fix = dropFix(wx, wz);
+            openSite(wx, wz, fix.name, fix.name);
+          }
+        }
       } else {
-        const [wx, wz] = chartToWorld(e.clientX, e.clientY);
-        lastField = fieldQuery(wx, wz);
-        lineNudge = performance.now();
-        try { void navigator.clipboard?.writeText(lastField.json); } catch { /* the toast still answers */ }
-        // A DELIBERATE TAP IS AN ASK. A tile the stream never reached — or one
-        // sitting out an error backoff — gets requested on the spot, pinned so
-        // the ring gate cannot drop it for being far from the truck. The query
-        // stays pure for the harness (__field probes never poke); the gesture
-        // is what carries the intent.
-        if (lastField.state === 'unasked' || lastField.state === 'error') {
-          osmPinned.add(`${lastField.tx}/${lastField.ty}`);
-          void loadOsmTile(lastField.tx, lastField.ty);
+        const g = globeTapAt(e.clientX, e.clientY);
+        if (g || globeFree() <= 0) {
+          const [wx, wz] = g ?? chartToWorld(e.clientX, e.clientY);
+          // ON THE LINE a pin still opens — reading a place is not travelling
+          // to it, and the card's two travel actions are withheld there (see
+          // the site card). Empty ground still answers with the field query.
+          const pin = poiUnder(wx, wz, chartTapR());
+          if (pin) openSite(pin.x, pin.z, pin.name, null);
+          else {
+            lastField = fieldQuery(wx, wz);
+            lineNudge = performance.now();
+            try { void navigator.clipboard?.writeText(lastField.json); } catch { /* the toast still answers */ }
+            // A DELIBERATE TAP IS AN ASK. A tile the stream never reached — or
+            // one sitting out an error backoff — gets requested on the spot,
+            // pinned so the ring gate cannot drop it for being far from the
+            // truck. The query stays pure for the harness (__field probes
+            // never poke); the gesture is what carries the intent.
+            if (lastField.state === 'unasked' || lastField.state === 'error') {
+              osmPinned.add(`${lastField.tx}/${lastField.ty}`);
+              void loadOsmTile(lastField.tx, lastField.ty);
+            }
+          }
         }
       }
       tapAt = 0;
@@ -28265,6 +33072,20 @@ function autoCourse(): AutoPlan {
     return { pts: r, src: 'leg', width: 1.8, regain: false,
       endsHere: !!tail && end[0] === tail[0] && end[1] === tail[1] };
   }
+  // THE SOLVED ROUTE, when there is one. A mission's authored leg outranks it
+  // (that road IS the task); everything below it is the chain, which is what
+  // drives while the solver has no answer yet.
+  const gr = goalAhead(state.x, state.z, AUTO_REACH);
+  if (gr && goal && goalRoute) {
+    // THE END OF THE PLAN IS A DESTINATION, wherever it lands. When the goal
+    // is off the network the route stops at the road's closest approach and
+    // the truck should stop there too — driving past it, or wandering off the
+    // end of the course, is worse than arriving where the roads end.
+    const end = gr[gr.length - 1];
+    const tail = goalRoute[goalRoute.length - 1];
+    return { pts: gr, src: `route:${goal.name}`, width: 1.8, regain: false,
+      endsHere: Math.hypot(end[0] - tail[0], end[1] - tail[1]) < 1 };
+  }
   const w = wayAhead(state.x, state.z, state.heading, AUTO_REACH, AUTO_HOPS, false);
   // The road simply running out of streamed geometry is not a destination, so
   // `endsHere` stays false — braking for the edge of the data would be braking
@@ -28272,7 +33093,25 @@ function autoCourse(): AutoPlan {
   // Width: the carriageway's half minus the truck's own half and a margin —
   // what the racing line may actually spend.
   if (w && w.pts.length >= 2) {
-    return { pts: w.pts, endsHere: false, src: w.name ?? 'road', regain: false,
+    // ── ARRIVING IS PART OF DRIVING THERE ──
+    // With a goal in reach the course is cut at the point nearest it and
+    // declared a destination, so the speed plan brakes to a stop ON the
+    // place instead of carrying past it at road speed. Out of reach, or off
+    // to one side of the road the chain took, nothing changes: the drive
+    // continues and the goal keeps biasing the junctions.
+    const pts = w.pts;
+    if (goal) {
+      let bi = -1, bd = GOAL_REACH;
+      for (let i = 1; i < pts.length; i++) {
+        const d = Math.hypot(pts[i][0] - goal.x, pts[i][1] - goal.z);
+        if (d < bd) { bd = d; bi = i; }
+      }
+      if (bi > 0) {
+        return { pts: pts.slice(0, bi + 1), endsHere: true, src: `goal:${goal.name}`,
+          regain: false, width: Math.max(0, (w.hw ?? 0) - 1.5) };
+      }
+    }
+    return { pts, endsHere: false, src: w.name ?? 'road', regain: false,
       width: Math.max(0, (w.hw ?? 0) - 1.5) };
   }
   // ── NO ROAD UNDER THE WHEELS, AND WHAT TO DO ABOUT IT ──
@@ -28332,6 +33171,69 @@ const autoHandsOn = (): boolean => stick !== null || brakeId !== null || lift !=
   || ['w', 's', 'a', 'd', ' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright']
     .some((k) => keys.has(k));
 function stepAuto(dt: number, off: boolean): void {
+  // ARRIVED. Checked here rather than in the controller because a goal is
+  // reached whether the autopilot or a thumb did the driving.
+  if (goal) {
+    // ARRIVED — at the place, or at the end of the road that reaches for it.
+    // A goal off the network (a trig point, a lake's name, a fix dropped on a
+    // hillside) is never reached by driving, and a run that can never end is
+    // worse than one that ends honestly: standing at the plan's last node
+    // with the roads no closer IS the arrival, and the toast says how far the
+    // rest is on foot.
+    const dGoal = Math.hypot(goal.x - state.x, goal.z - state.z);
+    const tail = goalRoute?.[goalRoute.length - 1];
+    const atEnd = !!tail && Math.hypot(tail[0] - state.x, tail[1] - state.z) < GOAL_WITHIN
+      && goalShortM > GOAL_WITHIN && Math.abs(state.speed) < 1;
+    if (dGoal < GOAL_WITHIN || atEnd) {
+      goalDone = { name: goal.name, at: performance.now(),
+        shortM: dGoal < GOAL_WITHIN ? 0 : Math.round(dGoal) };
+      goal = null;
+      goalRoute = null;
+      goalSolveFor = '';
+    }
+  }
+  // ── SOLVE, AND RE-SOLVE AS THE WORLD ARRIVES ──
+  //
+  // Not every frame: the graph is every streamed segment and the walk is
+  // thousands of nodes. On the timer, and only when the answer could have
+  // changed — a different goal, or more road (osmDone) than the last solve
+  // saw. A route that exists and is still under the truck is left alone.
+  if (!goal) routeJob = null;
+  if (goal) {
+    const now = performance.now();
+    if (routeJob && routeJob.name !== goal.name) routeJob = null;   // the goal changed under it
+    if (routeJob) {
+      // A slice a frame until it lands; the route in force stays in force.
+      const t0 = performance.now();
+      routeJobStep(routeJob, ROUTE_SLICE_MS);
+      if (routeJob.phase === 'done') { routeJobFinish(routeJob); routeJob = null; }
+      profAdd('routeSolve', t0);
+    } else {
+      const want = `${goal.name}|${osmDone.size}|${ovWayV}`;
+      const onIt = !!goalRoute && !!goalAhead(state.x, state.z, 60);
+      let stale = goalSolveFor !== want
+        || (!goalRoute && now - goalSolveAt > GOAL_SOLVE_MS * 2)
+        || (!!goalRoute && !onIt);
+      if (stale && onIt && goalSolveFor !== want) {
+        // Only the survey grew, and the truck is on its plan: ask whether any
+        // of the new tiles could change it before paying for the answer.
+        const was = goalSolveFor.split('|'), is = want.split('|');
+        if (was[0] === is[0] && was[2] === is[2] && !freshTilesTouchRoute()) {
+          stale = false;
+          goalSolveFor = want;
+        }
+      }
+      if (stale && now - goalSolveAt > GOAL_SOLVE_MS) {
+        goalSolveAt = now;
+        osmFresh.length = 0;
+        routeJob = routeJobStart();
+        const t0 = performance.now();
+        routeJobStep(routeJob, ROUTE_SLICE_MS);
+        if (routeJob.phase === 'done') { routeJobFinish(routeJob); routeJob = null; }
+        profAdd('routeSolve', t0);
+      }
+    }
+  }
   // THE THUMB WINS. A tool that keeps driving while you are trying to take
   // over is not a tool, and the one time you most want to grab the wheel is
   // the one time it is going somewhere you did not intend. UNLESS the drone
@@ -28586,7 +33488,7 @@ const miniCam = new THREE.PerspectiveCamera(60, 1, 1, 30000); // the dock's POV 
  *  z −1.2) so the sightline clears the scuttle and runs down the bonnet. The
  *  seat put the horizon behind sheet metal; with the shell ghosted in cab
  *  mode the roof line reads as a frame around the road, not a ceiling. */
-const EYE = { x: 0.42, y: 2.16, z: -0.95 };
+const EYE = { ...rigModel.anchors.eye };
 /** Ghost the truck's shell for the through-the-cab views: still there — the
  *  bonnet is the speed reference peripheral vision steers by — but translucent
  *  enough to see the road through. depthWrite off so the world never sorts
@@ -28596,7 +33498,7 @@ function ghostCab(on: boolean): void {
     m.transparent = on;
     // The BODY reads a touch stronger than the glass and trim: the bonnet is
     // the speed reference peripheral vision steers by, the rest is just frame.
-    m.opacity = on ? (m === bodyMat ? 0.3 : 0.16) : 1;
+    m.opacity = on ? (m.color === bodyMat?.color ? 0.3 : 0.16) : 1;
     m.depthWrite = !on;
   }
 }
@@ -28658,7 +33560,21 @@ const DRONE = {
   // recover-it-from-a-field consequence with it. A flight pack charged off the
   // house battery is also simply what an overlander with a drone actually has.
   KWH: 0.9,           // the flight pack, kWh — 9% of the rig's, per sortie
-  CHG: 4.1,           // kW the rig pushes into it while it sits on the rack
+  // ── AND IT FILLS IN A STOP, NOT A DRIVE ──
+  //
+  // The rate was 4.1 kW, which is thirteen minutes on the rack for sixty-two
+  // seconds of air: twelve times the sortie it pays for, so the drone was one
+  // flight a session and the rack was where it lived. Reported from the seat
+  // as "it should charge a lot quicker when docked". Stated as the FILL TIME
+  // rather than a power, because the fill time is the thing being chosen and
+  // the kW is what falls out of it — 36 kW, which is a real number for a
+  // pack this small and reads on the draw gauge as the brief spike it is.
+  //
+  // THE ENERGY IS UNCHANGED, and that is the point: a sortie still costs 0.9
+  // kWh out of the truck's 10, still stops at the reserve, and the array
+  // still pays it back. What changes is that you get it back at a viewpoint
+  // instead of a quarter of an hour later.
+  FILL_S: 90,         // seconds on the rack to fill a flat pack
   RSV: 0.15,          // …and the rig charge it will not draw the truck below
 };
 const drone = {
@@ -28683,6 +33599,7 @@ const drone = {
  *  not lying in a field somewhere — a drone you have to go and collect is not
  *  plugged into anything, which is the whole cost of running it flat. */
 const droneHome = (): boolean => !drone.up && !drone.downed && !drone.falling;
+let droneYPrev = 0;   // last frame's height, for the climb rate the voice rides
 let droneMesh: THREE.Object3D | null = null;
 // THE PARTS THAT MOVE, held so the ceremony can move them. An airframe that
 // unfolds and spins up is the whole of a deploy worth watching, and none of it
@@ -29241,6 +34158,11 @@ const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` 
 // away exactly the moment they matter — you arrive at a place and it vanishes.
 // They now stay all the way in and switch to an in-range presentation instead.
 const POI_RANGE = 55;
+/** Art pixels a scenery pin's 3km catchment must span before two pins inside
+ *  it can be told apart at all. Sixteen is about a label's own height: below
+ *  that every pin in range is within one label of every other, which is a
+ *  stack of names rather than a map. */
+const POI_SPREAD_PX = 16;
 /**
  * ── HOW MUCH IS ON THE GLASS, AND TWO DOORS TO IT ──
  *
@@ -29337,11 +34259,32 @@ function updatePois(): void {
   // OFF is off — and it has to clear the list rather than skip the rebuild, or
   // the last frame's pins stay painted and tappable for ever.
   if (poiVis === 0) { poiDraw = []; return; }
+  // ── AND AT PLANET ZOOM, NONE OF IT AT ALL ──
+  //
+  // The planet is not the fine world's map. Once the globe owns the frame the
+  // ENTIRE pin table — pinned entries included — is inside one art pixel of
+  // its centre, so every marker is a claim about a place it cannot possibly
+  // distinguish. The globe's own gold pin is the one marker that means
+  // anything out there, and it says the thing all of these were reduced to
+  // saying: this is where you are. Both lists are CLEARED rather than skipped:
+  // a list that is merely not rebuilt stays painted and stays tappable, which
+  // is the bug the `poiVis === 0` line above already carries a note about.
+  if (globeFree() > 0) { poiDraw = []; cpDraw = []; return; }
   const all = [...pois.values()].filter((p) => !lineOn || LINE_KINDS.has(p.kind))
     .map((p) => ({ p, d: Math.hypot(p.x - vx, p.z - vz) }));
   // See POI_PIN_NEAR: a pin you are standing on is describing something already
   // filling the frame.
-  const pinned = all.filter((e) => e.p.pinned && e.d > POI_PIN_NEAR).sort((a, b) => a.d - b.d);
+  //
+  // …EXCEPT A DOWNED DRONE, WHICH IS THE ONE THING YOU CANNOT SEE. Every
+  // other pinned POI is a PLACE — a town, a mission's destination, the rig —
+  // and at sixty metres a place does fill the frame. A drone lying in fynbos
+  // is a shoebox in waist-high scrub, and the last sixty metres are exactly
+  // the ones you need the marker for: reported from the seat as the pin
+  // vanishing on the approach, which is the moment it stops being a bearing
+  // and starts being a search. It keeps its pin all the way to the pickup,
+  // and the pickup itself is what clears it (see droneStep).
+  const pinned = all.filter((e) => e.p.pinned
+    && (e.d > POI_PIN_NEAR || e.p.kind === 'drone')).sort((a, b) => a.d - b.d);
   // A pinned waypoint SHADOWS its namesake from the OSM stream: the mission's
   // ADMIN OFFICE and the mapped Admin Office are the same place, and two pins
   // 10m apart reading the same name is a defect, not information.
@@ -29350,9 +34293,29 @@ function updatePois(): void {
   // pinned entries always come first and always survive — that is what pinned
   // means — so the mode only ever changes how much SCENERY rides along.
   const cap = poiVis === 1 ? 0 : poiVis === 3 ? 8 : 3;
+  // ── THE SCENERY GOES AS THE CHART OUTGROWS IT ──
+  //
+  // Every unpinned pin is drawn from a 3km catchment, which is a fact about the
+  // fine world. On a chart whose frame is a hundred kilometres across, three
+  // kilometres is a handful of art pixels: every label points at the same spot,
+  // they stack into a column of lanes down the glass, and not one of them says
+  // where anything is. Reported from the seat as fine labels — "BERGRIVIER
+  // 1.3KM" — still drawing at planet zoom.
+  //
+  // The rule is the catchment's own: two pins can only be told apart while the
+  // ground between them spans more than a label, so the scenery stops exactly
+  // where it stops being able to. `POI_SPREAD_PX` is stated in ART pixels
+  // because that is the buffer the picture is quantised into — see the
+  // rendering doctrine — and it is the one scale every wide-chart term here is
+  // keyed on (`chartMpp`).
+  //
+  // PINNED ENTRIES SURVIVE IT, because being far away is the whole point of a
+  // destination, the rig, a downed drone or a dropped fix.
+  const wideChart = chartMpp() * POI_SPREAD_PX > 3000;
   const near = pinned.concat(
-    all.filter((e) => !e.p.pinned && e.d < 3000 && !shadowed.has(e.p.name.toUpperCase()))
-      .sort((a, b) => a.d - b.d).slice(0, Math.max(0, cap - Math.min(2, pinned.length))),
+    nearestStable(all.filter((e) => !e.p.pinned && !wideChart
+      && e.d < 3000 && !shadowed.has(e.p.name.toUpperCase())),
+      Math.max(0, cap - Math.min(2, pinned.length)), e => e.d),
   );
   camera.getWorldDirection(camFwd);
   poiDraw = [];
@@ -29518,12 +34481,30 @@ function updatePois(): void {
  */
 const PEAK_SHOW = 3;
 /** Why each summit did or did not reach the glass this frame — see __peaks. */
-let peakGates = { cands: 0, near: 0, sunk: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
-/** A summit must HOLD its verdict before the glass believes it — 350ms to
- *  appear, 900ms to go — and its screen point is smoothed, so a bobbing
- *  camera and a 120ms depth cadence cannot make a name blink or shiver.
- *  Coming back is cheaper than arriving: a label that just left was probably
- *  real. */
+let peakGates = { cands: 0, near: 0, sunk: 0, belowEye: 0, kept: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
+/**
+ * A summit must HOLD its verdict before the glass believes it, and its screen
+ * point is smoothed, so a bobbing camera and a 120ms depth cadence cannot make
+ * a name blink or shiver.
+ *
+ * ── ARRIVING IS EXPENSIVE, LEAVING IS CHEAP ──
+ *
+ * The appear gate was 350ms, which is under the noise: a peak coming out from
+ * behind a ridge at driving speed, or one the depth map forgives for a frame
+ * or two, put its name on the glass and took it away again — reported from
+ * the seat as labels popping in and out. Two and a half seconds of a verdict
+ * that does not waver is the bar now. It is deliberately far longer than the
+ * 900ms it takes to lose one: a label that has just left was probably real
+ * and is cheap to restore, while a label that flickers on is a claim the
+ * world has not settled enough to make. A summit whose raw verdict wavers at
+ * all never latches, because every flip restarts the clock.
+ *
+ * AND A PEAK ARRIVES OFF. The first sighting used to seed `on` from its own
+ * first verdict, so a summit entering range on a lucky frame was drawn
+ * instantly and the gate applied to everything except the case it was written
+ * for. Every peak starts hidden and earns its label.
+ */
+const PEAK_ON_MS = 2500, PEAK_OFF_MS = 900;
 const peakSeen = new Map<string, { on: boolean; raw: boolean; rawAt: number; sx: number; sy: number }>();
 /** HUD pixels the summit triangle floats above the apex it points at. Four is
  *  the mark's own height, so this clears it completely without letting it
@@ -29553,7 +34534,7 @@ function updatePeaks(vx: number, vz: number): void {
   // heading. What belongs on the glass is the biggest summits ON the glass.
   const seen: Array<{ p: Peak; d: number; app: number;
     sx: number; sy: number; wx: number; wz: number; wy: number }> = [];
-  peakGates = { cands: cands.length, near: 0, sunk: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
+  peakGates = { cands: cands.length, near: 0, sunk: 0, belowEye: 0, kept: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
   for (const p of cands) {
     const l = peakLook(p, vx, vz, eyeY);
     // IN VIEW IS THE LAW, NOT DISTANCE. This gate has come down twice on the
@@ -29564,13 +34545,27 @@ function updatePeaks(vx: number, vz: number): void {
     // that (your eye is above the apex). 250m keeps a label from sitting on
     // the bonnet, nothing more.
     if (l.d < 250) { peakGates.near++; continue; }
-    // BELOW THE HORIZON IS NOT A VIEW. These markers used to survive as
-    // ghosted bearings — Mount Whitney from the Big Sur coast, 330km off and
-    // 8.5km under the curve — but a label on something the earth is in front
-    // of is furniture, not information. A summit is drawn when it can be
-    // seen, which is the same law the frustum check below already applies
-    // sideways.
-    if (l.rise <= 0) { peakGates.sunk++; continue; }
+    // ── UNDER THE EARTH'S BULGE, NOT MERELY UNDER YOU ──
+    //
+    // This rejected every summit whose apex sat below the EYE, which
+    // confuses two different things. One is a mountain the world's curve is
+    // in front of — Mount Whitney from the Big Sur coast, 330km off and
+    // 8.5km under — and that is furniture, correctly dropped. The other is
+    // a mountain simply BELOW you, which is every summit seen from a pass or
+    // a high shelf: plainly in view, and nameless. At the Senqu shelf the
+    // old test threw away 56 of 106 candidates before the depth map ever
+    // saw them.
+    //
+    // The eye's own height buys horizon: sqrt(2Rh). Inside that distance the
+    // curve hides nothing at all, whatever the apex's height relative to the
+    // eye; beyond it, the line of sight rises off the surface as
+    // (d - sqrt(2Rh))^2 / 2R, and only a summit under THAT is hidden. The
+    // terrain in between is `peakBlocked`'s business, not this gate's.
+    // `belowEye` is what the old test dropped and `kept` what this one saves:
+    // the two numbers that say whether a high vantage is being censored.
+    if (l.rise <= 0) peakGates.belowEye++;
+    if (peakUnderCurve(p, l.d, eyeY, vx, vz)) { peakGates.sunk++; continue; }
+    if (l.rise <= 0) peakGates.kept++;
     const dx = p.x - vx, dz = p.z - vz;
     const dc = Math.min(l.d, 900);                   // the pin's own stand-off
     const wx = vx + (dx / l.d) * dc, wz = vz + (dz / l.d) * dc;
@@ -29578,7 +34573,11 @@ function updatePeaks(vx: number, vz: number): void {
     // of frame in chase pitch, so an apex-true marker never drew exactly
     // where the shell dominates the view. Its label sits lower, ON the dome's
     // mass (anywhere on the thing is honest); a summit keeps its true angle.
-    const wy = eyeY + (p.r ? Math.min(l.app, 0.16) : Math.max(l.app, 0.004)) * dc;
+    // A summit BELOW the eye is placed below the horizon, where it is. The
+    // old floor of 0.004 lifted every marker to just over the horizontal,
+    // which was invisible while the sunk gate meant nothing below the eye
+    // ever got here, and would now put a valley's peak in the sky.
+    const wy = eyeY + (p.r ? Math.min(l.app, 0.16) : l.app) * dc;
     poiVec.set(wx, wy, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
     if (poiView.z >= -1) { peakGates.behind++; continue; }   // behind the camera
@@ -29610,14 +34609,32 @@ function updatePeaks(vx: number, vz: number): void {
   let drawn = 0;
   for (let i = 0; i < seen.length && drawn < PEAK_SHOW; i++) {
     const e = seen[i];
-    const hidden = lumaPrimed
-      ? !depthVisible(e.p.x, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) + 6, e.p.z)
-      : peakBlocked(e.p, vx, vz, eyeY, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) - eyeY, e.d);
+    // ── TWO EYES, AND EITHER MAY SAY NO ──
+    //
+    // The depth map was the sole authority whenever it was primed, and it has
+    // one pardon that a distant summit walks straight through: past 25km it
+    // scans several rows ABOVE the apex for sky, because the analytic curve
+    // and the renderer's disagree by whole grid rows at that range (Bears
+    // Ears, 68km). At 25-47km those rows are about eighty screen pixels —
+    // enough to clear a ridge a kilometre away and find the sky over it.
+    // Photographed in the Senqu: THABA-NTSO at 25.3km and QUTHING DISTRICT
+    // HIGH POINT at 47.1km, both marked INSIDE the hillside that hides them,
+    // while the sight line through that hillside stood 16m and 23m over the
+    // line to each.
+    //
+    // So the geometric march is not the fallback any more, it is a VETO. The
+    // depth map keeps what it is good at — the near occluders no heightfield
+    // knows, a building, the wall of a cutting, a tree — and the march keeps
+    // what IT is good at: a ridge ten kilometres out that the depth buffer
+    // either did not draw or forgave. A summit has to pass both.
+    const rise = e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) - eyeY;
+    const hidden = peakBlocked(e.p, vx, vz, eyeY, rise, e.d)
+      || (lumaPrimed && !depthVisible(e.p.x, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) + 6, e.p.z));
     const nowMs = performance.now();
     let st = peakSeen.get(e.p.name);
-    if (!st) { st = { on: !hidden, raw: !hidden, rawAt: nowMs, sx: e.sx, sy: e.sy }; peakSeen.set(e.p.name, st); }
+    if (!st) { st = { on: false, raw: !hidden, rawAt: nowMs, sx: e.sx, sy: e.sy }; peakSeen.set(e.p.name, st); }
     if (st.raw !== !hidden) { st.raw = !hidden; st.rawAt = nowMs; }
-    if (st.on !== st.raw && nowMs - st.rawAt > (st.raw ? 350 : 900)) st.on = st.raw;
+    if (st.on !== st.raw && nowMs - st.rawAt > (st.raw ? PEAK_ON_MS : PEAK_OFF_MS)) st.on = st.raw;
     st.sx += (e.sx - st.sx) * 0.25; st.sy += (e.sy - st.sy) * 0.25;
     if (!st.on) { peakGates.blocked++; continue; }
     drawn++;
@@ -29642,7 +34659,7 @@ interface CpDraw { x: number; y: number; tx: number; ty: number; got: boolean; a
 let cpDraw: CpDraw[] = [];
 /** One screen-space stretch of the active way on the chart — the line the
  *  pips are pearls on. Built only in top mode. */
-interface RoadSeg { x1: number; y1: number; x2: number; y2: number; task: boolean; d: number }
+interface RoadSeg { x1: number; y1: number; x2: number; y2: number; task: boolean; route?: boolean; far?: boolean; d: number }
 let roadSegs: RoadSeg[] = [];
 // The line is drawn from the way's REAL centreline geometry, not by joining
 // checkpoints: the survey lays checkpoints fragment by fragment in tile-load
@@ -29653,19 +34670,28 @@ let roadSegs: RoadSeg[] = [];
 // frame, because a cached projection slides against the scene the moment the
 // camera pans.
 interface RoadLineSeg { ax: number; ay: number; az: number; bx: number; by: number; bz: number;
-  mx: number; mz: number; task: boolean }
+  mx: number; mz: number; task: boolean; route?: boolean; far?: boolean }
 let roadLineWorld: RoadLineSeg[] = [];
 let roadLineKey = ''; let roadLineAt = -1e9;
 function refreshRoadLine(via: string | undefined, cur: string | undefined, now: number): void {
-  const key = `${via ?? ''}|${cur ?? ''}|${routeFor}|${routeXZ.length}`;
+  const key = `${via ?? ''}|${routeFor}|${routeXZ.length}|${goal?.name ?? ''}|${goalRoute?.length ?? 0}`;
   if (key === roadLineKey && now - roadLineAt < 1000) return;
   roadLineKey = key; roadLineAt = now;
   roadLineWorld = [];
-  if (!via && !cur) return;
+  // ── THE ROAD UNDER THE WHEELS IS NOT A NAVIGATION LAYER ──
+  //
+  // This used to trace every streamed segment sharing the CURRENT road's name
+  // in teal, so the chart could answer "which way does this run". The chart
+  // draws the roads itself now, and since the drive gained a solved route the
+  // teal was competing with the one line that is actually a plan — two
+  // highlights, neither obviously the answer to "where am I going". So the
+  // named-road pass keeps only the TASK's via, and the plan gets its own
+  // line below.
+  if (!via && !goalRoute) return;
   const seen = new Set<string>();
   for (const arr of roadGrid.values()) {
     for (const s of arr) {
-      if ((s.nm !== via && s.nm !== cur) || !s.nm) continue;
+      if (!via || s.nm !== via) continue;
       // The grid buckets a segment into every 24m cell it crosses — one copy.
       const k = `${s.ax.toFixed(1)},${s.az.toFixed(1)},${s.bx.toFixed(1)},${s.bz.toFixed(1)}`;
       if (seen.has(k)) continue;
@@ -29690,6 +34716,25 @@ function refreshRoadLine(via: string | undefined, cur: string | undefined, now: 
         ax, ay: groundAt(ax, az) + 1.2, az,
         bx, by: groundAt(bx, bz) + 1.2, bz,
         mx: (ax + bx) / 2, mz: (az + bz) / 2, task: true,
+      });
+    }
+  }
+  // THE PLAN, drawn last so it reads over everything: the solved route to the
+  // goal. Its own flag, because on the chart it is dotted and its own colour —
+  // a line you are going to drive, not a road that exists.
+  if (goalRoute && goalRoute.length >= 2) {
+    for (let i = 1; i < goalRoute.length && roadLineWorld.length < 1100; i++) {
+      const [ax, az, at] = goalRoute[i - 1], [bx, bz, bt] = goalRoute[i];
+      roadLineWorld.push({
+        ax, ay: groundAt(ax, az) + 1.2, az,
+        bx, by: groundAt(bx, bz) + 1.2, bz,
+        // THE PLAN HAS TWO CONFIDENCES NOW and the chart says which. The near
+        // half is the surveyed road and the truck can be steered down it; the
+        // far half is the chart's own coarse network, right about the valley
+        // and out by a hundred metres about the tarmac. Drawing them alike
+        // would promise a precision the far half does not have.
+        mx: (ax + bx) / 2, mz: (az + bz) / 2, task: false, route: true,
+        far: !!(at || bt),
       });
     }
   }
@@ -29727,7 +34772,7 @@ function projectRoadLine(): void {
     roadSegs.push({
       x1, y1,
       x2: (poiVec.x * 0.5 + 0.5) * innerWidth, y2: (-poiVec.y * 0.5 + 0.5) * innerHeight,
-      task: s.task, d: Math.hypot(s.mx - state.x, s.mz - state.z),
+      task: s.task, route: s.route, far: s.far, d: Math.hypot(s.mx - state.x, s.mz - state.z),
     });
   }
 }
@@ -29870,640 +34915,45 @@ function updateCps(): void {
 // nodes, no assets — and it must be armed by a gesture (iOS autoplay policy).
 (window as unknown as { __armAudio?: object }).__armAudio = (): string => { audio.arm(); return audio.state; };
 (window as unknown as { __mix?: object }).__mix = (): object => audio.mix();
-/** What the truck HIT, material and all — kept regardless of whether the
- *  audio context is armed, because the harness verifies with this list what
- *  an ear cannot: that a rail clangs, a rock crunches, a façade crashes. */
-type ImpactKind = 'shell' | 'metal' | 'stone' | 'wood';
-const impactLog: Array<{ t: number; kind: ImpactKind; force: number }> = [];
-(window as unknown as { __impacts?: object }).__impacts = (): object => impactLog.slice(-25);
-const audio = (() => {
-  let ctx: AudioContext | null = null;
-  let master: GainNode | null = null;
-  let engA: OscillatorNode, engB: OscillatorNode, engFilt: BiquadFilterNode, engGain: GainNode;
-  let roarGain: GainNode, roarFilt: BiquadFilterNode, windGain: GainNode, windFilt: BiquadFilterNode;
-  let gritSrc: AudioBufferSourceNode, gritGain: GainNode, gritFilt: BiquadFilterNode;
-  let squealGain: GainNode, squealFilt: BiquadFilterNode, squealOsc: OscillatorNode;
-  let scrapeGain: GainNode, scrapeFilt: BiquadFilterNode;
-  let waterGain: GainNode, waterFilt: BiquadFilterNode;
-  let rustleGain: GainNode, rustleFilt: BiquadFilterNode;
-  let riverGain: GainNode, riverFilt: BiquadFilterNode;
-  let brushGain: GainNode, brushFilt: BiquadFilterNode;
-  let crashAt = 0, creakAt = 0;   // one-shot cooldowns — a scrape is not a drum roll
-  let birdAt = 0;                 // next phrase, spaced by how alive the spot is
-  let scrapeLast = 0;             // the scrape's live level, for the sidechain below
-  let noiseBuf: AudioBuffer;
-  let on = true;
-  try { on = localStorage.getItem('drive.mute') !== '1'; } catch { /* fine */ }
-  const build = (): void => {
-    const AC = (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext });
-    const Ctor = AC.AudioContext ?? AC.webkitAudioContext;
-    if (!Ctor) return;
-    ctx = new Ctor();
-    master = ctx.createGain();
-    master.gain.value = on ? 0.55 : 0;
-    master.connect(ctx.destination);
-    // Two seconds of white noise, looped — the source of tires and wind.
-    noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
-    const d = noiseBuf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    // Engine: detuned saw + square through a lowpass that opens with revs.
-    engFilt = ctx.createBiquadFilter(); engFilt.type = 'lowpass'; engFilt.frequency.value = 700;
-    engGain = ctx.createGain(); engGain.gain.value = 0;
-    engFilt.connect(engGain); engGain.connect(master);
-    engA = ctx.createOscillator(); engA.type = 'sawtooth'; engA.frequency.value = 40;
-    engB = ctx.createOscillator(); engB.type = 'square'; engB.frequency.value = 60;
-    const engMix = ctx.createGain(); engMix.gain.value = 0.5;
-    engA.connect(engFilt); engB.connect(engMix); engMix.connect(engFilt);
-    engA.start(); engB.start();
-    // Tire roar: bandpassed noise, centre frequency set by the surface.
-    const roarSrc = ctx.createBufferSource(); roarSrc.buffer = noiseBuf; roarSrc.loop = true;
-    roarFilt = ctx.createBiquadFilter(); roarFilt.type = 'bandpass'; roarFilt.frequency.value = 300; roarFilt.Q.value = 0.7;
-    roarGain = ctx.createGain(); roarGain.gain.value = 0;
-    roarSrc.connect(roarFilt); roarFilt.connect(roarGain); roarGain.connect(master); roarSrc.start();
-    // GRIT: the gravel bed. Not steady noise — a few seconds of individual
-    // stone impacts (sharp attack, short decay, random pitch), looped and
-    // sped up with the truck so loose ground CRUNCHES rather than hisses.
-    const gritBuf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
-    const gd = gritBuf.getChannelData(0);
-    const grains = Math.floor(ctx.sampleRate * 4 * 0.012); // ~530 stones/sec of loop
-    for (let g = 0; g < grains; g++) {
-      const at = Math.floor(Math.random() * (gd.length - 900));
-      const len = 60 + Math.floor(Math.random() * 700);
-      const amp = 0.25 + Math.random() * 0.75;
-      const ring = 0.04 + Math.random() * 0.5; // a little pitch per stone
-      for (let i = 0; i < len; i++) {
-        const env = Math.exp((-i / len) * 6);
-        gd[at + i] += (Math.random() * 2 - 1) * env * amp * 0.5 + Math.sin(i * ring) * env * amp * 0.12;
-      }
-    }
-    let peak = 0;
-    for (let i = 0; i < gd.length; i++) peak = Math.max(peak, Math.abs(gd[i]));
-    if (peak > 0) for (let i = 0; i < gd.length; i++) gd[i] /= peak;
-    gritSrc = ctx.createBufferSource(); gritSrc.buffer = gritBuf; gritSrc.loop = true;
-    gritFilt = ctx.createBiquadFilter(); gritFilt.type = 'bandpass'; gritFilt.frequency.value = 1400; gritFilt.Q.value = 0.5;
-    gritGain = ctx.createGain(); gritGain.gain.value = 0;
-    gritSrc.connect(gritFilt); gritFilt.connect(gritGain); gritGain.connect(master); gritSrc.start();
-    // SQUEAL: a tyre that is sliding rather than rolling. Noise through a very
-    // narrow bandpass, plus a thin sawtooth at the same pitch so it has an edge
-    // — pure filtered noise reads as wind, not rubber.
-    const sqSrc = ctx.createBufferSource(); sqSrc.buffer = noiseBuf; sqSrc.loop = true;
-    squealFilt = ctx.createBiquadFilter(); squealFilt.type = 'bandpass';
-    squealFilt.frequency.value = 1500; squealFilt.Q.value = 14;
-    squealGain = ctx.createGain(); squealGain.gain.value = 0;
-    sqSrc.connect(squealFilt);
-    squealOsc = ctx.createOscillator(); squealOsc.type = 'sawtooth'; squealOsc.frequency.value = 1500;
-    const sqMix = ctx.createGain(); sqMix.gain.value = 0.09;   // the EDGE — noise alone reads as wind
-    squealOsc.connect(sqMix); sqMix.connect(squealFilt);
-    squealFilt.connect(squealGain); squealGain.connect(master);
-    sqSrc.start(); squealOsc.start();
-    // Wind: highpassed noise that climbs with the square of speed.
-    const windSrc = ctx.createBufferSource(); windSrc.buffer = noiseBuf; windSrc.loop = true;
-    windFilt = ctx.createBiquadFilter(); windFilt.type = 'highpass'; windFilt.frequency.value = 900;
-    windGain = ctx.createGain(); windGain.gain.value = 0;
-    windSrc.connect(windFilt); windFilt.connect(windGain); windGain.connect(master); windSrc.start();
-    // Scrape: the continuous half of a collision — bodywork dragged along a
-    // wall or rail. A mid bandpass with some bite; gain rides contact + speed.
-    const scSrc = ctx.createBufferSource(); scSrc.buffer = noiseBuf; scSrc.loop = true;
-    scrapeFilt = ctx.createBiquadFilter(); scrapeFilt.type = 'bandpass';
-    scrapeFilt.frequency.value = 640; scrapeFilt.Q.value = 2.4;
-    scrapeGain = ctx.createGain(); scrapeGain.gain.value = 0;
-    scSrc.connect(scrapeFilt); scrapeFilt.connect(scrapeGain); scrapeGain.connect(master); scSrc.start();
-    // Water: the wash of a hull pushing through it — low, wide, speed-driven.
-    const waSrc = ctx.createBufferSource(); waSrc.buffer = noiseBuf; waSrc.loop = true;
-    waterFilt = ctx.createBiquadFilter(); waterFilt.type = 'bandpass';
-    waterFilt.frequency.value = 420; waterFilt.Q.value = 0.8;
-    waterGain = ctx.createGain(); waterGain.gain.value = 0;
-    waSrc.connect(waterFilt); waterFilt.connect(waterGain); waterGain.connect(master); waSrc.start();
-    // ── the world without the car ──
-    // Rustle: leaves as high thin noise the wind pushes around; River: the
-    // steady wide wash of moving water nearby. Both live under everything
-    // and only surface when the truck lets them (see ambience()).
-    const ruSrc = ctx.createBufferSource(); ruSrc.buffer = noiseBuf; ruSrc.loop = true;
-    rustleFilt = ctx.createBiquadFilter(); rustleFilt.type = 'bandpass';
-    rustleFilt.frequency.value = 1750; rustleFilt.Q.value = 0.5;
-    rustleGain = ctx.createGain(); rustleGain.gain.value = 0;
-    ruSrc.connect(rustleFilt); rustleFilt.connect(rustleGain); rustleGain.connect(master); ruSrc.start();
-    const rvSrc = ctx.createBufferSource(); rvSrc.buffer = noiseBuf; rvSrc.loop = true;
-    riverFilt = ctx.createBiquadFilter(); riverFilt.type = 'bandpass';
-    riverFilt.frequency.value = 470; riverFilt.Q.value = 0.8;
-    riverGain = ctx.createGain(); riverGain.gain.value = 0;
-    rvSrc.connect(riverFilt); riverFilt.connect(riverGain); riverGain.connect(master); rvSrc.start();
-    // Brush: FOLIAGE ON THE BODYWORK — higher and thinner than the rustle
-    // bed, because these leaves are against the panels, not across the
-    // valley. Gain rides contact + speed like the scrape it is cousin to.
-    const brSrc = ctx.createBufferSource(); brSrc.buffer = noiseBuf; brSrc.loop = true;
-    brushFilt = ctx.createBiquadFilter(); brushFilt.type = 'bandpass';
-    brushFilt.frequency.value = 2400; brushFilt.Q.value = 0.7;
-    brushGain = ctx.createGain(); brushGain.gain.value = 0;
-    brSrc.connect(brushFilt); brushFilt.connect(brushGain); brushGain.connect(master); brSrc.start();
-  };
-  const arm = (): void => {
-    // ── MUTED MEANS NO CONTEXT AT ALL ──
-    //
-    // Building the graph and turning the master gain to zero is not silence,
-    // it is silence WITH THE AUDIO HARDWARE HELD. On a phone that is enough to
-    // duck or stop whatever the player was listening to — reported from the
-    // seat as the game stealing audio with the dial off, which is exactly what
-    // it did. There is nothing to arm when the answer is no sound: `toggle`
-    // calls arm() on the way back up, so the graph is built the moment it is
-    // actually wanted.
-    if (!on) return;
-    // ── AND WHEN IT IS WANTED, IT SHARES ──
-    //
-    // 'playback' is the category that says "I am the thing you are listening
-    // to", and iOS honours it by interrupting everyone else. That was chosen
-    // to beat the RINGER SWITCH, which silences Web Audio otherwise — a real
-    // problem, fixed at the cost of killing the player's podcast.
-    //
-    // 'ambient' is the other side of that trade and the right one for a game:
-    // it MIXES, so music keeps playing underneath. The cost is honest and
-    // worth stating — with the ringer switch off, the game is silent, which is
-    // how every other game on the phone behaves and what a player flicking
-    // that switch is asking for.
-    try {
-      const ns = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
-      if (ns) ns.type = 'ambient';
-    } catch { /* not supported — silent switch still applies */ }
-    if (!ctx) build();
-    if (!ctx) return;
-    // Must be *inside* the gesture: resume, then push a 1-sample silent buffer
-    // through — Safari only truly unlocks once something has been played.
-    if (ctx.state !== 'running') void ctx.resume();
-    try {
-      const s = ctx.createBufferSource();
-      s.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
-      s.connect(ctx.destination);
-      s.start(0);
-    } catch { /* fine */ }
-    syncBtn();
-  };
-  return {
-    arm,
-    /** The MIX, measured — what each channel's gain actually is right now,
-     *  because "should be audible" has been asserted from this desk twice
-     *  and disproved from the seat twice. Numbers or it did not happen. */
-    mix(): object {
-      const g = (n: GainNode | undefined): number => +(n?.gain.value ?? 0).toFixed(3);
-      return { state: ctx?.state ?? 'none', on,
-        eng: g(engGain), roar: g(roarGain), squeal: g(squealGain), scrape: g(scrapeGain),
-        grit: g(gritGain), wind: g(windGain), brush: g(brushGain),
-        rustle: g(rustleGain), river: g(riverGain), water: g(waterGain) };
-    },
-    /** Stand the graph down — a backgrounded tab must not keep an engine
-     *  running in it. `arm()` brings it back. */
-    hush(): void { try { void ctx?.suspend(); } catch { /* fine */ } },
-    get on(): boolean { return on; },
-    get state(): string { return ctx ? ctx.state : 'none'; },
-    toggle(): boolean {
-      on = !on;
-      try { localStorage.setItem('drive.mute', on ? '0' : '1'); } catch { /* fine */ }
-      if (on) arm();
-      if (master && ctx) master.gain.setTargetAtTime(on ? 0.55 : 0, ctx.currentTime, 0.05);
-      // MUTING GIVES THE HARDWARE BACK. A suspended context releases the audio
-      // session, so turning the dial off mid-drive stops ducking whatever else
-      // is playing rather than merely going quiet over the top of it.
-      if (!on) { try { void ctx?.suspend(); } catch { /* fine */ } }
-      return on;
-    },
-    // Called every frame; all parameters glide so nothing zippers.
-    /**
-     * `q` is the ground's own QUALITY, 0 a sand piste and 1 new asphalt, and it
-     * is what lets a surface sound like itself. The three-tier road/track/
-     * ground split was audible but coarse: cobbles sounded like an autobahn
-     * and a grade-5 forestry track like a graded gravel road, because the tier
-     * is all the mixer was told. `spin` is the wheels asking for more than the
-     * ground will give — the sound of traction being lost rather than of a
-     * surface being crossed.
-     */
-    update(speed: number, throttle: number, surf: Surface, grounded: number, rainAmt = 0, rev = 0, gear = 0, slip = 0,
-      q = 1, spin = 0, ambWind = 0, engF = 1): void {
-      if (!ctx || !master || ctx.state !== 'running') return;
-      const t = ctx.currentTime, v = Math.abs(speed);
-      // THE EVENT LEVELS FIRST, because the whole bed answers to them.
-      // A SEALED SURFACE SQUEALS; LOOSE GROUND JUST HISSES — the bite
-      // follows the quality rather than the tier. A SKID IS BOTH AXES, and
-      // THE LAMP AND THE EAR MUST AGREE: the HUD calls SLIP from 0.06 and
-      // the 0.55 curve opens the voice there rather than at a committed
-      // slide.
-      // …with a FLOOR under the sealed tiers. slip-sig caught the real
-      // silencer at last: q read 0.2 ON THE ROAD at Chapman's (worst-wheel
-      // sampling off the verge, thin surface data — either way), and
-      // 0.2^1.6 throttled a healthy skid signal to nothing. A worn road
-      // still screeches — only genuinely loose ground gets to not sing.
-      const bite = surf === 'road' ? Math.max(Math.pow(clamp(q, 0, 1), 1.6), 0.55)
-        : surf === 'track' ? Math.max(Math.pow(clamp(q, 0, 1), 1.6), 0.25) : 0.12;
-      const sq2 = Math.pow(clamp(Math.max(slip, spin * 0.85), 0, 1), 0.55);
-      const sqT = sq2 * bite * grounded * Math.min((v + spin * 9) / 8, 1) * 0.6;
-      // THE SIDECHAIN. Measured at Chapman's Peak (mix-audit): scrape peaked
-      // at 0.08 and squeal at 0.03 against an engine at 0.34 and grit at
-      // 0.40 — no per-channel raise wins against that bed, which is why two
-      // rounds of raises changed nothing from the seat. When rubber or
-      // bodywork speaks, the steady bed steps back; every real mix works
-      // this way.
-      const duck = 1 - 0.55 * clamp((sqT + scrapeLast * 1.2) * 2.2, 0, 1);
-      // Revs come from the DRIVETRAIN, not from road speed — the two part
-      // company the moment the wheels leave the ground, and the flare over a
-      // jump is the whole reason for the distinction.
-      const f = 42 + rev * 96 + gear * 10;
-      engA.frequency.setTargetAtTime(f, t, 0.07);
-      engB.frequency.setTargetAtTime(f * 1.5, t, 0.07);
-      engFilt.frequency.setTargetAtTime(500 + rev * 1500 + v * 22, t, 0.09);
-      // Airborne the engine gets LOUDER, not quieter: it is unloaded and
-      // screaming. Multiplying by `grounded` had it fade out over every jump.
-      // `engF` is the IGNITION: 1 running, a fraction while the starter
-      // turns it, 0 with the key off — the whole engine voice hangs on it.
-      engGain.gain.setTargetAtTime(
-        (0.1 + Math.abs(throttle) * 0.16 * (0.45 + 0.55 * grounded)
-          + (1 - grounded) * rev * 0.1 + Math.min(v / 60, 0.1)) * engF * duck, t, 0.09,
-      );
-      // Rubber that has stopped rolling — the levels were derived up top;
-      // here it just sings at its pitch.
-      const sf = 1250 + Math.min(v * 14, 620) + sq2 * 260;
-      squealFilt.frequency.setTargetAtTime(sf, t, 0.08);
-      squealOsc.frequency.setTargetAtTime(sf, t, 0.08);
-      squealGain.gain.setTargetAtTime(sqT, t, 0.06);
-      // Tarmac hisses high and thin; loose ground growls low and loud. A graded
-      // track sits between the two — you can hear which tier you are on.
-      const road = surf === 'road';
-      // HOW HARD THE GROUND IS, continuously. This is the number the ear reads
-      // as "what am I driving on" before the handling has said anything: a
-      // high thin hiss on new tarmac, sliding down to a low growl as the
-      // surface coarsens, and gone altogether on open ground.
-      const hard = surf === 'water' ? 0 : surf === 'road' || surf === 'track'
-        ? clamp(q, 0, 1) : 0.08;
-      roarFilt.frequency.setTargetAtTime(320 + hard * 830, t, 0.12);
-      roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (0.26 - hard * 0.16) * grounded * duck, t, 0.1);
-      // Rain rides the wind channel: same filtered noise, opened up and
-      // lifted — and so does the WEATHER'S wind, which blows whether or not
-      // the truck moves: a parked truck on a gusty pass is not silent.
-      windFilt.frequency.setTargetAtTime(900 - rainAmt * 500 - ambWind * 250, t, 0.4);
-      windGain.gain.setTargetAtTime(
-        Math.min((v * v) / 2600, 0.9) * 0.13 + rainAmt * 0.16 + ambWind * 0.09, t, 0.15);
-      // Gravel: absent on tarmac, dominant off it. Rate (playbackRate) AND
-      // level rise with speed, so the crunch density tracks the wheels.
-      // …and the grit is its complement, plus whatever the wheels are throwing
-      // up because they have stopped hooking up. A spinning wheel on gravel is
-      // the loudest thing the truck does.
-      const loose = surf === 'water' ? 0.12
-        : clamp(1 - Math.pow(clamp(q, 0, 1), 1.25), 0, 1) * (surf === 'ground' ? 1 : 0.92);
-      gritSrc.playbackRate.setTargetAtTime(0.55 + Math.min(v / 26, 1.35), t, 0.12);
-      gritFilt.frequency.setTargetAtTime(surf === 'water' ? 700 : 900 + Math.min(v * 26, 1400), t, 0.15);
-      // Off the tarmac the grit IS the feedback — it is how a surface change
-      // announces itself before the handling does — and at 0.3 it sat under the
-      // engine at every speed that mattered.
-      gritGain.gain.setTargetAtTime(
-        (Math.min(v / 12, 1) * 0.46 * loose + spin * 0.3 * (0.25 + 0.75 * loose)) * grounded * duck, t, 0.09);
-    },
-    /** The starter: four compressions through a low filter, dying if the
-     *  catch has not happened by the end — the engine's own voice takes over
-     *  from tick as engineSt turns on. */
-    crank(): void {
-      if (!ctx || !master || ctx.state !== 'running' || !on) return;
-      const t = ctx.currentTime;
-      const osc = ctx.createOscillator(); osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(24, t);
-      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 260;
-      const g = ctx.createGain(); g.gain.value = 0.0001;
-      for (let i = 0; i < 4; i++) {
-        const at = t + i * 0.15;
-        g.gain.setValueAtTime(0.001, at);
-        g.gain.exponentialRampToValueAtTime(0.15, at + 0.04);
-        g.gain.exponentialRampToValueAtTime(0.004, at + 0.13);
-      }
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.68);
-      osc.connect(lp); lp.connect(g); g.connect(master);
-      osc.start(t); osc.stop(t + 0.7);
-    },
-    /** The key off: one soft mechanical sigh as everything spins down. */
-    engOff(): void {
-      if (!ctx || !master || ctx.state !== 'running' || !on) return;
-      const t = ctx.currentTime;
-      const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
-      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 300;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.11, t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
-      src.connect(lp); lp.connect(g); g.connect(master);
-      src.start(t); src.stop(t + 0.32);
-    },
-    /** The world's own bed, set every frame like update(): leaves in the
-     *  wind, a river nearby, and now and then a bird — audible exactly as
-     *  much as the truck lets them be. `gusty` shifts the rustle's colour;
-     *  birds are PHRASES, not a loop: a few whistled notes, spaced by how
-     *  alive the spot is. */
-    ambience(rustle: number, river: number, birds: number, gusty: number, froth = 0): void {
-      if (!ctx || !master || !rustleGain || ctx.state !== 'running') return;
-      const t = ctx.currentTime;
-      rustleGain.gain.setTargetAtTime(rustle * 0.14, t, 0.5);
-      rustleFilt.frequency.setTargetAtTime(1300 + gusty * 900, t, 0.8);
-      // `froth` is the water's CHARACTER, from the same probes that found
-      // it: 0 is still water lapping low and wide, 1 is rapids — brighter,
-      // narrower, and a shade louder for the same nearness.
-      riverGain.gain.setTargetAtTime(river * (0.16 + froth * 0.12), t, 0.6);
-      riverFilt.frequency.setTargetAtTime(340 + froth * 520, t, 0.9);
-      riverFilt.Q.setTargetAtTime(0.8 - froth * 0.3, t, 0.9);
-      if (on && birds > 0.03) {
-        const nowP = performance.now();
-        if (nowP > birdAt) {
-          birdAt = nowP + 1500 + (Math.random() * 9000) / (0.15 + birds);
-          const notes = 2 + Math.floor(Math.random() * 4);
-          const base = 2300 + Math.random() * 1700;
-          let at = t + Math.random() * 0.2;
-          for (let i = 0; i < notes; i++) {
-            const osc = ctx.createOscillator(); osc.type = 'sine';
-            const f0 = base * (0.9 + Math.random() * 0.25);
-            osc.frequency.setValueAtTime(f0, at);
-            osc.frequency.exponentialRampToValueAtTime(
-              f0 * (0.82 + Math.random() * 0.4), at + 0.05 + Math.random() * 0.05);
-            const g = ctx.createGain();
-            g.gain.setValueAtTime(0.0001, at);
-            g.gain.exponentialRampToValueAtTime(0.008 + 0.035 * clamp(birds, 0, 1), at + 0.015);
-            g.gain.exponentialRampToValueAtTime(0.0001, at + 0.05 + Math.random() * 0.07);
-            osc.connect(g); g.connect(master);
-            osc.start(at); osc.stop(at + 0.16);
-            at += 0.07 + Math.random() * 0.12;
-          }
-        }
-      }
-    },
-    // Thunder: a low rumble whose attack softens and whose tail lengthens with
-    // distance — a near strike cracks, a far one rolls.
-    thunder(far: number): void {
-      if (!ctx || !master || ctx.state !== 'running' || !on) return;
-      const t = ctx.currentTime;
-      const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
-      const lp = ctx.createBiquadFilter();
-      lp.type = 'lowpass'; lp.frequency.value = 420 - far * 300; lp.Q.value = 0.7;
-      const g = ctx.createGain();
-      const dur = 0.9 + far * 2.6, atk = 0.005 + far * 0.35;
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(0.55 - far * 0.32, t + atk);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      src.connect(lp); lp.connect(g); g.connect(master);
-      src.start(t); src.stop(t + dur + 0.1);
-    },
-    // A stone spat out from under a tire — sharp, pitched, very short.
-    stone(): void {
-      if (!ctx || !master || ctx.state !== 'running' || !on) return;
-      const t = ctx.currentTime;
-      const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
-      const bp = ctx.createBiquadFilter();
-      bp.type = 'bandpass'; bp.frequency.value = 1100 + Math.random() * 2600; bp.Q.value = 4 + Math.random() * 8;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.16 + Math.random() * 0.14, t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05 + Math.random() * 0.06);
-      src.connect(bp); bp.connect(g); g.connect(master);
-      src.start(t); src.stop(t + 0.14);
-    },
-    // A short filtered burst — landings, kerb strikes, scrapes.
-    thud(force: number): void {
-      if (!ctx || !master || ctx.state !== 'running' || !on) return;
-      const t = ctx.currentTime;
-      const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
-      const bp = ctx.createBiquadFilter(); bp.type = 'lowpass'; bp.frequency.value = 220 + force * 180;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(Math.min(0.5, force * 0.42), t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
-      src.connect(bp); bp.connect(g); g.connect(master);
-      src.start(t); src.stop(t + 0.3);
-    },
-    // ── the rig meeting the world ──────────────────────────────────
-    /**
-     * THE RIG MEETING THE WORLD, AND LOSING SOMETHING TO IT.
-     *
-     * A collision is not an impact, it is an EVENT WITH A SHAPE: the strike,
-     * the shell ringing under it, metal giving way, the grinding as momentum
-     * drags the damage along, and the bits coming to rest. The old one had the
-     * first two only, over inside 300ms, with a bright 1.5k clatter on top —
-     * which from the seat read as a large stone thrown against the door rather
-     * than the rig folding around something. Reported that way, and right.
-     *
-     * Five layers, and what separates a knock from a wreck is mostly HOW LONG
-     * the world keeps making noise about it, so force lengthens the event as
-     * well as loudening it: half a second for a scrape, a second and a half
-     * for a real one.
-     */
-    crash(force: number, kind: ImpactKind = 'shell'): void {
-      // The ledger first, the loudspeaker second — a muted or headless run
-      // still records what the physics charged.
-      if (force >= 0.2) {
-        impactLog.push({ t: Math.round(performance.now()), kind, force: +clamp(force, 0, 1).toFixed(2) });
-        if (impactLog.length > 60) impactLog.shift();
-      }
-      if (!ctx || !master || ctx.state !== 'running' || !on) return;
-      const now = performance.now();
-      // A light knock may repeat quickly; a heavy one holds the floor, or a
-      // tumble down a bank arrives as mush instead of a sequence of hits.
-      if (now - crashAt < 260 + force * 340 || force < 0.2) return;
-      crashAt = now;
-      const ac = ctx, mas = master;          // narrowed once, for the closures
-      const f = clamp(force, 0, 1);
-      const t = ac.currentTime;
-      const dur = 0.5 + f * 0.95;
-      /** A noise voice, detuned per hit — the same wreck twice is a sample. */
-      const noise = (rate = 1): AudioBufferSourceNode => {
-        const s2 = ac.createBufferSource();
-        s2.buffer = noiseBuf; s2.loop = true;
-        s2.playbackRate.value = rate * (0.82 + Math.random() * 0.36);
-        return s2;
-      };
-      // 1 · THE STRIKE. Broadband, gone in a blink. On its own this IS the old
-      // sound; here it is only the leading edge of one.
-      {
-        const src = noise();
-        const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
-        lp.frequency.value = 2600 + f * 1800;
-        const g = ac.createGain();
-        g.gain.setValueAtTime(0.28 + f * 0.34, t);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
-        src.connect(lp); lp.connect(g); g.connect(mas);
-        src.start(t); src.stop(t + 0.07);
-      }
-      // 2 · THE BODY OF THE SOUND — two voices, and the TRUCK is always one
-      // of them: its steel box has two low modes rung by ANY strike. What
-      // was hit adds its own on top — a guard rail rings bright and long, a
-      // tuning fork bolted to posts; stone adds one dead extra thump and
-      // nothing more. (The first cut swapped the chassis out for the stone,
-      // and a boulder strike came back from the seat as "a dull thud" — the
-      // rock does not sing about being hit, but the truck folding around it
-      // still does.)
-      const modes: Array<[number, number, number, number]> = [
-        [58 + Math.random() * 16, 9, 0.42, 0.55], [132 + Math.random() * 30, 7, 0.26, 0.4],
-      ];
-      if (kind === 'metal') {
-        modes.push([330 + Math.random() * 140, 15, 0.24, 0.6],
-          [880 + Math.random() * 320, 13, 0.17, 0.7], [1650 + Math.random() * 500, 11, 0.09, 0.55]);
-      }
-      if (kind === 'stone') modes.push([64 + Math.random() * 18, 3, 0.5, 0.3]);
-      for (const [hz, q, amp, len] of modes) {
-        const src = noise();
-        const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
-        bp.frequency.value = hz; bp.Q.value = q;
-        const g = ac.createGain();
-        g.gain.setValueAtTime(Math.min(0.6, amp * (0.4 + f)), t);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + len + f * 0.5);
-        src.connect(bp); bp.connect(g); g.connect(mas);
-        src.start(t); src.stop(t + len + f * 0.55);
-      }
-      // 3 · THE BUCKLE. Metal yielding is PITCH THAT FALLS: the panel gives,
-      // and what was ringing at one frequency is suddenly ringing lower. A
-      // light knock buckles nothing, so this layer only shows up under load.
-      // It is the TRUCK'S panel folding, whatever it folded around — a rock
-      // dents the wing exactly as hard as a wall does.
-      if (f > 0.32) {
-        const osc = ac.createOscillator(); osc.type = 'sawtooth';
-        const f0 = 150 + Math.random() * 90;
-        osc.frequency.setValueAtTime(f0, t + 0.01);
-        osc.frequency.exponentialRampToValueAtTime(f0 * 0.34, t + 0.1 + f * 0.22);
-        const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
-        lp.frequency.value = 520; lp.Q.value = 3;
-        const g = ac.createGain();
-        g.gain.setValueAtTime(0.0001, t);
-        g.gain.exponentialRampToValueAtTime(0.05 + f * 0.13, t + 0.03);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18 + f * 0.3);
-        osc.connect(lp); lp.connect(g); g.connect(mas);
-        osc.start(t); osc.stop(t + 0.22 + f * 0.32);
-      }
-      // 4 · THE GRAUNCH. Momentum drags the damage along whatever it hit, and
-      // that is a GRITTY, IRREGULAR band — chopped into grains on purpose,
-      // because a smooth envelope over the same noise is just wind. The steps
-      // are the whole character of the layer.
-      {
-        const src = noise(kind === 'stone' ? 0.9 : 1.3);
-        const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
-        // Metal grinds bright, rubble grinds LOW — dragged gravel, not paint.
-        bp.frequency.setValueAtTime((kind === 'metal' ? 2100 : kind === 'stone' ? 800 : 1500) + Math.random() * 700, t);
-        bp.frequency.exponentialRampToValueAtTime(kind === 'stone' ? 240 : 420, t + dur);
-        bp.Q.value = 1.1;
-        const g = ac.createGain();
-        const peak = 0.06 + f * 0.2;
-        g.gain.setValueAtTime(0.0001, t);
-        const steps = Math.round(dur / 0.045);
-        for (let i2 = 1; i2 < steps; i2++) {
-          const st = t + i2 * 0.045;
-          const fade = 1 - i2 / steps;
-          g.gain.setValueAtTime(Math.max(0.0002, peak * fade * (0.25 + Math.random())), st);
-        }
-        g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.05);
-        src.connect(bp); bp.connect(g); g.connect(mas);
-        src.start(t + 0.02); src.stop(t + dur + 0.08);
-      }
-      // 5 · THE SETTLING. Trim, grit and panels finding their rest — scattered
-      // ticks across the tail, thinning as it goes. The reason a wreck sounds
-      // finished rather than cut off.
-      // Stone settles as RUBBLE — more pieces, heavier, duller — where a car
-      // sheds a few bright bits of trim.
-      const bits = Math.round((kind === 'stone' ? 4 : 2) + f * (kind === 'stone' ? 9 : 6));
-      for (let i2 = 0; i2 < bits; i2++) {
-        const at = t + 0.12 + Math.random() * dur;
-        const src = noise();
-        const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
-        bp.frequency.value = (kind === 'stone' ? 420 : 700) + Math.random() * (kind === 'stone' ? 1100 : 1900);
-        bp.Q.value = (kind === 'stone' ? 3 : 5) + Math.random() * 7;
-        const g = ac.createGain();
-        const late = clamp(1 - (at - t) / (dur + 0.1), 0.15, 1);
-        g.gain.setValueAtTime((0.03 + Math.random() * 0.05) * (0.4 + f) * late, at);
-        g.gain.exponentialRampToValueAtTime(0.0001, at + 0.05 + Math.random() * 0.07);
-        src.connect(bp); bp.connect(g); g.connect(mas);
-        src.start(at); src.stop(at + 0.14);
-      }
-    },
-    /** The chassis working — a short low groan for hits that flex the
-     *  suspension without bottoming it. */
-    creak(force: number): void {
-      if (!ctx || !master || ctx.state !== 'running' || !on) return;
-      const now = performance.now();
-      if (now - creakAt < 220) return;
-      creakAt = now;
-      const t = ctx.currentTime;
-      const osc = ctx.createOscillator(); osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(110 + force * 40, t);
-      osc.frequency.exponentialRampToValueAtTime(62, t + 0.14);
-      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 260; bp.Q.value = 2.5;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(force * 0.11, t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
-      osc.connect(bp); bp.connect(g); g.connect(master);
-      osc.start(t); osc.stop(t + 0.18);
-    },
-    /** Hitting water at speed: a broad wet slap, then the wash channel
-     *  carries the rest. */
-    splash(force: number): void {
-      if (!ctx || !master || ctx.state !== 'running' || !on) return;
-      const t = ctx.currentTime;
-      const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
-      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(Math.min(0.5, 0.2 + force * 0.35), t + 0.03);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
-      src.connect(lp); lp.connect(g); g.connect(master);
-      src.start(t); src.stop(t + 0.55);
-    },
-    /** Continuous channels, set every frame from tick like everything in
-     *  update(): 0 releases them. */
-    /** Foliage against the panels, continuous like scrape — 0 releases it. */
-    brush(level: number): void {
-      if (!ctx || !brushGain) return;
-      const t = ctx.currentTime;
-      brushGain.gain.setTargetAtTime(Math.min(level, 1) * 0.17, t, 0.07);
-      brushFilt.frequency.setTargetAtTime(2000 + Math.min(level, 1) * 900, t, 0.1);
-    },
-    /** One stem giving way. Woody is a TRUNK — a knock with a snap on top,
-     *  the sound of the bull bar finding the one hard thing in the hedge;
-     *  leafy is a whip of twigs dragged over the roof. */
-    whip(force: number, woody: boolean): void {
-      if (force >= 0.2 && woody) {
-        impactLog.push({ t: Math.round(performance.now()), kind: 'wood', force: +clamp(force, 0, 1).toFixed(2) });
-        if (impactLog.length > 60) impactLog.shift();
-      }
-      if (!ctx || !master || ctx.state !== 'running' || !on) return;
-      const t = ctx.currentTime;
-      const f = clamp(force, 0, 1);
-      if (woody) {
-        const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
-        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
-        bp.frequency.value = 150 + Math.random() * 70; bp.Q.value = 5;
-        const g = ctx.createGain();
-        g.gain.setValueAtTime(0.12 + f * 0.22, t);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
-        src.connect(bp); bp.connect(g); g.connect(master);
-        src.start(t); src.stop(t + 0.2);
-      }
-      const snap = ctx.createBufferSource(); snap.buffer = noiseBuf; snap.loop = true;
-      const hp = ctx.createBiquadFilter(); hp.type = 'highpass';
-      hp.frequency.value = woody ? 1300 : 1700;
-      const g2 = ctx.createGain();
-      g2.gain.setValueAtTime((woody ? 0.1 : 0.05) + f * 0.1, t);
-      g2.gain.exponentialRampToValueAtTime(0.0001, t + (woody ? 0.06 : 0.13));
-      snap.connect(hp); hp.connect(g2); g2.connect(master);
-      snap.start(t); snap.stop(t + 0.16);
-    },
-    /** `bright` is the MATERIAL under the bodywork: 0.35 is concrete and
-     *  masonry, 1 is a steel rail — the same drag reads as a grind on one
-     *  and a screech on the other. */
-    scrape(level: number, bright = 0.35): void {
-      if (!ctx || !scrapeGain) return;
-      const t = ctx.currentTime;
-      scrapeLast = level;   // the sidechain in update() reads this
-      // 0.55, third raise — but the real change is the sidechain: this is
-      // the one sound telling you the paint is going, and the bed now makes
-      // room for it instead of burying every raise.
-      scrapeGain.gain.setTargetAtTime(level * 0.55, t, 0.05);
-      scrapeFilt.frequency.setTargetAtTime(340 + bright * 640 + level * 620, t, 0.08);
-    },
-    water(level: number): void {
-      if (!ctx || !waterGain) return;
-      const t = ctx.currentTime;
-      waterGain.gain.setTargetAtTime(level * 0.3, t, 0.09);
-      waterFilt.frequency.setTargetAtTime(380 + level * 280, t, 0.12);
-    },
-  };
-})();
-// The sound button reports the TRUTH: 'TAP' means the context exists but the
-// browser hasn't unlocked it yet, so a silent failure is never mistaken for a
-// working mix.
-const syncBtn = (): void => { /* label is drawn from audio state each frame */ };
+/** The LEVELS, dBFS at every tap — what the ear gets, where __mix is what
+ *  the gain nodes were told. See audio.levels(). */
+(window as unknown as { __levels?: object }).__levels = (): object => audio.levels();
+(window as unknown as { __impacts?: object }).__impacts = (): object => audio.impacts();
+/** WHY THE MIX SOUNDS ENCLOSED HERE — every input, the raw verdict at the
+ *  point and the glided one the mixer was handed. A ceiling is the one
+ *  acoustic cue a screenshot cannot carry, so it needs a number. */
+(window as unknown as { __space?: object }).__space = (x?: number, z?: number): object => {
+  // ── THE BASE FOR A SWEPT POINT IS THE GROUND, AND THE FIRST CUT USED THE
+  //    ROAD, WHICH READ ZERO CEILINGS AT AN INTERCHANGE ──
+  //
+  // At the truck the base is `bodyY`, which is unambiguous: it is where the
+  // listener's head actually is. Away from the truck there is no listener, and
+  // `roadHeightAt` looked like the better answer — the deck you would be
+  // standing on. It is not, because it takes the road NEAREST IN PLAN, and a
+  // flyover is directly over the road beneath it, so at a crossing the base
+  // comes back as the flyover's own deck and the sweep asks what is above the
+  // bridge.
+  //
+  // So a swept point asks the ground's question — "is there a roof over this
+  // patch of Vélizy" — which is the mechanism question a sweep is for.
+  const at = x === undefined ? null : [x, z ?? state.z] as [number, number];
+  const r = enclosureAt(at ? at[0] : state.x, at ? at[1] : state.z,
+    at ? groundAt(at[0], at[1]) : bodyY);
+  return { ...r, enc: +encL.toFixed(3), forced: encForceUntil > performance.now(),
+    riverAt: +ambRiverAt.toFixed(2), mix: audio.mix() };
+};
+/** ── AN ENCLOSURE YOU CAN ASK FOR ──
+ *  The same bargain `__windset` strikes with the weather, for the same reason:
+ *  a tunnel is somewhere you have to DRIVE to, and a mix cannot be
+ *  photographed. Held for a few seconds so a measurement has time to read the
+ *  glided result, then the world takes it back. `__audioSpace(-1)` releases it
+ *  at once. */
+(window as unknown as { __audioSpace?: object }).__audioSpace = (e: number): void => {
+  if (e < 0) { encForceUntil = 0; return; }
+  encForce = clamp(e, 0, 1); encForceUntil = performance.now() + 12000;
+  encL = encForce; audio.space(encL);
+};
+const audio = createAudio();
 // ANY first gesture arms the context. iOS grants user activation on
 // touchend/click far more reliably than on pointerdown, so listen broadly and
 // keep listening (a backgrounded tab suspends the context again).
@@ -30520,6 +34970,7 @@ for (const ev of ['pointerdown', 'touchend', 'click', 'keydown']) {
 let hidden = document.hidden;
 addEventListener('visibilitychange', () => {
   hidden = document.hidden;
+  profVisibility();
   // Backgrounding a tab is how a phone ends a session — the loop stops running,
   // so the debounced write has to happen on the way out or the last few
   // hundred metres are lost.
@@ -30557,12 +35008,12 @@ let navAt = 0;
 let drapeAt = 0;
 let urlAt = 0, urlX = Infinity, urlZ = 0, urlH = 0;
 let urlCam: CamMode = 'chase', urlZoom = 1;
-/** The query keys the DRIVE owns and rewrites. Everything else in the bar
- *  belongs to whoever put it there. */
+// The query keys the DRIVE owns and rewrites are the `owned` rows of
+// `switches.ts` now, so a key cannot be added to one list and forgotten in the
+// other — which is the fault this set was itself added to fix.
 // `run` is owned-and-never-written: a shared run's link spawns AT the run,
 // so leaving ?run= in a rewritten URL would make every later reload fight
 // the player's own position with the run's head.
-const URL_OWNED = new Set(['lat', 'lon', 'h', 'cam', 'z', 'm', 'line', 'run']);
 const writeUrl = (la: number, lo: number): void => {
   // The URL is the PLAYER'S resumable state; a reel driving the truck through
   // a postcard must not write the postcard over it. `hopping` and the flagged
@@ -30815,6 +35266,14 @@ function roughNoise(x: number, z: number): number {
 // ringing at its own natural frequency instead of following the ground. That
 // ring is what reads as the truck bouncing down a hill.
 const SUSP = { k: 55, d: 8.5, ka: 40, da: 12.6, travel: 0.26, droop: 0.34 };
+/** THE SHAKE THE EAR GETS, 0..1. The body rides the smooth plane by design
+ *  (see the contacts in tick), so nothing in the picture says the ground is
+ *  rough and the ear is the only channel left — and it said nothing: over
+ *  washboard the only chassis sounds were two one-shots at the bump stops.
+ *  This is the washboard's RATE at the four wheels, which is exactly what
+ *  the dampers are being asked to do, and it drives the rattle bed. */
+let chassisShake = 0, chassisShakeRaw = 0;   // the second unscaled, for the probe
+const washPrev = [0, 0, 0, 0];
 // ── traction: what the tyres are allowed to decide ─────────────────
 /**
  * THE MODEL THIS GAME SHIPPED WITH NEVER LET THE TYRES DECIDE ANYTHING.
@@ -30874,6 +35333,24 @@ const IZZ_K = 1.7;
 /** Slip angle at which a tyre has given everything it has, near enough:
  *  tanh(9·α) is 0.9 by about nine degrees, which is a real tyre's shape. */
 const TYRE_K = 9;
+/**
+ * GRAVITY DOES NOT NEED FOUR WHEELS.
+ *
+ * Thrust, braking and cornering all come out of the contact patch, so they are
+ * rightly scaled by `groundedF` — lift a wheel and you have less of all three.
+ * The pull down the hill is not like that: a truck on a slope accelerates at
+ * g·sinθ whether it is sitting on four tyres, two, or a sheet of ice, and the
+ * wheels only decide which WAY it is free to go. Scaling it by the contact
+ * fraction meant the steepest, most articulated ground — the ground where a
+ * wheel is most likely to be light — was also where the hill stopped pulling,
+ * which is the wrong way round and was half of why articulating over a crest
+ * felt weightless.
+ *
+ * So any contact at all gives the whole of gravity, and only genuine flight
+ * takes it away: airborne the along-slope direction means nothing, and the
+ * fall is the sprung body's business rather than the drivetrain's.
+ */
+const gravGrip = (g: number): number => clamp(g * 4, 0, 1);
 /** Yaw rate, kept between frames now — the old model recomputed it from the
  *  rack every frame and never had to remember it. */
 let yawR = 0;
@@ -30918,6 +35395,7 @@ function stepTraction(dt: number, surf: SurfParams, grip: number, thrust: number
   // Euler step through it rings; the tick's clamp now allows up to 100ms, so
   // the count scales with the step instead of assuming one halving is enough.
   const n = Math.max(1, Math.ceil(dt / 0.025)), h = dt / n;
+  const gG = gravGrip(grip);
   for (let i = 0; i < n; i++) {
     const u = state.speed, v = slideV;
     const su = u < 0 ? -1 : 1;
@@ -30966,8 +35444,15 @@ function stepTraction(dt: number, surf: SurfParams, grip: number, thrust: number
     const pull = Math.min(CAR.accel, (muF * nF + muR * nR) * GRAV * TRACTION_LONG[tractionMode]);
     const aero = Math.max(0.0005, pull - surf.roll) / (surf.max * surf.max);
     const resist = (surf.roll * (0.4 + 0.6 * wetF) + aero * u * u) * (0.1 + 0.9 * grip);
-    const ax = fx + v * yawR - GRAV * Math.sin(gradeP) * grip - Math.sign(u) * resist;
-    const ay = fyF + fyR - u * yawR - GRAV * Math.sin(gradeR) * grip;
+    // ROLLING RESISTANCE OPPOSES MOTION AND VANISHES WITH IT. `Math.sign` is a
+    // step function: at a crawl it flips every sub-step and shoves a nearly
+    // stopped truck back and forth in the noise, which is slip the driver never
+    // asked for. Faded out over the last half metre per second it is what a
+    // rolling wheel actually does — and what has stopped rolling is held by the
+    // park latch, not by a resistance that never quite reaches zero.
+    const ax = fx + v * yawR - GRAV * Math.sin(gradeP) * gG - clamp(u / 0.5, -1, 1) * resist;
+    const ay = fyF + fyR - u * yawR - GRAV * Math.sin(gradeR) * gG;
+    if (!Number.isFinite(ax) || !Number.isFinite(ay)) nanTraceAt('accel', { fx, fyF, fyR, v, u, yawR, gradeP, gradeR, grip, resist, ax, ay, h });
     const izz = IZZ_K * AXLE_A * AXLE_A;
     const dr = (AXLE_A * fyF - AXLE_A * fyR) / izz;
     state.speed += ax * h;
@@ -31032,6 +35517,14 @@ let gradePitch = 0, gradeRoll = 0, slideV = 0;
  * instead of a drive.
  */
 let nanBreaks = 0;
+/** The first non-finite intermediate the chassis step produced, and where. */
+let nanTrace: Record<string, unknown> | null = null;
+function nanTraceAt(where: string, vals: Record<string, unknown>): void {
+  if (nanTrace) return;
+  const bad = Object.entries(vals).filter(([, v]) => Array.isArray(v) ? v.some((q) => typeof q === 'number' && !Number.isFinite(q)) : typeof v === 'number' && !Number.isFinite(v));
+  if (bad.length) nanTrace = { where, bad: bad.map(([k]) => k), vals: JSON.parse(JSON.stringify(vals, (_, v) => typeof v === 'number' && !Number.isFinite(v) ? String(v) : v)) };
+}
+(window as unknown as { __nanTrace?: object }).__nanTrace = (): object | null => nanTrace;
 const lastSane = { x: 0, z: 0, heading: 0 };
 function breakNanLatch(): void {
   const badState = !Number.isFinite(state.x) || !Number.isFinite(state.z)
@@ -31058,6 +35551,16 @@ function breakNanLatch(): void {
   bodyInit = false;
 }
 let prevGradePitch = 0;   // last frame's terrain grade, for the feed-forward above
+/** Last frame's axle-plane target and whether the truck ended that frame with
+ *  any wheel loaded, plus how long it has been in the air. The three of them
+ *  are what tells a truck that JUMPED from a world that moved underneath one
+ *  that did not — see the reseat rules in the suspension pass. */
+let prevTY = 0, wasGrounded = false, airS = 0;
+/** THE PARKING BRAKE. Latched, because the condition that earns the hold is
+ *  read from a truck that is already stopped: without a latch the hold would
+ *  chatter on and off at its own threshold. Released by the throttle, by real
+ *  drive, or by the ground itself going out from under it. */
+let parkLatch = false;
 // How hard the tyres are currently being asked to work beyond what they have
 // (0 = planted, 1 = fully away). Drives the squeal, the dust, and the HUD.
 let skid = 0;
@@ -31114,7 +35617,7 @@ function stepRig(dt: number, v: number, q: number, sunUp: number): void {
     // Never more than the room left, or a long frame overfills the pack and the
     // rig pays for charge that was never stored.
     const room = ((1 - drone.batt) * DRONE.KWH * 3600) / dt;
-    rig.droneKw = Math.min(DRONE.CHG, room);
+    rig.droneKw = Math.min((DRONE.KWH * 3600) / DRONE.FILL_S, room);
     rig.drawKw += rig.droneKw;
     drone.batt = clamp(drone.batt + (rig.droneKw * (dt / 3600)) / DRONE.KWH, 0, 1);
   }
@@ -31184,10 +35687,117 @@ let dbgAmb: Record<string, unknown> = {};
 let dbgSlip: Record<string, unknown> = {};
 (window as unknown as { __slip?: object }).__slip = (): object => dbgSlip;
 let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0, ambFrothL = 0;
+/** The room the last sample found, which `encL` is easing toward. */
+let encTarget = 0;
+/** Radius and weight of each water-probe ring — see the ambience sampler. */
+const AMB_WATER_RINGS: ReadonlyArray<readonly [number, number, number]> =
+  [[24, 1, 6], [60, 0.8, 8], [120, 0.6, 12], [220, 0.35, 12]];
+/** Where the water is, in the TRUCK's frame: −1 hard left, +1 hard right. */
+let ambRiverAt = 0;
+/** The ground cover under and around the truck as GRASS, 0..1 — what the
+ *  sward voice answers to. Two named river banks measured silent had the
+ *  water 220 m off (the fourth ring above) and a meadow with no tree in it
+ *  was as quiet as a car park (this). */
+let ambGrassL = 0;
+/** How enclosed the truck is, 0 open sky and 1 inside a bore — glided, so a
+ *  portal is an entrance rather than a switch. */
+let encL = 0;
+/** The debug override and its lease — see __audioSpace. */
+let encForce = 0, encForceUntil = 0;
+/** Head height: a deck lower than this over your base is not a ceiling, it is
+ *  the road. See the search below. */
+const ENC_HEAD = 1.6;
+/**
+ * ── IS THERE A CEILING HERE ──
+ *
+ * The one acoustic cue this game had every ingredient for and never used. The
+ * world knows exactly where its roofs are; the mixer was told nothing, so a
+ * bore, a bridge soffit and open sky all sounded identical. Three sources,
+ * and they are not the same amount of room:
+ *
+ *   · a TUNNEL INTERIOR (`tn`) — the solver's own flag for a stretch it left
+ *     under ground, which the tube pass sets on the inside of every tagged
+ *     tunnel as well as on untagged burial. Nothing is more enclosed than
+ *     this, so it is the 1.
+ *   · a TUNNEL MOUTH (`pc`, the portal porch) — you are under the collar with
+ *     daylight behind you. Two thirds, not one: a portal that snapped to full
+ *     bore would read as a wall rather than as an entrance.
+ *   · a DECK OVERHEAD — a flyover, a footbridge, a gallery. It roofs you and
+ *     leaves both sides open, so it caps at 0.7 and fades out as the deck
+ *     climbs away: full up to five metres of clearance, nothing by nine.
+ *
+ * `base` is the LISTENER's height, not the ground's — on a flyover the two are
+ * six metres apart and the ground's answer would put a ceiling over a truck
+ * standing in open air on top of the bridge.
+ *
+ * THE STRUCTURE TEST IS THE PART THAT IS EASY TO GET WRONG. A deck above you
+ * is only a roof if the ground under IT has fallen away; without that check a
+ * steep road is its own ceiling, because a station seven metres ahead on a
+ * 25% grade stands the required 1.7m over your head. Vélizy is flat and would
+ * never have shown it — Chapman's Peak has an 89% segment on the record.
+ */
+function enclosureAt(px: number, pz: number, base: number): {
+  e: number; deck: number | null; clear: number | null; buried: boolean; mouth: boolean;
+} {
+  let buried = false, mouth = false;
+  for (const seg of roadGrid.get(gkey(px, pz)) ?? []) {
+    if (!seg.tn && seg.pc === undefined) continue;
+    const [cx, cz] = closestOnSeg(px, pz, seg);
+    if (Math.hypot(px - cx, pz - cz) > seg.hw + 1.2) continue;
+    if (seg.tn) { buried = true; break; }
+    mouth = true;
+  }
+  if (buried) return { e: 1, deck: null, clear: null, buried, mouth };
+  // ── THE BUILT DECK, NOT THE PLANNER'S ──
+  //
+  // The first cut asked the solver's hint store, on the reasoning that a tile
+  // is planned whole before any of its ribbons build, so the deck above is
+  // known there whether or not it has been drawn. That is exactly right for
+  // `hintAbove`'s own consumer and useless here, because THE HINTS ARE NOT
+  // LIFTED. `writeHints` records the chain's algorithm profile; the flyover's
+  // rise over the road beneath is the per-way build's chord-and-lift stage,
+  // which never writes back. This file already says as much about the layer
+  // tag — "what the layer does NOT do on its own is lift anything" — and the
+  // measurement is unambiguous: at the layer-2 lift at (-133,-62), `__lifts`
+  // reports 6.39m raised and the highest hint within 8m over a 60m box stands
+  // at 2.765 on ground of 2.352. Four tenths of a metre where six were built.
+  //
+  // So the deck is read from `roadGrid`, which holds `ya`/`yb` AFTER the lift.
+  // The half-width test comes free with it and is better than a radius: a roof
+  // is only over you if you are under the carriageway.
+  let deck: number | null = null, clear: number | null = null;
+  let e = mouth ? 0.65 : 0;
+  for (const seg of roadGrid.get(gkey(px, pz)) ?? []) {
+    if (seg.ya === undefined || seg.yb === undefined) continue;
+    const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
+    const t = clamp(((px - seg.ax) * dx + (pz - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const cx = seg.ax + dx * t, cz = seg.az + dz * t;
+    if (Math.hypot(px - cx, pz - cz) > seg.hw + 0.5) continue;
+    const y = seg.ya + (seg.yb - seg.ya) * t;
+    // Head height: a deck lower than this is the road you are standing on, not
+    // a ceiling. `SURFACE.road.lift` alone puts a carriageway 4cm up.
+    if (y < base + ENC_HEAD) continue;
+    // A STRUCTURE, NOT A HILL. Without this a steep road is its own ceiling —
+    // a station seven metres ahead on a 25% grade stands the required 1.7m
+    // over your head. Vélizy is flat and would never have shown it; Chapman's
+    // Peak has an 89% segment on the record.
+    if (y - groundAt(cx, cz) <= 1.6) continue;
+    // The LOWEST qualifying deck: under two stacked flyovers the near one is
+    // what encloses you.
+    if (deck === null || y < deck) deck = y;
+  }
+  if (deck !== null) {
+    clear = +(deck - base).toFixed(2);
+    e = Math.max(e, 0.7 * clamp((9 - clear) / 4, 0, 1));
+  }
+  return { e: +e.toFixed(3), deck: deck === null ? null : +deck.toFixed(2), clear, buried, mouth };
+}
 let brushPeak = 0;   // session max — a one-frame brush must not hide from the probe
 let wallTouchAt = -1e9, dragKnockAt = 0;   // wall contact edge + the drag's knock pacing
 let scrapeHoldLvl = 0, scrapeHoldMetal = false;   // contact held across the graze's gap frames
 let dbgSusp: object = {};
+/** What the park latch is holding, and against what — read by __phys. */
+let dbgPark: object = {};
 // A shade over 9.81. Real gravity left long climbs feeling weightless once the
 // truck has 16m/s^2 of thrust to spend against it; this gives a hill enough
 // authority that you pick your line up it.
@@ -31403,20 +36013,6 @@ async function tapeSave(t: Tape): Promise<string> {
   db.close();
   return id;
 }
-/** How many runs are already banked — the deck shows it and nothing else needs
- *  the list until you ask to play one. */
-async function tapeCount(): Promise<number> {
-  try {
-    const db = await tapeDb();
-    const n = await new Promise<number>((go, no) => {
-      const q = db.transaction('runs', 'readonly').objectStore('runs').count();
-      q.onsuccess = () => go(q.result);
-      q.onerror = () => no(q.error);
-    });
-    db.close();
-    return n;
-  } catch { return 0; }
-}
 async function tapeLoad(id?: string): Promise<Tape | null> {
   const db = await tapeDb();
   const all = await new Promise<Array<Tape & { id: string }>>((go, no) => {
@@ -31614,6 +36210,210 @@ function tapeCorrect(): void {
   if (tapePlay.drift > tapePlay.worst) tapePlay.worst = tapePlay.drift;
   tapeRestore(t.keys, at);
 }
+/** WHERE THE FRAME GOES, by subsystem: milliseconds accumulated per call
+ *  site since the last read, with the worst single call — the instrument for
+ *  "FPS drops during streaming", which no single ledger could answer. */
+const frameProf = new Map<string, { ms: number; n: number; max: number }>();
+let profFrames = 0, profSince = 0, profWhole = 0;
+/** THE SESSION'S TELEMETRY. Everything the windowed profiler sees, never
+ *  reset, plus what it cannot say per window: the frame-time distribution,
+ *  and for every frame over SLOW_FRAME_MS which phases ran in it and which
+ *  was the largest — the blame that isolates a contributor to a drop. What
+ *  no wrapper or mark explains is split into two rows: `tick residue` (tick
+ *  code nothing here covers) and `gap` (unmeasured elapsed time, including
+ *  browser scheduling and uninstrumented work). Read with __telemetry(); a double tap on the
+ *  FPS readout copies it to the clipboard. */
+const SLOW_FRAME_MS = 50;
+interface SessRow { ms: number; n: number; max: number; slowMs: number; top: number }
+const sessProf = new Map<string, SessRow>();
+const sessAt = performance.now();
+let sessFrames = 0, sessWall = 0, sessSlow = 0;
+const sessHist = new Uint32Array(6);                       // <16.7 <33 <50 <100 <250 ≥250
+const sessRing = new Float32Array(4096); let sessRingN = 0; // last 4096 frame times
+const sessSlowLog: Array<{ t: number; ms: number; tops: string }> = [];
+const curFrame = new Map<string, number>();
+/** WHICH SIDE OF THE FRAME LOOP a measurement fell on. Inside the tick it is
+ *  the main thread's own frame work; outside it is an event-loop task — a
+ *  worker reply, a fetch continuation, a raster decode — that the frame's
+ *  wall time still paid for. The two residues are the diagnosis: `tick
+ *  residue` is tick code no mark or wrapper covers; `gap` is elapsed time
+ *  these instruments cannot explain. It cannot establish a GPU bottleneck. The
+ *  first device report could not say which: 70% of its wall time was one
+ *  undifferentiated "unattributed" row. */
+let inTick = false, tickStart = 0, tickMsCur = 0, attrIn = 0, attrOut = 0, markAt = 0, attrSinceMark = 0;
+let sessTick = 0, sessOff = 0, sessTickMax = 0;
+const tickRing = new Float32Array(4096);
+function profBump(name: string, d: number): void {
+  if (document.hidden) return;
+  const e = frameProf.get(name);
+  if (e) { e.ms += d; e.n++; if (d > e.max) e.max = d; } else frameProf.set(name, { ms: d, n: 1, max: d });
+  const r = sessProf.get(name);
+  if (r) { r.ms += d; r.n++; if (d > r.max) r.max = d; } else sessProf.set(name, { ms: d, n: 1, max: d, slowMs: 0, top: 0 });
+  curFrame.set(name, (curFrame.get(name) ?? 0) + d);
+}
+function profAdd(name: string, t0: number): void {
+  if (document.hidden) return;
+  const d = performance.now() - t0;
+  if (inTick) { attrIn += d; attrSinceMark += d; } else attrOut += d;
+  profBump(name, d);
+}
+/** A SECTION MARK: everything since the previous mark that no wrapped call
+ *  inside it already claimed. The tick is sectioned with these, so its
+ *  inline physics, streaming and camera code show up by name without a
+ *  wrapper around every statement. */
+function profMark(name: string): void {
+  const now = performance.now();
+  if (document.hidden) { markAt = now; attrSinceMark = 0; return; }
+  const d = Math.max(0, now - markAt - attrSinceMark);
+  markAt = now; attrSinceMark = 0;
+  attrIn += d;
+  profBump(name, d);
+}
+function profTickStart(): void { inTick = true; tickStart = markAt = performance.now(); attrSinceMark = 0; }
+function profTickEnd(name: string): void { profMark(name); tickMsCur = performance.now() - tickStart; inTick = false; }
+let profLast = 0;
+let profHiddenAt: number | null = document.hidden ? performance.now() : null;
+let profHiddenMs = 0, profResumes = 0;
+function profVisibility(): void {
+  const now = performance.now();
+  if (document.hidden) { profHiddenAt ??= now; }
+  else if (profHiddenAt !== null) {
+    profHiddenMs += now - profHiddenAt; profHiddenAt = null; profResumes++;
+  }
+  // Discard the boundary interval, not merely the simulation's dt. Otherwise
+  // returning from another app records its entire absence as one slow frame.
+  profLast = 0; tickMsCur = attrIn = attrOut = attrSinceMark = 0;
+  curFrame.clear();
+}
+function profFrame(now: number): void {
+  if (document.hidden) { profLast = 0; attrIn = attrOut = 0; curFrame.clear(); return; }
+  profFrames++;
+  if (profLast) {
+    const fm = now - profLast;
+    profWhole += fm;
+    sessFrames++; sessWall += fm; sessTick += tickMsCur; sessOff += attrOut;
+    sessTickMax = Math.max(sessTickMax, tickMsCur);
+    sessRing[sessRingN % sessRing.length] = fm;
+    tickRing[sessRingN % tickRing.length] = tickMsCur;
+    sessRingN++;
+    sessHist[fm < 16.7 ? 0 : fm < 33 ? 1 : fm < 50 ? 2 : fm < 100 ? 3 : fm < 250 ? 4 : 5]++;
+    // The two residues, as phases of their own, so the blame below can name them.
+    profBump('tick residue', Math.max(0, tickMsCur - attrIn));
+    profBump('gap (unmeasured)', Math.max(0, fm - tickMsCur - attrOut));
+    attrIn = attrOut = 0;
+    if (fm >= SLOW_FRAME_MS) {
+      sessSlow++;
+      let top = '', topMs = 0;
+      for (const [k, v] of curFrame) { const r = sessProf.get(k); if (r) r.slowMs += v; if (v > topMs) { topMs = v; top = k; } }
+      const r = sessProf.get(top); if (r) r.top++;
+      const tops = [...curFrame.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3).map(([k, v]) => `${k}:${Math.round(v)}`).join(' ');
+      sessSlowLog.push({ t: Math.round(now / 1000), ms: Math.round(fm), tops });
+      if (sessSlowLog.length > 24) sessSlowLog.shift();
+    }
+  }
+  attrIn = attrOut = 0;
+  curFrame.clear();
+  profLast = now;
+}
+/** The session's telemetry as text, for a clipboard or a probe. */
+function telemetryReport(): string {
+  const secs = (performance.now() - sessAt) / 1000;
+  const n = Math.min(sessRingN, sessRing.length);
+  const sorted = Array.from(sessRing.subarray(0, n)).sort((a, b) => a - b);
+  const pct = (q: number): number => n ? +sorted[Math.min(n - 1, Math.floor(q * n))].toFixed(1) : 0;
+  const tsorted = Array.from(tickRing.subarray(0, n)).sort((a, b) => a - b);
+  const tpct = (q: number): number => n ? +tsorted[Math.min(n - 1, Math.floor(q * n))].toFixed(1) : 0;
+  const shareOf = (ms: number): string => `${(100 * ms / Math.max(1, sessWall)).toFixed(0)}%`;
+  const gapRow = sessProf.get('gap (unmeasured)');
+  const gl = renderer.getContext();
+  const dbg = gl.getExtension('WEBGL_debug_renderer_info') as { UNMASKED_RENDERER_WEBGL: number } | null;
+  const gpu = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : 'n/a';
+  const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+  const L: string[] = [];
+  L.push(`DRIVE TELEMETRY · ${new Date().toISOString().slice(0, 19)}Z · ${Math.round(secs)}s · ${location.search}`);
+  L.push(`visibility: active frame time ${(sessWall / 1000).toFixed(1)}s · hidden ${((profHiddenMs + (profHiddenAt === null ? 0 : performance.now() - profHiddenAt)) / 1000).toFixed(1)}s · resumes ${profResumes} · boundary intervals excluded`);
+  L.push(`bitmap lifecycle: pending ${bitmapStats.pending} peak ${bitmapStats.peak} · completed ${bitmapStats.completed} failed ${bitmapStats.failed} closed ${bitmapStats.closed} · elapsed mean ${(bitmapStats.latencyMs / Math.max(1, bitmapStats.settled)).toFixed(1)}ms max ${bitmapStats.maxLatencyMs.toFixed(0)}ms (overlapping async latency, NOT CPU/GPU time)`);
+  L.push(`shadow stationary: samples ${shadowMotion.samples} · max/sample grid phase ${shadowMotion.phaseMax.toFixed(3)} texels · sun ${shadowMotion.sunDegMax.toFixed(4)}deg · pose ${shadowMotion.poseCmMax.toFixed(3)}cm/${shadowMotion.poseDegMax.toFixed(4)}deg · clock ${TIME_MODES[timeMode]} · map ${sun.shadow.mapSize.x} span ${shadowSpan}m · snap ${SHADOW_SNAP} · caster ${sun.castShadow ? 'sun' : headSpot.castShadow ? 'headlight' : 'none'}`);
+  if (errRing.length) L.push(`errors ${errRing.length} · ${errRing.join(' ¶ ')}`);
+  L.push(`device ${navigator.hardwareConcurrency ?? '?'} cores · dpr ${devicePixelRatio} · ${innerWidth}x${innerHeight} · ${gpu}`);
+  L.push(`ua ${navigator.userAgent.slice(0, 90)}`);
+  L.push(`settings tseg ${terrainSeg} · veg ${vegScale} · grass ${grassScale} · refine ${REFINE ? 'on' : 'off'} r${REFINE_R} · worker ${tworker && !tworker.disabled ? 'on' : 'off'} · luma ${lumaAsync ? 'async' : 'sync'}${mem ? ` · heap ${Math.round(mem.usedJSHeapSize / 1048576)}MB` : ''}`);
+  const _treePlacedByFamily = EZ_FAMILIES.map(f => ezTiers[f].reduce((n, t) => n + t.n, 0));
+  const _treePlaced = _treePlacedByFamily.reduce((n, v) => n + v, 0);
+  const _treeTris = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + t.n * t.tris, 0), 0);
+  const _treeBatches = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + Number(t.nNear > 0) + Number(t.nFar > 0), 0), 0);
+  // `t.mesh` as merged from the cell: EzTier carries the NEAR/FAR shadow split
+  // (only the near half is inside the shadow map and casts), so there is no
+  // single mesh and this read `undefined.castShadow` — a crash the moment the
+  // overlay opened. esbuild strips the types, so it reached the deployed cell
+  // without a murmur; tsc is the only reason it is not still there.
+  const _treeCasting = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + (t.nNear > 0 && t.near.castShadow ? 1 : 0), 0), 0);
+  const _treeVariants = treeVariantCap >= 1000 ? 'ALL' : String(treeVariantCap);
+  const _treeMix = EZ_FAMILIES.map((f, i) => `${f[0]}${_treePlacedByFamily[i]}`).join('/');
+  const _treeEdge = EZ_FAMILIES.map(f => `${f[0]}${ezEdgeLast[f]}`).join('/');
+  L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
+  L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
+  L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
+  L.push(`main thread: in tick ${(sessTick / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessTick)} of wall) recent ${n} ticks p50 ${tpct(0.5)} p95 ${tpct(0.95)} p99 ${tpct(0.99)} recent max ${tpct(1)} session max ${Math.round(sessTickMax)} · off-tick tasks ${(sessOff / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessOff)}) · gap ${((gapRow?.ms ?? 0) / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(gapRow?.ms ?? 0)}) — unmeasured time includes scheduling, GPU waits and uninstrumented work; not a GPU measurement`);
+  const rows = [...sessProf.entries()].map(([k, v]) => ({ k, ...v })).sort((a, b) => b.slowMs - a.slowMs || b.ms - a.ms);
+  const slowTotal = rows.reduce((a, r) => a + r.slowMs, 0);
+  L.push(`phase                 total ms   share   calls   mean    max | in slow frames ms  share  top-of-frame`);
+  const row = (k: string, ms: number, cnt: number, max: number, slowMs: number, top: number): string =>
+    `${k.padEnd(20)} ${String(Math.round(ms)).padStart(9)} ${String((100 * ms / Math.max(1, sessWall)).toFixed(1)).padStart(6)}% ${String(cnt).padStart(7)} ${String((ms / Math.max(1, cnt)).toFixed(1)).padStart(6)} ${String(max.toFixed(0)).padStart(6)} | ${String(Math.round(slowMs)).padStart(15)} ${String((100 * slowMs / Math.max(1, slowTotal)).toFixed(0)).padStart(5)}% ${String(top).padStart(6)}`;
+  for (const r of rows) L.push(row(r.k, r.ms, r.n, r.max, r.slowMs, r.top));
+  if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)} · feeds ${workerLedger.hydroFeeds} skipped ${workerLedger.hydroSkips}`);
+    const pa = Math.max(1, workerLedger.applied);
+    L.push(`post split ms/build reseat ${(workerLedger.reseatMs / pa).toFixed(1)} redrape ${(workerLedger.redrapeMs / pa).toFixed(1)} hydro ${(workerLedger.hydroMs / pa).toFixed(1)} batter ${(workerLedger.batterMs / pa).toFixed(1)} culvert ${(workerLedger.culvertMs / pa).toFixed(1)} · post max ${Math.round(workerLedger.postMax)} · dropped ${workerLedger.dropped}`); }
+  L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
+  { const r = goalSolveStat; if (r.runs) L.push(`route solves ${r.runs} (found ${r.found} failed ${r.failed}) · ms/solve ${(r.totalMs / r.runs).toFixed(0)} (graph ${(r.graphTotalMs / r.runs).toFixed(0)}) max ${Math.round(r.maxMs)} · slices ${r.slices} max ${r.maxSliceMs.toFixed(1)}ms · last span ${Math.round(r.spanMs)}ms · walked ${r.walked}/${r.nodes} (fine ${graphStat.fine} coarse ${graphStat.coarse} portals ${graphStat.portals}) · graph cached ${graphStat.cached ?? 0} · tiles skipped ${r.tilesSkipped} hit ${r.tilesHit} · last ${r.last}`); }
+  { const w = swardLedger; L.push(`sward sweeps ${w.sweeps} · steps ${w.steps} ms ${(w.stepMs / Math.max(1, w.steps)).toFixed(1)} max ${Math.round(w.stepMax)} · deferred ${w.deferred} · mask ${w.masks} ms ${(w.maskMs / Math.max(1, w.masks)).toFixed(1)} max ${Math.round(w.maskMax)}`); }
+  if (sessSlowLog.length) L.push(`slow frames (last ${sessSlowLog.length}): ` + sessSlowLog.map((f) => `${f.t}s ${f.ms}ms [${f.tops}]`).join(' · '));
+  L.push('tree phases ms/call (max): ' + [...vegPhaseTotals].map(([k, v]) => `${k} ${(v.ms / Math.max(1, v.n)).toFixed(1)} (${Math.round(v.max)})`).join(' · '));
+  return L.join('\n');
+}
+/** Copy the telemetry: the clipboard where a gesture allows it, a text box
+ *  to select otherwise. */
+function copyTelemetry(): void {
+  const text = telemetryReport();
+  const fallback = (): void => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;inset:10% 6%;z-index:60;background:#080e10;color:#d6e2e4;border:1px solid #2b3d43;font:11px ui-monospace,monospace;padding:8px;white-space:pre;';
+    ta.readOnly = true;
+    ta.addEventListener('pointerdown', (ev) => { ev.stopPropagation(); });
+    ta.addEventListener('click', () => { ta.select(); });
+    const close = document.createElement('button');
+    close.textContent = 'CLOSE';
+    close.style.cssText = 'position:fixed;top:5%;right:6%;z-index:61;font:12px ui-monospace,monospace;padding:6px 10px;';
+    close.addEventListener('click', () => { ta.remove(); close.remove(); });
+    document.body.append(ta, close);
+    ta.focus(); ta.select();
+  };
+  const clip = navigator.clipboard;
+  if (clip && clip.writeText) clip.writeText(text).then(() => hudFlash('TELEMETRY COPIED'), fallback);
+  else fallback();
+}
+(window as unknown as { __telemetry?: object }).__telemetry = (copy = false): string => { if (copy) copyTelemetry(); return telemetryReport(); };
+/** The FPS readout's hit box, in HUD units, set where it is drawn. */
+const fpsRect = { x: 0, y: 0, w: 0, h: 0 };
+let fpsTapAt = 0;
+function fpsDown(e: PointerEvent): boolean {
+  if (fpsRect.w === 0 || menu.tab() !== null) return false;
+  const x = e.clientX / hudS, y = e.clientY / hudS;
+  if (x < fpsRect.x - 8 || x > fpsRect.x + fpsRect.w + 8 || y < fpsRect.y - 8 || y > fpsRect.y + fpsRect.h + 8) return false;
+  const now = performance.now();
+  if (now - fpsTapAt < 450) { fpsTapAt = 0; copyTelemetry(); return true; }
+  fpsTapAt = now;
+  return true;
+}
+(window as unknown as { __frameprof?: object }).__frameprof = (reset = true): object => {
+  const secs = (performance.now() - profSince) / 1000;
+  const rows = [...frameProf.entries()].map(([k, v]) => ({ name: k, ms: +v.ms.toFixed(1), perFrame: +(v.ms / Math.max(1, profFrames)).toFixed(2), n: v.n, max: +v.max.toFixed(1) }))
+    .sort((a, b) => b.ms - a.ms);
+  const out = { frames: profFrames, secs: +secs.toFixed(1), wallMs: +profWhole.toFixed(0), rows };
+  if (reset) { frameProf.clear(); profFrames = 0; profWhole = 0; profSince = performance.now(); }
+  return out;
+};
 function tick(now: number): void {
   // PAUSED WHILE THE MENU IS UP, and the "when appropriate" is real drive: the
   // car outside is still moving whatever this screen is doing, so freezing the
@@ -31625,11 +36425,27 @@ function tick(now: number): void {
   // where it stands; REAL drive is exempt for the same reason the menu is —
   // the road outside does not pause, and a clock that lies about that is worse
   // than no clock.
-  const paused = ((menu.tab() !== null || hidden) || rewindPaused) && !real.on;
+  // Close the previous frame before recording this tick, on actual entry
+  // times. The animation timestamp can precede callback execution.
+  profFrame(performance.now());
+  profTickStart();
+  // A DRIVEN REEL IS EXEMPT, EXACTLY AS REAL DRIVE IS. The reel only runs with
+  // the hub open — `stepAttract` stands it down otherwise — and an open menu is
+  // what `paused` MEANS, so the two flatly contradict each other. A recorded
+  // tape never noticed: `played` is spliced in ahead of the pause a few lines
+  // below, so a replay drives a paused world by construction. The autopilot has
+  // no such splice — it is handed `off` when paused and its output is zeroed
+  // when paused — so a driven slot armed, engaged, streamed four thousand road
+  // cells and sat still for ninety seconds with `src: none`.
+  //
+  // Recording is still suppressed below: the reel's own driving must not land
+  // in the player's tape ring and come back as something they KEPT.
+  const attractDriving = attract.on && !!attract.drive;
+  const paused = ((menu.tab() !== null || hidden) || rewindPaused) && !real.on && !attractDriving;
   // BEFORE ANYTHING INTEGRATES. The chassis loop has no finite check inside it
   // and NaN survives every clamp on the way round, so the only place a break can
   // be made is ahead of the loop. See breakNanLatch.
-  breakNanLatch();
+  { const _p = performance.now(); breakNanLatch(); profAdd('breakNanLatch', _p); }
   const raw = now - last;
   if (raw > 0 && raw < 2000) frameMs += (raw - frameMs) * 0.1;
   // RAW SAMPLES, not the smoothed value. `frameMs` is a 0.1 lerp, which is the
@@ -31675,29 +36491,35 @@ function tick(now: number): void {
   // The splash's own clock: WALL time, because the sim's dt is zero exactly
   // when the menu is up — which is the only time the splash exists.
   const wallDt = clamp(raw / 1000, 0, 0.06);
+  // Username can arrive after the first frame or change on sign-out. Only a
+  // changed plate rebuilds its small glyph mesh and the derived silhouette.
+  if (now - rigPlateAt > 1000) {
+    rigPlateAt = now;
+    if (rigModel.setRegistration?.(sync.status().user)) rebuildRigSilhouette();
+  }
   {
-    const wantGold = menu.tab() === T_DRIVE && !lineOn && !real.on
-      && camMode !== 'top' && clockHeld === null;
+    const wantGold = (menu.tab() === T_DRIVE || (menu.tab() === T_RIG && menu.rigLive())) && !lineOn && !real.on
+      && camMode !== 'top' && clockShift === null;
     splashGold += ((wantGold ? 1 : 0) - splashGold) * Math.min(1, 0.9 * wallDt / 0.6);
     if (splashGold < 0.003) splashGold = 0;
   }
-  stepAttract(now);
+  { const _p = performance.now(); stepAttract(now); profAdd('stepAttract', _p); }
   // The autopilot decides BEFORE the frame's input is read, because that is
   // what it is: this frame's controls. Handed the same reasons to stand down
   // that the manual path has — a replay is already driving, real drive has no
   // throttle to give it, and the drone has the controls.
-  stepAuto(dt, !!played || real.on || paused || scrubbing);
+  { const _p = performance.now(); stepAuto(dt, !!played || real.on || paused || scrubbing); profAdd('stepAuto', _p); }
   const raw2 = played
     ? { throttle: played.throttle, steer: played.steer, brake: played.brake, brakeF: played.brakeF }
     : real.on || paused || scrubbing ? { throttle: 0, steer: 0, brake: false, brakeF: 0 } : input();
   // …and the RING takes what the hands just did, before anything downstream has
   // a chance to reinterpret it. Always, unless a tape is already driving —
   // recording the replay would be recording our own echo.
-  if (!played && !paused && !scrubbing && dt > 0) tapeWrite(dt, raw2);
+  if (!played && !paused && !attractDriving && !scrubbing && dt > 0) { const _p = performance.now(); tapeWrite(dt, raw2); profAdd('tapeWrite', _p); }
   // FLYING THE DRONE MEANS NOT DRIVING. The rig stays exactly where you left
   // it — that is the whole point of scouting ahead — so the controls are handed
   // over wholesale rather than shared.
-  stepDrone(dt, drone.up ? raw2.throttle : 0, drone.up ? raw2.steer : 0);
+  { const _p = performance.now(); stepDrone(dt, drone.up ? raw2.throttle : 0, drone.up ? raw2.steer : 0); profAdd('stepDrone', _p); }
   // FLYING USED TO MEAN NOT DRIVING — the controls hand over wholesale and
   // the rig parks. With the autopilot holding the wheel the rule inverts:
   // thumb flies the drone, arithmetic drives the truck, and the drone view
@@ -31715,8 +36537,8 @@ function tick(now: number): void {
   // in equilibrium.
   const parked = drone.up && !auto.on;
   if (parked) { state.speed = 0; slideV = 0; }
-  stepSun();
-  stepWeather(now, dt);
+  { const _p = performance.now(); stepSun(); profAdd('stepSun', _p); }
+  { const _p = performance.now(); stepWeather(now, dt); profAdd('stepWeather', _p); }
   const surfKind = surfaceAt(state.x, state.z);
   const surfQual = surfQ;                       // set by the call above
   // In water the depth is the quality, and the current is a fact the drive
@@ -31769,7 +36591,7 @@ function tick(now: number): void {
   const surf = wInfo || rigWadeM > 0.02
     ? wadeParams(Math.max(rigWadeM, wInfo?.depth ?? 0) * 0.5 + rigWadeM * 0.5)
     : surfaceFor(surfKind, surfQual);
-  if (real.on) stepReal(dt);
+  if (real.on) { const _p = performance.now(); stepReal(dt); profAdd('stepReal', _p); }
   // Arcade bicycle model: thrust minus drag, steering authority grows then
   // saturates with speed so the car neither pivots in place nor becomes twitchy.
   // SKIPPED ENTIRELY under real drive — the position is a measurement, and
@@ -31804,33 +36626,66 @@ function tick(now: number): void {
   // climbs cost speed and descents pay it back.
   const grip = groundedF;
   let yawRate = 0;
-  // PARKED IS A STATE, not a coincidence of forces. With no pedal down and no
-  // real speed left, static friction holds the truck on any sane grade —
-  // integrating grade-gravity and side-slope pull every frame instead had a
-  // "stopped" car creeping downhill forever. Past ~30° it genuinely rolls.
-  const parkHold = !real.on && !brake && Math.abs(throttle) < 0.02
-    && Math.abs(state.speed) < 0.45 && Math.abs(slideV) < 0.6
-    && Math.abs(Math.sin(gradePitch)) < 0.5 && Math.abs(Math.sin(gradeRoll)) < 0.5;
+  // ── PARKED IS A HOLD, NOT A BALANCE OF FORCES ──────────────────────
+  //
+  // A stopped truck must STAY stopped. The old rule had the right idea in the
+  // wrong PLACE: it zeroed the velocities after the integrator had already
+  // moved the truck for the frame, so every frame still contributed its own
+  // small displacement and the rig crept downhill forever regardless. Two
+  // millimetres a frame is twelve centimetres a second — which is exactly the
+  // "slipping slowly moves the rig when actually stationary" this ends. The
+  // hold is decided BEFORE the step now and the step is SKIPPED while it
+  // holds: nothing integrates, so nothing moves. That is a parking brake.
+  //
+  // AND THE GRADE IT SURVIVES IS THE TYRES', not a number. Gravity pulls a
+  // standing body along the slope at g·sinθ and the contact patch holds it at
+  // μ·g·cosθ, so it stays put while tanθ ≤ μ — the angle of repose, and the
+  // one honest place for the friction the four wheels are already sampling to
+  // decide something. Dry tarmac holds past 40°, wet mud lets go by 20, and
+  // the old fixed 30° was wrong in both directions.
+  //
+  // THE BRAKE NO LONGER DEFEATS IT. Coming to rest with the pedal down is the
+  // most obviously parked a truck ever is; requiring "no pedal" made the one
+  // input that should guarantee the hold the one that forbade it.
+  const holdMu = ((axleMu[0] + axleMu[1]) / 2) * rigGrip() * tune.grip;
+  const holdSlope = Math.hypot(Math.tan(gradePitch), Math.tan(gradeRoll));
+  // Wheels on the ground and a slope the patch can hold. Both are also the
+  // RELEASE: a steeper grade streaming in under a parked truck, or a wheel
+  // lifting off, hands it straight back to the physics instead of pinning it.
+  const canHold = !real.on && groundedF > 0.5 && holdSlope <= holdMu;
+  if (Math.abs(throttle) >= 0.02 || !canHold) parkLatch = false;
+  else if (Math.abs(state.speed) < 0.45 && Math.abs(slideV) < 0.6) parkLatch = true;
+  const parkHold = parkLatch;
+  dbgPark = { hold: parkHold, mu: +holdMu.toFixed(3), slope: +holdSlope.toFixed(3),
+    slopeDeg: +((Math.atan(holdSlope) * 180) / Math.PI).toFixed(1),
+    maxDeg: +((Math.atan(holdMu) * 180) / Math.PI).toFixed(1), grip: +groundedF.toFixed(2) };
   // THE STEERING RACK IS SHARED. Both models take the same input through the
   // same first-order lag; what they disagree about is what the front wheels
   // can DO with it.
   const SRATE0 = 7 * tune.steer;
   if (!real.on && !parked && tractionMode > 0) {
     steerCur += clamp(steer - steerCur, -SRATE0 * dt, SRATE0 * dt);
-    const wetDrag0 = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
-    stepTraction(dt, surf, grip, thrust, wetDrag0, gradePitch, gradeRoll);
-    if (brake && brakeF > 0.5 && grip > 0.4 && Math.abs(state.speed) < 1.2) { state.speed = 0; slideV = 0; }
-    if (parkHold) { state.speed = 0; slideV = 0; yawR = 0; }
-    state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2));
-    const want0 = clamp((Math.abs(slideV) - 0.5) / 3.5, 0, 1);
-    skid += (want0 - skid) * Math.min(1, (want0 > skid ? 9 : 3.5) * dt);
+    // The rack still turns while parked — a stopped truck can be pointed — but
+    // nothing else runs. Not the tyre model, not the position integral: the
+    // hold is the absence of a step, not a step whose result is thrown away.
+    if (parkHold) {
+      state.speed = 0; slideV = 0; yawR = 0; lastFx = 0; wheelSlipL = 0; slipAng = 0; dbgYaw = 0;
+      skid += (0 - skid) * Math.min(1, 3.5 * dt);
+    } else {
+      const wetDrag0 = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
+      { const _p = performance.now(); stepTraction(dt, surf, grip, thrust, wetDrag0, gradePitch, gradeRoll); profAdd('stepTraction', _p); }
+      if (brake && brakeF > 0.5 && grip > 0.4 && Math.abs(state.speed) < 1.2) { state.speed = 0; slideV = 0; }
+      state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2));
+      const want0 = clamp((Math.abs(slideV) - 0.5) / 3.5, 0, 1);
+      skid += (want0 - skid) * Math.min(1, (want0 > skid ? 9 : 3.5) * dt);
+    }
   } else if (!real.on && !parked) {
     state.speed += thrust * grip * dt;
     // Gravity acts on the GROUND's grade, not on the sprung body's pitch. pitchC
     // is damped by the suspension, carries a throttle-squat fudge, and is clamped
     // to 26 degrees — so it under-read every real hill and lagged the ones it did
     // see. gradePitch comes straight off the four wheel contacts.
-    state.speed -= GRAV * Math.sin(gradePitch) * grip * dt;
+    state.speed -= GRAV * Math.sin(gradePitch) * gravGrip(grip) * dt;
     // Wet ground drags and caps lower — the weather is felt through the wheels.
     const wetDrag = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
     state.speed -= state.speed * surf.drag * wetDrag * (0.1 + 0.9 * grip) * dt;
@@ -31840,7 +36695,7 @@ function tick(now: number): void {
     // the exact opposite of what that input meant, and it was the whole of what
     // "a small motion down stops the rig" felt like.
     if (brake && brakeF > 0.5 && grip > 0.4 && Math.abs(state.speed) < 1.2) state.speed = 0;
-    if (parkHold) state.speed = 0;
+    if (parkHold) { state.speed = 0; yawR = 0; }
     state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2)); // downhill may overrun the flat cap
     const SRATE = 7 * tune.steer; // full-lock in ~0.14s at STOCK
     steerCur += clamp(steer - steerCur, -SRATE * dt, SRATE * dt);
@@ -31873,7 +36728,7 @@ function tick(now: number): void {
     // Only partly — a fully coupled circle makes an arcade car undriveable.
     const longG = Math.min(Math.abs(thrust), budget);
     const lateral = Math.sqrt(Math.max(0, budget * budget - longG * longG * 0.5));
-    const gravLat = GRAV * Math.sin(gradeRoll) * grip;   // + = pulled to the car's LEFT
+    const gravLat = GRAV * Math.sin(gradeRoll) * gravGrip(grip);   // + = pulled to the car's LEFT
     const demand = state.speed * yawRate;                // + = wants to accelerate RIGHT
     // The slope's pull is served first; the corner gets what's left.
     const spare = Math.max(0, lateral - Math.abs(gravLat));
@@ -31910,6 +36765,7 @@ function tick(now: number): void {
     state.x += wInfo.fx * push * dt;
     state.z += wInfo.fz * push * dt;
   }
+  profMark('sim:drive');
   // ── revs: what the engine is doing, not what the road is doing ──
   // Grounded, the two agree and the box shifts every 14m/s. Airborne there is
   // no load at all: the throttle spins the engine straight up against its own
@@ -32155,6 +37011,7 @@ function tick(now: number): void {
   // laid on the terrain — so a corrected position gets its suspension resolved
   // this frame rather than showing one frame of the truck in the old attitude.
   if (played) { tapePlay.i++; tapeCorrect(); }
+  profMark('sim:collide');
   // ── suspension: the truck LIES on the terrain via 4 wheel contacts ──
   const sinH = Math.sin(state.heading), cosH = Math.cos(state.heading);
   const contacts: number[] = [];
@@ -32169,6 +37026,7 @@ function tick(now: number): void {
   const wheelWorld: Array<[number, number]> = [];
   const wheelSurf: Surface[] = [];
   let rawSum = 0;
+  let washRate = 0;   // metres of washboard the four wheels crossed this frame
   let wI = 0;
   // `wx` is the WEATHER everywhere else in this file and the WHEEL's offset
   // inside this loop, so the rain has to be read before the shadow falls.
@@ -32199,7 +37057,10 @@ function tick(now: number): void {
     const g = tyreHeight(wxw, wzw, sk, prevGround ?? groundAt(wxw, wzw));
     rawSum += g;
     smooth.push(g);
-    contacts.push(g + roughNoise(wxw, wzw) * sw.rough);
+    const wash = roughNoise(wxw, wzw) * sw.rough;
+    contacts.push(g + wash);
+    washRate += Math.abs(wash - washPrev[wI]); washPrev[wI] = wash;
+    if (!Number.isFinite(g)) nanTraceAt('contact', { wI, wxw, wzw, sk, g, prevGround: prevGround ?? null, gnd: groundAt(wxw, wzw), rc: roadCeiling(wxw, wzw), sh: sampleHeight(wxw, wzw), ms: meshSurfaceAt(wxw, wzw), diag: meshDiag(wxw, wzw), tiles: heightTiles.size, meshes: terrainMeshes.size, sx: state.x, sz: state.z, h: state.heading });
     wI++;
   }
   // WHEELS is [FL, FR, RL, RR] — negative z is forward, which is why the first
@@ -32209,6 +37070,16 @@ function tick(now: number): void {
   axleMu[0] = Math.min(wheelMu[0], wheelMu[1]) * 0.65 + ((wheelMu[0] + wheelMu[1]) / 2) * 0.35;
   axleMu[1] = Math.min(wheelMu[2], wheelMu[3]) * 0.65 + ((wheelMu[2] + wheelMu[3]) / 2) * 0.35;
   prevGround = rawSum / 4;
+  // In metres a second, MEASURED (soundscape-audit, Yosemite valley floor):
+  // open ground at 54 km/h asks the dampers for about 1.0, a graded track
+  // a third of that, tarmac under 0.2. The knee at 0.25 keeps tarmac silent
+  // and open ground at speed is the full bed; worn dampers rattle more,
+  // which is the suspension stock being audible for once.
+  const shakeRaw = dt > 0 ? washRate / (4 * dt) : 0;
+  chassisShakeRaw = shakeRaw;
+  const shakeT = Math.abs(state.speed) > 0.5
+    ? clamp((shakeRaw - 0.25) / 1.0, 0, 1) * (0.7 + 0.6 * (1 - rig.susp)) : 0;
+  chassisShake += (shakeT - chassisShake) * Math.min(1, dt * 8);
   const [cFL, cFR, cRL, cRR] = smooth;
   const ground = (cFL + cFR + cRL + cRR) / 4;
   const tY = ground + WHEEL_R; // axle-plane target
@@ -32232,16 +37103,48 @@ function tick(now: number): void {
   // (a 45 degree lean looks wrong), but gravity should see the real angle.
   gradePitch = Math.atan2((cFL + cFR - cRL - cRR) / 2, 2 * AXLE);
   gradeRoll = Math.atan2((cFR + cRR - cFL - cRL) / 2, 2 * TRACK);
-  if (!bodyInit) { bodyInit = true; bodyY = tY; pitchC = tPitch; rollC = tRoll; }
-  // SNAP when the ground moves further than any suspension could follow. The
-  // body descends at 9.81 and no faster (that cap is what makes crests launch
-  // you), so after anything that repositions the truck — a spawn, a curated
-  // start, a shove out of a building, a tunnel chord, terrain streaming in at a
-  // different height — it can be left hundreds of metres in the air, falling
-  // for tens of seconds with all four wheels drooped and therefore ZERO grip:
-  // no thrust, no braking, no steering, no gravity. Measured 3.9km of daylight
-  // under the hull after a relocation.
-  if (Math.abs(tY - bodyY) > 6) { bodyY = tY; vBodyY = 0; pitchC = tPitch; rollC = tRoll; }
+  // Seating the body is a placement, not a landing: whatever it was doing
+  // before the relocation is not a velocity it gets to keep, or the first frame
+  // after a teleport bottoms the bump stops and thuds.
+  if (!bodyInit) {
+    bodyInit = true; bodyY = tY; pitchC = tPitch; rollC = tRoll;
+    vBodyY = 0; vPitch = 0; vRoll = 0; prevTY = tY; wasGrounded = true; airS = 0;
+  }
+  // ── WHAT BRINGS THE TRUCK DOWN IS GRAVITY, NOT A RULE ──────────────
+  //
+  // This read `Math.abs(tY - bodyY) > 6` and seated the body on the ground the
+  // moment it found itself six metres from it, in either direction. It was
+  // written to recover a relocation that left the hull 3.9km in the air — and
+  // it does — but it cannot tell that from a truck that has simply driven off
+  // a ledge, so every jump ended the same way: clear six metres of air and you
+  // are yanked flat onto whatever terrain is underneath. The heave spring is
+  // already honest about flight (the -9.81 floor below means an airborne body
+  // falls at exactly g and nothing else, and the spring above it is the only
+  // thing that ever lifts one), so the fix is to stop overriding it.
+  //
+  // Three narrow reseats replace the blanket one, and each names the physical
+  // thing that went wrong rather than how far apart two numbers have got:
+  //
+  //   BURIED — the body is metres BELOW its own axle plane. The ground came up
+  //   through it: a tile refined, a chord loaded, a shove out of a building.
+  //   No fall produces this, and seating it is a lift, never a yank down.
+  //
+  //   THE GROUND MOVED — tY jumped further in one frame than a wheel could
+  //   have carried it, while the truck was still standing on it. That is the
+  //   world being rebuilt under a grounded truck, which is the streaming case
+  //   exactly; a truck LEAVING the ground is already airborne and this cannot
+  //   fire on it.
+  //
+  //   NEVER LANDED — the watchdog, and the only one of the three that is a
+  //   rule rather than a fact. Twelve unbroken seconds of air is a 700m fall;
+  //   nothing in this terrain offers one, so it means the hull is somewhere the
+  //   ground never was. It bounds the pathological case without touching any
+  //   real jump: the longest drop the Alps can hand you lands inside eight.
+  airS = wasGrounded ? 0 : airS + dt;
+  if (bodyY < tY - 6 || (wasGrounded && Math.abs(tY - prevTY) > 6) || airS > 12) {
+    bodyY = tY; vBodyY = 0; pitchC = tPitch; rollC = tRoll; vPitch = 0; vRoll = 0; airS = 0;
+  }
+  prevTY = tY;
   // THE DESCENT BUG. Capping downward acceleration at 1g is what makes a crest
   // launch the truck, and it must stay — but it was applied in the WORLD frame,
   // against a damper that wanted vBodyY = 0. On a sustained descent the ground
@@ -32317,10 +37220,35 @@ function tick(now: number): void {
   prevGradePitch = gradePitch;
   // Attitude springs are the same stiffness class as the heave spring — same
   // substep, same reason.
-  for (let si = 0; si < sn; si++) {
-    vPitch += (SUSP.ka * sK * (tPitch - pitchC) - SUSP.da * sD * (vPitch - gradeRate)) * sh;
-    pitchC += vPitch * sh;
-    vRoll += (SUSP.ka * sK * (tRoll - rollC) - SUSP.da * sD * vRoll) * sh; rollC += vRoll * sh;
+  //
+  // AND THEY ONLY EXIST WHILE A WHEEL IS LOADED. These springs ARE the
+  // suspension holding the body against the ground; with nothing touching,
+  // there is nothing to hold it, and chasing tPitch anyway had the hull rotate
+  // in mid-air to lie parallel to terrain it was merely flying over — the
+  // attitude half of the same yank the reseat above used to do to the height.
+  // In flight the body carries the rate it left with, bled slowly (a hull
+  // pushing air, no more), and the springs take back over the instant a wheel
+  // touches. That re-engagement, against whatever mismatch the landing found,
+  // is what makes a landing read as one.
+  //
+  // FLYING, NOT MERELY LIGHT. A fifth of a second is the threshold, and it is
+  // the difference between a jump and a bump: a descent over broken ground
+  // takes all four wheels off the deck for a frame or two at a time (35% of
+  // frames, measured on the Stelvio descent), and freezing the attitude on
+  // those would stop the body following a hill it is still driving down —
+  // which keeps the wheels drooped, which keeps it "airborne", which is a loop.
+  // Nothing real clears the ground for 200ms without having left it.
+  if (airS <= 0.2) {
+    for (let si = 0; si < sn; si++) {
+      vPitch += (SUSP.ka * sK * (tPitch - pitchC) - SUSP.da * sD * (vPitch - gradeRate)) * sh;
+      pitchC += vPitch * sh;
+      vRoll += (SUSP.ka * sK * (tRoll - rollC) - SUSP.da * sD * vRoll) * sh; rollC += vRoll * sh;
+    }
+  } else {
+    const bleed = Math.exp(-0.6 * dt);
+    vPitch *= bleed; vRoll *= bleed;
+    pitchC = clamp(pitchC + vPitch * dt, -1.0, 1.0);
+    rollC = clamp(rollC + vRoll * dt, -1.0, 1.0);
   }
   // Articulation: wheels chase their own contact while the sprung body lags.
   groundedF = 0;
@@ -32337,16 +37265,22 @@ function tick(now: number): void {
     // and the truck went from planted to helpless with no warning through the
     // controls. Load fades in over the last 10cm of extension instead.
     groundedF += 0.25 * clamp((def + SUSP.droop) / 0.1, 0, 1);
+    if (!Number.isFinite(def)) nanTraceAt('susp', { i, plane, def, bodyY, pitchC, rollC, contact: contacts[i], groundedF, vPitch, vRoll, tPitch, tRoll, gradeRate, dt });
     wheelPivots[i].position.y = def;
     wheelMeshes[i].scale.y = 1 - (0.1 * Math.max(0, def)) / SUSP.travel; // tire give under load
     wheelMeshes[i].rotation.x = wheelSpin;
     if (i < 2) wheelPivots[i].rotation.y = -steerCur * 0.42;
   }
+  // The airborne test the next frame reads, taken from THIS frame's contacts
+  // rather than from the height difference: a truck at full articulation with
+  // one wheel still loaded is not flying, and only the four deflections know.
+  wasGrounded = groundedF > 0;
   dbgSusp = { bodyY: +bodyY.toFixed(2), tY: +tY.toFixed(2), ground: +ground.toFixed(2),
     defs: wheelPivots.map((p) => +p.position.y.toFixed(3)),
     contacts: contacts.map((c) => +c.toFixed(2)),
     pitch: +((pitchC * 180) / Math.PI).toFixed(1), grounded: groundedF,
     vBodyY: +vBodyY.toFixed(2), terrainVy: +terrainVy.toFixed(2),
+    air: +airS.toFixed(2), gap: +(bodyY - tY).toFixed(2),
     gradeDeg: +((gradePitch * 180) / Math.PI).toFixed(1), dt: +dt.toFixed(3) };
   // With no load the wheels follow the ENGINE, not the road — so they blur up
   // over a jump and are still spinning when the truck lands.
@@ -32376,6 +37310,7 @@ function tick(now: number): void {
   // survey frame. A lamp's beam is not visible in sunlight; a hint of it is
   // kept, as it is for the pool, so dusk is a ramp rather than a switch.
   beamMat.uniforms.uAmp.value = (camMode === 'cab' ? 1.25 : camMode === 'chase' ? 1 : 0.25) * (0.15 + 0.85 * (1 - dayF));
+  profMark('sim:suspension');
   // HIGH BEAM AFTER DARK. One lamp spec cannot serve both: 110m of throw is
   // generous in daylight, where the beam is only a hint, and short at night,
   // where it is the only thing telling you where the road goes. Faded by the
@@ -32477,12 +37412,17 @@ function tick(now: number): void {
         // So: gated on the DRAWN surface, born at the WATERLINE rather than
         // at the wheel's contact patch under it, and thrown out along the
         // hull rather than straight up.
+        // A PUDDLE'S SURFACE IS THE ROAD, NOT THE RIVER UNDER THE BRIDGE.
+        // The gate answers for drawn bodies; standing rain has no body, so
+        // it sprays off the contact patch it is actually lying on. Either
+        // way the droplets are born on a surface the truck is touching.
         const spray = splashWet(wxw, wzw);
-        if (spray) {
+        const sprayY = spray ? spray.levelY : pud >= 0.35 ? contacts[i] : null;
+        if (sprayY !== null) {
           const side = (Math.random() < 0.5 ? 1 : -1) * (1.0 + Math.random() * 0.5);
-          emitDust(wxw + cosH * side * 0.4, spray.levelM - baseElev, wzw + sinH * side * 0.4,
+          emitDust(wxw + cosH * side * 0.4, Math.min(sprayY, bodyY + WETFX_ROOF), wzw + sinH * side * 0.4,
             cosH * side * 1.6 - sinH * v * 0.12, sinH * side * 1.6 + cosH * v * 0.12, true,
-            splashRgb(spray.kind));
+            splashRgb(spray?.kind ?? 'rain'));
         }
       } else if (Math.random() < 0.1) audio.stone(); // the pings ride the same plume
 
@@ -32491,10 +37431,13 @@ function tick(now: number): void {
   // THE BOW SHEET runs off the wade depth rather than the particle budget: it
   // is a property of the hull being in water, not of a wheel touching it, and
   // it must keep going when the budget is spent on spray.
+  profMark('lamps');
   splashBow(now, state.speed, rigWadeM);
-  stepDust(dt);
-  flushTerrain(now);
-  hydroTick(now);
+  { const _p = performance.now(); stepDust(dt); profAdd('stepDust', _p); }
+  { const _p = performance.now(); flushTerrain(now); profAdd('flushTerrain', _p); }
+  drainHydroJobs(now, appliedThisFrame);
+  appliedThisFrame = false;
+  { const _p = performance.now(); hydroTick(now); profAdd('hydroTick', _p); }
   // The sea keeps its station off a coast and stands down over dry basins.
   // Slewed, not snapped: the transition happens kilometres before the basin
   // floor is reachable, and a falling waterline reads as the lake this basin
@@ -32504,8 +37447,8 @@ function tick(now: number): void {
     const target = sl ?? groundAt(state.x, state.z) - 60;
     sea.position.y += clamp(target - sea.position.y, -0.5, 0.5);
   }
-  if (wildlifeOn) stepWildlife(dt);
-  stepOdo(dt, now);
+  if (wildlifeOn) { const _p = performance.now(); stepWildlife(dt); profAdd('stepWildlife', _p); }
+  { const _p = performance.now(); stepOdo(dt, now); profAdd('stepOdo', _p); }
   // The rig's condition, from the frame that just happened. SUN_DIR.y is the
   // sun's elevation, so it doubles as "is the array making anything".
   {
@@ -32537,12 +37480,12 @@ function tick(now: number): void {
       }
     }
   }
-  stepMission(now);
-  stepSurvey(now);
-  stepStations(now);
-  stepLine(now);
-  stepRuinLod(now);
-  stepZoomShed();
+  { const _p = performance.now(); stepMission(now); profAdd('stepMission', _p); }
+  { const _p = performance.now(); stepSurvey(now); profAdd('stepSurvey', _p); }
+  { const _p = performance.now(); stepStations(now); profAdd('stepStations', _p); }
+  { const _p = performance.now(); stepLine(now); profAdd('stepLine', _p); }
+  { const _p = performance.now(); stepRuinLod(now); profAdd('stepRuinLod', _p); }
+  { const _p = performance.now(); stepZoomShed(); profAdd('stepZoomShed', _p); }
   // THE CAR IS EVIDENCE TOO. Dry-land proof used to come only from a ribbon
   // being built, and Badwater Road is a single OSM way — so it fired once, at
   // the spawn, and never again. Drive 8km up the valley and the anchor was
@@ -32552,18 +37495,28 @@ function tick(now: number): void {
   if (seaOn && (surfKind === 'road' || surfKind === 'track')) {
     noteDryLand(state.x, state.z, groundAt(state.x, state.z));
   }
-  if (now > vegAt) { vegAt = now + 900; refreshVeg(); }
+  // Keep the existing population through a costly frame, but never starve it.
+  if (now > vegAt && (frameHeavyMs() < FRAME_HEAVY_MS || now - vegAt > 180)) {
+    const _treeRefreshAt = performance.now();
+    refreshVeg();
+    profAdd('treeRefresh', _treeRefreshAt);
+    // A refresh that ran out of seeding budget comes back in a fifth of a
+    // second rather than in nine tenths, so a hop's ring fills in a second or
+    // two instead of a quarter of a minute.
+    vegAt = now + (vegSeedDeferred ? VEG_SEED_CATCHUP : 900);
+  }
   else if (now > swardAt) { swardAt = now + 700; if (!swardGpu) refreshSward(); }
   // The GPU sward is uniform writes and a field rebuild only when the truck
   // leaves the middle of it, so it runs every frame rather than on a slow tick.
-  swardFrame();
+  { const _p = performance.now(); swardFrame(); profAdd('swardFrame', _p); }
   // Same shape and for the same reason: a sliced CPU sweep the shader reads,
   // rebuilt when the truck leaves the middle of it rather than on a tick.
-  sunmFrame();
+  { const _p = performance.now(); sunmFrame(); profAdd('sunmFrame', _p); }
   // ── the world's own sound, sampled around the truck ──
   // Cheap and cached: a ring of water probes and a look at this cell's
   // foliage, twice a second. The bed is DUCKED by motion and by the engine
   // — it was always there; the idle was on top of it.
+  if (wetDbgOn && nowMs - wetDbgAt > 2000) { wetDbgAt = nowMs; repaintWetDebug(); }
   if (nowMs - ambSampledAt > 500) {
     ambSampledAt = nowMs;
     // THE RULE (the owner's): the bed plays what is ACTUALLY THERE, never a
@@ -32572,35 +37525,123 @@ function tick(now: number): void {
     // and wide, a river runs mid, and fast water over the rapids' own
     // boulder grid froths bright. Birds and rustle already answer to this
     // cell's real foliage the same way.
-    let wet = 0, flow = 0;
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2;
-      const wi = waterInfoAt(state.x + Math.sin(a) * 24, state.z + Math.cos(a) * 24);
-      if (wi.depth > 0.06) { wet++; flow = Math.max(flow, wi.speed); }
+    // ── THE RING IS THREE RINGS, AND IT KNOWS WHICH WAY THE WATER IS ──
+    //
+    // It was one ring at 24m spent entirely on "how much", so a river you were
+    // driving alongside sat in the middle of your head — and a river a hundred
+    // metres off did not exist at all. That second half was invisible for as
+    // long as every dry probe came back half a metre deep (see waterInfoAt):
+    // the bed played everywhere, so nobody could tell it could not hear past a
+    // cricket pitch. Measured at the Yosemite valley floor with the default
+    // gone: the Merced is 67m away, the 24m, 40m and 60m rings are all dry and
+    // its nearest wet probe is on the 90m ring. A river you can SEE from the
+    // road, silent.
+    //
+    // Water is audible a long way and quieter further off, so distance is a
+    // WEIGHT and not a radius. Summing the wet probes' own directions then
+    // gives the bearing for free — a SUM, not a nearest, so water on both
+    // sides of a ford cancels to the middle, which is where it actually is.
+    // …AND THE FAR RINGS ARE DENSER. Six probes on a 220 m ring are 230 m
+    // apart, which is how the Merced — a river twenty metres wide, in
+    // plain sight — went between every one of them: the audit measured
+    // `riverRaw 0.09` from a single wet probe on the 120 m ring and nothing
+    // beyond. Twelve on the outer rings, 38 probes in all, twice a second;
+    // each is a hydro sample and the whole ring is cheaper than one tree.
+    // The weights rose with it: a river you can see from the road at
+    // sixty metres is worth about −30 dBFS, not −42.
+    // AND THE NEAREST WET PROBE SETS THE LEVEL; the sum only adds breadth.
+    // A sum alone is a sum over how many probes happen to land in a river
+    // twenty metres wide: the Merced at 67 m scored one hit on the 120 m
+    // ring and read 0.15 (−40 dBFS) for a river in plain sight. The nearest
+    // ring's weight is what that distance is worth — −30 dBFS at sixty
+    // metres — and every further hit adds a little, so a lake on the beam
+    // is still wider than a brook.
+    let wetW = 0, maxW = 0, flow = 0, bx = 0, bz = 0, near = 0;
+    for (const [rad, w, n] of AMB_WATER_RINGS) {
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        const wi = waterInfoAt(state.x + Math.sin(a) * rad, state.z + Math.cos(a) * rad);
+        // `wi.wet`, NOT `depth > 0.06` — see waterInfoAt. The depth is a
+        // default on dry land and this ring is the one caller asking whether
+        // there IS any water, so the old test was true at every point on the
+        // planet.
+        if (!wi.wet || wi.depth <= 0.06) continue;
+        wetW += w; maxW = Math.max(maxW, w);
+        bx += Math.sin(a) * w; bz += Math.cos(a) * w;
+        // FROTH IS A NEAR THING. Rapids two hundred metres off are a wash, not
+        // a rattle, so only the inner ring opens the bright channel.
+        if (rad === AMB_WATER_RINGS[0][0]) { near++; flow = Math.max(flow, wi.speed); }
+      }
     }
-    ambRiverL = clamp(wet / 3 + (surfKind === 'water' ? 0.4 : 0), 0, 1);
+    ambRiverL = clamp(maxW + wetW / 8 + (surfKind === 'water' ? 0.4 : 0), 0, 1);
+    // Into the TRUCK's frame. Forward is (sin h, -cos h), so the right vector
+    // is (cos h, sin h) — the dot with it is the ear the water is in.
+    ambRiverAt = wetW === 0 || surfKind === 'water' ? 0
+      : clamp(((bx / wetW) * Math.cos(state.heading) + (bz / wetW) * Math.sin(state.heading)), -1, 1);
+    // The room, on the same half-second tick as the rest of the bed: a hint
+    // walk and a grid-cell walk are cheap, and a ceiling does not move.
+    encTarget = enclosureAt(state.x, state.z, bodyY).e;
     const cxA = Math.floor(state.x / VEG_CELL), czA = Math.floor(state.z / VEG_CELL);
     let rap = 0;
     for (let ox = -1; ox <= 1; ox++) {
       for (let oz = -1; oz <= 1; oz++) rap += (rapidRocks.get(`${cxA + ox},${czA + oz}`) ?? []).length;
     }
-    ambFrothL = wet > 0 || surfKind === 'water' ? clamp(flow / 2.2 + rap / 6, 0, 1) : 0;
+    ambFrothL = near > 0 || surfKind === 'water' ? clamp(flow / 2.2 + rap / 6, 0, 1) : 0;
     const sites = vegGrid.get(`${cxA},${czA}`) ?? [];
     let fol = 0;
     for (const s of sites) if (s.k !== 'rock' && s.k !== 'spire') fol++;
     ambVegL = clamp(fol / 12, 0, 1);
+    // THE COVER, as grass: five WorldCover texels (here and 30 m out on four
+    // sides — a texel is 38 m). Grassland and crop hiss in the wind, a
+    // wetland and scrub less, a wood's floor a little, and built, bare,
+    // snow and water not at all.
+    let gr = 0;
+    for (const [ox, oz] of [[0, 0], [30, 0], [-30, 0], [0, 30], [0, -30]]) {
+      const c = sampleCover(state.x + ox, state.z + oz);
+      gr += c === COVER.grass ? 1 : c === COVER.crop ? 0.9 : c === COVER.wetland ? 0.7
+        : c === COVER.shrub ? 0.5 : c === COVER.moss ? 0.4 : c === COVER.tree ? 0.25 : 0;
+    }
+    ambGrassL = gr / 5;
   }
   const windAmb = clamp((live.on ? live.windKmh : 12) / 55, 0, 1);
   const bed = clamp(1 - Math.abs(state.speed) / 7, 0, 1) * (engineSt === 'on' ? 0.4 : 1);
   dbgAmb = {
     rustle: +(windAmb * (0.25 + 0.75 * ambVegL) * Math.max(bed, 0.2)).toFixed(3),
     river: +(ambRiverL * (0.35 + 0.65 * bed)).toFixed(3),
-    birds: +((sunAlt > 0.06 ? 1 : 0) * (1 - wxL.rain) * ambVegL * bed).toFixed(3),
+    // Dawn arrives gradually in the soundscape, as it does in the light.
+    birds: +(clamp((sunAlt + 0.04) / 0.16, 0, 1) * (1 - wxL.rain) * ambVegL * bed).toFixed(3),
     wind: +windAmb.toFixed(2), veg: +ambVegL.toFixed(2), riverRaw: +ambRiverL.toFixed(2),
     froth: +ambFrothL.toFixed(2), engine: engineSt, brush: +brushAmt.toFixed(2),
+    riverAt: +ambRiverAt.toFixed(2), enc: +encL.toFixed(3), encRaw: +encTarget.toFixed(3),
+    grass: +ambGrassL.toFixed(2), shake: +chassisShake.toFixed(2), shakeRaw: +chassisShakeRaw.toFixed(2),
     brushPeak: +(brushPeak = Math.max(brushPeak, brushAmt)).toFixed(2),
   };
-  audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number, windAmb, ambFrothL);
+  // THE GLIDE IS THE POINT. A portal is a hard edge in geometry and a soft one
+  // in air — you hear a tunnel a moment before you are inside it — and this
+  // half of the ease is what carries the approach; `space()` has its own,
+  // shorter, on the filter itself.
+  if (encForceUntil > nowMs) encL = encForce;
+  else encL += (encTarget - encL) * Math.min(1, dt * 2.5);
+  // Parked with the key out is the one time the driver is listening, and the
+  // cab's shell opens for it — see space().
+  const parkedNow = engineSt !== 'on' && Math.abs(state.speed) < 0.5 ? 1 : 0;
+  audio.space(encL, camMode === 'cab' ? 1 : 0, parkedNow);
+  audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number,
+    windAmb, ambFrothL, ambRiverAt, ambGrassL * Math.max(bed, 0.2));
+  // THE DRONE, HEARD — from wherever the listener is. In the drone view you
+  // are riding it; from the truck it is a machine some way off, on one side,
+  // working harder in a climb or a dash than in a hover. Spool 0 on the rack
+  // releases the voice, so the call is unconditional and cheap.
+  {
+    const own = camMode === 'drone';
+    const dx = drone.x - state.x, dz = drone.z - state.z;
+    const dist = Math.hypot(dx, drone.y - bodyY, dz);
+    const bearing = dist > 1 ? clamp((dx / dist) * Math.cos(state.heading) + (dz / dist) * Math.sin(state.heading), -1, 1) : 0;
+    const climb = dt > 0 ? Math.abs(drone.y - droneYPrev) / dt : 0;
+    droneYPrev = drone.y;
+    const load = clamp(climb / DRONE.CLIMB + Math.abs(drone.pitch) * 2 + Math.abs(drone.roll) * 1.5, 0, 1);
+    audio.drone(drone.spool, dist, load, bearing, own);
+  }
   // The squeal's raw inputs, photographed at the same instant the mixer
   // reads them — chasing "SLIP lit, tyre silent" needs the SIGNAL, not
   // another guess at the gain.
@@ -32608,7 +37649,8 @@ function tick(now: number): void {
     surf: surfKind, q: +surfQ.toFixed(2), kmh: +(state.speed * 3.6).toFixed(0) };
   audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, skid,
     surfKind === 'water' ? 0 : surfQ, wheelSlipL, windAmb,
-    engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0);
+    engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0,
+    dt > 0 && surfKind !== 'water' ? chassisShake : 0, wxL.wet);
   // The rig against the world: bodywork on a wall while moving, the hull's
   // wash through water, and the slap of arriving in it with any speed on.
   // The graze's floor rose from 0.4 to 0.55 of the mix: a lean along a rail
@@ -32641,7 +37683,8 @@ function tick(now: number): void {
     rig.hull = clamp(rig.hull - dt * 0.0035 * Math.min(1, Math.abs(state.speed) / 8), 0, 1);
   }
   prevSurfKind = surfKind;
-  reveal(state.x, state.z);
+  { const _p = performance.now(); reveal(state.x, state.z); profAdd('reveal', _p); }
+  profMark('world:fx');
   // A ZOOM IS A MOVE. The 1.2s cadence is right for a truck that covers 40m
   // between ticks; a pinch that doubles the view radius in one gesture used
   // to wait out the full tick before the first far or overview tile was even
@@ -32653,14 +37696,52 @@ function tick(now: number): void {
   // Two rigs. TOP: the chart view, tilted a touch for relief. CHASE: low and
   // behind, where speed is legible and the fog reads as a night horizon.
   const fwdX = Math.sin(state.heading), fwdZ = -Math.cos(state.heading);
+  // THE PLANET AND THE SKY, BEFORE THE BRANCH AND NOT INSIDE IT. Both of these
+  // stand themselves down off the chart, and both would be stranded ON by a
+  // camera change if they were only reached from the top branch — a backdrop
+  // left up is a black frame from the cab, and it would happen on the one
+  // frame nobody is looking at the chart to notice.
+  // Update the single zoom state BEFORE globe/shell ownership is evaluated.
+  // Previously the globe used last frame's zoom while the shell used this one.
+  if (camMode === 'top') zoomCur = panPtrs.size === 2 ? zoomT : smoothChartZoom(zoomCur, zoomT, dt);
+  stepGlobe();
+  // The atmosphere gives out where the planet becomes an object: by 14km a
+  // pixel the frame is wider than the Earth's disc and what surrounds the limb
+  // is space, not sky. Below 6km a pixel the dome is still a horizon you are
+  // looking along. `chartMpp` is 0 off the chart, so this is 0 there.
+  (skyMat.uniforms.uSpace as { value: number }).value =
+    camMode === 'top' ? clamp((chartDist() - 1800000) / 2500000, 0, 1) : 0;
   if (camMode === 'top') {
-    zoomCur += (zoomT - zoomCur) * Math.min(1, 8 * dt);
     // The coarse shell is a backdrop for the wide view and nothing else: shown
     // only once the frustum reaches past the fine ring, so its seam is never
     // on screen at an angle that could reveal it. The overview vectors ride
     // the same gate: below it the fine world is the better map of itself.
-    farGroup.visible = zoomCur > 6;
-    ovGroup.visible = zoomCur > 6;
+    // ── AND THE BACKDROP HANDS OVER WHEN IT STOPS COVERING THE FRAME ──
+    //
+    // The shell is a 5x5 ring, so past the zoom where that ring is narrower
+    // than the frame it is a RECTANGLE of coarse ground on a planet — which is
+    // what it looked like: at 6km a pixel the shell is a flat grey-green smear
+    // over two thirds of the frame with a hard edge across the Cape, while the
+    // globe beside it carries a hillshaded coast and a real sea. The shell was
+    // built to back a 600km chart and it is no longer the better picture at
+    // 1,500km and beyond.
+    //
+    // The test is geometric and self-adjusting at every rung: the ring covers
+    // the frame while it is wider than the frame's DIAGONAL — the corners are
+    // where a square ring under a rotated frame gives out first. Below that
+    // the shell draws, above it the planet does, and no edge is ever on
+    // screen. `|| !globeMesh.visible` keeps the old behaviour wherever there
+    // is no planet to hand to (a fixture, or the texture never arriving):
+    // a coarse backdrop beats an empty frame.
+    // ONE EXPRESSION, IN `globeFree`. The ring-against-diagonal test decides
+    // two things now — who draws the backdrop and whether a drag turns the
+    // planet — and they must never be able to disagree, because a spun globe
+    // under a shell that did not spin is the one failure this design exists to
+    // rule out. `globeFree` is 0 both where the ring covers and where there is
+    // no planet at all, which is exactly the pair of cases the shell draws in.
+    const shellOn = (zoomCur > 6 || chartRemote()) && globeFree() === 0;
+    farGroup.visible = shellOn;
+    ovGroup.visible = shellOn;
     // …and where the coarse vectors are allowed to start showing. At driving
     // zooms, only where the fine ring has given out (`osmRingR`, measured by
     // the tile queue) — below it the fine world is the better map of itself.
@@ -32678,22 +37759,24 @@ function tick(now: number): void {
     // toward the truck at 2.5/s while the thumb was still moving it, which is
     // the other half of what "janky" was describing — above 21km/h the chart
     // fought every pan.
-    if (!panPtrs.size && (stick || Math.abs(state.speed) > 6 || drone.up)) {
+    if (!panPtrs.size && !chartRemote() && globeFree() === 0
+      && (stick || Math.abs(state.speed) > 6 || drone.up)) {
       const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f;
     }
     // THE CHART IS OVER WHOEVER IS CURRENT. Flying, that is the drone: opening
     // the map to find the drone and being shown the parked truck instead is the
     // one thing the map must not do.
     const tvx = viewX(), tvz = viewZ();
-    const dist = CAM.base * zoomCur + Math.abs(drone.up ? 0 : state.speed) * 3.6 * CAM.perKmh;
-    const tiltRad = (CAM.tilt * Math.PI) / 180;
-    // THE CHART'S LINE WEIGHT, in metres, so that it is OV_PX pixels. The
-    // camera orbits at `dist` and the world renders into pixSize.y lines, so
-    // one art pixel is that much ground — and a ribbon is a fixed number of
-    // them at every zoom on the ladder. Floored at a metre so a driving-zoom
-    // chart cannot collapse the layer to nothing between frames.
-    ovWU.uOvW.value = Math.max(1,
-      (OV_PX * 2 * dist * Math.tan((camera.fov * Math.PI) / 360)) / pixSize.y);
+    const dist = chartDist();
+    const tiltRad = (chartTilt() * Math.PI) / 180;
+    // THE CHART'S LINE WEIGHT: one art pixel of ground at the centre (the
+    // camera orbits at `dist` and the world renders into pixSize.y lines),
+    // the rung's base width in those pixels, and the rung's ink — see the
+    // ladder at OV_PX_BY_Z. Floored at half a metre so a driving-zoom chart
+    // cannot collapse the layer to nothing between frames.
+    ovWU.uOvMpp.value = Math.max(0.5, (2 * dist * Math.tan((camera.fov * Math.PI) / 360)) / pixSize.y);
+    ovWU.uOvPx.value = ovPxFor(ovZ);
+    ovWU.uOvInk.value = ovInkFor(ovZ);
     // THE CHART'S FLOOR, LOW-PASSED. The camera rides at a fixed height above
     // the ground under its target, which is right for keeping a mountain out
     // of the lens — and a step function anywhere the ground steps. Panning the
@@ -32703,7 +37786,7 @@ function tick(now: number): void {
     // moving 74m during a drag that was purely sideways. The map lurching as
     // you cross a shoreline is the "janky" from the other side. Smoothed, the
     // floor still follows the land and never steps off it.
-    const tgtRaw = sampleHeight(tvx + panX, tvz + panZ);
+    const tgtRaw = chartGround(tvx + panX, tvz + panZ);
     chartY = chartY === null ? tgtRaw : chartY + (tgtRaw - chartY) * Math.min(1, 2.2 * dt);
     const tgtY = chartY;
     // The camera stands OPPOSITE whatever screen-up is meant to point at: due
@@ -32725,7 +37808,10 @@ function tick(now: number): void {
     // the flicker, and it gets worse the further out you zoom. Nothing is
     // within 8% of the orbit distance from a camera tilted 70° off the ground,
     // so this is free.
-    setNear(Math.max(1, dist * 0.08), Math.max(30000, dist * 4));
+    // THE FAR PLANE HAS TO CLEAR THE HORIZON, not four times the stand-off —
+    // see `globeFar`. Below about 800km up the two cross and `dist * 4` cuts
+    // the planet off mid-ocean.
+    setNear(Math.max(1, dist * 0.08), Math.max(30000, globeFar(dist)));
   } else if (camMode === 'drone') {
     // TWO VIEWS, the same two the rig has and chosen by the same chip. CHASE
     // trails it: far enough back that the drone is a legible object rather than
@@ -32905,6 +37991,7 @@ function tick(now: number): void {
   // The cab is WELDED to the body — no smoothing at all. A lerped eye lags the
   // shell it is supposed to be inside, and at 25/s that reads as the whole
   // truck sliding around the camera every time you turn in.
+  profMark('world:stream');
   // A SCRUB SNAPS, because a scrub has no dt to ease over. The follow is
   // `1 - exp(-k * dt)` and a scrub freezes dt at zero, so the factor is
   // exactly zero and the camera CANNOT move: reported from the seat as the rig
@@ -32930,9 +38017,16 @@ function tick(now: number): void {
       camInit = true;
       ghostCab(camMode === 'cab');
     }
-  } else if (!camInit || camMode === 'cab' || rewind.at !== null) {
+  } else if (!camInit || camMode === 'cab' || camMode === 'top' || rewind.at !== null) {
     camera.position.copy(camPos); camInit = true;
-  } else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
+    // THE CHART SNAPS, AND THAT IS WHY THE LERP BELOW LOST ITS `top` ARM. The
+    // top camera used to ease toward `camPos` at 10/s while `camera.lookAt`
+    // aimed at the new target immediately, so the eye and the aim disagreed for
+    // the whole of a drag and the chart's ANGLE changed under a finger that had
+    // only asked it to move. Position and aim are set together now, so there is
+    // nothing left to ease — and with `top` handled here the else can no longer
+    // be it, which is what the compiler said when the arm stayed behind.
+  } else camera.position.lerp(camPos, 1 - Math.exp(-4.5 * dt));
   // WHAT THIS RIG LOOKS AT, as a point, so a flight can interpolate the aim as
   // well as the eye. Whipping the lens onto the new subject while the body
   // drifts across is the cut all over again, in the axis you notice most.
@@ -32961,7 +38055,7 @@ function tick(now: number): void {
   // treated like one. Seeded from wherever the chase camera stood so entry is
   // a drift, not a cut; the truck sits LOW in frame because the aim point is
   // above its roof; the exit is the chase rig's own lerp easing back in.
-  if (menu.tab() === T_DRIVE && camMode !== 'top' && !drone.up && !real.on) {
+  if ((menu.tab() === T_RIG && menu.rigLive()) || (menu.tab() === T_DRIVE && camMode !== 'top' && !drone.up && !real.on)) {
     if (!splashOrbit.on) {
       splashOrbit.on = true;
       splashOrbit.a = Math.atan2(camera.position.x - state.x, camera.position.z - state.z);
@@ -33179,17 +38273,27 @@ function tick(now: number): void {
   // Project FIRST, draw SECOND — updatePois used to run after drawHud, so
   // the HUD drew the PREVIOUS frame's projections on top of this frame's
   // world: a second frame of trailing on top of the stale-inverse one.
-  updatePois(); // every frame — throttled pins juddered against the camera
-  stepLuma(now);          // refresh what the glass is being written over
-  xrayWire(now);          // keep the wireframe sweep over streamed-in tiles
-  drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF);
-  stepOverlays();
+  profMark('camera');
+  { const _p = performance.now(); updatePois(); profAdd('updatePois', _p); } // every frame — throttled pins juddered against the camera
+  { const _p = performance.now(); stepLuma(now); profAdd('stepLuma', _p); } // refresh what the glass is being written over
+  { const _p = performance.now(); xrayWire(now); profAdd('xrayWire', _p); } // keep the wireframe sweep over streamed-in tiles
+  // HALF RATE NEAR 60. The HUD is text, needles and a compass on its own
+  // canvas, and at 1.9 ms a frame (device, measured) it was the largest
+  // steady line in the tick after render — a tenth of the 60 fps budget for
+  // digits no eye reads faster than 30 Hz. Every other frame while the game
+  // runs near 60; every frame once it is at 30, where the budget has room
+  // and 15 Hz digits would show.
+  // …and the gate is 40 ms, not 22: at the device's usual 26 ms frames the
+  // old gate never fired and the HUD (4.5 ms, measured) drew every frame.
+  // Every other frame down to 25 fps is 12–30 Hz for text and a needle.
+  if (!((tickN & 1) && frameMs < 40)) { const _p = performance.now(); drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF); profAdd('drawHud', _p); }
+  { const _p = performance.now(); stepOverlays(); profAdd('stepOverlays', _p); }
   // Whatever view is up: the frame follows the truck even while the dock shows
   // the POV preview, so the map is whole the moment the chart comes back.
-  mapRecentre();
-  // The backdrop rides the curve under whoever is current (see alignFarShell),
-  // and answers a probe's override last, after every camera rule has had its say.
-  alignFarShell();
+  { const _p = performance.now(); mapRecentre(); profAdd('mapRecentre', _p); }
+  // The backdrop stands on the planet, which stepGlobe places under whoever is
+  // current; a probe's override answers last, after every camera rule has had
+  // its say.
   if (farForce !== null) farGroup.visible = farForce;
   if (camMode !== 'top' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   // Progress lives in the URL: reloading resumes here, not at the spawn.
@@ -33211,13 +38315,25 @@ function tick(now: number): void {
   // The coarse shell's hole, before anything draws: it is a fact about which
   // fine tiles have landed, and it has to be true in EVERY camera mode — the
   // fault it fixes was reported from the cab.
-  stepFineRing(now);
-  applyHidden();
-  if (NODRAW) { tickN++; requestAnimationFrame(tick); return; }
+  { const _p = performance.now(); stepFineRing(now); profAdd('stepFineRing', _p); }
+  { const _p = performance.now(); applyHidden(); profAdd('applyHidden', _p); }
+  profMark('hud+misc');
+  if (NODRAW) {
+    // THE REEL STILL TRAVELS WITH THE DRAWS OFF. The hop below normally leaves
+    // from AFTER the render, because it captures the frame it is departing on
+    // for the cross-fade — and with nothing drawn there is no frame to
+    // capture, so this early return skipped it entirely and the whole attract
+    // subsystem was frozen under `?nodraw=1`. Which made it exactly the thing
+    // the fast harness could not test: a reel test had to draw, at three
+    // frames a second, or measure a reel that could never advance.
+    if (attractGoI !== null) attractGoNow();
+    profTickEnd('nodraw'); tickN++; requestAnimationFrame(tick); return;
+  }
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
-  renderer.render(scene, camera);
-  composite(mblurAmt);
+  { const _p = performance.now(); renderer.render(scene, camera); profAdd('render', _p); }
+  { const _p = performance.now(); sampleShadowMotion(performance.now()); profAdd('shadowTelemetry', _p); }
+  { const _p = performance.now(); composite(mblurAmt); profAdd('composite', _p); }
   // Kept every frame, blur or none: the jump guard above compares against it,
   // and a prev-camera that only updates while the effect is on would call the
   // first frame after switching it back on a teleport.
@@ -33275,7 +38391,7 @@ function tick(now: number): void {
     // grade and palette dither as the world. Rendered straight to the screen it
     // was a smooth, full-colour window inside a hand-built bitmap HUD — the one
     // thing on screen that did not look like the game.
-    blitPixelated(scene, miniCam, vx, vy, vw, vh);
+    { const _p = performance.now(); blitPixelated(scene, miniCam, vx, vy, vw, vh); profAdd('blitPixelated', _p); }
     ovGroup.visible = ovWas; farGroup.visible = farWas;
     aimSky(camera);
     if (lastPov === 'cab') ghostCab(false);
@@ -33291,6 +38407,7 @@ function tick(now: number): void {
   // froze the entire game on the first idle cycle — dead renderer, dead
   // streamer, and every later tap reading as a hang (owner-caught, live).
   if (attractGoI !== null) attractGoNow();
+  profTickEnd('draw:misc');
   tickN++;
   requestAnimationFrame(tick);
 }
@@ -33317,6 +38434,7 @@ function blitPixelated(
   vehCopyMat.uniforms.uDither.value = (compMat.uniforms.uDither as { value: number }).value;
   vehCopyMat.uniforms.uMono.value = (compMat.uniforms.uMono as { value: number }).value;
   vehCopyMat.uniforms.uDPat.value = (compMat.uniforms.uDPat as { value: number }).value;
+  vehCopyMat.uniforms.uDChan.value = (compMat.uniforms.uDChan as { value: number }).value;
   vehCopyMat.uniforms.uBias.value = (compMat.uniforms.uBias as { value: number }).value;
   vehCopyMat.uniforms.uCon.value = (compMat.uniforms.uCon as { value: number }).value;
   (vehCopyMat.uniforms.uTint.value as THREE.Vector3).copy(compMat.uniforms.uTint.value as THREE.Vector3);
@@ -33459,6 +38577,13 @@ const GLYPHS: Record<string, string> = {
   L: 'ggggggv', M: 'hrllhhh', N: 'hhpljhh', O: 'ehhhhhe', P: 'uhhuggg', Q: 'ehhhlid',
   R: 'uhhukih', S: 'fgge11u', T: 'v444444', U: 'hhhhhhe', V: 'hhhhha4', W: 'hhhllrh',
   X: 'hha4ahh', Y: 'hha4444', Z: 'v1248gv',
+  // THE ONE LOWERCASE LETTER, because Z and 2 are the same diagonal with one
+  // pixel of difference at the top, and the seat read the scale line's
+  // `Z4.9` as `24.9` on five frames out of five. A zoom is written `z5.0`
+  // (the tile-debug line's `MAP z13` always was), and until this row existed
+  // that fell back to the capital through `GLYPHS[ch.toUpperCase()]` and
+  // drew the same glyph. Five rows at x-height cannot be read as a digit.
+  z: '00v248v',
   '0': 'ehjlphe', '1': '4c4444e', '2': 'eh1248v', '3': 'v4221he', '4': '26aiv22',
   '5': 'vgu11he', '6': '68guhhe', '7': 'v124888', '8': 'ehhehhe', '9': 'ehhf12c',
   '.': '00000cc', ',': '0000c48', ':': '0cc0cc0', '/': '122488g', '-': '000v000',
@@ -33490,7 +38615,6 @@ const fit = (s: string, maxPx: number): string => {
 // exact mechanism, with the font as the source of truth instead of a hex
 // string. Hard pixels on every browser, and any character the subset lacks
 // (an accented place name) quantizes through the same sieve.
-const MICRO_PX = 5;
 interface MGlyph { w: number; rows: number[] }   // rows[0] = baseline-5; bit b = column b
 const microGlyphs = new Map<string, MGlyph>();
 // If boot's 2s font timeout ever races a slow load, glyphs would quantize
@@ -33833,12 +38957,6 @@ function glowText(s: string, x: number, y: number, col: string, sc = 1): void {
   for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) text(hctx, s, x + dx * sc, y + dy * sc, col, sc);
   hctx.globalAlpha = 1;
   text(hctx, s, x, y, col, sc);
-}
-function meter(x: number, y: number, n: number, lit: number, col: string, w = 3, h = 5, gap = 1): void {
-  for (let i = 0; i < n; i++) {
-    hctx.fillStyle = i < lit ? col : 'rgba(87,201,176,0.16)';
-    hctx.fillRect(x + i * (w + gap), y, w, h);
-  }
 }
 // ── the co-driver's arrow ──────────────────────────────────────────
 // The call is DRAWN now: a bent arrow whose geometry IS the bend — a lean,
@@ -34198,12 +39316,6 @@ function stepRoute(now: number, prev: [number, number] | null): void {
     surveyFlash = 1;
     audio.stone();
   }
-}
-/** Has the line been DRIVEN, as opposed to its far end reached. */
-function routeDriven(m: Mission): boolean {
-  if (!m.route || !routeCps.length) return true;   // no course authored: arriving is the whole test
-  const need = m.via?.atLeast ?? Math.ceil(routeCps.length * ROUTE_MAJORITY);
-  return routeGot >= Math.min(need, routeCps.length);
 }
 type MissionPhase = 'none' | 'offered' | 'active' | 'done';
 let mission: Mission | null = null;
@@ -35860,8 +40972,23 @@ const DIAL_GROUPS: DialGroup[] = [
       // trades pattern visibility for more apparent tones; CHECK is the chunky
       // 2x2; GRAIN is a static hash — newsprint; LINES thresholds by row —
       // the etching. The pattern is the whole character of a 1-bit frame.
-      dial('dpat', 'PATTERN', ['BAYER4', 'BAYER8', 'CHECK', 'GRAIN', 'LINES'], 0,
+      // APPENDED, NEVER INSERTED. The rack persists an INDEX, so splicing a
+      // pattern into the middle of this list silently re-points every saved
+      // preference — the trap the TIME dial needed a named migration to undo.
+      // BAYER16 is one more turn of the same recursion; IGN is the closed-form
+      // pattern whose spectrum comes nearest blue noise; TPDF is grain with the
+      // signal-modulation taken out of it; HALFTONE is a clustered dot, which
+      // is a printing press rather than a CRT and belongs with the MONO inks.
+      dial('dpat', 'PATTERN',
+        ['BAYER4', 'BAYER8', 'CHECK', 'GRAIN', 'LINES', 'BAYER16', 'IGN', 'TPDF', 'HALFTONE'], 0,
         (i) => { cu.uDPat.value = i; }),
+      // Whether the three channels share one threshold. GREY keeps the shipped
+      // truth — the dither moves a pixel along the grey axis only. RGB gives
+      // each channel its own, so a pixel can land between two palette entries
+      // and the palette carries more apparent colour than it has levels, at the
+      // cost of a little chroma fringing on a shallow ramp.
+      dial('dchan', 'DITHER CH', ['GREY', 'RGB'], 0,
+        (i) => { cu.uDChan.value = i; }),
       // The quantiser's rounding constant. On the 1-bit looks this IS the ink
       // point: minus floods shadows to black, plus lifts midtones to paper.
       dial('thr', 'THRESHOLD', ['-2', '-1', '0', '+1', '+2'], 2,
@@ -36035,13 +41162,13 @@ const DIAL_GROUPS: DialGroup[] = [
       // Grass is the one layer whose cost is worth handing over: it is the
       // difference between a field and a golf course, and it is also the
       // difference between a phone holding 60fps and not. Five steps, and the
-      // top two are deliberately past what I would ship as a default.
-      // A WIDER BAND AT BOTH ENDS, asked for from the seat. LOW is half what it
-      // was and LUSH is double, which the sward can now spend because density
-      // costs vertices on a 47,360-pixel target rather than CPU matrices — a
-      // slot the dither drops is three vertices and no fragments at all.
+      // The upper stops are deliberately experimental. LOW retains the original
+      // shipping density, MEDIUM sits halfway to the former maximum, HIGH is
+      // that former 6.4 ceiling, and LUSH doubles it for device profiling.
+      // Density costs vertices on a 47,360-pixel target rather than CPU matrices —
+      // a slot the dither drops is three vertices and no fragments at all.
       dial('grass', 'GRASS', ['OFF', 'LOW', 'MEDIUM', 'HIGH', 'LUSH'], 2, (i) => {
-        grassScale = [0, 0.22, 1, 2.6, 6.4][i];
+        grassScale = [0, 1, 3.2, 6.4, 12.8][i];
       }),
       // TERRAIN detail, and what it really buys is ROADS. A finer mesh means a
       // smaller cell, a smaller cell means the road cut reaches less far, and
@@ -36117,6 +41244,31 @@ const DIAL_GROUPS: DialGroup[] = [
         hudResize();
       }),
       dial('tdbg', 'TILE DEBUG', ['OFF', 'ON'], 0, (i) => { tileDbg = i === 1; }),
+    ],
+  },
+  {
+    title: 'TREES',
+    dials: [
+      // These upper stops are intentionally unsafe. Together, 16X population,
+      // 2.8 km reach and a 100M-triangle ceiling are a profiler instrument,
+      // not a promise that a phone can render them.
+      dial('tpop', 'POPULATION CAP', ['0.25X', '0.5X', '1X', '2X', '4X', '8X', '16X'], 2,
+        (i) => { treePopulationScale = TREE_POP_STEPS[i]; }, true),
+      dial('trng', 'DRAW RANGE', ['350M', '700M', '1.4KM', '2.1KM', '2.8KM'], 1,
+        (i) => { treeRange = TREE_RANGE_STEPS[i]; }, true),
+      dial('ttri', 'EZ TRI CAP', ['0.3M', '1M', '2.4M', '6M', '15M', '40M', '100M'], 2,
+        (i) => { treeTriBudget = TREE_TRI_STEPS[i]; }, true),
+      dial('tvar', 'EZ VARIANTS', ['ONE', 'TWO', 'FOUR', 'ALL'], 3,
+        (i) => { treeVariantCap = TREE_VARIANT_STEPS[i]; }, true),
+      // FORM magnifies the stable per-site height/width/lean draws; BEND adds
+      // continuous deterministic growth shape in the vertex shader. Neither
+      // creates another draw call or asks the runtime EZ package to generate.
+      dial('tsiz', 'HEIGHT', ['0.5X', '1X', '1.5X', '2X', '3X', '4X'], 1,
+        (i) => { treeSizeScale = TREE_SIZE_STEPS[i]; }, true),
+      dial('tfrm', 'FORM SPREAD', ['EVEN', 'STOCK', 'RICH', 'WILD', 'EXTREME'], 1,
+        (i) => { treeFormScale = TREE_FORM_STEPS[i]; }, true),
+      dial('tbnd', 'GROWTH BEND', ['OFF', 'SUBTLE', 'RICH', 'WILD', 'STORM', 'IMPOSSIBLE'], 0,
+        (i) => { treeBendU.value = TREE_BEND_STEPS[i]; }, true),
     ],
   },
   {
@@ -36204,7 +41356,7 @@ function loadDials(): void {
     // …except a clock the URL asked for. ?time= is there to make a lighting
     // comparison reproducible, and a saved dial silently overruling it makes
     // the shot depend on which browser profile took it.
-    if (new URLSearchParams(location.search).has('time')) {
+    if (qsHas('time')) {
       const d = DIALS.find((x) => x.key === 'time');
       if (d) d.at = timeMode;
     }
@@ -36219,6 +41371,14 @@ const odo = { total: 0, trip: 0, at: 0 };
 try { odo.total = Number(localStorage.getItem('drive.odo') ?? 0) || 0; } catch { /* fine */ }
 const fmtKm = (m: number): string => (m < 1000 ? `${Math.round(m)} M` : `${(m / 1000).toFixed(m < 100000 ? 1 : 0)} KM`);
 function stepOdo(dt: number, now: number): void {
+  // THE REEL IS A TRAILER, NOT A DRIVE. The odometer is the player's record of
+  // what THEY drove and `drive.odo` is persisted for the life of the device, so
+  // an attract slot must not touch it. Caught in a frame: the splash orbit
+  // reading "111 M TRIP · 111 M TOTAL" while the reel drove Chapman's Peak on
+  // its own. A recorded tape had the same leak and it never showed, because
+  // twenty-one seconds is two hundred metres; a driven slot runs for two and a
+  // half minutes and the reel cycles for as long as the machine is left alone.
+  if (attract.on) return;
   const d = Math.abs(state.speed) * dt;
   odo.total += d;
   odo.trip += d;
@@ -36309,12 +41469,28 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     textEdgeS(hhmm, pad + 1, cy2, UI.gold);
     // The affordance: a pair of pips either side while a drag holds the sun,
     // so a scrubbed clock explains that it is an instrument and not a reading.
-    if (clockHeld !== null) {
+    if (clockShift !== null) {
       textSmall(hctx, '<', pad - 3 + 1, cy2 + 1, UI.dim);
       textSmall(hctx, '>', pad + 1 + textSW(hhmm) + 3, cy2 + 1, UI.dim);
     }
     clockRect = { x: pad, y: cy2 - 2, w: textSW(hhmm) + 4, h: 10 };
   } else clockRect.w = 0;
+  // ── the scale, on the chart ──
+  // Under the clock's row, where the chart has room and a map keeps it; below
+  // the tile-debug lines when those are up. The label first — the bar's
+  // length, the fraction, the zoom — then the bar: an ink bed, the rule, a
+  // tick at each end. See chartScale for what the three numbers are.
+  if (camMode === 'top') {
+    const sc = chartScale();
+    const x0 = pad + 1, y0 = tileDbg ? pad + 56 : pad + 34;
+    textEdgeS(sc.label, x0, y0, UI.soft);
+    hctx.fillStyle = 'rgba(4,10,11,0.85)';
+    hctx.fillRect(x0 - 1, y0 + 10, sc.barPx + 3, 5);
+    hctx.fillStyle = UI.text;
+    hctx.fillRect(x0, y0 + 12, sc.barPx + 1, 1);
+    hctx.fillRect(x0, y0 + 11, 1, 3);
+    hctx.fillRect(x0 + sc.barPx, y0 + 11, 1, 3);
+  }
   // The transport actions (rewind · AUTO · WPT) live in the CONTROL MATRIX
   // beside the dock now (Glass spec §5.5) — drawn with the dock so the grid
   // and the map share one geometry. See the matrix block below.
@@ -36362,15 +41538,25 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         if (Math.max(x1, x2) < -4 || Math.min(x1, x2) > HW + 4
           || Math.max(y1, y2) < -4 || Math.min(y1, y2) > HH + 4) continue;
         const near = Math.round(clamp(1 - s.d / CP_SIGHT, 0, 1) * 3) / 3;
-        hctx.fillStyle = pass === 0 ? UI.ink : s.task ? UI.gold : UI.edge;
-        // A floor high enough to trace the WHOLE road across the chart — this
-        // line is orientation, and orientation two valleys over is the point.
-        hctx.globalAlpha = pass === 0 ? 0.7 : (s.task ? 0.6 : 0.5) + 0.35 * near;
+        // TWO LINES, TWO JOBS. Gold and solid is the TASK's road — the thing
+        // the run is about. The solved route is mint and DOTTED: subtle
+        // enough to sit inside the chart's own language, dashed so it never
+        // reads as another road, and unmistakably the plan rather than the
+        // ground.
+        // …AND THE PLAN ITSELF HAS TWO HALVES. Past the survey the route is
+        // the chart's coarse network — the right valley, the wrong hundred
+        // metres — so it is drawn fainter and at a longer stride: still the
+        // plan, visibly less certain, and never mistakable for a road anyone
+        // has driven.
+        hctx.fillStyle = pass === 0 ? UI.ink : s.route ? UI.good : UI.gold;
+        hctx.globalAlpha = (pass === 0 ? (s.route ? 0.45 : 0.7)
+          : (s.route ? 0.5 : 0.6) + 0.35 * near) * (s.far ? 0.55 : 1);
         const n = Math.max(1, Math.round(Math.hypot(x2 - x1, y2 - y1) / 2));
         for (let i = 0; i <= n; i++) {
+          if (s.route && (i % (s.far ? 4 : 2))) continue;   // the dots of the plan
           const x = Math.round(x1 + ((x2 - x1) * i) / n);
           const y = Math.round(y1 + ((y2 - y1) * i) / n);
-          if (pass === 0) hctx.fillRect(x - 1, y - 1, 3, 3);
+          if (pass === 0) hctx.fillRect(x - 1, y - 1, s.route ? 2 : 3, s.route ? 2 : 3);
           else hctx.fillRect(x - 1, y - 1, 2, 2);
         }
       }
@@ -36924,15 +42110,22 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // two names in one cell and the better-ranked one keeps it — and the whole
   // layer is separate from the HUD's nearest-three pins, which are a cockpit
   // instrument, not a map.
+  ovLabelsDrawn.length = 0;
   if (camMode === 'top' && ovGroup.visible && ovPlaces.size) {
     const r = viewRadius();
     const maxRank = r > 26000 ? 1 : r > 12000 ? 2 : 4;
+    capEyeUpdate();
     const cells = new Set<string>();
     let budget = 16;
     const ranked = [...ovPlaces.values()].sort((a, b) => a.rank - b.rank);
     for (const p of ranked) {
       if (p.rank > maxRank || budget <= 0) break;
-      poiVec.set(p.x, p.y, p.z);
+      // A place on the far side of the planet is still in front of the camera
+      // and projects INSIDE the disc, mirrored — see onNearCap.
+      if (!onNearCap(p.sp)) continue;
+      // The place's point on the sphere, through the planet's own placement —
+      // composed here rather than read off matrixWorld, which is a render old.
+      poiVec.copy(p.sp).applyQuaternion(planetGroup.quaternion).add(planetGroup.position);
       if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) continue;
       poiVec.project(camera);
       if (Math.abs(poiVec.x) > 0.96 || Math.abs(poiVec.y) > 0.92) continue;
@@ -36946,6 +42139,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const col = p.rank === 0 ? UI.gold : p.rank === 4 ? UI.dim : p.rank <= 1 ? UI.text : UI.soft;
       textEdgeP(label, clamp(Math.round(sx - w / 2), 2, HW - w - 2), clamp(Math.round(sy), 12, HH - 20), col);
       budget--;
+      ovLabelsDrawn.push(p.name);
     }
   }
   // ── the rig's own marker on the chart ──
@@ -37264,8 +42458,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     if (ws.rank >= 3) textEdgeS(ws.hud, pad + 1, infoY + 9, ws.rank === 5 ? UI.bad : UI.gold);
     else {
       const w = wayAt(state.x, state.z);
-      const line = w ? (w.on ? w.name.toUpperCase() : `NEAR ${w.name.toUpperCase()}`)
-        : ws.hud;
+      // ON THE CHART THE MAP IS THE NEWS. Zoomed out over a coarse backdrop
+      // the road under the wheels is not what the frame is about, and the one
+      // layer the chart draws had nothing to say for itself while it streamed.
+      // It yields the line back the moment the ring is home.
+      const line = camMode === 'top' && ws.map ? ws.map
+        : w ? (w.on ? w.name.toUpperCase() : `NEAR ${w.name.toUpperCase()}`)
+          : ws.hud;
       // The survey tally rides on the way line and takes its room first, so the
       // road name is what gets clipped. A count you cannot read is worse than a
       // name you can only half read.
@@ -37333,6 +42532,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // block on the left and the trip readout on the right.
       textEdgeS(fs, Math.round((HW - textSW(fs)) / 2), infoY + 17,
         fps < 25 ? UI.bad : fps < 40 ? UI.gold : UI.dim);
+      fpsRect.x = Math.round((HW - textSW(fs)) / 2); fpsRect.y = infoY + 17 - 4; fpsRect.w = textSW(fs); fpsRect.h = 16;
     }
   }
   // ── the rig, bottom-right ──
@@ -37587,6 +42787,7 @@ function stepOverlays(): void {
     }
   }
   overlays.mission(mc);
+  overlays.route(goal ? routeCard(performance.now()) : null);
   overlays.prompt(stationNear && !stationOpen ? `${stationNear.st.name} · TERMINAL` : null);
   overlays.terminal(stationOpen ? terminalCard(stationOpen) : null);
   // THE SITE CARD, and the one rule that keeps two centred panels apart: a
@@ -37599,7 +42800,16 @@ function stepOverlays(): void {
     rows: siteOpen.rec.rows,
     // RELOCATE, not GO: the word says what actually happens — the truck is
     // picked up and set down there, which is a bigger thing than driving.
-    go: siteOpen.fix ? 'RELOCATE' : undefined,
+    // ── NOT ON THE LINE ──
+    // Both of these are travel, and the line is a run: a ranger who can
+    // relocate to the next checkpoint, or hand the drive to an autopilot
+    // aimed at it, is not driving the pipeline. Off the line they are the
+    // whole point of the card. The RECORD reads the same either way.
+    go: !lineOn && siteOpen.fix ? 'RELOCATE' : undefined,
+    // DRIVE TO: the same place, reached rather than arrived at. Offered for
+    // any site with a position — a fix, a station, a town — because "make
+    // this the destination" is the question the card could not answer.
+    goal: lineOn ? undefined : 'DRIVE TO',
     note: 'RECORD COPIED',
   } : null);
   // THE RECORD SAYS WHAT BOTH SOURCES SAY AND NOTHING ELSE. No verdict, no
@@ -37610,6 +42820,9 @@ function stepOverlays(): void {
     ? { kicker: `RECORDED · ${obsFlash.o.kind}`,
       head: `SURVEY SAYS ${obsFlash.o.satName}`,
       body: `GROUND: ${obsFlash.o.name ? obsFlash.o.name.toUpperCase() + ' · ' : ''}${obsFlash.o.tag.replace('=', ' ').toUpperCase()}` }
+    : goalDone && performance.now() - goalDone.at < 6000
+    ? { kicker: 'ARRIVED', head: goalDone.name.toUpperCase(),
+      body: goalDone.shortM ? `AS NEAR AS THE ROAD GETS · ${goalDone.shortM}M ON FOOT` : 'GOAL REACHED' }
     : surveyClaim && performance.now() - surveyClaim.at < 6000
     ? { kicker: 'SURVEYED', head: surveyClaim.name.toUpperCase(), body: `${surveyClaim.n} CHECKPOINTS` }
     : stationWoke && performance.now() - stationWoke.at < 6000
@@ -37816,11 +43029,156 @@ function setClean(on: boolean): void {
     max: Number.isFinite(max) ? +max.toFixed(3) : null };
 };
 (window as unknown as { __splash?: object }).__splash = (): object => ({
-  wade: +rigWadeM.toFixed(3), sheets: splash.alive(),
+  wade: +rigWadeM.toFixed(3), sheets: splash.alive(), wetfx: wetfxWhy,
   lastPlow: +lastPlow.toFixed(3), lastPlowAtKmh: +lastPlowKmh.toFixed(1),
   wet: !!splashWet(state.x, state.z),
 });
-(window as unknown as { __site?: object }).__site = (act?: 'go' | 'close'): object | null => {
+/** The goal: read it, set one at a place, or clear it. `__goal('name', x, z)`
+ *  is what a test drives with; the card is what a player uses. */
+/** THE ROAD CHAIN, AS IT IS ACTUALLY WALKED — length, hops, and the distinct
+ *  names it crosses. Two names in one chain is a rename followed through; one
+ *  short chain that stops at a junction is the fault this replaced. */
+(window as unknown as { __chain?: object }).__chain = (reach = 900, hops = 60): object | null => {
+  const w = wayAhead(state.x, state.z, state.heading, reach, hops, false);
+  if (!w) {
+    const near = nearestDeck(state.x, state.z, 200);
+    return { start: null, m: 0, pts: 0, names: [], goal: null,
+      why: near ? `off-deck by ${near.d.toFixed(1)}m` : 'no deck within 200m',
+      cells: roadGrid.size };
+  }
+  let len = 0;
+  for (let i = 1; i < w.pts.length; i++) {
+    len += Math.hypot(w.pts[i][0] - w.pts[i - 1][0], w.pts[i][1] - w.pts[i - 1][1]);
+  }
+  // The names under the chain, sampled every 25m along it.
+  const names: string[] = [];
+  for (let d = 0; d < len; d += 25) {
+    let run = 0;
+    for (let i = 1; i < w.pts.length; i++) {
+      const l = Math.hypot(w.pts[i][0] - w.pts[i - 1][0], w.pts[i][1] - w.pts[i - 1][1]);
+      if (run + l >= d) {
+        const t = (d - run) / (l || 1);
+        const px = w.pts[i - 1][0] + (w.pts[i][0] - w.pts[i - 1][0]) * t;
+        const pz = w.pts[i - 1][1] + (w.pts[i][1] - w.pts[i - 1][1]) * t;
+        const nm = wayAt(px, pz)?.name ?? '—';
+        if (names[names.length - 1] !== nm) names.push(nm);
+        break;
+      }
+      run += l;
+    }
+  }
+  return { start: w.name ?? null, m: Math.round(len), pts: w.pts.length, names,
+    goal: goal ? { name: goal.name, d: Math.round(Math.hypot(goal.x - state.x, goal.z - state.z)) } : null };
+};
+/** The graph node farthest from the truck — a goal a test can be sure is
+ *  actually connected to the road under the wheels. */
+(window as unknown as { __farnode?: object }).__farnode = (): object | null => {
+  const g = roadGraph();
+  const from = nearestNode(g, state.x, state.z, 120);
+  if (!from) return null;
+  // REACHABLE, not merely far: a test that picks the farthest node anywhere
+  // is testing whether the world happens to be connected, which is a fact
+  // about OSM streaming and not about the solver.
+  const seen = new Set<string>([from]);
+  const queue = [from];
+  let best: { x: number; z: number; d: number } | null = null;
+  while (queue.length) {
+    const id = queue.shift() as string;
+    const n = g.get(id) as GraphNode;
+    const d = Math.hypot(n.x - state.x, n.z - state.z);
+    if (!best || d > best.d) best = { x: n.x, z: n.z, d: Math.round(d) };
+    for (const e of n.to) if (!seen.has(e.id)) { seen.add(e.id); queue.push(e.id); }
+  }
+  return best ? { ...best, nodes: g.size, reachable: seen.size } : null;
+};
+/** The solved route, and what the solver last did. */
+(window as unknown as { __route?: object }).__route = (force?: boolean): object => {
+  if (force) { goalSolveAt = performance.now(); solveGoalRoute(); }
+  const rt = goalRoute;
+  let km = 0, fineKm = 0;
+  if (rt) {
+    for (let i = 1; i < rt.length; i++) {
+      const l = Math.hypot(rt[i][0] - rt[i - 1][0], rt[i][1] - rt[i - 1][1]);
+      km += l;
+      if (!rt[i][2] && !rt[i - 1][2]) fineKm += l;
+    }
+  }
+  const drive = goalAhead(state.x, state.z, 200);
+  return { goal: goal?.name ?? null, pts: rt?.length ?? 0, km: +(km / 1000).toFixed(2),
+    // WHAT IS PLANNED AND WHAT IS DRIVEABLE ARE NOT THE SAME NUMBER any more.
+    // `fineKm` is the surveyed part the autopilot may steer on; the rest is a
+    // corridor the chart draws and the junction bias drives toward.
+    fineKm: +(fineKm / 1000).toFixed(2),
+    coarsePts: rt?.filter((p) => p[2]).length ?? 0,
+    driveTo: drive ? drive.length : 0,
+    graph: graphStat, ovWays: [...ovWays.values()].reduce((n, l) => n + l.length, 0),
+    shortM: Math.round(goalShortM), onIt: !!drive, ...goalSolveStat };
+};
+/**
+ * A COARSE NETWORK ON DEMAND, so the router can be tested without waiting on
+ * the weather.
+ *
+ * These tiles are the one layer a fixture does not intercept: they come from
+ * the cell, a cold one is a live Overpass query, and the level is chosen by
+ * the chart's zoom. A harness that wants to assert the two-tier graph would
+ * otherwise be asserting whether Overpass felt well — measured across three
+ * runs: z13 arriving in 36s with 4km of reach, then z8 not arriving at all in
+ * two minutes. The tile PATH is exercised by the chart every time anyone opens
+ * it; what needs a deterministic bench is the graph, the portals and the rule
+ * that the autopilot only steers on the survey.
+ *
+ * Ways are [[x, z], ...] in world metres, which is what ovWays holds.
+ */
+(window as unknown as { __ovinject?: object }).__ovinject =
+  (ways?: Array<Array<[number, number]>>, hw = 6): object => {
+    if (ways === undefined) { ovWays.delete('inject'); ovWayV++; return { cleared: true }; }
+    ovWays.set('inject', ways.map((pts) => ({ pts, hw, name: 'injected' })));
+    ovWayV++;
+    return { ways: ways.length, pts: ways.reduce((n, w) => n + w.length, 0), v: ovWayV };
+  };
+/** The coarse network the chart fetched and the router now walks. */
+/** THE CHART'S OWN LAYER, AS THE SEAT SEES IT: what the zoom band asked for,
+ *  how much is home, how much is moving, and how long it has been since the
+ *  pass that asked. `__ovroads` answers the ROUTER's question (reach, ways,
+ *  the handover); this answers "is the map coming". */
+(window as unknown as { __ov?: object }).__ov = (): object => ({
+  level: ovZ, want: ovWant, have: ovMeshes.size, built: ovMeshes.size, asked: ovTiles.size,
+  inFlight: ovInFlight, queued: ovQueue.length, retired: ovRetired.length,
+  failing: [...ovFailedAt.values()].filter((t) => performance.now() - t < OV_RETRY_MS).length,
+  retryMs: OV_RETRY_MS,
+  sinceAskMs: ovAskedAt ? Math.round(performance.now() - ovAskedAt) : null,
+  waitMs: OV_WAIT_MS, top: camMode === 'top', word: worldStatus().map,
+  labels: [...ovLabelsDrawn],
+});
+(window as unknown as { __ovroads?: object }).__ovroads = (): object => {
+  let ways = 0, pts = 0, far = 0;
+  for (const l of ovWays.values()) {
+    for (const w of l) {
+      ways++; pts += w.pts.length;
+      for (const [px, pz] of w.pts) far = Math.max(far, Math.hypot(px - osmCarX, pz - osmCarZ));
+    }
+  }
+  return { tiles: ovWays.size, ways, pts, v: ovWayV, level: ovZ,
+    reachKm: +(far / 1000).toFixed(2),
+    handoverM: Number.isFinite(osmRingR) ? Math.round(osmRingR * OV_ROUTE_IN) : null,
+    fineRingM: Number.isFinite(osmRingR) ? Math.round(osmRingR) : null };
+};
+/** Stand the reel down, exactly as a tap on the screen does. The one thing a
+ *  driven reel must never fail at is giving the wheel back, and this is what
+ *  lets a test check it without synthesising a pointer event. */
+(window as unknown as { __attractstop?: object }).__attractstop = (): object => {
+  attractStop();
+  return { on: attract.on, drive: attract.drive, auto: auto.on, goal: goal?.name ?? null };
+};
+(window as unknown as { __goal?: object }).__goal =
+  (name?: string | null, x?: number, z?: number): object | null => {
+    if (name === null) { goal = null; return null; }
+    if (name !== undefined && x !== undefined && z !== undefined) setGoal(name, x, z);
+    return goal ? { name: goal.name, x: Math.round(goal.x), z: Math.round(goal.z),
+      d: Math.round(Math.hypot(goal.x - state.x, goal.z - state.z)),
+      done: goalDone?.name ?? null } : { name: null, done: goalDone?.name ?? null };
+  };
+(window as unknown as { __site?: object }).__site = (act?: 'go' | 'close' | 'goal'): object | null => {
   if (act === 'close') { siteOpen = null; return null; }
   if (act === 'go') {
     const open = siteOpen;
@@ -37828,6 +43186,15 @@ function setClean(on: boolean): void {
     if (open?.fix) {
       const fix = pois.get(open.fix);
       if (fix) { teleportTo(fix.x, fix.z); pois.delete(fix.name); }
+    }
+    return null;
+  }
+  if (act === 'goal') {
+    const open = siteOpen;
+    siteOpen = null;
+    if (open) {
+      const fix = open.fix ? pois.get(open.fix) : null;
+      setGoal(open.rec.name, fix ? fix.x : open.x, fix ? fix.z : open.z);
     }
     return null;
   }
@@ -37842,6 +43209,32 @@ function setClean(on: boolean): void {
 /** The live tap targets, in CANVAS pixels, so a test can aim a real pointer at
  *  a pin instead of trusting a probe to stand in for one. `live` is what the
  *  new rule says: whether this rect will actually consume a tap. */
+/** The clock's tap target in CANVAS pixels, so a test can aim a real pointer
+ *  at it rather than trusting a probe to stand in for the gesture — the same
+ *  bargain `__poirects` makes for the pins. Null while the clock is not drawn
+ *  (on the line, or with the chrome stripped). */
+(window as unknown as { __clockat?: object }).__clockat = (): object | null =>
+  (clockRect.w === 0 ? null : {
+    x: Math.round((clockRect.x + clockRect.w / 2) * hudS),
+    y: Math.round((clockRect.y + clockRect.h / 2) * hudS),
+  });
+/**
+ * WHAT THE PIN LAYER IS DRAWING, AND WHY IT IS NOT DRAWING MORE.
+ *
+ * A count on its own cannot say why it is zero, and there are now three
+ * different reasons: the visibility dial is off, the chart has outgrown the
+ * scenery's own catchment, or the planet has taken the frame. Each is correct
+ * in its own place and each looks exactly like the others from outside, which
+ * is the shape of question this file keeps recording as a lost round.
+ */
+(window as unknown as { __poidraw?: object }).__poidraw = (): object => ({
+  n: poiDraw.length,
+  pinned: poiDraw.filter((p) => p.pinned).length,
+  vis: poiVis,
+  mpp: +chartMpp().toFixed(1),
+  wide: chartMpp() * POI_SPREAD_PX > 3000,
+  planet: globeFree() > 0,
+});
 (window as unknown as { __poirects?: object }).__poirects = (): object =>
   poiRects.map((r) => ({
     name: r.name, kind: r.kind, rng: r.rng,
@@ -37992,20 +43385,24 @@ function rewindUp(e: PointerEvent): boolean {
   if (!rewindPaused) { rewindPaused = true; hudFlash('HOLD'); }
   return true;
 }
-let clockDrag: { id: number; x0: number; h0: number; wasHeld: boolean; moved: boolean } | null = null;
+let clockDrag: { id: number; x0: number; s0: number; moved: boolean } | null = null;
 function clockDown(e: PointerEvent): boolean {
   if (lineOn || menu.tab() !== null || clockRect.w === 0) return false;
   const x = e.clientX / hudS, y = e.clientY / hudS;
   if (x < clockRect.x - 4 || x > clockRect.x + clockRect.w + 8
     || y < clockRect.y - 5 || y > clockRect.y + clockRect.h + 6) return false;
-  clockDrag = { id: e.pointerId, x0: e.clientX, h0: solarHour(), wasHeld: clockHeld !== null, moved: false };
+  // A THUMB ON THE CLOCK ADOPTS A RUNNING RAMP rather than fighting it: the
+  // ease is converted to the offset that holds the sun exactly where it is,
+  // so grabbing the dial mid-ramp does not snap the sky to the new preset.
+  if (clockRamp !== null) { clockShift = hourDelta(clockBase(), clockHour()); clockRamp = null; }
+  clockDrag = { id: e.pointerId, x0: e.clientX, s0: clockShift ?? 0, moved: false };
   return true;
 }
 function clockMove(e: PointerEvent): boolean {
   if (clockDrag?.id !== e.pointerId) return false;
   const dx = e.clientX - clockDrag.x0;
   if (Math.abs(dx) > 9) clockDrag.moved = true;
-  if (clockDrag.moved) clockHeld = ((clockDrag.h0 + (dx / innerWidth) * 12) % 24 + 24) % 24;
+  if (clockDrag.moved) clockShift = ((clockDrag.s0 + (dx / innerWidth) * 12) % 24 + 24) % 24;
   return true;
 }
 function clockUp(e: PointerEvent): boolean {
@@ -38017,10 +43414,14 @@ function clockUp(e: PointerEvent): boolean {
   if (!clockDrag.moved) {
     const d = DIALS.find((x) => x.key === 'time');
     if (d) {
+      // WHERE THE SUN IS NOW, read before the mode moves under it — the ramp
+      // eases from here to whatever the new preset turns out to be saying.
+      const from = clockHour();
       d.at = (d.at + 1) % d.opts.length;
       d.apply(d.at);
       saveDials();
-      clockHeld = null;
+      clockShift = null;
+      clockRamp = { from, at: performance.now() };
       hudFlash(`TIME ${d.opts[d.at]}`);
     }
   }
@@ -38110,7 +43511,54 @@ function surveyLoaded(): Map<string, SurveyRoad> {
 // data crosses as plain strings and numbers (already
 // upper-cased, already formatted), actions cross as closures — the menu never
 // touches game state directly, so everything it can affect is listed here.
+
+/** Bind a fresh model to the stable simulation root, then rebuild the derived
+ * silhouette and material treatments. Old GPU resources are released only
+ * after no live graph references them. The same path serves both modes. */
+function selectRig(model: RigModelId, loadout: RigLoadoutId, equipment: RigEquipmentId[] = rigEquipment): void {
+  const selected = cleanEquipment(equipment);
+  if (model === rigModelId && loadout === rigLoadoutId && selected.join() === rigEquipment.join()) return;
+  const next = createRigModel(model, loadout, bodywork, selected);
+  next.setRegistration?.(sync.status().user);
+  const old = rigModel;
+  next.bodyMat.color.copy(bodyMat!.color);
+  next.tailMat.color.copy(tailMat.color);
+  const ghost = cabMats.some(m => m.transparent);
+  for (let i = 0; i < wheelPivots.length; i++) {
+    next.wheelPivots[i].position.y = wheelPivots[i].position.y;
+    next.wheelPivots[i].rotation.copy(wheelPivots[i].rotation);
+    next.wheelMeshes[i].rotation.copy(wheelMeshes[i].rotation);
+    next.wheelMeshes[i].scale.copy(wheelMeshes[i].scale);
+  }
+  for (const part of old.parts) car.remove(part);
+  for (const part of next.parts) car.add(part);
+  rigModel = next; rigModelId = model; rigLoadoutId = loadout; rigEquipment = selected;
+  bodyMat = next.bodyMat; tailMat = next.tailMat;
+  wheelPivots.splice(0, wheelPivots.length, ...next.wheelPivots);
+  wheelMeshes.splice(0, wheelMeshes.length, ...next.wheelMeshes);
+  cabMats.splice(0, cabMats.length, ...next.cabMats);
+  const marked = new Set<THREE.Material>();
+  for (const part of next.parts) part.traverse(o => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    castIfSolid(mesh);
+    for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      if (!marked.has(mat)) { marked.add(mat); noBlur(mat); }
+    }
+  });
+  beams.forEach((beam, i) => beam.position.copy(next.anchors.lamps[i]));
+  Object.assign(EYE, next.anchors.eye);
+  ghostCab(ghost);
+  rebuildRigSilhouette();
+  specCache = null;
+  old.dispose();
+  try { localStorage.setItem('drive.rig-model', JSON.stringify({ model, loadout, equipment: selected })); } catch { /* session still works */ }
+}
+
 const menu = createMenu({
+  rigChoice: () => ({ model: rigModelId, loadout: rigLoadoutId, equipment: [...rigEquipment] }),
+  registration: () => rigModel.root.userData.registration || car.userData.registration || 'DRIVE-01',
+  rigChoose: selectRig,
   colors: { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
   place: () => (placeLine && placeLine !== '…' ? placeLine : 'LOCATING').toUpperCase(),
   tapeBank: tapeBankLast,
@@ -38121,28 +43569,30 @@ const menu = createMenu({
     attract.idleAt = performance.now();
     attractStop();
   },
-  attractRet: () => { try { return sessionStorage.getItem(ATTRACT_RET_KEY); } catch { return null; } },
-  attractRetGo: () => {
-    try {
-      const ret = sessionStorage.getItem(ATTRACT_RET_KEY);
-      if (!ret) return;
-      sessionStorage.removeItem(ATTRACT_RET_KEY);
-      // Home is a HOP now, not a navigation — and when the hop cannot run
-      // (mid-hop, a GPS drive, the line) the reload REPLACES the entry:
-      // travel never leaves a history trail to back-button through.
-      const q = new URL(ret, location.href).searchParams;
-      const la = parseFloat(q.get('lat') ?? ''), lo = parseFloat(q.get('lon') ?? '');
-      const hh = parseFloat(q.get('h') ?? '0');
-      if (Number.isFinite(la) && Number.isFinite(lo) && !real.on && !lineOn && !hopping) {
-        attractStop();
-        void worldHop(la, lo, Number.isFinite(hh) ? hh : 0, { mission: q.get('m') ?? undefined })
-          .then(() => { history.replaceState(null, '', ret); })
-          .catch(() => { location.replace(ret); });
-        return;
-      }
-      location.replace(ret);
-    } catch { /* fine */ }
+  /**
+   * ── THE REEL AS A CAROUSEL ──
+   *
+   * The hub used to say only "RETURN · BACK TO WHERE YOU WERE", and only once
+   * the reel had already carried you off. That is a one-way door with no map:
+   * you could not see how many places there were, which one you were looking
+   * at, or get to a particular one on purpose.
+   *
+   * So the hub carries the whole programme instead. `at` is -1 when the truck
+   * is on the player's OWN spot and the index of the showing postcard
+   * otherwise, and HOME is a stop on the strip like any other — which is what
+   * retires RETURN: going home is no longer a special escape, it is just
+   * choosing the first dot.
+   */
+  reel: () => {
+    const list = reelNow.length ? reelNow : reelList();
+    let home = false;
+    try { home = !!sessionStorage.getItem(ATTRACT_RET_KEY); } catch { /* private mode */ }
+    return { n: list.length, at: attract.on ? attract.i : -1, home };
   },
+  /** -1 is home; 0..n-1 are the reel's stops. Both are a hop, not a jump. */
+  reelGo: reelGoAt,
+  attractRet: () => { try { return sessionStorage.getItem(ATTRACT_RET_KEY); } catch { return null; } },
+  attractRetGo: goHome,
   situation: () => {
     const [la, lo] = localToLatLon(state.x, state.z);
     const sh = solarHour();
@@ -38167,6 +43617,18 @@ const menu = createMenu({
   ],
   systemRows: () => [
     ['SOUND', audio.on ? (audio.state === 'running' ? 'ON' : 'NEEDS TAP') : 'OFF'],
+  ],
+  // THE TABLE IS THE PANEL. `switchRows` reads the declaration in switches.ts
+  // and the live query string; nothing here restates either, so a switch added
+  // to the table appears on the glass without anyone remembering to add it.
+  switches: () => switchRows(),
+  // The build, named where a reader can quote it back. `__BUILD__` is not a
+  // thing here, so the cell's own deployed version is the honest answer and it
+  // is already on the page that served this script.
+  aboutRows: () => [
+    ['CELL', 'drive · @c15r'],
+    ['BUILD', DRIVE_BUILD],
+    ['DEVICE', `${navigator.hardwareConcurrency ?? '?'} CORES · DPR ${Math.round(devicePixelRatio * 10) / 10}`],
   ],
   real: () => ({ on: real.on, err: real.err }),
   surveyHere: () => {
@@ -38376,6 +43838,8 @@ const menu = createMenu({
     return `${n(tiles)} GROUND TILES · ${n(ways)} ROAD TILES · THIS SITE IS USING `
       + `${size(used)}${quota ? ` OF ${size(quota)}` : ''}`;
   },
+  devConsole: (status) => loadEruda(status),
+  devReload: (status) => reloadWithConsole(status),
   cacheClear: (status) => {
     void (async () => {
       status('EMPTYING THE WORLD CACHE…');
@@ -38525,6 +43989,21 @@ const overlays = createOverlays(
     pois.delete(fix.name);
   },
   () => { siteOpen = null; },
+  // DRIVE TO: the card's second action. The site becomes the goal the road
+  // chain steers for at every junction; the card closes because the answer
+  // to "what now" is out of the window, not in the panel.
+  () => {
+    const s = siteOpen;
+    siteOpen = null;
+    if (!s) return;
+    // The PIN's position when there is one — a fix is a place with a name —
+    // and the point the card was opened on otherwise.
+    const fix = s.fix ? pois.get(s.fix) : null;
+    setGoal(s.rec.name, fix ? fix.x : s.x, fix ? fix.z : s.z);
+  },
+  () => { routeMin = false; },
+  () => { routeMin = true; },
+  () => cancelRoute(),
 );
 
 // ── boot ───────────────────────────────────────────────────────────
@@ -38534,6 +44013,8 @@ const overlays = createOverlays(
 loadDials();
 loadSpots();
 applyDials();
+// A URL instrument outranks the remembered rack, as the other URL fixtures do.
+if (Number.isFinite(treeTriUrl) && treeTriUrl > 0) treeTriBudget = treeTriUrl;
 // The custom paint rides OVER whatever preset the dial just applied.
 if (customPaint) bodyMat?.color.set(customPaint);
 // …and THEN the URL, because a dial that persists to localStorage will happily
@@ -38558,7 +44039,7 @@ if (timeFromUrl >= 0) {
  * so the blur itself remains inspectable in the place where the ground holds
  * still. The dial stays live for the session, exactly like the clock above.
  */
-if (FIXTURE && !new URLSearchParams(location.search).has('mblur')) {
+if (FIXTURE && !qsHas('mblur')) {
   const d = DIALS.find((x) => x.key === 'mblur');
   if (d) { d.at = 0; d.apply(0); }
 }
@@ -38568,8 +44049,8 @@ if (FIXTURE && !new URLSearchParams(location.search).has('mblur')) {
 // (?time / ?t), because probes and screenshots need a held sun more than the
 // fiction needs a moving one. The dial stays live for this session; it is the
 // stale saved value that loses, not the ranger's hand.
-if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
-  && new URLSearchParams(location.search).get('line') === '1') {
+if (timeFromUrl < 0 && !qs('time')
+  && qs('line') === '1') {
   const d = DIALS.find((x) => x.key === 'time');
   const i = TIME_MODES.indexOf('CYCLE');
   if (d && i >= 0) { d.at = i; d.apply(i); }
@@ -38579,7 +44060,7 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
 // changed a render dial, and until now the render dials were the one set of
 // conditions a screenshot could not state.
 {
-  const q = new URLSearchParams(location.search).get('mblur');
+  const q = qs('mblur');
   const d = q === null ? null : DIALS.find((x) => x.key === 'mblur');
   if (d) { d.at = clamp(Math.round(Number(q)) || 0, 0, d.opts.length - 1); d.apply(d.at); }
 }
@@ -38618,17 +44099,16 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   placeLabel = spawn.name ?? '…';
   renderPlace();
   // Resume orientation and camera from the URL (written live while driving).
-  const q = new URLSearchParams(location.search);
-  const h0 = parseFloat(q.get('h') ?? '');
+  const h0 = parseFloat(qs('h') ?? '');
   if (Number.isFinite(h0)) state.heading = (h0 * Math.PI) / 180;
-  { const c = q.get('cam'); if (c === 'chase' || c === 'cab' || c === 'top') setCam(c); }
+  { const c = qs('cam'); if (c === 'chase' || c === 'cab' || c === 'top') setCam(c); }
   // …and the chart's zoom, so a reload mid-survey resumes the survey. Applied
   // to both the target and the current so the camera does not spend the first
   // seconds flying out from street level.
-  { const z0 = parseFloat(q.get('z') ?? ''); if (Number.isFinite(z0)) zoomT = zoomCur = clamp(z0, ZOOM_MIN, ZOOM_MAX); }
+  { const z0 = parseFloat(qs('z') ?? ''); if (Number.isFinite(z0)) zoomT = zoomCur = clamp(z0, ZOOM_MIN, ZOOM_MAX); }
   // The default spawn faces its vista — El Capitan's rim looks southeast
   // down the valley; a URL heading always wins.
-  if (!Number.isFinite(h0) && !q.get('lat') && !q.get('random')) state.heading = (145 * Math.PI) / 180;
+  if (!Number.isFinite(h0) && !qsHas('lat') && !qsHas('random')) state.heading = (145 * Math.PI) / 180;
   // A fixture faces the way it was authored to be looked at — the T from the
   // joiner, the hairpin along the first leg — unless its tune or the URL says
   // otherwise. `?h=` still wins, as it does everywhere else.
@@ -38639,7 +44119,7 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // Armed here, taken up once the splash gesture lands: watchPosition before
   // that would burn a fix (and a permission prompt) against a world that has
   // not finished streaming.
-  real.on = q.get('real') === '1';
+  real.on = qs('real') === '1';
   // The destinations, before anything asks for one. A shared link can carry
   // `&m=<id>`, and the task it names lives in the campaign — so this has to have
   // landed before `missionById` is asked. It is one small cached fetch on a
@@ -38653,7 +44133,7 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // is optimistic — a stored token, or a sign-in finishing on this very load —
   // so an expired token still boots the run and is found out on the first
   // sync rather than locking a ranger out at the roadside.
-  if (q.get('line') === '1' && sync.signedIn()) {
+  if (qs('line') === '1' && sync.signedIn()) {
     lineOn = true;
     const st = lineLoad();
     lineOdo = st?.odo ?? 0;
@@ -38666,7 +44146,7 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   void sync.start();
   // The task, if this spawn carries one. Armed AFTER `origin` is set, because
   // both its waypoints are lat/lon and have to be projected into local metres.
-  const mid = q.get('m');
+  const mid = qs('m');
   if (mid) { const m = missionById(mid); if (m) armMission(m); }
   // NOT on a reel boot: this write runs before attractArm raises the gate, and
   // it was the last leak — the postcard's spawn went over the player's URL in
@@ -39035,7 +44515,7 @@ let toastT = 0;
 // back is JSON if it can be and its own toString if it cannot — an Error
 // included, because "it threw, and this is what it said" is an answer.
 {
-  const probeKey = (new URLSearchParams(location.search).get('probe') ?? '').trim();
+  const probeKey = (qs('probe') ?? '').trim();
   if (/^[A-Za-z0-9_-]{6,64}$/.test(probeKey)) {
     // Outside the `~/` namespace on purpose — that surface is cached by path
     // and would serve one tab's answer to another. See serveProbe.

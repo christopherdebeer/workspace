@@ -40,8 +40,15 @@ const respond = (statusCode: number, contentType: string, body: string, extra: R
 // passing this to openDrive; nothing else changes behaviour.
 export const CSP = [
   "default-src 'none'",
-  // The game module (served here) + three.js from esm.sh.
-  "script-src 'self' https://esm.sh",
+  // The game module (served here) + three.js from esm.sh — and jsdelivr, for
+  // the ONE script loaded on request rather than at boot: the eruda console
+  // (see loadEruda in main.ts), a devtools panel for a phone. Not esm.sh,
+  // because eruda is a classic script injected by tag, not a module; and a
+  // host, not a path, because CSP source lists match origins. THE HARNESS
+  // CANNOT VERIFY THIS LINE — it relays through curl and never sees a CSP —
+  // so the check is `curl -s -D - -o /dev/null <cell>/ | grep -i
+  // content-security` after the deploy, and then the button on a phone.
+  "script-src 'self' https://esm.sh https://cdn.jsdelivr.net",
   "style-src 'unsafe-inline'",
   // World data. OSM vectors now come from THIS origin (the public namespace —
   // `'self'`), but the Overpass hosts stay in the list: the client falls back
@@ -75,6 +82,27 @@ export const CSP = [
   "base-uri 'none'",
   "form-action 'none'",
 ].join('; ');
+/**
+ * THE SAME POLICY WITH EVAL, FOR ONE KIND OF LOAD AND NO OTHER.
+ *
+ * The eruda console's prompt evaluates what is typed into it, and the policy
+ * above forbids that for every reason its note gives (see the probe-module
+ * route, which is how code reaches a phone WITHOUT a hole). The seat's report
+ * was exact: "Refused to evaluate a string as JavaScript because
+ * 'unsafe-eval' … is not an allowed source". So a page load that ASKS for the
+ * console (`?eruda=1`) is served with 'unsafe-eval', and no ordinary load
+ * ever is. Three things make that a boundary rather than a wish: the header
+ * is per REQUEST and the query reaches this handler; the service worker hands
+ * such a navigation to the network instead of the cached shell (a cached
+ * response keeps the headers it was stored with — the locked ones — see
+ * shellResponse in static/sw.js); and `no-store` keeps the edge from ever
+ * holding this variant as anyone's shell.
+ */
+export const CSP_EVAL = CSP.replace("script-src 'self'", "script-src 'self' 'unsafe-eval'");
+const erudaOn = (q: string | undefined): boolean => {
+  const v = new URLSearchParams(q ?? '').get('eruda');
+  return v !== null && v !== '0' && v !== 'off';
+};
 
 const SHELL = `<!doctype html>
 <html>
@@ -152,6 +180,10 @@ const WEB_ASSETS: Record<string, { file: string; type: string }> = {
   '/icons/drive-192.png': { file: 'icons/drive-192.png', type: 'image/png' },
   '/icons/drive-512.png': { file: 'icons/drive-512.png', type: 'image/png' },
   '/icons/drive-maskable-512.png': { file: 'icons/drive-maskable-512.png', type: 'image/png' },
+  // The planet the wide chart is painted on — see client/globe.ts. Immutable
+  // for a day like the icons: it changes only when the bake is re-run, and a
+  // deploy is what publishes it.
+  '/globe-base.png': { file: 'globe-base.png', type: 'image/png' },
 };
 
 /**
@@ -169,14 +201,23 @@ const WEB_ASSETS: Record<string, { file: string; type: string }> = {
  * of one route.
  */
 let bundleStamp: string | null = null;
-function serveServiceWorker() {
+/** The bundle's own fingerprint, computed once. Named here rather than inside
+ *  the service worker's handler because the CLIENT wants it too now — the
+ *  ABOUT page has to be able to say which build the reader is looking at, and
+ *  the first question of any report is which version it was. Hashing app.js
+ *  BEFORE the placeholder is filled keeps it stable: the placeholder is a
+ *  constant, so the stamp does not depend on itself. */
+function stampOf(): string {
   if (bundleStamp === null) {
     try {
       bundleStamp = createHash('sha1')
         .update(readFileSync(join(__dirname, 'app.js'))).digest('hex').slice(0, 12);
     } catch { bundleStamp = 'unstamped'; }
   }
-  const body = webText('sw.js').replace('__DRIVE_SW_BUILD__', bundleStamp);
+  return bundleStamp;
+}
+function serveServiceWorker() {
+  const body = webText('sw.js').replace('__DRIVE_SW_BUILD__', stampOf());
   return respond(200, 'application/javascript; charset=utf-8', body, {
     // The one file that must never come from a stale cache: it is the only
     // thing that can replace a stale cache. Browsers already refuse to reuse a
@@ -286,7 +327,7 @@ function serveWebAsset(path: string) {
 // written — otherwise every ocean tile is a permanent miss and therefore a
 // permanent invocation — and (2) a failure must never be written, or one bad
 // minute upstream becomes our bad week.
-const TILE_RE = /^\/~\/osm\/v[23]\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+const TILE_RE = /^\/~\/osm\/v[2-4]\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;   // v4: water relations
 const COVER_RE = /^\/~\/cover\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // THREE upstreams, not one. Measured on a 12km corridor through Death Valley:
 // 7 of 25 cold tiles came back 503 at 9–12.5s because the single upstream was
@@ -587,7 +628,20 @@ const OV_RE = /^\/~\/osm\/ov1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // the two coarse rungs get more headroom than z10 for the opposite reason: the
 // same narrow class set over 4x and 16x the ground. Measured on the first z9
 // tiles served: 19-24KB gzipped, nowhere near the cap.
-const OV_CAP: Record<number, number> = { 8: 8000, 9: 6000, 10: 3000, 11: 4500, 12: 6000, 13: 6000 };
+// z7 is a 313km box carrying motorways and trunks alone — the rung the chart
+// reaches past the z8 ring once its sight line was doubled to 600km. Given
+// the most headroom of all, for the same reason z8 has more than z10.
+//
+// THE CAPS USED TO RUN THE WRONG WAY AGAINST THEIR OWN REASON. z8 was given
+// 8000 and z10 3000 on the stated grounds of "the same narrow class set over 4x
+// and 16x the ground" — but the class set at z8 was not narrower than z10's, it
+// was IDENTICAL, so sixteen times the area was given 2.7 times the headroom and
+// the tripwire fired on the rung it was least likely to be wrong about. With
+// z7-z9 served from the bake and z10 narrowed to motorways and trunks, each
+// rung's cap is now sized to the ask it actually makes: the coarse three are
+// fall-through values only, and z10's headroom rises because its query no
+// longer carries the class that was filling it.
+const OV_CAP: Record<number, number> = { 5: 12000, 6: 12000, 7: 12000, 8: 8000, 9: 6000, 10: 6000, 11: 4500, 12: 6000, 13: 6000 };
 // These tiles are rare and cached forever, so they may spend upstream time a
 // fine tile cannot. Measured: a z10 coastal tile needs 11-18s of Overpass, and
 // the densest z12 boxes on the line want more — the fine budget's 5s-per-mirror
@@ -615,7 +669,25 @@ const OV_UPSTREAM_MS = 44000;
 // and is now allowed to finish. The Overpass-side `timeout:25` gives up just
 // before we do, so a box that is truly too big returns a clean error rather
 // than a blind abort.
-const OV_ATTEMPT_MS = 26000;
+//
+// AND AT 26000 THE THIRD MIRROR WAS UNREACHABLE BY CONSTRUCTION. `askOverpass`
+// gives mirror one `min(attempt, left)` = 26s; on failure `left` is 18s, so
+// mirror two gets 18s; then `left` is under the 1500ms floor and the loop
+// breaks. Three mirrors were configured and two were ever tried — which matters
+// far more than it looks, because mirror health is not uniform: measured on
+// 2026-09-09, a ONE-BLOCK query returning 23 ways took 39.6s on kumi and 36.4s
+// on private.coffee against 1.6s on overpass-api.de. Two of the three were
+// saturated, and a rotation with no memory of health starts two thirds of tiles
+// on one of them.
+//
+// 18000 makes the sequence 18 + 18 + 8 and reaches all three. It is chosen
+// against the measurement that set the old number rather than away from it: the
+// case this window exists to protect is "a dense z12 tile near a metropolis
+// needs 11-18s of Overpass", and 18s still covers all of it. What it gives up
+// is the 18-26s tail on the FIRST mirror, in exchange for ever trying the
+// third — and with z7-z9 now served from the bake, the boxes still coming
+// through here are 39km and smaller.
+const OV_ATTEMPT_MS = 18000;
 function overviewQuery(z: number, x: number, y: number): string {
   const b = tileBounds(z, x, y);
   const bbox = `${b.latS},${b.lonW},${b.latN},${b.lonE}`;
@@ -623,19 +695,60 @@ function overviewQuery(z: number, x: number, y: number): string {
   // it for secondaries and rail is what timed out: the classes climb as the
   // tiles shrink, and each level carries only what its scale can draw —
   // motorways at the scale of a region, tertiaries only at the tightest band.
-  const hw = z <= 10 ? 'motorway|trunk|primary'
+  // z7 IS THE WIDEST RUNG AND THE NARROWEST ASK, and the ask was measured
+  // before the rung was offered. A z7 box is 313km on a side; the Paris tile
+  // asked for motorways and trunks alone came back as 6,645 ways of 58k
+  // points, 7.6MB raw, in 65s from a loaded mirror — past the 44s this
+  // handler can wait — and the same box's coastline on its own did not return
+  // in 100s. Motorways alone are about half of that count. So z7 carries the
+  // motorways and the cities and nothing else: the shell's own cover raster
+  // paints the sea at that scale, and rivers, summits and coast stay on z8
+  // and finer, where the trim's tolerance (611m at z7) could draw them
+  // anyway. A dense European z7 tile may still take several stream passes to
+  // land; once it does the bank serves it for ever.
+  //
+  // ── AND z7-z9 NO LONGER COME THROUGH HERE AT ALL ──
+  //
+  // They are served from the Natural Earth bake (`ne-wide.ts`), so this
+  // function's real range is z10 to z13 and the ladder below is written for
+  // that. The z7 branch is kept because `serveOverview` falls through to
+  // Overpass if the baked asset is missing from a deploy, and a fall-through
+  // that asks a query nobody has thought about is not a fallback.
+  //
+  // THE MIDDLE OF THE LADDER WAS NEVER A LADDER. z8, z9 and z10 all asked for
+  // `motorway|trunk|primary` over boxes of 156, 78 and 39km — sixteen, four and
+  // one times the area for an identical ask. Only z7 was ever narrowed, and it
+  // was narrowed because somebody measured it. z10 is the rung that remains
+  // here and it now drops to motorways and trunks: at 39km across and 150m a
+  // chart pixel, a primary through a town is a scribble, and primaries are also
+  // where the count explodes, because OSM splits them at every junction and
+  // name change.
+  const hw = z <= 7 ? 'motorway'
+    : z <= 9 ? 'motorway|trunk'
+    : z === 10 ? 'motorway|trunk'
     : z === 11 ? 'motorway|trunk|primary|secondary'
     : 'motorway|trunk|primary|secondary|tertiary';
   const rail = z >= 11 ? `way["railway"="rail"](${bbox});` : '';
   const canal = z >= 11 ? '|canal' : '';
-  const place = z <= 10 ? 'city|town' : z === 11 ? 'city|town|village' : 'city|town|village|hamlet';
+  const river = z >= 10 ? `way["waterway"~"^(river${canal})$"](${bbox});` : '';
+  // THE COASTLINE IS OFF BELOW z11, AND `out geom` IS WHY. It returns a matched
+  // way's WHOLE geometry, not the part inside the box, and a coastline way is
+  // not bounded by anything: one of them clipping the corner of a 39km tile can
+  // carry a continent's worth of vertices into it, invisibly, because the way
+  // COUNT stays at one. z7 already carried no coast for a measured reason ("the
+  // same box's coastline on its own did not return in 100s"); the reason does
+  // not stop applying at z8. The shell's own land cover paints the sea at every
+  // one of these scales, which is what made z7 safe to narrow.
+  const coast = z >= 11 ? `way["natural"="coastline"](${bbox});` : '';
+  const peak = z >= 10 ? `node["natural"="peak"]["name"](${bbox});` : '';
+  const place = z <= 7 ? 'city' : z <= 10 ? 'city|town' : z === 11 ? 'city|town|village' : 'city|town|village|hamlet';
   return `[out:json][timeout:25];(
       way["highway"~"^(${hw})$"](${bbox});
       ${rail}
-      way["waterway"~"^(river${canal})$"](${bbox});
-      way["natural"="coastline"](${bbox});
+      ${river}
+      ${coast}
       node["place"~"^(${place})$"](${bbox});
-      node["natural"="peak"]["name"](${bbox});
+      ${peak}
     );out geom ${OV_CAP[z] ?? 6000};`;
 }
 /**
@@ -689,8 +802,47 @@ export function trimOverview(elements: RawWay[], z: number): Array<Record<string
 }
 async function serveOverview(path: string, m: RegExpMatchArray) {
   const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  if (z < 8 || z > 13 || x >= 2 ** z || y >= 2 ** z) {
+  // The floor is the bake's: every rung below z10 is Natural Earth's, and the
+  // widest it serves is one number in ne-wide.ts. The globe lowers it.
+  if (z < NE_MIN_Z || z > 13 || x >= 2 ** z || y >= 2 ** z) {
     return respond(400, 'application/json', JSON.stringify({ error: 'overview tile out of range' }));
+  }
+  // ── THE WIDE RUNGS DO NOT ASK ANYONE ───────────────────────────────
+  //
+  // z7, z8 and z9 come from the Natural Earth bake in `ne-wide.ts`. They used
+  // to ask Overpass and could not be got: measured against this cell, a pure
+  // ocean tile — a box with nothing in it — 502'd at the edge exactly like a
+  // Cape Town city tile, and the same z9 tile asked at 0s, 70s and 140s came
+  // back 502 every time, so it was not filling in the background either.
+  //
+  // A tile from here is arithmetic over an already-loaded array: no upstream,
+  // no budget, no mirror, and the same answer every time. It still banks, so
+  // the edge serves it from S3 ever after and the Lambda is not asked twice.
+  //
+  // The fall-through is deliberate and is the whole safety of the swap: if the
+  // asset is missing from a deploy, `neWideTile` returns null and these rungs
+  // go back to Overpass exactly as before, degraded rather than broken.
+  const baked = z <= NE_MAX_Z ? neWideTile(z, x, y) : null;
+  if (baked) {
+    const payload = JSON.stringify({ v: 1, z, x, y, ways: trimOverview(baked, z) });
+    const gz = gzipSync(Buffer.from(payload, 'utf8'), { level: 9 });
+    try { await putTile(path, gz); } catch { /* best effort */ }
+    return {
+      statusCode: 200,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'content-encoding': 'gzip',
+        'cache-control': 'public, max-age=604800, immutable',
+        'access-control-allow-origin': '*',
+        // Which source answered, so "is the bake live?" is a curl and not a
+        // deploy archaeology exercise. The old failures were one bare 503 for
+        // four different causes and that is most of why this took two sessions
+        // to diagnose wrongly twice.
+        'x-ov-src': 'ne',
+      },
+      body: gz.toString('base64'),
+      isBase64Encoded: true,
+    };
   }
   let elements: RawWay[];
   try {
@@ -702,15 +854,25 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
     const rot = (x + y + z + Math.floor(Date.now() / 60000)) % OVERPASS_MIRRORS.length;
     elements = await askOverpass(overviewQuery(z, x, y), OV_UPSTREAM_MS, OV_ATTEMPT_MS, rot);
   } catch (err) {
-    return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
-      'retry-after': '5', 'cache-control': 'no-store',
-    });
+    // THE 503 SAYS WHICH FAILURE THIS IS. It used to be one bare string for
+    // four different endings — mirror refused instantly, query timed out,
+    // budget exhausted, cap tripped — and nobody outside could tell them apart,
+    // which is most of why the wide chart was diagnosed wrongly twice. `why`
+    // and `src` are the difference between a curl and an afternoon.
+    return respond(503, 'application/json', JSON.stringify({
+      error: String((err as Error).message ?? err),
+      why: 'upstream', src: 'overpass', z,
+      // If this is a coarse rung it should never have got here: say so, because
+      // a silent fall-through to the path that does not work is the failure
+      // mode the bake was added to end.
+      ...(z <= NE_MAX_Z ? { bakeMissing: neWideError() ?? 'asset absent' } : {}),
+    }), { 'retry-after': '5', 'cache-control': 'no-store', 'x-ov-src': 'overpass' });
   }
   // The tripwire: a response AT the cap is a truncation, not an answer.
   if (elements.length >= (OV_CAP[z] ?? 6000)) {
-    return respond(503, 'application/json', JSON.stringify({ error: 'tile too dense for the overview cap' }), {
-      'retry-after': '60', 'cache-control': 'no-store',
-    });
+    return respond(503, 'application/json', JSON.stringify({
+      error: 'tile too dense for the overview cap', why: 'cap', src: 'overpass', z, cap: OV_CAP[z] ?? 6000,
+    }), { 'retry-after': '60', 'cache-control': 'no-store', 'x-ov-src': 'overpass' });
   }
   const payload = JSON.stringify({ v: 1, z, x, y, ways: trimOverview(elements, z) });
   const gz = gzipSync(Buffer.from(payload, 'utf8'), { level: 9 });
@@ -752,6 +914,8 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
  * See `docs/drive-persistence.md`.
  */
 import { CAMPAIGN } from './campaigns/dakar';
+import { assembleRelationRings } from './osm-rings';
+import { neWideTile, neWideError, NE_MAX_Z, NE_MIN_Z } from './ne-wide';
 
 const CAMPAIGN_V = CAMPAIGN.v;
 const CAMPAIGN_RE = /^\/~\/campaign\/(\d{1,4})$/;
@@ -817,6 +981,116 @@ const PEAK_CAP = 120;             // per tile, tallest first
 // old window could not get.
 const PEAK_UPSTREAM_MS = 44000;
 const PEAK_ATTEMPT_MS = 26000;
+/**
+ * ══════════════════════════════════════════════════════════════════
+ * ECOREGIONS — the one thing climate cannot derive
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * The site model under `climate.ts` computes heat, water, seasonality and the
+ * rest from physics, and it can reach most of the world that way. It cannot
+ * reach FYNBOS. The Cape is an ordinary Mediterranean climate — mild, wet
+ * winter, bone-dry summer, maritime — that grows something structurally unlike
+ * any other Mediterranean climate on earth. No refinement of a temperature and
+ * a rainfall gets there, because the difference is not climatic: it is who
+ * happened to evolve there. Chaparral, matorral, maquis and kwongan are the
+ * same argument on four other coasts.
+ *
+ * So this is the one place the model reads a MAP instead of computing. RESOLVE
+ * Ecoregions 2017 — 846 terrestrial ecoregions inside 14 biomes, the standard
+ * carve-up — served through the same read-through cache as everything else:
+ * asked once for a tile, banked in the public namespace, served from the edge
+ * afterwards. Verified against the fixture set before the route was written:
+ * the Cape returns "Fynbos shrubland", Yosemite "Sierra Nevada forests",
+ * Zermatt "Alps conifer and mixed forests", Tamanrasset "West Saharan montane
+ * xeric woodlands".
+ *
+ * ── ONE ZOOM, AND IT IS A COARSE ONE ──
+ *
+ * Ecoregions are enormous and their boundaries are fuzzy in nature as well as
+ * in the data, so there is no pyramid: z5 tiles, about 1250km across at the
+ * equator, and the server simplifies to 0.05 degrees on the way out. Measured
+ * over the Cape: six features, 52KB gzipped — an overview tile's weight for a
+ * region's worth of answer, where the alternative was a point query per plant.
+ *
+ * ── AN EMPTY TILE IS AN ANSWER ──
+ *
+ * Most of the planet is ocean and has no terrestrial ecoregion. That must be
+ * stored like any other tile or the commonest tile on earth is a permanent
+ * cache miss — the same rule serveTile records for open country.
+ */
+const ECO_RE = /^\/~\/eco\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+/** RESOLVE Ecoregions 2017, as published on ArcGIS Living Atlas. */
+const ECO_URL = 'https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services'
+  + '/Resolve_Ecoregions/FeatureServer/0/query';
+/** Degrees of boundary simplification asked of the server. 0.05 is about 5km,
+ *  which is coarser than the 2km climate lattice and finer than any ecoregion
+ *  boundary is real to. 0.02 doubled the payload and moved nothing. */
+const ECO_OFFSET = 0.05;
+const ECO_MS = 20000;
+
+async function serveEco(path: string, m: RegExpMatchArray) {
+  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  // ONE ZOOM. A pyramid over data this coarse would multiply the upstream
+  // traffic and the storage to say the same thing at every level.
+  if (z !== 5 || x >= 2 ** z || y >= 2 ** z) {
+    return respond(400, 'application/json', JSON.stringify({ error: 'eco tiles are z5 only' }));
+  }
+  const b = tileBounds(z, x, y);
+  const env = JSON.stringify({
+    xmin: b.lonW, ymin: b.latS, xmax: b.lonE, ymax: b.latN,
+    spatialReference: { wkid: 4326 },
+  });
+  const q = new URLSearchParams({
+    geometry: env,
+    geometryType: 'esriGeometryEnvelope',
+    spatialRel: 'esriSpatialRelIntersects',
+    outFields: 'ECO_ID,ECO_NAME,BIOME_NUM,BIOME_NAME,REALM',
+    returnGeometry: 'true',
+    maxAllowableOffset: String(ECO_OFFSET),
+    geometryPrecision: '3',
+    outSR: '4326',
+    f: 'geojson',
+  });
+  let raw: { features?: Array<{ properties?: Record<string, unknown>; geometry?: unknown }> };
+  try {
+    const ctl = new AbortController();
+    const bail = setTimeout(() => ctl.abort(), ECO_MS);
+    try {
+      const res = await fetch(`${ECO_URL}?${q}`, { signal: ctl.signal });
+      if (!res.ok) throw new Error(`eco HTTP ${res.status}`);
+      raw = (await res.json()) as typeof raw;
+    } finally { clearTimeout(bail); }
+  } catch (err) {
+    // WRITE NOTHING. A 503 is retried; a stored failure is not.
+    return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
+      'retry-after': '5', 'cache-control': 'no-store',
+    });
+  }
+  // Trimmed to what a guild rule can use: the id to key a prior on, the biome
+  // for the coarse fallback, and the name so a probe can be read by a human.
+  // Everything else the service carries — colours, areas, NNH status — is the
+  // conservation dataset's business and not this game's.
+  const regions = (raw.features ?? []).map((f) => ({
+    id: Number(f.properties?.ECO_ID ?? -1),
+    biome: Number(f.properties?.BIOME_NUM ?? -1),
+    name: String(f.properties?.ECO_NAME ?? ''),
+    realm: String(f.properties?.REALM ?? ''),
+    g: f.geometry ?? null,
+  })).filter((r) => r.g && r.id >= 0);
+  const payload = JSON.stringify({ v: 1, z, x, y, regions });
+  const gz = gzipSync(Buffer.from(payload, 'utf8'), { level: 9 });
+  try { await putTile(path, gz); } catch { /* best effort */ }
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'content-encoding': 'gzip',
+      'cache-control': 'public, max-age=604800, immutable',
+    },
+    body: gz.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
 const PEAK_RE = /^\/~\/osm\/peak1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 /** OSM `ele` is free text: "1234", "1234.5", "1234 m", "4,808", and junk.
  *  Metres only — a value in feet is not marked as such often enough to guess,
@@ -914,6 +1188,8 @@ function overpassQuery(z: number, x: number, y: number): string {
       way["building"](${bbox});
       way["natural"~"water|coastline|cliff|scrub|wetland|bare_rock|sand"](${bbox});
       way["waterway"~"riverbank|river|stream|canal"](${bbox});
+      relation["natural"="water"](${bbox});
+      relation["waterway"="riverbank"](${bbox});
       way["landuse"~"forest|meadow|grass|recreation_ground|farmland|orchard|vineyard|quarry"](${bbox});
       way["leisure"~"park|pitch|garden|nature_reserve"](${bbox});
       way["railway"~"rail|light_rail|tram|narrow_gauge"](${bbox});
@@ -932,6 +1208,8 @@ function overpassQuery(z: number, x: number, y: number): string {
 interface RawWay {
   type?: string; id: number; tags?: Record<string, string>;
   geometry?: Array<{ lat: number; lon: number }>;
+  /** A relation's member ways, each with its geometry under `out geom`. */
+  members?: Array<{ type?: string; ref?: number; role?: string; geometry?: Array<{ lat: number; lon: number }> }>;
   /** Nodes carry their position directly rather than as a geometry array. */
   lat?: number; lon?: number;
 }
@@ -1003,6 +1281,18 @@ export async function askOverpass(query: string, budgetMs = UPSTREAM_MS, attempt
 export function trimWays(elements: RawWay[]): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   for (const el of elements) {
+    if (el.type === 'relation') {
+      // v4: water multipolygons, joined into rings here (see osm-rings.ts).
+      // A NEGATIVE id: ways and relations share a number space in OSM and
+      // the client dedupes by id, so a relation is -id, unmistakably. Its
+      // `geometry` is the first outer ring, which is what every consumer
+      // that only knows a way expects to find there.
+      if (!el.members?.length) continue;
+      const rings = assembleRelationRings(el.members);
+      if (!rings?.length) continue;
+      out.push({ id: -el.id, tags: el.tags ?? {}, geometry: rings[0].outer, rings });
+      continue;
+    }
     // A NODE IS A ONE-POINT GEOMETRY. Dropping everything that was not a `way`
     // is what silently threw away every fuel station, viewpoint and summit the
     // query now asks for — they are nodes, and a node keeps its position in
@@ -1695,6 +1985,8 @@ export const handler = async (event: {
     if (ov) return serveOverview(path, ov);
     const pk = path.match(PEAK_RE);
     if (pk) return servePeaks(path, pk);
+    const eco = path.match(ECO_RE);
+    if (eco) return serveEco(path, eco);
     const cp = path.match(CAMPAIGN_RE);
     if (cp) return serveCampaign(path, cp);
     return respond(404, 'application/json', JSON.stringify({ error: 'no such object' }), {
@@ -1718,5 +2010,9 @@ export const handler = async (event: {
   } catch (err) {
     return respond(404, 'application/json', JSON.stringify({ error: (err as Error).message }));
   }
-  return respond(200, 'text/html; charset=utf-8', SHELL, { 'content-security-policy': CSP });
+  // A load that asked for the dev console gets the policy that lets its
+  // prompt run — see CSP_EVAL — and is never stored as the shell.
+  return erudaOn(event.rawQueryString)
+    ? respond(200, 'text/html; charset=utf-8', SHELL, { 'content-security-policy': CSP_EVAL, 'cache-control': 'no-store' })
+    : respond(200, 'text/html; charset=utf-8', SHELL, { 'content-security-policy': CSP });
 };

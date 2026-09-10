@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import zlib from 'node:zlib';
 import { chromium } from 'playwright';
+import { offlineAliasFlags } from './offline-deps.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const CELL = join(HERE, '..');
@@ -136,7 +137,7 @@ export async function openDrive(opts = {}) {
   // runs. The tag is a label; the filename is a filename.
   const safeTag = String(tag).replace(/[^A-Za-z0-9._-]+/g, '-');
   const bundle = join(WORK, `${safeTag}.js`);
-  execSync(`npx esbuild ${src} --bundle --format=esm --outfile=${bundle}`, { stdio: 'pipe', cwd: ROOT });
+  execSync(`npx esbuild ${src} --bundle --format=esm ${offlineAliasFlags()} --outfile=${bundle}`, { stdio: 'pipe', cwd: ROOT });
 
   const html = shell();
   // ── THE CELL'S OWN ROUTES, SERVED BY THE CELL'S OWN HANDLER ──
@@ -287,12 +288,40 @@ export async function openDrive(opts = {}) {
         })
         .catch(() => { res.writeHead(503); res.end('{}'); });
     }
+    // ECOREGION TILES, and for the third time the same reason: the client has
+    // no fallback for these, so a 404 here does not degrade the answer, it
+    // deletes it — and it deletes it PERMANENTLY, because `loadEcoTile` reads
+    // a 4xx as "this tile is not coming, whatever we do" and never asks again.
+    // A run against this server therefore reported `ecoState: failed` on frame
+    // zero and looked exactly like a broken route on the cell. One z5 tile
+    // covers twelve hundred kilometres, so this is one fetch a continent.
+    else if (p.startsWith('/~/eco/v1/')) {
+      fetch(`https://c15r-drive.on.parc.land${p}`)
+        .then(async (r) => {
+          if (!r.ok) { res.writeHead(r.status); res.end('{}'); return; }
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(Buffer.from(await r.arrayBuffer()));
+        })
+        .catch(() => { res.writeHead(503); res.end('{}'); });
+    }
     else if (p.startsWith('/~/cover/v1/')) {
       cellRoute(p).then((out) => {
         if (!out) { res.writeHead(404); res.end('{}'); return; }
         res.writeHead(200, { 'content-type': out.type });
         res.end(out.body);
       }).catch(() => { res.writeHead(503); res.end('{}'); });
+    }
+    // THE PLANET, SERVED FROM THE FILE THE DEPLOY WOULD SERVE. The globe's
+    // base is a static asset, not a tile route, and the harness 404s anything
+    // it does not know — which would leave every wide-chart frame here with a
+    // textureless globe and no error, the exact shape of failure `loadEcoTile`
+    // needed this list for. Read off disk rather than proxied: it is in the
+    // repo, and a test should not need the deploy to be current.
+    else if (p === '/globe-base.png') {
+      try {
+        res.writeHead(200, { 'content-type': 'image/png' });
+        res.end(readFileSync(join(CELL, 'static', 'globe-base.png')));
+      } catch { res.writeHead(404); res.end('{}'); }
     }
     else { res.writeHead(404); res.end('{}'); }
   });

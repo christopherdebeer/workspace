@@ -28,13 +28,15 @@
  * Everything stateful stays in main.ts; this module gets a context of
  * getters and actions and owns only layout and the open/closed state.
  */
+import { RIG_EQUIPMENT, type RigEquipmentId } from './rig-equipment';
+import { RIG_MODELS, type RigModelId, type RigLoadoutId } from './rig-model';
 import { PIXEL_FONT, PIXEL_FONT_CSS, loadPixelFont } from './font';
 import { ICON, ICON_FONT, loadIcons } from './icons';
 
 // Screen indices are the probe API (__menutab) and predate the redesign:
 // 0 was the DRIVE tab and is now the splash hub; the rest keep their numbers.
-export const T_DRIVE = 0, T_SURVEY = 1, T_RIG = 2, T_WORLD = 3, T_SYSTEM = 4, T_LINE = 5;
-const TITLES: Record<number, string> = { [T_SURVEY]: 'SURVEYS', [T_RIG]: 'RIG', [T_WORLD]: 'DRIVES', [T_SYSTEM]: 'SETTINGS', [T_LINE]: 'THE LINE' };
+export const T_DRIVE = 0, T_SURVEY = 1, T_RIG = 2, T_WORLD = 3, T_SYSTEM = 4, T_LINE = 5, T_ABOUT = 6, T_PROGRESS = 7;
+const TITLES: Record<number, string> = { [T_SURVEY]: 'SURVEYS', [T_RIG]: 'RIG', [T_WORLD]: 'DRIVES', [T_SYSTEM]: 'SETTINGS', [T_LINE]: 'THE LINE', [T_ABOUT]: 'ABOUT', [T_PROGRESS]: 'PROGRESS' };
 
 export interface Rect { x: number; y: number; w: number; h: number }
 
@@ -46,6 +48,9 @@ export interface DialGroupRef { title: string; dials: DialRef[] }
 type Tone = 'edge' | 'dim' | 'text' | 'soft' | 'gold' | 'hot' | 'good' | 'bad';
 
 export interface MenuCtx {
+  rigChoice(): { model: RigModelId; loadout: RigLoadoutId; equipment: RigEquipmentId[] };
+  rigChoose(model: RigModelId, loadout: RigLoadoutId, equipment?: RigEquipmentId[]): void;
+  registration(): string;
   colors: Record<Tone, string>;
   // ── live readouts ──
   place(): string;
@@ -65,9 +70,23 @@ export interface MenuCtx {
    *  null once spent (or never set). */
   attractRet?(): string | null;
   attractRetGo?(): void;
+  /** The reel as a programme: how many stops it has, which is showing
+   *  (-1 = the player's own spot), and whether there is a home to go back to. */
+  reel?(): { n: number; at: number; home: boolean };
+  /** -1 is home; 0..n-1 are the reel's stops. */
+  reelGo?(i: number): void;
   driveStats(): Array<[string, string]>;
   worldRows(): Array<[string, string]>;
   systemRows(): Array<[string, string]>;
+  /** Every switch this build has, from `switches.ts`, with what THIS session is
+   *  running. Rendered whole and not filtered: the panel exists so that a
+   *  switch cannot be forgotten, and a list that hides the ones nobody set
+   *  hides exactly the ones nobody remembers. Optional: older ctx builds. */
+  switches?(): Array<{ id: string; value: string; set: boolean; marks: readonly string[] }>;
+  /** The build's own identity, for the foot of ABOUT — a page that credits
+   *  everyone and cannot say WHICH build the reader is looking at is half a
+   *  page, and the first question of any report is which version it was. */
+  aboutRows(): Array<[string, string]>;
   real(): { on: boolean; err: string };
   surveyHere(): { name: string; tally: string; frac: number; state: string; tone: Tone } | null;
   surveyTotals(): { roads: number; got: number; total: number };
@@ -136,6 +155,12 @@ export interface MenuCtx {
    *  the service worker. Signs out; the durable copy is not touched. Reloads
    *  when it is done, for the same reason lineReset does. */
   deviceReset(status: (s: string, bad?: boolean) => void): void;
+  /** Load the eruda console onto the page — a devtools panel for a phone —
+   *  and report through `status` whether it came. */
+  devConsole(status: (s: string, bad?: boolean) => void): void;
+  /** Reload this page with `?eruda=1`, the one kind of load the cell serves
+   *  under a policy that lets the console's prompt run code. */
+  devReload(status: (s: string, bad?: boolean) => void): void;
   syncLabel(): string;
   syncNote(): string;
   syncTone(): Tone;
@@ -155,6 +180,7 @@ export interface MenuCtx {
 }
 
 export interface MenuHandle {
+  rigLive(): boolean;
   open(tab?: number): void;
   close(): void;
   tab(): number | null;
@@ -213,6 +239,32 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu .m-place { color: ${C.gold}; font-size: 16px; font-weight: 700;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #menu .m-dimline { color: ${C.dim}; font-size: 10px; margin: 2px 0 6px; }
+  /* The carousel. Hit boxes are 32px tall with the ink drawn small inside —
+     a 6px dot is a 6px target otherwise, and this strip sits where a thumb
+     rests on a phone. */
+  #menu .m-dots { display: flex; gap: 2px; justify-content: center;
+    align-items: center; padding: 2px 8px 0; flex-wrap: wrap; }
+  #menu .m-dot { -webkit-appearance: none; appearance: none; background: none;
+    border: 0; cursor: pointer; padding: 0; width: 22px; height: 32px;
+    position: relative; }
+  /* THE UNVISITED DOTS HAVE TO BE VISIBLE — they are the "how many" half of
+     the affordance, and at dim-grey-on-a-live-sunset they read as dirt on the
+     screen. Photographed: the strip was there and could not be found. Soft
+     ink, a size that survives the pixel grid, and the same near-black ring
+     every glyph in this menu wears so they hold over any scene behind them. */
+  #menu .m-dot::after { content: ''; position: absolute; left: 50%; top: 50%;
+    width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
+    background: ${C.soft}; box-shadow: 0 0 0 2px rgba(4,10,11,0.92); }
+  /* HOME is a SQUARE. The one stop that is not a recording should not look
+     like one, and shape reads before colour at this size. */
+  #menu .m-dot.home::after { border-radius: 0; width: 9px; height: 9px;
+    margin: -4.5px 0 0 -4.5px; background: ${C.good}; }
+  #menu .m-dot.home.off::after { background: ${C.dim}; }
+  #menu .m-dot.on::after { background: ${C.gold}; width: 12px; height: 12px;
+    margin: -6px 0 0 -6px; box-shadow: 0 0 0 2px rgba(4,10,11,0.92); }
+  #menu .m-dot.home.on::after { background: ${C.good}; }
+  #menu .m-dotlab { text-align: center; font-size: 10px; letter-spacing: 2px;
+    padding: 0 8px 4px; }
   #menu table.m-kv { border-collapse: collapse; font-size: 11px; }
   #menu table.m-kv td { padding: 1px 1.2em 1px 0; vertical-align: baseline; }
   #menu table.m-kv td:first-child { color: ${C.dim}; padding-right: 1.6em; white-space: nowrap; }
@@ -246,6 +298,13 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu .m-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; }
   #menu .m-row.hit { cursor: pointer; }
   #menu .m-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* A CREDIT MUST NOT BE ELLIPSISED. Every other name in this menu is a road
+     or a rig and fits; an attribution is a sentence with a licence in it, and
+     .m-row's clip turned "contains modified Copernicus Sentinel data" into
+     "CONTAINS MODI…". The DOM test could not see it — textContent is whole
+     however the box clips — and it took the screenshot to catch, which is the
+     argument for taking one. */
+  #menu .m-credit { white-space: normal; overflow-wrap: anywhere; padding: 1px 0; }
   #menu .m-row .sub { margin-left: auto; color: ${C.dim}; font-size: 10px; text-align: right;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; max-width: 55%; }
   #menu .m-row .del { color: ${C.soft}; cursor: pointer; padding: 0 6px; flex-shrink: 0; }
@@ -306,11 +365,155 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     letter-spacing: 0.5px; }
   #menu .m-bay .cap { position: absolute; top: 3px; left: 5px; color: ${C.dim}; font-size: 10px; }
   #menu .m-bay .tag { position: absolute; bottom: 3px; left: 5px; color: ${C.gold}; font-size: 10px; }
+
+  /* The hub belongs to the glass: generous invisible hit areas, a small
+     amount of drawn ink. Keep the world and the truck as the hero. */
+  #menu button { text-shadow: inherit; border-radius: 0; touch-action: manipulation; }
+  #menu button:focus-visible { outline: 2px solid ${C.gold}; outline-offset: 3px; }
+  #menu.hub .m-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 6px; }
+  #menu.hub .m-navrow { position: relative; border: 0; background: transparent;
+    min-height: 52px; padding: 8px 3px; gap: 4px; color: ${C.text}; }
+  #menu.hub .m-navrow::before, #menu.hub .m-navrow::after {
+    content: ''; position: absolute; width: 7px; height: 7px; pointer-events: none; }
+  #menu.hub .m-navrow::before { top: 0; left: 0; border-top: 1px solid ${C.edge}; border-left: 1px solid ${C.edge}; }
+  #menu.hub .m-navrow::after { bottom: 0; right: 0; border-bottom: 1px solid ${C.edge}; border-right: 1px solid ${C.edge}; }
+  #menu.hub .m-navrow .name { font-size: 10px; letter-spacing: 0.3px; }
+  #menu.hub .m-navrow .ico { font-size: 12px; color: ${C.gold}; }
+  #menu.hub .m-utilities { display: flex; justify-content: center; flex-wrap: wrap;
+    gap: 4px 16px; margin-top: 6px; border-top: 1px solid ${C.dim}; }
+  #menu.hub .m-utilities .m-navrow { flex-direction: row; min-height: 44px;
+    padding: 4px; gap: 6px; }
+  #menu.hub .m-utilities .m-navrow::before, #menu.hub .m-utilities .m-navrow::after { display: none; }
+  #menu.hub .m-utilities .name { font-size: 9px; color: ${C.soft}; }
+  #menu.hub .m-utilities .ico { font-size: 10px; color: ${C.soft}; }
+  #menu.hub .m-cta:first-child { position: relative; background: rgba(8,20,23,0.36);
+    border: 0; border-top: 1px solid ${C.gold}; border-bottom: 1px solid ${C.dim};
+    min-height: 56px; font-size: 20px; letter-spacing: 4px; text-align: left; padding: 10px 16px; }
+  #menu.hub .m-cta:first-child::after { content: '→'; float: right; color: ${C.gold}; }
+  #menu.hub .m-cta.alt { min-height: 44px; background: transparent; border: 0;
+    color: ${C.soft}; letter-spacing: 0.5px; }
+  #menu.hub button:active { background: rgba(190,152,77,0.22); transform: translateY(1px); }
+  @media (hover: hover) { #menu.hub button:hover { background-color: rgba(190,152,77,0.12); } }
+  #menu.hub[data-treatment=instrument] .m-nav { gap: 1px; border-block: 1px solid ${C.dim}; background: rgba(6,17,19,0.82); }
+  #menu.hub[data-treatment=instrument] .m-navrow::before { width: 3px; height: 3px; border: 0; background: ${C.gold}; top: 7px; left: 7px; }
+  #menu.hub[data-treatment=instrument] .m-navrow::after { display: none; }
+  #menu.hub[data-treatment=instrument] .m-navrow { border-right: 1px solid ${C.dim}; }
+  #menu.hub[data-treatment=instrument] .m-cta:first-child { background: rgba(6,17,19,0.9); border-left: 4px solid ${C.gold}; }
+  #menu.hub[data-treatment=docket] .m-nav { gap: 0; border-top: 1px dashed ${C.soft}; }
+  #menu.hub[data-treatment=docket] .m-navrow { align-items: flex-start; text-align: left; padding-left: 8px; }
+  #menu.hub[data-treatment=docket] .m-navrow::before { content: attr(data-index); border: 0; position: static; width: auto; height: auto; font-size: 9px; color: ${C.gold}; }
+  #menu.hub[data-treatment=docket] .m-navrow::after, #menu.hub[data-treatment=docket] .m-nav > .m-navrow > .ico { display: none; }
+  #menu.hub[data-treatment=docket] .m-cta:first-child { border-top-style: dashed; background: rgba(43,36,23,0.62); }
+  #menu .m-choice { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+  #menu .m-choice button { min-height: 44px; padding: 6px 10px; color: ${C.soft};
+    border: 1px solid ${C.dim}; background: transparent; cursor: pointer; font-size: 10px; }
+  #menu .m-choice button[aria-pressed=true] { color: ${C.gold}; border-color: ${C.gold}; background: rgba(190,152,77,0.12); }
+  @media (max-width: 370px) { #menu.hub .m-nav { gap: 3px; } #menu.hub .m-navrow .name { font-size: 9px; } }
+
+  /* Composition, not skins. These share semantic controls but reserve their
+     space differently: floating glass, a console, and an asymmetric docket. */
+  #menu.hub .m-panel { border: 0; padding-top: 0; }
+  #menu.hub .m-corner, #menu.hub .m-panel > .m-rule, #menu.hub .m-foot { display: none; }
+  #menu.hub .m-head { min-height: 44px; padding: 0 12px; }
+  #menu.hub .m-title { font-size: 11px; letter-spacing: 1px; }
+  #menu.hub .m-x { border: 0; color: ${C.soft}; }
+  #menu.hub .m-body { padding-top: 12px; }
+  #menu.hub .m-hero-head { max-width: 32em; flex-shrink: 0; }
+  #menu.hub .m-place { font-size: clamp(18px, 4.8vw, 30px); line-height: 1.35;
+    white-space: normal; text-wrap: balance; letter-spacing: 0.5px; }
+  #menu.hub .m-dimline { font-size: 9px; margin-top: 10px; color: ${C.soft}; }
+  #menu.hub .m-launch { display: grid; gap: 8px; flex-shrink: 0; margin-top: 8px; }
+  #menu.hub .m-actions { display: grid; gap: 0; }
+  #menu.hub .m-actions .m-cta { margin: 0; }
+  #menu.hub .m-dotlab { font-size: 9px; }
+  #menu.hub .m-utilities { margin: 0; gap: 0 10px; border: 0; }
+  #menu.hub .m-utilities .m-navrow { border: 0; }
+  #menu.hub .m-utilities .ico { display: none; }
+  #menu.hub .m-utilities .name { font-size: 8px; }
+  #menu.hub .m-actions .m-cta.alt { font-size: 8px; letter-spacing: 0; min-height: 44px; }
+  #menu.hub[data-treatment=glass] .m-launch { grid-template-areas: 'actions' 'nav' 'utilities'; gap: 8px; }
+  #menu.hub[data-treatment=glass] .m-actions { grid-area: actions; }
+  #menu.hub[data-treatment=glass] .m-nav { grid-area: nav; }
+  #menu.hub[data-treatment=glass] .m-utilities { grid-area: utilities; }
+  #menu.hub[data-treatment=glass] .m-actions .m-cta:first-child { background: none; border: 0;
+    padding: 4px 0; font-size: 32px; min-height: 56px; letter-spacing: 7px; }
+  #menu.hub[data-treatment=glass] .m-actions .m-cta:first-child .ico { display: none; }
+  #menu.hub[data-treatment=glass] .m-navrow { min-height: 44px; }
+  #menu.hub[data-treatment=glass] .m-navrow .ico { display: none; }
+  #menu.hub[data-treatment=instrument] .m-launch { grid-template-columns: 1.15fr 1fr;
+    padding: 12px; gap: 10px; background: rgba(6,17,19,0.88); border-top: 2px solid ${C.gold}; }
+  #menu.hub[data-treatment=instrument] .m-nav { grid-column: 1; grid-row: 1;
+    grid-template-columns: repeat(2,minmax(0,1fr)); border: 0; margin: 0; background: none; gap: 5px; }
+  #menu.hub[data-treatment=instrument] .m-nav > .m-navrow { border: 1px solid ${C.dim}; min-height: 57px; }
+  #menu.hub[data-treatment=instrument] .m-actions { grid-column: 2; grid-row: 1; align-content: stretch; }
+  #menu.hub[data-treatment=instrument] .m-actions .m-cta:first-child { display: flex; flex-direction: column;
+    justify-content: center; align-items: center; padding: 8px; border: 1px solid ${C.gold};
+    font-size: 20px; letter-spacing: 2px; background: rgba(190,152,77,0.10); }
+  #menu.hub[data-treatment=instrument] .m-actions .m-cta:first-child .ico { display: none; }
+  #menu.hub[data-treatment=instrument] .m-actions .m-cta.alt { line-height: 1.7; }
+  #menu.hub[data-treatment=instrument] .m-utilities { grid-column: 1 / -1; border-top: 1px solid ${C.dim}; }
+  #menu.hub[data-treatment=docket] .m-hero-head { border-left: 2px solid ${C.gold}; padding-left: 12px; }
+  #menu.hub[data-treatment=docket] .m-launch { grid-template-columns: 1fr 1.1fr; gap: 8px 18px;
+    border-top: 1px dashed ${C.gold}; padding-top: 8px; }
+  #menu.hub[data-treatment=docket] .m-nav { grid-column: 1; grid-row: 1;
+    display: flex; flex-direction: column; border: 0; margin: 0; }
+  #menu.hub[data-treatment=docket] .m-nav > .m-navrow { flex-direction: row; align-items: center;
+    justify-content: flex-start; min-height: 44px; gap: 12px; padding-left: 0; border-bottom: 1px solid ${C.dim}; }
+  #menu.hub[data-treatment=docket] .m-navrow .name { font-size: 11px; }
+  #menu.hub[data-treatment=docket] .m-actions { grid-column: 2; grid-row: 1; align-content: end; }
+  #menu.hub[data-treatment=docket] .m-actions .m-cta:first-child { border: 0;
+    background: none; font-size: 23px; padding: 12px 0; letter-spacing: 1px; }
+  #menu.hub[data-treatment=docket] .m-actions .m-cta:first-child .ico { display: none; }
+  #menu.hub[data-treatment=docket] .m-actions::before { content: 'DEPARTURE / READY WHEN YOU ARE';
+    color: ${C.soft}; font-size: 8px; line-height: 1.7; letter-spacing: 1px; margin-bottom: 20px; }
+  #menu.hub[data-treatment=docket] .m-utilities { grid-column: 1 / -1; justify-content: flex-start; }
+  @media (min-width: 760px) {
+    #menu.hub .m-launch { width: min(620px, 100%); }
+    #menu.hub[data-treatment=glass] .m-launch { align-self: center; }
+    #menu.hub[data-treatment=instrument] .m-launch { width: min(720px,100%); align-self: center; }
+    #menu.hub[data-treatment=docket] .m-launch { align-self: flex-start; }
+  }
+  @media (max-height: 580px) and (min-width: 600px) {
+    #menu.hub .m-hero-head { max-width: 48%; }
+    #menu.hub .m-launch { width: 48%; align-self: flex-end !important; }
+    #menu.hub .m-dots, #menu.hub .m-dotlab { display: none !important; }
+  }
+
+  /* The live rig stays above a scrollable fitting sheet. Scrolling thirteen
+     choices must never scroll the vehicle out of sight. Studio/elevations
+     remain available for measurement rather than replacing the world. */
+  #menu.rig-live .m-scrim { display: none !important; }
+  #menu.rig-live .m-panel { border: 0; }
+  #menu.rig-live .m-corner, #menu.rig-live .m-panel > .m-rule, #menu.rig-live .m-foot { display: none; }
+  #menu.rig-live .m-body { overflow: hidden; }
+  #menu .m-rig-plate { display: inline-block; align-self: flex-start; background: #ded1a3; color: #14221d;
+    padding: 2px 9px; text-shadow: none; letter-spacing: 2px; font-size: 11px; margin: 5px 0 0; }
+  #menu .m-rig-viewbar { margin: 4px 0; flex-shrink: 0; }
+  #menu .m-rig-viewbar button { font-size: 8px; padding: 4px 8px; }
+  #menu .m-rig-window { flex: 1 1 auto; min-height: 100px; pointer-events: none; }
+  #menu .m-rig-controls { padding: 8px 10px; border-top: 1px solid ${C.gold}; background: rgba(7,20,20,.85); }
+  #menu.rig-live .m-rig-controls { flex: 0 1 45%; min-height: 100px; overflow-y: auto; overscroll-behavior: contain; }
+  #menu .m-equipment-head { display: flex; align-items: center; gap: 8px; font-size: 9px; color: ${C.soft}; }
+  #menu .m-equipment-head span { margin-right: auto; }
+  #menu .m-equipment-head button { min-height: 44px; padding: 4px 10px; border: 1px solid ${C.dim};
+    color: ${C.gold}; background: transparent; cursor: pointer; }
+  #menu .m-equipment { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 2px 8px; margin: 6px 0 14px; }
+  #menu .m-fitting { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 9px; cursor: pointer; }
+  #menu .m-fitting input { width: 18px; height: 18px; accent-color: ${C.gold}; margin: 0; flex-shrink: 0; }
+  #menu .m-fitting:has(input:checked) { color: ${C.gold}; }
+  #menu .m-measured { margin-top: 12px; }
+  #menu .m-measured summary { cursor: pointer; min-height: 44px; color: ${C.soft}; font-size: 10px; }
+  @media (min-width: 760px) { #menu.rig-live .m-rig-controls { align-self: flex-end; width: 360px; flex-basis: 50%; } }
+  @media (max-height: 550px) { #menu.rig-live .m-rig-controls { flex-basis: 40%; } #menu .m-rig-window { min-height: 45px; } }
   `;
   document.head.appendChild(style);
 
   const root = document.createElement('div');
   root.id = 'menu';
+  const treatments = ['glass', 'instrument', 'docket'] as const;
+  let treatment: string = 'glass';
+  try { const saved = localStorage.getItem('drive.menu-treatment'); if (treatments.some(t => t === saved)) treatment = saved!; } catch { /* default */ }
+  root.dataset.treatment = treatment;
   // The scrim, in four strips around a hole that is usually closed.
   const strips = Array.from({ length: 4 }, () => {
     const s = document.createElement('div');
@@ -356,7 +559,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       const t = el('div', 'm-title');
       t.append(el('span', 'at', '@c15r/'), 'drive');
       head.append(t, x);
-      subT.style.display = 'block';
+      subT.style.display = 'none';
     } else {
       const back = el('button', 'm-back', '< BACK');
       back.addEventListener('click', () => setTab(T_DRIVE));
@@ -367,6 +570,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
 
   // ── state ──────────────────────────────────────────────────────────
   let tab: number | null = null;
+  let rigLive = true;
   let bayEl: HTMLElement | null = null;
   let bayGridFor = '';           // last grid applied, so refresh doesn't redo it
   let currentStatus: { s: string; bad: boolean } | null = null;   // the CURRENT row's transient state
@@ -454,7 +658,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     bay.appendChild(el('div', 'cap'));
     // The splash hero is a WINDOW, not a studio: the hole shows the live
     // scene — the rig in chase cam against wherever it stands — so no tag.
-    if (!hero) bay.appendChild(el('div', 'tag', 'DAK 23'));
+    if (!hero) { const tag = el('div', 'tag'); bindText(tag, ctx.registration); bay.appendChild(tag); }
     bayGridFor = '';
     return bay;
   };
@@ -491,8 +695,8 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     bindText(situation, ctx.situation);
     // One line of facts. The four-row ledger was a screen's worth of chrome
     // on a phone; the VALUES carry everything the labels were saying.
-    const kv = el('div', 'm-statline');
-    bindText(kv, () => ctx.driveStats().map(([, v]) => v).join(' · '));
+    const heroHead = el('div', 'm-hero-head');
+    heroHead.append(place, situation);
     const cta = el('button', 'm-cta');
     cta.append(ico(ICON.car), el('span', 'lab', 'DRIVE'));
     cta.addEventListener('click', () => { ctx.drive(); close(); });
@@ -506,10 +710,11 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       gps.style.color = col;
       gps.style.borderColor = col;
     });
-    const nav = el('div', 'm-nav');
-    // THE LINE leads the stack: the campaign is the game's spine, and the row
-    // says where you stand on it without demanding anything.
-    const lineRow = el('div', 'm-navrow');
+    const nav = el('nav', 'm-nav');
+    nav.setAttribute('aria-label', 'Explore Drive');
+    const utilities = el('div', 'm-utilities');
+    // THE LINE is an optional journey alongside the free-drive destinations.
+    const lineRow = el('button', 'm-navrow');
     const lnIco = ico(ICON.road), lnName = el('span', 'name', 'THE LINE'),
       lnSub = el('span', 'sub', ''), lnChev = el('span', 'chev', '>');
     lineRow.append(lnIco, lnName, lnSub, lnChev);
@@ -520,27 +725,30 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       lnName.style.color = ln.on ? C.good : C.text;
       lnChev.style.color = ln.on ? C.good : C.gold;
     });
-    nav.appendChild(lineRow);
+
     for (const [t, name, sub, icon] of [
       [T_RIG, 'RIG', 'TUNE AND DRESS THE TRUCK', ICON.truck],
       [T_WORLD, 'DRIVES', 'DESTINATIONS · SPOTS · ELSEWHERE', ICON.map],
       [T_SURVEY, 'SURVEYS', 'ROADS DRIVEN AND CLAIMED', ICON.flag],
       [T_SYSTEM, 'SETTINGS', 'RENDER · WORLD · SOUND', ICON.gear],
     ] as Array<[number, string, string, string]>) {
-      const row = el('div', 'm-navrow');
+      const row = el('button', 'm-navrow');
       row.append(ico(icon), el('span', 'name', name), el('span', 'sub', sub), el('span', 'chev', '>'));
       row.addEventListener('click', () => setTab(t));
-      nav.appendChild(row);
+      if (t === T_SYSTEM) utilities.appendChild(row); else nav.appendChild(row);
     }
-    // …and PROGRESS, in the same stack rather than shouting above it. A player
+    // …and SIGN IN, in the same stack rather than shouting above it. A player
     // who never taps it loses nothing, so it reads as one more section — but it
     // is ON THE SPLASH, because a sign-in buried three screens down is a sign-in
     // nobody finds until after they have driven a thousand kilometres.
     //
-    // SIGNED OUT it is the only place that starts the redirect; SIGNED IN it
-    // reports and hands off to SETTINGS. Signing out is a destructive tap and
-    // does not belong on the screen you land on.
-    const signRow = el('div', 'm-navrow');
+    // ONLY WHEN IT IS A SIGN-IN. Signed in, this row said PROGRESS and did
+    // nothing but hop to SETTINGS — a whole line of the first screen anyone
+    // sees, spent on a redirect to a page already one row above it. The sync
+    // state it reported lives in SETTINGS beside the button that changes it,
+    // which is where a status belongs. Signing out is a destructive tap and
+    // does not belong on the screen you land on either.
+    const signRow = el('button', 'm-navrow');
     const signIco = ico(ICON.save), signName = el('span', 'name', ''),
       signSub = el('span', 'sub', ''), signChev = el('span', 'chev', '>');
     signRow.append(signIco, signName, signSub, signChev);
@@ -549,33 +757,84 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       else setTab(T_SYSTEM);
     });
     updaters.push(() => {
-      const p = ctx.syncPhase();
-      const out = p === 'off';
-      signName.textContent = out ? 'SIGN IN' : 'PROGRESS';
-      signName.style.color = out ? C.gold : C.text;
-      signSub.textContent = out ? 'PROGRESS ON EVERY DEVICE' : ctx.syncNote();
-      signSub.style.color = ctx.syncTone() === 'bad' ? C.bad : C.dim;
-      signChev.style.color = out ? C.gold : C.edge;
+      const out = ctx.syncPhase() === 'off';
+      signRow.style.display = out ? 'flex' : 'none';
+      signName.textContent = 'SIGN IN';
+      signName.style.color = C.gold;
+      signSub.textContent = 'PROGRESS ON EVERY DEVICE';
+      signSub.style.color = C.dim;
+      signChev.style.color = C.gold;
     });
-    nav.appendChild(signRow);
-    // The way home: the attract reel carried this session somewhere else, and
-    // the ticket back sits in the stack until it is spent. Hidden otherwise.
-    const retRow = el('div', 'm-navrow ret');
-    retRow.append(ico(ICON.gps), el('span', 'name', 'RETURN'),
-      el('span', 'sub', 'BACK TO WHERE YOU WERE'), el('span', 'chev', '>'));
-    retRow.addEventListener('click', () => ctx.attractRetGo?.());
-    nav.appendChild(retRow);
-    updaters.push(() => { retRow.style.display = ctx.attractRet?.() ? 'flex' : 'none'; });
+    utilities.appendChild(signRow);
+    // ABOUT, and it is not decoration: this world is built out of other
+    // people's surveys — OpenStreetMap's roads, a dozen nations' elevation
+    // data, ESA's land cover — and most of those are given on terms that ASK
+    // to be credited. A game that ships them with no visible attribution is
+    // taking something. It sits on the splash rather than three screens down
+    // for the same reason the sign-in does.
+    const aboutRow = el('button', 'm-navrow');
+    aboutRow.append(ico(ICON.map), el('span', 'name', 'ABOUT'),
+      el('span', 'sub', 'WHOSE MAPS THIS IS BUILT FROM'), el('span', 'chev', '>'));
+    aboutRow.addEventListener('click', () => setTab(T_ABOUT));
+    utilities.appendChild(aboutRow);
+    const progress = el('button', 'm-navrow');
+    progress.append(el('span', 'name', 'PROGRESS'));
+    progress.addEventListener('click', () => setTab(T_PROGRESS));
+    utilities.appendChild(progress);
+    nav.appendChild(lineRow);
+    Array.from(nav.children).forEach((row, i) => (row as HTMLElement).dataset.index = `0${i + 1}`);
+    for (const b of [...Array.from(nav.children), ...Array.from(utilities.children)]) (b as HTMLButtonElement).type = 'button';
+    // ── THE REEL, AS A CAROUSEL ──
+    //
+    // What stood here was a RETURN row that appeared only after the reel had
+    // already carried the session away: a one-way door with no map. You could
+    // not see how many places there were, which one you were looking at, or
+    // reach a particular one deliberately.
+    //
+    // A dot strip says all three at a glance, and it goes ABOVE the stack
+    // because it describes WHERE YOU ARE rather than offering somewhere to go
+    // — the nav below it is the going. HOME is the first stop and drawn as a
+    // square against the reel's dots, so "am I at my own place or in the
+    // programme" is answerable without reading a word. That is what retires
+    // RETURN: home stops being a special escape hatch and becomes the first
+    // thing on the strip.
+    const dots = el('div', 'm-dots');
+    const dotAt = el('div', 'm-dotlab', '');
+    updaters.push(() => {
+      const r = ctx.reel?.() ?? { n: 0, at: -1, home: false };
+      // Nothing to page through until the programme exists.
+      dots.style.display = r.n ? 'flex' : 'none';
+      dotAt.style.display = r.n ? 'block' : 'none';
+      const want = `${r.n}|${r.at}|${r.home}`;
+      if (dots.dataset.sig !== want) {
+        dots.dataset.sig = want;
+        dots.replaceChildren();
+        for (let i = -1; i < r.n; i++) {
+          const d = el('button', `m-dot${i < 0 ? ' home' : ''}${i === r.at ? ' on' : ''}`);
+          d.type = 'button';
+          d.setAttribute('aria-label', i < 0 ? 'HOME' : `DRIVE ${i + 1}`);
+          // Home is only reachable once there is somewhere to come back FROM.
+          if (i < 0 && !r.home) d.classList.add('off');
+          d.addEventListener('click', () => ctx.reelGo?.(i));
+          dots.appendChild(d);
+        }
+      }
+      dotAt.textContent = r.at < 0 ? 'YOUR OWN ROAD' : `DRIVE ${r.at + 1} OF ${r.n}`;
+      dotAt.style.color = r.at < 0 ? C.good : C.gold;
+    });
     // The scene IS the splash's background — no scrim, no window (the .hub
     // class kills the strips): the rig stands in the live world behind
     // everything, and the spacer holds the sections down where the chase
     // camera keeps the truck visible between the stats and the buttons.
     const spacer = el('div', '');
     spacer.style.flex = '1';
-    body.append(place, situation, kv, spacer, nav);
-    // DRIVE anchors the BOTTOM of the page — pinned in the foot, under the
-    // sections, always reachable without scrolling past it.
-    foot.append(cta, gps);
+    const launch = el('div', 'm-launch');
+    const actions = el('div', 'm-actions');
+    actions.append(cta, gps);
+    launch.append(nav, actions, utilities);
+    // One semantic order, three spatial compositions. The live camera reads
+    // the hero header and navigation bounds instead of guessing screen thirds.
+    body.append(heroHead, spacer, dots, dotAt, launch);
   }
 
   function renderSurveys(): void {
@@ -617,25 +876,37 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   // RIG leads with what you can CHANGE — the dials — then the drawings that
   // prove what you built against the sheet.
   function renderRig(): void {
-    const views = el('div', 'm-views');
-    const chips: HTMLButtonElement[] = [];
-    ctx.views().forEach((id, i) => {
-      const b = el('button', `m-view${ctx.vehView() === i ? ' on' : ''}`, id);
-      b.addEventListener('click', () => {
-        ctx.setVehView(i);
-        chips.forEach((c, j) => c.classList.toggle('on', j === i));
+    root.classList.toggle('rig-live', rigLive);
+    const choice = ctx.rigChoice();
+    const heading = el('div', 'm-hero-head');
+    const name = el('div', 'm-place', choice.model.toUpperCase());
+    const plate = el('div', 'm-rig-plate'); bindText(plate, ctx.registration);
+    heading.append(name, plate); body.appendChild(heading);
+    const viewbar = el('div', 'm-choice m-rig-viewbar');
+    for (const live of [true, false]) {
+      const b = el('button', '', live ? 'IN THE WORLD' : 'STUDIO / VIEWS'); b.type = 'button';
+      b.setAttribute('aria-pressed', String(rigLive === live));
+      b.addEventListener('click', () => { rigLive = live; render(); }); viewbar.appendChild(b);
+    }
+    body.appendChild(viewbar);
+    if (rigLive) { body.appendChild(el('div', 'm-rig-window')); }
+    else {
+      const views = el('div', 'm-views');
+      ctx.views().forEach((label, i) => {
+        const b = el('button', `m-view${ctx.vehView() === i ? ' on' : ''}`, label); b.type = 'button';
+        b.addEventListener('click', () => { ctx.setVehView(i); render(); }); views.appendChild(b);
       });
-      chips.push(b);
-      views.appendChild(b);
-    });
-    bayEl = mkBay();
-    body.append(views, bayEl);
-    for (const g of ctx.dialGroups('rig')) {
-      dialsInto(body, [g]);
-      if (g.title !== 'VEHICLE') continue;
-      // The custom swatch lives WITH the paint dial it overrides: any hex,
-      // native picker, persisted — and the preset dial clears it when cycled,
-      // so the updater keeps the swatch honest about what the truck wears.
+      bayEl = mkBay(); body.append(views, bayEl);
+    }
+    const controls = el('div', 'm-rig-controls'); body.appendChild(controls);
+    const models = el('div', 'm-choice');
+    for (const model of RIG_MODELS) {
+      const b = el('button', '', model.toUpperCase()); b.type = 'button';
+      b.setAttribute('aria-pressed', String(choice.model === model));
+      b.addEventListener('click', () => { const current = ctx.rigChoice(); ctx.rigChoose(model, current.loadout, current.equipment); render(); });
+      models.appendChild(b);
+    }
+    controls.append(el('div', 'm-sect', 'MODEL'), models);
       const row = el('div', 'm-dial');
       row.style.cursor = 'default';
       row.append(el('span', 'lab', 'PAINT · CUSTOM'));
@@ -647,7 +918,36 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
         if (document.activeElement !== input && input.value !== ctx.paint()) input.value = ctx.paint();
       });
       row.appendChild(input);
-      body.appendChild(row);
+      controls.appendChild(row);
+    const equipmentHead = el('div', 'm-equipment-head');
+    const count = el('span', '', '');
+    const updateCount = () => count.textContent = `${ctx.rigChoice().equipment.length} / ${RIG_EQUIPMENT.length} FITTED`;
+    updateCount(); equipmentHead.appendChild(count);
+    const boxes: HTMLInputElement[] = [];
+    const apply = (ids: RigEquipmentId[]) => {
+      const current = ctx.rigChoice(); ctx.rigChoose(current.model, current.loadout, ids);
+      const selected = ctx.rigChoice().equipment;
+      boxes.forEach((box,i) => box.checked = selected.includes(RIG_EQUIPMENT[i][0])); updateCount();
+    };
+    for (const all of [false, true]) {
+      const b = el('button', '', all ? 'ALL' : 'NONE'); b.type = 'button';
+      b.addEventListener('click', () => apply(all ? RIG_EQUIPMENT.map(([id])=>id) : [])); equipmentHead.appendChild(b);
+    }
+    const equipment = el('div', 'm-equipment');
+    for (const [id,label] of RIG_EQUIPMENT) {
+      const row = el('label', 'm-fitting');
+      const box = el('input', ''); box.type = 'checkbox'; box.checked = choice.equipment.includes(id);
+      box.addEventListener('change', () => {
+        const current = ctx.rigChoice().equipment;
+        apply(box.checked ? [...current,id] : current.filter(value=>value!==id));
+      });
+      boxes.push(box); row.append(box, el('span', '', label.toUpperCase())); equipment.appendChild(row);
+    }
+    controls.append(el('div', 'm-sect', 'EQUIPMENT'), equipmentHead, equipment);
+    for (const g of ctx.dialGroups('rig')) {
+      dialsInto(body, [g]);
+      if (g.title !== 'VEHICLE') continue;
+
     }
     const t = el('table', 'm-kv');
     {
@@ -658,13 +958,19 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
         const tr2 = el('tr', '');
         const built = el('td', '', d.built);
         built.style.color = d.ok ? C.good : C.hot;
+        updaters.push(() => {
+          const current = ctx.dims().find(value => value.k === d.k);
+          if (current) { built.textContent = current.built; built.style.color = current.ok ? C.good : C.hot; }
+        });
         const spec = el('td', '', d.spec);
         spec.style.color = C.dim;
         tr2.append(el('td', '', d.k), built, spec);
         t.appendChild(tr2);
       }
     }
-    body.append(el('div', 'm-sect', 'MEASURED'), t, el('div', 'm-sect', 'SHEET'), kvTable(ctx.specText));
+    const measured = el('details', 'm-measured');
+    measured.append(el('summary', '', 'DIMENSIONS & SPECIFICATION'), t, kvTable(ctx.specText));
+    controls.appendChild(measured);
   }
 
   function renderDrives(): void {
@@ -812,8 +1118,133 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     }
   }
 
+  /**
+   * ── ABOUT: WHOSE MAPS THIS IS BUILT FROM ──
+   *
+   * Almost nothing in this world is invented. The roads are OpenStreetMap's,
+   * surveyed by people on bicycles with GPS units; the ground is a dozen
+   * nations' elevation programmes; the land cover is ESA's; the weather is
+   * whatever the national forecasters published this morning. Most of it is
+   * given on terms that ASK for credit, and several of those terms are
+   * licences rather than requests. A game that ships them with no visible
+   * attribution is taking something.
+   *
+   * So the list is the real one, and it is kept honest by being derived from
+   * what the code actually calls: every host here appears in the cell's
+   * `connect-src` or is fetched by a devtool that bakes an asset into the
+   * bundle. If a source is added and this page is not, the CSP line is the
+   * place the omission shows.
+   */
+  const CREDITS: Array<[string, string, string, string]> = [
+    // what it gives, who made it, the terms, where to look
+    ['ROADS · PLACES · WATER · BUILDINGS',
+      'OpenStreetMap contributors',
+      'Open Database Licence (ODbL) 1.0',
+      'openstreetmap.org/copyright'],
+    ['THE SAME, QUERIED',
+      'Overpass API — overpass-api.de, kumi.systems, osm.jp, private.coffee',
+      'volunteer infrastructure, used sparingly and cached',
+      'overpass-api.de'],
+    ['PLACE SEARCH',
+      'Nominatim, by the OpenStreetMap Foundation',
+      'ODbL 1.0',
+      'nominatim.openstreetmap.org'],
+    ['ELEVATION — every hill you drive',
+      '© Mapterhorn, aggregating national elevation surveys',
+      'per the sources listed by Mapterhorn',
+      'mapterhorn.com/attribution'],
+    ['LAND COVER — what grows where',
+      'ESA WorldCover 2021 v200 · contains modified Copernicus Sentinel data',
+      'CC BY 4.0',
+      'esa-worldcover.org'],
+    ['WEATHER — cloud, rain, wind',
+      'Open-Meteo, relaying the national weather services',
+      'CC BY 4.0',
+      'open-meteo.com'],
+    ['ECOREGIONS — why the Cape is fynbos',
+      'RESOLVE Ecoregions 2017 · Dinerstein et al., BioScience 67(6)',
+      'CC BY 4.0',
+      'ecoregions.appspot.com'],
+    ['COASTLINES — distance to the sea',
+      'Natural Earth, 110m land',
+      'public domain',
+      'naturalearthdata.com'],
+    ['TREE SKELETONS',
+      'EZ-Tree, by Daniel Greenheck',
+      'MIT',
+      'github.com/dgreenheck/ez-tree'],
+    ['RENDERING',
+      'three.js',
+      'MIT',
+      'threejs.org'],
+    ['THE PIXEL FACE',
+      'Silkscreen, by Jason Kottke',
+      'SIL Open Font Licence 1.1',
+      'kottke.org/plus/type/silkscreen'],
+  ];
+
+  function renderProgress(): void {
+    body.append(el('div', 'm-sect', 'YOUR ROAD'), kvTable(ctx.driveStats));
+    body.append(el('div', 'm-sect', 'PROGRESS SYNC'), el('div', 'm-dimline', ctx.syncNote()));
+  }
+
+  function renderAbout(): void {
+    body.appendChild(el('div', 'm-place', 'SOLARPUNK OPEN WORLD DRIVING SIM'));
+    body.append(el('div', 'm-dimline',
+      'A driving sim over the real world. The world is not ours — it is '
+      + 'surveyed, measured and published by the people and institutions below, '
+      + 'and most of it is given on terms that ask to be credited.'));
+    for (const [what, who, terms, where] of CREDITS) {
+      body.append(el('div', 'm-sect', what));
+      body.append(el('div', 'm-credit', who));
+      const t = el('div', 'm-dimline', `${terms} · ${where}`);
+      body.append(t);
+    }
+    body.append(el('div', 'm-sect', 'AND THE REST'));
+    body.append(el('div', 'm-dimline',
+      'Everything else — the terrain mesh, the roads as they are drawn, the '
+      + 'water, the flora, the weather model, the truck and how it drives — is '
+      + 'built here from those inputs.'));
+    // WHERE A BUG REPORT GOES. An about page that credits everyone and gives
+    // the reader nowhere to push back is only half a page.
+    body.append(el('div', 'm-sect', 'THIS BUILD'));
+    body.appendChild(kvTable(ctx.aboutRows));
+  }
+
   function renderSettings(): void {
+    body.appendChild(el('div', 'm-sect', 'SPLASH TREATMENT'));
+    const variants = el('div', 'm-choice');
+    const names = ['GLASS BRACKETS', 'INSTRUMENT PANEL', 'ROUTE DOCKET'];
+    treatments.forEach((value, i) => {
+      const b = el('button', '', names[i]); b.type = 'button';
+      b.setAttribute('aria-pressed', String(value === treatment));
+      b.addEventListener('click', () => {
+        treatment = value; root.dataset.treatment = value;
+        try { localStorage.setItem('drive.menu-treatment', value); } catch { /* session choice survives */ }
+        setTab(T_DRIVE);
+      });
+      variants.appendChild(b);
+    });
+    body.appendChild(variants);
     body.appendChild(kvTable(ctx.systemRows));
+    // ── EVERY SWITCH, WHETHER OR NOT IT IS ON ──
+    //
+    // Fifty-three query-string switches had grown up one at a time and nothing
+    // listed them: ten appeared in no note, no test and no devtool. They are
+    // declared in one table now and this is that table, so the surface cannot
+    // drift out of a reader's reach again. A `•` is one this URL set; LEGACY
+    // marks a switch whose other position keeps a superseded path alive, which
+    // is the list to read when asking what can be retired.
+    const sw = ctx.switches?.() ?? [];
+    if (sw.length) {
+      const legacy = sw.filter((x) => x.marks.includes('legacy')).length;
+      const set = sw.filter((x) => x.set).length;
+      body.append(el('div', 'm-sect', 'SWITCHES'));
+      body.append(el('div', 'm-dimline',
+        `${sw.length} in this build · ${legacy} keep an older path alive · ${set} set by this link`));
+      body.appendChild(kvTable(() => (ctx.switches?.() ?? []).map((x) =>
+        [`${x.set ? '• ' : ''}?${x.id}${x.marks.includes('legacy') ? '  LEGACY' : ''}`, x.value] as [string, string])));
+    }
     // SIGNING IN IS OPTIONAL AND SAYS SO. A player who never touches this keeps
     // playing exactly as before, with progress on the device — so the row leads
     // with what it does rather than with a demand.
@@ -914,6 +1345,32 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     }, ICON.warn);
     body.append(wipe, wipeNote);
 
+    // ── the dev console ──
+    // A devtools panel ON the page, for the phone, which has no other. Loaded
+    // only when asked, from a pinned build; `?eruda=1` does the same at boot.
+    // Reading is the point — the page forbids eval, so its prompt cannot run
+    // code here; the probe module in index.ts is how that is done without a
+    // CSP hole.
+    const devNote = el('div', 'm-dimline',
+      'CONSOLE, NETWORK, ELEMENTS AND STORAGE, ON THE PAGE — FOR READING WHAT THE GAME DID ON THIS PHONE. ON AN ORDINARY LOAD ITS PROMPT CANNOT RUN CODE; RELOAD WITH CONSOLE SERVES THIS PAGE UNDER A POLICY THAT LETS IT.');
+    const dev = button('DEV CONSOLE', C.soft, () => {
+      ctx.devConsole((s, bad) => {
+        devNote.textContent = s;
+        devNote.style.color = bad ? C.bad : C.dim;
+      });
+    }, ICON.gear);
+    // THE SAME PLACE, RELOADED WITH `?eruda=1`: the only load the cell serves
+    // with eval allowed, so the prompt works. A reload costs the streamed
+    // world and not the record — pagehide flushes the survey, the marks and
+    // the docket first.
+    const devReload = button('RELOAD WITH CONSOLE', C.soft, () => {
+      ctx.devReload((s, bad) => {
+        devNote.textContent = s;
+        devNote.style.color = bad ? C.bad : C.dim;
+      });
+    }, ICON.gear);
+    body.append(dev, devReload, devNote);
+
     // ── the recorder ──
     // A DEV INSTRUMENT FIRST. It sits under the dials rather than in the deck
     // because nothing here is wanted mid-corner: you notice something, you
@@ -992,7 +1449,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     updaters = [];
     renderHead();
     ([
-      renderHome, renderSurveys, renderRig, renderDrives, renderSettings, renderLine,
+      renderHome, renderSurveys, renderRig, renderDrives, renderSettings, renderLine, renderAbout, renderProgress,
     ][tab] ?? renderHome)();
     // FILL THE VALUES BEFORE THE SCREEN IS SEEN. Everything dynamic here is
     // created empty and written by an updater, and the updaters only ran on the
@@ -1010,6 +1467,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     // The hub is CLEAR — the live scene is its background; the pages keep
     // the scrim (RIG punches its studio hole through it via bayRect).
     root.classList.toggle('hub', t === T_DRIVE);
+    root.classList.toggle('rig-live', t === T_RIG && rigLive);
     if (t !== T_RIG && t !== T_DRIVE) scrimFull();
     render();
   }
@@ -1029,7 +1487,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   }
 
   function bayRect(): Rect | null {
-    if ((tab !== T_RIG && tab !== T_DRIVE) || !bayEl || !bayEl.isConnected) return null;
+    if ((tab === T_RIG && rigLive) || (tab !== T_RIG && tab !== T_DRIVE) || !bayEl || !bayEl.isConnected) return null;
     const r = bayEl.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) return null;
     // Aim the scrim's hole here. Clamp to the body's box so a half-scrolled
@@ -1078,5 +1536,5 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   // about to detach.
   setInterval(refresh, 400);
 
-  return { open, close, tab: () => tab, bayRect, refresh };
+  return { open, close, tab: () => tab, bayRect, refresh, rigLive: () => tab === T_RIG && rigLive };
 }

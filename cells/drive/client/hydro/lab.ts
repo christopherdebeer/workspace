@@ -1,6 +1,13 @@
 import * as THREE from 'three';
 import { createDials } from '../lab-dials';
+import {
+  analyseHydroTile,
+  FLOWING_NOMINAL_DEPTH_M,
+  type HydroTileAnalysis,
+} from './build-tile';
+import { nearestSegment } from './geometry';
 import { createHydroSystem, type HydroSystem } from './system';
+import { bankHabitat, bankPatch, WATERLINE_CUT } from '../shoreline';
 import type {
   CoverageGrid, ElevationGrid, HydroDebugView, HydroFeature, HydroKind,
   HydroSample, HydroTileInput, HydroTuning, WorldBounds,
@@ -15,6 +22,8 @@ interface Fixture {
   height(x: number, z: number): number;
   ocean?: (x: number, z: number) => number;
   features: readonly HydroFeature[];
+  /** Lab-only authored boulders: x, z, horizontal radius, vertical radius. */
+  rocks?: readonly (readonly [number, number, number, number])[];
 }
 
 const BOUNDS: WorldBounds = { minX: -300, minZ: -300, maxX: 300, maxZ: 300 };
@@ -44,6 +53,16 @@ function channel(
 }
 
 const FIXTURES: readonly Fixture[] = [
+  {
+    id: 'waterfall', label: 'RIVER / WATERFALL', originY: 45, oceanLevelM: 0,
+    note: 'A 70m ledge between gentle reaches. The resolved falling face carries downward strands and aeration, unlike the graded river and pool–rapid controls. Try wireframe and night lighting.',
+    height: (x, z) => 85 - (z + 300) * .008
+      - 70 * (.5 + .5 * Math.tanh(z / 8)) + Math.min(12, Math.abs(x) * .18),
+    features: [
+      channel('lab:waterfall', 'river', 24, [0,-285, 0,285],
+        { roughness: .65, turbidity: .18 }),
+    ],
+  },
   {
     id: 'coast', label: 'COAST / OCEAN MASK', originY: 0, oceanLevelM: 0,
     note: 'Depth-derived shoaling turns waves toward the coast, raises them before the break and leaves irregular crest foam through the surf zone. The lagoon remains a separate body.',
@@ -111,6 +130,26 @@ const FIXTURES: readonly Fixture[] = [
     ],
   },
   {
+    id: 'shallows', label: 'RIVER / SHALLOWS & EDDIES', originY: 43, oceanLevelM: 0,
+    note: 'Clear broad shallows expose the pebble bed and wet gravel margins. Repeated bends exercise slow inside-bank eddies separately from faster outer-bank turbulence.',
+    height: (x, z) => {
+      const centre = Math.sin(z * .0135) * 82 + Math.sin(z * .029) * 16;
+      const profile = 56 - (z + 300) * .038;
+      return profile + Math.min(10, Math.abs(x - centre) * .032)
+        + Math.sin(x * .033 - z * .017) * .28;
+    },
+    features: [
+      channel('lab:shallows', 'river', 26,
+        [54,-285, -10,-230, -72,-165, -88,-95, -42,-25,
+          48,45, 94,110, 62,175, -18,235, -70,285],
+        { roughness: .48, turbidity: .12 }),
+    ],
+    rocks: [
+      [-74,-151,2.2,1.2], [-82,-127,1.5,.9], [75,91,1.8,1.0],
+      [85,118,2.4,1.35], [49,169,1.4,.8],
+    ],
+  },
+  {
     id: 'rapids', label: 'RIVER / POOL–RAPID', originY: 62, oceanLevelM: 0,
     note: 'Alternating gentle reaches and two sharp profile drops exercise rapid crests, downstream froth and bend turbulence. FLOW view shows the derived energy field without authored rapid markers.',
     height: (x, z) => {
@@ -126,6 +165,10 @@ const FIXTURES: readonly Fixture[] = [
         [12,-285, -36,-225, -41,-165, -46,-130, -54,-95, -31,-30,
           40,40, 54,70, 53,100, 42,150, 38,220, -12,285],
         { roughness: .92, turbidity: .35 }),
+    ],
+    rocks: [
+      [-49,-145,3.8,2.5], [-41,-126,2.5,1.7], [-55,-111,1.8,1.25],
+      [47,61,2.1,1.4], [55,78,4.2,2.8], [48,96,2.6,1.8],
     ],
   },
   {
@@ -179,7 +222,8 @@ const STYLE = [
   '.back{color:#93aaa0;text-decoration:none;font-size:10px}.hint{position:fixed;left:16px;top:43px;z-index:4;color:#789188;font:9px ui-monospace,monospace;background:#07100faa;padding:5px 7px}',
   '.panel{position:fixed;right:12px;top:50px;bottom:12px;z-index:5;width:min(310px,calc(100vw - 24px));overflow:auto;padding:12px;border:1px solid #31534b;background:#081311ef;box-shadow:7px 7px #02070699}',
   'h2{margin:0 0 8px;color:#72d2ae;font-size:11px;letter-spacing:.13em}.note{min-height:48px;color:#9fb1a6;font:10px/1.5 ui-monospace,monospace;margin-bottom:10px}',
-  '.section{border-top:1px solid #203c35;padding-top:9px;margin-top:10px}.st{color:#efc968;font-size:9px;letter-spacing:.15em;margin-bottom:7px}',
+  '.section{border-top:1px solid #203c35;padding-top:9px;margin-top:10px}.st{display:block;color:#efc968;font-size:9px;letter-spacing:.15em;margin-bottom:7px;cursor:pointer;user-select:none;list-style:none}',
+  '.st::-webkit-details-marker{display:none}.st::before{content:"▾";display:inline-block;width:14px;color:#67bea0}.section:not([open])>.st::before{content:"▸"}.section:not([open])>.st{margin-bottom:0}',
   '.row{display:grid;grid-template-columns:105px 1fr 42px;gap:7px;align-items:center;min-height:27px}.row.wide{grid-template-columns:105px 1fr}.row label{color:#aabcb2;font-size:9px}',
   '.row output{text-align:right;color:#e6d694;font:9px ui-monospace,monospace}.row input[type=range]{width:100%;accent-color:#67bea0}',
   '.row input[type=number],.row select{width:100%;min-width:0;color:#dce8d5;background:#0c211c;border:1px solid #31534b;padding:5px;font-size:9px}',
@@ -212,41 +256,322 @@ function page(): string {
     + '<div class="uibtn" id="uibtn" title="hide the panels (H)">HIDE</div>'
     + '<aside class="panel"><h2>WATER FIELD / GPU SURFACE</h2><div class="note" id="note"></div>'
     + '<div class="row wide"><label>FIXTURE</label><select id="fixture">' + fixtureOptions + '</select></div>'
+    + '<div class="row wide"><label>CAMERA</label><select id="cameraMode"><option>OVERVIEW</option><option>DETAIL</option></select></div>'
     + '<div class="row wide"><label>VIEW</label><select id="debug">' + debugOptions + '</select></div>'
-    + '<div class="section"><div class="st">WEATHER</div>'
+    + '<details class="section" data-section="weather" open><summary class="st">WEATHER</summary>'
     + range('wind','WIND m/s',0,22,.1,5) + range('direction','WIND °',0,359,1,35) + range('rain','RAIN',0,1,.01,.1)
-    + '<div class="row"><label>OCEAN m</label><input id="ocean" type="number" step=".1" value="0"><output></output></div></div>'
-    + '<div class="section"><div class="st">SURFACE</div>'
+    + '<div class="row"><label>OCEAN m</label><input id="ocean" type="number" step=".1" value="0"><output></output></div></details>'
+    + '<details class="section" data-section="surface" open><summary class="st">SURFACE</summary>'
     + range('amplitude','WAVE AMP',0,3,.01,1) + range('length','WAVE LENGTH',.2,3,.01,1)
     + range('ripple','RIPPLE',0,3,.01,1) + range('foam','FOAM',0,3,.01,1) + range('shore','SHORE FADE',.2,3,.01,1)
-    + '</div><div class="section"><div class="st">SAMPLING</div>'
+    + '</details><details class="section" data-section="river" open><summary class="st">RIVER DETAIL</summary>'
+    + '<div class="row wide"><label>ISOLATE</label><select id="detailPreset">'
+    + '<option>ALL</option><option>BED / SHALLOWS</option><option>BANK EDGES</option>'
+    + '<option>EDDIES</option><option>RAPIDS</option><option>WAKE</option><option>CUSTOM</option></select></div>'
+    + range('bed','BED DETAIL',0,3,.01,1) + range('edge','BANK EDGE',0,3,.01,1)
+    + range('turbulence','TURBULENCE',0,3,.01,1) + range('eddies','EDDIES',0,3,.01,1)
+    + '<label class="check"><input id="wakeDemo" type="checkbox"> vehicle wake demo</label>'
+    + range('wakeSpeed','WAKE m/s',1,12,.1,5)
+    + '</details><details class="section" data-section="sampling" open><summary class="st">SAMPLING</summary>'
     // The 600m lab at 32/8 has the same physical sampling as a production
     // 2.4km tile at 128/32: 18.75m field texels and 75m ocean mesh cells.
     // Default to that honest view; higher settings remain useful microscopes.
     + '<div class="row wide"><label>FIELD px</label><select id="field"><option selected value="32">32 · PROD SCALE</option><option>64</option><option>128</option><option>256</option></select></div>'
     + '<div class="row wide"><label>MESH seg</label><select id="mesh"><option selected value="8">8 · PROD SCALE</option><option>16</option><option>32</option><option>64</option></select></div>'
     + '<label class="check"><input id="wire" type="checkbox"> water wireframe</label>'
-    + '<label class="check"><input id="ground" type="checkbox" checked> terrain visible</label></div></aside>'
+    + '<label class="check"><input id="ground" type="checkbox" checked> terrain visible</label></details></aside>'
     + '<div class="status" id="status">building hydro fixture…</div></body>';
 }
 
-function makeTerrain(f: Fixture): THREE.Mesh {
-  const geometry = new THREE.PlaneGeometry(600, 600, 128, 128);
+/**
+ * The production terrain has already carved a watercourse to the same invert
+ * hydro profiles from. The lab used to show the raw fixture DEM instead, so a
+ * monotone river surface disappeared under every local ground hump and broke
+ * into islands in close views. Carve only the display mesh from the analysed
+ * profile; hydro still receives the raw elevation and therefore builds the
+ * exact profile this carve is based on.
+ */
+function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
+  const channels: Array<{
+    profile: Float32Array;
+    halfW: number;
+    kind: 'river' | 'stream' | 'canal';
+  }> = [];
+  for (let i = 0; i < f.features.length; i++) {
+    const feature = f.features[i];
+    if (feature.geometry.type !== 'line') continue;
+    const profile = analysis.profiles.get(`${feature.id}#${i}`)
+      ?? analysis.profiles.get(feature.id);
+    if (profile) channels.push({
+      profile,
+      halfW: feature.geometry.widthM * 0.5,
+      kind: feature.kind as 'river' | 'stream' | 'canal',
+    });
+  }
+  const carvedHeight = (x: number, z: number): number => {
+    let ground = f.height(x, z);
+    for (const channel of channels) {
+      const hit = nearestSegment(x, z, channel.profile, 3);
+      if (hit.segment < 0) continue;
+      const shoulder = Math.max(3, channel.halfW * 0.45);
+      if (hit.distanceM > channel.halfW + shoulder) continue;
+      const a = hit.segment * 3, b = (hit.segment + 1) * 3;
+      const surface = channel.profile[a + 2] * (1 - hit.t)
+        + channel.profile[b + 2] * hit.t;
+      const bed = surface - FLOWING_NOMINAL_DEPTH_M;
+      const bank = THREE.MathUtils.smoothstep(
+        hit.distanceM, channel.halfW, channel.halfW + shoulder,
+      );
+      ground = Math.min(ground, bed + (ground - bed) * bank);
+    }
+    return ground;
+  };
+  // Shore inspection needs a finer display terrain than the broad water mesh:
+  // coarse, flat-shaded bank triangles otherwise masquerade as a hydro edge
+  // defect when the camera comes down for pebble/eddy work.
+  const geometry = new THREE.PlaneGeometry(600, 600, 192, 192);
   geometry.rotateX(-Math.PI / 2);
   const p = geometry.attributes.position as THREE.BufferAttribute;
   const colour = new Float32Array(p.count * 3);
-  const low = new THREE.Color(0x506352), high = new THREE.Color(0x967c55), scratch = new THREE.Color();
+  const low = new THREE.Color(0x506352), high = new THREE.Color(0x967c55);
+  const mineral = new THREE.Color(0x5c5238), damp = new THREE.Color(0x39483b);
+  const reed = new THREE.Color(0x667033);
+  const scratch = new THREE.Color();
   for (let i = 0; i < p.count; i++) {
-    const h = f.height(p.getX(i), p.getZ(i));
+    const x = p.getX(i), z = p.getZ(i);
+    const h = carvedHeight(x, z);
     p.setY(i, h - f.originY);
     scratch.copy(low).lerp(high, Math.max(0, Math.min(1, .45 + (h - f.originY) / 70)));
+    let nearest: {
+      distanceM: number;
+      halfW: number;
+      surfaceM: number;
+      kind: 'river' | 'stream' | 'canal';
+      flow: [number, number];
+    } | undefined;
+    for (const channel of channels) {
+      const hit = nearestSegment(x, z, channel.profile, 3);
+      if (hit.segment < 0 || (nearest && hit.distanceM >= nearest.distanceM)) continue;
+      const a = hit.segment * 3, b = (hit.segment + 1) * 3;
+      const dx = channel.profile[b] - channel.profile[a];
+      const dz = channel.profile[b + 1] - channel.profile[a + 1];
+      const length = Math.max(.001, Math.hypot(dx, dz));
+      nearest = {
+        distanceM: hit.distanceM,
+        halfW: channel.halfW,
+        surfaceM: channel.profile[a + 2] * (1 - hit.t) + channel.profile[b + 2] * hit.t,
+        kind: channel.kind,
+        flow: [dx / length, dz / length],
+      };
+    }
+    if (nearest) {
+      const bankDistance = nearest.distanceM - nearest.halfW;
+      if (bankDistance > -.5 && bankDistance < 14) {
+        const slope = Math.min(.6, Math.hypot(
+          f.height(x + 2, z) - f.height(x - 2, z),
+          f.height(x, z + 2) - f.height(x, z - 2),
+        ) / 4);
+        const habitat = bankHabitat(null, .58, 14, slope, true, h, {
+          kind: nearest.kind,
+          restingLevelM: nearest.surfaceM,
+          depthM: Math.max(0, nearest.surfaceM - h),
+          shoreDistanceM: Math.max(0, bankDistance),
+          flow: nearest.flow,
+        });
+        const patch = bankPatch(x, z);
+        const bankFade = 1 - THREE.MathUtils.smoothstep(bankDistance, 7, 14);
+        const mineralWeight = habitat.mineral * bankFade
+          * THREE.MathUtils.smoothstep(patch, .18, .72);
+        const reedWeight = habitat.reeds * bankFade
+          * THREE.MathUtils.smoothstep(patch, .48, .82);
+        // A patch-varying damp fringe continues the shallow water's local
+        // terrain colour onto dry ground. It breaks the silhouette without
+        // alpha stipple, shader dithering, or a second fake water surface.
+        const wetWidth = 2.4 + patch * 3.8;
+        const dampWeight = 1 - THREE.MathUtils.smoothstep(bankDistance, 0, wetWidth);
+        scratch.lerp(damp, Math.min(.68, dampWeight * .68));
+        scratch.lerp(mineral, Math.min(.78, mineralWeight * .82));
+        scratch.lerp(reed, Math.min(.58, reedWeight * .58));
+      }
+    }
     colour[i*3] = scratch.r; colour[i*3+1] = scratch.g; colour[i*3+2] = scratch.b;
   }
   geometry.setAttribute('color', new THREE.BufferAttribute(colour, 3));
   geometry.computeVertexNormals();
-  return new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
-    vertexColors: true, roughness: .94, metalness: 0, flatShading: true,
+  const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: .94, metalness: 0, flatShading: false,
   }));
+  // The production hydro shader samples the sward colour field beneath each
+  // fragment. Give the isolated lab the same evidence instead of a single
+  // fallback green, so shallow water and exposed banks share a palette.
+  const rgba = new Uint8Array(p.count * 4);
+  for (let i = 0; i < p.count; i++) {
+    rgba[i * 4] = Math.round(THREE.MathUtils.clamp(colour[i * 3], 0, 1) * 255);
+    rgba[i * 4 + 1] = Math.round(THREE.MathUtils.clamp(colour[i * 3 + 1], 0, 1) * 255);
+    rgba[i * 4 + 2] = Math.round(THREE.MathUtils.clamp(colour[i * 3 + 2], 0, 1) * 255);
+    rgba[i * 4 + 3] = 255;
+  }
+  const terrainField = new THREE.DataTexture(
+    rgba, 193, 193, THREE.RGBAFormat, THREE.UnsignedByteType,
+  );
+  terrainField.flipY = false;
+  terrainField.minFilter = THREE.LinearFilter;
+  terrainField.magFilter = THREE.LinearFilter;
+  terrainField.generateMipmaps = false;
+  terrainField.needsUpdate = true;
+  mesh.userData.terrainField = terrainField;
+  return mesh;
+}
+
+/** Protruding lab rocks use the analysed water profile for their waterline.
+ * Production boulders remain terrain-generated; these are an inspection aid
+ * so the rapid and shallow fixtures exercise rock/water contact visually. */
+function makeRiverDetails(f: Fixture, analysis: HydroTileAnalysis): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'hydro-lab-river-details';
+  const channels: Array<{ profile: Float32Array; halfW: number; kind: string }> = [];
+  for (let i = 0; i < f.features.length; i++) {
+    const feature = f.features[i];
+    if (feature.geometry.type !== 'line') continue;
+    const profile = analysis.profiles.get(`${feature.id}#${i}`)
+      ?? analysis.profiles.get(feature.id);
+    if (profile) channels.push({
+      profile,
+      halfW: feature.geometry.widthM * .5,
+      kind: feature.kind,
+    });
+  }
+  const rockGeometry = new THREE.IcosahedronGeometry(1, 1);
+  const rockMaterial = new THREE.MeshStandardMaterial({
+    color: 0x64675b, roughness: .98, metalness: 0, flatShading: true,
+  });
+  for (const [x, z, radius, height] of f.rocks ?? []) {
+    let surface = f.height(x, z) + FLOWING_NOMINAL_DEPTH_M;
+    let nearest = Infinity;
+    for (const { profile } of channels) {
+      const hit = nearestSegment(x, z, profile, 3);
+      if (hit.segment < 0 || hit.distanceM >= nearest) continue;
+      const a = hit.segment * 3, b = (hit.segment + 1) * 3;
+      surface = profile[a + 2] * (1 - hit.t) + profile[b + 2] * hit.t;
+      nearest = hit.distanceM;
+    }
+    const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+    rock.position.set(x, surface - f.originY - height * .42, z);
+    rock.scale.set(radius, height, radius * .82);
+    rock.rotation.y = ((x * 17.13 + z * 3.71) % 6.283 + 6.283) % 6.283;
+    rock.rotation.z = Math.sin(x * 2.1 + z) * .08;
+    rock.castShadow = rock.receiveShadow = true;
+    group.add(rock);
+  }
+
+  // Lab-only bank witnesses. Production gets these habitats from the sward;
+  // the isolated page needs a few sparse forms so mineral margins and reed
+  // shelter remain legible without loading the entire terrain decoration stack.
+  const pebbleGeometry = new THREE.IcosahedronGeometry(1, 0);
+  const pebbleMaterial = new THREE.MeshStandardMaterial({
+    color: 0x706852, roughness: 1, metalness: 0, flatShading: true,
+  });
+  const reedGeometry = new THREE.ConeGeometry(.13, 1, 3);
+  const reedMaterial = new THREE.MeshStandardMaterial({
+    color: 0x69783d, roughness: .96, metalness: 0, flatShading: true,
+  });
+  for (const channel of channels) {
+    const profile = channel.profile;
+    for (let p = 3; p < profile.length; p += 3) {
+      const ax = profile[p - 3], az = profile[p - 2];
+      const bx = profile[p], bz = profile[p + 1];
+      const dx = bx - ax, dz = bz - az;
+      const length = Math.hypot(dx, dz);
+      if (length < .001) continue;
+      const tx = dx / length, tz = dz / length;
+      const nx = -tz, nz = tx;
+      const steps = Math.max(1, Math.floor(length / 14));
+      for (let step = 0; step < steps; step++) {
+        const t = (step + .5) / steps;
+        const cx = ax + dx * t, cz = az + dz * t;
+        const surfaceM = profile[p - 1] * (1 - t) + profile[p + 2] * t;
+        for (const side of [-1, 1]) {
+          const seed = bankPatch(cx + side * 19.7, cz - side * 8.3);
+          const offset = channel.halfW + 1.2 + seed * 5.5;
+          const x = cx + nx * side * offset, z = cz + nz * side * offset;
+          const groundM = f.height(x, z);
+          const slope = Math.min(.6, Math.hypot(
+            f.height(x + 2, z) - f.height(x - 2, z),
+            f.height(x, z + 2) - f.height(x, z - 2),
+          ) / 4);
+          const habitat = bankHabitat(null, .58, 14, slope, true, groundM, {
+            kind: channel.kind,
+            restingLevelM: surfaceM,
+            depthM: Math.max(0, surfaceM - groundM),
+            shoreDistanceM: offset - channel.halfW,
+            flow: [tx, tz],
+          });
+          if (!habitat.submerged && habitat.mineral * seed > .16) {
+            const pebble = new THREE.Mesh(pebbleGeometry, pebbleMaterial);
+            const radius = .28 + seed * .48;
+            pebble.position.set(x, groundM - f.originY + radius * .28, z);
+            pebble.scale.set(radius * 1.45, radius * .58, radius);
+            pebble.rotation.y = seed * Math.PI * 2;
+            pebble.castShadow = pebble.receiveShadow = true;
+            group.add(pebble);
+          }
+          const reedSeed = bankPatch(x - 31.2, z + 12.6);
+          if (!habitat.submerged && habitat.reeds * reedSeed > .22) {
+            const blade = new THREE.Mesh(reedGeometry, reedMaterial);
+            const height = 1 + reedSeed * 1.5;
+            blade.position.set(x + nx * .45, groundM - f.originY + height * .5, z + nz * .45);
+            blade.scale.set(1 + seed * .45, height, 1 + seed * .45);
+            blade.rotation.y = reedSeed * Math.PI * 2;
+            blade.castShadow = true;
+            group.add(blade);
+          }
+        }
+      }
+    }
+  }
+  group.userData.dispose = (): void => {
+    rockGeometry.dispose();
+    rockMaterial.dispose();
+    pebbleGeometry.dispose();
+    pebbleMaterial.dispose();
+    reedGeometry.dispose();
+    reedMaterial.dispose();
+  };
+  return group;
+}
+
+function wakeRigAt(
+  f: Fixture,
+  analysis: HydroTileAnalysis,
+  travelledM: number,
+  speedMps: number,
+): { x: number; z: number; vx: number; vz: number; levelM: number } | undefined {
+  for (let i = 0; i < f.features.length; i++) {
+    const feature = f.features[i];
+    if (feature.geometry.type !== 'line') continue;
+    const profile = analysis.profiles.get(`${feature.id}#${i}`)
+      ?? analysis.profiles.get(feature.id);
+    if (!profile || profile.length < 6) continue;
+    let total = 0;
+    for (let p = 3; p < profile.length; p += 3) {
+      total += Math.hypot(profile[p] - profile[p - 3], profile[p + 1] - profile[p - 2]);
+    }
+    let remaining = ((travelledM % total) + total) % total;
+    for (let p = 3; p < profile.length; p += 3) {
+      const dx = profile[p] - profile[p - 3], dz = profile[p + 1] - profile[p - 2];
+      const length = Math.hypot(dx, dz);
+      if (remaining > length) { remaining -= length; continue; }
+      const t = length > 0 ? remaining / length : 0;
+      return {
+        x: profile[p - 3] + dx * t,
+        z: profile[p - 2] + dz * t,
+        vx: dx / Math.max(length, .001) * speedMps,
+        vz: dz / Math.max(length, .001) * speedMps,
+        levelM: profile[p - 1] * (1 - t) + profile[p + 2] * t,
+      };
+    }
+  }
+  return undefined;
 }
 
 function sampleText(s: HydroSample | undefined, x: number, z: number): string {
@@ -263,6 +588,22 @@ export async function startHydroLab(): Promise<void> {
   document.title = 'Hydrograph — isolated water laboratory';
   const get = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
   const number = (id: string): number => Number(get<HTMLInputElement>(id).value);
+  // The native panel predates the shared lab dials, but should fold on the
+  // same terms: each section remembers its state across the refresh loop used
+  // while tuning shaders.
+  const sectionKey = 'drive:hydro:sections';
+  let foldedSections: Record<string, boolean> = {};
+  try {
+    foldedSections = JSON.parse(localStorage.getItem(sectionKey) ?? '{}') as Record<string, boolean>;
+  } catch { /* private mode / stale storage */ }
+  document.querySelectorAll<HTMLDetailsElement>('details.section').forEach((section) => {
+    const name = section.dataset.section ?? '';
+    if (name in foldedSections) section.open = foldedSections[name];
+    section.addEventListener('toggle', () => {
+      foldedSections[name] = section.open;
+      try { localStorage.setItem(sectionKey, JSON.stringify(foldedSections)); } catch { /* private mode */ }
+    });
+  });
   const canvas = get<HTMLCanvasElement>('hydro-canvas');
   const contextAttributes: WebGLContextAttributes = { antialias: false, powerPreference: 'high-performance' };
   const context = canvas.getContext('webgl2', contextAttributes) ?? canvas.getContext('webgl', contextAttributes);
@@ -332,10 +673,25 @@ export async function startHydroLab(): Promise<void> {
     yaw = HOME.yaw; pitch = HOME.pitch; distance = HOME.distance;
     placeCamera();
   };
+  const setCameraMode = (mode: string): void => {
+    target.set(0, 0, 0);
+    yaw = HOME.yaw;
+    if (mode === 'DETAIL') {
+      pitch = .72;
+      distance = 245;
+    } else {
+      pitch = HOME.pitch;
+      distance = HOME.distance;
+    }
+    placeCamera();
+  };
   placeCamera();
 
   let hydro: HydroSystem | undefined;
   let terrain: THREE.Mesh | undefined;
+  let terrainField: THREE.DataTexture | undefined;
+  let riverDetails: THREE.Group | undefined;
+  let analysis: HydroTileAnalysis | undefined;
   let fixture = FIXTURES[0];
   let revision = 0;
   let rebuilding = false;
@@ -343,10 +699,19 @@ export async function startHydroLab(): Promise<void> {
   const probe = new THREE.Mesh(new THREE.RingGeometry(3.2, 4.4, 20).rotateX(-Math.PI / 2),
     new THREE.MeshBasicMaterial({ color: 0xf2cf67, side: THREE.DoubleSide, depthTest: false }));
   probe.visible = false; probe.renderOrder = 20; scene.add(probe);
+  const rigMarker = new THREE.Mesh(
+    new THREE.BoxGeometry(3.2, 1.15, 5.4),
+    new THREE.MeshStandardMaterial({ color: 0xc8873b, roughness: .82, metalness: 0 }),
+  );
+  rigMarker.visible = false;
+  rigMarker.castShadow = true;
+  scene.add(rigMarker);
 
   const tune = (): HydroTuning => ({
     waveAmplitude: number('amplitude'), waveLength: number('length'),
     rippleStrength: number('ripple'), foamStrength: number('foam'), shoreFade: number('shore'),
+    shallowBedStrength: number('bed'), riverEdgeStrength: number('edge'),
+    turbulenceStrength: number('turbulence'), eddyStrength: number('eddies'),
   });
   const apply = (): void => {
     if (!hydro) return;
@@ -368,16 +733,27 @@ export async function startHydroLab(): Promise<void> {
     if (terrain) {
       terrain.removeFromParent(); terrain.geometry.dispose(); (terrain.material as THREE.Material).dispose();
     }
-    terrain = makeTerrain(fixture);
+    terrainField?.dispose();
+    terrainField = undefined;
+    if (riverDetails) {
+      riverDetails.removeFromParent();
+      (riverDetails.userData.dispose as (() => void) | undefined)?.();
+    }
+    const input = tileInput(fixture, ++revision);
+    analysis = analyseHydroTile(input);
+    terrain = makeTerrain(fixture, analysis);
+    terrainField = terrain.userData.terrainField as THREE.DataTexture | undefined;
     terrain.visible = get<HTMLInputElement>('ground').checked;
     scene.add(terrain);
+    riverDetails = makeRiverDetails(fixture, analysis);
+    scene.add(riverDetails);
     hydro = createHydroSystem({
       fieldResolution: Number(get<HTMLSelectElement>('field').value),
       meshResolution: Number(get<HTMLSelectElement>('mesh').value),
       oceanLevelM: fixture.oceanLevelM,
     });
     scene.add(hydro.object3d);
-    await hydro.upsertTile(tileInput(fixture, ++revision));
+    await hydro.upsertTile(input);
     apply(); inspected = ''; probe.visible = false; rebuilding = false;
   };
 
@@ -385,11 +761,63 @@ export async function startHydroLab(): Promise<void> {
     const output = input.parentElement?.querySelector('output');
     input.addEventListener('input', () => {
       if (output) output.textContent = Number(input.value).toFixed(Number(input.step) < 1 ? 2 : 0);
+      if (['bed','edge','turbulence','eddies'].includes(input.id)) {
+        get<HTMLSelectElement>('detailPreset').value = 'CUSTOM';
+      }
       apply();
     });
   });
+  const setDial = (id: string, value: number): void => {
+    const input = get<HTMLInputElement>(id);
+    input.value = String(value);
+    const output = input.parentElement?.querySelector('output');
+    if (output) output.textContent = value.toFixed(Number(input.step) < 1 ? 2 : 0);
+  };
+  get<HTMLSelectElement>('detailPreset').addEventListener('change', () => {
+    const preset = get<HTMLSelectElement>('detailPreset').value;
+    const settings: Record<string, [number, number, number, number, number]> = {
+      'ALL': [1, 1, 1, 1, 1],
+      'BED / SHALLOWS': [2, .45, 0, 0, .08],
+      'BANK EDGES': [.35, 2.2, 0, 0, .05],
+      'EDDIES': [.45, .55, .25, 2.3, .08],
+      'RAPIDS': [.25, .65, 1.8, .3, 1.35],
+      'WAKE': [.6, .8, .25, .5, .3],
+    };
+    const values = settings[preset];
+    if (!values) return;
+    setDial('bed', values[0]); setDial('edge', values[1]);
+    setDial('turbulence', values[2]); setDial('eddies', values[3]);
+    setDial('foam', values[4]);
+    const surface: Record<string, [number, number]> = {
+      'ALL': [1, 1],
+      'BED / SHALLOWS': [.18, .12],
+      'BANK EDGES': [.22, .16],
+      'EDDIES': [.20, .14],
+      'RAPIDS': [.72, .75],
+      'WAKE': [.24, .20],
+    };
+    setDial('amplitude', surface[preset][0]);
+    setDial('ripple', surface[preset][1]);
+    const wantedFixture = preset === 'RAPIDS' ? 'rapids'
+      : (preset === 'BED / SHALLOWS' || preset === 'BANK EDGES'
+        || preset === 'EDDIES' || preset === 'WAKE')
+        ? 'shallows' : undefined;
+    get<HTMLInputElement>('wakeDemo').checked = preset === 'WAKE';
+    get<HTMLSelectElement>('cameraMode').value = 'DETAIL';
+    setCameraMode('DETAIL');
+    if (wantedFixture && get<HTMLSelectElement>('fixture').value !== wantedFixture) {
+      get<HTMLSelectElement>('fixture').value = wantedFixture;
+      void rebuild();
+    } else apply();
+  });
   get<HTMLSelectElement>('debug').addEventListener('change', apply);
+  get<HTMLSelectElement>('cameraMode').addEventListener('change', () => {
+    setCameraMode(get<HTMLSelectElement>('cameraMode').value);
+  });
   get<HTMLInputElement>('wire').addEventListener('change', apply);
+  get<HTMLInputElement>('wakeDemo').addEventListener('change', () => {
+    if (!get<HTMLInputElement>('wakeDemo').checked) rigMarker.visible = false;
+  });
   get<HTMLInputElement>('ground').addEventListener('change', () => { if (terrain) terrain.visible = get<HTMLInputElement>('ground').checked; });
   get<HTMLInputElement>('ocean').addEventListener('input', () => hydro?.setOceanLevelM(number('ocean')));
   for (const id of ['fixture','field','mesh']) get<HTMLSelectElement>(id).addEventListener('change', () => { void rebuild(); });
@@ -419,7 +847,9 @@ export async function startHydroLab(): Promise<void> {
     ray.setFromCamera(pointer, camera);
     const hit = terrain ? ray.intersectObject(terrain, false)[0] : undefined;
     if (!hit) { probe.visible = false; inspected = ''; return; }
-    const s = hydro?.sampleRestingSurface(hit.point.x, hit.point.z);
+    const s = hydro?.sampleRestingSurface(
+      hit.point.x, hit.point.z, WATERLINE_CUT(hit.point.x, hit.point.z),
+    );
     inspected = sampleText(s, hit.point.x, hit.point.z);
     probe.position.set(hit.point.x, hit.point.y + .6, hit.point.z); probe.visible = true;
   };
@@ -511,7 +941,9 @@ export async function startHydroLab(): Promise<void> {
   createDials({
     slug: 'hydro',
     adopt: ['fixture', 'debug', 'ocean', 'field', 'mesh', 'wire', 'ground',
-      'wind', 'direction', 'rain', 'amplitude', 'length', 'ripple', 'foam', 'shore'],
+      'wind', 'direction', 'rain', 'amplitude', 'length', 'ripple', 'foam', 'shore',
+      'cameraMode', 'detailPreset', 'bed', 'edge', 'turbulence', 'eddies',
+      'wakeDemo', 'wakeSpeed'],
   });
 
   await rebuild();
@@ -519,12 +951,35 @@ export async function startHydroLab(): Promise<void> {
   let lastStatus = 0;
   const frame = (now: number): void => {
     const angle = number('direction') * Math.PI / 180;
+    const elapsed = (now - started) / 1000;
+    const wakeDemo = get<HTMLInputElement>('wakeDemo').checked;
+    const demoRig = wakeDemo && analysis
+      // Start near the fixture's central inspection bend, not 300m upstream
+      // beyond the detail camera. The offset is distance, so speed still
+      // controls only motion and the retained trail remains physically timed.
+      ? wakeRigAt(fixture, analysis, 300 + elapsed * number('wakeSpeed'), number('wakeSpeed'))
+      : undefined;
+    if (demoRig) {
+      rigMarker.visible = true;
+      rigMarker.position.set(demoRig.x, demoRig.levelM - fixture.originY + .25, demoRig.z);
+      rigMarker.rotation.y = Math.atan2(demoRig.vx, demoRig.vz);
+    } else rigMarker.visible = false;
     hydro?.update({
-      timeSeconds: (now - started) / 1000,
+      timeSeconds: elapsed,
       worldOrigin: { x: 0, y: fixture.originY, z: 0 },
       wind: { x: Math.cos(angle), z: Math.sin(angle), speedMps: number('wind') },
       rain: number('rain'),
       sunDirection: { x: sun.position.x, y: sun.position.y, z: sun.position.z },
+      terrainColour: { r: .12, g: .16, b: .11 },
+      terrainField: terrainField ? {
+        texture: terrainField,
+        originX: BOUNDS.minX,
+        originZ: BOUNDS.minZ,
+        widthM: BOUNDS.maxX - BOUNDS.minX,
+      } : undefined,
+      rig: demoRig ? {
+        x: demoRig.x, z: demoRig.z, vx: demoRig.vx, vz: demoRig.vz, wadeM: .48,
+      } : undefined,
     });
     renderer.render(scene, camera);
     if (now - lastStatus > 180) {
@@ -540,6 +995,13 @@ export async function startHydroLab(): Promise<void> {
   };
   requestAnimationFrame(frame);
   addEventListener('beforeunload', () => {
-    hydro?.dispose(); terrain?.geometry.dispose(); (terrain?.material as THREE.Material | undefined)?.dispose(); renderer.dispose();
+    hydro?.dispose();
+    terrain?.geometry.dispose();
+    (terrain?.material as THREE.Material | undefined)?.dispose();
+    terrainField?.dispose();
+    (riverDetails?.userData.dispose as (() => void) | undefined)?.();
+    rigMarker.geometry.dispose();
+    (rigMarker.material as THREE.Material).dispose();
+    renderer.dispose();
   }, { once: true });
 }

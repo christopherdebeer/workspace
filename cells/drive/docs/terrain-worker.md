@@ -141,6 +141,112 @@ dropped, and a hop sends `reset`.
 reading the geometry arrays as they do now), texture upload, and every probe.
 Target after the move: no main-thread task from terrain above 15 ms.
 
+## Where it stands (2026-09-03, later)
+
+Step 1 is done and measured. Per plain build (97 builds, Camps Bay stream,
+`__refine().plain`): colour pass 69 ms, heights pass 24 ms, corridor carve
+5 ms, normals 5 ms, everything else under 3 ms — of a 108 ms mesh build, with
+17 ms of post-steps after it. The colour pass dominates: per vertex it reads
+the climate field, samples cover twice through a linear scan of the cover
+tiles, samples height four times for the slope, and tests the OSM area
+polygons. The heights pass is the same lookups once. That is lookup overhead
+more than arithmetic, and the kernel's store is where it gets fixed: a build
+resolves its rasters once and indexes them directly.
+
+The two cheap cuts landed but did not move the count (92 against 89): most
+neighbour dirties were already deduplicated by the set, and the owner cascade
+is across time — an owner rebuilt by a later way dirties its followers again
+— not within one dirty set. They stay because they are right, not because
+they paid.
+
+Step 2 is done: `client/terrain-kernel.ts` holds the whole build over plain
+arrays and a `TerrainStore`; `buildTerrainMesh` in main.ts is now the store,
+the BufferGeometry wrap and the mesh placement. The main file lost 1,340 lines.
+Verified against the parent commit: seam probes 0/0 on all edges at Camps
+Bay and Senqu (settled on the full build count), through-node, carve-burial
+and terrain-scan green, and an interleaved A/B at Camps Bay — head and parent
+twice each, same script — settling at 151 builds every time with the same
+reasons. Build counts vary with the road stream's batching by time of day
+(87–96 in the morning, ~150 in the afternoon); compare against the parent
+in the same hour, never against a number from another day. One bug shipped
+and was caught: the plain lattice's cell table counted index entries, not
+triangles (CLAUDE.md, "A cell table counts TRIANGLES"). The remaining test
+noise — the Bixby join population, the corridor wedge budget, carve-through
+at spots where the road stream has not landed inside the window — is
+identical on the parent.
+
+Step 3 is done: `client/terrain-worker.ts`. The kernel became one closure
+(`createTerrainKernel`) whose source is embedded in a Blob worker, as the
+road profile worker is, so the cell is still one bundle. The worker mirrors
+the height and cover rasters once (a hop resets it) and takes everything
+else with each job — the strips and channels near the tile, flat, with
+their cell keys; the area patches; the landmark pads with their pad
+elevations resolved; a 17×17 climate raster of biome weights; the palette
+state and the constants. A job is self-contained on purpose: mirroring the
+strips would mean shadowing every mutation a road makes to its segments
+after they are rasterised, and the few hundred near a tile are tens of
+kilobytes. Replies are transferable arrays plus the border row and the
+followers to dirty; `applyTileBuild` wraps them and runs the post-steps.
+One job in flight, the queue and its owners-first order still on the main
+thread. `?tworker=0` keeps every build synchronous; a worker failure
+disables it and the synchronous slot takes the tile back. `__tworker()`
+is the ledger: jobs, worker ms, wait, prep, apply and post-step ms.
+
+Measured at Camps Bay (rendering off, so the worker is not starved by the
+software renderer): 83 builds to settle, all in the worker, borders 0/0 on
+every edge. Main thread per build: 5 ms to pack the job, 0.2 ms to wrap the
+arrays. The worker takes ~210 ms a build — its cover lookup is the linear
+scan and every job recomputes the break lines — which is fine off the main
+thread and the first thing to tune. With rendering on the main thread's
+whole slot is 35 ms a build, median 24: 5 ms of packing and wrapping, the
+rest the post-steps (reseat, redrape, hydro, batter, culverts), which are
+now the residue. In the harness the software renderer starves the worker
+(3 s of wait a job); on a GPU that is not a factor.
+
+One pacing rule changed with the worker: the synchronous slot builds at
+most one tile per 200 ms, and the worker path first inherited that, so the
+twenty-five first builds at boot took five seconds and two road-stream
+tests (Chapman's join population, the corridor's "truck is on a way") lost
+their windows. The worker path now posts the next tile on the next frame
+after a reply; both suites are back at their baseline.
+
+Step 5, the post-steps, measured per build with the ledger split: reseat,
+redrape, batter and culverts are each under a millisecond; hydroFeed was
+the whole 20 ms — it sampled a 132×132 elevation raster (17k height reads)
+on the main thread after every build. The worker now samples that raster
+with the build off the same sampler and hands it back; a starved refeed
+asks the worker for the raster alone. After: 3 ms to pack, 0.2 ms to wrap,
+7 ms of post-steps of which 6 is the hydro system's own synchronous upsert;
+the median build slot on the main thread is 4 ms, the worst 88.
+
+Attributed with `__frameprof` (Camps Bay, 90 s of streaming, main thread,
+totals): hydro tile builds 623 ms over 58 builds (11 ms each, max 22; 15 ms
+and max 46 at boot), the software renderer's draw issue 440, road build
+slices 209 over 32 slices (the 6 ms budget holding), the terrain pick and
+job packing 148, the terrain apply with post-steps 105 over 35 (3 ms each,
+max 45; 14 ms and max 65 at boot, where a first build reseats and redrapes
+everything on the tile). The frame loop's own subsystems are under a
+millisecond each except weather and wildlife at half a millisecond. So per
+streamed tile the main thread now pays a hydro build, an apply, and a job
+packing — about 20 ms spread over three frames with the drain — where it
+paid 125 ms in one.
+
+With the drain in place the same profile shows hydro builds no longer
+stacking on applies — and, in the harness's two-second frames, starving:
+three builds in ninety seconds against fifty-eight before, because the
+drain skipped every frame that carried an apply. The budget is time now:
+a frame with an apply still runs a hydro build when the queue is backing
+up or the last build is 200 ms behind.
+
+The hydro tile build is the next candidate for the worker: build-tile.ts
+and the body registry are pure TypeScript, but the registry is shared state
+updated per tile, so the worker would need the same update stream or the
+registry's relevant bodies shipped with each job. Halving the field
+resolution is the cheap lever if it is needed sooner.
+
+Step 4 (the queue in the worker) is optional now: the main-thread share
+of a build is the post-steps, not the ordering. Step 5 is the post-steps.
+
 ## Steps, each shippable
 
 1. **Split the ledger.** Record `buildTerrainMesh` time and post-step time

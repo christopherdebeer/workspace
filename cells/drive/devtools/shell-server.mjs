@@ -22,6 +22,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { chromium } from 'playwright';
+import { offlineAliasFlags } from './offline-deps.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const CELL = join(HERE, '..');
@@ -31,13 +32,13 @@ const WORK = process.env.DRIVE_WORK ?? '/tmp/drive-tools';
 /** Build the client bundle and stand the shell up. Returns the origin, the
  *  paths that have been asked for since the last `served.clear()`, and a
  *  `close()`. */
-export function serveShell(tag = 'shell') {
+export function serveShell(tag = 'shell', requestedPort) {
   const idx = readFileSync(join(CELL, 'index.ts'), 'utf8');
   const shell = `<!doctype html><html>${idx.match(/<head>[\s\S]*?<\/body>/)[0]}</html>`
     .replace(/\$\{[^}]*\}/g, '');
   mkdirSync(WORK, { recursive: true });
   const bundlePath = join(WORK, `${tag}.js`);
-  execSync(`npx esbuild ${join(CELL, 'client/main.ts')} --bundle --format=esm --outfile=${bundlePath}`,
+  execSync(`npx esbuild ${join(CELL, 'client/main.ts')} --bundle --format=esm ${offlineAliasFlags()} --outfile=${bundlePath}`,
     { stdio: 'pipe', cwd: ROOT });
   const bundle = readFileSync(bundlePath);
   // The stamp the cell computes, computed the same way, so the cache name here
@@ -66,7 +67,7 @@ export function serveShell(tag = 'shell') {
     if (p.startsWith('/~/') || p === '/state') { res.writeHead(404); return res.end('{}'); }
     return send('text/html; charset=utf-8', shell);
   });
-  const port = 8900 + Math.floor(Math.random() * 90);
+  const port = requestedPort ?? (8900 + Math.floor(Math.random() * 90));
   const ready = new Promise((r) => server.listen(port, '127.0.0.1', r));
   server.unref();
   return {

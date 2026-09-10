@@ -1,3 +1,4 @@
+import { riverDrops, sampleRiverDrop, type RiverDrop } from './waterfalls';
 import { HydroBodyRegistry } from './body-registry';
 import {
   areaOfRing,
@@ -9,7 +10,6 @@ import {
   quantile,
   sampleCoverage,
   sampleElevation,
-  signedDistanceToArea,
 } from './geometry';
 import {
   DEFAULT_HYDRO_BUILD,
@@ -126,10 +126,23 @@ function lineProfile(input: HydroTileInput, feature: HydroFeature): Float32Array
     clamp(feature.geometry.widthM * 1.25, 10, 40));
   const count = points.length >> 1;
   if (count < 2) return undefined;
+  // THE CARVED BED FIRST. Where the terrain has already dug this channel the
+  // stations stand on its invert, so the surface and the ground are one
+  // solve; the raster answers everywhere else, as it always did. One call a
+  // station (10-40m apart), not one a texel — see the bedFoot note below for
+  // what happens when this is asked per pixel.
+  // THE INVERT IS THE FLOOR, NOT THE SURFACE. Levelling the stations ON it
+  // gave a river of exactly zero depth — surface and bed the same number at
+  // every texel, measured — so the station stands a nominal depth above the
+  // bed the ground was carved to, which is what the ribbon has always drawn.
+  const invert = input.channelInvertM;
   const heights = new Array<number>(count);
   for (let i = 0; i < count; i++) {
+    const x = points[i * 2], z = points[i * 2 + 1];
+    const inv = invert ? invert(x, z) : NaN;
     heights[i] = feature.taggedLevelM
-      ?? sampleElevation(input.elevation, input.bounds, points[i * 2], points[i * 2 + 1]);
+      ?? (Number.isFinite(inv) ? inv + FLOWING_NOMINAL_DEPTH_M
+        : sampleElevation(input.elevation, input.bounds, x, z));
   }
   fillMissing(heights);
   // A tiny symmetric filter removes individual DEM pits before direction is
@@ -192,6 +205,13 @@ function areaEvidence(input: HydroTileInput, feature: HydroFeature): number | un
   }
   // Slightly below the median resists a few high bank pixels without selecting
   // the deepest DEM error in the body.
+  // A COVER-RASTER BODY STANDS AT THE LOWEST GROUND IN IT. Its outline is
+  // 38 m pixels, so it always takes in bank: at the Hunzikenbrücke over the
+  // Aare the 40th percentile of the ground inside it read 520.4 m against a
+  // river surface of 517.1, and the bridge deck stood in the water. An OSM
+  // outline is drawn at the waterline and its median is the surface; a
+  // cover outline is not, and only its low ground is.
+  if (feature.source === 'landcover') return quantile(samples, samples.length >= 8 ? 0.12 : 0);
   return quantile(samples, samples.length >= 8 ? 0.4 : 0.5);
 }
 
@@ -284,7 +304,9 @@ export function analyseHydroTile(input: HydroTileInput): HydroTileAnalysis {
  *
  * Standing water is untouched. A lake's flatness is not an approximation.
  */
-const FLOWING_NOMINAL_DEPTH_M = 0.6;
+/** Shared with the isolated lab's display carve so its terrain and the shipping
+ *  profile solver depict the same channel depth. */
+export const FLOWING_NOMINAL_DEPTH_M = 0.6;
 function bodyLevel(
   body: HydroBody,
   profile: Float32Array | undefined,
@@ -465,9 +487,19 @@ function indexProfile(profile: Float32Array, widthM: number): ProfileIndex {
   }
   return { cell, minX, minZ, cols, buckets };
 }
+/** One 2×2-texel block's answer from the nearest-profile search: the segment
+ *  it found, from which every texel in the block derives its own distance,
+ *  side and station exactly (a straight segment projects), so the search
+ *  runs a quarter as often and the centreline seam stays where it is. */
+interface BlockHit {
+  px: number; pz: number; fx: number; fz: number;
+  energy: number; s: number; curvature: number; centreHalfW: number; levelM: number;
+  grade: number; drops: readonly RiverDrop[]; s0: number;
+}
 interface ProfileHit {
   distanceM: number;
   levelM: number;
+  grade: number;
   /** Projection foot on the centreline — where the thalweg bed is sampled. */
   px: number;
   pz: number;
@@ -522,6 +554,7 @@ function sampleProfileAt(
   const cross = fx * (z - pz) - fz * (x - px);
   const curvA = spine.curvature[best], curvB = spine.curvature[best + 1] ?? curvA;
   return {
+    grade: (profile[q + 2] - profile[o + 2]) / len,
     distanceM: Math.sqrt(bestD2),
     levelM: profile[o + 2] * (1 - bestT) + profile[q + 2] * bestT,
     px, pz, fx, fz,
@@ -616,6 +649,71 @@ function nearestSourceMap(source: Uint8Array, width: number, height: number): In
   return nearest;
 }
 
+/** ── COVERAGE BY SCANLINE, NOT BY DISTANCE ──
+ *
+ * An area's coverage was a signed distance to its rings, per texel: O(texels
+ * × ring points), and a cover-raster lagoon or a real OSM lake outline runs
+ * to a thousand points — measured at 177 ms for one hydro tile in the harness
+ * once the cover's inland water arrived, against a 10 ms main-thread budget.
+ * This fills the polygon by scanline at 4×4 sub-samples a texel instead:
+ * O(rows × edges) once, then a lookup. The band the distance used to
+ * anti-alias is now the sub-sample fraction, which is the same thing
+ * measured the other way round. Holes are rings too: even-odd. */
+const AREA_SS = 4;
+function areaCoverageRaster(
+  geometry: Extract<HydroFeature['geometry'], { type: 'area' }>,
+  ix0: number, ix1: number, iz0: number, iz1: number,
+  xAt: (ix: number) => number, zAt: (iz: number) => number,
+  pixelX: number, pixelZ: number,
+): Float32Array {
+  const w = ix1 - ix0 + 1, h = iz1 - iz0 + 1;
+  const counts = new Uint8Array(w * h);
+  const X0 = xAt(ix0) - pixelX / 2, Z0 = zAt(iz0) - pixelZ / 2;
+  const subW = pixelX / AREA_SS, subH = pixelZ / AREA_SS;
+  // Only the edges that cross this raster's rows: a relation ring runs to
+  // thousands of points and this tile sees a few dozen of them. An edge to
+  // the LEFT or RIGHT of the raster still counts — even-odd parity needs it.
+  const Z1 = Z0 + h * pixelZ;
+  const ex0: number[] = [], ez0: number[] = [], ex1: number[] = [], ez1: number[] = [];
+  for (const poly of geometry.polygons) {
+    for (const ring of [poly.outer, ...poly.holes]) {
+      const n = ring.length >> 1;
+      for (let i = 0, j = n - 1; i < n; j = i++) {
+        const z0 = ring[j * 2 + 1], z1 = ring[i * 2 + 1];
+        if (Math.max(z0, z1) < Z0 || Math.min(z0, z1) > Z1 || z0 === z1) continue;
+        ex0.push(ring[j * 2]); ez0.push(z0); ex1.push(ring[i * 2]); ez1.push(z1);
+      }
+    }
+  }
+  const xs: number[] = [];
+  for (let sy = 0; sy < h * AREA_SS; sy++) {
+    const zs = Z0 + (sy + 0.5) * subH;
+    xs.length = 0;
+    for (let e = 0; e < ex0.length; e++) {
+      const z0 = ez0[e], z1 = ez1[e];
+      if ((z0 > zs) === (z1 > zs)) continue;
+      xs.push(ex0[e] + ((zs - z0) / (z1 - z0)) * (ex1[e] - ex0[e]));
+    }
+    if (xs.length < 2) continue;
+    xs.sort((a, b) => a - b);
+    const row = ((sy / AREA_SS) | 0) * w;
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const a = Math.max(0, Math.ceil((xs[k] - X0) / subW - 0.5));
+      const b = Math.min(w * AREA_SS - 1, Math.floor((xs[k + 1] - X0) / subW - 0.5));
+      for (let sx = a; sx <= b; sx++) counts[row + ((sx / AREA_SS) | 0)]++;
+    }
+  }
+  const out = new Float32Array(w * h);
+  for (let i = 0; i < out.length; i++) out[i] = counts[i] / (AREA_SS * AREA_SS);
+  return out;
+}
+
+/** WHERE A BUILD GOES, cumulative across the session: the instrument for a
+ *  hydro build that costs more than its frame. Read via __hydro().buildProf. */
+export const HYDRO_BUILD_PROF = {
+  builds: 0, total: 0, max: 0, ocean: 0, analyse: 0, raster: 0, texels: 0, search: 0, sources: 0, rest: 0,
+  items: 0, areaItems: 0, flowingAreas: 0, searchTexels: 0, paints: 0,
+};
 export function buildHydroTile(
   input: HydroTileInput,
   registry: HydroBodyRegistry,
@@ -636,6 +734,18 @@ export function buildHydroTile(
   const pixelX = spanX / resolution, pixelZ = spanZ / resolution;
   const pixelM = Math.sqrt(Math.abs(pixelX * pixelZ));
   const antialias = Math.max(pixelX, pixelZ) * 0.7;
+  // A STREAM NARROWER THAN A TEXEL STILL DRAWS. An unnamed `waterway=stream`
+  // is 4 m by default and a tile's texel is ~9 m, so its coverage peaked at
+  // 0.66 on the centreline and the shore fade took the rest: a whole wooded
+  // valley at George with two streams in its tile and no water in the field.
+  // The drawn half-width reaches just past half a texel's DIAGONAL. A narrow
+  // 45-degree stream otherwise lights only corner-touching texels; at the
+  // fragment shader's 0.5 cutoff those islands meet at one mathematical point
+  // and split on screen. The structure's own half-width (the cross-channel
+  // chart and physics width) stays the tagged one.
+  const continuousHalfW = Math.hypot(pixelX, pixelZ) * 0.51;
+  const drawnHalfW = (lineWidth: number): number =>
+    Math.max(lineWidth * 0.5, continuousHalfW);
 
   const coverage = new Float32Array(count);
   const level = new Float32Array(count);
@@ -653,10 +763,31 @@ export function buildHydroTile(
   // River space, allocated only once a flowing texel actually lands — an
   // ocean tile never pays for it. See HydroTileField.structure.
   let structure: Float32Array | null = null;
+  let waterfalls: Float32Array<ArrayBuffer> | undefined;
   const structureAt = (): Float32Array => structure ?? (structure = new Float32Array(count * 4));
   const xAt = (ix: number): number => input.bounds.minX + ((ix - gutter) + 0.5) * pixelX;
   const zAt = (iz: number): number => input.bounds.minZ + ((iz - gutter) + 0.5) * pixelZ;
 
+  // WHAT A BODY PAINTS IS THE SAME AT EVERY TEXEL — its priority, kind id,
+  // seed, turbidity, flags and flat wave scale were recomputed per paint,
+  // twelve thousand times for one wide river in one tile. Once per body.
+  interface BodyConsts { p: number; flowing: boolean; scaleFlat: number; kindId: number; seed: number; turb: number; flags: number }
+  const bodyConsts = new Map<HydroBody, BodyConsts>();
+  const constsOf = (body: HydroBody): BodyConsts => {
+    let c = bodyConsts.get(body);
+    if (!c) {
+      const flowing = FLOWING.has(body.kind);
+      const ws = waveScale(body.kind, body.fetchM, body.roughness);
+      c = {
+        p: priority(body.kind), flowing, scaleFlat: flowing ? Math.min(0.15, ws) : ws,
+        kindId: HYDRO_KIND_ID[body.kind],
+        seed: Math.round(clamp(body.seed, 0, 1) * 255), turb: Math.round(clamp(body.turbidity, 0, 1) * 255),
+        flags: (body.intermittent ? HydroFlags.Intermittent : 0) | (body.tidal ? HydroFlags.Tidal : 0) | (flowing ? HydroFlags.Flowing : 0),
+      };
+      bodyConsts.set(body, c);
+    }
+    return c;
+  };
   const paint = (
     ix: number,
     iz: number,
@@ -668,13 +799,19 @@ export function buildHydroTile(
     /** River space for this texel: [s, n, curvature, halfWidth]. Flowing
      *  paints without a spine get a legible fallback below. */
     river?: readonly [number, number, number, number],
+    /** The ground at this texel when the caller has already sampled it. */
+    groundM?: number,
+    fall?: readonly [number, number, number, number],
   ): void => {
     if (amount <= 0.005 || ix < 0 || iz < 0 || ix >= width || iz >= height) return;
     const i = iz * width + ix;
-    const p = priority(body.kind);
+    const c = constsOf(body);
+    const p = c.p;
     if (rank[i] > p || (rank[i] === p && coverage[i] > amount)) return;
     rank[i] = p;
-    if (FLOWING.has(body.kind)) {
+    if (fall && (fall[0] > 0 || fall[2] > 0)) waterfalls ??= new Float32Array(count * 4);
+    if (waterfalls) waterfalls.set(fall ?? [0, 0, 0, 0], i * 4);
+    if (c.flowing) {
       const st = structureAt();
       if (river) {
         st[i * 4] = river[0]; st[i * 4 + 1] = river[1];
@@ -692,25 +829,25 @@ export function buildHydroTile(
     }
     coverage[i] = Math.max(coverage[i], amount);
     level[i] = levelM;
-    const ground = sampleElevation(input.elevation, input.bounds, xAt(ix), zAt(iz));
+    const ground = groundM ?? sampleElevation(input.elevation, input.bounds, xAt(ix), zAt(iz));
     depth[i] = Number.isFinite(ground) ? Math.max(options.minimumDepthM, levelM - ground) : options.minimumDepthM;
     flowX[i] = localFlow[0]; flowZ[i] = localFlow[1];
     fetch[i] = body.fetchM;
     // Flowing water's wave scale IS its reach energy — see profileEnergy.
     // Without a profile a flowing body stays calm rather than inheriting a
     // fetch-derived state it has no evidence for.
-    scale[i] = localEnergy !== undefined ? localEnergy
-      : FLOWING.has(body.kind) ? Math.min(0.15, waveScale(body.kind, body.fetchM, body.roughness))
-      : waveScale(body.kind, body.fetchM, body.roughness);
-    kind[i] = HYDRO_KIND_ID[body.kind];
-    seed[i] = Math.round(clamp(body.seed, 0, 1) * 255);
-    turbidity[i] = Math.round(clamp(body.turbidity, 0, 1) * 255);
-    flags[i] = (body.intermittent ? HydroFlags.Intermittent : 0)
-      | (body.tidal ? HydroFlags.Tidal : 0)
-      | (FLOWING.has(body.kind) ? HydroFlags.Flowing : 0);
+    scale[i] = localEnergy !== undefined ? localEnergy : c.scaleFlat;
+    kind[i] = c.kindId;
+    seed[i] = c.seed;
+    turbidity[i] = c.turb;
+    flags[i] = c.flags;
     bodyIds.add(body.id);
   };
 
+  const P = HYDRO_BUILD_PROF;
+  const T0 = performance.now();
+  let tMark = T0;
+  const lap = (k: 'ocean' | 'analyse' | 'sources' | 'rest'): void => { const now = performance.now(); P[k] += now - tMark; tMark = now; };
   const ocean = registry.get('hydro:ocean');
   // Which texels the CURRENT coverage actually answered — ocean or dry. The
   // rest are unknown and keep the previous field's verdict below.
@@ -773,6 +910,10 @@ export function buildHydroTile(
       rank[i] = priority(ID_TO_KIND.get(prevKind) ?? 'ocean');
       // A retained flowing texel keeps its river space too, or its phase
       // would snap to zero while its motion machinery kept running.
+      if (previous.waterfalls && (flags[i] & HydroFlags.Flowing)) {
+        waterfalls ??= new Float32Array(count * 4);
+        waterfalls.set(previous.waterfalls.subarray(i * 4, i * 4 + 4), i * 4);
+      }
       if (previous.structure && (flags[i] & HydroFlags.Flowing)) {
         const st = structureAt();
         st[i * 4] = previous.structure[i * 4];
@@ -783,8 +924,10 @@ export function buildHydroTile(
     }
   }
 
+  lap('ocean');
   const resolved: Array<ResolvedHydroFeature & {
     energy?: Float32Array;
+    drops: RiverDrop[];
     spine?: ProfileSpine;
     s0?: number;
     index?: ProfileIndex;
@@ -810,18 +953,44 @@ export function buildHydroTile(
     const lineWidth = feature.geometry.type === 'line' ? feature.geometry.widthM : 0;
     resolved.push({
       feature, body, profile, spine, s0,
+      drops: profile && spine ? riverDrops(profile, spine.along) : [],
       index: profile && feature.geometry.type === 'line'
-        ? indexProfile(profile, lineWidth) : undefined,
+        ? indexProfile(profile, Math.max(lineWidth, antialias * 1.6)) : undefined,   // the DRAWN width's reach
       energy: flowing && profile ? profileEnergy(profile) : undefined,
     });
   }
+  lap('analyse');
   for (const item of resolved) {
+    P.items++;
     const fb = featureBounds(item.feature);
     const ix0 = clamp(Math.floor((fb.minX - input.bounds.minX) / pixelX) + gutter - 1, 0, width - 1);
     const ix1 = clamp(Math.ceil((fb.maxX - input.bounds.minX) / pixelX) + gutter + 1, 0, width - 1);
     const iz0 = clamp(Math.floor((fb.minZ - input.bounds.minZ) / pixelZ) + gutter - 1, 0, height - 1);
     const iz1 = clamp(Math.ceil((fb.maxZ - input.bounds.minZ) / pixelZ) + gutter + 1, 0, height - 1);
     const lineWidth = item.feature.geometry.type === 'line' ? item.feature.geometry.widthM : 0;
+    const tRaster = performance.now();
+    const areaCov = item.feature.geometry.type === 'area'
+      ? areaCoverageRaster(item.feature.geometry, ix0, ix1, iz0, iz1, xAt, zAt, pixelX, pixelZ) : null;
+    const covW = ix1 - ix0 + 1;
+    const tTexels = performance.now();
+    P.raster += tTexels - tRaster;
+    if (areaCov) P.areaItems++;
+    if (areaCov && FLOWING.has(item.feature.kind)) P.flowingAreas++;
+    // THE SEARCH'S CANDIDATES ARE CHOSEN ONCE. The nearest-profile search
+    // below ran every profile in the tile for every wet texel of a flowing
+    // area: a 300 m river relation over a ~9 m field is thousands of wet
+    // texels, and a coastal tile holds a dozen streams — 292 ms a build on
+    // the phone (De Hoop, measured by the telemetry), where the search is
+    // the only thing a relation added to a build. Only a profile whose
+    // reach touches the area is a candidate, and each is skipped at a
+    // texel its bounds cannot reach.
+    const SEARCH_REACH = 420;
+    const cands = FLOWING.has(item.feature.kind) && !item.spine && item.feature.geometry.type === 'area'
+      ? resolved.filter((c) => c.profile && c.spine && c.index && boundsIntersect(featureBounds(c.feature), fb, SEARCH_REACH))
+        .map((c) => ({ c, b: featureBounds(c.feature) }))
+      : [];
+    const covH = iz1 - iz0 + 1, bw = (covW + 1) >> 1;
+    const blockHits: Array<BlockHit | null | undefined> = cands.length ? new Array<BlockHit | null | undefined>(bw * ((covH + 1) >> 1)) : [];
     for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) {
       const x = xAt(ix), z = zAt(iz);
       if (item.index && item.profile && item.spine) {
@@ -830,7 +999,7 @@ export function buildHydroTile(
         // the index rejects it for the cost of nine Map lookups.
         const hit = sampleProfileAt(item.profile, item.energy, item.spine, item.index, x, z);
         if (!hit) continue;                    // no segment within reach: dry
-        const signed = lineWidth * 0.5 - hit.distanceM;
+        const signed = drawnHalfW(lineWidth) - hit.distanceM;
         const amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
         if (amount <= 0.005) continue;
         // ── A RIVER SITS IN ITS VALLEY, NOT OVER IT ──
@@ -842,6 +1011,15 @@ export function buildHydroTile(
         // cross-section humps upward at the edges; sampled at the thalweg,
         // the surface stays flat across the section and follows the valley
         // longitudinally. Where the fit says higher, the bed wins.
+        // The ceiling on the fitted level. The carved invert is the true bed
+        // where there is one — and it is a grid lookup, not a heightfield
+        // walk, so it can be afforded per texel where sampleHeight could not
+        // (that cost +5ms a build, measured, and seated every pixel on its
+        // own dip).
+        // THE RASTER HERE, THE INVERT AT THE STATIONS. Asked per wet texel the
+        // channel lookup is a grid walk each time and cost 7ms a build,
+        // measured; the profile above already carries the invert, so this
+        // ceiling has nothing left to correct where there is a carve.
         const bedFoot = sampleElevation(input.elevation, input.bounds, hit.px, hit.pz);
         const levelM = Number.isFinite(bedFoot)
           ? Math.min(hit.levelM, bedFoot + FLOWING_NOMINAL_DEPTH_M) : hit.levelM;
@@ -851,22 +1029,33 @@ export function buildHydroTile(
           clamp((hit.side * hit.distanceM) / halfW, -1.25, 1.25),
           hit.curvature,
           halfW,
-        ]);
+        ], undefined, item.drops.length ? sampleRiverDrop(item.drops, hit.s, levelM) : undefined);
         continue;
       }
-      const bed = sampleElevation(input.elevation, input.bounds, x, z);
-      let signed = -Infinity;
+      let amount: number;
       if (item.feature.geometry.type === 'area') {
-        signed = signedDistanceToArea(x, z, item.feature.geometry);
+        amount = (areaCov as Float32Array)[(iz - iz0) * covW + (ix - ix0)];
       } else {
-        signed = lineWidth * 0.5
+        const signed = drawnHalfW(lineWidth)
           - nearestSegment(x, z, item.feature.geometry.points).distanceM;
+        amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
       }
-      const amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
+      // Dry texels pay nothing: the nearest-profile search below was run for
+      // every texel of a lake's bounding box, water or not.
+      if (amount <= 0.005) continue;
+      const bed = sampleElevation(input.elevation, input.bounds, x, z);
       let localFlow: readonly [number, number] = profileFlow(item.profile, item.body, x, z);
       let localEnergy = item.profile && item.energy
         ? energyAt(item.profile, item.energy, x, z) : undefined;
       let river: readonly [number, number, number, number] | undefined;
+      let fall: [number, number, number, number] | undefined;
+      // A flowing AREA with no profile of its own — an OSM riverbank, or a
+      // cover-raster reach — used to take bed + nominal depth per texel, a
+      // surface that copies every DEM wrinkle. Where a centreline profile is
+      // within reach it takes THAT level instead, graded and monotone, the
+      // same surface the centreline body draws, capped at the thalweg bed
+      // plus nominal depth exactly as the line branch above does.
+      let levelM: number | undefined;
 
       // Riverbank/natural-water polygons describe the visible width, while a
       // neighbouring waterway line describes its motion. Project polygon
@@ -874,42 +1063,66 @@ export function buildHydroTile(
       // river as a directionless, synchronously heaving lake.
       if (FLOWING.has(item.feature.kind) && !item.spine
         && item.feature.geometry.type === 'area') {
-        let best: ProfileHit | null = null;
-        let bestItem: typeof resolved[number] | undefined;
-        for (const candidate of resolved) {
-          if (!candidate.profile || !candidate.spine || !candidate.index) continue;
-          const hit = sampleProfileAt(
-            candidate.profile, candidate.energy, candidate.spine,
-            candidate.index, x, z, 3,
-          );
-          if (hit && hit.distanceM < (best?.distanceM ?? 420)) {
-            best = hit;
-            bestItem = candidate;
+        const tSearch = performance.now();
+        P.searchTexels++;
+        const bk = ((iz - iz0) >> 1) * bw + ((ix - ix0) >> 1);
+        let hb = blockHits[bk];
+        if (hb === undefined) {
+          let best: ProfileHit | null = null;
+          let bestItem: typeof resolved[number] | undefined;
+          for (const { c: candidate, b } of cands) {
+            if (x < b.minX - SEARCH_REACH || x > b.maxX + SEARCH_REACH || z < b.minZ - SEARCH_REACH || z > b.maxZ + SEARCH_REACH) continue;
+            const hit = sampleProfileAt(
+              candidate.profile as Float32Array, candidate.energy, candidate.spine as ProfileSpine,
+              candidate.index as ProfileIndex, x, z, 3,
+            );
+            if (hit && hit.distanceM < (best?.distanceM ?? SEARCH_REACH)) {
+              best = hit;
+              bestItem = candidate;
+            }
           }
+          if (best && bestItem) {
+            const bedFoot = sampleElevation(input.elevation, input.bounds, best.px, best.pz);
+            hb = {
+              px: best.px, pz: best.pz, fx: best.fx, fz: best.fz,
+              grade: best.grade, drops: bestItem.drops, s0: bestItem.s0 ?? 0,
+              energy: best.energy, s: (bestItem.s0 ?? 0) + best.s, curvature: best.curvature,
+              centreHalfW: bestItem.feature.geometry.type === 'line' ? bestItem.feature.geometry.widthM * 0.5 : 4,
+              levelM: Number.isFinite(bedFoot) ? Math.min(best.levelM, bedFoot + FLOWING_NOMINAL_DEPTH_M) : best.levelM,
+            };
+          } else hb = null;
+          blockHits[bk] = hb;
         }
-        if (best && bestItem) {
-          localFlow = [best.fx, best.fz];
-          localEnergy = best.energy;
-          const centreHalfW = bestItem.feature.geometry.type === 'line'
-            ? bestItem.feature.geometry.widthM * 0.5 : 4;
-          // Preserve metres across the whole polygon even where it is wider
-          // than the nominal centreline way.
-          const chartHalfW = Math.max(centreHalfW, best.distanceM / 1.2, 1);
+        if (hb) {
+          const cross = hb.fx * (z - hb.pz) - hb.fz * (x - hb.px);
+          const dist = Math.abs(cross);
+          const chartHalfW = Math.max(hb.centreHalfW, dist / 1.2, 1);
+          localFlow = [hb.fx, hb.fz];
+          localEnergy = hb.energy;
           river = [
-            (bestItem.s0 ?? 0) + best.s,
-            clamp((best.side * best.distanceM) / chartHalfW, -1.25, 1.25),
-            best.curvature,
+            hb.s + (x - hb.px) * hb.fx + (z - hb.pz) * hb.fz,
+            clamp(((cross >= 0 ? 1 : -1) * dist) / chartHalfW, -1.25, 1.25),
+            hb.curvature,
             chartHalfW,
           ];
+          // Reuse the segment search, not the block's constant height. A
+          // 2x2 flat step intersects the line mesh on a steep waterfall.
+          const ds = (x - hb.px) * hb.fx + (z - hb.pz) * hb.fz;
+          levelM = hb.levelM + ds * hb.grade;
+          fall = hb.drops.length ? sampleRiverDrop(hb.drops, river[0] - hb.s0, levelM) : undefined;
         }
+        P.search += performance.now() - tSearch;
       }
       paint(
         ix, iz, amount, item.body,
-        bodyLevel(item.body, item.profile, x, z, bed),
-        localFlow, localEnergy, river,
+        levelM ?? bodyLevel(item.body, item.profile, x, z, bed),
+        localFlow, localEnergy, river, bed, fall,
       );
+      P.paints++;
     }
+    P.texels += performance.now() - tTexels;
   }
+  tMark = performance.now();
 
   // Extend body parameters outside the visible mask. The water mesh is much
   // coarser than this field, so its dry vertices still need the elevation of
@@ -917,9 +1130,11 @@ export function buildHydroTile(
   const sources = new Uint8Array(count);
   for (let i = 0; i < count; i++) sources[i] = coverage[i] > 0.005 && kind[i] !== 0 ? 1 : 0;
   const nearest = nearestSourceMap(sources, width, height);
+  lap('sources');
   for (let i = 0; i < count; i++) {
     if (sources[i] || nearest[i] < 0) continue;
     const n = nearest[i];
+    if (waterfalls) waterfalls.set(waterfalls.subarray(n * 4, n * 4 + 4), i * 4);
     level[i] = level[n]; depth[i] = depth[n];
     flowX[i] = flowX[n]; flowZ[i] = flowZ[n];
     fetch[i] = fetch[n]; scale[i] = scale[n];
@@ -934,6 +1149,32 @@ export function buildHydroTile(
     }
   }
 
+  // ── A RIVER FROM THE COVER RASTER IS ONE RIVER ──
+  //
+  // WorldCover's class 80 arrives as 22 m pixels traced into polygons, and at
+  // the field's 18.75 m texel that outline is a staircase with pinholes: the
+  // Senqu at a hundred metres wide came out as disjoint blobs — coverage 0.6
+  // in its own interior, every wet texel one cell from a dry one — drawn from
+  // above as separate pale patches with the terrain's own water paint
+  // showing between them, and every one of them ankle-deep because the
+  // shore was always a texel away. One 3×3 majority pass over flowing
+  // texels closes the pinholes and rounds the staircase: a texel whose
+  // neighbourhood is mostly wet is wet. Standing water keeps its outline;
+  // a pond's edge is its edge.
+  {
+    const src = coverage.slice();
+    for (let iz = 1; iz < height - 1; iz++) for (let ix = 1; ix < width - 1; ix++) {
+      const i = iz * width + ix;
+      if (kind[i] < HYDRO_KIND_ID.river || kind[i] > HYDRO_KIND_ID.canal) continue;
+      let sum = 0;
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+        const j = i + dz * width + dx;
+        sum += kind[j] === kind[i] || src[j] < 0.005 ? src[j] : 0;
+      }
+      const mean = sum / 9;
+      if (mean >= 0.5 && src[i] < mean) coverage[i] = Math.min(1, Math.max(coverage[i], mean * 1.15));
+    }
+  }
   const wet = new Uint8Array(count);
   const waterLevels: number[] = [];
   let hasWater = false;
@@ -979,7 +1220,18 @@ export function buildHydroTile(
     geometry[i * 4] = coverage[i];
     geometry[i * 4 + 1] = clamp(signedCells * pixelM, -options.shoreDistanceLimitM, options.shoreDistanceLimitM);
     geometry[i * 4 + 2] = level[i] - elevationBaseM;
-    geometry[i * 4 + 3] = depth[i];
+    // ── A WIDE RIVER IS DEEP IN THE MIDDLE ──
+    //
+    // Flowing depth is level minus ground, and the DEM does not resolve a
+    // channel: the Senqu at a hundred metres wide came out 8 to 40 cm deep
+    // from bank to bank, which the shader honestly drew as a hundred metres
+    // of shallow rapid — a white sheet from above, a mudflat from the seat.
+    // Nothing in the data says how deep a river is, but its width does: a
+    // channel deepens with distance from its own shore, about 8 cm a metre,
+    // to four metres. Standing water keeps the basin the DEM gives it.
+    const shoreM = geometry[i * 4 + 1];
+    const flowingKind = kind[i] >= HYDRO_KIND_ID.river && kind[i] <= HYDRO_KIND_ID.canal;
+    geometry[i * 4 + 3] = flowingKind && shoreM > 0 ? Math.max(depth[i], Math.min(4, shoreM * 0.08)) : depth[i];
     dynamics[i * 4] = flowX[i];
     dynamics[i * 4 + 1] = flowZ[i];
     dynamics[i * 4 + 2] = fetch[i];
@@ -990,6 +1242,8 @@ export function buildHydroTile(
     material[i * 4 + 3] = flags[i];
   }
 
+  lap('rest');
+  { const d = performance.now() - T0; P.builds++; P.total += d; if (d > P.max) P.max = d; }
   return {
     key: input.key,
     revision: input.revision,
@@ -1003,6 +1257,7 @@ export function buildHydroTile(
     dynamics,
     material,
     structure: structure ?? undefined,
+    waterfalls,
     hasWater,
     waterBounds,
     bodyIds: [...bodyIds],

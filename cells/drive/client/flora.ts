@@ -65,6 +65,18 @@ export function bushGeo(): THREE.BufferGeometry {
   g.translate(0, 0.6, 0);
   return g;
 }
+/** THE SWARD'S SHRUB: knee-high, two blobs leaning on each other, the thing
+ *  that stands between the flowers and the trees. Sized to one metre so the
+ *  sward can scale it from ankle scrub to a small bush. */
+export function shrubGeo(): THREE.BufferGeometry {
+  const a = new THREE.IcosahedronGeometry(0.5, 0);
+  a.scale(1.15, 0.8, 1.0);
+  a.translate(-0.12, 0.42, 0.05);
+  const b = new THREE.IcosahedronGeometry(0.36, 0);
+  b.scale(1.0, 0.85, 1.1);
+  b.translate(0.3, 0.34, -0.14);
+  return mergeGeos([a, b]);
+}
 export function rockGeo(): THREE.BufferGeometry {
   const g = new THREE.IcosahedronGeometry(1, 0);
   g.scale(1.2, 0.6, 0.95);
@@ -120,11 +132,32 @@ export function cactusGeo(): THREE.BufferGeometry {
  *  between the sward and the bushes that was simply missing. */
 export function fernGeo(): THREE.BufferGeometry {
   const v: number[] = [];
+  // ── IT ARCHES UP, NOT OUT ──
+  //
+  // MEASURED: the first fern stood 0.36 units and 1.56 across, which under
+  // VEG_SIZE `[0.55, 0.6]` is a plant 20 to 41 CENTIMETRES tall and up to a
+  // metre and a half wide — a rosette lying flat on the ground. It is the
+  // understory the guild leans on hardest (43% of a mangrove, 22% of the
+  // Amazon), and from the seat at thirty metres a rainforest floor was bare
+  // between the trunks with the census insisting on seventy ferns. A frond
+  // reaching 0.7 and rising 0.42 is a 31-degree arch; a real understory fern
+  // is taller than it is wide. Rise and reach are swapped, so the same five
+  // triangles now stand 0.6 to 1.3 m — knee to waist, which is what the layer
+  // between the sward and the canopy has to be to exist at all.
   for (let b = 0; b < 5; b++) {
     const a = (b / 5) * Math.PI * 2 + 0.4;
     const dx = Math.cos(a), dz = Math.sin(a);
-    const w = 0.13, len = 0.62 + (b % 2) * 0.22, rise = 0.42;
+    const w = 0.13, len = 0.40 + (b % 2) * 0.16, rise = 1.02 + (b % 3) * 0.12;
     v.push(dz * w, 0.06, -dx * w, -dz * w, 0.06, dx * w, dx * len, rise, dz * len);
+  }
+  // A LOWER WHORL, three fronds, shorter and flatter — the plant needs some
+  // depth or it reads as a star seen from above, and three triangles is the
+  // cheapest volume there is.
+  for (let b = 0; b < 3; b++) {
+    const a = (b / 3) * Math.PI * 2 - 0.7;
+    const dx = Math.cos(a), dz = Math.sin(a);
+    const w = 0.11, len = 0.52, rise = 0.44;
+    v.push(dz * w, 0.03, -dx * w, -dz * w, 0.03, dx * w, dx * len, rise, dz * len);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
@@ -248,6 +281,41 @@ export function grassGeo(): THREE.BufferGeometry {
  * because converting to non-indexed to win crisper facets would multiply the
  * vertex count of the single most instanced geometry in the world.
  */
+/**
+ * ── HOW MUCH OF THE WIND THIS VERTEX FEELS ──
+ *
+ * The sward leans linearly with height because a blade of grass is a blade of
+ * grass all the way up. Woody things are not: a trunk is stiff at the ground
+ * and limber at the tip, so the deflection goes as the SQUARE of the rise —
+ * the same shape the growth bend already uses, and near enough to a loaded
+ * cantilever for an eye.
+ *
+ * Baked per vertex rather than computed in the shader, because the archetypes
+ * are not normalised to a common height: a conifer cone stands 2.6 units tall
+ * and a bush 1.2, so `y*y` in the shader would have swayed the conifer six
+ * times as hard as the bush for no reason but how each geometry happened to be
+ * built. Normalising here makes one shader line correct for every kind, and
+ * makes STIFFNESS a property of the plant — a saguaro barely moves in a gale
+ * and a palm frond is mostly wind — rather than another uniform.
+ *
+ * A material that declares the attribute and meets a geometry without it reads
+ * zero and simply stands still, which is the right way for this to fail.
+ */
+export function swayWeight(geo: THREE.BufferGeometry, stiff = 1): THREE.BufferGeometry {
+  const p = geo.getAttribute('position') as THREE.BufferAttribute;
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox;
+  if (!bb) return geo;
+  const y0 = bb.min.y, span = Math.max(1e-3, bb.max.y - y0);
+  const w = new Float32Array(p.count);
+  for (let i = 0; i < p.count; i++) {
+    const r = Math.max(0, (p.getY(i) - y0) / span);
+    w[i] = r * r * stiff;
+  }
+  geo.setAttribute('aSway', new THREE.BufferAttribute(w, 1));
+  return geo;
+}
+
 export function faceTone(geo: THREE.BufferGeometry, spread = 0.2, foot = 0.22): THREE.BufferGeometry {
   const pos = geo.getAttribute('position') as THREE.BufferAttribute;
   const n = pos.count;

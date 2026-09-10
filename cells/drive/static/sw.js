@@ -100,6 +100,22 @@ async function shellResponse(request, url) {
   // A navigation is answered by the one shell entry whatever its path or query
   // — the spawn coordinates, `?fixture=`, a lab route. The client reads
   // `location` for itself; the HTML is the same bytes either way.
+  // A NAVIGATION THAT ASKED FOR THE DEV CONSOLE GOES TO THE NETWORK. The cell
+  // serves that one load under a policy that lets the console's prompt run
+  // (CSP_EVAL in index.ts), and a cached response keeps the headers it was
+  // stored with — the locked ones. It is not stored either, or the eval
+  // shell would become everyone's shell. Offline, the cached shell is still
+  // the right answer: a console that cannot run code beats no page.
+  if (request.mode === 'navigate') {
+    const v = url.searchParams.get('eruda');
+    if (v !== null && v !== '0' && v !== 'off') {
+      try { return await fetch(request); } catch (err) {
+        const shell = await cache.match('/');
+        if (shell) return shell;
+        throw err;
+      }
+    }
+  }
   const key = request.mode === 'navigate' ? '/' : url.pathname;
   const hit = await cache.match(key);
   if (hit) return hit;

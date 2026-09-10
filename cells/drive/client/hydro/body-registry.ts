@@ -279,12 +279,23 @@ export class HydroBodyRegistry {
   }
 
   private resolve(id: string, state: BodyState): HydroBody {
-    const observations = [...state.observations.values()];
+    // IN A FIXED ORDER, NOT INSERTION ORDER. The profile a river takes is the
+    // longest observation's, and ties went to whichever tile was fed first —
+    // but updateTile deletes and re-adds a tile's observation, so re-feeding
+    // that tile (every terrain rebuild does) moved it to the END, another
+    // tile's profile took over, the stations differed (each tile samples
+    // its own ground and extrapolates the rest), and the body "changed":
+    // every tile along the river rebuilt. On the Breede that was 277 hydro
+    // builds for 77 terrain builds, measured by the telemetry. Ties break on
+    // the tile key now, so the same tile answers until a longer profile
+    // truly arrives.
+    const observations = [...state.observations.entries()]
+      .sort(([ka, oa], [kb, ob]) => (ob.profile?.length ?? 0) - (oa.profile?.length ?? 0) || (ka < kb ? -1 : ka > kb ? 1 : 0))
+      .map(([, o]) => o);
     const first = observations[0];
     const tagged = observations.map((o) => o.taggedLevelM).filter((v): v is number => Number.isFinite(v));
     const candidates = observations.map((o) => o.candidateLevelM).filter((v): v is number => Number.isFinite(v));
     const profiles = observations.map((o) => o.profile).filter((v): v is Float32Array => !!v?.length);
-    profiles.sort((a, b) => b.length - a.length);
 
     const kind = first.kind;
     const elevationM = median(tagged) ?? median(candidates) ?? this.oceanLevelM;

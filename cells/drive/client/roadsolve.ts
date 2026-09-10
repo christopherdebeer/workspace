@@ -302,10 +302,26 @@ export class RoadSolver {
     let best: number | null = null;
     for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
       const arr = this.hints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
-      if (arr) for (const [hx, hz, hy, hl] of arr) {
+      if (arr) for (const [hx, hz, hy, hl, ci, ii] of arr) {
         if (hl >= layer) continue;
-        if (Math.hypot(hx - x, hz - z) > r) continue;
-        if (best === null || hy > best) best = hy;
+        // THE SEGMENT, NOT THE STATION — the lesson hintAt learned. Stations
+        // stand twelve metres apart on a straight, and a footbridge two
+        // metres wide crossing a motorway asked whether a station lay within
+        // 2.25 m of it: almost never, so the A6 footbridges at Rubigen got
+        // no lift and were drawn as a slab across the carriageway. The deck
+        // beneath a point is the chain's LINE there, interpolated.
+        let d = Math.hypot(hx - x, hz - z), y = hy;
+        const ch = this.chains.get(ci);
+        if (ch && ii + 1 < ch.xs.length && ch.ls[ii + 1] < layer) {
+          const sx = ch.xs[ii + 1] - hx, sz = ch.zs[ii + 1] - hz, l2 = sx * sx + sz * sz;
+          if (l2 > 1e-6) {
+            const t = Math.max(0, Math.min(1, ((x - hx) * sx + (z - hz) * sz) / l2));
+            const pd = Math.hypot(hx + sx * t - x, hz + sz * t - z);
+            if (pd < d) { d = pd; y = hy + (ch.ys[ii + 1] - hy) * t; }
+          }
+        }
+        if (d > r) continue;
+        if (best === null || y > best) best = y;
       }
     }
     return best;

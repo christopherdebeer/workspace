@@ -430,7 +430,16 @@ export class PlatformStack extends cdk.Stack {
       // bundler can inline a server renderer (renderToString) into a cell's
       // index.js for isomorphic SSR — see transpile.ts SERVER_BUNDLED.
       bundlingNodeModules: ['esbuild-wasm', 'react', 'react-dom'],
-      memorySize: 512,
+      // 1024, from 512 (2026-09-10): a deploy of the drive cell — a 2.5 MB
+      // main.ts through esbuild-wasm plus 6 MB of static/ read whole — ran at
+      // exactly 512 MB every time and died there one deploy in a few
+      // (Runtime.OutOfMemory at 70 s, then the bus retry's timeout at 120 s),
+      // and neither failure path writes deploy.phase, so the cell sat in
+      // DEPLOYING serving the previous build. Memory scales the CPU share too,
+      // so the same deploy runs faster as well as safer; the request-path
+      // commands this function also serves are 50 ms–2 s each and are not
+      // where the cost is.
+      memorySize: 1024,
       // The bundle (esm.sh dep fetches + esbuild) runs off the request path as an
       // event-driven invocation now (cell.deploy.requested → onDeployRequested),
       // so nothing in front caps it — give a cold cache headroom.

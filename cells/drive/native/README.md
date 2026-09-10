@@ -11,16 +11,12 @@ origin and proxies only the live cell/auth APIs. Capacitor uses its native HTTP
 bridge for those APIs. Native sign-in uses OAuth device authorization, so no
 custom callback scheme or embedded authentication page is required.
 
-Platform icon files under `electron/icons/` and the iOS asset catalogue are
-derived from the editable placeholder masters under `artwork/`.
-
 ## Setup
 
 ```sh
 cd cells/drive/native
 npm ci
 npm run typecheck
-npm test
 npm run web
 npm run verify
 ```
@@ -61,23 +57,9 @@ Steam launch option per depot in Steamworks:
 
 Use a dedicated Steam build account. Leave `STEAM_PASSWORD` unset for an
 interactive Steam Guard login, or provide it only through a CI secret store.
-
-A guarded account cannot log in from a fresh CI runner on a password alone —
-SteamCMD authorises a machine once and remembers it, and a runner is a new
-machine every time. Authorise the build account by hand once, then carry its
-login state across runs in `STEAM_CONFIG_VDF`:
-
-```sh
-steamcmd +login <build-account> +quit    # answer the Steam Guard prompt
-base64 -w0 ~/Steam/config/config.vdf     # store this as the secret
-```
-
 Code-sign Windows and macOS release builds by supplying electron-builder's
 standard `CSC_*` environment variables. Steam does not replace macOS signing
-and notarization. Signing variables are read only when they are non-empty: an
-unset repository secret reaches the runner as an empty string, and
-`scripts/signing-env.mjs` deletes those before electron-builder can mistake one
-for a certificate path.
+and notarization.
 
 ## iOS
 
@@ -100,28 +82,15 @@ APPLE_TEAM_ID=... DRIVE_IOS_BUNDLE_ID=land.parc.drive \
 
 The archive and exported IPA land under `dist/ios`. Automatic signing requires
 an installed distribution certificate and an authenticated Xcode account.
-Placeholder artwork, editable SVG masters, and production image-generation
-prompts live under `artwork/`. Before release, replace the placeholders with
-selected production artwork and review the location/motion usage copy in
-`ios/App/App/Info.plist`.
+Before release, replace Capacitor's generated icons/splash assets and review
+the location/motion usage copy in `ios/App/App/Info.plist`.
 
 ## CI
 
-`.github/workflows/drive-native.yml` runs in two modes.
-
-A pull request that touches `cells/drive/native/**` runs the checks — typecheck,
-tests, web build, `verify` — on Windows, macOS and Linux, and stops there.
-Three runners for a check that mostly does the same thing three times looks
-extravagant until you notice that the first release run failed on Windows
-alone, on a Node rule (`import()` takes a URL, and `D:\...` is not one) that
-no amount of testing on the other two can reach.
-
-A manual dispatch runs those same checks and then packages all three Steam
-platforms on native runners and verifies the iOS simulator target. Its
-`upload_steam` option consolidates the artifacts and uploads all configured
-depots; leaving `steam_branch` blank creates an unpublished Steam build.
-Configure `STEAM_APP_ID`, the three `STEAM_DEPOT_*` IDs, `STEAM_USER`,
-`STEAM_PASSWORD` and `STEAM_CONFIG_VDF` as repository secrets.
-Signed/notarized releases need the corresponding Apple and Windows signing
-secrets added to the workflow; leaving them unconfigured produces an unsigned
-build rather than a failed one.
+`.github/workflows/drive-native.yml` builds all three Steam platforms on native
+runners and verifies the iOS simulator target. Its `upload_steam` dispatch
+option consolidates those artifacts and uploads all configured depots; leaving
+`steam_branch` blank creates an unpublished Steam build. Configure the
+`STEAM_APP_ID`, three `STEAM_DEPOT_*` IDs, `STEAM_USER`, and `STEAM_PASSWORD`
+as repository secrets. Signed/notarized releases need the corresponding Apple
+and Windows signing secrets added to the workflow.

@@ -28,6 +28,50 @@ export const BIOME_ORDER = ['arid', 'tropical', 'temperate', 'boreal', 'alpine']
 export type BiomeName = typeof BIOME_ORDER[number];
 export const ALPINE = 4;
 
+/**
+ * ── THE GROUND'S OWN COLOUR, PER BIOME ──
+ *
+ * `[max elevation, colour]`, sharing breakpoints across all five so a place is
+ * one band lookup and a weighted sum rather than five scans. Solarpunk desert:
+ * cyan shallows → warm sand → ochre scrub → dry upland → bare rock → snow. The
+ * emerald in this world comes from the VEGETATION standing on the sand, not
+ * from painting the ground green.
+ *
+ * HERE RATHER THAN IN main.ts, so a lab can stand its plants on the ground
+ * they would actually stand on. The full `terrainPalette` — cover tint, slope
+ * shade, the shallows rule and its two hard-won corroboration tests — stays in
+ * main.ts where the world state it reads lives; what moves is the DATA, which
+ * is what a bare stand needs and all it needs. The Sonoran in the flora lab
+ * stood on grass until this did.
+ */
+export const GROUND_RAMPS: Record<BiomeName, Array<[number, [number, number, number]]>> = {
+  arid: [[0.5, [0.07, 0.30, 0.35]], [60, [0.44, 0.37, 0.22]], [300, [0.41, 0.33, 0.19]], [900, [0.37, 0.27, 0.15]], [1800, [0.33, 0.28, 0.23]], [1e9, [0.62, 0.63, 0.65]]],
+  tropical: [[0.5, [0.06, 0.26, 0.30]], [60, [0.14, 0.27, 0.14]], [300, [0.13, 0.24, 0.13]], [900, [0.16, 0.24, 0.14]], [1800, [0.24, 0.26, 0.20]], [1e9, [0.60, 0.62, 0.64]]],
+  temperate: [[0.5, [0.07, 0.28, 0.33]], [60, [0.25, 0.29, 0.17]], [300, [0.24, 0.27, 0.16]], [900, [0.28, 0.26, 0.17]], [1800, [0.31, 0.29, 0.25]], [1e9, [0.66, 0.67, 0.69]]],
+  boreal: [[0.5, [0.06, 0.24, 0.31]], [60, [0.18, 0.25, 0.19]], [300, [0.17, 0.23, 0.18]], [900, [0.21, 0.23, 0.19]], [1800, [0.30, 0.31, 0.30]], [1e9, [0.74, 0.76, 0.78]]],
+  alpine: [[0.5, [0.08, 0.28, 0.36]], [60, [0.28, 0.30, 0.24]], [300, [0.30, 0.30, 0.26]], [900, [0.34, 0.33, 0.30]], [1800, [0.44, 0.45, 0.46]], [1e9, [0.86, 0.88, 0.90]]],
+};
+/** The ground colour a stand of this climate stands on: the five ramps mixed
+ *  by the weights, at this elevation. The same band-then-blend rule
+ *  `terrainPalette` uses, over the same numbers. */
+export function groundColourAt(w: ArrayLike<number>, elev: number): [number, number, number] {
+  const ramps = BIOME_ORDER.map((b) => GROUND_RAMPS[b]);
+  const steps = ramps[0];
+  let band = steps.length - 1;
+  // From 1: the shallows band is about water, not altitude, and a stand is on
+  // land by construction. (main.ts's version has to corroborate that against
+  // the cover raster; here there is nothing to corroborate against.)
+  for (let i = 1; i < steps.length; i++) { if (elev <= steps[i][0]) { band = i; break; } }
+  let r = 0, g = 0, b = 0, tot = 0;
+  for (let k = 0; k < ramps.length; k++) {
+    const wk = w[k] ?? 0;
+    if (wk <= 0) continue;
+    const c = ramps[k][band][1];
+    r += c[0] * wk; g += c[1] * wk; b += c[2] * wk; tot += wk;
+  }
+  return tot > 0 ? [r / tot, g / tot, b / tot] : ramps[2][band][1];
+}
+
 /** Metres between sampled corners. See the note at the head of this file: at
  *  256 this hung the boot. Climate does not vary meaningfully inside 2km, and
  *  bilinear interpolation across that lattice is smoother than the field. */
@@ -70,10 +114,6 @@ export const CLIM_HOMES: Array<Array<[number, number, number]>> = [
   // should never be. Weak here, decisive where the trees stop.
   [[0.20, 0.40, 0.75]], // alpine    — cold, and mostly a matter of height
 ];
-/** The primary home of each archetype, kept for anything that wants one
- *  representative point rather than the set. */
-export const CLIM_HOME: Array<[number, number]> =
-  CLIM_HOMES.map((h) => [h[0][0], h[0][1]] as [number, number]);
 /** How much water each land-cover class implies. `built` and `snow` are absent
  *  DELIBERATELY and abstain from the average: a car park says nothing about
  *  rainfall, and frozen is not dry. */
@@ -460,4 +500,338 @@ export function aspectLift(env: ClimateEnv, x: number, z: number, lat: number, s
   // Saturate the steepness term: past about a 1:2 slope, more grade does not
   // make the face any more shaded.
   return northness * ASPECT_LIFT * Math.min(1, grade / 0.5);
+}
+
+/**
+ * ══════════════════════════════════════════════════════════════════
+ * THE SITE: A CONTINUOUS ENVIRONMENT, AND A LOCAL ONE UNDER IT
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * Everything above this line answers one question — which of five biomes is
+ * this — and answers it from latitude, height, and a moisture read off the
+ * land cover. That last part is partly circular: the vegetation is being used
+ * to predict the vegetation, and where cover is coarse or absent the model has
+ * nothing left to say. And five classes is a compression that puts fynbos,
+ * chaparral, savanna, steppe and monsoon forest in the same box.
+ *
+ * This is the layer under that. It does not classify. It reports the physical
+ * facts a plant actually responds to — how hot, how wet, how seasonal, how
+ * hard the winter, how far above the trees, how much sun THIS slope gets and
+ * how much water THIS hollow keeps — and leaves the choosing to whatever sits
+ * on top. Nothing here reads the land cover, so nothing here is circular.
+ *
+ * ── WHY THERE IS A LOCAL HALF AT ALL ──
+ *
+ * `CLIM_G` is 2048 and the note on it is right: climate does not vary
+ * meaningfully inside two kilometres. But half the places worth getting right
+ * vary inside two hundred metres, and not because of climate — because of
+ * ASPECT and DRAINAGE. A Cape ravine holds forest while the slope above it
+ * holds fynbos; a coastal California gully holds redwood while the ridge beside
+ * it holds chaparral. Both pairs sit in one climate cell and differ by which
+ * way the ground faces and where the water goes. No refinement of the climate
+ * term reaches them, at any resolution, because the climate is the same. So
+ * `insolation` and `wetness` are sampled from the terrain itself, at terrain
+ * resolution, and layered on top of a climate that stays coarse and cheap.
+ *
+ * ── WHAT THESE NUMBERS ARE, AND ARE NOT ──
+ *
+ * The precipitation and seasonality curves are SHAPES FITTED TO THE GENERAL
+ * CIRCULATION — the wet equator under the ITCZ, the dry belts under the
+ * subtropical highs, the wet mid-latitudes under the storm track — modulated
+ * by distance from the sea and by what the wind had to climb to get here.
+ * They are not a climatology and they are not measured. A real bioclim raster
+ * (WorldClim, CHELSA) would beat them everywhere and should replace them; the
+ * point of putting them behind one sampler is that doing so is a swap rather
+ * than a rewrite. Until then these are checked against real places rather than
+ * against themselves — see devtools/climate-fixtures.test.mjs.
+ */
+
+export interface SiteEnv extends ClimateEnv {
+  /** SIGNED latitude. The hemisphere decides which way a slope faces the sun,
+   *  and the existing model only ever needed the absolute value. */
+  latAt(x: number, z: number): number;
+  /** KILOMETRES to salt water, coarse and global — the continentality axis and
+   *  nothing else. Null where the coast is unknown, which is not the same as
+   *  far from it and is treated as no evidence rather than as an interior. */
+  coastKmAt(x: number, z: number): number | null;
+  /** METRES to salt water nearby, or null where the local water is unknown.
+   *
+   *  A DIFFERENT QUESTION AT A DIFFERENT SCALE, and it earned its own input by
+   *  being measured: the baked coast field is half-degree, so it puts Cape Town
+   *  at 0km and Singapore at 57 — perfect for a 400km e-folding and hopeless
+   *  for a term that has to resolve nine hundred metres. Deriving `salt` from
+   *  the coarse field would have made every coastal city a mangrove swamp and
+   *  every island interior a dune. */
+  seaNearAt?(x: number, z: number): number | null;
+}
+
+export interface SiteClimate {
+  /** Mean annual air temperature at this height, °C. */
+  heatC: number;
+  /** The warmest and coldest months, from the annual range. */
+  summerC: number;
+  winterC: number;
+  /** Annual temperature range in °C — the thing that separates a maritime
+   *  winter from a continental one at the same mean. */
+  rangeC: number;
+  /** Days a year below freezing, as a proxy. What excludes palms. */
+  frostDays: number;
+  /** Annual precipitation, mm. */
+  waterMm: number;
+  /** WHEN the water arrives, which matters more than how much. 0 means evenly
+   *  spread; 1 means the whole of one half-year is dry. Mediterranean climates
+   *  are summer-dry and savannas are winter-dry, and that single distinction
+   *  is most of what separates chaparral from monsoon forest at the same
+   *  latitude and rainfall. */
+  summerDry: number;
+  winterDry: number;
+  /** 0 at the shore, approaching 1 deep in an interior. */
+  contin: number;
+  /** How much the upwind terrain took out of the air before it got here. */
+  rainShadow: number;
+  /** Metres above (+) or below (−) the treeline. The alpine axis, signed, so
+   *  a caller can ask for "just below" as easily as "above". */
+  treelineDelta: number;
+  /** LOCAL. How much sun this slope takes, 0 (shaded pole-facing) through 0.5
+   *  (flat) to 1 (steep sun-facing). Hemisphere-aware. */
+  insolation: number;
+  /** LOCAL. How much water this ground keeps: 0 a shedding ridge, 1 a
+   *  collecting hollow. */
+  wetness: number;
+  /** LOCAL. Salt: low ground close to the sea, where mangrove and dune scrub
+   *  live and nothing else does. */
+  salt: number;
+  /** LOCAL. Wind exposure from relief — a ridge takes what a valley does not. */
+  exposure: number;
+  elevAbs: number;
+  /** False where the coast was unknown, so a caller can tell a maritime
+   *  verdict from an unevidenced one. */
+  hadCoast: boolean;
+}
+
+/** How fast the sea's influence dies inland, in metres. Beyond about a
+ *  thousand kilometres the air has forgotten the ocean either way. */
+const CONTIN_E = 400000;
+/** Metres of upwind relief that count as a full rain shadow. */
+const SHADOW_FULL = 1200;
+/** Where the terrain is sampled for slope and for the hollow test. The first
+ *  is a hillside's scale and the second a ravine's; both are far below the
+ *  climate lattice and that is the entire point. */
+const SLOPE_R = 90;
+const HOLLOW_R = 220;
+
+/**
+ * PREVAILING WIND, BY LATITUDE BAND — trades below 30°, westerlies to 60°,
+ * polar easterlies above. Returned as a unit vector pointing UPWIND (the
+ * direction the air came FROM), because that is the direction a rain shadow
+ * has to look in. `x` is east and `z` is south in this world's frame.
+ */
+export function upwindAt(lat: number): [number, number] {
+  const a = Math.abs(lat);
+  // Easterly bands blow from the east; the westerly belt blows from the west.
+  const east = a < 30 || a > 60;
+  return [east ? 1 : -1, 0];
+}
+
+/**
+ * ANNUAL PRECIPITATION FROM THE CIRCULATION, before the land touches it.
+ *
+ * Three terms, each a belt: the ITCZ's rain over the equator, the storm
+ * track's rain in the mid-latitudes, and a background nothing is ever drier
+ * than. The trough between them at 25-ish degrees is where every hot desert on
+ * earth is, and it falls out of the shape rather than being written in.
+ */
+export function beltRainAt(lat: number): number {
+  const a = Math.abs(lat);
+  // THE FLOOR IS LOW BECAUSE DESERTS ARE. At 180 the model gave Tamanrasset
+  // 201mm against a real 45 — four times too wet, and wet enough that nothing
+  // downstream could tell a true desert from a steppe. Ninety still keeps the
+  // driest place on earth off zero, which is right: even the Atacama gets
+  // something, and a hard zero makes every ratio built on this divide by it.
+  // ── AND THE MONSOON IS THE MISS THIS SHAPE CANNOT HAVE ──
+  //
+  // The ITCZ here sits on the equator all year. The real one MIGRATES, and far
+  // further over a continent than over an ocean — which is the whole of the
+  // Asian monsoon. Measured at the Sundarbans (21.95°N): this returns 194mm
+  // against a real ~1800. The same call at Tamanrasset (22.79°N) returns
+  // 135mm against a real 45, and is doing its job. Both are right on the
+  // latitude and one of them is a delta of mangrove: monsoon-versus-desert at
+  // one parallel is a fact about longitude and continent geometry, and NO
+  // latitude-only term can represent it — widening the tropics to reach Bengal
+  // floods the Sahara by construction. Recorded in the fixtures as a known
+  // miss, and the reason `guild.ts` will not thin a row the ecoregion has
+  // already called moist.
+  return 2200 * Math.exp(-((lat / 12) ** 2))
+    + 900 * Math.exp(-(((a - 52) / 16) ** 2))
+    + 90;
+}
+
+const norm = (v: number, lo: number, hi: number): number => clamp((v - lo) / (hi - lo), 0, 1);
+
+/**
+ * The site, from the world. Pure: every input arrives through `env`, so this
+ * is testable against real coordinates without a browser, a tile server or a
+ * land-cover raster — which is what makes the fixtures worth having.
+ */
+export function siteAt(env: SiteEnv, x: number, z: number): SiteClimate {
+  const lat = env.latAt(x, z);
+  const latAbs = Math.abs(lat);
+  let elevAbs = 0;
+  try { elevAbs = env.groundAt(x, z); } catch { /* terrain not up yet */ }
+  const coastRaw = env.coastKmAt(x, z);
+  const hadCoast = coastRaw !== null;
+  // No evidence is not the same as an interior. An unknown coast is treated as
+  // middling rather than dry, so a world that has not answered for its
+  // coastline does not turn every biome continental.
+  const contin = hadCoast ? 1 - Math.exp(-((coastRaw as number) * 1000) / CONTIN_E) : 0.45;
+
+  // ── THE SEA MOVES THE MEAN, NOT JUST THE RANGE ──
+  //
+  // The first cut had continentality widen the annual range and leave the mean
+  // alone, and the fixtures caught it at once: Reykjavik came out at -1.2°C
+  // against a real 5.0, and Irkutsk at 5.5 against a real 1.0 — six degrees
+  // wrong in one direction and four in the other, at almost the same latitude.
+  // That is one missing term with a sign, not two errors. A maritime high
+  // latitude is far milder than its parallel (the ocean carries heat poleward
+  // and gives it up all winter); a continental one is far colder. The effect
+  // grows with latitude and vanishes in the tropics, where the sea is barely
+  // warmer than the land.
+  const seaShift = (0.5 - contin) * 2 * Math.max(0, (latAbs - 35) * 0.22);
+  const heatC0 = seaTempAt(latAbs) + seaShift - LAPSE * Math.max(0, elevAbs);
+  // The annual range grows with latitude (a longer lever on the sun) and with
+  // distance from the sea (nothing to hold the heat). Reykjavik and Irkutsk sit
+  // within a degree of latitude of each other and thirty degrees of range
+  // apart; this is that axis.
+  // ── the rain shadow: what the wind had to climb ──
+  const [ux, uz] = upwindAt(lat);
+  let upMax = elevAbs, upMin = elevAbs;
+  for (let d = 15000; d <= 40000; d += 5000) {
+    try {
+      const h = env.groundAt(x + ux * d, z + uz * d);
+      if (h > upMax) upMax = h;
+      if (h < upMin) upMin = h;
+    } catch { /* off the edge of what is loaded */ }
+  }
+  const rainShadow = clamp((upMax - elevAbs - 300) / SHADOW_FULL, 0, 1);
+  // ── AND THE INTERIOR ONLY DRIES OUT AWAY FROM THE EQUATOR ──
+  //
+  // The distance-from-the-sea penalty was flat, and it halved Manaus: 1261mm
+  // against a real 2300, on the wettest site in the fixture set. Fourteen
+  // hundred kilometres from the Atlantic is nothing to the Amazon, because the
+  // ITCZ delivers there regardless and the forest recycles its own water. It
+  // is everything to Central Asia. So the penalty fades toward the equator.
+  const rainContin = 0.45 * clamp((latAbs - 8) / 20, 0, 1);
+  // ── AND TERRAIN GIVES AS WELL AS TAKES ──
+  //
+  // The model could only ever SUBTRACT for mountains, and Yosemite came out at
+  // 464mm against a real 900. The Sierra is wet for exactly the reason the
+  // Great Basin behind it is dry: air forced up a windward slope drops its
+  // water on the way. One sampling of the upwind ground answers both — the
+  // highest of it is the shadow you are standing behind, the lowest is the
+  // climb the air made to reach you. Ignoring the second half was keeping
+  // every windward range in the world at valley rainfall.
+  const orographic = clamp((elevAbs - upMin) / 1500, 0, 1);
+  const waterMm = beltRainAt(lat) * (1 - rainContin * contin)
+    * (1 - 0.6 * rainShadow) * (1 + 0.9 * orographic);
+  // ── A DRY SKY IS A HOT ONE ──
+  //
+  // Tamanrasset came out at 14.5°C against a real 22. The lapse rate was doing
+  // its job on a 1380m plateau and the model had nothing to say about WHY a
+  // desert is hot: no cloud, no evaporation, all the sun's energy arriving as
+  // heat instead of going into water. Wet places run cool for the same reason
+  // in reverse. This closes about half that gap; the rest is that a heated
+  // plateau does not cool at the free-air lapse rate at all, which is a deeper
+  // fix than a term here and is left honest rather than tuned away.
+  const heatC = heatC0 + clamp((600 - waterMm) / 600, 0, 1) * 3.5;
+
+  // The annual range grows with latitude (a longer lever on the sun) and with
+  // distance from the sea (nothing to hold the heat). Reykjavik and Irkutsk
+  // sit twelve degrees of latitude apart and thirty degrees of range apart;
+  // this is that axis. It reads the finished mean, so the dry-sky term above
+  // carries into the summer and winter figures too.
+  const rangeC = (2 + 0.62 * latAbs) * (0.3 + 0.7 * contin);
+  const summerC = heatC + rangeC / 2;
+  const winterC = heatC - rangeC / 2;
+  // A proxy, not a count: how far the cold month sits below freezing, spread
+  // over the shoulder either side of it.
+  const frostDays = clamp((4 - winterC) * 18, 0, 365);
+
+  // ── WHEN the water arrives ──
+  // The subtropical high migrates poleward in summer, so its dry edge — 30 to
+  // 45 degrees — is dry in summer and wet in winter. That is every
+  // Mediterranean climate on earth, and it is why the Cape and California and
+  // the Mediterranean itself grow structurally similar scrub on three
+  // continents. The ITCZ migrates the same way, so its dry edge — 5 to 20
+  // degrees — is the opposite: wet summers, dry winters, which is savanna and
+  // monsoon. West coasts feel both more sharply than interiors do.
+  const marine = 1 - contin;
+  const summerDry = clamp(Math.exp(-(((latAbs - 35) / 9) ** 2)) * (0.55 + 0.45 * marine), 0, 1);
+  const winterDry = clamp(Math.exp(-(((latAbs - 13) / 8) ** 2)) * 0.95, 0, 1);
+
+  // ── the local half: this slope, this hollow ──
+  const hE = safeGround(env, x + SLOPE_R, z, elevAbs);
+  const hW = safeGround(env, x - SLOPE_R, z, elevAbs);
+  const hS = safeGround(env, x, z + SLOPE_R, elevAbs);
+  const hN = safeGround(env, x, z - SLOPE_R, elevAbs);
+  const dx = (hE - hW) / (2 * SLOPE_R), dz = (hS - hN) / (2 * SLOPE_R);
+  const grade = Math.hypot(dx, dz);
+  // The sun sits equatorward: south of you in the north, north of you in the
+  // south. A slope faces the sun when its DOWNHILL direction points that way,
+  // and −z is north in this world, so the sign flips with the hemisphere.
+  //
+  // THE MINUS IS THE WHOLE POINT, and it was missing. `dz` is the GRADIENT,
+  // which points UPHILL; the direction a slope faces is its negation. Without
+  // it every pole-facing slope on earth read as full sun and every sunny one as
+  // shade — in both hemispheres, symmetrically, which is exactly why the
+  // fixture missed it: the authored hillside in `climate-fixtures.test.mjs`
+  // was built from the same wrong premise, so the two agreed and the suite was
+  // green. What disagreed was a REAL hillside — Chapman's Peak, 32° falling
+  // south at 34°S, the pole-facing side of the ridge, reported `insolation`
+  // 1.00 the first time `siteAt` was asked about ground the game had streamed.
+  //
+  // `aspectLift` above has always had it right (`northness` is +1 poleward),
+  // and the fixtures now assert the two against each other rather than each
+  // against its own idea of a slope.
+  const sunZ = lat >= 0 ? 1 : -1;
+  const sunward = grade > 1e-4 ? -(dz * sunZ) / grade : 0;
+  const insolation = clamp(0.5 + 0.5 * sunward * clamp(grade * 2.2, 0, 1), 0, 1);
+
+  // A hollow is ground with ground above it on most sides. Ring-sampled rather
+  // than differenced, because a ravine floor is flat locally and reads as a
+  // plain to any gradient — it is the WALLS that say what it is.
+  let above = 0, seen = 0;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const h = safeGround(env, x + Math.cos(a) * HOLLOW_R, z + Math.sin(a) * HOLLOW_R, NaN);
+    if (!Number.isFinite(h)) continue;
+    seen++;
+    above += clamp((h - elevAbs) / 60, 0, 1);
+  }
+  const wetness = seen ? above / seen : 0.3;
+  // Exposure is its opposite, plus the height itself: a ridge at altitude
+  // takes what a sheltered valley never does.
+  const exposure = clamp((1 - wetness) * 0.7 + norm(elevAbs, 200, 2600) * 0.3, 0, 1);
+
+  // Salt reaches a few hundred metres inland and a few metres up, and nowhere
+  // else. Mangrove and dune scrub live in that sliver; the guild above decides
+  // whether it is warm enough for either. It reads the LOCAL sea, never the
+  // continentality field — see seaNearAt.
+  const seaM = env.seaNearAt ? env.seaNearAt(x, z) : null;
+  const salt = seaM === null ? 0
+    : clamp(1 - seaM / 900, 0, 1) * clamp(1 - Math.max(0, elevAbs) / 6, 0, 1);
+
+  const treeline = treelineAt(latAbs, 0.5);
+  return {
+    heatC, summerC, winterC, rangeC, frostDays, waterMm,
+    summerDry, winterDry, contin, rainShadow,
+    treelineDelta: elevAbs - treeline,
+    insolation, wetness, salt, exposure, elevAbs, hadCoast,
+  };
+}
+
+function safeGround(env: SiteEnv, x: number, z: number, fallback: number): number {
+  try {
+    const h = env.groundAt(x, z);
+    return Number.isFinite(h) ? h : fallback;
+  } catch { return fallback; }
 }

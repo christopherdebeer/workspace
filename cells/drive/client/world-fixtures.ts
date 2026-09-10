@@ -114,6 +114,29 @@ export interface WorldFixture {
    * at 2,562m for a 700m capture — nearly four times the ground that exists.
    */
   extent?: number;
+  /**
+   * THE ECOREGION THIS GROUND IS IN, so a fixture can exercise the guild.
+   *
+   * `ecoAt` refuses to fetch on a fixture — asking would pull the REAL ecology
+   * of the authored crossroads' coordinates, which is the country above Geneva
+   * (the same trap `loadOvTile` and `loadPeakTile` already wear a gate for).
+   * That left the vegetation guilds untestable on the one worlds that are
+   * deterministic and need no network: every fixture fell back to the climate
+   * path, so the fast offline harness could say nothing about the rule that
+   * decides what grows.
+   *
+   * So a fixture DECLARES its region instead of asking for it. One record, not
+   * a tile: a capture's box is 700m to 1.4km and an ecoregion boundary is not
+   * real to five kilometres, so a point answer for the whole box is not an
+   * approximation worth apologising for. `devtools/capture-world.mjs` looks it
+   * up and prints the line to paste; the six existing captures carry theirs
+   * from the same lookup, recorded in CAPTURE_INDEX beside the coordinates it
+   * was made at.
+   *
+   * Undeclared means null, which is exactly what the open sea returns — an
+   * authored fixture is nowhere, and nowhere has no ecoregion.
+   */
+  eco?: { id: number; biome: number; name: string; realm: string };
 }
 
 /** A line of points along a bearing, so a fixture reads as intent rather than
@@ -238,7 +261,8 @@ interface CapturedWorld {
   ways: Array<{ id: number; tags: Record<string, string>; pts: Array<[number, number]> }>;
 }
 
-function captured(cap: CapturedWorld, label: string, note: string, heading = 0): WorldFixture {
+function captured(cap: CapturedWorld, label: string, note: string, heading = 0,
+  eco?: { id: number; biome: number; name: string; realm: string }): WorldFixture {
   const { n, step, base, b64 } = cap.height;
   // atob, not Buffer: this runs in the browser. The Int16Array is built by copy
   // rather than as a view, because a view onto a byte string's buffer inherits
@@ -276,6 +300,7 @@ function captured(cap: CapturedWorld, label: string, note: string, heading = 0):
     },
     ways: () => capturedWays(cap),
     extent: cap.r,
+    eco,
   };
 }
 const clampF = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
@@ -428,6 +453,44 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
       { id: 1, tags: mainTags(t, 'Col Road'), pts: run(-603, 244, 68, 1400) },
       { id: 2, tags: { highway: 'track', name: 'Forest Track', surface: 'dirt', tracktype: 'grade3' },
         pts: run(0, 900, 0, 700) },
+    ],
+  },
+  {
+    id: 'structures',
+    label: 'HOSTILE STRUCTURE CROSSINGS',
+    note: 'A tagged arch bridge whose nominal pier rhythm lands on three roads, a bored tunnel under a live surface crossing, and a stream conduit under a cutting. The geometry is intentionally hostile: every decorative support has a tempting but illegal place to stand. Clearance counters should report refusals while all carriageways remain open.',
+    spawn: { lat: HOME.lat, lon: HOME.lon, heading: 90 },
+    height: (e, s, t) => {
+      const base = t.lift + 320;
+      // Valley under the bridge at e=0.
+      const valley = -20 * Math.exp(-((s / 105) ** 2)) * Math.exp(-((e / 180) ** 2));
+      // Ridge over the tunnel at e=420.
+      const ridge = 24 * Math.exp(-((s / 82) ** 2)) * Math.exp(-(((e - 420) / 150) ** 2));
+      // A shallow cutting over the conduit at e=-420.
+      const bank = 5 * Math.exp(-((s / 65) ** 2)) * Math.exp(-(((e + 420) / 130) ** 2));
+      return base + (valley + ridge + bank) * t.relief;
+    },
+    cover(e, s, t) { return coverFor(e, s, t, this.height(e, s, t)); },
+    ways: (t): FixtureWay[] => [
+      { id: 1, tags: { ...mainTags(t, 'Arch Test'), bridge: 'yes', layer: '1',
+          'bridge:structure': 'arch', 'bridge:material': 'stone', start_date: '1887' },
+        pts: through(0, 0, 0, 520) },
+      // Three under-roads deliberately near a nominal support cadence.
+      { id: 2, tags: { highway: 'secondary', name: 'Under Centre', surface: t.surface },
+        pts: through(0, 0, 90, 620) },
+      { id: 3, tags: { highway: 'residential', name: 'Under North', surface: t.surface },
+        pts: through(0, -78, 90, 620) },
+      { id: 4, tags: { highway: 'residential', name: 'Under South', surface: t.surface },
+        pts: through(0, 78, 90, 620) },
+      { id: 5, tags: { ...mainTags(t, 'Bored Test'), tunnel: 'yes', layer: '-1',
+          'tunnel:type': 'bored', 'tunnel:lining': 'shotcrete' },
+        pts: through(420, 0, 0, 560) },
+      { id: 6, tags: { highway: 'tertiary', name: 'Tunnel Roof Road', surface: t.surface },
+        pts: through(420, 0, 90, 480) },
+      { id: 7, tags: { highway: 'secondary', name: 'Conduit Road', surface: t.surface },
+        pts: through(-420, 0, 90, 520) },
+      { id: 8, tags: { waterway: 'stream', name: 'Conduit Stream', width: '4' },
+        pts: through(-420, 0, 0, 480) },
     ],
   },
   {
@@ -710,38 +773,69 @@ export interface CaptureCard {
   /** The file under `static/fixtures/`. */
   file: string;
   heading: number;
+  /** THE ECOREGION AT THE CAPTURE'S OWN COORDINATES, so the guild rules can be
+   *  exercised on a world that needs no network and settles in seconds. Looked
+   *  up once through `~/eco/v1/` at the lat/lon named in each note below;
+   *  `devtools/capture-world.mjs` prints the line for a new capture. A box of
+   *  700m to 1.4km sits inside one ecoregion, so a point answer for the whole
+   *  fixture is not an approximation worth apologising for. */
+  eco?: { id: number; biome: number; name: string; realm: string };
 }
 
 export const CAPTURE_INDEX: readonly CaptureCard[] = [
   {
     id: 'at-bixby', file: 'world-bixby.json', heading: 100,
+    eco: { id: 425, biome: 12, name: 'Santa Lucia Montane Chaparral & Woodlands', realm: 'Nearctic' },
     label: 'BIG SUR — COAST ROAD',
     note: 'Captured from the live world at 36.3753,-121.8974: the Highway 1 approach above Bixby, where three separate OSM ways all called Coast Road meet at near-equal classes on a cliff the DEM resolves at 8m. Reported twice from the seat. NOTE its r is 700m and its road runs well past that, so most of what it draws stands on ground extrapolated from the edge of the evidence — re-capture it wider before quoting a number off it.',
   },
   {
     id: 'at-carmel-a', file: 'world-carmel-a.json', heading: 100,
+    eco: { id: 425, biome: 12, name: 'Santa Lucia Montane Chaparral & Woodlands', realm: 'Nearctic' },
     label: 'CARMEL HIGHLANDS — SOUTH',
     note: 'Captured at 36.5665,-121.9130. A dense hillside street network rather than one cliff road, which is a different kind of hard: many short ways of near-equal class meeting each other on a slope.',
   },
   {
     id: 'at-carmel-b', file: 'world-carmel-b.json', heading: 100,
+    eco: { id: 425, biome: 12, name: 'Santa Lucia Montane Chaparral & Woodlands', realm: 'Nearctic' },
     label: 'CARMEL HIGHLANDS — NORTH',
     note: 'Captured at 36.5753,-121.9128, a kilometre north of the other. More road and fewer buildings, so the junctions are less obscured while the terrain is the same.',
   },
   {
     id: 'at-campsbay', file: 'world-campsbay.json', heading: 122,
+    eco: { id: 89, biome: 12, name: 'Fynbos shrubland', realm: 'Afrotropic' },
     label: 'CAMPS BAY — THE TWELVE APOSTLES',
     note: 'Reported from the seat at -33.94533,18.38296 heading 122. The western flank of Table Mountain: 325 METRES of relief across a 1.4km box and 314 highways of every class on it. Victoria Road runs the contour while Camps Bay Drive, Geneva Drive and Kloof Road climb across it, so nearly every junction is a joiner meeting a host at a different height on a cross-slope. Settled, it reports 38 pairs of overlapping carriageway and node steps up to 2.18m — and it takes about four minutes to finish building, so do not read anything off it early.',
   },
   {
     id: 'at-paris-west', file: 'world-paris-west.json', heading: 203,
+    eco: { id: 664, biome: 4, name: 'European Atlantic mixed forests', realm: 'Palearctic' },
     label: 'SURESNES — THE BOULEVARDS',
     note: 'Reported from the seat at 48.86919,2.21523 heading 203. A dense European suburb rather than a hillside: 1,453 highways of which 762 are footway and 69 are steps, so nearly every carriageway is flanked by a pavement solving its own profile a couple of metres away — the geometry that produces a lengthwise seam rather than a bad junction. 29 ways carry three or four lanes. One vector tile of the twenty (16/33171/22541) exceeds the cell Overpass budget and has never built; that corner has no roads in it.',
   },
   {
     id: 'at-paris-south', file: 'world-paris-south.json', heading: 281,
+    eco: { id: 664, biome: 4, name: 'European Atlantic mixed forests', realm: 'Palearctic' },
     label: 'VÉLIZY — THE A 86 INTERCHANGE',
     note: 'Reported from the seat at 48.77736,2.22332 heading 281. The A 86 / N 118 interchange: 1,078 highways, 49 trunk_link and 20 motorway_link slip roads, lanes tags up to 5. THE LEVELS CASE. OSM says exactly where the flyovers are — 14 ways carry layer=1 or 2 with bridge=yes, 13 carry layer=-1 — and the game keeps the layer tag and never reads it: a tagged bridge is a chord between its two portals, not a deck above the road it crosses. Counted offline: 44 genuine grade-separated crossings in the box, 10 of them with a station of the flyover inside the 3m junction-pin radius of the road beneath, where the planner will weld the two decks together. Flat (44m of relief), so nothing here is terrain.',
+  },
+  {
+    id: 'at-senqu-top', file: 'world-senqu-top.json', heading: 4,
+    eco: { id: 41, biome: 7, name: 'Drakensberg grasslands', realm: 'Afrotropic' },
+    label: 'SENQU — FROM ABOVE',
+    note: 'Asked for from the seat at -30.70685,27.75090 heading 4, in the top-down chart at 0.8 zoom: the broad Senqu (WorldCover class 80 in the box) and its banks, for judging the shoreline pass from above and the chart’s own water against it.',
+  },
+  {
+    id: 'at-senqu-ford', file: 'world-senqu-ford.json', heading: 66,
+    eco: { id: 41, biome: 7, name: 'Drakensberg grasslands', realm: 'Afrotropic' },
+    label: 'SENQU — THE CROSSING',
+    note: 'Reported from the seat at -30.72068,27.75659 heading 66: the shallows are a colour that does not match the bank around them and the water still meets the ground on a hard edge, and driving the road across the river raises no splash and no wash. Six highways and the Senqu in a 1.4km box of Drakensberg grassland at 1,800m.',
+  },
+  {
+    id: 'at-simonstown', file: 'world-simonstown.json', heading: 246,
+    eco: { id: 89, biome: 12, name: 'Fynbos shrubland', realm: 'Afrotropic' },
+    label: 'SIMON\'S TOWN — THE JOINS',
+    note: 'Reported from the seat at -34.19511,18.44192 heading 246: at the junctions the batter stops short of the join and leaves a gap, the arms do not meet on one closed plane, the batter is a picture the truck drives into rather than ground it stands on, and a mis-joined arm can put a guard rail across the carriageway. A steep peninsula suburb — 181 highways over 437m of relief in a 1.4km box — so nearly every junction is a joiner meeting a host on a cross-slope, which is where all four live.',
   },
 ];
 
@@ -792,7 +886,7 @@ export const fixtureById = (id: string | null | undefined): WorldFixture | null 
   const card = CAPTURE_INDEX.find((c) => c.id === id);
   if (!card) return null;
   const cap = loadCapture(card);
-  return cap ? captured(cap, card.label, card.note, card.heading) : null;
+  return cap ? captured(cap, card.label, card.note, card.heading, card.eco) : null;
 };
 
 /**

@@ -12,15 +12,28 @@ export interface HydroFrameUniforms {
   uRig: { value: THREE.Vector4 };
   /** Wading depth in metres; 0 keeps the whole disturbance branch dark. */
   uRigWade: { value: number };
+  /** Newest first: absolute x/z, age seconds, disturbance strength. */
+  uRigTrail: { value: THREE.Vector4[] };
+  uRigTrailCount: { value: number };
   uSunDirection: { value: THREE.Vector3 };
   uSkyColour: { value: THREE.Color };
+  uSceneLight: { value: THREE.Vector3 };
+  uZenith: { value: THREE.Color };
+  uGroundGain: { value: THREE.Vector3 };
   uTerrainColour: { value: THREE.Color };
+  uSwardCol: { value: THREE.Texture | null };
+  uSwardOrg: { value: THREE.Vector2 };
+  uSwardW: { value: number };
   uDebugView: { value: number };
   uWaveAmplitude: { value: number };
   uWaveLength: { value: number };
   uRippleStrength: { value: number };
   uFoamStrength: { value: number };
   uShoreFade: { value: number };
+  uShallowBedStrength: { value: number };
+  uRiverEdgeStrength: { value: number };
+  uTurbulenceStrength: { value: number };
+  uEddyStrength: { value: number };
 }
 
 export interface HydroTileTextures {
@@ -30,6 +43,7 @@ export interface HydroTileTextures {
   /** River space (s, n, curvature, halfWidth) — only for tiles that hold
    *  flowing water, and only ever bound by the flowing material variant. */
   structure?: THREE.DataTexture;
+  waterfalls?: THREE.DataTexture;
 }
 
 export interface HydroTileGpuBinding {
@@ -48,15 +62,27 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uRain: { value: 0 },
     uRig: { value: new THREE.Vector4(0, 0, 0, 0) },
     uRigWade: { value: 0 },
+    uRigTrail: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
+    uRigTrailCount: { value: 0 },
     uSunDirection: { value: new THREE.Vector3(0.45, 0.82, 0.35).normalize() },
     uSkyColour: { value: new THREE.Color(0.46, 0.58, 0.68) },
+    uSceneLight: { value: new THREE.Vector3(1, 1, 1) },
+    uZenith: { value: new THREE.Color(0.05, 0.12, 0.28) },
+    uGroundGain: { value: new THREE.Vector3(0.49, 0.46, 0.43) },
     uTerrainColour: { value: new THREE.Color(0.16, 0.20, 0.13) },
+    uSwardCol: { value: null },
+    uSwardOrg: { value: new THREE.Vector2() },
+    uSwardW: { value: 0 },
     uDebugView: { value: 0 },
     uWaveAmplitude: { value: 1 },
     uWaveLength: { value: 1 },
     uRippleStrength: { value: 1 },
     uFoamStrength: { value: 1 },
     uShoreFade: { value: 1 },
+    uShallowBedStrength: { value: 1 },
+    uRiverEdgeStrength: { value: 1 },
+    uTurbulenceStrength: { value: 1 },
+    uEddyStrength: { value: 1 },
   };
 }
 
@@ -124,34 +150,56 @@ export function createHydroTextures(field: HydroTileField): HydroTileTextures {
     // loses whole metres past 2km, which is phase jitter where a long river
     // needs the coordinate most. Linear filtering is exactly right for s and
     // n (both are locally linear fields).
+    waterfalls: field.waterfalls ? configure(new THREE.DataTexture(
+      field.waterfalls, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
+    ), true) : undefined,
     structure: field.structure ? configure(new THREE.DataTexture(
       field.structure, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
     ), true) : undefined,
   };
 }
 
+/** A SHADE THE SCENE OWNS. The terrain darkens under the cloud deck by a
+ *  function its host writes; the water has to darken by the SAME function or
+ *  a cloud's shadow stops at the bank. The host hands in GLSL declaring
+ *  `float sceneShade(vec3 renderPos)` and the uniforms it reads, shared by
+ *  reference; hydro itself stays ignorant of clouds. */
+export interface SceneShade { head: string; uniforms: Record<string, THREE.IUniform> }
+
 export function createHydroMaterial(
   field: HydroTileField,
   textures: HydroTileTextures,
   frame: HydroFrameUniforms,
   /**
-   * ── TWO VARIANTS OF ONE SHADER ──
+   * ── THREE BEHAVIOURS, ONE SHADER ──
    *
-   * `flowing` compiles the river machinery (and binds the structure field);
-   * standing compiles without it, so the open ocean — most of every coastal
-   * frame — carries neither the extra texture read nor the river-space
-   * instructions. One GLSL source, split by the preprocessor, because two
-   * hand-maintained shaders is how the regimes drift apart.
+   * `flowing` compiles the river machinery (and binds the structure field).
+   * `surf` keeps the standing-water path but enables moving coastal coverage
+   * and terrain-clearing run-up on the shoreline-only fine mesh. The ordinary
+   * standing variant remains the cheap open-ocean body.
    */
   flowing = false,
+  surf = false,
+  shade?: SceneShade,
 ): THREE.ShaderMaterial {
   const centralScale = field.resolution / field.width;
   const offset = field.gutter / field.width;
+  const suffix = `${flowing ? ':flowing' : ''}${surf ? ':surf' : ''}`;
   return new THREE.ShaderMaterial({
-    name: `hydro:${field.key}${flowing ? ':flowing' : ''}`,
-    defines: flowing ? { HYDRO_FLOWING: 1 } : {},
+    name: `hydro:${field.key}${suffix}`,
+    defines: {
+      ...(flowing ? { HYDRO_FLOWING: 1 } : {}),
+      ...(flowing && textures.waterfalls ? { HYDRO_FALLS: 1 } : {}),
+      ...(surf ? { HYDRO_SURF: 1 } : {}),
+      ...(shade ? { HYDRO_SCENE_SHADE: 1 } : {}),
+    },
     vertexShader: HYDRO_VERTEX_SHADER,
-    fragmentShader: HYDRO_FRAGMENT_SHADER,
+    // The host's shade is spliced in ahead of main, after every declaration
+    // of hydro's own, so it can read nothing it was not handed.
+    fragmentShader: shade
+      ? HYDRO_FRAGMENT_SHADER.replace('void main() {', `${shade.head}\nvoid main() {`)
+      : HYDRO_FRAGMENT_SHADER,
+    extensions: { derivatives: true },
     uniforms: {
       // ── FOG UNIFORMS, OR THE FIRST RENDERED TILE THROWS ──
       //
@@ -177,6 +225,7 @@ export function createHydroMaterial(
       // declares is silently dropped by three, so the standing variant
       // carrying the key costs nothing and keeps this call-site unbranched.
       uHydroStructure: { value: textures.structure ?? null },
+      uHydroFalls: { value: textures.waterfalls ?? null },
       // Both the V flip and the water-rect sub-mapping live in one place —
       // see `fieldUvFor`.
       uFieldUv: { value: fieldUvFor(field, centralScale, offset) },
@@ -194,15 +243,28 @@ export function createHydroMaterial(
       uRain: frame.uRain,
       uRig: frame.uRig,
       uRigWade: frame.uRigWade,
+      uRigTrail: frame.uRigTrail,
+      uRigTrailCount: frame.uRigTrailCount,
       uSunDirection: frame.uSunDirection,
       uSkyColour: frame.uSkyColour,
+      uSceneLight: frame.uSceneLight,
+      uZenith: frame.uZenith,
+      uGroundGain: frame.uGroundGain,
       uTerrainColour: frame.uTerrainColour,
+      ...(shade?.uniforms ?? {}),
+      uSwardCol: frame.uSwardCol,
+      uSwardOrg: frame.uSwardOrg,
+      uSwardW: frame.uSwardW,
       uDebugView: frame.uDebugView,
       uWaveAmplitude: frame.uWaveAmplitude,
       uWaveLength: frame.uWaveLength,
       uRippleStrength: frame.uRippleStrength,
       uFoamStrength: frame.uFoamStrength,
       uShoreFade: frame.uShoreFade,
+      uShallowBedStrength: frame.uShallowBedStrength,
+      uRiverEdgeStrength: frame.uRiverEdgeStrength,
+      uTurbulenceStrength: frame.uTurbulenceStrength,
+      uEddyStrength: frame.uEddyStrength,
     },
     // ── A SURFACE YOU CAN BE UNDERNEATH ──
     //
@@ -221,7 +283,9 @@ export function createHydroMaterial(
     toneMapped: true,
     polygonOffset: true,
     polygonOffsetFactor: -1,
-    polygonOffsetUnits: -3,
+    // The swash mesh deliberately overlaps the body at its wet edge. Bias it
+    // forward just enough to make that overlap seamless instead of z-fighting.
+    polygonOffsetUnits: surf ? -5 : -3,
   });
 }
 
@@ -245,4 +309,5 @@ export function disposeHydroTextures(textures: HydroTileTextures): void {
   textures.dynamics.dispose();
   textures.material.dispose();
   textures.structure?.dispose();
+  textures.waterfalls?.dispose();
 }
