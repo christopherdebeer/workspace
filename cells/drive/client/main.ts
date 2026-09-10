@@ -109,6 +109,7 @@ import {
 } from './substrate/crossing-authority';
 import {
   buildProductionSubstrateTile,
+  findProductionDriveWaterOverlaps,
   ProductionSubstrateStore,
   type ProductionDriveRenderMesh,
   type ProductionDriveSample,
@@ -12069,10 +12070,11 @@ function legacySurfaceAt(x: number, z: number): Surface {
   if (crossingDrive) {
     surfQ = Q_ROAD;
     if (crossingDrive.record.kind === 'ford') {
-      const level = crossingDrive.record.waterSurfaceY;
-      return level !== null && level - crossingDrive.yM > FORD_MIN_M
-        ? 'water'
-        : 'road';
+      // A crossing record stores one centre level for diagnostics. On a
+      // sloping stream that level cannot classify every point in the oriented
+      // footprint: Camps Bay reused a wet centre 6m uphill where the exact
+      // surface was already below the deck. Ask the local hydro/deck pair.
+      return fordDepthAt(x, z) > FORD_MIN_M ? 'water' : 'road';
     }
     return 'road';
   }
@@ -18189,11 +18191,14 @@ function fordDepthAt(x: number, z: number): number {
   const wet = drawnHydroAt(x, z);
   if (!wet) return 0;
   const drive = productionDriveAt(x, z);
+  const crossingDrive = productionCrossingDriveAt(x, z);
   const e = roadEdge(x, z);
   const deck = drive
     ? drive.yM
-    : e ? e.y + baseElev
-      : hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
+    : crossingDrive
+      ? crossingDrive.yM
+      : e ? e.y + baseElev
+        : hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
   return Number.isFinite(deck) ? wet.restingLevelM - deck : 0;
 }
 interface RuntimeWaterInfo {
@@ -19101,6 +19106,49 @@ function productionWaterMotionSegmentsFor(t: HeightTile): ProductionWaterMotionS
   }
   return out;
 }
+/**
+ * Close crossing records that the one-shot legacy water flush could miss.
+ *
+ * This pass is deliberately narrow: it only records a tagged or physically
+ * exposed ford. Bridges, culverts and causeways still require their explicit
+ * source/construction authority; this must not infer hidden infrastructure
+ * from height. The inputs are the exact immutable vectors about to enter the
+ * tile, so arrival order can no longer make a wet road semantically disappear.
+ */
+function reconcileProductionWetCrossings(
+  driveSegments: readonly ProductionDriveSegment[],
+  waterSegments: readonly ProductionWaterMotionSegment[],
+): void {
+  for (const overlap of findProductionDriveWaterOverlaps(driveSegments, waterSegments)) {
+    const waterId = overlap.waterId ?? `water:${Math.round(overlap.x)},${Math.round(overlap.z)}`;
+    const existing = productionCrossings.at(overlap.x, overlap.z);
+    if (existing?.roadId === overlap.roadId && existing.waterId === waterId) continue;
+    const wet = drawnHydroAt(overlap.x, overlap.z);
+    if (!wet || wet.restingLevelM - overlap.deckY <= FORD_MIN_M) continue;
+    const roadTags = wayTagLog.get(overlap.roadId);
+    const roadLayer = Number(roadTags?.layer) || 0;
+    const intent = resolveProductionCrossingIntent({ roadLayer, roadTags });
+    if (intent.kind !== 'unresolved' && intent.kind !== 'ford') continue;
+    productionCrossings.observe({
+      roadId: overlap.roadId,
+      waterId,
+      x: overlap.x,
+      z: overlap.z,
+      radiusM: Math.max(overlap.roadHalfWidthM, overlap.waterHalfWidthM) + 4,
+      roadTangent: overlap.roadTangent,
+      waterTangent: overlap.waterTangent,
+      roadHalfWidthM: overlap.roadHalfWidthM,
+      waterHalfWidthM: overlap.waterHalfWidthM,
+      roadLayer,
+      roadTags,
+      deckY: overlap.deckY,
+      waterBedY: overlap.bedY,
+      waterSurfaceY: wet.restingLevelM,
+      availableClearanceM: overlap.deckY - overlap.bedY,
+      structureOutcome: 'ford-fallback',
+    });
+  }
+}
 function canCommitTerrainRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
   if (!SUBSTRATE_RENDER_ON || !tile.groundMesh || tile.terrainRenderMeshes.length !== 1) return false;
   if (productionSubstrate.tile(tile.key) !== tile) return false;
@@ -19694,8 +19742,10 @@ function buildProductionSubstrateShadow(
     || !terrainMeshes.has(key) || terrainDirty.has(key)) return;
   const terrainSourceRevision = terrainRevision.get(key) ?? 0;
   const terrainPackets = productionTerrainRenderMeshesFor(key, terrainSourceRevision);
-  const crossingRevision = productionCrossings.snapshot().revision;
   const drive = productionDriveSnapshotFor(t, key);
+  const waterMotionSegments = productionWaterMotionSegmentsFor(t);
+  reconcileProductionWetCrossings(drive.segments, waterMotionSegments);
+  const crossingRevision = productionCrossings.snapshot().revision;
   const structures = productionStructureRenderMeshesFor(key);
   const hydroDetails = productionHydroDetailRenderMeshesFor(
     key,
@@ -19730,7 +19780,7 @@ function buildProductionSubstrateShadow(
       const field = hydroSys?.fieldAt(t.xs + t.w / 2, t.zs + t.h / 2);
       return field?.key === key ? field : undefined;
     })(),
-    waterMotionSegments: productionWaterMotionSegmentsFor(t),
+    waterMotionSegments,
     waterCoverageCutAt: WATERLINE_CUT,
     crossings: productionCrossings.forBounds({
       minX: t.xs,

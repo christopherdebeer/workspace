@@ -6,6 +6,7 @@ import {
   buildRapidDetailField,
   buildRapidDetailMesh,
   buildSubstrateTile,
+  findProductionDriveWaterOverlaps,
   makeCrossingFixture,
   pointInProductionCrossingFootprint,
   productionCrossingFootprint,
@@ -119,6 +120,45 @@ function assertCrossing(kind: CrossingKind): ResolvedSubstrateTile {
  * lab are inspecting one implementation rather than parallel demonstrations.
  */
 export function runSubstrateSelfTest(): void {
+  const overlapDrive = [{
+    ax: -20,
+    az: 0,
+    bx: 20,
+    bz: 0,
+    yaM: 2,
+    ybM: 2,
+    halfWidthM: 2,
+    material: 'gravel' as const,
+    quality: .6,
+    roadId: 'road:overlap',
+  }];
+  const overlapWater = [{
+    ax: -16,
+    az: 0,
+    bx: 16,
+    bz: 0,
+    bedAM: 1,
+    bedBM: 1,
+    halfWidthM: 2,
+    speedMps: 1,
+    waterId: 'water:overlap',
+  }];
+  const overlapWitnesses = findProductionDriveWaterOverlaps(overlapDrive, overlapWater);
+  assert(overlapWitnesses.length >= 6,
+    'a long packet-space wet road must retain crossing witnesses along its reach');
+  assert(overlapWitnesses.every((witness) =>
+    witness.roadId === 'road:overlap'
+    && witness.waterId === 'water:overlap'
+    && witness.deckY === 2
+    && witness.bedY === 1),
+  'packet-space overlap witnesses must retain exact source identity and levels');
+  assert(findProductionDriveWaterOverlaps(overlapDrive, [{
+    ...overlapWater[0],
+    az: 10,
+    bz: 10,
+  }]).length === 0,
+  'separated packet vectors must not invent a road/water crossing');
+
   const culvertBore = buildCulvertBoreGeometry({
     stations: [[0, 0], [10, 0], [20, 0]],
     invertY: [1, .8, .6],

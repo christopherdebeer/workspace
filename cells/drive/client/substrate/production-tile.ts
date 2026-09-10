@@ -135,6 +135,125 @@ export interface ProductionWaterMotionSegment {
   waterId?: string;
 }
 
+export interface ProductionDriveWaterOverlap {
+  roadId: string;
+  waterId?: string;
+  x: number;
+  z: number;
+  deckY: number;
+  bedY: number;
+  roadHalfWidthM: number;
+  waterHalfWidthM: number;
+  roadTangent: readonly [number, number];
+  waterTangent: readonly [number, number];
+}
+
+/**
+ * Exact packet-space road/water overlap witnesses.
+ *
+ * Crossing discovery used to run once while legacy water ribbons were being
+ * flushed. A road arriving after that pass could therefore be present in the
+ * immutable substrate tile while absent from crossing authority. Reconcile at
+ * publication from the final drive and water vectors instead.
+ */
+export function findProductionDriveWaterOverlaps(
+  driveSegments: readonly ProductionDriveSegment[],
+  waterSegments: readonly ProductionWaterMotionSegment[],
+): readonly ProductionDriveWaterOverlap[] {
+  const cellM = 32;
+  const grid = new Map<string, ProductionDriveSegment[]>();
+  const keyAt = (x: number, z: number): string =>
+    `${Math.floor(x / cellM)},${Math.floor(z / cellM)}`;
+  for (const road of driveSegments) {
+    if (![road.ax, road.az, road.bx, road.bz, road.yaM, road.ybM,
+      road.halfWidthM, road.quality].every(Number.isFinite)
+      || road.halfWidthM <= 0) continue;
+    const reach = road.halfWidthM + .8;
+    const minX = Math.floor((Math.min(road.ax, road.bx) - reach) / cellM);
+    const maxX = Math.floor((Math.max(road.ax, road.bx) + reach) / cellM);
+    const minZ = Math.floor((Math.min(road.az, road.bz) - reach) / cellM);
+    const maxZ = Math.floor((Math.max(road.az, road.bz) + reach) / cellM);
+    for (let gx = minX; gx <= maxX; gx++) for (let gz = minZ; gz <= maxZ; gz++) {
+      const key = `${gx},${gz}`;
+      const bucket = grid.get(key);
+      if (bucket) bucket.push(road);
+      else grid.set(key, [road]);
+    }
+  }
+
+  const found = new Map<string, ProductionDriveWaterOverlap & { distanceM: number }>();
+  for (const water of waterSegments) {
+    if (![water.ax, water.az, water.bx, water.bz, water.bedAM, water.bedBM,
+      water.halfWidthM].every(Number.isFinite)
+      || water.halfWidthM <= 0) continue;
+    const waterDx = water.bx - water.ax;
+    const waterDz = water.bz - water.az;
+    const waterLength = Math.hypot(waterDx, waterDz);
+    if (waterLength <= 1e-6) continue;
+    const waterTangent = [waterDx / waterLength, waterDz / waterLength] as const;
+    // At most 3m between witnesses: narrower than a one-lane road, so an
+    // oblique crossing cannot fall between samples.
+    const steps = Math.max(1, Math.ceil(waterLength / 3));
+    for (let step = 0; step <= steps; step++) {
+      const wt = step / steps;
+      const x = mix(water.ax, water.bx, wt);
+      const z = mix(water.az, water.bz, wt);
+      for (const road of grid.get(keyAt(x, z)) ?? []) {
+        const roadDx = road.bx - road.ax;
+        const roadDz = road.bz - road.az;
+        const roadLength2 = roadDx * roadDx + roadDz * roadDz;
+        if (roadLength2 <= 1e-9) continue;
+        const roadT = clamp(
+          ((x - road.ax) * roadDx + (z - road.az) * roadDz) / roadLength2,
+          0,
+          1,
+        );
+        const roadX = mix(road.ax, road.bx, roadT);
+        const roadZ = mix(road.az, road.bz, roadT);
+        const distanceM = Math.hypot(x - roadX, z - roadZ);
+        if (distanceM > road.halfWidthM + .8) continue;
+        let deckY = mix(road.yaM, road.ybM, roadT);
+        if (road.crossfallA !== undefined && road.crossfallB !== undefined
+          && Number.isFinite(road.crossfallA) && Number.isFinite(road.crossfallB)) {
+          const roadLength = Math.sqrt(roadLength2);
+          const side = ((x - roadX) * (-roadDz / roadLength)
+            + (z - roadZ) * (roadDx / roadLength)) / road.halfWidthM;
+          deckY += mix(road.crossfallA, road.crossfallB, roadT) * clamp(side, -1, 1);
+        }
+        if (!Number.isFinite(deckY)) continue;
+        const roadLength = Math.sqrt(roadLength2);
+        const overlap: ProductionDriveWaterOverlap & { distanceM: number } = {
+          roadId: road.roadId,
+          ...(water.waterId ? { waterId: water.waterId } : {}),
+          x,
+          z,
+          deckY,
+          bedY: mix(water.bedAM, water.bedBM, wt),
+          roadHalfWidthM: road.halfWidthM,
+          waterHalfWidthM: water.halfWidthM,
+          roadTangent: [roadDx / roadLength, roadDz / roadLength],
+          waterTangent,
+          distanceM,
+        };
+        const identity = `${road.roadId}×${water.waterId ?? 'water'}`
+          + `@${Math.round(x / 4)},${Math.round(z / 4)}`;
+        const previous = found.get(identity);
+        if (!previous || distanceM < previous.distanceM
+          || (distanceM === previous.distanceM && deckY > previous.deckY)) {
+          found.set(identity, overlap);
+        }
+      }
+    }
+  }
+  return [...found.values()]
+    .sort((a, b) =>
+      a.roadId.localeCompare(b.roadId)
+      || (a.waterId ?? '').localeCompare(b.waterId ?? '')
+      || a.x - b.x
+      || a.z - b.z)
+    .map(({ distanceM: _distanceM, ...overlap }) => overlap);
+}
+
 export interface ProductionSubstrateTileInput {
   key: string;
   revision: number;

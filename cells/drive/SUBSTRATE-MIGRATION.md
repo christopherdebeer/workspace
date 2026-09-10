@@ -262,6 +262,13 @@ the shared hydro/substrate contract and packed field. Shore-width, habitat and
 fallback classification still have duplicate legacy consumers and remain in
 scope for retirement.
 
+Crossing publication now also reconciles exposed ford overlaps from the exact
+immutable drive and water vectors entering a tile. This closes the arrival-
+order hole where a road could land after the legacy water flush and therefore
+exist in vehicle support without any crossing record. The reconciliation is
+intentionally limited to tagged or physically wet fords; it does not infer a
+bridge, culvert or causeway from clearance.
+
 Fallbacks may remain only for tiles whose substrate status is explicitly
 unavailable, and must be counted. Production contact now enters through a
 typed `available`/`unavailable` tile lookup. `__substrate().contactAvailability`
@@ -293,12 +300,19 @@ No production renderer or physics cutover should occur until all of these hold:
 The current performance evidence is green. `hydro-resolution.test.mjs` measures
 the production flowing tier at 23.3 ms and 3.84 MiB per 256² field, with mean
 bank error improving from 2.53 m at 128² to 1.82 m. The production build-budget
-harness completes the terrain/road build in 16 yielded slices with a 7.3 ms
+harness completes the terrain/road build in 19 yielded slices with a 7.4 ms
 longest main-thread hold; its software-render frame maximum is reported
 separately and is not attributed to tile construction. Substrate render and
 structure-render harnesses pass with zero page errors, exact flowing shoreline
 terrain constraints, one edge-blended body per committed flowing tile and
 atomic crossing packet admission.
+
+The representative parity matrix now clears 1,920 probes across Senqu, Bixby,
+Camps Bay and the explicit-structures fixture with zero wet disagreement, tile
+fallback, unknown speed authority or unresolved crossing semantics. It includes
+the Camps Bay case where a road arrived after the legacy water flush and the
+Senqu bank probe where rollback previously measured ford depth against the
+wrong deck.
 
 `SubstrateShadowMonitor.readyForCutover` is deliberately conservative. It
 stays false for wet disagreement rate at or above 0.1%, depth p95 above 0.10m,
@@ -328,12 +342,13 @@ the failed comparison can be reproduced.
   migration is to move the other array builders and reach/road/terrain solve
   authorities into the substrate tile build, then retire the legacy builder
   entry points and road drape registry.
-- Contact/evidence cutover remains query-gated; representative water drives,
-  wheel-level telemetry and parity thresholds are not yet complete enough to
-  make it the default.
+- Contact/evidence cutover remains query-gated. Representative water drives,
+  persistent evidence and the multi-world parity thresholds pass; default-on
+  production observation and its rollback window are still outstanding.
 - Observed production overlaps still need a full classification audit beyond
-  the now-covered Senqu, Bixby and Chapman's Peak cases, especially untagged
-  fords versus procedural bridges, before unresolved geometry can be retired.
+  the now-covered Senqu, Bixby, Camps Bay, Chapman's Peak and explicit-structure
+  cases, especially untagged fords versus procedural bridges, before unresolved
+  geometry can be retired.
 - Performance, field-memory and tile-build harnesses are green. Production
   world captures still need to confirm cohesive banks, shallows, bed material,
   turbulence, persistent evidence and seams under representative lighting and

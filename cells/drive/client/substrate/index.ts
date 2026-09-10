@@ -33,11 +33,13 @@ export {
 } from './crossing-authority';
 export {
   buildProductionSubstrateTile,
+  findProductionDriveWaterOverlaps,
   ProductionSubstrateStore,
   sampleProductionSubstrateTile,
   type ProductionDriveSample,
   type ProductionDriveRenderMesh,
   type ProductionDriveSegment,
+  type ProductionDriveWaterOverlap,
   type ProductionGroundMesh,
   type ProductionGroundSample,
   type ProductionHydroDetailCollider,
