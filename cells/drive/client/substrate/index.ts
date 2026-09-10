@@ -60,6 +60,11 @@ export {
   type SubstrateConsumerAvailability,
   type SubstrateFallbackSnapshot,
 } from './availability';
+export {
+  resolveProductionSubstrateMode,
+  type ProductionSubstrateMode,
+  type ProductionSubstrateModeName,
+} from './mode';
 export { buildProductionHydroFixture } from './hydro-fixture';
 export { makeCrossingFixture, type CrossingFixtureOptions } from './fixtures';
 export {

@@ -15,6 +15,7 @@ import {
   ProductionSubstrateStore,
   resolveFluidContact,
   resolveCrossingKind,
+  resolveProductionSubstrateMode,
   resolveProductionCrossing,
   resolveProductionCrossingIntent,
   sampleHydroContactLayers,
@@ -120,6 +121,21 @@ function assertCrossing(kind: CrossingKind): ResolvedSubstrateTile {
  * lab are inspecting one implementation rather than parallel demonstrations.
  */
 export function runSubstrateSelfTest(): void {
+  const defaultMode = resolveProductionSubstrateMode(null);
+  assert(defaultMode.name === 'contact' && defaultMode.contact && defaultMode.shadow
+    && !defaultMode.render && !defaultMode.rollback,
+  'ordinary production URLs must default to canonical contact with shadow');
+  const rollbackMode = resolveProductionSubstrateMode('legacy');
+  assert(rollbackMode.name === 'legacy' && !rollbackMode.contact && rollbackMode.shadow
+    && rollbackMode.rollback,
+  'legacy rollback must preserve shadow diagnostics while restoring old contact');
+  const renderMode = resolveProductionSubstrateMode('render');
+  assert(renderMode.render && renderMode.contact && renderMode.shadow,
+    'render cutover must remain an atomic render/contact mode');
+  const offMode = resolveProductionSubstrateMode('off');
+  assert(!offMode.render && !offMode.contact && !offMode.shadow && offMode.rollback,
+    'emergency off mode must disable every substrate consumer');
+
   const overlapDrive = [{
     ax: -20,
     az: 0,

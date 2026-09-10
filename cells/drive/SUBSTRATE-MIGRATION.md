@@ -24,7 +24,7 @@ import the same implementation.
 | --- | --- | --- |
 | Layered data | Ground, drive, water, structure and crossing arrays in one tile | Revision-locked tiles retain exact terrain/contact triangles, renderer-neutral terrain/drive/structure/hydro-detail packets, road/channel vectors, the built hydro field and crossing records |
 | Crossings | Bridge, culvert, ford and causeway resolve explicitly | Live records control structure choice, terrain fill/channel carve and hydro visibility; road/deck generation still comes from the legacy solver |
-| Vehicle contact | Shared support + exposed-fluid resolver | `?substrate=contact` cuts centre, wheel support, fluid force and splash gates to exact substrate contact with legacy rollback |
+| Vehicle contact | Shared support + exposed-fluid resolver | Ordinary URLs cut centre, wheel support, fluid force and splash gates to exact substrate contact; `?substrate=legacy` retains rollback |
 | Hydro input | Production `HydroSample` / `HydroTileField` adapter, preserving unknown speed | Exact channel vectors provide physical speed where known; unknown speed disables current force |
 | Bed and bank material | Canonical `silt/sand/gravel/pebble/rock` bed and `soil/mud/gravel/rock` bank categories | Categories survive OSM/authored input, body resolution, packed hydro fields, CPU contact, diagnostics and shaders without reducing them to turbidity |
 | Diagnostics | `/lab/substrate`, production-hydro overlay, contact readout and fixtures | Shadow/contact modes report tile/fallback probes, revisions, support/fluid parity and crossing authority |
@@ -45,15 +45,16 @@ with newer water.
 - Sections in the dial panel are collapsible.
 - In the game, add `?substrate=shadow`, then call `__substrate()` in the
   console. `__substrate('reset')` clears counters.
-- Add `?substrate=contact` for the guarded consumer cutover. `__waterEvidence()`
-  reports contact authority, wake strength, tyre/hull wetness and live stamps.
+- Ordinary URLs use the canonical contact consumer. `__waterEvidence()` reports
+  contact authority, wake strength, tyre/hull wetness and live stamps. Add
+  `?substrate=legacy` to exercise rollback while keeping parity shadow alive.
 - Run `node devtools/substrate-drive.test.mjs` for the authored Senqu
   representative drive: exact field water, wake, wet tyres, exit tracks and
   drips are asserted in the shipping browser build.
 
-Shadow mode is read-only. Contact mode uses the exact tile for support, fluid
-and vehicle-water evidence while retaining one query switch back to the legacy
-path.
+Shadow mode is read-only. The ordinary production mode uses the exact tile for
+support, fluid and vehicle-water evidence while retaining
+`?substrate=legacy` as the observable rollback path.
 
 ## Migration stages
 
@@ -139,8 +140,8 @@ are retained as exact vectors and records; exact terrain triangles and the
 locked hydro field/channel vectors outrank the deliberately coarse 33×33
 diagnostic raster. Bed and bank categories are carried through the exact hydro
 field and contact adapters rather than inferred again by render or physics.
-`?substrate=contact` makes this tile contact authority while the ordinary URL
-remains the rollback.
+The ordinary URL makes this tile contact authority while
+`?substrate=legacy` remains the rollback.
 
 Rendering now follows the same ownership rule for every local geometric layer.
 Legacy terrain, road, structure and riverbed-detail builders still author
@@ -299,9 +300,9 @@ No production renderer or physics cutover should occur until all of these hold:
 
 The current performance evidence is green. `hydro-resolution.test.mjs` measures
 the production flowing tier at 23.3 ms and 3.84 MiB per 256² field, with mean
-bank error improving from 2.53 m at 128² to 1.82 m. The production build-budget
-harness completes the terrain/road build in 19 yielded slices with a 7.4 ms
-longest main-thread hold; its software-render frame maximum is reported
+bank error improving from 2.53 m at 128² to 1.82 m. The latest ordinary-URL
+build-budget run completes the terrain/road build in 13 yielded slices with a
+7.6 ms longest main-thread hold; its software-render frame maximum is reported
 separately and is not attributed to tile construction. Substrate render and
 structure-render harnesses pass with zero page errors, exact flowing shoreline
 terrain constraints, one edge-blended body per committed flowing tile and
@@ -313,6 +314,11 @@ fallback, unknown speed authority or unresolved crossing semantics. It includes
 the Camps Bay case where a road arrived after the legacy water flush and the
 Senqu bank probe where rollback previously measured ford depth against the
 wrong deck.
+
+`substrate-default-cutover.test.mjs` proves the ordinary URL selects canonical
+contact with zero loaded-tile consumer fallback, while `?substrate=legacy`
+restores the old contact consumer and retains revisioned tiles plus independent
+shadow evidence.
 
 `SubstrateShadowMonitor.readyForCutover` is deliberately conservative. It
 stays false for wet disagreement rate at or above 0.1%, depth p95 above 0.10m,
@@ -342,9 +348,10 @@ the failed comparison can be reproduced.
   migration is to move the other array builders and reach/road/terrain solve
   authorities into the substrate tile build, then retire the legacy builder
   entry points and road drape registry.
-- Contact/evidence cutover remains query-gated. Representative water drives,
-  persistent evidence and the multi-world parity thresholds pass; default-on
-  production observation and its rollback window are still outstanding.
+- Contact/evidence is now the production default with `?substrate=legacy` as
+  the observable rollback. Representative water drives, persistent evidence
+  and the multi-world parity thresholds pass; a production observation window
+  is still outstanding before the legacy consumer can be removed.
 - Observed production overlaps still need a full classification audit beyond
   the now-covered Senqu, Bixby, Camps Bay, Chapman's Peak and explicit-structure
   cases, especially untagged fords versus procedural bridges, before unresolved

@@ -125,6 +125,7 @@ import {
   SubstrateFallbackMonitor,
   type SubstrateContactConsumer,
 } from './substrate/availability';
+import { resolveProductionSubstrateMode } from './substrate/mode';
 import {
   SubstrateShadowMonitor,
   type SubstrateShadowObservation,
@@ -1910,24 +1911,27 @@ const HYDRO_ON = ((): boolean => {
   } catch { return true; }
 })();
 /**
- * Guarded substrate cutover modes. Shadow observes; contact feeds vehicle
- * support/fluid queries; render makes a versioned substrate tile commit the
- * exact hydro field retained by HydroSystem to GPU resources:
+ * Substrate cutover modes. Canonical contact is now the production default;
+ * shadow observes; render remains guarded while representative-world visual
+ * review finishes:
  *
+ *   ordinary URL        (canonical contact + shadow)
  *   ?substrate=shadow
- *   ?substrate=contact   (guarded contact consumer, same diagnostics)
- *   ?substrate=render    (guarded hydro-render consumer, rollback remains default)
+ *   ?substrate=legacy    (legacy contact rollback + shadow)
+ *   ?substrate=render    (guarded hydro-render consumer + canonical contact)
+ *   ?substrate=off       (emergency full disable)
  *   __substrate()
  *   __substrate('reset')
  */
-const SUBSTRATE_RENDER_ON = /[?&]substrate=render(?:&|$)/.test(location.search);
+const SUBSTRATE_MODE = resolveProductionSubstrateMode(
+  new URLSearchParams(location.search).get('substrate'),
+);
+const SUBSTRATE_RENDER_ON = SUBSTRATE_MODE.render;
 // A render cutover is a whole-consumer cutover. Mixing substrate-owned
 // terrain/water pixels with legacy wheel support, fluid force or splash gates
 // would make the same visible crossing answer two different geometries.
-const SUBSTRATE_CONTACT_ON = SUBSTRATE_RENDER_ON
-  || /[?&]substrate=contact(?:&|$)/.test(location.search);
-const SUBSTRATE_SHADOW_ON = SUBSTRATE_CONTACT_ON || SUBSTRATE_RENDER_ON
-  || /[?&]substrate=shadow(?:&|$)/.test(location.search);
+const SUBSTRATE_CONTACT_ON = SUBSTRATE_MODE.contact;
+const SUBSTRATE_SHADOW_ON = SUBSTRATE_MODE.shadow;
 const substrateShadow = SUBSTRATE_SHADOW_ON ? new SubstrateShadowMonitor() : undefined;
 const productionCrossings = new ProductionCrossingRegistry();
 /** Last crossing revision consumed by terrain/hydro invalidation. */
@@ -1983,11 +1987,12 @@ function productionContactAt(
   const at = typeof state === 'undefined'
     ? null
     : productionSubstrate.debugAt(state.x, state.z);
-  const mode = SUBSTRATE_RENDER_ON ? 'render'
-    : SUBSTRATE_CONTACT_ON ? 'contact'
-      : SUBSTRATE_SHADOW_ON ? 'shadow' : 'off';
+  const mode = SUBSTRATE_MODE.name;
   return substrateShadow ? {
     ...substrateShadow.snapshot(), mode, renderAuthority: SUBSTRATE_RENDER_ON ? 'substrate-tile' : 'hydro-system',
+    contactAuthority: SUBSTRATE_CONTACT_ON ? 'substrate-tile' : 'legacy',
+    rollback: SUBSTRATE_MODE.rollback,
+    rollbackWith: '?substrate=legacy',
     crossings, crossingRecords, crossingEarthworks, tiles, render, at,
     contactAvailability: substrateFallbacks.snapshot(),
     renderPacketRejections: productionRenderPacketRejections.slice(),
@@ -1996,8 +2001,11 @@ function productionContactAt(
     enabled: false,
     mode,
     renderAuthority: 'hydro-system',
-    enableWith: '?substrate=shadow, ?substrate=contact, or ?substrate=render',
-    note: 'shadow mode is read-only and does not drive rendering or physics',
+    contactAuthority: 'legacy',
+    rollback: SUBSTRATE_MODE.rollback,
+    rollbackWith: '?substrate=legacy',
+    enableWith: 'remove ?substrate=off, or use ?substrate=shadow / render',
+    note: 'substrate is fully disabled; ordinary URLs use canonical contact',
     crossings,
     crossingRecords,
     crossingEarthworks,
@@ -18431,7 +18439,7 @@ function observeSubstrateParityAt(x: number, z: number): boolean {
   if (!substrateShadow) {
     return {
       enabled: false,
-      enableWith: '?substrate=shadow, ?substrate=contact, or ?substrate=render',
+      enableWith: 'ordinary URLs, ?substrate=shadow, legacy, or render',
     };
   }
   substrateShadow.observe(substrateParityObservationAt(x, z));
@@ -18444,7 +18452,7 @@ function observeSubstrateParityAt(x: number, z: number): boolean {
     return {
       enabled: false,
       sampled: 0,
-      enableWith: '?substrate=shadow, ?substrate=contact, or ?substrate=render',
+      enableWith: 'ordinary URLs, ?substrate=shadow, legacy, or render',
     };
   }
   const waterLimit = clamp(Math.floor(maxWater), 16, 256);
