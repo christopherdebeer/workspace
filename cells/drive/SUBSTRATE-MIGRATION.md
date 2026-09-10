@@ -215,6 +215,27 @@ established builders remain hidden authoring inputs until direct substrate
 generation replaces them; rollback therefore remains available without mixing
 old and new visible layers.
 
+Invalidation forgets the COMMITS, not the picture. A source revision (a
+terrain rebuild, a hydro re-feed, a way or cover arrival marking the tile
+dirty) removes the tile's contact authority at once — `productionSubstrate`
+drops the tile and contact falls back to the legacy sampler, which reads the
+new build the moment it exists — but the admitted meshes and the hydro
+render stay in the scene until the next complete revision is admitted, and
+each commit swaps its previous binding in the same call that adds the new
+one. The first cut removed everything at invalidation, and under a cover
+arrival that dirtied a whole ring the chart showed 2 km squares popping out
+to the globe and back one at a time for as long as the rebuild queue took;
+`cells/drive/CLAUDE.md`, "the tile that popped out", has the measurement.
+Rapid-rock colliders are the exception: they stand down at invalidation, the
+admitted revision brings its own up. The hydro system does the same in
+deferred mode — `installField` keeps the previous field's parts and
+`renderField` swaps them when the substrate admits the new field
+(`renderedField` is what the parts were built from; `parts.length` no longer
+means "this field is rendered"). `__tileholes()` and the telemetry dump's
+`ground:` row count built-but-unshown tiles every frame; a settled render
+mode reads zero there, and `uncommittedVisibleTerrain` in the snapshot is
+the stale-but-still-shown count mid-rebuild, not a defect.
+
 The shared flowing-water shader now keeps the inland feather close to the
 terrain colour until it meets the opaque body, strengthens continuous
 shallow-edge terrain coupling, exposes a separate world-anchored pebble mask,

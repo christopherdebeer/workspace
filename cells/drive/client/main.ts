@@ -6190,6 +6190,15 @@ interface SubstrateHydroDetailRenderBinding extends SubstrateRenderBinding {
   rocks: Set<RapidRock>;
 }
 const substrateTerrainRenderMeshes = new Map<string, SubstrateRenderBinding>();
+/** The mesh a rebuild replaces. In render mode the admitted mesh IS the map's
+ *  entry (commitTerrainRenderFromSubstrate swaps it in), it is still on
+ *  screen, and its binding disposes it when the next revision is admitted —
+ *  so it is left exactly where it is. A wrapper that was never admitted, or
+ *  any mesh on the legacy path, goes now. */
+function retireTerrainSource(old: THREE.Mesh): void {
+  if (SUBSTRATE_RENDER_ON && (old.userData as { substrateOwned?: boolean }).substrateOwned) return;
+  worldGroup.remove(old); old.geometry.dispose();
+}
 const productionTerrainRenderPackets = new Map<string, {
   terrainRevision: number;
   packets: readonly ProductionRenderMesh[];
@@ -6335,7 +6344,7 @@ function buildTerrainMesh(t: HeightTile): void {
   cellTrisCache.set(geo, b.cellTris);
   (geo.userData as { seg?: number }).seg = SEG;
   const old = terrainMeshes.get(key);
-  if (old) { worldGroup.remove(old); old.geometry.dispose(); }
+  if (old) retireTerrainSource(old);
   substrateTerrainCommits.delete(key);
   const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key) : terrainMat);
   mesh.userData.productionTerrainSource = true;
@@ -6485,7 +6494,7 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
   cellTrisCache.set(geo, { seg: SEG, offs: r.cellOffs, tris: r.cellTris });
   (geo.userData as { seg?: number }).seg = SEG;
   const old = terrainMeshes.get(key);
-  if (old) { worldGroup.remove(old); old.geometry.dispose(); }
+  if (old) retireTerrainSource(old);
   substrateTerrainCommits.delete(key);
   const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key, r.normalMap) : terrainMat);
   mesh.userData.productionTerrainSource = true;
@@ -6605,6 +6614,56 @@ function hydroRefeed(t: HeightTile, key: string): void {
 const terrainDirty = new Set<string>();
 /** Monotonic per-tile mesh/earthwork revision, consumed by substrate shadow. */
 const terrainRevision = new Map<string, number>();
+/**
+ * ── GROUND HOLES ── the audit for "the tile popped out".
+ *
+ * A fine tile is a HOLE when the world has built it and is not showing it:
+ * neither its mesh nor, in render mode, its admitted binding is a child of
+ * the world. The legacy path cannot make one — a build swaps the mesh in the
+ * same call — and render mode made one at every invalidation until the
+ * picture was kept (see invalidateProductionSubstrateTile). `pops` counts a
+ * tile that WAS shown going dark, `unshown` the tiles built but never yet
+ * admitted (the first-admission wait, which is honest latency and not a
+ * pop), and the hidden time and its longest stretch say how bad a pop is.
+ * Sampled every frame — a ring is under a hundred keys — and read by
+ * `__tileholes()` and the telemetry dump's `ground:` row.
+ */
+const holeSince = new Map<string, number>();
+const shownOnce = new Set<string>();
+const holeStat = { now: 0, unshown: 0, pops: 0, ms: 0, max: 0, recent: [] as Array<{ key: string; ms: number; at: number }> };
+function groundShown(key: string): boolean {
+  const m = terrainMeshes.get(key);
+  if (m && m.parent === worldGroup) return true;
+  const b = substrateTerrainRenderMeshes.get(key);
+  if (b) for (const mesh of b.meshes) if (mesh.parent === worldGroup) return true;
+  return false;
+}
+function auditGroundHoles(now: number): void {
+  let holes = 0, unshown = 0;
+  for (const key of terrainMeshes.keys()) {
+    if (groundShown(key)) {
+      shownOnce.add(key);
+      const since = holeSince.get(key);
+      if (since === undefined) continue;
+      holeSince.delete(key);
+      const ms = now - since;
+      holeStat.ms += ms;
+      if (ms > holeStat.max) holeStat.max = ms;
+      holeStat.recent.push({ key, ms: Math.round(ms), at: Math.round(now) });
+      if (holeStat.recent.length > 40) holeStat.recent.shift();
+      continue;
+    }
+    if (!shownOnce.has(key)) { unshown++; continue; }
+    holes++;
+    if (!holeSince.has(key)) { holeSince.set(key, now); holeStat.pops++; }
+  }
+  holeStat.now = holes; holeStat.unshown = unshown;
+}
+(window as unknown as { __tileholes?: object }).__tileholes = (): object => ({
+  ...holeStat,
+  open: [...holeSince].map(([key, since]) => ({ key, ms: Math.round(performance.now() - since) })),
+  far: { asked: farTiles.size - farMeshes.size, stale: farStale.size, inflight: farAsking.size },
+});
 function coverDirtiedTerrain(xs: number, zs: number, w: number, h: number): void {
   for (const [key, t] of heightTiles) {
     if (t.xs > xs + w || t.zs > zs + h || t.xs + t.w < xs || t.zs + t.h < zs) continue;
@@ -19522,48 +19581,44 @@ function invalidateProductionSubstrateTile(key: string): void {
   if (!SUBSTRATE_SHADOW_ON) return;
   productionSubstrate.remove(key);
   if (!SUBSTRATE_RENDER_ON) return;
-  const terrainBinding = substrateTerrainRenderMeshes.get(key);
-  const hadTerrain = !!terrainBinding;
-  if (terrainBinding) {
-    for (const mesh of terrainBinding.meshes) {
-      mesh.removeFromParent();
-      mesh.geometry.dispose();
-    }
-    substrateTerrainRenderMeshes.delete(key);
-  }
+  // THE AUTHORITY GOES NOW; THE PICTURE STAYS UNTIL THE NEXT ONE IS ADMITTED.
+  //
+  // This used to pull every admitted mesh of the tile out of the world —
+  // terrain, carriageways, crossing structures, rapid detail, the water — the
+  // moment anything dirtied the tile, and the tile was then a hole until its
+  // rebuild landed, the substrate re-assembled it and the atomic commit put a
+  // whole new revision back. A cover raster arriving over the fine ring
+  // dirties every tile under it at once, the queue drains at one heavy job a
+  // frame with a 100–400 ms gap between builds, and the chart showed 2 km
+  // squares popping out to the globe and back in one at a time, thirty-one
+  // deep in REBUILD (the Senqu report). Contact still stands down here —
+  // `productionSubstrate.remove` — so the truck rides the legacy sampler,
+  // which reads the NEW build the moment it exists; a rebuild changes colour
+  // far more often than height, and a few hundred milliseconds of the old
+  // picture over the new ground is the trade every streaming renderer makes.
+  // The commit functions already know how to swap: each keeps its `previous`
+  // binding and, on admission of a different revision, removes and disposes
+  // the old meshes in the same call that adds the new — no frame between. So
+  // only the COMMITS are forgotten here; the bindings, and the hydro render
+  // (which keeps its old field's parts in deferred mode for the same reason),
+  // wait for the swap. Measured: see CLAUDE.md, "the tile that popped out".
   const hadCommit = substrateTerrainCommits.delete(key);
-  const hadRoad = dropSubstrateRoadRenderBinding(key);
   const hadRoadCommit = substrateRoadCommits.delete(key);
-  const structureBinding = substrateStructureRenderMeshes.get(key);
-  const hadStructure = !!structureBinding;
-  if (structureBinding) {
-    for (const mesh of structureBinding.meshes) {
-      mesh.removeFromParent();
-      mesh.geometry.dispose();
-    }
-    substrateStructureRenderMeshes.delete(key);
-  }
   const hadStructureCommit = substrateStructureCommits.delete(key);
+  const hadHydroDetailCommit = substrateHydroDetailCommits.delete(key);
+  // Rapid rocks are colliders, not pixels. A rock the next revision moves
+  // must not still be hit where it was, so they stand down now; the admitted
+  // revision brings its own up, and a same-revision re-commit re-activates.
+  let hadRocks = false;
   const hydroDetailBinding = substrateHydroDetailRenderMeshes.get(key);
-  let hadHydroDetail = !!hydroDetailBinding;
   if (hydroDetailBinding) {
-    for (const mesh of hydroDetailBinding.meshes) {
-      mesh.removeFromParent();
-      mesh.geometry.dispose();
-    }
     for (const rock of hydroDetailBinding.rocks) {
       if (!activeRapidRocks.has(rock)) continue;
       deactivateRapidRock(rock);
-      hadHydroDetail = true;
+      hadRocks = true;
     }
-    substrateHydroDetailRenderMeshes.delete(key);
   }
-  const hadHydroDetailCommit = substrateHydroDetailCommits.delete(key);
-  const hadHydro = !!hydroSys?.getTileBinding(key);
-  hydroSys?.unrenderTile(key);
-  if (hadTerrain || hadCommit || hadRoad || hadRoadCommit
-    || hadStructure || hadStructureCommit
-    || hadHydroDetail || hadHydroDetailCommit || hadHydro) {
+  if (hadCommit || hadRoadCommit || hadStructureCommit || hadHydroDetailCommit || hadRocks) {
     substrateRenderInvalidations++;
   }
 }
@@ -24766,6 +24821,7 @@ function setFarLevel(z: number): void {
   }
   farMeshes.clear();
   farTiles.clear();
+  farStale.clear();
   // The retired level's bake records go with it. They were kept, and they
   // are keyed by level so nothing collided — but `__far().cover` and `.tint`
   // aggregate over the whole map, so a z7 shell reported z11's twenty-five
@@ -24829,6 +24885,13 @@ const curveDrop = (dx: number, dz: number): number => (dx * dx + dz * dz) / (2 *
  */
 const farTiles = new Set<string>();
 const farMeshes = new Map<string, THREE.Mesh>();
+/** Shell tiles whose bake is out of date (cover landed under them) and are
+ *  still on screen with the old colour: loadFarTile asks these again, and
+ *  the landing swaps the mesh. `farAsking` is the fetch in flight, so a second
+ *  cover arrival during it does not ask a third time — the bake that lands
+ *  samples whatever cover is there when it runs. */
+const farStale = new Set<string>();
+const farAsking = new Set<string>();
 /**
  * A BROWSE LEAVES TILES BEHIND. The ring is asked around the chart's focus on
  * every stream pass, and a focus turning from California to India asks a
@@ -24858,7 +24921,7 @@ function evictFarOutside(): void {
     farGroup.remove(mesh); mesh.geometry.dispose();
     const mt = farMats.get(key);
     if (mt && mesh.material === mt) { mt.normalMap?.dispose(); mt.dispose(); farMats.delete(key); }
-    farMeshes.delete(key); farTiles.delete(key);
+    farMeshes.delete(key); farTiles.delete(key); farStale.delete(key);
     farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key); farBakeZ.delete(key);
   }
   // …and the asked set, or a refused fetch outside the ring is "asked" for ever.
@@ -24936,9 +24999,16 @@ function coverDirtiedFar(modeMoved: boolean, x: number, z: number, w: number, h:
       if (!r) continue;
       if (r.xs + r.w < x || r.xs > x + w || r.zs + r.h < z || r.zs > z + h) continue;
     }
-    farGroup.remove(mesh); mesh.geometry.dispose();
-    farMeshes.delete(key); farTiles.delete(key);
-    farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key); farBakeZ.delete(key);
+    if (farAsking.has(key)) continue;
+    // THE MESH STAYS UP WITH ITS STALE COLOUR. This used to remove it and
+    // forget the tile, so the next stream pass would ask again — and between
+    // the removal and the re-bake landing (146 ms of build on the phone,
+    // four fetches at a time, behind the rest of the ring's asks) the shell
+    // under the fine world was the bare globe. Now the tile is only marked:
+    // loadFarTile asks a stale key again, and the landing swaps the mesh in
+    // the same call that builds the new one. The bake records stay too —
+    // the raster still answers for the ground until the swap.
+    farStale.add(key);
   }
 }
 /**
@@ -25282,8 +25352,10 @@ const farFetched: Array<{ key: string; at: number; x: number; z: number }> = [];
 async function loadFarTile(x: number, y: number): Promise<void> {
   const z = farZ;
   const key = `${z}/${x}/${y}`;
-  if (farTiles.has(key)) return;
+  if (farTiles.has(key) && !farStale.has(key)) return;
+  farStale.delete(key);
   farTiles.add(key);
+  farAsking.add(key);
   {
     const b = tileBounds(x, y, z);
     const [cx, cz] = toLocal((b.latN + b.latS) / 2, (b.lonW + b.lonE) / 2);
@@ -25292,7 +25364,7 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   if (farInFlight >= 4) await new Promise<void>((go) => farQueue.push(go));
   farInFlight++;
   const data = await fetchHeights(x, y, z).finally(() => {
-    farInFlight--;
+    farInFlight--; farAsking.delete(key);
     farQueue.shift()?.();
   });
   // The level may have changed while this was in flight; that shell is gone.
@@ -25395,6 +25467,11 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   profAdd('far:nrm', _pNrm);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.copy(centre);
+  // The stale tile this re-bake replaces goes in the same breath the new one
+  // arrives — see coverDirtiedFar. Its own material was disposed by farMatFor
+  // above, or it wears the shared one.
+  const stale = farMeshes.get(key);
+  if (stale) { farGroup.remove(stale); stale.geometry.dispose(); }
   farMeshes.set(key, mesh);
   farRasters.set(key, { xs, zs, w, h, data });
   farGroup.add(mesh);
@@ -28657,7 +28734,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // are SHARED and never touched.
     dropRetiredFar(); dropRetiredOv();
     for (const m of farMeshes.values()) { farGroup.remove(m); m.geometry.dispose(); }
-    farMeshes.clear(); farTiles.clear(); farCoverHit.clear(); farTint.clear(); farRasters.clear(); farBakeZ.clear();
+    farMeshes.clear(); farTiles.clear(); farStale.clear(); farCoverHit.clear(); farTint.clear(); farRasters.clear(); farBakeZ.clear();
     for (const m of ovMeshes.values()) { ovGroup.remove(m); m.geometry.dispose(); }
     ovMeshes.clear(); ovTiles.clear(); ovPlaces.clear(); ovWays.clear(); ovWayV++;
     for (const child of [...worldGroup.children]) {
@@ -28676,6 +28753,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // so the worldGroup sweep above never saw their geometries.
     for (const mesh of terrainMeshes.values()) mesh.geometry.dispose();
     heightTiles.clear(); terrainReady.clear(); terrainMeshes.clear(); terrainDirty.clear(); terrainRevision.clear();
+    holeSince.clear(); shownOnce.clear();
     substrateTerrainCommits.clear();
     substrateTerrainRenderMeshes.clear();
     productionTerrainRenderPackets.clear();
@@ -33471,7 +33549,7 @@ let texMeanCache: Record<string, number> | null = null;
 (window as unknown as { __farrebake?: object }).__farrebake = (): object => {
   const n = farMeshes.size;
   for (const m of farMeshes.values()) { farGroup.remove(m); m.geometry.dispose(); }
-  farMeshes.clear(); farTiles.clear(); farCoverHit.clear();
+  farMeshes.clear(); farTiles.clear(); farStale.clear(); farCoverHit.clear();
   return { dropped: n };
 };
 /** How much of the sunward haze lobe reaches the GROUND (the sky keeps all of
@@ -39489,6 +39567,7 @@ function telemetryReport(): string {
     const q = (p: number): string => n ? (recent[Math.min(n - 1, Math.floor(p * n))] / 1e6).toFixed(2) : '?';
     const [fLat, fLon] = localToLatLon(viewX() + panX, viewZ() + panZ);
     L.push(`chart ${camMode} · zoom ${zoomCur < 10 ? zoomCur.toFixed(2) : String(Math.round(zoomCur))} · ${chartMpp().toFixed(1)} m/px · ${chartRemote() ? 'browsed' : 'home'} focus ${fLat.toFixed(2)},${fLon.toFixed(2)} · globe ${globeMesh.visible ? 'on' : 'off'} free ${globeFree()} fling ${flingOn ? 'on' : 'off'} · far z${farZ} ${farMeshes.size}/${farTiles.size} retired ${farRetired.length} inflight ${farInFlight} queued ${farQueue.length} · ov z${ovZ} ${ovHave()}/${ovTiles.size} (${ovMeshes.size} drawn, ${ovEmpty.size} empty) retired ${ovRetired.length} failing ${[...ovFailedAt.values()].filter((t) => performance.now() - t < OV_RETRY_MS).length} demless ${ovDemlessKeys.size} places ${ovPlaces.size} labels ${ovLabelsDrawn.length}`);
+    L.push(`ground: holes ${holeStat.now} (never shown ${holeStat.unshown}) · pop-outs ${holeStat.pops} · hidden ${(holeStat.ms / 1000).toFixed(1)}s longest ${Math.round(holeStat.max)}ms · far asked ${farTiles.size - farMeshes.size} stale ${farStale.size} inflight ${farAsking.size}`);
     L.push(`world pass: draw calls mean ${Math.round(drawStat.sumCalls / Math.max(1, drawStat.n))} max ${drawStat.maxCalls} · triangles mean ${(drawStat.sumTris / Math.max(1, drawStat.n) / 1e6).toFixed(2)}M max ${(drawStat.maxTris / 1e6).toFixed(2)}M · recent ${n} passes p50 ${q(0.5)}M p95 ${q(0.95)}M · last ${(drawStat.tris / 1e6).toFixed(2)}M / ${drawStat.calls} calls`); }
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
   { const r = goalSolveStat; if (r.runs) L.push(`route solves ${r.runs} (found ${r.found} failed ${r.failed}) · ms/solve ${(r.totalMs / r.runs).toFixed(0)} (graph ${(r.graphTotalMs / r.runs).toFixed(0)}) max ${Math.round(r.maxMs)} · slices ${r.slices} max ${r.maxSliceMs.toFixed(1)}ms · last span ${Math.round(r.spanMs)}ms · walked ${r.walked}/${r.nodes} (fine ${graphStat.fine} coarse ${graphStat.coarse} portals ${graphStat.portals}) · graph cached ${graphStat.cached ?? 0} · tiles skipped ${r.tilesSkipped} hit ${r.tilesHit} · last ${r.last}`); }
@@ -40901,6 +40980,7 @@ function tick(now: number): void {
   // Update the single zoom state BEFORE globe/shell ownership is evaluated.
   // Previously the globe used last frame's zoom while the shell used this one.
   if (camMode === 'top') zoomCur = panPtrs.size === 2 ? zoomT : smoothChartZoom(zoomCur, zoomT, dt);
+  auditGroundHoles(performance.now());
   { const _p = performance.now(); stepGlobe(); profAdd('stepGlobe', _p); }
   // The atmosphere gives out where the planet becomes an object: by 14km a
   // pixel the frame is wider than the Earth's disc and what surrounds the limb
@@ -44966,6 +45046,58 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       + ` REBUILD ${terrainDirty.size} · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
       + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
       6, 48, UI.soft);
+    // ── THE KEY ── the marks above, named in their own ink, so the overlay
+    // answers "what is that" without the source beside it. One row per
+    // layer in the order they stream — vectors, fine terrain, shell — and a
+    // row only while its layer is drawing marks (the vector row folds with
+    // its grid, the shell row appears with its boxes). A row wraps under its
+    // own name when the HUD is narrow. The header's words are these words.
+    {
+      const gw = (t: string): number => {
+        let w = 0;
+        for (const ch of t) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
+        return w;
+      };
+      let ly = 56;
+      type Mark = (cx: number, cy: number) => void;
+      const row = (name: string, items: Array<[string, string, Mark]>): void => {
+        const x0 = 6 + gw(name) + 4;
+        let lx = x0;
+        hctx.globalAlpha = 1;
+        textEdgeP(name, 6, ly, UI.text);
+        for (const [label, col, mark] of items) {
+          const w = 7 + gw(label);
+          if (lx > x0 && lx + w > HW - 4) { lx = x0; ly += 8; }
+          hctx.globalAlpha = 1;
+          mark(lx + 2, ly + 2);          // the glyph spans y-1..y+5; its middle is y+2
+          hctx.globalAlpha = 1;
+          textEdgeP(label, lx + 7, ly, col);
+          lx += w + 5;
+        }
+        ly += 8;
+      };
+      const box = (col: string): Mark => (cx, cy) => {
+        hctx.fillStyle = col; hctx.globalAlpha = 0.9;
+        dBox([cx - 3, cy - 3], [cx + 3, cy - 3], [cx + 3, cy + 3], [cx - 3, cy + 3]);
+      };
+      if (oFine) {
+        row(`Z${OSM_Z}`, [
+          ['WIRE', UI.gold, (cx, cy) => { hctx.fillStyle = UI.gold; hctx.fillRect(cx - 1, cy - 1, 3, 3); }],
+          ['QUEUE', UI.soft, (cx, cy) => { hctx.fillStyle = UI.soft; hctx.fillRect(cx - 1, cy - 1, 2, 2); }],
+          ['FAIL', UI.bad, (cx, cy) => {
+            hctx.fillStyle = UI.bad;
+            dSeg([cx - 2, cy - 2], [cx + 2, cy + 2]); dSeg([cx - 2, cy + 2], [cx + 2, cy - 2]);
+          }],
+          ['DONE', UI.good, (cx, cy) => { hctx.fillStyle = UI.good; hctx.fillRect(cx, cy, 2, 2); }],
+          ['ASKED', UI.dim, (cx, cy) => { hctx.fillStyle = UI.dim; hctx.fillRect(cx, cy, 1, 1); }],
+        ]);
+      }
+      row(`Z${TERRAIN_Z}`, [
+        ['MESH', UI.edge, box(UI.edge)], ['WAIT', UI.gold, box(UI.gold)], ['REBUILD', UI.hot, box(UI.hot)],
+      ]);
+      if (!oFine) row(`Z${farZ}`, [['SHELL', UI.edge, box(UI.edge)], ['ASKED', UI.gold, box(UI.gold)]]);
+      hctx.globalAlpha = 1;
+    }
   }
   // ── checkpoint markers, under everything ──
   // Never a label and never a distance: the moment a checkpoint tells you how

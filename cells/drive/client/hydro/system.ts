@@ -134,6 +134,9 @@ interface TileRecord {
   textures?: HydroTileTextures;
   /** Standing, flowing, and (for coastal tiles) a narrow swash overlay. */
   parts: TilePart[];
+  /** The field `parts` were built from. In deferred mode it lags `field`:
+   *  the old picture stays up until the substrate admits the new one. */
+  renderedField?: HydroTileField;
   binding?: HydroTileBinding;
   shoreRefinedCells: number;
 }
@@ -669,8 +672,10 @@ class DefaultHydroSystem implements HydroSystem {
     const record = this.records.get(field.key)!;
     // Identity matters as well as revision. A substrate tile must commit the
     // immutable field it captured, not an equal-looking field reconstructed
-    // after the renderer's record advanced.
-    if (record.parts.length || !field.hasWater) return true;
+    // after the renderer's record advanced. And "already rendered" is asked
+    // of the FIELD, not of the parts: in deferred mode the parts on screen
+    // may be the previous field's, kept up until this admission swaps them.
+    if (record.renderedField === field) return true;
     this.installRender(record, field);
     return true;
   }
@@ -880,14 +885,21 @@ class DefaultHydroSystem implements HydroSystem {
   }
 
   private installField(record: TileRecord, field: HydroTileField): void {
-    this.releaseRender(record);
     record.field = field;
     this.bankRev++;
+    // Immediate mode swaps the picture here (installRender releases the old
+    // parts first). Deferred mode keeps the OLD parts up: the substrate
+    // admits the new field with the rest of its tile and `renderField` swaps
+    // then. Releasing here is what made every hydro re-feed in render mode
+    // take the water off the map until the tile was re-admitted.
     if (!this.deferRendering) this.installRender(record, field);
   }
 
   private installRender(record: TileRecord, field: HydroTileField): void {
     this.releaseRender(record);
+    // Rendered even when it comes to no mesh: "no water" is this field's
+    // picture, and a second admission of it must not rebuild the cull.
+    record.renderedField = field;
     if (!field.hasWater) return;
     // The cull first: a tile can report water and still keep no cell, when the
     // coverage is a sliver the lattice cannot resolve. Building the textures
@@ -970,6 +982,7 @@ class DefaultHydroSystem implements HydroSystem {
       part.material.dispose();
     }
     record.parts = [];
+    record.renderedField = undefined;
     record.shoreRefinedCells = 0;
     if (record.textures) disposeHydroTextures(record.textures);
     record.textures = undefined;

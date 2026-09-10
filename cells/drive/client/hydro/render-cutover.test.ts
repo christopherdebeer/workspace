@@ -68,22 +68,34 @@ export async function runHydroRenderCutoverTest(): Promise<void> {
     assert(hydro.renderField(first as HydroTileField),
       'retained field could not be recommitted after invalidation');
 
+    // The first field's picture is up when the second arrives, and it STAYS
+    // up — the substrate admits the second with the rest of its tile, and
+    // only that admission swaps the parts. Dropping them here is what took
+    // the water off the map at every re-feed in render mode.
+    const stale = [...hydro.object3d.children];
+    assert(stale.length > 0, 'first field was not rendered before the second arrived');
     await hydro.upsertTile(input(2, .8));
     const second = hydro.fieldAt(300, 300);
     assert(second && second !== first && second.revision === 2,
       'second immutable field did not replace the first');
-    assert(hydro.object3d.children.length === 0,
-      'new field revision retained stale render resources');
+    assert(hydro.object3d.children.length === stale.length
+      && hydro.object3d.children.every((c) => stale.includes(c)),
+      'new field revision dropped the previous picture before admission');
     assert(!hydro.canRenderField(first as HydroTileField),
       'superseded substrate field passed render preflight');
     assert(!hydro.renderField(first as HydroTileField),
       'superseded substrate field was allowed to commit');
-    assert(hydro.object3d.children.length === 0,
+    assert(hydro.object3d.children.length === stale.length
+      && hydro.object3d.children.every((c) => stale.includes(c)),
       'refused stale field changed render state');
     assert(hydro.renderField(second as HydroTileField),
       'matching second revision was refused');
-    assert(hydro.object3d.children.length > 0,
-      'matching second revision did not restore rendering');
+    assert(hydro.object3d.children.length > 0
+      && !hydro.object3d.children.some((c) => stale.includes(c)),
+      'matching second revision did not swap the picture for its own');
+    assert(hydro.renderField(second as HydroTileField)
+      && hydro.object3d.children.length > 0,
+      'a second admission of the same field rebuilt or dropped its picture');
 
     const foreign = { ...(second as HydroTileField) };
     assert(!hydro.canRenderField(foreign),
