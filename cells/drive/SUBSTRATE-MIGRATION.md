@@ -146,25 +146,27 @@ Rendering now follows the same ownership rule for every local geometric layer.
 Legacy terrain, road, structure and riverbed-detail builders still author
 geometry during migration, but tile assembly no longer captures those meshes.
 Terrain publishes its renderer-neutral packet while the kernel result is
-applied; roads and riverbed details publish their arrays at batch completion
-and bind them after terrain redrape; structures publish at structure-batch
-completion. Road, structure and hydro-detail mesh wrappers are disposed
-immediately. Once terrain commits, its packet-instantiated visible mesh replaces
-the temporary build mesh as the shared query/raycast authority. Consequently a
-settled render-mode tile retains zero hidden terrain, road, structure or
-hydro-detail source meshes. Terrain packet positions are also the exact
-ground-contact array, so pixels and support cannot diverge through a second
-copy. Attribute packets preserve their authored typed component storage and
-normalized decode, including de-interleaving renderer-owned layouts without
-expanding integer colours or masks to floats. A source revision removes the
-complete visible packet; the next matching tile revision reconstructs terrain,
-drive, structures, hydro details/colliders and hydro atomically. An
-asynchronous stale tile request can refuse that commit, but cannot discard a
-new road/detail packet while it waits for terrain redrape. Diagnostics expose
-build-authored packet counts, retained source objects, bytes, conversion
-failures, rejection reasons and any accidentally visible source mesh; browser
-cutover requires publication parity, zero retained source meshes, source
-visibility and failures.
+applied. Profiled road ribbon decks now publish directly from their final
+merged arrays without constructing a temporary renderer mesh; mutable draped
+tracks and junctions still publish after terrain redrape at the legacy authoring
+boundary. Riverbed details publish their arrays after redrape, and structures
+publish at structure-batch completion. Any remaining road, structure and
+hydro-detail mesh wrappers are disposed immediately. Once terrain commits, its
+packet-instantiated visible mesh replaces the temporary build mesh as the shared
+query/raycast authority. Consequently a settled render-mode tile retains zero
+hidden terrain, road, structure or hydro-detail source meshes. Terrain packet
+positions are also the exact ground-contact array, so pixels and support cannot
+diverge through a second copy. Attribute packets preserve their authored typed
+component storage and normalized decode, including de-interleaving
+renderer-owned layouts without expanding integer colours or masks to floats. A
+source revision removes the complete visible packet; the next matching tile
+revision reconstructs terrain, drive, structures, hydro details/colliders and
+hydro atomically. An asynchronous stale tile request can refuse that commit,
+but cannot discard a new road/detail packet while it waits for terrain redrape.
+Diagnostics expose direct/build-authored packet counts, retained source
+objects, bytes, conversion failures, rejection reasons and any accidentally
+visible source mesh; browser cutover requires publication parity, zero retained
+source meshes, source visibility and failures.
 
 ### 4. Cut rendering over as one unit — terrain, drive and hydro guarded
 

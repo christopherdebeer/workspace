@@ -15007,10 +15007,12 @@ let ribBatch: Map<string, {
 }> | null = null;
 let ribBatchTerrainOwner: string | null = null;
 let roadBatchMeshes: THREE.Mesh[] | null = null;
+let roadBatchPackets: ProductionDriveRenderMesh[] | null = null;
 interface ProductionRoadRenderCandidate {
   generation: number;
   meshes: Set<THREE.Mesh>;
   meshCount: number;
+  directPacketCount: number;
   packetTerrainRevision: number;
   packets: readonly ProductionDriveRenderMesh[];
   authoredAfterRedrape: boolean;
@@ -15062,14 +15064,19 @@ function addRoadRenderMesh(mesh: THREE.Mesh): void {
     worldGroup.add(mesh);
   }
 }
-function registerProductionRoadRenderBatch(owner: string, meshes: THREE.Mesh[]): void {
-  if (!meshes.length) return;
+function registerProductionRoadRenderBatch(
+  owner: string,
+  meshes: THREE.Mesh[],
+  directPackets: readonly ProductionDriveRenderMesh[] = [],
+): void {
+  if (!meshes.length && !directPackets.length) return;
   let candidate = productionRoadRenderCandidates.get(owner);
   if (!candidate) {
     candidate = {
       generation: 0,
       meshes: new Set(),
       meshCount: 0,
+      directPacketCount: 0,
       packetTerrainRevision: -1,
       packets: [],
       authoredAfterRedrape: false,
@@ -15077,10 +15084,12 @@ function registerProductionRoadRenderBatch(owner: string, meshes: THREE.Mesh[]):
     productionRoadRenderCandidates.set(owner, candidate);
   }
   candidate.generation++;
-  candidate.meshCount += meshes.length;
+  candidate.meshCount += meshes.length + directPackets.length;
+  candidate.directPacketCount += directPackets.length;
   for (const mesh of meshes) candidate.meshes.add(mesh);
   candidate.packetTerrainRevision = -1;
   candidate.authoredAfterRedrape = false;
+  candidate.packets = [...candidate.packets, ...directPackets];
   appendProductionRoadRenderPackets(candidate, meshes);
   for (const mesh of meshes) {
     mesh.removeFromParent();
@@ -15250,15 +15259,49 @@ function flushRibbons(): void {
     }
     for (const g of geos) g.dispose();
     smoothSoupNormals(out);
-    const mesh = new THREE.Mesh(out, mat);
-    mesh.userData.ribbon = true;
-    // NAMED, because __census can only report what a mesh calls itself and
-    // the two biggest things in the world — the carriageways and the building
-    // stock — both came back as `unnamed`. That is the census's one job, and
-    // it made a mesh audit impossible to write as an assertion.
-    mesh.name = 'ribbon';
-    if (drive) addRoadRenderMesh(mesh);
-    else worldGroup.add(mesh);
+    // PROFILED DRIVE DECKS AUTHOR THE SUBSTRATE PACKET DIRECTLY. Their merged
+    // arrays are final at this boundary: unlike a draped track they will never
+    // be rewritten by redrape. Creating a THREE.Mesh here only to read the
+    // same arrays back into a packet and dispose the wrapper made the legacy
+    // renderer an unnecessary intermediate authority.
+    let directlyAuthored = false;
+    if (drive && lift === null && SUBSTRATE_RENDER_ON
+      && ribBatchTerrainOwner && roadBatchPackets) {
+      const packet = productionRenderPacketFromGeometry({
+        name: 'ribbon',
+        geometry: out,
+        material: [mat],
+        matrix: new Float32Array([
+          1, 0, 0, 0,
+          0, 1, 0, 0,
+          0, 0, 1, 0,
+          0, 0, 0, 1,
+        ]),
+        renderOrder: 0,
+        castShadow: false,
+        receiveShadow: false,
+        frustumCulled: true,
+        userData: { ribbon: true, substrateDirectAuthored: true },
+      }, false);
+      if (packet) {
+        roadBatchPackets.push(packet);
+        directlyAuthored = true;
+        // No GPU object was created. Disposing the unused BufferGeometry
+        // wrapper does not detach the typed arrays now owned by the packet.
+        out.dispose();
+      }
+    }
+    if (!directlyAuthored) {
+      const mesh = new THREE.Mesh(out, mat);
+      mesh.userData.ribbon = true;
+      // NAMED, because __census can only report what a mesh calls itself and
+      // the two biggest things in the world — the carriageways and the building
+      // stock — both came back as `unnamed`. That is the census's one job, and
+      // it made a mesh audit impossible to write as an assertion.
+      mesh.name = 'ribbon';
+      if (drive) addRoadRenderMesh(mesh);
+      else worldGroup.add(mesh);
+    }
     // A DRAPED batch registers ONCE for re-seating, in place of the entries
     // its pieces would each have made: redrape and __drape both walk vertices
     // with their own bounds checks, so a merged geometry re-seats exactly as
@@ -18168,8 +18211,19 @@ function productionRenderAttributeData(
   }
   return packed;
 }
-function productionRenderMeshFromThree(
-  mesh: THREE.Mesh,
+interface ProductionRenderPacketSource {
+  name: string;
+  geometry: THREE.BufferGeometry;
+  material: readonly THREE.Material[];
+  matrix: ArrayLike<number>;
+  renderOrder: number;
+  castShadow: boolean;
+  receiveShadow: boolean;
+  frustumCulled: boolean;
+  userData: Readonly<Record<string, string | number | boolean>>;
+}
+function productionRenderPacketFromGeometry(
+  source: ProductionRenderPacketSource,
   copyArrays: boolean,
 ): ProductionRenderMesh | undefined {
   const attributes: Record<string, {
@@ -18177,18 +18231,18 @@ function productionRenderMeshFromThree(
     normalized: boolean;
     data: ProductionRenderAttributeArray;
   }> = {};
-  for (const [name, raw] of Object.entries(mesh.geometry.attributes)) {
+  for (const [name, raw] of Object.entries(source.geometry.attributes)) {
     const data = productionRenderAttributeData(raw, copyArrays);
     if (!data) {
-      const source = raw instanceof THREE.BufferAttribute
+      const arraySource = raw instanceof THREE.BufferAttribute
         ? raw.array
         : raw instanceof THREE.InterleavedBufferAttribute
           ? raw.data.array
           : undefined;
       noteProductionRenderPacketRejection(
-        `${mesh.name || '<unnamed>'}.${name}:`
+        `${source.name || '<unnamed>'}.${name}:`
         + `${raw?.constructor?.name ?? typeof raw}/`
-        + `${source?.constructor?.name ?? 'no-array'}`,
+        + `${arraySource?.constructor?.name ?? 'no-array'}`,
       );
       return undefined;
     }
@@ -18198,11 +18252,38 @@ function productionRenderMeshFromThree(
       data,
     };
   }
-  const material = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-  if (!material.length) {
-    noteProductionRenderPacketRejection(`${mesh.name || '<unnamed>'}:no-material`);
+  if (!source.material.length) {
+    noteProductionRenderPacketRejection(`${source.name || '<unnamed>'}:no-material`);
     return undefined;
   }
+  const index = source.geometry.index;
+  return {
+    name: source.name,
+    materialKeys: source.material.map(productionRenderMaterialKey),
+    attributes,
+    ...(index ? {
+      index: !copyArrays && index.array instanceof Uint32Array
+        ? index.array as Uint32Array<ArrayBuffer>
+        : new Uint32Array(index.array as ArrayLike<number>),
+    } : {}),
+    groups: source.geometry.groups.map((group) => ({
+      start: group.start,
+      count: group.count,
+      materialIndex: group.materialIndex ?? 0,
+    })),
+    matrix: new Float32Array(source.matrix),
+    renderOrder: source.renderOrder,
+    castShadow: source.castShadow,
+    receiveShadow: source.receiveShadow,
+    frustumCulled: source.frustumCulled,
+    userData: { ...source.userData },
+  };
+}
+function productionRenderMeshFromThree(
+  mesh: THREE.Mesh,
+  copyArrays: boolean,
+): ProductionRenderMesh | undefined {
+  const material = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
   if (mesh.matrixAutoUpdate) mesh.updateMatrix();
   const userData: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(mesh.userData)) {
@@ -18214,28 +18295,17 @@ function productionRenderMeshFromThree(
       userData[key] = value;
     }
   }
-  const index = mesh.geometry.index;
-  return {
+  return productionRenderPacketFromGeometry({
     name: mesh.name,
-    materialKeys: material.map(productionRenderMaterialKey),
-    attributes,
-    ...(index ? {
-      index: !copyArrays && index.array instanceof Uint32Array
-        ? index.array as Uint32Array<ArrayBuffer>
-        : new Uint32Array(index.array as ArrayLike<number>),
-    } : {}),
-    groups: mesh.geometry.groups.map((group) => ({
-      start: group.start,
-      count: group.count,
-      materialIndex: group.materialIndex ?? 0,
-    })),
-    matrix: new Float32Array(mesh.matrix.elements),
+    geometry: mesh.geometry,
+    material,
+    matrix: mesh.matrix.elements,
     renderOrder: mesh.renderOrder,
     castShadow: mesh.castShadow,
     receiveShadow: mesh.receiveShadow,
     frustumCulled: mesh.frustumCulled,
     userData,
-  };
+  }, copyArrays);
 }
 function captureProductionRenderMesh(
   mesh: THREE.Mesh,
@@ -18864,6 +18934,7 @@ function substrateRenderSnapshot(): Record<string, number> {
   }
   let roadCandidates = 0;
   let roadPacketMeshes = 0;
+  let roadDirectAuthoredPacketMeshes = 0;
   let roadRedrapeAuthoredPacketMeshes = 0;
   let retainedRoadSourceMeshes = 0;
   let roadPacketVertices = 0;
@@ -18877,6 +18948,7 @@ function substrateRenderSnapshot(): Record<string, number> {
   for (const candidate of productionRoadRenderCandidates.values()) {
     roadCandidates += candidate.meshCount;
     roadPacketMeshes += candidate.packets.length;
+    roadDirectAuthoredPacketMeshes += candidate.directPacketCount;
     retainedRoadSourceMeshes += candidate.meshes.size;
     if (candidate.authoredAfterRedrape) {
       roadRedrapeAuthoredPacketMeshes += candidate.packets.length;
@@ -19007,6 +19079,7 @@ function substrateRenderSnapshot(): Record<string, number> {
     roadCandidateTiles: productionRoadRenderCandidates.size,
     roadCandidates,
     roadPacketMeshes,
+    roadDirectAuthoredPacketMeshes,
     roadRedrapeAuthoredPacketMeshes,
     retainedRoadSourceMeshes,
     roadPacketVertices,
@@ -22381,6 +22454,7 @@ async function renderWays(
   ribBatch = new Map();
   ribBatchTerrainOwner = terrainOwner;
   roadBatchMeshes = [];
+  roadBatchPackets = [];
   hydroDetailBatchMeshes = [];
   hydroDetailBatchRocks = [];
   const ep = worldEpoch;
@@ -22393,6 +22467,7 @@ async function renderWays(
     ribBatch = null;
     ribBatchTerrainOwner = null;
     roadBatchMeshes = null;
+    roadBatchPackets = null;
     hydroDetailBatchMeshes = null;
     hydroDetailBatchRocks = null;
     return;
@@ -22520,6 +22595,7 @@ async function renderWays(
       ribBatch = null;
       ribBatchTerrainOwner = null;
       roadBatchMeshes = null;
+      roadBatchPackets = null;
       hydroDetailBatchMeshes = null;
       hydroDetailBatchRocks = null;
       return;
@@ -22659,14 +22735,16 @@ async function renderWays(
   flushRibbons();
   const renderOwner = ribBatchTerrainOwner;
   const renderMeshes = roadBatchMeshes ?? [];
+  const renderPackets = roadBatchPackets ?? [];
   const hydroDetailMeshes = hydroDetailBatchMeshes ?? [];
   const hydroDetailRocks = hydroDetailBatchRocks ?? [];
   ribBatchTerrainOwner = null;
   roadBatchMeshes = null;
+  roadBatchPackets = null;
   hydroDetailBatchMeshes = null;
   hydroDetailBatchRocks = null;
   if (renderOwner) {
-    registerProductionRoadRenderBatch(renderOwner, renderMeshes);
+    registerProductionRoadRenderBatch(renderOwner, renderMeshes, renderPackets);
     registerProductionHydroDetailRenderBatch(renderOwner, hydroDetailMeshes, hydroDetailRocks);
   }
   // The pre-grid lives for exactly one batch: it exists to make build order
@@ -27970,6 +28048,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     ribBatch = null;
     ribBatchTerrainOwner = null;
     roadBatchMeshes = null;
+    roadBatchPackets = null;
     hydroDetailBatchMeshes = null;
     hydroDetailBatchRocks = null;
     carveCost.tiles = 0; carveCost.ms = 0; carveCost.relieved = 0;
