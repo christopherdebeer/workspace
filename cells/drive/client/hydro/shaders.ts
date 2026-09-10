@@ -282,6 +282,7 @@ uniform sampler2D uHydroMaterial;
 uniform sampler2D uHydroStructure;
 #endif
 uniform float uTime;
+uniform vec3 uWorldOrigin;
 uniform vec3 uWind;
 uniform float uRain;
 uniform vec4 uRig;
@@ -657,6 +658,14 @@ void main() {
   if (faceNormal.y < 0.0) faceNormal = -faceNormal;
   macroNormal = normalize(faceNormal + vec3(0.0, 0.000001, 0.0));
 #endif
+  // Only a resolved DOWNSTREAM face is falling water. Cross-bank slopes,
+  // bends and the reach-energy afterglow must not turn into waterfalls.
+  float waterfall = 0.0;
+#ifdef HYDRO_FLOWING
+  float downstreamGrade = max(0.0, dot(macroNormal.xz,
+    normalize(flow + vec2(0.00001, 0.0)))) / max(0.025, macroNormal.y);
+  waterfall = vFlowing * smoothstep(0.55, 1.50, downstreamGrade);
+#endif
   vec3 normal = macroNormal;
   if (nearWater) {
 #ifdef HYDRO_FLOWING
@@ -742,8 +751,10 @@ void main() {
     gradient = clamp(gradient, vec2(-2.0), vec2(2.0))
       * (1.0 + vTurbulence * 0.34 * clamp(uTurbulenceStrength, 0.0, 3.0))
       * detailLod;
-    vec2 macroSlope = macroNormal.xz / max(0.25, macroNormal.y);
-    normal = normalize(vec3(macroSlope.x - gradient.x, 1.0, macroSlope.y - gradient.y));
+    // Perturb the actual face, not a slope clamped to a near-horizontal
+    // surface. Keep the sheet's normal on steep drops.
+    normal = normalize(macroNormal - vec3(gradient.x, 0.0, gradient.y)
+      * max(0.025, macroNormal.y));
   }
 
   // ── ONE SHORE WETNESS SIGNAL ──
@@ -1224,6 +1235,20 @@ void main() {
     colour = mix(colour, wakeFoam, wake);
   }
 
+#ifdef HYDRO_FLOWING
+  // Metre-space falling strands: height increases upward, so +time moves
+  // this fixed-rate pattern DOWN. No energy-dependent phase speed or new
+  // textures. Broad aeration survives distance; fine strands fade away.
+  if (waterfall > 0.001) {
+    float fallPhase = vRenderPosition.y + uWorldOrigin.y + uTime * 8.0;
+    float strands = valueNoise(vec2(riverCross * 0.65, fallPhase * 0.11));
+    float brokenSheet = smoothstep(0.26, 0.78, strands);
+    float aeration = waterfall * (0.38 + brokenSheet * 0.42 * detailLod)
+      * clamp(uFoamStrength, 0.0, 3.0);
+    vec3 fallingColour = mix(colour, vec3(0.79, 0.87, 0.86) * sceneLight, 0.88);
+    colour = mix(colour, fallingColour, clamp(aeration, 0.0, 0.92));
+  }
+#endif
   gl_FragColor = vec4(colour, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>

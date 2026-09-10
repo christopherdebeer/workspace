@@ -54,6 +54,16 @@ function channel(
 
 const FIXTURES: readonly Fixture[] = [
   {
+    id: 'waterfall', label: 'RIVER / WATERFALL', originY: 45, oceanLevelM: 0,
+    note: 'A 70m ledge between gentle reaches. The resolved falling face carries downward strands and aeration, unlike the graded river and pool–rapid controls. Try wireframe and night lighting.',
+    height: (x, z) => 85 - (z + 300) * .008
+      - 70 * (.5 + .5 * Math.tanh(z / 8)) + Math.min(12, Math.abs(x) * .18),
+    features: [
+      channel('lab:waterfall', 'river', 24, [0,-285, 0,285],
+        { roughness: .65, turbidity: .18 }),
+    ],
+  },
+  {
     id: 'coast', label: 'COAST / OCEAN MASK', originY: 0, oceanLevelM: 0,
     note: 'Depth-derived shoaling turns waves toward the coast, raises them before the break and leaves irregular crest foam through the surf zone. The lagoon remains a separate body.',
     height: (x, z) => x < -20

@@ -218,22 +218,33 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
   }
   const build = (regime: number): THREE.BufferGeometry | undefined => {
     const pos: number[] = [], uvs: number[] = [], idx: number[] = [];
+    // Flowing faces must resolve the height field: a broad ocean quad can
+    // bridge an entire cliff. Bound the extra tessellation to wet river cells;
+    // standing water and surf retain their existing budgets.
+    const subdivision = regime === 2 ? Math.min(4, Math.max(1, Math.ceil(Math.max(
+      rectSpanX / segmentsX / (spanX / (field.resolution - 1)),
+      rectSpanZ / segmentsZ / (spanZ / (field.resolution - 1)),
+    )))) : 1;
+    const fineX = segmentsX * subdivision, fineZ = segmentsZ * subdivision;
     const vert = new Map<number, number>();
     const at = (i: number, j: number): number => {
-      const k = j * (segmentsX + 1) + i;
+      const k = j * (fineX + 1) + i;
       let v = vert.get(k);
       if (v === undefined) {
         v = pos.length / 3;
-        pos.push(i / segmentsX - 0.5, 0, j / segmentsZ - 0.5);
-        uvs.push(i / segmentsX, 1 - j / segmentsZ);
+        pos.push(i / fineX - 0.5, 0, j / fineZ - 0.5);
+        uvs.push(i / fineX, 1 - j / fineZ);
         vert.set(k, v);
       }
       return v;
     };
     for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
       if (keep[j * segmentsX + i] !== regime) continue;
-      const a = at(i, j), b = at(i + 1, j), c = at(i, j + 1), d = at(i + 1, j + 1);
-      idx.push(a, c, b, b, c, d);
+      for (let dz = 0; dz < subdivision; dz++) for (let dx = 0; dx < subdivision; dx++) {
+        const x = i * subdivision + dx, z = j * subdivision + dz;
+        const a = at(x, z), b = at(x + 1, z), c = at(x, z + 1), d = at(x + 1, z + 1);
+        idx.push(a, c, b, b, c, d);
+      }
     }
     if (!idx.length) return undefined;
     const geo = new THREE.BufferGeometry();
