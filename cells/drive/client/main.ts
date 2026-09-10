@@ -112,7 +112,10 @@ import {
   type ProductionSubstrateTile,
   type ProductionWaterMotionSegment,
 } from './substrate/production-tile';
-import { SubstrateShadowMonitor } from './substrate/shadow';
+import {
+  SubstrateShadowMonitor,
+  type SubstrateShadowObservation,
+} from './substrate/shadow';
 import type { SubstrateContact, SupportContact } from './substrate/types';
 import {
   buildRapidDetailField,
@@ -11948,6 +11951,17 @@ function surfaceAt(x: number, z: number): Surface {
       return resolved.kind;
     }
   }
+  return legacySurfaceAt(x, z);
+}
+/**
+ * The pre-substrate shipping surface answer, kept as an independently
+ * callable oracle while cutover parity is being measured.
+ *
+ * Do not route shadow observations through `surfaceAt`: guarded contact and
+ * render modes make that function consume the substrate, which would compare
+ * the candidate authority with itself and manufacture perfect agreement.
+ */
+function legacySurfaceAt(x: number, z: number): Surface {
   // Scan them ALL: tarmac wins wherever a track crosses or joins a road, and
   // returning on the first hit made that depend on insertion order. Where two
   // of a kind overlap the BETTER surface wins for the same reason — you are
@@ -18111,6 +18125,13 @@ function waterInfoAt(x: number, z: number): RuntimeWaterInfo {
     const contact = productionSubstrate.sample(x, z);
     if (contact) return waterInfoFromSubstrateContact(contact);
   }
+  return legacyWaterInfoAt(x, z);
+}
+/**
+ * The retired consumer's fluid answer, callable without consulting the
+ * substrate even when the active page is exercising guarded cutover.
+ */
+function legacyWaterInfoAt(x: number, z: number): RuntimeWaterInfo {
   // ── THE DRAWN WATER IS THE WATER ──
   //
   // This used to answer entirely from the CHANNEL grid — the carved ribbon a
@@ -18132,7 +18153,13 @@ function waterInfoAt(x: number, z: number): RuntimeWaterInfo {
     // not on the bed the road was laid over, so that is what the water is
     // deep against.
     const e = roadEdge(x, z);
-    const bed = e && e.out <= 0 ? e.y + baseElev : hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
+    // Measure against the support the legacy wheels actually consume. Raw
+    // `sampleHeight` predates corridor/channel carving here; at the Senqu it
+    // stood 0.70m above `wheelGround`, forcing a visibly deep channel down to
+    // the 5cm minimum and making rollback physics disagree with its own mesh.
+    const bed = e && e.out <= 0
+      ? e.y + baseElev
+      : hasHeight(x, z) ? wheelGround(x, z) + baseElev : NaN;
     // The field's own depth channel is floored at the build's minimumDepth, so
     // prefer the honest level-minus-ground where the ground is known.
     const d = Number.isFinite(bed) ? wet.restingLevelM - bed : wet.depthM;
@@ -18199,20 +18226,192 @@ function substrateShadowSupportAt(x: number, z: number, surface: Surface): Suppo
     material: 'terrain',
   };
 }
+/**
+ * Compare one exact world point without allowing the currently selected
+ * consumer mode to contaminate the legacy side of the observation.
+ */
+function substrateParityObservationAt(x: number, z: number): SubstrateShadowObservation {
+  const legacySurface = legacySurfaceAt(x, z);
+  const legacySupport = substrateShadowSupportAt(x, z, legacySurface);
+  const legacyWater = legacySurface === 'water'
+    ? legacyWaterInfoAt(x, z)
+    : null;
+  const substrateContact = productionSubstrate.sample(x, z);
+  const support = substrateContact?.support ?? legacySupport;
+  const hydro = substrateContact?.water
+    ? { water: substrateContact.water, fluid: substrateContact.fluid }
+    : !substrateContact
+      ? (() => {
+        const hydroSample = drawnHydroAt(x, z);
+        return hydroSample
+          ? adaptHydroSample(hydroSample, support, {
+            waterId: `${hydroSample.kind}:runtime-shadow`,
+          })
+          : undefined;
+      })()
+      : undefined;
+  const crossingRecord = productionCrossings.at(x, z);
+  return {
+    x,
+    z,
+    support,
+    legacySupport,
+    hydro,
+    canonicalConsumerDepthM: hydro?.fluid
+      ? clamp(hydro.fluid.depthAboveSupportM, .05, 4)
+      : null,
+    substrateAuthority: substrateContact ? 'tile' : 'fallback',
+    legacy: {
+      wet: legacyWater?.wet ?? false,
+      depthM: legacyWater?.wet ? legacyWater.depth : null,
+      speedMps: legacyWater?.wet ? legacyWater.speed : null,
+      flow: legacyWater?.wet ? [legacyWater.fx, legacyWater.fz] : null,
+    },
+    crossing: substrateContact?.crossing
+      ? { authority: 'canonical', kind: substrateContact.crossing, source: 'tile' }
+      : crossingRecord && crossingRecord.kind !== 'unresolved'
+        ? { authority: 'canonical', kind: crossingRecord.kind, source: 'registry' }
+        : {
+          authority: hydro && support.kind === 'drive' ? 'unresolved' : 'canonical',
+          source: 'none',
+        },
+  };
+}
+function observeSubstrateParityAt(x: number, z: number): boolean {
+  if (!substrateShadow) return false;
+  substrateShadow.observe(substrateParityObservationAt(x, z));
+  return true;
+}
+(window as unknown as {
+  __substrateParityAudit?: (maxWater?: number, radiusM?: number) => object;
+}).__substrateParityAudit = (maxWater = 96, radiusM = 3000): object => {
+  if (!substrateShadow) {
+    return {
+      enabled: false,
+      sampled: 0,
+      enableWith: '?substrate=shadow, ?substrate=contact, or ?substrate=render',
+    };
+  }
+  const waterLimit = clamp(Math.floor(maxWater), 16, 256);
+  const radius = clamp(radiusM, 50, 12000);
+  const water = productionSubstrate.waterPoints(waterLimit, {
+    x: state.x,
+    z: state.z,
+    radiusM: radius,
+  });
+  const target = clamp(Math.max(128, water.length * 5), 128, 1024);
+  const points: { x: number; z: number }[] = [];
+  const seen = new Set<string>();
+  const append = (x: number, z: number): void => {
+    if (points.length >= target || !productionSubstrate.sample(x, z)) return;
+    const key = `${Math.round(x * 4)},${Math.round(z * 4)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    points.push({ x, z });
+  };
+  // Visit every exact water/crossing seed before widening any one seed. Each
+  // subsequent ring is likewise breadth-first, so the audit represents the
+  // loaded river system rather than exhaustively studying its first metre.
+  for (const point of water) append(point.x, point.z);
+  for (const ringM of [1.5, 3, 6, 12, 24, 48]) {
+    for (const point of water) {
+      for (let octant = 0; octant < 8; octant++) {
+        const angle = octant * Math.PI / 4;
+        append(
+          point.x + Math.cos(angle) * ringM,
+          point.z + Math.sin(angle) * ringM,
+        );
+      }
+    }
+  }
+  const mismatches: object[] = [];
+  const unresolved: object[] = [];
+  const depthDeltas: {
+    deltaM: number;
+    detail: object;
+  }[] = [];
+  const detail = (observation: SubstrateShadowObservation): object => {
+    const rawDepth = observation.hydro?.fluid?.depthAboveSupportM ?? null;
+    const consumerDepth = observation.canonicalConsumerDepthM ?? null;
+    return {
+      x: +observation.x.toFixed(2),
+      z: +observation.z.toFixed(2),
+      substrateAuthority: observation.substrateAuthority,
+      support: {
+        kind: observation.support.kind,
+        yM: +observation.support.yM.toFixed(3),
+      },
+      legacySupport: observation.legacySupport ? {
+        kind: observation.legacySupport.kind,
+        yM: +observation.legacySupport.yM.toFixed(3),
+      } : null,
+      canonical: {
+        water: !!observation.hydro?.water,
+        fluid: !!observation.hydro?.fluid,
+        rawDepthM: rawDepth === null ? null : +rawDepth.toFixed(3),
+        consumerDepthM: consumerDepth === null ? null : +consumerDepth.toFixed(3),
+        levelM: observation.hydro?.water
+          ? +observation.hydro.water.yM.toFixed(3)
+          : null,
+      },
+      legacy: observation.legacy,
+      crossing: observation.crossing,
+      tile: productionSubstrate.debugAt(observation.x, observation.z),
+    };
+  };
+  for (const point of points) {
+    const observation = substrateParityObservationAt(point.x, point.z);
+    substrateShadow.observe(observation);
+    const canonicalWet = !!observation.hydro?.fluid;
+    if (canonicalWet !== observation.legacy.wet && mismatches.length < 16) {
+      mismatches.push(detail(observation));
+    }
+    if (observation.crossing.authority === 'unresolved' && unresolved.length < 16) {
+      unresolved.push(detail(observation));
+    }
+    const canonicalDepth = observation.canonicalConsumerDepthM;
+    const legacyDepth = observation.legacy.depthM;
+    if (canonicalDepth !== undefined && canonicalDepth !== null
+      && observation.legacy.wet && legacyDepth !== null) {
+      depthDeltas.push({
+        deltaM: Math.abs(canonicalDepth - legacyDepth),
+        detail: detail(observation),
+      });
+    }
+  }
+  depthDeltas.sort((a, b) => b.deltaM - a.deltaM);
+  return {
+    sampled: points.length,
+    waterSeeds: water.length,
+    radiusM: radius,
+    mismatches,
+    unresolved,
+    worstDepthDeltas: depthDeltas.slice(0, 16).map(({ deltaM, detail: value }) => ({
+      deltaM: +deltaM.toFixed(4),
+      ...value,
+    })),
+    ...substrateShadow.snapshot(),
+  };
+};
 function productionDriveAt(x: number, z: number): ProductionDriveSample | undefined {
   let best: ProductionDriveSample | undefined;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
-    if (seg.ya === undefined || seg.yb === undefined) continue;
+    if (seg.ya === undefined || seg.yb === undefined
+      || ![seg.ax, seg.az, seg.bx, seg.bz, seg.ya, seg.yb, seg.hw]
+        .every(Number.isFinite)
+      || seg.hw <= 0) continue;
     const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
     const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
     const px = seg.ax + dx * t, pz = seg.az + dz * t;
     if (Math.hypot(x - px, z - pz) > seg.hw + .8) continue;
     let y = seg.ya + (seg.yb - seg.ya) * t;
-    if (seg.ca !== undefined && seg.cb !== undefined) {
+    if (seg.ca !== undefined && seg.cb !== undefined
+      && Number.isFinite(seg.ca) && Number.isFinite(seg.cb)) {
       const length = Math.hypot(dx, dz) || 1;
       const side = ((x - px) * (-dz / length) + (z - pz) * (dx / length)) / (seg.hw || 1);
       y += (seg.ca + (seg.cb - seg.ca) * t) * clamp(side, -1, 1);
     }
+    if (!Number.isFinite(y)) continue;
     const sample: ProductionDriveSample = {
       yM: y + baseElev,
       material: seg.tk ? 'gravel' : 'asphalt',
@@ -18261,7 +18460,10 @@ function productionDriveSegmentsFor(t: HeightTile): ProductionDriveSegment[] {
   const minGZ = Math.floor(t.zs / GRID), maxGZ = Math.floor((t.zs + t.h) / GRID);
   for (let gx = minGX - 1; gx <= maxGX + 1; gx++) for (let gz = minGZ - 1; gz <= maxGZ + 1; gz++) {
     for (const seg of roadGrid.get(`${gx},${gz}`) ?? []) {
-      if (seen.has(seg) || seg.ya === undefined || seg.yb === undefined) continue;
+      if (seen.has(seg) || seg.ya === undefined || seg.yb === undefined
+        || ![seg.ax, seg.az, seg.bx, seg.bz, seg.ya, seg.yb, seg.hw]
+          .every(Number.isFinite)
+        || seg.hw <= 0) continue;
       seen.add(seg);
       if (Math.max(seg.ax, seg.bx) + seg.hw < t.xs
         || Math.min(seg.ax, seg.bx) - seg.hw > t.xs + t.w
@@ -18281,8 +18483,10 @@ function productionDriveSegmentsFor(t: HeightTile): ProductionDriveSegment[] {
         roadId: seg.wid
           ?? seg.nm
           ?? (seg.fd === undefined ? 'road:unknown' : `road:${seg.fd}`),
-        ...(seg.ca !== undefined ? { crossfallA: seg.ca } : {}),
-        ...(seg.cb !== undefined ? { crossfallB: seg.cb } : {}),
+        ...(seg.ca !== undefined && Number.isFinite(seg.ca)
+          ? { crossfallA: seg.ca } : {}),
+        ...(seg.cb !== undefined && Number.isFinite(seg.cb)
+          ? { crossfallB: seg.cb } : {}),
       });
     }
   }
@@ -39072,42 +39276,7 @@ function tick(now: number): void {
       : waterInfoAt(state.x, state.z)
     : null;
   if (substrateShadow && tickN % 15 === 0) {
-    const legacySupport = substrateShadowSupportAt(state.x, state.z, surfKind);
-    const substrateContact = substrateCentreContact
-      ?? productionSubstrate.sample(state.x, state.z);
-    const support = substrateContact?.support ?? legacySupport;
-    const hydro = substrateContact?.water
-      ? { water: substrateContact.water, fluid: substrateContact.fluid }
-      : !substrateContact
-        ? (() => {
-          const hydroSample = drawnHydroAt(state.x, state.z);
-          return hydroSample
-            ? adaptHydroSample(hydroSample, support, {
-              waterId: `${hydroSample.kind}:runtime-shadow`,
-            })
-            : undefined;
-        })()
-        : undefined;
-    const crossingRecord = productionCrossings.at(state.x, state.z);
-    substrateShadow.observe({
-      x: state.x,
-      z: state.z,
-      support,
-      legacySupport,
-      hydro,
-      substrateAuthority: substrateContact ? 'tile' : 'fallback',
-      legacy: {
-        wet: wInfo?.wet ?? false,
-        depthM: wInfo?.wet ? wInfo.depth : null,
-        speedMps: wInfo?.wet ? wInfo.speed : null,
-        flow: wInfo?.wet ? [wInfo.fx, wInfo.fz] : null,
-      },
-      crossing: substrateContact?.crossing
-        ? { authority: 'canonical', kind: substrateContact.crossing }
-        : crossingRecord && crossingRecord.kind !== 'unresolved'
-          ? { authority: 'canonical', kind: crossingRecord.kind }
-        : { authority: hydro && support.kind === 'drive' ? 'unresolved' : 'canonical' },
-    });
+    observeSubstrateParityAt(state.x, state.z);
   }
   // ── THE HULL ENTERS THE WATER; IT DOES NOT TELEPORT INTO IT ──
   //

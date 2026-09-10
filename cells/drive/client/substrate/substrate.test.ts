@@ -724,7 +724,53 @@ export function runSubstrateSelfTest(): void {
     'outboard shoulder must not masquerade as carriageway support');
   assert(narrowShoulderContact.driveProximity?.roadId === 'road:narrow'
     && narrowShoulderContact.driveProximity.outM > 1,
-  'exact drive proximity must retain the deck through the fairing zone');
+  `exact drive proximity must retain the deck through the fairing zone: ${
+    JSON.stringify(narrowShoulderContact)
+  }`);
+
+  const shoulderBridgeTile = buildProductionSubstrateTile({
+    key: 'production-shoulder-bridge',
+    revision: 9,
+    sourceRevisions: {
+      terrain: 3, drive: 6, structures: 1, hydro: 4, crossings: 2,
+      hydroDetails: 0,
+    },
+    bounds: { minX: 0, minZ: 0, maxX: 100, maxZ: 100 },
+    resolution: 3,
+    driveSegments: [{
+      ax: 0,
+      az: 9,
+      bx: 100,
+      bz: 9,
+      yaM: 7,
+      ybM: 7,
+      halfWidthM: 2.5,
+      material: 'asphalt',
+      quality: .95,
+      roadId: 'road:shoulder-only',
+      shoulderM: 2.2,
+      crossfallA: 0,
+      crossfallB: 0,
+    }],
+    crossings: [narrowCrossingRecord],
+    sampleGround: () => ({ yM: 0 }),
+    sampleDrive: () => undefined,
+    sampleWater: () => undefined,
+    sampleCrossing: () => undefined,
+  });
+  const shoulderBridgeContact = sampleProductionSubstrateTile(
+    shoulderBridgeTile,
+    50,
+    13,
+  );
+  assert(shoulderBridgeContact?.drive?.roadId === narrowCrossingRecord.roadId
+    && shoulderBridgeContact.support.kind === 'drive',
+  `a shoulder-only candidate must not suppress canonical bridge support: ${
+    JSON.stringify(shoulderBridgeContact)
+  }`);
+  assert(shoulderBridgeContact.driveProximity?.roadId === 'road:shoulder-only'
+    && shoulderBridgeContact.driveProximity.outM > .8,
+  'shoulder-only geometry must remain available to fairing diagnostics');
 
   const exactGroundPositions = new Float32Array([
     -5, 0, -5,

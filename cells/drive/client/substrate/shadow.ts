@@ -15,6 +15,7 @@ export interface ShadowCrossingObservation {
    */
   authority: 'canonical' | 'unresolved';
   kind?: CrossingKind;
+  source?: 'tile' | 'registry' | 'none';
 }
 
 export interface SubstrateShadowObservation {
@@ -25,6 +26,8 @@ export interface SubstrateShadowObservation {
   /** The shipping wheel/support answer being shadowed. */
   legacySupport?: SupportContact;
   hydro?: HydroContactLayers;
+  /** Depth delivered to the active vehicle consumer after runtime clamping. */
+  canonicalConsumerDepthM?: number | null;
   legacy: LegacyFluidObservation;
   crossing: ShadowCrossingObservation;
   substrateAuthority?: 'tile' | 'fallback';
@@ -50,6 +53,7 @@ export interface SubstrateShadowLastProbe {
     fluid: boolean;
     levelM: number | null;
     depthAboveSupportM: number | null;
+    consumerDepthM: number | null;
     speedAuthority: 'resolved' | 'unknown' | null;
   };
   legacy: LegacyFluidObservation;
@@ -244,7 +248,12 @@ export class SubstrateShadowMonitor {
     if (observation.hydro?.water.speedAuthority === 'unknown') this.unknownSpeed++;
     if (observation.crossing.authority === 'unresolved') this.unresolvedCrossing++;
 
-    const canonicalDepth = observation.hydro?.fluid?.depthAboveSupportM ?? null;
+    const canonicalRawDepth = observation.hydro?.fluid?.depthAboveSupportM ?? null;
+    const canonicalDepth = finiteOrNull(
+      Object.prototype.hasOwnProperty.call(observation, 'canonicalConsumerDepthM')
+        ? observation.canonicalConsumerDepthM ?? null
+        : canonicalRawDepth,
+    );
     const legacyDepth = finiteOrNull(observation.legacy.depthM);
     const depthDeltaM = canonicalDepth !== null && legacyWet && legacyDepth !== null
       ? canonicalDepth - legacyDepth
@@ -290,7 +299,8 @@ export class SubstrateShadowMonitor {
         water: canonicalWater,
         fluid: canonicalWet,
         levelM: observation.hydro?.water.yM ?? null,
-        depthAboveSupportM: canonicalDepth,
+        depthAboveSupportM: canonicalRawDepth,
+        consumerDepthM: canonicalDepth,
         speedAuthority: observation.hydro?.water.speedAuthority ?? null,
       },
       legacy: {

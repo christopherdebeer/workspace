@@ -26,8 +26,11 @@ await d.page.waitForTimeout(10000);
 
 const points = await d.page.evaluate(() => window.__substrateWaterPoints?.(96, 3000) ?? []);
 const bridge = points.find((point) => point.crossing === 'bridge' && !point.fluid) ?? null;
-const wet = points.find((point) => point.fluid && point.crossing === 'ford')
-  ?? points.find((point) => point.fluid && point.crossing === null)
+const fluidPoints = points.filter((point) => point.fluid)
+  .sort((a, b) => (b.depthAboveSupportM ?? 0) - (a.depthAboveSupportM ?? 0));
+const wet = fluidPoints.find((point) => point.crossing === 'ford')
+  ?? fluidPoints.find((point) => point.crossing === null)
+  ?? fluidPoints[0]
   ?? null;
 ok('the explicit bridge keeps water below vehicle support',
   !!bridge && !bridge.fluid && bridge.depthAboveSupportM === null, bridge);
@@ -41,10 +44,10 @@ if (wet) {
     window.__substrate?.('reset');
     window.__drive.x = point.x;
     window.__drive.z = point.z;
-    window.__drive.speed = 2.5;
+    window.__drive.speed = 1.5;
   }, wet);
 }
-await d.simWait(1.1);
+await d.simWait(.45);
 
 const immersed = await d.page.evaluate(() => ({
   evidence: window.__waterEvidence?.(),
@@ -72,6 +75,14 @@ ok('immersed probe is backed by exact terrain and hydro',
   && immersed.substrate?.at?.exactHydro
   && wet?.depthAboveSupportM > 0,
   immersed.substrate);
+ok('guarded mode compares against an independent wet legacy observation',
+  immersed.substrate?.depth?.compared > 0
+  && immersed.substrate?.last?.legacy?.wet
+  && immersed.substrate?.last?.canonical?.fluid,
+  {
+    depth: immersed.substrate?.depth,
+    last: immersed.substrate?.last,
+  });
 ok('splash gate uses the same exposed contact', immersed.wetfx?.why === 'wet',
   immersed.wetfx);
 
@@ -114,6 +125,39 @@ ok('exact support remains within the cutover tolerance',
     last: exited.substrate?.last,
     at: exited.substrate?.at,
   });
+
+const audit = await d.page.evaluate(() => {
+  window.__substrate?.('reset');
+  return window.__substrateParityAudit?.(96, 3000);
+});
+ok('representative bank and crossing audit reaches production sample gates',
+  audit?.sampled >= 100
+  && audit?.hydroWater >= 25
+  && audit?.depth?.compared >= 10
+  && audit?.driveWaterOverlap >= 1,
+  audit);
+ok('representative bank and crossing audit clears every cutover gate',
+  audit?.readyForCutover
+  && audit?.blockers?.length === 0
+  && audit?.wetDisagreement === 0
+  && audit?.unresolvedCrossing === 0,
+  audit);
+console.log('      parity audit', JSON.stringify({
+  sampled: audit?.sampled,
+  waterSeeds: audit?.waterSeeds,
+  readyForCutover: audit?.readyForCutover,
+  blockers: audit?.blockers,
+  wetDisagreementRate: audit?.wetDisagreementRate,
+  depth: audit?.depth,
+  support: audit?.support,
+  unknownSpeed: audit?.unknownSpeed,
+  unresolvedCrossing: audit?.unresolvedCrossing,
+  ...(audit?.readyForCutover ? {} : {
+    mismatches: audit?.mismatches,
+    unresolved: audit?.unresolved,
+    worstDepthDeltas: audit?.worstDepthDeltas,
+  }),
+}));
 
 report(d.errors);
 await d.close();

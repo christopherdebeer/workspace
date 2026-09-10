@@ -617,8 +617,12 @@ export function sampleProductionSubstrateTile(
     blockedWater: crossing === 'causeway' || tile.waterState[i] === WATER_STATE.blocked,
   };
 
-  let exactDrive: (ProductionDriveSample & { outM: number }) | undefined;
+  let exactDriveProximity: (ProductionDriveSample & { outM: number }) | undefined;
+  let exactDriveSupport: (ProductionDriveSample & { outM: number }) | undefined;
   for (const segment of tile.driveSegments) {
+    if (![segment.ax, segment.az, segment.bx, segment.bz, segment.yaM,
+      segment.ybM, segment.halfWidthM, segment.quality].every(Number.isFinite)
+      || segment.halfWidthM <= 0) continue;
     const dx = segment.bx - segment.ax, dz = segment.bz - segment.az;
     const t = clamp(((x - segment.ax) * dx + (z - segment.az) * dz)
       / (dx * dx + dz * dz || 1), 0, 1);
@@ -627,12 +631,14 @@ export function sampleProductionSubstrateTile(
     const outM = distance - segment.halfWidthM;
     if (outM > (segment.shoulderM ?? .8)) continue;
     let yM = mix(segment.yaM, segment.ybM, t);
-    if (segment.crossfallA !== undefined && segment.crossfallB !== undefined) {
+    if (segment.crossfallA !== undefined && segment.crossfallB !== undefined
+      && Number.isFinite(segment.crossfallA) && Number.isFinite(segment.crossfallB)) {
       const length = Math.hypot(dx, dz) || 1;
       const side = ((x - px) * (-dz / length) + (z - pz) * (dx / length))
         / (segment.halfWidthM || 1);
       yM += mix(segment.crossfallA, segment.crossfallB, t) * clamp(side, -1, 1);
     }
+    if (!Number.isFinite(yM) || !Number.isFinite(outM)) continue;
     const sample = {
       yM,
       material: segment.material,
@@ -640,7 +646,19 @@ export function sampleProductionSubstrateTile(
       roadId: segment.roadId,
       outM,
     };
-    if (!exactDrive || sample.yM > exactDrive.yM) exactDrive = sample;
+    if (!exactDriveProximity
+      || sample.outM < exactDriveProximity.outM
+      || (sample.outM === exactDriveProximity.outM
+        && sample.yM > exactDriveProximity.yM)) {
+      exactDriveProximity = sample;
+    }
+    // Shoulder/fairing reach is intentionally wider than physical drive
+    // support. Do not let a high shoulder-only segment hide a lower deck the
+    // vehicle is actually standing on.
+    if (sample.outM <= .8
+      && (!exactDriveSupport || sample.yM > exactDriveSupport.yM)) {
+      exactDriveSupport = sample;
+    }
   }
   // A crossing record is an authority, not merely a label. Tile clipping can
   // put the semantic centre in a tile whose road segment packet is owned by a
@@ -651,7 +669,7 @@ export function sampleProductionSubstrateTile(
   const crossingFootprint = crossingRecord
     ? productionCrossingFootprint(crossingRecord)
     : undefined;
-  if (!exactDrive && !Number.isFinite(tile.driveY[i])
+  if (!exactDriveSupport && !Number.isFinite(tile.driveY[i])
     && crossingRecord && crossingFootprint
     && pointInProductionCrossingFootprint(crossingFootprint, x, z)) {
     const tx = crossingRecord.roadTangent[0];
@@ -661,33 +679,38 @@ export function sampleProductionSubstrateTile(
       (x - crossingRecord.x) * (-tz / length)
       + (z - crossingRecord.z) * (tx / length),
     );
-    exactDrive = {
+    const crossingDrive: ProductionDriveSample & { outM: number } = {
       yM: crossingRecord.deckY,
       material: tile.driveMaterial[i] === DRIVE_MATERIAL.gravel ? 'gravel' : 'asphalt',
       quality: Math.max(.5, tile.driveQuality[i]),
       roadId: crossingRecord.roadId,
       outM: across - crossingRecord.roadHalfWidthM,
     };
+    // An exact segment remains the better fairing witness even when it is
+    // shoulder-only. The semantic crossing fallback supplies missing solid
+    // support; it must not erase more precise vector proximity.
+    if (!exactDriveProximity) exactDriveProximity = crossingDrive;
+    if (crossingDrive.outM <= .8) exactDriveSupport = crossingDrive;
   }
-  if (exactDrive) {
+  if (exactDriveProximity) {
     contact.driveProximity = {
-      outM: exactDrive.outM,
-      deckY: exactDrive.yM,
-      material: exactDrive.material,
-      quality: exactDrive.quality,
-      roadId: exactDrive.roadId,
+      outM: exactDriveProximity.outM,
+      deckY: exactDriveProximity.yM,
+      material: exactDriveProximity.material,
+      quality: exactDriveProximity.quality,
+      roadId: exactDriveProximity.roadId,
     };
   }
-  if ((exactDrive && exactDrive.outM <= .8) || Number.isFinite(tile.driveY[i])) {
+  if (exactDriveSupport || Number.isFinite(tile.driveY[i])) {
     const roadId = tile.roadIds[tile.roadIndex[i] - 1] ?? 'production-road:unknown';
     const material = crossing === 'ford'
       ? 'ford'
-      : exactDrive?.material ?? driveMaterialName(tile.driveMaterial[i]);
+      : exactDriveSupport?.material ?? driveMaterialName(tile.driveMaterial[i]);
     contact.drive = {
-      yM: exactDrive?.yM ?? bilinear(tile.driveY, n, fx, fz, tile.driveY[i]),
+      yM: exactDriveSupport?.yM ?? bilinear(tile.driveY, n, fx, fz, tile.driveY[i]),
       material,
-      quality: exactDrive?.quality ?? tile.driveQuality[i],
-      roadId: exactDrive?.roadId ?? roadId,
+      quality: exactDriveSupport?.quality ?? tile.driveQuality[i],
+      roadId: exactDriveSupport?.roadId ?? roadId,
     };
     contact.support = {
       kind: 'drive',
@@ -841,6 +864,10 @@ export class ProductionSubstrateStore {
       hydroDetailRenderMeshes: tile.hydroDetailRenderMeshes.length,
       hydroDetailColliders: tile.hydroDetailColliders.length,
       waterMotionSegments: tile.waterMotionSegments.length,
+      crossingRecords: tile.crossings.length,
+      crossing: contact?.crossing ?? null,
+      driveId: contact?.drive?.roadId ?? null,
+      waterId: contact?.water?.waterId ?? null,
       rasterGroundY,
       contactGroundY: contact?.ground.yM ?? null,
       supportY: contact?.support.yM ?? null,
