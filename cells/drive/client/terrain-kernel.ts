@@ -56,6 +56,9 @@ export interface TerrainStore {
   readonly cutL: number;
   readonly channels: Map<string, StripLike[]>;
   readonly grid: number;
+  /** Canonical hydro coverage contours crossing this tile. These are geometry
+   * constraints only: channel carving still owns their elevation. */
+  hydroBreakLines(t: HeightTile): readonly BreakLine[];
   onRoad(x: number, z: number): boolean;
   palette(elevAbs: number, slope: number, cover: number | null, x: number, z: number): Rgb;
   areaTint(x: number, z: number): Rgb | null;
@@ -601,13 +604,18 @@ export function createTerrainKernel() {
         if (Math.abs(x - (t.xs + ix * cw)) > 1e-3 || Math.abs(z - (t.zs + iz * ch)) > 1e-3) extraSeed = true;
       }
     }
+    const hydroLines = S.hydroBreakLines(t);
     // Lattice-only seeds are pins the plain path applies itself; only a
     // neighbour's extra edge points need the ring machinery.
-    if (!near.size && !extraSeed) return null;
+    if (!near.size && !extraSeed && !hydroLines.length) return null;
     // The break lines, and the cells each one crosses. A cell within reach of
     // any strip is `close`: its vertices take the corridor profile, the rest
     // take the ground and never pay for the lookup.
-    const lines: BreakLine[] = [];
+    // The waterline is not an inferred centreline offset. It is the exact
+    // coverage isoline the hydro field renders and contact samples. Splitting
+    // the ground along it prevents a coarse terrain triangle from bridging
+    // across the channel and presenting a serrated silhouette over the water.
+    const lines: BreakLine[] = [...hydroLines];
     const ordered = [...near].sort((a, b) => b.hw - a.hw);
     for (const s of ordered) for (const L of stripBreakLines(S, s)) lines.push(L);
     // A NARROW CHANNEL MUST BE TOPOLOGY AT A ROAD CROSSING, not merely a

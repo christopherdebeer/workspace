@@ -2,7 +2,10 @@
 export { createHydroSystem } from './system';
 export { extractOsmHydro } from './osm';
 export { pointInArea } from './geometry';
-export { extractHydroShoreSegments } from './shore-contour';
+export {
+  extractFlowingHydroShoreSegments,
+  extractHydroShoreSegments,
+} from './shore-contour';
 export { HYDRO_FRAGMENT_SHADER, HYDRO_VERTEX_SHADER } from './shaders';
 
 export type {

@@ -14,7 +14,7 @@
  * rasterised; shipping the few hundred near the tile costs tens of
  * kilobytes and cannot go stale.
  */
-import { createTerrainKernel, type HeightTile, type CoverTile, type StripLike, type Rgb, type AreaPatchLike, type TerrainCrossingMask, type TerrainStore, type CarveLog } from './terrain-kernel';
+import { createTerrainKernel, type HeightTile, type CoverTile, type StripLike, type Rgb, type AreaPatchLike, type TerrainCrossingMask, type TerrainStore, type CarveLog, type BreakLine } from './terrain-kernel';
 
 export interface TerrainJob {
   id: number; epoch: number; key: string;
@@ -30,6 +30,7 @@ export interface TerrainJob {
   origin: { lat: number; lon: number; mLon: number };
   strips: Float64Array; stripCells: Array<[string, number[]]>;
   channels: Float64Array; chanCells: Array<[string, number[]]>;
+  hydroBreakLines: Float64Array;
   crossings: TerrainCrossingMask[];
   areas: AreaPatchLike[];
   pads: Float64Array;
@@ -82,6 +83,15 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
       const sampler = K.makeSampler({ heights, cover, origin: job.origin, baseElev: job.baseElev, pads: job.pads, waterTilt: job.waterTilt, coverPx: job.coverPx });
       const strips = unflat(job.strips, job.stripCells);
       const channels = unflat(job.channels, job.chanCells);
+      const hydroBreakLines: BreakLine[] = [];
+      for (let i = 0; i + 3 < job.hydroBreakLines.length; i += 4) {
+        hydroBreakLines.push({
+          ax: job.hydroBreakLines[i],
+          az: job.hydroBreakLines[i + 1],
+          bx: job.hydroBreakLines[i + 2],
+          bz: job.hydroBreakLines[i + 3],
+        });
+      }
       const N = job.climN, KW = job.climK, t = job.tile;
       const climate = (x: number, z: number): ArrayLike<number> | null => {
         if (!N) return null;
@@ -107,6 +117,7 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
         cover: { water: job.water, built: job.built },
         seaAbs: () => job.seaAbs, baseElev: job.baseElev,
         strips, cutL: job.cutL, channels, grid: job.grid,
+        hydroBreakLines: () => hydroBreakLines,
         onRoad: (x, z) => K.onRoadOf(strips, job.cutL, x, z),
         palette, areaTint: (x, z) => K.areaTintOf(job.areas, x, z),
         borders, nrmScale: job.nrmScale, cutWash: job.cutWash, cprobe: job.cprobe, carveLog, cutRelief: job.cutRelief,

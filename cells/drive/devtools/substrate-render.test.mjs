@@ -52,6 +52,7 @@ while (Date.now() < settleDeadline) {
     render?.terrainCandidates,
     render?.terrainCommitted,
     render?.atomicCommits,
+    render?.hydroShoreBreakLineSegments,
     state.substrate?.tiles?.revision,
     hydro?.tiles,
     state.hydroTiles.length,
@@ -149,8 +150,13 @@ ok('every built hydro record is render-deferred',
 ok('a substrate-committed flowing tile owns one edge-blended body mesh',
   state.hydroTiles.some((tile) => tile.mesh && tile.flowingMesh && tile.edgeBlendMesh
     && tile.resolution === 256 && tile.gutter === 12
-    && tile.shoreSegments > 0 && tile.shoreGroundSpanM >= 0),
+    && tile.shoreSegments > 0 && tile.shoreGroundSpanM >= 0
+    && tile.shoreRefinedCells > 0),
   state.hydroTiles);
+ok('the exact flowing shoreline constrains production terrain topology',
+  state.substrate?.render?.hydroShoreBreakLineTiles > 0
+    && state.substrate?.render?.hydroShoreBreakLineSegments > 0,
+  state.substrate?.render);
 ok('non-flowing records retain the base field tier',
   state.hydroTiles.filter((tile) => tile.built && !tile.kinds
     ?.some((kind) => ['river', 'stream', 'canal'].includes(kind)))

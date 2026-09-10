@@ -33,7 +33,7 @@ import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
 import { smoothChartZoom, wrapLongitude } from './globe-navigation';
 import { bitmapStats, withDecodedBitmap } from './decode-telemetry';
 import { GLOBE_R, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, globeEast, globeNorth, subsolar } from './globe';
-import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSurfaceOccluder, type HydroSystem, type OceanCoverage } from './hydro';
+import { createHydroSystem, extractFlowingHydroShoreSegments, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSurfaceOccluder, type HydroSystem, type OceanCoverage } from './hydro';
 import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipment';
 import { createRigModel, OVERLAND, RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
 import { createWireMaterialPolicy } from './wire-material';
@@ -2555,6 +2555,44 @@ let hydroSys: HydroSystem | undefined;
  *  a view chosen at boot is not silently lost. */
 let hydroView: HydroDebugView = 'surface';
 const hydroRev = new Map<string, number>();
+/** Exact flowing-water coverage contours admitted into terrain triangulation.
+ * The field owns x/z placement; channel carving continues to own elevation. */
+const hydroShoreBreakLines = new Map<string, BreakLine[]>();
+function sameHydroBreakLines(
+  a: readonly BreakLine[] | undefined,
+  b: readonly BreakLine[],
+): boolean {
+  if (!a) return b.length === 0;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < b.length; i++) {
+    if (Math.abs(a[i].ax - b[i].ax) > .01
+      || Math.abs(a[i].az - b[i].az) > .01
+      || Math.abs(a[i].bx - b[i].bx) > .01
+      || Math.abs(a[i].bz - b[i].bz) > .01) return false;
+  }
+  return true;
+}
+function publishHydroShoreBreakLines(t: HeightTile, key: string): void {
+  const field = hydroSys?.fieldAt(t.xs + t.w / 2, t.zs + t.h / 2);
+  if (!field || field.key !== key || field.revision !== hydroRev.get(key)) return;
+  const lines: BreakLine[] = [];
+  for (const segment of extractFlowingHydroShoreSegments(field, .5, true)) {
+    lines.push({
+      ax: segment.a.x,
+      az: segment.a.z,
+      bx: segment.b.x,
+      bz: segment.b.z,
+    });
+  }
+  const previous = hydroShoreBreakLines.get(key);
+  if (sameHydroBreakLines(previous, lines)) return;
+  if (lines.length) hydroShoreBreakLines.set(key, lines);
+  else hydroShoreBreakLines.delete(key);
+  // The first field is allowed to render while this queued topology pass
+  // catches up. Render cutover invalidates the whole substrate tile here, so
+  // it cannot atomically publish water against the old terrain packet.
+  markTerrainDirty(key, 'hydro-shore');
+}
 /**
  * ── THE DATUM HANDOVER, DECIDED ONCE ──
  *
@@ -3033,7 +3071,10 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
     features: feats,
     oceanCoverage: ocean,
     surfaceOccluders,
-  }).then(() => queueProductionSubstrateShadow(t, key))
+  }).then(() => {
+    publishHydroShoreBreakLines(t, key);
+    queueProductionSubstrateShadow(t, key);
+  })
     .catch((e) => console.warn('[hydro]', e));
 }
 
@@ -6134,6 +6175,7 @@ const kStore: TerrainStore = {
   get cutL() { return cutL; },
   get channels() { return channelGrid as Map<string, StripLike[]>; },
   get grid() { return GRID; },
+  hydroBreakLines: (t) => hydroShoreBreakLines.get(`${t.tx}/${t.ty}`) ?? [],
   onRoad: (x, z) => onCarriageway(x, z, 0.6).road,
   palette: (elevAbs, slope, cover, x, z) => terrainPalette(elevAbs, slope, cover, x, z),
   areaTint: (x, z) => areaTintAt(x, z),
@@ -6302,11 +6344,29 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
     cutL, grid: GRID, water: COVER.water, built: COVER.built, waterTilt: WATER_TILT, coverPx: COVER_PX,
     origin: { lat: origin.lat, lon: origin.lon, mLon: origin.mLon },
     strips: st.flat, stripCells: st.cells, channels: ch.flat, chanCells: ch.cells,
+    hydroBreakLines: (() => {
+      const lines = hydroShoreBreakLines.get(`${t.tx}/${t.ty}`) ?? [];
+      const flat = new Float64Array(lines.length * 4);
+      for (let i = 0; i < lines.length; i++) {
+        flat[i * 4] = lines[i].ax;
+        flat[i * 4 + 1] = lines[i].az;
+        flat[i * 4 + 2] = lines[i].bx;
+        flat[i * 4 + 3] = lines[i].bz;
+      }
+      return flat;
+    })(),
     crossings, areas, pads,
     clim, climN: N, climK: KW,
     ramp: biome.ramp, ramps: BIOME_LIST.map((b) => b.ramp), coverTint: COVER_TINT, coverMix: COVER_MIX,
   };
-  return { job, transfer: [data.buffer, st.flat.buffer, ch.flat.buffer, pads.buffer, clim.buffer] as unknown as Transferable[] };
+  return { job, transfer: [
+    data.buffer,
+    st.flat.buffer,
+    ch.flat.buffer,
+    job.hydroBreakLines.buffer,
+    pads.buffer,
+    clim.buffer,
+  ] as unknown as Transferable[] };
 }
 /** The worker's arrays become the tile's mesh — what buildTerrainMesh does
  *  after its kernel call, with the rows and the followers from the reply. */
@@ -18764,6 +18824,10 @@ function invalidateProductionSubstrateTile(key: string): void {
   }
 }
 function substrateRenderSnapshot(): Record<string, number> {
+  let hydroShoreBreakLineSegments = 0;
+  for (const lines of hydroShoreBreakLines.values()) {
+    hydroShoreBreakLineSegments += lines.length;
+  }
   let terrainPacketMeshes = 0;
   let terrainBuildAuthoredPacketMeshes = 0;
   for (const source of productionTerrainRenderPackets.values()) {
@@ -18980,6 +19044,8 @@ function substrateRenderSnapshot(): Record<string, number> {
     uncommittedVisibleHydroDetails,
     activeHydroDetailColliders,
     uncommittedHydroDetailColliders,
+    hydroShoreBreakLineTiles: hydroShoreBreakLines.size,
+    hydroShoreBreakLineSegments,
     atomicCommits: substrateAtomicRenderCommits,
     atomicRefusals: substrateAtomicRenderRefusals,
     invalidations: substrateRenderInvalidations,
@@ -27885,6 +27951,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // compiled program to change some bounds.
     for (const key of hydroRev.keys()) hydroSys?.removeTile(key);
     hydroRev.clear(); hydroDirty.clear(); hydroFedInputs.clear(); hydroFeats.clear(); hydroFeatsFull = 0; coverHydro.clear();
+    hydroShoreBreakLines.clear();
     coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear(); sideCaches.clear();
     // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
     // spatially keyed, so the last postcard's road left an elevation under

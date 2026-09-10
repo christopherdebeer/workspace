@@ -1,5 +1,6 @@
 import {
   createTerrainKernel,
+  type BreakLine,
   type HeightTile,
   type StripLike,
   type TerrainCrossingKind,
@@ -71,6 +72,7 @@ function centreHeight(kind: TerrainCrossingKind | null): number {
     cutL: 24,
     channels: gridded(channel),
     grid: 24,
+    hydroBreakLines: () => [],
     onRoad: (_x, z) => Math.abs(z) <= 3,
     palette: () => [.4, .4, .4],
     areaTint: () => null,
@@ -94,7 +96,67 @@ function centreHeight(kind: TerrainCrossingKind | null): number {
   return built.pos[nearest * 3 + 1];
 }
 
+function assertHydroContourIsTopology(): void {
+  const tile: HeightTile = {
+    tx: 0,
+    ty: 0,
+    xs: -16,
+    zs: -16,
+    w: 32,
+    h: 32,
+    data: new Float32Array(256 * 256).fill(4),
+  };
+  const shore: BreakLine = { ax: -20, az: 3.25, bx: 20, bz: 3.25 };
+  const store: TerrainStore = {
+    heights: new Map([['0/0', tile]]),
+    hasHeight: () => true,
+    sampleHeight: () => 4,
+    sampleHeightRaw: () => 4,
+    sampleCover: () => 50,
+    coverPaint: () => 50,
+    coverWater: () => false,
+    crossingAt: () => null,
+    cover: { water: 80, built: 50 },
+    seaAbs: () => 0,
+    baseElev: 0,
+    strips: new Map(),
+    cutL: 24,
+    channels: new Map(),
+    grid: 24,
+    hydroBreakLines: () => [shore],
+    onRoad: () => false,
+    palette: () => [.4, .4, .4],
+    areaTint: () => null,
+    borders: new Map(),
+    nrmScale: 0,
+    cutWash: 0,
+    cprobe: false,
+    carveLog: new Map(),
+    cutRelief: false,
+  };
+  const built = K.buildTile(store, tile, 4, false, true);
+  assert(built.refined, 'a hydro contour did not select refined terrain topology');
+  let contourVertices = 0;
+  for (let i = 0; i < built.pos.length / 3; i++) {
+    if (Math.abs(built.pos[i * 3 + 2] - shore.az) < 1e-3) contourVertices++;
+  }
+  assert(contourVertices >= 5,
+    `hydro contour did not become a continuous terrain vertex row (${contourVertices})`);
+  for (let i = 0; i < built.idx.length; i += 3) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let k = 0; k < 3; k++) {
+      const z = built.pos[built.idx[i + k] * 3 + 2] - shore.az;
+      lo = Math.min(lo, z);
+      hi = Math.max(hi, z);
+    }
+    assert(!(lo < -1e-3 && hi > 1e-3),
+      'a terrain triangle still bridges across the canonical hydro contour');
+  }
+}
+
 export function runTerrainCrossingSelfTest(): void {
+  assertHydroContourIsTopology();
   const mask = {
     kind: 'causeway' as const,
     x: 0,

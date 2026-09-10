@@ -2,7 +2,10 @@ import { HydroBodyRegistry } from './body-registry';
 import { analyseHydroTile, buildHydroTile } from './build-tile';
 import { sampleFieldSurface } from './system';
 import { extractOsmHydro } from './osm';
-import { extractHydroShoreSegments } from './shore-contour';
+import {
+  extractFlowingHydroShoreSegments,
+  extractHydroShoreSegments,
+} from './shore-contour';
 import { HYDRO_KIND_ID, type HydroFeature, type HydroTileInput } from './types';
 import { HYDRO_FRAGMENT_SHADER } from './shaders';
 
@@ -174,6 +177,18 @@ export function runHydroSelfTest(): void {
       && Number.isFinite(segment.b.groundM)
       && Math.hypot(segment.b.x - segment.a.x, segment.b.z - segment.a.z) > 0),
   'coverage extraction produces finite terrain-attached shoreline segments');
+  const flowingShoreSegments = extractFlowingHydroShoreSegments(
+    riverField,
+    .5,
+    true,
+  );
+  assert(flowingShoreSegments.length >= shoreSegments.length
+    && flowingShoreSegments.every((segment) =>
+      Number.isFinite(segment.a.x)
+      && Number.isFinite(segment.a.z)
+      && Number.isFinite(segment.b.x)
+      && Number.isFinite(segment.b.z)),
+  'flowing terrain contours preserve the river shoreline through the gutter pass');
   const riverSample = sampleFieldSurface(riverField, 300, 300, .1);
   assert(riverSample?.bedMaterial === 'pebble',
     'packed field samples preserve explicit bed material');

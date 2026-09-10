@@ -135,6 +135,7 @@ interface TileRecord {
   /** Standing, flowing, and (for coastal tiles) a narrow swash overlay. */
   parts: TilePart[];
   binding?: HydroTileBinding;
+  shoreRefinedCells: number;
 }
 
 const immediateBuild = async (job: () => HydroTileField): Promise<HydroTileField> => job();
@@ -185,6 +186,9 @@ interface WaterGeometries {
    *  the continuous edge blend into that body rather than adding an overlay. */
   standingEdgeBlend: boolean;
   flowingEdgeBlend: boolean;
+  /** Parent cells crossed by the canonical inland coverage contour and
+   *  tessellated inside the same body. */
+  shoreRefinedCells: number;
 }
 function waterGeometry(field: HydroTileField, segments: number): WaterGeometries {
   const rect = field.waterBounds ?? field.bounds;
@@ -217,6 +221,7 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
   // cell — see the regime note above).
   const keep = new Uint8Array(segmentsX * segmentsZ);
   const fallKeep = new Uint8Array(segmentsX * segmentsZ);
+  const shoreKeep = new Uint8Array(segmentsX * segmentsZ);
   // The surf strip is independent of the broad water cull: it is allowed into
   // the one-texel dry margin around waterBounds, but only where the propagated
   // body class is ocean/lagoon and signed distance says this is truly shore.
@@ -234,16 +239,22 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     const iz1 = Math.min(field.height - 1, Math.ceil(fieldIz(z1)) + 1);
     let regime = 0;
     let coastalShore = false;
+    let inlandKind = false;
+    let minCoverage = 1;
+    let maxCoverage = 0;
     for (let iz = iz0; iz <= iz1; iz++) {
       for (let ix = ix0; ix <= ix1; ix++) {
         const t = iz * field.width + ix;
         const coverage = field.geometry[t * 4];
         const kind = field.material[t * 4];
         const signedShore = field.geometry[t * 4 + 1];
+        minCoverage = Math.min(minCoverage, coverage);
+        maxCoverage = Math.max(maxCoverage, coverage);
         if ((kind === 1 || kind === 2) && Math.abs(signedShore) <= 96) {
           coastalShore = true;
         }
         if (kind >= 3 && Math.abs(signedShore) <= 48) {
+          inlandKind = true;
           if ((field.material[t * 4 + 3] & HydroFlags.Flowing) !== 0) {
             flowingEdgeBlend = true;
           } else {
@@ -260,16 +271,17 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     const cell = j * segmentsX + i;
     keep[cell] = regime;
     surfKeep[cell] = coastalShore ? 1 : 0;
+    shoreKeep[cell] = inlandKind && minCoverage < .62 && maxCoverage > .38 ? 1 : 0;
   }
   const build = (regime: number): THREE.BufferGeometry | undefined => {
     const pos: number[] = [], uvs: number[] = [], idx: number[] = [];
     // Only connected drops and their landing regions need the fine grid.
     // Coarse neighbours stitch to fine edges, so this saving creates no
     // T-junctions whose displaced midpoint could open a crack.
-    const subdivision = regime === 2 ? Math.min(4, Math.max(1, Math.ceil(Math.max(
+    const subdivision = Math.min(8, Math.max(1, Math.ceil(Math.max(
       rectSpanX / segmentsX / (spanX / (field.resolution - 1)),
       rectSpanZ / segmentsZ / (spanZ / (field.resolution - 1)),
-    )))) : 1;
+    ))));
     const fineX = segmentsX * subdivision, fineZ = segmentsZ * subdivision;
     const vert = new Map<string, number>();
     const at = (i: number, j: number): number => {
@@ -286,9 +298,11 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
       if (keep[j * segmentsX + i] !== regime) continue;
       const x = i * subdivision, z = j * subdivision;
-      const fine = (a: number, b: number): boolean => regime === 2
-        && a >= 0 && b >= 0 && a < segmentsX && b < segmentsZ
-        && keep[b * segmentsX + a] === 2 && fallKeep[b * segmentsX + a] !== 0;
+      const fine = (a: number, b: number): boolean =>
+        a >= 0 && b >= 0 && a < segmentsX && b < segmentsZ
+        && keep[b * segmentsX + a] === regime
+        && (shoreKeep[b * segmentsX + a] !== 0
+          || regime === 2 && fallKeep[b * segmentsX + a] !== 0);
       if (fine(i, j)) {
         for (let dz = 0; dz < subdivision; dz++) for (let dx = 0; dx < subdivision; dx++) {
           const a = at(x + dx, z + dz), b = at(x + dx + 1, z + dz);
@@ -364,6 +378,7 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     surf: buildSurf(),
     standingEdgeBlend,
     flowingEdgeBlend,
+    shoreRefinedCells: shoreKeep.reduce((sum, refined) => sum + refined, 0),
   };
 }
 
@@ -453,7 +468,7 @@ class DefaultHydroSystem implements HydroSystem {
     if (!record) {
       record = {
         input, analysis, generation: 1, dirty: true, building: false,
-        chain: Promise.resolve(), parts: [],
+        chain: Promise.resolve(), parts: [], shoreRefinedCells: 0,
       };
       this.records.set(input.key, record);
     } else {
@@ -783,6 +798,7 @@ class DefaultHydroSystem implements HydroSystem {
         shoreGroundSpanM: shore.length
           ? +(shoreGroundMax - shoreGroundMin).toFixed(3)
           : null,
+        shoreRefinedCells: record.shoreRefinedCells,
         mesh: record.parts.length > 0,
         renderDeferred: this.deferRendering,
         flowingMesh: record.parts.some((p) => p.mesh.name.includes(':flowing')),
@@ -877,6 +893,7 @@ class DefaultHydroSystem implements HydroSystem {
     // coverage is a sliver the lattice cannot resolve. Building the textures
     // before finding that out would leak the float RGBA uploads per tile.
     const geometries = waterGeometry(field, this.meshSegments);
+    record.shoreRefinedCells = geometries.shoreRefinedCells;
     if (!geometries.standing && !geometries.flowing && !geometries.surf) return;
     const textures = createHydroTextures(field);
     // ── THE MESH COVERS THE WATER, NOT THE TILE ──
@@ -953,6 +970,7 @@ class DefaultHydroSystem implements HydroSystem {
       part.material.dispose();
     }
     record.parts = [];
+    record.shoreRefinedCells = 0;
     if (record.textures) disposeHydroTextures(record.textures);
     record.textures = undefined;
     record.binding = undefined;

@@ -275,10 +275,10 @@ function page(): string {
     + '<label class="check"><input id="wakeDemo" type="checkbox"> vehicle wake demo</label>'
     + range('wakeSpeed','WAKE m/s',1,12,.1,5)
     + '</details><details class="section" data-section="sampling" open><summary class="st">SAMPLING</summary>'
-    // The 600m lab at 32/8 has the same physical sampling as a production
-    // 2.4km tile at 128/32: 18.75m field texels and 75m ocean mesh cells.
-    // Default to that honest view; higher settings remain useful microscopes.
-    + '<div class="row wide"><label>FIELD px</label><select id="field"><option selected value="32">32 · PROD SCALE</option><option>64</option><option>128</option><option>256</option></select></div>'
+    // Flowing production tiles now use 256 samples across 2.4km. The 600m lab
+    // therefore uses 64 for the same 9.375m texel; 8 mesh cells still match
+    // production's 75m broad lattice before local shoreline/fall refinement.
+    + '<div class="row wide"><label>FIELD px</label><select id="field"><option value="32">32 · BASE TIER</option><option selected value="64">64 · FLOW PROD</option><option>128</option><option>256</option></select></div>'
     + '<div class="row wide"><label>MESH seg</label><select id="mesh"><option selected value="8">8 · PROD SCALE</option><option>16</option><option>32</option><option>64</option></select></div>'
     + '<label class="check"><input id="wire" type="checkbox"> water wireframe</label>'
     + '<label class="check"><input id="ground" type="checkbox" checked> terrain visible</label></details>'

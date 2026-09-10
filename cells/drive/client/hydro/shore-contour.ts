@@ -1,4 +1,5 @@
 import type { HydroTileField } from './types';
+import { sampleFieldSurface } from './field-sample';
 
 export interface HydroShorePoint {
   x: number;
@@ -29,6 +30,7 @@ const crossing = (
 export function extractHydroShoreSegments(
   field: HydroTileField,
   coverageCut = 0.5,
+  includeGutter = false,
 ): HydroShoreSegment[] {
   const cut = Number.isFinite(coverageCut)
     ? Math.max(0, Math.min(1, coverageCut))
@@ -47,10 +49,16 @@ export function extractHydroShoreSegments(
     field.geometry[(iz * field.width + ix) * 4] - cut;
 
   const out: HydroShoreSegment[] = [];
-  const x0 = field.gutter;
-  const z0 = field.gutter;
-  const x1 = x0 + field.resolution - 1;
-  const z1 = z0 + field.resolution - 1;
+  // Render diagnostics normally want only cells whose four samples are inside
+  // the tile. Terrain topology also needs the cells straddling the tile edge:
+  // their interior/gutter pair gives both neighbours the same physical
+  // crossing on their shared border instead of letting each bank terminate
+  // half a texel before the seam.
+  const margin = includeGutter && field.gutter > 0 ? 1 : 0;
+  const x0 = field.gutter - margin;
+  const z0 = field.gutter - margin;
+  const x1 = field.gutter + field.resolution - 1 + margin;
+  const z1 = field.gutter + field.resolution - 1 + margin;
   for (let iz = z0; iz < z1; iz++) for (let ix = x0; ix < x1; ix++) {
     const p = [
       at(ix, iz),
@@ -86,4 +94,27 @@ export function extractHydroShoreSegments(
     }
   }
   return out;
+}
+
+/** The exact terrain constraints for rivers, streams and canals. Standing and
+ * coastal shorelines keep their existing terrain treatment; this adapter is
+ * deliberately scoped to the channel banks whose coarse triangles visibly
+ * bridged over the rendered body. */
+export function extractFlowingHydroShoreSegments(
+  field: HydroTileField,
+  coverageCut = 0.5,
+  includeGutter = false,
+): HydroShoreSegment[] {
+  return extractHydroShoreSegments(field, coverageCut, includeGutter)
+    .filter((segment) => {
+      const sample = sampleFieldSurface(
+        field,
+        (segment.a.x + segment.b.x) * 0.5,
+        (segment.a.z + segment.b.z) * 0.5,
+        0.1,
+      );
+      return sample?.kind === 'river'
+        || sample?.kind === 'stream'
+        || sample?.kind === 'canal';
+    });
 }
