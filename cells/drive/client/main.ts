@@ -114,6 +114,11 @@ import {
 import { SubstrateShadowMonitor } from './substrate/shadow';
 import type { SubstrateContact, SupportContact } from './substrate/types';
 import {
+  buildRapidDetailMesh,
+  rapidDetailRandom,
+  type RapidDetailRock,
+} from './substrate/rapid-detail';
+import {
   VehicleWaterEvidence,
   type VehicleWaterEvidenceSnapshot,
   type VehicleWaterWheelSample,
@@ -19509,14 +19514,9 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
   // the surface shader's rock foam reads a per-vertex wake the boulders write,
   // so their placement has to be settled before a single ribbon vertex goes up.
   // Same hashes, same stations, same stones as before the reorder.
-  interface RapidRock { st: number; k: number; cx: number; cz: number; r: number;
-    top: number; base: number; spin: number; tone: number; across: number }
-  const rocks: RapidRock[] = [];
+  const rocks: RapidDetailRock[] = [];
   // A stable hash of a position: two rebuilds of the same river agree.
-  const rnd = (x: number, z: number, k: number): number => {
-    const v = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453;
-    return v - Math.floor(v);
-  };
+  const rnd = rapidDetailRandom;
   for (let i = 1; i < n - 1; i++) {
     const sp = speed[i];
     if (sp < 1.35) continue;                       // below this the water is not breaking
@@ -19530,14 +19530,19 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
       // Across the channel, kept off the very bank where it would read as
       // scree rather than as something the river has to go around.
       const across = (rnd(x0, z0, k + 11) * 1.5 - 0.75);
+      const radiusM = 0.35 + rnd(x0, z0, k + 23) * 0.85;
       rocks.push({
-        st: i, k, across,
-        cx: x0 + (ox / ol) * across * (width / 2),
-        cz: z0 + (oz / ol) * across * (width / 2),
-        r: 0.35 + rnd(x0, z0, k + 23) * 0.85,
+        station: i,
+        sequence: k,
+        stationX: x0,
+        stationZ: z0,
+        across,
+        x: x0 + (ox / ol) * across * (width / 2),
+        z: z0 + (oz / ol) * across * (width / 2),
+        radiusM,
         // How far it stands proud: enough to break the surface, never a monolith.
-        top: inv[i] + 0.025 + (0.35 + rnd(x0, z0, k + 23) * 0.85) * (0.35 + rnd(x0, z0, k + 31) * 0.7),
-        base: inv[i] - 0.5,
+        topY: inv[i] + 0.025 + radiusM * (0.35 + rnd(x0, z0, k + 31) * 0.7),
+        baseY: inv[i] - 0.5,
         spin: rnd(x0, z0, k + 41) * Math.PI,
         tone: 0.72 + rnd(x0, z0, k + 53) * 0.3,
       });
@@ -19558,11 +19563,11 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
   const foamP = new Array<number>(n).fill(0), foamM = new Array<number>(n).fill(0);
   const dstep = down ? 1 : -1;
   for (const rk of rocks) {
-    const s = 0.55 + rk.r * 0.8;          // a big rock tears more water
+    const s = 0.55 + rk.radiusM * 0.8;    // a big rock tears more water
     const wP = 0.5 + rk.across / 1.5;     // its side of the channel: 0..1 toward +off
     const wM = 1 - wP;
     for (let d = -1; d <= 4; d++) {
-      const j = rk.st + d * dstep;
+      const j = rk.station + d * dstep;
       if (j < 0 || j >= n) continue;
       const w = s * (d < 0 ? 0.4 : Math.exp(-d / 2.2));
       foamP[j] += w * wP;
@@ -19650,7 +19655,6 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
    * more draw calls than it saved, and these are built once and never touched.
    */
   if (rocks.length) {
-    const rv: number[] = [], rc: number[] = [];
     // One reach, one geology. Hillside boulders and stone buildings already use
     // this district-scale family; rapid rocks were the last global grey left in
     // the landscape. Individual stones vary inside the family's authored spans.
@@ -19658,42 +19662,18 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
     const rockClimate = climateAt(rockAt[0], rockAt[1]);
     const rockFamily = STONE[bedrockAt(cultEnv, rockAt[0], rockAt[1],
       STONE_MIX_ROWS, rockClimate.w)];
-    const rapidRockColour = new THREE.Color();
-    for (const rk of rocks) {
-      const [x0, z0] = dense[rk.st];
-      const sides = 6;
-      const familyPick = clamp((rk.tone - 0.72) / 0.30, 0, 1) - 0.5;
-      rapidRockColour.setHSL(
-        rockFamily[0] + familyPick * rockFamily[1],
-        clamp(rockFamily[2] + (rnd(x0, z0, rk.k + 57) - 0.5) * rockFamily[3], 0, 1),
-        clamp(rockFamily[4] + familyPick * rockFamily[5], 0.04, 0.78),
-      );
-      // A lump: one apex over a ragged ring. Flat-shaded, so this is enough.
-      for (let e = 0; e < sides; e++) {
-        const a0 = rk.spin + (e / sides) * Math.PI * 2, a1 = rk.spin + ((e + 1) / sides) * Math.PI * 2;
-        const r0 = rk.r * (0.7 + rnd(x0 + e, z0, rk.k + 61) * 0.6);
-        const r1 = rk.r * (0.7 + rnd(x0 + e + 1, z0, rk.k + 61) * 0.6);
-        rv.push(rk.cx, rk.top, rk.cz,
-          rk.cx + Math.cos(a0) * r0, rk.base, rk.cz + Math.sin(a0) * r0,
-          rk.cx + Math.cos(a1) * r1, rk.base, rk.cz + Math.sin(a1) * r1);
-        // The submerged ring is darker than the dry crown, giving the rock a
-        // wet contact without another material or transparency pass.
-        rc.push(
-          rapidRockColour.r * 1.04, rapidRockColour.g * 1.04, rapidRockColour.b * 1.02,
-          rapidRockColour.r * 0.76, rapidRockColour.g * 0.78, rapidRockColour.b * 0.80,
-          rapidRockColour.r * 0.76, rapidRockColour.g * 0.78, rapidRockColour.b * 0.80,
-        );
-      }
+    const detail = buildRapidDetailMesh(rocks, rockFamily);
+    for (const collider of detail.colliders) {
       // …and into the collision buckets. Something SOLID is in the river, and
       // the truck now knows it the way it knows a hillside boulder: a bite of
       // speed, a knock, and through (the rocks pass in tick reads this grid).
       // Its own grid, not vegGrid — a biome re-pick washes vegGrid and would
       // have silently disarmed every rapid until its river happened to rebuild.
-      addHydroDetailRock({ x: rk.cx, z: rk.cz, s: rk.r });
+      addHydroDetailRock({ x: collider.x, z: collider.z, s: collider.radiusM });
     }
     const g2 = new THREE.BufferGeometry();
-    g2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(rv), 3));
-    g2.setAttribute('color', new THREE.BufferAttribute(new Float32Array(rc), 3));
+    g2.setAttribute('position', new THREE.BufferAttribute(detail.positions, 3));
+    g2.setAttribute('color', new THREE.BufferAttribute(detail.colours, 3));
     g2.computeVertexNormals();
     addHydroDetailRenderGeometry(g2, MAT.boulder, {
       userData: { rapid: true },

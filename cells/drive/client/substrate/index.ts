@@ -53,6 +53,14 @@ export {
 export { buildProductionHydroFixture } from './hydro-fixture';
 export { makeCrossingFixture, type CrossingFixtureOptions } from './fixtures';
 export {
+  buildRapidDetailMesh,
+  rapidDetailRandom,
+  type RapidDetailCollider,
+  type RapidDetailMesh,
+  type RapidDetailRock,
+  type RapidDetailStoneFamily,
+} from './rapid-detail';
+export {
   VehicleWaterEvidence,
   type VehicleWaterAuthority,
   type VehicleWaterEvidenceInput,

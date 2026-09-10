@@ -1,6 +1,7 @@
 import {
   buildProductionHydroFixture,
   buildProductionSubstrateTile,
+  buildRapidDetailMesh,
   buildSubstrateTile,
   makeCrossingFixture,
   pointInProductionCrossingFootprint,
@@ -114,6 +115,44 @@ function assertCrossing(kind: CrossingKind): ResolvedSubstrateTile {
  * lab are inspecting one implementation rather than parallel demonstrations.
  */
 export function runSubstrateSelfTest(): void {
+  const rapidRocks = [{
+    station: 3,
+    sequence: 1,
+    stationX: 12,
+    stationZ: -8,
+    x: 13.5,
+    z: -7.25,
+    radiusM: .8,
+    topY: 2.4,
+    baseY: 1.1,
+    spin: .35,
+    tone: .91,
+    across: .2,
+  }];
+  const rapidDetailA = buildRapidDetailMesh(
+    rapidRocks,
+    [0.075, 0.02, 0.02, 0.05, 0.30, 0.15],
+  );
+  const rapidDetailB = buildRapidDetailMesh(
+    rapidRocks,
+    [0.075, 0.02, 0.02, 0.05, 0.30, 0.15],
+  );
+  sameArray(rapidDetailA.positions, rapidDetailB.positions,
+    'rapid-bed positions must be deterministic');
+  sameArray(rapidDetailA.colours, rapidDetailB.colours,
+    'rapid-bed geology colour must be deterministic');
+  assert(rapidDetailA.positions.length === 54
+    && rapidDetailA.colours.length === 54,
+  'one rapid rock must author six triangular facets');
+  assert(rapidDetailA.colliders.length === 1
+    && rapidDetailA.colliders[0].x === rapidRocks[0].x
+    && rapidDetailA.colliders[0].z === rapidRocks[0].z
+    && rapidDetailA.colliders[0].radiusM === rapidRocks[0].radiusM,
+  'rapid-bed packet and collider must derive from one rock witness');
+  assert([...rapidDetailA.positions, ...rapidDetailA.colours]
+    .every(Number.isFinite),
+  'rapid-bed geometry must remain numerically safe');
+
   const bridge = assertCrossing('bridge');
   const bridgeCentre = at(bridge, 0, 0);
   assert(bridgeCentre.water?.exposed, 'bridge must preserve the exposed river below');
