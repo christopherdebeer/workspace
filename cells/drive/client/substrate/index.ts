@@ -1,0 +1,64 @@
+export { buildSubstrateTile, resolveCrossing, resolveCrossingKind, sampleSubstrate } from './kernel';
+export { resolveFluidContact } from './contact';
+export {
+  adaptHydroSample,
+  sampleHydroContactLayers,
+  type HydroAdapterOptions,
+  type HydroContactLayers,
+} from './hydro-adapter';
+export {
+  SubstrateShadowMonitor,
+  type LegacyFluidObservation,
+  type ShadowCrossingObservation,
+  type SubstrateCutoverGate,
+  type SubstrateShadowObservation,
+  type SubstrateShadowSnapshot,
+} from './shadow';
+export {
+  pointInProductionCrossingFootprint,
+  productionCrossingFootprint,
+  ProductionCrossingRegistry,
+  resolveProductionCrossing,
+  resolveProductionCrossingIntent,
+  type CrossingAuthority,
+  type CrossingImplementation,
+  type CrossingStructureOutcome,
+  type ProductionCrossingEvidenceInput,
+  type ProductionCrossingFootprint,
+  type ProductionCrossingInput,
+  type ProductionCrossingIntent,
+  type ProductionCrossingKind,
+  type ProductionCrossingRecord,
+  type ProductionCrossingSnapshot,
+} from './crossing-authority';
+export {
+  buildProductionSubstrateTile,
+  ProductionSubstrateStore,
+  sampleProductionSubstrateTile,
+  type ProductionDriveSample,
+  type ProductionDriveRenderMesh,
+  type ProductionDriveSegment,
+  type ProductionGroundMesh,
+  type ProductionGroundSample,
+  type ProductionRenderAttribute,
+  type ProductionRenderAttributeArray,
+  type ProductionRenderGroup,
+  type ProductionRenderMesh,
+  type ProductionSubstrateStoreSnapshot,
+  type ProductionSubstrateTile,
+  type ProductionSubstrateTileInput,
+  type ProductionWaterProbe,
+  type ProductionWaterMotionSegment,
+} from './production-tile';
+export { buildProductionHydroFixture } from './hydro-fixture';
+export { makeCrossingFixture, type CrossingFixtureOptions } from './fixtures';
+export {
+  VehicleWaterEvidence,
+  type VehicleWaterAuthority,
+  type VehicleWaterEvidenceInput,
+  type VehicleWaterEvidenceSnapshot,
+  type VehicleWaterStamp,
+  type VehicleWaterStampKind,
+  type VehicleWaterWheelSample,
+} from './vehicle-water';
+export * from './types';

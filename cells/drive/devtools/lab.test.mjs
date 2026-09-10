@@ -107,6 +107,46 @@ for (const lab of LABS) {
   await d.close();
 }
 
+// ── SUBSTRATE AUTHORITY IS INSPECTABLE, NOT JUST COUNTED ─────────
+{
+  const d = await openDrive({ pagePath: '/lab/substrate', tag: 'lab-substrate-authority',
+    settle: 6000, bootTimeout: 45000 });
+  await d.page.waitForTimeout(2500);
+  const initial = await d.page.evaluate(() => ({
+    sections: [...document.querySelectorAll('.lab-dials .sec .sh span:first-child')]
+      .map((s) => s.textContent),
+    options: [...document.querySelectorAll('#authorityCase option')].map((o) => o.value),
+    status: document.getElementById('substrate-status')?.textContent ?? '',
+  }));
+  ok('substrate lab exposes a collapsible authority/parity section',
+    initial.sections.includes('AUTHORITY / PARITY'), initial.sections);
+  ok('substrate lab offers matching, missing, procedural and unresolved evidence',
+    ['matching', 'missing', 'procedural', 'unresolved']
+      .every((value) => initial.options.includes(value)), initial.options);
+  ok('substrate lab reports the selected crossing authority and implementation',
+    initial.status.includes('AUTH FORD · EXPLICIT-TAG · NOT-REQUIRED')
+      && initial.status.includes('EARTHWORK OPEN CHANNEL · FORD SUPPORT')
+      && initial.status.includes('SOURCE MESHES RETIRED AFTER COMMIT')
+      && initial.status.includes('CUTOVER GATES WET Δ <0.1%'),
+    initial.status);
+
+  await d.page.evaluate(() => {
+    const select = document.getElementById('authorityCase');
+    select.value = 'unresolved';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await d.page.waitForTimeout(300);
+  const unresolved = await d.page.evaluate(() =>
+    document.getElementById('substrate-status')?.textContent ?? '');
+  ok('substrate lab makes unresolved production evidence visible',
+    unresolved.includes('AUTH UNRESOLVED · UNRESOLVED · MISSING')
+      && unresolved.includes('structure outcome=none')
+      && unresolved.includes('EARTHWORK WITHHELD · CONSERVATIVE ROAD PLUG'),
+    unresolved);
+  errors.push(...d.errors);
+  await d.close();
+}
+
 // ── THE DIAL BARGAIN ──────────────────────────────────────────────
 {
   const d = await openDrive({ pagePath: '/lab/marks', tag: 'lab-dials',

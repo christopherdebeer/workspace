@@ -33,7 +33,7 @@ import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
 import { smoothChartZoom, wrapLongitude } from './globe-navigation';
 import { bitmapStats, withDecodedBitmap } from './decode-telemetry';
 import { GLOBE_R, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, globeEast, globeNorth, subsolar } from './globe';
-import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSystem, type OceanCoverage } from './hydro';
+import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSurfaceOccluder, type HydroSystem, type OceanCoverage } from './hydro';
 import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipment';
 import { createRigModel, OVERLAND, RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
 import { createWireMaterialPolicy } from './wire-material';
@@ -51,7 +51,7 @@ import { inlandComponents, inlandMask, maskSignature } from './inland-water';
 import { pointInPolygon } from './hydro/geometry';
 import { HYDRO_BUILD_PROF } from './hydro/build-tile';
 import type { SceneShade } from './hydro/material';
-import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
+import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainCrossingMask, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
 import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-worker';
 // THE TERRAIN KERNEL, instantiated once for the synchronous path and the
 // probes; the worker builds its own from the same source (terrain-worker.ts).
@@ -92,6 +92,33 @@ import {
 // Extracted so a test can drive the SHIPPED function — see client/clip.test.mjs
 // and the note in clip.ts about the corner nicks it used to drop.
 import { clipToBounds } from './clip';
+import { adaptHydroSample } from './substrate/hydro-adapter';
+import {
+  productionCrossingFootprint,
+  ProductionCrossingRegistry,
+  resolveProductionCrossingIntent,
+  type CrossingStructureOutcome,
+} from './substrate/crossing-authority';
+import {
+  buildProductionSubstrateTile,
+  ProductionSubstrateStore,
+  type ProductionDriveRenderMesh,
+  type ProductionDriveSample,
+  type ProductionDriveSegment,
+  type ProductionGroundMesh,
+  type ProductionRenderAttributeArray,
+  type ProductionRenderMesh,
+  type ProductionSubstrateTile,
+  type ProductionWaterMotionSegment,
+} from './substrate/production-tile';
+import { SubstrateShadowMonitor } from './substrate/shadow';
+import type { SubstrateContact, SupportContact } from './substrate/types';
+import {
+  VehicleWaterEvidence,
+  type VehicleWaterEvidenceSnapshot,
+  type VehicleWaterWheelSample,
+} from './substrate/vehicle-water';
+import { createVehicleWaterEvidenceRenderer } from './substrate/vehicle-water-render';
 
 // AHEAD OF THE ROUTE BRANCH, so a lab visit arms offline boot for the game and
 // the other way round. One shell answers every path on this host, so there is
@@ -1857,6 +1884,93 @@ const HYDRO_ON = ((): boolean => {
     return waterFromDials(JSON.parse(localStorage.getItem('drive.dials') ?? '{}') as Record<string, number>);
   } catch { return true; }
 })();
+/**
+ * Guarded substrate cutover modes. Shadow observes; contact feeds vehicle
+ * support/fluid queries; render makes a versioned substrate tile commit the
+ * exact hydro field retained by HydroSystem to GPU resources:
+ *
+ *   ?substrate=shadow
+ *   ?substrate=contact   (guarded contact consumer, same diagnostics)
+ *   ?substrate=render    (guarded hydro-render consumer, rollback remains default)
+ *   __substrate()
+ *   __substrate('reset')
+ */
+const SUBSTRATE_RENDER_ON = /[?&]substrate=render(?:&|$)/.test(location.search);
+// A render cutover is a whole-consumer cutover. Mixing substrate-owned
+// terrain/water pixels with legacy wheel support, fluid force or splash gates
+// would make the same visible crossing answer two different geometries.
+const SUBSTRATE_CONTACT_ON = SUBSTRATE_RENDER_ON
+  || /[?&]substrate=contact(?:&|$)/.test(location.search);
+const SUBSTRATE_SHADOW_ON = SUBSTRATE_CONTACT_ON || SUBSTRATE_RENDER_ON
+  || /[?&]substrate=shadow(?:&|$)/.test(location.search);
+const substrateShadow = SUBSTRATE_SHADOW_ON ? new SubstrateShadowMonitor() : undefined;
+const productionCrossings = new ProductionCrossingRegistry();
+/** Last crossing revision consumed by terrain/hydro invalidation. */
+const crossingAppliedRevision = new Map<string, number>();
+const productionSubstrate = new ProductionSubstrateStore();
+(window as unknown as {
+  __substrateWaterPoints?: (max?: number, radiusM?: number) => object[];
+}).__substrateWaterPoints = (max = 32, radiusM = 2400): object[] =>
+  productionSubstrate.waterPoints(max, typeof state === 'undefined'
+    ? undefined
+    : { x: state.x, z: state.z, radiusM });
+(window as unknown as {
+  __substrate?: (action?: 'reset') => object;
+}).__substrate = (action): object => {
+  // Reset observations, never authority. Crossing records and revision-locked
+  // tiles are world state; deleting them from a console counter reset would
+  // leave the shadow blind until the corresponding OSM ways happened to build
+  // again.
+  if (action === 'reset') substrateShadow?.reset();
+  const crossings = productionCrossings.snapshot();
+  const crossingRecords = productionCrossings.diagnostics();
+  const crossingEarthworks = crossingRecords.map((record) => {
+    const groundY = meshSurfaceAt(record.x, record.z);
+    const groundAbsY = groundY === null ? null : groundY + baseElev;
+    return {
+      id: record.id,
+      kind: record.kind,
+      implementation: record.implementation,
+      revision: record.revision,
+      x: record.x,
+      z: record.z,
+      groundY: groundAbsY,
+      deckY: record.deckY,
+      waterBedY: record.waterBedY,
+      waterSurfaceY: record.waterSurfaceY,
+      groundToDeckM: groundAbsY === null ? null : groundAbsY - record.deckY,
+      groundToBedM: groundAbsY === null ? null : groundAbsY - record.waterBedY,
+    };
+  });
+  const tiles = productionSubstrate.snapshot();
+  const render = substrateRenderSnapshot();
+  const at = typeof state === 'undefined'
+    ? null
+    : productionSubstrate.debugAt(state.x, state.z);
+  const mode = SUBSTRATE_RENDER_ON ? 'render'
+    : SUBSTRATE_CONTACT_ON ? 'contact'
+      : SUBSTRATE_SHADOW_ON ? 'shadow' : 'off';
+  return substrateShadow ? {
+    ...substrateShadow.snapshot(), mode, renderAuthority: SUBSTRATE_RENDER_ON ? 'substrate-tile' : 'hydro-system',
+    crossings, crossingRecords, crossingEarthworks, tiles, render, at,
+    renderPacketRejections: productionRenderPacketRejections.slice(),
+    renderRefusals: substrateAtomicRenderRefusalLog.slice(),
+  } : {
+    enabled: false,
+    mode,
+    renderAuthority: 'hydro-system',
+    enableWith: '?substrate=shadow, ?substrate=contact, or ?substrate=render',
+    note: 'shadow mode is read-only and does not drive rendering or physics',
+    crossings,
+    crossingRecords,
+    crossingEarthworks,
+    tiles,
+    render,
+    at,
+    renderPacketRejections: productionRenderPacketRejections.slice(),
+    renderRefusals: substrateAtomicRenderRefusalLog.slice(),
+  };
+};
 /** One mask per cover tile, built once and expired when the datum moves —
  *  the height gate is relative to the datum, so a measurement that shifts by
  *  more than the tolerance invalidates every answer that used it. */
@@ -2559,7 +2673,8 @@ function hydroTick(nowMs: number): void {
       x: state.x, z: state.z,
       vx: Math.sin(state.heading) * state.speed,
       vz: -Math.cos(state.heading) * state.speed,
-      wadeM: rigWadeM,
+      wadeM: vehicleWaterState.depthM,
+      wakeStrength: vehicleWaterState.wakeStrength,
     },
   });
 }
@@ -2723,7 +2838,11 @@ function sameRaster(a: Float32Array, b: Float32Array): boolean {
   return true;
 }
 /** The features by id and size, and the ocean's answer by status and mask. */
-function hydroInputSig(feats: readonly HydroFeature[], ocean: OceanCoverage): string {
+function hydroInputSig(
+  feats: readonly HydroFeature[],
+  ocean: OceanCoverage,
+  occluders: readonly HydroSurfaceOccluder[] = [],
+): string {
   const ids: string[] = [];
   for (const f of feats) {
     let n = 0;
@@ -2748,7 +2867,11 @@ function hydroInputSig(feats: readonly HydroFeature[], ocean: OceanCoverage): st
     }
   };
   walk(ocean as unknown as Record<string, unknown>, 0);
-  return `${oceanSig}|${ids.join(',')}`;
+  const structures = occluders.map((o) =>
+    `${o.kind}:${o.x.toFixed(1)},${o.z.toFixed(1)}:${o.roadHalfWidthM.toFixed(1)},${o.halfLengthM.toFixed(1)}`)
+    .sort()
+    .join(',');
+  return `${oceanSig}|${ids.join(',')}|${structures}`;
 }
 /** THE CLOUD DECK'S SHADOW, HANDED TO THE WATER — the same function the
  *  terrain shades by (terrainFx), the same uniforms shared by reference, so
@@ -2788,7 +2911,15 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
     // …and it runs from OUR queue, one a frame at most, never in the same
     // frame as a terrain apply: measured 13ms a tile (max 41), which stacked
     // on the apply's 7ms in the promise job right behind it.
-    hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs(), sceneShade: hydroSceneShade(), scheduleBuild: (job) =>
+    hydroSys = createHydroSystem({
+      oceanLevelM: seaSurfaceAbs(),
+      sceneShade: hydroSceneShade(),
+      // Measured on a production-sized winding 26m river: 256 cuts mean bank
+      // placement error by 28% for ~1.27x build time. Restricting the tier to
+      // flowing records avoids fourfold field memory across the dry ring.
+      flowingFieldResolution: 256,
+      deferRendering: SUBSTRATE_RENDER_ON,
+      scheduleBuild: (job) =>
       new Promise((resolve, reject) => { hydroJobs.push({ job, resolve, reject }); }) });
     hydroSys.setDebugView(hydroView);
     worldGroup.add(hydroSys.object3d);
@@ -2850,6 +2981,22 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
     if (e.maxZ < t.zs - pad || e.minZ > t.zs + t.h + pad) continue;
     feats.push(e.f);
   }
+  const surfaceOccluders: HydroSurfaceOccluder[] = productionCrossings.forBounds({
+    minX: t.xs,
+    minZ: t.zs,
+    maxX: t.xs + t.w,
+    maxZ: t.zs + t.h,
+  }).filter((crossing) =>
+    (crossing.kind === 'culvert' || crossing.kind === 'causeway')
+    && crossing.implementation === 'built')
+    .map((crossing) => ({
+      kind: crossing.kind as 'culvert' | 'causeway',
+      x: crossing.x,
+      z: crossing.z,
+      roadTangent: crossing.roadTangent,
+      roadHalfWidthM: crossing.roadHalfWidthM,
+      halfLengthM: crossing.waterHalfWidthM + 4,
+    }));
   // ── A FEED THAT CHANGES NOTHING IS NOT A BUILD ──
   //
   // Every terrain apply re-feeds its tile's water in full: a corridor
@@ -2864,15 +3011,17 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
   // (hydroDirty) is fed regardless: its inputs are the same, its answer is
   // not. ?hydroskip=0 turns the skip off for an A/B.
   workerLedger.hydroFeeds++;
-  const sig = hydroInputSig(feats, ocean);
+  const sig = hydroInputSig(feats, ocean, surfaceOccluders);
   const prev = hydroFedInputs.get(key);
   if (HYDRO_SKIP && !wasDirty && prev && prev.sig === sig && sameRaster(prev.elev, elevation)) {
     workerLedger.hydroSkips++;
+    queueProductionSubstrateShadow(t, key);
     return;
   }
   hydroFedInputs.set(key, { elev: elevation, sig });
   const rev = (hydroRev.get(key) ?? 0) + 1;
   hydroRev.set(key, rev);
+  invalidateProductionSubstrateTile(key);
   hydroFeedLog.push({ at: Math.round(performance.now()), key, rev,
     store: hydroFeats.size, fed: feats.length });
   if (hydroFeedLog.length > 400) hydroFeedLog.splice(0, 200);
@@ -2883,7 +3032,9 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
     elevation: { width: n, height: n, data: elevation, verticalDatum: 'absolute-m' },
     features: feats,
     oceanCoverage: ocean,
-  }).catch((e) => console.warn('[hydro]', e));
+    surfaceOccluders,
+  }).then(() => queueProductionSubstrateShadow(t, key))
+    .catch((e) => console.warn('[hydro]', e));
 }
 
 /** ── THE CULTURE SEAM ──
@@ -5938,6 +6089,27 @@ function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.Me
 // ── terrain meshes ─────────────────────────────────────────────────
 const terrainReady = new Map<string, Promise<void>>(); // per-tile load promise
 const terrainMeshes = new Map<string, THREE.Mesh>();
+/** Terrain candidates admitted to the scene by a matching substrate tile. */
+const substrateTerrainCommits = new Map<string, number>();
+interface SubstrateRenderBinding {
+  tileRevision: number;
+  meshes: Set<THREE.Mesh>;
+}
+const substrateTerrainRenderMeshes = new Map<string, SubstrateRenderBinding>();
+const productionTerrainRenderPackets = new Map<string, {
+  terrainRevision: number;
+  packets: readonly ProductionRenderMesh[];
+  authoredAtBuild: boolean;
+}>();
+let productionTerrainPacketFailures = 0;
+let substrateRenderInvalidations = 0;
+let substrateAtomicRenderCommits = 0;
+let substrateAtomicRenderRefusals = 0;
+const substrateAtomicRenderRefusalLog: Array<{
+  key: string;
+  layers: string[];
+  sourceRevisions: ProductionSubstrateTile['sourceRevisions'];
+}> = [];
 
 // ── THE TERRAIN KERNEL'S WINDOW ONTO THIS WORLD ───────────────────
 // The build itself lives in terrain-kernel.ts, over plain arrays and this
@@ -5951,6 +6123,10 @@ const kStore: TerrainStore = {
   sampleCover: (x, z) => sampleCover(x, z),
   coverPaint: (x, z) => coverPaint(x, z),
   coverWater: (x, z) => coverWater(x, z),
+  crossingAt: (x, z) => {
+    const crossing = productionCrossings.earthworkAt(x, z);
+    return crossing && crossing.kind !== 'unresolved' ? crossing.kind : null;
+  },
   get cover() { return { water: COVER.water, built: COVER.built }; },
   seaAbs: () => seaSurfaceAbs(),
   get baseElev() { return baseElev; },
@@ -5995,6 +6171,7 @@ function terrainNormalTex(t: { w: number; data: Float32Array; xs?: number; zs?: 
 }
 function buildTerrainMesh(t: HeightTile): void {
   const key = `${t.tx}/${t.ty}`;
+  invalidateProductionSubstrateTile(key);
   const SEG = terrainSeg;
   // THE CORRIDOR IS IN THE GEOMETRY where a road comes near — see
   // refineTileGeometry. A tile with no road keeps the plain grid.
@@ -6015,7 +6192,9 @@ function buildTerrainMesh(t: HeightTile): void {
   (geo.userData as { seg?: number }).seg = SEG;
   const old = terrainMeshes.get(key);
   if (old) { worldGroup.remove(old); old.geometry.dispose(); }
+  substrateTerrainCommits.delete(key);
   const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key) : terrainMat);
+  mesh.userData.productionTerrainSource = true;
   // Terrain RECEIVES shadows and no longer throws them into the map — the sun
   // march does the ridge-over-valley job; objects on the ground still cast.
   shadowy(mesh, false, true);
@@ -6025,13 +6204,16 @@ function buildTerrainMesh(t: HeightTile): void {
   (mesh.userData as { corridor?: boolean }).corridor = corridor;
   if (corridor) dropBatterFor(key);
   terrainMeshes.set(key, mesh);
-  worldGroup.add(mesh);
+  const revision = (terrainRevision.get(key) ?? 0) + 1;
+  terrainRevision.set(key, revision);
+  authorProductionTerrainRenderPacket(key, revision, mesh);
+  if (!SUBSTRATE_RENDER_ON) worldGroup.add(mesh);
   // THE FOLLOWERS. This tile owns its east and its south edge; a neighbour
   // there built against an older row is rebuilt to take it — only when its
   // border differs.
   for (const [dx, dy] of [[1, 0], [0, 1]]) {
     const nk = `${t.tx + dx}/${t.ty + dy}`;
-    if (terrainMeshes.has(nk) && !borderShared(t, nk)) { terrainDirty.add(nk); dirtyWhy.set(nk, `owner:${key}`); }
+    if (terrainMeshes.has(nk) && !borderShared(t, nk)) markTerrainDirty(nk, `owner:${key}`);
   }
   plainCost.mesh += performance.now() - p7;
   buildLog.push({ key, why: dirtyWhy.get(key) ?? 'load', corridor, refined: b.refined, at: Math.round(performance.now()) });
@@ -6075,6 +6257,16 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
   };
   const st = flatten(cutCells, cutL, TOE_REACH + cutL);
   const ch = flatten(channelGrid, GRID, GRID * 2);
+  const crossingPad = 12;
+  const crossings: TerrainCrossingMask[] = productionCrossings.forBounds({
+    minX: t.xs - crossingPad,
+    minZ: t.zs - crossingPad,
+    maxX: t.xs + t.w + crossingPad,
+    maxZ: t.zs + t.h + crossingPad,
+  }).flatMap((record) => {
+    const footprint = productionCrossingFootprint(record);
+    return footprint ? [footprint] : [];
+  });
   const areas: Array<{ pts: Array<[number, number]>; tint: Rgb; x0: number; z0: number; x1: number; z1: number }> = [];
   const seenA = new Set<AreaPatch>();
   for (let cx = Math.floor(t.xs / AREA_CELL); cx <= Math.floor((t.xs + t.w) / AREA_CELL); cx++) {
@@ -6109,7 +6301,8 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
     nrmScale: NRM_SCALE, cutWash: CUT_WASH, cprobe: CPROBE, cutRelief: CUT_RELIEF,
     cutL, grid: GRID, water: COVER.water, built: COVER.built, waterTilt: WATER_TILT, coverPx: COVER_PX,
     origin: { lat: origin.lat, lon: origin.lon, mLon: origin.mLon },
-    strips: st.flat, stripCells: st.cells, channels: ch.flat, chanCells: ch.cells, areas, pads,
+    strips: st.flat, stripCells: st.cells, channels: ch.flat, chanCells: ch.cells,
+    crossings, areas, pads,
     clim, climN: N, climK: KW,
     ramp: biome.ramp, ramps: BIOME_LIST.map((b) => b.ramp), coverTint: COVER_TINT, coverMix: COVER_MIX,
   };
@@ -6118,6 +6311,7 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
 /** The worker's arrays become the tile's mesh — what buildTerrainMesh does
  *  after its kernel call, with the rows and the followers from the reply. */
 function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string): void {
+  invalidateProductionSubstrateTile(key);
   const SEG = terrainSeg;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(r.pos, 3));
@@ -6129,18 +6323,23 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
   (geo.userData as { seg?: number }).seg = SEG;
   const old = terrainMeshes.get(key);
   if (old) { worldGroup.remove(old); old.geometry.dispose(); }
+  substrateTerrainCommits.delete(key);
   const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key, r.normalMap) : terrainMat);
+  mesh.userData.productionTerrainSource = true;
   shadowy(mesh, false, true);
   mesh.position.set(t.xs + t.w / 2, 0, t.zs + t.h / 2);
   (mesh.userData as { corridor?: boolean }).corridor = r.corridor;
   if (r.corridor) dropBatterFor(key);
   terrainMeshes.set(key, mesh);
-  worldGroup.add(mesh);
+  const revision = (terrainRevision.get(key) ?? 0) + 1;
+  terrainRevision.set(key, revision);
+  authorProductionTerrainRenderPacket(key, revision, mesh);
+  if (!SUBSTRATE_RENDER_ON) worldGroup.add(mesh);
   refinedBorders.set(key, r.border);
   if (r.carveLog) carveLog.set(key, r.carveLog);
   Object.assign(refineCost, r.refineCost); Object.assign(plainCost, r.plainCost); Object.assign(carveCost, r.carveCost);
   for (const nk of r.followers) {
-    if (terrainMeshes.has(nk)) { terrainDirty.add(nk); dirtyWhy.set(nk, `owner:${key}`); }
+    if (terrainMeshes.has(nk)) markTerrainDirty(nk, `owner:${key}`);
   }
   buildLog.push({ key, why, corridor: r.corridor, refined: r.refined, at: Math.round(performance.now()) });
   noteBuild(key, why);
@@ -6169,10 +6368,13 @@ function postTerrainBuild(t: HeightTile, key: string): void {
     const t2 = performance.now();
     terrainBuilds++;
     reseatBuildings(t); const t3 = performance.now();
-    redrape(t); const t4 = performance.now();
+    redrape(t);
+    publishProductionRoadRenderPackets(key, terrainRevision.get(key) ?? 0);
+    publishProductionHydroDetailRenderPackets(key, terrainRevision.get(key) ?? 0);
+    const t4 = performance.now();
     hydroFeed(t, r.hydroElev); const t5 = performance.now();
     flushBatter(t); const t6 = performance.now();
-    flushCulverts(t); const t7 = performance.now();
+    flushCulverts(t); queueProductionSubstrateShadow(t, key); const t7 = performance.now();
     terrainMs = t7 - t1 + prep;
     workerGap = clamp(3 * (terrainMs + workerLedger.lastHydroMs), 100, 400);
     appliedThisFrame = true;
@@ -6186,7 +6388,7 @@ function postTerrainBuild(t: HeightTile, key: string): void {
     // queue and the synchronous slot takes it.
     buildInFlight = null;
     console.warn('terrain worker:', error.message);
-    terrainDirty.add(key); dirtyWhy.set(key, why);
+    markTerrainDirty(key, why);
   });
 }
 /** ONE HEAVY JOB A FRAME. The budgeted jobs — a hydro build, a road slice, a
@@ -6238,16 +6440,29 @@ function hydroRefeed(t: HeightTile, key: string): void {
   tworker ? { on: !tworker.disabled, ...tworker.stats, inFlight: buildInFlight, gap: Math.round(workerGap), ...workerLedger } : { on: false };
 
 const terrainDirty = new Set<string>();
+/** Monotonic per-tile mesh/earthwork revision, consumed by substrate shadow. */
+const terrainRevision = new Map<string, number>();
 function coverDirtiedTerrain(xs: number, zs: number, w: number, h: number): void {
   for (const [key, t] of heightTiles) {
     if (t.xs > xs + w || t.zs > zs + h || t.xs + t.w < xs || t.zs + t.h < zs) continue;
     markTerrainDirty(key, 'cover');
   }
 }
+/** A crossing is resolved after the water/road overlap has been inspected,
+ *  which is necessarily after the first terrain build. Rebuild every touched
+ *  mesh once so the canonical bridge/culvert/ford/causeway earthwork reaches
+ *  the production terrain rather than remaining diagnostics-only state. */
+function crossingDirtiedTerrain(xs: number, zs: number, w: number, h: number): void {
+  for (const [key, t] of heightTiles) {
+    if (t.xs > xs + w || t.zs > zs + h || t.xs + t.w < xs || t.zs + t.h < zs) continue;
+    markTerrainDirty(key, 'crossing');
+  }
+}
 function markTerrainDirty(key: string, why = 'mark'): void {
   if (!terrainMeshes.has(key)) return;
   if (!terrainDirty.has(key)) dirtyAt.set(key, performance.now());
   terrainDirty.add(key); dirtyWhy.set(key, why);
+  invalidateProductionSubstrateTile(key);
 }
 /** When each dirty tile was FIRST dirtied — the hold below reads it. */
 const dirtyAt = new Map<string, number>();
@@ -6411,9 +6626,12 @@ function flushTerrain(now: number): void {
       terrainBuilds++;
       reseatBuildings(t);
       redrape(t);
+      publishProductionRoadRenderPackets(key, terrainRevision.get(key) ?? 0);
+      publishProductionHydroDetailRenderPackets(key, terrainRevision.get(key) ?? 0);
       hydroFeed(t);
       flushBatter(t);
       flushCulverts(t);
+      queueProductionSubstrateShadow(t, key);
       terrainMs = performance.now() - t0;
       if (buildLog.length) { const b = buildLog[buildLog.length - 1]; b.ms = Math.round(terrainMs); b.bms = Math.round(t1 - t0); }
       return;
@@ -6459,7 +6677,7 @@ function flushTerrain(now: number): void {
         }
       }
       if (!any) { (mesh.userData as { scanned?: boolean }).scanned = true; continue; }
-      terrainDirty.add(key); dirtyWhy.set(key, 'scan');
+      markTerrainDirty(key, 'scan');
       terrainAt = now;
       return;
     }
@@ -6485,7 +6703,7 @@ function flushTerrain(now: number): void {
         const ud = nm.userData as { auditTries?: number };
         if ((ud.auditTries ?? 0) >= 3) continue;
         ud.auditTries = (ud.auditTries ?? 0) + 1;
-        terrainDirty.add(nk); dirtyWhy.set(nk, `audit:${key}`); terrainAt = now; return;
+        markTerrainDirty(nk, `audit:${key}`); terrainAt = now; return;
       }
     }
   }
@@ -11433,6 +11651,9 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
    *  see wayQuality. Absent where the way said nothing, and then the class
    *  default stands in. */
   sq?: number;
+  /** Channel flow speed in metres per second. Present only on channelGrid
+   *  segments, where the solved invert owns this value. */
+  fs?: number;
   /** CROSS-FALL at each end: metres the deck rises on the +normal side over
    *  half a width. Carried on the segment so the height a wheel gets is the
    *  height that was DRAWN — without it the mesh tilts to the hillside and the
@@ -11647,6 +11868,14 @@ function onCarriageway(x: number, z: number, margin = 0,
   return { road, track };
 }
 function surfaceAt(x: number, z: number): Surface {
+  if (SUBSTRATE_CONTACT_ON) {
+    const contact = productionSubstrate.sample(x, z);
+    if (contact) {
+      const resolved = surfaceFromSubstrateContact(contact);
+      surfQ = resolved.quality;
+      return resolved.kind;
+    }
+  }
   // Scan them ALL: tarmac wins wherever a track crosses or joins a road, and
   // returning on the first hit made that depend on insertion order. Where two
   // of a kind overlap the BETTER surface wins for the same reason — you are
@@ -14504,7 +14733,7 @@ function flushAprons(): void {
     g.computeVertexNormals();
     const mm = new THREE.Mesh(g, m);
     if (m === MAT.stud) mm.userData.stud = true;   // so a probe can find them
-    worldGroup.add(mm);
+    addRoadRenderMesh(mm);
     v.length = 0; u.length = 0;
   }
 }
@@ -14710,7 +14939,183 @@ const hintAt = (x: number, z: number, reach = 6, layer?: number): number | null 
  * shape flushBuildings proved. Off outside a batch: a ribbon built outside
  * renderWays still stands its own mesh.
  */
-let ribBatch: Map<string, { mat: THREE.Material; geos: THREE.BufferGeometry[]; lift: number | null }> | null = null;
+let ribBatch: Map<string, {
+  mat: THREE.Material;
+  geos: THREE.BufferGeometry[];
+  lift: number | null;
+  drive: boolean;
+}> | null = null;
+let ribBatchTerrainOwner: string | null = null;
+let roadBatchMeshes: THREE.Mesh[] | null = null;
+interface ProductionRoadRenderCandidate {
+  generation: number;
+  meshes: Set<THREE.Mesh>;
+  meshCount: number;
+  packetTerrainRevision: number;
+  packets: readonly ProductionDriveRenderMesh[];
+  authoredAfterRedrape: boolean;
+}
+const productionRoadRenderCandidates = new Map<string, ProductionRoadRenderCandidate>();
+const substrateRoadCommits = new Map<string, number>();
+const substrateRoadRenderMeshes = new Map<string, SubstrateRenderBinding>();
+const productionRenderMaterials = new Map<string, THREE.Material>();
+const productionRenderMaterialKeys = new WeakMap<THREE.Material, string>();
+let productionRenderMaterialSequence = 0;
+interface ProductionStructureRenderCandidate {
+  generation: number;
+  meshes: Set<THREE.Mesh>;
+  meshCount: number;
+  packetGeneration: number;
+  packets: readonly ProductionRenderMesh[];
+  authoredAtBuild: boolean;
+}
+const productionStructureRenderCandidates =
+  new Map<string, ProductionStructureRenderCandidate>();
+const substrateStructureCommits = new Map<string, number>();
+const substrateStructureRenderMeshes = new Map<string, SubstrateRenderBinding>();
+let productionStructurePacketFailures = 0;
+let structureBatchOwner: string | null = null;
+let structureBatchMeshes: THREE.Mesh[] | null = null;
+interface ProductionHydroDetailRenderCandidate {
+  generation: number;
+  meshes: Set<THREE.Mesh>;
+  meshCount: number;
+  rocks: Set<RapidRock>;
+  packetTerrainRevision: number;
+  packets: readonly ProductionRenderMesh[];
+  authoredAfterRedrape: boolean;
+}
+const productionHydroDetailRenderCandidates =
+  new Map<string, ProductionHydroDetailRenderCandidate>();
+const substrateHydroDetailCommits = new Map<string, number>();
+const substrateHydroDetailRenderMeshes = new Map<string, SubstrateRenderBinding>();
+let productionHydroDetailPacketFailures = 0;
+let hydroDetailBatchMeshes: THREE.Mesh[] | null = null;
+let hydroDetailBatchRocks: RapidRock[] | null = null;
+function addRoadRenderMesh(mesh: THREE.Mesh): void {
+  // Source geometry may be sampled into a substrate packet, but in render
+  // cutover mode it must never be mistaken for the packet-owned scene mesh.
+  mesh.userData.productionDriveSource = true;
+  if (SUBSTRATE_RENDER_ON && ribBatchTerrainOwner && roadBatchMeshes) {
+    roadBatchMeshes.push(mesh);
+  } else {
+    worldGroup.add(mesh);
+  }
+}
+function registerProductionRoadRenderBatch(owner: string, meshes: THREE.Mesh[]): void {
+  if (!meshes.length) return;
+  let candidate = productionRoadRenderCandidates.get(owner);
+  if (!candidate) {
+    candidate = {
+      generation: 0,
+      meshes: new Set(),
+      meshCount: 0,
+      packetTerrainRevision: -1,
+      packets: [],
+      authoredAfterRedrape: false,
+    };
+    productionRoadRenderCandidates.set(owner, candidate);
+  }
+  candidate.generation++;
+  candidate.meshCount += meshes.length;
+  for (const mesh of meshes) candidate.meshes.add(mesh);
+  candidate.packetTerrainRevision = -1;
+  candidate.authoredAfterRedrape = false;
+  appendProductionRoadRenderPackets(candidate, meshes);
+  for (const mesh of meshes) {
+    mesh.removeFromParent();
+    mesh.geometry.dispose();
+    candidate.meshes.delete(mesh);
+  }
+  substrateRoadCommits.delete(owner);
+  // A yielded road build can overlap a terrain flush. Re-dirty at packet
+  // registration so a tile assembled between the last segment and this flush
+  // cannot remain current without the newly completed carriageway geometry.
+  markTerrainDirty(owner, 'drive-render');
+}
+function addStructureRenderMesh(mesh: THREE.Mesh): void {
+  mesh.userData.productionStructureSource = true;
+  if (SUBSTRATE_RENDER_ON && structureBatchOwner && structureBatchMeshes) {
+    structureBatchMeshes.push(mesh);
+  } else {
+    worldGroup.add(mesh);
+  }
+}
+function registerProductionStructureRenderBatch(owner: string, meshes: THREE.Mesh[]): void {
+  if (!meshes.length) return;
+  let candidate = productionStructureRenderCandidates.get(owner);
+  if (!candidate) {
+    candidate = {
+      generation: 0,
+      meshes: new Set(),
+      meshCount: 0,
+      packetGeneration: -1,
+      packets: [],
+      authoredAtBuild: false,
+    };
+    productionStructureRenderCandidates.set(owner, candidate);
+  }
+  candidate.generation++;
+  candidate.meshCount += meshes.length;
+  for (const mesh of meshes) candidate.meshes.add(mesh);
+  candidate.packetGeneration = -1;
+  candidate.authoredAtBuild = false;
+  publishProductionStructureRenderPackets(candidate, meshes);
+  // Structure geometry is final at this boundary: it is not re-draped on a
+  // later terrain revision. Once copied into immutable packets the hidden
+  // THREE sources have no remaining authority or consumer.
+  for (const mesh of meshes) {
+    mesh.removeFromParent();
+    mesh.geometry.dispose();
+    candidate.meshes.delete(mesh);
+  }
+  substrateStructureCommits.delete(owner);
+  invalidateProductionSubstrateTile(owner);
+}
+function addHydroDetailRenderMesh(mesh: THREE.Mesh): void {
+  mesh.userData.productionHydroDetailSource = true;
+  if (SUBSTRATE_RENDER_ON && ribBatchTerrainOwner && hydroDetailBatchMeshes) {
+    hydroDetailBatchMeshes.push(mesh);
+  } else {
+    worldGroup.add(mesh);
+  }
+}
+function registerProductionHydroDetailRenderBatch(
+  owner: string,
+  meshes: THREE.Mesh[],
+  rocks: RapidRock[],
+): void {
+  if (!meshes.length && !rocks.length) return;
+  let candidate = productionHydroDetailRenderCandidates.get(owner);
+  if (!candidate) {
+    candidate = {
+      generation: 0,
+      meshes: new Set(),
+      meshCount: 0,
+      rocks: new Set(),
+      packetTerrainRevision: -1,
+      packets: [],
+      authoredAfterRedrape: false,
+    };
+    productionHydroDetailRenderCandidates.set(owner, candidate);
+  }
+  candidate.generation++;
+  candidate.meshCount += meshes.length;
+  for (const mesh of meshes) candidate.meshes.add(mesh);
+  for (const rock of rocks) candidate.rocks.add(rock);
+  candidate.packetTerrainRevision = -1;
+  candidate.authoredAfterRedrape = false;
+  appendProductionHydroDetailRenderPackets(candidate, meshes);
+  for (const mesh of meshes) {
+    mesh.removeFromParent();
+    mesh.geometry.dispose();
+    candidate.meshes.delete(mesh);
+  }
+  substrateHydroDetailCommits.delete(owner);
+  // Rapid rocks alter both visual bed structure and vehicle collision. Force
+  // the owning tile through the same terrain/hydro revision gate.
+  markTerrainDirty(owner, 'hydro-detail');
+}
 /**
  * SMOOTH THE NORMALS ACROSS THE SOUP'S INVISIBLE JOINTS (audit finding 3).
  * Every bay and every fragment computed its normals alone, so the merged deck
@@ -14766,7 +15171,7 @@ function flushRibbons(): void {
   const b = ribBatch;
   ribBatch = null;
   if (!b) return;
-  for (const { mat, geos, lift } of b.values()) {
+  for (const { mat, geos, lift, drive } of b.values()) {
     if (!geos.length) continue;
     const names = Object.keys(geos[0].attributes);
     const out = new THREE.BufferGeometry();
@@ -14792,7 +15197,8 @@ function flushRibbons(): void {
     // stock — both came back as `unnamed`. That is the census's one job, and
     // it made a mesh audit impossible to write as an assertion.
     mesh.name = 'ribbon';
-    worldGroup.add(mesh);
+    if (drive) addRoadRenderMesh(mesh);
+    else worldGroup.add(mesh);
     // A DRAPED batch registers ONCE for re-seating, in place of the entries
     // its pieces would each have made: redrape and __drape both walk vertices
     // with their own bounds checks, so a merged geometry re-seats exactly as
@@ -17002,8 +17408,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // material per tile instead of one per way fragment. Draped decks group
     // by their lift too, and the flush registers the MERGED geometry with
     // drapedWays in place of the per-piece entry below.
-    const key = `${mat.uuid}|${Object.keys(geo.attributes).sort().join(',')}|${flat ? 'p' : `d${lift}`}`;
-    const e = ribBatch.get(key) ?? { mat, geos: [], lift: flat ? null : lift };
+    const key = `${mat.uuid}|${Object.keys(geo.attributes).sort().join(',')}|${flat ? 'p' : `d${lift}`}|${drivable ? 'drive' : 'decor'}`;
+    const e = ribBatch.get(key) ?? {
+      mat,
+      geos: [],
+      lift: flat ? null : lift,
+      drive: drivable,
+    };
     e.geos.push(geo);
     ribBatch.set(key, e);
   } else {
@@ -17014,7 +17425,8 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     smoothSoupNormals(geo);
     const ribbon = new THREE.Mesh(geo, mat);
     ribbon.userData.ribbon = true;
-    worldGroup.add(ribbon);
+    if (drivable) addRoadRenderMesh(ribbon);
+    else worldGroup.add(ribbon);
   }
   // A DRAPED way is registered to be re-seated whenever the terrain beneath it
   // is rebuilt. A PROFILED one is not: its deck is a solved alignment that the
@@ -17267,7 +17679,7 @@ function canopyRun(
   const shell = new THREE.Mesh(geo, MAT.tunnel);
   shell.userData.tunnel = true;
   shell.userData.shellKind = 'gallery';
-  worldGroup.add(shell);
+  addRoadRenderMesh(shell);
 }
 // The carved space: side walls + ceiling along a tunnel run, portal lintels at
 // the mouths, and solid collision so the car can't drive out through the rock.
@@ -17296,7 +17708,33 @@ const channelGrid = new Map<string, Seg[]>();
 // Rapids boulders, for the collision pass. VEG_CELL buckets to match the veg
 // rocks' walk, but their own map: vegGrid is washed on a biome re-pick and
 // pruned by distance, and neither event rebuilds a river.
-const rapidRocks = new Map<string, Array<{ x: number; z: number; s: number; hit?: number }>>();
+interface RapidRock { x: number; z: number; s: number; hit?: number }
+const rapidRocks = new Map<string, RapidRock[]>();
+const activeRapidRocks = new Set<RapidRock>();
+function activateRapidRock(rock: RapidRock): void {
+  if (activeRapidRocks.has(rock)) return;
+  activeRapidRocks.add(rock);
+  const key = `${Math.floor(rock.x / VEG_CELL)},${Math.floor(rock.z / VEG_CELL)}`;
+  let arr = rapidRocks.get(key);
+  if (!arr) rapidRocks.set(key, arr = []);
+  arr.push(rock);
+}
+function deactivateRapidRock(rock: RapidRock): void {
+  if (!activeRapidRocks.delete(rock)) return;
+  const key = `${Math.floor(rock.x / VEG_CELL)},${Math.floor(rock.z / VEG_CELL)}`;
+  const arr = rapidRocks.get(key);
+  if (!arr) return;
+  const index = arr.indexOf(rock);
+  if (index >= 0) arr.splice(index, 1);
+  if (!arr.length) rapidRocks.delete(key);
+}
+function addHydroDetailRock(rock: RapidRock): void {
+  if (SUBSTRATE_RENDER_ON && ribBatchTerrainOwner && hydroDetailBatchRocks) {
+    hydroDetailBatchRocks.push(rock);
+  } else {
+    activateRapidRock(rock);
+  }
+}
 const culvertStats = { ways: 0, runs: 0, rigSized: 0, m: 0, deepest: 0, uphillFixed: 0, crossings: 0,
   // Crossings with no room for a bore under the deck — the water passes at
   // grade and nothing is built, which is better than concrete in the road.
@@ -17385,7 +17823,47 @@ function fordDepthAt(x: number, z: number): number {
   const deck = e ? e.y : hasHeight(x, z) ? sampleHeight(x, z) : NaN;
   return Number.isFinite(deck) ? wet.restingLevelM - (deck + baseElev) : 0;
 }
-function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: number; speed: number; wet: boolean } {
+interface RuntimeWaterInfo {
+  depth: number;
+  fx: number;
+  fz: number;
+  speed: number;
+  wet: boolean;
+}
+function surfaceFromSubstrateContact(contact: SubstrateContact): {
+  kind: Surface;
+  quality: number;
+} {
+  if (contact.fluid) {
+    return { kind: 'water', quality: contact.drive?.quality ?? Q_GROUND };
+  }
+  if (contact.drive) {
+    return {
+      kind: contact.drive.material === 'gravel' ? 'track' : 'road',
+      quality: contact.drive.quality,
+    };
+  }
+  return { kind: 'ground', quality: Q_GROUND };
+}
+function waterInfoFromSubstrateContact(contact: SubstrateContact): RuntimeWaterInfo {
+  const fluid = contact.fluid;
+  if (!fluid) return { depth: .5, fx: 0, fz: 0, speed: 0, wet: false };
+  const length = Math.hypot(fluid.flow[0], fluid.flow[1]);
+  return {
+    depth: clamp(fluid.depthAboveSupportM, .05, 4),
+    fx: length > .01 ? fluid.flow[0] / length : 0,
+    fz: length > .01 ? fluid.flow[1] / length : 0,
+    // Unknown current authority means no current force. Rendering may still
+    // animate from direction, but physics never invents a speed.
+    speed: fluid.speedMps ?? 0,
+    wet: true,
+  };
+}
+function waterInfoAt(x: number, z: number): RuntimeWaterInfo {
+  if (SUBSTRATE_CONTACT_ON) {
+    const contact = productionSubstrate.sample(x, z);
+    if (contact) return waterInfoFromSubstrateContact(contact);
+  }
   // ── THE DRAWN WATER IS THE WATER ──
   //
   // This used to answer entirely from the CHANNEL grid — the carved ribbon a
@@ -17451,8 +17929,1172 @@ function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: num
   }
   return { depth: 0.5, fx: 0, fz: 0, speed: 0, wet: false };
 }
+/**
+ * Translate the support the shipping vehicle is already using into the
+ * canonical contact shape. This is shadow-only: it observes the resolved road
+ * deck or wheel ground but does not replace either calculation.
+ */
+function substrateShadowSupportAt(x: number, z: number, surface: Surface): SupportContact {
+  const edge = roadEdge(x, z);
+  if (edge && edge.out <= .8 && surface !== 'ground') {
+    const featureId = edge.nm
+      || (edge.fd === undefined ? undefined : `road:${edge.fd}`);
+    return {
+      kind: 'drive',
+      yM: edge.y + baseElev,
+      material: surface === 'water' ? 'ford' : edge.track ? 'gravel' : 'asphalt',
+      ...(featureId ? { featureId } : {}),
+    };
+  }
+  return {
+    kind: 'ground',
+    yM: wheelGround(x, z) + baseElev,
+    material: 'terrain',
+  };
+}
+function productionDriveAt(x: number, z: number): ProductionDriveSample | undefined {
+  let best: ProductionDriveSample | undefined;
+  for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
+    if (seg.ya === undefined || seg.yb === undefined) continue;
+    const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
+    const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const px = seg.ax + dx * t, pz = seg.az + dz * t;
+    if (Math.hypot(x - px, z - pz) > seg.hw + .8) continue;
+    let y = seg.ya + (seg.yb - seg.ya) * t;
+    if (seg.ca !== undefined && seg.cb !== undefined) {
+      const length = Math.hypot(dx, dz) || 1;
+      const side = ((x - px) * (-dz / length) + (z - pz) * (dx / length)) / (seg.hw || 1);
+      y += (seg.ca + (seg.cb - seg.ca) * t) * clamp(side, -1, 1);
+    }
+    const sample: ProductionDriveSample = {
+      yM: y + baseElev,
+      material: seg.tk ? 'gravel' : 'asphalt',
+      quality: seg.sq ?? (seg.tk ? Q_TRACK : Q_ROAD),
+      roadId: seg.wid
+        ?? seg.nm
+        ?? (seg.fd === undefined ? 'road:unknown' : `road:${seg.fd}`),
+    };
+    // One 2.5D drive layer: where decks stack, retain the highest valid solid
+    // support rather than whichever segment happened to enter the grid first.
+    if (!best || sample.yM > best.yM) best = sample;
+  }
+  return best;
+}
+function productionChannelAt(x: number, z: number): {
+  bedY: number;
+  speedMps: number | null;
+  waterId?: string;
+} | undefined {
+  const cx = Math.floor(x / GRID), cz = Math.floor(z / GRID);
+  let best: { bedY: number; speedMps: number | null; waterId?: string } | undefined;
+  for (let gx = -1; gx <= 1; gx++) for (let gz = -1; gz <= 1; gz++) {
+    for (const seg of channelGrid.get(`${cx + gx},${cz + gz}`) ?? []) {
+      if (seg.ya === undefined || seg.yb === undefined) continue;
+      const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
+      const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+      const px = seg.ax + dx * t, pz = seg.az + dz * t;
+      if (Math.hypot(x - px, z - pz) > seg.hw) continue;
+      const bedY = seg.ya + (seg.yb - seg.ya) * t + .15 + baseElev;
+      if (!best || bedY < best.bedY) {
+        best = {
+          bedY,
+          speedMps: seg.fs !== undefined && Number.isFinite(seg.fs) ? seg.fs : null,
+          ...(seg.wid ? { waterId: seg.wid } : {}),
+        };
+      }
+    }
+  }
+  return best;
+}
+let productionSubstrateRevision = 0;
+function productionDriveSegmentsFor(t: HeightTile): ProductionDriveSegment[] {
+  const seen = new Set<Seg>();
+  const out: ProductionDriveSegment[] = [];
+  const minGX = Math.floor(t.xs / GRID), maxGX = Math.floor((t.xs + t.w) / GRID);
+  const minGZ = Math.floor(t.zs / GRID), maxGZ = Math.floor((t.zs + t.h) / GRID);
+  for (let gx = minGX - 1; gx <= maxGX + 1; gx++) for (let gz = minGZ - 1; gz <= maxGZ + 1; gz++) {
+    for (const seg of roadGrid.get(`${gx},${gz}`) ?? []) {
+      if (seen.has(seg) || seg.ya === undefined || seg.yb === undefined) continue;
+      seen.add(seg);
+      if (Math.max(seg.ax, seg.bx) + seg.hw < t.xs
+        || Math.min(seg.ax, seg.bx) - seg.hw > t.xs + t.w
+        || Math.max(seg.az, seg.bz) + seg.hw < t.zs
+        || Math.min(seg.az, seg.bz) - seg.hw > t.zs + t.h) continue;
+      out.push({
+        ax: seg.ax,
+        az: seg.az,
+        bx: seg.bx,
+        bz: seg.bz,
+        yaM: seg.ya + baseElev,
+        ybM: seg.yb + baseElev,
+        halfWidthM: seg.hw,
+        material: seg.tk ? 'gravel' : 'asphalt',
+        quality: seg.sq ?? (seg.tk ? Q_TRACK : Q_ROAD),
+        shoulderM: KERB_FAIR,
+        roadId: seg.wid
+          ?? seg.nm
+          ?? (seg.fd === undefined ? 'road:unknown' : `road:${seg.fd}`),
+        ...(seg.ca !== undefined ? { crossfallA: seg.ca } : {}),
+        ...(seg.cb !== undefined ? { crossfallB: seg.cb } : {}),
+      });
+    }
+  }
+  return out;
+}
+interface ProductionDriveSource {
+  signature: string;
+  revision: number;
+}
+const productionDriveSources = new Map<string, ProductionDriveSource>();
+let productionDrivePacketFailures = 0;
+const productionRenderPacketRejections: string[] = [];
+function noteProductionRenderPacketRejection(reason: string): void {
+  productionRenderPacketRejections.push(reason);
+  if (productionRenderPacketRejections.length > 32) {
+    productionRenderPacketRejections.splice(0, productionRenderPacketRejections.length - 32);
+  }
+}
+function productionRenderMaterialKey(material: THREE.Material): string {
+  const existing = productionRenderMaterialKeys.get(material);
+  if (existing) return existing;
+  const key = `substrate-material:${++productionRenderMaterialSequence}`;
+  productionRenderMaterialKeys.set(material, key);
+  productionRenderMaterials.set(key, material);
+  return key;
+}
+function isProductionRenderAttributeArray(
+  array: ArrayLike<number>,
+): array is ProductionRenderAttributeArray {
+  return array instanceof Float32Array
+    || array instanceof Float64Array
+    || array instanceof Uint32Array
+    || array instanceof Uint16Array
+    || array instanceof Uint8Array
+    || array instanceof Uint8ClampedArray
+    || array instanceof Int32Array
+    || array instanceof Int16Array
+    || array instanceof Int8Array;
+}
+function productionRenderAttributeData(
+  raw: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+  copyArray: boolean,
+): ProductionRenderAttributeArray | undefined {
+  if (raw instanceof THREE.BufferAttribute) {
+    if (!isProductionRenderAttributeArray(raw.array)) return undefined;
+    return copyArray
+      ? raw.array.slice() as ProductionRenderAttributeArray
+      : raw.array;
+  }
+  if (!(raw instanceof THREE.InterleavedBufferAttribute)
+    || !isProductionRenderAttributeArray(raw.data.array)) return undefined;
+
+  // The packet format is deliberately renderer-neutral and contiguous.
+  // Interleaving is a GPU upload/layout optimisation owned by THREE, not an
+  // authored semantic, so de-interleave while preserving the component type
+  // and normalized decode. The source wrapper can then be retired exactly
+  // like a plain BufferAttribute without losing colour/mask attributes.
+  const source = raw.data.array;
+  const packed = source.slice(
+    0,
+    raw.count * raw.itemSize,
+  ) as ProductionRenderAttributeArray;
+  const stride = raw.data.stride;
+  for (let vertex = 0; vertex < raw.count; vertex++) {
+    const sourceOffset = vertex * stride + raw.offset;
+    const packedOffset = vertex * raw.itemSize;
+    for (let component = 0; component < raw.itemSize; component++) {
+      packed[packedOffset + component] = source[sourceOffset + component];
+    }
+  }
+  return packed;
+}
+function productionRenderMeshFromThree(
+  mesh: THREE.Mesh,
+  copyArrays: boolean,
+): ProductionRenderMesh | undefined {
+  const attributes: Record<string, {
+    itemSize: number;
+    normalized: boolean;
+    data: ProductionRenderAttributeArray;
+  }> = {};
+  for (const [name, raw] of Object.entries(mesh.geometry.attributes)) {
+    const data = productionRenderAttributeData(raw, copyArrays);
+    if (!data) {
+      const source = raw instanceof THREE.BufferAttribute
+        ? raw.array
+        : raw instanceof THREE.InterleavedBufferAttribute
+          ? raw.data.array
+          : undefined;
+      noteProductionRenderPacketRejection(
+        `${mesh.name || '<unnamed>'}.${name}:`
+        + `${raw?.constructor?.name ?? typeof raw}/`
+        + `${source?.constructor?.name ?? 'no-array'}`,
+      );
+      return undefined;
+    }
+    attributes[name] = {
+      itemSize: raw.itemSize,
+      normalized: raw.normalized,
+      data,
+    };
+  }
+  const material = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  if (!material.length) {
+    noteProductionRenderPacketRejection(`${mesh.name || '<unnamed>'}:no-material`);
+    return undefined;
+  }
+  if (mesh.matrixAutoUpdate) mesh.updateMatrix();
+  const userData: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(mesh.userData)) {
+    if (key === 'productionDriveSource'
+      || key === 'productionStructureSource'
+      || key === 'productionHydroDetailSource'
+      || key === 'productionTerrainSource') continue;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      userData[key] = value;
+    }
+  }
+  const index = mesh.geometry.index;
+  return {
+    name: mesh.name,
+    materialKeys: material.map(productionRenderMaterialKey),
+    attributes,
+    ...(index ? {
+      index: !copyArrays && index.array instanceof Uint32Array
+        ? index.array as Uint32Array<ArrayBuffer>
+        : new Uint32Array(index.array as ArrayLike<number>),
+    } : {}),
+    groups: mesh.geometry.groups.map((group) => ({
+      start: group.start,
+      count: group.count,
+      materialIndex: group.materialIndex ?? 0,
+    })),
+    matrix: new Float32Array(mesh.matrix.elements),
+    renderOrder: mesh.renderOrder,
+    castShadow: mesh.castShadow,
+    receiveShadow: mesh.receiveShadow,
+    frustumCulled: mesh.frustumCulled,
+    userData,
+  };
+}
+function captureProductionRenderMesh(
+  mesh: THREE.Mesh,
+): ProductionRenderMesh | undefined {
+  return productionRenderMeshFromThree(mesh, true);
+}
+function authorProductionTerrainRenderPacket(
+  key: string,
+  terrainSourceRevision: number,
+  mesh: THREE.Mesh,
+): void {
+  const packet = productionRenderMeshFromThree(mesh, false);
+  if (!packet) {
+    productionTerrainPacketFailures++;
+    productionTerrainRenderPackets.set(key, {
+      terrainRevision: terrainSourceRevision,
+      packets: [],
+      authoredAtBuild: true,
+    });
+    return;
+  }
+  productionTerrainRenderPackets.set(key, {
+    terrainRevision: terrainSourceRevision,
+    packets: [packet],
+    authoredAtBuild: true,
+  });
+}
+function appendProductionRoadRenderPackets(
+  candidate: ProductionRoadRenderCandidate,
+  meshes: readonly THREE.Mesh[],
+): void {
+  const packets: ProductionDriveRenderMesh[] = [...candidate.packets];
+  for (const mesh of meshes) {
+    // Position/normal arrays are shared with the drape registry. The tile is
+    // invalidated before a later terrain rebuild mutates them, and the next
+    // revision is bound only after redrape completes.
+    const packet = productionRenderMeshFromThree(mesh, false);
+    if (!packet) {
+      productionDrivePacketFailures++;
+      candidate.packets = [];
+      candidate.authoredAfterRedrape = false;
+      return;
+    }
+    packets.push(packet);
+  }
+  candidate.packets = packets;
+}
+function publishProductionRoadRenderPackets(
+  key: string,
+  terrainSourceRevision: number,
+): void {
+  const candidate = productionRoadRenderCandidates.get(key);
+  if (!candidate) return;
+  if (candidate.packets.length !== candidate.meshCount) {
+    productionDrivePacketFailures++;
+    candidate.packetTerrainRevision = terrainSourceRevision;
+    candidate.packets = [];
+    candidate.authoredAfterRedrape = false;
+    return;
+  }
+  candidate.packetTerrainRevision = terrainSourceRevision;
+  candidate.authoredAfterRedrape = true;
+}
+function publishProductionStructureRenderPackets(
+  candidate: ProductionStructureRenderCandidate,
+  meshes: readonly THREE.Mesh[],
+): void {
+  const packets: ProductionRenderMesh[] = [...candidate.packets];
+  for (const mesh of meshes) {
+    const packet = captureProductionRenderMesh(mesh);
+    if (!packet) {
+      productionStructurePacketFailures++;
+      candidate.packetGeneration = candidate.generation;
+      candidate.packets = [];
+      candidate.authoredAtBuild = true;
+      return;
+    }
+    packets.push(packet);
+  }
+  candidate.packetGeneration = candidate.generation;
+  candidate.packets = packets;
+  candidate.authoredAtBuild = true;
+}
+function appendProductionHydroDetailRenderPackets(
+  candidate: ProductionHydroDetailRenderCandidate,
+  meshes: readonly THREE.Mesh[],
+): void {
+  const packets: ProductionRenderMesh[] = [...candidate.packets];
+  for (const mesh of meshes) {
+    const packet = captureProductionRenderMesh(mesh);
+    if (!packet) {
+      productionHydroDetailPacketFailures++;
+      candidate.packets = [];
+      candidate.authoredAfterRedrape = false;
+      return;
+    }
+    packets.push(packet);
+  }
+  candidate.packets = packets;
+}
+function publishProductionHydroDetailRenderPackets(
+  key: string,
+  terrainSourceRevision: number,
+): void {
+  const candidate = productionHydroDetailRenderCandidates.get(key);
+  if (!candidate) return;
+  if (candidate.packets.length !== candidate.meshCount) {
+    productionHydroDetailPacketFailures++;
+    candidate.packetTerrainRevision = terrainSourceRevision;
+    candidate.packets = [];
+    candidate.authoredAfterRedrape = false;
+    return;
+  }
+  candidate.packetTerrainRevision = terrainSourceRevision;
+  candidate.authoredAfterRedrape = true;
+}
+function productionDriveRenderMeshesFor(
+  key: string,
+  terrainSourceRevision: number,
+): readonly ProductionDriveRenderMesh[] {
+  const candidate = productionRoadRenderCandidates.get(key);
+  if (!candidate) return [];
+  if (candidate.packetTerrainRevision === terrainSourceRevision) return candidate.packets;
+  // Registration can race an older asynchronous hydro completion: the new
+  // packet arrays already exist, but they are deliberately unbound until the
+  // terrain rebuild has redraped them. Refuse this tile revision without
+  // deleting those arrays; publication after redrape is the only operation
+  // allowed to advance their terrain revision.
+  return [];
+}
+function productionTerrainRenderMeshesFor(
+  key: string,
+  terrainSourceRevision: number,
+): readonly ProductionRenderMesh[] {
+  const cached = productionTerrainRenderPackets.get(key);
+  if (cached?.terrainRevision === terrainSourceRevision) return cached.packets;
+  // Terrain must publish its packet while the kernel result is applied. A
+  // missing packet is a generation failure; do not silently resurrect the old
+  // late capture path from the hidden THREE mesh.
+  productionTerrainPacketFailures++;
+  const failed = {
+    terrainRevision: terrainSourceRevision,
+    packets: [],
+    authoredAtBuild: false,
+  };
+  productionTerrainRenderPackets.set(key, failed);
+  return failed.packets;
+}
+function productionStructureRenderMeshesFor(
+  key: string,
+): readonly ProductionRenderMesh[] {
+  const candidate = productionStructureRenderCandidates.get(key);
+  if (!candidate) return [];
+  if (candidate.packetGeneration === candidate.generation) return candidate.packets;
+  productionStructurePacketFailures++;
+  candidate.packetGeneration = candidate.generation;
+  candidate.packets = [];
+  candidate.authoredAtBuild = false;
+  return candidate.packets;
+}
+function productionHydroDetailRenderMeshesFor(
+  key: string,
+  terrainSourceRevision: number,
+): readonly ProductionRenderMesh[] {
+  const candidate = productionHydroDetailRenderCandidates.get(key);
+  if (!candidate) return [];
+  if (candidate.packetTerrainRevision === terrainSourceRevision) return candidate.packets;
+  // As above, an in-flight terrain revision is an atomic-commit refusal, not
+  // packet corruption. Preserve the authored bed/rock arrays for redrape.
+  return [];
+}
+function productionDriveSnapshotFor(
+  t: HeightTile,
+  key: string,
+): {
+  segments: ProductionDriveSegment[];
+  renderMeshes: readonly ProductionDriveRenderMesh[];
+  revision: number;
+} {
+  const segments = productionDriveSegmentsFor(t);
+  const renderMeshes = productionDriveRenderMeshesFor(key, terrainRevision.get(key) ?? 0);
+  // Exact source identity, not merely a count. A late road fragment, changed
+  // profile, crossfall or material must advance the drive layer even if the
+  // terrain and hydro inputs happened to retain their own revisions.
+  const renderGeneration = productionRoadRenderCandidates.get(key)?.generation ?? 0;
+  const signature = `${renderGeneration};${segments.map((segment) => [
+    segment.ax, segment.az, segment.bx, segment.bz,
+    segment.yaM, segment.ybM, segment.halfWidthM,
+    segment.material, segment.quality, segment.shoulderM ?? '',
+    segment.crossfallA ?? '', segment.crossfallB ?? '', segment.roadId,
+  ].join(',')).join('|')}`;
+  const previous = productionDriveSources.get(key);
+  if (previous?.signature === signature) {
+    return { segments, renderMeshes, revision: previous.revision };
+  }
+  const source = {
+    signature,
+    revision: (previous?.revision ?? 0) + 1,
+  };
+  productionDriveSources.set(key, source);
+  return { segments, renderMeshes, revision: source.revision };
+}
+function productionGroundMeshFor(
+  t: HeightTile,
+  key: string,
+  terrainPacket?: ProductionRenderMesh,
+): ProductionGroundMesh | undefined {
+  const mesh = terrainMeshes.get(key);
+  if (!mesh || terrainDirty.has(key)) return undefined;
+  const geometry = mesh.geometry;
+  const position = geometry.attributes.position as THREE.BufferAttribute | undefined;
+  const segmentCount = segOf(geometry);
+  if (!position || segmentCount < 1) return undefined;
+  const cells = cellTrisOf(geometry, segmentCount);
+  const packetPositions = terrainPacket?.attributes.position?.data;
+  return {
+    // Shadow mode pays the copy once per revision so the tile cannot be
+    // mutated underneath itself when THREE disposes/replaces the render mesh.
+    // The render packet already made that immutable copy. Reusing its position
+    // attribute keeps contact and pixels on the same exact array and avoids a
+    // second terrain-sized allocation inside the tile.
+    positions: packetPositions instanceof Float32Array
+      ? packetPositions
+      : new Float32Array(position.array as ArrayLike<number>),
+    cellOffsets: new Int32Array(cells.offs),
+    cellTriangles: new Int32Array(cells.tris),
+    segmentCount,
+    originX: t.xs + t.w / 2,
+    originZ: t.zs + t.h / 2,
+    verticalOffsetM: baseElev,
+  };
+}
+function productionWaterMotionSegmentsFor(t: HeightTile): ProductionWaterMotionSegment[] {
+  const seen = new Set<Seg>();
+  const out: ProductionWaterMotionSegment[] = [];
+  const minGX = Math.floor(t.xs / GRID), maxGX = Math.floor((t.xs + t.w) / GRID);
+  const minGZ = Math.floor(t.zs / GRID), maxGZ = Math.floor((t.zs + t.h) / GRID);
+  for (let gx = minGX - 1; gx <= maxGX + 1; gx++) for (let gz = minGZ - 1; gz <= maxGZ + 1; gz++) {
+    for (const segment of channelGrid.get(`${gx},${gz}`) ?? []) {
+      if (seen.has(segment) || segment.ya === undefined || segment.yb === undefined) continue;
+      seen.add(segment);
+      if (Math.max(segment.ax, segment.bx) + segment.hw < t.xs
+        || Math.min(segment.ax, segment.bx) - segment.hw > t.xs + t.w
+        || Math.max(segment.az, segment.bz) + segment.hw < t.zs
+        || Math.min(segment.az, segment.bz) - segment.hw > t.zs + t.h) continue;
+      out.push({
+        ax: segment.ax,
+        az: segment.az,
+        bx: segment.bx,
+        bz: segment.bz,
+        bedAM: segment.ya + .15 + baseElev,
+        bedBM: segment.yb + .15 + baseElev,
+        halfWidthM: segment.hw,
+        speedMps: segment.fs !== undefined && Number.isFinite(segment.fs) ? segment.fs : null,
+        ...(segment.wid ? { waterId: segment.wid } : {}),
+      });
+    }
+  }
+  return out;
+}
+function canCommitTerrainRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
+  if (!SUBSTRATE_RENDER_ON || !tile.groundMesh || tile.terrainRenderMeshes.length !== 1) return false;
+  if (productionSubstrate.tile(tile.key) !== tile) return false;
+  const mesh = terrainMeshes.get(tile.key);
+  if (!mesh || terrainDirty.has(tile.key)
+    || terrainRevision.get(tile.key) !== tile.sourceRevisions.terrain) return false;
+  const position = mesh.geometry.attributes.position as THREE.BufferAttribute | undefined;
+  const packet = tile.terrainRenderMeshes[0];
+  return !!position
+    && position.count * 3 === tile.groundMesh.positions.length
+    && packet.attributes.position?.data === tile.groundMesh.positions
+    && packet.materialKeys.length > 0
+    && packet.materialKeys.every((key) => productionRenderMaterials.has(key));
+}
+function commitTerrainRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
+  if (!canCommitTerrainRenderFromSubstrate(tile)) return false;
+  const previous = substrateTerrainRenderMeshes.get(tile.key);
+  if (previous?.tileRevision === tile.revision) {
+    for (const mesh of previous.meshes) {
+      if (mesh.parent !== worldGroup) worldGroup.add(mesh);
+    }
+    substrateTerrainCommits.set(tile.key, tile.revision);
+    return true;
+  }
+  if (previous) {
+    for (const mesh of previous.meshes) {
+      mesh.removeFromParent();
+      mesh.geometry.dispose();
+    }
+    substrateTerrainRenderMeshes.delete(tile.key);
+  }
+  const source = terrainMeshes.get(tile.key);
+  const mesh = instantiateProductionRenderMesh(tile.terrainRenderMeshes[0], {
+    substrateOwned: true,
+    substrateRenderRevision: tile.revision,
+    substrateTerrainRevision: tile.sourceRevisions.terrain,
+  });
+  (mesh.geometry.userData as { seg?: number }).seg = tile.groundMesh!.segmentCount;
+  worldGroup.add(mesh);
+  // The visible packet mesh carries the exact same position array used by
+  // ground contact, so it can also serve every legacy terrain query/raycast
+  // while those call sites migrate. Retire the temporary build wrapper now;
+  // no hidden duplicate terrain mesh survives a committed revision.
+  terrainMeshes.set(tile.key, mesh);
+  if (source && source !== mesh) {
+    source.removeFromParent();
+    source.geometry.dispose();
+  }
+  substrateTerrainRenderMeshes.set(tile.key, {
+    tileRevision: tile.revision,
+    meshes: new Set([mesh]),
+  });
+  substrateTerrainCommits.set(tile.key, tile.revision);
+  return true;
+}
+function dropSubstrateRoadRenderBinding(key: string): boolean {
+  const binding = substrateRoadRenderMeshes.get(key);
+  if (!binding) return false;
+  for (const mesh of binding.meshes) {
+    mesh.removeFromParent();
+    mesh.geometry.dispose();
+  }
+  substrateRoadRenderMeshes.delete(key);
+  return true;
+}
+function instantiateProductionRenderMesh(
+  packet: ProductionRenderMesh,
+  userData: Record<string, string | number | boolean>,
+): THREE.Mesh {
+  const geometry = new THREE.BufferGeometry();
+  for (const [name, attribute] of Object.entries(packet.attributes)) {
+    geometry.setAttribute(name, new THREE.BufferAttribute(
+      attribute.data,
+      attribute.itemSize,
+      attribute.normalized,
+    ));
+  }
+  if (packet.index) geometry.setIndex(new THREE.BufferAttribute(packet.index, 1));
+  for (const group of packet.groups) {
+    geometry.addGroup(group.start, group.count, group.materialIndex);
+  }
+  const materials = packet.materialKeys.map((key) => productionRenderMaterials.get(key)!);
+  const mesh = new THREE.Mesh(geometry, materials.length === 1 ? materials[0] : materials);
+  mesh.name = packet.name;
+  mesh.matrix.fromArray(packet.matrix);
+  mesh.matrixAutoUpdate = false;
+  mesh.renderOrder = packet.renderOrder;
+  mesh.castShadow = packet.castShadow;
+  mesh.receiveShadow = packet.receiveShadow;
+  mesh.frustumCulled = packet.frustumCulled;
+  Object.assign(mesh.userData, packet.userData, userData);
+  return mesh;
+}
+function canCommitDriveRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
+  if (!SUBSTRATE_RENDER_ON || productionSubstrate.tile(tile.key) !== tile) return false;
+  const candidate = productionRoadRenderCandidates.get(tile.key);
+  if (!candidate) return tile.driveRenderMeshes.length === 0;
+  const source = productionDriveSources.get(tile.key);
+  return !!source && source.revision === tile.sourceRevisions.drive
+    && source.signature.startsWith(`${candidate.generation};`)
+    && tile.driveRenderMeshes.length === candidate.meshCount
+    && tile.driveRenderMeshes.every((packet) =>
+      !!packet.attributes.position
+      && packet.materialKeys.length > 0
+      && packet.materialKeys.every((key) => productionRenderMaterials.has(key)));
+}
+function commitDriveRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
+  if (!canCommitDriveRenderFromSubstrate(tile)) return false;
+  const previous = substrateRoadRenderMeshes.get(tile.key);
+  if (previous?.tileRevision === tile.revision) {
+    for (const mesh of previous.meshes) {
+      if (mesh.parent !== worldGroup) worldGroup.add(mesh);
+    }
+    substrateRoadCommits.set(tile.key, tile.revision);
+    return true;
+  }
+  dropSubstrateRoadRenderBinding(tile.key);
+  const meshes = new Set<THREE.Mesh>();
+  for (const packet of tile.driveRenderMeshes) {
+    const mesh = instantiateProductionRenderMesh(packet, {
+      substrateOwned: true,
+      substrateRenderRevision: tile.revision,
+      substrateDriveRevision: tile.sourceRevisions.drive,
+    });
+    worldGroup.add(mesh);
+    meshes.add(mesh);
+  }
+  substrateRoadRenderMeshes.set(tile.key, { tileRevision: tile.revision, meshes });
+  substrateRoadCommits.set(tile.key, tile.revision);
+  return true;
+}
+function canCommitStructureRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
+  if (!SUBSTRATE_RENDER_ON || productionSubstrate.tile(tile.key) !== tile) return false;
+  const candidate = productionStructureRenderCandidates.get(tile.key);
+  if (!candidate) return tile.structureRenderMeshes.length === 0;
+  return candidate.generation === tile.sourceRevisions.structures
+    && tile.structureRenderMeshes.length === candidate.meshCount
+    && tile.structureRenderMeshes.every((packet) =>
+      !!packet.attributes.position
+      && packet.materialKeys.length > 0
+      && packet.materialKeys.every((key) => productionRenderMaterials.has(key)));
+}
+function commitStructureRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
+  if (!canCommitStructureRenderFromSubstrate(tile)) return false;
+  const previous = substrateStructureRenderMeshes.get(tile.key);
+  if (previous?.tileRevision === tile.revision) {
+    for (const mesh of previous.meshes) {
+      if (mesh.parent !== worldGroup) worldGroup.add(mesh);
+    }
+    substrateStructureCommits.set(tile.key, tile.revision);
+    return true;
+  }
+  const old = substrateStructureRenderMeshes.get(tile.key);
+  if (old) {
+    for (const mesh of old.meshes) {
+      mesh.removeFromParent();
+      mesh.geometry.dispose();
+    }
+    substrateStructureRenderMeshes.delete(tile.key);
+  }
+  const meshes = new Set<THREE.Mesh>();
+  for (const packet of tile.structureRenderMeshes) {
+    const mesh = instantiateProductionRenderMesh(packet, {
+      substrateOwned: true,
+      substrateRenderRevision: tile.revision,
+      substrateStructureRevision: tile.sourceRevisions.structures,
+    });
+    worldGroup.add(mesh);
+    meshes.add(mesh);
+  }
+  substrateStructureRenderMeshes.set(tile.key, { tileRevision: tile.revision, meshes });
+  substrateStructureCommits.set(tile.key, tile.revision);
+  return true;
+}
+function canCommitHydroDetailRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
+  if (!SUBSTRATE_RENDER_ON || productionSubstrate.tile(tile.key) !== tile) return false;
+  const candidate = productionHydroDetailRenderCandidates.get(tile.key);
+  if (!candidate) return tile.hydroDetailRenderMeshes.length === 0;
+  return candidate.generation === tile.sourceRevisions.hydroDetails
+    && tile.hydroDetailRenderMeshes.length === candidate.meshCount
+    && tile.hydroDetailRenderMeshes.every((packet) =>
+      !!packet.attributes.position
+      && packet.materialKeys.length > 0
+      && packet.materialKeys.every((key) => productionRenderMaterials.has(key)));
+}
+function commitHydroDetailRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
+  if (!canCommitHydroDetailRenderFromSubstrate(tile)) return false;
+  const candidate = productionHydroDetailRenderCandidates.get(tile.key);
+  if (!candidate) return true;
+  const previous = substrateHydroDetailRenderMeshes.get(tile.key);
+  if (previous?.tileRevision === tile.revision) {
+    for (const mesh of previous.meshes) {
+      if (mesh.parent !== worldGroup) worldGroup.add(mesh);
+    }
+    for (const rock of candidate.rocks) activateRapidRock(rock);
+    substrateHydroDetailCommits.set(tile.key, tile.revision);
+    return true;
+  }
+  const old = substrateHydroDetailRenderMeshes.get(tile.key);
+  if (old) {
+    for (const mesh of old.meshes) {
+      mesh.removeFromParent();
+      mesh.geometry.dispose();
+    }
+    substrateHydroDetailRenderMeshes.delete(tile.key);
+  }
+  const meshes = new Set<THREE.Mesh>();
+  for (const packet of tile.hydroDetailRenderMeshes) {
+    const mesh = instantiateProductionRenderMesh(packet, {
+      substrateOwned: true,
+      substrateRenderRevision: tile.revision,
+      substrateHydroDetailRevision: tile.sourceRevisions.hydroDetails,
+    });
+    worldGroup.add(mesh);
+    meshes.add(mesh);
+  }
+  for (const rock of candidate.rocks) activateRapidRock(rock);
+  substrateHydroDetailRenderMeshes.set(tile.key, { tileRevision: tile.revision, meshes });
+  substrateHydroDetailCommits.set(tile.key, tile.revision);
+  return true;
+}
+function commitProductionSubstrateRender(tile: ProductionSubstrateTile): boolean {
+  if (!SUBSTRATE_RENDER_ON) return true;
+  const admissible = {
+    terrain: canCommitTerrainRenderFromSubstrate(tile),
+    drive: canCommitDriveRenderFromSubstrate(tile),
+    structures: canCommitStructureRenderFromSubstrate(tile),
+    hydroDetails: canCommitHydroDetailRenderFromSubstrate(tile),
+    hydro: !tile.hydroField || !!hydroSys?.canRenderField(tile.hydroField),
+  };
+  const refused = Object.entries(admissible)
+    .filter(([, accepted]) => !accepted)
+    .map(([layer]) => layer);
+  if (refused.length) {
+    substrateAtomicRenderRefusals++;
+    substrateAtomicRenderRefusalLog.push({
+      key: tile.key,
+      layers: refused,
+      sourceRevisions: tile.sourceRevisions,
+    });
+    if (substrateAtomicRenderRefusalLog.length > 24) {
+      substrateAtomicRenderRefusalLog.splice(
+        0,
+        substrateAtomicRenderRefusalLog.length - 24,
+      );
+    }
+    // Contact is part of render mode, so an uncommitted tile must not remain
+    // queryable by vehicle physics while its visual packet is absent.
+    invalidateProductionSubstrateTile(tile.key);
+    console.warn('[substrate] refused incomplete atomic render packet',
+      tile.key, refused, tile.sourceRevisions);
+    return false;
+  }
+
+  // All preflights are non-mutating and JavaScript cannot interleave another
+  // tile revision while these synchronous commits run. The scene therefore
+  // moves from no packet to one complete revision, never a layer at a time.
+  const committed = commitTerrainRenderFromSubstrate(tile)
+    && commitDriveRenderFromSubstrate(tile)
+    && commitStructureRenderFromSubstrate(tile)
+    && commitHydroDetailRenderFromSubstrate(tile)
+    && (!tile.hydroField || !!hydroSys?.renderField(tile.hydroField));
+  if (committed) {
+    substrateAtomicRenderCommits++;
+    return true;
+  }
+
+  // Defensive rollback if a future commit grows a fallible operation after
+  // its preflight. No partially admitted packet is allowed to survive.
+  substrateAtomicRenderRefusals++;
+  invalidateProductionSubstrateTile(tile.key);
+  console.warn('[substrate] rolled back failed atomic render packet',
+    tile.key, tile.sourceRevisions);
+  return false;
+}
+function invalidateProductionSubstrateTile(key: string): void {
+  if (!SUBSTRATE_SHADOW_ON) return;
+  productionSubstrate.remove(key);
+  if (!SUBSTRATE_RENDER_ON) return;
+  const terrainBinding = substrateTerrainRenderMeshes.get(key);
+  const hadTerrain = !!terrainBinding;
+  if (terrainBinding) {
+    for (const mesh of terrainBinding.meshes) {
+      mesh.removeFromParent();
+      mesh.geometry.dispose();
+    }
+    substrateTerrainRenderMeshes.delete(key);
+  }
+  const hadCommit = substrateTerrainCommits.delete(key);
+  const hadRoad = dropSubstrateRoadRenderBinding(key);
+  const hadRoadCommit = substrateRoadCommits.delete(key);
+  const structureBinding = substrateStructureRenderMeshes.get(key);
+  const hadStructure = !!structureBinding;
+  if (structureBinding) {
+    for (const mesh of structureBinding.meshes) {
+      mesh.removeFromParent();
+      mesh.geometry.dispose();
+    }
+    substrateStructureRenderMeshes.delete(key);
+  }
+  const hadStructureCommit = substrateStructureCommits.delete(key);
+  const hydroDetailCandidate = productionHydroDetailRenderCandidates.get(key);
+  const hydroDetailBinding = substrateHydroDetailRenderMeshes.get(key);
+  let hadHydroDetail = !!hydroDetailBinding;
+  if (hydroDetailBinding) {
+    for (const mesh of hydroDetailBinding.meshes) {
+      mesh.removeFromParent();
+      mesh.geometry.dispose();
+    }
+    substrateHydroDetailRenderMeshes.delete(key);
+  }
+  if (hydroDetailCandidate) {
+    for (const rock of hydroDetailCandidate.rocks) {
+      if (!activeRapidRocks.has(rock)) continue;
+      deactivateRapidRock(rock);
+      hadHydroDetail = true;
+    }
+  }
+  const hadHydroDetailCommit = substrateHydroDetailCommits.delete(key);
+  const hadHydro = !!hydroSys?.getTileBinding(key);
+  hydroSys?.unrenderTile(key);
+  if (hadTerrain || hadCommit || hadRoad || hadRoadCommit
+    || hadStructure || hadStructureCommit
+    || hadHydroDetail || hadHydroDetailCommit || hadHydro) {
+    substrateRenderInvalidations++;
+  }
+}
+function substrateRenderSnapshot(): Record<string, number> {
+  let terrainPacketMeshes = 0;
+  let terrainBuildAuthoredPacketMeshes = 0;
+  for (const source of productionTerrainRenderPackets.values()) {
+    terrainPacketMeshes += source.packets.length;
+    if (source.authoredAtBuild) {
+      terrainBuildAuthoredPacketMeshes += source.packets.length;
+    }
+  }
+  let terrainInstantiatedMeshes = 0;
+  let legacyTerrainCandidateMeshes = 0;
+  let retainedTerrainSourceMeshes = 0;
+  let visibleTerrain = 0;
+  let uncommittedVisibleTerrain = 0;
+  worldGroup.traverse((object) => {
+    if ((object.userData as { productionTerrainSource?: boolean }).productionTerrainSource) {
+      legacyTerrainCandidateMeshes++;
+    }
+  });
+  for (const mesh of terrainMeshes.values()) {
+    if ((mesh.userData as { productionTerrainSource?: boolean }).productionTerrainSource) {
+      retainedTerrainSourceMeshes++;
+    }
+  }
+  for (const [key, binding] of substrateTerrainRenderMeshes) {
+    terrainInstantiatedMeshes += binding.meshes.size;
+    for (const mesh of binding.meshes) {
+      if (mesh.parent !== worldGroup) continue;
+      visibleTerrain++;
+      if (!substrateTerrainCommits.has(key)
+        || !(mesh.userData as { substrateOwned?: boolean }).substrateOwned) {
+        uncommittedVisibleTerrain++;
+      }
+    }
+  }
+  let roadCandidates = 0;
+  let roadPacketMeshes = 0;
+  let roadRedrapeAuthoredPacketMeshes = 0;
+  let retainedRoadSourceMeshes = 0;
+  let roadPacketVertices = 0;
+  let roadPacketBytes = 0;
+  let roadIndexedPackets = 0;
+  let roadTransformedPackets = 0;
+  let roadInstantiatedMeshes = 0;
+  let legacyRoadCandidateMeshes = 0;
+  let visibleRoads = 0;
+  let uncommittedVisibleRoads = 0;
+  for (const candidate of productionRoadRenderCandidates.values()) {
+    roadCandidates += candidate.meshCount;
+    roadPacketMeshes += candidate.packets.length;
+    retainedRoadSourceMeshes += candidate.meshes.size;
+    if (candidate.authoredAfterRedrape) {
+      roadRedrapeAuthoredPacketMeshes += candidate.packets.length;
+    }
+    for (const packet of candidate.packets) {
+      const position = packet.attributes.position;
+      if (position) roadPacketVertices += position.data.length / position.itemSize;
+      for (const attribute of Object.values(packet.attributes)) {
+        roadPacketBytes += attribute.data.byteLength;
+      }
+      if (packet.index) {
+        roadIndexedPackets++;
+        roadPacketBytes += packet.index.byteLength;
+      }
+      const m = packet.matrix;
+      if (m.length === 16 && (
+        Math.abs(m[0] - 1) > 1e-6 || Math.abs(m[5] - 1) > 1e-6
+        || Math.abs(m[10] - 1) > 1e-6 || Math.abs(m[15] - 1) > 1e-6
+        || Math.abs(m[1]) > 1e-6 || Math.abs(m[2]) > 1e-6 || Math.abs(m[3]) > 1e-6
+        || Math.abs(m[4]) > 1e-6 || Math.abs(m[6]) > 1e-6 || Math.abs(m[7]) > 1e-6
+        || Math.abs(m[8]) > 1e-6 || Math.abs(m[9]) > 1e-6 || Math.abs(m[11]) > 1e-6
+        || Math.abs(m[12]) > 1e-6 || Math.abs(m[13]) > 1e-6 || Math.abs(m[14]) > 1e-6
+      )) roadTransformedPackets++;
+    }
+  }
+  worldGroup.traverse((object) => {
+    if ((object.userData as { productionDriveSource?: boolean }).productionDriveSource) {
+      legacyRoadCandidateMeshes++;
+    }
+  });
+  for (const [key, binding] of substrateRoadRenderMeshes) {
+    roadInstantiatedMeshes += binding.meshes.size;
+    for (const mesh of binding.meshes) {
+      if (mesh.parent !== worldGroup) continue;
+      visibleRoads++;
+      if (!substrateRoadCommits.has(key)
+        || !(mesh.userData as { substrateOwned?: boolean }).substrateOwned) {
+        uncommittedVisibleRoads++;
+      }
+    }
+  }
+  let structureCandidates = 0;
+  let structurePacketMeshes = 0;
+  let structureBuildAuthoredPacketMeshes = 0;
+  let structureInstantiatedMeshes = 0;
+  let retainedStructureSourceMeshes = 0;
+  let legacyStructureCandidateMeshes = 0;
+  let visibleStructures = 0;
+  let uncommittedVisibleStructures = 0;
+  for (const candidate of productionStructureRenderCandidates.values()) {
+    structureCandidates += candidate.meshCount;
+    structurePacketMeshes += candidate.packets.length;
+    retainedStructureSourceMeshes += candidate.meshes.size;
+    if (candidate.authoredAtBuild) {
+      structureBuildAuthoredPacketMeshes += candidate.packets.length;
+    }
+  }
+  worldGroup.traverse((object) => {
+    if ((object.userData as { productionStructureSource?: boolean }).productionStructureSource) {
+      legacyStructureCandidateMeshes++;
+    }
+  });
+  for (const [key, binding] of substrateStructureRenderMeshes) {
+    structureInstantiatedMeshes += binding.meshes.size;
+    for (const mesh of binding.meshes) {
+      if (mesh.parent !== worldGroup) continue;
+      visibleStructures++;
+      if (!substrateStructureCommits.has(key)
+        || !(mesh.userData as { substrateOwned?: boolean }).substrateOwned) {
+        uncommittedVisibleStructures++;
+      }
+    }
+  }
+  let hydroDetailCandidates = 0;
+  let hydroDetailPacketMeshes = 0;
+  let hydroDetailRedrapeAuthoredPacketMeshes = 0;
+  let hydroDetailInstantiatedMeshes = 0;
+  let retainedHydroDetailSourceMeshes = 0;
+  let legacyHydroDetailCandidateMeshes = 0;
+  let hydroDetailColliderCandidates = 0;
+  let visibleHydroDetails = 0;
+  let uncommittedVisibleHydroDetails = 0;
+  let activeHydroDetailColliders = 0;
+  let uncommittedHydroDetailColliders = 0;
+  for (const candidate of productionHydroDetailRenderCandidates.values()) {
+    hydroDetailCandidates += candidate.meshCount;
+    hydroDetailPacketMeshes += candidate.packets.length;
+    retainedHydroDetailSourceMeshes += candidate.meshes.size;
+    if (candidate.authoredAfterRedrape) {
+      hydroDetailRedrapeAuthoredPacketMeshes += candidate.packets.length;
+    }
+    hydroDetailColliderCandidates += candidate.rocks.size;
+  }
+  worldGroup.traverse((object) => {
+    if ((object.userData as { productionHydroDetailSource?: boolean }).productionHydroDetailSource) {
+      legacyHydroDetailCandidateMeshes++;
+    }
+  });
+  for (const [key, binding] of substrateHydroDetailRenderMeshes) {
+    hydroDetailInstantiatedMeshes += binding.meshes.size;
+    for (const mesh of binding.meshes) {
+      if (mesh.parent !== worldGroup) continue;
+      visibleHydroDetails++;
+      if (!substrateHydroDetailCommits.has(key)
+        || !(mesh.userData as { substrateOwned?: boolean }).substrateOwned) {
+        uncommittedVisibleHydroDetails++;
+      }
+    }
+  }
+  for (const [key, candidate] of productionHydroDetailRenderCandidates) {
+    for (const rock of candidate.rocks) {
+      if (!activeRapidRocks.has(rock)) continue;
+      activeHydroDetailColliders++;
+      if (!substrateHydroDetailCommits.has(key)) uncommittedHydroDetailColliders++;
+    }
+  }
+  return {
+    terrainCandidates: terrainMeshes.size,
+    terrainPacketMeshes,
+    terrainBuildAuthoredPacketMeshes,
+    terrainInstantiatedMeshes,
+    legacyTerrainCandidateMeshes,
+    retainedTerrainSourceMeshes,
+    terrainPacketFailures: productionTerrainPacketFailures,
+    terrainCommitted: substrateTerrainCommits.size,
+    visibleTerrain,
+    uncommittedVisibleTerrain,
+    roadCandidateTiles: productionRoadRenderCandidates.size,
+    roadCandidates,
+    roadPacketMeshes,
+    roadRedrapeAuthoredPacketMeshes,
+    retainedRoadSourceMeshes,
+    roadPacketVertices,
+    roadPacketBytes,
+    roadIndexedPackets,
+    roadTransformedPackets,
+    roadInstantiatedMeshes,
+    legacyRoadCandidateMeshes,
+    drivePacketFailures: productionDrivePacketFailures,
+    roadCommittedTiles: substrateRoadCommits.size,
+    visibleRoads,
+    uncommittedVisibleRoads,
+    structureCandidateTiles: productionStructureRenderCandidates.size,
+    structureCandidates,
+    structurePacketMeshes,
+    structureBuildAuthoredPacketMeshes,
+    structureInstantiatedMeshes,
+    retainedStructureSourceMeshes,
+    legacyStructureCandidateMeshes,
+    structurePacketFailures: productionStructurePacketFailures,
+    structureCommittedTiles: substrateStructureCommits.size,
+    visibleStructures,
+    uncommittedVisibleStructures,
+    hydroDetailCandidateTiles: productionHydroDetailRenderCandidates.size,
+    hydroDetailCandidates,
+    hydroDetailPacketMeshes,
+    hydroDetailRedrapeAuthoredPacketMeshes,
+    hydroDetailInstantiatedMeshes,
+    retainedHydroDetailSourceMeshes,
+    legacyHydroDetailCandidateMeshes,
+    hydroDetailPacketFailures: productionHydroDetailPacketFailures,
+    hydroDetailColliderCandidates,
+    hydroDetailCommittedTiles: substrateHydroDetailCommits.size,
+    visibleHydroDetails,
+    uncommittedVisibleHydroDetails,
+    activeHydroDetailColliders,
+    uncommittedHydroDetailColliders,
+    atomicCommits: substrateAtomicRenderCommits,
+    atomicRefusals: substrateAtomicRenderRefusals,
+    invalidations: substrateRenderInvalidations,
+    pendingReconciliations: productionSubstrateShadowRetries.size,
+  };
+}
+function buildProductionSubstrateShadow(
+  t: HeightTile,
+  key: string,
+): ProductionSubstrateTile | undefined {
+  if (!SUBSTRATE_SHADOW_ON || heightTiles.get(key) !== t
+    || !terrainMeshes.has(key) || terrainDirty.has(key)) return;
+  const terrainSourceRevision = terrainRevision.get(key) ?? 0;
+  const terrainPackets = productionTerrainRenderMeshesFor(key, terrainSourceRevision);
+  const crossingRevision = productionCrossings.snapshot().revision;
+  const drive = productionDriveSnapshotFor(t, key);
+  const structures = productionStructureRenderMeshesFor(key);
+  const hydroDetails = productionHydroDetailRenderMeshesFor(
+    key,
+    terrainRevision.get(key) ?? 0,
+  );
+  const tile = buildProductionSubstrateTile({
+    key,
+    revision: ++productionSubstrateRevision,
+    sourceRevisions: {
+      terrain: terrainSourceRevision,
+      drive: drive.revision,
+      structures: productionStructureRenderCandidates.get(key)?.generation ?? 0,
+      hydroDetails: productionHydroDetailRenderCandidates.get(key)?.generation ?? 0,
+      hydro: hydroRev.get(key) ?? 0,
+      crossings: crossingRevision,
+    },
+    bounds: { minX: t.xs, minZ: t.zs, maxX: t.xs + t.w, maxZ: t.zs + t.h },
+    // About 64m per sample on a z14 tile: enough for parity/contact shadow
+    // without pretending this coarse witness is the final render field.
+    resolution: 33,
+    groundMesh: productionGroundMeshFor(t, key, terrainPackets[0]),
+    terrainRenderMeshes: terrainPackets,
+    driveSegments: drive.segments,
+    driveRenderMeshes: drive.renderMeshes,
+    structureRenderMeshes: structures,
+    hydroDetailRenderMeshes: hydroDetails,
+    hydroField: (() => {
+      const field = hydroSys?.fieldAt(t.xs + t.w / 2, t.zs + t.h / 2);
+      return field?.key === key ? field : undefined;
+    })(),
+    waterMotionSegments: productionWaterMotionSegmentsFor(t),
+    waterCoverageCutAt: WATERLINE_CUT,
+    crossings: productionCrossings.forBounds({
+      minX: t.xs,
+      minZ: t.zs,
+      maxX: t.xs + t.w,
+      maxZ: t.zs + t.h,
+    }),
+    sampleGround: (x, z) => ({ yM: groundAt(x, z) + baseElev }),
+    sampleDrive: productionDriveAt,
+    sampleWater: (x, z, support) => {
+      const sample = drawnHydroAt(x, z);
+      if (!sample) return undefined;
+      const layers = adaptHydroSample(sample, support, {
+        waterId: `${sample.kind}:${key}`,
+      });
+      const channel = productionChannelAt(x, z);
+      if (channel) {
+        layers.water.bedY = channel.bedY;
+        layers.water.depthM = Math.max(0, layers.water.yM - channel.bedY);
+        if (channel.speedMps !== null) {
+          layers.water.speedMps = channel.speedMps;
+          layers.water.speedAuthority = 'resolved';
+        }
+        if (channel.waterId) layers.water.waterId = channel.waterId;
+      }
+      return layers;
+    },
+    sampleCrossing: (x, z) => productionCrossings.at(x, z),
+  });
+  productionSubstrate.upsert(tile);
+  commitProductionSubstrateRender(tile);
+  return tile;
+}
+const productionSubstrateShadowRetries = new Map<string, {
+  tile: HeightTile;
+  attempt: number;
+  timer?: number;
+}>();
+const SUBSTRATE_RETRY_MS = [0, 40, 120, 360, 1000, 2500, 6000, 12000] as const;
+function runProductionSubstrateShadowRetry(key: string): void {
+  const pending = productionSubstrateShadowRetries.get(key);
+  if (!pending || heightTiles.get(key) !== pending.tile) {
+    productionSubstrateShadowRetries.delete(key);
+    return;
+  }
+  pending.timer = undefined;
+  const tile = buildProductionSubstrateShadow(pending.tile, key);
+  if (tile && substrateTerrainCommits.get(key) === tile.revision) {
+    productionSubstrateShadowRetries.delete(key);
+    return;
+  }
+  pending.attempt++;
+  if (pending.attempt >= SUBSTRATE_RETRY_MS.length) return;
+  pending.timer = window.setTimeout(
+    () => runProductionSubstrateShadowRetry(key),
+    SUBSTRATE_RETRY_MS[pending.attempt],
+  );
+}
+function queueProductionSubstrateShadow(t: HeightTile, key: string): void {
+  if (!SUBSTRATE_SHADOW_ON) return;
+  const previous = productionSubstrateShadowRetries.get(key);
+  if (previous?.timer !== undefined) window.clearTimeout(previous.timer);
+  productionSubstrateShadowRetries.set(key, { tile: t, attempt: 0 });
+  queueMicrotask(() => runProductionSubstrateShadowRetry(key));
+}
 const builtRuns = new Map<string, Set<number>>();
-function waterway(pts: Array<[number, number]>, width: number, name?: string, key?: string): void {
+function waterway(pts: Array<[number, number]>, width: number, name?: string, key?: string,
+                  tags?: Readonly<Record<string, string>>): void {
   const dense = densifyPts(pts);
   const n = dense.length;
   if (n < 2) return;
@@ -17482,11 +19124,12 @@ function waterway(pts: Array<[number, number]>, width: number, name?: string, ke
   for (const [r0, r1] of runs) {
     if (done && done.has(r0)) continue;
     if (done) done.add(r0);
-    waterRun(dense.slice(r0, r1 + 1), width, name);
+    waterRun(dense.slice(r0, r1 + 1), width, name, key, tags);
   }
 }
 /** One continuous, fully-grounded stretch of watercourse. */
-function waterRun(dense: Array<[number, number]>, width: number, name?: string): void {
+function waterRun(dense: Array<[number, number]>, width: number, name?: string, key?: string,
+                  tags?: Readonly<Record<string, string>>): void {
   const n = dense.length;
   if (n < 2) return;
   void name;
@@ -17684,7 +19327,8 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
     // river in the world, so the number cannot live in a uniform.
     wide.push(width, width, width, width, width, width);
     addSeg(channelGrid, { ax: x0, az: z0, bx: x1, bz: z1,
-      hw: width / 2, ya: inv[i] - 0.15, yb: inv[i + 1] - 0.15 });
+      hw: width / 2, ya: inv[i] - 0.15, yb: inv[i + 1] - 0.15,
+      wid: key, nm: name, fs: (speed[i] + speed[i + 1]) * 0.5 });
     mapSeg(x0, z0, x1, z1, Math.max(width, 8), 'rgba(96,132,158,0.75)');
   }
   // ── WHERE THE OLD RIVER STOPS BEING DRAWN ──
@@ -17769,10 +19413,7 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
       // speed, a knock, and through (the rocks pass in tick reads this grid).
       // Its own grid, not vegGrid — a biome re-pick washes vegGrid and would
       // have silently disarmed every rapid until its river happened to rebuild.
-      const key = `${Math.floor(rk.cx / VEG_CELL)},${Math.floor(rk.cz / VEG_CELL)}`;
-      let arr = rapidRocks.get(key);
-      if (!arr) rapidRocks.set(key, arr = []);
-      arr.push({ x: rk.cx, z: rk.cz, s: rk.r });
+      addHydroDetailRock({ x: rk.cx, z: rk.cz, s: rk.r });
     }
     const g2 = new THREE.BufferGeometry();
     g2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(rv), 3));
@@ -17780,7 +19421,7 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
     g2.computeVertexNormals();
     const rm = new THREE.Mesh(g2, MAT.boulder);
     rm.userData.rapid = true;
-    worldGroup.add(rm);
+    addHydroDetailRenderMesh(rm);
   }
   // THE BORES ARE DEFERRED, because at this moment there may be no road.
   //
@@ -17792,14 +19433,23 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
   // five watercourses. Parked instead, and scanned once the terrain tile they
   // sit in is rebuilt — by which time every road in reach is in the grid. Same
   // deferral, same reason, as the batter.
-  pendingWater.push({ dense, inv, raw, width });
+  pendingWater.push({ dense, inv, raw, width, waterId: key, tags });
 }
 /** A watercourse awaiting the roads that cross it. */
-interface PendingWater { dense: Array<[number, number]>; inv: number[]; raw: number[]; width: number }
+interface PendingWater {
+  dense: Array<[number, number]>;
+  inv: number[];
+  raw: number[];
+  width: number;
+  waterId?: string;
+  tags?: Readonly<Record<string, string>>;
+}
 const pendingWater: PendingWater[] = [];
 /** Find and build the bores for every parked watercourse inside this tile. */
 function flushCulverts(t: HeightTile): void {
   if (!pendingWater.length) return;
+  structureBatchOwner = `${t.tx}/${t.ty}`;
+  structureBatchMeshes = [];
   let kept = 0;
   for (let w = 0; w < pendingWater.length; w++) {
     const p = pendingWater[w];
@@ -17810,40 +19460,129 @@ function flushCulverts(t: HeightTile): void {
     }
     const { dense, inv, raw, width } = p;
     const n = dense.length;
-    // Buried alone is not a culvert — it is a channel, and `carveChannels` digs
-    // the ground down to the invert everywhere it is allowed to, which is the
-    // watercourse cutting its own bed. The one place it is not allowed to dig
-    // is under tarmac, because the road has to keep standing on something. That
-    // plug of earth is exactly where the water has nothing to run in, and
-    // exactly where a real culvert goes: the test for a bore is the test for
-    // the plug.
+    // Every contiguous road overlap is one crossing EVENT. Geometry used to be
+    // the only observable result: a bore might appear, a bridge might happen
+    // to clear the channel, or nothing might fit, and all three facts were then
+    // discarded. Keep the event now, with the OSM identities and tags that
+    // caused it, so rendering, contact and parity can converge on one answer.
     let a = -1;
     for (let i = 0; i <= n; i++) {
-      // A CROSSING IS THE TEST, not a burial depth. The first version asked for
-      // CULV_MIN of cover as well, which is the embankment case only — and a
-      // stream meeting a road that sits at grade has no cover at all, so it got
-      // nothing and ran straight across the tarmac instead. `carveChannels`
-      // will not dig the bed under a carriageway (the road has to stand on
-      // something), so EVERY crossing needs a bore; the cover only decides how
-      // big it is. Measured at the Cabrillo Highway crossing, this is the
-      // difference between one culvert and none.
-      //
-      // Except under a bridge: there the road is already carried over the water
-      // and the deck stands far enough above the invert to say so.
-      const deck = i < n ? roadHeightAt(dense[i][0], dense[i][1]) : null;
-      const under = i < n && onCarriageway(dense[i][0], dense[i][1], 1.5).road
-        && (deck === null || deck - inv[i] < CULV_MAX);
-      if (under) culvertStats.crossings++;
-      if (under && a < 0) a = i;
-      if ((!under || i === n) && a >= 0) {
+      const overlap = i < n ? roadOver(dense[i][0], dense[i][1], 1.5) : null;
+      const crossing = overlap !== null;
+      if (crossing) culvertStats.crossings++;
+      if (crossing && a < 0) a = i;
+      if ((!crossing || i === n) && a >= 0) {
+        const core0 = a, core1 = i - 1;
+        const ci = Math.floor((core0 + core1) / 2);
+        const [cx, cz] = dense[ci];
+        const road = roadOver(cx, cz, 1.5)
+          ?? roadOver(dense[core0][0], dense[core0][1], 1.5);
+        if (!road) { a = -1; continue; }
+        const roadTags = road.segment.wid ? wayTagLog.get(road.segment.wid) : undefined;
+        const waterTags = p.tags;
+        const crossingIntent = resolveProductionCrossingIntent({
+          roadLayer: road.segment.ly ?? 0,
+          roadTags,
+          waterTags,
+        });
+        const clearance = road.y - inv[ci];
+        const wet = drawnHydroAt(cx, cz);
+        let structureOutcome: CrossingStructureOutcome;
+        let availableClearanceM: number | null = clearance;
+
         // Out to the headwalls: one station past the tarmac at each end, which
         // is where the open channel starts and the mouth belongs.
-        culvert(dense, inv, raw, Math.max(0, a - 1), Math.min(n - 1, i), width, a, i - 1);
+        if (crossingIntent.kind === 'bridge') {
+          structureOutcome = 'bridge-deck';
+        } else if (crossingIntent.kind === 'ford') {
+          structureOutcome = 'ford-fallback';
+        } else if (crossingIntent.kind === 'causeway') {
+          // The road embankment is the explicit structure. Cutting a conduit
+          // here would silently turn the authored causeway into a culvert.
+          structureOutcome = 'none';
+        } else if (crossingIntent.kind === 'unresolved' && clearance >= CULV_MAX) {
+          // Height is diagnostic, not semantic authority. This is plausibly a
+          // bridge, but without a tag or a built structure it stays unresolved.
+          structureOutcome = 'none';
+        } else {
+          const built = culvert(
+            dense, inv, raw,
+            Math.max(0, core0 - 1), Math.min(n - 1, i),
+            width, core0, core1,
+            {
+              // A tagged culvert is construction authority, not a hint for
+              // the contextual grammar. Preserve it as a compact pipe even
+              // when generic low-clearance selection would choose a ford.
+              taggedFamily: crossingIntent.kind === 'culvert' ? 'culvert' : undefined,
+              // An untagged overlap with exposed water at the carriageway and
+              // no buried room is the built open crossing already present in
+              // the world. Record that implementation as a procedural ford
+              // instead of leaving an unclassified wet road edge.
+              allowWetFordFallback: crossingIntent.kind === 'unresolved',
+              deckY: road.y,
+              waterSurfaceY: wet == null ? null : wet.restingLevelM - baseElev,
+            },
+          );
+          structureOutcome = built.outcome;
+          availableClearanceM = built.availableClearanceM;
+        }
+
+        const roadDx = road.segment.bx - road.segment.ax;
+        const roadDz = road.segment.bz - road.segment.az;
+        const roadLength = Math.hypot(roadDx, roadDz) || 1;
+        const waterA = dense[Math.max(0, ci - 1)];
+        const waterB = dense[Math.min(n - 1, ci + 1)];
+        const waterDx = waterB[0] - waterA[0];
+        const waterDz = waterB[1] - waterA[1];
+        const waterLength = Math.hypot(waterDx, waterDz) || 1;
+        const crossingRecord = productionCrossings.observe({
+          roadId: road.segment.wid
+            ?? road.segment.nm
+            ?? (road.segment.fd === undefined ? 'road:unknown' : `road:${road.segment.fd}`),
+          waterId: p.waterId ?? `water:${Math.round(cx)},${Math.round(cz)}`,
+          x: cx,
+          z: cz,
+          radiusM: Math.max(road.segment.hw, width / 2) + 4,
+          roadTangent: [roadDx / roadLength, roadDz / roadLength],
+          waterTangent: [waterDx / waterLength, waterDz / waterLength],
+          roadHalfWidthM: road.segment.hw,
+          waterHalfWidthM: width / 2,
+          roadLayer: road.segment.ly ?? 0,
+          roadTags,
+          waterTags,
+          deckY: road.y + baseElev,
+          waterBedY: inv[ci] + baseElev,
+          waterSurfaceY: wet?.restingLevelM ?? null,
+          availableClearanceM,
+          structureOutcome,
+        });
+        const crossingRevisionChanged =
+          crossingAppliedRevision.get(crossingRecord.id) !== crossingRecord.revision;
+        if (crossingRevisionChanged) {
+          crossingAppliedRevision.set(crossingRecord.id, crossingRecord.revision);
+        }
+        if (crossingRevisionChanged
+          && (crossingRecord.kind === 'culvert' || crossingRecord.kind === 'causeway')
+          && crossingRecord.implementation === 'built') {
+          const reach = crossingRecord.radiusM + 4;
+          hydroDirtyBox(cx - reach, cz - reach, cx + reach, cz + reach);
+        }
+        if (crossingRevisionChanged
+          && crossingRecord.kind !== 'unresolved'
+          && crossingRecord.implementation !== 'missing') {
+          const reach = crossingRecord.radiusM + 6;
+          crossingDirtiedTerrain(cx - reach, cz - reach, reach * 2, reach * 2);
+        }
         a = -1;
       }
     }
   }
   pendingWater.length = kept;
+  const owner = structureBatchOwner;
+  const meshes = structureBatchMeshes ?? [];
+  structureBatchOwner = null;
+  structureBatchMeshes = null;
+  if (owner) registerProductionStructureRenderBatch(owner, meshes);
 }
 /** The bore itself: two walls, a soffit, a headwall at each mouth. Sized to
  *  take a rig where the cover allows one, and a pipe where it does not. */
@@ -17855,24 +19594,45 @@ function flushCulverts(t: HeightTile): void {
  * bore then sized itself against the field after all, which is the bug this was
  * supposed to fix, silently.
  */
-function deckOver(x: number, z: number, margin: number): number | null {
-  let best: number | null = null;
+interface RoadOverlap {
+  segment: Seg;
+  y: number;
+  distanceM: number;
+}
+function roadOver(x: number, z: number, margin: number): RoadOverlap | null {
+  let best: RoadOverlap | null = null;
   for (let gx = -1; gx <= 1; gx++) for (let gz = -1; gz <= 1; gz++) {
     for (const sg of roadGrid.get(`${Math.floor(x / GRID) + gx},${Math.floor(z / GRID) + gz}`) ?? []) {
       if (sg.tk || sg.ya === undefined || sg.yb === undefined) continue;
       const dx = sg.bx - sg.ax, dz = sg.bz - sg.az;
       const t = clamp(((x - sg.ax) * dx + (z - sg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
       const px = sg.ax + dx * t, pz = sg.az + dz * t;
-      if (Math.hypot(x - px, z - pz) > sg.hw + 0.8 + margin) continue;
+      const distanceM = Math.hypot(x - px, z - pz);
+      if (distanceM > sg.hw + 0.8 + margin) continue;
       const y = (sg.ya as number) + ((sg.yb as number) - (sg.ya as number)) * t;
-      if (best === null || y < best) best = y;
+      if (best === null || y < best.y) best = { segment: sg, y, distanceM };
     }
   }
   return best;
 }
+function deckOver(x: number, z: number, margin: number): number | null {
+  return roadOver(x, z, margin)?.y ?? null;
+}
+interface CulvertBuildResult {
+  outcome: CrossingStructureOutcome;
+  availableClearanceM: number | null;
+  family?: string;
+}
+interface CulvertBuildOptions {
+  taggedFamily?: string;
+  allowWetFordFallback?: boolean;
+  deckY?: number;
+  waterSurfaceY?: number | null;
+}
 function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
-  a: number, b: number, width: number, core0: number, core1: number): void {
-  if (b <= a) return;
+  a: number, b: number, width: number, core0: number, core1: number,
+  options: CulvertBuildOptions = {}): CulvertBuildResult {
+  if (b <= a) return { outcome: 'infeasible', availableClearanceM: null };
   // Cover is measured over the BURIED CORE, not over the mouths. The run is
   // extended a station past the tarmac at each end so the headwalls stand in
   // open channel; those stations have almost no ground over them by
@@ -17890,13 +19650,23 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     const roof = deck === null ? g[i] : Math.min(g[i], deck - CULV_UNDER);
     cover = Math.min(cover, roof - inv[i]);
   }
-  if (!isFinite(cover)) return;
+  if (!isFinite(cover)) return { outcome: 'infeasible', availableClearanceM: null };
   const room = cover;
   // No usable room is a real answer: the water passes at grade and there is
   // nothing to build. The old 0.2m rejection sat BELOW CULV_CLR, then clamp
   // enlarged a 0.2–0.35m gap to a 0.35m bore — geometry larger than the room
   // that sized it. A clearance calculation may only shrink geometry.
-  if (room < CULV_CLR) { culvertStats.tooTight++; return; }
+  if (room < CULV_CLR) {
+    culvertStats.tooTight++;
+    if (options.allowWetFordFallback
+      && options.deckY !== undefined
+      && options.waterSurfaceY !== null
+      && options.waterSurfaceY !== undefined
+      && options.waterSurfaceY >= options.deckY - .15) {
+      return { outcome: 'ford-fallback', availableClearanceM: room, family: 'ford' };
+    }
+    return { outcome: 'no-room', availableClearanceM: room };
+  }
 
   const ci = Math.floor((core0 + core1) / 2);
   const [cx, cz] = dense[ci];
@@ -17906,6 +19676,7 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   const conduitRecipe = pickInfrastructureRecipe({
     key: conduitKey, kind: 'conduit', lengthM: Math.max(1, b - a) * 12,
     spanM: width, roadWidthM: width, tier: 1,
+    taggedStructure: options.taggedFamily,
     climate: cclim.w, temperatureC: cclim.tempC, moisture: cclim.moisture,
     snow: snowLoad(cclim.w, cclim.elevAbs), reliefM: 0, sideSlope: 0,
     coverM: room, daylightM: 0, waterWidthM: width, urbanity: 0.15,
@@ -17919,7 +19690,20 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   spanStats.recipes[crk] = (spanStats.recipes[crk] ?? 0) + 1;
   // Ford/none are intentionally geometry-free fallbacks: water continues at
   // grade and no procedural solid can intrude into the deck above.
-  if (!conduitRecipe.feasible || conduitRecipe.family === 'ford') return;
+  if (!conduitRecipe.feasible) {
+    return {
+      outcome: 'infeasible',
+      availableClearanceM: room,
+      family: conduitRecipe.family,
+    };
+  }
+  if (conduitRecipe.family === 'ford') {
+    return {
+      outcome: 'ford-fallback',
+      availableClearanceM: room,
+      family: conduitRecipe.family,
+    };
+  }
 
   const rig = room >= CULV_RIG;
   const H = rig ? CULV_RIG : Math.min(room, conduitRecipe.family === 'pipe' ? 1.45 : 1.8);
@@ -17966,7 +19750,7 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   geo.computeVertexNormals();
   const tube = new THREE.Mesh(geo, MAT.tunnel);
   tube.userData.culvert = true;
-  worldGroup.add(tube);
+  addStructureRenderMesh(tube);
   // HEADWALLS. Without them the bore is a rectangular hole in a grass bank and
   // reads as a hole in the world; with them it reads as something someone built.
   for (const end of [a, b]) {
@@ -17988,8 +19772,13 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     const wall = new THREE.Mesh(new THREE.BoxGeometry(W + 2.4, hh, 0.7), MAT.portal);
     wall.position.set(px, bottom + hh / 2, pz);
     wall.rotation.y = ang + Math.PI / 2;
-    worldGroup.add(wall);
+    addStructureRenderMesh(wall);
   }
+  return {
+    outcome: 'culvert-built',
+    availableClearanceM: room,
+    family: conduitRecipe.family,
+  };
 }
 function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number[], a: number, b: number, width: number, lift: number, recipe?: StructureRecipe): void {
   // Belt and braces: the ceiling can never poke out through the hillside —
@@ -18025,7 +19814,7 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
   const tube = new THREE.Mesh(geo, MAT.tunnel);
   tube.userData.tunnel = true; // so a probe can check none of it breaches the surface
   tube.userData.shellKind = 'tunnel';
-  worldGroup.add(tube);
+  addRoadRenderMesh(tube);
   // LUMINAIRES. A bore lit only by the emissive is uniform, and uniform is the
   // one thing a tunnel never looks like: what you actually see driving one is a
   // receding row of lamps, and it is the RHYTHM of them going past that tells
@@ -18066,7 +19855,7 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
       // geometry pokes out through the hillside, and at a mouth — where the
       // ceiling is deliberately uncapped — a lamp would read as a breach the
       // shell does not have.
-      worldGroup.add(new THREE.Mesh(lg, MAT.lamp));
+      addRoadRenderMesh(new THREE.Mesh(lg, MAT.lamp));
     }
   }
   for (const end of [a, b]) {
@@ -18080,7 +19869,7 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
     const [px, pz] = dense[end];
     lintel.position.set(px, ceil(end) + 0.3, pz);
     lintel.rotation.y = ang + Math.PI / 2; // across the road, not along it
-    worldGroup.add(lintel);
+    addRoadRenderMesh(lintel);
   }
 }
 // Everything a solid footprint owes the rest of the world: wall segments for
@@ -19642,7 +21431,7 @@ interface OsmWay {
 // Only the tags renderWays actually reads — the rest is dead weight per way.
 // amenity/shop feed repair POIs; surface/smoothness/tracktype feed wayQuality.
 // The S3 tiles keep EVERY tag — this list is only the client cache's diet.
-const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'layer', 'name', 'amenity', 'shop', 'surface', 'smoothness', 'tracktype',
+const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'ford', 'culvert', 'layer', 'name', 'amenity', 'shop', 'surface', 'smoothness', 'tracktype',
   // The building vocabulary (R55). Measured in this game's own tiles before
   // believing the wiki: roof:shape on 45% of Freiburg's stock, typed
   // building= values on 40%, honest colours on 2-5%. All of it was being
@@ -20517,16 +22306,31 @@ async function buildBreath(): Promise<void> {
  * warp have the same shape. So the yields go inside, and the calls queue.
  */
 let buildChain: Promise<void> = Promise.resolve();
-async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
+async function renderWays(
+  els: OsmWay[],
+  halo: OsmWay[] = [],
+  terrainOwner: string | null = null,
+): Promise<void> {
   wayTape?.push({ els, halo });
   ribBatch = new Map();
+  ribBatchTerrainOwner = terrainOwner;
+  roadBatchMeshes = [];
+  hydroDetailBatchMeshes = [];
+  hydroDetailBatchRocks = [];
   const ep = worldEpoch;
   buildUntil = performance.now() + BUILD_MS;
   // PRE-PASS: chain this tile's drivable ways end-to-end and solve each chain's
   // profile whole, publishing hints for the per-way builds below. Lives in
   // `roadsolve.ts` now — see there for why.
   await solver.plan(els, halo);
-  if (ep !== worldEpoch) { ribBatch = null; return; }
+  if (ep !== worldEpoch) {
+    ribBatch = null;
+    ribBatchTerrainOwner = null;
+    roadBatchMeshes = null;
+    hydroDetailBatchMeshes = null;
+    hydroDetailBatchRocks = null;
+    return;
+  }
   // WIDEST FIRST. The junction warp asks the segment grid what road it is
   // joining, and a road that has not been built yet is not in the grid — so a
   // driveway that happened to arrive before Chapman's Peak Drive had nothing to
@@ -20646,7 +22450,14 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
     // A hop can happen between two ways now that there is a between. These
     // ways are local metres for a world that no longer exists; the ribbon
     // batch was cleared by the sweep, so there is nothing to flush either.
-    if (ep !== worldEpoch) return;
+    if (ep !== worldEpoch) {
+      ribBatch = null;
+      ribBatchTerrainOwner = null;
+      roadBatchMeshes = null;
+      hydroDetailBatchMeshes = null;
+      hydroDetailBatchRocks = null;
+      return;
+    }
     // Clipped lines carry their own key; areas still dedupe on the bare id, so
     // a lake straddling two vector tiles is still drawn exactly once.
     const dk = el.ck ?? String(el.id);
@@ -20741,7 +22552,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       // module knows about or wants to. What it stops doing is drawing the
       // SURFACE; see the note at the mesh in `waterRun`.
       noteHydroWay(el.id, tags, pts, dk);
-      waterway(pts, WATER_W[tags.waterway as string], tags.name, dk);
+      waterway(pts, WATER_W[tags.waterway as string], tags.name, dk, tags);
     } else if (tags.railway) {
       // Rails read as a narrow dark line across the country and a thing you
       // bump over at a crossing. Not drivable — nobody drives a railway.
@@ -20780,6 +22591,18 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
   flushJunctions();
   flushAprons();
   flushRibbons();
+  const renderOwner = ribBatchTerrainOwner;
+  const renderMeshes = roadBatchMeshes ?? [];
+  const hydroDetailMeshes = hydroDetailBatchMeshes ?? [];
+  const hydroDetailRocks = hydroDetailBatchRocks ?? [];
+  ribBatchTerrainOwner = null;
+  roadBatchMeshes = null;
+  hydroDetailBatchMeshes = null;
+  hydroDetailBatchRocks = null;
+  if (renderOwner) {
+    registerProductionRoadRenderBatch(renderOwner, renderMeshes);
+    registerProductionHydroDetailRenderBatch(renderOwner, hydroDetailMeshes, hydroDetailRocks);
+  }
   // The pre-grid lives for exactly one batch: it exists to make build order
   // irrelevant WITHIN the batch, and a stale copy would shadow the real,
   // decked segments the next batch builds against.
@@ -21083,7 +22906,9 @@ async function renderGated(x: number, y: number, ways: OsmWay[]): Promise<void> 
   // ribbon batch between them.
   buildChain = buildChain.then(async () => {
     if (ep0 !== worldEpoch) return;
-    await renderWays(out, halo);
+    const scale = 2 ** (OSM_Z - TERRAIN_Z);
+    const terrainOwner = `${Math.floor(x / scale)}/${Math.floor(y / scale)}`;
+    await renderWays(out, halo, terrainOwner);
     if (ep0 !== worldEpoch) return;
     // The tile's buildings, standing up together — see flushBuildings.
     flushBuildings();
@@ -21698,7 +23523,7 @@ function streamWorld(ex: number, ez: number): void {
       measureSeaDatum();
       // The waterline just moved, and every seabed was cut against the old
       // one. Everything already built has to be cut again.
-      if (seaDatum !== was) for (const k of terrainMeshes.keys()) terrainDirty.add(k);
+      if (seaDatum !== was) for (const k of terrainMeshes.keys()) markTerrainDirty(k, 'sea-datum');
     }
     // The moment there is enough real cover to judge on, the world stops being
     // a latitude band and becomes the place it actually is. Once only.
@@ -21710,7 +23535,7 @@ function streamWorld(ex: number, ez: number): void {
           applyBiome(b);
           // Everything already painted was painted from the guess: the ground
           // colour, and every thicket the old species mix planted.
-          for (const k of terrainMeshes.keys()) terrainDirty.add(k);
+          for (const k of terrainMeshes.keys()) markTerrainDirty(k, 'biome');
           vegSeeded.clear();
           vegGrid.clear();
           vegSeedStats.clear();
@@ -24957,6 +26782,28 @@ function emitDust(x: number, y: number, z: number, vx: number, vz: number, water
  */
 const splash = createSplash();
 scene.add(splash.object3d);
+const vehicleWater = new VehicleWaterEvidence(WHEELS.length);
+const vehicleWaterMarks = createVehicleWaterEvidenceRenderer();
+scene.add(vehicleWaterMarks.object3d);
+let wheelWetMaterial: THREE.MeshLambertMaterial | null = null;
+const wheelDryColour = new THREE.Color();
+const wheelWetColour = new THREE.Color(0x05090b);
+function bindWheelWetMaterial(): void {
+  wheelWetMaterial?.dispose();
+  wheelWetMaterial = null;
+  const source = wheelMeshes[0]?.material;
+  if (!(source instanceof THREE.MeshLambertMaterial)) return;
+  wheelWetMaterial = source.clone();
+  wheelWetMaterial.name = 'vehicle-wet-tyres';
+  wheelDryColour.copy(source.color);
+  for (const wheel of wheelMeshes) wheel.material = wheelWetMaterial;
+}
+function applyWheelWetness(wetness: readonly number[]): void {
+  if (!wheelWetMaterial) return;
+  const wet = wetness.reduce((best, value) => Math.max(best, value), 0);
+  wheelWetMaterial.color.copy(wheelDryColour).lerp(wheelWetColour, clamp(wet * .78, 0, .78));
+}
+bindWheelWetMaterial();
 const splashTint = new THREE.Color();
 // Between the body's own colour and foam — thrown water is aerated, so it is
 // paler than the surface it came off, but it is NOT white. White is what the
@@ -25001,6 +26848,25 @@ const WETFX_BOB = 0.2;
 interface WetFx { levelM: number; levelY: number; depthM: number; kind: string }
 let wetfxWhy = 'idle';
 function splashWet(x: number, z: number): WetFx | null {
+  if (SUBSTRATE_CONTACT_ON) {
+    const contact = productionSubstrate.sample(x, z);
+    if (contact) {
+      if (!contact.fluid || !contact.water?.exposed) {
+        wetfxWhy = contact.water && !contact.water.exposed ? 'hidden' : 'dry';
+        return null;
+      }
+      const levelY = contact.water.yM - baseElev;
+      if (levelY > bodyY + WETFX_LIFT) { wetfxWhy = 'perched'; return null; }
+      if (levelY < bodyY - WETFX_DROP) { wetfxWhy = 'below'; return null; }
+      wetfxWhy = 'wet';
+      return {
+        levelM: contact.water.yM,
+        levelY,
+        depthM: contact.fluid.depthAboveSupportM,
+        kind: contact.water.kind,
+      };
+    }
+  }
   const w = drawnHydroAt(x, z);
   if (!w) { wetfxWhy = 'no-field'; return null; }
   const levelY = w.restingLevelM - baseElev;
@@ -25162,6 +27028,19 @@ const state = { x: 0, z: 0, heading: 0, speed: 0 };
 /** How deep the rig is wading right now, in metres; 0 on dry ground. Written
  *  by the drive step, read by hydroTick — see the note at each. */
 let rigWadeM = 0;
+let vehicleWaterWheels: VehicleWaterWheelSample[] = [];
+let vehicleWaterState: VehicleWaterEvidenceSnapshot = vehicleWater.snapshot();
+let vehicleWaterTimeS = 0;
+(window as unknown as { __waterEvidence?: () => object }).__waterEvidence = (): object => ({
+  ...vehicleWater.snapshot(),
+  stamps: vehicleWater.activeStamps(vehicleWaterTimeS).map((stamp) => ({
+    kind: stamp.kind,
+    x: +stamp.x.toFixed(2),
+    z: +stamp.z.toFixed(2),
+    age: +(vehicleWaterTimeS - stamp.bornSeconds).toFixed(2),
+    strength: +stamp.strength.toFixed(3),
+  })),
+});
 /** The last entry impulse and the speed it was taken at — see __splash. */
 let lastPlow = 0, lastPlowKmh = 0;
 
@@ -25917,7 +27796,59 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     droneArms = []; droneArmAxis = []; droneBlades = []; droneDiscs = [];
     droneDiscMat = null;
     // ── the bookkeeping ── local-coordinate stores and streaming gates.
-    heightTiles.clear(); terrainReady.clear(); terrainMeshes.clear(); terrainDirty.clear();
+    // In substrate render mode these source meshes were deliberately hidden,
+    // so the worldGroup sweep above never saw their geometries.
+    for (const mesh of terrainMeshes.values()) mesh.geometry.dispose();
+    heightTiles.clear(); terrainReady.clear(); terrainMeshes.clear(); terrainDirty.clear(); terrainRevision.clear();
+    substrateTerrainCommits.clear();
+    substrateTerrainRenderMeshes.clear();
+    productionTerrainRenderPackets.clear();
+    productionTerrainPacketFailures = 0;
+    substrateRenderInvalidations = 0;
+    substrateAtomicRenderCommits = 0;
+    substrateAtomicRenderRefusals = 0;
+    substrateAtomicRenderRefusalLog.length = 0;
+    for (const pending of productionSubstrateShadowRetries.values()) {
+      if (pending.timer !== undefined) window.clearTimeout(pending.timer);
+    }
+    productionSubstrateShadowRetries.clear();
+    productionDriveSources.clear();
+    substrateRoadCommits.clear();
+    // Visible packet instances were children of worldGroup and were disposed
+    // by the sweep above. Hidden legacy source meshes are not scene children
+    // and still need their own disposal below.
+    substrateRoadRenderMeshes.clear();
+    productionDrivePacketFailures = 0;
+    for (const candidate of productionRoadRenderCandidates.values()) {
+      for (const mesh of candidate.meshes) {
+        mesh.removeFromParent();
+        mesh.geometry.dispose();
+      }
+    }
+    productionRoadRenderCandidates.clear();
+    substrateStructureCommits.clear();
+    substrateStructureRenderMeshes.clear();
+    productionStructurePacketFailures = 0;
+    for (const candidate of productionStructureRenderCandidates.values()) {
+      for (const mesh of candidate.meshes) {
+        mesh.removeFromParent();
+        mesh.geometry.dispose();
+      }
+    }
+    productionStructureRenderCandidates.clear();
+    structureBatchOwner = null;
+    structureBatchMeshes = null;
+    substrateHydroDetailCommits.clear();
+    substrateHydroDetailRenderMeshes.clear();
+    productionHydroDetailPacketFailures = 0;
+    for (const candidate of productionHydroDetailRenderCandidates.values()) {
+      for (const mesh of candidate.meshes) {
+        mesh.removeFromParent();
+        mesh.geometry.dispose();
+      }
+      for (const rock of candidate.rocks) deactivateRapidRock(rock);
+    }
+    productionHydroDetailRenderCandidates.clear();
     // The per-tile material and its normal map. Both are capped, so neither was
     // an unbounded leak, and the keys are GLOBAL tile coordinates so a hop can
     // never collide with them — but a continent away is the one moment we know
@@ -25931,12 +27862,14 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     tworker?.reset(); buildInFlight = null;
     preRoadGrid.clear(); crumbDefer.clear();
     osmLoaded.clear(); osmActive.clear(); osmFailedAt.clear(); osmPinned.clear();
-    osmCorridor.clear(); osmDone.clear(); seenWays.clear();
+    osmCorridor.clear(); osmDone.clear(); seenWays.clear(); wayTagLog.clear();
     tileStats.clear(); surveyedCache.clear();
     unbuilt = 0; osmFails = 0; osmDown = false;
     mapFeats.length = 0; mapStroked.clear();
     roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear();
-    channelGrid.clear(); rapidRocks.clear(); chanSet.clear(); wiSet.clear();
+    channelGrid.clear(); rapidRocks.clear(); activeRapidRocks.clear(); chanSet.clear(); wiSet.clear();
+    pendingWater.length = 0; productionCrossings.reset(); crossingAppliedRevision.clear();
+    productionSubstrate.reset();
     builtRuns.clear(); synthSeen.clear();
     // ── THE HYDRO STORES SPEAK IN LOCAL METRES TOO ──
     //
@@ -25968,6 +27901,10 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     swardCache.clear(); sightCache.clear();
     roadSegs = []; roadLineWorld = []; roadLineKey = ''; roadLineAt = -1e9;
     ribBatch = null;
+    ribBatchTerrainOwner = null;
+    roadBatchMeshes = null;
+    hydroDetailBatchMeshes = null;
+    hydroDetailBatchRocks = null;
     carveCost.tiles = 0; carveCost.ms = 0; carveCost.relieved = 0;
     pois.clear(); areaGrid.clear(); survey.clear();
     vegGrid.clear(); vegSeeded.clear(); vegSeedStats.clear(); vegDeferredAt.clear();
@@ -27175,7 +29112,15 @@ function roadEdge(x: number, z: number, notFid?: number, notNm?: string): { out:
     // because the junction crop needs to know a join from a continuation.
     if (!best || out < best.out) {
       const l = Math.hypot(dx, dz) || 1;
-      best = { out, y: seg.ya + (seg.yb - seg.ya) * t, track: !!seg.tk, hw: seg.hw, ux: dx / l, uz: dz / l, nm: seg.nm, fd: seg.fd };
+      let y = seg.ya + (seg.yb - seg.ya) * t;
+      if (seg.ca !== undefined && seg.cb !== undefined) {
+        const px = seg.ax + dx * t;
+        const pz = seg.az + dz * t;
+        const side = ((x - px) * (-dz / l) + (z - pz) * (dx / l))
+          / (seg.hw || 1);
+        y += (seg.ca + (seg.cb - seg.ca) * t) * clamp(side, -1, 1);
+      }
+      best = { out, y, track: !!seg.tk, hw: seg.hw, ux: dx / l, uz: dz / l, nm: seg.nm, fd: seg.fd };
     }
   }
   return best;
@@ -27217,6 +29162,24 @@ function wheelGround(x: number, z: number): number {
   return Math.max(g, corridorH(x, z, g).h);
 }
 function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
+  if (SUBSTRATE_CONTACT_ON) {
+    const contact = productionSubstrate.sample(x, z);
+    if (contact) {
+      const gnd = contact.ground.yM - baseElev + SURFACE.ground.lift;
+      if (contact.fluid) {
+        const sink = clamp(contact.fluid.depthAboveSupportM / 1.1, .3, .85);
+        return contact.support.yM - baseElev - WHEEL_R * sink + SURFACE.water.lift;
+      }
+      const edge = contact.driveProximity;
+      if (!edge) return gnd;
+      const deck = edge.deckY - baseElev;
+      if (Math.abs(deck - near) > 4) return gnd;
+      const lift = edge.material === 'gravel' ? SURFACE.track.lift : SURFACE.road.lift;
+      const t = clamp(1 - edge.outM / KERB_FAIR, 0, 1);
+      const fair = t * t * (3 - 2 * t);
+      return gnd + (deck + lift - gnd) * fair;
+    }
+  }
   const gnd = wheelGround(x, z) + SURFACE.ground.lift;
   if (sk === 'water') {
     let g = groundAt(x, z);
@@ -36802,11 +38765,65 @@ function tick(now: number): void {
   if (parked) { state.speed = 0; slideV = 0; }
   { const _p = performance.now(); stepSun(); profAdd('stepSun', _p); }
   { const _p = performance.now(); stepWeather(now, dt); profAdd('stepWeather', _p); }
-  const surfKind = surfaceAt(state.x, state.z);
-  const surfQual = surfQ;                       // set by the call above
+  // One centre contact feeds the whole frame. In guarded mode this exact
+  // substrate answer decides the surface label, wading depth/current, entry
+  // impulse, vehicle evidence and wake. Re-sampling each consumer separately
+  // would make their ownership implicit and would let a future asynchronous
+  // consumer observe a different tile revision.
+  const substrateCentreContact = SUBSTRATE_CONTACT_ON
+    ? productionSubstrate.sample(state.x, state.z)
+    : undefined;
+  const substrateCentreSurface = substrateCentreContact
+    ? surfaceFromSubstrateContact(substrateCentreContact)
+    : undefined;
+  const surfKind = substrateCentreSurface?.kind ?? surfaceAt(state.x, state.z);
+  if (substrateCentreSurface) surfQ = substrateCentreSurface.quality;
+  const surfQual = surfQ;
   // In water the depth is the quality, and the current is a fact the drive
   // model below has to answer for (see the push after integration).
-  const wInfo = surfKind === 'water' ? waterInfoAt(state.x, state.z) : null;
+  const wInfo = surfKind === 'water'
+    ? substrateCentreContact
+      ? waterInfoFromSubstrateContact(substrateCentreContact)
+      : waterInfoAt(state.x, state.z)
+    : null;
+  if (substrateShadow && tickN % 15 === 0) {
+    const legacySupport = substrateShadowSupportAt(state.x, state.z, surfKind);
+    const substrateContact = substrateCentreContact
+      ?? productionSubstrate.sample(state.x, state.z);
+    const support = substrateContact?.support ?? legacySupport;
+    const hydro = substrateContact?.water
+      ? { water: substrateContact.water, fluid: substrateContact.fluid }
+      : !substrateContact
+        ? (() => {
+          const hydroSample = drawnHydroAt(state.x, state.z);
+          return hydroSample
+            ? adaptHydroSample(hydroSample, support, {
+              waterId: `${hydroSample.kind}:runtime-shadow`,
+            })
+            : undefined;
+        })()
+        : undefined;
+    const crossingRecord = productionCrossings.at(state.x, state.z);
+    substrateShadow.observe({
+      x: state.x,
+      z: state.z,
+      support,
+      legacySupport,
+      hydro,
+      substrateAuthority: substrateContact ? 'tile' : 'fallback',
+      legacy: {
+        wet: wInfo?.wet ?? false,
+        depthM: wInfo?.wet ? wInfo.depth : null,
+        speedMps: wInfo?.wet ? wInfo.speed : null,
+        flow: wInfo?.wet ? [wInfo.fx, wInfo.fz] : null,
+      },
+      crossing: substrateContact?.crossing
+        ? { authority: 'canonical', kind: substrateContact.crossing }
+        : crossingRecord && crossingRecord.kind !== 'unresolved'
+          ? { authority: 'canonical', kind: crossingRecord.kind }
+        : { authority: hydro && support.kind === 'drive' ? 'unresolved' : 'canonical' },
+    });
+  }
   // ── THE HULL ENTERS THE WATER; IT DOES NOT TELEPORT INTO IT ──
   //
   // `wadeParams` was already a function of depth, but it was applied as a STEP
@@ -36849,6 +38866,38 @@ function tick(now: number): void {
         // never disagree about how hard the truck hit the water.
         splashEntry(plow, rigWadeM);
       }
+    }
+  }
+  {
+    vehicleWaterTimeS = simT;
+    vehicleWaterState = vehicleWater.step({
+      dt,
+      timeSeconds: vehicleWaterTimeS,
+      x: state.x,
+      z: state.z,
+      vx: Math.sin(state.heading) * state.speed,
+      vz: -Math.cos(state.heading) * state.speed,
+      heading: state.heading,
+      depthM: rigWadeM,
+      inWater: wInfo?.wet ?? false,
+      authority: substrateCentreContact ? 'substrate' : HYDRO_ON ? 'legacy' : 'none',
+      // Wheel contacts are from the completed suspension solve one frame ago.
+      // They retain exact world positions, so the delay is temporal only and
+      // keeps the contact/physics ordering free of a second wheel solve.
+      wheels: vehicleWaterWheels,
+    });
+    applyWheelWetness(vehicleWaterState.tyreWetness);
+    for (const stamp of vehicleWaterState.emitted) {
+      if (stamp.kind !== 'drip') continue;
+      emitDust(
+        stamp.x,
+        stamp.yM + .22,
+        stamp.z,
+        Math.sin(state.heading) * state.speed * .08,
+        -Math.cos(state.heading) * state.speed * .08,
+        true,
+        splashRgb('rain'),
+      );
     }
   }
   const surf = wInfo || rigWadeM > 0.02
@@ -37326,6 +39375,13 @@ function tick(now: number): void {
     if (!Number.isFinite(g)) nanTraceAt('contact', { wI, wxw, wzw, sk, g, prevGround: prevGround ?? null, gnd: groundAt(wxw, wzw), rc: roadCeiling(wxw, wzw), sh: sampleHeight(wxw, wzw), ms: meshSurfaceAt(wxw, wzw), diag: meshDiag(wxw, wzw), tiles: heightTiles.size, meshes: terrainMeshes.size, sx: state.x, sz: state.z, h: state.heading });
     wI++;
   }
+  vehicleWaterWheels = wheelWorld.map(([x, z], i) => ({
+    x,
+    z,
+    yM: contacts[i],
+    wet: wheelSurf[i] === 'water'
+      || wheelSurf[i] === 'road' && wetNow > .45 && puddleAt(x, z, wetNow) > .3,
+  }));
   // WHEELS is [FL, FR, RL, RR] — negative z is forward, which is why the first
   // two are the pair that steers. An axle takes the WORSE of its two wheels:
   // one wheel on gravel is a compromised axle, not an averagely-gripping one,
@@ -37611,7 +39667,7 @@ function tick(now: number): void {
   // Dust off the loose stuff — rate follows speed, thrown back along travel.
   const v = Math.abs(state.speed);
   if (v > 3 && groundedF > 0.2) {
-    const anyWater = wheelSurf.some((k) => k === 'water');
+    const anyWater = vehicleWaterState.inWater || vehicleWaterWheels.some((wheel) => wheel.wet);
     // Wet ground raises no dust — but water itself throws plenty.
     // A sliding tyre tears up far more than a rolling one.
     // Wet ground raises no dust — but a soaked ROAD throws spray, and the
@@ -37626,7 +39682,7 @@ function tick(now: number): void {
       dustBudget -= 1;
       // WATER throws from the FRONT wheels — that is where a bow wave comes
       // from; dry ground throws from the rears, where the drive is.
-      const water = wheelSurf[0] === 'water' || wheelSurf[2] === 'water';
+      const water = vehicleWaterWheels[0]?.wet || vehicleWaterWheels[1]?.wet;
       const i = water ? Math.floor(Math.random() * 2) : 2 + Math.floor(Math.random() * 2);
       // Tarmac raises nothing — unless the tyres are sliding across it
       // (smoke), or STANDING WATER is on it: a puddle taken at speed throws a
@@ -37636,7 +39692,7 @@ function tick(now: number): void {
       const [wxw, wzw] = wheelWorld[i];
       const pud = wheelSurf[i] === 'road' && wx.wet > 0.45 ? puddleAt(wxw, wzw, wx.wet) : 0;
       if (wheelSurf[i] === 'road' && skid < 0.3 && pud < 0.35) continue;
-      const wet = wheelSurf[i] === 'water' || pud >= 0.35;
+      const wet = vehicleWaterWheels[i]?.wet || pud >= 0.35;
       // ── EJECTED, NOT LEFT BEHIND ──
       //
       // This used to launch at 5% of road speed, because a real backward throw
@@ -37695,8 +39751,9 @@ function tick(now: number): void {
   // is a property of the hull being in water, not of a wheel touching it, and
   // it must keep going when the budget is spent on spray.
   profMark('lamps');
-  splashBow(now, state.speed, rigWadeM);
+  splashBow(now, state.speed, vehicleWaterState.depthM);
   { const _p = performance.now(); stepDust(dt); profAdd('stepDust', _p); }
+  vehicleWaterMarks.update(vehicleWater.activeStamps(vehicleWaterTimeS), vehicleWaterTimeS);
   { const _p = performance.now(); flushTerrain(now); profAdd('flushTerrain', _p); }
   drainHydroJobs(now, appliedThisFrame);
   appliedThisFrame = false;
@@ -41444,7 +43501,7 @@ const DIAL_GROUPS: DialGroup[] = [
         if (want === terrainSeg) return;
         terrainSeg = want;
         recalcCut();
-        for (const k of terrainMeshes.keys()) terrainDirty.add(k);
+        for (const k of terrainMeshes.keys()) markTerrainDirty(k, 'terrain-resolution');
       }),
       dial('life', 'WILDLIFE', ['OFF', 'ON'], 1, (i) => {
         wildlifeOn = i === 1;
@@ -43799,6 +45856,8 @@ function selectRig(model: RigModelId, loadout: RigLoadoutId, equipment: RigEquip
   bodyMat = next.bodyMat; tailMat = next.tailMat;
   wheelPivots.splice(0, wheelPivots.length, ...next.wheelPivots);
   wheelMeshes.splice(0, wheelMeshes.length, ...next.wheelMeshes);
+  bindWheelWetMaterial();
+  applyWheelWetness(vehicleWaterState.tyreWetness);
   cabMats.splice(0, cabMats.length, ...next.cabMats);
   const marked = new Set<THREE.Material>();
   for (const part of next.parts) part.traverse(o => {

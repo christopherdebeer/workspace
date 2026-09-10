@@ -1,0 +1,965 @@
+import type { HydroKind } from '../hydro/types';
+import { sampleFieldSurface } from '../hydro/field-sample';
+import type { HydroTileField } from '../hydro/types';
+import { resolveFluidContact } from './contact';
+import type { HydroContactLayers } from './hydro-adapter';
+import type {
+  ProductionCrossingRecord,
+} from './crossing-authority';
+import {
+  pointInProductionCrossingFootprint,
+  productionCrossingFootprint,
+} from './crossing-authority';
+import {
+  CROSSING_ID,
+  DRIVE_MATERIAL,
+  GROUND_MATERIAL,
+  WATER_STATE,
+  type CrossingKind,
+  type DriveMaterial,
+  type GroundMaterialName,
+  type SubstrateBounds,
+  type SubstrateContact,
+  type SupportContact,
+} from './types';
+
+export interface ProductionGroundSample {
+  yM: number;
+  material?: GroundMaterialName;
+}
+
+export interface ProductionDriveSample {
+  yM: number;
+  material: Exclude<DriveMaterial, 'ford'>;
+  quality: number;
+  roadId: string;
+}
+
+export interface ProductionDriveSegment {
+  ax: number;
+  az: number;
+  bx: number;
+  bz: number;
+  yaM: number;
+  ybM: number;
+  halfWidthM: number;
+  material: Exclude<DriveMaterial, 'ford'>;
+  quality: number;
+  roadId: string;
+  shoulderM?: number;
+  crossfallA?: number;
+  crossfallB?: number;
+}
+
+/**
+ * Exact component storage for a renderer-neutral vertex attribute.
+ *
+ * Normalized integer attributes are materially different from eagerly
+ * expanding them to floats: the component width, signedness and normalized
+ * decode are part of the authored GPU contract. Keep that contract in the
+ * substrate packet so packet publication can share build arrays without
+ * rejecting colour/mask attributes used by some road and river materials.
+ */
+export type ProductionRenderAttributeArray =
+  | Float32Array<ArrayBuffer>
+  | Float64Array<ArrayBuffer>
+  | Uint32Array<ArrayBuffer>
+  | Uint16Array<ArrayBuffer>
+  | Uint8Array<ArrayBuffer>
+  | Uint8ClampedArray<ArrayBuffer>
+  | Int32Array<ArrayBuffer>
+  | Int16Array<ArrayBuffer>
+  | Int8Array<ArrayBuffer>;
+
+export interface ProductionRenderAttribute {
+  itemSize: number;
+  normalized: boolean;
+  data: ProductionRenderAttributeArray;
+}
+
+export interface ProductionRenderGroup {
+  start: number;
+  count: number;
+  materialIndex: number;
+}
+
+/**
+ * Renderer-neutral geometry captured after production roads have been profiled,
+ * joined and re-seated against the owning terrain revision.
+ *
+ * The substrate tile owns these immutable arrays. Runtime renderers may build
+ * GPU objects from them, but may not admit the hidden source mesh directly.
+ */
+export interface ProductionRenderMesh {
+  name: string;
+  materialKeys: readonly string[];
+  attributes: Readonly<Record<string, ProductionRenderAttribute>>;
+  index?: Uint32Array<ArrayBuffer>;
+  groups: readonly ProductionRenderGroup[];
+  matrix: Float32Array<ArrayBuffer>;
+  renderOrder: number;
+  castShadow: boolean;
+  receiveShadow: boolean;
+  frustumCulled: boolean;
+  userData: Readonly<Record<string, string | number | boolean>>;
+}
+export type ProductionDriveRenderMesh = ProductionRenderMesh;
+
+export interface ProductionGroundMesh {
+  /** Position xyz, local to originX/originZ; y is local to verticalOffsetM. */
+  positions: Float32Array<ArrayBuffer>;
+  cellOffsets: Int32Array<ArrayBuffer>;
+  cellTriangles: Int32Array<ArrayBuffer>;
+  segmentCount: number;
+  originX: number;
+  originZ: number;
+  verticalOffsetM: number;
+}
+
+export interface ProductionWaterMotionSegment {
+  ax: number;
+  az: number;
+  bx: number;
+  bz: number;
+  bedAM: number;
+  bedBM: number;
+  halfWidthM: number;
+  speedMps: number | null;
+  waterId?: string;
+}
+
+export interface ProductionSubstrateTileInput {
+  key: string;
+  revision: number;
+  sourceRevisions: {
+    terrain: number;
+    drive: number;
+    structures: number;
+    hydroDetails: number;
+    hydro: number;
+    crossings: number;
+  };
+  bounds: SubstrateBounds;
+  resolution: number;
+  groundMesh?: ProductionGroundMesh;
+  terrainRenderMeshes?: readonly ProductionRenderMesh[];
+  driveSegments?: readonly ProductionDriveSegment[];
+  driveRenderMeshes?: readonly ProductionDriveRenderMesh[];
+  structureRenderMeshes?: readonly ProductionRenderMesh[];
+  hydroDetailRenderMeshes?: readonly ProductionRenderMesh[];
+  hydroField?: HydroTileField;
+  waterMotionSegments?: readonly ProductionWaterMotionSegment[];
+  waterCoverageCutAt?: (x: number, z: number, kind: HydroKind) => number;
+  crossings?: readonly ProductionCrossingRecord[];
+  sampleGround(x: number, z: number): ProductionGroundSample;
+  sampleDrive(x: number, z: number): ProductionDriveSample | undefined;
+  sampleWater(x: number, z: number, support: SupportContact): HydroContactLayers | undefined;
+  sampleCrossing(x: number, z: number): ProductionCrossingRecord | undefined;
+}
+
+export interface ProductionSubstrateTile {
+  schemaVersion: 1;
+  source: 'production-substrate';
+  key: string;
+  revision: number;
+  sourceRevisions: {
+    terrain: number;
+    drive: number;
+    structures: number;
+    hydroDetails: number;
+    hydro: number;
+    crossings: number;
+  };
+  bounds: SubstrateBounds;
+  resolution: number;
+  roadIds: readonly string[];
+  waterIds: readonly string[];
+  crossings: readonly ProductionCrossingRecord[];
+  groundMesh?: ProductionGroundMesh;
+  terrainRenderMeshes: readonly ProductionRenderMesh[];
+  driveSegments: readonly ProductionDriveSegment[];
+  driveRenderMeshes: readonly ProductionDriveRenderMesh[];
+  structureRenderMeshes: readonly ProductionRenderMesh[];
+  hydroDetailRenderMeshes: readonly ProductionRenderMesh[];
+  hydroField?: HydroTileField;
+  waterMotionSegments: readonly ProductionWaterMotionSegment[];
+  waterCoverageCutAt?: (x: number, z: number, kind: HydroKind) => number;
+  groundY: Float32Array<ArrayBuffer>;
+  groundMaterial: Uint8Array<ArrayBuffer>;
+  driveY: Float32Array<ArrayBuffer>;
+  driveMaterial: Uint8Array<ArrayBuffer>;
+  driveQuality: Float32Array<ArrayBuffer>;
+  roadIndex: Uint16Array<ArrayBuffer>;
+  waterY: Float32Array<ArrayBuffer>;
+  waterBedY: Float32Array<ArrayBuffer>;
+  waterDepthM: Float32Array<ArrayBuffer>;
+  waterCoverage: Float32Array<ArrayBuffer>;
+  waterShoreDistanceM: Float32Array<ArrayBuffer>;
+  waterFlowX: Float32Array<ArrayBuffer>;
+  waterFlowZ: Float32Array<ArrayBuffer>;
+  waterSpeedMps: Float32Array<ArrayBuffer>;
+  waterEnergy: Float32Array<ArrayBuffer>;
+  waterVorticity: Float32Array<ArrayBuffer>;
+  waterFetchM: Float32Array<ArrayBuffer>;
+  waterKind: Uint8Array<ArrayBuffer>;
+  waterFlags: Uint8Array<ArrayBuffer>;
+  waterState: Uint8Array<ArrayBuffer>;
+  waterIndex: Uint16Array<ArrayBuffer>;
+  crossingId: Uint8Array<ArrayBuffer>;
+  crossingIndex: Uint16Array<ArrayBuffer>;
+}
+
+export interface ProductionSubstrateStoreSnapshot {
+  tiles: number;
+  revision: number;
+  cells: number;
+  roads: number;
+  waters: number;
+  crossings: number;
+}
+
+export interface ProductionWaterProbe {
+  tileKey: string;
+  x: number;
+  z: number;
+  surfaceY: number;
+  supportY: number;
+  depthAboveSupportM: number | null;
+  exposed: boolean;
+  fluid: boolean;
+  speedMps: number | null;
+  crossing: CrossingKind | null;
+}
+
+const HYDRO_KINDS: readonly HydroKind[] = [
+  'ocean', 'lagoon', 'lake', 'pond', 'reservoir',
+  'basin', 'river', 'stream', 'canal', 'wetland',
+];
+const HYDRO_KIND_ID = new Map(HYDRO_KINDS.map((kind, index) => [kind, index + 1]));
+
+const clamp = (value: number, lo: number, hi: number): number =>
+  Math.max(lo, Math.min(hi, value));
+const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
+const finiteOrNaN = (value: number | null): number =>
+  value !== null && Number.isFinite(value) ? value : NaN;
+
+const groundMaterialId = (material: GroundMaterialName): number =>
+  GROUND_MATERIAL[material];
+const groundMaterialName = (id: number): GroundMaterialName => {
+  switch (id) {
+    case GROUND_MATERIAL.cut: return 'cut';
+    case GROUND_MATERIAL.fill: return 'fill';
+    case GROUND_MATERIAL.riverbed: return 'riverbed';
+    case GROUND_MATERIAL.bank: return 'bank';
+    case GROUND_MATERIAL.shoulder: return 'shoulder';
+    default: return 'terrain';
+  }
+};
+const driveMaterialId = (material: DriveMaterial): number =>
+  DRIVE_MATERIAL[material];
+const driveMaterialName = (id: number): DriveMaterial =>
+  id === DRIVE_MATERIAL.gravel ? 'gravel'
+    : id === DRIVE_MATERIAL.ford ? 'ford'
+      : 'asphalt';
+
+const intern = (values: string[], indices: Map<string, number>, value: string): number => {
+  const found = indices.get(value);
+  if (found !== undefined) return found;
+  if (values.length >= 0xffff) throw new Error('production substrate feature table overflow');
+  values.push(value);
+  const index = values.length;
+  indices.set(value, index);
+  return index;
+};
+
+const internCrossing = (
+  values: ProductionCrossingRecord[],
+  indices: Map<string, number>,
+  value: ProductionCrossingRecord,
+): number => {
+  const found = indices.get(value.id);
+  if (found !== undefined) return found;
+  if (values.length >= 0xffff) throw new Error('production substrate crossing table overflow');
+  values.push(value);
+  const index = values.length;
+  indices.set(value.id, index);
+  return index;
+};
+
+const crossingKind = (id: number): CrossingKind | undefined => {
+  switch (id) {
+    case CROSSING_ID.bridge: return 'bridge';
+    case CROSSING_ID.culvert: return 'culvert';
+    case CROSSING_ID.ford: return 'ford';
+    case CROSSING_ID.causeway: return 'causeway';
+    default: return undefined;
+  }
+};
+
+/**
+ * Assemble the existing production facts into one immutable layered tile.
+ *
+ * This is the versioned production authority. Shadow mode compares it without
+ * consuming it; guarded contact/render modes use this same immutable answer.
+ */
+export function buildProductionSubstrateTile(
+  input: ProductionSubstrateTileInput,
+): ProductionSubstrateTile {
+  const resolution = Math.max(3, Math.floor(input.resolution));
+  const count = resolution * resolution;
+  const groundY = new Float32Array(count);
+  const groundMaterial = new Uint8Array(count);
+  const driveY = new Float32Array(count); driveY.fill(NaN);
+  const driveMaterial = new Uint8Array(count);
+  const driveQuality = new Float32Array(count);
+  const roadIndex = new Uint16Array(count);
+  const waterY = new Float32Array(count); waterY.fill(NaN);
+  const waterBedY = new Float32Array(count); waterBedY.fill(NaN);
+  const waterDepthM = new Float32Array(count);
+  const waterCoverage = new Float32Array(count);
+  const waterShoreDistanceM = new Float32Array(count);
+  const waterFlowX = new Float32Array(count);
+  const waterFlowZ = new Float32Array(count);
+  const waterSpeedMps = new Float32Array(count); waterSpeedMps.fill(NaN);
+  const waterEnergy = new Float32Array(count); waterEnergy.fill(NaN);
+  const waterVorticity = new Float32Array(count); waterVorticity.fill(NaN);
+  const waterFetchM = new Float32Array(count); waterFetchM.fill(NaN);
+  const waterKind = new Uint8Array(count);
+  const waterFlags = new Uint8Array(count);
+  const waterState = new Uint8Array(count);
+  const waterIndex = new Uint16Array(count);
+  const crossingId = new Uint8Array(count);
+  const crossingIndex = new Uint16Array(count);
+  const roadIds: string[] = [];
+  const waterIds: string[] = [];
+  const crossings: ProductionCrossingRecord[] = [...(input.crossings ?? [])];
+  const roadIndices = new Map<string, number>();
+  const waterIndices = new Map<string, number>();
+  const crossingIndices = new Map(crossings.map((crossing, index) => [crossing.id, index + 1]));
+  const spanX = input.bounds.maxX - input.bounds.minX;
+  const spanZ = input.bounds.maxZ - input.bounds.minZ;
+
+  for (let iz = 0; iz < resolution; iz++) {
+    const z = input.bounds.minZ + (iz / (resolution - 1)) * spanZ;
+    for (let ix = 0; ix < resolution; ix++) {
+      const x = input.bounds.minX + (ix / (resolution - 1)) * spanX;
+      const i = iz * resolution + ix;
+      const ground = input.sampleGround(x, z);
+      if (!Number.isFinite(ground.yM)) {
+        throw new Error(`production substrate ${input.key}: non-finite ground at ${x},${z}`);
+      }
+      groundY[i] = ground.yM;
+      groundMaterial[i] = groundMaterialId(ground.material ?? 'terrain');
+
+      const crossing = input.sampleCrossing(x, z);
+      if (crossing && crossing.kind !== 'unresolved') {
+        crossingId[i] = CROSSING_ID[crossing.kind];
+        crossingIndex[i] = internCrossing(crossings, crossingIndices, crossing);
+      }
+
+      const drive = input.sampleDrive(x, z);
+      let support: SupportContact = {
+        kind: 'ground',
+        yM: ground.yM,
+        material: ground.material ?? 'terrain',
+      };
+      if (drive) {
+        const material: DriveMaterial = crossing?.kind === 'ford' ? 'ford' : drive.material;
+        driveY[i] = drive.yM;
+        driveMaterial[i] = driveMaterialId(material);
+        driveQuality[i] = clamp(drive.quality, 0, 1);
+        roadIndex[i] = intern(roadIds, roadIndices, drive.roadId);
+        support = {
+          kind: 'drive',
+          yM: drive.yM,
+          material,
+          featureId: drive.roadId,
+        };
+      }
+
+      const hydro = input.sampleWater(x, z, support);
+      if (!hydro) continue;
+      const water = hydro.water;
+      waterY[i] = water.yM;
+      waterBedY[i] = water.bedY;
+      waterDepthM[i] = water.depthM;
+      waterCoverage[i] = clamp(water.coverage, 0, 1);
+      waterShoreDistanceM[i] = water.shoreDistanceM;
+      waterFlowX[i] = water.flow[0];
+      waterFlowZ[i] = water.flow[1];
+      waterSpeedMps[i] = finiteOrNaN(water.speedMps);
+      waterEnergy[i] = finiteOrNaN(water.energy);
+      waterVorticity[i] = finiteOrNaN(water.vorticity);
+      waterFetchM[i] = finiteOrNaN(water.fetchM);
+      waterKind[i] = HYDRO_KIND_ID.get(water.kind) ?? 0;
+      waterFlags[i] = (water.intermittent ? 1 : 0) | (water.tidal ? 2 : 0);
+      waterIndex[i] = intern(waterIds, waterIndices, water.waterId);
+      if (crossing?.kind === 'causeway') {
+        waterState[i] = WATER_STATE.blocked;
+      } else if (crossing?.kind === 'culvert') {
+        waterState[i] = WATER_STATE.hidden;
+      } else {
+        waterState[i] = water.exposed ? WATER_STATE.exposed : WATER_STATE.hidden;
+      }
+    }
+  }
+
+  return {
+    schemaVersion: 1,
+    source: 'production-substrate',
+    key: input.key,
+    revision: input.revision,
+    sourceRevisions: { ...input.sourceRevisions },
+    bounds: input.bounds,
+    resolution,
+    roadIds,
+    waterIds,
+    crossings,
+    ...(input.groundMesh ? { groundMesh: input.groundMesh } : {}),
+    terrainRenderMeshes: [...(input.terrainRenderMeshes ?? [])],
+    driveSegments: [...(input.driveSegments ?? [])],
+    driveRenderMeshes: [...(input.driveRenderMeshes ?? [])],
+    structureRenderMeshes: [...(input.structureRenderMeshes ?? [])],
+    hydroDetailRenderMeshes: [...(input.hydroDetailRenderMeshes ?? [])],
+    ...(input.hydroField ? { hydroField: input.hydroField } : {}),
+    waterMotionSegments: [...(input.waterMotionSegments ?? [])],
+    ...(input.waterCoverageCutAt ? { waterCoverageCutAt: input.waterCoverageCutAt } : {}),
+    groundY,
+    groundMaterial,
+    driveY,
+    driveMaterial,
+    driveQuality,
+    roadIndex,
+    waterY,
+    waterBedY,
+    waterDepthM,
+    waterCoverage,
+    waterShoreDistanceM,
+    waterFlowX,
+    waterFlowZ,
+    waterSpeedMps,
+    waterEnergy,
+    waterVorticity,
+    waterFetchM,
+    waterKind,
+    waterFlags,
+    waterState,
+    waterIndex,
+    crossingId,
+    crossingIndex,
+  };
+}
+
+function bilinear(
+  values: Float32Array<ArrayBuffer>,
+  n: number,
+  fx: number,
+  fz: number,
+  fallback: number,
+): number {
+  const x0 = Math.floor(fx), z0 = Math.floor(fz);
+  const x1 = Math.min(n - 1, x0 + 1), z1 = Math.min(n - 1, z0 + 1);
+  const tx = fx - x0, tz = fz - z0;
+  const a = values[z0 * n + x0], b = values[z0 * n + x1];
+  const c = values[z1 * n + x0], d = values[z1 * n + x1];
+  if (![a, b, c, d].every(Number.isFinite)) return fallback;
+  return mix(mix(a, b, tx), mix(c, d, tx), tz);
+}
+
+function sampleGroundMesh(
+  mesh: ProductionGroundMesh,
+  bounds: SubstrateBounds,
+  x: number,
+  z: number,
+): { yM: number; normal: readonly [number, number, number] } | undefined {
+  const seg = mesh.segmentCount;
+  if (seg < 1) return undefined;
+  const fx = ((x - bounds.minX) / Math.max(1e-6, bounds.maxX - bounds.minX)) * seg;
+  const fz = ((z - bounds.minZ) / Math.max(1e-6, bounds.maxZ - bounds.minZ)) * seg;
+  if (fx < 0 || fz < 0 || fx >= seg || fz >= seg) return undefined;
+  const cell = Math.floor(fz) * seg + Math.floor(fx);
+  const positions = mesh.positions;
+  const vertex = (index: number): readonly [number, number, number] => {
+    const i = index * 3;
+    return [
+      positions[i] + mesh.originX,
+      positions[i + 1] + mesh.verticalOffsetM,
+      positions[i + 2] + mesh.originZ,
+    ];
+  };
+  for (let h = mesh.cellOffsets[cell]; h < mesh.cellOffsets[cell + 1]; h++) {
+    const a = vertex(mesh.cellTriangles[h * 3]);
+    const b = vertex(mesh.cellTriangles[h * 3 + 1]);
+    const c = vertex(mesh.cellTriangles[h * 3 + 2]);
+    const denominator = (b[2] - c[2]) * (a[0] - c[0])
+      + (c[0] - b[0]) * (a[2] - c[2]);
+    if (Math.abs(denominator) < 1e-9) continue;
+    const wa = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2]))
+      / denominator;
+    const wb = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2]))
+      / denominator;
+    const wc = 1 - wa - wb;
+    if (wa < -1e-6 || wb < -1e-6 || wc < -1e-6) continue;
+    const abx = b[0] - a[0], aby = b[1] - a[1], abz = b[2] - a[2];
+    const acx = c[0] - a[0], acy = c[1] - a[1], acz = c[2] - a[2];
+    let nx = aby * acz - abz * acy;
+    let ny = abz * acx - abx * acz;
+    let nz = abx * acy - aby * acx;
+    if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+    const length = Math.hypot(nx, ny, nz) || 1;
+    return {
+      yM: wa * a[1] + wb * b[1] + wc * c[1],
+      normal: [nx / length, ny / length, nz / length],
+    };
+  }
+  return undefined;
+}
+
+function sampleWaterMotion(
+  segments: readonly ProductionWaterMotionSegment[],
+  x: number,
+  z: number,
+): { bedY: number; speedMps: number | null; waterId?: string } | undefined {
+  let best: { bedY: number; speedMps: number | null; waterId?: string } | undefined;
+  for (const segment of segments) {
+    const dx = segment.bx - segment.ax, dz = segment.bz - segment.az;
+    const t = clamp(((x - segment.ax) * dx + (z - segment.az) * dz)
+      / (dx * dx + dz * dz || 1), 0, 1);
+    const px = segment.ax + dx * t, pz = segment.az + dz * t;
+    if (Math.hypot(x - px, z - pz) > segment.halfWidthM) continue;
+    const bedY = mix(segment.bedAM, segment.bedBM, t);
+    if (!best || bedY < best.bedY) {
+      best = {
+        bedY,
+        speedMps: segment.speedMps,
+        ...(segment.waterId ? { waterId: segment.waterId } : {}),
+      };
+    }
+  }
+  return best;
+}
+
+export function sampleProductionSubstrateTile(
+  tile: ProductionSubstrateTile,
+  x: number,
+  z: number,
+): SubstrateContact | undefined {
+  const { bounds, resolution: n } = tile;
+  if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) return undefined;
+  const fx = clamp((x - bounds.minX) / Math.max(1e-6, bounds.maxX - bounds.minX), 0, 1) * (n - 1);
+  const fz = clamp((z - bounds.minZ) / Math.max(1e-6, bounds.maxZ - bounds.minZ), 0, 1) * (n - 1);
+  const ix = clamp(Math.round(fx), 0, n - 1);
+  const iz = clamp(Math.round(fz), 0, n - 1);
+  const i = iz * n + ix;
+  const exactGround = tile.groundMesh
+    ? sampleGroundMesh(tile.groundMesh, tile.bounds, x, z)
+    : undefined;
+  const groundLevel = exactGround?.yM
+    ?? bilinear(tile.groundY, n, fx, fz, tile.groundY[i]);
+  const sx = (bounds.maxX - bounds.minX) / (n - 1);
+  const sz = (bounds.maxZ - bounds.minZ) / (n - 1);
+  const left = tile.groundY[iz * n + Math.max(0, ix - 1)];
+  const right = tile.groundY[iz * n + Math.min(n - 1, ix + 1)];
+  const up = tile.groundY[Math.max(0, iz - 1) * n + ix];
+  const down = tile.groundY[Math.min(n - 1, iz + 1) * n + ix];
+  const nx = -(right - left) / Math.max(1e-6, sx * 2);
+  const nz = -(down - up) / Math.max(1e-6, sz * 2);
+  const normalLength = Math.hypot(nx, 1, nz) || 1;
+  const groundNormal = exactGround?.normal
+    ?? [nx / normalLength, 1 / normalLength, nz / normalLength] as const;
+  let crossingRecord: ProductionCrossingRecord | undefined;
+  let crossingDistance = Infinity;
+  for (const candidate of tile.crossings) {
+    const distance = Math.hypot(x - candidate.x, z - candidate.z);
+    const footprint = productionCrossingFootprint(candidate);
+    const contains = footprint
+      ? pointInProductionCrossingFootprint(footprint, x, z)
+      : distance <= candidate.radiusM;
+    if (contains && distance < crossingDistance) {
+      crossingRecord = candidate;
+      crossingDistance = distance;
+    }
+  }
+  const crossing = crossingRecord && crossingRecord.kind !== 'unresolved'
+    ? crossingRecord.kind
+    // Exact oriented records outrank the 33x33 diagnostic raster. Once a tile
+    // carries records, a nearby raster cell must not smear "bridge" sideways
+    // onto exposed river beside the actual deck footprint.
+    : tile.crossings.length === 0
+      ? crossingKind(tile.crossingId[i])
+      : undefined;
+  const contact: SubstrateContact = {
+    x,
+    z,
+    ground: {
+      yM: groundLevel,
+      normal: groundNormal,
+      material: groundMaterialName(tile.groundMaterial[i]),
+    },
+    support: {
+      kind: 'ground',
+      yM: groundLevel,
+      material: groundMaterialName(tile.groundMaterial[i]),
+    },
+    crossing,
+    blockedWater: crossing === 'causeway' || tile.waterState[i] === WATER_STATE.blocked,
+  };
+
+  let exactDrive: (ProductionDriveSample & { outM: number }) | undefined;
+  for (const segment of tile.driveSegments) {
+    const dx = segment.bx - segment.ax, dz = segment.bz - segment.az;
+    const t = clamp(((x - segment.ax) * dx + (z - segment.az) * dz)
+      / (dx * dx + dz * dz || 1), 0, 1);
+    const px = segment.ax + dx * t, pz = segment.az + dz * t;
+    const distance = Math.hypot(x - px, z - pz);
+    const outM = distance - segment.halfWidthM;
+    if (outM > (segment.shoulderM ?? .8)) continue;
+    let yM = mix(segment.yaM, segment.ybM, t);
+    if (segment.crossfallA !== undefined && segment.crossfallB !== undefined) {
+      const length = Math.hypot(dx, dz) || 1;
+      const side = ((x - px) * (-dz / length) + (z - pz) * (dx / length))
+        / (segment.halfWidthM || 1);
+      yM += mix(segment.crossfallA, segment.crossfallB, t) * clamp(side, -1, 1);
+    }
+    const sample = {
+      yM,
+      material: segment.material,
+      quality: segment.quality,
+      roadId: segment.roadId,
+      outM,
+    };
+    if (!exactDrive || sample.yM > exactDrive.yM) exactDrive = sample;
+  }
+  // A crossing record is an authority, not merely a label. Tile clipping can
+  // put the semantic centre in a tile whose road segment packet is owned by a
+  // neighbour; without this fallback a built bridge was reported as "bridge"
+  // while selecting the river bed as vehicle support and resolving live fluid
+  // above it. Retain the explicit deck through the crossing footprint until
+  // direct substrate road generation removes that ownership seam.
+  const crossingFootprint = crossingRecord
+    ? productionCrossingFootprint(crossingRecord)
+    : undefined;
+  if (!exactDrive && !Number.isFinite(tile.driveY[i])
+    && crossingRecord && crossingFootprint
+    && pointInProductionCrossingFootprint(crossingFootprint, x, z)) {
+    const tx = crossingRecord.roadTangent[0];
+    const tz = crossingRecord.roadTangent[1];
+    const length = Math.hypot(tx, tz) || 1;
+    const across = Math.abs(
+      (x - crossingRecord.x) * (-tz / length)
+      + (z - crossingRecord.z) * (tx / length),
+    );
+    exactDrive = {
+      yM: crossingRecord.deckY,
+      material: tile.driveMaterial[i] === DRIVE_MATERIAL.gravel ? 'gravel' : 'asphalt',
+      quality: Math.max(.5, tile.driveQuality[i]),
+      roadId: crossingRecord.roadId,
+      outM: across - crossingRecord.roadHalfWidthM,
+    };
+  }
+  if (exactDrive) {
+    contact.driveProximity = {
+      outM: exactDrive.outM,
+      deckY: exactDrive.yM,
+      material: exactDrive.material,
+      quality: exactDrive.quality,
+      roadId: exactDrive.roadId,
+    };
+  }
+  if ((exactDrive && exactDrive.outM <= .8) || Number.isFinite(tile.driveY[i])) {
+    const roadId = tile.roadIds[tile.roadIndex[i] - 1] ?? 'production-road:unknown';
+    const material = crossing === 'ford'
+      ? 'ford'
+      : exactDrive?.material ?? driveMaterialName(tile.driveMaterial[i]);
+    contact.drive = {
+      yM: exactDrive?.yM ?? bilinear(tile.driveY, n, fx, fz, tile.driveY[i]),
+      material,
+      quality: exactDrive?.quality ?? tile.driveQuality[i],
+      roadId: exactDrive?.roadId ?? roadId,
+    };
+    contact.support = {
+      kind: 'drive',
+      yM: contact.drive.yM,
+      material,
+      featureId: contact.drive.roadId,
+    };
+  }
+
+  let exactHydro = tile.hydroField
+    ? sampleFieldSurface(tile.hydroField, x, z, 0)
+    : undefined;
+  if (exactHydro) {
+    const cut = tile.waterCoverageCutAt
+      ? clamp(tile.waterCoverageCutAt(x, z, exactHydro.kind), 0, 1)
+      : .5;
+    if (exactHydro.coverage < cut) exactHydro = undefined;
+  }
+  if (exactHydro && crossing !== 'causeway') {
+    const motion = sampleWaterMotion(tile.waterMotionSegments, x, z);
+    const bedY = motion?.bedY ?? exactHydro.restingLevelM - exactHydro.depthM;
+    const speed = motion?.speedMps ?? null;
+    const waterId = motion?.waterId
+      ?? (tile.hydroField?.bodyIds.length === 1
+        ? tile.hydroField.bodyIds[0]
+        : `${tile.key}:water`);
+    contact.water = {
+      source: 'production-hydro',
+      kind: exactHydro.kind,
+      yM: exactHydro.restingLevelM,
+      bedY,
+      depthM: Math.max(0, exactHydro.restingLevelM - bedY),
+      coverage: exactHydro.coverage,
+      shoreDistanceM: exactHydro.shoreDistanceM,
+      flow: exactHydro.flow,
+      speedMps: speed,
+      speedAuthority: speed === null ? 'unknown' : 'resolved',
+      energy: null,
+      vorticity: null,
+      fetchM: exactHydro.fetchM,
+      bedMaterial: exactHydro.bedMaterial,
+      bankMaterial: exactHydro.bankMaterial,
+      intermittent: exactHydro.intermittent,
+      tidal: exactHydro.tidal,
+      exposed: crossing !== 'culvert',
+      waterId,
+    };
+    contact.fluid = resolveFluidContact(contact.water, contact.support);
+  } else if (!exactHydro
+    && (tile.waterState[i] === WATER_STATE.exposed || tile.waterState[i] === WATER_STATE.hidden)) {
+    const kind = HYDRO_KINDS[tile.waterKind[i] - 1];
+    const waterId = tile.waterIds[tile.waterIndex[i] - 1] ?? 'production-water:unknown';
+    const speed = tile.waterSpeedMps[i];
+    contact.water = {
+      source: 'production-hydro',
+      kind: kind ?? 'river',
+      yM: bilinear(tile.waterY, n, fx, fz, tile.waterY[i]),
+      bedY: bilinear(tile.waterBedY, n, fx, fz, tile.waterBedY[i]),
+      depthM: tile.waterDepthM[i],
+      coverage: tile.waterCoverage[i],
+      shoreDistanceM: tile.waterShoreDistanceM[i],
+      flow: [tile.waterFlowX[i], tile.waterFlowZ[i]],
+      speedMps: Number.isFinite(speed) ? speed : null,
+      speedAuthority: Number.isFinite(speed) ? 'resolved' : 'unknown',
+      energy: Number.isFinite(tile.waterEnergy[i]) ? tile.waterEnergy[i] : null,
+      vorticity: Number.isFinite(tile.waterVorticity[i]) ? tile.waterVorticity[i] : null,
+      fetchM: Number.isFinite(tile.waterFetchM[i]) ? tile.waterFetchM[i] : null,
+      intermittent: (tile.waterFlags[i] & 1) !== 0,
+      tidal: (tile.waterFlags[i] & 2) !== 0,
+      exposed: tile.waterState[i] === WATER_STATE.exposed,
+      waterId,
+    };
+    contact.fluid = resolveFluidContact(contact.water, contact.support);
+  }
+
+  if (crossing === 'bridge' && contact.drive) {
+    contact.structure = {
+      kind: 'bridge-deck',
+      bottomY: contact.drive.yM - .72,
+      topY: contact.drive.yM,
+    };
+  } else if (crossing === 'culvert' && contact.drive && contact.water) {
+    contact.structure = {
+      kind: 'culvert-roof',
+      bottomY: Math.min(contact.drive.yM - .22, contact.water.yM + .28),
+      topY: contact.drive.yM - .08,
+    };
+  } else if (crossing === 'causeway' && contact.drive) {
+    contact.structure = {
+      kind: 'causeway-fill',
+      bottomY: Number.isFinite(tile.waterBedY[i]) ? tile.waterBedY[i] : contact.ground.yM,
+      topY: contact.drive.yM - .08,
+    };
+  }
+  return contact;
+}
+
+export class ProductionSubstrateStore {
+  private readonly tiles = new Map<string, ProductionSubstrateTile>();
+  private revision = 0;
+
+  upsert(tile: ProductionSubstrateTile): void {
+    const previous = this.tiles.get(tile.key);
+    if (previous && previous.revision > tile.revision) return;
+    this.tiles.set(tile.key, tile);
+    this.revision = Math.max(this.revision + 1, tile.revision);
+  }
+
+  remove(key: string): void {
+    if (this.tiles.delete(key)) this.revision++;
+  }
+
+  reset(): void {
+    if (this.tiles.size) this.revision++;
+    this.tiles.clear();
+  }
+
+  tile(key: string): ProductionSubstrateTile | undefined {
+    return this.tiles.get(key);
+  }
+
+  sample(x: number, z: number): SubstrateContact | undefined {
+    const best = this.tileAt(x, z);
+    return best ? sampleProductionSubstrateTile(best, x, z) : undefined;
+  }
+
+  debugAt(x: number, z: number): Record<string, unknown> | null {
+    const tile = this.tileAt(x, z);
+    if (!tile) return null;
+    const contact = sampleProductionSubstrateTile(tile, x, z);
+    const n = tile.resolution;
+    const fx = clamp((x - tile.bounds.minX)
+      / Math.max(1e-6, tile.bounds.maxX - tile.bounds.minX), 0, 1) * (n - 1);
+    const fz = clamp((z - tile.bounds.minZ)
+      / Math.max(1e-6, tile.bounds.maxZ - tile.bounds.minZ), 0, 1) * (n - 1);
+    const ix = clamp(Math.round(fx), 0, n - 1);
+    const iz = clamp(Math.round(fz), 0, n - 1);
+    const rasterGroundY = bilinear(
+      tile.groundY, n, fx, fz, tile.groundY[iz * n + ix],
+    );
+    return {
+      key: tile.key,
+      revision: tile.revision,
+      sourceRevisions: tile.sourceRevisions,
+      exactGround: !!tile.groundMesh,
+      terrainRenderMeshes: tile.terrainRenderMeshes.length,
+      exactHydro: !!tile.hydroField,
+      driveSegments: tile.driveSegments.length,
+      driveRenderMeshes: tile.driveRenderMeshes.length,
+      structureRenderMeshes: tile.structureRenderMeshes.length,
+      hydroDetailRenderMeshes: tile.hydroDetailRenderMeshes.length,
+      waterMotionSegments: tile.waterMotionSegments.length,
+      rasterGroundY,
+      contactGroundY: contact?.ground.yM ?? null,
+      supportY: contact?.support.yM ?? null,
+    };
+  }
+
+  /**
+   * Exact points on the current field-rendered water for browser drives and
+   * diagnostics. This replaces probes that walked retired river ribbon meshes.
+   * Segment stations are preferred because they carry bed/speed authority;
+   * field texels fill bodies without a channel vector.
+   */
+  waterPoints(
+    max = 32,
+    around?: { x: number; z: number; radiusM?: number },
+  ): ProductionWaterProbe[] {
+    const limit = clamp(Math.floor(max), 1, 256);
+    const candidates: ProductionWaterProbe[] = [];
+    const seen = new Set<string>();
+    const append = (tile: ProductionSubstrateTile, x: number, z: number): void => {
+      if (candidates.length >= limit * 8 || this.tileAt(x, z) !== tile) return;
+      if (around && Math.hypot(x - around.x, z - around.z) > (around.radiusM ?? Infinity)) return;
+      const key = `${Math.round(x * 2)},${Math.round(z * 2)}`;
+      if (seen.has(key)) return;
+      const contact = sampleProductionSubstrateTile(tile, x, z);
+      if (!contact?.water?.exposed) return;
+      seen.add(key);
+      candidates.push({
+        tileKey: tile.key,
+        x,
+        z,
+        surfaceY: contact.water.yM,
+        supportY: contact.support.yM,
+        depthAboveSupportM: contact.fluid?.depthAboveSupportM ?? null,
+        exposed: contact.water.exposed,
+        fluid: !!contact.fluid,
+        speedMps: contact.water.speedMps,
+        crossing: contact.crossing ?? null,
+      });
+    };
+
+    // Semantic crossings are first-class audit targets. Sampling only channel
+    // stations made a representative "ford" drive timing-dependent: whichever
+    // ordinary wet segment entered the store first could consume the returned
+    // probe budget before the actual crossing centre was visited.
+    for (const tile of this.tiles.values()) {
+      for (const crossing of tile.crossings) append(tile, crossing.x, crossing.z);
+    }
+    for (const tile of this.tiles.values()) {
+      for (const segment of tile.waterMotionSegments) {
+        for (const t of [.2, .5, .8]) {
+          append(
+            tile,
+            mix(segment.ax, segment.bx, t),
+            mix(segment.az, segment.bz, t),
+          );
+        }
+      }
+    }
+    for (const tile of this.tiles.values()) {
+      const field = tile.hydroField;
+      if (!field || candidates.length >= limit * 4) continue;
+      const step = Math.max(1, Math.floor(field.resolution / Math.max(3, Math.sqrt(limit))));
+      const spanX = field.bounds.maxX - field.bounds.minX;
+      const spanZ = field.bounds.maxZ - field.bounds.minZ;
+      for (let iz = Math.floor(step / 2); iz < field.resolution; iz += step) {
+        for (let ix = Math.floor(step / 2); ix < field.resolution; ix += step) {
+          append(
+            tile,
+            field.bounds.minX + (ix + .5) / field.resolution * spanX,
+            field.bounds.minZ + (iz + .5) / field.resolution * spanZ,
+          );
+        }
+      }
+    }
+    const rank = (probe: ProductionWaterProbe): number =>
+      probe.crossing === 'ford' && probe.fluid
+        ? 0
+        : probe.crossing !== null
+          ? 1
+          : probe.fluid ? 2 : 3;
+    const stable = (a: ProductionWaterProbe, b: ProductionWaterProbe): number =>
+      rank(a) - rank(b)
+      || a.tileKey.localeCompare(b.tileKey)
+      || a.x - b.x
+      || a.z - b.z;
+    if (around) {
+      candidates.sort((a, b) =>
+        rank(a) - rank(b)
+        || Math.hypot(a.x - around.x, a.z - around.z)
+        - Math.hypot(b.x - around.x, b.z - around.z)
+        || stable(a, b));
+    } else {
+      candidates.sort((a, b) =>
+        rank(a) - rank(b)
+        || (b.depthAboveSupportM ?? -Infinity) - (a.depthAboveSupportM ?? -Infinity)
+        || stable(a, b));
+    }
+    return candidates.slice(0, limit);
+  }
+
+  private tileAt(x: number, z: number): ProductionSubstrateTile | undefined {
+    let best: ProductionSubstrateTile | undefined;
+    for (const tile of this.tiles.values()) {
+      const bounds = tile.bounds;
+      // Half-open, like HydroSystem and the terrain tile store. Two inclusive
+      // max edges can otherwise make a border point read whichever neighbour
+      // happened to enter this map first.
+      if (x < bounds.minX || x >= bounds.maxX || z < bounds.minZ || z >= bounds.maxZ) continue;
+      if (!best || tile.revision > best.revision) best = tile;
+    }
+    return best;
+  }
+
+  snapshot(): ProductionSubstrateStoreSnapshot {
+    let cells = 0, roads = 0, waters = 0, crossings = 0;
+    for (const tile of this.tiles.values()) {
+      cells += tile.resolution * tile.resolution;
+      roads += new Set([
+        ...tile.roadIds,
+        ...tile.driveSegments.map((segment) => segment.roadId),
+      ]).size;
+      waters += tile.waterIds.length;
+      crossings += tile.crossings.length;
+    }
+    return {
+      tiles: this.tiles.size,
+      revision: this.revision,
+      cells,
+      roads,
+      waters,
+      crossings,
+    };
+  }
+}

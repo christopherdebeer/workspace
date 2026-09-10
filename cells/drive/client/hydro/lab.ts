@@ -31,20 +31,21 @@ const pts = (...v: number[]): Float64Array => new Float64Array(v);
 
 function area(
   id: string, kind: HydroKind, level: number, outer: number[], holes: number[][] = [],
-  tuning: Partial<Pick<HydroFeature, 'roughness' | 'turbidity' | 'intermittent' | 'tidal'>> = {},
+  tuning: Partial<Pick<HydroFeature, 'roughness' | 'turbidity' | 'bedMaterial' | 'bankMaterial' | 'intermittent' | 'tidal'>> = {},
 ): HydroFeature {
   return {
     id, source: 'authored', kind, taggedLevelM: level,
     intermittent: tuning.intermittent ?? false,
     tidal: tuning.tidal ?? false,
     roughness: tuning.roughness, turbidity: tuning.turbidity,
+    bedMaterial: tuning.bedMaterial, bankMaterial: tuning.bankMaterial,
     geometry: { type: 'area', polygons: [{ outer: pts(...outer), holes: holes.map((h) => pts(...h)) }] },
   };
 }
 
 function channel(
   id: string, kind: 'river' | 'stream' | 'canal', widthM: number, points: number[],
-  tuning: Partial<Pick<HydroFeature, 'roughness' | 'turbidity' | 'taggedLevelM'>> = {},
+  tuning: Partial<Pick<HydroFeature, 'roughness' | 'turbidity' | 'bedMaterial' | 'bankMaterial' | 'taggedLevelM'>> = {},
 ): HydroFeature {
   return {
     id, source: 'authored', kind, intermittent: false, tidal: false, ...tuning,
@@ -86,7 +87,7 @@ const FIXTURES: readonly Fixture[] = [
     features: [
       channel('lab:canal', 'canal', 12,
         [-145,-260, -120,-160, -138,-55, -90,45, -105,155, -62,260],
-        { taggedLevelM: -2.7, roughness: .12, turbidity: .45 }),
+        { taggedLevelM: -2.7, roughness: .12, turbidity: .45, bedMaterial: 'silt', bankMaterial: 'soil' }),
       area('lab:reservoir', 'reservoir', -3,
         [35,-85, 145,-92, 184,-22, 145,62, 42,78, 8,-8], [],
         { roughness: .15, turbidity: .38 }),
@@ -126,7 +127,7 @@ const FIXTURES: readonly Fixture[] = [
     features: [
       channel('lab:river', 'river', 15,
         [-28,-285, 35,-225, 68,-150, 50,-75, -18,0, -76,85, -62,165, 4,238, 38,285],
-        { roughness: .72, turbidity: .42 }),
+        { roughness: .72, turbidity: .42, bedMaterial: 'gravel', bankMaterial: 'soil' }),
     ],
   },
   {
@@ -142,7 +143,7 @@ const FIXTURES: readonly Fixture[] = [
       channel('lab:shallows', 'river', 26,
         [54,-285, -10,-230, -72,-165, -88,-95, -42,-25,
           48,45, 94,110, 62,175, -18,235, -70,285],
-        { roughness: .48, turbidity: .12 }),
+        { roughness: .48, turbidity: .12, bedMaterial: 'pebble', bankMaterial: 'gravel' }),
     ],
     rocks: [
       [-74,-151,2.2,1.2], [-82,-127,1.5,.9], [75,91,1.8,1.0],
@@ -164,7 +165,7 @@ const FIXTURES: readonly Fixture[] = [
       channel('lab:rapids', 'river', 18,
         [12,-285, -36,-225, -41,-165, -46,-130, -54,-95, -31,-30,
           40,40, 54,70, 53,100, 42,150, 38,220, -12,285],
-        { roughness: .92, turbidity: .35 }),
+        { roughness: .92, turbidity: .35, bedMaterial: 'rock', bankMaterial: 'rock' }),
     ],
     rocks: [
       [-49,-145,3.8,2.5], [-41,-126,2.5,1.7], [-55,-111,1.8,1.25],
@@ -228,15 +229,15 @@ const STYLE = [
   '.row output{text-align:right;color:#e6d694;font:9px ui-monospace,monospace}.row input[type=range]{width:100%;accent-color:#67bea0}',
   '.row input[type=number],.row select{width:100%;min-width:0;color:#dce8d5;background:#0c211c;border:1px solid #31534b;padding:5px;font-size:9px}',
   '.check{display:flex;gap:8px;align-items:center;color:#aabcb2;font-size:9px;min-height:27px}.check input{accent-color:#67bea0}',
-  '.status{position:fixed;left:16px;bottom:14px;z-index:4;max-width:min(540px,calc(100vw - 350px));background:#07100fdd;border-left:3px solid #5ca78f;padding:8px 10px;color:#b8c8bf;font:10px/1.45 ui-monospace,monospace;white-space:pre-wrap}',
+  '.status{margin:10px 0 0;background:#07100fdd;border-left:3px solid #5ca78f;padding:8px 10px;color:#b8c8bf;font:10px/1.45 ui-monospace,monospace;white-space:pre-wrap}',
   // The chrome eats 43vh on a phone, which is most of the thing you came to
   // look at. `bare` takes all of it away; the toggle itself never hides, or
   // there would be no way back.
   '.uibtn{position:fixed;right:12px;top:12px;z-index:9;min-width:34px;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;'
     + 'color:#9fd8c2;background:#07100fee;border:1px solid #31534b;font:9px/1 ui-monospace,monospace;letter-spacing:.1em;cursor:pointer;user-select:none;-webkit-user-select:none}',
   '.uibtn:active{background:#0f2a24}',
-  'body.bare .head,body.bare .hint,body.bare .panel,body.bare .status{display:none}',
-  '@media(max-width:700px){.panel{top:auto;height:43vh;width:calc(100vw - 24px)}.status{bottom:calc(43vh + 22px);max-width:calc(100vw - 32px)}.hint{display:none}}',
+  'body.bare .head,body.bare .hint,body.bare .panel,body.bare .status,body.bare .lab-dials{display:none}',
+  '@media(max-width:700px){body:not(.bare) #hydro-canvas{bottom:auto;height:57vh}.panel{top:auto;height:43vh;width:calc(100vw - 24px)}.hint{display:none}}',
 ].join('');
 
 function range(id: string, label: string, min: number, max: number, step: number, value: number): string {
@@ -270,6 +271,7 @@ function page(): string {
     + '<option>EDDIES</option><option>RAPIDS</option><option>WAKE</option><option>CUSTOM</option></select></div>'
     + range('bed','BED DETAIL',0,3,.01,1) + range('edge','BANK EDGE',0,3,.01,1)
     + range('turbulence','TURBULENCE',0,3,.01,1) + range('eddies','EDDIES',0,3,.01,1)
+    + '<label class="check"><input id="bankFeather" type="checkbox" checked> continuous bank feather</label>'
     + '<label class="check"><input id="wakeDemo" type="checkbox"> vehicle wake demo</label>'
     + range('wakeSpeed','WAKE m/s',1,12,.1,5)
     + '</details><details class="section" data-section="sampling" open><summary class="st">SAMPLING</summary>'
@@ -279,8 +281,8 @@ function page(): string {
     + '<div class="row wide"><label>FIELD px</label><select id="field"><option selected value="32">32 · PROD SCALE</option><option>64</option><option>128</option><option>256</option></select></div>'
     + '<div class="row wide"><label>MESH seg</label><select id="mesh"><option selected value="8">8 · PROD SCALE</option><option>16</option><option>32</option><option>64</option></select></div>'
     + '<label class="check"><input id="wire" type="checkbox"> water wireframe</label>'
-    + '<label class="check"><input id="ground" type="checkbox" checked> terrain visible</label></details></aside>'
-    + '<div class="status" id="status">building hydro fixture…</div></body>';
+    + '<label class="check"><input id="ground" type="checkbox" checked> terrain visible</label></details>'
+    + '<div class="status" id="status">building hydro fixture…</div></aside></body>';
 }
 
 /**
@@ -329,7 +331,10 @@ function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
   // Shore inspection needs a finer display terrain than the broad water mesh:
   // coarse, flat-shaded bank triangles otherwise masquerade as a hydro edge
   // defect when the camera comes down for pebble/eddy work.
-  const geometry = new THREE.PlaneGeometry(600, 600, 192, 192);
+  const terrainSegments = 192;
+  const geometry = new THREE.PlaneGeometry(
+    600, 600, terrainSegments, terrainSegments,
+  );
   geometry.rotateX(-Math.PI / 2);
   const p = geometry.attributes.position as THREE.BufferAttribute;
   const colour = new Float32Array(p.count * 3);
@@ -412,7 +417,8 @@ function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
     rgba[i * 4 + 3] = 255;
   }
   const terrainField = new THREE.DataTexture(
-    rgba, 193, 193, THREE.RGBAFormat, THREE.UnsignedByteType,
+    rgba, terrainSegments + 1, terrainSegments + 1,
+    THREE.RGBAFormat, THREE.UnsignedByteType,
   );
   terrainField.flipY = false;
   terrainField.minFilter = THREE.LinearFilter;
@@ -578,7 +584,8 @@ function sampleText(s: HydroSample | undefined, x: number, z: number): string {
   if (!s) return 'x ' + x.toFixed(1) + '  z ' + z.toFixed(1) + '  · DRY';
   return 'x ' + x.toFixed(1) + '  z ' + z.toFixed(1) + '  · ' + s.kind.toUpperCase()
     + '\nlevel ' + s.restingLevelM.toFixed(2) + 'm  depth ' + s.depthM.toFixed(2)
-    + 'm  shore ' + s.shoreDistanceM.toFixed(1) + 'm'
+    + 'm  shore ' + s.shoreDistanceM.toFixed(1) + 'm  bed ' + s.bedMaterial.toUpperCase()
+    + ' / bank ' + s.bankMaterial.toUpperCase()
     + '\nflow ' + s.flow[0].toFixed(2) + ',' + s.flow[1].toFixed(2)
     + '  fetch ' + s.fetchM.toFixed(0) + 'm';
 }
@@ -677,14 +684,26 @@ export async function startHydroLab(): Promise<void> {
     target.set(0, 0, 0);
     yaw = HOME.yaw;
     if (mode === 'DETAIL') {
-      pitch = .72;
-      distance = 245;
+      // A low grazing view lets the near bank hide the channel, especially in
+      // the phone layout where controls own the lower 43% of the screen. The
+      // detail view is an inspection plan: steep enough to keep both banks,
+      // shallows and the downstream rapid visible together.
+      pitch = 1.12;
+      distance = 175;
     } else {
       pitch = HOME.pitch;
       distance = HOME.distance;
     }
     placeCamera();
   };
+  const resizeView = (): void => {
+    const width = Math.max(1, canvas.clientWidth);
+    const height = Math.max(1, canvas.clientHeight);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height, false);
+  };
+  resizeView();
   placeCamera();
 
   let hydro: HydroSystem | undefined;
@@ -719,7 +738,13 @@ export async function startHydroLab(): Promise<void> {
     hydro.setTuning(tune());
     hydro.object3d.traverse((o) => {
       const m = o as THREE.Mesh;
-      if (m.material instanceof THREE.ShaderMaterial) m.material.wireframe = get<HTMLInputElement>('wire').checked;
+      if (m.material instanceof THREE.ShaderMaterial) {
+        m.material.wireframe = get<HTMLInputElement>('wire').checked;
+        if (m.name.endsWith(':edge-blend')) {
+          const edge = m.material.uniforms.uEdgeBlendEnabled;
+          if (edge) edge.value = get<HTMLInputElement>('bankFeather').checked ? 1 : 0;
+        }
+      }
     });
   };
 
@@ -815,6 +840,7 @@ export async function startHydroLab(): Promise<void> {
     setCameraMode(get<HTMLSelectElement>('cameraMode').value);
   });
   get<HTMLInputElement>('wire').addEventListener('change', apply);
+  get<HTMLInputElement>('bankFeather').addEventListener('change', apply);
   get<HTMLInputElement>('wakeDemo').addEventListener('change', () => {
     if (!get<HTMLInputElement>('wakeDemo').checked) rigMarker.visible = false;
   });
@@ -919,6 +945,10 @@ export async function startHydroLab(): Promise<void> {
     document.body.classList.toggle('bare', on);
     uibtn.textContent = on ? 'SHOW' : 'HIDE';
     uibtn.title = on ? 'show the panels (H)' : 'hide the panels (H)';
+    // The phone canvas owns only the space above the dial rack. Recompute its
+    // real drawing buffer when the rack is removed/restored instead of
+    // stretching a full-screen camera behind an opaque panel.
+    requestAnimationFrame(resizeView);
   };
   uibtn.addEventListener('click', () => setBare(!document.body.classList.contains('bare')));
   addEventListener('keydown', (e) => {
@@ -929,9 +959,7 @@ export async function startHydroLab(): Promise<void> {
     if (e.key === 'r' || e.key === 'R') resetView();
   });
 
-  addEventListener('resize', () => {
-    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight, false);
-  });
+  addEventListener('resize', resizeView);
 
   // ── THE SAME BARGAIN AS EVERY OTHER LAB ──
   // This lab built its own controls long before there was a shared panel, so
@@ -943,7 +971,7 @@ export async function startHydroLab(): Promise<void> {
     adopt: ['fixture', 'debug', 'ocean', 'field', 'mesh', 'wire', 'ground',
       'wind', 'direction', 'rain', 'amplitude', 'length', 'ripple', 'foam', 'shore',
       'cameraMode', 'detailPreset', 'bed', 'edge', 'turbulence', 'eddies',
-      'wakeDemo', 'wakeSpeed'],
+      'bankFeather', 'wakeDemo', 'wakeSpeed'],
   });
 
   await rebuild();
@@ -985,10 +1013,16 @@ export async function startHydroLab(): Promise<void> {
     if (now - lastStatus > 180) {
       lastStatus = now;
       const stats = hydro?.stats();
+      let edgeBodies = 0;
+      hydro?.object3d.traverse((o) => {
+        if ((o as THREE.Mesh).name.endsWith(':edge-blend')) edgeBodies++;
+      });
       get('status').textContent = fixture.label + ' · FIELD ' + get<HTMLSelectElement>('field').value
         + '² · MESH ' + get<HTMLSelectElement>('mesh').value + '²\n'
         + (stats?.visibleTiles ?? 0) + ' WATER TILE · ' + renderer.info.render.triangles.toLocaleString()
         + ' TRIANGLES · ' + get<HTMLSelectElement>('debug').value.toUpperCase() + '\n'
+        + 'BANK FEATHER ' + (get<HTMLInputElement>('bankFeather').checked ? 'ON' : 'OFF')
+        + ' · ' + edgeBodies + ' BODY' + (edgeBodies === 1 ? '' : 'IES') + '\n'
         + (inspected || 'point at the terrain to inspect the CPU hydro sample');
     }
     requestAnimationFrame(frame);

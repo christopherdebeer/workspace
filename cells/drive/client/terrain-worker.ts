@@ -14,7 +14,7 @@
  * rasterised; shipping the few hundred near the tile costs tens of
  * kilobytes and cannot go stale.
  */
-import { createTerrainKernel, type HeightTile, type CoverTile, type StripLike, type Rgb, type AreaPatchLike, type TerrainStore, type CarveLog } from './terrain-kernel';
+import { createTerrainKernel, type HeightTile, type CoverTile, type StripLike, type Rgb, type AreaPatchLike, type TerrainCrossingMask, type TerrainStore, type CarveLog } from './terrain-kernel';
 
 export interface TerrainJob {
   id: number; epoch: number; key: string;
@@ -30,6 +30,7 @@ export interface TerrainJob {
   origin: { lat: number; lon: number; mLon: number };
   strips: Float64Array; stripCells: Array<[string, number[]]>;
   channels: Float64Array; chanCells: Array<[string, number[]]>;
+  crossings: TerrainCrossingMask[];
   areas: AreaPatchLike[];
   pads: Float64Array;
   clim: Float32Array; climN: number; climK: number;
@@ -102,6 +103,7 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
         sampleCover: sampler.sampleCover,
         coverPaint: (x, z) => sampler.coverPaint(x, z, job.water),
         coverWater: (x, z) => sampler.coverWater(x, z, job.water),
+        crossingAt: (x, z) => K.crossingKindAt(job.crossings, x, z),
         cover: { water: job.water, built: job.built },
         seaAbs: () => job.seaAbs, baseElev: job.baseElev,
         strips, cutL: job.cutL, channels, grid: job.grid,

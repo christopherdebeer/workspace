@@ -30,6 +30,15 @@ export interface TileBuild {
   pos: Float32Array; uv: Float32Array; idx: Uint32Array; colors: Float32Array; normals: Float32Array;
   kinds: Uint8Array | null; cellTris: CellTris; refined: boolean; corridor: boolean;
 }
+export type TerrainCrossingKind = 'bridge' | 'culvert' | 'ford' | 'causeway';
+export interface TerrainCrossingMask {
+  kind: TerrainCrossingKind;
+  x: number;
+  z: number;
+  roadTangent: readonly [number, number];
+  halfLengthM: number;
+  halfWidthM: number;
+}
 /** The world, as the build asks it. Getters on the main thread; a mirror in a worker. */
 export interface TerrainStore {
   readonly heights: Map<string, HeightTile>;
@@ -39,6 +48,7 @@ export interface TerrainStore {
   sampleCover(x: number, z: number): number | null;
   coverPaint(x: number, z: number): number | null;
   coverWater(x: number, z: number): boolean;
+  crossingAt(x: number, z: number): TerrainCrossingKind | null;
   readonly cover: { water: number; built: number };
   seaAbs(): number;
   readonly baseElev: number;
@@ -179,6 +189,31 @@ export function createTerrainKernel() {
   function nanScan(pos: Float32Array, phase: string, key: string): void {
     if (plainCost.nan) return;
     for (let i = 1; i < pos.length; i += 3) if (!Number.isFinite(pos[i])) { plainCost.nan = `${phase} ${key} v${(i - 1) / 3} x=${pos[i - 1]} z=${pos[i + 1]}`; return; }
+  }
+
+  function crossingKindAt(
+    crossings: readonly TerrainCrossingMask[],
+    x: number,
+    z: number,
+  ): TerrainCrossingKind | null {
+    let best: TerrainCrossingMask | null = null;
+    let bestDistance = Infinity;
+    for (const crossing of crossings) {
+      const tx = crossing.roadTangent[0];
+      const tz = crossing.roadTangent[1];
+      const length = Math.hypot(tx, tz) || 1;
+      const ux = tx / length;
+      const uz = tz / length;
+      const dx = x - crossing.x;
+      const dz = z - crossing.z;
+      if (Math.abs(dx * ux + dz * uz) > crossing.halfLengthM
+        || Math.abs(dx * -uz + dz * ux) > crossing.halfWidthM) continue;
+      const distance = dx * dx + dz * dz;
+      if (distance >= bestDistance) continue;
+      best = crossing;
+      bestDistance = distance;
+    }
+    return best?.kind ?? null;
   }
 
   /** How far out along (ox,oz) from a crest point (cx,cz) whose floor is y the
@@ -453,8 +488,14 @@ export function createTerrainKernel() {
       } else {
         const bank = y - f.out * BANK_K;
         if (bank <= N) continue;
-        // Water takes no bank, and neither does a deck standing in the air.
-        if (wet === null) wet = S.coverWater(x, z);
+        // Ordinary wet ground takes no road bank. Canonical culverts, fords
+        // and causeways do: their road earthwork is real, while a bridge
+        // remains an open deck and an unresolved overlap retains the legacy
+        // conservative answer.
+        if (wet === null) {
+          const crossing = S.crossingAt(x, z);
+          wet = S.coverWater(x, z) && (crossing === null || crossing === 'bridge');
+        }
         if (wet || y - crestGround(S, s, x, z) > DECK_GAP_T) continue;
         up = Math.max(up, bank);
       }
@@ -466,7 +507,10 @@ export function createTerrainKernel() {
       // embankment is solid — unless the road stands clear, or this is water.
       if (N >= floor) return { h: floor, k: 1 };
       const structure = nearY - crestGround(S, near, x, z) > DECK_GAP_T;
-      return structure || S.coverWater(x, z) ? { h: N, k: 0 } : { h: floor, k: 1 };
+      const crossing = S.crossingAt(x, z);
+      const waterBlocksFill = S.coverWater(x, z)
+        && (crossing === null || crossing === 'bridge');
+      return structure || waterBlocksFill ? { h: N, k: 0 } : { h: floor, k: 1 };
     }
     if (up > -Infinity) return { h: up, k: 3 };
     if (down < Infinity) return { h: down, k: 2 };
@@ -566,6 +610,57 @@ export function createTerrainKernel() {
     const lines: BreakLine[] = [];
     const ordered = [...near].sort((a, b) => b.hw - a.hw);
     for (const s of ordered) for (const L of stripBreakLines(S, s)) lines.push(L);
+    // A NARROW CHANNEL MUST BE TOPOLOGY AT A ROAD CROSSING, not merely a
+    // height query against whatever road-refined vertices happen to exist.
+    //
+    // Channel carving used to lower vertices inside the bed after the road
+    // mesh was triangulated. Where no vertex landed on the centreline, one
+    // triangle bridged the trench: the production culvert probe measured its
+    // terrain 2.43m above the recorded invert even though channelFloorAt had
+    // the correct answer. Split the crossing cells along the channel centre
+    // and bed edges first. Those lines become actual triangle edges, so the
+    // later carve constrains the interpolated surface all the way through the
+    // road without refining every river tile in the world.
+    const crossingChannels = new Set<StripLike>();
+    if (near.size) {
+      const gx0 = Math.floor(t.xs / S.grid) - 1;
+      const gx1 = Math.floor((t.xs + t.w) / S.grid) + 1;
+      const gz0 = Math.floor(t.zs / S.grid) - 1;
+      const gz1 = Math.floor((t.zs + t.h) / S.grid) + 1;
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gz = gz0; gz <= gz1; gz++) {
+          for (const channel of S.channels.get(`${gx},${gz}`) ?? []) {
+            const touchesRoad = ordered.some((road) => {
+              const reach = road.hw + channel.hw + 3;
+              return segTouchesBox(
+                channel,
+                Math.min(road.ax, road.bx) - reach,
+                Math.max(road.ax, road.bx) + reach,
+                Math.min(road.az, road.bz) - reach,
+                Math.max(road.az, road.bz) + reach,
+              );
+            });
+            if (touchesRoad) crossingChannels.add(channel);
+          }
+        }
+      }
+    }
+    for (const channel of crossingChannels) {
+      const dx = channel.bx - channel.ax;
+      const dz = channel.bz - channel.az;
+      const length = Math.hypot(dx, dz);
+      if (length < .5) continue;
+      const nx = -dz / length;
+      const nz = dx / length;
+      for (const offset of [-channel.hw, 0, channel.hw]) {
+        lines.push({
+          ax: channel.ax + nx * offset,
+          az: channel.az + nz * offset,
+          bx: channel.bx + nx * offset,
+          bz: channel.bz + nz * offset,
+        });
+      }
+    }
     const cellLines = new Map<number, number[]>();
     const close = new Uint8Array(SEG * SEG);
     for (const s of near) {
@@ -1095,24 +1190,11 @@ export function createTerrainKernel() {
   }
   const chanSet = new Set<StripLike>();
   /**
-   * THE BED, as a ceiling on the terrain — but never under a carriageway.
+   * THE BED, as a ceiling on the terrain — controlled by crossing authority.
    *
-   * A watercourse cuts its own channel, or it is a blue stripe lying on top of
-   * the countryside. The exception is the whole point of a culvert: where a road
-   * passes over, the ground must stay up to hold the road, and the water goes
-   * through the bore instead. So this returns null on tarmac, which leaves an
-   * open channel on each side and a plug of earth between them for the road to
-   * sit on and the bore to pass through.
-   */
-  /**
-   * THE BED, as a ceiling on the terrain — but never under a carriageway.
-   *
-   * A watercourse cuts its own channel, or it is a blue stripe lying on top of
-   * the countryside. The exception is the whole point of a culvert: where a road
-   * passes over, the ground must stay up to hold the road, and the water goes
-   * through the bore instead. So this returns null on tarmac, which leaves an
-   * open channel on each side and a plug of earth between them for the road to
-   * sit on and the bore to pass through.
+   * Bridge, culvert and ford channels remain continuous under the road.
+   * Causeways deliberately retain the earth plug. An unresolved overlap keeps
+   * the legacy plug until a real authority exists.
    */
   function channelFloorAt(S: TerrainStore, x: number, z: number, ceiling: number): number | null {
     chanSet.clear();
@@ -1135,7 +1217,10 @@ export function createTerrainKernel() {
     // The vertex is only interesting if the bed would actually lower it, and that
     // is a handful of arithmetic; the walk is asked of those alone.
     if (best === null || best >= ceiling) return null;
-    if (S.onRoad(x, z)) return null;   // the road's plug of earth
+    if (S.onRoad(x, z)) {
+      const crossing = S.crossingAt(x, z);
+      if (crossing === null || crossing === 'causeway') return null;
+    }
     return best;
   }
   /**
@@ -1800,6 +1885,7 @@ export function createTerrainKernel() {
   return {
     buildTile, borderShared, roadFloorHard, corridorH, stripBreakLines, stripFloor, cellTable, normalMapBytes, plainLattice, vertexNormals,
     refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear, makeSampler, makePalette, areaTintOf, onRoadOf, hydroElevation,
+    crossingKindAt,
     BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX, RELIEF_MIN,
   };
 }

@@ -36,6 +36,12 @@ export interface LabEntry {
 
 export const LABS: readonly LabEntry[] = [
   {
+    slug: 'substrate',
+    label: 'SUBSTRATE',
+    note: 'Terrain, road, river and crossing resolved as one layered tile: bridge, culvert, ford and causeway with vehicle support, immersion and retained evidence.',
+    start: () => import('./substrate/lab').then((m) => m.startSubstrateLab()),
+  },
+  {
     slug: 'hydro',
     label: 'HYDRO',
     note: 'Water fields, coastlines and river profiles over authored terrain fixtures.',

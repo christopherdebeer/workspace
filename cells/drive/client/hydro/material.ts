@@ -181,16 +181,18 @@ export function createHydroMaterial(
   flowing = false,
   surf = false,
   shade?: SceneShade,
+  edgeBlend = false,
 ): THREE.ShaderMaterial {
   const centralScale = field.resolution / field.width;
   const offset = field.gutter / field.width;
-  const suffix = `${flowing ? ':flowing' : ''}${surf ? ':surf' : ''}`;
+  const suffix = `${flowing ? ':flowing' : ''}${surf ? ':surf' : ''}${edgeBlend ? ':edge-blend' : ''}`;
   return new THREE.ShaderMaterial({
     name: `hydro:${field.key}${suffix}`,
     defines: {
       ...(flowing ? { HYDRO_FLOWING: 1 } : {}),
       ...(flowing && textures.waterfalls ? { HYDRO_FALLS: 1 } : {}),
       ...(surf ? { HYDRO_SURF: 1 } : {}),
+      ...(edgeBlend ? { HYDRO_EDGE_BLEND: 1 } : {}),
       ...(shade ? { HYDRO_SCENE_SHADE: 1 } : {}),
     },
     vertexShader: HYDRO_VERTEX_SHADER,
@@ -265,6 +267,7 @@ export function createHydroMaterial(
       uRiverEdgeStrength: frame.uRiverEdgeStrength,
       uTurbulenceStrength: frame.uTurbulenceStrength,
       uEddyStrength: frame.uEddyStrength,
+      uEdgeBlendEnabled: { value: edgeBlend ? 1 : 0 },
     },
     // ── A SURFACE YOU CAN BE UNDERNEATH ──
     //
@@ -276,6 +279,9 @@ export function createHydroMaterial(
     // the substance of that; this is so the remaining centimetre of it does
     // not disappear rather than showing a surface.
     side: THREE.DoubleSide,
+    // Inland edge cohesion is an opaque terrain-colour handoff inside the
+    // depth-writing body. Transparency exposed the terrain mesh's triangles
+    // through the river and created a worse sawtooth fringe.
     transparent: false,
     depthTest: true,
     depthWrite: true,

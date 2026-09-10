@@ -458,7 +458,7 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
   {
     id: 'structures',
     label: 'HOSTILE STRUCTURE CROSSINGS',
-    note: 'A tagged arch bridge whose nominal pier rhythm lands on three roads, a bored tunnel under a live surface crossing, and a stream conduit under a cutting. The geometry is intentionally hostile: every decorative support has a tempting but illegal place to stand. Clearance counters should report refusals while all carriageways remain open.',
+    note: 'A tagged arch bridge whose nominal pier rhythm lands on three roads, a bored tunnel under a live surface crossing, an explicit stream conduit under a cutting, and a tagged causeway that must not acquire a second conduit. The geometry is intentionally hostile: every decorative support has a tempting but illegal place to stand. Clearance counters should report refusals while all carriageways remain open.',
     spawn: { lat: HOME.lat, lon: HOME.lon, heading: 90 },
     height: (e, s, t) => {
       const base = t.lift + 320;
@@ -489,8 +489,14 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
         pts: through(420, 0, 90, 480) },
       { id: 7, tags: { highway: 'secondary', name: 'Conduit Road', surface: t.surface },
         pts: through(-420, 0, 90, 520) },
-      { id: 8, tags: { waterway: 'stream', name: 'Conduit Stream', width: '4' },
+      { id: 8, tags: { waterway: 'stream', name: 'Conduit Stream', width: '4',
+          tunnel: 'culvert' },
         pts: through(-420, 0, 0, 480) },
+      { id: 9, tags: { highway: 'secondary', name: 'Causeway Road', surface: t.surface,
+          embankment: 'yes' },
+        pts: through(650, 260, 90, 360) },
+      { id: 10, tags: { waterway: 'stream', name: 'Causeway Stream', width: '4' },
+        pts: through(650, 260, 0, 300) },
     ],
   },
   {

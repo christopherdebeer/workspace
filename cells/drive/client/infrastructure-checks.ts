@@ -77,6 +77,13 @@ export function runInfrastructureChecks(): InfrastructureCheck[] {
   add('minor crossing fallback', lowFord.family === 'ford' && lowFord.geometry.silhouette === 'open-crossing',
     'small minor crossing becomes an open ford, not a larger buried bore');
 
+  const taggedLowCulvert = pickInfrastructureRecipe({ ...CHECK_CONTEXT, key: 'way/check-tagged-culvert',
+    kind: 'conduit', tier: 2, waterWidthM: 4.5, availableClearanceM: 0.46,
+    taggedStructure: 'culvert' });
+  add('tagged low culvert precedence',
+    taggedLowCulvert.family === 'pipe' && taggedLowCulvert.feasible,
+    'explicit culvert remains a compact conduit when measured room is safe');
+
   const line = [{ x: -60, z: 4 }, { x: 10, z: 8 }, { x: 90, z: 20 }];
   const ca = canonicalAlignment(line), cb = canonicalAlignment(line.slice().reverse());
   add('reverse-order alignment', eq(ca.points, cb.points) && ca.lengthM === cb.lengthM,

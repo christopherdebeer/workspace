@@ -13,6 +13,12 @@ import {
 } from './geometry';
 import {
   DEFAULT_HYDRO_BUILD,
+  HYDRO_BANK_ID,
+  HYDRO_BANK_MASK,
+  HYDRO_BANK_SHIFT,
+  HYDRO_BED_ID,
+  HYDRO_BED_MASK,
+  HYDRO_BED_SHIFT,
   HYDRO_KIND_ID,
   HydroFlags,
   type HydroBody,
@@ -270,6 +276,8 @@ export function analyseHydroTile(input: HydroTileInput): HydroTileAnalysis {
       fetchM: fetchFor(feature),
       roughness: feature.roughness,
       turbidity: feature.turbidity,
+      bedMaterial: feature.bedMaterial,
+      bankMaterial: feature.bankMaterial,
       intermittent: feature.intermittent,
       tidal: feature.tidal,
     });
@@ -771,7 +779,15 @@ export function buildHydroTile(
   // WHAT A BODY PAINTS IS THE SAME AT EVERY TEXEL — its priority, kind id,
   // seed, turbidity, flags and flat wave scale were recomputed per paint,
   // twelve thousand times for one wide river in one tile. Once per body.
-  interface BodyConsts { p: number; flowing: boolean; scaleFlat: number; kindId: number; seed: number; turb: number; flags: number }
+  interface BodyConsts {
+    p: number;
+    flowing: boolean;
+    scaleFlat: number;
+    kindId: number;
+    seed: number;
+    turb: number;
+    flags: number;
+  }
   const bodyConsts = new Map<HydroBody, BodyConsts>();
   const constsOf = (body: HydroBody): BodyConsts => {
     let c = bodyConsts.get(body);
@@ -782,7 +798,11 @@ export function buildHydroTile(
         p: priority(body.kind), flowing, scaleFlat: flowing ? Math.min(0.15, ws) : ws,
         kindId: HYDRO_KIND_ID[body.kind],
         seed: Math.round(clamp(body.seed, 0, 1) * 255), turb: Math.round(clamp(body.turbidity, 0, 1) * 255),
-        flags: (body.intermittent ? HydroFlags.Intermittent : 0) | (body.tidal ? HydroFlags.Tidal : 0) | (flowing ? HydroFlags.Flowing : 0),
+        flags: (body.intermittent ? HydroFlags.Intermittent : 0)
+          | (body.tidal ? HydroFlags.Tidal : 0)
+          | (flowing ? HydroFlags.Flowing : 0)
+          | ((HYDRO_BED_ID[body.bedMaterial] << HYDRO_BED_SHIFT) & HYDRO_BED_MASK)
+          | ((HYDRO_BANK_ID[body.bankMaterial] << HYDRO_BANK_SHIFT) & HYDRO_BANK_MASK),
       };
       bodyConsts.set(body, c);
     }
@@ -1175,6 +1195,35 @@ export function buildHydroTile(
       if (mean >= 0.5 && src[i] < mean) coverage[i] = Math.min(1, Math.max(coverage[i], mean * 1.15));
     }
   }
+  // ── STRUCTURES OWN SURFACE VISIBILITY ──
+  //
+  // A culvert carries water below the road and a causeway blocks it with fill;
+  // neither has a visible free surface through the carriageway. Applying the
+  // mask after continuity repair and last-known-good retention is essential:
+  // either pass would otherwise paint the deliberately hidden strip back in.
+  //
+  // The rectangle is road-aligned. Its short axis is the carriageway width;
+  // its long axis spans the channel and banks. Coverage fades over one field
+  // texel so the conduit mouths meet open water without a raster-hard cut.
+  for (const occluder of input.surfaceOccluders ?? []) {
+    const length = Math.hypot(occluder.roadTangent[0], occluder.roadTangent[1]) || 1;
+    const tx = occluder.roadTangent[0] / length;
+    const tz = occluder.roadTangent[1] / length;
+    const nx = -tz, nz = tx;
+    const halfLength = Math.max(.5, occluder.halfLengthM);
+    const halfWidth = Math.max(.5, occluder.roadHalfWidthM);
+    const feather = Math.max(.25, Math.max(Math.abs(pixelX), Math.abs(pixelZ)) * .75);
+    for (let iz = 0; iz < height; iz++) for (let ix = 0; ix < width; ix++) {
+      const i = iz * width + ix;
+      if (coverage[i] <= .005) continue;
+      const dx = xAt(ix) - occluder.x, dz = zAt(iz) - occluder.z;
+      const along = Math.abs(dx * tx + dz * tz) - halfLength;
+      const across = Math.abs(dx * nx + dz * nz) - halfWidth;
+      const outside = Math.max(along, across);
+      const keep = clamp(.5 + outside / feather, 0, 1);
+      coverage[i] *= keep;
+    }
+  }
   const wet = new Uint8Array(count);
   const waterLevels: number[] = [];
   let hasWater = false;
@@ -1215,6 +1264,13 @@ export function buildHydroTile(
   const geometry = new Float32Array(count * 4);
   const dynamics = new Float32Array(count * 4);
   const material = new Uint8Array(count * 4);
+  const ground = new Float32Array(count);
+  for (let iz = 0; iz < height; iz++) for (let ix = 0; ix < width; ix++) {
+    const sampled = sampleElevation(input.elevation, input.bounds, xAt(ix), zAt(iz));
+    ground[iz * width + ix] = Number.isFinite(sampled)
+      ? sampled - elevationBaseM
+      : 0;
+  }
   for (let i = 0; i < count; i++) {
     const signedCells = wet[i] ? toDry[i] : -toWet[i];
     geometry[i * 4] = coverage[i];
@@ -1253,6 +1309,7 @@ export function buildHydroTile(
     width,
     height,
     elevationBaseM,
+    ground,
     geometry,
     dynamics,
     material,

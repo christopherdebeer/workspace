@@ -1,5 +1,12 @@
 import { hashString, quantile } from './geometry';
-import type { HydroBody, HydroBodyObservation, HydroKind, TileKey } from './types';
+import type {
+  HydroBedMaterial,
+  HydroBankMaterial,
+  HydroBody,
+  HydroBodyObservation,
+  HydroKind,
+  TileKey,
+} from './types';
 
 const ROUGHNESS: Record<HydroKind, number> = {
   ocean: 0.72,
@@ -25,6 +32,32 @@ const TURBIDITY: Record<HydroKind, number> = {
   stream: 0.38,
   canal: 0.5,
   wetland: 0.78,
+};
+
+const BED_MATERIAL: Record<HydroKind, HydroBedMaterial> = {
+  ocean: 'sand',
+  lagoon: 'silt',
+  lake: 'silt',
+  pond: 'silt',
+  reservoir: 'gravel',
+  basin: 'silt',
+  river: 'gravel',
+  stream: 'pebble',
+  canal: 'silt',
+  wetland: 'silt',
+};
+
+const BANK_MATERIAL: Record<HydroKind, HydroBankMaterial> = {
+  ocean: 'soil',
+  lagoon: 'mud',
+  lake: 'soil',
+  pond: 'mud',
+  reservoir: 'gravel',
+  basin: 'mud',
+  river: 'gravel',
+  stream: 'gravel',
+  canal: 'soil',
+  wetland: 'mud',
 };
 
 interface BodyState {
@@ -65,6 +98,8 @@ function bodyEquivalent(a: HydroBody | undefined, b: HydroBody): boolean {
     || Math.abs(a.flow[1] - b.flow[1]) > 0.01
     || Math.abs(a.roughness - b.roughness) > 0.01
     || Math.abs(a.turbidity - b.turbidity) > 0.01
+    || a.bedMaterial !== b.bedMaterial
+    || a.bankMaterial !== b.bankMaterial
     || a.intermittent !== b.intermittent
     || a.tidal !== b.tidal) return false;
   if (a.level.type === 'flat' && b.level.type === 'flat') {
@@ -84,6 +119,22 @@ function bodyEquivalent(a: HydroBody | undefined, b: HydroBody): boolean {
 
 function median(values: number[]): number | undefined {
   return quantile(values, 0.5);
+}
+
+function categoricalMode<T extends string>(values: readonly T[]): T | undefined {
+  if (!values.length) return undefined;
+  const counts = new Map<T, number>();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  let winner = values[0];
+  let winnerCount = counts.get(winner) ?? 0;
+  for (const value of values) {
+    const count = counts.get(value) ?? 0;
+    if (count > winnerCount) {
+      winner = value;
+      winnerCount = count;
+    }
+  }
+  return winner;
 }
 
 /**
@@ -314,6 +365,14 @@ export class HydroBodyRegistry {
       ?? ROUGHNESS[kind];
     const turbidity = median(observations.map((o) => o.turbidity).filter((v): v is number => v !== undefined))
       ?? TURBIDITY[kind];
+    const bedMaterial = categoricalMode(
+      observations.map((o) => o.bedMaterial)
+        .filter((v): v is HydroBedMaterial => v !== undefined),
+    ) ?? BED_MATERIAL[kind];
+    const bankMaterial = categoricalMode(
+      observations.map((o) => o.bankMaterial)
+        .filter((v): v is HydroBankMaterial => v !== undefined),
+    ) ?? BANK_MATERIAL[kind];
     return {
       id,
       kind,
@@ -323,6 +382,8 @@ export class HydroBodyRegistry {
       seed: hashString(id) / 0xffffffff,
       roughness,
       turbidity,
+      bedMaterial,
+      bankMaterial,
       intermittent: observations.some((o) => o.intermittent),
       tidal: observations.some((o) => o.tidal),
       version: state.body?.version ?? 1,

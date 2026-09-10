@@ -1,4 +1,15 @@
-import { HYDRO_ID_KIND, HydroFlags, type HydroTileField, type HydroSample } from './hydro/types';
+import {
+  HYDRO_BED_MASK,
+  HYDRO_BED_SHIFT,
+  HYDRO_BANK_MASK,
+  HYDRO_BANK_SHIFT,
+  HYDRO_ID_BED,
+  HYDRO_ID_BANK,
+  HYDRO_ID_KIND,
+  HydroFlags,
+  type HydroTileField,
+  type HydroSample,
+} from './hydro/types';
 import { sampleFieldSurface } from './hydro/field-sample';
 /** Shared inland-bank art rules. No water is invented when the field is absent.
  * Geometry/depth remain the hydro system's authority; these are habitat weights. */
@@ -104,10 +115,13 @@ export function sampleBankField(f: HydroTileField, x: number, z: number,
   }
   if (best < 0) return undefined;
   const flags = f.material[best+3];
+  const bedMaterial = HYDRO_ID_BED[(flags & HYDRO_BED_MASK) >> HYDRO_BED_SHIFT] ?? 'silt';
+  const bankMaterial = HYDRO_ID_BANK[(flags & HYDRO_BANK_MASK) >> HYDRO_BANK_SHIFT] ?? 'soil';
   return { wet: false, kind: HYDRO_ID_KIND[f.material[best]], coverage: drawn?.coverage ?? 0,
     restingLevelM: f.elevationBaseM+f.geometry[best+2],
     shoreDistanceM: Math.min(0, f.geometry[centre+1]), depthM: f.geometry[best+3],
     flow: [f.dynamics[best],f.dynamics[best+1]], fetchM: f.dynamics[best+2],
+    bedMaterial, bankMaterial,
     intermittent: (flags & HydroFlags.Intermittent)!==0,
     tidal: (flags & HydroFlags.Tidal)!==0 };
 }
