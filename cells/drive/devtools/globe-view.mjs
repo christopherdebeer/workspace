@@ -28,6 +28,17 @@ for (const z of ZOOMS) {
     if (await page.evaluate(() => window.__globe().tex)) break;
     await new Promise((r) => setTimeout(r, 500));
   }
+  // AND THE RING. A frame taken while the shell is still landing is a frame
+  // of one tile standing on the planet with its neighbours missing — which is
+  // exactly what a broken placement would look like, and proves nothing. The
+  // shell only draws below the hand-over, so past it there is nothing to wait
+  // for.
+  for (let i = 0; i < 100; i++) {
+    const f = await page.evaluate(() => { const x = window.__far(); const g = window.__globe(); return { home: x.inFlight === 0 && x.queued === 0 && x.tiles >= x.asked, free: g.free }; });
+    if (f.free > 0 || f.home) break;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  console.log(`  far: ${JSON.stringify(await page.evaluate(() => { const x = window.__far(); return { tiles: x.tiles, asked: x.asked, level: x.level, sphere: x.sphere, seam: x.seam }; }))}`);
   const g = await page.evaluate(() => window.__globe());
   const sky = await page.evaluate(() => window.__sky());
   console.log(`\nzoom ${z}: ${JSON.stringify(g)}`);

@@ -30241,6 +30241,32 @@ let texMeanCache: Record<string, number> | null = null;
 };
 (window as unknown as { __far?: object }).__far = (): object =>
   ({ tiles: farMeshes.size, asked: farTiles.size, inFlight: farInFlight, queued: farQueue.length,
+    // ON THE SPHERE, AS A NUMBER. Over a sample of every tile's vertices: the
+    // vertex's height over the datum (its planet radius less R) against the
+    // raster's own height at that lat/lon less the drop — zero by construction
+    // (sphereRTC), and the witness that stays. The raster is read at both
+    // pixels a rounded coordinate could land on, so a half-texel does not
+    // report a pixel's relief as an error.
+    sphere: (() => {
+      let worst = 0, n = 0;
+      for (const [key, m] of farMeshes) {
+        const r = farRasters.get(key);
+        if (!r) continue;
+        const p = m.geometry.getAttribute('position') as THREE.BufferAttribute;
+        for (let i = 0; i < p.count; i += 97) {
+          const [la, lo, h] = sphereLatLon(sphV.set(p.getX(i), p.getY(i), p.getZ(i)).add(m.position));
+          const [x, z] = toLocal(la, lo);
+          const fu = ((x - r.xs) / r.w) * 255, fv = ((z - r.zs) / r.h) * 255;
+          let best = Infinity;
+          for (const u of [Math.floor(fu), Math.ceil(fu)]) for (const v of [Math.floor(fv), Math.ceil(fv)]) {
+            const want = r.data[clamp(v, 0, 255) * 256 + clamp(u, 0, 255)] - baseElev - FAR_DROP;
+            best = Math.min(best, Math.abs(h - want));
+          }
+          worst = Math.max(worst, best); n++;
+        }
+      }
+      return { n, worstM: +worst.toFixed(3) };
+    })(),
     retired: farRetired.length, shown: farGroup.visible, radius: Math.round(viewRadius()),
     sight: SIGHT_M, level: farZ, farPlane: camera.far,
     // How much land-cover each shell tile had when it was baked. A shell tile

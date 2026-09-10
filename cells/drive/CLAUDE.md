@@ -5094,6 +5094,109 @@ that it is purely so.
 globe — the asset already holds them — and the globe has no place names of its
 own, so between the shell's hand-over and the limb the chart is silent.
 
+## The far layers are on the sphere, and the paraboloid is gone
+
+Asked from the seat: could the distinction between sphere and plane be
+resolved — what would it take to always be on the sphere? The answer has a
+short half and a long half, and the short half is that **the fine world already
+is**: a 5km tangent patch differs from the sphere by 2m of sag at its edge and
+a fifth of a millimetre of foreshortening, which is what every planet renderer
+does, and this one rebases on a hop. What there was to resolve is that the far
+layers were placed on a PARABOLOID in the rig's equirectangular frame, and the
+globe was a second, separate sphere they were asked to agree with. Three
+approximations of one surface: `curveDrop` (d²/2R, baked from the origin into
+every far vertex), `chartShellMatrix` (the chart's shear of that paraboloid
+under the browsed focus) and `alignFarShell` (the seat's first-order tilt by
+|c|/R, which the old note records as 70m low thirty kilometres down the road).
+
+How far apart they get, measured before anything moved: the paraboloid is
+3km off the sphere at 1,500km (which is why `SIGHT_MAX` stopped there), 44km
+at 3,000, 461km at 5,000 and half a radius at a quarter turn — it has no limb,
+no horizon and no far side, and those are the planet. And `toLocal` draws
+every parallel at the RIG's, so with the truck at 37.75N Europe came out 1.23×
+too wide at 50N, 1.58× at 60N, 2.31× at 70N.
+
+**Now there is one node, `planetGroup`, and everything past the fine ring is
+a child of it**: the globe mesh, its pin, the far shell, the overview vectors.
+`stepGlobe` places it every frame in every camera — one radius under the
+chart's FOCUS on the chart, under the POV from the seat, turned so that point
+is its top (`globeOrientation`). The far tiles and the ribbons are built in
+the planet's own frame, `latLonToUnit` times R + elev − baseElev − FAR_DROP,
+**relative to each tile's centre point** (`sphereRTC`): Float32 holds three
+centimetres across a 990km tile and half a millimetre across a 5km one, the
+mesh's position is the centre in a JS double, and three composes matrixWorld
+and modelViewMatrix in doubles before anything is uploaded, so nothing at a
+planet's magnitude ever meets a Float32. The globe MESH keeps its own
+visibility rule and carries its own sink beneath the frame, so the shell still
+wins where both exist.
+
+**Measured** (`__far().sphere`, 25 z7 tiles at Letsemeng, 4,300 sampled
+vertices): every vertex within **6mm** of R + height over the datum, the
+lat/lon round trip included. `devtools/globe-navigation.test.cjs` holds the
+contract in pure node — `sphereRTC` inverts through `sphereLatLon` at five
+centres from the equator to 84N, and the planet is placed under the focus on
+the chart and under the POV from the seat, up landing on +y to 1e-9 — and the
+map-rotation sweep beside it is intact. The 47N frame `far-circles` takes is
+indistinguishable from the flat one, which is the point: the roads sit on
+their coasts, the tiles have no seam, and what changed is that they now
+stand where the Earth is.
+
+Three things inside it that were real work, and two that were not:
+
+- **The far material's normal map was written with +y up.** It is
+  object-space — the kernel's x east, y up, z south — and three reads it
+  straight through `normalMatrix`. Across a 990km z5 tile the radial swings
+  8.9 degrees, so read as-is every tile is lit with a vignette, the sun's
+  cosine drifting ±4.5 degrees edge to edge. `sphereNormal` rebuilds each
+  fragment's own east/up/north from its position (east from the radial's own
+  x/z, north as up × east — which the mirrored frame in `globe.ts` makes a
+  rotation) and reads the map in that. **Under its own program cache key**:
+  `farClip` set one shared with the fallback `farMat`, whose map is
+  tangent-space and has no `vObjP`, and three would have handed one the
+  other's program.
+- **The overview ribbon's push is a vec3 now.** The ribbon is a centreline
+  with `aOff` pushing it apart in the vertex shader; in the flat frame that
+  was a vec2 in xz. It is a vector in the tile's tangent plane, written in the
+  tile centre's east/north — at z7 the frame turns 2.8 degrees edge to edge,
+  and what it turns is a two-pixel ribbon's width.
+- **A place label's point is kept in the planet's frame** and composed
+  through the planet's position and quaternion at draw time, not read off a
+  `matrixWorld` that is a render old. The three probes that read a ribbon
+  vertex as a flat point (`__ovfloat`, `__ovinside`) go back through
+  `sphereLatLon`; `coverDirtiedFar` tests overlap on the raster's own flat
+  box, kept beside the mesh, rather than on bounds that are on the sphere now.
+- **`curveDrop` stays for the peaks' sight lines**, where d²/2R is the right
+  second-order answer to "how far below the tangent plane is that summit" and
+  is 0.03% off at 300km. Only its PLACEMENT uses are gone.
+- **Every raster reader is untouched.** `farRasters`, `farRasterAt`,
+  `chartGround`, `__farat` and the peak march index the RASTERS by flat metres;
+  the raster is still a lat/lon grid and only the MESH moved. The streamers are
+  keyed on `panX/panZ`; the retained-focus gestures are as they were; the fine
+  box clip is an x/z test within 5km of the rig, where the sphere's
+  foreshortening is 0.2mm.
+
+**What is deliberately NOT done, and why.** Reparenting the fine world under
+the planet as a tangent patch (identity whenever the chart is home) would put
+the fine ring on the sphere's side while you browse elsewhere. Its visual
+value is nil — the chart is at 89.9° of tilt, a vertical offset has no
+parallax straight down, and the fine ring is a 5km speck three hundred
+kilometres from the frame's centre — and its cost is every shader that reads
+`vWorldP` in flat metres (the cloud lattice, `sunMarch`, the wet debug, hydro's
+scene shade). Physics on the sphere is a rewrite of a 42,000-line coordinate
+assumption for two metres of sag the rebase already handles.
+
+**What is still true after this.** Mercator tiles stop at ±85°, so the shell
+never draws the poles and the globe does. The ring is a finite cost and the
+globe backs it; that distinction — streamed versus baked — is level of
+detail, the fine/far distinction one rung further out, and it is right that
+it stays. The hand-over (`globeFree`) survives as a LOOK rule, not a geometry
+rule: the shell's Lambert-over-DEM and the globe's bake differ in character,
+so the ring's edge is still a visible boundary — and because both are one
+surface now, a Bayer dissolve over the outer ring is possible for the first
+time. `devtools/globe-view.mjs` waits for the ring before it photographs a
+zoom, because a frame of one tile standing on the planet with its neighbours
+missing is exactly what a broken placement would look like.
+
 ## Globe navigation: retain the place, not a disposable spin
 
 The seat reported that spinning the planet then zooming in returned to the
