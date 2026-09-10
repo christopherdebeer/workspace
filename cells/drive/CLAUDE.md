@@ -5807,7 +5807,14 @@ coastal kinds only — and gave the coast field a band with no sea in it:
 travel started 60 m out and measured from the polygon's rim. A standing-
 water area whose interior samples mostly read confirmed ocean is observed
 as a **lagoon** now (`seaTouching`, sampled the way `areaEvidence` samples a
-level); a lake behind a beach has no sample under the mask.
+level); a lake behind a beach has no sample under the mask. And the
+registry took a body's kind from its FIRST observation across tiles, so the
+bay polygon stayed a lake because one tile — analysed before its coverage
+arrived, or holding only the polygon's landward clip — said so first; the
+top-down field frame over the harbour showed the basin's own texels
+solved and the open bay beside them green and empty. A polygon any tile
+has seen under the mask is coastal everywhere: the sea-touching kind wins
+the merge.
 
 **Measured at Simon's Town** (`scratchpad/coast-shots2.mjs`: the rig placed
 on the shore the field itself found): the harbour shore reads exposure

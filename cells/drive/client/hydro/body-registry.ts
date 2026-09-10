@@ -348,7 +348,16 @@ export class HydroBodyRegistry {
     const candidates = observations.map((o) => o.candidateLevelM).filter((v): v is number => Number.isFinite(v));
     const profiles = observations.map((o) => o.profile).filter((v): v is Float32Array => !!v?.length);
 
-    const kind = first.kind;
+    // THE SEA-TOUCHING KIND WINS. A body is observed once per tile, and an
+    // OSM water polygon over the sea (Simon's Town's harbour, False Bay off
+    // it) is a LAKE by its tag and a lagoon by `seaTouching` — but only in
+    // the tiles whose ocean coverage had arrived when they were analysed,
+    // and only where its clipped part lies under the mask. Taking the first
+    // observation's kind left the whole bay a lake because one tile said so
+    // first: no surf strip, no coast field, a pond's edge on the open sea.
+    // A polygon any tile has seen under the mask is coastal everywhere.
+    const kind = first.kind !== 'lagoon' && !['river', 'stream', 'canal', 'wetland', 'ocean'].includes(first.kind)
+      && observations.some((o) => o.kind === 'lagoon') ? 'lagoon' : first.kind;
     const elevationM = median(tagged) ?? median(candidates) ?? this.oceanLevelM;
     const level = kind === 'ocean'
       ? { type: 'ocean' as const, elevationM: this.oceanLevelM }
