@@ -305,6 +305,9 @@ export interface ProductionSubstrateTile {
   groundMesh?: ProductionGroundMesh;
   terrainRenderMeshes: readonly ProductionRenderMesh[];
   driveSegments: readonly ProductionDriveSegment[];
+  /** Built on the first sample, see buildDriveIndex; never part of the
+   *  tile's identity or revision. */
+  driveIndex?: ProductionDriveIndex;
   driveRenderMeshes: readonly ProductionDriveRenderMesh[];
   structureRenderMeshes: readonly ProductionRenderMesh[];
   hydroDetailRenderMeshes: readonly ProductionRenderMesh[];
@@ -682,6 +685,60 @@ function sampleWaterMotion(
   return best;
 }
 
+/**
+ * WHICH ROAD SEGMENTS CAN REACH A POINT, WITHOUT ASKING EVERY ONE.
+ *
+ * The sampler walked every drive segment of the tile for every query — and
+ * validated each with an eight-element array allocated per segment per
+ * query — while `surfaceAt`, `waterInfoAt`, `splashWet` and `tyreHeight`
+ * had all become this sampler on the ordinary path. Every animal every
+ * frame, four wheels, every POI, every tree and shrub lattice point: the
+ * seat read stepWildlife at 14.5 ms a frame, sim:suspension at 4.1,
+ * treeRefresh at 62 ms with shrubs at 31, against 0.3 / 0.1 / 12 / 4 on the
+ * build before, and the fixture reproduced it (stepWildlife 0.8 → 4.9 ms a
+ * frame on the default path). A segment can only answer for points within
+ * halfWidth + shoulder of itself, so each is filed once, at the tile's
+ * first sample, into every 32 m cell its reach touches, and a query reads
+ * its own cell's list. Validation moves here too, so it happens once.
+ */
+export interface ProductionDriveIndex {
+  cell: number;
+  cols: number;
+  rows: number;
+  buckets: ReadonlyArray<readonly number[] | undefined>;
+}
+const DRIVE_INDEX_CELL = 32;
+const NO_SEGMENTS: readonly number[] = [];
+function buildDriveIndex(tile: ProductionSubstrateTile): ProductionDriveIndex {
+  const b = tile.bounds, cell = DRIVE_INDEX_CELL;
+  const cols = Math.max(1, Math.ceil((b.maxX - b.minX) / cell));
+  const rows = Math.max(1, Math.ceil((b.maxZ - b.minZ) / cell));
+  const buckets: Array<number[] | undefined> = new Array(cols * rows);
+  tile.driveSegments.forEach((segment, i) => {
+    if (![segment.ax, segment.az, segment.bx, segment.bz, segment.yaM,
+      segment.ybM, segment.halfWidthM, segment.quality].every(Number.isFinite)
+      || segment.halfWidthM <= 0) return;
+    // The sampler keeps a segment while distance − halfWidth ≤ shoulder; a
+    // box around the segment grown by that reach contains every such point.
+    const reach = segment.halfWidthM + Math.max(0, segment.shoulderM ?? .8) + .5;
+    const x0 = Math.max(0, Math.floor((Math.min(segment.ax, segment.bx) - reach - b.minX) / cell));
+    const x1 = Math.min(cols - 1, Math.floor((Math.max(segment.ax, segment.bx) + reach - b.minX) / cell));
+    const z0 = Math.max(0, Math.floor((Math.min(segment.az, segment.bz) - reach - b.minZ) / cell));
+    const z1 = Math.min(rows - 1, Math.floor((Math.max(segment.az, segment.bz) + reach - b.minZ) / cell));
+    for (let cz = z0; cz <= z1; cz++) for (let cx = x0; cx <= x1; cx++) {
+      const k = cz * cols + cx;
+      (buckets[k] ??= []).push(i);
+    }
+  });
+  return { cell, cols, rows, buckets };
+}
+function driveSegmentsNear(tile: ProductionSubstrateTile, x: number, z: number): readonly number[] {
+  const idx = tile.driveIndex ?? (tile.driveIndex = buildDriveIndex(tile));
+  const b = tile.bounds;
+  const cx = Math.floor((x - b.minX) / idx.cell), cz = Math.floor((z - b.minZ) / idx.cell);
+  if (cx < 0 || cz < 0 || cx >= idx.cols || cz >= idx.rows) return NO_SEGMENTS;
+  return idx.buckets[cz * idx.cols + cx] ?? NO_SEGMENTS;
+}
 export function sampleProductionSubstrateTile(
   tile: ProductionSubstrateTile,
   x: number,
@@ -750,10 +807,8 @@ export function sampleProductionSubstrateTile(
 
   let exactDriveProximity: (ProductionDriveSample & { outM: number }) | undefined;
   let exactDriveSupport: (ProductionDriveSample & { outM: number }) | undefined;
-  for (const segment of tile.driveSegments) {
-    if (![segment.ax, segment.az, segment.bx, segment.bz, segment.yaM,
-      segment.ybM, segment.halfWidthM, segment.quality].every(Number.isFinite)
-      || segment.halfWidthM <= 0) continue;
+  for (const si of driveSegmentsNear(tile, x, z)) {
+    const segment = tile.driveSegments[si];
     const dx = segment.bx - segment.ax, dz = segment.bz - segment.az;
     const t = clamp(((x - segment.ax) * dx + (z - segment.az) * dz)
       / (dx * dx + dz * dz || 1), 0, 1);
@@ -1129,7 +1184,16 @@ export class ProductionSubstrateStore {
     return candidates.slice(0, limit);
   }
 
+  /** The tile that answered last, and the store revision it answered under:
+   *  a wheel, an animal or a lattice point asks thousands of times inside
+   *  one 2 km tile, and the scan below ran for each of those. */
+  private lastHit: { tile: ProductionSubstrateTile; rev: number } | undefined;
   private tileAt(x: number, z: number): ProductionSubstrateTile | undefined {
+    const hit = this.lastHit;
+    if (hit && hit.rev === this.revision) {
+      const b = hit.tile.bounds;
+      if (x >= b.minX && x < b.maxX && z >= b.minZ && z < b.maxZ) return hit.tile;
+    }
     let best: ProductionSubstrateTile | undefined;
     for (const tile of this.tiles.values()) {
       const bounds = tile.bounds;
@@ -1139,6 +1203,7 @@ export class ProductionSubstrateStore {
       if (x < bounds.minX || x >= bounds.maxX || z < bounds.minZ || z >= bounds.maxZ) continue;
       if (!best || tile.revision > best.revision) best = tile;
     }
+    if (best) this.lastHit = { tile: best, rev: this.revision };
     return best;
   }
 

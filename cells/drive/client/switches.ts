@@ -91,6 +91,8 @@ export const SWITCHES = [
     note: 'the same as time, kept because links carry it' },
   { id: 'sunalt', kind: 'number', marks: ['look', 'bench'], fallback: 'the clock’s own sun',
     note: 'pin the sun’s altitude in degrees, −20..89' },
+  { id: 'substrate', kind: 'choice', marks: ['bench', 'legacy'], fallback: 'canonical contact, legacy render',
+    note: 'the road/terrain/water substrate (SUBSTRATE-MIGRATION.md): legacy = the pre-substrate contact with shadow diagnostics, the rollback; shadow = legacy contact, substrate observed; render = the substrate draws the water too. It was read round the typed reader and so was in no list until it was declared here' },
   { id: 'wx', kind: 'choice', marks: ['look', 'bench'], fallback: 'the live weather',
     note: 'pin the sky: clear, haze, rain or storm' },
   { id: 'fog', kind: 'number', marks: ['look', 'bench'], fallback: 'the live mist',

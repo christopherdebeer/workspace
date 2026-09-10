@@ -1925,9 +1925,11 @@ const HYDRO_ON = ((): boolean => {
  *   __substrate()
  *   __substrate('reset')
  */
-const SUBSTRATE_MODE = resolveProductionSubstrateMode(
-  new URLSearchParams(location.search).get('substrate'),
-);
+// Through the typed reader, not URLSearchParams: a switch read round `qs`
+// is declared nowhere, listed nowhere in SETTINGS, and invisible to
+// switches.test — which is how `?substrate=render` was on the seat's URL and
+// on no list.
+const SUBSTRATE_MODE = resolveProductionSubstrateMode(qs('substrate') ?? null);
 const SUBSTRATE_RENDER_ON = SUBSTRATE_MODE.render;
 // A render cutover is a whole-consumer cutover. Mixing substrate-owned
 // terrain/water pixels with legacy wheel support, fluid force or splash gates
