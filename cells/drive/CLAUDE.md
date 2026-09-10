@@ -5102,6 +5102,39 @@ that it is purely so.
 globe — the asset already holds them — and the globe has no place names of its
 own, so between the shell's hand-over and the limb the chart is silent.
 
+## The chart states its scale, as a map would
+
+Asked from the seat with five frames from the Afsluitdijk: the chart should
+carry a scale bar, the representative fraction, and the zoom. It does now,
+under the clock's row at top-left (below the tile-debug lines when those are
+up): `500 KM · 1:16M · Z5.0` over the continent, `2 KM · 1:81K · Z12.6` over a
+district, `20 M · 1:816 · Z19.3` over a junction, with a bar of that round
+length under it. `chartScale()` is the arithmetic and `__scale()` reports it.
+
+- **All three are the scale AT THE FRAME'S CENTRE**, which is the honest
+  statement for a tilted perspective: the near edge is larger and the far
+  edge smaller, and at 89.9 degrees the difference is under a pixel.
+- **The fraction is ground metres per metre of GLASS**, and the glass is the
+  CSS reference pixel — 1/96 of an inch, what a phone reports whatever its
+  panel's density — so 1:15M here means what 1:15M means on paper at reading
+  distance. `chartMpp` is metres per ART pixel; the art is magnified
+  `innerHeight / pixSize.y` onto the glass, which is why the PIXEL dial moves
+  the art's scale and not the map's.
+- **The zoom is the fractional slippy zoom at the centre latitude** — the z at
+  which a 256px tile's texel is one CSS pixel here — and it is what `MAP z13`
+  and `FAR Z5` in the tile-debug line are measured against. A view at Z9.4
+  drawing a z8 overview ring is one rung coarser than the glass could show:
+  the ladder's own margin, now a number on the glass.
+- **The bar is a round length** — 1, 2, 5 × 10^k metres — chosen from the top
+  so it is as long as it may be under two fifths of the HUD's width.
+
+`devtools/scale-bar.test.mjs` checks the three against the camera at three
+zooms. Its first cut failed on its own tolerances: `__cam().dist` is rounded
+to the metre (a third of a percent at a junction zoom) and `__globe().focus`
+to a thousandth of a degree (two millionths in the cosine), so the camera is
+checked at what the probes can say and the scale's own numbers against each
+other exactly.
+
 ## The far layers are on the sphere, and the paraboloid is gone
 
 Asked from the seat: could the distinction between sphere and plane be

@@ -21335,6 +21335,53 @@ function chartMpp(): number {
     ? (2 * chartDist() * Math.tan(((camera.fov / 2) * Math.PI) / 180)) / Math.max(2, pixSize.y)
     : 0;
 }
+/**
+ * ── THE CHART'S SCALE, AS A MAP WOULD STATE IT ──
+ *
+ * Three numbers a map carries and this one did not: a bar of a round length,
+ * the representative fraction, and — because the layers are named by it — the
+ * Web-Mercator zoom the frame is equivalent to. All three are the scale AT THE
+ * FRAME'S CENTRE, which is the honest statement for a tilted perspective: the
+ * near edge is larger and the far edge smaller, and at 89.9 degrees the
+ * difference is under a pixel.
+ *
+ * The fraction is ground metres per metre of GLASS, and the glass is the CSS
+ * reference pixel — 1/96 of an inch, which is what a phone reports whatever
+ * its panel's density — so 1:15M on this chart means what 1:15M means on
+ * paper held at reading distance. `chartMpp` is metres per ART pixel; the art
+ * is magnified innerHeight/pixSize.y times onto the glass, so the PIXEL dial
+ * moves the art's scale and not the map's.
+ *
+ * The zoom is the fractional slippy zoom at the centre latitude: the z at
+ * which a 256px tile's texel is one CSS pixel here. It is what MAP z13 and
+ * FAR Z5 in the tile-debug line are measured against — a view at Z9.4 drawing
+ * a z8 overview ring is one rung coarser than the glass could show, which is
+ * the ladder's own margin and now a number on the glass.
+ */
+function chartScale(): { mppArt: number; mppCss: number; ratio: number; zoom: number;
+  barM: number; barPx: number; bar: string; label: string } {
+  const mppArt = chartMpp();
+  const cssPerArt = Math.max(1, innerHeight / Math.max(2, pixSize.y));
+  const mppCss = mppArt / cssPerArt;
+  const ratio = mppCss / (0.0254 / 96);
+  const [lat] = localToLatLon(viewX() + panX, viewZ() + panZ);
+  const zoom = Math.log2((40075016.686 * Math.cos((lat * Math.PI) / 180)) / (256 * Math.max(1e-9, mppCss)));
+  // A round length — 1, 2, 5 × 10^k metres — that lands under two fifths of
+  // the HUD's width, chosen from the top so the bar is as long as it may be.
+  const mPerHud = mppCss * hudS;
+  const maxPx = Math.round(HW * 0.42);
+  let barM = 1;
+  outer: for (let k = 7; k >= 0; k--) for (const m of [5, 2, 1]) {
+    const L = m * 10 ** k;
+    if (L / mPerHud <= maxPx) { barM = L; break outer; }
+  }
+  const barPx = Math.max(1, Math.round(barM / mPerHud));
+  const short = (v: number): string => (v >= 10 ? String(Math.round(v)) : v.toFixed(1));
+  const bar = barM >= 1000 ? `${barM / 1000} KM` : `${barM} M`;
+  const rf = ratio < 1000 ? String(Math.round(ratio)) : ratio < 1e6 ? `${short(ratio / 1e3)}K` : `${short(ratio / 1e6)}M`;
+  return { mppArt, mppCss, ratio, zoom, barM, barPx, bar, label: `${bar} · 1:${rf} · Z${zoom.toFixed(1)}` };
+}
+(window as unknown as { __scale?: object }).__scale = (): object => chartScale();
 /** How much of the frame the planet owns: 0 while the streamed world fills it,
  *  1 once the chart is looking at a globe. The one ramp the wide view's terms
  *  are keyed on. */
@@ -22644,39 +22691,66 @@ const ovInkU = { uInkOn: { value: 1 } };
  *
  * So the geometry is a centreline plus a unit normal (aOff, carrying the
  * class's relative weight), and the width arrives as one uniform in metres,
- * recomputed each frame from the chart camera: OV_PX art pixels wide, whatever
+ * recomputed each frame from the chart camera: the rung's base width in art
+ * pixels (see the ladder below), whatever
  * the zoom. No rebuild, no per-class uniform, no CPU work per way.
  */
-const ovWU = { uOvW: { value: 40 } };
-/** Base ribbon width in the pixels the world is actually RENDERED at (PIX_H
- *  lines, magnified after). The class multipliers run 0.5–1.3 around it, so
- *  the thinnest chart line still lands a pixel wide and a motorway reads as
- *  the trunk it is. */
-const OV_PX = 2.0;
+/**
+ * …AND A LINE'S WEIGHT IS RELATIVE TO THE FRAME IT IS IN.
+ *
+ * "Importance does not change when you pinch" held the ribbons at one art
+ * width across every rung of the ladder, and the seat's five frames from the
+ * Afsluitdijk say where that stops being true: the same two and a half
+ * pixels of saturated gold that annotate a district out-ink a continent. At
+ * the wide rungs the frame is about the landform and the player's plan, and
+ * a road network drawn at the district's weight is the loudest thing on it.
+ *
+ * So the ladder has a WEIGHT and an INK per rung, and what stays constant is
+ * the hierarchy — motorway 1.3 × primary 1.0 × the rest 0.72 — not the
+ * absolute weight. The base width falls from two art pixels at the street
+ * rungs to one at the country's; every class is floored at one pixel (a
+ * sub-pixel ribbon is a dotted ghost, the fault this design replaced); and
+ * the ink is an alpha the composite dithers toward the ground, full at the
+ * street rungs and half at the continent. The route line, the mission's via,
+ * the pins and the truck's marker are drawn on the HUD and take none of
+ * this: THE BASE MAP RECEDES AS THE FRAME WIDENS; THE PLAN DOES NOT. Labels
+ * keep their own rank gate. Measured on the Afsluitdijk stand, see the
+ * chart section of CLAUDE.md.
+ */
+const OV_PX_BY_Z: Record<number, number> = { 13: 2.0, 12: 2.0, 11: 2.0, 10: 1.7, 9: 1.4, 8: 1.2, 7: 1.0, 6: 1.0, 5: 1.0 };
+const OV_INK_BY_Z: Record<number, number> = { 13: 1, 12: 1, 11: 1, 10: 0.9, 9: 0.8, 8: 0.7, 7: 0.6, 6: 0.5, 5: 0.5 };
+const ovPxFor = (z: number): number => OV_PX_BY_Z[z] ?? 1.0;
+const ovInkFor = (z: number): number => OV_INK_BY_Z[z] ?? 0.5;
+/** Metres per ART pixel at the chart's centre (`uOvMpp`), the rung's base
+ *  width in art pixels (`uOvPx`) and its ink (`uOvInk`) — set once a frame. */
+const ovWU = { uOvMpp: { value: 20 }, uOvPx: { value: 2 }, uOvInk: { value: 1 } };
 ovMat.onBeforeCompile = (sh: { vertexShader: string; fragmentShader: string; uniforms: Record<string, unknown> }) => {
   Object.assign(sh.uniforms, ovU, ovInkU, ovWU);
   sh.vertexShader = sh.vertexShader
     .replace('#include <common>', `#include <common>
       varying vec2 vOvW; attribute float aInk; varying float vInk;
-      attribute vec3 aOff; uniform float uOvW;`)
+      attribute vec3 aOff; uniform float uOvMpp; uniform float uOvPx;`)
     // BEFORE project_vertex, which is what consumes `transformed`. The ribbon
     // has no width in the buffer at all — it is a centreline until here. The
-    // push is a vector in the tile's tangent plane (see buildOvTile).
+    // push is a vector in the tile's tangent plane (see buildOvTile) whose
+    // length is the class's relative half-width; each side is that times the
+    // rung's base, floored at half a pixel so no class thins below one.
     .replace('#include <begin_vertex>', `#include <begin_vertex>
-      transformed += aOff * uOvW;`)
+      float ovHw = length(aOff);
+      transformed += (ovHw > 0.0 ? aOff / ovHw : vec3(0.0)) * max(ovHw * uOvPx, 0.5) * uOvMpp;`)
     .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
       vOvW = (modelMatrix * vec4(transformed, 1.0)).xz;
       vInk = aInk;`);
   sh.fragmentShader = sh.fragmentShader
     .replace('#include <common>', `#include <common>
       varying vec2 vOvW; uniform vec2 uOvC; uniform vec2 uOvR;
-      varying float vInk; uniform float uInkOn;`)
+      varying float vInk; uniform float uInkOn; uniform float uOvInk;`)
     .replace('#include <dithering_fragment>', `#include <dithering_fragment>
       // UNSURVEYED IS ABSENT, not faint: a ghost road is a road you would
       // steer by, and the whole point of the gate is that the Service has not
       // been told about this one yet.
       if (uInkOn > 0.5 && vInk < 0.5) discard;
-      gl_FragColor.a *= smoothstep(uOvR.x, uOvR.y, distance(vOvW, uOvC));`);
+      gl_FragColor.a *= smoothstep(uOvR.x, uOvR.y, distance(vOvW, uOvC)) * uOvInk;`);
 };
 /** Ways built but not yet lit, with the vertex range each owns. Entries leave
  *  the list the moment they light — the walk is over what is still dark. */
@@ -23413,7 +23487,7 @@ function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number
     viewR: Math.round(viewRadius()), zoom: +zoomCur.toFixed(1),
     // The ribbon in BOTH currencies: the metres it happens to occupy right
     // now, and the art pixels it is meant to hold at every zoom.
-    ribbonW: +ovWU.uOvW.value.toFixed(1), ribbonPx: OV_PX, pixH: pixSize.y,
+    ribbonMpp: +ovWU.uOvMpp.value.toFixed(2), ribbonPx: ovWU.uOvPx.value, ink: ovWU.uOvInk.value, pixH: pixSize.y,
     // Where the layer is allowed to start showing at all, against the fine
     // ring it is meant to be standing in for.
     fineR: Math.round(osmRingR), fade: [Math.round(ovU.uOvR.value.x), Math.round(ovU.uOvR.value.y)],
@@ -37655,13 +37729,14 @@ function tick(now: number): void {
     const tvx = viewX(), tvz = viewZ();
     const dist = chartDist();
     const tiltRad = (chartTilt() * Math.PI) / 180;
-    // THE CHART'S LINE WEIGHT, in metres, so that it is OV_PX pixels. The
-    // camera orbits at `dist` and the world renders into pixSize.y lines, so
-    // one art pixel is that much ground — and a ribbon is a fixed number of
-    // them at every zoom on the ladder. Floored at a metre so a driving-zoom
-    // chart cannot collapse the layer to nothing between frames.
-    ovWU.uOvW.value = Math.max(1,
-      (OV_PX * 2 * dist * Math.tan((camera.fov * Math.PI) / 360)) / pixSize.y);
+    // THE CHART'S LINE WEIGHT: one art pixel of ground at the centre (the
+    // camera orbits at `dist` and the world renders into pixSize.y lines),
+    // the rung's base width in those pixels, and the rung's ink — see the
+    // ladder at OV_PX_BY_Z. Floored at half a metre so a driving-zoom chart
+    // cannot collapse the layer to nothing between frames.
+    ovWU.uOvMpp.value = Math.max(0.5, (2 * dist * Math.tan((camera.fov * Math.PI) / 360)) / pixSize.y);
+    ovWU.uOvPx.value = ovPxFor(ovZ);
+    ovWU.uOvInk.value = ovInkFor(ovZ);
     // THE CHART'S FLOOR, LOW-PASSED. The camera rides at a fixed height above
     // the ground under its target, which is right for keeping a mountain out
     // of the lens — and a step function anywhere the ground steps. Panning the
@@ -41353,6 +41428,22 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     }
     clockRect = { x: pad, y: cy2 - 2, w: textSW(hhmm) + 4, h: 10 };
   } else clockRect.w = 0;
+  // ── the scale, on the chart ──
+  // Under the clock's row, where the chart has room and a map keeps it; below
+  // the tile-debug lines when those are up. The label first — the bar's
+  // length, the fraction, the zoom — then the bar: an ink bed, the rule, a
+  // tick at each end. See chartScale for what the three numbers are.
+  if (camMode === 'top') {
+    const sc = chartScale();
+    const x0 = pad + 1, y0 = tileDbg ? pad + 56 : pad + 34;
+    textEdgeS(sc.label, x0, y0, UI.soft);
+    hctx.fillStyle = 'rgba(4,10,11,0.85)';
+    hctx.fillRect(x0 - 1, y0 + 10, sc.barPx + 3, 5);
+    hctx.fillStyle = UI.text;
+    hctx.fillRect(x0, y0 + 12, sc.barPx + 1, 1);
+    hctx.fillRect(x0, y0 + 11, 1, 3);
+    hctx.fillRect(x0 + sc.barPx, y0 + 11, 1, 3);
+  }
   // The transport actions (rewind · AUTO · WPT) live in the CONTROL MATRIX
   // beside the dock now (Glass spec §5.5) — drawn with the dock so the grid
   // and the map share one geometry. See the matrix block below.
