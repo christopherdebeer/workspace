@@ -245,7 +245,11 @@ export class SubstrateShadowMonitor {
     }
     if (canonicalWater && !canonicalWet) this.hydroBelowSupport++;
     if (legacyWet && !canonicalWater) this.legacyWetWithoutHydro++;
-    if (observation.hydro?.water.speedAuthority === 'unknown') this.unknownSpeed++;
+    // A buried or otherwise non-contact water layer cannot exert current on
+    // the vehicle, so its animation authority is not a cutover blocker.
+    if (canonicalWet && observation.hydro?.water.speedAuthority === 'unknown') {
+      this.unknownSpeed++;
+    }
     if (observation.crossing.authority === 'unresolved') this.unresolvedCrossing++;
 
     const canonicalRawDepth = observation.hydro?.fluid?.depthAboveSupportM ?? null;

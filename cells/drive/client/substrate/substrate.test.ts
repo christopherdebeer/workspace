@@ -489,7 +489,7 @@ export function runSubstrateSelfTest(): void {
       sampleGround: () => ({ yM: 0, material: 'terrain' }),
       sampleDrive: (_x, z) => Math.abs(z) <= 2
         ? {
-          yM: kind === 'bridge' ? 4 : kind === 'ford' ? .2 : 1.8,
+          yM: kind === 'bridge' ? .9 : kind === 'ford' ? .2 : 1.8,
           material: 'gravel',
           quality: .75,
           roadId: 'road:7',
@@ -534,7 +534,8 @@ export function runSubstrateSelfTest(): void {
     assert(productionContact.drive, `${kind}: production tile lost drive support`);
     if (kind === 'bridge') {
       assert(productionContact.water?.exposed, 'production bridge must retain exposed water');
-      assert(!productionContact.fluid, 'production bridge water must remain below support');
+      assert(!productionContact.fluid,
+        'production bridge water must not become vehicle fluid without flood authority');
     } else if (kind === 'culvert') {
       assert(productionContact.water && !productionContact.water.exposed,
         'production culvert must hide conduit water');
@@ -727,6 +728,13 @@ export function runSubstrateSelfTest(): void {
   `exact drive proximity must retain the deck through the fairing zone: ${
     JSON.stringify(narrowShoulderContact)
   }`);
+  narrowVectorTile.driveY.fill(12);
+  narrowVectorTile.driveQuality.fill(.9);
+  narrowVectorTile.driveMaterial.fill(1);
+  narrowVectorTile.roadIndex.fill(1);
+  const rasterBleedContact = sampleProductionSubstrateTile(narrowVectorTile, 50, 25);
+  assert(rasterBleedContact && !rasterBleedContact.drive,
+    'coarse drive raster must not invent support between exact vector roads');
 
   const shoulderBridgeTile = buildProductionSubstrateTile({
     key: 'production-shoulder-bridge',

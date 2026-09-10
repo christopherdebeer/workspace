@@ -669,7 +669,8 @@ export function sampleProductionSubstrateTile(
   const crossingFootprint = crossingRecord
     ? productionCrossingFootprint(crossingRecord)
     : undefined;
-  if (!exactDriveSupport && !Number.isFinite(tile.driveY[i])
+  if (!exactDriveSupport
+    && (tile.driveSegments.length > 0 || !Number.isFinite(tile.driveY[i]))
     && crossingRecord && crossingFootprint
     && pointInProductionCrossingFootprint(crossingFootprint, x, z)) {
     const tx = crossingRecord.roadTangent[0];
@@ -701,7 +702,12 @@ export function sampleProductionSubstrateTile(
       roadId: exactDriveProximity.roadId,
     };
   }
-  if (exactDriveSupport || Number.isFinite(tile.driveY[i])) {
+  // The coarse drive raster is a compatibility witness only. Once exact
+  // vector segments are present it must not fill gaps between them: at Senqu
+  // a bridge approach bled across a 64m raster cell and invented an elevated
+  // deck over open river several metres outside the carriageway.
+  const rasterDrive = tile.driveSegments.length === 0 && Number.isFinite(tile.driveY[i]);
+  if (exactDriveSupport || rasterDrive) {
     const roadId = tile.roadIds[tile.roadIndex[i] - 1] ?? 'production-road:unknown';
     const material = crossing === 'ford'
       ? 'ford'
@@ -758,8 +764,13 @@ export function sampleProductionSubstrateTile(
       exposed: crossing !== 'culvert',
       waterId,
     };
-    contact.fluid = resolveFluidContact(contact.water, contact.support);
-  } else if (!exactHydro
+    // Bridge water remains exposed/renderable below the structure, but is not
+    // vehicle fluid. A flooded deck needs explicit flood state; centimetres of
+    // profile/reconstruction disagreement are not flooding authority.
+    contact.fluid = crossing === 'bridge' && contact.support.kind === 'drive'
+      ? undefined
+      : resolveFluidContact(contact.water, contact.support);
+  } else if (!exactHydro && crossing !== 'causeway'
     && (tile.waterState[i] === WATER_STATE.exposed || tile.waterState[i] === WATER_STATE.hidden)) {
     const kind = HYDRO_KINDS[tile.waterKind[i] - 1];
     const waterId = tile.waterIds[tile.waterIndex[i] - 1] ?? 'production-water:unknown';
@@ -780,10 +791,12 @@ export function sampleProductionSubstrateTile(
       fetchM: Number.isFinite(tile.waterFetchM[i]) ? tile.waterFetchM[i] : null,
       intermittent: (tile.waterFlags[i] & 1) !== 0,
       tidal: (tile.waterFlags[i] & 2) !== 0,
-      exposed: tile.waterState[i] === WATER_STATE.exposed,
+      exposed: crossing !== 'culvert' && tile.waterState[i] === WATER_STATE.exposed,
       waterId,
     };
-    contact.fluid = resolveFluidContact(contact.water, contact.support);
+    contact.fluid = crossing === 'bridge' && contact.support.kind === 'drive'
+      ? undefined
+      : resolveFluidContact(contact.water, contact.support);
   }
 
   if (crossing === 'bridge' && contact.drive) {

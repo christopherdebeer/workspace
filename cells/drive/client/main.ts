@@ -98,6 +98,7 @@ import {
   ProductionCrossingRegistry,
   resolveProductionCrossingIntent,
   type CrossingStructureOutcome,
+  type ProductionCrossingRecord,
 } from './substrate/crossing-authority';
 import {
   buildProductionSubstrateTile,
@@ -2764,7 +2765,7 @@ function hydroWet(x: number, z: number): boolean {
   // wade, and drove on grass. Reported as "registers on water near water".
   // The drawn water is the water: the truck is in it only where the resting
   // level clears the ground it stands on.
-  return !hasHeight(x, z) || wet.restingLevelM > sampleHeight(x, z) + baseElev + 0.02;
+  return !hasHeight(x, z) || wet.restingLevelM > wheelGround(x, z) + baseElev + .01;
 }
 /**
  * ── THE OCEAN MASK, RESAMPLED INTO THE TILE'S OWN FRAME ──
@@ -6729,6 +6730,20 @@ function flushTerrain(now: number): void {
     hydroDirty.delete(key);
     const t = heightTiles.get(key);
     if (t) { terrainAt = now; hydroRefeed(t, key); return; }
+  }
+  // Watercourses deliberately wait for a quiet road stream before resolving
+  // crossings. If the last road did not itself trigger another terrain build,
+  // finish one parked watercourse from this existing quiet-work slot.
+  if (pendingWater.length && osmStreamQuiet()) {
+    const mid = pendingWater[0].dense[pendingWater[0].dense.length >> 1];
+    for (const [key, t] of heightTiles) {
+      if (mid[0] < t.xs || mid[1] < t.zs
+        || mid[0] > t.xs + t.w || mid[1] > t.zs + t.h) continue;
+      terrainAt = now;
+      flushCulverts(t);
+      queueProductionSubstrateShadow(t, key);
+      return;
+    }
   }
   // A TILE THAT CAME INTO RANGE, or was built plain while roads were still
   // streaming, takes its corridor now — one per quiet visit, so a drive into
@@ -11907,6 +11922,21 @@ function wallHitAlong(ax: number, az: number, bx: number, bz: number, camY: numb
   return sMin;
 }
 type Surface = 'road' | 'track' | 'water' | 'ground';
+function productionCrossingDriveAt(
+  x: number,
+  z: number,
+  crossing = productionCrossings.earthworkAt(x, z),
+): { record: ProductionCrossingRecord; yM: number } | null {
+  if (!crossing) return null;
+  const tx = crossing.roadTangent[0];
+  const tz = crossing.roadTangent[1];
+  const length = Math.hypot(tx, tz) || 1;
+  const dx = x - crossing.x;
+  const dz = z - crossing.z;
+  const across = Math.abs(dx * (-tz / length) + dz * (tx / length));
+  if (across > crossing.roadHalfWidthM + .8) return null;
+  return { record: crossing, yM: crossing.deckY };
+}
 /**
  * The surface quality that the LAST call to `surfaceAt` resolved — 1 for new
  * tarmac, down to 0.1 for a sand piste. Read it straight after the call that
@@ -11966,7 +11996,9 @@ function legacySurfaceAt(x: number, z: number): Surface {
   // returning on the first hit made that depend on insertion order. Where two
   // of a kind overlap the BETTER surface wins for the same reason — you are
   // driving on the top one.
-  let road = -1, track = -1;
+  const exactDrive = productionDriveAt(x, z);
+  let road = exactDrive?.material === 'asphalt' ? exactDrive.quality : -1;
+  let track = exactDrive?.material === 'gravel' ? exactDrive.quality : -1;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
     const [cx, cz] = closestOnSeg(x, z, seg);
     if (Math.hypot(x - cx, z - cz) > seg.hw + 0.8) continue;
@@ -11983,9 +12015,44 @@ function legacySurfaceAt(x: number, z: number): Surface {
   // no wake, reported from the seat. The deck's height against the water's
   // resting level is the whole test: over it you are on a bridge, under it
   // you are wading, and the tag never has to be right.
-  if (road >= 0) { surfQ = road; return fordDepthAt(x, z) > FORD_MIN_M ? 'water' : 'road'; }
-  if (track >= 0) { surfQ = track; return fordDepthAt(x, z) > FORD_MIN_M ? 'water' : 'track'; }
+  const crossing = productionCrossings.earthworkAt(x, z);
+  const crossingDrive = productionCrossingDriveAt(x, z, crossing);
+  if (crossingDrive?.record.kind === 'ford'
+    && fordDepthAt(x, z) > FORD_MIN_M) {
+    surfQ = exactDrive?.quality ?? Q_TRACK;
+    return 'water';
+  }
+  if (road >= 0) {
+    surfQ = road;
+    if (crossing?.kind === 'bridge' || crossing?.kind === 'culvert'
+      || crossing?.kind === 'causeway') return 'road';
+    return fordDepthAt(x, z) > FORD_MIN_M ? 'water' : 'road';
+  }
+  if (track >= 0) {
+    surfQ = track;
+    if (crossing?.kind === 'bridge' || crossing?.kind === 'culvert'
+      || crossing?.kind === 'causeway') return 'track';
+    return fordDepthAt(x, z) > FORD_MIN_M ? 'water' : 'track';
+  }
+  // The rollback road grid can miss a short or stacked deck even though the
+  // source-derived crossing registry has its exact carriageway footprint.
+  // Preserve that deck as rollback support; otherwise parity can compare a
+  // canonical bridge against the creek bed tens of metres below it.
+  if (crossingDrive) {
+    surfQ = Q_ROAD;
+    if (crossingDrive.record.kind === 'ford') {
+      const level = crossingDrive.record.waterSurfaceY;
+      return level !== null && level - crossingDrive.yM > FORD_MIN_M
+        ? 'water'
+        : 'road';
+    }
+    return 'road';
+  }
   surfQ = Q_GROUND;
+  // The crossing registry is shared source authority, not a substrate sample.
+  // Let rollback honor explicit buried/blocked flow without consulting the
+  // candidate contact tile it is meant to shadow independently.
+  if (crossing?.kind === 'culvert' || crossing?.kind === 'causeway') return 'ground';
   {
     // The mask says "a water polygon is somewhere in this cell"; the polygons
     // say whether it is under YOU. Both, in that order.
@@ -12004,7 +12071,12 @@ function legacySurfaceAt(x: number, z: number): Surface {
   // whose on-channel probes read a live current under a dry surface.
   // AFTER the carriageways, same as cover: a road over a channel is a
   // culvert's deck or a bridge, and you are on it, not in the water under it.
-  if (channelAt(x, z)) return 'water';
+  if (channelAt(x, z)) {
+    const wet = drawnHydroAt(x, z);
+    if (!wet) return 'water';
+    const support = wheelGround(x, z) + baseElev;
+    return wet.restingLevelM > support + .01 ? 'water' : 'ground';
+  }
   // ── THE SEA, ASKED SPATIALLY ──
   //
   // With the hydro field up this is `oceanAt`, and the two lines it replaces
@@ -12023,7 +12095,15 @@ function legacySurfaceAt(x: number, z: number): Surface {
   // later. Asking only the field would make a coast briefly drivable while its
   // tile built; asking only the mask is what stage 3 did, and it left every
   // lake dry the moment the drape stopped drawing them.
-  if (HYDRO_ON) return oceanAt(x, z) || hydroWet(x, z) ? 'water' : 'ground';
+  if (HYDRO_ON) {
+    // Ocean classification says where the sea body exists, not whether its
+    // surface reaches the vehicle. Coastal terrain can legitimately cover an
+    // ocean-classified texel; contact agrees with the drawn field only when
+    // the datum clears the support under the wheels.
+    const seaWet = oceanAt(x, z)
+      && seaSurfaceAbs() > wheelGround(x, z) + baseElev + .01;
+    return seaWet || hydroWet(x, z) ? 'water' : 'ground';
+  }
   // WHAT THE GROUND IS beats how high the DEM thinks it is. Off Big Sur the
   // elevation source fills the whole ocean at a flat +1.2m, so the height test
   // below called four kilometres of open Pacific dry ground and let the truck
@@ -18075,14 +18155,18 @@ const wiSet = new Set<Seg>();
  */
 /** Metres of water over the carriageway here, or 0: the resting level of
  *  the hydro body against the road deck (surfaceAt's ford test). */
-const FORD_MIN_M = 0.12;
+const FORD_MIN_M = 0.01;
 function fordDepthAt(x: number, z: number): number {
   if (!HYDRO_ON || !hydroSys) return 0;
   const wet = drawnHydroAt(x, z);
   if (!wet) return 0;
+  const drive = productionDriveAt(x, z);
   const e = roadEdge(x, z);
-  const deck = e ? e.y : hasHeight(x, z) ? sampleHeight(x, z) : NaN;
-  return Number.isFinite(deck) ? wet.restingLevelM - (deck + baseElev) : 0;
+  const deck = drive
+    ? drive.yM
+    : e ? e.y + baseElev
+      : hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
+  return Number.isFinite(deck) ? wet.restingLevelM - deck : 0;
 }
 interface RuntimeWaterInfo {
   depth: number;
@@ -18152,12 +18236,18 @@ function legacyWaterInfoAt(x: number, z: number): RuntimeWaterInfo {
     // THE FLOOR IS THE DECK ON A FORD: the wheels stand on the carriageway,
     // not on the bed the road was laid over, so that is what the water is
     // deep against.
+    const drive = productionDriveAt(x, z);
     const e = roadEdge(x, z);
     // Measure against the support the legacy wheels actually consume. Raw
     // `sampleHeight` predates corridor/channel carving here; at the Senqu it
     // stood 0.70m above `wheelGround`, forcing a visibly deep channel down to
     // the 5cm minimum and making rollback physics disagree with its own mesh.
-    const bed = e && e.out <= 0
+    const crossingDrive = productionCrossingDriveAt(x, z);
+    const bed = drive
+      ? drive.yM
+      : crossingDrive
+      ? crossingDrive.yM
+      : e && e.out <= .8
       ? e.y + baseElev
       : hasHeight(x, z) ? wheelGround(x, z) + baseElev : NaN;
     // The field's own depth channel is floored at the build's minimumDepth, so
@@ -18209,6 +18299,26 @@ function legacyWaterInfoAt(x: number, z: number): RuntimeWaterInfo {
  * deck or wheel ground but does not replace either calculation.
  */
 function substrateShadowSupportAt(x: number, z: number, surface: Surface): SupportContact {
+  const drive = productionDriveAt(x, z);
+  if (drive) {
+    return {
+      kind: 'drive',
+      yM: drive.yM,
+      material: surface === 'water' ? 'ford' : drive.material,
+      featureId: drive.roadId,
+    };
+  }
+  const crossingDrive = productionCrossingDriveAt(x, z);
+  if (crossingDrive) {
+    return {
+      kind: 'drive',
+      yM: crossingDrive.yM,
+      material: surface === 'water' || crossingDrive.record.kind === 'ford'
+        ? 'ford'
+        : 'asphalt',
+      featureId: crossingDrive.record.roadId,
+    };
+  }
   const edge = roadEdge(x, z);
   if (edge && edge.out <= .8 && surface !== 'ground') {
     const featureId = edge.nm
@@ -18272,7 +18382,7 @@ function substrateParityObservationAt(x: number, z: number): SubstrateShadowObse
       : crossingRecord && crossingRecord.kind !== 'unresolved'
         ? { authority: 'canonical', kind: crossingRecord.kind, source: 'registry' }
         : {
-          authority: hydro && support.kind === 'drive' ? 'unresolved' : 'canonical',
+          authority: hydro?.fluid && support.kind === 'drive' ? 'unresolved' : 'canonical',
           source: 'none',
         },
   };
@@ -18333,6 +18443,8 @@ function observeSubstrateParityAt(x: number, z: number): boolean {
   const detail = (observation: SubstrateShadowObservation): object => {
     const rawDepth = observation.hydro?.fluid?.depthAboveSupportM ?? null;
     const consumerDepth = observation.canonicalConsumerDepthM ?? null;
+    const liveHydro = drawnHydroAt(observation.x, observation.z);
+    const registryCrossing = productionCrossings.earthworkAt(observation.x, observation.z);
     return {
       x: +observation.x.toFixed(2),
       z: +observation.z.toFixed(2),
@@ -18355,7 +18467,22 @@ function observeSubstrateParityAt(x: number, z: number): boolean {
           : null,
       },
       legacy: observation.legacy,
+      legacyInputs: {
+        liveHydro: liveHydro ? {
+          levelM: +liveHydro.restingLevelM.toFixed(3),
+          coverage: +liveHydro.coverage.toFixed(3),
+          kind: liveHydro.kind,
+        } : null,
+        fordDepthM: +fordDepthAt(observation.x, observation.z).toFixed(3),
+        channel: channelAt(observation.x, observation.z),
+      },
       crossing: observation.crossing,
+      registryCrossing: registryCrossing ? {
+        id: registryCrossing.id,
+        kind: registryCrossing.kind,
+        x: +registryCrossing.x.toFixed(2),
+        z: +registryCrossing.z.toFixed(2),
+      } : null,
       tile: productionSubstrate.debugAt(observation.x, observation.z),
     };
   };
@@ -18395,34 +18522,41 @@ function observeSubstrateParityAt(x: number, z: number): boolean {
 };
 function productionDriveAt(x: number, z: number): ProductionDriveSample | undefined {
   let best: ProductionDriveSample | undefined;
-  for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
-    if (seg.ya === undefined || seg.yb === undefined
-      || ![seg.ax, seg.az, seg.bx, seg.bz, seg.ya, seg.yb, seg.hw]
-        .every(Number.isFinite)
-      || seg.hw <= 0) continue;
-    const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
-    const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
-    const px = seg.ax + dx * t, pz = seg.az + dz * t;
-    if (Math.hypot(x - px, z - pz) > seg.hw + .8) continue;
-    let y = seg.ya + (seg.yb - seg.ya) * t;
-    if (seg.ca !== undefined && seg.cb !== undefined
-      && Number.isFinite(seg.ca) && Number.isFinite(seg.cb)) {
-      const length = Math.hypot(dx, dz) || 1;
-      const side = ((x - px) * (-dz / length) + (z - pz) * (dx / length)) / (seg.hw || 1);
-      y += (seg.ca + (seg.cb - seg.ca) * t) * clamp(side, -1, 1);
+  const cx = Math.floor(x / GRID);
+  const cz = Math.floor(z / GRID);
+  const seen = new Set<Seg>();
+  for (let gx = -1; gx <= 1; gx++) for (let gz = -1; gz <= 1; gz++) {
+    for (const seg of roadGrid.get(`${cx + gx},${cz + gz}`) ?? []) {
+      if (seen.has(seg)) continue;
+      seen.add(seg);
+      if (seg.ya === undefined || seg.yb === undefined
+        || ![seg.ax, seg.az, seg.bx, seg.bz, seg.ya, seg.yb, seg.hw]
+          .every(Number.isFinite)
+        || seg.hw <= 0) continue;
+      const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
+      const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+      const px = seg.ax + dx * t, pz = seg.az + dz * t;
+      if (Math.hypot(x - px, z - pz) > seg.hw + .8) continue;
+      let y = seg.ya + (seg.yb - seg.ya) * t;
+      if (seg.ca !== undefined && seg.cb !== undefined
+        && Number.isFinite(seg.ca) && Number.isFinite(seg.cb)) {
+        const length = Math.hypot(dx, dz) || 1;
+        const side = ((x - px) * (-dz / length) + (z - pz) * (dx / length)) / (seg.hw || 1);
+        y += (seg.ca + (seg.cb - seg.ca) * t) * clamp(side, -1, 1);
+      }
+      if (!Number.isFinite(y)) continue;
+      const sample: ProductionDriveSample = {
+        yM: y + baseElev,
+        material: seg.tk ? 'gravel' : 'asphalt',
+        quality: seg.sq ?? (seg.tk ? Q_TRACK : Q_ROAD),
+        roadId: seg.wid
+          ?? seg.nm
+          ?? (seg.fd === undefined ? 'road:unknown' : `road:${seg.fd}`),
+      };
+      // One 2.5D drive layer: where decks stack, retain the highest valid solid
+      // support rather than whichever segment happened to enter the grid first.
+      if (!best || sample.yM > best.yM) best = sample;
     }
-    if (!Number.isFinite(y)) continue;
-    const sample: ProductionDriveSample = {
-      yM: y + baseElev,
-      material: seg.tk ? 'gravel' : 'asphalt',
-      quality: seg.sq ?? (seg.tk ? Q_TRACK : Q_ROAD),
-      roadId: seg.wid
-        ?? seg.nm
-        ?? (seg.fd === undefined ? 'road:unknown' : `road:${seg.fd}`),
-    };
-    // One 2.5D drive layer: where decks stack, retain the highest valid solid
-    // support rather than whichever segment happened to enter the grid first.
-    if (!best || sample.yM > best.yM) best = sample;
   }
   return best;
 }
@@ -19915,6 +20049,16 @@ function flushCulverts(t: HeightTile): void {
       pendingWater[kept++] = p;                 // not this tile — keep waiting
       continue;
     }
+    // Crossing discovery is a join between two independently streamed
+    // sources. Scanning while OSM is still landing permanently consumed the
+    // watercourse after whichever road happened to arrive first: at Senqu the
+    // tagged bridge was recorded and the adjacent untagged road vanished; at
+    // Bixby the creek was consumed before Coast Road entered the grid. Keep the
+    // water parked until the road stream is quiet, then scan the complete set.
+    if (!osmStreamQuiet()) {
+      pendingWater[kept++] = p;
+      continue;
+    }
     const { dense, inv, raw, width } = p;
     const n = dense.length;
     // Every contiguous road overlap is one crossing EVENT. Geometry used to be
@@ -19922,19 +20066,39 @@ function flushCulverts(t: HeightTile): void {
     // to clear the channel, or nothing might fit, and all three facts were then
     // discarded. Keep the event now, with the OSM identities and tags that
     // caused it, so rendering, contact and parity can converge on one answer.
-    let a = -1;
-    for (let i = 0; i <= n; i++) {
-      const overlap = i < n ? roadOver(dense[i][0], dense[i][1], 1.5) : null;
-      const crossing = overlap !== null;
-      if (crossing) culvertStats.crossings++;
-      if (crossing && a < 0) a = i;
-      if ((!crossing || i === n) && a >= 0) {
-        const core0 = a, core1 = i - 1;
+    const overlapSets = dense.map(([x, z]) => roadsOver(x, z, 1.5));
+    const identities = new Set<string>();
+    for (const overlaps of overlapSets) {
+      for (const overlap of overlaps) {
+        culvertStats.crossings++;
+        identities.add(roadCrossingIdentity(overlap.segment));
+      }
+    }
+    // A water station can overlap several roads at once: a tagged bridge, its
+    // approach and a nearby lower road are common at real crossings. Resolve
+    // every distinct source way independently instead of allowing the lowest
+    // deck returned by `roadOver` to hide all the others.
+    for (const identity of identities) {
+      const overlaps = overlapSets.map((set): RoadOverlap | null => {
+        let best: RoadOverlap | null = null;
+        for (const overlap of set) {
+          if (roadCrossingIdentity(overlap.segment) !== identity) continue;
+          if (!best || overlap.distanceM < best.distanceM
+            || (overlap.distanceM === best.distanceM && overlap.y > best.y)) {
+            best = overlap;
+          }
+        }
+        return best;
+      });
+      let core0 = 0;
+      while (core0 < n) {
+        const firstRoad = overlaps[core0];
+        if (!firstRoad) { core0++; continue; }
+        let core1 = core0;
+        while (core1 + 1 < n && overlaps[core1 + 1]) core1++;
         const ci = Math.floor((core0 + core1) / 2);
         const [cx, cz] = dense[ci];
-        const road = roadOver(cx, cz, 1.5)
-          ?? roadOver(dense[core0][0], dense[core0][1], 1.5);
-        if (!road) { a = -1; continue; }
+        const road = overlaps[ci] ?? firstRoad;
         const roadTags = road.segment.wid ? wayTagLog.get(road.segment.wid) : undefined;
         const waterTags = p.tags;
         const crossingIntent = resolveProductionCrossingIntent({
@@ -19957,6 +20121,12 @@ function flushCulverts(t: HeightTile): void {
           // The road embankment is the explicit structure. Cutting a conduit
           // here would silently turn the authored causeway into a culvert.
           structureOutcome = 'none';
+        } else if (crossingIntent.kind === 'unresolved' && road.segment.tk) {
+          // A path/track crossing open water is an at-grade crossing unless
+          // its source explicitly says otherwise. Building a highway-sized
+          // conduit under a footpath invents infrastructure; retaining the
+          // open crossing as a ford records what the authored geometry says.
+          structureOutcome = 'ford-fallback';
         } else if (crossingIntent.kind === 'unresolved' && clearance >= CULV_MAX) {
           // Height is diagnostic, not semantic authority. This is plausibly a
           // bridge, but without a tag or a built structure it stays unresolved.
@@ -19964,7 +20134,7 @@ function flushCulverts(t: HeightTile): void {
         } else {
           const built = culvert(
             dense, inv, raw,
-            Math.max(0, core0 - 1), Math.min(n - 1, i),
+            Math.max(0, core0 - 1), Math.min(n - 1, core1 + 1),
             width, core0, core1,
             {
               // A tagged culvert is construction authority, not a hint for
@@ -19976,8 +20146,6 @@ function flushCulverts(t: HeightTile): void {
               // the world. Record that implementation as a procedural ford
               // instead of leaving an unclassified wet road edge.
               allowWetFordFallback: crossingIntent.kind === 'unresolved',
-              deckY: road.y,
-              waterSurfaceY: wet == null ? null : wet.restingLevelM - baseElev,
             },
           );
           structureOutcome = built.outcome;
@@ -20030,7 +20198,7 @@ function flushCulverts(t: HeightTile): void {
           const reach = crossingRecord.radiusM + 6;
           crossingDirtiedTerrain(cx - reach, cz - reach, reach * 2, reach * 2);
         }
-        a = -1;
+        core0 = core1 + 1;
       }
     }
   }
@@ -20058,19 +20226,34 @@ interface RoadOverlap {
   y: number;
   distanceM: number;
 }
-function roadOver(x: number, z: number, margin: number): RoadOverlap | null {
-  let best: RoadOverlap | null = null;
+function roadCrossingIdentity(segment: Seg): string {
+  const way = segment.wid?.split('@', 1)[0];
+  return way
+    ?? segment.nm
+    ?? (segment.fd === undefined ? 'road:unknown' : `road:${segment.fd}`);
+}
+function roadsOver(x: number, z: number, margin: number): RoadOverlap[] {
+  const overlaps: RoadOverlap[] = [];
+  const seen = new Set<Seg>();
   for (let gx = -1; gx <= 1; gx++) for (let gz = -1; gz <= 1; gz++) {
     for (const sg of roadGrid.get(`${Math.floor(x / GRID) + gx},${Math.floor(z / GRID) + gz}`) ?? []) {
-      if (sg.tk || sg.ya === undefined || sg.yb === undefined) continue;
+      if (seen.has(sg) || sg.ya === undefined || sg.yb === undefined) continue;
+      seen.add(sg);
       const dx = sg.bx - sg.ax, dz = sg.bz - sg.az;
       const t = clamp(((x - sg.ax) * dx + (z - sg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
       const px = sg.ax + dx * t, pz = sg.az + dz * t;
       const distanceM = Math.hypot(x - px, z - pz);
       if (distanceM > sg.hw + 0.8 + margin) continue;
       const y = (sg.ya as number) + ((sg.yb as number) - (sg.ya as number)) * t;
-      if (best === null || y < best.y) best = { segment: sg, y, distanceM };
+      overlaps.push({ segment: sg, y, distanceM });
     }
+  }
+  return overlaps;
+}
+function roadOver(x: number, z: number, margin: number): RoadOverlap | null {
+  let best: RoadOverlap | null = null;
+  for (const overlap of roadsOver(x, z, margin)) {
+    if (best === null || overlap.y < best.y) best = overlap;
   }
   return best;
 }
@@ -20085,8 +20268,6 @@ interface CulvertBuildResult {
 interface CulvertBuildOptions {
   taggedFamily?: string;
   allowWetFordFallback?: boolean;
-  deckY?: number;
-  waterSurfaceY?: number | null;
 }
 function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   a: number, b: number, width: number, core0: number, core1: number,
@@ -20117,11 +20298,11 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   // that sized it. A clearance calculation may only shrink geometry.
   if (room < CULV_CLR) {
     culvertStats.tooTight++;
-    if (options.allowWetFordFallback
-      && options.deckY !== undefined
-      && options.waterSurfaceY !== null
-      && options.waterSurfaceY !== undefined
-      && options.waterSurfaceY >= options.deckY - .15) {
+    // A known road/channel overlap with no physical room for a conduit is an
+    // open at-grade crossing. Do not make that construction outcome depend on
+    // whether the asynchronously built hydro field happened to expose its
+    // resting surface during this pass.
+    if (options.allowWetFordFallback) {
       return { outcome: 'ford-fallback', availableClearanceM: room, family: 'ford' };
     }
     return { outcome: 'no-room', availableClearanceM: room };
