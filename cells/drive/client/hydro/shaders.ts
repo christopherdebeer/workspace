@@ -89,6 +89,9 @@ import { BANK_GLSL } from '../shoreline';
  */
 
 export const HYDRO_VERTEX_SHADER = /* glsl */`
+#ifdef HYDRO_FALLS
+uniform sampler2D uHydroFalls;
+#endif
 precision highp float;
 
 uniform sampler2D uHydroGeometry;
@@ -244,6 +247,12 @@ void main() {
   float amplitude = mix(standingAmplitude, riverAmplitude, vFlowing)
     * uWaveAmplitude;
 
+  vec4 fallField = vec4(0.0);
+#ifdef HYDRO_FALLS
+  fallField = texture2D(uHydroFalls, vHydroUv);
+  // A falling sheet does not heave like horizontal rapid water.
+  amplitude *= 1.0 - fallField.r * 0.95;
+#endif
   vSurfaceWave = clamp(wave, -1.0, 1.0);
   vSurfaceEnergy = clamp(amplitude / mix(0.55, 0.15, vFlowing), 0.0, 1.0);
   float displaced = wave * amplitude * geometryField.r;
@@ -265,6 +274,12 @@ void main() {
   renderPosition.y = uElevationBase + geometryField.b - uWorldOrigin.y
     + displaced + runupLift;
 
+#ifdef HYDRO_FALLS
+  // A small downstream stand-off clears the independently triangulated
+  // cliff skin. It is confined to known sheets and fades at lip/toe.
+  renderPosition.xz += normalize(dynamics.xy + vec2(0.00001, 0.0)) * fallField.r * 0.65;
+  renderPosition.y += fallField.r * 0.12;
+#endif
   vRenderPosition = renderPosition.xyz;
   vec4 mvPosition = viewMatrix * renderPosition;
   gl_Position = projectionMatrix * mvPosition;
@@ -273,6 +288,9 @@ void main() {
 `;
 
 export const HYDRO_FRAGMENT_SHADER = /* glsl */`
+#ifdef HYDRO_FALLS
+uniform sampler2D uHydroFalls;
+#endif
 precision highp float;
 
 uniform sampler2D uHydroGeometry;
@@ -658,14 +676,13 @@ void main() {
   if (faceNormal.y < 0.0) faceNormal = -faceNormal;
   macroNormal = normalize(faceNormal + vec3(0.0, 0.000001, 0.0));
 #endif
-  // Only a resolved DOWNSTREAM face is falling water. Cross-bank slopes,
-  // bends and the reach-energy afterglow must not turn into waterfalls.
-  float waterfall = 0.0;
-#ifdef HYDRO_FLOWING
-  float downstreamGrade = max(0.0, dot(macroNormal.xz,
-    normalize(flow + vec2(0.00001, 0.0)))) / max(0.025, macroNormal.y);
-  waterfall = vFlowing * smoothstep(0.55, 1.50, downstreamGrade);
+  // Connected profile evidence carries lip, sheet and landing through the
+  // same chart. A bank slope or energetic bend cannot earn a falling sheet.
+  vec4 fallField = vec4(0.0);
+#ifdef HYDRO_FALLS
+  fallField = texture2D(uHydroFalls, vHydroUv);
 #endif
+  float waterfall = fallField.r;
   vec3 normal = macroNormal;
   if (nearWater) {
 #ifdef HYDRO_FLOWING
@@ -1235,18 +1252,36 @@ void main() {
     colour = mix(colour, wakeFoam, wake);
   }
 
-#ifdef HYDRO_FLOWING
-  // Metre-space falling strands: height increases upward, so +time moves
-  // this fixed-rate pattern DOWN. No energy-dependent phase speed or new
-  // textures. Broad aeration survives distance; fine strands fade away.
-  if (waterfall > 0.001) {
-    float fallPhase = vRenderPosition.y + uWorldOrigin.y + uTime * 8.0;
-    float strands = valueNoise(vec2(riverCross * 0.65, fallPhase * 0.11));
-    float brokenSheet = smoothstep(0.26, 0.78, strands);
-    float aeration = waterfall * (0.38 + brokenSheet * 0.42 * detailLod)
+#ifdef HYDRO_FALLS
+  if (waterfall + fallField.b > 0.001) {
+    float progress = fallField.g;
+    // Free-fall travel time is a spatial coordinate. Subtract global time:
+    // features accelerate down the sheet without multiplying time by a
+    // varying local velocity (which tears phases between adjacent faces).
+    float fallenM = progress * max(4.0, fallField.a);
+    float travel = sqrt((fallenM + 2.0) * (2.0 / 9.81));
+    float strandPhase = travel - uTime * 0.85;
+    float crossM = riverCross * mix(1.0, 1.17, sin(progress * 3.14159));
+    float longStrands = valueNoise(vec2(crossM * 1.15, strandPhase * 1.6));
+    float fineStrands = valueNoise(vec2(crossM * 2.6 + 7.0, strandPhase * 3.5));
+    float threads = smoothstep(0.42, 0.78, longStrands * 0.78 + fineStrands * 0.22);
+    float aeration = (0.10 + smoothstep(0.08, 0.8, progress) * 0.18)
+      + threads * (0.32 + progress * 0.22) * detailLod;
+    // Suppress inherited rapid blotches on the face; retain a dark water
+    // foundation between bright strands rather than a white opaque ribbon.
+    vec3 sheetBase = mix(uTerrainColour * uGroundGain, vec3(0.18, 0.29, 0.30), 0.65) * sceneLight;
+    vec3 sheetColour = mix(sheetBase, vec3(0.82, 0.89, 0.87) * sceneLight,
+      clamp(aeration * uFoamStrength, 0.0, 0.88));
+    colour = mix(colour, sheetColour, waterfall);
+
+    // Impact is strongest at the connected toe, then spreads across the
+    // channel and loses strength downstream. No billboard/particle pass.
+    float tailNoise = valueNoise(vec2(riverS * 0.16 - uTime * 1.8, riverCross * 0.35));
+    float landingWidth = 1.0 - smoothstep(0.55, 1.2, abs(riverField.g));
+    float impactFoam = fallField.b * landingWidth
+      * (0.38 + smoothstep(0.28, 0.76, tailNoise) * 0.5 * foamLod)
       * clamp(uFoamStrength, 0.0, 3.0);
-    vec3 fallingColour = mix(colour, vec3(0.79, 0.87, 0.86) * sceneLight, 0.88);
-    colour = mix(colour, fallingColour, clamp(aeration, 0.0, 0.92));
+    colour = mix(colour, vec3(0.78, 0.86, 0.83) * sceneLight, clamp(impactFoam, 0.0, 0.85));
   }
 #endif
   gl_FragColor = vec4(colour, 1.0);

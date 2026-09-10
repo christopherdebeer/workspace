@@ -1,3 +1,4 @@
+import { riverDrops, sampleRiverDrop, type RiverDrop } from './waterfalls';
 import { HydroBodyRegistry } from './body-registry';
 import {
   areaOfRing,
@@ -493,10 +494,12 @@ function indexProfile(profile: Float32Array, widthM: number): ProfileIndex {
 interface BlockHit {
   px: number; pz: number; fx: number; fz: number;
   energy: number; s: number; curvature: number; centreHalfW: number; levelM: number;
+  grade: number; drops: readonly RiverDrop[]; s0: number;
 }
 interface ProfileHit {
   distanceM: number;
   levelM: number;
+  grade: number;
   /** Projection foot on the centreline — where the thalweg bed is sampled. */
   px: number;
   pz: number;
@@ -551,6 +554,7 @@ function sampleProfileAt(
   const cross = fx * (z - pz) - fz * (x - px);
   const curvA = spine.curvature[best], curvB = spine.curvature[best + 1] ?? curvA;
   return {
+    grade: (profile[q + 2] - profile[o + 2]) / len,
     distanceM: Math.sqrt(bestD2),
     levelM: profile[o + 2] * (1 - bestT) + profile[q + 2] * bestT,
     px, pz, fx, fz,
@@ -759,6 +763,7 @@ export function buildHydroTile(
   // River space, allocated only once a flowing texel actually lands — an
   // ocean tile never pays for it. See HydroTileField.structure.
   let structure: Float32Array | null = null;
+  let waterfalls: Float32Array<ArrayBuffer> | undefined;
   const structureAt = (): Float32Array => structure ?? (structure = new Float32Array(count * 4));
   const xAt = (ix: number): number => input.bounds.minX + ((ix - gutter) + 0.5) * pixelX;
   const zAt = (iz: number): number => input.bounds.minZ + ((iz - gutter) + 0.5) * pixelZ;
@@ -796,6 +801,7 @@ export function buildHydroTile(
     river?: readonly [number, number, number, number],
     /** The ground at this texel when the caller has already sampled it. */
     groundM?: number,
+    fall?: readonly [number, number, number, number],
   ): void => {
     if (amount <= 0.005 || ix < 0 || iz < 0 || ix >= width || iz >= height) return;
     const i = iz * width + ix;
@@ -803,6 +809,8 @@ export function buildHydroTile(
     const p = c.p;
     if (rank[i] > p || (rank[i] === p && coverage[i] > amount)) return;
     rank[i] = p;
+    if (fall && (fall[0] > 0 || fall[2] > 0)) waterfalls ??= new Float32Array(count * 4);
+    if (waterfalls) waterfalls.set(fall ?? [0, 0, 0, 0], i * 4);
     if (c.flowing) {
       const st = structureAt();
       if (river) {
@@ -902,6 +910,10 @@ export function buildHydroTile(
       rank[i] = priority(ID_TO_KIND.get(prevKind) ?? 'ocean');
       // A retained flowing texel keeps its river space too, or its phase
       // would snap to zero while its motion machinery kept running.
+      if (previous.waterfalls && (flags[i] & HydroFlags.Flowing)) {
+        waterfalls ??= new Float32Array(count * 4);
+        waterfalls.set(previous.waterfalls.subarray(i * 4, i * 4 + 4), i * 4);
+      }
       if (previous.structure && (flags[i] & HydroFlags.Flowing)) {
         const st = structureAt();
         st[i * 4] = previous.structure[i * 4];
@@ -915,6 +927,7 @@ export function buildHydroTile(
   lap('ocean');
   const resolved: Array<ResolvedHydroFeature & {
     energy?: Float32Array;
+    drops: RiverDrop[];
     spine?: ProfileSpine;
     s0?: number;
     index?: ProfileIndex;
@@ -940,6 +953,7 @@ export function buildHydroTile(
     const lineWidth = feature.geometry.type === 'line' ? feature.geometry.widthM : 0;
     resolved.push({
       feature, body, profile, spine, s0,
+      drops: profile && spine ? riverDrops(profile, spine.along) : [],
       index: profile && feature.geometry.type === 'line'
         ? indexProfile(profile, Math.max(lineWidth, antialias * 1.6)) : undefined,   // the DRAWN width's reach
       energy: flowing && profile ? profileEnergy(profile) : undefined,
@@ -1015,7 +1029,7 @@ export function buildHydroTile(
           clamp((hit.side * hit.distanceM) / halfW, -1.25, 1.25),
           hit.curvature,
           halfW,
-        ]);
+        ], undefined, item.drops.length ? sampleRiverDrop(item.drops, hit.s, levelM) : undefined);
         continue;
       }
       let amount: number;
@@ -1034,6 +1048,7 @@ export function buildHydroTile(
       let localEnergy = item.profile && item.energy
         ? energyAt(item.profile, item.energy, x, z) : undefined;
       let river: readonly [number, number, number, number] | undefined;
+      let fall: [number, number, number, number] | undefined;
       // A flowing AREA with no profile of its own — an OSM riverbank, or a
       // cover-raster reach — used to take bed + nominal depth per texel, a
       // surface that copies every DEM wrinkle. Where a centreline profile is
@@ -1070,6 +1085,7 @@ export function buildHydroTile(
             const bedFoot = sampleElevation(input.elevation, input.bounds, best.px, best.pz);
             hb = {
               px: best.px, pz: best.pz, fx: best.fx, fz: best.fz,
+              grade: best.grade, drops: bestItem.drops, s0: bestItem.s0 ?? 0,
               energy: best.energy, s: (bestItem.s0 ?? 0) + best.s, curvature: best.curvature,
               centreHalfW: bestItem.feature.geometry.type === 'line' ? bestItem.feature.geometry.widthM * 0.5 : 4,
               levelM: Number.isFinite(bedFoot) ? Math.min(best.levelM, bedFoot + FLOWING_NOMINAL_DEPTH_M) : best.levelM,
@@ -1089,14 +1105,18 @@ export function buildHydroTile(
             hb.curvature,
             chartHalfW,
           ];
-          levelM = hb.levelM;
+          // Reuse the segment search, not the block's constant height. A
+          // 2x2 flat step intersects the line mesh on a steep waterfall.
+          const ds = (x - hb.px) * hb.fx + (z - hb.pz) * hb.fz;
+          levelM = hb.levelM + ds * hb.grade;
+          fall = hb.drops.length ? sampleRiverDrop(hb.drops, river[0] - hb.s0, levelM) : undefined;
         }
         P.search += performance.now() - tSearch;
       }
       paint(
         ix, iz, amount, item.body,
         levelM ?? bodyLevel(item.body, item.profile, x, z, bed),
-        localFlow, localEnergy, river, bed,
+        localFlow, localEnergy, river, bed, fall,
       );
       P.paints++;
     }
@@ -1114,6 +1134,7 @@ export function buildHydroTile(
   for (let i = 0; i < count; i++) {
     if (sources[i] || nearest[i] < 0) continue;
     const n = nearest[i];
+    if (waterfalls) waterfalls.set(waterfalls.subarray(n * 4, n * 4 + 4), i * 4);
     level[i] = level[n]; depth[i] = depth[n];
     flowX[i] = flowX[n]; flowZ[i] = flowZ[n];
     fetch[i] = fetch[n]; scale[i] = scale[n];
@@ -1236,6 +1257,7 @@ export function buildHydroTile(
     dynamics,
     material,
     structure: structure ?? undefined,
+    waterfalls,
     hasWater,
     waterBounds,
     bodyIds: [...bodyIds],

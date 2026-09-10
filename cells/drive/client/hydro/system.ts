@@ -183,6 +183,7 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
   // 0 dry, 1 standing water, 2 flowing water (any flowing texel claims the
   // cell — see the regime note above).
   const keep = new Uint8Array(segmentsX * segmentsZ);
+  const fallKeep = new Uint8Array(segmentsX * segmentsZ);
   // The surf strip is independent of the broad water cull: it is allowed into
   // the one-texel dry margin around waterBounds, but only where the propagated
   // body class is ocean/lagoon and signed distance says this is truly shore.
@@ -208,6 +209,8 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
           coastalShore = true;
         }
         if (coverage <= 0.005) continue;
+        if (field.waterfalls && (field.waterfalls[t * 4] > 0.01 || field.waterfalls[t * 4 + 2] > 0.05))
+          fallKeep[j * segmentsX + i] = 1;
         regime = (field.material[t * 4 + 3] & HydroFlags.Flowing) !== 0 ? 2
           : Math.max(regime, 1);
       }
@@ -218,17 +221,17 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
   }
   const build = (regime: number): THREE.BufferGeometry | undefined => {
     const pos: number[] = [], uvs: number[] = [], idx: number[] = [];
-    // Flowing faces must resolve the height field: a broad ocean quad can
-    // bridge an entire cliff. Bound the extra tessellation to wet river cells;
-    // standing water and surf retain their existing budgets.
+    // Only connected drops and their landing regions need the fine grid.
+    // Coarse neighbours stitch to fine edges, so this saving creates no
+    // T-junctions whose displaced midpoint could open a crack.
     const subdivision = regime === 2 ? Math.min(4, Math.max(1, Math.ceil(Math.max(
       rectSpanX / segmentsX / (spanX / (field.resolution - 1)),
       rectSpanZ / segmentsZ / (spanZ / (field.resolution - 1)),
     )))) : 1;
     const fineX = segmentsX * subdivision, fineZ = segmentsZ * subdivision;
-    const vert = new Map<number, number>();
+    const vert = new Map<string, number>();
     const at = (i: number, j: number): number => {
-      const k = j * (fineX + 1) + i;
+      const k = i + ':' + j;
       let v = vert.get(k);
       if (v === undefined) {
         v = pos.length / 3;
@@ -240,9 +243,30 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     };
     for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
       if (keep[j * segmentsX + i] !== regime) continue;
-      for (let dz = 0; dz < subdivision; dz++) for (let dx = 0; dx < subdivision; dx++) {
-        const x = i * subdivision + dx, z = j * subdivision + dz;
-        const a = at(x, z), b = at(x + 1, z), c = at(x, z + 1), d = at(x + 1, z + 1);
+      const x = i * subdivision, z = j * subdivision;
+      const fine = (a: number, b: number): boolean => regime === 2
+        && a >= 0 && b >= 0 && a < segmentsX && b < segmentsZ
+        && keep[b * segmentsX + a] === 2 && fallKeep[b * segmentsX + a] !== 0;
+      if (fine(i, j)) {
+        for (let dz = 0; dz < subdivision; dz++) for (let dx = 0; dx < subdivision; dx++) {
+          const a = at(x + dx, z + dz), b = at(x + dx + 1, z + dz);
+          const c = at(x + dx, z + dz + 1), d = at(x + dx + 1, z + dz + 1);
+          idx.push(a, c, b, b, c, d);
+        }
+      } else if (subdivision > 1 && (fine(i - 1, j) || fine(i + 1, j) || fine(i, j - 1) || fine(i, j + 1))) {
+        const rim: number[] = [];
+        const edge = (ax: number, az: number, bx: number, bz: number, split: boolean): void => {
+          const n = split ? subdivision : 1;
+          for (let k = 0; k < n; k++) rim.push(at(ax + (bx - ax) * k / n, az + (bz - az) * k / n));
+        };
+        edge(x, z, x, z + subdivision, fine(i - 1, j));
+        edge(x, z + subdivision, x + subdivision, z + subdivision, fine(i, j + 1));
+        edge(x + subdivision, z + subdivision, x + subdivision, z, fine(i + 1, j));
+        edge(x + subdivision, z, x, z, fine(i, j - 1));
+        const centre = at(x + subdivision / 2, z + subdivision / 2);
+        for (let k = 0; k < rim.length; k++) idx.push(centre, rim[k], rim[(k + 1) % rim.length]);
+      } else {
+        const a = at(x, z), b = at(x + subdivision, z), c = at(x, z + subdivision), d = at(x + subdivision, z + subdivision);
         idx.push(a, c, b, b, c, d);
       }
     }

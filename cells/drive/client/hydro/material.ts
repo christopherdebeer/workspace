@@ -43,6 +43,7 @@ export interface HydroTileTextures {
   /** River space (s, n, curvature, halfWidth) — only for tiles that hold
    *  flowing water, and only ever bound by the flowing material variant. */
   structure?: THREE.DataTexture;
+  waterfalls?: THREE.DataTexture;
 }
 
 export interface HydroTileGpuBinding {
@@ -149,6 +150,9 @@ export function createHydroTextures(field: HydroTileField): HydroTileTextures {
     // loses whole metres past 2km, which is phase jitter where a long river
     // needs the coordinate most. Linear filtering is exactly right for s and
     // n (both are locally linear fields).
+    waterfalls: field.waterfalls ? configure(new THREE.DataTexture(
+      field.waterfalls, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
+    ), true) : undefined,
     structure: field.structure ? configure(new THREE.DataTexture(
       field.structure, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
     ), true) : undefined,
@@ -185,6 +189,7 @@ export function createHydroMaterial(
     name: `hydro:${field.key}${suffix}`,
     defines: {
       ...(flowing ? { HYDRO_FLOWING: 1 } : {}),
+      ...(flowing && textures.waterfalls ? { HYDRO_FALLS: 1 } : {}),
       ...(surf ? { HYDRO_SURF: 1 } : {}),
       ...(shade ? { HYDRO_SCENE_SHADE: 1 } : {}),
     },
@@ -220,6 +225,7 @@ export function createHydroMaterial(
       // declares is silently dropped by three, so the standing variant
       // carrying the key costs nothing and keeps this call-site unbranched.
       uHydroStructure: { value: textures.structure ?? null },
+      uHydroFalls: { value: textures.waterfalls ?? null },
       // Both the V flip and the water-rect sub-mapping live in one place —
       // see `fieldUvFor`.
       uFieldUv: { value: fieldUvFor(field, centralScale, offset) },
@@ -303,4 +309,5 @@ export function disposeHydroTextures(textures: HydroTileTextures): void {
   textures.dynamics.dispose();
   textures.material.dispose();
   textures.structure?.dispose();
+  textures.waterfalls?.dispose();
 }

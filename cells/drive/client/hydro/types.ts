@@ -205,6 +205,8 @@ export interface HydroTileField {
    * the coordinate most.
    */
   structure?: Float32Array<ArrayBuffer>;
+  /** Connected drop: sheet strength, fallen fraction, impact/tail, drop metres. */
+  waterfalls?: Float32Array<ArrayBuffer>;
   hasWater: boolean;
   /**
    * The world rect the water actually occupies, padded by a texel.
