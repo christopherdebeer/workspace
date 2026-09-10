@@ -166,6 +166,22 @@ async function frame(mode) {
         await d.shot(`substrate-visual-render-top-${view}`);
       }
       await d.page.evaluate(() => window.__hydroview?.('surface'));
+
+      // Term ablations keep a failed bank review actionable: terrain/sward,
+      // shallow-bed reveal and the wet edge can be judged independently.
+      for (const [name, tuning] of [
+        ['no-bed', { shallowBedStrength: 0, riverEdgeStrength: 1 }],
+        ['no-edge', { shallowBedStrength: 1, riverEdgeStrength: 0 }],
+        ['no-bed-edge', { shallowBedStrength: 0, riverEdgeStrength: 0 }],
+      ]) {
+        await d.page.evaluate((patch) => window.__hydrotune?.(patch), tuning);
+        await d.page.waitForTimeout(400);
+        await d.shot(`substrate-visual-render-top-${name}`);
+      }
+      await d.page.evaluate(() => window.__hydrotune?.({
+        shallowBedStrength: 1,
+        riverEdgeStrength: 1,
+      }));
     }
 
     await d.page.evaluate(({ wet, heading }) => {

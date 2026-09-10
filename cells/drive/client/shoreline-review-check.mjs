@@ -6,7 +6,7 @@ import * as THREE from 'three';
 const read=p=>fs.readFileSync(new URL(p,import.meta.url),'utf8');
 function mod(p){const c={module:{exports:{}},exports:{},console,performance,Float32Array,Float64Array,Uint8Array,Uint16Array,Uint32Array,setTimeout,clearTimeout};
  vm.runInNewContext(buildSync({entryPoints:[new URL(p,import.meta.url).pathname],bundle:true,write:false,format:'cjs',platform:'node'}).outputFiles[0].text,c);return c.module.exports;}
-const {bankHabitat:B,sampleBankField,bankHash,bankPatch,bankWetMargin,BANK_GLSL,WATERLINE_CUT}=mod('./shoreline.ts');
+const {bankHabitat:B,bankGroundMineralMix,bankMineralColour,sampleBankField,bankHash,bankPatch,bankWetMargin,BANK_GLSL,WATERLINE_CUT}=mod('./shoreline.ts');
 const {sampleFieldSurface:S}=mod('./hydro/field-sample.ts');
 // Cross-check the integer hash against float32 arithmetic, rather than itself.
 const F=Math.fround,M=(x,y)=>F(x-F(y*Math.floor(F(x/y))));
@@ -21,7 +21,11 @@ assert.equal(bankPatch(-5802,3147),bankPatch(-5802,3147));
 assert.equal(bankWetMargin(0,.5),1);
 assert.ok(bankWetMargin(4,.8)>bankWetMargin(8,.8));
 assert.equal(bankWetMargin(20,.5),0);
+assert.equal(bankMineralColour(.4,.3,.2).map(v=>v.toFixed(4)).join(','),'0.2948,0.2340,0.1732');
 const w={kind:'lake',restingLevelM:10,depthM:0.3,shoreDistanceM:1,flow:[0.1,0],wet:true};
+assert.ok(bankGroundMineralMix(w,.5)>.85);
+assert.ok(bankGroundMineralMix({...w,wet:false,shoreDistanceM:2},.5)>0);
+assert.equal(bankGroundMineralMix({...w,kind:'ocean'},.5),0);
 assert.ok(B(90,.8,18,.02,true,9.8,w).reeds>.5);
 assert.equal(B(80,.8,18,.02,true,7,w).reeds,0);
 assert.equal(B(80,.8,18,.02,true,7,w).mineral,0);
@@ -72,11 +76,15 @@ const rc={SWARD_F:1,SWARD_FM:3,swardPendX:0,swardPendZ:0,swardScratchF:Fld,sward
  climateAt:()=>({moisture:.8,tempC:18,treeline:2000}),swardLift:()=>1,GRASS_M2:{80:0},SHORE_ON:true,
  terrainPalette:()=>[.4,.4,.3],bankPaint:()=>30,hydroSys:{fieldAt:()=>({})},
  sampleBankField:()=>w,bankHabitat:B,bankPatch:()=>.5,bankWetMargin,
- bankMineralOf:(r,g,b)=>[r*.8,g*.8,b*.8],
+ bankMineralColour:(r,g,b)=>[r*.8,g*.8,b*.8],
  BANK_REED:[.4,.44,.2],REED_M2:.14,COVER:{water:80,wetland:90,mangrove:95},
  swardCtxAt:()=>2,clamp:(v,a,b)=>Math.max(a,Math.min(b,v))};
 vm.createContext(rc);vm.runInContext(transformSync(rows,{loader:'ts',format:'cjs'}).code,rc);
 vm.runInContext('swardRows(0,1)',rc);assert.ok(Fld[1]<0);assert.ok(Fld[2]>.4);
+rc.sampleBankField=()=>({...w,wet:false,shoreDistanceM:0});
+rc.bankPaint=()=>30;
+vm.runInContext('swardRows(0,1)',rc);
+assert.ok(Fld[1]>0&&Fld[1]<.45,'dry class-80 bank regrows a softened canonical margin');
 rc.SHORE_ON=false;vm.runInContext('swardRows(0,1)',rc);assert.equal(Fld[2],0);assert.equal(Fld[3],0);
 mod('./hydro/hydro.test.ts').runHydroSelfTest();
 console.log('PASS: float32 hash parity, GPU-aligned field sampling and tile-edge continuity, habitat/depth gates, real sward producer and Three shader injection, hydro regressions');

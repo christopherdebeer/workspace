@@ -23,7 +23,9 @@ import { clamp } from './num';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
 import {
   WATERLINE_CUT,
+  bankGroundMineralMix,
   bankHabitat,
+  bankMineralColour,
   bankPatch,
   bankWetMargin,
   sampleBankField,
@@ -6260,6 +6262,54 @@ function terrainNormalTex(t: { w: number; data: Float32Array; xs?: number; zs?: 
   tex.needsUpdate = true;
   return tex;
 }
+/**
+ * THE RIVERBED IS THE BANK'S GROUND, NOT WORLDCOVER'S WATER SWATCH.
+ *
+ * The canonical hydro contour now inserts exact vertices into terrain. That
+ * made a pre-existing paint disagreement impossible to miss: those vertices
+ * still took class 80's broad cyan tint while the water shader and sward used
+ * the neighbouring bank palette. With the water hidden this appeared as a
+ * hard, pale river-shaped corridor.
+ *
+ * Hydro publication dirties this terrain tile before it can be admitted into
+ * a substrate revision, so both synchronous and worker builds reach this pass
+ * with the exact field that supplied their shoreline break lines. Blend the
+ * authored terrain colours toward local mineral ground continuously across
+ * that field. Material-specific gravel/pebble/rock detail remains the water
+ * shader's job; this pass only gives it a coherent ground colour underneath.
+ */
+function blendHydroBankTerrain(
+  t: HeightTile,
+  positions: Float32Array,
+  colors: Float32Array,
+  normals: Float32Array,
+): void {
+  if (!SHORE_ON || !hydroSys) return;
+  const key = `${t.tx}/${t.ty}`;
+  const field = hydroSys.fieldAt(t.xs + t.w / 2, t.zs + t.h / 2);
+  if (!field || field.key !== key || field.revision !== hydroRev.get(key)) return;
+  const cx = t.xs + t.w / 2, cz = t.zs + t.h / 2;
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = positions[i] + cx, z = positions[i + 2] + cz;
+    const bank = sampleBankField(field, x, z, 12);
+    if (!bank) continue;
+    const mix = bankGroundMineralMix(bank, bankPatch(x, z));
+    if (mix <= 0) continue;
+    const ny = Math.max(0.08, Math.abs(normals[i + 1]));
+    const slope = Math.hypot(normals[i], normals[i + 2]) / ny;
+    const local = terrainPalette(
+      positions[i + 1] + baseElev,
+      slope,
+      bankPaint(x, z),
+      x,
+      z,
+    );
+    const mineral = bankMineralColour(local[0], local[1], local[2]);
+    colors[i] += (mineral[0] - colors[i]) * mix;
+    colors[i + 1] += (mineral[1] - colors[i + 1]) * mix;
+    colors[i + 2] += (mineral[2] - colors[i + 2]) * mix;
+  }
+}
 function buildTerrainMesh(t: HeightTile): void {
   const key = `${t.tx}/${t.ty}`;
   invalidateProductionSubstrateTile(key);
@@ -6272,6 +6322,7 @@ function buildTerrainMesh(t: HeightTile): void {
   // its corridor exactly once, when nothing more is coming.
   const corridor = REFINE && nearTruck && osmStreamQuiet();
   const b = K.buildTile(kStore, t, SEG, corridor, REFINE);
+  blendHydroBankTerrain(t, b.pos, b.colors, b.normals);
   const p7 = performance.now();
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(b.pos, 3));
@@ -6422,6 +6473,7 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
 function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string): void {
   invalidateProductionSubstrateTile(key);
   const SEG = terrainSeg;
+  blendHydroBankTerrain(t, r.pos, r.colors, r.normals);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(r.pos, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(r.uv, 2));
@@ -9646,15 +9698,6 @@ let swardFieldReady = false;
  *  bank's mineral where the habitat says mineral, and reeds thicken a
  *  sheltered, shallow margin at REED_M2 a square metre. */
 const BANK_REED: [number, number, number] = [0.40, 0.44, 0.20];
-/** THE BANK'S MINERAL, FROM THE GROUND IT IS IN. A fixed gravel tan drew a
- *  beach around a grassland river in the chart; wet mineral ground is the
- *  local palette a fifth darker and a fifth greyer — the rule the water
- *  shader's `wetGround` applies to the bed, so the two meet in one colour
- *  at the waterline instead of each bringing its own sand. */
-const bankMineralOf = (r: number, g: number, b: number): [number, number, number] => {
-  const l = (r + g + b) / 3;
-  return [(r + (l - r) * 0.22) * 0.78, (g + (l - g) * 0.22) * 0.78, (b + (l - b) * 0.22) * 0.78];
-};
 // This is before SWARD_LUSH: tall stalks need fewer slots than short grass.
 const REED_M2 = 0.14;
 /**
@@ -9817,6 +9860,14 @@ function swardRows(from: number, to: number): void {
         const bs = f ? sampleBankField(f, wx, wz, 12) : undefined;
         const wetCover = cv === COVER.wetland || cv === COVER.mangrove;
         if (bs || wetCover) {
+          // WorldCover's class-80 texel can be tens of metres wider than the
+          // actual river. On dry canonical bank, recover the neighbouring
+          // cover's ordinary density before applying the continuous wet-margin
+          // fade; otherwise the coarse raster leaves a broad shaved corridor.
+          if (bs && !bs.wet && cv === COVER.water) {
+            const bankCover = bankPaint(wx, wz);
+            density = (bankCover === null ? 0.35 : (GRASS_M2[bankCover] ?? 0.3)) * lift;
+          }
           // A north/south bank must be as steep as an east/west one.
           // Pay the second ground read only in bank/wetland texels.
           const bankSlope = Math.hypot(slope, (groundAt(wx, wz + SWARD_FM) - h) / SWARD_FM);
@@ -9827,14 +9878,17 @@ function swardRows(from: number, to: number): void {
           // Signed density distinguishes submerged slots without another field:
           // only emergents/minerals may occupy them, never ordinary grass.
           const bankRate = hab.reeds * REED_M2 * lift + hab.mineral * 0.06;
-          density = hab.submerged ? -(bankRate + 0.00001)
-            : density * (1 - hab.mineral * 0.65) + bankRate;
           const wetMargin = bs && !bs.wet
             ? bankWetMargin(bs.shoreDistanceM, bankPatch(wx, wz))
             : 0;
+          density = hab.submerged ? -(bankRate + 0.00001)
+            : density
+              * (1 - hab.mineral * 0.25)
+              * (1 - wetMargin * (0.62 + hab.mineral * 0.25))
+              + bankRate;
           const mk = Math.max(hab.mineral * 0.75, wetMargin * 0.52);
           const rk = hab.reeds * 0.5;
-          const [mr, mg, mb] = bankMineralOf(pr, pg, pb);
+          const [mr, mg, mb] = bankMineralColour(pr, pg, pb);
           pr += (mr - pr) * mk; pg += (mg - pg) * mk; pb += (mb - pb) * mk;
           pr += (BANK_REED[0] - pr) * rk; pg += (BANK_REED[1] - pg) * rk; pb += (BANK_REED[2] - pb) * rk;
         }
@@ -9990,6 +10044,14 @@ function refreshSwardField(full = true): void {
     for (const ch of channelGrid.get(`${gx},${gz}`) ?? []) {
       if (cseen.has(ch)) continue;
       cseen.add(ch);
+      // A current canonical field owns the river edge and the signed sward
+      // density above. Keep this legacy stroke only while that field is absent;
+      // otherwise its centreline width imposes a second, harder shoreline.
+      const field = hydroSys?.fieldAt(
+        (ch.ax + ch.bx) * 0.5,
+        (ch.az + ch.bz) * 0.5,
+      );
+      if (field && field.revision === hydroRev.get(field.key)) continue;
       const w = (ch.hw - SWARD_SHALLOW) * 2;
       if (w <= 0.2) continue;
       swardMaskCtx.lineWidth = Math.max(1, w * px);

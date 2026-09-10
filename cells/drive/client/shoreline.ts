@@ -70,6 +70,31 @@ export function bankWetMargin(distanceM: number, patch = 0.5): number {
   const smooth = t * t * (3 - 2 * t);
   return 1 - smooth;
 }
+/** The mineral bank is the local ground, darkened and pulled slightly toward
+ * neutral. Keeping this rule shared prevents terrain, sward and water from
+ * inventing separate "river sand" colours at the same physical edge. */
+export function bankMineralColour(r: number, g: number, b: number): [number, number, number] {
+  const l = (r + g + b) / 3;
+  return [
+    (r + (l - r) * 0.22) * 0.78,
+    (g + (l - g) * 0.22) * 0.78,
+    (b + (l - b) * 0.22) * 0.78,
+  ];
+}
+/** How strongly visible ground should become local bank mineral.
+ *
+ * Dry ground fades over the same patch-varied metre-space margin as the
+ * habitat field. Inland submerged ground is predominantly bank/bed material,
+ * not WorldCover's coarse class-80 tint; the hydro shader adds the canonical
+ * silt/sand/gravel/pebble/rock structure on top. Oceans retain their existing
+ * bathymetric palette. */
+export function bankGroundMineralMix(water: BankWater, patch = 0.5): number {
+  if (water.kind === 'ocean' || water.kind === 'lagoon') return 0;
+  if (water.wet === false) return bankWetMargin(water.shoreDistanceM, patch) * 0.58;
+  const shallow = unit(1 - Math.max(0, water.depthM) / 1.5);
+  const edge = unit(1 - Math.max(0, water.shoreDistanceM) / 4);
+  return unit(0.78 + shallow * 0.12 + edge * 0.08);
+}
 /** The fragment cut the water shader applies to coverage at this point —
  *  the one number the physics and the overlay must share with it. */
 export const WATERLINE_CUT = (px: number, pz: number, kind?: string): number =>

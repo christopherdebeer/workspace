@@ -398,7 +398,7 @@ vec4 rigTrailField(vec2 p, vec2 flow) {
 // ground darkened and greyed, never a sand constant: a grassland river has a
 // dark green-grey bed and a desert river a pale one, because their banks do.
 // The sward's bank paint applies the same rule on the ground side
-// (bankMineralOf in main.ts), so the two meet in one colour at the waterline.
+// (bankMineralColour in shoreline.ts), so the two meet in one colour at the waterline.
 vec3 wetGround(vec3 t) {
   return mix(t, vec3(dot(t, vec3(0.333))), 0.22) * 0.78;
 }
@@ -958,12 +958,21 @@ void main() {
       vec3 sandSediment = mix(terrainC * 1.08, wetGround(terrainC) * 1.02, 0.36);
       vec3 sediment = mix(siltSediment, coarseSediment, coarseBed);
       sediment = mix(sediment, sandSediment, sandBed);
-      vec3 paleGravel = mix(sediment, terrainC * 1.32, 0.42 + coarseBed * 0.28);
+      // Gravel is a change in mineral structure, not a cream outline around
+      // every channel. The old path could raise local ground by 32% here and
+      // another 30% below, then replace 95% of the water with it: from above,
+      // the entire shallow shelf became one pale ribbon. Keep the bed in the
+      // bank's own key, with only enough lift for bars to survive global post.
+      vec3 gravelMineral = mix(
+        sediment,
+        mix(terrainC, wetGround(terrainC), 0.18) * 1.08,
+        0.34 + coarseBed * 0.22
+      );
       // From above the bars and pools are the read, so their contrast opens
       // with the view's overhead component; the fine grain fades with range.
       vec3 bedColour = mix(
-        sediment * mix(0.82, 0.68, overhead),
-        paleGravel * mix(1.12, 1.30, overhead),
+        sediment * mix(0.86, 0.76, overhead),
+        gravelMineral * mix(1.02, 1.12, overhead),
         bedPatch
       ) * (0.96 + ((pebble - 0.5) * mix(0.10, 0.34, coarseBed)
         + (bar - 0.5) * mix(0.14, 0.26, coarseBed)
@@ -996,8 +1005,13 @@ void main() {
       float opticalBedDepth = max(0.0, bedDepth - 0.08);
       bedColour *= exp(-vec3(0.42, 0.21, 0.14) * opticalBedDepth
         * (1.0 + turbidity * 2.0));
+      // Retain a real water column over flowing shallows. Without this cap the
+      // bed replaced virtually the whole surface at the bank, so removing the
+      // bed term made the river disappear and enabling it drew a hard mineral
+      // stripe. Standing-water behaviour is unchanged.
+      float bedMixCap = mix(0.95, 0.82, vFlowing);
       colour = mix(colour, bedColour,
-        clamp(bedVisibility * mix(1.0, 0.64, turbidity), 0.0, 0.95));
+        clamp(bedVisibility * mix(1.0, 0.64, turbidity), 0.0, bedMixCap));
     }
   }
 

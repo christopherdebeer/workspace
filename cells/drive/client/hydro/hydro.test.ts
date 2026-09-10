@@ -35,8 +35,13 @@ export function runHydroSelfTest(): void {
   'surface colour continuously includes sky reflection and shallow terrain tint');
   assert(HYDRO_FRAGMENT_SHADER.includes('cobbleColour')
     && HYDRO_FRAGMENT_SHADER.includes('bedVisibility')
-    && HYDRO_FRAGMENT_SHADER.includes('pebbleSpeck'),
+    && HYDRO_FRAGMENT_SHADER.includes('pebbleSpeck')
+    && HYDRO_FRAGMENT_SHADER.includes('gravelMineral')
+    && HYDRO_FRAGMENT_SHADER.includes('float bedMixCap = mix(0.95, 0.82, vFlowing)'),
   'clear shallows reveal a stable sediment, pebble and cobble bed');
+  assert(!HYDRO_FRAGMENT_SHADER.includes('terrainC * 1.32')
+    && !HYDRO_FRAGMENT_SHADER.includes('mix(1.12, 1.30, overhead)'),
+  'flowing shallow beds stay in the local bank key instead of drawing a cream rim');
   assert(HYDRO_FRAGMENT_SHADER.includes('stoneCluster')
     && HYDRO_FRAGMENT_SHADER.includes('stoneGrain')
     && HYDRO_FRAGMENT_SHADER.includes('vec2 bedFlowP = bedP')
