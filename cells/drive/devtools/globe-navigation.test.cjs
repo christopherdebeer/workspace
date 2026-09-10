@@ -19,7 +19,7 @@ const globe = loadTS('globe.ts');
 const source = fs.readFileSync(sourcePath, 'utf8');
 const names = ['localToLatLon', 'setChartFocus', 'chartRemote', 'chartDist', 'chartMpp',
   'globeOn', 'globeFree', 'globeDegPerPx', 'chartTilt', 'stepGlobe', 'dragGlobe',
-  'globeSpinLatRange', 'alignFarShell', 'chartPlaneAt'];
+  'globeSpinLatRange', 'chartPlaneAt', 'sphereRTC', 'sphereLatLon'];
 const code = names.map(name => {
   const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, name);
@@ -35,8 +35,8 @@ const ctx = {THREE, ...nav, ...globe, Math, origin, M_LAT:111320,
   GLOBE_SINK:800,GLOBE_PIN_PX:4.5,GLOBE_PIN_LIFT:1.001,GLOBE_SPIN_LAT_MAX:85,
   FAR_RING_MAX:2,SIGHT_MAX:1500000,EARTH_R:6371000,farZ:5,FIXTURE:false,
   innerWidth:390,innerHeight:844,pixSize:{x:148,y:320},
-  globeGroup:new THREE.Group(),globePin:new THREE.Mesh(),
-  farGroup:new THREE.Group(),ovGroup:new THREE.Group(),farAxis:new THREE.Vector3(),
+  planetGroup:new THREE.Group(),globeMesh:new THREE.Mesh(),globePin:new THREE.Mesh(),
+  farGroup:new THREE.Group(),ovGroup:new THREE.Group(),
   globeU:{uBase:{value:{}},uSun:{value:new THREE.Vector3()}},
   clamp:(x,a,b)=>Math.max(a,Math.min(b,x)),viewX:()=>0,viewZ:()=>0,mapRot:()=>0,
   toLocal:(lat,lon)=>[(lon-origin.lon)*origin.mLon,(origin.lat-lat)*111320],
@@ -82,13 +82,23 @@ ctx.mapRot=()=>0;ctx.setChartFocus(-30,25);ctx.zoomCur=40000;frame();
 const free=ctx.globeFree(),tilt=ctx.chartTilt();
 for(const z of [13,11,9,7,6,5]){ctx.farZ=z;assert.equal(ctx.globeFree(),free);}
 for(const h of [160,320,844]){ctx.pixSize.y=h;close(ctx.chartTilt(),tilt);assert.equal(ctx.globeFree(),free);}
-// The paraboloid is tangent beneath any browsed place; roads and land agree.
-for(const [cx,cz] of [[0,0],[100000,200000],[19000000,-7000000]]){
-  const m=nav.chartShellMatrix(cx,cz,globe.GLOBE_R);
-  for(const [dx,dz] of [[0,0],[100,0],[0,100],[10000,-5000]]){
-    const x=cx+dx,z=cz+dz;
-    const p=new THREE.Vector3(x,123-(x*x+z*z)/(2*globe.GLOBE_R),z).applyMatrix4(m);
-    close(p.y,123-(dx*dx+dz*dz)/(2*globe.GLOBE_R),1e-6);
+// THE SHELL IS ON THE SPHERE, NOT ON A PARABOLOID. Every far and overview
+// vertex is built by sphereRTC relative to its tile's centre point: the sum
+// stands at exactly R + height from the planet's centre, and the inverse
+// gives the lat/lon and height back. The old shear (chartShellMatrix) and the
+// seat's first-order tilt (alignFarShell) are gone with the paraboloid.
+{
+  const R=globe.GLOBE_R,out=new THREE.Vector3();
+  for(const [cLat,cLon] of [[0,0],[47,8],[-30,25],[84,-179],[-60,150]]){
+    const centre=globe.latLonToUnit(cLat,cLon).multiplyScalar(R);
+    for(const [lat,lon,y] of [[cLat,cLon,0],[cLat+3,cLon-4,1234],[cLat-2.5,cLon+5,-4817],[cLat+0.01,cLon,12]]){
+      ctx.sphereRTC(lat,lon,y,centre,out);
+      close(out.clone().add(centre).length(),R+y,1e-3);
+      const [la,lo,h]=ctx.sphereLatLon(out.clone().add(centre));
+      close(la,lat,1e-9);close(((lo-lon+540)%360)-180,0,1e-9);close(h,y,1e-3);
+      // Relative to its centre the vertex is the tile's size, not the Earth's.
+      assert.ok(out.length()<1.2e6,`rtc magnitude ${out.length()}`);
+    }
   }
 }
 // Repeat two-finger out/in sequences across the hand-over. All intermediate
@@ -106,9 +116,18 @@ for(const separation of [190,180,160,140,120,100,80,60,80,100,120,140,160,180,19
 close(ctx.zoomCur,16000,1e-6);
 console.log('Repeated pinch focus error (degrees):',focus()[0]-20,focus()[1]-160);
 close(focus()[0],20,0.5);close(focus()[1],160,0.5);
-ctx.alignFarShell();assert.deepEqual(ctx.farGroup.matrix.elements,ctx.ovGroup.matrix.elements);
-ctx.camMode='chase';ctx.alignFarShell();assert.equal(ctx.farGroup.matrixAutoUpdate,true);
-assert.equal(ctx.ovGroup.matrixAutoUpdate,true);
+// THE PLANET IS PLACED UNDER THE FOCUS ON THE CHART AND UNDER THE POV FROM
+// THE SEAT, in every camera: one radius down, turned so that point is its top.
+for(const mode of ['top','chase']){
+  ctx.camMode=mode;ctx.setChartFocus(20,160);frame();
+  const [fx,fz]=mode==='top'?[ctx.panX,ctx.panZ]:[ctx.viewX(),ctx.viewZ()];
+  close(ctx.planetGroup.position.x,fx,1e-6);close(ctx.planetGroup.position.z,fz,1e-6);
+  close(ctx.planetGroup.position.y,-globe.GLOBE_R,1e-6);
+  const [la,lo]=ctx.localToLatLon(fx,fz);
+  const up=globe.latLonToUnit(la,lo).applyQuaternion(ctx.planetGroup.quaternion);
+  close(up.x,0,1e-9);close(up.y,1,1e-9);close(up.z,0,1e-9);
+}
+ctx.camMode='top';
 // Equal elapsed time gives equal zoom at 30/60/120 fps and both extremes.
 for(const [from,to] of [[1,110000],[110000,1],[8,16]]){
   const values=[30,60,120].map(fps=>{let z=from;for(let i=0;i<fps;i++)z=nav.smoothChartZoom(z,to,1/fps);return z;});
@@ -152,4 +171,4 @@ ctx.mapRot=()=>0;
 assert.ok(source.includes("camMode === 'cab' || camMode === 'top'"));
 assert.ok(source.indexOf('zoomCur = panPtrs.size === 2') < source.indexOf('  stepGlobe();'));
 assert.ok(!source.includes('globeSpinLat *= g'));
-console.log('PASS: retained focus, rig unchanged, dateline/poles, globe drag, stable hand-over, shell alignment, frame-independent zoom, map rotation survives the tilt');
+console.log('PASS: retained focus, rig unchanged, dateline/poles, globe drag, stable hand-over, shell on the sphere, planet placed in every camera, frame-independent zoom, map rotation survives the tilt');

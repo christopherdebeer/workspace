@@ -30,9 +30,9 @@ import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt
 import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } from './infrastructure';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
 import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
-import { smoothChartZoom, wrapLongitude, chartShellMatrix } from './globe-navigation';
+import { smoothChartZoom, wrapLongitude } from './globe-navigation';
 import { bitmapStats, withDecodedBitmap } from './decode-telemetry';
-import { GLOBE_R, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, subsolar } from './globe';
+import { GLOBE_R, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, globeEast, globeNorth, subsolar } from './globe';
 import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSystem, type OceanCoverage } from './hydro';
 import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipment';
 import { createRigModel, OVERLAND, RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
@@ -5648,7 +5648,45 @@ farClip(farMat);
  * layers are lit by one law and differ only in outline.
  */
 const farMats = new Map<string, THREE.MeshLambertMaterial>();
-function farMatFor(data: Float32Array, w: number, key: string): THREE.MeshLambertMaterial {
+/**
+ * THE MAP WAS WRITTEN WITH +Y UP, AND ON A SPHERE UP IS THE RADIAL.
+ *
+ * The kernel's normal map is object-space — its x east, y up, z south, the
+ * flat frame's axes — and three reads it straight through normalMatrix. Across
+ * a 990km z5 tile the radial swings 8.9 degrees, so a map read as-is lights
+ * every tile with a vignette: the sun's cosine drifts ±4.5 degrees from one
+ * edge to the other, about ±5% of the direct term. So the fragment rebuilds
+ * the vertex's own east/up/north from its position — the frame latLonToUnit
+ * defines, east from the radial's x/z, north as up × east, which the mirrored
+ * frame makes a rotation — and reads the map in that. `uTileC` is the tile's
+ * centre in the planet's frame, the vector the RTC vertices are relative to.
+ *
+ * A DISTINCT CACHE KEY from farMat's, or three hands the fallback material
+ * (a tangent-space map, no vObjP) this program and the shell goes black.
+ */
+function sphereNormal(mat: THREE.MeshLambertMaterial, centre: THREE.Vector3): void {
+  const base = mat.onBeforeCompile;
+  const u = { uTileC: { value: centre } };
+  mat.onBeforeCompile = function (sh, renderer) {
+    base.call(this, sh, renderer);
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vObjP;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvObjP = transformed;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vObjP; uniform vec3 uTileC;')
+      .replace('#include <normal_fragment_maps>', `
+        {
+          vec3 mN = texture2D(normalMap, vNormalMapUv).xyz * 2.0 - 1.0;
+          vec3 uR = normalize(vObjP + uTileC);
+          vec3 eR = normalize(vec3(uR.z, 0.0, -uR.x));
+          vec3 nR = cross(uR, eR);
+          normal = normalize(normalMatrix * (mN.x * eR + mN.y * uR - mN.z * nR));
+        }`);
+  };
+  mat.customProgramCacheKey = () => 'terrain-far-sphere';
+}
+function farMatFor(data: Float32Array, w: number, key: string, centre: THREE.Vector3): THREE.MeshLambertMaterial {
   const old = farMats.get(key);
   if (old) { old.normalMap?.dispose(); old.dispose(); }
   // A quarter-megabyte of texture per tile, and the ring is 25 of them; a level
@@ -5673,6 +5711,7 @@ function farMatFor(data: Float32Array, w: number, key: string): THREE.MeshLamber
   m.normalMapType = THREE.ObjectSpaceNormalMap;
   terrainFx(m, { detail: true });
   farClip(m);
+  sphereNormal(m, centre);
   farMats.set(key, m);
   return m;
 }
@@ -21274,7 +21313,7 @@ function globeOn(): number {
  * nothing to show for itself.
  */
 function globeFree(): number {
-  if (camMode !== 'top' || !globeGroup.visible) return 0;
+  if (camMode !== 'top' || !globeMesh.visible) return 0;
   // The final shell's reach is stable; the currently downloading LOD is not.
   // Using farZ could change gesture ownership underneath a held finger.
   const ringM = (2 * FAR_RING_MAX + 1) * tileMetres(farLevelFor(SIGHT_MAX));
@@ -21929,7 +21968,9 @@ let farRetired: THREE.Mesh[] = [];
 function setFarLevel(z: number): void {
   if (z === farZ) return;
   farZ = z;
-  for (const m of farMeshes.values()) { m.position.y -= 18; farRetired.push(m); }
+  // Sunk RADIALLY: the mesh's position is its centre point on the sphere, so
+  // scaling it toward the planet's centre is the 18m the flat drop used to be.
+  for (const m of farMeshes.values()) { m.position.multiplyScalar(1 - 18 / GLOBE_R); farRetired.push(m); }
   farMeshes.clear();
   farTiles.clear();
   // The retired level's bake records go with it. They were kept, and they
@@ -21953,41 +21994,17 @@ function dropRetiredFar(): void {
 const EARTH_R = 6371000;
 const curveDrop = (dx: number, dz: number): number => (dx * dx + dz * dz) / (2 * EARTH_R);
 /**
- * …AND THE CURVE IS MEASURED FROM WHERE YOU ARE STANDING.
+ * …AND THE CURVE IS NOT A TERM ANY MORE.
  *
- * The shell bakes its drop from the world ORIGIN, which is geometrically
- * correct against the tangent plane at the spawn — and disagrees with the
- * FINE world, which is built dead flat at every distance. Standing at the
- * spawn the two agree. Thirty kilometres down the road they do not: the shell
- * is 70m low, the fine ring ends in a cliff, and 70m of it is real geometry
- * doing exactly what it was told.
- *
- * Rebaking every mesh as the truck moves is not affordable. It is also not
- * necessary, because the difference between the two drops is LINEAR in
- * position — (2·p·c − |c|²)/2R for a viewer at c — and a linear ramp over a
- * rigid body is a tilt plus a lift. So the shell is tilted by |c|/R about the
- * horizontal axis across the direction of travel and dropped by |c|²/2R,
- * which is the same statement as "the world tips as you go over the curve".
- * Exact to first order, two numbers a frame, and it keeps the horizon level
- * under the truck wherever the truck has got to.
+ * The shell used to bake its drop from the world ORIGIN (d²/2R, the sphere to
+ * second order) and then be re-seated every frame — tilted by |c|/R from the
+ * seat, sheared under the browsed focus on the chart — because a paraboloid
+ * baked at one place is wrong everywhere else: 70m low thirty kilometres down
+ * the road, 44km off the sphere at 3,000km, half a radius off at a quarter
+ * turn. Its tiles are built ON the sphere now, in the planet's own frame (see
+ * planetGroup and sphereRTC), and `stepGlobe` places that frame under the
+ * view. There is nothing left to align: the curve is the geometry.
  */
-const farAxis = new THREE.Vector3();
-function alignFarShell(): void {
-  if (camMode === 'top') {
-    farGroup.matrixAutoUpdate = ovGroup.matrixAutoUpdate = false;
-    chartShellMatrix(viewX() + panX, viewZ() + panZ, EARTH_R, farGroup.matrix);
-    ovGroup.matrix.copy(farGroup.matrix);
-    farGroup.matrixWorldNeedsUpdate = ovGroup.matrixWorldNeedsUpdate = true;
-    return;
-  }
-  farGroup.matrixAutoUpdate = ovGroup.matrixAutoUpdate = true;
-  ovGroup.position.set(0, 0, 0); ovGroup.rotation.set(0, 0, 0);
-  const cx = viewX(), cz = viewZ();
-  const d = Math.hypot(cx, cz);
-  if (d < 1) { farGroup.rotation.set(0, 0, 0); farGroup.position.y = 0; return; }
-  farGroup.setRotationFromAxisAngle(farAxis.set(-cz / d, 0, cx / d), d / EARTH_R);
-  farGroup.position.y = -(d * d) / (2 * EARTH_R);
-}
 const farTiles = new Set<string>();
 const farMeshes = new Map<string, THREE.Mesh>();
 /** Per far tile, the fraction of its vertices that had a cover class at bake,
@@ -22053,21 +22070,66 @@ function coverDirtiedFar(modeMoved: boolean, x: number, z: number, w: number, h:
     const mesh = farMeshes.get(key);
     if (!mesh) continue;
     if (!modeMoved) {
-      const b = mesh.geometry.boundingBox ?? (mesh.geometry.computeBoundingBox(), mesh.geometry.boundingBox);
-      if (!b) continue;
-      const x0 = b.min.x + mesh.position.x, x1 = b.max.x + mesh.position.x;
-      const z0 = b.min.z + mesh.position.z, z1 = b.max.z + mesh.position.z;
-      if (x1 < x || x0 > x + w || z1 < z || z0 > z + h) continue;
+      // The tile's FLAT box is the raster's, kept beside it; the mesh's own
+      // bounds are on the sphere now and say nothing in these coordinates.
+      const r = farRasters.get(key);
+      if (!r) continue;
+      if (r.xs + r.w < x || r.xs > x + w || r.zs + r.h < z || r.zs > z + h) continue;
     }
     farGroup.remove(mesh); mesh.geometry.dispose();
     farMeshes.delete(key); farTiles.delete(key);
     farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key); farBakeZ.delete(key);
   }
 }
+/**
+ * ── THE PLANET, AS A FRAME ──
+ *
+ * One node, tangent under the view, that everything past the fine ring is a
+ * child of: the globe mesh, its pin, the far shell and the overview vectors.
+ * The children are built in the PLANET'S OWN FRAME — `latLonToUnit` times a
+ * radius, relative to each tile's centre point — so they lie on one sphere by
+ * construction and the node's transform (set once a frame in `stepGlobe`) is
+ * the only thing that decides where that sphere stands. Before this the shell
+ * carried a paraboloid baked from the origin, the chart sheared it under the
+ * browsed focus, the seat tilted it by |c|/R to first order, and the globe was
+ * a second sphere the shell was asked to agree with: three approximations of
+ * one surface, and the arithmetic in CLAUDE.md's planet section for how far
+ * apart they get — 44km at 3,000km, half a radius at a quarter turn.
+ *
+ * The fine world stays a flat tangent patch at the rig: two metres of sag at
+ * its edge and a fifth of a millimetre of foreshortening, which is what every
+ * planet renderer does, and this one already rebases on a hop.
+ */
+const planetGroup = new THREE.Group();
+planetGroup.name = 'planet';
+worldGroup.add(planetGroup);
+/**
+ * A point on the planet, in its frame, RELATIVE TO A TILE'S OWN CENTRE.
+ *
+ * Float32 holds half a metre at 6.4e6; it holds three centimetres across a
+ * 990km tile and half a millimetre across a 5km one. So every vertex is the
+ * tile's size and not the Earth's, the mesh's position is the centre point
+ * itself (a JS double), and three composes matrixWorld and modelViewMatrix in
+ * doubles before anything is uploaded — nothing at a planet's magnitude ever
+ * meets a Float32. `y` is height over the datum in the flat frame's sense,
+ * elev − baseElev plus whatever sink the layer takes, so the radius is R + y
+ * and the sphere's top under the view is the flat frame's y = 0.
+ */
+function sphereRTC(lat: number, lon: number, y: number, centre: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
+  return latLonToUnit(lat, lon, out).multiplyScalar(GLOBE_R + y).sub(centre);
+}
+/** A planet-frame vector back to lat/lon and height over the datum — the
+ *  inverse of `sphereRTC`, for the probes that read a far vertex and then ask
+ *  the flat world about the ground there. */
+function sphereLatLon(p: THREE.Vector3): [number, number, number] {
+  const r = p.length();
+  return [(Math.asin(clamp(p.y / r, -1, 1)) * 180) / Math.PI, (Math.atan2(-p.z, p.x) * 180) / Math.PI, r - GLOBE_R];
+}
+const sphV = new THREE.Vector3();
 const farGroup = new THREE.Group();
 farGroup.name = 'far';
 farGroup.visible = false;
-worldGroup.add(farGroup);
+planetGroup.add(farGroup);
 
 /**
  * ── THE PLANET, UNDER EVERYTHING ──
@@ -22075,13 +22137,13 @@ worldGroup.add(farGroup);
  * See client/globe.ts for why this is a backdrop rather than a mode. Two
  * numbers here are load-bearing:
  *
- * THE SINK. The far shell drops by d²/2R, which is this sphere to second
- * order, so the two surfaces very nearly coincide and would z-fight along
- * every tile of the shell. The globe is dropped 800m so the shell always wins
- * where both exist — the shell has real terrain and the globe has a 39km
- * texel. 800m is under two pixels at the widest zoom the shell is even drawn
- * at, and the depth buffer has metres to spare there (near:far is 1:50 at
- * these altitudes), so it is invisible and decisive at once.
+ * THE SINK. The far shell is built on this very sphere now (see planetGroup),
+ * so the two surfaces would coincide exactly and z-fight along every tile of
+ * the shell. The globe MESH is dropped 800m beneath the frame so the shell
+ * always wins where both exist — the shell has real terrain and the globe has
+ * a 39km texel. 800m is under two pixels at the widest zoom the shell is even
+ * drawn at, and the depth buffer has metres to spare there (near:far is 1:50
+ * at these altitudes), so it is invisible and decisive at once.
  *
  * RENDER ORDER −5, between the sky dome's −10 and the world's 0: the dome
  * paints first with no depth write, the globe over it, the streamed world over
@@ -22130,12 +22192,13 @@ const globePin = new THREE.Mesh(
 );
 globePin.name = 'globe-pin';
 globePin.renderOrder = -4;       // after the planet, still under the world
-const globeGroup = new THREE.Group();
-globeGroup.name = 'globe';
-globeGroup.visible = false;
-globeGroup.add(globeMesh);
-globeGroup.add(globePin);
-worldGroup.add(globeGroup);
+globeMesh.visible = false;
+// THE SINK IS THE MESH'S, NOT THE FRAME'S. The frame's centre is exactly one
+// radius under the view so the shell's vertices land at the flat frame's
+// heights; the backdrop alone drops by GLOBE_SINK beneath it.
+globeMesh.position.y = -GLOBE_SINK;
+planetGroup.add(globeMesh);
+planetGroup.add(globePin);
 let globeAsked = false, globeFailed = false;
 /**
  * WHERE THE PLANET IS TURNED TO, IN DEGREES OFF THE TRUCK'S OWN POINT.
@@ -22202,43 +22265,47 @@ function globeTexture(): void {
 }
 /** Where the planet is tangent, how it is turned, and where its sun stands. */
 function stepGlobe(): void {
-  const on = camMode === 'top' && chartDist() > 150000 && !FIXTURE;
-  if (on) globeTexture();
-  globeGroup.visible = on && globeU.uBase.value !== null;
-  if (!globeGroup.visible) return;
+  // ── THE PLANET IS PLACED EVERY FRAME, IN EVERY CAMERA ──
+  //
+  // It used to be placed only while the globe was drawn, because the globe was
+  // the only thing standing on it. The far shell and the overview vectors are
+  // its children now, built on the sphere in its own frame, so wherever THEY
+  // are drawn the planet has to be where they were built to stand: tangent
+  // under the chart's FOCUS on the chart, and under the POV from the seat —
+  // where alignFarShell used to tilt the shell by |c|/R to first order, and
+  // was 70m low thirty kilometres down the road. A fixture has no globe and
+  // still has a shell, so the placement does not stand down with the mesh.
+  //
   // Spin is a change of chart focus, never a disposable offset. The rig stays
   // where it is; the existing overview streamer follows panX/panZ.
-  if (globeSpinLat || globeSpinLon) {
+  if (camMode === 'top' && (globeSpinLat || globeSpinLon)) {
     const [lat, lon] = localToLatLon(viewX() + panX, viewZ() + panZ);
     setChartFocus(lat + globeSpinLat, lon + globeSpinLon);
     globeSpinLat = globeSpinLon = 0;
   }
-  const vx = viewX() + panX, vz = viewZ() + panZ;
+  const vx = camMode === 'top' ? viewX() + panX : viewX();
+  const vz = camMode === 'top' ? viewZ() + panZ : viewZ();
   const [gLat, gLon] = localToLatLon(vx, vz);
-  globeGroup.position.set(vx, -(GLOBE_R + GLOBE_SINK), vz);
-  // ── THE SPIN, SCALED BY THE HAND-OVER ──
-  //
-  // `globeFree` is 0 wherever the far shell still covers the frame, so the
-  // planet is tangent under the truck by construction exactly where a second
-  // backdrop could contradict it, and 1 where the planet is the only thing out
-  // there. The consequence at the other end is what makes the gesture safe:
-  // zooming back in puts the Earth home in the same frame the shell arrives
-  // in — behind it, so the snap is not seen — rather than leaving the chart
-  // parked over an ocean the fine world cannot stream.
-  const free = globeFree();
-  const sLat = clamp(gLat + globeSpinLat * free, -89.9, 89.9);
-  const sLon = gLon + globeSpinLon * free;
-  globeOrientation(sLat, sLon, globeGroup.quaternion);
+  // The centre is exactly one radius under the focus: the sphere's top is the
+  // flat frame's y = 0 there, so a far vertex built at R + elev - baseElev
+  // lands at the height the fine world gives the same ground. The globe MESH
+  // carries its own sink beneath it (GLOBE_SINK).
+  planetGroup.position.set(vx, -GLOBE_R, vz);
+  globeOrientation(clamp(gLat, -89.9, 89.9), gLon, planetGroup.quaternion);
+  const on = camMode === 'top' && chartDist() > 150000 && !FIXTURE;
+  if (on) globeTexture();
+  globeMesh.visible = on && globeU.uBase.value !== null;
   // The pin marks the truck's TRUE point on the sphere, which is the top of it
-  // only while the spin is nothing. Hidden below the hand-over, where it would
+  // only while the chart is home. Hidden below the hand-over, where it would
   // be a gold diamond sitting on the frame's centre saying what the whole
   // chart already says.
-  globePin.visible = free > 0.001;
+  globePin.visible = globeMesh.visible && globeFree() > 0.001;
   if (globePin.visible) {
     const [rigLat, rigLon] = localToLatLon(viewX(), viewZ());
     latLonToUnit(rigLat, rigLon, globePin.position).multiplyScalar(GLOBE_R * GLOBE_PIN_LIFT);
     globePin.scale.setScalar(GLOBE_PIN_PX * chartMpp());
   }
+  if (!globeMesh.visible) return;
   // THE SUN IS THE CLOCK'S, NOT THE WALL'S. `clockHour` is local solar time at
   // the origin's meridian — the same number the sky and the shadows are built
   // from — so the terminator moves when the time dial is dragged and holds
@@ -22279,10 +22346,17 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   const w = Math.abs(wx1 - wx0), h = Math.abs(wz1 - wz0);
   const seg = farSeg(z);
   let hit = 0, tr = 0, tg = 0, tb = 0;
+  // The lattice is still laid out flat — its u/v index the raster and its
+  // flat x/z give each vertex its lat/lon through the same equirectangular
+  // map every layer is placed by — and then every vertex is moved onto the
+  // sphere, relative to the tile's centre point (see sphereRTC). Nothing
+  // about the bake changes: the same pixel, the same slope, the same colour.
   const geo = new THREE.PlaneGeometry(w, h, seg, seg);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
+  const [cLat, cLon] = localToLatLon(xs + w / 2, zs + h / 2);
+  const centre = latLonToUnit(cLat, cLon).multiplyScalar(GLOBE_R);
   // SLOPE IS SHADED PER TEXEL, NOT PER VERTEX. du/dv are the rise across one
   // heightfield pixel, so the divisor has to be a pixel's ground width — and
   // the fine builder happens to use twice that. Dividing by this layer's own
@@ -22291,17 +22365,13 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   // rectangle of "real" terrain around the car on the wide chart.
   const cell = w / 128;
   for (let i = 0; i < pos.count; i++) {
+    const lx = pos.getX(i), lz = pos.getZ(i);
     // Sampled from THIS tile's own pixels — no cross-tile bilinear, no road
     // grid, no cut. A seam of a few metres between coarse tiles is invisible
     // from the only altitude this layer is ever seen at.
-    const u = clamp(Math.round(((pos.getX(i) + w / 2) / w) * 255), 0, 255);
-    const v = clamp(Math.round(((pos.getZ(i) + h / 2) / h) * 255), 0, 255);
+    const u = clamp(Math.round(((lx + w / 2) / w) * 255), 0, 255);
+    const v = clamp(Math.round(((lz + h / 2) / h) * 255), 0, 255);
     const raw = data[v * 256 + u];
-    // World position of this vertex, so the curve is measured from the ORIGIN
-    // rather than from the tile — the drop has to be continuous across the
-    // whole shell or every tile edge becomes a step.
-    pos.setY(i, raw - baseElev - FAR_DROP
-      - curveDrop(xs + w / 2 + pos.getX(i), zs + h / 2 + pos.getZ(i)));
     const du = data[v * 256 + Math.min(255, u + 1)] - raw;
     const dv = data[Math.min(255, v + 1) * 256 + u] - raw;
     // THE SAME PALETTE AS THE FINE WORLD. This called terrainPalette with no
@@ -22312,7 +22382,15 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     // escarpment at Senqu, where the shell stands up to 38m ABOVE the fine
     // ground and paints over it. Cover is null out past the loaded raster,
     // which is exactly the old behaviour, so the far horizon is unchanged.
-    const fwx = xs + w / 2 + pos.getX(i), fwz = zs + h / 2 + pos.getZ(i);
+    const fwx = xs + w / 2 + lx, fwz = zs + h / 2 + lz;
+    // ONTO THE SPHERE. The height is the flat frame's — elev over the datum,
+    // less the drop that keeps the fine world on top where both exist — and
+    // the curve is no longer a term: it is the sphere.
+    {
+      const [vLat, vLon] = localToLatLon(fwx, fwz);
+      sphereRTC(vLat, vLon, raw - baseElev - FAR_DROP, centre, sphV);
+      pos.setXYZ(i, sphV.x, sphV.y, sphV.z);
+    }
     // The SHELL sampler: the fine raster where it reaches, the coarse ladder
     // beyond it. `hit` counts either, which is what makes __far().cover the
     // measurement of "is this tile wearing real cover or a guess".
@@ -22342,8 +22420,8 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   farBakeZ.set(key, coverWideZ);
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? farMatFor(data, w, key) : farMat);
-  mesh.position.set(xs + w / 2, 0, zs + h / 2);
+  const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? farMatFor(data, w, key, centre) : farMat);
+  mesh.position.copy(centre);
   farMeshes.set(key, mesh);
   farRasters.set(key, { xs, zs, w, h, data });
   farGroup.add(mesh);
@@ -22420,7 +22498,7 @@ const ovQueue: Array<() => void> = [];
 const ovGroup = new THREE.Group();
 ovGroup.name = 'overview';
 ovGroup.visible = false;
-worldGroup.add(ovGroup);
+planetGroup.add(ovGroup);
 /**
  * THE BACKDROP HAS TO KNOW IT IS ONE.
  *
@@ -22498,11 +22576,12 @@ ovMat.onBeforeCompile = (sh: { vertexShader: string; fragmentShader: string; uni
   sh.vertexShader = sh.vertexShader
     .replace('#include <common>', `#include <common>
       varying vec2 vOvW; attribute float aInk; varying float vInk;
-      attribute vec2 aOff; uniform float uOvW;`)
+      attribute vec3 aOff; uniform float uOvW;`)
     // BEFORE project_vertex, which is what consumes `transformed`. The ribbon
-    // has no width in the buffer at all — it is a centreline until here.
+    // has no width in the buffer at all — it is a centreline until here. The
+    // push is a vector in the tile's tangent plane (see buildOvTile).
     .replace('#include <begin_vertex>', `#include <begin_vertex>
-      transformed.xz += aOff * uOvW;`)
+      transformed += aOff * uOvW;`)
     .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
       vOvW = (modelMatrix * vec4(transformed, 1.0)).xz;
       vInk = aInk;`);
@@ -22566,7 +22645,9 @@ function ovInkRefresh(): void {
   ovDark = keep;
 }
 /** A place the chart can write on the land: rank 0 city … 3 hamlet, 4 peak. */
-interface OvPlace { name: string; x: number; z: number; y: number; rank: number }
+/** `x/z/y` in the flat frame, for whoever asks the flat world about the
+ *  place; `sp` its point in the PLANET'S frame, which is what draws it. */
+interface OvPlace { name: string; x: number; z: number; y: number; sp: THREE.Vector3; rank: number }
 const ovPlaces = new Map<string, OvPlace>();
 /**
  * ── THE COARSE ROAD NETWORK, KEPT ──
@@ -22607,7 +22688,7 @@ function setOvLevel(z: number): void {
   // The outgoing level holds the frame while the new one streams, exactly as
   // the terrain shell does — sunk a little so the incoming level wins where
   // both exist, dropped when the new ring has landed.
-  for (const m of ovMeshes.values()) { m.position.y -= 15; ovRetired.push(m); }
+  for (const m of ovMeshes.values()) { m.position.multiplyScalar(1 - 15 / GLOBE_R); ovRetired.push(m); }
   ovMeshes.clear();
   ovTiles.clear();
   ovWays.clear(); ovWayV++;    // the level swapped; the coarse graph is stale
@@ -22707,11 +22788,21 @@ function buildOvTile(key: string, x: number, y: number, z: number,
     if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
     return;
   }
-  const yAt = (la: number, lo: number, wx: number, wz: number): number => {
+  // Height over the datum in the flat frame's sense; the curve is the sphere
+  // the vertex is put on (sphereRTC), not a term here any more.
+  const yAt = (la: number, lo: number): number => {
     const u = clamp(Math.round(((lo - b.lonW) / (b.lonE - b.lonW)) * 255), 0, 255);
     const v = clamp(Math.round(((b.latN - la) / (b.latN - b.latS)) * 255), 0, 255);
-    return dem[v * 256 + u] - baseElev - FAR_DROP - curveDrop(wx, wz) + lift;
+    return dem[v * 256 + u] - baseElev - FAR_DROP + lift;
   };
+  // THE TILE'S OWN FRAME ON THE SPHERE: its centre point, which the vertices
+  // are relative to, and the east/north there, which the ribbon's push is
+  // written in. One frame for the whole tile — at z7 the frame turns 2.8
+  // degrees edge to edge, and what it turns is a two-pixel ribbon's width.
+  const [cLat, cLon] = [(b.latN + b.latS) / 2, (b.lonW + b.lonE) / 2];
+  const centre = latLonToUnit(cLat, cLon).multiplyScalar(GLOBE_R);
+  const eC = globeEast(cLat, cLon), nC = globeNorth(cLat, cLon);
+  const vA = new THREE.Vector3(), vB = new THREE.Vector3();
   /**
    * EVERY TILE DRAWS ITS OWN PIECE OF A WAY, AND NOBODY ELSE'S.
    *
@@ -22780,7 +22871,8 @@ function buildOvTile(key: string, x: number, y: number, z: number,
       // one place it leaked.
       if (underCover(la, lo, 1)) continue;
       const [px, pz] = toLocal(la, lo);
-      ovPlaces.set(name, { name, x: px, z: pz, y: yAt(la, lo, px, pz),
+      ovPlaces.set(name, { name, x: px, z: pz, y: yAt(la, lo),
+        sp: latLonToUnit(la, lo).multiplyScalar(GLOBE_R + yAt(la, lo)),
         rank: t.place ? OV_RANK[t.place] ?? 3 : 4 });
       continue;
     }
@@ -22823,14 +22915,17 @@ function buildOvTile(key: string, x: number, y: number, z: number,
       const dx = bx - ax, dz = bz - az;
       const len = Math.hypot(dx, dz) || 1;
       const px2 = (-dz / len) * hw, pz2 = (dx / len) * hw;
-      const ay = yAt(aLa, aLo, ax, az), by = yAt(bLa, bLo, bx, bz);
+      sphereRTC(aLa, aLo, yAt(aLa, aLo), centre, vA);
+      sphereRTC(bLa, bLo, yAt(bLa, bLo), centre, vB);
+      // The push, in the tangent plane: the flat frame's z is SOUTH.
+      const ox = px2 * eC.x - pz2 * nC.x, oy = px2 * eC.y - pz2 * nC.y, oz = px2 * eC.z - pz2 * nC.z;
       // Six vertices on the CENTRELINE, six normals that push them apart in
       // the vertex shader. Same triangle count, same ink ranges, and a width
       // that is a decision about the camera rather than about the tile.
-      verts.push(ax, ay, az, bx, by, bz, ax, ay, az,
-        bx, by, bz, bx, by, bz, ax, ay, az);
-      offs.push(px2, pz2, px2, pz2, -px2, -pz2,
-        px2, pz2, -px2, -pz2, -px2, -pz2);
+      verts.push(vA.x, vA.y, vA.z, vB.x, vB.y, vB.z, vA.x, vA.y, vA.z,
+        vB.x, vB.y, vB.z, vB.x, vB.y, vB.z, vA.x, vA.y, vA.z);
+      offs.push(ox, oy, oz, ox, oy, oz, -ox, -oy, -oz,
+        ox, oy, oz, -ox, -oy, -oz, -ox, -oy, -oz);
       for (let q = 0; q < 6; q++) cols.push(col[0], col[1], col[2]);
     }
     }
@@ -22847,7 +22942,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
   geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cols), 3));
-  geo.setAttribute('aOff', new THREE.BufferAttribute(new Float32Array(offs), 2));
+  geo.setAttribute('aOff', new THREE.BufferAttribute(new Float32Array(offs), 3));
   // Everything is lit unless a run says otherwise — rail, water and coastline
   // never enter inkRuns at all, so they are simply on.
   const ink = new Float32Array(verts.length / 3).fill(1);
@@ -22863,6 +22958,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   // after the world's own transparents (water, rain) rather than under
   // whichever happened to sort nearer that frame.
   mesh.renderOrder = 40;
+  mesh.position.copy(centre);
   for (const r of inkRuns) if (!r.lit) ovDark.push({ mesh, name: r.name, la: r.la, lo: r.lo, from: r.from, to: r.to });
   ovMeshes.set(key, mesh);
   ovGroup.add(mesh);
@@ -23218,12 +23314,13 @@ function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number
   for (const m of ovMeshes.values()) {
     const p = m.geometry.getAttribute('position');
     for (let i = 0; i < p.count && fl.length + wet.length < 900; i += 37) {
-      const x = p.getX(i), z = p.getZ(i);
+      const [la, lo, yv] = sphereLatLon(sphV.set(p.getX(i), p.getY(i), p.getZ(i)).add(m.position));
+      const [x, z] = toLocal(la, lo);
       if (!hasHeight(x, z)) continue;          // only where the FINE world exists
       const g = sampleHeight(x, z);
       const overSea = seaOn && g < sea.position.y;
       const surface = overSea ? sea.position.y : g;
-      (overSea ? wet : fl).push(p.getY(i) + m.position.y - surface);
+      (overSea ? wet : fl).push(yv - surface);
     }
   }
   wet.sort((a, b) => a - b);
@@ -30039,7 +30136,7 @@ let texMeanCache: Record<string, number> | null = null;
     // not a census — a shell full of motorway would show in any sample.
     for (let i = 0; i < a.count; i += 8) {
       totalPts++;
-      const [la, lo] = localToLatLon(a.getX(i), a.getZ(i));
+      const [la, lo] = sphereLatLon(sphV.set(a.getX(i), a.getY(i), a.getZ(i)).add(m.position));
       if (underCover(la, lo, 1)) wayPts++;
     }
   }
@@ -30051,7 +30148,7 @@ let texMeanCache: Record<string, number> | null = null;
   const [gLat, gLon] = localToLatLon(viewX(), viewZ());
   const ss = subsolar(clockHour(), origin.lon);
   return {
-    shown: globeGroup.visible, tex: globeU.uBase.value !== null, asked: globeAsked, failed: globeFailed,
+    shown: globeMesh.visible, tex: globeU.uBase.value !== null, asked: globeAsked, failed: globeFailed,
     mpp: +chartMpp().toFixed(1), on: +globeOn().toFixed(3), tilt: +chartTilt().toFixed(1),
     space: +(skyMat.uniforms.uSpace as { value: number }).value.toFixed(3),
     // THE RIG AND THE PLACE ARE NO LONGER THE SAME POINT. Since the chart
@@ -30081,7 +30178,7 @@ let texMeanCache: Record<string, number> | null = null;
     // off, so `globePin.visible` keeps whatever it last held — a stale `true`
     // under a hidden group, which reads from outside exactly like a pin left
     // on the glass. The group's own visibility is half the answer.
-    pin: globeGroup.visible && globePin.visible,
+    pin: globePin.visible,
     ringKm: Math.round(((2 * FAR_RING_MAX + 1) * tileMetres(farZ)) / 1000),
     frameKm: Math.round((chartMpp() * Math.hypot(pixSize.x, pixSize.y)) / 1000),
     alt: Math.round(chartDist()), far: Math.round(camera.far),
@@ -32005,7 +32102,7 @@ function dragGlobe(x0: number, y0: number, x1: number, y1: number): void {
   const at = (x: number, y: number) => {
     const ray = new THREE.Vector3(x / innerWidth * 2 - 1, 1 - y / innerHeight * 2, 0.5)
       .unproject(camera).sub(camera.position).normalize();
-    return globeHit(camera.position, ray, globeGroup.position, globeGroup.quaternion);
+    return globeHit(camera.position, ray, planetGroup.position, planetGroup.quaternion);
   };
   const a = at(x0, y0), b = at(x1, y1);
   const [lat, lon] = localToLatLon(viewX() + panX, viewZ() + panZ);
@@ -32046,7 +32143,7 @@ function globeTapAt(px: number, py: number): [number, number] | null {
   if (globeFree() <= 0) return null;
   const dir = new THREE.Vector3((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1, 0.5)
     .unproject(camera).sub(camera.position).normalize();
-  const hit = globeHit(camera.position, dir, globeGroup.position, globeGroup.quaternion);
+  const hit = globeHit(camera.position, dir, planetGroup.position, planetGroup.quaternion);
   return hit ? toLocal(hit.lat, hit.lon) : null;
 }
 function chartToWorld(px: number, py: number): [number, number] {
@@ -37411,7 +37508,7 @@ function tick(now: number): void {
     // the frame while it is wider than the frame's DIAGONAL — the corners are
     // where a square ring under a rotated frame gives out first. Below that
     // the shell draws, above it the planet does, and no edge is ever on
-    // screen. `|| !globeGroup.visible` keeps the old behaviour wherever there
+    // screen. `|| !globeMesh.visible` keeps the old behaviour wherever there
     // is no planet to hand to (a fixture, or the texture never arriving):
     // a coarse backdrop beats an empty frame.
     // ONE EXPRESSION, IN `globeFree`. The ring-against-diagonal test decides
@@ -37971,9 +38068,9 @@ function tick(now: number): void {
   // Whatever view is up: the frame follows the truck even while the dock shows
   // the POV preview, so the map is whole the moment the chart comes back.
   { const _p = performance.now(); mapRecentre(); profAdd('mapRecentre', _p); }
-  // The backdrop rides the curve under whoever is current (see alignFarShell),
-  // and answers a probe's override last, after every camera rule has had its say.
-  { const _p = performance.now(); alignFarShell(); profAdd('alignFarShell', _p); }
+  // The backdrop stands on the planet, which stepGlobe places under whoever is
+  // current; a probe's override answers last, after every camera rule has had
+  // its say.
   if (farForce !== null) farGroup.visible = farForce;
   if (camMode !== 'top' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   // Progress lives in the URL: reloading resumes here, not at the spawn.
@@ -41775,7 +41872,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const ranked = [...ovPlaces.values()].sort((a, b) => a.rank - b.rank);
     for (const p of ranked) {
       if (p.rank > maxRank || budget <= 0) break;
-      poiVec.set(p.x, p.y, p.z).applyMatrix4(ovGroup.matrix);
+      // The place's point on the sphere, through the planet's own placement —
+      // composed here rather than read off matrixWorld, which is a render old.
+      poiVec.copy(p.sp).applyQuaternion(planetGroup.quaternion).add(planetGroup.position);
       if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) continue;
       poiVec.project(camera);
       if (Math.abs(poiVec.x) > 0.96 || Math.abs(poiVec.y) > 0.92) continue;
