@@ -27,8 +27,10 @@ import { inflateSync } from 'node:zlib';
 import { join } from 'node:path';
 
 const REV = process.env.REV || '';
-const TAG = REV ? `poke-${REV.slice(0, 7)}` : 'poke-fix';
 const Z = Number(process.env.Z ?? 11000);
+// Frames are named by build AND zoom, or a second zoom's run overwrites the
+// first's witness while you are still looking at it.
+const TAG = `${REV ? `poke-${REV.slice(0, 7)}` : 'poke-fix'}-z${Z}`;
 const RIG = { lat: 37.7351, lon: -119.637 }, FOCUS = { lat: 20, lon: 78 };
 const SPOT = `lat=${RIG.lat}&lon=${RIG.lon}&h=0&cam=top&wx=clear&time=NOON&nodraw=1&z=${Z}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

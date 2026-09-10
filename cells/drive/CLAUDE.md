@@ -5284,17 +5284,18 @@ centimetres across a 990km tile and half a millimetre across a 5km one, the
 mesh's position is the centre in a JS double, and three composes matrixWorld
 and modelViewMatrix in doubles before anything is uploaded, so nothing at a
 planet's magnitude ever meets a Float32. The globe MESH keeps its own
-visibility rule and carries its own sink beneath the frame, so the shell still
-wins where both exist — **along the focus's own radial, set every frame.** The
-first cut wrote it as `position.y = -GLOBE_SINK` on the mesh, and the mesh's
-position is in the PLANET'S frame, whose y is the pole axis: that sank the
-globe toward the south pole, 584m down at Romoos and 400m UP at Letsemeng,
-where every lattice vertex of the sphere then stood through the Karoo shell
-as a small diamond every 2.25 degrees. A sink that is right in one hemisphere
-and wrong in the other is exactly the kind of thing the 47N frame could never
-have caught; the Letsemeng day frame at zoom 11,000 did, and the same frame
-on the build that sinks along the radial has none — the shell corner to
-corner over the Karoo with nothing standing through it.
+visibility rule, and the shell wins where both exist BY DRAW ORDER — the
+backdrop writes no depth — not by geometry. It was a sink first, and the sink
+was wrong twice, which is the next section. The first cut wrote it as
+`position.y = -GLOBE_SINK` on the mesh, and the mesh's position is in the
+PLANET'S frame, whose y is the pole axis: that sank the globe toward the
+south pole, 584m down at Romoos and 400m UP at Letsemeng, where every lattice
+vertex of the sphere then stood through the Karoo shell as a small diamond
+every 2.25 degrees. A sink that is right in one hemisphere and wrong in the
+other is exactly the kind of thing the 47N frame could never have caught; the
+Letsemeng day frame at zoom 11,000 did. The second cut sank it along the
+focus's radial, which fixed that hemisphere and left the same lattice
+standing through every country lower than the rig — see below.
 
 **Measured** (`__far().sphere`, 25 z7 tiles at Letsemeng, 4,300 sampled
 vertices): every vertex within **6mm** of R + height over the datum, the
@@ -5362,6 +5363,104 @@ surface now, a Bayer dissolve over the outer ring is possible for the first
 time. `devtools/globe-view.mjs` waits for the ring before it photographs a
 zoom, because a frame of one tile standing on the planet with its neighbours
 missing is exactly what a broken placement would look like.
+
+## The globe stood through the shell in circles, and the far side's names came through the planet
+
+Reported from the seat with the rig at Mariposa and the chart turned to India:
+dark circles on a lattice with four-pointed stars between them across the
+whole subcontinent, bands along the parallels over Alberta on the way out,
+and Edmonton, Denver, San Francisco, Havana and Guadalajara written over the
+Deccan — with west to the RIGHT. Two faults, one measurement each, and the
+second turned out to be the first seen from another side.
+
+**The circles are the globe's own lattice.** Autocorrelation of the seat's
+frames (`scratchpad/lattice.mjs`, the 16-bit phone PNG decoded with zlib
+alone, luma detrended by a 90px box) put the period at **126px across and
+128px down** over India and 118/128 over the Arabian Sea coast; at the bar's
+own scale (500km over 267 file pixels) 126px is 235km, which is 2.25° of
+longitude at 20°N — and `globeGeometry(160, 80)` is a 2.25° lattice. A z7
+shell tile, the other candidate, would have been 157px. Over Alberta the
+frame carries a y-period of 128px and no x-period, because at 55°N the
+longitude chord is short and only the latitude one sags: bands, not discs.
+
+**Why it stood through.** The far shell is built on the sphere at
+`R + elev − baseElev − FAR_DROP`: the RIG'S OWN ELEVATION is in every far
+vertex's radius, and the rig stood at **2,299m** (terrarium at the spot;
+`__origin().baseElev` reads it now). So over India's plains the shell sits
+2.2km inside the sphere, over the Deccan 1.8km, over the sea floor 6km. The
+globe mesh sank a fixed 800m under the focus, and a 2.25° lattice chords
+1.23km below the true sphere at mid-edge and 2.46km at a cell centre: at every
+vertex the globe stood 1.4km ABOVE the shell, at mid-edge 180m above it, at
+the cell centres 1km below — a disc around each vertex, a star of shell at
+each centre. A sink of any fixed size is right at exactly one elevation
+difference and this one was chosen with the shell at the rig's own height.
+**The fix is not a bigger sink: the backdrop writes no depth** (`depthWrite:
+false` in `globeMaterial`), so the shell wins wherever it is drawn, by order,
+whatever its radius. Nothing behind the planet is ever drawn — back faces are
+culled — so the depth buffer was never doing anything a sphere needs, except
+one thing, which is the second fault.
+
+**The names came through the planet.** The place labels were culled by "in
+front of the camera" (`view.z > −1`) and by the screen rectangle. A point on
+the FAR side of the sphere is still in front of the camera, and the
+perspective projection of the far hemisphere lands INSIDE the disc, mirrored
+— Mariposa is 163° of longitude from the Deccan, near enough antipodal that
+the whole US fell on the near face with east and west swapped, which is what
+the frame shows (Denver left of San Francisco, Atlanta left of Dallas). With
+the globe's depth gone the pin would have done the same. Both use the exact
+cap test now: a surface point P is visible from eye E about centre C iff
+`(P−C)·(E−C) ≥ R²` (`onNearCap`, with the eye taken into the planet's frame
+once per pass). `__ov().labels` reports what the HUD actually DREW, because
+"is San Francisco written over India" is a question about the frame and no
+probe could answer it.
+
+**Reproduced and measured** (`devtools/globe-poke.mjs`: the rig at Mariposa,
+`__globespin` to 20N 78E, the z5 ring and the overview ring home, frames with
+everything, with the shell hidden and with the globe hidden, the clock pinned
+to NOON). The lattice number is the autocorrelation at the globe lattice's
+own period in the frame, from the chart's stated scale; `shell%` is the share
+of the pane that changes when the shell is hidden — what the shell was
+drawing; `globe%` the share that changes when the globe is hidden with the
+shell on:
+
+| zoom 11,000, India from Mariposa | control (1e7617d) | fix |
+|---|---|---|
+| lattice at 2.25° (x / y) | **0.424 / 0.449** | **0.130 / 0.064** |
+| shell% of the pane | 78.4 | **99.1** |
+| globe% with the shell on | (no switch) | **0.00** |
+| labels drawn | US cities, mirrored | Delhi, Jaipur, Hyderabad, Pune, Bengaluru, Kanpur, Nagpur, Chennai |
+| **zoom 22,000 — the seat's own `500 KM · 1:18M`** | | |
+| lattice at 2.25° (x / y) | **0.371 / 0.403** | **0.081 / 0.009** |
+| shell% of the pane | 66.1 | **96.1** |
+| globe% with the shell on | (no switch) | **0.00** |
+| labels drawn | US cities, mirrored | Kabul, Lahore, Delhi … Chennai, fourteen, none American |
+
+The control's frame IS the seat's frame — lighter discs of globe on the
+lattice, darker stars of shell, the US names across it — and the shell-hidden
+frame beside it is the bare planet with the same names, which is the label
+fault on its own.
+
+**Two traps in the measuring, both of which cost a run:**
+
+- **`time=DAY` is not a mode.** `TIME_MODES` is CYCLE, LIVE, DAWN, MORNING,
+  NOON, AFTERNOON, DUSK, NIGHT; an unknown value leaves the 24× cycle running,
+  the two hide frames were five sim minutes apart, and the "globe%" read 2.8%
+  of dither re-weaving under a moved sun. Pin with `time=NOON`.
+- **At dawn the control read the lattice at 0.021 — lower than the fix.** The
+  globe's day side and the shell under a sun on the horizon were the same
+  tone, so the discs were there and invisible in luma, and a "control that
+  shows nothing" would have said the harness could not reproduce the fault.
+  The same run at NOON read 0.424. A negative control is a claim about the
+  lighting as much as the geometry; look at the frame before believing the
+  number, and pin the clock.
+
+**And the scale line's zoom is `z5.0` now, lowercase with a real glyph.** The
+seat read `24.9` on all five frames for what the HUD drew as `Z4.9`: in the
+5×7 face, Z (`v1248gv`) and 2 (`eh1248v`) are the same diagonal with one
+pixel of difference at the top. The table had no lowercase at all —
+`GLYPHS[ch] ?? GLYPHS[ch.toUpperCase()]` — so the tile-debug line's `MAP z13`
+had been drawing a capital Z all along too. `z: '00v248v'` is five rows at
+x-height and cannot be read as a digit.
 
 ## Globe navigation: retain the place, not a disposable spin
 
