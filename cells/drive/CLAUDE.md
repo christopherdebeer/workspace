@@ -5565,6 +5565,19 @@ coast ran in frame-time and the planet was still turning 0.5° per 300 ms
 long after it should have rested; the closed form `v·τ·(1−e^(−T/τ))` is
 exact for any frame length and needs no clamp.).
 
+**AND THE DOUBLE TAP DROPPED A FIX UNDER THE READOUT.** Reported the
+moment the rows shipped: the telemetry copied, and a fix appeared where the
+FPS figure is, its record written to the clipboard over the telemetry.
+`fpsDown` swallowed the pointerdown; the pointerup still reached `endStick`,
+whose chart tap logic is "any up without a stick", and the readout's two
+taps were the chart's double tap. Every instrument that takes a down now
+puts the pointer's id in `hudPtrs`, and `endStick` ends on that id before
+the chart is asked anything — for a cancel too, and for the window's copy
+of the same up (`lastUp`). `devtools/fps-tap.test.mjs` double-taps the
+readout by its own rectangle (`__fpsTap()`) and asserts one copy and no
+fix, then double-taps open chart and asserts a fix — the control that keeps
+the first assertion from being vacuous.
+
 **Two traps, one round each:**
 
 - **Moves under 4 ms apart update no velocity.** A synthetic drag dispatched

@@ -32360,12 +32360,11 @@ const setStickFrom = (e: PointerEvent): void => {
 };
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
-  if (fpsDown(e)) return;
-  if (autoDown(e)) return;
-  if (poiDown(e)) return;
-  if (rewindDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
-  if (clockDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
-  if (hudTap(e.clientX, e.clientY)) return; // an instrument swallowed it
+  // Each instrument swallows the DOWN; hudPtrs makes it swallow the UP too.
+  if (fpsDown(e) || autoDown(e) || poiDown(e)) { hudPtrs.add(e.pointerId); return; }
+  if (rewindDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
+  if (clockDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
+  if (hudTap(e.clientX, e.clientY)) { hudPtrs.add(e.pointerId); return; } // an instrument swallowed it
   // Capture: without it, a finger lifted over interactive chrome (the reroll
   // button) never fires pointerup HERE — the brake finger leaked and stayed
   // held forever, which read as "the car is stuck".
@@ -32549,6 +32548,20 @@ let tapAt = 0, tapX = 0, tapY = 0, tapSeen = 0;
 // twice with the SAME event object. Without this the second run sees a tap
 // zero milliseconds old at zero distance and teleports on a single tap.
 let lastUp: Event | null = null;
+/**
+ * A POINTER AN INSTRUMENT TOOK ON THE DOWN NEVER REACHES THE CHART ON THE UP.
+ *
+ * The FPS readout, the AUTO button, a pin, the rewind and the clock all
+ * swallow their pointerdown and return — and the pointerup still arrived at
+ * `endStick`, whose tap logic on the chart is "any up without a stick". So a
+ * double tap on the FPS readout copied the telemetry on its second DOWN and
+ * then, on its second UP, was also the chart's double tap: a fix dropped
+ * where the readout is, its record written to the clipboard over the
+ * telemetry that had just been put there. Reported from the seat as both
+ * happening at once. The ids an instrument takes are kept here and the up
+ * for one of them ends before the chart is asked anything.
+ */
+const hudPtrs = new Set<number>();
 /**
  * Where a screen pixel lands on a HORIZONTAL plane at height `y0`, through the
  * live camera. The cheap sibling of `chartToWorld`: that one marches the
@@ -32975,8 +32988,13 @@ const tapCanMark = (e: PointerEvent): boolean => {
   return e.clientY < innerHeight * 0.5;
 };
 const endStick = (e: PointerEvent): void => {
+  // Taken by an instrument on the down — see hudPtrs. Deleted whatever the
+  // event type, so a cancel clears it too; `lastUp` is set so the window's
+  // copy of the same up (this handler is on both) does not ask the chart.
+  const hud = hudPtrs.delete(e.pointerId);
   if (e.type === 'pointerup' && rewindUp(e)) return;
   if (e.type === 'pointerup' && clockUp(e)) return;
+  if (hud) { lastUp = e; return; }
   if (tapCanMark(e) && e.type === 'pointerup' && e !== lastUp) {
     lastUp = e;
     tapSeen++;
@@ -36664,6 +36682,7 @@ function telemetryReport(): string {
 /** Copy the telemetry: the clipboard where a gesture allows it, a text box
  *  to select otherwise. */
 function copyTelemetry(): void {
+  telemetryCopies++;
   const text = telemetryReport();
   const fallback = (): void => {
     const ta = document.createElement('textarea');
@@ -36686,6 +36705,14 @@ function copyTelemetry(): void {
 (window as unknown as { __telemetry?: object }).__telemetry = (copy = false): string => { if (copy) copyTelemetry(); return telemetryReport(); };
 /** The FPS readout's hit box, in HUD units, set where it is drawn. */
 const fpsRect = { x: 0, y: 0, w: 0, h: 0 };
+let telemetryCopies = 0;
+/** The FPS readout's centre in CSS pixels, how many times the telemetry has
+ *  been copied, and how many fixes stand — so a test can double-tap the
+ *  readout and prove the copy happened and no fix did. */
+(window as unknown as { __fpsTap?: object }).__fpsTap = (): object => ({
+  x: (fpsRect.x + fpsRect.w / 2) * hudS, y: (fpsRect.y + fpsRect.h / 2) * hudS, w: fpsRect.w * hudS,
+  copies: telemetryCopies, fixes: [...pois.values()].filter((p) => p.kind === 'survey').length,
+});
 let fpsTapAt = 0;
 function fpsDown(e: PointerEvent): boolean {
   if (fpsRect.w === 0 || menu.tab() !== null) return false;
