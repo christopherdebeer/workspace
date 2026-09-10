@@ -5535,13 +5535,34 @@ Ocean for as long as the chart stayed. Empty landings count as home now
 (`ovEmpty`, `ovHave`), and the stragglers that used to pad the count are
 gone from the asked sets as well as the meshes.
 
-**What the new rows said on their first run, and what is next.** `farBuild`
-is **618 ms a tile** on the harness's main thread (50 tiles, 35% of all
-slow-frame time) — the 128² lattice, a `sampleCoverShell` and a
-`sphereRTC` per vertex, a normal map — and it runs in the frame. On a phone
-that is the freeze under a fast browse, and the terrain kernel already
-knows how to do this in a worker; that is the next unit, and the row is
-what will measure it.
+**What the new rows said on their first run, and what is next.** In the
+harness the far build read 618 ms a tile on the main thread (50 tiles, 35%
+of all slow-frame time); then the seat's first dump with the rows in it
+(iPhone, 96 s, a browse from Mono Lake to Newfoundland at z11) put the
+number where it counts: **146 ms a tile, 259 tiles, 37.8 s of a 96 s
+session, 87% of every slow frame and top of 148 of the 162** — the whole of
+the 12.3 ms/frame "off-tick tasks" row, with `render` at 1.2 ms and the tick
+at 4 ms p50. A z11 ring is twenty-kilometre tiles and a pan across an
+ocean re-centres it every stream pass, so the browse asks and BUILDS rings
+all the way. The build runs by phase now — `far:bake` (the lattice and the
+vertex loop: a cover sample, the palette and the sphere per vertex),
+`far:geo` (attributes and normals), `far:nrm` (the normal map) — as the
+only wrappers, so the off-tick total counts it once. **In the harness the
+split is 614 / 5 / 7 ms: the vertex loop is 98% of the build**, the normal
+map and the geometry are noise, and the loop is one function over a raster,
+a cover raster and the palette — the shape the terrain kernel already runs
+in a worker. That is the next unit, and `far:bake` is the row that will
+measure it. The same dump also read `places 800 · labels 0`: the place table
+is keyed by name and capped, and the browse had filled it with every town
+it passed over, so nothing at Newfoundland could register; places leave
+with the ring now, by its own box in degrees. And `ov z11 0/30` with
+nothing in flight is a question the row can answer since it carries
+`failing` and `demless` — z11 is live Overpass, and a refused ring waits out
+`OV_RETRY_MS` between asks.
+
+(This paragraph was written once before, uncommitted, and eaten by the
+deploy ritual's own pull — the trap the top of this file describes, walked
+into by the author of the section above it. Commit before you pull.)
 
 **The fling.** A drag on the planet stopped dead under the lifted finger,
 which at 20,000 km reads as a map stuck to the glass. `dragGlobe` keeps a
