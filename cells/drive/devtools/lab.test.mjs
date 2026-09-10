@@ -102,6 +102,21 @@ for (const lab of LABS) {
       links.length >= 3 && links.every((h) => h.includes('fixture=')), links);
   } else {
     ok(`${lab.slug}: it put a canvas up`, seen.canvases > 0 && seen.painted, seen);
+    if (lab.slug === 'hydro') {
+      const hydro = await d.page.evaluate(() => ({
+        sections: [...document.querySelectorAll('details.section > summary')]
+          .map((summary) => summary.textContent?.trim() ?? ''),
+        status: document.getElementById('status')?.textContent ?? '',
+      }));
+      ok('hydro: weather, surface, river and sampling controls are collapsible',
+        ['WEATHER', 'SURFACE', 'RIVER DETAIL', 'SAMPLING']
+          .every((section) => hydro.sections.includes(section)),
+        hydro.sections);
+      ok('hydro: canonical shoreline topology is visible in the lab',
+        /SHORE TOPOLOGY [1-9][0-9,]* SEGMENTS · TERRAIN CONSTRAINED/
+          .test(hydro.status),
+        hydro.status);
+    }
   }
   errors.push(...d.errors);
   await d.close();

@@ -1,16 +1,29 @@
 import * as THREE from 'three';
 import { createDials } from '../lab-dials';
 import {
+  createTerrainKernel,
+  type BreakLine,
+  type HeightTile,
+  type Rgb,
+  type TerrainStore,
+} from '../terrain-kernel';
+import {
   analyseHydroTile,
   FLOWING_NOMINAL_DEPTH_M,
   type HydroTileAnalysis,
 } from './build-tile';
 import { nearestSegment } from './geometry';
+import { extractFlowingHydroShoreSegments } from './shore-contour';
 import { createHydroSystem, type HydroSystem } from './system';
-import { bankHabitat, bankPatch, WATERLINE_CUT } from '../shoreline';
+import {
+  bankHabitat,
+  bankPatch,
+  sampleBankField,
+  WATERLINE_CUT,
+} from '../shoreline';
 import type {
   CoverageGrid, ElevationGrid, HydroDebugView, HydroFeature, HydroKind,
-  HydroSample, HydroTileInput, HydroTuning, WorldBounds,
+  HydroSample, HydroTileField, HydroTileInput, HydroTuning, WorldBounds,
 } from './types';
 
 interface Fixture {
@@ -291,9 +304,15 @@ function page(): string {
  * monotone river surface disappeared under every local ground hump and broke
  * into islands in close views. Carve only the display mesh from the analysed
  * profile; hydro still receives the raw elevation and therefore builds the
- * exact profile this carve is based on.
+ * exact profile this carve is based on. Its topology is now built by the same
+ * renderer-neutral terrain kernel as production and split by the exact
+ * flowing-water contour.
  */
-function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
+function makeTerrain(
+  f: Fixture,
+  analysis: HydroTileAnalysis,
+  field: HydroTileField | undefined,
+): THREE.Mesh {
   const channels: Array<{
     profile: Float32Array;
     halfW: number;
@@ -328,25 +347,23 @@ function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
     }
     return ground;
   };
-  // Shore inspection needs a finer display terrain than the broad water mesh:
-  // coarse, flat-shaded bank triangles otherwise masquerade as a hydro edge
-  // defect when the camera comes down for pebble/eddy work.
-  const terrainSegments = 192;
-  const geometry = new THREE.PlaneGeometry(
-    600, 600, terrainSegments, terrainSegments,
-  );
-  geometry.rotateX(-Math.PI / 2);
-  const p = geometry.attributes.position as THREE.BufferAttribute;
-  const colour = new Float32Array(p.count * 3);
-  const low = new THREE.Color(0x506352), high = new THREE.Color(0x967c55);
-  const mineral = new THREE.Color(0x5c5238), damp = new THREE.Color(0x39483b);
+  const low = new THREE.Color(0x506352);
+  const high = new THREE.Color(0x967c55);
+  const mineral = new THREE.Color(0x5c5238);
+  const damp = new THREE.Color(0x39483b);
   const reed = new THREE.Color(0x667033);
-  const scratch = new THREE.Color();
-  for (let i = 0; i < p.count; i++) {
-    const x = p.getX(i), z = p.getZ(i);
-    const h = carvedHeight(x, z);
-    p.setY(i, h - f.originY);
-    scratch.copy(low).lerp(high, Math.max(0, Math.min(1, .45 + (h - f.originY) / 70)));
+  const colourAt = (x: number, z: number, h = carvedHeight(x, z)): Rgb => {
+    const elevationMix = THREE.MathUtils.clamp(.45 + (h - f.originY) / 70, 0, 1);
+    const colour: Rgb = [
+      THREE.MathUtils.lerp(low.r, high.r, elevationMix),
+      THREE.MathUtils.lerp(low.g, high.g, elevationMix),
+      THREE.MathUtils.lerp(low.b, high.b, elevationMix),
+    ];
+    const blend = (target: THREE.Color, weight: number): void => {
+      colour[0] = THREE.MathUtils.lerp(colour[0], target.r, weight);
+      colour[1] = THREE.MathUtils.lerp(colour[1], target.g, weight);
+      colour[2] = THREE.MathUtils.lerp(colour[2], target.b, weight);
+    };
     let nearest: {
       distanceM: number;
       halfW: number;
@@ -369,20 +386,27 @@ function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
         flow: [dx / length, dz / length],
       };
     }
-    if (nearest) {
-      const bankDistance = nearest.distanceM - nearest.halfW;
+    const fieldBank = field ? sampleBankField(field, x, z, 14) : undefined;
+    if (fieldBank || nearest) {
+      // The lab's geometry follows the exact field contour, so its colour must
+      // use that contour too. The centreline half-width remains only a fallback
+      // for fixtures whose field has not built.
+      const bankDistance = fieldBank
+        ? (fieldBank.wet ? -fieldBank.shoreDistanceM : fieldBank.shoreDistanceM)
+        : (nearest!.distanceM - nearest!.halfW);
       if (bankDistance > -.5 && bankDistance < 14) {
         const slope = Math.min(.6, Math.hypot(
           f.height(x + 2, z) - f.height(x - 2, z),
           f.height(x, z + 2) - f.height(x, z - 2),
         ) / 4);
-        const habitat = bankHabitat(null, .58, 14, slope, true, h, {
-          kind: nearest.kind,
-          restingLevelM: nearest.surfaceM,
-          depthM: Math.max(0, nearest.surfaceM - h),
+        const water = fieldBank ?? {
+          kind: nearest!.kind,
+          restingLevelM: nearest!.surfaceM,
+          depthM: Math.max(0, nearest!.surfaceM - h),
           shoreDistanceM: Math.max(0, bankDistance),
-          flow: nearest.flow,
-        });
+          flow: nearest!.flow,
+        };
+        const habitat = bankHabitat(null, .58, 14, slope, true, h, water);
         const patch = bankPatch(x, z);
         const bankFade = 1 - THREE.MathUtils.smoothstep(bankDistance, 7, 14);
         const mineralWeight = habitat.mineral * bankFade
@@ -394,30 +418,111 @@ function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
         // alpha stipple, shader dithering, or a second fake water surface.
         const wetWidth = 2.4 + patch * 3.8;
         const dampWeight = 1 - THREE.MathUtils.smoothstep(bankDistance, 0, wetWidth);
-        scratch.lerp(damp, Math.min(.68, dampWeight * .68));
-        scratch.lerp(mineral, Math.min(.78, mineralWeight * .82));
-        scratch.lerp(reed, Math.min(.58, reedWeight * .58));
+        blend(damp, Math.min(.68, dampWeight * .68));
+        blend(mineral, Math.min(.78, mineralWeight * .82));
+        blend(reed, Math.min(.58, reedWeight * .58));
       }
     }
-    colour[i*3] = scratch.r; colour[i*3+1] = scratch.g; colour[i*3+2] = scratch.b;
-  }
-  geometry.setAttribute('color', new THREE.BufferAttribute(colour, 3));
-  geometry.computeVertexNormals();
+    return colour;
+  };
+
+  const shoreSegments = field
+    ? extractFlowingHydroShoreSegments(field, 0.5, false)
+    : [];
+  const breakLines: BreakLine[] = shoreSegments.map((segment) => ({
+    ax: segment.a.x,
+    az: segment.a.z,
+    bx: segment.b.x,
+    bz: segment.b.z,
+  }));
+  // 128 segments over a 2.4km production tile is 18.75m per broad cell.
+  // Thirty-two over this 600m fixture keeps the same scale; the contour
+  // splitter spends extra vertices only where the waterline crosses it.
+  const terrainSegments = 32;
+  const heightTile: HeightTile = {
+    tx: 0,
+    ty: 0,
+    xs: BOUNDS.minX,
+    zs: BOUNDS.minZ,
+    w: BOUNDS.maxX - BOUNDS.minX,
+    h: BOUNDS.maxZ - BOUNDS.minZ,
+    // The lab height source is analytic and `hasHeight` is always true, so
+    // this production-raster compatibility array is never sampled.
+    data: new Float32Array(256 * 256),
+  };
+  const store: TerrainStore = {
+    heights: new Map([['0/0', heightTile]]),
+    hasHeight: () => true,
+    sampleHeight: (x, z) => carvedHeight(x, z) - f.originY,
+    sampleHeightRaw: (x, z) => carvedHeight(x, z) - f.originY,
+    sampleCover: () => null,
+    coverPaint: () => null,
+    coverWater: () => false,
+    crossingAt: () => null,
+    cover: { water: 1, built: 2 },
+    seaAbs: () => f.oceanLevelM,
+    baseElev: f.originY,
+    strips: new Map(),
+    cutL: heightTile.w / terrainSegments,
+    channels: new Map(),
+    grid: heightTile.w / terrainSegments,
+    hydroBreakLines: () => breakLines,
+    onRoad: () => false,
+    palette: (_elevAbs, _slope, _cover, x, z) => colourAt(x, z),
+    areaTint: () => null,
+    borders: new Map(),
+    nrmScale: 1,
+    cutWash: 0,
+    cprobe: false,
+    carveLog: new Map(),
+    cutRelief: false,
+  };
+  const built = createTerrainKernel().buildTile(
+    store,
+    heightTile,
+    terrainSegments,
+    false,
+    true,
+  );
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(built.pos, 3));
+  geometry.setAttribute('uv', new THREE.BufferAttribute(built.uv, 2));
+  geometry.setAttribute('color', new THREE.BufferAttribute(built.colors, 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(built.normals, 3));
+  geometry.setIndex(new THREE.BufferAttribute(built.idx, 1));
+  geometry.computeBoundingSphere();
   const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
     vertexColors: true, roughness: .94, metalness: 0, flatShading: false,
   }));
   // The production hydro shader samples the sward colour field beneath each
   // fragment. Give the isolated lab the same evidence instead of a single
   // fallback green, so shallow water and exposed banks share a palette.
-  const rgba = new Uint8Array(p.count * 4);
-  for (let i = 0; i < p.count; i++) {
-    rgba[i * 4] = Math.round(THREE.MathUtils.clamp(colour[i * 3], 0, 1) * 255);
-    rgba[i * 4 + 1] = Math.round(THREE.MathUtils.clamp(colour[i * 3 + 1], 0, 1) * 255);
-    rgba[i * 4 + 2] = Math.round(THREE.MathUtils.clamp(colour[i * 3 + 2], 0, 1) * 255);
-    rgba[i * 4 + 3] = 255;
+  // The constrained mesh is irregular, while a sampled shader field must
+  // remain regular. Both still share `colourAt`, so there is one bank palette.
+  const terrainFieldSize = 193;
+  const rgba = new Uint8Array(terrainFieldSize * terrainFieldSize * 4);
+  for (let iz = 0; iz < terrainFieldSize; iz++) {
+    const z = THREE.MathUtils.lerp(
+      BOUNDS.minZ,
+      BOUNDS.maxZ,
+      iz / (terrainFieldSize - 1),
+    );
+    for (let ix = 0; ix < terrainFieldSize; ix++) {
+      const x = THREE.MathUtils.lerp(
+        BOUNDS.minX,
+        BOUNDS.maxX,
+        ix / (terrainFieldSize - 1),
+      );
+      const colour = colourAt(x, z);
+      const i = iz * terrainFieldSize + ix;
+      rgba[i * 4] = Math.round(THREE.MathUtils.clamp(colour[0], 0, 1) * 255);
+      rgba[i * 4 + 1] = Math.round(THREE.MathUtils.clamp(colour[1], 0, 1) * 255);
+      rgba[i * 4 + 2] = Math.round(THREE.MathUtils.clamp(colour[2], 0, 1) * 255);
+      rgba[i * 4 + 3] = 255;
+    }
   }
   const terrainField = new THREE.DataTexture(
-    rgba, terrainSegments + 1, terrainSegments + 1,
+    rgba, terrainFieldSize, terrainFieldSize,
     THREE.RGBAFormat, THREE.UnsignedByteType,
   );
   terrainField.flipY = false;
@@ -426,6 +531,8 @@ function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
   terrainField.generateMipmaps = false;
   terrainField.needsUpdate = true;
   mesh.userData.terrainField = terrainField;
+  mesh.userData.hydroShoreSegments = shoreSegments.length;
+  mesh.userData.refined = built.refined;
   return mesh;
 }
 
@@ -754,7 +861,10 @@ export async function startHydroLab(): Promise<void> {
     fixture = FIXTURES.find((f) => f.id === get<HTMLSelectElement>('fixture').value) ?? FIXTURES[0];
     get('note').textContent = fixture.note;
     get<HTMLInputElement>('ocean').value = String(fixture.oceanLevelM);
-    hydro?.dispose();
+    if (hydro) {
+      hydro.object3d.removeFromParent();
+      hydro.dispose();
+    }
     if (terrain) {
       terrain.removeFromParent(); terrain.geometry.dispose(); (terrain.material as THREE.Material).dispose();
     }
@@ -766,12 +876,6 @@ export async function startHydroLab(): Promise<void> {
     }
     const input = tileInput(fixture, ++revision);
     analysis = analyseHydroTile(input);
-    terrain = makeTerrain(fixture, analysis);
-    terrainField = terrain.userData.terrainField as THREE.DataTexture | undefined;
-    terrain.visible = get<HTMLInputElement>('ground').checked;
-    scene.add(terrain);
-    riverDetails = makeRiverDetails(fixture, analysis);
-    scene.add(riverDetails);
     hydro = createHydroSystem({
       fieldResolution: Number(get<HTMLSelectElement>('field').value),
       meshResolution: Number(get<HTMLSelectElement>('mesh').value),
@@ -779,6 +883,16 @@ export async function startHydroLab(): Promise<void> {
     });
     scene.add(hydro.object3d);
     await hydro.upsertTile(input);
+    const field = hydro.fieldAt(
+      (BOUNDS.minX + BOUNDS.maxX) * .5,
+      (BOUNDS.minZ + BOUNDS.maxZ) * .5,
+    );
+    terrain = makeTerrain(fixture, analysis, field);
+    terrainField = terrain.userData.terrainField as THREE.DataTexture | undefined;
+    terrain.visible = get<HTMLInputElement>('ground').checked;
+    scene.add(terrain);
+    riverDetails = makeRiverDetails(fixture, analysis);
+    scene.add(riverDetails);
     apply(); inspected = ''; probe.visible = false; rebuilding = false;
   };
 
@@ -1021,6 +1135,8 @@ export async function startHydroLab(): Promise<void> {
         + '² · MESH ' + get<HTMLSelectElement>('mesh').value + '²\n'
         + (stats?.visibleTiles ?? 0) + ' WATER TILE · ' + renderer.info.render.triangles.toLocaleString()
         + ' TRIANGLES · ' + get<HTMLSelectElement>('debug').value.toUpperCase() + '\n'
+        + 'SHORE TOPOLOGY ' + Number(terrain?.userData.hydroShoreSegments ?? 0).toLocaleString()
+        + ' SEGMENTS · TERRAIN ' + (terrain?.userData.refined ? 'CONSTRAINED' : 'PLAIN') + '\n'
         + 'BANK FEATHER ' + (get<HTMLInputElement>('bankFeather').checked ? 'ON' : 'OFF')
         + ' · ' + edgeBodies + ' BODY' + (edgeBodies === 1 ? '' : 'IES') + '\n'
         + (inspected || 'point at the terrain to inspect the CPU hydro sample');

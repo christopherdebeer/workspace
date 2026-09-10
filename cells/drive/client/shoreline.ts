@@ -62,7 +62,7 @@ export function bankPatch(px: number, pz: number): number {
 /** The fragment cut the water shader applies to coverage at this point —
  *  the one number the physics and the overlay must share with it. */
 export const WATERLINE_CUT = (px: number, pz: number, kind?: string): number =>
-  kind === 'ocean' || kind === 'lagoon' ? 0.5 : 0.5 + (bankPatch(px, pz) - 0.5) * 0.24;
+  kind === 'ocean' || kind === 'lagoon' ? 0.5 : 0.5 + (bankPatch(px, pz) - 0.5) * 0.08;
 
 /** Continuous, stationary metre-space patches shared by hydro and sward.
  * No time or tile seed: streamed tiles cannot disagree at their boundaries. */
@@ -119,7 +119,11 @@ export function sampleBankField(f: HydroTileField, x: number, z: number,
   const bankMaterial = HYDRO_ID_BANK[(flags & HYDRO_BANK_MASK) >> HYDRO_BANK_SHIFT] ?? 'soil';
   return { wet: false, kind: HYDRO_ID_KIND[f.material[best]], coverage: drawn?.coverage ?? 0,
     restingLevelM: f.elevationBaseM+f.geometry[best+2],
-    shoreDistanceM: Math.min(0, f.geometry[centre+1]), depthM: f.geometry[best+3],
+    // `bankHabitat` consumes metres AWAY from the water on dry ground. The
+    // signed field value here is negative, which previously collapsed every
+    // dry texel in the 12m search radius to a zero-distance bank. Use the
+    // measured distance to the nearest wet texel footprint instead.
+    shoreDistanceM: Math.sqrt(bestD), depthM: f.geometry[best+3],
     flow: [f.dynamics[best],f.dynamics[best+1]], fetchM: f.dynamics[best+2],
     bedMaterial, bankMaterial,
     intermittent: (flags & HydroFlags.Intermittent)!==0,

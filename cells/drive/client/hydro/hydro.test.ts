@@ -6,6 +6,7 @@ import {
   extractFlowingHydroShoreSegments,
   extractHydroShoreSegments,
 } from './shore-contour';
+import { sampleBankField, WATERLINE_CUT } from '../shoreline';
 import { HYDRO_KIND_ID, type HydroFeature, type HydroTileInput } from './types';
 import { HYDRO_FRAGMENT_SHADER } from './shaders';
 
@@ -74,6 +75,12 @@ export function runHydroSelfTest(): void {
   'inland bank cohesion is a controllable blend inside the single water body');
   assert(!HYDRO_FRAGMENT_SHADER.includes('edgeDither'),
     'bank feather does not implement local dithering');
+  assert(HYDRO_FRAGMENT_SHADER.includes(
+    '(bankPatch(vAbsoluteXZ) - 0.5) * 0.08',
+  ), 'rendered inland waterline uses the shared narrow contour perturbation');
+  const riverCut = WATERLINE_CUT(123.4, 456.7, 'river');
+  assert(riverCut >= 0.46 && riverCut <= 0.54,
+    `CPU inland waterline stays close to the canonical contour (saw ${riverCut})`);
   const coastalMain = HYDRO_FRAGMENT_SHADER.indexOf('bool coastalKind');
   const terrainDeclaration = HYDRO_FRAGMENT_SHADER.indexOf(
     'vec3 terrainC = uTerrainColour', coastalMain,
@@ -196,6 +203,25 @@ export function runHydroSelfTest(): void {
     'packed field samples preserve explicit bank material');
   assert(riverSample?.intermittent && riverSample.tidal,
     'packed bed and bank classes do not corrupt intermittent and tidal flags');
+  let dryBankDistance = -1;
+  for (let iz = riverField.gutter; iz < riverField.gutter + riverField.resolution; iz++) {
+    for (let ix = riverField.gutter; ix < riverField.gutter + riverField.resolution; ix++) {
+      const i = iz * riverField.width + ix;
+      if (riverField.geometry[i * 4] >= 0.5) continue;
+      const x = riverField.bounds.minX
+        + ((ix - riverField.gutter + 0.5) / riverField.resolution) * 600;
+      const z = riverField.bounds.minZ
+        + ((iz - riverField.gutter + 0.5) / riverField.resolution) * 600;
+      const bank = sampleBankField(riverField, x, z, 12);
+      if (bank && !bank.wet) {
+        dryBankDistance = bank.shoreDistanceM;
+        break;
+      }
+    }
+    if (dryBankDistance >= 0) break;
+  }
+  assert(dryBankDistance > 0 && dryBankDistance <= 12,
+    `dry bank reports positive metre distance to water (saw ${dryBankDistance})`);
   assert(!!riverField.structure, 'a flowing tile carries the structure field');
   if (riverField.structure) {
     const st = riverField.structure;
