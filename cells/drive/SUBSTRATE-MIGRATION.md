@@ -151,9 +151,11 @@ gallery and tunnel shells, luminaires and portal fittings now publish directly
 from their geometry arrays without constructing a temporary renderer mesh.
 Draped tracks retain only their `BufferGeometry` in the terrain re-seat
 registry; packet attributes share those arrays and are admitted only after
-redrape. Riverbed details publish their arrays after redrape, and structures
-publish at structure-batch completion. Remaining structure and hydro-detail
-mesh wrappers are disposed immediately. Once terrain commits, its
+redrape. Culvert bores/headwalls and rapid-bed geometry likewise publish their
+final arrays directly; the matching structure generation or terrain revision
+still gates admission. No local terrain, road, structure or hydro-detail
+authoring path now needs a temporary renderer mesh in substrate mode. Once
+terrain commits, its
 packet-instantiated visible mesh replaces the temporary build mesh as the shared
 query/raycast authority. Consequently a settled render-mode tile retains zero
 hidden terrain, road, structure or hydro-detail source meshes. Terrain packet

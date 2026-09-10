@@ -15028,6 +15028,7 @@ interface ProductionStructureRenderCandidate {
   generation: number;
   meshes: Set<THREE.Mesh>;
   meshCount: number;
+  directPacketCount: number;
   packetGeneration: number;
   packets: readonly ProductionRenderMesh[];
   authoredAtBuild: boolean;
@@ -15039,10 +15040,12 @@ const substrateStructureRenderMeshes = new Map<string, SubstrateRenderBinding>()
 let productionStructurePacketFailures = 0;
 let structureBatchOwner: string | null = null;
 let structureBatchMeshes: THREE.Mesh[] | null = null;
+let structureBatchPackets: ProductionRenderMesh[] | null = null;
 interface ProductionHydroDetailRenderCandidate {
   generation: number;
   meshes: Set<THREE.Mesh>;
   meshCount: number;
+  directPacketCount: number;
   rocks: Set<RapidRock>;
   packetTerrainRevision: number;
   packets: readonly ProductionRenderMesh[];
@@ -15054,6 +15057,7 @@ const substrateHydroDetailCommits = new Map<string, number>();
 const substrateHydroDetailRenderMeshes = new Map<string, SubstrateRenderBinding>();
 let productionHydroDetailPacketFailures = 0;
 let hydroDetailBatchMeshes: THREE.Mesh[] | null = null;
+let hydroDetailBatchPackets: ProductionRenderMesh[] | null = null;
 let hydroDetailBatchRocks: RapidRock[] | null = null;
 const IDENTITY_RENDER_MATRIX = new Float32Array([
   1, 0, 0, 0,
@@ -15170,14 +15174,56 @@ function addStructureRenderMesh(mesh: THREE.Mesh): void {
     worldGroup.add(mesh);
   }
 }
-function registerProductionStructureRenderBatch(owner: string, meshes: THREE.Mesh[]): void {
-  if (!meshes.length) return;
+function addStructureRenderGeometry(
+  geometry: THREE.BufferGeometry,
+  material: THREE.Material,
+  options: RoadRenderGeometryOptions = {},
+): boolean {
+  const matrix = options.matrix ?? IDENTITY_RENDER_MATRIX;
+  if (SUBSTRATE_RENDER_ON && structureBatchOwner && structureBatchPackets) {
+    const packet = productionRenderPacketFromGeometry({
+      name: options.name ?? '',
+      geometry,
+      material: [material],
+      matrix,
+      renderOrder: 0,
+      castShadow: false,
+      receiveShadow: false,
+      frustumCulled: true,
+      userData: {
+        ...(options.userData ?? {}),
+        substrateDirectAuthored: true,
+      },
+    }, false);
+    if (packet) {
+      structureBatchPackets.push(packet);
+      geometry.dispose();
+      return true;
+    }
+  }
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = options.name ?? '';
+  Object.assign(mesh.userData, options.userData);
+  if (options.matrix) {
+    mesh.matrix.fromArray(Array.from(options.matrix));
+    mesh.matrixAutoUpdate = false;
+  }
+  addStructureRenderMesh(mesh);
+  return false;
+}
+function registerProductionStructureRenderBatch(
+  owner: string,
+  meshes: THREE.Mesh[],
+  directPackets: readonly ProductionRenderMesh[] = [],
+): void {
+  if (!meshes.length && !directPackets.length) return;
   let candidate = productionStructureRenderCandidates.get(owner);
   if (!candidate) {
     candidate = {
       generation: 0,
       meshes: new Set(),
       meshCount: 0,
+      directPacketCount: 0,
       packetGeneration: -1,
       packets: [],
       authoredAtBuild: false,
@@ -15185,10 +15231,12 @@ function registerProductionStructureRenderBatch(owner: string, meshes: THREE.Mes
     productionStructureRenderCandidates.set(owner, candidate);
   }
   candidate.generation++;
-  candidate.meshCount += meshes.length;
+  candidate.meshCount += meshes.length + directPackets.length;
+  candidate.directPacketCount += directPackets.length;
   for (const mesh of meshes) candidate.meshes.add(mesh);
   candidate.packetGeneration = -1;
   candidate.authoredAtBuild = false;
+  candidate.packets = [...candidate.packets, ...directPackets];
   publishProductionStructureRenderPackets(candidate, meshes);
   // Structure geometry is final at this boundary: it is not re-draped on a
   // later terrain revision. Once copied into immutable packets the hidden
@@ -15209,18 +15257,57 @@ function addHydroDetailRenderMesh(mesh: THREE.Mesh): void {
     worldGroup.add(mesh);
   }
 }
+function addHydroDetailRenderGeometry(
+  geometry: THREE.BufferGeometry,
+  material: THREE.Material,
+  options: RoadRenderGeometryOptions = {},
+): boolean {
+  const matrix = options.matrix ?? IDENTITY_RENDER_MATRIX;
+  if (SUBSTRATE_RENDER_ON && ribBatchTerrainOwner && hydroDetailBatchPackets) {
+    const packet = productionRenderPacketFromGeometry({
+      name: options.name ?? '',
+      geometry,
+      material: [material],
+      matrix,
+      renderOrder: 0,
+      castShadow: false,
+      receiveShadow: false,
+      frustumCulled: true,
+      userData: {
+        ...(options.userData ?? {}),
+        substrateDirectAuthored: true,
+      },
+    }, false);
+    if (packet) {
+      hydroDetailBatchPackets.push(packet);
+      geometry.dispose();
+      return true;
+    }
+  }
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = options.name ?? '';
+  Object.assign(mesh.userData, options.userData);
+  if (options.matrix) {
+    mesh.matrix.fromArray(Array.from(options.matrix));
+    mesh.matrixAutoUpdate = false;
+  }
+  addHydroDetailRenderMesh(mesh);
+  return false;
+}
 function registerProductionHydroDetailRenderBatch(
   owner: string,
   meshes: THREE.Mesh[],
   rocks: RapidRock[],
+  directPackets: readonly ProductionRenderMesh[] = [],
 ): void {
-  if (!meshes.length && !rocks.length) return;
+  if (!meshes.length && !rocks.length && !directPackets.length) return;
   let candidate = productionHydroDetailRenderCandidates.get(owner);
   if (!candidate) {
     candidate = {
       generation: 0,
       meshes: new Set(),
       meshCount: 0,
+      directPacketCount: 0,
       rocks: new Set(),
       packetTerrainRevision: -1,
       packets: [],
@@ -15229,11 +15316,13 @@ function registerProductionHydroDetailRenderBatch(
     productionHydroDetailRenderCandidates.set(owner, candidate);
   }
   candidate.generation++;
-  candidate.meshCount += meshes.length;
+  candidate.meshCount += meshes.length + directPackets.length;
+  candidate.directPacketCount += directPackets.length;
   for (const mesh of meshes) candidate.meshes.add(mesh);
   for (const rock of rocks) candidate.rocks.add(rock);
   candidate.packetTerrainRevision = -1;
   candidate.authoredAfterRedrape = false;
+  candidate.packets = [...candidate.packets, ...directPackets];
   appendProductionHydroDetailRenderPackets(candidate, meshes);
   for (const mesh of meshes) {
     mesh.removeFromParent();
@@ -19034,6 +19123,7 @@ function substrateRenderSnapshot(): Record<string, number> {
   }
   let structureCandidates = 0;
   let structurePacketMeshes = 0;
+  let structureDirectAuthoredPacketMeshes = 0;
   let structureBuildAuthoredPacketMeshes = 0;
   let structureInstantiatedMeshes = 0;
   let retainedStructureSourceMeshes = 0;
@@ -19043,6 +19133,7 @@ function substrateRenderSnapshot(): Record<string, number> {
   for (const candidate of productionStructureRenderCandidates.values()) {
     structureCandidates += candidate.meshCount;
     structurePacketMeshes += candidate.packets.length;
+    structureDirectAuthoredPacketMeshes += candidate.directPacketCount;
     retainedStructureSourceMeshes += candidate.meshes.size;
     if (candidate.authoredAtBuild) {
       structureBuildAuthoredPacketMeshes += candidate.packets.length;
@@ -19066,6 +19157,7 @@ function substrateRenderSnapshot(): Record<string, number> {
   }
   let hydroDetailCandidates = 0;
   let hydroDetailPacketMeshes = 0;
+  let hydroDetailDirectAuthoredPacketMeshes = 0;
   let hydroDetailRedrapeAuthoredPacketMeshes = 0;
   let hydroDetailInstantiatedMeshes = 0;
   let retainedHydroDetailSourceMeshes = 0;
@@ -19078,6 +19170,7 @@ function substrateRenderSnapshot(): Record<string, number> {
   for (const candidate of productionHydroDetailRenderCandidates.values()) {
     hydroDetailCandidates += candidate.meshCount;
     hydroDetailPacketMeshes += candidate.packets.length;
+    hydroDetailDirectAuthoredPacketMeshes += candidate.directPacketCount;
     retainedHydroDetailSourceMeshes += candidate.meshes.size;
     if (candidate.authoredAfterRedrape) {
       hydroDetailRedrapeAuthoredPacketMeshes += candidate.packets.length;
@@ -19137,6 +19230,7 @@ function substrateRenderSnapshot(): Record<string, number> {
     structureCandidateTiles: productionStructureRenderCandidates.size,
     structureCandidates,
     structurePacketMeshes,
+    structureDirectAuthoredPacketMeshes,
     structureBuildAuthoredPacketMeshes,
     structureInstantiatedMeshes,
     retainedStructureSourceMeshes,
@@ -19148,6 +19242,7 @@ function substrateRenderSnapshot(): Record<string, number> {
     hydroDetailCandidateTiles: productionHydroDetailRenderCandidates.size,
     hydroDetailCandidates,
     hydroDetailPacketMeshes,
+    hydroDetailDirectAuthoredPacketMeshes,
     hydroDetailRedrapeAuthoredPacketMeshes,
     hydroDetailInstantiatedMeshes,
     retainedHydroDetailSourceMeshes,
@@ -19600,9 +19695,9 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
     g2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(rv), 3));
     g2.setAttribute('color', new THREE.BufferAttribute(new Float32Array(rc), 3));
     g2.computeVertexNormals();
-    const rm = new THREE.Mesh(g2, MAT.boulder);
-    rm.userData.rapid = true;
-    addHydroDetailRenderMesh(rm);
+    addHydroDetailRenderGeometry(g2, MAT.boulder, {
+      userData: { rapid: true },
+    });
   }
   // THE BORES ARE DEFERRED, because at this moment there may be no road.
   //
@@ -19631,6 +19726,7 @@ function flushCulverts(t: HeightTile): void {
   if (!pendingWater.length) return;
   structureBatchOwner = `${t.tx}/${t.ty}`;
   structureBatchMeshes = [];
+  structureBatchPackets = [];
   let kept = 0;
   for (let w = 0; w < pendingWater.length; w++) {
     const p = pendingWater[w];
@@ -19761,9 +19857,11 @@ function flushCulverts(t: HeightTile): void {
   pendingWater.length = kept;
   const owner = structureBatchOwner;
   const meshes = structureBatchMeshes ?? [];
+  const packets = structureBatchPackets ?? [];
   structureBatchOwner = null;
   structureBatchMeshes = null;
-  if (owner) registerProductionStructureRenderBatch(owner, meshes);
+  structureBatchPackets = null;
+  if (owner) registerProductionStructureRenderBatch(owner, meshes, packets);
 }
 /** The bore itself: two walls, a soffit, a headwall at each mouth. Sized to
  *  take a rig where the cover allows one, and a pipe where it does not. */
@@ -19929,9 +20027,9 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
   geo.computeVertexNormals();
-  const tube = new THREE.Mesh(geo, MAT.tunnel);
-  tube.userData.culvert = true;
-  addStructureRenderMesh(tube);
+  addStructureRenderGeometry(geo, MAT.tunnel, {
+    userData: { culvert: true },
+  });
   // HEADWALLS. Without them the bore is a rectangular hole in a grass bank and
   // reads as a hole in the world; with them it reads as something someone built.
   for (const end of [a, b]) {
@@ -19950,10 +20048,12 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     // Do not force a decorative minimum back through the deck ceiling. Where
     // even a thin headwall will not fit, the safe visual is no headwall.
     if (hh < 0.15) continue;
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(W + 2.4, hh, 0.7), MAT.portal);
-    wall.position.set(px, bottom + hh / 2, pz);
-    wall.rotation.y = ang + Math.PI / 2;
-    addStructureRenderMesh(wall);
+    const wallGeometry = new THREE.BoxGeometry(W + 2.4, hh, 0.7);
+    const wallMatrix = new THREE.Matrix4().makeRotationY(ang + Math.PI / 2);
+    wallMatrix.setPosition(px, bottom + hh / 2, pz);
+    addStructureRenderGeometry(wallGeometry, MAT.portal, {
+      matrix: wallMatrix.elements,
+    });
   }
   return {
     outcome: 'culvert-built',
@@ -22501,6 +22601,7 @@ async function renderWays(
   roadBatchMeshes = [];
   roadBatchPackets = [];
   hydroDetailBatchMeshes = [];
+  hydroDetailBatchPackets = [];
   hydroDetailBatchRocks = [];
   const ep = worldEpoch;
   buildUntil = performance.now() + BUILD_MS;
@@ -22514,6 +22615,7 @@ async function renderWays(
     roadBatchMeshes = null;
     roadBatchPackets = null;
     hydroDetailBatchMeshes = null;
+    hydroDetailBatchPackets = null;
     hydroDetailBatchRocks = null;
     return;
   }
@@ -22642,6 +22744,7 @@ async function renderWays(
       roadBatchMeshes = null;
       roadBatchPackets = null;
       hydroDetailBatchMeshes = null;
+      hydroDetailBatchPackets = null;
       hydroDetailBatchRocks = null;
       return;
     }
@@ -22782,15 +22885,22 @@ async function renderWays(
   const renderMeshes = roadBatchMeshes ?? [];
   const renderPackets = roadBatchPackets ?? [];
   const hydroDetailMeshes = hydroDetailBatchMeshes ?? [];
+  const hydroDetailPackets = hydroDetailBatchPackets ?? [];
   const hydroDetailRocks = hydroDetailBatchRocks ?? [];
   ribBatchTerrainOwner = null;
   roadBatchMeshes = null;
   roadBatchPackets = null;
   hydroDetailBatchMeshes = null;
+  hydroDetailBatchPackets = null;
   hydroDetailBatchRocks = null;
   if (renderOwner) {
     registerProductionRoadRenderBatch(renderOwner, renderMeshes, renderPackets);
-    registerProductionHydroDetailRenderBatch(renderOwner, hydroDetailMeshes, hydroDetailRocks);
+    registerProductionHydroDetailRenderBatch(
+      renderOwner,
+      hydroDetailMeshes,
+      hydroDetailRocks,
+      hydroDetailPackets,
+    );
   }
   // The pre-grid lives for exactly one batch: it exists to make build order
   // irrelevant WITHIN the batch, and a stale copy would shadow the real,
@@ -28027,6 +28137,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     productionStructureRenderCandidates.clear();
     structureBatchOwner = null;
     structureBatchMeshes = null;
+    structureBatchPackets = null;
     substrateHydroDetailCommits.clear();
     substrateHydroDetailRenderMeshes.clear();
     productionHydroDetailPacketFailures = 0;
@@ -28095,6 +28206,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     roadBatchMeshes = null;
     roadBatchPackets = null;
     hydroDetailBatchMeshes = null;
+    hydroDetailBatchPackets = null;
     hydroDetailBatchRocks = null;
     carveCost.tiles = 0; carveCost.ms = 0; carveCost.relieved = 0;
     pois.clear(); areaGrid.clear(); survey.clear();

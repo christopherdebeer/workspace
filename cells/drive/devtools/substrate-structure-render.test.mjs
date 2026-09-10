@@ -92,6 +92,8 @@ ok('tile-owned drive packets retain indexed transformed tunnel geometry',
 ok('the matching substrate tile admits the complete structure packet',
   state.substrate?.render?.structureCommittedTiles > 0
     && state.substrate?.render?.structurePacketMeshes > 0
+    && state.substrate?.render?.structureDirectAuthoredPacketMeshes
+      === state.substrate?.render?.structurePacketMeshes
     && state.substrate?.render?.structureBuildAuthoredPacketMeshes
       === state.substrate?.render?.structurePacketMeshes
     && state.substrate?.render?.structurePacketMeshes

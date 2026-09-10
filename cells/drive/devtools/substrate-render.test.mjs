@@ -129,6 +129,8 @@ ok('no uncommitted crossing structure enters the scene',
   state.substrate?.render);
 ok('river-bed rapid meshes and colliders commit as one detail packet',
   state.substrate?.render?.hydroDetailCandidates > 0
+    && state.substrate?.render?.hydroDetailDirectAuthoredPacketMeshes
+      === state.substrate?.render?.hydroDetailPacketMeshes
     && state.substrate?.render?.hydroDetailRedrapeAuthoredPacketMeshes
       === state.substrate?.render?.hydroDetailPacketMeshes
     && state.substrate?.render?.retainedHydroDetailSourceMeshes === 0
