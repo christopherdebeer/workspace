@@ -2646,6 +2646,16 @@ from the seat by construction. `?widedither=0` is the exact A/B;
 test tells "IGN because the chart is wide" from "IGN because the dial says
 so". The bay's copy pass keeps the dial's pattern: it is never a wide chart.
 
+**Measured over the same render, every pattern in the rack** (`SWEEP=1`):
+the autocorrelation of the detrended luma at bayer4's own period, over the
+terrain pane at art resolution, labels and roads masked. The undithered
+render — the terrain's own structure — reads 0.135 at lag 4. bayer4 reads
+**0.229**, bayer8 0.218, bayer16 0.215, check 0.272: every tiled pattern ADDS
+a period. IGN reads **0.078 at lag 4 and 0.072 at lag 8**, the only pattern
+below the terrain at every lag; grain matches it at 4 and clumps back to 0.175
+at 8, TPDF 0.104 and 0.197. More levels help bayer4 (0.144 at 28) at the cost
+of 534 tones against 204, which is a different look and not this fix.
+
 **Two things the run-length table above cannot see, which is why this was
 measured on the frame it is for and not read off the table.** That table was
 taken at a junction zoom, where the gradient is steep and every ordered

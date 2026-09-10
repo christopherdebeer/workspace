@@ -14,7 +14,12 @@ import { join } from 'node:path';
 
 const LAT = process.env.LAT ?? '47.0', LON = process.env.LON ?? '8.0';
 const Z = Number(process.env.Z ?? 19300);
-const SPOT = `lat=${LAT}&lon=${LON}&h=0&cam=top&z=${Z}&wx=clear&time=${process.env.TIME ?? 'DAY'}`;
+// BOOT BLIND. Headless paints at two to four frames a second and the world
+// build is paced by the frame loop, so the boot at a European spot took
+// fifteen minutes with the draws on — none of it the far ring, which the
+// relay's disk cache answers in seconds the second time. `nodraw=1` skips the
+// draws and `__draw(true)` below turns them back on for the frames.
+const SPOT = `lat=${LAT}&lon=${LON}&h=0&cam=top&z=${Z}&wx=clear&nodraw=1&time=${process.env.TIME ?? 'DAY'}`;
 const { page, close } = await openDrive({ spot: SPOT, tag: 'farcircles', menu: true, settle: 0 });
 
 await page.evaluate((zz) => { window.__cam('top'); window.__zoom(zz); }, Z);
