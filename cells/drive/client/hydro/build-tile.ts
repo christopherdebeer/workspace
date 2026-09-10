@@ -176,6 +176,45 @@ function lineProfile(input: HydroTileInput, feature: HydroFeature): Float32Array
   return out;
 }
 
+/**
+ * A standing-water AREA whose interior lies mostly under the confirmed ocean
+ * mask is the sea wearing an OSM `natural=water` polygon. Camps Bay's beach
+ * carries one, three texels wide between the sand and the ocean body, and as
+ * a LAKE it drew a pond's edge where the surf should break, kept the surf
+ * strip and the run-up off that shore (they compile for coastal kinds only),
+ * and cut the coast field's travel off at its own rim — the field measured
+ * the sea's crests from the polygon's edge and left the band itself with
+ * none. Observed as a lagoon it is coastal, which is what it is on the
+ * ground. Sampled the way `areaEvidence` samples a level: an eleven-by-eleven
+ * lattice over the clipped bounds, the samples inside the polygon, and the
+ * sea if half of them read confirmed ocean. A lake behind a beach has none
+ * under the mask; a wetland keeps its own kind whatever it stands in.
+ */
+function seaTouching(input: HydroTileInput, feature: HydroFeature): boolean {
+  if (feature.geometry.type !== 'area' || FLOWING.has(feature.kind)
+    || feature.kind === 'wetland' || feature.kind === 'lagoon' || feature.kind === 'ocean') return false;
+  if (input.oceanCoverage.status !== 'ready') return false;
+  const bounds = featureBounds(feature);
+  if (!boundsIntersect(bounds, input.bounds)) return false;
+  const clipped: WorldBounds = {
+    minX: Math.max(bounds.minX, input.bounds.minX),
+    minZ: Math.max(bounds.minZ, input.bounds.minZ),
+    maxX: Math.min(bounds.maxX, input.bounds.maxX),
+    maxZ: Math.min(bounds.maxZ, input.bounds.maxZ),
+  };
+  const covBounds = input.oceanCoverage.bounds ?? input.bounds;
+  const n = 11;
+  let inside = 0, sea = 0;
+  for (let iz = 0; iz < n; iz++) for (let ix = 0; ix < n; ix++) {
+    const x = clipped.minX + (ix + 0.5) / n * (clipped.maxX - clipped.minX);
+    const z = clipped.minZ + (iz + 0.5) / n * (clipped.maxZ - clipped.minZ);
+    if (!pointInArea(x, z, feature.geometry)) continue;
+    inside++;
+    if (sampleCoverage(input.oceanCoverage.grid, covBounds, x, z) >= 0.7) sea++;
+  }
+  return inside >= 3 && sea * 2 >= inside;
+}
+
 function areaEvidence(input: HydroTileInput, feature: HydroFeature): number | undefined {
   if (feature.taggedLevelM !== undefined) return feature.taggedLevelM;
   if (feature.geometry.type !== 'area') return undefined;
@@ -269,7 +308,7 @@ export function analyseHydroTile(input: HydroTileInput): HydroTileAnalysis {
     observations.push({
       tileKey: input.key,
       id: feature.id,
-      kind: feature.kind,
+      kind: seaTouching(input, feature) ? 'lagoon' : feature.kind,
       candidateLevelM: profile ? quantile(Array.from(profile).filter((_, i) => i % 3 === 2), 0.5) : areaEvidence(input, feature),
       taggedLevelM: feature.taggedLevelM,
       profile,

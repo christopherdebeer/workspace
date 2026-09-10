@@ -30046,9 +30046,29 @@ function tapeKeep(): string {
   const iz = clamp(Math.round(v * f.resolution - 0.5) + f.gutter, 0, f.width - 1);
   const i = (iz * f.width + ix) * 4;
   return {
-    key: f.key, coast: !!f.coast, shoreM: +f.geometry[i + 1].toFixed(1), depth: +f.geometry[i + 3].toFixed(2),
+    key: f.key, coast: !!f.coast, ix, iz, kind: f.material[i], coverage: +f.geometry[i].toFixed(2),
+    shoreM: +f.geometry[i + 1].toFixed(1), depth: +f.geometry[i + 3].toFixed(2),
     ...(f.coast ? { travelM: +f.coast[i].toFixed(1), dir: [+f.coast[i + 1].toFixed(2), +f.coast[i + 2].toFixed(2)], exposure: +f.coast[i + 3].toFixed(2) } : {}),
   };
+};
+/** Every marker on the glass this frame — name, kind, HUD position and the
+ *  HUD scale to turn it into a CSS point — so a harness can tap what it can
+ *  see, the way a finger does, instead of guessing at world coordinates. */
+(window as unknown as { __poimarks?: object }).__poimarks = (): object => ({
+  hudS, marks: poiDraw.map((q) => ({ name: q.name, kind: q.kind, x: Math.round(q.x), y: Math.round(q.y), hid: q.hid })),
+  // …and everything a tap could land on, in world coordinates, drawn or not.
+  peaks: [...peaks.values()].map((p) => ({ name: p.name, x: Math.round(p.x), z: Math.round(p.z), ele: Math.round(p.ele) })),
+  places: [...ovPlaces.values()].map((p) => ({ name: p.name, x: Math.round(p.x), z: Math.round(p.z), rank: p.rank })),
+  pins: [...pois.values()].map((p) => ({ name: p.name, kind: p.kind, x: Math.round(p.x), z: Math.round(p.z) })),
+});
+/** A chart tap at a world point, without the pointer: the same choice the
+ *  gesture makes — open the marker under it, or drop a fix and open that —
+ *  and what the card says, so a test can prove a summit answers a tap. */
+(window as unknown as { __tapat?: object }).__tapat = (wx: number, wz: number): object | null => {
+  const pin = poiUnder(wx, wz, chartTapR());
+  if (pin) openSite(pin.x, pin.z, pin.name, null);
+  else { const fix = dropFix(wx, wz); openSite(wx, wz, fix.name, fix.name); }
+  return siteOpen ? { name: siteOpen.rec.name, fix: siteOpen.fix, hit: pin ? pin.name : null } : null;
 };
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number, margin = 0.8) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
@@ -35870,10 +35890,20 @@ function chartTapR(): number {
 }
 function poiUnder(wx: number, wz: number, r: number): { name: string; x: number; z: number } | null {
   let best: { name: string; x: number; z: number } | null = null, bd = r * r;
-  for (const p of pois.values()) {
-    const d = (p.x - wx) ** 2 + (p.z - wz) ** 2;
-    if (d < bd) { bd = d; best = { name: p.name, x: p.x, z: p.z }; }
-  }
+  const take = (name: string, x: number, z: number): void => {
+    const d = (x - wx) ** 2 + (z - wz) ** 2;
+    if (d < bd) { bd = d; best = { name, x, z }; }
+  };
+  for (const p of pois.values()) take(p.name, p.x, p.z);
+  // A SUMMIT IS A PLACE, AND SO IS A TOWN ON THE WIDE CHART. Only the pins
+  // answered a tap before, so a finger on a peak's triangle dropped a fresh
+  // fix beside it and opened THAT — a mark on nothing, next to the thing it
+  // was reaching for. Every marker the chart draws opens the same card now:
+  // the summit or the place is the site, its record reads the ground there,
+  // and GOAL points the truck at it. A summit has no fix to travel to, so GO
+  // stays withheld, as it is for any pin that is not a survey mark.
+  for (const p of peaks.values()) take(p.name, p.x, p.z);
+  for (const p of ovPlaces.values()) take(p.name, p.x, p.z);
   return best;
 }
 function openSite(ex: number, ez: number, name: string, fix: string | null): void {
@@ -45083,32 +45113,38 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       + ` REBUILD ${terrainDirty.size} · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
       + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
       6, 48, UI.soft);
-    // ── THE KEY ── the marks above, named in their own ink, so the overlay
-    // answers "what is that" without the source beside it. One row per
-    // layer in the order they stream — vectors, fine terrain, shell — and a
-    // row only while its layer is drawing marks (the vector row folds with
-    // its grid, the shell row appears with its boxes). A row wraps under its
-    // own name when the HUD is narrow. The header's words are these words.
+    // ── THE KEY ── one row per LAYER that draws boxes, in the order they
+    // stream: what zoom it is, how wide one of its boxes is here (a tile's
+    // metres shrink with the cosine of the latitude, so this is computed,
+    // not quoted), the layer's name, then its marks in their own inks. The
+    // vector row shows while its cells draw and the shell row while its
+    // boxes do, and a folded ring says so. Drawn UNDER the scale bar — the
+    // first cut sat on the bar's label, which is exactly the rows this is
+    // meant to read beside. The header's words are the key's words.
     {
       const gw = (t: string): number => {
         let w = 0;
         for (const ch of t) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
         return w;
       };
-      let ly = 56;
-      type Mark = (cx: number, cy: number) => void;
+      const size = (z: number): string => {
+        const m = tileMetres(z);
+        return m >= 1000 ? `${(m / 1000).toFixed(m < 10000 ? 1 : 0)}KM` : `${Math.round(m)}M`;
+      };
+      let ly = pad + 56 + 20;                        // the scale bar's label is at pad+56, its bar to +70
+      type Mark = ((cx: number, cy: number) => void) | null;
       const row = (name: string, items: Array<[string, string, Mark]>): void => {
         const x0 = 6 + gw(name) + 4;
         let lx = x0;
         hctx.globalAlpha = 1;
         textEdgeP(name, 6, ly, UI.text);
         for (const [label, col, mark] of items) {
-          const w = 7 + gw(label);
+          const w = (mark ? 7 : 0) + gw(label);
           if (lx > x0 && lx + w > HW - 4) { lx = x0; ly += 8; }
           hctx.globalAlpha = 1;
-          mark(lx + 2, ly + 2);          // the glyph spans y-1..y+5; its middle is y+2
+          if (mark) mark(lx + 2, ly + 2);              // the glyph spans y-1..y+5; its middle is y+2
           hctx.globalAlpha = 1;
-          textEdgeP(label, lx + 7, ly, col);
+          textEdgeP(label, lx + (mark ? 7 : 0), ly, col);
           lx += w + 5;
         }
         ly += 8;
@@ -45118,7 +45154,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         dBox([cx - 3, cy - 3], [cx + 3, cy - 3], [cx + 3, cy + 3], [cx - 3, cy + 3]);
       };
       if (oFine) {
-        row(`Z${OSM_Z}`, [
+        row(`Z${OSM_Z} ${size(OSM_Z)}`, [
+          ['VECTORS', UI.soft, null],
           ['WIRE', UI.gold, (cx, cy) => { hctx.fillStyle = UI.gold; hctx.fillRect(cx - 1, cy - 1, 3, 3); }],
           ['QUEUE', UI.soft, (cx, cy) => { hctx.fillStyle = UI.soft; hctx.fillRect(cx - 1, cy - 1, 2, 2); }],
           ['FAIL', UI.bad, (cx, cy) => {
@@ -45129,10 +45166,16 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
           ['ASKED', UI.dim, (cx, cy) => { hctx.fillStyle = UI.dim; hctx.fillRect(cx, cy, 1, 1); }],
         ]);
       }
-      row(`Z${TERRAIN_Z}`, [
+      row(`Z${TERRAIN_Z} ${size(TERRAIN_Z)}`, [
+        ['TERRAIN', UI.soft, null],
         ['MESH', UI.edge, box(UI.edge)], ['WAIT', UI.gold, box(UI.gold)], ['REBUILD', UI.hot, box(UI.hot)],
       ]);
-      if (!oFine) row(`Z${farZ}`, [['SHELL', UI.edge, box(UI.edge)], ['ASKED', UI.gold, box(UI.gold)]]);
+      if (!oFine) {
+        row(`Z${farZ} ${size(farZ)}`, [
+          ['SHELL', UI.soft, null], ['MESH', UI.edge, box(UI.edge)], ['ASKED', UI.gold, box(UI.gold)],
+        ]);
+      }
+      if (!oFine || tPx < DBG_CELL_PX) row('ONE BOX', [['THE WHOLE RING, FOLDED', UI.dim, null]]);
       hctx.globalAlpha = 1;
     }
   }

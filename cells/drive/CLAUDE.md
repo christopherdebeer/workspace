@@ -5732,13 +5732,9 @@ admitted — first-admission latency, not a pop), `pops` (a tile that WAS
 shown going dark), hidden time and the longest stretch. `__tileholes()`
 carries them with the open holes and the far `asked/stale/inflight`; the
 dump has them as the `ground:` row under `chart`. A settled render mode reads
-`holes 0 · pop-outs 0`. **The tile-debug overlay has a key now**, two rows
-under its header (three when the shell boxes draw), in the marks' own inks:
-z16 WIRE (pulsing gold square, on the wire) · QUEUE (soft pip and its serving
-rank) · FAIL (red X, in its 30 s backoff) · DONE (green pip) · ASKED (dim
-dot, requested and unsettled); z14 MESH (teal box) · WAIT (gold, DEM asked)
-· REBUILD (orange, dirty); the shell SHELL (teal) · ASKED (gold). The
-header's words are the key's words.
+`holes 0 · pop-outs 0`. **The tile-debug overlay has a key now** — see
+"The layer ladder, and the key that names it" below for what it says and
+where it sits.
 
 **What to take from it:** a remove-then-wait is a hole for as long as the
 wait, and the wait is the whole rebuild queue. Anything that replaces a
@@ -5746,6 +5742,49 @@ visible thing asynchronously keeps the old one up until the new one is
 ready — the route solver learned this ("old route live until the new one
 lands"), the far level swap learned it (the retired ring), and the substrate
 commit had the swap written and was bypassed by its own invalidation.
+
+## The layer ladder, and the key that names it
+
+The first key sat on the scale bar's label — exactly the rows it was meant
+to read beside — and named the MARKS, when what was asked for was a legend
+for the BOXES: which dashed square is which layer, at what zoom, how wide.
+So the ladder, in the words the code and this file already use, from the
+truck outward:
+
+| name | zoom | one tile here | what it is | drawn as |
+|---|---|---|---|---|
+| FINE · vectors | z16 | ~600 m (× cos lat) | the OSM ring: roads, water, buildings streamed round the truck | the grid of small cells, a pip per cell |
+| FINE · terrain | z14 | ~2.4 km | the height tiles the world is built on, `terrainMeshes` | the medium dashed boxes |
+| SHELL | z11 (the level moves with the zoom) | ~19 km | the far ground on the sphere, baked from the coarse DEM and painted by COVER | the large boxes, only past the fold |
+| COVER | z10 / z12 | ~40 km / ~10 km | the WorldCover raster that tints the shell and the fine tiles; no boxes | the header's `COV` count |
+| OVERVIEW | z13 down to z5 with the zoom | ~5 km to ~1,200 km | the chart's coarse road and place vectors; no boxes | the dump's `ov` figures |
+| GLOBE | — | — | the planet under everything | the sphere |
+
+"FINE" is the streamed world you can drive on; "SHELL" is what fills the
+horizon and the wide chart; "beyond" is the globe. A ring FOLDS when its
+cells fall under eight HUD pixels: it is then drawn as one box round the
+whole ring, and the key says so.
+
+The key itself sits UNDER the scale bar (its label is at `pad + 56` with
+tile debug on; the key starts twenty below), one row per layer that draws
+boxes: `Z16 526M VECTORS` then the pip vocabulary in its inks — WIRE
+(pulsing gold, on the wire), QUEUE (soft pip and its serving rank), FAIL
+(red X in its 30 s backoff), DONE (green), ASKED (dim dot, requested and
+unsettled); `Z14 2.1KM TERRAIN` then MESH (teal box), WAIT (gold, DEM
+asked), REBUILD (orange, dirty); `Z11 19KM SHELL` then MESH and ASKED while
+the shell boxes draw; and `ONE BOX: THE WHOLE RING, FOLDED` while a ring is
+folded. The metres are computed from the latitude, not quoted. A row wraps
+under its name on a narrow HUD. The header's words are the key's words.
+
+**Every marker answers a tap the same way now.** `poiUnder` searched only
+the pins, so a finger on a summit's triangle dropped a fresh fix beside it
+and opened THAT — a mark on nothing, next to the thing reached for. It
+searches the summits and the wide chart's places too: the same site card
+opens, its record reads the ground there, GOAL points the truck at it, and
+GO stays withheld as it is for any pin that is not a survey mark.
+`__poimarks()` lists what is on the glass and everything tappable in world
+coordinates; `__tapat(x, z)` makes the chart's choice without the pointer,
+which is how the harness proves a summit opens its own card.
 
 ## The Senqu river stands on the hillside: its line runs 30–60 m off the DEM's floor
 
