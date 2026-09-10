@@ -21629,7 +21629,7 @@ function worldStatus(): WorldWord {
   // A level change empties both sets by construction (setOvLevel), so zooming
   // through a band reads as a fresh count rather than as a stall — which is
   // the truth: the old level is still on screen, sunk, until the new one lands.
-  const ovHome = ovMeshes.size;
+  const ovHome = ovHave();
   let ovRetry = 0;
   for (const t of ovFailedAt.values()) if (now - t < OV_RETRY_MS) ovRetry++;
   const map = !ovWant || ovHome >= ovWant ? ''
@@ -22210,6 +22210,11 @@ function evictFarOutside(): void {
     farMeshes.delete(key); farTiles.delete(key);
     farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key); farBakeZ.delete(key);
   }
+  // …and the asked set, or a refused fetch outside the ring is "asked" for ever.
+  for (const key of [...farTiles]) {
+    const [z, x, y] = key.split('/').map(Number);
+    if (farOutside(z, x, y) && !farMeshes.has(key)) farTiles.delete(key);
+  }
 }
 /** Per far tile, the fraction of its vertices that had a cover class at bake,
  *  and the mean colour it baked. The second is the one that matters: if two
@@ -22733,7 +22738,7 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   profAdd('farBuild', _pBuild);
   // An overview tile at this index that landed DEMLESS can build now: drop
   // its key so the next stream pass asks again (the vectors are a cache hit).
-  if (z === ovZ && ovTiles.has(key) && !ovMeshes.has(key)) ovTiles.delete(key);
+  if (z === ovZ && ovDemlessKeys.delete(key)) ovTiles.delete(key);
   // Whatever this tile now covers of the retired ring goes; and the last
   // fetch of the batch home takes the rest.
   cullRetiredFar();
@@ -22777,6 +22782,13 @@ const OV_WAIT_MS = 11000;
 let ovZ = OV_LEVELS[0];
 const ovTiles = new Set<string>();
 const ovMeshes = new Map<string, THREE.Mesh>();
+/** AN EMPTY TILE IS HOME. Open ocean at z5 carries no road, so its build
+ *  keeps the key and makes no mesh — and `ovMeshes.size` was the ring's
+ *  "have", so the status line read `MAP z5 · 15/25` over the Indian Ocean for
+ *  as long as the chart stayed, and only the stragglers a browse left behind
+ *  had ever padded it past the want. The empty landings are counted here. */
+const ovEmpty = new Set<string>();
+const ovHave = (): number => ovMeshes.size + ovEmpty.size;
 /** The overview's `farRingAt` — see the note there. A browse left `ov 28/50`
  *  on a 25-tile ring the same way. */
 let ovRingAt = { z: -1, x: 0, y: 0, r: 0, n: 1 };
@@ -22793,10 +22805,20 @@ function evictOvOutside(): void {
     ovMeshes.delete(key); ovTiles.delete(key);
     ovDark = ovDark.filter((d) => d.mesh !== mesh);
   }
+  // The asked set too — an empty landing, a demless one, a fetch that never
+  // came home — or `asked` carries every tile a browse ever passed over.
+  for (const key of [...ovTiles]) {
+    const [z, x, y] = key.split('/').map(Number);
+    if (ovOutside(z, x, y)) { ovTiles.delete(key); ovEmpty.delete(key); ovDemlessKeys.delete(key); }
+  }
 }
 let ovRetired: THREE.Mesh[] = [];
 /** Overview tiles that arrived with vectors but no heights to lay them on. */
 let ovDemless = 0;
+/** The keys that landed without heights — the ones a far landing may re-ask.
+ *  A key merely in flight must not be re-asked: two landings for one key
+ *  would set ovMeshes twice and leak the first mesh in the group. */
+const ovDemlessKeys = new Set<string>();
 let ovInFlight = 0;
 /** How many tiles the last chart stream pass asked its ring for, and when —
  *  the denominator of the MAP status word and of `__ov()`. Zero off the chart:
@@ -23055,6 +23077,7 @@ function setOvLevel(z: number): void {
     m.userData.retired = { z: was, x, y, at: performance.now() };
     m.position.multiplyScalar(1 - 15 / GLOBE_R); ovRetired.push(m);
   }
+  ovEmpty.clear(); ovDemlessKeys.clear();
   ovMeshes.clear();
   ovTiles.clear();
   ovWays.clear(); ovWayV++;    // the level swapped; the coarse graph is stale
@@ -23072,14 +23095,15 @@ function cullRetiredOv(): void {
     const r = m.userData.retired as { z: number; x: number; y: number; at: number } | undefined;
     let covered = false;
     if (r && Number.isFinite(r.x)) {
-      if (ovZ <= r.z) { const k = r.z - ovZ; covered = ovMeshes.has(`${ovZ}/${r.x >> k}/${r.y >> k}`); }
+      const landed = (key: string): boolean => ovMeshes.has(key) || ovEmpty.has(key);
+      if (ovZ <= r.z) { const k = r.z - ovZ; covered = landed(`${ovZ}/${r.x >> k}/${r.y >> k}`); }
       else {
         const k = ovZ - r.z, n = 1 << k; let asked = 0; covered = true;
         for (let i = 0; i < n && covered; i++) for (let j = 0; j < n; j++) {
           const key = `${ovZ}/${(r.x << k) + i}/${(r.y << k) + j}`;
           if (!ovTiles.has(key)) continue;
           asked++;
-          if (!ovMeshes.has(key)) { covered = false; break; }
+          if (!landed(key)) { covered = false; break; }
         }
         if (!asked) covered = false;
       }
@@ -23185,6 +23209,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   // of a batch had no heights.
   if (!dem) {
     ovDemless++;
+    ovDemlessKeys.add(key);
     if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
     return;
   }
@@ -23334,8 +23359,10 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   }
   if (!verts.length) {
     // An empty tile is still a LANDED tile: it has to hold its key (or every
-    // stream pass refetches the open ocean), and it still gets to say the ring
-    // is complete so the retired level can go.
+    // stream pass refetches the open ocean), it counts as home (ovEmpty), and
+    // it still gets to say the ring is complete so the retired level can go.
+    ovEmpty.add(key);
+    cullRetiredOv();
     if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
     return;
   }
@@ -43405,13 +43432,17 @@ function setClean(on: boolean): void {
  *  pass that asked. `__ovroads` answers the ROUTER's question (reach, ways,
  *  the handover); this answers "is the map coming". */
 (window as unknown as { __ov?: object }).__ov = (): object => ({
-  level: ovZ, want: ovWant, have: ovMeshes.size, built: ovMeshes.size, asked: ovTiles.size,
+  level: ovZ, want: ovWant, have: ovHave(), built: ovMeshes.size, empty: ovEmpty.size, asked: ovTiles.size,
   inFlight: ovInFlight, queued: ovQueue.length, retired: ovRetired.length,
   failing: [...ovFailedAt.values()].filter((t) => performance.now() - t < OV_RETRY_MS).length,
   retryMs: OV_RETRY_MS,
   sinceAskMs: ovAskedAt ? Math.round(performance.now() - ovAskedAt) : null,
   waitMs: OV_WAIT_MS, top: camMode === 'top', word: worldStatus().map,
   labels: [...ovLabelsDrawn],
+  // Which asked tiles have no mesh, and the two reasons a tile can be one:
+  // it failed (and waits out OV_RETRY_MS) or it landed without heights.
+  missing: [...ovTiles].filter((k) => !ovMeshes.has(k) && !ovEmpty.has(k)),
+  failed: [...ovFailedAt.keys()], demless: ovDemless, demlessKeys: [...ovDemlessKeys],
 });
 (window as unknown as { __ovroads?: object }).__ovroads = (): object => {
   let ways = 0, pts = 0, far = 0;
