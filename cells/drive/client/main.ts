@@ -24158,7 +24158,7 @@ function worldStatus(): WorldWord {
   // A level change empties both sets by construction (setOvLevel), so zooming
   // through a band reads as a fresh count rather than as a stall — which is
   // the truth: the old level is still on screen, sunk, until the new one lands.
-  const ovHome = ovMeshes.size;
+  const ovHome = ovHave();
   let ovRetry = 0;
   for (const t of ovFailedAt.values()) if (now - t < OV_RETRY_MS) ovRetry++;
   const map = !ovWant || ovHome >= ovWant ? ''
@@ -24739,6 +24739,11 @@ function evictFarOutside(): void {
     farMeshes.delete(key); farTiles.delete(key);
     farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key); farBakeZ.delete(key);
   }
+  // …and the asked set, or a refused fetch outside the ring is "asked" for ever.
+  for (const key of [...farTiles]) {
+    const [z, x, y] = key.split('/').map(Number);
+    if (farOutside(z, x, y) && !farMeshes.has(key)) farTiles.delete(key);
+  }
 }
 /** Per far tile, the fraction of its vertices that had a cover class at bake,
  *  and the mean colour it baked. The second is the one that matters: if two
@@ -25172,7 +25177,13 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   // …or the ring moved on while this was on the wire: a tile outside it now
   // would be built and evicted on the next pass, at 600 ms of main thread.
   if (!data || z !== farZ || farOutside(z, x, y)) { farTiles.delete(key); return; }
-  const _pBuild = performance.now();   // the build is profiled as `farBuild`
+  // THE BUILD IS PROFILED BY PHASE — far:bake (the lattice and the vertex
+  // loop: cover sample, palette, sphere), far:geo (attributes and normals),
+  // far:nrm (the normal map) — as the only wrappers, so the off-tick total is
+  // counted once. The phone read 146 ms a tile, 259 tiles in a 96 s browse,
+  // 87% of every slow frame; which of the three it is decides what moves to
+  // a worker first.
+  const _pBuild = performance.now();
   const b = tileBounds(x, y, z);
   const [wx0, wz0] = toLocal(b.latN, b.lonW);
   const [wx1, wz1] = toLocal(b.latS, b.lonE);
@@ -25252,17 +25263,22 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   farCoverHit.set(key, hit / Math.max(1, pos.count));
   farTint.set(key, [tr / pos.count, tg / pos.count, tb / pos.count]);
   farBakeZ.set(key, coverWideZ);
+  profAdd('far:bake', _pBuild);
+  const _pGeo = performance.now();
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? farMatFor(data, w, key, centre) : farMat);
+  profAdd('far:geo', _pGeo);
+  const _pNrm = performance.now();
+  const mat = NRM_SCALE > 0 ? farMatFor(data, w, key, centre) : farMat;
+  profAdd('far:nrm', _pNrm);
+  const mesh = new THREE.Mesh(geo, mat);
   mesh.position.copy(centre);
   farMeshes.set(key, mesh);
   farRasters.set(key, { xs, zs, w, h, data });
   farGroup.add(mesh);
-  profAdd('farBuild', _pBuild);
   // An overview tile at this index that landed DEMLESS can build now: drop
   // its key so the next stream pass asks again (the vectors are a cache hit).
-  if (z === ovZ && ovTiles.has(key) && !ovMeshes.has(key)) ovTiles.delete(key);
+  if (z === ovZ && ovDemlessKeys.delete(key)) ovTiles.delete(key);
   // Whatever this tile now covers of the retired ring goes; and the last
   // fetch of the batch home takes the rest.
   cullRetiredFar();
@@ -25306,6 +25322,13 @@ const OV_WAIT_MS = 11000;
 let ovZ = OV_LEVELS[0];
 const ovTiles = new Set<string>();
 const ovMeshes = new Map<string, THREE.Mesh>();
+/** AN EMPTY TILE IS HOME. Open ocean at z5 carries no road, so its build
+ *  keeps the key and makes no mesh — and `ovMeshes.size` was the ring's
+ *  "have", so the status line read `MAP z5 · 15/25` over the Indian Ocean for
+ *  as long as the chart stayed, and only the stragglers a browse left behind
+ *  had ever padded it past the want. The empty landings are counted here. */
+const ovEmpty = new Set<string>();
+const ovHave = (): number => ovMeshes.size + ovEmpty.size;
 /** The overview's `farRingAt` — see the note there. A browse left `ov 28/50`
  *  on a 25-tile ring the same way. */
 let ovRingAt = { z: -1, x: 0, y: 0, r: 0, n: 1 };
@@ -25322,10 +25345,32 @@ function evictOvOutside(): void {
     ovMeshes.delete(key); ovTiles.delete(key);
     ovDark = ovDark.filter((d) => d.mesh !== mesh);
   }
+  // The asked set too — an empty landing, a demless one, a fetch that never
+  // came home — or `asked` carries every tile a browse ever passed over.
+  for (const key of [...ovTiles]) {
+    const [z, x, y] = key.split('/').map(Number);
+    if (ovOutside(z, x, y)) { ovTiles.delete(key); ovEmpty.delete(key); ovDemlessKeys.delete(key); }
+  }
+  // AND THE PLACES. The table is keyed by name and capped at 800, and a
+  // browse filled it with every town it passed over: the phone read
+  // `places 800 labels 0` at Newfoundland — nothing new could register. A
+  // place leaves with the ring, by the ring's own box in degrees (a ring
+  // across the dateline keeps everything rather than guess).
+  const { z, x, y, r, n } = ovRingAt;
+  if (z >= 0 && x - r - 1 >= 0 && x + r + 1 < n) {
+    const nw = tileBounds(x - r - 1, Math.max(0, y - r - 1), z), se = tileBounds(x + r + 1, Math.min(n - 1, y + r + 1), z);
+    for (const [name, p] of [...ovPlaces]) {
+      if (p.la > nw.latN || p.la < se.latS || p.lo < nw.lonW || p.lo > se.lonE) ovPlaces.delete(name);
+    }
+  }
 }
 let ovRetired: THREE.Mesh[] = [];
 /** Overview tiles that arrived with vectors but no heights to lay them on. */
 let ovDemless = 0;
+/** The keys that landed without heights — the ones a far landing may re-ask.
+ *  A key merely in flight must not be re-asked: two landings for one key
+ *  would set ovMeshes twice and leak the first mesh in the group. */
+const ovDemlessKeys = new Set<string>();
 let ovInFlight = 0;
 /** How many tiles the last chart stream pass asked its ring for, and when —
  *  the denominator of the MAP status word and of `__ov()`. Zero off the chart:
@@ -25531,7 +25576,7 @@ function ovInkRefresh(): void {
 /** A place the chart can write on the land: rank 0 city … 3 hamlet, 4 peak. */
 /** `x/z/y` in the flat frame, for whoever asks the flat world about the
  *  place; `sp` its point in the PLANET'S frame, which is what draws it. */
-interface OvPlace { name: string; x: number; z: number; y: number; sp: THREE.Vector3; rank: number }
+interface OvPlace { name: string; x: number; z: number; y: number; la: number; lo: number; sp: THREE.Vector3; rank: number }
 const ovPlaces = new Map<string, OvPlace>();
 /** The names the chart drew last frame, for `__ov().labels` — a test cannot
  *  read the HUD canvas back, and "is San Francisco written over India" is a
@@ -25584,6 +25629,7 @@ function setOvLevel(z: number): void {
     m.userData.retired = { z: was, x, y, at: performance.now() };
     m.position.multiplyScalar(1 - 15 / GLOBE_R); ovRetired.push(m);
   }
+  ovEmpty.clear(); ovDemlessKeys.clear();
   ovMeshes.clear();
   ovTiles.clear();
   ovWays.clear(); ovWayV++;    // the level swapped; the coarse graph is stale
@@ -25601,14 +25647,15 @@ function cullRetiredOv(): void {
     const r = m.userData.retired as { z: number; x: number; y: number; at: number } | undefined;
     let covered = false;
     if (r && Number.isFinite(r.x)) {
-      if (ovZ <= r.z) { const k = r.z - ovZ; covered = ovMeshes.has(`${ovZ}/${r.x >> k}/${r.y >> k}`); }
+      const landed = (key: string): boolean => ovMeshes.has(key) || ovEmpty.has(key);
+      if (ovZ <= r.z) { const k = r.z - ovZ; covered = landed(`${ovZ}/${r.x >> k}/${r.y >> k}`); }
       else {
         const k = ovZ - r.z, n = 1 << k; let asked = 0; covered = true;
         for (let i = 0; i < n && covered; i++) for (let j = 0; j < n; j++) {
           const key = `${ovZ}/${(r.x << k) + i}/${(r.y << k) + j}`;
           if (!ovTiles.has(key)) continue;
           asked++;
-          if (!ovMeshes.has(key)) { covered = false; break; }
+          if (!landed(key)) { covered = false; break; }
         }
         if (!asked) covered = false;
       }
@@ -25714,6 +25761,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   // of a batch had no heights.
   if (!dem) {
     ovDemless++;
+    ovDemlessKeys.add(key);
     if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
     return;
   }
@@ -25800,7 +25848,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
       // one place it leaked.
       if (underCover(la, lo, 1)) continue;
       const [px, pz] = toLocal(la, lo);
-      ovPlaces.set(name, { name, x: px, z: pz, y: yAt(la, lo),
+      ovPlaces.set(name, { name, x: px, z: pz, y: yAt(la, lo), la, lo,
         sp: latLonToUnit(la, lo).multiplyScalar(GLOBE_R + yAt(la, lo)),
         rank: t.place ? OV_RANK[t.place] ?? 3 : 4 });
       continue;
@@ -25863,8 +25911,10 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   }
   if (!verts.length) {
     // An empty tile is still a LANDED tile: it has to hold its key (or every
-    // stream pass refetches the open ocean), and it still gets to say the ring
-    // is complete so the retired level can go.
+    // stream pass refetches the open ocean), it counts as home (ovEmpty), and
+    // it still gets to say the ring is complete so the retired level can go.
+    ovEmpty.add(key);
+    cullRetiredOv();
     if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
     return;
   }
@@ -35006,12 +35056,11 @@ const setStickFrom = (e: PointerEvent): void => {
 };
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
-  if (fpsDown(e)) return;
-  if (autoDown(e)) return;
-  if (poiDown(e)) return;
-  if (rewindDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
-  if (clockDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
-  if (hudTap(e.clientX, e.clientY)) return; // an instrument swallowed it
+  // Each instrument swallows the DOWN; hudPtrs makes it swallow the UP too.
+  if (fpsDown(e) || autoDown(e) || poiDown(e)) { hudPtrs.add(e.pointerId); return; }
+  if (rewindDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
+  if (clockDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
+  if (hudTap(e.clientX, e.clientY)) { hudPtrs.add(e.pointerId); return; } // an instrument swallowed it
   // Capture: without it, a finger lifted over interactive chrome (the reroll
   // button) never fires pointerup HERE — the brake finger leaked and stayed
   // held forever, which read as "the car is stuck".
@@ -35195,6 +35244,20 @@ let tapAt = 0, tapX = 0, tapY = 0, tapSeen = 0;
 // twice with the SAME event object. Without this the second run sees a tap
 // zero milliseconds old at zero distance and teleports on a single tap.
 let lastUp: Event | null = null;
+/**
+ * A POINTER AN INSTRUMENT TOOK ON THE DOWN NEVER REACHES THE CHART ON THE UP.
+ *
+ * The FPS readout, the AUTO button, a pin, the rewind and the clock all
+ * swallow their pointerdown and return — and the pointerup still arrived at
+ * `endStick`, whose tap logic on the chart is "any up without a stick". So a
+ * double tap on the FPS readout copied the telemetry on its second DOWN and
+ * then, on its second UP, was also the chart's double tap: a fix dropped
+ * where the readout is, its record written to the clipboard over the
+ * telemetry that had just been put there. Reported from the seat as both
+ * happening at once. The ids an instrument takes are kept here and the up
+ * for one of them ends before the chart is asked anything.
+ */
+const hudPtrs = new Set<number>();
 /**
  * Where a screen pixel lands on a HORIZONTAL plane at height `y0`, through the
  * live camera. The cheap sibling of `chartToWorld`: that one marches the
@@ -35621,8 +35684,13 @@ const tapCanMark = (e: PointerEvent): boolean => {
   return e.clientY < innerHeight * 0.5;
 };
 const endStick = (e: PointerEvent): void => {
+  // Taken by an instrument on the down — see hudPtrs. Deleted whatever the
+  // event type, so a cancel clears it too; `lastUp` is set so the window's
+  // copy of the same up (this handler is on both) does not ask the chart.
+  const hud = hudPtrs.delete(e.pointerId);
   if (e.type === 'pointerup' && rewindUp(e)) return;
   if (e.type === 'pointerup' && clockUp(e)) return;
+  if (hud) { lastUp = e; return; }
   if (tapCanMark(e) && e.type === 'pointerup' && e !== lastUp) {
     lastUp = e;
     tapSeen++;
@@ -39298,7 +39366,7 @@ function telemetryReport(): string {
     const recent = Array.from(drawRing.subarray(0, n)).sort((a, b) => a - b);
     const q = (p: number): string => n ? (recent[Math.min(n - 1, Math.floor(p * n))] / 1e6).toFixed(2) : '?';
     const [fLat, fLon] = localToLatLon(viewX() + panX, viewZ() + panZ);
-    L.push(`chart ${camMode} · zoom ${zoomCur < 10 ? zoomCur.toFixed(2) : String(Math.round(zoomCur))} · ${chartMpp().toFixed(1)} m/px · ${chartRemote() ? 'browsed' : 'home'} focus ${fLat.toFixed(2)},${fLon.toFixed(2)} · globe ${globeMesh.visible ? 'on' : 'off'} free ${globeFree()} fling ${flingOn ? 'on' : 'off'} · far z${farZ} ${farMeshes.size}/${farTiles.size} retired ${farRetired.length} inflight ${farInFlight} queued ${farQueue.length} · ov z${ovZ} ${ovMeshes.size}/${ovTiles.size} retired ${ovRetired.length} places ${ovPlaces.size} labels ${ovLabelsDrawn.length}`);
+    L.push(`chart ${camMode} · zoom ${zoomCur < 10 ? zoomCur.toFixed(2) : String(Math.round(zoomCur))} · ${chartMpp().toFixed(1)} m/px · ${chartRemote() ? 'browsed' : 'home'} focus ${fLat.toFixed(2)},${fLon.toFixed(2)} · globe ${globeMesh.visible ? 'on' : 'off'} free ${globeFree()} fling ${flingOn ? 'on' : 'off'} · far z${farZ} ${farMeshes.size}/${farTiles.size} retired ${farRetired.length} inflight ${farInFlight} queued ${farQueue.length} · ov z${ovZ} ${ovHave()}/${ovTiles.size} (${ovMeshes.size} drawn, ${ovEmpty.size} empty) retired ${ovRetired.length} failing ${[...ovFailedAt.values()].filter((t) => performance.now() - t < OV_RETRY_MS).length} demless ${ovDemlessKeys.size} places ${ovPlaces.size} labels ${ovLabelsDrawn.length}`);
     L.push(`world pass: draw calls mean ${Math.round(drawStat.sumCalls / Math.max(1, drawStat.n))} max ${drawStat.maxCalls} · triangles mean ${(drawStat.sumTris / Math.max(1, drawStat.n) / 1e6).toFixed(2)}M max ${(drawStat.maxTris / 1e6).toFixed(2)}M · recent ${n} passes p50 ${q(0.5)}M p95 ${q(0.95)}M · last ${(drawStat.tris / 1e6).toFixed(2)}M / ${drawStat.calls} calls`); }
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
   { const r = goalSolveStat; if (r.runs) L.push(`route solves ${r.runs} (found ${r.found} failed ${r.failed}) · ms/solve ${(r.totalMs / r.runs).toFixed(0)} (graph ${(r.graphTotalMs / r.runs).toFixed(0)}) max ${Math.round(r.maxMs)} · slices ${r.slices} max ${r.maxSliceMs.toFixed(1)}ms · last span ${Math.round(r.spanMs)}ms · walked ${r.walked}/${r.nodes} (fine ${graphStat.fine} coarse ${graphStat.coarse} portals ${graphStat.portals}) · graph cached ${graphStat.cached ?? 0} · tiles skipped ${r.tilesSkipped} hit ${r.tilesHit} · last ${r.last}`); }
@@ -39310,6 +39378,7 @@ function telemetryReport(): string {
 /** Copy the telemetry: the clipboard where a gesture allows it, a text box
  *  to select otherwise. */
 function copyTelemetry(): void {
+  telemetryCopies++;
   const text = telemetryReport();
   const fallback = (): void => {
     const ta = document.createElement('textarea');
@@ -39332,6 +39401,14 @@ function copyTelemetry(): void {
 (window as unknown as { __telemetry?: object }).__telemetry = (copy = false): string => { if (copy) copyTelemetry(); return telemetryReport(); };
 /** The FPS readout's hit box, in HUD units, set where it is drawn. */
 const fpsRect = { x: 0, y: 0, w: 0, h: 0 };
+let telemetryCopies = 0;
+/** The FPS readout's centre in CSS pixels, how many times the telemetry has
+ *  been copied, and how many fixes stand — so a test can double-tap the
+ *  readout and prove the copy happened and no fix did. */
+(window as unknown as { __fpsTap?: object }).__fpsTap = (): object => ({
+  x: (fpsRect.x + fpsRect.w / 2) * hudS, y: (fpsRect.y + fpsRect.h / 2) * hudS, w: fpsRect.w * hudS,
+  copies: telemetryCopies, fixes: [...pois.values()].filter((p) => p.kind === 'survey').length,
+});
 let fpsTapAt = 0;
 function fpsDown(e: PointerEvent): boolean {
   if (fpsRect.w === 0 || menu.tab() !== null) return false;
@@ -46140,13 +46217,17 @@ function setClean(on: boolean): void {
  *  pass that asked. `__ovroads` answers the ROUTER's question (reach, ways,
  *  the handover); this answers "is the map coming". */
 (window as unknown as { __ov?: object }).__ov = (): object => ({
-  level: ovZ, want: ovWant, have: ovMeshes.size, built: ovMeshes.size, asked: ovTiles.size,
+  level: ovZ, want: ovWant, have: ovHave(), built: ovMeshes.size, empty: ovEmpty.size, asked: ovTiles.size,
   inFlight: ovInFlight, queued: ovQueue.length, retired: ovRetired.length,
   failing: [...ovFailedAt.values()].filter((t) => performance.now() - t < OV_RETRY_MS).length,
   retryMs: OV_RETRY_MS,
   sinceAskMs: ovAskedAt ? Math.round(performance.now() - ovAskedAt) : null,
   waitMs: OV_WAIT_MS, top: camMode === 'top', word: worldStatus().map,
   labels: [...ovLabelsDrawn],
+  // Which asked tiles have no mesh, and the two reasons a tile can be one:
+  // it failed (and waits out OV_RETRY_MS) or it landed without heights.
+  missing: [...ovTiles].filter((k) => !ovMeshes.has(k) && !ovEmpty.has(k)),
+  failed: [...ovFailedAt.keys()], demless: ovDemless, demlessKeys: [...ovDemlessKeys],
 });
 (window as unknown as { __ovroads?: object }).__ovroads = (): object => {
   let ways = 0, pts = 0, far = 0;
