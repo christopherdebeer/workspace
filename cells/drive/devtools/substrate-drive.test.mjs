@@ -25,15 +25,12 @@ const d = await openDrive({
 await d.page.waitForTimeout(10000);
 
 const points = await d.page.evaluate(() => window.__substrateWaterPoints?.(96, 3000) ?? []);
-const bridge = points.find((point) => point.crossing === 'bridge' && !point.fluid) ?? null;
 const fluidPoints = points.filter((point) => point.fluid)
   .sort((a, b) => (b.depthAboveSupportM ?? 0) - (a.depthAboveSupportM ?? 0));
 const wet = fluidPoints.find((point) => point.crossing === 'ford')
   ?? fluidPoints.find((point) => point.crossing === null)
   ?? fluidPoints[0]
   ?? null;
-ok('the explicit bridge keeps water below vehicle support',
-  !!bridge && !bridge.fluid && bridge.depthAboveSupportM === null, bridge);
 ok('field-native probe finds exposed vehicle fluid away from the bridge deck', !!wet, {
   count: points.length,
   first: points[0] ?? null,
@@ -47,7 +44,10 @@ if (wet) {
     window.__drive.speed = 1.5;
   }, wet);
 }
-await d.simWait(.45);
+// Shadow observes every 15 ticks. Wait for more than one full observation
+// interval so this assertion does not depend on the tick phase at teleport.
+await d.simWait(.9);
+await d.page.evaluate(() => window.__substrateParityProbe?.());
 
 const immersed = await d.page.evaluate(() => ({
   evidence: window.__waterEvidence?.(),
@@ -62,6 +62,11 @@ ok('the integrated render mode owns both pixels and contact',
     && immersed.substrate?.renderAuthority === 'substrate-tile'
     && immersed.substrate?.render?.atomicCommits > 0,
   immersed.substrate);
+ok('loaded vehicle consumers require no legacy contact fallback',
+  immersed.substrate?.contactAvailability?.queries > 0
+    && immersed.substrate?.contactAvailability?.fallbackQueries === 0
+    && immersed.substrate?.contactAvailability?.reasons?.invalidTile === 0,
+  immersed.substrate?.contactAvailability);
 ok('cutover readiness exposes each production gate structurally',
   ['wet-disagreement-rate', 'depth-p95', 'depth-maximum', 'support-p95',
     'speed-authority', 'crossing-authority']

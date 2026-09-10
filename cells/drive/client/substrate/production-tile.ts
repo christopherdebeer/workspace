@@ -227,6 +227,18 @@ export interface ProductionSubstrateStoreSnapshot {
   crossings: number;
 }
 
+export type ProductionSubstrateLookup =
+  | {
+    status: 'available';
+    tileKey: string;
+    tileRevision: number;
+    contact: SubstrateContact;
+  }
+  | {
+    status: 'unavailable';
+    reason: 'no-tile' | 'invalid-tile';
+  };
+
 export interface ProductionWaterProbe {
   tileKey: string;
   x: number;
@@ -845,9 +857,25 @@ export class ProductionSubstrateStore {
     return this.tiles.get(key);
   }
 
+  lookup(x: number, z: number): ProductionSubstrateLookup {
+    const tile = this.tileAt(x, z);
+    if (!tile) return { status: 'unavailable', reason: 'no-tile' };
+    const contact = sampleProductionSubstrateTile(tile, x, z);
+    // `tileAt` and the sampler deliberately share the same bounds. Keep this
+    // defensive state explicit: a malformed/revised tile may use rollback,
+    // but it must never masquerade as an ordinary dry substrate answer.
+    if (!contact) return { status: 'unavailable', reason: 'invalid-tile' };
+    return {
+      status: 'available',
+      tileKey: tile.key,
+      tileRevision: tile.revision,
+      contact,
+    };
+  }
+
   sample(x: number, z: number): SubstrateContact | undefined {
-    const best = this.tileAt(x, z);
-    return best ? sampleProductionSubstrateTile(best, x, z) : undefined;
+    const lookup = this.lookup(x, z);
+    return lookup.status === 'available' ? lookup.contact : undefined;
   }
 
   debugAt(x: number, z: number): Record<string, unknown> | null {

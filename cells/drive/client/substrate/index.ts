@@ -45,12 +45,19 @@ export {
   type ProductionRenderAttributeArray,
   type ProductionRenderGroup,
   type ProductionRenderMesh,
+  type ProductionSubstrateLookup,
   type ProductionSubstrateStoreSnapshot,
   type ProductionSubstrateTile,
   type ProductionSubstrateTileInput,
   type ProductionWaterProbe,
   type ProductionWaterMotionSegment,
 } from './production-tile';
+export {
+  SubstrateFallbackMonitor,
+  type SubstrateContactConsumer,
+  type SubstrateConsumerAvailability,
+  type SubstrateFallbackSnapshot,
+} from './availability';
 export { buildProductionHydroFixture } from './hydro-fixture';
 export { makeCrossingFixture, type CrossingFixtureOptions } from './fixtures';
 export {

@@ -10,6 +10,7 @@ import {
   pointInProductionCrossingFootprint,
   productionCrossingFootprint,
   ProductionCrossingRegistry,
+  SubstrateFallbackMonitor,
   ProductionSubstrateStore,
   resolveFluidContact,
   resolveCrossingKind,
@@ -959,7 +960,31 @@ export function runSubstrateSelfTest(): void {
   assert(exactHydroContact.water.waterId === 'water:exact',
     'exact channel identity must survive in production contact');
   const exactHydroStore = new ProductionSubstrateStore();
+  const emptyLookup = exactHydroStore.lookup(0, 0);
+  assert(emptyLookup.status === 'unavailable' && emptyLookup.reason === 'no-tile',
+    'an absent production tile must be explicitly unavailable');
   exactHydroStore.upsert(exactHydroTile);
+  const exactLookup = exactHydroStore.lookup(0, 34);
+  assert(exactLookup.status === 'available'
+    && exactLookup.tileKey === exactHydroTile.key
+    && exactLookup.tileRevision === exactHydroTile.revision,
+  'an admitted production tile must expose revisioned availability');
+  const fallbackMonitor = new SubstrateFallbackMonitor();
+  assert(fallbackMonitor.consume('fluid', 0, 34, exactLookup)?.water,
+    'available contact consumers must receive the tile contact');
+  assert(!fallbackMonitor.consume('surface', 500, 500, exactHydroStore.lookup(500, 500)),
+    'only an explicitly unavailable tile may enter rollback');
+  const fallbackSnapshot = fallbackMonitor.snapshot();
+  assert(fallbackSnapshot.queries === 2
+    && fallbackSnapshot.tileQueries === 1
+    && fallbackSnapshot.fallbackQueries === 1
+    && fallbackSnapshot.reasons.noTile === 1
+    && fallbackSnapshot.byConsumer.fluid.tile === 1
+    && fallbackSnapshot.byConsumer.surface.fallback === 1,
+  'runtime availability diagnostics must count tile and fallback consumers');
+  fallbackMonitor.reset();
+  assert(fallbackMonitor.snapshot().queries === 0,
+    'runtime availability diagnostics must reset without deleting authority');
   const exactWaterPoints = exactHydroStore.waterPoints(8, { x: 0, z: 0, radiusM: 100 });
   assert(exactWaterPoints.length > 0,
     'production store must expose exact field water for representative-drive probes');

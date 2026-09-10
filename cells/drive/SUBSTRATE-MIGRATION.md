@@ -263,7 +263,13 @@ fallback classification still have duplicate legacy consumers and remain in
 scope for retirement.
 
 Fallbacks may remain only for tiles whose substrate status is explicitly
-unavailable, and must be counted.
+unavailable, and must be counted. Production contact now enters through a
+typed `available`/`unavailable` tile lookup. `__substrate().contactAvailability`
+counts the actual surface, fluid, wheel-support, wet-effects and frame-centre
+consumers by authority and reason; a loaded dry tile is an available substrate
+answer, never permission to consult legacy water. `__substrateParityProbe()`
+records one deterministic current-position comparison when a browser or lab
+needs parity evidence without waiting for the periodic sampler.
 
 ## Cutover gates
 

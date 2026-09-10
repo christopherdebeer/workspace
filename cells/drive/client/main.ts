@@ -121,6 +121,10 @@ import {
   type ProductionWaterMotionSegment,
 } from './substrate/production-tile';
 import {
+  SubstrateFallbackMonitor,
+  type SubstrateContactConsumer,
+} from './substrate/availability';
+import {
   SubstrateShadowMonitor,
   type SubstrateShadowObservation,
 } from './substrate/shadow';
@@ -1928,6 +1932,14 @@ const productionCrossings = new ProductionCrossingRegistry();
 /** Last crossing revision consumed by terrain/hydro invalidation. */
 const crossingAppliedRevision = new Map<string, number>();
 const productionSubstrate = new ProductionSubstrateStore();
+const substrateFallbacks = new SubstrateFallbackMonitor();
+function productionContactAt(
+  x: number,
+  z: number,
+  consumer: SubstrateContactConsumer,
+): SubstrateContact | undefined {
+  return substrateFallbacks.consume(consumer, x, z, productionSubstrate.lookup(x, z));
+}
 (window as unknown as {
   __substrateWaterPoints?: (max?: number, radiusM?: number) => object[];
 }).__substrateWaterPoints = (max = 32, radiusM = 2400): object[] =>
@@ -1941,7 +1953,10 @@ const productionSubstrate = new ProductionSubstrateStore();
   // tiles are world state; deleting them from a console counter reset would
   // leave the shadow blind until the corresponding OSM ways happened to build
   // again.
-  if (action === 'reset') substrateShadow?.reset();
+  if (action === 'reset') {
+    substrateShadow?.reset();
+    substrateFallbacks.reset();
+  }
   const crossings = productionCrossings.snapshot();
   const crossingRecords = productionCrossings.diagnostics();
   const crossingEarthworks = crossingRecords.map((record) => {
@@ -1973,6 +1988,7 @@ const productionSubstrate = new ProductionSubstrateStore();
   return substrateShadow ? {
     ...substrateShadow.snapshot(), mode, renderAuthority: SUBSTRATE_RENDER_ON ? 'substrate-tile' : 'hydro-system',
     crossings, crossingRecords, crossingEarthworks, tiles, render, at,
+    contactAvailability: substrateFallbacks.snapshot(),
     renderPacketRejections: productionRenderPacketRejections.slice(),
     renderRefusals: substrateAtomicRenderRefusalLog.slice(),
   } : {
@@ -1987,6 +2003,7 @@ const productionSubstrate = new ProductionSubstrateStore();
     tiles,
     render,
     at,
+    contactAvailability: substrateFallbacks.snapshot(),
     renderPacketRejections: productionRenderPacketRejections.slice(),
     renderRefusals: substrateAtomicRenderRefusalLog.slice(),
   };
@@ -11985,7 +12002,7 @@ function onCarriageway(x: number, z: number, margin = 0,
 }
 function surfaceAt(x: number, z: number): Surface {
   if (SUBSTRATE_CONTACT_ON) {
-    const contact = productionSubstrate.sample(x, z);
+    const contact = productionContactAt(x, z, 'surface');
     if (contact) {
       const resolved = surfaceFromSubstrateContact(contact);
       surfQ = resolved.quality;
@@ -18217,7 +18234,7 @@ function waterInfoFromSubstrateContact(contact: SubstrateContact): RuntimeWaterI
 }
 function waterInfoAt(x: number, z: number): RuntimeWaterInfo {
   if (SUBSTRATE_CONTACT_ON) {
-    const contact = productionSubstrate.sample(x, z);
+    const contact = productionContactAt(x, z, 'fluid');
     if (contact) return waterInfoFromSubstrateContact(contact);
   }
   return legacyWaterInfoAt(x, z);
@@ -18403,6 +18420,18 @@ function observeSubstrateParityAt(x: number, z: number): boolean {
   substrateShadow.observe(substrateParityObservationAt(x, z));
   return true;
 }
+(window as unknown as {
+  __substrateParityProbe?: (x?: number, z?: number) => object;
+}).__substrateParityProbe = (x = state.x, z = state.z): object => {
+  if (!substrateShadow) {
+    return {
+      enabled: false,
+      enableWith: '?substrate=shadow, ?substrate=contact, or ?substrate=render',
+    };
+  }
+  substrateShadow.observe(substrateParityObservationAt(x, z));
+  return substrateShadow.snapshot();
+};
 (window as unknown as {
   __substrateParityAudit?: (maxWater?: number, radiusM?: number) => object;
 }).__substrateParityAudit = (maxWater = 96, radiusM = 3000): object => {
@@ -27524,7 +27553,7 @@ interface WetFx { levelM: number; levelY: number; depthM: number; kind: string }
 let wetfxWhy = 'idle';
 function splashWet(x: number, z: number): WetFx | null {
   if (SUBSTRATE_CONTACT_ON) {
-    const contact = productionSubstrate.sample(x, z);
+    const contact = productionContactAt(x, z, 'wet-effects');
     if (contact) {
       if (!contact.fluid || !contact.water?.exposed) {
         wetfxWhy = contact.water && !contact.water.exposed ? 'hidden' : 'dry';
@@ -29844,7 +29873,7 @@ function wheelGround(x: number, z: number): number {
 }
 function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
   if (SUBSTRATE_CONTACT_ON) {
-    const contact = productionSubstrate.sample(x, z);
+    const contact = productionContactAt(x, z, 'wheel-support');
     if (contact) {
       const gnd = contact.ground.yM - baseElev + SURFACE.ground.lift;
       if (contact.fluid) {
@@ -39452,12 +39481,15 @@ function tick(now: number): void {
   // would make their ownership implicit and would let a future asynchronous
   // consumer observe a different tile revision.
   const substrateCentreContact = SUBSTRATE_CONTACT_ON
-    ? productionSubstrate.sample(state.x, state.z)
+    ? productionContactAt(state.x, state.z, 'frame-centre')
     : undefined;
   const substrateCentreSurface = substrateCentreContact
     ? surfaceFromSubstrateContact(substrateCentreContact)
     : undefined;
-  const surfKind = substrateCentreSurface?.kind ?? surfaceAt(state.x, state.z);
+  // A frame-centre lookup is atomic: unavailable means the whole centre
+  // contact rolls back together. Do not call the guarded wrappers again and
+  // manufacture separate surface/fluid fallback decisions for one frame.
+  const surfKind = substrateCentreSurface?.kind ?? legacySurfaceAt(state.x, state.z);
   if (substrateCentreSurface) surfQ = substrateCentreSurface.quality;
   const surfQual = surfQ;
   // In water the depth is the quality, and the current is a fact the drive
@@ -39465,7 +39497,7 @@ function tick(now: number): void {
   const wInfo = surfKind === 'water'
     ? substrateCentreContact
       ? waterInfoFromSubstrateContact(substrateCentreContact)
-      : waterInfoAt(state.x, state.z)
+      : legacyWaterInfoAt(state.x, state.z)
     : null;
   if (substrateShadow && tickN % 15 === 0) {
     observeSubstrateParityAt(state.x, state.z);
