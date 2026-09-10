@@ -2604,6 +2604,61 @@ make the weave stick to the ground. It is the most interesting experiment left
 and the most likely to look worse — it will swim at silhouette edges where the
 depth reconstruction jumps.
 
+### The wide chart makes the weave the picture
+
+Reported from the seat, browsing Europe from a truck in California: "larger
+(dither?) circles" in the far shell, which the baked globe beneath it does not
+have. Four suspects read innocent from the code and one measurement before the
+frame was reproduced: the 48–80m mottle and the cloud shadows (both faded to
+nothing by `smoothstep(15, 60, uMpp)`, and `chartMpp()` is ~11,000 there); the
+fine world's repeat-70 procedural normal map (the shell does not wear it —
+`farMatFor` builds an OBJECT-SPACE map from the tile's own DEM); and
+bathymetry (on the real z5 terrarium tile at 52N 25W the palette's slope shade
+spans 0.95–1.00 across a 990km tile, under a quarter of one palette step, so
+it crosses no boundary at all).
+
+**Four composites over ONE scene render settled it** (`devtools/far-circles.mjs`,
+47N 8E at zoom 19,300 — `mpp 10,989`, the seat's own scale — all 25 z5 tiles
+home): 256 levels with the amplitude at zero is SMOOTH, no blobs anywhere; 14
+levels with it at zero is the same patches, posterised with hard edges; the
+shipped pair is those patches woven. Every circle is in `ditherQuant` and none
+is in the terrain.
+
+**The mechanism, and why it only bites out there.** An ordered dither puts its
+pattern on every pixel whose value falls between two levels — 57% of the
+terrain pane on the undithered render, and that share is the same at every
+zoom, because it is a property of a smooth signal and not of the scale. What
+scales is the SIZE of each such patch: one palette step divided by the
+signal's gradient. From the seat the ground crosses a step in a pixel or two
+and the weave is a thin band that reads as texture. On a 3,874km chart the
+shell's colour has been averaged into a ramp a few steps deep across the
+whole frame, and the same weave spreads over connected regions measured at
+**3,115 art pixels for the largest — 63 across, 166 screen pixels on the
+phone — then a family at 12–22 art px (33–58 screen px)**. A 4×4 tile
+magnified 2.6× over a patch that size is not texture; it is a blob.
+
+**So past the fine ring the tile gives way to a pattern with no period.**
+`uDPatWide` (interleaved gradient noise, index 6) takes over from the dial's
+pattern once `uMpp > 60` — the boundary the cloud shadows and the mottle
+already stand down at, so the chart changes its rules in one place, and 0
+from the seat by construction. `?widedither=0` is the exact A/B;
+`__dither().wideNow` says whether THIS frame is past the line, which is how a
+test tells "IGN because the chart is wide" from "IGN because the dial says
+so". The bay's copy pass keeps the dial's pattern: it is never a wide chart.
+
+**Two things the run-length table above cannot see, which is why this was
+measured on the frame it is for and not read off the table.** That table was
+taken at a junction zoom, where the gradient is steep and every ordered
+pattern saturates at a run of 3; it ranks patterns by how well they break a
+ramp, not by whether their period is legible over a sixty-pixel patch — the
+question the wide chart asks. And the baked globe reads visibly crisper at
+the same zoom (`farc-globe-only`): not because its data is finer — it is
+39km a texel, magnified 3.5× there — but because its bake draws palette
+breaks as hard steps at its own resolution where the shell hands the
+quantiser a smooth ramp. That is the same fact as the cost arithmetic in the
+planet section, seen from the other side: the globe is the layer built for
+this scale.
+
 **Anything hung around the eye is a function of the CAMERA, not of the frame.**
 The scene is rendered more than once per frame — the world through `camera`,
 then the chart's POV dock through `miniCam`, then the studio bay — and anything

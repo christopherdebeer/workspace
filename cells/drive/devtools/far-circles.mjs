@@ -1,6 +1,6 @@
 // WHERE DO THE BLOBS IN THE WIDE CHART'S TERRAIN COME FROM?
 //
-//   node cells/drive/devtools/far-circles.mjs
+//   node cells/drive/devtools/far-circles.mjs          (SWEEP=1 for every pattern)
 //
 // Reported from the seat: browsing the wide chart, the streamed far shell
 // carries large round dithered patches that the baked globe under it does
@@ -54,9 +54,28 @@ await page.evaluate(() => window.__dither({ levels: 256, amt: 0 }));
 await shoot('nopost');
 await page.evaluate(() => window.__dither({ levels: 14, amt: 0 }));
 await shoot('quant-nodither');
+// SWEEP=1: every threshold pattern in the rack over the same render, and the
+// two other levers the composite has — more levels, less amplitude — so the
+// choice of remedy is measured on the frame it is for and not on the doctrine
+// table, which was measured at a junction zoom where the gradient is steep.
+if (process.env.SWEEP) {
+  const d0 = await page.evaluate(() => window.__dither());
+  for (const pat of d0.pats) {
+    await page.evaluate((pp) => window.__dither({ pat: pp, levels: 14, amt: 1 }), pat);
+    await shoot(`pat-${pat}`);
+  }
+  for (const levels of [20, 28]) {
+    await page.evaluate((l) => window.__dither({ pat: 'bayer4', levels: l, amt: 1 }), levels);
+    await shoot(`bayer4-L${levels}`);
+  }
+  await page.evaluate(() => window.__dither({ pat: 'bayer4', levels: 14, amt: 0.5 }));
+  await shoot('bayer4-amt05');
+  await page.evaluate(() => window.__dither({ pat: 'ign', levels: 20, amt: 1 }));
+  await shoot('ign-L20');
+}
 // 3. The shell away entirely: the baked globe alone, for the comparison the
 // seat is actually making.
-await page.evaluate(() => { window.__dither({ levels: 14, amt: 1 }); window.__hide('far'); window.__draw(true); });
+await page.evaluate(() => { window.__dither({ pat: 'bayer4', levels: 14, amt: 1 }); window.__hide('far'); window.__draw(true); });
 const f1 = await page.evaluate(() => window.__clock().frames);
 for (let i = 0; i < 160; i++) {
   if (await page.evaluate(() => window.__clock().frames) - f1 >= 4) break;

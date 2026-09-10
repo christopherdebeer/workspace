@@ -4724,6 +4724,13 @@ const compMat = new THREE.ShaderMaterial({
     /** Which threshold pattern the dither reads: 0 bayer4 · 1 bayer8 ·
      *  2 bayer2 (checker) · 3 hash grain · 4 line etch. */
     uDPat: { value: 0 },
+    /** THE WIDE CHART'S OWN PATTERN, and whether it takes over. Past the fine
+     *  ring a tiled threshold spreads into blobs (see the note at the quantise
+     *  call); 6 is interleaved gradient noise, the closed-form blue noise the
+     *  rack already carries. `?widedither=0` keeps the dial's pattern out
+     *  there too, which is the A/B. */
+    uDPatWide: { value: 6 },
+    uDWide: { value: qsOn('widedither', true) ? 1 : 0 },
     /** 0 = one threshold for all three channels (the shipped truth: the dither
      *  can then only ever move a pixel along the grey axis). 1 = a threshold per
      *  channel, so a pixel can land on a MIXTURE of two palette entries and
@@ -4748,7 +4755,7 @@ const compMat = new THREE.ShaderMaterial({
     uniform float uLevels; uniform float uFow; uniform float uFlare;
     uniform float uDither; uniform float uMono;
     uniform float uDPat; uniform float uBias; uniform float uCon; uniform vec3 uTint;
-    uniform float uDChan;
+    uniform float uDChan; uniform float uDPatWide; uniform float uDWide;
     uniform float uFlash; uniform vec2 uSunUv; uniform float uSunVis;
     uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos; uniform float span;
     uniform vec2 sunXZ; uniform vec2 uPix; uniform vec3 uHazeBase; uniform vec3 uHazeSun; varying vec2 vUv;
@@ -4966,7 +4973,33 @@ ${DITHER_GLSL}
       enc = (enc - 0.5) * uCon + 0.5;
       // uBias is the rounding constant — 0.5 rounds to nearest; the THRESHOLD
       // dial moves it, which on the 1-bit looks is the ink point itself.
-      enc = ditherQuant(enc, floor(vUv * uPix), uDPat, uDither, uBias, uLevels, uDChan);
+      // ── THE WEAVE PAST THE FINE RING ──
+      //
+      // An ordered dither puts its pattern on every pixel whose value falls
+      // BETWEEN two levels. Measured on an undithered wide chart at 11,000m an
+      // art pixel: 57% of the terrain pane, and that share is the same at every
+      // zoom — it is what makes the look work. What changes with zoom is the
+      // SIZE of each such patch, which is one palette step divided by the
+      // signal's gradient. From the seat the ground crosses a step in a pixel
+      // or two and the weave is a thin band that reads as texture. Out where
+      // the shell's colour has been averaged into a ramp a few steps deep
+      // across the whole frame, the same weave spreads over regions measured
+      // at 12 to 63 art pixels across — 33 to 166 screen pixels on a phone —
+      // and a 4x4 tile magnified 2.6x over a patch that size is not texture,
+      // it is a blob. Reported from the seat as "larger dither circles" over
+      // Europe; four composites over ONE scene render (devtools/far-circles.mjs)
+      // put every one of them in this line and none in the terrain: 256 levels
+      // with the amplitude at zero is smooth, 14 levels with it at zero is the
+      // same patches posterised, and the shipped pair is those patches woven.
+      //
+      // So past the fine ring the tile gives way to a pattern with no period to
+      // read. 60m a pixel is the boundary the cloud shadows and the mottle
+      // already stand down at (terrainFx), so the chart changes its rules in
+      // one place; and uMpp is 0 from the seat, which is the whole of the
+      // "does this touch the drive" question. The bay's copy pass keeps the
+      // dial's pattern — it is never a wide chart.
+      float wPat = (uDWide > 0.5 && uMpp > 60.0) ? uDPatWide : uDPat;
+      enc = ditherQuant(enc, floor(vUv * uPix), wPat, uDither, uBias, uLevels, uDChan);
       // Phosphor tint AFTER the quantise: tinting first would quantise the
       // channels apart and break the exact-N-tone promise the dial makes.
       enc *= mix(vec3(1.0), uTint, uMono);
@@ -31504,6 +31537,7 @@ function noteTags(t: Record<string, string>): void {
 const DITHER_PATS = ['bayer4', 'bayer8', 'check', 'grain', 'lines', 'bayer16', 'ign', 'tpdf', 'halftone'];
 (window as unknown as { __dither?: object }).__dither = (patch?: {
   pat?: number | string; amt?: number; chan?: number; levels?: number; bias?: number; con?: number;
+  patWide?: number | string; wide?: number;
 }): object => {
   const u = compMat.uniforms as Record<string, { value: number }>;
   if (patch) {
@@ -31516,6 +31550,11 @@ const DITHER_PATS = ['bayer4', 'bayer8', 'check', 'grain', 'lines', 'bayer16', '
     if (patch.levels !== undefined) u.uLevels.value = patch.levels;
     if (patch.bias !== undefined) u.uBias.value = patch.bias;
     if (patch.con !== undefined) u.uCon.value = patch.con;
+    if (patch.patWide !== undefined) {
+      const i = typeof patch.patWide === 'string' ? DITHER_PATS.indexOf(patch.patWide) : patch.patWide;
+      if (i >= 0) u.uDPatWide.value = i;
+    }
+    if (patch.wide !== undefined) u.uDWide.value = patch.wide;
     // Re-run the post chain over the scene already in rtScene, so the change
     // is on the glass immediately even with the frame loop stood down.
     composite(mblurAmt);
@@ -31525,6 +31564,11 @@ const DITHER_PATS = ['bayer4', 'bayer8', 'check', 'grain', 'lines', 'bayer16', '
     pats: DITHER_PATS,
     amt: u.uDither.value, chan: u.uDChan.value, levels: u.uLevels.value,
     bias: +u.uBias.value.toFixed(3), con: u.uCon.value, mono: u.uMono.value,
+    // The wide chart's pattern, whether the swap is armed, and whether THIS
+    // frame is past the line it swaps at — so a test can tell "IGN because the
+    // chart is wide" from "IGN because the dial says so".
+    patWide: DITHER_PATS[u.uDPatWide.value] ?? u.uDPatWide.value, wide: u.uDWide.value,
+    wideNow: u.uDWide.value > 0.5 && envU.uMpp.value > 60,
     pix: [pixSize.x, pixSize.y],
   };
 };

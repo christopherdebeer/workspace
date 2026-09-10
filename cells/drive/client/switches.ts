@@ -135,6 +135,8 @@ export const SWITCHES = [
   // ── the A/Bs that keep an older path alive ──
   { id: 'wetdebug', kind: 'toggle', marks: ['legacy'], fallback: 'off',
     note: 'wetdebug=1 paints every input to the water decision on the ground around the truck — drawn water, water under the ground, the waterline band, channels, ocean, cover, decks over water' },
+  { id: 'widedither', kind: 'toggle', marks: ['look'], fallback: 'on',
+    note: 'widedither=0 keeps the PATTERN dial\'s threshold on the wide chart; on, the tiled weave gives way to interleaved gradient noise past the fine ring (60m a pixel), where a 4x4 tile spread over a smooth ramp reads as blobs' },
   { id: 'shore', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'shore=0 leaves the water its frame colour and the banks their hillside grass — the A/B for the shoreline pass' },
   { id: 'ez', kind: 'toggle', marks: ['legacy'], fallback: 'skeletons',
