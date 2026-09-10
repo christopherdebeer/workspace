@@ -5462,6 +5462,124 @@ pixel of difference at the top. The table had no lowercase at all —
 had been drawing a capital Z all along too. `z: '00v248v'` is five rows at
 x-height and cannot be read as a digit.
 
+## The dump can see the planet, a retired ring is one ring, and the globe has mass
+
+Asked from the seat: is the FPS-tap telemetry enough to diagnose the globe's
+frame rate, and can the spin have momentum. The first answer was no, and the
+reason is in the phone's own status line on the India frames: `FAR Z5 83/87`
+at 3 fps — 83 shell meshes on a ring of 25 — and not one row of the dump
+could have named it. Every phase in the report is CPU time; the profiler's
+`render` row is the main thread ISSUING draws, and `gap (unmeasured)`
+"cannot establish a GPU bottleneck" by its own note. A chart that is slow
+because it draws three retired rings of 128² lattice under the live one is
+slow somewhere the dump did not look.
+
+**What the dump carries now** (`__telemetry()`, the double tap on the FPS
+readout; `devtools/globe-poke.mjs` prints these rows at the end of a run):
+
+- `chart …` — camera mode, zoom, m/px, home or browsed with the focus, globe
+  on/off and `free`, fling on/off, the far ring as `z5 25/25 retired 0
+  inflight 0 queued 0`, the overview the same with its places and the labels
+  actually DRAWN.
+- `world pass: draw calls … triangles …` — off `renderer.info` right after
+  `renderer.render(scene, camera)`, every frame: session mean and max, the
+  recent window's p50 and p95, the last pass. A frame rate that falls with
+  every CPU phase flat is fill or triangles, and this row says which count
+  moved. (`renderer.info` autoResets at the next render() and the last
+  render of a frame is the composite's two triangles — `__gpu` draws its own
+  frame to read it; the sample here is taken between the two.)
+- Each slow frame in the log carries its own `M tris / calls` beside its top
+  three phases, so a 400 ms frame reads `render:12 hud+misc:9 … · 2.7M tris
+  91 calls` and the blame is on the line.
+- `farBuild`, `ovBuild` and `stepGlobe` are phases. A z5 tile's 128² bake
+  with its normal map and a Natural Earth tile's ribbon build used to fall
+  into `world:stream`; the planet's placement into `camera`.
+
+**And the 83 meshes were a bug, not a budget.** `setFarLevel` pushed the
+whole previous ring into `farRetired` on every level change, and
+`dropRetiredFar` waited for the NEW ring to land completely (`farInFlight
+=== 0 && farQueue.length === 0`) — which one tile on a retry backoff defers
+for as long as it retries. A browse from the seat's zoom to the planet swaps
+the level three times in a few seconds, so three rings stacked, each drawn
+every frame under the live one, and the four tiles that never landed kept
+all of them. The overview had the same shape (`ovRetired`). Now the previous
+level is the ONLY ring held — the globe backs whatever it does not cover,
+which it could not while it wrote depth — and `cullRetiredFar` drops each
+retired tile on its own evidence: coarser now, when its one ancestor at the
+new level has landed; finer now, when every descendant the ring asked for
+has landed; and at `FAR_RETIRED_MS` (20 s) whatever happened. The material
+cache grew from 30 to 56 with it, two rings' worth, or the eviction handed
+LIVE tiles the tangent-space fallback and lit them with a vignette beside
+neighbours lit by the sphere.
+
+**AND THE RING LEAVES TILES BEHIND, which is the other half of the 83.** With
+the retired stack gone the reproduction still read `far 45/45` at the ring
+line — forty-five CURRENT-level tiles on a ring of twenty-five — and `ov
+28/50`. The stream pass asks a 5×5 around the chart's focus every ~1.2 s,
+and a focus turning from California to India asks a fresh ring at every step
+of the way; nothing ever took the old ones down, because the only eviction
+the shell had was the cover-dirtied REBUILD. So the pass records the ring it
+asked (`farRingAt`, `ovRingAt`), drops every landed tile more than one ring's
+margin outside it (all six maps a far tile lives in, its material included,
+the dateline wrapped), and a fetch that comes home outside the ring is not
+built at all. Measured on the reproduction (India from Mariposa, the ring
+home): the far ring line went from `far 45/45` to
+**`25/25 retired 0`**, the world pass from **116 draw calls and 2.05M
+triangles to 76 and 1.38M** at the seat's own zoom, the lattice and the
+labels unchanged (0.081 / 0.009, fourteen South Asian names). The overview
+then read `15/25` with nothing in flight, nothing failed and nothing
+demless — `__ov().missing` names the ten — and the ten are open ocean: an
+EMPTY tile keeps its key and makes no mesh, and `ovMeshes.size` was the
+"have", so the status line would have said `MAP z5 · 15/25` over the Indian
+Ocean for as long as the chart stayed. Empty landings count as home now
+(`ovEmpty`, `ovHave`), and the stragglers that used to pad the count are
+gone from the asked sets as well as the meshes.
+
+**What the new rows said on their first run, and what is next.** `farBuild`
+is **618 ms a tile** on the harness's main thread (50 tiles, 35% of all
+slow-frame time) — the 128² lattice, a `sampleCoverShell` and a
+`sphereRTC` per vertex, a normal map — and it runs in the frame. On a phone
+that is the freeze under a fast browse, and the terrain kernel already
+knows how to do this in a worker; that is the next unit, and the row is
+what will measure it.
+
+**The fling.** A drag on the planet stopped dead under the lifted finger,
+which at 20,000 km reads as a map stuck to the glass. `dragGlobe` keeps a
+running velocity — an EMA over about 50 ms of moves, in degrees a second,
+the drag's own units — and a lift within `GLOBE_FLING_HOLD_MS` (90) of the
+last move releases it; `stepGlobe` feeds it into the retained focus a frame
+at a time and decays it with `GLOBE_FLING_TAU` (0.45 s: a flick at 135°/s
+coasts about 60°), capped at 180°/s, at rest under 0.05°/s, dead at the
+pole's clamp. A finger that rested before lifting throws nothing (a rest is
+a place); a touch stops a spinning planet; a second finger is a pinch and
+never throws; leaving the chart drops it. It is a change of focus like the
+drag it continues, so the rig, the streamers and the hand-over know nothing
+new. `?fling=0` and `__fling(false)` turn the release off; `__globe().fling`
+and `__fling().vel` report it. Measured (`devtools/globe-spin.test.mjs`, its
+throw block): released at 6.18°/s westward off an eight-move
+harness drag, the planet coasted 2.85° further, the spin read zero after
+1.6 s and the focus moved 0.000° in the 300 ms after; the same drag with the
+finger resting 250 ms before the lift threw 0.000°. (The first cut clamped
+`dt` at 100 ms and decayed per FRAME, so on the harness's slow frames the
+coast ran in frame-time and the planet was still turning 0.5° per 300 ms
+long after it should have rested; the closed form `v·τ·(1−e^(−T/τ))` is
+exact for any frame length and needs no clamp.).
+
+**Two traps, one round each:**
+
+- **Moves under 4 ms apart update no velocity.** A synthetic drag dispatched
+  in one task — the navigation test calling `dragGlobe` directly, a
+  `page.evaluate` — has no clock in it; without the floor every such drag
+  would have thrown, and every gesture test would have measured the coast on
+  top of the rate. The harness's real pointer stream at 12–30 ms a move
+  throws exactly as a thumb does, so the spin test's rate checks run with
+  `fling=0` and its throw has its own block with `__fling(true)`.
+- **A test that asserts SOURCE ORDER by literal text breaks when the text
+  changes.** `globe-navigation.test.cjs` proves the zoom is advanced before
+  `stepGlobe();` by comparing two `indexOf`s; wrapping the call for the
+  profiler turned the needle into −1 and the assertion into a falsehood
+  about ordering. The needle follows the wrapped call now.
+
 ## Globe navigation: retain the place, not a disposable spin
 
 The seat reported that spinning the planet then zooming in returned to the
