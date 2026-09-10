@@ -118,7 +118,10 @@ import {
   buildRapidDetailField,
   buildRapidDetailMesh,
 } from './substrate/rapid-detail';
-import { buildCulvertBoreGeometry } from './substrate/culvert-detail';
+import {
+  buildCulvertBoreGeometry,
+  buildCulvertHeadwallGeometry,
+} from './substrate/culvert-detail';
 import {
   VehicleWaterEvidence,
   type VehicleWaterEvidenceSnapshot,
@@ -20007,16 +20010,30 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     const hi = hdeck === null ? Infinity : hdeck - CULV_UNDER;
     const top = Math.min(inv[end] + H + 0.7, hi);
     const bottom = inv[end] - 0.4;
-    const hh = top - bottom;
     // Do not force a decorative minimum back through the deck ceiling. Where
     // even a thin headwall will not fit, the safe visual is no headwall.
-    if (hh < 0.15) continue;
-    const wallGeometry = new THREE.BoxGeometry(W + 2.4, hh, 0.7);
-    const wallMatrix = new THREE.Matrix4().makeRotationY(ang + Math.PI / 2);
-    wallMatrix.setPosition(px, bottom + hh / 2, pz);
-    addStructureRenderGeometry(wallGeometry, MAT.portal, {
-      matrix: wallMatrix.elements,
+    const wall = buildCulvertHeadwallGeometry({
+      x: px,
+      z: pz,
+      bottomY: bottom,
+      topY: top,
+      widthM: W + 2.4,
+      depthM: 0.7,
+      rotationY: ang + Math.PI / 2,
     });
+    if (!wall) continue;
+    const wallGeometry = new THREE.BufferGeometry();
+    wallGeometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(wall.positions, 3),
+    );
+    wallGeometry.setAttribute(
+      'normal',
+      new THREE.BufferAttribute(wall.normals, 3),
+    );
+    wallGeometry.setAttribute('uv', new THREE.BufferAttribute(wall.uvs, 2));
+    wallGeometry.setIndex(new THREE.BufferAttribute(wall.index, 1));
+    addStructureRenderGeometry(wallGeometry, MAT.portal);
   }
   return {
     outcome: 'culvert-built',

@@ -1,5 +1,6 @@
 import {
   buildCulvertBoreGeometry,
+  buildCulvertHeadwallGeometry,
   buildProductionHydroFixture,
   buildProductionSubstrateTile,
   buildRapidDetailField,
@@ -143,6 +144,37 @@ export function runSubstrateSelfTest(): void {
   assert([...culvertBore.positions, ...twinCulvertBore.positions]
     .every(Number.isFinite),
   'culvert geometry must remain numerically safe');
+  const headwall = buildCulvertHeadwallGeometry({
+    x: 4,
+    z: -3,
+    bottomY: 1,
+    topY: 3,
+    widthM: 5,
+    depthM: .7,
+    rotationY: Math.PI / 3,
+  });
+  assert(headwall?.positions.length === 72
+    && headwall.normals.length === 72
+    && headwall.uvs.length === 48
+    && headwall.index.length === 36,
+  'culvert headwall must retain indexed textured box topology');
+  assert([
+    ...(headwall?.positions ?? []),
+    ...(headwall?.normals ?? []),
+    ...(headwall?.uvs ?? []),
+    ...(headwall?.index ?? []),
+  ].every(Number.isFinite),
+  'culvert headwall geometry must remain numerically safe');
+  assert(buildCulvertHeadwallGeometry({
+    x: 0,
+    z: 0,
+    bottomY: 1,
+    topY: 1.1,
+    widthM: 5,
+    depthM: .7,
+    rotationY: 0,
+  }) === undefined,
+  'culvert headwall must not exceed a constrained deck ceiling');
 
   const rapidStations = Array.from(
     { length: 20 },

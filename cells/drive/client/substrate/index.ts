@@ -55,8 +55,11 @@ export { buildProductionHydroFixture } from './hydro-fixture';
 export { makeCrossingFixture, type CrossingFixtureOptions } from './fixtures';
 export {
   buildCulvertBoreGeometry,
+  buildCulvertHeadwallGeometry,
   type CulvertBoreGeometry,
   type CulvertBoreInput,
+  type CulvertHeadwallGeometry,
+  type CulvertHeadwallInput,
   type CulvertStructureFamily,
 } from './culvert-detail';
 export {

@@ -15,6 +15,24 @@ export interface CulvertBoreGeometry {
   lengthM: number;
 }
 
+export interface CulvertHeadwallInput {
+  x: number;
+  z: number;
+  bottomY: number;
+  topY: number;
+  widthM: number;
+  depthM: number;
+  rotationY: number;
+  minimumHeightM?: number;
+}
+
+export interface CulvertHeadwallGeometry {
+  positions: Float32Array<ArrayBuffer>;
+  normals: Float32Array<ArrayBuffer>;
+  uvs: Float32Array<ArrayBuffer>;
+  index: Uint32Array<ArrayBuffer>;
+}
+
 const appendQuad = (
   output: number[],
   a: readonly [number, number, number],
@@ -90,4 +108,127 @@ export function buildCulvertBoreGeometry(
     positions: new Float32Array(positions),
     lengthM,
   };
+}
+
+/**
+ * Build one indexed, textured headwall box in world coordinates.
+ *
+ * Keeping this renderer-free prevents the decorative mouth from becoming a
+ * second geometry authority beside the versioned structure packet.
+ */
+export function buildCulvertHeadwallGeometry(
+  input: CulvertHeadwallInput,
+): CulvertHeadwallGeometry | undefined {
+  const heightM = input.topY - input.bottomY;
+  if (heightM < (input.minimumHeightM ?? 0.15)) return undefined;
+  const centreY = input.bottomY + heightM / 2;
+  const halfWidth = input.widthM / 2;
+  const halfHeight = heightM / 2;
+  const halfDepth = input.depthM / 2;
+  const cosine = Math.cos(input.rotationY);
+  const sine = Math.sin(input.rotationY);
+  const transform = (
+    point: readonly [number, number, number],
+  ): readonly [number, number, number] => [
+    input.x + cosine * point[0] + sine * point[2],
+    centreY + point[1],
+    input.z - sine * point[0] + cosine * point[2],
+  ];
+  const rotateNormal = (
+    normal: readonly [number, number, number],
+  ): readonly [number, number, number] => [
+    cosine * normal[0] + sine * normal[2],
+    normal[1],
+    -sine * normal[0] + cosine * normal[2],
+  ];
+  const faces: Array<{
+    normal: readonly [number, number, number];
+    corners: readonly [
+      readonly [number, number, number],
+      readonly [number, number, number],
+      readonly [number, number, number],
+      readonly [number, number, number],
+    ];
+  }> = [
+    {
+      normal: [1, 0, 0],
+      corners: [
+        [halfWidth, -halfHeight, halfDepth],
+        [halfWidth, -halfHeight, -halfDepth],
+        [halfWidth, halfHeight, halfDepth],
+        [halfWidth, halfHeight, -halfDepth],
+      ],
+    },
+    {
+      normal: [-1, 0, 0],
+      corners: [
+        [-halfWidth, -halfHeight, -halfDepth],
+        [-halfWidth, -halfHeight, halfDepth],
+        [-halfWidth, halfHeight, -halfDepth],
+        [-halfWidth, halfHeight, halfDepth],
+      ],
+    },
+    {
+      normal: [0, 1, 0],
+      corners: [
+        [-halfWidth, halfHeight, halfDepth],
+        [halfWidth, halfHeight, halfDepth],
+        [-halfWidth, halfHeight, -halfDepth],
+        [halfWidth, halfHeight, -halfDepth],
+      ],
+    },
+    {
+      normal: [0, -1, 0],
+      corners: [
+        [-halfWidth, -halfHeight, -halfDepth],
+        [halfWidth, -halfHeight, -halfDepth],
+        [-halfWidth, -halfHeight, halfDepth],
+        [halfWidth, -halfHeight, halfDepth],
+      ],
+    },
+    {
+      normal: [0, 0, 1],
+      corners: [
+        [-halfWidth, -halfHeight, halfDepth],
+        [halfWidth, -halfHeight, halfDepth],
+        [-halfWidth, halfHeight, halfDepth],
+        [halfWidth, halfHeight, halfDepth],
+      ],
+    },
+    {
+      normal: [0, 0, -1],
+      corners: [
+        [halfWidth, -halfHeight, -halfDepth],
+        [-halfWidth, -halfHeight, -halfDepth],
+        [halfWidth, halfHeight, -halfDepth],
+        [-halfWidth, halfHeight, -halfDepth],
+      ],
+    },
+  ];
+  const positions = new Float32Array(6 * 4 * 3);
+  const normals = new Float32Array(6 * 4 * 3);
+  const uvs = new Float32Array(6 * 4 * 2);
+  const index = new Uint32Array(6 * 6);
+  const faceUvs = [0, 0, 1, 0, 0, 1, 1, 1];
+  for (let face = 0; face < faces.length; face++) {
+    const positionOffset = face * 12;
+    const uvOffset = face * 8;
+    const indexOffset = face * 6;
+    const vertexOffset = face * 4;
+    const worldNormal = rotateNormal(faces[face].normal);
+    for (let corner = 0; corner < 4; corner++) {
+      positions.set(transform(faces[face].corners[corner]), positionOffset + corner * 3);
+      normals.set(worldNormal, positionOffset + corner * 3);
+    }
+    uvs.set(faceUvs, uvOffset);
+    index.set([
+      vertexOffset,
+      vertexOffset + 1,
+      vertexOffset + 2,
+      vertexOffset + 2,
+      vertexOffset + 1,
+      vertexOffset + 3,
+    ], indexOffset);
+  }
+  return { positions, normals, uvs, index };
 }
