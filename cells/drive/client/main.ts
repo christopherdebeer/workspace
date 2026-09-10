@@ -22648,7 +22648,13 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   // …or the ring moved on while this was on the wire: a tile outside it now
   // would be built and evicted on the next pass, at 600 ms of main thread.
   if (!data || z !== farZ || farOutside(z, x, y)) { farTiles.delete(key); return; }
-  const _pBuild = performance.now();   // the build is profiled as `farBuild`
+  // THE BUILD IS PROFILED BY PHASE — far:bake (the lattice and the vertex
+  // loop: cover sample, palette, sphere), far:geo (attributes and normals),
+  // far:nrm (the normal map) — as the only wrappers, so the off-tick total is
+  // counted once. The phone read 146 ms a tile, 259 tiles in a 96 s browse,
+  // 87% of every slow frame; which of the three it is decides what moves to
+  // a worker first.
+  const _pBuild = performance.now();
   const b = tileBounds(x, y, z);
   const [wx0, wz0] = toLocal(b.latN, b.lonW);
   const [wx1, wz1] = toLocal(b.latS, b.lonE);
@@ -22728,14 +22734,19 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   farCoverHit.set(key, hit / Math.max(1, pos.count));
   farTint.set(key, [tr / pos.count, tg / pos.count, tb / pos.count]);
   farBakeZ.set(key, coverWideZ);
+  profAdd('far:bake', _pBuild);
+  const _pGeo = performance.now();
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? farMatFor(data, w, key, centre) : farMat);
+  profAdd('far:geo', _pGeo);
+  const _pNrm = performance.now();
+  const mat = NRM_SCALE > 0 ? farMatFor(data, w, key, centre) : farMat;
+  profAdd('far:nrm', _pNrm);
+  const mesh = new THREE.Mesh(geo, mat);
   mesh.position.copy(centre);
   farMeshes.set(key, mesh);
   farRasters.set(key, { xs, zs, w, h, data });
   farGroup.add(mesh);
-  profAdd('farBuild', _pBuild);
   // An overview tile at this index that landed DEMLESS can build now: drop
   // its key so the next stream pass asks again (the vectors are a cache hit).
   if (z === ovZ && ovDemlessKeys.delete(key)) ovTiles.delete(key);
@@ -22810,6 +22821,18 @@ function evictOvOutside(): void {
   for (const key of [...ovTiles]) {
     const [z, x, y] = key.split('/').map(Number);
     if (ovOutside(z, x, y)) { ovTiles.delete(key); ovEmpty.delete(key); ovDemlessKeys.delete(key); }
+  }
+  // AND THE PLACES. The table is keyed by name and capped at 800, and a
+  // browse filled it with every town it passed over: the phone read
+  // `places 800 labels 0` at Newfoundland — nothing new could register. A
+  // place leaves with the ring, by the ring's own box in degrees (a ring
+  // across the dateline keeps everything rather than guess).
+  const { z, x, y, r, n } = ovRingAt;
+  if (z >= 0 && x - r - 1 >= 0 && x + r + 1 < n) {
+    const nw = tileBounds(x - r - 1, Math.max(0, y - r - 1), z), se = tileBounds(x + r + 1, Math.min(n - 1, y + r + 1), z);
+    for (const [name, p] of [...ovPlaces]) {
+      if (p.la > nw.latN || p.la < se.latS || p.lo < nw.lonW || p.lo > se.lonE) ovPlaces.delete(name);
+    }
   }
 }
 let ovRetired: THREE.Mesh[] = [];
@@ -23024,7 +23047,7 @@ function ovInkRefresh(): void {
 /** A place the chart can write on the land: rank 0 city … 3 hamlet, 4 peak. */
 /** `x/z/y` in the flat frame, for whoever asks the flat world about the
  *  place; `sp` its point in the PLANET'S frame, which is what draws it. */
-interface OvPlace { name: string; x: number; z: number; y: number; sp: THREE.Vector3; rank: number }
+interface OvPlace { name: string; x: number; z: number; y: number; la: number; lo: number; sp: THREE.Vector3; rank: number }
 const ovPlaces = new Map<string, OvPlace>();
 /** The names the chart drew last frame, for `__ov().labels` — a test cannot
  *  read the HUD canvas back, and "is San Francisco written over India" is a
@@ -23296,7 +23319,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
       // one place it leaked.
       if (underCover(la, lo, 1)) continue;
       const [px, pz] = toLocal(la, lo);
-      ovPlaces.set(name, { name, x: px, z: pz, y: yAt(la, lo),
+      ovPlaces.set(name, { name, x: px, z: pz, y: yAt(la, lo), la, lo,
         sp: latLonToUnit(la, lo).multiplyScalar(GLOBE_R + yAt(la, lo)),
         rank: t.place ? OV_RANK[t.place] ?? 3 : 4 });
       continue;
@@ -36670,7 +36693,7 @@ function telemetryReport(): string {
     const recent = Array.from(drawRing.subarray(0, n)).sort((a, b) => a - b);
     const q = (p: number): string => n ? (recent[Math.min(n - 1, Math.floor(p * n))] / 1e6).toFixed(2) : '?';
     const [fLat, fLon] = localToLatLon(viewX() + panX, viewZ() + panZ);
-    L.push(`chart ${camMode} · zoom ${zoomCur < 10 ? zoomCur.toFixed(2) : String(Math.round(zoomCur))} · ${chartMpp().toFixed(1)} m/px · ${chartRemote() ? 'browsed' : 'home'} focus ${fLat.toFixed(2)},${fLon.toFixed(2)} · globe ${globeMesh.visible ? 'on' : 'off'} free ${globeFree()} fling ${flingOn ? 'on' : 'off'} · far z${farZ} ${farMeshes.size}/${farTiles.size} retired ${farRetired.length} inflight ${farInFlight} queued ${farQueue.length} · ov z${ovZ} ${ovHave()}/${ovTiles.size} (${ovMeshes.size} drawn, ${ovEmpty.size} empty) retired ${ovRetired.length} places ${ovPlaces.size} labels ${ovLabelsDrawn.length}`);
+    L.push(`chart ${camMode} · zoom ${zoomCur < 10 ? zoomCur.toFixed(2) : String(Math.round(zoomCur))} · ${chartMpp().toFixed(1)} m/px · ${chartRemote() ? 'browsed' : 'home'} focus ${fLat.toFixed(2)},${fLon.toFixed(2)} · globe ${globeMesh.visible ? 'on' : 'off'} free ${globeFree()} fling ${flingOn ? 'on' : 'off'} · far z${farZ} ${farMeshes.size}/${farTiles.size} retired ${farRetired.length} inflight ${farInFlight} queued ${farQueue.length} · ov z${ovZ} ${ovHave()}/${ovTiles.size} (${ovMeshes.size} drawn, ${ovEmpty.size} empty) retired ${ovRetired.length} failing ${[...ovFailedAt.values()].filter((t) => performance.now() - t < OV_RETRY_MS).length} demless ${ovDemlessKeys.size} places ${ovPlaces.size} labels ${ovLabelsDrawn.length}`);
     L.push(`world pass: draw calls mean ${Math.round(drawStat.sumCalls / Math.max(1, drawStat.n))} max ${drawStat.maxCalls} · triangles mean ${(drawStat.sumTris / Math.max(1, drawStat.n) / 1e6).toFixed(2)}M max ${(drawStat.maxTris / 1e6).toFixed(2)}M · recent ${n} passes p50 ${q(0.5)}M p95 ${q(0.95)}M · last ${(drawStat.tris / 1e6).toFixed(2)}M / ${drawStat.calls} calls`); }
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
   { const r = goalSolveStat; if (r.runs) L.push(`route solves ${r.runs} (found ${r.found} failed ${r.failed}) · ms/solve ${(r.totalMs / r.runs).toFixed(0)} (graph ${(r.graphTotalMs / r.runs).toFixed(0)}) max ${Math.round(r.maxMs)} · slices ${r.slices} max ${r.maxSliceMs.toFixed(1)}ms · last span ${Math.round(r.spanMs)}ms · walked ${r.walked}/${r.nodes} (fine ${graphStat.fine} coarse ${graphStat.coarse} portals ${graphStat.portals}) · graph cached ${graphStat.cached ?? 0} · tiles skipped ${r.tilesSkipped} hit ${r.tilesHit} · last ${r.last}`); }

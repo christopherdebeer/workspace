@@ -101,7 +101,7 @@ const errs = await page.evaluate(() => window.__pageErrors ?? []);
 // double tap would copy them — the dump is the instrument the phone has.
 const tele = await page.evaluate(() => (typeof window.__telemetry === 'function' ? window.__telemetry() : ''));
 for (const line of tele.split('\n')) {
-  if (/^(chart |world pass|render |stepGlobe|farBuild|ovBuild|hud\+misc|world:stream|camera )/.test(line)) log(`telemetry  ${line}`);
+  if (/^(chart |world pass|render |stepGlobe|far:|ovBuild|hud\+misc|world:stream|camera )/.test(line)) log(`telemetry  ${line}`);
 }
 await close();
 
