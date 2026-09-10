@@ -22731,6 +22731,9 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   farRasters.set(key, { xs, zs, w, h, data });
   farGroup.add(mesh);
   profAdd('farBuild', _pBuild);
+  // An overview tile at this index that landed DEMLESS can build now: drop
+  // its key so the next stream pass asks again (the vectors are a cache hit).
+  if (z === ovZ && ovTiles.has(key) && !ovMeshes.has(key)) ovTiles.delete(key);
   // Whatever this tile now covers of the retired ring goes; and the last
   // fetch of the batch home takes the rest.
   cullRetiredFar();
@@ -23132,7 +23135,14 @@ async function loadOvTile(x: number, y: number): Promise<void> {
     if (z !== ovZ) { ovTiles.delete(key); return; }
     ovFailedAt.delete(key);
     if (ovOutside(z, x, y)) { ovTiles.delete(key); return; }   // the ring moved on
-    { const _p = performance.now(); buildOvTile(key, x, y, z, data.ways ?? [], dem); profAdd('ovBuild', _p); }
+    // THE SHELL'S OWN RASTER, WHEN THE FETCH HERE CAME BACK EMPTY. The far
+    // ring asks the same DEM tile, and the two asks race: the reproduction
+    // read `ov 15/25` with nothing in flight, ten tiles built demless while
+    // their far tile landed a moment later — and a demless tile keeps its key
+    // and is never asked again. A raster already on the shell is the answer
+    // the fetch would have given; and the far landing re-asks whatever is
+    // still demless (see loadFarTile).
+    { const _p = performance.now(); buildOvTile(key, x, y, z, data.ways ?? [], dem ?? farRasters.get(key)?.data ?? null); profAdd('ovBuild', _p); }
   } catch {
     // A 503 is a cold tile filling and a 502 is the edge giving up on one that
     // may never fill; neither is worth asking again on the next 1.2s pass.
