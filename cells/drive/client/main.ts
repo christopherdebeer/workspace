@@ -30070,6 +30070,13 @@ function tapeKeep(): string {
   else { const fix = dropFix(wx, wz); openSite(wx, wz, fix.name, fix.name); }
   return siteOpen ? { name: siteOpen.rec.name, fix: siteOpen.fix, hit: pin ? pin.name : null } : null;
 };
+/** The hydro tile under a point: its features, what the analysis makes of
+ *  them, its coverage state and its bodies' settled kinds. */
+(window as unknown as { __hydrotile?: object }).__hydrotile = (x?: number, z?: number): object | null => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const f = hydroSys?.fieldAt(px, pz);
+  return f ? hydroSys!.debugTile(f.key) : null;
+};
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number, margin = 0.8) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
 /** The three heights of a point, side by side — the DEM the hydro field is

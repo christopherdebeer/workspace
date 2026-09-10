@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { HydroBodyRegistry } from './body-registry';
-import { analyseHydroTile, buildHydroTile, type HydroTileAnalysis } from './build-tile';
+import { analyseHydroTile, buildHydroTile, seaTouching, seaTouchingStats, type HydroTileAnalysis } from './build-tile';
 import { clamp, sampleElevation } from './geometry';
 import { sampleFieldSurface } from './field-sample';
 import { extractHydroShoreSegments } from './shore-contour';
@@ -86,6 +86,7 @@ export interface HydroSystem {
   getTuning(): Readonly<HydroTuning>;
   update(frame: HydroFrame): void;
   getTileBinding(key: TileKey): HydroTileBinding | undefined;
+  debugTile(key: TileKey): object | null;
   /**
    * True only when `field` is the exact immutable field currently retained
    * for its tile and can therefore be committed without changing authority.
@@ -660,6 +661,29 @@ class DefaultHydroSystem implements HydroSystem {
 
   getTileBinding(key: TileKey): HydroTileBinding | undefined {
     return this.records.get(key)?.binding;
+  }
+
+  /** WHAT WATER IS HERE, AND WHY: the tile's features as they were handed
+   *  in, what the analysis makes of each (`seaTouching`), the coverage's
+   *  state, and the bodies the field was painted from with the kind the
+   *  registry settled on — because "why is this water a lake" took a
+   *  screenshot, a probe and a guess before this answered it in one call. */
+  debugTile(key: TileKey): object | null {
+    const record = this.records.get(key);
+    if (!record) return null;
+    const input = record.input;
+    return {
+      key, revision: input.revision, oceanCoverage: input.oceanCoverage.status,
+      features: input.features.map((f) => ({
+        id: f.id, kind: f.kind, geometry: f.geometry.type,
+        seaTouching: seaTouching(input, f),
+        ...seaTouchingStats(input, f),
+      })),
+      bodies: (record.field?.bodyIds ?? []).map((id) => {
+        const body = this.registry.get(id);
+        return { id, kind: body?.kind ?? null, level: body?.level.type ?? null };
+      }),
+    };
   }
 
   canRenderField(field: HydroTileField): boolean {

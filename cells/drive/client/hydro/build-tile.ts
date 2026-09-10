@@ -190,12 +190,18 @@ function lineProfile(input: HydroTileInput, feature: HydroFeature): Float32Array
  * sea if half of them read confirmed ocean. A lake behind a beach has none
  * under the mask; a wetland keeps its own kind whatever it stands in.
  */
-function seaTouching(input: HydroTileInput, feature: HydroFeature): boolean {
+export function seaTouching(input: HydroTileInput, feature: HydroFeature): boolean {
+  const t = seaTouchingStats(input, feature);
+  return t.known >= 3 && t.sea * 2 >= t.known;
+}
+/** The rule's arithmetic, for the tile debug: samples on the lattice, inside
+ *  the polygon, answered by the mask, and reading sea. */
+export function seaTouchingStats(input: HydroTileInput, feature: HydroFeature): { inside: number; known: number; sea: number; why?: string } {
   if (feature.geometry.type !== 'area' || FLOWING.has(feature.kind)
-    || feature.kind === 'wetland' || feature.kind === 'lagoon' || feature.kind === 'ocean') return false;
-  if (input.oceanCoverage.status !== 'ready') return false;
+    || feature.kind === 'wetland' || feature.kind === 'lagoon' || feature.kind === 'ocean') return { inside: 0, known: 0, sea: 0, why: 'kind' };
+  if (input.oceanCoverage.status !== 'ready') return { inside: 0, known: 0, sea: 0, why: 'no coverage' };
   const bounds = featureBounds(feature);
-  if (!boundsIntersect(bounds, input.bounds)) return false;
+  if (!boundsIntersect(bounds, input.bounds)) return { inside: 0, known: 0, sea: 0, why: 'outside' };
   const clipped: WorldBounds = {
     minX: Math.max(bounds.minX, input.bounds.minX),
     minZ: Math.max(bounds.minZ, input.bounds.minZ),
@@ -203,16 +209,23 @@ function seaTouching(input: HydroTileInput, feature: HydroFeature): boolean {
     maxZ: Math.min(bounds.maxZ, input.bounds.maxZ),
   };
   const covBounds = input.oceanCoverage.bounds ?? input.bounds;
+  // THE MASK'S UNKNOWNS DO NOT VOTE. Offshore the mask is often not yet
+  // judged (a class-80 pixel waits for the terrain under it — see
+  // OceanCoverage's tri-state), so the verdict is taken over the samples
+  // the mask has answered.
   const n = 11;
-  let inside = 0, sea = 0;
+  let inside = 0, known = 0, sea = 0;
   for (let iz = 0; iz < n; iz++) for (let ix = 0; ix < n; ix++) {
     const x = clipped.minX + (ix + 0.5) / n * (clipped.maxX - clipped.minX);
     const z = clipped.minZ + (iz + 0.5) / n * (clipped.maxZ - clipped.minZ);
     if (!pointInArea(x, z, feature.geometry)) continue;
     inside++;
-    if (sampleCoverage(input.oceanCoverage.grid, covBounds, x, z) >= 0.7) sea++;
+    const raw = sampleCoverage(input.oceanCoverage.grid, covBounds, x, z);
+    if (raw < 0.25) continue;
+    known++;
+    if (raw >= 0.7) sea++;
   }
-  return inside >= 3 && sea * 2 >= inside;
+  return { inside, known, sea };
 }
 
 function areaEvidence(input: HydroTileInput, feature: HydroFeature): number | undefined {

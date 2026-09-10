@@ -5814,7 +5814,15 @@ arrived, or holding only the polygon's landward clip — said so first; the
 top-down field frame over the harbour showed the basin's own texels
 solved and the open bay beside them green and empty. A polygon any tile
 has seen under the mask is coastal everywhere: the sea-touching kind wins
-the merge.
+the merge. What stays a lake on the at-simonstown FIXTURE is the WorldCover
+water polygon over False Bay itself (4,382 pixels): `__hydrotile` shows the
+mask answering confirmed DRY at every one of its 110 samples, because the
+fixture carries no OSM coastline for the bay and the terrain under it reads
+at the datum — a fixture limit, not the rule's. The mask's unknowns do not
+vote, so a polygon the mask has only partly judged is decided by the part
+it has. `__hydrotile(x, z)` is the instrument: the tile's features, each
+one's sea-touching arithmetic, the coverage state and the bodies' settled
+kinds, in one call.
 
 **Measured at Simon's Town** (`scratchpad/coast-shots2.mjs`: the rig placed
 on the shore the field itself found): the harbour shore reads exposure
