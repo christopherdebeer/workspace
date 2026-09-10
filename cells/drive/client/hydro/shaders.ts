@@ -814,10 +814,12 @@ void main() {
     // Bank width follows metres and depth, not 30% of every channel.
     float bankMetres = max(0.0, (1.0 - abs(riverField.g)) * riverField.a);
     float bankSlope = geometryField.a / max(0.35, bankMetres);
-    // A sub-half-metre fade vanished into one global-post pixel from the
-    // production camera and left a hard cut-out. Keep at least a metre of
-    // damp, ankle-deep water, widening naturally on a gentle bank.
-    float riverFadeM = clamp(0.86 / max(0.08, bankSlope), 0.90, 5.5);
+    // A sub-half-metre fade vanished into one display pixel from the
+    // production camera and left a hard cut-out. Keep a real shallow shelf
+    // on even a steep bank, widening naturally where the channel is gentle.
+    // This is a continuous material transition inside the resolved body, not
+    // alpha stipple or local post-processing.
+    float riverFadeM = clamp(1.65 / max(0.08, bankSlope), 2.4, 8.0);
     float channelWet = smoothstep(0.0, riverFadeM, bankMetres);
     shoreWetness = clamp(channelWet * mix(0.08, 1.0, depthWet), 0.0, 1.0);
   }
@@ -941,7 +943,7 @@ void main() {
       vec3 sandSediment = mix(terrainC * 1.08, wetGround(terrainC) * 1.02, 0.36);
       vec3 sediment = mix(siltSediment, coarseSediment, coarseBed);
       sediment = mix(sediment, sandSediment, sandBed);
-      vec3 paleGravel = mix(sediment, terrainC * 1.14, 0.40 + coarseBed * 0.24);
+      vec3 paleGravel = mix(sediment, terrainC * 1.32, 0.42 + coarseBed * 0.28);
       // From above the bars and pools are the read, so their contrast opens
       // with the view's overhead component; the fine grain fades with range.
       vec3 bedColour = mix(
@@ -980,24 +982,31 @@ void main() {
       bedColour *= exp(-vec3(0.42, 0.21, 0.14) * opticalBedDepth
         * (1.0 + turbidity * 2.0));
       colour = mix(colour, bedColour,
-        clamp(bedVisibility * mix(0.94, 0.62, turbidity), 0.0, 0.92));
+        clamp(bedVisibility * mix(1.0, 0.64, turbidity), 0.0, 0.95));
     }
   }
 
   // The edge is damp terrain becoming shallow water, never a separately dark
   // contact stripe. Depth and distance both contribute, so the transition
   // remains broad at an ocean and compact at a river or pond.
+  // At coverage zero the body must reproduce the terrain underneath exactly.
+  // Darkening from a wet film begins only after entering the channel; doing it
+  // at the contour drew a serrated trench even when terrain and water shared
+  // the same topology.
+  float dampFilm = smoothstep(0.08, 0.58, shoreWetness);
+  vec3 edgeGround = mix(terrainC, wetGround(terrainC),
+    dampFilm * mix(0.52, 0.74, turbidity));
   vec3 dampTerrain = mix(
-    terrainC * mix(0.86, 0.95, 1.0 - turbidity),
+    edgeGround,
     colour,
-    wetlandKind ? 0.30 : 0.16
+    (wetlandKind ? 0.30 : 0.10) * dampFilm
   );
 #ifdef HYDRO_FLOWING
   if (vFlowing > 0.5 && flowingKind) {
     // The waterline is the same local material as the ground, darkened by a
     // film of water. Holding this over the metre-scale fade prevents the
     // opaque river body from meeting terrain as two unrelated palette blocks.
-    dampTerrain = mix(wetGround(terrainC) * 0.94, colour, 0.18);
+    dampTerrain = mix(edgeGround, colour, 0.10 * dampFilm);
     // The last wet metre contains gravel bars, damp sediment and broken
     // reflected water rather than one dark contact stripe. This lies inside
     // the opaque surface and meets the physical coverage waterline at the bank.
@@ -1011,7 +1020,8 @@ void main() {
       riverCross * 0.82 + riverS * 0.009
     ));
     float bankPatch = smoothstep(0.22, 0.78, bankGrain * 0.42 + bankBar * 0.58)
-      * bankNear * detailLod * clamp(uRiverEdgeStrength, 0.0, 3.0);
+      * bankNear * smoothstep(0.12, 0.48, shoreWetness)
+      * detailLod * clamp(uRiverEdgeStrength, 0.0, 3.0);
     vec3 soilEdge = mix(
       terrainC * 0.72,
       wetGround(terrainC) * 1.1,
@@ -1032,7 +1042,7 @@ void main() {
       clamp(bankPatch * 0.55, 0.0, 0.74));
   }
 #endif
-  float waterBlend = smoothstep(0.025, 0.84, shoreWetness);
+  float waterBlend = smoothstep(0.07, 0.92, shoreWetness);
 #ifdef HYDRO_EDGE_BLEND
   waterBlend = mix(1.0, waterBlend, step(0.5, uEdgeBlendEnabled));
 #endif
@@ -1226,15 +1236,39 @@ void main() {
     // leaves pools of working, water-coloured turbulence between them.
     float rapidReach = smoothstep(0.50, 0.76,
       valueNoise(vec2(downstream * 0.032 + seed * 19.0, seed * 7.0 + 3.0)));
-    float foamStreak = valueNoise(vec2(downstream * 0.10 - uTime * foamRate,
-      across * 0.74 + seed * 13.0));
+    // Whitewater gathers into broad downstream tongues. Cross-stream noise
+    // used to be almost metre-scale and presented as evenly scattered white
+    // flecks; this slow lane field gives each rapid a coherent head and tail.
+    float rapidTongue = 1.0;
+#ifdef HYDRO_FLOWING
+    if (vFlowing > 0.5) {
+      float laneCentre = (valueNoise(vec2(
+        downstream * 0.018 + seed * 7.0, seed * 23.0 + 5.0
+      )) - 0.5) * 0.82;
+      float primaryTongue = 1.0 - smoothstep(0.18, 0.54,
+        abs(riverField.g - laneCentre));
+      float splitTongue = (1.0 - smoothstep(0.12, 0.34,
+        abs(riverField.g + laneCentre * 0.46)))
+        * smoothstep(0.54, 0.84, causalEnergy);
+      rapidTongue = max(primaryTongue, splitTongue * 0.55);
+    }
+#endif
+    float foamStreak = valueNoise(vec2(downstream * 0.085 - uTime * foamRate,
+      across * 0.20 + seed * 13.0));
     float foamBreak = smoothstep(0.64, 0.84,
-      valueNoise(vec2(downstream * 0.58 - uTime * 1.78,
-        across * 1.12 - seed * 9.0)));
-    float riverFoam = vFlowing * energyGate
+      valueNoise(vec2(downstream * 0.34 - uTime * 1.78,
+        across * 0.32 - seed * 9.0)));
+    float brokenFoam = vFlowing * energyGate
       * smoothstep(0.72, 0.92, foamStreak + grain * 0.08)
-      * foamBreak * rapidReach * 0.34
+      * foamBreak * rapidReach * rapidTongue * 0.14
       * clamp(uTurbulenceStrength, 0.0, 3.0);
+    // A low-opacity connected body underneath the broken crest fragments
+    // makes the rapid read as one tongue of aerated water rather than a bag
+    // of white confetti. It retains water colour and follows the same lane.
+    float tongueBody = vFlowing * energyGate * rapidReach * rapidTongue
+      * (0.075 + foamStreak * 0.060)
+      * clamp(uTurbulenceStrength, 0.0, 3.0);
+    float riverFoam = max(brokenFoam, tongueBody);
     // A second, shorter chop breaks shallow high-energy reaches into flecks.
     // Deep energetic water keeps boil and long streaks; it does not become a
     // uniformly white rapid merely because its profile is steep.
@@ -1242,7 +1276,7 @@ void main() {
       valueNoise(vec2(downstream * 0.45 - uTime * 1.72,
         across * 0.82 + seed * 5.0)));
     riverFoam = max(riverFoam,
-      rapidChop * foamBreak * rapidReach * 0.12);
+      rapidChop * foamBreak * rapidReach * rapidTongue * 0.035);
     // ── BOIL: THE TEXTURE OF WATER THAT IS WORKING BUT NOT BREAKING ──
     // Below the white-foam threshold a reach still churns; that reads as
     // luminance mottling riding the same advected streak field the foam

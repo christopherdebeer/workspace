@@ -18,6 +18,7 @@ import { createHydroSystem, type HydroSystem } from './system';
 import {
   bankHabitat,
   bankPatch,
+  bankWetMargin,
   sampleBankField,
   WATERLINE_CUT,
 } from '../shoreline';
@@ -413,12 +414,11 @@ function makeTerrain(
           * THREE.MathUtils.smoothstep(patch, .18, .72);
         const reedWeight = habitat.reeds * bankFade
           * THREE.MathUtils.smoothstep(patch, .48, .82);
-        // A patch-varying damp fringe continues the shallow water's local
-        // terrain colour onto dry ground. It breaks the silhouette without
-        // alpha stipple, shader dithering, or a second fake water surface.
-        const wetWidth = 2.4 + patch * 3.8;
-        const dampWeight = 1 - THREE.MathUtils.smoothstep(bankDistance, 0, wetWidth);
-        blend(damp, Math.min(.68, dampWeight * .68));
+        // The same metre-space wet margin production bakes into the sward
+        // colour field. It makes the dry bank begin before the mesh contour,
+        // without alpha stipple or a second fake water surface.
+        const dampWeight = bankWetMargin(bankDistance, patch);
+        blend(damp, Math.min(.52, dampWeight * .52));
         blend(mineral, Math.min(.78, mineralWeight * .82));
         blend(reed, Math.min(.58, reedWeight * .58));
       }
@@ -737,9 +737,21 @@ export async function startHydroLab(): Promise<void> {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0b1715);
   scene.fog = new THREE.Fog(0x0b1715, 480, 1100);
-  scene.add(new THREE.HemisphereLight(0xbad8cf, 0x332d25, 1.55));
+  const hemi = new THREE.HemisphereLight(0xbad8cf, 0x332d25, 1.55);
+  scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xffd48b, 2.25);
   sun.position.set(260, 430, 180); scene.add(sun);
+  // Hydro receives terrain albedo, while MeshStandardMaterial shades that
+  // albedo with the lab lights. Supply the same reference-noon gain that
+  // production computes in main.ts or the isolated water is reviewed at
+  // roughly half the terrain luminance and every bank looks like a dark cut.
+  const sunUp = sun.position.y / sun.position.length();
+  const labGroundGain = {
+    r: (sun.color.r * sun.intensity * sunUp + hemi.color.r * hemi.intensity) / Math.PI,
+    g: (sun.color.g * sun.intensity * sunUp + hemi.color.g * hemi.intensity) / Math.PI,
+    b: (sun.color.b * sun.intensity * sunUp + hemi.color.b * hemi.intensity) / Math.PI,
+  };
+  const labSkyColour = { r: hemi.color.r, g: hemi.color.g, b: hemi.color.b };
 
   const camera = new THREE.PerspectiveCamera(46, innerWidth / innerHeight, .5, 2200);
   const target = new THREE.Vector3();
@@ -919,7 +931,7 @@ export async function startHydroLab(): Promise<void> {
       'BED / SHALLOWS': [2, .45, 0, 0, .08],
       'BANK EDGES': [.35, 2.2, 0, 0, .05],
       'EDDIES': [.45, .55, .25, 2.3, .08],
-      'RAPIDS': [.25, .65, 1.8, .3, 1.35],
+      'RAPIDS': [.25, .65, 1.8, .3, .9],
       'WAKE': [.6, .8, .25, .5, .3],
     };
     const values = settings[preset];
@@ -1112,6 +1124,10 @@ export async function startHydroLab(): Promise<void> {
       wind: { x: Math.cos(angle), z: Math.sin(angle), speedMps: number('wind') },
       rain: number('rain'),
       sunDirection: { x: sun.position.x, y: sun.position.y, z: sun.position.z },
+      skyColour: labSkyColour,
+      zenithColour: labSkyColour,
+      sceneLight: { r: 1, g: 1, b: 1 },
+      groundGain: labGroundGain,
       terrainColour: { r: .12, g: .16, b: .11 },
       terrainField: terrainField ? {
         texture: terrainField,

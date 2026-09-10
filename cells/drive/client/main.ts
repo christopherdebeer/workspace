@@ -21,7 +21,14 @@ import { createAudio, type ImpactKind } from './audio';
 import { coastKm } from './coast';
 import { clamp } from './num';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
-import { WATERLINE_CUT, bankHabitat, sampleBankField, BANK_GLSL } from './shoreline';
+import {
+  WATERLINE_CUT,
+  bankHabitat,
+  bankPatch,
+  bankWetMargin,
+  sampleBankField,
+  BANK_GLSL,
+} from './shoreline';
 import { URL_OWNED, qs, qsHas, qsOn, switchRows } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
@@ -9796,7 +9803,11 @@ function swardRows(from: number, to: number): void {
           const bankRate = hab.reeds * REED_M2 * lift + hab.mineral * 0.06;
           density = hab.submerged ? -(bankRate + 0.00001)
             : density * (1 - hab.mineral * 0.65) + bankRate;
-          const mk = hab.mineral * 0.75, rk = hab.reeds * 0.5;
+          const wetMargin = bs && !bs.wet
+            ? bankWetMargin(bs.shoreDistanceM, bankPatch(wx, wz))
+            : 0;
+          const mk = Math.max(hab.mineral * 0.75, wetMargin * 0.52);
+          const rk = hab.reeds * 0.5;
           const [mr, mg, mb] = bankMineralOf(pr, pg, pb);
           pr += (mr - pr) * mk; pg += (mg - pg) * mk; pb += (mb - pb) * mk;
           pr += (BANK_REED[0] - pr) * rk; pg += (BANK_REED[1] - pg) * rk; pb += (BANK_REED[2] - pb) * rk;

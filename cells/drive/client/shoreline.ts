@@ -59,6 +59,17 @@ export function bankNoise(px: number, pz: number): number {
 export function bankPatch(px: number, pz: number): number {
   return bankNoise(px * 0.17, pz * 0.17) * 0.72 + bankNoise(px * 0.043, pz * 0.043) * 0.28;
 }
+/** Continuous dry-ground wet margin shared by production sward paint and the
+ * hydro lab. It reaches several metres beyond the coverage contour so the
+ * terrain visibly becomes bank before it becomes water. Patch variation moves
+ * only the width; it never decides coverage and contains no screen-space
+ * dither or quantisation. */
+export function bankWetMargin(distanceM: number, patch = 0.5): number {
+  const widthM = 4.5 + unit(patch) * 5.5;
+  const t = unit(Math.max(0, distanceM) / widthM);
+  const smooth = t * t * (3 - 2 * t);
+  return 1 - smooth;
+}
 /** The fragment cut the water shader applies to coverage at this point —
  *  the one number the physics and the overlay must share with it. */
 export const WATERLINE_CUT = (px: number, pz: number, kind?: string): number =>
