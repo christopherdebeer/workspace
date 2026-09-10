@@ -35,6 +35,10 @@ const ctx = {THREE, ...nav, ...globe, Math, origin, M_LAT:111320,
   GLOBE_PIN_PX:4.5,GLOBE_PIN_LIFT:1.001,GLOBE_SPIN_LAT_MAX:85,
   // the near-cap test's scratch objects and the hide set stepGlobe reads
   capEye:new THREE.Vector3(),capQ:new THREE.Quaternion(),hideSet:new Set(),
+  // the fling's state and constants, the retired rings stepGlobe culls, and the clock dragGlobe reads
+  globeVelLat:0,globeVelLon:0,globeVelAt:0,globeFlingLat:0,globeFlingLon:0,globeFlingAt:0,
+  GLOBE_FLING_TAU:0.45,GLOBE_FLING_MAX:180,GLOBE_FLING_STOP:0.05,GLOBE_FLING_HOLD_MS:90,flingOn:true,
+  farRetired:[],ovRetired:[],performance,
   FAR_RING_MAX:2,SIGHT_MAX:1500000,EARTH_R:6371000,farZ:5,FIXTURE:false,
   innerWidth:390,innerHeight:844,pixSize:{x:148,y:320},
   planetGroup:new THREE.Group(),globeMesh:new THREE.Mesh(),globePin:new THREE.Mesh(),
@@ -171,6 +175,6 @@ for(let i=0;i<8;i++){
 }
 ctx.mapRot=()=>0;
 assert.ok(source.includes("camMode === 'cab' || camMode === 'top'"));
-assert.ok(source.indexOf('zoomCur = panPtrs.size === 2') < source.indexOf('  stepGlobe();'));
+assert.ok(source.indexOf('zoomCur = panPtrs.size === 2') < source.indexOf("stepGlobe(); profAdd('stepGlobe'"));
 assert.ok(!source.includes('globeSpinLat *= g'));
 console.log('PASS: retained focus, rig unchanged, dateline/poles, globe drag, stable hand-over, shell on the sphere, planet placed in every camera, frame-independent zoom, map rotation survives the tilt');

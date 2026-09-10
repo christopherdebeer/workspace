@@ -137,6 +137,8 @@ export const SWITCHES = [
     note: 'wetdebug=1 paints every input to the water decision on the ground around the truck — drawn water, water under the ground, the waterline band, channels, ocean, cover, decks over water' },
   { id: 'eruda', kind: 'toggle', marks: ['bench'], fallback: 'off',
     note: 'eruda=1 loads the eruda console onto the page at boot — console, network, elements and storage in a panel — and is the ONE load the cell serves with eval allowed, so its prompt runs code; SETTINGS → STORAGE → DEV CONSOLE loads it read-only on an ordinary page, RELOAD WITH CONSOLE reloads with this set' },
+  { id: 'fling', kind: 'toggle', marks: ['look'], fallback: 'on',
+    note: 'fling=0 stops a lifted finger throwing the planet; on, a drag on the globe carries its speed past the lift and coasts to rest (the gesture-rate tests run with it off, and __fling(true) turns it on for the throw test)' },
   { id: 'widedither', kind: 'toggle', marks: ['look'], fallback: 'on',
     note: 'widedither=0 keeps the PATTERN dial\'s threshold on the wide chart; on, the tiled weave gives way to interleaved gradient noise past the fine ring (60m a pixel), where a 4x4 tile spread over a smooth ramp reads as blobs' },
   { id: 'shore', kind: 'toggle', marks: ['legacy'], fallback: 'on',

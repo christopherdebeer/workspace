@@ -5763,7 +5763,10 @@ function farMatFor(data: Float32Array, w: number, key: string, centre: THREE.Vec
   if (old) { old.normalMap?.dispose(); old.dispose(); }
   // A quarter-megabyte of texture per tile, and the ring is 25 of them; a level
   // swap orphans a whole ring at once. Same eviction the fine tiles keep.
-  if (farMats.size > 30) {
+  // Two rings' worth — the live one and the one retired ring held under it —
+  // or the cap evicts live tiles to the tangent-space fallback and lights
+  // them with a vignette while their neighbours are lit by the sphere.
+  if (farMats.size > 56) {
     for (const k of [...farMats.keys()].slice(0, 10)) {
       if (k === key) continue;
       const m2 = farMats.get(k) as THREE.MeshLambertMaterial;
@@ -21889,6 +21892,8 @@ function streamWorld(ex: number, ez: number): void {
     // raster order put the far corner of the sky ahead of the horizon.
     if (FIXTURE) for (const [x, y] of fixtureTiles(farZ)) void loadFarTile(x, y);
     else {
+      farRingAt = { z: farZ, x: fx, y: fy, r: fRing, n: 1 << farZ };
+      evictFarOutside();
       for (let d = 0; d <= fRing; d++)
         for (let dx = -d; dx <= d; dx++)
           for (let dy = -d; dy <= d; dy++)
@@ -21938,6 +21943,8 @@ function streamWorld(ex: number, ez: number): void {
       // silence behind a backdrop that looks the same empty as it does cold.
       ovWant = (vRing * 2 + 1) ** 2;
       ovAskedAt = performance.now();
+      ovRingAt = { z: ovZ, x: vx, y: vy, r: vRing, n: 1 << ovZ };
+      evictOvOutside();
       for (let dx = -vRing; dx <= vRing; dx++)
         for (let dy = -vRing; dy <= vRing; dy++) void loadOvTile(vx + dx, vy + dy);
     } else ovWant = 0;
@@ -22086,10 +22093,26 @@ function farLevelFor(radius: number): number {
 let farRetired: THREE.Mesh[] = [];
 function setFarLevel(z: number): void {
   if (z === farZ) return;
+  // ONE RETIRED RING, NOT A STACK. A browse from the seat's zoom out to the
+  // planet swaps the level three times in a few seconds, and each swap
+  // pushed the whole previous ring here while the drop waited for the newest
+  // ring to land completely — which one tile in retry backoff defers for
+  // ever. The phone read `FAR 25 83/87` at 3 fps over India: three retired
+  // rings, 83 meshes of 128² lattice drawn every frame under the one that
+  // mattered. The previous level is the only one that holds the frame (and
+  // the globe backs whatever it does not cover, now that it writes no
+  // depth); anything older goes now, and `cullRetiredFar` drops each retired
+  // tile the moment the new level has covered it, or at FAR_RETIRED_MS.
+  const was = farZ;
   farZ = z;
+  dropRetiredFar();
   // Sunk RADIALLY: the mesh's position is its centre point on the sphere, so
   // scaling it toward the planet's centre is the 18m the flat drop used to be.
-  for (const m of farMeshes.values()) { m.position.multiplyScalar(1 - 18 / GLOBE_R); farRetired.push(m); }
+  for (const [k, m] of farMeshes) {
+    const [, x, y] = k.split('/').map(Number);
+    m.userData.retired = { z: was, x, y, at: performance.now() };
+    m.position.multiplyScalar(1 - 18 / GLOBE_R); farRetired.push(m);
+  }
   farMeshes.clear();
   farTiles.clear();
   // The retired level's bake records go with it. They were kept, and they
@@ -22102,6 +22125,35 @@ function setFarLevel(z: number): void {
 function dropRetiredFar(): void {
   for (const m of farRetired) { farGroup.remove(m); m.geometry.dispose(); }
   farRetired = [];
+}
+const FAR_RETIRED_MS = 20000;
+/** Drop each retired tile the new level has covered: coarser now, its one
+ *  ancestor has landed; finer now, every descendant the ring asked for has
+ *  landed (a retired tile with no descendant asked lies outside the new ring
+ *  and waits for the cap — it costs one draw, not a frame). Then the cap, for
+ *  the tile whose cover is a fetch that never returns. */
+function cullRetiredFar(): void {
+  const now = performance.now();
+  farRetired = farRetired.filter((m) => {
+    const r = m.userData.retired as { z: number; x: number; y: number; at: number } | undefined;
+    let covered = false;
+    if (r && Number.isFinite(r.x)) {
+      if (farZ <= r.z) { const k = r.z - farZ; covered = farMeshes.has(`${farZ}/${r.x >> k}/${r.y >> k}`); }
+      else {
+        const k = farZ - r.z, n = 1 << k; let asked = 0; covered = true;
+        for (let i = 0; i < n && covered; i++) for (let j = 0; j < n; j++) {
+          const key = `${farZ}/${(r.x << k) + i}/${(r.y << k) + j}`;
+          if (!farTiles.has(key)) continue;
+          asked++;
+          if (!farMeshes.has(key)) { covered = false; break; }
+        }
+        if (!asked) covered = false;
+      }
+    }
+    if (!covered && (!r || now - r.at < FAR_RETIRED_MS)) return true;
+    farGroup.remove(m); m.geometry.dispose();
+    return false;
+  });
 }
 // THE EARTH IS ROUND, and at this range that stops being pedantry. The drop
 // below a tangent plane is d²/2R: 8m at 10km, which nothing would notice, but
@@ -22126,6 +22178,39 @@ const curveDrop = (dx: number, dz: number): number => (dx * dx + dz * dz) / (2 *
  */
 const farTiles = new Set<string>();
 const farMeshes = new Map<string, THREE.Mesh>();
+/**
+ * A BROWSE LEAVES TILES BEHIND. The ring is asked around the chart's focus on
+ * every stream pass, and a focus turning from California to India asks a
+ * fresh 5×5 at every step of the way — and nothing ever took the old ones
+ * down: the only eviction the shell had was the cover-dirtied REBUILD. The
+ * reproduction read `far 45/45` on a 25-tile ring after one spin and the
+ * phone `FAR Z5 83/87` after a browse through Europe, every one a 128²
+ * lattice with a quarter-megabyte normal map, drawn every frame, 2.05M
+ * triangles a world pass. So the pass records the ring it asked for and
+ * drops every landed tile more than one ring's margin outside it — the six
+ * maps a tile lives in, its material included — and a fetch that comes home
+ * to find itself outside is not built at all (`farBuild` is 600 ms of main
+ * thread in the harness; on a phone it is the freeze under a fast browse).
+ * `n` is the tile count round the planet at the level, for the dateline.
+ * A fixture never sets the ring, so a fixture's tiles are never outside it.
+ */
+let farRingAt = { z: -1, x: 0, y: 0, r: 0, n: 1 };
+const farOutside = (z: number, x: number, y: number): boolean => {
+  if (farRingAt.z !== z) return false;
+  const dx = Math.abs(x - farRingAt.x), n = farRingAt.n;
+  return Math.max(Math.min(dx, n - dx), Math.abs(y - farRingAt.y)) > farRingAt.r + 1;
+};
+function evictFarOutside(): void {
+  for (const [key, mesh] of [...farMeshes]) {
+    const [z, x, y] = key.split('/').map(Number);
+    if (!farOutside(z, x, y)) continue;
+    farGroup.remove(mesh); mesh.geometry.dispose();
+    const mt = farMats.get(key);
+    if (mt && mesh.material === mt) { mt.normalMap?.dispose(); mt.dispose(); farMats.delete(key); }
+    farMeshes.delete(key); farTiles.delete(key);
+    farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key); farBakeZ.delete(key);
+  }
+}
 /** Per far tile, the fraction of its vertices that had a cover class at bake,
  *  and the mean colour it baked. The second is the one that matters: if two
  *  shell tiles over the same kind of country disagree about their average
@@ -22376,6 +22461,33 @@ let globeAsked = false, globeFailed = false;
  */
 let globeSpinLat = 0, globeSpinLon = 0;
 /**
+ * THE FLING. A drag on the planet used to stop dead under the lifted finger,
+ * which on a 20,000km-high view reads as a map stuck to the glass rather
+ * than a globe with mass. So the drag keeps a running velocity (an EMA over
+ * about fifty milliseconds of pointer moves, in degrees a second — the units
+ * the drag itself is in), and a lift within GLOBE_FLING_HOLD_MS of the last
+ * move releases it as a free spin that `stepGlobe` feeds into the retained
+ * focus a frame at a time and decays with an e-folding time of
+ * GLOBE_FLING_TAU. A finger that came to rest before lifting releases
+ * nothing (that is a place, not a throw); a touch on the planet stops it; a
+ * second finger is a pinch, not a throw; leaving the chart drops it. It is a
+ * change of FOCUS like the drag it continues, so nothing about the rig, the
+ * streamers or the hand-over is new — the fling is the drag, carried on.
+ *
+ * The velocity is only updated from moves at least 4ms apart: a synthetic
+ * drag dispatched in one task (the harness, a test) has no clock in it and
+ * must throw nothing, or every gesture test would measure the coast on top
+ * of the rate. `?fling=0` (and `__fling(false)`) turns the release off for
+ * the rate tests; the spin test turns it on for its own throw.
+ */
+let globeVelLat = 0, globeVelLon = 0, globeVelAt = 0;
+let globeFlingLat = 0, globeFlingLon = 0, globeFlingAt = 0;
+const GLOBE_FLING_TAU = 0.45;     // s; a flick at 135°/s coasts about 60°
+const GLOBE_FLING_MAX = 180;      // °/s; a throw faster than this is a slip
+const GLOBE_FLING_STOP = 0.05;    // °/s; at rest
+const GLOBE_FLING_HOLD_MS = 90;   // a finger still for longer lifts nothing
+let flingOn = qsOn('fling', true);
+/**
  * HOW FAR NORTH OR SOUTH THE VIEW MAY BE TURNED — a latitude the view reaches,
  * NOT an offset the spin may hold, and the difference is a whole hemisphere.
  *
@@ -22435,11 +22547,39 @@ function stepGlobe(): void {
   //
   // Spin is a change of chart focus, never a disposable offset. The rig stays
   // where it is; the existing overview streamer follows panX/panZ.
+  // The free spin, a frame at a time — see the fling note at globeVelLat.
+  if (globeFlingLat || globeFlingLon) {
+    const now = performance.now(), dt = Math.max(0, (now - globeFlingAt) / 1000);
+    globeFlingAt = now;
+    if (camMode !== 'top' || panPtrs.size || globeFree() <= 0) globeFlingLat = globeFlingLon = 0;
+    else {
+      // THE CLOSED FORM, NOT A CLAMPED EULER STEP. Over an interval T the
+      // spin travels v·τ·(1 − e^(−T/τ)) and keeps v·e^(−T/τ), exactly,
+      // whatever T is — so a 300 ms harness frame and eighteen 16 ms phone
+      // frames coast the same distance and stop at the same wall-clock
+      // moment. The first cut clamped dt at 100 ms and decayed per frame,
+      // which on slow frames stretched the coast by the frame's length over
+      // the clamp: the spin test read a planet still turning at 0.5° per
+      // 300 ms long after it should have rested.
+      const k = Math.exp(-dt / GLOBE_FLING_TAU), travel = GLOBE_FLING_TAU * (1 - k);
+      globeSpinLat += globeFlingLat * travel; globeSpinLon += globeFlingLon * travel;
+      globeFlingLat *= k; globeFlingLon *= k;
+      // At the pole the latitude clamps; a spin still pushing into it would
+      // hold the view there for the rest of its decay.
+      const [lat] = localToLatLon(viewX() + panX, viewZ() + panZ);
+      if (Math.abs(lat + globeSpinLat) >= 84.9) globeFlingLat = 0;
+      if (Math.hypot(globeFlingLat, globeFlingLon) < GLOBE_FLING_STOP) globeFlingLat = globeFlingLon = 0;
+    }
+  }
   if (camMode === 'top' && (globeSpinLat || globeSpinLon)) {
     const [lat, lon] = localToLatLon(viewX() + panX, viewZ() + panZ);
     setChartFocus(lat + globeSpinLat, lon + globeSpinLon);
     globeSpinLat = globeSpinLon = 0;
   }
+  // A retired ring is dropped tile by tile as the new level covers it, and
+  // by the cap whatever happened — see cullRetiredFar.
+  if (farRetired.length) cullRetiredFar();
+  if (ovRetired.length) cullRetiredOv();
   const vx = camMode === 'top' ? viewX() + panX : viewX();
   const vz = camMode === 'top' ? viewZ() + panZ : viewZ();
   const [gLat, gLon] = localToLatLon(vx, vz);
@@ -22500,7 +22640,10 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     farQueue.shift()?.();
   });
   // The level may have changed while this was in flight; that shell is gone.
-  if (!data || z !== farZ) { farTiles.delete(key); return; }
+  // …or the ring moved on while this was on the wire: a tile outside it now
+  // would be built and evicted on the next pass, at 600 ms of main thread.
+  if (!data || z !== farZ || farOutside(z, x, y)) { farTiles.delete(key); return; }
+  const _pBuild = performance.now();   // the build is profiled as `farBuild`
   const b = tileBounds(x, y, z);
   const [wx0, wz0] = toLocal(b.latN, b.lonW);
   const [wx1, wz1] = toLocal(b.latS, b.lonE);
@@ -22587,7 +22730,10 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   farMeshes.set(key, mesh);
   farRasters.set(key, { xs, zs, w, h, data });
   farGroup.add(mesh);
-  // Last fetch of the batch home? The new level covers the frame now.
+  profAdd('farBuild', _pBuild);
+  // Whatever this tile now covers of the retired ring goes; and the last
+  // fetch of the batch home takes the rest.
+  cullRetiredFar();
   if (farInFlight === 0 && farQueue.length === 0) dropRetiredFar();
 }
 /** Sunk far enough that the fine layer always wins where both exist, shallow
@@ -22628,6 +22774,23 @@ const OV_WAIT_MS = 11000;
 let ovZ = OV_LEVELS[0];
 const ovTiles = new Set<string>();
 const ovMeshes = new Map<string, THREE.Mesh>();
+/** The overview's `farRingAt` — see the note there. A browse left `ov 28/50`
+ *  on a 25-tile ring the same way. */
+let ovRingAt = { z: -1, x: 0, y: 0, r: 0, n: 1 };
+const ovOutside = (z: number, x: number, y: number): boolean => {
+  if (ovRingAt.z !== z) return false;
+  const dx = Math.abs(x - ovRingAt.x), n = ovRingAt.n;
+  return Math.max(Math.min(dx, n - dx), Math.abs(y - ovRingAt.y)) > ovRingAt.r + 1;
+};
+function evictOvOutside(): void {
+  for (const [key, mesh] of [...ovMeshes]) {
+    const [z, x, y] = key.split('/').map(Number);
+    if (!ovOutside(z, x, y)) continue;
+    ovGroup.remove(mesh); mesh.geometry.dispose();
+    ovMeshes.delete(key); ovTiles.delete(key);
+    ovDark = ovDark.filter((d) => d.mesh !== mesh);
+  }
+}
 let ovRetired: THREE.Mesh[] = [];
 /** Overview tiles that arrived with vectors but no heights to lay them on. */
 let ovDemless = 0;
@@ -22877,11 +23040,18 @@ function ovLevelFor(radius: number): number {
 }
 function setOvLevel(z: number): void {
   if (z === ovZ) return;
+  const was = ovZ;
   ovZ = z;
   // The outgoing level holds the frame while the new one streams, exactly as
   // the terrain shell does — sunk a little so the incoming level wins where
-  // both exist, dropped when the new ring has landed.
-  for (const m of ovMeshes.values()) { m.position.multiplyScalar(1 - 15 / GLOBE_R); ovRetired.push(m); }
+  // both exist, one ring at a time, culled as the new ring covers it (see
+  // setFarLevel for the stack this replaces).
+  dropRetiredOv();
+  for (const [k, m] of ovMeshes) {
+    const [, x, y] = k.split('/').map(Number);
+    m.userData.retired = { z: was, x, y, at: performance.now() };
+    m.position.multiplyScalar(1 - 15 / GLOBE_R); ovRetired.push(m);
+  }
   ovMeshes.clear();
   ovTiles.clear();
   ovWays.clear(); ovWayV++;    // the level swapped; the coarse graph is stale
@@ -22889,6 +23059,32 @@ function setOvLevel(z: number): void {
 function dropRetiredOv(): void {
   for (const m of ovRetired) { ovGroup.remove(m); m.geometry.dispose(); }
   ovRetired = [];
+}
+const OV_RETIRED_MS = 20000;
+/** The overview's `cullRetiredFar`: the same coverage test over ovTiles
+ *  (asked) and ovMeshes (landed), the same cap. */
+function cullRetiredOv(): void {
+  const now = performance.now();
+  ovRetired = ovRetired.filter((m) => {
+    const r = m.userData.retired as { z: number; x: number; y: number; at: number } | undefined;
+    let covered = false;
+    if (r && Number.isFinite(r.x)) {
+      if (ovZ <= r.z) { const k = r.z - ovZ; covered = ovMeshes.has(`${ovZ}/${r.x >> k}/${r.y >> k}`); }
+      else {
+        const k = ovZ - r.z, n = 1 << k; let asked = 0; covered = true;
+        for (let i = 0; i < n && covered; i++) for (let j = 0; j < n; j++) {
+          const key = `${ovZ}/${(r.x << k) + i}/${(r.y << k) + j}`;
+          if (!ovTiles.has(key)) continue;
+          asked++;
+          if (!ovMeshes.has(key)) { covered = false; break; }
+        }
+        if (!asked) covered = false;
+      }
+    }
+    if (!covered && (!r || now - r.at < OV_RETIRED_MS)) return true;
+    ovGroup.remove(m); m.geometry.dispose();
+    return false;
+  });
 }
 // The chart's palette. Roads in the minimap's bone-and-amber so the two maps
 // agree with each other; water in the map's own blue; rail dark; the coast a
@@ -22935,7 +23131,8 @@ async function loadOvTile(x: number, y: number): Promise<void> {
     const data = (await res.json()) as { ways?: Array<{ tags: Record<string, string>; geometry: Array<[number, number]> }> };
     if (z !== ovZ) { ovTiles.delete(key); return; }
     ovFailedAt.delete(key);
-    buildOvTile(key, x, y, z, data.ways ?? [], dem);
+    if (ovOutside(z, x, y)) { ovTiles.delete(key); return; }   // the ring moved on
+    { const _p = performance.now(); buildOvTile(key, x, y, z, data.ways ?? [], dem); profAdd('ovBuild', _p); }
   } catch {
     // A 503 is a cold tile filling and a 502 is the edge giving up on one that
     // may never fill; neither is worth asking again on the next 1.2s pass.
@@ -23155,6 +23352,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   for (const r of inkRuns) if (!r.lit) ovDark.push({ mesh, name: r.name, la: r.la, lo: r.lo, from: r.from, to: r.to });
   ovMeshes.set(key, mesh);
   ovGroup.add(mesh);
+  cullRetiredOv();
   if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
 }
 // ── the peak layer: named summits as far landmarks ─────────────────
@@ -30367,6 +30565,7 @@ let texMeanCache: Record<string, number> | null = null;
     // the product — read the pair, because a spin held while the shell is back
     // is stored and shown nowhere, and that is the design rather than a fault.
     free: +globeFree().toFixed(3),
+    fling: [+globeFlingLat.toFixed(2), +globeFlingLon.toFixed(2)], flingOn,
     spin: [+globeSpinLat.toFixed(2), +globeSpinLon.toFixed(2)],
     applied: [+(globeSpinLat * globeFree()).toFixed(2), +(globeSpinLon * globeFree()).toFixed(2)],
     degPerPx: +globeDegPerPx().toFixed(4),
@@ -30392,6 +30591,12 @@ let texMeanCache: Record<string, number> | null = null;
  * `globeFree` is 0 and the planet will not move, which is the design and is
  * what `__globe().applied` is there to show.
  */
+/** The fling switch at runtime, so a test can measure the rate with it off
+ *  and the throw with it on, in one boot. */
+(window as unknown as { __fling?: object }).__fling = (on?: boolean): object => {
+  if (on !== undefined) { flingOn = on; if (!on) globeFlingLat = globeFlingLon = 0; }
+  return { on: flingOn, fling: [+globeFlingLat.toFixed(2), +globeFlingLon.toFixed(2)], vel: [+globeVelLat.toFixed(2), +globeVelLon.toFixed(2)] };
+};
 (window as unknown as { __globespin?: object }).__globespin = (lat?: number, lon?: number): object => {
   if (lat !== undefined) { const [lo, hi] = globeSpinLatRange(); globeSpinLat = clamp(lat, lo, hi); }
   if (lon !== undefined) globeSpinLon = lon;
@@ -32146,6 +32351,8 @@ canvas.addEventListener('pointerdown', (e) => {
       stickBase.style.top = stickNub.style.top = `${h.y}px`;
       setStickFrom(e);
     } else {
+      globeFlingLat = globeFlingLon = 0;   // a touch on a spinning planet stops it
+      if (panPtrs.size) { globeVelLat = globeVelLon = 0; globeVelAt = 0; }   // a second finger is a pinch
       panPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
       // THE HEIGHT OF THE GROUND YOU GRABBED, once, for the whole gesture.
       // The drag resolves against a horizontal plane, and putting that plane at
@@ -32262,7 +32469,7 @@ canvas.addEventListener('pointermove', (e) => {
         // pinch anchored, rather than pulling everything towards screen centre.
         const px = innerWidth / 2 + (mx1 - innerWidth / 2) * ratio;
         const py = innerHeight / 2 + (my1 - innerHeight / 2) * ratio;
-        if (globeFree()) dragGlobe(mx0, my0, px, py);
+        if (globeFree()) { dragGlobe(mx0, my0, px, py); globeVelLat = globeVelLon = 0; globeVelAt = 0; }
         else {
           const y = panY ?? chartGround(viewX() + panX, viewZ() + panZ);
           const a = chartPlaneAt(mx0, my0, y), b = chartPlaneAt(px, py, y);
@@ -32336,6 +32543,17 @@ function dragGlobe(x0: number, y0: number, x1: number, y1: number): void {
     : -(dx * Math.sin(mr) + dy * Math.cos(mr));
   const dLon = a && b ? clamp(wrapLongitude(a.lon - b.lon), -maxStep / cs, maxStep / cs)
     : (dx * Math.cos(mr) - dy * Math.sin(mr)) / cs;
+  // The running velocity a lift may release — see the fling note. Moves
+  // under 4ms apart leave it alone: they are synthetic, or coalesced.
+  {
+    const now = performance.now(), dt = (now - globeVelAt) / 1000;
+    if (globeVelAt && dt >= 0.004 && dt < 0.25) {
+      const k = 1 - Math.exp(-dt / 0.05);
+      globeVelLat += (dLat / dt - globeVelLat) * k;
+      globeVelLon += (wrapLongitude(dLon) / dt - globeVelLon) * k;
+      globeVelAt = now;
+    } else if (!globeVelAt || dt >= 0.25) { globeVelLat = globeVelLon = 0; globeVelAt = now; }
+  }
   setChartFocus(lat + dLat, lon + dLon);
 }
 function chartPlaneAt(px: number, py: number, y0: number): [number, number] | null {
@@ -32793,6 +33011,15 @@ const endStick = (e: PointerEvent): void => {
       tapAt = now; tapX = e.clientX; tapY = e.clientY;
     }
   }
+  // THE LIFT MAY THROW THE PLANET — see the fling note at globeVelLat. Only
+  // a lone finger that was still moving; a rest before the lift is a place.
+  if (panPtrs.size === 1 && panPtrs.has(e.pointerId) && camMode === 'top' && globeFree() > 0) {
+    if (flingOn && globeVelAt && performance.now() - globeVelAt < GLOBE_FLING_HOLD_MS) {
+      const v = Math.hypot(globeVelLat, globeVelLon), sc = v > GLOBE_FLING_MAX ? GLOBE_FLING_MAX / v : 1;
+      globeFlingLat = globeVelLat * sc; globeFlingLon = globeVelLon * sc; globeFlingAt = performance.now();
+    }
+  }
+  globeVelLat = globeVelLon = 0; globeVelAt = 0;
   panPtrs.delete(e.pointerId);
   if (!panPtrs.size) panY = null;   // the next grab picks its own ground
   if (stick?.id === e.pointerId) {
@@ -36231,6 +36458,26 @@ let sessFrames = 0, sessWall = 0, sessSlow = 0;
 const sessHist = new Uint32Array(6);                       // <16.7 <33 <50 <100 <250 ≥250
 const sessRing = new Float32Array(4096); let sessRingN = 0; // last 4096 frame times
 const sessSlowLog: Array<{ t: number; ms: number; tops: string }> = [];
+/** WHAT THE WORLD PASS DREW — draw calls and triangles off renderer.info,
+ *  sampled right after `renderer.render(scene, camera)` (autoReset clears it
+ *  at the next render(), and the last render of a frame is the composite's
+ *  two triangles, which is why `__gpu` draws a frame of its own to read it).
+ *  A frame rate that falls on the chart with every CPU phase flat is fill or
+ *  triangles, and until this row neither was in the report: the phone at
+ *  3 fps over India read `FAR 25 83/87` — three retired shell rings never
+ *  dropped, 83 meshes of 128² lattice a frame — and nothing in the dump could
+ *  have said so. Session mean and max, the recent window's percentiles, and
+ *  each slow frame carries its own count beside its top phases. */
+const drawStat = { calls: 0, tris: 0, n: 0, sumCalls: 0, sumTris: 0, maxCalls: 0, maxTris: 0 };
+const drawRing = new Float32Array(4096);   // triangles of the last 4096 world passes
+function drawStatSample(calls: number, tris: number): void {
+  drawStat.calls = calls; drawStat.tris = tris;
+  drawStat.sumCalls += calls; drawStat.sumTris += tris;
+  drawRing[drawStat.n % drawRing.length] = tris;
+  drawStat.n++;
+  if (calls > drawStat.maxCalls) drawStat.maxCalls = calls;
+  if (tris > drawStat.maxTris) drawStat.maxTris = tris;
+}
 const curFrame = new Map<string, number>();
 /** WHICH SIDE OF THE FRAME LOOP a measurement fell on. Inside the tick it is
  *  the main thread's own frame work; outside it is an event-loop task — a
@@ -36307,7 +36554,7 @@ function profFrame(now: number): void {
       for (const [k, v] of curFrame) { const r = sessProf.get(k); if (r) r.slowMs += v; if (v > topMs) { topMs = v; top = k; } }
       const r = sessProf.get(top); if (r) r.top++;
       const tops = [...curFrame.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3).map(([k, v]) => `${k}:${Math.round(v)}`).join(' ');
-      sessSlowLog.push({ t: Math.round(now / 1000), ms: Math.round(fm), tops });
+      sessSlowLog.push({ t: Math.round(now / 1000), ms: Math.round(fm), tops: `${tops} · ${(drawStat.tris / 1e6).toFixed(2)}M tris ${drawStat.calls} calls` });
       if (sessSlowLog.length > 24) sessSlowLog.shift();
     }
   }
@@ -36364,6 +36611,12 @@ function telemetryReport(): string {
   if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)} · feeds ${workerLedger.hydroFeeds} skipped ${workerLedger.hydroSkips}`);
     const pa = Math.max(1, workerLedger.applied);
     L.push(`post split ms/build reseat ${(workerLedger.reseatMs / pa).toFixed(1)} redrape ${(workerLedger.redrapeMs / pa).toFixed(1)} hydro ${(workerLedger.hydroMs / pa).toFixed(1)} batter ${(workerLedger.batterMs / pa).toFixed(1)} culvert ${(workerLedger.culvertMs / pa).toFixed(1)} · post max ${Math.round(workerLedger.postMax)} · dropped ${workerLedger.dropped}`); }
+  { const n = Math.min(drawStat.n, drawRing.length);
+    const recent = Array.from(drawRing.subarray(0, n)).sort((a, b) => a - b);
+    const q = (p: number): string => n ? (recent[Math.min(n - 1, Math.floor(p * n))] / 1e6).toFixed(2) : '?';
+    const [fLat, fLon] = localToLatLon(viewX() + panX, viewZ() + panZ);
+    L.push(`chart ${camMode} · zoom ${zoomCur < 10 ? zoomCur.toFixed(2) : String(Math.round(zoomCur))} · ${chartMpp().toFixed(1)} m/px · ${chartRemote() ? 'browsed' : 'home'} focus ${fLat.toFixed(2)},${fLon.toFixed(2)} · globe ${globeMesh.visible ? 'on' : 'off'} free ${globeFree()} fling ${flingOn ? 'on' : 'off'} · far z${farZ} ${farMeshes.size}/${farTiles.size} retired ${farRetired.length} inflight ${farInFlight} queued ${farQueue.length} · ov z${ovZ} ${ovMeshes.size}/${ovTiles.size} retired ${ovRetired.length} places ${ovPlaces.size} labels ${ovLabelsDrawn.length}`);
+    L.push(`world pass: draw calls mean ${Math.round(drawStat.sumCalls / Math.max(1, drawStat.n))} max ${drawStat.maxCalls} · triangles mean ${(drawStat.sumTris / Math.max(1, drawStat.n) / 1e6).toFixed(2)}M max ${(drawStat.maxTris / 1e6).toFixed(2)}M · recent ${n} passes p50 ${q(0.5)}M p95 ${q(0.95)}M · last ${(drawStat.tris / 1e6).toFixed(2)}M / ${drawStat.calls} calls`); }
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
   { const r = goalSolveStat; if (r.runs) L.push(`route solves ${r.runs} (found ${r.found} failed ${r.failed}) · ms/solve ${(r.totalMs / r.runs).toFixed(0)} (graph ${(r.graphTotalMs / r.runs).toFixed(0)}) max ${Math.round(r.maxMs)} · slices ${r.slices} max ${r.maxSliceMs.toFixed(1)}ms · last span ${Math.round(r.spanMs)}ms · walked ${r.walked}/${r.nodes} (fine ${graphStat.fine} coarse ${graphStat.coarse} portals ${graphStat.portals}) · graph cached ${graphStat.cached ?? 0} · tiles skipped ${r.tilesSkipped} hit ${r.tilesHit} · last ${r.last}`); }
   { const w = swardLedger; L.push(`sward sweeps ${w.sweeps} · steps ${w.steps} ms ${(w.stepMs / Math.max(1, w.steps)).toFixed(1)} max ${Math.round(w.stepMax)} · deferred ${w.deferred} · mask ${w.masks} ms ${(w.maskMs / Math.max(1, w.masks)).toFixed(1)} max ${Math.round(w.maskMax)}`); }
@@ -37704,7 +37957,7 @@ function tick(now: number): void {
   // Update the single zoom state BEFORE globe/shell ownership is evaluated.
   // Previously the globe used last frame's zoom while the shell used this one.
   if (camMode === 'top') zoomCur = panPtrs.size === 2 ? zoomT : smoothChartZoom(zoomCur, zoomT, dt);
-  stepGlobe();
+  { const _p = performance.now(); stepGlobe(); profAdd('stepGlobe', _p); }
   // The atmosphere gives out where the planet becomes an object: by 14km a
   // pixel the frame is wider than the Earth's disc and what surrounds the limb
   // is space, not sky. Below 6km a pixel the dome is still a horizon you are
@@ -38331,7 +38584,7 @@ function tick(now: number): void {
   }
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
-  { const _p = performance.now(); renderer.render(scene, camera); profAdd('render', _p); }
+  { const _p = performance.now(); renderer.render(scene, camera); profAdd('render', _p); drawStatSample(renderer.info.render.calls, renderer.info.render.triangles); }
   { const _p = performance.now(); sampleShadowMotion(performance.now()); profAdd('shadowTelemetry', _p); }
   { const _p = performance.now(); composite(mblurAmt); profAdd('composite', _p); }
   // Kept every frame, blur or none: the jump guard above compares against it,

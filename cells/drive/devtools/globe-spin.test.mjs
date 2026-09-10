@@ -32,7 +32,10 @@ import { join } from 'node:path';
 // Letsemeng: the same spot globe-view.mjs stands at, so the two tools' numbers
 // are comparable. `nodraw` because nothing here is judged by eye unless SHOT
 // asks for it, and the harness paints at three frames a second.
-const SPOT = 'lat=-29.9872&lon=24.7765&h=0&cam=top&wx=clear&nodraw=1';
+// fling=0: the drags below measure the RATE of a drag, and a lift that
+// throws the planet would add the coast to every reading. The throw has its
+// own block at the end, with the switch turned on for it.
+const SPOT = 'lat=-29.9872&lon=24.7765&h=0&cam=top&wx=clear&nodraw=1&fling=0';
 const PLANET_Z = 40000, CHART_Z = 8;
 const { page, close } = await openDrive({ spot: `${SPOT}&z=${PLANET_Z}`, tag: 'globespin', menu: true, settle: 0 });
 
@@ -256,6 +259,41 @@ if (process.env.SHOT) {
   console.log(`\n  frame: ${shot}`);
 }
 
+// ── THE FLING: a throw coasts and comes to rest; a hold throws nothing ──
+await focusOn(-29.9872, 24.7765);
+await page.evaluate(() => { window.__cam('top'); window.__zoom(40000); window.__fling(true); });
+await page.waitForTimeout(600);
+{
+  const throwIt = async (restMs) => {
+    const x0 = 195, y0 = 300;
+    await page.mouse.move(x0, y0); await page.mouse.down();
+    for (let i = 1; i <= 8; i++) { await page.mouse.move(x0 + 15 * i, y0); await page.waitForTimeout(12); }
+    if (restMs) await page.waitForTimeout(restMs);
+    await page.mouse.up();
+    await page.waitForTimeout(60);
+    return (await globe()).focus;
+  };
+  const f1 = await throwIt(0);
+  const v1 = (await page.evaluate(() => window.__fling())).fling;
+  // Rest is when the spin reads zero, not a window guessed from the release:
+  // at τ 0.45 s a 9°/s throw is under the stop threshold after ~2.3 s.
+  let restMs = 0;
+  for (; restMs < 5000; restMs += 100) {
+    const f = (await page.evaluate(() => window.__fling())).fling;
+    if (!f[0] && !f[1]) break;
+    await page.waitForTimeout(100);
+  }
+  const f2 = (await globe()).focus;
+  await page.waitForTimeout(300);
+  const f3 = (await globe()).focus;
+  check(dLon(f2[1], f1[1]) < -0.5, `a throw coasts on after the lift (released at ${v1[1]}°/s, ${dLon(f2[1], f1[1]).toFixed(2)}° more, westward)`);
+  check(restMs < 5000 && Math.abs(dLon(f3[1], f2[1])) < 0.02, `and comes to rest (spin zero after ${restMs}ms, ${dLon(f3[1], f2[1]).toFixed(3)}° in the 300ms after)`);
+  const g1 = await throwIt(250);
+  await page.waitForTimeout(600);
+  const g2 = (await globe()).focus;
+  check(Math.abs(dLon(g2[1], g1[1])) < 0.02, `a finger that rested before lifting throws nothing (${dLon(g2[1], g1[1]).toFixed(3)}°)`);
+  await page.evaluate(() => window.__fling(false));
+}
 const errs = await page.evaluate(() => window.__pageErrors ?? []);
 check(errs.length === 0, `no page errors ${JSON.stringify(errs.slice(0, 2))}`);
 await close();
