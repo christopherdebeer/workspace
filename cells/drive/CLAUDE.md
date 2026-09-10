@@ -5747,6 +5747,54 @@ ready — the route solver learned this ("old route live until the new one
 lands"), the far level swap learned it (the retired ring), and the substrate
 commit had the swap written and was bypassed by its own invalidation.
 
+## The Senqu river stands on the hillside: its line runs 30–60 m off the DEM's floor
+
+Reported from the cab at `lat=-30.94647&lon=27.46395&h=153&cam=chase`
+(`substrate=render`, but the field is the same in every mode — the default
+run gives the same numbers): "the river seems raised from the terrain".
+Measured with `__ground` (DEM, drawn mesh and standing ground at a point,
+with the water's resting level beside them — `scratchpad/river3.mjs`,
+`river4.mjs`), west–east sections through the river at the rig's row and
+100 m either side, every 5 m:
+
+| section | DEM floor | drawn river (east of rig) | DEM under it | resting level | river above the floor | west edge above its ground |
+|---|---|---|---|---|---|---|
+| at the rig | 1530.1 m at +5 m | 35–45 m | 1532.9–1534.7 | 1534.3 | **2.6–4.2 m**, 35 m west | +1.4 m |
+| 100 m south | 1529.5 m at +35 m | 80–95 m | 1535.5–1541.4 | 1538.1–1539.3 | **8.6–9.8 m**, 50 m west | +2.5 m |
+| 100 m north | 1530.0 m at −30 m | −5…+5 m | 1532.6–1534.5 | 1534.0 | **4.0 m**, 30 m west | +1.4 m |
+
+The ground rises east at 18–25 m per 100 m; the valley floor the DEM has
+runs 30–60 m WEST of where the OSM waterway line runs, up the eastern slope.
+The profile's station level is the DEM sampled ON the line (`buildProfile`:
+carved invert + nominal depth where there is a carve, else
+`sampleElevation` at the station, smoothed, then the monotone descending
+fit), and the per-texel ceiling is that same foot plus 0.6 m — so the water
+is exactly right for the ground under the line and 3–10 m above the valley
+floor next to it. The sheet is flat across its drawn width, so its western
+edge floats 1.4–2.5 m over the ground (the wet overlay's `E`/`W` there) and
+its eastern edge is buried in the rising bank (`U`). From the floor, where
+the truck sits, that is a river standing on the hillside 40 m away; 70 m
+south-east, inside the drawn width, the truck is under 2.5 m of water and
+the HUD says WATER. Nothing in render mode or the substrate caused it — the
+same field draws in `legacy` — and the mesh follows the DEM to 0.2 m at the
+rig, so "which terrain" is answered: the DEM's, and the DEM's floor is not
+under the line. Which of the two is wrong on the ground is not decidable
+here (OSM traces the river from imagery to ~5–10 m; the terrarium z14 pixel
+is 9.5 m but its source in Lesotho is a 30 m product, which does not resolve
+a channel in a gorge and smears the floor sideways) — but the mesh IS the
+DEM, so the river has to sit in the valley the mesh has.
+
+**Not fixed; the shape of the fix:** seat each station on the DEM's floor —
+at profile build, scan the DEM across ±60–80 m perpendicular to the line
+(the DEM's own spacing, a dozen samples a station, cheap against the
+raster loop) and move the station onto the lowest point, with continuity
+along the line so a meander does not hop valleys; then the level, the
+carve and the drawn ribbon all follow the terrain's valley. Lowering the
+level alone would sink the river under the hillside where it is drawn.
+The carve (`channelsNear` in the kernel) and the field must move together
+or the carve cuts a trench up the slope and the water sits in the floor
+beside it.
+
 ## Globe navigation: retain the place, not a disposable spin
 
 The seat reported that spinning the planet then zooming in returned to the
