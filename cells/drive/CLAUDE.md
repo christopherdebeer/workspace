@@ -5135,6 +5135,71 @@ to a thousandth of a degree (two millionths in the cosine), so the camera is
 checked at what the probes can say and the scale's own numbers against each
 other exactly.
 
+## The chart's ink ladder: the base map recedes as the frame widens, the plan does not
+
+Asked from the seat with the same five frames: the roads and motorways are
+far too bold at the wide zooms, and the approach should be principled — what
+draws at which zoom, at what weight, and how it sits with the pins and the
+plan. The ribbons had ONE rule for weight ("a chart line is a pixel wide, not
+a hundred metres wide" — see the note at `ovWU`), written against the
+opposite complaint, and it was right as far as it went: a line's weight is a
+statement about importance and importance does not change when you pinch.
+What the frames show is where that stops: the same two and a half pixels of
+saturated gold that annotate a district out-ink a continent, because at the
+wide rungs the frame is about the landform and the player's plan and a road
+network at the district's weight is the loudest thing on it.
+
+**The principle.** Weight is RELATIVE to the frame. What stays constant down
+the ladder is the hierarchy — motorway 1.3 × primary 1.0 × the rest 0.72 —
+not the absolute weight; the base width recedes and the ink mutes as the
+rungs coarsen; and the things that are the player's — the route line, the
+mission's via, the pins, the truck's marker — are drawn on the HUD and take
+none of it. Labels keep their own rank gate (`maxRank` by `viewRadius`).
+
+**The ladder** (`OV_PX_BY_Z`, `OV_INK_BY_Z`; the class set per rung is the
+cell's and the bake's, unchanged):
+
+| rung | classes | base width (art px) | ink |
+|---|---|---|---|
+| z13 · z12 · z11 (street, district) | everything the tile carries | 2.0 | 1.0 |
+| z10 | motorway/trunk/primary, coast, rivers, places | 1.7 | 0.9 |
+| z9 | NE scalerank ≤ 8 | 1.4 | 0.8 |
+| z8 | NE scalerank ≤ 6 | 1.2 | 0.7 |
+| z7 | NE scalerank ≤ 4 (motorway/trunk) | 1.0 | 0.6 |
+| z6 · z5 | NE scalerank ≤ 3 · ≤ 2, capitals | 1.0 | 0.5 |
+
+Every class is floored at one pixel (the vertex shader pushes each side by
+`max(hw × base, 0.5)` pixels of ground) — a sub-pixel ribbon is the dotted
+ghost the one-rule design replaced. The ink is an alpha the composite dithers
+toward the ground; the route line and the pins are HUD ink and keep theirs.
+
+**Measured** (`devtools/chart-ink.mjs`, the Afsluitdijk, control against fix,
+each rung's ring home). The instrument is a hide-diff: each rung photographed
+with the overview and with `__hide('ov')`, so the pixels that differ ARE the
+ribbons — a colour test cannot see muted ink, which is the point. Footprint
+is the share of the terrain pane the ribbons change; contrast the luma they
+add:
+
+| rung | control | ladder |
+|---|---|---|
+| Z13.8 street (level 13) | 15.1% / +35 | 15.7% / +31 — unchanged by design, within streaming noise |
+| Z10.5 district (level 10) | 13.1% / +24 | 12.1% / +19 |
+| **Z7.8 country (level 7)** | **12.4% / +33** | **4.1% / +12** |
+| Z4.5 (past the hand-over at 53N) | 1.3% / −13 | identical: no overview is drawn there in either build |
+
+**Two things the measurement found that the ladder does not fix.** Past the
+hand-over the overview leaves with the shell and the globe draws no roads at
+all — the standing note about `NE_MIN_Z` — so between the last rung and the
+limb the chart is landform and labels; and at 53N that hand-over comes
+sooner than the seat's own z5 frame (smaller tiles, the ring narrower than
+the frame sooner), which is why a z19300 rung here photographs the globe.
+And OSM's dual carriageways are two `motorway` ways twenty metres apart, so
+at z13–z11 a motorway is two ribbons where a map would draw one; the cell's
+trimmer is the place to collapse them, and it is not done here.
+
+The values are a first setting, judged on these frames; the seat's report
+against them is the verification.
+
 ## The far layers are on the sphere, and the paraboloid is gone
 
 Asked from the seat: could the distinction between sphere and plane be
