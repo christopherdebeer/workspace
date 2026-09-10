@@ -22193,10 +22193,16 @@ const globePin = new THREE.Mesh(
 globePin.name = 'globe-pin';
 globePin.renderOrder = -4;       // after the planet, still under the world
 globeMesh.visible = false;
-// THE SINK IS THE MESH'S, NOT THE FRAME'S. The frame's centre is exactly one
+// THE SINK IS THE MESH'S, NOT THE FRAME'S — and it is set in stepGlobe, along
+// the FOCUS'S OWN RADIAL, every frame. The frame's centre is exactly one
 // radius under the view so the shell's vertices land at the flat frame's
-// heights; the backdrop alone drops by GLOBE_SINK beneath it.
-globeMesh.position.y = -GLOBE_SINK;
+// heights; the backdrop alone drops by GLOBE_SINK beneath it. Written here
+// once as `position.y = -GLOBE_SINK` it was wrong in a way that only the
+// southern hemisphere could show: the mesh's position is in the PLANET'S
+// frame, whose y is the pole axis, so that sank the globe toward the south
+// pole — 584m down at Romoos, and 400m UP at Letsemeng, where every one of
+// the lattice's vertices then stood through the Karoo shell as a small
+// diamond every 2.25 degrees. Measured on the day frame at zoom 11,000.
 planetGroup.add(globeMesh);
 planetGroup.add(globePin);
 let globeAsked = false, globeFailed = false;
@@ -22292,6 +22298,10 @@ function stepGlobe(): void {
   // carries its own sink beneath it (GLOBE_SINK).
   planetGroup.position.set(vx, -GLOBE_R, vz);
   globeOrientation(clamp(gLat, -89.9, 89.9), gLon, planetGroup.quaternion);
+  // The backdrop's sink, along the radial under the view: minus the unit
+  // vector AT THE FOCUS, in the planet's frame, times GLOBE_SINK. Not
+  // `position.y` — see the note at the mesh.
+  latLonToUnit(gLat, gLon, globeMesh.position).multiplyScalar(-GLOBE_SINK);
   const on = camMode === 'top' && chartDist() > 150000 && !FIXTURE;
   if (on) globeTexture();
   globeMesh.visible = on && globeU.uBase.value !== null;

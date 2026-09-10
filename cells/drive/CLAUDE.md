@@ -5128,7 +5128,14 @@ mesh's position is the centre in a JS double, and three composes matrixWorld
 and modelViewMatrix in doubles before anything is uploaded, so nothing at a
 planet's magnitude ever meets a Float32. The globe MESH keeps its own
 visibility rule and carries its own sink beneath the frame, so the shell still
-wins where both exist.
+wins where both exist — **along the focus's own radial, set every frame.** The
+first cut wrote it as `position.y = -GLOBE_SINK` on the mesh, and the mesh's
+position is in the PLANET'S frame, whose y is the pole axis: that sank the
+globe toward the south pole, 584m down at Romoos and 400m UP at Letsemeng,
+where every lattice vertex of the sphere then stood through the Karoo shell
+as a small diamond every 2.25 degrees. A sink that is right in one hemisphere
+and wrong in the other is exactly the kind of thing the 47N frame could never
+have caught; the Letsemeng day frame at zoom 11,000 did.
 
 **Measured** (`__far().sphere`, 25 z7 tiles at Letsemeng, 4,300 sampled
 vertices): every vertex within **6mm** of R + height over the datum, the
