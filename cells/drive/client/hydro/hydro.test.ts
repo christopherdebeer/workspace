@@ -61,7 +61,9 @@ export function runHydroSelfTest(): void {
     'OSM bank tags enter the canonical bank-material contract');
   assert(HYDRO_FRAGMENT_SHADER.includes('shallowRapid')
     && HYDRO_FRAGMENT_SHADER.includes('rapidChop')
-    && HYDRO_FRAGMENT_SHADER.includes('rapidTongue'),
+    && HYDRO_FRAGMENT_SHADER.includes('rapidTongue')
+    && HYDRO_FRAGMENT_SHADER.includes('tongueEnergy = max(energyGate, shallowRapid')
+    && HYDRO_FRAGMENT_SHADER.includes('tongueReach = mix(0.38, 1.0, rapidReach)'),
   'shallow high-energy reaches receive coherent flow-aligned rapid tongues');
   assert(HYDRO_FRAGMENT_SHADER.includes('riverEddyField')
     && HYDRO_FRAGMENT_SHADER.includes('riverEddyTone'),
@@ -75,8 +77,10 @@ export function runHydroSelfTest(): void {
     && HYDRO_FRAGMENT_SHADER.includes('waterBlend = mix(1.0, waterBlend'),
   'inland bank cohesion is a controllable blend inside the single water body');
   assert(HYDRO_FRAGMENT_SHADER.includes('vec3 edgeGround = mix(terrainC')
-    && HYDRO_FRAGMENT_SHADER.includes('float riverFadeM = clamp(1.65'),
-  'river edges reproduce terrain at the contour before widening into shallows');
+    && HYDRO_FRAGMENT_SHADER.includes('float riverFadeM = clamp(1.65')
+    && HYDRO_FRAGMENT_SHADER.includes('min(bankMetres, geometryField.g)')
+    && HYDRO_FRAGMENT_SHADER.includes('coverageInterior = smoothstep(bodyCut'),
+  'river edges use the rendered coverage contour before widening into shallows');
   assert(!HYDRO_FRAGMENT_SHADER.includes('edgeDither'),
     'bank feather does not implement local dithering');
   assert(HYDRO_FRAGMENT_SHADER.includes(

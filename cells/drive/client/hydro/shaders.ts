@@ -542,6 +542,7 @@ void main() {
   // Keep the texture sample after discard so rejected surf fragments pay
   // nothing for it.
   vec3 terrainC = uTerrainColour;
+  float coverageInterior = 1.0;
 #ifdef HYDRO_SURF
   if (!coastalKind || abs(geometryField.g) > 96.0) discard;
   float coverageCut = 0.5;
@@ -574,6 +575,12 @@ void main() {
   // metre of that shared line at the production field tier.
   float bodyCut = coastalKind ? 0.5 : 0.5 + (bankPatch(vAbsoluteXZ) - 0.5) * 0.08;
   if (geometryField.r < bodyCut) discard;
+  // Coverage owns the literal fragment boundary. Signed distance and river N
+  // are smooth physical coordinates, but their zeroes can sit between
+  // different field samples after antialiasing. This ramp guarantees that
+  // the first visible fragment at the cut carries ground, then becomes
+  // shallow water continuously over the interior coverage shoulder.
+  coverageInterior = smoothstep(bodyCut, min(0.98, bodyCut + 0.22), geometryField.r);
   // THE GROUND'S OWN COLOUR, HERE. uTerrainColour is the ground under the
   // truck; the sward's colour field is the palette at THIS fragment's XZ
   // wherever it reaches (a 768 m square around the truck), and the frame
@@ -813,15 +820,23 @@ void main() {
   if (vFlowing > 0.5 && flowingKind) {
     // Bank width follows metres and depth, not 30% of every channel.
     float bankMetres = max(0.0, (1.0 - abs(riverField.g)) * riverField.a);
-    float bankSlope = geometryField.a / max(0.35, bankMetres);
+    // Coverage distance owns the rendered contour. River-space N owns the
+    // channel section, but bends and rasterised area banks can place N=±1 a
+    // few metres away from the actual coverage cut. Shading from N alone let
+    // bright water run all the way to a differently shaped terrain edge.
+    // Taking the nearer of both coordinates guarantees zero wetness on the
+    // exact contour while retaining the smooth vector-space shelf inward.
+    float shoreMetres = max(0.0, min(bankMetres, geometryField.g));
+    float bankSlope = geometryField.a / max(0.35, shoreMetres);
     // A sub-half-metre fade vanished into one display pixel from the
     // production camera and left a hard cut-out. Keep a real shallow shelf
     // on even a steep bank, widening naturally where the channel is gentle.
     // This is a continuous material transition inside the resolved body, not
     // alpha stipple or local post-processing.
     float riverFadeM = clamp(1.65 / max(0.08, bankSlope), 2.4, 8.0);
-    float channelWet = smoothstep(0.0, riverFadeM, bankMetres);
-    shoreWetness = clamp(channelWet * mix(0.08, 1.0, depthWet), 0.0, 1.0);
+    float channelWet = smoothstep(0.0, riverFadeM, shoreMetres);
+    shoreWetness = clamp(channelWet * mix(0.08, 1.0, depthWet)
+      * coverageInterior, 0.0, 1.0);
   }
 #endif
 
@@ -1265,8 +1280,13 @@ void main() {
     // A low-opacity connected body underneath the broken crest fragments
     // makes the rapid read as one tongue of aerated water rather than a bag
     // of white confetti. It retains water colour and follows the same lane.
-    float tongueBody = vFlowing * energyGate * rapidReach * rapidTongue
-      * (0.075 + foamStreak * 0.060)
+    float tongueEnergy = max(energyGate, shallowRapid * 0.90);
+    // The stationary reach mask may suppress broken crests completely, but a
+    // physically shallow high-energy reach must still read as working water.
+    // Keep a restrained aeration floor for the connected tongue only.
+    float tongueReach = mix(0.38, 1.0, rapidReach);
+    float tongueBody = vFlowing * tongueEnergy * tongueReach * rapidTongue
+      * (0.10 + foamStreak * 0.075)
       * clamp(uTurbulenceStrength, 0.0, 3.0);
     float riverFoam = max(brokenFoam, tongueBody);
     // A second, shorter chop breaks shallow high-energy reaches into flecks.
