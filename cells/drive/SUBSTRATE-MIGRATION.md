@@ -173,12 +173,13 @@ visible source mesh; browser cutover requires publication parity, every road
 packet direct-authored, zero retained source meshes, source visibility and
 failures.
 
-Rapid-bed facets are also the first legacy geometry builder moved behind the
-substrate contract. `client/substrate/rapid-detail.ts` deterministically emits
-the exact position/colour arrays and matching collider witnesses from one rock
-record without importing the renderer. The legacy water solver still chooses
-rock placement and reach foam, so placement authority remains part of the
-generation migration rather than being claimed as complete.
+Rapid-bed detail is also the first complete local detail builder moved behind
+the substrate contract. `client/substrate/rapid-detail.ts` deterministically
+resolves rock placement, side-weighted wakes and waterfall aeration, then emits
+the exact position/colour arrays and matching collider witnesses without
+importing the renderer. The legacy water solver still supplies the solved reach
+stations, invert, speed and mitred offsets, but it no longer independently
+decides where rapid rocks or their foam exist.
 
 ### 4. Cut rendering over as one unit — terrain, drive and hydro guarded
 
@@ -288,11 +289,11 @@ the failed comparison can be reproduced.
 - Terrain, road, structure and most hydro-detail arrays still originate in
   separate legacy builders, although all publish immutable packet data at their
   authoring boundary and retain no hidden mesh wrappers after commit. Rapid-bed
-  facet/colour/collider generation has moved into the pure substrate package;
-  its placement witness still comes from the legacy water solver. The remaining
-  generation migration is to move the other array builders and placement
-  authorities into the substrate tile build, then retire the legacy builder
-  entry points and road drape registry.
+  placement, foam, facet/colour and collider generation has moved into the pure
+  substrate package. The remaining generation migration is to move the other
+  array builders and reach/road/terrain solve authorities into the substrate
+  tile build, then retire the legacy builder entry points and road drape
+  registry.
 - Contact/evidence cutover remains query-gated; representative water drives,
   wheel-level telemetry and parity thresholds are not yet complete enough to
   make it the default.

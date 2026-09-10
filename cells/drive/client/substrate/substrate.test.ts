@@ -1,6 +1,7 @@
 import {
   buildProductionHydroFixture,
   buildProductionSubstrateTile,
+  buildRapidDetailField,
   buildRapidDetailMesh,
   buildSubstrateTile,
   makeCrossingFixture,
@@ -115,6 +116,35 @@ function assertCrossing(kind: CrossingKind): ResolvedSubstrateTile {
  * lab are inspecting one implementation rather than parallel demonstrations.
  */
 export function runSubstrateSelfTest(): void {
+  const rapidStations = Array.from(
+    { length: 20 },
+    (_, index) => [index * 10, 0] as const,
+  );
+  const rapidFieldInput = {
+    stations: rapidStations,
+    offsets: rapidStations.map(() => [0, 4] as const),
+    invertY: rapidStations.map((_, index) =>
+      20 - index * .1 - (index >= 10 ? 4 : 0)),
+    speedMps: rapidStations.map(() => 2.8),
+    widthM: 8,
+    downhillInArrayOrder: true,
+  };
+  const rapidFieldA = buildRapidDetailField(rapidFieldInput);
+  const rapidFieldB = buildRapidDetailField(rapidFieldInput);
+  assert(JSON.stringify(rapidFieldA.rocks) === JSON.stringify(rapidFieldB.rocks),
+    'rapid placement witnesses must be deterministic');
+  sameArray(rapidFieldA.foamPositive, rapidFieldB.foamPositive,
+    'positive-bank rapid foam must be deterministic');
+  sameArray(rapidFieldA.foamNegative, rapidFieldB.foamNegative,
+    'negative-bank rapid foam must be deterministic');
+  assert(rapidFieldA.rocks.length > 0,
+    'high-energy reach must resolve solid rapid witnesses');
+  assert(
+    [...rapidFieldA.foamPositive, ...rapidFieldA.foamNegative]
+      .some((value) => value > 1),
+    'rock wakes and waterfall aeration must enter the shared foam field',
+  );
+
   const rapidRocks = [{
     station: 3,
     sequence: 1,

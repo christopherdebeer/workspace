@@ -114,9 +114,8 @@ import {
 import { SubstrateShadowMonitor } from './substrate/shadow';
 import type { SubstrateContact, SupportContact } from './substrate/types';
 import {
+  buildRapidDetailField,
   buildRapidDetailMesh,
-  rapidDetailRandom,
-  type RapidDetailRock,
 } from './substrate/rapid-detail';
 import {
   VehicleWaterEvidence,
@@ -19514,40 +19513,15 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
   // the surface shader's rock foam reads a per-vertex wake the boulders write,
   // so their placement has to be settled before a single ribbon vertex goes up.
   // Same hashes, same stations, same stones as before the reorder.
-  const rocks: RapidDetailRock[] = [];
-  // A stable hash of a position: two rebuilds of the same river agree.
-  const rnd = rapidDetailRandom;
-  for (let i = 1; i < n - 1; i++) {
-    const sp = speed[i];
-    if (sp < 1.35) continue;                       // below this the water is not breaking
-    const [x0, z0] = dense[i];
-    // More rock in faster water, and never more than the channel can hold.
-    const want = Math.min(3, Math.floor((sp - 1.1) * 1.6));
-    const [ox, oz] = off[i];
-    const ol = Math.hypot(ox, oz) || 1;
-    for (let k = 0; k < want; k++) {
-      if (rnd(x0, z0, k) > 0.72) continue;         // gappy, not a regiment
-      // Across the channel, kept off the very bank where it would read as
-      // scree rather than as something the river has to go around.
-      const across = (rnd(x0, z0, k + 11) * 1.5 - 0.75);
-      const radiusM = 0.35 + rnd(x0, z0, k + 23) * 0.85;
-      rocks.push({
-        station: i,
-        sequence: k,
-        stationX: x0,
-        stationZ: z0,
-        across,
-        x: x0 + (ox / ol) * across * (width / 2),
-        z: z0 + (oz / ol) * across * (width / 2),
-        radiusM,
-        // How far it stands proud: enough to break the surface, never a monolith.
-        topY: inv[i] + 0.025 + radiusM * (0.35 + rnd(x0, z0, k + 31) * 0.7),
-        baseY: inv[i] - 0.5,
-        spin: rnd(x0, z0, k + 41) * Math.PI,
-        tone: 0.72 + rnd(x0, z0, k + 53) * 0.3,
-      });
-    }
-  }
+  const rapidDetail = buildRapidDetailField({
+    stations: dense,
+    offsets: off,
+    invertY: inv,
+    speedMps: speed,
+    widthM: width,
+    downhillInArrayOrder: down,
+  });
+  const rocks = rapidDetail.rocks;
   /**
    * THE WAKE EACH ROCK WRITES. Water piles on the upstream face and tears
    * white behind, so every boulder charges the stations downstream of it —
@@ -19560,32 +19534,8 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
    * Downstream is the FLOW order, not the array order — `dense` runs whichever
    * way OSM drew it, and `down` is the ground's answer.
    */
-  const foamP = new Array<number>(n).fill(0), foamM = new Array<number>(n).fill(0);
-  const dstep = down ? 1 : -1;
-  for (const rk of rocks) {
-    const s = 0.55 + rk.radiusM * 0.8;    // a big rock tears more water
-    const wP = 0.5 + rk.across / 1.5;     // its side of the channel: 0..1 toward +off
-    const wM = 1 - wP;
-    for (let d = -1; d <= 4; d++) {
-      const j = rk.station + d * dstep;
-      if (j < 0 || j >= n) continue;
-      const w = s * (d < 0 ? 0.4 : Math.exp(-d / 2.2));
-      foamP[j] += w * wP;
-      foamM[j] += w * wM;
-    }
-  }
-  // WATERFALLS. Where the invert steps hard between stations the ribbon
-  // already draws the drop — it connects the stations whatever their heights —
-  // but it drew it as calm glass. A genuine step froths the whole channel at
-  // the lip and the plunge, through the same wake attribute the rocks use.
-  for (let i = 1; i < n; i++) {
-    const j = idx(i), pj = idx(i - 1);
-    const dd = Math.hypot(dense[j][0] - dense[pj][0], dense[j][1] - dense[pj][1]) || 1;
-    if ((inv[pj] - inv[j]) / dd > 0.28) {
-      foamP[j] += 1.3; foamM[j] += 1.3;      // the plunge pool
-      foamP[pj] += 0.9; foamM[pj] += 0.9;    // the lip
-    }
-  }
+  const foamP = rapidDetail.foamPositive;
+  const foamM = rapidDetail.foamNegative;
   const verts: number[] = [], uvs: number[] = [], flow: number[] = [], foamA: number[] = [], wide: number[] = [];
   for (let i = 0; i < n - 1; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];

@@ -34,6 +34,23 @@ export interface RapidDetailMesh {
   colliders: readonly RapidDetailCollider[];
 }
 
+export interface RapidDetailReachInput {
+  stations: readonly (readonly [x: number, z: number])[];
+  /** Mitred channel half-width offsets, one per station. */
+  offsets: readonly (readonly [x: number, z: number])[];
+  invertY: readonly number[];
+  speedMps: readonly number[];
+  widthM: number;
+  /** True when station indices already run from source toward mouth. */
+  downhillInArrayOrder: boolean;
+}
+
+export interface RapidDetailField {
+  rocks: readonly RapidDetailRock[];
+  foamPositive: Float32Array<ArrayBuffer>;
+  foamNegative: Float32Array<ArrayBuffer>;
+}
+
 const clamp = (value: number, lo: number, hi: number): number =>
   Math.max(lo, Math.min(hi, value));
 
@@ -41,6 +58,97 @@ const clamp = (value: number, lo: number, hi: number): number =>
 export function rapidDetailRandom(x: number, z: number, sequence: number): number {
   const value = Math.sin(x * 12.9898 + z * 78.233 + sequence * 37.719) * 43758.5453;
   return value - Math.floor(value);
+}
+
+/**
+ * Resolve the solid witnesses and aeration field for one flowing reach.
+ *
+ * This is deliberately upstream of rendering: the same rock record drives
+ * surface foam, authored facets and vehicle collision. Rebuilding a tile from
+ * identical stations therefore cannot move a boulder or leave whitewater where
+ * no solid witness exists.
+ */
+export function buildRapidDetailField(
+  input: RapidDetailReachInput,
+): RapidDetailField {
+  const n = input.stations.length;
+  if (input.offsets.length !== n
+    || input.invertY.length !== n
+    || input.speedMps.length !== n) {
+    throw new Error('rapid detail reach arrays must have matching lengths');
+  }
+  const rocks: RapidDetailRock[] = [];
+  for (let station = 1; station < n - 1; station++) {
+    const speed = input.speedMps[station];
+    if (speed < 1.35) continue;
+    const [stationX, stationZ] = input.stations[station];
+    const wanted = Math.min(3, Math.floor((speed - 1.1) * 1.6));
+    const [offsetX, offsetZ] = input.offsets[station];
+    const offsetLength = Math.hypot(offsetX, offsetZ) || 1;
+    for (let sequence = 0; sequence < wanted; sequence++) {
+      if (rapidDetailRandom(stationX, stationZ, sequence) > 0.72) continue;
+      const across = rapidDetailRandom(stationX, stationZ, sequence + 11) * 1.5 - 0.75;
+      const radiusM = 0.35
+        + rapidDetailRandom(stationX, stationZ, sequence + 23) * 0.85;
+      rocks.push({
+        station,
+        sequence,
+        stationX,
+        stationZ,
+        x: stationX + (offsetX / offsetLength) * across * (input.widthM / 2),
+        z: stationZ + (offsetZ / offsetLength) * across * (input.widthM / 2),
+        radiusM,
+        topY: input.invertY[station] + 0.025
+          + radiusM
+            * (0.35 + rapidDetailRandom(
+              stationX,
+              stationZ,
+              sequence + 31,
+            ) * 0.7),
+        baseY: input.invertY[station] - 0.5,
+        spin: rapidDetailRandom(stationX, stationZ, sequence + 41) * Math.PI,
+        tone: 0.72 + rapidDetailRandom(stationX, stationZ, sequence + 53) * 0.3,
+        across,
+      });
+    }
+  }
+
+  const foamPositive = new Float32Array(n);
+  const foamNegative = new Float32Array(n);
+  const downstreamStep = input.downhillInArrayOrder ? 1 : -1;
+  for (const rock of rocks) {
+    const strength = 0.55 + rock.radiusM * 0.8;
+    const positiveWeight = 0.5 + rock.across / 1.5;
+    const negativeWeight = 1 - positiveWeight;
+    for (let distance = -1; distance <= 4; distance++) {
+      const station = rock.station + distance * downstreamStep;
+      if (station < 0 || station >= n) continue;
+      const wake = strength
+        * (distance < 0 ? 0.4 : Math.exp(-distance / 2.2));
+      foamPositive[station] += wake * positiveWeight;
+      foamNegative[station] += wake * negativeWeight;
+    }
+  }
+
+  const indexInFlowOrder = (index: number): number =>
+    input.downhillInArrayOrder ? index : n - 1 - index;
+  for (let index = 1; index < n; index++) {
+    const station = indexInFlowOrder(index);
+    const previous = indexInFlowOrder(index - 1);
+    const distance = Math.hypot(
+      input.stations[station][0] - input.stations[previous][0],
+      input.stations[station][1] - input.stations[previous][1],
+    ) || 1;
+    if ((input.invertY[previous] - input.invertY[station]) / distance <= 0.28) {
+      continue;
+    }
+    foamPositive[station] += 1.3;
+    foamNegative[station] += 1.3;
+    foamPositive[previous] += 0.9;
+    foamNegative[previous] += 0.9;
+  }
+
+  return { rocks, foamPositive, foamNegative };
 }
 
 const hue2rgb = (p: number, q: number, t0: number): number => {
