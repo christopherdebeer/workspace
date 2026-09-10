@@ -5135,7 +5135,9 @@ globe toward the south pole, 584m down at Romoos and 400m UP at Letsemeng,
 where every lattice vertex of the sphere then stood through the Karoo shell
 as a small diamond every 2.25 degrees. A sink that is right in one hemisphere
 and wrong in the other is exactly the kind of thing the 47N frame could never
-have caught; the Letsemeng day frame at zoom 11,000 did.
+have caught; the Letsemeng day frame at zoom 11,000 did, and the same frame
+on the build that sinks along the radial has none — the shell corner to
+corner over the Karoo with nothing standing through it.
 
 **Measured** (`__far().sphere`, 25 z7 tiles at Letsemeng, 4,300 sampled
 vertices): every vertex within **6mm** of R + height over the datum, the
