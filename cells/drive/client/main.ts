@@ -30032,6 +30032,23 @@ function tapeKeep(): string {
 };
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number, margin = 0.8) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
+/** The three heights of a point, side by side — the DEM the hydro field is
+ *  solved on, the DRAWN mesh (carves, corridors and all), and what the truck
+ *  stands on — because "the river is raised from the terrain" is a question
+ *  about which terrain. Absolute metres, with the water's resting level and
+ *  depth there when the field is wet. */
+(window as unknown as { __ground?: object }).__ground = (x?: number, z?: number): object => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const mesh = meshSurfaceAt(px, pz);
+  const wet = hydroSys?.sampleRestingSurface(px, pz);
+  return {
+    at: [+px.toFixed(1), +pz.toFixed(1)],
+    dem: hasHeight(px, pz) ? +(sampleHeight(px, pz) + baseElev).toFixed(2) : null,
+    mesh: mesh === null ? null : +(mesh + baseElev).toFixed(2),
+    ground: +(groundAt(px, pz) + baseElev).toFixed(2),
+    water: wet ? { kind: wet.kind, resting: +wet.restingLevelM.toFixed(2), depth: +wet.depthM.toFixed(2), coverage: +wet.coverage.toFixed(2), shore: +wet.shoreDistanceM.toFixed(1) } : null,
+  };
+};
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
  *  (negative on the carriageway), and the road's own surface height there. */
 /** Does the road that owns this deck END at the point, or pass through it?
