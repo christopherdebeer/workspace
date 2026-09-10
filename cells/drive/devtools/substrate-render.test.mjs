@@ -141,6 +141,8 @@ ok('river-bed rapid meshes and colliders commit as one detail packet',
     && state.substrate?.render?.legacyHydroDetailCandidateMeshes === 0
     && state.substrate?.render?.hydroDetailPacketFailures === 0
     && state.substrate?.render?.hydroDetailColliderCandidates > 0
+    && state.substrate?.render?.hydroDetailTileColliders
+      === state.substrate?.render?.hydroDetailColliderCandidates
     && state.substrate?.render?.visibleHydroDetails
       === state.substrate?.render?.hydroDetailCandidates
     && state.substrate?.render?.activeHydroDetailColliders

@@ -105,6 +105,13 @@ export interface ProductionRenderMesh {
 }
 export type ProductionDriveRenderMesh = ProductionRenderMesh;
 
+export interface ProductionHydroDetailCollider {
+  kind: 'rapid-rock';
+  x: number;
+  z: number;
+  radiusM: number;
+}
+
 export interface ProductionGroundMesh {
   /** Position xyz, local to originX/originZ; y is local to verticalOffsetM. */
   positions: Float32Array<ArrayBuffer>;
@@ -147,6 +154,7 @@ export interface ProductionSubstrateTileInput {
   driveRenderMeshes?: readonly ProductionDriveRenderMesh[];
   structureRenderMeshes?: readonly ProductionRenderMesh[];
   hydroDetailRenderMeshes?: readonly ProductionRenderMesh[];
+  hydroDetailColliders?: readonly ProductionHydroDetailCollider[];
   hydroField?: HydroTileField;
   waterMotionSegments?: readonly ProductionWaterMotionSegment[];
   waterCoverageCutAt?: (x: number, z: number, kind: HydroKind) => number;
@@ -181,6 +189,7 @@ export interface ProductionSubstrateTile {
   driveRenderMeshes: readonly ProductionDriveRenderMesh[];
   structureRenderMeshes: readonly ProductionRenderMesh[];
   hydroDetailRenderMeshes: readonly ProductionRenderMesh[];
+  hydroDetailColliders: readonly ProductionHydroDetailCollider[];
   hydroField?: HydroTileField;
   waterMotionSegments: readonly ProductionWaterMotionSegment[];
   waterCoverageCutAt?: (x: number, z: number, kind: HydroKind) => number;
@@ -421,6 +430,9 @@ export function buildProductionSubstrateTile(
     driveRenderMeshes: [...(input.driveRenderMeshes ?? [])],
     structureRenderMeshes: [...(input.structureRenderMeshes ?? [])],
     hydroDetailRenderMeshes: [...(input.hydroDetailRenderMeshes ?? [])],
+    hydroDetailColliders: (input.hydroDetailColliders ?? []).map((collider) => ({
+      ...collider,
+    })),
     ...(input.hydroField ? { hydroField: input.hydroField } : {}),
     waterMotionSegments: [...(input.waterMotionSegments ?? [])],
     ...(input.waterCoverageCutAt ? { waterCoverageCutAt: input.waterCoverageCutAt } : {}),
@@ -827,6 +839,7 @@ export class ProductionSubstrateStore {
       driveRenderMeshes: tile.driveRenderMeshes.length,
       structureRenderMeshes: tile.structureRenderMeshes.length,
       hydroDetailRenderMeshes: tile.hydroDetailRenderMeshes.length,
+      hydroDetailColliders: tile.hydroDetailColliders.length,
       waterMotionSegments: tile.waterMotionSegments.length,
       rasterGroundY,
       contactGroundY: contact?.ground.yM ?? null,

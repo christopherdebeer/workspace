@@ -106,6 +106,7 @@ import {
   type ProductionDriveSample,
   type ProductionDriveSegment,
   type ProductionGroundMesh,
+  type ProductionHydroDetailCollider,
   type ProductionRenderAttributeArray,
   type ProductionRenderMesh,
   type ProductionSubstrateTile,
@@ -6139,6 +6140,9 @@ const substrateTerrainCommits = new Map<string, number>();
 interface SubstrateRenderBinding {
   tileRevision: number;
   meshes: Set<THREE.Mesh>;
+}
+interface SubstrateHydroDetailRenderBinding extends SubstrateRenderBinding {
+  rocks: Set<RapidRock>;
 }
 const substrateTerrainRenderMeshes = new Map<string, SubstrateRenderBinding>();
 const productionTerrainRenderPackets = new Map<string, {
@@ -15058,7 +15062,8 @@ interface ProductionHydroDetailRenderCandidate {
 const productionHydroDetailRenderCandidates =
   new Map<string, ProductionHydroDetailRenderCandidate>();
 const substrateHydroDetailCommits = new Map<string, number>();
-const substrateHydroDetailRenderMeshes = new Map<string, SubstrateRenderBinding>();
+const substrateHydroDetailRenderMeshes =
+  new Map<string, SubstrateHydroDetailRenderBinding>();
 let productionHydroDetailPacketFailures = 0;
 let hydroDetailBatchMeshes: THREE.Mesh[] | null = null;
 let hydroDetailBatchPackets: ProductionRenderMesh[] | null = null;
@@ -18612,6 +18617,19 @@ function productionHydroDetailRenderMeshesFor(
   // packet corruption. Preserve the authored bed/rock arrays for redrape.
   return [];
 }
+function productionHydroDetailCollidersFor(
+  key: string,
+  terrainSourceRevision: number,
+): readonly ProductionHydroDetailCollider[] {
+  const candidate = productionHydroDetailRenderCandidates.get(key);
+  if (!candidate || candidate.packetTerrainRevision !== terrainSourceRevision) return [];
+  return [...candidate.rocks].map((rock) => ({
+    kind: 'rapid-rock',
+    x: rock.x,
+    z: rock.z,
+    radiusM: rock.s,
+  }));
+}
 function productionDriveSnapshotFor(
   t: HeightTile,
   key: string,
@@ -18878,9 +18896,19 @@ function commitStructureRenderFromSubstrate(tile: ProductionSubstrateTile): bool
 function canCommitHydroDetailRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
   if (!SUBSTRATE_RENDER_ON || productionSubstrate.tile(tile.key) !== tile) return false;
   const candidate = productionHydroDetailRenderCandidates.get(tile.key);
-  if (!candidate) return tile.hydroDetailRenderMeshes.length === 0;
+  if (!candidate) {
+    return tile.hydroDetailRenderMeshes.length === 0
+      && tile.hydroDetailColliders.length === 0;
+  }
   return candidate.generation === tile.sourceRevisions.hydroDetails
     && tile.hydroDetailRenderMeshes.length === candidate.meshCount
+    && tile.hydroDetailColliders.length === candidate.rocks.size
+    && tile.hydroDetailColliders.every((collider) =>
+      collider.kind === 'rapid-rock'
+      && Number.isFinite(collider.x)
+      && Number.isFinite(collider.z)
+      && Number.isFinite(collider.radiusM)
+      && collider.radiusM > 0)
     && tile.hydroDetailRenderMeshes.every((packet) =>
       !!packet.attributes.position
       && packet.materialKeys.length > 0
@@ -18888,14 +18916,12 @@ function canCommitHydroDetailRenderFromSubstrate(tile: ProductionSubstrateTile):
 }
 function commitHydroDetailRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
   if (!canCommitHydroDetailRenderFromSubstrate(tile)) return false;
-  const candidate = productionHydroDetailRenderCandidates.get(tile.key);
-  if (!candidate) return true;
   const previous = substrateHydroDetailRenderMeshes.get(tile.key);
   if (previous?.tileRevision === tile.revision) {
     for (const mesh of previous.meshes) {
       if (mesh.parent !== worldGroup) worldGroup.add(mesh);
     }
-    for (const rock of candidate.rocks) activateRapidRock(rock);
+    for (const rock of previous.rocks) activateRapidRock(rock);
     substrateHydroDetailCommits.set(tile.key, tile.revision);
     return true;
   }
@@ -18905,6 +18931,7 @@ function commitHydroDetailRenderFromSubstrate(tile: ProductionSubstrateTile): bo
       mesh.removeFromParent();
       mesh.geometry.dispose();
     }
+    for (const rock of old.rocks) deactivateRapidRock(rock);
     substrateHydroDetailRenderMeshes.delete(tile.key);
   }
   const meshes = new Set<THREE.Mesh>();
@@ -18917,8 +18944,21 @@ function commitHydroDetailRenderFromSubstrate(tile: ProductionSubstrateTile): bo
     worldGroup.add(mesh);
     meshes.add(mesh);
   }
-  for (const rock of candidate.rocks) activateRapidRock(rock);
-  substrateHydroDetailRenderMeshes.set(tile.key, { tileRevision: tile.revision, meshes });
+  const rocks = new Set<RapidRock>();
+  for (const collider of tile.hydroDetailColliders) {
+    const rock: RapidRock = {
+      x: collider.x,
+      z: collider.z,
+      s: collider.radiusM,
+    };
+    activateRapidRock(rock);
+    rocks.add(rock);
+  }
+  substrateHydroDetailRenderMeshes.set(tile.key, {
+    tileRevision: tile.revision,
+    meshes,
+    rocks,
+  });
   substrateHydroDetailCommits.set(tile.key, tile.revision);
   return true;
 }
@@ -19002,7 +19042,6 @@ function invalidateProductionSubstrateTile(key: string): void {
     substrateStructureRenderMeshes.delete(key);
   }
   const hadStructureCommit = substrateStructureCommits.delete(key);
-  const hydroDetailCandidate = productionHydroDetailRenderCandidates.get(key);
   const hydroDetailBinding = substrateHydroDetailRenderMeshes.get(key);
   let hadHydroDetail = !!hydroDetailBinding;
   if (hydroDetailBinding) {
@@ -19010,14 +19049,12 @@ function invalidateProductionSubstrateTile(key: string): void {
       mesh.removeFromParent();
       mesh.geometry.dispose();
     }
-    substrateHydroDetailRenderMeshes.delete(key);
-  }
-  if (hydroDetailCandidate) {
-    for (const rock of hydroDetailCandidate.rocks) {
+    for (const rock of hydroDetailBinding.rocks) {
       if (!activeRapidRocks.has(rock)) continue;
       deactivateRapidRock(rock);
       hadHydroDetail = true;
     }
+    substrateHydroDetailRenderMeshes.delete(key);
   }
   const hadHydroDetailCommit = substrateHydroDetailCommits.delete(key);
   const hadHydro = !!hydroSys?.getTileBinding(key);
@@ -19167,6 +19204,7 @@ function substrateRenderSnapshot(): Record<string, number> {
   let retainedHydroDetailSourceMeshes = 0;
   let legacyHydroDetailCandidateMeshes = 0;
   let hydroDetailColliderCandidates = 0;
+  let hydroDetailTileColliders = 0;
   let visibleHydroDetails = 0;
   let uncommittedVisibleHydroDetails = 0;
   let activeHydroDetailColliders = 0;
@@ -19188,6 +19226,7 @@ function substrateRenderSnapshot(): Record<string, number> {
   });
   for (const [key, binding] of substrateHydroDetailRenderMeshes) {
     hydroDetailInstantiatedMeshes += binding.meshes.size;
+    hydroDetailTileColliders += binding.rocks.size;
     for (const mesh of binding.meshes) {
       if (mesh.parent !== worldGroup) continue;
       visibleHydroDetails++;
@@ -19196,9 +19235,7 @@ function substrateRenderSnapshot(): Record<string, number> {
         uncommittedVisibleHydroDetails++;
       }
     }
-  }
-  for (const [key, candidate] of productionHydroDetailRenderCandidates) {
-    for (const rock of candidate.rocks) {
+    for (const rock of binding.rocks) {
       if (!activeRapidRocks.has(rock)) continue;
       activeHydroDetailColliders++;
       if (!substrateHydroDetailCommits.has(key)) uncommittedHydroDetailColliders++;
@@ -19253,6 +19290,7 @@ function substrateRenderSnapshot(): Record<string, number> {
     legacyHydroDetailCandidateMeshes,
     hydroDetailPacketFailures: productionHydroDetailPacketFailures,
     hydroDetailColliderCandidates,
+    hydroDetailTileColliders,
     hydroDetailCommittedTiles: substrateHydroDetailCommits.size,
     visibleHydroDetails,
     uncommittedVisibleHydroDetails,
@@ -19302,6 +19340,10 @@ function buildProductionSubstrateShadow(
     driveRenderMeshes: drive.renderMeshes,
     structureRenderMeshes: structures,
     hydroDetailRenderMeshes: hydroDetails,
+    hydroDetailColliders: productionHydroDetailCollidersFor(
+      key,
+      terrainRevision.get(key) ?? 0,
+    ),
     hydroField: (() => {
       const field = hydroSys?.fieldAt(t.xs + t.w / 2, t.zs + t.h / 2);
       return field?.key === key ? field : undefined;
@@ -28069,6 +28111,9 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     structureBatchMeshes = null;
     structureBatchPackets = null;
     substrateHydroDetailCommits.clear();
+    for (const binding of substrateHydroDetailRenderMeshes.values()) {
+      for (const rock of binding.rocks) deactivateRapidRock(rock);
+    }
     substrateHydroDetailRenderMeshes.clear();
     productionHydroDetailPacketFailures = 0;
     for (const candidate of productionHydroDetailRenderCandidates.values()) {
@@ -28076,7 +28121,6 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
         mesh.removeFromParent();
         mesh.geometry.dispose();
       }
-      for (const rock of candidate.rocks) deactivateRapidRock(rock);
     }
     productionHydroDetailRenderCandidates.clear();
     // The per-tile material and its normal map. Both are capped, so neither was

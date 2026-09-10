@@ -40,6 +40,7 @@ export {
   type ProductionDriveSegment,
   type ProductionGroundMesh,
   type ProductionGroundSample,
+  type ProductionHydroDetailCollider,
   type ProductionRenderAttribute,
   type ProductionRenderAttributeArray,
   type ProductionRenderGroup,

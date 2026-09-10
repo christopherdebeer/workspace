@@ -179,7 +179,10 @@ resolves rock placement, side-weighted wakes and waterfall aeration, then emits
 the exact position/colour arrays and matching collider witnesses without
 importing the renderer. The legacy water solver still supplies the solved reach
 stations, invert, speed and mitred offsets, but it no longer independently
-decides where rapid rocks or their foam exist.
+decides where rapid rocks or their foam exist. Collider witnesses are copied
+into the immutable substrate tile beside the detail render packet; activation,
+revision replacement and invalidation now consume that tile payload rather than
+the mutable authoring candidate registry.
 
 ### 4. Cut rendering over as one unit — terrain, drive and hydro guarded
 
@@ -290,10 +293,10 @@ the failed comparison can be reproduced.
   separate legacy builders, although all publish immutable packet data at their
   authoring boundary and retain no hidden mesh wrappers after commit. Rapid-bed
   placement, foam, facet/colour and collider generation has moved into the pure
-  substrate package. The remaining generation migration is to move the other
-  array builders and reach/road/terrain solve authorities into the substrate
-  tile build, then retire the legacy builder entry points and road drape
-  registry.
+  substrate package, and its collider witnesses are versioned in the production
+  tile. The remaining generation migration is to move the other array builders
+  and reach/road/terrain solve authorities into the substrate tile build, then
+  retire the legacy builder entry points and road drape registry.
 - Contact/evidence cutover remains query-gated; representative water drives,
   wheel-level telemetry and parity thresholds are not yet complete enough to
   make it the default.

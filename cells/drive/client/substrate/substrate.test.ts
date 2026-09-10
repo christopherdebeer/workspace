@@ -621,6 +621,12 @@ export function runSubstrateSelfTest(): void {
       frustumCulled: true,
       userData: { riverbed: true },
     }],
+    hydroDetailColliders: [{
+      kind: 'rapid-rock',
+      x: 50,
+      z: 13,
+      radiusM: .8,
+    }],
     crossings: [narrowCrossingRecord],
     sampleGround: () => ({ yM: 0 }),
     sampleDrive: () => undefined,
@@ -646,6 +652,10 @@ export function runSubstrateSelfTest(): void {
   assert(narrowVectorTile.hydroDetailRenderMeshes.length === 1
     && narrowVectorTile.hydroDetailRenderMeshes[0].userData.riverbed === true,
   'production tile must retain exact hydro-detail render packets');
+  assert(narrowVectorTile.hydroDetailColliders.length === 1
+    && narrowVectorTile.hydroDetailColliders[0].kind === 'rapid-rock'
+    && narrowVectorTile.hydroDetailColliders[0].radiusM === .8,
+  'production tile must retain versioned hydro-detail collider witnesses');
   assert(narrowVectorContact.crossing === 'bridge',
     'exact crossing records must survive when the diagnostic raster misses the crossing');
   const narrowShoulderContact = sampleProductionSubstrateTile(narrowVectorTile, 50, 17);
