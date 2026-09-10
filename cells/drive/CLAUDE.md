@@ -2656,6 +2656,14 @@ below the terrain at every lag; grain matches it at 4 and clumps back to 0.175
 at 8, TPDF 0.104 and 0.197. More levels help bayer4 (0.144 at 28) at the cost
 of 534 tones against 204, which is a different look and not this fix.
 
+**Verified on the build that ships it**, same stand, blind boot, no page
+errors, `__dither()` reading `patWide: "ign", wide: 1, wideNow: true`: the
+shipped frame's period at bayer4's lag went **0.216 → 0.088** (lag 8: 0.301 →
+0.140), under the undithered terrain's own 0.137, with the tone count
+unchanged (230 → 238). The frames are the pair `farc-before-bayer4.png` and
+`farc-shipped.png` in `$DRIVE_WORK`; by eye the sea is an even grain and the
+coast, the Alps and the roads are exactly where they were.
+
 **Two things the run-length table above cannot see, which is why this was
 measured on the frame it is for and not read off the table.** That table was
 taken at a junction zoom, where the gradient is steep and every ordered
