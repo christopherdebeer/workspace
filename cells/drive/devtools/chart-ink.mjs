@@ -6,10 +6,13 @@
 //
 // Stands where the seat stood (Súdwest-Fryslân, on the Afsluitdijk) and
 // photographs the chart at four zooms that land on four rungs of the overview
-// ladder, each with its ring home. Per frame: the share of the terrain pane
-// that is ribbon gold, and the mean luma of that gold against the ground's —
-// the two numbers "too bold" is made of. Labels are gold too and are the same
-// in both runs, so the DIFFERENCE between runs is the ribbons'.
+// ladder, each with its ring home — twice: with the overview layer and with
+// it hidden (`__hide('ov')`), the scene otherwise the same. The pixels that
+// differ ARE the ribbons, so the two numbers "too bold" is made of fall out
+// without a colour test: the FOOTPRINT (the share of the terrain pane the
+// ribbons change) and the CONTRAST (how far, in luma, they move it). A gold
+// share is kept beside them for the eye, and it is the weaker instrument: it
+// cannot see muted ink, which is the point of the fix.
 import { openDrive, WORK } from './harness.mjs';
 import { readPng } from './png-lite.mjs';
 import { join } from 'node:path';
@@ -41,18 +44,32 @@ for (const z of ZOOMS) {
   }
   const shot = join(WORK, `ink-${REV ? 'ctl' : 'fix'}-${z}.png`);
   await page.screenshot({ path: shot, timeout: 240000 });
-  await page.evaluate(() => window.__draw(false));
-  // Art resolution, the terrain pane, gold against the rest.
-  const p = readPng(shot), AW = 148, S = p.w / AW;
-  let gold = 0, n = 0, gl = 0, groundL = 0, gn = 0;
+  // The same frame without the layer. The HUD's labels ride on top in both,
+  // and every pixel the two frames disagree on is the overview's.
+  await page.evaluate(() => { window.__hide('ov', true); window.__draw(true); });
+  const f1 = await page.evaluate(() => window.__clock().frames);
+  for (let i = 0; i < 120; i++) {
+    if (await page.evaluate(() => window.__clock().frames) - f1 >= 4) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  const bare = join(WORK, `ink-${REV ? 'ctl' : 'fix'}-${z}-bare.png`);
+  await page.screenshot({ path: bare, timeout: 240000 });
+  await page.evaluate(() => { window.__draw(false); window.__hide('ov', false); });
+  // Art resolution, the terrain pane.
+  const p = readPng(shot), q = readPng(bare), AW = 148, S = p.w / AW;
+  let n = 0, changed = 0, dSum = 0, gold = 0, groundL = 0, gn = 0;
   for (let ay = 26; ay < 236; ay++) for (let ax = 26; ax < 122; ax++) {
     const x = Math.min(p.w - 1, Math.round(ax * S + S / 2)), y = Math.min(p.h - 1, Math.round(ay * S + S / 2));
     const i = (y * p.w + x) * p.bpp, r = p.data[i], g = p.data[i + 1], b = p.data[i + 2];
     const L = r * 0.2126 + g * 0.7152 + b * 0.0722;
+    const L0 = q.data[i] * 0.2126 + q.data[i + 1] * 0.7152 + q.data[i + 2] * 0.0722;
     n++;
-    if (r > 140 && r - b > 60 && g > 100) { gold++; gl += L; } else { groundL += L; gn++; }
+    if (Math.abs(L - L0) > 12) { changed++; dSum += L - L0; } else { groundL += L0; gn++; }
+    if (r > 140 && r - b > 60 && g > 100) gold++;
   }
-  const row = { z, level: ov?.level, ribbonPx: ov?.px, ink: ov?.ink, goldShare: +(100 * gold / n).toFixed(2), goldLuma: gold ? +(gl / gold).toFixed(0) : 0, groundLuma: +(groundL / Math.max(1, gn)).toFixed(0), frame: shot, sc: await page.evaluate(() => window.__scale().label) };
+  const row = { z, level: ov?.level, footprint: +(100 * changed / n).toFixed(2), contrast: changed ? +(dSum / changed).toFixed(0) : 0,
+    groundLuma: +(groundL / Math.max(1, gn)).toFixed(0), goldShare: +(100 * gold / n).toFixed(2), frame: shot,
+    sc: await page.evaluate(() => (window.__scale ? window.__scale().label : '(no scale on this revision)')) };
   rows.push(row);
   console.log(JSON.stringify(row));
 }
