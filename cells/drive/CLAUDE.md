@@ -5251,6 +5251,30 @@ Main syntax and the helper's types checked. This environment cannot create a
 WebGL context, so these are geometry/input regression checks, not a claim of
 on-device visual or touch-feel verification.
 
+## A devtools panel for the phone
+
+Every fault this file records from the seat was found on a device with no
+console — which is why the telemetry paste, the probe-module route in
+`index.ts` and the status lines in SETTINGS exist. `?eruda=1`, or SETTINGS →
+STORAGE → DEV CONSOLE, loads the eruda console onto the page: console,
+network, elements, storage and resources in a panel, for READING what the
+game did on that phone. Loaded only when asked, never at boot (half a
+megabyte nobody driving should pay for), from a pinned jsdelivr build by a
+script tag; `__eruda()` reports `state` (off / loading / on / failed).
+
+- **The CSP carries the host, and the harness cannot see it.** `script-src`
+  in `index.ts` gained `https://cdn.jsdelivr.net`. The harness relays through
+  curl and never sees a CSP, so a green harness run proves the LOADER and
+  nothing about the header; the check is `curl -s -D - -o /dev/null <cell>/ |
+  grep -i content-security` after the deploy (a HEAD request comes back
+  without it — use GET), and then the button on a phone. A script the CSP
+  refuses fires `error`, not `load`, exactly as a dead network does, so the
+  status line names both.
+- **Its prompt cannot run code here, on purpose.** The page forbids eval
+  (`script-src` has no `unsafe-eval`, and `index.ts:1654` says why), so
+  typing an expression into eruda's console fails. Running code on the phone
+  is the probe module's job, which does it without a CSP hole.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where

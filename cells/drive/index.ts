@@ -40,8 +40,15 @@ const respond = (statusCode: number, contentType: string, body: string, extra: R
 // passing this to openDrive; nothing else changes behaviour.
 export const CSP = [
   "default-src 'none'",
-  // The game module (served here) + three.js from esm.sh.
-  "script-src 'self' https://esm.sh",
+  // The game module (served here) + three.js from esm.sh — and jsdelivr, for
+  // the ONE script loaded on request rather than at boot: the eruda console
+  // (see loadEruda in main.ts), a devtools panel for a phone. Not esm.sh,
+  // because eruda is a classic script injected by tag, not a module; and a
+  // host, not a path, because CSP source lists match origins. THE HARNESS
+  // CANNOT VERIFY THIS LINE — it relays through curl and never sees a CSP —
+  // so the check is `curl -s -D - -o /dev/null <cell>/ | grep -i
+  // content-security` after the deploy, and then the button on a phone.
+  "script-src 'self' https://esm.sh https://cdn.jsdelivr.net",
   "style-src 'unsafe-inline'",
   // World data. OSM vectors now come from THIS origin (the public namespace —
   // `'self'`), but the Overpass hosts stay in the list: the client falls back

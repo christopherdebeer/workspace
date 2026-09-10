@@ -1778,6 +1778,51 @@ const waterFromDials = (rec: Record<string, number>): boolean =>
  *  terrain colour and the sward's mineral and reed banks. `shore=0` is the
  *  frame colour and hillside grass to the waterline, as it was. */
 const SHORE_ON = qsOn('shore', true);
+/**
+ * ── A DEVTOOLS PANEL FOR A PHONE ──
+ *
+ * Every fault this file records from the seat was found on a device with no
+ * console: the telemetry paste, the probe-module route in index.ts and the
+ * status lines in SETTINGS all exist because there is no way to READ a phone
+ * from the phone. eruda is that way — console, network, elements, storage
+ * and resources in a panel on the page — loaded only when asked, never at
+ * boot (half a megabyte nobody driving should pay for), from a pinned build
+ * on jsdelivr; script-src carries the host, see CSP in index.ts.
+ *
+ * WHAT IT CANNOT DO HERE, and it is on purpose: the page forbids eval, so
+ * typing an expression into eruda's prompt fails. Reading what the game
+ * logged, fetched and stored is the value; running code on the phone is the
+ * probe module's job, which does it without a CSP hole.
+ */
+const ERUDA_SRC = 'https://cdn.jsdelivr.net/npm/eruda@3.4.3/eruda.js';
+let erudaState: 'off' | 'loading' | 'on' | 'failed' = 'off';
+function loadEruda(status?: (s: string, bad?: boolean) => void): void {
+  const w = window as unknown as { eruda?: { init(): void; show?(): void } };
+  if (w.eruda) { erudaState = 'on'; w.eruda.show?.(); status?.('DEV CONSOLE IS UP — THE ICON IS BOTTOM RIGHT'); return; }
+  if (erudaState === 'loading') { status?.('LOADING THE DEV CONSOLE…'); return; }
+  erudaState = 'loading';
+  status?.('LOADING THE DEV CONSOLE…');
+  const tag = document.createElement('script');
+  tag.src = ERUDA_SRC;
+  tag.async = true;
+  tag.onload = () => {
+    if (!w.eruda) { erudaState = 'failed'; status?.('THE SCRIPT LOADED AND LEFT NO CONSOLE — NOT THE BUILD EXPECTED', true); return; }
+    w.eruda.init();
+    w.eruda.show?.();
+    erudaState = 'on';
+    status?.('DEV CONSOLE IS UP — THE ICON IS BOTTOM RIGHT');
+  };
+  // A script the CSP refuses fires error, not load, exactly as a dead network
+  // does — the message names both, because from the seat they look the same.
+  tag.onerror = () => {
+    erudaState = 'failed';
+    status?.('COULD NOT LOAD THE DEV CONSOLE — OFFLINE, OR THIS PAGE\'S CSP DOES NOT ALLOW CDN.JSDELIVR.NET', true);
+  };
+  document.head.appendChild(tag);
+}
+if (qsOn('eruda', false)) loadEruda();
+(window as unknown as { __eruda?: object }).__eruda = (): object =>
+  ({ state: erudaState, src: ERUDA_SRC, present: !!(window as unknown as { eruda?: unknown }).eruda });
 const HYDRO_ON = ((): boolean => {
   const q = /[?&]hydro=([01])/.exec(location.search);
   if (q) return q[1] === '1';
@@ -43621,6 +43666,7 @@ const menu = createMenu({
     return `${n(tiles)} GROUND TILES · ${n(ways)} ROAD TILES · THIS SITE IS USING `
       + `${size(used)}${quota ? ` OF ${size(quota)}` : ''}`;
   },
+  devConsole: (status) => loadEruda(status),
   cacheClear: (status) => {
     void (async () => {
       status('EMPTYING THE WORLD CACHE…');

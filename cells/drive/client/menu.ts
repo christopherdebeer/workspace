@@ -155,6 +155,9 @@ export interface MenuCtx {
    *  the service worker. Signs out; the durable copy is not touched. Reloads
    *  when it is done, for the same reason lineReset does. */
   deviceReset(status: (s: string, bad?: boolean) => void): void;
+  /** Load the eruda console onto the page — a devtools panel for a phone —
+   *  and report through `status` whether it came. */
+  devConsole(status: (s: string, bad?: boolean) => void): void;
   syncLabel(): string;
   syncNote(): string;
   syncTone(): Tone;
@@ -1338,6 +1341,22 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       });
     }, ICON.warn);
     body.append(wipe, wipeNote);
+
+    // ── the dev console ──
+    // A devtools panel ON the page, for the phone, which has no other. Loaded
+    // only when asked, from a pinned build; `?eruda=1` does the same at boot.
+    // Reading is the point — the page forbids eval, so its prompt cannot run
+    // code here; the probe module in index.ts is how that is done without a
+    // CSP hole.
+    const devNote = el('div', 'm-dimline',
+      'CONSOLE, NETWORK, ELEMENTS AND STORAGE, ON THE PAGE — FOR READING WHAT THE GAME DID ON THIS PHONE. ITS PROMPT CANNOT RUN CODE HERE.');
+    const dev = button('DEV CONSOLE', C.soft, () => {
+      ctx.devConsole((s, bad) => {
+        devNote.textContent = s;
+        devNote.style.color = bad ? C.bad : C.dim;
+      });
+    }, ICON.gear);
+    body.append(dev, devNote);
 
     // ── the recorder ──
     // A DEV INSTRUMENT FIRST. It sits under the dials rather than in the deck
