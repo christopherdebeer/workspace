@@ -1795,10 +1795,27 @@ const SHORE_ON = qsOn('shore', true);
  * probe module's job, which does it without a CSP hole.
  */
 const ERUDA_SRC = 'https://cdn.jsdelivr.net/npm/eruda@3.4.3/eruda.js';
+/** Whether THIS load asked for the console, which is the only kind the cell
+ *  serves with 'unsafe-eval' (CSP_EVAL in index.ts) — so it is also whether
+ *  the console's prompt can run what is typed into it. Reported from the seat
+ *  on the first build, which loaded the console under the locked policy:
+ *  "Refused to evaluate a string as JavaScript". */
+const ERUDA_EVAL = qsOn('eruda', false);
+/** Whether this page MAY evaluate a string — asked of the browser by page
+ *  script, once, at boot, which is the only honest way to ask. A probe run
+ *  through the DevTools protocol (`page.evaluate` in the harness) is exempt
+ *  from the policy's eval rule and reports yes under any header; eruda's
+ *  prompt is page script and gets the real answer, which the seat reported. */
+const ERUDA_EVAL_OK = ((): boolean => {
+  try { new Function('return 1'); return true; } catch { return false; }
+})();
+const erudaUp = (): string => (ERUDA_EVAL_OK
+  ? 'DEV CONSOLE IS UP — THE ICON IS BOTTOM RIGHT; ITS PROMPT RUNS CODE ON THIS LOAD'
+  : 'DEV CONSOLE IS UP — READ-ONLY: ITS PROMPT CANNOT RUN CODE ON THIS LOAD. RELOAD WITH CONSOLE FOR THAT');
 let erudaState: 'off' | 'loading' | 'on' | 'failed' = 'off';
 function loadEruda(status?: (s: string, bad?: boolean) => void): void {
   const w = window as unknown as { eruda?: { init(): void; show?(): void } };
-  if (w.eruda) { erudaState = 'on'; w.eruda.show?.(); status?.('DEV CONSOLE IS UP — THE ICON IS BOTTOM RIGHT'); return; }
+  if (w.eruda) { erudaState = 'on'; w.eruda.show?.(); status?.(erudaUp()); return; }
   if (erudaState === 'loading') { status?.('LOADING THE DEV CONSOLE…'); return; }
   erudaState = 'loading';
   status?.('LOADING THE DEV CONSOLE…');
@@ -1810,7 +1827,7 @@ function loadEruda(status?: (s: string, bad?: boolean) => void): void {
     w.eruda.init();
     w.eruda.show?.();
     erudaState = 'on';
-    status?.('DEV CONSOLE IS UP — THE ICON IS BOTTOM RIGHT');
+    status?.(erudaUp());
   };
   // A script the CSP refuses fires error, not load, exactly as a dead network
   // does — the message names both, because from the seat they look the same.
@@ -1820,9 +1837,19 @@ function loadEruda(status?: (s: string, bad?: boolean) => void): void {
   };
   document.head.appendChild(tag);
 }
-if (qsOn('eruda', false)) loadEruda();
+/** Leave with the console: the same place, `?eruda=1` added, so the page
+ *  comes back under the policy that lets the prompt run. The unload flush
+ *  (pagehide) writes the survey, the marks and the docket first, so what a
+ *  reload costs is the streamed world, not the record. */
+function reloadWithConsole(status?: (s: string, bad?: boolean) => void): void {
+  const u = new URL(location.href);
+  u.searchParams.set('eruda', '1');
+  status?.('RELOADING WITH THE CONSOLE — ITS PROMPT WILL RUN CODE ON THAT LOAD…');
+  setTimeout(() => location.assign(u.toString()), 150);
+}
+if (ERUDA_EVAL) loadEruda();
 (window as unknown as { __eruda?: object }).__eruda = (): object =>
-  ({ state: erudaState, src: ERUDA_SRC, present: !!(window as unknown as { eruda?: unknown }).eruda });
+  ({ state: erudaState, evalOn: ERUDA_EVAL, evalAllowed: ERUDA_EVAL_OK, src: ERUDA_SRC, present: !!(window as unknown as { eruda?: unknown }).eruda });
 const HYDRO_ON = ((): boolean => {
   const q = /[?&]hydro=([01])/.exec(location.search);
   if (q) return q[1] === '1';
@@ -43667,6 +43694,7 @@ const menu = createMenu({
       + `${size(used)}${quota ? ` OF ${size(quota)}` : ''}`;
   },
   devConsole: (status) => loadEruda(status),
+  devReload: (status) => reloadWithConsole(status),
   cacheClear: (status) => {
     void (async () => {
       status('EMPTYING THE WORLD CACHE…');

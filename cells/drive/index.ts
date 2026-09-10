@@ -82,6 +82,27 @@ export const CSP = [
   "base-uri 'none'",
   "form-action 'none'",
 ].join('; ');
+/**
+ * THE SAME POLICY WITH EVAL, FOR ONE KIND OF LOAD AND NO OTHER.
+ *
+ * The eruda console's prompt evaluates what is typed into it, and the policy
+ * above forbids that for every reason its note gives (see the probe-module
+ * route, which is how code reaches a phone WITHOUT a hole). The seat's report
+ * was exact: "Refused to evaluate a string as JavaScript because
+ * 'unsafe-eval' … is not an allowed source". So a page load that ASKS for the
+ * console (`?eruda=1`) is served with 'unsafe-eval', and no ordinary load
+ * ever is. Three things make that a boundary rather than a wish: the header
+ * is per REQUEST and the query reaches this handler; the service worker hands
+ * such a navigation to the network instead of the cached shell (a cached
+ * response keeps the headers it was stored with — the locked ones — see
+ * shellResponse in static/sw.js); and `no-store` keeps the edge from ever
+ * holding this variant as anyone's shell.
+ */
+export const CSP_EVAL = CSP.replace("script-src 'self'", "script-src 'self' 'unsafe-eval'");
+const erudaOn = (q: string | undefined): boolean => {
+  const v = new URLSearchParams(q ?? '').get('eruda');
+  return v !== null && v !== '0' && v !== 'off';
+};
 
 const SHELL = `<!doctype html>
 <html>
@@ -1989,5 +2010,9 @@ export const handler = async (event: {
   } catch (err) {
     return respond(404, 'application/json', JSON.stringify({ error: (err as Error).message }));
   }
-  return respond(200, 'text/html; charset=utf-8', SHELL, { 'content-security-policy': CSP });
+  // A load that asked for the dev console gets the policy that lets its
+  // prompt run — see CSP_EVAL — and is never stored as the shell.
+  return erudaOn(event.rawQueryString)
+    ? respond(200, 'text/html; charset=utf-8', SHELL, { 'content-security-policy': CSP_EVAL, 'cache-control': 'no-store' })
+    : respond(200, 'text/html; charset=utf-8', SHELL, { 'content-security-policy': CSP });
 };

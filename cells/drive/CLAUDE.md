@@ -273,6 +273,14 @@ Other harness facts learned the hard way:
   lives, so a bundle in `/tmp` cannot find `three`.
 - Never `pkill` a test by name from inside a compound command; it kills the
   enclosing shell and discards pending edits. (Yes, really.)
+- **`page.evaluate` IS EXEMPT FROM THE PAGE'S CSP EVAL RULE.** It goes
+  through the DevTools protocol, which may evaluate a string under any header
+  — so a `new Function` inside `page.evaluate` succeeded under the locked
+  policy and would have "proved" the policy was off. The harness does enforce
+  a `csp:` it is given (no `bypassCSP`); what cannot be trusted is a probe
+  that evaluates from the protocol's side. Anything about eval has to be
+  asked by PAGE SCRIPT — `__eruda().evalAllowed` is a boolean main.ts
+  computes once at boot for exactly this — and read back afterwards.
 
 ---
 
@@ -5270,10 +5278,24 @@ script tag; `__eruda()` reports `state` (off / loading / on / failed).
   without it — use GET), and then the button on a phone. A script the CSP
   refuses fires `error`, not `load`, exactly as a dead network does, so the
   status line names both.
-- **Its prompt cannot run code here, on purpose.** The page forbids eval
-  (`script-src` has no `unsafe-eval`, and `index.ts:1654` says why), so
-  typing an expression into eruda's console fails. Running code on the phone
-  is the probe module's job, which does it without a CSP hole.
+- **Its prompt runs code ONLY on a load that asked for the console.** The
+  first build loaded eruda under the locked policy and the seat reported it
+  exactly: `Refused to evaluate a string as JavaScript because 'unsafe-eval'
+  … is not an allowed source`. The page forbids eval for the reasons at
+  `index.ts:1654`, and it still does — for every ordinary load. A load with
+  `?eruda=1` is served with `CSP_EVAL` (the same policy plus `'unsafe-eval'`)
+  and `cache-control: no-store`, so its prompt works; three things make that
+  a boundary rather than a wish: the header is per REQUEST and the query
+  reaches the handler; the service worker hands such a navigation to the
+  network rather than the cached shell (a cached response keeps the headers
+  it was stored with — the locked ones) and does not store it; and the edge
+  never holds it. SETTINGS → STORAGE → RELOAD WITH CONSOLE is the button for
+  it, and DEV CONSOLE on an ordinary page loads a read-only one and says so.
+  `__eruda().evalOn` reports which kind of load this is.
+  `devtools/eruda-csp.test.mjs` holds both halves under the browser's own
+  enforcement: the harness serves the page with each policy in turn (the
+  `csp:` option), `new Function` throws under `CSP` and runs under
+  `CSP_EVAL`, and eruda itself loads under both.
 
 ## The switch table
 

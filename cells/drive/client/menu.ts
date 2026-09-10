@@ -158,6 +158,9 @@ export interface MenuCtx {
   /** Load the eruda console onto the page — a devtools panel for a phone —
    *  and report through `status` whether it came. */
   devConsole(status: (s: string, bad?: boolean) => void): void;
+  /** Reload this page with `?eruda=1`, the one kind of load the cell serves
+   *  under a policy that lets the console's prompt run code. */
+  devReload(status: (s: string, bad?: boolean) => void): void;
   syncLabel(): string;
   syncNote(): string;
   syncTone(): Tone;
@@ -1349,14 +1352,24 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     // code here; the probe module in index.ts is how that is done without a
     // CSP hole.
     const devNote = el('div', 'm-dimline',
-      'CONSOLE, NETWORK, ELEMENTS AND STORAGE, ON THE PAGE — FOR READING WHAT THE GAME DID ON THIS PHONE. ITS PROMPT CANNOT RUN CODE HERE.');
+      'CONSOLE, NETWORK, ELEMENTS AND STORAGE, ON THE PAGE — FOR READING WHAT THE GAME DID ON THIS PHONE. ON AN ORDINARY LOAD ITS PROMPT CANNOT RUN CODE; RELOAD WITH CONSOLE SERVES THIS PAGE UNDER A POLICY THAT LETS IT.');
     const dev = button('DEV CONSOLE', C.soft, () => {
       ctx.devConsole((s, bad) => {
         devNote.textContent = s;
         devNote.style.color = bad ? C.bad : C.dim;
       });
     }, ICON.gear);
-    body.append(dev, devNote);
+    // THE SAME PLACE, RELOADED WITH `?eruda=1`: the only load the cell serves
+    // with eval allowed, so the prompt works. A reload costs the streamed
+    // world and not the record — pagehide flushes the survey, the marks and
+    // the docket first.
+    const devReload = button('RELOAD WITH CONSOLE', C.soft, () => {
+      ctx.devReload((s, bad) => {
+        devNote.textContent = s;
+        devNote.style.color = bad ? C.bad : C.dim;
+      });
+    }, ICON.gear);
+    body.append(dev, devReload, devNote);
 
     // ── the recorder ──
     // A DEV INSTRUMENT FIRST. It sits under the dials rather than in the deck
