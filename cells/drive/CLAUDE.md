@@ -341,6 +341,37 @@ fixture world possible:
 | WorldCover class tile | `loadCoverTile(x, y)` | z12 |
 | OSM vector tile | `proxyTile(x, y)` / `readTileCache` | z16 |
 
+All three come through the cell's `~/` routes now, where CloudFront reads S3
+first and the Lambda banks what it computed. The DEM was the last one in: it
+went straight to tiles.mapterhorn.com from every player's device until
+2026-09-11, and it was 37% of the game's data bytes in a dense city and 94–96%
+everywhere else. `~/dem/v1/` is a byte proxy, not a compute route (no Lambda
+can decode lossless WebP without shipping a decoder), and its one piece of
+cleverness is that an ABSENT tile is answered with a stored `text/plain`
+sentinel naming the ancestor to climb to — a 404 cannot be banked, and most of
+the planet is an absent tile. The publishers stay in the client as the
+bad-deploy fallback, exactly as `proxyTile` keeps the Overpass mirrors.
+
+TERRARIUM IS THE ENCODING, MAPTERHORN IS A PUBLISHER, and the route is named
+for neither: `~/dem/v1/` promises terrarium bytes for a tile and the cell
+decides who answered. The full reasoning is by `serveDem` in `index.ts`.
+
+The climb floor was z6 on a guess and is 0 on a measurement: Mapterhorn
+publishes every tile at z0 (one 512px tile, 239KB), z1 and z2. The old floor
+meant `FAR_LEVELS`' widest level, z5, ran an EMPTY climb loop and took every
+z5 shell tile from the corrupt legacy AWS mosaic without ever asking.
+
+`API-AUDIT-2026-09-11.md` has all of it, plus the measured answer to "could
+the globe be a few live tiles instead of the baked PNG" (no — the bake is a
+colour product of three inputs and is smaller than its own cheapest one).
+
+`node devtools/api-audit.mjs [--spot=] [--drive=] [--nodraw] [--json=]` is the
+instrument: it boots the real bundle and reports every request by host, split
+into what goes through the cache and what does not. A host it has not been told
+about prints as UNCLASSIFIED, so a new upstream shows up as a line nobody
+wrote. It cannot speak to REACHABILITY — the relay bypasses CSP, see the
+harness notes above.
+
 Answer those three from an authored fixture and the **entire production
 pipeline** runs with no network: terrain build, corridor carve, ribbon, batter,
 kerb, junction, vegetation, sward, façades, water. That is `client/world-fixtures.ts`,
