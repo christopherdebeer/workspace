@@ -52,7 +52,15 @@ function shell() {
   const m = idx.match(/<head>[\s\S]*?<\/body>/);
   if (!m) throw new Error('could not find the page shell in index.ts');
   return `<!doctype html><html>${m[0]}</html>`
-    .replace(/\$\{[^}]*\}/g, '');   // the shell is a template literal
+    .replace(/\$\{[^}]*\}/g, '')    // the shell is a template literal
+    // THE HARNESS STAMPS ITS SHELL TOO. The deployed cell puts a hash of the
+    // app.js it served in this meta (index.ts, stampOf) and the client reads
+    // it back to say which build is running; a harness page left it as the
+    // raw placeholder, so the one screen that reports it could never be
+    // exercised here. `HARNESS_BUILD` is what this page claims to be and
+    // `HARNESS_SERVED` (below) what the server will admit to — set them apart
+    // and the STALE path is reproducible without deploying anything.
+    .replace('__DRIVE_BUILD_STAMP__', process.env.HARNESS_BUILD ?? 'harnessbuild');
 }
 
 /**
@@ -185,6 +193,13 @@ export async function openDrive(opts = {}) {
   const server = http.createServer((req, res) => {
     const p = req.url.split('?')[0];
     if (p === '/app.js') { res.writeHead(200, { 'content-type': 'application/javascript' }); res.end(readFileSync(bundle)); }
+    // What the SERVER says it is serving — the cell's own /build route (see
+    // index.ts). The ABOUT page asks this and compares it with the stamp in
+    // the shell it booted from, so a test can put them apart deliberately.
+    else if (p === '/build') {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ build: process.env.HARNESS_SERVED ?? process.env.HARNESS_BUILD ?? 'harnessbuild', cell: 'harness', at: Date.now() }));
+    }
     // ── THE CAPTURED FIXTURES, WHICH ARE NO LONGER IN THE BUNDLE ──
     //
     // They were `import world-bixby.json`, so they arrived inside app.js and
