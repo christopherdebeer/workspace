@@ -194,10 +194,6 @@ const WEB_ASSETS: Record<string, { file: string; type: string }> = {
   '/icons/drive-192.png': { file: 'icons/drive-192.png', type: 'image/png' },
   '/icons/drive-512.png': { file: 'icons/drive-512.png', type: 'image/png' },
   '/icons/drive-maskable-512.png': { file: 'icons/drive-maskable-512.png', type: 'image/png' },
-  // The planet the wide chart is painted on — see client/globe.ts. Immutable
-  // for a day like the icons: it changes only when the bake is re-run, and a
-  // deploy is what publishes it.
-  '/globe-base.png': { file: 'globe-base.png', type: 'image/png' },
 };
 
 /**

@@ -45,13 +45,15 @@ for (const path of shell) {
 // not a broken install — it is an icon that is simply missing from an
 // installed app when the network is off, which is harder to notice and just as
 // wrong.
-// …EXCEPT WHAT IS FETCHED ON DEMAND, BY DESIGN. The globe's base texture is
-// 317KB the planet section of CLAUDE.md says is "fetched on the first wide
-// chart and never at boot" — a cost nobody driving should pay, and an install
-// is a boot. It is served from static/ and deliberately not precached; the
-// check here is the other way round, so it cannot creep into the shell list
-// without the design being revisited.
-const ON_DEMAND = new Set(['/globe-base.png']);
+// …EXCEPT WHAT IS FETCHED ON DEMAND, BY DESIGN. An asset a driver should not
+// pay for at boot — an install IS a boot — is served from static/ and
+// deliberately left out of the shell list, and this set checks that the other
+// way round so it cannot creep back in without the design being revisited.
+// EMPTY NOW: its one member was the globe's 317KB base texture, and the
+// planet's surface is a graticule the fragment shader draws. Kept rather than
+// deleted because the next asset of that shape needs this exemption to exist,
+// and an empty set is a statement that today there is none.
+const ON_DEMAND = new Set([]);
 for (const path of assets) {
   if (ON_DEMAND.has(path)) {
     check(`on demand, not precached: ${path}`, !shell.includes(path), shell);
@@ -89,8 +91,13 @@ check('the cell reads them from static/, which is what the platform ships',
   /readFileSync\(join\(__dirname, 'static', file\)\)/.test(cell), null);
 // AND NOT WITH AN ENCODING. `readFileSync(path, 'utf8')` on a PNG is the exact
 // bug this replaced — it inflates the file and serves mojibake behind a 200.
+// THE NEEDLE IS THE ASSET-SERVING CALL, NOT ANY STATIC READ. The first cut
+// matched `join(__dirname, 'static', <anything>), 'utf8'` and had been failing
+// since `cover-wide.b64` arrived — a base64 TEXT file the handler reads by its
+// own name and decodes itself, which is utf8 correctly. A check that fires on
+// the right code doing the right thing is a check nobody reads.
 check('…as bytes, never through a UTF-8 decode',
-  !/readFileSync\(join\(__dirname, 'static'[^)]*\), *'utf8'\)/.test(cell), null);
+  !/readFileSync\(join\(__dirname, 'static', file\), *'[^']+'\)/.test(cell), null);
 check('the generated base64 module is gone',
   !existsSync(join(CELL, 'web-assets.ts')) && !/from '\.\/web-assets'/.test(cell), null);
 

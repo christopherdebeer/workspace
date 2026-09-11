@@ -4973,6 +4973,12 @@ cos(origin.lat) and the curve compensation is first-order — so past it there i
 a sphere. `client/globe.ts`, `static/globe-base.png`, `devtools/bake-globe.mjs`,
 `devtools/globe.test.mjs`, `devtools/globe-view.mjs`.
 
+> **THE BAKE IS RETIRED** — the surface is a graticule drawn in the fragment
+> shader, and the asset, its route and its baker are deleted (see "The globe is
+> a graticule…" below). Everything about the SPHERE in this section still
+> stands; what it says about the texture is history, and git has the baker if
+> the bake is ever wanted back.
+
 **IT IS A BACKDROP, NOT A MODE, AND THAT IS THE WHOLE DESIGN.** The instinct is
 a globe VIEW with a cross-fade over a zoom band. It is not needed: the far
 shell already sinks by d²/2R, which IS the sphere to second order, so a sphere
@@ -5762,10 +5768,26 @@ a nearly-black ocean-blue fill that the shell is meant to paint over.
 - **A BACKTICK IN A GLSL COMMENT ENDS THE TS TEMPLATE LITERAL**, and it cost
   another round here — in a comment describing a helper's own parameters, of
   all places. The rule is absolute: no backticks in shader comments, ever.
-- **STILL SHIPPED, AND NOW FETCHED BY NOBODY:** `static/globe-base.png` is
-  still in the cell. `cells.deleteFile` is what removes one; until then it is
-  317KB of deploy payload on a deployer that already runs at its memory ceiling
-  every time.
+- **AND THEN REMOVED, IN FIVE PLACES**, because an asset nobody fetches is
+  324KB of payload on a deployer that already runs at its memory ceiling every
+  time — and a baker still pointed at it is a resurrection waiting to happen.
+  The file, its route in `index.ts`, the harness's local serve of it, the
+  `ON_DEMAND` exemption in `appshell.test.mjs` (kept as an empty set: the next
+  asset of that shape needs the exemption to exist) and `devtools/bake-globe.mjs`
+  itself. **`cells.deleteFile` is what takes it off the cell** — a push sends
+  what is local and does not delete what is not, so a file removed only from
+  the working tree comes back on the next pull. And the deployed BUNDLE keeps
+  its copy until the next deploy re-zips `static/`, so the cleanup is a deploy
+  as much as a delete.
+- **THE CLEANUP UNCOVERED A CHECK THAT HAD BEEN FAILING SINCE `cover-wide.b64`
+  ARRIVED.** `appshell.test.mjs` asserts no static asset is read through a
+  UTF-8 decode — the fault that once served inflated mojibake PNGs behind a 200
+  — and its needle matched `join(__dirname, 'static', <anything>), 'utf8'`,
+  which is `cover-wide.b64`: a base64 TEXT file the handler reads by name and
+  decodes itself, correctly. The needle is the asset-serving call now
+  (`'static', file`), which is the only one that can carry a binary. It fails
+  at HEAD and at the commit before it; a check that fires on the right code
+  doing the right thing is a check nobody reads.
 
 ### The terminator was on the globe, and the globe is not what you are looking at
 
