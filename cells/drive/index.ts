@@ -110,6 +110,13 @@ const SHELL = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#071215">
+<!-- WHICH BUNDLE IS THIS? The cell stamps its own app.js here (a hash of the
+     file it will serve — see stampOf) so the running code can say which build
+     a reader is looking at, and so a stale SHELL is self-reporting: a cached
+     shell carries the stamp it was cached with, and /build answers with the
+     one the server has now. A meta tag rather than an inline script because
+     the CSP is script-src 'self' and an inline one would be refused. -->
+<meta name="drive-build" content="__DRIVE_BUILD_STAMP__">
 <meta name="color-scheme" content="dark">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -215,6 +222,22 @@ function stampOf(): string {
     } catch { bundleStamp = 'unstamped'; }
   }
   return bundleStamp;
+}
+/** The shell, with the bundle's stamp in it. A `.replace` per request is a
+ *  string scan of a few kilobytes against a Lambda that has just read and
+ *  hashed three megabytes; the shell is not worth caching per stamp. */
+function shellHtml(): string {
+  return SHELL.replace('__DRIVE_BUILD_STAMP__', stampOf());
+}
+/** WHAT THE SERVER HAS RIGHT NOW, never from a cache. The ABOUT page asks
+ *  this and compares it with the stamp baked into the shell it booted from:
+ *  equal is "you are on the current build", different is "you are looking at
+ *  a cached one, reload". The service worker does not intercept it — it
+ *  handles only the shell's own paths — so this is always the network. */
+function serveBuild() {
+  return respond(200, 'application/json; charset=utf-8',
+    JSON.stringify({ build: stampOf(), cell: process.env.CELL_ID ?? null, at: Date.now() }),
+    { 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
 }
 function serveServiceWorker() {
   const body = webText('sw.js').replace('__DRIVE_SW_BUILD__', stampOf());
@@ -1995,6 +2018,7 @@ export const handler = async (event: {
   }
   try {
     if (path === '/sw.js') return serveServiceWorker();
+    if (path === '/build') return serveBuild();
     const asset = serveWebAsset(path);
     if (asset) return asset;
     if (path.startsWith('/fixtures/')) {
@@ -2013,6 +2037,6 @@ export const handler = async (event: {
   // A load that asked for the dev console gets the policy that lets its
   // prompt run — see CSP_EVAL — and is never stored as the shell.
   return erudaOn(event.rawQueryString)
-    ? respond(200, 'text/html; charset=utf-8', SHELL, { 'content-security-policy': CSP_EVAL, 'cache-control': 'no-store' })
-    : respond(200, 'text/html; charset=utf-8', SHELL, { 'content-security-policy': CSP });
+    ? respond(200, 'text/html; charset=utf-8', shellHtml(), { 'content-security-policy': CSP_EVAL, 'cache-control': 'no-store' })
+    : respond(200, 'text/html; charset=utf-8', shellHtml(), { 'content-security-policy': CSP });
 };

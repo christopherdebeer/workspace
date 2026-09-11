@@ -35028,6 +35028,11 @@ function noteTags(t: Record<string, string>): void {
 /** What the world puts in the truck's way, and what it grows where it should
  *  not: wall segments by kind, vegetation sites standing on a carriageway, and
  *  how many buildings are registered for re-seating. */
+/** Stand the rig somewhere, facing somewhere. `h` is the heading in RADIANS,
+ *  the truck's own units — forward is (sin h, -cos h) — and NOT the degrees
+ *  the `?h=` switch takes. Two devtools convert at the call site and a third
+ *  did not: every frame of its first run faced (degrees mod 2pi) and
+ *  photographed whatever was there. */
 (window as unknown as { __place?: object }).__place = (x: number, z: number, h?: number): void => {
   teleportTo(x, z);
   if (h !== undefined) state.heading = h;
@@ -39706,6 +39711,42 @@ function profFrame(now: number): void {
   profLast = now;
 }
 /** The session's telemetry as text, for a clipboard or a probe. */
+/**
+ * ── AM I LOOKING AT THE BUILD I DEPLOYED? ──
+ *
+ * The shell carries a stamp of the app.js the cell served it with (index.ts,
+ * stampOf) and `DRIVE_BUILD` reads it back. That alone says which build is
+ * RUNNING; it cannot say whether it is the CURRENT one, because a service
+ * worker's whole job is to hand over what it cached. So ABOUT asks `/build`,
+ * which is `no-store` and outside the worker's shell paths, and compares. The
+ * answer is deliberately blunt where it matters: a stale build says RELOAD.
+ *
+ * Asked at most every half minute, and only while someone is looking at the
+ * page that shows it.
+ */
+let servedBuild: string | null = null;
+let servedBuildAt = 0;
+let servedBuildState: 'idle' | 'asking' | 'ok' | 'failed' = 'idle';
+const SERVED_BUILD_MS = 30000;
+function checkServedBuild(): void {
+  if (servedBuildState === 'asking') return;
+  if (servedBuild !== null && performance.now() - servedBuildAt < SERVED_BUILD_MS) return;
+  servedBuildState = 'asking';
+  void fetch(`${CELL_BASE}/build`, { cache: 'no-store' })
+    .then((r) => (r.ok ? r.json() as Promise<{ build?: unknown }> : Promise.reject(new Error(String(r.status)))))
+    .then((j) => {
+      servedBuild = typeof j.build === 'string' ? j.build : null;
+      servedBuildAt = performance.now();
+      servedBuildState = servedBuild === null ? 'failed' : 'ok';
+    })
+    .catch(() => { servedBuildState = 'failed'; servedBuildAt = performance.now(); });
+}
+function servedBuildRow(): string {
+  if (servedBuildState === 'failed') return 'OFFLINE — CANNOT ASK';
+  if (servedBuild === null) return 'CHECKING…';
+  if (DRIVE_BUILD === 'web') return `SERVER HAS ${servedBuild}`;
+  return servedBuild === DRIVE_BUILD ? 'CURRENT' : `STALE — SERVER HAS ${servedBuild} — RELOAD`;
+}
 function telemetryReport(): string {
   const secs = (performance.now() - sessAt) / 1000;
   const n = Math.min(sessRingN, sessRing.length);
@@ -39720,7 +39761,7 @@ function telemetryReport(): string {
   const gpu = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : 'n/a';
   const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
   const L: string[] = [];
-  L.push(`DRIVE TELEMETRY · ${new Date().toISOString().slice(0, 19)}Z · ${Math.round(secs)}s · ${location.search}`);
+  L.push(`DRIVE TELEMETRY · ${new Date().toISOString().slice(0, 19)}Z · ${Math.round(secs)}s · build ${DRIVE_BUILD} · ${location.search}`);
   L.push(`visibility: active frame time ${(sessWall / 1000).toFixed(1)}s · hidden ${((profHiddenMs + (profHiddenAt === null ? 0 : performance.now() - profHiddenAt)) / 1000).toFixed(1)}s · resumes ${profResumes} · boundary intervals excluded`);
   L.push(`bitmap lifecycle: pending ${bitmapStats.pending} peak ${bitmapStats.peak} · completed ${bitmapStats.completed} failed ${bitmapStats.failed} closed ${bitmapStats.closed} · elapsed mean ${(bitmapStats.latencyMs / Math.max(1, bitmapStats.settled)).toFixed(1)}ms max ${bitmapStats.maxLatencyMs.toFixed(0)}ms (overlapping async latency, NOT CPU/GPU time)`);
   L.push(`shadow stationary: samples ${shadowMotion.samples} · max/sample grid phase ${shadowMotion.phaseMax.toFixed(3)} texels · sun ${shadowMotion.sunDegMax.toFixed(4)}deg · pose ${shadowMotion.poseCmMax.toFixed(3)}cm/${shadowMotion.poseDegMax.toFixed(4)}deg · clock ${TIME_MODES[timeMode]} · map ${sun.shadow.mapSize.x} span ${shadowSpan}m · snap ${SHADOW_SNAP} · caster ${sun.castShadow ? 'sun' : headSpot.castShadow ? 'headlight' : 'none'}`);
@@ -47162,14 +47203,20 @@ const menu = createMenu({
   // and the live query string; nothing here restates either, so a switch added
   // to the table appears on the glass without anyone remembering to add it.
   switches: () => switchRows(),
-  // The build, named where a reader can quote it back. `__BUILD__` is not a
-  // thing here, so the cell's own deployed version is the honest answer and it
-  // is already on the page that served this script.
-  aboutRows: () => [
-    ['CELL', 'drive · @c15r'],
-    ['BUILD', DRIVE_BUILD],
-    ['DEVICE', `${navigator.hardwareConcurrency ?? '?'} CORES · DPR ${Math.round(devicePixelRatio * 10) / 10}`],
-  ],
+  // The build, named where a reader can quote it back — and checked against
+  // the one the server has, because the question is never only "which build
+  // is this" but "is it the build I just deployed, or the one my phone
+  // cached". The row asks the moment ABOUT is rendered and the menu's own
+  // 400ms refresh brings the answer in without a rebuild.
+  aboutRows: () => {
+    checkServedBuild();
+    return [
+      ['CELL', 'drive · @c15r'],
+      ['BUILD', DRIVE_BUILD === 'web' ? 'UNSTAMPED' : DRIVE_BUILD],
+      ['SERVING', servedBuildRow()],
+      ['DEVICE', `${navigator.hardwareConcurrency ?? '?'} CORES · DPR ${Math.round(devicePixelRatio * 10) / 10}`],
+    ];
+  },
   real: () => ({ on: real.on, err: real.err }),
   surveyHere: () => {
     const here = surveyHere();
