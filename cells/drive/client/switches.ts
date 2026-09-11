@@ -76,6 +76,8 @@ export const SWITCHES = [
     note: 'arm real GPS drive, taken up at the splash gesture' },
   { id: 'probe', kind: 'text', marks: ['bench'], fallback: 'no channel',
     note: 'listen as a named probe channel for a driving harness' },
+  { id: 'dem', kind: 'choice', marks: ['world', 'bench'], fallback: 'Mapterhorn, falling back up the pyramid',
+    note: 'dem=aws reads the elevation from the AWS terrain tiles instead of Mapterhorn' },
   // FOUND BY BUILDING THIS TABLE, which is the argument for it: these two are
   // read through a variable rather than a literal, so the survey's grep for
   // `.get('…')` never saw them and neither did anything else.
@@ -119,6 +121,8 @@ export const SWITCHES = [
     note: 'how far a cut face washes toward the verge' },
   { id: 'slip', kind: 'number', marks: ['look'], fallback: '1',
     note: 'erosion paint strength on a cut face' },
+  { id: 'hydro', kind: 'toggle', marks: ['look', 'bench'], fallback: 'the WATER dial',
+    note: 'hydro=1 or hydro=0 settles the water system for this load before the dial rack is read, so a capture states its own water' },
 
   // ── how hard to work ──
   { id: 'shadows', kind: 'toggle', marks: [], fallback: 'on',
@@ -133,6 +137,20 @@ export const SWITCHES = [
     note: 'tree population multiplier, unsaved and exact' },
   { id: 'refr', kind: 'number', marks: ['bench'], fallback: '1100 m',
     note: 'how far from the truck the terrain takes its road corridor' },
+
+  // ── what a measuring run turns off ──
+  // None of these is for a player: each one removes a stage so the stage can be
+  // priced against the same tiles rather than against memory of a previous run.
+  { id: 'nodraw', kind: 'toggle', marks: ['bench'], fallback: 'off',
+    note: 'nodraw=1 runs the frame loop with every draw removed — streaming, carving, the road build, the settle counters and every probe are exactly what they are with it off, so a headless fixture settles in seconds instead of minutes' },
+  { id: 'cprobe', kind: 'toggle', marks: ['bench'], fallback: 'off',
+    note: 'cprobe=1 keeps the carve probe\u2019s per-tile record of what each deck sample cost — the target, the mesh height before carving and the field height, to tell a needed cut from the mesh\u2019s own coarseness' },
+  { id: 'noweld', kind: 'toggle', marks: ['bench'], fallback: 'on',
+    note: 'noweld=1 stops road ends welding to their neighbours, to measure continuity against grade' },
+  { id: 'nopins', kind: 'toggle', marks: ['bench'], fallback: 'on',
+    note: 'nopins=1 drops the junction pins, to measure what they are worth against the same tiles' },
+  { id: 'nofill', kind: 'toggle', marks: ['bench'], fallback: 'on',
+    note: 'nofill=1 leaves the verge unfilled, to see the ditch the fill closes' },
 
   // ── the A/Bs that keep an older path alive ──
   { id: 'wetdebug', kind: 'toggle', marks: ['legacy'], fallback: 'off',
@@ -215,11 +233,37 @@ export const URL_OWNED: ReadonlySet<string> =
  *  A switch the URL sets is marked, so the panel answers both "what exists"
  *  and "what is on right now". */
 export function switchRows(search?: string): Array<{
-  id: string; note: string; value: string; set: boolean; marks: readonly SwitchMark[];
+  id: string; note: string; kind: SwitchKind; value: string; raw: string | null;
+  set: boolean; marks: readonly SwitchMark[];
 }> {
   return SWITCHES.map((s) => {
     const v = qs(s.id, search);
-    return { id: s.id, note: s.note, marks: s.marks, set: v !== null,
+    return { id: s.id, note: s.note, kind: s.kind, marks: s.marks, set: v !== null, raw: v,
       value: v === null ? s.fallback : (v === '' ? 'on' : v) };
   });
+}
+
+/**
+ * ── A SWITCH IS SET BY RELOADING, AND THE PANEL SHOULD SAY SO ──
+ *
+ * Every switch is read once, into a `const`, while the module initialises.
+ * That is not an accident to be fixed: the world it addresses — which tiles,
+ * which DEM, which water system — is built from those values before there is
+ * a frame to change. So SETTINGS cannot offer a switch as a live toggle
+ * without lying about when it takes effect.
+ *
+ * What it can offer is the honest thing: stage the changes, show what is
+ * staged, and reload once with all of them. This builds that URL. Anything
+ * not being changed is preserved verbatim, which is the same rule the drive's
+ * own rewrite follows and for the same reason — the art-direction and
+ * instrumentation flags are not ours to drop.
+ */
+export function urlWithSwitches(changes: Record<string, string | null>, search?: string): string {
+  const q = new URLSearchParams(search ?? (typeof location === 'undefined' ? '' : location.search));
+  for (const [id, v] of Object.entries(changes)) {
+    if (v === null) q.delete(id);
+    else q.set(id, v);
+  }
+  const s = q.toString();
+  return s ? `?${s}` : '';
 }

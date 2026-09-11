@@ -31,7 +31,7 @@ import {
   sampleBankField,
   BANK_GLSL,
 } from './shoreline';
-import { URL_OWNED, qs, qsHas, qsOn, switchRows } from './switches';
+import { URL_OWNED, qs, qsHas, qsOn, switchRows, urlWithSwitches } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
@@ -696,7 +696,7 @@ async function decodeTerrarium(blob: Blob, px: number): Promise<Float32Array> {
 // engine already assumes. Absent tiles 404 — every pure-ocean one, and every
 // level past what the local source resolves — and fall back up the pyramid,
 // which is also how a coarse region degrades gracefully rather than failing.
-const MAPTERHORN = !/[?&]dem=aws/.test(location.search);
+const MAPTERHORN = qs('dem') !== 'aws';
 const mthMissing = new Set<string>();
 const demSource = { mth: 0, aws: 0, none: 0,
   /** Tiles that arrived off the planet — patched if a few pixels, refused if
@@ -1829,6 +1829,34 @@ function ecoPending(ex: number, ez: number): boolean {
  */
 const waterFromDials = (rec: Record<string, number>): boolean =>
   ((rec['v'] ?? 1) < 4 ? true : rec['water'] !== 0);
+/**
+ * ── THE RACK IS READ ONCE, AND THIS IS WHERE ──
+ *
+ * `drive.dials` had two readers. `loadDials` is the canonical one and runs
+ * when the rack is built; HYDRO_ON needs the same record hundreds of lines
+ * earlier, because whether the water system exists at all is settled before
+ * there is a rack to ask. So it parsed the key itself — the same string, a
+ * second `JSON.parse`, its own `try`, and no way for either to know the other
+ * had run. Two readers of one key is how the v4 migration came to need the
+ * "a pre-v4 `water` cannot be told from unset" note in `loadDials`: the two
+ * disagreed about what an absent value meant.
+ *
+ * One parse, memoised, and both callers take it from here. It stays a
+ * function rather than a const because module init order is what made the
+ * duplicate in the first place, and a function cannot be read too early.
+ *
+ * `loadDials` migrates the record IN PLACE, which is safe because it runs
+ * exactly once and runs after HYDRO_ON has already taken its answer. A second
+ * caller appearing between the two is the thing to watch for.
+ */
+let dialRecord: Record<string, number> | null = null;
+function readDialRecord(): Record<string, number> {
+  if (dialRecord) return dialRecord;
+  try {
+    dialRecord = JSON.parse(localStorage.getItem('drive.dials') ?? '{}') as Record<string, number>;
+  } catch { dialRecord = {}; }
+  return dialRecord;
+}
 /** The shoreline pass as one switch, for the A/B: the water's local
  *  terrain colour and the sward's mineral and reed banks. `shore=0` is the
  *  frame colour and hillside grass to the waterline, as it was. */
@@ -1905,13 +1933,7 @@ function reloadWithConsole(status?: (s: string, bad?: boolean) => void): void {
 if (ERUDA_EVAL) loadEruda();
 (window as unknown as { __eruda?: object }).__eruda = (): object =>
   ({ state: erudaState, evalOn: ERUDA_EVAL, evalAllowed: ERUDA_EVAL_OK, src: ERUDA_SRC, present: !!(window as unknown as { eruda?: unknown }).eruda });
-const HYDRO_ON = ((): boolean => {
-  const q = /[?&]hydro=([01])/.exec(location.search);
-  if (q) return q[1] === '1';
-  try {
-    return waterFromDials(JSON.parse(localStorage.getItem('drive.dials') ?? '{}') as Record<string, number>);
-  } catch { return true; }
-})();
+const HYDRO_ON = qsHas('hydro') ? qsOn('hydro', true) : waterFromDials(readDialRecord());
 /**
  * Substrate cutover modes. Canonical contact is now the production default;
  * shadow observes; render remains guarded while representative-world visual
@@ -14020,7 +14042,7 @@ function segOf(geo: THREE.BufferGeometry): number {
 // Kept PER TILE and replaced on every rebuild — a tile is recarved each time a
 // road inside it changes, so an append-only log would count the same excavation
 // four times and read as four times the damage.
-const CPROBE = /[?&]cprobe=1/.test(location.search);
+const CPROBE = qsOn('cprobe', false);
 /**
  * MEASURE WITHOUT DRAWING (`?nodraw=1`). Headless Chromium renders this game
  * through SwiftShader at three or four frames a second, and the world build
@@ -14031,7 +14053,7 @@ const CPROBE = /[?&]cprobe=1/.test(location.search);
  * what they are with it off. Never on for a person; a screenshot run leaves
  * it off by definition.
  */
-let NODRAW = /[?&]nodraw=1/.test(location.search);
+let NODRAW = qsOn('nodraw', false);
 /** …and back on, for a run that settles blind and then wants pictures: a
  *  screenshot survey of six captures spends its minutes settling, not
  *  drawing, and the frames it does paint are the ones it keeps. */
@@ -15099,10 +15121,10 @@ const TUNNEL_H = 5;    // clearance of the carved tube
 // float error move a shared node by.
 const JUNC_R = 3;
 // Off only from a probe (`?noweld=1`), to measure continuity against grade.
-const endWeld = !/[?&]noweld=1/.test(location.search);
+const endWeld = !qsOn('noweld', false);
 // Off only from a probe (`?nopins=1`), to measure what the pins are worth
 // against the same tiles rather than against memory of a previous run.
-const juncPins = !/[?&]nopins=1/.test(location.search);
+const juncPins = !qsOn('nopins', false);
 // Height difference past which two roads at the same spot are passing OVER one
 // another rather than meeting — the one case that still earns a parapet across
 // the other road's line. Below it there is a turning here, and a barrier across
@@ -15118,7 +15140,7 @@ interface LiftRec { x: number; z: number; nm?: string; fid: number; layer: numbe
 const liftLog: LiftRec[] = [];
 const RAIL_H = 1;      // parapet height above the kerb it stands on
 // Off only from a probe (`?nofill=1`), to see the ditch the fill closes.
-const vergeFill = !/[?&]nofill=1/.test(location.search);
+const vergeFill = !qsOn('nofill', false);
 /** The deck height an ALREADY BUILT road holds at (x,z), if any fragment ends
  *  there — the continuity anchor for the fragment about to build. Fragments of
  *  one way arrive independently (tile clipping, tag changes chop a road into
@@ -44844,7 +44866,7 @@ function saveDials(): void {
 }
 function loadDials(): void {
   try {
-    const raw = JSON.parse(localStorage.getItem('drive.dials') ?? '{}') as Record<string, number>;
+    const raw = readDialRecord();
     // The TIME list grew in the middle, so a stored index from before that
     // means a different hour now. Remap it through the old list by NAME, once,
     // and stamp the record so it is not remapped again. Anything saved without
@@ -47203,6 +47225,7 @@ const menu = createMenu({
   // and the live query string; nothing here restates either, so a switch added
   // to the table appears on the glass without anyone remembering to add it.
   switches: () => switchRows(),
+  switchUrl: (changes) => urlWithSwitches(changes),
   // The build, named where a reader can quote it back — and checked against
   // the one the server has, because the question is never only "which build
   // is this" but "is it the build I just deployed, or the one my phone

@@ -82,7 +82,12 @@ export interface MenuCtx {
    *  running. Rendered whole and not filtered: the panel exists so that a
    *  switch cannot be forgotten, and a list that hides the ones nobody set
    *  hides exactly the ones nobody remembers. Optional: older ctx builds. */
-  switches?(): Array<{ id: string; value: string; set: boolean; marks: readonly string[] }>;
+  switches?(): Array<{ id: string; note: string; kind: string; value: string; raw: string | null;
+    set: boolean; marks: readonly string[] }>;
+  /** This page's URL with a staged set of switch changes applied and
+   *  everything else preserved — what RELOAD spends. Built in `switches.ts`
+   *  so the preservation rule lives beside the table it preserves. */
+  switchUrl?(changes: Record<string, string | null>): string;
   /** The build's own identity, for the foot of ABOUT — a page that credits
    *  everyone and cannot say WHICH build the reader is looking at is half a
    *  page, and the first question of any report is which version it was. */
@@ -310,7 +315,37 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu .m-row .del { color: ${C.soft}; cursor: pointer; padding: 0 6px; flex-shrink: 0; }
   #menu .m-meter { display: inline-flex; gap: 1px; align-self: center; flex-shrink: 0; }
   #menu .m-meter i { width: 4px; height: 4px; background: rgba(87,201,176,0.16); }
-  #menu .m-dial { display: flex; align-items: baseline; gap: 8px; padding: 3px 2px; cursor: pointer; }
+  /* ── A ROW YOU CAN TAP IS 44px, AND ONLY A ROW YOU CAN TAP ──
+     The panel already sized its back, close, carousel and chip controls to 44
+     and then laid the bulk of its actual surface — every dial, every list row
+     — out at 3px of padding, which is most of SETTINGS, DRIVES and SURVEYS.
+     The fix is on .hit and .m-dial rather than on .m-row flat, because
+     the rows that are NOT tappable (a credit, a spec line, a dimensions
+     table) do not need a thumb's worth of height and blowing those up would
+     add a screen of scrolling to pages nobody taps. */
+  #menu .m-row.hit { min-height: 44px; align-items: center; }
+  #menu .m-switches { display: flex; flex-direction: column; }
+  #menu .m-switch { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 8px;
+    align-items: center; min-height: 44px; padding: 4px 2px; cursor: pointer;
+    border-bottom: 1px solid rgba(87,201,176,0.08); }
+  #menu .m-switch:focus-visible { outline: 1px solid ${C.gold}; outline-offset: -1px; }
+  #menu .m-switch .sw-id { color: ${C.soft}; font-size: 12px; }
+  #menu .m-switch .sw-val { grid-column: 3; color: ${C.gold}; font-size: 12px; text-align: right;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+  #menu .m-switch .sw-val.unset { color: ${C.dim}; }
+  #menu .m-switch .sw-note { grid-column: 1 / -1; color: ${C.dim}; font-size: 9px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #menu .m-switch .sw-marks { display: flex; gap: 4px; flex-wrap: wrap; }
+  #menu .m-switch .tag { font-style: normal; font-size: 8px; letter-spacing: 1px;
+    padding: 1px 3px; border: 1px solid ${C.dim}; color: ${C.dim}; }
+  /* The marks that change what you are looking at read warm; the ones that
+     only matter to a bench stay quiet; legacy is the retirement list and is
+     the one worth spotting from across the page. */
+  #menu .m-switch .tag.look, #menu .m-switch .tag.world { color: ${C.soft}; border-color: ${C.soft}; }
+  #menu .m-switch .tag.legacy { color: ${C.hot}; border-color: ${C.hot}; }
+  #menu .m-switch.staged { background: rgba(190,152,77,0.10); }
+  #menu .m-switch.staged .sw-id { color: ${C.gold}; }
+  #menu .m-dial { display: flex; align-items: center; gap: 8px; padding: 3px 2px; cursor: pointer; min-height: 44px; }
   #menu .m-dial .lab { color: ${C.soft}; font-size: 12px; }
   #menu .m-dial .val { margin-left: auto; color: ${C.gold}; font-size: 12px; }
   #menu input[type=color] { margin-left: auto; width: 38px; height: 20px; padding: 1px;
@@ -571,6 +606,12 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   // ── state ──────────────────────────────────────────────────────────
   let tab: number | null = null;
   let rigLive = true;
+  /** Which marks the SWITCHES list is showing, and what a tap has staged but
+   *  not yet reloaded. Both live here rather than in renderSettings because a
+   *  re-render rebuilds that function's whole DOM tree and would otherwise
+   *  throw away the filter mid-scroll and the staged set mid-edit. */
+  let swMark: string = 'all';
+  let swStaged: Record<string, string | null> = {};
   let bayEl: HTMLElement | null = null;
   let bayGridFor = '';           // last grid applied, so refresh doesn't redo it
   let currentStatus: { s: string; bad: boolean } | null = null;   // the CURRENT row's transient state
@@ -1237,13 +1278,122 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     // is the list to read when asking what can be retired.
     const sw = ctx.switches?.() ?? [];
     if (sw.length) {
-      const legacy = sw.filter((x) => x.marks.includes('legacy')).length;
-      const set = sw.filter((x) => x.set).length;
+      // ── EVERY SWITCH, AND NOW REACHABLE ──
+      //
+      // This was a kvTable: sixty-seven rows of text with no click handler, so
+      // the one thing a player could not do on the SETTINGS panel was set a
+      // setting. The list was honest about WHAT EXISTS and silent about how to
+      // reach any of it, and the answer — edit the query string by hand and
+      // reload — is not one a phone can carry out at all.
+      //
+      // Three things fix that, and the third is the one that makes the other
+      // two safe:
+      //
+      //   FILTER BY MARK. Sixty-seven rows in one scroll is a list nobody
+      //   reads. The marks were already carried on every row and rendered on
+      //   none of them except `legacy`, so a bench probe and the spawn
+      //   latitude looked identical. They are chips now, and the count beside
+      //   each says how many it would show.
+      //
+      //   TAP TO STAGE, NOT TO APPLY. A switch is read once into a `const`
+      //   while the module initialises — see `urlWithSwitches` — so a control
+      //   that flipped one live would be lying about when it takes effect. A
+      //   tap stages; the foot says what is staged; one RELOAD spends the lot.
+      //   Staging also means a set of changes arrives together, which is what
+      //   an A/B usually needs and what hand-editing a URL made tedious.
+      //
+      //   AND THE STAGED SET IS SHOWN AS THE DIFF IT IS. `?id` in gold with
+      //   its new value beside the old one, so the reload is never a surprise.
+      const marks = ['all', 'set', 'world', 'look', 'bench', 'legacy'] as const;
+      const showing = (x: { set: boolean; marks: readonly string[] }): boolean =>
+        swMark === 'all' ? true : swMark === 'set' ? x.set : x.marks.includes(swMark);
+      const staged = (): number => Object.keys(swStaged).length;
+
       body.append(el('div', 'm-sect', 'SWITCHES'));
       body.append(el('div', 'm-dimline',
-        `${sw.length} in this build · ${legacy} keep an older path alive · ${set} set by this link`));
-      body.appendChild(kvTable(() => (ctx.switches?.() ?? []).map((x) =>
-        [`${x.set ? '• ' : ''}?${x.id}${x.marks.includes('legacy') ? '  LEGACY' : ''}`, x.value] as [string, string])));
+        `${sw.length} in this build · ${sw.filter((x) => x.marks.includes('legacy')).length} keep an older path alive · ${sw.filter((x) => x.set).length} set by this link`));
+
+      const chips = el('div', 'm-choice m-swfilter');
+      for (const m of marks) {
+        const n = m === 'all' ? sw.length
+          : m === 'set' ? sw.filter((x) => x.set).length
+            : sw.filter((x) => x.marks.includes(m)).length;
+        const b = el('button', '', `${m.toUpperCase()} ${n}`);
+        b.setAttribute('aria-pressed', String(swMark === m));
+        b.addEventListener('click', () => { swMark = m; render(); });
+        chips.appendChild(b);
+      }
+      body.appendChild(chips);
+
+      const list = el('div', 'm-switches');
+      for (const x of sw) {
+        if (!showing(x)) continue;
+        const row = el('div', 'm-switch');
+        const has = Object.prototype.hasOwnProperty.call(swStaged, x.id);
+        const now = has ? swStaged[x.id] : x.raw;
+        if (has) row.classList.add('staged');
+        const name = el('div', 'sw-id', `?${x.id}`);
+        // A mark is what KIND of switch this is, and the row says so rather
+        // than leaving it to be inferred from the id.
+        const tags = el('div', 'sw-marks');
+        for (const m of x.marks) tags.appendChild(el('i', `tag ${m}`, m));
+        const val = el('div', 'sw-val', now === null ? x.value : (now === '' ? 'on' : now));
+        if (now === null) val.classList.add('unset');
+        const note = el('div', 'sw-note', x.note);
+        row.append(name, tags, val, note);
+
+        // A toggle cycles through the three states it really has — the URL
+        // says on, the URL says off, the URL says nothing — because "unset"
+        // is not the same as "set to the default" and the reader (`qsOn`)
+        // already draws that distinction.
+        const cycle = (): void => {
+          if (x.kind === 'toggle') {
+            const next = now === null ? '1' : now === '1' ? '0' : null;
+            if (next === x.raw) delete swStaged[x.id]; else swStaged[x.id] = next;
+            render();
+            return;
+          }
+          // Anything with a value is typed, because six named steps do not
+          // cover a latitude. An empty box clears the switch.
+          const typed = prompt(`?${x.id} — ${x.note}\n\nwithout it: ${x.value}`, now ?? '');
+          if (typed === null) return;
+          const next = typed.trim() === '' ? null : typed.trim();
+          if (next === x.raw) delete swStaged[x.id]; else swStaged[x.id] = next;
+          render();
+        };
+        row.addEventListener('click', cycle);
+        row.tabIndex = 0;
+        row.addEventListener('keydown', (e) => {
+          if ((e as KeyboardEvent).key === 'Enter' || (e as KeyboardEvent).key === ' ') { e.preventDefault(); cycle(); }
+        });
+        list.appendChild(row);
+      }
+      body.appendChild(list);
+      if (!list.childElementCount) body.append(el('div', 'm-dimline', 'NONE WITH THIS MARK'));
+
+      if (staged()) {
+        const diff = Object.entries(swStaged)
+          .map(([id, v]) => (v === null ? `?${id} CLEARED` : `?${id}=${v === '' ? 'on' : v}`)).join(' · ');
+        body.append(el('div', 'm-sect', 'STAGED'));
+        body.append(el('div', 'm-dimline', diff));
+        const bar = el('div', 'm-choice');
+        // NOT "RELOAD WITH n" — STORAGE already offers RELOAD WITH CONSOLE a
+        // screen further down, and two buttons on one page that begin with the
+        // same two words are a misread waiting to happen.
+        bar.appendChild(button(`RELOAD · ${staged()} STAGED`, C.gold, () => {
+          // An EMPTY query is a real answer — it is what clearing the last
+          // switch produces — so the guard is on the method being absent, not
+          // on the string being falsy, and the path is put back in front of
+          // it. `location.href = ''` reloads the URL you are already on, which
+          // would have made "clear the only switch set" do nothing at all.
+          const q = ctx.switchUrl?.(swStaged);
+          if (q === undefined) return;
+          swStaged = {};
+          location.href = location.pathname + q;
+        }, ICON.gear));
+        bar.appendChild(button('CLEAR', C.soft, () => { swStaged = {}; render(); }));
+        body.appendChild(bar);
+      }
     }
     // SIGNING IN IS OPTIONAL AND SAYS SO. A player who never touches this keeps
     // playing exactly as before, with progress on the device — so the row leads

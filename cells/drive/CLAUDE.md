@@ -214,6 +214,8 @@ Nothing here is fast. Budget for it.
 | `node devtools/appshell.test.mjs` | the worker precaches only what the cell serves | instant |
 | `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~20s |
 | `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
+| `node devtools/switches.test.mjs` | the table cannot rot in either direction | instant |
+| `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
 | `node devtools/offline-ground.test.mjs` | and finds ground when it does | ~3min |
 | `node devtools/<name>.test.mjs` | 66 of them; pick what you touched | varies |
 
@@ -6136,17 +6138,82 @@ closes the other direction — a switch declared and no longer read fails.
   about a second after boot (found while measuring species mixes with a world
   pinned to ARID that reported temperate ten seconds later). It was a second
   hand-maintained list of the same thing; now it is the `owned` rows.
-- **SEVENTEEN ARE MARKED `legacy`** — the non-default value keeps a superseded
+- **TWENTY ARE MARKED `legacy`** — the non-default value keeps a superseded
   implementation alive, so each one is a retirement candidate and the question
   "what can we retire" is a filter rather than an archaeology expedition:
   `ez ezstand guild refine tworker sward lumasync hydroskip vegseed relief
-  shfade shsnap shrub treewind ezbark ezedge imu`.
+  shfade shsnap shrub treewind ezbark ezedge imu substrate wetdebug shore`.
   **Not all of them are retirable, and the mark does not claim they are.**
   `refine=0` and `guild=0` both restore paths that are still LIVE for another
   reason — the plain lattice is what builds past `REFINE_R`, and the climate
   path is what runs wherever `guildAt` returns null (the sea, a fixture, a tile
   in flight). Retiring one of these means proving the other branch is
-  unreachable, not just unfashionable.
+  unreachable, not just unfashionable. **Do not quote a count from this file:**
+  it was seventeen here and twenty in the table for as long as it took to read
+  one and not the other. `switches.test.mjs` prints both numbers on every run
+  and that is the copy to trust.
+
+### …AND SEVEN MORE WERE READ BY REGEX, WHICH THE TEST COULD NOT SEE
+
+The lesson above — a switch read round `qs` is declared nowhere, listed nowhere
+in SETTINGS and invisible to `switches.test` — was written into `main.ts` when
+`?substrate=` was caught. Nineteen lines ABOVE that comment, `HYDRO_ON` was
+reading `/[?&]hydro=([01])/.exec(location.search)`. Six others were doing the
+same: `dem`, `cprobe`, `nodraw`, `noweld`, `nopins`, `nofill` — among them the
+flag the harness itself depends on to measure without drawing.
+
+**The test's guard matched one spelling.** It counted
+`new URLSearchParams(location.search)` and required no more than two; a regex
+against `location.search` is not that string, so it cost nothing to add and the
+table never saw it. `?substrate=` was fixed one switch at a time and seven of
+the same kind stayed live.
+
+All seven are declared now and read through `qs`, and the assertion is on the
+SHAPE rather than on a count: **no client module may match the query string with
+a regex**, over the whole directory, because the next one will not be in
+main.ts. The guard was checked by putting the old form back — it fails, which is
+the only thing that makes a regression test worth having. Two readers widened
+slightly in the conversion: `?cprobe=2` and `?hydro=anything` now read as on,
+where the regexes demanded `=1` exactly. That is `qsOn`'s rule for every other
+toggle in the table, which is the point of the table.
+
+### AND SETTINGS CAN SET THEM
+
+The panel rendered all sixty-seven rows through `kvTable`, which has no click
+handler — so the one thing SETTINGS could not do was set a setting, and the
+documented way to change a switch was to edit the query string by hand, which a
+phone cannot do at all. Three changes, and the third is what makes the other two
+honest:
+
+- **Filter by mark.** Sixty-seven rows in one scroll is a list nobody reads. The
+  marks were carried on every row and rendered on none but `legacy`, so a bench
+  probe and the spawn latitude looked alike. They are chips with counts now
+  (`ALL 67 · SET 6 · WORLD 13 · LOOK 17 · BENCH 28 · LEGACY 20`), and the
+  LEGACY chip is the retirement list as a filter, which is what the mark was
+  for.
+- **A tap STAGES; it does not apply.** Every switch is read once into a `const`
+  while the module initialises — that is not a defect to fix, it is what makes
+  the world buildable before there is a frame — so a control that flipped one
+  live would lie about when it takes effect. A toggle cycles the three states
+  the reader actually distinguishes (on, off, absent — "unset" is not "set to
+  the default"); anything with a value is typed. The foot shows the diff and
+  one RELOAD spends the lot, which is also what an A/B usually wants.
+- **`urlWithSwitches` preserves every key it is not changing**, the same rule
+  and the same reason as `URL_OWNED`'s: the art-direction and instrumentation
+  flags are not ours to drop. Asserted in `switches.test.mjs`, without a
+  browser.
+
+**`RELOAD · n STAGED`, not `RELOAD WITH n`** — STORAGE offers RELOAD WITH
+CONSOLE one section further down, and two buttons on one page opening with the
+same two words is a misread waiting to happen. Found by a test that matched the
+wrong one.
+
+**AND THE TAP TARGETS.** The panel sizes its back, close, carousel and chip
+controls to 44px and then laid out the bulk of its own surface — every dial row,
+every list row — at 3px of padding. `.m-row.hit` and `.m-dial` are 44 now;
+`.m-row` flat is NOT, because a credit, a spec line and a dimensions row are not
+tappable and giving them a thumb's height adds a screen of scrolling to pages
+nobody taps.
 
 ## Stationary rig shadow: diagnose rotation, not only translation
 
