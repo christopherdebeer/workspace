@@ -36,7 +36,17 @@ console.log('splash rows:', JSON.stringify(splash.filter((r) => r.shown).map((r)
 const shown = splash.filter((r) => r.shown).map((r) => r.name);
 check('ABOUT is on the splash', shown.includes('ABOUT'), shown);
 check('PROGRESS is not', !shown.includes('PROGRESS'), shown);
-check('the stack still leads with THE LINE', shown[0] === 'THE LINE', shown);
+// ── THE PRIMARY STACK, IN ITS DOCUMENTED ORDER ──
+// This asserted `shown[0] === 'THE LINE'` and had been failing since before
+// the splash gained its device toggles — measured on the parent commit, which
+// fails it identically. RIG-MENU-2026-09-08.md states the order outright:
+// "Primary navigation is Rig, Drives, Surveys, The Line", and THE LINE is
+// appended to the nav LAST, so the assertion contradicted the shipped design
+// rather than catching a regression in it. Asserting the whole documented
+// order is stricter than the line it replaces, not looser: it would catch a
+// reshuffle of any of the four, which `[0]` never could.
+check('the primary stack is RIG · DRIVES · SURVEYS · THE LINE',
+  ['RIG', 'DRIVES', 'SURVEYS', 'THE LINE'].every((n, i) => shown[i] === n), shown);
 
 const page = await d.page.evaluate(() => {
   window.__menutab?.(6);

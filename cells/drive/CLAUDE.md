@@ -214,6 +214,9 @@ Nothing here is fast. Budget for it.
 | `node devtools/appshell.test.mjs` | the worker precaches only what the cell serves | instant |
 | `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~20s |
 | `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
+| `node devtools/switches.test.mjs` | the table cannot rot in either direction | instant |
+| `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
+| `node devtools/menu-survey.mjs` | every menu screen photographed, SETTINGS scrolled through | ~2min |
 | `node devtools/offline-ground.test.mjs` | and finds ground when it does | ~3min |
 | `node devtools/<name>.test.mjs` | 66 of them; pick what you touched | varies |
 
@@ -6316,17 +6319,186 @@ closes the other direction — a switch declared and no longer read fails.
   about a second after boot (found while measuring species mixes with a world
   pinned to ARID that reported temperate ten seconds later). It was a second
   hand-maintained list of the same thing; now it is the `owned` rows.
-- **SEVENTEEN ARE MARKED `legacy`** — the non-default value keeps a superseded
+- **TWENTY ARE MARKED `legacy`** — the non-default value keeps a superseded
   implementation alive, so each one is a retirement candidate and the question
   "what can we retire" is a filter rather than an archaeology expedition:
   `ez ezstand guild refine tworker sward lumasync hydroskip vegseed relief
-  shfade shsnap shrub treewind ezbark ezedge imu`.
+  shfade shsnap shrub treewind ezbark ezedge imu substrate wetdebug shore`.
   **Not all of them are retirable, and the mark does not claim they are.**
   `refine=0` and `guild=0` both restore paths that are still LIVE for another
   reason — the plain lattice is what builds past `REFINE_R`, and the climate
   path is what runs wherever `guildAt` returns null (the sea, a fixture, a tile
   in flight). Retiring one of these means proving the other branch is
-  unreachable, not just unfashionable.
+  unreachable, not just unfashionable. **Do not quote a count from this file:**
+  it was seventeen here and twenty in the table for as long as it took to read
+  one and not the other. `switches.test.mjs` prints both numbers on every run
+  and that is the copy to trust.
+
+### …AND SEVEN MORE WERE READ BY REGEX, WHICH THE TEST COULD NOT SEE
+
+The lesson above — a switch read round `qs` is declared nowhere, listed nowhere
+in SETTINGS and invisible to `switches.test` — was written into `main.ts` when
+`?substrate=` was caught. Nineteen lines ABOVE that comment, `HYDRO_ON` was
+reading `/[?&]hydro=([01])/.exec(location.search)`. Six others were doing the
+same: `dem`, `cprobe`, `nodraw`, `noweld`, `nopins`, `nofill` — among them the
+flag the harness itself depends on to measure without drawing.
+
+**The test's guard matched one spelling.** It counted
+`new URLSearchParams(location.search)` and required no more than two; a regex
+against `location.search` is not that string, so it cost nothing to add and the
+table never saw it. `?substrate=` was fixed one switch at a time and seven of
+the same kind stayed live.
+
+All seven are declared now and read through `qs`, and the assertion is on the
+SHAPE rather than on a count: **no client module may match the query string with
+a regex**, over the whole directory, because the next one will not be in
+main.ts. The guard was checked by putting the old form back — it fails, which is
+the only thing that makes a regression test worth having. Two readers widened
+slightly in the conversion: `?cprobe=2` and `?hydro=anything` now read as on,
+where the regexes demanded `=1` exactly. That is `qsOn`'s rule for every other
+toggle in the table, which is the point of the table.
+
+### AND SETTINGS CAN SET THEM
+
+The panel rendered all sixty-seven rows through `kvTable`, which has no click
+handler — so the one thing SETTINGS could not do was set a setting, and the
+documented way to change a switch was to edit the query string by hand, which a
+phone cannot do at all. Three changes, and the third is what makes the other two
+honest:
+
+- **Filter by mark.** Sixty-seven rows in one scroll is a list nobody reads. The
+  marks were carried on every row and rendered on none but `legacy`, so a bench
+  probe and the spawn latitude looked alike. They are chips with counts now
+  (`ALL 67 · SET 6 · WORLD 13 · LOOK 17 · BENCH 28 · LEGACY 20`), and the
+  LEGACY chip is the retirement list as a filter, which is what the mark was
+  for.
+- **A tap STAGES; it does not apply.** Every switch is read once into a `const`
+  while the module initialises — that is not a defect to fix, it is what makes
+  the world buildable before there is a frame — so a control that flipped one
+  live would lie about when it takes effect. A toggle cycles the three states
+  the reader actually distinguishes (on, off, absent — "unset" is not "set to
+  the default"); anything with a value is typed. The foot shows the diff and
+  one RELOAD spends the lot, which is also what an A/B usually wants.
+- **`urlWithSwitches` preserves every key it is not changing**, the same rule
+  and the same reason as `URL_OWNED`'s: the art-direction and instrumentation
+  flags are not ours to drop. Asserted in `switches.test.mjs`, without a
+  browser.
+
+**`RELOAD · n STAGED`, not `RELOAD WITH n`** — STORAGE offers RELOAD WITH
+CONSOLE one section further down, and two buttons on one page opening with the
+same two words is a misread waiting to happen. Found by a test that matched the
+wrong one.
+
+**AND THE TAP TARGETS.** The panel sizes its back, close, carousel and chip
+controls to 44px and then laid out the bulk of its own surface — every dial row,
+every list row — at 3px of padding. `.m-row.hit` and `.m-dial` are 44 now;
+`.m-row` flat is NOT, because a credit, a spec line and a dimensions row are not
+tappable and giving them a thumb's height adds a screen of scrolling to pages
+nobody taps.
+
+### AND IT COST THE PAGE ITS LENGTH, WHICH NOTHING WAS MEASURING
+
+`devtools/menu-survey.mjs` scrolls SETTINGS a screenful at a time and
+photographs each, because one screenshot of a scroll region is the first
+screenful and an assumption about the rest. Measured on the same spot and
+window, the change above against its parent:
+
+| | before | after |
+|---|---|---|
+| SETTINGS scroll height | 3,238 px | **6,139 px** |
+| screenfuls of a 678 px window | 4.8 | **9.1** |
+| switch rows | 60, as kv text | 67, tappable, with notes |
+| dial row height | 24 px | 44 px |
+
+Two thirds of the growth is the switch list and one third the dial tap
+targets, and the list sits FIRST — so sign-in, RESET THE LINE, STORAGE, the
+dev console, the tape recorder and all forty-six dials are now behind five
+screenfuls of reference material. The filter chips only half answer it,
+because the default is ALL 67 and the panel's own doctrine is that the list
+renders whole ("a list that hides the ones nobody set hides exactly the ones
+nobody remembers"). **Reference before action is the fault**; the ordering, or
+a screen of its own for the switches, is the fix, and neither is made here.
+
+### TWO SCREENS, SPLIT BY WHO THE ROW IS FOR
+
+The owner's call, and it is the fix for the length above rather than a
+reordering: **SETTINGS keeps what a player tunes; ADVANCED takes the developer
+levers and the buttons that delete.** Splash treatment, sign-in and the
+RENDER/WORLD/TREES rack stay; the switch table, the tape recorder, the eruda
+console, RESET THE LINE and STORAGE go one deliberate tap deeper, ordered from
+harmless to final so the last thing on the page is the one that hands the
+device back. Measured, same spot, same window:
+
+| | before | after |
+|---|---|---|
+| SETTINGS | 6,139 px · 9.1 screens | **2,299 px · 3.1 screens** |
+| ADVANCED | — | 3,816 px |
+
+The content did not shrink; it stopped being one scroll. `T_ADVANCED = 8` is
+the probe index, and three suites that drove SETTINGS by number were moved with
+it — `storage-reset`, `line-boot` and `settings-switches`, which now also
+asserts the switch table renders on ADVANCED and **not** on SETTINGS, because a
+table on both pages is the old scroll with a second door.
+
+**AND CAMERA WENT TO THE RIG.** `dialGroups` split the rack by excluding
+VEHICLE and SETUP, which put CHASE HEIGHT, CAB FOV and the splash orbit at the
+bottom of the longest scroll in the menu — on the page whose siblings are
+RENDER and TREES, not on the page whose subtitle is TUNE AND DRESS THE TRUCK.
+The rig set is named rather than derived by exclusion now, so a group added
+later lands in SETTINGS by default: an unclassified dial shows in the wrong
+place rather than in neither.
+
+### THE FOOT IS A PER-SCREEN ACTION BAR, AND SOUND WAS NEVER AN ACTION
+
+`menu-survey.mjs` printed the foot per tab and settled what it is: DRIVES
+stacks four page actions in it, THE LINE puts one full-width CTA there, the hub
+and rig-live hide it in CSS, and SURVEYS, ABOUT and PROGRESS leave it empty —
+so it is a per-screen slot, not a persistent bar, and the two global toggles
+sitting in SETTINGS' foot were teaching the wrong thing about the slot.
+
+SOUND and HIDE HUD now bracket the splash's utilities strip — `SOUND · SETTINGS
+· ABOUT · [SIGN IN|PROGRESS] · HIDE HUD` — on the screen every BACK returns to.
+Left and right rather than inline, because a toggle is not a destination.
+**HIDE HUD was deliberately NOT put in the header beside the X**: it is an exit
+as much as a toggle, and two exits a thumb's width apart with different side
+effects is worse than the scroll it replaced.
+
+**SIGN IN and PROGRESS are one slot.** Both were on the splash at once — the
+redundancy was visible in the first screenshot anyone took of it — and at most
+one ever meant anything: signed out, PROGRESS was the only tile in the row with
+no icon and no subtitle, whose whole job was to hop to a page; signed in, SIGN
+IN hid itself and left that orphan behind.
+
+**And `worldRows` and `systemRows` are gone.** The first was fully implemented,
+carried real data and was called by NOTHING — the same class of fault as the
+forgotten switches, one layer up. The second reported whether the sound was on,
+and the control that changes it now says so itself on the splash. An empty foot
+no longer spends its padding either (`.m-foot:empty`).
+
+**AND A STAGED SET IS INVISIBLE THE MOMENT YOU LEAVE.** `swStaged` is closure
+state so it survives a tab change and a close, while `RELOAD · n STAGED` is
+built only inside `renderSettings`. Measured: stage one, go to RIG — nothing on
+the screen says anything is pending — close the menu, reopen SETTINGS, and it
+is still staged. A pending commitment nothing announces is the same shape of
+fault as a switch nobody remembers. The count rides in the header now — the one
+element every screen has — as a gold `⚑ n` chip that taps through to ADVANCED.
+
+### TWO CHECKS IN line-boot AND about WERE ALREADY RED, AND ONE STILL IS
+
+`THE LINE leads the hub stack` asserted `shown[0] === 'THE LINE'` while THE LINE
+is appended to the nav LAST, and `RIG-MENU-2026-09-08.md` states the intended
+order outright — "Primary navigation is Rig, Drives, Surveys, The Line". It
+contradicted the shipped design rather than catching a regression in it, and
+**the parent commit fails it identically**, which is how that was established
+rather than assumed. Both copies now assert the whole documented order, which
+is stricter than the line they replace: `[0]` could not have caught a reshuffle
+of the other three.
+
+`line-boot`'s `…and the docket is handed back` still times out, **and also fails
+identically on the parent** — the wipe is polled for 20 s against a harness
+whose init script re-seeds localStorage on every navigation, and the reboot then
+never arrives. Not this work's, not fixed here, and recorded rather than left
+for the next session to attribute.
 
 ## Stationary rig shadow: diagnose rotation, not only translation
 
