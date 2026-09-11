@@ -27,7 +27,7 @@
  * `simWait`, never on a timeout.
  */
 import { execSync, execFile } from 'node:child_process';
-import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -167,7 +167,17 @@ export async function openDrive(opts = {}) {
   const cellRoute = async (p) => {
     if (cellHandler === undefined) {
       try {
-        const out = join(WORK, 'cell-index.mjs');
+        // IN A DIRECTORY WITH `static/` BESIDE IT. The handler reads baked
+        // assets off disk relative to its own __dirname — ne-wide.b64 for the
+        // overview, cover-wide.b64 for the coarse cover — exactly as it does
+        // from /var/task on the deploy. Bundled loose into WORK it finds
+        // neither, and the routes that need them answer 503 with nothing to
+        // say why: measured, every ~/cover/w1 tile in the harness.
+        const dir = join(WORK, 'cell');
+        mkdirSync(dir, { recursive: true });
+        try { rmSync(join(dir, 'static'), { force: true }); } catch { /* first run */ }
+        symlinkSync(join(CELL, 'static'), join(dir, 'static'), 'dir');
+        const out = join(dir, 'index.mjs');
         execSync(`npx esbuild ${join(CELL, 'index.ts')} --bundle --platform=node --format=esm`
           + ` --packages=external --outfile=${out}`, { stdio: 'pipe', cwd: ROOT });
         cellHandler = (await import(`${out}?t=${Date.now()}`)).handler;
@@ -327,6 +337,16 @@ export async function openDrive(opts = {}) {
     // code the phone will run. Both of its answers matter here — a tile is
     // image/webp and an absence is a text/plain sentinel naming where to climb
     // — which is why cellRoute had to learn to remember a content type.
+    // The coarse cover, from the bake in static/ — through the handler for the
+    // same reason ~/cover/v1 is: it is compute over an asset in this repo, and
+    // running it locally proves the route rather than the deploy.
+    else if (p.startsWith('/~/cover/w1/')) {
+      cellRoute(p).then((out) => {
+        if (!out) { res.writeHead(404); res.end('{}'); return; }
+        res.writeHead(200, { 'content-type': out.type });
+        res.end(out.body);
+      }).catch(() => { res.writeHead(503); res.end('{}'); });
+    }
     else if (p.startsWith('/~/dem/v1/') && opts.dem !== false) {
       cellRoute(p).then((out) => {
         if (!out) { res.writeHead(404); res.end('{}'); return; }
