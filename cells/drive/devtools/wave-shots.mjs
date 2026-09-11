@@ -29,6 +29,22 @@
  * Every frame is printed with the `__wave` numbers at the point it is looking
  * at, so a picture can be checked against the arithmetic that made it rather
  * than argued about.
+ *
+ * ── WHAT THE FIRST GOOD RUN FOUND (Kommetjie, sea state 0.95, 12.4 m/s,
+ *    50 km of fetch) ──
+ *
+ * The picture is the SHALLOWS, LOOKING OUT, with the sun around fourteen
+ * degrees: the eye sits a metre over the surface, the crest bands fill the
+ * frame with real relief, and the numbers behind it are peak 2.22 m (4.43 m
+ * of height), 1.81 m of chop, a 217 m wave carried on ten mesh cells. A high
+ * sun lights crest and trough alike and the sea goes flat; five degrees is
+ * handsome but dim. The BEACH station has the strongest breaker gate (0.91)
+ * and the worst framing — the chase camera is close behind the rig and the
+ * truck eats the lower half of the frame — so for surf specifically the next
+ * thing to try is the CAB view, which is lower and has no truck in it.
+ * Whether "out" or "along" is the sea depends on the coast: this bay curves,
+ * and along-shore looked at the beach. The tool prints the seaward bearing it
+ * found, so check that against the frame before believing a zero.
  */
 import { openDrive } from './harness.mjs';
 
