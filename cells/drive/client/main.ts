@@ -30077,6 +30077,61 @@ function tapeKeep(): string {
   const f = hydroSys?.fieldAt(px, pz);
   return f ? hydroSys!.debugTile(f.key) : null;
 };
+/**
+ * THE VERTEX'S OWN ARITHMETIC, ON THE CPU: what the sea's GEOMETRY is doing
+ * at a point, factor by factor. The displacement lives in the vertex shader
+ * and cannot be read back, so this replicates its chain from the same field
+ * the GPU samples — sea state, depth, shoal, the post-break collapse, the
+ * shelter — and reports the peak rise in metres beside what the same texel
+ * would rise with no shelter at all. "Has the sea gone flat, and which term
+ * flattened it" is otherwise a question only a screenshot can answer badly.
+ */
+(window as unknown as { __wave?: object }).__wave = (x?: number, z?: number): object | null => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const f = hydroSys?.fieldAt(px, pz);
+  if (!f) return null;
+  const u = (px - f.bounds.minX) / (f.bounds.maxX - f.bounds.minX);
+  const v = (pz - f.bounds.minZ) / (f.bounds.maxZ - f.bounds.minZ);
+  const ix = clamp(Math.round(u * f.resolution - 0.5) + f.gutter, 0, f.width - 1);
+  const iz = clamp(Math.round(v * f.resolution - 0.5) + f.gutter, 0, f.height - 1);
+  const i = (iz * f.width + ix) * 4;
+  const smooth = (e0: number, e1: number, t: number): number => {
+    const k = clamp((t - e0) / (e1 - e0), 0, 1);
+    return k * k * (3 - 2 * k);
+  };
+  const coverage = f.geometry[i], shoreM = f.geometry[i + 1], depth = Math.max(0, f.geometry[i + 3]);
+  const sea = clamp(f.dynamics[i + 3], 0, 1), fetchM = Math.max(1, f.dynamics[i + 2]);
+  const exposure = f.coast ? clamp(f.coast[i + 3], 0, 1) : 1;
+  const speed = Math.max(0.2, worldWind.kmh / 3.6);
+  const windSea = smooth(0.5, 15, speed);
+  const standingState = clamp(sea * (0.5 + windSea * 0.75), 0, 1);
+  const breakerDepth = 0.55 + (2.7 - 0.55) * sea;
+  const shoal = 1 - smooth(breakerDepth, Math.max(breakerDepth + 0.1, 10), depth);
+  const postBreak = 0.28 + 0.72 * smooth(0.12, Math.max(0.3, breakerDepth * 0.85), depth);
+  const amplitude = (0.012 + (1.05 - 0.012) * Math.pow(standingState, 1.6))
+    * (1 + shoal * 0.62) * postBreak;
+  // The phase coordinate decides which wave this texel is riding; the peak of
+  // the crossfade between them is the envelope the vertex actually reaches.
+  const phase = f.coast && shoreM >= 0 ? Math.max(0, f.coast[i]) : shoreM;
+  const nearShore = 1 - smooth(22, 120, Math.max(0, phase));
+  const gain = (1 - nearShore) * (0.35 + 0.65 * exposure) + nearShore * (0.45 + 0.55 * exposure);
+  return {
+    at: [+px.toFixed(1), +pz.toFixed(1)], key: f.key, kind: f.material[i],
+    coverage: +coverage.toFixed(2), shoreM: +shoreM.toFixed(1), depthM: +depth.toFixed(2),
+    seaState: +sea.toFixed(2), fetchKm: +(fetchM / 1000).toFixed(1),
+    windMps: +speed.toFixed(1), exposure: +exposure.toFixed(2),
+    shoal: +shoal.toFixed(2), postBreak: +postBreak.toFixed(2),
+    amplitudeM: +amplitude.toFixed(3),
+    /** Peak rise above the resting surface, metres — half the wave's height. */
+    peakM: +(amplitude * gain * coverage).toFixed(3),
+    /** …and the same texel with no shelter, which is what it was before the
+     *  coast field's exposure entered the wave. */
+    openPeakM: +(amplitude * coverage).toFixed(3),
+    /** What the crest whitening reads at that envelope (smoothstep .48-.94). */
+    crest: +smooth(0.48, 0.94, gain).toFixed(2),
+    openCrest: +smooth(0.48, 0.94, 1).toFixed(2),
+  };
+};
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number, margin = 0.8) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
 /** The three heights of a point, side by side — the DEM the hydro field is
