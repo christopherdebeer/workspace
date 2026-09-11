@@ -216,6 +216,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
 | `node devtools/switches.test.mjs` | the table cannot rot in either direction | instant |
 | `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
+| `node devtools/menu-survey.mjs` | every menu screen photographed, SETTINGS scrolled through | ~2min |
 | `node devtools/offline-ground.test.mjs` | and finds ground when it does | ~3min |
 | `node devtools/<name>.test.mjs` | 66 of them; pick what you touched | varies |
 
@@ -6214,6 +6215,36 @@ every list row — at 3px of padding. `.m-row.hit` and `.m-dial` are 44 now;
 `.m-row` flat is NOT, because a credit, a spec line and a dimensions row are not
 tappable and giving them a thumb's height adds a screen of scrolling to pages
 nobody taps.
+
+### AND IT COST THE PAGE ITS LENGTH, WHICH NOTHING WAS MEASURING
+
+`devtools/menu-survey.mjs` scrolls SETTINGS a screenful at a time and
+photographs each, because one screenshot of a scroll region is the first
+screenful and an assumption about the rest. Measured on the same spot and
+window, the change above against its parent:
+
+| | before | after |
+|---|---|---|
+| SETTINGS scroll height | 3,238 px | **6,139 px** |
+| screenfuls of a 678 px window | 4.8 | **9.1** |
+| switch rows | 60, as kv text | 67, tappable, with notes |
+| dial row height | 24 px | 44 px |
+
+Two thirds of the growth is the switch list and one third the dial tap
+targets, and the list sits FIRST — so sign-in, RESET THE LINE, STORAGE, the
+dev console, the tape recorder and all forty-six dials are now behind five
+screenfuls of reference material. The filter chips only half answer it,
+because the default is ALL 67 and the panel's own doctrine is that the list
+renders whole ("a list that hides the ones nobody set hides exactly the ones
+nobody remembers"). **Reference before action is the fault**; the ordering, or
+a screen of its own for the switches, is the fix, and neither is made here.
+
+**AND A STAGED SET IS INVISIBLE THE MOMENT YOU LEAVE.** `swStaged` is closure
+state so it survives a tab change and a close, while `RELOAD · n STAGED` is
+built only inside `renderSettings`. Measured: stage one, go to RIG — nothing on
+the screen says anything is pending — close the menu, reopen SETTINGS, and it
+is still staged. A pending commitment nothing announces is the same shape of
+fault as a switch nobody remembers.
 
 ## Stationary rig shadow: diagnose rotation, not only translation
 
