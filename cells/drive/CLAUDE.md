@@ -361,9 +361,40 @@ publishes every tile at z0 (one 512px tile, 239KB), z1 and z2. The old floor
 meant `FAR_LEVELS`' widest level, z5, ran an EMPTY climb loop and took every
 z5 shell tile from the corrupt legacy AWS mosaic without ever asking.
 
-`API-AUDIT-2026-09-11.md` has all of it, plus the measured answer to "could
-the globe be a few live tiles instead of the baked PNG" (no — the bake is a
-colour product of three inputs and is smaller than its own cheapest one).
+`API-AUDIT-2026-09-11.md` has all of it.
+
+## AND THE LADDER STOPS FIVE RUNGS ABOVE THE DATA
+
+Said in that same audit that the globe could not be live tiles. That was
+wrong, and `LADDER-BELOW-Z5-2026-09-11.md` is the measurement that says so.
+The short version, because it is the kind of thing that costs a session:
+
+- **From the equator the shell never leaves z6.** `farLevelFor` is fed a
+  radius capped at SIGHT_MAX (1,500km) and a z6 5x5 ring reaches 1,565km
+  there, so **z5, the last rung of FAR_LEVELS, is unreachable at that
+  latitude** and a 375x zoom-out moves nothing. The shell covers a 1,565km
+  disc of a 12,742km planet — 12% of the face — and the rest is the bake.
+  `devtools/ladder-audit.mjs` prints that table.
+- **`globe-base.png` is 39 km A PIXEL.** It is downsampled from a 4096²
+  mosaic, so the bake's INPUTS are not its output and comparing tiles against
+  the inputs (which is what the audit did) overstates the cost by 4x.
+  Mapterhorn z2 is 19.6 km/px: twice the bake's delivered resolution, 16 tiles.
+- **Geometry is not the constraint.** The whole planet at z2, at the geometric
+  budget `globeGeometry(160, 80)` already spends, is ~51k triangles and 16
+  draws — cheaper than the 25-draw, 200k-triangle ring drawn today. What is
+  wrong is that `farSeg` is metres-per-VERTEX, which is the right dial only
+  while a tile is bigger than the screen.
+- **Cover is the one real blocker, and it is 90KB.** `~/cover/v1/` range-reads
+  3-degree COGs and a coarse tile lands on many — z5 on 20, z4 on 64, z2 on
+  690 (`devtools/cover-reach.mjs`), which is why COVER_WIDE_LEVELS ends at 4.
+  There is no global overview in the ESA bucket. So bake it, exactly as
+  `ne-wide.ts` bakes the roads for exactly the same reason — measured at 0.044
+  bytes a texel, the whole planet at z2 resolution is ~90KB.
+
+The principle worth keeping out of all of it: **bake the INPUTS, not the
+output.** A baked picture freezes the palette, the weather and the biome rules
+into an image; a baked class raster is the cover layer arriving by a different
+road, and `climCompute` carries on.
 
 `node devtools/api-audit.mjs [--spot=] [--drive=] [--nodraw] [--json=]` is the
 instrument: it boots the real bundle and reports every request by host, split
