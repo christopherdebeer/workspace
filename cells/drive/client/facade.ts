@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { MARK_COLS, MARK_PALETTE, drawMarkAtlas } from './graffiti';
 import { mulberry32 } from './rng';
+import { FACADE_DEFAULTS, type FacadeGrammar } from './facade-grammar';
+import { TRADITION_LIST, gramTable } from './traditions';
 
 /**
  * ── THE FAÇADE: A BUILDING IS NOT A TILING BITMAP ──
@@ -163,56 +165,32 @@ export function setMarkTuning(patch: Partial<MarkTuning>): MarkTuning {
  * next unit, and it will arrive as a vertex attribute the way aMark did,
  * because buildings batch per tile and a uniform is per draw.
  */
-export interface FacadeGrammar {
-  /** The bay grid: metres across a bay, metres floor to floor. */
-  bayM: number;
-  storeyM: number;
-  /** The window box, as shares of the bay (x) and the storey (y). */
-  winX0: number;
-  winX1: number;
-  winY0: number;
-  winY1: number;
-  /** The door box; its sill is at the bay's floor. */
-  doorX0: number;
-  doorX1: number;
-  doorY1: number;
-  /** Share of ground-floor bays that are a door rather than a shopfront. */
-  doorShare: number;
-  /** Share of bays that carry an opening at all; the rest are blank wall. */
-  openShare: number;
-  /** The void: a fraction OF the wall, plus a per-bay variation. */
-  glassShade: number;
-  glassVar: number;
-  /** The lintel line's darkening at the window head. */
-  lintel: number;
-  /** Ivy, as a multiplier on the column claim: 1 is the shipped amount. */
-  ivy: number;
-  /** Water staining under every horizontal break. */
-  stain: number;
-}
-
-/** The shipped grammar — what the shader drew before any of this was a
- *  number — frozen, so the atlas can state a tradition as OVERRIDES of it and
- *  the game can fall back to it where the atlas is silent. */
-export const FACADE_DEFAULTS: Readonly<FacadeGrammar> = Object.freeze({
-  bayM: 2.75,
-  storeyM: 3.1,
-  winX0: 0.2,
-  winX1: 0.8,
-  winY0: 0.34,
-  winY1: 0.86,
-  doorX0: 0.33,
-  doorX1: 0.67,
-  doorY1: 0.6,
-  doorShare: 0.36,
-  openShare: 0.76,
-  glassShade: 0.2,
-  glassVar: 0.16,
-  lintel: 0.25,
-  ivy: 1,
-  stain: 0.16,
-});
+export type { FacadeGrammar } from './facade-grammar';
+export { FACADE_DEFAULTS } from './facade-grammar';
 export const FACADE_GRAMMAR: FacadeGrammar = { ...FACADE_DEFAULTS };
+
+/**
+ * ── EVERY TRADITION'S GRAMMAR, AS A TEXTURE ──
+ *
+ * The same route as the mark tins, for the same GLSL ES 1.00 reason: a
+ * building's tradition rides in as ONE float attribute (aGram, its row plus
+ * one) and the shader reads that row — four RGBA8 texels — with texture2D.
+ * Row 0 does not exist: aGram 0 means "the uniforms", which are
+ * FACADE_DEFAULTS in the game and the dials in the lab. Built once from the
+ * atlas at load; facade-grammar.ts owns the byte layout and the test decodes
+ * it back.
+ */
+const gramTex = (() => {
+  const { data, rows } = gramTable();
+  const t = new THREE.DataTexture(data, 4, Math.max(1, rows), THREE.RGBAFormat);
+  t.magFilter = t.minFilter = THREE.NearestFilter;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.generateMipmaps = false;
+  t.needsUpdate = true;
+  return t;
+})();
+const uGramU = { value: gramTex };
+const uGramN = { value: Math.max(1, TRADITION_LIST.length) };
 
 // Shared by reference, like the mark tuning: one write reaches every wall.
 const uFacA = { value: new THREE.Vector4() };
@@ -250,6 +228,8 @@ export function facade(mat: THREE.Material): void {
     sh.uniforms.uFacB = uFacB;
     sh.uniforms.uFacC = uFacC;
     sh.uniforms.uFacD = uFacD;
+    sh.uniforms.uGram = uGramU;
+    sh.uniforms.uGramN = uGramN;
     // THE BASE RIDES IN AS A VERTEX ATTRIBUTE, not off the model matrix.
     // Buildings batch per tile now (see flushBuildings), so one mesh carries
     // hundreds of them and modelMatrix[3][1] — the old source of "this
@@ -257,39 +237,53 @@ export function facade(mat: THREE.Material): void {
     // its own building's base in aBase instead, and re-seating shifts the
     // attribute alongside the positions.
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aBase;\nattribute float aMark;\nvarying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark;')
+      .replace('#include <common>', '#include <common>\nattribute float aBase;\nattribute float aMark;\nattribute float aGram;\nvarying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark; varying float vGram;')
       .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
         vec4 facW = modelMatrix * vec4(transformed, 1.0);
         vFacW = facW.xyz;
         vFacN = mat3(modelMatrix) * objectNormal;
         vFacH = facW.y - aBase;
-        vMark = aMark;`);
+        vMark = aMark;
+        vGram = aGram;`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark;
+        varying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark; varying float vGram;
         uniform sampler2D uMarks; uniform sampler2D uMarkTins;
         uniform vec4 uMarkA; uniform vec4 uMarkB; uniform vec2 uFacNight;
         uniform vec4 uFacA; uniform vec4 uFacB; uniform vec4 uFacC; uniform vec4 uFacD;
+        uniform sampler2D uGram; uniform float uGramN;
         float fah(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 41.31); return fract(p.x * p.y); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
       {
         vec3 fn = normalize(vFacN);
+        // ── WHOSE GRAMMAR: THE BUILDING'S TRADITION, OR THE UNIFORMS ──
+        // aGram > 0 names a row of the atlas texture (see gramTex); 0 is the
+        // uniforms, which the game keeps at FACADE_DEFAULTS and the lab drives.
+        // The scales are facade-grammar.ts's GRAM_FIELDS, to the digit.
+        vec4 gA = uFacA, gB = uFacB, gC = uFacC, gD = uFacD;
+        if (vGram > 0.5) {
+          float gy = (floor(vGram + 0.5) - 0.5) / uGramN;
+          gA = texture2D(uGram, vec2(0.125, gy)); gA.xy *= 8.0;
+          gB = texture2D(uGram, vec2(0.375, gy));
+          gC = texture2D(uGram, vec2(0.625, gy));
+          gD = texture2D(uGram, vec2(0.875, gy)); gD.z *= 2.0;
+        }
         // Roofs and floor slabs get grime and nothing else — a window in the
         // ceiling is the giveaway that this is a texture and not a building.
         if (abs(fn.y) < 0.55) {
           // Run the bay grid along whichever horizontal axis this wall faces.
           // Every number in the grid is FACADE_GRAMMAR (above), carried in
-          // uFacA..uFacD; the defaults are the literals that used to be here.
+          // gA..uFacD; the defaults are the literals that used to be here.
           float u = abs(fn.x) > abs(fn.z) ? vFacW.z : vFacW.x;
-          vec2 cell = vec2(u / uFacA.x, vFacH / uFacA.y);
+          vec2 cell = vec2(u / gA.x, vFacH / gA.y);
           vec2 idc = floor(cell), f = fract(cell);
           float r = fah(idc + vec2(7.13, 3.31));
-          float win = step(uFacA.z, f.x) * step(f.x, uFacA.w) * step(uFacB.x, f.y) * step(f.y, uFacB.y);
-          float door = step(uFacB.z, f.x) * step(f.x, uFacB.w) * step(0.03, f.y) * step(f.y, uFacC.x);
+          float win = step(gA.z, f.x) * step(f.x, gA.w) * step(gB.x, f.y) * step(f.y, gB.y);
+          float door = step(gB.z, f.x) * step(f.x, gB.w) * step(0.03, f.y) * step(f.y, gC.x);
           // Street level is doorways and shopfronts; above it, windows.
-          float ground = step(vFacH, uFacA.y);
-          float open = mix(win, mix(win * step(0.52, f.y), door, step(r, uFacC.y)), ground);
-          open *= step(r, uFacC.z);                 // the rest are bricked up
+          float ground = step(vFacH, gA.y);
+          float open = mix(win, mix(win * step(0.52, f.y), door, step(r, gC.y)), ground);
+          open *= step(r, gC.z);                 // the rest are bricked up
           // ── GLASS IS A DARKENING OF THE WALL, NOT AN ABSOLUTE COLOUR ──
           //
           // These were fixed values — 0.05 to 0.17 — on the assumption that the
@@ -306,15 +300,15 @@ export function facade(mat: THREE.Material): void {
           // darker. So the void is a fraction OF the wall, with a small absolute
           // term so pure-black paint still shows an opening at all. That is one
           // multiply and it cannot invert.
-          float shade = uFacC.w + uFacD.x * fah(idc + vec2(2.7));
+          float shade = gC.w + gD.x * fah(idc + vec2(2.7));
           vec3 glass = diffuseColor.rgb * shade + vec3(0.012, 0.014, 0.020);
           // A few catch the low sun. Still absolute, and rightly so — a
           // reflection is the SKY's brightness, not the wall's.
           glass = mix(glass, vec3(0.62, 0.44, 0.2), step(0.94, fah(idc + vec2(11.3, 5.7))) * 0.75);
           diffuseColor.rgb = mix(diffuseColor.rgb, glass, open * 0.9);
           // A one-pixel lintel/sill so the opening has an edge, not just a hole.
-          float lint = step(uFacB.y, f.y) * step(uFacA.z, f.x) * step(f.x, uFacA.w) * (1.0 - ground);
-          diffuseColor.rgb *= 1.0 - lint * uFacD.y;
+          float lint = step(gB.y, f.y) * step(gA.z, f.x) * step(f.x, gA.w) * (1.0 - ground);
+          diffuseColor.rgb *= 1.0 - lint * gD.y;
           // ── SOMEBODY IS IN ──
           //
           // A share of the openings carry a light after dark. Per BAY, from the
@@ -342,7 +336,7 @@ export function facade(mat: THREE.Material): void {
           float vine = smoothstep(0.6, 0.95, fah(vec2(colv, 17.3)))
             * exp(-vFacH * 0.13)
             * (0.5 + 0.5 * fah(vec2(colv, floor(vFacH * 0.75))));
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.11, 0.21, 0.09), clamp(vine * uFacD.z, 0.0, 0.8));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.11, 0.21, 0.09), clamp(vine * gD.z, 0.0, 0.8));
           // ── MARKS ──
           //
           // Where someone stood. Everything about the placement is a rule
@@ -415,7 +409,7 @@ export function facade(mat: THREE.Material): void {
           }
         }
         // Water staining below every horizontal break, on every face.
-        diffuseColor.rgb *= 1.0 - uFacD.w * fah(floor(vFacW.xz * 1.7) + floor(vFacH * 2.3));
+        diffuseColor.rgb *= 1.0 - gD.w * fah(floor(vFacW.xz * 1.7) + floor(vFacH * 2.3));
       }`);
   };
 }

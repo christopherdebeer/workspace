@@ -22,9 +22,8 @@ mkdirSync(cache, { recursive: true });
 const built = join(cache, 'drive-traditions.test.mjs');
 execFileSync('npx', ['esbuild', join(HERE, '../client/traditions.ts'), '--bundle', '--format=esm',
   `--outfile=${built}`], { cwd: ROOT, stdio: 'pipe' });
-const { TRADITIONS, TRADITION_REGIONS, traditionFor, traditionCulture } = await import(pathToFileURL(built).href);
-const cultures = await import(pathToFileURL(join(cache, 'drive-traditions.test.mjs')).href);
-void cultures;
+const { TRADITIONS, TRADITION_REGIONS, TRADITION_LIST, traditionFor, traditionCulture, traditionIndex, gramTable, gramDecode, FACADE_DEFAULTS }
+  = await import(pathToFileURL(built).href);
 
 let bad = 0;
 const ok = (name, cond, saw) => {
@@ -120,6 +119,28 @@ for (const [name, lat, lon, want] of PLACES) {
   const med = traditionCulture(TRADITIONS.mediterranean);
   ok('…and one with no overrides is its base, renamed',
     med.wallTex === 'render' && med.roofTex === 'pantile' && med.storeyM === 3.25 && med.key === 'mediterranean', med);
+}
+// ── THE TEXTURE ROUND TRIP: WHAT THE SHADER READS IS WHAT WAS AUTHORED ──
+// Eight bits a field, under known scales. A bay may be 3 cm off and a share
+// 0.4%, and nothing more — the composite quantises to fourteen levels, so
+// that is precision nobody can see, and the test holds it anyway.
+{
+  const { data, rows } = gramTable();
+  ok('one row per tradition, in list order', rows === TRADITION_LIST.length && data.length === rows * 16
+    && TRADITION_LIST.every((k, i) => traditionIndex(k) === i + 1), { rows, list: TRADITION_LIST.length });
+  ok('no tradition is row 0, and an unknown key is', traditionIndex('nowhere') === 0 && traditionIndex(null) === 0
+    && TRADITION_LIST.every((k) => traditionIndex(k) > 0), null);
+  const worst = [];
+  for (const key of TRADITION_LIST) {
+    const want = { ...FACADE_DEFAULTS, ...TRADITIONS[key].grammar };
+    const got = gramDecode(data, traditionIndex(key));
+    for (const [k, v] of Object.entries(want)) {
+      const tol = k === 'bayM' || k === 'storeyM' ? 8 / 255 / 2 + 1e-9 : k === 'ivy' ? 2 / 255 / 2 + 1e-9 : 1 / 255 / 2 + 1e-9;
+      if (Math.abs(got[k] - v) > tol) worst.push(`${key}.${k}: ${v} -> ${got[k]}`);
+    }
+  }
+  ok('every field survives the bytes to within half a step', worst.length === 0, worst.slice(0, 6));
+  ok('row 0 decodes to the defaults', JSON.stringify(gramDecode(data, 0)) === JSON.stringify(FACADE_DEFAULTS), gramDecode(data, 0));
 }
 console.log(bad ? `\n${bad} FAILED` : '\nall ok');
 process.exitCode = bad ? 1 : 0;

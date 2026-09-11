@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BUILD_CULTURES, type BuildCulture } from './culture';
 import { FACADE_DEFAULTS, FACADE_GRAMMAR, facade, setFacadeGrammar, uFacNight, type FacadeGrammar } from './facade';
-import { TRADITIONS, traditionCulture, type Tradition } from './traditions';
+import { TRADITIONS, traditionCulture, traditionIndex, type Tradition } from './traditions';
 import { createDials, type DialValues } from './lab-dials';
 import { clamp } from './num';
 import { roofGeo } from './roof';
@@ -67,12 +67,14 @@ function extrude(pts: Array<[number, number]>, bottom: number, top: number): THR
   geo.translate(0, bottom, 0);
   return geo;
 }
-/** aBase and aMark: the two attributes the tile batch owes every vertex. The
- *  base is the SUNK bottom, as it is in the game; no marks here. */
-function withBase(geo: THREE.BufferGeometry, base: number): THREE.BufferGeometry {
+/** aBase, aMark and aGram: the three attributes the tile batch owes every
+ *  vertex. No marks here; aGram is 0 (the uniforms, which the dials drive)
+ *  unless VIA ATTRIBUTE asks the wall to read its tradition's row instead. */
+function withBase(geo: THREE.BufferGeometry, base: number, gram: number): THREE.BufferGeometry {
   const n = geo.attributes.position.count;
   geo.setAttribute('aBase', new THREE.BufferAttribute(new Float32Array(n).fill(base), 1));
   geo.setAttribute('aMark', new THREE.BufferAttribute(new Float32Array(n), 1));
+  geo.setAttribute('aGram', new THREE.BufferAttribute(new Float32Array(n).fill(gram), 1));
   return geo;
 }
 const num = (v: DialValues, k: string): number => Number(v[k]);
@@ -160,6 +162,12 @@ export async function startFacadeLab(): Promise<void> {
       { id: 'ridge', label: 'RIDGE m', kind: 'range', min: 0.4, max: 8, step: 0.1, value: 2.2 },
       { id: 'terrace', label: 'TERRACE', kind: 'range', min: 1, max: 8, step: 1, value: 1 },
       { id: 'sGram', label: 'THE OPENINGS', kind: 'section' },
+      // ON: the wall reads its tradition's ROW of the atlas texture through
+      // aGram, exactly as a building in the world does, and the uniforms are
+      // parked at the defaults — so the picture must come from the texture,
+      // and a wall that changed with the toggle would say the two paths
+      // disagree. OFF: the dials drive the uniforms and aGram is 0.
+      { id: 'viaAttr', label: 'VIA ATTRIBUTE', kind: 'toggle', value: false },
       { id: 'bayM', label: 'BAY m', kind: 'range', min: 1.2, max: 6, step: 0.05, value: G.bayM },
       { id: 'gridFollows', label: 'ROWS = STOREYS', kind: 'toggle', value: false },
       { id: 'gridM', label: 'ROW m', kind: 'range', min: 2.2, max: 4.5, step: 0.05, value: G.storeyM },
@@ -228,8 +236,8 @@ export async function startFacadeLab(): Promise<void> {
 
   let builtKey = '';
   let roofRefused = false;
-  const rebuild = (w: number, d: number, height: number, plinth: number, aBase: number, roofShape: string,
-    ridge: number, terrace: number): void => {
+  const rebuild = (w: number, d: number, height: number, plinth: number, aBase: number, gram: number,
+    roofShape: string, ridge: number, terrace: number): void => {
     for (const m of group.children) (m as THREE.Mesh).geometry.dispose();
     group.clear();
     roofRefused = false;
@@ -239,10 +247,10 @@ export async function startFacadeLab(): Promise<void> {
     for (let i = 0; i < terrace; i++) {
       const x0 = -total / 2 + i * w;
       const pts: Array<[number, number]> = [[x0, -d / 2], [x0 + w, -d / 2], [x0 + w, d / 2], [x0, d / 2]];
-      group.add(new THREE.Mesh(withBase(extrude(pts, -plinth, height), aBase), [roofMat, wallMat]));
+      group.add(new THREE.Mesh(withBase(extrude(pts, -plinth, height), aBase, gram), [roofMat, wallMat]));
       if (roofShape !== 'flat') {
         const rg = roofGeo(pts, roofShape, height, ridge);
-        if (rg) group.add(new THREE.Mesh(withBase(rg, aBase), [roofMat, wallMat]));
+        if (rg) group.add(new THREE.Mesh(withBase(rg, aBase, gram), [roofMat, wallMat]));
         else roofRefused = true;
       }
     }
@@ -280,7 +288,10 @@ export async function startFacadeLab(): Promise<void> {
     const storeys = Math.round(num(v, 'storeys'));
     const height = storeys * storeyM;
     const g = grammarFrom(v);
-    setFacadeGrammar(g);
+    // The attribute path parks the uniforms at the defaults so the texture is
+    // the only thing that can be dressing the wall.
+    const gram = bool(v, 'viaAttr') && tradition ? traditionIndex(tradition.key) : 0;
+    setFacadeGrammar(gram ? { ...FACADE_DEFAULTS } : g);
     const night = bool(v, 'night');
     uFacNight.value.set(night ? 1 : 0, num(v, 'lit'));
     // The paint: the culture's own palette by index, or a colour typed in.
@@ -305,8 +316,8 @@ export async function startFacadeLab(): Promise<void> {
     const aBase = bool(v, 'baseGround') ? 0 : -plinth;
     const ridge = bool(v, 'cultureRidge') ? clamp((Math.min(w, d) / 2) * culture.pitch, 1.2, 7) : num(v, 'ridge');
     const terrace = Math.round(num(v, 'terrace'));
-    const key = [w, d, height, plinth, aBase, roofShape, ridge, terrace].join('|');
-    if (key !== builtKey) { builtKey = key; rebuild(w, d, height, plinth, aBase, roofShape, ridge, terrace); }
+    const key = [w, d, height, plinth, aBase, gram, roofShape, ridge, terrace].join('|');
+    if (key !== builtKey) { builtKey = key; rebuild(w, d, height, plinth, aBase, gram, roofShape, ridge, terrace); }
     // The light. At night the sun is the moon and the sky is a floor; the
     // game's skylight lift (bldSkylit) is not reproduced, so a night wall here
     // reads darker than in the world — the lit bays are what this is for.
@@ -326,14 +337,15 @@ export async function startFacadeLab(): Promise<void> {
     const row1 = g.storeyM + aBase, doorHead = g.doorY1 * g.storeyM + aBase;
     const win1 = g.storeyM + g.winY0 * g.storeyM + aBase;
     report = {
-      culture: culture.key, tradition: tradition?.key ?? null, w, d, storeys, storeyM, height, roof: roofShape, ridge, terrace, plinth, aBase,
+      culture: culture.key, tradition: tradition?.key ?? null, gramIndex: gram, viaAttribute: gram > 0,
+      w, d, storeys, storeyM, height, roof: roofShape, ridge, terrace, plinth, aBase,
       bays: +bays.toFixed(2), rows: +rows.toFixed(2), row1AboveGround: +row1.toFixed(2),
       doorHeadAboveGround: +doorHead.toFixed(2), firstWindowSill: +win1.toFixed(2), roofRefused, night,
     };
     status.textContent =
       `${culture.key.toUpperCase()}${tradition ? ` (atlas: ${tradition.base} base)` : ''} · ${w} x ${d} m · ${storeys} storeys of ${storeyM.toFixed(2)} = ${height.toFixed(1)} m`
       + ` · roof ${roofShape}${roofShape === 'flat' ? '' : ` ridge ${ridge.toFixed(1)}`}${roofRefused ? ' (roofGeo REFUSED this plan)' : ''}`
-      + ` · ${terrace > 1 ? `terrace of ${terrace}` : 'detached'}\n`
+      + ` · ${terrace > 1 ? `terrace of ${terrace}` : 'detached'}${gram ? ` · grammar VIA aGram row ${gram}` : ''}\n`
       + `bays ${bays.toFixed(1)} across a ${g.bayM} m grid · rows ${rows.toFixed(2)} of ${g.storeyM.toFixed(2)} m`
       + ` · row 1 stands ${row1.toFixed(2)} m above ground (plinth ${plinth}, base ${aBase === 0 ? 'ground' : 'plinth'}) · door head ${doorHead.toFixed(2)} m · first sill ${win1.toFixed(2)} m\n`
       + `${night ? 'NIGHT' : `sun ${num(v, 'sunAlt')}° az ${num(v, 'sunAz')}°`} · eye ${eye} m at ${dist} m · pixel ${num(v, 'pixel')}x`;

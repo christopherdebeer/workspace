@@ -73,8 +73,9 @@ const { BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, 
 import { createOverlays, type RouteCard } from './overlays';
 import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
-import { FACADE_DEFAULTS, FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, setFacadeGrammar, uFacNight } from './facade';
-import { TRADITIONS, traditionCulture, traditionFor } from './traditions';
+import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight } from './facade';
+import { gramDecode } from './facade-grammar';
+import { gramTable, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { startLab } from './labs';
 import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
@@ -3376,9 +3377,6 @@ const cultEnv = { latLonAt: (x: number, z: number) => localToLatLon(x, z) };
  *  cell, so it survives a rebase along with everything else. */
 const lookCache = new Map<string, BuildLook>();
 const stoneCol = new THREE.Color();
-/** The tradition whose grammar the façade shader is running, and when it was
- *  last asked — see the note by uFacNight's write. */
-let gramKey = '', gramAt = 0;
 function buildLook(x: number, z: number): BuildLook {
   const c = climateAt(x, z);
   const key = `${Math.round(x / 160)},${Math.round(z / 160)},${c.domIdx}`;
@@ -21084,7 +21082,10 @@ const bPaint = (id: number): number => {
 // The facade shader reads each building's ground line from the aBase vertex
 // attribute (see facade()), and re-seating shifts a building's own vertex
 // ranges inside the batch (see reseatBuildings).
-interface BldPiece { geo: THREE.BufferGeometry; base: number; mark: number; pts: Array<[number, number]> }
+/** `gram` is the building's tradition row (traditionIndex), packed per vertex
+ *  as aGram at flush — how a batch of a whole tile's walls can each read
+ *  their own opening grammar. 0 is the uniforms (the defaults). */
+interface BldPiece { geo: THREE.BufferGeometry; base: number; mark: number; gram: number; pts: Array<[number, number]> }
 let bldBatch: { walls: BldPiece[]; rubble: BldPiece[]; intact: Map<number, BldPiece[]> } | null = null;
 const openBldBatch = (): NonNullable<typeof bldBatch> =>
   (bldBatch ??= { walls: [], rubble: [], intact: new Map() });
@@ -21231,7 +21232,7 @@ function flushBuildings(): void {
     for (const p of pieces) total += p.geo.attributes.position.count;
     const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3),
       col = new Float32Array(total * 3), aB = new Float32Array(total),
-      aM = new Float32Array(total);
+      aM = new Float32Array(total), aG = new Float32Array(total);
     const seats: Seats = [];
     let o = 0;
     for (const p of pieces) {
@@ -21241,6 +21242,7 @@ function flushBuildings(): void {
       col.set(p.geo.attributes.color.array as Float32Array, o * 3);
       aB.fill(p.base, o, o + n);
       aM.fill(p.mark, o, o + n);
+      aG.fill(p.gram, o, o + n);
       seats.push({ pts: p.pts, ranges: [{ start: o, count: n }] });
       o += n;
       p.geo.dispose();
@@ -21251,6 +21253,7 @@ function flushBuildings(): void {
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.setAttribute('aBase', new THREE.BufferAttribute(aB, 1));
     geo.setAttribute('aMark', new THREE.BufferAttribute(aM, 1));
+    geo.setAttribute('aGram', new THREE.BufferAttribute(aG, 1));
     finish(geo, rubble ? ruinMatFar : ruinMat, seats, { noCast: rubble, ruinLod: !rubble });
   };
   packRuin(b.walls, false);
@@ -21262,7 +21265,7 @@ function flushBuildings(): void {
   if (total) {
     const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3),
       uv = new Float32Array(total * 2), aB = new Float32Array(total),
-      aM = new Float32Array(total);
+      aM = new Float32Array(total), aG = new Float32Array(total);
     const geo = new THREE.BufferGeometry();
     const seatsBy = new Map<BldPiece, Array<{ start: number; count: number }>>();
     let o = 0;
@@ -21273,6 +21276,7 @@ function flushBuildings(): void {
       if (u) uv.set(u.subarray(start * 2, (start + count) * 2), o * 2);
       aB.fill(p.base, o, o + count);
       aM.fill(p.mark, o, o + count);
+      aG.fill(p.gram, o, o + count);
       const list = seatsBy.get(p) ?? [];
       list.push({ start: o, count });
       seatsBy.set(p, list);
@@ -21295,6 +21299,7 @@ function flushBuildings(): void {
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geo.setAttribute('aBase', new THREE.BufferAttribute(aB, 1));
     geo.setAttribute('aMark', new THREE.BufferAttribute(aM, 1));
+    geo.setAttribute('aGram', new THREE.BufferAttribute(aG, 1));
     finish(geo, B_MATS_FLAT, [...seatsBy.entries()].map(([p, ranges]) => ({ pts: p.pts, ranges })));
   }
 }
@@ -21550,6 +21555,9 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // the culture (see BuildCulture.storeyM) rather than a global 3.1m. It is a
   // cached lookup on position and has no dependency on anything below.
   const look = buildLook(ctrX, ctrZ);
+  // The opening grammar this building's walls read: its tradition's row of
+  // the atlas texture, or 0 for the defaults where the atlas is silent.
+  const gram = traditionIndex(look.tradition);
   // ON THE LINE, nothing out here is intact. The Covers are where the built
   // world went — everything the domes did not take has stood empty since the
   // Leaving, so the campaign's world ruins every building outside a shell
@@ -21578,10 +21586,10 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
       const batch = openBldBatch();
       const arr = batch.intact.get(paint) ?? [];
       const mark = markForBuilding(ctrX, ctrZ, kind);
-      arr.push({ geo, base, mark, pts });
+      arr.push({ geo, base, mark, gram, pts });
       if (roof) {
         const rg = roofGeo(pts, roof, top, ridge);
-        if (rg) arr.push({ geo: rg, base, mark, pts });
+        if (rg) arr.push({ geo: rg, base, mark, gram, pts });
       }
       batch.intact.set(paint, arr);
     };
@@ -21693,9 +21701,9 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
           const batch = openBldBatch();
           const arr = batch.intact.get(paint) ?? [];
           const mark = markForBuilding(tx, tz, kind);
-          arr.push({ geo, base, mark, pts: sq });
+          arr.push({ geo, base, mark, gram, pts: sq });
           const rg = roofGeo(sq, 'pyramidal', top, 4.5);
-          if (rg) arr.push({ geo: rg, base, mark, pts: sq });
+          if (rg) arr.push({ geo: rg, base, mark, gram, pts: sq });
           batch.intact.set(paint, arr);
         });
     }
@@ -21786,12 +21794,13 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // aBase is the ground the ruin stands on, not the buried foot: the same
   // rule as the intact stock's ground line, so a ruin's doorways and its
   // marks band are measured from the grass and not from 0.6 m under it.
-  batch.walls.push({ geo: wallsGeo, base: minH, mark: markForBuilding(ctrX, ctrZ, kind), pts });
+  // A ruin reads its tradition's grammar too: a Paris shell has Paris bays.
+  batch.walls.push({ geo: wallsGeo, base: minH, mark: markForBuilding(ctrX, ctrZ, kind), gram, pts });
   if (rubble.length) {
     const rubbleGeo = mergeParts(rubble);
     rubbleGeo.translate(0, foot, 0);
     // Rubble takes no marks: a heap of broken slab has no wall to write on.
-    batch.rubble.push({ geo: rubbleGeo, base: foot, mark: 0, pts });
+    batch.rubble.push({ geo: rubbleGeo, base: foot, mark: 0, gram: 0, pts });
   }
   mapPoly(pts, 'rgba(70,66,58,0.9)');
   claimSolid(pts, foot + tallest, true);
@@ -27795,24 +27804,6 @@ function stepWeather(now: number, dt: number): void {
   ruinMatFar.emissive.copy(ruinLift);
   // The façade's night term: how much night, and how many windows are lit.
   uFacNight.value.x = 1 - dayF;
-  // ── THE GRAMMAR IN FORCE IS THE TRADITION UNDER THE TRUCK ──
-  //
-  // FACADE_GRAMMAR is a uniform, so it is one grammar per draw and, since the
-  // walls batch per tile, one grammar for the world. Until the per-building
-  // attribute lands (the shape aMark took, for the same reason) the honest
-  // interim is the tradition the truck is standing in: the fine ring is five
-  // kilometres and a tradition box is a country, so a boundary crossing —
-  // which restyles every window in view at once — is rare, and the frame it
-  // happens on is the one the atlas is wrong on either side of anyway. Read
-  // once a second, written only on change.
-  if (performance.now() - gramAt > 1000) {
-    gramAt = performance.now();
-    const key = buildLook(state.x, state.z).tradition ?? '';
-    if (key !== gramKey) {
-      gramKey = key;
-      setFacadeGrammar({ ...FACADE_DEFAULTS, ...(TRADITIONS[key]?.grammar ?? {}) });
-    }
-  }
   // THE DIAL IS THE BASE; THE WEATHER ONLY MODULATES IT.
   //
   // This line used to ASSIGN the bloom, every frame, from the weather and the
@@ -31913,13 +31904,26 @@ function repaintWetDebug(): void {
  *   Is it keyed to place, not to id?      → the same coordinates always give
  *                                            the same answer, on any reload.
  */
-// The atlas at the truck, and the grammar the walls are running: `at` is
-// what traditionFor answers here (null where the climate pick does), `inForce`
-// the tradition whose grammar is on the uniforms, `grammar` those numbers.
+// The atlas at a point and what the walls there read: `at` is what
+// traditionFor answers (null where the climate pick does), `row` its aGram,
+// `grammar` the row DECODED as the shader will see it (bytes, not the
+// authored floats), `uniforms` what a row-0 wall reads, and `batches` how
+// many building meshes carry aGram with the set of rows seen across them.
 (window as unknown as { __tradition?: object }).__tradition = (x?: number, z?: number): object => {
   const [lat, lon] = localToLatLon(x ?? state.x, z ?? state.z);
   const t = traditionFor(lat, lon);
-  return { at: t?.key ?? null, note: t?.note ?? null, inForce: gramKey || null, grammar: { ...FACADE_GRAMMAR_LIVE } };
+  const row = traditionIndex(t?.key);
+  const rows = new Set<number>();
+  let batches = 0;
+  for (const m of bldBatchMeshes) {
+    const a = m.geometry.getAttribute('aGram') as THREE.BufferAttribute | undefined;
+    if (!a) continue;
+    batches++;
+    for (let i = 0; i < a.count; i += 97) rows.add(a.getX(i));
+  }
+  return { at: t?.key ?? null, note: t?.note ?? null, row,
+    grammar: row ? gramDecode(gramTable().data, row) : null,
+    uniforms: { ...FACADE_GRAMMAR_LIVE }, batches, rows: [...rows].sort((p, q) => p - q) };
 };
 (window as unknown as { __culture?: object }).__culture = (r = 0, bearing = 90, steps = 8): object => {
   const at = (x: number, z: number): Record<string, unknown> => {

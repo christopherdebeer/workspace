@@ -262,6 +262,28 @@ for (const lab of LABS) {
   await d.page.waitForTimeout(3500);
   const back = await d.page.evaluate(() => document.getElementById('bayM')?.value);
   ok('the grammar survives a reload', back === '3.25', back);
+  // A TRADITION ON THE SAME WALL, BY EITHER ROAD. Choosing t:cape sets the
+  // grammar dials to what the atlas states (the uniforms' road); VIA ATTRIBUTE
+  // parks the uniforms at the defaults and hands the wall its row through
+  // aGram (the world's road). The report says which is in force.
+  await d.page.evaluate(() => {
+    const el = document.getElementById('culture');
+    el.value = 't:cape';
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await d.page.waitForTimeout(600);
+  const cape = await d.page.evaluate(() => window.__facade?.());
+  ok('choosing a tradition dresses the wall as the atlas states',
+    !!cape && cape.tradition === 'cape' && cape.gramIndex === 0 && Math.abs(cape.grammar.bayM - 3.3) < 1e-9, cape);
+  await d.page.evaluate(() => {
+    const el = document.getElementById('viaAttr');
+    el.checked = true;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await d.page.waitForTimeout(600);
+  const via = await d.page.evaluate(() => window.__facade?.());
+  ok('…and VIA ATTRIBUTE hands it the row instead, with the uniforms at the defaults',
+    !!via && via.viaAttribute === true && via.gramIndex > 0 && Math.abs(via.grammar.bayM - 2.75) < 1e-9, via);
   // Put it back, so the next lab run — and anyone opening the lab on this
   // browser profile — starts from the engine's defaults.
   await d.page.evaluate(() => localStorage.removeItem('drive.lab.facade.dials'));

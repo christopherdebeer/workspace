@@ -1,5 +1,6 @@
 import { BUILD_CULTURES, type BuildCulture, type RoofTex, type WallTex } from './culture';
-import type { FacadeGrammar } from './facade';
+import { FACADE_DEFAULTS, GRAM_ROW_BYTES, gramEncode, type FacadeGrammar } from './facade-grammar';
+export { gramDecode, FACADE_DEFAULTS } from './facade-grammar';
 
 /**
  * ── THE TRADITION ATLAS: WHAT A PLACE BUILDS LIKE, WRITTEN DOWN ──
@@ -333,4 +334,33 @@ export function traditionCulture(t: Tradition): BuildCulture {
     pitch: t.pitch ?? base.pitch,
     storeyM: t.storeyM ?? base.storeyM,
   };
+}
+
+/** The traditions in a fixed order: row i of the grammar texture is
+ *  TRADITION_LIST[i], and a building's aGram is i + 1 (0 is "no tradition —
+ *  the uniforms"). Insertion order of the table, which is stable as long as
+ *  entries are appended; an entry moved would re-dress every building on
+ *  the next deploy, so append. */
+export const TRADITION_LIST: readonly string[] = Object.keys(TRADITIONS);
+
+/** aGram for a tradition key: its row plus one, and 0 for none. */
+export function traditionIndex(key: string | undefined | null): number {
+  if (!key) return 0;
+  const i = TRADITION_LIST.indexOf(key);
+  return i < 0 ? 0 : i + 1;
+}
+
+/** Every tradition's full grammar (the defaults with its overrides) as the
+ *  bytes of the shader's lookup texture, one row each, in TRADITION_LIST
+ *  order. Pure, so the test can decode what the shader will read. */
+// Uint8Array<ArrayBuffer>, not Uint8Array: three's DataTexture takes a
+// BufferSource, which TypeScript 5.7+ types as a view over a plain
+// ArrayBuffer — the same annotation HydroTileField's arrays needed.
+export function gramTable(): { data: Uint8Array<ArrayBuffer>; rows: number } {
+  const rows = TRADITION_LIST.length;
+  const data = new Uint8Array(Math.max(1, rows) * GRAM_ROW_BYTES);
+  TRADITION_LIST.forEach((key, i) => {
+    gramEncode({ ...FACADE_DEFAULTS, ...TRADITIONS[key].grammar }, data, i * GRAM_ROW_BYTES);
+  });
+  return { data, rows };
 }

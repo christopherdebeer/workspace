@@ -2089,23 +2089,25 @@ says which town it lost. Three rules:
   stone village is still built of the hill behind it (the bedrock palette),
   unless the entry carries its own `wall`.
 
-**THE GRAMMAR IN FORCE IS THE TRADITION UNDER THE TRUCK.** `FACADE_GRAMMAR`
-is a uniform — one grammar per draw, and the walls batch per tile, so one
-grammar for the world. Until the per-building attribute lands (the shape
-`aMark` took, for exactly this reason) main.ts reads the truck's `buildLook`
-once a second beside the `uFacNight` write and sets the grammar to
-`FACADE_DEFAULTS` plus the tradition's overrides on change. A tradition box
-is a country and the fine ring is five kilometres, so the boundary crossing
-that restyles every window at once is rare; it is the honest interim and it
-is written down as one. `__tradition()` reports `at` (the atlas here),
-`inForce` (whose grammar the walls are running) and the numbers.
+**THE GRAMMAR IN FORCE WAS THE TRADITION UNDER THE TRUCK, for one commit.**
+`FACADE_GRAMMAR` is a uniform — one grammar per draw, and the walls batch per
+tile — so phase 1 read the truck's `buildLook` once a second and set the
+uniforms to its tradition's grammar, and said so as an interim. Phase 3
+below replaced it the same day with the per-building attribute; the
+paragraph stays because the interim is the shape the next "one uniform for
+the world" will want to take, and should not.
 
 **Measured in the world** (`scratchpad/atlas-world.mjs`, the fixtures, nodraw,
 no page errors): Camps Bay `cape` — render under corrugated, palette
 `#f3f0e8 #cfd3cf #e9e5d9`, pitch 0.20, grammar bay 3.3 m / open 0.88 in
 force; Suresnes `ile-de-france` — render under pantile, creams, pitch 0.48,
-bay 3.0 m in force. Before: `brick` under slate and `limewash`. The lab's
-CULTURE dial lists every entry as `t:<key>`; choosing one sets the grammar
+bay 3.0 m in force. Before: `brick` under slate and `limewash`. **The Camps Bay survey pair**
+(`/tmp/drive-tools/bldg-control` against `bldg-fix`, same four spots): the
+b1 block at low sun is a dark oxide-red brick wall with a scatter of small
+windows on the control and a white rendered wall with the Cape's wide glass
+in a regular grid on the working tree — the same building, the same frame,
+and the first frame in this file where a building says where it is. The
+lab's CULTURE dial lists every entry as `t:<key>`; choosing one sets the grammar
 dials to what it states, once, and the dials are the record from then on.
 Five traditions photographed on the same wall with no page errors
 (`facade-trad.mjs`): the Haussmann block's floor-to-ceiling windows, the
@@ -2124,6 +2126,51 @@ none of those fields yet: a field nothing consumes is a label.
 drew the same one and the lab suite died on `EADDRINUSE` before its first
 lab. It retries another draw a dozen times now, so a survey and a suite can
 run together.
+
+### Phase 3: the grammar rides per building, as a row of a texture
+
+`FACADE_GRAMMAR` is a uniform and buildings batch per tile, so a per-building
+grammar cannot be a uniform and sixteen floats cannot ride on every vertex.
+The route is the one the marks took for their tins, for the same GLSL ES 1.00
+reason (no dynamically indexed uniform arrays in a fragment shader, and a
+one-column lookup texture costs one sample): **one float attribute, `aGram`,
+the building's tradition row plus one, and a 4×N RGBA8 texture of every
+tradition's full grammar** — four texels a row under the scales in
+`GRAM_FIELDS`, a bay stored as eighths of a metre, ivy as halves, the rest as
+shares. `aGram` 0 is "the uniforms", which the game keeps at
+`FACADE_DEFAULTS` and the lab drives; the shader picks per fragment
+(`vGram > 0.5`). The tile batch packs `aGram` from `BldPiece.gram` beside
+`aBase` and `aMark`; ruins carry their tradition's row too (a Paris shell has
+Paris bays), rubble carries 0.
+
+- **`client/facade-grammar.ts` is pure, and that is why it exists.** The
+  interface, the frozen defaults and the byte encode/decode moved out of
+  facade.ts (which needs THREE and a document) so the atlas can encode its
+  rows and the node test can decode them back. facade.ts re-exports the
+  names it always exported; nothing that imported them changed.
+- **The bytes are held to half a step.** `traditions.test.mjs` decodes every
+  row and asserts every field within 3 cm (bay, storey), 0.4% (a share) and
+  1/255 (ivy) of the authored number. That is precision under a composite
+  that quantises to fourteen levels, and it is the reason the two roads
+  below agree.
+- **The two roads agree, and the lab proves it on one wall.** VIA ATTRIBUTE
+  in `/lab/facade` parks the uniforms at the defaults and hands the wall its
+  tradition's row through `aGram`, exactly as a building in the world gets
+  it; off, the dials drive the uniforms and `aGram` is 0. Photographed both
+  ways for the Dutch terrace and the Haussmann block (`facade-roads.mjs`),
+  the wall pane diffed with `imgdiff.mjs`: **mean 1.7–1.9/255, 4% of pixels
+  moved by more than 3, the same frame against itself 0** — the moved pixels
+  are the edges of windows whose bay rounded from 3.0 to 3.012 m, one pixel
+  here and there, and nothing else. `lab.test.mjs` holds the report
+  (`gramIndex`, `viaAttribute`, the uniforms parked) rather than the pixels.
+- **`__tradition()` reports what a wall READS, not what was authored:** `row`
+  (its aGram), `grammar` decoded from the bytes, `uniforms`, and `batches`
+  with the set of rows seen across the building meshes. Camps Bay reads
+  `rows: [0, 3]` — the rubble at 0, every wall on `cape`'s row — with the
+  row's bay at 3.294 for an authored 3.3.
+- **`TRADITION_LIST` order is a wire format.** Row i is entry i of the table
+  in insertion order; an entry MOVED re-dresses every building on the next
+  deploy. Append.
 
 ## The labs
 
