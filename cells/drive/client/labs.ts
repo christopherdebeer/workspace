@@ -54,6 +54,12 @@ export const LABS: readonly LabEntry[] = [
     start: () => import('./marks-lab').then((m) => m.startMarksLab()),
   },
   {
+    slug: 'facade',
+    label: 'FAÇADE',
+    note: 'One building at the survey\'s own stand-off: the production façade shader and roof, the culture\'s wall and roof canvases, and the massing, the plinth and the whole opening grammar on dials.',
+    start: () => import('./facade-lab').then((m) => m.startFacadeLab()),
+  },
+  {
     slug: 'roads',
     label: 'ROADS',
     note: 'A section through the bench search: the ground, the candidate offsets, the chosen profile and the cut and fill between them.',

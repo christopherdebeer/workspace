@@ -1,17 +1,6 @@
 import * as THREE from 'three';
 import { MARK_COLS, MARK_PALETTE, drawMarkAtlas } from './graffiti';
-
-/** The same small PRNG main.ts seeds its textures with, so an atlas drawn
- *  here and one drawn there are the same atlas. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+import { mulberry32 } from './rng';
 
 /**
  * ── THE FAÇADE: A BUILDING IS NOT A TILING BITMAP ──
@@ -156,6 +145,94 @@ export function setMarkTuning(patch: Partial<MarkTuning>): MarkTuning {
   return MARK_TUNING;
 }
 
+/**
+ * ── THE OPENING GRAMMAR, NAMED AND LIVE ──
+ *
+ * The bay grid, the window and door boxes, the shares, the glass and the ivy
+ * were literals in the shader below: one 2.75 x 3.1 m grid for the planet,
+ * windows from 0.2 to 0.8 of a bay, a door in a third of the ground-floor
+ * bays, and no way to ask whether a Provençal terrace and a timber farmhouse
+ * should share any of it without an edit, a build and a hunt for a wall. The
+ * building review named "one bay grid for the planet" as its open item and
+ * the façade lab is what answers it — so, like the mark tuning above, the
+ * grammar is a named set carried as four vec4s, the lab drives it live, and
+ * COPY there writes exactly this literal.
+ *
+ * THE DEFAULTS ARE TODAY'S LITERALS TO THE DIGIT. Shipping this changes no
+ * pixel; it changes where the numbers live. A per-tradition grammar is the
+ * next unit, and it will arrive as a vertex attribute the way aMark did,
+ * because buildings batch per tile and a uniform is per draw.
+ */
+export interface FacadeGrammar {
+  /** The bay grid: metres across a bay, metres floor to floor. */
+  bayM: number;
+  storeyM: number;
+  /** The window box, as shares of the bay (x) and the storey (y). */
+  winX0: number;
+  winX1: number;
+  winY0: number;
+  winY1: number;
+  /** The door box; its sill is at the bay's floor. */
+  doorX0: number;
+  doorX1: number;
+  doorY1: number;
+  /** Share of ground-floor bays that are a door rather than a shopfront. */
+  doorShare: number;
+  /** Share of bays that carry an opening at all; the rest are blank wall. */
+  openShare: number;
+  /** The void: a fraction OF the wall, plus a per-bay variation. */
+  glassShade: number;
+  glassVar: number;
+  /** The lintel line's darkening at the window head. */
+  lintel: number;
+  /** Ivy, as a multiplier on the column claim: 1 is the shipped amount. */
+  ivy: number;
+  /** Water staining under every horizontal break. */
+  stain: number;
+}
+
+export const FACADE_GRAMMAR: FacadeGrammar = {
+  bayM: 2.75,
+  storeyM: 3.1,
+  winX0: 0.2,
+  winX1: 0.8,
+  winY0: 0.34,
+  winY1: 0.86,
+  doorX0: 0.33,
+  doorX1: 0.67,
+  doorY1: 0.6,
+  doorShare: 0.36,
+  openShare: 0.76,
+  glassShade: 0.2,
+  glassVar: 0.16,
+  lintel: 0.25,
+  ivy: 1,
+  stain: 0.16,
+};
+
+// Shared by reference, like the mark tuning: one write reaches every wall.
+const uFacA = { value: new THREE.Vector4() };
+const uFacB = { value: new THREE.Vector4() };
+const uFacC = { value: new THREE.Vector4() };
+const uFacD = { value: new THREE.Vector4() };
+function pushGrammar(): void {
+  const g = FACADE_GRAMMAR;
+  uFacA.value.set(g.bayM, g.storeyM, g.winX0, g.winX1);
+  uFacB.value.set(g.winY0, g.winY1, g.doorX0, g.doorX1);
+  uFacC.value.set(g.doorY1, g.doorShare, g.openShare, g.glassShade);
+  uFacD.value.set(g.glassVar, g.lintel, g.ivy, g.stain);
+}
+pushGrammar();
+
+/** Change the grammar everywhere at once. The façade lab's dials call this;
+ *  nothing in the game does yet, which is the point — the game runs the
+ *  defaults above until a tradition atlas says otherwise. */
+export function setFacadeGrammar(patch: Partial<FacadeGrammar>): FacadeGrammar {
+  Object.assign(FACADE_GRAMMAR, patch);
+  pushGrammar();
+  return FACADE_GRAMMAR;
+}
+
 export function facade(mat: THREE.Material): void {
   mat.onBeforeCompile = (sh) => {
     // Shared by reference: one atlas and one palette for the whole world, so
@@ -165,6 +242,10 @@ export function facade(mat: THREE.Material): void {
     sh.uniforms.uMarkA = uMarkA;
     sh.uniforms.uMarkB = uMarkB;
     sh.uniforms.uFacNight = uFacNight;
+    sh.uniforms.uFacA = uFacA;
+    sh.uniforms.uFacB = uFacB;
+    sh.uniforms.uFacC = uFacC;
+    sh.uniforms.uFacD = uFacD;
     // THE BASE RIDES IN AS A VERTEX ATTRIBUTE, not off the model matrix.
     // Buildings batch per tile now (see flushBuildings), so one mesh carries
     // hundreds of them and modelMatrix[3][1] — the old source of "this
@@ -184,6 +265,7 @@ export function facade(mat: THREE.Material): void {
         varying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark;
         uniform sampler2D uMarks; uniform sampler2D uMarkTins;
         uniform vec4 uMarkA; uniform vec4 uMarkB; uniform vec2 uFacNight;
+        uniform vec4 uFacA; uniform vec4 uFacB; uniform vec4 uFacC; uniform vec4 uFacD;
         float fah(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 41.31); return fract(p.x * p.y); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
       {
@@ -192,16 +274,18 @@ export function facade(mat: THREE.Material): void {
         // ceiling is the giveaway that this is a texture and not a building.
         if (abs(fn.y) < 0.55) {
           // Run the bay grid along whichever horizontal axis this wall faces.
+          // Every number in the grid is FACADE_GRAMMAR (above), carried in
+          // uFacA..uFacD; the defaults are the literals that used to be here.
           float u = abs(fn.x) > abs(fn.z) ? vFacW.z : vFacW.x;
-          vec2 cell = vec2(u / 2.75, vFacH / 3.1);
+          vec2 cell = vec2(u / uFacA.x, vFacH / uFacA.y);
           vec2 idc = floor(cell), f = fract(cell);
           float r = fah(idc + vec2(7.13, 3.31));
-          float win = step(0.2, f.x) * step(f.x, 0.8) * step(0.34, f.y) * step(f.y, 0.86);
-          float door = step(0.33, f.x) * step(f.x, 0.67) * step(0.03, f.y) * step(f.y, 0.6);
+          float win = step(uFacA.z, f.x) * step(f.x, uFacA.w) * step(uFacB.x, f.y) * step(f.y, uFacB.y);
+          float door = step(uFacB.z, f.x) * step(f.x, uFacB.w) * step(0.03, f.y) * step(f.y, uFacC.x);
           // Street level is doorways and shopfronts; above it, windows.
-          float ground = step(vFacH, 3.1);
-          float open = mix(win, mix(win * step(0.52, f.y), door, step(r, 0.36)), ground);
-          open *= step(r, 0.76);                    // the rest are bricked up
+          float ground = step(vFacH, uFacA.y);
+          float open = mix(win, mix(win * step(0.52, f.y), door, step(r, uFacC.y)), ground);
+          open *= step(r, uFacC.z);                 // the rest are bricked up
           // ── GLASS IS A DARKENING OF THE WALL, NOT AN ABSOLUTE COLOUR ──
           //
           // These were fixed values — 0.05 to 0.17 — on the assumption that the
@@ -218,15 +302,15 @@ export function facade(mat: THREE.Material): void {
           // darker. So the void is a fraction OF the wall, with a small absolute
           // term so pure-black paint still shows an opening at all. That is one
           // multiply and it cannot invert.
-          float shade = 0.20 + 0.16 * fah(idc + vec2(2.7));
+          float shade = uFacC.w + uFacD.x * fah(idc + vec2(2.7));
           vec3 glass = diffuseColor.rgb * shade + vec3(0.012, 0.014, 0.020);
           // A few catch the low sun. Still absolute, and rightly so — a
           // reflection is the SKY's brightness, not the wall's.
           glass = mix(glass, vec3(0.62, 0.44, 0.2), step(0.94, fah(idc + vec2(11.3, 5.7))) * 0.75);
           diffuseColor.rgb = mix(diffuseColor.rgb, glass, open * 0.9);
           // A one-pixel lintel/sill so the opening has an edge, not just a hole.
-          float lint = step(0.86, f.y) * step(0.2, f.x) * step(f.x, 0.8) * (1.0 - ground);
-          diffuseColor.rgb *= 1.0 - lint * 0.25;
+          float lint = step(uFacB.y, f.y) * step(uFacA.z, f.x) * step(f.x, uFacA.w) * (1.0 - ground);
+          diffuseColor.rgb *= 1.0 - lint * uFacD.y;
           // ── SOMEBODY IS IN ──
           //
           // A share of the openings carry a light after dark. Per BAY, from the
@@ -254,7 +338,7 @@ export function facade(mat: THREE.Material): void {
           float vine = smoothstep(0.6, 0.95, fah(vec2(colv, 17.3)))
             * exp(-vFacH * 0.13)
             * (0.5 + 0.5 * fah(vec2(colv, floor(vFacH * 0.75))));
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.11, 0.21, 0.09), clamp(vine, 0.0, 0.8));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.11, 0.21, 0.09), clamp(vine * uFacD.z, 0.0, 0.8));
           // ── MARKS ──
           //
           // Where someone stood. Everything about the placement is a rule
@@ -327,7 +411,7 @@ export function facade(mat: THREE.Material): void {
           }
         }
         // Water staining below every horizontal break, on every face.
-        diffuseColor.rgb *= 1.0 - 0.16 * fah(floor(vFacW.xz * 1.7) + floor(vFacH * 2.3));
+        diffuseColor.rgb *= 1.0 - uFacD.w * fah(floor(vFacW.xz * 1.7) + floor(vFacH * 2.3));
       }`);
   };
 }

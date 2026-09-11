@@ -207,6 +207,56 @@ for (const lab of LABS) {
   await d.close();
 }
 
+// ── THE FAÇADE LAB KEEPS THE SAME BARGAIN ────────────────────────
+// A second lab on the same panel, held to the same three promises — and to a
+// fourth that is its own: the numbers it reports are the numbers the world
+// would build, so the plinth finding (a door head 0.46 m above the pavement
+// on flat ground) has to be READABLE off the probe, not eyeballed off a frame.
+{
+  const d = await openDrive({ pagePath: '/lab/facade', tag: 'lab-facade',
+    settle: 6000, bootTimeout: 45000 });
+  await d.page.waitForTimeout(2500);
+  const dialCount = await d.page.evaluate(() =>
+    document.querySelectorAll('.lab-dials .d').length);
+  ok('the façade lab is liberal with its dials', dialCount >= 30, dialCount);
+  const rep = await d.page.evaluate(() => window.__facade?.());
+  ok('it reports the grammar against the massing',
+    !!rep && typeof rep.bays === 'number' && typeof rep.doorHeadAboveGround === 'number'
+      && rep.grammar?.bayM === 2.75 && rep.grammar?.storeyM === 3.1, rep);
+  // THE SHIPPED NUMBERS, READ BACK: a 1.4 m plinth under a 3.1 m row puts the
+  // ground row 1.7 m above the grass and a door's head at 0.6 x 3.1 - 1.4.
+  ok('…and the plinth arithmetic is the game\'s',
+    !!rep && Math.abs(rep.row1AboveGround - 1.7) < 1e-6 && Math.abs(rep.doorHeadAboveGround - 0.46) < 1e-6, rep);
+  await d.page.evaluate(() => {
+    const el = document.getElementById('bayM');
+    el.value = '3.25';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await d.page.waitForTimeout(400);
+  const moved = await d.page.evaluate(() => window.__facade?.().grammar.bayM);
+  ok('a dial moves the ENGINE\'s grammar, not a slider', moved === 3.25, moved);
+  const stored = await d.page.evaluate(() => localStorage.getItem('drive.lab.facade.dials'));
+  ok('the grammar is saved as it is turned',
+    !!stored && JSON.parse(stored).bayM === 3.25, stored?.slice(0, 90));
+  const text = await d.page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.lab-dials button')].find((b) => b.textContent === 'COPY');
+    btn?.click();
+    return document.querySelector('.lab-dials')?.dataset.lastCopy ?? '';
+  });
+  ok('copy writes the FACADE_GRAMMAR literal',
+    typeof text === 'string' && text.includes('FACADE_GRAMMAR') && text.includes('bayM: 3.25'),
+    String(text).slice(0, 120));
+  await d.page.reload({ waitUntil: 'domcontentloaded' });
+  await d.page.waitForTimeout(3500);
+  const back = await d.page.evaluate(() => document.getElementById('bayM')?.value);
+  ok('the grammar survives a reload', back === '3.25', back);
+  // Put it back, so the next lab run — and anyone opening the lab on this
+  // browser profile — starts from the engine's defaults.
+  await d.page.evaluate(() => localStorage.removeItem('drive.lab.facade.dials'));
+  errors.push(...d.errors);
+  await d.close();
+}
+
 // ── AND THE PANEL FITS ON THE SCREEN ─────────────────────────────
 // Being liberal with the dials is the bargain; the cost is a panel that can be
 // taller than the viewport. It used to be one scrolling box with COPY, PASTE

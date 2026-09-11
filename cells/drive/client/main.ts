@@ -20,6 +20,10 @@ import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, GROUND_RAMPS, altBa
 import { createAudio, type ImpactKind } from './audio';
 import { coastKm } from './coast';
 import { clamp } from './num';
+import { mulberry32, type Rng } from './rng';
+import { cracks, makeCanvasTex, moss, speckle, wallTextures } from './wall-tex';
+import { roofGeo } from './roof';
+import { morphology } from './morphology';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
 import {
   WATERLINE_CUT,
@@ -7492,16 +7496,9 @@ const GRADE_MAX: Record<string, number> = {
 // walls with moss and vines, weathered roofs. Everything is generated from a
 // seeded RNG (mulberry32), so the same crumbling world grows back identically
 // on every device — the first brick of the solarpunk overhaul.
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-type Rng = () => number;
+// mulberry32 and the Rng type live in ./rng now: one copy, shared with the
+// façade module and the wall textures, so a canvas seeded here and one seeded
+// in a lab are the same canvas.
 /** ROAD TEXTURES ARE FILTERED ANISOTROPICALLY. A road ahead of the truck is
  *  seen at a grazing angle: one screen pixel covers a texel's width across
  *  the carriageway and dozens of texels along it, and isotropic mipmapping
@@ -7523,56 +7520,10 @@ const TEX_ANISO = ((): number => {
 })();
 (window as unknown as { __texfilter?: () => object }).__texfilter = () =>
   ({ anisotropy: TEX_ANISO, max: renderer.capabilities.getMaxAnisotropy(), minFilter: TEX_ANISO > 1 ? 'LinearMipmapLinear' : 'NearestMipmapNearest' });
-function canvasTex(size: number, repeatX: number, repeatY: number, seed: number, draw: (c: CanvasRenderingContext2D, s: number, r: Rng) => void): THREE.Texture {
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = size;
-  draw(cv.getContext('2d')!, size, mulberry32(seed));
-  const t = new THREE.CanvasTexture(cv);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  // NEAREST everywhere: crisp texels are half the pixel look. Mipmapping stays
-  // ON (nearest-within-mip) or distant surfaces shimmer as texels fall below
-  // the pixel grid — the classic failure of naive pixel-art 3D.
-  t.magFilter = THREE.NearestFilter;
-  t.minFilter = TEX_ANISO > 1 ? THREE.LinearMipmapLinearFilter : THREE.NearestMipmapNearestFilter;
-  if (TEX_ANISO > 1) t.anisotropy = TEX_ANISO;
-  t.repeat.set(repeatX, repeatY);
-  return t;
-}
-function speckle(c: CanvasRenderingContext2D, s: number, r: Rng, colors: string[], n: number, rad = 1.6): void {
-  for (let i = 0; i < n; i++) {
-    c.fillStyle = colors[i % colors.length];
-    c.fillRect(r() * s, r() * s, rad + r() * rad, rad + r() * rad);
-  }
-}
-// A crack is a random walk with momentum — jagged, branchless, believable.
-function cracks(c: CanvasRenderingContext2D, s: number, r: Rng, n: number, color: string): void {
-  c.strokeStyle = color;
-  c.lineWidth = 1;
-  for (let i = 0; i < n; i++) {
-    let x = r() * s, y = r() * s, ang = r() * Math.PI * 2;
-    c.beginPath();
-    c.moveTo(x, y);
-    for (let j = 0, steps = 4 + Math.floor(r() * 5); j < steps; j++) {
-      ang += (r() - 0.5) * 1.2;
-      x += Math.cos(ang) * (3 + r() * 6);
-      y += Math.sin(ang) * (3 + r() * 6);
-      c.lineTo(x, y);
-    }
-    c.stroke();
-  }
-}
-// Moss/overgrowth: clustered soft blobs in layered greens.
-function moss(c: CanvasRenderingContext2D, s: number, r: Rng, n: number, colors: string[]): void {
-  for (let i = 0; i < n; i++) {
-    const cx = r() * s, cy = r() * s, blob = 2 + r() * 5;
-    for (let j = 0; j < 6; j++) {
-      c.fillStyle = colors[j % colors.length];
-      c.beginPath();
-      c.arc(cx + (r() - 0.5) * blob * 2, cy + (r() - 0.5) * blob * 2, 1 + (r() * blob) / 2, 0, Math.PI * 2);
-      c.fill();
-    }
-  }
-}
+// The factory is in ./wall-tex so the façade lab can bake the same canvases
+// under its own renderer's anisotropy; this is the game's instance of it, and
+// every texture below is drawn through it exactly as before.
+const canvasTex = makeCanvasTex(TEX_ANISO);
 // Road: u spans the width, v runs 20m per wrap — centre dash ≈ 8m on / 12m off,
 // pale edge lines, cracked and patched, growth creeping in from the verges.
 const roadTex = canvasTex(128, 1, 1, 101, (c, s, r) => {
@@ -7983,173 +7934,10 @@ const waterTex = canvasTex(128, 1 / 26, 1 / 26, 103, (c, s, r) => {
     c.stroke();
   }
 });
-const roofTex = canvasTex(128, 1 / 10, 1 / 10, 105, (c, s, r) => {
-  c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-  speckle(c, s, r, ['rgba(0,0,0,0.10)', 'rgba(0,0,0,0.05)'], 300);
-  c.strokeStyle = 'rgba(0,0,0,0.10)'; c.lineWidth = 1;
-  for (let i = 16; i < s; i += 26) { c.beginPath(); c.moveTo(0, i); c.lineTo(s, i); c.stroke(); } // panel seams
-  cracks(c, s, r, 3, 'rgba(30,26,18,0.25)');
-  moss(c, s, r, 6, ['rgba(64,96,44,0.45)', 'rgba(42,70,32,0.4)', 'rgba(96,128,60,0.3)']);
-});
-// Crumbling walls, two variants so neighbouring parcels don't twin: floor
-// bands, cracks, and moss/vines claiming the concrete. White base — the
-// per-parcel material colour tints it.
-const wallTexes = [7101, 7102].map((seed) => canvasTex(128, 1 / 9, 1 / 9, seed, (c, s, r) => {
-  c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-  c.fillStyle = 'rgba(0,0,0,0.10)';
-  for (let y = 10; y < s; y += 24) c.fillRect(0, y, s, 3); // floor bands
-  speckle(c, s, r, ['rgba(0,0,0,0.08)', 'rgba(255,255,255,0.05)'], 240);
-  cracks(c, s, r, 5, 'rgba(20,16,10,0.35)');
-  moss(c, s, r, 7, ['rgba(64,96,44,0.5)', 'rgba(42,70,32,0.45)', 'rgba(96,128,60,0.35)']);
-}));
-// ── M5: THE MATERIAL FAMILIES ─────────────────────────────────────
-//
-// The two textures above — one roof, two walls — were the whole vocabulary of
-// the built world, so every building on the planet was rendered concrete under
-// panel-seam felt however much its PAINT varied. That is why the twelve creams
-// read as twelve creams rather than as places: colour without material is a
-// tint, and the eye reads material first.
-//
-// These are drawn once at load into a canvas and cached forever, which is the
-// route `grainFx` and `wallTexes` already established. The cost is paid once
-// and shared by every instance in the world, so a family costs a texture, not
-// a draw call. White base throughout — the culture's paint tints it, exactly
-// as the limewash pair already worked.
-const WALL_TEX: Record<WallTex, THREE.Texture> = {
-  // Lime render: near-flat, the detail carried by wear rather than by units.
-  render: wallTexes[0],
-  // Ashlar. COURSES, not a grid: real stonework breaks its vertical joints
-  // between courses, and a texture that does not is instantly a wallpaper.
-  stone: canvasTex(128, 1 / 9, 1 / 9, 3301, (c, s, r) => {
-    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-    const rows = 7, h = s / rows;
-    for (let i = 0; i < rows; i++) {
-      const y = i * h;
-      // Each course offset by its own amount, so no two courses line up.
-      let x = -r() * 40;
-      while (x < s) {
-        const w = 16 + r() * 26;
-        c.fillStyle = `rgba(0,0,0,${(0.03 + r() * 0.07).toFixed(3)})`;
-        c.fillRect(x + 1, y + 1, w - 2, h - 2);
-        x += w;
-      }
-      c.strokeStyle = 'rgba(0,0,0,0.13)'; c.lineWidth = 1;
-      c.beginPath(); c.moveTo(0, y); c.lineTo(s, y); c.stroke();
-    }
-    speckle(c, s, r, ['rgba(0,0,0,0.05)', 'rgba(255,255,255,0.05)'], 200);
-    moss(c, s, r, 4, ['rgba(64,96,44,0.35)', 'rgba(42,70,32,0.3)']);
-  }),
-  // Stretcher bond: half-lap every course, which is the pattern the eye
-  // actually recognises as brick from thirty metres.
-  brick: canvasTex(128, 1 / 6, 1 / 6, 3302, (c, s, r) => {
-    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-    const rows = 16, h = s / rows, bw = s / 4;
-    for (let i = 0; i < rows; i++) {
-      const y = i * h, off = (i % 2) * (bw / 2);
-      for (let j = -1; j < 5; j++) {
-        c.fillStyle = `rgba(0,0,0,${(0.02 + r() * 0.06).toFixed(3)})`;
-        c.fillRect(j * bw + off + 1, y + 1, bw - 2, h - 2);
-      }
-    }
-    c.strokeStyle = 'rgba(255,255,255,0.10)'; c.lineWidth = 1;
-    for (let i = 0; i <= rows; i++) { c.beginPath(); c.moveTo(0, i * h); c.lineTo(s, i * h); c.stroke(); }
-    speckle(c, s, r, ['rgba(0,0,0,0.06)'], 160);
-  }),
-  // Vertical board-and-batten. The battens are the read; the boards between
-  // them only need to vary slightly in tone.
-  timber: canvasTex(128, 1 / 7, 1 / 7, 3303, (c, s, r) => {
-    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-    for (let x = 0; x < s; x += 11) {
-      c.fillStyle = `rgba(0,0,0,${(0.02 + r() * 0.08).toFixed(3)})`;
-      c.fillRect(x, 0, 10, s);
-      c.fillStyle = 'rgba(0,0,0,0.16)'; c.fillRect(x + 9, 0, 2, s);      // batten shadow
-      c.fillStyle = 'rgba(255,255,255,0.10)'; c.fillRect(x + 11, 0, 1, s); // its lit edge
-    }
-    // Grain, along the board rather than across it.
-    c.strokeStyle = 'rgba(0,0,0,0.07)'; c.lineWidth = 1;
-    for (let i = 0; i < 26; i++) {
-      const x = r() * s; c.beginPath(); c.moveTo(x, r() * s * 0.4); c.lineTo(x + (r() - 0.5) * 3, s); c.stroke();
-    }
-  }),
-  // Earth: no units at all. Hand-shaped, so what varies is the SURFACE —
-  // broad soft undulation, and the darker line where a wall has been patched.
-  adobe: canvasTex(128, 1 / 8, 1 / 8, 3304, (c, s, r) => {
-    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-    for (let i = 0; i < 40; i++) {
-      c.fillStyle = `rgba(0,0,0,${(0.015 + r() * 0.035).toFixed(3)})`;
-      c.beginPath(); c.ellipse(r() * s, r() * s, 8 + r() * 22, 6 + r() * 16, r() * 3.14, 0, 6.2832); c.fill();
-    }
-    speckle(c, s, r, ['rgba(0,0,0,0.05)', 'rgba(255,255,255,0.06)'], 260, 1.2);
-    cracks(c, s, r, 3, 'rgba(60,44,24,0.18)');
-  }),
-};
-const ROOF_TEX: Record<RoofTex, THREE.Texture> = {
-  // Pantile: overlapping S-curves in rows. The alternating light/dark down
-  // each row is the barrel, and it is the whole read at distance.
-  pantile: canvasTex(128, 1 / 7, 1 / 7, 3401, (c, s, r) => {
-    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-    const rows = 9, h = s / rows, tw = 14;
-    for (let i = 0; i < rows; i++) {
-      const y = i * h, off = (i % 2) * (tw / 2);
-      for (let x = -tw; x < s + tw; x += tw) {
-        c.fillStyle = 'rgba(0,0,0,0.13)'; c.fillRect(x + off, y, tw / 2, h);
-        c.fillStyle = `rgba(255,255,255,${(0.05 + r() * 0.06).toFixed(3)})`;
-        c.fillRect(x + off + tw / 2, y, tw / 2, h);
-      }
-      c.fillStyle = 'rgba(0,0,0,0.20)'; c.fillRect(0, y, s, 2);  // the course shadow
-    }
-    moss(c, s, r, 5, ['rgba(64,96,44,0.35)', 'rgba(96,128,60,0.25)']);
-  }),
-  // Slate: small units, broken bond, and a little tonal variation per slate
-  // because a slate roof is never one grey.
-  slate: canvasTex(128, 1 / 8, 1 / 8, 3402, (c, s, r) => {
-    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-    const rows = 13, h = s / rows, w = 18;
-    for (let i = 0; i < rows; i++) {
-      const y = i * h, off = (i % 2) * (w / 2);
-      for (let x = -w; x < s + w; x += w) {
-        c.fillStyle = `rgba(0,0,0,${(0.02 + r() * 0.10).toFixed(3)})`;
-        c.fillRect(x + off, y, w - 1, h - 1);
-      }
-      c.fillStyle = 'rgba(0,0,0,0.16)'; c.fillRect(0, y + h - 1, s, 1);
-    }
-    speckle(c, s, r, ['rgba(255,255,255,0.06)'], 120, 1.2);
-  }),
-  // Shingle: same bond, softer edges, warmer wear — and it splits rather than
-  // cracking, so the marks run with the grain.
-  shingle: canvasTex(128, 1 / 8, 1 / 8, 3403, (c, s, r) => {
-    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-    const rows = 11, h = s / rows, w = 15;
-    for (let i = 0; i < rows; i++) {
-      const y = i * h, off = (i % 2) * (w / 2);
-      for (let x = -w; x < s + w; x += w) {
-        c.fillStyle = `rgba(0,0,0,${(0.03 + r() * 0.09).toFixed(3)})`;
-        c.fillRect(x + off, y, w - 1, h - 1);
-        if (r() > 0.7) { c.fillStyle = 'rgba(0,0,0,0.10)'; c.fillRect(x + off + 3 + r() * 8, y, 1, h - 1); }
-      }
-      c.fillStyle = 'rgba(0,0,0,0.14)'; c.fillRect(0, y + h - 1, s, 1);
-    }
-    moss(c, s, r, 6, ['rgba(64,96,44,0.4)', 'rgba(42,70,32,0.35)']);
-  }),
-  // Corrugated iron: vertical ribs, hard specular banding, and rust where the
-  // fixings are. The one roof that is brighter in strips than overall.
-  corrugated: canvasTex(128, 1 / 6, 1 / 6, 3404, (c, s, r) => {
-    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-    for (let x = 0; x < s; x += 8) {
-      c.fillStyle = 'rgba(0,0,0,0.16)'; c.fillRect(x, 0, 3, s);
-      c.fillStyle = 'rgba(255,255,255,0.12)'; c.fillRect(x + 4, 0, 2, s);
-    }
-    c.fillStyle = 'rgba(0,0,0,0.10)';
-    for (let y = 22; y < s; y += 44) c.fillRect(0, y, s, 2);        // sheet laps
-    for (let i = 0; i < 26; i++) {                                   // rust at the fixings
-      c.fillStyle = `rgba(122,68,32,${(0.15 + r() * 0.3).toFixed(2)})`;
-      c.fillRect(r() * s, r() * s, 1 + r() * 3, 1 + r() * 3);
-    }
-  }),
-  // Flat: felt and gravel, with the ponding and the patch lines that go with
-  // it. Keeps the old panel-seam roof, which is exactly what this is.
-  flat: roofTex,
-};
+// The wall and roof families are drawn in ./wall-tex now, so the façade lab
+// bakes the same canvases the game does rather than a copy of them. The names
+// are unchanged; every reader below is as it was.
+const { WALL_TEX, ROOF_TEX, wallTexes, roofTex } = wallTextures(canvasTex);
 
 // DoubleSide throughout: ribbon winding and the rotate+mirror extrusion leave
 // face orientation mixed — lighting both sides costs little at this scene size
@@ -12345,6 +12133,13 @@ function pointInPoly(px: number, pz: number, pts: Array<[number, number]>): bool
 // So footprints are indexed as POLYGONS too, and containment is escaped by
 // leaving through the nearest wall rather than by bouncing off it.
 const plotGrid = new Map<string, Array<Array<[number, number]>>>();
+/** EVERY footprint building() has seen, intact or ruin, by OSM id — for the
+ *  census probe. plotGrid cannot stand in for it: claimSolid files no plot
+ *  for a ruin by design (a ruin is a place you may be), so a census over the
+ *  plots was a census of whichever 58% the ruin roll left standing, and the
+ *  attached share read half the fixture's. Keyed by id so a tile retried and
+ *  rebuilt does not count its buildings twice; cleared with plotGrid. */
+const bldRings = new Map<number, Array<[number, number]>>();
 function addPlot(pts: Array<[number, number]>): void {
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
   for (const [x, z] of pts) { minx = Math.min(minx, x); minz = Math.min(minz, z); maxx = Math.max(maxx, x); maxz = Math.max(maxz, z); }
@@ -21562,104 +21357,7 @@ function parseMetres(v: string | undefined): number | null {
   const n = parseFloat(v);
   return Number.isFinite(n) && n > 0 && n < 600 ? n : null;
 }
-/**
- * A pitched roof over a footprint, built in world coordinates with its eave
- * at `top` (the extrusion's roof plane). Everything comes off the footprint's
- * oriented box — the longest edge sets the ridge line — because a pitched
- * roof IS a statement that the plan is a box; anything too far from one
- * (courtyard blocks, L-plans, long malls) keeps its flat cap instead, which
- * is also what those wear in life. Groups: materialIndex 0 for the roof
- * planes (roof paint), 1 for the vertical gable/skillion walls (wall paint),
- * matching the ExtrudeGeometry caps/sides convention flushBuildings splits on.
- */
-function roofGeo(pts: Array<[number, number]>, shape: string, top: number,
-  ridgeH?: number): THREE.BufferGeometry | null {
-  if (pts.length < 3 || pts.length > 8) return null;
-  // The oriented box, axed along the longest edge.
-  let bi = 0, bl = -1;
-  for (let i = 0; i < pts.length; i++) {
-    const [x1, z1] = pts[i], [x2, z2] = pts[(i + 1) % pts.length];
-    const l = (x2 - x1) ** 2 + (z2 - z1) ** 2;
-    if (l > bl) { bl = l; bi = i; }
-  }
-  const [ex1, ez1] = pts[bi], [ex2, ez2] = pts[(bi + 1) % pts.length];
-  const el = Math.hypot(ex2 - ex1, ez2 - ez1);
-  if (el < 1e-3) return null;
-  const ux = (ex2 - ex1) / el, uz = (ez2 - ez1) / el;  // along the ridge
-  const vx = -uz, vz = ux;                             // across it
-  let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
-  for (const [x, z] of pts) {
-    const u = x * ux + z * uz, v = x * vx + z * vz;
-    if (u < u0) u0 = u; if (u > u1) u1 = u;
-    if (v < v0) v0 = v; if (v > v1) v1 = v;
-  }
-  // Rectangularity: ring area against box area. Below the bar, a box-cut
-  // roof floats over the footprint's notches and reads as a wrong building.
-  let area2 = 0;
-  for (let i = 0; i < pts.length; i++) {
-    const [x1, z1] = pts[i], [x2, z2] = pts[(i + 1) % pts.length];
-    area2 += x1 * z2 - x2 * z1;
-  }
-  const du = u1 - u0, dv = v1 - v0;
-  if (Math.abs(area2) / 2 < du * dv * 0.72) return null;
-  if (du < 2.2 || dv < 2.2 || du * dv > 1400) return null;   // houses, not malls
-  const h = ridgeH ?? clamp(Math.min(du, dv) * 0.45, 1.6, 6);
-  // A small eave overhang: hides the OBB-vs-ring mismatch and is what real
-  // pitched roofs do anyway.
-  u0 -= 0.45; u1 += 0.45; v0 -= 0.45; v1 += 0.45;
-  const P = (u: number, v: number, y: number): [number, number, number] =>
-    [u * ux + v * vx, y, u * uz + v * vz];
-  const roof: number[] = [], wall: number[] = [];
-  const uvR: number[] = [], uvW: number[] = [];
-  const tri = (into: number[], uvInto: number[],
-    a: [number, number, number], b: [number, number, number], c: [number, number, number]): void => {
-    into.push(...a, ...b, ...c);
-    // Roof uv in world metres off the ground plan (a slope compresses a
-    // little; at these pitches nobody can tell) — walls get along-wall/height.
-    if (into === roof) for (const q of [a, b, c]) uvInto.push(q[0], q[2]);
-    else for (const q of [a, b, c]) uvInto.push(q[0] * ux + q[2] * uz + q[0] * vx + q[2] * vz, q[1]);
-  };
-  const quad = (into: number[], uvInto: number[],
-    a: [number, number, number], b: [number, number, number], c: [number, number, number], d: [number, number, number]): void => {
-    tri(into, uvInto, a, b, c); tri(into, uvInto, a, c, d);
-  };
-  const vm = (v0 + v1) / 2, um = (u0 + u1) / 2;
-  if (shape === 'gabled') {
-    quad(roof, uvR, P(u0, v0, top), P(u1, v0, top), P(u1, vm, top + h), P(u0, vm, top + h));
-    quad(roof, uvR, P(u0, vm, top + h), P(u1, vm, top + h), P(u1, v1, top), P(u0, v1, top));
-    tri(wall, uvW, P(u0, v0, top), P(u0, v1, top), P(u0, vm, top + h));
-    tri(wall, uvW, P(u1, v0, top), P(u1, v1, top), P(u1, vm, top + h));
-  } else if (shape === 'hipped') {
-    const ins = Math.min(dv / 2, du / 2 - 0.1);          // 45-degree hips
-    const r0 = u0 + ins, r1 = u1 - ins;
-    quad(roof, uvR, P(u0, v0, top), P(u1, v0, top), P(r1, vm, top + h), P(r0, vm, top + h));
-    quad(roof, uvR, P(r0, vm, top + h), P(r1, vm, top + h), P(u1, v1, top), P(u0, v1, top));
-    tri(roof, uvR, P(u0, v0, top), P(r0, vm, top + h), P(u0, v1, top));
-    tri(roof, uvR, P(u1, v0, top), P(u1, v1, top), P(r1, vm, top + h));
-  } else if (shape === 'pyramidal') {
-    const apex = P(um, vm, top + h);
-    tri(roof, uvR, P(u0, v0, top), P(u1, v0, top), apex);
-    tri(roof, uvR, P(u1, v0, top), P(u1, v1, top), apex);
-    tri(roof, uvR, P(u1, v1, top), P(u0, v1, top), apex);
-    tri(roof, uvR, P(u0, v1, top), P(u0, v0, top), apex);
-  } else if (shape === 'skillion') {
-    quad(roof, uvR, P(u0, v0, top + h), P(u1, v0, top + h), P(u1, v1, top), P(u0, v1, top));
-    tri(wall, uvW, P(u0, v0, top), P(u0, v1, top), P(u0, v0, top + h));
-    tri(wall, uvW, P(u1, v0, top), P(u1, v1, top), P(u1, v0, top + h));
-    quad(wall, uvW, P(u0, v0, top), P(u1, v0, top), P(u1, v0, top + h), P(u0, v0, top + h));
-  } else return null;
-  const pos = new Float32Array(roof.length + wall.length);
-  pos.set(roof, 0); pos.set(wall, roof.length);
-  const uv = new Float32Array(uvR.length + uvW.length);
-  uv.set(uvR, 0); uv.set(uvW, uvR.length);
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  geo.addGroup(0, roof.length / 3, 0);
-  if (wall.length) geo.addGroup(roof.length / 3, wall.length / 3, 1);
-  geo.computeVertexNormals();
-  return geo;
-}
+// roofGeo lives in ./roof now: the façade lab builds the same roof the world does.
 /**
  * ── HOW BUILT-UP IS THIS, ROUGHLY ──
  *
@@ -21831,6 +21529,7 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     ctrZ = pts.length ? cz0 / pts.length : 0;
     if (pts.length && inLandmarkPad(ctrX, ctrZ)) return;
   }
+  bldRings.set(id, pts);
   const kind = tags.building ?? 'yes';
   const levels = parseFloat(tags['building:levels'] ?? '') || 0;
   // THE LOOK IS NEEDED BEFORE THE HEIGHT NOW, because a storey is a property of
@@ -29686,7 +29385,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     tileStats.clear(); surveyedCache.clear();
     unbuilt = 0; osmFails = 0; osmDown = false;
     mapFeats.length = 0; mapStroked.clear();
-    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear();
+    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear();
     channelGrid.clear(); rapidRocks.clear(); activeRapidRocks.clear(); chanSet.clear(); wiSet.clear();
     pendingWater.length = 0; productionCrossings.reset(); crossingAppliedRevision.clear();
     productionSubstrate.reset();
@@ -30814,6 +30513,19 @@ function tapeKeep(): string {
     for (const [x, z] of pts) { cx += x; cz += z; }
     return { x: cx / pts.length, z: cz / pts.length, n: pts.length };
   });
+// ── THE FOOTPRINT CENSUS, IN THE WORLD ──
+//
+// The same morphology() the capture devtool and its unit test run, over every
+// footprint building() has seen (bldRings — NOT plotGrid, which holds the
+// intact stock only). A ruin's footprint is still a footprint: this is a
+// census of the DATA, not of what stands. `r` keeps it to rings whose first
+// vertex is within r metres of the truck, so one street can be read apart
+// from the town around it.
+(window as unknown as { __bldcensus?: object }).__bldcensus = (r?: number): object => {
+  let rings = [...bldRings.values()];
+  if (r !== undefined) rings = rings.filter((p) => Math.hypot(p[0][0] - state.x, p[0][1] - state.z) <= r);
+  return { within: r ?? null, ...morphology(rings.map((pts, i) => ({ id: i, pts }))).summary };
+};
 // What the HUD is currently pinning, and how far each one is — so a test can
 // walk the car in and confirm nothing vanishes as it arrives.
 (window as unknown as { __pins?: object }).__pins = (): object => {

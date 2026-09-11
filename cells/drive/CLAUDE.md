@@ -1901,9 +1901,10 @@ nobody re-litigates them:
 **Still standing, and not yet explained:** a large pure-black region in the
 Suresnes b1 cab frame, present before this work as well as after, on a surface
 that is not obviously a lifted wall or a lifted soffit. Worth one raycast.
-Also open: one bay grid for the planet (2.75m × 3.1m, fixed in `facade.ts`, no
-per-culture or per-class window rhythm), and no chimneys, parapets, cornices or
-balconies anywhere.
+Also open: one bay grid for the planet (2.75m × 3.1m — `FACADE_GRAMMAR` in
+`facade.ts` now, on uniforms and on the façade lab's dials, but still one set
+for every building on earth), and no chimneys, parapets, cornices or balconies
+anywhere.
 
 **AND THE MARK TINS ARE STILL ABSOLUTE, which is the glass fault one surface
 over.** A tin is mixed in at `fadeMin + fadeVar` of its own colour regardless of
@@ -1914,6 +1915,123 @@ CONTRAST problem, so the suite cannot see it. The fix is the same shape as the
 glass one: carry the tin toward the wall's own value rather than mixing a fixed
 colour over it.
 
+### Phase 0 of the building work: instruments before opinions
+
+Asked from the seat: buildings are generic blocks with procedural repeating
+windows — how do we get real local and cultural diversity? The answer agreed
+was a HAND-AUTHORED tradition atlas keyed on geography (the way `LANDMARKS`
+and `conventionFor` already are), intact stock before ruins, and, before any
+of that, three instruments — because every earlier building change in this
+file was judged off a frame that happened to be facing a wall, and the
+review's own open items ("one bay grid for the planet", "no ground floor")
+were claims nobody could put a number on.
+
+**THE CENSUS: the footprints say what the tags cannot.** `client/morphology.ts`
+is pure — rings in, rows and a summary out — and it runs in three places
+that cannot disagree because there is one of it: `devtools/building-census.mjs`
+over the nine `static/fixtures/world-*.json` captures, `__bldcensus(r?)` in
+the world, and `devtools/morphology.test.mjs` on authored rings.
+
+| capture | n | attached | runs · median · max | plot m² p25 / p50 / p75 / p95 | grid |
+|---|---|---|---|---|---|
+| paris-west | 3,794 | **74%** | 692 · 3 · **38** | 19 / 61 / 102 / 335 | 63% |
+| paris-south | 1,302 | **73%** | 245 · 3 · 19 | 20 / 66 / 97 / 651 | 57% |
+| campsbay | 627 | 7% | 21 · 2 · 3 | 153 / 216 / 284 / 483 | 38% |
+| simonstown | 660 | 7% | 20 · 2 · 5 | 87 / 153 / 223 / 812 | 55% |
+| carmel-a | 656 | 10% | 19 · 3 · 6 | 110 / 162 / 225 / 340 | 32% |
+| carmel-b | 66 | 8% | 2 · 3 · 3 | 202 / 265 / 337 / 886 | 44% |
+
+7,114 footprints: `building=yes` 75%, `house` 14.5%, `apartments` 4%;
+`building:levels` 5.1%, `roof:shape` 1.7%, `height` 0.0%, material 0.3%,
+colour 0.4%. A Haussmann perimeter block and a hillside of villas are
+different PLACES in the rings alone — three quarters attached against a
+tenth, 60 m² plots against 200, runs of thirty-eight against three — which
+is what the atlas and the morphology phases will read. Three rules in the
+module, each of which the first cut got wrong:
+
+- **A footprint must not attach to itself.** Every closed ring in a capture
+  repeats its first vertex last; keyed naively, every building in Camps Bay
+  was "attached" and the suburb read 100% terraces.
+- **Two shared vertices is a wall; one is a corner touch** that a mapper's
+  snapping produces between buildings that never meet.
+- **Within 0.2 m is a DISTANCE, not a cell.** The first rule keyed vertices
+  by their 0.2 m cell, and the test's fifteen-centimetre gap fell either
+  side of a boundary — 10.0 in cell 50, 10.15 in cell 51 — so a wall the
+  rule meant to join read as an alley. The route solver's lesson ("match
+  endpoints, do not quantise them") and the border's (`mmNear`), a third
+  time: the hash finds candidates over the 3×3 of cells and the distance
+  decides.
+
+**AND THE IN-WORLD PROBE READS `bldRings`, NOT `plotGrid`.** `claimSolid`
+files no plot for a ruin by design (a ruin is a place you may be, and the
+plot exists to shove the truck out of a room), so a census over the plots
+was a census of whichever 58% the ruin roll left standing: Camps Bay read
+350 rings, 3.4% attached, six runs. `building()` now records every footprint
+it sees by OSM id, and the probe reads 559 rings, **7.5% attached, 20 runs
+of 2–3** — against the devtool's 627 / 7% / 21 on the same capture. The 68
+missing are rings that never reach `building()` at all (not yet attributed;
+the two numbers are close enough to say the probe measures the rule the
+world runs).
+
+**THE FAÇADE LAB (`/lab/facade`, `client/facade-lab.ts`)** is the marks lab
+widened to the whole façade: one footprint extruded exactly as `polygon()`
+does it, sunk by the same plinth, wearing the culture's own canvases, roofed
+by `roofGeo`, at the building survey's 26 m stand-off with the eye at the
+cab's 1.3 m. Forty-odd dials — the culture and its paints, width, depth,
+storeys, the plinth, the roof and its ridge, a terrace count, every grammar
+number, the sun, night with its lit share, the eye, and a PIXEL dial that
+renders at a fraction of the glass and magnifies nearest — and COPY writes
+`export const FACADE_GRAMMAR`. `__facade()` reports what the grammar makes of
+the massing, which is how `lab.test.mjs` holds it. Three extractions made it
+possible, each pure, each verbatim: `client/rng.ts` (one `mulberry32`, where
+there were two and about to be three — a canvas seeded from a drifted copy
+would be a different canvas in the lab and the game), `client/wall-tex.ts`
+(`makeCanvasTex(aniso)` and `wallTextures()`, so the lab bakes the same
+canvases under its own renderer's anisotropy), `client/roof.ts` (`roofGeo`).
+And `FACADE_GRAMMAR` itself: the shader's sixteen literals on four vec4s,
+defaults equal to the literals to the digit — no pixel changes; the numbers
+moved house. A per-tradition grammar will arrive as a vertex attribute the
+way `aMark` did, because buildings batch per tile and a uniform is per draw.
+
+**WHAT THE LAB SHOWED BEFORE A DIAL WAS TURNED**, read off `__facade()` and
+then seen in the frames:
+
+- **EVERY GROUND FLOOR IS 1.4 m UNDERGROUND.** `polygon()` sinks an intact
+  building by a plinth — `clamp(maxG − minG + 1.4, 1.4, 14)` — and `aBase`
+  is the sunk bottom, so the shader's rows count from below the grass. On
+  flat ground the ground row is 1.7 m tall, a door's head stands **0.46 m**
+  above the pavement, and the first upper sill is at 2.75 m; on a slope the
+  uphill wall has no ground row at all. Plinth 0 in the lab: row 3.10 m,
+  door head 1.86, sill 4.15 — the façade the shader was written for. The
+  control frames agree: the doors in Suresnes are dark stubs at the grass
+  line, where the grass does not hide them entirely. The fix is one number
+  in the batch (aBase as the ground line, not the plinth bottom) and it is
+  NOT made here, because phase 0 is the instruments and the fix belongs with
+  the grammar it will be judged against.
+- **THE ROWS DO NOT FOLLOW THE STOREYS.** `BuildCulture.storeyM` sets a
+  building's height (timber 2.7, adobe 3.3) and the shader's row is 3.1 for
+  everyone, so a two-storey timber house is 5.4 m of wall carrying 1.74 rows
+  of windows. ROWS = STOREYS on the lab ties them; the atlas will.
+- **CAMPS BAY BUILDS IN BRICK UNDER SLATE.** `__culture` on that capture:
+  `brick`, pitch 0.59, because the cultures are picked by CLIMATE weights and
+  a temperate coast is temperate; Suresnes is `limewash`. The atlas is the
+  answer and this is the frame to hold it to.
+
+**THE CONTROL FRAMES** (`devtools/building-survey.mjs`, `REV=8e11b60`, the
+six captures, in `/tmp/drive-tools/bldg-control/`): four buildings a capture,
+high sun, low sun and a chase frame each, and the planform. **Six captures
+in one process is fifty-five minutes and the harness fuse is twenty**
+(`HARNESS_FUSE_MIN`): the first run was killed after Camps Bay's first
+building with `exit 9` and the log's own FUSE BLOWN line, having finished
+Paris west and south cleanly. One process per capture from then on. And a
+lab suite started beside a survey drew the same random harness port
+(8800–8889) once in ninety and died on `EADDRINUSE` before its first lab —
+the log said so plainly; re-run, not a fault.
+
+**Not done here, deliberately:** the plinth fix, the atlas (`traditionFor`),
+party walls and runs from the morphology, roofs, ruins per material, the
+landmarks, stations and covers — phases 1 to 6, in that order.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.
@@ -1922,6 +2040,7 @@ colour over it.
 |---|---|
 | `hydro` | water fields, coastlines, river profiles |
 | `marks` | the production façade shader and its graffiti |
+| `facade` | one building at the survey's stand-off: the production façade shader and roof, the culture's own wall and roof canvases, and the massing, the plinth and the whole opening grammar on dials |
 | `roads` | the bench-search profile solver, as a section |
 | `flora` | the climate ladder **and** a real stand of the shipping plants |
 | `weather` | the 48×48 weather lattice, with time on a dial |
