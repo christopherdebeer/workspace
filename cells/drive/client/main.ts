@@ -47211,16 +47211,6 @@ const menu = createMenu({
       ['WORLD', worldStatus().world],
     ];
   },
-  worldRows: () => [
-    ['HERE', (placeLine && placeLine !== '…' ? placeLine : 'LOCATING').toUpperCase()],
-    ['BIOME', `${biome.name.toUpperCase()} · ${WX[wx.sky].label}${wx.wet > 0.05 ? ' WET' : ''}`],
-    ['HEADING', `${Math.round((((state.heading * 180) / Math.PI) % 360 + 360) % 360)} DEG · ${Math.round(Math.abs(state.speed) * 3.6)} KM/H`],
-    ['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`],
-    ['VECTORS', worldStatus().vectors],
-  ],
-  systemRows: () => [
-    ['SOUND', audio.on ? (audio.state === 'running' ? 'ON' : 'NEEDS TAP') : 'OFF'],
-  ],
   // THE TABLE IS THE PANEL. `switchRows` reads the declaration in switches.ts
   // and the live query string; nothing here restates either, so a switch added
   // to the table appears on the glass without anyone remembering to add it.
@@ -47329,8 +47319,24 @@ const menu = createMenu({
       caption: `${AXIS_SIZE(specBox, v.w).toFixed(2)} X ${AXIS_SIZE(specBox, v.h).toFixed(2)} M · 1M GRID`,
     };
   },
-  dialGroups: (which) => DIAL_GROUPS.filter((g) =>
-    which === 'rig' ? g.title === 'VEHICLE' || g.title === 'SETUP' : g.title !== 'VEHICLE' && g.title !== 'SETUP'),
+  // ── CAMERA IS THE RIG'S, NOT THE SYSTEM'S ──
+  //
+  // The split was "VEHICLE and SETUP are the rig's, everything else is the
+  // system's", which put CHASE HEIGHT, CAB FOV and the splash orbit on the
+  // SETTINGS page — under RENDER, WORLD and TREES, at the bottom of the
+  // longest scroll in the menu. RIG is the page whose own subtitle is TUNE
+  // AND DRESS THE TRUCK, and where you sit in the truck is a fact about the
+  // truck. A player looking for the chase camera had no reason to look in
+  // SETTINGS and, measured on the panel, would have had to scroll past
+  // forty-odd other dials to find it there.
+  //
+  // The set is named rather than derived by exclusion now: a group added
+  // later lands in SETTINGS by default, which is the safer direction — an
+  // unclassified dial is visible in the wrong place rather than in neither.
+  dialGroups: (which) => DIAL_GROUPS.filter((g) => {
+    const rig = g.title === 'VEHICLE' || g.title === 'SETUP' || g.title === 'CAMERA';
+    return which === 'rig' ? rig : !rig;
+  }),
   cycleDial: (d) => {
     const dl = d as Dial;                        // the menu holds the same objects
     dl.at = (dl.at + 1) % dl.opts.length;        // dials CYCLE; there is no slider

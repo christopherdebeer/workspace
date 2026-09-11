@@ -6239,12 +6239,86 @@ renders whole ("a list that hides the ones nobody set hides exactly the ones
 nobody remembers"). **Reference before action is the fault**; the ordering, or
 a screen of its own for the switches, is the fix, and neither is made here.
 
+### TWO SCREENS, SPLIT BY WHO THE ROW IS FOR
+
+The owner's call, and it is the fix for the length above rather than a
+reordering: **SETTINGS keeps what a player tunes; ADVANCED takes the developer
+levers and the buttons that delete.** Splash treatment, sign-in and the
+RENDER/WORLD/TREES rack stay; the switch table, the tape recorder, the eruda
+console, RESET THE LINE and STORAGE go one deliberate tap deeper, ordered from
+harmless to final so the last thing on the page is the one that hands the
+device back. Measured, same spot, same window:
+
+| | before | after |
+|---|---|---|
+| SETTINGS | 6,139 px · 9.1 screens | **2,299 px · 3.1 screens** |
+| ADVANCED | — | 3,816 px |
+
+The content did not shrink; it stopped being one scroll. `T_ADVANCED = 8` is
+the probe index, and three suites that drove SETTINGS by number were moved with
+it — `storage-reset`, `line-boot` and `settings-switches`, which now also
+asserts the switch table renders on ADVANCED and **not** on SETTINGS, because a
+table on both pages is the old scroll with a second door.
+
+**AND CAMERA WENT TO THE RIG.** `dialGroups` split the rack by excluding
+VEHICLE and SETUP, which put CHASE HEIGHT, CAB FOV and the splash orbit at the
+bottom of the longest scroll in the menu — on the page whose siblings are
+RENDER and TREES, not on the page whose subtitle is TUNE AND DRESS THE TRUCK.
+The rig set is named rather than derived by exclusion now, so a group added
+later lands in SETTINGS by default: an unclassified dial shows in the wrong
+place rather than in neither.
+
+### THE FOOT IS A PER-SCREEN ACTION BAR, AND SOUND WAS NEVER AN ACTION
+
+`menu-survey.mjs` printed the foot per tab and settled what it is: DRIVES
+stacks four page actions in it, THE LINE puts one full-width CTA there, the hub
+and rig-live hide it in CSS, and SURVEYS, ABOUT and PROGRESS leave it empty —
+so it is a per-screen slot, not a persistent bar, and the two global toggles
+sitting in SETTINGS' foot were teaching the wrong thing about the slot.
+
+SOUND and HIDE HUD now bracket the splash's utilities strip — `SOUND · SETTINGS
+· ABOUT · [SIGN IN|PROGRESS] · HIDE HUD` — on the screen every BACK returns to.
+Left and right rather than inline, because a toggle is not a destination.
+**HIDE HUD was deliberately NOT put in the header beside the X**: it is an exit
+as much as a toggle, and two exits a thumb's width apart with different side
+effects is worse than the scroll it replaced.
+
+**SIGN IN and PROGRESS are one slot.** Both were on the splash at once — the
+redundancy was visible in the first screenshot anyone took of it — and at most
+one ever meant anything: signed out, PROGRESS was the only tile in the row with
+no icon and no subtitle, whose whole job was to hop to a page; signed in, SIGN
+IN hid itself and left that orphan behind.
+
+**And `worldRows` and `systemRows` are gone.** The first was fully implemented,
+carried real data and was called by NOTHING — the same class of fault as the
+forgotten switches, one layer up. The second reported whether the sound was on,
+and the control that changes it now says so itself on the splash. An empty foot
+no longer spends its padding either (`.m-foot:empty`).
+
 **AND A STAGED SET IS INVISIBLE THE MOMENT YOU LEAVE.** `swStaged` is closure
 state so it survives a tab change and a close, while `RELOAD · n STAGED` is
 built only inside `renderSettings`. Measured: stage one, go to RIG — nothing on
 the screen says anything is pending — close the menu, reopen SETTINGS, and it
 is still staged. A pending commitment nothing announces is the same shape of
-fault as a switch nobody remembers.
+fault as a switch nobody remembers. The count rides in the header now — the one
+element every screen has — as a gold `⚑ n` chip that taps through to ADVANCED.
+
+### TWO CHECKS IN line-boot AND about WERE ALREADY RED, AND ONE STILL IS
+
+`THE LINE leads the hub stack` asserted `shown[0] === 'THE LINE'` while THE LINE
+is appended to the nav LAST, and `RIG-MENU-2026-09-08.md` states the intended
+order outright — "Primary navigation is Rig, Drives, Surveys, The Line". It
+contradicted the shipped design rather than catching a regression in it, and
+**the parent commit fails it identically**, which is how that was established
+rather than assumed. Both copies now assert the whole documented order, which
+is stricter than the line they replace: `[0]` could not have caught a reshuffle
+of the other three.
+
+`line-boot`'s `…and the docket is handed back` still times out, **and also fails
+identically on the parent** — the wipe is polled for 20 s against a harness
+whose init script re-seeds localStorage on every navigation, and the reboot then
+never arrives. Not this work's, not fixed here, and recorded rather than left
+for the next session to attribute.
 
 ## Stationary rig shadow: diagnose rotation, not only translation
 

@@ -33,7 +33,10 @@ const d = await openDrive({
 });
 
 const shape = await d.page.evaluate(() => {
-  window.__menutab?.(4);
+  // 8 is ADVANCED. The switch table moved off SETTINGS when that page was
+  // split: what a player tunes stayed, and the developer levers and the
+  // destructive buttons went one deliberate tap deeper.
+  window.__menutab?.(8);
   const rows = [...document.querySelectorAll('#menu .m-switch')];
   const chips = [...document.querySelectorAll('#menu .m-swfilter button')]
     .map((b) => b.textContent ?? '');
@@ -53,11 +56,20 @@ const shape = await d.page.evaluate(() => {
     // A row nobody can read is not a row. The note is what makes sixty-seven
     // ids mean anything.
     noted: rows.filter((r) => (r.querySelector('.sw-note')?.textContent ?? '').length > 8).length,
+    // THE SPLIT IS THE ASSERTION, not just that the rows exist somewhere: a
+    // table that renders on both pages is the old scroll with a second door.
+    notOnSettings: (() => {
+      window.__menutab?.(4);
+      const n = document.querySelectorAll('#menu .m-switch').length;
+      window.__menutab?.(8);
+      return n === 0;
+    })(),
   };
 });
 console.log('panel:', JSON.stringify(shape.first), `${shape.rows} rows`, shape.chips.join(' | '));
 
 check('the switch rows are on the screen', shape.rows >= 60, shape.rows);
+check('…on ADVANCED, and not on SETTINGS', shape.notOnSettings, shape);
 check('every row says what its switch does', shape.noted === shape.rows, shape);
 check('a row carries its marks', (shape.first?.marks.length ?? 0) > 0, shape.first);
 check('a row is a 44px tap target', shape.minHeight >= 44, shape.minHeight);

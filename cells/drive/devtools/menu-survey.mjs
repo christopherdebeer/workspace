@@ -33,7 +33,7 @@ const d = await openDrive({
 
 const TABS = [
   [0, 'hub'], [1, 'surveys'], [2, 'rig'], [3, 'drives'],
-  [5, 'line'], [6, 'about'], [7, 'progress'],
+  [5, 'line'], [6, 'about'], [7, 'progress'], [8, 'advanced'],
 ];
 
 // ── SETTINGS, a screenful at a time ──
@@ -67,7 +67,7 @@ for (let i = 0; i < steps; i++) {
 // ── and the foot, which is the question ──
 const foots = await d.page.evaluate(() => {
   const out = {};
-  for (const t of [0, 1, 2, 3, 4, 5, 6, 7]) {
+  for (const t of [0, 1, 2, 3, 4, 5, 6, 7, 8]) {
     window.__menutab?.(t);
     const f = document.querySelector('#menu .m-foot');
     const shown = f ? getComputedStyle(f).display !== 'none' : false;
