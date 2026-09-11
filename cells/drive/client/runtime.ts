@@ -19,8 +19,25 @@ declare global {
 
 export const PACKAGED =
   typeof __DRIVE_PACKAGED__ !== 'undefined' && __DRIVE_PACKAGED__ === true;
+/**
+ * WHICH BUILD IS RUNNING. The packaged shells bake it at build time; the web
+ * cell cannot, because the deploy version is assigned after the source is
+ * pushed — so the CELL stamps the shell with a hash of the app.js it serves
+ * (index.ts, stampOf) and the running code reads it back off the page it
+ * booted from. That indirection is the point: a cached shell hands over the
+ * stamp it was cached with, which is exactly the question "am I looking at
+ * the build I just deployed, or an old one?" `/build` answers with the
+ * server's current stamp for the comparison. 'web' means neither was there —
+ * a harness page, a lab, or a shell served before this existed.
+ */
+const stampedShell = (): string | null => {
+  if (typeof document === 'undefined') return null;
+  const meta = document.querySelector('meta[name="drive-build"]');
+  const v = meta?.getAttribute('content') ?? '';
+  return v && !v.startsWith('__') ? v : null;
+};
 export const DRIVE_BUILD =
-  typeof __DRIVE_BUILD__ !== 'undefined' ? __DRIVE_BUILD__ : 'web';
+  typeof __DRIVE_BUILD__ !== 'undefined' ? __DRIVE_BUILD__ : (stampedShell() ?? 'web');
 
 export const LIVE_CELL_ORIGIN = 'https://c15r-drive.on.parc.land';
 export const LIVE_AUTH_ORIGIN = 'https://parc.land';
