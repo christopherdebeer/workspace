@@ -1361,15 +1361,22 @@ export function buildHydroTile(
   let coast: Float32Array<ArrayBuffer> | undefined;
   if (options.coastField) {
     const coastal = new Uint8Array(count);
+    // The MEDIUM is every standing texel, whatever body owns it — see the
+    // coast field's own note. A channel is excluded: a river is not the sea's
+    // road, and its banks bound the swell like any other shore.
+    const standing = new Uint8Array(count);
     let any = false, fetchMax = 0;
     for (let i = 0; i < count; i++) {
-      if (!wet[i] || (kind[i] !== HYDRO_KIND_ID.ocean && kind[i] !== HYDRO_KIND_ID.lagoon)) continue;
+      if (!wet[i]) continue;
+      const k = kind[i];
+      if (k < HYDRO_KIND_ID.river || k > HYDRO_KIND_ID.canal) standing[i] = 1;
+      if (k !== HYDRO_KIND_ID.ocean && k !== HYDRO_KIND_ID.lagoon) continue;
       coastal[i] = 1; any = true;
       if (fetch[i] > fetchMax) fetchMax = fetch[i];
     }
     if (any) {
       coast = solveCoastField({
-        width, height, pixelM, wet, coastal, interior: oceanInterior, depth, toDry,
+        width, height, pixelM, wet: standing, coastal, interior: oceanInterior, depth, toDry,
         swellWavelengthM: swellWavelengthM(fetchMax),
       }).data;
     }

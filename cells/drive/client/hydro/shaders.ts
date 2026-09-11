@@ -185,6 +185,32 @@ void main() {
   float coastalStanding = (1.0 - vFlowing)
     * step(0.5, vertexKind) * (1.0 - step(2.5, vertexKind));
 
+  // ── THE SEA HAS NO SOUNDINGS, AND THE BREAK GATES MUST NOT BELIEVE ITS
+  //    DEPTH ──
+  //
+  // Terrarium encodes open water as ZERO, not as bathymetry, so a sea
+  // texel's depth is the resting datum minus that zero: 0.40 m at Camps Bay
+  // — at every sample out to a kilometre and a half, measured with __wave.
+  // Every gate below reads that number in metres, so the whole Atlantic sat
+  // permanently in the post-break collapse (postBreak 0.32, vShoal pinned at
+  // 1, and a breaker band that could never form because the depth delta's
+  // exponential was 0.045). It cost half the wave: 0.347 m of peak rise
+  // where the same sea state in deep water gives about 0.67.
+  //
+  // So the WAVE terms read an ordinary beach profile instead of the fill:
+  // zero at the waterline and one in seventeen seaward. That slope is a
+  // rendering proxy, chosen so the whole profile — wash, break, shoal, deep
+  // — fits inside the 180 m the shore-distance field can actually measure
+  // (it clamps there): the wash is the first forty metres, the break lands
+  // around forty-three, the shoaling boost fades by a hundred and eighty,
+  // and past that the sea is deep and the swell is its own honest height.
+  // The DEEPER of the two always wins, so a tile that does carry soundings
+  // keeps them and nothing is ever made shallower than the data says.
+  // Coastal standing water only: a mountain lake's basin IS real land data
+  // and a river owns its channel. Contact, colour and the bed are untouched;
+  // this is only the geometry's idea of how far down the bottom is.
+  float waveDepth = mix(depth, max(depth, shoreDist * 0.06), coastalStanding);
+
   vec4 renderPosition = modelMatrix * vec4(position, 1.0);
   vAbsoluteXZ = renderPosition.xz + uWorldOrigin.xz;
 
@@ -214,7 +240,16 @@ void main() {
   // A swell arrives in sets. The envelope travels more slowly than the
   // crests and varies amplitude only, preserving continuous wave phase.
   float waveSet = 0.82 + 0.18 * sin(dot(vAbsoluteXZ, windDir) * k * 0.23 - uTime * omega * 0.31);
-  float swell = (swellA * 0.74 + swellB * 0.26) * waveSet * mix(0.35, 1.0, exposure);
+  // EXPOSURE IS NOT IN THE ENVELOPE. It was, for a day: the swell carried
+  // mix(0.35, 1, exposure) and the shore wave mix(0.45, 1, exposure), which
+  // took a third of the wave height and — because crest whitening is a steep
+  // smoothstep on this same envelope — almost all of the whitecaps wherever
+  // the fan read sheltered, including a great deal of open water it had no
+  // business shading (the fan's own faults, since fixed). Shelter belongs to
+  // what shelter actually stops: the breakers, their foam and the spill,
+  // damped by vExposure below and in the fragment. A quiet harbour is quiet
+  // because nothing breaks in it, not because its swell is shorter.
+  float swell = (swellA * 0.74 + swellB * 0.26) * waveSet;
 
   // Shore-following geometry is also macro scale. The 5-30m crest structure
   // belongs in the analytic normal and foam response, not a 75m vertex grid.
@@ -223,9 +258,9 @@ void main() {
   // Signed distance keeps the phase continuous through the waterline:
   // clamping the dry side to zero made every run-up vertex move in lockstep.
   float shorePhase = phaseCoord * shoreK + uTime * omega * 0.86;
-  float steepen = 1.0 - smoothstep(0.8, 4.5, depth);
-  float shoreWave = (sin(shorePhase)
-    + sin(shorePhase * 2.0) * 0.24 * steepen) * mix(0.45, 1.0, exposure);
+  float steepen = 1.0 - smoothstep(0.8, 4.5, waveDepth);
+  float shoreWave = sin(shorePhase)
+    + sin(shorePhase * 2.0) * 0.24 * steepen;
   // The crossfade to the shore wave rides the same coordinate, so over a
   // shoal the shore-following crests persist as far out as the slowing does.
   float nearShore = (1.0 - smoothstep(22.0, 120.0, max(0.0, phaseCoord)))
@@ -256,13 +291,13 @@ void main() {
 
   // ── SHOAL, BREAK, THEN COLLAPSE ──
   float breakerDepth = mix(0.55, 2.7, energy);
-  float depthDelta = (depth - breakerDepth) / max(0.28, breakerDepth * 0.48);
+  float depthDelta = (waveDepth - breakerDepth) / max(0.28, breakerDepth * 0.48);
   vBreaker = (1.0 - vFlowing) * exp(-depthDelta * depthDelta) * geometryField.r
     * mix(0.15, 1.0, exposure);
   vShoal = (1.0 - vFlowing)
-    * (1.0 - smoothstep(breakerDepth, max(breakerDepth + 0.1, 10.0), depth));
+    * (1.0 - smoothstep(breakerDepth, max(breakerDepth + 0.1, 10.0), waveDepth));
   float postBreak = mix(0.28, 1.0,
-    smoothstep(0.12, max(0.3, breakerDepth * 0.85), depth));
+    smoothstep(0.12, max(0.3, breakerDepth * 0.85), waveDepth));
 
   vWaveCrest = smoothstep(0.48, 0.94, standingWave) * (1.0 - vFlowing);
 

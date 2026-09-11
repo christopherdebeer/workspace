@@ -8652,6 +8652,8 @@ let dryAt: [number, number] | null = null;
 let seaDatum: number | null = null;
 let seaDatumN = 0;
 let seaDatumSteady = 0;
+/** The last scan that moved the datum — reported by `__sea`. */
+let seaScan: { wet: number; dry: number; median: number; lowDry: number; at: number } | null = null;
 const SEA_MIN_SAMPLES = 150;
 function measureSeaDatum(): void {
   const wet: number[] = [], dry: number[] = [];
@@ -8661,6 +8663,21 @@ function measureSeaDatum(): void {
       const x = state.x + c * r, z = state.z + s * r;
       const cv = sampleCover(x, z);
       if (cv === null) continue;
+      // ── AND NO MEASUREMENT IS NOT A MEASUREMENT OF ZERO, HERE EITHER ──
+      //
+      // `sampleHeight` answers 0 — the spawn's own level — anywhere it has no
+      // tile, so a water sample over unstreamed ground votes for `baseElev`.
+      // Cover arrives well ahead of terrain, so the FIRST scan of a coastal
+      // session is mostly such samples and the datum it sets is the spawn
+      // elevation: measured live at Simon's Town, a 10.4 m sea. Everything
+      // downstream then fails honestly against a false number — the ocean
+      // mask's height gate refused all 62,578 pixels of the False Bay tile,
+      // so there was no ocean body at all and the bay drew as the land-cover
+      // LAKE polygons over it: sea state 0.34 instead of 0.72, no surf, no
+      // breakers, no coast field. The mask already learned this lesson for
+      // its own pixels ("no measurement is not a measurement of zero"); the
+      // datum that the mask is measured against had not.
+      if (!hasHeight(x, z)) continue;
       (cv === COVER.water ? wet : dry).push(sampleHeight(x, z) + baseElev);
     }
   }
@@ -8682,6 +8699,8 @@ function measureSeaDatum(): void {
   seaDatumSteady = seaDatum !== null && Math.abs(lvl - seaDatum) < 1 ? seaDatumSteady + 1 : 0;
   seaDatum = lvl;
   seaDatumN = wet.length;
+  seaScan = { wet: wet.length, dry: dry.length, median: +lvl.toFixed(2),
+    lowDry: +dry[Math.floor(dry.length * 0.2)].toFixed(2), at: Math.round(performance.now()) };
 }
 /** Absolute elevation of the sea surface. The 0.4 is freeboard: the DEM's
  *  ocean fill is a flat plate, and a plane at exactly its height z-fights with
@@ -30102,34 +30121,33 @@ function tapeKeep(): string {
   const coverage = f.geometry[i], shoreM = f.geometry[i + 1], depth = Math.max(0, f.geometry[i + 3]);
   const sea = clamp(f.dynamics[i + 3], 0, 1), fetchM = Math.max(1, f.dynamics[i + 2]);
   const exposure = f.coast ? clamp(f.coast[i + 3], 0, 1) : 1;
+  const kind = f.material[i];
   const speed = Math.max(0.2, worldWind.kmh / 3.6);
   const windSea = smooth(0.5, 15, speed);
   const standingState = clamp(sea * (0.5 + windSea * 0.75), 0, 1);
+  // The same beach profile the vertex reads, for the same reason: terrarium
+  // gives the open sea one constant depth, and every gate below is in metres.
+  const shoreDist = Math.max(0, shoreM);
+  const coastal = kind === 1 || kind === 2;
+  const waveDepth = coastal ? Math.max(depth, shoreDist * 0.06) : depth;
   const breakerDepth = 0.55 + (2.7 - 0.55) * sea;
-  const shoal = 1 - smooth(breakerDepth, Math.max(breakerDepth + 0.1, 10), depth);
-  const postBreak = 0.28 + 0.72 * smooth(0.12, Math.max(0.3, breakerDepth * 0.85), depth);
+  const delta = (waveDepth - breakerDepth) / Math.max(0.28, breakerDepth * 0.48);
+  const shoal = 1 - smooth(breakerDepth, Math.max(breakerDepth + 0.1, 10), waveDepth);
+  const postBreak = 0.28 + 0.72 * smooth(0.12, Math.max(0.3, breakerDepth * 0.85), waveDepth);
   const amplitude = (0.012 + (1.05 - 0.012) * Math.pow(standingState, 1.6))
     * (1 + shoal * 0.62) * postBreak;
-  // The phase coordinate decides which wave this texel is riding; the peak of
-  // the crossfade between them is the envelope the vertex actually reaches.
-  const phase = f.coast && shoreM >= 0 ? Math.max(0, f.coast[i]) : shoreM;
-  const nearShore = 1 - smooth(22, 120, Math.max(0, phase));
-  const gain = (1 - nearShore) * (0.35 + 0.65 * exposure) + nearShore * (0.45 + 0.55 * exposure);
   return {
-    at: [+px.toFixed(1), +pz.toFixed(1)], key: f.key, kind: f.material[i],
-    coverage: +coverage.toFixed(2), shoreM: +shoreM.toFixed(1), depthM: +depth.toFixed(2),
+    at: [+px.toFixed(1), +pz.toFixed(1)], key: f.key, kind,
+    coverage: +coverage.toFixed(2), shoreM: +shoreM.toFixed(1),
+    /** What the DEM says, and what the wave terms read instead. */
+    demDepthM: +depth.toFixed(2), waveDepthM: +waveDepth.toFixed(2),
     seaState: +sea.toFixed(2), fetchKm: +(fetchM / 1000).toFixed(1),
     windMps: +speed.toFixed(1), exposure: +exposure.toFixed(2),
     shoal: +shoal.toFixed(2), postBreak: +postBreak.toFixed(2),
-    amplitudeM: +amplitude.toFixed(3),
     /** Peak rise above the resting surface, metres — half the wave's height. */
-    peakM: +(amplitude * gain * coverage).toFixed(3),
-    /** …and the same texel with no shelter, which is what it was before the
-     *  coast field's exposure entered the wave. */
-    openPeakM: +(amplitude * coverage).toFixed(3),
-    /** What the crest whitening reads at that envelope (smoothstep .48-.94). */
-    crest: +smooth(0.48, 0.94, gain).toFixed(2),
-    openCrest: +smooth(0.48, 0.94, 1).toFixed(2),
+    peakM: +(amplitude * coverage).toFixed(3),
+    /** The breaker gate, which is where shelter is allowed to show. */
+    breaker: +(Math.exp(-delta * delta) * coverage * (0.15 + 0.85 * exposure)).toFixed(3),
   };
 };
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number, margin = 0.8) =>
@@ -33171,6 +33189,10 @@ function heightsOf(): number[] {
   return {
     seaOn, y: +sea.position.y.toFixed(1), live: seaLevelY() !== null, baseElev: +baseElev.toFixed(1),
     datum: seaDatum === null ? null : +seaDatum.toFixed(2), datumN: seaDatumN,
+    // The last scan that was ALLOWED to set the datum: how many samples on
+    // each side, the water median it took, and the dry twentieth percentile
+    // it had to stay under. A datum that looks wrong is one of these.
+    scan: seaScan,
     dryAt: dryAt ? [Math.round(dryAt[0]), Math.round(dryAt[1])] : null,
     dryDist: dryAt ? Math.round(Math.hypot(dryAt[0] - state.x, dryAt[1] - state.z)) : null,
   };

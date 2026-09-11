@@ -45,7 +45,11 @@ export function runCoastFieldTest(): void {
   // …inside the band each texel adds distance at the dispersion's own rate
   // for the depth there (twelve metres is far from deep for a 300 m swell)…
   const dBand = at(38, 48)[0] - at(34, 48)[0];
-  const hBand = (36 - shore + 0.5) * pixelM * 0.05;
+  // The solver takes the DEEPER of the tile's own soundings and its beach
+  // shelf, so the expectation has to take it too — here the shelf is deeper
+  // than this fixture's 1-in-20 slope, and it is the shelf that sets the rate.
+  const runM = (36 - shore + 0.5) * pixelM;
+  const hBand = Math.max(runM * 0.05, runM * 0.06);
   const rateBand = Math.min(3, swellSlowness(k0, hBand) / deep);
   assert(Math.abs(dBand / (4 * pixelM) / rateBand - 1) < 0.08,
     `twelve metres down adds distance at the dispersion rate (${(dBand / (4 * pixelM)).toFixed(3)} vs ${rateBand.toFixed(3)})`);
@@ -68,6 +72,34 @@ export function runCoastFieldTest(): void {
   // back), and the arms are land the solve never crossed.
   assert(bayAt(44, 48)[0] > bayAt(30, 48)[0] && bayAt(30, 48)[0] > 0, 'travel grows out from the back of the bay');
   assert(bayAt(40, 10)[0] === 0 && bayAt(40, 10)[3] === 1, 'an arm of the bay is land');
+
+  // ── A SEA WITH NO SOUNDINGS STILL REFRACTS ──
+  // Terrarium encodes open water as zero, so a real sea arrives at a uniform
+  // 0.40 m: every texel equally slow, the cap flattening them all to three
+  // times deep, no gradient and therefore no refraction — a threefold phase
+  // stretch and nothing else. The shelf profile restores the gradient.
+  const flatGrid = grid(n, pixelM, shore, 0);
+  for (let i = 0; i < flatGrid.depth.length; i++) if (flatGrid.wet[i]) flatGrid.depth[i] = 0.4;
+  const flat = solveCoastField(flatGrid);
+  const fAt = (x: number): number => flat.data[(48 * n + x) * 4];
+  const nearRate = fAt(shore + 4) - fAt(shore + 2);
+  const farRate = fAt(shore + 15) - fAt(shore + 13);
+  assert(nearRate > farRate * 1.1,
+    `a fill-flat sea still slows toward the beach (${nearRate.toFixed(1)} vs ${farRate.toFixed(1)} m per two texels)`);
+  for (let x = shore + 1; x < shore + 20; x++) {
+    assert(fAt(x + 1) > fAt(x), `and stays monotone across the band (x=${x})`);
+  }
+
+  // ── ONLY LAND STOPS A SWELL ──
+  // Water of another kind — a land-cover polygon lying over the sea — used
+  // to wall the exposure fan and read shelter on open water.
+  const otherKind = grid(n, pixelM, shore, 0.05);
+  for (let z = 30; z < 66; z++) for (let x = shore + 8; x < shore + 20; x++) {
+    otherKind.coastal[z * n + x] = 0;              // wet, not this body's kind
+  }
+  const across = solveCoastField(otherKind);
+  assert(across.data[((48 * n) + shore + 2) * 4 + 3] > 0.9,
+    `a foreign water body does not shelter the beach behind it (${across.data[((48 * n) + shore + 2) * 4 + 3].toFixed(2)})`);
 
   // A tile wholly at sea, no shore in its grid: every texel carries the
   // plain (clamped) distance, never a zero that would read as the waterline.
@@ -109,5 +141,5 @@ export function runCoastFieldTest(): void {
   assert(coastMs < 60, `the coast solve is a small part of a build (${coastMs.toFixed(1)} ms at 128²)`);
   const off = buildHydroTile(input, registry, analysis, { fieldResolution: 128, coastField: false });
   assert(!off.coast, 'coastField: false builds no field');
-  console.log(`  coast: beach cycles ${beach.stats.cycles} solve ${beach.stats.solveMs.toFixed(1)} ms exposure ${beach.stats.exposureMs.toFixed(1)} ms · tile build coast ${coastMs.toFixed(1)} ms`);
+  console.log(`  coast: fill-flat slowing ${nearRate.toFixed(1)}→${farRate.toFixed(1)} m/2 texels · beach cycles ${beach.stats.cycles} solve ${beach.stats.solveMs.toFixed(1)} ms exposure ${beach.stats.exposureMs.toFixed(1)} ms · tile build coast ${coastMs.toFixed(1)} ms`);
 }

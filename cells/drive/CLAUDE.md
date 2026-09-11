@@ -5743,6 +5743,105 @@ ready — the route solver learned this ("old route live until the new one
 lands"), the far level swap learned it (the retired ring), and the substrate
 commit had the swap written and was bypassed by its own invalidation.
 
+## The sea had no soundings, so the waves had no height
+
+From the seat: "did we lose vertical height/volume on ocean waves at some
+point?" Yes, twice, and neither was a change to the amplitude constants —
+those have not moved since the original hydro shading commits. What changed
+is what multiplies them. `__wave(x, z)` is the instrument the question
+needed: the vertex's displacement chain cannot be read back off the GPU, so
+it replays the chain on the CPU from the same field — sea state, depth,
+shoal, the post-break collapse, the shelter — and reports the peak rise in
+metres. Peak rise is half the wave's height.
+
+**The big one, and it was old. Terrarium encodes open water as ZERO, not as
+bathymetry.** A sea texel's depth is therefore the resting datum minus that
+zero: 0.40 m at Camps Bay, at every sample out to a kilometre and a half.
+Every gate in the wave's chain reads metres, so the whole Atlantic sat
+permanently in the post-break collapse — `postBreak` 0.32, `vShoal` pinned
+at 1, `vBreaker` 0.045 so no breaker could ever form, anywhere, at any
+distance. The sea was a flat 0.3 m sheet from the waterline to the horizon.
+The gates are right; the number they were reading was fill.
+
+So the wave terms read an ordinary beach profile instead: zero at the
+waterline, **one in seventeen** seaward, the deeper of profile and datum
+always winning so a tile that does carry soundings keeps them. The slope is
+a rendering proxy chosen so the whole profile fits inside the 180 m the
+shore-distance field can actually measure (it clamps there). The coast
+field's solver reads the same shelf — fed the fill it had no depth gradient
+at all, so its dispersion was uniformly at the 3× cap and there was **no
+refraction**, only a threefold phase stretch; the test now holds it to a
+gradient (112.5 → 90.6 m of travel per two texels on a fill-flat sea).
+
+Measured on the live Camps Bay beach, the same spot before and after:
+
+| offshore | peak rise before | after | breaker after |
+|---|---|---|---|
+| 0 m (the wash) | 0.20 m | 0.30 m | 0.10 |
+| 25 m | 0.30 m | **1.11 m** | **0.75** |
+| 50 m | 0.30 m | 1.08 m | 0.31 |
+| 100 m | 0.32 m | 0.90 m | 0 |
+| 200 m and out | 0.29–0.35 m | 0.68 m | 0 |
+
+A profile where there was a sheet: deep-water swell at 0.68, rising through
+the shoaling band, breaking at twenty-five to fifty metres, collapsing into
+the wash. Mean over seventeen sea samples, 0.322 → 0.947 m.
+
+**The small one was a day old and mine.** The coast field's exposure
+multiplied the wave ENVELOPE — the swell by mix(0.35, 1, exposure), the
+shore wave by mix(0.45, 1, exposure) — which took a third of the height
+where the fan read sheltered and, because crest whitening is a steep
+smoothstep on that same envelope, took the whitecaps almost entirely
+(crest 1.00 → 0.31 on the at-simonstown fixture). Shelter now damps only
+what shelter stops: the breakers, their foam and the spill. **A quiet
+harbour is quiet because nothing breaks in it, not because its swell is
+shorter.**
+
+And the fan itself was wrong twice over, both from the demo's assumptions
+about an authored seabed. It walled off water of another KIND, so the
+land-cover polygon lying over False Bay — 62,578 pixels — killed five of
+seven rays on open water; and it attenuated 0.87 a step over anything under
+two metres, which on fill-flat depth fired on every step of every ray
+(0.9^28 = 0.05) and drove whole coastlines to the floor. Only LAND stops a
+swell now. The solve's medium is any STANDING water, whatever body owns it:
+foreign water was also outside the medium, which made it a SOURCE at travel
+zero — a false waterline emitting crests from its own rim, the very defect
+the travel field exists to remove.
+
+## A coastal spawn set the sea ten metres up, and the ocean stopped existing
+
+The live coast at Simon's Town had no ocean AT ALL: `__hydrotile` showed
+two `lake` bodies and the mask refusing all 62,578 pixels of the False Bay
+tile with a datum of 10.4 m. The sea was drawn as the land-cover polygons
+over it — sea state 0.34 instead of 0.72, short fetch, and because lake is
+not a coastal kind, no surf strip, no run-up, no breakers and no coast
+field. Camps Bay, ten kilometres away, was healthy at 85–100% ocean.
+
+The cause is one line in `measureSeaDatum`, and the mask had already
+learned the same lesson for its own pixels. The radial scan pushes
+`sampleHeight(x, z) + baseElev` for every cover-water sample, and
+`sampleHeight` answers 0 — the spawn's own level — anywhere it has no tile.
+Cover arrives well ahead of terrain, so the first scan of a coastal session
+is mostly such samples and the datum it sets is the SPAWN ELEVATION: ten
+metres at Simon's Town, which is where the town sits. Everything downstream
+then failed honestly against a false number. A sample with no terrain does
+not vote now, and `__sea().scan` reports what the last accepted scan
+actually saw (wet and dry counts, the water median, the dry twentieth
+percentile it had to stay under) so the next occurrence is one call to
+diagnose.
+
+Measured live at Simon's Town, before and after: datum **10.4 → 0.4 m**;
+the False Bay tile's mask **0% ocean and 62,578 refused → 95.5% and 6**;
+the tile's bodies **lake, lake → ocean**; ocean texels in a three-kilometre
+scan **0 → 1,365**. The bay is sea again, with everything that follows from
+being sea.
+
+**What to take from both:** a fill value is not a measurement, and the
+difference is invisible at the call site. `sampleHeight` returning 0 and
+terrarium's ocean returning 0 are the same trap at two scales — one flattened
+every wave in the world, the other deleted an ocean — and in both cases the
+code downstream was correct and reading a number that meant "I do not know".
+
 ## The coast field: the sea's crests ride travel time, and a harbour is quiet
 
 Gleaned from the ocean demo the seat was shown (its eikonal coast was the

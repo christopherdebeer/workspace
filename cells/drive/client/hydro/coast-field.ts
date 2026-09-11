@@ -44,9 +44,20 @@ export interface CoastFieldInput {
   height: number;
   /** Metres per texel. */
   pixelM: number;
-  /** 1 where the texel is water (coverage past the waterline cut). */
+  /**
+   * ── THE MEDIUM ── 1 where the swell can stand or travel: any STANDING
+   * water the caller hands in, whatever body it belongs to. Not merely the
+   * texels the field is about. A land-cover polygon lying over the sea (False
+   * Bay wears one 62,578 pixels across) is sea to a wave whatever its tag
+   * says, and when the medium was the coastal kinds alone such a polygon was
+   * BOTH a wall to the exposure fan AND, being outside the medium, a source
+   * of travel at zero — a false waterline emitting crests from its own rim,
+   * the very defect the travel field exists to remove. Land bounds the
+   * medium, and so does a channel: a river is the caller's to exclude.
+   */
   wet: Uint8Array;
-  /** 1 where the water is the sea or a lagoon — the only water the swell crosses. */
+  /** 1 where that water is the sea or a lagoon — what the field is ABOUT,
+   *  which is a narrower thing than what the swell crosses. Stats only. */
   coastal: Uint8Array;
   /** 1 where the ocean mask's interior painted the texel: depth unknown, deep assumed. */
   interior: Uint8Array;
@@ -134,6 +145,18 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
   // RELATIVE speeds across a section) keeps its shape.
   const SLOW_MAX = 3;
   const deepSlow = 1 / c0;
+  // ── AND THE SOLVE READS A BEACH PROFILE, NOT THE FILL ──
+  // Terrarium encodes open water as zero, so `depth` is the resting datum
+  // everywhere offshore — 0.40 m at Camps Bay, a kilometre out. Fed to the
+  // dispersion, that is ten times slower than deep water at EVERY texel,
+  // which the cap below flattens to a uniform three: no gradient, therefore
+  // no refraction at all, and a phase coordinate stretched threefold across
+  // the whole nearshore. So the solve reads the same one-in-seventeen shelf
+  // the wave shader reads (shaders.ts explains the slope), off the distance
+  // transform it already has — the two must agree about where the bottom is
+  // — and the deeper of shelf and datum wins, so real soundings survive
+  // wherever a tile carries them.
+  const SHELF = 0.06;
   // ── THE SWEEP IS A BAND; THE FAR FIELD IS GROWN FROM IT ──
   // The shader reads the travel as a phase only within the nearshore
   // crossfade (120 m of it) and whatever a shoal stretches that to. So the
@@ -147,7 +170,7 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
   // exposure fan, which still marches over every sea texel.
   const BAND = 16;
   const toDry = input.toDry ?? chamfer(wet, width, height, 0);
-  const sea = new Uint8Array(n);
+  const medium = new Uint8Array(n);
   // Seconds to cross one texel, per band texel; land and other water are
   // walls, the far field is fixed and carries no step.
   const step = new Float32Array(n);
@@ -155,12 +178,14 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
   const T = new Float32Array(n);
   let coastalTexels = 0;
   for (let i = 0; i < n; i++) {
-    if (!wet[i] || !coastal[i]) continue;
-    sea[i] = 1; coastalTexels++;
+    if (!wet[i]) continue;
+    medium[i] = 1;
+    if (coastal[i]) coastalTexels++;
     T[i] = INF;
     if (toDry[i] > BAND) continue;
+    const h = Math.max(depth[i], toDry[i] * pixelM * SHELF, 0.35);
     step[i] = interior[i] ? deepStep
-      : Math.min(swellSlowness(k0, Math.max(0.35, depth[i])), deepSlow * SLOW_MAX) * pixelM;
+      : Math.min(swellSlowness(k0, h), deepSlow * SLOW_MAX) * pixelM;
   }
   // Monotone Godunov sweeps in the four diagonal orders. A coast source is
   // reached in two or three cycles; the loop stops when a cycle moves
@@ -208,7 +233,7 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
     const c1 = deepStep, c2 = deepStep * Math.SQRT2;
     for (let z = 0; z < height; z++) for (let x = 0; x < width; x++) {
       const i = z * width + x;
-      if (!sea[i] || step[i] !== 0) continue;
+      if (!medium[i] || step[i] !== 0) continue;
       let v = T[i];
       if (x > 0) { const w = T[i - 1] + c1; if (w < v) v = w; }
       if (z > 0) {
@@ -220,7 +245,7 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
     }
     for (let z = height - 1; z >= 0; z--) for (let x = width - 1; x >= 0; x--) {
       const i = z * width + x;
-      if (!sea[i] || step[i] !== 0) continue;
+      if (!medium[i] || step[i] !== 0) continue;
       let v = T[i];
       if (x + 1 < width) { const w = T[i + 1] + c1; if (w < v) v = w; }
       if (z + 1 < height) {
@@ -242,8 +267,8 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
     // the distance transform's own answer there (a clamp, well past the
     // nearshore crossfade). Left at zero it would read as the waterline and
     // put a full, phase-flat shore wave over the whole open tile.
-    if (!sea[i] || T[i] >= INF) {
-      if (sea[i]) data[i * 4] = Math.min(4000, toDry[i] * pixelM);
+    if (!medium[i] || T[i] >= INF) {
+      if (medium[i]) data[i * 4] = Math.min(4000, toDry[i] * pixelM);
       data[i * 4 + 3] = 1;
       continue;
     }
@@ -270,7 +295,7 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
   for (let lz = 0; lz < lh; lz++) for (let lx = 0; lx < lw; lx++) {
     const x = Math.min(width - 1, lx * STRIDE), z = Math.min(height - 1, lz * STRIDE);
     const i = z * width + x;
-    if (!sea[i] || T[i] >= INF) continue;
+    if (!medium[i] || T[i] >= INF) continue;
     let dx = data[i * 4 + 1], dz = data[i * 4 + 2];
     if (toDeep[i] < 1e8) {
       const gx = toDeep[z * width + Math.min(width - 1, x + 1)] - toDeep[z * width + Math.max(0, x - 1)];
@@ -289,8 +314,16 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
         const px = Math.round(x + rx * s * STEP_TEXELS), pz = Math.round(z + rz * s * STEP_TEXELS);
         if (px < 0 || pz < 0 || px >= width || pz >= height) break;   // left the grid: open
         const j = pz * width + px;
-        if (!wet[j] || !coastal[j]) { energy = 0.03; break; }
-        if (!interior[j] && depth[j] < 2) energy *= 0.9;
+        // ANY WATER IS WATER. Only LAND stops a swell. The first cut also
+        // walled off water of another KIND, and a land-cover polygon lying
+        // over the sea — False Bay wears one 62,578 pixels across — killed
+        // five of seven rays on open water, reading 0.34 where it should
+        // read 1. And the demo's shallow attenuation (0.87 a step over its
+        // authored seabed) is meaningless on fill: our sea is 0.40 m deep
+        // everywhere, so it fired on every step of every ray — 0.9^28 =
+        // 0.05 — and drove whole coastlines to the floor. Shelter here is
+        // what the LAND blocks, which is what this data can carry.
+        if (!wet[j]) { energy = 0.03; break; }
       }
       sum += energy;
     }
@@ -298,7 +331,7 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
   }
   for (let z = 0; z < height; z++) for (let x = 0; x < width; x++) {
     const i = z * width + x;
-    if (!sea[i] || T[i] >= INF) continue;
+    if (!medium[i] || T[i] >= INF) continue;
     const fx = x / STRIDE, fz = z / STRIDE;
     const x0 = Math.min(lw - 1, Math.floor(fx)), z0 = Math.min(lh - 1, Math.floor(fz));
     const x1 = Math.min(lw - 1, x0 + 1), z1 = Math.min(lh - 1, z0 + 1);
