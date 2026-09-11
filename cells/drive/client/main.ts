@@ -677,27 +677,80 @@ async function decodeTerrarium(blob: Blob, px: number): Promise<Float32Array> {
   return out;
   });
 }
-// ── MAPTERHORN: the same encoding, better ground ───────────────────
-// AWS's terrarium mosaic is unmaintained and, under this project's own tiles,
-// carries hard corruption: the z14 tile over Chapman's Peak holds 445 pixels
-// (0.68%) below −500m and bottoms out at −13,029m, and Beach Road's has 28 more
-// at −2,632m. `repairDem` was written to survive exactly that.
+// ── WHERE THE GROUND COMES FROM, AND WHAT THE NAMES MEAN ───────────
 //
-// Mapterhorn serves the SAME terrarium packing — so this decodes through the
-// same path and costs no new code — over Copernicus GLO-30 with national LiDAR
-// where it exists, in 512px lossless WebP, CORS-open. Measured on the same
-// ground: zero corrupt pixels at both Cape Town sites. Found by reading what
-// arnis (an OSM→Minecraft world generator with our elevation problem and none
-// of our rendering ones) switched to after demoting these same AWS tiles to
-// "legacy".
+// TERRARIUM IS AN ENCODING. `r*256 + g + b/256 - 32768` metres, Mapzen's
+// packing, and every source below speaks it — which is why there is exactly
+// one decoder above and why swapping publishers cost no new code.
+//
+// THE PUBLISHERS ARE SOMETHING ELSE, and there are two:
+//
+//  - Mapterhorn — Copernicus GLO-30 with national LiDAR where it exists, 512px
+//    lossless WebP, CORS-open. AWS's terrarium mosaic is unmaintained and,
+//    under this project's own tiles, carries hard corruption: the z14 tile over
+//    Chapman's Peak holds 445 pixels (0.68%) below −500m and bottoms out at
+//    −13,029m, and Beach Road's has 28 more at −2,632m. `repairDem` was written
+//    to survive exactly that. Measured on the same ground, Mapterhorn has zero
+//    corrupt pixels at both Cape Town sites. Found by reading what arnis (an
+//    OSM→Minecraft world generator with our elevation problem and none of our
+//    rendering ones) switched to after demoting the AWS tiles to "legacy".
+//  - AWS `elevation-tiles-prod` — that legacy mosaic, 256px PNG. Still here as
+//    the last resort, and in a measured session it answers nothing.
+//
+// AND THE ROUTE IS NAMED FOR NEITHER. `~/dem/v1/` is a promise about the
+// PAYLOAD — terrarium bytes for this tile — and which publisher answered is
+// the cell's business (see the long note by `serveDem` in index.ts). That is
+// the whole of the naming: encoding in the contract, publisher behind the
+// route. `mth` and `aws` survive as counter names because five tests read them.
+//
+// ── AND IT GOES THROUGH THE CELL NOW ──
+//
+// It did not, for as long as this file has existed, and it was the only thing
+// that did not: vectors, cover, ecoregions and summits have all asked their
+// upstream once for everybody and banked the answer, while elevation asked
+// once per player per tile. Measured before the cutover (API-AUDIT-2026-09-11):
+// 83 to 136 direct requests in the first half-minute of driving, 37% of the
+// game's data bytes in a dense city and 94–96% everywhere else.
+//
+// The direct publisher stays as the fallback, exactly as `proxyTile` keeps the
+// Overpass mirrors: a bad deploy degrades to the old behaviour rather than to
+// a world with no hills.
 //
 // Tiles are 512px over the SAME footprint as a 256px AWS tile at equal z, so a
 // straight 2×2 average lands twice-sampled ground in the frame the rest of the
-// engine already assumes. Absent tiles 404 — every pure-ocean one, and every
-// level past what the local source resolves — and fall back up the pyramid,
-// which is also how a coarse region degrades gracefully rather than failing.
-const MAPTERHORN = !/[?&]dem=aws/.test(location.search);
+// engine already assumes. Absent tiles are answered by the route's sentinel —
+// every pure-ocean one, and every level past what the local source resolves —
+// and fall back up the pyramid, which is also how a coarse region degrades
+// gracefully rather than failing.
+const DEM_MAIN = !/[?&]dem=aws/.test(location.search);
+const DEM_DIRECT = 'https://tiles.mapterhorn.com';
+/**
+ * THE FLOOR OF THE CLIMB, AND IT USED TO BE z6 ON A GUESS.
+ *
+ * "z6 is the floor (all land has a tile there)" was true and beside the point:
+ * the publisher holds a whole planet at z0 (one 512px tile, 239KB), z1 (4
+ * tiles, 873KB) and z2 (16 tiles, 3.2MB), every one of them present — measured
+ * over the complete grid, not assumed. A floor of 6 threw that away twice. Once
+ * for ocean, where the climb gave up eight levels above ground that exists. And
+ * once, worse, at the far shell's widest level: FAR_LEVELS bottoms out at z5,
+ * `up <= z - 6` is an empty loop there, and EVERY z5 shell tile in the game has
+ * therefore come from the corrupt legacy mosaic without ever asking the good
+ * source. The cost of a deeper climb is requests, and the route's sentinel
+ * carries the answer to that — see demFetch.
+ */
+const DEM_FLOOR = 0;
+/** Tiles no publisher holds, learned this session — keyed `z/x/y`, so a hole
+ *  already walked is not walked again. */
 const mthMissing = new Set<string>();
+/** …and WHERE each of those holes said to climb to. The cell's sentinel names
+ *  the nearest published ancestor, which turns a fourteen-level walk over the
+ *  open ocean into one request and a jump. Keyed the same; the value is the
+ *  ancestor's zoom. */
+const demHint = new Map<string, number>();
+/** One clean failure of the route retires it for the session, exactly as
+ *  `tileProxyOk` does for the vectors. A 503 is NOT that: it is the cell
+ *  telling us the publisher just failed IT, which is an answer about the tile. */
+let demProxyOk = true;
 const demSource = { mth: 0, aws: 0, none: 0,
   /** Tiles that arrived off the planet — patched if a few pixels, refused if
    *  many. The counter is the point: a spiking world should be able to SAY it
@@ -712,34 +765,91 @@ const demSource = { mth: 0, aws: 0, none: 0,
   mthBlocked: 0,
   /** Tiles answered from the on-device raster cache — the number that says
    *  whether an offline session has any ground to stand on. */
-  disk: 0 };
-async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32Array | null> {
+  disk: 0,
+  /** The cutover's own instrument: how many levels came through the cell's
+   *  namespace against how many went straight to the publisher. `direct`
+   *  climbing on a live deploy means the route is failing and nothing else
+   *  will say so — the world looks exactly the same either way. */
+  proxy: 0, direct: 0,
+  /** Absences the route answered with a climb hint, and the levels that hint
+   *  saved. Zero saved with a busy ocean on screen means the sentinel is not
+   *  being written. */
+  hinted: 0, skipped: 0 };
+/**
+ * ONE LEVEL'S BYTES — from this cell's namespace if it is answering, and from
+ * the publisher if it is not.
+ *
+ * `null` means nobody holds this tile. That is not an error and it is the
+ * COMMON case: most of the planet is ocean or is past what the local source
+ * resolves. The route answers it with a short `text/plain` sentinel rather
+ * than a 404, because a 404 cannot be banked and would send every ocean tile
+ * to the Lambda for every player forever; the content type is how the two are
+ * told apart, and the body carries where to climb to.
+ *
+ * Throws exactly what `fetch` throws, so the caller's TypeError branch still
+ * means "the request never left" and nothing else.
+ */
+async function demFetch(key: string): Promise<Blob | null> {
+  if (demProxyOk) {
+    const res = await fetch(`${CELL_BASE}/~/dem/v1/${key}`);
+    if (res.ok) {
+      if (!/^image\//.test(res.headers.get('content-type') ?? '')) {
+        const hint = (await res.text()).match(/^ABSENT (\d+)\//);
+        if (hint) { demHint.set(key, Number(hint[1])); demSource.hinted++; }
+        return null;
+      }
+      demSource.proxy++;
+      return await res.blob();
+    }
+    if (res.status !== 503) demProxyOk = false;
+  }
+  const res = await fetch(`${DEM_DIRECT}/${key}.webp`);
+  if (!res.ok) return null;
+  demSource.direct++;
+  return await res.blob();
+}
+async function fetchDemPyramid(x: number, y: number, z: number): Promise<Float32Array | null> {
   // Set the moment a request is refused rather than answered: from then on
   // this climb reads the cache and asks the network nothing. See the catch.
   let refused = false;
-  // Up the pyramid until something exists; z6 is the floor (all land has a
-  // tile there), and each step up quarters the ground detail we can recover.
-  for (let up = 0; up <= z - 6; up++) {
+  // Up the pyramid until something exists; each step up quarters the ground
+  // detail we can recover, and DEM_FLOOR's note says why it goes all the way.
+  for (let up = 0; up <= z - DEM_FLOOR; up++) {
     const tz = z - up, tx = x >> up, ty = y >> up;
     const key = `${tz}/${tx}/${ty}`;
-    if (mthMissing.has(key)) continue;
+    /** Skip the levels a hint has already ruled out. Called on every path that
+     *  leaves a level empty, so the jump works whether this hole was learned
+     *  now or three tiles ago. */
+    const jump = (): void => {
+      const to = demHint.get(key);
+      if (to === undefined || to >= tz) return;
+      demSource.skipped += (tz - to) - 1;
+      up = z - to - 1;             // the loop's own ++ lands us on `to`
+    };
+    if (mthMissing.has(key)) { jump(); continue; }
     let raw: Float32Array;
-    const url = `https://tiles.mapterhorn.com/${key}.webp`;
+    // THE CACHE IS KEYED BY THE TILE, NOT BY THE URL IT CAME DOWN. Every other
+    // raster here is keyed by source URL, and that was right while there was
+    // one source per raster. With the cell in front of the publisher there are
+    // two URLs for identical bytes, and keying by either would make a session
+    // that fell back to the publisher unable to read what it had already
+    // stored. The one-time cost is that tiles banked under the old
+    // tiles.mapterhorn.com keys are orphaned and refill once.
+    const ckey = `dem/v1/${key}`;
     // Whether these bytes came off the disk decides two things in the catch:
     // a stored tile that will not decode has to be dropped, and it cannot be
     // evidence that the SOURCE is unreachable.
     let disk = false;
     try {
-      let blob = await readRaster(url);
+      let blob = await readRaster(ckey);
       disk = !!blob;
       if (!blob) {
         // Nothing stored, and the network already said no on a level below —
         // asking again would be a second failure for the same reason. Keep
         // climbing on the disk alone.
         if (refused) continue;
-        const res = await fetch(url);
-        if (!res.ok) { mthMissing.add(key); continue; }
-        blob = await res.blob();
+        blob = await demFetch(key);
+        if (!blob) { mthMissing.add(key); jump(); continue; }
       }
       raw = await decodeTerrarium(blob, 512);
       // AFTER the decode, never before. Bytes are worth keeping only once
@@ -747,10 +857,10 @@ async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32
       // an error document would otherwise be stored and re-read as a broken
       // tile in every future session, and the cache would have manufactured a
       // permanent fault out of a passing one.
-      if (!disk) writeRaster(url, blob);
+      if (!disk) writeRaster(ckey, blob);
       if (disk) demSource.disk++;
     } catch (e) {
-      if (disk) dropRaster(url);
+      if (disk) dropRaster(ckey);
       // A tile that will not DECODE is a tile we do not have: step UP the
       // pyramid rather than abandoning the source — bailing out here sent every
       // request at Chapman's Peak, where nothing exists below z12, straight
@@ -779,6 +889,7 @@ async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32
         continue;
       }
       mthMissing.add(key);
+      jump();
       continue;
     }
     const out = new Float32Array(256 * 256);
@@ -820,7 +931,7 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
   const tile = `${z}/${x}/${y}`;
   let src = 'mth';
   let out: Float32Array | null = null;
-  if (MAPTERHORN) out = await fetchMapterhorn(x, y, z);
+  if (DEM_MAIN) out = await fetchDemPyramid(x, y, z);
   if (out) demSource.mth++;
   else {
     const url = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
@@ -33188,7 +33299,8 @@ function heightsOf(): number[] {
   ({ ...rasterStat, db: osmDbHow, budgetMB: RASTER_BUDGET / 1024 / 1024 });
 /** What the elevation source got wrong here, and how much of it we repaired. */
 (window as unknown as { __demsrc?: object }).__demsrc = (): object =>
-  ({ mapterhorn: MAPTERHORN, ...demSource, missingTiles: mthMissing.size });
+  ({ mapterhorn: DEM_MAIN, proxyOk: demProxyOk, ...demSource,
+    missingTiles: mthMissing.size, hints: demHint.size });
 (window as unknown as { __dem?: object }).__dem = (): object => ({
   tilesRepaired: demFixes.length,
   pixels: demFixes.reduce((a, f) => a + f.n, 0),

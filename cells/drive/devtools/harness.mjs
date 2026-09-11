@@ -175,12 +175,21 @@ export async function openDrive(opts = {}) {
     }
     if (!cellHandler) return null;
     const key = join(cellCache, createHash('sha1').update(p).digest('hex'));
-    if (existsSync(key)) return { body: readFileSync(key), type: 'image/png' };
+    // THE TYPE IS CACHED BESIDE THE BODY. This returned a hardcoded
+    // 'image/png' on a cache hit, which was true while ~/cover was the only
+    // route through here and silently wrong the moment a second one arrived:
+    // ~/dem/v1 answers image/webp for a tile and text/plain for an absence,
+    // and the client tells those two apart BY THE CONTENT TYPE.
+    if (existsSync(key)) {
+      const type = existsSync(`${key}.type`) ? readFileSync(`${key}.type`, 'utf8') : 'image/png';
+      return { body: readFileSync(key), type };
+    }
     const r = await cellHandler({ rawPath: p, requestContext: { http: { method: 'GET' } } });
     if (r.statusCode !== 200) return null;
     const body = r.isBase64Encoded ? Buffer.from(r.body, 'base64') : Buffer.from(String(r.body));
-    try { writeFileSync(key, body); } catch { /* best effort */ }
-    return { body, type: r.headers?.['content-type'] ?? 'application/octet-stream' };
+    const type = r.headers?.['content-type'] ?? 'application/octet-stream';
+    try { writeFileSync(key, body); writeFileSync(`${key}.type`, type); } catch { /* best effort */ }
+    return { body, type };
   };
   const server = http.createServer((req, res) => {
     const p = req.url.split('?')[0];
@@ -309,6 +318,21 @@ export async function openDrive(opts = {}) {
           res.end(Buffer.from(await r.arrayBuffer()));
         })
         .catch(() => { res.writeHead(503); res.end('{}'); });
+    }
+    // ── THE ELEVATION TILES, THROUGH THE CELL'S OWN HANDLER ──
+    //
+    // Through the handler rather than proxied to the deploy, unlike the
+    // vectors: `serveDem` is a proxy and a HEAD walk, not an Overpass budget,
+    // so running it locally costs one upstream request and exercises the route
+    // code the phone will run. Both of its answers matter here — a tile is
+    // image/webp and an absence is a text/plain sentinel naming where to climb
+    // — which is why cellRoute had to learn to remember a content type.
+    else if (p.startsWith('/~/dem/v1/') && opts.dem !== false) {
+      cellRoute(p).then((out) => {
+        if (!out) { res.writeHead(404); res.end('{}'); return; }
+        res.writeHead(200, { 'content-type': out.type });
+        res.end(out.body);
+      }).catch(() => { res.writeHead(503); res.end('{}'); });
     }
     else if (p.startsWith('/~/cover/v1/')) {
       cellRoute(p).then((out) => {

@@ -66,6 +66,13 @@ export const CSP = [
   // Mapterhorn was brought in to replace, including the -13,029m hole at
   // Chapman's Peak. Nothing reported it, because a silent fallback was the
   // designed behaviour for a genuinely missing tile.
+  //
+  // BOTH ELEVATION HOSTS ARE FALLBACKS NOW and the line keeps them anyway. The
+  // primary path is `~/dem/v1/` on this origin (see serveDem), so a policy
+  // that dropped these two would work perfectly right up until the deploy that
+  // needs them — which is the same invisible failure as the paragraph above,
+  // with the fallback removed instead of the source. They come out of this
+  // line on the day the client stops naming them, and not before.
   // …and the apex, for the OAuth endpoints ALONE. `/state` is same-origin on
   // this cell's own host, so signing in is the only thing that reaches off it
   // (docs/cell-origin-isolation.md §4.5).
@@ -604,6 +611,137 @@ async function serveCover(path: string, m: RegExpMatchArray) {
     },
     body: png.toString('base64'),
     isBase64Encoded: true,
+  };
+}
+
+// ── the elevation tiles: the one source that used to skip this cell ────
+//
+// Every other raster and vector the game reads has come through a `~/` route
+// for a long time; the DEM never did. `API-AUDIT-2026-09-11.md` has the
+// measurement — 83 to 136 direct requests to tiles.mapterhorn.com in the first
+// half-minute of driving, 37% of the game's data bytes in a dense city and
+// 94–96% everywhere else — but the shape of it is simple: the cover, vector
+// and ecoregion layers ask their upstream ONCE FOR EVERYBODY and bank the
+// answer, and elevation asked once per player per tile, forever.
+//
+// ── TERRARIUM IS THE ENCODING; MAPTERHORN IS THE SOURCE ──
+//
+// Worth saying once, plainly, because the client's names have drifted into
+// each other. "Terrarium" is Mapzen's RGB height packing — `r*256 + g + b/256
+// - 32768` metres — and BOTH sources speak it, which is why the client has one
+// decoder. "Mapterhorn" is the publisher this cell reads: Copernicus GLO-30
+// with national LiDAR where it exists, 512px lossless WebP, CORS-open. The
+// legacy AWS mosaic (`elevation-tiles-prod`) is the other publisher of the
+// same encoding, 256px PNG, unmaintained and measurably corrupt over this
+// project's own ground.
+//
+// So the ROUTE is named for neither: `~/dem/v1/` is a promise about the
+// PAYLOAD — terrarium-encoded bytes for this tile — and which publisher
+// answered it is this cell's business and nobody else's. That is the whole
+// ambiguity cleanup: encoding in the contract, source behind the route.
+//
+// ── AND IT DOES NOT DECODE ANYTHING ──
+//
+// The cover route computes: range-reads a COG, inflates blocks, renders a PNG.
+// This one deliberately does not. A Lambda with no image library cannot decode
+// lossless WebP without shipping a decoder, and it does not have to: the
+// client's pyramid climb, its 2×2 downsample, its bilinear re-projection and
+// its four repair passes are hard-won code (read the comments around
+// `fetchMapterhorn`) that works on the bytes as published. The cell's job here
+// is to be the one who asks upstream, and to remember the answer.
+//
+// ── AN ABSENCE IS AN ANSWER, AND IT IS THE COMMON ONE ──
+//
+// Mapterhorn 404s every pure-ocean tile and every level past what the local
+// source resolves, and most of the planet is one or the other. A 404 cannot be
+// banked as an object, so a route that simply passed the 404 on would send
+// every ocean tile to this Lambda, for every player, forever — the exact
+// invocation pattern the namespace exists to stop, and the one that made the
+// cover route store its all-zero tiles.
+//
+// So an absence is stored as a REAL OBJECT: a tiny `text/plain` body, which
+// the client tells from a tile by the content type. And because the client's
+// next move after an absence is always to climb, the body carries WHERE TO
+// CLIMB TO — `ABSENT 9/271/307`, the nearest ancestor that exists, found here
+// with HEADs. One request instead of up to fourteen, and the answer is banked,
+// so the second player pays a CDN hit for it.
+const DEM_RE = /^\/~\/dem\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+/** Terrarium-encoded 512px lossless WebP over Copernicus GLO-30 + national
+ *  LiDAR. The publisher behind `~/dem/v1/`. */
+const DEM_URL = 'https://tiles.mapterhorn.com';
+/** The floor of the climb. Mapterhorn publishes a whole planet at z0 (one
+ *  512px tile, 239KB) and full land coverage from z1 up — measured, not
+ *  assumed — so there is ground at every level and no reason to stop above 0. */
+const DEM_Z_MIN = 0;
+const DEM_MS = 20000;
+
+/** Does the publisher hold this tile? A HEAD, because the climb only needs to
+ *  know THAT it exists and the body is up to a quarter of a megabyte. */
+async function demHas(z: number, x: number, y: number): Promise<boolean> {
+  const ctl = new AbortController();
+  const bail = setTimeout(() => ctl.abort(), DEM_MS);
+  try {
+    const r = await fetch(`${DEM_URL}/${z}/${x}/${y}.webp`, { method: 'HEAD', signal: ctl.signal });
+    return r.ok;
+  } catch { return false; } finally { clearTimeout(bail); }
+}
+
+async function serveDem(path: string, m: RegExpMatchArray) {
+  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  // z14 is the fine terrain level and z5 the widest the far shell asks for;
+  // the ceiling is where the publisher's own pyramid ends.
+  if (z < DEM_Z_MIN || z > 15 || x >= 2 ** z || y >= 2 ** z) {
+    return respond(400, 'application/json', JSON.stringify({ error: 'tile out of range' }));
+  }
+  let body: Buffer | null = null;
+  try {
+    const ctl = new AbortController();
+    const bail = setTimeout(() => ctl.abort(), DEM_MS);
+    try {
+      const res = await fetch(`${DEM_URL}/${z}/${x}/${y}.webp`, { signal: ctl.signal });
+      // A 404 is a REAL ANSWER — see the block above. Anything else is the
+      // upstream failing us, and a failure is retried, never stored.
+      if (res.status === 404) body = null;
+      else if (!res.ok) throw new Error(`dem HTTP ${res.status}`);
+      else body = Buffer.from(await res.arrayBuffer());
+    } finally { clearTimeout(bail); }
+  } catch (err) {
+    return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
+      'retry-after': '5', 'cache-control': 'no-store',
+    });
+  }
+  if (body) {
+    // WebP is already compressed; declaring gzip on it would hand the browser
+    // a file it cannot decode (the same trap the cover route's PNG notes).
+    try { await putTile(path, body, 'image/webp', null); } catch { /* best effort */ }
+    return {
+      statusCode: 200,
+      headers: {
+        'content-type': 'image/webp',
+        'cache-control': 'public, max-age=604800, immutable',
+        'access-control-allow-origin': '*',
+      },
+      body: body.toString('base64'),
+      isBase64Encoded: true,
+    };
+  }
+  // Absent here. Find the nearest ancestor that IS published, so the client
+  // makes one more request rather than one per level.
+  let hint = '';
+  for (let up = 1; z - up >= DEM_Z_MIN; up++) {
+    const [az, ax, ay] = [z - up, x >> up, y >> up];
+    if (await demHas(az, ax, ay)) { hint = ` ${az}/${ax}/${ay}`; break; }
+  }
+  const sentinel = Buffer.from(`ABSENT${hint}\n`, 'utf8');
+  try { await putTile(path, sentinel, 'text/plain; charset=utf-8', null); } catch { /* best effort */ }
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'public, max-age=604800, immutable',
+      'access-control-allow-origin': '*',
+    },
+    body: sentinel.toString('utf8'),
   };
 }
 
@@ -1981,6 +2119,8 @@ export const handler = async (event: {
     if (tile) return serveTile(path, tile);
     const cover = path.match(COVER_RE);
     if (cover) return serveCover(path, cover);
+    const dem = path.match(DEM_RE);
+    if (dem) return serveDem(path, dem);
     const ov = path.match(OV_RE);
     if (ov) return serveOverview(path, ov);
     const pk = path.match(PEAK_RE);

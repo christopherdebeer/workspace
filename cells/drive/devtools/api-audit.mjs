@@ -53,8 +53,8 @@ const KNOWN = [
   ['overpass.kumi.systems',      { what: 'OSM vectors', route: '~/osm/v4/', verdict: 'FALLBACK' }],
   ['overpass.osm.jp',            { what: 'OSM vectors', route: '~/osm/v4/', verdict: 'FALLBACK' }],
   ['overpass.private.coffee',    { what: 'OSM vectors', route: '~/osm/v4/', verdict: 'FALLBACK' }],
-  ['tiles.mapterhorn.com',       { what: 'DEM (terrarium webp)', route: null, verdict: 'UNCACHED' }],
-  ['s3.amazonaws.com',           { what: 'DEM (terrarium png, legacy AWS)', route: null, verdict: 'UNCACHED' }],
+  ['tiles.mapterhorn.com',       { what: 'DEM (terrarium webp)', route: '~/dem/v1/', verdict: 'FALLBACK' }],
+  ['s3.amazonaws.com',           { what: 'DEM (terrarium png, legacy publisher)', route: '~/dem/v1/', verdict: 'FALLBACK' }],
   ['nominatim.openstreetmap.org', { what: 'reverse geocode', route: null, verdict: 'UNCACHED' }],
   ['api.open-meteo.com',         { what: 'live weather', route: null, verdict: 'UNCACHED' }],
   ['esm.sh',                     { what: 'three.js / ez-tree modules', route: null, verdict: 'CODE' }],
@@ -194,7 +194,7 @@ if (uncached.length) {
 } else console.log('  nothing uncached.');
 if (fellBack.length) {
   const dead = cell.reduce((s, r) => s + r.dead, 0);
-  console.log(`  ${fellBack.reduce((s, r) => s + r.n, 0)} request(s) took the Overpass MIRROR FALLBACK —`);
+  console.log(`  ${fellBack.reduce((s, r) => s + r.n, 0)} request(s) took a PUBLISHER FALLBACK —`);
   console.log('  the cell route did not answer, so the cache was bypassed for those tiles.');
   if (dead) console.log(`  (${dead} cell request(s) were still cold at proxyTile's 9s bail.)`);
 }

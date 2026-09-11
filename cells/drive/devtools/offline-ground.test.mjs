@@ -57,7 +57,10 @@ try {
   check('and the device kept them', cold.stored > 20 && cold.failed === 0, cold);
 
   // ── every source of ground goes away, and only then does the page reload ──
-  await d.page.route(/mapterhorn\.com|elevation-tiles-prod|\/~\/cover\//, (route) => route.abort());
+  // `~/dem/` is in the list because the elevation cutover put the cell in
+  // front of the publisher: cutting the two hosts alone now leaves a route
+  // that still answers, and the test would prove nothing.
+  await d.page.route(/mapterhorn\.com|elevation-tiles-prod|\/~\/dem\/|\/~\/cover\//, (route) => route.abort());
   await d.page.reload();
   await d.page.waitForFunction(
     () => document.querySelector('#boot')?.classList.contains('ready'), null, { timeout: 120000 });
