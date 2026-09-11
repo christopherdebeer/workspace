@@ -396,6 +396,31 @@ output.** A baked picture freezes the palette, the weather and the biome rules
 into an image; a baked class raster is the cover layer arriving by a different
 road, and `climCompute` carries on.
 
+### …and it is all built now. Four things to know before touching it
+
+- **The shell's reach is not the plane's.** `viewRadius` caps at SIGHT_MAX
+  because the equirectangular tangent plane stops being honest there;
+  `backdropRadius` is the same expression WITHOUT the cap, and it exists
+  because the shell is built on the sphere and does not live in that plane.
+  Feeding the capped radius to `farLevelFor` is what pinned the ladder at z6.
+- **`shellOn` no longer hides the shell.** It used to carry
+  `&& globeFree() === 0`, which switched twenty-five BUILT tiles off past the
+  hand-over. `globeFree` still owns the GESTURE and is untouched; the two were
+  tied so they could not drift, and they are untied because the thing that
+  needed protecting — a spun globe under a static shell — cannot happen: a
+  "spin" is `setChartFocus`, and `planetGroup` is placed from that one focus.
+- **Finer sits higher, by level.** `farLift` is a radial offset derived from
+  FAR_LEVELS' own span, so the ordering between levels is total and does not
+  depend on which was retired. It replaced a sink applied to the outgoing ring,
+  which is right for a curtain and backwards for a pyramid. The span is derived
+  rather than fixed BECAUSE a fixed 1.5m a rung was 15m over ten rungs and
+  would have lifted z13 through the fine world it hides under (FAR_DROP is 12).
+- **The coarse rings wrap in x and clip in y.** `loadFarTile` takes raw
+  indices; harmless at z9, not at z3, where a 12,500km ring asks for negative x
+  past ~70 degrees from the prime meridian and 404s a silent quarter of the
+  backdrop. There is no tile above the mercator cut at 85 degrees — that seam
+  is the baked sphere's one remaining job, along with the first frame.
+
 `node devtools/api-audit.mjs [--spot=] [--drive=] [--nodraw] [--json=]` is the
 instrument: it boots the real bundle and reports every request by host, split
 into what goes through the cache and what does not. A host it has not been told

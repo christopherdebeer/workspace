@@ -24850,10 +24850,30 @@ function streamWorld(ex: number, ez: number): void {
     else {
       farRingAt = { z: farZ, x: fx, y: fy, r: fRing, n: 1 << farZ };
       evictFarOutside();
+      // ── WRAPPED IN X, CLIPPED IN Y ──
+      //
+      // The ring used to hand `loadFarTile` raw indices, which was harmless
+      // while a 5x5 ring at z9 could only fall off the edge of the world
+      // within a few hundred kilometres of the dateline. It is not harmless at
+      // the rungs this ladder now has: a z3 ring is 12,500km across, so at any
+      // longitude past about 70 degrees from the prime meridian it asks for
+      // negative x — which does not match the route's own `(\d{1,7})` and 404s,
+      // and arrives as a silently missing quarter of the backdrop.
+      //
+      // x WRAPS because the world is a cylinder in longitude and tile n-1 is
+      // the neighbour of tile 0. y does NOT: there is no tile above the
+      // mercator cut at 85 degrees, and asking for one is asking for ground
+      // that does not exist. That is the seam the baked sphere still covers,
+      // and the one job it keeps.
+      const fn = 1 << farZ;
       for (let d = 0; d <= fRing; d++)
         for (let dx = -d; dx <= d; dx++)
-          for (let dy = -d; dy <= d; dy++)
-            if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadFarTile(fx + dx, fy + dy);
+          for (let dy = -d; dy <= d; dy++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== d) continue;
+            const ty = fy + dy;
+            if (ty < 0 || ty >= fn) continue;
+            void loadFarTile((((fx + dx) % fn) + fn) % fn, ty);
+          }
     }
     // …and the cover to PAINT it, once the shell has grown past the fine
     // raster's own 7x7 ring. Below that the fine tiles already cover every
@@ -24872,8 +24892,16 @@ function streamWorld(ex: number, ez: number): void {
       setCoverWideLevel(coverWideLevelFor(shellR));
       const [wx, wy] = tileAt(cLat, cLon, coverWideZ);
       const wRing = clamp(Math.ceil(shellR / tileMetres(coverWideZ)), 1, COVER_WIDE_RING);
+      // Wrapped and clipped for the same reason the shell's ring is, and it
+      // bites sooner here: a z2 cover tile is 10,019km, so a ring of them runs
+      // off both ends of the world from almost anywhere.
+      const wn = 1 << coverWideZ;
       for (let dx = -wRing; dx <= wRing; dx++)
-        for (let dy = -wRing; dy <= wRing; dy++) void loadCoverWideTile(wx + dx, wy + dy, coverWideZ);
+        for (let dy = -wRing; dy <= wRing; dy++) {
+          const ty = wy + dy;
+          if (ty < 0 || ty >= wn) continue;
+          void loadCoverWideTile((((wx + dx) % wn) + wn) % wn, ty, coverWideZ);
+        }
       // …and let go of what the view has left behind. Every level at once, by
       // distance from where we are looking — see evictCoverWide.
       {

@@ -178,7 +178,72 @@ the bake": **demote it to the bottom rung of the ladder.**
 
 ---
 
-## Staged path
+## BUILT — what actually shipped, and what changed about the plan
+
+All five stages are in. Three things turned out differently from the plan
+above, and they are the interesting part.
+
+### The hide was the real finding, and it was not in the plan at all
+
+`shellOn = (zoomCur > 6 || chartRemote()) && globeFree() === 0` set
+`farGroup.visible` AND `ovGroup.visible`. Past the hand-over it switched off
+**twenty-five built shell tiles and twenty-five built overview tiles** — paid
+for, complete, standing — so a 39 km/px painting could hold the frame.
+Measured at Bukama: `tiles 25/25 shown false`. Forcing them on with
+`__farshow(true)` drew them correctly registered on the sphere.
+
+The stated reason was a spin the shell would not follow. That reason is stale
+twice over: the shell became a child of `planetGroup` in 8c9f736, which landed
+*after* `globeFree` in ec78bdf; and there is no independent rotation to follow
+anyway — `globeSpinLat/Lon` feed `setChartFocus`, and `planetGroup`'s position
+and orientation come off that one focus every frame. They cannot disagree
+because there is only one of them. `globeFree` is untouched and still owns the
+gesture; only the drawing was untied from it.
+
+### Stage 4 did not need a z2 rung
+
+A 5×5 ring at **z3 is 12,500 km** against a 12,742 km disc — it already covers
+the planet's visible face. 25 z3 tiles give 4× the resolution of 9 z2 tiles for
+2.8× the count, so z3 is the better trade and z2 was not added.
+
+What stage 4 actually needed was **index handling**. The ring handed
+`loadFarTile` raw x/y, which is harmless at z9 where a ring is a few hundred
+kilometres, and not harmless at z3: past about 70° from the prime meridian a
+12,500 km ring asks for negative x, which does not match the route's own
+`(\d{1,7})` and 404s — a silently missing quarter of the backdrop. x wraps now
+(the world is a cylinder in longitude); y is clipped, because there is no tile
+above the mercator cut at 85° and asking for one is asking for ground that does
+not exist. That cut is the seam the baked sphere still covers, and the one job
+it keeps — no explicit demotion was needed, since `globeMesh` already writes no
+depth at `renderOrder -5`.
+
+### The cover bake came in smaller and better than estimated
+
+Estimated ~90 KB at 19.6 km/texel. Built at **9.8 km/texel — 4080×2040, 424 KB
+of base64** — because every WorldCover COG carries its own overview pyramid and
+the coarsest level is 562×562 for a 3° cell in a **single 59 KB block**. One
+header read and one block read per cell, 2,651 cells, 0 failures. 27.5% of
+texels carry a class against Earth's 29% land, which is the check that the
+geometry is right.
+
+It takes the **majority** class per output texel, not a point sample. At 9.8 km
+one texel covers forest, river, town and field, and nearest-neighbour makes the
+wide picture a dither of unrelated biomes rather than a map. (This was the open
+question at the bottom of this document; majority is the answer.)
+
+### Measured, same spot, before and after
+
+| | before | after |
+|---|---|---|
+| level at zoom 30,000 | z6 | z4 |
+| level at zoom 120,000+ | z6 | z3 |
+| shell drawn past the hand-over | no | yes |
+| wide cover floor | z4, 64 COG reads a tile | z4 and below from one baked raster |
+| finer cover on a band change | deleted | kept, finest sampled first |
+
+---
+
+## Staged path (as planned)
 
 Each stage is independently shippable and independently measurable.
 
