@@ -5857,9 +5857,12 @@ is the fault the ring was added to fix, and nothing here touches it.
 
 - **BOUNDED IN BYTES, NOT TILES**, because a tile is not one size: the lattice
   is `farSeg(z)` a side and the levels do not agree. Least-recently-seen goes
-  first. Per tile, by level — attrs is position, colour and normal as vec3
-  Float32 plus uv as vec2 Float32; the index is Uint16 under 65,536 vertices;
-  the map is the tile's own 256x256 **RGBA** object-space normal map:
+  first. Per tile, by level, **as the park first shipped** — attrs is position,
+  colour and normal as vec3 Float32 plus uv as vec2 Float32; the index is Uint16
+  under 65,536 vertices; the map is the tile's own 256x256 **RGBA** object-space
+  normal map. (The next section took every row of this to about a third; the
+  table is kept because the cut is only legible against it, and
+  `devtools/park-bytes.mjs` prints both columns.)
 
 | seg | levels | vertices | attrs | index | map | tile | ring of 25 |
 |---|---|---|---|---|---|---|---|
@@ -5901,8 +5904,9 @@ Before the park the same pair read **75 fetched**: the return cost a whole ring
 of bakes, and now it costs nothing. `__far().park` and the telemetry's `chart`
 row report tiles, MB, cap and hits.
 
-**THE HONEST NEXT CUT IS THE PER-TILE COST, NOT THE CAP**, and at the 0.93MB
-row it is three things, largest first:
+**THE HONEST NEXT CUT IS THE PER-TILE COST, NOT THE CAP** — this is what was
+proposed from the 0.93MB row, and the section after it is what was actually
+done, which differs in its first line for a reason worth reading:
 
 | cut | saves | why it is safe, and what it costs |
 |---|---|---|
@@ -5916,6 +5920,93 @@ believed: the vertex NORMAL attribute (0.15MB) may be dead weight, since the
 shell wears an OBJECT-SPACE normal map and `sphereNormal` rebuilds the frame
 from the fragment's own position — but three wants a normal on a Lambert
 material, so that is a claim to test, not to assume.
+
+*(What landed: the first row's argument was wrong and was replaced by a
+two-channel map at full resolution, the other two landed as written, and the
+fourth turned out to be needed by the fallback material. 0.93 → 0.340,
+measured live. See below.)*
+
+### …and the next cut was taken: 0.93 MB a tile becomes 0.34
+
+Three of the four items above landed, one was replaced by something better, and
+the fourth was answered by reading the code rather than measuring it.
+
+- **THE NORMAL MAP KEEPS ITS RESOLUTION AND LOSES A CHANNEL.** Halving it to
+  128² was the proposal and the argument for it was wrong: "already finer than
+  the mesh it shades" is what a normal map is FOR. The honest comparison is
+  against the SCREEN, and at the BAND FLOOR of every coarse level — the closest
+  zoom at which that level is ever drawn, which is what `farSeg` already
+  computes — a 256 map is about **1.5 texels a pixel**. Halving would be
+  visibly soft at the near end of every band. What is actually redundant is the
+  third channel: `normalMapBytes` writes east, up, south, 255, and a
+  heightfield's UP is always positive, so `sqrt(1 - x² - z²)` recovers it
+  exactly. `farNormalTex` packs the pair into RG8 and `sphereNormal` — which
+  already replaces three's whole `normal_fragment_maps` chunk and decodes the
+  texel itself — reconstructs the third. **0.25 MB → 0.125, at the same
+  resolution and the same precision in what is stored.** RG8 is WebGL2; on a
+  WebGL1 context the same pair goes into RGBA, so the shader's `.xy` means one
+  thing everywhere and there is one decode, not two.
+- **THE uv AND THE INDEX BELONG TO THE LEVEL.** Both depend only on `farSeg(z)`
+  and were byte-identical across a ring — twenty-five copies of 0.31 MB at the
+  128 lattice. `farLattice(seg)` holds one of each per segment count (the clamp
+  gives four across the whole ladder, 0.655 MB for all of them together), and
+  the bake builds its own lattice rather than taking `PlaneGeometry` — which is
+  the cost: the layout has to reproduce
+  `PlaneGeometry(w, h, seg, seg).rotateX(-π/2)` EXACTLY, rows north to south,
+  uv `(ix/seg, 1 - iz/seg)`, triangles wound a-b-d / b-c-d, because the normal
+  map's rows are stored reversed against that mapping and a lattice that
+  disagreed would light every shell tile upside down. (`plainLattice` in the
+  kernel is the same construction for the fine tiles and is the thing to read
+  beside it.) The index is Uint16 while the lattice is under 65,536 vertices,
+  which `farSeg`'s 128 clamp guarantees; PlaneGeometry hands out Uint32 at that
+  size, so the sharing pays twice.
+- **COLOURS AS NORMALIZED Uint8, NORMALS AS NORMALIZED Int8.** `terrainPalette`
+  answers 0..1 and the composite quantises to fourteen levels, so eight bits is
+  several times the precision that can reach the glass; a normal is a unit
+  vector and a byte a component is about half a degree. **`Uint8Array` WRAPS
+  rather than clamping**, so a palette that ever answered over 1 would come
+  back as a dark vertex instead of a bright one — one wrong pixel in a ring of
+  twenty-five tiles, which is the kind of thing nobody finds. Clamped
+  explicitly.
+- **AND THE VERTEX NORMAL IS NOT DEAD WEIGHT, which is why it is still there.**
+  It looked droppable: `sphereNormal` replaces `normal` outright from the map,
+  so on a tile wearing its own material nothing reads it. But the shared
+  fallback `farMat` — what a tile wears when `NRM_SCALE` is 0 or the material
+  cache has taken its own away — carries the fine terrain's TANGENT-space map
+  and shades through three's standard path, which builds its frame from the
+  geometry normal. Code reading, not an A/B: the claim was testable and turned
+  out not to need a test.
+
+**Measured in a live page** (`devtools/park-ab.mjs`, Letsemeng, `wx=clear`,
+`time=NOON`, the same spin out and back the park was built against, run once on
+the working tree and once on a control worktree at HEAD):
+
+| | control | fix |
+|---|---|---|
+| z5 ring (seg 112) | **0.930 MB a tile** | **0.340** |
+| z7 ring (seg 128) | 1.14 (derived) | **0.420** |
+| parked / hits on the return | 10 / 10 | 10 / 10 |
+| page errors | 0 | 0 |
+
+`devtools/park-bytes.mjs` derives the same table in pure node and agrees to the
+millibyte. The 48 MB budget now holds about a hundred and forty z5 tiles rather
+than fifty — five rings and a half, so a browse across a continent and back is
+free where a spin out and back was.
+
+**AND THE PICTURE IS THE SAME PICTURE, with a control that says how much
+"same" is worth.** Two runs of the SAME build, frame against frame over the
+terrain band: **mean 0/255, worst 1.9, nothing moved by more than 3** — the
+clock is pinned and the tiles are the same tiles, so the renderer is
+deterministic there and any difference is attributable. Control against fix
+over that band: **mean 0.211/255, worst 12.6, 2.47% of pixels moved by more
+than 3** — under one palette step (0.07 sRGB is 18/255) everywhere, which is
+the quantiser flipping pixels that were already sitting on a level boundary.
+**The full frame's worst is 112.9 and it is NOT the terrain**: the same 112.9
+appears control-against-control, and the diff panel puts it on the status line
+(`MAP z5 · 18/25 · 7 RETRY` against `· 16/25 · 2 ON THE WIRE` — the overview
+ring's streaming state, which is the relay's timing) and on the cab dock's live
+preview. A worst-pixel number over a frame that contains a HUD is a
+measurement of the HUD.
 
 ### `qsNum` answered 0 for every switch that was not there
 

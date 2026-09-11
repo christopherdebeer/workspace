@@ -6308,7 +6308,14 @@ function sphereNormal(mat: THREE.MeshLambertMaterial, centre: THREE.Vector3): vo
       .replace('#include <common>', '#include <common>\nvarying vec3 vObjP; uniform vec3 uTileC;')
       .replace('#include <normal_fragment_maps>', `
         {
-          vec3 mN = texture2D(normalMap, vNormalMapUv).xyz * 2.0 - 1.0;
+          // TWO CHANNELS, AND THE THIRD IS ARITHMETIC. The map stores the
+          // normal's EAST and SOUTH components; its UP component is always
+          // positive (a heightfield has no overhangs), so it is exactly
+          // sqrt(1 - x*x - z*z) and storing it was a quarter of a megabyte a
+          // tile spent on a number the shader can derive. Same precision in
+          // the two that are stored, same expression below.
+          vec2 mXZ = texture2D(normalMap, vNormalMapUv).xy * 2.0 - 1.0;
+          vec3 mN = vec3(mXZ.x, sqrt(max(0.0, 1.0 - dot(mXZ, mXZ))), mXZ.y);
           vec3 uR = normalize(vObjP + uTileC);
           vec3 eR = normalize(vec3(uR.z, 0.0, -uR.x));
           vec3 nR = cross(uR, eR);
@@ -6316,6 +6323,43 @@ function sphereNormal(mat: THREE.MeshLambertMaterial, centre: THREE.Vector3): vo
         }`);
   };
   mat.customProgramCacheKey = () => 'terrain-far-sphere';
+}
+/**
+ * THE SHELL'S NORMAL MAP, IN TWO CHANNELS.
+ *
+ * `normalMapBytes` writes RGBA — east, up, south, 255 — because the FINE
+ * terrain reads it through three's own object-space path, which wants all
+ * three. The shell does not: `sphereNormal` replaces that chunk outright and
+ * decodes the texel itself, so it can reconstruct the up component (always
+ * positive on a heightfield) and carry only two. A quarter of a megabyte
+ * becomes an eighth, at the same resolution and the same precision in what is
+ * stored — which matters because at the coarse levels this texture was the
+ * LARGEST single item in a parked tile, 27% of it.
+ *
+ * HALVING THE RESOLUTION WAS THE FIRST PROPOSAL AND IT WAS WRONG: a normal map
+ * is meant to be finer than the mesh, that being its whole job, and the honest
+ * comparison is against the SCREEN. At the band floor of every coarse level —
+ * the closest zoom at which that level is ever drawn — a 256 map is about 1.5
+ * texels a pixel, so 128 would be visibly soft at the near end of each band.
+ * Two channels cost nothing at all.
+ *
+ * RG8 IS WEBGL2. On a WebGL1 context the same pair is written into an RGBA
+ * texture, so the shader's `.xy` means the same thing either way and there is
+ * one decode, not two.
+ */
+function farNormalTex(data: Float32Array, w: number): THREE.DataTexture {
+  const rgba = K.normalMapBytes(kStore, { w, data });
+  const n = 256 * 256;
+  const rg2 = renderer.capabilities.isWebGL2;
+  const out = new Uint8Array(n * (rg2 ? 2 : 4));
+  for (let i = 0; i < n; i++) {
+    if (rg2) { out[i * 2] = rgba[i * 4]; out[i * 2 + 1] = rgba[i * 4 + 2]; }
+    else { out[i * 4] = rgba[i * 4]; out[i * 4 + 1] = rgba[i * 4 + 2]; out[i * 4 + 3] = 255; }
+  }
+  const tex = new THREE.DataTexture(out as Uint8Array<ArrayBuffer>, 256, 256,
+    rg2 ? THREE.RGFormat : THREE.RGBAFormat);
+  tex.needsUpdate = true;
+  return tex;
 }
 function farMatFor(data: Float32Array, w: number, key: string, centre: THREE.Vector3): THREE.MeshLambertMaterial {
   const old = farMats.get(key);
@@ -6340,7 +6384,7 @@ function farMatFor(data: Float32Array, w: number, key: string, centre: THREE.Vec
   }
   const m = new THREE.MeshLambertMaterial({
     vertexColors: true,
-    normalMap: terrainNormalTex({ w, data }),
+    normalMap: farNormalTex(data, w),
   });
   m.normalMapType = THREE.ObjectSpaceNormalMap;
   terrainFx(m, { detail: true });
@@ -25251,6 +25295,67 @@ const farSeg = (z: number): number => {
   const screen = mpp > 0 ? tileMetres(z) / (mpp * FAR_PX_PER_VERT) : Infinity;
   return clamp(Math.round(Math.min(ground, screen) / 8) * 8, 32, 128);
 };
+/**
+ * ── THE HALF OF A SHELL TILE THAT IS NOT THE TILE ──
+ *
+ * A far tile's uv and its index depend on `farSeg(z)` and on NOTHING ELSE: the
+ * uv is the lattice's own 0..1 grid and the index is which corners make which
+ * triangle, so twenty-five tiles of a ring carried twenty-five byte-identical
+ * copies of 0.24 MB. They belong to the LEVEL. Held here per segment count (the
+ * clamp gives four distinct values across the whole ladder, so this map is at
+ * most a megabyte and never grows), and handed to every geometry built at that
+ * count.
+ *
+ * THE LAYOUT IS `PlaneGeometry(w, h, seg, seg).rotateX(-PI/2)` EXACTLY, and it
+ * has to be: rows north to south, x east, uv (ix/seg, 1 - iz/seg), triangles
+ * wound a-b-d / b-c-d. The normal map's rows are stored reversed against that
+ * mapping (see `normalMapBytes`), so a lattice that disagreed would light every
+ * shell tile upside down. `plainLattice` in the kernel is the same construction
+ * for the fine tiles and is the thing to read beside this.
+ *
+ * SHARING COSTS ONE THING, AND IT IS SMALL. `geometry.dispose()` frees the GPU
+ * buffer of every attribute the geometry references, so evicting one tile drops
+ * the level's shared uv and index too; three re-creates the buffer the next
+ * time a sibling draws. That is one 0.24 MB re-upload per eviction pass, not
+ * per tile, against 0.24 MB of heap saved on every tile parked.
+ */
+const farLattices = new Map<number, { uv: THREE.BufferAttribute; idx: THREE.BufferAttribute; idxArr: Uint16Array }>();
+/** Every attribute the shell SHARES, so the park does not count one array
+ *  twenty-five times and report a budget it is not spending. */
+const farShared = new Set<THREE.BufferAttribute>();
+function farLattice(seg: number): { uv: THREE.BufferAttribute; idx: THREE.BufferAttribute; idxArr: Uint16Array } {
+  const had = farLattices.get(seg);
+  if (had) return had;
+  const n = (seg + 1) * (seg + 1);
+  const uv = new Float32Array(n * 2);
+  for (let iz = 0; iz <= seg; iz++) {
+    for (let ix = 0; ix <= seg; ix++) {
+      const v = iz * (seg + 1) + ix;
+      uv[v * 2] = ix / seg; uv[v * 2 + 1] = 1 - iz / seg;
+    }
+  }
+  // Uint16 is enough while the lattice is under 65,536 vertices, and `farSeg`
+  // clamps at 128 — 16,641 — so it always is. Half the bytes of the Uint32 a
+  // PlaneGeometry hands out at this size.
+  const idxArr = new Uint16Array(seg * seg * 6);
+  for (let iz = 0; iz < seg; iz++) {
+    for (let ix = 0; ix < seg; ix++) {
+      const a = ix + (seg + 1) * iz, b = ix + (seg + 1) * (iz + 1);
+      const c = ix + 1 + (seg + 1) * (iz + 1), d = ix + 1 + (seg + 1) * iz;
+      const o = (iz * seg + ix) * 6;
+      idxArr[o] = a; idxArr[o + 1] = b; idxArr[o + 2] = d;
+      idxArr[o + 3] = b; idxArr[o + 4] = c; idxArr[o + 5] = d;
+    }
+  }
+  const made = {
+    uv: new THREE.BufferAttribute(uv, 2),
+    idx: new THREE.BufferAttribute(idxArr, 1),
+    idxArr,
+  };
+  farShared.add(made.uv); farShared.add(made.idx);
+  farLattices.set(seg, made);
+  return made;
+}
 /** The coarsest level whose 5x5 ring still reaches `radius`. */
 function farLevelFor(radius: number): number {
   for (const z of FAR_LEVELS) if (radius <= tileMetres(z) * (FAR_RING_MAX + 0.5)) return z;
@@ -25521,14 +25626,21 @@ const FAR_PARK_BYTES = Math.max(0, qsNum('farpark', 48)) * (1 << 20);
 const farParked = new Map<string, { mesh: THREE.Mesh; mat: THREE.Material | null; bytes: number; at: number }>();
 let farParkBytes = 0;
 /** What a parked tile actually holds: the attribute arrays the bake wrote,
- *  plus the normal map's own bytes where the tile has its own material. */
+ *  plus the normal map's own bytes where the tile has its own material.
+ *
+ *  THE LEVEL'S SHARED uv AND INDEX DO NOT COUNT. Twenty-five parked tiles
+ *  reference one copy of each (see `farLattice`), so charging every tile for
+ *  them would have the park believe it is spending a quarter of a megabyte a
+ *  tile that nobody allocated — a budget measured against a fiction evicts
+ *  real tiles to make room for one. */
 function parkedBytes(mesh: THREE.Mesh, mat: THREE.MeshLambertMaterial | undefined): number {
   let n = 0;
   for (const a of Object.values(mesh.geometry.attributes)) {
+    if (farShared.has(a as THREE.BufferAttribute)) continue;
     n += (a as THREE.BufferAttribute).array.byteLength;
   }
   const idx = mesh.geometry.index;
-  if (idx) n += idx.array.byteLength;
+  if (idx && !farShared.has(idx)) n += idx.array.byteLength;
   const img = mat?.normalMap?.image as { data?: ArrayBufferView } | undefined;
   if (img?.data) n += img.data.byteLength;
   return n;
@@ -26080,10 +26192,19 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   // map every layer is placed by — and then every vertex is moved onto the
   // sphere, relative to the tile's centre point (see sphereRTC). Nothing
   // about the bake changes: the same pixel, the same slope, the same colour.
-  const geo = new THREE.PlaneGeometry(w, h, seg, seg);
-  geo.rotateX(-Math.PI / 2);
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  const colors = new Float32Array(pos.count * 3);
+  //
+  // IT IS BUILT BY HAND RATHER THAN FROM PlaneGeometry, so that the half of it
+  // which is the same for every tile at this level can be shared — see
+  // `farLattice`, which also owns the exact layout this loop assumes.
+  const lat = farLattice(seg);
+  const n = (seg + 1) * (seg + 1);
+  const posArr = new Float32Array(n * 3);
+  // COLOURS AS NORMALIZED Uint8, not Float32. `terrainPalette` answers 0..1 and
+  // the composite quantises the frame to fourteen levels before dithering it,
+  // so eight bits is several times the precision that can survive to the glass
+  // — and it is a quarter of the bytes. Measured on the wide chart at noon and
+  // at night: see the park's own note.
+  const colors = new Uint8Array(n * 3);
   const [cLat, cLon] = localToLatLon(xs + w / 2, zs + h / 2);
   const centre = latLonToUnit(cLat, cLon).multiplyScalar(GLOBE_R);
   // SLOPE IS SHADED PER TEXEL, NOT PER VERTEX. du/dv are the rise across one
@@ -26093,8 +26214,9 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   // than the same hillside in the fine layer, which is what drew a hard-edged
   // rectangle of "real" terrain around the car on the wide chart.
   const cell = w / 128;
-  for (let i = 0; i < pos.count; i++) {
-    const lx = pos.getX(i), lz = pos.getZ(i);
+  for (let i = 0; i < n; i++) {
+    const ix = i % (seg + 1), iz = (i / (seg + 1)) | 0;
+    const lx = (ix / seg - 0.5) * w, lz = (iz / seg - 0.5) * h;
     // Sampled from THIS tile's own pixels — no cross-tile bilinear, no road
     // grid, no cut. A seam of a few metres between coarse tiles is invisible
     // from the only altitude this layer is ever seen at.
@@ -26118,7 +26240,7 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     {
       const [vLat, vLon] = localToLatLon(fwx, fwz);
       sphereRTC(vLat, vLon, raw - baseElev - FAR_DROP, centre, sphV);
-      pos.setXYZ(i, sphV.x, sphV.y, sphV.z);
+      posArr[i * 3] = sphV.x; posArr[i * 3 + 1] = sphV.y; posArr[i * 3 + 2] = sphV.z;
     }
     // The SHELL sampler: the fine raster where it reaches, the coarse ladder
     // beyond it. `hit` counts either, which is what makes __far().cover the
@@ -26140,17 +26262,37 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     // __far().cover keeps reporting how much of the raster the tile had.
     const cvv = cv ?? (raw < seaSurfaceAbs() ? 80 : coverMode);
     const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1), cvv, fwx, fwz);
-    colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
+    // Uint8Array WRAPS, it does not clamp, so a palette that ever answered over
+    // 1 would come back as a dark vertex rather than a bright one — the kind of
+    // thing that shows as one wrong pixel in a ring of twenty-five tiles.
+    colors[i * 3] = clamp(Math.round(r * 255), 0, 255);
+    colors[i * 3 + 1] = clamp(Math.round(g * 255), 0, 255);
+    colors[i * 3 + 2] = clamp(Math.round(bb * 255), 0, 255);
     tr += r; tg += g; tb += bb;
   }
   // WHAT THIS TILE KNEW WHEN IT WAS BAKED, and what it came out looking like.
-  farCoverHit.set(key, hit / Math.max(1, pos.count));
-  farTint.set(key, [tr / pos.count, tg / pos.count, tb / pos.count]);
+  farCoverHit.set(key, hit / Math.max(1, n));
+  farTint.set(key, [tr / n, tg / n, tb / n]);
   farBakeZ.set(key, coverWideZ);
   profAdd('far:bake', _pBuild);
   const _pGeo = performance.now();
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geo.computeVertexNormals();
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
+  geo.setAttribute('uv', lat.uv);
+  geo.setIndex(lat.idx);
+  // NORMALS AS NORMALIZED Int8. Where the tile wears its own material nothing
+  // reads them at all — `sphereNormal` replaces `normal` outright from the map
+  // — and where it has fallen back to the shared `farMat` they are the frame a
+  // tangent-space map is applied in, at a coarse level, on a shell that is a
+  // backdrop. A byte a component is about half a degree of angular error, which
+  // is under a thousandth of one palette step of Lambert.
+  {
+    const nrm = K.vertexNormals(posArr, lat.idxArr);
+    const nrm8 = new Int8Array(n * 3);
+    for (let i = 0; i < nrm8.length; i++) nrm8[i] = clamp(Math.round(nrm[i] * 127), -127, 127);
+    geo.setAttribute('normal', new THREE.BufferAttribute(nrm8, 3, true));
+  }
   profAdd('far:geo', _pGeo);
   const _pNrm = performance.now();
   const mat = NRM_SCALE > 0 ? farMatFor(data, w, key, centre) : farMat;
