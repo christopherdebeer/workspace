@@ -37,6 +37,27 @@ function input(revision: number, roughness: number): HydroTileInput {
   };
 }
 
+function oceanInput(): HydroTileInput {
+  const n = 33;
+  const elevation = new Float32Array(n * n);
+  const coverage = new Uint8Array(n * n);
+  for (let iz = 0; iz < n; iz++) for (let ix = 0; ix < n; ix++) {
+    elevation[iz * n + ix] = -8 + ix * .04;
+    coverage[iz * n + ix] = ix < 5 ? 0 : 255;
+  }
+  return {
+    key: 'cutover/ocean',
+    revision: 1,
+    bounds: { minX: 0, minZ: 0, maxX: 600, maxZ: 600 },
+    elevation: { width: n, height: n, data: elevation },
+    features: [],
+    oceanCoverage: {
+      status: 'ready',
+      grid: { width: n, height: n, data: coverage },
+    },
+  };
+}
+
 export async function runHydroRenderCutoverTest(): Promise<void> {
   const hydro = createHydroSystem({
     fieldResolution: 128,
@@ -102,7 +123,42 @@ export async function runHydroRenderCutoverTest(): Promise<void> {
       'equal-looking foreign field passed render preflight');
     assert(!hydro.renderField(foreign),
       'equal-looking foreign field bypassed identity locking');
+
+    const riverDebug = hydro.debugTiles()[0] as {
+      coastalMesh?: boolean;
+    };
+    assert(riverDebug.coastalMesh === false,
+      'a river-only tile paid the coastal geometry tier');
   } finally {
     hydro.dispose();
+  }
+
+  const ocean = createHydroSystem({
+    fieldResolution: 64,
+    meshResolution: 8,
+    coastalMeshMultiplier: 3,
+  });
+  try {
+    await ocean.upsertTile(oceanInput());
+    const debug = ocean.debugTiles()[0] as {
+      coastalMesh?: boolean;
+      meshSegments?: [number, number];
+      meshTriangles?: number;
+    };
+    assert(debug.coastalMesh === true,
+      'an ocean tile did not select the coastal geometry tier');
+    assert((debug.meshSegments?.[0] ?? 0) >= 20
+      && (debug.meshSegments?.[1] ?? 0) >= 20,
+    `the 8-cell base did not become a dense coastal lattice (${debug.meshSegments})`);
+    assert((debug.meshTriangles ?? 0) > 500,
+      `the coastal surface did not retain enough geometry for swell (${debug.meshTriangles} triangles)`);
+    const surface = ocean.object3d.children.find((child) =>
+      child.name.startsWith('hydro-tile:cutover/ocean')) as {
+        material?: { uniforms?: Record<string, { value: unknown }> };
+      } | undefined;
+    assert(surface?.material?.uniforms?.uWaveChop?.value === 1,
+      'the coastal material did not bind the crest-chop uniform');
+  } finally {
+    ocean.dispose();
   }
 }

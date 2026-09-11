@@ -27,6 +27,7 @@ export interface HydroFrameUniforms {
   uDebugView: { value: number };
   uWaveAmplitude: { value: number };
   uWaveLength: { value: number };
+  uWaveChop: { value: number };
   uRippleStrength: { value: number };
   uFoamStrength: { value: number };
   uShoreFade: { value: number };
@@ -77,6 +78,7 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uDebugView: { value: 0 },
     uWaveAmplitude: { value: 1 },
     uWaveLength: { value: 1 },
+    uWaveChop: { value: 1 },
     uRippleStrength: { value: 1 },
     uFoamStrength: { value: 1 },
     uShoreFade: { value: 1 },
@@ -270,6 +272,7 @@ export function createHydroMaterial(
       uDebugView: frame.uDebugView,
       uWaveAmplitude: frame.uWaveAmplitude,
       uWaveLength: frame.uWaveLength,
+      uWaveChop: frame.uWaveChop,
       uRippleStrength: frame.uRippleStrength,
       uFoamStrength: frame.uFoamStrength,
       uShoreFade: frame.uShoreFade,

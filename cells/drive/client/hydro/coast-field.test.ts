@@ -20,13 +20,13 @@ function grid(n: number, pixelM: number, shore: number, slope: number, bay?: { a
     wet[i] = 1; coastal[i] = 1;
     depth[i] = (x - shore + 0.5) * pixelM * slope;
   }
-  return { width: n, height: n, pixelM, wet, coastal, interior, depth, swellWavelengthM: 300 };
+  return { width: n, height: n, pixelM, wet, coastal, interior, depth, swellWavelengthM: 240 };
 }
 
 export function runCoastFieldTest(): void {
-  assert(Math.abs(swellWavelengthM(1e6) - 300) < 1e-6 && Math.abs(swellWavelengthM(80) - 38) < 1e-6,
-    'the swell wavelength is the shader\'s ramp: 38 m at no fetch, 300 m on the open sea');
-  const k0 = (2 * Math.PI) / 300;
+  assert(Math.abs(swellWavelengthM(1e6) - 240) < 1e-6 && Math.abs(swellWavelengthM(80) - 38) < 1e-6,
+    'the swell wavelength is the shader\'s ramp: 38 m at no fetch, 240 m on the open sea');
+  const k0 = (2 * Math.PI) / 240;
   const deep = swellSlowness(k0, 1000), shallow = swellSlowness(k0, 2);
   assert(Math.abs(deep - k0 / Math.sqrt(9.81 * k0)) < 1e-9, 'deep water keeps the deep-water slowness');
   assert(shallow > deep * 3, `two metres of water is much slower than deep (${shallow.toFixed(4)} vs ${deep.toFixed(4)} s/m)`);
@@ -43,7 +43,7 @@ export function runCoastFieldTest(): void {
   const distAt = (x: number) => (x - shore + 1) * pixelM;
   assert(at(30, 48)[0] > distAt(30) * 1.3, `over the shallows travel outruns distance (${at(30, 48)[0].toFixed(0)} vs ${distAt(30).toFixed(0)} m)`);
   // …inside the band each texel adds distance at the dispersion's own rate
-  // for the depth there (twelve metres is far from deep for a 300 m swell)…
+  // for the depth there (twelve metres is far from deep for a 240 m swell)…
   const dBand = at(38, 48)[0] - at(34, 48)[0];
   // The solver takes the DEEPER of the tile's own soundings and its beach
   // shelf, so the expectation has to take it too — here the shelf is deeper

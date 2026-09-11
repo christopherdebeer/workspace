@@ -271,13 +271,14 @@ function page(): string {
     + '<div class="uibtn" id="uibtn" title="hide the panels (H)">HIDE</div>'
     + '<aside class="panel"><h2>WATER FIELD / GPU SURFACE</h2><div class="note" id="note"></div>'
     + '<div class="row wide"><label>FIXTURE</label><select id="fixture">' + fixtureOptions + '</select></div>'
-    + '<div class="row wide"><label>CAMERA</label><select id="cameraMode"><option>OVERVIEW</option><option>DETAIL</option></select></div>'
+    + '<div class="row wide"><label>CAMERA</label><select id="cameraMode"><option>OVERVIEW</option><option>DETAIL</option><option>GRAZING</option></select></div>'
     + '<div class="row wide"><label>VIEW</label><select id="debug">' + debugOptions + '</select></div>'
     + '<details class="section" data-section="weather" open><summary class="st">WEATHER</summary>'
     + range('wind','WIND m/s',0,22,.1,5) + range('direction','WIND °',0,359,1,35) + range('rain','RAIN',0,1,.01,.1)
     + '<div class="row"><label>OCEAN m</label><input id="ocean" type="number" step=".1" value="0"><output></output></div></details>'
     + '<details class="section" data-section="surface" open><summary class="st">SURFACE</summary>'
     + range('amplitude','WAVE AMP',0,3,.01,1) + range('length','WAVE LENGTH',.2,3,.01,1)
+    + range('chop','CREST CHOP',0,3,.01,1)
     + range('ripple','RIPPLE',0,3,.01,1) + range('foam','FOAM',0,3,.01,1) + range('shore','SHORE FADE',.2,3,.01,1)
     + '</details><details class="section" data-section="river" open><summary class="st">RIVER DETAIL</summary>'
     + '<div class="row wide"><label>ISOLATE</label><select id="detailPreset">'
@@ -290,8 +291,9 @@ function page(): string {
     + range('wakeSpeed','WAKE m/s',1,12,.1,5)
     + '</details><details class="section" data-section="sampling" open><summary class="st">SAMPLING</summary>'
     // Flowing production tiles now use 256 samples across 2.4km. The 600m lab
-    // therefore uses 64 for the same 9.375m texel; 8 mesh cells still match
-    // production's 75m broad lattice before local shoreline/fall refinement.
+    // therefore uses 64 for the same 9.375m texel. Eight cells still match the
+    // production base lattice; coastal water automatically receives the same
+    // 3× geometry tier as production (shown in status).
     + '<div class="row wide"><label>FIELD px</label><select id="field"><option value="32">32 · BASE TIER</option><option selected value="64">64 · FLOW PROD</option><option>128</option><option>256</option></select></div>'
     + '<div class="row wide"><label>MESH seg</label><select id="mesh"><option selected value="8">8 · PROD SCALE</option><option>16</option><option>32</option><option>64</option></select></div>'
     + '<label class="check"><input id="wire" type="checkbox"> water wireframe</label>'
@@ -802,7 +804,15 @@ export async function startHydroLab(): Promise<void> {
   const setCameraMode = (mode: string): void => {
     target.set(0, 0, 0);
     yaw = HOME.yaw;
-    if (mode === 'DETAIL') {
+    if (mode === 'GRAZING') {
+      // A wave can have metres of height and still look flat from the plan
+      // cameras. This profile view stands just offshore and looks shoreward,
+      // exposing silhouette, crest asymmetry and horizontal displacement.
+      target.set(fixture.id === 'coast' ? -22 : 0, 0, 0);
+      yaw = fixture.id === 'coast' ? -Math.PI / 2 : HOME.yaw;
+      pitch = .045;
+      distance = 115;
+    } else if (mode === 'DETAIL') {
       // A low grazing view lets the near bank hide the channel, especially in
       // the phone layout where controls own the lower 43% of the screen. The
       // detail view is an inspection plan: steep enough to keep both banks,
@@ -846,7 +856,7 @@ export async function startHydroLab(): Promise<void> {
   scene.add(rigMarker);
 
   const tune = (): HydroTuning => ({
-    waveAmplitude: number('amplitude'), waveLength: number('length'),
+    waveAmplitude: number('amplitude'), waveLength: number('length'), waveChop: number('chop'),
     rippleStrength: number('ripple'), foamStrength: number('foam'), shoreFade: number('shore'),
     shallowBedStrength: number('bed'), riverEdgeStrength: number('edge'),
     turbulenceStrength: number('turbulence'), eddyStrength: number('eddies'),
@@ -1095,7 +1105,7 @@ export async function startHydroLab(): Promise<void> {
   createDials({
     slug: 'hydro',
     adopt: ['fixture', 'debug', 'ocean', 'field', 'mesh', 'wire', 'ground',
-      'wind', 'direction', 'rain', 'amplitude', 'length', 'ripple', 'foam', 'shore',
+      'wind', 'direction', 'rain', 'amplitude', 'length', 'chop', 'ripple', 'foam', 'shore',
       'cameraMode', 'detailPreset', 'bed', 'edge', 'turbulence', 'eddies',
       'bankFeather', 'wakeDemo', 'wakeSpeed'],
   });
@@ -1143,12 +1153,17 @@ export async function startHydroLab(): Promise<void> {
     if (now - lastStatus > 180) {
       lastStatus = now;
       const stats = hydro?.stats();
+      const mesh = hydro?.debugTiles()[0] as {
+        coastalMesh?: boolean;
+        meshSegments?: number[];
+      } | undefined;
       let edgeBodies = 0;
       hydro?.object3d.traverse((o) => {
         if ((o as THREE.Mesh).name.endsWith(':edge-blend')) edgeBodies++;
       });
       get('status').textContent = fixture.label + ' · FIELD ' + get<HTMLSelectElement>('field').value
-        + '² · MESH ' + get<HTMLSelectElement>('mesh').value + '²\n'
+        + '² · MESH ' + get<HTMLSelectElement>('mesh').value + '² BASE'
+        + (mesh?.coastalMesh ? ' / ' + (mesh.meshSegments ?? []).join('×') + ' COAST' : '') + '\n'
         + (stats?.visibleTiles ?? 0) + ' WATER TILE · ' + renderer.info.render.triangles.toLocaleString()
         + ' TRIANGLES · ' + get<HTMLSelectElement>('debug').value.toUpperCase() + '\n'
         + 'SHORE TOPOLOGY ' + Number(terrain?.userData.hydroShoreSegments ?? 0).toLocaleString()

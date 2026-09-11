@@ -30124,7 +30124,7 @@ function tapeKeep(): string {
   const kind = f.material[i];
   const speed = Math.max(0.2, worldWind.kmh / 3.6);
   const windSea = smooth(0.5, 15, speed);
-  const standingState = clamp(sea * (0.5 + windSea * 0.75), 0, 1);
+  const standingState = clamp(sea * (0.78 + windSea * 0.42), 0, 1);
   // The same beach profile the vertex reads, for the same reason: terrarium
   // gives the open sea one constant depth, and every gate below is in metres.
   const shoreDist = Math.max(0, shoreM);
@@ -30134,8 +30134,36 @@ function tapeKeep(): string {
   const delta = (waveDepth - breakerDepth) / Math.max(0.28, breakerDepth * 0.48);
   const shoal = 1 - smooth(breakerDepth, Math.max(breakerDepth + 0.1, 10), waveDepth);
   const postBreak = 0.28 + 0.72 * smooth(0.12, Math.max(0.3, breakerDepth * 0.85), waveDepth);
+  const tuning = hydroSys?.getTuning();
   const amplitude = (0.012 + (1.05 - 0.012) * Math.pow(standingState, 1.6))
-    * (1 + shoal * 0.62) * postBreak;
+    * (1 + shoal * 0.62) * postBreak * (tuning?.waveAmplitude ?? 1);
+  const fetchScale = clamp(Math.log2(Math.max(fetchM, 80) / 80) / 8, 0, 1);
+  const wavelength = (38 + (240 - 38) * fetchScale)
+    * Math.max(0.2, tuning?.waveLength ?? 1);
+  const windWaveLength = Math.max(64, wavelength * 0.32);
+  const shoreWavelength = Math.max(72, wavelength * 0.42);
+  const nearShore = 1 - smooth(22, 120, Math.max(0, f.coast ? f.coast[i] : shoreM));
+  const dominantWavelength = wavelength + (shoreWavelength - wavelength) * nearShore;
+  const windWaveWeight = (0.20 + windSea * 0.22) * smooth(0.10, 0.72, standingState);
+  const steepen = 1 - smooth(0.8, 4.5, waveDepth);
+  const verticalEnvelope = (1 + windWaveWeight) * (1 - nearShore)
+    + (1 + 0.24 * steepen) * nearShore;
+  const horizontalEnvelope = (1 + windWaveWeight) * (1 - nearShore)
+    + (1 + 0.12 * steepen) * nearShore;
+  const chopState = smooth(0.08, 0.86, standingState);
+  const chopM = amplitude * (0.10 + (0.82 - 0.10) * chopState)
+    * (tuning?.waveChop ?? 1) * coverage * horizontalEnvelope;
+  const peakM = amplitude * coverage * verticalEnvelope;
+  const mesh = hydroSys?.debugTiles().find((tile) => tile.key === f.key) as {
+    meshSegments?: [number, number];
+    coastalMesh?: boolean;
+  } | undefined;
+  const rect = f.waterBounds ?? f.bounds;
+  const segments = mesh?.meshSegments ?? [32, 32];
+  const meshSpacing = Math.max(
+    (rect.maxX - rect.minX) / Math.max(1, segments[0]),
+    (rect.maxZ - rect.minZ) / Math.max(1, segments[1]),
+  );
   return {
     at: [+px.toFixed(1), +pz.toFixed(1)], key: f.key, kind,
     coverage: +coverage.toFixed(2), shoreM: +shoreM.toFixed(1),
@@ -30144,8 +30172,21 @@ function tapeKeep(): string {
     seaState: +sea.toFixed(2), fetchKm: +(fetchM / 1000).toFixed(1),
     windMps: +speed.toFixed(1), exposure: +exposure.toFixed(2),
     shoal: +shoal.toFixed(2), postBreak: +postBreak.toFixed(2),
-    /** Peak rise above the resting surface, metres — half the wave's height. */
-    peakM: +(amplitude * coverage).toFixed(3),
+    standingState: +standingState.toFixed(2),
+    wavelengthM: +dominantWavelength.toFixed(1),
+    mesh: {
+      coastalTier: !!mesh?.coastalMesh,
+      segments,
+      spacingM: +meshSpacing.toFixed(1),
+      samplesPerWave: +(dominantWavelength / Math.max(0.01, meshSpacing)).toFixed(1),
+      windWaveM: +windWaveLength.toFixed(1),
+      samplesPerWindWave: +(windWaveLength / Math.max(0.01, meshSpacing)).toFixed(1),
+    },
+    /** Base amplitude, estimated peak envelope/height, and horizontal reach. */
+    amplitudeM: +(amplitude * coverage).toFixed(3),
+    peakM: +peakM.toFixed(3),
+    heightM: +(peakM * 2).toFixed(3),
+    chopM: +chopM.toFixed(3),
     /** The breaker gate, which is where shelter is allowed to show. */
     breaker: +(Math.exp(-delta * delta) * coverage * (0.15 + 0.85 * exposure)).toFixed(3),
   };

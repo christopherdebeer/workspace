@@ -34,6 +34,12 @@ import {
 export interface HydroSystemOptions extends Partial<HydroBuildOptions> {
   /** Broad displacement geometry only; shoreline precision comes from fields. */
   meshResolution?: number;
+  /**
+   * Ocean/lagoon geometry tier relative to the broad river/lake lattice.
+   * Production's 32-cell base becomes 96 cells across coastal tiles: enough
+   * for geometric swell and crest shape without charging every river tile.
+   */
+  coastalMeshMultiplier?: number;
   /** Registry-induced rebuilds admitted per frame. */
   rebuildsPerFrame?: number;
   /**
@@ -140,6 +146,10 @@ interface TileRecord {
   renderedField?: HydroTileField;
   binding?: HydroTileBinding;
   shoreRefinedCells: number;
+  meshSegmentsX: number;
+  meshSegmentsZ: number;
+  coastalMesh: boolean;
+  meshTriangles: number;
 }
 
 const immediateBuild = async (job: () => HydroTileField): Promise<HydroTileField> => job();
@@ -193,6 +203,8 @@ interface WaterGeometries {
   /** Parent cells crossed by the canonical inland coverage contour and
    *  tessellated inside the same body. */
   shoreRefinedCells: number;
+  segmentsX: number;
+  segmentsZ: number;
 }
 function waterGeometry(field: HydroTileField, segments: number): WaterGeometries {
   const rect = field.waterBounds ?? field.bounds;
@@ -383,7 +395,18 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     standingEdgeBlend,
     flowingEdgeBlend,
     shoreRefinedCells: shoreKeep.reduce((sum, refined) => sum + refined, 0),
+    segmentsX,
+    segmentsZ,
   };
+}
+
+function hasCoastalWater(field: HydroTileField): boolean {
+  for (let i = 0; i < field.width * field.height; i++) {
+    if (field.geometry[i * 4] <= 0.005) continue;
+    const kind = field.material[i * 4];
+    if (kind === 1 || kind === 2) return true;
+  }
+  return false;
 }
 
 function worldToUv(field: HydroTileField): THREE.Matrix3 {
@@ -424,6 +447,7 @@ class DefaultHydroSystem implements HydroSystem {
   private readonly frameUniforms: HydroFrameUniforms = createHydroFrameUniforms();
   private readonly buildOptions: HydroBuildOptions;
   private readonly meshSegments: number;
+  private readonly coastalMeshMultiplier: number;
   private readonly flowingFieldResolution: number;
   private readonly scheduleBuild: (job: () => HydroTileField) => Promise<HydroTileField>;
   private readonly sceneShade: SceneShade | undefined;
@@ -454,6 +478,11 @@ class DefaultHydroSystem implements HydroSystem {
     this.deferRendering = options.deferRendering ?? false;
     this.rebuildsPerFrame = Math.max(1, Math.floor(options.rebuildsPerFrame ?? 1));
     this.meshSegments = Math.max(4, Math.floor(options.meshResolution ?? 32));
+    this.coastalMeshMultiplier = clamp(
+      Math.floor(options.coastalMeshMultiplier ?? 3),
+      1,
+      4,
+    );
     this.flowingFieldResolution = Math.max(
       this.buildOptions.fieldResolution,
       Math.floor(options.flowingFieldResolution ?? this.buildOptions.fieldResolution),
@@ -474,6 +503,7 @@ class DefaultHydroSystem implements HydroSystem {
       record = {
         input, analysis, generation: 1, dirty: true, building: false,
         chain: Promise.resolve(), parts: [], shoreRefinedCells: 0,
+        meshSegmentsX: 0, meshSegmentsZ: 0, coastalMesh: false, meshTriangles: 0,
       };
       this.records.set(input.key, record);
     } else {
@@ -513,6 +543,7 @@ class DefaultHydroSystem implements HydroSystem {
     this.tuning = {
       waveAmplitude: finite(patch.waveAmplitude, this.tuning.waveAmplitude),
       waveLength: finite(patch.waveLength, this.tuning.waveLength),
+      waveChop: finite(patch.waveChop, this.tuning.waveChop),
       rippleStrength: finite(patch.rippleStrength, this.tuning.rippleStrength),
       foamStrength: finite(patch.foamStrength, this.tuning.foamStrength),
       shoreFade: finite(patch.shoreFade, this.tuning.shoreFade),
@@ -523,6 +554,7 @@ class DefaultHydroSystem implements HydroSystem {
     };
     this.frameUniforms.uWaveAmplitude.value = this.tuning.waveAmplitude;
     this.frameUniforms.uWaveLength.value = this.tuning.waveLength;
+    this.frameUniforms.uWaveChop.value = this.tuning.waveChop;
     this.frameUniforms.uRippleStrength.value = this.tuning.rippleStrength;
     this.frameUniforms.uFoamStrength.value = this.tuning.foamStrength;
     this.frameUniforms.uShoreFade.value = this.tuning.shoreFade;
@@ -829,6 +861,9 @@ class DefaultHydroSystem implements HydroSystem {
           ? +(shoreGroundMax - shoreGroundMin).toFixed(3)
           : null,
         shoreRefinedCells: record.shoreRefinedCells,
+        meshSegments: [record.meshSegmentsX, record.meshSegmentsZ],
+        coastalMesh: record.coastalMesh,
+        meshTriangles: record.meshTriangles,
         mesh: record.parts.length > 0,
         renderDeferred: this.deferRendering,
         flowingMesh: record.parts.some((p) => p.mesh.name.includes(':flowing')),
@@ -929,8 +964,16 @@ class DefaultHydroSystem implements HydroSystem {
     // The cull first: a tile can report water and still keep no cell, when the
     // coverage is a sliver the lattice cannot resolve. Building the textures
     // before finding that out would leak the float RGBA uploads per tile.
-    const geometries = waterGeometry(field, this.meshSegments);
+    const coastalMesh = hasCoastalWater(field);
+    const geometrySegments = Math.min(
+      128,
+      this.meshSegments * (coastalMesh ? this.coastalMeshMultiplier : 1),
+    );
+    const geometries = waterGeometry(field, geometrySegments);
     record.shoreRefinedCells = geometries.shoreRefinedCells;
+    record.meshSegmentsX = geometries.segmentsX;
+    record.meshSegmentsZ = geometries.segmentsZ;
+    record.coastalMesh = coastalMesh;
     if (!geometries.standing && !geometries.flowing && !geometries.surf) return;
     const textures = createHydroTextures(field);
     // ── THE MESH COVERS THE WATER, NOT THE TILE ──
@@ -985,6 +1028,8 @@ class DefaultHydroSystem implements HydroSystem {
       install(geometries.flowing, true, false, geometries.flowingEdgeBlend);
     }
     if (geometries.surf) install(geometries.surf, false, true);
+    record.meshTriangles = record.parts.reduce((sum, part) =>
+      sum + ((part.geometry.index?.count ?? 0) / 3), 0);
     const base = hydroBinding(field, textures);
     record.textures = textures;
     record.binding = {
@@ -1009,6 +1054,10 @@ class DefaultHydroSystem implements HydroSystem {
     record.parts = [];
     record.renderedField = undefined;
     record.shoreRefinedCells = 0;
+    record.meshSegmentsX = 0;
+    record.meshSegmentsZ = 0;
+    record.coastalMesh = false;
+    record.meshTriangles = 0;
     if (record.textures) disposeHydroTextures(record.textures);
     record.textures = undefined;
     record.binding = undefined;

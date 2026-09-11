@@ -334,6 +334,8 @@ export type HydroDebugView = 'surface' | 'coverage' | 'shore' | 'depth' | 'flow'
 export interface HydroTuning {
   waveAmplitude: number;
   waveLength: number;
+  /** Horizontal trochoidal displacement of standing-water crests. */
+  waveChop: number;
   rippleStrength: number;
   foamStrength: number;
   shoreFade: number;
@@ -350,6 +352,7 @@ export interface HydroTuning {
 export const DEFAULT_HYDRO_TUNING: HydroTuning = {
   waveAmplitude: 1,
   waveLength: 1,
+  waveChop: 1,
   rippleStrength: 1,
   foamStrength: 1,
   shoreFade: 1,

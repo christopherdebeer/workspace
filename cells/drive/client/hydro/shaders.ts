@@ -112,6 +112,7 @@ uniform vec3 uWorldOrigin;
 uniform vec3 uWind;
 uniform float uWaveAmplitude;
 uniform float uWaveLength;
+uniform float uWaveChop;
 uniform float uShoreFade;
 
 varying vec2 vHydroUv;
@@ -216,27 +217,36 @@ void main() {
 
   // ── BODY SCALE BELONGS TO GEOMETRY ──
   //
-  // A production ocean tile is 2.4km wide and the default mesh is 32 cells:
-  // roughly 75m between vertices. The old 9-34m displacement could not exist
-  // on that lattice. Geometric wavelength is now fetch-scaled and never below
-  // 38m for small, tightly meshed bodies; open-ocean swell is ~300m: four
-  // production cells per dominant wave, rather than the barely perceptible
-  // 360m sheet, while remaining above the lattice's aliasing floor. The
-  // fragment still owns all shorter structure.
+  // Coastal bodies receive a denser lattice than rivers (system.ts), so the
+  // open sea no longer has to stretch one wave over four enormous triangles.
+  // The 240m dominant swell resolves to roughly ten cells on production's
+  // coastal tier, while small bodies retain the old 38m floor.
   float speed = max(0.2, uWind.z);
   float fetchScale = clamp(log2(max(fetchM, 80.0) / 80.0) / 8.0, 0.0, 1.0);
-  float wavelength = mix(38.0, 300.0, fetchScale) * max(0.2, uWaveLength);
+  float wavelength = mix(38.0, 240.0, fetchScale) * max(0.2, uWaveLength);
   float k = 6.28318530718 / wavelength;
   float omega = 0.34 + speed * 0.055;
+  float windSea = smoothstep(0.5, 15.0, speed);
+  // Sea state carries established swell. Local wind changes its height, but
+  // cannot halve an energetic ocean merely because the beach is currently
+  // under a light breeze; wind contributes the shorter skin and chop below.
+  float standingState = clamp(energy * (0.78 + windSea * 0.42), 0.0, 1.0);
   vec2 windDir = normalize(uWind.xy + vec2(0.00001, 0.0));
   vec2 windCross = vec2(-windDir.y, windDir.x);
   vec2 secondaryDir = normalize(windDir + windCross * 0.46);
+  vec2 windWaveDir = normalize(windDir - windCross * 0.34);
+  float windWaveLength = max(64.0, wavelength * 0.32);
+  float windWaveK = 6.28318530718 / windWaveLength;
 
   // Each phase has one constant direction. Their amplitudes mix; their
   // directions never vary inside dot(p,d), preserving the fingerprint fix.
-  float swellA = sin(dot(vAbsoluteXZ, windDir) * k - uTime * omega);
-  float swellB = sin(dot(vAbsoluteXZ, secondaryDir) * k * 1.62
-    - uTime * omega * 1.14 + 1.7);
+  float swellPhaseA = dot(vAbsoluteXZ, windDir) * k - uTime * omega;
+  float swellPhaseB = dot(vAbsoluteXZ, secondaryDir) * k * 1.62
+    - uTime * omega * 1.14 + 1.7;
+  float windWavePhase = dot(vAbsoluteXZ, windWaveDir) * windWaveK
+    - uTime * (omega * 1.72 + 0.16) + 4.1;
+  float swellA = sin(swellPhaseA);
+  float swellB = sin(swellPhaseB);
   // A swell arrives in sets. The envelope travels more slowly than the
   // crests and varies amplitude only, preserving continuous wave phase.
   float waveSet = 0.82 + 0.18 * sin(dot(vAbsoluteXZ, windDir) * k * 0.23 - uTime * omega * 0.31);
@@ -249,7 +259,17 @@ void main() {
   // what shelter actually stops: the breakers, their foam and the spill,
   // damped by vExposure below and in the fragment. A quiet harbour is quiet
   // because nothing breaks in it, not because its swell is shorter.
-  float swell = (swellA * 0.74 + swellB * 0.26) * waveSet;
+  // This is still geometry, not ripple-normal paint: the coastal lattice was
+  // introduced specifically so an intermediate wind wave can carry visible
+  // faces between the 240m swell and the fragment skin.
+  float windWaveWeight = (0.20 + windSea * 0.22)
+    * smoothstep(0.10, 0.72, standingState);
+  float swell = (swellA * 0.74 + swellB * 0.26) * waveSet
+    + sin(windWavePhase) * windWaveWeight;
+  vec2 swellHorizontal = (
+    windDir * cos(swellPhaseA) * 0.74
+    + secondaryDir * cos(swellPhaseB) * 0.26
+  ) * waveSet + windWaveDir * cos(windWavePhase) * windWaveWeight;
 
   // Shore-following geometry is also macro scale. The 5-30m crest structure
   // belongs in the analytic normal and foam response, not a 75m vertex grid.
@@ -261,11 +281,21 @@ void main() {
   float steepen = 1.0 - smoothstep(0.8, 4.5, waveDepth);
   float shoreWave = sin(shorePhase)
     + sin(shorePhase * 2.0) * 0.24 * steepen;
+  // The coast field's direction points seaward. This phase travels toward
+  // decreasing travel time, so its horizontal motion is shoreward.
+#ifdef HYDRO_COAST
+  vec2 shoreward = -normalize(coast.gb + vec2(0.00001, 0.0));
+#else
+  vec2 shoreward = windDir;
+#endif
+  vec2 shoreHorizontal = shoreward
+    * (cos(shorePhase) + cos(shorePhase * 2.0) * 0.12 * steepen);
   // The crossfade to the shore wave rides the same coordinate, so over a
   // shoal the shore-following crests persist as far out as the slowing does.
   float nearShore = (1.0 - smoothstep(22.0, 120.0, max(0.0, phaseCoord)))
     * (1.0 - vFlowing);
   float standingWave = mix(swell, shoreWave, nearShore);
+  vec2 standingHorizontal = mix(swellHorizontal, shoreHorizontal, nearShore);
   vShorePhase = sin(shorePhase);
 
 #ifdef HYDRO_FLOWING
@@ -302,11 +332,8 @@ void main() {
   vWaveCrest = smoothstep(0.48, 0.94, standingWave) * (1.0 - vFlowing);
 
   // Macro volume remains with distance. Only fragment-scale skin is allowed
-  // to fade. Body roughness supplies persistent swell, but wind now opens the
-  // range substantially: the previous linear multiplier compressed calm sea,
-  // moderate weather and gale into variations of the same shallow sheet.
-  float windSea = smoothstep(0.5, 15.0, speed);
-  float standingState = clamp(energy * (0.50 + windSea * 0.75), 0.0, 1.0);
+  // to fade. Established swell is primarily body state; current wind broadens
+  // the range without erasing that swell during a lull.
   float standingAmplitude = mix(0.012, 1.05, pow(standingState, 1.60))
     * (1.0 + vShoal * 0.62) * postBreak;
   float riverAmplitude = mix(0.006, 0.21, pow(energy, 1.35));
@@ -322,6 +349,14 @@ void main() {
   vSurfaceWave = clamp(wave, -1.0, 1.0);
   vSurfaceEnergy = clamp(amplitude / mix(0.55, 0.15, vFlowing), 0.0, 1.0);
   float displaced = wave * amplitude * geometryField.r;
+  // A vertical sine is a breathing sheet. Trochoidal horizontal displacement
+  // makes the same continuous phases form narrower crests and broader troughs,
+  // which gives the wave parallax and silhouette instead of merely changing
+  // its colour. Rivers keep their own heave and receive none of this motion.
+  float chopState = smoothstep(0.08, 0.86, standingState);
+  float chopMetres = amplitude * mix(0.10, 0.82, chopState)
+    * clamp(uWaveChop, 0.0, 3.0) * geometryField.r * (1.0 - vFlowing);
+  renderPosition.xz += standingHorizontal * chopMetres;
 
   // Only the shoreline-only fine mesh advances onto the dry coastal ramp.
   // Its coverage encodes level-ground+0.35, so the amount needed to clear the
