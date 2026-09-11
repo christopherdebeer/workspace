@@ -191,7 +191,10 @@ export interface FacadeGrammar {
   stain: number;
 }
 
-export const FACADE_GRAMMAR: FacadeGrammar = {
+/** The shipped grammar — what the shader drew before any of this was a
+ *  number — frozen, so the atlas can state a tradition as OVERRIDES of it and
+ *  the game can fall back to it where the atlas is silent. */
+export const FACADE_DEFAULTS: Readonly<FacadeGrammar> = Object.freeze({
   bayM: 2.75,
   storeyM: 3.1,
   winX0: 0.2,
@@ -208,7 +211,8 @@ export const FACADE_GRAMMAR: FacadeGrammar = {
   lintel: 0.25,
   ivy: 1,
   stain: 0.16,
-};
+});
+export const FACADE_GRAMMAR: FacadeGrammar = { ...FACADE_DEFAULTS };
 
 // Shared by reference, like the mark tuning: one write reaches every wall.
 const uFacA = { value: new THREE.Vector4() };

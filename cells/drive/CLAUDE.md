@@ -2032,6 +2032,99 @@ the log said so plainly; re-run, not a fault.
 party walls and runs from the morphology, roofs, ruins per material, the
 landmarks, stations and covers — phases 1 to 6, in that order.
 
+### Phase 1: the ground line, and the atlas
+
+Two units, in the order the lab made them safe to do.
+
+**THE FAÇADE'S BASE IS THE GROUND LINE.** `polygon()` hands the batch the
+MEAN of the ground it sampled under the footprint as the building's `aBase`,
+where it used to hand the sunk bottom of the box. The plinth is unchanged —
+it still keeps daylight out from under the downhill wall — only the number
+the shader measures its rows, its ivy and its marks band from moved. Ruins
+take `minH` for the same reason (their foot is 0.6 m under it). Measured,
+`__facade()` in the lab with the BASE = GROUND toggle as the only difference:
+
+| | base at the plinth bottom | base at the ground line |
+|---|---|---|
+| ground row above the grass | 1.70 m | 3.10 m |
+| door head above the pavement | 0.46 m | 1.86 m |
+| first upper sill | 2.75 m | 4.15 m |
+
+`lab.test.mjs` asserts both rows — the shipped rule and, with the toggle off,
+the rule it replaced — so the A/B cannot rot into a test of one number. In
+the game (`devtools/building-survey.mjs` on the working tree against the
+`8e11b60` control, Suresnes, same four spots because the spots come from the
+fixture): on the red-roofed house at b2 the upper windows moved from mid-wall
+to under the eave and the ground row's openings appeared at the grass line
+behind the hedge. On a slope the mean puts the ground row half a basement
+into the uphill side, which is what a house on a hill does; a per-wall base
+is the next refinement if a frame ever asks for it.
+
+**THE TRADITION ATLAS** (`client/traditions.ts`, `traditionFor(lat, lon)`).
+Twenty-three hand-authored entries — Paris inside the périphérique and its
+suburbs, the Cape, Lesotho, the platteland, East Africa, the Sahel, North
+Africa, the Mediterranean rim, the Alps, the Swiss plateau, the Low
+Countries, Britain, Scandinavia, temperate Europe, coastal California, the
+Sierra, the Southwest, the rest of the US, the Altiplano, Amazonia, the
+Ganges delta, Australia — each a base culture, the paints, the wall and roof
+canvases, the pitch and the storey that make the place, and an OPENING
+GRAMMAR as overrides of `FACADE_DEFAULTS`. Each carries a note saying what it
+is modelled on, because the palettes are judgements and the lab is where they
+get argued with. Regions are lat/lon boxes, first match wins, specific
+before broad; `devtools/traditions.test.mjs` names forty-two driven places
+and the tradition each must answer, so a box that drifts fails a case that
+says which town it lost. Three rules:
+
+- **The atlas first, the climate second** — `buildLook` asks `traditionFor`
+  and hands `buildLookAt` the tradition's culture as `forced`; everywhere the
+  atlas is silent (Reykjavik, Irkutsk, the sea) the climate pick answers
+  exactly as before. `BuildLook.tradition` and `__culture().tradition` say
+  which happened.
+- **An atlas pitch is stated, not steepened.** `snowLoad` steepens a
+  climate-picked pitch by half at full load and vetoes pantiles under snow;
+  for a forced culture only the district scatter applies, because the alpine
+  entry already says what a chalet's roof does about snow, and a person
+  authored it knowing whether it snows there.
+- **The stone override stands down where the atlas states the stone.** A
+  stone village is still built of the hill behind it (the bedrock palette),
+  unless the entry carries its own `wall`.
+
+**THE GRAMMAR IN FORCE IS THE TRADITION UNDER THE TRUCK.** `FACADE_GRAMMAR`
+is a uniform — one grammar per draw, and the walls batch per tile, so one
+grammar for the world. Until the per-building attribute lands (the shape
+`aMark` took, for exactly this reason) main.ts reads the truck's `buildLook`
+once a second beside the `uFacNight` write and sets the grammar to
+`FACADE_DEFAULTS` plus the tradition's overrides on change. A tradition box
+is a country and the fine ring is five kilometres, so the boundary crossing
+that restyles every window at once is rare; it is the honest interim and it
+is written down as one. `__tradition()` reports `at` (the atlas here),
+`inForce` (whose grammar the walls are running) and the numbers.
+
+**Measured in the world** (`scratchpad/atlas-world.mjs`, the fixtures, nodraw,
+no page errors): Camps Bay `cape` — render under corrugated, palette
+`#f3f0e8 #cfd3cf #e9e5d9`, pitch 0.20, grammar bay 3.3 m / open 0.88 in
+force; Suresnes `ile-de-france` — render under pantile, creams, pitch 0.48,
+bay 3.0 m in force. Before: `brick` under slate and `limewash`. The lab's
+CULTURE dial lists every entry as `t:<key>`; choosing one sets the grammar
+dials to what it states, once, and the dials are the record from then on.
+Five traditions photographed on the same wall with no page errors
+(`facade-trad.mjs`): the Haussmann block's floor-to-ceiling windows, the
+Dutch terrace's tall sashes under its gables, the Altiplano's slits.
+
+**What the atlas does not yet reach, by design:** roof FORMS (Camps Bay is
+`cape` with pitch 0.20 and still gables 132 of its 351 intact buildings,
+because `building()`'s flat gate is `pitch < 0.2` and the district scatter
+straddles it — the roof phase reads a form table per tradition), storeys per
+tradition (the massing phase), party walls and runs (the morphology phase),
+and how each material ruins. The `Tradition` interface deliberately carries
+none of those fields yet: a field nothing consumes is a label.
+
+**AND THE HARNESS RE-DRAWS A COLLIDING PORT.** Unless the caller pinned one,
+`openDrive` picks a port in 8800–8889; two harness processes side by side
+drew the same one and the lab suite died on `EADDRINUSE` before its first
+lab. It retries another draw a dozen times now, so a survey and a suite can
+run together.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.

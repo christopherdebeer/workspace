@@ -73,7 +73,8 @@ const { BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, 
 import { createOverlays, type RouteCard } from './overlays';
 import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
-import { facade, uFacNight } from './facade';
+import { FACADE_DEFAULTS, FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, setFacadeGrammar, uFacNight } from './facade';
+import { TRADITIONS, traditionCulture, traditionFor } from './traditions';
 import { startLab } from './labs';
 import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
@@ -3375,12 +3376,24 @@ const cultEnv = { latLonAt: (x: number, z: number) => localToLatLon(x, z) };
  *  cell, so it survives a rebase along with everything else. */
 const lookCache = new Map<string, BuildLook>();
 const stoneCol = new THREE.Color();
+/** The tradition whose grammar the façade shader is running, and when it was
+ *  last asked — see the note by uFacNight's write. */
+let gramKey = '', gramAt = 0;
 function buildLook(x: number, z: number): BuildLook {
   const c = climateAt(x, z);
   const key = `${Math.round(x / 160)},${Math.round(z / 160)},${c.domIdx}`;
   let got = lookCache.get(key);
   if (got === undefined) {
-    got = buildLookAt(cultEnv, x, z, c.w, c.elevAbs);
+    // ── THE ATLAS FIRST, THE CLIMATE SECOND ──
+    //
+    // Same rule as conventionFor for the road markings, for the same reason:
+    // the climate pick has no idea where it is, and Camps Bay came out brick
+    // under slate because a temperate coast is temperate. Where a person has
+    // written down what the place builds like (traditions.ts) that answers;
+    // everywhere else the climate pick answers exactly as before.
+    const [lat, lon] = localToLatLon(x, z);
+    const trad = traditionFor(lat, lon);
+    got = buildLookAt(cultEnv, x, z, c.w, c.elevAbs, trad ? traditionCulture(trad) : undefined);
     // ── A STONE VILLAGE IS BUILT OF THE HILL BEHIND IT ──
     //
     // Every other culture ships its own palette, because render, brick and
@@ -3389,7 +3402,8 @@ function buildLook(x: number, z: number): BuildLook {
     // and had no way to say. So this one culture throws away its generic greys
     // and takes the district's rock family instead — the same answer the
     // boulders on the hillside now come from, so the two agree.
-    if (got.culture.wallTex === 'stone') {
+    // (…unless the atlas stated the stone's colour itself.)
+    if (got.culture.wallTex === 'stone' && !trad?.wall) {
       const fam = STONE[bedrockAt(cultEnv, x, z, STONE_MIX_ROWS, c.w)];
       const set = seedAt(cultEnv, x, z, 'settlement');
       got = { ...got, palette: stoneWalls(fam, set).map(([h, sa, li]) => stoneCol.setHSL(h, sa, li).getHex()) };
@@ -21769,7 +21783,10 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   const batch = openBldBatch();
   const wallsGeo = mergeParts(parts);
   wallsGeo.translate(0, foot, 0);
-  batch.walls.push({ geo: wallsGeo, base: foot, mark: markForBuilding(ctrX, ctrZ, kind), pts });
+  // aBase is the ground the ruin stands on, not the buried foot: the same
+  // rule as the intact stock's ground line, so a ruin's doorways and its
+  // marks band are measured from the grass and not from 0.6 m under it.
+  batch.walls.push({ geo: wallsGeo, base: minH, mark: markForBuilding(ctrX, ctrZ, kind), pts });
   if (rubble.length) {
     const rubbleGeo = mergeParts(rubble);
     rubbleGeo.translate(0, foot, 0);
@@ -21964,7 +21981,9 @@ function shoreRibbon(ring: Array<[number, number]>): void {
 function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Material[], lift: number, extrude = 0, collide?: 'solid' | 'water',
   /** A batch sink: when set (buildings only), the extrusion is handed over
    *  baked at world height instead of standing up its own mesh — the batch
-   *  owes it an aBase and a seat range at flush (see flushBuildings). */
+   *  owes it an aBase and a seat range at flush (see flushBuildings). The
+   *  `base` it is handed is the façade's GROUND LINE (the mean ground under
+   *  the footprint), not the sunk bottom of the box — see below. */
   sink?: (geo: THREE.BufferGeometry, base: number, top: number) => void): void {
   if (pts.length < 3) return;
   // THE SAME GATE THE RIBBON KEEPS, for the same reason. An area is drawn
@@ -21993,13 +22012,14 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
   // straddle a dip its outline never touches. Sample the interior too, take the
   // real minimum, and sink the box a plinth below it: the excess is buried, and
   // burying costs nothing but a taller box on ground nobody can see under.
-  let base = 0, depth = extrude;
+  let base = 0, depth = extrude, groundLine = 0;
   if (extrude > 0) {
-    let minG = Infinity, maxG = -Infinity;
+    let minG = Infinity, maxG = -Infinity, sumG = 0, nG = 0;
     const note = (x: number, z: number): void => {
       const g = groundAt(x, z);
       if (g < minG) minG = g;
       if (g > maxG) maxG = g;
+      sumG += g; nG++;
     };
     for (const [x, z] of pts) note(x, z);
     let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
@@ -22018,6 +22038,23 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
     const plinth = clamp(maxG - minG + 1.4, 1.4, 14);
     base = minG - plinth;
     depth = extrude + lift + plinth;   // the TOP stays exactly where it was
+    // ── THE FAÇADE'S GROUND LINE IS THE GROUND, NOT THE PLINTH'S BOTTOM ──
+    //
+    // The batch used to be handed `base` — the sunk bottom — as the
+    // building's aBase, and the façade shader counts its rows from aBase. So
+    // every intact building on earth had its ground floor 1.4 m under the
+    // grass (the plinth's floor on the flat, more on a slope): a door's head
+    // stood 0.46 m above the pavement, the first upper sill at 2.75 m, the
+    // marks band and the ivy's foot below the ground, and uphill on a slope
+    // the whole ground row was buried. The façade lab put a number on it
+    // (`__facade().doorHeadAboveGround`) and the Suresnes control frames show
+    // the doors as dark stubs at the grass line. The mean of the sampled
+    // ground is the line: exact on the flat, and on a slope the ground row
+    // sits half a basement into the uphill side and half a plinth over the
+    // downhill one, which is what a house on a hill does. The plinth itself
+    // is unchanged — it is what keeps daylight out from under the downhill
+    // wall — only the number the shader measures from moved.
+    groundLine = nG ? sumG / nG : minG;
   }
   const geo = extrude > 0
     ? new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false })
@@ -22029,7 +22066,7 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
     // collision walls and the chart mark are below (they never cared about
     // meshes), and the geometry goes to the tile batch at world height.
     geo.translate(0, base, 0);
-    sink(geo, base, base + depth);
+    sink(geo, groundLine, base + depth);
     mapPoly(pts, 'rgba(70,66,58,0.9)');
     claimSolid(pts, base + depth);
     return;
@@ -27758,6 +27795,24 @@ function stepWeather(now: number, dt: number): void {
   ruinMatFar.emissive.copy(ruinLift);
   // The façade's night term: how much night, and how many windows are lit.
   uFacNight.value.x = 1 - dayF;
+  // ── THE GRAMMAR IN FORCE IS THE TRADITION UNDER THE TRUCK ──
+  //
+  // FACADE_GRAMMAR is a uniform, so it is one grammar per draw and, since the
+  // walls batch per tile, one grammar for the world. Until the per-building
+  // attribute lands (the shape aMark took, for the same reason) the honest
+  // interim is the tradition the truck is standing in: the fine ring is five
+  // kilometres and a tradition box is a country, so a boundary crossing —
+  // which restyles every window in view at once — is rare, and the frame it
+  // happens on is the one the atlas is wrong on either side of anyway. Read
+  // once a second, written only on change.
+  if (performance.now() - gramAt > 1000) {
+    gramAt = performance.now();
+    const key = buildLook(state.x, state.z).tradition ?? '';
+    if (key !== gramKey) {
+      gramKey = key;
+      setFacadeGrammar({ ...FACADE_DEFAULTS, ...(TRADITIONS[key]?.grammar ?? {}) });
+    }
+  }
   // THE DIAL IS THE BASE; THE WEATHER ONLY MODULATES IT.
   //
   // This line used to ASSIGN the bloom, every frame, from the weather and the
@@ -31858,6 +31913,14 @@ function repaintWetDebug(): void {
  *   Is it keyed to place, not to id?      → the same coordinates always give
  *                                            the same answer, on any reload.
  */
+// The atlas at the truck, and the grammar the walls are running: `at` is
+// what traditionFor answers here (null where the climate pick does), `inForce`
+// the tradition whose grammar is on the uniforms, `grammar` those numbers.
+(window as unknown as { __tradition?: object }).__tradition = (x?: number, z?: number): object => {
+  const [lat, lon] = localToLatLon(x ?? state.x, z ?? state.z);
+  const t = traditionFor(lat, lon);
+  return { at: t?.key ?? null, note: t?.note ?? null, inForce: gramKey || null, grammar: { ...FACADE_GRAMMAR_LIVE } };
+};
 (window as unknown as { __culture?: object }).__culture = (r = 0, bearing = 90, steps = 8): object => {
   const at = (x: number, z: number): Record<string, unknown> => {
     const c = climateAt(x, z, groundAt(x, z) + baseElev);
@@ -31867,7 +31930,8 @@ function repaintWetDebug(): void {
     const look = buildLook(x, z);
     const road = roadLookAt(cultEnv, x, z, c.w);
     return {
-      culture: look.culture.key, wallTex: look.culture.wallTex, roofTex: look.culture.roofTex,
+      culture: look.culture.key, tradition: look.tradition ?? null,
+      wallTex: look.culture.wallTex, roofTex: look.culture.roofTex,
       palette: look.palette.map((h) => `#${h.toString(16).padStart(6, '0')}`),
       roof: `#${look.roofCol.toString(16).padStart(6, '0')}`,
       pitch: +look.pitch.toFixed(2), snow: +snowLoad(c.w, c.elevAbs).toFixed(2),

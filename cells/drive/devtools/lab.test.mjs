@@ -223,10 +223,22 @@ for (const lab of LABS) {
   ok('it reports the grammar against the massing',
     !!rep && typeof rep.bays === 'number' && typeof rep.doorHeadAboveGround === 'number'
       && rep.grammar?.bayM === 2.75 && rep.grammar?.storeyM === 3.1, rep);
-  // THE SHIPPED NUMBERS, READ BACK: a 1.4 m plinth under a 3.1 m row puts the
-  // ground row 1.7 m above the grass and a door's head at 0.6 x 3.1 - 1.4.
-  ok('…and the plinth arithmetic is the game\'s',
-    !!rep && Math.abs(rep.row1AboveGround - 1.7) < 1e-6 && Math.abs(rep.doorHeadAboveGround - 0.46) < 1e-6, rep);
+  // THE GAME'S RULE NOW: the base is the ground line, so a 3.1 m row stands
+  // 3.1 m over the grass and a door's head at 0.6 x 3.1, whatever the plinth.
+  ok('…and the base is the ground line, whatever the plinth',
+    !!rep && Math.abs(rep.row1AboveGround - 3.1) < 1e-6 && Math.abs(rep.doorHeadAboveGround - 1.86) < 1e-6, rep);
+  // …AND THE RULE IT REPLACED IS ONE TOGGLE AWAY, so the A/B stays honest: a
+  // 1.4 m plinth under a 3.1 m row put the ground row 1.7 m above the grass
+  // and the door's head at 0.46 m, which is what every building had.
+  await d.page.evaluate(() => {
+    const el = document.getElementById('baseGround');
+    el.checked = false;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await d.page.waitForTimeout(400);
+  const old = await d.page.evaluate(() => window.__facade?.());
+  ok('…and BASE = GROUND off is the plinth-bottom rule the lab found',
+    !!old && Math.abs(old.row1AboveGround - 1.7) < 1e-6 && Math.abs(old.doorHeadAboveGround - 0.46) < 1e-6, old);
   await d.page.evaluate(() => {
     const el = document.getElementById('bayM');
     el.value = '3.25';

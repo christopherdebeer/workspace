@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { BUILD_CULTURES } from './culture';
-import { FACADE_GRAMMAR, facade, setFacadeGrammar, uFacNight, type FacadeGrammar } from './facade';
+import { BUILD_CULTURES, type BuildCulture } from './culture';
+import { FACADE_DEFAULTS, FACADE_GRAMMAR, facade, setFacadeGrammar, uFacNight, type FacadeGrammar } from './facade';
+import { TRADITIONS, traditionCulture, type Tradition } from './traditions';
 import { createDials, type DialValues } from './lab-dials';
 import { clamp } from './num';
 import { roofGeo } from './roof';
@@ -43,6 +44,17 @@ import { makeCanvasTex, wallTextures } from './wall-tex';
 
 const ROOFS = ['culture', 'gabled', 'hipped', 'pyramidal', 'skillion', 'flat'] as const;
 const hex = (n: number): string => `#${n.toString(16).padStart(6, '0')}`;
+/** The CULTURE dial offers the six cultures and, after them, every atlas
+ *  entry as `t:<key>` — so a tradition can be judged as the world will build
+ *  it, and argued with, on the same wall. */
+const CULTURE_OPTIONS = [...BUILD_CULTURES.map((c) => c.key), ...Object.keys(TRADITIONS).map((k) => `t:${k}`)];
+/** The grammar dials, by the FacadeGrammar field each carries — storeyM is
+ *  the ROW dial, because the massing has its own storey. */
+const GRAMMAR_DIALS: Record<keyof FacadeGrammar, string> = {
+  bayM: 'bayM', storeyM: 'gridM', winX0: 'winX0', winX1: 'winX1', winY0: 'winY0', winY1: 'winY1',
+  doorX0: 'doorX0', doorX1: 'doorX1', doorY1: 'doorY1', doorShare: 'doorShare', openShare: 'openShare',
+  glassShade: 'glassShade', glassVar: 'glassVar', lintel: 'lintel', ivy: 'ivy', stain: 'stain',
+};
 
 /** The game's extrusion, to the letter — see polygon() in main.ts. The shape
  *  is XY, rotated onto XZ, mirrored so the extrusion runs up, and translated
@@ -67,10 +79,21 @@ const num = (v: DialValues, k: string): number => Number(v[k]);
 const bool = (v: DialValues, k: string): boolean => v[k] === true;
 const str = (v: DialValues, k: string): string => String(v[k]);
 
+/** What the CULTURE dial names: one of the six, or an atlas entry resolved
+ *  through traditionCulture exactly as buildLook resolves it. */
+function cultureOf(v: DialValues): { culture: BuildCulture; tradition: Tradition | null } {
+  const k = str(v, 'culture');
+  if (k.startsWith('t:')) {
+    const t = TRADITIONS[k.slice(2)];
+    if (t) return { culture: traditionCulture(t), tradition: t };
+  }
+  return { culture: BUILD_CULTURES.find((c) => c.key === k) ?? BUILD_CULTURES[0], tradition: null };
+}
+
 /** The grammar the dials describe, resolved against the culture where a
  *  toggle says to follow it — one function, so COPY and the wall agree. */
 function grammarFrom(v: DialValues): FacadeGrammar {
-  const culture = BUILD_CULTURES.find((c) => c.key === str(v, 'culture')) ?? BUILD_CULTURES[0];
+  const { culture } = cultureOf(v);
   const storeyM = bool(v, 'cultureStorey') ? culture.storeyM : num(v, 'storeyM');
   return {
     bayM: num(v, 'bayM'),
@@ -112,8 +135,7 @@ export async function startFacadeLab(): Promise<void> {
     slug: 'facade',
     spec: [
       { id: 'sBld', label: 'THE BUILDING', kind: 'section' },
-      { id: 'culture', label: 'CULTURE', kind: 'select', value: BUILD_CULTURES[0].key,
-        options: BUILD_CULTURES.map((c) => c.key) },
+      { id: 'culture', label: 'CULTURE', kind: 'select', value: BUILD_CULTURES[0].key, options: CULTURE_OPTIONS },
       { id: 'wallPick', label: 'WALL PAINT #', kind: 'range', min: 0, max: 6, step: 1, value: 0 },
       { id: 'roofPick', label: 'ROOF PAINT #', kind: 'range', min: 0, max: 3, step: 1, value: 0 },
       { id: 'custom', label: 'CUSTOM PAINT', kind: 'toggle', value: false },
@@ -129,6 +151,10 @@ export async function startFacadeLab(): Promise<void> {
       { id: 'cultureStorey', label: 'CULTURE STOREY', kind: 'toggle', value: true },
       { id: 'storeyM', label: 'STOREY m', kind: 'range', min: 2.2, max: 4.2, step: 0.05, value: 3.0 },
       { id: 'plinth', label: 'PLINTH m', kind: 'range', min: 0, max: 4, step: 0.1, value: 1.4 },
+      // ON: aBase is the ground line, as polygon() hands the batch now. OFF:
+      // aBase is the plinth's bottom, which is what every building on earth
+      // had until the lab measured it — the A/B for that fix, one switch.
+      { id: 'baseGround', label: 'BASE = GROUND', kind: 'toggle', value: true },
       { id: 'roof', label: 'ROOF', kind: 'select', value: 'culture', options: ROOFS },
       { id: 'cultureRidge', label: 'CULTURE RIDGE', kind: 'toggle', value: true },
       { id: 'ridge', label: 'RIDGE m', kind: 'range', min: 0.4, max: 8, step: 0.1, value: 2.2 },
@@ -202,7 +228,7 @@ export async function startFacadeLab(): Promise<void> {
 
   let builtKey = '';
   let roofRefused = false;
-  const rebuild = (w: number, d: number, height: number, plinth: number, roofShape: string,
+  const rebuild = (w: number, d: number, height: number, plinth: number, aBase: number, roofShape: string,
     ridge: number, terrace: number): void => {
     for (const m of group.children) (m as THREE.Mesh).geometry.dispose();
     group.clear();
@@ -213,10 +239,10 @@ export async function startFacadeLab(): Promise<void> {
     for (let i = 0; i < terrace; i++) {
       const x0 = -total / 2 + i * w;
       const pts: Array<[number, number]> = [[x0, -d / 2], [x0 + w, -d / 2], [x0 + w, d / 2], [x0, d / 2]];
-      group.add(new THREE.Mesh(withBase(extrude(pts, -plinth, height), -plinth), [roofMat, wallMat]));
+      group.add(new THREE.Mesh(withBase(extrude(pts, -plinth, height), aBase), [roofMat, wallMat]));
       if (roofShape !== 'flat') {
         const rg = roofGeo(pts, roofShape, height, ridge);
-        if (rg) group.add(new THREE.Mesh(withBase(rg, -plinth), [roofMat, wallMat]));
+        if (rg) group.add(new THREE.Mesh(withBase(rg, aBase), [roofMat, wallMat]));
         else roofRefused = true;
       }
     }
@@ -232,9 +258,24 @@ export async function startFacadeLab(): Promise<void> {
   };
 
   let report: Record<string, unknown> = {};
+  let lastTradition = '';
   const apply = (): void => {
     const v = dials.values();
-    const culture = BUILD_CULTURES.find((c) => c.key === str(v, 'culture')) ?? BUILD_CULTURES[0];
+    const { culture, tradition } = cultureOf(v);
+    // A tradition CHOSEN sets the grammar dials to what it states, once, and
+    // the dials are the record from then on — turn one and it is yours. The
+    // set fires onChange, which re-enters here with the tradition already
+    // noted, so the wall is built once.
+    if (tradition && tradition.key !== lastTradition) {
+      lastTradition = tradition.key;
+      const g = { ...FACADE_DEFAULTS, ...tradition.grammar };
+      const patch: DialValues = { ...v };
+      for (const k of Object.keys(GRAMMAR_DIALS) as Array<keyof FacadeGrammar>) patch[GRAMMAR_DIALS[k]] = g[k];
+      patch.gridFollows = false;
+      dials.set(patch);
+      return;
+    }
+    if (!tradition) lastTradition = '';
     const storeyM = bool(v, 'cultureStorey') ? culture.storeyM : num(v, 'storeyM');
     const storeys = Math.round(num(v, 'storeys'));
     const height = storeys * storeyM;
@@ -259,10 +300,13 @@ export async function startFacadeLab(): Promise<void> {
     const ask = str(v, 'roof');
     const roofShape = ask === 'culture' ? (culture.pitch < 0.2 ? 'flat' : 'gabled') : ask;
     const w = num(v, 'width'), d = num(v, 'depth'), plinth = num(v, 'plinth');
+    // The shader's base: the ground line (the game's rule now), or the sunk
+    // bottom of the box (the rule the lab found and the toggle keeps for A/B).
+    const aBase = bool(v, 'baseGround') ? 0 : -plinth;
     const ridge = bool(v, 'cultureRidge') ? clamp((Math.min(w, d) / 2) * culture.pitch, 1.2, 7) : num(v, 'ridge');
     const terrace = Math.round(num(v, 'terrace'));
-    const key = [w, d, height, plinth, roofShape, ridge, terrace].join('|');
-    if (key !== builtKey) { builtKey = key; rebuild(w, d, height, plinth, roofShape, ridge, terrace); }
+    const key = [w, d, height, plinth, aBase, roofShape, ridge, terrace].join('|');
+    if (key !== builtKey) { builtKey = key; rebuild(w, d, height, plinth, aBase, roofShape, ridge, terrace); }
     // The light. At night the sun is the moon and the sky is a floor; the
     // game's skylight lift (bldSkylit) is not reproduced, so a night wall here
     // reads darker than in the world — the lit bays are what this is for.
@@ -279,19 +323,19 @@ export async function startFacadeLab(): Promise<void> {
     // What the grammar makes of this massing — the numbers the review asked
     // for and could not read off a frame.
     const bays = (w / g.bayM), rows = height / g.storeyM;
-    const row1 = g.storeyM - plinth, doorHead = g.doorY1 * g.storeyM - plinth;
-    const win1 = g.storeyM + g.winY0 * g.storeyM - plinth;
+    const row1 = g.storeyM + aBase, doorHead = g.doorY1 * g.storeyM + aBase;
+    const win1 = g.storeyM + g.winY0 * g.storeyM + aBase;
     report = {
-      culture: culture.key, w, d, storeys, storeyM, height, roof: roofShape, ridge, terrace, plinth,
+      culture: culture.key, tradition: tradition?.key ?? null, w, d, storeys, storeyM, height, roof: roofShape, ridge, terrace, plinth, aBase,
       bays: +bays.toFixed(2), rows: +rows.toFixed(2), row1AboveGround: +row1.toFixed(2),
       doorHeadAboveGround: +doorHead.toFixed(2), firstWindowSill: +win1.toFixed(2), roofRefused, night,
     };
     status.textContent =
-      `${culture.key.toUpperCase()} · ${w} x ${d} m · ${storeys} storeys of ${storeyM.toFixed(2)} = ${height.toFixed(1)} m`
+      `${culture.key.toUpperCase()}${tradition ? ` (atlas: ${tradition.base} base)` : ''} · ${w} x ${d} m · ${storeys} storeys of ${storeyM.toFixed(2)} = ${height.toFixed(1)} m`
       + ` · roof ${roofShape}${roofShape === 'flat' ? '' : ` ridge ${ridge.toFixed(1)}`}${roofRefused ? ' (roofGeo REFUSED this plan)' : ''}`
       + ` · ${terrace > 1 ? `terrace of ${terrace}` : 'detached'}\n`
       + `bays ${bays.toFixed(1)} across a ${g.bayM} m grid · rows ${rows.toFixed(2)} of ${g.storeyM.toFixed(2)} m`
-      + ` · row 1 stands ${row1.toFixed(2)} m above ground (plinth ${plinth}) · door head ${doorHead.toFixed(2)} m · first sill ${win1.toFixed(2)} m\n`
+      + ` · row 1 stands ${row1.toFixed(2)} m above ground (plinth ${plinth}, base ${aBase === 0 ? 'ground' : 'plinth'}) · door head ${doorHead.toFixed(2)} m · first sill ${win1.toFixed(2)} m\n`
       + `${night ? 'NIGHT' : `sun ${num(v, 'sunAlt')}° az ${num(v, 'sunAz')}°`} · eye ${eye} m at ${dist} m · pixel ${num(v, 'pixel')}x`;
   };
   dials.onChange(apply);

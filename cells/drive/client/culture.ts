@@ -383,6 +383,9 @@ export interface BuildLook {
   /** Distance from the settlement boundary, 0..1 — 0 on the edge between two
    *  settlements. Consumers may use it to soften a transition. */
   edge: number;
+  /** The tradition atlas entry this look came from, when the atlas answered;
+   *  absent where the climate pick did. See traditions.ts. */
+  tradition?: string;
 }
 
 /**
@@ -427,7 +430,11 @@ export function snowLoad(w: number[], elevAbs: number): number {
  * next village along wears the same tradition in a different key. Neither step
  * consults an OSM id, so the answer is the same whichever way you arrive.
  */
-export function buildLookAt(env: CultureEnv, x: number, z: number, w: number[], elevAbs: number): BuildLook {
+export function buildLookAt(env: CultureEnv, x: number, z: number, w: number[], elevAbs: number,
+  /** A culture the TRADITION ATLAS stated for this place (traditions.ts).
+   *  When given, the climate pick and its snow veto stand down: the atlas is
+   *  a person saying what is built here, and a person knows whether it snows. */
+  forced?: BuildCulture): BuildLook {
   const [lat, lon] = env.latLonAt(x, z);
   const [ex, ez] = absMetres(lat, lon);
   const reg = cellAt(ex, ez, SCOPE.region, SALT.region);
@@ -435,7 +442,7 @@ export function buildLookAt(env: CultureEnv, x: number, z: number, w: number[], 
   // them — see roofSnowBias. Picking the culture and then discovering it
   // cannot survive the winter is the wrong order.
   const snow = snowLoad(w, elevAbs);
-  const culture = pickCulture(BUILD_CULTURES, w, unit(reg.seed), (c) => roofSnowBias(c.roofTex, snow));
+  const culture = forced ?? pickCulture(BUILD_CULTURES, w, unit(reg.seed), (c) => roofSnowBias(c.roofTex, snow));
   const set = cellAt(ex, ez, SCOPE.settlement, SALT.settlement);
   // Three paints, drawn without replacement from the culture's set. Without
   // replacement matters: drawn with it, a settlement can roll the same paint
@@ -447,10 +454,13 @@ export function buildLookAt(env: CultureEnv, x: number, z: number, w: number[], 
   }
   const roofCol = culture.roof[Math.floor(unitN(set.seed, 9) * culture.roof.length)];
   // Snow steepens, and the district adds a little scatter so two villages in
-  // one region are not identical in section.
-  const pitch = Math.min(0.95, culture.pitch * (1 + 0.5 * snow) + (unitN(set.seed, 11) - 0.5) * 0.08);
+  // one region are not identical in section. An atlas pitch is STATED — the
+  // alpine entry already says what a chalet's roof does about snow — so only
+  // the scatter applies to it.
+  const pitch = Math.min(0.95, culture.pitch * (forced ? 1 : 1 + 0.5 * snow) + (unitN(set.seed, 11) - 0.5) * 0.08);
   const edge = Math.min(1, (set.d2 - set.d1) / SCOPE.settlement);
-  return { culture, palette, roofCol, pitch, edge };
+  return forced ? { culture, palette, roofCol, pitch, edge, tradition: forced.key }
+    : { culture, palette, roofCol, pitch, edge };
 }
 
 /** Which of the settlement's paints THIS building wears. Keyed on the

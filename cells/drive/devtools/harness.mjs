@@ -103,7 +103,7 @@ export async function openDrive(opts = {}) {
   armFuse();
   const {
     spot = 'lat=-34.09905&lon=18.37835&h=0&cam=chase',
-    port = 8800 + Math.floor(Math.random() * 90),
+    port: askPort = 8800 + Math.floor(Math.random() * 90),
     tag = 'app',
     menu = true,
     settle = 0,
@@ -378,7 +378,24 @@ export async function openDrive(opts = {}) {
     }
     else { res.writeHead(404); res.end('{}'); }
   });
-  await new Promise((r) => server.listen(port, r));
+  // A RANDOM PORT COLLIDES ONCE IN NINETY, AND IT USED TO BE FATAL. Two harness
+  // runs side by side — a survey and the lab suite — drew the same port and
+  // the suite died on EADDRINUSE before its first lab. Unless the caller
+  // pinned a port, a collision is a re-draw, not a failure.
+  let port = askPort;
+  await new Promise((resolve, reject) => {
+    let tries = 0;
+    const attempt = () => {
+      server.once('error', (e) => {
+        if (e && e.code === 'EADDRINUSE' && opts.port === undefined && tries++ < 12) {
+          port = 8800 + Math.floor(Math.random() * 90);
+          attempt();
+        } else reject(e);
+      });
+      server.listen(port, () => { server.removeAllListeners('error'); resolve(); });
+    };
+    attempt();
+  });
   // A listening socket is a live handle, and a live handle means node cannot
   // exit. When a run threw between here and its `close()`, this server alone
   // held the process open — measured once at three hours and eight minutes for
