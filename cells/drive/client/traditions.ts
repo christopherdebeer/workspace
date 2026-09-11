@@ -435,3 +435,53 @@ export function roofFormFor(t: Tradition, u: number): RoofForm | null {
   }
   return ROOF_FORMS[ROOF_FORMS.length - 1];
 }
+
+/**
+ * ── HOW A WALL RUINS DEPENDS ON WHAT IT IS MADE OF ──
+ *
+ * The ruin path stood every building on earth down the same way: walls kept
+ * half to 85% of their height, one bay in eight fell entirely, every bay was
+ * 55 to 67 cm thick, and the whole world's rubble was one grey (0x9a8f7c).
+ * A timber house does not ruin like a stone one — it burns and rots to low
+ * stubs with most bays gone, while ashlar stands nearly to its eaves and
+ * loses a corner; earth erodes to thick rounded stumps; render washes off
+ * masonry and leaves it grey. Keyed by the wall material the tradition (or
+ * the culture) built with, so a Paris shell and a Sierra one differ before
+ * their colour does. `grey` is how much of the building's own paint the
+ * weather has taken: limewash to grey, brick keeps its red, stone was never
+ * painted.
+ */
+export interface RuinProfile {
+  /** Standing height as a share of the building's, lowest and highest. */
+  stand: [number, number];
+  /** The least a wall stands, metres — under this a ruin is a footprint.
+   *  Masonry keeps a person's height; a burnt frame keeps a sill. Measured
+   *  before it existed: a single 2.4 m floor put timber at a 0.6 share
+   *  against a stated 0.15–0.45, because two storeys of 2.9 m is 5.8 m and
+   *  2.4 is already 0.41 of it. */
+  floorM: number;
+  /** Share of bays that came down entirely. */
+  bayLoss: number;
+  /** Bay width, metres. */
+  bay: number;
+  /** Wall thickness, metres, lowest and highest. */
+  thick: [number, number];
+  /** How ragged the skyline is: 1 lets a bay keep as little as 42% of the
+   *  standing height, 0 is a level cut. */
+  ragged: number;
+  /** How far the paint has gone toward weathered grey, 0..1. */
+  grey: number;
+}
+
+export const RUIN_BY_MATERIAL: Record<WallTex, RuinProfile> = {
+  // Lime render over masonry: the shipped profile, and the render gone.
+  render: { stand: [0.5, 0.85], floorM: 2.4, bayLoss: 0.12, bay: 2.6, thick: [0.55, 0.67], ragged: 1, grey: 0.5 },
+  // Ashlar stands: tall, even, a corner lost, its own colour throughout.
+  stone: { stand: [0.62, 0.95], floorM: 2.4, bayLoss: 0.06, bay: 2.4, thick: [0.6, 0.8], ragged: 0.45, grey: 0.15 },
+  // Brick holds its red and most of its height; the parapets go first.
+  brick: { stand: [0.5, 0.85], floorM: 2.4, bayLoss: 0.1, bay: 2.6, thick: [0.45, 0.6], ragged: 0.65, grey: 0.3 },
+  // Timber burns and rots: low stubs, most bays gone, silvered.
+  timber: { stand: [0.15, 0.45], floorM: 1.1, bayLoss: 0.3, bay: 3.0, thick: [0.35, 0.5], ragged: 0.9, grey: 0.55 },
+  // Earth erodes: thick rounded stumps, half height, still the colour of the ground.
+  adobe: { stand: [0.3, 0.6], floorM: 1.6, bayLoss: 0.15, bay: 2.6, thick: [0.7, 1.0], ragged: 0.75, grey: 0.35 },
+};

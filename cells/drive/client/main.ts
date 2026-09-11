@@ -75,7 +75,7 @@ import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight } from './facade';
 import { gramDecode } from './facade-grammar';
-import { TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
+import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { startLab } from './labs';
 import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
@@ -8475,6 +8475,9 @@ const B_MATS = [
 /** The stand-in for the average of a ruin's vertex colours — see the skylight
  *  lift, which cannot read them and would otherwise light a ruin white. */
 const RUIN_SKYLIT = new THREE.Color(0x6b6257);
+/** The weathered grey a ruin's paint goes toward — the one colour every ruin
+ *  used to be, now the far end of a material's `grey`. */
+const RUIN_GREY = new THREE.Color(0x9a8f7c);
 const ruinMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: DS });
 facade(ruinMat);
 // The far side of the ruin LOD: identical weathering, FRONT faces only.
@@ -21057,6 +21060,9 @@ function claimSolid(pts: Array<[number, number]>, top: number, rubble = false): 
 const buildStats = {
   intact: 0, ruin: 0, ruins: [] as Array<[number, number]>,
   hist: [] as number[], roofs: {} as Record<string, number>,
+  /** Ruins by the wall material they were built of: how many, and the mean
+   *  standing height as a share of the building's. */
+  ruinBy: {} as Record<string, { n: number; stand: number }>,
 };
 /** One building's height and roof, for the massing histogram. */
 function noteMass(height: number, roof: string | undefined): void {
@@ -21786,7 +21792,22 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   }
   cx /= pts.length; cz /= pts.length;
   const foot = minH - 0.6;                       // bury the base on the uphill side
-  const standing = Math.max(2.4, height * (0.5 + r() * 0.35));
+  // ── A RUIN IS THE MATERIAL IT WAS BUILT OF ──
+  //
+  // The profile (traditions.ts, RUIN_BY_MATERIAL) says how much of the wall
+  // stands, how many bays fell, how thick and how ragged what is left is,
+  // and how far the paint has gone to grey; the paint itself is the
+  // building's own — the tradition's, or the typology's — so a brick shell
+  // is red, a limewash one grey, a timber one a few silvered stubs.
+  const prof = RUIN_BY_MATERIAL[look.culture.wallTex];
+  const standing = Math.max(prof.floorM, height * (prof.stand[0] + r() * (prof.stand[1] - prof.stand[0])));
+  const ruinBase = new THREE.Color(TYPO_COL[kind] !== undefined ? TYPO_COL[kind] : paintFor(cultEnv, look, ctrX, ctrZ))
+    .lerp(RUIN_GREY, prof.grey);
+  {
+    const by = buildStats.ruinBy[look.culture.wallTex] ?? (buildStats.ruinBy[look.culture.wallTex] = { n: 0, stand: 0 });
+    by.n++;
+    by.stand += standing / height;
+  }
   const parts: THREE.BufferGeometry[] = [];   // the walls — these cast shadows
   let tallest = 0;
   for (let i = 0; i < pts.length; i++) {
@@ -21794,15 +21815,15 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     const len = Math.hypot(bx - ax, bz - az);
     if (len < 0.6) continue;
     const ang = Math.atan2(bx - ax, bz - az);    // local +z runs along the edge
-    const bays = Math.max(1, Math.round(len / 2.6));
+    const bays = Math.max(1, Math.round(len / prof.bay));
     for (let s = 0; s < bays; s++) {
-      if (r() < 0.12) continue;                  // a bay that came down entirely
+      if (r() < prof.bayLoss) continue;          // a bay that came down entirely
       const t = (s + 0.5) / bays;
       // The chewed top: each bay keeps its own share of the wall, so the
       // skyline of a ruin is ragged instead of a clean horizontal cut.
-      const top = standing * (0.42 + r() * 0.62);
+      const top = standing * (1 - prof.ragged * 0.58 * r());
       tallest = Math.max(tallest, top);
-      const w = 0.55 + r() * 0.12;
+      const w = prof.thick[0] + r() * (prof.thick[1] - prof.thick[0]);
       const shade = 0.5 + r() * 0.34;            // each bay weathers differently
       // y is relative to `foot`; the mesh is then placed AT foot, so the façade
       // shader can read the building's base off the model matrix like it does
@@ -21812,7 +21833,7 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
       parts.push(boxPart(
         w, top, (len / bays) * 1.04,
         ax + (bx - ax) * t, top / 2, az + (bz - az) * t,
-        new THREE.Color(0x9a8f7c).multiplyScalar(shade).getHex(), 0, ang, true,
+        ruinBase.clone().multiplyScalar(shade).getHex(), 0, ang, true,
       ));
     }
   }
@@ -21843,8 +21864,9 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     const gy = groundAt(px, pz) - foot;          // same local frame as the walls
     if (r() < 0.45) {
       const s = 0.5 + r() * 1.3;                 // slab of fallen roof
+      // The fallen slab is a piece of the wall, so it carries a third of its paint.
       rubble.push(boxPart(s, 0.3 + r() * 0.4, s * (0.6 + r()), px, gy + 0.2, pz,
-        new THREE.Color(0x8e8474).multiplyScalar(0.45 + r() * 0.3).getHex(), 0, r() * 3, true));
+        new THREE.Color(0x8e8474).lerp(ruinBase, 0.35).multiplyScalar(0.45 + r() * 0.3).getHex(), 0, r() * 3, true));
     } else {
       const s = 0.9 + r() * 1.8, h = 1.1 + r() * 2.6;
       rubble.push(boxPart(s, h, s, px, gy + h / 2, pz,

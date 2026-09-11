@@ -2244,6 +2244,38 @@ rule), a big untyped footprint in a dense place, and the sheds. **A run cut
 by a tile edge is two runs**, one either side, and may seat two heights —
 real, and the next thing to measure if a frame ever shows it.
 
+### Phase 5: a ruin is the material it was built of
+
+The ruin path stood every building on earth down the same way — half to 85%
+of its height, one bay in eight gone, 55 to 67 cm walls, one grey
+(`0x9a8f7c`) — and the review had it down as culture-blind. `RUIN_BY_MATERIAL`
+(traditions.ts) keys a profile on the wall material the tradition, or the
+climate-picked culture, built with: the standing share and its floor in
+metres, the bay loss, the bay width, the thickness, how ragged the skyline
+is, and how far the paint has gone to grey. The colour is the building's own
+paint — the tradition's palette through `paintFor`, or the typology's oxide
+for a barn — pulled that far toward the old grey, so a brick shell is red, a
+limewash one grey, a stone one the hill's colour, a timber one a few silvered
+stubs. The fallen slabs carry a third of the wall's paint.
+
+- **THE FLOOR IS THE MATERIAL'S TOO, and the first cut forgot it.** A single
+  2.4 m minimum standing height, right for masonry, put timber at a mean
+  share of **0.60** against a stated 0.15–0.45: two storeys of 2.9 m is
+  5.8 m, and 2.4 is already 0.41 of it. `floorM` per material (1.1 m for a
+  burnt frame, 1.6 for earth, 2.4 for masonry) took Carmel's timber ruins to
+  **0.34**. A profile with a clamp under it is the clamp.
+- **`__built().ruinBy`** counts ruins by material with their mean standing
+  share — Suresnes `render` 1,582 at 0.73, Carmel `timber` 163 at 0.34 — so
+  a material whose ruins do not read as stated is a number before it is a
+  frame. `RUIN_SKYLIT`, the skylight lift's stand-in for the mean vertex
+  colour, is still one mid tone; a brick ruin's lift is a little cool and a
+  limewash one a little warm for it, under one palette step.
+- **What this is not:** a ruin still carries no map, because the batch draws
+  every ruin in one material and a material per wall texture would be five
+  more draws a tile for a texture that is sub-pixel past thirty metres. The
+  material shows in the massing and the colour, which at 12 px/m is what
+  can show.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.

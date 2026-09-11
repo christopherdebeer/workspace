@@ -22,7 +22,7 @@ mkdirSync(cache, { recursive: true });
 const built = join(cache, 'drive-traditions.test.mjs');
 execFileSync('npx', ['esbuild', join(HERE, '../client/traditions.ts'), '--bundle', '--format=esm',
   `--outfile=${built}`], { cwd: ROOT, stdio: 'pipe' });
-const { TRADITIONS, TRADITION_REGIONS, TRADITION_LIST, ROOF_FORMS, traditionFor, traditionCulture, traditionIndex, gramTable, gramDecode, roofFormFor, FACADE_DEFAULTS }
+const { TRADITIONS, TRADITION_REGIONS, TRADITION_LIST, ROOF_FORMS, RUIN_BY_MATERIAL, traditionFor, traditionCulture, traditionIndex, gramTable, gramDecode, roofFormFor, FACADE_DEFAULTS }
   = await import(pathToFileURL(built).href);
 
 let bad = 0;
@@ -159,6 +159,21 @@ for (const [name, lat, lon, want] of PLACES) {
   ok('the draw lands on each form in its stated share (Cape, ten thousand draws)', off < 0.002, { seen, off });
   ok('the first draw is the first form and the last draw the last', roofFormFor(cape, 0) === 'gabled' && roofFormFor(cape, 0.9999) === 'flat',
     [roofFormFor(cape, 0), roofFormFor(cape, 0.9999)]);
+}
+// ── EVERY MATERIAL RUINS, AND WITHIN REASON ──
+{
+  const mats = ['render', 'stone', 'brick', 'timber', 'adobe'];
+  ok('every wall material has a ruin profile', mats.every((m) => RUIN_BY_MATERIAL[m]), Object.keys(RUIN_BY_MATERIAL));
+  const sane = (p) => p.stand[0] > 0 && p.stand[0] <= p.stand[1] && p.stand[1] <= 1
+    && p.floorM >= 0.8 && p.floorM <= 3
+    && p.bayLoss >= 0 && p.bayLoss < 0.6 && p.bay >= 1.5 && p.bay <= 4
+    && p.thick[0] >= 0.2 && p.thick[0] <= p.thick[1] && p.thick[1] <= 1.2
+    && p.ragged >= 0 && p.ragged <= 1 && p.grey >= 0 && p.grey <= 1;
+  ok('…and each profile is a wall a person could stand beside', mats.every((m) => sane(RUIN_BY_MATERIAL[m])),
+    mats.filter((m) => !sane(RUIN_BY_MATERIAL[m])));
+  ok('timber falls lower than stone, and loses more bays',
+    RUIN_BY_MATERIAL.timber.stand[1] < RUIN_BY_MATERIAL.stone.stand[0] && RUIN_BY_MATERIAL.timber.bayLoss > RUIN_BY_MATERIAL.stone.bayLoss,
+    [RUIN_BY_MATERIAL.timber, RUIN_BY_MATERIAL.stone]);
 }
 console.log(bad ? `\n${bad} FAILED` : '\nall ok');
 process.exitCode = bad ? 1 : 0;
