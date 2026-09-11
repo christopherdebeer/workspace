@@ -2208,6 +2208,42 @@ and gables in favour of flat and hipped; Suresnes gained its third storeys
 for a dwelling. Both are what the entries say, and neither was measurable
 before the survey and the probe existed.
 
+### Phase 2: a terrace is one height, and one roof
+
+The 32 m stand norm made neighbours agree; it could not make a RUN agree,
+because a run of thirty-eight in Paris spans five stands and a stand boundary
+falls through the middle of a terrace. `renderWays` now runs `morphology()`
+— the census module, the same rule the probe and the devtool run — over each
+batch's footprints before any building stands, and files every attached
+footprint with its run's size and the run's seed (its lowest OSM id, the
+same whichever order the batch builds in). `massHeight` takes the run's norm
+for an attached building and the stand's for a detached one; the roof form
+draw is the run's too, so a terrace wears one roof.
+
+- **A member takes the run's storey outright, and is the odd one out on a
+  twelve-percent draw.** The first cut kept a half-storey jitter on the
+  shared norm, and whenever the norm landed near a half the run came out a
+  coin toss between two storeys — measured as a 3.7 m mean spread against
+  4.05 with no rule at all. `?bldruns=0` is the stand norm alone, declared
+  in the switch table as the A/B.
+- **`__runs()` reads the spread twice**: over every member, and over the
+  dwelling-sized members alone (55 m² and up), because the shed on the end
+  of a terrace is a shed and its height is right to differ.
+
+**Measured** on Suresnes (`scratchpad/runs-world.mjs`, nodraw, no page
+errors; 704 runs of two or more, the longest 38):
+
+| | stand norm alone | the run rule |
+|---|---|---|
+| every member: mean spread / seated within 0.3 m | 4.07 m / 16% | 3.70 m / 21% |
+| dwellings only: mean spread / seated | 2.51 m / 39% | **1.69 m / 63%** |
+
+What is left is the data and the typologies: a level-tagged or surveyed
+member, an `apartments` block in a run of houses (its plan-and-density
+rule), a big untyped footprint in a dense place, and the sheds. **A run cut
+by a tile edge is two runs**, one either side, and may seat two heights —
+real, and the next thing to measure if a frame ever shows it.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.

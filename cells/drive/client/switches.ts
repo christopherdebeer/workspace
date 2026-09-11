@@ -167,6 +167,8 @@ export const SWITCHES = [
     note: 'coast=0 builds no coastal travel-time field: the nearshore crests phase on plain shore distance and no water is sheltered — the A/B for the refraction and exposure pass (hydro/coast-field.ts); __hydroview(\'coast\') paints the field' },
   { id: 'shore', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'shore=0 leaves the water its frame colour and the banks their hillside grass — the A/B for the shoreline pass' },
+  { id: 'bldruns', kind: 'toggle', marks: ['legacy'], fallback: 'on',
+    note: 'bldruns=0 masses every attached building on its own 32 m stand norm again, as if it stood alone — the A/B for the terrace rule (morphology.ts runs seat one height and one roof form per run); __runs() reads the spread' },
   { id: 'ez', kind: 'toggle', marks: ['legacy'], fallback: 'skeletons',
     note: 'ez=0 draws the 20-triangle archetypes instead of the baked skeletons' },
   { id: 'ezstand', kind: 'toggle', marks: ['legacy'], fallback: 'per stand',

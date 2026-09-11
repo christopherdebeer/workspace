@@ -23,7 +23,7 @@ import { clamp } from './num';
 import { mulberry32, type Rng } from './rng';
 import { cracks, makeCanvasTex, moss, speckle, wallTextures } from './wall-tex';
 import { roofGeo } from './roof';
-import { morphology } from './morphology';
+import { morphology, plan as footprintPlan } from './morphology';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
 import {
   WATERLINE_CUT,
@@ -12152,6 +12152,20 @@ const plotGrid = new Map<string, Array<Array<[number, number]>>>();
  *  attached share read half the fixture's. Keyed by id so a tile retried and
  *  rebuilt does not count its buildings twice; cleared with plotGrid. */
 const bldRings = new Map<number, Array<[number, number]>>();
+/** Which terrace a footprint is part of, from the morphology pass renderWays
+ *  runs over each batch before any building stands: how many are in the run
+ *  and the run's seed (its lowest OSM id, the same whichever way the batch
+ *  is ordered). A detached building is a run of one and is not filed.
+ *  Cleared with plotGrid. */
+const bldRunOf = new Map<number, { runN: number; seed: number; nbrs: number }>();
+/** Every built height by OSM id, for __runs() to read a terrace's spread. */
+const bldHeights = new Map<number, number>();
+/** THE TERRACE RULE, and its A/B. On, an attached building takes its RUN's
+ *  norm for the storey draw and the roof form, so a terrace of thirty-eight
+ *  in Paris is one height and one roof rather than thirty-eight draws — the
+ *  same lesson as the tree atlas ("a wood is one wood") and the 32 m stand
+ *  norm, one scale down. `?bldruns=0` is the stand norm alone. */
+const RUN_NORM = qsOn('bldruns', true);
 function addPlot(pts: Array<[number, number]>): void {
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
   for (const [x, z] of pts) { minx = Math.min(minx, x); minz = Math.min(minz, z); maxx = Math.max(maxx, x); maxz = Math.max(maxz, z); }
@@ -21499,11 +21513,22 @@ function footprintSize(pts: Array<[number, number]>): { area: number; short: num
 }
 function massHeight(
   kind: string, pts: Array<[number, number]>, x: number, z: number, look: BuildLook, id: number,
+  run?: { runN: number; seed: number },
 ): number {
   const { area, short } = footprintSize(pts);
   const rm = mulberry32((Math.imul(id, 0x9e3779b1) ^ 0x5bf03635) >>> 0);
   rm();                                     // the first draw off a hashed seed is poor
-  const norm = unitN(seedAt(cultEnv, x, z, 'stand'), 3);   // this terrace's own norm
+  // ── A TERRACE IS ONE HEIGHT ──
+  //
+  // The 32 m stand norm made neighbours AGREE; it could not make a run of
+  // attached houses agree, because a run of thirty-eight in Paris spans five
+  // stands and the stand boundary fell through the middle of a terrace. An
+  // attached building takes its run's norm (the run's own seed, from the
+  // morphology pass in renderWays) and a smaller draw of its own, so the
+  // terrace seats at one height with the odd house a storey out — which is
+  // what a real terrace is. A detached building keeps the stand.
+  const attached = RUN_NORM && !!run && run.runN >= 2;
+  const norm = attached ? unitN(run.seed, 3) : unitN(seedAt(cultEnv, x, z, 'stand'), 3);
   const dens = builtUpAt(x, z);
   const storey = look.culture.storeyM;
   // A CANOPY IS NOT A BUILDING. `building=roof` is a bus shelter, a filling
@@ -21528,7 +21553,16 @@ function massHeight(
   const trad = look.tradition ? TRADITIONS[look.tradition] : undefined;
   if (trad && !MASS_BLOCK.has(kind) && (kind !== 'yes' || (area >= 55 && !(area > 300 && dens > 0.5)))) {
     const [lo, hi] = trad.storeys;
-    return clamp(Math.round(lo + norm * (hi - lo) + (rm() - 0.5) * 0.9), lo, hi) * storey;
+    const base = lo + norm * (hi - lo);
+    // ONE HEIGHT, WITH THE ODD HOUSE OUT. A jitter on a terrace's shared norm
+    // straddles the rounding point whenever the norm lands near a half, and
+    // the run comes out a coin toss between two storeys — measured on
+    // Suresnes as a 3.7 m mean spread against 4.05 with no rule at all. So a
+    // run member takes the run's storey outright and steps up or down by one
+    // on a twelve-percent draw; a detached house keeps its half-storey wobble.
+    const u = rm();
+    const st = attached ? Math.round(base) + (u < 0.06 ? -1 : u > 0.94 ? 1 : 0) : Math.round(base + (u - 0.5) * 0.9);
+    return clamp(st, lo, hi) * storey;
   }
   // Somewhere between one and three storeys, the stand deciding which.
   const houseSt = 1 + (norm > 0.52 ? 1 : 0) + (rm() > 0.82 ? 1 : 0);
@@ -21572,6 +21606,8 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // The opening grammar this building's walls read: its tradition's row of
   // the atlas texture, or 0 for the defaults where the atlas is silent.
   const gram = traditionIndex(look.tradition);
+  // The terrace this footprint is part of, if the morphology pass found one.
+  const run = bldRunOf.get(id);
   // ON THE LINE, nothing out here is intact. The Covers are where the built
   // world went — everything the domes did not take has stood empty since the
   // Leaving, so the campaign's world ruins every building outside a shell
@@ -21585,8 +21621,9 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // than 3 so a canopy and a garage can actually be low; a building is still
   // never shorter than a person can walk under.
   const height = clamp(
-    surveyed ?? (levels > 0 ? levels * look.culture.storeyM : massHeight(kind, pts, ctrX, ctrZ, look, id)),
+    surveyed ?? (levels > 0 ? levels * look.culture.storeyM : massHeight(kind, pts, ctrX, ctrZ, look, id, run)),
     2.2, lineOn ? 26 : 90);
+  bldHeights.set(id, height);
   const r = mulberry32((id * 2654435761) >>> 0);
   r(); // first draw off a hashed seed is poorly distributed
   // WHAT OSM SAYS FELL DOWN STAYS DOWN. Giza's home town maps 94% of its
@@ -21677,7 +21714,9 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     // ANY kind — a shed in a flat-roofed town is flat too — and a pitched
     // draw then meets the typologies below, which still know that a lean-to
     // is what a shed wears, a barn is a long gable, and a block is capped.
-    const form = trad ? roofFormFor(trad, rr()) : null;
+    // …and a terrace wears ONE roof form: the draw is the run's where there
+    // is one, the building's own where it stands alone.
+    const form = trad ? roofFormFor(trad, RUN_NORM && run && run.runN >= 2 ? unitN(run.seed, 7) : rr()) : null;
     if (form === 'flat') return undefined;
     // ── MEASURED, AND THE FIRST CUT OVERSHOT ──
     //
@@ -23466,6 +23505,30 @@ async function renderWays(
   // no dependency (rank 0, which is most of the world) is untouched.
   const byDepth = ordered.slice().sort((a, b) =>
     (buildRank.get(a.ck ?? String(a.id)) ?? 0) - (buildRank.get(b.ck ?? String(b.id)) ?? 0));
+  // ── THE BATCH'S TERRACES, BEFORE ANY BUILDING STANDS ──
+  //
+  // morphology() over this batch's footprints — the census module, the same
+  // rule __bldcensus and the capture devtool run — so a building knows which
+  // run it is in before massHeight asks. The run's seed is its lowest OSM id,
+  // the same whichever order the batch builds in. A run cut by a tile edge is
+  // two runs, one either side, and may seat two heights: the seam is real and
+  // is the next thing to measure if a frame ever shows it.
+  {
+    const fps: Array<{ id: number; pts: Array<[number, number]> }> = [];
+    for (const el of byDepth) {
+      if (!el.tags?.building || !el.geometry || el.geometry.length < 3) continue;
+      fps.push({ id: el.id, pts: el.geometry.map((g) => toLocal(g.lat, g.lon)) });
+    }
+    if (fps.length) {
+      const m = morphology(fps);
+      const seedOf = new Map<number, number>();
+      for (const r of m.rows) seedOf.set(r.run, Math.min(seedOf.get(r.run) ?? Infinity, r.id as number));
+      for (const r of m.rows) {
+        if (r.runN < 2) continue;
+        bldRunOf.set(r.id as number, { runN: r.runN, seed: seedOf.get(r.run)!, nbrs: r.nbrs.length });
+      }
+    }
+  }
   buildUntil = performance.now() + BUILD_MS;
   for (const el of byDepth) {
     await buildBreath();
@@ -29457,7 +29520,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     tileStats.clear(); surveyedCache.clear();
     unbuilt = 0; osmFails = 0; osmDown = false;
     mapFeats.length = 0; mapStroked.clear();
-    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear();
+    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear();
     channelGrid.clear(); rapidRocks.clear(); activeRapidRocks.clear(); chanSet.clear(); wiSet.clear();
     pendingWater.length = 0; productionCrossings.reset(); crossingAppliedRevision.clear();
     productionSubstrate.reset();
@@ -31935,6 +31998,45 @@ function repaintWetDebug(): void {
 // `grammar` the row DECODED as the shader will see it (bytes, not the
 // authored floats), `uniforms` what a row-0 wall reads, and `batches` how
 // many building meshes carry aGram with the set of rows seen across them.
+// THE TERRACES, AS BUILT: over every run of two or more the morphology pass
+// filed, the heights building() gave its members — how many runs, the mean
+// spread (tallest less shortest, metres) and the share seated within 0.3 m.
+// `?bldruns=0` is the control: the same runs, the stand norm alone.
+(window as unknown as { __runs?: object }).__runs = (): object => {
+  const byRun = new Map<number, number[]>();
+  for (const [id, r] of bldRunOf) {
+    const h = bldHeights.get(id);
+    if (h === undefined) continue;
+    const arr = byRun.get(r.seed) ?? [];
+    arr.push(h);
+    byRun.set(r.seed, arr);
+  }
+  // Twice: over every member, and over the dwelling-sized members alone (a
+  // footprint of 55 m² or more — the shed on the end of a terrace is a shed,
+  // and its height is right to differ).
+  const byRunDwell = new Map<number, number[]>();
+  for (const [id, r] of bldRunOf) {
+    const h = bldHeights.get(id), pts = bldRings.get(id);
+    if (h === undefined || !pts || footprintPlan(pts).area < 55) continue;
+    const arr = byRunDwell.get(r.seed) ?? [];
+    arr.push(h);
+    byRunDwell.set(r.seed, arr);
+  }
+  const tally = (m: Map<number, number[]>): { runs: number; members: number; longest: number; spreadMean: number; sameShare: number } => {
+    let spread = 0, same = 0, members = 0, longest = 0, n = 0;
+    for (const hs of m.values()) {
+      if (hs.length < 2) continue;
+      n++;
+      const mn = Math.min(...hs), mx = Math.max(...hs);
+      spread += mx - mn;
+      if (mx - mn < 0.3) same++;
+      members += hs.length;
+      longest = Math.max(longest, hs.length);
+    }
+    return { runs: n, members, longest, spreadMean: n ? +(spread / n).toFixed(2) : 0, sameShare: n ? +(same / n).toFixed(2) : 0 };
+  };
+  return { runNorm: RUN_NORM, all: tally(byRun), dwellings: tally(byRunDwell) };
+};
 (window as unknown as { __tradition?: object }).__tradition = (x?: number, z?: number): object => {
   const [lat, lon] = localToLatLon(x ?? state.x, z ?? state.z);
   const t = traditionFor(lat, lon);
