@@ -98,17 +98,27 @@ async function focusOn(lat, lon) {
 
 console.log('\n=== the planet has the frame ===');
 await zoomTo(PLANET_Z);
-// The base texture is fetched on the first wide chart, and nothing is free to
-// browse until it has landed — `globeFree` is 0 with no planet to browse.
-for (let i = 0; i < 60; i++) {
-  if ((await globe()).tex) break;
-  await page.waitForTimeout(500);
-}
+// THERE IS NOTHING LEFT TO WAIT FOR. The surface used to be a 317KB baked
+// equirect PNG fetched on the first wide chart, and `globeFree` stayed 0 until
+// it landed — so this block spent up to thirty seconds polling `tex` before it
+// could ask anything. The graticule is drawn in the fragment shader, so the
+// planet is browsable on the frame the chart reaches it, and `wire` reports
+// which surface the build carries where `tex` used to report the fetch.
 let g = await globe();
 console.log(`  ${JSON.stringify(g)}`);
-check(g.tex, 'the base texture landed');
+check(g.wire, 'the surface is drawn, not fetched');
 check(g.shown, 'the planet is drawn');
-check(!g.shell, 'the streamed shell has handed over');
+// THE PICTURE DOES NOT HAND OVER; THE GESTURE DOES. This line used to require
+// the shell to be OFF here, because `shellOn` carried `&& globeFree() === 0`:
+// a spun globe standing beside a shell fixed under the truck would carry two
+// different places through neighbouring pixels. Both are children of
+// `planetGroup` now and are placed from ONE focus every frame, so they cannot
+// disagree, and the ladder reaches z5 — the ring is 10,847km across against an
+// 8,030km frame at the ceiling, so hiding it would open an edge rather than
+// close one. What changes hands at `globeFree` is the drag. Asserting the pair:
+// both backdrops drawn, and the gesture the planet's. Re-tying the two would
+// fail this line rather than pass it.
+check(g.shell && g.shown, 'both backdrops draw; only the gesture hands over');
 check(g.free === 1, `globeFree is 1 (${g.free})`);
 check(g.pin, 'the rig has a pin on it');
 
@@ -261,7 +271,16 @@ if (process.env.SHOT) {
 
 // ── THE FLING: a throw coasts and comes to rest; a hold throws nothing ──
 await focusOn(-29.9872, 24.7765);
-await page.evaluate(() => { window.__cam('top'); window.__zoom(40000); window.__fling(true); });
+// `__zoom` SETS A TARGET THE FRAME LOOP EASES TOWARD, and the harness runs at
+// two to four frames a second, so a fixed wait after it is a wait on nothing:
+// this block asked for 40,000 from the z900 the survey check left behind, slept
+// 600ms, and dragged at whatever zoom the ease had reached — under the
+// hand-over, where a drag is a flat pan and records no spin at all, which the
+// throw then reported as "released at 0°/s". `zoomTo` polls until the zoom has
+// actually arrived. (The same trap is written up in CLAUDE.md against
+// `chart-dist.mjs`: the zoom and everything else live on different clocks.)
+await zoomTo(40000);
+await page.evaluate(() => { window.__fling(true); });
 await page.waitForTimeout(600);
 {
   const throwIt = async (restMs) => {

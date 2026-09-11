@@ -95,6 +95,8 @@ export const SWITCHES = [
     note: 'pin the sun’s altitude in degrees, −20..89' },
   { id: 'substrate', kind: 'choice', marks: ['bench', 'legacy'], fallback: 'canonical contact, legacy render',
     note: 'the road/terrain/water substrate (SUBSTRATE-MIGRATION.md): legacy = the pre-substrate contact with shadow diagnostics, the rollback; shadow = legacy contact, substrate observed; render = the substrate draws the water too. It was read round the typed reader and so was in no list until it was declared here' },
+  { id: 'farpark', kind: 'number', marks: ['bench'], fallback: '48 MB of parked shell',
+    note: 'megabytes of baked far-shell kept off-ring so a browse that returns costs nothing — 0 to park nothing at all, which is the exact A/B for whether the park is helping' },
   { id: 'wx', kind: 'choice', marks: ['look', 'bench'], fallback: 'the live weather',
     note: 'pin the sky: clear, haze, rain or storm' },
   { id: 'fog', kind: 'number', marks: ['look', 'bench'], fallback: 'the live mist',
@@ -219,8 +221,16 @@ export const qsOn = (id: SwitchId, whenAbsent: boolean, search?: string): boolea
   const v = qs(id, search);
   return v === null ? whenAbsent : v !== '0' && v !== 'off';
 };
+/** …and the same rule, which this got wrong: `qs` answers `null` when a switch
+ *  is absent, `Number(null)` is 0, and 0 IS finite — so every absent number
+ *  switch read as zero and no caller's default was ever reached. Found by its
+ *  first real caller (`farpark`, which came back as a 0 MB budget and parked
+ *  nothing), and invisible to the test above it, which covered "not a number"
+ *  and "a number" and not "not there". */
 export const qsNum = (id: SwitchId, whenAbsent: number, search?: string): number => {
-  const v = Number(qs(id, search));
+  const raw = qs(id, search);
+  if (raw === null || raw === '') return whenAbsent;
+  const v = Number(raw);
   return Number.isFinite(v) ? v : whenAbsent;
 };
 

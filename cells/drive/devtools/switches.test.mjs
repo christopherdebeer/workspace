@@ -93,6 +93,14 @@ ok('?x=0 and ?x=off are off', !qsOn('shrub', true, '?shrub=0') && !qsOn('shrub',
 ok('anything else present is on', qsOn('shrub', false, '?shrub=1') && qsOn('shrub', false, '?shrub=yes'));
 ok('a number falls back when it is not one', qsNum('treetris', 42, '?treetris=abc') === 42
   && qsNum('treetris', 42, '?treetris=900000') === 900000);
+// ABSENT IS THE CALLER'S DEFAULT, which is the rule qsOn states and qsNum
+// broke: `qs` answers null, Number(null) is 0, and 0 is finite, so every
+// unset number switch read as zero. The two cases above both PASS against
+// that bug — they only ever pass a value — which is why it shipped.
+ok('a number that is not there falls back too',
+  qsNum('treetris', 42, '') === 42 && qsNum('treetris', 42, '?other=1') === 42
+  && qsNum('treetris', 42, '?treetris=') === 42
+  && qsNum('treetris', 42, '?treetris=0') === 0);
 ok('a bare key reads as present', qs('nodraw' in {} ? 'ez' : 'ez', '?ez') === '');
 
 // ── the panel's own rows ──

@@ -5727,6 +5727,202 @@ the first assertion from being vacuous.
   profiler turned the needle into −1 and the assertion into a falsehood
   about ordering. The needle follows the wrapped call now.
 
+## The globe is a graticule, the shell has a terminator, and a baked tile survives eviction
+
+Four reports from one test drive over the wide chart, and three of them are one
+unit: drop the baked globe for a lat/lon wireframe; why are loaded tiles dropped
+("what a waste?"), at what threshold, and do the `~/` routes allow client
+caching; and the world has no sun on it. (The fourth was the dock over the
+menus — "A WebGL blit answers to no overlay", above.)
+
+### The surface is drawn now, not fetched
+
+`static/globe-base.png` was a 1024x512 equirect bake — 317KB, 39km a pixel —
+fetched on the first wide chart, and `globeFree` stayed 0 until it landed, so
+the first browse of a session waited on an asset before a drag meant anything.
+`globeMaterial` computes a graticule instead: 15 degree minor lines at 0.55 of
+the ink, 90 degree majors and the tropics at |lat| - 23.44 at full weight, over
+a nearly-black ocean-blue fill that the shell is meant to paint over.
+
+- **A SCREEN-CONSTANT LINE NEEDS DERIVATIVES.** The widths come from
+  `fwidth(lon) * 0.75` in degrees, which is what keeps a meridian the same
+  weight at 2,000km and at 20,000 instead of aliasing into a smear as the disc
+  shrinks. `extensions: { derivatives: true }` on the material, because this is
+  a WebGL1-compatible ShaderMaterial and the extension is not free.
+- **MERIDIANS FADE AT THE POLES**, where any fixed spacing converges into a
+  solid cap of ink: `poleFade = smoothstep(0.02, 0.30, cos(radians(lat)))`.
+- **LAT/LON COME FROM `vUv`, NOT FROM THE NORMAL.** The lattice is 2.25 degrees
+  a quad and uv is linear across each one, so the error is a fraction of a
+  quad's width on a line — invisible — and it costs no trig. The frame is
+  mirrored (see the sphere section), so a normal would have to unmirror first.
+- `GlobeUniforms` is `{uSun, uNight}`; `uBase` and `globeTexture()` are gone,
+  and with them the fetch, the retry and the "asked / failed" state the probe
+  used to carry. `__globe()` reports `wire` where it reported `tex`, and
+  `globe-spin.test.mjs` lost the thirty-second poll that waited for the asset.
+- **A BACKTICK IN A GLSL COMMENT ENDS THE TS TEMPLATE LITERAL**, and it cost
+  another round here — in a comment describing a helper's own parameters, of
+  all places. The rule is absolute: no backticks in shader comments, ever.
+- **STILL SHIPPED, AND NOW FETCHED BY NOBODY:** `static/globe-base.png` is
+  still in the cell. `cells.deleteFile` is what removes one; until then it is
+  317KB of deploy payload on a deployer that already runs at its memory ceiling
+  every time.
+
+### The terminator was on the globe, and the globe is not what you are looking at
+
+Measured before changing anything: the globe's own day/night term is real, and
+at DUSK it puts the night side at 0.6 of the day side — about one step of a
+fourteen-level palette, which is why it reads as no terminator at all. And the
+far shell, which is what actually covers the frame at every zoom where the
+planet is up, had NONE: it is Lambert ground under the SCENE's sun, and the
+scene's sun is the rig's local sun, so the whole visible face of the Earth was
+lit as though it were the truck's hour everywhere.
+
+- **ONE COPY OF THE TERM, SHARED.** `PLANET_SUN_GLSL` in globe.ts is
+  `planetLit` / `planetLam` / `planetDusk` / `planetSun`; the globe material
+  includes it, and `planetSunFx(mat)` chains it onto every far tile's material
+  (and onto the fallback `farMat`). Chained, never assigned: `terrainFx` owns
+  `worldpos_vertex`, `lights_fragment_begin` and `dithering_fragment`, `grain`
+  owns `color_fragment`, `sphereNormal` owns `normal_fragment_maps`, so this
+  one hangs its varying off `begin_vertex` and captures the previous
+  `onBeforeCompile`.
+- **THE SUN ARRIVES TWICE, IN TWO FRAMES.** `uSun` is in the GLOBE's frame,
+  because the mesh is a child of `planetGroup` and the rotation is in its model
+  matrix; `uPlanetSun` is the same direction in WORLD space, because the
+  shell's fragment reconstructs its own radial in world space. One vector for
+  both is the fresnel fault from the globe's first day, one section up.
+- **IT IS A CHART TERM.** `uPlanetMix` ramps over `uMpp` 15 to 60 — the same
+  ramp the cloud shadows and the mottle already stand down over — and is 0 in
+  any camera but `top`, so from the seat the shell keeps the scene's own sun
+  exactly and nothing a driver sees changes.
+- The globe's rim took its night share from 0.25 to 0.10 with it: a limb
+  brighter than the ground it wraps is the blue veil again, in miniature.
+
+**Measured**, Letsemeng, zoom 110,000, one scanline through the middle of the
+frame, `?wx=clear` and the clock pinned:
+
+| clock | before | after |
+|---|---|---|
+| NOON | 88-107, flat | 88-107, flat (unchanged, correctly) |
+| DUSK | 107 to 88 | **107 in the west, 27-28 in the east** |
+| NIGHT | ~88 | 28-29, flat |
+
+The night side is a quarter of the day side where it was three fifths, and the
+ramp between them crosses the frame where the terminator is.
+
+### The tiles were not evicted for memory, and what was thrown away was the bake
+
+The seat's question was three questions, and they have three separate answers:
+
+- **The eviction is GEOMETRIC.** `evictFarOutside` drops every far tile more
+  than one ring's margin outside the 5x5 the stream pass last asked for. There
+  is no byte budget and no LRU; that rule is the fix that took a browse from 45
+  tiles on a 25-tile ring (116 draw calls, 2.05M triangles) down to 25.
+- **The routes DO allow client caching, and always did.** `~/dem/v1/`,
+  `~/cover/v1/` and the OSM routes answer `public, max-age=604800, immutable`
+  (a month for summits), the S3-served copies carry an ETag, and the client
+  keeps DEM bytes in its own IndexedDB raster store on top of that. A
+  re-entered tile costs no download at any of the three levels.
+- **What it costs to come back is the BAKE**, and that is a device number: 146ms
+  a tile on the phone (259 tiles in a 96s browse, 87% of every slow frame), of
+  which 98% is the vertex loop — a cover sample, the palette and `sphereRTC`
+  per vertex — plus the tile's own normal map. The bytes were never the cost.
+
+So a tile leaving the ring is PARKED rather than destroyed: the GPU buffers go
+(`geometry.dispose()`), the arrays the bake wrote stay, and re-entering the
+ring is `farGroup.add(mesh)` and a re-upload. **Draw calls and triangles are
+exactly what they were** — the ring still decides what is in the scene, which
+is the fault the ring was added to fix, and nothing here touches it.
+
+- **BOUNDED IN BYTES, NOT TILES**, because a tile is not one size: the lattice
+  is `farSeg(z)` a side and the levels do not agree. Least-recently-seen goes
+  first. Measured at **0.93MB a tile** (a 128-square lattice is 16,641 vertices:
+  position, colour and normal at 200KB each, uv 133KB, index ~196KB, normal map
+  ~196KB).
+- **A CAP THAT HOLDS ONE RING IS A CAP THAT NEVER PAYS.** The first cut was
+  24MB, which is 25 tiles — exactly one ring — so a spin out and back always
+  evicted what it was meant to keep: the outgoing ring parked at 23.2MB and the
+  trim had dropped it to make room for the ring in between, `hits 0`. 48MB is
+  two rings and a bit. `?farpark=<MB>` moves it and 0 parks nothing, which is
+  the exact A/B, because the right number is a property of the device and this
+  one is a desktop's guess.
+- **A TILE OWED A RE-BAKE IS NOT PARKED** (its colours are stale by
+  definition), and neither is one whose material the normal-map cache has
+  already taken — it would come back wearing the tangent-space fallback, lit by
+  a vignette beside neighbours lit by the sphere. For the same reason a parked
+  tile's material comes OUT of `farMats`: that cache is capped at two rings and
+  DISPOSES what it drops, and a park outlives it by design.
+
+**Measured**, the same browse out and back, the only difference the park:
+
+| | tiles parked | MB | hits | tiles fetched |
+|---|---|---|---|---|
+| spun away | 25 | 23.2 | 0 | 50 |
+| came back | 25 | 23.2 | **25** | **50** |
+
+Before the park the same pair read **75 fetched**: the return cost a whole ring
+of bakes, and now it costs nothing. `__far().park` and the telemetry's `chart`
+row report tiles, MB, cap and hits.
+
+**THE HONEST NEXT CUT IS THE PER-TILE COST, NOT THE CAP.** The uv and the index
+depend only on `farSeg(z)` and are byte-identical for every tile at a level —
+330KB of the 930 — and the colours are a palette lookup that would lose nothing
+as Uint8, another 150KB. Sharing the lattice would take a tile under 0.4MB and
+put a hundred and twenty of them in this same budget. It is not done here
+because it means building the geometry by hand instead of from PlaneGeometry,
+and a shared attribute is disposed by whichever geometry goes first.
+
+### `qsNum` answered 0 for every switch that was not there
+
+`qs` answers `null` for an absent switch, `Number(null)` is **0**, and 0 is
+finite — so `qsNum` returned 0 rather than the default for every numeric switch
+that was not in the URL. It had been that way since the typed reader shipped,
+and nothing noticed because until `farpark` no caller had a default whose
+absence was visible: a 0MB park budget parks nothing and reports `hits 0`,
+which looks exactly like a park that does not work.
+
+`switches.test.mjs` gained the case it was missing — absent, empty, and a
+garbage value all fall back — and it is the case the table's whole contract is
+about. **A typed reader is only as good as the test that reads what it answers
+when asked for nothing.**
+
+### Three stale assertions, and the control that said which were mine
+
+The far-ladder merge and the sphere pass each retired something a globe test
+still asserted, and running the suites at HEAD before touching them is what
+separated the three:
+
+- `globe-navigation.test.cjs` called `chartShellMatrix`, which the sphere pass
+  deleted with the paraboloid. Replaced by the contract that succeeded it: the
+  `sphereRTC` / `sphereLatLon` round trip is exact at four tile centres from
+  the equator to 84N, and a parked tile's vertices stay within 2e6 metres of
+  their own centre (which is what keeps the Float32 upload honest). Checked
+  against a control with the sign flipped in `sphereLatLon`, where it fails on
+  the first non-zero longitude.
+- The same file proved the zoom is advanced before `stepGlobe` by comparing two
+  `indexOf`s, and the needle `'  stepGlobe();'` stopped matching when the call
+  was wrapped for the profiler — so the assertion became a true statement about
+  -1. **Both needles are required to exist now**, and the needle is
+  `profAdd('stepGlobe'`, which only the call site carries. This is the second
+  time this exact check has gone vacuous.
+- `globe-spin.test.mjs` required the shell to be OFF at planet zoom. `shellOn`
+  carried `&& globeFree() === 0` when that was written; both backdrops are
+  children of `planetGroup` now and are placed from one focus, so they cannot
+  disagree and hiding the ring would open an edge rather than close one. It
+  asserts the pair instead — both drawn, the GESTURE handed over — which fails
+  if anyone re-ties them.
+
+And one that was neither stale nor mine: the fling block asked for zoom 40,000
+with a bare `__zoom` and a fixed 600ms wait. `__zoom` sets a TARGET the frame
+loop eases toward, the harness runs at two to four frames a second, and the
+block before it left the chart at z900 — so the drag happened below the
+hand-over, where it is a flat pan that records no spin, and the throw reported
+`released at 0°/s`. It polls with `zoomTo` now, and the same drag then throws
+at **-26.43°/s and coasts 11.88 degrees** — the fling was never broken, the
+test was measuring a chart that had not finished arriving. **The zoom and
+everything else live on different clocks** — the same trap `chart-dist.mjs`
+carries a note about, met from the other side.
+
+
 ## The substrate's contact sampler was a linear scan, and it was on every URL
 
 The substrate migration (`SUBSTRATE-MIGRATION.md`, pulled from the branch on

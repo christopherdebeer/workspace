@@ -31,7 +31,7 @@ import {
   sampleBankField,
   BANK_GLSL,
 } from './shoreline';
-import { URL_OWNED, qs, qsHas, qsOn, switchRows, urlWithSwitches } from './switches';
+import { URL_OWNED, qs, qsHas, qsNum, qsOn, switchRows, urlWithSwitches } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
@@ -41,7 +41,7 @@ import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanma
 import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
 import { smoothChartZoom, wrapLongitude } from './globe-navigation';
 import { bitmapStats, withDecodedBitmap } from './decode-telemetry';
-import { GLOBE_R, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, globeEast, globeNorth, subsolar } from './globe';
+import { GLOBE_R, PLANET_SUN_GLSL, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, globeEast, globeNorth, subsolar } from './globe';
 import { createHydroSystem, extractFlowingHydroShoreSegments, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSurfaceOccluder, type HydroSystem, type OceanCoverage } from './hydro';
 import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipment';
 import { createRigModel, OVERLAND, RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
@@ -6146,6 +6146,95 @@ const farMat = new THREE.MeshLambertMaterial({
   normalScale: new THREE.Vector2(0.32, 0.32),
 });
 terrainFx(farMat, { detail: true });
+/**
+ * THE PLANET'S OWN SUN, ON THE STREAMED SHELL.
+ *
+ * The globe has had a terminator since it was built and the shell beside it
+ * never did: it is Lambert ground under the scene's ONE directional light,
+ * which at planet scale is a single direction for the whole world — so a tile
+ * on the far side of the Earth is lit by the sun standing over the TRUCK. The
+ * shell writes over the globe by draw order wherever it has streamed, so what
+ * the chart actually showed was a flat lit patch standing on a planet that was
+ * at least trying. Reported from the seat as "we seem to be missing the global
+ * lighting/sun position/terminator" — which was true of the layer that covers
+ * the view and false of the one underneath it.
+ *
+ * IT IS THE GLOBE'S OWN ARITHMETIC, as a string (`PLANET_SUN_GLSL`), because
+ * the whole point is that the two layers agree along the seam where both are
+ * on screen. Two copies would drift in a week.
+ *
+ * ── EVERYTHING IS IN WORLD SPACE, WHICH IS WHAT MAKES IT SHARED ──
+ *
+ * The obvious route is the tile's own centre, which `sphereNormal` already
+ * carries — and it is per-tile, so the fallback `farMat` (one material shared
+ * by every tile the normal-map cache has evicted) could not have it, and those
+ * tiles would stand unlit beside lit neighbours. That is the vignette fault
+ * this file already records, one layer over. A radial taken as
+ * `worldPos − planetCentre` and dotted with the sun rotated into world space
+ * needs nothing per tile, so one uniform block serves both materials.
+ *
+ * ── AND IT REPLACES THE SCENE'S LIGHT RATHER THAN MULTIPLYING IT ──
+ *
+ * Multiplying would stack the planet's cosine on top of a Lambert term that is
+ * already meaningless out there (a tile a quarter-turn away has normals
+ * pointing anywhere relative to the truck's sun). So at full strength the
+ * fragment is the tile's own albedo — `vColor`, which is exactly what
+ * `terrainPalette` baked — under the planet's sun, and nothing else. That is
+ * the same expression the globe applies to its own surface.
+ *
+ * ── FADED ON uMpp, so the seat is untouched ──
+ *
+ * `uMpp` is metres of ground per art pixel, 0 from the seat by construction.
+ * The same 15→60 ramp the cloud shadows and the 30-80m mottle already stand
+ * down over, so the chart changes its rules in ONE place: below it the shell
+ * is the horizon of a tangent world and the scene's sun is the right light for
+ * it; above it the shell is a piece of a planet.
+ */
+const planetSunU = {
+  uPlanetC: { value: new THREE.Vector3() },
+  uPlanetSun: { value: new THREE.Vector3(1, 0, 0) },
+  uPlanetNight: { value: 0.14 },
+  uPlanetMix: { value: 0 },
+};
+function planetSunFx(mat: THREE.MeshLambertMaterial): void {
+  const base = mat.onBeforeCompile;
+  mat.onBeforeCompile = function (sh, renderer) {
+    base.call(this, sh, renderer);
+    Object.assign(sh.uniforms, planetSunU);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vPsunP;')
+      // begin_vertex, not worldpos_vertex: terrainFx owns that one, and a
+      // second helper writing over its hook is how the grass lost its wind
+      // for months (see the wind section in CLAUDE.md).
+      .replace('#include <begin_vertex>',
+        '#include <begin_vertex>\nvPsunP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vPsunP;
+        uniform vec3 uPlanetC; uniform vec3 uPlanetSun;
+        uniform float uPlanetNight; uniform float uPlanetMix;
+        ${PLANET_SUN_GLSL}`)
+      .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+        if (uPlanetMix > 0.001) {
+          float pd = dot(normalize(vPsunP - uPlanetC), uPlanetSun);
+          #ifdef USE_COLOR
+            vec3 pAlb = vColor;
+          #else
+            vec3 pAlb = gl_FragColor.rgb;
+          #endif
+          gl_FragColor.rgb = mix(gl_FragColor.rgb,
+            planetSun(pAlb, pd, uPlanetNight), uPlanetMix);
+        }`);
+  };
+  // The key has to carry this, or a material with the term shares a compiled
+  // program with one without it — the exact fault farClip once had against
+  // the fallback material.
+  const prev = mat.customProgramCacheKey;
+  mat.customProgramCacheKey = () => `${prev ? prev.call(mat) : 'terrain-far'}+psun`;
+}
+// The shared fallback wears it too: a tile the normal-map cache has evicted
+// down to this material must not be the one unlit patch on a lit planet.
+planetSunFx(farMat);
 /** The fine-world clip, injected into whichever far material is being built. */
 function farClip(mat: THREE.MeshLambertMaterial): void {
   const base = mat.onBeforeCompile;
@@ -6257,6 +6346,7 @@ function farMatFor(data: Float32Array, w: number, key: string, centre: THREE.Vec
   terrainFx(m, { detail: true });
   farClip(m);
   sphereNormal(m, centre);
+  planetSunFx(m);
   farMats.set(key, m);
   return m;
 }
@@ -25359,16 +25449,126 @@ const farOutside = (z: number, x: number, y: number): boolean => {
   const dx = Math.abs(x - farRingAt.x), n = farRingAt.n;
   return Math.max(Math.min(dx, n - dx), Math.abs(y - farRingAt.y)) > farRingAt.r + 1;
 };
+/**
+ * ── THE RING DECIDES WHAT IS DRAWN; IT DOES NOT DECIDE WHAT IS KEPT ──
+ *
+ * Reported from the seat: turn the globe slowly until a country has streamed,
+ * zoom back to the seat, come out again, and the tiles are gone. They were —
+ * `evictFarOutside` destroyed every one of the six maps a tile lives in the
+ * moment the ring moved past it, so coming back paid the whole build again.
+ *
+ * The bytes were never the waste. Every `~/` route serves
+ * `public, max-age=604800, immutable` with an ETag, so a re-visited tile is a
+ * browser-cache read. What was thrown away is `far:bake` — the per-vertex
+ * loop that samples the cover raster, runs `terrainPalette` and projects each
+ * vertex onto the sphere — measured at 98% of a build, and a build at 146 ms
+ * a tile on the phone, 259 of them in a 96 s browse, top of 87% of the slow
+ * frames.
+ *
+ * SO THE MESH IS PARKED, NOT DESTROYED. `geometry.dispose()` frees the GPU
+ * buffers and leaves the CPU arrays alone — they are the bake's output — so a
+ * parked tile costs memory and no frame time, and re-entering the ring is
+ * `farGroup.add(mesh)` and a re-upload. Draw calls and triangles are exactly
+ * what they were: the ring still decides what is IN the scene, which is the
+ * fault the ring was added to fix (a browse left 45 tiles on a 25-tile ring,
+ * 116 draw calls, 2.05M triangles) and nothing here touches it.
+ *
+ * BOUNDED IN BYTES, NOT TILES, because a tile is not one size: the lattice is
+ * `farSeg(z)` a side and the levels do not agree. Least-recently-seen goes
+ * first, so a browse that wanders never grows without limit and a browse that
+ * returns finds what it left.
+ */
+/**
+ * MEASURED AT 0.93 MB A TILE, which is the number that sets this. A 128-square
+ * lattice is 16,641 vertices: position, colour and normal at 200KB each, uv at
+ * 133KB, the index at ~196KB and the tile's own normal map at ~196KB. A ring
+ * is 25 tiles, so the first cut's 24MB held EXACTLY ONE RING — measured: spin
+ * away and the outgoing ring parks at 23.2MB, spin back and the trim has
+ * already evicted it to make room for the ring in between, `hits 0`. A cap
+ * that holds one ring is a cap that never pays.
+ *
+ * 48MB is two rings and a bit, which is what makes a spin out and back free.
+ * `?farpark=<MB>` moves it (0 parks nothing — the exact A/B), because the
+ * right number is a property of the device and this one is a desktop's guess.
+ *
+ * THE HONEST NEXT CUT IS THE PER-TILE COST, NOT THE CAP. The uv and the index
+ * depend only on `farSeg(z)` and are byte-identical for every tile at a level
+ * — 330KB of the 930 — and the colours are a palette lookup that would lose
+ * nothing as Uint8, another 150KB. Sharing the lattice would take a tile
+ * under 0.4MB and put a hundred and twenty of them in this same budget. It is
+ * not done here because it means building the geometry by hand instead of
+ * from PlaneGeometry, and a shared attribute is disposed by whichever
+ * geometry goes first.
+ */
+const FAR_PARK_BYTES = Math.max(0, qsNum('farpark', 48)) * (1 << 20);
+const farParked = new Map<string, { mesh: THREE.Mesh; mat: THREE.Material | null; bytes: number; at: number }>();
+let farParkBytes = 0;
+/** What a parked tile actually holds: the attribute arrays the bake wrote,
+ *  plus the normal map's own bytes where the tile has its own material. */
+function parkedBytes(mesh: THREE.Mesh, mat: THREE.MeshLambertMaterial | undefined): number {
+  let n = 0;
+  for (const a of Object.values(mesh.geometry.attributes)) {
+    n += (a as THREE.BufferAttribute).array.byteLength;
+  }
+  const idx = mesh.geometry.index;
+  if (idx) n += idx.array.byteLength;
+  const img = mat?.normalMap?.image as { data?: ArrayBufferView } | undefined;
+  if (img?.data) n += img.data.byteLength;
+  return n;
+}
+function farParkTrim(): void {
+  if (farParkBytes <= FAR_PARK_BYTES) return;
+  for (const [key, p] of [...farParked].sort((a, b) => a[1].at - b[1].at)) {
+    if (farParkBytes <= FAR_PARK_BYTES) break;
+    farUnpark(key, p);
+  }
+}
+/** Let a parked tile go for good — the only place a baked shell tile dies. */
+function farUnpark(key: string, p: { mesh: THREE.Mesh; mat: THREE.Material | null; bytes: number }): void {
+  p.mesh.geometry.dispose();
+  const mt = p.mat as THREE.MeshLambertMaterial | null;
+  if (mt && mt !== farMat) { mt.normalMap?.dispose(); mt.dispose(); }
+  farParked.delete(key); farParkBytes -= p.bytes;
+  farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key); farBakeZ.delete(key);
+}
+/** Drop a parked tile because its INPUTS changed (cover arrived, a re-bake is
+ *  owed). A parked tile is invisible, so there is nothing to hold up: it goes
+ *  at once and the next visit builds it properly. */
+function farParkDrop(key: string): void {
+  const p = farParked.get(key);
+  if (p) farUnpark(key, p);
+}
 function evictFarOutside(): void {
   for (const [key, mesh] of [...farMeshes]) {
     const [z, x, y] = key.split('/').map(Number);
     if (!farOutside(z, x, y)) continue;
-    farGroup.remove(mesh); mesh.geometry.dispose();
+    farGroup.remove(mesh);
     const mt = farMats.get(key);
-    if (mt && mesh.material === mt) { mt.normalMap?.dispose(); mt.dispose(); farMats.delete(key); }
+    const own = mt && mesh.material === mt ? mt : undefined;
+    // A tile owed a re-bake is not worth parking — its colours are stale by
+    // definition — and neither is one whose material the normal-map cache has
+    // already taken away, since it would come back wearing the flat fallback.
+    if (farStale.has(key) || (mt && mesh.material !== mt)) {
+      mesh.geometry.dispose();
+      if (own) { own.normalMap?.dispose(); own.dispose(); }
+      farMats.delete(key);
+      farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key); farBakeZ.delete(key);
+    } else {
+      // The GPU buffers go; the arrays the bake wrote stay.
+      const bytes = parkedBytes(mesh, own);
+      mesh.geometry.dispose();
+      farParked.set(key, { mesh, mat: own ?? null, bytes, at: performance.now() });
+      farParkBytes += bytes;
+      // The park record is now the material's only owner, so take it OUT of
+      // `farMats`: that cache is capped at two rings and DISPOSES what it
+      // drops, a park outlives it by design, and a parked tile whose material
+      // was freed under it comes back wearing the tangent-space fallback —
+      // lit by a vignette beside neighbours lit by the sphere.
+      if (own) farMats.delete(key);
+    }
     farMeshes.delete(key); farTiles.delete(key); farStale.delete(key);
-    farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key); farBakeZ.delete(key);
   }
+  farParkTrim();
   // …and the asked set, or a refused fetch outside the ring is "asked" for ever.
   for (const key of [...farTiles]) {
     const [z, x, y] = key.split('/').map(Number);
@@ -25435,8 +25635,12 @@ function farPixelM(): number {
 function coverDirtiedFar(modeMoved: boolean, x: number, z: number, w: number, h: number): void {
   for (const [key, hit] of [...farCoverHit]) {
     if (hit > 0.98) continue;
-    const mesh = farMeshes.get(key);
-    if (!mesh) continue;
+    // A PARKED TILE IS MARKED TOO. It is out of the ring and invisible, so
+    // nothing on screen changes — but its colours are as stale as a drawn
+    // tile's, and a park that outlived a cover arrival would come back wearing
+    // the guess it was baked with. `farStale` is what loadFarTile checks
+    // before it reaches for the park, so one flag serves both.
+    if (!farMeshes.has(key) && !farParked.has(key)) continue;
     if (!modeMoved) {
       // The tile's FLAT box is the raster's, kept beside it; the mesh's own
       // bounds are on the sphere now and say nothing in these coordinates.
@@ -25564,7 +25768,6 @@ function onNearCap(p: THREE.Vector3): boolean {
  *  shell covers the frame and 16k triangles would draw for nothing. */
 const GLOBE_MPP_ON = 500;
 const globeU = {
-  uBase: { value: null as THREE.Texture | null },
   uSun: { value: new THREE.Vector3(1, 0, 0) },
   uNight: { value: 0.14 },
 };
@@ -25612,7 +25815,7 @@ globeMesh.visible = false;
 // same lattice standing through every country lower than the rig.
 planetGroup.add(globeMesh);
 planetGroup.add(globePin);
-let globeAsked = false, globeFailed = false;
+
 /**
  * WHERE THE PLANET IS TURNED TO, IN DEGREES OFF THE TRUCK'S OWN POINT.
  *
@@ -25682,27 +25885,6 @@ function globeSpinLatRange(): [number, number] {
   const [tLat] = localToLatLon(viewX() + panX, viewZ() + panZ);
   return [-GLOBE_SPIN_LAT_MAX - tLat, GLOBE_SPIN_LAT_MAX - tLat];
 }
-/** Fetched once, on the first wide chart — not at boot. 317KB is not a cost
- *  anyone driving should pay, and the ez-tree lesson in CLAUDE.md is what
- *  happens when a wide-view asset lands in the boot path. */
-function globeTexture(): void {
-  if (globeAsked) return;
-  globeAsked = true;
-  new THREE.TextureLoader().load(`${CELL_BASE}/globe-base.png`, (t) => {
-    // flipY OFF, because the bake's first row is +90° and the geometry's v=0
-    // is the north pole. With three's default the planet arrives upside down
-    // with every coastline still at the right coordinate, which is the sort of
-    // wrong that survives a coordinate check and not a glance.
-    t.flipY = false;
-    t.colorSpace = THREE.SRGBColorSpace;
-    t.wrapS = THREE.RepeatWrapping;          // or the dateline is a seam
-    t.minFilter = THREE.LinearMipmapLinearFilter;
-    t.magFilter = THREE.LinearFilter;
-    t.anisotropy = TEX_ANISO;
-    t.needsUpdate = true;
-    globeU.uBase.value = t;
-  }, undefined, () => { globeFailed = true; });
-}
 /** Where the planet is tangent, how it is turned, and where its sun stands. */
 function stepGlobe(): void {
   // ── THE PLANET IS PLACED EVERY FRAME, IN EVERY CAMERA ──
@@ -25760,9 +25942,11 @@ function stepGlobe(): void {
   // carries its own sink beneath it (GLOBE_SINK).
   planetGroup.position.set(vx, -GLOBE_R, vz);
   globeOrientation(clamp(gLat, -89.9, 89.9), gLon, planetGroup.quaternion);
+  // NOTHING TO WAIT FOR ANY MORE. This used to ask for globe-base.png on the
+  // first wide chart and stay invisible until it landed, so the planet arrived
+  // a beat late and not at all offline. A graticule is in the bundle.
   const on = camMode === 'top' && chartDist() > 150000 && !FIXTURE;
-  if (on) globeTexture();
-  globeMesh.visible = on && globeU.uBase.value !== null && !hideSet.has('globe');
+  globeMesh.visible = on && !hideSet.has('globe');
   // The pin marks the truck's TRUE point on the sphere, which is the top of it
   // only while the chart is home. Hidden below the hand-over, where it would
   // be a gold diamond sitting on the frame's centre saying what the whole
@@ -25778,27 +25962,71 @@ function stepGlobe(): void {
     capEyeUpdate();
     globePin.visible = onNearCap(globePin.position);
   }
-  if (!globeMesh.visible) return;
   // THE SUN IS THE CLOCK'S, NOT THE WALL'S. `clockHour` is local solar time at
   // the origin's meridian — the same number the sky and the shadows are built
   // from — so the terminator moves when the time dial is dragged and holds
   // when the clock is pinned. At the truck the globe's lighting and the
   // world's agree by construction: the tangent frame's up IS the sphere's
   // normal there.
+  //
+  // COMPUTED WHETHER OR NOT THE GLOBE IS DRAWN, which it was not: this block
+  // sat behind an early return on `globeMesh.visible`, which was right while
+  // the globe was the only thing the sun lit. The streamed shell takes the
+  // same sun now (planetSunFx) and it is drawn at chart zooms far below the
+  // one that shows the planet, so a return here left the shell lighting
+  // itself from a stale vector — or, on a session that never widened far
+  // enough to show the globe at all, from the (1,0,0) it was initialised
+  // with.
   const ss = subsolar(clockHour(), origin.lon);
   latLonToUnit(ss.lat, ss.lon, globeU.uSun.value);
+  // …and the same direction in WORLD space for the shell, which is not a
+  // child of the globe's own frame in the shader's eyes: the planet's
+  // rotation is in its model matrix, and the fragment reconstructs its radial
+  // in world space, so the sun has to meet it there.
+  planetSunU.uPlanetC.value.copy(planetGroup.position);
+  planetSunU.uPlanetSun.value.copy(globeU.uSun.value).applyQuaternion(planetGroup.quaternion);
+  planetSunU.uPlanetNight.value = globeU.uNight.value;
+  // The chart's own scale ramp — the one the cloud shadows and the mottle
+  // already stand down over — so the seat keeps the scene's sun exactly.
+  {
+    const t = clamp((envU.uMpp.value - 15) / (60 - 15), 0, 1);
+    planetSunU.uPlanetMix.value = camMode === 'top' ? t * t * (3 - 2 * t) : 0;
+  }
 }
 // Four at a time. Asking for a whole ring at once is a thundering herd against
 // one S3 bucket: a measured 49-tile request landed 9 meshes and left the rest
 // racing each other for sockets.
 let farInFlight = 0;
+/** How many ring re-entries were served by a parked tile. The measurement the
+ *  park exists for: against `farFetched`'s length it says what fraction of a
+ *  browse's tiles cost nothing at all. */
+let farParkHits = 0;
 const farQueue: Array<() => void> = [];
 const farFetched: Array<{ key: string; at: number; x: number; z: number }> = [];
 async function loadFarTile(x: number, y: number): Promise<void> {
   const z = farZ;
   const key = `${z}/${x}/${y}`;
   if (farTiles.has(key) && !farStale.has(key)) return;
+  // ── PARKED? THEN THERE IS NOTHING TO DO BUT PUT IT BACK ──
+  // No fetch, no decode, no bake: the arrays the bake wrote are still on the
+  // mesh and three re-uploads them on the next render. This is the whole of
+  // the saving — see the note above farParked.
+  if (!farStale.has(key)) {
+    const p = farParked.get(key);
+    if (p) {
+      farParked.delete(key); farParkBytes -= p.bytes;
+      if (p.mat) farMats.set(key, p.mat as THREE.MeshLambertMaterial);
+      farMeshes.set(key, p.mesh);
+      farGroup.add(p.mesh);
+      farTiles.add(key);
+      farParkHits++;
+      return;
+    }
+  }
   farStale.delete(key);
+  // A stale tile's parked copy is stale too — drop it rather than let the
+  // rebuild's own park collide with it.
+  farParkDrop(key);
   farTiles.add(key);
   farAsking.add(key);
   {
@@ -34112,7 +34340,9 @@ let texMeanCache: Record<string, number> | null = null;
   const [gLat, gLon] = localToLatLon(viewX(), viewZ());
   const ss = subsolar(clockHour(), origin.lon);
   return {
-    shown: globeMesh.visible, tex: globeU.uBase.value !== null, asked: globeAsked, failed: globeFailed,
+    // `wire` where `tex` used to be: the surface is drawn, not fetched, so
+    // there is no longer an asset whose arrival anything waits on.
+    shown: globeMesh.visible, wire: true,
     mpp: +chartMpp().toFixed(1), on: +globeOn().toFixed(3), tilt: +chartTilt().toFixed(1),
     space: +(skyMat.uniforms.uSpace as { value: number }).value.toFixed(3),
     // THE RIG AND THE PLACE ARE NO LONGER THE SAME POINT. Since the chart
@@ -34240,6 +34470,14 @@ let texMeanCache: Record<string, number> | null = null;
     })(),
     retired: farRetired.length, shown: farGroup.visible, radius: Math.round(viewRadius()),
     sight: SIGHT_M, level: farZ, farPlane: camera.far,
+    // THE PARK'S BOOKS. `hits` against `fetched` is the measurement the park
+    // exists for — what share of a browse's tiles came back for nothing —
+    // and `mb` against the cap says whether the browse is about to start
+    // paying again.
+    park: {
+      tiles: farParked.size, mb: +(farParkBytes / (1 << 20)).toFixed(1),
+      capMb: FAR_PARK_BYTES >> 20, hits: farParkHits, fetched: farFetched.length,
+    },
     // How much land-cover each shell tile had when it was baked. A shell tile
     // is coloured once and never revisited, so anything below 1 here is a tile
     // wearing a palette the fine world would not agree with.
@@ -40254,7 +40492,7 @@ function telemetryReport(): string {
     const recent = Array.from(drawRing.subarray(0, n)).sort((a, b) => a - b);
     const q = (p: number): string => n ? (recent[Math.min(n - 1, Math.floor(p * n))] / 1e6).toFixed(2) : '?';
     const [fLat, fLon] = localToLatLon(viewX() + panX, viewZ() + panZ);
-    L.push(`chart ${camMode} · zoom ${zoomCur < 10 ? zoomCur.toFixed(2) : String(Math.round(zoomCur))} · ${chartMpp().toFixed(1)} m/px · ${chartRemote() ? 'browsed' : 'home'} focus ${fLat.toFixed(2)},${fLon.toFixed(2)} · globe ${globeMesh.visible ? 'on' : 'off'} free ${globeFree()} fling ${flingOn ? 'on' : 'off'} · far z${farZ} ${farMeshes.size}/${farTiles.size} retired ${farRetired.length} inflight ${farInFlight} queued ${farQueue.length} · ov z${ovZ} ${ovHave()}/${ovTiles.size} (${ovMeshes.size} drawn, ${ovEmpty.size} empty) retired ${ovRetired.length} failing ${[...ovFailedAt.values()].filter((t) => performance.now() - t < OV_RETRY_MS).length} demless ${ovDemlessKeys.size} places ${ovPlaces.size} labels ${ovLabelsDrawn.length}`);
+    L.push(`chart ${camMode} · zoom ${zoomCur < 10 ? zoomCur.toFixed(2) : String(Math.round(zoomCur))} · ${chartMpp().toFixed(1)} m/px · ${chartRemote() ? 'browsed' : 'home'} focus ${fLat.toFixed(2)},${fLon.toFixed(2)} · globe ${globeMesh.visible ? 'on' : 'off'} free ${globeFree()} fling ${flingOn ? 'on' : 'off'} · far z${farZ} ${farMeshes.size}/${farTiles.size} retired ${farRetired.length} parked ${farParked.size} (${(farParkBytes / (1 << 20)).toFixed(1)}MB, ${farParkHits} hits) inflight ${farInFlight} queued ${farQueue.length} · ov z${ovZ} ${ovHave()}/${ovTiles.size} (${ovMeshes.size} drawn, ${ovEmpty.size} empty) retired ${ovRetired.length} failing ${[...ovFailedAt.values()].filter((t) => performance.now() - t < OV_RETRY_MS).length} demless ${ovDemlessKeys.size} places ${ovPlaces.size} labels ${ovLabelsDrawn.length}`);
     L.push(`ground: holes ${holeStat.now} (never shown ${holeStat.unshown}) · pop-outs ${holeStat.pops} · hidden ${(holeStat.ms / 1000).toFixed(1)}s longest ${Math.round(holeStat.max)}ms · far asked ${farTiles.size - farMeshes.size} stale ${farStale.size} inflight ${farAsking.size}`);
     L.push(`world pass: draw calls mean ${Math.round(drawStat.sumCalls / Math.max(1, drawStat.n))} max ${drawStat.maxCalls} · triangles mean ${(drawStat.sumTris / Math.max(1, drawStat.n) / 1e6).toFixed(2)}M max ${(drawStat.maxTris / 1e6).toFixed(2)}M · recent ${n} passes p50 ${q(0.5)}M p95 ${q(0.95)}M · last ${(drawStat.tris / 1e6).toFixed(2)}M / ${drawStat.calls} calls`); }
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
