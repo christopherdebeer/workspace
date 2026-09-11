@@ -75,7 +75,7 @@ import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight } from './facade';
 import { gramDecode } from './facade-grammar';
-import { gramTable, traditionCulture, traditionFor, traditionIndex } from './traditions';
+import { TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { startLab } from './labs';
 import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
@@ -21516,6 +21516,20 @@ function massHeight(
   // A hall is ONE tall volume, not floors — and a farm's sheds agree with each
   // other, so the stand norm carries more weight here than the individual draw.
   if (MASS_HALL.has(kind)) return 5.4 + 4.6 * norm + 1.2 * (rm() - 0.5);
+  // ── THE ATLAS STATES THE STOREYS ──
+  //
+  // Where a tradition is written down, its dwelling has a storey range and
+  // the stand norm runs it (a terrace agrees with itself), the building's own
+  // draw moving it half a storey. Haussmann is five to seven whatever the
+  // plan says; the Cape is one or two. Blocks keep their plan-and-density
+  // rule below, and so does the big untyped footprint in a dense place,
+  // because that is a block by another name — the atlas describes the
+  // dwelling, not the flats.
+  const trad = look.tradition ? TRADITIONS[look.tradition] : undefined;
+  if (trad && !MASS_BLOCK.has(kind) && (kind !== 'yes' || (area >= 55 && !(area > 300 && dens > 0.5)))) {
+    const [lo, hi] = trad.storeys;
+    return clamp(Math.round(lo + norm * (hi - lo) + (rm() - 0.5) * 0.9), lo, hi) * storey;
+  }
   // Somewhere between one and three storeys, the stand deciding which.
   const houseSt = 1 + (norm > 0.52 ? 1 : 0) + (rm() > 0.82 ? 1 : 0);
   if (MASS_BLOCK.has(kind)) {
@@ -21645,7 +21659,8 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     // town's flat silhouette is the thing that says "somewhere hot" before any
     // colour registers, and it was only ever arriving by accident of the kind
     // regex above not matching.
-    if (look.pitch < 0.2) return undefined;
+    const trad = look.tradition ? TRADITIONS[look.tradition] : undefined;
+    if (!trad && look.pitch < 0.2) return undefined;
     // A canopy is a sheet on posts and has no attic to roof.
     if (MASS_CANOPY.has(kind)) return undefined;
     const { area, short } = footprintSize(pts);
@@ -21654,6 +21669,16 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     // any one of the three is a comparison of that one thing.
     const rr = mulberry32((Math.imul(id, 0x85ebca6b) ^ 0x9e3779b9) >>> 0);
     rr();
+    // ── THE ATLAS STATES THE ROOF FORMS ──
+    //
+    // A weighted draw over the tradition's table replaces the culture's pitch
+    // gate: the Cape is flat nearly half the time and hipped a third, the
+    // Alps gable nine in ten, the Sahara is flat. A flat draw is the cap for
+    // ANY kind — a shed in a flat-roofed town is flat too — and a pitched
+    // draw then meets the typologies below, which still know that a lean-to
+    // is what a shed wears, a barn is a long gable, and a block is capped.
+    const form = trad ? roofFormFor(trad, rr()) : null;
+    if (form === 'flat') return undefined;
     // ── MEASURED, AND THE FIRST CUT OVERSHOT ──
     //
     // Gating only on the culture's pitch and a height ceiling put a pitched roof
@@ -21671,7 +21696,8 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     // "apartments" is a converted house and still wears a roof.
     const block = MASS_BLOCK.has(kind) || height > 18
       || (kind === 'yes' && area > 300 && builtUpAt(ctrX, ctrZ) > 0.5);
-    if (block) return area > 300 || height > 14 ? undefined : (rr() < 0.5 ? 'hipped' : 'gabled');
+    if (block) return area > 300 || height > 14 ? undefined : (form ?? (rr() < 0.5 ? 'hipped' : 'gabled'));
+    if (form) return form;
     // A square plan CAN hip; a long one gables. Hipping stays the minority
     // choice even where the plan allows it, because a street of hips reads as
     // stamped — the squareness test comes free off the box roofGeo is about to

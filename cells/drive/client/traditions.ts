@@ -58,7 +58,18 @@ export interface Tradition {
   storeyM?: number;
   /** The opening grammar, as overrides of FACADE_DEFAULTS. */
   grammar: Partial<FacadeGrammar>;
+  /** Storeys of the untyped dwelling, lowest and highest: the stand norm
+   *  runs the range and a building's own draw moves it half a storey.
+   *  massHeight reads it for houses and the dwelling-sized untyped stock;
+   *  blocks, halls, sheds and canopies keep their typology. */
+  storeys: [number, number];
+  /** Roof forms by weight. building() draws one per building; 'flat' is the
+   *  extrusion's cap. Sheds, halls and true blocks keep their typology. */
+  roofs: Partial<Record<RoofForm, number>>;
 }
+
+export type RoofForm = 'gabled' | 'hipped' | 'pyramidal' | 'skillion' | 'flat';
+export const ROOF_FORMS: readonly RoofForm[] = ['gabled', 'hipped', 'pyramidal', 'skillion', 'flat'];
 
 export interface TraditionRegion {
   key: string;
@@ -78,6 +89,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     pitch: 0.62, storeyM: 3.2,
     grammar: { bayM: 3.4, storeyM: 3.2, winX0: 0.28, winX1: 0.72, winY0: 0.1, winY1: 0.9,
       doorX0: 0.34, doorX1: 0.66, doorY1: 0.88, doorShare: 0.18, openShare: 0.92, lintel: 0.32, ivy: 0.05, stain: 0.12 },
+    storeys: [5, 7],
+    roofs: { hipped: 0.55, gabled: 0.15, flat: 0.3 },
   },
   'ile-de-france': {
     key: 'ile-de-france',
@@ -87,6 +100,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x9a5a3e, 0x5a5f66, 0x8a4f38, 0x6a6f76],
     pitch: 0.5, storeyM: 2.9,
     grammar: { bayM: 3.0, storeyM: 2.9, winX0: 0.25, winX1: 0.75, winY0: 0.22, winY1: 0.86, doorShare: 0.3, openShare: 0.82, ivy: 0.5 },
+    storeys: [2, 3],
+    roofs: { gabled: 0.5, hipped: 0.35, flat: 0.15 },
   },
   cape: {
     key: 'cape',
@@ -97,6 +112,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     pitch: 0.2, storeyM: 3.0,
     grammar: { bayM: 3.3, storeyM: 3.0, winX0: 0.14, winX1: 0.86, winY0: 0.22, winY1: 0.9,
       doorX0: 0.35, doorX1: 0.65, doorY1: 0.72, doorShare: 0.22, openShare: 0.88, glassShade: 0.16, ivy: 0.25, stain: 0.1 },
+    storeys: [1, 2],
+    roofs: { flat: 0.45, hipped: 0.3, gabled: 0.2, skillion: 0.05 },
   },
   'lesotho-highland': {
     key: 'lesotho-highland',
@@ -106,6 +123,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     pitch: 0.3, storeyM: 2.7,
     grammar: { bayM: 2.6, storeyM: 2.7, winX0: 0.32, winX1: 0.68, winY0: 0.4, winY1: 0.76,
       doorX0: 0.36, doorX1: 0.64, doorY1: 0.68, doorShare: 0.42, openShare: 0.6, glassShade: 0.25, ivy: 0, stain: 0.12 },
+    storeys: [1, 1],
+    roofs: { gabled: 0.55, hipped: 0.15, flat: 0.3 },
   },
   karoo: {
     key: 'karoo',
@@ -115,6 +134,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x8b3f2f, 0x5c6167, 0x7a7f85, 0x4b5056],
     pitch: 0.32, storeyM: 3.1,
     grammar: { bayM: 3.0, storeyM: 3.1, winX0: 0.26, winX1: 0.74, winY0: 0.3, winY1: 0.84, doorShare: 0.3, openShare: 0.72, ivy: 0.1, stain: 0.1 },
+    storeys: [1, 1],
+    roofs: { gabled: 0.6, hipped: 0.3, flat: 0.1 },
   },
   'east-africa-savanna': {
     key: 'east-africa-savanna',
@@ -124,6 +145,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x6d7278, 0x8a3f2e, 0x555a60],
     pitch: 0.3, storeyM: 2.9,
     grammar: { bayM: 2.8, storeyM: 2.9, winX0: 0.3, winX1: 0.7, winY0: 0.4, winY1: 0.8, doorShare: 0.4, openShare: 0.66, ivy: 0, stain: 0.14 },
+    storeys: [1, 1],
+    roofs: { gabled: 0.6, hipped: 0.3, flat: 0.1 },
   },
   sahel: {
     key: 'sahel',
@@ -132,6 +155,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     wall: [0xe1d4ba, 0xd3ba90, 0xf0e7d3, 0xc5a87c, 0xd8cfbd],
     pitch: 0.05, storeyM: 3.1,
     grammar: { bayM: 2.8, storeyM: 3.1, winX0: 0.3, winX1: 0.7, winY0: 0.36, winY1: 0.8, doorShare: 0.35, openShare: 0.66, glassShade: 0.22, ivy: 0, stain: 0.16 },
+    storeys: [1, 3],
+    roofs: { flat: 0.9, gabled: 0.05, skillion: 0.05 },
   },
   'north-africa': {
     key: 'north-africa',
@@ -140,12 +165,16 @@ export const TRADITIONS: Record<string, Tradition> = {
     wall: [0xcabb9d, 0xb6a58a, 0xd4c5a8, 0xa0937b, 0xc2b39a],
     pitch: 0.04, storeyM: 3.1,
     grammar: { bayM: 3.0, storeyM: 3.1, winX0: 0.25, winX1: 0.75, winY0: 0.3, winY1: 0.8, doorShare: 0.3, openShare: 0.7, ivy: 0, stain: 0.22 },
+    storeys: [2, 5],
+    roofs: { flat: 0.95, skillion: 0.05 },
   },
   mediterranean: {
     key: 'mediterranean',
     note: 'The Mediterranean rim (Provence, Liguria, the Spanish coasts): the ochre culture as it ships, with narrow bays and small shuttered windows, pantiles, two and three storeys, attached.',
     base: 'ochre',
     grammar: { bayM: 2.6, storeyM: 3.1, winX0: 0.3, winX1: 0.7, winY0: 0.3, winY1: 0.8, doorShare: 0.35, openShare: 0.72, glassShade: 0.14, ivy: 0.6 },
+    storeys: [2, 3],
+    roofs: { gabled: 0.6, hipped: 0.3, flat: 0.1 },
   },
   alpine: {
     key: 'alpine',
@@ -155,6 +184,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x4f5358, 0x5d6166, 0x45494e],
     pitch: 0.5, storeyM: 2.6,
     grammar: { bayM: 2.4, storeyM: 2.6, winX0: 0.26, winX1: 0.74, winY0: 0.36, winY1: 0.8, doorShare: 0.3, openShare: 0.76, ivy: 0, stain: 0.1 },
+    storeys: [2, 3],
+    roofs: { gabled: 0.9, hipped: 0.05, skillion: 0.05 },
   },
   'swiss-mittelland': {
     key: 'swiss-mittelland',
@@ -164,6 +195,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x8b4a34, 0x6e3f30, 0x9a5a40, 0x5c4e48],
     pitch: 0.6, storeyM: 2.9,
     grammar: { bayM: 3.0, storeyM: 2.9, winX0: 0.25, winX1: 0.75, winY0: 0.3, winY1: 0.85, doorShare: 0.3, openShare: 0.8, ivy: 0.3 },
+    storeys: [2, 3],
+    roofs: { gabled: 0.5, hipped: 0.4, flat: 0.1 },
   },
   netherlands: {
     key: 'netherlands',
@@ -173,6 +206,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x9a5136, 0x4e4340, 0x7a4a3a, 0x3f3a38],
     pitch: 0.66, storeyM: 2.9,
     grammar: { bayM: 3.0, storeyM: 2.9, winX0: 0.22, winX1: 0.78, winY0: 0.14, winY1: 0.88, doorShare: 0.3, openShare: 0.86, lintel: 0.2, ivy: 0.3 },
+    storeys: [2, 3],
+    roofs: { gabled: 0.75, hipped: 0.15, flat: 0.1 },
   },
   'british-isles': {
     key: 'british-isles',
@@ -182,6 +217,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x51565c, 0x464b51, 0x5c6167],
     pitch: 0.6, storeyM: 2.8,
     grammar: { bayM: 2.9, storeyM: 2.8, winX0: 0.22, winX1: 0.78, winY0: 0.28, winY1: 0.85, doorShare: 0.36, openShare: 0.8, ivy: 0.5 },
+    storeys: [2, 2],
+    roofs: { gabled: 0.7, hipped: 0.25, flat: 0.05 },
   },
   nordic: {
     key: 'nordic',
@@ -191,6 +228,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x3f4246, 0x8c4a34, 0x4a4d52],
     pitch: 0.7, storeyM: 2.6,
     grammar: { bayM: 2.6, storeyM: 2.6, winX0: 0.25, winX1: 0.75, winY0: 0.34, winY1: 0.82, doorShare: 0.3, openShare: 0.76, ivy: 0.15, stain: 0.1 },
+    storeys: [1, 2],
+    roofs: { gabled: 0.9, hipped: 0.1 },
   },
   'central-europe': {
     key: 'central-europe',
@@ -200,6 +239,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x8f4e38, 0x5a4a44, 0x9c5a40, 0x6a5a52],
     pitch: 0.58, storeyM: 2.9,
     grammar: { bayM: 3.0, storeyM: 2.9, winX0: 0.24, winX1: 0.76, winY0: 0.3, winY1: 0.85, doorShare: 0.32, openShare: 0.8 },
+    storeys: [2, 3],
+    roofs: { gabled: 0.6, hipped: 0.3, flat: 0.1 },
   },
   'california-coastal': {
     key: 'california-coastal',
@@ -210,6 +251,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     pitch: 0.35, storeyM: 2.9,
     grammar: { bayM: 3.4, storeyM: 2.9, winX0: 0.15, winX1: 0.85, winY0: 0.3, winY1: 0.86,
       doorX0: 0.36, doorX1: 0.64, doorY1: 0.72, doorShare: 0.24, openShare: 0.86, glassShade: 0.18, ivy: 0.3, stain: 0.08 },
+    storeys: [1, 2],
+    roofs: { gabled: 0.55, hipped: 0.25, skillion: 0.1, flat: 0.1 },
   },
   sierra: {
     key: 'sierra',
@@ -219,6 +262,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x4b443c, 0x5a5147, 0x3c3630],
     pitch: 0.7, storeyM: 2.7,
     grammar: { bayM: 2.8, storeyM: 2.7, winX0: 0.26, winX1: 0.74, winY0: 0.36, winY1: 0.8, doorShare: 0.34, openShare: 0.7, ivy: 0, stain: 0.1 },
+    storeys: [1, 2],
+    roofs: { gabled: 0.8, skillion: 0.15, hipped: 0.05 },
   },
   'southwest-desert': {
     key: 'southwest-desert',
@@ -227,6 +272,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     wall: [0xc9a67d, 0xb9956b, 0xd5b58f, 0xa9875e, 0xc4a480],
     pitch: 0.05, storeyM: 3.0,
     grammar: { bayM: 2.6, storeyM: 3.0, winX0: 0.3, winX1: 0.7, winY0: 0.4, winY1: 0.76, doorShare: 0.35, openShare: 0.64, glassShade: 0.22, ivy: 0, stain: 0.06 },
+    storeys: [1, 1],
+    roofs: { flat: 0.8, gabled: 0.15, skillion: 0.05 },
   },
   'us-general': {
     key: 'us-general',
@@ -236,6 +283,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x4b4a46, 0x565650, 0x40403c, 0x6a5a52],
     pitch: 0.5, storeyM: 2.8,
     grammar: { bayM: 3.2, storeyM: 2.8, winX0: 0.22, winX1: 0.78, winY0: 0.3, winY1: 0.86, doorShare: 0.3, openShare: 0.8, ivy: 0.2 },
+    storeys: [1, 2],
+    roofs: { gabled: 0.6, hipped: 0.3, flat: 0.1 },
   },
   'andes-altiplano': {
     key: 'andes-altiplano',
@@ -246,6 +295,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     pitch: 0.25, storeyM: 2.6,
     grammar: { bayM: 2.4, storeyM: 2.6, winX0: 0.35, winX1: 0.65, winY0: 0.45, winY1: 0.75,
       doorX0: 0.36, doorX1: 0.64, doorY1: 0.7, doorShare: 0.45, openShare: 0.56, glassShade: 0.28, ivy: 0, stain: 0.1 },
+    storeys: [1, 1],
+    roofs: { gabled: 0.6, flat: 0.3, skillion: 0.1 },
   },
   amazon: {
     key: 'amazon',
@@ -255,6 +306,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x8a3f2e, 0x6d7278, 0x9a5a40],
     pitch: 0.3, storeyM: 3.0,
     grammar: { bayM: 2.8, storeyM: 3.0, winX0: 0.28, winX1: 0.72, winY0: 0.34, winY1: 0.82, doorShare: 0.36, openShare: 0.7, ivy: 0.4, stain: 0.3 },
+    storeys: [1, 2],
+    roofs: { gabled: 0.5, hipped: 0.3, flat: 0.2 },
   },
   'bengal-delta': {
     key: 'bengal-delta',
@@ -263,6 +316,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     wall: [0xa96b53, 0xc1856b, 0x8f5b45, 0xd7c1a9, 0xb8a58c, 0xe0d6c4],
     pitch: 0.08, storeyM: 3.0,
     grammar: { bayM: 2.8, storeyM: 3.0, winX0: 0.28, winX1: 0.72, winY0: 0.34, winY1: 0.8, doorShare: 0.36, openShare: 0.7, ivy: 0.3, stain: 0.34 },
+    storeys: [1, 3],
+    roofs: { flat: 0.7, gabled: 0.2, hipped: 0.1 },
   },
   australia: {
     key: 'australia',
@@ -272,6 +327,8 @@ export const TRADITIONS: Record<string, Tradition> = {
     roof: [0x4a4f54, 0x8c4a38, 0x6d7278, 0x3f4a3f],
     pitch: 0.3, storeyM: 2.8,
     grammar: { bayM: 3.2, storeyM: 2.8, winX0: 0.2, winX1: 0.8, winY0: 0.3, winY1: 0.85, doorShare: 0.3, openShare: 0.8, ivy: 0.2 },
+    storeys: [1, 1],
+    roofs: { hipped: 0.5, gabled: 0.4, skillion: 0.1 },
   },
 };
 
@@ -363,4 +420,18 @@ export function gramTable(): { data: Uint8Array<ArrayBuffer>; rows: number } {
     gramEncode({ ...FACADE_DEFAULTS, ...TRADITIONS[key].grammar }, data, i * GRAM_ROW_BYTES);
   });
   return { data, rows };
+}
+
+/** One roof form for a building of this tradition, from a draw u in [0,1):
+ *  the weights laid end to end. null where the entry names none. */
+export function roofFormFor(t: Tradition, u: number): RoofForm | null {
+  let total = 0;
+  for (const f of ROOF_FORMS) total += t.roofs[f] ?? 0;
+  if (total <= 0) return null;
+  let acc = 0;
+  for (const f of ROOF_FORMS) {
+    acc += (t.roofs[f] ?? 0) / total;
+    if (u < acc) return f;
+  }
+  return ROOF_FORMS[ROOF_FORMS.length - 1];
 }

@@ -2113,13 +2113,12 @@ Five traditions photographed on the same wall with no page errors
 (`facade-trad.mjs`): the Haussmann block's floor-to-ceiling windows, the
 Dutch terrace's tall sashes under its gables, the Altiplano's slits.
 
-**What the atlas does not yet reach, by design:** roof FORMS (Camps Bay is
-`cape` with pitch 0.20 and still gables 132 of its 351 intact buildings,
-because `building()`'s flat gate is `pitch < 0.2` and the district scatter
-straddles it — the roof phase reads a form table per tradition), storeys per
-tradition (the massing phase), party walls and runs (the morphology phase),
-and how each material ruins. The `Tradition` interface deliberately carries
-none of those fields yet: a field nothing consumes is a label.
+**What the atlas did not reach in phase 1, by design:** roof FORMS (Camps Bay
+was `cape` with pitch 0.20 and still gabled 132 of its 351 intact buildings,
+because `building()`'s flat gate was `pitch < 0.2` and the district scatter
+straddled it), storeys per tradition, party walls and runs, and how each
+material ruins. The first two arrived as phase 4 below; the `Tradition`
+interface carries a field only once something consumes it.
 
 **AND THE HARNESS RE-DRAWS A COLLIDING PORT.** Unless the caller pinned one,
 `openDrive` picks a port in 8800–8889; two harness processes side by side
@@ -2171,6 +2170,43 @@ Paris bays), rubble carries 0.
 - **`TRADITION_LIST` order is a wire format.** Row i is entry i of the table
   in insertion order; an entry MOVED re-dresses every building on the next
   deploy. Append.
+
+### Phase 4: the atlas states the storeys and the roof forms
+
+Two more fields on a `Tradition`, both read by `building()`, both authored
+for all twenty-three entries and held by `traditions.test.mjs`:
+
+- **`storeys: [lo, hi]`** — the untyped dwelling's range. `massHeight` runs
+  it on the stand norm (a terrace agrees with itself) and moves it half a
+  storey on the building's own draw: Haussmann five to seven whatever the
+  plan, the Cape one or two. Blocks keep their plan-and-density rule, and so
+  does a big untyped footprint in a dense place (over 300 m² with
+  `builtUpAt` past a half), because that is a block by another name — the
+  atlas describes the dwelling, not the flats. Halls, sheds and canopies
+  keep their typology.
+- **`roofs: {form: weight}`** — a weighted draw (`roofFormFor`, the weights
+  laid end to end) replaces the culture's `pitch < 0.2` gate. A flat draw is
+  the cap for ANY kind — a shed in a flat-roofed town is flat too — and a
+  pitched draw then meets the typologies: a lean-to is still what a shed
+  wears, a barn is still a long gable, a true block is still capped, a small
+  block takes the drawn form. The test draws ten thousand for the Cape and
+  holds each form to its stated share within 0.2%.
+
+**Measured**, the two fixtures, nodraw, no page errors, same code either side
+but the two fields (`scratchpad/mass-world.mjs`; `__built().roofs` and the
+3 m `hist`):
+
+| | Camps Bay before | after | Suresnes before | after |
+|---|---|---|---|---|
+| gabled / hipped / skillion / flat | 131 / 69 / 10 / 141 | **57 / 96 / 25 / 173** | 907 / 178 / 530 / 566 | 574 / **367** / 463 / 777 |
+| intact by height, 0–3 / 3–6 / 6–9 m | 12 / 118 / 124 | 12 / **173** / 138 | 557 / 1049 / 321 | 416 / 1083 / **564** |
+| 9–12 / 12–15 / 15–18 m | 46 / 37 / 12 | **6 / 13 / 7** | 114 / 105 / 23 | **42 / 42** / 22 |
+
+The Cape lost its four-storey suburban guesses (46 → 6 in the 9–12 m bucket)
+and gables in favour of flat and hipped; Suresnes gained its third storeys
+(321 → 564) and its hips, and the flat count rose by the 15% the entry states
+for a dwelling. Both are what the entries say, and neither was measurable
+before the survey and the probe existed.
 
 ## The labs
 

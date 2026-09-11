@@ -22,7 +22,7 @@ mkdirSync(cache, { recursive: true });
 const built = join(cache, 'drive-traditions.test.mjs');
 execFileSync('npx', ['esbuild', join(HERE, '../client/traditions.ts'), '--bundle', '--format=esm',
   `--outfile=${built}`], { cwd: ROOT, stdio: 'pipe' });
-const { TRADITIONS, TRADITION_REGIONS, TRADITION_LIST, traditionFor, traditionCulture, traditionIndex, gramTable, gramDecode, FACADE_DEFAULTS }
+const { TRADITIONS, TRADITION_REGIONS, TRADITION_LIST, ROOF_FORMS, traditionFor, traditionCulture, traditionIndex, gramTable, gramDecode, roofFormFor, FACADE_DEFAULTS }
   = await import(pathToFileURL(built).href);
 
 let bad = 0;
@@ -141,6 +141,24 @@ for (const [name, lat, lon, want] of PLACES) {
   }
   ok('every field survives the bytes to within half a step', worst.length === 0, worst.slice(0, 6));
   ok('row 0 decodes to the defaults', JSON.stringify(gramDecode(data, 0)) === JSON.stringify(FACADE_DEFAULTS), gramDecode(data, 0));
+}
+// ── STOREYS AND ROOFS: STATED, SANE, AND DRAWN AS STATED ──
+{
+  const entries = Object.values(TRADITIONS);
+  ok('every entry states a storey range within one to nine, low to high',
+    entries.every((t) => Array.isArray(t.storeys) && t.storeys[0] >= 1 && t.storeys[1] <= 9 && t.storeys[0] <= t.storeys[1]),
+    entries.filter((t) => !(t.storeys[0] >= 1 && t.storeys[1] <= 9 && t.storeys[0] <= t.storeys[1])).map((t) => t.key));
+  ok('every entry names roof forms the roof builder knows, with positive weight',
+    entries.every((t) => Object.keys(t.roofs).every((f) => ROOF_FORMS.includes(f)) && Object.values(t.roofs).some((w) => w > 0)),
+    entries.filter((t) => !Object.keys(t.roofs).every((f) => ROOF_FORMS.includes(f))).map((t) => t.key));
+  // The draw reproduces the weights: ten thousand draws for the Cape.
+  const cape = TRADITIONS.cape, n = 10000, seen = {};
+  for (let i = 0; i < n; i++) { const f = roofFormFor(cape, (i + 0.5) / n); seen[f] = (seen[f] ?? 0) + 1; }
+  const total = Object.values(cape.roofs).reduce((a, b) => a + b, 0);
+  const off = Object.entries(cape.roofs).map(([f, w]) => Math.abs((seen[f] ?? 0) / n - w / total)).reduce((a, b) => Math.max(a, b), 0);
+  ok('the draw lands on each form in its stated share (Cape, ten thousand draws)', off < 0.002, { seen, off });
+  ok('the first draw is the first form and the last draw the last', roofFormFor(cape, 0) === 'gabled' && roofFormFor(cape, 0.9999) === 'flat',
+    [roofFormFor(cape, 0), roofFormFor(cape, 0.9999)]);
 }
 console.log(bad ? `\n${bad} FAILED` : '\nall ok');
 process.exitCode = bad ? 1 : 0;

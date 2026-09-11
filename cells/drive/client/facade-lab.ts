@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BUILD_CULTURES, type BuildCulture } from './culture';
 import { FACADE_DEFAULTS, FACADE_GRAMMAR, facade, setFacadeGrammar, uFacNight, type FacadeGrammar } from './facade';
-import { TRADITIONS, traditionCulture, traditionIndex, type Tradition } from './traditions';
+import { TRADITIONS, roofFormFor, traditionCulture, traditionIndex, type Tradition } from './traditions';
 import { createDials, type DialValues } from './lab-dials';
 import { clamp } from './num';
 import { roofGeo } from './roof';
@@ -309,7 +309,10 @@ export async function startFacadeLab(): Promise<void> {
     // building()'s own rule off the culture's base pitch — snowLoad steepens
     // it in the world, and that is one of the numbers the dial exists to try.
     const ask = str(v, 'roof');
-    const roofShape = ask === 'culture' ? (culture.pitch < 0.2 ? 'flat' : 'gabled') : ask;
+    // 'culture': a tradition's commonest form (its table read at the median
+    // draw), else the six cultures' own rule — flat below a 0.2 pitch.
+    const roofShape = ask !== 'culture' ? ask
+      : tradition ? (roofFormFor(tradition, 0.5) ?? 'gabled') : (culture.pitch < 0.2 ? 'flat' : 'gabled');
     const w = num(v, 'width'), d = num(v, 'depth'), plinth = num(v, 'plinth');
     // The shader's base: the ground line (the game's rule now), or the sunk
     // bottom of the box (the rule the lab found and the toggle keeps for A/B).
