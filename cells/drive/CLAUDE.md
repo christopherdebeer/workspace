@@ -2275,6 +2275,16 @@ stubs. The fallen slabs carry a third of the wall's paint.
   more draws a tile for a texture that is sub-pixel past thirty metres. The
   material shows in the massing and the colour, which at 12 px/m is what
   can show.
+- **Photographed** (`scratchpad/ruin-shots.mjs`: the three ruins nearest the
+  origin, 18 m off, cab, the sun at 30°, control `6fe14dd` against the
+  working tree, in `/tmp/drive-tools/ruins/`): at Carmel the control's
+  warm-grey shell at chest height is a few low silvered stubs in the grass on
+  the fix — which is the profile, and also the finding: **a burnt timber
+  house reads as nothing from the seat once the sward is a metre tall.** The
+  thing a burnt frame leaves standing in life is its chimney; one bay kept at
+  the building's full height for the timber profile is the next cut, and it
+  is not made here. At Suresnes the render shell keeps its height and takes
+  the tradition's cream, a step warmer than the grey it was.
 
 ## The labs
 
