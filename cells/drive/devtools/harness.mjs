@@ -261,7 +261,13 @@ export async function openDrive(opts = {}) {
     // and for the same reason: read what is banked rather than re-earning it.
     // The client's mirror fallback still exists and is still what a bad deploy
     // degrades to; it just stops being the harness's PRIMARY source.
-    else if (p.startsWith('/~/osm/v3/') && opts.osm !== false) {
+    //
+    // MATCHED BY SHAPE, NOT BY VERSION. This read `/~/osm/v3/` while the
+    // client had moved to `~/osm/v4/` (water relations), so every fine tile
+    // 404'd here and every harness run silently drove the client's Overpass
+    // mirror fallback — the exact thing the paragraph above says it stopped
+    // being. The cell's own TILE_RE accepts v2..v4; match the same shape.
+    else if (/^\/~\/osm\/v\d+\//.test(p) && opts.osm !== false) {
       fetch(`https://c15r-drive.on.parc.land${p}`)
         .then(async (r) => {
           if (!r.ok) { res.writeHead(r.status); res.end('{}'); return; }

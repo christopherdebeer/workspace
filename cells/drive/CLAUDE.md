@@ -341,6 +341,20 @@ fixture world possible:
 | WorldCover class tile | `loadCoverTile(x, y)` | z12 |
 | OSM vector tile | `proxyTile(x, y)` / `readTileCache` | z16 |
 
+And exactly ONE of those three goes straight to a third party. The vectors and
+the cover come through the cell's `~/` routes, where CloudFront reads S3 first
+and the Lambda banks what it computed; the DEM has no route at all and every
+player's device asks tiles.mapterhorn.com itself. It is 37% of the game's data
+bytes in a dense city and 94–96% everywhere else — measured, with the numbers
+and the case for a `~/dem/v1/` route, in `API-AUDIT-2026-09-11.md`.
+
+`node devtools/api-audit.mjs [--spot=] [--drive=] [--nodraw] [--json=]` is the
+instrument: it boots the real bundle and reports every request by host, split
+into what goes through the cache and what does not. A host it has not been told
+about prints as UNCLASSIFIED, so a new upstream shows up as a line nobody
+wrote. It cannot speak to REACHABILITY — the relay bypasses CSP, see the
+harness notes above.
+
 Answer those three from an authored fixture and the **entire production
 pipeline** runs with no network: terrain build, corridor carve, ribbon, batter,
 kerb, junction, vegetation, sward, façades, water. That is `client/world-fixtures.ts`,
