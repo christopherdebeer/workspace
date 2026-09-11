@@ -1018,7 +1018,11 @@ const COVER_NAME: Record<number, string> = {
   10: 'FOREST', 20: 'SCRUB', 30: 'GRASS', 40: 'FARMLAND', 50: 'URBAN', 60: 'BARREN',
   70: 'ICE', 80: 'WATER', 90: 'WETLAND', 95: 'MANGROVE', 100: 'TUNDRA',
 };
-interface CoverTile { xs: number; zs: number; w: number; h: number; data: Uint8Array }
+interface CoverTile { xs: number; zs: number; w: number; h: number; data: Uint8Array;
+  /** The wide map's tiles carry the level they were fetched at, because that
+   *  map now holds SEVERAL at once and the sampler has to prefer the finest.
+   *  The fine map holds one level by construction and leaves this unset. */
+  z?: number }
 const coverTiles = new Map<string, CoverTile>();
 const coverAsked = new Set<string>();
 /**
@@ -1038,7 +1042,7 @@ async function coverRaster(z: number, x: number, y: number): Promise<Uint8Array>
     return fixtureRaster(new Uint8Array(256 * 256), x, y, z,
       (e, s) => FIXTURE.cover(e, s, FIXTURE_TUNE));
   }
-  const url = `${CELL_BASE}/~/cover/v1/${z}/${x}/${y}`;
+  const url = `${CELL_BASE}/~/cover/${coverRoute(z)}/${z}/${x}/${y}`;
   let blob = await readRaster(url);
   const fromDisk = !!blob;
   if (!blob) {
@@ -1240,7 +1244,30 @@ function sampleCoverRaw(ex: number, ez: number): number | undefined {
 // cover ring reaches 1,565 — two thirds of the shell blind at the ceiling
 // without it. A z4 cover tile is 2,504km on a side at 9.8km a pixel, which
 // at that zoom is a pixel and a half of chart.
-const COVER_WIDE_LEVELS = [10, 8, 6, 4];
+/**
+ * WHICH ROUTE ANSWERS A COVER TILE, and it is a resolution argument rather
+ * than a cost one.
+ *
+ * `~/cover/v1/` range-reads the 3-degree WorldCover COGs, which is the real
+ * ground at 38m and is cheap while a tile lands on one or two files. By z4 a
+ * tile lands on 64 of them (devtools/cover-reach.mjs) — and what those 64
+ * expensive reads produce at that zoom is a 9,784m texel, which is EXACTLY
+ * what the baked global raster already holds. So the swap costs nothing in
+ * quality and saves the whole read; below z4 the COGs cannot reach at all
+ * (210 files at z3, 690 at z2) and the bake is the only answer there is.
+ *
+ * z5 stays on v1: its texel is 4,892m, genuinely finer than the bake, and 20
+ * files is still inside what the route was built for.
+ */
+const COVER_BAKE_Z = 4;
+const coverRoute = (z: number): string => (z <= COVER_BAKE_Z ? 'w1' : 'v1');
+// …AND THE RUNGS THE BAKE ADDS. z3 (5,009km a tile) and z2 (10,019km — sixteen
+// of them are the whole planet) exist because the shell's ladder now reaches
+// there, and a shell tile with no cover under it is painted from `coverMode`'s
+// guess. Measured before this: a z6 wide-cover ring reaches 1,565km against a
+// z5 shell ring's 2,710km, so two thirds of the widest view was already blind
+// at the OLD ceiling — and the ladder has since been extended past it.
+const COVER_WIDE_LEVELS = [10, 8, 6, 4, 3, 2];
 const COVER_WIDE_RING = 2;            // 5x5 tiles at whichever level is current
 let coverWideZ = 0;                   // 0 until the view is wide enough to want one
 const coverWide = new Map<string, CoverTile>();
@@ -1251,15 +1278,52 @@ function coverWideLevelFor(radius: number): number {
   for (const z of COVER_WIDE_LEVELS) if (radius <= tileMetres(z) * (COVER_WIDE_RING + 0.5)) return z;
   return COVER_WIDE_LEVELS[COVER_WIDE_LEVELS.length - 1];
 }
+/**
+ * ── THE LEVELS ARE KEPT NOW, AND THAT IS THE WHOLE POINT ──
+ *
+ * This used to `coverWide.clear()` on every band change, on the argument that
+ * "there is nothing on screen to hold". That argument is about MESHES and this
+ * map holds DATA — and the data it was throwing away was the best data it had.
+ * The rungs step 10 → 8 → 6 → 4, so one band change replaced a 2,446m texel
+ * with a 9,784m one and DELETED the finer raster, over ground it still
+ * completely covered. Every shell tile that rebaked afterwards was painted
+ * from a quarter of the resolution that was in memory a frame earlier. That is
+ * the smear you see two zoom steps out from anywhere.
+ *
+ * So nothing is dropped for being the wrong level. What is dropped is what the
+ * view has left behind, which is the honest reason to drop a raster, and the
+ * budget below is what stops a browse across a continent from keeping every
+ * tile it ever touched (the failure `evictFarOutside` was written for).
+ */
+const COVER_WIDE_KEEP = 96;          // ~6MB of class bytes across every level
 function setCoverWideLevel(z: number): void {
   if (z === coverWideZ) return;
   coverWideZ = z;
-  // Dropped rather than retired: unlike the terrain and vector shells there is
-  // nothing on screen to hold — this map is only ever read while a shell tile
-  // bakes, and a tile that bakes before the new level lands falls back to
-  // `coverMode` exactly as it did before any of this existed.
-  coverWide.clear();
-  coverWideAsked.clear();
+  coverWideSorted = null;
+}
+/**
+ * Drop the rasters furthest from where the view is now, whatever level they
+ * are. Distance is to the tile's own centre in local metres, which is the
+ * frame the bounds are already in.
+ */
+function evictCoverWide(cx: number, cz: number): void {
+  if (coverWide.size <= COVER_WIDE_KEEP) return;
+  const far = [...coverWide.entries()]
+    .map(([k, t]) => [k, Math.hypot(t.xs + t.w / 2 - cx, t.zs + t.h / 2 - cz)] as const)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, coverWide.size - COVER_WIDE_KEEP);
+  for (const [k] of far) { coverWide.delete(k); coverWideAsked.delete(k); }
+  coverWideSorted = null;
+}
+/** The wide rasters finest-FIRST, so the sampler can stop at its first hit.
+ *  Rebuilt on a change rather than per sample: a shell tile asks this once per
+ *  vertex and a 128-segment tile has sixteen thousand of them. */
+let coverWideSorted: CoverTile[] | null = null;
+function coverWideList(): CoverTile[] {
+  if (!coverWideSorted) {
+    coverWideSorted = [...coverWide.values()].sort((a, b) => (b.z ?? 0) - (a.z ?? 0));
+  }
+  return coverWideSorted;
 }
 async function loadCoverWideTile(x: number, y: number, z: number): Promise<void> {
   const key = `${z}/${x}/${y}`;
@@ -1267,13 +1331,17 @@ async function loadCoverWideTile(x: number, y: number, z: number): Promise<void>
   coverWideAsked.add(key);
   try {
     const data = await coverRaster(z, x, y);
-    if (z !== coverWideZ) { coverWideAsked.delete(key); return; }   // the level moved under us
+    // THE LEVEL MOVING UNDER US IS NO LONGER A REASON TO THROW THE TILE AWAY.
+    // It used to be, because the map held one level; it holds all of them now
+    // and a raster that arrived a band late is still the best answer for the
+    // ground it covers. Only the REBUILD below is gated on the live level.
     const b = tileBounds(x, y, z);
     const [wx0, wz0] = toLocal(b.latN, b.lonW);
     const [wx1, wz1] = toLocal(b.latS, b.lonE);
     const xs = Math.min(wx0, wx1), zs = Math.min(wz0, wz1);
     const w = Math.abs(wx1 - wx0), h = Math.abs(wz1 - wz0);
-    coverWide.set(key, { xs, zs, w, h, data });
+    coverWide.set(key, { xs, zs, w, h, data, z });
+    coverWideSorted = null;
     /**
      * ONE REBUILD WHEN THE RING IS HOME, NOT ONE PER TILE.
      *
@@ -1293,7 +1361,17 @@ async function loadCoverWideTile(x: number, y: number, z: number): Promise<void>
      * has new cover available — and because one pass over the shell is the
      * whole cost either way.
      */
-    if (coverWide.size >= coverWideAsked.size) coverDirtiedFar(true, xs, zs, w, h);
+    // …AND THE RING'S OWN LEVEL IS COUNTED, NOT THE WHOLE MAP. This compared
+    // two sizes that used to be the same set; with levels retained they are
+    // not, and `coverWide.size >= coverWideAsked.size` would fire on the first
+    // arrival of every new band (the map already holds the last band's
+    // twenty-five) and then never again. Count this level alone.
+    if (z !== coverWideZ) return;
+    let have = 0, want = 0;
+    const pre = `${z}/`;
+    for (const k of coverWide.keys()) if (k.startsWith(pre)) have++;
+    for (const k of coverWideAsked) if (k.startsWith(pre)) want++;
+    if (have >= want) coverDirtiedFar(true, xs, zs, w, h);
   } catch {
     setTimeout(() => coverWideAsked.delete(key), 20000);
   }
@@ -1308,12 +1386,19 @@ async function loadCoverWideTile(x: number, y: number, z: number): Promise<void>
 function sampleCoverShell(ex: number, ez: number): number | null {
   const near = sampleCover(ex, ez);
   if (near !== null) return near;
-  for (const t of coverWide.values()) {
+  // FINEST FIRST, and take the first tile that actually has a class there.
+  // This used to take the first tile in map order that merely CONTAINED the
+  // point, which was correct only while the map held one level. It holds
+  // several now, and "contains the point" is not the same question as "is the
+  // best thing that contains the point" — nor as "has an answer there": a
+  // coarse tile's ocean texel is 0, and returning that would hide a finer
+  // tile's coastline underneath it.
+  for (const t of coverWideList()) {
     if (ex < t.xs || ez < t.zs || ex >= t.xs + t.w || ez >= t.zs + t.h) continue;
     const px = Math.min(255, Math.max(0, Math.floor(((ex - t.xs) / t.w) * 256)));
     const pz = Math.min(255, Math.max(0, Math.floor(((ez - t.zs) / t.h) * 256)));
     const v = t.data[pz * 256 + px];
-    return v === 0 ? null : v;
+    if (v !== 0) return v;
   }
   return null;
 }
@@ -24353,6 +24438,36 @@ function viewRadius(): number {
   // the way to it.
   return Math.min(SIGHT_MAX, dist * halfV * Math.max(1, 1 / Math.cos(((90 - chartTilt()) * Math.PI) / 180)) * 1.35);
 }
+/**
+ * THE SAME REACH, WITHOUT THE CEILING — for the BACKDROP alone.
+ *
+ * `viewRadius` stops at SIGHT_MAX because that is where the tangent plane
+ * stops being honest: `toLocal` is equirectangular scaled by cos(origin.lat),
+ * and past 1,500km the fine world would be placing things somewhere they are
+ * not. Every consumer of `viewRadius` is a layer that lives in that plane, and
+ * the cap is right for all of them.
+ *
+ * The shell is not one of them. Its tiles are built ON THE SPHERE in the
+ * planet's own frame (see planetGroup and sphereRTC), so the projection that
+ * gives out at 1,500km is not the projection it uses — and capping its reach
+ * there had one visible consequence: `farLevelFor` could never be asked for a
+ * radius past z6's ring, so at the equator, where cos(lat) is 1 and a z6 ring
+ * reaches 1,565km, THE LADDER'S LAST RUNG WAS UNREACHABLE AND THE SHELL NEVER
+ * LEFT z6. Measured at Tshuapa: a 375x zoom-out, from 8,000 to 3,000,000, and
+ * the level did not move once. The planet is 12,742km across; the shell was
+ * covering 12% of its face and the baked sphere was doing the rest.
+ *
+ * Bounded by half the planet's circumference, which is the furthest any view
+ * can see in a straight line and the point past which a wider ring is asking
+ * for tiles on the other side of the world.
+ */
+function backdropRadius(): number {
+  if (camMode !== 'top') return viewRadius();
+  const dist = chartDist();
+  const halfV = Math.tan(((camera.fov / 2) * Math.PI) / 180);
+  return Math.min(EARTH_R * Math.PI,
+    dist * halfV * Math.max(1, 1 / Math.cos(((90 - chartTilt()) * Math.PI) / 180)) * 1.35);
+}
 // Two budgets, and they are budgets rather than radii because the cost of the
 // two layers is nothing alike. A terrain tile is a PNG and a mesh; an OSM tile
 // is a vector query whose geometry cost is unbounded in a city. So terrain
@@ -24709,6 +24824,8 @@ function streamWorld(ex: number, ez: number): void {
   // below stay on the chart's own budget, since they are a map layer and only
   // the chart draws them.
   const sight = Math.max(r, SIGHT_M);
+  // The SHELL's sight line, which is not the plane's — see backdropRadius.
+  const shellSight = Math.max(backdropRadius(), SIGHT_M);
   if (sight > tileMetres(TERRAIN_Z) * 1.5) {
     // THE CHART STREAMS WHERE YOU LOOK. The fine rings above serve the TRUCK —
     // that is gameplay. The far shell and the overview vectors serve the VIEW,
@@ -24724,19 +24841,39 @@ function streamWorld(ex: number, ez: number): void {
     // landscape made entirely of the last pixel of the evidence. The finest
     // level, over the box only: enough to close the seam at the edge of the
     // fine ring, and nothing beyond it.
-    setFarLevel(FIXTURE ? FAR_LEVELS[0] : farLevelFor(sight));
+    setFarLevel(FIXTURE ? FAR_LEVELS[0] : farLevelFor(shellSight));
     const [fx, fy] = tileAt(cLat, cLon, farZ);
-    const fRing = clamp(Math.ceil(sight / tileMetres(farZ)), 1, FAR_RING_MAX);
+    const fRing = clamp(Math.ceil(shellSight / tileMetres(farZ)), 1, FAR_RING_MAX);
     // Rings outward here too: the shell's four-at-a-time gate is a FIFO, and
     // raster order put the far corner of the sky ahead of the horizon.
     if (FIXTURE) for (const [x, y] of fixtureTiles(farZ)) void loadFarTile(x, y);
     else {
       farRingAt = { z: farZ, x: fx, y: fy, r: fRing, n: 1 << farZ };
       evictFarOutside();
+      // ── WRAPPED IN X, CLIPPED IN Y ──
+      //
+      // The ring used to hand `loadFarTile` raw indices, which was harmless
+      // while a 5x5 ring at z9 could only fall off the edge of the world
+      // within a few hundred kilometres of the dateline. It is not harmless at
+      // the rungs this ladder now has: a z3 ring is 12,500km across, so at any
+      // longitude past about 70 degrees from the prime meridian it asks for
+      // negative x — which does not match the route's own `(\d{1,7})` and 404s,
+      // and arrives as a silently missing quarter of the backdrop.
+      //
+      // x WRAPS because the world is a cylinder in longitude and tile n-1 is
+      // the neighbour of tile 0. y does NOT: there is no tile above the
+      // mercator cut at 85 degrees, and asking for one is asking for ground
+      // that does not exist. That is the seam the baked sphere still covers,
+      // and the one job it keeps.
+      const fn = 1 << farZ;
       for (let d = 0; d <= fRing; d++)
         for (let dx = -d; dx <= d; dx++)
-          for (let dy = -d; dy <= d; dy++)
-            if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadFarTile(fx + dx, fy + dy);
+          for (let dy = -d; dy <= d; dy++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== d) continue;
+            const ty = fy + dy;
+            if (ty < 0 || ty >= fn) continue;
+            void loadFarTile((((fx + dx) % fn) + fn) % fn, ty);
+          }
     }
     // …and the cover to PAINT it, once the shell has grown past the fine
     // raster's own 7x7 ring. Below that the fine tiles already cover every
@@ -24755,8 +24892,22 @@ function streamWorld(ex: number, ez: number): void {
       setCoverWideLevel(coverWideLevelFor(shellR));
       const [wx, wy] = tileAt(cLat, cLon, coverWideZ);
       const wRing = clamp(Math.ceil(shellR / tileMetres(coverWideZ)), 1, COVER_WIDE_RING);
+      // Wrapped and clipped for the same reason the shell's ring is, and it
+      // bites sooner here: a z2 cover tile is 10,019km, so a ring of them runs
+      // off both ends of the world from almost anywhere.
+      const wn = 1 << coverWideZ;
       for (let dx = -wRing; dx <= wRing; dx++)
-        for (let dy = -wRing; dy <= wRing; dy++) void loadCoverWideTile(wx + dx, wy + dy, coverWideZ);
+        for (let dy = -wRing; dy <= wRing; dy++) {
+          const ty = wy + dy;
+          if (ty < 0 || ty >= wn) continue;
+          void loadCoverWideTile((((wx + dx) % wn) + wn) % wn, ty, coverWideZ);
+        }
+      // …and let go of what the view has left behind. Every level at once, by
+      // distance from where we are looking — see evictCoverWide.
+      {
+        const [ecx, ecz] = toLocal(cLat, cLon);
+        evictCoverWide(ecx, ecz);
+      }
     }
     // …and the vectors to draw on it. Same trigger, same banding discipline:
     // the chart only pays for the coarse road source once it can see past the
@@ -24892,7 +25043,20 @@ function streamWorld(ex: number, ez: number): void {
 // asks for 1,500; z5's reaches 2,710. Same 25 tiles at the same 128 segments,
 // and a z5 raster is 4.2km a pixel — the terrain is a relief map by then, and
 // that is the honest degradation, not a new kind of failure.
-const FAR_LEVELS = [13, 11, 9, 7, 6, 5];
+// …AND THE RUNGS BELOW IT, WHICH THE DATA HAS HAD ALL ALONG.
+// z4 (2,505km a tile) and z3 (5,009km) carry the ladder from z5's 2,710km
+// reach out to the whole visible hemisphere. Nothing new is fetched to do it:
+// `~/dem/v1/` serves every level to z0, and it was measured tile by tile —
+// z0, z1 and z2 are complete, z3 is 61 of 64 with the three missing being open
+// ocean. What the coarse rungs cost is triangles, and `farSeg`'s pixel rule
+// (above) is what stops them costing a near level's worth.
+// The cover under them is a different story and a real limit: `~/cover/v1/`
+// range-reads 3-degree COGs and a coarse tile lands on many of them (20 at z5,
+// 64 at z4, 690 at z2 — devtools/cover-reach.mjs), so COVER_WIDE_LEVELS ends
+// at z4 and these rungs are painted from a 9.8km texel until the baked global
+// raster lands. Coarser colour on real relief, which is the trade the shell
+// has always made one rung at a time.
+const FAR_LEVELS = [13, 11, 9, 7, 6, 5, 4, 3];
 let farZ = FAR_LEVELS[0];
 const FAR_RING_MAX = 2;       // 5×5 coarse tiles at whichever level is current
 // METRES PER VERTEX, not segments, is what decides whether a massif has a
@@ -24917,7 +25081,57 @@ const FAR_RING_MAX = 2;       // 5×5 coarse tiles at whichever level is current
  * current — FEWER than the old fixed 128 spent at z9, for twice the fidelity,
  * because the level below covers the same sky with smaller tiles.
  */
-const farSeg = (z: number): number => clamp(Math.round(tileMetres(z) / 250 / 8) * 8, 32, 128);
+const FAR_M_PER_VERT = 250;
+/**
+ * …AND SO IS METRES PER SCREEN PIXEL, WHICH IS THE DIAL THE COARSE END NEEDS.
+ *
+ * Ground metres per vertex is the right rule while a tile is BIGGER than the
+ * frame — it is a statement about the DEM, and the DEM does not care how far
+ * away you are. It stops being the right rule the moment the tile is smaller
+ * than the frame, which is the whole of the wide ladder: at planet zoom the
+ * ground rule hands a ten-thousand-kilometre tile the clamp's full 128² for
+ * something a couple of hundred art pixels across, and every one of those
+ * vertices is spent below the resolution anything can show.
+ *
+ * So take whichever is COARSER. Near levels are untouched (the ground rule
+ * already clamps them), and the coarse levels this ladder is being extended
+ * into stop costing what a near level costs.
+ *
+ * THE PIXEL RULE IS EVALUATED AT THE BAND'S FLOOR, NOT AT THE LIVE ZOOM, and
+ * that is not a detail. A tile is built once and stands until its level
+ * changes, so a tile built while the planet filled the frame is still standing
+ * when the view comes back in to the bottom of its own band — and nothing
+ * rebuilds it on the way. Sizing it for the live zoom would therefore bake a
+ * planet-zoom lattice into a tile that is about to be looked at from a tenth
+ * of the distance. The band's floor is the closest this level is ever chosen
+ * for, so the tile is never coarser than the view that keeps it.
+ */
+const FAR_PX_PER_VERT = 1.5;
+/** The smallest view radius this level is chosen for: where the level one rung
+ *  FINER stops reaching. Zero for the finest rung, which has no floor and
+ *  keeps the ground rule alone. */
+function farBandFloor(z: number): number {
+  const i = FAR_LEVELS.indexOf(z);
+  return i <= 0 ? 0 : tileMetres(FAR_LEVELS[i - 1]) * (FAR_RING_MAX + 0.5);
+}
+/** Metres of radial lift for a level, finest highest, the whole span kept
+ *  comfortably inside FAR_DROP so no rung reaches the fine world. */
+const FAR_LIFT_SPAN = 8;
+function farLift(z: number): number {
+  const lo = FAR_LEVELS[FAR_LEVELS.length - 1], hi = FAR_LEVELS[0];
+  return hi === lo ? 0 : ((z - lo) / (hi - lo)) * FAR_LIFT_SPAN;
+}
+const farSeg = (z: number): number => {
+  const ground = tileMetres(z) / FAR_M_PER_VERT;
+  const floor = farBandFloor(z);
+  // `viewRadius` is the frustum's ground reach and `chartMpp` its metres per
+  // art pixel; both are the same two multiplies off `chartDist`, so the ratio
+  // between them is a constant of the frame and the band floor converts
+  // straight into a metres-per-pixel without needing a camera.
+  const mpp = floor > 0 ? (2 * floor) / (1.35 * Math.max(2, pixSize.y)) : 0;
+  const screen = mpp > 0 ? tileMetres(z) / (mpp * FAR_PX_PER_VERT) : Infinity;
+  return clamp(Math.round(Math.min(ground, screen) / 8) * 8, 32, 128);
+};
 /** The coarsest level whose 5x5 ring still reaches `radius`. */
 function farLevelFor(radius: number): number {
   for (const z of FAR_LEVELS) if (radius <= tileMetres(z) * (FAR_RING_MAX + 0.5)) return z;
@@ -24944,13 +25158,34 @@ function setFarLevel(z: number): void {
   // tile the moment the new level has covered it, or at FAR_RETIRED_MS.
   const was = farZ;
   farZ = z;
-  dropRetiredFar();
-  // Sunk RADIALLY: the mesh's position is its centre point on the sphere, so
-  // scaling it toward the planet's centre is the 18m the flat drop used to be.
+  // ── A FINER RING IS KEPT; A COARSER ONE IS ONLY A STAND-IN ──
+  //
+  // This called `dropRetiredFar()` unconditionally, on the rule "ONE RETIRED
+  // RING, NOT A STACK" — which was the right rule when a retired ring was
+  // nothing but a curtain held over a gap for twenty seconds. It is the wrong
+  // rule for a pyramid. Zooming OUT, everything already standing is finer than
+  // what is coming, and throwing it away is throwing away the best ground on
+  // screen to replace it with a coarser copy of the same place. Zooming IN,
+  // the reverse: what is standing is coarser than what is coming and is worth
+  // nothing once covered, which is what `cullRetiredFar` already decides.
+  //
+  // So: keep what is finer than the new level, drop what is not, and let the
+  // budget in `cullRetiredFar` be the thing that stops a browse across a
+  // continent from keeping every tile it ever touched. That failure is on the
+  // record — `far 45/45` after one spin, a phone at `FAR Z5 83/87` and 3fps —
+  // and it is a budget's job, not a timer's.
+  farRetired = farRetired.filter((m) => {
+    const r = m.userData.retired as { z: number } | undefined;
+    if (r && r.z > z) return true;
+    farGroup.remove(m); m.geometry.dispose();
+    return false;
+  });
+  // No sink here any more: the level's own radial lift (see farBuild) already
+  // orders these against whatever is coming, in both directions.
   for (const [k, m] of farMeshes) {
     const [, x, y] = k.split('/').map(Number);
     m.userData.retired = { z: was, x, y, at: performance.now() };
-    m.position.multiplyScalar(1 - 18 / GLOBE_R); farRetired.push(m);
+    farRetired.push(m);
   }
   farMeshes.clear();
   farTiles.clear();
@@ -24972,6 +25207,20 @@ const FAR_RETIRED_MS = 20000;
  *  landed (a retired tile with no descendant asked lies outside the new ring
  *  and waits for the cap — it costs one draw, not a frame). Then the cap, for
  *  the tile whose cover is a fetch that never returns. */
+/**
+ * How many meshes the shell may hold in total, current level and retained
+ * levels together. The ring is 25, so this is the current level plus roughly
+ * two retained ones — and it is a CAP rather than a target: nothing is dropped
+ * to reach it, only to stay under it.
+ *
+ * The number that matters here is the one on the record from a phone:
+ * `FAR Z5 83/87` at three frames a second, three retired rings of 128-segment
+ * lattice drawn under the one that mattered. That was the failure of having no
+ * rule at all; a timer was the first answer to it and a budget is the right
+ * one, because a tile's cost is its triangles and its worth is whether you can
+ * see it — neither of which is a function of how long it has been there.
+ */
+const FAR_MESH_BUDGET = 80;
 function cullRetiredFar(): void {
   const now = performance.now();
   farRetired = farRetired.filter((m) => {
@@ -24990,10 +25239,44 @@ function cullRetiredFar(): void {
         if (!asked) covered = false;
       }
     }
+    // ── A FINER TILE IS NOT ON A CLOCK ──
+    //
+    // `covered` means something different in the two directions and always
+    // did. Zooming IN (farZ > r.z) the retired tile is COARSER, its
+    // descendants have landed, and it is genuinely redundant — drop it, and
+    // drop it on the timer too if the cover never comes, because a coarse tile
+    // hanging under a finer one is pure cost. Zooming OUT (farZ < r.z) the
+    // retired tile is FINER, and "covered" only means a coarser copy of the
+    // same ground has arrived. That is not a reason to delete the better one.
+    // The budget below is.
+    const finer = !!r && r.z > farZ;
+    if (finer) return true;
     if (!covered && (!r || now - r.at < FAR_RETIRED_MS)) return true;
     farGroup.remove(m); m.geometry.dispose();
     return false;
   });
+  // ── AND THEN THE BUDGET, COARSEST AND FURTHEST FIRST ──
+  //
+  // Only retained tiles are candidates: the current level's ring is what the
+  // view asked for and `evictFarOutside` is what trims that. Among the
+  // retained, the coarsest go first (they are the closest to what the current
+  // level already draws) and within a level the furthest from the planet frame
+  // origin, which is where the view is looking.
+  const over = farMeshes.size + farRetired.length - FAR_MESH_BUDGET;
+  if (over > 0) {
+    const ranked = farRetired
+      .map((m) => {
+        const r = m.userData.retired as { z: number } | undefined;
+        return { m, z: r?.z ?? 0, d: m.position.lengthSq() };
+      })
+      .sort((a, b) => (a.z - b.z) || (b.d - a.d));
+    const kill = new Set(ranked.slice(0, over).map((e) => e.m));
+    farRetired = farRetired.filter((m) => {
+      if (!kill.has(m)) return true;
+      farGroup.remove(m); m.geometry.dispose();
+      return false;
+    });
+  }
 }
 // THE EARTH IS ROUND, and at this range that stops being pedantry. The drop
 // below a tangent plane is d²/2R: 8m at 10km, which nothing would notice, but
@@ -25600,6 +25883,25 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   profAdd('far:nrm', _pNrm);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.copy(centre);
+  // ── FINER SITS HIGHER, BY LEVEL, ALWAYS ──
+  //
+  // The depth order between two levels used to be a property of WHICH ONE WAS
+  // RETIRED: `setFarLevel` sank the outgoing ring 18m radially so the incoming
+  // one always won. That is exactly right for a ladder that shows one level at
+  // a time and exactly wrong for a pyramid, where the level that should win is
+  // the FINER one whichever arrived first — a retained z6 ring under a new z3
+  // ring is the good data, and sinking it would bury it.
+  //
+  // So the offset is a function of the level and nothing else, which makes the
+  // ordering total and order-of-arrival irrelevant.
+  //
+  // AND THE WHOLE STACK FITS INSIDE FAR_DROP, which is not a detail: the shell
+  // is deliberately seated FAR_DROP (12m) below the true ground so the fine
+  // terrain always wins where it exists. A fixed 1.5m a rung would have been
+  // 15m across this ladder's ten rungs and lifted the finest level THROUGH the
+  // fine world it is supposed to hide under. Derived from the ladder's own
+  // span instead, so adding a rung cannot quietly break it.
+  mesh.position.multiplyScalar(1 + farLift(z) / GLOBE_R);
   // The stale tile this re-bake replaces goes in the same breath the new one
   // arrives — see coverDirtiedFar. Its own material was disposed by farMatFor
   // above, or it wears the shared one.
@@ -25614,7 +25916,12 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   // Whatever this tile now covers of the retired ring goes; and the last
   // fetch of the batch home takes the rest.
   cullRetiredFar();
-  if (farInFlight === 0 && farQueue.length === 0) dropRetiredFar();
+  // NOT `dropRetiredFar()` ANY MORE. "The batch is home, take the curtain
+  // down" is right for a curtain and wrong for a pyramid: the retained rings
+  // are finer than the one that just landed, and the moment the new ring
+  // completed this deleted every one of them. `cullRetiredFar` has both rules
+  // now — redundant-and-coarser goes, finer stays until the budget — and it
+  // has just run.
 }
 /** Sunk far enough that the fine layer always wins where both exist, shallow
  *  enough that the lip around the fine ring does not draw its own shadow. The
@@ -28885,6 +29192,13 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // In substrate render mode these source meshes were deliberately hidden,
     // so the worldGroup sweep above never saw their geometries.
     for (const mesh of terrainMeshes.values()) mesh.geometry.dispose();
+    // THE WIDE COVER GOES WITH THEM. Its tiles carry `xs/zs/w/h` in LOCAL
+    // metres, computed with `toLocal` under the origin that was current when
+    // they landed — so a hop leaves every one of them pointing at ground on
+    // the other side of the world. It survived before only because the next
+    // band change cleared the map by accident; the map retains levels now, so
+    // the accident is gone and this has to be deliberate.
+    coverWide.clear(); coverWideAsked.clear(); coverWideSorted = null;
     heightTiles.clear(); terrainReady.clear(); terrainMeshes.clear(); terrainDirty.clear(); terrainRevision.clear();
     holeSince.clear(); shownOnce.clear();
     substrateTerrainCommits.clear();
@@ -41361,7 +41675,35 @@ function tick(now: number): void {
     // under a shell that did not spin is the one failure this design exists to
     // rule out. `globeFree` is 0 both where the ring covers and where there is
     // no planet at all, which is exactly the pair of cases the shell draws in.
-    const shellOn = (zoomCur > 6 || chartRemote()) && globeFree() === 0;
+    // ── THE SHELL IS NOT HIDDEN BY THE HAND-OVER ANY MORE ──
+    //
+    // This read `&& globeFree() === 0`, which switched `farGroup` AND
+    // `ovGroup` off the moment the frame grew past a z6 ring — twenty-five
+    // BUILT shell tiles and twenty-five built overview tiles, paid for and
+    // standing, turned off so a 39km-a-pixel painting could hold the frame.
+    // Measured at Bukama: `tiles 25/25 shown false`, and forcing them back on
+    // with `__farshow(true)` drew them correctly registered on the sphere.
+    //
+    // The reason given for the hide was a SPIN: "a spun globe under a shell
+    // that did not spin is the one failure this design exists to rule out."
+    // That reason is gone twice over. The shell became a child of
+    // `planetGroup` (8c9f736, which landed after the hide), so it carries
+    // whatever the planet's frame does; and there is no independent rotation
+    // to carry anyway — `globeSpinLat/Lon` feed `setChartFocus`, so a "spin"
+    // is a focus move, and `planetGroup`'s position and orientation are set
+    // from that one focus every frame. They cannot disagree; there is only one
+    // of them.
+    //
+    // What the hide was really buying was an EDGE: the ring is square and the
+    // planet is not, so past the point where the ring stops covering the frame
+    // you can see where the shell stops. That is a real cost and it is now a
+    // deliberate one — the ladder reaches far enough that the edge is usually
+    // off-frame, and blending it is its own piece of work.
+    //
+    // `globeFree` is untouched and still owns the GESTURE. Those two were
+    // deliberately tied together so they could not drift; they are untied here
+    // because the thing they were protecting against cannot happen.
+    const shellOn = zoomCur > 6 || chartRemote();
     farGroup.visible = shellOn;
     ovGroup.visible = shellOn;
     // …and where the coarse vectors are allowed to start showing. At driving

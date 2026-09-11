@@ -361,9 +361,65 @@ publishes every tile at z0 (one 512px tile, 239KB), z1 and z2. The old floor
 meant `FAR_LEVELS`' widest level, z5, ran an EMPTY climb loop and took every
 z5 shell tile from the corrupt legacy AWS mosaic without ever asking.
 
-`API-AUDIT-2026-09-11.md` has all of it, plus the measured answer to "could
-the globe be a few live tiles instead of the baked PNG" (no — the bake is a
-colour product of three inputs and is smaller than its own cheapest one).
+`API-AUDIT-2026-09-11.md` has all of it.
+
+## AND THE LADDER STOPS FIVE RUNGS ABOVE THE DATA
+
+Said in that same audit that the globe could not be live tiles. That was
+wrong, and `LADDER-BELOW-Z5-2026-09-11.md` is the measurement that says so.
+The short version, because it is the kind of thing that costs a session:
+
+- **From the equator the shell never leaves z6.** `farLevelFor` is fed a
+  radius capped at SIGHT_MAX (1,500km) and a z6 5x5 ring reaches 1,565km
+  there, so **z5, the last rung of FAR_LEVELS, is unreachable at that
+  latitude** and a 375x zoom-out moves nothing. The shell covers a 1,565km
+  disc of a 12,742km planet — 12% of the face — and the rest is the bake.
+  `devtools/ladder-audit.mjs` prints that table.
+- **`globe-base.png` is 39 km A PIXEL.** It is downsampled from a 4096²
+  mosaic, so the bake's INPUTS are not its output and comparing tiles against
+  the inputs (which is what the audit did) overstates the cost by 4x.
+  Mapterhorn z2 is 19.6 km/px: twice the bake's delivered resolution, 16 tiles.
+- **Geometry is not the constraint.** The whole planet at z2, at the geometric
+  budget `globeGeometry(160, 80)` already spends, is ~51k triangles and 16
+  draws — cheaper than the 25-draw, 200k-triangle ring drawn today. What is
+  wrong is that `farSeg` is metres-per-VERTEX, which is the right dial only
+  while a tile is bigger than the screen.
+- **Cover is the one real blocker, and it is 90KB.** `~/cover/v1/` range-reads
+  3-degree COGs and a coarse tile lands on many — z5 on 20, z4 on 64, z2 on
+  690 (`devtools/cover-reach.mjs`), which is why COVER_WIDE_LEVELS ends at 4.
+  There is no global overview in the ESA bucket. So bake it, exactly as
+  `ne-wide.ts` bakes the roads for exactly the same reason — measured at 0.044
+  bytes a texel, the whole planet at z2 resolution is ~90KB.
+
+The principle worth keeping out of all of it: **bake the INPUTS, not the
+output.** A baked picture freezes the palette, the weather and the biome rules
+into an image; a baked class raster is the cover layer arriving by a different
+road, and `climCompute` carries on.
+
+### …and it is all built now. Four things to know before touching it
+
+- **The shell's reach is not the plane's.** `viewRadius` caps at SIGHT_MAX
+  because the equirectangular tangent plane stops being honest there;
+  `backdropRadius` is the same expression WITHOUT the cap, and it exists
+  because the shell is built on the sphere and does not live in that plane.
+  Feeding the capped radius to `farLevelFor` is what pinned the ladder at z6.
+- **`shellOn` no longer hides the shell.** It used to carry
+  `&& globeFree() === 0`, which switched twenty-five BUILT tiles off past the
+  hand-over. `globeFree` still owns the GESTURE and is untouched; the two were
+  tied so they could not drift, and they are untied because the thing that
+  needed protecting — a spun globe under a static shell — cannot happen: a
+  "spin" is `setChartFocus`, and `planetGroup` is placed from that one focus.
+- **Finer sits higher, by level.** `farLift` is a radial offset derived from
+  FAR_LEVELS' own span, so the ordering between levels is total and does not
+  depend on which was retired. It replaced a sink applied to the outgoing ring,
+  which is right for a curtain and backwards for a pyramid. The span is derived
+  rather than fixed BECAUSE a fixed 1.5m a rung was 15m over ten rungs and
+  would have lifted z13 through the fine world it hides under (FAR_DROP is 12).
+- **The coarse rings wrap in x and clip in y.** `loadFarTile` takes raw
+  indices; harmless at z9, not at z3, where a 12,500km ring asks for negative x
+  past ~70 degrees from the prime meridian and 404s a silent quarter of the
+  backdrop. There is no tile above the mercator cut at 85 degrees — that seam
+  is the baked sphere's one remaining job, along with the first frame.
 
 `node devtools/api-audit.mjs [--spot=] [--drive=] [--nodraw] [--json=]` is the
 instrument: it boots the real bundle and reports every request by host, split

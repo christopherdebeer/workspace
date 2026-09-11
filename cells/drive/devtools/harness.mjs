@@ -27,7 +27,7 @@
  * `simWait`, never on a timeout.
  */
 import { execSync, execFile } from 'node:child_process';
-import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -175,7 +175,17 @@ export async function openDrive(opts = {}) {
   const cellRoute = async (p) => {
     if (cellHandler === undefined) {
       try {
-        const out = join(WORK, 'cell-index.mjs');
+        // IN A DIRECTORY WITH `static/` BESIDE IT. The handler reads baked
+        // assets off disk relative to its own __dirname — ne-wide.b64 for the
+        // overview, cover-wide.b64 for the coarse cover — exactly as it does
+        // from /var/task on the deploy. Bundled loose into WORK it finds
+        // neither, and the routes that need them answer 503 with nothing to
+        // say why: measured, every ~/cover/w1 tile in the harness.
+        const dir = join(WORK, 'cell');
+        mkdirSync(dir, { recursive: true });
+        try { rmSync(join(dir, 'static'), { force: true }); } catch { /* first run */ }
+        symlinkSync(join(CELL, 'static'), join(dir, 'static'), 'dir');
+        const out = join(dir, 'index.mjs');
         execSync(`npx esbuild ${join(CELL, 'index.ts')} --bundle --platform=node --format=esm`
           + ` --packages=external --outfile=${out}`, { stdio: 'pipe', cwd: ROOT });
         cellHandler = (await import(`${out}?t=${Date.now()}`)).handler;
@@ -183,12 +193,21 @@ export async function openDrive(opts = {}) {
     }
     if (!cellHandler) return null;
     const key = join(cellCache, createHash('sha1').update(p).digest('hex'));
-    if (existsSync(key)) return { body: readFileSync(key), type: 'image/png' };
+    // THE TYPE IS CACHED BESIDE THE BODY. This returned a hardcoded
+    // 'image/png' on a cache hit, which was true while ~/cover was the only
+    // route through here and silently wrong the moment a second one arrived:
+    // ~/dem/v1 answers image/webp for a tile and text/plain for an absence,
+    // and the client tells those two apart BY THE CONTENT TYPE.
+    if (existsSync(key)) {
+      const type = existsSync(`${key}.type`) ? readFileSync(`${key}.type`, 'utf8') : 'image/png';
+      return { body: readFileSync(key), type };
+    }
     const r = await cellHandler({ rawPath: p, requestContext: { http: { method: 'GET' } } });
     if (r.statusCode !== 200) return null;
     const body = r.isBase64Encoded ? Buffer.from(r.body, 'base64') : Buffer.from(String(r.body));
-    try { writeFileSync(key, body); } catch { /* best effort */ }
-    return { body, type: r.headers?.['content-type'] ?? 'application/octet-stream' };
+    const type = r.headers?.['content-type'] ?? 'application/octet-stream';
+    try { writeFileSync(key, body); writeFileSync(`${key}.type`, type); } catch { /* best effort */ }
+    return { body, type };
   };
   const server = http.createServer((req, res) => {
     const p = req.url.split('?')[0];
@@ -276,7 +295,13 @@ export async function openDrive(opts = {}) {
     // and for the same reason: read what is banked rather than re-earning it.
     // The client's mirror fallback still exists and is still what a bad deploy
     // degrades to; it just stops being the harness's PRIMARY source.
-    else if (p.startsWith('/~/osm/v3/') && opts.osm !== false) {
+    //
+    // MATCHED BY SHAPE, NOT BY VERSION. This read `/~/osm/v3/` while the
+    // client had moved to `~/osm/v4/` (water relations), so every fine tile
+    // 404'd here and every harness run silently drove the client's Overpass
+    // mirror fallback — the exact thing the paragraph above says it stopped
+    // being. The cell's own TILE_RE accepts v2..v4; match the same shape.
+    else if (/^\/~\/osm\/v\d+\//.test(p) && opts.osm !== false) {
       fetch(`https://c15r-drive.on.parc.land${p}`)
         .then(async (r) => {
           if (!r.ok) { res.writeHead(r.status); res.end('{}'); return; }
@@ -318,6 +343,31 @@ export async function openDrive(opts = {}) {
           res.end(Buffer.from(await r.arrayBuffer()));
         })
         .catch(() => { res.writeHead(503); res.end('{}'); });
+    }
+    // ── THE ELEVATION TILES, THROUGH THE CELL'S OWN HANDLER ──
+    //
+    // Through the handler rather than proxied to the deploy, unlike the
+    // vectors: `serveDem` is a proxy and a HEAD walk, not an Overpass budget,
+    // so running it locally costs one upstream request and exercises the route
+    // code the phone will run. Both of its answers matter here — a tile is
+    // image/webp and an absence is a text/plain sentinel naming where to climb
+    // — which is why cellRoute had to learn to remember a content type.
+    // The coarse cover, from the bake in static/ — through the handler for the
+    // same reason ~/cover/v1 is: it is compute over an asset in this repo, and
+    // running it locally proves the route rather than the deploy.
+    else if (p.startsWith('/~/cover/w1/')) {
+      cellRoute(p).then((out) => {
+        if (!out) { res.writeHead(404); res.end('{}'); return; }
+        res.writeHead(200, { 'content-type': out.type });
+        res.end(out.body);
+      }).catch(() => { res.writeHead(503); res.end('{}'); });
+    }
+    else if (p.startsWith('/~/dem/v1/') && opts.dem !== false) {
+      cellRoute(p).then((out) => {
+        if (!out) { res.writeHead(404); res.end('{}'); return; }
+        res.writeHead(200, { 'content-type': out.type });
+        res.end(out.body);
+      }).catch(() => { res.writeHead(503); res.end('{}'); });
     }
     else if (p.startsWith('/~/cover/v1/')) {
       cellRoute(p).then((out) => {

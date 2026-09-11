@@ -637,6 +637,116 @@ async function serveCover(path: string, m: RegExpMatchArray) {
   };
 }
 
+// ── the coarse cover: baked once, because the COGs cannot reach ────
+//
+// `~/cover/v1/` builds its tile by range-reading ESA WorldCover's 3-degree
+// COGs, and that is cheap only while a tile lands on one or two of them. It
+// does not stay cheap — measured by `devtools/cover-reach.mjs`, one tile
+// touches 6 source files at z6, 20 at z5, 64 at z4, 210 at z3 and 690 at z2.
+// So the wide end of the ladder has been painted from a 9.8km texel at best
+// and from nothing at all past that, and the whole planet has been a picture.
+//
+// There is no global overview to escape to: the bucket has the 3-degree COGs
+// and, under `macrotiles/`, multi-gigabyte ZIPS of the same 10m data. The ESA
+// web viewer is Terrascope's own pre-rendered WMTS, which is a third party
+// with no cache of ours — precisely what `ne-wide.ts` refused for the roads.
+//
+// So this route answers from a BAKE, exactly as the overview's coarse rungs
+// do, and for the sentence in that module's own header. What is baked is the
+// INPUT — a class-index raster — not a picture, so the client still runs
+// `climCompute` over it and the wide ground is coloured by the same rules as
+// the hillside under the wheels. `devtools/bake-cover-wide.mjs` builds it out
+// of every COG's own coarsest overview.
+const COVERW_RE = /^\/~\/cover\/w1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+const CW_SPAN = 3;                       // degrees per source cell
+const CW_PER = 34;                       // output texels per source cell
+const CW_W = (360 / CW_SPAN) * CW_PER;   // 4080
+const CW_H = (180 / CW_SPAN) * CW_PER;   // 2040
+/** The finest zoom this route answers. Past it `~/cover/v1/` is both cheaper
+ *  and far better: one source file, 38m texels, the real ground. */
+const COVERW_MAX_Z = 7;
+/** `undefined` not yet read, `null` read and unusable — so a missing or
+ *  corrupt bake costs one read rather than one per request. */
+let cwRaster: Uint8Array | null | undefined;
+function coverWideRaster(): Uint8Array | null {
+  if (cwRaster !== undefined) return cwRaster;
+  try {
+    // Base64 text for the same reason ne-wide.b64 is: `cell-sync push` sends a
+    // binary asset in ONE signed request and that request 403s somewhere past
+    // a megabyte, while text is chunked with appendToFile and decoded whole.
+    const raw = readFileSync(join(__dirname, 'static', 'cover-wide.b64'), 'utf8');
+    const buf = inflateSync(Buffer.from(raw, 'base64'));
+    cwRaster = buf.length === CW_W * CW_H ? new Uint8Array(buf) : null;
+  } catch { cwRaster = null; }
+  return cwRaster;
+}
+
+function serveCoverWide(path: string, m: RegExpMatchArray) {
+  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (z < 0 || z > COVERW_MAX_Z || x >= 2 ** z || y >= 2 ** z) {
+    return respond(400, 'application/json', JSON.stringify({ error: 'tile out of range' }));
+  }
+  const src = coverWideRaster();
+  if (!src) {
+    // No bake deployed. A 503 and no object: the client falls back to the
+    // finer route exactly as it did before this existed, and the day the bake
+    // lands nothing has a stored 404 to unlearn.
+    return respond(503, 'application/json', JSON.stringify({ error: 'no coarse cover baked' }), {
+      'retry-after': '3600', 'cache-control': 'no-store',
+    });
+  }
+  const n = 2 ** z;
+  const out = new Uint8Array(COVER_PX * COVER_PX);
+  const lonOf = (px: number): number => ((x + px / COVER_PX) / n) * 360 - 180;
+  const latOf = (py: number): number => {
+    const t = Math.PI * (1 - (2 * (y + py / COVER_PX)) / n);
+    return (Math.atan(Math.sinh(t)) * 180) / Math.PI;
+  };
+  // THE MAJORITY, NOT THE POINT — the same argument the bake makes one level
+  // up. A z2 tile's texel is 39km and this raster's is 9.8, so a nearest
+  // sample is whichever of the four the arithmetic landed on, and a continent
+  // comes out as a dither of unrelated biomes rather than a map. Four by four
+  // is enough: past z4 the tile texel is finer than the raster and the loop
+  // reads the same pixel sixteen times, which costs nothing worth avoiding.
+  const SUB = 4;
+  const hist = new Uint16Array(256);
+  for (let py = 0; py < COVER_PX; py++) {
+    for (let px = 0; px < COVER_PX; px++) {
+      hist.fill(0);
+      let best = 0, bestN = 0;
+      for (let sy = 0; sy < SUB; sy++) {
+        const lat = latOf(py + (sy + 0.5) / SUB);
+        // Equirect rows run from +90 DOWN, which is how the bake writes them.
+        const ry = Math.min(CW_H - 1, Math.max(0, Math.floor(((90 - lat) / 180) * CW_H)));
+        for (let sx = 0; sx < SUB; sx++) {
+          const lon = lonOf(px + (sx + 0.5) / SUB);
+          const rx = Math.min(CW_W - 1, Math.max(0, Math.floor(((lon + 180) / 360) * CW_W)));
+          const v = src[ry * CW_W + rx];
+          if (!v) continue;
+          const c = ++hist[v];
+          if (c > bestN) { bestN = c; best = v; }
+        }
+      }
+      out[py * COVER_PX + px] = best;
+    }
+  }
+  const png = greyPng(out, COVER_PX);
+  // An all-zero tile is a REAL answer here too — open ocean has no land class
+  // — and storing it is what stops every sea tile being a permanent
+  // invocation. Same rule as the cover route this one stands beside.
+  void putTile(path, png, 'image/png', null).catch(() => { /* serve now, store best-effort */ });
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'image/png',
+      'cache-control': 'public, max-age=604800, immutable',
+      'access-control-allow-origin': '*',
+    },
+    body: Buffer.from(png).toString('base64'),
+    isBase64Encoded: true,
+  };
+}
+
 // ── the elevation tiles: the one source that used to skip this cell ────
 //
 // Every other raster and vector the game reads has come through a `~/` route
@@ -2144,6 +2254,8 @@ export const handler = async (event: {
     if (cover) return serveCover(path, cover);
     const dem = path.match(DEM_RE);
     if (dem) return serveDem(path, dem);
+    const cw = path.match(COVERW_RE);
+    if (cw) return serveCoverWide(path, cw);
     const ov = path.match(OV_RE);
     if (ov) return serveOverview(path, ov);
     const pk = path.match(PEAK_RE);
