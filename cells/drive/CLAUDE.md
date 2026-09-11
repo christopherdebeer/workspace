@@ -372,20 +372,6 @@ about prints as UNCLASSIFIED, so a new upstream shows up as a line nobody
 wrote. It cannot speak to REACHABILITY — the relay bypasses CSP, see the
 harness notes above.
 
-**AND THE HARNESS CANNOT EXERCISE `~/dem/v1/` YET, so every run measures the
-fallback.** `harness.mjs` serves a fixed list of paths and 404s everything
-else; a non-503 failure sets `demProxyOk = false` for the session, so the
-first DEM ask retires the route and the other thirty go straight to the
-publisher. Measured on the first boot after the cutover shipped from here:
-`proxy 0, direct 31` with 25 height tiles home and no page errors — the
-fallback works, and the route it is a fallback FOR is untested by every
-harness run in this repo. That is the same trap the eco route wore, fixed
-there by proxying the path to the deployed cell (`loadEcoTile` reads a 4xx
-as permanent, and a local 404 does not degrade a layer, it deletes it). The
-live route itself answers: curled at Kommetjie, z12, z5 and z0 return real
-WebP, and z14 there returns `ABSENT 12/2256/2459` — the publisher does not
-hold that ground at z14, so the climb hint is doing exactly its job.
-
 Answer those three from an authored fixture and the **entire production
 pipeline** runs with no network: terrain build, corridor carve, ribbon, batter,
 kerb, junction, vegetation, sward, façades, water. That is `client/world-fixtures.ts`,
