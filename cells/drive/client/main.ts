@@ -24917,7 +24917,50 @@ const FAR_RING_MAX = 2;       // 5×5 coarse tiles at whichever level is current
  * current — FEWER than the old fixed 128 spent at z9, for twice the fidelity,
  * because the level below covers the same sky with smaller tiles.
  */
-const farSeg = (z: number): number => clamp(Math.round(tileMetres(z) / 250 / 8) * 8, 32, 128);
+const FAR_M_PER_VERT = 250;
+/**
+ * …AND SO IS METRES PER SCREEN PIXEL, WHICH IS THE DIAL THE COARSE END NEEDS.
+ *
+ * Ground metres per vertex is the right rule while a tile is BIGGER than the
+ * frame — it is a statement about the DEM, and the DEM does not care how far
+ * away you are. It stops being the right rule the moment the tile is smaller
+ * than the frame, which is the whole of the wide ladder: at planet zoom the
+ * ground rule hands a ten-thousand-kilometre tile the clamp's full 128² for
+ * something a couple of hundred art pixels across, and every one of those
+ * vertices is spent below the resolution anything can show.
+ *
+ * So take whichever is COARSER. Near levels are untouched (the ground rule
+ * already clamps them), and the coarse levels this ladder is being extended
+ * into stop costing what a near level costs.
+ *
+ * THE PIXEL RULE IS EVALUATED AT THE BAND'S FLOOR, NOT AT THE LIVE ZOOM, and
+ * that is not a detail. A tile is built once and stands until its level
+ * changes, so a tile built while the planet filled the frame is still standing
+ * when the view comes back in to the bottom of its own band — and nothing
+ * rebuilds it on the way. Sizing it for the live zoom would therefore bake a
+ * planet-zoom lattice into a tile that is about to be looked at from a tenth
+ * of the distance. The band's floor is the closest this level is ever chosen
+ * for, so the tile is never coarser than the view that keeps it.
+ */
+const FAR_PX_PER_VERT = 1.5;
+/** The smallest view radius this level is chosen for: where the level one rung
+ *  FINER stops reaching. Zero for the finest rung, which has no floor and
+ *  keeps the ground rule alone. */
+function farBandFloor(z: number): number {
+  const i = FAR_LEVELS.indexOf(z);
+  return i <= 0 ? 0 : tileMetres(FAR_LEVELS[i - 1]) * (FAR_RING_MAX + 0.5);
+}
+const farSeg = (z: number): number => {
+  const ground = tileMetres(z) / FAR_M_PER_VERT;
+  const floor = farBandFloor(z);
+  // `viewRadius` is the frustum's ground reach and `chartMpp` its metres per
+  // art pixel; both are the same two multiplies off `chartDist`, so the ratio
+  // between them is a constant of the frame and the band floor converts
+  // straight into a metres-per-pixel without needing a camera.
+  const mpp = floor > 0 ? (2 * floor) / (1.35 * Math.max(2, pixSize.y)) : 0;
+  const screen = mpp > 0 ? tileMetres(z) / (mpp * FAR_PX_PER_VERT) : Infinity;
+  return clamp(Math.round(Math.min(ground, screen) / 8) * 8, 32, 128);
+};
 /** The coarsest level whose 5x5 ring still reaches `radius`. */
 function farLevelFor(radius: number): number {
   for (const z of FAR_LEVELS) if (radius <= tileMetres(z) * (FAR_RING_MAX + 0.5)) return z;
