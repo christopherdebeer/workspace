@@ -5857,9 +5857,25 @@ is the fault the ring was added to fix, and nothing here touches it.
 
 - **BOUNDED IN BYTES, NOT TILES**, because a tile is not one size: the lattice
   is `farSeg(z)` a side and the levels do not agree. Least-recently-seen goes
-  first. Measured at **0.93MB a tile** (a 128-square lattice is 16,641 vertices:
-  position, colour and normal at 200KB each, uv 133KB, index ~196KB, normal map
-  ~196KB).
+  first. Per tile, by level — attrs is position, colour and normal as vec3
+  Float32 plus uv as vec2 Float32; the index is Uint16 under 65,536 vertices;
+  the map is the tile's own 256x256 **RGBA** object-space normal map:
+
+| seg | levels | vertices | attrs | index | map | tile | ring of 25 |
+|---|---|---|---|---|---|---|---|
+| 32 | z13 | 1,089 | 0.05 | 0.01 | 0.25 | **0.31MB** | 7.7MB |
+| 64 | z11 | 4,225 | 0.18 | 0.05 | 0.25 | **0.47MB** | 11.9MB |
+| 128 | z9, z7 | 16,641 | 0.70 | 0.19 | 0.25 | **1.14MB** | 28.4MB |
+| 112 | z6 and coarser | 12,769 | 0.54 | 0.14 | 0.25 | **0.93MB** | 23.2MB |
+
+  The 23.2MB the park reported at planet zoom is the last row exactly, which is
+  what says the arithmetic and the measurement agree. `devtools/park-bytes.mjs`
+  re-derives the table in pure node (it re-runs `farSeg`'s own rule), so a
+  change to the lattice can be costed without booting anything. **The earlier note here
+  quoted a 128-lattice breakdown beside the 112-lattice total and had the
+  normal map at RGB**: the map is RGBA and 0.25MB, and at the coarse end it is
+  the largest single item in the tile — 27% of it, for a texture 2.3x finer
+  than the lattice it is on.
 - **A CAP THAT HOLDS ONE RING IS A CAP THAT NEVER PAYS.** The first cut was
   24MB, which is 25 tiles — exactly one ring — so a spin out and back always
   evicted what it was meant to keep: the outgoing ring parked at 23.2MB and the
@@ -5885,13 +5901,21 @@ Before the park the same pair read **75 fetched**: the return cost a whole ring
 of bakes, and now it costs nothing. `__far().park` and the telemetry's `chart`
 row report tiles, MB, cap and hits.
 
-**THE HONEST NEXT CUT IS THE PER-TILE COST, NOT THE CAP.** The uv and the index
-depend only on `farSeg(z)` and are byte-identical for every tile at a level —
-330KB of the 930 — and the colours are a palette lookup that would lose nothing
-as Uint8, another 150KB. Sharing the lattice would take a tile under 0.4MB and
-put a hundred and twenty of them in this same budget. It is not done here
-because it means building the geometry by hand instead of from PlaneGeometry,
-and a shared attribute is disposed by whichever geometry goes first.
+**THE HONEST NEXT CUT IS THE PER-TILE COST, NOT THE CAP**, and at the 0.93MB
+row it is three things, largest first:
+
+| cut | saves | why it is safe, and what it costs |
+|---|---|---|
+| the normal map at 128² for coarse levels | 0.19MB | at z5 a 256² map over a 1,085km tile is 4.2km a texel against 9.7km a vertex — it is already finer than the mesh it shades, and the chart is 22,000 m/px there |
+| uv + index owned by the LEVEL, not the tile | 0.24MB | both depend only on `farSeg(z)` and are byte-identical across a ring; needs the lattice built by hand instead of from PlaneGeometry, and an owner, because `geometry.dispose()` frees the GPU buffer of every attribute it references and the next tile to go would take the level's uv with it |
+| colours as normalized Uint8 | 0.11MB | the palette answers 0..1 and the composite quantises to 14 levels — 8 bits is four times the precision that survives the dither |
+
+0.93MB becomes about **0.39**, and the same 48MB then holds a hundred and
+twenty tiles rather than fifty. A fourth is worth measuring before it is
+believed: the vertex NORMAL attribute (0.15MB) may be dead weight, since the
+shell wears an OBJECT-SPACE normal map and `sphereNormal` rebuilds the frame
+from the fragment's own position — but three wants a normal on a Lambert
+material, so that is a claim to test, not to assume.
 
 ### `qsNum` answered 0 for every switch that was not there
 

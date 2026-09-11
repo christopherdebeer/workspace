@@ -25479,26 +25479,43 @@ const farOutside = (z: number, x: number, y: number): boolean => {
  * returns finds what it left.
  */
 /**
- * MEASURED AT 0.93 MB A TILE, which is the number that sets this. A 128-square
- * lattice is 16,641 vertices: position, colour and normal at 200KB each, uv at
- * 133KB, the index at ~196KB and the tile's own normal map at ~196KB. A ring
- * is 25 tiles, so the first cut's 24MB held EXACTLY ONE RING — measured: spin
- * away and the outgoing ring parks at 23.2MB, spin back and the trim has
- * already evicted it to make room for the ring in between, `hits 0`. A cap
- * that holds one ring is a cap that never pays.
+ * MEASURED AT 0.93 MB A TILE AT THE PLANET'S OWN LEVEL, which is the number
+ * that sets this — and the size is a function of `farSeg(z)`, so it is not one
+ * number for the ladder. `farSeg` gives z13 32 segments, z11 64, z9 and z7 the
+ * 128 clamp, and z6 and coarser 112, so a tile is:
  *
- * 48MB is two rings and a bit, which is what makes a spin out and back free.
- * `?farpark=<MB>` moves it (0 parks nothing — the exact A/B), because the
- * right number is a property of the device and this one is a desktop's guess.
+ *   seg 32  (z13)   1,089 verts   0.05 attrs + 0.01 index + 0.25 map = 0.31 MB
+ *   seg 64  (z11)   4,225 verts   0.18        + 0.05       + 0.25    = 0.47 MB
+ *   seg 128 (z9/7) 16,641 verts   0.70        + 0.19       + 0.25    = 1.14 MB
+ *   seg 112 (z6-)  12,769 verts   0.54        + 0.14       + 0.25    = 0.93 MB
  *
- * THE HONEST NEXT CUT IS THE PER-TILE COST, NOT THE CAP. The uv and the index
- * depend only on `farSeg(z)` and are byte-identical for every tile at a level
- * — 330KB of the 930 — and the colours are a palette lookup that would lose
- * nothing as Uint8, another 150KB. Sharing the lattice would take a tile
- * under 0.4MB and put a hundred and twenty of them in this same budget. It is
- * not done here because it means building the geometry by hand instead of
- * from PlaneGeometry, and a shared attribute is disposed by whichever
- * geometry goes first.
+ * "attrs" is position, colour and normal as vec3 Float32 plus uv as vec2
+ * Float32; the index is Uint16 while the lattice is under 65,536 vertices; the
+ * map is the tile's own 256x256 RGBA object-space normal map, and at the
+ * coarse end it is the LARGEST SINGLE ITEM — a quarter of a megabyte, 27% of
+ * the tile, for a texture 2.3x finer than the mesh it is on.
+ *
+ * A ring is 25 tiles, so a z5 ring is 23.2MB and the first cut's 24MB cap held
+ * EXACTLY ONE RING — measured: spin away and the outgoing ring parks at
+ * 23.2MB, spin back and the trim has already evicted it to make room for the
+ * ring in between, `hits 0`. A cap that holds one ring is a cap that never
+ * pays. 48MB is two rings and a bit, which is what makes a spin out and back
+ * free. `?farpark=<MB>` moves it (0 parks nothing — the exact A/B), because
+ * the right number is a property of the device and this one is a desktop's
+ * guess.
+ *
+ * THE HONEST NEXT CUT IS THE PER-TILE COST, NOT THE CAP, and at z5 it is three
+ * things in order of size: the normal map is 0.25MB and could be 128x128 at
+ * the coarse levels, where it is already finer than the lattice (0.19MB); the
+ * uv and the index depend only on `farSeg(z)` and are byte-identical for every
+ * tile at a level, so they belong to the LEVEL and not the tile (0.24MB); and
+ * the colours are a palette lookup that would lose nothing as normalized Uint8
+ * under a 14-level quantiser (0.11MB). That is 0.93MB down to about 0.39, and
+ * a hundred and twenty tiles in this same budget. Not done here: sharing means
+ * building the lattice by hand instead of from PlaneGeometry, and a shared
+ * attribute needs an owner, because `geometry.dispose()` frees the GPU buffer
+ * of every attribute it references and the next tile to go would take the
+ * level's uv with it.
  */
 const FAR_PARK_BYTES = Math.max(0, qsNum('farpark', 48)) * (1 << 20);
 const farParked = new Map<string, { mesh: THREE.Mesh; mat: THREE.Material | null; bytes: number; at: number }>();
