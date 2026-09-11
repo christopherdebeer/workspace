@@ -4,6 +4,20 @@
  *   node cells/drive/devtools/wave-shots.mjs
  *   SPOT='lat=-34.17822&lon=18.34359' SUN=55,14,5 CLEAN=1 node …/wave-shots.mjs
  *
+ * `REV=<sha>` photographs a past revision's whole client instead of the
+ * working tree, which is the only honest way to judge a change to the wave
+ * constants: the sea is a moving surface under a moving sun, so two runs of
+ * different builds at the same station, the same sun and the same heading is
+ * the comparison, and a remembered frame is not.
+ *
+ * WHICH MEANS THE WEATHER HAS TO BE PINNED, and the first A/B run of this
+ * tool was not. Weather is rolled per boot, so the control came up under
+ * crisp cloud and the fix under an overcast: two frames of two different
+ * skies, two different sea colours and two different suns, offered as a
+ * comparison of a wave constant. `WX` (default `clear`) pins it, and every
+ * frame now prints the eye's height over the water beside the wave's own
+ * numbers — a sea photographed from inside it looks flat too.
+ *
  * A wave that MEASURES right can still photograph as a flat sheet, and the
  * first attempt at this proved it: the open Atlantic off Kommetjie reads 1.70 m
  * of amplitude on a 240 m swell, which is a slope of about one in thirty-five
@@ -53,10 +67,14 @@ const SPOT = process.env.SPOT ?? 'lat=-34.17822&lon=18.34359';
 const TAG = process.env.TAG ?? 'waveshot';
 const SUNS = (process.env.SUN ?? '55,14,5').split(',').map(Number);
 const CLEAN = process.env.CLEAN !== '0';
+const REV = process.env.REV || undefined;
+const WX = process.env.WX ?? 'clear';
 
 const { page, close, shot } = await openDrive({
-  spot: `${SPOT}&cam=chase&time=NOON`, tag: TAG, menu: true, settle: 0, bootTimeout: 240000,
+  spot: `${SPOT}&cam=chase&time=NOON&wx=${WX}`, tag: TAG, menu: true, settle: 0, bootTimeout: 300000,
+  ...(REV ? { rev: REV } : {}),
 });
+if (REV) console.log(`control build: ${REV}`);
 await page.evaluate(() => window.__draw?.(true));
 
 // Let the ring stream and the hydro queue drain: a half-built sea photographs
@@ -127,15 +145,27 @@ for (const sun of SUNS) {
     const px = survey.edge.x + sx * off, pz = survey.edge.z + sz * off;
     for (const [vname, heading] of views) {
       await page.evaluate(({ x, z, h }) => window.__place(x, z, h), { x: px, z: pz, h: heading });
-      await sleep(2600);
+      // THE RIG HAS TO LAND BEFORE THE SHUTTER. `__place` sets a position;
+      // the suspension then settles the body onto the seabed and the chase
+      // camera springs in behind it, and at the harness's two to four frames
+      // a second that is several seconds of wall time. A frame taken early
+      // is of a truck still falling, from a camera still flying — which is
+      // how one run of this came back with the rig underwater and the next
+      // with it riding high, at stations that differ by nothing.
+      await sleep(6000);
       const tag = `${TAG}-sun${sun}-${name}-${vname}`;
       await shot(tag);
       const look = await page.evaluate(({ x, z, h }) => {
         const dx = Math.sin(h), dz = -Math.cos(h);
-        return window.__wave(x + dx * 45, z + dz * 45);
+        const w = window.__wave(x + dx * 45, z + dz * 45);
+        // The body's height over the resting surface: a sea photographed
+        // from inside it is flat whatever its geometry, and the chase camera
+        // rides three to four metres over the body.
+        const s = window.__susp?.(), sea = window.__sea?.();
+        return w ? { ...w, bodyY: s?.bodyY ?? null, gap: s?.gap ?? null, seaY: sea?.y ?? null } : null;
       }, { x: px, z: pz, h: heading });
       rows.push({ tag, sun, station: name, view: vname, w: look });
-      console.log(`  ${tag}: peak ${look?.peakM} m height ${look?.heightM} chop ${look?.chopM} breaker ${look?.breaker} · ${look?.wavelengthM} m wave on ${look?.mesh?.spacingM} m cells (${look?.mesh?.samplesPerWave}/wave)`);
+      console.log(`  ${tag}: peak ${look?.peakM} m height ${look?.heightM} chop ${look?.chopM} breaker ${look?.breaker} · ${look?.wavelengthM} m wave on ${look?.mesh?.spacingM} m cells (${look?.mesh?.samplesPerWave}/wave) · body ${look?.bodyY} over sea ${look?.seaY}`);
     }
   }
 }

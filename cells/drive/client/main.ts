@@ -30135,16 +30135,16 @@ function tapeKeep(): string {
   const shoal = 1 - smooth(breakerDepth, Math.max(breakerDepth + 0.1, 10), waveDepth);
   const postBreak = 0.28 + 0.72 * smooth(0.12, Math.max(0.3, breakerDepth * 0.85), waveDepth);
   const tuning = hydroSys?.getTuning();
-  const amplitude = (0.012 + (1.05 - 0.012) * Math.pow(standingState, 1.6))
+  const amplitude = (0.012 + (1.45 - 0.012) * Math.pow(standingState, 1.6))
     * (1 + shoal * 0.62) * postBreak * (tuning?.waveAmplitude ?? 1);
   const fetchScale = clamp(Math.log2(Math.max(fetchM, 80) / 80) / 8, 0, 1);
-  const wavelength = (38 + (240 - 38) * fetchScale)
+  const wavelength = (38 + (140 - 38) * fetchScale)
     * Math.max(0.2, tuning?.waveLength ?? 1);
-  const windWaveLength = Math.max(64, wavelength * 0.32);
+  const windWaveLength = Math.max(72, wavelength * 0.32);
   const shoreWavelength = Math.max(72, wavelength * 0.42);
   const nearShore = 1 - smooth(22, 120, Math.max(0, f.coast ? f.coast[i] : shoreM));
   const dominantWavelength = wavelength + (shoreWavelength - wavelength) * nearShore;
-  const windWaveWeight = (0.20 + windSea * 0.22) * smooth(0.10, 0.72, standingState);
+  const windWaveWeight = (0.26 + windSea * 0.30) * smooth(0.10, 0.72, standingState);
   const steepen = 1 - smooth(0.8, 4.5, waveDepth);
   const verticalEnvelope = (1 + windWaveWeight) * (1 - nearShore)
     + (1 + 0.24 * steepen) * nearShore;

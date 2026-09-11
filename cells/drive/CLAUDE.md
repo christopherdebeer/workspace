@@ -5743,6 +5743,99 @@ ready — the route solver learned this ("old route live until the new one
 lands"), the far level swap learned it (the retired ring), and the substrate
 commit had the swap written and was bypassed by its own invalidation.
 
+## …and then it still read flat, because the sea was not STEEP
+
+The seat again, after the soundings fix: "I am still convinced we're not
+seeing any vertex shader height to waves — relocated offshore, drone, near
+sunset, pixel quantisation and dither off, and the ocean is totally flat.
+Do we need to set height to something arbitrarily large to confirm?" The
+answer to the last question is no, and doing it is what settled the first.
+
+**THE VERTEX PATH WAS PROVED SOUND BEFORE ANYTHING WAS TUNED**, and the
+proof is the part worth keeping. At the seat's own coordinates, hiding the
+hydro mesh, the legacy sea plane and the far shell in turn showed the
+visible water IS the hydro mesh. Then the amplitude dial: ×1, ×4 and ×8 —
+the last of them **23.6 m of wave height** — all photographed as a flat
+plate. The same ×8 with the wavelength quartered visibly heaves. So the
+displacement works, height was never the lever, and "make it bigger" would
+have gone on failing at any size.
+
+**WHAT THE EYE READS IS H/L.** At the 240 m dominant this sea stood at
+**0.012** — a gradient of one in eighty, which is a level floor with a slow
+tilt in it and no face anywhere for a low sun to catch.
+
+**AND THE HONEST WAVE FOR THIS WIND IS SHORTER THAN THE MESH.** Fetch-
+limited at the 12.6 m/s and 50 km the sea state stands for: Hs **1.44 m**,
+Tp 5.35 s, wavelength **44.7 m**, slope **0.032**. Production's coastal
+lattice is 21.1 m between vertices, so Nyquist is 42 m: the wavelength this
+wind actually makes is precisely the one the mesh cannot carry, and no
+tuning reaches it. Going shorter without a denser mesh buys a crest that
+pulses as it travels through the sample points, which reads worse than the
+plate did.
+
+**So the wave is drawn long and the SLOPE is kept.** Dominant 240 → **140 m**
+(6.6 samples a wave, a crest drawn at 89% of its height wherever the phase
+falls); the amplitude ceiling 1.05 → **1.45 m** of peak rise, which is not
+chosen but SOLVED — at a full sea state the vertical envelope is
+1 + windWaveWeight = 1.54, so 1.45 reads as 4.46 m of wave on 140 m, H/L
+**0.0319** against the real sea's 0.0322. The wind-wave layer, the only one
+between the dominant and the fragment skin that carries real faces, is
+leant on harder (0.20 + windSea·0.22 → **0.26 + windSea·0.30**) and its
+length floor goes 64 → **72 m**, which is 3.4 samples and the same floor the
+shore wave already sits on. **The stated cost is that the sea is about three
+times too TALL for its wind** — a right slope on a wrong length has to be —
+and that trade is the whole change.
+
+**AND THE COAST FIELD'S SWELL MOVED WITH IT.** `swellWavelengthM` in
+`coast-field.ts` is a second copy of the shader's ramp, and it has to be:
+the field is the travel time of the wave the vertex draws, so solved for a
+longer swell than the one being phased on it the refraction bends the wrong
+crests and the shoaling starts in water that swell would not yet feel. A
+shorter swell feels the bottom later, so the crawl now begins closer in.
+
+**Measured**, Kommetjie, one sky (`wx=clear`), one sun (14°), the same three
+stations, the build the only difference:
+
+| station | control L / H | control H/L | fix L / H | fix H/L |
+|---|---|---|---|---|
+| beach | 184 m / 2.70 m | 0.0147 | 113 m / 3.85 m | **0.0341** |
+| shallows | 217 m / 2.65 m | 0.0122 | 129 m / 3.82 m | **0.0297** |
+| surf | 236 m / 2.56 m | 0.0109 | 138 m / 3.72 m | **0.0270** |
+
+…and in the frame itself, over the sea band of the beach station's own
+photograph: luma spread **17.2 → 20.3**, vertical gradient 4.16 → 4.38,
+tones 40 → 41. **A real change and a modest one** — the numbers are the
+stronger evidence, and the seat's report against the deploy is the rest.
+
+**THREE TRAPS, ALL THREE PAID FOR IN RUNS:**
+
+- **A/B THE WEATHER OR YOU ARE COMPARING TWO SKIES.** Weather is rolled per
+  boot. The first photographic comparison came back with the control under
+  crisp cloud and the fix under an overcast — two sea colours, two suns, two
+  haze depths — and was offered as a comparison of a wave constant. `wx=` is
+  the pin, and `wave-shots.mjs` now passes `WX` (default `clear`) always.
+  The same run's `windMps` moves with it, so the absolute peaks in the table
+  above are lower than the live-weather run's and only the PAIR means
+  anything.
+- **`__place` SETS A POSITION; THE RIG HAS TO LAND.** The tool shot 2.6 s
+  after placing, which at the harness's two to four frames a second is a
+  handful of frames — so one run photographed a truck still falling from a
+  camera still flying, and the next the same station settled. Six seconds,
+  and the body's height is printed beside the wave's numbers.
+- **A FRAME IS EVIDENCE OF WHAT IS IN IT, NOT OF WHY.** The surf station's
+  photographs come back from inside the water column, and that read as a
+  crest tall enough to swallow the camera — an argument that nearly set the
+  amplitude by it. It is not: the rig stands on a seabed **5.8 m** below the
+  resting surface at that station, and the control's camera is under water
+  there too. `body -7.41 over sea -1.60` in the tool's own line is what said
+  so.
+
+**WHAT THIS DOES NOT FIX.** The honest wave is still three times shorter
+than the lattice can draw, so the only real cure is a denser coastal tier —
+at 10 m between vertices a 45 m wave is 4.5 samples and the height could
+come back down to its true 1.4 m. That is a mesh change with a cost, and it
+is the next thing to measure if the sea still reads wrong from the seat.
+
 ## The sea had no soundings, so the waves had no height
 
 From the seat: "did we lose vertical height/volume on ocean waves at some

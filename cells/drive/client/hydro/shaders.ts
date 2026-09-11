@@ -219,11 +219,52 @@ void main() {
   //
   // Coastal bodies receive a denser lattice than rivers (system.ts), so the
   // open sea no longer has to stretch one wave over four enormous triangles.
-  // The 240m dominant swell resolves to roughly ten cells on production's
-  // coastal tier, while small bodies retain the old 38m floor.
+  // Small bodies retain the 38m floor; the dominant swell is the number that
+  // was measured, twice, and moved.
+  //
+  // A SEA THAT LOOKS FLAT IS NOT SHORT OF AMPLITUDE, IT IS SHORT OF
+  // STEEPNESS. Reported from the seat as no vertex height at all, offshore,
+  // at dusk, with the quantiser and the dither turned off. The vertex path
+  // was proved sound first and the proof is worth keeping: hiding the hydro
+  // mesh, the sea plane and the far shell in turn showed the visible water
+  // IS this mesh, and the amplitude dial at 1x, 4x and 8x — the last of them
+  // 23.6m of wave height — all read as a flat plate. The same 8x with the
+  // wavelength quartered heaves. So height was never the lever.
+  //
+  // ── THE WAVE THIS WIND ACTUALLY MAKES IS SHORTER THAN THE MESH ──
+  //
+  // Fetch-limited, at the 12.6 m/s and 50 km this sea state stands for:
+  // Hs 1.44 m at a peak period of 5.35 s, which is a wavelength of FORTY-FIVE
+  // METRES and a slope Hs/L of 0.032. Production's coastal lattice is 21.1 m
+  // between vertices — Nyquist is 42 m — so the honest wavelength is exactly
+  // the one this mesh cannot carry, and no amount of tuning changes that.
+  //
+  // SO THE WAVE IS DRAWN LONG AND THE SLOPE IS KEPT, because slope is what
+  // the eye reads and length is what it forgives. 140 m is 6.6 samples a
+  // wave (a crest drawn at 89% of its height wherever the phase falls);
+  // the amplitude below then puts H/L at 0.032, the real sea's own. THE
+  // STATED COST is that the wave is about three times too TALL for its wind
+  // — a right slope on a wrong length has to be. That is a judgement, and it
+  // is the one the seat asked for: at 240 m the same sea stood at H/L 0.012,
+  // a gradient of one in eighty, which is a level floor with a slow tilt in
+  // it and no face anywhere to catch a low sun.
+  //
+  // MATCH THE REAL SLOPE; DO NOT BEAT IT. A first cut stood at H/L 0.042 —
+  // the reasoning being that the quantiser eats shallow gradients, so lean
+  // past the truth — and there is no evidence for that and one good argument
+  // against: this sea is already three times too tall, and a slope chosen by
+  // taste is a number nobody can ever check. 0.032 is checkable.
+  //
+  // (The frame that first argued for backing it off argued wrongly, and the
+  // trap is worth the line: the surf station's photographs came back from
+  // INSIDE the water column, which read as a crest swallowing the camera.
+  // It was not. The probe prints the body's height beside the resting
+  // surface now, and at that station the rig stands on a seabed 5.8 m down
+  // whatever the sea is doing — the camera is under water in the control
+  // too. A frame is evidence of what is in it, not of why.)
   float speed = max(0.2, uWind.z);
   float fetchScale = clamp(log2(max(fetchM, 80.0) / 80.0) / 8.0, 0.0, 1.0);
-  float wavelength = mix(38.0, 240.0, fetchScale) * max(0.2, uWaveLength);
+  float wavelength = mix(38.0, 140.0, fetchScale) * max(0.2, uWaveLength);
   float k = 6.28318530718 / wavelength;
   float omega = 0.34 + speed * 0.055;
   float windSea = smoothstep(0.5, 15.0, speed);
@@ -235,7 +276,12 @@ void main() {
   vec2 windCross = vec2(-windDir.y, windDir.x);
   vec2 secondaryDir = normalize(windDir + windCross * 0.46);
   vec2 windWaveDir = normalize(windDir - windCross * 0.34);
-  float windWaveLength = max(64.0, wavelength * 0.32);
+  // 0.32 of the dominant is 45m now, which the lattice cannot carry, so the
+  // floor is what this layer actually is: 72m, 3.4 samples a wave, the
+  // shortest wave on the production tier whose crest does not pulse badly as
+  // it travels. The shore wave below sits on the same floor for the same
+  // reason.
+  float windWaveLength = max(72.0, wavelength * 0.32);
   float windWaveK = 6.28318530718 / windWaveLength;
 
   // Each phase has one constant direction. Their amplitudes mix; their
@@ -262,7 +308,14 @@ void main() {
   // This is still geometry, not ripple-normal paint: the coastal lattice was
   // introduced specifically so an intermediate wind wave can carry visible
   // faces between the 240m swell and the fragment skin.
-  float windWaveWeight = (0.20 + windSea * 0.22)
+  // LEANT ON HARDER WITH THE SHORTER SWELL. This is the only layer between
+  // the dominant and the fragment skin that carries real faces, and at a
+  // 140m dominant it is half the visible slope rather than a texture on top
+  // of it: 0.26 to 0.56 of the swell's own amplitude by wind, against 0.20
+  // to 0.42 before. Its own steepness stays mild (H/L about 0.019 at a fresh
+  // wind) — what it adds is a second period, so a crest is not a single
+  // hundred-metre roll with nothing on it.
+  float windWaveWeight = (0.26 + windSea * 0.30)
     * smoothstep(0.10, 0.72, standingState);
   float swell = (swellA * 0.74 + swellB * 0.26) * waveSet
     + sin(windWavePhase) * windWaveWeight;
@@ -334,7 +387,16 @@ void main() {
   // Macro volume remains with distance. Only fragment-scale skin is allowed
   // to fade. Established swell is primarily body state; current wind broadens
   // the range without erasing that swell during a lull.
-  float standingAmplitude = mix(0.012, 1.05, pow(standingState, 1.60))
+  //
+  // The ceiling rose with the wavelength above, and it is SOLVED from it
+  // rather than chosen: at a full sea state the vertical envelope is
+  // 1 + windWaveWeight = 1.54, so a ceiling of 1.45 m of peak rise reads as
+  // 4.46 m of wave on a 140 m length — H/L 0.0319 against the fetch-limited
+  // sea's own 0.0322 (the arithmetic is at the wavelength above). Well
+  // inside the 1/7 a deep-water wave breaks at, and low enough that a
+  // shoaling crest, which is this times 1.62, stays under the chase camera.
+  // Raising this ALONE was measured and does nothing: see the wavelength.
+  float standingAmplitude = mix(0.012, 1.45, pow(standingState, 1.60))
     * (1.0 + vShoal * 0.62) * postBreak;
   float riverAmplitude = mix(0.006, 0.21, pow(energy, 1.35));
   float amplitude = mix(standingAmplitude, riverAmplitude, vFlowing)

@@ -110,10 +110,18 @@ export interface CoastField {
 }
 
 /** The shader's own swell wavelength for a body's fetch, at uWaveLength = 1:
- *  38 m for a pond, 240 m for the open sea, on the same log ramp. */
+ *  38 m for a pond, 140 m for the open sea, on the same log ramp.
+ *
+ *  IT HAS TO BE THE SHADER'S NUMBER, not a number of its own. The field is
+ *  the travel time of the wave the vertex draws; solved for a longer swell
+ *  than the one being phased on it, the refraction bends the wrong crests
+ *  and the shoaling starts in water that swell would not yet feel. It moved
+ *  from 240 with the shader's steepness pass — see the wavelength note in
+ *  shaders.ts — and a shorter swell feels the bottom later, so the crawl
+ *  below now begins closer in, which is the physics and not a tuning. */
 export function swellWavelengthM(fetchM: number): number {
   const fetchScale = clamp(Math.log2(Math.max(fetchM, 80) / 80) / 8, 0, 1);
-  return 38 + (240 - 38) * fetchScale;
+  return 38 + (140 - 38) * fetchScale;
 }
 
 /** Slowness (seconds per metre) of a swell of deep-water wavenumber k0 over
@@ -136,7 +144,7 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
   const c0 = Math.sqrt(G / k0);
   const deepStep = pixelM / c0;
   // THE CRAWL IS CAPPED AT THREE TIMES DEEP. Half a metre of water carries a
-  // 240 m swell at two metres a second against twenty offshore, so the
+  // 140 m swell at two metres a second against fifteen offshore, so the
   // last wet texel would be worth ten texels of deep-water metres — one and
   // a half shore wavelengths of phase inside the 18.75 m the field can
   // resolve, which is aliasing, not shoaling. At three times, the crests
