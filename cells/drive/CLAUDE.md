@@ -5240,6 +5240,29 @@ that it is purely so.
 globe — the asset already holds them — and the globe has no place names of its
 own, so between the shell's hand-over and the limb the chart is silent.
 
+## A WebGL blit answers to no overlay
+
+Reported from the seat: open the hub from the chart and the cab/chase dock
+stays floating over the menu while the whole rest of the HUD has correctly
+gone. Every other instrument stands down through one of two mechanisms — the
+HUD canvas (`drawHud` returns on `menu.tab() !== null`) or the DOM overlay's
+own display rules — and the dock is in NEITHER. It is a scissored render of
+the live scene through `miniCam`, taken after the composite, straight onto the
+canvas. Nothing above it can hide it; the gate has to be written on it.
+
+**AND ITS RECT GOES STALE RATHER THAN EMPTY, which is why it is intermittent.**
+`dockRect` is assigned inside `drawHud`, so once the HUD stands down the rect
+keeps whatever it last held. A page booted straight into the hub has a rect of
+zeroes and blits nothing — the fault is invisible there. Chart first, so the
+HUD lays the dock out, THEN open the menu, and the blit runs on a live rect
+behind a shut HUD. Measured both ways: `{x:4, y:334, w:58, h:58}` with the menu
+shut and the identical rect with it open.
+
+Verified in pixels, because a WebGL blit is not in the DOM and no probe reports
+it: the dock is in the frame with the menu shut and absent with it open
+(`scratchpad/dock.mjs` in the session). The control matters — a test that opens
+the menu first passes without the fix.
+
 ## The chart states its scale, as a map would
 
 Asked from the seat with five frames from the Afsluitdijk: the chart should

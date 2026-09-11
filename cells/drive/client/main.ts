@@ -42332,7 +42332,15 @@ function tick(now: number): void {
   // first frame after switching it back on a teleport.
   mblurUsedVP.copy(mblurPrevVP);
   mblurPrevVP.copy(mblurVP); mblurPrevCam.copy(camera.position); mblurPrimed = true;
-  if (camMode === 'top') {
+  // …AND NOT BEHIND A MENU. Reported from the seat: open the hub from the
+  // chart and the cab/chase dock stays floating over it while the whole rest
+  // of the HUD has correctly gone. `drawHud` returns on `menu.tab() !== null`
+  // and the dock is not in `drawHud` — it is a scissored WebGL blit straight
+  // onto the canvas, taken after the composite, so it answers to neither the
+  // HUD's gate nor the DOM overlay's display rules. Anything drawn this way
+  // needs the menu's gate written on it by hand; there is no layer that will
+  // hide it for you.
+  if (camMode === 'top' && menu.tab() === null) {
     // The dock previews the POV a tap will DROP BACK INTO — only while
     // charting; on the road the dock is the minimap now. Scissored raw scene
     // over the composite (autoClear respects the scissor).
