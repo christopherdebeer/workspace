@@ -7379,7 +7379,7 @@ const bridgeSpans: BridgeSpan[] = [];
  *  of "ground" for a 23 m deck at the Normandie, so seven metres a side. */
 const BRIDGE_SPAN_MARGIN = 10;
 const BRIDGE_DEM_ON = qsOn('bridgedem', true);
-const demSpanLedger = { tiles: 0, moved: 0, worstM: 0, refused: 0, onWater: 0 };
+const demSpanLedger = { tiles: 0, moved: 0, worstM: 0, refused: 0, onWater: 0, flank: 0 };
 /** The spans that reach one tile, in its own texel space. */
 function bridgeSpansFor(t: HeightTile, only?: readonly BridgeSpan[]): DemSpan[] {
   const mpp = (t.w + t.h) / 512;
@@ -7408,10 +7408,24 @@ function clearTileSpans(t: HeightTile, only?: readonly BridgeSpan[]): boolean {
   // water pixel whose ground tilts or stands proud — which is precisely what a
   // deck does — so asking it would refuse the very texels this needs. The
   // question here is the cover's, and the DEM is what is under suspicion.
-  const r = clearDemSpans(t.data, spans, DEM_SPAN_DEFAULTS, 256, (px, py) =>
-    sampleCover(t.xs + ((px + 0.5) / 256) * t.w, t.zs + ((py + 0.5) / 256) * t.h) === COVER.water);
+  // Asked once per texel and remembered: the walk now runs to its full reach
+  // both ways from every deck texel the cover calls water, and the flank fill
+  // asks again for each neighbour it considers — several hundred thousand
+  // questions on a tile with a two-kilometre span, each a scan of the cover
+  // ring. The raster is 65,536 texels; nothing needs asking twice.
+  const wet = new Uint8Array(256 * 256);
+  const r = clearDemSpans(t.data, spans, DEM_SPAN_DEFAULTS, 256, (px, py) => {
+    const k = py * 256 + px;
+    let v = wet[k];
+    if (!v) {
+      v = sampleCover(t.xs + ((px + 0.5) / 256) * t.w, t.zs + ((py + 0.5) / 256) * t.h) === COVER.water ? 2 : 1;
+      wet[k] = v;
+    }
+    return v === 2;
+  });
   demSpanLedger.refused += r.refused;
   demSpanLedger.onWater += r.onWater;
+  demSpanLedger.flank += r.flank;
   if (!r.moved) return false;
   demSpanLedger.tiles++;
   demSpanLedger.moved += r.moved;
@@ -34454,6 +34468,29 @@ function heightsOf(): number[] {
   }
   return { spans: bridgeSpans.length, offM: best === Infinity ? null : +best.toFixed(1),
     halfM: +halfM.toFixed(1), under: best <= halfM };
+};
+/**
+ * Run the span repair AGAIN on the tile under a point, with every span known
+ * now, and say what changed. The repair runs once when a tile lands and once
+ * more for each bridge that arrives afterwards; what it cannot see is a cover
+ * tile that lands after both. This is the question "would the rule take this
+ * texel if it ran now?" asked from the seat — a no means the rule itself
+ * refuses the place, a yes means the order things arrived in did.
+ */
+(window as unknown as { __respan?: object }).__respan = (x = state.x, z = state.z): object => {
+  for (const [key, t] of heightTiles) {
+    if (x < t.xs || z < t.zs || x >= t.xs + t.w || z >= t.zs + t.h) continue;
+    const cover = sampleCover(x, z);
+    const touching = bridgeSpansFor(t).length;
+    const before = +(sampleHeight(x, z) + baseElev).toFixed(2);
+    const was = { ...demSpanLedger };
+    const moved = clearTileSpans(t);
+    if (moved) { tworker?.remirrorHeight(key, t); markTerrainDirty(key, 'respan'); }
+    return { key, cover, touching, before, after: +(sampleHeight(x, z) + baseElev).toFixed(2), moved,
+      texels: demSpanLedger.moved - was.moved, worstM: +(demSpanLedger.worstM).toFixed(1),
+      refused: demSpanLedger.refused - was.refused, onWater: demSpanLedger.onWater - was.onWater };
+  }
+  return { key: null };
 };
 /** What the elevation source got wrong here, and how much of it we repaired. */
 (window as unknown as { __demsrc?: object }).__demsrc = (): object =>

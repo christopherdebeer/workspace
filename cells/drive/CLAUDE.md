@@ -2776,32 +2776,115 @@ threshold with room to spare: the Normandie's anchor is **55.2 m** over its own
 median, Half Dome's rim 14.2 and El Capitan's — the default spawn — **4.5**.
 
 **MEASURED**, the seat's own spawn, `?bridgedem=0` against the fix, one build,
-180 s settled, no page errors:
+180 s settled, no page errors (the second column is the first cut; the third
+is the rule as it stands after the seat's photograph, below):
 
-| at the Pont de Normandie | repair off | repair on |
-|---|---|---|
-| `baseElev` (the world's datum) | 62.1 m | **6.5 m** (`raw 62.08, median 6.48`) |
-| DEM 120 m north of the spawn | 57.77 m | **3.30 m** |
-| DEM at the spawn | 62.55 m | **7.71 m** |
-| the river's resting level there | **37.76 m** | **4.27 m** |
-| texels lowered / worst / refused | — | 361 / 69.6 m / 0 |
-| a point 53 m off any span, at 44.2 m | 44.2 | 44.2 — untouched |
+| at the Pont de Normandie | repair off | first cut | now |
+|---|---|---|---|
+| `baseElev` (the world's datum) | 62.1 m¹ | **6.5 m** (`raw 62.08, median 6.48`) | 6.5 m |
+| DEM 120 m north of the spawn | 57.77 m | **3.30 m** | −2.23 m |
+| DEM at the spawn | 62.55 m | **7.71 m** | 7.71 m |
+| the river's resting level there | **37.76 m** | **4.27 m** | 0.17 m |
+| texels lowered / of them flank / worst / refused | — | 361 / — / 69.6 m / 0 | **1,618 / 1,159 / 78.9 m / 0** |
+| the north pylon's crown, 720 m north, 53 m off the axis | 44.2 m | 44.2 m | **−1.75 m** |
+| the logistics shed 640 m south-south-west, 236 m off any span | 12.23 m | 12.23 m | 12.23 m — untouched |
 
-The last row is the control inside the measurement: a structure nobody tagged
-as a bridge is left exactly where it is, which is the rule refusing to guess.
+¹ Measured before the anchor rule landed; `bridgedem` gates the span repair
+and not the anchor, so `?bridgedem=0` reads 6.5 m today as well.
 
-**WHAT IT DOES NOT REACH**, unchanged from the survey: a viaduct over dry land
-(no water to take the reference from, so only the smear-free case moves); a
-ship, a crane or a pier, which no road tags; and a small river bridge, where
-the cover has no water at all — a hydro-field gate rather than a cover gate is
-what would reach that, and the hook is one argument wide. A cover tile that
-arrives AFTER a span is patched does not re-run the repair; the way-dirty path
-would have to carry it.
+The first cut's write-up called the 44.2 m row its control — "a structure
+nobody tagged as a bridge, left exactly where it is". It was the north pylon's
+own flank, and the seat photographed it. The shed is the control: a 200 m
+block the surface model carries at twelve to twenty metres, land to the cover,
+far off any span, and nothing here may touch it.
+
+### …and the seat's photograph: two white towers and two green mounds
+
+Sent with no words, from the top camera at `49.4261 0.2773`, beside the real
+bridge: the deck now runs over the water — and two tall pale cylinders stand
+where the pylons are, and two dark-green wedges stand on the far bank either
+side of the deck. Both are attributed, one is fixed, one is proposed.
+
+**THE TOWERS ARE OSM BUILDINGS.** The cell's banked z16 tiles carry the
+pylons as footprints: ways `1085528281` and `1085528282` at the south pylon's
+two legs (`building=yes`, `height=214`, nine points each, 46 m apart) and
+`1085528283` at the north pylon (`building=service`, `height=214`). `building()`
+reads the surveyed height, clamps it to **90 m** (`lineOn ? 26 : 90`), takes a
+flat roof and the region's tradition paint — a near-white cream — and hands
+the nine-point ring to the batch, which at phone scale is a pale cylinder
+ninety metres tall. `mmThing()` is not involved (`__built().mm` is 0: no
+`man_made` here), and the cable family builds no towers of its own —
+`supportSpacingM` is 0 for `cable` in infrastructure.ts, so a cable-stayed
+bridge gets a rail and nothing under it. **What stands at the pylons is the
+data drawn as the wrong thing**, in the right place at half the height. The
+proposal, not built: a `building` footprint whose surveyed height is far over
+any storey count, with no `building:levels`, whose centroid lies within a
+bridge span's corridor, is a pylon — a tapered concrete column of the
+footprint's radius at the surveyed height, concrete grey, the way `mmThing`
+builds a `tower`. The corridor test is the guard: a slender skyscraper mapped
+with `height` alone would otherwise become a pylon. The order in which a
+tile's ways build means the bridge way may not have registered its span when
+the footprint builds, so the test has to read the tile's own bridge-tagged
+highways as well as the registry.
+
+**THE MOUNDS WERE THE NORTH PYLON, AND THEY WERE THE RULE'S OWN FAULT.** Read
+from a spawn at `49.4395 0.2725` (still in the estuary — the Seine is a
+kilometre wide here, and the north bank is further than it looks), the relief
+map ±750 m showed a mound 230 m across and 76 m high straddling the span at
+the north pylon, with the deck strip through its middle **still at 63–76 m**:
+`__respan` — a probe that runs the repair again on the tile under a point with
+every span known and the cover loaded — moved nothing there (`cover 80,
+touching 14, before 74.24, after 74.24`). So it was not the order things
+arrived in; the rule refused the place. Two reasons, both in the walk:
+
+1. **The walk asked the cover before the mask.** WorldCover calls every texel
+   of an estuary span water — the survey found this at all sixteen — so the
+   first step off a deck texel landed on its neighbour, which was water to the
+   cover and deck to the field, and the "water" the deck was lowered to was
+   its own height. Nothing moved wherever the cover calls the deck water,
+   which is the whole channel; the south side worked only because the cover
+   there is trees, built and bare (rows 49–52 of the cover tile), so the walk
+   had to step over the mask to find its reference. The self-test never saw
+   it because every water case authored `wet` OUTSIDE the smear. Now a masked
+   texel is never the reference, whatever the cover says of it, and the
+   `all water` case (`() => true`) fails on the old module — `cleared to 60,
+   wanted the water + 1` — and passes on this one.
+2. **The first water is not the bed.** Off a pylon the first unmasked water
+   is the blob's own flank at sixty metres; with the reach at 14 texels there
+   is nothing else within it. The walk now carries on to its reach and keeps
+   the LOWEST water it saw, and a deck the cover itself calls water walks
+   **40 texels** (~190 m) for it — `waterReachPx` — while a deck the cover
+   calls land keeps the short reach and so a bluff road keeps its bank.
+
+That cut the slot: the strip at −1 to −2.3 across all three sections. **And
+left the two wedges standing either side of it** — 72.5 m and 76.2 m at the
+blob's widest row — because the mask is the deck's width and the blob is two
+hundred metres wide. Which is the photograph. So the structure's own flank
+comes down with the deck: from every lowered deck texel, a fill grows through
+texels the cover calls water that stand more than `blobM` (4 m) over that
+texel's target, on a leash of `waterReachPx` hops, and gives them the same
+target. The cover is the fence — a hill, an island under a span and the wall
+of a dam are land to it and stop the fill at their first texel, and the lake
+behind a dam is never reached because the dam is in the way (both held by
+the self-test). Measured, the north pylon's three cross-sections read −0.8 to
+−2.3 m across the full ±150 m; the tile's ledger went from 222 texels moved
+to 1,181, of them 832 flank; `__respan` afterwards moves nothing.
+
+**WHAT IT STILL DOES NOT REACH:** a viaduct over dry land (no water to take
+the reference from, so only the smear-free case moves — the south approach's
+`embankment=yes` ways run on a real 20 m earthwork the DSM shows and the road
+drapes over, which is right); a ship, a crane or a pier, which no road tags; a
+small river bridge, where the cover has no water at all; and the pylons
+themselves, standing as 90 m cream buildings until the proposal above is
+built. A cover tile that arrives AFTER a span is patched still does not
+re-run the repair; `__respan(x, z)` is the seat's way to ask.
 
 Held by `devtools/dem-spans.test.mjs` (pure: the deck cleared, a hill and a
 steep hill kept, an embankment refused, a cutting left alone, the water rule
-both ways) and `devtools/dem-ridges.mjs` for the tile arithmetic. `boot.mjs`
-and `through-node.test.mjs` are green (Camps Bay 8 / 0 / 0.19 m, unchanged);
+both ways, the water-called deck, the pylon blob with the cover calling the
+deck water and calling it land, the hill by a lake, the lake behind a dam)
+and `devtools/dem-ridges.mjs` for the tile arithmetic. `boot.mjs` and
+`through-node.test.mjs` are green (Camps Bay 8 / 0 / 0.19 m, unchanged);
 **`fixture-world.test.mjs` fails three checks — crossroads and tee "built sward
 meshes", village "built ribbon meshes" — and the control worktree at `b3efe88`
 fails the same three with the same mesh lists**, so they are not this work's.

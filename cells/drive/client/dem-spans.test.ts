@@ -124,6 +124,89 @@ export function runDemSpanSelfTest(): void {
     clearDemSpans(d, [midSpan(3)], DEM_SPAN_DEFAULTS, W, (px) => px < W / 2 - 6);
     if (Math.abs(at(d, W / 2, W / 2) - 1) > 0.01) fail(`cleared to ${at(d, W / 2, W / 2)}, wanted the water + 1`);
   }
+  // ── THE COVER CALLS THE DECK WATER TOO ──
+  // Which is what WorldCover actually says of a deck over an estuary: every
+  // texel of it, the span and the river alike, is class 80. The first cut
+  // asked the cover before the mask and so the first step off a deck texel
+  // found "water" at the deck's own height; the north pylon of the Pont de
+  // Normandie stayed at 74 m with everything loaded. A masked texel is never
+  // the reference.
+  {
+    const d = flat(0);
+    for (let y = 0; y < W; y++) for (let x = W / 2 - 2; x <= W / 2 + 2; x++) d[y * W + x] = 60;
+    const r = clearDemSpans(d, [midSpan(3)], DEM_SPAN_DEFAULTS, W, () => true);
+    if (Math.abs(at(d, W / 2, W / 2) - 1) > 0.01) fail(`all water: cleared to ${at(d, W / 2, W / 2)}, wanted the water + 1`);
+    if (r.moved < 5 * W * 0.9) fail(`all water: the deck should come down, moved ${r.moved}`);
+  }
+  // ── A PYLON'S FOOT IS A BLOB WIDER THAN THE REACH ──
+  // The surface model carries a pylon as a mound two hundred metres across
+  // with the deck over its crown, and the cover calls all of it water. Within
+  // the ordinary reach there is nothing but the mound's own flank; the water
+  // reach carries the walk to the river.
+  {
+    const d = flat(0);
+    for (let y = 0; y < W; y++) {
+      for (let x = 0; x < W; x++) {
+        const off = Math.abs(x - W / 2);
+        d[y * W + x] = off <= 2 ? 76 : Math.max(0, 76 - (off - 2) * 3);   // 76 on the deck, foot 27 texels out
+      }
+    }
+    const r = clearDemSpans(d, [midSpan(3)], DEM_SPAN_DEFAULTS, W, () => true);
+    if (Math.abs(at(d, W / 2, W / 2) - 1) > 0.01) fail(`pylon blob: crown cleared to ${at(d, W / 2, W / 2)}, wanted the water + 1`);
+    if (!r.onWater) fail('pylon blob: the water has to be the reference');
+    // …and the mound either side of the slot comes down with it, as far as
+    // it stands over the bar; the toe under the bar is left.
+    if (Math.abs(at(d, W / 2 + 10, W / 2) - 1) > 0.01) fail(`pylon blob: the flank stayed at ${at(d, W / 2 + 10, W / 2)}`);
+    if (Math.abs(at(d, W / 2 - 20, W / 2) - 1) > 0.01) fail(`pylon blob: the far flank stayed at ${at(d, W / 2 - 20, W / 2)}`);
+    if (at(d, W / 2 + 26, W / 2) !== 4) fail(`pylon blob: the toe under the bar moved to ${at(d, W / 2 + 26, W / 2)}`);
+    if (!r.flank) fail('pylon blob: the flank has to be counted');
+    // The same blob, with the deck's own texels called LAND by the cover:
+    // only the short reach is walked, and it finds nothing but flank.
+    const d2 = flat(0);
+    for (let y = 0; y < W; y++) {
+      for (let x = 0; x < W; x++) {
+        const off = Math.abs(x - W / 2);
+        d2[y * W + x] = off <= 2 ? 76 : Math.max(0, 76 - (off - 2) * 3);
+      }
+    }
+    clearDemSpans(d2, [midSpan(3)], DEM_SPAN_DEFAULTS, W, (px) => Math.abs(px - W / 2) > 20);
+    if (at(d2, W / 2, W / 2) < 60) fail(`land deck over a blob: the short reach must stand on the flank, got ${at(d2, W / 2, W / 2)}`);
+  }
+  // ── THE LAKE BEHIND A DAM IS NOT THE BRIDGE'S FLANK ──
+  // A deck over the tailwater below a dam: the fill from the lowered deck
+  // meets water that stands nowhere near the bar and stops; the dam's wall
+  // is land to the cover, and the lake behind it, forty metres up and water
+  // to the cover, is never reached.
+  {
+    const d = flat(0);
+    for (let y = 0; y < W; y++) {
+      for (let x = W / 2 - 2; x <= W / 2 + 2; x++) d[y * W + x] = 60;   // the deck
+      for (let x = W / 2 + 8; x <= W / 2 + 9; x++) d[y * W + x] = 40;   // the dam
+      for (let x = W / 2 + 10; x < W; x++) d[y * W + x] = 40;          // the lake
+    }
+    const wet = (px: number) => px < W / 2 + 8 || px >= W / 2 + 10;
+    const r = clearDemSpans(d, [midSpan(3)], DEM_SPAN_DEFAULTS, W, (px) => wet(px));
+    if (Math.abs(at(d, W / 2, W / 2) - 1) > 0.01) fail(`dam: deck cleared to ${at(d, W / 2, W / 2)}`);
+    if (at(d, W / 2 + 9, W / 2) !== 40) fail('dam: the wall moved');
+    if (at(d, W / 2 + 20, W / 2) !== 40) fail(`dam: the lake behind it moved to ${at(d, W / 2 + 20, W / 2)}`);
+    if (r.flank) fail(`dam: ${r.flank} texels of flank where there is none`);
+  }
+  // ── A HILL BESIDE A LAKE KEEPS ITS CREST ──
+  // The long reach is walked only from a texel the cover calls water. A road
+  // tagged as a bridge over a hill's crest, with a lake shore twenty texels
+  // off, is land to the cover: the short reach finds the hill's own flank a
+  // few metres down and the prominence guard leaves the crest.
+  {
+    const d = flat(0);
+    for (let y = 0; y < W; y++) {
+      for (let x = 0; x < W; x++) {
+        const r2 = Math.hypot(x - W / 2, y - W / 2);
+        d[y * W + x] = Math.max(0, 60 - r2 * 2);
+      }
+    }
+    const r = clearDemSpans(d, [midSpan(3)], DEM_SPAN_DEFAULTS, W, (px) => px > W / 2 + 20);
+    if (r.moved) fail(`a hill by a lake lost ${r.moved} texels`);
+  }
   // ── AND A HILL IS STILL A HILL WITH THE COVER ASKED ──
   {
     const d = flat(0);

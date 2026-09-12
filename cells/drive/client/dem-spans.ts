@@ -59,6 +59,28 @@ export interface DemSpan {
 export interface DemSpanOpts {
   /** How far past the mask to look for ground, in texels. */
   reachPx: number;
+  /** How far to look for the WATER under a deck the cover itself calls water,
+   *  in texels. A pylon's foot in a surface model is a blob two hundred metres
+   *  wide with the deck running over its crown, and every texel of it — deck,
+   *  blob and river — is water to the cover. Within `reachPx` of such a deck
+   *  there is nothing but the blob's own flank, and a rule that took the
+   *  first water it met stood on that flank. Measured at the Pont de
+   *  Normandie's north pylon: a 76 m crown left at 74 with the cover loaded
+   *  and every span known. Forty texels is about 190 m at the tile's zoom
+   *  in the mid-latitudes, and it is only ever walked from a texel the cover
+   *  says is water — a road along a bluff, which the cover calls land, keeps
+   *  the short reach and so its bank. */
+  waterReachPx: number;
+  /** Metres a texel must stand over the deck's own target, contiguous with a
+   *  lowered deck texel through texels the cover calls water, to be taken as
+   *  the structure's flank. The pylon blob is the case: a mound two hundred
+   *  metres wide with the deck over its crown, and the mask is the deck's
+   *  width, so the first cut carved a slot through the mound and left two
+   *  wedges standing either side — which is what the seat photographed. The
+   *  fill grows only through cover-water, so a hill, an island under a span,
+   *  or the wall of a dam stops it; four metres is over the field's own
+   *  noise on open water and under anything a structure stands. */
+  blobM: number;
   /** Metres a texel must stand over the ground beside it before it is touched
    *  at all — and the one number that keeps this off real terrain. A mask is
    *  the deck's own width, so the prominence an ORDINARY hillside shows across
@@ -94,7 +116,7 @@ export interface DemSpanOpts {
  */
 export type DemSpanWater = (px: number, py: number) => boolean;
 
-export const DEM_SPAN_DEFAULTS: DemSpanOpts = { reachPx: 14, riseM: 12, clearM: 1 };
+export const DEM_SPAN_DEFAULTS: DemSpanOpts = { reachPx: 14, waterReachPx: 40, riseM: 12, clearM: 1, blobM: 4 };
 
 /** Distance from a point to a segment, and the segment's unit normal. */
 function segNear(
@@ -122,8 +144,8 @@ export function clearDemSpans(
   opts: DemSpanOpts = DEM_SPAN_DEFAULTS,
   w = 256,
   isWater?: DemSpanWater,
-): { moved: number; worstM: number; refused: number; onWater: number } {
-  if (!spans.length) return { moved: 0, worstM: 0, refused: 0, onWater: 0 };
+): { moved: number; worstM: number; refused: number; onWater: number; flank: number } {
+  if (!spans.length) return { moved: 0, worstM: 0, refused: 0, onWater: 0, flank: 0 };
   const h = data.length / w;
   // The mask, and the segment each masked texel belongs to — the normal is
   // what makes the walk go ACROSS the deck rather than along it.
@@ -149,9 +171,14 @@ export function clearDemSpans(
       }
     }
   }
-  let moved = 0, worstM = 0, refused = 0, onWater = 0;
+  let moved = 0, worstM = 0, refused = 0, onWater = 0, flank = 0;
   const out = new Float32Array(data.length);
   out.set(data);
+  // What each lowered texel was lowered TO, and how many texels it is from
+  // the deck — the seeds and the leash of the flank fill below.
+  const tgt = new Float32Array(data.length);
+  const hop = new Int16Array(data.length).fill(-1);
+  const queue: number[] = [];
   for (let k = 0; k < data.length; k++) {
     if (!mask[k]) continue;
     const x = k % w, y = (k / w) | 0;
@@ -161,22 +188,33 @@ export function clearDemSpans(
     // leaves the structure, and a rule that accepted that would shave the
     // shoulders off every causeway on earth and leave its middle standing.
     let found = 0, ref = -Infinity, water = Infinity;
+    // A deck the cover calls water is over water, and its bed may be a long
+    // way past its own pylon's foot; a deck the cover calls land is looked
+    // past only as far as the smear of an ordinary deck reaches.
+    const reach = isWater && isWater(x, y) ? Math.max(opts.reachPx, opts.waterReachPx) : opts.reachPx;
     for (const sgn of [1, -1]) {
       let side: number | null = null;
-      for (let step = 1; step <= opts.reachPx; step++) {
+      for (let step = 1; step <= reach; step++) {
         const sx = Math.round(x + sgn * nx[k] * step);
         const sy = Math.round(y + sgn * ny[k] * step);
         if (sx < 0 || sy < 0 || sx >= w || sy >= h) break;
         const j = sy * w + sx;
-        // The cover's water beats anything: it is the one reading that cannot
-        // be the structure. Keep walking while the texels are masked OR while
-        // this side has only found more structure to stand on.
-        if (isWater && isWater(sx, sy)) {
-          side = data[j];
-          if (data[j] < water) water = data[j];
-          break;
-        }
+        // A masked texel is the structure under suspicion, whatever the cover
+        // says of it — and the cover says WATER of a deck over an estuary,
+        // every texel of it. The first cut asked the cover before the mask,
+        // so the first step off a deck texel landed on its neighbour, which
+        // was water to the cover and deck to the field, and the "water" the
+        // deck came down to was its own height. Nothing moved.
         if (mask[j]) continue;
+        // The cover's water beats anything: it is the one reading that cannot
+        // be the structure. But the FIRST water is not the bed — off a pylon
+        // the first water is the blob's flank — so the walk carries on to its
+        // reach and keeps the lowest water it saw.
+        if (isWater && isWater(sx, sy)) {
+          if (side === null) side = data[j];
+          if (data[j] < water) water = data[j];
+          continue;
+        }
         if (side === null) side = data[j];
         if (!isWater) break;              // no cover to ask: the first ground it is
       }
@@ -200,7 +238,40 @@ export function clearDemSpans(
     out[k] = target;
     moved++;
     if (data[k] - target > worstM) worstM = data[k] - target;
+    tgt[k] = target; hop[k] = 0; queue.push(k);
+  }
+  // ── THE STRUCTURE'S OWN FLANK COMES DOWN WITH THE DECK ──
+  //
+  // The surface model carries a pylon as a mound far wider than the deck,
+  // and the mask is the deck's width: the walk above carves a slot through
+  // the mound and leaves its two halves standing. Measured at the north
+  // pylon of the Pont de Normandie once the slot was cut: 72.5 m and 76.2 m
+  // either side of a strip at −2. From a lowered deck texel, grow outward
+  // through texels the cover calls WATER that stand more than `blobM` over
+  // that texel's own target, and give them the same target. The cover is
+  // the fence: a hill, an island under the span and the wall of a dam are
+  // land to it and stop the fill at their first texel, and the lake behind
+  // a dam is never reached because the dam is in the way. The leash keeps a
+  // fill from walking a whole estuary's worth of mis-classed marsh.
+  if (isWater) {
+    for (let qi = 0; qi < queue.length; qi++) {
+      const k = queue[qi];
+      if (hop[k] >= opts.waterReachPx) continue;
+      const x = k % w, y = (k / w) | 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const sx = x + dx, sy = y + dy;
+        if (sx < 0 || sy < 0 || sx >= w || sy >= h) continue;
+        const j = sy * w + sx;
+        if (mask[j] || hop[j] >= 0) continue;
+        if (data[j] - tgt[k] <= opts.blobM) continue;
+        if (!isWater(sx, sy)) continue;
+        out[j] = tgt[k]; tgt[j] = tgt[k]; hop[j] = hop[k] + 1;
+        moved++; flank++;
+        if (data[j] - tgt[k] > worstM) worstM = data[j] - tgt[k];
+        queue.push(j);
+      }
+    }
   }
   if (moved) data.set(out);
-  return { moved, worstM, refused, onWater };
+  return { moved, worstM, refused, onWater, flank };
 }
