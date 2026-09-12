@@ -3466,9 +3466,14 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
   workerLedger.hydroFeeds++;
   const sig = hydroInputSig(feats, ocean, surfaceOccluders);
   const prev = hydroFedInputs.get(key);
+  if (wasDirty) workerLedger.hydroWhyDirty++;
+  else if (!prev) workerLedger.hydroWhyFirst++;
+  else if (prev.sig !== sig) workerLedger.hydroWhySig++;
+  else workerLedger.hydroWhyGround++;
   if (HYDRO_SKIP && !wasDirty && prev && prev.sig === sig) {
     const moved = rasterMoved(prev.elev, elevation, hydroWetBand(t, featBoxes, ocean, EN));
     if (!moved.wet) {
+      workerLedger.hydroWhyGround--;
       workerLedger.hydroSkips++;
       // What the band bought: the ground DID move, and not where water is.
       if (moved.any) workerLedger.hydroSkipsDry++;
@@ -6910,7 +6915,14 @@ let buildInFlight: string | null = null;
 let workerGap = 100;
 /** A terrain apply landed since the last frame: the hydro drain skips one. */
 let appliedThisFrame = false;
-const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0, hydroBuildMs: 0, hydroBuilds: 0, hydroBuildMax: 0, lastHydroMs: 0, hydroFeeds: 0, hydroSkips: 0, hydroSkipsDry: 0 };
+const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0, hydroBuildMs: 0, hydroBuilds: 0, hydroBuildMax: 0, lastHydroMs: 0, hydroFeeds: 0, hydroSkips: 0, hydroSkipsDry: 0,
+  // ── WHY A FEED BUILT, which is the only way to cut the churn rather than
+  // guess at it. `dirty`: a body changed somewhere else and this tile was
+  // marked stale, so its inputs are the same and its answer is not — the
+  // raster is never even compared. `sig`: a feature or the ocean mask moved.
+  // `ground`: the elevation raster moved where the water reads it. `first`:
+  // no previous feed to compare against.
+  hydroWhyDirty: 0, hydroWhySig: 0, hydroWhyGround: 0, hydroWhyFirst: 0 };
 /** Everything a build reads that is not a raster, packed for the worker. */
 function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<TerrainJob, 'id'>; transfer: Transferable[] } {
   const flatten = (grid: Map<string, Seg[]>, cell: number, margin: number): { flat: Float64Array; cells: Array<[string, number[]]> } => {
@@ -40878,7 +40890,7 @@ function telemetryReport(): string {
   const row = (k: string, ms: number, cnt: number, max: number, slowMs: number, top: number): string =>
     `${k.padEnd(20)} ${String(Math.round(ms)).padStart(9)} ${String((100 * ms / Math.max(1, sessWall)).toFixed(1)).padStart(6)}% ${String(cnt).padStart(7)} ${String((ms / Math.max(1, cnt)).toFixed(1)).padStart(6)} ${String(max.toFixed(0)).padStart(6)} | ${String(Math.round(slowMs)).padStart(15)} ${String((100 * slowMs / Math.max(1, slowTotal)).toFixed(0)).padStart(5)}% ${String(top).padStart(6)}`;
   for (const r of rows) L.push(row(r.k, r.ms, r.n, r.max, r.slowMs, r.top));
-  if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)} · feeds ${workerLedger.hydroFeeds} skipped ${workerLedger.hydroSkips} (dry ground ${workerLedger.hydroSkipsDry})`);
+  if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)} · feeds ${workerLedger.hydroFeeds} skipped ${workerLedger.hydroSkips} (dry ground ${workerLedger.hydroSkipsDry}) · built by dirty ${workerLedger.hydroWhyDirty} sig ${workerLedger.hydroWhySig} ground ${workerLedger.hydroWhyGround} first ${workerLedger.hydroWhyFirst}`);
     const pa = Math.max(1, workerLedger.applied);
     L.push(`post split ms/build reseat ${(workerLedger.reseatMs / pa).toFixed(1)} redrape ${(workerLedger.redrapeMs / pa).toFixed(1)} hydro ${(workerLedger.hydroMs / pa).toFixed(1)} batter ${(workerLedger.batterMs / pa).toFixed(1)} culvert ${(workerLedger.culvertMs / pa).toFixed(1)} · post max ${Math.round(workerLedger.postMax)} · dropped ${workerLedger.dropped}`); }
   { const n = Math.min(drawStat.n, drawRing.length);
