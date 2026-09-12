@@ -358,26 +358,27 @@ function serveWebAsset(path: string) {
  *
  * A banked tile is an S3 object whose key IS this path, and CloudFront serves
  * it from S3 without ever reaching this code again: `serveTile` runs on a
- * cache MISS and nothing else. So a wrong answer, once written, is permanent —
- * there is no expiry, no re-check, and no request that could trigger one.
+ * cache MISS and nothing else. So a wrong answer, once written, is permanent
+ * — there is no expiry, no re-check, and no request that could trigger one.
+ * Bumping this number is a fresh keyspace and the only remedy there is.
  *
- * Measured at the Golden Gate: `10472/25319..25322` and `10473/25322` are
- * banked with an empty way list, 44 bytes each, while `10471/25322` beside
- * them carries 48 ways including the bridge's own sidewalk. A way that
- * crosses a tile boundary is returned for BOTH bboxes by `out geom`, so a
- * column of empties beside a tile holding the bridge is not geography; it is
- * a bad answer written down. The client clips each tile's ways to that
- * tile's bounds, so the empty column erases the span from the world.
+ * IT WAS BUMPED TO 5 ON A WRONG DIAGNOSIS AND PUT BACK. The Golden Gate
+ * looked like a poisoned bank: `10472/25319..25322` banked with an empty way
+ * list, 44 bytes each, beside a tile carrying the bridge's sidewalk. The tile
+ * arithmetic was off by one column. Tile 10472 begins at lon −122.4756 and
+ * the bridge stands at −122.4783, so the empty column is the open water east
+ * of it — genuinely empty, correctly banked. Checked against v5 afterwards:
+ * the tiles that DO hold the bridge answer with identical bytes on both
+ * keyspaces (1,678 at the deck, 13,891 at the north tower, 907 at the Forth
+ * Road Bridge). Nothing was ever poisoned, and a bump costs the world a
+ * re-fetch for nothing.
  *
- * The cause is upstream and now guarded (see askMirror: any `remark` is a
- * refusal), but the guard cannot unwrite what was written before it. Bumping
- * this version is a fresh keyspace: every tile is asked again, once, and the
- * poisoned rows are unreachable. It is the blunt instrument and the only one
- * — so it is one constant, and the client asks for the same number.
+ * The lesson kept from it is in `askMirror`: any `remark` is a refusal, so
+ * an unclean answer is never banked in the first place.
  *
- *   v4: water relations · v5: re-ask after the empty-bank finding
+ *   v4: water relations
  */
-const TILE_V = 5;
+const TILE_V = 4;
 const TILE_RE = new RegExp(`^/~/osm/v[2-${TILE_V}]/(\\d{1,2})/(\\d{1,7})/(\\d{1,7})$`);
 const COVER_RE = /^\/~\/cover\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // THREE upstreams, not one. Measured on a 12km corridor through Death Valley:

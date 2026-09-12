@@ -237,7 +237,7 @@ addEventListener('unhandledrejection', (e) => {
 const OSM_Z = 16;             // overpass tile zoom (~600m — keeps per-query weight low)
 /** The cell's tile keyspace — see TILE_V in index.ts. A banked tile is
  *  permanent, so this number is how a wrong one is escaped: bump both. */
-const OSM_TILE_V = 5;
+const OSM_TILE_V = 4;
 const OSM_RING = 1;           // load a (2R+1)² neighbourhood of vector tiles
 const TERRAIN_RING = 2;       // wider ring at the finer zoom keeps the horizon populated
 const REVEAL_M = 150;         // fog hole radius around the car, metres
@@ -23423,7 +23423,7 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
 });
 // Free the shared origin quota from the failed localStorage era.
 try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
-const osmCacheKey = (x: number, y: number): string => `7/${OSM_Z}/${x}/${y}`; // v7: v5 tiles (the empty-bank re-ask)
+const osmCacheKey = (x: number, y: number): string => `6/${OSM_Z}/${x}/${y}`; // v6: water relations (v4 tiles)
 async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
   // THE FIXTURE IS THE CACHE. Answering here as well as at the proxy is what
   // gives renderGated its halo — so an authored road solves its profile

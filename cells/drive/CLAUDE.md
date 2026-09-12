@@ -3139,49 +3139,41 @@ owes after this is the crossing's GEOMETRY — the registry still learns of a
 crossing after the road is built, from the built road; the profile now asks
 before, but through a function, not a record.
 
-### The empty tile bank, and why a bridge can be missing entirely
+### The empty tile bank: a wrong diagnosis, and what it taught
 
 The seat drove the Forth and the Golden Gate and found both bridges in the
-water. At the Golden Gate the cause is not the deck at all: **the tiles
-carrying the span are banked EMPTY**.
+water. Beside the Golden Gate sat a column of tiles banked with an empty way
+list — `10472/25319..25322`, 44 bytes each — next to a tile carrying 48 ways
+including the bridge's own sidewalk. Written up as a poisoned bank, fixed
+with a keyspace bump, deployed.
 
-```
-10472/25319  ways=0     10472/25320  ways=0     10472/25321  ways=0
-10472/25322  ways=0     10473/25322  ways=0
-10471/25322  ways=48    ← Golden Gate Bridge West Sidewalk, Presidio Parkway
-```
+**IT WAS THE TILE ARITHMETIC.** Tile 10472 begins at lon −122.4756 and the
+bridge stands at −122.4783, so that column is the open water EAST of the
+bridge: genuinely empty, correctly banked. The bridge's own column is 10471
+and always had its ways. Checked against the new keyspace afterwards, the
+tiles that hold the bridge answer with identical bytes on both — 1,678 at
+the deck, 13,891 at the north tower, 907 at the Forth Road Bridge. Nothing
+was ever poisoned. `TILE_V` went back to 4; a bump costs the world a
+re-fetch and there was nothing to heal.
 
-A way that crosses a tile boundary is returned for BOTH bboxes by
-`out geom`, so a column of 44-byte empties beside a tile holding the bridge
-is not geography. It is a bad answer written down. And the client clips each
-tile's ways to that tile's own bounds, so the neighbour's copy of the bridge
-is cut off at the boundary and the span is simply absent from the world.
+**WHAT SURVIVES IT.** Two things worth keeping. `askMirror` refuses ANY
+Overpass `remark` now rather than three by name: a bank with no expiry
+cannot afford a guess about which remarks are benign, and the cost of
+heeding all of them is one 503 and a retry. And the mechanism the panic
+uncovered is real and worth writing down: a banked tile is an S3 object
+whose key IS the request path, CloudFront serves it without the cell's code
+running, and `serveTile` runs on a cache MISS and nothing else. There is no
+expiry, no re-check, and no request that could trigger one. If a tile is
+ever wrong, the version constant is the only remedy there is.
 
-**WHY IT IS PERMANENT.** A banked tile is an S3 object whose key IS the
-request path, and CloudFront serves it from S3 without the cell's code
-running: `serveTile` runs on a cache MISS and nothing else. There is no
-expiry, no re-check, and no request that could trigger one. An empty answer
-is stored deliberately — ocean, desert and open country are most of the
-planet and leaving them unwritten would make the commonest tile on Earth a
-permanent miss — so nothing distinguishes "no roads here" from "Overpass
-gave me nothing this time".
-
-**THE CAUSE, and what was already guarded.** A timed-out Overpass query
-answers HTTP 200 with an empty element list and the reason in `remark`.
-`askMirror` already refused three of those — `timed out`, `out of memory`,
-`runtime error` — added proactively after a 25-tile audit found no
-disagreements. The Golden Gate's column is what a remark outside that list
-looks like, or a tile banked before the guard existed. **Any** remark is now
-a refusal: a bank with no expiry cannot afford a guess about which remarks
-are benign, and the cost of heeding all of them is one 503 and a retry.
-
-**AND THE ONLY HEAL IS THE VERSION.** Nothing can rewrite a banked tile in
-place, so the tile path carries `TILE_V`, now **5** (the route regex derives
-from it and the client asks for the same number). A bump is a fresh
-keyspace: every tile is asked once more and the poisoned rows are
-unreachable. It costs the world a re-fetch, which is the price of a bank
-with no expiry, and it is one constant in two files. The client's own
-IndexedDB key went to `7` with it.
+**AND THE REAL FAULTS AT THOSE TWO SPOTS**, found while disproving the
+first: the Golden Gate's carriageway is named `Presidio Parkway` and carries
+`bridge:name=Golden Gate Bridge`, which the entry lookup reads first, so the
+hint reaches it. The Forth Road Bridge is named exactly that, and the store's
+`forth-bridge` entry matches `forth bridge` and `forth rail` — neither is a
+substring of "Forth Road Bridge" — so it has no entry at all, and its ways
+carry no `bridge:structure`, which means the recipe rolls a beam and plants
+a support every 24 metres across the firth.
 
 ### …and the clearance is proportional to the crossing
 
