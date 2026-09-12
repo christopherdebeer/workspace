@@ -306,7 +306,11 @@ export class ClimateField {
     w: [0, 0, 0, 0, 0], w0: [0, 0, 0, 0, 0], domIdx: 2, tempC: 12, moisture: 0.5,
     treeline: 2000, elevAbs: 0, hadCover: false, stamp: 0,
   };
-  constructor(private env: ClimateEnv) {}
+  /** The corner lattice's pitch. CLIM_G for the fine world; the far shell
+   *  asks for a field at its own scale (see farClimField in main.ts), because
+   *  a z4 vertex 2.4 km from its neighbour misses a 2 km memo four times over
+   *  and a 1,200 km tile has 360,000 corners against a cache of 20,000. */
+  constructor(private env: ClimateEnv, readonly cellM: number = CLIM_G) {}
   get size(): number { return this.cache.size; }
   /** New cover: every corner that had none gets one more chance. */
   noteCover(): void { this.stamp++; }
@@ -317,7 +321,7 @@ export class ClimateField {
     // it must be, or the far shell recomputes it per vertex — but only until
     // the next cover tile lands, at which point it is asked again, once.
     if (c && (c.hadCover || c.stamp === this.stamp)) return c;
-    const fresh = climCompute(this.env, gx * CLIM_G, gz * CLIM_G, this.stamp);
+    const fresh = climCompute(this.env, gx * this.cellM, gz * this.cellM, this.stamp);
     if (this.cache.size > CLIM_CACHE_MAX) this.cache.clear();
     this.cache.set(k, fresh);
     return fresh;
@@ -333,7 +337,7 @@ export class ClimateField {
    */
   at(x: number, z: number, elevAbs?: number): ClimateSample {
     const s = this.scratch;
-    const fx = x / CLIM_G, fz = z / CLIM_G;
+    const fx = x / this.cellM, fz = z / this.cellM;
     const gx = Math.floor(fx), gz = Math.floor(fz);
     const tx = fx - gx, tz = fz - gz;
     const a = this.corner(gx, gz), b = this.corner(gx + 1, gz);

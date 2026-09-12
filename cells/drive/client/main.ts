@@ -15,7 +15,7 @@
  * backend.
  */
 import * as THREE from 'three';
-import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, GROUND_RAMPS, altBandAt, aspectLift, climPick,
+import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, CLIM_G, ClimateField, GROUND_RAMPS, altBandAt, aspectLift, climPick,
   climPickRow, krummholz, siteAt, swardLift, treelineAt, type ClimateSample, type SiteClimate } from './climate';
 import { createAudio, type ImpactKind } from './audio';
 import { coastKm } from './coast';
@@ -1122,6 +1122,7 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
     tworker?.mirrorCover(key, ctile);
     // New evidence: every climate corner that had none gets one more chance.
     climField.noteCover();
+    for (const f of farClimFields.values()) f.noteCover();
     // Terrain built before this arrived was coloured from a guess and, more
     // importantly, has no seabed under its water. Rebuild what this tile
     // covers — staggered by the rebuild throttle, so it costs a few frames
@@ -1778,6 +1779,31 @@ const climEnv = {
   groundAt: (x: number, z: number) => groundAt(x, z) + baseElev,
 };
 const climField = new ClimateField(climEnv);
+/**
+ * ── THE SHELL'S CLIMATE, AT THE SHELL'S SCALE ──
+ *
+ * The far bake asked `climateAt` per vertex, and the seat's dump on the wide
+ * chart put far:bake at 216 ms a tile, 30% of the session and top of a third
+ * of the slow frames. At z4 a tile is 1,200 km and its vertices 2.4 km apart:
+ * every vertex missed the fine field's 2 km corner memo four times over, each
+ * miss a full climCompute, and the tile's 360,000 corners cleared a cache of
+ * 20,000 several times per bake — so nothing was ever reused. A field per
+ * cell size instead: the coarser the level, the coarser its lattice (a
+ * twenty-fourth of the tile, never finer than the fine field's), its corners
+ * shared across the ring, and its cover read through the SHELL's sampler so
+ * a corner over the wide raster counts as evidenced and is not recomputed on
+ * every cover arrival. The fine field is untouched: it never sees the shell.
+ */
+const farClimEnv = { ...climEnv, coverAt: (x: number, z: number) => sampleCoverShell(x, z) };
+const farClimFields = new Map<number, ClimateField>();
+function farClimCell(tileW: number): number {
+  return Math.max(CLIM_G, 2 ** Math.ceil(Math.log2(Math.max(1, tileW / 24))));
+}
+function farClimField(cellM: number): ClimateField {
+  let f = farClimFields.get(cellM);
+  if (!f) { f = new ClimateField(farClimEnv, cellM); farClimFields.set(cellM, f); }
+  return f;
+}
 /**
  * ── THE SITE: THE SAME WORLD, ASKED A HARDER QUESTION ──
  *
@@ -3424,6 +3450,10 @@ function elevEffAt(x: number, z: number): number {
 type Climate = ClimateSample & { dom: Biome };
 const climOut = { dom: BIOMES.temperate } as { dom: Biome };
 function climateAt(x: number, z: number, elevAbs?: number): Climate {
+  return climateIn(climField, x, z, elevAbs);
+}
+/** The same answer off a given field — the shell's coarse one, or the fine. */
+function climateIn(field: ClimateField, x: number, z: number, elevAbs?: number): Climate {
   // ART DIRECTION WINS, and collapses the field to one archetype — otherwise
   // `?biome=arid` would still blend a green valley through the desert.
   if (biomeForced) {
@@ -3434,7 +3464,7 @@ function climateAt(x: number, z: number, elevAbs?: number): Climate {
     forcedSample.elevAbs = elevAbs ?? forcedSample.elevAbs;
     return Object.assign(forcedSample, { dom: biomeForced }) as Climate;
   }
-  const s = climField.at(x, z, elevAbs);
+  const s = field.at(x, z, elevAbs);
   climOut.dom = BIOME_LIST[s.domIdx];
   return Object.assign(s, climOut) as Climate;
 }
@@ -3461,7 +3491,7 @@ const COVER_TINT: Record<number, Rgb> = {
 };
 const COVER_MIX = 0.55;     // how far toward the tint the biome ramp is pulled
 const terrainPalette = (elev: number, slope: number, cover?: number | null,
-  px?: number, pz?: number): [number, number, number] => {
+  px?: number, pz?: number, clim?: ClimateField): [number, number, number] => {
   // Solarpunk desert: cyan shallows → warm sand → ochre scrub → dry upland →
   // bare rock → snow. The emerald in this world comes from the VEGETATION
   // standing on the sand, not from painting the ground green.
@@ -3474,7 +3504,9 @@ const terrainPalette = (elev: number, slope: number, cover?: number | null,
   // than five separate scans. Without a position — a caller I have missed, or
   // one that genuinely has none — it falls back to the settled `biome`, which
   // is exactly the old behaviour.
-  const cl = px !== undefined && pz !== undefined ? climateAt(px, pz, elev) : null;
+  // The shell hands its own coarse field in (see farClimField); the fine
+  // world asks the fine one.
+  const cl = px !== undefined && pz !== undefined ? climateIn(clim ?? climField, px, pz, elev) : null;
   const ramp = biome.ramp;
   let c: Rgb = ramp[ramp.length - 1][1];
   // THE SHALLOWS BAND IS ABOUT WATER, NOT ABOUT ALTITUDE. Every ramp opens
@@ -6954,6 +6986,27 @@ function frameHeavyMs(): number {
 /** The hydro system's tile builds, run one a frame from the frame loop. */
 const hydroJobs: Array<{ job: () => unknown; resolve: (v: never) => void; reject: (e: Error) => void }> = [];
 let hydroJobAt = 0;
+/** Far bakes waiting for frame time — see the loop in loadFarTile. */
+const farBakeJobs: Array<{ n: number; i: number; step: (i: number) => void; live: () => boolean; done: () => void }> = [];
+/** Milliseconds of a frame the far bakes may take. Six is a tenth of a 60 Hz
+ *  frame and a fifth of the phone's usual 30; a z4 tile of 12,800 vertices
+ *  at nine microseconds each is about twenty frames, so a ring of twenty-five
+ *  lands in ten seconds at 60 Hz where it stalled the thread for five. */
+const FAR_BAKE_MS = 6;
+function stepFarBakes(): void {
+  if (!farBakeJobs.length) return;
+  // Not on top of a frame that already carried a heavy build.
+  if (frameHeavyMs() >= FRAME_HEAVY_MS) return;
+  const t0 = performance.now();
+  while (farBakeJobs.length && performance.now() - t0 < FAR_BAKE_MS) {
+    const j = farBakeJobs[0];
+    if (!j.live()) { farBakeJobs.shift(); j.done(); continue; }
+    const end = Math.min(j.n, j.i + 256);
+    for (; j.i < end; j.i++) j.step(j.i);
+    if (j.i >= j.n) { farBakeJobs.shift(); j.done(); }
+  }
+  profAdd('far:bake', t0);
+}
 function drainHydroJobs(now: number, applied: boolean): void {
   if (!hydroJobs.length) return;
   // Not in a frame that already carried a terrain apply — unless the queue
@@ -26094,7 +26147,19 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   // than the same hillside in the fine layer, which is what drew a hard-edged
   // rectangle of "real" terrain around the car on the wide chart.
   const cell = w / 128;
-  for (let i = 0; i < n; i++) {
+  const clim = farClimField(farClimCell(w));
+  // ── THE LOOP RUNS IN SLICES, FROM THE TICK ──
+  // Even with the climate memo doing its job the loop is nine microseconds a
+  // vertex on the phone — 146 ms a tile at z11, a whole frame and three more
+  // — and it ran to completion inside the fetch's continuation, off the tick,
+  // where nothing could pace it. It is a job now: stepFarBakes takes
+  // FAR_BAKE_MS of a frame (and stands down in a frame that already carried a
+  // heavy build), so the ring fills a tile every dozen frames instead of
+  // stalling one frame per tile. The step is this closure over the arrays;
+  // the shared scratch it writes (sphV, the climate field's) is safe because
+  // a slice is synchronous.
+  const live = (): boolean => z === farZ && !farOutside(z, x, y);
+  const bakeOne = (i: number): void => {
     const ix = i % (seg + 1), iz = (i / (seg + 1)) | 0;
     const lx = (ix / seg - 0.5) * w, lz = (iz / seg - 0.5) * h;
     // Sampled from THIS tile's own pixels — no cross-tile bilinear, no road
@@ -26141,7 +26206,7 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     // water, whatever the mode is. `hit` still counts only real cover, so
     // __far().cover keeps reporting how much of the raster the tile had.
     const cvv = cv ?? (raw < seaSurfaceAbs() ? 80 : coverMode);
-    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1), cvv, fwx, fwz);
+    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1), cvv, fwx, fwz, clim);
     // Uint8Array WRAPS, it does not clamp, so a palette that ever answered over
     // 1 would come back as a dark vertex rather than a bright one — the kind of
     // thing that shows as one wrong pixel in a ring of twenty-five tiles.
@@ -26149,12 +26214,15 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     colors[i * 3 + 1] = clamp(Math.round(g * 255), 0, 255);
     colors[i * 3 + 2] = clamp(Math.round(bb * 255), 0, 255);
     tr += r; tg += g; tb += bb;
-  }
+  };
+  profAdd('far:bake', _pBuild);   // the lattice and the arrays; the slices bill themselves
+  await new Promise<void>((done) => { farBakeJobs.push({ n, i: 0, step: bakeOne, live, done }); });
+  // The ring may have moved on, or the level changed, while the slices ran.
+  if (!live()) { farTiles.delete(key); return; }
   // WHAT THIS TILE KNEW WHEN IT WAS BAKED, and what it came out looking like.
   farCoverHit.set(key, hit / Math.max(1, n));
   farTint.set(key, [tr / n, tg / n, tb / n]);
   farBakeZ.set(key, coverWideZ);
-  profAdd('far:bake', _pBuild);
   const _pGeo = performance.now();
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
@@ -41753,6 +41821,7 @@ function tick(now: number): void {
   vehicleWaterMarks.update(vehicleWater.activeStamps(vehicleWaterTimeS), vehicleWaterTimeS);
   { const _p = performance.now(); flushTerrain(now); profAdd('flushTerrain', _p); }
   drainHydroJobs(now, appliedThisFrame);
+  stepFarBakes();
   appliedThisFrame = false;
   { const _p = performance.now(); hydroTick(now); profAdd('hydroTick', _p); }
   // The sea keeps its station off a coast and stands down over dry basins.
