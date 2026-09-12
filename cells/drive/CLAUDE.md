@@ -2889,6 +2889,140 @@ and `devtools/dem-ridges.mjs` for the tile arithmetic. `boot.mjs` and
 meshes", village "built ribbon meshes" — and the control worktree at `b3efe88`
 fails the same three with the same mesh lists**, so they are not this work's.
 
+### Bridges are landmarks
+
+The seat's verdict on the deck repair: we were going down the wrong path.
+Large bridges are landmarks — their architecture and materials distinct and
+well known — and while the substrate and the hydro field should handle any
+crossing, a famous bridge needs its profile to be recognisable. The question
+was whether there are general bridge morphologies to paint even the famous
+ones from. There are, and they are few.
+
+**WHERE THE CODE STOOD.** `infrastructure.ts` named six bridge families and
+a silhouette per family, and nothing in main.ts read the silhouette. A bridge
+was a deck ribbon, a rail, and round piers at a spacing for four families;
+the cable family had `supportSpacingM` 0 and got nothing under it at all. The
+Pont de Normandie's pylons existed only because OSM happens to map them as
+buildings (`building=yes height=214`, clamped to 90 m and painted cream). The
+landmarks store — "the world the data cannot draw", authored by hand, in git,
+wire-format ready — had pyramids, an obelisk, a spire and a ring.
+
+**THE MORPHOLOGIES, AND WHAT IDENTIFIES AN INSTANCE.** Structural
+engineering's own taxonomy, read for what a driver recognises from a
+kilometre off at this pixel scale:
+
+| family | what identifies an instance | famous instances |
+|---|---|---|
+| girder / viaduct | pier rhythm, deck depth | Øresund's approach, Confederation |
+| arch | through, deck or tied; rise over span; open or filled spandrels; hangers | Sydney Harbour (through, 0.27, granite end pylons), Hell Gate, Pont du Gard (three tiers), Charles Bridge (16 stone arches) |
+| truss / cantilever | web pattern, through or deck, balanced cantilever | the Forth (three tubular cantilevers, red oxide) |
+| suspension | **tower style**, cable sag, side spans, truss or box deck, colour | Golden Gate (deco portal, International Orange), Brooklyn (gothic stone), Humber (plain portal), Akashi (braced), Tsing Ma and Verrazzano (double deck) |
+| cable-stayed | **pylon form**: A, inverted Y, H, mast, diamond; fan, semi-fan or harp; pylon count | Normandie (inverted Y, white), Millau (seven A-frames on 245 m piers), Øresund (H, harp, double deck), Rion–Antirrio (four A-frames), Erasmus and Alamillo (one mast) |
+| movable | bascule with towers, swing, lift, transporter | Tower Bridge (gothic pair, high walkway) |
+
+The dozen parameters per entry: family; span stations; tower style; cable
+pattern; arch placement and rise; deck section; rail; material and colour;
+end features. **Nine tower styles cover the famous bridges** — `portal`,
+`deco-portal`, `braced-portal`, `gothic`, `a-frame`, `inverted-y`, `h-frame`,
+`mast`, `cantilever` — with four cable patterns (`fan`, `semi-fan`, `harp`,
+`suspension`) and two arch placements. That is the vocabulary
+`bridge-forms.ts` paints from.
+
+**THE TABLE, as authored in `landmarks.ts` (kind `bridge`):**
+
+| bridge | form | tower | cables | tower over deck | stations | colour |
+|---|---|---|---|---|---|---|
+| Pont de Normandie | cable-stayed | inverted-y | semi-fan | 160 m | the two OSM pylon footprints | white concrete |
+| Golden Gate | suspension | deco-portal | suspension, sag 0.11 | 152 m | two, 1,280 m apart | International Orange `f04a00` |
+| Sydney Harbour | arch, through, rise 0.27 | — | hangers | — | the arch's two ends; granite pylon pairs | grey steel, sandstone |
+| Tower Bridge | bascule | gothic | — | 55 m | the two towers | Portland stone, blue steel |
+| Brooklyn | suspension | gothic | suspension, sag 0.08 | 48 m | two, 486 m apart | granite, grey cable |
+| Forth | truss, through | cantilever | — | 100 m | three | red oxide `9b3b2c` |
+| Millau | cable-stayed | a-frame | fan | 87 m | seven, as fractions | white |
+| Øresund | cable-stayed | h-frame | harp | 145 m | two | grey, double deck |
+| Akashi Kaikyō | suspension | braced-portal | suspension | 200 m | two, 1,991 m apart | grey-green |
+| Humber | suspension | portal | suspension | 125 m | two | concrete |
+| Tsing Ma | suspension | portal | suspension | 144 m | two | grey, double deck |
+| Rion–Antirrio | cable-stayed | a-frame | fan | 113 m | four, as fractions | white |
+| Erasmus | cable-stayed | mast | harp | 127 m | one | pale blue |
+| Verrazzano-Narrows | suspension | portal | suspension | 141 m | two | grey, double deck |
+| 25 de Abril | suspension | portal | suspension | 120 m | two | red `c4472f`, double deck |
+| Bosphorus | suspension | portal | suspension | 101 m | two | grey |
+| Hell Gate | arch, through, rise 0.2 | — | hangers | — | stone end pylons | red-brown steel |
+| Alamillo | cable-stayed | mast | harp | 142 m | one | white |
+| Severn | suspension | portal | suspension | 100 m | two, 988 m apart | pale grey |
+
+Charles Bridge and the Pont du Gard need no entry: a stone multi-arch at
+16–35 m spans is what the recipe's `arch` family already paints between its
+piers (the spandrel walls, `gap` 8–45 m). What the entries cannot say yet:
+Alamillo's mast leans and Erasmus's is bent, Brooklyn's stays are diagonal
+as well as vertical, and the Forth's truss deepens at the towers. Those are
+the next four parameters, each a small addition to a style that exists.
+
+**THE PAINTER** (`client/bridge-forms.ts`, pure). A bridge is an ASSEMBLY of
+deck fragments — OSM splits a long bridge into several ways, one per
+carriageway and again at the pylons, each rendered as its own ribbon in its
+own tile — gathered by the bridge's name (`bridge:name` or `name`; unnamed
+bridges are assemblies of one) and rebuilt from every fragment known each
+time one arrives. The principal axis is the line between the assembly's two
+most distant ends; stations are authored points, mapped `bridge:support`
+nodes, or fractions of the axis; a station stands BETWEEN the fragments it
+finds (a twin carriageway gets one tower, not two beside it) and only an
+authored point's position along the axis is used, so a coordinate a few tens
+of metres wide of the deck still puts the tower on the bridge. Towers are
+boxes from the ground (the DEM under the station — after the deck repair,
+the bed) to the deck as a foundation and legs above by style; stays are
+crossed thin quads from the tower to every deck edge within half the
+distance to the next tower; the suspension cable is a parabola between tower
+tops with the textbook sag and hangers to the deck edge every step; a
+through arch is a pair of ribs outside the kerbs with hangers down and cross
+bracing on top, a deck arch the same rib below on footings with columns up;
+a truss is chords, verticals and Warren diagonals on both sides. One mesh per
+bridge with vertex colours, in the world group like a landmark and not in a
+tile's road batch, so the north pylon does not vanish when the tile that
+carried the south carriageway is evicted. `?bridgeforms=0` is the A/B.
+
+**THE PAINTER NEVER GUESSES A FORM ON A LONG BRIDGE.** Measured at the
+untagged Severn Bridge: the recipe's family is a weighted roll made per way,
+and it came up `cable` on one boot (two A-frames and 210 stays on a
+suspension bridge) and `truss` on the next (a 6,428-quad lattice along two
+kilometres). Above 150 m only a `bridge:structure` tag or a landmark entry
+names a form; an untagged long bridge stays what it was, a deck on piers,
+and the assembly takes the majority family across its fragments for the
+short ones. The Severn got an entry.
+
+**THE LANDMARK KIND.** A `bridge` entry claims an assembly by name within
+`reach` metres of its position and overrides the generic spec's fields; its
+stations become the towers; `pad` metres round each station an OSM building
+stands down, which is how the Normandie's 214 m "buildings" leave. A bridge
+entry flattens no pad and stands no group up of its own — `liveLandmarks`
+filters it out — its geometry is the assembly's.
+
+**THE MAP'S OWN PYLONS.** The cell's query and the client's fallback now
+fetch `nwr["bridge:support"]`; `renderWays` notes each one in local metres
+before any ribbon asks, and an assembly with no authored stations takes the
+pylons and piers within 40 m of its fragments as its stations. Banked tiles
+predate the query change and carry none until they are refetched.
+
+**MEASURED at the Pont de Normandie**, from the deck at the south pylon,
+150 s settled, no page errors: the assembly `bridge:pont de normandie:1`
+gathered **16 fragments** (both carriageways, split at the pylons and at the
+tile edges), matched the entry, and stood up **2 towers, 268 stays, 576
+quads** in 16 rebuilds; `__built()` reports no intact building — the two
+214 m pylon "buildings" stood down inside the entry's pads. From mid-span
+looking north the frame is the bridge: the inverted-Y pylon with its legs
+meeting into a mast, the semi-fan of stays converging on it from both deck
+edges, the estuary either side. From the south approach the pylon rises out
+of the frame with the fan hanging off it. `boot.mjs` and
+`through-node.test.mjs` green, Camps Bay 8 / 0 / 0.19 m unchanged.
+
+Held by `devtools/bridge-forms.test.mjs`: the tags name the family, a girder
+paints nothing, two towers at the default stations with the right height and
+a foundation to the ground, one tower between twin decks, authored stations
+fix only the position along, the suspension tower height, the through arch's
+crown and the deck arch's footing, the truss's depth, the bascule's pair, the
+end pylons, and the attribute arrays agree.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.

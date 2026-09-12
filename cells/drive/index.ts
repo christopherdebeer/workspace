@@ -1469,6 +1469,7 @@ function overpassQuery(z: number, x: number, y: number): string {
       nwr["historic"~"^(castle|fort|monument|memorial|ruins|archaeological_site|city_gate|citywalls|aqueduct)$"](${bbox});
       nwr["power"="generator"]["generator:source"="wind"](${bbox});
       way["waterway"~"^(dam|weir)$"](${bbox});
+      nwr["bridge:support"](${bbox});
     );out geom 2000;`;
 }
 

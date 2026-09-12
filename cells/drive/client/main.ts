@@ -44,6 +44,7 @@ import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } f
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
 import { anchorElevation, demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
 import { clearDemSpans, DEM_SPAN_DEFAULTS, type DemSpan } from './dem-spans';
+import { buildBridgeForms, specFor as bridgeSpecFor, type BridgeFormSpec, type BridgeWay } from './bridge-forms';
 import { smoothChartZoom, wrapLongitude } from './globe-navigation';
 import { bitmapStats, withDecodedBitmap } from './decode-telemetry';
 import { GLOBE_R, PLANET_SUN_GLSL, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, globeEast, globeNorth, subsolar } from './globe';
@@ -7458,6 +7459,228 @@ function noteBridgeSpan(pts: Array<[number, number]>, width: number): void {
       }
     }
   }
+}
+/**
+ * ── BRIDGE FORMS: THE STRUCTURE A DECK HANGS FROM ──
+ *
+ * OSM splits a long bridge into several ways — one per carriageway, and
+ * again at the pylons — and each renders as its own ribbon, in its own tile,
+ * in whatever order the tiles arrive. A tower is not a property of any one
+ * of those fragments; it is a property of the BRIDGE. So the fragments of a
+ * bridge are gathered into an assembly keyed on the bridge's name (the
+ * `bridge:name` or `name` tag, which is how OSM says "these are one
+ * structure"; an unnamed bridge is an assembly of one) and the assembly's
+ * forms — towers, stays, cables, ribs, lattice — are rebuilt from every
+ * fragment known each time one arrives. A rebuild is a few hundred quads
+ * and happens as many times as the bridge has fragments, which is a handful.
+ *
+ * The forms are one mesh per bridge in the world group, like a landmark,
+ * and not part of the road batch: a road batch belongs to a tile and dies
+ * with it, and the north pylon must not vanish when the tile that carried
+ * the south carriageway is evicted. They die at a hop, with everything else.
+ *
+ * `bridge-forms.ts` does the geometry and is pure; this is the world's side
+ * of it — what a fragment is, where the ground is, and what a bridge is
+ * called. See "Bridges are landmarks" in CLAUDE.md.
+ */
+interface BridgeAssembly {
+  key: string;
+  name: string | null;
+  ways: Map<string, BridgeWay>;
+  tags: Record<string, string>;
+  family: string;
+  families: Map<string, number>;
+  spec: BridgeFormSpec | null;
+  mesh: THREE.Mesh | null;
+  quads: number;
+  towers: number;
+  stays: number;
+  hangers: number;
+  ribs: number;
+  panels: number;
+  builds: number;
+}
+const bridgeAssemblies = new Map<string, BridgeAssembly>();
+const BRIDGE_FORMS_ON = qsOn('bridgeforms', true);
+/** Pylon and pier positions the map carries (`bridge:support` nodes and
+ *  areas), by the tile that brought them, in local metres. A bridge whose
+ *  supports are mapped stands its towers where the map says. */
+const bridgeSupports = new Map<string, { x: number; z: number; kind: string }>();
+let bridgeMat: THREE.MeshLambertMaterial | null = null;
+function bridgeMatFor(): THREE.MeshLambertMaterial {
+  if (bridgeMat) return bridgeMat;
+  // Vertex colours: one mesh carries white concrete, grey steel and pale
+  // cable together, and a landmark entry can paint a bridge any colour it
+  // was painted in life without a material per bridge.
+  const m = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: DS });
+  terrainFx(m);
+  sunMarchFx(m);
+  grainFx(m, 'grain-bridge', 0.5, 0.05);
+  bridgeMat = m;
+  return m;
+}
+function bridgeKeyFor(tags: Record<string, string> | undefined, wayKey: string | undefined): { key: string; name: string | null } {
+  const name = tags?.['bridge:name'] ?? tags?.name ?? null;
+  // A name is shared by both carriageways and every fragment; a layer keeps
+  // two named bridges that cross each other apart.
+  if (name) return { key: `bridge:${name.toLowerCase()}:${tags?.layer ?? ''}`, name };
+  return { key: `bridge:${wayKey ?? 'anon'}`, name: null };
+}
+/**
+ * A bridge fragment, as the ribbon built it: the dense centreline and the
+ * deck height at each point. The assembly it belongs to is rebuilt.
+ */
+function noteBridgeForm(wayKey: string | undefined, tags: Record<string, string> | undefined, family: string,
+  dense: Array<[number, number]>, deckY: number[], width: number): void {
+  if (!BRIDGE_FORMS_ON || dense.length < 2) return;
+  let { key } = bridgeKeyFor(tags, wayKey);
+  const { name } = bridgeKeyFor(tags, wayKey);
+  // A road's name is often the only name a bridge way carries — "A29" on
+  // every bridge the A29 crosses — and an assembly that gathered fragments
+  // kilometres apart would stretch its axis across all of them. A fragment
+  // more than four kilometres from an assembly's first point is another
+  // bridge with the same name.
+  for (let n = 0; n < 8; n++) {
+    const have = bridgeAssemblies.get(key);
+    if (!have) break;
+    const first = have.ways.values().next().value as BridgeWay | undefined;
+    if (!first || Math.hypot(first.pts[0][0] - dense[0][0], first.pts[0][1] - dense[0][1]) < 4000) break;
+    key = `${key}@${n + 1}`;
+  }
+  let a = bridgeAssemblies.get(key);
+  if (!a) {
+    a = { key, name, ways: new Map(), tags: tags ?? {}, family, families: new Map(), spec: null, mesh: null,
+      quads: 0, towers: 0, stays: 0, hangers: 0, ribs: 0, panels: 0, builds: 0 };
+    bridgeAssemblies.set(key, a);
+  }
+  a.ways.set(wayKey ?? `${key}#${a.ways.size}`, { pts: dense.map((p) => [p[0], p[1]] as [number, number]), y: deckY.slice(), width });
+  // The recipe rolls a family PER WAY, so two fragments of one bridge can
+  // disagree; the assembly takes the majority, which is stable once the
+  // fragments are in whatever order they arrived.
+  a.families.set(family, (a.families.get(family) ?? 0) + 1);
+  let top = 0;
+  for (const [f, n] of a.families) if (n > top) { top = n; a.family = f; }
+  rebuildBridgeForms(a);
+}
+function rebuildBridgeForms(a: BridgeAssembly): void {
+  const ways = [...a.ways.values()];
+  // The principal span for the spec's defaults: the longest fragment.
+  let longest = 0;
+  for (const w of ways) {
+    let l = 0;
+    for (let i = 1; i < w.pts.length; i++) l += Math.hypot(w.pts[i][0] - w.pts[i - 1][0], w.pts[i][1] - w.pts[i - 1][1]);
+    if (l > longest) longest = l;
+  }
+  const spec = bridgeLandmarkFor(a, longest) ?? bridgeSpecFor(a.tags, a.family, longest);
+  // Mapped supports within reach of any fragment are the stations, unless a
+  // landmark entry has already said where the towers stand.
+  if (!spec.stations.length && bridgeSupports.size) {
+    const near: Array<[number, number]> = [];
+    for (const sp of bridgeSupports.values()) {
+      if (sp.kind !== 'pylon' && sp.kind !== 'pier') continue;
+      let best = Infinity;
+      for (const w of ways) for (const p of w.pts) { const d = Math.hypot(p[0] - sp.x, p[1] - sp.z); if (d < best) best = d; }
+      if (best < 40) near.push([sp.x, sp.z]);
+    }
+    if (near.length && (spec.form === 'cable-stayed' || spec.form === 'suspension')) spec.stations = near;
+  }
+  a.spec = spec;
+  if (a.mesh) { worldGroup.remove(a.mesh); a.mesh.geometry.dispose(); a.mesh = null; }
+  const built = buildBridgeForms(ways, spec, (x, z) => hasHeight(x, z) ? sampleHeight(x, z) : -Infinity);
+  a.quads = built.quads; a.towers = built.towers; a.stays = built.stays; a.hangers = built.hangers;
+  a.ribs = built.ribs; a.panels = built.panels; a.builds++;
+  if (!built.quads) return;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(built.pos), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(built.uv), 2));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(built.col), 3));
+  g.computeVertexNormals();
+  const mesh = new THREE.Mesh(g, bridgeMatFor());
+  shadowy(mesh, true, true);
+  mesh.visible = !shedWorld;
+  worldGroup.add(mesh);
+  a.mesh = mesh;
+}
+function clearBridgeForms(): void {
+  for (const a of bridgeAssemblies.values()) if (a.mesh) { worldGroup.remove(a.mesh); a.mesh.geometry.dispose(); }
+  bridgeAssemblies.clear();
+  bridgeSupports.clear();
+}
+/**
+ * ── BRIDGES ARE LANDMARKS ──
+ *
+ * What a landmark entry says about this bridge, over the generic spec. An
+ * entry claims an assembly by NAME — the `bridge:name` or `name` its deck
+ * ways carry, matched case-blind against the entry's `match` list — within
+ * `reach` metres of the entry's position, so "Tower Bridge" in Sacramento
+ * does not become the one in London. An entry with an empty `match` claims
+ * any bridge assembly within reach, for the few whose ways carry no name.
+ *
+ * The entry's stations are the towers' positions in the world; the painter
+ * takes only their position ALONG the axis and stands each tower between
+ * the deck fragments it finds there, so a coordinate a few tens of metres
+ * off still puts the tower on the bridge.
+ */
+const BRIDGE_LANDMARKS = LANDMARKS.filter((d) => d.kind === 'bridge' && d.bridge);
+function bridgeLandmarkFor(a: BridgeAssembly, longest: number): BridgeFormSpec | null {
+  if (!BRIDGE_LANDMARKS.length) return null;
+  let px = 0, pz = 0, n = 0;
+  for (const w of a.ways.values()) for (const p of w.pts) { px += p[0]; pz += p[1]; n++; }
+  if (!n) return null;
+  px /= n; pz /= n;
+  const lname = (a.name ?? '').toLowerCase();
+  for (const def of BRIDGE_LANDMARKS) {
+    const b = def.bridge;
+    if (!b) continue;
+    const [lx, lz] = toLocal(def.lat, def.lon);
+    if (Math.hypot(px - lx, pz - lz) > b.reach) continue;
+    if (b.match.length && !b.match.some((m) => lname.includes(m.toLowerCase()))) continue;
+    const spec = bridgeSpecFor(a.tags, a.family, longest);
+    spec.form = b.form;
+    if (b.tower) spec.tower = b.tower;
+    if (b.cables) spec.cables = b.cables;
+    if (b.towerM !== undefined) spec.towerM = b.towerM;
+    if (b.towerRatio !== undefined) spec.towerRatio = b.towerRatio;
+    if (b.sag !== undefined) spec.sag = b.sag;
+    if (b.arch) spec.arch = b.arch;
+    if (b.rise !== undefined) spec.rise = b.rise;
+    if (b.truss) spec.truss = b.truss;
+    if (b.deck) spec.deck = b.deck;
+    if (b.ends) spec.ends = b.ends;
+    if (b.towerCol !== undefined) spec.towerCol = b.towerCol;
+    if (b.cableCol !== undefined) spec.cableCol = b.cableCol;
+    if (b.steelCol !== undefined) spec.steelCol = b.steelCol;
+    if (b.stoneCol !== undefined) spec.stoneCol = b.stoneCol;
+    if (b.stations?.length) spec.stations = b.stations.map(([la, lo]) => toLocal(la, lo));
+    else if (b.fractions?.length) spec.stationFractions = b.fractions;
+    return spec;
+  }
+  return null;
+}
+/**
+ * The pylons of a famous bridge are often in OSM as BUILDINGS with a height
+ * — the Normandie's are, at 214 m — and a building extruded at the pylon's
+ * foot inside the tower the entry paints is the data doubling ours. Inside
+ * `pad` metres of an entry's station the footprint stands down, the way a
+ * building stands down inside a pyramid's pad.
+ */
+let bridgePadsOrigin = '';
+let bridgePads: Array<[number, number, number]> = [];
+function inBridgePylonPad(ex: number, ez: number): boolean {
+  const key = `${origin.lat},${origin.lon}`;
+  if (key !== bridgePadsOrigin) {
+    bridgePadsOrigin = key;
+    bridgePads = [];
+    for (const def of BRIDGE_LANDMARKS) {
+      const b = def.bridge;
+      if (!b?.stations?.length || !(b.pad ?? 0)) continue;
+      for (const [la, lo] of b.stations) { const [x, z] = toLocal(la, lo); bridgePads.push([x, z, b.pad ?? 0]); }
+    }
+  }
+  for (const [x, z, r] of bridgePads) {
+    if (Math.abs(ex - x) < r && Math.abs(ez - z) < r && Math.hypot(ex - x, ez - z) < r) return true;
+  }
+  return false;
 }
 function dirtyTerrainAround(pts: Array<[number, number]>): void {
   const M = TOE_REACH + cutL;
@@ -17306,6 +17529,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     spanStats.pierRefused += planned.refused;
     pierStations = planned.accepted.map((q) => reverse ? total - q.stationM : q.stationM).sort((a, b) => a - b);
   }
+  // The structure the deck hangs from — towers, cables, ribs — is the
+  // bridge's, not this fragment's; register the fragment and the assembly
+  // rebuilds. The deck's own height is the profile plus the lift it is
+  // drawn at, which is what the anchors and hangers must meet.
+  if (mode === 'bridge' && infraRecipe?.kind === 'bridge' && n > 1) {
+    noteBridgeForm(wayKey, wayTags, infraRecipe.family, dense, prof.map((p) => p + lift), width);
+  }
   // WHERE THE RAIL GOES, decided for the whole way before any of it is drawn.
   // Emitting per quad left holes: one 12m step whose drop dipped under the
   // threshold — the inside of a bend, a bench in the slope — opened a gap you
@@ -22052,7 +22282,7 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     for (const [x, z] of pts) { cx0 += x; cz0 += z; }
     ctrX = pts.length ? cx0 / pts.length : 0;
     ctrZ = pts.length ? cz0 / pts.length : 0;
-    if (pts.length && inLandmarkPad(ctrX, ctrZ)) return;
+    if (pts.length && (inLandmarkPad(ctrX, ctrZ) || inBridgePylonPad(ctrX, ctrZ))) return;
   }
   bldRings.set(id, pts);
   const kind = tags.building ?? 'yes';
@@ -23856,6 +24086,17 @@ async function renderWays(
   terrainOwner: string | null = null,
 ): Promise<void> {
   wayTape?.push({ els, halo });
+  // The map's own pylons and piers, before any ribbon asks where a tower
+  // stands. A `bridge:support` node is a one-point geometry by the time it
+  // gets here; an area's centroid is as good.
+  for (const el of els) {
+    const kind = el.tags?.['bridge:support'];
+    if (!kind || !el.geometry?.length) continue;
+    let la = 0, lo = 0;
+    for (const g of el.geometry) { la += g.lat; lo += g.lon; }
+    const [x, z] = toLocal(la / el.geometry.length, lo / el.geometry.length);
+    bridgeSupports.set(`${el.id}`, { x, z, kind });
+  }
   ribBatch = new Map();
   ribBatchTerrainOwner = terrainOwner;
   roadBatchMeshes = [];
@@ -24619,6 +24860,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
         way["aeroway"~"^(runway|taxiway|apron)$"](${bbox});
         nwr["man_made"~"^(water_tower|silo|chimney|storage_tank|lighthouse|windmill|tower|communications_tower|obelisk)$"](${bbox});
         nwr["power"="generator"]["generator:source"="wind"](${bbox});
+        nwr["bridge:support"](${bbox});
       );out geom 2000;`;
       const r = await overpass(q);
       // Ways keep their geometry; a NODE (how most man_made verticals are
@@ -29959,6 +30201,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // the other side of the world — the same trap the wide cover carries a
     // note about two lines up.
     bridgeSpans.length = 0;
+    clearBridgeForms();
     holeSince.clear(); shownOnce.clear();
     substrateTerrainCommits.clear();
     substrateTerrainRenderMeshes.clear();
@@ -34469,6 +34712,16 @@ function heightsOf(): number[] {
   return { spans: bridgeSpans.length, offM: best === Infinity ? null : +best.toFixed(1),
     halfM: +halfM.toFixed(1), under: best <= halfM };
 };
+/** Every bridge assembly the world holds: what it is called, how many
+ *  fragments it has, what form it took and what got built. */
+(window as unknown as { __bridges?: object }).__bridges = (): object =>
+  [...bridgeAssemblies.values()].map((a) => ({
+    key: a.key, name: a.name, fragments: a.ways.size, builds: a.builds,
+    form: a.spec?.form ?? null, tower: a.spec?.tower ?? null, cables: a.spec?.cables ?? null,
+    stations: a.spec?.stations.length ?? 0,
+    quads: a.quads, towers: a.towers, stays: a.stays, hangers: a.hangers, ribs: a.ribs, panels: a.panels,
+    supports: bridgeSupports.size,
+  }));
 /**
  * Run the span repair AGAIN on the tile under a point, with every span known
  * now, and say what changed. The repair runs once when a tile lands and once
@@ -45292,7 +45545,10 @@ function liveLandmarks(): LandmarkLive[] {
     landmarksOrigin = key;
     for (const g of landmarkBuilt.values()) worldGroup.remove(g);
     landmarkBuilt.clear();
-    landmarksLive = LANDMARKS.map((def) => {
+    // A bridge entry is not a pad: it flattens nothing and stands no group
+    // up here — its geometry is the bridge assembly's, built from the deck
+    // ways as they arrive (see bridgeLandmarkFor).
+    landmarksLive = LANDMARKS.filter((def) => def.kind !== 'bridge').map((def) => {
       const [x, z] = toLocal(def.lat, def.lon);
       return { def, x, z, padEle: null };
     });
