@@ -6997,8 +6997,14 @@ function stepFarBakes(): void {
   if (!farBakeJobs.length) return;
   // Not on top of a frame that already carried a heavy build.
   if (frameHeavyMs() >= FRAME_HEAVY_MS) return;
+  // A SIXTH OF THE SMOOTHED FRAME, floored at FAR_BAKE_MS — the sward step's
+  // own rule. A phone at 30 or 60 Hz keeps its six milliseconds; the harness,
+  // at two seconds a frame through the software renderer, bakes a tile a
+  // frame instead of one every three, so a devtool that waits for the ring
+  // waits for the relay and not for frames it will never get.
+  const budget = clamp(frameMs / 6, FAR_BAKE_MS, 400);
   const t0 = performance.now();
-  while (farBakeJobs.length && performance.now() - t0 < FAR_BAKE_MS) {
+  while (farBakeJobs.length && performance.now() - t0 < budget) {
     const j = farBakeJobs[0];
     if (!j.live()) { farBakeJobs.shift(); j.done(); continue; }
     const end = Math.min(j.n, j.i + 256);

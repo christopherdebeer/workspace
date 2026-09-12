@@ -2389,6 +2389,53 @@ the Haussmann block its balconies and shopfronts; the pantile roof at 12 m is
 barrels in courses. Judgement, not anchors: the seat's report is the
 verification, and every number above is a dial.
 
+### The far bake, from the seat's dump: a climate field at the shell's scale, and slices
+
+The seat's telemetry on the wide chart (z4, 14.7 km a pixel, 98 s):
+`far:bake` 216 ms a tile, 137 tiles, 30% of the session, top of 123 of 575
+slow frames and 36% of their time; the frame at 11 fps with half of them
+over 50 ms. Two causes, both in the bake's vertex loop, and neither was the
+loop's own arithmetic:
+
+- **EVERY VERTEX MISSED THE CLIMATE MEMO FOUR TIMES.** `terrainPalette` asks
+  `climateAt` per vertex, and the fine field's corner lattice is `CLIM_G`,
+  2 km. At z4 the vertices are 2.4 km apart, so each one needed four fresh
+  corners — four `climCompute`s — and a 1,200 km tile has 360,000 corners
+  against `CLIM_CACHE_MAX` of 20,000: the cache was cleared several times
+  per bake and nothing was ever reused. Right for the fine world (8 m
+  vertices under 2 km cells), exactly wrong for the shell. `ClimateField`
+  takes a cell size now and `farClimField` keeps one per size: a
+  twenty-fourth of the tile, never finer than the fine field's, its corners
+  shared across the ring, its cover read through `sampleCoverShell` so a
+  corner over the wide raster counts as evidenced and is not recomputed on
+  every cover arrival. The fine field never sees the shell.
+- **AND THE LOOP RAN OFF THE TICK, WHOLE.** Inside the fetch's continuation,
+  where nothing paced it — the same shape the route solver had. It is a job
+  now (`farBakeJobs`, `stepFarBakes` beside the hydro drain): `FAR_BAKE_MS`
+  of a frame, standing down in a frame that already carried a heavy build,
+  and dropping a tile whose level or ring moved on while it was sliced.
+
+**Measured** (`scratchpad/farbake-ab.mjs`: the seat's own spot and zoom,
+`0115fe6` against the working tree, 180 s each, the harness's software
+renderer at 0.6 fps so only the main-thread rows carry):
+
+| | control | fix |
+|---|---|---|
+| `far:bake` per call, mean / max | 608 / 767 ms (a call is a tile) | **4.0 / 9 ms** (a call is a slice) |
+| main thread per tile baked | 608 ms | **17 ms** (261 ms over 15 tiles) |
+| tiles home in the window | 25 | 15 |
+
+The per-tile cut is the memo — thirty-five times in the harness, where
+`climCompute` is dearer than on the phone; on the phone the loop's own nine
+microseconds a vertex remain, sliced. **The fewer tiles are the harness's
+frame rate**: a slice is a frame, a z4 tile is three of them, and at 0.6 fps
+that is five seconds a tile where a phone at 30 fps takes a tenth. Any
+devtool that waits for the ring (`globe-view.mjs`, `globe-spin.test.mjs`,
+`park-ab.mjs`) now waits on frames rather than fetches; the budget scales
+with the smoothed frame so a slow harness bakes a tile a frame and a phone
+keeps its six milliseconds. `far:geo` and `far:nrm` are unchanged. The
+worker remains the honest next cut for the nine microseconds.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.
