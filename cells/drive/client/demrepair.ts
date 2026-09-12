@@ -223,3 +223,50 @@ export function repairDem(e: Float32Array, mpp: number, note?: DemNote): Float32
   note?.(`${flagged}px`, flagged);
   return out;
 }
+
+/**
+ * ── THE WORLD'S DATUM IS ONE TEXEL, AND IT MAY BE A BRIDGE ──
+ *
+ * `baseElev` is read at boot and on every hop from a single pixel of the
+ * spawn's own tile, and every metre in the world is expressed relative to it —
+ * there is no rebase short of another hop. At the Pont de Normandie the seat's
+ * own spawn sits on the deck, so that texel reads 61.6 m over a 6.4 m estuary
+ * and the whole world is measured from a carriageway.
+ *
+ * A robust statistic over the neighbourhood is the obvious answer and it is
+ * wrong at a cliff: the default spawn is the rim of El Capitan, where a median
+ * over two hundred metres is a third of the way down the face. What separates
+ * the two is how far the anchor stands over its OWN fifty metres, and the
+ * landform tiles say the margin is wide (devtools/dem-ridges.mjs):
+ *
+ *     Pont de Normandie   61.6 m, its 50 m median 6.4   — 55.2 m over
+ *     Half Dome        2691.5 m, its 50 m median 2677.3 — 14.2 m over
+ *     El Capitan       2305.2 m, its 50 m median 2300.7 —  4.5 m over
+ *
+ * So the median stands in only where the anchor towers over its own
+ * neighbourhood, and everywhere else the texel is kept exactly. The failure
+ * this can still have is mild by construction: a datum a few metres out shifts
+ * every height in the world together and nothing reads it as terrain.
+ */
+export const ANCHOR_BOX_M = 50;
+export const ANCHOR_SPIKE = 25;
+export function anchorElevation(
+  e: Float32Array, u: number, v: number, mpp: number, w = 256,
+): { m: number; raw: number; median: number; spiked: boolean } {
+  const raw = e[v * w + u];
+  const r = Math.max(2, Math.min(32, Math.round(ANCHOR_BOX_M / Math.max(1, mpp))));
+  const box: number[] = [];
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      const x = u + dx, y = v + dy;
+      if (x < 0 || y < 0 || x >= w || y >= e.length / w) continue;
+      const h = e[y * w + x];
+      if (Number.isFinite(h)) box.push(h);
+    }
+  }
+  if (!box.length) return { m: raw, raw, median: raw, spiked: false };
+  box.sort((a, b) => a - b);
+  const median = box[box.length >> 1];
+  const spiked = raw - median > ANCHOR_SPIKE;
+  return { m: spiked ? median : raw, raw, median, spiked };
+}

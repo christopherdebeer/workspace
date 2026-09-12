@@ -174,6 +174,21 @@ export class TerrainWorker {
       this.mirrored.add('h' + key); this.stats.mirrored++;
     } catch { this.disabled = true; }
   }
+  /**
+   * A raster that has CHANGED since it was mirrored.
+   *
+   * The guard above exists so a tile is sent once rather than with every job,
+   * and it is exactly right until something repairs a raster in place — a
+   * bridge's deck taken out of the elevation (see noteBridgeSpan in main.ts).
+   * Without this the worker keeps the first copy for ever: the wheels, the
+   * water and the road solve read the repaired ground while the MESH is still
+   * built from the ridge, which is the picture and the physics disagreeing
+   * about the floor.
+   */
+  remirrorHeight(key: string, t: HeightTile): void {
+    this.mirrored.delete('h' + key);
+    this.mirrorHeight(key, t);
+  }
   mirrorCover(key: string, t: CoverTile): void {
     if (this.disabled || this.mirrored.has('c' + key)) return;
     try {

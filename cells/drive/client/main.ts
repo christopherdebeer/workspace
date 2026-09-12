@@ -42,7 +42,8 @@ import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt
   seedAt, snowLoad, stoneWalls, unitN, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
 import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } from './infrastructure';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
-import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
+import { anchorElevation, demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
+import { clearDemSpans, DEM_SPAN_DEFAULTS, type DemSpan } from './dem-spans';
 import { smoothChartZoom, wrapLongitude } from './globe-navigation';
 import { bitmapStats, withDecodedBitmap } from './decode-telemetry';
 import { GLOBE_R, PLANET_SUN_GLSL, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, globeEast, globeNorth, subsolar } from './globe';
@@ -602,6 +603,23 @@ async function placeName(lat: number, lon: number): Promise<string | null> {
 
 const heightTiles = new Map<string, HeightTile>();
 let baseElev = 0;
+/**
+ * The world's datum, from the spawn tile — robust to the spawn standing on a
+ * structure. `anchorElevation` (demrepair.ts) carries the reasoning and the
+ * landform numbers that set its threshold; this is the one place the game
+ * reads it, and `anchorWhy` is what the probe reports.
+ */
+let anchorWhy: { raw: number; median: number; spiked: boolean } | null = null;
+function anchorAt(tile: Float32Array, tx: number, ty: number, lat: number, lon: number): number {
+  const b = tileBounds(tx, ty, TERRAIN_Z);
+  const u = clamp(Math.round(((lon - b.lonW) / (b.lonE - b.lonW)) * 255), 0, 255);
+  const v = clamp(Math.round(((b.latN - lat) / (b.latN - b.latS)) * 255), 0, 255);
+  const mpp = (40075016.686 * Math.cos((lat * Math.PI) / 180)) / (2 ** TERRAIN_Z * 256);
+  const a = anchorElevation(tile, u, v, mpp);
+  anchorWhy = { raw: +a.raw.toFixed(2), median: +a.median.toFixed(2), spiked: a.spiked };
+  return a.m;
+}
+
 // One texel on the GLOBAL z-level pixel grid; overflowing pixel coords walk
 // into the neighbouring tile. Returns null where no tile is loaded.
 function texel(tx: number, ty: number, px: number, pz: number): number | null {
@@ -7321,6 +7339,112 @@ const buildLog: Array<{ key: string; why: string; corridor: boolean; refined: bo
 // tile: 25 of 26 tiles dirty at once in the CBD telemetry, 260 builds in 85 s.
 // A way now dirties the tile under each sample and the neighbour across an
 // edge only when the sample stands within the corridor's reach of that edge.
+/**
+ * ── A BRIDGE TELLS THE TERRAIN IT IS NOT GROUND ──
+ *
+ * Reported from the seat over the Seine: footpaths in the air and water in the
+ * sky. The elevation mosaic is a SURFACE model where its best source is one, so
+ * at the Pont de Normandie it serves the deck and its pylons as terrain — 137 m
+ * of "ground" over an estuary the land cover calls water — and the mesh, the
+ * water's bed and the road solve all believe it.
+ *
+ * `repairDem` cannot reach it and no widening of it could. Measured over
+ * twenty-one tiles (devtools/dem-ridges.mjs): the pylons ARE flagged and
+ * diffused away, and what stands is the DECK, 79 m up and 37 m wide, which is
+ * under the 80 m rise the blob walk considers and under the 3x relief a blob
+ * must dwarf — and shape cannot rescue it, because at six metres a pixel
+ *
+ *     the Normandie's deck   79 m tall · 37 m wide · 0.40 of the width its height allows
+ *     the Old Man of Hoy     77 m tall · 30 m wide · 0.33 of the width its height allows
+ *
+ * are the same object. The only thing that separates a carriageway from a sea
+ * stack is that somebody mapped a `bridge` over one of them.
+ *
+ * So the ways carry the repair (client/dem-spans.ts holds the rule and its
+ * reasoning) and it lands in the RASTER rather than in the mesh, because
+ * `sampleHeight` is the one height of the world and a mesh-only repair is the
+ * picture and the physics disagreeing about the floor.
+ *
+ * THE ORDER IS WRONG BY CONSTRUCTION AND THAT IS WHY THERE ARE TWO CALLERS. A
+ * z14 height tile is ~2 km and lands long before the z16 vector tiles that
+ * carry the bridge, so a span is applied to whatever is already loaded when it
+ * arrives, and every tile applies whatever it has when IT arrives. Neither on
+ * its own is enough, and both are cheap: the repair only ever lowers, so a
+ * second pass over a span already cleared moves nothing.
+ */
+interface BridgeSpan { pts: Array<[number, number]>; halfM: number }
+const bridgeSpans: BridgeSpan[] = [];
+/** Alignment slop: OSM's centreline and the mosaic's deck are a few metres
+ *  apart, and the DSM smears the structure wider than the carriageway — 37 m
+ *  of "ground" for a 23 m deck at the Normandie, so seven metres a side. */
+const BRIDGE_SPAN_MARGIN = 10;
+const BRIDGE_DEM_ON = qsOn('bridgedem', true);
+const demSpanLedger = { tiles: 0, moved: 0, worstM: 0, refused: 0, onWater: 0 };
+/** The spans that reach one tile, in its own texel space. */
+function bridgeSpansFor(t: HeightTile, only?: readonly BridgeSpan[]): DemSpan[] {
+  const mpp = (t.w + t.h) / 512;
+  const out: DemSpan[] = [];
+  for (const s of only ?? bridgeSpans) {
+    const halfPx = s.halfM / mpp;
+    const flat = new Float64Array(s.pts.length * 2);
+    let touches = false;
+    for (let i = 0; i < s.pts.length; i++) {
+      const x = ((s.pts[i][0] - t.xs) / t.w) * 256;
+      const z = ((s.pts[i][1] - t.zs) / t.h) * 256;
+      flat[i * 2] = x; flat[i * 2 + 1] = z;
+      if (x > -halfPx - 2 && x < 256 + halfPx + 2 && z > -halfPx - 2 && z < 256 + halfPx + 2) touches = true;
+    }
+    if (touches) out.push({ pts: flat, halfPx });
+  }
+  return out;
+}
+/** Take the structures out of one tile's raster. Returns whether it moved. */
+function clearTileSpans(t: HeightTile, only?: readonly BridgeSpan[]): boolean {
+  if (!BRIDGE_DEM_ON) return false;
+  const spans = bridgeSpansFor(t, only);
+  if (!spans.length) return false;
+  // THE COVER IS WHAT MAKES THE ESTUARY CASE WORK, and it is asked in this
+  // tile's own texel space. The RAW class, not `coverWater`: that one vetoes a
+  // water pixel whose ground tilts or stands proud — which is precisely what a
+  // deck does — so asking it would refuse the very texels this needs. The
+  // question here is the cover's, and the DEM is what is under suspicion.
+  const r = clearDemSpans(t.data, spans, DEM_SPAN_DEFAULTS, 256, (px, py) =>
+    sampleCover(t.xs + ((px + 0.5) / 256) * t.w, t.zs + ((py + 0.5) / 256) * t.h) === COVER.water);
+  demSpanLedger.refused += r.refused;
+  demSpanLedger.onWater += r.onWater;
+  if (!r.moved) return false;
+  demSpanLedger.tiles++;
+  demSpanLedger.moved += r.moved;
+  demSpanLedger.worstM = Math.max(demSpanLedger.worstM, r.worstM);
+  return true;
+}
+/**
+ * A bridge fragment, as the ribbon built it. Every tile already loaded under
+ * it is repaired now — and the worker is told, because its height mirror is
+ * send-once by design and a repaired raster that never reaches it would leave
+ * the ridge in the mesh for ever while the wheels stopped believing in it.
+ */
+function noteBridgeSpan(pts: Array<[number, number]>, width: number): void {
+  if (!BRIDGE_DEM_ON || pts.length < 2) return;
+  const span: BridgeSpan = { pts: pts.map((p) => [p[0], p[1]] as [number, number]),
+    halfM: width / 2 + BRIDGE_SPAN_MARGIN };
+  bridgeSpans.push(span);
+  const seen = new Set<string>();
+  for (const [x, z] of pts) {
+    const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const key = `${tx + dx}/${ty + dy}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const t = heightTiles.get(key);
+        if (!t || !clearTileSpans(t, [span])) continue;
+        tworker?.remirrorHeight(key, t);
+        markTerrainDirty(key, 'bridge');
+      }
+    }
+  }
+}
 function dirtyTerrainAround(pts: Array<[number, number]>): void {
   const M = TOE_REACH + cutL;
   const mark = (x: number, z: number): void => {
@@ -7556,6 +7680,10 @@ async function loadTerrainTileInner(x: number, y: number): Promise<void> {
   const [wx0, wz0] = toLocal(b.latN, b.lonW);
   const [wx1, wz1] = toLocal(b.latS, b.lonE);
   const tile: HeightTile = { tx: x, ty: y, xs: Math.min(wx0, wx1), zs: Math.min(wz0, wz1), w: Math.abs(wx1 - wx0), h: Math.abs(wz1 - wz0), data };
+  // Before anything reads it: the bridges that landed while this tile was on
+  // the wire. No dirty and no re-mirror here — the tile has not been published
+  // or mirrored yet, so the repair is simply part of what arrives.
+  clearTileSpans(tile);
   heightTiles.set(key, tile);
   tworker?.mirrorHeight(key, tile);
   if (tworker && !tworker.disabled) { terrainDirty.add(key); dirtyWhy.set(key, 'load'); }
@@ -18577,6 +18705,11 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // is buried in.
   for (const sg of segsOf) rasterizeCut(sg);
   if (canopy && n > 2) canopyRun(dense, prof, width, lift, fid, wayKey);
+  // A TAGGED BRIDGE IS A STRUCTURE WHETHER OR NOT IT IS DRIVABLE — a footbridge
+  // is in the surface model too, and the deck over the A6 at Rubigen is the
+  // case this file already carries a note about. A tunnel is excluded because
+  // the high ground over a tunnel IS the hill.
+  if (wayTags?.bridge && wayTags.bridge !== 'no' && !wayTags.tunnel) noteBridgeSpan(dense, width);
   if (drivable) { dirtyTerrainAround(dense); osmLastLand = performance.now(); }
 }
 /**
@@ -29807,6 +29940,11 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // the accident is gone and this has to be deliberate.
     coverWide.clear(); coverWideAsked.clear(); coverWideSorted = null;
     heightTiles.clear(); terrainReady.clear(); terrainMeshes.clear(); terrainDirty.clear(); terrainRevision.clear();
+    // The spans are in LOCAL metres under the origin that was current when
+    // they were built, so a hop leaves every one of them pointing at ground on
+    // the other side of the world — the same trap the wide cover carries a
+    // note about two lines up.
+    bridgeSpans.length = 0;
     holeSince.clear(); shownOnce.clear();
     substrateTerrainCommits.clear();
     substrateTerrainRenderMeshes.clear();
@@ -29954,10 +30092,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     const anchor = await fetchHeights(tx, ty);
     if (ep !== worldEpoch) return;   // a second hop overtook this one
     if (anchor) {
-      const b = tileBounds(tx, ty, TERRAIN_Z);
-      const u = clamp(Math.round(((lon - b.lonW) / (b.lonE - b.lonW)) * 255), 0, 255);
-      const v = clamp(Math.round(((b.latN - lat) / (b.latN - b.latS)) * 255), 0, 255);
-      baseElev = anchor[v * 256 + u];
+      baseElev = anchorAt(anchor, tx, ty, lat, lon);
     }
     seaOn = true;
     if (baseElev >= -2) { dryAt = null; sea.position.y = seaSurfaceAbs() - baseElev; }
@@ -34292,6 +34427,34 @@ function heightsOf(): number[] {
  *  visit says they were never there to read. */
 (window as unknown as { __raster?: object }).__raster = (): object =>
   ({ ...rasterStat, db: osmDbHow, budgetMB: RASTER_BUDGET / 1024 / 1024 });
+/**
+ * What the BRIDGES took out of the elevation, which is a different question
+ * from what the shape repair did — `moved` is texels lowered, `worstM` the
+ * worst structure taken down, and `refused` the texels whose walk never got
+ * off the deck (a mis-tagged embankment, or a span wider than the reach).
+ * A span count with no moved texels is the ordinary case and the right one:
+ * fifteen of the sixteen estuary spans surveyed have a flat DEM under them.
+ */
+(window as unknown as { __demspans?: object }).__demspans = (): object =>
+  ({ on: BRIDGE_DEM_ON, spans: bridgeSpans.length, ...demSpanLedger });
+/** The nearest registered bridge span to a point: how far off its centreline,
+ *  and how wide the mask there is — because "the deck is still in the DEM
+ *  here" and "no span ever reached here" look identical in a height reading. */
+(window as unknown as { __bridgeat?: object }).__bridgeat = (x = state.x, z = state.z): object => {
+  let best = Infinity, halfM = 0;
+  for (const s of bridgeSpans) {
+    for (let i = 0; i + 1 < s.pts.length; i++) {
+      const [ax, az] = s.pts[i], [bx, bz] = s.pts[i + 1];
+      const dx = bx - ax, dz = bz - az;
+      const len2 = dx * dx + dz * dz;
+      const t = len2 > 0 ? clamp(((x - ax) * dx + (z - az) * dz) / len2, 0, 1) : 0;
+      const d = Math.hypot(x - (ax + dx * t), z - (az + dz * t));
+      if (d < best) { best = d; halfM = s.halfM; }
+    }
+  }
+  return { spans: bridgeSpans.length, offM: best === Infinity ? null : +best.toFixed(1),
+    halfM: +halfM.toFixed(1), under: best <= halfM };
+};
 /** What the elevation source got wrong here, and how much of it we repaired. */
 (window as unknown as { __demsrc?: object }).__demsrc = (): object =>
   ({ mapterhorn: DEM_MAIN, proxyOk: demProxyOk, ...demSource,
@@ -34581,7 +34744,8 @@ function heightsOf(): number[] {
   // baseElev is the datum every height in the flat frame is relative to — and
   // the number the far shell carries in its radius on the sphere, which is why
   // a rig at 2,300m browsing a plain at 100m matters (see the globe mesh).
-  ({ lat: +origin.lat.toFixed(5), lon: +origin.lon.toFixed(5), baseElev: +baseElev.toFixed(1), farDrop: FAR_DROP });
+  ({ lat: +origin.lat.toFixed(5), lon: +origin.lon.toFixed(5), baseElev: +baseElev.toFixed(1),
+    farDrop: FAR_DROP, anchor: anchorWhy });
 /** What is actually STORED, as opposed to what is loaded — the two differ by
  *  every road whose tiles have not streamed in, which is the whole point of
  *  keeping the store separate from `survey`. */
@@ -48914,10 +49078,7 @@ if (timeFromUrl < 0 && !qs('time')
   const [tx, ty] = tileAt(spawn.lat, spawn.lon, TERRAIN_Z);
   const anchor = await fetchHeights(tx, ty);
   if (anchor) {
-    const b = tileBounds(tx, ty, TERRAIN_Z);
-    const u = clamp(Math.round(((spawn.lon - b.lonW) / (b.lonE - b.lonW)) * 255), 0, 255);
-    const v = clamp(Math.round(((b.latN - spawn.lat) / (b.latN - b.latS)) * 255), 0, 255);
-    baseElev = anchor[v * 256 + u];
+    baseElev = anchorAt(anchor, tx, ty, spawn.lat, spawn.lon);
   }
   // Anchor the sea to true sea level — unless the land here is itself below
   // it (a depression), in which case there is no sea to show.

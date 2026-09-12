@@ -2706,6 +2706,106 @@ would have to touch.
   water (above). A hydro-field gate rather than a cover gate would reach the
   last of those.
 
+### …and the bridge comes out of the elevation
+
+Built, measured at the Pont de Normandie, and gated by `?bridgedem=0`.
+
+**THE SHAPE REPAIR TAKES THE PYLONS AND LEAVES THE DECK, and the numbers say
+why in its own terms** (`devtools/dem-ridges.mjs`, which decodes the real tile
+exactly as `decodeTerrarium` does and hands it to the SHIPPED module): the
+tallest blob is 161.8 m over a ground of −3.2 with the tile's relief at the
+30 m floor, its equivalent radius 0.51 of what the slope allows, and
+`repairDem` diffuses its 1,085 px away. What is left standing is 76.6 m of
+carriageway — **under the 80 m rise the blob walk even considers**, and under
+the `3 × relief` a blob must dwarf. The anchor texel under the seat's own
+spawn reads 61.6 m after the repair, which is the 62.1 the game booted with.
+
+**AND NO WIDENING OF THAT RULE COULD REACH IT.** Twenty-one tiles, the
+hardest narrow landforms on earth among them, measured with the same tool:
+
+| | peak | width by erosion | of the width its height allows |
+|---|---|---|---|
+| Pont de Normandie, the deck | 79 m | 37 m | **0.40** |
+| Old Man of Hoy, the stack | 77 m | 30 m | **0.33** |
+
+At six metres a pixel a sea stack and a carriageway are the same object, and
+the sea stack survives today only because the dwarf test spares it. The one
+thing that separates them is that somebody mapped a `bridge` over one of them
+— which is the survey's conclusion arrived at from the other side, and the
+reason this is `client/dem-spans.ts` and not a looser `demrepair.ts`.
+
+**THE RULE, AND THE FOUR THINGS THAT KEEP IT HONEST.** A way tagged `bridge`
+(and not `tunnel`) registers its densified centreline with `roadHalf + 10 m`;
+every texel inside that mask walks SQUARE to the deck, both ways, and:
+
+- **it only ever LOWERS.** A span with no structure under it is a no-op, which
+  is fifteen of the sixteen surveyed estuary spans;
+- **it interpolates ACROSS the deck, never along it**, so the ground it reads
+  is twenty metres away and the bed under a 1,185 m span is never guessed from
+  its banks;
+- **both sides must find ground**, or the texel is refused — one side is not
+  evidence, and at the edge of a mis-tagged embankment the outward walk finds
+  ground while the inward one never leaves the structure;
+- **and the COVER'S WATER beats a smear.** A surface model does not stop at
+  the carriageway: 23 m of deck leaves 37 m of "ground", with the pylons wider
+  still, so the first texel off the mask is more bridge. Measured, with the
+  first cut standing on it: **62.55 m came down to 32.45 and stopped.** A side
+  that reaches cover-water takes the water's level, and where any side is water
+  the water is the bed — the higher-of-two rule is right for a deck along a
+  shoreline and wrong for one whose other flank is its own pylon. The
+  prominence guard (`riseM`, 12 m — the slope times the half mask on a 45%
+  hillside is nine) is what keeps an abutment and every hill safe.
+
+**THE WIRING HAS TWO CALLERS AND ONE RE-MIRROR, all three from the survey's
+own list of what this would cost:** a z14 height tile lands long before the
+z16 vectors that carry the bridge, so a span repairs whatever is loaded when
+it arrives and every tile repairs whatever it has when IT arrives (the repair
+only lowers, so the second pass over a cleared span moves nothing); and
+`TerrainWorkerClient.remirrorHeight` exists because the height mirror is
+send-once by design — without it the wheels would read the repaired ground
+while the MESH kept the ridge, which is the picture and the physics
+disagreeing about the floor. `bridgeSpans` clears on a hop: they are in local
+metres under the origin that built them.
+
+**AND THE WORLD'S DATUM IS NO LONGER ONE TEXEL.** `baseElev` was
+`anchor[v * 256 + u]`, read at boot and on every hop before any way exists, and
+at the Normandie that texel is the deck. `anchorElevation` (demrepair.ts, pure,
+so the capture tool can run it) keeps the texel unless it stands more than 25 m
+over the median of its own fifty metres, and the landform tiles set that
+threshold with room to spare: the Normandie's anchor is **55.2 m** over its own
+median, Half Dome's rim 14.2 and El Capitan's — the default spawn — **4.5**.
+
+**MEASURED**, the seat's own spawn, `?bridgedem=0` against the fix, one build,
+180 s settled, no page errors:
+
+| at the Pont de Normandie | repair off | repair on |
+|---|---|---|
+| `baseElev` (the world's datum) | 62.1 m | **6.5 m** (`raw 62.08, median 6.48`) |
+| DEM 120 m north of the spawn | 57.77 m | **3.30 m** |
+| DEM at the spawn | 62.55 m | **7.71 m** |
+| the river's resting level there | **37.76 m** | **4.27 m** |
+| texels lowered / worst / refused | — | 361 / 69.6 m / 0 |
+| a point 53 m off any span, at 44.2 m | 44.2 | 44.2 — untouched |
+
+The last row is the control inside the measurement: a structure nobody tagged
+as a bridge is left exactly where it is, which is the rule refusing to guess.
+
+**WHAT IT DOES NOT REACH**, unchanged from the survey: a viaduct over dry land
+(no water to take the reference from, so only the smear-free case moves); a
+ship, a crane or a pier, which no road tags; and a small river bridge, where
+the cover has no water at all — a hydro-field gate rather than a cover gate is
+what would reach that, and the hook is one argument wide. A cover tile that
+arrives AFTER a span is patched does not re-run the repair; the way-dirty path
+would have to carry it.
+
+Held by `devtools/dem-spans.test.mjs` (pure: the deck cleared, a hill and a
+steep hill kept, an embankment refused, a cutting left alone, the water rule
+both ways) and `devtools/dem-ridges.mjs` for the tile arithmetic. `boot.mjs`
+and `through-node.test.mjs` are green (Camps Bay 8 / 0 / 0.19 m, unchanged);
+**`fixture-world.test.mjs` fails three checks — crossroads and tee "built sward
+meshes", village "built ribbon meshes" — and the control worktree at `b3efe88`
+fails the same three with the same mesh lists**, so they are not this work's.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.

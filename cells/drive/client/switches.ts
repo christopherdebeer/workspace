@@ -95,6 +95,8 @@ export const SWITCHES = [
     note: 'pin the sun’s altitude in degrees, −20..89' },
   { id: 'substrate', kind: 'choice', marks: ['bench', 'legacy'], fallback: 'canonical contact, legacy render',
     note: 'the road/terrain/water substrate (SUBSTRATE-MIGRATION.md): legacy = the pre-substrate contact with shadow diagnostics, the rollback; shadow = legacy contact, substrate observed; render = the substrate draws the water too. It was read round the typed reader and so was in no list until it was declared here' },
+  { id: 'bridgedem', kind: 'toggle', marks: ['bench', 'legacy'], fallback: 'a tagged bridge takes its deck out of the DEM',
+    note: 'off leaves the elevation exactly as the publisher served it, structures and all — the A/B for the Pont de Normandie, where the mosaic serves a 137 m carriageway as terrain' },
   { id: 'hydroground', kind: 'number', marks: ['bench'], fallback: '150 m round the water',
     note: 'metres round the water within which a moved ground raster rebuilds the hydro field; 0 compares the whole raster exactly, which is the old behaviour and the A/B' },
   { id: 'hydroeps', kind: 'number', marks: ['bench'], fallback: '2 cm of bed',
