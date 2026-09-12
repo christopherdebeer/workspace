@@ -2549,6 +2549,163 @@ keeps the exact comparison.
 
 `?hydroground=0` and `?hydroeps=0` restore the old rule, separately.
 
+### The bridge in the elevation data: sixteen estuary spans
+
+The Pont de Normandie, reported from the seat as footpaths in the air and
+water in the sky, is the primary DEM publisher serving the deck and its pylons
+as TERRAIN. Measured there: 137.5 m of "ground" standing over an estuary the
+land cover calls water, and everything downstream believing it — `baseElev`
+62.1 m mid-river (the origin's own texel), a river body resting at 37.61 m, the
+carriageway solved to −1.3 m absolute, 63 m under the ridge it belongs to, and
+the rig drowned with all 961 sampled points wet.
+
+Before fixing that by letting the ROADS tell the terrain, the question is how
+general it is. `devtools/dem-structures.mjs` asks sixteen major estuary spans,
+both publishers through ONE sampler in the browser, on the same world grid:
+over the texels the land cover calls water, how far does the elevation stand
+above the sea, how narrow is the highest thing it finds, how much of the box is
+water, and what does OSM say. The controls are five inland waters.
+
+| span | mth peak | >10 m | deck | aws peak | aws spread | water | span | osm |
+|---|---|---|---|---|---|---|---|---|
+| **Pont de Normandie** | **137.5 m** | **1.3%** | **30 m** | 0.8 m | 0.5 m | 67% | 1,185 m | 4/4 L1 |
+| Øresund | 0.6 | 0 | 15 | −6.4 | 0.6 | 84% | 1,980 | 1/1 L4 |
+| Golden Gate | 0.0 | 0 | 15 | −24.4 | **66.5** | 96% | 2,565 | 4/4 L1 |
+| Bay Bridge west | 0.0 | 0 | 15 | 1.8 | 14.8 | 95% | 885 | 2/2 L1,2 |
+| Humber | −2.1 | 0 | 15 | −1.7 | 0.2 | 96% | 1,770 | 5/5 L1 |
+| Queensferry Crossing | −0.5 | 0 | 15 | 15.5 | 13.1 | 95% | 1,425 | 4/4 L1,2 |
+| Vasco da Gama | 0.0 | 0 | 15 | 0.0 | 0 | 60% | 1,830 | 2/2 L1 |
+| Storebælt East | 6.5 | 0 | 15 | 2.0 | 8.4 | 89% | 1,830 | — |
+| Akashi Kaikyō | 0.0 | 0 | 15 | 0.0 | 0 | 95% | 1,905 | 2/2 L2 |
+| Hangzhou Bay | 0.0 | 0 | 15 | 0.0 | 0 | 98% | 2,160 | — |
+| Sydney Harbour | 14.9 | 0.2% | 75 | 26.1 | 10.1 | 75% | 45 | 6/28 L1 |
+| Chesapeake Bay | 0.0 | 0 | 15 | 0.0 | 0 | 78% | 2,490 | 2/2 L1 |
+| Rio–Niterói | 0.0 | 0 | 15 | −1.0 | 1.1 | 99% | 3,630 | 2/2 L2 |
+| Prince of Wales | −0.5 | 0 | 15 | −0.6 | 4.7 | 93% | 1,020 | 503 |
+| Tsing Ma | 0.0 | 0 | 15 | 1.2 | 1.0 | 68% | 1,575 | 4/4 L2,3 |
+| Confederation | 0.3 | 0 | 15 | 0.0 | 0 | 100% | 2,475 | 1/1 L1 |
+| *(control)* Loch Ness | 16.0 | **100%** | 2,415 | 16.0 | 0 | 100% | 3,075 | — |
+| *(control)* Senqu · Rhône · Merced · Breede | *no cover-water within 200 m at any of the four* ||||||||
+
+**ONE SPAN IN SIXTEEN CARRIES ITS BRIDGE.** Everywhere else the estuary is
+flat in both publishers: Mapterhorn is a LAND model and answers a nodata 0 over
+open water (and at Hangzhou, Tsing Ma and Rio has no z14 tile at all, so the
+game climbs to z12), while AWS terrarium is either the same 0 or real
+bathymetry — the Golden Gate's channel at −92.9 m, the Bay Bridge's at −24.1.
+Neither carries the Humber, the Forth, the Great Belt, Akashi, Chesapeake or
+Confederation decks, all of which stand 30–60 m over the water in life. The
+Normandie is a DSM's surface where a national source filled the gap, and 1.3%
+of the water texels in its box — the deck, 30 m wide — is the whole fault.
+
+**And the two inputs option 1 needs are both there.** The cover calls the peak
+texel water at all sixteen, water is 60–100% of every box, and the cell's own
+z16 tile answers `bridge` on 13 of the 16 with a `layer` on every one of them.
+So the trigger and the gate are present, and they are present at the ONE place
+the trigger is needed.
+
+Three traps, each of which cost a run and each of which is the general lesson:
+
+- **A DEM READ WITHOUT `RAW_BITMAP` IS A READING OF CHROMIUM'S COLOUR
+  MANAGEMENT.** The first cut decoded the WebP with the default
+  `createImageBitmap` options and the ridge came back as 5.2 m: a terrarium R
+  channel moved by one unit is 256 m of elevation, so a colour-managed tile is
+  not a noisy measurement, it is a different planet. main.ts asks for
+  `colorSpaceConversion: 'none'`; anything reading these tiles must too.
+- **THE SPOT IS NOT THE MEASUREMENT.** A hand-typed coordinate lands anywhere
+  along a three-kilometre bridge: the first run sampled 640 m north of the
+  pylon the game had measured at 146 m, read 1.9 m, and would have reported the
+  fault as ABSENT at the one place it is worst. The measure is the peak over a
+  box, which is publisher-symmetric and does not depend on aim.
+- **AND THE DATUM MUST BE THE WATER, NOT THE BOX.** Taking the box's tenth
+  percentile as "the water" is right over an estuary and wrong the moment a
+  publisher carries bathymetry: at the Golden Gate the tenth percentile was the
+  100 m channel bed, so the narrowest run above it marched the whole box and
+  reported a 1,575 m deck. Over the texels the cover calls water, against the
+  sea, there is no such tail.
+
+**WHAT THE CONTROLS SAY ABOUT THE CHEAP FIX.** The obvious rule needs no roads
+at all — over cover-water, ground standing more than ten metres above the water
+is not ground — and the controls say exactly which form of it is safe:
+
+- against the SEA it deletes Loch Ness, whose surface is 16 m up and 100% of
+  whose texels are "over 10 m" in both publishers;
+- against the LOCAL WATER MEDIAN it fires on 1.48% of the Normandie's water
+  texels, 0.00% at the other fifteen spans AND at Loch Ness on the publisher
+  the game reads — but on 28.9% of the Golden Gate's under the FALLBACK, where
+  the median is the deep channel and the shallows stand 60 m over it;
+- and at four inland river points — the Senqu, the Rhône at Obergoms, the
+  Merced and the Breede — there is no cover-water within 200 m at all, so no
+  cover-gated rule of any form fires at a small river bridge. WorldCover at
+  37 m a pixel does not see a channel; the same fact is already recorded
+  against hydro's own inland water.
+
+So the honest statement is that a local-median veto is clean on the primary
+publisher at every one of the seventeen places measured and unsafe on the
+fallback at one of them, and that the cover gate is blind inland. That is the
+argument FOR option 1 rather than against it: the roads say which high texel is
+a structure without needing a water surface that is itself derived from the DEM.
+
+### …and what option 1 would cost, read off the code
+
+Not built — this is the survey's other half, and each item is a place the rule
+would have to touch.
+
+- **THE REPAIR BELONGS IN THE RASTER, NOT IN THE MESH.** `sampleHeight` is the
+  one height of the world (97 call sites) and the mesh is built from the same
+  rasters in a worker. Patch only the mesh and the picture and the physics
+  disagree about the floor, which is the fault `sampleHeight`'s own comment
+  exists to record.
+- **AND `mirrorHeight` IS SEND-ONCE, AND TRANSFERS THE BUFFER.** The worker
+  keeps the first copy of every tile it is given (`mirrored.has('h'+key)`), so a
+  raster patched after the mirror never reaches the build. A patched tile needs
+  a revision and a re-send, or the ridge stays in the mesh for ever while the
+  wheels stop believing it.
+- **`demrepair.ts` IS THE CONCEPTUAL HOME AND CANNOT BE THE ACTUAL ONE.** It is
+  pure per-tile, and it must stay that way: `capture-world.mjs` runs it so a
+  fixture is conditioned exactly as the game conditions it. A structure repair
+  reads the ways and the cover, which a per-tile function does not have — so it
+  is a second pass, and the capture needs the same pass or a captured estuary
+  reproduces a defect the game has repaired. That is the fabricated-witness
+  trap this file already records twice.
+- **THE ORDER IS WRONG BY CONSTRUCTION.** A z14 DEM tile is ~2.4 km and lands
+  long before the z16 vector tiles that carry the bridge, so the repair is
+  necessarily retroactive: patch on the ways' arrival, dirty the terrain tile,
+  re-mirror, re-feed hydro. The way-dirty path and `WAY_HOLD_MS` already bound
+  that churn, and the patch moves the raster by tens of metres, so the hydro
+  skip's 2 cm tolerance correctly lets exactly one rebuild through.
+- **IT CANNOT FIX THE ORIGIN, AND THE ORIGIN IS HALF THE DAMAGE.** `baseElev`
+  is ONE texel of the anchor tile, read at boot before any way exists
+  (`baseElev = anchor[v * 256 + u]`), and the whole world's metres are relative
+  to it — there is no rebase short of a hop. At the Normandie that one texel
+  was 62.1 m. A robust statistic over a small box would have read about zero,
+  and it is a cheaper, independent fix that needs no roads.
+- **THE CROSSING REGISTRY ALREADY RESOLVES THE TAGS — AND ITS FOOTPRINT IS THE
+  WRONG SHAPE.** `resolveProductionCrossingIntent` already answers
+  bridge/culvert/ford/causeway from explicit tags, the kernel already consumes
+  `TerrainCrossingMask[]` per build job, and `corridorH` already reads
+  `crossingAt` beside `coverWater`. But a footprint is a POINT with
+  `halfLength = waterHalfWidth + 4`, sized by the water feature at the crossing
+  — built for a road over a river, not for a 2 km span — and `at()` and
+  `earthworkAt()` are linear scans over every record, which is the exact shape
+  of the substrate contact sampler that cost 17% of a phone's CPU. Option 1
+  wants the bridge WAY's own polyline between its portals, in a cell index.
+- **THE BED MUST NOT BE RAMPED FROM THE BANKS.** "Interpolate from the banks"
+  is 1,185 m at the Normandie and 2,565 m at the Golden Gate, and the banks are
+  a 20 m cliff at plenty of estuaries. The water's own surface — the sea datum,
+  or the body's resting level — is the honest fill, and the veto must only ever
+  LOWER ground standing above it, never raise a bed the fallback publisher
+  actually sounded.
+- **THE GAME ALREADY KNOWS THOSE TEXELS ARE NOT WATER.** `coverWater` vetoes a
+  water class whose ground tilts more than 9% or stands 1.2 m proud of its
+  neighbours — a 137 m deck fails both — so the deck's texels are already
+  classified as LAND. The cover is not wrong about the estuary; the DEM is
+  wrong about the deck, and only a rule that can say so will move it.
+- **WHAT IT WOULD NOT REACH:** a viaduct over dry land, where a DSM carries the
+  same structure with no water to gate on; a ship, a crane or a pier in a port,
+  which no road tags; and every small river bridge, where the cover has no
+  water (above). A hydro-field gate rather than a cover gate would reach the
+  last of those.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.
