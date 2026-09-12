@@ -61,7 +61,8 @@ function functionSource(name) {
   assert.ok(found,name);
   return found.getText(ast);
 }
-const newRefresh=functionSource('refreshVeg');
+// The refresh is a generator plus the whole-call wrapper now; both halves are the function under test.
+const newRefresh=functionSource('vegRefreshSteps')+'\n'+functionSource('refreshVeg');
 const oldRefresh=fs.readFileSync(new URL('./baseline-refresh.txt',import.meta.url),'utf8');
 const capacity=functionSource('ensureVegCapacity');
 function context(code,range,ez,triCap) {
@@ -84,7 +85,7 @@ function context(code,range,ez,triCap) {
     groundAt:(x,z)=>Math.sin(x/30)+Math.cos(z/30),sampleCover:()=>10,
     terrainPalette:()=>[0.2,0.3,0.1],trunkReach:(k,h,s)=>h+s*0.38,
     clamp:(v,a,b)=>Math.max(a,Math.min(b,v)),
-    ezPlaced:[],ezEdgeLast:{},vegMs:0,roadCalls:0,roads:false,
+    ezPlaced:[],ezEdgeLast:{},vegMs:0,roadCalls:0,roads:false,vegStaging:new WeakMap(),vegJob:null,
   };
   c.onCarriageway=(x,z)=>{c.roadCalls++;return {road:c.roads&&Math.abs(x%100)<18,track:false};};
   // Deterministic dense fixture. Include multiple roles, styles, equal distances

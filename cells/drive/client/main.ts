@@ -11299,7 +11299,44 @@ function refreshShrubs(): void {
   if (shrubs.instanceColor) shrubs.instanceColor.needsUpdate = true;
 }
 (window as unknown as { __shrubs?: object }).__shrubs = (): object => ({ on: SHRUB_ON, n: shrubN, within40m: shrubNear, cap: SHRUB_CAP, step: SHRUB_STEP, sight: SHRUB_SIGHT, field: !Number.isNaN(swardFX) });
-function refreshVeg(): void {
+/**
+ * ── THE REFRESH IS RESUMABLE WORK ──
+ *
+ * The seat's dump at Honfleur put treeRefresh at 33 ms a call, 240 calls in
+ * a hundred seconds and the top of 185 of the 488 slow frames — more frames
+ * than anything else in the session. Its split was honest and unhelpful:
+ * fourteen milliseconds gathering candidates over a 27x27 ring of cells,
+ * three admitting the nearest, fourteen placing nine hundred trees (a ground
+ * read, a matrix, a colour each) — no one phase to cut, and all of it in
+ * one synchronous call every 900 ms, or every 120 when a hop's seeding was
+ * still catching up.
+ *
+ * So the refresh is a GENERATOR now: it yields after every ring cell of the
+ * gather, after the admit, and after every ring cell of the place, and the
+ * tick runs it in slices of a sixth of the smoothed frame (VEG_STEP_MS at
+ * the floor) until it is done. Two rules make that safe:
+ *
+ * - **THE PLACE WRITES INTO STAGING, NOT INTO THE INSTANCES.** A frame drawn
+ *   between two slices of a refresh that wrote the instance buffers directly
+ *   would show the first k slots re-assigned and the rest still last
+ *   refresh's — a tree twice where the order shifted, none where it did not
+ *   yet. Every matrix and colour goes into a staging array per mesh (sized
+ *   to the mesh's capacity, kept across refreshes) and the whole set is
+ *   committed in one slice at the end, with the counts.
+ * - **ONE JOB AT A TIME, AND A WHOLE CALL CANCELS IT.** The tick starts a
+ *   job only when none is running, so a cadence that has fallen behind
+ *   coalesces rather than stacks; `refreshVeg()` — the debug toggle, the hop
+ *   — drops any job in flight and runs the same generator to completion in
+ *   one call, which is also what `perf-check.mjs` compares against its
+ *   baseline, so the sliced and the whole refresh cannot drift apart.
+ *
+ * The seed budget is per SLICE (the stepper sets vegSeedLeft before each
+ * one), so seeding cannot spend more than the slice; the deferral count
+ * accumulates over the job and decides the next cadence as before.
+ */
+const vegStaging = new WeakMap<THREE.InstancedMesh, { m: Float32Array; c: Float32Array }>();
+let vegJob: Generator<void, void, void> | null = null;
+function* vegRefreshSteps(): Generator<void, void, void> {
   const t0 = performance.now();
   for (const k of Object.keys(vegPhase)) delete vegPhase[k];
   vegPhaseAt = t0;
@@ -11329,7 +11366,7 @@ function refreshVeg(): void {
   const ezNeed: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
   const ezNeedNear: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
   for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) { t.n = 0; t.nNear = 0; t.nFar = 0; }
-  ezPlaced = [];
+  const placed: Array<Record<string, number | string>> = [];
   vegMark('ring');
   // ── THE TREES ARE ADMITTED BY DISTANCE, NOT BY CELL ──
   //
@@ -11348,6 +11385,7 @@ function refreshVeg(): void {
   if (EZ_ON) {
     const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = ezRecord(() => [] as Array<[number, PlacedVegSite]>);
     for (const [gx, gz] of ring) {
+      yield;
       seedCell(gx, gz);
       const cell = vegGrid.get(`${gx},${gz}`);
       if (!cell) continue;
@@ -11391,7 +11429,17 @@ function refreshVeg(): void {
     ensureVegCapacity(vegMeshes[k], Math.ceil(VEG_CAP[k] * vegScale * treePopulationScale));
   }
   ensureVegCapacity(trunks, Math.ceil(3600 * vegScale * treePopulationScale));
+  // The staging arrays, sized to each mesh's capacity as it stands after the
+  // admit grew it; kept across refreshes so a steady state allocates nothing.
+  const stg = (m: THREE.InstancedMesh): { m: Float32Array; c: Float32Array } => {
+    const n = m.instanceMatrix.count;
+    let st = vegStaging.get(m);
+    if (!st || st.m.length < n * 16) { st = { m: new Float32Array(n * 16), c: new Float32Array(n * 3) }; vegStaging.set(m, st); }
+    return st;
+  };
+  yield;
   for (const [gx, gz] of ring) {
+    yield;
     {
       seedCell(gx, gz);
       const cell = vegGrid.get(`${gx},${gz}`);
@@ -11445,22 +11493,22 @@ function refreshVeg(): void {
           const casts = d2v < shadowSpan * shadowSpan;
           const mesh = casts ? tier.near : tier.far;
           const slot = casts ? tier.nNear++ : tier.nFar++;
-          mesh.setMatrixAt(slot, vegDummy.matrix);
+          vegDummy.matrix.toArray(stg(mesh).m, slot * 16);
           // Distance over the ADMITTED edge, not the plant range: the budget's
           // edge is where a tree vanishes, so that is where it must fade.
           const tt = Math.sqrt(d2v) / Math.max(120, ezEdge[fam]);
           if (vegRoleDebug) {
-            mesh.setColorAt(slot, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
+            VEG_ROLE_COL[v.anchor ? 'anchor' : v.role].toArray(stg(mesh).c, slot * 3);
           } else if (tt > 0.66) {
             const fmv = Math.min(1, (tt - 0.66) / 0.34);
             const mixv = fmv * 0.7;
             const [tr, tg, tb] = terrainPalette(y + baseElev, 0, sampleCover(v.x, v.z), v.x, v.z);
             swardCol.setRGB(v.c.r + (tr - v.c.r) * mixv, v.c.g + (tg - v.c.g) * mixv, v.c.b + (tb - v.c.b) * mixv);
-            mesh.setColorAt(slot, swardCol);
-          } else mesh.setColorAt(slot, v.c);
+            swardCol.toArray(stg(mesh).c, slot * 3);
+          } else v.c.toArray(stg(mesh).c, slot * 3);
           tier.n++;
           ezCounts[fam]++;
-          if (ezPlaced.length < 600) ezPlaced.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +formSy.toFixed(2), sw: +formSw.toFixed(2), variant: vi, H: +H.toFixed(2), casts: casts ? 1 : 0 });
+          if (placed.length < 600) placed.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +formSy.toFixed(2), sw: +formSw.toFixed(2), variant: vi, H: +H.toFixed(2), casts: casts ? 1 : 0 });
           activeRoles[v.role]++;
           if (v.anchor) activeAnchors++;
           continue;
@@ -11480,7 +11528,7 @@ function refreshVeg(): void {
         vegDummy.rotation.set((v.tl ?? 0) * form, v.rot, 0);
         vegDummy.scale.set(siteS * formSw, siteS * formSy, siteS);
         vegDummy.updateMatrix();
-        mesh.setMatrixAt(i, vegDummy.matrix);
+        vegDummy.matrix.toArray(stg(mesh).m, i * 16);
         activeRoles[v.role]++;
         if (v.anchor) activeAnchors++;
         // The same dissolve the sward does, at the scatter's own horizon: the
@@ -11491,7 +11539,7 @@ function refreshVeg(): void {
         // BEHIND it, not under it.
         const tt = Math.sqrt(d2v) / (tree ? treeRange : VEG_RANGE);
         if (vegRoleDebug) {
-          mesh.setColorAt(i, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
+          VEG_ROLE_COL[v.anchor ? 'anchor' : v.role].toArray(stg(mesh).c, i * 3);
         } else if (tt > 0.5) {
           // LINEAR, not squared: a squared ramp left scrub on a 70%-range
           // ridge line at nine-tenths saturation — precisely the confetti the
@@ -11504,8 +11552,8 @@ function refreshVeg(): void {
             v.c.g + (tg - v.c.g) * mixv,
             v.c.b + (tb - v.c.b) * mixv,
           );
-          mesh.setColorAt(i, swardCol);
-        } else mesh.setColorAt(i, v.c);
+          swardCol.toArray(stg(mesh).c, i * 3);
+        } else v.c.toArray(stg(mesh).c, i * 3);
         counts[v.k] = i + 1;
         if (v.h > 0 && trunkN < trunks.instanceMatrix.count) {
           vegDummy.position.set(v.x, y, v.z);
@@ -11514,38 +11562,38 @@ function refreshVeg(): void {
           // a sapling's stem and a slender fir on a fencepost.
           vegDummy.scale.set(siteS * 0.42 * formSw, trunkReach(v.k, siteH, siteS), siteS * 0.42 * formSw);
           vegDummy.updateMatrix();
-          trunks.setMatrixAt(trunkN++, vegDummy.matrix);
+          vegDummy.matrix.toArray(stg(trunks).m, trunkN++ * 16);
         }
       }
     }
   }
   vegMark('place');
+  // ── THE COMMIT: STAGING BECOMES THE INSTANCES, IN ONE SLICE ──
+  // A mesh that has never been coloured has no colour attribute yet (three
+  // creates it on the first setColorAt); one slot through that path makes it.
+  const commit = (m: THREE.InstancedMesh, n: number, colours: boolean): void => {
+    const st = stg(m);
+    (m.instanceMatrix.array as Float32Array).set(st.m.subarray(0, n * 16));
+    m.count = n;
+    uploadPrefix(m.instanceMatrix, n);
+    if (!colours) return;
+    if (!m.instanceColor && n > 0) m.setColorAt(0, swardCol);
+    if (m.instanceColor) { (m.instanceColor.array as Float32Array).set(st.c.subarray(0, n * 3)); uploadPrefix(m.instanceColor, n); }
+  };
   for (const k of Object.keys(vegMeshes) as VegKind[]) {
     if (k === 'grass') continue;              // the sward keeps its own clock
-    const m = vegMeshes[k];
-    m.count = counts[k];
-    uploadPrefix(m.instanceMatrix, m.count);
-    uploadPrefix(m.instanceColor, m.count);
+    commit(vegMeshes[k], counts[k], true);
   }
-  trunks.count = trunkN;
-  uploadPrefix(trunks.instanceMatrix, trunkN);
-  for (const fam of EZ_FAMILIES) {
-    for (const t of ezTiers[fam]) {
-      t.near.count = t.nNear;
-      uploadPrefix(t.near.instanceMatrix, t.nNear);
-      uploadPrefix(t.near.instanceColor, t.nNear);
-      t.far.count = t.nFar;
-      uploadPrefix(t.far.instanceMatrix, t.nFar);
-      uploadPrefix(t.far.instanceColor, t.nFar);
-    }
-  }
+  commit(trunks, trunkN, false);
+  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) { commit(t.near, t.nNear, true); commit(t.far, t.nFar, true); }
+  ezPlaced = placed;
   vegMark('upload');
   vegActiveRoles = activeRoles;
   ezEdgeLast = ezRecord((f) => Math.round(ezEdge[f]));
   refreshShrubs();
   vegMark('shrubs');
   vegActiveAnchors = activeAnchors;
-  vegMs = performance.now() - t0;
+  vegPhase.t0 = t0;   // the callers set vegMs: a sliced refresh is not one span
   // Forget buckets far behind so a long drive cannot grow the site list
   // without bound. They regenerate identically if you come back.
   if (vegGrid.size > 900) {
@@ -11558,6 +11606,36 @@ function refreshVeg(): void {
       }
     }
   }
+}
+
+/** The whole refresh in one call — the debug toggle and the hop, and what
+ *  perf-check.mjs holds against its baseline. Drops any job in flight. */
+function refreshVeg(): void {
+  vegJob = null;
+  const t0 = performance.now();
+  const it = vegRefreshSteps();
+  while (!it.next().done) { /* every slice, now */ }
+  vegMs = performance.now() - t0;
+}
+/** Milliseconds of a frame a refresh slice may take, at the floor; the
+ *  budget is a sixth of the smoothed frame above it (the sward step's rule),
+ *  so the harness's two-second frames run a refresh whole. `?vegstep=N`
+ *  forces exactly N (0: the whole refresh in one call, the old behaviour). */
+const VEG_STEP_MS = 5;
+const VEG_STEP_FORCED = qsNum('vegstep', -1);
+let vegJobMs = 0;
+/** One slice of the running refresh; true when it finished this frame. */
+function stepVegRefresh(): boolean {
+  if (!vegJob) return false;
+  const budget = VEG_STEP_FORCED === 0 ? Infinity
+    : VEG_STEP_FORCED > 0 ? VEG_STEP_FORCED : clamp(frameMs / 6, VEG_STEP_MS, 400);
+  const t0 = performance.now();
+  vegSeedLeft = VEG_SEED_BUDGET ? Math.max(0, Math.min(VEG_SEED_MS, budget) - frameHeavyMs()) : Infinity;
+  let done = false;
+  while (performance.now() - t0 < budget) { if (vegJob.next().done) { done = true; break; } }
+  vegJobMs += performance.now() - t0;
+  if (done) { vegJob = null; vegMs = vegJobMs; vegJobMs = 0; }
+  return done;
 }
 
 // ── wildlife ───────────────────────────────────────────────────────
@@ -41888,14 +41966,22 @@ function tick(now: number): void {
     noteDryLand(state.x, state.z, groundAt(state.x, state.z));
   }
   // Keep the existing population through a costly frame, but never starve it.
-  if (now > vegAt && (frameHeavyMs() < FRAME_HEAVY_MS || now - vegAt > 180)) {
+  // The refresh runs in slices (see vegRefreshSteps): a job in flight takes
+  // its slice every frame; a new one starts only when none is running, so a
+  // cadence that fell behind coalesces rather than stacks.
+  if (vegJob) {
     const _treeRefreshAt = performance.now();
-    refreshVeg();
-    profAdd('treeRefresh', _treeRefreshAt);
     // A refresh that ran out of seeding budget comes back in a fifth of a
     // second rather than in nine tenths, so a hop's ring fills in a second or
     // two instead of a quarter of a minute.
-    vegAt = now + (vegSeedDeferred ? VEG_SEED_CATCHUP : 900);
+    if (stepVegRefresh()) vegAt = now + (vegSeedDeferred ? VEG_SEED_CATCHUP : 900);
+    profAdd('treeRefresh', _treeRefreshAt);
+  } else if (now > vegAt && (frameHeavyMs() < FRAME_HEAVY_MS || now - vegAt > 180)) {
+    const _treeRefreshAt = performance.now();
+    vegJob = vegRefreshSteps();
+    vegJobMs = 0;
+    if (stepVegRefresh()) vegAt = now + (vegSeedDeferred ? VEG_SEED_CATCHUP : 900);
+    profAdd('treeRefresh', _treeRefreshAt);
   }
   else if (now > swardAt) { swardAt = now + 700; if (!swardGpu) refreshSward(); }
   // The GPU sward is uniform writes and a field rebuild only when the truck

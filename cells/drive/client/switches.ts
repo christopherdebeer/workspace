@@ -95,6 +95,8 @@ export const SWITCHES = [
     note: 'pin the sun’s altitude in degrees, −20..89' },
   { id: 'substrate', kind: 'choice', marks: ['bench', 'legacy'], fallback: 'canonical contact, legacy render',
     note: 'the road/terrain/water substrate (SUBSTRATE-MIGRATION.md): legacy = the pre-substrate contact with shadow diagnostics, the rollback; shadow = legacy contact, substrate observed; render = the substrate draws the water too. It was read round the typed reader and so was in no list until it was declared here' },
+  { id: 'vegstep', kind: 'number', marks: ['bench'], fallback: 'a sixth of the frame, 5 ms at least',
+    note: 'milliseconds of a frame one slice of the tree refresh may take; 0 runs the whole refresh in one call, the old behaviour and the A/B' },
   { id: 'farpark', kind: 'number', marks: ['bench'], fallback: '48 MB of parked shell',
     note: 'megabytes of baked far-shell kept off-ring so a browse that returns costs nothing — 0 to park nothing at all, which is the exact A/B for whether the park is helping' },
   { id: 'wx', kind: 'choice', marks: ['look', 'bench'], fallback: 'the live weather',

@@ -2436,6 +2436,44 @@ with the smoothed frame so a slow harness bakes a tile a frame and a phone
 keeps its six milliseconds. `far:geo` and `far:nrm` are unchanged. The
 worker remains the honest next cut for the nine microseconds.
 
+### The tree refresh is resumable work
+
+The next dump from the seat (Honfleur, chase, 27 fps): the far bake gone
+from the slow frames (1.8 ms a slice, 10 max), and `treeRefresh` at 33 ms a
+call, 240 calls in a hundred seconds, top of 185 of the 488 slow frames —
+more frames than anything else. Its split was honest and unhelpful: 14 ms
+gathering candidates over a 27x27 ring of cells, 3.5 admitting the nearest,
+14 placing nine hundred trees (a ground read, a matrix and a colour each).
+No one phase to cut, and all of it in one synchronous call every 900 ms, or
+every 120 while a hop's seeding was catching up.
+
+`refreshVeg` is a generator now (`vegRefreshSteps`): it yields after every
+ring cell of the gather, after the admit, and after every cell of the place,
+and the tick runs it in slices of a sixth of the smoothed frame, five
+milliseconds at the floor, until it is done. Two rules make that safe:
+
+- **THE PLACE WRITES INTO STAGING, NOT INTO THE INSTANCES.** A frame drawn
+  between two slices of a refresh that wrote the instance buffers directly
+  would show the first k slots re-assigned and the rest still last refresh's
+  — a tree twice where the order shifted, none where it had not yet. Every
+  matrix and colour goes into a staging array per mesh, sized to its
+  capacity and kept across refreshes, and the whole set is committed in one
+  slice at the end with the counts. A mesh that has never been coloured has
+  no colour attribute until its first `setColorAt`; the commit makes one.
+- **ONE JOB AT A TIME, AND A WHOLE CALL CANCELS IT.** The tick starts a job
+  only when none is running, so a cadence that fell behind coalesces rather
+  than stacks; `refreshVeg()` — the debug toggle, the hop — drops any job in
+  flight and runs the same generator to completion in one call. That is also
+  what `perf-check.mjs` holds against its baseline (it extracts both halves
+  now), so the sliced and the whole refresh cannot drift apart: **20 of 20
+  production refills byte-identical** to the pre-slice function.
+
+The seed budget is per slice, so seeding cannot spend more than the slice;
+the deferral count accumulates over the job and sets the next cadence as
+before. `?vegstep=N` forces a slice of exactly N ms (0 is the whole refresh
+in one call, the A/B), because the harness's two-second frames run a refresh
+whole under the frame-scaled rule and could not otherwise show a slice.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.
