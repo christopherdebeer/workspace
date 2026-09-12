@@ -7622,19 +7622,80 @@ function clearBridgeForms(): void {
  * off still puts the tower on the bridge.
  */
 const BRIDGE_LANDMARKS = LANDMARKS.filter((d) => d.kind === 'bridge' && d.bridge);
-function bridgeLandmarkFor(a: BridgeAssembly, longest: number): BridgeFormSpec | null {
+/** The entry that claims a bridge called `name` at a point, or null. */
+function bridgeEntryFor(name: string | null, px: number, pz: number): Landmark | null {
   if (!BRIDGE_LANDMARKS.length) return null;
-  let px = 0, pz = 0, n = 0;
-  for (const w of a.ways.values()) for (const p of w.pts) { px += p[0]; pz += p[1]; n++; }
-  if (!n) return null;
-  px /= n; pz /= n;
-  const lname = (a.name ?? '').toLowerCase();
+  const lname = (name ?? '').toLowerCase();
   for (const def of BRIDGE_LANDMARKS) {
     const b = def.bridge;
     if (!b) continue;
     const [lx, lz] = toLocal(def.lat, def.lon);
     if (Math.hypot(px - lx, pz - lz) > b.reach) continue;
     if (b.match.length && !b.match.some((m) => lname.includes(m.toLowerCase()))) continue;
+    return def;
+  }
+  return null;
+}
+/**
+ * ── THE WATER UNDER A DECK ──
+ *
+ * The resting level of the hydro field where it has one, in the profile's
+ * own local metres. Where the field has not built yet — the tile that
+ * carries the water polygon may arrive after the road's — the cover's word
+ * stands in, with the bed as the level: after the deck repair the bed under
+ * a span IS about the water, and before it (or with the repair off) the bed
+ * is the deck's own smear, which is why the stand-in is capped two metres
+ * over the sea. An inland lake at altitude the field has not reached reads
+ * far under its own chord and moves nothing, which is the right refusal.
+ */
+function waterUnder(x: number, z: number): number | null {
+  const wet = drawnHydroAt(x, z);
+  if (wet) return wet.restingLevelM - baseElev;
+  if (BRIDGE_DEM_ON && hasHeight(x, z) && sampleCover(x, z) === COVER.water) return Math.min(sampleHeight(x, z), 2 - baseElev);
+  return null;
+}
+/**
+ * The deck an entry describes, as a function of position: level at `deckM`
+ * over the water between the outer towers, falling at `grade` beyond them
+ * until the chord takes over. Every fragment of the bridge evaluates the
+ * same function, so the approach viaduct climbs to the span at the real
+ * grade whichever tile built first — the ordering that defeats the weld on
+ * a flyover cannot arise. Null where the entry gives no deck height.
+ */
+function bridgeDeckHint(def: Landmark): ((x: number, z: number) => number | null) | null {
+  const b = def.bridge;
+  if (!b || b.deckM === undefined) return null;
+  const sts = (b.stations ?? []).map(([la, lo]) => toLocal(la, lo));
+  const deckM = b.deckM;
+  // The water at the towers; the sea where the field has nothing yet.
+  let wy = 0, n = 0;
+  for (const [x, z] of sts) { const w = waterUnder(x, z); if (w !== null) { wy += w; n++; } }
+  const top = (n ? wy / n : -baseElev) + deckM;
+  if (sts.length < 2) return (x, z) => (waterUnder(x, z) === null ? null : top);
+  const a = sts[0], c = sts[sts.length - 1];
+  const len = Math.hypot(c[0] - a[0], c[1] - a[1]) || 1;
+  const ux = (c[0] - a[0]) / len, uz = (c[1] - a[1]) / len;
+  const g = b.grade ?? 0.06;
+  return (x, z) => {
+    const s = (x - a[0]) * ux + (z - a[1]) * uz;
+    const beyond = s < 0 ? -s : s > len ? s - len : 0;
+    return top - g * beyond;
+  };
+}
+/** Clearance over water a bridge gets with no entry to say: by class, and
+ *  only where its chord would otherwise lie in the water (see the lift). */
+function waterClearFor(highway: string | undefined): number {
+  return highway === 'motorway' || highway === 'trunk' ? 10
+    : highway === 'primary' || highway === 'secondary' ? 7 : 4.5;
+}
+function bridgeLandmarkFor(a: BridgeAssembly, longest: number): BridgeFormSpec | null {
+  let px = 0, pz = 0, n = 0;
+  for (const w of a.ways.values()) for (const p of w.pts) { px += p[0]; pz += p[1]; n++; }
+  if (!n) return null;
+  const def = bridgeEntryFor(a.name, px / n, pz / n);
+  const b = def?.bridge;
+  if (!def || !b) return null;
+  {
     const spec = bridgeSpecFor(a.tags, a.family, longest);
     spec.form = b.form;
     if (b.tower) spec.tower = b.tower;
@@ -7655,7 +7716,6 @@ function bridgeLandmarkFor(a: BridgeAssembly, longest: number): BridgeFormSpec |
     else if (b.fractions?.length) spec.stationFractions = b.fractions;
     return spec;
   }
-  return null;
 }
 /**
  * The pylons of a famous bridge are often in OSM as BUILDINGS with a height
@@ -15958,7 +16018,7 @@ const GRADE_SEP = 2.6;
 const BRIDGE_CLEAR = 5.5;
 /** `m` is the most any station rose; `p0`/`p1` are what the portals rose —
  *  zero on a bridge long enough to ramp to its clearance. */
-interface LiftRec { x: number; z: number; nm?: string; fid: number; layer: number; m: number; n: number; p0: number; p1: number }
+interface LiftRec { x: number; z: number; nm?: string; fid: number; layer: number; m: number; n: number; p0: number; p1: number; src?: string }
 const liftLog: LiftRec[] = [];
 const RAIL_H = 1;      // parapet height above the kerb it stands on
 // Off only from a probe (`?nofill=1`), to see the ditch the fill closes.
@@ -17007,8 +17067,29 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // grade — the standard two-pass cone. The portals rise only by what the
     // ramp cannot absorb: nothing, on a bridge long enough to climb; the
     // residual, on a short span, where it is still handed to the weld below.
-    if (mode === 'bridge' && layer > 0 && runs.length) {
+    // ── AND A BRIDGE OVER WATER CLEARS THE WATER ──
+    //
+    // The chord is portal to portal through whatever the elevation says at
+    // the ends, and over an estuary that is the bed: measured at the Pont de
+    // Normandie once the deck repair had taken the surface model's smear
+    // away, the drivable surface equalled the terrain at every sample and
+    // lay 0.7 m UNDER the resting water for a kilometre. Nothing supplied a
+    // deck height over water — the layer lift wants a lower-layer road, the
+    // crossing registry transcribes the deck rather than deciding it, and
+    // the hydro field was never asked. So it is asked here, on the same
+    // two-pass cone as the flyover: a landmark entry's deck profile where
+    // one claims the way, else the water plus a clearance by class at every
+    // station whose chord would otherwise lie in the water. The generic
+    // rule is confined to that failure on purpose — an ordinary river bridge
+    // whose chord already spans bank to bank keeps it, and its approaches
+    // keep their welds.
+    const bridgeEntry = mode === 'bridge' && n > 1
+      ? bridgeEntryFor(wayTags?.['bridge:name'] ?? wayTags?.name ?? null, dense[n >> 1][0], dense[n >> 1][1]) : null;
+    const deckHint = bridgeEntry ? bridgeDeckHint(bridgeEntry) : null;
+    if (mode === 'bridge' && runs.length) {
       let need = 0;
+      let liftSrc = '';
+      const gRamp = bridgeEntry?.bridge?.grade ?? gLim;
       // NOT AT THE PORTALS. The nearest lower-layer deck to a portal station is
       // the bridge's OWN approach: the shared node is one dense point in the
       // chain and carries whichever member's layer came first, and the
@@ -17031,7 +17112,21 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         const [pax, paz] = dense[a], [pbx, pbz] = dense[b];
         const nearPortal = (x: number, z: number): boolean =>
           Math.hypot(x - pax, z - paz) < PORTAL_R || Math.hypot(x - pbx, z - pbz) < PORTAL_R;
-        for (let i = a + 1; i <= b; i++) {
+        // The water first. An entry's profile is taken at every station, the
+        // portals included — the neighbouring fragment reads the same
+        // function at the shared node, so the ends agree without a weld. The
+        // generic clearance keeps off the portals like the road scan below.
+        for (let i = a; i <= b; i++) {
+          const [x, z] = dense[i];
+          let want: number | null = null;
+          if (deckHint) { want = deckHint(x, z); if (want !== null) liftSrc = 'hint'; }
+          else if (i > a && i < b && !nearPortal(x, z)) {
+            const wy = waterUnder(x, z);
+            if (wy !== null && prof[i] < wy + 1) { want = wy + waterClearFor(wayTags?.highway); liftSrc = 'water'; }
+          }
+          if (want !== null && want > prof[i]) prof[i] = want;
+        }
+        for (let i = a + 1; i <= b && layer > 0; i++) {
           const [x0, z0] = dense[i - 1], [x1, z1] = dense[i];
           const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 3));
           let below: number | null = null;
@@ -17044,16 +17139,16 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           }
           if (below === null) continue;
           const want = below + BRIDGE_CLEAR;
-          if (i - 1 > a && want > prof[i - 1]) prof[i - 1] = want;
-          if (i < b && want > prof[i]) prof[i] = want;
+          if (i - 1 > a && want > prof[i - 1]) { prof[i - 1] = want; liftSrc = liftSrc || 'deck'; }
+          if (i < b && want > prof[i]) { prof[i] = want; liftSrc = liftSrc || 'deck'; }
         }
         for (let i = a + 1; i <= b; i++) {
           const d = Math.max(0.1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
-          prof[i] = Math.max(prof[i], prof[i - 1] - gLim * d);
+          prof[i] = Math.max(prof[i], prof[i - 1] - gRamp * d);
         }
         for (let i = b - 1; i >= a; i--) {
           const d = Math.max(0.1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
-          prof[i] = Math.max(prof[i], prof[i + 1] - gLim * d);
+          prof[i] = Math.max(prof[i], prof[i + 1] - gRamp * d);
         }
         for (let i = a; i <= b; i++) need = Math.max(need, prof[i] - chord[i]);
       }
@@ -17068,7 +17163,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         if (liftLog.length < 500) {
           liftLog.push({ x: +dense[0][0].toFixed(1), z: +dense[0][1].toFixed(1), nm: name, fid, layer,
             m: +need.toFixed(2), n: runs.reduce((c, [a, b]) => c + (b - a + 1), 0),
-            p0: +(prof[0] - chord[0]).toFixed(2), p1: +(prof[n - 1] - chord[n - 1]).toFixed(2) });
+            p0: +(prof[0] - chord[0]).toFixed(2), p1: +(prof[n - 1] - chord[n - 1]).toFixed(2), src: liftSrc });
         }
       }
     }
@@ -34721,6 +34816,13 @@ function heightsOf(): number[] {
     stations: a.spec?.stations.length ?? 0,
     quads: a.quads, towers: a.towers, stays: a.stays, hangers: a.hangers, ribs: a.ribs, panels: a.panels,
     supports: bridgeSupports.size,
+    // The deck the fragments were built at, in metres above sea level: the
+    // one reading that says whether the road stands over the water.
+    deck: (() => {
+      let lo = Infinity, hi = -Infinity;
+      for (const w of a.ways.values()) for (let i = 0; i < w.y.length; i++) { const y = w.y[i] + baseElev; if (y < lo) lo = y; if (y > hi) hi = y; }
+      return lo === Infinity ? null : [+lo.toFixed(1), +hi.toFixed(1)];
+    })(),
   }));
 /**
  * Run the span repair AGAIN on the tile under a point, with every span known

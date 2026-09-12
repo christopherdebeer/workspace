@@ -3023,6 +3023,90 @@ fix only the position along, the suspension tower height, the through arch's
 crown and the deck arch's footing, the truss's depth, the bascule's pair, the
 end pylons, and the attribute arrays agree.
 
+### …and the deck stands clear of the water
+
+The seat found the Pont de Normandie's deck at water level at
+`49.42481 0.27555` and asked whether the substrate needed finishing, and
+whether known bridges needed landmark hints. Measured there, in
+`substrate=render` and in the default alike: the drivable surface equalled
+the terrain at every sample along the axis — 7 m over the marsh, then −1.6 to
+−3.2 m over the Seine with the water resting at −1 to −2.7 — and `__decks`
+reported the bridge's segments with 0.2 m of daylight. `substrate=render`
+was not the variable.
+
+**ROOT CAUSE.** A bridge-mode way takes a whole-way run and the run's
+profile is the portal-to-portal chord: a line between the terrain heights at
+the fragment's ends. Nothing else supplies a deck height over water — the
+layer lift raises a deck only over a lower-layer ROAD ("bridges over
+nothing find no deck and keep their chord"), the crossing registry records
+`deckY` as an input read from the road, and the hydro field was never asked.
+Before the deck repair the surface model's smear carried the deck at 60–76 m
+and the chord stood on it: right by accident. The repair lowered the terrain
+under the deck to the bed and the chord followed it down, towers and all.
+The regression was this work's, not an old one.
+
+**THE FIX rides the flyover's own cone.** In the lift block, before the
+lower-deck scan, every station is asked for a water want, and the two-pass
+ramp then descends from any raised station at the ruling grade exactly as
+it does for a flyover:
+
+- **A landmark entry's deck profile** where one claims the way (`deckM`,
+  the deck's height over the water at the towers, and `grade`): level
+  between the outer towers, falling at the grade beyond them until the chord
+  takes over. It is a function of position, so every fragment — the
+  approach viaduct included, whichever tile built first — reads the same
+  height at the shared node and the ends agree without a weld. That is what
+  makes the hint the right tool: the ordering that defeats the weld on a
+  flyover cannot arise.
+- **The water plus a clearance by class** (10 m motorway and trunk, 7 m
+  primary and secondary, 4.5 m otherwise) with no entry, and ONLY at a
+  station whose chord would otherwise lie in the water. An ordinary river
+  bridge whose chord already spans bank to bank keeps it, so its approaches
+  keep their welds; the generic rule is confined to the failure the repair
+  created.
+
+`waterUnder` is the hydro field's resting level, or — where the field has
+not built yet — the cover's word with the bed as the level, capped two
+metres over the sea so an unrepaired smear cannot pose as the water. The
+eighteen entries over water carry their deck heights (Normandie 52 m at
+6 %, Golden Gate 67, Verrazzano 69.5, Akashi 65, Bosphorus 64, Tsing Ma 62,
+Øresund 57, Rion–Antirrio 52, Sydney 49, Forth 46, Brooklyn and Hell Gate
+41, Severn 37, Humber 30, Erasmus 12.5, Alamillo 10, Tower Bridge 8.6).
+`__lifts()` now says which rule lifted a way: `hint`, `water` or `deck`.
+
+**MEASURED** at the seat's spot, 150 s settled, no page errors: `__lifts`
+lists the Normandie's fragments lifted by `hint` — 33 to 39 m over their
+chords — and `__decks` puts the fragment under the rig at **18.7–25.1 m**
+with 24.8 m of daylight where it had 0.2; the assembly's deck runs
+**15.6 m at the approach to 54 m over the water**, and the towers rise from
+it. From mid-span the deck now soars over the estuary with the pylon's foot
+in the water below it. `boot.mjs` and `through-node.test.mjs` green, Camps
+Bay 8 / 0 / 0.19 m unchanged — the generic rule moved nothing there, which
+is the confinement working.
+
+**A SPAWN BESIDE A VIADUCT LANDS BESIDE IT, and that is left as it is.**
+The seat's URL is 43 m east of the carriageway, on the marsh; the truck
+spawns on the terrain, the road arrives afterwards, and a wheel takes a
+deck only within four metres of where it already is (`tyreHeight`). Before
+this work the deck was at marsh level and the truck stood beside it; now it
+stands beside a 25 m deck. A seat rule was tried in this round — wait for
+the nearest deck standing over four metres above the truck within sixty
+metres and put the truck on it — and not shipped: the first such deck to
+arrive was the embankment track at 4.6 m, then a side road at 6.3 m, never
+the bridge, because the fragments arrive in tile order and the rule cannot
+know a taller one is coming; and a teleport onto a track's centreline did
+not seat the truck on it either. The honest version waits for the tile to
+finish and then takes the tallest deck, and needs the tyre gate opened for
+it; measured with `__seatwhy` over four runs and left for its own round.
+Spawn on the deck itself (`49.4283 0.2745`, the seat's earlier spawn, is
+on it) or use `__toroad()`.
+
+**WHAT THE SUBSTRATE STILL OWES.** The crossing authority transcribes the
+deck it is given. The migration's next step is for it to DECIDE the deck —
+from the hydro level, the class clearance and the landmark hint — and hand
+the number to the profile, instead of the profile reaching past it as it
+does here. The two inputs it needs now exist.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.
