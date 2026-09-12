@@ -3139,6 +3139,90 @@ owes after this is the crossing's GEOMETRY — the registry still learns of a
 crossing after the road is built, from the built road; the profile now asks
 before, but through a function, not a record.
 
+### The empty tile bank, and why a bridge can be missing entirely
+
+The seat drove the Forth and the Golden Gate and found both bridges in the
+water. At the Golden Gate the cause is not the deck at all: **the tiles
+carrying the span are banked EMPTY**.
+
+```
+10472/25319  ways=0     10472/25320  ways=0     10472/25321  ways=0
+10472/25322  ways=0     10473/25322  ways=0
+10471/25322  ways=48    ← Golden Gate Bridge West Sidewalk, Presidio Parkway
+```
+
+A way that crosses a tile boundary is returned for BOTH bboxes by
+`out geom`, so a column of 44-byte empties beside a tile holding the bridge
+is not geography. It is a bad answer written down. And the client clips each
+tile's ways to that tile's own bounds, so the neighbour's copy of the bridge
+is cut off at the boundary and the span is simply absent from the world.
+
+**WHY IT IS PERMANENT.** A banked tile is an S3 object whose key IS the
+request path, and CloudFront serves it from S3 without the cell's code
+running: `serveTile` runs on a cache MISS and nothing else. There is no
+expiry, no re-check, and no request that could trigger one. An empty answer
+is stored deliberately — ocean, desert and open country are most of the
+planet and leaving them unwritten would make the commonest tile on Earth a
+permanent miss — so nothing distinguishes "no roads here" from "Overpass
+gave me nothing this time".
+
+**THE CAUSE, and what was already guarded.** A timed-out Overpass query
+answers HTTP 200 with an empty element list and the reason in `remark`.
+`askMirror` already refused three of those — `timed out`, `out of memory`,
+`runtime error` — added proactively after a 25-tile audit found no
+disagreements. The Golden Gate's column is what a remark outside that list
+looks like, or a tile banked before the guard existed. **Any** remark is now
+a refusal: a bank with no expiry cannot afford a guess about which remarks
+are benign, and the cost of heeding all of them is one 503 and a retry.
+
+**AND THE ONLY HEAL IS THE VERSION.** Nothing can rewrite a banked tile in
+place, so the tile path carries `TILE_V`, now **5** (the route regex derives
+from it and the client asks for the same number). A bump is a fresh
+keyspace: every tile is asked once more and the poisoned rows are
+unreachable. It costs the world a re-fetch, which is the price of a bank
+with no expiry, and it is one constant in two files. The client's own
+IndexedDB key went to `7` with it.
+
+### …and the clearance is proportional to the crossing
+
+The seat's next question answered itself: *surely the clearance from water
+is at minimum proportional to waterway width?* The first generic rule was a
+flat 4.5 to 10 m by road class, fired only where the chord lay IN the water.
+Both halves were wrong. Ten metres over a two-kilometre estuary still reads
+as a bridge lying in it, and a deck a metre ABOVE the water is as wrong as
+one a metre under.
+
+`navigableClearance` takes a twentieth of the wet span, floored at the class
+minimum and capped at 65 m. The ratio is read off the store's own bridges,
+deck height over main span:
+
+| bridge | span | deck | ratio |
+|---|---|---|---|
+| Golden Gate | 1,280 m | 67 m | 0.052 |
+| Pont de Normandie | 856 m | 52 m | 0.061 |
+| Brooklyn | 486 m | 41 m | 0.084 |
+| Severn | 988 m | 37 m | 0.037 |
+| Akashi Kaikyō | 1,991 m | 65 m | 0.033 |
+| Humber | 1,410 m | 30 m | 0.021 |
+| Tower Bridge | 61 m | 8.6 m | 0.14 |
+
+A twentieth sits in the middle and lands within a few metres of the real
+thing on the big ones: 64 m against 67 at the Golden Gate, 43 against 52 at
+the Normandie. The cap is about the tallest air draught built anywhere, so a
+mis-measured estuary cannot raise a road into the stratosphere; the floor
+keeps a ditch from lowering one into the water; an entry overrides both with
+the surveyed number.
+
+**THE WET SPAN IS MEASURED ALONG THE DECK** — the longest CONTIGUOUS run of
+stations with water under them, so a causeway hopping islands is measured by
+its channel rather than by its total length — and only for a deck already
+known to be low, which is the one case that needs a number. A bridge with a
+landmark entry costs no water samples at all. What it cannot see is a
+crossing OSM split into several ways: each fragment measures its own wet
+run, so a bridge cut into thirds asks for a third of the clearance. The
+entries cover the famous ones; the assembly already gathers the fragments,
+and teaching the measurement to read it is the next step.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.

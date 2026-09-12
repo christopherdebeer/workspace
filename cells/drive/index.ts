@@ -353,7 +353,32 @@ function serveWebAsset(path: string) {
 // written — otherwise every ocean tile is a permanent miss and therefore a
 // permanent invocation — and (2) a failure must never be written, or one bad
 // minute upstream becomes our bad week.
-const TILE_RE = /^\/~\/osm\/v[2-4]\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;   // v4: water relations
+/**
+ * ── THE TILE VERSION IS THE ONLY WAY THE BANK HEALS ──
+ *
+ * A banked tile is an S3 object whose key IS this path, and CloudFront serves
+ * it from S3 without ever reaching this code again: `serveTile` runs on a
+ * cache MISS and nothing else. So a wrong answer, once written, is permanent —
+ * there is no expiry, no re-check, and no request that could trigger one.
+ *
+ * Measured at the Golden Gate: `10472/25319..25322` and `10473/25322` are
+ * banked with an empty way list, 44 bytes each, while `10471/25322` beside
+ * them carries 48 ways including the bridge's own sidewalk. A way that
+ * crosses a tile boundary is returned for BOTH bboxes by `out geom`, so a
+ * column of empties beside a tile holding the bridge is not geography; it is
+ * a bad answer written down. The client clips each tile's ways to that
+ * tile's bounds, so the empty column erases the span from the world.
+ *
+ * The cause is upstream and now guarded (see askMirror: any `remark` is a
+ * refusal), but the guard cannot unwrite what was written before it. Bumping
+ * this version is a fresh keyspace: every tile is asked again, once, and the
+ * poisoned rows are unreachable. It is the blunt instrument and the only one
+ * — so it is one constant, and the client asks for the same number.
+ *
+ *   v4: water relations · v5: re-ask after the empty-bank finding
+ */
+const TILE_V = 5;
+const TILE_RE = new RegExp(`^/~/osm/v[2-${TILE_V}]/(\\d{1,2})/(\\d{1,7})/(\\d{1,7})$`);
 const COVER_RE = /^\/~\/cover\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // THREE upstreams, not one. Measured on a 12km corridor through Death Valley:
 // 7 of 25 cold tiles came back 503 at 9–12.5s because the single upstream was
@@ -1511,7 +1536,15 @@ async function askMirror(url: string, query: string, ms: number): Promise<RawWay
   // and cached in every browser that fetched it. Never seen in the wild here
   // (a 25-tile corridor audit found zero disagreements with Overpass), which
   // is precisely why it is worth closing before it is.
-  if (json.remark && /timed out|out of memory|runtime error/i.test(json.remark)) {
+  // ANY remark, not a list of the ones we thought of. The list was
+  // `timed out|out of memory|runtime error`, and the reasoning behind it was
+  // sound for the failures it named — but a bank with no expiry cannot
+  // afford a guess about which remarks are benign. Overpass says something
+  // in `remark` when the answer is not clean; that is the whole signal, and
+  // the cost of heeding all of it is one 503 and a retry, against a wrong
+  // tile written down for ever. The Golden Gate's empty column (see TILE_V)
+  // is what a missed one looks like.
+  if (json.remark) {
     throw new Error(`remark: ${json.remark.slice(0, 120)}`);
   }
   return json.elements ?? [];

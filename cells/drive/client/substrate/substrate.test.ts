@@ -18,6 +18,7 @@ import {
   resolveProductionSubstrateMode,
   resolveProductionCrossing,
   resolveProductionCrossingIntent,
+  navigableClearance,
   resolveProductionDeck,
   sampleHydroContactLayers,
   sampleProductionSubstrateTile,
@@ -393,9 +394,29 @@ export function runSubstrateSelfTest(): void {
   const lane = resolveProductionDeck({ chordY: 0.5, waterY: 0, hintY: null, portal: false, roadTags: { highway: 'residential' } });
   assert(lane.authority === 'water-clearance' && Math.abs(lane.deckY - 4.5) < 0.01,
     'a lane chord in the water stands four and a half metres over it');
-  const spanning = resolveProductionDeck({ chordY: 6, waterY: 0, hintY: null, portal: false, roadTags: { highway: 'primary' } });
-  assert(spanning.authority === 'chord' && spanning.deckY === 6 && spanning.clearanceM === 6,
-    'a chord already over the water keeps its height and reports the clearance it has');
+  const spanning = resolveProductionDeck({ chordY: 12, waterY: 0, hintY: null, portal: false, roadTags: { highway: 'primary' } });
+  assert(spanning.authority === 'chord' && spanning.deckY === 12 && spanning.clearanceM === 12,
+    'a chord already over its clearance keeps its height and reports the clearance it has');
+
+  // ── AIR DRAUGHT FOLLOWS THE CROSSING, NOT THE ROAD CLASS ──
+  // A flat clearance is wrong at both ends: ten metres over a two-kilometre
+  // estuary is a bridge in the water, and it is more than a lane needs over
+  // a brook. A twentieth of the wet span, floored by class and capped.
+  assert(Math.abs(navigableClearance(1280, 'motorway') - 64) < 0.01,
+    'the Golden Gate\'s 1,280 m of water earns sixty-four metres');
+  assert(Math.abs(navigableClearance(856, 'trunk') - 42.8) < 0.01,
+    'the Normandie\'s 856 m earns forty-three');
+  assert(Math.abs(navigableClearance(300, 'primary') - 15) < 0.01, 'a 300 m river earns fifteen');
+  assert(navigableClearance(40, 'residential') === 4.5, 'a stream falls back to the lane floor');
+  assert(navigableClearance(40, 'trunk') === 10, 'a stream under a trunk road keeps the trunk floor');
+  assert(navigableClearance(4000, 'motorway') === 65, 'a mis-measured estuary is capped');
+  assert(navigableClearance(0, 'trunk') === 10, 'no measurement, class floor');
+  // …and it fires on a deck merely LOW over wide water, not only a drowned one.
+  const low = resolveProductionDeck({ chordY: 3, waterY: 0, hintY: null, portal: false, wetSpanM: 1280, roadTags: { highway: 'motorway' } });
+  assert(low.authority === 'water-clearance' && Math.abs(low.deckY - 64) < 0.01,
+    'three metres over a 1,280 m channel is still a bridge in the water');
+  const proud = resolveProductionDeck({ chordY: 70, waterY: 0, hintY: null, portal: false, wetSpanM: 1280, roadTags: { highway: 'motorway' } });
+  assert(proud.authority === 'chord', 'a deck already clear of the channel is left alone');
   const portal = resolveProductionDeck({ chordY: -2, waterY: -2.7, hintY: null, portal: true, roadTags: { highway: 'trunk' } });
   assert(portal.authority === 'chord',
     'the generic clearance keeps off the portals; the approach owns them');

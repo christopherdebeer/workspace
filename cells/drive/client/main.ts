@@ -116,6 +116,7 @@ import {
   ProductionCrossingRegistry,
   resolveProductionCrossingIntent,
   resolveProductionDeck,
+  waterClearanceForClass,
   type CrossingStructureOutcome,
   type DeckAuthority,
   type ProductionCrossingRecord,
@@ -234,6 +235,9 @@ addEventListener('unhandledrejection', (e) => {
 }
 (window as unknown as { __errors?: object }).__errors = (): string[] => [...errRing];
 const OSM_Z = 16;             // overpass tile zoom (~600m — keeps per-query weight low)
+/** The cell's tile keyspace — see TILE_V in index.ts. A banked tile is
+ *  permanent, so this number is how a wrong one is escaped: bump both. */
+const OSM_TILE_V = 5;
 const OSM_RING = 1;           // load a (2R+1)² neighbourhood of vector tiles
 const TERRAIN_RING = 2;       // wider ring at the finer zoom keeps the horizon populated
 const REVEAL_M = 150;         // fog hole radius around the car, metres
@@ -17128,21 +17132,55 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // fragment reads the same function at the shared node, so the ends
         // agree without a weld — and the generic clearance keeps off them
         // like the road scan below.
+        // THE FIELD IS ASKED ONLY WHERE THE ANSWER CAN TURN ON IT. A hint
+        // over the chord decides on its own, and a portal is the approach's
+        // business either way — so neither needs the water, and a bridge
+        // with an entry costs no samples at all. `sampleRestingSurface` is
+        // real work inside the six-millisecond build budget: an earlier cut
+        // asked at every station of every bridge and the causeway's terrain
+        // mesh went missing on an unrelated fixture in two runs of five.
+        // Each station is asked at most once, and only when it could matter.
+        const wy: Array<number | null | undefined> = new Array(n).fill(undefined);
+        const hintOf: Array<number | null> = new Array(n).fill(null);
+        const portalOf = (i: number): boolean => i === a || i === b || nearPortal(dense[i][0], dense[i][1]);
+        const hintWins = (i: number): boolean => hintOf[i] !== null && (hintOf[i] as number) > prof[i];
+        const waterOf = (i: number): number | null => {
+          if (wy[i] === undefined) wy[i] = waterUnder(dense[i][0], dense[i][1]);
+          return wy[i] as number | null;
+        };
+        let anyLow = false;
         for (let i = a; i <= b; i++) {
-          const [x, z] = dense[i];
-          const portal = i === a || i === b || nearPortal(x, z);
-          const hintY = deckHint ? deckHint(x, z) : null;
-          // THE FIELD IS ASKED ONLY WHERE THE ANSWER CAN TURN ON IT. A hint
-          // over the chord decides on its own, and a portal is the
-          // approach's business either way — so neither needs the water.
-          // The first cut asked at every station of every bridge, and
-          // `sampleRestingSurface` is real work inside the six-millisecond
-          // build budget: measured on the structures fixture, the causeway's
-          // terrain mesh was missing at the probe's instant in two runs of
-          // five, against none in four of the control. This is the old call
-          // count exactly, with the authority still making the decision.
-          const waterY = portal || (hintY !== null && hintY > prof[i]) ? null : waterUnder(x, z);
-          const decided = resolveProductionDeck({ chordY: prof[i], waterY, hintY, roadTags: wayTags, portal });
+          hintOf[i] = deckHint ? deckHint(dense[i][0], dense[i][1]) : null;
+          if (anyLow || portalOf(i) || hintWins(i)) continue;
+          const w = waterOf(i);
+          if (w !== null && prof[i] < w + waterClearanceForClass(wayTags?.highway)) anyLow = true;
+        }
+        // ── HOW WIDE THE CROSSING IS, MEASURED ALONG THE DECK ──
+        //
+        // The air draught a bridge is built to is a property of the water it
+        // crosses, and the honest measure of that is how far this deck runs
+        // over water — the crossing's width in the direction that matters.
+        // The longest CONTIGUOUS wet run, so a causeway hopping islands is
+        // measured by its channel and not by its total length. Measured only
+        // for a deck already known to be low, which is the one case that
+        // needs a number.
+        let wetSpanM = 0;
+        if (anyLow) {
+          let run = 0;
+          for (let i = a; i <= b; i++) {
+            if (waterOf(i) === null) { run = 0; continue; }
+            if (i > a && waterOf(i - 1) !== null) {
+              run += Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
+            }
+            if (run > wetSpanM) wetSpanM = run;
+          }
+        }
+        for (let i = a; i <= b; i++) {
+          const portal = portalOf(i);
+          const decided = resolveProductionDeck({
+            chordY: prof[i], hintY: hintOf[i], roadTags: wayTags, portal, wetSpanM,
+            waterY: portal || hintWins(i) ? null : waterOf(i),
+          });
           if (decided.authority === 'chord') continue;
           if (decided.authority === 'landmark-hint') liftSrc = 'hint';
           else if (!liftSrc) liftSrc = 'water';
@@ -23385,7 +23423,7 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
 });
 // Free the shared origin quota from the failed localStorage era.
 try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
-const osmCacheKey = (x: number, y: number): string => `6/${OSM_Z}/${x}/${y}`; // v6: water relations (v4 tiles)
+const osmCacheKey = (x: number, y: number): string => `7/${OSM_Z}/${x}/${y}`; // v7: v5 tiles (the empty-bank re-ask)
 async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
   // THE FIXTURE IS THE CACHE. Answering here as well as at the proxy is what
   // gives renderGated its halo — so an authored road solves its profile
@@ -24902,7 +24940,7 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
   const ctl = new AbortController();
   const bail = setTimeout(() => ctl.abort(), TILE_WAIT_MS);
   try {
-    const res = await fetch(`${CELL_BASE}/~/osm/v4/${OSM_Z}/${x}/${y}`, { signal: ctl.signal });
+    const res = await fetch(`${CELL_BASE}/~/osm/v${OSM_TILE_V}/${OSM_Z}/${x}/${y}`, { signal: ctl.signal });
     // 503 is the cell telling us Overpass just failed IT — a real answer, and a
     // reason to retry this tile later, not to abandon the proxy.
     if (res.status === 503) throw new Error('fill failed');

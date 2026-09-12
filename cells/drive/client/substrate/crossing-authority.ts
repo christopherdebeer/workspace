@@ -46,6 +46,9 @@ export interface ProductionDeckInput {
   roadTags?: Readonly<Record<string, string>>;
   /** A portal station of the fragment. */
   portal: boolean;
+  /** How far this deck runs over water, metres — the crossing's own width in
+   *  the direction that matters. Zero or absent falls back to the class floor. */
+  wetSpanM?: number;
 }
 
 export interface ProductionDeckDecision {
@@ -56,11 +59,41 @@ export interface ProductionDeckDecision {
   evidence: readonly string[];
 }
 
-/** Clearance over water a bridge gets with nothing else to say, by class:
- *  a motorway over a navigable river against a lane over a brook. */
+/** The floor: clearance a bridge gets from its road class alone, before the
+ *  crossing is measured. A motorway over a navigable river against a lane
+ *  over a brook. */
 export function waterClearanceForClass(highway: string | undefined): number {
   return highway === 'motorway' || highway === 'trunk' ? 10
     : highway === 'primary' || highway === 'secondary' ? 7 : 4.5;
+}
+
+/**
+ * ── AIR DRAUGHT IS PROPORTIONAL TO THE CROSSING ──
+ *
+ * A flat clearance by road class is wrong at both ends: ten metres over a
+ * two-kilometre estuary still reads as a bridge lying in the water, and it
+ * is far more than a lane needs over a brook. What a bridge is built to
+ * clear is the WATER IT CROSSES — a wide channel is a shipping channel, and
+ * the air draught follows.
+ *
+ * The ratio is read off the bridges in the landmark store, deck height over
+ * main span: Golden Gate 0.052, Normandie 0.061, Brooklyn 0.084, Severn
+ * 0.037, Humber 0.021, Akashi 0.033, Tower Bridge 0.14. A twentieth of the
+ * wet span sits in the middle of that and lands within a few metres of the
+ * real thing on the big ones: 64 m against 67 at the Golden Gate, 43 against
+ * 52 at the Normandie.
+ *
+ * Capped at 65 m, which is about the tallest air draught built anywhere, so
+ * a mis-measured estuary cannot raise a road into the stratosphere; floored
+ * at the class minimum, so a ditch does not lower one into the water. A
+ * landmark entry overrides all of it with the surveyed number.
+ */
+export const WET_SPAN_RATIO = 0.05;
+export const WET_CLEARANCE_MAX = 65;
+export function navigableClearance(wetSpanM: number, highway: string | undefined): number {
+  const floor = waterClearanceForClass(highway);
+  if (!(wetSpanM > 0)) return floor;
+  return Math.max(floor, Math.min(WET_CLEARANCE_MAX, WET_SPAN_RATIO * wetSpanM));
 }
 
 export function resolveProductionDeck(input: ProductionDeckInput): ProductionDeckDecision {
@@ -70,10 +103,17 @@ export function resolveProductionDeck(input: ProductionDeckInput): ProductionDec
     evidence.push(`landmark deck ${input.hintY.toFixed(1)} over chord ${input.chordY.toFixed(1)}`);
     return { deckY: input.hintY, authority: 'landmark-hint', clearanceM: over(input.hintY), evidence };
   }
-  if (!input.portal && input.waterY !== null && input.chordY < input.waterY + 1) {
-    const clear = waterClearanceForClass(input.roadTags?.highway);
-    evidence.push(`chord ${input.chordY.toFixed(1)} in water at ${input.waterY.toFixed(1)}; ${input.roadTags?.highway ?? 'road'} clears ${clear}`);
-    return { deckY: input.waterY + clear, authority: 'water-clearance', clearanceM: clear, evidence };
+  if (!input.portal && input.waterY !== null) {
+    // NOT ONLY WHEN IT IS SUBMERGED. The first cut fired only where the chord
+    // lay IN the water, which leaves a deck a metre over a two-kilometre
+    // estuary exactly as wrong as one a metre under it. The test is the
+    // clearance the crossing earns.
+    const clear = navigableClearance(input.wetSpanM ?? 0, input.roadTags?.highway);
+    if (input.chordY < input.waterY + clear) {
+      evidence.push(`chord ${input.chordY.toFixed(1)} under ${clear.toFixed(1)}m over water at ${input.waterY.toFixed(1)}`
+        + (input.wetSpanM ? `; wet span ${Math.round(input.wetSpanM)}m` : `; ${input.roadTags?.highway ?? 'road'} class floor`));
+      return { deckY: input.waterY + clear, authority: 'water-clearance', clearanceM: clear, evidence };
+    }
   }
   return { deckY: input.chordY, authority: 'chord', clearanceM: over(input.chordY), evidence };
 }
