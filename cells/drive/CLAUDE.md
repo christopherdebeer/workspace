@@ -2492,6 +2492,63 @@ marks measure from the last mark**, so across a frame gap they billed the
 gap to whichever phase was running (ezGather read 4.5 s a call); a slice
 re-arms the clock at its start.
 
+### The water rebuilt for a millimetre of ground
+
+The Pont de Normandie dump, at 27 fps with the far bake and the tree refresh
+already cut: `hydroBuild` 67 ms a build, 234 builds in 112 s, 14% of the
+session and **49% of every slow frame**, top of 170 of them. And beside it
+`feeds 199 skipped 36` — the skip built for five feeds in six.
+
+**THE FIRST GUESS WAS WRONG AND THE MEASUREMENT SAID SO.** The skip compares
+the elevation raster, and `sampleHeight` carries every road carve, so the
+obvious story was that terrain churn a kilometre inland was rebuilding the
+estuary. That is real, and it is not what dominates: masking the comparison
+to a band round the water (`?hydroground`, the features' own boxes and the
+ocean mask's non-dry texels, dilated) saved **nothing at all** at Simon's
+Town — a fixture that is mostly sea, so the band is the tile. Guessing a
+second time was the temptation; counting was the fix.
+
+**SO THE FEED SAYS WHY IT BUILT**, in four words the ledger line carries —
+`dirty` (a body changed elsewhere and the tile was marked stale, which
+bypasses the raster entirely), `sig` (a feature or the ocean mask moved),
+`ground` (the raster moved where the water reads it), `first`. Measured:
+
+| | Senqu ford | Simon's Town |
+|---|---|---|
+| feeds | 27 | 49 |
+| built by `first` | 20 | 20 |
+| built by `sig` | 0 | 4 |
+| built by `ground` | **6** | **24** |
+| built by `dirty` | 0 | 0 |
+
+The body cascade never fires on a settled fixture; one build a tile is the
+floor; everything else is the ground. **And the ground comparison was EXACT
+FLOAT EQUALITY.** The water reads the raster as a bed depth and a waterline,
+in metres; `sampleHeight` jitters below a centimetre as roads seat, weld and
+re-drape. A texel must move by `?hydroeps` metres — two centimetres, under
+the field's own vertical resolution — before it counts. Measured, the same
+two fixtures, the tolerance the only change:
+
+| | exact | 2 cm |
+|---|---|---|
+| Simon's Town: built by ground / skipped | 24 / 1 | **0 / 30** |
+| Senqu ford: built by ground / skipped | 6 / 1 | **0 / 7** |
+| Senqu ford: ms a build, mean / max | 30.0 / 165 | 20.0 / 149 |
+
+Every ground-driven rebuild at both places was a sub-centimetre wobble.
+
+**THE TOLERANCE IS SAFE BECAUSE THE STORED RASTER IS THE ONE THAT LAST
+BUILT**, not the one last fed: drift is measured from the field's own input,
+so a bank creeping a centimetre a rebuild is caught on the rebuild that
+takes it past two, rather than never. And a ground change cannot create
+water on its own — inland water is a FEATURE and the sea is the ocean mask,
+both already in the signature — so the band may drop a texel without
+dropping a body. An unknown mask texel counts as wet-relevant (the build
+keeps the previous field's answer there) and a tile whose mask never arrived
+keeps the exact comparison.
+
+`?hydroground=0` and `?hydroeps=0` restore the old rule, separately.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.
