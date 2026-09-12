@@ -188,67 +188,50 @@ export function wallTextures(canvasTex: CanvasTexFn): WallTextures {
       cracks(c, s, r, 3, 'rgba(60,44,24,0.18)');
     }),
   };
+  // ── THE ROOF CANVASES CARRY TONE; THE UNITS ARE THE SHADER'S ──
+  //
+  // These used to draw the courses — rows of barrels, broken-bond slates,
+  // corrugated ribs — and roof-fx.ts draws all of that per fragment now, in
+  // a frame that runs WITH the slope (the canvas is mapped in world plan, so
+  // its rows ran along world z whichever way the ridge went), at the size a
+  // real unit is, with edges the quantiser keeps. A canvas that still drew
+  // rows would lay a second, coarser, wrongly-turned set under the shader's.
+  // What a canvas is good for is what a shader's hash is bad at: the moss on
+  // the shaded slope, the rust running from a fixing, the patchy weathering
+  // of a roof that has stood forty years. White base, tinted by the paint.
   const ROOF_TEX: Record<RoofTex, THREE.Texture> = {
-    // Pantile: overlapping S-curves in rows. The alternating light/dark down
-    // each row is the barrel, and it is the whole read at distance.
+    // Pantile: a warm patchiness — some tiles have baked darker — and moss.
     pantile: canvasTex(128, 1 / 7, 1 / 7, 3401, (c, s, r) => {
       c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-      const rows = 9, h = s / rows, tw = 14;
-      for (let i = 0; i < rows; i++) {
-        const y = i * h, off = (i % 2) * (tw / 2);
-        for (let x = -tw; x < s + tw; x += tw) {
-          c.fillStyle = 'rgba(0,0,0,0.13)'; c.fillRect(x + off, y, tw / 2, h);
-          c.fillStyle = `rgba(255,255,255,${(0.05 + r() * 0.06).toFixed(3)})`;
-          c.fillRect(x + off + tw / 2, y, tw / 2, h);
-        }
-        c.fillStyle = 'rgba(0,0,0,0.20)'; c.fillRect(0, y, s, 2);  // the course shadow
-      }
+      speckle(c, s, r, ['rgba(60,30,10,0.10)', 'rgba(255,240,220,0.08)', 'rgba(40,20,10,0.06)'], 220, 2.5);
       moss(c, s, r, 5, ['rgba(64,96,44,0.35)', 'rgba(96,128,60,0.25)']);
     }),
-    // Slate: small units, broken bond, and a little tonal variation per slate
-    // because a slate roof is never one grey.
+    // Slate: never one grey — a cool mottle and the odd pale slate.
     slate: canvasTex(128, 1 / 8, 1 / 8, 3402, (c, s, r) => {
       c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-      const rows = 13, h = s / rows, w = 18;
-      for (let i = 0; i < rows; i++) {
-        const y = i * h, off = (i % 2) * (w / 2);
-        for (let x = -w; x < s + w; x += w) {
-          c.fillStyle = `rgba(0,0,0,${(0.02 + r() * 0.10).toFixed(3)})`;
-          c.fillRect(x + off, y, w - 1, h - 1);
-        }
-        c.fillStyle = 'rgba(0,0,0,0.16)'; c.fillRect(0, y + h - 1, s, 1);
-      }
+      speckle(c, s, r, ['rgba(0,0,0,0.10)', 'rgba(20,30,50,0.08)', 'rgba(255,255,255,0.06)'], 260, 2.2);
       speckle(c, s, r, ['rgba(255,255,255,0.06)'], 120, 1.2);
     }),
-    // Shingle: same bond, softer edges, warmer wear — and it splits rather than
-    // cracking, so the marks run with the grain.
+    // Shingle: the grain runs down the slope (canvas y is the slope in the
+    // shader's frame), warm wear, and moss where it stays damp.
     shingle: canvasTex(128, 1 / 8, 1 / 8, 3403, (c, s, r) => {
       c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-      const rows = 11, h = s / rows, w = 15;
-      for (let i = 0; i < rows; i++) {
-        const y = i * h, off = (i % 2) * (w / 2);
-        for (let x = -w; x < s + w; x += w) {
-          c.fillStyle = `rgba(0,0,0,${(0.03 + r() * 0.09).toFixed(3)})`;
-          c.fillRect(x + off, y, w - 1, h - 1);
-          if (r() > 0.7) { c.fillStyle = 'rgba(0,0,0,0.10)'; c.fillRect(x + off + 3 + r() * 8, y, 1, h - 1); }
-        }
-        c.fillStyle = 'rgba(0,0,0,0.14)'; c.fillRect(0, y + h - 1, s, 1);
+      for (let x = 0; x < s; x += 3) {
+        c.fillStyle = `rgba(40,24,10,${(0.02 + r() * 0.07).toFixed(3)})`;
+        c.fillRect(x, 0, 1 + Math.floor(r() * 2), s);
       }
       moss(c, s, r, 6, ['rgba(64,96,44,0.4)', 'rgba(42,70,32,0.35)']);
     }),
-    // Corrugated iron: vertical ribs, hard specular banding, and rust where the
-    // fixings are. The one roof that is brighter in strips than overall.
+    // Corrugated iron: rust at the fixings and the runs below them — the
+    // ribs and the sheet laps are the shader's.
     corrugated: canvasTex(128, 1 / 6, 1 / 6, 3404, (c, s, r) => {
       c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-      for (let x = 0; x < s; x += 8) {
-        c.fillStyle = 'rgba(0,0,0,0.16)'; c.fillRect(x, 0, 3, s);
-        c.fillStyle = 'rgba(255,255,255,0.12)'; c.fillRect(x + 4, 0, 2, s);
-      }
-      c.fillStyle = 'rgba(0,0,0,0.10)';
-      for (let y = 22; y < s; y += 44) c.fillRect(0, y, s, 2);        // sheet laps
-      for (let i = 0; i < 26; i++) {                                   // rust at the fixings
+      for (let i = 0; i < 26; i++) {
+        const x = r() * s, y = r() * s;
         c.fillStyle = `rgba(122,68,32,${(0.15 + r() * 0.3).toFixed(2)})`;
-        c.fillRect(r() * s, r() * s, 1 + r() * 3, 1 + r() * 3);
+        c.fillRect(x, y, 1 + r() * 3, 1 + r() * 3);
+        c.fillStyle = `rgba(122,68,32,${(0.05 + r() * 0.12).toFixed(2)})`;
+        c.fillRect(x, y, 1 + r() * 2, 6 + r() * 24);   // the run below it
       }
     }),
     // Flat: felt and gravel, with the ponding and the patch lines that go with

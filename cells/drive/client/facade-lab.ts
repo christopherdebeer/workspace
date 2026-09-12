@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BUILD_CULTURES, type BuildCulture } from './culture';
-import { FACADE_DEFAULTS, FACADE_GRAMMAR, facade, setFacadeGrammar, uFacNight, type FacadeGrammar } from './facade';
+import { FACADE_DEFAULTS, FACADE_GRAMMAR, facade, setFacadeGrammar, uFacNight, uFacSun, type FacadeGrammar } from './facade';
+import { roofFx } from './roof-fx';
 import { TRADITIONS, roofFormFor, traditionCulture, traditionIndex, type Tradition } from './traditions';
 import { createDials, type DialValues } from './lab-dials';
 import { clamp } from './num';
@@ -54,6 +55,9 @@ const GRAMMAR_DIALS: Record<keyof FacadeGrammar, string> = {
   bayM: 'bayM', storeyM: 'gridM', winX0: 'winX0', winX1: 'winX1', winY0: 'winY0', winY1: 'winY1',
   doorX0: 'doorX0', doorX1: 'doorX1', doorY1: 'doorY1', doorShare: 'doorShare', openShare: 'openShare',
   glassShade: 'glassShade', glassVar: 'glassVar', lintel: 'lintel', ivy: 'ivy', stain: 'stain',
+  revealM: 'revealM', sillM: 'sillM', frame: 'frame', mullion: 'mullion', glassSky: 'glassSky',
+  stringCourse: 'stringCourse', cornice: 'cornice', plinthM: 'plinthM', shutters: 'shutters', balcony: 'balcony',
+  streaks: 'streaks', dampM: 'dampM', trim: 'trim', shutterCol: 'shutterCol', shopfront: 'shopfront', eaveM: 'eaveM',
 };
 
 /** The game's extrusion, to the letter — see polygon() in main.ts. The shape
@@ -70,11 +74,12 @@ function extrude(pts: Array<[number, number]>, bottom: number, top: number): THR
 /** aBase, aMark and aGram: the three attributes the tile batch owes every
  *  vertex. No marks here; aGram is 0 (the uniforms, which the dials drive)
  *  unless VIA ATTRIBUTE asks the wall to read its tradition's row instead. */
-function withBase(geo: THREE.BufferGeometry, base: number, gram: number): THREE.BufferGeometry {
+function withBase(geo: THREE.BufferGeometry, base: number, gram: number, top: number): THREE.BufferGeometry {
   const n = geo.attributes.position.count;
   geo.setAttribute('aBase', new THREE.BufferAttribute(new Float32Array(n).fill(base), 1));
   geo.setAttribute('aMark', new THREE.BufferAttribute(new Float32Array(n), 1));
   geo.setAttribute('aGram', new THREE.BufferAttribute(new Float32Array(n).fill(gram), 1));
+  geo.setAttribute('aTop', new THREE.BufferAttribute(new Float32Array(n).fill(top), 1));
   return geo;
 }
 const num = (v: DialValues, k: string): number => Number(v[k]);
@@ -105,6 +110,10 @@ function grammarFrom(v: DialValues): FacadeGrammar {
     doorShare: num(v, 'doorShare'), openShare: num(v, 'openShare'),
     glassShade: num(v, 'glassShade'), glassVar: num(v, 'glassVar'),
     lintel: num(v, 'lintel'), ivy: num(v, 'ivy'), stain: num(v, 'stain'),
+    revealM: num(v, 'revealM'), sillM: num(v, 'sillM'), frame: num(v, 'frame'), mullion: num(v, 'mullion'),
+    glassSky: num(v, 'glassSky'), stringCourse: num(v, 'stringCourse'), cornice: num(v, 'cornice'), plinthM: num(v, 'plinthM'),
+    shutters: num(v, 'shutters'), balcony: num(v, 'balcony'), streaks: num(v, 'streaks'), dampM: num(v, 'dampM'),
+    trim: Math.round(num(v, 'trim')), shutterCol: Math.round(num(v, 'shutterCol')), shopfront: num(v, 'shopfront'), eaveM: num(v, 'eaveM'),
   };
 }
 
@@ -185,6 +194,23 @@ export async function startFacadeLab(): Promise<void> {
       { id: 'lintel', label: 'LINTEL', kind: 'range', min: 0, max: 0.6, step: 0.01, value: G.lintel },
       { id: 'ivy', label: 'IVY', kind: 'range', min: 0, max: 2, step: 0.05, value: G.ivy },
       { id: 'stain', label: 'STAIN', kind: 'range', min: 0, max: 0.5, step: 0.01, value: G.stain },
+      { id: 'sArt', label: 'DEPTH AND TRIM', kind: 'section' },
+      { id: 'revealM', label: 'REVEAL m', kind: 'range', min: 0, max: 0.5, step: 0.01, value: G.revealM },
+      { id: 'sillM', label: 'SILL m', kind: 'range', min: 0, max: 0.3, step: 0.01, value: G.sillM },
+      { id: 'frame', label: 'FRAME', kind: 'range', min: 0, max: 1, step: 0.02, value: G.frame },
+      { id: 'mullion', label: 'MULLIONS', kind: 'range', min: 0, max: 1, step: 0.02, value: G.mullion },
+      { id: 'glassSky', label: 'SKY IN GLASS', kind: 'range', min: 0, max: 1, step: 0.02, value: G.glassSky },
+      { id: 'trim', label: 'TRIM #', kind: 'range', min: 0, max: 7, step: 1, value: G.trim },
+      { id: 'shutters', label: 'SHUTTERS', kind: 'range', min: 0, max: 1, step: 0.02, value: G.shutters },
+      { id: 'shutterCol', label: 'SHUTTER #', kind: 'range', min: 0, max: 7, step: 1, value: G.shutterCol },
+      { id: 'balcony', label: 'BALCONIES', kind: 'range', min: 0, max: 1, step: 0.02, value: G.balcony },
+      { id: 'shopfront', label: 'SHOPFRONTS', kind: 'range', min: 0, max: 1, step: 0.02, value: G.shopfront },
+      { id: 'stringCourse', label: 'STRING COURSE', kind: 'range', min: 0, max: 1, step: 0.02, value: G.stringCourse },
+      { id: 'cornice', label: 'CORNICE', kind: 'range', min: 0, max: 1, step: 0.02, value: G.cornice },
+      { id: 'eaveM', label: 'EAVE m', kind: 'range', min: 0, max: 1.2, step: 0.02, value: G.eaveM },
+      { id: 'plinthM', label: 'PLINTH BAND m', kind: 'range', min: 0, max: 2, step: 0.05, value: G.plinthM },
+      { id: 'streaks', label: 'STREAKS', kind: 'range', min: 0, max: 1, step: 0.02, value: G.streaks },
+      { id: 'dampM', label: 'DAMP m', kind: 'range', min: 0, max: 2, step: 0.05, value: G.dampM },
       { id: 'sLight', label: 'THE LIGHT', kind: 'section' },
       { id: 'sunAlt', label: 'SUN ALT', kind: 'range', min: 3, max: 85, step: 1, value: 52 },
       { id: 'sunAz', label: 'SUN AZ', kind: 'range', min: -180, max: 180, step: 5, value: 35 },
@@ -231,6 +257,7 @@ export async function startFacadeLab(): Promise<void> {
   const wallMat = new THREE.MeshLambertMaterial({ color: 0xe9dcc6, map: tex.WALL_TEX.render, side: THREE.DoubleSide });
   facade(wallMat);
   const roofMat = new THREE.MeshLambertMaterial({ color: 0xa8613c, map: tex.ROOF_TEX.pantile, side: THREE.DoubleSide });
+  roofFx(roofMat, 'pantile');
   const group = new THREE.Group();
   scene.add(group);
 
@@ -247,10 +274,10 @@ export async function startFacadeLab(): Promise<void> {
     for (let i = 0; i < terrace; i++) {
       const x0 = -total / 2 + i * w;
       const pts: Array<[number, number]> = [[x0, -d / 2], [x0 + w, -d / 2], [x0 + w, d / 2], [x0, d / 2]];
-      group.add(new THREE.Mesh(withBase(extrude(pts, -plinth, height), aBase, gram), [roofMat, wallMat]));
+      group.add(new THREE.Mesh(withBase(extrude(pts, -plinth, height), aBase, gram, height), [roofMat, wallMat]));
       if (roofShape !== 'flat') {
         const rg = roofGeo(pts, roofShape, height, ridge);
-        if (rg) group.add(new THREE.Mesh(withBase(rg, aBase, gram), [roofMat, wallMat]));
+        if (rg) group.add(new THREE.Mesh(withBase(rg, aBase, gram, height), [roofMat, wallMat]));
         else roofRefused = true;
       }
     }
@@ -302,7 +329,11 @@ export async function startFacadeLab(): Promise<void> {
     wallMat.color.copy(wallCol);
     roofMat.color.copy(roofCol).multiplyScalar(0.78);
     if (wallMat.map !== tex.WALL_TEX[culture.wallTex]) { wallMat.map = tex.WALL_TEX[culture.wallTex]; wallMat.needsUpdate = true; }
-    if (roofMat.map !== tex.ROOF_TEX[culture.roofTex]) { roofMat.map = tex.ROOF_TEX[culture.roofTex]; roofMat.needsUpdate = true; }
+    if (roofMat.map !== tex.ROOF_TEX[culture.roofTex]) {
+      // The kind rides on userData and the hook reads it at compile, which
+      // needsUpdate forces — so the courses change with the canvas.
+      roofMat.map = tex.ROOF_TEX[culture.roofTex]; roofMat.userData.roofKind = culture.roofTex; roofMat.needsUpdate = true;
+    }
     // The massing. The culture's roof is what building() picks for a plain
     // house of this tradition: flat below a 0.2 pitch, else a gable (the hip
     // is a minority draw there, and there is a dial for it here). The ridge is
@@ -326,6 +357,7 @@ export async function startFacadeLab(): Promise<void> {
     // reads darker than in the world — the lit bays are what this is for.
     const alt = num(v, 'sunAlt') * Math.PI / 180, az = num(v, 'sunAz') * Math.PI / 180;
     sun.position.set(Math.cos(alt) * Math.sin(az) * 40, Math.sin(alt) * 40, Math.cos(alt) * Math.cos(az) * 40);
+    uFacSun.value.copy(sun.position).normalize();
     sun.intensity = night ? 0.06 : 2.1;
     sky.intensity = night ? 0.14 : num(v, 'ambient');
     (scene.background as THREE.Color).set(night ? 0x0a1016 : 0x2c3f47);

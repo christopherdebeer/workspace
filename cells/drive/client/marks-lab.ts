@@ -45,6 +45,7 @@ function slab(w: number, h: number, x: number, mat: THREE.Material): THREE.Mesh 
   geo.setAttribute('aMark', new THREE.BufferAttribute(new Float32Array(n), 1));
   // aGram 0: the uniforms' grammar, the defaults. A slab is not a place.
   geo.setAttribute('aGram', new THREE.BufferAttribute(new Float32Array(n), 1));
+  geo.setAttribute('aTop', new THREE.BufferAttribute(new Float32Array(n).fill(h), 1));
   return new THREE.Mesh(geo, mat);
 }
 

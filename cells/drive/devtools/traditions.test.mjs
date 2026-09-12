@@ -22,7 +22,7 @@ mkdirSync(cache, { recursive: true });
 const built = join(cache, 'drive-traditions.test.mjs');
 execFileSync('npx', ['esbuild', join(HERE, '../client/traditions.ts'), '--bundle', '--format=esm',
   `--outfile=${built}`], { cwd: ROOT, stdio: 'pipe' });
-const { TRADITIONS, TRADITION_REGIONS, TRADITION_LIST, ROOF_FORMS, RUIN_BY_MATERIAL, traditionFor, traditionCulture, traditionIndex, gramTable, gramDecode, roofFormFor, FACADE_DEFAULTS }
+const { TRADITIONS, TRADITION_REGIONS, TRADITION_LIST, ROOF_FORMS, RUIN_BY_MATERIAL, traditionFor, traditionCulture, traditionIndex, gramTable, gramDecode, roofFormFor, FACADE_DEFAULTS, GRAM_FIELDS }
   = await import(pathToFileURL(built).href);
 
 let bad = 0;
@@ -95,13 +95,17 @@ for (const [name, lat, lon, want] of PLACES) {
     TRADITION_REGIONS.filter((r) => !(r.lat[0] < r.lat[1] && r.lon[0] < r.lon[1])).map((r) => r.key));
   ok('every entry says what it is modelled on', Object.values(TRADITIONS).every((t) => t.note.length > 40),
     Object.values(TRADITIONS).filter((t) => t.note.length <= 40).map((t) => t.key));
-  const shares = ['winX0', 'winX1', 'winY0', 'winY1', 'doorX0', 'doorX1', 'doorY1', 'doorShare', 'openShare', 'glassShade', 'glassVar', 'lintel', 'stain'];
+  const shares = ['winX0', 'winX1', 'winY0', 'winY1', 'doorX0', 'doorX1', 'doorY1', 'doorShare', 'openShare', 'glassShade', 'glassVar', 'lintel', 'stain',
+    'revealM', 'sillM', 'frame', 'mullion', 'glassSky', 'stringCourse', 'cornice', 'shutters', 'balcony', 'streaks', 'shopfront'];
   const sane = (t) => {
     const g = t.grammar;
     for (const k of shares) if (g[k] !== undefined && !(g[k] >= 0 && g[k] <= 1)) return `${k}=${g[k]}`;
     if (g.bayM !== undefined && !(g.bayM >= 1.5 && g.bayM <= 6)) return `bayM=${g.bayM}`;
     if (g.storeyM !== undefined && !(g.storeyM >= 2.2 && g.storeyM <= 4.5)) return `storeyM=${g.storeyM}`;
     if (g.ivy !== undefined && !(g.ivy >= 0 && g.ivy <= 2)) return `ivy=${g.ivy}`;
+    for (const k of ['plinthM', 'dampM']) if (g[k] !== undefined && !(g[k] >= 0 && g[k] <= 2)) return `${k}=${g[k]}`;
+    if (g.eaveM !== undefined && !(g.eaveM >= 0 && g.eaveM <= 1.2)) return `eaveM=${g.eaveM}`;
+    for (const k of ['trim', 'shutterCol']) if (g[k] !== undefined && !(Number.isInteger(g[k]) && g[k] >= 0 && g[k] <= 7)) return `${k}=${g[k]}`;
     if (g.winX0 !== undefined && g.winX1 !== undefined && !(g.winX0 < g.winX1)) return 'winX0 >= winX1';
     if (g.winY0 !== undefined && g.winY1 !== undefined && !(g.winY0 < g.winY1)) return 'winY0 >= winY1';
     if (g.doorX0 !== undefined && g.doorX1 !== undefined && !(g.doorX0 < g.doorX1)) return 'doorX0 >= doorX1';
@@ -126,7 +130,7 @@ for (const [name, lat, lon, want] of PLACES) {
 // that is precision nobody can see, and the test holds it anyway.
 {
   const { data, rows } = gramTable();
-  ok('one row per tradition, in list order', rows === TRADITION_LIST.length && data.length === rows * 16
+  ok('one row per tradition, in list order', rows === TRADITION_LIST.length && data.length === rows * 32
     && TRADITION_LIST.every((k, i) => traditionIndex(k) === i + 1), { rows, list: TRADITION_LIST.length });
   ok('no tradition is row 0, and an unknown key is', traditionIndex('nowhere') === 0 && traditionIndex(null) === 0
     && TRADITION_LIST.every((k) => traditionIndex(k) > 0), null);
@@ -135,11 +139,16 @@ for (const [name, lat, lon, want] of PLACES) {
     const want = { ...FACADE_DEFAULTS, ...TRADITIONS[key].grammar };
     const got = gramDecode(data, traditionIndex(key));
     for (const [k, v] of Object.entries(want)) {
-      const tol = k === 'bayM' || k === 'storeyM' ? 8 / 255 / 2 + 1e-9 : k === 'ivy' ? 2 / 255 / 2 + 1e-9 : 1 / 255 / 2 + 1e-9;
+      const scale = GRAM_FIELDS.find(([f]) => f === k)?.[1];
+      if (scale === undefined) { worst.push(`${k} is not in GRAM_FIELDS`); continue; }
+      // A colour index is rounded back to the integer it was.
+      const tol = k === 'trim' || k === 'shutterCol' ? 1e-9 : scale / 255 / 2 + 1e-9;
       if (Math.abs(got[k] - v) > tol) worst.push(`${key}.${k}: ${v} -> ${got[k]}`);
     }
   }
   ok('every field survives the bytes to within half a step', worst.length === 0, worst.slice(0, 6));
+  ok('every grammar field has a row in the byte table', Object.keys(FACADE_DEFAULTS).every((k) => GRAM_FIELDS.some(([f]) => f === k)) && GRAM_FIELDS.length === 32,
+    { fields: Object.keys(FACADE_DEFAULTS).length, table: GRAM_FIELDS.length });
   ok('row 0 decodes to the defaults', JSON.stringify(gramDecode(data, 0)) === JSON.stringify(FACADE_DEFAULTS), gramDecode(data, 0));
 }
 // ── STOREYS AND ROOFS: STATED, SANE, AND DRAWN AS STATED ──

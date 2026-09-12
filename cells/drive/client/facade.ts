@@ -182,7 +182,7 @@ export const FACADE_GRAMMAR: FacadeGrammar = { ...FACADE_DEFAULTS };
  */
 const gramTex = (() => {
   const { data, rows } = gramTable();
-  const t = new THREE.DataTexture(data, 4, Math.max(1, rows), THREE.RGBAFormat);
+  const t = new THREE.DataTexture(data, 8, Math.max(1, rows), THREE.RGBAFormat);
   t.magFilter = t.minFilter = THREE.NearestFilter;
   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
   t.generateMipmaps = false;
@@ -192,17 +192,38 @@ const gramTex = (() => {
 const uGramU = { value: gramTex };
 const uGramN = { value: Math.max(1, TRADITION_LIST.length) };
 
+/**
+ * ── THE SUN, FOR THE REVEALS ──
+ *
+ * The articulation below (reveals, sills, balconies, eaves) is drawn as the
+ * SHADOWS those things cast on the wall, and a shadow has a direction. Three's
+ * own lighting cannot supply it: the wall is flat geometry, so the lit side of
+ * a reveal and the shadow under a sill are not in any normal the fragment
+ * carries. A world-space unit vector toward the sun, copied from the scene's
+ * sun each frame (main.ts) or the lab's light (facade-lab.ts). Shared by
+ * reference like the rest.
+ */
+export const uFacSun = { value: new THREE.Vector3(0.3, 0.8, 0.5) };
+
 // Shared by reference, like the mark tuning: one write reaches every wall.
 const uFacA = { value: new THREE.Vector4() };
 const uFacB = { value: new THREE.Vector4() };
 const uFacC = { value: new THREE.Vector4() };
 const uFacD = { value: new THREE.Vector4() };
+const uFacE = { value: new THREE.Vector4() };
+const uFacF = { value: new THREE.Vector4() };
+const uFacG = { value: new THREE.Vector4() };
+const uFacH = { value: new THREE.Vector4() };
 function pushGrammar(): void {
   const g = FACADE_GRAMMAR;
   uFacA.value.set(g.bayM, g.storeyM, g.winX0, g.winX1);
   uFacB.value.set(g.winY0, g.winY1, g.doorX0, g.doorX1);
   uFacC.value.set(g.doorY1, g.doorShare, g.openShare, g.glassShade);
   uFacD.value.set(g.glassVar, g.lintel, g.ivy, g.stain);
+  uFacE.value.set(g.revealM, g.sillM, g.frame, g.mullion);
+  uFacF.value.set(g.glassSky, g.stringCourse, g.cornice, g.plinthM);
+  uFacG.value.set(g.shutters, g.balcony, g.streaks, g.dampM);
+  uFacH.value.set(g.trim, g.shutterCol, g.shopfront, g.eaveM);
 }
 pushGrammar();
 
@@ -228,6 +249,11 @@ export function facade(mat: THREE.Material): void {
     sh.uniforms.uFacB = uFacB;
     sh.uniforms.uFacC = uFacC;
     sh.uniforms.uFacD = uFacD;
+    sh.uniforms.uFacE = uFacE;
+    sh.uniforms.uFacF = uFacF;
+    sh.uniforms.uFacG = uFacG;
+    sh.uniforms.uFacH = uFacH;
+    sh.uniforms.uFacSun = uFacSun;
     sh.uniforms.uGram = uGramU;
     sh.uniforms.uGramN = uGramN;
     // THE BASE RIDES IN AS A VERTEX ATTRIBUTE, not off the model matrix.
@@ -237,22 +263,39 @@ export function facade(mat: THREE.Material): void {
     // its own building's base in aBase instead, and re-seating shifts the
     // attribute alongside the positions.
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aBase;\nattribute float aMark;\nattribute float aGram;\nvarying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark; varying float vGram;')
+      .replace('#include <common>', '#include <common>\nattribute float aBase;\nattribute float aMark;\nattribute float aGram;\nattribute float aTop;\nvarying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark; varying float vGram; varying float vFacTop;')
       .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
         vec4 facW = modelMatrix * vec4(transformed, 1.0);
         vFacW = facW.xyz;
         vFacN = mat3(modelMatrix) * objectNormal;
         vFacH = facW.y - aBase;
         vMark = aMark;
-        vGram = aGram;`);
+        vGram = aGram;
+        vFacTop = aTop - aBase;`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark; varying float vGram;
+        varying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark; varying float vGram; varying float vFacTop;
         uniform sampler2D uMarks; uniform sampler2D uMarkTins;
         uniform vec4 uMarkA; uniform vec4 uMarkB; uniform vec2 uFacNight;
         uniform vec4 uFacA; uniform vec4 uFacB; uniform vec4 uFacC; uniform vec4 uFacD;
+        uniform vec4 uFacE; uniform vec4 uFacF; uniform vec4 uFacG; uniform vec4 uFacH;
+        uniform vec3 uFacSun;
         uniform sampler2D uGram; uniform float uGramN;
-        float fah(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 41.31); return fract(p.x * p.y); }`)
+        float fah(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 41.31); return fract(p.x * p.y); }
+        // The eight trim paints, by index (facade-grammar.ts names them):
+        // white, cream, green, blue, grey, brown, oxide, black. A chain of
+        // steps because GLSL ES 1.00 cannot index a constant array by a float.
+        vec3 trimCol(float i) {
+          vec3 c = vec3(0.92, 0.90, 0.86);
+          c = mix(c, vec3(0.88, 0.82, 0.66), step(0.5, i));
+          c = mix(c, vec3(0.18, 0.36, 0.24), step(1.5, i));
+          c = mix(c, vec3(0.20, 0.32, 0.52), step(2.5, i));
+          c = mix(c, vec3(0.50, 0.52, 0.54), step(3.5, i));
+          c = mix(c, vec3(0.38, 0.26, 0.16), step(4.5, i));
+          c = mix(c, vec3(0.50, 0.20, 0.14), step(5.5, i));
+          c = mix(c, vec3(0.10, 0.10, 0.11), step(6.5, i));
+          return c;
+        }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
       {
         vec3 fn = normalize(vFacN);
@@ -261,54 +304,227 @@ export function facade(mat: THREE.Material): void {
         // uniforms, which the game keeps at FACADE_DEFAULTS and the lab drives.
         // The scales are facade-grammar.ts's GRAM_FIELDS, to the digit.
         vec4 gA = uFacA, gB = uFacB, gC = uFacC, gD = uFacD;
+        vec4 gE = uFacE, gF = uFacF, gG = uFacG, gH = uFacH;
         if (vGram > 0.5) {
           float gy = (floor(vGram + 0.5) - 0.5) / uGramN;
-          gA = texture2D(uGram, vec2(0.125, gy)); gA.xy *= 8.0;
-          gB = texture2D(uGram, vec2(0.375, gy));
-          gC = texture2D(uGram, vec2(0.625, gy));
-          gD = texture2D(uGram, vec2(0.875, gy)); gD.z *= 2.0;
+          gA = texture2D(uGram, vec2(0.0625, gy)); gA.xy *= 8.0;
+          gB = texture2D(uGram, vec2(0.1875, gy));
+          gC = texture2D(uGram, vec2(0.3125, gy));
+          gD = texture2D(uGram, vec2(0.4375, gy)); gD.z *= 2.0;
+          gE = texture2D(uGram, vec2(0.5625, gy));
+          gF = texture2D(uGram, vec2(0.6875, gy)); gF.w *= 2.0;
+          gG = texture2D(uGram, vec2(0.8125, gy)); gG.w *= 2.0;
+          gH = texture2D(uGram, vec2(0.9375, gy)); gH.xy = floor(gH.xy * 8.0 + 0.5);
         }
         // Roofs and floor slabs get grime and nothing else — a window in the
         // ceiling is the giveaway that this is a texture and not a building.
         if (abs(fn.y) < 0.55) {
-          // Run the bay grid along whichever horizontal axis this wall faces.
-          // Every number in the grid is FACADE_GRAMMAR (above), carried in
-          // gA..uFacD; the defaults are the literals that used to be here.
+          // ── THE WALL HAS DEPTH, AND THE DEPTH IS DRAWN AS ITS SHADOWS ──
+          //
+          // The first cut of this shader drew a window as a darker rectangle
+          // on a flat wall, and the critique was exact: whatever the palette
+          // and the bay grid did per place, the result was still a texture.
+          // What makes a wall read as a BUILDING in a frame twelve pixels to
+          // the metre is not the colour of the glass but the fact that the
+          // glass is set BACK into the wall: the reveal's jamb throws the
+          // sun's shadow across the top and the sun side of every pane, the
+          // sill projects and casts under itself, the eave and the balcony
+          // slab lay a band of shadow down the wall, and all of it moves with
+          // the sun. Everything below is that geometry, computed per fragment
+          // from the sun's direction against the wall's own frame — the wall
+          // is still one quad; per-fragment work is the cheap resource here.
+          //
+          // THE WALL'S FRAME. u runs along the wall (whichever world axis the
+          // face is nearer to), tu is that direction, nOut the outward normal
+          // (the material is DoubleSide, so the geometric normal is flipped for
+          // a back face, and a soffit seen from below must not read the sun
+          // through the wall). sn is the sun's component along the normal —
+          // positive is a lit face — su its component along the wall, sy its
+          // height. A shadow's length on the wall is the depth of the thing
+          // that casts it times the tangential over the normal component,
+          // which is why every shadow below divides by snc.
           float u = abs(fn.x) > abs(fn.z) ? vFacW.z : vFacW.x;
+          vec3 tu = abs(fn.x) > abs(fn.z) ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+          vec3 nOut = gl_FrontFacing ? fn : -fn;
+          float sn = dot(uFacSun, nOut), su = dot(uFacSun, tu), sy = uFacSun.y;
+          // lit: the face is toward the sun and it is day. The shadows fade
+          // in over the first few degrees so a face grazed by the sun does not
+          // flip between striped and plain as the truck turns a corner.
+          float lit = smoothstep(0.02, 0.14, sn) * (1.0 - uFacNight.x);
+          float snc = max(sn, 0.08);
+          // ── THE BAY GRID ──
+          // Every number in it is FACADE_GRAMMAR, carried in gA..gH (the
+          // uniforms, or the building's tradition row). Rows count from the
+          // ground line (aBase), so row 0 is the ground floor.
           vec2 cell = vec2(u / gA.x, vFacH / gA.y);
           vec2 idc = floor(cell), f = fract(cell);
           float r = fah(idc + vec2(7.13, 3.31));
-          float win = step(gA.z, f.x) * step(f.x, gA.w) * step(gB.x, f.y) * step(f.y, gB.y);
-          float door = step(gB.z, f.x) * step(f.x, gB.w) * step(0.03, f.y) * step(f.y, gC.x);
-          // Street level is doorways and shopfronts; above it, windows.
           float ground = step(vFacH, gA.y);
-          float open = mix(win, mix(win * step(0.52, f.y), door, step(r, gC.y)), ground);
-          open *= step(r, gC.z);                 // the rest are bricked up
-          // ── GLASS IS A DARKENING OF THE WALL, NOT AN ABSOLUTE COLOUR ──
-          //
-          // These were fixed values — 0.05 to 0.17 — on the assumption that the
-          // paint around them is pale limewash. Measured against the walls the
-          // world actually builds, that assumption fails in two common cases and
-          // INVERTS the façade when it does: on a face turned away from the sun,
-          // and on any dark paint (oxide-red barns, brick, stained timber), the
-          // wall renders below the glass and every window reads as a pale PANEL
-          // stuck on the building rather than as an opening. Photographed at
-          // Camps Bay as three beige rectangles on a red wall, and at Suresnes
-          // as the brightest thing on a shaded gable.
-          //
-          // A window is a hole: whatever the wall is doing, the opening is
-          // darker. So the void is a fraction OF the wall, with a small absolute
-          // term so pure-black paint still shows an opening at all. That is one
-          // multiply and it cannot invert.
+          // topD: metres below the wall top, for the eave and the cornice.
+          float topD = vFacTop - vFacH;
+          vec3 trim = trimCol(gH.x), shutC = trimCol(gH.y);
+          // What this bay is. The draws are per bay from the bay's own hash so
+          // a building is the same building from every side and every frame;
+          // the shares are the tradition's.
+          float hasOpen = step(r, gC.z);
+          float isDoor = ground * step(r, gC.y);
+          float isShop = ground * (1.0 - isDoor) * step(fah(idc + vec2(5.9, 12.1)), gH.z);
+          float hasBalc = (1.0 - ground) * step(fah(idc + vec2(9.3, 14.7)), gG.y);
+          float hasShut = step(fah(idc + vec2(15.1, 2.9)), gG.x) * (1.0 - isDoor) * (1.0 - isShop);
+          float shutClosed = hasShut * step(0.8, fah(idc + vec2(4.2, 8.8)));
+          // The opening's box in bay shares: the window by default, the door
+          // box for a door, floor to head for a balcony door, and a shopfront
+          // is glass across the bay under a fascia.
+          float x0 = gA.z, x1 = gA.w, y0 = gB.x, y1 = gB.y;
+          if (hasBalc > 0.5) y0 = 0.05;
+          if (isShop > 0.5) { x0 = 0.08; x1 = 0.92; y0 = 0.08; y1 = 0.74; }
+          float inWin = step(x0, f.x) * step(f.x, x1) * step(y0, f.y) * step(f.y, y1);
+          float inDoor = step(gB.z, f.x) * step(f.x, gB.w) * step(0.03, f.y) * step(f.y, gC.x);
+          float open = mix(inWin, inDoor, isDoor) * hasOpen;
+          if (isDoor > 0.5) { x0 = gB.z; x1 = gB.w; y0 = 0.03; y1 = gC.x; }
+          // Distances to the opening's four edges, in METRES, because the
+          // reveal is a depth in metres and a bay is not a fixed size.
+          float wxm = (x1 - x0) * gA.x, wym = (y1 - y0) * gA.y;
+          float dTop = (y1 - f.y) * gA.y, dBot = (f.y - y0) * gA.y;
+          float dL = (f.x - x0) * gA.x, dR = (x1 - f.x) * gA.x;
+          // ── THE REVEAL ──
+          // The jamb on the sun's side and the head cast onto the glass: a
+          // band of shadow of the reveal's depth times tan(sun angle) along
+          // the top and down one side. Which side is the sign of su. Capped
+          // at 0.7 m so a grazing sun does not blacken the whole pane.
+          float dSun = su > 0.0 ? dR : dL;
+          float shTop = clamp(gE.x * sy / snc, 0.0, 0.7) * lit;
+          float shSide = clamp(gE.x * abs(su) / snc, 0.0, 0.7) * lit;
+          float revSh = max(step(dTop, shTop), step(dSun, shSide)) * step(0.02, gE.x);
+          // And a little ambient dark all round the inside of the reveal,
+          // sun or no sun — the sky cannot reach into a recess either.
+          float edge = min(min(dL, dR), min(dTop, dBot));
+          float ao = 1.0 - 0.32 * step(0.02, gE.x) * (1.0 - smoothstep(0.0, 0.5 * gE.x + 0.04, edge));
+          // ── THE GLASS ──
+          // Two things, and the reveal's shadow tells them apart. The VOID is
+          // a darkening of the wall, never an absolute colour (a pale panel on
+          // a dark wall is the fault this replaced) — the room behind the
+          // pane, with a curtain in a share of them. The SKY IN THE PANE is
+          // absolute, because it is the sky's brightness and not the wall's:
+          // stronger toward the head, and it is what the jamb's shadow takes
+          // away. The first cut shadowed the void, and a shadow on a thing
+          // already a fifth of the wall was invisible after the quantiser;
+          // a shadow on the sky's reflection is the band a real window shows.
+          // A share of the reflection goes to EMISSIVE, so a shaded face's
+          // windows still shine a little — a reflection is not diffuse, and
+          // on a face turned from the sun the glass IS the lightest thing.
           float shade = gC.w + gD.x * fah(idc + vec2(2.7));
-          vec3 glass = diffuseColor.rgb * shade + vec3(0.012, 0.014, 0.020);
-          // A few catch the low sun. Still absolute, and rightly so — a
-          // reflection is the SKY's brightness, not the wall's.
-          glass = mix(glass, vec3(0.62, 0.44, 0.2), step(0.94, fah(idc + vec2(11.3, 5.7))) * 0.75);
-          diffuseColor.rgb = mix(diffuseColor.rgb, glass, open * 0.9);
-          // A one-pixel lintel/sill so the opening has an edge, not just a hole.
-          float lint = step(gB.y, f.y) * step(gA.z, f.x) * step(f.x, gA.w) * (1.0 - ground);
+          vec3 void_ = diffuseColor.rgb * shade + vec3(0.012, 0.014, 0.020);
+          float curtain = step(0.72, fah(idc + vec2(17.7, 3.3))) * (1.0 - isShop) * (1.0 - isDoor);
+          void_ = mix(void_, diffuseColor.rgb * 0.62 + vec3(0.03), curtain * 0.7);
+          float ty = clamp((f.y - y0) / max(y1 - y0, 0.01), 0.0, 1.0);
+          float skyW = gF.x * (0.35 + 0.65 * ty) * (1.0 - uFacNight.x) * (1.0 - 0.85 * revSh) * ao;
+          vec3 skyRef = vec3(0.30, 0.36, 0.44) * skyW;
+          vec3 glass = void_ * (1.0 - 0.3 * revSh) * ao + skyRef;
+          totalEmissiveRadiance += skyRef * 0.22 * open * (1.0 - isDoor) * (1.0 - shutClosed);
+          glass = mix(glass, vec3(0.62, 0.44, 0.2), step(0.94, fah(idc + vec2(11.3, 5.7))) * 0.75 * lit);
+          // A door is the shutter paint, not glass; a closed shutter is its
+          // paint with slats.
+          // A door is the shutter paint with a fanlight over it, not glass.
+          vec3 doorC = shutC * (0.55 + 0.25 * fah(idc + vec2(1.9, 6.6)));
+          doorC = mix(doorC, void_ + skyRef * 0.6, step(0.86, ty) * step(0.5, fah(idc + vec2(12.4, 0.7))));
+          glass = mix(glass, doorC, isDoor);
+          float slat = step(0.7, fract(vFacH / 0.2)) * 0.25;
+          glass = mix(glass, shutC * (1.0 - slat), shutClosed);
+          // ── FRAME, MULLION, TRANSOM ──
+          // A painted frame in the trim colour round the inside of the
+          // opening; a centre mullion on any window over 1.1 m wide and a
+          // transom on any over 1.5 m tall, on the share the tradition states.
+          // At the survey's stand-off these are a pixel and dither to a lighter
+          // edge, which is what a frame looks like from the street.
+          float fw = 0.08;
+          float rim = step(edge, fw) * gE.z;
+          float divv = step(fah(idc + vec2(6.1, 19.3)), gE.w);
+          float mull = step(1.1, wxm) * divv * step(abs(f.x - 0.5 * (x0 + x1)) * gA.x, 0.5 * fw);
+          float trans = step(1.5, wym) * divv * step(abs(f.y - (y0 + 0.58 * (y1 - y0))) * gA.y, 0.5 * fw);
+          float bar = clamp(rim + max(mull, trans) * gE.z, 0.0, 1.0) * (1.0 - isDoor) * (1.0 - shutClosed);
+          glass = mix(glass, trim * (0.72 + 0.28 * lit), bar);
+          // The shopfront's fascia: a band of the shutter paint over the glass.
+          float fascia = isShop * step(0.76, f.y) * step(f.y, 0.9) * step(0.06, f.x) * step(f.x, 0.94);
+          diffuseColor.rgb = mix(diffuseColor.rgb, shutC * 0.7, fascia * hasOpen);
+          diffuseColor.rgb = mix(diffuseColor.rgb, glass, open * 0.92);
+          // ── THE SILL ──
+          // A ledge under every window: its front face in the trim, lit a
+          // little more when the sun is high, and the shadow it casts on the
+          // wall below it, of the sill's projection times tan(sun angle).
+          float belowSill = (y0 - f.y) * gA.y;
+          float winBay = hasOpen * (1.0 - isDoor) * (1.0 - isShop) * (1.0 - hasBalc);
+          float sillHere = step(0.02, gE.y) * winBay * step(-0.04, dL) * step(-0.04, dR);
+          float sillLine = sillHere * step(0.0, belowSill) * step(belowSill, 0.08);
+          float sillSh = clamp(gE.y * sy / snc, 0.0, 0.4) * lit;
+          float underSill = sillHere * step(0.0, dL) * step(0.0, dR) * step(0.08, belowSill) * step(belowSill, 0.08 + sillSh);
+          diffuseColor.rgb = mix(diffuseColor.rgb, trim * (0.8 + 0.35 * sy * lit), sillLine * 0.9);
+          diffuseColor.rgb *= 1.0 - 0.4 * underSill;
+          // ── SHUTTERS, OPEN ──
+          // A leaf either side of the window, half its width, no wider than
+          // the wall left beside it, in the shutter paint with its slats.
+          float sw = clamp(0.5 * (x1 - x0), 0.0, max(x0 - 0.02, 0.0));
+          float inShut = max(step(x0 - sw, f.x) * step(f.x, x0), step(x1, f.x) * step(f.x, x1 + sw))
+            * step(y0, f.y) * step(f.y, y1) * hasShut * (1.0 - shutClosed) * hasOpen;
+          diffuseColor.rgb = mix(diffuseColor.rgb, shutC * (1.0 - slat) * (0.75 + 0.25 * lit), inShut);
+          // ── THE BALCONY ──
+          // A railing across the bay, 0.95 m tall, dark with a trim rail on
+          // top, over the door behind it; and the slab's shadow on the wall
+          // below, of the slab's projection (0.45 m) times tan(sun angle).
+          float railH = 0.95 / gA.y;
+          float rail = hasBalc * hasOpen * step(x0 - 0.12, f.x) * step(f.x, x1 + 0.12) * step(y0 - 0.02, f.y) * step(f.y, y0 + railH);
+          float railTop = rail * step(y0 + railH - 0.06 / gA.y, f.y);
+          diffuseColor.rgb = mix(diffuseColor.rgb, trimCol(7.0) * 0.9, rail * 0.62);
+          diffuseColor.rgb = mix(diffuseColor.rgb, trim * 0.8, railTop);
+          // The slab's front edge, 0.14 m of the trim lit from above, is what
+          // makes the railing stand OFF the wall rather than lie on it.
+          float slabEdge = hasBalc * hasOpen * step(x0 - 0.15, f.x) * step(f.x, x1 + 0.15)
+            * step(y0 - 0.16 / gA.y, f.y) * step(f.y, y0 - 0.02);
+          diffuseColor.rgb = mix(diffuseColor.rgb, trim * (0.72 + 0.3 * sy * lit), slabEdge * 0.9);
+          float slabSh = hasBalc * hasOpen * step(x0 - 0.15, f.x) * step(f.x, x1 + 0.15)
+            * step(f.y, y0 - 0.16 / gA.y) * step(y0 - 0.16 / gA.y - clamp(0.45 * sy / snc, 0.0, 0.6) / gA.y, f.y) * lit;
+          diffuseColor.rgb *= 1.0 - 0.45 * slabSh;
+          // The lintel band over the head, as before, per tradition.
+          float lint = step(y1, f.y) * step(x0, f.x) * step(f.x, x1) * (1.0 - ground) * hasOpen * (1.0 - isDoor);
           diffuseColor.rgb *= 1.0 - lint * gD.y;
+          // ── THE HORIZONTALS: STRING COURSE, PLINTH, CORNICE, EAVE ──
+          // A light line at each upper floor level where the tradition has
+          // one; a darker dado up to plinthM with a lit edge at its top; the
+          // cornice band under the wall top in the trim; and the eave's
+          // shadow down the wall from the top, of the overhang times
+          // tan(sun angle), with the soffit's own dark line under it always.
+          float course = (1.0 - ground) * step(f.y * gA.y, 0.08) * gF.y;
+          diffuseColor.rgb = mix(diffuseColor.rgb, trim * 0.92, course);
+          float plinth = step(0.05, gF.w) * step(vFacH, gF.w);
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.72, 0.70, 0.68) + vec3(0.03), plinth * 0.9);
+          diffuseColor.rgb *= 1.0 + 0.12 * step(0.05, gF.w) * step(abs(vFacH - gF.w), 0.04);
+          if (topD > 0.0) {
+            float cornice = step(topD, 0.22) * gF.z;
+            diffuseColor.rgb = mix(diffuseColor.rgb, trim * (0.85 + 0.15 * lit), cornice * 0.85);
+            float eave = clamp(gH.w * sy / snc, 0.0, 1.4) * lit;
+            diffuseColor.rgb *= 1.0 - 0.42 * step(topD, eave) * step(0.05, gH.w);
+            diffuseColor.rgb *= 1.0 - 0.15 * step(topD, 0.12);
+          }
+          // ── WEATHER: RAIN STREAKS AND THE DAMP BAND ──
+          // Rain runs off the sill's corners and streaks the wall under them,
+          // fading over a metre; and the wall is darker where the ground
+          // splashes it, to dampM, with the band's edge broken per few metres.
+          float streak = winBay * step(0.0, belowSill)
+            * max(step(abs(f.x - x0) * gA.x, 0.05), step(abs(f.x - x1) * gA.x, 0.05))
+            * exp(-belowSill / 0.9) * gG.z * (0.4 + 0.6 * fah(idc + vec2(8.1, 1.1)));
+          diffuseColor.rgb *= 1.0 - 0.32 * streak;
+          float damp = (1.0 - smoothstep(0.0, max(gG.w, 0.01), vFacH + 0.25 * fah(vec2(floor(u * 1.5), 3.0)))) * step(0.05, gG.w);
+          diffuseColor.rgb *= 1.0 - 0.26 * damp;
+          // A downpipe on a share of the bay lines, the wall's whole height:
+          // a dark vertical a hand wide, which at the survey's stand-off is
+          // the one-pixel line a real one is. Not a grammar field — every
+          // tradition has gutters — and the streaks share says how stained.
+          float pipe = step(0.82, fah(vec2(idc.x, 27.1))) * step(f.x * gA.x, 0.09) * step(0.3, vFacH);
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.45 + vec3(0.02), pipe * 0.85);
+          diffuseColor.rgb *= 1.0 - 0.18 * gG.z * step(0.82, fah(vec2(idc.x, 27.1))) * step(f.x * gA.x, 0.2) * step(0.09, f.x * gA.x);
+          // The door's threshold: a step in the trim under it.
+          float thresh = isDoor * hasOpen * step(gB.z - 0.04, f.x) * step(f.x, gB.w + 0.04) * step(f.y * gA.y, 0.14) * step(0.02, f.y * gA.y);
+          diffuseColor.rgb = mix(diffuseColor.rgb, trim * 0.8, thresh * 0.8);
           // ── SOMEBODY IS IN ──
           //
           // A share of the openings carry a light after dark. Per BAY, from the
@@ -328,7 +544,7 @@ export function facade(mat: THREE.Material): void {
           // already do. Scaled by uFacNight.x so it is absent by day.
           float litBay = step(fah(idc + vec2(23.1, 6.7)), uFacNight.y);
           totalEmissiveRadiance += vec3(1.0, 0.74, 0.38) * 0.72
-            * open * litBay * uFacNight.x;
+            * open * litBay * uFacNight.x * (1.0 - shutClosed);
           // IVY. Whole columns of wall get claimed, thickest at the base and
           // thinning as it climbs — which is what makes a ruin read as reclaimed
           // rather than merely dirty.
@@ -408,8 +624,11 @@ export function facade(mat: THREE.Material): void {
             }
           }
         }
-        // Water staining below every horizontal break, on every face.
-        diffuseColor.rgb *= 1.0 - gD.w * fah(floor(vFacW.xz * 1.7) + floor(vFacH * 2.3));
+        // Water staining below every horizontal break, on every face — at
+        // three fifths of what it was, now the wall carries its own streaks
+        // and damp band and the staining is a texture over them, not the
+        // weather itself.
+        diffuseColor.rgb *= 1.0 - 0.6 * gD.w * fah(floor(vFacW.xz * 1.7) + floor(vFacH * 2.3));
       }`);
   };
 }

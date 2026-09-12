@@ -73,7 +73,8 @@ const { BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, 
 import { createOverlays, type RouteCard } from './overlays';
 import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
-import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight } from './facade';
+import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight, uFacSun } from './facade';
+import { roofFx } from './roof-fx';
 import { gramDecode } from './facade-grammar';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { startLab } from './labs';
@@ -8467,6 +8468,7 @@ const B_MATS = [
   // A roof is tile or felt, not paint, and it is the one surface that goes
   // square-on to a high sun — so it takes the darkening the wall used to.
   const roof = new THREE.MeshLambertMaterial({ color: new THREE.Color(c).multiplyScalar(0.78), map: roofTex, side: DS });
+  roofFx(roof, 'flat');
   bldRoofSkylit.push(roof);
   return [roof, wall] as [THREE.Material, THREE.Material];
 });
@@ -21105,7 +21107,9 @@ const bPaint = (id: number): number => {
 /** `gram` is the building's tradition row (traditionIndex), packed per vertex
  *  as aGram at flush — how a batch of a whole tile's walls can each read
  *  their own opening grammar. 0 is the uniforms (the defaults). */
-interface BldPiece { geo: THREE.BufferGeometry; base: number; mark: number; gram: number; pts: Array<[number, number]> }
+interface BldPiece { geo: THREE.BufferGeometry; base: number; mark: number; gram: number;
+  /** The wall's top, world y — aTop, so the shader knows where the eave is. */
+  top: number; pts: Array<[number, number]> }
 let bldBatch: { walls: BldPiece[]; rubble: BldPiece[]; intact: Map<number, BldPiece[]> } | null = null;
 const openBldBatch = (): NonNullable<typeof bldBatch> =>
   (bldBatch ??= { walls: [], rubble: [], intact: new Map() });
@@ -21131,6 +21135,7 @@ function registerPaint(col: number): number | null {
   facade(wall);
   bldSkylit.push(wall);
   const roof = new THREE.MeshLambertMaterial({ color: side.clone().multiplyScalar(0.78), map: roofTex, side: DS });
+  roofFx(roof, 'flat');
   bldRoofSkylit.push(roof);
   const paint = B_MATS_FLAT.length / 2;
   B_MATS_FLAT.push(roof, wall);
@@ -21167,6 +21172,8 @@ function registerCulturePaint(wallCol: number, roofCol: number, wt: WallTex, rt:
   // brighter of the two surfaces.
   const roof = new THREE.MeshLambertMaterial({
     color: new THREE.Color(roofCol).multiplyScalar(0.78), map: ROOF_TEX[rt], side: DS });
+  // The courses run with the slope, per fragment, for this kind of roof.
+  roofFx(roof, rt);
   bldRoofSkylit.push(roof);
   const paint = B_MATS_FLAT.length / 2;
   B_MATS_FLAT.push(roof, wall);
@@ -21252,7 +21259,7 @@ function flushBuildings(): void {
     for (const p of pieces) total += p.geo.attributes.position.count;
     const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3),
       col = new Float32Array(total * 3), aB = new Float32Array(total),
-      aM = new Float32Array(total), aG = new Float32Array(total);
+      aM = new Float32Array(total), aG = new Float32Array(total), aT = new Float32Array(total);
     const seats: Seats = [];
     let o = 0;
     for (const p of pieces) {
@@ -21263,6 +21270,7 @@ function flushBuildings(): void {
       aB.fill(p.base, o, o + n);
       aM.fill(p.mark, o, o + n);
       aG.fill(p.gram, o, o + n);
+      aT.fill(p.top, o, o + n);
       seats.push({ pts: p.pts, ranges: [{ start: o, count: n }] });
       o += n;
       p.geo.dispose();
@@ -21274,6 +21282,7 @@ function flushBuildings(): void {
     geo.setAttribute('aBase', new THREE.BufferAttribute(aB, 1));
     geo.setAttribute('aMark', new THREE.BufferAttribute(aM, 1));
     geo.setAttribute('aGram', new THREE.BufferAttribute(aG, 1));
+    geo.setAttribute('aTop', new THREE.BufferAttribute(aT, 1));
     finish(geo, rubble ? ruinMatFar : ruinMat, seats, { noCast: rubble, ruinLod: !rubble });
   };
   packRuin(b.walls, false);
@@ -21285,7 +21294,7 @@ function flushBuildings(): void {
   if (total) {
     const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3),
       uv = new Float32Array(total * 2), aB = new Float32Array(total),
-      aM = new Float32Array(total), aG = new Float32Array(total);
+      aM = new Float32Array(total), aG = new Float32Array(total), aT = new Float32Array(total);
     const geo = new THREE.BufferGeometry();
     const seatsBy = new Map<BldPiece, Array<{ start: number; count: number }>>();
     let o = 0;
@@ -21297,6 +21306,7 @@ function flushBuildings(): void {
       aB.fill(p.base, o, o + count);
       aM.fill(p.mark, o, o + count);
       aG.fill(p.gram, o, o + count);
+      aT.fill(p.top, o, o + count);
       const list = seatsBy.get(p) ?? [];
       list.push({ start: o, count });
       seatsBy.set(p, list);
@@ -21320,6 +21330,7 @@ function flushBuildings(): void {
     geo.setAttribute('aBase', new THREE.BufferAttribute(aB, 1));
     geo.setAttribute('aMark', new THREE.BufferAttribute(aM, 1));
     geo.setAttribute('aGram', new THREE.BufferAttribute(aG, 1));
+    geo.setAttribute('aTop', new THREE.BufferAttribute(aT, 1));
     finish(geo, B_MATS_FLAT, [...seatsBy.entries()].map(([p, ranges]) => ({ pts: p.pts, ranges })));
   }
 }
@@ -21643,10 +21654,10 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
       const batch = openBldBatch();
       const arr = batch.intact.get(paint) ?? [];
       const mark = markForBuilding(ctrX, ctrZ, kind);
-      arr.push({ geo, base, mark, gram, pts });
+      arr.push({ geo, base, mark, gram, top, pts });
       if (roof) {
         const rg = roofGeo(pts, roof, top, ridge);
-        if (rg) arr.push({ geo: rg, base, mark, gram, pts });
+        if (rg) arr.push({ geo: rg, base, mark, gram, top, pts });
       }
       batch.intact.set(paint, arr);
     };
@@ -21772,9 +21783,9 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
           const batch = openBldBatch();
           const arr = batch.intact.get(paint) ?? [];
           const mark = markForBuilding(tx, tz, kind);
-          arr.push({ geo, base, mark, gram, pts: sq });
+          arr.push({ geo, base, mark, gram, top, pts: sq });
           const rg = roofGeo(sq, 'pyramidal', top, 4.5);
-          if (rg) arr.push({ geo: rg, base, mark, gram, pts: sq });
+          if (rg) arr.push({ geo: rg, base, mark, gram, top, pts: sq });
           batch.intact.set(paint, arr);
         });
     }
@@ -21882,12 +21893,12 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // rule as the intact stock's ground line, so a ruin's doorways and its
   // marks band are measured from the grass and not from 0.6 m under it.
   // A ruin reads its tradition's grammar too: a Paris shell has Paris bays.
-  batch.walls.push({ geo: wallsGeo, base: minH, mark: markForBuilding(ctrX, ctrZ, kind), gram, pts });
+  batch.walls.push({ geo: wallsGeo, base: minH, mark: markForBuilding(ctrX, ctrZ, kind), gram, top: foot + tallest, pts });
   if (rubble.length) {
     const rubbleGeo = mergeParts(rubble);
     rubbleGeo.translate(0, foot, 0);
     // Rubble takes no marks: a heap of broken slab has no wall to write on.
-    batch.rubble.push({ geo: rubbleGeo, base: foot, mark: 0, gram: 0, pts });
+    batch.rubble.push({ geo: rubbleGeo, base: foot, mark: 0, gram: 0, top: foot, pts });
   }
   mapPoly(pts, 'rgba(70,66,58,0.9)');
   claimSolid(pts, foot + tallest, true);
@@ -27915,6 +27926,8 @@ function stepWeather(now: number, dt: number): void {
   ruinMatFar.emissive.copy(ruinLift);
   // The façade's night term: how much night, and how many windows are lit.
   uFacNight.value.x = 1 - dayF;
+  // The sun in world space, for the reveals' and the eaves' shadows.
+  uFacSun.value.copy(SUN_DIR);
   // THE DIAL IS THE BASE; THE WEATHER ONLY MODULATES IT.
   //
   // This line used to ASSIGN the bloom, every frame, from the weather and the

@@ -2286,6 +2286,92 @@ stubs. The fallen slabs carry a third of the wall's paint.
   is not made here. At Suresnes the render shell keeps its height and takes
   the tradition's cream, a step warmer than the grey it was.
 
+### The wall has depth, and the roof has courses
+
+The phases above gave the buildings a place — a palette, a grammar, a roof
+form, a storey count per tradition — and the critique from the seat was exact:
+"I was expecting the shader to approach far greater realism, not just making
+the limited palette and blocky texture diverse." True. Every wall was still a
+flat quad with darker rectangles on it, and a roof was a plane wearing a
+canvas mapped in world plan. What follows is the fidelity unit, judged in the
+lab at the survey's stand-off and then in the two captures.
+
+**THE OPENINGS ARE DRAWN AS THEIR SHADOWS.** What makes a wall read as a
+building in a frame twelve pixels to the metre is not the colour of the glass
+but that the glass is set BACK: the reveal's jamb throws the sun across the
+top and the sun side of every pane, the sill projects and casts under itself,
+the eave and the balcony slab lay a band down the wall, and all of it moves
+with the sun. `uFacSun` is a world-space unit vector toward the sun (main.ts
+copies `SUN_DIR` each frame; the lab its light), and in the fragment the
+wall's own frame — `u` along the face, `nOut` outward (the geometric normal
+flipped for a back face, so a soffit does not read the sun through the wall),
+`sn`/`su`/`sy` the sun's components — makes every shadow one line: the
+caster's depth times the tangential over the normal component. Sixteen more
+grammar fields carry the articulation (`revealM sillM frame mullion glassSky
+stringCourse cornice plinthM shutters balcony streaks dampM trim shutterCol
+shopfront eaveM`), so the row is 32 bytes, the texture eight texels wide, and
+uniforms E–H beside A–D; the trim and shutter paints are indices into eight
+colours in the shader (`trimCol`), because GLSL ES 1.00 cannot index an array
+by a float. The wall top rides in as `aTop` beside `aBase` for the cornice and
+the eave; every piece the batch packs carries it.
+
+- **THE SHADOW WENT ON THE VOID FIRST, AND VANISHED.** The first cut shadowed
+  the glass as it was — a fifth of the wall — and a 55% darkening of a thing
+  already dark was under the quantiser at every stand-off: the low-sun lab
+  frame was pixel-identical to the high-sun one. A real window shows the
+  band because the pane REFLECTS THE SKY, and the jamb's shadow takes the
+  sky away. So the glass is two things now: the void (a fraction of the wall,
+  the curtain in a share of them) and the sky in the pane (absolute, because
+  it is the sky's brightness, stronger toward the head), and the reveal
+  shadows the second. A share of the reflection goes to EMISSIVE: on a face
+  turned from the sun the glass is the lightest thing on it, and a reflection
+  is not diffuse — the same lesson as the lit windows at night, one
+  surface earlier. `glassSky` per tradition is the lever.
+- **`cast` IS A RESERVED WORD IN GLSL ES 1.00.** Every lab frame of the first
+  run came back with `'cast' : Illegal use of reserved word` and
+  `useProgram: program not valid` in `d.errors` — the wall drew as flat
+  Lambert and looked plausible. Read the errors before the frames.
+- **What is on the wall now, per fragment and per tradition:** the reveal's
+  cast and ambient, the painted frame with a mullion on a wide window and a
+  transom on a tall one, the sill and its shadow, shutters open (a leaf each
+  side, slatted) and a fifth of them closed, the balcony (rail, lit slab
+  edge, slab shadow, the door behind), the shopfront under its fascia, the
+  door in the shutter paint with a fanlight and a threshold, the string
+  course, the plinth's dado with a lit top, the cornice band, the eave's
+  shadow, rain streaks from the sill corners, the damp band from the ground,
+  and a downpipe on a share of the bay lines. The old staining is at three
+  fifths, a texture over the weather rather than the weather.
+
+**THE ROOF IS COURSES, AND THE COURSES RUN WITH THE SLOPE** (`client/roof-fx.ts`,
+`roofFx(mat, kind)` on every roof material in main.ts and the lab's). The
+roof canvas was mapped by world plan (`roofGeo`'s uv is x, z), so the pantile
+rows ran along world z whatever way the ridge ran, its row was 0.78 m against
+a real course of 0.3, and at twelve pixels to the metre it mip-filtered to a
+tone with a grid in it. Per fragment now: down-slope is gravity projected
+into the plane, across is the eave, and (across, down) is a coordinate in
+metres on the surface in which a course is a row, a unit a cell and the
+broken bond half a cell on alternate rows — pantile barrels, slate's wide
+thin units, shingle's small ones, corrugated ribs DOWN the slope with sheet
+laps across (the one roof whose units run the other way), and the flat cap
+keeps its felt in plan. The canvas is sampled in the same frame, so the moss
+sits on the courses, and it carries TONE ONLY now — the recipes in
+`wall-tex.ts` lost their rows, because a canvas still drawing them lays a
+second, coarser, wrongly-turned set under the shader's. The last course sits
+in the gutter's shadow off `aTop`. **The gate on "pitched" is three degrees,
+not fourteen**: a cap is exactly level, and the first cut's 0.97 drew a Cape
+skillion at eight degrees as felt. No ridge line yet — a fragment cannot
+know where its plane ends, and the ridge would be a fifth attribute.
+
+**Photographed** (`scratchpad/facade-fid.mjs` and `roof-fid.mjs`, the lab,
+`/tmp/drive-tools/facade-fid/`; `building-survey.mjs` on the two captures
+against `/tmp/drive-tools/bldg-fix2/`): the Camps Bay block at b1 went from
+dark rectangles on a white slab to sky-reflecting panes with frames, sills,
+balcony rails and the reveal's band at noon; the Mediterranean wall in the
+lab wears blue shutters, the Dutch terrace its white sashes under the gables,
+the Haussmann block its balconies and shopfronts; the pantile roof at 12 m is
+barrels in courses. Judgement, not anchors: the seat's report is the
+verification, and every number above is a dial.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.
