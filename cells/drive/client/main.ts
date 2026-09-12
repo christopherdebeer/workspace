@@ -3183,6 +3183,106 @@ function sameRaster(a: Float32Array, b: Float32Array): boolean {
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
 }
+/**
+ * ── THE WATER ONLY READS THE GROUND WHERE THE WATER IS ──
+ *
+ * The feed's skip (below) asks whether the three things the water reads have
+ * moved, and answers the elevation raster with EXACT equality over all 17,424
+ * samples. That is right and far too strict: `sampleHeight` carries every road
+ * carve, so a corridor refinement, a border pin or a junction rebuild a
+ * kilometre inland changes the raster and the estuary's field is rebuilt for
+ * it. Measured from the seat at the Pont de Normandie: 199 feeds, 36 skipped,
+ * 234 builds at 67 ms — 49% of every slow frame in the session, on a tile
+ * whose water had not moved.
+ *
+ * What the build actually reads the raster FOR is the bed under wet texels,
+ * the waterline where coverage crosses a half, the coast field's travel time
+ * over the bathymetry and the bank habitat beside it — all of it within a
+ * short reach of water. Ground beyond that reach cannot reach the field. So
+ * the comparison is masked to a BAND round the water: every feature's own
+ * bounding box (the same boxes the gather uses) and every ocean-mask texel
+ * that is not confirmed dry, dilated by `?hydroground` metres.
+ *
+ * WHAT THE BAND MAY NOT MISS is water that does not exist yet. A ground
+ * change cannot create water on its own: inland water is a FEATURE (an OSM
+ * way or a cover-traced component) and the sea is the ocean mask, and both
+ * are in the signature already — a new feature or a changed mask builds
+ * whatever the band says. An UNKNOWN mask texel is treated as wet-relevant,
+ * because the build keeps the previous field's answer there and the ground
+ * under it may yet matter; only confirmed dry is dropped. A tile whose mask
+ * never arrived keeps the exact comparison.
+ */
+const HYDRO_GROUND_R = Math.max(0, qsNum('hydroground', 150));
+let hydroBandA = new Uint8Array(0), hydroBandB = new Uint8Array(0);
+interface WetBox { minX: number; maxX: number; minZ: number; maxZ: number }
+function hydroWetBand(t: HeightTile, boxes: readonly WetBox[], ocean: OceanCoverage, EN: number): Uint8Array | null {
+  if (HYDRO_GROUND_R <= 0) return null;
+  const n = EN * EN;
+  if (hydroBandA.length !== n) { hydroBandA = new Uint8Array(n); hydroBandB = new Uint8Array(n); }
+  const m = hydroBandA, b = hydroBandB;
+  m.fill(0);
+  const sx = t.w / (EN - 1), sz = t.h / (EN - 1);
+  // The features, by the boxes the gather already tested. A box rather than
+  // the geometry: the build bounds each feature to its own pixel range the
+  // same way, and a box is conservative, which is the side to err on.
+  for (const q of boxes) {
+    const i0 = Math.max(0, Math.floor((q.minX - t.xs) / sx)), i1 = Math.min(EN - 1, Math.ceil((q.maxX - t.xs) / sx));
+    const j0 = Math.max(0, Math.floor((q.minZ - t.zs) / sz)), j1 = Math.min(EN - 1, Math.ceil((q.maxZ - t.zs) / sz));
+    for (let j = j0; j <= j1; j++) { const o = j * EN; for (let i = i0; i <= i1; i++) m[o + i] = 1; }
+  }
+  // The ocean mask, anything but confirmed dry. Without one the whole tile is
+  // relevant: an absent mask is not a dry tile, it is an unanswered question.
+  if (ocean.status !== 'ready') { m.fill(1); return m; }
+  {
+    const g = ocean.grid, gb = ocean.bounds;
+    const bx0 = gb ? gb.minX : t.xs, bz0 = gb ? gb.minZ : t.zs;
+    const bw = (gb ? gb.maxX - gb.minX : t.w) || 1, bh = (gb ? gb.maxZ - gb.minZ : t.h) || 1;
+    for (let j = 0; j < EN; j++) {
+      const wz = t.zs + j * sz;
+      const gy = Math.min(g.height - 1, Math.max(0, Math.floor(((wz - bz0) / bh) * g.height)));
+      const o = j * EN;
+      for (let i = 0; i < EN; i++) {
+        if (m[o + i]) continue;
+        const wx = t.xs + i * sx;
+        const gx = Math.min(g.width - 1, Math.max(0, Math.floor(((wx - bx0) / bw) * g.width)));
+        const v = g.data[gy * g.width + gx];
+        if (v >= 200 || v === 0) m[o + i] = 1;       // ocean, or not yet known
+      }
+    }
+  }
+  // Dilate by the reach, as two linear sweeps a row and two a column: the
+  // distance since the last wet texel, thresholded. That is a SQUARE of the
+  // radius rather than a disc — a superset, so the band can only be too
+  // generous, which is the direction that cannot drop a build.
+  const rt = Math.ceil(HYDRO_GROUND_R / Math.max(0.01, Math.min(sx, sz)));
+  for (let j = 0; j < EN; j++) {
+    const o = j * EN;
+    let d = EN;
+    for (let i = 0; i < EN; i++) { d = m[o + i] ? 0 : d + 1; b[o + i] = d <= rt ? 1 : 0; }
+    d = EN;
+    for (let i = EN - 1; i >= 0; i--) { d = m[o + i] ? 0 : d + 1; if (d <= rt) b[o + i] = 1; }
+  }
+  for (let i = 0; i < EN; i++) {
+    let d = EN;
+    for (let j = 0; j < EN; j++) { const k = j * EN + i; d = b[k] ? 0 : d + 1; m[k] = d <= rt ? 1 : 0; }
+    d = EN;
+    for (let j = EN - 1; j >= 0; j--) { const k = j * EN + i; d = b[k] ? 0 : d + 1; if (d <= rt) m[k] = 1; }
+  }
+  return m;
+}
+/** Did the ground move, and did it move where the water reads it? `wet` is
+ *  the one that decides a build; `any` is what says the band earned it. */
+function rasterMoved(a: Float32Array, b: Float32Array, band: Uint8Array | null): { any: boolean; wet: boolean } {
+  if (a === b) return { any: false, wet: false };
+  if (a.length !== b.length) return { any: true, wet: true };
+  let any = false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue;
+    any = true;
+    if (!band || band[i]) return { any: true, wet: true };
+  }
+  return { any, wet: false };
+}
 /** The features by id and size, and the ocean's answer by status and mask. */
 function hydroInputSig(
   feats: readonly HydroFeature[],
@@ -3313,6 +3413,9 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
   // gather below or the first feed of every tile misses its own lakes.
   const ocean = oceanCoverageFor(t);
   const feats: HydroFeature[] = [];
+  // …and their boxes, for the band below: the same test, so the band cannot
+  // disagree with the gather about which water this tile stands under.
+  const featBoxes: WetBox[] = [];
   // ── AND THE GUTTER COUNTS ──
   //
   // The field is `fieldResolution` plus a one-texel gutter on each side, so it
@@ -3329,6 +3432,7 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
     if (e.maxX < t.xs - pad || e.minX > t.xs + t.w + pad) continue;
     if (e.maxZ < t.zs - pad || e.minZ > t.zs + t.h + pad) continue;
     feats.push(e.f);
+    featBoxes.push({ minX: e.minX, maxX: e.maxX, minZ: e.minZ, maxZ: e.maxZ });
   }
   const surfaceOccluders: HydroSurfaceOccluder[] = productionCrossings.forBounds({
     minX: t.xs,
@@ -3362,10 +3466,18 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
   workerLedger.hydroFeeds++;
   const sig = hydroInputSig(feats, ocean, surfaceOccluders);
   const prev = hydroFedInputs.get(key);
-  if (HYDRO_SKIP && !wasDirty && prev && prev.sig === sig && sameRaster(prev.elev, elevation)) {
-    workerLedger.hydroSkips++;
-    queueProductionSubstrateShadow(t, key);
-    return;
+  if (HYDRO_SKIP && !wasDirty && prev && prev.sig === sig) {
+    const moved = rasterMoved(prev.elev, elevation, hydroWetBand(t, featBoxes, ocean, EN));
+    if (!moved.wet) {
+      workerLedger.hydroSkips++;
+      // What the band bought: the ground DID move, and not where water is.
+      if (moved.any) workerLedger.hydroSkipsDry++;
+      // THE STORED RASTER STAYS THE OLD ONE. Away from water a texel may
+      // drift as far as it likes and never matter; near water any difference
+      // at all builds, so there is nothing for a stale reference to hide.
+      queueProductionSubstrateShadow(t, key);
+      return;
+    }
   }
   hydroFedInputs.set(key, { elev: elevation, sig });
   const rev = (hydroRev.get(key) ?? 0) + 1;
@@ -6798,7 +6910,7 @@ let buildInFlight: string | null = null;
 let workerGap = 100;
 /** A terrain apply landed since the last frame: the hydro drain skips one. */
 let appliedThisFrame = false;
-const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0, hydroBuildMs: 0, hydroBuilds: 0, hydroBuildMax: 0, lastHydroMs: 0, hydroFeeds: 0, hydroSkips: 0 };
+const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0, hydroBuildMs: 0, hydroBuilds: 0, hydroBuildMax: 0, lastHydroMs: 0, hydroFeeds: 0, hydroSkips: 0, hydroSkipsDry: 0 };
 /** Everything a build reads that is not a raster, packed for the worker. */
 function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<TerrainJob, 'id'>; transfer: Transferable[] } {
   const flatten = (grid: Map<string, Seg[]>, cell: number, margin: number): { flat: Float64Array; cells: Array<[string, number[]]> } => {
@@ -40766,7 +40878,7 @@ function telemetryReport(): string {
   const row = (k: string, ms: number, cnt: number, max: number, slowMs: number, top: number): string =>
     `${k.padEnd(20)} ${String(Math.round(ms)).padStart(9)} ${String((100 * ms / Math.max(1, sessWall)).toFixed(1)).padStart(6)}% ${String(cnt).padStart(7)} ${String((ms / Math.max(1, cnt)).toFixed(1)).padStart(6)} ${String(max.toFixed(0)).padStart(6)} | ${String(Math.round(slowMs)).padStart(15)} ${String((100 * slowMs / Math.max(1, slowTotal)).toFixed(0)).padStart(5)}% ${String(top).padStart(6)}`;
   for (const r of rows) L.push(row(r.k, r.ms, r.n, r.max, r.slowMs, r.top));
-  if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)} · feeds ${workerLedger.hydroFeeds} skipped ${workerLedger.hydroSkips}`);
+  if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)} · feeds ${workerLedger.hydroFeeds} skipped ${workerLedger.hydroSkips} (dry ground ${workerLedger.hydroSkipsDry})`);
     const pa = Math.max(1, workerLedger.applied);
     L.push(`post split ms/build reseat ${(workerLedger.reseatMs / pa).toFixed(1)} redrape ${(workerLedger.redrapeMs / pa).toFixed(1)} hydro ${(workerLedger.hydroMs / pa).toFixed(1)} batter ${(workerLedger.batterMs / pa).toFixed(1)} culvert ${(workerLedger.culvertMs / pa).toFixed(1)} · post max ${Math.round(workerLedger.postMax)} · dropped ${workerLedger.dropped}`); }
   { const n = Math.min(drawStat.n, drawRing.length);
