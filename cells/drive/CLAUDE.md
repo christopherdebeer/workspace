@@ -3074,6 +3074,17 @@ eighteen entries over water carry their deck heights (Normandie 52 m at
 41, Severn 37, Humber 30, Erasmus 12.5, Alamillo 10, Tower Bridge 8.6).
 `__lifts()` now says which rule lifted a way: `hint`, `water` or `deck`.
 
+**THE HINT'S DATUM IS AUTHORED, NOT SAMPLED.** The first cut read the water
+at the towers from the live field, which makes the hint a function of what
+has streamed as well as of position: each fragment built its own idea of the
+deck from whatever the hydro or the cover said at that moment, and the
+fragments disagreed. Measured at the Normandie across two runs of the same
+build, the assembly's deck spread **15.6-54 m** on one and **15.6-86.2 m**
+on the next. The datum is now the entry's own — `deckM` over `waterEleM`,
+the water's elevation above sea level, zero for a tidal crossing, which is
+every entry so far — so the hint is the same number before and after any
+tile lands.
+
 **MEASURED** at the seat's spot, 150 s settled, no page errors: `__lifts`
 lists the Normandie's fragments lifted by `hint` — 33 to 39 m over their
 chords — and `__decks` puts the fragment under the rig at **18.7–25.1 m**
@@ -3101,11 +3112,32 @@ it; measured with `__seatwhy` over four runs and left for its own round.
 Spawn on the deck itself (`49.4283 0.2745`, the seat's earlier spawn, is
 on it) or use `__toroad()`.
 
-**WHAT THE SUBSTRATE STILL OWES.** The crossing authority transcribes the
-deck it is given. The migration's next step is for it to DECIDE the deck —
-from the hydro level, the class clearance and the landmark hint — and hand
-the number to the profile, instead of the profile reaching past it as it
-does here. The two inputs it needs now exist.
+**AND THE FIELD IS ASKED ONLY WHERE THE ANSWER TURNS ON IT.** The first cut
+of the decision loop asked `sampleRestingSurface` at every station of every
+bridge, where the rule it replaced asked only at the non-portal stations of
+a bridge with no hint. That is real work inside the six-millisecond build
+budget, and it showed as a TIMING fault a long way from the bridge: on the
+structures fixture the causeway's terrain mesh was absent at the probe's
+instant in **two runs of five, against none in four of the control**. A
+hint over the chord decides on its own and a portal is the approach's
+business either way, so neither asks; the call count is the old one exactly
+and the authority still makes the decision.
+
+**AND THE AUTHORITY DECIDES IT.** The three rules above live in
+`substrate/crossing-authority.ts` as `resolveProductionDeck` — pure, tested
+in `substrate.test.ts` (hint over chord at a portal too, a low hint refused,
+a trunk chord in the water at ten metres, a lane at four and a half, a chord
+already over the water kept with its clearance reported, portals left to the
+approach, no water no clearance) — and the ribbon's lift block consumes its
+answer station by station, which is the migration the registry was built
+for: construction consumes the authority, it does not reinterpret the
+evidence afterwards. Who decided each way's deck is kept by way key, handed
+to the registry when it records the crossing, carried on the record as
+`deckAuthority` with `deck by landmark-hint` in its evidence, and counted in
+the snapshot as `deckByHint` and `deckByWater`. What the substrate still
+owes after this is the crossing's GEOMETRY — the registry still learns of a
+crossing after the road is built, from the built road; the profile now asks
+before, but through a function, not a record.
 
 ## The labs
 

@@ -81,6 +81,10 @@ export interface BridgeLandmark {
   /** The approach grade the deck descends at beyond its outer towers; the
    *  Normandie's viaducts are built to 6 %. */
   grade?: number;
+  /** The water's own elevation above sea level, metres — the datum `deckM`
+   *  is measured from. Zero for a tidal crossing, which is every entry here
+   *  so far; a bridge over a reservoir in the mountains would state it. */
+  waterEleM?: number;
 }
 
 export interface Landmark {

@@ -11,6 +11,73 @@ export type CrossingStructureOutcome =
   | 'infeasible'
   | 'none';
 
+/**
+ * ── WHO DECIDES HOW HIGH A DECK STANDS OVER WATER ──
+ *
+ * The road's own profile is the chord between the terrain at a fragment's
+ * ends, and over an estuary that is the bed: measured at the Pont de
+ * Normandie, the deck lay 0.7 m under the resting water for a kilometre once
+ * the elevation repair had taken the surface model's smear away. Nothing
+ * had ever supplied a deck height over water; the registry below recorded
+ * whatever the profile built. The decision belongs here, before the
+ * geometry, in the same spirit as the intent above: construction consumes
+ * the answer and does not reinterpret the evidence afterwards.
+ *
+ * Three authorities, in order. A LANDMARK HINT is the deck a famous bridge's
+ * entry describes at this station — level between its towers, falling at
+ * its grade beyond them — and it is taken at every station, portals
+ * included, because every fragment reads the same function and the ends
+ * agree without a weld. WATER CLEARANCE is the resting level plus a
+ * clearance by road class, and it is taken only where the chord would
+ * otherwise lie IN the water: an ordinary river bridge whose chord already
+ * spans bank to bank keeps it, and its approaches keep their welds. It
+ * keeps off the portals, whose height is the approach's business. Else the
+ * CHORD stands.
+ */
+export type DeckAuthority = 'landmark-hint' | 'water-clearance' | 'chord';
+
+export interface ProductionDeckInput {
+  /** The profile's own height at this station before any lift. */
+  chordY: number;
+  /** The resting water under the station, in the same datum; null for none. */
+  waterY: number | null;
+  /** The deck a landmark entry describes here; null for no entry. */
+  hintY: number | null;
+  roadTags?: Readonly<Record<string, string>>;
+  /** A portal station of the fragment. */
+  portal: boolean;
+}
+
+export interface ProductionDeckDecision {
+  deckY: number;
+  authority: DeckAuthority;
+  /** The deck's height over the water, where the water is known. */
+  clearanceM: number | null;
+  evidence: readonly string[];
+}
+
+/** Clearance over water a bridge gets with nothing else to say, by class:
+ *  a motorway over a navigable river against a lane over a brook. */
+export function waterClearanceForClass(highway: string | undefined): number {
+  return highway === 'motorway' || highway === 'trunk' ? 10
+    : highway === 'primary' || highway === 'secondary' ? 7 : 4.5;
+}
+
+export function resolveProductionDeck(input: ProductionDeckInput): ProductionDeckDecision {
+  const evidence: string[] = [];
+  const over = (y: number): number | null => (input.waterY === null ? null : y - input.waterY);
+  if (input.hintY !== null && input.hintY > input.chordY) {
+    evidence.push(`landmark deck ${input.hintY.toFixed(1)} over chord ${input.chordY.toFixed(1)}`);
+    return { deckY: input.hintY, authority: 'landmark-hint', clearanceM: over(input.hintY), evidence };
+  }
+  if (!input.portal && input.waterY !== null && input.chordY < input.waterY + 1) {
+    const clear = waterClearanceForClass(input.roadTags?.highway);
+    evidence.push(`chord ${input.chordY.toFixed(1)} in water at ${input.waterY.toFixed(1)}; ${input.roadTags?.highway ?? 'road'} clears ${clear}`);
+    return { deckY: input.waterY + clear, authority: 'water-clearance', clearanceM: clear, evidence };
+  }
+  return { deckY: input.chordY, authority: 'chord', clearanceM: over(input.chordY), evidence };
+}
+
 export interface ProductionCrossingInput {
   roadId: string;
   waterId: string;
@@ -29,6 +96,8 @@ export interface ProductionCrossingInput {
   waterSurfaceY: number | null;
   availableClearanceM: number | null;
   structureOutcome: CrossingStructureOutcome;
+  /** Who decided the deck this road was built at (see resolveProductionDeck). */
+  deckAuthority?: DeckAuthority;
 }
 
 export type ProductionCrossingEvidenceInput = Pick<
@@ -71,6 +140,7 @@ export interface ProductionCrossingRecord {
   waterBedY: number;
   waterSurfaceY: number | null;
   availableClearanceM: number | null;
+  deckAuthority: DeckAuthority;
 }
 
 export interface ProductionCrossingSnapshot {
@@ -82,6 +152,9 @@ export interface ProductionCrossingSnapshot {
   causeway: number;
   unresolved: number;
   missingImplementation: number;
+  /** Bridges whose deck the landmark store or the water clearance decided. */
+  deckByHint: number;
+  deckByWater: number;
 }
 
 const affirmative = (value: string | undefined): boolean =>
@@ -178,6 +251,8 @@ export function resolveProductionCrossing(
   if (input.availableClearanceM !== null) {
     evidence.push(`clearance=${input.availableClearanceM.toFixed(2)}m`);
   }
+  const deckAuthority: DeckAuthority = input.deckAuthority ?? 'chord';
+  if (deckAuthority !== 'chord') evidence.push(`deck by ${deckAuthority}`);
 
   return {
     id: crossingId(input),
@@ -198,6 +273,7 @@ export function resolveProductionCrossing(
     waterBedY: input.waterBedY,
     waterSurfaceY: input.waterSurfaceY,
     availableClearanceM: input.availableClearanceM,
+    deckAuthority,
   };
 }
 
@@ -262,6 +338,7 @@ export class ProductionCrossingRegistry {
         waterBedY: next.waterBedY,
         waterSurfaceY: next.waterSurfaceY,
         availableClearanceM: next.availableClearanceM,
+        deckAuthority: next.deckAuthority,
       };
     }
     const comparable = previous ? { ...previous, revision: 0 } : undefined;
@@ -341,10 +418,14 @@ export class ProductionCrossingRegistry {
       causeway: 0,
       unresolved: 0,
       missingImplementation: 0,
+      deckByHint: 0,
+      deckByWater: 0,
     };
     for (const record of this.records.values()) {
       out[record.kind]++;
       if (record.implementation === 'missing') out.missingImplementation++;
+      if (record.deckAuthority === 'landmark-hint') out.deckByHint++;
+      if (record.deckAuthority === 'water-clearance') out.deckByWater++;
     }
     return out;
   }

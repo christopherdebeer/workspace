@@ -18,6 +18,7 @@ import {
   resolveProductionSubstrateMode,
   resolveProductionCrossing,
   resolveProductionCrossingIntent,
+  resolveProductionDeck,
   sampleHydroContactLayers,
   sampleProductionSubstrateTile,
   sampleSubstrate,
@@ -373,6 +374,41 @@ export function runSubstrateSelfTest(): void {
   const unresolvedCrossingIntent = resolveProductionCrossingIntent({ roadLayer: 0 });
   assert(unresolvedCrossingIntent.kind === 'unresolved',
     'an untagged overlap must remain unresolved before construction');
+
+  // ── THE AUTHORITY DECIDES THE DECK ──
+  // A landmark's deck wins over the chord wherever it is higher, portals
+  // included; the water plus a class clearance takes a chord lying in the
+  // water and nothing else; the chord stands otherwise.
+  const hinted = resolveProductionDeck({ chordY: -2, waterY: -2.7, hintY: 49.3, portal: true, roadTags: { highway: 'trunk' } });
+  assert(hinted.authority === 'landmark-hint' && hinted.deckY === 49.3,
+    'a landmark deck over the chord must be the deck, at a portal too');
+  assert(hinted.clearanceM !== null && Math.abs(hinted.clearanceM - 52) < 0.01,
+    'the hinted deck reports its clearance over the water');
+  const lowHint = resolveProductionDeck({ chordY: 20, waterY: 0, hintY: 12, portal: false });
+  assert(lowHint.authority === 'chord' && lowHint.deckY === 20,
+    'a landmark deck under the chord does not lower it');
+  const drowned = resolveProductionDeck({ chordY: -2, waterY: -2.7, hintY: null, portal: false, roadTags: { highway: 'trunk' } });
+  assert(drowned.authority === 'water-clearance' && Math.abs(drowned.deckY - 7.3) < 0.01,
+    'a trunk chord in the water stands ten metres over it');
+  const lane = resolveProductionDeck({ chordY: 0.5, waterY: 0, hintY: null, portal: false, roadTags: { highway: 'residential' } });
+  assert(lane.authority === 'water-clearance' && Math.abs(lane.deckY - 4.5) < 0.01,
+    'a lane chord in the water stands four and a half metres over it');
+  const spanning = resolveProductionDeck({ chordY: 6, waterY: 0, hintY: null, portal: false, roadTags: { highway: 'primary' } });
+  assert(spanning.authority === 'chord' && spanning.deckY === 6 && spanning.clearanceM === 6,
+    'a chord already over the water keeps its height and reports the clearance it has');
+  const portal = resolveProductionDeck({ chordY: -2, waterY: -2.7, hintY: null, portal: true, roadTags: { highway: 'trunk' } });
+  assert(portal.authority === 'chord',
+    'the generic clearance keeps off the portals; the approach owns them');
+  const dry = resolveProductionDeck({ chordY: 3, waterY: null, hintY: null, portal: false });
+  assert(dry.authority === 'chord' && dry.clearanceM === null,
+    'no water, no clearance: the chord and nothing to measure it against');
+  const recordedDeck = resolveProductionCrossing({
+    ...productionCrossingBase, roadLayer: 1, roadTags: { bridge: 'yes' }, structureOutcome: 'bridge-deck',
+    deckAuthority: 'landmark-hint',
+  });
+  assert(recordedDeck.deckAuthority === 'landmark-hint'
+    && recordedDeck.evidence.some((e) => e.includes('deck by landmark-hint')),
+    'the record carries who decided the deck');
 
   const explicitProductionBridge = resolveProductionCrossing({
     ...productionCrossingBase,

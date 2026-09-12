@@ -115,7 +115,9 @@ import {
   productionCrossingFootprint,
   ProductionCrossingRegistry,
   resolveProductionCrossingIntent,
+  resolveProductionDeck,
   type CrossingStructureOutcome,
+  type DeckAuthority,
   type ProductionCrossingRecord,
 } from './substrate/crossing-authority';
 import {
@@ -7667,10 +7669,20 @@ function bridgeDeckHint(def: Landmark): ((x: number, z: number) => number | null
   if (!b || b.deckM === undefined) return null;
   const sts = (b.stations ?? []).map(([la, lo]) => toLocal(la, lo));
   const deckM = b.deckM;
-  // The water at the towers; the sea where the field has nothing yet.
-  let wy = 0, n = 0;
-  for (const [x, z] of sts) { const w = waterUnder(x, z); if (w !== null) { wy += w; n++; } }
-  const top = (n ? wy / n : -baseElev) + deckM;
+  // ── THE DATUM IS AUTHORED, NOT SAMPLED ──
+  //
+  // The first cut took the water at the towers from the live field, which
+  // makes the hint a function of WHAT HAS STREAMED as well as of position:
+  // each fragment built its own idea of the deck from whatever the hydro or
+  // the cover happened to say at that moment, and the fragments disagreed.
+  // Measured at the Normandie over two runs of the same build: the deck
+  // spread 15.6-54 m on one and 15.6-86.2 m on the next. The whole point of
+  // a hint is that every fragment reads the same height at a shared node,
+  // so the datum is the entry's own: `deckM` over `waterEleM` (the water's
+  // elevation above sea level, 0 for the tidal crossings, which is all of
+  // them so far). Deterministic, and the same number before and after any
+  // tile lands.
+  const top = deckM + (b.waterEleM ?? 0) - baseElev;
   if (sts.length < 2) return (x, z) => (waterUnder(x, z) === null ? null : top);
   const a = sts[0], c = sts[sts.length - 1];
   const len = Math.hypot(c[0] - a[0], c[1] - a[1]) || 1;
@@ -7682,12 +7694,10 @@ function bridgeDeckHint(def: Landmark): ((x: number, z: number) => number | null
     return top - g * beyond;
   };
 }
-/** Clearance over water a bridge gets with no entry to say: by class, and
- *  only where its chord would otherwise lie in the water (see the lift). */
-function waterClearFor(highway: string | undefined): number {
-  return highway === 'motorway' || highway === 'trunk' ? 10
-    : highway === 'primary' || highway === 'secondary' ? 7 : 4.5;
-}
+/** Who decided each bridge way's deck — read by the crossing registry when
+ *  it records the crossing, so the record says `deck by landmark-hint`
+ *  rather than transcribing a height it cannot explain. */
+const deckAuthorityByWay = new Map<string, DeckAuthority>();
 function bridgeLandmarkFor(a: BridgeAssembly, longest: number): BridgeFormSpec | null {
   let px = 0, pz = 0, n = 0;
   for (const w of a.ways.values()) for (const p of w.pts) { px += p[0]; pz += p[1]; n++; }
@@ -17075,14 +17085,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // away, the drivable surface equalled the terrain at every sample and
     // lay 0.7 m UNDER the resting water for a kilometre. Nothing supplied a
     // deck height over water — the layer lift wants a lower-layer road, the
-    // crossing registry transcribes the deck rather than deciding it, and
-    // the hydro field was never asked. So it is asked here, on the same
-    // two-pass cone as the flyover: a landmark entry's deck profile where
-    // one claims the way, else the water plus a clearance by class at every
-    // station whose chord would otherwise lie in the water. The generic
-    // rule is confined to that failure on purpose — an ordinary river bridge
-    // whose chord already spans bank to bank keeps it, and its approaches
-    // keep their welds.
+    // crossing registry transcribed the deck rather than deciding it, and
+    // the hydro field was never asked. So the CROSSING AUTHORITY is asked,
+    // station by station, on the same two-pass cone as the flyover: it
+    // takes a landmark entry's deck profile where one claims the way, else
+    // the water plus a clearance by class where the chord would otherwise
+    // lie in the water, else the chord — see resolveProductionDeck for the
+    // rules and why the generic one is confined to that failure. This is
+    // the profile CONSUMING the authority's answer, which is the migration
+    // the registry was built for; the number is recorded with the crossing.
     const bridgeEntry = mode === 'bridge' && n > 1
       ? bridgeEntryFor(wayTags?.['bridge:name'] ?? wayTags?.name ?? null, dense[n >> 1][0], dense[n >> 1][1]) : null;
     const deckHint = bridgeEntry ? bridgeDeckHint(bridgeEntry) : null;
@@ -17112,19 +17123,30 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         const [pax, paz] = dense[a], [pbx, pbz] = dense[b];
         const nearPortal = (x: number, z: number): boolean =>
           Math.hypot(x - pax, z - paz) < PORTAL_R || Math.hypot(x - pbx, z - pbz) < PORTAL_R;
-        // The water first. An entry's profile is taken at every station, the
-        // portals included — the neighbouring fragment reads the same
-        // function at the shared node, so the ends agree without a weld. The
-        // generic clearance keeps off the portals like the road scan below.
+        // The water first, decided by the authority at every station: the
+        // entry's profile is taken at the portals too — the neighbouring
+        // fragment reads the same function at the shared node, so the ends
+        // agree without a weld — and the generic clearance keeps off them
+        // like the road scan below.
         for (let i = a; i <= b; i++) {
           const [x, z] = dense[i];
-          let want: number | null = null;
-          if (deckHint) { want = deckHint(x, z); if (want !== null) liftSrc = 'hint'; }
-          else if (i > a && i < b && !nearPortal(x, z)) {
-            const wy = waterUnder(x, z);
-            if (wy !== null && prof[i] < wy + 1) { want = wy + waterClearFor(wayTags?.highway); liftSrc = 'water'; }
-          }
-          if (want !== null && want > prof[i]) prof[i] = want;
+          const portal = i === a || i === b || nearPortal(x, z);
+          const hintY = deckHint ? deckHint(x, z) : null;
+          // THE FIELD IS ASKED ONLY WHERE THE ANSWER CAN TURN ON IT. A hint
+          // over the chord decides on its own, and a portal is the
+          // approach's business either way — so neither needs the water.
+          // The first cut asked at every station of every bridge, and
+          // `sampleRestingSurface` is real work inside the six-millisecond
+          // build budget: measured on the structures fixture, the causeway's
+          // terrain mesh was missing at the probe's instant in two runs of
+          // five, against none in four of the control. This is the old call
+          // count exactly, with the authority still making the decision.
+          const waterY = portal || (hintY !== null && hintY > prof[i]) ? null : waterUnder(x, z);
+          const decided = resolveProductionDeck({ chordY: prof[i], waterY, hintY, roadTags: wayTags, portal });
+          if (decided.authority === 'chord') continue;
+          if (decided.authority === 'landmark-hint') liftSrc = 'hint';
+          else if (!liftSrc) liftSrc = 'water';
+          if (decided.deckY > prof[i]) prof[i] = decided.deckY;
         }
         for (let i = a + 1; i <= b && layer > 0; i++) {
           const [x0, z0] = dense[i - 1], [x1, z1] = dense[i];
@@ -17151,6 +17173,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           prof[i] = Math.max(prof[i], prof[i + 1] - gRamp * d);
         }
         for (let i = a; i <= b; i++) need = Math.max(need, prof[i] - chord[i]);
+      }
+      if (wayKey) {
+        deckAuthorityByWay.set(wayKey, liftSrc === 'hint' ? 'landmark-hint' : liftSrc === 'water' ? 'water-clearance' : 'chord');
       }
       if (need > 0) {
         // AND IT DOES NOT WELD DOWN. An anchor more than a metre under a lifted
@@ -21370,6 +21395,7 @@ function flushCulverts(t: HeightTile): void {
           waterSurfaceY: wet?.restingLevelM ?? null,
           availableClearanceM,
           structureOutcome,
+          deckAuthority: road.segment.wid ? deckAuthorityByWay.get(road.segment.wid) : undefined,
         });
         const crossingRevisionChanged =
           crossingAppliedRevision.get(crossingRecord.id) !== crossingRecord.revision;
@@ -30297,6 +30323,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // note about two lines up.
     bridgeSpans.length = 0;
     clearBridgeForms();
+    deckAuthorityByWay.clear();
     holeSince.clear(); shownOnce.clear();
     substrateTerrainCommits.clear();
     substrateTerrainRenderMeshes.clear();
