@@ -66,6 +66,10 @@ export interface Tradition {
   /** Roof forms by weight. building() draws one per building; 'flat' is the
    *  extrusion's cap. Sheds, halls and true blocks keep their typology. */
   roofs: Partial<Record<RoofForm, number>>;
+  /** Share of gabled and hipped roofs that carry a chimney stack — the
+   *  roofline's tell for a cold place with a hearth, and for a hot one
+   *  without. Read by building(); drawn in roof.ts. */
+  chimneys: number;
 }
 
 export type RoofForm = 'gabled' | 'hipped' | 'pyramidal' | 'skillion' | 'flat';
@@ -92,6 +96,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.22, frame: 0.4, mullion: 0.7, glassSky: 0.5, stringCourse: 0.7, cornice: 0.9, plinthM: 1.1, shutters: 0, balcony: 0.6, streaks: 0.4, dampM: 0.3, trim: 4, shutterCol: 4, shopfront: 0.75, eaveM: 0.4 },
     storeys: [5, 7],
     roofs: { hipped: 0.55, gabled: 0.15, flat: 0.3 },
+    chimneys: 0.9,
   },
   'ile-de-france': {
     key: 'ile-de-france',
@@ -104,6 +109,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.16, frame: 0.6, shutters: 0.6, trim: 0, shutterCol: 4, cornice: 0.35, plinthM: 0.4, shopfront: 0.3, balcony: 0.15, streaks: 0.5 },
     storeys: [2, 3],
     roofs: { gabled: 0.5, hipped: 0.35, flat: 0.15 },
+    chimneys: 0.85,
   },
   cape: {
     key: 'cape',
@@ -117,6 +123,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.1, frame: 0.75, mullion: 0.5, glassSky: 0.75, cornice: 0.2, plinthM: 0.3, shutters: 0, balcony: 0.35, streaks: 0.3, dampM: 0.3, trim: 0, shopfront: 0.3, eaveM: 0.5 },
     storeys: [1, 2],
     roofs: { flat: 0.45, hipped: 0.3, gabled: 0.2, skillion: 0.05 },
+    chimneys: 0.35,
   },
   'lesotho-highland': {
     key: 'lesotho-highland',
@@ -129,6 +136,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.3, frame: 0.3, mullion: 0.2, glassSky: 0.3, cornice: 0.1, plinthM: 0, shutters: 0, streaks: 0.5, dampM: 0.5, trim: 4, shopfront: 0.1, eaveM: 0.4 },
     storeys: [1, 1],
     roofs: { gabled: 0.55, hipped: 0.15, flat: 0.3 },
+    chimneys: 0.3,
   },
   karoo: {
     key: 'karoo',
@@ -141,6 +149,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.14, frame: 0.7, cornice: 0.25, plinthM: 0.35, shutters: 0.15, trim: 0, shutterCol: 2, shopfront: 0.25, eaveM: 0.6, streaks: 0.35 },
     storeys: [1, 1],
     roofs: { gabled: 0.6, hipped: 0.3, flat: 0.1 },
+    chimneys: 0.5,
   },
   'east-africa-savanna': {
     key: 'east-africa-savanna',
@@ -153,6 +162,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.2, frame: 0.4, cornice: 0.15, plinthM: 0.2, shutters: 0.2, trim: 3, shutterCol: 3, shopfront: 0.35, eaveM: 0.5, streaks: 0.6 },
     storeys: [1, 1],
     roofs: { gabled: 0.6, hipped: 0.3, flat: 0.1 },
+    chimneys: 0.05,
   },
   sahel: {
     key: 'sahel',
@@ -164,6 +174,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.3, frame: 0.2, cornice: 0, plinthM: 0.2, shutters: 0.35, trim: 3, shutterCol: 3, shopfront: 0.45, eaveM: 0, streaks: 0.7, dampM: 0.6, glassSky: 0.3 },
     storeys: [1, 3],
     roofs: { flat: 0.9, gabled: 0.05, skillion: 0.05 },
+    chimneys: 0.0,
   },
   'north-africa': {
     key: 'north-africa',
@@ -175,6 +186,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.32, frame: 0.25, cornice: 0.1, plinthM: 0.3, shutters: 0.4, trim: 4, shutterCol: 2, shopfront: 0.55, eaveM: 0, streaks: 0.8, dampM: 0.7, glassSky: 0.35, balcony: 0.35 },
     storeys: [2, 5],
     roofs: { flat: 0.95, skillion: 0.05 },
+    chimneys: 0.0,
   },
   mediterranean: {
     key: 'mediterranean',
@@ -184,6 +196,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.2, frame: 0.35, shutters: 0.85, trim: 1, shutterCol: 3, cornice: 0.3, plinthM: 0.5, balcony: 0.35, streaks: 0.6, shopfront: 0.4, mullion: 0.4 },
     storeys: [2, 3],
     roofs: { gabled: 0.6, hipped: 0.3, flat: 0.1 },
+    chimneys: 0.5,
   },
   alpine: {
     key: 'alpine',
@@ -196,6 +209,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.18, frame: 0.7, shutters: 0.7, trim: 0, shutterCol: 6, cornice: 0.5, eaveM: 0.9, balcony: 0.6, plinthM: 0.6, streaks: 0.3, mullion: 0.6 },
     storeys: [2, 3],
     roofs: { gabled: 0.9, hipped: 0.05, skillion: 0.05 },
+    chimneys: 0.9,
   },
   'swiss-mittelland': {
     key: 'swiss-mittelland',
@@ -208,6 +222,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.18, frame: 0.7, shutters: 0.55, trim: 0, shutterCol: 2, cornice: 0.45, eaveM: 0.7, plinthM: 0.4, balcony: 0.2, shopfront: 0.3 },
     storeys: [2, 3],
     roofs: { gabled: 0.5, hipped: 0.4, flat: 0.1 },
+    chimneys: 0.85,
   },
   netherlands: {
     key: 'netherlands',
@@ -220,6 +235,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.14, frame: 0.9, mullion: 0.85, trim: 0, stringCourse: 0.3, cornice: 0.4, plinthM: 0.3, shutters: 0.1, shutterCol: 2, shopfront: 0.45, glassSky: 0.55 },
     storeys: [2, 3],
     roofs: { gabled: 0.75, hipped: 0.15, flat: 0.1 },
+    chimneys: 0.9,
   },
   'british-isles': {
     key: 'british-isles',
@@ -232,6 +248,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.14, frame: 0.9, mullion: 0.9, trim: 0, stringCourse: 0.4, cornice: 0.35, plinthM: 0.3, shutters: 0, shopfront: 0.45, streaks: 0.55, dampM: 0.5 },
     storeys: [2, 2],
     roofs: { gabled: 0.7, hipped: 0.25, flat: 0.05 },
+    chimneys: 0.95,
   },
   nordic: {
     key: 'nordic',
@@ -244,6 +261,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.12, frame: 0.9, mullion: 0.75, trim: 0, cornice: 0.3, plinthM: 0.25, shutters: 0, eaveM: 0.5, streaks: 0.3 },
     storeys: [1, 2],
     roofs: { gabled: 0.9, hipped: 0.1 },
+    chimneys: 0.9,
   },
   'central-europe': {
     key: 'central-europe',
@@ -256,6 +274,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.16, frame: 0.7, shutters: 0.45, trim: 0, shutterCol: 2, cornice: 0.4, plinthM: 0.4, shopfront: 0.35, balcony: 0.15 },
     storeys: [2, 3],
     roofs: { gabled: 0.6, hipped: 0.3, flat: 0.1 },
+    chimneys: 0.85,
   },
   'california-coastal': {
     key: 'california-coastal',
@@ -269,6 +288,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.1, frame: 0.8, mullion: 0.7, trim: 0, shutters: 0.3, shutterCol: 7, cornice: 0.3, eaveM: 0.6, plinthM: 0.2, glassSky: 0.65, streaks: 0.25, balcony: 0.25 },
     storeys: [1, 2],
     roofs: { gabled: 0.55, hipped: 0.25, skillion: 0.1, flat: 0.1 },
+    chimneys: 0.45,
   },
   sierra: {
     key: 'sierra',
@@ -281,6 +301,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.12, frame: 0.8, mullion: 0.6, trim: 0, shutters: 0.2, shutterCol: 2, cornice: 0.35, eaveM: 0.7, plinthM: 0.3, streaks: 0.3 },
     storeys: [1, 2],
     roofs: { gabled: 0.8, skillion: 0.15, hipped: 0.05 },
+    chimneys: 0.7,
   },
   'southwest-desert': {
     key: 'southwest-desert',
@@ -292,6 +313,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.35, frame: 0.3, mullion: 0.3, trim: 5, shutters: 0.1, shutterCol: 3, cornice: 0, plinthM: 0, eaveM: 0, streaks: 0.4, dampM: 0.2, glassSky: 0.35 },
     storeys: [1, 1],
     roofs: { flat: 0.8, gabled: 0.15, skillion: 0.05 },
+    chimneys: 0.35,
   },
   'us-general': {
     key: 'us-general',
@@ -304,6 +326,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.12, frame: 0.8, mullion: 0.7, trim: 0, shutters: 0.4, shutterCol: 7, cornice: 0.3, eaveM: 0.5, plinthM: 0.25, streaks: 0.3 },
     storeys: [1, 2],
     roofs: { gabled: 0.6, hipped: 0.3, flat: 0.1 },
+    chimneys: 0.7,
   },
   'andes-altiplano': {
     key: 'andes-altiplano',
@@ -317,6 +340,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.4, frame: 0.25, mullion: 0.2, trim: 5, shutters: 0, cornice: 0, plinthM: 0, eaveM: 0.4, streaks: 0.5, dampM: 0.5, glassSky: 0.3 },
     storeys: [1, 1],
     roofs: { gabled: 0.6, flat: 0.3, skillion: 0.1 },
+    chimneys: 0.3,
   },
   amazon: {
     key: 'amazon',
@@ -329,6 +353,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.18, frame: 0.6, trim: 0, shutters: 0.4, shutterCol: 2, cornice: 0.2, plinthM: 0.3, balcony: 0.25, streaks: 0.75, dampM: 0.7, shopfront: 0.5, eaveM: 0.5 },
     storeys: [1, 2],
     roofs: { gabled: 0.5, hipped: 0.3, flat: 0.2 },
+    chimneys: 0.05,
   },
   'bengal-delta': {
     key: 'bengal-delta',
@@ -340,6 +365,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.25, frame: 0.4, trim: 1, shutters: 0.25, shutterCol: 2, cornice: 0.3, plinthM: 0.4, balcony: 0.5, streaks: 0.9, dampM: 0.9, shopfront: 0.55, eaveM: 0.3 },
     storeys: [1, 3],
     roofs: { flat: 0.7, gabled: 0.2, hipped: 0.1 },
+    chimneys: 0.05,
   },
   australia: {
     key: 'australia',
@@ -352,6 +378,7 @@ export const TRADITIONS: Record<string, Tradition> = {
       revealM: 0.1, frame: 0.75, mullion: 0.6, trim: 0, shutters: 0, cornice: 0.4, eaveM: 0.8, plinthM: 0.25, balcony: 0.3, streaks: 0.3, glassSky: 0.6 },
     storeys: [1, 1],
     roofs: { hipped: 0.5, gabled: 0.4, skillion: 0.1 },
+    chimneys: 0.5,
   },
 };
 

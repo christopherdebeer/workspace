@@ -2362,6 +2362,23 @@ not fourteen**: a cap is exactly level, and the first cut's 0.97 drew a Cape
 skillion at eight degrees as felt. No ridge line yet — a fragment cannot
 know where its plane ends, and the ridge would be a fifth attribute.
 
+**THE ROOFLINE: A RIDGE COURSE AND A CHIMNEY.** A ridge was two planes
+meeting on a line, and from the street that line was whatever the two
+slopes' shading did; `roofGeo` lays a course of ridge tiles along it now — a
+narrow flat top, lit square to a high sun so it reads lighter than either
+slope, with skirts steeper than the roof — on every gable and hip, none on a
+pyramid. And a stack: `chimneyGeo` (roof.ts, on `roofBox`, the oriented box
+`roofGeo` itself is built on, so it refuses where the roof refused) stands
+one on the ridge a metre in from the gable end, two on a plan over 160 m²,
+buried to half the ridge so it meets the slope at any pitch. `Tradition.chimneys`
+is the share of pitched roofs that carry one — the Alps and Britain nine in
+ten, the Sahel none — drawn off the id by a constant nothing else uses.
+**The stack is its own piece with `aGram` −1, the shader's BLANK wall**: a
+chimney is 0.64 m wide, the bay grid falls across it however it falls, and
+the first thought — put it in the roof piece — would have drawn a door on it
+somewhere in every town. Blank keeps the cornice band at its top, which on a
+stack is its cap. The lab has a CHIMNEY toggle.
+
 **Photographed** (`scratchpad/facade-fid.mjs` and `roof-fid.mjs`, the lab,
 `/tmp/drive-tools/facade-fid/`; `building-survey.mjs` on the two captures
 against `/tmp/drive-tools/bldg-fix2/`): the Camps Bay block at b1 went from

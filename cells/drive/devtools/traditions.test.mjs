@@ -163,6 +163,10 @@ for (const [name, lat, lon, want] of PLACES) {
   // The draw reproduces the weights: ten thousand draws for the Cape.
   const cape = TRADITIONS.cape, n = 10000, seen = {};
   for (let i = 0; i < n; i++) { const f = roofFormFor(cape, (i + 0.5) / n); seen[f] = (seen[f] ?? 0) + 1; }
+  ok('every entry states a chimney share', entries.every((t) => typeof t.chimneys === 'number' && t.chimneys >= 0 && t.chimneys <= 1),
+    entries.filter((t) => !(typeof t.chimneys === 'number' && t.chimneys >= 0 && t.chimneys <= 1)).map((t) => t.key));
+  ok('…and the Alps have hearths where the Sahel has none', TRADITIONS.alpine.chimneys > 0.8 && TRADITIONS.sahel.chimneys < 0.05,
+    [TRADITIONS.alpine.chimneys, TRADITIONS.sahel.chimneys]);
   const total = Object.values(cape.roofs).reduce((a, b) => a + b, 0);
   const off = Object.entries(cape.roofs).map(([f, w]) => Math.abs((seen[f] ?? 0) / n - w / total)).reduce((a, b) => Math.max(a, b), 0);
   ok('the draw lands on each form in its stated share (Cape, ten thousand draws)', off < 0.002, { seen, off });

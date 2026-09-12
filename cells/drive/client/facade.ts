@@ -366,7 +366,11 @@ export function facade(mat: THREE.Material): void {
           // What this bay is. The draws are per bay from the bay's own hash so
           // a building is the same building from every side and every frame;
           // the shares are the tradition's.
-          float hasOpen = step(r, gC.z);
+          // aGram -1 is a BLANK wall — a chimney stack, which must carry no
+          // door however the bay grid falls across it — and still wears the
+          // cornice at its top, which on a stack is its cap.
+          float blank = step(vGram, -0.5);
+          float hasOpen = step(r, gC.z) * (1.0 - blank);
           float isDoor = ground * step(r, gC.y);
           float isShop = ground * (1.0 - isDoor) * step(fah(idc + vec2(5.9, 12.1)), gH.z);
           float hasBalc = (1.0 - ground) * step(fah(idc + vec2(9.3, 14.7)), gG.y);
@@ -552,7 +556,7 @@ export function facade(mat: THREE.Material): void {
           float vine = smoothstep(0.6, 0.95, fah(vec2(colv, 17.3)))
             * exp(-vFacH * 0.13)
             * (0.5 + 0.5 * fah(vec2(colv, floor(vFacH * 0.75))));
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.11, 0.21, 0.09), clamp(vine * gD.z, 0.0, 0.8));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.11, 0.21, 0.09), clamp(vine * gD.z, 0.0, 0.8) * (1.0 - blank));
           // ── MARKS ──
           //
           // Where someone stood. Everything about the placement is a rule

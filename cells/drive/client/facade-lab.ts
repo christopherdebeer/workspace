@@ -5,7 +5,7 @@ import { roofFx } from './roof-fx';
 import { TRADITIONS, roofFormFor, traditionCulture, traditionIndex, type Tradition } from './traditions';
 import { createDials, type DialValues } from './lab-dials';
 import { clamp } from './num';
-import { roofGeo } from './roof';
+import { chimneyGeo, roofGeo } from './roof';
 import { makeCanvasTex, wallTextures } from './wall-tex';
 
 /**
@@ -170,6 +170,8 @@ export async function startFacadeLab(): Promise<void> {
       { id: 'cultureRidge', label: 'CULTURE RIDGE', kind: 'toggle', value: true },
       { id: 'ridge', label: 'RIDGE m', kind: 'range', min: 0.4, max: 8, step: 0.1, value: 2.2 },
       { id: 'terrace', label: 'TERRACE', kind: 'range', min: 1, max: 8, step: 1, value: 1 },
+      // A stack on the ridge, as building() draws on the tradition's share.
+      { id: 'chimney', label: 'CHIMNEY', kind: 'toggle', value: true },
       { id: 'sGram', label: 'THE OPENINGS', kind: 'section' },
       // ON: the wall reads its tradition's ROW of the atlas texture through
       // aGram, exactly as a building in the world does, and the uniforms are
@@ -264,7 +266,7 @@ export async function startFacadeLab(): Promise<void> {
   let builtKey = '';
   let roofRefused = false;
   const rebuild = (w: number, d: number, height: number, plinth: number, aBase: number, gram: number,
-    roofShape: string, ridge: number, terrace: number): void => {
+    roofShape: string, ridge: number, terrace: number, chimney: boolean): void => {
     for (const m of group.children) (m as THREE.Mesh).geometry.dispose();
     group.clear();
     roofRefused = false;
@@ -279,6 +281,10 @@ export async function startFacadeLab(): Promise<void> {
         const rg = roofGeo(pts, roofShape, height, ridge);
         if (rg) group.add(new THREE.Mesh(withBase(rg, aBase, gram, height), [roofMat, wallMat]));
         else roofRefused = true;
+        if (rg && chimney) {
+          const cg = chimneyGeo(pts, roofShape, height, ridge, w * d > 160 ? 2 : 1);
+          if (cg) group.add(new THREE.Mesh(withBase(cg, aBase, -1, cg.userData.top as number), [roofMat, wallMat]));
+        }
       }
     }
   };
@@ -350,8 +356,9 @@ export async function startFacadeLab(): Promise<void> {
     const aBase = bool(v, 'baseGround') ? 0 : -plinth;
     const ridge = bool(v, 'cultureRidge') ? clamp((Math.min(w, d) / 2) * culture.pitch, 1.2, 7) : num(v, 'ridge');
     const terrace = Math.round(num(v, 'terrace'));
-    const key = [w, d, height, plinth, aBase, gram, roofShape, ridge, terrace].join('|');
-    if (key !== builtKey) { builtKey = key; rebuild(w, d, height, plinth, aBase, gram, roofShape, ridge, terrace); }
+    const chimney = bool(v, 'chimney');
+    const key = [w, d, height, plinth, aBase, gram, roofShape, ridge, terrace, chimney].join('|');
+    if (key !== builtKey) { builtKey = key; rebuild(w, d, height, plinth, aBase, gram, roofShape, ridge, terrace, chimney); }
     // The light. At night the sun is the moon and the sky is a floor; the
     // game's skylight lift (bldSkylit) is not reproduced, so a night wall here
     // reads darker than in the world — the lit bays are what this is for.

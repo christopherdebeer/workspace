@@ -22,7 +22,7 @@ import { coastKm } from './coast';
 import { clamp } from './num';
 import { mulberry32, type Rng } from './rng';
 import { cracks, makeCanvasTex, moss, speckle, wallTextures } from './wall-tex';
-import { roofGeo } from './roof';
+import { chimneyGeo, roofGeo } from './roof';
 import { morphology, plan as footprintPlan } from './morphology';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
 import {
@@ -21649,7 +21649,7 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   const forceRuin = kind === 'ruins' || kind === 'collapsed' || kind === 'construction';
   // Intact buildings hand their extrusion to the tile batch instead of
   // standing up a mesh each — see flushBuildings for why.
-  const intactSink = (paint: number, roof?: string, ridge?: number) =>
+  const intactSink = (paint: number, roof?: string, ridge?: number, chim = 0) =>
     (geo: THREE.BufferGeometry, base: number, top: number): void => {
       const batch = openBldBatch();
       const arr = batch.intact.get(paint) ?? [];
@@ -21658,6 +21658,12 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
       if (roof) {
         const rg = roofGeo(pts, roof, top, ridge);
         if (rg) arr.push({ geo: rg, base, mark, gram, top, pts });
+        // The stack is its own piece: gram -1 is the façade shader's BLANK
+        // wall (no openings, no ivy, no marks), and its aTop is the cap.
+        if (rg && chim > 0) {
+          const cg = chimneyGeo(pts, roof, top, ridge, chim);
+          if (cg) arr.push({ geo: cg, base, mark: 0, gram: -1, top: cg.userData.top as number, pts });
+        }
       }
       batch.intact.set(paint, arr);
     };
@@ -21767,10 +21773,17 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // worked out which this is. `roof:levels` still wins where it exists.
   const ridgeM = clamp(parseFloat(tags['roof:levels'] ?? '') * 2.6 || 0, 0, 9)
     || clamp((footprintSize(pts).short / 2) * look.pitch, 1.2, 7);
+  // ── THE CHIMNEY IS THE TRADITION'S ──
+  // A stack on the tradition's share of pitched roofs, drawn off the id by a
+  // constant nothing else uses; a long plan carries two. A hearth is what a
+  // cold country's roofline says, and its absence what a hot one's does.
+  const tradC = look.tradition ? TRADITIONS[look.tradition] : undefined;
+  const chimN = tradC && (roofShape === 'gabled' || roofShape === 'hipped') && unitN(id, 11) < tradC.chimneys
+    ? (footprintSize(pts).area > 160 ? 2 : 1) : 0;
   if (!lineOn && !forceRuin && (height > 24 || r() > 0.42 || TYPO_COL[kind] !== undefined || mapped !== null)) {
     buildStats.intact++;
     noteMass(height, roofShape);
-    polygon(pts, B_MATS[0], 0.9, height, 'solid', intactSink(paint, roofShape, ridgeM));
+    polygon(pts, B_MATS[0], 0.9, height, 'solid', intactSink(paint, roofShape, ridgeM, chimN));
     // A house of worship grows its tower: a square campanile off the ring's
     // first corner, batched like any other footprint, wearing a pyramid.
     if ((kind === 'church' || kind === 'cathedral' || kind === 'chapel'
