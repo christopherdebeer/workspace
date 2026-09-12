@@ -97,6 +97,8 @@ export const SWITCHES = [
     note: 'the road/terrain/water substrate (SUBSTRATE-MIGRATION.md): legacy = the pre-substrate contact with shadow diagnostics, the rollback; shadow = legacy contact, substrate observed; render = the substrate draws the water too. It was read round the typed reader and so was in no list until it was declared here' },
   { id: 'hydroground', kind: 'number', marks: ['bench'], fallback: '150 m round the water',
     note: 'metres round the water within which a moved ground raster rebuilds the hydro field; 0 compares the whole raster exactly, which is the old behaviour and the A/B' },
+  { id: 'hydroeps', kind: 'number', marks: ['bench'], fallback: '2 cm of bed',
+    note: 'metres the ground must move, inside the band, before the hydro field is rebuilt; 0 demands exact float equality, which is the old behaviour and the A/B' },
   { id: 'vegstep', kind: 'number', marks: ['bench'], fallback: 'a sixth of the frame, 5 ms at least',
     note: 'milliseconds of a frame one slice of the tree refresh may take; 0 runs the whole refresh in one call, the old behaviour and the A/B' },
   { id: 'farpark', kind: 'number', marks: ['bench'], fallback: '48 MB of parked shell',

@@ -3213,6 +3213,25 @@ function sameRaster(a: Float32Array, b: Float32Array): boolean {
  * never arrived keeps the exact comparison.
  */
 const HYDRO_GROUND_R = Math.max(0, qsNum('hydroground', 150));
+/**
+ * ── AND IT READS THE GROUND IN METRES, NOT IN FLOATS ──
+ *
+ * The band above narrows WHERE the comparison looks; this narrows how finely.
+ * The skip asked for exact float equality, and `sampleHeight` carries every
+ * carve, seat and weld the roads do — so a junction rebuild that moved a
+ * riverbank texel by a millimetre rebuilt the field. Measured on the two
+ * fixtures with the reasons counted: of 27 feeds at the Senqu ford 6 built on
+ * moved ground and of 49 at Simon's Town 24 did, while the body cascade never
+ * fired at all. The water reads the ground as a bed depth and a waterline, in
+ * metres; two centimetres is under the field's own vertical resolution and an
+ * order below anything the surface shows.
+ *
+ * THE STORED RASTER STAYS THE ONE THAT LAST BUILT, which is what makes a
+ * tolerance safe: the drift is measured from the field's own input, not from
+ * the previous feed, so a bank creeping a centimetre per rebuild is caught on
+ * the rebuild that takes it past the tolerance rather than never.
+ */
+const HYDRO_GROUND_EPS = Math.max(0, qsNum('hydroeps', 0.02));
 let hydroBandA = new Uint8Array(0), hydroBandB = new Uint8Array(0);
 interface WetBox { minX: number; maxX: number; minZ: number; maxZ: number }
 function hydroWetBand(t: HeightTile, boxes: readonly WetBox[], ocean: OceanCoverage, EN: number): Uint8Array | null {
@@ -3279,7 +3298,7 @@ function rasterMoved(a: Float32Array, b: Float32Array, band: Uint8Array | null):
   for (let i = 0; i < a.length; i++) {
     if (a[i] === b[i]) continue;
     any = true;
-    if (!band || band[i]) return { any: true, wet: true };
+    if ((!band || band[i]) && Math.abs(a[i] - b[i]) > HYDRO_GROUND_EPS) return { any: true, wet: true };
   }
   return { any, wet: false };
 }
