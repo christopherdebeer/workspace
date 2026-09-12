@@ -2474,6 +2474,24 @@ before. `?vegstep=N` forces a slice of exactly N ms (0 is the whole refresh
 in one call, the A/B), because the harness's two-second frames run a refresh
 whole under the frame-scaled rule and could not otherwise show a slice.
 
+**Measured** (`scratchpad/vegjob-ab.mjs`, the Camps Bay fixture, a minute
+settled then forty seconds driving, `vegstep=0` against `vegstep=5`; the
+harness's frames are seconds so the whole refresh is cheaper there than on
+the phone, and the ratio is the number):
+
+| | whole (`vegstep=0`) | sliced (`vegstep=5`) |
+|---|---|---|
+| `treeRefresh` per call, mean / max | 13.5 / 55 ms (a call is a refresh) | **5.7 / 11 ms** (a call is a slice) |
+| stand forms within 300 m | bare 5 · columnar 3 · round 8 | the same |
+
+Two things the first sliced run taught: **the tiers' counts are the job's
+until the commit** — `__ez().tris` read 0 mid-refresh because it sums
+`t.n × tris` and the generator had zeroed them at its start; the slots and
+the counts are the job's own now and land with the meshes — and **the phase
+marks measure from the last mark**, so across a frame gap they billed the
+gap to whichever phase was running (ezGather read 4.5 s a call); a slice
+re-arms the clock at its start.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.

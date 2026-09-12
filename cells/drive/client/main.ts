@@ -11365,7 +11365,12 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   const ezVariant = new WeakMap<PlacedVegSite, number>();
   const ezNeed: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
   const ezNeedNear: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
-  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) { t.n = 0; t.nNear = 0; t.nFar = 0; }
+  // The tiers' counts are the job's until the commit: a probe reading them
+  // between two slices would see a refresh half done (the harness read
+  // __ez().tris as 0 for exactly that reason), and the slot a tree takes is
+  // the job's own counter, not the tier's live one.
+  const tierN = new Map<EzTier, { n: number; nNear: number; nFar: number }>();
+  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) tierN.set(t, { n: 0, nNear: 0, nFar: 0 });
   const placed: Array<Record<string, number | string>> = [];
   vegMark('ring');
   // ── THE TREES ARE ADMITTED BY DISTANCE, NOT BY CELL ──
@@ -11492,7 +11497,8 @@ function* vegRefreshSteps(): Generator<void, void, void> {
           vegDummy.updateMatrix();
           const casts = d2v < shadowSpan * shadowSpan;
           const mesh = casts ? tier.near : tier.far;
-          const slot = casts ? tier.nNear++ : tier.nFar++;
+          const tn = tierN.get(tier)!;
+          const slot = casts ? tn.nNear++ : tn.nFar++;
           vegDummy.matrix.toArray(stg(mesh).m, slot * 16);
           // Distance over the ADMITTED edge, not the plant range: the budget's
           // edge is where a tree vanishes, so that is where it must fade.
@@ -11506,7 +11512,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
             swardCol.setRGB(v.c.r + (tr - v.c.r) * mixv, v.c.g + (tg - v.c.g) * mixv, v.c.b + (tb - v.c.b) * mixv);
             swardCol.toArray(stg(mesh).c, slot * 3);
           } else v.c.toArray(stg(mesh).c, slot * 3);
-          tier.n++;
+          tn.n++;
           ezCounts[fam]++;
           if (placed.length < 600) placed.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +formSy.toFixed(2), sw: +formSw.toFixed(2), variant: vi, H: +H.toFixed(2), casts: casts ? 1 : 0 });
           activeRoles[v.role]++;
@@ -11585,7 +11591,11 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     commit(vegMeshes[k], counts[k], true);
   }
   commit(trunks, trunkN, false);
-  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) { commit(t.near, t.nNear, true); commit(t.far, t.nFar, true); }
+  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) {
+    const tn = tierN.get(t)!;
+    t.n = tn.n; t.nNear = tn.nNear; t.nFar = tn.nFar;
+    commit(t.near, t.nNear, true); commit(t.far, t.nFar, true);
+  }
   ezPlaced = placed;
   vegMark('upload');
   vegActiveRoles = activeRoles;
@@ -11630,6 +11640,10 @@ function stepVegRefresh(): boolean {
   const budget = VEG_STEP_FORCED === 0 ? Infinity
     : VEG_STEP_FORCED > 0 ? VEG_STEP_FORCED : clamp(frameMs / 6, VEG_STEP_MS, 400);
   const t0 = performance.now();
+  // The phase marks measure from the last mark; across a frame gap that
+  // would bill the gap to whichever phase was running, so a slice re-arms
+  // the clock at its start and the phases sum only the time inside slices.
+  vegPhaseAt = t0;
   vegSeedLeft = VEG_SEED_BUDGET ? Math.max(0, Math.min(VEG_SEED_MS, budget) - frameHeavyMs()) : Infinity;
   let done = false;
   while (performance.now() - t0 < budget) { if (vegJob.next().done) { done = true; break; } }
