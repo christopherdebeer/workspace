@@ -9031,11 +9031,12 @@ the raster.
 - **What a 3.3 m formation costs the plain lattice is unmeasured.** Past
   `REFINE_R` the corridor is the old grid carve, whose lattice unit is the
   terrain cell (~21 m), and `rasterizeCut`'s own note records a 3 m footpath
-  excavating a 40 m shelf. A railway is only slightly narrower than the
-  narrowest carving road (`ROAD_W` floors at 5 m) and, unlike a footpath, has a
-  solved deck rather than contaminated drape heights — so it is in the same
-  class as a lane, not the class the track exclusion was written for. Said here
-  rather than asserted: nothing has been photographed at that range.
+  excavating a 40 m shelf. A Cape-gauge formation is 3.32 m against the
+  narrowest road that carves at all — `ROAD_W`'s `service` at 4.5 m — and,
+  unlike a footpath, it has a solved deck rather than contaminated drape
+  heights, so it is in the same class as a back lane rather than the class the
+  track exclusion was written for. Said here rather than asserted: nothing has
+  been photographed at that range.
 
 ### The instrument
 
