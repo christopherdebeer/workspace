@@ -217,6 +217,8 @@ export const SWITCHES = [
     note: 'ezedge=1 lets a leaf card seen edge-on draw its old bright line' },
   { id: 'imu', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'imu=0 drives real GPS without the gyro' },
+  { id: 'railgrade', kind: 'toggle', marks: ['legacy'], fallback: 'on',
+    note: 'railgrade=0 drapes a railway over the ground instead of engineering it' },
 ] as const satisfies readonly SwitchDef[];
 
 /** Every declared id, as a type. An undeclared read does not compile, which is

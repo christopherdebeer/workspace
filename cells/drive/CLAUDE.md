@@ -216,6 +216,8 @@ Nothing here is fast. Budget for it.
 | `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
 | `node devtools/switches.test.mjs` | the table cannot rot in either direction | instant |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
+| `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
+| `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
 | `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
 | `node devtools/menu-survey.mjs` | every menu screen photographed, SETTINGS scrolled through | ~2min |
 | `node devtools/offline-ground.test.mjs` | and finds ground when it does | ~3min |
@@ -8890,3 +8892,175 @@ real one steps with the roof's own levels; nothing drains, so there are no
 outlets or upstands at a gutter; the plant is boxes, not plant; and `roof:shape`
 values this game does not model (dome, onion, gambrel — a tenth of a percent of
 the stock) take the flat treatment, which is what they already wore.
+
+## A railway is engineered, and `drivable` was the one flag saying so
+
+Reported from the seat after the ballast and sleepers shipped: *"I've taken a
+look at rails live (minor: sleeper gaps can be 4x) and it seems like railways
+are not participating in the road ribbon's solved grading — a special case for
+rail, far more straight, and thereby likely to be cutting or raised on bridges
+etc."* Both halves are right, and the second is one flag.
+
+### `drivable` was five jobs
+
+Every railway in the world was drawn as
+`ribbon(pts, w, mat, lift, /* drivable */ false, /* mode */ 'none', …)`, which
+drapes a way over the heightfield exactly as a footpath is draped. It was not
+an oversight about railways: `drivable` gates FIVE separate things and there
+was no way to ask for some of them.
+
+| job | what reads it | a railway wants it? |
+|---|---|---|
+| the solved longitudinal profile | `hintEl`, `flat`, `solveChainLocal`, `ruleGrade` | **yes** |
+| `roadGrid` | the physics surface, `surfaceAt`, `wayAhead`, `juncNodeGrid`, the router, `__toroad` | **never** |
+| `segsOf` → `rasterizeCut` | the corridor carve and the kernel's break lines | **yes** |
+| `dirtyTerrainAround` | the tiles rebuild so the corridor shows | **yes** |
+| (with `!track`) kerbs, apron, junction boxes, give-way bars, paint | the carriageway's dressing | no |
+
+So the split is `engineered = drivable || railway`, and the second row is the
+one line that keeps a railway out of the game: `addSeg(drivable ? roadGrid :
+railGrid, s)`. **`roadGrid` is not a spatial index, it is the answer to "what
+is under the wheels"** — a segment filed there is a segment the truck drives on
+and the autopilot plans down.
+
+`railGrid` exists for the two things the earthworks need that a bare list
+cannot do: `rebuildCut` has to re-raster every formation when the lattice
+changes under it (a world hop, a terrain dial) or every railway corridor in the
+world is silently dropped the first time it does; and a rail fragment's END
+WELD has to find its own kind — OSM chops a line at every tile edge and every
+tag change, and a road's deck at a shared node is a level crossing or a bridge,
+neither of which is a reason for the track to take the tarmac's height.
+`deckAnchorAt` and `tiltAnchorAt` take the grid now.
+
+**The one thing NOT derived from `engineered` is the hint lookup.** The chain
+planner chains DRIVABLE ways, so a railway asking `hintAt` would find a road's
+profile within two and a half metres and take a carriageway's deck at every
+level crossing there is. A rail fragment solves locally (`solveChainLocal`) and
+welds to its own kind.
+
+### The ruling grade is the whole difference, and so is the deviation budget
+
+Steel on steel has about a tenth of the adhesion of rubber on tarmac, so where
+a road climbs at ten or fifteen per cent a main line will not exceed two —
+which is *why* a railway cuts through what a road goes over. `RailSpec` states
+it per kind (`gradeMax`): a funicular 0.5 (a cable, not adhesion), narrow gauge
+and miniature 0.05, light rail and heritage 0.04, a siding or an industrial
+branch 0.035, **a main line 0.022**. And `graded` says which kinds get a
+formation at all — every kind but `tram`, whose rails are laid in a carriageway
+that already has a profile and whose corridor would be a cutting down a city
+street.
+
+**AND FIVE METRES IS A ROAD'S DEVIATION BUDGET.** `DEV` in the grade clamp is
+the number that decides who wins when the ruling grade and the ground disagree,
+and its own note says why it is small: so that a San Francisco street at 20%
+stays a street instead of becoming a viaduct through the neighbourhood. That is
+right for a road, which mostly follows the ground. A railway is the opposite
+object — straying from the ground is what it IS — and under a five-metre budget
+the 2.2% clamp simply loses every argument and the track goes back to being
+draped. `DEV` is **24 m for rail**. The grade line's smoothing window goes with
+it (±16 stations, about ±200 m, against a road's ±8): a road's gradient
+genuinely changes over a couple of hundred metres and a main line's does not.
+
+### Measured at Glencairn
+
+`devtools/rail-grade.mjs`, `at-glencairn` (four ways of the PRASA Southern Line,
+no network at all so the answer is the same every run), three-signal settle gate
+including the terrain build count. **The A/B is the SWITCH** (`?railgrade=0`),
+not a pinned revision — both columns come from the same bundle and the only
+difference is the rule, which a `rev` cannot promise once a change lives in
+three files.
+
+| | `railgrade=0` (draped) | engineered |
+|---|---|---|
+| rail segments with a solved deck | **0** | **190** |
+| of them cutting / embankment | — | **80 / 46** |
+| mean \|deck − natural ground\| | 0 by construction | **2.05 m** |
+| worst cutting / embankment | — | 24.2 m / 3.52 m |
+| drawn mesh against the deck, mean | — | **0.51 m** |
+| corridor strips in the carve | 4,776 | 5,248 |
+| terrain triangles | 569,260 | 575,177 |
+| roadCells (the control within the frame) | 1,074 | **1,074** |
+
+…and the gradient, which is the actual argument. A draped railway carries the
+ground's gradient exactly, because it IS the ground plus a lift — so the ground
+column is also the control's answer and needs no second run:
+
+| fragment | length | deck grade p95 / max | the ground it crosses, p95 / max |
+|---|---|---|---|
+| 10 | **1,229 m** | **1.8% / 2.6%** | **66.4% / 144.3%** |
+| 9 | 258 m | 0.0% / 0.0% | 5.9% / 6.0% |
+| 30 | 212 m | 2.6% / 2.6% | 6.3% / 6.3% |
+
+2.6% is `gLim` exactly (0.022 × 1.2), so the longest fragment is running at its
+ruling grade and nowhere near it otherwise. Read the profile in order rather
+than the worst rows — `__railgrade().profiles` chains each fragment by its own
+endpoints — and the shape is the point: over the last three hundred metres the
+DEM swings **−26.0 → −12.2 → −13.9 → −29.1** between samples thirty metres
+apart, and the deck holds −25.9 through all of it. Draped, the track rode that.
+
+**The 24.2 m "cutting" is that same DEM noise, not a hill**: its station reads
+−2.39 with neighbours at −12 to −26. The honest summary is the mean (2.05 m)
+and the gradient table; a worst-case over a coastal z14 tile is a measurement of
+the raster.
+
+### Three things that follow, and one that is left under the hill
+
+- **A DEEP CUTTING BECOMES HIDDEN TRACK, by the road rule.** `elevMin[i] −
+  prof[i] > TUNNEL_H + 0.6` sets `tn` — no carve, the way left under intact
+  ground — and it exists so our own arithmetic cannot dig a crater through a
+  town. With a 2.2% ruling it fires far more often on rail than on road: 8 of
+  190 segments here. That is the right silent failure and it is visible in
+  `__railgrade().tn`, not dressed up as a feature.
+- **A RAIL TUNNEL TAKES THE EXEMPTION AND NO BORE.** `tunnelTube` builds a road
+  tunnel — a `TUNNEL_H` shell sized for a carriageway — and a 3.3 m formation
+  inside a 5 m road bore is neither thing. A `railway=* tunnel=yes` way now
+  takes `mode: 'tunnel'`, runs on its portal-to-portal chord under the hill and
+  is simply not seen. **Before this it was drawn on the surface, over the top of
+  the mountain it is tunnelling through** — the subway filter was the only
+  tunnel gate in `railSpec`, so every main-line bore in the world was painted on
+  the hillside above itself.
+- **AND THE FORTH BRIDGE CAN FINALLY FIRE.** `noteBridgeForm` — what registers a
+  deck fragment with the bridge ASSEMBLY, so a landmark entry can stand its
+  towers, cantilevers or truss up — hung off `infraRecipe`, and `infraRecipe`
+  was gated on `drivable`. The `forth-bridge` entry has therefore never once
+  fired: the Forth Bridge carries no road. **Every famous truss and cantilever
+  on earth is a railway bridge**, so that gate was excluding the family it was
+  written for. It is `engineered && !track` now. A railway still gets no apron —
+  no kerbs, fascia, soffit or piers, all of which are gated on `apronOn` where
+  they are built — only the recipe and the assembly.
+- **What a 3.3 m formation costs the plain lattice is unmeasured.** Past
+  `REFINE_R` the corridor is the old grid carve, whose lattice unit is the
+  terrain cell (~21 m), and `rasterizeCut`'s own note records a 3 m footpath
+  excavating a 40 m shelf. A railway is only slightly narrower than the
+  narrowest carving road (`ROAD_W` floors at 5 m) and, unlike a footpath, has a
+  solved deck rather than contaminated drape heights — so it is in the same
+  class as a lane, not the class the track exclusion was written for. Said here
+  rather than asserted: nothing has been photographed at that range.
+
+### The instrument
+
+`__railgrade(r)` is the probe the question needed, and it needs three numbers at
+a station that nothing else reported together: the solved DECK (`railGrid`'s own
+`ya`), the NATURAL ground (the height raster — the corridor lives in the terrain
+MESH, so the raster is still the untouched hillside) and the DRAWN ground
+(`meshSurfaceAt`). Deck minus natural is the cutting or the bank; drawn minus
+deck says whether the carve actually reached the mesh rather than merely being
+asked for. It also chains each fragment into an ORDERED profile with its
+gradient statistics, because sorted by depth a cutting and an embankment two
+kilometres apart sit next to each other and the SHAPE is invisible.
+
+`?railgrade=0` is the exact A/B and `devtools/rail-grade.mjs` drives it, one
+variant per process.
+
+### And the sleeper gaps really were 4×
+
+The other half of the report, and it was one line of the canvas. The first cut
+drew a 0.34 m sleeper with a 0.17 m shadow, so 0.51 m of a 0.65 m pitch was dark
+and the pale ballast between was 3.4 of 16 canvas pixels — **twenty-two per
+cent**. A feature that thin on that pitch beats against the screen's own grid
+under minification and what survives is every second or every fourth gap, which
+the eye reads as sleepers laid four times too far apart. A real sleeper is
+0.25 m on a 0.65 m pitch: **the gap is about sixty per cent of a railway**, and
+drawing the bars fat inverts the thing that makes track read as track. 0.24 m
+with a 0.05 m hairline shadow leaves 55% pale and an 8.9-pixel gap with room to
+survive a mip level.

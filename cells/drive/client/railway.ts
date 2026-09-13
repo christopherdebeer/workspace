@@ -67,6 +67,22 @@ export interface RailSpec {
   minor: boolean;
   /** Out of use, rails still down: the weeds take it. */
   disused: boolean;
+  /** Whether this track sits on an ENGINEERED FORMATION — a solved longitudinal
+   *  profile, a corridor cut into the terrain and a batter either side — rather
+   *  than being draped over whatever ground it crosses. True of every railway
+   *  laid on its own alignment; false of a tram, whose rails are set into a
+   *  street that already has its own profile and whose corridor would be the
+   *  road's. See the ruling grade below for why the two cannot share a rule. */
+  graded: boolean;
+  /** THE RULING GRADE, as a rise per metre. This is the number that makes a
+   *  railway a railway and not a narrow road: steel on steel has about a tenth
+   *  of the adhesion of rubber on tarmac, so where a road climbs a hillside at
+   *  ten or fifteen per cent a main line will not exceed two — which is why a
+   *  railway cuts through what a road goes over, embanks across what a road
+   *  dips into, and bridges what a road fords. The profile solver already
+   *  takes a `maxGrade`; it had simply never been given one for a railway,
+   *  because a railway was never solved at all. */
+  gradeMax: number;
   /** Carries wires — for the masts, when they are built. */
   electrified: boolean;
   /** The material cache's key. */
@@ -146,12 +162,29 @@ export function railSpec(tags: Record<string, string>): RailSpec {
   // a wrap is enough for the pattern to read and few enough that the canvas
   // keeps ~25 pixels per metre along the track.
   const sleeperM = kind === 'miniature' ? 0.3 : kind === 'tram' ? 0.75 : minor ? 0.72 : 0.65;
+  // ── THE ALIGNMENT ──
+  // A tram is the one kind that is NOT on a formation of its own: it is laid in
+  // a carriageway that was graded for road traffic, and giving it a corridor
+  // would carve a railway cutting down a city street.
+  const graded = kind !== 'tram';
+  // Real ruling grades, and they differ by an order of magnitude across the
+  // vocabulary: a freight main line is built to 1-1.5% and a passenger one
+  // rarely over 2.5; a branch or an industrial spur will take 3-4; light rail
+  // and metro stock climbs 4; a narrow-gauge mountain line 5; and a funicular
+  // is a cable hauling a car up something no adhesion railway could attempt at
+  // all, so it is given a number that effectively lets the ground decide.
+  const gradeMax = kind === 'funicular' ? 0.5
+    : kind === 'tram' ? 0.08
+    : kind === 'narrow' || kind === 'miniature' ? 0.05
+    : kind === 'light' || kind === 'heritage' ? 0.04
+    : minor ? 0.035 : 0.022;
   return {
     kind, draw, gaugeM, widthM, sleeperM, sleepers: 8, sleeperLenM,
     ballast: kind === 'tram' ? 'none' : minor ? 'slag' : 'stone',
     // Ballasted track stands proud; a tram's rails are flush in the roadway.
     liftM: kind === 'tram' ? 0.015 : minor ? 0.08 : 0.12,
     minor, disused, electrified: !!tags.electrified && tags.electrified !== 'no',
+    graded, gradeMax,
     key: `${kind}|${gaugeM.toFixed(3)}|${minor ? 'm' : 'M'}|${disused ? 'd' : 'l'}`,
   };
 }

@@ -99,6 +99,29 @@ ok(railSpec({ railway: 'subway', tunnel: 'no' }).draw, '…and tunnel=no is not 
   ok(t.liftM < 0.05, '…and lies flush in it', t.liftM);
   ok(t.widthM < 2.5, '…and its strip is the rails and little else', t.widthM);
 }
+// ── THE ALIGNMENT: WHAT IS ENGINEERED, AND AT WHAT RULING GRADE ──
+// This is the pair the grading split reads. A railway holds a fraction of a
+// road's grade, which is WHY it cuts and embanks; a tram holds none of its own
+// because it is laid in a street that was graded for something else.
+{
+  const main = railSpec(GLENCAIRN);
+  const road = 0.15;                       // the ribbon's own default for a road
+  ok(main.graded, 'a main line sits on a formation of its own');
+  ok(main.gradeMax < road / 4, 'and holds under a quarter of a road\'s grade', main.gradeMax);
+  ok(main.gradeMax <= 0.025, '…about two per cent, which is what a main line is built to', main.gradeMax);
+  const branch = railSpec({ railway: 'rail', usage: 'industrial' });
+  ok(branch.graded && branch.gradeMax > main.gradeMax,
+    'a branch or an industrial spur will take a steeper grade than a main line', branch.gradeMax);
+  const t = railSpec({ railway: 'tram' });
+  ok(!t.graded, 'a tram is NOT graded — its corridor would be a cutting down a city street');
+  const f = railSpec({ railway: 'funicular' });
+  ok(f.graded && f.gradeMax > road,
+    'a funicular is a cable and outclimbs any road', f.gradeMax);
+  const narrow = railSpec({ railway: 'narrow_gauge' });
+  ok(narrow.gradeMax > main.gradeMax, 'a narrow-gauge mountain line takes more than a main line', narrow.gradeMax);
+  ok([main, branch, t, f, narrow].every((q) => q.gradeMax > 0),
+    'every kind states a grade — a zero would turn the ribbon\'s ruling off entirely');
+}
 // ── DISUSED: THE RAILS ARE STILL DOWN ──
 {
   const d = railSpec({ railway: 'disused' });
