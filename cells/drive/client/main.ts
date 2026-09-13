@@ -2140,6 +2140,19 @@ function readDialRecord(): Record<string, number> {
  *  terrain colour and the sward's mineral and reed banks. `shore=0` is the
  *  frame colour and hillside grass to the waterline, as it was. */
 const SHORE_ON = qsOn('shore', true);
+/** `airblur=1` puts the aerial perspective's DISTANCE BLUR back — the term that
+ *  mixed the far field toward `softTex` as well as toward the haze colour. Off
+ *  by default: see `uAirBlur`. The exact A/B for the far-field sharpness. */
+const AIR_BLUR = qsOn('airblur', false) ? 1 : 0;
+/** Tilt-shift strength by preset. A look, so it is opt-in and named rather than
+ *  numeric: the seat picks a word, not a lens angle. */
+const TILT_PRESETS: Record<string, { amt: number; sharp: number; blur: number }> = {
+  off: { amt: 0, sharp: 34, blur: 92 },
+  subtle: { amt: 0.5, sharp: 44, blur: 130 },
+  mini: { amt: 0.9, sharp: 30, blur: 84 },
+  hard: { amt: 1, sharp: 20, blur: 56 },
+};
+const TILT_MODE = ((v) => (v && v in TILT_PRESETS ? v : 'off'))(qs('tilt')?.toLowerCase());
 /**
  * ── A DEVTOOLS PANEL FOR A PHONE ──
  *
@@ -5450,6 +5463,56 @@ const compMat = new THREE.ShaderMaterial({
     // evening.
     uHazeE: { value: 1400 },
     uHazeAmt: { value: 0.3 },
+    /**
+     * ── ATMOSPHERE IS CONTRAST; FOCUS IS SHARPNESS. THEY WERE ONE TERM ──
+     *
+     * `deep` did two jobs: it washed distant ground toward the haze colour
+     * (`dimF`, right and staying) and it ALSO blended the frame toward the
+     * blurred `softTex` (`blurF`). The note below it says "THE BLUR IS PART OF
+     * THE AIR", and that was a defensible way to say distance before there was
+     * anything else saying it.
+     *
+     * It is what the seat has been reading as roads losing their detail toward
+     * the vanishing point, and the measurement is unambiguous because `vFac`
+     * makes the term STRONGEST along a near-horizontal sight line — which is
+     * exactly where a road's vanishing point is. On a flat road at the default
+     * (`uHazeE` 1400, `uHazeAmt` 0.3, fog of war off, so `m` is 0) the share of
+     * the broad half-resolution blur mixed into the carriageway is 5% at 260 m,
+     * 9% at 500, 15% at 1 km, 23% at 2 km and 29% at 5 km. `softTex` is four
+     * separable Gaussian passes at HALF the art resolution, so a quarter of it
+     * is quite enough to take the markings off.
+     *
+     * And it becomes incoherent the moment there is an explicit focus model:
+     * a tilt-shift plane saying "this surface is in focus" cannot be believed
+     * while the air is holding a floor of 23% blur under it at two kilometres.
+     *
+     * So the distance term is off by default and the dial keeps the half that
+     * is a fact about air: far ground still loses contrast and takes the haze
+     * colour, it just stays in focus. `?airblur=1` restores the old coupling
+     * exactly, which is the A/B.
+     *
+     * NOT YET MEASURED, and it is the reason this is a switch rather than a
+     * deletion: that blur was also anti-aliasing sub-pixel content in the far
+     * field at 320p. The same argument the tilt-shift report makes for leaving
+     * the road texture's mipmapping alone applies here, so if distant
+     * vegetation or roof lines start to crawl in motion, this is the term that
+     * was hiding it.
+     */
+    uAirBlur: { value: AIR_BLUR },
+    // ── TILT-SHIFT ──
+    // A plane of focus in the WORLD (a point and a normal), not a band on the
+    // glass. See the block in the fragment shader.
+    uTiltAmt: { value: 0 },
+    uFocusP: { value: new THREE.Vector3() },
+    uFocusN: { value: new THREE.Vector3(0, 0, -1) },
+    // The focus band and the reach to full blur, in ART PIXELS — see the
+    // shader for why a metric slab cannot work across this camera system.
+    uTiltSharp: { value: 34 },
+    uTiltBlur: { value: 92 },
+    uTanHalfFov: { value: Math.tan((55 * Math.PI) / 360) },
+    // How defocused the sky is when the effect is on. Not 1: a fully smeared
+    // sunset fights the horizon treatment the sky branch already does.
+    uTiltSky: { value: 0.7 },
     // Metres a pixel on the chart (shared by reference): what the aerial
     // perspective fades on past the fine world. See `deep` below.
     uMpp: mppU,
@@ -5535,6 +5598,8 @@ const compMat = new THREE.ShaderMaterial({
     // term, 2 kills the haze outright, 3 kills the sun lobe. See __haze.
     uniform float uHazeDbg; uniform float uHazeWarm; uniform float uMpp;
     uniform float uHazeE; uniform float uHazeAmt; uniform float uSkyD;
+    uniform float uAirBlur; uniform float uTiltAmt; uniform vec3 uFocusP; uniform vec3 uFocusN;
+    uniform float uTiltSharp; uniform float uTiltBlur; uniform float uTanHalfFov; uniform float uTiltSky;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
 ${DITHER_GLSL}
     // The warm argument is HOW MUCH OF THE SUNWARD LOBE THIS CALLER WANTS. The sky wants
@@ -5583,7 +5648,12 @@ ${DITHER_GLSL}
       return slab + cbase * 0.85 + wxs.g * 0.20;
     }
     void main(){
-      vec3 sharp = texture2D(sceneTex, vUv).rgb;
+      // THE ALPHA IS CARRIED, not dropped: noBlur writes 0 there for anything
+      // that is not part of the world to smear — the rig above all — and the
+      // focus term below reads it so the truck cannot be defocused by a plane
+      // it is not standing on. One sample, as before.
+      vec4 sharp4 = texture2D(sceneTex, vUv);
+      vec3 sharp = sharp4.rgb;
       vec3 soft = texture2D(softTex, vUv).rgb;
       float z = texture2D(depthTex, vUv).r;
       vec4 far = invPV * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
@@ -5596,12 +5666,63 @@ ${DITHER_GLSL}
       vec4 wp4 = invPV * vec4(vUv * 2.0 - 1.0, z * 2.0 - 1.0, 1.0);
       vec3 wp = wp4.xyz / wp4.w;
       float t = distance(wp, camPos);
+      /**
+       * ── TILT-SHIFT: A PLANE OF FOCUS IN THE WORLD, NOT A BAND ON THE GLASS ──
+       *
+       * The usual cheap miniature effect blurs by distance from a horizontal
+       * strip of the screen, which is a lie that shows the moment anything
+       * vertical crosses the strip: a tower blurs at its feet and sharpens at
+       * its top for no reason. This composite already reconstructs the true
+       * world position of every fragment (wp, above, for the fog) so it can
+       * afford the real thing — a plane, given as a point and a normal, and a
+       * signed distance to it.
+       *
+       * THE UNIT IS ART PIXELS, NOT METRES, and that is the whole reason this
+       * works across Drive's cameras. A 50 m focal slab is the entire frame
+       * from the cab and less than one pixel on a 300 km chart. Metres per art
+       * pixel at this fragment is 2 t tan(fov/2) / uPix.y, so dividing the
+       * plane distance by it gives a quantity that means the same thing at
+       * every altitude and at 240P, 320P and 480P alike.
+       *
+       * ONE BLUR SCALE, INTERPOLATED — not a varying circle of confusion.
+       * softTex is already built every frame for the atmosphere (four
+       * separable passes at half art resolution) and is reused here, so the
+       * whole effect costs a dot product, a divide and a smoothstep: no extra
+       * pass, no extra target, no change to __passes(). At fourteen palette
+       * levels with a Bayer dither over the top, a continuous CoC radius is
+       * not what the eye is being given anyway — what it sees is a defocused
+       * region collapsing into broader, quieter pixel clusters, and one broad
+       * blur does that. If halos appear around silhouettes, THAT is the signal
+       * to build a depth-aware blur of its own, and not before.
+       */
+      float coc = 0.0;
+      if (uTiltAmt > 0.001) {
+        if (t >= uSkyD) {
+          // The sky writes no depth, so its reconstructed position is the far
+          // plane and its distance to any focal plane is meaningless. It is
+          // classified rather than measured: soft, because a miniature camera's
+          // backdrop is, but not fully — uTiltSky is 0.7 because a completely
+          // smeared sunset fights the horizon treatment the sky branch does.
+          coc = uTiltSky;
+        } else {
+          float fd = dot(wp - uFocusP, uFocusN);
+          float mpp = max(2.0 * t * uTanHalfFov / max(uPix.y, 1.0), 1e-4);
+          coc = smoothstep(uTiltSharp, uTiltBlur, abs(fd) / mpp);
+        }
+        // THE RIG IS NEVER DEFOCUSED BY A PLANE IT IS NOT ON. noBlur already
+        // writes alpha 0 for everything that is not world to smear — the truck
+        // above all — and the motion blur has read that convention for years.
+        // Reusing it costs nothing: the alpha came with the sample.
+        if (sharp4.a < 0.25) coc = 0.0;
+        coc *= uTiltAmt;
+      }
       vec3 col;
       if (t >= uSkyD) {
         // Nothing drawn here (the sky dome writes no depth): crisp sky with a
         // soft luminous band hugging the horizon.
         float band = exp(-abs(dir.y) * 26.0);
         col = mix(sharp, mix(soft, hazeAt(dir, 1.0), 0.5), band * 0.5);
+        col = mix(col, soft, coc);
       } else {
         // Fog by the pixel's TRUE surface point: distance sets how much it
         // blurs and dims (aerial perspective); the fog-of-war mask at that
@@ -5635,16 +5756,23 @@ ${DITHER_GLSL}
         // horizon keeps its haze.
         float deep = (1.0 - exp(-t / uHazeE)) * vFac * step(uHazeDbg, 1.5)
           * (1.0 - smoothstep(15.0, 60.0, uMpp));
-        // THE BLUR IS PART OF THE AIR, so it answers to the same dial. It did
-        // not: the dim term took uHazeAmt and this kept a hardcoded 0.3, so
-        // HAZE OFF removed the milk and left the far field just as SOFT — a
-        // world that is clear and out of focus at the same time, which is
-        // neither of the two things anyone was asking for. The coefficient was
-        // already 0.3 on both sides and MED sets uHazeAmt to 0.3, so at the
-        // default this is the same expression it always was.
-        float blurF = clamp(m * (0.1 + 0.9 * near) + deep * uHazeAmt, 0.0, 1.0);
-        // Never fully opaque: the unexplored world stays a SUGGESTION behind
-        // the haze — you can make out a coastline or a ridge to steer toward.
+        // ── THREE THINGS CAN SOFTEN A PIXEL, AND ONLY TWO OF THEM SHOULD ──
+        //
+        // The fog of war hides what has not been explored, and hiding it by
+        // blur is the point. The FOCUS PLANE defocuses what is off it. And the
+        // AIR used to do it by distance, which is the term the seat has been
+        // reading as roads dissolving toward their vanishing point — see
+        // uAirBlur, which is 0 by default and restores it at 1.
+        //
+        // Composed as a product of what each one LEAVES sharp rather than a
+        // sum, so two of them at 60% give 84% and never a clipped 100%.
+        float fowBlur = clamp(m * (0.1 + 0.9 * near) + deep * uHazeAmt * uAirBlur, 0.0, 1.0);
+        float blurF = 1.0 - (1.0 - fowBlur) * (1.0 - coc);
+        // …AND THE DIM TERM IS UNTOUCHED, which is the point of the split:
+        // aerial perspective keeps every bit of its contrast and colour work,
+        // it has simply stopped taking the focus with it. Never fully opaque:
+        // the unexplored world stays a SUGGESTION behind the haze — you can
+        // make out a coastline or a ridge to steer toward.
         float dimF = min(m * mix(0.10, 0.86, near) + (1.0 - m) * deep * uHazeAmt, 0.86);
         col = mix(sharp, soft, blurF);
         col = mix(col, hazeAt(dir, uHazeWarm), dimF);
@@ -32660,6 +32788,69 @@ function tapeKeep(): string {
     water: wet ? { kind: wet.kind, resting: +wet.restingLevelM.toFixed(2), depth: +wet.depthM.toFixed(2), coverage: +wet.coverage.toFixed(2), shore: +wet.shoreDistanceM.toFixed(1) } : null,
   };
 };
+/**
+ * ── WHERE THE PLANE OF FOCUS GOES, EACH FRAME ──
+ *
+ * The composite wants a point and a normal in world metres. The point is what
+ * the camera is LOOKING AT on the ground, not a fixed distance: a fixed metric
+ * focal distance is the same mistake as a fixed metric focal slab, right for
+ * one camera and absurd for the next.
+ *
+ * So the camera's own forward ray is dropped to the ground plane under
+ * whatever it is pointed at. From the chart, looking all but straight down,
+ * that lands on the chart's focus and the miniature band lies across the map.
+ * From the seat, looking a few degrees down, it lands on the road ahead. The
+ * clamp is what keeps a near-horizontal ray from solving at the horizon.
+ *
+ * THE NORMAL IS THE CAMERA'S FORWARD, TILTED. Untilted (the default) the plane
+ * is fronto-parallel and the effect is the classic miniature band: a slab of
+ * sharpness at one distance with everything nearer and further soft. That is
+ * what the look actually wants — a real lens tilt is the Scheimpflug trick for
+ * laying the plane ALONG a receding surface, which puts more of the ground in
+ * focus, not less. The rotation is here so it can be dialled, and it is zero
+ * until someone asks for it.
+ *
+ * A PRESET PER CAMERA, because the effect costs road readability. The chart is
+ * where a miniature belongs and gets the preset in full; chase takes a third of
+ * it; the cab takes none — a narrow depth of field while you are the one
+ * steering is a tax on exactly the information you are steering by.
+ */
+const FOCUS_FWD = new THREE.Vector3();
+const FOCUS_RIGHT = new THREE.Vector3();
+const FOCUS_UP = new THREE.Vector3(0, 1, 0);
+let tiltTiltRad = 0;
+function aimFocus(): void {
+  const u = compMat.uniforms;
+  const preset = TILT_PRESETS[TILT_MODE];
+  // The cab is deliberately exempt; the chart is where the look belongs.
+  const byCam = camMode === 'top' ? 1 : camMode === 'cab' ? 0 : 0.34;
+  const amt = preset.amt * byCam;
+  u.uTiltAmt.value = amt;
+  // THE PLANE IS PLACED EVEN WHEN THE EFFECT IS OFF, so `__tilt` always reports
+  // a live one. An early return here saved a handful of vector operations and
+  // made the probe answer with whatever was last written — which on a build
+  // with tilt off is the origin, reported as a focal point. An instrument that
+  // lies when the feature is off is worse than the operations it saves.
+  u.uTiltSharp.value = preset.sharp;
+  u.uTiltBlur.value = preset.blur;
+  u.uTanHalfFov.value = Math.tan((camera.fov * Math.PI) / 360);
+  camera.getWorldDirection(FOCUS_FWD);
+  // The ground the ray is aimed at. `groundAt` under the truck is the right
+  // datum from every camera: the chart is centred on it and the seat is on it.
+  const gY = groundAt(state.x, state.z);
+  const drop = -FOCUS_FWD.y;
+  // A near-horizontal ray solves at the horizon, so the distance is clamped
+  // rather than trusted — and the floor keeps the plane off the bonnet.
+  const dist = clamp(drop > 0.02 ? (camera.position.y - gY) / drop : 1e9, 18, 6000);
+  u.uFocusP.value.copy(FOCUS_FWD).multiplyScalar(dist).add(camera.position);
+  // Fronto-parallel unless tilted: see above.
+  FOCUS_RIGHT.crossVectors(FOCUS_FWD, FOCUS_UP).normalize();
+  u.uFocusN.value.copy(FOCUS_FWD);
+  if (tiltTiltRad !== 0 && FOCUS_RIGHT.lengthSq() > 1e-6) {
+    u.uFocusN.value.applyAxisAngle(FOCUS_RIGHT, tiltTiltRad);
+  }
+  u.uFocusN.value.normalize();
+}
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
  *  (negative on the carriageway), and the road's own surface height there. */
 /** Does the road that owns this deck END at the point, or pass through it?
@@ -33831,6 +34022,76 @@ function repaintWetDebug(): void {
  * A railway is in `roadGrid` with every other drivable way now, so the
  * formations are picked out by `Seg.rw` — which is what that flag is for.
  */
+/**
+ * ── THE FOCUS, AS NUMBERS ──
+ *
+ * A look is judged from a frame, but a frame cannot say WHY a pixel is soft —
+ * and there are now three separate reasons it can be (the fog of war, the air,
+ * the focal plane), which is precisely the confusion the air/focus split exists
+ * to end. This reports the plane in force and, for a given point, the three
+ * terms at that point, so "is this blurred because it is far or because it is
+ * off the plane" is one call rather than an argument.
+ *
+ * Called with an object it also SETS the dials live — amount, tilt in degrees,
+ * the band and reach in art pixels, the sky share — so the look can be found
+ * from the console at 3 fps without a reload, which is what the dial rack will
+ * be built from once the seat has picked numbers.
+ */
+(window as unknown as { __tilt?: object }).__tilt = (
+  opts?: { amount?: number; angle?: number; sharp?: number; blur?: number; sky?: number; air?: number },
+  at?: [number, number],
+): object => {
+  const u = compMat.uniforms;
+  if (opts?.amount !== undefined) u.uTiltAmt.value = clamp(opts.amount, 0, 1);
+  if (opts?.angle !== undefined) tiltTiltRad = (opts.angle * Math.PI) / 180;
+  if (opts?.sharp !== undefined) u.uTiltSharp.value = opts.sharp;
+  if (opts?.blur !== undefined) u.uTiltBlur.value = opts.blur;
+  if (opts?.sky !== undefined) u.uTiltSky.value = clamp(opts.sky, 0, 1);
+  if (opts?.air !== undefined) u.uAirBlur.value = clamp(opts.air, 0, 1);
+  const P = u.uFocusP.value as THREE.Vector3, N = u.uFocusN.value as THREE.Vector3;
+  // What the shader would compute at a point on the ground, reproduced here in
+  // the same order and the same units. A probe that reports the inputs and not
+  // the answer cannot witness the term applied between them.
+  const sample = (x: number, z: number): object => {
+    const y = groundAt(x, z);
+    const t = Math.hypot(x - camera.position.x, y - camera.position.y, z - camera.position.z);
+    const fd = (x - P.x) * N.x + (y - P.y) * N.y + (z - P.z) * N.z;
+    const mpp = Math.max((2 * t * (u.uTanHalfFov.value as number)) / Math.max(pixSize.y, 1), 1e-4);
+    const px = Math.abs(fd) / mpp;
+    const sh = u.uTiltSharp.value as number, bl = u.uTiltBlur.value as number;
+    const k = clamp((px - sh) / Math.max(bl - sh, 1e-4), 0, 1);
+    const coc = k * k * (3 - 2 * k) * (u.uTiltAmt.value as number);
+    // …and the air's own contribution at the same point, which is the thing
+    // that used to be indistinguishable from it.
+    const vFac = clamp(1.4 - Math.abs((y - camera.position.y) / Math.max(t, 1e-4)) * 1.3, 0.15, 1);
+    const deep = (1 - Math.exp(-t / (u.uHazeE.value as number))) * vFac
+      * (1 - clamp((envU.uMpp.value - 15) / 45, 0, 1));
+    const air = deep * (u.uHazeAmt.value as number) * (u.uAirBlur.value as number);
+    return { x: +x.toFixed(1), z: +z.toFixed(1), t: +t.toFixed(1), planeM: +fd.toFixed(2),
+      px: +px.toFixed(1), coc: +coc.toFixed(3), air: +air.toFixed(3),
+      // What the composite ends up mixing toward softTex, the two composed.
+      blur: +(1 - (1 - air) * (1 - coc)).toFixed(3) };
+  };
+  return {
+    mode: TILT_MODE, cam: camMode, amount: +(u.uTiltAmt.value as number).toFixed(3),
+    angleDeg: +((tiltTiltRad * 180) / Math.PI).toFixed(2),
+    sharpPx: u.uTiltSharp.value, blurPx: u.uTiltBlur.value, sky: u.uTiltSky.value,
+    airBlur: u.uAirBlur.value,
+    focusP: [+P.x.toFixed(1), +P.y.toFixed(1), +P.z.toFixed(1)],
+    focusN: [+N.x.toFixed(3), +N.y.toFixed(3), +N.z.toFixed(3)],
+    // How far the focal point is from the eye, which is the number that says
+    // whether the plane landed on the ground or at the clamp.
+    focusDistM: +camera.position.distanceTo(P).toFixed(1),
+    pix: [pixSize.x, pixSize.y],
+    at: at ? sample(at[0], at[1]) : sample(state.x, state.z),
+    // A transect straight ahead: the shape of the focal field along the road,
+    // which is the one reading that says whether a vanishing point survives.
+    ahead: [25, 60, 120, 260, 500, 1000, 2000, 5000].map((d) => {
+      const hx = Math.sin(state.heading), hz = -Math.cos(state.heading);
+      return sample(state.x + hx * d, state.z + hz * d);
+    }),
+  };
+};
 (window as unknown as { __railgrade?: object }).__railgrade = (r = 900): object => {
   const seen = new Set<Seg>();
   const rows: Array<{ x: number; z: number; nm: string; deck: number; dem: number; mesh: number | null; cut: number; gap: number | null }> = [];
@@ -44596,6 +44857,7 @@ function tick(now: number): void {
     ? clamp(1 - Math.max(Math.abs(sunScreen.x), Math.abs(sunScreen.y)) * 0.55, 0, 1) * (1 - wx.cloud * 0.85)
     : 0;
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
+  aimFocus();
   // THE SHUTTER, decided here because this is where the camera is finally
   // settled. The projection is snapshotted along with the view: setNear
   // rebuilds it inside every camera branch above, so a view matrix kept

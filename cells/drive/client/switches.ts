@@ -219,6 +219,10 @@ export const SWITCHES = [
     note: 'imu=0 drives real GPS without the gyro' },
   { id: 'railgrade', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'railgrade=0 drapes a railway over the ground: no formation, no earthworks, and not drivable' },
+  { id: 'airblur', kind: 'toggle', marks: ['legacy', 'look'], fallback: 'off',
+    note: 'airblur=1 puts back the aerial perspective’s distance BLUR — the term that softened a road toward its vanishing point' },
+  { id: 'tilt', kind: 'choice', marks: ['look'], fallback: 'off',
+    note: 'tilt=subtle|mini|hard puts a tilt-shift plane of focus in the world' },
 ] as const satisfies readonly SwitchDef[];
 
 /** Every declared id, as a type. An undeclared read does not compile, which is
