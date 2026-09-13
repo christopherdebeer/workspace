@@ -186,8 +186,21 @@ export async function openDrive(opts = {}) {
         try { rmSync(join(dir, 'static'), { force: true }); } catch { /* first run */ }
         symlinkSync(join(CELL, 'static'), join(dir, 'static'), 'dir');
         const out = join(dir, 'index.mjs');
+        // …AND THE BUNDLE HAS TO KNOW WHERE IT IS. `__dirname` DOES NOT EXIST
+        // IN AN ESM BUNDLE — esbuild leaves the identifier alone and node
+        // throws `__dirname is not defined` the first time a route reads an
+        // asset. The symlink above was added to fix the coarse cover and could
+        // not have: measured on the bundle this line produces,
+        // `~/cover/w1/4/8/6` answered `503 {"error":"no coarse cover baked"}`
+        // and `~/osm/ov1/7/19/48` fell past its bake to a 43s Overpass timeout
+        // with `bakeMissing: "__dirname is not defined"` in the body. Every
+        // harness run since those routes shipped has been testing the fallback.
+        // The handler's own error strings are what say so — `serveOverview`
+        // reports why the bake did not answer, which is the whole reason that
+        // field exists.
         execSync(`npx esbuild ${join(CELL, 'index.ts')} --bundle --platform=node --format=esm`
-          + ` --packages=external --outfile=${out}`, { stdio: 'pipe', cwd: ROOT });
+          + ` --packages=external --define:__dirname=${JSON.stringify(JSON.stringify(dir))}`
+          + ` --outfile=${out}`, { stdio: 'pipe', cwd: ROOT });
         cellHandler = (await import(`${out}?t=${Date.now()}`)).handler;
       } catch { cellHandler = null; }
     }
@@ -204,8 +217,17 @@ export async function openDrive(opts = {}) {
     }
     const r = await cellHandler({ rawPath: p, requestContext: { http: { method: 'GET' } } });
     if (r.statusCode !== 200) return null;
-    const body = r.isBase64Encoded ? Buffer.from(r.body, 'base64') : Buffer.from(String(r.body));
+    let body = r.isBase64Encoded ? Buffer.from(r.body, 'base64') : Buffer.from(String(r.body));
     const type = r.headers?.['content-type'] ?? 'application/octet-stream';
+    // AND THE ENCODING IS UNWOUND HERE, ONCE. `serveOverview` answers gzip;
+    // `serveDem` and the cover routes do not, which is why this was invisible
+    // until a vector route came through. The server below writes a bare
+    // content-type, so a gzipped body reached the page as bytes it then tried
+    // to parse as JSON: every coarse chart tile threw, every one was filed in
+    // `ovFailedAt`, and the chart read `0/25 · 25 RETRY` with a route that was
+    // answering 200 in fourteen milliseconds. Decoding here keeps the disk
+    // cache plain and leaves every consumer route as it was.
+    if (r.headers?.['content-encoding'] === 'gzip') body = zlib.gunzipSync(body);
     try { writeFileSync(key, body); writeFileSync(`${key}.type`, type); } catch { /* best effort */ }
     return { body, type };
   };
@@ -310,8 +332,25 @@ export async function openDrive(opts = {}) {
         })
         .catch(() => { res.writeHead(503); res.end('{}'); });
     }
+    // THE OVERVIEW IS TWO ROUTES WEARING ONE PATH, and the harness has to
+    // split them or it can only ever test the half that is already deployed.
+    // The fine rungs (z10 and in) are Overpass queries and must be read from
+    // the BANK, exactly as the fine vectors are — re-earning them here would
+    // be minutes of a public service per run. The wide rungs (z9 and out) are
+    // arithmetic over `static/ne-wide.b64`, a file in this repo: running them
+    // through the handler costs nothing, exercises the route code the phone
+    // will run, and — the reason this exists — lets a change to the LADDER be
+    // measured before it is deployed. A rung added to the bake is otherwise a
+    // 400 here until a deploy, which reads as a broken client.
     else if (p.startsWith('/~/osm/ov1/')) {
-      fetch(`https://c15r-drive.on.parc.land${p}`)
+      const oz = Number(p.split('/')[4]);
+      if (Number.isFinite(oz) && oz <= 9) {
+        cellRoute(p).then((out) => {
+          if (!out) { res.writeHead(404); res.end('{}'); return; }
+          res.writeHead(200, { 'content-type': out.type });
+          res.end(out.body);
+        }).catch(() => { res.writeHead(503); res.end('{}'); });
+      } else fetch(`https://c15r-drive.on.parc.land${p}`)
         .then(async (r) => {
           if (!r.ok) { res.writeHead(r.status); res.end('{}'); return; }
           res.writeHead(200, { 'content-type': 'application/json' });

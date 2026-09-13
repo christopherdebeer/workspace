@@ -74,9 +74,13 @@ interface RawWay {
 // same move `overviewQuery` made at z7 when it was Overpass's, for the same
 // reason. Places rank 0-10 and do have coarse rungs, but capitals alone is one
 // city per country, so z5 keeps z6's cut.
-export const NE_SCALERANK: Record<number, number> = { 5: 3, 6: 3, 7: 4, 8: 6, 9: 8 };
+export const NE_SCALERANK: Record<number, number> = {
+  0: 3, 1: 3, 2: 3, 3: 3, 4: 3, 5: 3, 6: 3, 7: 4, 8: 6, 9: 8,
+};
 /** The same idea for settlements: which places have earned a name at this box. */
-export const NE_PLACE_RANK: Record<number, number> = { 5: 2, 6: 2, 7: 3, 8: 5, 9: 7 };
+export const NE_PLACE_RANK: Record<number, number> = {
+  0: 1, 1: 1, 2: 1, 3: 2, 4: 2, 5: 2, 6: 2, 7: 3, 8: 5, 9: 7,
+};
 /** A class cut on top of the rank cut, where the rank has run out of rungs:
  *  at z ≤ this, only motorways. */
 export const NE_WIDE_CLASS_Z = 5;
@@ -85,7 +89,31 @@ export const NE_WIDE_CLASS_Z = 5;
  *  whole of what the overview needs to do for it, since the asset already
  *  carries every road to scalerank 8 and every place to 7. */
 export const NE_MAX_Z = 9;
-export const NE_MIN_Z = 5;
+/**
+ * ── AND THE FLOOR IS THE PLANET ──
+ *
+ * This was 5, and the note above said wider than that was the globe's, when
+ * it came. It came: the chart's group is a child of the planet now, the
+ * cover ladder reaches z2 and the far shell z3, so the vector map was the
+ * one layer that stopped early — and the chart's own ring is sized by the
+ * view, so a globe-wide frame asked for z5 tiles it could never cover with
+ * and drew nothing over most of the Earth.
+ *
+ * Measured with `devtools/ov-wide-size.mjs` over five contrasting boxes, the
+ * WORST tile at each rung: z4 293 ways and 8.5KB gzipped in 5ms, z3 390 and
+ * 9.5KB in 6ms, z2 1,004 and 21.2KB in 20ms, z1 2,868 and 53.0KB in 32ms,
+ * and z0 — the entire planet in ONE tile — 4,293 ways, 82.8KB, 51ms. The
+ * whole wide chart is a single request, and it is a tenth of what one dense
+ * z12 Overpass tile costs.
+ *
+ * THE RANK CUT STAYS AT 3 ALL THE WAY DOWN, rather than tapering the way the
+ * finer rungs do. The class cut below NE_WIDE_CLASS_Z has already reduced
+ * these rungs to motorways alone; tightening the rank as well would take a
+ * planet view down to a few strokes. Rank 3 motorways ARE the world's trunk
+ * network, which is what a globe should carry. Places taper instead, because
+ * a name has to be legible and there is no room for a hamlet on a globe.
+ */
+export const NE_MIN_Z = 0;
 
 const HW = ['motorway', 'trunk', 'primary'];
 const ABS = 1e6, DEL = 1e4;

@@ -1100,6 +1100,9 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
   if (z < NE_MIN_Z || z > 13 || x >= 2 ** z || y >= 2 ** z) {
     return respond(400, 'application/json', JSON.stringify({ error: 'overview tile out of range' }));
   }
+  // z0 IS ONE TILE AND IT IS THE WORLD. Nothing below the bake's ceiling asks
+  // an upstream, so the widest rungs cost a little arithmetic and bank like
+  // any other tile; see NE_MIN_Z for what each weighs.
   // ── THE WIDE RUNGS DO NOT ASK ANYONE ───────────────────────────────
   //
   // z7, z8 and z9 come from the Natural Earth bake in `ne-wide.ts`. They used

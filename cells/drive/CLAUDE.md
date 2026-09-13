@@ -316,6 +316,13 @@ Other harness facts learned the hard way:
   capture against fourteen seconds on Camps Bay, all of it before the script's
   own gate started counting. A measurement with its own settle gate passes
   `settle: 0`; the option exists for tests that integrate physics.
+- **THE HARNESS'S OWN CELL BUNDLE IS ESM, SO IT HAS NO `__dirname`.** Every
+  route that reads a baked asset off disk (`~/cover/w1`, `~/osm/ov1`'s wide
+  rungs) threw on its first call and answered 503 for as long as those routes
+  have existed — see "…and the harness had never served the baked routes at
+  all" below for the measurement and the fix. And `cellRoute` gunzips now: a
+  route that answers `content-encoding: gzip` reached the page as bytes it
+  could not parse.
 - Screenshots land in `/tmp/drive-tools/` (`$DRIVE_WORK`).
 - A bundle built for a test must be written **inside the repo** (e.g.
   `node_modules/.cache`) — `--external:three` resolves from where the file
@@ -8224,6 +8231,165 @@ change eased over four seconds has identical grid movement near/far (0.09792
 texels/frame); the real shadow may still move as illumination changes.
 Telemetry regression tests and main syntax checks also pass. These are
 geometry/matrix tests, not on-device GPU visual validation.
+
+## The chart's tiles: the level rule, the ladder to z0, and no empty frames
+
+Reported from the seat: *"zooming out provides inconsistent and laggy
+(sometimes empty) chart."* Three different faults share that one symptom and
+nothing could tell them apart — the RULE picking a level its ring cannot
+cover, the WIRE not having landed the tiles yet, and the PICTURE being thrown
+away mid-gesture — so the first thing built was the instrument that separates
+them. `devtools/ov-sweep.mjs` walks the ladder rung by rung (the level, the
+frame's own half-diagonal in ground metres, the ground the ring reaches,
+whether it covers, and how long the ring took) and then sweeps the whole zoom
+range in one continuous pull-out, sampling four times a second and counting
+the samples where **nothing of this layer is drawn at all**. That last number
+is the seat's "sometimes empty", and it is not `have < want`: an incomplete
+map is a map.
+
+**THE COVERAGE TEST BELONGS TO THE TOOL, NOT TO THE BUILD.** The first cut
+read `__ov().covers`, which is part of the change under test and does not
+exist on an older revision — so the control reported the rule as failing on
+every sample and said nothing. Both halves are derived in the tool now, from
+numbers every build has carried since the scale bar shipped.
+
+Four faults, and the first two are arithmetic:
+
+- **THE LEVEL RULE ASKED FOR HALF A TILE MORE THAN THE RING REACHES.**
+  `ovLevelFor` took the finest level with `radius <= tileMetres(z) * (R + 0.5)`
+  where R is `OV_RING_MAX`. A ring of R tiles about the tile holding the view
+  centre guarantees R tiles of reach and **no more** — the centre can sit
+  anywhere inside its own tile, and in the worst case it is against the far
+  edge. So at the wide end of every band the chart's own corners had no data
+  and could not get any until the zoom crossed into the next band. Reach
+  exactly what the ring reaches.
+- **AND THE LADDER STOPPED FIVE RUNGS SHORT OF THE VIEW.** `OV_LEVELS` ended at
+  z5 — about 2,000km of ring at mid latitude — while the cover ladder reaches
+  z2 and the far shell z3. Measured at the Golden Gate: at zoom 30,000 the
+  frame is 3,011km across and the ring reached 1,979km; at 110,000 it is
+  10,970km against the same 1,979km. The vector map was the one layer that ran
+  out before the view did, and most of a globe-wide chart had no roads and no
+  names on it. z4 through z0 cost nothing to serve — they are arithmetic over
+  the baked Natural Earth array, never an upstream — and **one z0 tile is the
+  whole planet: 4,293 features, 82.8KB gzipped, 51ms through the handler (6ms
+  of that is the slice).** `NE_MIN_Z` is 0, the
+  rank rows run down to it, and `ovLevelFor`'s ring reaches the ceiling.
+- **THE RETIRED RING WAS DROPPED BEFORE THE NEW ONE HAD ANYTHING.**
+  `setOvLevel` called `dropRetiredOv()` at the top, and three build paths
+  called it again whenever the queue happened to empty. A zoom-out crossing
+  three bands in a second therefore threw away everything the previous swap
+  had retained and was left holding only the newest band, which had nothing
+  landed in it. `cullRetiredOv` already drops a mesh the moment the new level
+  covers it, or after twenty seconds; all the swap needs is a CAP, so a long
+  sweep cannot accumulate for ever. `OV_RETIRED_GENS` is three.
+- **…AND HOLDING THREE BROKE THE ORDERING, which is `farLift`'s lesson one
+  layer over.** `ovMat` has `depthTest: false`, so the depth buffer decides
+  nothing and draw order is the only law; the retirement used to sink the
+  outgoing ring fifteen metres, which works through the transparent sort and
+  works only while exactly ONE ring is retired. Three rings at one sunk radius
+  is a tie, and the winner is whichever three ordered last. The order is a
+  function of the LEVEL now and of nothing else — `ovOrderFor`, finest last
+  hence on top, `renderOrder` 40 upward, nothing else in the scene above 40 —
+  so a retained z13 patch stays over a new z5 ring, which is the better data in
+  the few kilometres it covers. The note by `farLift` says the same thing about
+  the same mistake: a sink on the outgoing ring is right for a curtain and
+  backwards for a pyramid.
+
+Two smaller things went with them. The ring is asked **centre-out** and its
+indices are wrapped in x and clipped in y, because at the widest rungs the ring
+is wider than the grid and an index off the end is a 400 the loader would hold
+against that tile for the whole retry window (`ovWant` is the deduplicated ask,
+so z0 asks for one tile and z1 for four). And a tile the chart is **looking at**
+is re-asked after `OV_RETRY_NEAR_MS` (6s) rather than the full 45: the long
+window is right for a tile the view has left behind and is forty-five seconds
+of hole in the middle of the map for one inside the current ring.
+
+**MEASURED at the Golden Gate**, control against the working tree, same spot,
+same harness, `nodraw`:
+
+| zoom | frame | control level / reach | covers | fix level / reach | covers |
+|---|---|---|---|---|---|
+| 120 | 12.0 km | z12 / 15.5 km | yes | z11 / 30.9 km | yes |
+| 500 | 50.2 km | z10 / 61.8 km | yes | z9 / 123.7 km | yes |
+| 2,000 | 200.7 km | z8 / 247.3 km | yes | z7 / 494.6 km | yes |
+| 8,000 | 802.8 km | z6 / 989.3 km | yes | z5 / 1,978.6 km | yes |
+| **30,000** | **3,010.6 km** | **z5 / 1,978.6 km** | **NO** | **z4 / 3,957.1 km** | yes |
+| **110,000** | **10,970 km** | **z5 / 1,978.6 km** | **NO** | **z2 / 15,828.5 km** | yes |
+
+and the gesture itself — one continuous pull-out from zoom 4 to 110,000 over
+90 seconds, sampled every 250ms:
+
+| | control | fix |
+|---|---|---|
+| samples with NOTHING drawn | **22 of 328 (7%)** | **0 of 325** |
+| longest blank run | **5.5 s** | **0** |
+| rungs that land | 25/25 to z5, then nothing wider exists | 25/25 at every rung, 16/16 at z0–z2 |
+| ring home, z2,000 / z8,000 / z30,000 | 8 s / 6 s / 3 s | 3 s / 3 s / 2 s |
+
+The level rule picking one rung COARSER at the same zoom is not a loss of
+detail, it is the ring finally covering the frame — and at the wide end it
+lands the chart on the bake sooner, which is why the rings come home faster.
+What the pair cannot separate is how much of the blank-frame fix is the
+retirement and how much is the ladder; the retirement is the only mechanism
+that can blank a frame the control could otherwise draw, and the ladder only
+adds rungs past where the control had z5 permanently drawn, but that is
+reasoning and not a measurement.
+
+### …and the harness had never served the baked routes at all
+
+Found while making the wide rungs measurable, and it invalidates more than this
+change. The harness runs `~/dem/v1/`, `~/cover/v1/` and `~/cover/w1/` through
+the cell's own handler, bundled with esbuild as **ESM** — and **`__dirname`
+does not exist in an ESM bundle**. Every route that reads a baked asset off
+disk threw on its first call. Measured on the bundle the harness produces:
+
+```
+/~/cover/w1/4/8/6    503 {"error":"no coarse cover baked"}
+/~/osm/ov1/7/19/48   503 … 43s … {"bakeMissing":"__dirname is not defined"}
+```
+
+The comment beside the symlink in `cellRoute` says it was added to fix the
+coarse cover and could not have. **Every harness run since `cover-wide.b64`
+shipped has been measuring the fallback** — the shell's wide cover has been
+absent in this rig throughout, and any harness reading of `__cover().wide` from
+that period is a reading of nothing. `--define:__dirname=<dir>` is the fix (and
+note the quoting: through `execSync` it needs a doubled `JSON.stringify`,
+because the shell eats one layer — through `execFile`'s argument array it needs
+one, which is the trap `ov-wide-size.mjs` already recorded from the other side).
+The handler's own error strings are what said so, which is exactly why
+`serveOverview` reports `bakeMissing`.
+
+Two more, both in the same route:
+
+- **THE OVERVIEW IS TWO ROUTES WEARING ONE PATH.** The fine rungs (z10 and in)
+  are Overpass queries and must be read from the BANK — re-earning them locally
+  is minutes of a public service per run — and the wide rungs are arithmetic
+  over a file in this repo. The harness splits on the zoom now: z9 and out
+  through the handler, z10 and in proxied to the deploy. Without the split a
+  rung ADDED to the bake is a 400 here until a deploy, which reads exactly like
+  a broken client, and the ladder above could not have been measured before it
+  shipped.
+- **AND `cellRoute` DROPPED `content-encoding`.** `serveOverview` answers
+  gzipped; `serveDem` and the cover routes do not, which is why nobody had met
+  it. The harness wrote a bare `content-type`, so the page got gzip bytes and
+  tried to parse them as JSON: every coarse chart tile threw, every one was
+  filed in `ovFailedAt`, and the chart read `0/25 · 25 RETRY` against a route
+  answering 200 in fourteen milliseconds. It is gunzipped in `cellRoute` now,
+  once, so the disk cache stays plain and every consumer route is unchanged.
+
+`__ov()` carries `sightM`, `reachM`, `covers`, `ring` and `levels` for the same
+reason: the rule is arithmetic between two numbers and neither was reported, so
+"the chart's corners are empty" could not be told from "the tiles have not
+landed". Held by `devtools/ne-wide.test.mjs` (every rung z4 out to z0 answers, is
+a skeleton rather than a wall, draws motorways only, and slices in single-digit
+milliseconds; z0 names 68 capitals) and measured by `devtools/ov-sweep.mjs`.
+`boot.mjs`, `switches.test.mjs` and `through-node.test.mjs` green — Camps Bay
+8 / 0 / 0.19 m unchanged.
+
+**What is NOT done here**, and is the next unit the seat asked for: the chart
+is still ONE layer. Splitting it so cities draw at the wide views, roads closer
+in, and cover and eco polygons can be toggled with a key and a legend is the
+work this was the prerequisite for.
 
 ## Big shapes worth knowing
 

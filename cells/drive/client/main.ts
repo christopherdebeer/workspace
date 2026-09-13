@@ -25709,8 +25709,14 @@ function streamWorld(ex: number, ez: number): void {
   // below stay on the chart's own budget, since they are a map layer and only
   // the chart draws them.
   const sight = Math.max(r, SIGHT_M);
-  // The SHELL's sight line, which is not the plane's — see backdropRadius.
-  const shellSight = Math.max(backdropRadius(), SIGHT_M);
+  // The VIEW's sight line, which is not the plane's — see backdropRadius. It
+  // is the frustum's true ground reach with no ceiling on it; the shell floors
+  // it at SIGHT_M because terrain is streamed for the EYE and the eye wants
+  // ground under it even from the seat. The chart's vector map takes it
+  // UNFLOORED: it is a map layer the chart alone draws, and a 24km floor would
+  // hold it two rungs coarser than the frame at the close end of the zoom.
+  const viewSight = backdropRadius();
+  const shellSight = Math.max(viewSight, SIGHT_M);
   if (sight > tileMetres(TERRAIN_Z) * 1.5) {
     // THE CHART STREAMS WHERE YOU LOOK. The fine rings above serve the TRUCK —
     // that is gameplay. The far shell and the overview vectors serve the VIEW,
@@ -25807,22 +25813,53 @@ function streamWorld(ex: number, ez: number): void {
     // synthetic crossroads. A fixture is supposed to run with the network out
     // of the loop; this was the hole in that claim.
     if (camMode === 'top' && !FIXTURE) {
-      setOvLevel(ovLevelFor(r));
+      // THE CHART'S REACH IS THE SHELL'S, NOT THE PLANE'S. `r` is capped at
+      // SIGHT_MAX because past it the tangent plane stops being honest, which
+      // is right for every layer that lives in the plane — and the chart's
+      // group is a child of the PLANET. Sized by the capped radius, a
+      // globe-wide frame asked for a ring about 1,500km across and drew
+      // nothing over the rest of the Earth. The shell has always used its
+      // own, uncapped sight line; the map drawn on it now uses the same one —
+      // without the shell's SIGHT_M floor, which is a terrain budget and not
+      // a map one.
+      const ovSight = viewSight;
+      setOvLevel(ovLevelFor(ovSight));
       const [vx, vy] = tileAt(cLat, cLon, ovZ);
-      const vRing = clamp(Math.ceil(r / tileMetres(ovZ)), 1, OV_RING_MAX);
+      const vRing = clamp(Math.ceil(ovSight / tileMetres(ovZ)), 1, OV_RING_MAX);
       // WHAT THIS PASS ASKED FOR, so the chart can say how much of it is home.
       // Reported from the seat: "I open the chart and zoom out and it is not
       // clear if or when the overview will load." It was not clear because
       // nothing said — the fine vector layer has had a status line for years
       // and this layer, which is the one the chart actually draws, streamed in
       // silence behind a backdrop that looks the same empty as it does cold.
-      ovWant = (vRing * 2 + 1) ** 2;
+      const ovN = 1 << ovZ;
       ovAskedAt = performance.now();
-      ovRingAt = { z: ovZ, x: vx, y: vy, r: vRing, n: 1 << ovZ };
+      ovRingAt = { z: ovZ, x: vx, y: vy, r: vRing, n: ovN };
       evictOvOutside();
-      for (let dx = -vRing; dx <= vRing; dx++)
-        for (let dy = -vRing; dy <= vRing; dy++) void loadOvTile(vx + dx, vy + dy);
-    } else ovWant = 0;
+      // CENTRE-OUT, so the middle of the frame fills first and a slow ring
+      // reads as a map growing outward rather than as scattered patches.
+      // …and never off the ends of the world: at the widest rungs the ring is
+      // wider than the grid itself, and an index outside it is a 400 that the
+      // loader would hold against the tile for the whole retry window.
+      const ovAsk: Array<[number, number]> = [];
+      const seen = new Set<string>();
+      for (let d = 0; d <= vRing; d++) {
+        for (let dx = -d; dx <= d; dx++) for (let dy = -d; dy <= d; dy++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== d) continue;
+          const ty = vy + dy;
+          if (ty < 0 || ty >= ovN) continue;
+          const tx = (((vx + dx) % ovN) + ovN) % ovN;
+          const k = `${tx}/${ty}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          ovAsk.push([tx, ty]);
+        }
+      }
+      ovWant = ovAsk.length;
+      ovSightM = ovSight;
+      ovReachM = tileMetres(ovZ) * vRing;
+      for (const [tx, ty] of ovAsk) void loadOvTile(tx, ty);
+    } else { ovWant = 0; ovSightM = 0; ovReachM = 0; }
   }
   // ── the summits ──
   // OUTSIDE the view gates above — a mountain is a landmark from the driver's
@@ -27106,7 +27143,17 @@ const FAR_DROP = 12;
 // z6 and z5 come from the same Natural Earth bake as z7-z9 (`ne-wide.ts`):
 // scalerank ≤ 3 and ≤ 2, the trunk network of a subcontinent, and the
 // capitals. The asset already held them; the rungs are two entries.
-const OV_LEVELS = [13, 12, 11, 10, 9, 8, 7, 6, 5];
+/**
+ * ── THE LADDER REACHES THE PLANET ──
+ *
+ * It stopped at z5, which is 1,252km a tile, while the cover ladder reaches
+ * z2 and the far shell z3 — so the vector map was the one layer that ran out
+ * before the view did, and a globe-wide chart had no roads or names over most
+ * of the Earth. The wide rungs cost nothing to serve (they are arithmetic over
+ * a baked Natural Earth array, never an upstream) and one z0 tile is the whole
+ * planet at 83KB.
+ */
+const OV_LEVELS = [13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0];
 const OV_RING_MAX = 2;        // 5×5 tiles at whichever level is current
 /** How long the CHART waits, which is not how long the CELL takes. See the
  *  note in loadOvTile: an abandoned request still banks its tile. */
@@ -27168,6 +27215,13 @@ let ovInFlight = 0;
  *  the denominator of the MAP status word and of `__ov()`. Zero off the chart:
  *  this layer is only ever streamed for the top camera. */
 let ovWant = 0, ovAskedAt = 0;
+/** The sight line the last pass sized the ring by, and the ground the ring
+ *  it asked for actually reaches. The level rule is arithmetic between these
+ *  two and nothing reported either, so "the chart is empty at the corners"
+ *  could not be told from "the tiles have not landed" — the first is a rule
+ *  that under-reaches and the second is the wire. `__ov().sightM` against
+ *  `.reachM` is that distinction in one call. */
+let ovSightM = 0, ovReachM = 0;
 /**
  * ── A REFUSED OVERVIEW TILE BACKS OFF, AS THE FINE LAYER'S ALREADY DOES ──
  *
@@ -27188,6 +27242,11 @@ let ovWant = 0, ovAskedAt = 0;
  */
 const ovFailedAt = new Map<string, number>();
 const OV_RETRY_MS = 45000;
+/** …but a tile the chart is LOOKING AT is asked again much sooner. The long
+ *  window is right for one the view has left behind; for one inside the
+ *  current ring it is forty-five seconds of hole in the middle of the map,
+ *  and the commonest failure is a busy mirror that answers on the next ask. */
+const OV_RETRY_NEAR_MS = 6000;
 const ovQueue: Array<() => void> = [];
 const ovGroup = new THREE.Group();
 ovGroup.name = 'overview';
@@ -27282,8 +27341,8 @@ const ovInkU = { uInkOn: { value: 1 } };
  * keep their own rank gate. Measured on the Afsluitdijk stand, see the
  * chart section of CLAUDE.md.
  */
-const OV_PX_BY_Z: Record<number, number> = { 13: 2.0, 12: 2.0, 11: 2.0, 10: 1.7, 9: 1.4, 8: 1.2, 7: 1.0, 6: 1.0, 5: 1.0 };
-const OV_INK_BY_Z: Record<number, number> = { 13: 1, 12: 1, 11: 1, 10: 0.9, 9: 0.8, 8: 0.7, 7: 0.6, 6: 0.5, 5: 0.5 };
+const OV_PX_BY_Z: Record<number, number> = { 13: 2.0, 12: 2.0, 11: 2.0, 10: 1.7, 9: 1.4, 8: 1.2, 7: 1.0, 6: 1.0, 5: 1.0, 4: 1.0, 3: 1.0, 2: 1.0, 1: 1.0, 0: 1.0 };
+const OV_INK_BY_Z: Record<number, number> = { 13: 1, 12: 1, 11: 1, 10: 0.9, 9: 0.8, 8: 0.7, 7: 0.6, 6: 0.5, 5: 0.5, 4: 0.45, 3: 0.45, 2: 0.4, 1: 0.4, 0: 0.4 };
 const ovPxFor = (z: number): number => OV_PX_BY_Z[z] ?? 1.0;
 const ovInkFor = (z: number): number => OV_INK_BY_Z[z] ?? 0.5;
 /** Metres per ART pixel at the chart's centre (`uOvMpp`), the rung's base
@@ -27402,9 +27461,18 @@ const OV_HW: Record<string, number> = {
   motorway_link: 4, trunk_link: 4, primary_link: 4, unclassified: 3.5, residential: 3.5,
 };
 const OV_RANK: Record<string, number> = { city: 0, town: 1, village: 2, hamlet: 3 };
-/** The finest overview level whose 5×5 ring still fills the view. */
+/**
+ * The finest overview level the ring can actually COVER.
+ *
+ * A ring of R tiles about the tile holding the view centre guarantees R tiles
+ * of reach and no more: the centre can sit anywhere in its own tile, and in
+ * the worst case it is against the far edge. This asked for `R + 0.5`, which
+ * is half a tile more than the ring can reach — so at the wide end of every
+ * level band the chart's own corners had no data, and stayed empty until the
+ * zoom crossed into the next band. Reach exactly what the ring reaches.
+ */
 function ovLevelFor(radius: number): number {
-  for (const z of OV_LEVELS) if (radius <= tileMetres(z) * (OV_RING_MAX + 0.5)) return z;
+  for (const z of OV_LEVELS) if (radius <= tileMetres(z) * OV_RING_MAX) return z;
   return OV_LEVELS[OV_LEVELS.length - 1];
 }
 function setOvLevel(z: number): void {
@@ -27415,17 +27483,59 @@ function setOvLevel(z: number): void {
   // the terrain shell does — sunk a little so the incoming level wins where
   // both exist, one ring at a time, culled as the new ring covers it (see
   // setFarLevel for the stack this replaces).
-  dropRetiredOv();
+  //
+  // …AND IT IS NOT DROPPED HERE. This threw away everything the PREVIOUS
+  // change had retired, so a zoom-out crossing three bands in a second was
+  // left holding only the newest band — which had nothing landed in it yet,
+  // and the chart went empty. `cullRetiredOv` drops a mesh the moment the new
+  // level covers it, or after twenty seconds; all this needs is a cap, so a
+  // long sweep cannot accumulate for ever.
+  while (ovRetired.length > OV_RETIRED_GENS * (2 * OV_RING_MAX + 1) ** 2) {
+    const m = ovRetired.shift();
+    if (m) { ovGroup.remove(m); m.geometry.dispose(); }
+  }
   for (const [k, m] of ovMeshes) {
     const [, x, y] = k.split('/').map(Number);
     m.userData.retired = { z: was, x, y, at: performance.now() };
-    m.position.multiplyScalar(1 - 15 / GLOBE_R); ovRetired.push(m);
+    // No sink: the mesh already carries its level's draw order, and it keeps
+    // it. See OV_ORDER for why retirement must not touch the ordering.
+    ovRetired.push(m);
   }
   ovEmpty.clear(); ovDemlessKeys.clear();
   ovMeshes.clear();
   ovTiles.clear();
   ovWays.clear(); ovWayV++;    // the level swapped; the coarse graph is stale
 }
+/** How many outgoing levels may be held at once. A sweep from the seat to the
+ *  globe crosses a dozen bands; without a cap every one would stay in the
+ *  scene until its own coverage test passed. */
+const OV_RETIRED_GENS = 3;
+/**
+ * ── FINER DRAWS LAST, BY LEVEL, AND NOT BY WHICH RING WAS RETIRED ──
+ *
+ * `ovMat` has `depthTest: false`, so the depth buffer decides nothing here and
+ * the ONLY law is draw order. The retirement used to sink the outgoing ring by
+ * fifteen metres, which works through the transparent sort — a further mesh is
+ * drawn earlier, so the incoming level paints over it — and works only while
+ * exactly ONE ring is ever retired. Holding three (which is what stops a fast
+ * zoom-out going blank) puts three rings at the same sunk radius, where the
+ * sort between them is a tie and the winner is whichever three happened to
+ * order last.
+ *
+ * This is `farLift`'s lesson one layer over, and the note there says it
+ * plainly: a sink applied to the OUTGOING ring is right for a curtain and
+ * backwards for a pyramid. A retained z13 patch under a new z5 ring is the
+ * better data in the few kilometres it covers, and burying it is the wrong
+ * answer. So the order is a function of the LEVEL and of nothing else — finest
+ * last, hence on top — which makes it total and arrival-order irrelevant.
+ *
+ * 40 was the chart ink's own order, chosen to paint after the world's
+ * transparents (water, rain); the ladder runs up from it and nothing else in
+ * the scene sits above 40.
+ */
+const OV_ORDER = 40;
+const ovOrderFor = (z: number): number =>
+  OV_ORDER + (z - OV_LEVELS[OV_LEVELS.length - 1]);
 function dropRetiredOv(): void {
   for (const m of ovRetired) { ovGroup.remove(m); m.geometry.dispose(); }
   ovRetired = [];
@@ -27478,7 +27588,9 @@ async function loadOvTile(x: number, y: number): Promise<void> {
   const key = `${z}/${x}/${y}`;
   if (ovTiles.has(key)) return;
   const failed = ovFailedAt.get(key);
-  if (failed !== undefined && performance.now() - failed < OV_RETRY_MS) return;
+  const near = !!ovRingAt && ovRingAt.z === z && !ovOutside(z, x, y);
+  if (failed !== undefined
+    && performance.now() - failed < (near ? OV_RETRY_NEAR_MS : OV_RETRY_MS)) return;
   ovTiles.add(key);
   if (ovInFlight >= 4) await new Promise<void>((go) => ovQueue.push(go));
   ovInFlight++;
@@ -27554,7 +27666,6 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   if (!dem) {
     ovDemless++;
     ovDemlessKeys.add(key);
-    if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
     return;
   }
   // Height over the datum in the flat frame's sense; the curve is the sphere
@@ -27707,7 +27818,6 @@ function buildOvTile(key: string, x: number, y: number, z: number,
     // it still gets to say the ring is complete so the retired level can go.
     ovEmpty.add(key);
     cullRetiredOv();
-    if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
     return;
   }
   const geo = new THREE.BufferGeometry();
@@ -27727,14 +27837,14 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   mesh.frustumCulled = false;
   // With depth ignored, draw order is the only law — the chart's ink paints
   // after the world's own transparents (water, rain) rather than under
-  // whichever happened to sort nearer that frame.
-  mesh.renderOrder = 40;
+  // whichever happened to sort nearer that frame, and the LEVEL decides which
+  // of the chart's own rings wins where two overlap. See OV_ORDER.
+  mesh.renderOrder = ovOrderFor(z);
   mesh.position.copy(centre);
   for (const r of inkRuns) if (!r.lit) ovDark.push({ mesh, name: r.name, la: r.la, lo: r.lo, from: r.from, to: r.to });
   ovMeshes.set(key, mesh);
   ovGroup.add(mesh);
   cullRetiredOv();
-  if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
 }
 // ── the peak layer: named summits as far landmarks ─────────────────
 /**
@@ -48507,6 +48617,13 @@ function setClean(on: boolean): void {
   inFlight: ovInFlight, queued: ovQueue.length, retired: ovRetired.length,
   failing: [...ovFailedAt.values()].filter((t) => performance.now() - t < OV_RETRY_MS).length,
   retryMs: OV_RETRY_MS,
+  // The rule, as two metres: how far the frame sees, and how far the ring
+  // that was asked for reaches. `covers` is the whole level rule — false is
+  // a chart whose own corners have no data and never will at this zoom.
+  sightM: Math.round(ovSightM), reachM: Math.round(ovReachM),
+  covers: ovReachM >= ovSightM,
+  ring: ovRingAt.z >= 0 ? { ...ovRingAt } : null,
+  levels: [...OV_LEVELS],
   sinceAskMs: ovAskedAt ? Math.round(performance.now() - ovAskedAt) : null,
   waitMs: OV_WAIT_MS, top: camMode === 'top', word: worldStatus().map,
   labels: [...ovLabelsDrawn],
