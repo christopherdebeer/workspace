@@ -219,12 +219,21 @@ export function drawRailTexture(c: CanvasRenderingContext2D, s: number, r: Rng, 
     c.fillStyle = 'rgba(255,250,238,0.16)'; c.fillRect(0, 0, sh, s);
     c.fillStyle = 'rgba(0,0,0,0.22)'; c.fillRect(s - sh, 0, sh, s);
   }
-  // ── THE SLEEPERS ──
-  // Half a metre wide on the ground (a real one is 0.25; at this scale that is
-  // three pixels and the rhythm is what carries, not the width), spanning the
-  // sleeper's own length rather than the whole formation, so the ballast
-  // shoulder shows outside them.
-  const slW = Math.max(2, 0.34 * py);
+  // ── THE SLEEPERS, AND HOW MUCH BALLAST HAS TO SHOW BETWEEN THEM ──
+  //
+  // Reported from the seat: "sleeper gaps can be 4x." They can, and it is this
+  // line. The first cut drew a 0.34 m sleeper and gave it a 0.17 m shadow, so
+  // 0.51 m of a 0.65 m pitch was dark and the pale ballast between was 3.4 of
+  // 16 canvas pixels — TWENTY-TWO PER CENT. A feature that thin on that pitch
+  // beats against the screen's own grid under minification, and what survives
+  // is every second or every fourth gap. The eye reads that as sleepers laid
+  // four times too far apart, which is exactly the report.
+  //
+  // A real sleeper is 0.25 m on a 0.65 m pitch — the GAP is the majority of a
+  // railway, about sixty per cent of it, and drawing the bars fat inverts the
+  // thing that makes track read as track. 0.24 m with a 0.05 m shadow leaves
+  // 55% pale, and a 8.9-pixel gap has room to survive a mip level.
+  const slW = Math.max(2, 0.24 * py);
   const slX0 = mid - (spec.sleeperLenM / 2) * px, slX1 = mid + (spec.sleeperLenM / 2) * px;
   for (let k = 0; k < spec.sleepers; k++) {
     const y = ((k + 0.5) / spec.sleepers) * s - slW / 2;
@@ -237,10 +246,11 @@ export function drawRailTexture(c: CanvasRenderingContext2D, s: number, r: Rng, 
       : `rgba(${84 + r() * 16 | 0},${80 + r() * 14 | 0},${74 + r() * 12 | 0},0.95)`;
     c.fillStyle = tone;
     c.fillRect(slX0, y, slX1 - slX0, slW);
-    // …and its own shadow into the stone on the far side, which is most of
-    // what makes the rhythm read from above.
-    c.fillStyle = 'rgba(0,0,0,0.42)';
-    c.fillRect(slX0, y + slW, slX1 - slX0, Math.max(1, slW * 0.5));
+    // …and a hairline of its own shadow into the stone on the far side. A
+    // LINE, not a band: this used to be half the sleeper's width again and it
+    // is what ate the gap.
+    c.fillStyle = 'rgba(0,0,0,0.45)';
+    c.fillRect(slX0, y + slW, slX1 - slX0, Math.max(1, 0.05 * py));
   }
   // ── THE RAILS ──
   // Two of them, at the gauge, running the full length. Steel that is polished
