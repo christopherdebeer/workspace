@@ -23,6 +23,7 @@ import { clamp } from './num';
 import { mulberry32, type Rng } from './rng';
 import { cracks, makeCanvasTex, moss, speckle, wallTextures } from './wall-tex';
 import { chimneyGeo, flatRoofGeo, flipWinding, roofGeo } from './roof';
+import { drawRailTexture, railRepeatY, railSpec, type RailSpec } from './railway';
 import { morphology, plan as footprintPlan } from './morphology';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
 import {
@@ -8322,6 +8323,61 @@ function roadTexture(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.
   });
   roadTexCache.set(key, tex);
   return tex;
+}
+
+/**
+ * ── ONE MATERIAL PER FORMATION, CACHED ON THE SPEC'S OWN KEY ──
+ *
+ * The same shape as `roadTexture`'s cache and for the same reason: the canvas
+ * is a function of the spec and nothing else, a tile can carry a dozen ways of
+ * one kind, and a texture per way would be a texture per way.
+ *
+ * THE v REPEAT IS THE WHOLE TRICK. The ribbon's v is `along / 20` and that is
+ * not negotiable from out here, so a canvas mapped straight onto it would be
+ * 20 m of track in 128 pixels — six pixels to the metre, on which a sleeper at
+ * 0.65 m pitch is four pixels including its gap and the rhythm dithers away.
+ * `repeat.y = railRepeatY` makes one canvas height exactly eight sleepers of
+ * real pitch (5.2 m on a main line), which is twenty-five pixels to the metre
+ * along the track and a sleeper you can count.
+ *
+ * NOT TRANSPARENT, unlike `MAT.minor` which it replaces: ballast is opaque
+ * stone, and the 0.85 the footpath carried let the hillside through it.
+ */
+const railTexCache = new Map<string, THREE.Texture>();
+const railMatCache = new Map<string, THREE.Material>();
+function railMat(spec: RailSpec): THREE.Material {
+  const hit = railMatCache.get(spec.key);
+  if (hit) return hit;
+  let seed = 331;
+  for (let i = 0; i < spec.key.length; i++) seed = (seed * 31 + spec.key.charCodeAt(i)) % 9973;
+  let tex = railTexCache.get(spec.key);
+  if (!tex) {
+    tex = canvasTex(128, 1, railRepeatY(spec), seed, (c, sz, r) => drawRailTexture(c, sz, r, spec));
+    railTexCache.set(spec.key, tex);
+  }
+  const mat = new THREE.MeshLambertMaterial({
+    map: tex, side: FS,
+    // Above the terrain in the same units ladder the roads use, and BELOW the
+    // carriageway (-12): at a level crossing the road is laid over the track,
+    // which is what a level crossing is.
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6,
+  });
+  railMatCache.set(spec.key, mat);
+  return mat;
+}
+/** Every railway this world has built, by OSM id — the census a look has to be
+ *  arguable from. `__built().roofs` had to be invented for buildings for the
+ *  same reason: a count cannot say WHICH, and the first question anyone asks
+ *  of a railway is "what did it decide this one was". Cleared with plotGrid. */
+const railWays = new Map<number, RailSpec & { x: number; z: number; len: number }>();
+function noteRailway(id: number, spec: RailSpec, pts: Array<[number, number]>): void {
+  // WHERE IT IS, not only what it is. A probe that cannot say where a thing
+  // stands cannot be used to frame one, and the first tool written against
+  // this one had to guess a coordinate and photographed a street instead.
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  const m = pts[Math.floor(pts.length / 2)] ?? [0, 0];
+  railWays.set(id, { ...spec, x: +m[0].toFixed(1), z: +m[1].toFixed(1), len: +len.toFixed(1) });
 }
 
 // The junction mouth's own surface: the same tarmac with NO lines — a host's
@@ -23431,7 +23487,26 @@ const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterwa
   'water', 'width', 'intermittent', 'seasonal', 'tidal', 'water_level',
   // Infrastructure grammar: explicit facts always outrank procedural context.
   'bridge:structure', 'bridge:support', 'bridge:material', 'tunnel:type',
-  'tunnel:lining', 'material', 'start_date', 'lanes', 'width', 'diameter'];
+  'tunnel:lining', 'material', 'start_date', 'lanes', 'width', 'diameter',
+  // ── THE RAILWAY VOCABULARY, AND `railway` ITSELF, WHICH WAS NEVER HERE ──
+  //
+  // This list is the whitelist `writeTileCache` copies a way's tags through
+  // before storing it, and `railway` was not on it — so a railway drew on the
+  // visit that fetched the tile and was GONE on the next one, because the
+  // cached copy of those ways has no tag to match. Two of the three ways at
+  // Glencairn carry nothing else on this list at all, so their cached `tags`
+  // came back `undefined` outright.
+  //
+  // And the vocabulary is worth keeping, which is NOT the lesson buildings
+  // taught. Counted over 113 railway ways in the z16 tiles under Glencairn,
+  // Suresnes, Vélizy and Clapham Junction: gauge 96%, electrified 99%,
+  // voltage 99%, operator 99%, name 72%, maxspeed 64%, usage 55%, tracks 37%,
+  // service 35%. A railway is one of the best-surveyed things in OSM — the
+  // opposite of a building, where height is 0.05% — so the look can READ
+  // rather than synthesise. (That sample is Europe-weighted and says nothing
+  // about Asia or the Americas: four of the ten tiles asked for timed out
+  // cold. Widen it before quoting a global figure.)
+  'railway', 'gauge', 'electrified', 'usage', 'tracks', 'passenger_lines', 'service'];
 let osmDb: IDBDatabase | null = null;
 let osmDbHow = 'pending';
 /**
@@ -24578,9 +24653,17 @@ async function renderWays(
       noteHydroWay(el.id, tags, pts, dk);
       waterway(pts, WATER_W[tags.waterway as string], tags.name, dk, tags);
     } else if (tags.railway) {
-      // Rails read as a narrow dark line across the country and a thing you
-      // bump over at a crossing. Not drivable — nobody drives a railway.
-      ribbon(pts, 3.4, MAT.minor, 0.035, false, 'none', false, tags.name);
+      // A RAILWAY IS ITS OWN FORMATION, not a narrow road — ballast at the
+      // width the gauge asks for, sleepers at their own pitch and two rails
+      // between them. See client/railway.ts for what is read and what is
+      // synthesised, and for the filter: `subway` in a tunnel, `abandoned`,
+      // `razed`, `platform` and `construction` drew a surface ribbon before
+      // this and draw nothing now. Not drivable — nobody drives a railway.
+      const rs = railSpec(tags);
+      if (rs.draw) {
+        noteRailway(el.id, rs, pts);
+        ribbon(pts, rs.widthM, railMat(rs), rs.liftM, false, 'none', false, tags.name);
+      }
     } else if (tags.aeroway === 'runway' || tags.aeroway === 'taxiway') {
       // A runway is the widest ribbon in the vocabulary and perfectly
       // drivable — which is the whole point of fetching it.
@@ -30999,7 +31082,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     tileStats.clear(); surveyedCache.clear();
     unbuilt = 0; osmFails = 0; osmDown = false;
     mapFeats.length = 0; mapStroked.clear();
-    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear(); bldRoofs.clear();
+    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear(); bldRoofs.clear(); railWays.clear();
     channelGrid.clear(); rapidRocks.clear(); activeRapidRocks.clear(); chanSet.clear(); wiSet.clear();
     pendingWater.length = 0; productionCrossings.reset(); crossingAppliedRevision.clear();
     productionSubstrate.reset();
@@ -33518,6 +33601,28 @@ function repaintWetDebug(): void {
 // roof to, within `r` of the truck: its id, plan centroid, area, the short
 // side of its oriented box (so a tool can pick one WIDER than the sample box
 // it is about to read), its built height and its form. Sorted biggest first.
+// EVERY RAILWAY THIS WORLD HAS BUILT, and what it decided each one was.
+// A railway is the best-tagged thing in OSM (gauge 96%, electrified 99%,
+// measured — see client/railway.ts), so the interesting question is not how
+// much was synthesised but whether the tags were read correctly, and that is a
+// per-way answer. `kinds` is the histogram, `list` the ways themselves.
+(window as unknown as { __railways?: object }).__railways = (): object => {
+  const list = [...railWays.entries()].map(([id, s2]) => ({ id, ...s2 }));
+  const tally = (f: (s2: RailSpec) => string): Record<string, number> =>
+    list.reduce((m: Record<string, number>, s2) => (m[f(s2)] = (m[f(s2)] ?? 0) + 1, m), {});
+  return {
+    n: list.length,
+    kinds: tally((s2) => s2.kind),
+    gauges: tally((s2) => s2.gaugeM.toFixed(3)),
+    minor: list.filter((s2) => s2.minor).length,
+    disused: list.filter((s2) => s2.disused).length,
+    electrified: list.filter((s2) => s2.electrified).length,
+    // What the ribbons actually cost, so a look can be argued against a bill.
+    materials: railMatCache.size, textures: railTexCache.size,
+    // Longest first: the main line rather than whichever siding built first.
+    list: list.sort((a, b) => b.len - a.len).slice(0, 30),
+  };
+};
 (window as unknown as { __bldroofs?: object }).__bldroofs = (r = 400, form?: string): object => {
   const out: Array<{ id: number; x: number; z: number; area: number; short: number; h: number; roof: string;
     ring: number[][] }> = [];

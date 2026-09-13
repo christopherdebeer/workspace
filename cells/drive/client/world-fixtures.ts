@@ -843,6 +843,12 @@ export const CAPTURE_INDEX: readonly CaptureCard[] = [
     label: 'SIMON\'S TOWN — THE JOINS',
     note: 'Reported from the seat at -34.19511,18.44192 heading 246: at the junctions the batter stops short of the join and leaves a gap, the arms do not meet on one closed plane, the batter is a picture the truck drives into rather than ground it stands on, and a mis-joined arm can put a guard rail across the carriageway. A steep peninsula suburb — 181 highways over 437m of relief in a 1.4km box — so nearly every junction is a joiner meeting a host on a cross-slope, which is where all four live.',
   },
+  {
+    id: 'at-glencairn', file: 'world-glencairn.json', heading: 20,
+    eco: { id: 89, biome: 12, name: 'Fynbos shrubland', realm: 'Afrotropic' },
+    label: 'GLENCAIRN — THE SOUTHERN LINE',
+    note: 'Reported from the seat at -34.15905,18.43142: the railway ribbon is not railway-like. THE FIRST FIXTURE IN THIS REPO THAT CONTAINS A RAILWAY AT ALL — `railway` was missing from capture-world\'s own KEEP_TAGS as well as the game\'s, so all nine captures before this one held ZERO railway ways, Simon\'s Town included, and nothing deterministic could see one. Four ways of the PRASA Southern Line in a 700m box between the mountain and the beach, all `railway=rail usage=main gauge=1067 electrified=contact_line passenger_lines=1`, one of them a `bridge=yes layer=1` — so the gauge, the electrification and the bridge case are all in one capture. 103 highways beside them, and the M4 runs parallel for the whole length, which is the comparison a railway look has to survive.',
+  },
 ];
 
 /**
