@@ -2144,13 +2144,42 @@ const SHORE_ON = qsOn('shore', true);
  *  mixed the far field toward `softTex` as well as toward the haze colour. Off
  *  by default: see `uAirBlur`. The exact A/B for the far-field sharpness. */
 const AIR_BLUR = qsOn('airblur', false) ? 1 : 0;
-/** Tilt-shift strength by preset. A look, so it is opt-in and named rather than
- *  numeric: the seat picks a word, not a lens angle. */
+/**
+ * ── TILT-SHIFT STRENGTH BY PRESET, AND THE BAND AS A FRACTION OF SATURATION ──
+ *
+ * A look, so it is opt-in and named rather than numeric: the seat picks a word,
+ * not a lens angle.
+ *
+ * THE BAND IS A FRACTION, NOT A PIXEL COUNT, and the first cut of this got it
+ * wrong by a factor of four because there is a ceiling nobody had derived. On
+ * ground receding from the eye the plane distance is about `d - D` (D being the
+ * focal distance), and metres per art pixel grows with `d`, so the circle of
+ * confusion in art pixels is
+ *
+ *     px = |fd| / mpp = K * |1 - D/d|,   K = uPix.y / (2 tan(fov/2))
+ *
+ * which SATURATES at K — about 307 at a 55 degree lens over 320 art pixels.
+ * Everything past the plane, however far, is bounded by it. So a `blurPx` near
+ * or above K means the far field never reaches full blur, and a small
+ * `sharpPx` means an absurdly tight band: at 84 the sharp zone was
+ * |1 - D/d| < 0.27 and at 30 it was < 0.098 — a TEN METRE band at a 53 m
+ * focus, which is why the measurement came back a flat 0.306 at every distance
+ * out to five kilometres. The band was real and almost nothing was in it.
+ *
+ * Stated as fractions of K the numbers mean something a person can predict:
+ * `sharp` 0.36 is sharp over d in [0.74 D, 1.56 D], `blur` 0.75 is full blur
+ * outside [0.57 D, 4 D]. And they cannot be set impossibly, because K is
+ * computed from the live lens and art resolution rather than guessed.
+ */
 const TILT_PRESETS: Record<string, { amt: number; sharp: number; blur: number }> = {
-  off: { amt: 0, sharp: 34, blur: 92 },
-  subtle: { amt: 0.5, sharp: 44, blur: 130 },
-  mini: { amt: 0.9, sharp: 30, blur: 84 },
-  hard: { amt: 1, sharp: 20, blur: 56 },
+  off: { amt: 0, sharp: 0.36, blur: 0.75 },
+  // A long band that only softens the extreme fore and background.
+  subtle: { amt: 0.5, sharp: 0.55, blur: 0.95 },
+  // The model-railway band: about three quarters to one and a half times the
+  // focal distance sharp, everything well outside it gone.
+  mini: { amt: 0.9, sharp: 0.36, blur: 0.75 },
+  // A macro lens: a narrow slab, and the rest of the world a wash.
+  hard: { amt: 1, sharp: 0.20, blur: 0.52 },
 };
 const TILT_MODE = ((v) => (v && v in TILT_PRESETS ? v : 'off'))(qs('tilt')?.toLowerCase());
 /**
@@ -32831,9 +32860,15 @@ function aimFocus(): void {
   // made the probe answer with whatever was last written — which on a build
   // with tilt off is the origin, reported as a focal point. An instrument that
   // lies when the feature is off is worse than the operations it saves.
-  u.uTiltSharp.value = preset.sharp;
-  u.uTiltBlur.value = preset.blur;
-  u.uTanHalfFov.value = Math.tan((camera.fov * Math.PI) / 360);
+  // THE SATURATION CONSTANT, from the live lens and the live art resolution —
+  // see TILT_PRESETS for why the band is stated against it rather than in bare
+  // pixels. A 480P frame and a 240P frame have different K, and the preset
+  // means the same thing on both because of it.
+  const tanHalf = Math.tan((camera.fov * Math.PI) / 360);
+  u.uTanHalfFov.value = tanHalf;
+  const K = Math.max(1, pixSize.y) / (2 * Math.max(tanHalf, 1e-3));
+  u.uTiltSharp.value = preset.sharp * K;
+  u.uTiltBlur.value = Math.max(preset.blur * K, preset.sharp * K + 1);
   camera.getWorldDirection(FOCUS_FWD);
   // The ground the ray is aimed at. `groundAt` under the truck is the right
   // datum from every camera: the chart is centred on it and the seat is on it.
@@ -34072,6 +34107,26 @@ function repaintWetDebug(): void {
       // What the composite ends up mixing toward softTex, the two composed.
       blur: +(1 - (1 - air) * (1 - coc)).toFixed(3) };
   };
+  // ── THE TRANSECT RUNS ALONG THE CAMERA'S GROUND DIRECTION, NOT THE TRUCK'S ──
+  //
+  // The first cut of this walked out along `state.heading` from the truck, and
+  // on the chart that is the one direction guaranteed to say nothing: the top
+  // camera looks down a line of its own, the band of focus lies across THAT
+  // line, and a transect down the truck's nose can cross the band at any angle
+  // including ninety degrees. It read a flat field over a world that had one.
+  //
+  // So the ray is the camera's own forward flattened to the ground, from the
+  // point under the EYE rather than under the truck — which also makes `t`
+  // close to `d`, so a row can be read against `focusDistM` without arithmetic.
+  // Straight down (the chart's limit) has no ground direction at all, and there
+  // the truck's heading is the honest fallback: it is what the chart is
+  // oriented to.
+  const fwd = camera.getWorldDirection(new THREE.Vector3());
+  let dx = fwd.x, dz = fwd.z;
+  const flat = Math.hypot(dx, dz);
+  if (flat < 1e-3) { dx = Math.sin(state.heading); dz = -Math.cos(state.heading); }
+  else { dx /= flat; dz /= flat; }
+  const ox = camera.position.x, oz = camera.position.z;
   return {
     mode: TILT_MODE, cam: camMode, amount: +(u.uTiltAmt.value as number).toFixed(3),
     angleDeg: +((tiltTiltRad * 180) / Math.PI).toFixed(2),
@@ -34084,12 +34139,16 @@ function repaintWetDebug(): void {
     focusDistM: +camera.position.distanceTo(P).toFixed(1),
     pix: [pixSize.x, pixSize.y],
     at: at ? sample(at[0], at[1]) : sample(state.x, state.z),
-    // A transect straight ahead: the shape of the focal field along the road,
-    // which is the one reading that says whether a vanishing point survives.
-    ahead: [25, 60, 120, 260, 500, 1000, 2000, 5000].map((d) => {
-      const hx = Math.sin(state.heading), hz = -Math.cos(state.heading);
-      return sample(state.x + hx * d, state.z + hz * d);
-    }),
+    // Which way the transect below was walked, and from where: a reading whose
+    // ray is implicit cannot be checked against the frame it is meant to explain.
+    rayDeg: +((Math.atan2(dx, -dz) * 180) / Math.PI).toFixed(1),
+    rayFrom: [+ox.toFixed(1), +oz.toFixed(1)],
+    // A transect along that ray: the shape of the focal field receding from the
+    // eye, which is the one reading that says whether a vanishing point
+    // survives. The near steps are close together because the band is tight
+    // near the plane and a coarse walk steps straight over it.
+    ahead: [10, 25, 40, 60, 90, 130, 200, 320, 600, 1200, 3000].map((d) =>
+      sample(ox + dx * d, oz + dz * d)),
   };
 };
 (window as unknown as { __railgrade?: object }).__railgrade = (r = 900): object => {
