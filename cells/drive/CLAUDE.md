@@ -8901,7 +8901,7 @@ are not participating in the road ribbon's solved grading — a special case for
 rail, far more straight, and thereby likely to be cutting or raised on bridges
 etc."* Both halves are right, and the second is one flag.
 
-### `drivable` was five jobs
+### `drivable` was five jobs, and the split was WRONG about one of them
 
 Every railway in the world was drawn as
 `ribbon(pts, w, mat, lift, /* drivable */ false, /* mode */ 'none', …)`, which
@@ -8911,32 +8911,57 @@ was no way to ask for some of them.
 
 | job | what reads it | a railway wants it? |
 |---|---|---|
-| the solved longitudinal profile | `hintEl`, `flat`, `solveChainLocal`, `ruleGrade` | **yes** |
-| `roadGrid` | the physics surface, `surfaceAt`, `wayAhead`, `juncNodeGrid`, the router, `__toroad` | **never** |
-| `segsOf` → `rasterizeCut` | the corridor carve and the kernel's break lines | **yes** |
-| `dirtyTerrainAround` | the tiles rebuild so the corridor shows | **yes** |
-| (with `!track`) kerbs, apron, junction boxes, give-way bars, paint | the carriageway's dressing | no |
+| the solved longitudinal profile | `hintEl`, `flat`, `solveChainLocal`, `ruleGrade` | yes |
+| `roadGrid` | the physics surface, `surfaceAt`, `wayAhead`, `juncNodeGrid`, the router, `__toroad` | **yes — see below** |
+| `segsOf` → `rasterizeCut` | the corridor carve and the kernel's break lines | yes |
+| `dirtyTerrainAround` | the tiles rebuild so the corridor shows | yes |
+| (with `!track`) the apron — batter, fascia, soffit, piers, parapet, `daylight` | the earthworks and the structure | **yes** |
+| (with `!track`) cat's eyes, chevrons, hazard boards | the carriageway's furniture | no |
 
-So the split is `engineered = drivable || railway`, and the second row is the
-one line that keeps a railway out of the game: `addSeg(drivable ? roadGrid :
-railGrid, s)`. **`roadGrid` is not a spatial index, it is the answer to "what
-is under the wheels"** — a segment filed there is a segment the truck drives on
-and the autopilot plans down.
+**THE FIRST CUT PUT `roadGrid` IN THE "NEVER" COLUMN, AND THAT WAS THE NEXT
+BUG.** It kept railways in a `railGrid` of their own on the reasoning that
+nothing in the physics, `surfaceAt`, `wayAhead`, the junction registry or the
+router should ever find a track under the wheels. The seat's report on that
+build was exact: *"Still not seeing bridges and batter apply to railways. And I
+think for the purposes of this game they should be fully driveable (any
+concrete reason not to?)"* — and the two halves are the same half.
 
-`railGrid` exists for the two things the earthworks need that a bare list
-cannot do: `rebuildCut` has to re-raster every formation when the lattice
-changes under it (a world hop, a terrain dial) or every railway corridor in the
-world is silently dropped the first time it does; and a rail fragment's END
-WELD has to find its own kind — OSM chops a line at every tile edge and every
-tag change, and a road's deck at a shared node is a level crossing or a bridge,
-neither of which is a reason for the track to take the tarmac's height.
-`deckAnchorAt` and `tiltAnchorAt` take the grid now.
+**`apronOn` is `drivable && !track`.** It gates the batter, the fascia, the deck
+soffit, the piers, the parapet and `daylight` — and `daylight` is what
+`maxDaylight` is computed from, which is what decides whether a way is a
+STRUCTURE at all. So a railway that is not drivable **cannot have earthworks or
+a bridge by construction**, however carefully its profile is solved. The first
+cut moved `noteBridgeForm`'s gate off `drivable` and thought that was enough; it
+was not, because `maxDaylight` was still 0 and the whole apron was still off.
+One flag, five jobs, and withholding it withheld four.
 
-**The one thing NOT derived from `engineered` is the hint lookup.** The chain
-planner chains DRIVABLE ways, so a railway asking `hintAt` would find a road's
-profile within two and a half metres and take a carriageway's deck at every
-level crossing there is. A rail fragment solves locally (`solveChainLocal`) and
-welds to its own kind.
+**And there is no concrete reason to withhold it.** This is a game about driving
+anywhere; a ballasted formation is a perfectly good surface to put a truck on;
+and a rail alignment through a mountain is exactly the sort of shortcut a player
+should be allowed to find. The router needed no special pleading either —
+`GOAL_NARROW` already prices a 3.3 m formation well above a 7.5 m street, so a
+plan takes the track only where the track is genuinely the way.
+
+So a graded railway is drivable in full, `railGrid` is gone, and what survives
+of the split is **the dressing**: `railway` gates off the road furniture — cat's
+eyes down the middle of a main line, chevrons and hazard boards along a cutting
+— because those are captions for a carriageway rather than facts about a
+surface. It keeps the parapet and the reflector posts, which are about an edge
+you can fall off and the truck can now be on this one. The paint needs no gate
+at all: markings live in the road TEXTURE and a railway wears `railMat`.
+
+**BALLAST IS NOT TARMAC, AND `sq` IS WHERE THAT IS SAID.** `Seg.sq` is the
+surface quality the wheels read (`Q_ROAD` 1, `Q_TRACK` 0.55, `Q_GROUND` 0.2); a
+formation is handed `Q_TRACK` and a siding 0.4, so driving a main line feels
+like a graded gravel road with something hard every two thirds of a metre.
+`Seg.rw` marks a formation inside a grid that is otherwise all roads — it is
+what `__railgrade` finds them by, now that they are not in a store of their own.
+
+**The one thing still NOT derived from `drivable` is the hint lookup.** The
+chain planner chains ways by NAME and solves them as one profile; a railway
+asking `hintAt` would find a road's profile within two and a half metres and
+take a carriageway's deck at every level crossing there is. `hintEl` stays on
+the planner's own ways, and a rail fragment solves locally (`solveChainLocal`).
 
 ### The ruling grade is the whole difference, and so is the deviation budget
 
@@ -9021,13 +9046,11 @@ the raster.
   the hillside above itself.
 - **AND THE FORTH BRIDGE CAN FINALLY FIRE.** `noteBridgeForm` — what registers a
   deck fragment with the bridge ASSEMBLY, so a landmark entry can stand its
-  towers, cantilevers or truss up — hung off `infraRecipe`, and `infraRecipe`
-  was gated on `drivable`. The `forth-bridge` entry has therefore never once
-  fired: the Forth Bridge carries no road. **Every famous truss and cantilever
-  on earth is a railway bridge**, so that gate was excluding the family it was
-  written for. It is `engineered && !track` now. A railway still gets no apron —
-  no kerbs, fascia, soffit or piers, all of which are gated on `apronOn` where
-  they are built — only the recipe and the assembly.
+  towers, cantilevers or truss up — hangs off `infraRecipe`, `infraRecipe` hangs
+  off `apronOn`, and `apronOn` is `drivable && !track`. So while a railway was
+  not drivable the `forth-bridge` entry could never once fire: the Forth Bridge
+  carries no road. **Every famous truss and cantilever on earth is a railway
+  bridge**, so that gate was excluding the family it was written for.
 - **What a 3.3 m formation costs the plain lattice is unmeasured.** Past
   `REFINE_R` the corridor is the old grid carve, whose lattice unit is the
   terrain cell (~21 m), and `rasterizeCut`'s own note records a 3 m footpath
@@ -9037,6 +9060,77 @@ the raster.
   heights, so it is in the same class as a back lane rather than the class the
   track exclusion was written for. Said here rather than asserted: nothing has
   been photographed at that range.
+
+### …and a bridge way's name is the ROUTE's, which is why the Forth still missed
+
+With the apron on, the Forth Bridge's assembly formed and was still a flat
+ribbon, and the reason had nothing to do with railways. Read straight out of the
+cell's own banked z16 tiles (`16/32150/20404-20406`, by hand, before anything
+was changed):
+
+```
+4074164    railway=rail bridge=yes layer=1  name="East Coast (Northern) Line"
+312411250  railway=rail bridge=yes layer=1  name="East Coast (Northern) Line"
+4337906    railway=rail bridge=yes layer=1  name="East Coast (Northern) Line"
+312411253  railway=rail bridge=yes layer=1  name="East Coast (Northern) Line"
+```
+
+**Four ways, no `bridge:name`, and the `name` is the LINE.** The store's entry
+matches `forth bridge` and `forth rail`, and neither is a substring of "East
+Coast (Northern) Line", so `bridgeEntryFor` returned null and the assembly fell
+through to the generic recipe.
+
+This file already records the same fault twice without generalising it — "the
+Forth Road Bridge is named exactly that, and neither match is a substring", and
+`noteBridgeForm`'s own comment that "a road's name is often the only name a
+bridge way carries — A29 on every bridge the A29 crosses". **It is the rule, not
+the exception**: a bridge way carries the route's identity, because that is what
+a router needs, and the bridge's own name is an optional extra key that most
+mappers never add. A landmark store that claims by name alone will keep missing
+the bridges it was authored for, one famous structure at a time.
+
+So an entry claims an assembly **two** ways now, and the second is what the
+entry's coordinate was always for:
+
+- **by NAME within `reach`** — unchanged, 1.6–2.4 km, because a name is strong
+  evidence and a bridge's fragments spread;
+- **by POSITION within `BRIDGE_ON_R` (420 m)** when the name says nothing
+  either way. A fifth of a reach, deliberately: the assembly has to be
+  essentially ON the entry rather than merely in the same estuary. A positive
+  name match for another entry still wins, so this can only fill a silence.
+
+**The Forth is the case that sets that radius, because three bridges cross the
+same firth.** Measured on the fix, live, one settle:
+
+| assembly | fragments | form | claimed by |
+|---|---|---|---|
+| East Coast (Northern) Line | 8 | **truss · cantilever · 3 towers · 1,788 panels** | the `forth-bridge` entry, **by position** |
+| Queensferry Crossing | 10 | cable-stayed · a-frame · semi-fan · 166 stays | its own OSM `bridge:structure`, no entry |
+| Forth Road Bridge | 12 | girder | nothing — it has no entry, and 420 m keeps the Forth's off it |
+| Ferrytoll Viaduct · Fife Circle Line · Station Road | 4 · 2 · 1 | girder | nothing |
+
+A 1.6 km positional radius would have put the Forth's cantilevers on the road
+bridge a kilometre west, which is a suspension bridge. 420 m claims the rail
+bridge and nothing else. `__bridges()` is the readout.
+
+And the deck goes up with it: `__lifts` reports the two 2.4 km fragments raised
+**40.89 m and 33.88 m** with `src: "hint"` — the entry's own `deckM` 46 at
+`grade` 0.02 — against a firth at sea level, and `__decks` at the seat's spot
+reads the deck at **38.4–41.2 m over terrain at −5.8 to 4.1**.
+
+The earthworks on the same run, over 39 railway ways and 823 formation segments
+in a 2.5 km radius — with the spans separated out, which is the whole reason
+they now are:
+
+| | at the Forth |
+|---|---|
+| span (standing clear of the drawn ground) / worst | **527** / 52.4 m |
+| cutting / embankment | 100 / 105 |
+| worst cutting / embankment | 12.6 m / 4.8 m |
+| mean \|deck − natural ground\| over the earthworks | **2.31 m** |
+| drawn mesh against the deck, mean | **0.63 m** |
+| deck gradient, the two 2.4 km fragments | p95 **1.7%** |
+| the ground they cross | p95 **36.6%** and **30.0%** |
 
 ### The instrument
 
@@ -9050,8 +9144,24 @@ asked for. It also chains each fragment into an ORDERED profile with its
 gradient statistics, because sorted by depth a cutting and an embankment two
 kilometres apart sit next to each other and the SHAPE is invisible.
 
-`?railgrade=0` is the exact A/B and `devtools/rail-grade.mjs` drives it, one
-variant per process.
+**AND A DECK IS NOT AN EMBANKMENT.** The first cut of this probe read, at the
+Forth: *620 embankments, worst 46.89 m, mean 22.16*. Every one of those numbers
+was the BRIDGE — 2.4 km of deck forty metres over an estuary with the natural
+ground at sea level under it. "Deck minus ground" says *this way is high above
+the land*, which is equally true of a bank and of a span, and a mean that mixes
+them describes neither. The DRAWN MESH tells them apart and was already being
+read: an embankment is ground the carve RAISED to meet the deck, so the mesh
+comes up with it; a structure stands clear and the mesh stays where the ground
+is. A station standing more than three metres (`ribbon`'s own `DECK_GAP`) over
+its drawn ground is counted as `span`, and the earthwork statistics — including
+`meshOff`, the number that says the carve reached the terrain — are taken over
+the rest.
+
+`?railgrade=0` is the exact A/B. `devtools/rail-grade.mjs` runs it on the
+Glencairn fixture and `devtools/forth-rail.mjs` at the Forth, one variant per
+process. The Forth tool is a LIVE run and says so: the tiles were read by hand
+first, so a run that finds no railway there reports a streaming failure rather
+than an absent bridge.
 
 ### And the sleeper gaps really were 4×
 

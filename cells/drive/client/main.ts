@@ -7647,18 +7647,51 @@ function clearBridgeForms(): void {
  */
 const BRIDGE_LANDMARKS = LANDMARKS.filter((d) => d.kind === 'bridge' && d.bridge);
 /** The entry that claims a bridge called `name` at a point, or null. */
+/**
+ * ── A BRIDGE WAY'S `name` IS THE ROUTE'S, NOT THE BRIDGE'S ──
+ *
+ * The Forth Bridge is the case that proved it. Its four rail ways carry
+ * `railway=rail bridge=yes layer=1` and `name=East Coast (Northern) Line` —
+ * the ROUTE — with no `bridge:name` at all, so `forth bridge` and `forth rail`
+ * matched nothing and the landmark entry could never claim the assembly. This
+ * file already records the same fault on the other side of the firth ("the
+ * Forth Road Bridge is named exactly that, and neither match is a substring"),
+ * and `noteBridgeForm`'s own comment says it out loud about roads: "A road's
+ * name is often the only name a bridge way carries — A29 on every bridge the
+ * A29 crosses". It is the rule rather than the exception, and a store that
+ * matches on names alone will keep missing the bridges it was authored for.
+ *
+ * So there are two ways to claim an assembly now, and the second is why the
+ * entry carries a coordinate:
+ *
+ *  - BY NAME, within the entry's own `reach` — unchanged, and still what an
+ *    entry means by `match`. `reach` is generous (1.6-2.4 km) because a name
+ *    is strong evidence and a bridge's fragments spread.
+ *  - BY POSITION, within `BRIDGE_ON_R`, when the name says nothing either way.
+ *    That radius is deliberately a fifth of a reach: the assembly has to be
+ *    essentially ON the entry, not merely in the estuary with it. At the Forth
+ *    the rail bridge's centroid is on the entry and the road bridge — a
+ *    suspension bridge a kilometre west that must NOT get cantilevers — is far
+ *    outside it. A positive name match for ANOTHER entry still wins, so this
+ *    can only fill a silence.
+ */
+const BRIDGE_ON_R = 420;
 function bridgeEntryFor(name: string | null, px: number, pz: number): Landmark | null {
   if (!BRIDGE_LANDMARKS.length) return null;
   const lname = (name ?? '').toLowerCase();
+  let onIt: Landmark | null = null, onD = BRIDGE_ON_R;
   for (const def of BRIDGE_LANDMARKS) {
     const b = def.bridge;
     if (!b) continue;
     const [lx, lz] = toLocal(def.lat, def.lon);
-    if (Math.hypot(px - lx, pz - lz) > b.reach) continue;
-    if (b.match.length && !b.match.some((m) => lname.includes(m.toLowerCase()))) continue;
-    return def;
+    const d = Math.hypot(px - lx, pz - lz);
+    if (d > b.reach) continue;
+    if (!b.match.length || b.match.some((m) => lname.includes(m.toLowerCase()))) return def;
+    // No name match: remember it as a positional candidate, nearest first, and
+    // keep looking for an entry this assembly is actually NAMED for.
+    if (d < onD) { onD = d; onIt = def; }
   }
-  return null;
+  return onIt;
 }
 /**
  * ── THE WATER UNDER A DECK ──
@@ -8343,8 +8376,9 @@ function roadTexture(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.
  * NOT TRANSPARENT, unlike `MAT.minor` which it replaces: ballast is opaque
  * stone, and the 0.85 the footpath carried let the hillside through it.
  */
-/** `railgrade=0` puts a railway back on the heightfield: draped, no solved
- *  profile, no corridor, no batter — the exact A/B for the grading split. */
+/** `railgrade=0` puts a railway back where it was: draped on the heightfield,
+ *  not drivable, no solved profile, no corridor, no batter and no structure —
+ *  the exact A/B for the whole formation change. */
 const RAIL_GRADE = qsOn('railgrade', true);
 const railTexCache = new Map<string, THREE.Texture>();
 const railMatCache = new Map<string, THREE.Material>();
@@ -12904,33 +12938,40 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
    *  height that was DRAWN — without it the mesh tilts to the hillside and the
    *  physics keeps handing back the centreline, and the truck drives along a
    *  cambered road on an invisible flat one. */
-  ca?: number; cb?: number }
+  ca?: number; cb?: number;
+  /** A RAILWAY, not a road. Drivable, carved and battered exactly like a
+   *  carriageway — the flag exists so the probe can find a formation in a grid
+   *  that is otherwise all roads, and so anything that wants to treat ballast
+   *  as ballast has something to read. */
+  rw?: boolean }
 const wallGrid = new Map<string, Seg[]>();   // building edges — solid
 const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-width
 /**
- * ── AND THE RAILWAY'S OWN GRID, WHICH IS NOT THE ROAD'S ──
+ * ── AND A RAILWAY IS IN IT TOO, BECAUSE A RAILWAY IS DRIVEABLE ──
  *
- * A railway is ENGINEERED — it wants the solved longitudinal profile, the
- * corridor carved into the terrain and the batter either side, all of which a
- * road gets by being `drivable`. It is emphatically NOT driveable: nothing in
- * the physics, `surfaceAt`, `wayAhead`, the junction registry or the router
- * may ever find a track under the wheels, or the truck drives the Southern
- * Line and the autopilot plans a route down it.
+ * The first cut of the grading split kept railways in a `railGrid` of their
+ * own so nothing in the physics, `surfaceAt`, `wayAhead` or the router could
+ * ever find one under the wheels. Asked from the seat whether there was a
+ * concrete reason for that, and there is not: this is a game about driving
+ * anywhere, a ballasted formation is a perfectly good surface to put a truck
+ * on, and a rail alignment through a mountain is exactly the sort of shortcut
+ * a player should be allowed to find.
  *
- * `drivable` was one flag doing five jobs, and this is the split: the
- * earthworks read THIS grid as well as `roadGrid`, and everything else reads
- * `roadGrid` alone. The segments are the same shape so `rasterizeCut`,
- * `stripsNear` and the terrain kernel's break lines need no change at all —
- * they were always asking "what formation crosses this cell", and the answer
- * simply has railways in it now.
+ * Keeping it out cost more than it bought, and the cost WAS the next report —
+ * bridges and batter not applying to railways. `apronOn` is
+ * `drivable && !track`, and it gates the batter, the fascia, the deck soffit,
+ * the piers, the parapet and `daylight` — and therefore `maxDaylight`, which
+ * is what decides whether a way is a STRUCTURE at all. A railway that is not
+ * drivable has no earthworks and no bridge BY CONSTRUCTION, however carefully
+ * its profile was solved. That is why the Forth stayed a flat ribbon.
  *
- * It is also what a rail fragment's END WELD anchors to (`deckAnchorAt` takes
- * the grid): OSM chops a line at every tile edge and every tag change, so the
- * fragments must find each other — and must never find a road, because a road
- * crossing a railway is a level crossing at best and a bridge at worst, and
- * neither is a reason for the track to take the tarmac's deck.
+ * What survives of the split is the DRESSING: `railway` gates off the road
+ * furniture — cat's eyes down the middle of a main line, chevrons and hazard
+ * boards along a cutting — because those are statements about a carriageway
+ * rather than about a surface. The router is left to its own arithmetic:
+ * `GOAL_NARROW` already prices a 3.3 m formation well above a 7.5 m street,
+ * so a plan takes the track only where the track is genuinely the way.
  */
-const railGrid = new Map<string, Seg[]>();   // engineered, not driveable
 const waterCells = new Set<string>();        // coarse water mask — the fast reject
 /**
  * …AND THE POLYGONS THEMSELVES, per cell, because the mask alone is 24 metres
@@ -14654,15 +14695,8 @@ function recalcCut(): void {
 function rebuildCut(): void {
   cutCells.clear();
   const seen = new Set<Seg>();
-  // BOTH FORMATIONS. A railway is in `railGrid` and nowhere else — it was never
-  // added to `roadGrid`, deliberately — so a rebuild that walked only the roads
-  // would silently drop every railway corridor in the world the first time the
-  // lattice changed under it (a world hop, a terrain-detail dial). The carve
-  // would then be a road-only carve with no error anywhere to say so.
-  for (const grid of [roadGrid, railGrid]) {
-    for (const arr of grid.values()) for (const sg of arr) {
-      if (!seen.has(sg)) { seen.add(sg); rasterizeCut(sg); }
-    }
+  for (const arr of roadGrid.values()) for (const sg of arr) {
+    if (!seen.has(sg)) { seen.add(sg); rasterizeCut(sg); }
   }
 }
 const CUT_FACE = 0.62;     // rise per metre off the kerb — a ~32° cut face
@@ -16161,11 +16195,11 @@ const vergeFill = !qsOn('nofill', false);
 /** The distance the last deckAnchorAt answer stood at — read straight after
  *  the call by the join log, never by anything that decides geometry. */
 let lastAnchorD: number | null = null;
-function deckAnchorAt(x: number, z: number, grid: Map<string, Seg[]> = roadGrid): number | null {
+function deckAnchorAt(x: number, z: number): number | null {
   let best: number | null = null, bd = 2.2;
   lastAnchorD = null;
   for (const dx of [0, -GRID, GRID]) for (const dz of [0, -GRID, GRID]) {
-    for (const s of grid.get(gkey(x + dx, z + dz)) ?? []) {
+    for (const s of roadGrid.get(gkey(x + dx, z + dz)) ?? []) {
       // Tracks and paths are DRAPED, not profiled — on a misregistered cliff
       // their deck heights ARE the contamination, and a viewpoint footpath
       // junctioning the road must not weld the carriageway to the rock above.
@@ -16196,11 +16230,11 @@ function deckAnchorAt(x: number, z: number, grid: Map<string, Seg[]> = roadGrid)
  *  angle keeps its camber to itself — past ~45° its cross-fall points
  *  somewhere this fragment has no kerb, and junction ends are the warp's
  *  business, not this weld's. */
-function tiltAnchorAt(x: number, z: number, tx: number, tz: number, grid: Map<string, Seg[]> = roadGrid): number | null {
+function tiltAnchorAt(x: number, z: number, tx: number, tz: number): number | null {
   const tl = Math.hypot(tx, tz) || 1;
   let best: number | null = null, bd = 2.2;
   for (const dx of [0, -GRID, GRID]) for (const dz of [0, -GRID, GRID]) {
-    for (const s of grid.get(gkey(x + dx, z + dz)) ?? []) {
+    for (const s of roadGrid.get(gkey(x + dx, z + dz)) ?? []) {
       if (s.ya === undefined || s.yb === undefined || s.tk || s.ca === undefined || s.cb === undefined) continue;
       const sdx = s.bx - s.ax, sdz = s.bz - s.az, sl = Math.hypot(sdx, sdz) || 1;
       const cos = (sdx * tx + sdz * tz) / (sl * tl);
@@ -16766,30 +16800,30 @@ function flushRibbons(): void {
 }
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string, layer = 0, wayTags?: Record<string, string>, railway = false): void {
   /**
-   * ── `drivable` WAS FIVE JOBS, AND A RAILWAY WANTS FOUR OF THEM ──
+   * ── A RAILWAY IS `drivable`, AND `railway` IS ONLY ABOUT THE DRESSING ──
    *
-   * Reported from the seat, driving the Southern Line at Glencairn: "railways
-   * are not participating in the road ribbon's solved grading — a special case
-   * for rail, far more straight, and thereby likely to be cutting or raised on
-   * bridges." Exactly so, and the reason is one flag.
+   * Reported from the seat, in two rounds. First: railways are not
+   * participating in the road ribbon's solved grading — "a special case for
+   * rail, far more straight, and thereby likely to be cutting or raised on
+   * bridges." Then, against the fix for that: still no bridges and no batter
+   * on railways, and "for the purposes of this game they should be fully
+   * driveable (any concrete reason not to?)".
    *
-   * `drivable` gated, indivisibly: the solved longitudinal profile; entry into
-   * `roadGrid` (which IS the physics surface, `surfaceAt`, `wayAhead`, the
-   * junction registry and the router's graph); the corridor carve and the
-   * terrain kernel's break lines; `dirtyTerrainAround`; and — with `!track` —
-   * the kerbs, the apron, the junction boxes, the give-way bars and the paint.
-   * A railway wants the first, the third and the fourth, must never have the
-   * second, and would look absurd with the fifth.
+   * There is not one, and the two reports turn out to be the same report. The
+   * first cut kept a railway out of `roadGrid` so nothing could drive it — and
+   * `apronOn` is `drivable && !track`, so that also withheld the batter, the
+   * fascia, the deck soffit, the piers, the parapet and `daylight`, and with
+   * `daylight` the `maxDaylight` that decides whether a way is a STRUCTURE at
+   * all. A railway that is not drivable cannot have earthworks or a bridge,
+   * however well its profile is solved. See the note at `roadGrid`.
    *
-   * So `railway` is the other half of the split. `engineered` is what the EARTHWORKS
-   * read; `drivable` keeps every job that is about a vehicle being on a surface.
-   * The one thing that is NOT derived from `engineered` is the hint lookup: the
-   * chain planner chains DRIVABLE ways, so a railway asking `hintAt` would find
-   * a road's profile within two and a half metres and take a carriageway's deck
-   * at every level crossing in the world. A rail fragment solves locally and
-   * welds to its own kind through `railGrid`.
+   * So a graded railway is drivable in full, and `railway` now gates exactly
+   * one thing: the ROAD FURNITURE. Cat's eyes down the middle of a main line
+   * and chevrons along a cutting are statements about a carriageway, not about
+   * a surface, and they are the only part of the carriageway's dressing that a
+   * formation should not wear. (The paint needs no gate: markings live in the
+   * road TEXTURE and a railway wears `railMat`.)
    */
-  const engineered = drivable || railway;
   const name_ = name;
   const fid = ++ribbonSeq;
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
@@ -16863,13 +16897,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // Ends anchor to whatever a neighbouring fragment already built there (see
   // deckAnchorAt) — a hard pin to the centreline sample gave the cliff its
   // contamination back at every one of the many short fragment joins.
-  // A RAIL FRAGMENT WELDS TO RAIL. See railGrid: a road's deck at a shared node
-  // is a level crossing or a bridge, and neither is a reason for the track to
-  // take the tarmac's height.
-  const deckGrid = railway ? railGrid : roadGrid;
-  const anchor0 = deckAnchorAt(dense[0][0], dense[0][1], deckGrid);
+  const anchor0 = deckAnchorAt(dense[0][0], dense[0][1]);
   const anchor0D = lastAnchorD;
-  const anchor1 = deckAnchorAt(dense[n - 1][0], dense[n - 1][1], deckGrid);
+  const anchor1 = deckAnchorAt(dense[n - 1][0], dense[n - 1][1]);
   const anchor1D = lastAnchorD;
   const p0 = anchor0 === null ? null : anchor0 - lift;
   const p1 = anchor1 === null ? null : anchor1 - lift;
@@ -17656,12 +17686,10 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // linearly by arc length.
     let e0 = 0, e1 = 0;
     if (endWeld && n > 1) {
-      // The same grid the deck anchor read — a railway's cross-fall is the
-      // railway's, not the camber of a road it happens to cross.
       const t0 = tiltAnchorAt(dense[0][0], dense[0][1],
-        dense[1][0] - dense[0][0], dense[1][1] - dense[0][1], deckGrid);
+        dense[1][0] - dense[0][0], dense[1][1] - dense[0][1]);
       const t1 = tiltAnchorAt(dense[n - 1][0], dense[n - 1][1],
-        dense[n - 1][0] - dense[n - 2][0], dense[n - 1][1] - dense[n - 2][1], deckGrid);
+        dense[n - 1][0] - dense[n - 2][0], dense[n - 1][1] - dense[n - 2][1]);
       if (t0 !== null) e0 = t0 - tilt[0];
       if (t1 !== null) e1 = t1 - tilt[n - 1];
     }
@@ -17786,20 +17814,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   for (let i = 1; i < n; i++) arc[i] = arc[i - 1] + Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
   const total = arc[n - 1] || 1;
   let infraRecipe: StructureRecipe | null = null;
-  // ── A RAIL BRIDGE IS A STRUCTURE, AND THE FORTH COULD NOT REACH THIS BLOCK ──
+  // ── AND A RAIL BRIDGE REACHES THIS BLOCK NOW ──
   //
   // `noteBridgeForm` below is what registers a deck fragment with the bridge
   // ASSEMBLY — the thing that gathers a bridge's many OSM ways by name, matches
   // a landmark entry and stands its towers, cantilevers or truss up. It hangs
-  // off `infraRecipe`, and `infraRecipe` was gated on `drivable`, so the
-  // `forth-bridge` entry in the landmark store has never once fired: the Forth
-  // Bridge carries no road. Every famous truss and cantilever on earth is a
-  // railway bridge, so this gate was excluding the family it was written for.
-  //
-  // `!track` rather than `apronOn`: a railway still gets no apron (no kerbs, no
-  // fascia, no soffit, no piers — that machinery is a carriageway's and is
-  // gated on `apronOn` where it is built), only the recipe and the assembly.
-  if (engineered && !track && (mode === 'bridge' || mode === 'tunnel' || canopy || maxDaylight > DECK_GAP)) {
+  // off `infraRecipe`, `infraRecipe` hangs off `apronOn`, and `apronOn` is
+  // `drivable && !track`: so while a railway was not drivable the
+  // `forth-bridge` entry in the landmark store could never once fire, because
+  // the Forth Bridge carries no road. Every famous truss and cantilever on
+  // earth is a railway bridge, so this gate was excluding the family it was
+  // written for — and `maxDaylight` was 0 for a railway besides, since
+  // `daylight` itself is behind `apronOn`.
+  if (apronOn && (mode === 'bridge' || mode === 'tunnel' || canopy || maxDaylight > DECK_GAP)) {
     const mi = n >> 1;
     const [mx, mz] = dense[mi];
     const cc = climateAt(mx, mz, prof[mi] + baseElev);
@@ -17846,10 +17873,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       dense[j][1] + (dense[Math.min(j + 1, n - 1)][1] - dense[j][1]) * f];
   };
   let pierStations: number[] = [];
-  // Only where something consumes them: the piers are built inside the apron,
-  // which a railway does not get, and planning them costs a footprint test per
-  // candidate.
-  if (apronOn && infraRecipe?.kind === 'bridge' && infraRecipe.supportSpacingM > 0 && total > 4) {
+  if (infraRecipe?.kind === 'bridge' && infraRecipe.supportSpacingM > 0 && total > 4) {
     const [lla, llb] = [localToLatLon(dense[0][0], dense[0][1]), localToLatLon(dense[n - 1][0], dense[n - 1][1])];
     const [aa, bb] = [absMetres(lla[0], lla[1]), absMetres(llb[0], llb[1])];
     const reverse = aa[0] > bb[0] || (aa[0] === bb[0] && aa[1] > bb[1]);
@@ -18312,7 +18336,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // junction (off-axis, so no anchor) keeps the plane's cross-fall.
       const tAnchor = tiltAnchorAt(nodeX, nodeZ,
         end === 0 ? dense[1][0] - dense[0][0] : dense[n - 1][0] - dense[n - 2][0],
-        end === 0 ? dense[1][1] - dense[0][1] : dense[n - 1][1] - dense[n - 2][1], deckGrid);
+        end === 0 ? dense[1][1] - dense[0][1] : dense[n - 1][1] - dense[n - 2][1]);
       // NEVER THE FAR END'S OWN STATIONS. On a short way the old break-on-null
       // kept the fade from ever reaching the other end; the plane answers
       // everywhere, and the first run of this warp dragged a 4-station service
@@ -18718,18 +18742,10 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0), x0, z0);
       for (let k = 0; k < 6; k++) dirts.push(dr, dg, db);
     }
-    if (engineered) {
+    if (drivable) {
       const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq, fd: fid, pb: pbranch,
-        wid: wayKey, ca: tilt[i], cb: tilt[i + 1], ly: layer };
-      // THE ONE LINE THAT KEEPS A RAILWAY OUT OF THE GAME. `roadGrid` is not a
-      // spatial index, it is the answer to "what is under the wheels" — the
-      // physics surface, `surfaceAt`, `wayAhead`, `juncNodeGrid`, the route
-      // solver's graph and `__toroad` all read it, so a segment filed here is a
-      // segment the truck can drive on and the autopilot will plan down.
-      // `segsOf` is the EARTHWORKS list and takes both: the corridor, the
-      // batter and the break lines are about a formation cut into a hillside,
-      // which is the same job whatever runs along the top of it.
-      addSeg(drivable ? roadGrid : railGrid, s);
+        wid: wayKey, ca: tilt[i], cb: tilt[i + 1], ly: layer, rw: railway || undefined };
+      addSeg(roadGrid, s);
       segsOf.push(s);
     }
     if (apronOn && !hidden) {
@@ -18897,7 +18913,10 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // Every drivable carriageway gets them, not just the ones with a barrier:
       // the roads where you cannot see where you are going are the unlit rural
       // ones, and those are the ones with no parapet.
-      if (drivable && !track) {
+      // …AND NOT DOWN THE MIDDLE OF A RAILWAY. A cat's eye is a lane marker;
+      // a formation has no lanes and a reflector between the rails is the one
+      // piece of this dressing that reads as a mistake rather than as detail.
+      if (drivable && !track && !railway) {
         centreRun += len;
         if (centreRun >= CENTRE_EVERY) {
           centreRun -= CENTRE_EVERY;
@@ -18924,12 +18943,17 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         }
       }
       // ── roadside furniture ──
-      // WHAT the sign is now follows from what the road is doing, rather than
-      // every post being a hazard board. A chevron means the road turns here
-      // and there is somewhere to fall; a triangle means it turns; a marker
-      // post means nothing at all, which is what most roadside furniture
-      // means, and is why it can be common without becoming noise.
-      {
+      // …which a railway does not have: a chevron board means THE ROAD TURNS
+      // HERE, and a line of them along a cutting on a main line is a caption
+      // for a vehicle that is not coming. Same argument as the cat's eyes
+      // above, and the same one line. What a railway DOES keep is the parapet
+      // and the reflector posts on a drop (`railOn` / `postOn`): those are
+      // about an edge you can fall off, and the truck can now be on this one.
+      // A chevron means the road turns here and there is somewhere to fall; a
+      // triangle means it turns; a marker post means nothing at all, which is
+      // what most roadside furniture means, and is why it can be common
+      // without becoming noise.
+      if (!railway) {
         const turn = i + 1 < n - 1 ? bendAt(i + 1) : 0;
         const sharp = turn > (BEND_DEG * Math.PI) / 180;
         const fall = Math.max(drop[0], drop[1]) > SIGN_DROP;
@@ -19316,7 +19340,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // do, and `dirtyTerrainAround` already reaches only as far as the corridor's
   // own toe (see the note there), so a 4 m formation dirties far less than a
   // carriageway does.
-  if (engineered) { dirtyTerrainAround(dense); osmLastLand = performance.now(); }
+  if (drivable) { dirtyTerrainAround(dense); osmLastLand = performance.now(); }
 }
 /**
  * ONE OFFSET PER STATION, MITRED — so neighbouring bays share their corners.
@@ -24783,33 +24807,45 @@ async function renderWays(
       // between them. See client/railway.ts for what is read and what is
       // synthesised, and for the filter: `subway` in a tunnel, `abandoned`,
       // `razed`, `platform` and `construction` drew a surface ribbon before
-      // this and draw nothing now. Not drivable — nobody drives a railway.
+      // this and draw nothing now.
       const rs = railSpec(tags);
       if (rs.draw) {
         noteRailway(el.id, rs, pts);
-        // ── AND IT IS ENGINEERED, WHICH IS THE OTHER HALF OF BEING A RAILWAY ──
+        // ── AND IT IS ENGINEERED, AND DRIVEABLE, AND THOSE ARE ONE THING ──
         //
-        // Reported from the seat: railways were not participating in the road
-        // ribbon's solved grading. They were not: this call passed `'none'`,
-        // which drapes a way over the heightfield exactly as a footpath is
-        // draped, so a main line rode every hummock the DEM has. A railway is
-        // the MOST engineered linear thing in the landscape — it holds two per
-        // cent where a road takes fifteen, so it cuts, embanks, bridges and
-        // tunnels wherever the ground disagrees — and the machinery to do that
-        // has been in `ribbon` all along behind `drivable`. See the split at
-        // the head of that function, and `railGrid`.
+        // Reported from the seat in two rounds: first that railways were not
+        // participating in the road ribbon's solved grading, then that bridges
+        // and batter still were not applying and that for this game a railway
+        // should be fully driveable. Both are answered here, and they were
+        // always the same answer — see the note at the head of `ribbon`.
+        //
+        // This call used to pass `false, 'none'`: not drivable, and draped over
+        // the heightfield exactly as a footpath is, so a main line rode every
+        // hummock the DEM has AND could have no earthworks, because the whole
+        // apron hangs off `drivable`. A railway is the most engineered linear
+        // thing in the landscape — it holds two per cent where a road takes
+        // fifteen, so it cuts, embanks, bridges and tunnels wherever the ground
+        // disagrees — and the machinery for all of that was already in `ribbon`
+        // behind that one flag.
         //
         // A tram is the exception and says so itself (`graded`): its rails are
         // in a carriageway that already has a profile, and carving it a
-        // corridor would excavate a cutting down a city street.
+        // corridor would excavate a cutting down a city street. An ungraded
+        // railway keeps the old draped ribbon and stays off the road grid.
         const graded = rs.graded && RAIL_GRADE;
         const mode: RoadMode = !graded ? 'none'
           : tags.tunnel && tags.tunnel !== 'no' ? 'tunnel'
           : tags.bridge && tags.bridge !== 'no' ? 'bridge'
           : 'auto';
         if (dk) wayTagLog.set(dk, tags);
-        ribbon(pts, rs.widthM, railMat(rs), rs.liftM, false, mode, false, tags.name,
-          undefined, rs.gradeMax, false, undefined, dk, layerOf(tags), tags, graded);
+        // BALLAST IS NOT TARMAC, and `sq` is where that is said: it is the
+        // surface quality the wheels read (`Q_ROAD` 1, `Q_TRACK` 0.55,
+        // `Q_GROUND` 0.2). Driving a main line should feel like driving a
+        // graded gravel road with something hard every two thirds of a metre,
+        // so a formation sits at a track's quality and a siding below it.
+        ribbon(pts, rs.widthM, railMat(rs), rs.liftM, graded, mode, false, tags.name,
+          graded ? (rs.minor ? 0.4 : Q_TRACK) : undefined,
+          rs.gradeMax, false, undefined, dk, layerOf(tags), tags, graded);
       }
     } else if (tags.aeroway === 'runway' || tags.aeroway === 'taxiway') {
       // A runway is the widest ribbon in the vocabulary and perfectly
@@ -31229,7 +31265,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     tileStats.clear(); surveyedCache.clear();
     unbuilt = 0; osmFails = 0; osmDown = false;
     mapFeats.length = 0; mapStroked.clear();
-    roadGrid.clear(); railGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear(); bldRoofs.clear(); railWays.clear();
+    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear(); bldRoofs.clear(); railWays.clear();
     channelGrid.clear(); rapidRocks.clear(); activeRapidRocks.clear(); chanSet.clear(); wiSet.clear();
     pendingWater.length = 0; productionCrossings.reset(); crossingAppliedRevision.clear();
     productionSubstrate.reset();
@@ -33774,7 +33810,7 @@ function repaintWetDebug(): void {
  * ── WHAT THE RAILWAY'S EARTHWORKS ACTUALLY DID ──
  *
  * The question "is a railway cutting and embanking" is three numbers at a
- * station and nothing else could report them: the solved DECK (`railGrid`'s
+ * station and nothing else could report them: the solved DECK (the segment's
  * own `ya`, which is where the track was built), the NATURAL ground (the
  * height raster — the corridor lives in the terrain MESH, so the raster is
  * still the untouched hillside), and the DRAWN ground (`meshSurfaceAt`, which
@@ -33783,15 +33819,14 @@ function repaintWetDebug(): void {
  * followed, which is the half that says the carve reached the mesh rather than
  * merely being asked for.
  *
- * `railGrid` is the only store a railway is in, by design, so a probe over
- * `roadGrid` reports nothing about one — which is exactly the confusion this
- * exists to prevent.
+ * A railway is in `roadGrid` with every other drivable way now, so the
+ * formations are picked out by `Seg.rw` — which is what that flag is for.
  */
 (window as unknown as { __railgrade?: object }).__railgrade = (r = 900): object => {
   const seen = new Set<Seg>();
   const rows: Array<{ x: number; z: number; nm: string; deck: number; dem: number; mesh: number | null; cut: number; gap: number | null }> = [];
-  for (const arr of railGrid.values()) for (const sg of arr) {
-    if (seen.has(sg)) continue;
+  for (const arr of roadGrid.values()) for (const sg of arr) {
+    if (seen.has(sg) || !sg.rw) continue;
     seen.add(sg);
     const x = (sg.ax + sg.bx) / 2, z = (sg.az + sg.bz) / 2;
     if (Math.hypot(x - state.x, z - state.z) > r) continue;
@@ -33808,19 +33843,42 @@ function repaintWetDebug(): void {
       // means the corridor was built; a metre or two means it was not.
       gap: mesh === null ? null : +(mesh - deck).toFixed(2) });
   }
-  const cuts = rows.filter((q) => q.cut > 0.5), fills = rows.filter((q) => q.cut < -0.5);
+  // ── A DECK IS NOT AN EMBANKMENT, AND THE FIRST CUT COUNTED IT AS ONE ──
+  //
+  // At the Forth this probe read "620 embankments, worst 46.89 m, mean 22.16"
+  // and every one of those numbers was the BRIDGE: 2.4 km of deck forty metres
+  // over an estuary, with the natural ground at sea level under it. Deck minus
+  // ground says "this way is high above the land", which is true of a bank and
+  // equally true of a span, and a mean that mixes them describes neither.
+  //
+  // The DRAWN MESH tells them apart, and it is already read. An embankment is
+  // ground the carve RAISED to meet the deck, so the mesh comes up with it and
+  // `gap` is small; a structure stands clear and the mesh stays where the ground
+  // is. So a station whose drawn ground is more than `DECK_GAP` below its deck
+  // is span, and the earthwork statistics are taken over the rest. Three metres
+  // is `ribbon`'s own DECK_GAP — "above this much daylight it is a structure,
+  // not a bank" — restated here because that one is a local const.
+  const SPAN_AIR = 3;
+  const span = rows.filter((q) => q.gap !== null && -(q.gap as number) > SPAN_AIR);
+  const earth = rows.filter((q) => !span.includes(q));
+  const cuts = earth.filter((q) => q.cut > 0.5), fills = earth.filter((q) => q.cut < -0.5);
   const worst = (a: typeof rows, f: (q: typeof rows[0]) => number): number => a.reduce((m, q) => Math.max(m, f(q)), 0);
   return {
     segs: rows.length, tn: [...seen].filter((sg) => sg.tn).length,
+    // Standing clear of the drawn ground: a bridge or a viaduct, not an earthwork.
+    span: span.length,
+    spanMax: +span.reduce((m, q) => Math.max(m, -(q.gap as number)), 0).toFixed(2),
     cut: cuts.length, fill: fills.length,
     worstCut: +worst(cuts, (q) => q.cut).toFixed(2),
     worstFill: +worst(fills, (q) => -q.cut).toFixed(2),
-    meanAbs: +(rows.reduce((t, q) => t + Math.abs(q.cut), 0) / Math.max(1, rows.length)).toFixed(3),
-    // The mesh's agreement with the deck, over the stations that have one.
-    meshOff: +(rows.filter((q) => q.gap !== null).reduce((t, q) => t + Math.abs(q.gap as number), 0)
-      / Math.max(1, rows.filter((q) => q.gap !== null).length)).toFixed(3),
+    meanAbs: +(earth.reduce((t, q) => t + Math.abs(q.cut), 0) / Math.max(1, earth.length)).toFixed(3),
+    // The mesh's agreement with the deck, over the EARTHWORK stations that have
+    // one — the number that says the carve reached the terrain. Including the
+    // spans would make it the deck height, which is not a defect.
+    meshOff: +(earth.filter((q) => q.gap !== null).reduce((t, q) => t + Math.abs(q.gap as number), 0)
+      / Math.max(1, earth.filter((q) => q.gap !== null).length)).toFixed(3),
     strips: [...cutCells.values()].reduce((t, a) => t + a.length, 0),
-    rows: rows.sort((a, b) => Math.abs(b.cut) - Math.abs(a.cut)).slice(0, 24),
+    rows: earth.slice().sort((a, b) => Math.abs(b.cut) - Math.abs(a.cut)).slice(0, 20),
     // ── AND THE PROFILE IN ORDER, which the rows above cannot show ──
     // Sorted by depth, a cutting and an embankment two kilometres apart sit
     // next to each other and the SHAPE — does the line hold one gradient and
