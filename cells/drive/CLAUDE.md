@@ -8938,9 +8938,17 @@ One flag, five jobs, and withholding it withheld four.
 **And there is no concrete reason to withhold it.** This is a game about driving
 anywhere; a ballasted formation is a perfectly good surface to put a truck on;
 and a rail alignment through a mountain is exactly the sort of shortcut a player
-should be allowed to find. The router needed no special pleading either —
-`GOAL_NARROW` already prices a 3.3 m formation well above a 7.5 m street, so a
-plan takes the track only where the track is genuinely the way.
+should be allowed to find.
+
+**The router needed no special pleading, and the arithmetic says why.** An edge
+costs `len × (1 + (GOAL_NARROW − 1) × clamp((5 − hw) / 4, 0, 1))`, so a metre of
+Cape-gauge formation (hw 1.66) costs **2.00**, a metre of residential street (hw
+3.75) **1.38**, and a metre of motorway **1.00** — the track is half as dear
+again as the street beside it and twice a trunk road, so a plan takes it only
+where it genuinely is the way. And `wayAhead` will not turn onto one by
+accident: `chainScore` docks a candidate the full 0.3 its width step allows for
+a road-to-rail change, and a level crossing is near enough perpendicular to fail
+`AHEAD_MIN_DOT` (0.12, about 83°) outright.
 
 So a graded railway is drivable in full, `railGrid` is gone, and what survives
 of the split is **the dressing**: `railway` gates off the road furniture — cat's

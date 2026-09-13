@@ -12968,9 +12968,18 @@ const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-widt
  * What survives of the split is the DRESSING: `railway` gates off the road
  * furniture — cat's eyes down the middle of a main line, chevrons and hazard
  * boards along a cutting — because those are statements about a carriageway
- * rather than about a surface. The router is left to its own arithmetic:
- * `GOAL_NARROW` already prices a 3.3 m formation well above a 7.5 m street,
- * so a plan takes the track only where the track is genuinely the way.
+ * rather than about a surface.
+ *
+ * THE ROUTER NEEDED NO SPECIAL PLEADING, and the arithmetic is worth having
+ * written down rather than asserted. An edge costs
+ * `len * (1 + (GOAL_NARROW - 1) * clamp((5 - hw) / 4, 0, 1))`, so a metre of
+ * Cape-gauge formation (hw 1.66) costs **2.00**, a metre of residential street
+ * (hw 3.75) **1.38** and a metre of motorway **1.00**: the track is half as
+ * dear again as the street beside it and twice a trunk road, so a plan takes
+ * it only where it is genuinely the way. And `wayAhead` will not turn onto one
+ * by accident either — `chainScore` docks a candidate the full 0.3 its width
+ * step allows for a road-to-rail change, and a level crossing is near enough
+ * perpendicular to fail `AHEAD_MIN_DOT` outright.
  */
 const waterCells = new Set<string>();        // coarse water mask — the fast reject
 /**
