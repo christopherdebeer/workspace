@@ -22,7 +22,7 @@ import { coastKm } from './coast';
 import { clamp } from './num';
 import { mulberry32, type Rng } from './rng';
 import { cracks, makeCanvasTex, moss, speckle, wallTextures } from './wall-tex';
-import { chimneyGeo, roofGeo } from './roof';
+import { chimneyGeo, flatRoofGeo, flipWinding, roofGeo } from './roof';
 import { morphology, plan as footprintPlan } from './morphology';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
 import {
@@ -12915,6 +12915,12 @@ const bldRings = new Map<number, Array<[number, number]>>();
 const bldRunOf = new Map<number, { runN: number; seed: number; nbrs: number }>();
 /** Every built height by OSM id, for __runs() to read a terrace's spread. */
 const bldHeights = new Map<number, number>();
+/** And the roof form it was given, for __bldroofs(). A histogram
+ *  (`__built().roofs`) can say a town is half flat and cannot say WHICH
+ *  half — so a tool that wants to stand the camera over a flat roof to
+ *  measure one had to guess, and guessed the biggest footprint nearby, and
+ *  sampled a pitched one. Cleared with plotGrid. */
+const bldRoofs = new Map<number, string>();
 /** THE TERRACE RULE, and its A/B. On, an attached building takes its RUN's
  *  norm for the storey draw and the roof form, so a terrace of thirty-eight
  *  in Paris is one height and one roof rather than thirty-eight draws — the
@@ -21918,7 +21924,11 @@ function noteMass(height: number, roof: string | undefined): void {
   const b = Math.min(11, Math.floor(height / 3));
   while (buildStats.hist.length < 12) buildStats.hist.push(0);
   buildStats.hist[b]++;
-  const k = roof ?? 'flat';
+  // `undefined` USED TO MEAN FLAT AND NOW MEANS CANOPY — roofShape says 'flat'
+  // outright since a flat roof gained a parapet and some plant, and the one
+  // case left with no roof at all is a sheet on posts. Counting them together
+  // was honest while they drew the same thing and is not any more.
+  const k = roof ?? 'canopy';
   buildStats.roofs[k] = (buildStats.roofs[k] ?? 0) + 1;
 }
 /** Which paint this building wears. HASHED, not `id % n`: OSM ids are handed
@@ -22502,7 +22512,17 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
       const arr = batch.intact.get(paint) ?? [];
       const mark = markForBuilding(ctrX, ctrZ, kind);
       arr.push({ geo, base, mark, gram, top, pts });
-      if (roof) {
+      if (roof === 'flat') {
+        // A FLAT ROOF IS A PARAPET AND SOME PLANT, not the extrusion's bare
+        // lid — see flatRoofGeo. One piece at gram -1 (the façade shader's
+        // BLANK wall) for the chimney's reason: the bay grid falls across a
+        // parapet however it falls, and a door on one gets photographed.
+        // Blank still wears the cornice band at its own aTop, which on a
+        // parapet IS its coping. `top - base` is the building's height over
+        // its ground line, which is what the size gates are written in.
+        const fg = BLD_PARA ? flatRoofGeo(pts, top, top - base, id) : null;
+        if (fg) arr.push({ geo: fg, base, mark: 0, gram: -1, top: fg.userData.top as number, pts });
+      } else if (roof) {
         const rg = roofGeo(pts, roof, top, ridge);
         if (rg) arr.push({ geo: rg, base, mark, gram, top, pts });
         // The stack is its own piece: gram -1 is the façade shader's BLANK
@@ -22559,7 +22579,16 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   const roofShape = (() => {
     const rs = tags['roof:shape'];
     if (rs === 'gabled' || rs === 'hipped' || rs === 'pyramidal' || rs === 'skillion') return rs;
-    if (rs) return undefined;                     // flat, dome, … — extrusion as-is
+    // ── 'flat' IS A ROOF FORM NOW, NOT THE ABSENCE OF ONE ──
+    // This used to answer `undefined` in six places and the extrusion's own
+    // cap was what you got: one horizontal quad, flush with the wall, with
+    // nothing on it. `undefined` is reserved for the ONE thing that genuinely
+    // has no roof — a canopy, which is a sheet on posts with no attic under
+    // it. A roof:shape this game does not model (dome, onion, gambrel — a
+    // tenth of a percent of the stock, and every one of them drawn as a flat
+    // cap today) takes the flat treatment, which is no worse than the lid it
+    // already wore and rather better at the eave.
+    if (rs) return 'flat';
     // THE CULTURE'S PITCH IS FINALLY LOAD-BEARING. It has been computed, snow-
     // biased and reported by __culture since the cultures shipped, and consumed
     // by nothing at all. Near zero it means a flat-roofed tradition — an adobe
@@ -22567,8 +22596,9 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     // colour registers, and it was only ever arriving by accident of the kind
     // regex above not matching.
     const trad = look.tradition ? TRADITIONS[look.tradition] : undefined;
-    if (!trad && look.pitch < 0.2) return undefined;
-    // A canopy is a sheet on posts and has no attic to roof.
+    if (!trad && look.pitch < 0.2) return 'flat';
+    // A canopy is a sheet on posts and has no attic to roof — the one case
+    // that really is roofless, and the only `undefined` left in here.
     if (MASS_CANOPY.has(kind)) return undefined;
     const { area, short } = footprintSize(pts);
     // Its own generator, seeded off the id by a constant nothing else uses, so
@@ -22587,7 +22617,7 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     // …and a terrace wears ONE roof form: the draw is the run's where there
     // is one, the building's own where it stands alone.
     const form = trad ? roofFormFor(trad, RUN_NORM && run && run.runN >= 2 ? unitN(run.seed, 7) : rr()) : null;
-    if (form === 'flat') return undefined;
+    if (form === 'flat') return 'flat';
     // ── MEASURED, AND THE FIRST CUT OVERSHOT ──
     //
     // Gating only on the culture's pitch and a height ceiling put a pitched roof
@@ -22598,14 +22628,14 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     //
     // A LEAN-TO IS WHAT A SMALL OUTBUILDING WEARS. Not a hip — a hipped roof on
     // a 6m² garden shed is a doll's house.
-    if (MASS_OUT.has(kind) || area < 55) return rr() < 0.55 ? 'skillion' : undefined;
+    if (MASS_OUT.has(kind) || area < 55) return rr() < 0.55 ? 'skillion' : 'flat';
     // A barn is a long gable, and that is most of its silhouette.
     if (MASS_HALL.has(kind)) return 'gabled';
     // A BLOCK IS FLAT-TOPPED once it is genuinely a block. Below that a small
     // "apartments" is a converted house and still wears a roof.
     const block = MASS_BLOCK.has(kind) || height > 18
       || (kind === 'yes' && area > 300 && builtUpAt(ctrX, ctrZ) > 0.5);
-    if (block) return area > 300 || height > 14 ? undefined : (form ?? (rr() < 0.5 ? 'hipped' : 'gabled'));
+    if (block) return area > 300 || height > 14 ? 'flat' : (form ?? (rr() < 0.5 ? 'hipped' : 'gabled'));
     if (form) return form;
     // A square plan CAN hip; a long one gables. Hipping stays the minority
     // choice even where the plan allows it, because a street of hips reads as
@@ -22630,6 +22660,7 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   if (!lineOn && !forceRuin && (height > 24 || r() > 0.42 || TYPO_COL[kind] !== undefined || mapped !== null)) {
     buildStats.intact++;
     noteMass(height, roofShape);
+    bldRoofs.set(id, roofShape ?? 'canopy');
     polygon(pts, B_MATS[0], 0.9, height, 'solid', intactSink(paint, roofShape, ridgeM, chimN));
     // A house of worship grows its tower: a square campanile off the ring's
     // first corner, batched like any other footprint, wearing a pyramid.
@@ -22945,6 +22976,8 @@ function shoreRibbon(ring: Array<[number, number]>): void {
   drapes.push(mesh);
   worldGroup.add(mesh);
 }
+const BLD_FACE = qsOn('bldface', true);
+const BLD_PARA = qsOn('bldpara', true);
 function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Material[], lift: number, extrude = 0, collide?: 'solid' | 'water',
   /** A batch sink: when set (buildings only), the extrusion is handed over
    *  baked at world height instead of standing up its own mesh — the batch
@@ -23027,7 +23060,7 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
     ? new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false })
     : new THREE.ShapeGeometry(shape);
   geo.rotateX(Math.PI / 2); // shape XY → world XZ (y down after rotate; extrude goes up via scale)
-  if (extrude > 0) geo.scale(1, -1, 1);
+  if (extrude > 0) { geo.scale(1, -1, 1); if (BLD_FACE) flipWinding(geo); }
   if (sink && extrude > 0) {
     // Everything a mesh would have owed the world, without the mesh: the
     // collision walls and the chart mark are below (they never cared about
@@ -30966,7 +30999,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     tileStats.clear(); surveyedCache.clear();
     unbuilt = 0; osmFails = 0; osmDown = false;
     mapFeats.length = 0; mapStroked.clear();
-    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear();
+    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear(); bldRoofs.clear();
     channelGrid.clear(); rapidRocks.clear(); activeRapidRocks.clear(); chanSet.clear(); wiSet.clear();
     pendingWater.length = 0; productionCrossings.reset(); crossingAppliedRevision.clear();
     productionSubstrate.reset();
@@ -31488,7 +31521,13 @@ function reelGoAt(i: number): void {
   attractGo(i);
 }
 function attractStop(): void {
-  car.visible = true;
+  // …UNLESS A MEASUREMENT HAS HIDDEN IT. `stepAttract` runs every frame and
+  // calls this on every frame the hub is not open, so a plain `= true` here
+  // put the rig back about sixteen milliseconds after `__hide('rig')` took it
+  // away — measured as `rig: false` and then `rig: true` four seconds later,
+  // with the truck still in the middle of every frame. Anything that asserts
+  // a visibility every frame outranks anything that assigns one once.
+  car.visible = !hideSet.has('rig');
   attractHoldDrop();
   attractGoI = null;
   if (!attract.on) return;
@@ -31523,7 +31562,7 @@ function stepAttract(now: number): void {
     return;
   }
   if (attract.on) {
-    if (tapePlay.on || attract.drive || now > attract.showAt) { car.visible = true; attractHoldDrop(); }
+    if (tapePlay.on || attract.drive || now > attract.showAt) { car.visible = !hideSet.has('rig'); attractHoldDrop(); }
     // A DRIVEN SLOT IS FINISHED BY ITS OWN RULE, not by a tape running out —
     // and until it is, it is emphatically not done, so the dwell must not
     // start. `attractDriveTick` also does the engaging, so it runs every
@@ -32021,6 +32060,11 @@ function tapeKeep(): string {
     box.setFromObject(h.object);
     const m = h.object as THREE.Mesh;
     return {
+      // WHAT IT IS. `finish()` in flushBuildings names its meshes 'building'
+      // and 'ruin', and __census keys on exactly that — so a tool that needs
+      // to prove its sample box is on a roof rather than on the street can ask
+      // here instead of hoping.
+      name: m.name || '',
       dist: Math.round(h.distance),
       point: [Math.round(h.point.x), Math.round(h.point.y), Math.round(h.point.z)],
       span: Math.round(Math.max(box.max.x - box.min.x, box.max.z - box.min.z)),
@@ -32755,6 +32799,14 @@ function applyHidden(): void {
     birds.visible = false;
   }
 }
+// THE HUD OFF, FOR A MEASUREMENT. Not the player's HIDE HUD (that is
+// `setClean`, which hides the DOM controls and leaves this canvas alone) — this
+// is the one that clears the instruments off the frame so a tool can read the
+// world under them. See drawHud for what goes with it.
+(window as unknown as { __hud?: object }).__hud = (on?: boolean): object => {
+  if (on !== undefined) hudOn = on;
+  return { hudOn };
+};
 (window as unknown as { __hide?: object }).__hide = (layer?: string, off = true): object => {
   if (layer !== undefined) {
     if (off) hideSet.add(layer); else hideSet.delete(layer);
@@ -32772,9 +32824,21 @@ function applyHidden(): void {
       if (layer === 'critters') { for (const m of herds) m.visible = true; birds.visible = true; }
       if (layer === 'sward') for (const b of swardBands) b.mesh.visible = true;
     }
+    // ── THE TRUCK IS ALWAYS AT THE CENTRE OF THE CHART ──
+    // Which makes "sample the middle of a top view" a measurement of the
+    // truck's own paint, not of whatever it is parked on — and that is exactly
+    // what roof-light.mjs did: it stood the rig on a footprint so the roof
+    // would be under the frame's middle, read a box there, and reported the
+    // same value with the shadow map on and off because the box was on the
+    // bonnet both times. Hiding the rig is the only way to read the surface
+    // under it — AND AN ASSIGNMENT HERE IS NOT ENOUGH ON ITS OWN: `attractStop`
+    // runs from the frame loop on every frame the hub is not open and put the
+    // truck back about sixteen milliseconds later, so the reel reads this set
+    // rather than asserting `true`.
+    if (layer === 'rig') car.visible = !off;
   }
-  return { hidden: [...hideSet],
-    layers: ['drape', 'synth', 'far', 'ov', 'theme', 'globe', 'sea', 'veg', 'terrain', 'critters', 'sward'],
+  return { hidden: [...hideSet], rig: car.visible,
+    layers: ['drape', 'synth', 'far', 'ov', 'theme', 'globe', 'sea', 'veg', 'terrain', 'critters', 'sward', 'rig'],
     counts: { drapes: drapes.length, synth: synthBodies.length, terrain: terrainMeshes.size } };
 };
 /**
@@ -33446,6 +33510,35 @@ function repaintWetDebug(): void {
 // filed, the heights building() gave its members — how many runs, the mean
 // spread (tallest less shortest, metres) and the share seated within 0.3 m.
 // `?bldruns=0` is the control: the same runs, the stand norm alone.
+// WHICH BUILDINGS HAVE WHICH ROOF, AND WHERE. `__built().roofs` is a
+// histogram: it can say a town is half flat and not WHICH half, so a tool that
+// wants to stand the camera over a flat roof to measure one had to guess —
+// roof-light.mjs guessed the biggest footprint nearby, sampled a pitched one
+// and reported the same green three times. Every footprint building() gave a
+// roof to, within `r` of the truck: its id, plan centroid, area, the short
+// side of its oriented box (so a tool can pick one WIDER than the sample box
+// it is about to read), its built height and its form. Sorted biggest first.
+(window as unknown as { __bldroofs?: object }).__bldroofs = (r = 400, form?: string): object => {
+  const out: Array<{ id: number; x: number; z: number; area: number; short: number; h: number; roof: string;
+    ring: number[][] }> = [];
+  for (const [id, roof] of bldRoofs) {
+    const pts = bldRings.get(id), h = bldHeights.get(id);
+    if (!pts || h === undefined) continue;
+    if (form && roof !== form) continue;
+    let cx = 0, cz = 0;
+    for (const [x, z] of pts) { cx += x; cz += z; }
+    cx /= pts.length; cz /= pts.length;
+    if (Math.hypot(cx - state.x, cz - state.z) > r) continue;
+    const fp = footprintSize(pts);
+    out.push({ id, x: +cx.toFixed(1), z: +cz.toFixed(1), area: +fp.area.toFixed(1), short: +fp.short.toFixed(1), h: +h.toFixed(1), roof,
+      // The ring itself: a tool that wants to sample a roof has to be able to
+      // prove its box is ON one, and a fraction of the frame is a box of
+      // unknown size in metres.
+      ring: pts.map(([x, z]) => [+x.toFixed(2), +z.toFixed(2)]) });
+  }
+  out.sort((a, b) => b.area - a.area);
+  return { n: out.length, forms: out.reduce((m: Record<string, number>, b) => (m[b.roof] = (m[b.roof] ?? 0) + 1, m), {}), list: out.slice(0, 40) };
+};
 (window as unknown as { __runs?: object }).__runs = (): object => {
   const byRun = new Map<number, number[]>();
   for (const [id, r] of bldRunOf) {
@@ -47355,6 +47448,21 @@ function hudSafeRects(): Array<[number, number, number, number]> {
 }
 function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   hctx.clearRect(0, 0, HW, HH);
+  // ── THE HUD OFF, FOR A MEASUREMENT ──
+  //
+  // This file already records that "a worst-pixel number over a frame with a
+  // HUD in it is a measurement of the HUD", and every tool since has worked
+  // around the instruments rather than removing them: masking rows out of a
+  // diff, dodging the gauges down the sides, and — the one that cost a
+  // measurement outright — trying to read the surface under the chart's centre
+  // with the HUD'S OWN VEHICLE MARKER drawn on it. `__hide('rig')` takes the
+  // 3D model away and cannot touch this canvas. `__hud(false)` can.
+  //
+  // The camera-dock rects go with it: they are assigned HERE, so an early
+  // return leaves them holding wherever the dock last was and the blit — which
+  // is a scissored render straight onto the canvas and answers to no overlay —
+  // would go on painting the live scene into a stale rectangle.
+  if (!hudOn) { dockRect = povRect = droneRect = mapUpRect = { x: 0, y: 0, w: 0, h: 0 }; return; }
   // While the DOM menu is up the HUD stands down entirely. Its scrim used to
   // be painted over these pixels in this same buffer; now the menu sits above
   // this canvas, and the RIG tab's bay is a HOLE through it to the renderer —
@@ -48902,6 +49010,10 @@ function stepOverlays(): void {
           : { kicker: 'THE LINE', head: 'THE LINE IS DRIVEN', body: 'NO TRAVEL ON A RUN · LEAVE VIA THE MENU' })
         : null);
 }
+/** Whether the HUD draws at all. A measurement's switch, never a player's —
+ *  SETTINGS' own HIDE HUD is `setClean`, which hides the DOM controls and
+ *  leaves this canvas exactly where it was. */
+let hudOn = true;
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
 let povRect = { x: 0, y: 0, w: 0, h: 0 };
 let droneRect = { x: 0, y: 0, w: 0, h: 0 };

@@ -5,7 +5,7 @@ import { roofFx } from './roof-fx';
 import { TRADITIONS, roofFormFor, traditionCulture, traditionIndex, type Tradition } from './traditions';
 import { createDials, type DialValues } from './lab-dials';
 import { clamp } from './num';
-import { chimneyGeo, roofGeo } from './roof';
+import { chimneyGeo, flatRoofGeo, flipWinding, roofGeo } from './roof';
 import { makeCanvasTex, wallTextures } from './wall-tex';
 
 /**
@@ -61,13 +61,16 @@ const GRAMMAR_DIALS: Record<keyof FacadeGrammar, string> = {
 };
 
 /** The game's extrusion, to the letter — see polygon() in main.ts. The shape
- *  is XY, rotated onto XZ, mirrored so the extrusion runs up, and translated
- *  so the box spans bottom..top. */
+ *  is XY, rotated onto XZ, mirrored so the extrusion runs up, the winding put
+ *  back (the mirror reverses it and leaves the normals alone — see
+ *  flipWinding, which is exported from roof.ts precisely so this copy cannot
+ *  drift from the game's), and translated so the box spans bottom..top. */
 function extrude(pts: Array<[number, number]>, bottom: number, top: number): THREE.BufferGeometry {
   const shape = new THREE.Shape(pts.map(([x, z]) => new THREE.Vector2(x, z)));
   const geo = new THREE.ExtrudeGeometry(shape, { depth: top - bottom, bevelEnabled: false });
   geo.rotateX(Math.PI / 2);
   geo.scale(1, -1, 1);
+  flipWinding(geo);
   geo.translate(0, bottom, 0);
   return geo;
 }
@@ -277,7 +280,14 @@ export async function startFacadeLab(): Promise<void> {
       const x0 = -total / 2 + i * w;
       const pts: Array<[number, number]> = [[x0, -d / 2], [x0 + w, -d / 2], [x0 + w, d / 2], [x0, d / 2]];
       group.add(new THREE.Mesh(withBase(extrude(pts, -plinth, height), aBase, gram, height), [roofMat, wallMat]));
-      if (roofShape !== 'flat') {
+      if (roofShape === 'flat') {
+        // A FLAT ROOF IS A PARAPET AND SOME PLANT. The lab judges it at the
+        // same stand-off as any other form, because "flat" was the one entry
+        // on the ROOF dial that drew nothing at all.
+        const fg = flatRoofGeo(pts, height, height, 8100 + i * 37);
+        if (fg) group.add(new THREE.Mesh(withBase(fg, aBase, -1, fg.userData.top as number), [roofMat, wallMat]));
+        else roofRefused = true;
+      } else {
         const rg = roofGeo(pts, roofShape, height, ridge);
         if (rg) group.add(new THREE.Mesh(withBase(rg, aBase, gram, height), [roofMat, wallMat]));
         else roofRefused = true;
@@ -386,7 +396,7 @@ export async function startFacadeLab(): Promise<void> {
     };
     status.textContent =
       `${culture.key.toUpperCase()}${tradition ? ` (atlas: ${tradition.base} base)` : ''} · ${w} x ${d} m · ${storeys} storeys of ${storeyM.toFixed(2)} = ${height.toFixed(1)} m`
-      + ` · roof ${roofShape}${roofShape === 'flat' ? '' : ` ridge ${ridge.toFixed(1)}`}${roofRefused ? ' (roofGeo REFUSED this plan)' : ''}`
+      + ` · roof ${roofShape}${roofShape === 'flat' ? '' : ` ridge ${ridge.toFixed(1)}`}${roofRefused ? ` (${roofShape === 'flat' ? 'flatRoofGeo' : 'roofGeo'} REFUSED this plan)` : ''}`
       + ` · ${terrace > 1 ? `terrace of ${terrace}` : 'detached'}${gram ? ` · grammar VIA aGram row ${gram}` : ''}\n`
       + `bays ${bays.toFixed(1)} across a ${g.bayM} m grid · rows ${rows.toFixed(2)} of ${g.storeyM.toFixed(2)} m`
       + ` · row 1 stands ${row1.toFixed(2)} m above ground (plinth ${plinth}, base ${aBase === 0 ? 'ground' : 'plinth'}) · door head ${doorHead.toFixed(2)} m · first sill ${win1.toFixed(2)} m\n`

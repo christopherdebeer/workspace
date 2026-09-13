@@ -215,6 +215,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~20s |
 | `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
 | `node devtools/switches.test.mjs` | the table cannot rot in either direction | instant |
+| `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
 | `node devtools/menu-survey.mjs` | every menu screen photographed, SETTINGS scrolled through | ~2min |
 | `node devtools/offline-ground.test.mjs` | and finds ground when it does | ~3min |
@@ -8680,3 +8681,212 @@ all is a judgement nobody has made yet.
   else pushed to the repository.
 - Report outcomes faithfully. If a test fails, say so with the output; if a
   check was skipped or interrupted, say that rather than implying green.
+
+## The flat roofs were black, and the reason was the winding
+
+Reported from the seat: *"we recently iterated on buildings (facades and roofs)
+but I'm seeing that flat roofs still render black. They should not be dead
+black, they should be proper flat roofs, often with small protrusions and
+miscellaneous structures on top? With an edge/small wall?"*
+
+Two separate faults with one look, and **"dead black" was not a figure of
+speech**. Measured at Suresnes on a 663 m² flat-roofed block, noon, clear sky,
+four sample points each verified by raycast to be on the building's own mesh:
+**sRGB [0,1,0], luminance 0.0001**, with the grass beside it at 0.0500. Two of
+the four samples read exactly zero.
+
+### A mirror is not a rotation
+
+`polygon` builds its extrusion as `ExtrudeGeometry` → `rotateX(90°)` →
+`scale(1, −1, 1)`, and that last step is a MIRROR. `BufferGeometry.scale`
+transforms the NORMAL attribute through the normal matrix, correctly — and it
+does not touch the index, so the triangle WINDING reverses and the two stop
+agreeing. Measured on the shipped construction, a plain 12 × 8 box:
+
+```
+cap triangles: attr-up 2, attr-down 2
+winding vs attribute: agree 0, DISAGREE 4
+wall triangles:       agree 0, DISAGREE 8
+```
+
+Every triangle, caps and walls alike. The material is `DoubleSide`, and three's
+`normal_fragment_begin` does `normal *= faceDirection` there — so from OUTSIDE
+the building every face is back-facing, the shading normal flips to point
+INWARD, and Lambert's `dot(N, L)` clamps to zero. The buildings have been lit
+from the wrong side since the day the extrusion was written.
+
+**WHY THE WALLS SURVIVED IT AND THE ROOFS DID NOT.** A wall has three other
+sources of value — `bldSkylit`'s emissive lift, the façade shader's sky
+reflection in the glass, and its own drawn detail — so an unlit wall reads as a
+flat wall rather than as a hole. A flat roof has ONE: `bldRoofSkylit`'s lift at
+HALF the wall's (`lift * 0.5`, about 0.026 of its own colour at noon), and the
+hemisphere light then hands a downward-facing normal its GROUND colour, which
+is what those samples are. That is the "dead black", and it is not that the
+roof was dark: it was receiving no sunlight at all.
+
+**AND `roofGeo` AND `chimneyGeo` WERE INSIDE OUT TOO**, by a different
+mechanism: they emit their own triangles and `computeVertexNormals` derives the
+attribute FROM the winding, so the two agree and both point the wrong way —
+which DoubleSide hides completely, because a consistently inverted surface is
+lit toward the viewer from either side. Same 12 × 8 plan:
+
+```
+roofGeo gabled    roof 0 outward, 10 INWARD   wall 1 outward, 1 INWARD
+roofGeo hipped    roof 0 outward, 12 INWARD
+roofGeo pyramidal roof 0 outward,  4 INWARD
+chimneyGeo        cap  0 outward,  2 INWARD   wall 2 outward, 6 INWARD
+```
+
+The gable ends are the tell: the two triangles are written in the same (u, v)
+order at opposite ends of the ridge, so one faces out and one faces in — which
+**no blanket reversal can fix** (the first attempt was exactly that, and left
+them 1/1 the other way round). So the rule is stated once and enforced in
+`faceOut`, in terms of what these generators actually emit: every face is either
+EXACTLY VERTICAL (a gable end, a skillion's eave wall, a stack's side) or an
+upward-facing surface (a plane, a hip, a cap, a ridge tile), so a vertical face
+points away from the piece's own axis and everything else points up.
+
+- **THE FIRST CUT PUT THE WALL TEST AT 0.55** — the façade shader's own — and
+  the ridge cap's skirts measure |ny| **0.537**: steeper than the shader calls
+  a roof, and sitting ON the ridge, where "away from the plan's centre" means
+  nothing. One skirt of every gable and hip in the world came out pointing
+  down. A threshold that has to separate a 57° tile from a wall is the wrong
+  threshold; a wall is vertical, and 0.05 is float noise.
+- **A CHIMNEY IS NOT AT THE PLAN'S CENTRE.** It stands a metre in from the
+  gable end, so the shared reference calls three of its four sides outward and
+  the fourth one in. Each stack is oriented about its own axis, over its own
+  slice of the arrays.
+- **AND THE CLOSING VERTEX DOES NOT VOTE.** An OSM way repeats its first node,
+  so on a four-corner rectangle the repeat drags the centroid a metre off its
+  own middle — enough, measured, to call a correct gable end inward.
+
+`?bldface=0` restores the inside-out world exactly, and
+`devtools/roof-wind.test.mjs` holds all of it in pure node in under a second,
+with the mirrored extrusion as a CONTROL that must fail both halves.
+
+### A flat roof is not a lid
+
+The other half of the report, and it needed no fix because there was nothing to
+fix: **`roofGeo` returns null for 'flat'**, so the roof of a third of the
+stock (439 of 1,204 intact at Suresnes, measured) was the extrusion's own cap — one horizontal quad, flush with the
+wall, with nothing on it and no edge to it. Even lit correctly that is a lid,
+and from the chart a town of them is a sheet of paper.
+
+`flatRoofGeo` (roof.ts, pure) builds the three things a real flat roof has:
+
+- **A PARAPET.** The wall runs on past the roof as a low upstand with a coping,
+  which is what stops the covering peeling and what stops people falling off —
+  and from the street it is the building's top EDGE. An inset ring mitred on
+  the angle bisector (clamped at about three times the thickness, so a sharp
+  spike in an OSM footprint cannot throw its inner corner across the roof),
+  with an outer face, a coping and an inner face per edge. Height
+  `0.26 + 0.035 × height` capped at 1.15 m: a course or two of brick on a house,
+  waist high on a block.
+- **PLANT.** One lift overrun or tank housing and then the miscellany — vents,
+  ducts, condensers — square to the footprint's own oriented box, one to four by
+  the plan's area, each placed only where all four of its corners plus the
+  parapet's clearance lie inside the ring.
+- **NOTHING WHERE THERE IS NO ROOM.** Under 20 m² a lean-to keeps its lid; the
+  parapet wants 40 m² or a 6 m height; the plant wants 120 m². **And a plan
+  narrower than two parapets is refused outright** — OSM tags walls, platforms
+  and lean-tos as buildings, a 40 m × 0.5 m ring clears 20 m² comfortably, and
+  its inset ring would cross itself and turn every inner face inside out along
+  its length.
+
+**IT IS ONE PIECE AT `aGram` −1 — the façade shader's BLANK wall — for the
+chimney's reason**: the bay grid falls across a parapet however it falls, and a
+door on one is the kind of thing that gets photographed. Blank still wears the
+cornice band at its own `aTop`, which on a parapet IS its coping, so the street
+reads wall, cornice at the eave line, parapet, coping. Deterministic off the
+OSM id by a constant nothing else uses, so an A/B of the massing, the ruin roll,
+the roof form or this is a comparison of that one thing.
+
+**AND `roofShape` SAYS 'flat' OUTRIGHT NOW.** It answered `undefined` in six
+places and `undefined` is what `intactSink` reads as "no roof". The one case
+that genuinely has no roof is a CANOPY — a sheet on posts with no attic — and
+`__built().roofs` counts it separately, where it used to be filed under flat.
+
+### Measured
+
+`devtools/flat-roof-ab.mjs`, at-paris-west, `time=NOON&wx=clear&sunalt=62`, the
+same building and the same sample points in all three runs, one variant per
+process:
+
+| | flat roof, median luminance | buildings, triangles |
+|---|---|---|
+| `bldface=0 bldpara=0` — as shipped | **0.0001** (samples 0, 0, 0.0002, 0.0006) | 135,588 |
+| `bldface=1 bldpara=0` — the winding | **0.0330** (0.0322 … 0.0340) | 135,588 |
+| `bldface=1 bldpara=1` — and the roof | **0.0392** (0.0323 … 0.0480) | 161,166 |
+
+with the grass beside the building at 0.0500 in all three. Over the terrain
+pane: the winding moved **35.9%** of it (mean 18.7/255), the parapet and plant
+another **6.1%** (mean 4.4), and the pane's own luma went 0.0413 → 0.0624. The
+frames are the argument: in the control the block is a solid black wedge in a
+lit street; in the fix it is slate felt with a cream coping running the whole
+perimeter. **+18.9% on the building triangle bill** for parapets and plant on
+115 flat roofs — the same order as the pitched roofs' +3.5%, on a stock that is
+cheap (10 draw calls at Suresnes, 11% of the scene's triangles).
+
+### …and from the street, in the lab
+
+A parapet is a thing you see from the pavement, and the chart cannot judge it.
+`devtools/flat-roof-lab.mjs` drives the façade lab with ROOF = FLAT at three
+traditions, two suns each — which is what the lab is for and why its flat entry
+now draws something instead of nothing. Twenty seconds, no world, no HUD, no
+page errors. The frames: on the Île-de-France block the parapet is a band of
+wall above the last row of windows with the cornice's lit line at its head and
+a plant box standing over it at the corner; on the Sahel's adobe block, two.
+
+Two things the first run of that tool taught, both about the lab and not about
+the roof. **The dials panel is most of the glass at 390 px** — the first frames
+were photographs of the dials; `H` is the lab's own fold key and gives the
+gutter back. And **the lab's lens is horizontal** (`camera.lookAt(0, eye, 0)`),
+so the survey's 26 m stand-off at a 1.3 m cab eye puts a four-storey building's
+top edge off the top of a portrait frame — the one part of it this tool exists
+to photograph. There is no number in that tool, deliberately: the lab's light
+rig is not the game's (no `bldSkylit`), so a luminance read there would not be
+the world's.
+
+### Three instruments, because the first three attempts measured something else
+
+Every one of these cost a run, and all three are the same shape of fault — a
+sample that could not be shown to be on the surface it named.
+
+- **THE TRUCK IS ALWAYS AT THE CENTRE OF A TOP VIEW.** Standing the rig on a
+  footprint so its roof lands under the middle of the frame puts the RIG under
+  the middle of the frame. Measured: the control and the fix returned sRGB
+  [78,48,37] and [78,48,37] — the same bonnet, twice. That is also what made
+  `roof-light.mjs` inconclusive when it was written; its three sample boxes
+  "all read the same green" because they were on the truck.
+  `__hide('rig')` is new and hides the model — **and `attractStop` put it back
+  about sixteen milliseconds later**, because `stepAttract` runs every frame
+  and calls it on every frame the hub is not open. Anything that asserts a
+  visibility every frame outranks anything that assigns one once; the rig's
+  visibility is derived from `hideSet` now.
+- **AND THE HUD DRAWS ITS OWN VEHICLE MARKER THERE**, on a canvas no scene
+  switch reaches. `__hud(false)` clears the instruments off the frame — not the
+  player's HIDE HUD, which is `setClean` and hides the DOM controls only — and
+  takes the camera-dock rects with it, or the dock goes on blitting the live
+  scene into a stale rectangle (the fault this file already records).
+- **A BOX AT A FRACTION OF THE FRAME IS A BOX OF UNKNOWN SIZE.** It is sized
+  from `__scale().mppCss` and stated in metres now, the zoom is POLLED until it
+  settles (`__zoom` sets a target the frame loop eases toward: two runs
+  photographed after a fixed wait came back at a 45 m frame and a 32 m frame,
+  which is not an A/B), and **every sample asks `__pick` what it is standing
+  on** and is dropped unless the answer is `building`. The sample sets are not
+  identical between variants by construction — a parapet stands a metre higher
+  than the lid it replaced, so a ray that used to pass over the roof and hit
+  the rig behind it now hits the parapet — so the comparison is the median over
+  the samples that hit a building in EVERY run.
+
+Two probes came out of it and are worth knowing: `__bldroofs(r, form?)` lists
+every footprint `building()` gave a roof to with its centroid, area, short side,
+height, form and ring (`__built().roofs` is a histogram: it can say a town is
+half flat and not WHICH half, which is why a tool had to guess and guessed
+wrong), and `__pick` now names the mesh it hits.
+
+**Not done here:** the parapet is one height round a whole building, where a
+real one steps with the roof's own levels; nothing drains, so there are no
+outlets or upstands at a gutter; the plant is boxes, not plant; and `roof:shape`
+values this game does not model (dome, onion, gambrel — a tenth of a percent of
+the stock) take the flat treatment, which is what they already wore.
