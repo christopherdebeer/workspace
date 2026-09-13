@@ -62,7 +62,39 @@ for (const cam of ['chase', 'top']) {
   console.log('      ' + ahead.map((r) => `${r.t}m ${r.air.toFixed(3)}/${r.coc.toFixed(3)}/${r.blur.toFixed(3)}`).join('  '));
 }
 
-if (process.env.SHOTS !== '0') {
+// ── THE HONEST A/B IS ONE PROCESS, TWO UNIFORM VALUES ──
+//
+// Two separate boots of the same fixture are NOT a control: the wildlife, the
+// sward's phase and the streaming order all differ, so a diff between them
+// carries the change plus whatever the world did. Measured that way the first
+// time: mean 0.85/255 with a worst pixel of 133.9, and the 133.9 was nothing
+// to do with the blur.
+//
+// `__tilt({air})` sets the uniform live, so these two frames come from one
+// boot, one settled world, one clock — and differ by exactly the term under
+// test. The same trick the dither rack uses: re-composite what is already in
+// rtScene rather than rendering the world twice.
+if (process.env.AB === '1') {
+  await q(() => { window.__draw(true); window.__hud(false); window.__hide('rig'); });
+  await q(() => window.__cam('chase'));
+  await d.page.waitForTimeout(9000);
+  for (const air of [1, 0]) {
+    await q((a) => window.__tilt({ air: a }), air);
+    await d.page.waitForTimeout(1200);
+    writeFileSync(`${OUT}/ab-air${air}.png`, await d.page.screenshot({ timeout: 240000 }));
+    console.log(`  shot ab-air${air}`);
+  }
+  // …and the same for the focal plane, so the two softenings can be told apart
+  // in pixels and not only in the probe.
+  await q(() => window.__tilt({ air: 0, amount: 0 }));
+  await d.page.waitForTimeout(1200);
+  writeFileSync(`${OUT}/ab-tilt0.png`, await d.page.screenshot({ timeout: 240000 }));
+  await q(() => window.__tilt({ amount: 0.9, sharp: 30, blur: 84 }));
+  await d.page.waitForTimeout(1200);
+  writeFileSync(`${OUT}/ab-tilt1.png`, await d.page.screenshot({ timeout: 240000 }));
+  console.log(`  shot ab-tilt0 / ab-tilt1`);
+}
+if (process.env.SHOTS !== '0' && process.env.AB !== '1') {
   await q(() => { window.__draw(true); window.__hud(false); window.__hide('rig'); });
   for (const [name, cam, zoom] of [['chase', 'chase', 0], ['top', 'top', 0.9]]) {
     await q((m) => window.__cam(m), cam);
