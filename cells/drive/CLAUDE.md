@@ -8528,6 +8528,124 @@ by tapping the map (the legend names them; the site card already answers for a
 point). And `COVER_NAME` in main.ts is still a second list of the same eleven
 class names — harmless, and the next thing to collapse into the table.
 
+### …and then the seat photographed it loading badly
+
+Five frames and an exact report: *"only some of the viewport loading eco and
+then not proceeding, and then loading and then throwing away on zoom in when
+its replacement isn't yet built. Do we prioritise focus area? Why discard on
+zoom in/out — surely just replace when finer detail available."* Three separate
+faults with one look, and the answers are the three rules the far shell and the
+chart ink already live by, which the sheet had been written without.
+
+- **A SHEET BELONGS TO A SHELL TILE, NOT TO A TILE KEY.** `refreshTheme`
+  reconciled against `farMeshes`, which is the CURRENT ring and is not what is
+  on the screen: `setFarLevel` moves the outgoing ring into `farRetired`, where
+  those meshes go on being DRAWN until the new level covers them — that
+  retention is the whole reason a zoom does not blink, and it is three sections
+  up in this file. Keyed by the key, every sheet was dropped at the instant its
+  tile was retired, so the RELIEF stayed and the class map vanished and came
+  back a tile at a time. It is keyed by the far MESH now, so a sheet lives
+  exactly as long as the thing it is drawn on — current, retired, whatever —
+  and dies when that mesh leaves the group (evicted, or parked, which releases
+  the very geometry the sheet is drawn with). `far.parent` is the whole test.
+  **This is the third time in this file that a second lifetime kept beside a
+  first has drifted from it**, and the fix is the same every time: do not keep
+  two, derive one.
+- **NEAREST THE FOCUS FIRST.** Asked directly, and the answer was no — the
+  tiles were baked in `farMeshes` insertion order, which is the order the shell
+  happened to land them, which at the widest zooms is most of a hemisphere away
+  from what the player is looking at. Sorted by distance from the chart's own
+  focus (`viewX() + panX`), in the tangent plane, which is exact enough to
+  order twenty-five tiles by and needs no sphere.
+- **A SHEET BAKED OVER A HALF-ARRIVED SOURCE IS A HOLE NOTHING WOULD FILL.**
+  One shot, from whatever had streamed at that moment — and the cover rasters
+  and the ecoregion tiles arrive over seconds. That is the "not proceeding"
+  half exactly. `themeSrcRev` is bumped wherever a cover or eco tile lands, a
+  sheet records the revision and the count of texels that came out with NO
+  class, and a sheet with unknowns is baked again when the revision has moved:
+  **one a pass, nearest first**, because a cover ring landing bumps the
+  revision twenty-five times and re-baking every incomplete sheet on each would
+  be the ring's work several times over for a map that is already drawn.
+
+**AND THE FINE WORLD WAS PUNCHING A HOLE IN THE MIDDLE OF IT.** The first cut
+kept `depthTest` on with a polygonOffset, reasoning that turning it off would
+paint a class map over the streets. What it actually did was let the fine ring
+occlude the sheet: at the seat's own ten-kilometre frame the fine ring is a
+quarter of the glass, and the photograph is a class map with a block of bare
+terrain in the middle of it. A thematic sheet is a statement about the whole
+frame or it is noise. `depthTest: false` now, and **`THEME_MPP_MIN` is what
+makes that honest** — past 15 m/px a street is one pixel and there is nothing
+under the sheet that the sheet is hiding. With depth off, draw order is the
+only law, so the sheet takes the same total-order-by-level the chart ink and
+the shell's lift already use (`themeOrderFor`, 20 + z): a retained finer sheet
+stays over a new coarse one, and the whole band sits between the shell at 0 and
+the ink at 40, so a class map is always a GROUND.
+
+**AND A SILENT SHEET NOW SAYS WHY.** The first cut had four states and covered
+three: on-and-below-the-zoom-gate said "zoom out", on-and-drawing-with-a-legend
+drew the legend, and **on, past the gate, with nothing baked yet fell through
+every branch and printed nothing at all** — which is the state the seat
+photographed with `FAR 25 0/25` on the status line and a COVER chip that looked
+broken. Four branches now: ZOOM OUT FOR THE SHEET · SHEET NEEDS THE SHELL ·
+SHEET LOADING · the legend. And the legend carries a dim `+` while any sheet
+still has unknown texels, because "is that everything or is it still coming" is
+the question the report asked three different ways and nothing answered.
+
+**AND "STILL LOADING" IS WORK OUTSTANDING, NOT TEXELS MISSING.** The first
+version of the re-bake rule tested `unknown > 0`, which is wrong twice over.
+Over OCEAN it is permanent and correct — measured on a wide Cape zoom,
+**84,353 of 102,400 texels unknown with the ring fully home**, which is the sea,
+that WorldCover does not map and the ecoregions do not claim — so the legend's
+`+` would have been on for ever and the re-bake would have fired on every cover
+tile that landed anywhere. And a sheet with unknowns whose SOURCE has not moved
+since it baked has nothing to wait for. So a sheet settles the moment a re-bake
+fails to LOWER its unknown count (or after `THEME_REBAKE_MAX` tries), and
+`themeWork()` — tiles in the ring with no sheet, bakes in flight, unsettled
+sheets a newly-landed source has left behind — is what the `+` and the probe's
+`filling` report. Zero means the map is as complete as the data allows.
+
+**Measured** (`devtools/chart-layers.mjs PHASE=sweep SHOTS=0`, Cape Town,
+primed at zoom 300 then jumped to 20,000, sampled ~500ms for a minute), the
+working tree against `f4f046c`:
+
+| | control | fix |
+|---|---|---|
+| sheets held on RETIRED shell tiles (the mechanism) | **0**, structurally | **39** |
+| samples with the shell drawing and the sheet empty | 3 of 128 (2%), longest 0.8s | **0 of 101** |
+| shell levels crossed during the sample | (the control's probe cannot say) | 11 → 6 → 5 |
+| sheets at the end, for a 25-tile ring | 25 | 50 (25 current + a retained ring) |
+
+**The first number is the one to read.** A sheet keyed by its tile KEY cannot
+be on a retired tile — it is dropped the instant the key leaves the current
+ring — so the control's zero is structural rather than lucky, and the fix's 39
+is the class map surviving two level swaps. The blank count is the SYMPTOM, and
+a harness can barely sample it: a bake is 1.6 ms and a tile here lands off a
+warm relay, so the window the seat sees over a real network is a frame or two
+here. `scratchpad/sheettrace.mjs`-style tracing showed it directly — level 7
+with 4 sheets all current, then the swap to 5 with `retiredSheets 4` holding
+for the rest of the trace while the new ring streamed.
+
+`__chartlayers()` carries `sheets`, `retiredSheets`, `unknown`, `filling`,
+`rebaked` and `asking`; the telemetry's `chart layers` row carries the same, so
+a seat report says whether a sheet was still filling.
+
+**AND ONE PHASE A PROCESS.** All three sections of `chart-layers.mjs` in one
+run blew the twenty-minute harness fuse, which kills the run rather than
+waiting — so the last number printed was from a process that was killed, and no
+number from such a run should be quoted. `PHASE=basic|sweep|near`, and
+`SHOTS=0` for a phase whose answer is numbers: with drawing on, one probe round
+trip is five seconds and a sixty-second sweep is TWELVE samples, which is not a
+sample of anything.
+
+**Still not done, and now with a reason rather than a shrug:** a sheet is per
+far tile, so where the shell has handed over to the globe there is none — the
+globe is a graticule, not a tiled surface, and a planet-wide class map is a
+BAKE (the same argument as `globe-base.png`'s, one layer over). And the sheet
+is a `MeshBasicMaterial` and takes no day/night term, so on the night side it
+would draw at full brightness; it matches the chart's other unlit furniture
+(the road ink does the same), and whether a thematic overlay should be lit at
+all is a judgement nobody has made yet.
+
 ## Big shapes worth knowing
 
 - **`client/main.ts` is ~36k lines** and holds the world's module state. Do not

@@ -1063,6 +1063,19 @@ interface CoverTile { xs: number; zs: number; w: number; h: number; data: Uint8A
    *  map now holds SEVERAL at once and the sampler has to prefer the finest.
    *  The fine map holds one level by construction and leaves this unset. */
   z?: number }
+/**
+ * EVERY TIME A SOURCE A THEMATIC SHEET READS ARRIVES.
+ *
+ * A sheet is baked once from whatever had streamed at that moment, and the
+ * cover rasters and the ecoregion tiles arrive over seconds — so a sheet baked
+ * early is a sheet with holes in it that nothing would ever fill. Reported
+ * from the seat as "only some of the viewport loading eco and then not
+ * proceeding", which is exactly what a one-shot bake over a half-arrived
+ * source looks like. Bumped here rather than per source because the rule that
+ * consumes it is already narrow: only a sheet that CAME OUT with unknown
+ * texels is ever re-baked, and only one a pass.
+ */
+let themeSrcRev = 0;
 const coverTiles = new Map<string, CoverTile>();
 const coverAsked = new Set<string>();
 /**
@@ -1145,6 +1158,7 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
       w: Math.abs(wx1 - wx0), h: Math.abs(wz1 - wz0), data,
     };
     coverTiles.set(key, ctile);
+    themeSrcRev++;   // a sheet with unknown texels here can be re-baked now
     tworker?.mirrorCover(key, ctile);
     // New evidence: every climate corner that had none gets one more chance.
     climField.noteCover();
@@ -1382,6 +1396,7 @@ async function loadCoverWideTile(x: number, y: number, z: number): Promise<void>
     const xs = Math.min(wx0, wx1), zs = Math.min(wz0, wz1);
     const w = Math.abs(wx1 - wx0), h = Math.abs(wz1 - wz0);
     coverWide.set(key, { xs, zs, w, h, data, z });
+    themeSrcRev++;
     coverWideSorted = null;
     /**
      * ONE REBUILD WHEN THE RING IS HOME, NOT ONE PER TILE.
@@ -1948,6 +1963,7 @@ async function loadEcoTile(tx: number, ty: number): Promise<void> {
     const res = await fetch(`${CELL_BASE}/~/eco/v1/${ECO_Z}/${tx}/${ty}`);
     if (!res.ok) throw new Error(`eco HTTP ${res.status}`);
     ecoTiles.set(key, decodeEcoTile(await res.json()));
+    themeSrcRev++;
     ecoFail.delete(key);
     // A z5 tile is a twelve-hundred-kilometre square: a session that drove for
     // a week would hold a handful. The cap is against the attract reel, which
@@ -27211,12 +27227,58 @@ themeGroup.visible = false;
 // under — see sphereRTC. A sheet in the world group would be flat while
 // everything it describes is on a sphere.
 planetGroup.add(themeGroup);
-const themeMeshes = new Map<string, THREE.Mesh>();
-/** What each sheet tile found, by class — the legend is built from the tiles
- *  actually in the scene, so it names what is on the screen and not what the
- *  dataset defines. */
-const themeCounts = new Map<string, Map<number, number>>();
-let themeBaked = 0, themeBakeMs = 0;
+/**
+ * ── A SHEET BELONGS TO A SHELL TILE, NOT TO A TILE KEY ──
+ *
+ * The first cut keyed sheets by `z/x/y` and reconciled against `farMeshes`,
+ * which is the CURRENT ring. It is not what is on the screen: `setFarLevel`
+ * moves the outgoing ring into `farRetired`, where those meshes go on being
+ * DRAWN until the new level covers them — that retention is the whole reason a
+ * zoom does not blink. Keyed by the key, every sheet was dropped at the
+ * instant its tile was retired, so the relief stayed and the class map
+ * vanished and came back a tile at a time.
+ *
+ * Reported from the seat, exactly: "loading and then throwing away on zoom in
+ * when its replacement isn't yet built... surely just replace when finer
+ * detail available". Keyed by the far MESH, a sheet lives precisely as long as
+ * the thing it is drawn on lives — current, retired, whatever — and dies when
+ * that mesh leaves the group (evicted, or parked, which releases the very
+ * geometry the sheet is drawn with). One rule, no second lifetime to keep in
+ * step with the first.
+ */
+interface ThemeSheet {
+  sheet: THREE.Mesh;
+  key: string;
+  counts: Map<number, number>;
+  /** Texels that came out with no class. */
+  unknown: number;
+  /** The source revision it was baked at. */
+  rev: number;
+  /**
+   * NOTHING MORE IS COMING FOR THIS TILE.
+   *
+   * `unknown > 0` looked like the test for "still filling" and is not: over
+   * OCEAN it is the right answer and a permanent one. Measured on a zoom-out
+   * at the Cape, 84,353 of 102,400 texels unknown with the ring fully home —
+   * the sea, which WorldCover does not map and the ecoregions do not claim.
+   * Re-baking on that forever would be the ring's work every time a cover tile
+   * landed anywhere, for a map that was already as complete as it can be.
+   *
+   * So the test is whether a re-bake ACTUALLY HELPED. A sheet is settled the
+   * moment a bake fails to lower its unknown count, or after
+   * `THEME_REBAKE_MAX` tries; and only unsettled sheets are re-baked, and only
+   * unsettled sheets put the `+` on the legend.
+   */
+  settled: boolean;
+  tries: number;
+}
+/** How many times one tile's sheet may be baked again while a source is still
+ *  arriving. A bound, not a schedule: the settle test above is what normally
+ *  stops it, and this is what stops a source that keeps moving without ever
+ *  answering for this tile. */
+const THEME_REBAKE_MAX = 3;
+const themeSheets = new Map<THREE.Mesh, ThemeSheet>();
+let themeBaked = 0, themeBakeMs = 0, themeRebaked = 0;
 /**
  * The class at a point, for whichever sheet is in force. Both sources answer
  * "what is it here" at a point and neither needs geometry: the cover raster
@@ -27253,11 +27315,13 @@ function themeClassAt(layer: ChartLayerId, ex: number, ez: number): number {
  * own parallel — which on a class map of a coastline looks like bad data
  * rather than like a flipped texture.
  */
-async function bakeThemeTile(key: string, layer: ChartLayerId): Promise<void> {
-  const far = farMeshes.get(key), ras = farRasters.get(key);
-  if (!far || !ras) return;
+async function bakeThemeTile(far: THREE.Mesh, key: string, layer: ChartLayerId): Promise<void> {
+  const ras = farRasters.get(key);
+  if (!ras || !far.parent) return;
   const px = new Uint8Array(THEME_N * THEME_N * 4);
   const counts = new Map<number, number>();
+  const rev = themeSrcRev;
+  let unknown = 0;
   // THE COST IS THE ROWS, NOT THE WALL. The first measurement timed from here
   // to the last slice and read 209ms a tile — which is the harness's two-frames
   // -a-second spread over sixty-four slices, not work. A sliced job's price is
@@ -27272,17 +27336,17 @@ async function bakeThemeTile(key: string, layer: ChartLayerId): Promise<void> {
       const cls = themeClassAt(layer, ex, ez);
       const ink = cls ? inkFor(layer, cls) : null;
       const o = (j * THEME_N + i) * 4;
-      if (!ink) { px[o + 3] = 0; continue; }
+      if (!ink) { px[o + 3] = 0; unknown++; continue; }
       px[o] = ink.rgb[0]; px[o + 1] = ink.rgb[1]; px[o + 2] = ink.rgb[2]; px[o + 3] = 255;
       counts.set(cls, (counts.get(cls) ?? 0) + 1);
     }
     cpu += performance.now() - _p;
     profAdd('theme:bake', _p);
   };
-  // Still the tile we started on, still the layer that asked, and the far mesh
-  // still in the ring: a sheet is the shell's own geometry wearing a texture,
-  // and a tile evicted mid-bake has had that geometry's buffers released.
-  const live = (): boolean => themeLayer() === layer && farMeshes.get(key) === far;
+  // Still the layer that asked, and the mesh still in the scene: a sheet is a
+  // shell tile's own geometry wearing a texture, and a tile that has left has
+  // had that geometry's buffers released.
+  const live = (): boolean => themeLayer() === layer && !!far.parent;
   await new Promise<void>((done) => { farBakeJobs.push({ n: THEME_N, i: 0, step: row, live, done }); });
   if (!live()) return;
   const tex = new THREE.DataTexture(px, THEME_N, THEME_N, THREE.RGBAFormat);
@@ -27297,60 +27361,118 @@ async function bakeThemeTile(key: string, layer: ChartLayerId): Promise<void> {
   tex.needsUpdate = true;
   const mat = new THREE.MeshBasicMaterial({
     map: tex, transparent: true, opacity: THEME_ALPHA, depthWrite: false, side: DS,
-    // A DECAL ON A SURFACE IT IS COPLANAR WITH. The sheet wears the shell's own
-    // geometry, so without this the two fight for every pixel; and a radial
-    // lift cannot fix it at chart distances, where the depth buffer spans
-    // thousands of kilometres and two metres is nothing. depthTest stays ON so
-    // the fine world still occludes the sheet — turning it off would paint a
-    // class map over the streets.
-    polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    // ── DEPTH OFF, AND THE ZOOM GATE IS WHAT MAKES THAT HONEST ──
+    //
+    // The first cut kept depthTest on with a polygonOffset, on the reasoning
+    // that turning it off would paint a class map over the streets. What it
+    // actually did was let the FINE WORLD punch a hole in the sheet: at a
+    // ten-kilometre frame the fine ring is a quarter of the glass, and the
+    // seat's photograph is a class map with a block of bare terrain in the
+    // middle of it. A thematic sheet is a statement about the whole frame or
+    // it is noise. `THEME_MPP_MIN` is the rule that keeps this honest — past
+    // 15 m/px a street is one pixel and there is nothing under the sheet the
+    // sheet is hiding.
+    depthTest: false,
   });
   const mesh = new THREE.Mesh(far.geometry, mat);
   mesh.position.copy(far.position);
   mesh.frustumCulled = false;
-  // Under the chart's ink and over the shell: a thematic sheet is a ground,
-  // and the roads and the coast are drawn ON grounds.
-  mesh.renderOrder = THEME_ORDER;
-  dropThemeTile(key);
-  themeMeshes.set(key, mesh);
-  themeCounts.set(key, counts);
+  mesh.renderOrder = themeOrderFor(Number(key.split('/')[0]));
+  const was = themeSheets.get(far);
+  const tries = (was?.tries ?? 0) + 1;
+  // Settled when nothing is missing, when a bake stopped helping, or when the
+  // tries are spent. `was` is only present on a re-bake of the SAME mesh.
+  const settled = unknown === 0 || (was ? unknown >= was.unknown : false) || tries > THEME_REBAKE_MAX;
+  dropThemeSheet(far);
+  themeSheets.set(far, { sheet: mesh, key, counts, unknown, rev, settled, tries });
   themeGroup.add(mesh);
   themeBaked++; themeBakeMs += cpu;
 }
 /** How strongly a sheet states itself. Not 1: the relief under it is what
  *  makes a class map readable as a PLACE, and a solid wash deletes it. */
 const THEME_ALPHA = 0.66;
-const THEME_ORDER = 35;
-function dropThemeTile(key: string): void {
-  const m = themeMeshes.get(key);
-  if (!m) return;
-  themeGroup.remove(m);
+/**
+ * ── FINER DRAWS LAST, HERE TOO ──
+ *
+ * Same rule as the chart ink's `ovOrderFor` and the shell's `farLift`, for the
+ * same reason: with depth off, draw order is the only law, and a retained
+ * finer sheet under a new coarse one would be the better data buried. The band
+ * sits between the shell (0) and the chart's own ink (40 and up), so a class
+ * map is always a GROUND — roads and coastlines are drawn on it, never under.
+ */
+const THEME_ORDER = 20;
+const themeOrderFor = (z: number): number => THEME_ORDER + clamp(z, 0, 13);
+function dropThemeSheet(far: THREE.Mesh): void {
+  const t = themeSheets.get(far);
+  if (!t) return;
+  themeGroup.remove(t.sheet);
   // The GEOMETRY IS THE SHELL'S and is not ours to dispose — only the texture
   // and the material this sheet made.
-  const mat = m.material as THREE.MeshBasicMaterial;
+  const mat = t.sheet.material as THREE.MeshBasicMaterial;
   mat.map?.dispose(); mat.dispose();
-  themeMeshes.delete(key); themeCounts.delete(key);
+  themeSheets.delete(far);
 }
 function dropTheme(): void {
-  for (const key of [...themeMeshes.keys()]) dropThemeTile(key);
+  for (const far of [...themeSheets.keys()]) dropThemeSheet(far);
   themeAsking.clear();
 }
-const themeAsking = new Set<string>();
+const themeAsking = new Set<THREE.Mesh>();
 /**
  * Reconcile the sheet against the shell, once a stream pass.
  *
- * The far ring decides what exists; this follows it. A tile that left the ring
- * (or was parked, which releases its geometry's buffers) loses its sheet in
- * the same breath, and a tile that has no sheet and should gets one queued.
+ * THREE RULES, AND THE SEAT'S REPORT IS THE REASON FOR ALL THREE:
+ *
+ *  - a sheet lives as long as its far mesh is in the scene, so a level swap
+ *    keeps the old class map exactly as long as it keeps the old relief;
+ *  - the tiles to bake are taken NEAREST THE CHART'S FOCUS FIRST, not in the
+ *    order the shell happened to land them. Asked directly — "do we prioritise
+ *    focus area (viewport centre on spun globe)" — and the answer was no: the
+ *    map filled from wherever, which at the widest zooms is most of a
+ *    hemisphere away from what the player is looking at;
+ *  - a sheet that came out with unknown texels is baked again when a source
+ *    has landed since, one a pass, nearest first. A one-shot bake over a
+ *    half-arrived cover raster or a missing ecoregion tile is a hole nothing
+ *    would ever fill, which is the "not proceeding" half of the report.
  */
 function refreshTheme(): void {
   const layer = themeLayer();
-  if (!layer || FIXTURE) { if (themeMeshes.size) dropTheme(); return; }
-  for (const key of [...themeMeshes.keys()]) if (!farMeshes.has(key)) dropThemeTile(key);
-  for (const key of farMeshes.keys()) {
-    if (themeMeshes.has(key) || themeAsking.has(key)) continue;
-    themeAsking.add(key);
-    void bakeThemeTile(key, layer).finally(() => themeAsking.delete(key));
+  if (!layer || FIXTURE) { if (themeSheets.size) dropTheme(); return; }
+  for (const far of [...themeSheets.keys()]) if (!far.parent) dropThemeSheet(far);
+  for (const far of [...themeAsking]) if (!far.parent) themeAsking.delete(far);
+  // The focus in the tangent plane's metres, which is what a far tile's raster
+  // box is in — the ordering does not need the sphere and the plane is exact
+  // enough to sort twenty-five tiles by.
+  const fx = viewX() + panX, fz = viewZ() + panZ;
+  const near = (key: string): number => {
+    const r = farRasters.get(key);
+    if (!r) return Infinity;
+    return Math.hypot(r.xs + r.w / 2 - fx, r.zs + r.h / 2 - fz);
+  };
+  const want: Array<{ far: THREE.Mesh; key: string; d: number }> = [];
+  const stale: Array<{ far: THREE.Mesh; key: string; d: number }> = [];
+  for (const [key, far] of farMeshes) {
+    if (themeAsking.has(far)) continue;
+    const have = themeSheets.get(far);
+    if (!have) { want.push({ far, key, d: near(key) }); continue; }
+    // A sheet whose tile REBUILT (a cover re-bake swaps the mesh) is a
+    // different mesh and lands in `want` above; this is the other case, a
+    // sheet that is complete except for what had not arrived.
+    if (!have.settled && have.rev !== themeSrcRev) stale.push({ far, key, d: near(key) });
+  }
+  want.sort((a, b) => a.d - b.d);
+  stale.sort((a, b) => a.d - b.d);
+  for (const w of want) {
+    themeAsking.add(w.far);
+    void bakeThemeTile(w.far, w.key, layer).finally(() => themeAsking.delete(w.far));
+  }
+  // ONE RE-BAKE A PASS. A cover ring landing bumps the revision twenty-five
+  // times; re-baking every incomplete sheet on each would be the ring's worth
+  // of work several times over for a map that is already drawn.
+  const s = stale[0];
+  if (s) {
+    themeAsking.add(s.far);
+    themeRebaked++;
+    void bakeThemeTile(s.far, s.key, layer).finally(() => themeAsking.delete(s.far));
   }
 }
 /**
@@ -27363,12 +27485,18 @@ function refreshTheme(): void {
  * and bounded by the store's own 24-tile cap, so browsing a hemisphere cannot
  * turn into an unbounded fetch. A z5 tile is twelve hundred kilometres, so
  * this is a handful of requests for a continent.
+ *
+ * THE RING IS SIZED BY THE FRAME, not fixed at one tile out: a two-thousand-
+ * kilometre chart spans two z5 tiles and a globe-wide one spans the lot, and
+ * asking only the 3x3 left the rest of a wide frame permanently unpainted with
+ * nothing on the screen saying why.
  */
 function streamEcoForChart(cLat: number, cLon: number): void {
   if (themeLayer() !== 'eco' || FIXTURE || ecoInFlight > 0) return;
   const n = 2 ** ECO_Z;
   const [cx, cy] = ecoTileOf(cLat, cLon);
-  for (let d = 0; d <= 1; d++) {
+  const reach = clamp(Math.ceil(backdropRadius() / tileMetres(ECO_Z)), 1, 3);
+  for (let d = 0; d <= reach; d++) {
     for (let dx = -d; dx <= d; dx++) for (let dy = -d; dy <= d; dy++) {
       if (Math.max(Math.abs(dx), Math.abs(dy)) !== d) continue;
       const ty = cy + dy;
@@ -27380,14 +27508,35 @@ function streamEcoForChart(cLat: number, cLon: number): void {
     }
   }
 }
-/** The legend, from the tiles in the scene — see `legendFor`. Summed over the
- *  sheet rather than per tile, or a legend would change every time the ring
- *  moved by one tile. */
+/**
+ * IS THE MAP STILL GOING TO CHANGE — work outstanding, not texels missing.
+ *
+ * `unknown > 0` was the first answer and is wrong twice over. Over ocean it is
+ * permanent and correct (84,353 of 102,400 texels at a wide Cape zoom are the
+ * sea), so it reads as "still loading" forever; and a sheet that is unsettled
+ * but whose source has not moved since it baked has nothing to wait FOR. What
+ * a reader wants to know is whether anything is queued: a tile in the ring
+ * with no sheet, a bake in flight, or a sheet that a newly-landed source has
+ * left behind. Zero means the map is as complete as the data allows.
+ */
+function themeWork(): number {
+  if (!themeLayer()) return 0;
+  let n = themeAsking.size;
+  for (const [, far] of farMeshes) {
+    const t = themeSheets.get(far);
+    if (!t) { if (!themeAsking.has(far)) n++; continue; }
+    if (!t.settled && t.rev !== themeSrcRev) n++;
+  }
+  return n;
+}
+/** The legend, from the sheets in the scene — see `legendFor`. Summed over the
+ *  whole sheet rather than per tile, or a legend would change every time the
+ *  ring moved by one tile. */
 function themeLegend(): Array<{ cls: number; name: string; hex: string; share: number }> {
   const layer = themeLayer();
   if (!layer) return [];
   const all = new Map<number, number>();
-  for (const c of themeCounts.values()) for (const [cls, n] of c) all.set(cls, (all.get(cls) ?? 0) + n);
+  for (const t of themeSheets.values()) for (const [cls, n] of t.counts) all.set(cls, (all.get(cls) ?? 0) + n);
   return legendFor(layer, all);
 }
 
@@ -41929,8 +42078,10 @@ function telemetryReport(): string {
     // and the sheet's own cost belongs beside it, because a class sheet is the
     // one chart layer with a bake in it.
     L.push(`chart layers ${CHART_LAYERS.map((l) => `${l.name.toLowerCase()} ${chartOn[l.id] ? 'on' : 'off'}`).join(' · ')}`
-      + ` · sheet ${themeLayer() ?? 'none'} ${themeGroup.visible ? 'drawing' : 'down'} ${themeMeshes.size}/${farMeshes.size} tiles`
-      + ` baked ${themeBaked} at ${(themeBakeMs / Math.max(1, themeBaked)).toFixed(1)}ms`
+      + ` · sheet ${themeLayer() ?? 'none'} ${themeGroup.visible ? 'drawing' : 'down'} ${themeSheets.size}/${farMeshes.size} tiles`
+      + ` baked ${themeBaked} (${themeRebaked} again) at ${(themeBakeMs / Math.max(1, themeBaked)).toFixed(1)}ms`
+      + ` unknown ${[...themeSheets.values()].reduce((n, t) => n + t.unknown, 0)}`
+      + ` work ${themeWork()}`
       + ` · legend ${themeLegend().map((r) => r.name).join(',') || '—'}`);
     L.push(`ground: holes ${holeStat.now} (never shown ${holeStat.unshown}) · pop-outs ${holeStat.pops} · hidden ${(holeStat.ms / 1000).toFixed(1)}s longest ${Math.round(holeStat.max)}ms · far asked ${farTiles.size - farMeshes.size} stale ${farStale.size} inflight ${farAsking.size}`);
     L.push(`world pass: draw calls mean ${Math.round(drawStat.sumCalls / Math.max(1, drawStat.n))} max ${drawStat.maxCalls} · triangles mean ${(drawStat.sumTris / Math.max(1, drawStat.n) / 1e6).toFixed(2)}M max ${(drawStat.maxTris / 1e6).toFixed(2)}M · recent ${n} passes p50 ${q(0.5)}M p95 ${q(0.95)}M · last ${(drawStat.tris / 1e6).toFixed(2)}M / ${drawStat.calls} calls`); }
@@ -41995,7 +42146,22 @@ function layerDown(e: PointerEvent): boolean {
       layers: CHART_LAYERS.map((l) => ({ id: l.id, name: l.name, kind: l.kind, on: chartOn[l.id] })),
       theme: themeLayer(), themeDrawing: themeGroup.visible, mpp: +envU.uMpp.value.toFixed(1),
       mppMin: THEME_MPP_MIN,
-      sheets: themeMeshes.size, shell: farMeshes.size, baked: themeBaked,
+      sheets: themeSheets.size, shell: farMeshes.size, baked: themeBaked,
+      // SHEETS ON RETIRED TILES — the direct witness of the lifetime rule. A
+      // sheet keyed by its tile KEY cannot have one (it is dropped the instant
+      // the key leaves the current ring), so this is structurally 0 on the
+      // build the seat photographed and non-zero here whenever a level swap is
+      // in progress. That is the fault, as a number, rather than as a window
+      // too short for a harness at three frames a second to sample.
+      retiredSheets: [...themeSheets.keys()].filter((m) => !farMeshes.has(themeSheets.get(m)?.key ?? '')
+        || farMeshes.get(themeSheets.get(m)?.key ?? '') !== m).length,
+      farZ,
+      rebaked: themeRebaked, asking: themeAsking.size,
+      // Texels with no class — mostly the sea, which is a real answer. What
+      // says whether the map is still GOING to fill is `filling`.
+      unknown: [...themeSheets.values()].reduce((n, t) => n + t.unknown, 0),
+      filling: themeWork(),
+      unsettled: [...themeSheets.values()].filter((t) => !t.settled).length,
       bakeMs: +(themeBakeMs / Math.max(1, themeBaked)).toFixed(1),
       legend: themeLegend().map((r) => ({ name: r.name, hex: r.hex, share: +r.share.toFixed(3) })),
       rects: layerRects.map((r) => ({ id: r.id, x: (r.x + r.w / 2) * hudS, y: (r.y + r.h / 2) * hudS })),
@@ -47281,8 +47447,21 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // Only the classes actually on the screen, commonest first, from the
       // tallies the bake kept — see legendFor. A legend listing every class the
       // dataset defines is fourteen rows of which two are in view.
+      // A SHEET THAT IS ON AND SHOWS NOTHING HAS TO SAY WHY, or the chip reads
+      // as broken — and the first cut had a hole in exactly the state the seat
+      // photographed: ON, past the zoom gate, and with no tile baked yet, which
+      // fell through every branch and printed nothing at all. Four states, and
+      // they are four different things to do: pull the chart out, wait for the
+      // shell, wait for the bake, or read the legend.
       const leg = themeLegend();
-      if (leg.length && themeGroup.visible) {
+      if (themeLayer() && !themeGroup.visible) {
+        textEdgeP(envU.uMpp.value <= THEME_MPP_MIN ? 'ZOOM OUT FOR THE SHEET' : 'SHEET NEEDS THE SHELL',
+          pad + 1, ly, UI.dim);
+        ly += 9;
+      } else if (themeLayer() && !leg.length) {
+        textEdgeP('SHEET LOADING', pad + 1, ly, UI.dim);
+        ly += 9;
+      } else if (leg.length) {
         for (const row of leg) {
           const w = 7 + gw(row.name);
           if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
@@ -47290,13 +47469,15 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
           textEdgeP(row.name, lx + 7, ly, UI.soft);
           lx += w + 5;
         }
-        ly += 9;
-      } else if (themeLayer() && !themeGroup.visible) {
-        // A SHEET THAT IS ON AND NOT DRAWING HAS TO SAY WHY, or the chip looks
-        // broken. There are exactly two reasons and they are different asks of
-        // the player: pull the chart out, or wait.
-        textEdgeP(envU.uMpp.value <= THEME_MPP_MIN ? 'ZOOM OUT FOR THE SHEET' : 'SHEET LOADING',
-          pad + 1, ly, UI.dim);
+        // …AND WHETHER THE LEGEND IS FINISHED. A sheet still waiting on a cover
+        // raster or an ecoregion tile will grow; one that is not, will not.
+        // "Is that everything, or is it still coming" is the question the seat
+        // asked in three different ways and nothing on the glass answered.
+        if (themeWork() > 0) {
+          const w = gw('+');
+          if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
+          textEdgeP('+', lx, ly, UI.dim);
+        }
         ly += 9;
       }
       hctx.globalAlpha = 1;
