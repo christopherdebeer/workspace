@@ -8391,6 +8391,143 @@ is still ONE layer. Splitting it so cities draw at the wide views, roads closer
 in, and cover and eco polygons can be toggled with a key and a legend is the
 work this was the prerequisite for.
 
+## The chart is several maps now, and the key is the switch
+
+The second half of the same ask: *"I wonder if it's possible to have overview
+separate into layers (not just OSM) so that I can easily toggle say cover or
+eco polygons with a key/legend"*, and then — *"cities only at wide views, roads
+closer in, and togglable cover/eco regions"*.
+
+The chart had exactly ONE layer and no surface on which to say so. Its roads
+and its place names arrive in the same tile and were drawn by the same pass,
+gated on the same `ovGroup.visible`. The land cover existed as a raster only
+the terrain painter read; the ecoregions existed as polygons only the guild
+read. **Neither had ever been drawn on the map it describes**, and nothing on
+the glass told a player they existed.
+
+**`client/chart-layers.ts` is the table and the palettes, and it is pure** — no
+THREE, no DOM, no world state — so `devtools/chart-layers.test.mjs` drives the
+shipping functions in node in a second, and the colour in the sheet's texture
+and the colour in the key's swatch are the same call. A legend whose ink is a
+second copy of the layer's ink goes wrong silently; that is the whole reason
+for a module rather than a record literal in main.ts.
+
+**TWO KINDS OF LAYER, AND THEY COST NOTHING ALIKE.** A VECTOR layer (`roads`,
+`places`) is already drawn and switching it is a boolean on a pass that was
+running anyway. A THEMATIC layer (`cover`, `eco`) is a class per texel, sampled
+per far-shell tile over that tile's own world-metre box and uploaded as a
+texture the shell's own geometry wears — so it has a BAKE, and a bake is what
+this file has twice measured at the top of a phone's slow frames.
+
+- **The sheet rides the shell's geometry and builds none of its own.** One
+  extra `Mesh` per far tile sharing that tile's `BufferGeometry`, positioned
+  where the far mesh is, which buys the sphere placement, the RTC centre and
+  the lift for nothing. `refreshTheme` reconciles against `farMeshes` once a
+  stream pass: a tile that left the ring (or was PARKED, which releases its
+  geometry's GPU buffers) loses its sheet in the same breath, and a tile
+  without one gets a bake queued.
+- **A decal, not a lift.** The sheet is coplanar with what it lies on, and a
+  radial offset cannot fix that at chart distances where the depth buffer spans
+  thousands of kilometres and two metres is nothing. `polygonOffset` −4/−4,
+  `depthWrite: false`, `renderOrder` 35 — under the chart's ink at 40, over the
+  shell. `depthTest` stays ON so the fine world still occludes it; turning it
+  off would paint a class map over the streets.
+- **ONE THEMATIC LAYER AT A TIME**, and not as a budget dodge: two class sheets
+  over each other is neither map, and the legend — which is the point of a
+  thematic layer — can only name the classes of one. `setChartLayer` makes the
+  thematic chips a radio group.
+- **It stands down at street scale**, above `THEME_MPP_MIN` (15 m/px) only.
+  WorldCover is 10 m data and RESOLVE is simplified to five kilometres; both are
+  statements about REGIONS, and a class sheet over a junction is a flat wash
+  over the one scale that can already show what is there. 15 m/px is the same
+  boundary the cloud shadows and the ground mottle already stand down at, so
+  the chart changes its rules in one place rather than three.
+- **The eco layer streams its own tiles.** `ecoAt` asks for ONE z5 tile because
+  the guild's question is about the ground under the wheels; a sheet over a
+  chart is a question about the frame. One tile a pass, centre-out from the
+  CHART's focus, bounded by the store's own 24-tile cap.
+
+**THE KEY IS THE SWITCH**, under the scale bar: a chip a layer, filled swatch
+and bright text for a layer that is drawing, hollow and dim for one that is
+not, tappable (`layerDown` swallows the DOWN through `hudPtrs`, or the same
+press would also drop a chart fix). A chip that is off still shows, because a
+key that hides what you do not have cannot teach. Under it, the LEGEND — built
+from the tallies the bake kept, so it names the classes actually on screen,
+commonest first, capped at six. `__chartlayers(id?, on?)` reports the lot and
+makes the same choice a finger does; the telemetry dump carries a `chart
+layers` row, because a seat report about a chart that does not say which layers
+were on is a report about a map nobody can reproduce.
+
+**THE PALETTE SITS ON A LATTICE OF 42, AND THE TEST IS WHY.** The composite
+quantises to fourteen levels, so one palette step is about 18/255 and two
+classes one step apart are one colour. Every class is snapped to
+14/56/98/140/182/224 in each channel with no two in a layer sharing a point,
+which puts any pair at least two and a third steps apart in at least one
+channel. **The first cut was hand-picked and the test measured its tropical
+conifer against its mangrove at EIGHT of 255** — half a palette step, two
+greens that were one green on the glass — and its bare ground against its
+lichen at 34. Neither is findable by looking at a legend.
+
+**CITIES ONLY AT WIDE VIEWS** is one rung added to a ladder that was one short:
+`maxRank` was `r > 26000 ? 1 : r > 12000 ? 2 : 4`, so a two-hundred-kilometre
+frame and a twenty-seven-kilometre one drew the same class of settlement. Past
+200 km it is rank 0 — cities — because a town's name there is a claim about a
+place the frame cannot show the shape of, and sixteen of them is the whole
+label budget spent before a capital is drawn. The radius is `backdropRadius()`,
+not `viewRadius()`, for the reason the chart's own ring now uses it: the capped
+one saturates and every wide band reads the same.
+
+**AND THE PLACES PASS NO LONGER RIDES ON THE ROADS' SWITCH.** It read
+`ovGroup.visible`, which was the only record that the coarse map was allowed to
+draw — fine while roads and names were one layer and wrong the moment they were
+two, since switching ROADS off would have taken every name with it. `ovBandOn`
+is the ZOOM claim; the layers are the PLAYER's.
+
+**Measured** (`devtools/chart-layers.mjs`, Cape Town, chart at 4,555 m/px, the
+far ring home):
+
+| | result |
+|---|---|
+| COVER on | 25/25 shell tiles carry a sheet, **1.6 ms a tile** |
+| its legend | GRASS 41% · SCRUB 29% · BARE 13% · FOREST 6% · WATER 6% · CROPS 5% |
+| ECO on | 25/25 sheets, **1.8 ms a tile** |
+| its legend | MEDITERRANEAN 58% · DESERT 42% |
+| ROADS off | roads gone, the place labels still drawn |
+| PLACES off | labels 0, roads still drawn |
+| at 2 m/px | `theme cover`, `drawing false` — the sheet stands down |
+
+The eco sheet at the Cape is the Fynbos against the Succulent Karoo, which is
+the right answer and the one the guild has been reading for months without
+anybody being able to see it. The frames are `layers-*.png` in `$DRIVE_WORK`.
+
+**THE FIRST BAKE MEASUREMENT WAS 209 MS A TILE AND WAS A READING OF THE FRAME
+RATE.** It timed from the start of the job to its last slice — which in a
+harness at two frames a second is sixty-four slices spread over wall time, not
+work. **A sliced job's price is the sum of its slices and nothing else.** The
+row timer sums inside the slice now and reports 1.6; `theme:bake` is the same
+number on a device's own telemetry. This is the third time in this file a wall
+measurement has been offered for a CPU one, and it is always the same shape.
+
+Two smaller things worth keeping:
+
+- **DATA ROW 0 IS THE SOUTH EDGE.** The shell's lattice runs north to south
+  with uv `(ix/seg, 1 - iz/seg)`, so v = 0 is the south row and a `DataTexture`'s
+  first row is v = 0. Backwards, every sheet is mirrored about its own parallel
+  — which on a class map of a coastline looks like bad data rather than like a
+  flipped texture.
+- **0 IS NOT A CLASS.** An unknown texel is written fully transparent, so a
+  sheet never paints over ground nothing has measured. An overlay that fills
+  its gaps with a colour is lying about its coverage, and saying where the data
+  IS is most of what these layers are for — at the Cape the eco sheet visibly
+  stops where its z5 tile does.
+
+**What is NOT done here.** The sheets are per far tile, so at a zoom where the
+shell has handed over to the globe there is no sheet either; a globe-wide cover
+map wants the coarse bake, not this path. There is no way to see a class's name
+by tapping the map (the legend names them; the site card already answers for a
+point). And `COVER_NAME` in main.ts is still a second list of the same eleven
+class names — harmless, and the next thing to collapse into the table.
+
 ## Big shapes worth knowing
 
 - **`client/main.ts` is ~36k lines** and holds the world's module state. Do not

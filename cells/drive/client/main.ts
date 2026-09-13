@@ -37,6 +37,7 @@ import {
 } from './shoreline';
 import { URL_OWNED, qs, qsHas, qsNum, qsOn, switchRows, urlWithSwitches } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
+import { CHART_LAYERS, chartLayer, inkFor, inkHex, legendFor, type ChartLayerId } from './chart-layers';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
   seedAt, snowLoad, stoneWalls, unitN, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
@@ -25860,6 +25861,13 @@ function streamWorld(ex: number, ez: number): void {
       ovReachM = tileMetres(ovZ) * vRing;
       for (const [tx, ty] of ovAsk) void loadOvTile(tx, ty);
     } else { ovWant = 0; ovSightM = 0; ovReachM = 0; }
+    // …AND THE THEMATIC SHEET FOLLOWS THE SHELL, once a pass. The far ring
+    // decides what tiles exist; this only reconciles against it, so a sheet
+    // cannot stream anything the chart was not already paying for — except
+    // the eco layer's own tiles, which are the one source the rig's single
+    // tile under the wheels cannot cover for a frame.
+    refreshTheme();
+    streamEcoForChart(cLat, cLon);
   }
   // ── the summits ──
   // OUTSIDE the view gates above — a mountain is a landmark from the driver's
@@ -27120,6 +27128,269 @@ async function loadFarTile(x: number, y: number): Promise<void> {
  *  rather than an artefact. */
 const FAR_DROP = 12;
 
+// ── the chart's layers, and the thematic sheets ────────────────────
+/**
+ * ── THE CHART IS SEVERAL MAPS NOW, AND THE KEY IS THE SWITCH ──
+ *
+ * `client/chart-layers.ts` is the table and the palettes and is pure; this is
+ * the wiring — what is on, what a texel's class is, and the sheet it becomes.
+ *
+ * TWO KINDS, AND THEY COST NOTHING ALIKE. A VECTOR layer (roads, places) is
+ * already drawn and switching it is a boolean on a pass that was running
+ * anyway. A THEMATIC layer is a class per texel, sampled per far tile over
+ * that tile's own world-metre box and uploaded as a texture the shell's own
+ * geometry wears — so it has a BAKE, and a bake is the thing this file has
+ * twice measured at the top of a phone's slow frames. Hence the rules below.
+ *
+ * ONE THEMATIC LAYER AT A TIME. Not a budget dodge: two class sheets over each
+ * other is neither map, and the legend — which is the whole point of a
+ * thematic layer — can only name the classes of one of them. Choosing one
+ * turns the other off, which is what a key with radio behaviour means.
+ */
+const CHART_LAYER_KEY = 'drive.chart.layers';
+const chartOn: Record<ChartLayerId, boolean> =
+  Object.fromEntries(CHART_LAYERS.map((l) => [l.id, l.on])) as Record<ChartLayerId, boolean>;
+function loadChartLayers(): void {
+  try {
+    const raw = localStorage.getItem(CHART_LAYER_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as Partial<Record<ChartLayerId, boolean>>;
+    // READ THE TABLE, NOT THE RECORD. A layer the saved object does not
+    // mention keeps its declared default, so adding a row cannot arrive
+    // switched off for everyone who has ever opened the key — the trap the
+    // dial rack needs a version stamp and a migration for.
+    for (const l of CHART_LAYERS) if (typeof saved[l.id] === 'boolean') chartOn[l.id] = saved[l.id] as boolean;
+  } catch { /* private mode, or a stored shape from another life */ }
+  // Whatever was stored, the invariant holds: at most one thematic sheet.
+  let seen = false;
+  for (const l of CHART_LAYERS) {
+    if (l.kind !== 'thematic') continue;
+    if (chartOn[l.id] && seen) chartOn[l.id] = false;
+    else if (chartOn[l.id]) seen = true;
+  }
+}
+loadChartLayers();
+function saveChartLayers(): void {
+  try { localStorage.setItem(CHART_LAYER_KEY, JSON.stringify(chartOn)); } catch { /* private mode */ }
+}
+/** The thematic sheet in force, or null. Derived rather than stored, so the
+ *  one-at-a-time rule has a single place it can be true. */
+function themeLayer(): ChartLayerId | null {
+  for (const l of CHART_LAYERS) if (l.kind === 'thematic' && chartOn[l.id]) return l.id;
+  return null;
+}
+function setChartLayer(id: ChartLayerId, on: boolean): void {
+  const row = chartLayer(id);
+  if (!row) return;
+  if (on && row.kind === 'thematic') for (const l of CHART_LAYERS) if (l.kind === 'thematic') chartOn[l.id] = false;
+  chartOn[id] = on;
+  saveChartLayers();
+  if (row.kind === 'thematic') dropTheme();      // the sheet in the scene is the old layer's
+}
+/**
+ * THE SHEET STANDS DOWN WHERE IT WOULD BE A LIE ABOUT SCALE.
+ *
+ * WorldCover is 10m data and RESOLVE is simplified to five kilometres; both
+ * are thematic statements about REGIONS, and a class sheet laid over a street
+ * at half a metre a pixel is a flat wash over the one scale at which the
+ * player can already see what is there. 15 m/px is the same boundary the cloud
+ * shadows and the ground mottle already stand down at (see `uMpp`), so the
+ * chart changes its rules in ONE place rather than three.
+ */
+const THEME_MPP_MIN = 15;
+const themeOnNow = (): boolean =>
+  camMode === 'top' && !FIXTURE && themeLayer() !== null && envU.uMpp.value > THEME_MPP_MIN;
+/** Texels a side. 64 over a tile the shell draws at 32–128 vertices a side is
+ *  finer than the mesh it lies on and coarser than the sources it reads, which
+ *  is the right place for a sheet whose job is to show REGIONS. */
+const THEME_N = 64;
+const themeGroup = new THREE.Group();
+themeGroup.name = 'chart-theme';
+themeGroup.visible = false;
+// A CHILD OF THE PLANET, like the shell it lies on and the ink it lies
+// under — see sphereRTC. A sheet in the world group would be flat while
+// everything it describes is on a sphere.
+planetGroup.add(themeGroup);
+const themeMeshes = new Map<string, THREE.Mesh>();
+/** What each sheet tile found, by class — the legend is built from the tiles
+ *  actually in the scene, so it names what is on the screen and not what the
+ *  dataset defines. */
+const themeCounts = new Map<string, Map<number, number>>();
+let themeBaked = 0, themeBakeMs = 0;
+/**
+ * The class at a point, for whichever sheet is in force. Both sources answer
+ * "what is it here" at a point and neither needs geometry: the cover raster
+ * through the shell's own sampler (finest tile first, and it already prefers a
+ * real class over a coarse tile's ocean zero), the ecoregions through the same
+ * even-odd test the guild runs. 0 is NOT A CLASS and is drawn as nothing — an
+ * overlay that fills its gaps with a colour is lying about its coverage.
+ */
+function themeClassAt(layer: ChartLayerId, ex: number, ez: number): number {
+  if (layer === 'cover') return sampleCoverShell(ex, ez) ?? 0;
+  if (layer === 'eco') {
+    const [la, lo] = localToLatLon(ex, ez);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) return 0;
+    const [tx, ty] = ecoTileOf(la, lo);
+    const regs = ecoTiles.get(`${tx}/${ty}`);
+    if (!regs) return 0;
+    return ecoLookup(regs, lo, la)?.biome ?? 0;
+  }
+  return 0;
+}
+/**
+ * Bake one tile's sheet, a ROW at a time inside the far bake's own slicer.
+ *
+ * The row is the slice because a row is 64 samples and the budget is measured
+ * in milliseconds: `ecoLookup` walks polygons and is the dear one, so a slice
+ * that was a whole tile would be exactly the 146ms-a-tile fault the far bake
+ * was cut up to end. `farBakeJobs` already stands down in a frame carrying a
+ * heavy build and drops a job whose tile has moved on; there is no reason for
+ * a second queue with the same rules.
+ *
+ * DATA ROW 0 IS THE SOUTH EDGE. The shell's lattice runs north to south with
+ * uv `(ix/seg, 1 - iz/seg)`, so v = 0 is the south row, and a DataTexture's
+ * first row is v = 0. Get this backwards and every sheet is mirrored about its
+ * own parallel — which on a class map of a coastline looks like bad data
+ * rather than like a flipped texture.
+ */
+async function bakeThemeTile(key: string, layer: ChartLayerId): Promise<void> {
+  const far = farMeshes.get(key), ras = farRasters.get(key);
+  if (!far || !ras) return;
+  const px = new Uint8Array(THEME_N * THEME_N * 4);
+  const counts = new Map<number, number>();
+  // THE COST IS THE ROWS, NOT THE WALL. The first measurement timed from here
+  // to the last slice and read 209ms a tile — which is the harness's two-frames
+  // -a-second spread over sixty-four slices, not work. A sliced job's price is
+  // the sum of its slices and nothing else; anything else is a reading of the
+  // frame rate. `theme:bake` is the same number on the device's own telemetry.
+  let cpu = 0;
+  const row = (j: number): void => {
+    const _p = performance.now();
+    const ez = ras.zs + ras.h - ((j + 0.5) / THEME_N) * ras.h;
+    for (let i = 0; i < THEME_N; i++) {
+      const ex = ras.xs + ((i + 0.5) / THEME_N) * ras.w;
+      const cls = themeClassAt(layer, ex, ez);
+      const ink = cls ? inkFor(layer, cls) : null;
+      const o = (j * THEME_N + i) * 4;
+      if (!ink) { px[o + 3] = 0; continue; }
+      px[o] = ink.rgb[0]; px[o + 1] = ink.rgb[1]; px[o + 2] = ink.rgb[2]; px[o + 3] = 255;
+      counts.set(cls, (counts.get(cls) ?? 0) + 1);
+    }
+    cpu += performance.now() - _p;
+    profAdd('theme:bake', _p);
+  };
+  // Still the tile we started on, still the layer that asked, and the far mesh
+  // still in the ring: a sheet is the shell's own geometry wearing a texture,
+  // and a tile evicted mid-bake has had that geometry's buffers released.
+  const live = (): boolean => themeLayer() === layer && farMeshes.get(key) === far;
+  await new Promise<void>((done) => { farBakeJobs.push({ n: THEME_N, i: 0, step: row, live, done }); });
+  if (!live()) return;
+  const tex = new THREE.DataTexture(px, THEME_N, THEME_N, THREE.RGBAFormat);
+  // NEAREST magnification, as everything in this world is: a class is not a
+  // number and there is no halfway between forest and cropland, so a bilinear
+  // stretch across a boundary invents a colour that names nothing. Minified it
+  // may blend — at that size the texel is under a pixel and the blend is the
+  // honest average of what is there.
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex, transparent: true, opacity: THEME_ALPHA, depthWrite: false, side: DS,
+    // A DECAL ON A SURFACE IT IS COPLANAR WITH. The sheet wears the shell's own
+    // geometry, so without this the two fight for every pixel; and a radial
+    // lift cannot fix it at chart distances, where the depth buffer spans
+    // thousands of kilometres and two metres is nothing. depthTest stays ON so
+    // the fine world still occludes the sheet — turning it off would paint a
+    // class map over the streets.
+    polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+  });
+  const mesh = new THREE.Mesh(far.geometry, mat);
+  mesh.position.copy(far.position);
+  mesh.frustumCulled = false;
+  // Under the chart's ink and over the shell: a thematic sheet is a ground,
+  // and the roads and the coast are drawn ON grounds.
+  mesh.renderOrder = THEME_ORDER;
+  dropThemeTile(key);
+  themeMeshes.set(key, mesh);
+  themeCounts.set(key, counts);
+  themeGroup.add(mesh);
+  themeBaked++; themeBakeMs += cpu;
+}
+/** How strongly a sheet states itself. Not 1: the relief under it is what
+ *  makes a class map readable as a PLACE, and a solid wash deletes it. */
+const THEME_ALPHA = 0.66;
+const THEME_ORDER = 35;
+function dropThemeTile(key: string): void {
+  const m = themeMeshes.get(key);
+  if (!m) return;
+  themeGroup.remove(m);
+  // The GEOMETRY IS THE SHELL'S and is not ours to dispose — only the texture
+  // and the material this sheet made.
+  const mat = m.material as THREE.MeshBasicMaterial;
+  mat.map?.dispose(); mat.dispose();
+  themeMeshes.delete(key); themeCounts.delete(key);
+}
+function dropTheme(): void {
+  for (const key of [...themeMeshes.keys()]) dropThemeTile(key);
+  themeAsking.clear();
+}
+const themeAsking = new Set<string>();
+/**
+ * Reconcile the sheet against the shell, once a stream pass.
+ *
+ * The far ring decides what exists; this follows it. A tile that left the ring
+ * (or was parked, which releases its geometry's buffers) loses its sheet in
+ * the same breath, and a tile that has no sheet and should gets one queued.
+ */
+function refreshTheme(): void {
+  const layer = themeLayer();
+  if (!layer || FIXTURE) { if (themeMeshes.size) dropTheme(); return; }
+  for (const key of [...themeMeshes.keys()]) if (!farMeshes.has(key)) dropThemeTile(key);
+  for (const key of farMeshes.keys()) {
+    if (themeMeshes.has(key) || themeAsking.has(key)) continue;
+    themeAsking.add(key);
+    void bakeThemeTile(key, layer).finally(() => themeAsking.delete(key));
+  }
+}
+/**
+ * THE ECO SHEET NEEDS MORE THAN THE TILE UNDER THE TRUCK.
+ *
+ * `ecoAt` asks for one z5 tile because the guild's question is about the
+ * ground under the wheels; a sheet over a chart is a question about the frame,
+ * and at any wide zoom the frame spans several. Asked only while the eco sheet
+ * is in force, one tile a pass, from the CHART's focus rather than the rig's —
+ * and bounded by the store's own 24-tile cap, so browsing a hemisphere cannot
+ * turn into an unbounded fetch. A z5 tile is twelve hundred kilometres, so
+ * this is a handful of requests for a continent.
+ */
+function streamEcoForChart(cLat: number, cLon: number): void {
+  if (themeLayer() !== 'eco' || FIXTURE || ecoInFlight > 0) return;
+  const n = 2 ** ECO_Z;
+  const [cx, cy] = ecoTileOf(cLat, cLon);
+  for (let d = 0; d <= 1; d++) {
+    for (let dx = -d; dx <= d; dx++) for (let dy = -d; dy <= d; dy++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== d) continue;
+      const ty = cy + dy;
+      if (ty < 0 || ty >= n) continue;
+      const tx = (((cx + dx) % n) + n) % n;
+      if (ecoTiles.has(`${tx}/${ty}`)) continue;
+      void loadEcoTile(tx, ty);
+      return;                                   // one a pass; the ring refills
+    }
+  }
+}
+/** The legend, from the tiles in the scene — see `legendFor`. Summed over the
+ *  sheet rather than per tile, or a legend would change every time the ring
+ *  moved by one tile. */
+function themeLegend(): Array<{ cls: number; name: string; hex: string; share: number }> {
+  const layer = themeLayer();
+  if (!layer) return [];
+  const all = new Map<number, number>();
+  for (const c of themeCounts.values()) for (const [cls, n] of c) all.set(cls, (all.get(cls) ?? 0) + n);
+  return legendFor(layer, all);
+}
+
 // ── the overview vectors: the chart's coarse road source ───────────
 // The fine OSM ring stops at OSM_RING_MAX (~5.4km) because covering a 47km
 // chart at z16 is 8649 Overpass queries; past it the wide view was landform
@@ -27252,6 +27523,10 @@ const ovGroup = new THREE.Group();
 ovGroup.name = 'overview';
 ovGroup.visible = false;
 planetGroup.add(ovGroup);
+/** Whether the ZOOM BAND admits the coarse map at all — see the note where it
+ *  is set. The LAYERS decide what of it is drawn; this decides whether any of
+ *  it may be. */
+let ovBandOn = false;
 /**
  * THE BACKDROP HAS TO KNOW IT IS ONE.
  *
@@ -32309,6 +32584,7 @@ function applyHidden(): void {
   if (hideSet.has('synth')) for (const b of synthBodies) for (const m of b.meshes) m.visible = false;
   if (hideSet.has('far')) farGroup.visible = false;
   if (hideSet.has('ov')) ovGroup.visible = false;
+  if (hideSet.has('theme')) themeGroup.visible = false;
   if (hideSet.has('sea')) sea.visible = false;
   if (hideSet.has('veg')) {
     for (const k of Object.keys(vegMeshes) as VegKind[]) vegMeshes[k].visible = false;
@@ -32349,7 +32625,7 @@ function applyHidden(): void {
     }
   }
   return { hidden: [...hideSet],
-    layers: ['drape', 'synth', 'far', 'ov', 'globe', 'sea', 'veg', 'terrain', 'critters', 'sward'],
+    layers: ['drape', 'synth', 'far', 'ov', 'theme', 'globe', 'sea', 'veg', 'terrain', 'critters', 'sward'],
     counts: { drapes: drapes.length, synth: synthBodies.length, terrain: terrainMeshes.size } };
 };
 /**
@@ -37292,7 +37568,7 @@ const setStickFrom = (e: PointerEvent): void => {
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   // Each instrument swallows the DOWN; hudPtrs makes it swallow the UP too.
-  if (fpsDown(e) || autoDown(e) || poiDown(e)) { hudPtrs.add(e.pointerId); return; }
+  if (fpsDown(e) || layerDown(e) || autoDown(e) || poiDown(e)) { hudPtrs.add(e.pointerId); return; }
   if (rewindDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (clockDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (hudTap(e.clientX, e.clientY)) { hudPtrs.add(e.pointerId); return; } // an instrument swallowed it
@@ -41648,6 +41924,14 @@ function telemetryReport(): string {
     const q = (p: number): string => n ? (recent[Math.min(n - 1, Math.floor(p * n))] / 1e6).toFixed(2) : '?';
     const [fLat, fLon] = localToLatLon(viewX() + panX, viewZ() + panZ);
     L.push(`chart ${camMode} · zoom ${zoomCur < 10 ? zoomCur.toFixed(2) : String(Math.round(zoomCur))} · ${chartMpp().toFixed(1)} m/px · ${chartRemote() ? 'browsed' : 'home'} focus ${fLat.toFixed(2)},${fLon.toFixed(2)} · globe ${globeMesh.visible ? 'on' : 'off'} free ${globeFree()} fling ${flingOn ? 'on' : 'off'} · far z${farZ} ${farMeshes.size}/${farTiles.size} retired ${farRetired.length} parked ${farParked.size} (${(farParkBytes / (1 << 20)).toFixed(1)}MB, ${farParkHits} hits) inflight ${farInFlight} queued ${farQueue.length} · ov z${ovZ} ${ovHave()}/${ovTiles.size} (${ovMeshes.size} drawn, ${ovEmpty.size} empty) retired ${ovRetired.length} failing ${[...ovFailedAt.values()].filter((t) => performance.now() - t < OV_RETRY_MS).length} demless ${ovDemlessKeys.size} places ${ovPlaces.size} labels ${ovLabelsDrawn.length}`);
+    // WHICH MAP THE SEAT WAS LOOKING AT. A report about a chart that does not
+    // say which layers were on is a report about a map nobody can reproduce —
+    // and the sheet's own cost belongs beside it, because a class sheet is the
+    // one chart layer with a bake in it.
+    L.push(`chart layers ${CHART_LAYERS.map((l) => `${l.name.toLowerCase()} ${chartOn[l.id] ? 'on' : 'off'}`).join(' · ')}`
+      + ` · sheet ${themeLayer() ?? 'none'} ${themeGroup.visible ? 'drawing' : 'down'} ${themeMeshes.size}/${farMeshes.size} tiles`
+      + ` baked ${themeBaked} at ${(themeBakeMs / Math.max(1, themeBaked)).toFixed(1)}ms`
+      + ` · legend ${themeLegend().map((r) => r.name).join(',') || '—'}`);
     L.push(`ground: holes ${holeStat.now} (never shown ${holeStat.unshown}) · pop-outs ${holeStat.pops} · hidden ${(holeStat.ms / 1000).toFixed(1)}s longest ${Math.round(holeStat.max)}ms · far asked ${farTiles.size - farMeshes.size} stale ${farStale.size} inflight ${farAsking.size}`);
     L.push(`world pass: draw calls mean ${Math.round(drawStat.sumCalls / Math.max(1, drawStat.n))} max ${drawStat.maxCalls} · triangles mean ${(drawStat.sumTris / Math.max(1, drawStat.n) / 1e6).toFixed(2)}M max ${(drawStat.maxTris / 1e6).toFixed(2)}M · recent ${n} passes p50 ${q(0.5)}M p95 ${q(0.95)}M · last ${(drawStat.tris / 1e6).toFixed(2)}M / ${drawStat.calls} calls`); }
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
@@ -41681,6 +41965,43 @@ function copyTelemetry(): void {
   else fallback();
 }
 (window as unknown as { __telemetry?: object }).__telemetry = (copy = false): string => { if (copy) copyTelemetry(); return telemetryReport(); };
+/** The layer key's chips, in HUD units, set where they are drawn — the key IS
+ *  the switch, so the rect list is the control surface. Empty off the chart. */
+const layerRects: Array<{ id: ChartLayerId; x: number; y: number; w: number; h: number }> = [];
+/** Where the layer key ended, so the tile-debug key can start under it rather
+ *  than through it. The legend grows and shrinks with what is on screen, so
+ *  this cannot be a constant. */
+let layerKeyBottom = 0;
+/** A tap on a chip toggles that layer. Swallows the DOWN like every other HUD
+ *  instrument (see hudPtrs), or the same press would also drop a chart fix. */
+function layerDown(e: PointerEvent): boolean {
+  if (!layerRects.length || menu.tab() !== null) return false;
+  const x = e.clientX / hudS, y = e.clientY / hudS;
+  for (const r of layerRects) {
+    if (x < r.x || x > r.x + r.w || y < r.y || y > r.y + r.h) continue;
+    setChartLayer(r.id, !chartOn[r.id]);
+    hudFlash(`${chartLayer(r.id)?.name ?? r.id} ${chartOn[r.id] ? 'ON' : 'OFF'}`);
+    return true;
+  }
+  return false;
+}
+/** The key, as data: what each layer is, whether it is on, where its chip is,
+ *  and the legend the sheet is currently claiming. `tap` makes the same choice
+ *  a finger does, so a test can drive the switch without a pointer. */
+(window as unknown as { __chartlayers?: object }).__chartlayers =
+  (tap?: ChartLayerId, on?: boolean): object => {
+    if (tap) setChartLayer(tap, on ?? !chartOn[tap]);
+    return {
+      layers: CHART_LAYERS.map((l) => ({ id: l.id, name: l.name, kind: l.kind, on: chartOn[l.id] })),
+      theme: themeLayer(), themeDrawing: themeGroup.visible, mpp: +envU.uMpp.value.toFixed(1),
+      mppMin: THEME_MPP_MIN,
+      sheets: themeMeshes.size, shell: farMeshes.size, baked: themeBaked,
+      bakeMs: +(themeBakeMs / Math.max(1, themeBaked)).toFixed(1),
+      legend: themeLegend().map((r) => ({ name: r.name, hex: r.hex, share: +r.share.toFixed(3) })),
+      rects: layerRects.map((r) => ({ id: r.id, x: (r.x + r.w / 2) * hudS, y: (r.y + r.h / 2) * hudS })),
+      places: ovPlaces.size, labels: ovLabelsDrawn.length, roads: ovGroup.visible,
+    };
+  };
 /** The FPS readout's hit box, in HUD units, set where it is drawn. */
 const fpsRect = { x: 0, y: 0, w: 0, h: 0 };
 let telemetryCopies = 0;
@@ -43135,8 +43456,20 @@ function tick(now: number): void {
     // deliberately tied together so they could not drift; they are untied here
     // because the thing they were protecting against cannot happen.
     const shellOn = zoomCur > 6 || chartRemote();
+    // THE BAND, REMEMBERED. `ovGroup.visible` used to be the only record that
+    // the coarse map was allowed to draw, and the place names read it — which
+    // was fine while roads and names were one layer and wrong the moment they
+    // were two: switching ROADS off would have taken every name with it.
+    ovBandOn = shellOn;
     farGroup.visible = shellOn;
-    ovGroup.visible = shellOn;
+    // THE ROADS ARE A LAYER NOW, and the key is the switch. `shellOn` still
+    // decides whether the coarse map may draw at all — it is a claim about the
+    // zoom band — and the layer decides whether the player wants it.
+    ovGroup.visible = shellOn && chartOn.roads;
+    // The thematic sheet rides the shell's own tiles, so it can only draw
+    // where the shell does, and only past the scale at which a class map means
+    // anything (THEME_MPP_MIN).
+    themeGroup.visible = shellOn && themeOnNow();
     // …and where the coarse vectors are allowed to start showing. At driving
     // zooms, only where the fine ring has given out (`osmRingR`, measured by
     // the tile queue) — below it the fine world is the better map of itself.
@@ -43216,6 +43549,7 @@ function tick(now: number): void {
     // you actually want when you are reading ground rather than flying.
     farGroup.visible = true;
     ovGroup.visible = false;
+    themeGroup.visible = false;   // a thematic sheet is chart furniture
     const dfx = Math.sin(drone.heading), dfz = -Math.cos(drone.heading);
     if (lastPov === 'cab') {
       setNear(0.3, 30000);
@@ -43234,6 +43568,7 @@ function tick(now: number): void {
     // under the haze besides. What the old rule actually cost was the horizon.
     farGroup.visible = true;
     ovGroup.visible = false;
+    themeGroup.visible = false;   // a thematic sheet is chart furniture
     // THE DRIVER'S SEAT. The eye is a point on the body, so it takes the body's
     // whole attitude — pitch, roll and the suspension's own heave — which is
     // what makes a cattle grid felt rather than watched. Everything else in
@@ -43267,6 +43602,7 @@ function tick(now: number): void {
   } else {
     farGroup.visible = true;
     ovGroup.visible = false;
+    themeGroup.visible = false;   // a thematic sheet is chart furniture
     // FAR ENOUGH TO HOLD A MOUNTAIN. 30km clipped the shell mid-range, which
     // would have drawn a horizon that ENDS — worse than none. One bit of depth
     // precision buys the skyline; the near plane is untouched.
@@ -43783,8 +44119,8 @@ function tick(now: number): void {
     // showed the coarse backdrop and the overview vectors hanging in it,
     // which is neither what the chase view looks like nor what the tap drops
     // you into. Off for the blit, back on for the chart.
-    const ovWas = ovGroup.visible, farWas = farGroup.visible;
-    ovGroup.visible = false; farGroup.visible = false;
+    const ovWas = ovGroup.visible, farWas = farGroup.visible, thWas = themeGroup.visible;
+    ovGroup.visible = false; farGroup.visible = false; themeGroup.visible = false;
     // …and the sky is part of that world. See aimSky: the dome is hung around
     // ONE eye, so drawing it for the chart camera and then reusing it here
     // slung the dock's horizon kilometres high and swelled it as the chart
@@ -43795,7 +44131,7 @@ function tick(now: number): void {
     // was a smooth, full-colour window inside a hand-built bitmap HUD — the one
     // thing on screen that did not look like the game.
     { const _p = performance.now(); blitPixelated(scene, miniCam, vx, vy, vw, vh); profAdd('blitPixelated', _p); }
-    ovGroup.visible = ovWas; farGroup.visible = farWas;
+    ovGroup.visible = ovWas; farGroup.visible = farWas; themeGroup.visible = thWas;
     aimSky(camera);
     if (lastPov === 'cab') ghostCab(false);
   }
@@ -46896,7 +47232,77 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.fillRect(x0, y0 + 12, sc.barPx + 1, 1);
     hctx.fillRect(x0, y0 + 11, 1, 3);
     hctx.fillRect(x0 + sc.barPx, y0 + 11, 1, 3);
-  }
+    // ── THE LAYER KEY ──
+    //
+    // A map's key names what is on it; this one is also the SWITCH, which is
+    // the whole of what the seat asked for — "so that I can easily toggle say
+    // cover or eco polygons with a key/legend". A chip a layer, in its own
+    // state rather than its own colour: a filled swatch and bright text for a
+    // layer that is drawing, a hollow swatch and dim text for one that is not.
+    // The thematic chips behave as a radio group because only one sheet may be
+    // in force (see setChartLayer), and a chip that is off still shows, because
+    // a key that hides what you do not have is a key that cannot teach.
+    //
+    // UNDER THE SCALE BAR, where the tile-debug key already sits, and the
+    // tile-debug key moves down to follow it: those are two keys about two
+    // different things (what the map SHOWS against what the STREAM is doing)
+    // and stacking them in that order reads as general before diagnostic.
+    layerRects.length = 0;
+    {
+      const gw = (t: string): number => {
+        let w = 0;
+        for (const ch of t) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
+        return w;
+      };
+      const sw = (cx: number, cy: number, col: string, filled: boolean): void => {
+        hctx.fillStyle = col; hctx.globalAlpha = 1;
+        if (filled) { hctx.fillRect(cx - 2, cy - 2, 5, 5); return; }
+        hctx.fillRect(cx - 2, cy - 2, 5, 1); hctx.fillRect(cx - 2, cy + 2, 5, 1);
+        hctx.fillRect(cx - 2, cy - 1, 1, 3); hctx.fillRect(cx + 2, cy - 1, 1, 3);
+      };
+      let ly = y0 + 19, lx = pad + 1;
+      for (const l of CHART_LAYERS) {
+        const on = chartOn[l.id];
+        const w = 7 + gw(l.name);
+        if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
+        sw(lx + 2, ly + 2, on ? UI.text : UI.dim, on);
+        textEdgeP(l.name, lx + 7, ly, on ? UI.text : UI.dim);
+        // The hit box is the chip plus a margin: at 44px of thumb against a
+        // seven-pixel glyph the box is the control, and the drawing is a hint
+        // about where it is.
+        layerRects.push({ id: l.id, x: lx - 2, y: ly - 3, w: w + 4, h: 12 });
+        lx += w + 5;
+      }
+      ly += 9; lx = pad + 1;
+      // ── AND THE LEGEND, WHICH IS THE SHEET SAYING WHAT IT DREW ──
+      // On its own row, always: the first cut let it continue from the last
+      // chip, so the commonest class sat in the switch row and read as a fifth
+      // layer you could tap. A key and a legend are two different statements.
+      // Only the classes actually on the screen, commonest first, from the
+      // tallies the bake kept — see legendFor. A legend listing every class the
+      // dataset defines is fourteen rows of which two are in view.
+      const leg = themeLegend();
+      if (leg.length && themeGroup.visible) {
+        for (const row of leg) {
+          const w = 7 + gw(row.name);
+          if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
+          sw(lx + 2, ly + 2, row.hex, true);
+          textEdgeP(row.name, lx + 7, ly, UI.soft);
+          lx += w + 5;
+        }
+        ly += 9;
+      } else if (themeLayer() && !themeGroup.visible) {
+        // A SHEET THAT IS ON AND NOT DRAWING HAS TO SAY WHY, or the chip looks
+        // broken. There are exactly two reasons and they are different asks of
+        // the player: pull the chart out, or wait.
+        textEdgeP(envU.uMpp.value <= THEME_MPP_MIN ? 'ZOOM OUT FOR THE SHEET' : 'SHEET LOADING',
+          pad + 1, ly, UI.dim);
+        ly += 9;
+      }
+      hctx.globalAlpha = 1;
+      layerKeyBottom = ly;
+    }
+  } else { layerRects.length = 0; layerKeyBottom = 0; }
   // The transport actions (rewind · AUTO · WPT) live in the CONTROL MATRIX
   // beside the dock now (Glass spec §5.5) — drawn with the dock so the grid
   // and the map share one geometry. See the matrix block below.
@@ -47193,7 +47599,10 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         const m = tileMetres(z);
         return m >= 1000 ? `${(m / 1000).toFixed(m < 10000 ? 1 : 0)}KM` : `${Math.round(m)}M`;
       };
-      let ly = pad + 56 + 20;                        // the scale bar's label is at pad+56, its bar to +70
+      // Below the LAYER key, which is drawn first and is a variable number of
+      // rows (the legend grows with what is on screen). The fallback is the old
+      // fixed offset, for the frame before the chart block has run.
+      let ly = Math.max(pad + 56 + 20, layerKeyBottom + 3);
       type Mark = ((cx: number, cy: number) => void) | null;
       const row = (name: string, items: Array<[string, string, Mark]>): void => {
         const x0 = 6 + gw(name) + 4;
@@ -47582,9 +47991,14 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // layer is separate from the HUD's nearest-three pins, which are a cockpit
   // instrument, not a map.
   ovLabelsDrawn.length = 0;
-  if (camMode === 'top' && ovGroup.visible && ovPlaces.size) {
-    const r = viewRadius();
-    const maxRank = r > 26000 ? 1 : r > 12000 ? 2 : 4;
+  if (camMode === 'top' && ovBandOn && chartOn.places && ovPlaces.size) {
+    // CITIES ONLY AT WIDE VIEWS, which is what the seat asked for and what the
+    // rank ladder was one rung short of saying. Past a two-hundred-kilometre
+    // frame a town's name is a claim about a place the frame cannot show the
+    // shape of, and sixteen of them is the whole label budget spent before a
+    // single capital is drawn. The three bands under it are unchanged.
+    const r = backdropRadius();
+    const maxRank = r > 200000 ? 0 : r > 26000 ? 1 : r > 12000 ? 2 : 4;
     capEyeUpdate();
     const cells = new Set<string>();
     let budget = 16;
