@@ -9183,3 +9183,115 @@ the eye reads as sleepers laid four times too far apart. A real sleeper is
 drawing the bars fat inverts the thing that makes track read as track. 0.24 m
 with a 0.05 m hairline shadow leaves 55% pale and an 8.9-pixel gap with room to
 survive a mip level.
+
+## Atmosphere is contrast; focus is sharpness — and a plane of focus has a scale
+
+Two reports arrived together: one asking for a tilt-shift miniature, one
+finding that the aerial perspective's `deep` term was already doubling as a
+defocus. They are the same subject from opposite ends, and the second is the
+reason the first was worth doing carefully.
+
+**The air's blur is now off by default, behind `?airblur=1`.** `deep` mixed the
+far field toward `softTex` as well as toward the haze colour, so a road's
+vanishing point went soft because it was far — which is atmosphere doing
+optics' job. Haze is a CONTRAST effect: distant things lose contrast against
+the sky, they do not lose focus. Split, each can be judged.
+
+### A plane of focus perpendicular to a near-nadir camera does nothing at all
+
+The first cut made the plane fronto-parallel — normal = the camera's forward,
+which is what a lens without tilt gives you. On the chart that measured
+
+```
+167m:0.00 168m:0.00 170m:0.00 176m:0.00 189m:0.00 209m:0.00 253m:0.00 ... 3000m:0.00
+```
+
+an exact zero at every station out to three kilometres, and **no amount of
+retuning would have moved it**. A plane perpendicular to a near-nadir view is a
+horizontal slab; flat ground lies inside it; a depth of field over ground that
+is all at one depth has nothing to blur. Only relief could ever have registered,
+and the transect was not crossing any.
+
+Which is precisely why the photographs the look is named after are taken with
+the lens TILTED. **The normal is the camera's forward flattened to the
+horizontal**, so the plane stands vertical and the band lies across the view.
+It costs nothing at the seat — a camera looking 7° down has a forward and a
+ground direction a few art pixels apart over a hundred metres, and the chase
+band moved from 0.18 to 0.20 at 130 m — and it is the entire effect on the
+chart. `__tilt({angle})` now leans the plane BACK from vertical, which is the
+Scheimpflug direction proper: at 90° minus the camera's pitch the plane lies
+along the ground and level land comes back into focus. Swept and confirmed at
+0/30/55/70/80/88°.
+
+### The band is a fraction of the frame, and getting that scale wrong is silent
+
+On ground receding from the eye, with the plane at distance `D`,
+
+```
+px = |fd| / mpp = K · |1 − D/d|,      K = uPix.y / (2·tan(fov/2))
+```
+
+so **the circle of confusion SATURATES at K** — about 307 at a 55° lens over
+320 art rows. Nothing past the plane, at any distance, blurs more. A band asked
+for near or above K never resolves; a small one is absurdly tight. The first
+presets were bare pixel counts written against nothing: `mini` asked for sharp
+under 30 px, i.e. `|1 − D/d| < 0.098`, a **ten-metre** sharp slab at a 53 m
+focus, and 84 px for full blur meant everything past ~73 m sat at one value.
+The measurement came back a flat 0.306 at every station out to five kilometres
+and was right to. **The band was real and almost nothing was in it.**
+
+K is the natural scale for a receding view and a hopeless one for the chart. At
+a near-nadir camera the ground offset along the view ray maps all but
+one-for-one onto art rows, so the whole visible frame spans about `uPix.y / 2`
+— **half of K**. Stated against K, `mini` put its sharp edge two thirds of the
+way to the frame edge and its full-blur edge outside the frame entirely: the
+chart A/B moved 7.3% of pixels, nearly all of it dither, one softened road at
+the top edge and nothing else. Stated against **half the frame** the same words
+mean the middle third sharp and the edges gone — 20.3% moved, foreground and
+horizon band both plainly soft — and the seat keeps a real far field anyway
+because K is nearly twice the frame and the far field saturates past it.
+
+`__tilt` reports BOTH (`halfPx`, `satPx`) with the band as a fraction of each,
+because a band read against the wrong scale is how this went wrong twice.
+
+### An instrument that the frame loop overwrites is not a dial
+
+`__tilt({amount, sharp, blur})` promised to set the look live at 3 fps without
+a reload. It did not: `aimFocus` rewrites all three uniforms EVERY FRAME from
+the preset, so a console write survived until the next animation frame and no
+longer. **Every A/B ever taken through those three dials was an A/B of
+nothing** — and that is exactly why the air term, the one dial `aimFocus` does
+not touch, was the only one that had ever shown a difference. Writes go to an
+override the frame loop lays the preset under; `null` clears a field back.
+
+The same class of fault, twice in one unit: an early return in `aimFocus` had
+the probe reporting a stale focal point whenever tilt was off. **An instrument
+that lies when the feature is off is worse than the operations it saves.**
+
+### And the transect must run along the CAMERA's ray
+
+It walked out along `state.heading` from the truck, which on the chart is the
+one ray guaranteed to say nothing: the top camera looks down a line of its own,
+the band lies across THAT line, and the truck's nose can cross it at any angle
+including ninety degrees. It now runs along the camera's forward flattened to
+the ground, from the point under the EYE — so `t ≈ d` and a row reads directly
+against `focusDistM` — with the heading kept only for the straight-down limit,
+where there is no ground direction to use. The ray and its origin are reported.
+
+**A two-boot image diff is not a control.** The first air A/B diffed frames
+from separate boots: mean 0.85/255, 5.09% moved, worst 133.9 — and the 133.9
+was wildlife, not blur. Wildlife, sward phase and streaming order all differ
+between boots. `devtools/focus-ab.mjs` with `AB=1` flips the uniform live on
+one settled world, which is the only honest form of this measurement.
+
+| preset | amount | sharp | blur | what it means |
+|---|---|---|---|---|
+| `off` | 0 | — | — | the default |
+| `subtle` | 0.5 | 0.55 | 1.30 | fore and far background only |
+| `mini` | 0.9 | 0.36 | 0.75 | the model-railway band |
+| `hard` | 1.0 | 0.20 | 0.50 | a macro slab |
+
+`sharp`/`blur` are fractions of half the art frame. A per-camera scale sits on
+top: the chart takes the preset in full, chase a third of it, **the cab none** —
+a narrow depth of field while you are the one steering is a tax on exactly the
+information you are steering by.
