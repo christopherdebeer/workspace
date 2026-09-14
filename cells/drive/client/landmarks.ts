@@ -205,6 +205,33 @@ export const LANDMARKS: Landmark[] = [
   { id: 'forth-bridge', name: 'FORTH BRIDGE', lat: 56.0003, lon: -3.3886, kind: 'bridge', base: 521, h: 100,
     bridge: { deckM: 46, grade: 0.02, match: ['forth bridge', 'forth rail'], reach: 1600, form: 'truss', tower: 'cantilever', truss: 'through', towerM: 100,
       stations: [[56.0050, -3.3862], [56.0003, -3.3886], [55.9956, -3.3910]], towerCol: 0x9b3b2c, steelCol: 0x9b3b2c, cableCol: 0x9b3b2c, pad: 30 } },
+  // ── THE OTHER TWO FORTH BRIDGES ──
+  //
+  // Asked for from the seat as the landmark test case, and the fixture
+  // (at-forth) says why it is the right one: three famous bridges in a row,
+  // and before these entries only ONE of the three reached the painter with
+  // its own identity. The Queensferry Crossing had its form from OSM's own
+  // `bridge:structure` and nothing else — no towers where its towers are, no
+  // colour, no deck height — and the FORTH ROAD BRIDGE, a 1,006 m suspension
+  // bridge, was claimed by nobody at all and drawn as a deck on piers,
+  // because its ways are named exactly `Forth Road Bridge` and the rail
+  // bridge's entry matches `forth bridge` and `forth rail`, neither of which
+  // is a substring of it. This file recorded that gap and it is closed here.
+  //
+  // THE STATIONS ARE PLACED FROM THE PUBLISHED SPANS along a roughly
+  // north-south axis, not surveyed: only a station's position ALONG the
+  // assembly's own axis is used, so a coordinate tens of metres wide of the
+  // deck still stands its tower on the bridge.
+  { id: 'forth-road-bridge', name: 'FORTH ROAD BRIDGE', lat: 55.99946, lon: -3.40440, kind: 'bridge', base: 1006, h: 156,
+    bridge: { deckM: 44, grade: 0.03, match: ['forth road'], reach: 1800, form: 'suspension', tower: 'portal', cables: 'suspension', towerM: 156, sag: 0.09,
+      stations: [[56.00398, -3.40460], [55.99494, -3.40420]], towerCol: 0xb8bcbe, cableCol: 0x8a8e90, steelCol: 0xa8acae, pad: 40 } },
+  // Three towers, which is what the entry is FOR: the recipe gave this one a
+  // single tower off its default station rule. The real crossing's stay
+  // cables overlap at the centre tower — the one thing in its silhouette the
+  // painter cannot draw, and worth knowing before anyone judges the frame.
+  { id: 'queensferry-crossing', name: 'QUEENSFERRY CROSSING', lat: 56.00186, lon: -3.40883, kind: 'bridge', base: 650, h: 210,
+    bridge: { deckM: 50, grade: 0.03, match: ['queensferry crossing'], reach: 2000, form: 'cable-stayed', tower: 'mast', cables: 'fan', towerM: 210,
+      stations: [[56.00770, -3.40950], [56.00186, -3.40883], [55.99602, -3.40816]], towerCol: 0xe6e6e4, cableCol: 0xd8dcde, pad: 45 } },
   { id: 'millau', name: 'VIADUC DE MILLAU', lat: 44.0778, lon: 3.0224, kind: 'bridge', base: 342, h: 87,
     bridge: { match: ['millau'], reach: 2200, form: 'cable-stayed', tower: 'a-frame', cables: 'fan', towerM: 87,
       fractions: [0.083, 0.222, 0.361, 0.5, 0.639, 0.778, 0.917], towerCol: 0xe8e6e1, cableCol: 0xf0f0ee, pad: 0 } },

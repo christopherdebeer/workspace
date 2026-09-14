@@ -221,6 +221,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
 | `node devtools/bedding.mjs` | whether the substrate's bedding is geology or corduroy: the autocorrelation of its own contribution above its background, at a solved scale so two runs compare (`REV=` for a control, `ANALYSE=1` to re-read frames already on disk) | ~9min |
 | `node devtools/bridge-water.mjs` | every tagged bridge at a crossing ran its chord (`2d-chord` in its own stage log) and stands over its water — the witness is the STAGE, the metre is the symptom (`FIX=`, `CROSSINGS=`) | ~1min |
+| `node devtools/bridge-landmarks.mjs` | who CLAIMED each bridge assembly — an entry's id, OSM's own `bridge:structure`, or the recipe — beside what the painter actually built; fails on a spec that names a form and paints nothing, and on a long span nobody claimed (`FIX=`, `LONG_M=`) | ~2min |
 | `node devtools/hydro-phases.mjs` | where a hydro build's milliseconds go, by phase and by ns/texel, with the wet/waterless build split and the wet share of the grid (`DRY=0` is the short-circuit's control, `FIX=`/`SPOT=` the place) | ~1min |
 | `node devtools/hydro-dry.test.mjs` | a waterless tile's short-circuit is the path it replaced, byte for byte, against the revision's own build-tile (`REV=`) | ~10s |
 | `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
@@ -3491,6 +3492,93 @@ reconstruction to go stale, and is checked in beside the number it explains:
 `at-yosemite` (37.73606,-119.63732, r=1400 m, cover classes 10/30/60/80, the
 Merced and 1,202-2,417 m of granite) is the first fixture in the repo that
 holds the river the dump was about.
+
+### The Forth: three bridges, three claim paths, and one of them reached its entry
+
+Asked for from the seat as the landmark test case — *"see forth bridges as a
+test case/fixture as well, especially as named/well known landmark cases"* —
+and it is the best one on earth: three famous bridges in a row over one firth,
+each reaching the painter by a DIFFERENT route. Captured as `at-forth`
+(56.00636,-3.39091, r=1200 m; the first capture attempt timed out at 900 s on
+64 cold tiles and was re-run in the background).
+
+**A BRIDGE IS CLAIMED THREE WAYS, AND ONLY ONE OF THEM IS A NAME.**
+
+| path | what decides | at the Forth |
+|---|---|---|
+| a landmark entry, by NAME | `bridge:name ?? name` contains one of the entry's `match` strings, within `reach` (1.6–2.4 km) | the Queensferry Crossing and the Forth Road Bridge, once they had entries |
+| a landmark entry, by POSITION | the name says nothing either way, and the assembly's centroid is within `BRIDGE_ON_R` (420 m) of the entry | the 1890 Forth Bridge — its four ways are named `East Coast (Northern) Line` and carry no `bridge:name` at all |
+| OSM's own `bridge:structure` | the recipe reads the tag | the Queensferry Crossing, before it had an entry |
+| the recipe | nothing said anything; a family is rolled, and REFUSED past 150 m | the Forth Road Bridge, before it had one — a 1,006 m suspension bridge drawn as a deck on piers |
+
+**AND NOTHING COULD SAY WHICH HAD HAPPENED.** `__bridges()` reported the form
+and not the authority, and a `truss` that came out of a roll is
+indistinguishable from a `truss` an entry asked for — so "is the Forth Bridge
+claimed?" could only be answered by inferring it from the output. That is the
+same fault this file records for the terrain's cell table one layer down: **a
+probe that reports the OUTPUT and not the AUTHORITY cannot witness a claim.**
+`BridgeAssembly.claim` is the entry's id, `tags`, or `recipe`, and `spanM` —
+the LONGEST FRAGMENT, not the total, because a bridge split into eight deck
+pieces would otherwise read as eight times its own length — is beside it.
+
+**THE GUARD THE GEOMETRY FORCED, AND IT HAD TO GO IN FIRST.** The Forth Road
+Bridge and the Queensferry Crossing stand about 250 m apart at their nearest,
+which is INSIDE the 420 m positional radius — a radius sized against a firth
+with two bridges in it, and this is a firth with three. So the moment the road
+bridge had an entry, any Queensferry fragment not carrying the crossing's own
+name (an approach, a slip, a ramp) became a positional candidate for a
+SUSPENSION bridge it is not, and would have worn portal towers and a catenary.
+`bridgeEntryFor` takes a `tagged` flag now: **a positional claim stands down to
+OSM's own `bridge:structure`, and a NAME match still beats it** — an entry
+saying "this is the Humber Bridge" is more specific than a tag saying "this is
+cable-stayed", and a positional GUESS is weaker evidence than a surveyor's tag.
+It was written BEFORE the two entries, from reading the geometry; it is the one
+hazard in this unit that a frame would have shown as a plausible-looking wrong
+bridge rather than as an absence.
+
+**Measured**, `at-forth`, settled, the two entries the only difference:
+
+| bridge | before | after |
+|---|---|---|
+| Forth Bridge (rail) | `forth-bridge` **by position** · truss / cantilever · 3 towers, 1,568 panels | unchanged |
+| Queensferry Crossing | **`tags`** · cable-stayed / a-frame · 1 tower, 94 stays | **`queensferry-crossing`** · mast / fan · 2 towers, 120 stays, deck to 50 m |
+| Forth Road Bridge | **`recipe`** · girder · **built nothing** | **`forth-road-bridge`** · suspension / portal · 2 towers, 588 hangers, 1,800 quads, deck to 44 m |
+
+One of three reached its entry before; three of three do now, and the rail
+bridge — the one that never had a name to match on — is the one that already
+worked, because its entry's coordinate was doing the job all along. The other
+three assemblies in the box (Fife Circle Line, Hopetoun Road, and one unnamed
+way) are 16–23 m and correctly stay `recipe` · girder, building nothing.
+
+**AND `spanM` IS A FRAGMENT, WHICH AT THE FORTH IS MOST OF THE PROBLEM.** The
+longest fragment of the Forth Road Bridge measures **342 m** and the crossing's
+**363 m**, against bridges of 1,006 m and 2,700 m — OSM splits a long bridge at
+its towers, at its carriageways and at every tile edge, and each piece is a way
+of its own. So the tool's "a long span nobody claimed" check is a check on
+FRAGMENTS, and so is the clearance rule's wet-span measurement, and so is the
+recipe's own 150 m refusal. That is the limitation this file already records
+from the uMngeni (one structure, two assemblies), met again at a bridge whose
+assembly is right and whose longest way is a third of it: **the assembly
+already gathers the fragments, and teaching the measurements to read IT rather
+than the way is the open work.**
+
+**THE QUEENSFERRY CROSSING GOT TWO TOWERS AND ITS ENTRY AUTHORS THREE, and
+that is reported as observed rather than claimed.** A station stands BETWEEN
+the fragments it finds (a twin carriageway gets one tower, not two beside it),
+so a station with no fragment on one side of it stands nothing up; the capture
+holds ten fragments and they do not span the whole crossing. Whether the centre
+tower appears on the live world with the full set streamed is untested — the
+fixture is what was measured, and the fixture is 1.2 km of a 2.7 km bridge.
+Its real stay cables also overlap at that centre tower, which is the one thing
+in its silhouette the painter cannot draw at all.
+
+`devtools/bridge-landmarks.mjs` is the instrument and it REPORTS rather than
+asserting a form per bridge: what a famous bridge should look like is a
+judgement in `landmarks.ts`, and a test restating it here would be the same
+table twice. What it FAILS on is structural — an assembly whose spec names a
+non-girder form and whose painter built nothing, and a span over `LONG_M`
+(150 m) that nobody claimed, which is the landmark-entry gap rather than a
+defect and is printed as one.
 
 ## The labs
 

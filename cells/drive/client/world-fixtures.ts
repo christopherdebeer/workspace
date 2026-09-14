@@ -860,6 +860,11 @@ export const CAPTURE_INDEX: readonly CaptureCard[] = [
     label: 'uMNGENI MOUTH — TWO BRIDGES',
     note: 'Probed from the seat at -29.81016,31.03845. Two tagged bridges 580 m apart over the uMngeni a kilometre from the Indian Ocean: the M4 Ellis Brown Viaduct (two 471 m carriageways, bridge:name, motorway) and the Athlone Bridge upriver (412 m on TWO POINTS, bridge:name, secondary). Neither carries bridge:structure and neither is in the landmark store, so both take the generic recipe; neither publisher carries their decks, so the chord is the only thing that can hold them over the water. THE FIXTURE THE BRIDGE CHORD REGRESSION WAS FOUND ON. No terrestrial ecoregion — the box is mostly estuary and sea, so `eco` is deliberately absent and the guild falls back to the climate path.',
   },
+  {
+    id: 'at-forth', file: 'world-forth.json', heading: 0,
+    label: 'THE FORTH — THREE BRIDGES, THREE CLAIMS',
+    note: 'Asked for from the seat at 56.00636,-3.39091 as the landmark test case, and it is the best one there is: three famous bridges in a row over the Firth of Forth, each reaching the painter by a DIFFERENT path. The 1890 Forth Bridge is four `rail` ways named for the East Coast (Northern) Line with no bridge:name at all, so its entry can only claim it BY POSITION; the Queensferry Crossing carries its own `bridge:structure=cable-stayed` and needs no entry; the Forth Road Bridge is named exactly that, carries no structure tag and matches no entry, so it is claimed by nobody. They also stand ~250 m apart at their nearest, which is inside BRIDGE_ON_R — so this is the fixture where a positional claim can cross from one bridge to the next.',
+  },
 ];
 
 /**

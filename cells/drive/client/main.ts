@@ -8263,6 +8263,17 @@ interface BridgeAssembly {
   family: string;
   families: Map<string, number>;
   spec: BridgeFormSpec | null;
+  /** ── WHO DECIDED THIS BRIDGE'S FORM ──
+   *
+   * The landmark entry's id, `tags` where OSM's own `bridge:structure` said
+   * it, or `recipe` where neither did and the family was rolled (or refused,
+   * past 150 m). Nothing could say this before, so "is the Forth Bridge
+   * claimed?" could only be answered by inferring it from the form — and a
+   * `truss` that came out of a roll looks exactly like a `truss` an entry
+   * asked for. A probe that reports the OUTPUT and not the AUTHORITY cannot
+   * witness a claim; the same rule this file records for the terrain's
+   * kernel, one layer over. */
+  claim: string | null;
   mesh: THREE.Mesh | null;
   quads: number;
   towers: number;
@@ -8321,7 +8332,7 @@ function noteBridgeForm(wayKey: string | undefined, tags: Record<string, string>
   }
   let a = bridgeAssemblies.get(key);
   if (!a) {
-    a = { key, name, owner: ribBatchTerrainOwner, ways: new Map(), tags: tags ?? {}, family, families: new Map(), spec: null, mesh: null,
+    a = { key, name, owner: ribBatchTerrainOwner, ways: new Map(), tags: tags ?? {}, family, families: new Map(), spec: null, claim: null, mesh: null,
       quads: 0, towers: 0, stays: 0, hangers: 0, ribs: 0, panels: 0, builds: 0 };
     bridgeAssemblies.set(key, a);
   }
@@ -8344,7 +8355,11 @@ function rebuildBridgeForms(a: BridgeAssembly): void {
     for (let i = 1; i < w.pts.length; i++) l += Math.hypot(w.pts[i][0] - w.pts[i - 1][0], w.pts[i][1] - w.pts[i - 1][1]);
     if (l > longest) longest = l;
   }
-  const spec = bridgeLandmarkFor(a, longest) ?? bridgeSpecFor(a.tags, a.family, longest);
+  const claimed = bridgeLandmarkFor(a, longest);
+  const spec = claimed ?? bridgeSpecFor(a.tags, a.family, longest);
+  a.claim = claimed
+    ? (bridgeEntryIdFor(a) ?? 'landmark')
+    : (a.tags['bridge:structure'] ? 'tags' : 'recipe');
   // Mapped supports within reach of any fragment are the stations, unless a
   // landmark entry has already said where the towers stand.
   if (!spec.stations.length && bridgeSupports.size) {
@@ -8448,7 +8463,22 @@ const BRIDGE_LANDMARKS = LANDMARKS.filter((d) => d.kind === 'bridge' && d.bridge
  *    can only fill a silence.
  */
 const BRIDGE_ON_R = 420;
-function bridgeEntryFor(name: string | null, px: number, pz: number): Landmark | null {
+/**
+ * …AND A POSITIONAL CLAIM MUST NOT OVERRULE THE MAP. `tagged` says the
+ * assembly carries its own `bridge:structure`. A NAME match still wins over
+ * it — an entry that says "this is the Humber Bridge" is more specific than
+ * "this is cable-stayed" — but a positional GUESS is weaker evidence than a
+ * surveyor's tag and must stand down to it.
+ *
+ * The Forth is why. Its road bridge and the Queensferry Crossing stand about
+ * 250 metres apart at their nearest, which is INSIDE this radius, so the
+ * moment the road bridge has an entry any nearby Queensferry fragment that
+ * does not carry the crossing's own name — an approach, a slip, a ramp — is a
+ * positional candidate for a SUSPENSION bridge it is not. The radius was
+ * sized against a firth with two bridges in it and this is a firth with
+ * three.
+ */
+function bridgeEntryFor(name: string | null, px: number, pz: number, tagged = false): Landmark | null {
   if (!BRIDGE_LANDMARKS.length) return null;
   const lname = (name ?? '').toLowerCase();
   let onIt: Landmark | null = null, onD = BRIDGE_ON_R;
@@ -8461,7 +8491,7 @@ function bridgeEntryFor(name: string | null, px: number, pz: number): Landmark |
     if (!b.match.length || b.match.some((m) => lname.includes(m.toLowerCase()))) return def;
     // No name match: remember it as a positional candidate, nearest first, and
     // keep looking for an entry this assembly is actually NAMED for.
-    if (d < onD) { onD = d; onIt = def; }
+    if (!tagged && d < onD) { onD = d; onIt = def; }
   }
   return onIt;
 }
@@ -8525,11 +8555,18 @@ function bridgeDeckHint(def: Landmark): ((x: number, z: number) => number | null
  *  it records the crossing, so the record says `deck by landmark-hint`
  *  rather than transcribing a height it cannot explain. */
 const deckAuthorityByWay = new Map<string, DeckAuthority>();
+/** The entry that claims this assembly, for the ledger — the same lookup
+ *  `bridgeLandmarkFor` makes, so the two cannot disagree about who decided. */
+function bridgeEntryIdFor(a: BridgeAssembly): string | null {
+  let px = 0, pz = 0, n = 0;
+  for (const w of a.ways.values()) for (const p of w.pts) { px += p[0]; pz += p[1]; n++; }
+  return n ? (bridgeEntryFor(a.name, px / n, pz / n, !!a.tags['bridge:structure'])?.id ?? null) : null;
+}
 function bridgeLandmarkFor(a: BridgeAssembly, longest: number): BridgeFormSpec | null {
   let px = 0, pz = 0, n = 0;
   for (const w of a.ways.values()) for (const p of w.pts) { px += p[0]; pz += p[1]; n++; }
   if (!n) return null;
-  const def = bridgeEntryFor(a.name, px / n, pz / n);
+  const def = bridgeEntryFor(a.name, px / n, pz / n, !!a.tags['bridge:structure']);
   const b = def?.bridge;
   if (!def || !b) return null;
   {
@@ -17851,7 +17888,8 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // owns that complete station solve, the lower-deck scan and the grade
     // cone; this builder supplies streamed facts and consumes the result.
     const bridgeEntry = mode === 'bridge' && n > 1
-      ? bridgeEntryFor(wayTags?.['bridge:name'] ?? wayTags?.name ?? null, dense[n >> 1][0], dense[n >> 1][1]) : null;
+      ? bridgeEntryFor(wayTags?.['bridge:name'] ?? wayTags?.name ?? null, dense[n >> 1][0], dense[n >> 1][1],
+        !!wayTags?.['bridge:structure']) : null;
     const deckHint = bridgeEntry ? bridgeDeckHint(bridgeEntry) : null;
     // ── THE GATE READS THE MODE, NOT A LIST THIS PATH NEVER FILLS ──
     //
@@ -36459,6 +36497,20 @@ function heightsOf(): number[] {
     key: a.key, name: a.name, fragments: a.ways.size, builds: a.builds,
     owner: a.owner,
     form: a.spec?.form ?? null, tower: a.spec?.tower ?? null, cables: a.spec?.cables ?? null,
+    claim: a.claim, structureTag: a.tags['bridge:structure'] ?? null,
+    // The PRINCIPAL span — the longest fragment, which is what the recipe's
+    // own form rules read and therefore the honest measure of "is this a long
+    // bridge". The total of every fragment is not: a bridge split into eight
+    // deck pieces would read as eight times its own length.
+    spanM: (() => {
+      let longest = 0;
+      for (const w of a.ways.values()) {
+        let l = 0;
+        for (let i = 1; i < w.pts.length; i++) l += Math.hypot(w.pts[i][0] - w.pts[i - 1][0], w.pts[i][1] - w.pts[i - 1][1]);
+        if (l > longest) longest = l;
+      }
+      return +longest.toFixed(0);
+    })(),
     stations: a.spec?.stations.length ?? 0,
     quads: a.quads, towers: a.towers, stays: a.stays, hangers: a.hangers, ribs: a.ribs, panels: a.panels,
     supports: bridgeSupports.size,
