@@ -3141,21 +3141,20 @@ hint over the chord decides on its own and a portal is the approach's
 business either way, so neither asks; the call count is the old one exactly
 and the authority still makes the decision.
 
-**AND THE AUTHORITY DECIDES IT.** The three rules above live in
-`substrate/crossing-authority.ts` as `resolveProductionDeck` — pure, tested
-in `substrate.test.ts` (hint over chord at a portal too, a low hint refused,
-a trunk chord in the water at ten metres, a lane at four and a half, a chord
-already over the water kept with its clearance reported, portals left to the
-approach, no water no clearance) — and the ribbon's lift block consumes its
-answer station by station, which is the migration the registry was built
-for: construction consumes the authority, it does not reinterpret the
-evidence afterwards. Who decided each way's deck is kept by way key, handed
-to the registry when it records the crossing, carried on the record as
-`deckAuthority` with `deck by landmark-hint` in its evidence, and counted in
-the snapshot as `deckByHint` and `deckByWater`. What the substrate still
-owes after this is the crossing's GEOMETRY — the registry still learns of a
-crossing after the road is built, from the built road; the profile now asks
-before, but through a function, not a record.
+**AND THE AUTHORITY DECIDES IT.** The three station rules live in
+`substrate/crossing-authority.ts` as `resolveProductionDeck`, and the complete
+run solve now lives beside them as `resolveProductionBridgeProfile`: it owns
+the lazy water reads, contiguous wet-span measurement, between-station
+lower-deck scan and two-pass ruling-grade cone. Both are pure and tested in
+`substrate.test.ts`; the ribbon supplies streamed water/deck callbacks and
+consumes the returned profile without reinterpreting the evidence. Who decided
+each way's deck is kept by way key, handed to the registry when it records the
+crossing, carried on the record as `deckAuthority` with `deck by
+landmark-hint` in its evidence, and counted in the snapshot as `deckByHint`
+and `deckByWater`. What the substrate still owes after this is the full bench
+solve and GEOMETRY — the registry still learns of a crossing after the road is
+built, from the built road, even though its clearance profile is now decided
+before geometry.
 
 ### The empty tile bank: a wrong diagnosis, and what it taught
 

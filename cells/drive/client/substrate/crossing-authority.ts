@@ -118,6 +118,230 @@ export function resolveProductionDeck(input: ProductionDeckInput): ProductionDec
   return { deckY: input.chordY, authority: 'chord', clearanceM: over(input.chordY), evidence };
 }
 
+export type ProductionBridgeLiftSource = 'hint' | 'water' | 'deck';
+
+export interface ProductionBridgeProfileInput {
+  stations: readonly (readonly [x: number, z: number])[];
+  /** Portal-to-portal chord/profile before crossing clearance is applied. */
+  profile: readonly number[];
+  /** Inclusive bridge runs in station indices. */
+  runs: readonly (readonly [start: number, end: number])[];
+  roadTags?: Readonly<Record<string, string>>;
+  layer: number;
+  /** Maximum descending grade away from a held clearance station. */
+  grade: number;
+  /** Stable authored landmark profile, when one claims the bridge. */
+  hintAt?: (x: number, z: number) => number | null;
+  /** Resting water in the profile datum. Called lazily. */
+  waterAt: (x: number, z: number) => number | null;
+  /** Highest already-built lower-layer deck near this point. Called lazily. */
+  deckBelow: (x: number, z: number) => number | null;
+  bridgeClearanceM?: number;
+  portalReachM?: number;
+  deckSampleStepM?: number;
+}
+
+export interface ProductionBridgeProfileResult {
+  profile: number[];
+  maximumLiftM: number;
+  source?: ProductionBridgeLiftSource;
+  /** Crossing records retain the water/landmark authority. A lower road can
+   *  lift the geometry without changing the bridge-over-water authority. */
+  deckAuthority: DeckAuthority;
+}
+
+export const PRODUCTION_BRIDGE_CLEARANCE_M = 5.5;
+export const PRODUCTION_BRIDGE_PORTAL_REACH_M = 8;
+export const PRODUCTION_BRIDGE_DECK_SAMPLE_STEP_M = 3;
+
+/**
+ * Resolve a bridge's complete clearance profile before geometry exists.
+ *
+ * Water/landmark decisions, lower-deck sampling and the two-pass grade cone
+ * are one authority operation. The caller supplies only the streamed facts;
+ * it must not reinterpret them after this function returns.
+ */
+export function resolveProductionBridgeProfile(
+  input: ProductionBridgeProfileInput,
+): ProductionBridgeProfileResult {
+  if (input.stations.length !== input.profile.length) {
+    throw new Error('bridge stations and profile must have matching lengths');
+  }
+  const profile = [...input.profile];
+  const bridgeClearanceM = input.bridgeClearanceM
+    ?? PRODUCTION_BRIDGE_CLEARANCE_M;
+  const portalReachM = input.portalReachM
+    ?? PRODUCTION_BRIDGE_PORTAL_REACH_M;
+  const deckSampleStepM = input.deckSampleStepM
+    ?? PRODUCTION_BRIDGE_DECK_SAMPLE_STEP_M;
+  const grade = Math.max(0, input.grade);
+  let source: ProductionBridgeLiftSource | undefined;
+  let maximumLiftM = 0;
+  const noteSource = (next: ProductionBridgeLiftSource): void => {
+    if (next === 'hint') source = 'hint';
+    else if (!source) source = next;
+  };
+
+  for (const run of input.runs) {
+    const start = run[0];
+    const end = run[1];
+    if (!Number.isInteger(start)
+      || !Number.isInteger(end)
+      || start < 0
+      || end >= profile.length
+      || end <= start) {
+      throw new Error('bridge run bounds are invalid');
+    }
+    const [portalAX, portalAZ] = input.stations[start];
+    const [portalBX, portalBZ] = input.stations[end];
+    const nearPortal = (x: number, z: number): boolean =>
+      Math.hypot(x - portalAX, z - portalAZ) < portalReachM
+      || Math.hypot(x - portalBX, z - portalBZ) < portalReachM;
+    const portalAt = (station: number): boolean => {
+      const [x, z] = input.stations[station];
+      return station === start || station === end || nearPortal(x, z);
+    };
+
+    // The field is sampled only when its answer can change the profile. A
+    // winning landmark hint and a portal need no water lookup. Once one low
+    // station is found, the contiguous wet span is measured for air draught.
+    const water: Array<number | null | undefined> =
+      new Array(profile.length).fill(undefined);
+    const hints: Array<number | null> =
+      new Array(profile.length).fill(null);
+    const waterAt = (station: number): number | null => {
+      if (water[station] === undefined) {
+        const [x, z] = input.stations[station];
+        water[station] = input.waterAt(x, z);
+      }
+      return water[station] as number | null;
+    };
+    const hintWins = (station: number): boolean =>
+      hints[station] !== null
+      && (hints[station] as number) > profile[station];
+    let anyLow = false;
+    for (let station = start; station <= end; station++) {
+      const [x, z] = input.stations[station];
+      hints[station] = input.hintAt?.(x, z) ?? null;
+      if (anyLow || portalAt(station) || hintWins(station)) continue;
+      const waterY = waterAt(station);
+      if (waterY !== null
+        && profile[station]
+          < waterY + waterClearanceForClass(input.roadTags?.highway)) {
+        anyLow = true;
+      }
+    }
+
+    let wetSpanM = 0;
+    if (anyLow) {
+      let wetRunM = 0;
+      for (let station = start; station <= end; station++) {
+        if (waterAt(station) === null) {
+          wetRunM = 0;
+          continue;
+        }
+        if (station > start && waterAt(station - 1) !== null) {
+          wetRunM += Math.hypot(
+            input.stations[station][0] - input.stations[station - 1][0],
+            input.stations[station][1] - input.stations[station - 1][1],
+          );
+        }
+        wetSpanM = Math.max(wetSpanM, wetRunM);
+      }
+    }
+
+    for (let station = start; station <= end; station++) {
+      const portal = portalAt(station);
+      const decided = resolveProductionDeck({
+        chordY: profile[station],
+        hintY: hints[station],
+        roadTags: input.roadTags,
+        portal,
+        wetSpanM,
+        waterY: portal || hintWins(station) ? null : waterAt(station),
+      });
+      if (decided.authority === 'chord') continue;
+      noteSource(decided.authority === 'landmark-hint' ? 'hint' : 'water');
+      profile[station] = Math.max(profile[station], decided.deckY);
+    }
+
+    // Sample along each leg, not only at authored stations: a narrow road
+    // beneath can fall between two bridge stations. Portals are excluded so
+    // the bridge cannot discover and clear its own approach.
+    if (input.layer > 0) {
+      for (let station = start + 1; station <= end; station++) {
+        const [x0, z0] = input.stations[station - 1];
+        const [x1, z1] = input.stations[station];
+        const steps = Math.max(
+          1,
+          Math.ceil(Math.hypot(x1 - x0, z1 - z0) / deckSampleStepM),
+        );
+        let below: number | null = null;
+        for (let step = 0; step <= steps; step++) {
+          const t = step / steps;
+          const x = x0 + (x1 - x0) * t;
+          const z = z0 + (z1 - z0) * t;
+          if (nearPortal(x, z)) continue;
+          const candidate = input.deckBelow(x, z);
+          if (candidate !== null && (below === null || candidate > below)) {
+            below = candidate;
+          }
+        }
+        if (below === null) continue;
+        const wanted = below + bridgeClearanceM;
+        if (station - 1 > start && wanted > profile[station - 1]) {
+          profile[station - 1] = wanted;
+          noteSource('deck');
+        }
+        if (station < end && wanted > profile[station]) {
+          profile[station] = wanted;
+          noteSource('deck');
+        }
+      }
+    }
+
+    // The lowest profile satisfying every clearance witness is the forward
+    // and backward cone at the bridge's ruling grade.
+    for (let station = start + 1; station <= end; station++) {
+      const distance = Math.max(0.1, Math.hypot(
+        input.stations[station][0] - input.stations[station - 1][0],
+        input.stations[station][1] - input.stations[station - 1][1],
+      ));
+      profile[station] = Math.max(
+        profile[station],
+        profile[station - 1] - grade * distance,
+      );
+    }
+    for (let station = end - 1; station >= start; station--) {
+      const distance = Math.max(0.1, Math.hypot(
+        input.stations[station + 1][0] - input.stations[station][0],
+        input.stations[station + 1][1] - input.stations[station][1],
+      ));
+      profile[station] = Math.max(
+        profile[station],
+        profile[station + 1] - grade * distance,
+      );
+    }
+    for (let station = start; station <= end; station++) {
+      maximumLiftM = Math.max(
+        maximumLiftM,
+        profile[station] - input.profile[station],
+      );
+    }
+  }
+
+  return {
+    profile,
+    maximumLiftM,
+    source,
+    deckAuthority: source === 'hint'
+      ? 'landmark-hint'
+      : source === 'water'
+        ? 'water-clearance'
+        : 'chord',
+  };
+}
+
 export interface ProductionCrossingInput {
   roadId: string;
   waterId: string;

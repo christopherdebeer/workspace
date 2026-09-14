@@ -112,10 +112,13 @@ ordinary channel stations so this seam remains covered.
 The production structures fixture verifies the open culvert, filled causeway
 and converged rebuild queue through `__substrate().crossingEarthworks`.
 
-The remaining crossing migration is to replace the legacy road profile/deck
-builder with substrate-owned generation; it already consumes canonical intent
-at the structure decision point, but it is not yet emitted from the substrate
-tile itself.
+The bridge clearance profile is now substrate-owned arithmetic:
+`resolveProductionBridgeProfile` consumes landmark/water decisions, samples
+lower-layer decks between sparse road stations and applies the two-pass ruling
+grade cone before any geometry exists. The legacy road builder supplies only
+streamed water/deck callbacks and consumes the resulting profile. The remaining
+crossing migration is to move the whole bench/profile and geometry authoring
+pipeline into tile construction, then emit it from the substrate tile itself.
 
 ### 3. Build one production substrate authority tile — guarded authority landed
 
@@ -365,10 +368,12 @@ the failed comparison can be reproduced.
   placement, foam, facet/colour and collider generation has moved into the pure
   substrate package, and its collider witnesses are versioned in the production
   tile. Culvert bore and headwall arrays are also substrate-built after the
-  legacy context resolver chooses their dimensions. The remaining generation
-  migration is to move the other array builders and reach/road/terrain solve
-  authorities into the substrate tile build, then retire the legacy builder
-  entry points and road drape registry.
+  legacy context resolver chooses their dimensions. Bridge clearance and its
+  grade-constrained profile now resolve in the pure substrate package; the
+  remaining generation migration is to move the bench/profile inputs, other
+  array builders and reach/road/terrain solve authorities into the substrate
+  tile build, then retire the legacy builder entry points and road drape
+  registry.
 - Contact/evidence is now the production default with `?substrate=legacy` as
   the observable rollback. Representative water drives, persistent evidence
   and the multi-world parity thresholds pass; a production observation window

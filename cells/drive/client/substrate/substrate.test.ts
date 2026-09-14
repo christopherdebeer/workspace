@@ -16,6 +16,7 @@ import {
   resolveFluidContact,
   resolveCrossingKind,
   resolveProductionSubstrateMode,
+  resolveProductionBridgeProfile,
   resolveProductionCrossing,
   resolveProductionCrossingIntent,
   navigableClearance,
@@ -423,6 +424,92 @@ export function runSubstrateSelfTest(): void {
   const dry = resolveProductionDeck({ chordY: 3, waterY: null, hintY: null, portal: false });
   assert(dry.authority === 'chord' && dry.clearanceM === null,
     'no water, no clearance: the chord and nothing to measure it against');
+
+  // The station solve itself belongs to the substrate too: callers supply
+  // streamed facts, and receive the one profile geometry must consume.
+  let hintedWaterReads = 0;
+  const hintedProfile = resolveProductionBridgeProfile({
+    stations: [[0, 0], [20, 0], [40, 0]],
+    profile: [0, 0, 0],
+    runs: [[0, 2]],
+    layer: 1,
+    grade: .1,
+    roadTags: { highway: 'trunk' },
+    hintAt: () => 12,
+    waterAt: () => { hintedWaterReads++; return 0; },
+    deckBelow: () => null,
+  });
+  assert(hintedProfile.profile.every((height) => height === 12)
+    && hintedProfile.source === 'hint'
+    && hintedProfile.deckAuthority === 'landmark-hint',
+  'a landmark profile owns the complete bridge run');
+  assert(hintedWaterReads === 0,
+    'a winning landmark profile must not sample the live water field');
+
+  const waterProfile = resolveProductionBridgeProfile({
+    stations: [[0, 0], [100, 0], [200, 0]],
+    profile: [0, 0, 0],
+    runs: [[0, 2]],
+    layer: 0,
+    grade: .1,
+    roadTags: { highway: 'primary' },
+    waterAt: () => 0,
+    deckBelow: () => null,
+  });
+  assert(Math.abs(waterProfile.profile[1] - 10) < 0.01
+    && waterProfile.profile[0] === 0
+    && waterProfile.profile[2] === 0,
+  'a two-hundred-metre wet span lifts its interior by proportional clearance');
+  assert(waterProfile.source === 'water'
+    && waterProfile.deckAuthority === 'water-clearance',
+  'the bridge profile retains water authority');
+
+  let lowerDeckReads = 0;
+  const flyoverProfile = resolveProductionBridgeProfile({
+    stations: [[0, 0], [12, 0], [24, 0]],
+    profile: [0, 0, 0],
+    runs: [[0, 2]],
+    layer: 1,
+    grade: 1,
+    waterAt: () => null,
+    deckBelow: (x) => {
+      lowerDeckReads++;
+      return Math.abs(x - 15) < .01 ? 3 : null;
+    },
+  });
+  assert(flyoverProfile.profile[0] === 0
+    && Math.abs(flyoverProfile.profile[1] - 8.5) < 0.01
+    && flyoverProfile.profile[2] === 0,
+  'a lower road sampled between sparse stations lifts the bridge interior');
+  assert(lowerDeckReads > 0 && flyoverProfile.source === 'deck'
+    && flyoverProfile.deckAuthority === 'chord',
+  'lower-deck clearance changes geometry without inventing water authority');
+
+  const shortProfile = resolveProductionBridgeProfile({
+    stations: [[0, 0], [10, 0]],
+    profile: [0, 0],
+    runs: [[0, 1]],
+    layer: 1,
+    grade: .1,
+    waterAt: () => null,
+    deckBelow: () => 20,
+  });
+  assert(shortProfile.maximumLiftM === 0,
+    'a two-station culvert has no interior station to lift');
+
+  const coneProfile = resolveProductionBridgeProfile({
+    stations: [[0, 0], [10, 0], [20, 0]],
+    profile: [0, 0, 0],
+    runs: [[0, 2]],
+    layer: 1,
+    grade: .5,
+    waterAt: () => null,
+    deckBelow: (x) => Math.abs(x - 10) < .01 ? 10 : null,
+  });
+  assert(Math.abs(coneProfile.profile[0] - 10.5) < 0.01
+    && Math.abs(coneProfile.profile[1] - 15.5) < 0.01
+    && Math.abs(coneProfile.profile[2] - 10.5) < 0.01,
+  'the grade cone carries unavoidable short-span lift to both portals');
   const recordedDeck = resolveProductionCrossing({
     ...productionCrossingBase, roadLayer: 1, roadTags: { bridge: 'yes' }, structureOutcome: 'bridge-deck',
     deckAuthority: 'landmark-hint',

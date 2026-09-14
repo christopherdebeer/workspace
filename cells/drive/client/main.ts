@@ -120,9 +120,8 @@ import { adaptHydroSample } from './substrate/hydro-adapter';
 import {
   productionCrossingFootprint,
   ProductionCrossingRegistry,
+  resolveProductionBridgeProfile,
   resolveProductionCrossingIntent,
-  resolveProductionDeck,
-  waterClearanceForClass,
   type CrossingStructureOutcome,
   type DeckAuthority,
   type ProductionCrossingRecord,
@@ -16932,10 +16931,6 @@ const juncPins = !qsOn('nopins', false);
 // the other road's line. Below it there is a turning here, and a barrier across
 // a turning is both wrong to look at and wrong to drive.
 const GRADE_SEP = 2.6;
-/** Clearance a flyover keeps over the deck beneath it, soffit to surface.
- *  Real road bridges hold ~5m; this is the deck-to-deck figure, so the drawn
- *  soffit (apron depth below) sits a little under that. */
-const BRIDGE_CLEAR = 5.5;
 /** `m` is the most any station rose; `p0`/`p1` are what the portals rose —
  *  zero on a bridge long enough to ramp to its clearance. */
 interface LiftRec { x: number; z: number; nm?: string; fid: number; layer: number; m: number; n: number; p0: number; p1: number; src?: string }
@@ -17931,7 +17926,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // carved tube is built around it. OSM tunnel/bridge tags force whole-way
   // runs. Detection runs on the ALIGNED profile: phantom knolls the bench
   // walk already dodged must not become phantom tunnels.
-  const prof = alg.slice();
+  let prof = alg.slice();
   const runs: Array<[number, number]> = [];
   // A COVERED BRIDGE IS STILL A BRIDGE. `canopy` (covered=yes, or an
   // avalanche gallery) means "profile on the ground and wear a roof", which
@@ -17992,8 +17987,8 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // OSM carries no elevation; `layer` is its whole statement about the
     // vertical, and it was being kept and never read.
     //
-    // So the deck rises to put every station BRIDGE_CLEAR above the highest
-    // lower-layer deck beneath it. Bridges over nothing (a river, a railway
+    // So the substrate profile authority rises the deck over the highest
+    // lower-layer road beneath it. Bridges over nothing (a river, a railway
     // not in the road set) find no deck and keep their chord.
     //
     // THE LIFT IS A RAMP, NOT A STEP. The first version raised the chord as
@@ -18025,126 +18020,33 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // station by station, on the same two-pass cone as the flyover: it
     // takes a landmark entry's deck profile where one claims the way, else
     // the water plus a clearance by class where the chord would otherwise
-    // lie in the water, else the chord — see resolveProductionDeck for the
-    // rules and why the generic one is confined to that failure. This is
-    // the profile CONSUMING the authority's answer, which is the migration
-    // the registry was built for; the number is recorded with the crossing.
+    // lie in the water, else the chord. `resolveProductionBridgeProfile`
+    // owns that complete station solve, the lower-deck scan and the grade
+    // cone; this builder supplies streamed facts and consumes the result.
     const bridgeEntry = mode === 'bridge' && n > 1
       ? bridgeEntryFor(wayTags?.['bridge:name'] ?? wayTags?.name ?? null, dense[n >> 1][0], dense[n >> 1][1]) : null;
     const deckHint = bridgeEntry ? bridgeDeckHint(bridgeEntry) : null;
     if (mode === 'bridge' && runs.length) {
-      let need = 0;
-      let liftSrc = '';
       const gRamp = bridgeEntry?.bridge?.grade ?? gLim;
-      // NOT AT THE PORTALS. The nearest lower-layer deck to a portal station is
-      // the bridge's OWN approach: the shared node is one dense point in the
-      // chain and carries whichever member's layer came first, and the
-      // approach's hints run away from it along the bridge's own line. Counted,
-      // every bridge would lift BRIDGE_CLEAR above its own approach while
-      // crossing nothing. A crossed road passes mid-span, so the scan starts
-      // one station in from each end; a two-station bridge (a culvert) has no
-      // span to scan and keeps its chord, which is right for a culvert.
-      const chord = prof.slice();
-      for (const [a, b] of runs) {
-        // ALONG THE SPAN, NOT ONLY AT ITS STATIONS. A bridge's own stations
-        // are twelve metres apart too, so the crossing over the road beneath
-        // fell between them for anything narrow: the decks are read every
-        // three metres along each leg and the higher answer holds both ends.
-        // …and never within PORTAL_R of a portal, where the only lower deck
-        // is the bridge's own approach: sampled up to the portal, the
-        // Hunzikenbrücke — a river bridge with nothing beneath it — lifted
-        // 8.6 m off its own abutments.
-        const PORTAL_R = 8;
-        const [pax, paz] = dense[a], [pbx, pbz] = dense[b];
-        const nearPortal = (x: number, z: number): boolean =>
-          Math.hypot(x - pax, z - paz) < PORTAL_R || Math.hypot(x - pbx, z - pbz) < PORTAL_R;
-        // The water first, decided by the authority at every station: the
-        // entry's profile is taken at the portals too — the neighbouring
-        // fragment reads the same function at the shared node, so the ends
-        // agree without a weld — and the generic clearance keeps off them
-        // like the road scan below.
-        // THE FIELD IS ASKED ONLY WHERE THE ANSWER CAN TURN ON IT. A hint
-        // over the chord decides on its own, and a portal is the approach's
-        // business either way — so neither needs the water, and a bridge
-        // with an entry costs no samples at all. `sampleRestingSurface` is
-        // real work inside the six-millisecond build budget: an earlier cut
-        // asked at every station of every bridge and the causeway's terrain
-        // mesh went missing on an unrelated fixture in two runs of five.
-        // Each station is asked at most once, and only when it could matter.
-        const wy: Array<number | null | undefined> = new Array(n).fill(undefined);
-        const hintOf: Array<number | null> = new Array(n).fill(null);
-        const portalOf = (i: number): boolean => i === a || i === b || nearPortal(dense[i][0], dense[i][1]);
-        const hintWins = (i: number): boolean => hintOf[i] !== null && (hintOf[i] as number) > prof[i];
-        const waterOf = (i: number): number | null => {
-          if (wy[i] === undefined) wy[i] = waterUnder(dense[i][0], dense[i][1]);
-          return wy[i] as number | null;
-        };
-        let anyLow = false;
-        for (let i = a; i <= b; i++) {
-          hintOf[i] = deckHint ? deckHint(dense[i][0], dense[i][1]) : null;
-          if (anyLow || portalOf(i) || hintWins(i)) continue;
-          const w = waterOf(i);
-          if (w !== null && prof[i] < w + waterClearanceForClass(wayTags?.highway)) anyLow = true;
-        }
-        // ── HOW WIDE THE CROSSING IS, MEASURED ALONG THE DECK ──
-        //
-        // The air draught a bridge is built to is a property of the water it
-        // crosses, and the honest measure of that is how far this deck runs
-        // over water — the crossing's width in the direction that matters.
-        // The longest CONTIGUOUS wet run, so a causeway hopping islands is
-        // measured by its channel and not by its total length. Measured only
-        // for a deck already known to be low, which is the one case that
-        // needs a number.
-        let wetSpanM = 0;
-        if (anyLow) {
-          let run = 0;
-          for (let i = a; i <= b; i++) {
-            if (waterOf(i) === null) { run = 0; continue; }
-            if (i > a && waterOf(i - 1) !== null) {
-              run += Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
-            }
-            if (run > wetSpanM) wetSpanM = run;
-          }
-        }
-        for (let i = a; i <= b; i++) {
-          const portal = portalOf(i);
-          const decided = resolveProductionDeck({
-            chordY: prof[i], hintY: hintOf[i], roadTags: wayTags, portal, wetSpanM,
-            waterY: portal || hintWins(i) ? null : waterOf(i),
-          });
-          if (decided.authority === 'chord') continue;
-          if (decided.authority === 'landmark-hint') liftSrc = 'hint';
-          else if (!liftSrc) liftSrc = 'water';
-          if (decided.deckY > prof[i]) prof[i] = decided.deckY;
-        }
-        for (let i = a + 1; i <= b && layer > 0; i++) {
-          const [x0, z0] = dense[i - 1], [x1, z1] = dense[i];
-          const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 3));
-          let below: number | null = null;
-          for (let k = 0; k <= steps; k++) {
-            const t = k / steps;
-            const x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
-            if (nearPortal(x, z)) continue;
-            const v = solver.deckBelow(x, z, layer, width / 2 + 1.5);
-            if (v !== null && (below === null || v > below)) below = v;
-          }
-          if (below === null) continue;
-          const want = below + BRIDGE_CLEAR;
-          if (i - 1 > a && want > prof[i - 1]) { prof[i - 1] = want; liftSrc = liftSrc || 'deck'; }
-          if (i < b && want > prof[i]) { prof[i] = want; liftSrc = liftSrc || 'deck'; }
-        }
-        for (let i = a + 1; i <= b; i++) {
-          const d = Math.max(0.1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
-          prof[i] = Math.max(prof[i], prof[i - 1] - gRamp * d);
-        }
-        for (let i = b - 1; i >= a; i--) {
-          const d = Math.max(0.1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
-          prof[i] = Math.max(prof[i], prof[i + 1] - gRamp * d);
-        }
-        for (let i = a; i <= b; i++) need = Math.max(need, prof[i] - chord[i]);
-      }
+      const lifted = resolveProductionBridgeProfile({
+        stations: dense,
+        profile: prof,
+        runs,
+        roadTags: wayTags,
+        layer,
+        grade: gRamp,
+        hintAt: deckHint ?? undefined,
+        waterAt: waterUnder,
+        deckBelow: (x, z) =>
+          solver.deckBelow(x, z, layer, width / 2 + 1.5),
+      });
+      const portalLift0 = lifted.profile[0] - prof[0];
+      const portalLift1 = lifted.profile[n - 1] - prof[n - 1];
+      prof = lifted.profile;
+      const need = lifted.maximumLiftM;
+      const liftSrc = lifted.source ?? '';
       if (wayKey) {
-        deckAuthorityByWay.set(wayKey, liftSrc === 'hint' ? 'landmark-hint' : liftSrc === 'water' ? 'water-clearance' : 'chord');
+        deckAuthorityByWay.set(wayKey, lifted.deckAuthority);
       }
       if (need > 0) {
         // AND IT DOES NOT WELD DOWN. An anchor more than a metre under a lifted
@@ -18157,7 +18059,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         if (liftLog.length < 500) {
           liftLog.push({ x: +dense[0][0].toFixed(1), z: +dense[0][1].toFixed(1), nm: name, fid, layer,
             m: +need.toFixed(2), n: runs.reduce((c, [a, b]) => c + (b - a + 1), 0),
-            p0: +(prof[0] - chord[0]).toFixed(2), p1: +(prof[n - 1] - chord[n - 1]).toFixed(2), src: liftSrc });
+            p0: +portalLift0.toFixed(2), p1: +portalLift1.toFixed(2), src: liftSrc });
         }
       }
     }
