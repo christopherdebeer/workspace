@@ -263,6 +263,21 @@ the two checks will disagree in silence.
 
 ### Tests that fail for reasons that are not you
 
+**`substrate-structure-render.test.mjs`'s causeway check is a RACE, on both
+sides.** "the causeway terrain retains solid fill to the authored road" reads
+`meshSurfaceAt` at the crossing through `__substrate().crossingEarthworks`, at
+a fixed settle, and that sample can land inside a rebuild: measured 2 of 3
+failures on the pre-substrate-migration control as well as on the tree that
+followed it. **One control run is not an attribution** — the first control run
+here passed and the failure was written up as a regression before the other
+two came back. What the underlying quantity actually does, traced at the point
+every 500 ms for 40 s: 7 transient nulls after the migration against the
+control's 10, first at ~5 s, last at ~18 s, **and none at all once `dirty`
+reaches 0** in either. `__tileholes()` reads 0 throughout, so no tile is
+missing its mesh — it is the cell-triangle lookup answering null mid-swap. The
+honest fix is a settle gate on that assertion rather than a fixed wait; until
+then, read it against three runs of a control, not one.
+
 `sward.test.mjs` and anything else that needs a road under the car depend on
 **Overpass**, a busy public service that fails for whole sessions at a time.
 Its road/water masking checks fail in a family and the count moves run to run.
