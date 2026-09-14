@@ -123,9 +123,12 @@ road/rail deviation-budget clamp; `resolveProductionRoadCrossSection` owns
 kerb seating, designed crossfall/superelevation, the post-seat ruling-grade
 pass and endpoint centre/camber welds. The legacy road builder supplies the
 aligned bench, terrain samples and streamed water/deck/neighbour callbacks,
-then consumes the resulting profile. The remaining crossing migration is to
-move the aligned bench inputs and geometry authoring into tile construction,
-then emit it from the substrate tile itself.
+then consumes the resulting profile. `buildProductionRoadSurfaceGeometry`
+owns the renderer-neutral carriageway triangles, UV/paint attributes, face
+normals and seam-normal smoothing from the final cropped bay corners. The
+remaining crossing migration is to move the aligned bench inputs plus
+contextual junction/apron/structure geometry decisions into tile construction,
+then emit them from the substrate tile itself.
 
 ### 3. Build one production substrate authority tile — guarded authority landed
 

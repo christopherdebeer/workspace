@@ -2,6 +2,7 @@ import {
   buildCulvertBoreGeometry,
   buildCulvertHeadwallGeometry,
   buildProductionHydroFixture,
+  buildProductionRoadSurfaceGeometry,
   buildProductionSubstrateTile,
   buildRapidDetailField,
   buildRapidDetailMesh,
@@ -27,6 +28,7 @@ import {
   sampleHydroContactLayers,
   sampleProductionSubstrateTile,
   sampleSubstrate,
+  smoothProductionRoadSurfaceNormals,
   SubstrateShadowMonitor,
   VehicleWaterEvidence,
 } from './index';
@@ -594,6 +596,28 @@ export function runSubstrateSelfTest(): void {
   });
   assert(bridgeSection.seatedProfile.every((height) => height === 9),
   'a bridge cross-section keeps its structural grade line above terrain');
+  const roadSurface = buildProductionRoadSurfaceGeometry([{
+    rightA: [0, 0, 2, 0, 0],
+    rightB: [10, 0, 2, 0, 1],
+    leftA: [0, 0, -2, 1, 0],
+    leftB: [10, 0, -2, 1, 1],
+    color: [.2, .3, .4],
+    slip: [1, 2, 3, 4],
+    dirt: [.5, .6, .7],
+  }]);
+  assert(roadSurface.positions.length === 18
+    && roadSurface.uvs.length === 12
+    && roadSurface.slips.join(',') === '1,2,3,2,4,3',
+  'substrate road geometry owns the production bay triangle and attribute order');
+  assert(Array.from({ length: 6 }, (_, i) => roadSurface.normals[i * 3 + 1])
+    .every((normalY) => Math.abs(normalY - 1) < 1e-9),
+  'substrate road geometry emits upward face normals for a flat carriageway');
+  const seamPositions = new Float32Array([0, 0, 0, 0, 0, 0]);
+  const seamNormals = new Float32Array([0, 1, 0, .1, .995, 0]);
+  smoothProductionRoadSurfaceNormals(seamPositions, seamNormals);
+  assert(Math.abs(seamNormals[0] - seamNormals[3]) < 1e-9
+    && Math.abs(seamNormals[1] - seamNormals[4]) < 1e-9,
+  'substrate road geometry smooths coincident normals inside the production cone');
   const recordedDeck = resolveProductionCrossing({
     ...productionCrossingBase, roadLayer: 1, roadTags: { bridge: 'yes' }, structureOutcome: 'bridge-deck',
     deckAuthority: 'landmark-hint',

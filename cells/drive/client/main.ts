@@ -132,6 +132,11 @@ import {
   resolveProductionRoadStructureProfile,
 } from './substrate/road-profile';
 import {
+  buildProductionRoadSurfaceGeometry,
+  smoothProductionRoadSurfaceNormals,
+  type ProductionRoadSurfaceBay,
+} from './substrate/road-surface';
+import {
   buildProductionSubstrateTile,
   findProductionDriveWaterOverlaps,
   ProductionSubstrateStore,
@@ -17466,37 +17471,10 @@ function smoothSoupNormals(out: THREE.BufferGeometry): void {
   const pos = out.attributes.position as THREE.BufferAttribute | undefined;
   const nrm = out.attributes.normal as THREE.BufferAttribute | undefined;
   if (!pos || !nrm) return;
-  const pa = pos.array as Float32Array, na = nrm.array as Float32Array;
-  const groups = new Map<string, number[]>();
-  for (let i = 0; i < pos.count; i++) {
-    const k = `${Math.round(pa[i * 3] * 100)},${Math.round(pa[i * 3 + 1] * 100)},${Math.round(pa[i * 3 + 2] * 100)}`;
-    const g = groups.get(k);
-    if (g) g.push(i); else groups.set(k, [i]);
-  }
-  const COS = 0.75;
-  for (const g of groups.values()) {
-    if (g.length < 2) continue;
-    const used = new Uint8Array(g.length);
-    for (let s = 0; s < g.length; s++) {
-      if (used[s]) continue;
-      const i0 = g[s] * 3;
-      const members = [g[s]];
-      let sx = na[i0], sy = na[i0 + 1], sz = na[i0 + 2];
-      for (let t = s + 1; t < g.length; t++) {
-        if (used[t]) continue;
-        const j = g[t] * 3;
-        if (na[i0] * na[j] + na[i0 + 1] * na[j + 1] + na[i0 + 2] * na[j + 2] > COS) {
-          used[t] = 1;
-          members.push(g[t]);
-          sx += na[j]; sy += na[j + 1]; sz += na[j + 2];
-        }
-      }
-      if (members.length < 2) continue;
-      const l = Math.hypot(sx, sy, sz) || 1;
-      sx /= l; sy /= l; sz /= l;
-      for (const m of members) { na[m * 3] = sx; na[m * 3 + 1] = sy; na[m * 3 + 2] = sz; }
-    }
-  }
+  smoothProductionRoadSurfaceNormals(
+    pos.array as Float32Array,
+    nrm.array as Float32Array,
+  );
   nrm.needsUpdate = true;
 }
 function flushRibbons(): void {
@@ -18158,14 +18136,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const bx2 = dense[i + 1][0] - dense[i][0], bz2 = dense[i + 1][1] - dense[i][1];
     return ax2 * bz2 - az2 * bx2;
   };
-  const verts: number[] = [];
-  const uvs: number[] = [];
-  // Per-vertex tint: what the way is made of, or for a track the colour of the
-  // ground it is worn into. See `roadTint`.
-  const cols: number[] = [];
-  // Per-vertex slip strength, and the colour of what slipped. See SLIP_K.
-  const slips: number[] = [];
-  const dirts: number[] = [];
+  const surfaceBays: ProductionRoadSurfaceBay[] = [];
   // The road's THICKNESS. Two side faces hanging off the kerbs, closing the
   // gap between the carriageway and whatever the terrain mesh actually does
   // underneath it. Earth where the road is cut into the ground, concrete where
@@ -19086,26 +19057,20 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       seat(BR, 1); seat(BL, 1);
       if (!track) mouth(cropB, BR, BL, x0 - x1, z0 - z1, endPlane[1]);
     }
-    if (!hidden) {
-      verts.push(
-        AR[0], AR[1], AR[2], BR[0], BR[1], BR[2], AL[0], AL[1], AL[2],
-        BR[0], BR[1], BR[2], BL[0], BL[1], BL[2], AL[0], AL[1], AL[2],
-      );
-      uvs.push(AR[3], AR[4], BR[3], BR[4], AL[3], AL[4], BR[3], BR[4], BL[3], BL[4], AL[3], AL[4]);
-    }
     // A TRACK TAKES THE GROUND'S OWN COLOUR. Two ruts painted a fixed brown sat
     // on the hillside as a stripe of somebody else's palette; sampled from
     // `terrainPalette` at the rut itself, they read as the ground worn through
     // rather than as a decal over it — and the whole point of a track is that
     // it is the ground, just used.
     if (!hidden) {
+      let bayColor: [number, number, number];
       if (track) {
         const [tr, tg, tb] = terrainPalette(elev[i] + baseElev,
           Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0), x0, z0);
-        for (let k = 0; k < 6; k++) cols.push(tr * 1.06, tg * 0.99, tb * 0.9);
+        bayColor = [tr * 1.06, tg * 0.99, tb * 0.9];
       } else {
         const c = tint ?? [1, 1, 1];
-        for (let k = 0; k < 6; k++) cols.push(c[0], c[1], c[2]);
+        bayColor = [c[0], c[1], c[2]];
       }
       // ── how much has come down on this bay, corner by corner ──
       //
@@ -19157,15 +19122,21 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       };
       const sAR = slipOf(AR, 1), sAL = slipOf(AL, -1);
       const sBR = slipOf(BR, 1), sBL = slipOf(BL, -1);
-      // Same corner order the two triangles were pushed in.
-      slips.push(sAR, sBR, sAL, sBR, sBL, sAL);
       // WHAT COLOUR THE DIRT IS: the ground's own, at this bay, from the same
       // palette the hillside beside it is painted with. One lookup per bay —
       // what a track already pays — because a slip is one slide of one
       // hillside and does not need to change hue across four metres.
       const [dr, dg, db] = terrainPalette(elev[i] + baseElev,
         Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0), x0, z0);
-      for (let k = 0; k < 6; k++) dirts.push(dr, dg, db);
+      surfaceBays.push({
+        rightA: [AR[0], AR[1], AR[2], AR[3], AR[4]],
+        rightB: [BR[0], BR[1], BR[2], BR[3], BR[4]],
+        leftA: [AL[0], AL[1], AL[2], AL[3], AL[4]],
+        leftB: [BL[0], BL[1], BL[2], BL[3], BL[4]],
+        color: bayColor,
+        slip: [sAR, sBR, sAL, sBL],
+        dirt: [dr, dg, db],
+      });
     }
     if (drivable) {
       const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq, fd: fid, pb: pbranch,
@@ -19559,16 +19530,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
     pendingCropEnds.length = keep;
   }
-  if (!verts.length) return;
+  if (!surfaceBays.length) return;
+  const surface = buildProductionRoadSurfaceGeometry(surfaceBays);
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
-  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
-  if (cols.length === verts.length) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cols), 3));
-  if (slips.length * 3 === verts.length) {
-    geo.setAttribute('aSlip', new THREE.BufferAttribute(new Float32Array(slips), 1));
-    geo.setAttribute('aDirt', new THREE.BufferAttribute(new Float32Array(dirts), 3));
-  }
-  geo.computeVertexNormals();
+  geo.setAttribute('position', new THREE.BufferAttribute(surface.positions, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(surface.normals, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(surface.uvs, 2));
+  geo.setAttribute('color', new THREE.BufferAttribute(surface.colors, 3));
+  geo.setAttribute('aSlip', new THREE.BufferAttribute(surface.slips, 1));
+  geo.setAttribute('aDirt', new THREE.BufferAttribute(surface.dirts, 3));
   if (ribBatch) {
     // Any deck inside a tile batch: merged at flushRibbons, one draw call per
     // material per tile instead of one per way fragment. Draped decks group
@@ -19607,11 +19577,11 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // the road back on the hillside the profile exists to cut through.
   if (!flat && !ribBatch) {
     let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
-    for (let i = 0; i < verts.length; i += 3) {
-      if (verts[i] < x0) x0 = verts[i];
-      if (verts[i] > x1) x1 = verts[i];
-      if (verts[i + 2] < z0) z0 = verts[i + 2];
-      if (verts[i + 2] > z1) z1 = verts[i + 2];
+    for (let i = 0; i < surface.positions.length; i += 3) {
+      if (surface.positions[i] < x0) x0 = surface.positions[i];
+      if (surface.positions[i] > x1) x1 = surface.positions[i];
+      if (surface.positions[i + 2] < z0) z0 = surface.positions[i + 2];
+      if (surface.positions[i + 2] > z1) z1 = surface.positions[i + 2];
     }
     { const d = { geo, lift, x0, z0, x1, z1 }; drapedWays.push(d); indexDrape(d); }
   }

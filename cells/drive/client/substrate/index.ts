@@ -27,6 +27,13 @@ export {
   type ProductionRoadStructureProfileInput,
 } from './road-profile';
 export {
+  buildProductionRoadSurfaceGeometry,
+  smoothProductionRoadSurfaceNormals,
+  type ProductionRoadSurfaceBay,
+  type ProductionRoadSurfaceCorner,
+  type ProductionRoadSurfaceGeometry,
+} from './road-surface';
+export {
   pointInProductionCrossingFootprint,
   productionCrossingFootprint,
   ProductionCrossingRegistry,
