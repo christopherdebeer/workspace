@@ -40,6 +40,8 @@ import {
   navigableClearance,
   resolveProductionDeck,
   sampleHydroContactLayers,
+  sampleProductionRoadBenchProfile,
+  sampleProductionRoadBenchStation,
   sampleProductionRoadHostPlane,
   sampleProductionSubstrateTile,
   sampleSubstrate,
@@ -868,6 +870,28 @@ export function runSubstrateSelfTest(): void {
     && clippedBatter.drawable
     && Math.abs(clippedBatter.reachedM - .85) < 1e-9,
   'substrate road batter clips to the last quarter-metre clear of another road');
+  const benchSamples = sampleProductionRoadBenchProfile(
+    [[0, 0], [10, 0]],
+    (x, z) => x + z,
+  );
+  assert(benchSamples.sampleCount === 22
+    && benchSamples.candidates.length === 2
+    && benchSamples.candidates[0][0] === -45
+    && benchSamples.candidates[0][5] === 0
+    && benchSamples.candidates[1][10] === 55,
+  'substrate road profile owns production lateral bench sample placement');
+  assert(benchSamples.chaotic,
+  'substrate road profile classifies a cross-section with over 18m relief as chaotic');
+  const benchStation = sampleProductionRoadBenchStation(
+    [[0, 0], [10, 0]],
+    1,
+    (x, z) => x + z,
+  );
+  assert(benchStation.sampleCount === 11
+    && benchStation.candidates[0] === -35
+    && benchStation.candidates[10] === 55
+    && benchStation.chaotic,
+  'substrate road profile exposes the production single-station sampling policy');
   const kerbs = resolveProductionRoadKerbGeometry({
     stations: [[0, 0], [10, 0], [10, 10]],
     halfWidthM: 2,

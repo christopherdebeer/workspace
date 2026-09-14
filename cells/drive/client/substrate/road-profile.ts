@@ -1,4 +1,10 @@
-import { ruleGrade } from '../roadprofile';
+import {
+  BENCH_C,
+  BENCH_K,
+  benchFlat,
+  latCands,
+  ruleGrade,
+} from '../roadprofile';
 
 export type ProductionRoadStructureMode = 'none' | 'auto' | 'tunnel' | 'bridge';
 
@@ -37,6 +43,20 @@ export interface ProductionAlignedRoadProfile {
   profile: number[];
   branch: 1 | 2 | 3 | 4 | 5 | 6;
   gradeLimit: number;
+}
+
+export interface ProductionRoadBenchSamples {
+  candidates: number[][];
+  bench: number[];
+  chaotic: boolean;
+  sampleCount: number;
+}
+
+export interface ProductionRoadBenchStation {
+  candidates: number[];
+  bench: number;
+  chaotic: boolean;
+  sampleCount: number;
 }
 
 export interface ProductionEngineeredRoadProfileInput {
@@ -129,6 +149,48 @@ export interface ProductionRoadHostPlane {
 
 const clamp = (value: number, lo: number, hi: number): number =>
   Math.max(lo, Math.min(hi, value));
+
+/**
+ * Sample the production lateral bench fan once for an entire road fragment.
+ *
+ * The adapter supplies terrain heights; substrate owns sample placement,
+ * standalone bench selection and the cross-section chaos classification used
+ * by both crumb deferral and aligned-profile branch selection.
+ */
+export function sampleProductionRoadBenchStation(
+  stations: readonly (readonly [x: number, z: number])[],
+  station: number,
+  sampleHeight: (x: number, z: number) => number,
+): ProductionRoadBenchStation {
+  const dense = stations as Array<[number, number]>;
+  const candidates = latCands(dense, station, sampleHeight);
+  const freedom = clamp(
+    Math.abs(candidates[BENCH_K - 1] - candidates[0]) / 18,
+    0,
+    1,
+  );
+  return {
+    candidates,
+    bench: candidates[BENCH_C]
+      + (benchFlat(candidates) - candidates[BENCH_C]) * freedom,
+    chaotic: Math.abs(candidates[BENCH_K - 1] - candidates[0]) > 18,
+    sampleCount: BENCH_K,
+  };
+}
+
+export function sampleProductionRoadBenchProfile(
+  stations: readonly (readonly [x: number, z: number])[],
+  sampleHeight: (x: number, z: number) => number,
+): ProductionRoadBenchSamples {
+  const sampled = stations.map((_, station) =>
+    sampleProductionRoadBenchStation(stations, station, sampleHeight));
+  return {
+    candidates: sampled.map((value) => value.candidates),
+    bench: sampled.map((value) => value.bench),
+    chaotic: sampled.some((value) => value.chaotic),
+    sampleCount: sampled.reduce((total, value) => total + value.sampleCount, 0),
+  };
+}
 
 /**
  * Fit the local host carriageway plane used by junction warp and mouth seats.

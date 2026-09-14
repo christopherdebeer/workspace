@@ -129,8 +129,11 @@ pass and endpoint centre/camber welds;
 resolved host-road plane without crossing held stations;
 `resolveProductionRoadHostPlane` owns the three-sample along/cross gradient
 fit and clamps before that plane can extrapolate down a side road. The legacy road
-builder supplies the terrain/bench candidates and streamed
-water/deck/neighbour callbacks, then consumes the resulting profile.
+builder supplies the terrain sampler and streamed water/deck/neighbour
+callbacks, then consumes the resulting profile.
+`sampleProductionRoadBenchProfile` owns lateral sample placement, standalone
+bench selection and cross-section chaos classification, producing one shared
+candidate matrix for chain planning and per-fragment branch authority.
 `buildProductionRoadSurfaceGeometry`
 owns the renderer-neutral carriageway triangles, UV/paint attributes, face
 normals and seam-normal smoothing from the final cropped bay corners;
@@ -153,8 +156,8 @@ callbacks plus queue timing.
 planning and the complete tower, cable, arch, truss and lower-deck arrays.
 The live assembly context only groups streamed fragments, resolves mapped or
 landmark stations, samples foundation ground and publishes the resulting mesh.
-The remaining crossing migration is to move the terrain/bench sampling inputs
-into tile construction, then emit them from the substrate tile itself.
+The remaining crossing migration is to carry those solved road authoring
+inputs through tile construction and emit them from the substrate tile itself.
 
 ### 3. Build one production substrate authority tile — guarded authority landed
 
@@ -415,7 +418,7 @@ the failed comparison can be reproduced.
   arrays; host-road crop hierarchy and kerb intersections are substrate-owned
   too, as are the local host-plane fit and its bounded junction fade. The
   remaining generation migration is contextual rather than another
-  road-profile authority: move terrain/bench sampling plus the remaining
+  road-profile authority: carry solved road authoring plus the remaining
   terrain/hydro reach solves into tile construction, then retire the legacy builder entry
   points and road drape registry after rollback observation. Common apron
   faces, piers, arch spandrels, parapets, studs and hazard signs are already

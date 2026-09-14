@@ -65,10 +65,7 @@ import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
 import { RoadSolver, densifyPts, layerOf } from './roadsolve';
-import {
-  BENCH_OFFS, BENCH_K, BENCH_C, benchFlat, latCands,
-  solveChain as solveProfile,
-} from './roadprofile';
+import { solveChain as solveProfile } from './roadprofile';
 import { RoadProfileWorker } from './roadprofile-worker';
 import { inlandComponents, inlandMask, maskSignature } from './inland-water';
 import { pointInPolygon } from './hydro/geometry';
@@ -138,6 +135,8 @@ import {
   resolveProductionRoadHostPlane,
   resolveProductionRoadJunctionWarp,
   resolveProductionRoadStructureProfile,
+  sampleProductionRoadBenchProfile,
+  sampleProductionRoadBenchStation,
   sampleProductionRoadHostPlane,
 } from './substrate/road-profile';
 import {
@@ -16927,16 +16926,10 @@ function dirAnchorAt(x: number, z: number, tx: number, tz: number): [number, num
 // where it was sitting. SolveEnv had already flagged it as "numerically
 // delicate and worth moving on its own, later, with its own tests".
 //
-// Only this shim stays, because the candidates are the one part that samples
-// terrain and `sampleHeight` lives here.
-function latCandsFor(dense: Array<[number, number]>, i: number): number[] {
-  return latCands(dense, i, sampleHeight);
-}
 function solveChainLocal(dense: Array<[number, number]>, maxGrade: number, p0: number | null,
   p1: number | null, pins?: Array<number | null>): number[] {
-  const cand: number[][] = [];
-  for (let i = 0; i < dense.length; i++) cand.push(latCandsFor(dense, i));
-  return solveProfile(dense, cand, maxGrade, p0, p1, pins);
+  const sampled = sampleProductionRoadBenchProfile(dense, sampleHeight);
+  return solveProfile(dense, sampled.candidates, maxGrade, p0, p1, pins);
 }
 const roadProfileWorker = new RoadProfileWorker();
 const roadPlanCost = { samples: 0, sampleMs: 0, syncJobs: 0, syncMs: 0, fallbacks: 0 };
@@ -16948,9 +16941,9 @@ async function solveChainPlanned(
   p1: number | null, pins?: Array<number | null>,
 ): Promise<number[]> {
   const t0 = performance.now();
-  const cand: number[][] = [];
-  for (let i = 0; i < dense.length; i++) cand.push(latCandsFor(dense, i));
-  roadPlanCost.samples += dense.length * BENCH_K;
+  const sampled = sampleProductionRoadBenchProfile(dense, sampleHeight);
+  const cand = sampled.candidates;
+  roadPlanCost.samples += sampled.sampleCount;
   roadPlanCost.sampleMs += performance.now() - t0;
   if (dense.length < ROAD_WORKER_MIN) {
     const ts = performance.now();
@@ -17552,22 +17545,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       if (seen < 3) { crumbDefer.set(dkey, seen + 1); unbuilt++; return; }
     }
   }
-  // ±2 samples of the SOURCE's real resolution, not the tile's: high-zoom
-  // terrarium here is oversampled ~30m SRTM, so ±8m candidates were mostly
-  // re-reading the same underlying measurement.
-  const K = BENCH_K;
-  const latCands = (i: number): number[] => latCandsFor(dense, i);
-  /** The bench estimate for one station standing alone: the centreline where
-   *  the ground is calm; where the cross-section turns to cliff, the FLATTEST
-   *  candidate — the shelf. Not the lowest: on a coast road ±24m spans the
-   *  rock above AND the sea slope below, and "lowest" dove 80m off the road.
-   */
-  const flatOf = benchFlat;
-  const benchAt = (i: number): number => {
-    const cs = latCands(i);
-    const f = clamp(Math.abs(cs[K - 1] - cs[0]) / 18, 0, 1);
-    return cs[BENCH_C] + (flatOf(cs) - cs[BENCH_C]) * f;
-  };
+  // Substrate owns the lateral fan, standalone bench and chaos classification.
+  // Keep the original per-decision sampling cadence: it is part of the build
+  // budget and therefore of when a streamed fixture is considered settled.
+  const benchSample = (i: number) =>
+    sampleProductionRoadBenchStation(dense, i, sampleHeight);
+  const latCands = (i: number): number[] => benchSample(i).candidates;
+  const benchAt = (i: number): number => benchSample(i).bench;
   // THE WHOLE-WAY SOLVE, when renderWays has one: hints are the chain's
   // profile — continuous across every fragment of this road in the tile —
   // and a fragment covered by them takes them verbatim instead of solving
@@ -17669,21 +17653,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const seen = crumbDefer.get(dkey) ?? 0;
     if (seen < 3) {
       let chaotic = false;
-      for (let i = 0; i < n && !chaotic; i++) {
-        const cs = latCands(i);
-        chaotic = Math.abs(cs[K - 1] - cs[0]) > 18;
+      for (let i = 0; i < n && !chaotic; i++) chaotic = benchSample(i).chaotic;
+      if (chaotic) {
+        crumbDefer.set(dkey, seen + 1);
+        unbuilt++;
+        return;
       }
-      if (chaotic) { crumbDefer.set(dkey, seen + 1); unbuilt++; return; }
     }
   }
   // Terrain sampling remains an adapter. Substrate owns the branch authority:
   // hint interpolation, crumb continuity, automatic DP selection, portal
   // bench anchors and the first ruling-grade pass.
   const chaoticHere = (): boolean => {
-    for (let i = 0; i < n; i++) {
-      const cs = latCands(i);
-      if (Math.abs(cs[K - 1] - cs[0]) > 18) return true;
-    }
+    for (let i = 0; i < n; i++) if (benchSample(i).chaotic) return true;
     return false;
   };
   const aligned = resolveProductionAlignedRoadProfile({
