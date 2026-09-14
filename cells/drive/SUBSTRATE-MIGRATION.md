@@ -119,11 +119,13 @@ sparse road stations and applies the two-pass ruling-grade cone before any
 geometry exists. `resolveProductionRoadStructureProfile` also owns automatic
 tunnel-run detection and tunnel chords;
 `resolveProductionEngineeredRoadProfile` owns the wide grade line and the
-road/rail deviation-budget clamp. The legacy road builder supplies the aligned
-bench plus streamed water/deck callbacks and consumes the resulting profile.
-The remaining crossing migration is to move the aligned bench inputs, final
-cross-section/weld solve and geometry authoring into tile construction, then
-emit it from the substrate tile itself.
+road/rail deviation-budget clamp; `resolveProductionRoadCrossSection` owns
+kerb seating, designed crossfall/superelevation, the post-seat ruling-grade
+pass and endpoint centre/camber welds. The legacy road builder supplies the
+aligned bench, terrain samples and streamed water/deck/neighbour callbacks,
+then consumes the resulting profile. The remaining crossing migration is to
+move the aligned bench inputs and geometry authoring into tile construction,
+then emit it from the substrate tile itself.
 
 ### 3. Build one production substrate authority tile — guarded authority landed
 

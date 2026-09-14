@@ -16,9 +16,12 @@ export {
 } from './shadow';
 export {
   resolveProductionEngineeredRoadProfile,
+  resolveProductionRoadCrossSection,
   resolveProductionRoadStructureProfile,
   type ProductionEngineeredRoadProfile,
   type ProductionEngineeredRoadProfileInput,
+  type ProductionRoadCrossSection,
+  type ProductionRoadCrossSectionInput,
   type ProductionRoadStructureMode,
   type ProductionRoadStructureProfile,
   type ProductionRoadStructureProfileInput,

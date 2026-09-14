@@ -1,3 +1,5 @@
+import { ruleGrade } from '../roadprofile';
+
 export type ProductionRoadStructureMode = 'none' | 'auto' | 'tunnel' | 'bridge';
 
 export interface ProductionRoadStructureProfileInput {
@@ -27,6 +29,39 @@ export interface ProductionEngineeredRoadProfileInput {
 export interface ProductionEngineeredRoadProfile {
   gradeLineProfile: number[];
   profile: number[];
+}
+
+export interface ProductionRoadCrossSectionInput {
+  stations: readonly (readonly [x: number, z: number])[];
+  profile: readonly number[];
+  centreGround: readonly number[];
+  rightGround: readonly number[];
+  leftGround: readonly number[];
+  mode: Exclude<ProductionRoadStructureMode, 'none'>;
+  width: number;
+  heldStations?: ArrayLike<number>;
+  seatHeldStations?: ArrayLike<number>;
+  gradeLimit: number;
+  endWeld: boolean;
+  weldStart?: number | null;
+  weldEnd?: number | null;
+  tiltStart?: number | null;
+  tiltEnd?: number | null;
+}
+
+export interface ProductionRoadCrossSection {
+  seatedProfile: number[];
+  smoothedProfile: number[];
+  reruledProfile: number[];
+  profile: number[];
+  tilt: number[];
+  unweldedTilt: number[];
+  centreWeldStart: number;
+  centreWeldEnd: number;
+  tiltWeldStart: number;
+  tiltWeldEnd: number;
+  preWeldStart: number;
+  preWeldEnd: number;
 }
 
 const clamp = (value: number, lo: number, hi: number): number =>
@@ -207,4 +242,211 @@ export function resolveProductionEngineeredRoadProfile(
     }
   }
   return { gradeLineProfile, profile };
+}
+
+/**
+ * Construct the final engineered road plane from its longitudinal profile.
+ *
+ * Terrain sampling and neighbour lookup stay at the tile boundary; this
+ * arithmetic owns seating the two kerbs, designed crossfall/superelevation,
+ * the post-seat ruling-grade pass and the final centre/tilt endpoint weld.
+ */
+export function resolveProductionRoadCrossSection(
+  input: ProductionRoadCrossSectionInput,
+): ProductionRoadCrossSection {
+  const n = input.profile.length;
+  for (const [name, values] of [
+    ['stations', input.stations],
+    ['centre ground', input.centreGround],
+    ['right ground', input.rightGround],
+    ['left ground', input.leftGround],
+  ] as const) {
+    if (values.length !== n) {
+      throw new Error(`road cross-section ${name} and profile must have matching lengths`);
+    }
+  }
+  if (input.heldStations && input.heldStations.length !== n) {
+    throw new Error('road cross-section held stations and profile must have matching lengths');
+  }
+  if (input.seatHeldStations && input.seatHeldStations.length !== n) {
+    throw new Error('road cross-section seat-held stations and profile must have matching lengths');
+  }
+
+  const profile = [...input.profile];
+  const profileBeforeSeat = [...profile];
+  const tilt = new Array<number>(n).fill(0);
+  const edgeR = new Array<number>(n);
+  const edgeL = new Array<number>(n);
+  const HUG_LO = 0.35;
+  const HUG_HI = 1.9;
+  const MAX_FALL = 0.85;
+  const CROSSFALL = 0.025;
+  const SUPER_MAX = 0.06;
+  const SUPER_K = 20;
+
+  const bendAt = (station: number): number => {
+    if (station <= 0 || station >= n - 1) return 0;
+    const ax = input.stations[station][0] - input.stations[station - 1][0];
+    const az = input.stations[station][1] - input.stations[station - 1][1];
+    const bx = input.stations[station + 1][0] - input.stations[station][0];
+    const bz = input.stations[station + 1][1] - input.stations[station][1];
+    const la = Math.hypot(ax, az) || 1;
+    const lb = Math.hypot(bx, bz) || 1;
+    return Math.acos(clamp((ax * bx + az * bz) / (la * lb), -1, 1));
+  };
+  const bendSign = (station: number): number => {
+    if (station <= 0 || station >= n - 1) return 0;
+    const ax = input.stations[station][0] - input.stations[station - 1][0];
+    const az = input.stations[station][1] - input.stations[station - 1][1];
+    const bx = input.stations[station + 1][0] - input.stations[station][0];
+    const bz = input.stations[station + 1][1] - input.stations[station][1];
+    return ax * bz - az * bx;
+  };
+
+  for (let station = 0; station < n; station++) {
+    const right = input.rightGround[station];
+    const left = input.leftGround[station];
+    const hug = input.mode === 'bridge'
+      ? 0
+      : 1 - clamp(
+        (profile[station]
+          - Math.min(left, right, input.centreGround[station])
+          - HUG_LO)
+          / (HUG_HI - HUG_LO),
+        0,
+        1,
+      );
+    const held = Boolean(
+      input.heldStations?.[station] || input.seatHeldStations?.[station],
+    );
+    const seat = held
+      ? profile[station]
+      : profile[station]
+        + (Math.min(profile[station], (right + left) * 0.5) - profile[station]) * hug;
+    const dTheta = bendAt(station);
+    const lo = Math.max(0, station - 1);
+    const hi = Math.min(n - 1, station + 1);
+    const ds = Math.max(1, Math.hypot(
+      input.stations[hi][0] - input.stations[lo][0],
+      input.stations[hi][1] - input.stations[lo][1],
+    ) * 0.5);
+    const elevation = clamp((dTheta / ds) * SUPER_K, 0, SUPER_MAX);
+    const bank = -Math.sign(bendSign(station)) * elevation;
+    const drain = CROSSFALL * (1 - clamp(elevation / CROSSFALL, 0, 1));
+    const half = clamp(
+      (bank + drain) * (input.width / 2),
+      -MAX_FALL,
+      MAX_FALL,
+    );
+    edgeR[station] = seat + half;
+    edgeL[station] = seat - half;
+  }
+  const seatedProfile = edgeR.map((right, station) =>
+    (right + edgeL[station]) * 0.5);
+
+  for (let pass = 0; pass < 3; pass++) {
+    const right = [...edgeR];
+    const left = [...edgeL];
+    for (let station = 1; station < n - 1; station++) {
+      if (input.heldStations?.[station]) continue;
+      edgeR[station] =
+        (right[station - 1] + right[station] * 2 + right[station + 1]) * 0.25;
+      edgeL[station] =
+        (left[station - 1] + left[station] * 2 + left[station + 1]) * 0.25;
+    }
+  }
+  for (let station = 0; station < n; station++) {
+    profile[station] = (edgeR[station] + edgeL[station]) * 0.5;
+    tilt[station] = (edgeR[station] - edgeL[station]) * 0.5;
+    const over = profile[station] - profileBeforeSeat[station];
+    if (over > 0) {
+      profile[station] -= over;
+      edgeR[station] -= over;
+      edgeL[station] -= over;
+    }
+  }
+  const smoothedProfile = [...profile];
+
+  const beforeRuling = [...profile];
+  const gradeHeld = Array.from({ length: n }, (_, station) =>
+    input.heldStations?.[station] || input.seatHeldStations?.[station]
+      ? 1
+      : null);
+  ruleGrade(input.stations as Array<[number, number]>, profile, input.gradeLimit, gradeHeld);
+  for (let station = 0; station < n; station++) {
+    const dy = profile[station] - beforeRuling[station];
+    edgeR[station] += dy;
+    edgeL[station] += dy;
+  }
+  const reruledProfile = [...profile];
+  const unweldedTilt = [...tilt];
+
+  const centreWeldStart =
+    input.weldStart == null || !input.endWeld ? 0 : input.weldStart - profile[0];
+  const centreWeldEnd =
+    input.weldEnd == null || !input.endWeld ? 0 : input.weldEnd - profile[n - 1];
+  const preWeldStart = profile[0];
+  const preWeldEnd = profile[n - 1];
+  const tiltWeldStart =
+    input.endWeld && input.tiltStart != null ? input.tiltStart - tilt[0] : 0;
+  const tiltWeldEnd =
+    input.endWeld && input.tiltEnd != null ? input.tiltEnd - tilt[n - 1] : 0;
+
+  if (centreWeldStart !== 0
+    || centreWeldEnd !== 0
+    || tiltWeldStart !== 0
+    || tiltWeldEnd !== 0) {
+    const arc = new Array<number>(n).fill(0);
+    for (let station = 1; station < n; station++) {
+      arc[station] = arc[station - 1] + Math.hypot(
+        input.stations[station][0] - input.stations[station - 1][0],
+        input.stations[station][1] - input.stations[station - 1][1],
+      );
+    }
+    const total = arc[n - 1] || 1;
+    let firstHeld = -1;
+    let lastHeld = -1;
+    for (let station = 0; station < n; station++) {
+      if (!input.heldStations?.[station]) continue;
+      if (firstHeld < 0) firstHeld = station;
+      lastHeld = station;
+    }
+    for (let station = 0; station < n; station++) {
+      let startFade: number;
+      let endFade: number;
+      if (firstHeld < 0) {
+        const fraction = arc[station] / total;
+        startFade = 1 - fraction;
+        endFade = fraction;
+      } else {
+        startFade = firstHeld === 0
+          ? (station === 0 ? 1 : 0)
+          : station <= firstHeld ? 1 - arc[station] / arc[firstHeld] : 0;
+        endFade = lastHeld === n - 1
+          ? (station === n - 1 ? 1 : 0)
+          : station >= lastHeld
+            ? (arc[station] - arc[lastHeld]) / (total - arc[lastHeld])
+            : 0;
+      }
+      const dy = centreWeldStart * startFade + centreWeldEnd * endFade;
+      const dt = tiltWeldStart * startFade + tiltWeldEnd * endFade;
+      profile[station] += dy;
+      tilt[station] += dt;
+    }
+  }
+
+  return {
+    seatedProfile,
+    smoothedProfile,
+    reruledProfile,
+    profile,
+    tilt,
+    unweldedTilt,
+    centreWeldStart,
+    centreWeldEnd,
+    tiltWeldStart,
+    tiltWeldEnd,
+    preWeldStart,
+    preWeldEnd,
+  };
 }

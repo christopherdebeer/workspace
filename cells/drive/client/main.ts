@@ -128,6 +128,7 @@ import {
 } from './substrate/crossing-authority';
 import {
   resolveProductionEngineeredRoadProfile,
+  resolveProductionRoadCrossSection,
   resolveProductionRoadStructureProfile,
 } from './substrate/road-profile';
 import {
@@ -18077,214 +18078,55 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     stage('2c-devclamp', prof);
   }
   const flat = mode !== 'none'; // profiled roads get a flat cross-section
-  // ── hug the ground where there is nothing to bridge ────────────────
-  // A profiled road took ONE height for the whole cross-section: the
-  // centreline's. That is right for a viaduct and wrong for the other ninety
-  // per cent, because on any cross-slope the downhill kerb then floats — a 7m
-  // carriageway on a 15% side-slope stands half a metre clear of the hill it is
-  // supposedly cut into, which is exactly the gap you can see.
-  //
-  // So the deck now measures the ground under BOTH kerbs and does two things
-  // with it: it drops the centreline toward the mean of the two, and it tilts
-  // the deck to the cross-fall. It stays a PLANE either way — the carriageway
-  // never gets bumpy, it just stops pretending the hillside is level.
-  //
-  // Both are scaled by how much daylight is under the run, so the behaviour
-  // fades out exactly where it should: a road lying on the ground hugs it
-  // completely, an embankment half-commits, and a bridge or a tagged viaduct
-  // keeps its dead-flat deck and its clear span.
-  // Declared above the deck tilt because the designed superelevation reads
-  // them: the roll comes from how hard the road TURNS, not from the hillside.
-  /** Heading change at dense point `i`, in radians — how hard the road turns. */
-  const bendAt = (i: number): number => {
-    if (i <= 0 || i >= n - 1) return 0;
-    const ax2 = dense[i][0] - dense[i - 1][0], az2 = dense[i][1] - dense[i - 1][1];
-    const bx2 = dense[i + 1][0] - dense[i][0], bz2 = dense[i + 1][1] - dense[i][1];
-    const la = Math.hypot(ax2, az2) || 1, lb = Math.hypot(bx2, bz2) || 1;
-    return Math.acos(clamp((ax2 * bx2 + az2 * bz2) / (la * lb), -1, 1));
-  };
-  /** WHICH WAY it turns: the cross product's sign. The inside of the bend is
-   *  the `+n` side when this is positive, so the outside — where the sign goes,
-   *  and where your lights sweep as you turn in — is the negation. */
-  const bendSign = (i: number): number => {
-    if (i <= 0 || i >= n - 1) return 0;
-    const ax2 = dense[i][0] - dense[i - 1][0], az2 = dense[i][1] - dense[i - 1][1];
-    const bx2 = dense[i + 1][0] - dense[i][0], bz2 = dense[i + 1][1] - dense[i][1];
-    return ax2 * bz2 - az2 * bx2;
-  };
-
-  const tilt = new Array<number>(n).fill(0);
-  if (flat) {
-    const HUG_LO = 0.35;      // daylight below this and the deck is simply on the ground
-    const HUG_HI = 1.9;       // above this it is a structure and holds its line
-    // A backstop only, now that the roll is designed rather than sampled: the
-    // designed terms cannot reach it (SUPER_MAX on the widest carriageway is
-    // well inside it), and it is kept so a freak `width` cannot produce a wall.
-    const MAX_FALL = 0.85;    // metres of half-width drop — a cambered road, not a wall
-    const CROSSFALL = 0.025;  // 2.5% — the standard camber that sheds water
-    const SUPER_MAX = 0.06;   // …and the ceiling on banking, near real practice
-    const SUPER_K = 20;
-    // Curvature (rad/m) to superelevation. 1/500m radius earns 4%, 1/250 hits
-    // the ceiling — gentle enough that an ordinary sweeping bend is not a
-    // wall of death and firm enough to be felt through a hairpin.
-    // Each KERB is solved for directly, rather than deriving a centreline and a
-    // tilt and hoping the two land on the ground. Deriving them was the version
-    // that failed: "never raise the deck" and "put each kerb on its own ground"
-    // are different statements once the centreline stops being the mean of the
-    // two, and the difference showed up as a Chapman's Peak that got worse, not
-    // better. Solve the kerbs, then read the centreline and cross-fall back off
-    // them — those are now definitions rather than assumptions.
-    const edgeR = new Array<number>(n);
-    const edgeL = new Array<number>(n);
-    const profRaw = prof.slice();
+  let tilt = new Array<number>(n).fill(0);
+  if (mode !== 'none') {
+    // Substrate owns the final road plane. The legacy builder is now only the
+    // adapter for terrain samples, neighbour anchors and diagnostic recording.
+    const rightGround = new Array<number>(n);
+    const leftGround = new Array<number>(n);
     for (let i = 0; i < n; i++) {
       const [x, z] = dense[i];
-      const [ax2, az2] = dense[Math.max(0, i - 1)], [bx2, bz2] = dense[Math.min(n - 1, i + 1)];
+      const [ax2, az2] = dense[Math.max(0, i - 1)];
+      const [bx2, bz2] = dense[Math.min(n - 1, i + 1)];
       const tx = bx2 - ax2, tz = bz2 - az2, tl = Math.hypot(tx, tz) || 1;
       const ox = (-tz / tl) * (width / 2), oz = (tx / tl) * (width / 2);
-      const tR = sampleHeight(x + ox, z + oz), tL = sampleHeight(x - ox, z - oz);
-      const hug = mode === 'bridge'
-        ? 0
-        : 1 - clamp((prof[i] - Math.min(tL, tR, elev[i]) - HUG_LO) / (HUG_HI - HUG_LO), 0, 1);
-      // SEAT ON THE MEAN, TILT BY THE DIFFERENCE — never above the line the
-      // solver ruled.
-      //
-      // The rule here used to be ONLY EVER DOWN, per kerb: each edge was pulled
-      // down onto its own ground and never raised, and the centreline was then
-      // re-read as the mean of the two. That is not neutral. On any ground with
-      // cross-section noise the low kerb pulls and the high one cannot push
-      // back, so the deck sinks by about half the one-sided deviation at every
-      // station — and nothing ever lifts it again. Measured at Noordhoek: the
-      // deck ran a median 0.14m BELOW the field at its own centreline and 1.8m
-      // below at worst, which is ground the corridor carve then has to excavate
-      // out from under a road that was never above it. 15.2% of carve samples
-      // had real terrain over the deck; only 0.3% were mesh artefact. The
-      // digging was honest, the elevation it was digging to was not.
-      //
-      // Seating the SECTION on the mean of its two kerbs and taking the tilt
-      // from their difference puts each kerb on its own ground exactly when the
-      // ground is planar across the width — which is the flat and gently
-      // cambered case, i.e. most roads — so there is nothing left to cut. The
-      // failure the old rule was written against (a coast road lifted into the
-      // air, kerb gaps over half a metre going 16 → 30 at Big Sur) came from
-      // pushing to the mean UNCONDITIONALLY. Two things prevent it now: the
-      // seat is clamped at `prof`, so a section whose ground averages above the
-      // road stays in its cutting rather than climbing out of it, and `hug`
-      // still fades the whole thing to zero over any drop worth bridging, which
-      // is precisely the coastal case.
-      const seat = held[i] || seatHold[i] ? prof[i] : prof[i] + (Math.min(prof[i], (tR + tL) * 0.5) - prof[i]) * hug;
-      // ── THE DECK'S ROLL IS DESIGNED, NOT SAMPLED ──
-      //
-      // This used to be `(tR - tL) * 0.5 * hug`, capped at MAX_FALL: the
-      // carriageway simply took the tilt of the hillside under it. At the cap
-      // that is 1.7m edge to edge, about 23% across a 7.5m road, and even well
-      // short of the cap it means the deck rolls with every wobble in a
-      // heightfield sampled at 9.5m/px. Roads are not built that way. A
-      // carriageway is a designed surface: a small constant crossfall to shed
-      // water, and superelevation on a bend, banked INTO the turn — and the
-      // hillside's job is the cut and the fill either side of it, which the
-      // apron and the batter already do.
-      //
-      // The centreline still SEATS on its ground (above), so the road keeps
-      // sitting where the terrain says. Only the roll stops being terrain's to
-      // decide.
-      const dTheta = bendAt(i);
-      const ds = Math.max(1, Math.hypot(
-        dense[Math.min(n - 1, i + 1)][0] - dense[Math.max(0, i - 1)][0],
-        dense[Math.min(n - 1, i + 1)][1] - dense[Math.max(0, i - 1)][1]) * 0.5);
-      // Curvature to superelevation. Saturates at SUPER_MAX, which is roughly
-      // where real practice stops (7% is a common ceiling; anything more and a
-      // stopped vehicle starts to slide).
-      const e = clamp((dTheta / ds) * SUPER_K, 0, SUPER_MAX);
-      // Banked into the bend: bendSign > 0 puts the inside on the +n side, and
-      // the inside of a banked curve is the LOW edge.
-      const bank = -Math.sign(bendSign(i)) * e;
-      // On a superelevated curve the whole width takes the bank, so the
-      // drainage crossfall fades out as the bank comes in rather than adding
-      // to it and leaving a kink where the bend starts.
-      const drain = CROSSFALL * (1 - clamp(e / CROSSFALL, 0, 1));
-      const half = clamp((bank + drain) * (width / 2), -MAX_FALL, MAX_FALL);
-      edgeR[i] = seat + half;
-      edgeL[i] = seat - half;
+      rightGround[i] = sampleHeight(x + ox, z + oz);
+      leftGround[i] = sampleHeight(x - ox, z - oz);
     }
-    // Smoothed along the way before use. The heightfield is noisy at 9.5m/px
-    // and a deck taken straight from it would ripple; three passes of a 1-2-1
-    // kernel keep the grade a road could actually have been built to.
-    stage('3-seated', dense.map((_, i) => (edgeR[i] + edgeL[i]) * 0.5));
-    for (let pass = 0; pass < 3; pass++) {
-      const a = edgeR.slice(), b = edgeL.slice();
-      for (let i = 1; i < n - 1; i++) {
-        if (held[i]) continue;
-        edgeR[i] = (a[i - 1] + a[i] * 2 + a[i + 1]) * 0.25;
-        edgeL[i] = (b[i - 1] + b[i] * 2 + b[i + 1]) * 0.25;
-      }
-    }
-    // WHAT THE DECK ACTUALLY ROLLS, recorded after the smoothing that finalises
-    // the two kerbs and before anything downstream reads them. The ribbon is
-    // built straight from these two arrays, so this is the deck plane itself.
-    for (let i = 0; i < n; i++) {
-      if (!Number.isFinite(edgeR[i]) || !Number.isFinite(edgeL[i])) continue;
-      rollLog[rollAt++ % rollLog.length] = Math.abs(edgeR[i] - edgeL[i]) / Math.max(1, width);
-    }
-    // Nothing ends up higher than the road the profile described — but the
-    // thing held to that promise is the CENTRELINE, not each kerb. Capping the
-    // edges individually is what the old down-only rule implied, and under the
-    // new seat it would shear the high side of every cross-fall back to the
-    // centreline and hand back exactly the sink this was written to remove: a
-    // road tilted into a hillside has its uphill kerb above its own centreline
-    // by construction, and that kerb is sitting on real ground.
-    for (let i = 0; i < n; i++) {
-      prof[i] = (edgeR[i] + edgeL[i]) * 0.5;
-      tilt[i] = (edgeR[i] - edgeL[i]) * 0.5;
-      const over = prof[i] - profRaw[i];
-      if (over > 0) { prof[i] -= over; edgeR[i] -= over; edgeL[i] -= over; }
-    }
-    // AND AGAIN, because the hug just rewrote the profile the solver ruled.
-    // It pulls each station down toward its own kerb samples, and on rough
-    // ground neighbouring stations are pulled by very different amounts — the
-    // 1-2-1 smoothing above softens that but bounds nothing, so a 98% step
-    // survived on Coast Road at Big Sur with the pre-hug limit already applied.
-    // The centreline is what "grade" means, so it is the centreline that is
-    // ruled; the cross-fall rides with it and the section simply translates.
-    stage('4-smoothed', prof);
-    const before = prof.slice();
-    ruleGrade(dense, prof, gLim, heldArr);
-    for (let i = 0; i < n; i++) {
-      const dy = prof[i] - before[i];
-      edgeR[i] += dy; edgeL[i] += dy;
-    }
-    stage('5-reruled', prof);
-    // WELD LAST. An anchor is the neighbouring fragment's deck at the node the
-    // two share; the ruling grade is what a vehicle can climb. Where the data
-    // makes those contradict — Chapman's fragments either side of [110,-494]
-    // disagree by 17m about the same point — refusing the weld does not delete
-    // the disagreement, it stands it up as a CLIFF at the join, and a cliff is
-    // the one thing worse than a steep ramp. Measured: ruling the grade without
-    // this took the worst step on that road from 0.54m to 17.34m while fixing
-    // the walls, which is trading one undrivable thing for another.
-    //
-    // So the ends are taken from the neighbours and the residual is spread
-    // linearly over the whole fragment. Where the data is sound both residuals
-    // are centimetres and this does nothing; where it is not, the result is
-    // over the class grade but CONTINUOUS, and as shallow as this fragment's
-    // length allows — which is the same principle the limiter itself follows.
-    const d0 = weldP0 === null || !endWeld ? 0 : weldP0 - prof[0];
-    const d1 = weldP1 === null || !endWeld ? 0 : weldP1 - prof[n - 1];
-    const pre0 = prof[0], pre1 = prof[n - 1];
-    // AND THE TILT WITH IT. The centreline weld above closes the middle; the
-    // cross-fall was still each fragment's own, and the audit measured half-
-    // metre kerb steps over zero-centimetre centreline steps on one Bixby
-    // service road because of exactly that. Same cure, same shape: take the
-    // collinear neighbour's camber at the shared node, spread the residual
-    // linearly by arc length.
-    let e0 = 0, e1 = 0;
-    if (endWeld && n > 1) {
-      const t0 = tiltAnchorAt(dense[0][0], dense[0][1],
-        dense[1][0] - dense[0][0], dense[1][1] - dense[0][1]);
-      const t1 = tiltAnchorAt(dense[n - 1][0], dense[n - 1][1],
-        dense[n - 1][0] - dense[n - 2][0], dense[n - 1][1] - dense[n - 2][1]);
-      if (t0 !== null) e0 = t0 - tilt[0];
-      if (t1 !== null) e1 = t1 - tilt[n - 1];
+    const tiltStart = endWeld && n > 1
+      ? tiltAnchorAt(dense[0][0], dense[0][1],
+        dense[1][0] - dense[0][0], dense[1][1] - dense[0][1])
+      : null;
+    const tiltEnd = endWeld && n > 1
+      ? tiltAnchorAt(dense[n - 1][0], dense[n - 1][1],
+        dense[n - 1][0] - dense[n - 2][0], dense[n - 1][1] - dense[n - 2][1])
+      : null;
+    const section = resolveProductionRoadCrossSection({
+      stations: dense,
+      profile: prof,
+      centreGround: elev,
+      rightGround,
+      leftGround,
+      mode,
+      width,
+      heldStations: held,
+      seatHeldStations: seatHold,
+      gradeLimit: gLim,
+      endWeld,
+      weldStart: weldP0,
+      weldEnd: weldP1,
+      tiltStart,
+      tiltEnd,
+    });
+    stage('3-seated', section.seatedProfile);
+    stage('4-smoothed', section.smoothedProfile);
+    stage('5-reruled', section.reruledProfile);
+    prof = section.profile;
+    tilt = section.tilt;
+    for (const value of section.unweldedTilt) {
+      if (!Number.isFinite(value)) continue;
+      rollLog[rollAt++ % rollLog.length] =
+        Math.abs(value * 2) / Math.max(1, width);
     }
     if (joinLog.length < 6000) {
       const rec = (end: 0 | 1, i: number, pre: number, weld: number, tw: number, anchor: number | null, aD: number | null): JoinRec =>
@@ -18292,40 +18134,30 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           anchor: anchor === null ? null : +(anchor - lift).toFixed(3), anchorD: aD === null ? null : +aD.toFixed(2),
           hint: hintEl[i] === undefined || hintEl[i] === null ? null : +(hintEl[i] as number).toFixed(3),
           pre: +pre.toFixed(3), weld: +weld.toFixed(3), tiltWeld: +tw.toFixed(3), y: +(pre + weld).toFixed(3) });
-      joinLog.push(rec(0, 0, pre0, d0, e0, anchor0, anchor0D), rec(1, n - 1, pre1, d1, e1, anchor1, anchor1D));
-    }
-    if (d0 !== 0 || d1 !== 0 || e0 !== 0 || e1 !== 0) {
-      const arc = new Array<number>(n).fill(0);
-      for (let i = 1; i < n; i++) {
-        arc[i] = arc[i - 1] + Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
-      }
-      const total = arc[n - 1] || 1;
-      // The residual reaches the nearest HELD station and no further: a
-      // linear spread across the whole fragment carried +0.58m of one end's
-      // correction into a junction pin seven stations in (measured, Eldon
-      // Lane). Between held stations nothing moves; outside them each end's
-      // own residual fades to zero at the first pin it meets.
-      const firstHeld = jn.length ? jn[0] : -1, lastHeld = jn.length ? jn[jn.length - 1] : -1;
-      for (let i = 0; i < n; i++) {
-        let f0: number, f1: number;
-        if (firstHeld < 0) { const f = arc[i] / total; f0 = 1 - f; f1 = f; }
-        else {
-          // A pin AT the end leaves that end's residual nowhere to go: the span
-          // to spread it over is zero, and dividing by `|| 1` instead handed
-          // station 1 a residual eleven times the end's and sign-flipped.
-          f0 = firstHeld === 0 ? (i === 0 ? 1 : 0)
-            : i <= firstHeld ? 1 - arc[i] / arc[firstHeld] : 0;
-          f1 = lastHeld === n - 1 ? (i === n - 1 ? 1 : 0)
-            : i >= lastHeld ? (arc[i] - arc[lastHeld]) / (total - arc[lastHeld]) : 0;
-        }
-        const dy = d0 * f0 + d1 * f1;
-        const dt = e0 * f0 + e1 * f1;
-        prof[i] += dy; tilt[i] += dt;
-        edgeR[i] += dy + dt; edgeL[i] += dy - dt;
-      }
+      joinLog.push(
+        rec(0, 0, section.preWeldStart, section.centreWeldStart,
+          section.tiltWeldStart, anchor0, anchor0D),
+        rec(1, n - 1, section.preWeldEnd, section.centreWeldEnd,
+          section.tiltWeldEnd, anchor1, anchor1D),
+      );
     }
   }
   stage('6-welded', prof);
+  // Geometry dressing still reads curvature for signs. The deck's crossfall
+  // solve uses the equivalent substrate-owned calculation above.
+  const bendAt = (i: number): number => {
+    if (i <= 0 || i >= n - 1) return 0;
+    const ax2 = dense[i][0] - dense[i - 1][0], az2 = dense[i][1] - dense[i - 1][1];
+    const bx2 = dense[i + 1][0] - dense[i][0], bz2 = dense[i + 1][1] - dense[i][1];
+    const la = Math.hypot(ax2, az2) || 1, lb = Math.hypot(bx2, bz2) || 1;
+    return Math.acos(clamp((ax2 * bx2 + az2 * bz2) / (la * lb), -1, 1));
+  };
+  const bendSign = (i: number): number => {
+    if (i <= 0 || i >= n - 1) return 0;
+    const ax2 = dense[i][0] - dense[i - 1][0], az2 = dense[i][1] - dense[i - 1][1];
+    const bx2 = dense[i + 1][0] - dense[i][0], bz2 = dense[i + 1][1] - dense[i][1];
+    return ax2 * bz2 - az2 * bx2;
+  };
   const verts: number[] = [];
   const uvs: number[] = [];
   // Per-vertex tint: what the way is made of, or for a track the colour of the

@@ -18,6 +18,7 @@ import {
   resolveProductionSubstrateMode,
   resolveProductionBridgeProfile,
   resolveProductionEngineeredRoadProfile,
+  resolveProductionRoadCrossSection,
   resolveProductionRoadStructureProfile,
   resolveProductionCrossing,
   resolveProductionCrossingIntent,
@@ -559,6 +560,40 @@ export function runSubstrateSelfTest(): void {
   assert(engineeredProfile.profile[0] === 0
     && engineeredProfile.profile[10] === 0,
   'engineered profile endpoints remain exact');
+  const crossSection = resolveProductionRoadCrossSection({
+    stations: [[0, 0], [10, 0], [20, 0]],
+    profile: [9, 9, 9],
+    centreGround: [8, 8, 8],
+    rightGround: [8, 8, 8],
+    leftGround: [8, 8, 8],
+    mode: 'auto',
+    width: 8,
+    gradeLimit: .2,
+    endWeld: true,
+    weldStart: 10,
+    weldEnd: 11,
+    tiltStart: .2,
+    tiltEnd: -.1,
+  });
+  assert(Math.abs(crossSection.profile[0] - 10) < 1e-9
+    && Math.abs(crossSection.profile[2] - 11) < 1e-9,
+  'the final road cross-section welds both endpoint centre heights');
+  assert(Math.abs(crossSection.tilt[0] - .2) < 1e-9
+    && Math.abs(crossSection.tilt[2] + .1) < 1e-9,
+  'the final road cross-section welds both endpoint cambers');
+  const bridgeSection = resolveProductionRoadCrossSection({
+    stations: [[0, 0], [10, 0], [20, 0]],
+    profile: [9, 9, 9],
+    centreGround: [0, 0, 0],
+    rightGround: [0, 0, 0],
+    leftGround: [0, 0, 0],
+    mode: 'bridge',
+    width: 8,
+    gradeLimit: .2,
+    endWeld: false,
+  });
+  assert(bridgeSection.seatedProfile.every((height) => height === 9),
+  'a bridge cross-section keeps its structural grade line above terrain');
   const recordedDeck = resolveProductionCrossing({
     ...productionCrossingBase, roadLayer: 1, roadTags: { bridge: 'yes' }, structureOutcome: 'bridge-deck',
     deckAuthority: 'landmark-hint',
