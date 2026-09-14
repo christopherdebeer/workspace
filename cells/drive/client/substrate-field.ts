@@ -335,3 +335,284 @@ export function subTintOf(r: number, g: number, b: number, w: SubW): [number, nu
     b * rest + rk[2] * w.rock + so[2] * w.soil + tu[2] * w.turf,
   ];
 }
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ *  THE SHARED GEOMORPHIC SUBSTRATE FIELD
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * The model above this — rock / soil / turf as three competing weights chosen
+ * from a noise domain — is retired by this one, and the reason is worth
+ * stating before the code, because it is an argument about grammar rather than
+ * about tuning.
+ *
+ * A three-octave domain says "this patch is rock" and a motif is then stamped
+ * on it. The eye reads exactly that back: somebody chose a material and
+ * printed it. Real ground does not look geological because its textures are
+ * good; it looks geological because its features are CAUSALLY CORRELATED. A
+ * convex steep shoulder sheds its soil and shows bedrock. What breaks off it
+ * collects downslope as scree. Fine material gathers in concavities. Water
+ * sorts and darkens along the drainage. Soil deepens on stable low-gradient
+ * ground. Vegetation exploits that soil wherever nothing else interferes.
+ *
+ * And — the correction that makes the rest of it work — **turf is not a
+ * substrate**. Grass is a COVER LAYER over rock, regolith and soil, and
+ * rockiness goes on existing under and through it. A point is not
+ * `rock 0.6, soil 0.2, turf 0.2`; it is
+ *
+ *     bedrock exposure  0.72
+ *     debris / scree    0.38
+ *     soil depth        0.21
+ *     moisture          0.34
+ *     grass cover       0.57
+ *
+ * so that grass among rock is expressible at all, which "grass OR rock" never
+ * was.
+ *
+ * ── ONE FIELD, TWO READERS, WHICH IS THE WHOLE POINT ──
+ *
+ * The field is built ONCE per terrain tile, in the worker, off the DEM. The
+ * terrain fragment samples it and the sward seeder samples it, so a thinning
+ * of the blades and a roughening of the ground are one decision seen twice
+ * rather than two models that happen to agree. That divergence is the fault
+ * this replaces: the shader and the seeder each had their own idea of where
+ * the rock was.
+ *
+ * ── AND IT IS COARSE, BECAUSE THAT IS WHERE A LANDSCAPE LIVES ──
+ *
+ * 64x64 over a z14 tile is about 33 m a cell: the 30–150 m band (cliff bands,
+ * scree tongues, wet hollows, grassy terraces) and the top of the 5–30 m band
+ * (outcrop patches, debris fans, shallow-soil pockets). A 50 m tongue of scree
+ * down a mountainside does more for "organic" than ten thousand 45 cm
+ * procedural stones. Everything finer than this stays in the fragment, as
+ * detail ON a physical signal rather than as the signal.
+ */
+/** Cells a side, over one terrain tile. 64 over ~2.15 km at z14 is ~33 m. */
+export const SUB_FIELD_N = 64;
+/**
+ * THE CHANNEL ORDER IS A WIRE FORMAT. The kernel packs it, two RGBA textures
+ * carry it to the fragment, and the CPU sampler indexes it. Appending is safe;
+ * MOVING a channel re-dresses every hillside in the world on the next deploy,
+ * exactly as TRADITION_LIST's order does for buildings.
+ */
+export const SUB_CH = Object.freeze({
+  exposure: 0, debris: 1, soilDepth: 2, moisture: 3,   // texture A, rgba
+  grassPot: 4, rockFamily: 5, flowX: 6, flowZ: 7,      // texture B, rgba
+});
+/** Four rock structure families, chosen by CONTEXT rather than rolled: a
+ *  steep high-exposure face is massive or jointed, a broad hillside with
+ *  contour expression is bedded, a debris zone is broken. Carried as a scalar
+ *  because it rides in one byte of a texture; `rockFamilyOf` names it. */
+export const ROCK_FAMILY = Object.freeze(['massive', 'bedded', 'fractured', 'loose'] as const);
+export type RockFamily = (typeof ROCK_FAMILY)[number];
+export function rockFamilyOf(v: number): RockFamily {
+  return ROCK_FAMILY[Math.min(3, Math.max(0, Math.round(v * 3)))];
+}
+export interface SubstrateField {
+  n: number;
+  /** The tile's world box, so a world point can be put in the field's frame. */
+  xs: number; zs: number; w: number; h: number;
+  /** exposure, debris, soilDepth, moisture — normalized bytes. */
+  a: Uint8Array;
+  /** grassPot, rockFamily, flowX, flowZ — flow is (v/255)*2-1. */
+  b: Uint8Array;
+}
+/** What the builder needs, and it is almost nothing: the tile's own
+ *  heightfield, its box, and the one input that is not the DEM. */
+export interface SubstrateInput {
+  data: Float32Array | Int16Array | number[];
+  xs: number; zs: number; w: number; h: number;
+  /** WorldCover class at a world point, or null where the raster has not
+   *  reached — which is a real answer and abstains rather than voting. */
+  cover: (x: number, z: number) => number | null;
+}
+const cl01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+/** A bump peaking at `c`: "steep enough to shed, shallow enough to hold". */
+const bump = (v: number, c: number, wdt: number): number => cl01(1 - Math.abs(v - c) / wdt);
+/**
+ * ── THE DERIVATION ──
+ *
+ * Every term is a physical claim written so the next person can argue with the
+ * CLAIM rather than with a magic number. The order is causal and cannot be
+ * shuffled: moisture and exposure are inputs to debris, both are inputs to
+ * soil, and all four are inputs to the grass.
+ *
+ * Signs, once, because every consumer depends on them: `curv` is the mean of
+ * the neighbours LESS the centre, so it is POSITIVE in a hollow (concave,
+ * collecting) and NEGATIVE on a shoulder (convex, shedding). `relEl` is 0 at
+ * the lowest ground within the window and 1 at its crest — the cheapest
+ * drainage proxy there is, since water and fines end up where relEl is low.
+ */
+export function buildSubstrateCells(inp: SubstrateInput): { a: Uint8Array; b: Uint8Array } {
+  const N = SUB_FIELD_N, cellM = inp.w / N;
+  const step = 256 / N;                       // raster pixels a cell (4 at N=64)
+  // ── 1. THE LANDFORM, NOT THE PIXEL ── the mean of each block rather than a
+  // point sample: a point sample at 33 m carries every spike the DEM has, and
+  // the whole purpose of this lattice is to describe the shape of the hill.
+  const lo = new Float32Array(N * N);
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      let s = 0, m = 0;
+      for (let b = 0; b < step; b++) {
+        for (let a = 0; a < step; a++) { s += inp.data[(j * step + b) * 256 + (i * step + a)]; m++; }
+      }
+      lo[j * N + i] = s / Math.max(1, m);
+    }
+  }
+  const at = (j: number, i: number): number =>
+    lo[Math.min(N - 1, Math.max(0, j)) * N + Math.min(N - 1, Math.max(0, i))];
+  // ── 2. THE EVIDENCE ── slope, aspect, curvature at two scales, relief and
+  // relative elevation over a ~200 m window.
+  const slope = new Float32Array(N * N), curv = new Float32Array(N * N);
+  const relief = new Float32Array(N * N), relEl = new Float32Array(N * N);
+  const gx = new Float32Array(N * N), gz = new Float32Array(N * N);
+  const R = 3;
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const dx = (at(j, i + 1) - at(j, i - 1)) / (2 * cellM);
+      const dz = (at(j + 1, i) - at(j - 1, i)) / (2 * cellM);
+      slope[j * N + i] = Math.hypot(dx, dz);
+      gx[j * N + i] = dx; gz[j * N + i] = dz;
+      const h = lo[j * N + i];
+      // Two bands of curvature: the lattice's own ~33 m, which sees an
+      // outcrop's shoulder, and ~100 m, which sees the hillside it sits on.
+      const cNear = (at(j, i - 1) + at(j, i + 1) + at(j - 1, i) + at(j + 1, i)) * 0.25 - h;
+      const cFar = (at(j, i - 3) + at(j, i + 3) + at(j - 3, i) + at(j + 3, i)) * 0.25 - h;
+      // Normalised so that a pronounced shoulder or hollow — about a
+      // twentieth of the span it is measured over — reads 1.
+      curv[j * N + i] = Math.max(-1, Math.min(1,
+        (cNear / (cellM * 0.05)) * 0.45 + (cFar / (cellM * 3 * 0.05)) * 0.55));
+      let mn = Infinity, mx = -Infinity;
+      for (let b = -R; b <= R; b++) {
+        for (let a = -R; a <= R; a++) { const v = at(j + b, i + a); if (v < mn) mn = v; if (v > mx) mx = v; }
+      }
+      const span = mx - mn;
+      relief[j * N + i] = span;
+      // A flat window has no floor and no crest, and dividing by its span
+      // would turn float noise into a landform. Half is "neither".
+      relEl[j * N + i] = span > 1 ? (h - mn) / span : 0.5;
+    }
+  }
+  // ── 3. THE COVER'S OWN WORD ── a wood or a crop is a statement that soil is
+  // there and outranks a slope estimated from a 9.5 m DEM; bare ground argues
+  // the other way; snow hides whatever is under it and must not read as
+  // bedrock. Unmapped abstains.
+  const bare = new Float32Array(N * N), veg = new Float32Array(N * N), grassBias = new Float32Array(N * N);
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const wx = inp.xs + (i + 0.5) * cellM, wz = inp.zs + (j + 0.5) * (inp.h / N);
+      const c = inp.cover(wx, wz);
+      const k = j * N + i;
+      if (c === null || c === undefined) { bare[k] = 0.5; veg[k] = 0.5; grassBias[k] = 0.5; continue; }
+      bare[k] = c === 60 ? 1 : c === 70 ? 0.3 : c === 50 ? 0.6 : c === 80 ? 0 : 0.1;
+      veg[k] = c === 10 || c === 40 || c === 90 || c === 95 ? 1 : c === 30 || c === 20 ? 0.8 : c === 100 ? 0.5 : 0.05;
+      grassBias[k] = c === 30 ? 1 : c === 20 ? 0.7 : c === 40 ? 0.6 : c === 10 ? 0.45 : c === 100 ? 0.4 : c === 60 ? 0.12 : 0.1;
+    }
+  }
+  // ── 4. EXPOSURE — bedrock showing ── CONTINUOUS, never thresholded, because
+  // 0.3 must mean "grass with stones and bedrock peeking through" and 0.9 a
+  // bare face. A threshold here is what makes the whole thing read as a
+  // material classifier again.
+  const exposure = new Float32Array(N * N);
+  for (let k = 0; k < N * N; k++) {
+    const sl = sstepF(0.25, 0.90, slope[k]);
+    const convex = cl01(-curv[k]);
+    const rlf = cl01(relief[k] / 120);
+    exposure[k] = cl01(sl * 0.45 + convex * 0.20 + rlf * 0.20 + bare[k] * 0.20 - veg[k] * 0.25);
+  }
+  // ── 5. DEBRIS — what the face above shed ── this is the causal relationship
+  // that reads instantly as geology: rock face above implies broken material
+  // below. Walked UPHILL along the gradient, so the answer is "how much
+  // exposed rock stands over me", and the walk is what makes a scree apron a
+  // TONGUE rather than a blob.
+  const debris = new Float32Array(N * N);
+  const UP = 6;                                  // ~200 m of fall line
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const k = j * N + i;
+      // ── A WEIGHTED MAX, NOT A MEAN, AND THE TEST CAUGHT THE DIFFERENCE ──
+      //
+      // The first cut averaged the exposure along the walk and normalised by
+      // the weights, which dilutes the one thing being asked about: an apron
+      // two hundred metres below a cliff has five cells of its own bare
+      // ground between it and the face, so the face's 0.55 came back as
+      // 0.026 and no scree existed anywhere in the world. The question is not
+      // "how exposed is my fall line on average", it is "is there a face
+      // above me, and how far up" — a MAX over the walk, faded with distance.
+      let fi = i, fj = j, best = 0;
+      for (let s = 1; s <= UP; s++) {
+        const kk = Math.min(N - 1, Math.max(0, Math.round(fj))) * N + Math.min(N - 1, Math.max(0, Math.round(fi)));
+        const g = Math.hypot(gx[kk], gz[kk]);
+        if (g < 1e-4) break;
+        fi += gx[kk] / g; fj += gz[kk] / g;      // +gradient is uphill
+        if (fi < 0 || fj < 0 || fi > N - 1 || fj > N - 1) break;
+        const w = 1 - (s - 1) / (UP + 1);        // the face just above counts most
+        const e = exposure[Math.round(fj) * N + Math.round(fi)] * w;
+        if (e > best) best = e;
+      }
+      const upslope = best;
+      const toe = cl01(curv[k]);                                   // material rests where it flattens
+      const mid = bump(slope[k], 0.45, 0.40);                      // steep enough to receive, shallow enough to hold
+      // The vegetation penalty is GENTLE here, where it is firm for exposure:
+      // WorldCover at 10 m calls a scree apron with tussocks in it grassland,
+      // and a penalty stiff enough to respect that erases the one landform
+      // this channel exists to draw. A face is unmistakable to the raster; an
+      // apron is not.
+      debris[k] = cl01(upslope * 0.52 + toe * 0.25 + mid * 0.20 + bare[k] * 0.20 - veg[k] * 0.12);
+    }
+  }
+  // ── 6. MOISTURE, SOIL, GRASS ── a topographic wetness proxy and what grows
+  // on it. The hydro field remains the authority on actual water and the
+  // climate on how much there is to begin with; this is only about where it
+  // goes once it has fallen.
+  const a = new Uint8Array(N * N * 4), bOut = new Uint8Array(N * N * 4);
+  for (let k = 0; k < N * N; k++) {
+    const concave = cl01(curv[k]);
+    const moisture = cl01(concave * 0.40 + (1 - relEl[k]) * 0.42 + (1 - cl01(slope[k])) * 0.18);
+    const soil = cl01((1 - cl01(slope[k] / 0.6)) * 0.30 + concave * 0.25 + moisture * 0.20 + veg[k] * 0.20
+      - exposure[k] * 0.35 - debris[k] * 0.20);
+    const grassPot = cl01(soil * 0.45 + moisture * 0.25 + bump(slope[k], 0.12, 0.5) * 0.15 + grassBias[k] * 0.25
+      - exposure[k] * 0.35 - debris[k] * 0.15);
+    // ── THE ROCK'S STRUCTURE, BY CONTEXT ── broken where the debris is, and
+    // between massive and bedded by whether the hillside has contour
+    // expression: high relief on a steep face is a cliff of blocks, moderate
+    // relief on a moderate slope is where ledges and bands read.
+    const ledge = bump(slope[k], 0.35, 0.35) * cl01(relief[k] / 90);
+    const family = debris[k] > 0.45 ? 1
+      : 0.333 * cl01(ledge * 1.6) + 0.666 * cl01((debris[k] - 0.25) * 2) * 0.5;
+    const g = Math.hypot(gx[k], gz[k]) || 1;
+    a[k * 4] = Math.round(exposure[k] * 255);
+    a[k * 4 + 1] = Math.round(debris[k] * 255);
+    a[k * 4 + 2] = Math.round(soil * 255);
+    a[k * 4 + 3] = Math.round(moisture * 255);
+    bOut[k * 4] = Math.round(grassPot * 255);
+    bOut[k * 4 + 1] = Math.round(cl01(family) * 255);
+    // Downhill, which is the axis every anisotropic warp downstream is written
+    // in: scree elongates along it, wet ground follows it, strata cross it.
+    bOut[k * 4 + 2] = Math.round((cl01(-gx[k] / g * 0.5 + 0.5)) * 255);
+    bOut[k * 4 + 3] = Math.round((cl01(-gz[k] / g * 0.5 + 0.5)) * 255);
+  }
+  return { a, b: bOut };
+}
+const sstepF = (a: number, b: number, v: number): number => {
+  const t = cl01((v - a) / (b - a || 1));
+  return t * t * (3 - 2 * t);
+};
+/** One channel of the field at a world point, bilinear — the CPU reader, for
+ *  the sward seeder, the flora placement and every probe. Nearest would put
+ *  the lattice's own 33 m squares on the hillside, which is the blocky-motif
+ *  fault one scale up. */
+export function sampleSubstrate(f: SubstrateField, x: number, z: number, ch: number): number {
+  const n = f.n;
+  const fx = Math.min(n - 1, Math.max(0, ((x - f.xs) / f.w) * n - 0.5));
+  const fz = Math.min(n - 1, Math.max(0, ((z - f.zs) / f.h) * n - 0.5));
+  const x0 = Math.floor(fx), z0 = Math.floor(fz);
+  const x1 = Math.min(n - 1, x0 + 1), z1 = Math.min(n - 1, z0 + 1);
+  const tx = fx - x0, tz = fz - z0;
+  const arr = ch < 4 ? f.a : f.b, o = (ch & 3);
+  const p = (j: number, i: number): number => arr[(j * n + i) * 4 + o] / 255;
+  const top = p(z0, x0) + (p(z0, x1) - p(z0, x0)) * tx;
+  const bot = p(z1, x0) + (p(z1, x1) - p(z1, x0)) * tx;
+  const v = top + (bot - top) * tz;
+  return ch === SUB_CH.flowX || ch === SUB_CH.flowZ ? v * 2 - 1 : v;
+}
