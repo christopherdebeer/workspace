@@ -221,6 +221,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
 | `node devtools/bedding.mjs` | whether the substrate's bedding is geology or corduroy: the autocorrelation of its own contribution above its background, at a solved scale so two runs compare (`REV=` for a control, `ANALYSE=1` to re-read frames already on disk) | ~9min |
 | `node devtools/bridge-water.mjs` | every tagged bridge at a crossing ran its chord (`2d-chord` in its own stage log) and stands over its water — the witness is the STAGE, the metre is the symptom (`FIX=`, `CROSSINGS=`) | ~1min |
+| `node devtools/chart-bands.mjs` | which layer owns each band of the chart — a hide-diff of the fine world, the coarse shell and the globe over one settled frame, with the same-frame-twice floor beside it, the far/fine seam in luma, and the planet-sun ramp (`SPOT=`, `Z=`, `CLIP=0`) | ~8min |
 | `node devtools/bridge-landmarks.mjs` | who CLAIMED each bridge assembly — an entry's id, OSM's own `bridge:structure`, or the recipe — beside what the painter actually built; fails on a spec that names a form and paints nothing, and on a long span nobody claimed (`FIX=`, `LONG_M=`) | ~2min |
 | `node devtools/hydro-phases.mjs` | where a hydro build's milliseconds go, by phase and by ns/texel, with the wet/waterless build split and the wet share of the grid (`DRY=0` is the short-circuit's control, `FIX=`/`SPOT=` the place) | ~1min |
 | `node devtools/hydro-dry.test.mjs` | a waterless tile's short-circuit is the path it replaced, byte for byte, against the revision's own build-tile (`REV=`) | ~10s |
@@ -8185,6 +8186,128 @@ GO stays withheld as it is for any pin that is not a survey mark.
 `__poimarks()` lists what is on the glass and everything tappable in world
 coordinates; `__tapat(x, z)` makes the chart's choice without the pointer,
 which is how the harness proves a summit opens its own card.
+
+### The chart's pale outer ground is the SHELL, and the clip had left it a ring to paint
+
+Two questions from the seat, over Zagor Town in Xizang
+(`?lat=28.5108&lon=87.0714&cam=top`, the chart at `2 KM · 1:53K · z13.3`, tile
+debug on): why is the outer chart far lighter and flatter than the middle, and
+what is the outer strip that looks as though it only PARTLY paints, letting the
+lighter layer through? Both were read as the globe showing through. Neither is
+the globe — it is a near-black graticule and at that zoom the streamed world
+covers it completely — and the two are one mechanism seen twice.
+
+**THE INSTRUMENT IS A HIDE-DIFF WITH ITS OWN FLOOR** (`devtools/chart-bands.mjs`).
+Three layers can be under any pixel out there and from a still frame they are a
+matter of opinion about a grey shape, so: one settled world, the same frame
+photographed with everything, with `__hide('far')` and with `__hide('terrain')`
+— the pixels that CHANGE when a layer goes are that layer's — and, first of
+all, **the same frame twice with nothing changed**, which is the only thing
+that makes the rest readable. Measured floor: **0.0% over the top two thirds of
+the frame and 9.7% in one band around the truck**, which is the dither
+re-weaving over the sward. That band was 9.7% "shell" in the attribution too,
+and is therefore not shell at all; the first reading of this frame counted it
+as one.
+
+**WHAT THE OUTER GROUND IS.** The coarse shell — z11, 19 km tiles at ~150 m a
+vertex — drawn where the fine world is not protected by the clip. Hiding the
+far group turns those pixels back into the fine world's own darker relief;
+hiding the fine terrain leaves a flat blue-grey where the clip's hole is (the
+sky, at luma 133 ± 7 with no structure in it), not a planet.
+
+**WHY IT IS LIGHTER, AND TWO THIRDS OF IT IS ONE UNIFORM.** Over the 1,792 art
+pixels the shell actually painted, at 36 m an art pixel:
+
+| | luma |
+|---|---|
+| the shell, as drawn | **160.0** |
+| the fine world underneath it | **133.7** |
+| the shell with `__planetmix(0)` — the scene's sun, as the fine world has it | **142.4** |
+
+A **26-luma seam, a palette step and a half**, of which **17.6 is the planet's
+own sun** (`uPlanetMix`, 0.45 at that zoom). At full strength that term
+REPLACES the shell's Lambert shading — of the tile's own DEM normal map — with
+`planetSun(albedo, radial·sun)`, which has no slope in it at all: flat albedo
+under a sphere's cosine. That is why the outer ground reads not merely brighter
+but FLATTER, and it is the fault the section above it ("THE FAR/FINE DIFFERENCE
+SHOULD BE MESH DETAIL AND NOTHING ELSE") was written to end, reintroduced at
+chart zooms by a ramp. The remaining 8.7 luma is the honest difference: a
+150 m lattice, the coarse cover, no substrate.
+
+**THE RAMP WAS THE CLOUD SHADOWS', AND THOSE TWO ANSWER DIFFERENT QUESTIONS.**
+`uPlanetMix` faded in over `uMpp` 15→60 to match the cloud fade and the mottle,
+"so the chart changes its rules in one place" — but 15 m an art pixel is a
+2.2 km frame and 60 is a 9 km one. A noise field going sub-pixel is a question
+about RESOLUTION; whether the shell is a planet or the horizon of a tangent
+world is a question about REACH. It is 400→2,000 m an art pixel now — a 60 km
+frame to a 300 km one — and every wide-chart number in this file was taken at
+6,000 m an art pixel or more, where the mix is 1 either way.
+
+**AND THE "PARTLY PAINTED" STRIP IS TWO LAYERS FIGHTING OVER ONE BAND.** Where
+the shell is not clipped away it does not replace the fine world, it competes
+with it: both are drawn, and the shell wins only where its 150 m chords stand
+above the fine surface. `__far().seam` reads **−61.1 to +11.7 m** here against a
+`FAR_DROP` of 12 — so across a Himalayan valley the coarse triangle is within a
+whisker of the drop everywhere and over it in patches. That interleaving IS the
+partial paint, and it is why the band reads as a wash with the ground showing
+through rather than as a clean edge.
+
+**THE CLIP HAD LEFT IT A WHOLE RING, BY ARITHMETIC.** `stepFineRing` walked
+complete rings to `TERRAIN_RING` (2) while the streamer asks `tRing` — up to
+`TERRAIN_RING_MAX` (3) — whenever the view is wide, which on the chart it
+always is. Measured at Zagor Town: **49 height tiles loaded (7×7, 15.0 km)
+against a clip box of 10.7 km**. One full ring of fine ground, built and drawn,
+outside the rectangle the shell is discarded inside, at every chart zoom there
+has ever been.
+
+**AND ONE LATE TILE COLLAPSED THE WHOLE BLOCK.** The box was the complete
+RINGS, which is all-or-nothing: a single tile of ring 1 still on the wire — or
+one the DEM refused, which never arrives — took a 7×7 block down to the truck's
+own tile and handed the shell everything else. The seat's own frame is what
+that looks like, and the screenshot can be measured: its scale bar is 369 px
+for 2 km, its two strongest grid lines stand 396 px apart — 2.15 km, the z14
+tile at that latitude — and **the frame's luminance steps sit on them**, at
+x 360 and x 756 with the truck at 603. The pale ground begins at the edges of
+the truck's OWN tile, which is a `CLIP 1x1`. That is a reading of a photograph
+rather than a probe, so it is offered as consistent-with rather than proven;
+the header above now answers it outright. It is the largest RECTANGLE of loaded
+tiles around the truck's own now, grown a whole row or column at a time, so it
+still cannot contain a tile the fine world has not built and a missing corner
+costs one row rather than everything.
+
+**Measured**, same spot, same zoom, same settled world, the two changes the
+only difference (`devtools/chart-bands.mjs`; the rows are art rows of a 320-row
+frame, the floor is the same-frame-twice control):
+
+| | before | after | floor |
+|---|---|---|---|
+| clip block | 5×5 tiles · 10.7 km | **7×7 · 15.0 km** | — |
+| planet-sun mix at this zoom | 0.45 | **0.00** | — |
+| rows 0–19, the horizon past the loaded world | 80.0% shell · seam **+26.3 luma** | 49.2% · **+10.9** | 0.0% |
+| rows 20–59, the partly-painted band | **19.6% shell** · +32.7 | **3.5%** · +17.0 | 0.0% |
+| rows 62–139 | 0.0% | 0.1% | 0.1% |
+| rows 140–199 | 9.7% | 9.7% | **9.7% — all of it the floor** |
+
+The horizon is still the shell's and must be — that is what the layer is for.
+What changed is that it is no longer a palette step and a half brighter than the
+ground it continues, and that it stops at the edge of the world the fine
+terrain has actually built rather than a ring inside it. The ramp, checked at
+six zooms on the build that ships it: **0.000 at 36, 113 and 396 m an art pixel
+· 0.443 at 1,139 · 1.000 at 3,416 and 11,197** — the wide chart's terminator
+measurements were all taken at 6,263 m an art pixel and up.
+
+**AND THE FRAME SAYS IT NOW.** The tile-debug header carries `CLIP w×h`, the
+block in tiles, beside MESH and REBUILD; `__far().fineBlock` is the same number.
+A chart whose outer ground looks pale and flat with `CLIP 1x1` on the line is
+this, and needs no investigation at all — which is the whole reason the number
+is on the glass rather than in a probe.
+
+**`__planetmix(v)` is the override the measurement needed**, and it is there for
+the reason this file has recorded twice: the term is written every frame from
+`uMpp`, so a console write survives until the next animation frame and no
+longer. `__farclip(true)` lifts the clip; `__faralign`, which a comment beside
+it has pointed at for months, **does not exist** — the same class of fault as
+the hydro bench this file once named.
 
 ## The Senqu river stands on the hillside: its line runs 30–60 m off the DEM's floor
 

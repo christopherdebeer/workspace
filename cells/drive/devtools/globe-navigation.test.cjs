@@ -44,6 +44,9 @@ const ctx = {THREE, ...nav, ...globe, Math, origin, M_LAT:111320,
   planetSunU:{uPlanetC:{value:new THREE.Vector3()},uPlanetSun:{value:new THREE.Vector3()},
     uPlanetNight:{value:0.14},uPlanetMix:{value:0}},
   envU:{uMpp:{value:0}},
+  // The measurement override for the planet's sun on the shell (__planetmix).
+  // null is "the ramp decides", which is what the world runs.
+  planetMixForce:null,
   // The fling, the retired-ring culls and the near-cap test are all reached by
   // stepGlobe; a vm context throws ReferenceError on any global it lacks, so
   // an unstubbed one reads as a broken change rather than a thin stub.

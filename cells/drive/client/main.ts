@@ -7374,19 +7374,33 @@ function farMatFor(data: Float32Array, w: number, key: string, centre: THREE.Vec
  *  and the guaranteed radius from anywhere inside the centre tile is one ring
  *  less than the last complete one. */
 let fineRingR = 0, fineRingAt = 0;
+/** The clip block in TILES around the truck's own, west/east/north/south —
+ *  what the tile-debug key prints, so a frame from the seat says whether
+ *  the shell was free to paint over the fine world and how far. */
+let fineBlock: [number, number, number, number] = [0, 0, 0, 0];
 function stepFineRing(now: number): void {
   farRing.uFineC.value.set(state.x, state.z);
   if (now < fineRingAt) return;
   fineRingAt = now + 400;
   const [la, lo] = localToLatLon(state.x, state.z);
   const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
+  const loaded = (dx: number, dy: number): boolean => terrainMeshes.has(`${tx + dx}/${ty + dy}`);
+  // ── THE RING IS WALKED TO THE WIDEST THE STREAMER MAY ASK FOR ──
+  //
+  // It stopped at TERRAIN_RING (2) while the stream asks `tRing` — up to
+  // TERRAIN_RING_MAX (3) — whenever the view is wide, which on the chart it
+  // always is. So at every chart zoom a whole ring of fine ground was LOADED,
+  // DRAWN and outside the clip, and the shell fought it for those pixels with
+  // nothing but a twelve-metre drop between two surfaces sampled 150 m apart.
+  // Measured at Zagor Town: heightTiles 49 (7x7, 15.0 km) against a box of
+  // 10.7 km, and the shell painting patches over the band between them.
   let full = 0;
-  for (let k = 0; k <= TERRAIN_RING; k++) {
+  for (let k = 0; k <= TERRAIN_RING_MAX; k++) {
     let all = true;
     for (let dx = -k; dx <= k && all; dx++) {
       for (let dy = -k; dy <= k && all; dy++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== k) continue;
-        if (!terrainMeshes.has(`${tx + dx}/${ty + dy}`)) all = false;
+        if (!loaded(dx, dy)) all = false;
       }
     }
     if (!all) break;
@@ -7394,13 +7408,36 @@ function stepFineRing(now: number): void {
   }
   fineRingR = Math.max(0, full - 1) * tileMetres(TERRAIN_Z);
   farRing.uFineR.value = fineRingR;
-  // …and the block those complete rings actually occupy, read off the tiles
-  // themselves rather than derived from a tile size, so it can never claim
-  // ground the fine world has not built.
-  const r0 = Math.max(0, full - 1);
+  // ── AND THE BLOCK GROWS BY ROWS, SO ONE LATE TILE IS NOT A CLIFF ──
+  //
+  // The box used to be the complete RINGS, which is all-or-nothing: a single
+  // tile of ring 1 still on the wire — or one the DEM refused, which never
+  // arrives at all — collapsed a 7x7 block to the truck's own tile and handed
+  // the shell everything else. That is a 2 km chart with a coarse backdrop
+  // painted over every kilometre of the fine world but one, and it looks
+  // exactly like a palette fault.
+  //
+  // It is the largest RECTANGLE of loaded tiles around the truck's own now,
+  // grown a whole row or column at a time — so it still cannot contain a tile
+  // the fine world has not built (which is what stops the clip opening a hole
+  // onto the sky), and a missing corner costs one row instead of everything.
+  let w0 = 0, e0 = 0, n0 = 0, s0 = 0;
+  if (loaded(0, 0)) {
+    const col = (dx: number): boolean => { for (let dy = -n0; dy <= s0; dy++) if (!loaded(dx, dy)) return false; return true; };
+    const row = (dy: number): boolean => { for (let dx = -w0; dx <= e0; dx++) if (!loaded(dx, dy)) return false; return true; };
+    for (let grew = true; grew;) {
+      grew = false;
+      if (w0 < TERRAIN_RING_MAX && col(-(w0 + 1))) { w0++; grew = true; }
+      if (e0 < TERRAIN_RING_MAX && col(e0 + 1)) { e0++; grew = true; }
+      if (n0 < TERRAIN_RING_MAX && row(-(n0 + 1))) { n0++; grew = true; }
+      if (s0 < TERRAIN_RING_MAX && row(s0 + 1)) { s0++; grew = true; }
+    }
+  }
+  // …read off the tiles themselves rather than derived from a tile size, so it
+  // can never claim ground the fine world has not built.
   let bx0 = Infinity, bz0 = Infinity, bx1 = -Infinity, bz1 = -Infinity;
-  for (let dx = -r0; dx <= r0; dx++) {
-    for (let dy = -r0; dy <= r0; dy++) {
+  for (let dx = -w0; dx <= e0; dx++) {
+    for (let dy = -n0; dy <= s0; dy++) {
       const ht = heightTiles.get(`${tx + dx}/${ty + dy}`);
       if (!ht) continue;
       if (ht.xs < bx0) bx0 = ht.xs;
@@ -7409,6 +7446,7 @@ function stepFineRing(now: number): void {
       if (ht.zs + ht.h > bz1) bz1 = ht.zs + ht.h;
     }
   }
+  fineBlock = [w0, e0, n0, s0];
   if (Number.isFinite(bx0)) farRing.uFineBox.value.set(bx0, bz0, bx1, bz1);
   else farRing.uFineBox.value.set(0, 0, 0, 0);
   if (farClipOff) { farRing.uFineR.value = 0; farRing.uFineBox.value.set(0, 0, 0, 0); }
@@ -27195,13 +27233,54 @@ function stepGlobe(): void {
   planetSunU.uPlanetC.value.copy(planetGroup.position);
   planetSunU.uPlanetSun.value.copy(globeU.uSun.value).applyQuaternion(planetGroup.quaternion);
   planetSunU.uPlanetNight.value = globeU.uNight.value;
-  // The chart's own scale ramp — the one the cloud shadows and the mottle
-  // already stand down over — so the seat keeps the scene's sun exactly.
+  // ── AND IT FADES IN WHERE THE SHELL IS A PLANET, NOT WHERE A NOISE FIELD
+  // GOES SUB-PIXEL ──
+  //
+  // It borrowed the cloud shadows' own 15→60 ramp, on the reasoning that the
+  // chart should change its rules in one place. Those two ramps answer
+  // different questions, and this one took the wrong answer: 15 m an art pixel
+  // is a 2.2 km frame and 60 is a 9 km one — a chart of the ground the truck is
+  // standing on, where the shell is the horizon of a tangent world and the
+  // fine terrain beside it is lit by the scene.
+  //
+  // What that cost, measured at Zagor Town at z13.3 (36 m an art pixel, so a
+  // mix of 0.45) over the 1,792 art pixels the shell actually painted: the
+  // shell drew at luma 160.0 against the fine world's 133.7 under it, and with
+  // the term off at 142.4. **Two thirds of a 26-luma seam — a palette step and
+  // a half — was this one term**, because at full strength it replaces the
+  // Lambert shading of the tile's own DEM normal map with the planet's radial
+  // cosine, which has no slope in it at all. The section above this one exists
+  // to make the far/fine difference MESH DETAIL and nothing else; this put the
+  // lighting back.
+  //
+  // 400 → 2,000 m an art pixel is a 60 km frame to a 300 km one: past the
+  // first the shell is the backdrop and the fine ring a speck, and by the
+  // second the curvature and the terminator are real. Every wide-chart number
+  // this file records was taken at 6,000 m an art pixel or more, where the mix
+  // is 1 either way.
   {
-    const t = clamp((envU.uMpp.value - 15) / (60 - 15), 0, 1);
-    planetSunU.uPlanetMix.value = camMode === 'top' ? t * t * (3 - 2 * t) : 0;
+    const t = clamp((envU.uMpp.value - 400) / (2000 - 400), 0, 1);
+    planetSunU.uPlanetMix.value = planetMixForce ?? (camMode === 'top' ? t * t * (3 - 2 * t) : 0);
   }
 }
+/**
+ * FORCE THE PLANET'S SUN ON THE SHELL, OR TAKE IT AWAY.
+ *
+ * The term is written every frame from `uMpp`, so a console write survives
+ * until the next animation frame and no longer — which is how three dials'
+ * worth of A/B in this file turned out to be an A/B of nothing (see the
+ * tilt-shift section). This is the sticky override the measurement needs:
+ * `__planetmix(0)` lights the shell by the scene exactly as the fine world is
+ * lit, `__planetmix(1)` is the planet at full, `__planetmix(null)` gives the
+ * ramp back. It is the only way to ask "how much of the seam at the ring's
+ * edge is this term" without rebuilding the world between the two frames.
+ */
+let planetMixForce: number | null = null;
+(window as unknown as { __planetmix?: (v?: number | null) => number }).__planetmix =
+  (v?: number | null): number => {
+    if (v !== undefined) planetMixForce = v === null ? null : clamp(v, 0, 1);
+    return planetSunU.uPlanetMix.value;
+  };
 // Four at a time. Asking for a whole ring at once is a thundering herd against
 // one S3 bucket: a measured 49-tile request landed 9 meshes and left the rest
 // racing each other for sockets.
@@ -37251,6 +37330,10 @@ let texMeanCache: Record<string, number> | null = null;
     // from. A seam that is POSITIVE inside this radius is the shell standing
     // over the fine world — the fault the clip exists to make impossible.
     fineR: Math.round(fineRingR), tileM: Math.round(tileMetres(TERRAIN_Z)),
+    // The clip block in TILES (west, east, north, south of the truck's own),
+    // which is what actually decides how much of the frame the shell may
+    // paint — the box in metres below is that block's own rectangle.
+    fineBlock: [...fineBlock],
     fineBox: [farRing.uFineBox.value.x, farRing.uFineBox.value.y,
       farRing.uFineBox.value.z, farRing.uFineBox.value.w].map(Math.round),
     fromOrigin: Math.round(Math.hypot(viewX(), viewZ())) });
@@ -48976,8 +49059,14 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     for (const [, at] of osmFailedAt) if (dNow - at < 30000) fails++;
     textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
       6, 40, UI.text);
+    // CLIP is the block of fine tiles the shell is discarded inside. It is the
+    // number to read when the chart's outer ground looks paler and flatter
+    // than the middle: anything outside that block is the coarse shell's to
+    // paint wherever its 150 m chords stand over the fine world, and a block
+    // that has collapsed to 1x1 hands it nearly everything.
     textEdgeP(`Z${TERRAIN_Z} MESH ${terrainMeshes.size} WAIT ${terrainReady.size - terrainMeshes.size}`
-      + ` REBUILD ${terrainDirty.size} · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
+      + ` REBUILD ${terrainDirty.size} CLIP ${fineBlock[0] + fineBlock[1] + 1}x${fineBlock[2] + fineBlock[3] + 1}`
+      + ` · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
       + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
       6, 48, UI.soft);
     // ── THE KEY ── one row per LAYER that draws boxes, in the order they
