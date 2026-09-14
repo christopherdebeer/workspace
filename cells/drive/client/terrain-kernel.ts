@@ -1605,7 +1605,11 @@ export function createTerrainKernel() {
       const kind = kinds ? kinds[i] : 0;
       let slope = Math.hypot(du, dv) / Math.max(cell, 1);
       if (kind === 2) slope = Math.max(slope, CUTF_K); else if (kind === 3) slope = Math.max(slope, BANK_K);
-      let [r, g, bb] = S.palette(elevAbs, slope, S.coverPaint(ex, ez), ex, ez);
+      // ONE READ, TWO CONSUMERS. coverPaint is two sampleCover calls and two
+      // hashes; the colour and the detail material both want the same answer
+      // at the same point, and it was being asked twice.
+      const cp = S.coverPaint(ex, ez);
+      let [r, g, bb] = S.palette(elevAbs, slope, cp, ex, ez);
       if (kind === 2) { r += (EARTH_T[0] - r) * 0.6; g += (EARTH_T[1] - g) * 0.6; bb += (EARTH_T[2] - bb) * 0.6; }
       // …and then whoever actually drew this ground. The 38m raster says what is
       // growing across a landscape; an OSM area says where a particular wood
@@ -1619,12 +1623,19 @@ export function createTerrainKernel() {
       colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
       // ── AND WHAT THE GROUND IS MADE OF, for the detail cascade ──
       //
-      // `coverPaint` is already read above for the colour, so this costs one
-      // table lookup. SLOPE RAISES ROUGHNESS because a steep face sheds its
-      // soil: the same class on a cliff is exposed rock. A cut face (kind 2)
-      // is fresh earth and the roughest thing in the world.
-      const mc = S.coverPaint(ex, ez);
-      const mt = mc === null || mc === undefined ? null : TD_MAT[mc];
+      // The cover read above is reused, so this really does cost one table
+      // lookup — the first cut of this comment CLAIMED that while calling
+      // coverPaint a second time, and the comment is the reason the duplicate
+      // survived review. What the duplicate did NOT cost is worth recording
+      // beside it, because the obvious story is wrong: measured at Yosemite,
+      // 68.87ms a tile in the colour phase with the duplicate and 69.83
+      // without it — no change, and the 69ms is this loop's own long-standing
+      // price (the kernel split measured the same figure before aTd or this
+      // table existed). Do not call a thing twice; do not expect that to be
+      // where the time is. SLOPE RAISES ROUGHNESS because a steep face sheds
+      // its soil: the same class on a cliff is exposed rock. A cut face
+      // (kind 2) is fresh earth and the roughest thing in the world.
+      const mt = cp === null || cp === undefined ? null : TD_MAT[cp];
       let rough = mt ? mt[0] : 0.6, grain = mt ? mt[1] : 0.5;
       rough = Math.min(1, rough + Math.min(slope, 1) * 0.6);
       if (kind === 2) { rough = Math.min(1, rough + 0.35); grain = Math.min(1, grain + 0.3); }
