@@ -28,6 +28,15 @@ export interface CellTris { seg: number; offs: Int32Array; tris: Int32Array }
 export interface RefinedMesh { pos: Float32Array; uv: Float32Array; idx: Uint32Array; kinds: Uint8Array; cells: number; tris: number; cellTris: CellTris }
 export interface TileBuild {
   pos: Float32Array; uv: Float32Array; idx: Uint32Array; colors: Float32Array; normals: Float32Array;
+  /** Per vertex, two numbers the SURFACE-DETAIL cascade needs and the colour
+   *  cannot carry: ROUGH (how strongly fine detail draws here — bare rock
+   *  and a fresh cut face loud, a crop field almost silent, open water
+   *  nothing) and GRAIN (its character — 1 is stony scatter, 0 a smooth
+   *  wash). Decided here rather than in the shader because the cover class
+   *  is known here and is thrown away by the palette: `bare` deliberately
+   *  has NO tint entry, so bare ground and ochre scrub come out the same
+   *  colour and no fragment could tell them apart afterwards. */
+  mats: Float32Array;
   kinds: Uint8Array | null; cellTris: CellTris; refined: boolean; corridor: boolean;
 }
 export type TerrainCrossingKind = 'bridge' | 'culvert' | 'ford' | 'causeway';
@@ -114,6 +123,32 @@ export function createTerrainKernel() {
   const TOE_REACH = 16;       // how far out a bank or a face is looked for at all
   const DECK_GAP_T = 3;       // a crest this far above the ground is a structure: no bank
   const EARTH_T: Rgb = [0.42, 0.34, 0.26];
+  /**
+   * ── WHAT EACH LAND COVER IS MADE OF, as [rough, grain] ──
+   *
+   * ROUGH scales how loudly the fine octaves draw; GRAIN chooses their
+   * character, 1 being stony scatter and 0 a smooth wash. The keys are the
+   * WorldCover classes the palette already reads.
+   *
+   * Bare is the loud one, and it is the whole reason this table exists: the
+   * palette gives bare ground NO tint — the biome ramp is already sand and
+   * rock — so bare and ochre scrub arrive at the fragment as the same colour
+   * and nothing downstream could have told them apart. Water is silent, and
+   * has to be: a lake with grit on it is a lake with grit on it.
+   */
+  const TD_MAT: Record<number, [number, number]> = {
+    10: [0.40, 0.30],   // tree     — leaf litter under a canopy
+    20: [0.60, 0.50],   // shrub    — broken scrub and stone between the bushes
+    30: [0.35, 0.15],   // grass    — tussock patchiness, no scatter
+    40: [0.28, 0.05],   // crop     — worked ground, deliberately smooth
+    50: [0.50, 0.20],   // built    — a made surface, and its edges
+    60: [1.00, 0.85],   // bare     — stony scatter: the loud one
+    70: [0.25, 0.00],   // snow     — drift, smooth
+    80: [0.00, 0.00],   // water    — nothing at all
+    90: [0.30, 0.10],   // wetland
+    95: [0.35, 0.20],   // mangrove
+    100: [0.45, 0.25],  // moss/lichen on rock
+  };
   /** The corridor is built into tiles this close to the truck; further out a
    *  tile keeps the plain grid and the carve, and STITCHES to any refined
    *  neighbour along their shared border. A tile that comes into range while
@@ -1490,6 +1525,7 @@ export function createTerrainKernel() {
     const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
     const cell = t.w / SEG;
     const colors = new Float32Array(pos.length);
+    const mats = new Float32Array((pos.length / 3) * 2);
     for (let i = 0; i < (refined ? 0 : (pos.length / 3)); i++) {
       const ex = pos[(i) * 3] + cxm, ez = pos[(i) * 3 + 2] + czm;
       const cv = S.sampleCover(ex, ez);
@@ -1581,13 +1617,25 @@ export function createTerrainKernel() {
         r += (at2[0] - r) * AREA_MIX; g += (at2[1] - g) * AREA_MIX; bb += (at2[2] - bb) * AREA_MIX;
       }
       colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
+      // ── AND WHAT THE GROUND IS MADE OF, for the detail cascade ──
+      //
+      // `coverPaint` is already read above for the colour, so this costs one
+      // table lookup. SLOPE RAISES ROUGHNESS because a steep face sheds its
+      // soil: the same class on a cliff is exposed rock. A cut face (kind 2)
+      // is fresh earth and the roughest thing in the world.
+      const mc = S.coverPaint(ex, ez);
+      const mt = mc === null || mc === undefined ? null : TD_MAT[mc];
+      let rough = mt ? mt[0] : 0.6, grain = mt ? mt[1] : 0.5;
+      rough = Math.min(1, rough + Math.min(slope, 1) * 0.6);
+      if (kind === 2) { rough = Math.min(1, rough + 0.35); grain = Math.min(1, grain + 0.3); }
+      mats[i * 2] = rough; mats[i * 2 + 1] = grain;
     }
     const p6 = performance.now();
     const normals = vertexNormals(pos, idx);
     const p7 = performance.now();
     plainCost.builds++; plainCost.refine += p1 - p0; plainCost.heights += p2 - p1; plainCost.carve += p3 - p2; plainCost.channels += p4 - p3;
     plainCost.pins += p5 - p4; plainCost.colour += p6 - p5; plainCost.normals += p7 - p6;
-    return { pos, uv, idx, colors, normals, kinds: refined ? refined.kinds : null, cellTris, refined: !!refined, corridor };
+    return { pos, uv, idx, colors, normals, mats, kinds: refined ? refined.kinds : null, cellTris, refined: !!refined, corridor };
   }
 
   const M_LAT = 111320, TERRAIN_Z = 14;

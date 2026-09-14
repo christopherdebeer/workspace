@@ -2197,26 +2197,111 @@ const TD_GONE = TD_LAMBDA / 2;
  * — under a palette step of 0.07 — so the step it can produce is below what
  * the quantiser can show.
  */
-const TDETAIL = ((v) => (v && ['on', 'mpp', 'px', 'off'].includes(v) ? v : 'on'))(qs('tdetail')?.toLowerCase());
+const TDETAIL = ((v) => (v && ['on', 'flat', 'mpp', 'px', 'off'].includes(v) ? v : 'on'))(qs('tdetail')?.toLowerCase());
 /** Which ruler is in force (1 = the fragment's footprint, 0 = the chart's
  *  uniform) and whether the mottle draws at all — both live, so `__tdetail`
  *  can flip them on one settled world rather than across two boots. */
 const tdU = {
+  // ── A MATERIAL OVERRIDE, SO THE CASCADE CAN BE JUDGED WITHOUT A DESERT ──
+  //
+  // The loud case is rough 1.0, which is bare rock and salt, and every fixture
+  // in the set is Cape fynbos, Paris or a fjord. The live alternative is worse
+  // than it sounds: a salt flat has NO OSM WAYS, so a harness that settles on
+  // "the ways stopped arriving" never settles there at all.
+  //
+  // Negative means "use the vertex attribute", which is the shipping path.
+  // Forcing it is a lab instrument for the LOOK; that real bare ground gets
+  // 1.0 is a separate question, answered by the kernel's table and witnessed by
+  // the `mat` read-back in __tdetail.
+  uTdForce: { value: new THREE.Vector2(-1, -1) },
   uTdRule: { value: TDETAIL === 'mpp' ? 0 : 1 },
   uTdAmt: { value: TDETAIL === 'off' ? 0 : 1 },
+  // How many of the FINE octaves draw, 0..3. Live, so the cascade can be
+  // stepped on one settled world instead of four boots — the same reason the
+  // ruler is a uniform. `tdetail=flat` pins it at 0, which is the exact A/B
+  // for "what did the cascade add".
+  uTdOct: { value: TDETAIL === 'flat' ? 0 : 3 },
 };
 /** The footprint helper and the heat ramp, prepended to the terrain fragment
  *  shader. One string, so the measuring mode and the shipping mode cannot
  *  drift apart — the instrument must read the same number the term uses. */
 const TD_HELPERS = `
 float tdPx(vec2 gp) {
+  // ── THE GEOMETRIC MEAN, NOT THE MAX, AND THE DIFFERENCE IS THE WHOLE LOOK ──
+  //
+  // Ground is seen at a grazing angle, so the footprint is wildly anisotropic:
+  // at 100 m from the chase seat it is 0.33 m ACROSS the view and 10.3 m ALONG
+  // it. The max is the along-ray number, and gating on it means "remove this
+  // detail if it is undersampled in the WORST direction" — which is correct,
+  // conservative, and maximally blurry: measured, it confined every fine octave
+  // to a few metres around the camera and the cascade did visibly nothing.
+  //
+  // sqrt(dx*dy) is the footprint of an equal-area isotropic pixel, which is
+  // what a trilinear mip chain picks when there is no anisotropic filtering —
+  // the familiar trade every renderer makes. It keeps detail an order of
+  // magnitude further out (100 m reads 1.84 m instead of 10.3) at the cost of
+  // mild along-ray aliasing, which this palette's dither hides better than a
+  // smooth renderer would. The honest statement is not that the max was wrong;
+  // it is that the max buys a sharpness nobody asked for with a blur everybody
+  // sees.
   vec2 d = fwidth(gp);
-  return max(max(d.x, d.y), 1e-4);
+  return max(sqrt(max(d.x, 1e-5) * max(d.y, 1e-5)), 1e-4);
+}
+// Hashed value noise. The same shape as the cloud field's clh21/clvn, kept
+// separate because this one is read at a quarter of a metre and the cloud's is
+// read at six hundred: sharing them would tie two very different budgets
+// together for the sake of six lines.
+float tdH(vec2 p) {
+  // ── THE LATTICE INDEX IS WRAPPED, AND IT HAS TO BE ──
+  //
+  // The hash is fract(p * 127.31), and world coordinates here are metres from
+  // the spawn, so a drive of twenty kilometres hands the finest octave a
+  // lattice index of 80000 and the hash an argument of 1.0e7. A float32 has a
+  // ULP of 1.0 at that magnitude: fract returns 0.0 for most inputs and the
+  // noise stops varying — degenerating into flat bands exactly where the
+  // player has driven far enough to want it.
+  //
+  // Derived rather than observed: every fixture spawns near the origin, so no
+  // test in this harness could have shown it.
+  //
+  // 2048 cells keeps the hash argument under 3e5, where the ULP is 0.03 and
+  // fract is still smooth. The cost is a repeat every 2048 cells — 512 m for
+  // the quarter-metre octave, which can only be seen from ten metres away, and
+  // 8 km for the four-metre one, by which range its own band has long since
+  // turned it off. Neither period is reachable by an eye that can resolve the
+  // octave it belongs to.
+  p = mod(p, 2048.0);
+  p = fract(p * vec2(127.31, 311.7));
+  p += dot(p, p + 34.23);
+  return fract(p.x * p.y);
+}
+float tdVN(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = tdH(i), b = tdH(i + vec2(1.0, 0.0));
+  float c = tdH(i + vec2(0.0, 1.0)), d = tdH(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y) - 0.5;
+}
+// ONE OCTAVE, AND THE WHOLE POINT OF THE CASCADE. A single fixed wavelength can
+// only ever be honest at one distance: make it fine enough to see from the cab
+// and it aliases past a few metres. So each octave carries its own Nyquist
+// test against the art pixel and simply is not there beyond it. Full strength
+// while a pixel spans under a quarter of the wavelength, gone by half of it.
+float tdBand(float px, float lambda) {
+  return 1.0 - smoothstep(lambda * 0.25, lambda * 0.5, px);
+}
+// Stony scatter versus a smooth wash. A gentle S on the noise pushes values
+// toward the ends and leaves a scatter of light and dark specks; grain 0 keeps
+// the plain interpolation, which reads as damp patchiness.
+float tdGrain(float n, float grain) {
+  float sharp = sign(n) * smoothstep(0.0, 0.35, abs(n)) * 0.5;
+  return mix(n, sharp, grain);
 }
 vec3 tdHeat(float px) {
   // A log ruler from a tenth of a metre to a kilometre, in saturated primaries
   // so it survives 14 palette levels and a Bayer dither. Blue is finer than
-  // the mottle needs, green is around the band edge, red is aliasing.
+  // the cascade's finest octave needs, green is around the coarse band edge,
+  // red is where nothing may draw.
   float u = clamp((log2(px) + 3.32) / 13.29, 0.0, 1.0);
   vec3 c = mix(vec3(0.0, 0.0, 0.6), vec3(0.0, 0.8, 0.9), smoothstep(0.0, 0.33, u));
   c = mix(c, vec3(0.1, 0.9, 0.1), smoothstep(0.33, 0.55, u));
@@ -6423,7 +6508,13 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
     sh.uniforms.uWxMin = wxU.uWxMin;
     sh.uniforms.uWxInv = wxU.uWxInv;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;\n'
+        // WHAT THE GROUND IS MADE OF, from the terrain geometry. A material
+        // wearing terrainFx over geometry WITHOUT this attribute (the lab's
+        // ground, the far shell's fallback) gets the zero vector, which reads
+        // as rough 0 — no fine detail, which is the right thing to do when
+        // nobody said what the surface is.
+        + 'attribute vec2 aTd;\nvarying vec2 vTd;')
       // ── AND IT HAS TO KNOW WHERE THE INSTANCE IS ──
       //
       // This read `modelMatrix * transformed` and skipped `instanceMatrix`,
@@ -6444,7 +6535,8 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         #ifdef USE_INSTANCING
           fxWp = instanceMatrix * fxWp;
         #endif
-        vWorldP = (modelMatrix * fxWp).xyz;`);
+        vWorldP = (modelMatrix * fxWp).xyz;
+        vTd = aTd;`);
     sh.uniforms.uSunSkew = envU.uSunSkew;
     sh.uniforms.uDeckY = envU.uDeckY;
     sh.uniforms.uCloudScale = envU.uCloudScale;
@@ -6458,6 +6550,7 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vWorldP;
+        varying vec2 vTd;
         uniform sampler2D uDbgWet; uniform vec2 uDbgOrg; uniform float uDbgW; uniform float uDbgOn;
         uniform float uCloudS; uniform vec2 uWind; uniform float uMpp;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
@@ -6532,18 +6625,67 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
       // per fragment, and per-fragment is where this renderer has room.
       sh.uniforms.uTdRule = tdU.uTdRule;
       sh.uniforms.uTdAmt = tdU.uTdAmt;
+      sh.uniforms.uTdOct = tdU.uTdOct;
+      sh.uniforms.uTdForce = tdU.uTdForce;
       sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
       {
         vec2 gp = vWorldP.xz;
+        float px = tdPx(gp);
         float gn = sin(gp.x * 0.131 + sin(gp.y * 0.093) * 2.0) * sin(gp.y * 0.117 + sin(gp.x * 0.071) * 2.0);
-        float bandPx = 1.0 - smoothstep(${TD_KEEP.toFixed(2)}, ${TD_GONE.toFixed(2)}, tdPx(gp));
+        float bandPx = 1.0 - smoothstep(${TD_KEEP.toFixed(2)}, ${TD_GONE.toFixed(2)}, px);
         float bandMpp = 1.0 - smoothstep(15.0, 60.0, uMpp);
+        // OCTAVE 0, the mottle this shader has always had: broad tonal drift.
+        // ── THE PEDESTAL IS FIXED, AND IT HAS TO BE ──
+        //
+        // The shipped base 0.955 is 1 minus the mottle's amplitude, which looks
+        // like "texture may darken the palette but never brighten past it" —
+        // and tracking it against the live octave sum is the obvious next step
+        // and is WRONG. Every octave here has zero mean, so a fixed pedestal
+        // keeps the MEAN brightness identical whether three octaves are drawing
+        // or none. A pedestal that shrinks as octaves fade out does not: the
+        // far field, where they have all gone, would lift by the whole cascade
+        // amplitude and the world would read as a bright horizon against dark
+        // ground at the truck. Fifteen per cent of it, at full roughness.
+        //
+        // So the base stays put and the loudest bare ground is allowed a few
+        // per cent above its palette colour. Consistency across distance is
+        // worth more than a ceiling at neutral.
+        float d = 0.045 * gn * mix(bandMpp, bandPx, uTdRule);
+        // ── AND THE FINER OCTAVES, WHICH ARE THE POINT ──
+        //
+        // Each is gated on the SAME footprint the coarse band uses, so none of
+        // them can alias; the gates nest because a pixel fine enough for the
+        // third is fine enough for the first two, and a branch on the footprint
+        // is coherent across the screen, so the far field pays for one compare.
+        //
+        // ROUGH comes from the ground itself (vTd.x). Bare rock is 1.0 and a
+        // crop field 0.28, so the same cascade reads as stony scatter on one
+        // and as almost nothing on the other — which is the difference the
+        // palette throws away and the whole reason aTd exists.
+        //
+        // THE AMPLITUDES RISE AS THE OCTAVES GET FINER, against the instinct.
+        // One palette level is about 0.07 sRGB, so a term at the old +/-0.045
+        // is two thirds of a step and spends most of its life deciding which
+        // side of the dither a pixel falls on. A term only close enough to see
+        // can afford to be loud, because close enough to see is also far from
+        // Nyquist.
+        float rough = uTdForce.x >= 0.0 ? uTdForce.x : vTd.x;
+        float grain = uTdForce.y >= 0.0 ? uTdForce.y : vTd.y;
+        if (rough > 0.01 && px < 2.0 && uTdOct > 0.5) {
+          d += 0.055 * rough * tdVN(gp * 0.25) * tdBand(px, 4.0);
+          if (px < 0.5 && uTdOct > 1.5) {
+            d += 0.070 * rough * tdGrain(tdVN(gp), grain) * tdBand(px, 1.0);
+            if (px < 0.125 && uTdOct > 2.5) {
+              d += 0.085 * rough * tdGrain(tdVN(gp * 4.0), grain) * tdBand(px, 0.25);
+            }
+          }
+        }
         ${TDETAIL === 'px'
-          ? 'diffuseColor.rgb = tdHeat(tdPx(gp));'
-          : 'diffuseColor.rgb *= 0.955 + 0.045 * gn * mix(bandMpp, bandPx, uTdRule) * uTdAmt;'}
+          ? 'diffuseColor.rgb = tdHeat(px);'
+          : 'diffuseColor.rgb *= 0.955 + d * uTdAmt;'}
       }`);
       sh.fragmentShader = TD_HELPERS
-        + 'uniform float uTdRule;\nuniform float uTdAmt;\n'
+        + 'uniform float uTdRule;\nuniform float uTdAmt;\nuniform float uTdOct;\nuniform vec2 uTdForce;\n'
         + sh.fragmentShader;
     }
   };
@@ -7200,6 +7342,10 @@ function buildTerrainMesh(t: HeightTile): void {
   geo.setAttribute('uv', new THREE.BufferAttribute(b.uv, 2));
   geo.setAttribute('color', new THREE.BufferAttribute(b.colors, 3));
   geo.setAttribute('normal', new THREE.BufferAttribute(b.normals, 3));
+  // WHAT THE GROUND IS MADE OF, per vertex — see terrain-kernel's TD_MAT.
+  // The colour cannot stand in for it: bare ground has no tint entry, so it
+  // arrives at the fragment the same colour as ochre scrub.
+  geo.setAttribute('aTd', new THREE.BufferAttribute(b.mats, 2));
   geo.setIndex(new THREE.BufferAttribute(b.idx, 1));
   cellTrisCache.set(geo, b.cellTris);
   (geo.userData as { seg?: number }).seg = SEG;
@@ -7357,6 +7503,10 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
   geo.setAttribute('uv', new THREE.BufferAttribute(r.uv, 2));
   geo.setAttribute('color', new THREE.BufferAttribute(r.colors, 3));
   geo.setAttribute('normal', new THREE.BufferAttribute(r.normals, 3));
+  // WHAT THE GROUND IS MADE OF, per vertex — see terrain-kernel's TD_MAT.
+  // The colour cannot stand in for it: bare ground has no tint entry, so it
+  // arrives at the fragment the same colour as ochre scrub.
+  geo.setAttribute('aTd', new THREE.BufferAttribute(r.mats, 2));
   geo.setIndex(new THREE.BufferAttribute(r.idx, 1));
   cellTrisCache.set(geo, { seg: SEG, offs: r.cellOffs, tris: r.cellTris });
   (geo.userData as { seg?: number }).seg = SEG;
@@ -34234,6 +34384,30 @@ function repaintWetDebug(): void {
  * from the console at 3 fps without a reload, which is what the dial rack will
  * be built from once the seat has picked numbers.
  */
+/** The [rough, grain] the BUILT MESH carries at a point — the nearest vertex of
+ *  the terrain tile that owns it. Read from the attribute rather than
+ *  recomputed from the cover raster, because the question this answers is
+ *  "what did the shader get", and a second derivation could agree with the
+ *  raster while disagreeing with the geometry. */
+function tdMatAt(x: number, z: number): object | null {
+  // Every built tile, nearest vertex wins. A probe, so the sweep is affordable
+  // and worth more than a key lookup that could disagree with the geometry: the
+  // question is what the SHADER got, not what the raster says.
+  let best = Infinity, rough = 0, grain = 0;
+  for (const mesh of terrainMeshes.values()) {
+    const at = mesh.geometry.getAttribute('aTd');
+    const pos = mesh.geometry.getAttribute('position');
+    if (!at || !pos) continue;
+    const ox = mesh.position.x, oz = mesh.position.z;
+    for (let i = 0; i < pos.count; i++) {
+      const dx = pos.getX(i) + ox - x, dz = pos.getZ(i) + oz - z;
+      const d = dx * dx + dz * dz;
+      if (d < best) { best = d; rough = at.getX(i); grain = at.getY(i); }
+    }
+  }
+  return best === Infinity ? null
+    : { rough: +rough.toFixed(3), grain: +grain.toFixed(3), dist: +Math.sqrt(best).toFixed(1) };
+}
 /**
  * ── WHAT AN ART PIXEL ACTUALLY COVERS ON THE GROUND, ALONG THE VIEW ──
  *
@@ -34252,9 +34426,15 @@ function repaintWetDebug(): void {
  * seat, which is the finding.
  */
 (window as unknown as { __tdetail?: object }).__tdetail = (
-  opts?: { rule?: 'px' | 'mpp'; amount?: number },
+  opts?: { rule?: 'px' | 'mpp'; amount?: number; oct?: number;
+    rough?: number | null; grain?: number | null },
 ): object => {
+  // null hands the ground back to its own attribute.
+  if (opts?.rough !== undefined) tdU.uTdForce.value.x = opts.rough === null ? -1 : clamp(opts.rough, 0, 1);
+  if (opts?.grain !== undefined) tdU.uTdForce.value.y = opts.grain === null ? -1 : clamp(opts.grain, 0, 1);
   if (opts?.rule !== undefined) tdU.uTdRule.value = opts.rule === 'mpp' ? 0 : 1;
+  // How many fine octaves draw. 0 is the world before the cascade.
+  if (opts?.oct !== undefined) tdU.uTdOct.value = clamp(Math.round(opts.oct), 0, 3);
   // 0..4, NOT 0..1. The mottle's own amplitude is +/-0.045 and one palette step
   // is about 0.07 sRGB, so the shipped term is two thirds of a step either side
   // of its mean: most of what it contributes survives quantisation only as
@@ -34279,15 +34459,39 @@ function repaintWetDebug(): void {
     // from the ray rather than assumed flat, so a hillside facing the camera
     // reports the shorter footprint it really has.
     const sinG = Math.min(1, Math.max(1e-4, Math.abs(eye.y - y) / Math.max(t, 1e-4)));
+    // The geometric mean is what tdPx returns and what every band is gated on;
+    // across and along are reported beside it because the ANISOTROPY is the
+    // reason the choice between them matters at all.
+    const geo = Math.sqrt(across * (across / sinG));
     return { d, t: +t.toFixed(1), across: +across.toFixed(2), along: +(across / sinG).toFixed(1),
+      geo: +geo.toFixed(2),
       // What the shipped fade would leave of the mottle at this point, under
       // each ruler. The pair is the A/B, in one row.
-      keepPx: +(1 - clamp((across / sinG - TD_KEEP) / (TD_GONE - TD_KEEP), 0, 1)).toFixed(3),
+      keepPx: +(1 - clamp((geo - TD_KEEP) / (TD_GONE - TD_KEEP), 0, 1)).toFixed(3),
+      // …and what each fine octave is worth here, which is the row that says
+      // whether the cascade reaches this far.
+      oct: [4, 1, 0.25].map((L) => +(1 - clamp((geo - L * 0.25) / (L * 0.25), 0, 1)).toFixed(2)),
       keepMpp: +(1 - clamp((envU.uMpp.value - 15) / 45, 0, 1)).toFixed(3) };
   };
   return {
     mode: TDETAIL, rule: tdU.uTdRule.value ? 'px' : 'mpp', amount: tdU.uTdAmt.value,
-    cam: camMode, pix: [pixSize.x, pixSize.y],
+    oct: tdU.uTdOct.value, cam: camMode, pix: [pixSize.x, pixSize.y],
+    forced: tdU.uTdForce.value.x < 0 ? null
+      : [tdU.uTdForce.value.x, tdU.uTdForce.value.y],
+    // What the ground under the truck says it is made of, read back from the
+    // built mesh — so "the grit is not drawing" can be answered with the
+    // roughness rather than with a guess about the cover raster.
+    mat: tdMatAt(state.x, state.z),
+    // WHAT THE EXTRA PER-VERTEX BUFFER COST. aTd adds two floats a vertex and
+    // one table lookup to the kernel's colour loop, which is already timed —
+    // so "negligible" is a number here rather than an assertion.
+    build: { tiles: plainCost.builds, colourMs: +plainCost.colour.toFixed(0),
+      perTileMs: +(plainCost.colour / Math.max(1, plainCost.builds)).toFixed(2),
+      normalsMs: +plainCost.normals.toFixed(0) },
+    // Each fine octave's wavelength and the footprint band it lives inside, so
+    // a row of `ahead` can be read against the octave it turns off.
+    octaves: [[4, 1, 2], [1, 0.25, 0.5], [0.25, 0.0625, 0.125]]
+      .map(([lambda, keep, gone]) => ({ lambda, keep, gone })),
     lambda: +TD_LAMBDA.toFixed(1), keep: +TD_KEEP.toFixed(1), gone: +TD_GONE.toFixed(1),
     // The chart's uniform, which is the legacy fade's only input.
     mpp: +envU.uMpp.value.toFixed(2),

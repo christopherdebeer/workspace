@@ -27,14 +27,24 @@ import { openDrive } from './harness.mjs';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
 const TD = process.env.TD ?? 'on';
+// A LIVE SPOT, because no fixture in the set is bare ground. The cascade's
+// loudest case is rough 1.0 — exposed rock and salt — and every captured world
+// here is Cape fynbos, Paris or a Norwegian fjord. SPOT= takes a raw query
+// (SPOT='lat=-20.1338&lon=-67.4891' is the Uyuni salt flat).
+const SPOT = process.env.SPOT ?? '';
 const FIX = process.env.FIX ?? 'at-campsbay';
+// ROAD=0 leaves the truck where it spawned. __toroad puts it on a carriageway,
+// and a carriageway does not wear terrainFx at all — so the first run of this
+// measured a frame whose entire near field was ROAD and concluded the cascade
+// did nothing. The near ground has to be ground.
+const ROAD = process.env.ROAD !== '0';
 const OUT = process.env.OUT ?? '/tmp/drive-tools/tdetail';
 mkdirSync(OUT, { recursive: true });
 const t0 = Date.now();
 const el = () => `${((Date.now() - t0) / 1000).toFixed(0)}s`;
 
 const d = await openDrive({
-  spot: `fixture=${FIX}&cam=chase&time=NOON&wx=clear&nodraw=1&tdetail=${TD}`,
+  spot: (SPOT ? SPOT : `fixture=${FIX}`) + `&cam=chase&time=NOON&wx=clear&nodraw=1&tdetail=${TD}`,
   tag: `tdetail-${TD}`, settle: 0, bootTimeout: 240000, dpr: 1,
 });
 const q = (f, ...a) => d.page.evaluate(f, ...a);
@@ -49,17 +59,20 @@ for (let i = 0; i < 90; i++) {
   if (quiet >= 4) break;
 }
 console.log(`[${el()}] settled: ways ${pw}, roadCells ${pc}, builds ${pb}`);
-await q(() => window.__toroad?.(400));
+if (ROAD) await q(() => window.__toroad?.(400));
 
 for (const cam of ['chase', 'cab', 'top']) {
   await q((m) => window.__cam(m), cam);
   await d.page.waitForTimeout(2500);
   const t = await q(() => window.__tdetail());
-  const { ahead, ...head } = t;
+  const { ahead, build, ...head } = t;
   console.log(`  [${cam}] ${JSON.stringify(head)}`);
-  console.log('    d / across / ALONG / keep(px) / keep(mpp):');
+  // The kernel's colour loop is where aTd's cost lands; printed once per camera
+  // so a regression shows up beside the look it paid for.
+  if (build) console.log(`    build: ${JSON.stringify(build)}`);
+  console.log('    d / across / along / GEO | coarse | oct 4m/1m/0.25m:');
   console.log('      ' + ahead.map((r) =>
-    `${r.d}m ${r.across}/${r.along} ${r.keepPx}/${r.keepMpp}`).join('  '));
+    `${r.d}m ${r.across}/${r.along}/${r.geo} ${r.keepPx} [${r.oct.join(' ')}]`).join('  '));
 }
 
 // The frames. `nodraw` comes off for these; the heat map is worthless without
@@ -89,17 +102,35 @@ for (const [name, cam, zoom] of [['chase', 'chase', 0], ['cab', 'cab', 0], ['top
     // thirds of a step, so a sweep to four times it says how loud a procedural
     // surface term has to be before 14 levels and a dither can carry it —
     // which is the constraint every later one of these has to be designed to.
-    const legs = [['mpp-a', 'mpp', 1], ['px-a', 'px', 1], ['mpp-b', 'mpp', 1],
-      ['px-b', 'px', 1], ['off', 'px', 0],
-      ['amp2', 'px', 2], ['amp3', 'px', 3], ['amp4', 'px', 4]];
-    for (const [tag, rule, amount] of legs) {
-      await q((o) => window.__tdetail(o), { rule, amount });
+    // ── THE OCTAVE LADDER: WHAT EACH ONE ADDS, ON ONE SETTLED WORLD ──
+    //
+    // oct 0 is the world before the cascade — the 15 m mottle alone. Each step
+    // switches on one finer octave, so the diff between consecutive frames is
+    // exactly that octave and nothing else. The interleaved repeat (oct3 twice)
+    // gives the floor at the same temporal separation: without it a cross diff
+    // carries the world's own motion, and the first attempt at this read a
+    // worst pixel of 126 that turned out to be a deer.
+    // ROUGH= forces the material, so the loud case (bare rock and salt, 1.0)
+    // can be judged from a fixture. Real bare ground reaching 1.0 is a separate
+    // question and the `mat` read-back above answers it.
+    const ROUGH = process.env.ROUGH ? Number(process.env.ROUGH) : null;
+    const GRAIN = process.env.GRAIN ? Number(process.env.GRAIN) : null;
+    if (ROUGH !== null) await q((o) => window.__tdetail(o), { rough: ROUGH, grain: GRAIN ?? 0.85 });
+    // INTERLEAVED AND MATCHED. Each consecutive pair is one leg apart, so the
+    // repeats (oct0 twice, oct3 twice) are the floor at the SAME separation as
+    // the comparisons. The first attempt put the repeats four legs from their
+    // twins and produced a floor larger than the signal, which says nothing
+    // about either.
+    const legs = [['oct0', 0], ['oct3', 3], ['oct0-b', 0], ['oct3-b', 3],
+      ['oct1', 1], ['oct2', 2], ['off', -1]];
+    for (const [tag, oct] of legs) {
+      await q((o) => window.__tdetail(o), oct < 0 ? { amount: 0 } : { oct, amount: 1 });
       // Long enough for the uniform to reach a drawn frame at 3 fps, short
       // enough that the world has not walked far.
       await d.page.waitForTimeout(500);
       writeFileSync(`${OUT}/${name}-ab-${tag}.png`, await d.page.screenshot({ timeout: 240000 }));
     }
-    await q(() => window.__tdetail({ rule: 'px', amount: 1 }));
+    await q(() => window.__tdetail({ rule: 'px', oct: 3, amount: 1 }));
     console.log(`  shot ${name}-ab-{${legs.map((l) => l[0]).join(',')}}`);
   } else {
     writeFileSync(`${OUT}/${name}-${TD}.png`, await d.page.screenshot({ timeout: 240000 }));
