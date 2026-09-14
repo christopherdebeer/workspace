@@ -219,6 +219,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
 | `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
+| `node devtools/substrate-ab.mjs` | whether the substrate's classification draws a material or more noise: the inputs at six points, an interleaved one-boot A/B cropped to the near field, and the domain and amount dials swept (`TD=dom` paints the classification) | ~9min |
 | `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
 | `node devtools/menu-survey.mjs` | every menu screen photographed, SETTINGS scrolled through | ~2min |
 | `node devtools/offline-ground.test.mjs` | and finds ground when it does | ~3min |
@@ -9393,3 +9394,161 @@ octaves at ×2.07, so a finest feature near **70 m**, sharpened further by
 `clCov` — and its amplitude is up to **0.5 darkening, about seven palette
 steps** against the mottle's 0.64. Same fault, ten times as loud. Not measured
 here: the fixture runs `wx=clear`, so `covL` was ~0 and the term never drew.
+
+## The substrate: the ground is a material now, not a wash with noise on it
+
+The seat's verdict on the detail cascade, after driving it: over exposed ground
+the world is one undifferentiated surface with some texture on it, and what it
+wants is *less "terrain texture" and more a procedural substrate renderer* —
+three strongly differentiated components for ground no land-cover class
+describes, with the priority stated outright: **5–50 m coherent substrate
+domains + 0.5–5 m material structure. Not micro-detail first.**
+
+The cascade could never have got there, and the arithmetic says why in one
+line. Every term in it is a BRIGHTNESS, one palette step is 0.07 sRGB, and its
+loudest octave is 0.085 — so the whole four-octave cascade lives inside a step
+and a half and can only say "a bit lighter, a bit darker". It cannot say
+OUTCROP, SCREE or TURF, at any amplitude, because those are not brightnesses.
+
+So `client/substrate-field.ts` is the layer under the texture: a first-order
+CLASSIFICATION into rock, regolith and turf, coherent over the ten to fifty
+metres a driver reads a landscape at, moving CHROMA where the cascade moves
+luminance.
+
+- **THE MATERIALS ARE TRANSFORMS OF THE PLACE'S OWN COLOUR, NOT THREE
+  COLOURS.** The palette has already decided what country this is — the climate
+  ramps, the bedrock family, the cover tint, the guild standing on it — and a
+  substrate that painted a fixed granite grey over all of that would undo the
+  whole site model to gain a texture. Rock is the ground's colour with its
+  chroma pulled out and a cool cast on it (weathered stone is grey whatever the
+  soil around it is), regolith is that colour oxidised warm, turf is it pulled
+  green. **And every transform holds luminance to within a few per cent**,
+  deliberately: fourteen levels and a dither turn a brightness difference into
+  a different TONE and a hue difference into a different MATERIAL, and it is
+  materials this draws. The differentials are one to two and a half palette
+  steps in the chroma channels and under one in luminance.
+- **THE EVIDENCE IS THE ATTRIBUTE AND THE VERTEX COLOUR, AND BOTH ARE NEEDED.**
+  `aTd` is three floats now — rough, grain and the bed's own slope — which say
+  how mineral and how steep this is; the colour says whether anything grows
+  here (`veg`) and whether the ground is oxidised (`warm`), both normalised by
+  luminance so a shaded face and a sunlit one classify alike. Neither half is
+  enough on its own, and the case that proves it is snow.
+- **SLOPE RIDES SEPARATELY EVEN THOUGH ROUGH ALREADY CARRIES IT.** The kernel
+  adds slope into rough because a steep face rightly draws louder detail; the
+  substrate needs to know how much of what it sees is STEEP, because a slope is
+  where soil has left. Reading that back out of rough means inverting the cover
+  table in the shader — the kind of cleverness that breaks the first time a row
+  moves. And the slope it carries is the BED's, captured before the corridor's
+  cut and bank faces force it, or every road's earthworks would paint as
+  outcrop.
+- **BEDDING IS PHASED ON THE WORLD Y, AND THAT IS THE WHOLE TRICK.** A
+  sedimentary bed is a near-horizontal layer, so the line where it meets the
+  hillside is a contour of `y + dip·xz`: the bands then wrap round a spur,
+  climb a gully and close up where the ground steepens, exactly as real strata
+  do, for one dot product. A purely horizontal noise, however well tuned, lies
+  flat across the slope and reads as paint on a hill rather than as the hill's
+  own structure. The dip itself comes from two very low-frequency reads, so a
+  hillside's beds all dip the same way and the direction turns over about a
+  kilometre — which is the scale a fold belt actually varies at, and it needs
+  no district table and no upload.
+- **THE DOMAIN COLLAPSES TO ITS MEAN RATHER THAN ALIASING, AND IS NOT
+  EVALUATED PAST THAT.** Beyond the range where a patch is narrower than an art
+  pixel the field is replaced by its own mean and the classification falls back
+  on the vertex material, which is smooth and is exactly what the far field
+  should read. Switching the substrate off out there would be worse: this band
+  is the one the brief singles out BECAUSE it survives into the middle
+  distance, and at 18 m it is still drawing at nine metres a pixel — most of a
+  kilometre from the chase seat.
+
+### What it draws, and the three things the measurement overturned
+
+`devtools/substrate-ab.mjs` is the instrument: the classification's inputs at
+six points around the truck, an **interleaved one-boot A/B** (sub0, sub1,
+sub0-b, sub1-b — the repeats are the same setting at the same separation as the
+cross pairs, so their diff is the floor), **cropped to the near field** because
+the domain band-limits away and a full-frame mean of a near-field term divides
+the signal by the sky. `?tdetail=dom` paints the shader's own answer — red
+outcrop, green turf, blue regolith — which is the only honest witness for a
+weight computed in a fragment.
+
+**Measured at the seat's own Yosemite spot** (`lat=37.73606&lon=-119.63732`,
+NOON, clear, one settled boot, the lower half and middle three quarters of the
+pane):
+
+| | chase | top |
+|---|---|---|
+| floor, substrate off / on | 1.57 / 1.05 (7.0% / 5.1% of pixels) | 1.34 / 0.40 (4.6% / 1.5%) |
+| **SIGNAL, off vs on** | **5.07 /255, 53.9% moved** | **4.96 /255, 44.1% moved** |
+| domain 18 m vs 8 m | 1.02, 8.8% | 0.93, 9.9% |
+| domain 18 m vs 40 m | 1.92, 10.1% | 1.58, 15.2% |
+| amount 1 vs 2 | 4.67, 52.4% | 4.69, 48.5% |
+
+Three to five times the floor in the mean and eight to thirty times in pixels
+moved, on a term that is meant to change the ground and nothing else. For
+contrast, the ruler change one section up sat INSIDE its own floor on two
+cameras of three — that is what a real effect and a true-but-quiet one look
+like on the same instrument.
+
+And three things this found that reasoning had got wrong:
+
+- **THE REGOLITH GATE WAS BLIND AT EXACTLY THE SPOT THE BRIEF WAS ABOUT.** It
+  gated on the palette's warmth alone — soil is oxidised, snow is not — which
+  is true and insufficient. Yosemite's exposed granite reads (0.711, 0.727,
+  0.746): pale and very slightly BLUE, so `warm` is −0.049, one gate short of a
+  snowfield's, and the surface the seat photographed classified as 49% outcrop
+  and **51% leave-it-alone**. The pale sheet stayed a pale sheet, and the whole
+  unit would have shipped doing very little where it was wanted most. What
+  separates granite grus from a glacier is the cover class, already in hand:
+  bare ground carries grain 0.85 and snow 0.00. Either piece of evidence opens
+  the gate now and snow still has neither. **The signal went 2.11 → 5.07 and
+  13.2% → 53.9% of the pane on that one change.**
+- **A STRUCTURE'S AMPLITUDE IS ATTENUATED BY ITS OWN MATERIAL'S WEIGHT.** A
+  tone reaches the frame as tone × weight × the material's colour, so at
+  Yosemite — rock 0.46 on ground at 0.72 — the bedding's 0.13 arrived as 0.043,
+  six tenths of a palette step, and was invisible in the frame while the
+  classification under it was correct. **That is the cascade's own fault one
+  layer down**: an amplitude chosen against the palette step is under it by the
+  time it draws. The bedding, joints, tonal regions and clasts are loud by the
+  standards of a texture now (a coincident bedding line is about two and a half
+  steps) and can afford to be, because every one is band-limited.
+- **THE AMOUNT DIAL WAS A BRIGHTNESS, NOT A MATERIAL.** Scaling the WEIGHTS by
+  it is wrong in both directions: at Yosemite they already sum to one, so
+  asking for two doubled the absolute colour — 45/255 of mean luma and 94% of
+  the pane, a blowout rather than a stronger substrate. It interpolates the
+  finished colour now (`mix(palette, substrate, amt)`), so 0 is the palette
+  exactly, 1 the classification, and above 1 it extrapolates along the same
+  direction: monotone, and 4.7/255 at amt 2 rather than 45.
+
+**And the turf pulls half as hard as the other two, from the Camps Bay run.**
+Nearly every texel of that fixture classifies as turf, and at the full pull the
+whole meadow came out a step greener than the place's own palette — the site
+model overruled by a texture. The palette already handles vegetated ground
+well; the brief's complaint was about exposed ground, and that is where the
+chroma belongs.
+
+### What it does NOT do yet, stated
+
+- **THE SWARD DOES NOT SHARE THE FIELD**, which is the brief's own next ask:
+  *if the shader says this location is 70% grassy and 30% exposed soil, the
+  sward seeder should read essentially the same field.* It does not — blades
+  take their colour from `swardColData` and their density from the sward's own
+  habitat rule, so grass still stands on a rock domain as though it were
+  meadow. That is the next unit and it is the one that stops sward reading as
+  tufts pasted onto blank ground.
+- **THE BATTER STRIP WEARS NO SUBSTRATE.** `MAT.batter` does not wear
+  `terrainFx` at all (so it takes no cloud shadow either — pre-existing), and
+  it carries no `aTd`. On a refined tile it draws nothing, so this can only
+  show beyond `REFINE_R`, where the domain has band-limited away and the
+  classification is the vertex material's — but the mean colour still moves
+  there, so a distant cut face can differ from the ground it is cut into. Not
+  measured; recorded.
+- **THE FAR SHELL IS EXEMPT AND SHOULD BE.** Its geometry carries no `aTd`, so
+  `vTd` is the zero vector, `rough` is 0 and the gate closes. At 63 m a pixel
+  the domain is band-limited away in any case.
+- **THE PER-FRAGMENT COST IS UNMEASURED ON A DEVICE.** Worst case is the domain
+  (three value-noise reads, twelve hashes) plus a material's own structure; the
+  domain is not evaluated past its band and the dip is read only inside the
+  rock branch, so the far field pays a compare. The harness renders through
+  SwiftShader at three frames a second and cannot say what a phone pays — the
+  next telemetry paste is the verification, and `?tdetail=flat` is the A/B that
+  takes both the fine octaves and the substrate out.

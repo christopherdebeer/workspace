@@ -79,6 +79,7 @@ import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight, uFacSun } from './facade';
 import { roofFx } from './roof-fx';
+import { SUB_GLSL, SUB_DOM_M } from './substrate-field';
 import { gramDecode } from './facade-grammar';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { startLab } from './labs';
@@ -2197,7 +2198,7 @@ const TD_GONE = TD_LAMBDA / 2;
  * — under a palette step of 0.07 — so the step it can produce is below what
  * the quantiser can show.
  */
-const TDETAIL = ((v) => (v && ['on', 'flat', 'mpp', 'px', 'off'].includes(v) ? v : 'on'))(qs('tdetail')?.toLowerCase());
+const TDETAIL = ((v) => (v && ['on', 'flat', 'mpp', 'px', 'dom', 'off'].includes(v) ? v : 'on'))(qs('tdetail')?.toLowerCase());
 /** Which ruler is in force (1 = the fragment's footprint, 0 = the chart's
  *  uniform) and whether the mottle draws at all — both live, so `__tdetail`
  *  can flip them on one settled world rather than across two boots. */
@@ -2221,6 +2222,19 @@ const tdU = {
   // ruler is a uniform. `tdetail=flat` pins it at 0, which is the exact A/B
   // for "what did the cascade add".
   uTdOct: { value: TDETAIL === 'flat' || TDETAIL === 'off' ? 0 : 3 },
+  // ── THE SUBSTRATE'S OWN TWO DIALS ──
+  //
+  // Amount scales the whole classification toward the plain palette, so 0 is
+  // the exact A/B for "what did the substrate change" on ONE settled world —
+  // which is the only honest form of this comparison, because two boots of
+  // this world differ by wildlife, sward phase and streaming order before they
+  // differ by a material. `tdetail=flat` pins it at 0 for a benchmark that
+  // wants the term gone as well as the cascade's fine octaves.
+  uSubAmt: { value: TDETAIL === 'flat' || TDETAIL === 'off' ? 0 : 1 },
+  // The domain's wavelength in metres. Live, because "how big is a patch of
+  // scree" is a judgement nobody can make from a constant in a file and the
+  // seat has to be able to walk it up and down over one world.
+  uSubDom: { value: SUB_DOM_M },
 };
 /** The footprint helper and the heat ramp, prepended to the terrain fragment
  *  shader. One string, so the measuring mode and the shipping mode cannot
@@ -6514,7 +6528,7 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         // ground, the far shell's fallback) gets the zero vector, which reads
         // as rough 0 — no fine detail, which is the right thing to do when
         // nobody said what the surface is.
-        + 'attribute vec2 aTd;\nvarying vec2 vTd;')
+        + 'attribute vec3 aTd;\nvarying vec3 vTd;')
       // ── AND IT HAS TO KNOW WHERE THE INSTANCE IS ──
       //
       // This read `modelMatrix * transformed` and skipped `instanceMatrix`,
@@ -6550,7 +6564,7 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vWorldP;
-        varying vec2 vTd;
+        varying vec3 vTd;
         uniform sampler2D uDbgWet; uniform vec2 uDbgOrg; uniform float uDbgW; uniform float uDbgOn;
         uniform float uCloudS; uniform vec2 uWind; uniform float uMpp;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
@@ -6635,6 +6649,8 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
       sh.uniforms.uTdAmt = tdU.uTdAmt;
       sh.uniforms.uTdOct = tdU.uTdOct;
       sh.uniforms.uTdForce = tdU.uTdForce;
+      sh.uniforms.uSubAmt = tdU.uSubAmt;
+      sh.uniforms.uSubDom = tdU.uSubDom;
       sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
       {
         vec2 gp = vWorldP.xz;
@@ -6688,12 +6704,125 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
             }
           }
         }
-        ${TDETAIL === 'px'
-          ? 'diffuseColor.rgb = tdHeat(px);'
-          : 'diffuseColor.rgb *= 0.955 + d * uTdAmt;'}
+        diffuseColor.rgb *= 0.955 + d * uTdAmt;
+        // ── AND UNDER THE TEXTURE, THE SUBSTRATE ──
+        //
+        // Everything above is a BRIGHTNESS at four wavelengths, and the seat's
+        // verdict on it was exact: over exposed ground the world is one
+        // undifferentiated wash with noise on it. It has to be — one palette
+        // step is 0.07 sRGB and the loudest octave here is 0.085, so the whole
+        // cascade lives inside a step and a half and can only ever say "a bit
+        // lighter, a bit darker". Nothing in it can say OUTCROP, SCREE, TURF.
+        //
+        // So the substrate is a classification rather than a texture, at the
+        // ten-to-fifty metres a driver reads a landscape at, and it moves
+        // CHROMA where the cascade moves luminance. See substrate-field.ts for
+        // why the three materials are transforms of the ground's own colour and
+        // not three colours.
+        //
+        // WATER IS EXEMPT AND HAS TO BE STATED. Cover class 80 is the one row
+        // of TD_MAT that is (0, 0), and a rough of zero walks straight into
+        // "no mineral evidence, no slope" — which the turf branch would read
+        // as deep sward. Open water would come out green. rough < 0.02 is
+        // class 80 and nothing else.
+        if (uSubAmt > 0.001 && rough > 0.02) {
+          vec3 pc = diffuseColor.rgb;
+          float lum = dot(pc, vec3(0.2126, 0.7152, 0.0722));
+          // WHAT THE PALETTE ALREADY KNOWS, and the attribute cannot: whether
+          // anything grows here, and whether the ground is oxidised. Normalised
+          // by luminance so a shaded hillside and a sunlit one classify alike —
+          // the vertex colour carries the slope shade, and without the divide
+          // every north face in the world would read as a different material
+          // from the south face of the same hill.
+          float veg = (pc.g - 0.5 * (pc.r + pc.b)) / max(lum, 1e-3);
+          float warm = (pc.r - pc.b) / max(lum, 1e-3);
+          // ── THE DOMAIN COLLAPSES TO ITS MEAN RATHER THAN ALIASING ──
+          //
+          // Past the range where a patch is narrower than an art pixel the
+          // field is replaced by its own mean, so the classification falls back
+          // on the vertex material — which is smooth, correct, and exactly what
+          // the far field should read. Switching the whole substrate off out
+          // there would be worse: this band is the one the brief singles out
+          // BECAUSE it survives into the middle distance, and at 18 m it is
+          // still drawing at nine metres a pixel, which from the seat is most
+          // of a kilometre.
+          // …and the field is not EVALUATED out there either. Twelve hashes
+          // for a value about to be mixed away to its own mean is the exact
+          // fault the tdetail=off switch was made to compile out one layer up.
+          float domBand = tdBand(px, uSubDom * 1.7);
+          float dom = domBand > 0.002 ? mix(0.5, subDomain(gp, uSubDom), domBand) : 0.5;
+          vec3 w = subWeights(vec3(rough, grain, vTd.z), veg, warm, dom);
+          // ── EACH MATERIAL'S OWN STRUCTURE, EACH IN ITS OWN BAND ──
+          //
+          // Tones, not weights: the classification decides WHAT this is and
+          // these decide what it looks like once you are close enough for the
+          // question to mean anything. All three are zero-mean, so a material
+          // seen from far enough that its structure has faded is the same
+          // average colour as one seen from the cab.
+          //
+          // ── AND EACH IS ATTENUATED BY ITS OWN WEIGHT, WHICH SETS THE SCALE ──
+          //
+          // A tone here reaches the frame as tone x weight x the material's own
+          // colour, so at Yosemite — rock 0.46 on ground at 0.72 — an amplitude
+          // of 0.13 arrives as 0.043, which is six tenths of a palette step and
+          // spends its life modulating the dither. That is the cascade's own
+          // fault one layer down, and it was measured here before it was
+          // believed: the first cut's bedding was invisible in the frame at the
+          // seat's own spot while the classification under it was correct.
+          // These are therefore loud by the standards of a texture — the worst
+          // coincident bedding line is about two and a half steps — and they
+          // can afford to be, because every one of them is band-limited and a
+          // term close enough to see is a term far from Nyquist.
+          float rockT = 0.0, soilT = 0.0, turfT = 0.0;
+          if (w.x > 0.004) {
+            // The dip is read inside the rock branch because only rock reads
+            // it — eight hashes a fragment for a meadow, otherwise.
+            vec2 dip = subDip(gp);
+            // Beds at 4.5 m and 1.2 m, and the joints that cut them. The
+            // bedding plane is a SHADOW — rock is read by its lines, and a
+            // line is the one feature this palette renders well.
+            rockT -= 0.22 * subBed(vWorldP, dip, 4.5) * tdBand(px, 4.5);
+            rockT -= 0.16 * subBed(vWorldP, dip, 1.2) * tdBand(px, 1.2);
+            rockT -= 0.12 * subJoint(gp, dip, 3.2) * tdBand(px, 3.2);
+            rockT += 0.09 * tdVN(gp * 0.14) * tdBand(px, 7.0);
+          }
+          if (w.y > 0.004) {
+            // Metre-scale tonal regions — damp and dry, fine and coarse — and
+            // then the clasts lying on them, which are LIGHTER than the fill
+            // they sit on because a stone catches the sky and the dirt does not.
+            soilT += 0.13 * tdVN(gp * 0.4) * tdBand(px, 2.5);
+            soilT += 0.19 * (subStones(gp, 0.45, 0.62) - 0.12) * tdBand(px, 0.9);
+          }
+          if (w.z > 0.004) {
+            // Clumped sward, at the scale a tussock actually holds.
+            turfT += 0.13 * tdVN(gp * 0.9) * tdBand(px, 1.1);
+            turfT += 0.075 * tdVN(gp * 0.22) * tdBand(px, 4.5);
+          }
+          vec3 rockC = subRockC(pc, lum) * (1.0 + rockT);
+          vec3 soilC = subSoilC(pc) * (1.0 + soilT);
+          vec3 turfC = subTurfC(pc) * (1.0 + turfT);
+          // ── THE AMOUNT IS A DISPLACEMENT FROM THE PALETTE, NOT A WEIGHT ──
+          //
+          // The first cut scaled the WEIGHTS by it, which is wrong in both
+          // directions and was measured being wrong: at Yosemite the weights
+          // already sum to one, so asking for two doubled the absolute colour
+          // rather than the material — 45/255 of mean luma and 94% of the pane
+          // moved, which is a brightness blowout and not a stronger substrate.
+          // Interpolating the finished colour makes the dial linear and
+          // monotone: 0 is the palette exactly, 1 is the classification, and
+          // above 1 mix() extrapolates along the same direction, which is what
+          // "show me more of this" has to mean for a seat to judge it.
+          vec3 subC = pc * max(1.0 - w.x - w.y - w.z, 0.0)
+            + rockC * w.x + soilC * w.y + turfC * w.z;
+          ${TDETAIL === 'dom'
+            ? 'diffuseColor.rgb = vec3(w.x, w.z, w.y);'
+            : 'diffuseColor.rgb = mix(pc, subC, uSubAmt);'}
+        }
+        ${TDETAIL === 'px' ? 'diffuseColor.rgb = tdHeat(px);' : ''}
       }`);
-      sh.fragmentShader = TD_HELPERS
+      sh.fragmentShader = TD_HELPERS + SUB_GLSL
         + 'uniform float uTdRule;\nuniform float uTdAmt;\nuniform float uTdOct;\nuniform vec2 uTdForce;\n'
+        + 'uniform float uSubAmt;\nuniform float uSubDom;\n'
         + sh.fragmentShader;
     }
   };
@@ -7350,10 +7479,11 @@ function buildTerrainMesh(t: HeightTile): void {
   geo.setAttribute('uv', new THREE.BufferAttribute(b.uv, 2));
   geo.setAttribute('color', new THREE.BufferAttribute(b.colors, 3));
   geo.setAttribute('normal', new THREE.BufferAttribute(b.normals, 3));
-  // WHAT THE GROUND IS MADE OF, per vertex — see terrain-kernel's TD_MAT.
-  // The colour cannot stand in for it: bare ground has no tint entry, so it
-  // arrives at the fragment the same colour as ochre scrub.
-  geo.setAttribute('aTd', new THREE.BufferAttribute(b.mats, 2));
+  // WHAT THE GROUND IS MADE OF, per vertex — rough, grain and the bed's own
+  // slope; see terrain-kernel's TileBuild.mats. The colour cannot stand in for
+  // it: bare ground has no tint entry, so it arrives at the fragment the same
+  // colour as ochre scrub.
+  geo.setAttribute('aTd', new THREE.BufferAttribute(b.mats, 3));
   geo.setIndex(new THREE.BufferAttribute(b.idx, 1));
   cellTrisCache.set(geo, b.cellTris);
   (geo.userData as { seg?: number }).seg = SEG;
@@ -7511,10 +7641,11 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
   geo.setAttribute('uv', new THREE.BufferAttribute(r.uv, 2));
   geo.setAttribute('color', new THREE.BufferAttribute(r.colors, 3));
   geo.setAttribute('normal', new THREE.BufferAttribute(r.normals, 3));
-  // WHAT THE GROUND IS MADE OF, per vertex — see terrain-kernel's TD_MAT.
-  // The colour cannot stand in for it: bare ground has no tint entry, so it
-  // arrives at the fragment the same colour as ochre scrub.
-  geo.setAttribute('aTd', new THREE.BufferAttribute(r.mats, 2));
+  // WHAT THE GROUND IS MADE OF, per vertex — rough, grain and the bed's own
+  // slope; see terrain-kernel's TileBuild.mats. The colour cannot stand in for
+  // it: bare ground has no tint entry, so it arrives at the fragment the same
+  // colour as ochre scrub.
+  geo.setAttribute('aTd', new THREE.BufferAttribute(r.mats, 3));
   geo.setIndex(new THREE.BufferAttribute(r.idx, 1));
   cellTrisCache.set(geo, { seg: SEG, offs: r.cellOffs, tris: r.cellTris });
   (geo.userData as { seg?: number }).seg = SEG;
@@ -34404,30 +34535,71 @@ function repaintWetDebug(): void {
  * from the console at 3 fps without a reload, which is what the dial rack will
  * be built from once the seat has picked numbers.
  */
-/** The [rough, grain] the BUILT MESH carries at a point — the nearest vertex of
- *  the terrain tile that owns it. Read from the attribute rather than
- *  recomputed from the cover raster, because the question this answers is
- *  "what did the shader get", and a second derivation could agree with the
- *  raster while disagreeing with the geometry. */
+/** Every input the substrate's classification reads, at a point — the nearest
+ *  vertex of the terrain tile that owns it. `aTd`'s rough, grain and slope AND
+ *  the vertex colour, because BOTH halves decide the answer and neither is
+ *  derivable from the other: the attribute says how mineral and how steep, the
+ *  colour says whether anything grows here and whether the ground is oxidised.
+ *
+ *  Read from the geometry rather than recomputed from the cover raster,
+ *  because the question this answers is "what did the shader get", and a second
+ *  derivation could agree with the raster while disagreeing with the mesh.
+ *
+ *  THE WEIGHTS IT REPORTS ARE AT THE DOMAIN'S MEAN, and that is stated rather
+ *  than hidden: the 10-50 m field is a hash the CPU has no cheap copy of, and a
+ *  second port of it would be exactly the drifting mirror this probe exists to
+ *  avoid. Mid-domain is the honest number anyway — it is the classification the
+ *  FAR field gets, once the domain has band-limited away. The pixel witness for
+ *  the near field is `?tdetail=dom`, which paints the shader's own answer. */
 function tdMatAt(x: number, z: number): object | null {
   // Every built tile, nearest vertex wins. A probe, so the sweep is affordable
   // and worth more than a key lookup that could disagree with the geometry: the
   // question is what the SHADER got, not what the raster says.
-  let best = Infinity, rough = 0, grain = 0;
+  let best = Infinity, rough = 0, grain = 0, slope = 0, cr = 0, cg = 0, cb = 0;
   for (const mesh of terrainMeshes.values()) {
     const at = mesh.geometry.getAttribute('aTd');
     const pos = mesh.geometry.getAttribute('position');
+    const col = mesh.geometry.getAttribute('color');
     if (!at || !pos) continue;
     const ox = mesh.position.x, oz = mesh.position.z;
     for (let i = 0; i < pos.count; i++) {
       const dx = pos.getX(i) + ox - x, dz = pos.getZ(i) + oz - z;
       const d = dx * dx + dz * dz;
-      if (d < best) { best = d; rough = at.getX(i); grain = at.getY(i); }
+      if (d < best) {
+        best = d; rough = at.getX(i); grain = at.getY(i); slope = at.getZ(i);
+        if (col) { cr = col.getX(i); cg = col.getY(i); cb = col.getZ(i); }
+      }
     }
   }
-  return best === Infinity ? null
-    : { rough: +rough.toFixed(3), grain: +grain.toFixed(3), dist: +Math.sqrt(best).toFixed(1) };
+  if (best === Infinity) return null;
+  const lum = Math.max(1e-3, 0.2126 * cr + 0.7152 * cg + 0.0722 * cb);
+  const veg = (cg - 0.5 * (cr + cb)) / lum;
+  const warm = (cr - cb) / lum;
+  // The same arithmetic as subWeights in substrate-field.ts, at dom = 0.5 —
+  // where every domain term is identically zero, so this is the shader's own
+  // expression with three constants dropped rather than a paraphrase of it.
+  const sstep = (a: number, b: number, v: number): number => {
+    const t = clamp((v - a) / (b - a), 0, 1);
+    return t * t * (3 - 2 * t);
+  };
+  const rock = clamp(grain * 0.80 + slope * 0.85 - 0.22, 0, 1);
+  const turf = clamp((0.95 - rough) * 1.15, 0, 1) * sstep(0.05, 0.16, veg) * (1 - rock * 0.75);
+  const soil = clamp(0.85 - turf - rock * 0.55, 0, 1)
+    * Math.max(sstep(0.02, 0.18, warm), sstep(0.25, 0.60, grain));
+  const t = rock + soil + turf, n = t > 1 ? t : 1;
+  return {
+    rough: +rough.toFixed(3), grain: +grain.toFixed(3), slope: +slope.toFixed(3),
+    rgb: [+cr.toFixed(3), +cg.toFixed(3), +cb.toFixed(3)],
+    veg: +veg.toFixed(3), warm: +warm.toFixed(3),
+    midDom: { rock: +(rock / n).toFixed(3), soil: +(soil / n).toFixed(3), turf: +(turf / n).toFixed(3) },
+    dist: +Math.sqrt(best).toFixed(1),
+  };
 }
+/** The substrate's evidence at any point, not only under the truck — because
+ *  the whole claim of a 10-50 m domain is that neighbours differ, and one
+ *  vertex cannot witness that. */
+(window as unknown as { __submat?: object }).__submat = (x: number, z: number): object | null =>
+  tdMatAt(x, z);
 /**
  * ── WHAT AN ART PIXEL ACTUALLY COVERS ON THE GROUND, ALONG THE VIEW ──
  *
@@ -34447,7 +34619,7 @@ function tdMatAt(x: number, z: number): object | null {
  */
 (window as unknown as { __tdetail?: object }).__tdetail = (
   opts?: { rule?: 'px' | 'mpp'; amount?: number; oct?: number;
-    rough?: number | null; grain?: number | null },
+    rough?: number | null; grain?: number | null; sub?: number; dom?: number },
 ): object => {
   // null hands the ground back to its own attribute.
   if (opts?.rough !== undefined) tdU.uTdForce.value.x = opts.rough === null ? -1 : clamp(opts.rough, 0, 1);
@@ -34462,6 +34634,12 @@ function tdMatAt(x: number, z: number): object | null {
   // the question "how loud does a procedural surface term have to be before
   // this renderer can show it at all" gets an answer instead of an opinion.
   if (opts?.amount !== undefined) tdU.uTdAmt.value = clamp(opts.amount, 0, 4);
+  // The substrate's strength, 0..2. 0 is the exact A/B on one settled world.
+  if (opts?.sub !== undefined) tdU.uSubAmt.value = clamp(opts.sub, 0, 2);
+  // …and how big a patch of one material is, in metres. The brief's band is
+  // 10-50; the dial reaches either side of it so the seat can find out whether
+  // the answer is inside that band at all.
+  if (opts?.dom !== undefined) tdU.uSubDom.value = clamp(opts.dom, 3, 200);
   const tanHalf = Math.tan((camera.fov * Math.PI) / 360);
   const rows = Math.max(2, pixSize.y);
   const eye = camera.position;
@@ -34496,13 +34674,20 @@ function tdMatAt(x: number, z: number): object | null {
   return {
     mode: TDETAIL, rule: tdU.uTdRule.value ? 'px' : 'mpp', amount: tdU.uTdAmt.value,
     oct: tdU.uTdOct.value, cam: camMode, pix: [pixSize.x, pixSize.y],
+    // The substrate's two dials, reported beside the value they were set to,
+    // so a run's log says what it measured rather than what it asked for.
+    sub: tdU.uSubAmt.value, dom: tdU.uSubDom.value,
+    // …and the range at which the domain has band-limited away, which is where
+    // the classification falls back on the vertex material alone. Stated in the
+    // footprint's own units, so it reads straight against a row of `ahead`.
+    domGonePx: +(tdU.uSubDom.value * 1.7 * 0.5).toFixed(2),
     forced: tdU.uTdForce.value.x < 0 ? null
       : [tdU.uTdForce.value.x, tdU.uTdForce.value.y],
     // What the ground under the truck says it is made of, read back from the
     // built mesh — so "the grit is not drawing" can be answered with the
     // roughness rather than with a guess about the cover raster.
     mat: tdMatAt(state.x, state.z),
-    // WHAT THE EXTRA PER-VERTEX BUFFER COST. aTd adds two floats a vertex and
+    // WHAT THE EXTRA PER-VERTEX BUFFER COST. aTd adds three floats a vertex and
     // one table lookup to the kernel's colour loop, which is already timed —
     // so "negligible" is a number here rather than an assertion.
     build: { tiles: plainCost.builds, colourMs: +plainCost.colour.toFixed(0),

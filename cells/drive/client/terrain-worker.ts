@@ -40,8 +40,8 @@ export interface TerrainJob {
 export interface TerrainReply {
   id: number; key: string; epoch: number; error?: string; hydroOnly?: boolean;
   pos: Float32Array; uv: Float32Array; idx: Uint32Array; colors: Float32Array; normals: Float32Array;
-  /** Per vertex [rough, grain] for the surface-detail cascade — see the
-   *  kernel's TD_MAT for what the two numbers mean. */
+  /** Per vertex [rough, grain, slope] for the substrate renderer — see the
+   *  kernel's TileBuild.mats for what the three numbers mean. */
   mats: Float32Array;
   kinds: Uint8Array | null; cellOffs: Int32Array; cellTris: Int32Array;
   border: Float64Array; normalMap: Uint8Array; refined: boolean; corridor: boolean;

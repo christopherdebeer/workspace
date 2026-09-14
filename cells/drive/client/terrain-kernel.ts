@@ -28,14 +28,24 @@ export interface CellTris { seg: number; offs: Int32Array; tris: Int32Array }
 export interface RefinedMesh { pos: Float32Array; uv: Float32Array; idx: Uint32Array; kinds: Uint8Array; cells: number; tris: number; cellTris: CellTris }
 export interface TileBuild {
   pos: Float32Array; uv: Float32Array; idx: Uint32Array; colors: Float32Array; normals: Float32Array;
-  /** Per vertex, two numbers the SURFACE-DETAIL cascade needs and the colour
+  /** Per vertex, THREE numbers the substrate renderer needs and the colour
    *  cannot carry: ROUGH (how strongly fine detail draws here — bare rock
    *  and a fresh cut face loud, a crop field almost silent, open water
-   *  nothing) and GRAIN (its character — 1 is stony scatter, 0 a smooth
-   *  wash). Decided here rather than in the shader because the cover class
-   *  is known here and is thrown away by the palette: `bare` deliberately
-   *  has NO tint entry, so bare ground and ochre scrub come out the same
-   *  colour and no fragment could tell them apart afterwards. */
+   *  nothing), GRAIN (its character — 1 is stony scatter, 0 a smooth
+   *  wash) and SLOPE (the ground's own gradient, 0 flat and 1 at forty-five
+   *  degrees and steeper). Decided here rather than in the shader because the
+   *  cover class is known here and is thrown away by the palette: `bare`
+   *  deliberately has NO tint entry, so bare ground and ochre scrub come out
+   *  the same colour and no fragment could tell them apart afterwards.
+   *
+   *  SLOPE RIDES SEPARATELY EVEN THOUGH ROUGH ALREADY CARRIES IT, and the
+   *  reason is that they answer different questions. Rough is a detail
+   *  amplitude and a steep face rightly raises it; the substrate needs to
+   *  know how much of what it is looking at is STEEP, because a slope is
+   *  where soil has left and bedrock is showing, and a cliff of the same
+   *  cover class as the meadow below it is a different material. Reading
+   *  that back out of rough means inverting the cover table in the shader,
+   *  which is the kind of cleverness that breaks the first time a row moves. */
   mats: Float32Array;
   kinds: Uint8Array | null; cellTris: CellTris; refined: boolean; corridor: boolean;
 }
@@ -1525,7 +1535,7 @@ export function createTerrainKernel() {
     const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
     const cell = t.w / SEG;
     const colors = new Float32Array(pos.length);
-    const mats = new Float32Array((pos.length / 3) * 2);
+    const mats = new Float32Array((pos.length / 3) * 3);
     for (let i = 0; i < (refined ? 0 : (pos.length / 3)); i++) {
       const ex = pos[(i) * 3] + cxm, ez = pos[(i) * 3 + 2] + czm;
       const cv = S.sampleCover(ex, ez);
@@ -1604,6 +1614,12 @@ export function createTerrainKernel() {
       // the earth the batter strip used to.
       const kind = kinds ? kinds[i] : 0;
       let slope = Math.hypot(du, dv) / Math.max(cell, 1);
+      // THE BED'S OWN GRADIENT, kept before the corridor forces it. The
+      // substrate reads this to decide where soil has left and rock is
+      // showing; a cut face is already declared by `kind` and takes its
+      // material from that, and letting CUTF_K stand in for a hillside would
+      // paint every road's earthworks as outcrop.
+      const bedSlope = Math.min(1, slope);
       if (kind === 2) slope = Math.max(slope, CUTF_K); else if (kind === 3) slope = Math.max(slope, BANK_K);
       // ONE READ, TWO CONSUMERS. coverPaint is two sampleCover calls and two
       // hashes; the colour and the detail material both want the same answer
@@ -1639,7 +1655,7 @@ export function createTerrainKernel() {
       let rough = mt ? mt[0] : 0.6, grain = mt ? mt[1] : 0.5;
       rough = Math.min(1, rough + Math.min(slope, 1) * 0.6);
       if (kind === 2) { rough = Math.min(1, rough + 0.35); grain = Math.min(1, grain + 0.3); }
-      mats[i * 2] = rough; mats[i * 2 + 1] = grain;
+      mats[i * 3] = rough; mats[i * 3 + 1] = grain; mats[i * 3 + 2] = bedSlope;
     }
     const p6 = performance.now();
     const normals = vertexNormals(pos, idx);

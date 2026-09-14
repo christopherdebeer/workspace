@@ -222,7 +222,7 @@ export const SWITCHES = [
   { id: 'airblur', kind: 'toggle', marks: ['legacy', 'look'], fallback: 'off',
     note: 'airblur=1 puts back the aerial perspective’s distance BLUR — the term that softened a road toward its vanishing point' },
   { id: 'tdetail', kind: 'choice', marks: ['look', 'bench'], fallback: 'on',
-    note: 'the terrain’s procedural surface detail: on = the full octave cascade, band-limited per fragment by fwidth, flat = the 15m mottle alone (the A/B for what the cascade added), mpp = the legacy chart-uniform fade, which is identically zero from the seat and so never faded anything there, px = paint the art-pixel footprint as a heat map instead of the ground, off = no detail at all' },
+    note: 'the terrain’s procedural surface renderer: on = the octave cascade plus the substrate classification (rock, regolith, turf over 10-50m domains), flat = the 15m mottle alone, with neither the fine octaves nor the substrate — the A/B for what both added, mpp = the legacy chart-uniform fade, which is identically zero from the seat and so never faded anything there, px = paint the art-pixel footprint as a heat map instead of the ground, dom = paint the substrate classification instead (red outcrop, green turf, blue regolith), off = no detail at all' },
   { id: 'tilt', kind: 'choice', marks: ['look'], fallback: 'off',
     note: 'tilt=subtle|mini|hard puts a tilt-shift plane of focus in the world' },
 ] as const satisfies readonly SwitchDef[];
