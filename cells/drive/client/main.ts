@@ -28,7 +28,6 @@ import { morphology, plan as footprintPlan } from './morphology';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
 import {
   WATERLINE_CUT,
-  bankGroundMineralMix,
   bankHabitat,
   bankMineralColour,
   bankPatch,
@@ -189,6 +188,7 @@ import {
   buildRapidDetailMesh,
 } from './substrate/rapid-detail';
 import { resolveProductionHydroReach } from './substrate/hydro-reach';
+import { blendProductionTerrainHydroBank } from './substrate/terrain-hydro';
 import {
   buildCulvertBoreGeometry,
   buildCulvertHeadwallGeometry,
@@ -7632,27 +7632,17 @@ function blendHydroBankTerrain(
   const key = `${t.tx}/${t.ty}`;
   const field = hydroSys.fieldAt(t.xs + t.w / 2, t.zs + t.h / 2);
   if (!field || field.key !== key || field.revision !== hydroRev.get(key)) return;
-  const cx = t.xs + t.w / 2, cz = t.zs + t.h / 2;
-  for (let i = 0; i < positions.length; i += 3) {
-    const x = positions[i] + cx, z = positions[i + 2] + cz;
-    const bank = sampleBankField(field, x, z, 12);
-    if (!bank) continue;
-    const mix = bankGroundMineralMix(bank, bankPatch(x, z));
-    if (mix <= 0) continue;
-    const ny = Math.max(0.08, Math.abs(normals[i + 1]));
-    const slope = Math.hypot(normals[i], normals[i + 2]) / ny;
-    const local = terrainPalette(
-      positions[i + 1] + baseElev,
-      slope,
-      bankPaint(x, z),
-      x,
-      z,
-    );
-    const mineral = bankMineralColour(local[0], local[1], local[2]);
-    colors[i] += (mineral[0] - colors[i]) * mix;
-    colors[i + 1] += (mineral[1] - colors[i + 1]) * mix;
-    colors[i + 2] += (mineral[2] - colors[i + 2]) * mix;
-  }
+  blendProductionTerrainHydroBank({
+    field,
+    positions,
+    colours: colors,
+    normals,
+    centreX: t.xs + t.w / 2,
+    centreZ: t.zs + t.h / 2,
+    baseElevationM: baseElev,
+    coverAt: bankPaint,
+    terrainColourAt: terrainPalette,
+  });
 }
 function buildTerrainMesh(t: HeightTile): void {
   const key = `${t.tx}/${t.ty}`;

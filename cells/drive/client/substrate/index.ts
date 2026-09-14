@@ -202,6 +202,11 @@ export {
   type ProductionHydroReachStation,
 } from './hydro-reach';
 export {
+  blendProductionTerrainHydroBank,
+  type ProductionTerrainColour,
+  type ProductionTerrainHydroBlendInput,
+} from './terrain-hydro';
+export {
   VehicleWaterEvidence,
   type VehicleWaterAuthority,
   type VehicleWaterEvidenceInput,

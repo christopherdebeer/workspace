@@ -427,9 +427,12 @@ the failed comparison can be reproduced.
   too, as are the local host-plane fit and its bounded junction fade. The
   remaining generation migration is contextual rather than another
   road-profile or watercourse-reach authority: carry solved authoring through
-  tile construction, move the remaining terrain contextual transforms behind
-  that boundary, then retire legacy builder entry points and the road drape
-  registry after rollback observation. Common apron
+  tile construction, then retire legacy builder entry points and the road
+  drape registry after rollback observation. The final hydro-bank terrain
+  transform now runs through `client/substrate/terrain-hydro.ts` for both
+  synchronous and worker terrain arrays; field sampling, slope derivation,
+  mineral colour and array mutation no longer have separate context-owned
+  implementations. Common apron
   faces, piers, arch spandrels, parapets, studs and hazard signs are already
   renderer-free substrate builders; final batter strip/cap packets and all
   bridge-family forms are too. Batter packets publish through the atomic tile

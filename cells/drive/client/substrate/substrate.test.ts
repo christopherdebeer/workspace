@@ -15,6 +15,7 @@ import {
   buildRapidDetailField,
   buildRapidDetailMesh,
   buildSubstrateTile,
+  blendProductionTerrainHydroBank,
   findProductionDriveWaterOverlaps,
   makeCrossingFixture,
   pointInProductionCrossingFootprint,
@@ -239,6 +240,67 @@ export function runSubstrateSelfTest(): void {
   }
   assert(rejectedHydroReach,
     'hydro reach must reject mismatched station and ground arrays');
+
+  const terrainHydroFixture = buildProductionHydroFixture(makeCrossingFixture('ford'));
+  const terrainHydroPositions = new Float32Array([
+    0, 2, 0,
+    60, 3, 60,
+  ]);
+  const terrainHydroColours = new Float32Array([
+    .2, .3, .4,
+    .5, .6, .7,
+  ]);
+  let terrainHydroPaletteCalls = 0;
+  const blendedTerrainHydro = blendProductionTerrainHydroBank({
+    field: terrainHydroFixture,
+    positions: terrainHydroPositions,
+    colours: terrainHydroColours,
+    normals: new Float32Array([
+      .3, .4, 0,
+      0, 1, 0,
+    ]),
+    centreX: 0,
+    centreZ: 0,
+    baseElevationM: 100,
+    coverAt: (x, z) => x === 0 && z === 0 ? 30 : null,
+    terrainColourAt: (elevationM, slope, cover, x, z) => {
+      terrainHydroPaletteCalls++;
+      close(elevationM, 102, 1e-12, 'terrain hydro absolute elevation');
+      close(slope, .75, 1e-7, 'terrain hydro slope');
+      assert(cover === 30 && x === 0 && z === 0,
+        'terrain hydro palette must receive canonical world context');
+      return [.8, .6, .4];
+    },
+  });
+  assert(blendedTerrainHydro === 1 && terrainHydroPaletteCalls === 1,
+    'terrain hydro blend must mutate only vertices with bank context');
+  assert(
+    terrainHydroColours[0] !== .2
+      && terrainHydroColours[1] !== .3
+      && terrainHydroColours[2] !== .4,
+    'terrain hydro blend must apply the shared mineral transform',
+  );
+  close(terrainHydroColours[3], .5, 1e-7, 'terrain outside hydro bank red');
+  close(terrainHydroColours[4], .6, 1e-7, 'terrain outside hydro bank green');
+  close(terrainHydroColours[5], .7, 1e-7, 'terrain outside hydro bank blue');
+  let rejectedTerrainHydro = false;
+  try {
+    blendProductionTerrainHydroBank({
+      field: terrainHydroFixture,
+      positions: new Float32Array(3),
+      colours: new Float32Array(2),
+      normals: new Float32Array(3),
+      centreX: 0,
+      centreZ: 0,
+      baseElevationM: 0,
+      coverAt: () => null,
+      terrainColourAt: () => [0, 0, 0],
+    });
+  } catch {
+    rejectedTerrainHydro = true;
+  }
+  assert(rejectedTerrainHydro,
+    'terrain hydro blend must reject mismatched final terrain arrays');
 
   const overlapDrive = [{
     ax: -20,
