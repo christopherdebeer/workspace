@@ -134,6 +134,7 @@ import {
 } from './substrate/road-profile';
 import {
   buildProductionRoadSurfaceGeometry,
+  resolveProductionRoadKerbGeometry,
   smoothProductionRoadSurfaceNormals,
   type ProductionRoadSurfaceBay,
 } from './substrate/road-surface';
@@ -18506,44 +18507,24 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     return t ? [-t[1], t[0]] : null;
   };
   const nbrBay0 = nbrBay(0), nbrBay1 = nbrBay(1);
-  /** The outward normal of the bay starting at station j, as a unit vector.
-   *  Out-of-range stations are the terminal case: the neighbour's bay when
-   *  one is built, else the clamp that stood here before. */
-  const bayN = (j: number): [number, number] => {
-    if (j < 0 && nbrBay0) return nbrBay0;
-    if (j > n - 2 && nbrBay1) return nbrBay1;
-    const k = clamp(j, 0, n - 2);
-    const ax2 = dense[k][0], az2 = dense[k][1];
-    const bx2 = dense[k + 1][0], bz2 = dense[k + 1][1];
-    const ddx = bx2 - ax2, ddz = bz2 - az2, l = Math.hypot(ddx, ddz) || 1;
-    return [-ddz / l, ddx / l];
+  const kerbGeometry = resolveProductionRoadKerbGeometry({
+    stations: dense,
+    halfWidthM: width / 2,
+    outwardReachM: 2.2,
+    startNeighborNormal: nbrBay0,
+    endNeighborNormal: nbrBay1,
+  });
+  const kerbMitre = (station: number, side: number, _halfWidth?: number): [number, number] => {
+    const offset = side > 0
+      ? kerbGeometry.right[station]
+      : kerbGeometry.left[station];
+    return [offset[0], offset[1]];
   };
-  /** The MITRED KERB at a station: the same bisector, scaled to the road's own
-   *  half-width. Everything that hangs off the kerb — the fascia, the parapet,
-   *  the batter's inboard edge — is placed on this rather than on the bay's own
-   *  normal, so neighbouring bays share the point exactly and none of the three
-   *  breaks at a corner. The carriageway's gore reaches it too, so the tarmac
-   *  goes out to where its own furniture stands. */
-  const kerbMitre = (j: number, sgn: number, hw: number): [number, number] => {
-    const [px1, pz1] = bayN(j - 1), [px2, pz2] = bayN(j);
-    const mx2 = (px1 + px2) * 0.5, mz2 = (pz1 + pz2) * 0.5;
-    const m = Math.hypot(mx2, mz2);
-    if (m < 0.2) return [px2 * hw * sgn, pz2 * hw * sgn];
-    const k = hw * clamp(1 / m, 1, 2.4);
-    return [(mx2 / m) * k * sgn, (mz2 / m) * k * sgn];
-  };
-  /** …and the MITRED outward reach at a STATION: the bisector of the two bays
-   *  meeting there, lengthened so neighbouring strips' outer corners coincide.
-   *  Scaled to the 2.2m the batter's step arithmetic is written in. */
-  const mitreAt = (j: number, sgn: number): [number, number] => {
-    const [px1, pz1] = bayN(j - 1), [px2, pz2] = bayN(j);
-    const mx2 = (px1 + px2) * 0.5, mz2 = (pz1 + pz2) * 0.5;
-    const m = Math.hypot(mx2, mz2);
-    if (m < 0.2) return [px2 * 2.2 * sgn, pz2 * 2.2 * sgn];   // a near-reversal
-    // |average of two unit vectors| IS cos(half the angle between them), so the
-    // mitre length is 2.2/cos — capped, or a hairpin throws a spike.
-    const scale = 2.2 * clamp(1 / m, 1, 2.4);
-    return [(mx2 / m) * scale * sgn, (mz2 / m) * scale * sgn];
+  const mitreAt = (station: number, side: number): [number, number] => {
+    const offset = side > 0
+      ? kerbGeometry.outwardRight[station]
+      : kerbGeometry.outwardLeft[station];
+    return [offset[0], offset[1]];
   };
   /**
    * THE JUNCTION WARP — a side road lies IN the road it joins.

@@ -20,6 +20,94 @@ export interface ProductionRoadSurfaceGeometry {
   dirts: Float32Array<ArrayBuffer>;
 }
 
+export interface ProductionRoadKerbGeometryInput {
+  stations: readonly (readonly [x: number, z: number])[];
+  halfWidthM: number;
+  outwardReachM: number;
+  startNeighborNormal?: readonly [x: number, z: number] | null;
+  endNeighborNormal?: readonly [x: number, z: number] | null;
+}
+
+export interface ProductionRoadKerbGeometry {
+  right: readonly (readonly [x: number, z: number])[];
+  left: readonly (readonly [x: number, z: number])[];
+  outwardRight: readonly (readonly [x: number, z: number])[];
+  outwardLeft: readonly (readonly [x: number, z: number])[];
+  mitreRatio: readonly number[];
+}
+
+const clamp = (value: number, low: number, high: number): number =>
+  Math.max(low, Math.min(high, value));
+
+/**
+ * Resolve one shared mitred cross-section at every road station.
+ *
+ * The carriageway, fascia, parapet and batter all consume these offsets. End
+ * normals may come from a built continuation so independently authored
+ * fragments meet on the same kerb point instead of reverting to a bay-normal
+ * butt joint at the tile edge.
+ */
+export function resolveProductionRoadKerbGeometry(
+  input: ProductionRoadKerbGeometryInput,
+): ProductionRoadKerbGeometry {
+  const n = input.stations.length;
+  if (n < 2) {
+    return {
+      right: [],
+      left: [],
+      outwardRight: [],
+      outwardLeft: [],
+      mitreRatio: [],
+    };
+  }
+  const bayNormal = (bay: number): readonly [number, number] => {
+    if (bay < 0 && input.startNeighborNormal) return input.startNeighborNormal;
+    if (bay > n - 2 && input.endNeighborNormal) return input.endNeighborNormal;
+    const station = clamp(bay, 0, n - 2);
+    const dx = input.stations[station + 1][0] - input.stations[station][0];
+    const dz = input.stations[station + 1][1] - input.stations[station][1];
+    const length = Math.hypot(dx, dz) || 1;
+    return [-dz / length, dx / length];
+  };
+  const offsetAt = (
+    station: number,
+    side: 1 | -1,
+    reach: number,
+  ): readonly [number, number] => {
+    const previous = bayNormal(station - 1);
+    const next = bayNormal(station);
+    const averageX = (previous[0] + next[0]) * 0.5;
+    const averageZ = (previous[1] + next[1]) * 0.5;
+    const magnitude = Math.hypot(averageX, averageZ);
+    if (magnitude < 0.2) {
+      return [next[0] * reach * side, next[1] * reach * side];
+    }
+    const scale = reach * clamp(1 / magnitude, 1, 2.4);
+    return [
+      (averageX / magnitude) * scale * side,
+      (averageZ / magnitude) * scale * side,
+    ];
+  };
+  const right: Array<readonly [number, number]> = [];
+  const left: Array<readonly [number, number]> = [];
+  const outwardRight: Array<readonly [number, number]> = [];
+  const outwardLeft: Array<readonly [number, number]> = [];
+  const mitreRatio: number[] = [];
+  for (let station = 0; station < n; station++) {
+    const rightOffset = offsetAt(station, 1, input.halfWidthM);
+    right.push(rightOffset);
+    left.push([-rightOffset[0], -rightOffset[1]]);
+    const outward = offsetAt(station, 1, input.outwardReachM);
+    outwardRight.push(outward);
+    outwardLeft.push([-outward[0], -outward[1]]);
+    mitreRatio.push(
+      Math.hypot(rightOffset[0], rightOffset[1])
+        / Math.max(1e-9, input.halfWidthM),
+    );
+  }
+  return { right, left, outwardRight, outwardLeft, mitreRatio };
+}
+
 /**
  * Average coincident road-surface normals within a 40-degree cone.
  *

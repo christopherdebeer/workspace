@@ -128,10 +128,12 @@ pass and endpoint centre/camber welds. The legacy road builder supplies the
 terrain/bench candidates and streamed water/deck/neighbour callbacks, then
 consumes the resulting profile. `buildProductionRoadSurfaceGeometry`
 owns the renderer-neutral carriageway triangles, UV/paint attributes, face
-normals and seam-normal smoothing from the final cropped bay corners. The
-remaining crossing migration is to move the aligned bench inputs plus
-contextual junction/apron/structure geometry decisions into tile construction,
-then emit them from the substrate tile itself.
+normals and seam-normal smoothing from the final cropped bay corners;
+`resolveProductionRoadKerbGeometry` owns the shared mitred kerb and outward
+apron offsets, including continuation normals at fragment ends. The remaining
+crossing migration is to move the terrain/bench sampling inputs plus contextual
+junction/apron/structure geometry decisions into tile construction, then emit
+them from the substrate tile itself.
 
 ### 3. Build one production substrate authority tile — guarded authority landed
 

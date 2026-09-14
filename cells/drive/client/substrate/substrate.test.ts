@@ -21,6 +21,7 @@ import {
   resolveProductionBridgeProfile,
   resolveProductionEngineeredRoadProfile,
   resolveProductionRoadCrossSection,
+  resolveProductionRoadKerbGeometry,
   resolveProductionRoadStructureProfile,
   resolveProductionCrossing,
   resolveProductionCrossingIntent,
@@ -662,6 +663,17 @@ export function runSubstrateSelfTest(): void {
   assert(Math.abs(seamNormals[0] - seamNormals[3]) < 1e-9
     && Math.abs(seamNormals[1] - seamNormals[4]) < 1e-9,
   'substrate road geometry smooths coincident normals inside the production cone');
+  const kerbs = resolveProductionRoadKerbGeometry({
+    stations: [[0, 0], [10, 0], [10, 10]],
+    halfWidthM: 2,
+    outwardReachM: 3,
+  });
+  assert(Math.abs(kerbs.right[1][0] + 2) < 1e-9
+    && Math.abs(kerbs.right[1][1] - 2) < 1e-9,
+  'substrate road geometry mitres a right-angle station on the shared bisector');
+  assert(Math.abs(kerbs.mitreRatio[1] - Math.SQRT2) < 1e-9
+    && kerbs.left[1][0] === -kerbs.right[1][0],
+  'substrate road geometry reports the mitre reach and mirrored kerb');
   const recordedDeck = resolveProductionCrossing({
     ...productionCrossingBase, roadLayer: 1, roadTags: { bridge: 'yes' }, structureOutcome: 'bridge-deck',
     deckAuthority: 'landmark-hint',
