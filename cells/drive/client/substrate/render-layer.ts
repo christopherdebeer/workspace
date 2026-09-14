@@ -1,23 +1,26 @@
-export interface ProductionRenderLayerAppend<T> {
+export interface ProductionRenderLayerAppend<T, W = never> {
   expectedCount: number;
   packets: readonly T[];
   directPacketCount?: number;
+  witnesses?: readonly W[];
 }
 
-export interface ProductionRenderLayerSnapshot<T> {
+export interface ProductionRenderLayerSnapshot<T, W = never> {
   generation: number;
   expectedCount: number;
   directPacketCount: number;
   packets: readonly T[];
+  witnesses: readonly W[];
   boundSourceRevision: number;
   complete: boolean;
 }
 
-interface MutableProductionRenderLayer<T> {
+interface MutableProductionRenderLayer<T, W> {
   generation: number;
   expectedCount: number;
   directPacketCount: number;
   packets: T[];
+  witnesses: W[];
   boundSourceRevision: number;
   complete: boolean;
 }
@@ -30,10 +33,13 @@ interface MutableProductionRenderLayer<T> {
  * while removing their source-revision authority, allowing a later terrain
  * redrape to bind the same arrays without reconstructing renderer objects.
  */
-export class ProductionRenderLayerStore<T> {
-  private readonly layers = new Map<string, MutableProductionRenderLayer<T>>();
+export class ProductionRenderLayerStore<T, W = never> {
+  private readonly layers = new Map<string, MutableProductionRenderLayer<T, W>>();
 
-  append(key: string, input: ProductionRenderLayerAppend<T>): ProductionRenderLayerSnapshot<T> {
+  append(
+    key: string,
+    input: ProductionRenderLayerAppend<T, W>,
+  ): ProductionRenderLayerSnapshot<T, W> {
     if (!Number.isInteger(input.expectedCount) || input.expectedCount < 0) {
       throw new Error('render layer expected count must be a non-negative integer');
     }
@@ -50,6 +56,7 @@ export class ProductionRenderLayerStore<T> {
         expectedCount: 0,
         directPacketCount: 0,
         packets: [],
+        witnesses: [],
         boundSourceRevision: -1,
         complete: true,
       };
@@ -64,6 +71,9 @@ export class ProductionRenderLayerStore<T> {
     layer.packets = layer.complete
       ? [...layer.packets, ...input.packets]
       : [];
+    layer.witnesses = layer.complete
+      ? [...layer.witnesses, ...(input.witnesses ?? [])]
+      : [];
     return this.snapshotOf(layer);
   }
 
@@ -74,6 +84,7 @@ export class ProductionRenderLayerStore<T> {
     layer.boundSourceRevision = sourceRevision;
     if (!complete) {
       layer.packets = [];
+      layer.witnesses = [];
       layer.complete = false;
     }
     return complete;
@@ -86,12 +97,12 @@ export class ProductionRenderLayerStore<T> {
       : [];
   }
 
-  snapshot(key: string): ProductionRenderLayerSnapshot<T> | undefined {
+  snapshot(key: string): ProductionRenderLayerSnapshot<T, W> | undefined {
     const layer = this.layers.get(key);
     return layer ? this.snapshotOf(layer) : undefined;
   }
 
-  *entries(): IterableIterator<[string, ProductionRenderLayerSnapshot<T>]> {
+  *entries(): IterableIterator<[string, ProductionRenderLayerSnapshot<T, W>]> {
     for (const [key, layer] of this.layers) yield [key, this.snapshotOf(layer)];
   }
 
@@ -111,12 +122,15 @@ export class ProductionRenderLayerStore<T> {
     this.layers.clear();
   }
 
-  private snapshotOf(layer: MutableProductionRenderLayer<T>): ProductionRenderLayerSnapshot<T> {
+  private snapshotOf(
+    layer: MutableProductionRenderLayer<T, W>,
+  ): ProductionRenderLayerSnapshot<T, W> {
     return {
       generation: layer.generation,
       expectedCount: layer.expectedCount,
       directPacketCount: layer.directPacketCount,
       packets: layer.packets,
+      witnesses: layer.witnesses,
       boundSourceRevision: layer.boundSourceRevision,
       complete: layer.complete,
     };

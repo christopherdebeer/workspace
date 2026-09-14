@@ -172,6 +172,16 @@ export function runSubstrateSelfTest(): void {
   assert(!failedRenderLayer.bind('tile:failed', 2)
     && failedRenderLayer.packetsFor('tile:failed', 2).length === 0,
   'an incomplete render batch must never become tile authority');
+  const witnessedRenderLayer =
+    new ProductionRenderLayerStore<{ id: string }, { radiusM: number }>();
+  witnessedRenderLayer.append('tile:witnessed', {
+    expectedCount: 0,
+    packets: [],
+    witnesses: [{ radiusM: 1.25 }],
+  });
+  assert(witnessedRenderLayer.bind('tile:witnessed', 9)
+    && witnessedRenderLayer.snapshot('tile:witnessed')?.witnesses[0]?.radiusM === 1.25,
+  'render-layer witnesses must bind atomically with an empty visual packet layer');
 
   const defaultMode = resolveProductionSubstrateMode(null);
   assert(defaultMode.name === 'contact' && defaultMode.contact && defaultMode.shadow

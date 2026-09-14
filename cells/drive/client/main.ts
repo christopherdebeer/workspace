@@ -17098,17 +17098,8 @@ const substrateRoadRenderMeshes = new Map<string, SubstrateRenderBinding>();
 const productionRenderMaterials = new Map<string, THREE.Material>();
 const productionRenderMaterialKeys = new WeakMap<THREE.Material, string>();
 let productionRenderMaterialSequence = 0;
-interface ProductionStructureRenderCandidate {
-  generation: number;
-  meshes: Set<THREE.Mesh>;
-  meshCount: number;
-  directPacketCount: number;
-  packetGeneration: number;
-  packets: readonly ProductionRenderMesh[];
-  authoredAtBuild: boolean;
-}
-const productionStructureRenderCandidates =
-  new Map<string, ProductionStructureRenderCandidate>();
+const productionStructureRenderLayers =
+  new ProductionRenderLayerStore<ProductionRenderMesh>();
 /** Globally assembled bridge forms are replaceable contributions to one
  *  stable owner tile. A null entry means authoring failed and deliberately
  *  keeps that tile inadmissible instead of resurrecting a direct scene mesh. */
@@ -17121,18 +17112,8 @@ let productionStructurePacketFailures = 0;
 let structureBatchOwner: string | null = null;
 let structureBatchMeshes: THREE.Mesh[] | null = null;
 let structureBatchPackets: ProductionRenderMesh[] | null = null;
-interface ProductionHydroDetailRenderCandidate {
-  generation: number;
-  meshes: Set<THREE.Mesh>;
-  meshCount: number;
-  directPacketCount: number;
-  rocks: Set<RapidRock>;
-  packetTerrainRevision: number;
-  packets: readonly ProductionRenderMesh[];
-  authoredAfterRedrape: boolean;
-}
-const productionHydroDetailRenderCandidates =
-  new Map<string, ProductionHydroDetailRenderCandidate>();
+const productionHydroDetailRenderLayers =
+  new ProductionRenderLayerStore<ProductionRenderMesh, ProductionHydroDetailCollider>();
 const substrateHydroDetailCommits = new Map<string, number>();
 const substrateHydroDetailRenderMeshes =
   new Map<string, SubstrateHydroDetailRenderBinding>();
@@ -17306,42 +17287,29 @@ function registerProductionStructureRenderBatch(
   directPackets: readonly ProductionRenderMesh[] = [],
 ): void {
   if (!meshes.length && !directPackets.length) return;
-  let candidate = productionStructureRenderCandidates.get(owner);
-  if (!candidate) {
-    candidate = {
-      generation: 0,
-      meshes: new Set(),
-      meshCount: 0,
-      directPacketCount: 0,
-      packetGeneration: -1,
-      packets: [],
-      authoredAtBuild: false,
-    };
-    productionStructureRenderCandidates.set(owner, candidate);
-  }
-  candidate.generation++;
-  candidate.meshCount += meshes.length + directPackets.length;
-  candidate.directPacketCount += directPackets.length;
-  for (const mesh of meshes) candidate.meshes.add(mesh);
-  candidate.packetGeneration = -1;
-  candidate.authoredAtBuild = false;
-  candidate.packets = [...candidate.packets, ...directPackets];
-  publishProductionStructureRenderPackets(candidate, meshes);
-  // Structure geometry is final at this boundary: it is not re-draped on a
-  // later terrain revision. Once copied into immutable packets the hidden
-  // THREE sources have no remaining authority or consumer.
+  const packets: ProductionRenderMesh[] = [...directPackets];
+  let complete = true;
   for (const mesh of meshes) {
+    const packet = captureProductionRenderMesh(mesh);
+    if (packet) packets.push(packet);
+    else complete = false;
     mesh.removeFromParent();
     mesh.geometry.dispose();
-    candidate.meshes.delete(mesh);
   }
+  productionStructureRenderLayers.append(owner, {
+    expectedCount: meshes.length + directPackets.length,
+    packets: complete ? packets : [],
+    directPacketCount: directPackets.length,
+  });
+  if (!complete) productionStructurePacketFailures++;
   advanceProductionStructureSource(owner);
 }
 function advanceProductionStructureSource(owner: string): void {
-  productionStructureSourceRevisions.set(
-    owner,
-    (productionStructureSourceRevisions.get(owner) ?? 0) + 1,
-  );
+  const revision = (productionStructureSourceRevisions.get(owner) ?? 0) + 1;
+  productionStructureSourceRevisions.set(owner, revision);
+  if (!productionStructureRenderLayers.bind(owner, revision)) {
+    productionStructurePacketFailures++;
+  }
   substrateStructureCommits.delete(owner);
   invalidateProductionSubstrateTile(owner);
 }
@@ -17422,34 +17390,27 @@ function registerProductionHydroDetailRenderBatch(
   directPackets: readonly ProductionRenderMesh[] = [],
 ): void {
   if (!meshes.length && !rocks.length && !directPackets.length) return;
-  let candidate = productionHydroDetailRenderCandidates.get(owner);
-  if (!candidate) {
-    candidate = {
-      generation: 0,
-      meshes: new Set(),
-      meshCount: 0,
-      directPacketCount: 0,
-      rocks: new Set(),
-      packetTerrainRevision: -1,
-      packets: [],
-      authoredAfterRedrape: false,
-    };
-    productionHydroDetailRenderCandidates.set(owner, candidate);
-  }
-  candidate.generation++;
-  candidate.meshCount += meshes.length + directPackets.length;
-  candidate.directPacketCount += directPackets.length;
-  for (const mesh of meshes) candidate.meshes.add(mesh);
-  for (const rock of rocks) candidate.rocks.add(rock);
-  candidate.packetTerrainRevision = -1;
-  candidate.authoredAfterRedrape = false;
-  candidate.packets = [...candidate.packets, ...directPackets];
-  appendProductionHydroDetailRenderPackets(candidate, meshes);
+  const packets: ProductionRenderMesh[] = [...directPackets];
+  let complete = true;
   for (const mesh of meshes) {
+    const packet = captureProductionRenderMesh(mesh);
+    if (packet) packets.push(packet);
+    else complete = false;
     mesh.removeFromParent();
     mesh.geometry.dispose();
-    candidate.meshes.delete(mesh);
   }
+  productionHydroDetailRenderLayers.append(owner, {
+    expectedCount: meshes.length + directPackets.length,
+    packets: complete ? packets : [],
+    directPacketCount: directPackets.length,
+    witnesses: rocks.map((rock) => ({
+      kind: 'rapid-rock',
+      x: rock.x,
+      z: rock.z,
+      radiusM: rock.s,
+    })),
+  });
+  if (!complete) productionHydroDetailPacketFailures++;
   substrateHydroDetailCommits.delete(owner);
   // Rapid rocks alter both visual bed structure and vehicle collision. Force
   // the owning tile through the same terrain/hydro revision gate.
@@ -20446,58 +20407,13 @@ function publishProductionRoadRenderPackets(
     productionDrivePacketFailures++;
   }
 }
-function publishProductionStructureRenderPackets(
-  candidate: ProductionStructureRenderCandidate,
-  meshes: readonly THREE.Mesh[],
-): void {
-  const packets: ProductionRenderMesh[] = [...candidate.packets];
-  for (const mesh of meshes) {
-    const packet = captureProductionRenderMesh(mesh);
-    if (!packet) {
-      productionStructurePacketFailures++;
-      candidate.packetGeneration = candidate.generation;
-      candidate.packets = [];
-      candidate.authoredAtBuild = true;
-      return;
-    }
-    packets.push(packet);
-  }
-  candidate.packetGeneration = candidate.generation;
-  candidate.packets = packets;
-  candidate.authoredAtBuild = true;
-}
-function appendProductionHydroDetailRenderPackets(
-  candidate: ProductionHydroDetailRenderCandidate,
-  meshes: readonly THREE.Mesh[],
-): void {
-  const packets: ProductionRenderMesh[] = [...candidate.packets];
-  for (const mesh of meshes) {
-    const packet = captureProductionRenderMesh(mesh);
-    if (!packet) {
-      productionHydroDetailPacketFailures++;
-      candidate.packets = [];
-      candidate.authoredAfterRedrape = false;
-      return;
-    }
-    packets.push(packet);
-  }
-  candidate.packets = packets;
-}
 function publishProductionHydroDetailRenderPackets(
   key: string,
   terrainSourceRevision: number,
 ): void {
-  const candidate = productionHydroDetailRenderCandidates.get(key);
-  if (!candidate) return;
-  if (candidate.packets.length !== candidate.meshCount) {
+  if (!productionHydroDetailRenderLayers.bind(key, terrainSourceRevision)) {
     productionHydroDetailPacketFailures++;
-    candidate.packetTerrainRevision = terrainSourceRevision;
-    candidate.packets = [];
-    candidate.authoredAfterRedrape = false;
-    return;
   }
-  candidate.packetTerrainRevision = terrainSourceRevision;
-  candidate.authoredAfterRedrape = true;
 }
 function productionDriveRenderMeshesFor(
   key: string,
@@ -20540,18 +20456,8 @@ function productionTerrainRenderMeshesFor(
 function productionStructureRenderMeshesFor(
   key: string,
 ): readonly ProductionRenderMesh[] {
-  const candidate = productionStructureRenderCandidates.get(key);
-  let packets: readonly ProductionRenderMesh[] = [];
-  if (candidate) {
-    if (candidate.packetGeneration === candidate.generation) {
-      packets = candidate.packets;
-    } else {
-      productionStructurePacketFailures++;
-      candidate.packetGeneration = candidate.generation;
-      candidate.packets = [];
-      candidate.authoredAtBuild = false;
-    }
-  }
+  const revision = productionStructureSourceRevisions.get(key) ?? 0;
+  const packets = productionStructureRenderLayers.packetsFor(key, revision);
   const bridgePackets = productionBridgeStructurePackets.get(key);
   if (!bridgePackets) return packets;
   return [
@@ -20565,9 +20471,8 @@ function productionHydroDetailRenderMeshesFor(
   key: string,
   terrainSourceRevision: number,
 ): readonly ProductionRenderMesh[] {
-  const candidate = productionHydroDetailRenderCandidates.get(key);
-  if (!candidate) return [];
-  if (candidate.packetTerrainRevision === terrainSourceRevision) return candidate.packets;
+  const packets = productionHydroDetailRenderLayers.packetsFor(key, terrainSourceRevision);
+  if (packets.length) return packets;
   // As above, an in-flight terrain revision is an atomic-commit refusal, not
   // packet corruption. Preserve the authored bed/rock arrays for redrape.
   return [];
@@ -20576,14 +20481,9 @@ function productionHydroDetailCollidersFor(
   key: string,
   terrainSourceRevision: number,
 ): readonly ProductionHydroDetailCollider[] {
-  const candidate = productionHydroDetailRenderCandidates.get(key);
-  if (!candidate || candidate.packetTerrainRevision !== terrainSourceRevision) return [];
-  return [...candidate.rocks].map((rock) => ({
-    kind: 'rapid-rock',
-    x: rock.x,
-    z: rock.z,
-    radiusM: rock.s,
-  }));
+  const candidate = productionHydroDetailRenderLayers.snapshot(key);
+  if (!candidate || candidate.boundSourceRevision !== terrainSourceRevision) return [];
+  return candidate.witnesses;
 }
 function productionDriveSnapshotFor(
   t: HeightTile,
@@ -20851,11 +20751,11 @@ function commitDriveRenderFromSubstrate(tile: ProductionSubstrateTile): boolean 
 }
 function canCommitStructureRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
   if (!SUBSTRATE_RENDER_ON || productionSubstrate.tile(tile.key) !== tile) return false;
-  const candidate = productionStructureRenderCandidates.get(tile.key);
+  const candidate = productionStructureRenderLayers.snapshot(tile.key);
   const bridgeCandidates = productionBridgeStructurePackets.get(tile.key)?.size ?? 0;
   return (productionStructureSourceRevisions.get(tile.key) ?? 0)
       === tile.sourceRevisions.structures
-    && tile.structureRenderMeshes.length === (candidate?.meshCount ?? 0) + bridgeCandidates
+    && tile.structureRenderMeshes.length === (candidate?.expectedCount ?? 0) + bridgeCandidates
     && tile.structureRenderMeshes.every((packet) =>
       !!packet.attributes.position
       && packet.materialKeys.length > 0
@@ -20895,14 +20795,14 @@ function commitStructureRenderFromSubstrate(tile: ProductionSubstrateTile): bool
 }
 function canCommitHydroDetailRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
   if (!SUBSTRATE_RENDER_ON || productionSubstrate.tile(tile.key) !== tile) return false;
-  const candidate = productionHydroDetailRenderCandidates.get(tile.key);
+  const candidate = productionHydroDetailRenderLayers.snapshot(tile.key);
   if (!candidate) {
     return tile.hydroDetailRenderMeshes.length === 0
       && tile.hydroDetailColliders.length === 0;
   }
   return candidate.generation === tile.sourceRevisions.hydroDetails
-    && tile.hydroDetailRenderMeshes.length === candidate.meshCount
-    && tile.hydroDetailColliders.length === candidate.rocks.size
+    && tile.hydroDetailRenderMeshes.length === candidate.expectedCount
+    && tile.hydroDetailColliders.length === candidate.witnesses.length
     && tile.hydroDetailColliders.every((collider) =>
       collider.kind === 'rapid-rock'
       && Number.isFinite(collider.x)
@@ -21191,13 +21091,12 @@ function substrateRenderSnapshot(): Record<string, number> {
   let legacyStructureCandidateMeshes = 0;
   let visibleStructures = 0;
   let uncommittedVisibleStructures = 0;
-  const structureCandidateTileKeys = new Set(productionStructureRenderCandidates.keys());
-  for (const candidate of productionStructureRenderCandidates.values()) {
-    structureCandidates += candidate.meshCount;
+  const structureCandidateTileKeys = new Set(productionStructureRenderLayers.keys());
+  for (const [, candidate] of productionStructureRenderLayers.entries()) {
+    structureCandidates += candidate.expectedCount;
     structurePacketMeshes += candidate.packets.length;
     structureDirectAuthoredPacketMeshes += candidate.directPacketCount;
-    retainedStructureSourceMeshes += candidate.meshes.size;
-    if (candidate.authoredAtBuild) {
+    if (candidate.complete) {
       structureBuildAuthoredPacketMeshes += candidate.packets.length;
     }
   }
@@ -21244,15 +21143,14 @@ function substrateRenderSnapshot(): Record<string, number> {
   let uncommittedVisibleHydroDetails = 0;
   let activeHydroDetailColliders = 0;
   let uncommittedHydroDetailColliders = 0;
-  for (const candidate of productionHydroDetailRenderCandidates.values()) {
-    hydroDetailCandidates += candidate.meshCount;
+  for (const [, candidate] of productionHydroDetailRenderLayers.entries()) {
+    hydroDetailCandidates += candidate.expectedCount;
     hydroDetailPacketMeshes += candidate.packets.length;
     hydroDetailDirectAuthoredPacketMeshes += candidate.directPacketCount;
-    retainedHydroDetailSourceMeshes += candidate.meshes.size;
-    if (candidate.authoredAfterRedrape) {
+    if (candidate.boundSourceRevision >= 0) {
       hydroDetailRedrapeAuthoredPacketMeshes += candidate.packets.length;
     }
-    hydroDetailColliderCandidates += candidate.rocks.size;
+    hydroDetailColliderCandidates += candidate.witnesses.length;
   }
   worldGroup.traverse((object) => {
     if ((object.userData as { productionHydroDetailSource?: boolean }).productionHydroDetailSource) {
@@ -21319,7 +21217,7 @@ function substrateRenderSnapshot(): Record<string, number> {
     structureCommittedTiles: substrateStructureCommits.size,
     visibleStructures,
     uncommittedVisibleStructures,
-    hydroDetailCandidateTiles: productionHydroDetailRenderCandidates.size,
+    hydroDetailCandidateTiles: productionHydroDetailRenderLayers.size,
     hydroDetailCandidates,
     hydroDetailPacketMeshes,
     hydroDetailDirectAuthoredPacketMeshes,
@@ -21367,7 +21265,7 @@ function buildProductionSubstrateShadow(
       terrain: terrainSourceRevision,
       drive: drive.revision,
       structures: productionStructureSourceRevisions.get(key) ?? 0,
-      hydroDetails: productionHydroDetailRenderCandidates.get(key)?.generation ?? 0,
+      hydroDetails: productionHydroDetailRenderLayers.snapshot(key)?.generation ?? 0,
       hydro: hydroRev.get(key) ?? 0,
       crossings: crossingRevision,
     },
@@ -31308,13 +31206,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     substrateStructureCommits.clear();
     substrateStructureRenderMeshes.clear();
     productionStructurePacketFailures = 0;
-    for (const candidate of productionStructureRenderCandidates.values()) {
-      for (const mesh of candidate.meshes) {
-        mesh.removeFromParent();
-        mesh.geometry.dispose();
-      }
-    }
-    productionStructureRenderCandidates.clear();
+    productionStructureRenderLayers.clear();
     productionBridgeStructurePackets.clear();
     productionStructureSourceRevisions.clear();
     structureBatchOwner = null;
@@ -31326,13 +31218,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     }
     substrateHydroDetailRenderMeshes.clear();
     productionHydroDetailPacketFailures = 0;
-    for (const candidate of productionHydroDetailRenderCandidates.values()) {
-      for (const mesh of candidate.meshes) {
-        mesh.removeFromParent();
-        mesh.geometry.dispose();
-      }
-    }
-    productionHydroDetailRenderCandidates.clear();
+    productionHydroDetailRenderLayers.clear();
     // The per-tile material and its normal map. Both are capped, so neither was
     // an unbounded leak, and the keys are GLOBAL tile coordinates so a hop can
     // never collide with them — but a continent away is the one moment we know
