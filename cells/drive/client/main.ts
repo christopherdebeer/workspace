@@ -6881,28 +6881,63 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
           float rockT = 0.0, soilT = 0.0, turfT = 0.0;
           // None of the structure is computed for the classification view: it
           // paints the weights and would throw every tone away.
-          if (uGView < 0.5 && w.x > 0.004) {
+          //
+          // ── AND EVERY TERM IS SKIPPED WHERE ITS OWN BAND IS SHUT ──
+          //
+          // tdBand is exactly zero once an art pixel spans half the wavelength,
+          // so a term past that was being EVALUATED — four to eight hashes —
+          // for a result multiplied by nothing. That is the same fault the
+          // tdetail=off switch compiles out one layer up and the domain field
+          // already guards against, and the seat's own frames are what made it
+          // worth fixing: at the Stelvio the MATERIAL view ran at 22 fps and
+          // the ordinary render at 17, and the only difference between them is
+          // that the classification view skips all of this.
+          //
+          // The guards are EXACT rather than conservative — px < lambda * 0.5
+          // is the same threshold tdBand uses — so nothing that was drawing
+          // stops drawing. What changes is only what a fragment pays for a term
+          // it could not have shown.
+          if (uGView < 0.5 && w.x > 0.004 && px < 3.5) {
             // The dip is read inside the rock branch because only rock reads
             // it — eight hashes a fragment for a meadow, otherwise.
             vec2 dip = subDip(gp);
+            // ── THE WARP HAS TO BE FAST ENOUGH TO BE SEEN, AND THE FIRST ONE
+            //    WAS NOT ──
+            //
+            // A drift of one bed over ninety metres is under a bed across the
+            // whole frame, and measured at the seat's own scale it moved the
+            // comb's autocorrelation from 0.166 above background to 0.157 —
+            // nothing. Two octaves at forty and thirteen metres wander the
+            // spacing by a couple of beds inside one hillside, which is the
+            // scale a fold actually bends strata at and the scale the eye reads
+            // regularity over.
+            float bWarp = tdVN(gp * (1.0 / 40.0)) * 2.2 + tdVN(gp * (1.0 / 13.0)) * 0.55;
+            // AND AN OUTCROP IS NOT CONTINUOUS. Real bedding shows in patches
+            // where rock is exposed and is buried by scree and soil between
+            // them; drawn unbroken across a whole hillside it reads as
+            // corduroy however irregular its spacing. A coarse mask at about
+            // fourteen metres opens and closes the exposure, which is the same
+            // thing the domain does one scale up and the reason the lines stop
+            // being one continuous comb.
+            float bShow = 0.30 + 0.70 * smoothstep(-0.18, 0.16, tdVN(gp * (1.0 / 14.0)));
             // Beds at 4.5 m and 1.2 m, and the joints that cut them. The
             // bedding plane is a SHADOW — rock is read by its lines, and a
             // line is the one feature this palette renders well.
-            rockT -= 0.22 * subBed(vWorldP, dip, 4.5) * tdBand(px, 4.5);
-            rockT -= 0.16 * subBed(vWorldP, dip, 1.2) * tdBand(px, 1.2);
-            rockT -= 0.12 * subJoint(gp, dip, 3.2) * tdBand(px, 3.2);
+            if (px < 2.25) rockT -= 0.22 * bShow * subBed(vWorldP, dip, 4.5, bWarp) * tdBand(px, 4.5);
+            if (px < 0.6) rockT -= 0.16 * bShow * subBed(vWorldP, dip, 1.2, bWarp * 3.0) * tdBand(px, 1.2);
+            if (px < 1.6) rockT -= 0.12 * subJoint(gp, dip, 3.2) * tdBand(px, 3.2);
             rockT += 0.09 * tdVN(gp * 0.14) * tdBand(px, 7.0);
           }
-          if (uGView < 0.5 && w.y > 0.004) {
+          if (uGView < 0.5 && w.y > 0.004 && px < 1.25) {
             // Metre-scale tonal regions — damp and dry, fine and coarse — and
             // then the clasts lying on them, which are LIGHTER than the fill
             // they sit on because a stone catches the sky and the dirt does not.
             soilT += 0.13 * tdVN(gp * 0.4) * tdBand(px, 2.5);
-            soilT += 0.19 * (subStones(gp, 0.45, 0.62) - 0.12) * tdBand(px, 0.9);
+            if (px < 0.45) soilT += 0.19 * (subStones(gp, 0.45, 0.62) - 0.12) * tdBand(px, 0.9);
           }
-          if (uGView < 0.5 && w.z > 0.004) {
+          if (uGView < 0.5 && w.z > 0.004 && px < 2.25) {
             // Clumped sward, at the scale a tussock actually holds.
-            turfT += 0.13 * tdVN(gp * 0.9) * tdBand(px, 1.1);
+            if (px < 0.55) turfT += 0.13 * tdVN(gp * 0.9) * tdBand(px, 1.1);
             turfT += 0.075 * tdVN(gp * 0.22) * tdBand(px, 4.5);
           }
           vec3 rockC = subRockC(pc, lum) * (1.0 + rockT);

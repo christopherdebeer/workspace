@@ -107,14 +107,37 @@ float subDomain(vec2 gp, float s) {
 // dot product. A purely horizontal noise, however well tuned, lies flat across
 // the slope and reads as paint on a hill rather than as the hill's own
 // structure. Returns 1 in the bedding plane's shadow and 0 on the bed's face.
-float subBed(vec3 p, vec2 dip, float thick) {
-  float f = abs(fract((p.y + dot(p.xz, dip)) / max(thick, 0.05)) - 0.5);
-  return smoothstep(0.13, 0.035, f);
+float subBed(vec3 p, vec2 dip, float thick, float warp) {
+  // ── A BED IS NOT A PERIOD, AND THE FIRST CUT MADE IT ONE ──
+  //
+  // fract(u) at one thickness is a perfectly regular comb, and over a whole
+  // alpine hillside that is not strata, it is CORDUROY — reported from the
+  // seat at the Stelvio as long parallel ribs running across the entire frame
+  // in one direction. Real bedding does two things this did not: its spacing
+  // wanders, and only SOME beds are resistant enough to stand out.
+  //
+  // The warp argument is a slow phase drift the caller reads at about ninety
+  // metres, so the spacing stretches and bunches instead of ticking.
+  float u = (p.y + dot(p.xz, dip)) / max(thick, 0.05) + warp;
+  float line = smoothstep(0.13, 0.035, abs(fract(u) - 0.5));
+  // …and the strength is keyed on the bed INDEX, not the position, so a
+  // resistant bed is resistant along its whole outcrop — which is what makes
+  // a bedding plane read as one bed seen across a hillside rather than as a
+  // texture. It also thins the ink by a third on average, because most beds
+  // are now faint, which is both the honest look and the cheaper one.
+  return line * (0.22 + 0.78 * tdH(vec2(floor(u), 17.0)));
 }
 // The cross-fractures that break a bed into blocks. Square to the dip, because
 // a joint set forms perpendicular to the bedding it cuts.
 float subJoint(vec2 gp, vec2 dip, float spacing) {
-  vec2 dir = normalize(vec2(-dip.y, dip.x) + vec2(0.31, 0.95));
+  // SQUARE TO THE DIP, AND NOTHING ELSE. Adding a constant vector to the
+  // perpendicular biased every joint set on earth toward one world bearing, so
+  // the fractures did not turn with the geology they cut — they ran the same
+  // way in the Alps as at the Cape. The dip is two noise reads and is
+  // essentially never zero, so the perpendicular alone is well defined; the
+  // constant fallback is for the degenerate case and only for that.
+  vec2 n = vec2(-dip.y, dip.x);
+  vec2 dir = normalize(dot(n, n) > 2.5e-3 ? n : vec2(0.31, 0.95));
   float f = abs(fract(dot(gp, dir) / max(spacing, 0.05)) - 0.5);
   return smoothstep(0.10, 0.02, f);
 }

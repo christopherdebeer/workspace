@@ -219,6 +219,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
 | `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
+| `node devtools/bedding.mjs` | whether the substrate's bedding is geology or corduroy: the autocorrelation of its own contribution above its background, at a solved scale so two runs compare (`REV=` for a control, `ANALYSE=1` to re-read frames already on disk) | ~9min |
 | `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
 | `node devtools/sward-sub.mjs` | whether the sward's density follows the substrate's own field, as the correlation between them, with `swardsub=0` as the control (a fixture, and CPU numbers rather than pixels — see the note) | ~3min |
 | `node devtools/ground-view.mjs` | a ground view is a uniform, not a sheet: the chip sets the channel in every camera, the legend is tallied off the attribute the fragment reads, and the chase frame moves (`FIX=` for an offline world) | ~6min |
@@ -9790,3 +9791,80 @@ WATER moving almost nothing at Yosemite is the correct answer and worth
 knowing before it is read as a failure: the classifier returns "." for dry
 ground and paints nothing, and there is essentially no water at that spot. The
 Senqu fixtures are where it has something to say.
+
+## The bedding was corduroy, and the first fix for it did nothing
+
+Four frames from the seat at the Stelvio (46.5302, 10.4547, the chart at
+`20 M · 1:910 · z18.8`). Two findings, and the second one is about this file's
+own method rather than about rock.
+
+**THE CLASSIFICATION IS RIGHT THERE AND THE LOOK IS NOT.** The MATERIAL view
+paints the whole pass red and magenta — outcrop, and outcrop over regolith —
+with no turf anywhere, which for a 2,800 m alpine pass of rock and scree is the
+correct answer. The ordinary render underneath it is the problem: long parallel
+diagonal ribs, evenly spaced, running edge to edge across the entire hillside
+in one direction. Strata drawn as a weave.
+
+It has to be, and the arithmetic says why in one line: `fract(u)` at one
+thickness is a perfectly regular comb. Real bedding does two things that comb
+does not — its spacing wanders, and an outcrop is not continuous, it shows in
+patches between the scree and soil that bury it.
+
+**AND THE FIRST FIX FOR IT MOVED NOTHING, WHICH IS THE PART WORTH KEEPING.**
+A phase warp read at ninety metres and a per-bed strength keyed on the bed
+index. Measured at the seat's own scale, the comb's autocorrelation above its
+own background went **0.166 → 0.157**: a twentieth, inside the noise. Both
+terms were reasonable and both were beside the point —
+
+- a drift of one bed over ninety metres is under a bed across the whole frame,
+  so the spacing did not visibly wander;
+- and a strength keyed on the bed index randomises each bed's AMPLITUDE while
+  leaving every bed's POSITION exactly where the comb put it, which is what an
+  autocorrelation reads. It made the ink prettier and the period identical.
+
+What worked was a warp fast enough to be seen (two octaves at forty and
+thirteen metres, so the spacing wanders by a couple of beds inside one
+hillside — the scale a fold actually bends strata at) and an exposure mask at
+about fourteen metres, so the bedding shows in patches and stops between them.
+**0.166 → 0.109**, same zoom, same settled world.
+
+| the Stelvio chart, 0.242 m a CSS pixel | peak | background | above |
+|---|---|---|---|
+| as deployed (`a9774a6`) | 0.191 | 0.025 | **0.166** |
+| warp at 90 m + per-bed strength | 0.190 | 0.032 | **0.157** |
+| warp at 40/13 m + an exposure mask | 0.132 | 0.023 | **0.109** |
+
+The frames are the argument the number supports: the control is unbroken ribs
+from one edge to the other, and the fix is traces that group, wander and stop.
+
+### Two things about measuring it, both of which cost a run
+
+- **THE FIRST METRIC NAMED THE WRONG PERIOD.** It set `__zoom` to a number,
+  photographed whatever frame that gave, and reported the strongest
+  autocorrelation over lags from five pixels out — which came back at SIX
+  PIXELS in every run. At that zoom six pixels is not a four-metre bed; it is
+  the Bayer dither. A number that measures the wrong thing is not a weaker
+  measurement, it is a different one, and it would have made any change look
+  like an improvement or a regression at random. `devtools/bedding.mjs` now
+  SOLVES the zoom for a target metres-per-CSS-pixel — the seat's own 0.241, so
+  the frame is the frame that was reported — and the lag window is 12–40 px,
+  which at that scale can only be the coarse bedding.
+- **A PEAK ALONE CANNOT SAY "COMB".** A noisier frame has a larger variance and
+  therefore a smaller correlation at every lag, so a peak that fell might mean
+  only that the term got broader. What says comb is how far the peak stands
+  above the BACKGROUND of its own lag window, and that is the column to read.
+
+### …and the cost, which the seat's own frames raised
+
+The Stelvio frames read **22 fps with MATERIAL on and 17 with it off**, and the
+only difference between those two is that the classification view skips every
+structure term. That is the first device evidence about what the substrate
+costs per fragment, and it is confounded (both frames say `RETRYING WORLD DATA`,
+so the streaming differed) — but it points at a real omission: `tdBand` is
+exactly zero once an art pixel spans half a wavelength, and a term past that
+was still being EVALUATED, four to eight hashes for a result multiplied by
+nothing. Every structure term now carries its own footprint guard at exactly
+the threshold `tdBand` uses, so nothing that was drawing stops drawing and a
+fragment stops paying for what it could not have shown. **Not verified on a
+device**: the harness renders through SwiftShader at three frames a second and
+cannot say what a phone pays. The next telemetry paste is the verification.
