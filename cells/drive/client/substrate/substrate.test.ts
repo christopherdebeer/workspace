@@ -21,6 +21,7 @@ import {
   resolveProductionBridgeProfile,
   resolveProductionEngineeredRoadProfile,
   resolveProductionRoadCrossSection,
+  resolveProductionRoadJunctionWarp,
   resolveProductionRoadKerbGeometry,
   resolveProductionRoadStructureProfile,
   resolveProductionCrossing,
@@ -674,6 +675,20 @@ export function runSubstrateSelfTest(): void {
   assert(Math.abs(kerbs.mitreRatio[1] - Math.SQRT2) < 1e-9
     && kerbs.left[1][0] === -kerbs.right[1][0],
   'substrate road geometry reports the mitre reach and mirrored kerb');
+  const junctionWarp = resolveProductionRoadJunctionWarp({
+    stations: Array.from({ length: 5 }, (_, i) => [i * 10, 0] as const),
+    profile: [0, 0, 0, 0, 0],
+    tilt: [0, 0, 0, 0, 0],
+    end: 0,
+    planeAt: (_x, z) => 2 + z * .1,
+    kerbOffsetAt: (_station, side) => [0, side * 2],
+    maximumCentreDisplacementM: 2,
+  });
+  assert(Math.abs(junctionWarp.profile[0] - 2) < 1e-9
+    && Math.abs(junctionWarp.tilt[0] - .2) < 1e-9,
+  'substrate junction warp seats the endpoint centre and camber on the host plane');
+  assert(junctionWarp.profile[3] === 0 && junctionWarp.profile[4] === 0,
+  'substrate junction warp never reaches the far endpoint stations');
   const recordedDeck = resolveProductionCrossing({
     ...productionCrossingBase, roadLayer: 1, roadTags: { bridge: 'yes' }, structureOutcome: 'bridge-deck',
     deckAuthority: 'landmark-hint',

@@ -86,6 +86,25 @@ export interface ProductionRoadCrossSection {
   preWeldEnd: number;
 }
 
+export interface ProductionRoadJunctionWarpInput {
+  stations: readonly (readonly [x: number, z: number])[];
+  profile: readonly number[];
+  tilt: readonly number[];
+  heldStations?: ArrayLike<number>;
+  end: 0 | 1;
+  planeAt(x: number, z: number): number;
+  kerbOffsetAt(station: number, side: 1 | -1): readonly [x: number, z: number];
+  maximumCentreDisplacementM: number;
+  tiltAnchor?: number | null;
+  fadeM?: number;
+  displacementLimitM?: number;
+}
+
+export interface ProductionRoadJunctionWarp {
+  profile: number[];
+  tilt: number[];
+}
+
 const clamp = (value: number, lo: number, hi: number): number =>
   Math.max(lo, Math.min(hi, value));
 
@@ -587,4 +606,58 @@ export function resolveProductionRoadCrossSection(
     preWeldStart,
     preWeldEnd,
   };
+}
+
+/**
+ * Ease a road end onto a host-road plane without crossing a held junction.
+ *
+ * The host lookup and local plane fit are contextual tile inputs. Substrate
+ * owns how their residual reaches the road: by arc length, bounded by the
+ * node disagreement, never through the far end or the first pinned station.
+ */
+export function resolveProductionRoadJunctionWarp(
+  input: ProductionRoadJunctionWarpInput,
+): ProductionRoadJunctionWarp {
+  const n = input.profile.length;
+  if (input.stations.length !== n || input.tilt.length !== n) {
+    throw new Error('junction warp stations, profile and tilt must have matching lengths');
+  }
+  if (input.heldStations && input.heldStations.length !== n) {
+    throw new Error('junction warp held stations and profile must have matching lengths');
+  }
+  const profile = [...input.profile];
+  const tilt = [...input.tilt];
+  const fadeM = input.fadeM ?? 60;
+  const limitM = input.displacementLimitM ?? 3;
+  let along = 0;
+  for (let step = 0; step < n - 2; step++) {
+    const station = input.end === 0 ? step : n - 1 - step;
+    if (step > 0) {
+      const previous = input.end === 0 ? step - 1 : n - step;
+      along += Math.hypot(
+        input.stations[station][0] - input.stations[previous][0],
+        input.stations[station][1] - input.stations[previous][1],
+      );
+    }
+    if (along >= fadeM || input.heldStations?.[station]) break;
+    const rightOffset = input.kerbOffsetAt(station, 1);
+    const leftOffset = input.kerbOffsetAt(station, -1);
+    const right = input.planeAt(
+      input.stations[station][0] + rightOffset[0],
+      input.stations[station][1] + rightOffset[1],
+    );
+    const left = input.planeAt(
+      input.stations[station][0] + leftOffset[0],
+      input.stations[station][1] + leftOffset[1],
+    );
+    const weight = 1 - along / fadeM;
+    profile[station] += clamp(
+      clamp((right + left) * 0.5 - profile[station], -limitM, limitM) * weight,
+      -input.maximumCentreDisplacementM,
+      input.maximumCentreDisplacementM,
+    );
+    tilt[station] += ((input.tiltAnchor ?? (right - left) * 0.5) - tilt[station])
+      * weight;
+  }
+  return { profile, tilt };
 }

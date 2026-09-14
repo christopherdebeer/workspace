@@ -130,6 +130,7 @@ import {
   resolveProductionAlignedRoadProfile,
   resolveProductionEngineeredRoadProfile,
   resolveProductionRoadCrossSection,
+  resolveProductionRoadJunctionWarp,
   resolveProductionRoadStructureProfile,
 } from './substrate/road-profile';
 import {
@@ -18643,50 +18644,22 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const tAnchor = tiltAnchorAt(nodeX, nodeZ,
         end === 0 ? dense[1][0] - dense[0][0] : dense[n - 1][0] - dense[n - 2][0],
         end === 0 ? dense[1][1] - dense[0][1] : dense[n - 1][1] - dense[n - 2][1]);
-      // NEVER THE FAR END'S OWN STATIONS. On a short way the old break-on-null
-      // kept the fade from ever reaching the other end; the plane answers
-      // everywhere, and the first run of this warp dragged a 4-station service
-      // way's FAR node 2m onto an extrapolation — measured as a new 2.05m
-      // centreline step at Chapman's junction checkpoint. The far end is
-      // somebody else's junction or continuation; it is not this end's to move.
-      // THE FADE RUNS BY ARC LENGTH, NOT BY STATION. `1 - k / WARP` was
-      // written for 12m stations and read as "~60m"; on a bend the densify
-      // arcs put stations 2.4m apart with a 0.5m straight between two arcs,
-      // so the same five steps spanned eight metres, and the step between
-      // the two closest stations — a fifth of the whole disagreement with
-      // the host, 0.4m of a 2m one — landed on the half-metre station.
-      // Measured on The Cheviots Road at Camps Bay as an 86% segment that
-      // the profile log showed at 19% one stage earlier, because this ran
-      // after the last logged stage. Sixty metres of ground now, whatever
-      // the stations, and the far end's own stations still never.
-      // AND NEVER THROUGH A JUNCTION PIN. A held station is another road's
-      // deck; past it the disagreement with this end's host is somebody
-      // else's junction. Measured at Camps Bay where Eldon Lane crosses
-      // Shanklin Crescent 22m short of Eldon Lane's end: both chains agreed
-      // at 12.765, the per-way log left the pin at 12.607, and the built
-      // deck stood 1.02m off — the fade had reached back through the pin.
-      // Same rule as the weld spread: the residual reaches the nearest held
-      // station and no further.
-      const WARP_M = 60;
-      let along = 0;
-      for (let k = 0; k < n - 2; k++) {
-        const i = end === 0 ? k : n - 1 - k;
-        if (k > 0) {
-          const j = end === 0 ? k - 1 : n - k;
-          along += Math.hypot(dense[i][0] - dense[j][0], dense[i][1] - dense[j][1]);
-        }
-        if (along >= WARP_M || held[i]) break;
-        const [rx, rz] = kerbMitre(i, 1, width / 2), [lx, lz] = kerbMitre(i, -1, width / 2);
-        // The plane at this station's own kerbs — answered everywhere, so
-        // the FADE governs the transition, not the kerb's luck at landing on
-        // the host's tarmac. Clamped: extrapolation may EASE a station, never
-        // relocate it.
-        const hR = plane(dense[i][0] + rx, dense[i][1] + rz);
-        const hL = plane(dense[i][0] + lx, dense[i][1] + lz);
-        const w = 1 - along / WARP_M;
-        prof[i] += clamp(clamp((hR + hL) * 0.5 - prof[i], -GRADE_SEP, GRADE_SEP) * w, -r0, r0);
-        tilt[i] += ((tAnchor ?? (hR - hL) * 0.5) - tilt[i]) * w;
-      }
+      const warped = resolveProductionRoadJunctionWarp({
+        stations: dense,
+        profile: prof,
+        tilt,
+        heldStations: held,
+        end: end as 0 | 1,
+        planeAt: plane,
+        kerbOffsetAt: (station, side) => side > 0
+          ? kerbGeometry.right[station]
+          : kerbGeometry.left[station],
+        maximumCentreDisplacementM: r0,
+        tiltAnchor: tAnchor,
+        displacementLimitM: GRADE_SEP,
+      });
+      prof = warped.profile;
+      tilt = warped.tilt;
     }
   }
   stage('7-warped', prof);

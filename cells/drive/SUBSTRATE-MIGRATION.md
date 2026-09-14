@@ -124,7 +124,9 @@ tunnel-run detection and tunnel chords;
 `resolveProductionEngineeredRoadProfile` owns the wide grade line and the
 road/rail deviation-budget clamp; `resolveProductionRoadCrossSection` owns
 kerb seating, designed crossfall/superelevation, the post-seat ruling-grade
-pass and endpoint centre/camber welds. The legacy road builder supplies the
+pass and endpoint centre/camber welds;
+`resolveProductionRoadJunctionWarp` owns the bounded arc-length fade onto a
+resolved host-road plane without crossing held stations. The legacy road builder supplies the
 terrain/bench candidates and streamed water/deck/neighbour callbacks, then
 consumes the resulting profile. `buildProductionRoadSurfaceGeometry`
 owns the renderer-neutral carriageway triangles, UV/paint attributes, face
