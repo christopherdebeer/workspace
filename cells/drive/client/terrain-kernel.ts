@@ -28,15 +28,21 @@ export interface CellTris { seg: number; offs: Int32Array; tris: Int32Array }
 export interface RefinedMesh { pos: Float32Array; uv: Float32Array; idx: Uint32Array; kinds: Uint8Array; cells: number; tris: number; cellTris: CellTris }
 export interface TileBuild {
   pos: Float32Array; uv: Float32Array; idx: Uint32Array; colors: Float32Array; normals: Float32Array;
-  /** Per vertex, THREE numbers the substrate renderer needs and the colour
-   *  cannot carry: ROUGH (how strongly fine detail draws here — bare rock
+  /** Per vertex, FOUR numbers the substrate renderer and the ground views need
+   *  and the colour cannot carry: ROUGH (how strongly fine detail draws here — bare rock
    *  and a fresh cut face loud, a crop field almost silent, open water
    *  nothing), GRAIN (its character — 1 is stony scatter, 0 a smooth
    *  wash) and SLOPE (the ground's own gradient, 0 flat and 1 at forty-five
    *  degrees and steeper). Decided here rather than in the shader because the
    *  cover class is known here and is thrown away by the palette: `bare`
    *  deliberately has NO tint entry, so bare ground and ochre scrub come out
-   *  the same colour and no fragment could tell them apart afterwards.
+   *  the same colour and no fragment could tell them apart afterwards. The
+   *  fourth is the COVER CLASS BYTE itself — 10 tree, 60 bare, 80 water, 0 for
+   *  ground no tile has answered for — which is what lets `?view=cover` paint
+   *  the raster's own verdict into the terrain's fragment at the raster's own
+   *  resolution, in every camera. It is the UNDITHERED read (`sampleCover`,
+   *  not `coverPaint`): the colour wants the dither so a 38 m block edge
+   *  dissolves, and a data view wants the class.
    *
    *  SLOPE RIDES SEPARATELY EVEN THOUGH ROUGH ALREADY CARRIES IT, and the
    *  reason is that they answer different questions. Rough is a detail
@@ -1535,7 +1541,7 @@ export function createTerrainKernel() {
     const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
     const cell = t.w / SEG;
     const colors = new Float32Array(pos.length);
-    const mats = new Float32Array((pos.length / 3) * 3);
+    const mats = new Float32Array((pos.length / 3) * 4);
     for (let i = 0; i < (refined ? 0 : (pos.length / 3)); i++) {
       const ex = pos[(i) * 3] + cxm, ez = pos[(i) * 3 + 2] + czm;
       const cv = S.sampleCover(ex, ez);
@@ -1655,7 +1661,13 @@ export function createTerrainKernel() {
       let rough = mt ? mt[0] : 0.6, grain = mt ? mt[1] : 0.5;
       rough = Math.min(1, rough + Math.min(slope, 1) * 0.6);
       if (kind === 2) { rough = Math.min(1, rough + 0.35); grain = Math.min(1, grain + 0.3); }
-      mats[i * 3] = rough; mats[i * 3 + 1] = grain; mats[i * 3 + 2] = bedSlope;
+      mats[i * 4] = rough; mats[i * 4 + 1] = grain; mats[i * 4 + 2] = bedSlope;
+      // The class the raster actually holds, for the ground views. One extra
+      // sampleCover a vertex: the colour above reads coverPaint, which is a
+      // DITHERED pair of reads and deliberately cannot answer "which class is
+      // this" — it answers "which colour should this be", and the dither is
+      // the point of it.
+      mats[i * 4 + 3] = S.sampleCover(ex, ez) ?? 0;
     }
     const p6 = performance.now();
     const normals = vertexNormals(pos, idx);

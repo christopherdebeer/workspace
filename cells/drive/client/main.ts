@@ -38,7 +38,7 @@ import {
 } from './shoreline';
 import { URL_OWNED, qs, qsHas, qsNum, qsOn, switchRows, urlWithSwitches } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
-import { CHART_LAYERS, chartLayer, inkFor, inkHex, legendFor, type ChartLayerId } from './chart-layers';
+import { CHART_LAYERS, COVER_INK, SUBSTRATE_LEGEND, chartLayer, inkFor, inkHex, legendFor, type ChartLayerId } from './chart-layers';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
   seedAt, snowLoad, stoneWalls, unitN, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
@@ -79,6 +79,7 @@ import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight, uFacSun } from './facade';
 import { roofFx } from './roof-fx';
+import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, groundInkPixels, type GroundViewId } from './ground-view';
 import { SUB_GLSL, SUB_DOM_M } from './substrate-field';
 import { gramDecode } from './facade-grammar';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
@@ -2236,6 +2237,87 @@ const tdU = {
   // seat has to be able to walk it up and down over one world.
   uSubDom: { value: SUB_DOM_M },
 };
+/**
+ * ── THE GROUND VIEW CHANNEL, AND WHY IT IS ONE UNIFORM AND NOT A LAYER ──
+ *
+ * `?tdetail=dom` was a compile-time mode that replaced the ground's colour
+ * with the substrate's classification, and the seat's verdict on it was that
+ * this is how the chart's thematic layers should work too — in the renderer,
+ * in every camera, not as a decal over the top camera only. So the mode is a
+ * RUNTIME channel now: one uniform, switched live, with the substrate and the
+ * cover raster as peers. `tdetail=dom` still works and now sets the channel's
+ * initial value rather than changing the shader source, which also makes it
+ * switchable from a chip without a reload.
+ *
+ * See ground-view.ts for why the palette is a 256-wide lookup indexed by the
+ * class byte and why alpha is the coverage claim.
+ */
+const gvLuts = new Map<'cover' | 'eco', THREE.DataTexture>();
+function gvLutFor(layer: 'cover' | 'eco'): THREE.DataTexture {
+  const had = gvLuts.get(layer);
+  if (had) return had;
+  const tex = new THREE.DataTexture(groundInkPixels(layer), 256, 1, THREE.RGBAFormat);
+  // NEAREST in both directions and no mips: this is a table, not an image, and
+  // a filtered read between two class inks is a colour that means nothing.
+  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+  gvLuts.set(layer, tex);
+  return tex;
+}
+const gvU = {
+  uGView: { value: TDETAIL === 'dom' ? GROUND_VIEW.substrate : GROUND_VIEW.off },
+  uGLut: { value: gvLutFor('cover') },
+};
+let groundView: GroundViewId = TDETAIL === 'dom' ? 'substrate' : 'off';
+/** What the channel returns to when no chip is asking for a view. `tdetail=dom`
+ *  is a boot switch, so it is the floor rather than a one-shot. */
+const baseGroundView: GroundViewId = TDETAIL === 'dom' ? 'substrate' : 'off';
+/**
+ * ── WHAT THE KEY SAYS A CLASS VIEW IS SHOWING, TALLIED OFF THE GEOMETRY ──
+ *
+ * The baked sheets counted classes as they wrote texels, which is where
+ * `legendFor` got its shares. A fragment view writes no texels and counts
+ * nothing, so the legend is read back from the same attribute the shader
+ * paints: every sixteenth vertex of every built terrain tile and every shell
+ * tile in the scene. That is the honest source — it is literally what the
+ * fragment will read — and it is cheap enough to run on a slow cadence, which
+ * is what a legend needs.
+ *
+ * It is NOT what is in FRAME. A legend of the whole loaded world over-reports
+ * whatever is behind you, and the sheets had the same property for the same
+ * reason. Naming that here rather than implying a frustum test nobody wrote.
+ */
+const gvClassCounts = new Map<number, number>();
+let gvCountAt = 0, gvCountVerts = 0;
+const GV_COUNT_MS = 1200;
+function gvTally(now: number): void {
+  if (groundView !== 'cover' && groundView !== 'eco') return;
+  if (now - gvCountAt < GV_COUNT_MS) return;
+  gvCountAt = now;
+  gvClassCounts.clear();
+  let seen = 0;
+  const eat = (m: THREE.Mesh): void => {
+    const at = m.geometry.getAttribute('aTd');
+    if (!at || at.itemSize < 4) return;
+    for (let i = 0; i < at.count; i += 16) {
+      const c = Math.round(at.getW(i));
+      if (c <= 0) continue;
+      gvClassCounts.set(c, (gvClassCounts.get(c) ?? 0) + 1);
+      seen++;
+    }
+  };
+  for (const m of terrainMeshes.values()) eat(m);
+  for (const m of farMeshes.values()) if (m.parent) eat(m);
+  gvCountVerts = seen;
+}
+/** Switch the channel. A class view swaps the lookup with it, so the palette
+ *  and the uniform can never be a layer apart. */
+function setGroundView(v: GroundViewId): void {
+  groundView = v;
+  if (v === 'cover' || v === 'eco') gvU.uGLut.value = gvLutFor(v);
+  gvU.uGView.value = GROUND_VIEW[v];
+}
 /** The footprint helper and the heat ramp, prepended to the terrain fragment
  *  shader. One string, so the measuring mode and the shipping mode cannot
  *  drift apart — the instrument must read the same number the term uses. */
@@ -6528,7 +6610,7 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         // ground, the far shell's fallback) gets the zero vector, which reads
         // as rough 0 — no fine detail, which is the right thing to do when
         // nobody said what the surface is.
-        + 'attribute vec3 aTd;\nvarying vec3 vTd;')
+        + 'attribute vec4 aTd;\nvarying vec4 vTd;')
       // ── AND IT HAS TO KNOW WHERE THE INSTANCE IS ──
       //
       // This read `modelMatrix * transformed` and skipped `instanceMatrix`,
@@ -6564,7 +6646,7 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vWorldP;
-        varying vec3 vTd;
+        varying vec4 vTd;
         uniform sampler2D uDbgWet; uniform vec2 uDbgOrg; uniform float uDbgW; uniform float uDbgOn;
         uniform float uCloudS; uniform vec2 uWind; uniform float uMpp;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
@@ -6651,6 +6733,8 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
       sh.uniforms.uTdForce = tdU.uTdForce;
       sh.uniforms.uSubAmt = tdU.uSubAmt;
       sh.uniforms.uSubDom = tdU.uSubDom;
+      sh.uniforms.uGView = gvU.uGView;
+      sh.uniforms.uGLut = gvU.uGLut;
       sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
       {
         vec2 gp = vWorldP.xz;
@@ -6725,7 +6809,15 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         // "no mineral evidence, no slope" — which the turf branch would read
         // as deep sward. Open water would come out green. rough < 0.02 is
         // class 80 and nothing else.
-        if (uSubAmt > 0.001 && rough > 0.02) {
+        // ── THE SUBSTRATE, AND THE VIEW THAT PAINTS IT ──
+        //
+        // Entered when the substrate is drawing OR when the channel is asking
+        // for its classification, because the classification is the thing the
+        // view paints and it is computed nowhere else. It is skipped outright
+        // for a class view (uGView >= 2), which reads a raster and needs none
+        // of this — the branch is coherent across the screen, so that is one
+        // compare for the whole frame.
+        if (uGView < 1.5 && (uSubAmt > 0.001 || uGView > 0.5) && rough > 0.02) {
           vec3 pc = diffuseColor.rgb;
           float lum = dot(pc, vec3(0.2126, 0.7152, 0.0722));
           // WHAT THE PALETTE ALREADY KNOWS, and the attribute cannot: whether
@@ -6774,7 +6866,9 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
           // can afford to be, because every one of them is band-limited and a
           // term close enough to see is a term far from Nyquist.
           float rockT = 0.0, soilT = 0.0, turfT = 0.0;
-          if (w.x > 0.004) {
+          // None of the structure is computed for the classification view: it
+          // paints the weights and would throw every tone away.
+          if (uGView < 0.5 && w.x > 0.004) {
             // The dip is read inside the rock branch because only rock reads
             // it — eight hashes a fragment for a meadow, otherwise.
             vec2 dip = subDip(gp);
@@ -6786,14 +6880,14 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
             rockT -= 0.12 * subJoint(gp, dip, 3.2) * tdBand(px, 3.2);
             rockT += 0.09 * tdVN(gp * 0.14) * tdBand(px, 7.0);
           }
-          if (w.y > 0.004) {
+          if (uGView < 0.5 && w.y > 0.004) {
             // Metre-scale tonal regions — damp and dry, fine and coarse — and
             // then the clasts lying on them, which are LIGHTER than the fill
             // they sit on because a stone catches the sky and the dirt does not.
             soilT += 0.13 * tdVN(gp * 0.4) * tdBand(px, 2.5);
             soilT += 0.19 * (subStones(gp, 0.45, 0.62) - 0.12) * tdBand(px, 0.9);
           }
-          if (w.z > 0.004) {
+          if (uGView < 0.5 && w.z > 0.004) {
             // Clumped sward, at the scale a tussock actually holds.
             turfT += 0.13 * tdVN(gp * 0.9) * tdBand(px, 1.1);
             turfT += 0.075 * tdVN(gp * 0.22) * tdBand(px, 4.5);
@@ -6814,15 +6908,27 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
           // "show me more of this" has to mean for a seat to judge it.
           vec3 subC = pc * max(1.0 - w.x - w.y - w.z, 0.0)
             + rockC * w.x + soilC * w.y + turfC * w.z;
-          ${TDETAIL === 'dom'
-            ? 'diffuseColor.rgb = vec3(w.x, w.z, w.y);'
-            : 'diffuseColor.rgb = mix(pc, subC, uSubAmt);'}
+          if (uGView > 0.5) diffuseColor.rgb = vec3(w.x, w.z, w.y);
+          else diffuseColor.rgb = mix(pc, subC, uSubAmt);
+        }
+        // ── A CLASS VIEW: THE RASTER'S OWN VERDICT, WHERE IT HAS ONE ──
+        //
+        // Outside the substrate's gate entirely, and that is not tidiness:
+        // water is cover class 80 and carries rough 0, so anything inside that
+        // gate could never paint the sea — on a cover view the sea is the one
+        // class a reader is most certain of. Alpha is the coverage claim, so
+        // ground no tile has answered for keeps its own colour and the view
+        // says where the data IS rather than filling its gaps.
+        if (uGView > 1.5) {
+          vec4 gInk = gvInk(uGLut, vTd.w);
+          diffuseColor.rgb = mix(diffuseColor.rgb, gInk.rgb, gInk.a);
         }
         ${TDETAIL === 'px' ? 'diffuseColor.rgb = tdHeat(px);' : ''}
       }`);
-      sh.fragmentShader = TD_HELPERS + SUB_GLSL
+      sh.fragmentShader = TD_HELPERS + SUB_GLSL + GV_GLSL
         + 'uniform float uTdRule;\nuniform float uTdAmt;\nuniform float uTdOct;\nuniform vec2 uTdForce;\n'
         + 'uniform float uSubAmt;\nuniform float uSubDom;\n'
+        + 'uniform float uGView;\nuniform sampler2D uGLut;\n'
         + sh.fragmentShader;
     }
   };
@@ -7483,7 +7589,7 @@ function buildTerrainMesh(t: HeightTile): void {
   // slope; see terrain-kernel's TileBuild.mats. The colour cannot stand in for
   // it: bare ground has no tint entry, so it arrives at the fragment the same
   // colour as ochre scrub.
-  geo.setAttribute('aTd', new THREE.BufferAttribute(b.mats, 3));
+  geo.setAttribute('aTd', new THREE.BufferAttribute(b.mats, 4));
   geo.setIndex(new THREE.BufferAttribute(b.idx, 1));
   cellTrisCache.set(geo, b.cellTris);
   (geo.userData as { seg?: number }).seg = SEG;
@@ -7645,7 +7751,7 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
   // slope; see terrain-kernel's TileBuild.mats. The colour cannot stand in for
   // it: bare ground has no tint entry, so it arrives at the fragment the same
   // colour as ochre scrub.
-  geo.setAttribute('aTd', new THREE.BufferAttribute(r.mats, 3));
+  geo.setAttribute('aTd', new THREE.BufferAttribute(r.mats, 4));
   geo.setIndex(new THREE.BufferAttribute(r.idx, 1));
   cellTrisCache.set(geo, { seg: SEG, offs: r.cellOffs, tris: r.cellTris });
   (geo.userData as { seg?: number }).seg = SEG;
@@ -26750,6 +26856,9 @@ function streamWorld(ex: number, ez: number): void {
     // the eco layer's own tiles, which are the one source the rig's single
     // tile under the wheels cannot cover for a frame.
     refreshTheme();
+    // The legend's tally, on the stream pass's own cadence — it is a readback
+    // over built geometry and belongs nowhere near the frame's hot path.
+    gvTally(performance.now());
     streamEcoForChart(cLat, cLon);
   }
   // ── the summits ──
@@ -27855,6 +27964,9 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   // — and it is a quarter of the bytes. Measured on the wide chart at noon and
   // at night: see the park's own note.
   const colors = new Uint8Array(n * 3);
+  // aTd for the shell: three zeroes (no substrate out here) and the cover
+  // class, so the ground views reach past the fine ring. See the setAttribute.
+  const cls = new Uint8Array(n * 4);
   const [cLat, cLon] = localToLatLon(xs + w / 2, zs + h / 2);
   const centre = latLonToUnit(cLat, cLon).multiplyScalar(GLOBE_R);
   // SLOPE IS SHADED PER TEXEL, NOT PER VERTEX. du/dv are the rise across one
@@ -27909,6 +28021,14 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     // measurement of "is this tile wearing real cover or a guess".
     const cv = sampleCoverShell(fwx, fwz);
     if (cv !== null) hit++;
+    // WHAT THE VIEWS PAINT, and it is `cv` rather than `cvv` below: the
+    // fallbacks under it — the country's modal class, the sea inferred from
+    // bathymetry — are inferences the PAINTER is entitled to make and a data
+    // view is not. Unknown stays 0, which the lookup answers with alpha 0 and
+    // the ground keeps its own colour, so a cover view over open ocean says
+    // "no raster here" instead of asserting a class. That is the same count
+    // __far().cover already reports as blind.
+    cls[i * 4 + 3] = cv ?? 0;
     // …and where the raster does not reach, the average of what it does say
     // rather than nothing at all. See coverMode.
     //
@@ -27944,6 +28064,14 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
+  // THE SHELL WEARS THE SAME ATTRIBUTE THE FINE WORLD DOES, so one fragment
+  // path serves both and a ground view does not stop at the ring's edge.
+  // Bytes rather than floats: the only channel the shell fills is a class in
+  // 0..100, and the other three are zero BY DESIGN — rough 0 keeps the
+  // substrate exempt out here, where its 18 m domain is band-limited away long
+  // before the shell is drawn. Four bytes a vertex, about 15% on a parked z5
+  // tile's 340 KB.
+  geo.setAttribute('aTd', new THREE.BufferAttribute(cls, 4));
   geo.setAttribute('uv', lat.uv);
   geo.setIndex(lat.idx);
   // NORMALS AS NORMALIZED Int8. Where the tile wears its own material nothing
@@ -28042,7 +28170,15 @@ function loadChartLayers(): void {
     // mention keeps its declared default, so adding a row cannot arrive
     // switched off for everyone who has ever opened the key — the trap the
     // dial rack needs a version stamp and a migration for.
-    for (const l of CHART_LAYERS) if (typeof saved[l.id] === 'boolean') chartOn[l.id] = saved[l.id] as boolean;
+    for (const l of CHART_LAYERS) {
+      // A DEBUG CHIP IS NEVER RESTORED. Its chip is only drawn while the tile
+      // overlay is up, so a stored `substrate: true` would come back as a
+      // false-coloured world with no control on the glass to turn it off —
+      // the settings panel's own lesson about a staged change nothing
+      // announces, one surface over.
+      if (l.debug) continue;
+      if (typeof saved[l.id] === 'boolean') chartOn[l.id] = saved[l.id] as boolean;
+    }
   } catch { /* private mode, or a stored shape from another life */ }
   // Whatever was stored, the invariant holds: at most one thematic sheet.
   let seen = false;
@@ -28056,10 +28192,18 @@ loadChartLayers();
 function saveChartLayers(): void {
   try { localStorage.setItem(CHART_LAYER_KEY, JSON.stringify(chartOn)); } catch { /* private mode */ }
 }
-/** The thematic sheet in force, or null. Derived rather than stored, so the
- *  one-at-a-time rule has a single place it can be true. */
+/** The thematic layer that still wants a BAKED SHEET, or null — which is now
+ *  only the ones the ground-view channel does not serve. Derived rather than
+ *  stored, so the one-at-a-time rule has a single place it can be true. */
 function themeLayer(): ChartLayerId | null {
-  for (const l of CHART_LAYERS) if (l.kind === 'thematic' && chartOn[l.id]) return l.id;
+  for (const l of CHART_LAYERS) {
+    if (l.kind === 'thematic' && chartOn[l.id] && !VIEW_FOR_LAYER[l.id]) return l.id;
+  }
+  return null;
+}
+/** The chip that is driving the renderer's channel, or null. */
+function viewLayer(): ChartLayerId | null {
+  for (const l of CHART_LAYERS) if (chartOn[l.id] && VIEW_FOR_LAYER[l.id]) return l.id;
   return null;
 }
 function setChartLayer(id: ChartLayerId, on: boolean): void {
@@ -28068,7 +28212,15 @@ function setChartLayer(id: ChartLayerId, on: boolean): void {
   if (on && row.kind === 'thematic') for (const l of CHART_LAYERS) if (l.kind === 'thematic') chartOn[l.id] = false;
   chartOn[id] = on;
   saveChartLayers();
-  if (row.kind === 'thematic') dropTheme();      // the sheet in the scene is the old layer's
+  if (row.kind === 'thematic') {
+    dropTheme();      // the sheet in the scene is the old layer's
+    // …and the channel follows the chips, with the boot switch as the floor:
+    // `?tdetail=dom` asked for the substrate before any chip existed, and
+    // turning a class view off should give that back rather than nothing.
+    const v = viewLayer();
+    setGroundView(v ? (VIEW_FOR_LAYER[v] as GroundViewId) : baseGroundView);
+    gvClassCounts.clear(); gvCountAt = 0;
+  }
 }
 /**
  * THE SHEET STANDS DOWN WHERE IT WOULD BE A LIE ABOUT SCALE.
@@ -28400,6 +28552,15 @@ function themeWork(): number {
  *  whole sheet rather than per tile, or a legend would change every time the
  *  ring moved by one tile. */
 function themeLegend(): Array<{ cls: number; name: string; hex: string; share: number }> {
+  // A CHANNEL VIEW FIRST, because it is what the ground is actually wearing.
+  // The substrate's legend is fixed — its three components are not classes
+  // that may or may not be in frame — and a class view's comes from the same
+  // attribute the fragment reads. See gvTally for what that tally is and is
+  // not a tally of.
+  if (groundView === 'substrate') {
+    return SUBSTRATE_LEGEND.map((r, i) => ({ cls: -1 - i, name: r.name, hex: r.hex, share: 0 }));
+  }
+  if (groundView === 'cover' || groundView === 'eco') return legendFor(groundView, gvClassCounts);
   const layer = themeLayer();
   if (!layer) return [];
   const all = new Map<number, number>();
@@ -34555,7 +34716,7 @@ function tdMatAt(x: number, z: number): object | null {
   // Every built tile, nearest vertex wins. A probe, so the sweep is affordable
   // and worth more than a key lookup that could disagree with the geometry: the
   // question is what the SHADER got, not what the raster says.
-  let best = Infinity, rough = 0, grain = 0, slope = 0, cr = 0, cg = 0, cb = 0;
+  let best = Infinity, rough = 0, grain = 0, slope = 0, cover = 0, cr = 0, cg = 0, cb = 0;
   for (const mesh of terrainMeshes.values()) {
     const at = mesh.geometry.getAttribute('aTd');
     const pos = mesh.geometry.getAttribute('position');
@@ -34567,6 +34728,7 @@ function tdMatAt(x: number, z: number): object | null {
       const d = dx * dx + dz * dz;
       if (d < best) {
         best = d; rough = at.getX(i); grain = at.getY(i); slope = at.getZ(i);
+        cover = at.itemSize > 3 ? at.getW(i) : 0;
         if (col) { cr = col.getX(i); cg = col.getY(i); cb = col.getZ(i); }
       }
     }
@@ -34589,6 +34751,10 @@ function tdMatAt(x: number, z: number): object | null {
   const t = rock + soil + turf, n = t > 1 ? t : 1;
   return {
     rough: +rough.toFixed(3), grain: +grain.toFixed(3), slope: +slope.toFixed(3),
+    // The class the VIEW paints, read off the same vertex — so "the cover
+    // layer says forest and the ground is bare" is one line rather than a
+    // guess about which raster answered.
+    cover, coverName: COVER_INK[cover]?.name ?? null,
     rgb: [+cr.toFixed(3), +cg.toFixed(3), +cb.toFixed(3)],
     veg: +veg.toFixed(3), warm: +warm.toFixed(3),
     midDom: { rock: +(rock / n).toFixed(3), soil: +(soil / n).toFixed(3), turf: +(turf / n).toFixed(3) },
@@ -43632,6 +43798,16 @@ function layerDown(e: PointerEvent): boolean {
       layers: CHART_LAYERS.map((l) => ({ id: l.id, name: l.name, kind: l.kind, on: chartOn[l.id] })),
       theme: themeLayer(), themeDrawing: themeGroup.visible, mpp: +envU.uMpp.value.toFixed(1),
       mppMin: THEME_MPP_MIN,
+      // ── THE CHANNEL, WHICH IS THE OTHER HALF OF THIS KEY NOW ──
+      //
+      // A view painted by the terrain's own fragment has no sheet, no bake and
+      // no drawing flag, so every number below it is about the layers that
+      // still have those. `view` is what the ground is actually wearing, in
+      // every camera; `tallied` is how many vertices the legend read and is
+      // the thing to check when a legend looks short.
+      view: groundView, viewLayer: viewLayer(), tallied: gvCountVerts,
+      classes: [...gvClassCounts.entries()].sort((a, b) => b[1] - a[1])
+        .slice(0, 8).map(([cls, n]) => ({ cls, n })),
       sheets: themeSheets.size, shell: farMeshes.size, baked: themeBaked,
       // SHEETS ON RETIRED TILES — the direct witness of the lifetime rule. A
       // sheet keyed by its tile KEY cannot have one (it is dropped the instant
@@ -48930,6 +49106,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       };
       let ly = y0 + 19, lx = pad + 1;
       for (const l of CHART_LAYERS) {
+        // A DEBUG CHIP ONLY WHILE THE TILE OVERLAY IS UP. The substrate view
+        // says what the RENDERER believes, not what the planet is, and it
+        // belongs with the ring counts rather than beside COVER. Asked for
+        // from the seat in those terms.
+        if (l.debug && !tileDbg) continue;
         const on = chartOn[l.id];
         const w = 7 + gw(l.name);
         if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
@@ -48956,7 +49137,15 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // they are four different things to do: pull the chart out, wait for the
       // shell, wait for the bake, or read the legend.
       const leg = themeLegend();
-      if (themeLayer() && !themeGroup.visible) {
+      // A CHANNEL VIEW HAS NO WAITING STATES. It is a uniform on a material
+      // that is already drawing: there is no zoom gate, no shell to wait for
+      // and no bake, which is most of the argument for it. The only thing it
+      // can be short of is ground that has streamed, and an empty legend under
+      // a view that is on says exactly that.
+      if (groundView !== 'off' && !leg.length) {
+        textEdgeP('NO GROUND CLASSED YET', pad + 1, ly, UI.dim);
+        ly += 9;
+      } else if (themeLayer() && !themeGroup.visible) {
         textEdgeP(envU.uMpp.value <= THEME_MPP_MIN ? 'ZOOM OUT FOR THE SHEET' : 'SHEET NEEDS THE SHELL',
           pad + 1, ly, UI.dim);
         ly += 9;
@@ -48975,7 +49164,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         // raster or an ecoregion tile will grow; one that is not, will not.
         // "Is that everything, or is it still coming" is the question the seat
         // asked in three different ways and nothing on the glass answered.
-        if (themeWork() > 0) {
+        if (groundView === 'off' && themeWork() > 0) {
           const w = gw('+');
           if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
           textEdgeP('+', lx, ly, UI.dim);
@@ -48985,7 +49174,33 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       hctx.globalAlpha = 1;
       layerKeyBottom = ly;
     }
-  } else { layerRects.length = 0; layerKeyBottom = 0; }
+  } else {
+    layerRects.length = 0; layerKeyBottom = 0;
+    // ── A VIEW THAT IS ON SAYS SO WHEREVER YOU ARE ──
+    //
+    // The channel's whole point is that it applies in every camera; its SWITCH
+    // is a chip on the chart's key, which is in exactly one of them. Leave it
+    // at that and a player who turns COVER on and drives away has a
+    // false-coloured world and no control on the glass — the route banner's
+    // own lesson ("a pending commitment nothing announces"), and the settings
+    // panel's before it. So off the chart the active view keeps one chip, in
+    // its own row under the clock, and a tap on it clears the view. It is
+    // pushed into `layerRects`, so the tap is the same code path the key's
+    // chips use and the two cannot answer differently.
+    const vl = viewLayer();
+    if (vl && !lineOn) {
+      const row = chartLayer(vl);
+      const name = row?.name ?? vl;
+      let w = 7;
+      for (const ch of name) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
+      const lx = pad + 1, ly = pad + 34;
+      hctx.globalAlpha = 1;
+      hctx.fillStyle = UI.text;
+      hctx.fillRect(lx + 0, ly, 5, 5);
+      textEdgeP(name, lx + 7, ly - 2, UI.text);
+      layerRects.push({ id: vl, x: lx - 2, y: ly - 5, w: w + 4, h: 12 });
+    }
+  }
   // The transport actions (rewind · AUTO · WPT) live in the CONTROL MATRIX
   // beside the dock now (Glass spec §5.5) — drawn with the dock so the grid
   // and the map share one geometry. See the matrix block below.

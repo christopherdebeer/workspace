@@ -42,9 +42,15 @@ export interface ChartLayer {
   on: boolean;
   /** One line, for the record card and for anyone reading the table. */
   note: string;
+  /** A chip only offered while the tile-debug overlay is up. The substrate's
+   *  classification is an INSTRUMENT, not a map of the world: it says what the
+   *  renderer believes the ground is made of, which is a question about this
+   *  program rather than about the planet, and it belongs beside the tile
+   *  counts and the ring state rather than beside COVER and ECO. */
+  debug?: boolean;
 }
 
-export type ChartLayerId = 'roads' | 'places' | 'cover' | 'eco';
+export type ChartLayerId = 'roads' | 'places' | 'cover' | 'eco' | 'substrate';
 
 /**
  * THE TABLE. Order is the order on the key, and the key reads top-down as the
@@ -65,6 +71,28 @@ export const CHART_LAYERS: readonly ChartLayer[] = Object.freeze([
     note: 'ESA WorldCover classes as a thematic sheet over the shell' }),
   Object.freeze({ id: 'eco' as const, name: 'ECO', kind: 'thematic' as const, on: false,
     note: 'RESOLVE ecoregions by biome — the partition the guild plants from' }),
+  // MATERIAL rather than SUBSTRATE on the chip, and the name is not a
+  // compromise: the key's eight-character budget forced the question and the
+  // shorter word is the better one. Beside COVER and ECO the three read as one
+  // vocabulary — what grows here, what biome this is, what the ground is MADE
+  // OF — where "substrate" names the renderer's module rather than the thing
+  // the reader is looking at. The id stays `substrate`; a chip's label is a
+  // word on glass and an id is a wire format.
+  Object.freeze({ id: 'substrate' as const, name: 'MATERIAL', kind: 'thematic' as const,
+    on: false, debug: true,
+    note: 'what the renderer believes the ground is made of: outcrop, turf, regolith' }),
+]);
+
+/** The substrate view's own legend. Fixed rather than tallied: these are not
+ *  classes of a dataset that may or may not be in frame, they are the three
+ *  components every fragment is a mixture of, and the reader wants to know
+ *  which colour means which whether or not any of it is on screen. The inks
+ *  are the channel assignment in the shader — red, green, blue — and nothing
+ *  is free to choose them differently. */
+export const SUBSTRATE_LEGEND: ReadonlyArray<{ name: string; hex: string }> = Object.freeze([
+  Object.freeze({ name: 'OUTCROP', hex: '#e03838' }),
+  Object.freeze({ name: 'TURF', hex: '#38e038' }),
+  Object.freeze({ name: 'REGOLITH', hex: '#3838e0' }),
 ]);
 
 export const CHART_LAYER_IDS: readonly ChartLayerId[] =

@@ -219,6 +219,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
 | `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
+| `node devtools/ground-view.mjs` | a ground view is a uniform, not a sheet: the chip sets the channel in every camera, the legend is tallied off the attribute the fragment reads, and the chase frame moves (`FIX=` for an offline world) | ~6min |
 | `node devtools/substrate-ab.mjs` | whether the substrate's classification draws a material or more noise: the inputs at six points, an interleaved one-boot A/B cropped to the near field, and the domain and amount dials swept (`TD=dom` paints the classification) | ~9min |
 | `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
 | `node devtools/menu-survey.mjs` | every menu screen photographed, SETTINGS scrolled through | ~2min |
@@ -9552,3 +9553,114 @@ chroma belongs.
   SwiftShader at three frames a second and cannot say what a phone pays — the
   next telemetry paste is the verification, and `?tdetail=flat` is the A/B that
   takes both the fine octaves and the substrate out.
+
+## A ground view is a channel in the renderer, not a layer over it
+
+The seat, on `?tdetail=dom`: *I really like the data exposure of that and can't
+help but feel that is how we should be showing the overview layers — instead of
+rendering a new layer in top-down it should apply more generally, into the
+actual renderer, and consider showing the substrate debug the same way when
+tile debug is on.* Right, and the investigation says so in three numbers.
+
+**WHAT THE SHEETS ACTUALLY WERE.** `bakeThemeTile` reads `farRasters` — the FAR
+SHELL's own height raster — so a thematic layer was never a map of the world,
+it was a decal on the shell, in the top camera, past 15 m a pixel. Three
+consequences, none of them chosen:
+
+- it cannot answer the question from the SEAT, which is where every fault in
+  this file was found;
+- it reads the SHELL's cover — a 19 km tile at 64 texels, about 300 m a texel —
+  and draws it over a fine world holding the z12 raster at 38 m, so the layer
+  was four times coarser than the ground it was describing;
+- and it carries a bake, a re-bake ladder, a settle rule, a lifetime keyed to a
+  mesh and a draw-order band: 341 lines of main.ts, every one of which exists
+  because the sheet is a second object with a second lifetime.
+
+A fragment term has none of that. `uGView` is one uniform on the terrain
+material, so the view applies in every camera, on the fine ring and the shell
+alike, with no bake, no reach limit, no cadence and no waiting states — which
+is why the key's four legend states are three for a channel view: it can only
+ever be short of ground that has streamed.
+
+- **THE PALETTE IS A 256-WIDE LOOKUP INDEXED BY THE CLASS BYTE ITSELF.** GLSL
+  ES 1.00 forbids dynamically indexing a uniform array in a fragment shader
+  (markTins is the worked example), so a palette must be a texture; making it
+  256 wide and indexing it by the RAW byte — 10, 20, … 95, 100 for WorldCover,
+  1..14 for RESOLVE — means there is no ordinal mapping in the kernel, in the
+  shader or in `ground-view.ts`. The cover classes are not contiguous, so that
+  mapping would have been a real one, and a table in two places is a table that
+  will disagree. A kilobyte of texture buys its absence.
+- **ALPHA IS THE COVERAGE CLAIM**, as it was for the sheets and for the same
+  reason: a class the dataset does not define is alpha 0 and the ground keeps
+  its own colour, so the view says where the data IS rather than filling its
+  gaps. On the shell that means the class it paints is `cv`, the raster's own
+  answer — NOT `cvv`, which carries the country's modal class and the sea
+  inferred from bathymetry. Those are inferences the PAINTER is entitled to
+  make and a data view is not.
+- **AND THE CLASS VIEW SITS OUTSIDE THE SUBSTRATE'S GATE**, which is not
+  tidiness. Water is cover class 80 and carries rough 0, so anything inside
+  that gate could never paint the sea — and on a cover view the sea is the one
+  class a reader is most certain of.
+- **THE FALSE COLOUR IS STILL LIT.** It is assigned to `diffuseColor` and takes
+  the sun, the cloud shadow and the sun march like any other ground, so the
+  landform reads THROUGH the classification. A flat unlit wash would be a truer
+  map and a worse instrument.
+
+**COVER RIDES THE GEOMETRY; ECO CANNOT YET, AND THE REASON IS THE DATA PATH.**
+The kernel already samples the class per vertex and the shell's bake already
+reads it, so `aTd.w` costs one extra `sampleCover` and the view is then exact
+at the raster's own resolution with no reach limit and no repaint. (It is the
+UNDITHERED read: the colour wants `coverPaint`'s dither so a 38 m block edge
+dissolves, and a data view wants the class.) An ecoregion is a point-in-polygon
+over a z5 tile, which the terrain kernel cannot do at all — it runs in a worker
+that has never heard of the eco store — and which costs about 7 ms a tile to
+fill in on the main thread at apply time. Affordable ON DEMAND, when the view
+is asked for, and its own unit. **Until then the eco chip keeps its sheet**,
+and `themeLayer()` is now "a thematic layer that the channel does not serve".
+
+**MEASURED**, at the seat's Yosemite spot, one settled boot, the near field
+cropped, the chip flipped live:
+
+| | chase | top |
+|---|---|---|
+| floor (view off, twice) | 1.49 /255, 6.8% moved | 1.66, 8.0% |
+| **COVER** | **7.73, 75.5% moved** | **15.31, 88.2%** |
+| **MATERIAL** (the substrate) | 88.4, 95.5% | 79.2, 99.6% |
+| sheets baked | **0** | **0** |
+| legend, tallied off the attribute | FOREST · GRASS · BARE | the same |
+
+The chase column is the finding: the old mechanism could not draw in that
+camera at all, and the legend under it names classes read from the very
+attribute the fragment paints.
+
+**Three rules that came out of building it:**
+
+- **THE LEGEND IS TALLIED OFF THE GEOMETRY, AND IT IS NOT A TALLY OF THE
+  FRAME.** The sheets counted classes as they wrote texels; a fragment view
+  writes none, so `gvTally` reads every sixteenth vertex of every built terrain
+  tile and every shell tile in the scene, on the stream pass's cadence. That is
+  the honest source — it is literally what the fragment will read — and it
+  over-reports whatever is behind you, exactly as the sheets did. Named here
+  rather than implying a frustum test nobody wrote.
+- **A DEBUG CHIP IS NEVER RESTORED FROM STORAGE.** MATERIAL's chip is drawn
+  only while the tile overlay is up, so a stored `substrate: true` would come
+  back as a false-coloured world with no control on the glass to turn it off.
+  The settings panel's own lesson about a staged change nothing announces, one
+  surface over.
+- **AND A VIEW THAT IS ON SAYS SO WHEREVER YOU ARE.** The channel applies in
+  every camera and its switch is a chip on the chart's key, which is in exactly
+  one of them. Off the chart the active view keeps one chip under the clock,
+  pushed into the same `layerRects` the key uses so the tap cannot take a
+  different code path. This is the route banner's rule and the third time this
+  file has recorded it.
+
+**MATERIAL, not SUBSTRATE, on the chip** — the key's eight-character budget
+forced the question and the shorter word is the better one. Beside COVER and
+ECO the three read as one vocabulary: what grows here, what biome this is, what
+the ground is made of. The id stays `substrate`; a chip's label is a word on
+glass and an id is a wire format.
+
+**What is left:** eco on the channel (above), and then the 341 lines of sheet
+machinery can go with it. `devtools/ground-view.mjs` is the instrument — it
+asserts the chip sets the CHANNEL and bakes no sheet, that the legend names
+what is under the camera, and that the chase frame moves.
