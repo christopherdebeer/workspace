@@ -218,6 +218,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
+| `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
 | `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
 | `node devtools/menu-survey.mjs` | every menu screen photographed, SETTINGS scrolled through | ~2min |
 | `node devtools/offline-ground.test.mjs` | and finds ground when it does | ~3min |
@@ -9295,3 +9296,100 @@ one settled world, which is the only honest form of this measurement.
 top: the chart takes the preset in full, chase a third of it, **the cab none** —
 a narrow depth of field while you are the one steering is a tax on exactly the
 information you are steering by.
+
+## The terrain mottle's fade has never once fired, and the ruler was the reason
+
+A report arrived proposing a procedural surface-detail system: per-fragment
+art-pixel band-limiting for terrain, material-aware functions, a shared
+generated-coordinate chunk, façade materials, normal perturbation. Before any
+of it, two of its premises had to be checked against this build.
+
+**The report describes code that is not here.** `terrainHash`, `uTerrainRough`,
+`tdAppear`, `vTerrainMpp` — `grep -c` returns **0** for every one. The actual
+term is two crossed sines at ±0.045, six lines, in `terrainFx(mat, {detail})`.
+
+**And its fade is dead.** `1 - smoothstep(15, 60, uMpp)`, where `uMpp` is
+`chartMpp()`, which returns **0 unless `camMode === 'top'`**. Measured by
+`__tdetail()` at every station on all three cameras:
+
+```
+keep(mpp) = 1.000 everywhere — chase, cab AND chart
+```
+
+Not approximate. Not "mostly right from the seat". It has never removed any of
+this term anywhere, and on the chart it only begins to at a 3 km view.
+
+### The defence was true across the view and wrong along it by 10³
+
+`uMpp`'s own comment argues the fade is unnecessary from the seat: "from the
+seat nothing is ever wider than a pixel at the range the shell begins". That is
+true of the **across-ray** footprint and irrelevant, because **ground is seen at
+a grazing angle** and along the ray the footprint is the across-ray one divided
+by the sine of that angle:
+
+| from the chase seat | across | **along** |
+|---|---|---|
+| 50 m | 0.16 m | 4.1 m |
+| 100 m | 0.33 m | **10.3 m** |
+| 800 m | 2.61 m | **29.2 m** |
+| 3.2 km | 10.41 m | **424.7 m** |
+| 8 km | 26.03 m | **34.8 km** |
+
+Against which: **the mottle's shortest wavelength is 15.3 m, not the 30–80 m
+its comment claims.** 30–80 m is the BLOB size. The sines are phase-modulated
+with index 2, which spreads sidebands, and their product carries the sum
+frequency, so the top of the band is
+
+```
+|∇A|max + |∇B|max = hypot(0.131, 2·0.093) + hypot(2·0.071, 0.117)
+                  = 0.2275 + 0.1841 = 0.4116 rad/m  →  λ = 15.3 m
+```
+
+So from 100 m outward the term has been drawing a moiré against the palette
+dither, and at 8 km it is being point-sampled at a hundredth of a pixel.
+
+`fwidth` measures that anisotropy per fragment for one derivative instruction
+and no uniform. `?tdetail=px` paints it as a heat ramp and the picture agrees
+with the table exactly: blue foreground, cyan to about 50 m, green on the far
+hillside, yellow at the ridge.
+
+### Both rulers are compiled in and chosen by a uniform, because otherwise the A/B is two boots
+
+Baking the mode into the shader source makes the comparison two processes, and
+two boots of this world differ by wildlife, sward phase and streaming order
+before they differ by the term. One smoothstep and a mix per fragment buys a
+`__tdetail({rule})` that flips it live. Per-fragment is where this renderer has
+room; per-boot is where its measurements go to die.
+
+### And the pixel consequence is honestly small — measured against a floor
+
+The pass is **interleaved** — mpp, px, mpp, px — so the two same-setting frames
+give the noise floor at the same temporal separation as the cross pairs. The
+first cut skipped that and read a worst pixel of 126; the 126 was a deer.
+
+| | floor (same setting) | signal (ruler change) |
+|---|---|---|
+| chase | 0.13–0.22 /255 | 0.28–0.49 |
+| cab | 0.21–0.40 | 0.32–0.47 |
+| chart | 0.83–1.19 | 0.88–1.16 |
+
+Chase clears the floor by about 2×; **cab and chart are inside it.** The whole
+term, on versus off, is 0.68–1.02 against those same floors. So the ruler is
+right for reasons that are geometric and not in doubt — the correction is
+simply quiet, because the thing being corrected is quiet.
+
+**What is NOT established**: an amplitude ladder to ×4 grew the mean delta only
+2.2×, which looks like quantisation (±0.045 is 0.64 of a palette step, so most
+of the term only decides which side of the dither threshold a pixel falls). But
+the band limit also shrinks the affected AREA, and a frame-wide mean cannot
+separate the two. A region-restricted measurement is owed before the report's
+larger programme is designed against an amplitude floor.
+
+### The same fade is on the cloud shadow, an order of magnitude louder
+
+`terrainFx`'s cloud-shadow term uses the identical `1 - smoothstep(15, 60,
+uMpp)`. Its field is `clfbm` at `CLOUD_SCALE` 0.0016 — 625 m per noise unit, 4
+octaves at ×2.07, so a finest feature near **70 m**, sharpened further by
+`clCov` — and its amplitude is up to **0.5 darkening, about seven palette
+steps** against the mottle's 0.64. Same fault, ten times as loud. Not measured
+here: the fixture runs `wx=clear`, so `covL` was ~0 and the term never drew.

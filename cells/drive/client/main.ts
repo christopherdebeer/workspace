@@ -2145,6 +2145,87 @@ const SHORE_ON = qsOn('shore', true);
  *  by default: see `uAirBlur`. The exact A/B for the far-field sharpness. */
 const AIR_BLUR = qsOn('airblur', false) ? 1 : 0;
 /**
+ * ── THE TERRAIN MOTTLE'S SPECTRUM, AND THE PIXEL THAT HAS TO HOLD IT ──
+ *
+ * The mottle is two crossed sines, each PHASE-MODULATED by a sine across the
+ * other axis, multiplied together:
+ *
+ *     A = 0.131 x + 2 sin(0.093 y)      B = 0.117 y + 2 sin(0.071 x)
+ *     gn = sin(A) * sin(B)
+ *
+ * The comment beside it called that "30–80m blobs" and that is the BLOB size,
+ * not the spectrum. Phase modulation with an index of 2 spreads sidebands
+ * either side of the carrier, and a product of two sines carries their sum
+ * frequency as well, so the honest top of the band is
+ *
+ *     |grad A|max + |grad B|max
+ *       = hypot(0.131, 2·0.093) + hypot(2·0.071, 0.117)
+ *       = 0.2275 + 0.1841 = 0.4116 rad/m   →   λ = 15.3 m
+ *
+ * FIFTEEN metres, not thirty. Which halves the range over which this can be
+ * drawn honestly, and is why the numbers below are what they are: full
+ * strength while an art pixel spans under a quarter of that wavelength, gone
+ * by half of it, which is Nyquist. Past Nyquist the term is not detail — it is
+ * a moiré beating against the palette dither, and the correctly filtered
+ * answer is its mean, which is the flat colour the fade leaves behind.
+ */
+const TD_LAMBDA = (2 * Math.PI) / (Math.hypot(0.131, 2 * 0.093) + Math.hypot(2 * 0.071, 0.117));
+const TD_KEEP = TD_LAMBDA / 4;
+const TD_GONE = TD_LAMBDA / 2;
+/**
+ * ── AND WHICH RULER MEASURES THAT PIXEL ──
+ *
+ * `?tdetail=` — `on` (the default: the fragment's own footprint), `mpp` (the
+ * legacy fade on the chart's uniform), `px` (paint the footprint instead of
+ * the ground, which is the instrument), `off` (no mottle at all, the control).
+ *
+ * THE LEGACY FADE READS A NUMBER THAT IS ZERO FROM THE SEAT. `envU.uMpp` is
+ * `chartMpp()`, which returns 0 unless `camMode === 'top'` — so from the seat
+ * `smoothstep(15, 60, 0)` is 0, the fade is 1, and the mottle draws at full
+ * strength at every range there is, the far shell's horizon included. The
+ * uniform's own comment defends this with "from the seat nothing is ever wider
+ * than a pixel at the range the shell begins", and that is true only ACROSS
+ * the view. Ground is seen at a GRAZING angle, and along the view ray the
+ * footprint is the across-ray one divided by the sine of that angle: from a
+ * 2 m seat, ground at 300 m is 0.98 m across and 147 m ALONG, and at 1 km it
+ * is 3.3 m across and 1.6 km along. The mottle's 15 m is a hundredth of a
+ * pixel there. Aliasing, at exactly the ranges the defence claimed were safe.
+ *
+ * `fwidth` measures that anisotropy directly, per fragment, for one derivative
+ * instruction and no uniform. It is discontinuous across a triangle edge where
+ * the ground slope steps, but it scales a term whose whole amplitude is 0.045
+ * — under a palette step of 0.07 — so the step it can produce is below what
+ * the quantiser can show.
+ */
+const TDETAIL = ((v) => (v && ['on', 'mpp', 'px', 'off'].includes(v) ? v : 'on'))(qs('tdetail')?.toLowerCase());
+/** Which ruler is in force (1 = the fragment's footprint, 0 = the chart's
+ *  uniform) and whether the mottle draws at all — both live, so `__tdetail`
+ *  can flip them on one settled world rather than across two boots. */
+const tdU = {
+  uTdRule: { value: TDETAIL === 'mpp' ? 0 : 1 },
+  uTdAmt: { value: TDETAIL === 'off' ? 0 : 1 },
+};
+/** The footprint helper and the heat ramp, prepended to the terrain fragment
+ *  shader. One string, so the measuring mode and the shipping mode cannot
+ *  drift apart — the instrument must read the same number the term uses. */
+const TD_HELPERS = `
+float tdPx(vec2 gp) {
+  vec2 d = fwidth(gp);
+  return max(max(d.x, d.y), 1e-4);
+}
+vec3 tdHeat(float px) {
+  // A log ruler from a tenth of a metre to a kilometre, in saturated primaries
+  // so it survives 14 palette levels and a Bayer dither. Blue is finer than
+  // the mottle needs, green is around the band edge, red is aliasing.
+  float u = clamp((log2(px) + 3.32) / 13.29, 0.0, 1.0);
+  vec3 c = mix(vec3(0.0, 0.0, 0.6), vec3(0.0, 0.8, 0.9), smoothstep(0.0, 0.33, u));
+  c = mix(c, vec3(0.1, 0.9, 0.1), smoothstep(0.33, 0.55, u));
+  c = mix(c, vec3(1.0, 0.9, 0.0), smoothstep(0.55, 0.72, u));
+  c = mix(c, vec3(1.0, 0.1, 0.0), smoothstep(0.72, 1.0, u));
+  return c;
+}
+`;
+/**
  * ── TILT-SHIFT STRENGTH BY PRESET, AND THE BAND AS A FRACTION OF SATURATION ──
  *
  * A look, so it is opt-in and named rather than numeric: the seat picks a word,
@@ -6432,17 +6513,38 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         }
       }`);
     if (opts.detail) {
-      // World-space mottle (~30–80m blobs) breaks the flat-shaded banding of
-      // the vertex-colored terrain without any texture upload.
-      // …and it is gone where a pixel outspans it. 30-80m blobs at a survey
-      // zoom of hundreds of metres a pixel are aliasing, not texture, and the
-      // far shell wears this material at exactly those zooms.
+      // World-space mottle breaks the flat-shaded banding of the
+      // vertex-coloured terrain without any texture upload — see TD_LAMBDA for
+      // what its actual spectrum is, which is narrower than the 30-80m the
+      // first comment here claimed.
+      //
+      // …AND IT IS GONE WHERE AN ART PIXEL OUTSPANS IT, because a term
+      // narrower than a pixel does not draw detail, it draws aliasing. Which
+      // of the two ways of knowing that is used is the whole of TDETAIL:
+      // uMpp is the chart's own number and IDENTICALLY ZERO FROM THE SEAT,
+      // fwidth is the fragment's real footprint and right from everywhere.
+      //
+      // BOTH RULERS ARE COMPILED IN AND CHOSEN BY A UNIFORM, which is not
+      // thrift — it is the only way this comparison can be honest. Baking the
+      // mode into the shader source makes the A/B two boots, and two boots of
+      // this world differ by wildlife, sward phase and streaming order before
+      // they differ by the term under test. It costs one smoothstep and a mix
+      // per fragment, and per-fragment is where this renderer has room.
+      sh.uniforms.uTdRule = tdU.uTdRule;
+      sh.uniforms.uTdAmt = tdU.uTdAmt;
       sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
       {
         vec2 gp = vWorldP.xz;
         float gn = sin(gp.x * 0.131 + sin(gp.y * 0.093) * 2.0) * sin(gp.y * 0.117 + sin(gp.x * 0.071) * 2.0);
-        diffuseColor.rgb *= 0.955 + 0.045 * gn * (1.0 - smoothstep(15.0, 60.0, uMpp));
+        float bandPx = 1.0 - smoothstep(${TD_KEEP.toFixed(2)}, ${TD_GONE.toFixed(2)}, tdPx(gp));
+        float bandMpp = 1.0 - smoothstep(15.0, 60.0, uMpp);
+        ${TDETAIL === 'px'
+          ? 'diffuseColor.rgb = tdHeat(tdPx(gp));'
+          : 'diffuseColor.rgb *= 0.955 + 0.045 * gn * mix(bandMpp, bandPx, uTdRule) * uTdAmt;'}
       }`);
+      sh.fragmentShader = TD_HELPERS
+        + 'uniform float uTdRule;\nuniform float uTdAmt;\n'
+        + sh.fragmentShader;
     }
   };
 }
@@ -34132,6 +34234,67 @@ function repaintWetDebug(): void {
  * from the console at 3 fps without a reload, which is what the dial rack will
  * be built from once the seat has picked numbers.
  */
+/**
+ * ── WHAT AN ART PIXEL ACTUALLY COVERS ON THE GROUND, ALONG THE VIEW ──
+ *
+ * The companion to `?tdetail=px`: the heat map shows WHERE the footprint is
+ * too coarse for the mottle, this says BY HOW MUCH and lets the claim be
+ * argued in metres. Both numbers, because the anisotropy is the whole point:
+ *
+ *   across  = 2 t tan(fov/2) / uPix.y        (the number `chartMpp` computes)
+ *   along   = across / sin(grazing angle)    (what ground at a grazing angle
+ *                                             actually costs per pixel)
+ *
+ * `lambda` is the mottle's shortest wavelength and `keep`/`gone` the band the
+ * shader fades over, so a row can be read straight off: `along` under `keep`
+ * is honest detail, over `gone` is aliasing that the fade now removes, and
+ * `mpp` beside them is the chart uniform the legacy fade read — zero from the
+ * seat, which is the finding.
+ */
+(window as unknown as { __tdetail?: object }).__tdetail = (
+  opts?: { rule?: 'px' | 'mpp'; amount?: number },
+): object => {
+  if (opts?.rule !== undefined) tdU.uTdRule.value = opts.rule === 'mpp' ? 0 : 1;
+  // 0..4, NOT 0..1. The mottle's own amplitude is +/-0.045 and one palette step
+  // is about 0.07 sRGB, so the shipped term is two thirds of a step either side
+  // of its mean: most of what it contributes survives quantisation only as
+  // modulation of the Bayer dither. Being able to ask for four times it is how
+  // the question "how loud does a procedural surface term have to be before
+  // this renderer can show it at all" gets an answer instead of an opinion.
+  if (opts?.amount !== undefined) tdU.uTdAmt.value = clamp(opts.amount, 0, 4);
+  const tanHalf = Math.tan((camera.fov * Math.PI) / 360);
+  const rows = Math.max(2, pixSize.y);
+  const eye = camera.position;
+  const fwd = camera.getWorldDirection(new THREE.Vector3());
+  let dx = fwd.x, dz = fwd.z;
+  const flat = Math.hypot(dx, dz);
+  if (flat < 1e-3) { dx = Math.sin(state.heading); dz = -Math.cos(state.heading); }
+  else { dx /= flat; dz /= flat; }
+  const at = (d: number): object => {
+    const x = eye.x + dx * d, z = eye.z + dz * d;
+    const y = groundAt(x, z);
+    const t = Math.hypot(x - eye.x, y - eye.y, z - eye.z);
+    const across = (2 * t * tanHalf) / rows;
+    // The sine of the angle the view ray makes with the ground there. Taken
+    // from the ray rather than assumed flat, so a hillside facing the camera
+    // reports the shorter footprint it really has.
+    const sinG = Math.min(1, Math.max(1e-4, Math.abs(eye.y - y) / Math.max(t, 1e-4)));
+    return { d, t: +t.toFixed(1), across: +across.toFixed(2), along: +(across / sinG).toFixed(1),
+      // What the shipped fade would leave of the mottle at this point, under
+      // each ruler. The pair is the A/B, in one row.
+      keepPx: +(1 - clamp((across / sinG - TD_KEEP) / (TD_GONE - TD_KEEP), 0, 1)).toFixed(3),
+      keepMpp: +(1 - clamp((envU.uMpp.value - 15) / 45, 0, 1)).toFixed(3) };
+  };
+  return {
+    mode: TDETAIL, rule: tdU.uTdRule.value ? 'px' : 'mpp', amount: tdU.uTdAmt.value,
+    cam: camMode, pix: [pixSize.x, pixSize.y],
+    lambda: +TD_LAMBDA.toFixed(1), keep: +TD_KEEP.toFixed(1), gone: +TD_GONE.toFixed(1),
+    // The chart's uniform, which is the legacy fade's only input.
+    mpp: +envU.uMpp.value.toFixed(2),
+    eyeY: +eye.y.toFixed(1), groundY: +groundAt(state.x, state.z).toFixed(1),
+    ahead: [10, 25, 50, 100, 200, 400, 800, 1600, 3200, 8000].map(at),
+  };
+};
 (window as unknown as { __tilt?: object }).__tilt = (
   opts?: { amount?: number | null; angle?: number; sharp?: number | null; blur?: number | null;
     sky?: number; air?: number },

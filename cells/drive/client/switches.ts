@@ -221,6 +221,8 @@ export const SWITCHES = [
     note: 'railgrade=0 drapes a railway over the ground: no formation, no earthworks, and not drivable' },
   { id: 'airblur', kind: 'toggle', marks: ['legacy', 'look'], fallback: 'off',
     note: 'airblur=1 puts back the aerial perspective’s distance BLUR — the term that softened a road toward its vanishing point' },
+  { id: 'tdetail', kind: 'choice', marks: ['look', 'bench'], fallback: 'on',
+    note: 'how the terrain’s procedural mottle is band-limited: on = the fragment’s own footprint (fwidth), mpp = the legacy chart uniform, which is identically zero from the seat and so never faded anything there, px = paint the footprint as a heat map instead of the ground, off = no mottle at all' },
   { id: 'tilt', kind: 'choice', marks: ['look'], fallback: 'off',
     note: 'tilt=subtle|mini|hard puts a tilt-shift plane of focus in the world' },
 ] as const satisfies readonly SwitchDef[];
