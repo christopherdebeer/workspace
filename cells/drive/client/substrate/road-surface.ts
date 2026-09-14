@@ -36,6 +36,60 @@ export interface ProductionRoadKerbGeometry {
   mitreRatio: readonly number[];
 }
 
+export interface ProductionRoadCropHost {
+  outM: number;
+  track: boolean;
+  halfWidthM: number;
+  tangentX: number;
+  tangentZ: number;
+  name?: string;
+  fragmentId?: number;
+  built: boolean;
+}
+
+export interface ProductionRoadEndCrop {
+  rightFraction: number;
+  leftFraction: number;
+  hostTangentX: number;
+  hostTangentZ: number;
+  hiddenBays: number;
+}
+
+export type ProductionRoadEndCropReason =
+  | 'cropped'
+  | 'no-host'
+  | 'host-is-track'
+  | 'not-inside-host'
+  | 'host-narrower'
+  | 'tie-unbuilt-host'
+  | 'host-ends-here'
+  | 'grade-separated'
+  | 'continuation'
+  | 'too-parallel'
+  | 'never-enters-host';
+
+export interface ProductionRoadEndCropInput {
+  stations: readonly (readonly [x: number, z: number])[];
+  rightOffsets: readonly (readonly [x: number, z: number])[];
+  leftOffsets: readonly (readonly [x: number, z: number])[];
+  end: 0 | 1;
+  halfWidthM: number;
+  roadName?: string;
+  ownHeightM: number;
+  gradeSeparationM: number;
+  hostAt(x: number, z: number): ProductionRoadCropHost | null;
+  hostEndsAt?(host: ProductionRoadCropHost, x: number, z: number): boolean;
+  hostHeightAtNode?(): number | null;
+}
+
+export interface ProductionRoadEndCropDecision {
+  reason: ProductionRoadEndCropReason;
+  host?: ProductionRoadCropHost;
+  crop?: ProductionRoadEndCrop;
+  alignment?: number;
+  heightDeltaM?: number;
+}
+
 const clamp = (value: number, low: number, high: number): number =>
   Math.max(low, Math.min(high, value));
 
@@ -106,6 +160,131 @@ export function resolveProductionRoadKerbGeometry(
     );
   }
   return { right, left, outwardRight, outwardLeft, mitreRatio };
+}
+
+/**
+ * Decide where a road end stops against a host carriageway.
+ *
+ * Host lookup remains a tile-context callback, but hierarchy, continuation,
+ * grade-separation, shallow-fork hiding and the left/right kerb intersections
+ * are one substrate decision. This keeps build order from creating a second
+ * crop authority in the renderer.
+ */
+export function resolveProductionRoadEndCrop(
+  input: ProductionRoadEndCropInput,
+): ProductionRoadEndCropDecision {
+  const n = input.stations.length;
+  if (n < 4
+    || input.rightOffsets.length !== n
+    || input.leftOffsets.length !== n) {
+    throw new Error('road crop requires four stations and matching kerb offsets');
+  }
+  const node = input.end === 0 ? 0 : n - 1;
+  const nodeX = input.stations[node][0];
+  const nodeZ = input.stations[node][1];
+  const host = input.hostAt(nodeX, nodeZ);
+  if (!host) return { reason: 'no-host' };
+  if (host.track) return { reason: 'host-is-track', host };
+  if (host.outM >= -0.6) return { reason: 'not-inside-host', host };
+  if (host.halfWidthM < input.halfWidthM - 0.4) {
+    return { reason: 'host-narrower', host };
+  }
+  if (!host.built && host.halfWidthM < input.halfWidthM + 0.4) {
+    return { reason: 'tie-unbuilt-host', host };
+  }
+  if (host.built && input.hostEndsAt?.(host, nodeX, nodeZ)) {
+    return { reason: 'host-ends-here', host };
+  }
+  const hostHeight = input.hostHeightAtNode?.() ?? null;
+  const heightDeltaM = hostHeight === null
+    ? undefined
+    : hostHeight - input.ownHeightM;
+  if (heightDeltaM !== undefined
+    && Math.abs(heightDeltaM) > input.gradeSeparationM) {
+    return { reason: 'grade-separated', host, heightDeltaM };
+  }
+
+  const neighbor = input.end === 0 ? 1 : n - 2;
+  const dx = input.stations[neighbor][0] - nodeX;
+  const dz = input.stations[neighbor][1] - nodeZ;
+  const length = Math.hypot(dx, dz) || 1;
+  const alignment = Math.abs(
+    (dx / length) * host.tangentX + (dz / length) * host.tangentZ,
+  );
+  const sameIdentity = input.roadName !== undefined
+    ? input.roadName === host.name
+    : host.name === undefined;
+  if (sameIdentity && alignment >= 0.94) {
+    return { reason: 'continuation', host, alignment };
+  }
+  if (alignment >= 0.99) {
+    return { reason: 'too-parallel', host, alignment };
+  }
+
+  const offsetAt = (
+    station: number,
+    side: 1 | -1,
+  ): readonly [number, number] =>
+    side > 0 ? input.rightOffsets[station] : input.leftOffsets[station];
+  const insideStation = (station: number): boolean => {
+    for (const side of [1, -1] as const) {
+      const offset = offsetAt(station, side);
+      const edge = input.hostAt(
+        input.stations[station][0] + offset[0],
+        input.stations[station][1] + offset[1],
+      );
+      if (!edge || edge.outM > -0.2) return false;
+    }
+    return true;
+  };
+  let hiddenBays = 0;
+  const hiddenCap = Math.min(3, n - 3);
+  while (hiddenBays < hiddenCap
+    && insideStation(input.end === 0 ? hiddenBays : n - 1 - hiddenBays)
+    && insideStation(input.end === 0 ? hiddenBays + 1 : n - 2 - hiddenBays)) {
+    hiddenBays++;
+  }
+  const outer = input.end === 0 ? hiddenBays : n - 1 - hiddenBays;
+  const inner = input.end === 0 ? hiddenBays + 1 : n - 2 - hiddenBays;
+  const fractionFor = (side: 1 | -1): number => {
+    const outerOffset = offsetAt(outer, side);
+    const innerOffset = offsetAt(inner, side);
+    const outerX = input.stations[outer][0] + outerOffset[0];
+    const outerZ = input.stations[outer][1] + outerOffset[1];
+    const innerX = input.stations[inner][0] + innerOffset[0];
+    const innerZ = input.stations[inner][1] + innerOffset[1];
+    const outAt = (fraction: number): number => input.hostAt(
+      innerX + (outerX - innerX) * fraction,
+      innerZ + (outerZ - innerZ) * fraction,
+    )?.outM ?? 1;
+    if (outAt(1) >= 0) return 1;
+    if (outAt(0) <= 0) return 0.08;
+    let low = 0;
+    let high = 1;
+    for (let iteration = 0; iteration < 9; iteration++) {
+      const middle = (low + high) / 2;
+      if (outAt(middle) > 0) low = middle;
+      else high = middle;
+    }
+    return (low + high) / 2;
+  };
+  const rightFraction = fractionFor(1);
+  const leftFraction = fractionFor(-1);
+  if (rightFraction >= 1 && leftFraction >= 1 && hiddenBays === 0) {
+    return { reason: 'never-enters-host', host, alignment };
+  }
+  return {
+    reason: 'cropped',
+    host,
+    alignment,
+    crop: {
+      rightFraction,
+      leftFraction,
+      hostTangentX: host.tangentX,
+      hostTangentZ: host.tangentZ,
+      hiddenBays,
+    },
+  };
 }
 
 /**

@@ -135,8 +135,10 @@ import {
 } from './substrate/road-profile';
 import {
   buildProductionRoadSurfaceGeometry,
+  resolveProductionRoadEndCrop,
   resolveProductionRoadKerbGeometry,
   smoothProductionRoadSurfaceNormals,
+  type ProductionRoadCropHost,
   type ProductionRoadSurfaceBay,
 } from './substrate/road-surface';
 import {
@@ -18700,13 +18702,38 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // Built roads answer first (exact, decked); ways of THIS batch that
       // have not built yet answer through the pre-grid, blind to this way's
       // own body — which is what makes the crop independent of build order.
-      const hostEdge = (qx: number, qz: number): { out: number; track: boolean; hw: number; ux: number; uz: number; nm?: string; fd?: number; built: boolean } | null => {
+      const hostEdge = (qx: number, qz: number): ProductionRoadCropHost | null => {
         const a = roadEdge(qx, qz);
         const b = preEdge(qx, qz, wayKey);
-        return a && (!b || a.out <= b.out) ? { ...a, built: true } : b ? { ...b, built: false } : null;
+        const host = a && (!b || a.out <= b.out)
+          ? { ...a, built: true }
+          : b ? { ...b, built: false } : null;
+        return host ? {
+          outM: host.out,
+          track: host.track,
+          halfWidthM: host.hw,
+          tangentX: host.ux,
+          tangentZ: host.uz,
+          name: host.nm,
+          fragmentId: 'fd' in host ? host.fd : undefined,
+          built: host.built,
+        } : null;
       };
-      const at0 = hostEdge(ex0, ez0);
-      if (!at0) {
+      const decision = resolveProductionRoadEndCrop({
+        stations: dense,
+        rightOffsets: kerbGeometry.right,
+        leftOffsets: kerbGeometry.left,
+        end: end as 0 | 1,
+        halfWidthM: width / 2,
+        roadName: name,
+        ownHeightM: flat ? prof[i0] : elev[i0],
+        gradeSeparationM: GRADE_SEP,
+        hostAt: hostEdge,
+        hostEndsAt: (host, x, z) =>
+          hostEndsAt(x, z, host.name, host.fragmentId),
+        hostHeightAtNode: () => roadHeightAt(ex0, ez0, 1.2),
+      });
+      if (decision.reason === 'no-host') {
         // No host in the built grid AND none in this batch — one may still
         // arrive in a LATER batch (cross-tile). Park the end; a later road
         // sweeps the list and masks what it can.
@@ -18719,83 +18746,34 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         clog('no-host');
         continue;
       }
-      if (at0.track) { clog('host-is-track'); continue; }
-      if (at0.out >= -0.6) { clog('not-inside-host', { out: +at0.out.toFixed(2) }); continue; }
-      if (at0.hw < width / 2 - 0.4) { clog('host-narrower', { host: at0.nm }); continue; }
-      // A TIE CROPS ONCE. Equal widths defer to whichever is already BUILT —
-      // but the pre-grid answers for a host that has not built yet, so two
-      // equal roads meeting in one batch each found the other and BOTH
-      // cropped: measured where Blair Road turns into Shanklin Crescent at
-      // Camps Bay, `cropped` logged from both ends of the same node and the
-      // corner between them drawn by nobody — the hole in the carriageway
-      // reported from the seat. The one that builds first now leaves the
-      // corner alone; the second finds it built and crops against it.
-      if (!at0.built && at0.hw < width / 2 + 0.4) { clog('tie-unbuilt-host', { host: at0.nm }); continue; }
-      // AND A HOST THAT ENDS HERE IS NOT A HOST. The crop stops a side road on
-      // a carriageway that continues past the node; where the other road
-      // also ends at this node — a corner where the name changes — its kerb
-      // line ends too, and a cut there only opens the outside of the bend.
-      // Both draw to the node, and the inside overlaps as a same-name
-      // continuation's does.
-      if (at0.built && hostEndsAt(ex0, ez0, at0.nm, at0.fd)) { clog('host-ends-here', { host: at0.nm }); continue; }
-      // A FLYOVER IS NOT A MOUTH. Past GRADE_SEP the two roads are passing,
-      // not meeting, and neither the cut nor the seat may apply — pulling a
-      // viaduct's edge down to the road below it is worse than any overlap.
-      // Gated only when the host is BUILT (its deck is knowable); dependency
-      // ordering makes that the common case.
-      const ownY0 = flat ? prof[i0] : elev[i0];
-      const hostY0 = roadHeightAt(ex0, ez0, 1.2);
-      if (hostY0 !== null && Math.abs(hostY0 - ownY0) > GRADE_SEP) {
-        clog('grade-separated', { out: +(hostY0 - ownY0).toFixed(2) });
-        continue;
-      }
-      const iN0 = end === 0 ? 1 : n - 2;
-      const ddx = dense[iN0][0] - ex0, ddz = dense[iN0][1] - ez0;
-      const dl = Math.hypot(ddx, ddz) || 1;
-      const align = Math.abs((ddx / dl) * at0.ux + (ddz / dl) * at0.uz);
-      const sameIdentity = name !== undefined ? name === at0.nm : at0.nm === undefined;
-      if (sameIdentity && align >= 0.94) { clog('continuation', { align: +align.toFixed(3), host: at0.nm }); continue; }
-      if (align >= 0.99) { clog('too-parallel', { align: +align.toFixed(3), host: at0.nm }); continue; }
-      // How many whole bays this end buries inside the host's carriageway.
-      const insideSt = (idx: number): boolean => {
-        for (const sgn of [1, -1]) {
-          const [kx, kz] = kerbMitre(idx, sgn, width / 2);
-          const e = hostEdge(dense[idx][0] + kx, dense[idx][1] + kz);
-          if (!e || e.out > -0.2) return false;
-        }
-        return true;
-      };
-      let skip = 0;
-      const cap = Math.min(3, n - 3);
-      while (skip < cap
-        && insideSt(end === 0 ? skip : n - 1 - skip)
-        && insideSt(end === 0 ? skip + 1 : n - 2 - skip)) skip++;
-      const iE = end === 0 ? skip : n - 1 - skip;      // the cut bay's outer station
-      const iN = end === 0 ? skip + 1 : n - 2 - skip;  // …and its inner one
-      const sFor = (sgn: number): number => {
-        const [kex, kez] = kerbMitre(iE, sgn, width / 2);
-        const [kix, kiz] = kerbMitre(iN, sgn, width / 2);
-        const Px = dense[iE][0] + kex, Pz = dense[iE][1] + kez;   // the outer corner
-        const Qx = dense[iN][0] + kix, Qz = dense[iN][1] + kiz;   // the inner one
-        const outAt = (s: number): number => {
-          const e = hostEdge(Qx + (Px - Qx) * s, Qz + (Pz - Qz) * s);
-          return e ? e.out : 1;
+      if (decision.crop) {
+        cropEnd[end] = {
+          sR: decision.crop.rightFraction,
+          sL: decision.crop.leftFraction,
+          hx: decision.crop.hostTangentX,
+          hz: decision.crop.hostTangentZ,
+          skip: decision.crop.hiddenBays,
         };
-        if (outAt(1) >= 0) return 1;        // this corner never enters the host
-        if (outAt(0) <= 0) return 0.08;     // still inside at the walk's cap — keep a sliver
-        let lo = 0, hi = 1;
-        for (let it = 0; it < 9; it++) {
-          const mid = (lo + hi) / 2;
-          if (outAt(mid) > 0) lo = mid; else hi = mid;
-        }
-        return (lo + hi) / 2;
-      };
-      const sR = sFor(1), sL = sFor(-1);
-      if (sR < 1 || sL < 1 || skip > 0) {
-        cropEnd[end] = { sR, sL, hx: at0.ux, hz: at0.uz, skip };
         spanStats.cropped++;
-        clog('cropped', { sR: +sR.toFixed(2), sL: +sL.toFixed(2), skip, host: at0.nm });
-      } else clog('never-enters-host', { host: at0.nm });
+      }
+      const extra: Record<string, string | number | undefined> = {
+        host: decision.host?.name,
+      };
+      if (decision.host && decision.reason === 'not-inside-host') {
+        extra.out = +decision.host.outM.toFixed(2);
+      }
+      if (decision.alignment !== undefined) {
+        extra.align = +decision.alignment.toFixed(3);
+      }
+      if (decision.heightDeltaM !== undefined) {
+        extra.out = +decision.heightDeltaM.toFixed(2);
+      }
+      if (decision.crop) {
+        extra.sR = +decision.crop.rightFraction.toFixed(2);
+        extra.sL = +decision.crop.leftFraction.toFixed(2);
+        extra.skip = decision.crop.hiddenBays;
+      }
+      clog(decision.reason, extra);
     }
   }
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)

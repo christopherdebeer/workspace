@@ -21,6 +21,7 @@ import {
   resolveProductionBridgeProfile,
   resolveProductionEngineeredRoadProfile,
   resolveProductionRoadCrossSection,
+  resolveProductionRoadEndCrop,
   resolveProductionRoadJunctionWarp,
   resolveProductionRoadKerbGeometry,
   resolveProductionRoadStructureProfile,
@@ -675,6 +676,62 @@ export function runSubstrateSelfTest(): void {
   assert(Math.abs(kerbs.mitreRatio[1] - Math.SQRT2) < 1e-9
     && kerbs.left[1][0] === -kerbs.right[1][0],
   'substrate road geometry reports the mitre reach and mirrored kerb');
+  const cropStations = [[0, 0], [10, 0], [20, 0], [30, 0]] as const;
+  const cropRight = cropStations.map(() => [0, 2] as const);
+  const cropLeft = cropStations.map(() => [0, -2] as const);
+  const crossingHost = (x: number) => ({
+    outM: Math.abs(x) - 5,
+    track: false,
+    halfWidthM: 5,
+    tangentX: 0,
+    tangentZ: 1,
+    name: 'host',
+    built: true,
+  });
+  const endCrop = resolveProductionRoadEndCrop({
+    stations: cropStations,
+    rightOffsets: cropRight,
+    leftOffsets: cropLeft,
+    end: 0,
+    halfWidthM: 2,
+    roadName: 'side',
+    ownHeightM: 0,
+    gradeSeparationM: 3,
+    hostAt: (x) => crossingHost(x),
+    hostHeightAtNode: () => 0,
+  });
+  assert(endCrop.reason === 'cropped'
+    && endCrop.crop !== undefined
+    && Math.abs(endCrop.crop.rightFraction - .5) < .01
+    && Math.abs(endCrop.crop.leftFraction - .5) < .01,
+  'substrate road crop intersects both side-road kerbs with the host edge');
+  const continuationCrop = resolveProductionRoadEndCrop({
+    stations: cropStations,
+    rightOffsets: cropRight,
+    leftOffsets: cropLeft,
+    end: 0,
+    halfWidthM: 2,
+    roadName: 'same',
+    ownHeightM: 0,
+    gradeSeparationM: 3,
+    hostAt: () => ({ ...crossingHost(0), tangentX: 1, tangentZ: 0, name: 'same' }),
+  });
+  assert(continuationCrop.reason === 'continuation',
+  'substrate road crop preserves a same-road continuation');
+  const separatedCrop = resolveProductionRoadEndCrop({
+    stations: cropStations,
+    rightOffsets: cropRight,
+    leftOffsets: cropLeft,
+    end: 0,
+    halfWidthM: 2,
+    roadName: 'side',
+    ownHeightM: 0,
+    gradeSeparationM: 3,
+    hostAt: (x) => crossingHost(x),
+    hostHeightAtNode: () => 7,
+  });
+  assert(separatedCrop.reason === 'grade-separated',
+  'substrate road crop leaves a flyover mouth intact');
   const junctionWarp = resolveProductionRoadJunctionWarp({
     stations: Array.from({ length: 5 }, (_, i) => [i * 10, 0] as const),
     profile: [0, 0, 0, 0, 0],

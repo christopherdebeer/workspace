@@ -126,16 +126,19 @@ road/rail deviation-budget clamp; `resolveProductionRoadCrossSection` owns
 kerb seating, designed crossfall/superelevation, the post-seat ruling-grade
 pass and endpoint centre/camber welds;
 `resolveProductionRoadJunctionWarp` owns the bounded arc-length fade onto a
-resolved host-road plane without crossing held stations. The legacy road builder supplies the
-terrain/bench candidates and streamed water/deck/neighbour callbacks, then
-consumes the resulting profile. `buildProductionRoadSurfaceGeometry`
+resolved host-road plane without crossing held stations. The legacy road
+builder supplies the terrain/bench candidates and streamed
+water/deck/neighbour callbacks, then consumes the resulting profile.
+`buildProductionRoadSurfaceGeometry`
 owns the renderer-neutral carriageway triangles, UV/paint attributes, face
 normals and seam-normal smoothing from the final cropped bay corners;
 `resolveProductionRoadKerbGeometry` owns the shared mitred kerb and outward
-apron offsets, including continuation normals at fragment ends. The remaining
-crossing migration is to move the terrain/bench sampling inputs plus contextual
-junction/apron/structure geometry decisions into tile construction, then emit
-them from the substrate tile itself.
+apron offsets, including continuation normals at fragment ends;
+`resolveProductionRoadEndCrop` owns host hierarchy, continuation and
+grade-separation gates plus shallow-fork hiding and exact kerb intersections.
+The remaining crossing migration is to move the terrain/bench sampling inputs
+plus host-plane fitting and apron/structure geometry into tile construction,
+then emit them from the substrate tile itself.
 
 ### 3. Build one production substrate authority tile — guarded authority landed
 
@@ -393,11 +396,12 @@ the failed comparison can be reproduced.
   engineered smoothing/deviation limits, cross-section seating and camber,
   endpoint welds and host-plane junction warp. Substrate also owns the shared
   kerb/mitre outline and final carriageway triangle, UV, paint and normal
-  arrays. The remaining generation migration is contextual rather than another
-  road-profile authority: move terrain/bench sampling, host-road crop/plane
-  fitting, apron/furniture/bridge-family arrays and the remaining terrain/hydro
-  reach solves into tile construction, then retire the legacy builder entry
-  points and road drape registry after rollback observation.
+  arrays; host-road crop hierarchy and kerb intersections are substrate-owned
+  too. The remaining generation migration is contextual rather than another
+  road-profile authority: move terrain/bench sampling, host-plane fitting,
+  apron/furniture/bridge-family arrays and the remaining terrain/hydro reach
+  solves into tile construction, then retire the legacy builder entry points
+  and road drape registry after rollback observation.
 - Contact/evidence is now the production default with `?substrate=legacy` as
   the observable rollback. Representative water drives, persistent evidence
   and the multi-world parity thresholds pass; a production observation window

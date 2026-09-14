@@ -34,8 +34,14 @@ export {
 } from './road-profile';
 export {
   buildProductionRoadSurfaceGeometry,
+  resolveProductionRoadEndCrop,
   resolveProductionRoadKerbGeometry,
   smoothProductionRoadSurfaceNormals,
+  type ProductionRoadCropHost,
+  type ProductionRoadEndCrop,
+  type ProductionRoadEndCropDecision,
+  type ProductionRoadEndCropInput,
+  type ProductionRoadEndCropReason,
   type ProductionRoadKerbGeometry,
   type ProductionRoadKerbGeometryInput,
   type ProductionRoadSurfaceBay,
