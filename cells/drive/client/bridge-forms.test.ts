@@ -1,4 +1,11 @@
-import { buildBridgeForms, bridgeAxis, planBridgeStations, specFor, type BridgeFormSpec, type BridgeWay } from './bridge-forms';
+import {
+  buildBridgeForms,
+  bridgeAxis,
+  planBridgeStations,
+  specFor,
+  type BridgeFormSpec,
+  type BridgeWay,
+} from './substrate/bridge-forms';
 
 const fail = (m: string): never => { throw new Error(m); };
 

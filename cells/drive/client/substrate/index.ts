@@ -154,6 +154,28 @@ export {
   type ProductionRoadBatterTint,
 } from './road-batter';
 export {
+  box as appendProductionBridgeBox,
+  bridgeAxis,
+  buildBridgeForms,
+  planBridgeStations,
+  specFor as productionBridgeFormSpec,
+  strand as appendProductionBridgeStrand,
+  tower as appendProductionBridgeTower,
+  type ArchPlace,
+  type BridgeAxis,
+  type BridgeForm,
+  type BridgeFormSpec,
+  type BridgeMesh,
+  type BridgeWay,
+  type CablePattern,
+  type DeckKind,
+  type EndFeature,
+  type Station as BridgeStation,
+  type TowerBuilt,
+  type TowerStyle,
+  type TrussPlace,
+} from './bridge-forms';
+export {
   buildRapidDetailField,
   buildRapidDetailMesh,
   rapidDetailRandom,

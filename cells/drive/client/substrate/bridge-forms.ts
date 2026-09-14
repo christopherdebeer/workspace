@@ -17,7 +17,7 @@
  * off — those ARE the identity. The ornament that makes Tower Bridge Tower
  * Bridge is a tower style, not a bespoke model.
  *
- * This module is pure: it takes the deck fragments a bridge is built from
+ * This substrate module is pure: it takes the deck fragments a bridge is built from
  * (OSM splits a long bridge into several ways, one per carriageway and again
  * at the pylons) and a spec, and returns vertex arrays. No THREE, no world
  * state, so `devtools/bridge-forms.test.mjs` can run it in node and say what

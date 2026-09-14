@@ -1,5 +1,5 @@
 /**
- * The bridge painter, over authored decks.
+ * The substrate bridge painter, over authored decks.
  *
  *   node cells/drive/devtools/bridge-forms.test.mjs
  *

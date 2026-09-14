@@ -146,8 +146,12 @@ belong, enforces carriageway refusal/collision and supplies spacing counters.
 `client/substrate/road-batter.ts` owns the final shoulder strip and end-cap
 triangle, UV, colour and terrain-seat arrays after the live context resolves
 terrain contact, clipping, water stops and tint recipes.
+`client/substrate/bridge-forms.ts` owns bridge-family classification, station
+planning and the complete tower, cable, arch, truss and lower-deck arrays.
+The live assembly context only groups streamed fragments, resolves mapped or
+landmark stations, samples foundation ground and publishes the resulting mesh.
 The remaining crossing migration is to move the terrain/bench sampling inputs
-plus the batter reach/contact solve and bridge-family geometry into tile
+plus the batter reach/contact solve into tile
 construction, then emit them from the substrate tile itself.
 
 ### 3. Build one production substrate authority tile — guarded authority landed
@@ -410,11 +414,12 @@ the failed comparison can be reproduced.
   too, as are the local host-plane fit and its bounded junction fade. The
   remaining generation migration is contextual rather than another
   road-profile authority: move terrain/bench sampling,
-  batter reach/contact and bridge-family decisions plus the remaining terrain/hydro
+  batter reach/contact plus the remaining terrain/hydro
   reach solves into tile construction, then retire the legacy builder entry
   points and road drape registry after rollback observation. Common apron
   faces, piers, arch spandrels, parapets, studs and hazard signs are already
-  renderer-free substrate builders; final batter strip/cap packets are too.
+  renderer-free substrate builders; final batter strip/cap packets and all
+  bridge-family forms are too.
 - Contact/evidence is now the production default with `?substrate=legacy` as
   the observable rollback. Representative water drives, persistent evidence
   and the multi-world parity thresholds pass; a production observation window

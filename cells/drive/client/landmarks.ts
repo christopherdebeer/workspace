@@ -22,14 +22,22 @@
  * the true geometry it approximates) and OSM buildings stand down (whatever
  * polygon OSM carries would double-render inside ours).
  */
-import type { ArchPlace, BridgeForm, CablePattern, DeckKind, EndFeature, TowerStyle, TrussPlace } from './bridge-forms';
+import type {
+  ArchPlace,
+  BridgeForm,
+  CablePattern,
+  DeckKind,
+  EndFeature,
+  TowerStyle,
+  TrussPlace,
+} from './substrate/bridge-forms';
 
 /**
  * ── BRIDGES ARE LANDMARKS ──
  *
  * A big bridge is architecture: its family, where its towers stand, the
  * shape of a tower, how the cables hang, what colour it was painted. The
- * generic painter (`bridge-forms.ts`) draws any bridge from its OSM tags;
+ * generic painter (`substrate/bridge-forms.ts`) draws any bridge from its OSM tags;
  * an entry here is the dozen parameters that make a famous one read as
  * itself from a kilometre off. It claims the deck ways by NAME within
  * `reach` of its position, so the towers rise from the real deck at the

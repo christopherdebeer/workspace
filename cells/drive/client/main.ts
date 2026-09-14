@@ -47,7 +47,12 @@ import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } f
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
 import { anchorElevation, demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
 import { clearDemSpans, DEM_SPAN_DEFAULTS, type DemSpan } from './dem-spans';
-import { buildBridgeForms, specFor as bridgeSpecFor, type BridgeFormSpec, type BridgeWay } from './bridge-forms';
+import {
+  buildBridgeForms,
+  specFor as bridgeSpecFor,
+  type BridgeFormSpec,
+  type BridgeWay,
+} from './substrate/bridge-forms';
 import { smoothChartZoom, wrapLongitude } from './globe-navigation';
 import { bitmapStats, withDecodedBitmap } from './decode-telemetry';
 import { GLOBE_R, PLANET_SUN_GLSL, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, globeEast, globeNorth, subsolar } from './globe';
@@ -8252,9 +8257,9 @@ function noteBridgeSpan(pts: Array<[number, number]>, width: number): void {
  * with it, and the north pylon must not vanish when the tile that carried
  * the south carriageway is evicted. They die at a hop, with everything else.
  *
- * `bridge-forms.ts` does the geometry and is pure; this is the world's side
- * of it — what a fragment is, where the ground is, and what a bridge is
- * called. See "Bridges are landmarks" in CLAUDE.md.
+ * `substrate/bridge-forms.ts` does the geometry and is pure; this is the
+ * world's side of it — what a fragment is, where the ground is, and what a
+ * bridge is called. See "Bridges are landmarks" in CLAUDE.md.
  */
 interface BridgeAssembly {
   key: string;

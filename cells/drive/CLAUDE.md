@@ -2944,7 +2944,7 @@ end features. **Nine tower styles cover the famous bridges** — `portal`,
 `deco-portal`, `braced-portal`, `gothic`, `a-frame`, `inverted-y`, `h-frame`,
 `mast`, `cantilever` — with four cable patterns (`fan`, `semi-fan`, `harp`,
 `suspension`) and two arch placements. That is the vocabulary
-`bridge-forms.ts` paints from.
+`substrate/bridge-forms.ts` paints from.
 
 **THE TABLE, as authored in `landmarks.ts` (kind `bridge`):**
 
@@ -2977,7 +2977,7 @@ Alamillo's mast leans and Erasmus's is bent, Brooklyn's stays are diagonal
 as well as vertical, and the Forth's truss deepens at the towers. Those are
 the next four parameters, each a small addition to a style that exists.
 
-**THE PAINTER** (`client/bridge-forms.ts`, pure). A bridge is an ASSEMBLY of
+**THE PAINTER** (`client/substrate/bridge-forms.ts`, pure). A bridge is an ASSEMBLY of
 deck fragments — OSM splits a long bridge into several ways, one per
 carriageway and again at the pylons, each rendered as its own ribbon in its
 own tile — gathered by the bridge's name (`bridge:name` or `name`; unnamed

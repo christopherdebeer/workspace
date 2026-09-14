@@ -96,7 +96,7 @@ export const SWITCHES = [
   { id: 'substrate', kind: 'choice', marks: ['bench', 'legacy'], fallback: 'canonical contact, legacy render',
     note: 'the road/terrain/water substrate (SUBSTRATE-MIGRATION.md): legacy = the pre-substrate contact with shadow diagnostics, the rollback; shadow = legacy contact, substrate observed; render = the substrate draws the water too. It was read round the typed reader and so was in no list until it was declared here' },
   { id: 'bridgeforms', kind: 'toggle', marks: ['bench', 'legacy'], fallback: 'a bridge paints its towers, cables, ribs and lattice',
-    note: 'off leaves a bridge as its deck, rail and piers — the world before bridge-forms.ts, and the A/B for anything the painter stands up in the wrong place' },
+    note: 'off leaves a bridge as its deck, rail and piers — the world before substrate/bridge-forms.ts, and the A/B for anything the painter stands up in the wrong place' },
   { id: 'bridgedem', kind: 'toggle', marks: ['bench', 'legacy'], fallback: 'a tagged bridge takes its deck out of the DEM',
     note: 'off leaves the elevation exactly as the publisher served it, structures and all — the A/B for the Pont de Normandie, where the mosaic serves a 137 m carriageway as terrain' },
   { id: 'hydroground', kind: 'number', marks: ['bench'], fallback: '150 m round the water',
