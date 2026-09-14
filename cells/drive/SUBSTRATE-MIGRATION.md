@@ -143,8 +143,11 @@ vertical apron/fascia faces, splayed bridge-pier facets and segmented arch
 spandrels, plus parapet faces, paired retroreflective studs and double-sided
 hazard boards with crossed posts. Context still decides where those details
 belong, enforces carriageway refusal/collision and supplies spacing counters.
+`client/substrate/road-batter.ts` owns the final shoulder strip and end-cap
+triangle, UV, colour and terrain-seat arrays after the live context resolves
+terrain contact, clipping, water stops and tint recipes.
 The remaining crossing migration is to move the terrain/bench sampling inputs
-plus batter and bridge-family geometry into tile
+plus the batter reach/contact solve and bridge-family geometry into tile
 construction, then emit them from the substrate tile itself.
 
 ### 3. Build one production substrate authority tile — guarded authority landed
@@ -407,11 +410,11 @@ the failed comparison can be reproduced.
   too, as are the local host-plane fit and its bounded junction fade. The
   remaining generation migration is contextual rather than another
   road-profile authority: move terrain/bench sampling,
-  batter/bridge-family arrays and the remaining terrain/hydro
+  batter reach/contact and bridge-family decisions plus the remaining terrain/hydro
   reach solves into tile construction, then retire the legacy builder entry
   points and road drape registry after rollback observation. Common apron
   faces, piers, arch spandrels, parapets, studs and hazard signs are already
-  renderer-free substrate builders.
+  renderer-free substrate builders; final batter strip/cap packets are too.
 - Contact/evidence is now the production default with `?substrate=legacy` as
   the observable rollback. Representative water drives, persistent evidence
   and the multi-world parity thresholds pass; a production observation window

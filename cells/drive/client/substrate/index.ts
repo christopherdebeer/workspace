@@ -146,6 +146,14 @@ export {
   type ProductionRoadStudInput,
 } from './road-structure';
 export {
+  appendProductionRoadBatter,
+  type ProductionRoadBatterColour,
+  type ProductionRoadBatterInput,
+  type ProductionRoadBatterResult,
+  type ProductionRoadBatterStep,
+  type ProductionRoadBatterTint,
+} from './road-batter';
+export {
   buildRapidDetailField,
   buildRapidDetailMesh,
   rapidDetailRandom,

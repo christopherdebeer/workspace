@@ -153,6 +153,11 @@ import {
   appendProductionRoadStud,
 } from './substrate/road-structure';
 import {
+  appendProductionRoadBatter,
+  type ProductionRoadBatterStep,
+  type ProductionRoadBatterTint,
+} from './substrate/road-batter';
+import {
   buildProductionSubstrateTile,
   findProductionDriveWaterOverlaps,
   ProductionSubstrateStore,
@@ -16281,24 +16286,6 @@ function structureSpanClear(
   }
   return true;
 }
-/** Two triangles into a vertex/uv pair. `ribbon` has its own local `quad`, and
- *  the only `quad` in scope out here is a THREE.Mesh — which the stub types are
- *  happy to let you call, and which would have thrown on the first shoulder. */
-/** Per-corner colours for one quadInto call — a, b, c, d in the same
- *  six-vertex order the two triangles are emitted in. */
-function tintInto(C: number[], a: number[], b: number[], c: number[], d: number[]): void {
-  C.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2],
-    b[0], b[1], b[2], d[0], d[1], d[2], c[0], c[1], c[2]);
-}
-function quadInto(V: number[], U: number[], p: number[], uv: number[], S?: number[], sm?: number[]): void {
-  V.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8],
-    p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
-  U.push(uv[0], uv[1], uv[2], uv[3], uv[4], uv[5], uv[2], uv[3], uv[6], uv[7], uv[4], uv[5]);
-  // The seat mask, if the caller keeps one, in the SAME six-vertex order the
-  // two triangles above are emitted in. Getting this order wrong re-seats the
-  // kerb and welds the toe, which is the failure inverted rather than fixed.
-  if (S && sm) S.push(sm[0], sm[1], sm[2], sm[1], sm[3], sm[2]);
-}
 /**
  * DRAPED WAYS FOLLOW THE GROUND THEY ARE DRAWN ON.
  *
@@ -16594,9 +16581,9 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       continue;
     }
     // [left distance, right distance, left height, right height, left seated?, right seated?, left ground, right ground]
-    const pts: Array<[number, number, number, number, number, number, number, number]> = [];
+    const pts: ProductionRoadBatterStep[] = [];
     // …and the tint at each end of each step, parallel to `pts`.
-    const tints: Array<[[number, number, number], [number, number, number]]> = [];
+    const tints: ProductionRoadBatterTint[] = [];
     // NEVER OVER ANOTHER ROAD — but a junction is a reason to STOP SHORT, not a
     // reason to draw nothing. This used to `break` out of the whole loop the
     // moment a step landed on somebody else's tarmac, and at a junction the
@@ -16764,51 +16751,31 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     if (!met && pts.some((p) => p[2] > b.y0 + 0.3 || p[3] > b.y1 + 0.3)) met = true;
     if (!met && !clipped && !wet) { spanStats.fillUnmet++; continue; }
     spanStats.fillDrawn++;
-    // THE ENDS OF A RUN GET A FACE. Where the next bay has no batter — the run
-    // starts, stops, or hands over to a deck — the strip simply ended, and you
-    // could see in under the earth from the side. A fan from the kerb out over
-    // the profile closes it.
-    for (const [end, on] of [[0, b.capA], [1, b.capB]] as Array<[number, boolean]>) {
-      if (!on || pts.length < 1) continue;
-      const ex = end ? b.bx : b.ax, ez = end ? b.bz : b.az;
-      const nx2 = end ? b.nxB : b.nxA, nz2 = end ? b.nzB : b.nzA;
-      const ky = end ? b.y1 : b.y0;
-      let ppx = 0, ppy = ky, pps = 0, ppc: [number, number, number] = SHOULDER;
-      for (let k = 0; k < pts.length; k++) {
-        const p = pts[k];
-        const d = end ? p[1] : p[0], y = end ? p[3] : p[2], sd = end ? p[5] : p[4];
-        const tc = end ? tints[k][1] : tints[k][0];
-        const fa = ppx / 2.2, fb = d / 2.2;
-        // A quad with its inboard edge collapsed onto the kerb point: the fan
-        // triangle, expressed in the one emitter this file has.
-        quadInto(V, U, [
-          ex, ky, ez,
-          ex, ky, ez,
-          ex + nx2 * fa, ppy, ez + nz2 * fa,
-          ex + nx2 * fb, y, ez + nz2 * fb,
-        ], [b.uA * 2, 0, b.uA * 2, 0, b.uA * 2, ppx / 4, b.uA * 2, d / 4], S, [0, 0, pps, sd]);
-        tintInto(C, SHOULDER, SHOULDER, ppc, tc);
-        ppx = d; ppy = y; pps = sd; ppc = tc;
-      }
-      spanStats.fillCap++;
-    }
-    let px0 = 0, px1 = 0, py0 = b.y0, py1 = b.y1, ps0 = 0, ps1 = 0;
-    let pc0: [number, number, number] = SHOULDER, pc1: [number, number, number] = SHOULDER;
-    for (let k = 0; k < pts.length; k++) {
-      const [d0, d1, y0, y1, s0, s1] = pts[k];
-      const [c0, c1] = tints[k];
-      const fa0 = px0 / 2.2, fa1 = px1 / 2.2, fb0 = d0 / 2.2, fb1 = d1 / 2.2;
-      quadInto(V, U, [
-        b.ax + b.nxA * fa0, py0, b.az + b.nzA * fa0,
-        b.bx + b.nxB * fa1, py1, b.bz + b.nzB * fa1,
-        b.ax + b.nxA * fb0, y0, b.az + b.nzA * fb0,
-        b.bx + b.nxB * fb1, y1, b.bz + b.nzB * fb1,
-      ], [b.uA * 2, px0 / 4, b.uB * 2, px1 / 4, b.uA * 2, d0 / 4, b.uB * 2, d1 / 4], S, [ps0, ps1, s0, s1]);
-      tintInto(C, pc0, pc1, c0, c1);
-      px0 = d0; px1 = d1; py0 = y0; py1 = y1; ps0 = s0; ps1 = s1; pc0 = c0; pc1 = c1;
-      bx0 = Math.min(bx0, b.ax, b.bx); bx1 = Math.max(bx1, b.ax, b.bx);
-      bz0 = Math.min(bz0, b.az, b.bz); bz1 = Math.max(bz1, b.az, b.bz);
-    }
+    // Substrate owns the exact strip/cap packet, including the seat-mask order
+    // that keeps the kerb welded while later terrain rebuilds move the toe.
+    const batter = appendProductionRoadBatter(V, U, C, S, {
+      ax: b.ax,
+      az: b.az,
+      bx: b.bx,
+      bz: b.bz,
+      normalAx: b.nxA,
+      normalAz: b.nzA,
+      normalBx: b.nxB,
+      normalBz: b.nzB,
+      kerbHeightA: b.y0,
+      kerbHeightB: b.y1,
+      uA: b.uA,
+      uB: b.uB,
+      capA: b.capA,
+      capB: b.capB,
+      normalReachM: 2.2,
+      shoulderColour: SHOULDER,
+      steps: pts,
+      tints,
+    });
+    spanStats.fillCap += batter.capCount;
+    bx0 = Math.min(bx0, b.ax, b.bx); bx1 = Math.max(bx1, b.ax, b.bx);
+    bz0 = Math.min(bz0, b.az, b.bz); bz1 = Math.max(bz1, b.az, b.bz);
   }
   pendingBatter.length = kept;
   if (!V.length) return;

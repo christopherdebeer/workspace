@@ -1,5 +1,6 @@
 import {
   appendProductionRoadArch,
+  appendProductionRoadBatter,
   appendProductionRoadFace,
   appendProductionRoadPier,
   appendProductionRoadQuad,
@@ -766,6 +767,50 @@ export function runSubstrateSelfTest(): void {
     && Math.abs(signDirection.forwardX - .6) < 1e-9
     && Math.abs(signDirection.forwardZ - .8) < 1e-9,
   'substrate road detail authors the double-sided hazard board and crossed post');
+  const batterVertices: number[] = [];
+  const batterUvs: number[] = [];
+  const batterColours: number[] = [];
+  const batterSeats: number[] = [];
+  const batterResult = appendProductionRoadBatter(
+    batterVertices,
+    batterUvs,
+    batterColours,
+    batterSeats,
+    {
+      ax: 0,
+      az: 0,
+      bx: 10,
+      bz: 0,
+      normalAx: 0,
+      normalAz: 2.2,
+      normalBx: 0,
+      normalBz: 2.2,
+      kerbHeightA: 2,
+      kerbHeightB: 3,
+      uA: 0,
+      uB: 2,
+      capA: true,
+      capB: false,
+      normalReachM: 2.2,
+      shoulderColour: [.56, .52, .45],
+      steps: [
+        [.6, .8, 1.8, 2.7, 0, 0, 1.7, 2.6],
+        [1.4, 1.6, 1.4, 2.2, 1, 1, 1.4, 2.2],
+      ],
+      tints: [
+        [[.56, .52, .45], [.56, .52, .45]],
+        [[.2, .3, .4], [.4, .5, .6]],
+      ],
+    },
+  );
+  assert(batterResult.capCount === 1
+    && batterVertices.length === 72
+    && batterUvs.length === 48
+    && batterColours.length === 72
+    && batterSeats.length === 24,
+  'substrate road batter authors strip, cap, colours and seat mask atomically');
+  assert(batterSeats.slice(-6).join(',') === '0,0,1,0,1,1',
+  'substrate road batter preserves production toe-seat triangle order');
   const kerbs = resolveProductionRoadKerbGeometry({
     stations: [[0, 0], [10, 0], [10, 10]],
     halfWidthM: 2,
