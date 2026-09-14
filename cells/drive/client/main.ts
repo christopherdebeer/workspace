@@ -16345,8 +16345,8 @@ interface Draped { geo: THREE.BufferGeometry; lift: number;
    * vertices were seated on ground at build time. Absent, everything follows,
    * which is what every existing drape wants. */
   seat?: Uint8Array;
-  /** A batter strip's mesh and the tile it was flushed for, so a corridor
-   *  build of that tile can take the strip down — see dropBatterFor. */
+  /** A batter strip's rollback mesh and the tile it was flushed for, so a
+   *  corridor build of that tile can retire both geometry and tile packet. */
   mesh?: THREE.Mesh; tile?: string }
 const drapedWays: Draped[] = [];
 /**
@@ -16359,9 +16359,11 @@ const drapedWays: Draped[] = [];
  * refined tile; this removes what was parked before it was one.
  */
 function dropBatterFor(key: string): void {
+  let dropped = false;
   for (let i = drapedWays.length - 1; i >= 0; i--) {
     const d = drapedWays[i];
     if (d.tile !== key) continue;
+    dropped = true;
     drapedWays.splice(i, 1);
     for (const k of boxCells(d.x0, d.z0, d.x1, d.z1)) {
       const a = drapeGrid.get(k);
@@ -16371,9 +16373,11 @@ function dropBatterFor(key: string): void {
     }
     const w = drapeWide.indexOf(d);
     if (w >= 0) drapeWide.splice(w, 1);
-    if (d.mesh) { worldGroup.remove(d.mesh); d.geo.dispose(); }
+    if (d.mesh) worldGroup.remove(d.mesh);
+    d.geo.dispose();
     spanStats.fillDropped++;
   }
+  if (dropped) dropProductionRoadBatterPackets(key);
 }
 /**
  * WHERE THE DRAPES ARE, so a rebuild does not have to ask all of them.
@@ -16482,8 +16486,17 @@ function batterMean(): [number, number, number] {
 }
 function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   if (!vergeFill || !pendingBatter.length) return;
-  const V: number[] = [], U: number[] = [], S: number[] = [], C: number[] = [];
-  let bx0 = Infinity, bz0 = Infinity, bx1 = -Infinity, bz1 = -Infinity;
+  interface BatterBatch {
+    V: number[];
+    U: number[];
+    S: number[];
+    C: number[];
+    x0: number;
+    z0: number;
+    x1: number;
+    z1: number;
+  }
+  const batches = new Map<string, BatterBatch>();
   const BATT = BANK_K;                   // metres of drop per metre out (a fill bank)
   // ── THE BATTER IS A WEDGE ABOUT THE NATURAL GROUND, ON BOTH SIDES ──
   //
@@ -16672,9 +16685,25 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     // the side of a road with nothing under it.
     if (!solved.drawable) { spanStats.fillUnmet++; continue; }
     spanStats.fillDrawn++;
+    if (!under) continue;
+    const owner = `${under.tx}/${under.ty}`;
+    let batch = batches.get(owner);
+    if (!batch) {
+      batch = {
+        V: [],
+        U: [],
+        S: [],
+        C: [],
+        x0: Infinity,
+        z0: Infinity,
+        x1: -Infinity,
+        z1: -Infinity,
+      };
+      batches.set(owner, batch);
+    }
     // Substrate owns the exact strip/cap packet, including the seat-mask order
     // that keeps the kerb welded while later terrain rebuilds move the toe.
-    const batter = appendProductionRoadBatter(V, U, C, S, {
+    const batter = appendProductionRoadBatter(batch.V, batch.U, batch.C, batch.S, {
       ax: b.ax,
       az: b.az,
       bx: b.bx,
@@ -16695,34 +16724,71 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       tints,
     });
     spanStats.fillCap += batter.capCount;
-    bx0 = Math.min(bx0, b.ax, b.bx); bx1 = Math.max(bx1, b.ax, b.bx);
-    bz0 = Math.min(bz0, b.az, b.bz); bz1 = Math.max(bz1, b.az, b.bz);
+    batch.x0 = Math.min(batch.x0, b.ax, b.bx);
+    batch.x1 = Math.max(batch.x1, b.ax, b.bx);
+    batch.z0 = Math.min(batch.z0, b.az, b.bz);
+    batch.z1 = Math.max(batch.z1, b.az, b.bz);
   }
   pendingBatter.length = kept;
-  if (!V.length) return;
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(V), 3));
-  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(U), 2));
-  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(C), 3));
-  g.computeVertexNormals();
-  const strip = new THREE.Mesh(g, MAT.batter);
-  worldGroup.add(strip);
-  // ── AND IT RE-SEATS FROM NOW ON ──
-  //
-  // A batter was a static mesh built against the ground as it stood at that
-  // moment, and the ground does not hold still: the corridor carve digs a
-  // neighbouring road's cutting after the fact and the terrain slides out from
-  // under the bank's outer edge, leaving the hairline crack the audit found
-  // along it. Registered here with a seat mask so the toe follows and the kerb
-  // does not — the outer edge, and nothing else, as the finding asks.
-  //
-  // REACH, not the kerb extent, for the bounds: the toe stands up to sixteen
-  // metres outboard of the kerb line, and a box drawn round the kerbs alone
-  // would exclude the very vertices that need re-seating.
-  const seat = new Uint8Array(S);
-  const d2: Draped = { geo: g, lift: 0, seat, mesh: strip, tile: t ? `${t.tx}/${t.ty}` : undefined,
-    x0: bx0 - REACH, z0: bz0 - REACH, x1: bx1 + REACH, z1: bz1 + REACH };
-  drapedWays.push(d2); indexDrape(d2);
+  for (const [owner, batch] of batches) {
+    if (!batch.V.length) continue;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(batch.V), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(batch.U), 2));
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(batch.C), 3));
+    g.computeVertexNormals();
+    let strip: THREE.Mesh | undefined;
+    if (SUBSTRATE_RENDER_ON) {
+      const packet = productionRenderPacketFromGeometry({
+        name: 'road-batter',
+        geometry: g,
+        material: [MAT.batter],
+        matrix: IDENTITY_RENDER_MATRIX,
+        renderOrder: 0,
+        castShadow: false,
+        receiveShadow: false,
+        frustumCulled: true,
+        userData: {
+          roadBatter: true,
+          substrateDirectAuthored: true,
+        },
+      }, false);
+      if (packet) {
+        appendProductionRoadBatterPacket(owner, packet);
+      } else {
+        productionDrivePacketFailures++;
+        strip = new THREE.Mesh(g, MAT.batter);
+        strip.userData.productionDriveSource = true;
+        worldGroup.add(strip);
+      }
+    } else {
+      strip = new THREE.Mesh(g, MAT.batter);
+      worldGroup.add(strip);
+    }
+    // ── AND IT RE-SEATS FROM NOW ON ──
+    //
+    // The packet shares this geometry's arrays. Only the seat-mask vertices
+    // follow later terrain revisions; publication advances after redrape, so
+    // an admitted tile can never pair a stale toe with new ground.
+    //
+    // REACH, not the kerb extent, for the bounds: the toe stands up to thirty
+    // metres outboard of the kerb line, and a box drawn round the kerbs alone
+    // would exclude the very vertices that need re-seating.
+    const seat = new Uint8Array(batch.S);
+    const d2: Draped = {
+      geo: g,
+      lift: 0,
+      seat,
+      mesh: strip,
+      tile: owner,
+      x0: batch.x0 - REACH,
+      z0: batch.z0 - REACH,
+      x1: batch.x1 + REACH,
+      z1: batch.z1 + REACH,
+    };
+    drapedWays.push(d2);
+    indexDrape(d2);
+  }
 }
 /**
  * THE JUNCTION BOX AND ITS GIVE-WAY LINES, one per node the batch's topology
@@ -17035,6 +17101,16 @@ interface ProductionRoadRenderCandidate {
   authoredAfterRedrape: boolean;
 }
 const productionRoadRenderCandidates = new Map<string, ProductionRoadRenderCandidate>();
+interface ProductionRoadBatterRenderCandidate {
+  generation: number;
+  packetTerrainRevision: number;
+  packets: readonly ProductionDriveRenderMesh[];
+}
+/** Mutable batter arrays are a replaceable road-layer contribution. Their
+ *  packets share the drape geometry arrays and become admissible only after
+ *  the owning terrain revision has re-seated those arrays. */
+const productionRoadBatterRenderCandidates =
+  new Map<string, ProductionRoadBatterRenderCandidate>();
 const substrateRoadCommits = new Map<string, number>();
 const substrateRoadRenderMeshes = new Map<string, SubstrateRenderBinding>();
 const productionRenderMaterials = new Map<string, THREE.Material>();
@@ -17188,6 +17264,32 @@ function registerProductionRoadRenderBatch(
   // registration so a tile assembled between the last segment and this flush
   // cannot remain current without the newly completed carriageway geometry.
   markTerrainDirty(owner, 'drive-render');
+}
+function appendProductionRoadBatterPacket(
+  owner: string,
+  packet: ProductionDriveRenderMesh,
+): void {
+  let candidate = productionRoadBatterRenderCandidates.get(owner);
+  if (!candidate) {
+    candidate = {
+      generation: 0,
+      packetTerrainRevision: -1,
+      packets: [],
+    };
+    productionRoadBatterRenderCandidates.set(owner, candidate);
+  }
+  candidate.generation++;
+  candidate.packetTerrainRevision = -1;
+  candidate.packets = [...candidate.packets, packet];
+  substrateRoadCommits.delete(owner);
+  markTerrainDirty(owner, 'drive-batter');
+}
+/** A refined corridor owns the wedge itself, so every earlier strip for this
+ *  tile and its packet contribution retire together during the same build. */
+function dropProductionRoadBatterPackets(owner: string): void {
+  if (!productionRoadBatterRenderCandidates.delete(owner)) return;
+  substrateRoadCommits.delete(owner);
+  invalidateProductionSubstrateTile(owner);
 }
 function addStructureRenderMesh(mesh: THREE.Mesh): void {
   mesh.userData.productionStructureSource = true;
@@ -20422,16 +20524,19 @@ function publishProductionRoadRenderPackets(
   terrainSourceRevision: number,
 ): void {
   const candidate = productionRoadRenderCandidates.get(key);
-  if (!candidate) return;
-  if (candidate.packets.length !== candidate.meshCount) {
-    productionDrivePacketFailures++;
-    candidate.packetTerrainRevision = terrainSourceRevision;
-    candidate.packets = [];
-    candidate.authoredAfterRedrape = false;
-    return;
+  if (candidate) {
+    if (candidate.packets.length !== candidate.meshCount) {
+      productionDrivePacketFailures++;
+      candidate.packetTerrainRevision = terrainSourceRevision;
+      candidate.packets = [];
+      candidate.authoredAfterRedrape = false;
+    } else {
+      candidate.packetTerrainRevision = terrainSourceRevision;
+      candidate.authoredAfterRedrape = true;
+    }
   }
-  candidate.packetTerrainRevision = terrainSourceRevision;
-  candidate.authoredAfterRedrape = true;
+  const batter = productionRoadBatterRenderCandidates.get(key);
+  if (batter) batter.packetTerrainRevision = terrainSourceRevision;
 }
 function publishProductionStructureRenderPackets(
   candidate: ProductionStructureRenderCandidate,
@@ -20491,14 +20596,25 @@ function productionDriveRenderMeshesFor(
   terrainSourceRevision: number,
 ): readonly ProductionDriveRenderMesh[] {
   const candidate = productionRoadRenderCandidates.get(key);
-  if (!candidate) return [];
-  if (candidate.packetTerrainRevision === terrainSourceRevision) return candidate.packets;
+  const batter = productionRoadBatterRenderCandidates.get(key);
+  const packets: ProductionDriveRenderMesh[] = [];
+  if (candidate?.packetTerrainRevision === terrainSourceRevision) {
+    packets.push(...candidate.packets);
+  }
+  if (batter?.packetTerrainRevision === terrainSourceRevision) {
+    packets.push(...batter.packets);
+  }
+  if (packets.length) return packets;
   // Registration can race an older asynchronous hydro completion: the new
   // packet arrays already exist, but they are deliberately unbound until the
   // terrain rebuild has redraped them. Refuse this tile revision without
   // deleting those arrays; publication after redrape is the only operation
   // allowed to advance their terrain revision.
   return [];
+}
+function productionRoadRenderGenerationSignature(key: string): string {
+  return `${productionRoadRenderCandidates.get(key)?.generation ?? 0}:`
+    + `${productionRoadBatterRenderCandidates.get(key)?.generation ?? 0}`;
 }
 function productionTerrainRenderMeshesFor(
   key: string,
@@ -20579,7 +20695,7 @@ function productionDriveSnapshotFor(
   // Exact source identity, not merely a count. A late road fragment, changed
   // profile, crossfall or material must advance the drive layer even if the
   // terrain and hydro inputs happened to retain their own revisions.
-  const renderGeneration = productionRoadRenderCandidates.get(key)?.generation ?? 0;
+  const renderGeneration = productionRoadRenderGenerationSignature(key);
   const signature = `${renderGeneration};${segments.map((segment) => [
     segment.ax, segment.az, segment.bx, segment.bz,
     segment.yaM, segment.ybM, segment.halfWidthM,
@@ -20794,11 +20910,12 @@ function instantiateProductionRenderMesh(
 function canCommitDriveRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
   if (!SUBSTRATE_RENDER_ON || productionSubstrate.tile(tile.key) !== tile) return false;
   const candidate = productionRoadRenderCandidates.get(tile.key);
-  if (!candidate) return tile.driveRenderMeshes.length === 0;
+  const batter = productionRoadBatterRenderCandidates.get(tile.key);
   const source = productionDriveSources.get(tile.key);
   return !!source && source.revision === tile.sourceRevisions.drive
-    && source.signature.startsWith(`${candidate.generation};`)
-    && tile.driveRenderMeshes.length === candidate.meshCount
+    && source.signature.startsWith(`${productionRoadRenderGenerationSignature(tile.key)};`)
+    && tile.driveRenderMeshes.length
+      === (candidate?.meshCount ?? 0) + (batter?.packets.length ?? 0)
     && tile.driveRenderMeshes.every((packet) =>
       !!packet.attributes.position
       && packet.materialKeys.length > 0
@@ -21093,6 +21210,7 @@ function substrateRenderSnapshot(): Record<string, number> {
   let legacyRoadCandidateMeshes = 0;
   let visibleRoads = 0;
   let uncommittedVisibleRoads = 0;
+  const roadCandidateTileKeys = new Set(productionRoadRenderCandidates.keys());
   for (const candidate of productionRoadRenderCandidates.values()) {
     roadCandidates += candidate.meshCount;
     roadPacketMeshes += candidate.packets.length;
@@ -21120,6 +21238,30 @@ function substrateRenderSnapshot(): Record<string, number> {
         || Math.abs(m[8]) > 1e-6 || Math.abs(m[9]) > 1e-6 || Math.abs(m[11]) > 1e-6
         || Math.abs(m[12]) > 1e-6 || Math.abs(m[13]) > 1e-6 || Math.abs(m[14]) > 1e-6
       )) roadTransformedPackets++;
+    }
+  }
+  let roadBatterCandidates = 0;
+  let roadBatterPacketMeshes = 0;
+  for (const [key, candidate] of productionRoadBatterRenderCandidates) {
+    roadCandidateTileKeys.add(key);
+    roadBatterCandidates += candidate.packets.length;
+    roadBatterPacketMeshes += candidate.packets.length;
+    roadCandidates += candidate.packets.length;
+    roadPacketMeshes += candidate.packets.length;
+    roadDirectAuthoredPacketMeshes += candidate.packets.length;
+    if (candidate.packetTerrainRevision >= 0) {
+      roadRedrapeAuthoredPacketMeshes += candidate.packets.length;
+    }
+    for (const packet of candidate.packets) {
+      const position = packet.attributes.position;
+      if (position) roadPacketVertices += position.data.length / position.itemSize;
+      for (const attribute of Object.values(packet.attributes)) {
+        roadPacketBytes += attribute.data.byteLength;
+      }
+      if (packet.index) {
+        roadIndexedPackets++;
+        roadPacketBytes += packet.index.byteLength;
+      }
     }
   }
   worldGroup.traverse((object) => {
@@ -21243,8 +21385,10 @@ function substrateRenderSnapshot(): Record<string, number> {
     terrainCommitted: substrateTerrainCommits.size,
     visibleTerrain,
     uncommittedVisibleTerrain,
-    roadCandidateTiles: productionRoadRenderCandidates.size,
+    roadCandidateTiles: roadCandidateTileKeys.size,
     roadCandidates,
+    roadBatterCandidates,
+    roadBatterPacketMeshes,
     roadPacketMeshes,
     roadDirectAuthoredPacketMeshes,
     roadRedrapeAuthoredPacketMeshes,
@@ -31470,6 +31614,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
       }
     }
     productionRoadRenderCandidates.clear();
+    productionRoadBatterRenderCandidates.clear();
     substrateStructureCommits.clear();
     substrateStructureRenderMeshes.clear();
     productionStructurePacketFailures = 0;
@@ -31560,6 +31705,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     carveCost.tiles = 0; carveCost.ms = 0; carveCost.relieved = 0;
     pois.clear(); areaGrid.clear(); survey.clear();
     vegGrid.clear(); vegSeeded.clear(); vegSeedStats.clear(); vegDeferredAt.clear();
+    for (const d of drapedWays) d.geo.dispose();
     drapedWays.length = 0; drapeGrid.clear(); drapeWide.length = 0; seatGrid.clear();
     // NOT peakData: the summits themselves are global and immutable, and only
     // their LOCAL seats are stale. The ceiling does reset — the Alps must not
@@ -36434,7 +36580,7 @@ function meshHeightAt(x: number, z: number): number | null {
   const rows: object[] = [];
   let strips = 0, verts = 0, noTile = 0, off5 = 0, tall = 0, air5 = 0;
   for (const d of drapedWays) {
-    if (!d.mesh) continue;
+    if (!d.seat) continue;
     const mx = (d.x0 + d.x1) / 2, mz = (d.z0 + d.z1) / 2;
     if (Math.hypot(mx - state.x, mz - state.z) > r) continue;
     strips++;

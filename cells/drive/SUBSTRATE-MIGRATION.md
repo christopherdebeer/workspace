@@ -151,7 +151,10 @@ triangle, UV, colour and terrain-seat arrays. It also owns the production
 reach/contact solve: fill/cut wedge limits, exact toe interpolation, steep-cut
 wall promotion, carriageway clipping and water/unknown-ground stops. The live
 context supplies loaded/rendered-ground, road, water and terrain-colour
-callbacks plus queue timing.
+callbacks plus queue timing. Mutable batter arrays now publish as a replaceable
+owner-tile road contribution: the drape registry retains geometry plus its seat
+mask without a source mesh, advances packet admission after terrain re-seating,
+and removes the full contribution when refined corridor terrain owns the wedge.
 `client/substrate/bridge-forms.ts` owns bridge-family classification, station
 planning and the complete tower, cable, arch, truss and lower-deck arrays.
 The live assembly context only groups streamed fragments, resolves mapped or
@@ -426,9 +429,10 @@ the failed comparison can be reproduced.
   points and road drape registry after rollback observation. Common apron
   faces, piers, arch spandrels, parapets, studs and hazard signs are already
   renderer-free substrate builders; final batter strip/cap packets and all
-  bridge-family forms are too. Bridge assemblies publish those forms through
-  the atomic tile structure layer, and the batter reach/contact solve is
-  substrate-owned.
+  bridge-family forms are too. Batter packets publish through the atomic tile
+  road layer with no visible or retained source mesh; bridge assemblies publish
+  their forms through the atomic tile structure layer. The batter reach/contact
+  solve is substrate-owned.
 - Contact/evidence is now the production default with `?substrate=legacy` as
   the observable rollback. Representative water drives, persistent evidence
   and the multi-world parity thresholds pass; a production observation window
