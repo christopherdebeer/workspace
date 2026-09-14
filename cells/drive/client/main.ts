@@ -2150,36 +2150,47 @@ const AIR_BLUR = qsOn('airblur', false) ? 1 : 0;
  * A look, so it is opt-in and named rather than numeric: the seat picks a word,
  * not a lens angle.
  *
- * THE BAND IS A FRACTION, NOT A PIXEL COUNT, and the first cut of this got it
- * wrong by a factor of four because there is a ceiling nobody had derived. On
- * ground receding from the eye the plane distance is about `d - D` (D being the
- * focal distance), and metres per art pixel grows with `d`, so the circle of
- * confusion in art pixels is
+ * THE BAND IS A FRACTION OF THE FRAME, NOT A PIXEL COUNT. The first cut wrote
+ * absolute art pixels against nothing, and was three to four times too tight
+ * as a result: `mini` asked for sharp under 30 px, and on receding ground
  *
  *     px = |fd| / mpp = K * |1 - D/d|,   K = uPix.y / (2 tan(fov/2))
  *
- * which SATURATES at K — about 307 at a 55 degree lens over 320 art pixels.
- * Everything past the plane, however far, is bounded by it. So a `blurPx` near
- * or above K means the far field never reaches full blur, and a small
- * `sharpPx` means an absurdly tight band: at 84 the sharp zone was
- * |1 - D/d| < 0.27 and at 30 it was < 0.098 — a TEN METRE band at a 53 m
- * focus, which is why the measurement came back a flat 0.306 at every distance
- * out to five kilometres. The band was real and almost nothing was in it.
+ * so 30 px meant |1 - D/d| < 0.098 — a ten metre sharp slab at a 53 m focus —
+ * while 84 px for full blur meant everything past about 73 m sat at one value.
+ * The measurement came back a flat 0.306 at every station out to five
+ * kilometres and was right to. That K is also a CEILING: nothing past the
+ * plane, at any distance, blurs more than it, so a band asked for near or over
+ * it never resolves.
  *
- * Stated as fractions of K the numbers mean something a person can predict:
- * `sharp` 0.36 is sharp over d in [0.74 D, 1.56 D], `blur` 0.75 is full blur
- * outside [0.57 D, 4 D]. And they cannot be set impossibly, because K is
- * computed from the live lens and art resolution rather than guessed.
+ * The scale the numbers are stated against is HALF THE FRAME, `uPix.y / 2`, and
+ * that choice was measured rather than assumed. K is the natural scale for a
+ * receding view and a hopeless one for the chart: at a near-nadir camera the
+ * ground offset along the view ray maps all but one-for-one onto art rows, so
+ * the whole visible frame spans about `uPix.y / 2` of confusion — 160 px, half
+ * of K. Stated against K, `mini` put its sharp edge at 110 px, two thirds of
+ * the way to the frame edge, and its full-blur edge at 230, outside the frame
+ * entirely: the chart A/B moved 7.3% of pixels, nearly all of it dither, with
+ * one softened road band at the top edge and nothing else. Against the frame
+ * the same words mean the middle third sharp and the edges gone, which is what
+ * a miniature is, and the seat keeps a real far field anyway because K is
+ * nearly twice the frame and the far field saturates past it.
+ *
+ * So `sharp` 0.36 is sharp within 36% of a half-frame of the plane; `blur`
+ * 0.75 is full blur past three quarters of it. And they cannot be set
+ * impossibly, because the scale comes from the live art resolution rather than
+ * being guessed.
  */
 const TILT_PRESETS: Record<string, { amt: number; sharp: number; blur: number }> = {
   off: { amt: 0, sharp: 0.36, blur: 0.75 },
-  // A long band that only softens the extreme fore and background.
-  subtle: { amt: 0.5, sharp: 0.55, blur: 0.95 },
-  // The model-railway band: about three quarters to one and a half times the
-  // focal distance sharp, everything well outside it gone.
+  // A long band that only softens the extreme fore and background: sharp over
+  // most of a chart frame, and at the seat a far field that never quite goes.
+  subtle: { amt: 0.5, sharp: 0.55, blur: 1.3 },
+  // The model-railway band: the middle third of a chart frame sharp, the edges
+  // gone; at the seat roughly [0.85 D, 1.25 D] sharp and past 1.6 D a wash.
   mini: { amt: 0.9, sharp: 0.36, blur: 0.75 },
   // A macro lens: a narrow slab, and the rest of the world a wash.
-  hard: { amt: 1, sharp: 0.20, blur: 0.52 },
+  hard: { amt: 1, sharp: 0.2, blur: 0.5 },
 };
 const TILT_MODE = ((v) => (v && v in TILT_PRESETS ? v : 'off'))(qs('tilt')?.toLowerCase());
 /**
@@ -32831,13 +32842,29 @@ function tapeKeep(): string {
  * From the seat, looking a few degrees down, it lands on the road ahead. The
  * clamp is what keeps a near-horizontal ray from solving at the horizon.
  *
- * THE NORMAL IS THE CAMERA'S FORWARD, TILTED. Untilted (the default) the plane
- * is fronto-parallel and the effect is the classic miniature band: a slab of
- * sharpness at one distance with everything nearer and further soft. That is
- * what the look actually wants — a real lens tilt is the Scheimpflug trick for
- * laying the plane ALONG a receding surface, which puts more of the ground in
- * focus, not less. The rotation is here so it can be dialled, and it is zero
- * until someone asks for it.
+ * THE NORMAL IS THE CAMERA'S FORWARD FLATTENED TO THE HORIZONTAL, so the plane
+ * of focus stands VERTICAL and the band lies across the view. The first cut
+ * used the forward itself — a fronto-parallel plane, which is what a camera
+ * without a tilt lens has — and on the chart that produced a measured, exact,
+ * completely flat zero at every station from 167 m to three kilometres. The
+ * reason is not a bug and no amount of retuning would have moved it: a plane
+ * perpendicular to a near-nadir view is a HORIZONTAL SLAB, flat ground lies
+ * inside it, and a depth of field over ground that is all at one depth has
+ * nothing to blur. Only relief could ever have registered.
+ *
+ * Which is exactly why the real photographs this look is named after are taken
+ * with the lens TILTED. Standing the plane up costs nothing at the seat — a
+ * camera looking seven degrees down has a forward and a ground direction that
+ * differ by a few art pixels over a hundred metres, and the measured chase
+ * band barely moves — and it is the whole effect on the chart, where the
+ * sweep gave sharp out to about 210 m and full blur by 340 m around a focus
+ * at 176 m. One rule, correct at both ends.
+ *
+ * `tiltTiltRad` now leans the plane BACK from vertical, about the camera's own
+ * right axis, which is the Scheimpflug direction proper: lay the plane along a
+ * receding surface and more of that surface comes into focus, not less. At
+ * ninety degrees minus the camera's pitch it lies flat along the ground and
+ * the effect goes out over level land. It is zero until someone asks for it.
  *
  * A PRESET PER CAMERA, because the effect costs road readability. The chart is
  * where a miniature belongs and gets the preset in full; chase takes a third of
@@ -32848,12 +32875,34 @@ const FOCUS_FWD = new THREE.Vector3();
 const FOCUS_RIGHT = new THREE.Vector3();
 const FOCUS_UP = new THREE.Vector3(0, 1, 0);
 let tiltTiltRad = 0;
+/**
+ * ── WHAT THE CONSOLE HAS OVERRIDDEN, WHICH aimFocus MUST NOT UNDO ──
+ *
+ * `__tilt({amount, sharp, blur})` promises to set the dials live so a look can
+ * be found at 3 fps without a reload, and for a while it did not: aimFocus
+ * rewrites all three uniforms EVERY FRAME from the preset, so a console write
+ * survived until the next animation frame and no longer. Every A/B taken
+ * through those three dials was therefore an A/B of nothing — which is why the
+ * air term, the one dial aimFocus does not touch, was the only one that ever
+ * showed a difference.
+ *
+ * The write goes here instead and aimFocus lays it over the preset, so it
+ * persists across frames, across camera changes and across a lens change (the
+ * pixel band is absolute once overridden — that is what a dial means). `null`
+ * for a field clears it back to the preset.
+ */
+const tiltOver: { amt?: number; sharp?: number; blur?: number } = {};
+/** The saturation ceiling the last frame solved, reported by `__tilt` so a band
+ *  in pixels can be read against the largest one that exists on receding
+ *  ground — and the half-frame the presets are actually stated against. */
+let tiltK = 1;
+let tiltHalf = 1;
 function aimFocus(): void {
   const u = compMat.uniforms;
   const preset = TILT_PRESETS[TILT_MODE];
   // The cab is deliberately exempt; the chart is where the look belongs.
   const byCam = camMode === 'top' ? 1 : camMode === 'cab' ? 0 : 0.34;
-  const amt = preset.amt * byCam;
+  const amt = tiltOver.amt ?? preset.amt * byCam;
   u.uTiltAmt.value = amt;
   // THE PLANE IS PLACED EVEN WHEN THE EFFECT IS OFF, so `__tilt` always reports
   // a live one. An early return here saved a handful of vector operations and
@@ -32866,9 +32915,16 @@ function aimFocus(): void {
   // means the same thing on both because of it.
   const tanHalf = Math.tan((camera.fov * Math.PI) / 360);
   u.uTanHalfFov.value = tanHalf;
-  const K = Math.max(1, pixSize.y) / (2 * Math.max(tanHalf, 1e-3));
-  u.uTiltSharp.value = preset.sharp * K;
-  u.uTiltBlur.value = Math.max(preset.blur * K, preset.sharp * K + 1);
+  // HALF THE FRAME is what a band is stated against; K is the ceiling it can
+  // never exceed on receding ground. Both are reported, because a band read
+  // against the wrong one of them is how the first cut went wrong. See
+  // TILT_PRESETS.
+  const half = Math.max(1, pixSize.y) / 2;
+  const sharpPx = tiltOver.sharp ?? preset.sharp * half;
+  u.uTiltSharp.value = sharpPx;
+  u.uTiltBlur.value = Math.max(tiltOver.blur ?? preset.blur * half, sharpPx + 1);
+  tiltHalf = half;
+  tiltK = half / Math.max(tanHalf, 1e-3);
   camera.getWorldDirection(FOCUS_FWD);
   // The ground the ray is aimed at. `groundAt` under the truck is the right
   // datum from every camera: the chart is centred on it and the seat is on it.
@@ -32878,9 +32934,13 @@ function aimFocus(): void {
   // rather than trusted — and the floor keeps the plane off the bonnet.
   const dist = clamp(drop > 0.02 ? (camera.position.y - gY) / drop : 1e9, 18, 6000);
   u.uFocusP.value.copy(FOCUS_FWD).multiplyScalar(dist).add(camera.position);
-  // Fronto-parallel unless tilted: see above.
+  // Vertical unless leaned back: see above. Straight down has no ground
+  // direction, and there the truck's heading is the honest fallback — it is
+  // what the chart is oriented to, so the band lies across the map either way.
   FOCUS_RIGHT.crossVectors(FOCUS_FWD, FOCUS_UP).normalize();
-  u.uFocusN.value.copy(FOCUS_FWD);
+  const flat = Math.hypot(FOCUS_FWD.x, FOCUS_FWD.z);
+  if (flat > 1e-4) u.uFocusN.value.set(FOCUS_FWD.x / flat, 0, FOCUS_FWD.z / flat);
+  else u.uFocusN.value.set(Math.sin(state.heading), 0, -Math.cos(state.heading));
   if (tiltTiltRad !== 0 && FOCUS_RIGHT.lengthSq() > 1e-6) {
     u.uFocusN.value.applyAxisAngle(FOCUS_RIGHT, tiltTiltRad);
   }
@@ -34073,14 +34133,21 @@ function repaintWetDebug(): void {
  * be built from once the seat has picked numbers.
  */
 (window as unknown as { __tilt?: object }).__tilt = (
-  opts?: { amount?: number; angle?: number; sharp?: number; blur?: number; sky?: number; air?: number },
+  opts?: { amount?: number | null; angle?: number; sharp?: number | null; blur?: number | null;
+    sky?: number; air?: number },
   at?: [number, number],
 ): object => {
   const u = compMat.uniforms;
-  if (opts?.amount !== undefined) u.uTiltAmt.value = clamp(opts.amount, 0, 1);
+  // A dial write goes to the OVERRIDE, not the uniform: aimFocus rewrites the
+  // uniform every frame and would have eaten it. `null` puts the preset back.
+  if (opts?.amount !== undefined) tiltOver.amt = opts.amount === null ? undefined : clamp(opts.amount, 0, 1);
   if (opts?.angle !== undefined) tiltTiltRad = (opts.angle * Math.PI) / 180;
-  if (opts?.sharp !== undefined) u.uTiltSharp.value = opts.sharp;
-  if (opts?.blur !== undefined) u.uTiltBlur.value = opts.blur;
+  if (opts?.sharp !== undefined) tiltOver.sharp = opts.sharp === null ? undefined : opts.sharp;
+  if (opts?.blur !== undefined) tiltOver.blur = opts.blur === null ? undefined : opts.blur;
+  // Put the override on the uniforms NOW rather than a frame from now, so a
+  // screenshot taken on the next tick is of what was asked for.
+  if (opts?.amount !== undefined || opts?.sharp !== undefined || opts?.blur !== undefined
+    || opts?.angle !== undefined) aimFocus();
   if (opts?.sky !== undefined) u.uTiltSky.value = clamp(opts.sky, 0, 1);
   if (opts?.air !== undefined) u.uAirBlur.value = clamp(opts.air, 0, 1);
   const P = u.uFocusP.value as THREE.Vector3, N = u.uFocusN.value as THREE.Vector3;
@@ -34130,7 +34197,18 @@ function repaintWetDebug(): void {
   return {
     mode: TILT_MODE, cam: camMode, amount: +(u.uTiltAmt.value as number).toFixed(3),
     angleDeg: +((tiltTiltRad * 180) / Math.PI).toFixed(2),
-    sharpPx: u.uTiltSharp.value, blurPx: u.uTiltBlur.value, sky: u.uTiltSky.value,
+    sharpPx: +(u.uTiltSharp.value as number).toFixed(1), blurPx: +(u.uTiltBlur.value as number).toFixed(1),
+    // The two scales a band can be read against. `halfPx` is what the presets
+    // state: half the frame, and all a near-nadir chart ever spans. `satPx` is
+    // the ceiling on receding ground — nothing past the plane, at any distance,
+    // blurs more than it, so a blurPx at or over it never resolves at the seat.
+    halfPx: +tiltHalf.toFixed(1), satPx: +tiltK.toFixed(1),
+    sharpF: +((u.uTiltSharp.value as number) / tiltHalf).toFixed(3),
+    blurF: +((u.uTiltBlur.value as number) / tiltHalf).toFixed(3),
+    // Which dials the console is holding, so a reading taken under an override
+    // is not mistaken for the preset's own.
+    held: Object.keys(tiltOver).filter((k) => (tiltOver as Record<string, number | undefined>)[k] !== undefined),
+    sky: u.uTiltSky.value,
     airBlur: u.uAirBlur.value,
     focusP: [+P.x.toFixed(1), +P.y.toFixed(1), +P.z.toFixed(1)],
     focusN: [+N.x.toFixed(3), +N.y.toFixed(3), +N.z.toFixed(3)],

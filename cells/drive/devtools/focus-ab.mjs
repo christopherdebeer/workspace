@@ -48,8 +48,8 @@ for (let i = 0; i < 90; i++) {
 }
 console.log(`[${el()}] settled: ways ${pw}, roadCells ${pc}, builds ${pb}`);
 
-// PUT THE TRUCK ON A ROAD FIRST. The transect runs along the heading, and a
-// transect from open veld measures the veld.
+// PUT THE TRUCK ON A ROAD FIRST. The transect runs along the camera's own
+// ground ray from under the eye, and from open veld it measures the veld.
 await q(() => window.__toroad?.(400));
 for (const cam of ['chase', 'top']) {
   await q((m) => window.__cam(m), cam);
@@ -86,13 +86,27 @@ if (process.env.AB === '1') {
   }
   // …and the same for the focal plane, so the two softenings can be told apart
   // in pixels and not only in the probe.
-  await q(() => window.__tilt({ air: 0, amount: 0 }));
-  await d.page.waitForTimeout(1200);
-  writeFileSync(`${OUT}/ab-tilt0.png`, await d.page.screenshot({ timeout: 240000 }));
-  await q(() => window.__tilt({ amount: 0.9, sharp: 30, blur: 84 }));
-  await d.page.waitForTimeout(1200);
-  writeFileSync(`${OUT}/ab-tilt1.png`, await d.page.screenshot({ timeout: 240000 }));
-  console.log(`  shot ab-tilt0 / ab-tilt1`);
+  // THE FOCAL PLANE, ON BOTH CAMERAS AND FROM ONE BOOT. `amount: null` puts
+  // the preset back rather than pinning a number, so the ON frame is the look
+  // as it actually ships on that camera — full on the chart, a third in chase.
+  // The band itself is never set here in bare pixels: the preset states it as
+  // a fraction of `halfPx`, half the art frame, which is the scale a viewer
+  // can actually predict. `satPx` is printed beside it because it is the
+  // ceiling on receding ground — a band at or over it never resolves.
+  for (const cam of ['chase', 'top']) {
+    await q((m) => window.__cam(m), cam);
+    if (cam === 'top') await q(() => window.__zoom(0.9));
+    await d.page.waitForTimeout(9000);
+    for (const on of [0, 1]) {
+      await q((v) => window.__tilt({ air: 0, amount: v ? null : 0 }), on);
+      await d.page.waitForTimeout(1200);
+      const t = await q(() => window.__tilt());
+      writeFileSync(`${OUT}/ab-${cam}-tilt${on}.png`, await d.page.screenshot({ timeout: 240000 }));
+      console.log(`  shot ab-${cam}-tilt${on}  amt ${t.amount} D ${t.focusDistM}m`
+        + ` band ${t.sharpPx}-${t.blurPx} of half ${t.halfPx} / sat ${t.satPx}`
+        + ` N ${JSON.stringify(t.focusN)}`);
+    }
+  }
 }
 if (process.env.SHOTS !== '0' && process.env.AB !== '1') {
   await q(() => { window.__draw(true); window.__hud(false); window.__hide('rig'); });
