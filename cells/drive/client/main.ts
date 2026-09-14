@@ -126,7 +126,10 @@ import {
   type DeckAuthority,
   type ProductionCrossingRecord,
 } from './substrate/crossing-authority';
-import { resolveProductionRoadStructureProfile } from './substrate/road-profile';
+import {
+  resolveProductionEngineeredRoadProfile,
+  resolveProductionRoadStructureProfile,
+} from './substrate/road-profile';
 import {
   buildProductionSubstrateTile,
   findProductionDriveWaterOverlaps,
@@ -18051,25 +18054,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // fragments smooth independently, and two one-sided averages disagreeing
     // at a shared tile-boundary vertex would step the deck mid-street.
     stage('2e-lift', prof);
-    if (mode === 'auto' && n > 8) {
-      // …AND A RAILWAY IS SMOOTHER STILL. The window is a claim about the
-      // WAVELENGTH at which the alignment is honest: a road's grade genuinely
-      // changes over a couple of hundred metres, and a main line's does not —
-      // it is set out in tangents and long transitions and holds one gradient
-      // for kilometres. Sixteen stations either way is about ±200 m, run twice.
-      const W = railway ? 16 : 8;
-      const wide = (src: number[]): number[] => src.map((_, i) => {
-        let s = 0, c = 0;
-        for (let j = Math.max(0, i - W); j <= Math.min(n - 1, i + W); j++) { s += src[j]; c++; }
-        return s / c;
-      });
-      const eng = wide(wide(prof));
-      for (let i = 0; i < n; i++) {
-        if (held[i]) continue;                         // a junction pin is not DEM noise
-        const pin = clamp(Math.min(i, n - 1 - i) / W, 0, 1);
-        prof[i] += (eng[i] - prof[i]) * pin;
-      }
-    }
+    const engineered = resolveProductionEngineeredRoadProfile({
+      stations: dense,
+      profile: prof,
+      mode,
+      heldStations: held,
+      maxGrade,
+      railway,
+    });
+    prof = engineered.gradeLineProfile;
     stage('2b-gradeline', prof);
     // A ROAD CLASS IMPLIES A RULING GRADE. A motorway is BUILT to ~7%, an
     // ordinary paved road to low teens — so any along-way grade past the
@@ -18080,43 +18073,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // metres from the measured line in service of the grade and then
     // concedes. Noise needs only small corrections and dies; real steepness
     // exceeds the budget and stays. Ends re-pinned as ever.
-    if (mode === 'auto' && n > 8 && maxGrade > 0) {
-      const base = prof.slice();
-      // ── THE DEVIATION BUDGET IS THE WHOLE DIFFERENCE BETWEEN A ROAD AND A
-      // RAILWAY, AND FIVE METRES IS A ROAD'S NUMBER ──
-      //
-      // The budget above says "the profile may stray a few metres from the
-      // measured line in service of the grade, and then concedes" — written so
-      // that a San Francisco street at 20% stays a 20% street instead of
-      // becoming a viaduct through the neighbourhood. For a road that is
-      // right: a road mostly follows the ground.
-      //
-      // A railway is the opposite object. Straying from the ground is what it
-      // IS — a main line holds 2% by cutting thirty metres into a spur and
-      // embanking twenty across the valley beyond it, and under a five-metre
-      // budget the grade clamp simply loses every argument and the track goes
-      // back to being draped. So the ruling grade wins by a wide margin and
-      // the ground only decides where the earthwork is genuinely enormous,
-      // which is where a real railway tunnels or bridges instead.
-      const DEV = railway ? 24 : 5;
-      for (let pass = 0; pass < 3; pass++) {
-        for (let i = 1; i < n; i++) {
-          if (held[i]) continue;
-          const g = maxGrade * Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
-          prof[i] = clamp(clamp(prof[i], prof[i - 1] - g, prof[i - 1] + g), base[i] - DEV, base[i] + DEV);
-        }
-        for (let i = n - 2; i >= 0; i--) {
-          if (held[i]) continue;
-          const g = maxGrade * Math.max(1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
-          prof[i] = clamp(clamp(prof[i], prof[i + 1] - g, prof[i + 1] + g), base[i] - DEV, base[i] + DEV);
-        }
-      }
-      for (let i = 0; i < n; i++) {
-        if (held[i]) continue;
-        const pin = clamp(Math.min(i, n - 1 - i) / 8, 0, 1);
-        prof[i] = base[i] + (prof[i] - base[i]) * pin;
-      }
-    }
+    prof = engineered.profile;
     stage('2c-devclamp', prof);
   }
   const flat = mode !== 'none'; // profiled roads get a flat cross-section

@@ -17,6 +17,7 @@ import {
   resolveCrossingKind,
   resolveProductionSubstrateMode,
   resolveProductionBridgeProfile,
+  resolveProductionEngineeredRoadProfile,
   resolveProductionRoadStructureProfile,
   resolveProductionCrossing,
   resolveProductionCrossingIntent,
@@ -543,6 +544,21 @@ export function runSubstrateSelfTest(): void {
     && tunnelProfile.runs[0][0] === 1
     && tunnelProfile.runs[0][1] === 5,
   'automatic structure detection expands a sustained buried run to its portals');
+
+  const engineeredProfile = resolveProductionEngineeredRoadProfile({
+    stations: Array.from({ length: 11 }, (_, i) => [i * 10, 0] as const),
+    profile: [0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0],
+    mode: 'auto',
+    heldStations: new Uint8Array([0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0]),
+    maxGrade: .1,
+    railway: false,
+  });
+  assert(engineeredProfile.gradeLineProfile[5] === 10
+    && engineeredProfile.profile[5] === 10,
+  'an engineered profile preserves a held junction through both stages');
+  assert(engineeredProfile.profile[0] === 0
+    && engineeredProfile.profile[10] === 0,
+  'engineered profile endpoints remain exact');
   const recordedDeck = resolveProductionCrossing({
     ...productionCrossingBase, roadLayer: 1, roadTags: { bridge: 'yes' }, structureOutcome: 'bridge-deck',
     deckAuthority: 'landmark-hint',

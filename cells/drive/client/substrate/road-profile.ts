@@ -15,6 +15,23 @@ export interface ProductionRoadStructureProfile {
   chordProfile: number[];
 }
 
+export interface ProductionEngineeredRoadProfileInput {
+  stations: readonly (readonly [x: number, z: number])[];
+  profile: readonly number[];
+  mode: ProductionRoadStructureMode;
+  heldStations?: ArrayLike<number>;
+  maxGrade: number;
+  railway: boolean;
+}
+
+export interface ProductionEngineeredRoadProfile {
+  gradeLineProfile: number[];
+  profile: number[];
+}
+
+const clamp = (value: number, lo: number, hi: number): number =>
+  Math.max(lo, Math.min(hi, value));
+
 /**
  * Decide which aligned road spans become structures and construct their
  * portal chords before rendering exists.
@@ -96,4 +113,98 @@ export function resolveProductionRoadStructureProfile(
     }
   }
   return { runs, chordProfile };
+}
+
+/**
+ * Apply the engineered longitudinal line after structure clearances.
+ *
+ * Roads smooth DEM-scale oscillation but retain steep streets through a small
+ * deviation budget. Railways use a wider wavelength and a much larger budget
+ * because leaving the ground is the formation's purpose. Held junctions and
+ * fragment endpoints remain exact.
+ */
+export function resolveProductionEngineeredRoadProfile(
+  input: ProductionEngineeredRoadProfileInput,
+): ProductionEngineeredRoadProfile {
+  if (input.stations.length !== input.profile.length) {
+    throw new Error('engineered road stations and profile must have matching lengths');
+  }
+  if (input.heldStations
+    && input.heldStations.length !== input.profile.length) {
+    throw new Error('engineered road held stations and profile must have matching lengths');
+  }
+  const n = input.profile.length;
+  const gradeLineProfile = [...input.profile];
+  if (input.mode === 'auto' && n > 8) {
+    const window = input.railway ? 16 : 8;
+    const wide = (source: readonly number[]): number[] => source.map((_, i) => {
+      let total = 0;
+      let count = 0;
+      for (let j = Math.max(0, i - window);
+        j <= Math.min(n - 1, i + window);
+        j++) {
+        total += source[j];
+        count++;
+      }
+      return total / count;
+    });
+    const engineered = wide(wide(gradeLineProfile));
+    for (let station = 0; station < n; station++) {
+      if (input.heldStations?.[station]) continue;
+      const pin = clamp(
+        Math.min(station, n - 1 - station) / window,
+        0,
+        1,
+      );
+      gradeLineProfile[station] +=
+        (engineered[station] - gradeLineProfile[station]) * pin;
+    }
+  }
+
+  const profile = [...gradeLineProfile];
+  if (input.mode === 'auto' && n > 8 && input.maxGrade > 0) {
+    const base = [...profile];
+    const deviationM = input.railway ? 24 : 5;
+    for (let pass = 0; pass < 3; pass++) {
+      for (let station = 1; station < n; station++) {
+        if (input.heldStations?.[station]) continue;
+        const allowance = input.maxGrade * Math.max(1, Math.hypot(
+          input.stations[station][0] - input.stations[station - 1][0],
+          input.stations[station][1] - input.stations[station - 1][1],
+        ));
+        profile[station] = clamp(
+          clamp(
+            profile[station],
+            profile[station - 1] - allowance,
+            profile[station - 1] + allowance,
+          ),
+          base[station] - deviationM,
+          base[station] + deviationM,
+        );
+      }
+      for (let station = n - 2; station >= 0; station--) {
+        if (input.heldStations?.[station]) continue;
+        const allowance = input.maxGrade * Math.max(1, Math.hypot(
+          input.stations[station + 1][0] - input.stations[station][0],
+          input.stations[station + 1][1] - input.stations[station][1],
+        ));
+        profile[station] = clamp(
+          clamp(
+            profile[station],
+            profile[station + 1] - allowance,
+            profile[station + 1] + allowance,
+          ),
+          base[station] - deviationM,
+          base[station] + deviationM,
+        );
+      }
+    }
+    for (let station = 0; station < n; station++) {
+      if (input.heldStations?.[station]) continue;
+      const pin = clamp(Math.min(station, n - 1 - station) / 8, 0, 1);
+      profile[station] =
+        base[station] + (profile[station] - base[station]) * pin;
+    }
+  }
+  return { gradeLineProfile, profile };
 }

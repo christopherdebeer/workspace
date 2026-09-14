@@ -15,7 +15,10 @@ export {
   type SubstrateShadowSnapshot,
 } from './shadow';
 export {
+  resolveProductionEngineeredRoadProfile,
   resolveProductionRoadStructureProfile,
+  type ProductionEngineeredRoadProfile,
+  type ProductionEngineeredRoadProfileInput,
   type ProductionRoadStructureMode,
   type ProductionRoadStructureProfile,
   type ProductionRoadStructureProfileInput,
