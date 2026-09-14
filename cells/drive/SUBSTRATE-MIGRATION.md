@@ -25,7 +25,7 @@ import the same implementation.
 | Layered data | Ground, drive, water, structure and crossing arrays in one tile | Revision-locked tiles retain exact terrain/contact triangles, renderer-neutral terrain/drive/structure/hydro-detail packets, road/channel vectors, the built hydro field and crossing records |
 | Crossings | Bridge, culvert, ford and causeway resolve explicitly | Live records control structure choice, terrain fill/channel carve and hydro visibility; road/deck generation still comes from the legacy solver |
 | Vehicle contact | Shared support + exposed-fluid resolver | Ordinary URLs cut centre, wheel support, fluid force and splash gates to exact substrate contact; `?substrate=legacy` retains rollback |
-| Hydro input | Production `HydroSample` / `HydroTileField` adapter, preserving unknown speed | Exact channel vectors provide physical speed where known; unknown speed disables current force |
+| Hydro input | Production `HydroSample` / `HydroTileField` adapter plus renderer-free watercourse reach solve, preserving unknown speed | Exact channel vectors provide substrate-solved invert, direction and physical speed where known; unknown speed disables current force |
 | Bed and bank material | Canonical `silt/sand/gravel/pebble/rock` bed and `soil/mud/gravel/rock` bank categories | Categories survive OSM/authored input, body resolution, packed hydro fields, CPU contact, diagnostics and shaders without reducing them to turbidity |
 | Diagnostics | `/lab/substrate`, production-hydro overlay, contact readout and fixtures | Shadow/contact modes report tile/fallback probes, revisions, support/fluid parity and crossing authority |
 | Evidence | `VehicleWaterEvidence` owns wake strength, tyre/hull carry, drips and wet tracks | Production and `/lab/substrate` consume the same deterministic history and wet-mark renderer behind the contact rollback |
@@ -226,12 +226,14 @@ Rapid-bed detail is also the first complete local detail builder moved behind
 the substrate contract. `client/substrate/rapid-detail.ts` deterministically
 resolves rock placement, side-weighted wakes and waterfall aeration, then emits
 the exact position/colour arrays and matching collider witnesses without
-importing the renderer. The legacy water solver still supplies the solved reach
-stations, invert, speed and mitred offsets, but it no longer independently
-decides where rapid rocks or their foam exist. Collider witnesses are copied
-into the immutable substrate tile beside the detail render packet; activation,
-revision replacement and invalidation now consume that tile payload rather than
-the mutable authoring candidate registry.
+importing the renderer. `client/substrate/hydro-reach.ts` now owns downhill
+orientation, DEM smoothing, monotone invert and explicit daylight concessions,
+bounded flow speed, source-relative texture distance and shared bank mitres.
+The live context supplies grounded stations, updates telemetry and consumes the
+solved reach in channel, rapid and crossing records. Collider witnesses are
+copied into the immutable substrate tile beside the detail render packet;
+activation, revision replacement and invalidation consume that tile payload
+rather than the mutable authoring candidate registry.
 
 Culvert shell arrays have begun the same migration. Once crossing intent,
 clearance, conduit family and dimensions are resolved, the renderer-free
@@ -424,9 +426,10 @@ the failed comparison can be reproduced.
   arrays; host-road crop hierarchy and kerb intersections are substrate-owned
   too, as are the local host-plane fit and its bounded junction fade. The
   remaining generation migration is contextual rather than another
-  road-profile authority: carry solved road authoring plus the remaining
-  terrain/hydro reach solves into tile construction, then retire the legacy builder entry
-  points and road drape registry after rollback observation. Common apron
+  road-profile or watercourse-reach authority: carry solved authoring through
+  tile construction, move the remaining terrain contextual transforms behind
+  that boundary, then retire legacy builder entry points and the road drape
+  registry after rollback observation. Common apron
   faces, piers, arch spandrels, parapets, studs and hazard signs are already
   renderer-free substrate builders; final batter strip/cap packets and all
   bridge-family forms are too. Batter packets publish through the atomic tile

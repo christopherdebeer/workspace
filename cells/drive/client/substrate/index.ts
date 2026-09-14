@@ -194,6 +194,14 @@ export {
   type RapidDetailStoneFamily,
 } from './rapid-detail';
 export {
+  productionHydroReachOffsets,
+  resolveProductionHydroReach,
+  type ProductionHydroReach,
+  type ProductionHydroReachInput,
+  type ProductionHydroReachOffset,
+  type ProductionHydroReachStation,
+} from './hydro-reach';
+export {
   VehicleWaterEvidence,
   type VehicleWaterAuthority,
   type VehicleWaterEvidenceInput,

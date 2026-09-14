@@ -28,6 +28,7 @@ import {
   resolveProductionSubstrateMode,
   resolveProductionBridgeProfile,
   resolveProductionEngineeredRoadProfile,
+  resolveProductionHydroReach,
   resolveProductionRoadCrossSection,
   resolveProductionRoadEndCrop,
   resolveProductionRoadBatterReach,
@@ -160,6 +161,84 @@ export function runSubstrateSelfTest(): void {
   const offMode = resolveProductionSubstrateMode('off');
   assert(!offMode.render && !offMode.contact && !offMode.shadow && offMode.rollback,
     'emergency off mode must disable every substrate consumer');
+
+  const hydroStations = [
+    [0, 0],
+    [10, 0],
+    [20, 0],
+    [30, 10],
+    [30, 20],
+  ] as const;
+  const hydroGround = [12, 11, 10, 9, 8];
+  const hydroReach = resolveProductionHydroReach({
+    stations: hydroStations,
+    groundY: hydroGround,
+    widthM: 4,
+    maxBurialM: 9,
+  });
+  assert(hydroReach.downhillInArrayOrder,
+    'hydro reach must orient flow from the higher averaged end');
+  assert(hydroReach.invertY.every((height, index) =>
+    index === 0 || height <= hydroReach.invertY[index - 1]),
+  'hydro reach invert must be monotone in flow order');
+  assert(hydroReach.speedMps.every((speed) => speed >= .4 && speed <= 3.2),
+    'hydro reach speed must retain production bounds');
+  close(hydroReach.flowTextureV[0], 0, 1e-12,
+    'hydro texture phase must begin at the source');
+  close(hydroReach.flowTextureV[4], 2.2071067811865475, 1e-12,
+    'hydro texture phase must accumulate source-relative arc length');
+  const cornerHydroReach = resolveProductionHydroReach({
+    stations: [[0, 0], [10, 0], [10, 10]],
+    groundY: [3, 2, 1],
+    widthM: 4,
+    maxBurialM: 9,
+  });
+  close(cornerHydroReach.offsets[1][0], -2, 1e-12,
+    'hydro corner mitre x');
+  close(cornerHydroReach.offsets[1][1], 2, 1e-12,
+    'hydro corner mitre z');
+
+  const reversedHydroReach = resolveProductionHydroReach({
+    stations: [...hydroStations].reverse(),
+    groundY: [...hydroGround].reverse(),
+    widthM: 4,
+    maxBurialM: 9,
+  });
+  assert(!reversedHydroReach.downhillInArrayOrder,
+    'reversed OSM geometry must reverse array flow authority');
+  sameArray(reversedHydroReach.invertY, [...hydroReach.invertY].reverse(),
+    'hydro invert must be direction invariant');
+  sameArray(reversedHydroReach.speedMps, [...hydroReach.speedMps].reverse(),
+    'hydro speed must be direction invariant');
+  sameArray(reversedHydroReach.flowTextureV, [...hydroReach.flowTextureV].reverse(),
+    'hydro source phase must be direction invariant');
+
+  const daylightHydroReach = resolveProductionHydroReach({
+    stations: [[0, 0], [10, 0], [20, 0]],
+    groundY: [30, 10, 30],
+    widthM: 3,
+    maxBurialM: 9,
+    smoothingPasses: 0,
+  });
+  assert(daylightHydroReach.daylightCount === 1
+    && daylightHydroReach.daylighted[2]
+    && daylightHydroReach.invertY[2] === 30,
+  'a DEM watershed beyond the burial cap must daylight explicitly');
+  close(daylightHydroReach.worstDownhillRiseM, 0, 1e-12,
+    'deliberate daylight must not count as a monotonicity failure');
+  let rejectedHydroReach = false;
+  try {
+    resolveProductionHydroReach({
+      stations: [[0, 0], [1, 0]],
+      groundY: [1],
+      widthM: 2,
+      maxBurialM: 9,
+    });
+  } catch {
+    rejectedHydroReach = true;
+  }
+  assert(rejectedHydroReach,
+    'hydro reach must reject mismatched station and ground arrays');
 
   const overlapDrive = [{
     ax: -20,

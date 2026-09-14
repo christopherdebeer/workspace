@@ -188,6 +188,7 @@ import {
   buildRapidDetailField,
   buildRapidDetailMesh,
 } from './substrate/rapid-detail';
+import { resolveProductionHydroReach } from './substrate/hydro-reach';
 import {
   buildCulvertBoreGeometry,
   buildCulvertHeadwallGeometry,
@@ -21594,102 +21595,27 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
   const n = dense.length;
   if (n < 2) return;
   void name;
-  // WHICH WAY IS DOWNHILL. OSM orders a waterway from source to mouth by
-  // convention and breaks that convention often enough not to trust it, and the
-  // ground is right here to be asked: average the first fifth against the last
-  // fifth and let the water run away from the higher end.
   const raw = dense.map(([x, z]) => sampleHeight(x, z));
-  // SMOOTHED BEFORE THE GRADIENT IS BELIEVED, for the same reason the road's
-  // grade line is: at 9.5m per pixel the field rolls by metres from sample to
-  // sample, and a strictly descending invert taken off raw ground dives into
-  // the first dip and then runs buried until the ground falls that far again.
-  // Measured on the Big Sur River before this: 46 buried runs and 1758m of
-  // bore, none with more than 0.6m of cover — noise, drawn as tunnel.
-  const g = raw.slice();
-  for (let pass = 0; pass < 3; pass++) {
-    const a2 = g.slice();
-    for (let i = 1; i < n - 1; i++) g[i] = (a2[i - 1] + a2[i] * 2 + a2[i + 1]) * 0.25;
-  }
-  const k = Math.max(1, Math.round(n / 5));
-  let head = 0, tail = 0;
-  for (let i = 0; i < k; i++) { head += g[i]; tail += g[n - 1 - i]; }
-  const down = head / k >= tail / k;             // already ordered downhill?
-  const idx = (i: number): number => (down ? i : n - 1 - i);
-  // THE INVERT, monotone by construction. Capped: where the ground climbs more
-  // than a culvert's worth the DEM is describing a watershed the z14 raster
-  // cannot resolve, and burying nine metres of hill to prove a point about
-  // gradients would carve a canyon. There the water is allowed to daylight.
-  const inv = new Array<number>(n);
-  const daylit = new Array<boolean>(n).fill(false);
-  let run = g[idx(0)];
-  for (let i = 0; i < n; i++) {
-    const j = idx(i);
-    run = Math.min(run, g[j]);
-    if (run < g[j] - CULV_MAX) { run = g[j]; daylit[j] = true; culvertStats.uphillFixed++; }
-    inv[j] = run;
-  }
+  // Substrate owns direction, smoothing, monotone invert/daylighting, flow
+  // speed, texture phase and channel mitres. This context supplies the sampled
+  // ground and consumes the solved reach in live registries and render arrays.
+  const reach = resolveProductionHydroReach({
+    stations: dense,
+    groundY: raw,
+    widthM: width,
+    maxBurialM: CULV_MAX,
+  });
+  const inv = reach.invertY;
+  const speed = reach.speedMps;
+  const vAt = reach.flowTextureV;
+  const off = reach.offsets;
+  const down = reach.downhillInArrayOrder;
+  culvertStats.uphillFixed += reach.daylightCount;
   culvertStats.ways++;
-  // The self-check skips the stations that DELIBERATELY climbed. A daylighting
-  // is the solver conceding that the DEM has described a watershed it cannot
-  // resolve; counting those as failures measured the concession, not the claim.
-  for (let i = 1; i < n; i++) {
-    if (daylit[idx(i)]) continue;
-    const rise = inv[idx(i)] - inv[idx(i - 1)];
-    if (rise > culvertStats.worstRise) culvertStats.worstRise = rise;
-  }
-  /**
-   * HOW FAST THE WATER IS GOING, per station, from the invert it was just given.
-   *
-   * The shader needs one number per vertex and this is the only place that
-   * knows it: `inv` descends by construction, so the drop between two stations
-   * over the distance between them is the surface slope, and nothing else in
-   * the frame has to be trusted for it.
-   *
-   * sqrt of slope rather than slope, which is where every open-channel formula
-   * lands (Chézy, Manning) and also where the eye does: a 1% stream and a 4%
-   * stream do not differ fourfold to look at, they differ about twofold. Floored
-   * so flat water still creeps — a river that stops dead reads as a painted
-   * one — and capped so a DEM cliff does not produce a blur.
-   */
-  const speed = new Array<number>(n).fill(0.6);
-  for (let i = 0; i < n; i++) {
-    // OVER FORTY METRES, not over one station. Stations are twelve metres apart
-    // and the field is nine and a half metres a pixel, so a one-station drop is
-    // mostly raster noise: measured in Isterdalen it put the MEDIAN slope at
-    // 10.5% and 96% of the valley under whitewater, which is not a river, it is
-    // a staircase. A longer baseline asks the same question of ground the DEM
-    // can actually answer it about.
-    const j0 = Math.max(0, i - 3), j1 = Math.min(n - 1, i + 3);
-    let run = 0;
-    for (let j = j0; j < j1; j++) run += Math.hypot(dense[j + 1][0] - dense[j][0], dense[j + 1][1] - dense[j][1]);
-    const drop = Math.abs(inv[j0] - inv[j1]);
-    speed[i] = clamp(0.4 + 4.5 * Math.sqrt(drop / Math.max(run, 1)), 0.4, 3.2);
-  }
-  // ARC LENGTH FROM THE SOURCE, not from station zero. `dense` may run either
-  // way — OSM's source-to-mouth convention is broken often enough that the
-  // ground was asked instead — so v is accumulated in the DOWNHILL order and
-  // the shader can scroll one way and be right on every river.
-  const vAt = new Array<number>(n).fill(0);
-  {
-    let acc = 0;
-    for (let i = 0; i < n; i++) {
-      const j = idx(i);
-      if (i > 0) {
-        const pj = idx(i - 1);
-        acc += Math.hypot(dense[j][0] - dense[pj][0], dense[j][1] - dense[pj][1]);
-      }
-      vAt[j] = acc / 20;
-    }
-  }
-  // The visible water, and the bed the terrain is dug to.
-  //
-  // MITRED, like every other ribbon here. A river was a run of rectangles about
-  // each bay's own centreline, so on the outside of every meander the bays
-  // parted and left the bank notched — the same wedge the carriageway once had
-  // a gore for and the tunnel shells were mitred to close. A watercourse has no
-  // Seg.hw to keep faith with, so it takes the simpler fix: both bays use the
-  // same two points and there is nothing left to fill.
-  const off = mitreOffsets(dense, 0, n - 1, width / 2);
+  culvertStats.worstRise = Math.max(
+    culvertStats.worstRise,
+    reach.worstDownhillRiseM,
+  );
   // THE ROCKS COME FIRST NOW, because the water needs to know where they are:
   // the surface shader's rock foam reads a per-vertex wake the boulders write,
   // so their placement has to be settled before a single ribbon vertex goes up.
