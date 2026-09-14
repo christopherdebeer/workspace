@@ -74,7 +74,7 @@ import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, ty
 import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-worker';
 // THE TERRAIN KERNEL, instantiated once for the synchronous path and the
 // probes; the worker builds its own from the same source (terrain-worker.ts).
-const K = createTerrainKernel();
+const K = createTerrainKernel(buildSubstrateCells, SUB_FIELD_N);
 const { BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX, refineCost, plainCost, carveCost, stripFloor, mmKey, mmIndex, mmNear, onTileEdge, plainLattice, cellTable } = K;
 import { createOverlays, type RouteCard } from './overlays';
 import { createSplash, SPLASH_TALL_MAX } from './splash';
@@ -83,7 +83,8 @@ import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight, uFacSun } fro
 import { roofFx } from './roof-fx';
 import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, groundInkPixels, type GroundViewId } from './ground-view';
 import { SUB_GLSL, SUB_DOM_M, subDomainAt, subEvidence, subGrassFactor, subMatOf,
-  subTintOf, subWeightsOf } from './substrate-field';
+  subTintOf, subWeightsOf, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
+  type SubstrateField } from './substrate-field';
 import { gramDecode } from './facade-grammar';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { startLab } from './labs';
@@ -7707,6 +7708,7 @@ function buildTerrainMesh(t: HeightTile): void {
   // it: bare ground has no tint entry, so it arrives at the fragment the same
   // colour as ochre scrub.
   geo.setAttribute('aTd', new THREE.BufferAttribute(b.mats, 4));
+  noteSubstrateField(key, t, b.sub.a, b.sub.b);
   geo.setIndex(new THREE.BufferAttribute(b.idx, 1));
   cellTrisCache.set(geo, b.cellTris);
   (geo.userData as { seg?: number }).seg = SEG;
@@ -7855,6 +7857,48 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
 }
 /** The worker's arrays become the tile's mesh — what buildTerrainMesh does
  *  after its kernel call, with the rows and the followers from the reply. */
+/**
+ * ── THE TILE'S GEOMORPHIC SUBSTRATE FIELD, KEPT WHERE BOTH READERS CAN SEE IT ──
+ *
+ * Built once in the worker off the tile's own DEM (see substrate-field.ts for
+ * what the channels mean and why turf is not among them) and kept here for the
+ * length of the tile, because the whole argument for it is that ONE field is
+ * read twice: the terrain fragment paints from it and the sward seeder thins
+ * from it, so a roughening of the ground and a thinning of the blades are one
+ * decision rather than two models that happen to agree.
+ *
+ * Keyed and cleared exactly as `heightTiles` is — a field for a tile that no
+ * longer exists would answer questions about ground nobody can see.
+ */
+const substrateFields = new Map<string, SubstrateField>();
+function noteSubstrateField(key: string, t: HeightTile, a: Uint8Array, b: Uint8Array): void {
+  substrateFields.set(key, { n: SUB_FIELD_N, xs: t.xs, zs: t.zs, w: t.w, h: t.h, a, b });
+}
+/** One channel of the substrate at a world point, or null where no tile has
+ *  built — which is a real answer, and the callers all have a fallback for it
+ *  rather than a zero that would read as "bare rock, no soil, no grass". */
+function substrateAt(x: number, z: number, ch: number): number | null {
+  const [la, lo] = localToLatLon(x, z);
+  const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
+  const f = substrateFields.get(`${tx}/${ty}`);
+  return f ? sampleSubstrate(f, x, z, ch) : null;
+}
+/** Every channel at a point, named — the probe the seat and the devtools read,
+ *  and the one that makes "why is there scree here" answerable at all. */
+(window as unknown as { __substrate?: object }).__substrate = (x = state.x, z = state.z): object | null => {
+  const [la, lo] = localToLatLon(x, z);
+  const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
+  const f = substrateFields.get(`${tx}/${ty}`);
+  if (!f) return { tile: `${tx}/${ty}`, built: false, fields: substrateFields.size };
+  const g = (ch: number): number => +sampleSubstrate(f, x, z, ch).toFixed(3);
+  return {
+    tile: `${tx}/${ty}`, built: true, fields: substrateFields.size, n: f.n,
+    exposure: g(SUB_CH.exposure), debris: g(SUB_CH.debris), soilDepth: g(SUB_CH.soilDepth),
+    moisture: g(SUB_CH.moisture), grassPot: g(SUB_CH.grassPot),
+    rockFamily: rockFamilyOf(g(SUB_CH.rockFamily)), family: g(SUB_CH.rockFamily),
+    flow: [g(SUB_CH.flowX), g(SUB_CH.flowZ)],
+  };
+};
 function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string): void {
   invalidateProductionSubstrateTile(key);
   const SEG = terrainSeg;
@@ -7869,6 +7913,7 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
   // it: bare ground has no tint entry, so it arrives at the fragment the same
   // colour as ochre scrub.
   geo.setAttribute('aTd', new THREE.BufferAttribute(r.mats, 4));
+  noteSubstrateField(key, t, r.subA, r.subB);
   geo.setIndex(new THREE.BufferAttribute(r.idx, 1));
   cellTrisCache.set(geo, { seg: SEG, offs: r.cellOffs, tris: r.cellTris });
   (geo.userData as { seg?: number }).seg = SEG;
@@ -31338,6 +31383,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // the accident is gone and this has to be deliberate.
     coverWide.clear(); coverWideAsked.clear(); coverWideSorted = null;
     heightTiles.clear(); terrainReady.clear(); terrainMeshes.clear(); terrainDirty.clear(); terrainRevision.clear();
+    substrateFields.clear();
     // The spans are in LOCAL metres under the origin that was current when
     // they were built, so a hop leaves every one of them pointing at ground on
     // the other side of the world — the same trap the wide cover carries a

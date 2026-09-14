@@ -53,6 +53,11 @@ export interface TileBuild {
    *  that back out of rough means inverting the cover table in the shader,
    *  which is the kind of cleverness that breaks the first time a row moves. */
   mats: Float32Array;
+  /** The tile's shared geomorphic substrate field: `a` is exposure, debris,
+   *  soil depth, moisture and `b` is grass potential, rock family, flow x and
+   *  z, each a normalized byte on a `subFieldN` square lattice. Read by the
+   *  terrain fragment AND by the sward seeder — which is the point of it. */
+  sub: { a: Uint8Array; b: Uint8Array };
   kinds: Uint8Array | null; cellTris: CellTris; refined: boolean; corridor: boolean;
 }
 export type TerrainCrossingKind = 'bridge' | 'culvert' | 'ford' | 'causeway';
@@ -126,7 +131,16 @@ export interface AreaPatchLike { pts: Array<[number, number]>; tint: Rgb; x0: nu
  * here may reach a module-scope binding of this file — types only, which
  * erase — or the worker would throw on its first job.
  */
-export function createTerrainKernel() {
+/** The self-contained geomorphic builder and its lattice size, handed IN
+ *  rather than imported, because this whole factory is stringified into a Blob
+ *  worker and a module binding inside it throws on the first job. See
+ *  `buildSubstrateCells`'s own header and `terrainWorkerSource`. */
+export type SubstrateBuilder = (inp: {
+  data: Float32Array | Int16Array | number[];
+  xs: number; zs: number; w: number; h: number; n: number;
+  cover: (x: number, z: number) => number | null;
+}) => { a: Uint8Array; b: Uint8Array };
+export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFieldN: number) {
   const cutSet = new Set<StripLike>();
   /** A relief step smaller than this is not worth a pass. */
   const RELIEF_MIN = 0.06;
@@ -1542,6 +1556,15 @@ export function createTerrainKernel() {
     const cell = t.w / SEG;
     const colors = new Float32Array(pos.length);
     const mats = new Float32Array((pos.length / 3) * 4);
+    // ── THE SHARED GEOMORPHIC FIELD FOR THIS TILE ──
+    // Off the tile's own heightfield, once, here in the worker — so the ground
+    // model costs the main thread nothing and the same two arrays serve the
+    // fragment and the sward seeder. See substrate-field.ts for what the
+    // channels mean and why turf is not among them.
+    const sub = buildSubstrateCells({
+      data: t.data, xs: t.xs, zs: t.zs, w: t.w, h: t.h, n: subFieldN,
+      cover: (x: number, z: number): number | null => S.sampleCover(x, z),
+    });
     for (let i = 0; i < (refined ? 0 : (pos.length / 3)); i++) {
       const ex = pos[(i) * 3] + cxm, ez = pos[(i) * 3 + 2] + czm;
       const cv = S.sampleCover(ex, ez);
@@ -1674,7 +1697,7 @@ export function createTerrainKernel() {
     const p7 = performance.now();
     plainCost.builds++; plainCost.refine += p1 - p0; plainCost.heights += p2 - p1; plainCost.carve += p3 - p2; plainCost.channels += p4 - p3;
     plainCost.pins += p5 - p4; plainCost.colour += p6 - p5; plainCost.normals += p7 - p6;
-    return { pos, uv, idx, colors, normals, mats, kinds: refined ? refined.kinds : null, cellTris, refined: !!refined, corridor };
+    return { pos, uv, idx, colors, normals, mats, sub, kinds: refined ? refined.kinds : null, cellTris, refined: !!refined, corridor };
   }
 
   const M_LAT = 111320, TERRAIN_Z = 14;

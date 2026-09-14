@@ -34,11 +34,38 @@ execSync(`npx esbuild ${join(CELL, 'client/substrate-field.ts')} --bundle --plat
 const { buildSubstrateCells, sampleSubstrate, SUB_CH, SUB_FIELD_N, rockFamilyOf } = await import(BUNDLE);
 
 const TILE = 2150;                                  // metres, a z14 tile at 28N
+
+// ── THE SELF-CONTAINMENT CHECK, FIRST, BECAUSE EVERYTHING ELSE RESTS ON IT ──
+//
+// The terrain kernel is stringified into a Blob worker, so this function is
+// shipped there as TEXT rather than copied by hand. Re-evaluating it through
+// `new Function` gives it no scope at all: if it has reached for a module-level
+// helper or constant, this throws a ReferenceError here, in a second, instead
+// of in the worker on its first job — where the symptom is no terrain anywhere
+// and nothing in the console of the machine that has it.
+const viaText = new Function(`return (${buildSubstrateCells.toString()})`)();
+{
+  const data = new Float32Array(256 * 256);
+  for (let v = 0; v < 256; v++) for (let u = 0; u < 256; u++) data[v * 256 + u] = 1000 + v * 3 + Math.sin(u / 9) * 12;
+  const inp = { data, xs: 0, zs: 0, w: TILE, h: TILE, n: SUB_FIELD_N, cover: () => 30 };
+  const direct = buildSubstrateCells(inp), text = viaText(inp);
+  const same = direct.a.every((v, i) => v === text.a[i]) && direct.b.every((v, i) => v === text.b[i]);
+  console.log(`self-contained: the function re-evaluated with no scope agrees ${same ? 'byte for byte' : 'NOT AT ALL'}`);
+  // AND IT TRAVELS INSIDE A TEMPLATE LITERAL. terrainWorkerSource interpolates
+  // this function's text into one, so a backtick or a ${'$'}{ in its body would end
+  // the literal and produce a worker that does not parse — the same trap this
+  // repo has recorded four times for GLSL comments, one layer over.
+  const src = buildSubstrateCells.toString();
+  const tmpl = !src.includes('`') && !src.includes('${'.replace('$', '$'));
+  console.log(`  …and carries nothing that would end a template literal: ${tmpl ? 'yes' : 'NO'}`);
+  if (!tmpl) { console.log('  FAIL the worker source would not parse'); process.exitCode = 1; }
+  if (!same) { console.log('  FAIL the worker copy would not match the main thread'); process.exitCode = 1; }
+}
 /** An authored tile: h(u, v) in raster indices, metres. */
 function field(h, cover = () => 30) {
   const data = new Float32Array(256 * 256);
   for (let v = 0; v < 256; v++) for (let u = 0; u < 256; u++) data[v * 256 + u] = h(u, v);
-  const { a, b } = buildSubstrateCells({ data, xs: 0, zs: 0, w: TILE, h: TILE, cover });
+  const { a, b } = buildSubstrateCells({ data, xs: 0, zs: 0, w: TILE, h: TILE, n: SUB_FIELD_N, cover });
   return { n: SUB_FIELD_N, xs: 0, zs: 0, w: TILE, h: TILE, a, b };
 }
 const at = (f, u, v, ch) => sampleSubstrate(f, (u / 256) * TILE, (v / 256) * TILE, ch);

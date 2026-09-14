@@ -422,15 +422,36 @@ export interface SubstrateField {
 export interface SubstrateInput {
   data: Float32Array | Int16Array | number[];
   xs: number; zs: number; w: number; h: number;
+  /** Cells a side. Passed in rather than read from SUB_FIELD_N because the
+   *  builder must close over NOTHING — see the note on its own header. */
+  n: number;
   /** WorldCover class at a world point, or null where the raster has not
    *  reached — which is a real answer and abstains rather than voting. */
   cover: (x: number, z: number) => number | null;
 }
-const cl01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
-/** A bump peaking at `c`: "steep enough to shed, shallow enough to hold". */
-const bump = (v: number, c: number, wdt: number): number => cl01(1 - Math.abs(v - c) / wdt);
 /**
  * ── THE DERIVATION ──
+ *
+ * ── IT CLOSES OVER NOTHING, AND THAT IS LOAD-BEARING ──
+ *
+ * The terrain kernel is one closure stringified into a Blob worker, so nothing
+ * inside it may touch a module binding — which is why TD_MAT is duplicated in
+ * the kernel with a test parsing both copies to hold them honest. A second
+ * hand-copy of a hundred and twenty lines of geomorphology would be far worse
+ * than that one: the two would drift the first time a weight moved, and the
+ * drift would show as the sward thinning in a different place from the rock,
+ * which is precisely the divergence this field exists to end.
+ *
+ * So this function is SELF-CONTAINED — every helper and every constant it uses
+ * is declared inside it — and `terrain-worker.ts` ships it to the worker as
+ * text (`buildSubstrateCells.toString()`), handed to the kernel factory as an
+ * argument. One copy of the code, two places it runs.
+ *
+ * `devtools/substrate-morph.test.mjs` re-evaluates the function through
+ * `new Function` with no scope at all and requires it to produce byte-identical
+ * output, which is the check that fails the moment somebody reaches for a
+ * module-scope helper — a mistake that would otherwise surface as the terrain
+ * worker throwing on its first job, with no terrain anywhere.
  *
  * Every term is a physical claim written so the next person can argue with the
  * CLAIM rather than with a magic number. The order is causal and cannot be
@@ -444,7 +465,14 @@ const bump = (v: number, c: number, wdt: number): number => cl01(1 - Math.abs(v 
  * drainage proxy there is, since water and fines end up where relEl is low.
  */
 export function buildSubstrateCells(inp: SubstrateInput): { a: Uint8Array; b: Uint8Array } {
-  const N = SUB_FIELD_N, cellM = inp.w / N;
+  const cl01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+  /** A bump peaking at `c`: "steep enough to shed, shallow enough to hold". */
+  const bump = (v: number, c: number, wdt: number): number => cl01(1 - Math.abs(v - c) / wdt);
+  const sstepF = (a0: number, b0: number, v: number): number => {
+    const t = cl01((v - a0) / (b0 - a0 || 1));
+    return t * t * (3 - 2 * t);
+  };
+  const N = inp.n, cellM = inp.w / N;
   const step = 256 / N;                       // raster pixels a cell (4 at N=64)
   // ── 1. THE LANDFORM, NOT THE PIXEL ── the mean of each block rather than a
   // point sample: a point sample at 33 m carries every spike the DEM has, and
@@ -482,15 +510,40 @@ export function buildSubstrateCells(inp: SubstrateInput): { a: Uint8Array; b: Ui
       // twentieth of the span it is measured over — reads 1.
       curv[j * N + i] = Math.max(-1, Math.min(1,
         (cNear / (cellM * 0.05)) * 0.45 + (cFar / (cellM * 3 * 0.05)) * 0.55));
-      let mn = Infinity, mx = -Infinity;
-      for (let b = -R; b <= R; b++) {
-        for (let a = -R; a <= R; a++) { const v = at(j + b, i + a); if (v < mn) mn = v; if (v > mx) mx = v; }
+      // relief and relEl are filled by the separable pass below — a square
+      // window's min and max are two one-dimensional passes, 14 reads a cell
+      // rather than 49, and this is the whole cost of the build.
+    }
+  }
+  // ── 2b. THE WINDOW, SEPARABLY ── min and max over a (2R+1) square are the
+  // min and max of the row-wise mins and maxes, so it is two passes of 2R+1
+  // instead of one of (2R+1)². Measured on a real-sized tile, and the figure
+  // is the measurement rather than the estimate that was written here first:
+  // 8.48 ms a build to 6.82. The window is a fifth of the cost, not all of it
+  // — the rest is the 65,536-pixel downsample and the per-cell cover read.
+  {
+    const rmn = new Float32Array(N * N), rmx = new Float32Array(N * N);
+    for (let j = 0; j < N; j++) {
+      for (let i = 0; i < N; i++) {
+        let mn = Infinity, mx = -Infinity;
+        for (let a = -R; a <= R; a++) { const v = at(j, i + a); if (v < mn) mn = v; if (v > mx) mx = v; }
+        rmn[j * N + i] = mn; rmx[j * N + i] = mx;
       }
-      const span = mx - mn;
-      relief[j * N + i] = span;
-      // A flat window has no floor and no crest, and dividing by its span
-      // would turn float noise into a landform. Half is "neither".
-      relEl[j * N + i] = span > 1 ? (h - mn) / span : 0.5;
+    }
+    for (let j = 0; j < N; j++) {
+      for (let i = 0; i < N; i++) {
+        let mn = Infinity, mx = -Infinity;
+        for (let b = -R; b <= R; b++) {
+          const jj = Math.min(N - 1, Math.max(0, j + b));
+          if (rmn[jj * N + i] < mn) mn = rmn[jj * N + i];
+          if (rmx[jj * N + i] > mx) mx = rmx[jj * N + i];
+        }
+        const span = mx - mn;
+        relief[j * N + i] = span;
+        // A flat window has no floor and no crest, and dividing by its span
+        // would turn float noise into a landform. Half is "neither".
+        relEl[j * N + i] = span > 1 ? (lo[j * N + i] - mn) / span : 0.5;
+      }
     }
   }
   // ── 3. THE COVER'S OWN WORD ── a wood or a crop is a statement that soil is
@@ -594,10 +647,6 @@ export function buildSubstrateCells(inp: SubstrateInput): { a: Uint8Array; b: Ui
   }
   return { a, b: bOut };
 }
-const sstepF = (a: number, b: number, v: number): number => {
-  const t = cl01((v - a) / (b - a || 1));
-  return t * t * (3 - 2 * t);
-};
 /** One channel of the field at a world point, bilinear — the CPU reader, for
  *  the sward seeder, the flora placement and every probe. Nearest would put
  *  the lattice's own 33 m squares on the hillside, which is the blocky-motif

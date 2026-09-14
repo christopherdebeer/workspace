@@ -14,6 +14,7 @@
  * rasterised; shipping the few hundred near the tile costs tens of
  * kilobytes and cannot go stale.
  */
+import { buildSubstrateCells, SUB_FIELD_N } from './substrate-field';
 import { createTerrainKernel, type HeightTile, type CoverTile, type StripLike, type Rgb, type AreaPatchLike, type TerrainCrossingMask, type TerrainStore, type CarveLog, type BreakLine } from './terrain-kernel';
 
 export interface TerrainJob {
@@ -43,6 +44,11 @@ export interface TerrainReply {
   /** Per vertex [rough, grain, slope, coverClass] for the substrate renderer
    *  and the ground views — see the kernel's TileBuild.mats. */
   mats: Float32Array;
+  /** The tile's geomorphic substrate field — see the kernel's TileBuild.sub.
+   *  Two RGBA byte lattices, retained on the main thread for the sward and
+   *  uploaded as the terrain material's own pair of textures. */
+  subA: Uint8Array;
+  subB: Uint8Array;
   kinds: Uint8Array | null; cellOffs: Int32Array; cellTris: Int32Array;
   border: Float64Array; normalMap: Uint8Array; refined: boolean; corridor: boolean;
   hydroElev: Float32Array | null;
@@ -142,11 +148,12 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
       const reply: TerrainReply = {
         id: job.id, key: job.key, epoch: job.epoch,
         pos: b.pos, uv: b.uv, idx: b.idx, colors: b.colors, normals: b.normals, mats: b.mats, kinds: b.kinds,
+        subA: b.sub.a, subB: b.sub.b,
         cellOffs: b.cellTris.offs, cellTris: b.cellTris.tris, border, normalMap, refined: b.refined, corridor: b.corridor,
         hydroElev, followers, workerMs: performance.now() - t0, carveLog: carveLog.get(job.key) ?? null,
         refineCost: { ...K.refineCost }, plainCost: { ...K.plainCost }, carveCost: { ...K.carveCost },
       };
-      const transfer = [b.pos.buffer, b.uv.buffer, b.idx.buffer, b.colors.buffer, b.normals.buffer, b.mats.buffer, b.cellTris.offs.buffer, b.cellTris.tris.buffer, normalMap.buffer] as unknown as Transferable[];
+      const transfer = [b.pos.buffer, b.uv.buffer, b.idx.buffer, b.colors.buffer, b.normals.buffer, b.mats.buffer, b.sub.a.buffer, b.sub.b.buffer, b.cellTris.offs.buffer, b.cellTris.tris.buffer, normalMap.buffer] as unknown as Transferable[];
       if (b.kinds) transfer.push(b.kinds.buffer as unknown as Transferable);
       if (hydroElev) transfer.push(hydroElev.buffer as unknown as Transferable);
       (self as unknown as { postMessage(m: unknown, t: Transferable[]): void }).postMessage(reply, transfer);
@@ -156,7 +163,12 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
   };
 }
 export function terrainWorkerSource(): string {
-  return `'use strict';\n(${terrainWorkerMain.toString()})((${createTerrainKernel.toString()})());`;
+  // THE GEOMORPHIC BUILDER TRAVELS AS TEXT, not as a hand-copy. It is written
+  // to close over nothing for exactly this line; `substrate-morph.test.mjs`
+  // re-evaluates it with no scope and requires byte-identical output, which is
+  // the check that fails instead of the worker throwing on its first job.
+  return `'use strict';\n(${terrainWorkerMain.toString()})((${createTerrainKernel.toString()})(`
+    + `${buildSubstrateCells.toString()}, ${SUB_FIELD_N}));`;
 }
 interface Pending { at: number; resolve: (r: TerrainReply) => void; reject: (e: Error) => void }
 export class TerrainWorker {

@@ -7,6 +7,7 @@ import {
   type Rgb,
   type TerrainStore,
 } from '../terrain-kernel';
+import { buildSubstrateCells, SUB_FIELD_N } from '../substrate-field';
 import {
   analyseHydroTile,
   FLOWING_NOMINAL_DEPTH_M,
@@ -479,7 +480,7 @@ function makeTerrain(
     carveLog: new Map(),
     cutRelief: false,
   };
-  const built = createTerrainKernel().buildTile(
+  const built = createTerrainKernel(buildSubstrateCells, SUB_FIELD_N).buildTile(
     store,
     heightTile,
     terrainSegments,

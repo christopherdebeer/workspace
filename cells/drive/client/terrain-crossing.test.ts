@@ -6,6 +6,7 @@ import {
   type TerrainCrossingKind,
   type TerrainStore,
 } from './terrain-kernel';
+import { buildSubstrateCells, SUB_FIELD_N } from './substrate-field';
 
 const fail = (message: string): never => {
   throw new Error(message);
@@ -18,7 +19,7 @@ const assert: (condition: unknown, message: string) => asserts condition = (
   if (!condition) fail(message);
 };
 
-const K = createTerrainKernel();
+const K = createTerrainKernel(buildSubstrateCells, SUB_FIELD_N);
 
 function gridded(segment: StripLike): Map<string, StripLike[]> {
   const out = new Map<string, StripLike[]>();
