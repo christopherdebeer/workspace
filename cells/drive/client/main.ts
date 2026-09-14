@@ -193,6 +193,10 @@ import {
   buildProductionCulvert,
 } from './substrate/culvert-detail';
 import {
+  buildProductionGalleryGeometry,
+  buildProductionTunnelGeometry,
+} from './substrate/road-tunnel';
+import {
   VehicleWaterEvidence,
   type VehicleWaterEvidenceSnapshot,
   type VehicleWaterWheelSample,
@@ -19635,47 +19639,19 @@ function canopyRun(
   const [cxm, czm] = dense[mid];
   const up = sampleHeight(cxm + mpx * 14, czm + mpz * 14)
     >= sampleHeight(cxm - mpx * 14, czm - mpz * 14) ? 1 : -1;
-  const hw = width / 2 + 0.7;
-  const roof = TUNNEL_H;         // clears the chase camera's stock ride height
-  const tv: number[] = [];
-  const quad = (a: number[], b: number[], c: number[], d: number[]): void => {
-    tv.push(...a, ...b, ...c, ...b, ...d, ...c);
-  };
-  let colAcc = 6;                // first column a few metres in, then every ~9m
-  const off = mitreOffsets(dense, 0, n - 1, hw);
-  for (let i = 0; i < n - 1; i++) {
-    const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
-    const len = Math.hypot(x1 - x0, z1 - z0) || 1;
-    // The SHARED station offsets, so this bay's leading corners are the next
-    // bay's trailing ones exactly.
-    const [pax, paz] = off[i], [pbx, pbz] = off[i + 1];
-    const yA = prof[i] + lift, yB = prof[i + 1] + lift;
-    const rA = yA + roof, rB = yB + roof;
-    // roof slab
-    quad([x0 + pax, rA, z0 + paz], [x1 + pbx, rB, z1 + pbz],
-      [x0 - pax, rA, z0 - paz], [x1 - pbx, rB, z1 - pbz]);
-    // the mountain-side wall, deck to roof — solid to the eye and the hull
-    const uax = pax * up, uaz = paz * up, ubx = pbx * up, ubz = pbz * up;
-    quad([x0 + uax, yA, z0 + uaz], [x1 + ubx, yB, z1 + ubz],
-      [x0 + uax, rA, z0 + uaz], [x1 + ubx, rB, z1 + ubz]);
-    addSeg(wallGrid, { ax: x0 + uax, az: z0 + uaz, bx: x1 + ubx, bz: z1 + ubz, hw: 0, ya: rA, yb: rB });
-    // columns on the open side, thin crossed fins
-    colAcc += len;
-    if (colAcc >= 9) {
-      const cx2 = x0 - uax, cz2 = z0 - uaz;
-      // The open side routinely crosses side roads at a gallery mouth. Leave
-      // that bay open instead of planting a crossed pair of fins in the
-      // carriageway; do not reset the accumulator, so the rhythm resumes at
-      // the first clear station rather than losing a column altogether.
-      if (structureFootprintClear(cx2, cz2, 0.5, ownFid, ownKey)) {
-        colAcc = 0;
-        quad([cx2 - 0.3, yA, cz2], [cx2 + 0.3, yA, cz2], [cx2 - 0.3, rA, cz2], [cx2 + 0.3, rA, cz2]);
-        quad([cx2, yA, cz2 - 0.3], [cx2, yA, cz2 + 0.3], [cx2, rA, cz2 - 0.3], [cx2, rA, cz2 + 0.3]);
-      } else spanStats.galleryRefused++;
-    }
-  }
+  const built = buildProductionGalleryGeometry({
+    stations: dense,
+    profileY: prof,
+    widthM: width,
+    liftM: lift,
+    roofHeightM: TUNNEL_H,
+    uphillSide: up,
+    columnAllowed: (x, z) => structureFootprintClear(x, z, .5, ownFid, ownKey),
+  });
+  spanStats.galleryRefused += built.refusedColumns;
+  for (const wall of built.walls) addSeg(wallGrid, { ...wall, hw: 0 });
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
+  geo.setAttribute('position', new THREE.BufferAttribute(built.positions, 3));
   geo.computeVertexNormals();
   addRoadRenderGeometry(geo, MAT.tunnel, {
     userData: { tunnel: true, shellKind: 'gallery' },
@@ -22071,98 +22047,37 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   };
 }
 function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number[], a: number, b: number, width: number, lift: number, recipe?: StructureRecipe): void {
-  // Belt and braces: the ceiling can never poke out through the hillside —
-  // EXCEPT at the mouths, which wear a straight collar at tube height. The
-  // mouth stations used to cap under the RAW terrain, but the portal-throat
-  // cut has since carved that ground away, and a ceiling capped against
-  // elevation that no longer exists hovered over the mouth as a dark slab.
-  const ceil = (i: number): number => (i <= a + 1 || i >= b - 1)
-    ? prof[i] + lift + TUNNEL_H
-    : Math.min(prof[i] + lift + TUNNEL_H, elev[i] - 0.4);
-  const tv: number[] = [];
-  const quadPush = (...p: number[]): void => {
-    tv.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
-  };
-  // Mitred, so the bore is one continuous tube through the bends rather than a
-  // string of boxes that open a slot to the daylight on the outside of each.
-  const off = mitreOffsets(dense, a, b, width / 2 + 0.6);
-  for (let i = a; i < b; i++) {
-    const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
-    const [ax2, az2] = off[i - a], [bx2, bz2] = off[i + 1 - a];
-    const yA = prof[i] + lift, yB = prof[i + 1] + lift;
-    const cA = ceil(i), cB = ceil(i + 1);
-    quadPush(x0 + ax2, yA, z0 + az2, x1 + bx2, yB, z1 + bz2, x0 + ax2, cA, z0 + az2, x1 + bx2, cB, z1 + bz2);
-    quadPush(x0 - ax2, yA, z0 - az2, x1 - bx2, yB, z1 - bz2, x0 - ax2, cA, z0 - az2, x1 - bx2, cB, z1 - bz2);
-    quadPush(x0 + ax2, cA, z0 + az2, x1 + bx2, cB, z1 + bz2, x0 - ax2, cA, z0 - az2, x1 - bx2, cB, z1 - bz2);
-    const top = Math.max(cA, cB);
-    addSeg(wallGrid, { ax: x0 + ax2, az: z0 + az2, bx: x1 + bx2, bz: z1 + bz2, hw: 0, ya: top, yb: top });
-    addSeg(wallGrid, { ax: x0 - ax2, az: z0 - az2, bx: x1 - bx2, bz: z1 - bz2, hw: 0, ya: top, yb: top });
-  }
+  const built = buildProductionTunnelGeometry({
+    stations: dense,
+    profileY: prof,
+    terrainY: elev,
+    start: a,
+    end: b,
+    widthM: width,
+    liftM: lift,
+    roofHeightM: TUNNEL_H,
+    recipe,
+  });
+  for (const wall of built.walls) addSeg(wallGrid, { ...wall, hw: 0 });
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
+  geo.setAttribute('position', new THREE.BufferAttribute(built.shellPositions, 3));
   geo.computeVertexNormals();
   addRoadRenderGeometry(geo, MAT.tunnel, {
     // So a probe can check none of it breaches the surface.
     userData: { tunnel: true, shellKind: 'tunnel' },
   });
-  // LUMINAIRES. A bore lit only by the emissive is uniform, and uniform is the
-  // one thing a tunnel never looks like: what you actually see driving one is a
-  // receding row of lamps, and it is the RHYTHM of them going past that tells
-  // you how fast you are travelling and how far there is left to go. Drawn as
-  // flat panels just under the ceiling, one geometry for the whole tube, and
-  // spaced in metres rather than per station so the rhythm is the tunnel's and
-  // not the DEM's.
-  {
-    const lv: number[] = [];
-    // Lighting is part of the deterministic recipe. Rural raw-rock bores stay
-    // sparse; major segmental/cut-cover tubes carry a continuous rhythm.
-    const lampEvery = recipe?.lighting === 'none' ? Infinity
-      : recipe?.lighting === 'portal' ? 36 : recipe?.lighting === 'continuous' ? 12 : 24;
-    let run = lampEvery * 0.5;
-    for (let i = a; i < b; i++) {
-      const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
-      const dx = x1 - x0, dz = z1 - z0;
-      const len = Math.hypot(dx, dz) || 1;
-      run += len;
-      if (run < lampEvery) continue;
-      run = 0;
-      const ux = dx / len, uz = dz / len;         // along
-      const px2 = -uz * 0.4, pz2 = ux * 0.4;      // across, an 0.8m panel
-      // Recessed under the ceiling, so from far down the tube it is edge-on and
-      // nearly nothing — which is both what a real luminaire looks like from
-      // there and what stops it dominating a low-resolution frame.
-      const ly = ceil(i) - 0.18;
-      const [sx, sz] = [x0 + ux * 0.9, z0 + uz * 0.9];
-      const c = [sx + px2, ly, sz + pz2], d2 = [sx - px2, ly, sz - pz2];
-      const e = [sx + px2 + ux * 1.4, ly, sz + pz2 + uz * 1.4];
-      const f = [sx - px2 + ux * 1.4, ly, sz - pz2 + uz * 1.4];
-      lv.push(...c, ...e, ...d2, ...e, ...f, ...d2);
-    }
-    if (lv.length) {
-      const lg = new THREE.BufferGeometry();
-      lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lv), 3));
-      // NOT tagged `tunnel`: that flag feeds the probe that checks no tube
-      // geometry pokes out through the hillside, and at a mouth — where the
-      // ceiling is deliberately uncapped — a lamp would read as a breach the
-      // shell does not have.
-      addRoadRenderGeometry(lg, MAT.lamp);
-    }
+  if (built.lampPositions.length) {
+    const lamps = new THREE.BufferGeometry();
+    lamps.setAttribute('position', new THREE.BufferAttribute(built.lampPositions, 3));
+    addRoadRenderGeometry(lamps, MAT.lamp);
   }
-  for (const end of [a, b]) {
-    const i0 = end === a ? a : b - 1, i1 = end === a ? a + 1 : b;
-    const [x0, z0] = dense[i0], [x1, z1] = dense[i1];
-    const ang = Math.atan2(z1 - z0, x1 - x0);
-    const rawPortal = recipe?.family === 'rock' || recipe?.family === 'gallery';
-    const lintelGeometry = new THREE.BoxGeometry(
-      width + (rawPortal ? 1.8 : 3), rawPortal ? 0.9 : 1.6, rawPortal ? 0.8 : 1.2,
-    );
-    const [px, pz] = dense[end];
-    const lintelMatrix = new THREE.Matrix4().makeRotationY(ang + Math.PI / 2);
-    lintelMatrix.setPosition(px, ceil(end) + 0.3, pz);
-    addRoadRenderGeometry(lintelGeometry, MAT.portal, {
-      // Across the road, not along it.
-      matrix: lintelMatrix.elements,
-    });
+  for (const portal of built.portals) {
+    const lintel = new THREE.BufferGeometry();
+    lintel.setAttribute('position', new THREE.BufferAttribute(portal.positions, 3));
+    lintel.setAttribute('normal', new THREE.BufferAttribute(portal.normals, 3));
+    lintel.setAttribute('uv', new THREE.BufferAttribute(portal.uvs, 2));
+    lintel.setIndex(new THREE.BufferAttribute(portal.index, 1));
+    addRoadRenderGeometry(lintel, MAT.portal);
   }
 }
 // Everything a solid footprint owes the rest of the world: wall segments for

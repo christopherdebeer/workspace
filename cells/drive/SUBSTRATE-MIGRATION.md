@@ -433,7 +433,11 @@ the failed comparison can be reproduced.
   transform now runs through `client/substrate/terrain-hydro.ts` for both
   synchronous and worker terrain arrays; field sampling, slope derivation,
   mineral colour and array mutation no longer have separate context-owned
-  implementations. Common apron
+  implementations. Gallery roofs, mountain walls and column rhythm plus tunnel
+  walls, capped ceilings, luminaires and indexed portal boxes are authored by
+  `client/substrate/road-tunnel.ts`; context only supplies uphill-side and
+  footprint observations, registers collision walls and binds materials.
+  Common apron
   faces, piers, arch spandrels, parapets, studs and hazard signs are already
   renderer-free substrate builders; final batter strip/cap packets and all
   bridge-family forms are too. Batter packets publish through the atomic tile

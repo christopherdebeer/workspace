@@ -81,11 +81,11 @@ ok('the substrate captures a versioned structure candidate',
     && state.substrate?.render?.bridgeStructureCandidates === 1
     && state.substrate?.render?.bridgeStructurePacketMeshes === 1,
   state.substrate?.render);
-ok('tile-owned drive packets retain indexed transformed tunnel geometry',
+ok('tile-owned drive packets retain direct indexed tunnel geometry',
   state.substrate?.render?.roadPacketVertices > 0
     && state.substrate?.render?.roadPacketBytes > 0
     && state.substrate?.render?.roadIndexedPackets > 0
-    && state.substrate?.render?.roadTransformedPackets > 0
+    && state.substrate?.render?.roadTransformedPackets === 0
     && state.substrate?.render?.roadDirectAuthoredPacketMeshes
       === state.substrate?.render?.roadPacketMeshes
     && state.substrate?.render?.legacyRoadCandidateMeshes === 0

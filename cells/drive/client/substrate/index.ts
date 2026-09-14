@@ -165,6 +165,15 @@ export {
   type ProductionRoadBatterTint,
 } from './road-batter';
 export {
+  buildProductionGalleryGeometry,
+  buildProductionTunnelGeometry,
+  type ProductionGalleryGeometry,
+  type ProductionGalleryInput,
+  type ProductionTunnelGeometry,
+  type ProductionTunnelInput,
+  type ProductionTunnelWall,
+} from './road-tunnel';
+export {
   box as appendProductionBridgeBox,
   bridgeAxis,
   buildBridgeForms,

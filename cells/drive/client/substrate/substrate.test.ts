@@ -10,9 +10,11 @@ import {
   buildCulvertBoreGeometry,
   buildCulvertHeadwallGeometry,
   buildProductionCulvert,
+  buildProductionGalleryGeometry,
   buildProductionHydroFixture,
   buildProductionRoadSurfaceGeometry,
   buildProductionSubstrateTile,
+  buildProductionTunnelGeometry,
   buildRapidDetailField,
   buildRapidDetailMesh,
   buildSubstrateTile,
@@ -460,6 +462,42 @@ export function runSubstrateSelfTest(): void {
     && productionFordFallback.tooTight
     && !productionFordFallback.bore,
   'a wet overlap without buried room must remain a geometry-free ford');
+  const galleryGeometry = buildProductionGalleryGeometry({
+    stations: [[0, 0], [10, 0], [20, 5]],
+    profileY: [1, 1.2, 1.4],
+    widthM: 7,
+    liftM: .1,
+    roofHeightM: 5,
+    uphillSide: 1,
+    columnAllowed: (x) => x < 15,
+  });
+  assert(galleryGeometry.positions.length > 0
+    && galleryGeometry.walls.length === 2
+    && galleryGeometry.positions.every(Number.isFinite),
+  'gallery builder must author continuous roof, wall and column arrays');
+  const tunnelGeometry = buildProductionTunnelGeometry({
+    stations: [[0, 0], [10, 0], [20, 4], [30, 4]],
+    profileY: [1, 1.1, 1.2, 1.3],
+    terrainY: [8, 9, 7, 8],
+    start: 0,
+    end: 3,
+    widthM: 7,
+    liftM: .1,
+    roofHeightM: 5,
+    recipe: { family: 'segmental', lighting: 'continuous' },
+  });
+  assert(tunnelGeometry.shellPositions.length === 3 * 3 * 18
+    && tunnelGeometry.walls.length === 6
+    && tunnelGeometry.portals.length === 2
+    && tunnelGeometry.lampPositions.length > 0,
+  'tunnel builder must author shell faces, paired walls, lamps and portals');
+  assert([
+    ...tunnelGeometry.shellPositions,
+    ...tunnelGeometry.lampPositions,
+    ...tunnelGeometry.ceilingY,
+    ...tunnelGeometry.portals.flatMap((portal) => [...portal.positions]),
+  ].every(Number.isFinite),
+  'tunnel shell arrays must remain numerically safe');
 
   const rapidStations = Array.from(
     { length: 20 },
