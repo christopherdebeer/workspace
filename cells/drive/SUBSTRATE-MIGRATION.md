@@ -140,9 +140,11 @@ apron offsets, including continuation normals at fragment ends;
 grade-separation gates plus shallow-fork hiding and exact kerb intersections.
 `client/substrate/road-structure.ts` owns the common detail quad order,
 vertical apron/fascia faces, splayed bridge-pier facets and segmented arch
-spandrels. Context still decides where those details belong.
+spandrels, plus parapet faces, paired retroreflective studs and double-sided
+hazard boards with crossed posts. Context still decides where those details
+belong, enforces carriageway refusal/collision and supplies spacing counters.
 The remaining crossing migration is to move the terrain/bench sampling inputs
-plus batter, parapet/furniture and bridge-family geometry into tile
+plus batter and bridge-family geometry into tile
 construction, then emit them from the substrate tile itself.
 
 ### 3. Build one production substrate authority tile — guarded authority landed
@@ -405,10 +407,11 @@ the failed comparison can be reproduced.
   too, as are the local host-plane fit and its bounded junction fade. The
   remaining generation migration is contextual rather than another
   road-profile authority: move terrain/bench sampling,
-  batter/parapet/furniture/bridge-family arrays and the remaining terrain/hydro
+  batter/bridge-family arrays and the remaining terrain/hydro
   reach solves into tile construction, then retire the legacy builder entry
   points and road drape registry after rollback observation. Common apron
-  faces, piers and arch spandrels are already renderer-free substrate builders.
+  faces, piers, arch spandrels, parapets, studs and hazard signs are already
+  renderer-free substrate builders.
 - Contact/evidence is now the production default with `?substrate=legacy` as
   the observable rollback. Representative water drives, persistent evidence
   and the multi-world parity thresholds pass; a production observation window

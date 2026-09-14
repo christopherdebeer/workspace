@@ -148,6 +148,9 @@ import {
   appendProductionRoadFace,
   appendProductionRoadPier,
   appendProductionRoadQuad,
+  appendProductionRoadRail,
+  appendProductionRoadSign,
+  appendProductionRoadStud,
 } from './substrate/road-structure';
 import {
   buildProductionSubstrateTile,
@@ -18378,16 +18381,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
    */
   const stud = (px: number, py: number, pz: number,
     ux: number, uz: number, half: number, high: number): void => {
-    const rx = -uz, rz = ux;                 // across the way
-    for (const nsg of [1, -1]) {             // one face each way down the road
-      const ox = ux * 0.04 * nsg, oz = uz * 0.04 * nsg;
-      quad(apron.stV, apron.stUV, [
-        px - rx * half + ox, py + high, pz - rz * half + oz,
-        px + rx * half + ox, py + high, pz + rz * half + oz,
-        px - rx * half + ox, py - high, pz - rz * half + oz,
-        px + rx * half + ox, py - high, pz + rz * half + oz,
-      ], [CATS_U0, CATS_V0, CATS_U1, CATS_V0, CATS_U0, CATS_V1, CATS_U1, CATS_V1]);
-    }
+    appendProductionRoadStud(apron.stV, apron.stUV, {
+      centreX: px,
+      centreY: py,
+      centreZ: pz,
+      forwardX: ux,
+      forwardZ: uz,
+      halfWidthM: half,
+      halfHeightM: high,
+      atlasU0: CATS_U0,
+      atlasV0: CATS_V0,
+      atlasU1: CATS_U1,
+      atlasV1: CATS_V1,
+    });
     spanStats.cats++;
   };
   // PER KERB, not per way: one shared counter was satisfied by the SUM of
@@ -18402,9 +18408,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   ): void => {
     const L = Math.hypot(xB - xA, zB - zA);
     spanStats.railM += L;
-    quad(apron.rlV, apron.rlUV,
-      [xA, yA + RAIL_H, zA, xB, yB + RAIL_H, zB, xA, yA - 0.15, zA, xB, yB - 0.15, zB],
-      [u0, 0, u1, 0, u0, 1, u1, 1]);
+    appendProductionRoadRail(apron.rlV, apron.rlUV, {
+      xA, yA, zA, xB, yB, zB,
+      heightM: RAIL_H,
+      bottomDropM: 0.15,
+      u0,
+      u1,
+    });
     // `solid: false` is the narrow-deck parapet: a way slimmer than RAIL_MIN_W
     // still gets the visual barrier a bridge always has, but no wall segment —
     // two solid walls 4.5m apart would hold the truck like a vice, which is
@@ -18440,44 +18450,28 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const other = onCarriageway(px, pz, -0.3, fid, name).road;
     const pre = preEdge(px, pz, wayKey);
     if (other || (pre && pre.out < -0.3)) { spanStats.signRefused++; return; }
-    const l = Math.hypot(fwdX, fwdZ) || 1;
-    const fx = fwdX / l, fz = fwdZ / l;
-    // Facing back along the way, canted 12° toward the carriageway.
-    const a = Math.atan2(-fx, -fz) + side * 0.21;
-    const rx = Math.cos(a), rz = -Math.sin(a);      // the panel's own width axis
-    // A 1.64m board at scale 1, low enough to sit in the beam. Scale drives the
-    // width and the panel's own height while leaving the FOOT on the ground:
-    // a delineator is a short post, a direction board a wide one, and both
-    // still stand in the dirt rather than floating at hazard-board height.
-    // Width is separate from height because the atlas cell is one aspect and
-    // roadside furniture is not: a delineator is a narrow post, a direction
-    // board a wide plate, and both are the same texture.
-    const HW = 0.82 * scale * wide, TOP = 0.86 + 1.14 * scale, BOT = 0.86;
-    const u0 = kind / SIGN_KINDS, u1 = (kind + 1) / SIGN_KINDS;
-    // Face (upper half of the atlas) and back (lower half) as one double-sided
-    // quad each, offset a few centimetres so they never z-fight.
-    for (const [n, v0, v1] of [[1, 0, 0.5], [-1, 0.5, 1]] as Array<[number, number, number]>) {
-      const ox = -rz * 0.03 * n, oz = rx * 0.03 * n;
-      quad(apron.sgV, apron.sgUV, [
-        px - rx * HW + ox, py + TOP, pz - rz * HW + oz,
-        px + rx * HW + ox, py + TOP, pz + rz * HW + oz,
-        px - rx * HW + ox, py + BOT, pz - rz * HW + oz,
-        px + rx * HW + ox, py + BOT, pz + rz * HW + oz,
-      ], [u0, v0, u1, v0, u0, v1, u1, v1]);
-    }
-    // The post. Same atlas, sampled from a blank corner of the backplate, so it
-    // reads as galvanised steel without needing a second material.
-    const PW = 0.055;
-    for (const [ax2, az2] of [[rx, rz], [-rz, rx]] as Array<[number, number]>) {
-      quad(apron.sgV, apron.sgUV, [
-        px - ax2 * PW, py + TOP, pz - az2 * PW,
-        px + ax2 * PW, py + TOP, pz + az2 * PW,
-        px - ax2 * PW, py - 0.3, pz - az2 * PW,
-        px + ax2 * PW, py - 0.3, pz + az2 * PW,
-      ], [u0 + 0.005, 0.97, u0 + 0.02, 0.97, u0 + 0.005, 0.99, u0 + 0.02, 0.99]);
-    }
+    const direction = appendProductionRoadSign(apron.sgV, apron.sgUV, {
+      centreX: px,
+      centreY: py,
+      centreZ: pz,
+      forwardX: fwdX,
+      forwardZ: fwdZ,
+      side,
+      kind,
+      atlasKinds: SIGN_KINDS,
+      scale,
+      widthScale: wide,
+    });
     spanStats.signs++;
-    if (spanStats.signAt.length < 400) spanStats.signAt.push({ x: px, z: pz, fx, fz, kind });
+    if (spanStats.signAt.length < 400) {
+      spanStats.signAt.push({
+        x: px,
+        z: pz,
+        fx: direction.forwardX,
+        fz: direction.forwardZ,
+        kind,
+      });
+    }
   };
   /** The bay a built NEIGHBOUR contributes past this fragment's end (audit
    *  finding 5). Inside the fragment every kerb point is mitred on the

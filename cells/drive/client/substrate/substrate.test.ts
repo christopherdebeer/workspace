@@ -3,6 +3,9 @@ import {
   appendProductionRoadFace,
   appendProductionRoadPier,
   appendProductionRoadQuad,
+  appendProductionRoadRail,
+  appendProductionRoadSign,
+  appendProductionRoadStud,
   buildCulvertBoreGeometry,
   buildCulvertHeadwallGeometry,
   buildProductionHydroFixture,
@@ -714,6 +717,55 @@ export function runSubstrateSelfTest(): void {
     halfWidthM: 2,
   }) && archVertices.length === 288 && archUvs.length === 192,
   'substrate road detail authors paired segmented arch spandrels');
+  const studVertices: number[] = [];
+  const studUvs: number[] = [];
+  appendProductionRoadStud(studVertices, studUvs, {
+    centreX: 2,
+    centreY: 3,
+    centreZ: 4,
+    forwardX: 1,
+    forwardZ: 0,
+    halfWidthM: .12,
+    halfHeightM: .09,
+    atlasU0: .85,
+    atlasV0: .06,
+    atlasU1: .96,
+    atlasV1: .11,
+  });
+  assert(studVertices.length === 36 && studUvs.length === 24,
+  'substrate road detail authors both retroreflective stud faces');
+  const railVertices: number[] = [];
+  const railUvs: number[] = [];
+  appendProductionRoadRail(railVertices, railUvs, {
+    xA: 0, yA: 2, zA: 0,
+    xB: 10, yB: 3, zB: 0,
+    heightM: 1,
+    bottomDropM: .15,
+    u0: 0,
+    u1: 2,
+  });
+  assert(railVertices.length === 18
+    && railUvs.length === 12
+    && railVertices[1] === 3
+    && railVertices[13] === 2.85,
+  'substrate road detail authors the production parapet face');
+  const signVertices: number[] = [];
+  const signUvs: number[] = [];
+  const signDirection = appendProductionRoadSign(signVertices, signUvs, {
+    centreX: 0,
+    centreY: 1,
+    centreZ: 0,
+    forwardX: 3,
+    forwardZ: 4,
+    side: 1,
+    kind: 2,
+    atlasKinds: 5,
+  });
+  assert(signVertices.length === 72
+    && signUvs.length === 48
+    && Math.abs(signDirection.forwardX - .6) < 1e-9
+    && Math.abs(signDirection.forwardZ - .8) < 1e-9,
+  'substrate road detail authors the double-sided hazard board and crossed post');
   const kerbs = resolveProductionRoadKerbGeometry({
     stations: [[0, 0], [10, 0], [10, 10]],
     halfWidthM: 2,

@@ -28,6 +28,51 @@ export interface ProductionRoadArchInput {
   segments?: number;
 }
 
+export interface ProductionRoadStudInput {
+  centreX: number;
+  centreY: number;
+  centreZ: number;
+  forwardX: number;
+  forwardZ: number;
+  halfWidthM: number;
+  halfHeightM: number;
+  atlasU0: number;
+  atlasV0: number;
+  atlasU1: number;
+  atlasV1: number;
+}
+
+export interface ProductionRoadRailInput {
+  xA: number;
+  yA: number;
+  zA: number;
+  xB: number;
+  yB: number;
+  zB: number;
+  heightM: number;
+  bottomDropM: number;
+  u0: number;
+  u1: number;
+}
+
+export interface ProductionRoadSignInput {
+  centreX: number;
+  centreY: number;
+  centreZ: number;
+  forwardX: number;
+  forwardZ: number;
+  side: number;
+  kind: number;
+  atlasKinds: number;
+  scale?: number;
+  widthScale?: number;
+}
+
+export interface ProductionRoadSignResult {
+  forwardX: number;
+  forwardZ: number;
+}
+
 const clamp = (value: number, low: number, high: number): number =>
   Math.max(low, Math.min(high, value));
 
@@ -175,4 +220,116 @@ export function appendProductionRoadArch(
     }
   }
   return true;
+}
+
+/** Append a paired retroreflective stud aimed both ways along the carriageway. */
+export function appendProductionRoadStud(
+  vertices: number[],
+  uvs: number[],
+  input: ProductionRoadStudInput,
+): void {
+  const acrossX = -input.forwardZ;
+  const acrossZ = input.forwardX;
+  for (const facing of [1, -1]) {
+    const offsetX = input.forwardX * 0.04 * facing;
+    const offsetZ = input.forwardZ * 0.04 * facing;
+    appendProductionRoadQuad(vertices, uvs, [
+      input.centreX - acrossX * input.halfWidthM + offsetX,
+      input.centreY + input.halfHeightM,
+      input.centreZ - acrossZ * input.halfWidthM + offsetZ,
+      input.centreX + acrossX * input.halfWidthM + offsetX,
+      input.centreY + input.halfHeightM,
+      input.centreZ + acrossZ * input.halfWidthM + offsetZ,
+      input.centreX - acrossX * input.halfWidthM + offsetX,
+      input.centreY - input.halfHeightM,
+      input.centreZ - acrossZ * input.halfWidthM + offsetZ,
+      input.centreX + acrossX * input.halfWidthM + offsetX,
+      input.centreY - input.halfHeightM,
+      input.centreZ + acrossZ * input.halfWidthM + offsetZ,
+    ], [
+      input.atlasU0, input.atlasV0,
+      input.atlasU1, input.atlasV0,
+      input.atlasU0, input.atlasV1,
+      input.atlasU1, input.atlasV1,
+    ]);
+  }
+}
+
+/** Append one production parapet/rail face. */
+export function appendProductionRoadRail(
+  vertices: number[],
+  uvs: number[],
+  input: ProductionRoadRailInput,
+): void {
+  appendProductionRoadQuad(vertices, uvs, [
+    input.xA, input.yA + input.heightM, input.zA,
+    input.xB, input.yB + input.heightM, input.zB,
+    input.xA, input.yA - input.bottomDropM, input.zA,
+    input.xB, input.yB - input.bottomDropM, input.zB,
+  ], [input.u0, 0, input.u1, 0, input.u0, 1, input.u1, 1]);
+}
+
+/**
+ * Append a double-sided hazard board and crossed post.
+ *
+ * Returns the normalized travel direction used to orient the board.
+ */
+export function appendProductionRoadSign(
+  vertices: number[],
+  uvs: number[],
+  input: ProductionRoadSignInput,
+): ProductionRoadSignResult {
+  const length = Math.hypot(input.forwardX, input.forwardZ) || 1;
+  const forwardX = input.forwardX / length;
+  const forwardZ = input.forwardZ / length;
+  const angle = Math.atan2(-forwardX, -forwardZ) + input.side * 0.21;
+  const rightX = Math.cos(angle);
+  const rightZ = -Math.sin(angle);
+  const scale = input.scale ?? 1;
+  const halfWidth = 0.82 * scale * (input.widthScale ?? 1);
+  const top = 0.86 + 1.14 * scale;
+  const bottom = 0.86;
+  const u0 = input.kind / input.atlasKinds;
+  const u1 = (input.kind + 1) / input.atlasKinds;
+  for (const [facing, v0, v1] of [[1, 0, 0.5], [-1, 0.5, 1]] as const) {
+    const offsetX = -rightZ * 0.03 * facing;
+    const offsetZ = rightX * 0.03 * facing;
+    appendProductionRoadQuad(vertices, uvs, [
+      input.centreX - rightX * halfWidth + offsetX,
+      input.centreY + top,
+      input.centreZ - rightZ * halfWidth + offsetZ,
+      input.centreX + rightX * halfWidth + offsetX,
+      input.centreY + top,
+      input.centreZ + rightZ * halfWidth + offsetZ,
+      input.centreX - rightX * halfWidth + offsetX,
+      input.centreY + bottom,
+      input.centreZ - rightZ * halfWidth + offsetZ,
+      input.centreX + rightX * halfWidth + offsetX,
+      input.centreY + bottom,
+      input.centreZ + rightZ * halfWidth + offsetZ,
+    ], [u0, v0, u1, v0, u0, v1, u1, v1]);
+  }
+  const postHalfWidth = 0.055;
+  for (const [axisX, axisZ] of [[rightX, rightZ], [-rightZ, rightX]] as const) {
+    appendProductionRoadQuad(vertices, uvs, [
+      input.centreX - axisX * postHalfWidth,
+      input.centreY + top,
+      input.centreZ - axisZ * postHalfWidth,
+      input.centreX + axisX * postHalfWidth,
+      input.centreY + top,
+      input.centreZ + axisZ * postHalfWidth,
+      input.centreX - axisX * postHalfWidth,
+      input.centreY - 0.3,
+      input.centreZ - axisZ * postHalfWidth,
+      input.centreX + axisX * postHalfWidth,
+      input.centreY - 0.3,
+      input.centreZ + axisZ * postHalfWidth,
+    ], [
+      u0 + 0.005, 0.97,
+      u0 + 0.02, 0.97,
+      u0 + 0.005, 0.99,
+      u0 + 0.02, 0.99,
+    ]);
+  }
+  return { forwardX, forwardZ };
 }

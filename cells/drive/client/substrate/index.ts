@@ -134,9 +134,16 @@ export {
   appendProductionRoadFace,
   appendProductionRoadPier,
   appendProductionRoadQuad,
+  appendProductionRoadRail,
+  appendProductionRoadSign,
+  appendProductionRoadStud,
   type ProductionRoadArchInput,
   type ProductionRoadFaceInput,
   type ProductionRoadPierInput,
+  type ProductionRoadRailInput,
+  type ProductionRoadSignInput,
+  type ProductionRoadSignResult,
+  type ProductionRoadStudInput,
 } from './road-structure';
 export {
   buildRapidDetailField,
