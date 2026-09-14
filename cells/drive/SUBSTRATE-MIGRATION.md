@@ -443,7 +443,7 @@ the failed comparison can be reproduced.
   bridge-family forms are too. Batter packets publish through the atomic tile
   road layer with no visible or retained source mesh; bridge assemblies publish
   their forms through the atomic tile structure layer. The batter reach/contact
-  solve is substrate-owned. Road, batter, structure and hydro-detail packet
+  solve is substrate-owned. Terrain, road, batter, structure and hydro-detail packet
   generation, completeness, redrape invalidation and source-revision binding
   now live in the renderer-free `ProductionRenderLayerStore`; rapid-rock
   collider witnesses version with their visual packet layer. Tile construction

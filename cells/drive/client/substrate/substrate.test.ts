@@ -163,6 +163,14 @@ export function runSubstrateSelfTest(): void {
   assert(renderLayer.bind('tile:ready', 4)
     && renderLayer.packetsFor('tile:ready', 4)[0]?.id === 'road',
   'a complete render layer must bind its authored packets to one source revision');
+  renderLayer.replace('tile:ready', {
+    expectedCount: 1,
+    packets: [{ id: 'terrain:next' }],
+  });
+  assert(renderLayer.packetsFor('tile:ready', 4).length === 0
+    && renderLayer.bind('tile:ready', 5)
+    && renderLayer.packetsFor('tile:ready', 5)[0]?.id === 'terrain:next',
+  'a replacement render layer must supersede both packets and source binding');
   const failedRenderLayer = new ProductionRenderLayerStore<{ id: string }>();
   failedRenderLayer.append('tile:failed', {
     expectedCount: 2,

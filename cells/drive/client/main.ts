@@ -7536,11 +7536,8 @@ function retireTerrainSource(old: THREE.Mesh): void {
   if (SUBSTRATE_RENDER_ON && (old.userData as { substrateOwned?: boolean }).substrateOwned) return;
   worldGroup.remove(old); old.geometry.dispose();
 }
-const productionTerrainRenderPackets = new Map<string, {
-  terrainRevision: number;
-  packets: readonly ProductionRenderMesh[];
-  authoredAtBuild: boolean;
-}>();
+const productionTerrainRenderLayers =
+  new ProductionRenderLayerStore<ProductionRenderMesh>();
 let productionTerrainPacketFailures = 0;
 let substrateRenderInvalidations = 0;
 let substrateAtomicRenderCommits = 0;
@@ -20381,20 +20378,13 @@ function authorProductionTerrainRenderPacket(
   mesh: THREE.Mesh,
 ): void {
   const packet = productionRenderMeshFromThree(mesh, false);
-  if (!packet) {
-    productionTerrainPacketFailures++;
-    productionTerrainRenderPackets.set(key, {
-      terrainRevision: terrainSourceRevision,
-      packets: [],
-      authoredAtBuild: true,
-    });
-    return;
-  }
-  productionTerrainRenderPackets.set(key, {
-    terrainRevision: terrainSourceRevision,
-    packets: [packet],
-    authoredAtBuild: true,
+  productionTerrainRenderLayers.replace(key, {
+    expectedCount: 1,
+    packets: packet ? [packet] : [],
+    directPacketCount: packet ? 1 : 0,
   });
+  const complete = productionTerrainRenderLayers.bind(key, terrainSourceRevision);
+  if (!packet || !complete) productionTerrainPacketFailures++;
 }
 function publishProductionRoadRenderPackets(
   key: string,
@@ -20439,19 +20429,21 @@ function productionTerrainRenderMeshesFor(
   key: string,
   terrainSourceRevision: number,
 ): readonly ProductionRenderMesh[] {
-  const cached = productionTerrainRenderPackets.get(key);
-  if (cached?.terrainRevision === terrainSourceRevision) return cached.packets;
+  const cached = productionTerrainRenderLayers.snapshot(key);
+  if (cached?.boundSourceRevision === terrainSourceRevision) {
+    return cached.complete ? cached.packets : [];
+  }
   // Terrain must publish its packet while the kernel result is applied. A
   // missing packet is a generation failure; do not silently resurrect the old
   // late capture path from the hidden THREE mesh.
   productionTerrainPacketFailures++;
-  const failed = {
-    terrainRevision: terrainSourceRevision,
+  productionTerrainRenderLayers.replace(key, {
+    expectedCount: 1,
     packets: [],
-    authoredAtBuild: false,
-  };
-  productionTerrainRenderPackets.set(key, failed);
-  return failed.packets;
+    directPacketCount: 0,
+  });
+  productionTerrainRenderLayers.bind(key, terrainSourceRevision);
+  return [];
 }
 function productionStructureRenderMeshesFor(
   key: string,
@@ -20968,9 +20960,9 @@ function substrateRenderSnapshot(): Record<string, number> {
   }
   let terrainPacketMeshes = 0;
   let terrainBuildAuthoredPacketMeshes = 0;
-  for (const source of productionTerrainRenderPackets.values()) {
+  for (const [, source] of productionTerrainRenderLayers.entries()) {
     terrainPacketMeshes += source.packets.length;
-    if (source.authoredAtBuild) {
+    if (source.complete) {
       terrainBuildAuthoredPacketMeshes += source.packets.length;
     }
   }
@@ -31185,7 +31177,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     holeSince.clear(); shownOnce.clear();
     substrateTerrainCommits.clear();
     substrateTerrainRenderMeshes.clear();
-    productionTerrainRenderPackets.clear();
+    productionTerrainRenderLayers.clear();
     productionTerrainPacketFailures = 0;
     substrateRenderInvalidations = 0;
     substrateAtomicRenderCommits = 0;

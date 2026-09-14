@@ -77,6 +77,14 @@ export class ProductionRenderLayerStore<T, W = never> {
     return this.snapshotOf(layer);
   }
 
+  replace(
+    key: string,
+    input: ProductionRenderLayerAppend<T, W>,
+  ): ProductionRenderLayerSnapshot<T, W> {
+    this.layers.delete(key);
+    return this.append(key, input);
+  }
+
   bind(key: string, sourceRevision: number): boolean {
     const layer = this.layers.get(key);
     if (!layer) return true;
