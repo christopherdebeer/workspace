@@ -1,4 +1,8 @@
 import {
+  appendProductionRoadArch,
+  appendProductionRoadFace,
+  appendProductionRoadPier,
+  appendProductionRoadQuad,
   buildCulvertBoreGeometry,
   buildCulvertHeadwallGeometry,
   buildProductionHydroFixture,
@@ -667,6 +671,49 @@ export function runSubstrateSelfTest(): void {
   assert(Math.abs(seamNormals[0] - seamNormals[3]) < 1e-9
     && Math.abs(seamNormals[1] - seamNormals[4]) < 1e-9,
   'substrate road geometry smooths coincident normals inside the production cone');
+  const detailVertices: number[] = [];
+  const detailUvs: number[] = [];
+  appendProductionRoadQuad(
+    detailVertices,
+    detailUvs,
+    [0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0, 1, 1, 1],
+  );
+  assert(detailVertices.length === 18 && detailUvs.length === 12,
+  'substrate road detail owns production quad triangulation');
+  const faceVertices: number[] = [];
+  const faceUvs: number[] = [];
+  appendProductionRoadFace(faceVertices, faceUvs, {
+    xA: 0, yA: 4, zA: 0,
+    xB: 10, yB: 5, zB: 0,
+    bottomA: 0, bottomB: 1,
+    u0: 0, u1: 2,
+  });
+  assert(faceVertices.length === 18
+    && faceUvs[5] === 1
+    && faceUvs[9] === 1,
+  'substrate road detail owns apron face depth UVs');
+  const pierVertices: number[] = [];
+  const pierUvs: number[] = [];
+  appendProductionRoadPier(pierVertices, pierUvs, {
+    centreX: 0,
+    centreZ: 0,
+    axisX: 1,
+    axisZ: 0,
+    topY: 8,
+    bottomY: 0,
+    halfWidthM: 2,
+  });
+  assert(pierVertices.length === 72 && pierUvs.length === 48,
+  'substrate road detail authors all four splayed pier faces');
+  const archVertices: number[] = [];
+  const archUvs: number[] = [];
+  assert(appendProductionRoadArch(archVertices, archUvs, {
+    start: { x: 0, z: 0, top: 8, bottom: 0 },
+    end: { x: 20, z: 0, top: 8, bottom: 0 },
+    halfWidthM: 2,
+  }) && archVertices.length === 288 && archUvs.length === 192,
+  'substrate road detail authors paired segmented arch spandrels');
   const kerbs = resolveProductionRoadKerbGeometry({
     stations: [[0, 0], [10, 0], [10, 10]],
     halfWidthM: 2,

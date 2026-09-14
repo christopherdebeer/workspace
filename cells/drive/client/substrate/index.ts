@@ -130,6 +130,15 @@ export {
   type CulvertStructureFamily,
 } from './culvert-detail';
 export {
+  appendProductionRoadArch,
+  appendProductionRoadFace,
+  appendProductionRoadPier,
+  appendProductionRoadQuad,
+  type ProductionRoadArchInput,
+  type ProductionRoadFaceInput,
+  type ProductionRoadPierInput,
+} from './road-structure';
+export {
   buildRapidDetailField,
   buildRapidDetailMesh,
   rapidDetailRandom,

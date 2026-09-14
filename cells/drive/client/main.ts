@@ -144,6 +144,12 @@ import {
   type ProductionRoadSurfaceBay,
 } from './substrate/road-surface';
 import {
+  appendProductionRoadArch,
+  appendProductionRoadFace,
+  appendProductionRoadPier,
+  appendProductionRoadQuad,
+} from './substrate/road-structure';
+import {
   buildProductionSubstrateTile,
   findProductionDriveWaterOverlaps,
   ProductionSubstrateStore,
@@ -18308,40 +18314,34 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     bA: number, bB: number, u0: number, u1: number, deck: boolean,
   ): void => {
     const V = deck ? apron.dckV : apron.cutV, U = deck ? apron.dckUV : apron.cutUV;
-    const d0 = (yA - bA) / 4, d1 = (yB - bB) / 4;
-    V.push(xA, yA, zA, xB, yB, zB, xA, bA, zA, xB, yB, zB, xB, bB, zB, xA, bA, zA);
-    U.push(u0, 0, u1, 0, u0, d0, u1, 0, u1, d1, u0, d0);
+    appendProductionRoadFace(V, U, {
+      xA, yA, zA, xB, yB, zB,
+      bottomA: bA,
+      bottomB: bB,
+      u0,
+      u1,
+    });
   };
   // Any quad, in world space, into a chosen accumulator. The soffit needs a
   // horizontal face and `face` only makes vertical ones.
   const quad = (V: number[], U: number[], p: number[], uv: number[]): void => {
-    V.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8],
-      p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
-    U.push(uv[0], uv[1], uv[2], uv[3], uv[4], uv[5], uv[2], uv[3], uv[6], uv[7], uv[4], uv[5]);
+    appendProductionRoadQuad(V, U, p, uv);
   };
   // A pier: four splayed faces from the soffit down into whatever is below,
   // which for the bridge in the screenshot is the bed of a lake. Wider across
   // the carriageway than along it, so it reads as holding the road up rather
   // than as a post someone left there.
   const pier = (cx: number, cz: number, ax: number, az: number, top: number, bot: number, halfW: number): void => {
-    const tl = Math.hypot(ax, az) || 1;
-    const ux = ax / tl, uz = az / tl;              // along the road
-    const vx = -uz, vz = ux;                       // across it
-    const corner = (s: number, k: number): [number, number] => [
-      cx + vx * halfW * s + ux * 1.05 * k, cz + vz * halfW * s + uz * 1.05 * k,
-    ];
     spanStats.piers++;
-    const SPLAY = 1.22;                            // the base is broader than the neck
-    const cs: Array<[number, number]> = [[1, 1], [1, -1], [-1, -1], [-1, 1]];
-    for (let i = 0; i < 4; i++) {
-      const [s0, k0] = cs[i], [s1, k1] = cs[(i + 1) % 4];
-      const [tx0, tz0] = corner(s0, k0), [tx1, tz1] = corner(s1, k1);
-      const [bx0, bz0] = corner(s0 * SPLAY, k0 * SPLAY), [bx1, bz1] = corner(s1 * SPLAY, k1 * SPLAY);
-      const h = (top - bot) / 4;
-      quad(apron.dckV, apron.dckUV,
-        [tx0, top, tz0, tx1, top, tz1, bx0, bot, bz0, bx1, bot, bz1],
-        [0, 0, 1, 0, 0, h, 1, h]);
-    }
+    appendProductionRoadPier(apron.dckV, apron.dckUV, {
+      centreX: cx,
+      centreZ: cz,
+      axisX: ax,
+      axisZ: az,
+      topY: top,
+      bottomY: bot,
+      halfWidthM: halfW,
+    });
   };
   // Spandrel walls between two consecutive piers, so a run of them reads as an
   // aqueduct rather than a row of posts: a pair of thin faces just inside the
@@ -18350,27 +18350,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // piers close the ends, so two hanging curtains are all the arch needs.
   const arch = (a: { x: number; z: number; top: number; bot: number },
     b: { x: number; z: number; top: number; bot: number }, halfW: number): void => {
-    const dx = b.x - a.x, dz = b.z - a.z;
-    const gap = Math.hypot(dx, dz);
-    if (gap < 8 || gap > 45) return;
-    spanStats.arches++;
-    const vx = -dz / gap, vz = dx / gap;
-    const crownDrop = clamp(gap * 0.18, 0.7, 2.0);
-    const springDrop = clamp(gap * 0.75, 3, 10);
-    const floor = Math.min(a.bot, b.bot);
-    const topAt = (t: number): number => a.top + (b.top - a.top) * t;
-    const lowAt = (t: number): number => Math.max(floor,
-      topAt(t) - crownDrop - (springDrop - crownDrop) * Math.abs(Math.cos(Math.PI * t)));
-    const SEG = 8;
-    for (const s of [1, -1]) {
-      for (let k = 0; k < SEG; k++) {
-        const t0 = k / SEG, t1 = (k + 1) / SEG;
-        const px0 = a.x + dx * t0 + vx * halfW * s, pz0 = a.z + dz * t0 + vz * halfW * s;
-        const px1 = a.x + dx * t1 + vx * halfW * s, pz1 = a.z + dz * t1 + vz * halfW * s;
-        quad(apron.dckV, apron.dckUV,
-          [px0, topAt(t0), pz0, px1, topAt(t1), pz1, px0, lowAt(t0), pz0, px1, lowAt(t1), pz1],
-          [gap * t0 / 4, 0, gap * t1 / 4, 0, gap * t0 / 4, springDrop / 4, gap * t1 / 4, springDrop / 4]);
-      }
+    if (appendProductionRoadArch(apron.dckV, apron.dckUV, {
+      start: { x: a.x, z: a.z, top: a.top, bottom: a.bot },
+      end: { x: b.x, z: b.z, top: b.top, bottom: b.bot },
+      halfWidthM: halfW,
+    })) {
+      spanStats.arches++;
     }
   };
   // The parapet, standing on the deck's own overhang — and SOLID. A barrier you
