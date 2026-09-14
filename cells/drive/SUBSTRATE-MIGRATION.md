@@ -155,7 +155,10 @@ callbacks plus queue timing.
 `client/substrate/bridge-forms.ts` owns bridge-family classification, station
 planning and the complete tower, cable, arch, truss and lower-deck arrays.
 The live assembly context only groups streamed fragments, resolves mapped or
-landmark stations, samples foundation ground and publishes the resulting mesh.
+landmark stations and samples foundation ground. Each assembly now publishes
+one replaceable packet through its stable owner tile's versioned structure
+layer; later fragments replace that packet rather than appending intermediate
+meshes, and no bridge-form source mesh enters the scene in render mode.
 The remaining crossing migration is to carry those solved road authoring
 inputs through tile construction and emit them from the substrate tile itself.
 
@@ -423,7 +426,8 @@ the failed comparison can be reproduced.
   points and road drape registry after rollback observation. Common apron
   faces, piers, arch spandrels, parapets, studs and hazard signs are already
   renderer-free substrate builders; final batter strip/cap packets and all
-  bridge-family forms are too, and the batter reach/contact solve is
+  bridge-family forms are too. Bridge assemblies publish those forms through
+  the atomic tile structure layer, and the batter reach/contact solve is
   substrate-owned.
 - Contact/evidence is now the production default with `?substrate=legacy` as
   the observable rollback. Representative water drives, persistent evidence

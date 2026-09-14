@@ -8250,10 +8250,11 @@ function noteBridgeSpan(pts: Array<[number, number]>, width: number): void {
  * fragment known each time one arrives. A rebuild is a few hundred quads
  * and happens as many times as the bridge has fragments, which is a handful.
  *
- * The forms are one mesh per bridge in the world group, like a landmark,
- * and not part of the road batch: a road batch belongs to a tile and dies
- * with it, and the north pylon must not vanish when the tile that carried
- * the south carriageway is evicted. They die at a hop, with everything else.
+ * The forms are one replaceable structure packet per bridge, owned by the
+ * first terrain tile that delivered a fragment. The assembly itself remains
+ * global: rebuilding from a later fragment replaces that packet in place, so
+ * no intermediate half-bridge is appended and a neighbouring tile's arrival
+ * cannot duplicate towers. Assemblies and packet ownership die at a hop.
  *
  * `substrate/bridge-forms.ts` does the geometry and is pure; this is the
  * world's side of it — what a fragment is, where the ground is, and what a
@@ -8262,6 +8263,9 @@ function noteBridgeSpan(pts: Array<[number, number]>, width: number): void {
 interface BridgeAssembly {
   key: string;
   name: string | null;
+  /** First terrain tile that delivered a fragment. Bridge forms are rebuilt
+   *  globally, but one stable tile must publish the replaceable packet. */
+  owner: string | null;
   ways: Map<string, BridgeWay>;
   tags: Record<string, string>;
   family: string;
@@ -8325,10 +8329,11 @@ function noteBridgeForm(wayKey: string | undefined, tags: Record<string, string>
   }
   let a = bridgeAssemblies.get(key);
   if (!a) {
-    a = { key, name, ways: new Map(), tags: tags ?? {}, family, families: new Map(), spec: null, mesh: null,
+    a = { key, name, owner: ribBatchTerrainOwner, ways: new Map(), tags: tags ?? {}, family, families: new Map(), spec: null, mesh: null,
       quads: 0, towers: 0, stays: 0, hangers: 0, ribs: 0, panels: 0, builds: 0 };
     bridgeAssemblies.set(key, a);
   }
+  if (!a.owner && ribBatchTerrainOwner) a.owner = ribBatchTerrainOwner;
   a.ways.set(wayKey ?? `${key}#${a.ways.size}`, { pts: dense.map((p) => [p[0], p[1]] as [number, number]), y: deckY.slice(), width });
   // The recipe rolls a family PER WAY, so two fragments of one bridge can
   // disagree; the assembly takes the majority, which is stable once the
@@ -8365,12 +8370,35 @@ function rebuildBridgeForms(a: BridgeAssembly): void {
   const built = buildBridgeForms(ways, spec, (x, z) => hasHeight(x, z) ? sampleHeight(x, z) : -Infinity);
   a.quads = built.quads; a.towers = built.towers; a.stays = built.stays; a.hangers = built.hangers;
   a.ribs = built.ribs; a.panels = built.panels; a.builds++;
-  if (!built.quads) return;
+  if (!built.quads) {
+    if (a.owner) setProductionBridgeStructurePacket(a.owner, a.key, undefined);
+    return;
+  }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(built.pos), 3));
   g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(built.uv), 2));
   g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(built.col), 3));
   g.computeVertexNormals();
+  if (SUBSTRATE_RENDER_ON && a.owner) {
+    const packet = productionRenderPacketFromGeometry({
+      name: `bridge-form:${a.key}`,
+      geometry: g,
+      material: [bridgeMatFor()],
+      matrix: IDENTITY_RENDER_MATRIX,
+      renderOrder: 0,
+      castShadow: true,
+      receiveShadow: true,
+      frustumCulled: true,
+      userData: {
+        bridgeForm: true,
+        substrateDirectAuthored: true,
+      },
+    }, false);
+    if (!packet) productionStructurePacketFailures++;
+    setProductionBridgeStructurePacket(a.owner, a.key, packet);
+    g.dispose();
+    return;
+  }
   const mesh = new THREE.Mesh(g, bridgeMatFor());
   shadowy(mesh, true, true);
   mesh.visible = !shedWorld;
@@ -17023,6 +17051,12 @@ interface ProductionStructureRenderCandidate {
 }
 const productionStructureRenderCandidates =
   new Map<string, ProductionStructureRenderCandidate>();
+/** Globally assembled bridge forms are replaceable contributions to one
+ *  stable owner tile. A null entry means authoring failed and deliberately
+ *  keeps that tile inadmissible instead of resurrecting a direct scene mesh. */
+const productionBridgeStructurePackets =
+  new Map<string, Map<string, ProductionRenderMesh | null>>();
+const productionStructureSourceRevisions = new Map<string, number>();
 const substrateStructureCommits = new Map<string, number>();
 const substrateStructureRenderMeshes = new Map<string, SubstrateRenderBinding>();
 let productionStructurePacketFailures = 0;
@@ -17235,8 +17269,40 @@ function registerProductionStructureRenderBatch(
     mesh.geometry.dispose();
     candidate.meshes.delete(mesh);
   }
+  advanceProductionStructureSource(owner);
+}
+function advanceProductionStructureSource(owner: string): void {
+  productionStructureSourceRevisions.set(
+    owner,
+    (productionStructureSourceRevisions.get(owner) ?? 0) + 1,
+  );
   substrateStructureCommits.delete(owner);
   invalidateProductionSubstrateTile(owner);
+}
+/**
+ * Replace one bridge assembly's contribution without appending every
+ * intermediate rebuild. `undefined` removes an intentionally empty form
+ * (plain girders); `null` records a packet-authoring failure and makes the
+ * owner's next atomic tile commit refuse the incomplete structure layer.
+ */
+function setProductionBridgeStructurePacket(
+  owner: string,
+  assemblyKey: string,
+  packet: ProductionRenderMesh | null | undefined,
+): void {
+  let packets = productionBridgeStructurePackets.get(owner);
+  if (!packets) {
+    if (packet === undefined) return;
+    packets = new Map();
+    productionBridgeStructurePackets.set(owner, packets);
+  }
+  if (packet === undefined) {
+    if (!packets.delete(assemblyKey)) return;
+    if (!packets.size) productionBridgeStructurePackets.delete(owner);
+  } else {
+    packets.set(assemblyKey, packet);
+  }
+  advanceProductionStructureSource(owner);
 }
 function addHydroDetailRenderMesh(mesh: THREE.Mesh): void {
   mesh.userData.productionHydroDetailSource = true;
@@ -20456,13 +20522,25 @@ function productionStructureRenderMeshesFor(
   key: string,
 ): readonly ProductionRenderMesh[] {
   const candidate = productionStructureRenderCandidates.get(key);
-  if (!candidate) return [];
-  if (candidate.packetGeneration === candidate.generation) return candidate.packets;
-  productionStructurePacketFailures++;
-  candidate.packetGeneration = candidate.generation;
-  candidate.packets = [];
-  candidate.authoredAtBuild = false;
-  return candidate.packets;
+  let packets: readonly ProductionRenderMesh[] = [];
+  if (candidate) {
+    if (candidate.packetGeneration === candidate.generation) {
+      packets = candidate.packets;
+    } else {
+      productionStructurePacketFailures++;
+      candidate.packetGeneration = candidate.generation;
+      candidate.packets = [];
+      candidate.authoredAtBuild = false;
+    }
+  }
+  const bridgePackets = productionBridgeStructurePackets.get(key);
+  if (!bridgePackets) return packets;
+  return [
+    ...packets,
+    ...[...bridgePackets.values()].filter(
+      (packet): packet is ProductionRenderMesh => packet !== null,
+    ),
+  ];
 }
 function productionHydroDetailRenderMeshesFor(
   key: string,
@@ -20754,9 +20832,10 @@ function commitDriveRenderFromSubstrate(tile: ProductionSubstrateTile): boolean 
 function canCommitStructureRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
   if (!SUBSTRATE_RENDER_ON || productionSubstrate.tile(tile.key) !== tile) return false;
   const candidate = productionStructureRenderCandidates.get(tile.key);
-  if (!candidate) return tile.structureRenderMeshes.length === 0;
-  return candidate.generation === tile.sourceRevisions.structures
-    && tile.structureRenderMeshes.length === candidate.meshCount
+  const bridgeCandidates = productionBridgeStructurePackets.get(tile.key)?.size ?? 0;
+  return (productionStructureSourceRevisions.get(tile.key) ?? 0)
+      === tile.sourceRevisions.structures
+    && tile.structureRenderMeshes.length === (candidate?.meshCount ?? 0) + bridgeCandidates
     && tile.structureRenderMeshes.every((packet) =>
       !!packet.attributes.position
       && packet.materialKeys.length > 0
@@ -21068,6 +21147,7 @@ function substrateRenderSnapshot(): Record<string, number> {
   let legacyStructureCandidateMeshes = 0;
   let visibleStructures = 0;
   let uncommittedVisibleStructures = 0;
+  const structureCandidateTileKeys = new Set(productionStructureRenderCandidates.keys());
   for (const candidate of productionStructureRenderCandidates.values()) {
     structureCandidates += candidate.meshCount;
     structurePacketMeshes += candidate.packets.length;
@@ -21077,6 +21157,20 @@ function substrateRenderSnapshot(): Record<string, number> {
       structureBuildAuthoredPacketMeshes += candidate.packets.length;
     }
   }
+  let bridgeStructureCandidates = 0;
+  let bridgeStructurePacketMeshes = 0;
+  for (const [key, packets] of productionBridgeStructurePackets) {
+    structureCandidateTileKeys.add(key);
+    bridgeStructureCandidates += packets.size;
+    for (const packet of packets.values()) {
+      if (!packet) continue;
+      bridgeStructurePacketMeshes++;
+      structurePacketMeshes++;
+      structureDirectAuthoredPacketMeshes++;
+      structureBuildAuthoredPacketMeshes++;
+    }
+  }
+  structureCandidates += bridgeStructureCandidates;
   worldGroup.traverse((object) => {
     if ((object.userData as { productionStructureSource?: boolean }).productionStructureSource) {
       legacyStructureCandidateMeshes++;
@@ -21165,8 +21259,10 @@ function substrateRenderSnapshot(): Record<string, number> {
     roadCommittedTiles: substrateRoadCommits.size,
     visibleRoads,
     uncommittedVisibleRoads,
-    structureCandidateTiles: productionStructureRenderCandidates.size,
+    structureCandidateTiles: structureCandidateTileKeys.size,
     structureCandidates,
+    bridgeStructureCandidates,
+    bridgeStructurePacketMeshes,
     structurePacketMeshes,
     structureDirectAuthoredPacketMeshes,
     structureBuildAuthoredPacketMeshes,
@@ -21224,7 +21320,7 @@ function buildProductionSubstrateShadow(
     sourceRevisions: {
       terrain: terrainSourceRevision,
       drive: drive.revision,
-      structures: productionStructureRenderCandidates.get(key)?.generation ?? 0,
+      structures: productionStructureSourceRevisions.get(key) ?? 0,
       hydroDetails: productionHydroDetailRenderCandidates.get(key)?.generation ?? 0,
       hydro: hydroRev.get(key) ?? 0,
       crossings: crossingRevision,
@@ -31384,6 +31480,8 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
       }
     }
     productionStructureRenderCandidates.clear();
+    productionBridgeStructurePackets.clear();
+    productionStructureSourceRevisions.clear();
     structureBatchOwner = null;
     structureBatchMeshes = null;
     structureBatchPackets = null;
@@ -36588,6 +36686,7 @@ function heightsOf(): number[] {
 (window as unknown as { __bridges?: object }).__bridges = (): object =>
   [...bridgeAssemblies.values()].map((a) => ({
     key: a.key, name: a.name, fragments: a.ways.size, builds: a.builds,
+    owner: a.owner,
     form: a.spec?.form ?? null, tower: a.spec?.tower ?? null, cables: a.spec?.cables ?? null,
     stations: a.spec?.stations.length ?? 0,
     quads: a.quads, towers: a.towers, stays: a.stays, hangers: a.hangers, ribs: a.ribs, panels: a.panels,

@@ -77,7 +77,9 @@ ok('crossing earthwork invalidation converges',
   { now: state.now, crossingRebuilds, implementedCrossings, terrain: state.terrain });
 ok('the substrate captures a versioned structure candidate',
   state.substrate?.render?.structureCandidateTiles > 0
-    && state.substrate?.render?.structureCandidates >= 3,
+    && state.substrate?.render?.structureCandidates >= 3
+    && state.substrate?.render?.bridgeStructureCandidates === 1
+    && state.substrate?.render?.bridgeStructurePacketMeshes === 1,
   state.substrate?.render);
 ok('tile-owned drive packets retain indexed transformed tunnel geometry',
   state.substrate?.render?.roadPacketVertices > 0
