@@ -446,6 +446,32 @@ export function runSubstrateSelfTest(): void {
   assert(hintedWaterReads === 0,
     'a winning landmark profile must not sample the live water field');
 
+  const unpinnedChord = resolveProductionBridgeProfile({
+    stations: [[0, 0], [10, 0], [20, 0]],
+    profile: [0, 9, 0],
+    runs: [[0, 2]],
+    layer: 0,
+    grade: .1,
+    waterAt: () => null,
+    deckBelow: () => null,
+  });
+  assert(unpinnedChord.chordProfile.every((height) => height === 0),
+    'a bridge constructs its portal-to-portal chord inside the authority');
+  const pinnedChord = resolveProductionBridgeProfile({
+    stations: [[0, 0], [10, 0], [20, 0]],
+    profile: [0, 9, 0],
+    runs: [[0, 2]],
+    heldStations: new Uint8Array([0, 1, 0]),
+    layer: 0,
+    grade: .1,
+    waterAt: () => null,
+    deckBelow: () => null,
+  });
+  assert(pinnedChord.chordProfile[0] === 0
+    && pinnedChord.chordProfile[1] === 9
+    && pinnedChord.chordProfile[2] === 0,
+  'a held junction splits the bridge chord and keeps its solved deck');
+
   const waterProfile = resolveProductionBridgeProfile({
     stations: [[0, 0], [100, 0], [200, 0]],
     profile: [0, 0, 0],

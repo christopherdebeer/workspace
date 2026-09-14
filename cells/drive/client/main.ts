@@ -17962,6 +17962,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // consecutive pins instead, so a ramp merging onto a viaduct still meets
     // it where the planner said.
     for (const [a, b] of runs) {
+      if (mode === 'bridge') continue;
       const knots = [a];
       for (let i = a + 1; i < b; i++) if (held[i]) knots.push(i);
       knots.push(b);
@@ -17976,7 +17977,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         }
       }
     }
-    stage('2d-chord', prof);
+    if (mode !== 'bridge') stage('2d-chord', prof);
     // ── A FLYOVER CLEARS THE ROAD IT CROSSES ──
     //
     // The chord above is portal to portal, and the portals anchor to the
@@ -18032,6 +18033,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         stations: dense,
         profile: prof,
         runs,
+        heldStations: held,
         roadTags: wayTags,
         layer,
         grade: gRamp,
@@ -18040,8 +18042,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         deckBelow: (x, z) =>
           solver.deckBelow(x, z, layer, width / 2 + 1.5),
       });
-      const portalLift0 = lifted.profile[0] - prof[0];
-      const portalLift1 = lifted.profile[n - 1] - prof[n - 1];
+      stage('2d-chord', lifted.chordProfile);
+      const portalLift0 = lifted.profile[0] - lifted.chordProfile[0];
+      const portalLift1 = lifted.profile[n - 1] - lifted.chordProfile[n - 1];
       prof = lifted.profile;
       const need = lifted.maximumLiftM;
       const liftSrc = lifted.source ?? '';

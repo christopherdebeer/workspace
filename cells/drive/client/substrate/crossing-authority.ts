@@ -122,10 +122,12 @@ export type ProductionBridgeLiftSource = 'hint' | 'water' | 'deck';
 
 export interface ProductionBridgeProfileInput {
   stations: readonly (readonly [x: number, z: number])[];
-  /** Portal-to-portal chord/profile before crossing clearance is applied. */
+  /** Aligned road profile before the bridge chord is constructed. */
   profile: readonly number[];
   /** Inclusive bridge runs in station indices. */
   runs: readonly (readonly [start: number, end: number])[];
+  /** Junction stations whose solved height the chord must preserve. */
+  heldStations?: ArrayLike<number>;
   roadTags?: Readonly<Record<string, string>>;
   layer: number;
   /** Maximum descending grade away from a held clearance station. */
@@ -142,6 +144,7 @@ export interface ProductionBridgeProfileInput {
 }
 
 export interface ProductionBridgeProfileResult {
+  chordProfile: number[];
   profile: number[];
   maximumLiftM: number;
   source?: ProductionBridgeLiftSource;
@@ -167,7 +170,43 @@ export function resolveProductionBridgeProfile(
   if (input.stations.length !== input.profile.length) {
     throw new Error('bridge stations and profile must have matching lengths');
   }
-  const profile = [...input.profile];
+  if (input.heldStations
+    && input.heldStations.length !== input.profile.length) {
+    throw new Error('bridge held stations and profile must have matching lengths');
+  }
+  const runs = input.runs.map((run) => {
+    const start = run[0];
+    const end = run[1];
+    if (!Number.isInteger(start)
+      || !Number.isInteger(end)
+      || start < 0
+      || end >= input.profile.length
+      || end <= start) {
+      throw new Error('bridge run bounds are invalid');
+    }
+    return [start, end] as const;
+  });
+  // A chord breaks at every held junction. The pin is another road's solved
+  // deck, so a ramp merging onto a viaduct must meet it exactly instead of
+  // letting one portal-to-portal line overwrite it.
+  const chordProfile = [...input.profile];
+  for (const [start, end] of runs) {
+    const knots = [start];
+    for (let station = start + 1; station < end; station++) {
+      if (input.heldStations?.[station]) knots.push(station);
+    }
+    knots.push(end);
+    for (let knot = 0; knot + 1 < knots.length; knot++) {
+      const a = knots[knot];
+      const b = knots[knot + 1];
+      for (let station = a; station <= b; station++) {
+        chordProfile[station] = input.profile[a]
+          + ((input.profile[b] - input.profile[a])
+            * (station - a)) / (b - a || 1);
+      }
+    }
+  }
+  const profile = [...chordProfile];
   const bridgeClearanceM = input.bridgeClearanceM
     ?? PRODUCTION_BRIDGE_CLEARANCE_M;
   const portalReachM = input.portalReachM
@@ -182,16 +221,7 @@ export function resolveProductionBridgeProfile(
     else if (!source) source = next;
   };
 
-  for (const run of input.runs) {
-    const start = run[0];
-    const end = run[1];
-    if (!Number.isInteger(start)
-      || !Number.isInteger(end)
-      || start < 0
-      || end >= profile.length
-      || end <= start) {
-      throw new Error('bridge run bounds are invalid');
-    }
+  for (const [start, end] of runs) {
     const [portalAX, portalAZ] = input.stations[start];
     const [portalBX, portalBZ] = input.stations[end];
     const nearPortal = (x: number, z: number): boolean =>
@@ -325,12 +355,13 @@ export function resolveProductionBridgeProfile(
     for (let station = start; station <= end; station++) {
       maximumLiftM = Math.max(
         maximumLiftM,
-        profile[station] - input.profile[station],
+        profile[station] - chordProfile[station],
       );
     }
   }
 
   return {
+    chordProfile,
     profile,
     maximumLiftM,
     source,

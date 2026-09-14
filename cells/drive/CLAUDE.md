@@ -3144,17 +3144,17 @@ and the authority still makes the decision.
 **AND THE AUTHORITY DECIDES IT.** The three station rules live in
 `substrate/crossing-authority.ts` as `resolveProductionDeck`, and the complete
 run solve now lives beside them as `resolveProductionBridgeProfile`: it owns
-the lazy water reads, contiguous wet-span measurement, between-station
-lower-deck scan and two-pass ruling-grade cone. Both are pure and tested in
-`substrate.test.ts`; the ribbon supplies streamed water/deck callbacks and
-consumes the returned profile without reinterpreting the evidence. Who decided
-each way's deck is kept by way key, handed to the registry when it records the
-crossing, carried on the record as `deckAuthority` with `deck by
-landmark-hint` in its evidence, and counted in the snapshot as `deckByHint`
-and `deckByWater`. What the substrate still owes after this is the full bench
-solve and GEOMETRY — the registry still learns of a crossing after the road is
-built, from the built road, even though its clearance profile is now decided
-before geometry.
+the portal chord around held junctions, lazy water reads, contiguous wet-span
+measurement, between-station lower-deck scan and two-pass ruling-grade cone.
+Both are pure and tested in `substrate.test.ts`; the ribbon supplies the aligned
+bench plus streamed water/deck callbacks and consumes the returned chord and
+profile without reinterpreting the evidence. Who decided each way's deck is
+kept by way key, handed to the registry when it records the crossing, carried
+on the record as `deckAuthority` with `deck by landmark-hint` in its evidence,
+and counted in the snapshot as `deckByHint` and `deckByWater`. What the
+substrate still owes after this is the aligned bench solve and GEOMETRY — the
+registry still learns of a crossing after the road is built, from the built
+road, even though its crossing profile is now decided before geometry.
 
 ### The empty tile bank: a wrong diagnosis, and what it taught
 
