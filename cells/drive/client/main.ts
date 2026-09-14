@@ -38,7 +38,8 @@ import {
 } from './shoreline';
 import { URL_OWNED, qs, qsHas, qsNum, qsOn, switchRows, urlWithSwitches } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
-import { CHART_LAYERS, COVER_INK, SUBSTRATE_LEGEND, chartLayer, inkFor, inkHex, legendFor, type ChartLayerId } from './chart-layers';
+import { CHART_LAYERS, COVER_INK, SUBSTRATE_LEGEND, SURFACE_LEGEND, WATER_LEGEND,
+  chartLayer, inkFor, inkHex, legendFor, type ChartLayerId } from './chart-layers';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
   seedAt, snowLoad, stoneWalls, unitN, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
@@ -80,7 +81,8 @@ import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight, uFacSun } from './facade';
 import { roofFx } from './roof-fx';
 import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, groundInkPixels, type GroundViewId } from './ground-view';
-import { SUB_GLSL, SUB_DOM_M } from './substrate-field';
+import { SUB_GLSL, SUB_DOM_M, subDomainAt, subEvidence, subGrassFactor, subMatOf,
+  subTintOf, subWeightsOf } from './substrate-field';
 import { gramDecode } from './facade-grammar';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { startLab } from './labs';
@@ -2142,6 +2144,17 @@ function readDialRecord(): Record<string, number> {
  *  terrain colour and the sward's mineral and reed banks. `shore=0` is the
  *  frame colour and hillside grass to the waterline, as it was. */
 const SHORE_ON = qsOn('shore', true);
+/** The sward reads the substrate's classification — the brief's own "sward and
+ *  terrain from the same field". Off restores the sward that thins for cover,
+ *  altitude and the bank and knows nothing about outcrop, which is the exact
+ *  A/B for what one shared field is worth. */
+const SUB_SWARD = qsOn('swardsub', true);
+/** How far a blade's colour goes toward the material it stands in. Not all the
+ *  way: the sward's own colour rules — the bank mineral, the reeds, the
+ *  altitude lift — are about the PLANT, and this is about the ground under it.
+ *  Two thirds reads as grass growing out of that ground rather than as grass
+ *  painted the colour of it. */
+const SUB_SWARD_TINT = 0.65;
 /** `airblur=1` puts the aerial perspective's DISTANCE BLUR back — the term that
  *  mixed the far field toward `softTex` as well as toward the haze colour. Off
  *  by default: see `uAirBlur`. The exact A/B for the far-field sharpness. */
@@ -11555,6 +11568,37 @@ function swardRows(from: number, to: number): void {
           pr += (mr - pr) * mk; pg += (mg - pg) * mk; pb += (mb - pb) * mk;
           pr += (BANK_REED[0] - pr) * rk; pg += (BANK_REED[1] - pg) * rk; pb += (BANK_REED[2] - pb) * rk;
         }
+      }
+      // ── AND THE SWARD READS THE SUBSTRATE'S OWN FIELD ──
+      //
+      // The brief: *if the shader says this location is 70% grassy and 30%
+      // exposed soil, the sward seeder should read essentially the same field.
+      // Then sward doesn't appear as arbitrary tufts pasted onto blank ground.*
+      // Every input is already in hand here — the true cover class, the slope,
+      // and the palette colour this texel just computed — so the classification
+      // is the same arithmetic on the same evidence, over the same 18 m domain.
+      // What makes it ONE field rather than two agreeing ones is that the
+      // constants and the material transforms live in substrate-field.ts and
+      // the fragment's source interpolates them.
+      //
+      // THE GRASS THINS ON THE MINERAL SHARE, NOT ON THE TURF WEIGHT. Turf is
+      // "how sward-like is this ground", which is most of what GRASS_M2
+      // already says from the cover class; multiplying the two would thin every
+      // meadow in the world by a third for nothing. The outcrop and the scree
+      // are what the cover class cannot see and the domain draws.
+      if (SUB_SWARD && density > 0) {
+        const ev = subEvidence(pr, pg, pb);
+        const w = subWeightsOf(subMatOf(cv, slope), ev.veg, ev.warm, subDomainAt(wx, wz));
+        density *= subGrassFactor(w);
+        // …and a blade fades toward the material it stands on rather than the
+        // tile's mean, so a tuft on an outcrop is the outcrop's colour. Held
+        // back to a share of the way: the sward's own colour rules (the bank
+        // mineral, the reeds, the altitude) are about the PLANT and this is
+        // about the ground it is standing in.
+        const [tr, tg, tb] = subTintOf(pr, pg, pb, w);
+        pr += (tr - pr) * SUB_SWARD_TINT;
+        pg += (tg - pg) * SUB_SWARD_TINT;
+        pb += (tb - pb) * SUB_SWARD_TINT;
       }
       swardScratchF[k + 1] = density;
       swardScratchC[k] = Math.round(clamp(pr, 0, 1) * 255);
@@ -28197,7 +28241,7 @@ function saveChartLayers(): void {
  *  stored, so the one-at-a-time rule has a single place it can be true. */
 function themeLayer(): ChartLayerId | null {
   for (const l of CHART_LAYERS) {
-    if (l.kind === 'thematic' && chartOn[l.id] && !VIEW_FOR_LAYER[l.id]) return l.id;
+    if (l.kind === 'thematic' && chartOn[l.id] && !VIEW_FOR_LAYER[l.id] && !DBG_RASTER[l.id]) return l.id;
   }
   return null;
 }
@@ -28206,6 +28250,17 @@ function viewLayer(): ChartLayerId | null {
   for (const l of CHART_LAYERS) if (chartOn[l.id] && VIEW_FOR_LAYER[l.id]) return l.id;
   return null;
 }
+/** Turn the debug raster on for one classifier, or off. `wetDbgAt` is reset so
+ *  the first repaint is immediate rather than up to a second away — a chip
+ *  that appears to do nothing for a second reads as a chip that does nothing. */
+function setDebugRaster(v: 'water' | 'surface' | null): void {
+  dbgView = v;
+  wetDbgOn = v !== null;
+  if (v === null) wetDbgU.uDbgOn.value = 0; else wetDbgAt = -1e9;
+}
+/** Which chips paint the raster rather than the channel. */
+const DBG_RASTER: Partial<Record<ChartLayerId, 'water' | 'surface'>> =
+  { water: 'water', surface: 'surface' };
 function setChartLayer(id: ChartLayerId, on: boolean): void {
   const row = chartLayer(id);
   if (!row) return;
@@ -28220,6 +28275,12 @@ function setChartLayer(id: ChartLayerId, on: boolean): void {
     const v = viewLayer();
     setGroundView(v ? (VIEW_FOR_LAYER[v] as GroundViewId) : baseGroundView);
     gvClassCounts.clear(); gvCountAt = 0;
+    // …and the raster views the same way. They are in the same radio group, so
+    // exactly one of the two mechanisms can be asking at a time and the other
+    // has to be told to stand down — a raster left painted under a class view
+    // would be two answers over one piece of ground.
+    const rl = CHART_LAYERS.find((l) => chartOn[l.id] && DBG_RASTER[l.id]);
+    setDebugRaster(rl ? (DBG_RASTER[rl.id] as 'water' | 'surface') : null);
   }
 }
 /**
@@ -28561,6 +28622,10 @@ function themeLegend(): Array<{ cls: number; name: string; hex: string; share: n
     return SUBSTRATE_LEGEND.map((r, i) => ({ cls: -1 - i, name: r.name, hex: r.hex, share: 0 }));
   }
   if (groundView === 'cover' || groundView === 'eco') return legendFor(groundView, gvClassCounts);
+  if (dbgView) {
+    const rows = dbgView === 'surface' ? SURFACE_LEGEND : WATER_LEGEND;
+    return rows.map((r, i) => ({ cls: -1 - i, name: r.name, hex: r.hex, share: 0 }));
+  }
   const layer = themeLayer();
   if (!layer) return [];
   const all = new Map<number, number>();
@@ -34160,6 +34225,63 @@ function truckSpec(): Record<string, number> {
 /** THE SWARD, AS NUMBERS: slots offered, field cost, reach. What the dither
  *  actually keeps is a GPU-side decision and cannot be counted from here — the
  *  honest measure of that is the screen. */
+/**
+ * ── IS THE SWARD READING THE SUBSTRATE'S FIELD, OR A FIELD THAT LOOKS LIKE IT ──
+ *
+ * The claim is not "the grass is patchy" — it was patchy before, from the cover
+ * class and the altitude. The claim is that it is patchy ON THE SAME PATCHES
+ * the shader draws, and the number that says so is the CORRELATION between the
+ * sward's own density and the substrate's grass factor over the field's texels.
+ *
+ * POSITIVE: a high grass factor means the substrate allows grass, so density
+ * should rise with it. (The first version of this comment said "strongly
+ * negative", which is the sign of the thing it describes read backwards, and
+ * the measurement caught it before the claim shipped.)
+ *
+ * Near +1 would mean the density is nothing BUT the substrate, which it should
+ * not be: cover, altitude, the bank and the waterline all still rule. And the
+ * control is not zero either — the two fields already shared one input, the
+ * cover class, which GRASS_M2 and TD_MAT both key off. So what the shared
+ * DOMAIN is worth is the gap between those two numbers.
+ *
+ * Walked over the live field rather than recomputed from scratch, so it reports
+ * what the BLADES were seeded from — the same rule as reading aTd off the mesh
+ * rather than re-deriving it from the raster. One consequence to know when
+ * reading it: the colour it takes the vegetation and warmth evidence from is
+ * the sward's own STORED colour, which the tint has already moved, so the
+ * factor it recomputes drifts about a per cent from the one the seeder used.
+ * Under what the correlation resolves, and cheaper than storing a second
+ * colour for a probe.
+ */
+(window as unknown as { __swardsub?: object }).__swardsub = (): object => {
+  let n = 0, sd = 0, sg = 0, sdd = 0, sgg = 0, sdg = 0, thin = 0;
+  for (let j = 0; j < SWARD_F; j++) for (let i = 0; i < SWARD_F; i++) {
+    const k = (j * SWARD_F + i) * 4;
+    const dens = swardFieldData[k + 1];
+    if (!(dens > 0)) continue;             // submerged and bare are not samples
+    const wx = swardPendX + (i + 0.5) * SWARD_FM, wz = swardPendZ + (j + 0.5) * SWARD_FM;
+    const h = swardFieldData[k];
+    const slope = Math.abs(groundAt(wx + SWARD_FM, wz) - h) / SWARD_FM;
+    const ev = subEvidence(swardColData[k] / 255, swardColData[k + 1] / 255, swardColData[k + 2] / 255);
+    const w = subWeightsOf(subMatOf(sampleCover(wx, wz), slope), ev.veg, ev.warm, subDomainAt(wx, wz));
+    const g = subGrassFactor(w);
+    n++; sd += dens; sg += g; sdd += dens * dens; sgg += g * g; sdg += dens * g;
+    if (g < 0.6) thin++;
+  }
+  if (n < 32) return { n, note: 'no sward field yet' };
+  const cov = sdg / n - (sd / n) * (sg / n);
+  const vd = Math.max(1e-9, sdd / n - (sd / n) ** 2), vg = Math.max(1e-9, sgg / n - (sg / n) ** 2);
+  return {
+    on: SUB_SWARD, n,
+    meanDensity: +(sd / n).toFixed(4), meanGrassFactor: +(sg / n).toFixed(3),
+    // The headline. With the sward blind to the substrate this is the
+    // correlation between two unrelated fields and sits near zero.
+    correlation: +(cov / Math.sqrt(vd * vg)).toFixed(3),
+    // How much of the field the substrate is calling mineral enough to thin.
+    thinnedShare: +(thin / n).toFixed(3),
+    tint: SUB_SWARD_TINT,
+  };
+};
 (window as unknown as { __sward?: object }).__sward = (gpu?: boolean, rebuild?: boolean): object => {
   // The field rebuilds on 48m of travel or on the world growing, so a test that
   // teleports and asks immediately gets the field from where it WAS. Forcing it
@@ -34403,6 +34525,25 @@ function truckSpec(): Record<string, number> {
 /** One letter per point: what says water here, and whether the eye would
  *  see it. The overlay and `__wetmap` share this so they cannot disagree. */
 type WetClass = 'W' | 'D' | 'U' | 'E' | 'F' | 'C' | 'O' | 'c' | 'X' | '.';
+/** What the wheels read, and whether the deck under the point is a STRUCTURE
+ *  standing clear of the terrain — which is the other half of every "why is
+ *  the truck on a road here" and "is that a bridge or an embankment" the seat
+ *  has ever asked. Same shape as wetClassAt so one painter serves both. */
+type SurfClass = 'R' | 'S' | 'T' | 'W' | 'g' | '.';
+function surfClassAt(x: number, z: number): SurfClass {
+  const s = surfaceAt(x, z);
+  if (s === 'water') return 'W';
+  if (s === 'road' || s === 'track') {
+    // DECK_GAP is the ribbon's own rule for "this is a structure, not an
+    // earthwork" — the same three metres __railgrade counts spans by, so the
+    // overlay and that audit cannot disagree about what a bridge is.
+    const deck = roadHeightAt(x, z);
+    const g = meshSurfaceAt(x, z);
+    if (deck !== null && g !== null && Number.isFinite(g) && deck - g > 3) return 'S';
+    return s === 'road' ? 'R' : 'T';
+  }
+  return 'g';
+}
 function wetClassAt(x: number, z: number): WetClass {
   const surf = surfaceAt(x, z);
   // Ask below either possible shoreline cut so the overlay can show the
@@ -34429,20 +34570,40 @@ const WET_RGBA: Record<WetClass, string> = {
   F: 'rgba(30,220,255,0.85)', C: 'rgba(60,220,220,0.7)', O: 'rgba(20,30,140,0.7)', c: 'rgba(160,170,190,0.55)',
   X: 'rgba(255,40,40,0.9)', '.': 'rgba(0,0,0,0)',
 };
+const SURF_RGBA: Record<SurfClass, string> = {
+  R: 'rgba(224,224,224,0.70)', S: 'rgba(255,150,30,0.85)', T: 'rgba(200,160,90,0.70)',
+  // GROUND IS THE COMMONEST ANSWER AND THE LEAST INTERESTING, so it is the
+  // faintest: at 0.45 it washed 87% of a chase frame green and the classes
+  // worth looking at — a structure, a carriageway, water — had to compete with
+  // it. A debug overlay's contrast budget belongs to its rare classes.
+  W: 'rgba(40,110,255,0.70)', g: 'rgba(60,120,40,0.22)', '.': 'rgba(0,0,0,0)',
+};
+/** Which classifier the overlay is painting. The chips are a radio group, so
+ *  this is one value; `null` is the overlay off. */
+let dbgView: 'water' | 'surface' | null = wetDbgOn ? 'water' : null;
 /** Repaint the overlay around the truck: 16k classifications, about 40 ms,
- *  once a second and only while the switch is on. */
+ *  once a second and only while a debug raster chip is on.
+ *
+ *  ONE PAINTER, TWO CLASSIFIERS. The alternative — a second canvas, a second
+ *  uniform, a second cadence — is two mechanisms that will fall out of step
+ *  about their box, their resolution and their repaint, for no gain: they
+ *  cannot both be on (the chips are a radio group) and they sample the same
+ *  world through the same 768 m window. */
 function repaintWetDebug(): void {
   const t0 = performance.now();
   // surfaceAt writes surfQ as a side effect; sixteen thousand calls must
-  // not leave the truck standing on the last texel's quality.
+  // not leave the truck standing on the last texel's quality. Both
+  // classifiers call it, so the save has to wrap the whole sweep.
   const surfQWas = surfQ;
   const half = wetDbgU.uDbgW.value / 2, step = wetDbgU.uDbgW.value / WETDBG_N;
   const ox = state.x - half, oz = state.z - half;
   wetDbgCtx.clearRect(0, 0, WETDBG_N, WETDBG_N);
+  const surf = dbgView === 'surface';
   for (let j = 0; j < WETDBG_N; j++) for (let i = 0; i < WETDBG_N; i++) {
-    const k = wetClassAt(ox + (i + 0.5) * step, oz + (j + 0.5) * step);
+    const px = ox + (i + 0.5) * step, pz = oz + (j + 0.5) * step;
+    const k = surf ? surfClassAt(px, pz) : wetClassAt(px, pz);
     if (k === '.') continue;
-    wetDbgCtx.fillStyle = WET_RGBA[k];
+    wetDbgCtx.fillStyle = surf ? SURF_RGBA[k as SurfClass] : WET_RGBA[k as WetClass];
     wetDbgCtx.fillRect(i, j, 1, 1);
   }
   surfQ = surfQWas;
@@ -34453,8 +34614,11 @@ function repaintWetDebug(): void {
 }
 /** The overlay, from a script or the address bar: `__wetdebug(true)`. */
 (window as unknown as { __wetdebug?: object }).__wetdebug = (on?: boolean): object => {
-  if (on !== undefined) { wetDbgOn = on; if (!on) wetDbgU.uDbgOn.value = 0; else wetDbgAt = -1e9; }
-  return { on: wetDbgOn, repaintMs: +wetDbgMs.toFixed(1), legend: 'W drawn water · D deck over water · U wet under the ground · E waterline band · F ford · C channel · O ocean · c cover-80 only · X unexplained' };
+  if (on !== undefined) setDebugRaster(on ? 'water' : null);
+  return { on: wetDbgOn, view: dbgView, repaintMs: +wetDbgMs.toFixed(1),
+    legend: dbgView === 'surface'
+      ? SURFACE_LEGEND.map((r) => `${r.key} ${r.name}`).join(' · ')
+      : WATER_LEGEND.map((r) => `${r.key} ${r.name}`).join(' · ') };
 };
 /** The same classes as an ASCII map for the harness, truck at @. */
 (window as unknown as { __wetmap?: object }).__wetmap = (halfM = 120, n = 25): string[] => {
@@ -49142,7 +49306,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // and no bake, which is most of the argument for it. The only thing it
       // can be short of is ground that has streamed, and an empty legend under
       // a view that is on says exactly that.
-      if (groundView !== 'off' && !leg.length) {
+      if ((groundView !== 'off' || dbgView) && !leg.length) {
         textEdgeP('NO GROUND CLASSED YET', pad + 1, ly, UI.dim);
         ly += 9;
       } else if (themeLayer() && !themeGroup.visible) {
@@ -49187,7 +49351,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // its own row under the clock, and a tap on it clears the view. It is
     // pushed into `layerRects`, so the tap is the same code path the key's
     // chips use and the two cannot answer differently.
-    const vl = viewLayer();
+    const vl = viewLayer() ?? (CHART_LAYERS.find((l) => chartOn[l.id] && DBG_RASTER[l.id])?.id ?? null);
     if (vl && !lineOn) {
       const row = chartLayer(vl);
       const name = row?.name ?? vl;

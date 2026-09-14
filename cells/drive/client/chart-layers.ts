@@ -50,7 +50,7 @@ export interface ChartLayer {
   debug?: boolean;
 }
 
-export type ChartLayerId = 'roads' | 'places' | 'cover' | 'eco' | 'substrate';
+export type ChartLayerId = 'roads' | 'places' | 'cover' | 'eco' | 'substrate' | 'water' | 'surface';
 
 /**
  * THE TABLE. Order is the order on the key, and the key reads top-down as the
@@ -81,6 +81,54 @@ export const CHART_LAYERS: readonly ChartLayer[] = Object.freeze([
   Object.freeze({ id: 'substrate' as const, name: 'MATERIAL', kind: 'thematic' as const,
     on: false, debug: true,
     note: 'what the renderer believes the ground is made of: outcrop, turf, regolith' }),
+  Object.freeze({ id: 'water' as const, name: 'WATER', kind: 'thematic' as const,
+    on: false, debug: true,
+    note: 'every input to the physics’ water decision, painted: drawn water, a deck over it, a field wet UNDER the ground, the waterline band, a ford, a carved channel, the ocean mask, cover-80 alone, and the unexplained' }),
+  Object.freeze({ id: 'surface' as const, name: 'SURFACE', kind: 'thematic' as const,
+    on: false, debug: true,
+    note: 'what the wheels read: carriageway, formation, ground and water, and whether the deck under the point is a structure standing clear of the terrain' }),
+]);
+
+/**
+ * ── THE DEBUG RASTER VIEWS, AND WHY THEY ARE NOT THE CHANNEL ──
+ *
+ * MATERIAL and COVER ride the geometry: the evidence is per vertex, so the
+ * fragment paints them everywhere at no cost and with no reach. WATER and
+ * SURFACE cannot — their verdicts are `surfaceAt`, `sampleRestingSurface`,
+ * `channelAt`, `oceanAt` and the road grid, which are CPU walks over live
+ * state that no attribute can carry and no shader can call. So they are a
+ * classified raster painted around the truck and sampled in the same fragment
+ * — the mechanism `?wetdebug` has shipped for months, generalised.
+ *
+ * What they share with the channel is everything the reader touches: the same
+ * key, the same chips, the same radio group, the same legend, the same rule
+ * that a debug chip is only offered while the tile overlay is up. The
+ * mechanism differs because the DATA differs, and that is the honest reason
+ * rather than an inconsistency.
+ *
+ * Their legends are fixed for the same reason SUBSTRATE_LEGEND is: these are
+ * the verdicts a classifier can return, not classes of a dataset that may or
+ * may not be in frame, and the reader wants to know what a colour means
+ * whether or not any of it is on screen.
+ */
+export interface DebugLegend { readonly key: string; readonly name: string; readonly hex: string }
+export const WATER_LEGEND: ReadonlyArray<DebugLegend> = Object.freeze([
+  Object.freeze({ key: 'W', name: 'WATER', hex: '#286eff' }),
+  Object.freeze({ key: 'D', name: 'DECK', hex: '#ff961e' }),
+  Object.freeze({ key: 'U', name: 'BURIED', hex: '#e628dc' }),
+  Object.freeze({ key: 'E', name: 'EDGE', hex: '#fae628' }),
+  Object.freeze({ key: 'F', name: 'FORD', hex: '#1edcff' }),
+  Object.freeze({ key: 'C', name: 'CHANNEL', hex: '#3cdcdc' }),
+  Object.freeze({ key: 'O', name: 'OCEAN', hex: '#141e8c' }),
+  Object.freeze({ key: 'c', name: 'COVER-80', hex: '#a0aabe' }),
+  Object.freeze({ key: 'X', name: 'UNEXPLAINED', hex: '#ff2828' }),
+]);
+export const SURFACE_LEGEND: ReadonlyArray<DebugLegend> = Object.freeze([
+  Object.freeze({ key: 'R', name: 'ROAD', hex: '#e0e0e0' }),
+  Object.freeze({ key: 'S', name: 'STRUCTURE', hex: '#ff961e' }),
+  Object.freeze({ key: 'T', name: 'TRACK', hex: '#c8a05a' }),
+  Object.freeze({ key: 'W', name: 'WATER', hex: '#286eff' }),
+  Object.freeze({ key: 'g', name: 'GROUND', hex: '#3c7828' }),
 ]);
 
 /** The substrate view's own legend. Fixed rather than tallied: these are not

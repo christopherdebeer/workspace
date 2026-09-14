@@ -219,6 +219,8 @@ Nothing here is fast. Budget for it.
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
 | `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
+| `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
+| `node devtools/sward-sub.mjs` | whether the sward's density follows the substrate's own field, as the correlation between them, with `swardsub=0` as the control (a fixture, and CPU numbers rather than pixels — see the note) | ~3min |
 | `node devtools/ground-view.mjs` | a ground view is a uniform, not a sheet: the chip sets the channel in every camera, the legend is tallied off the attribute the fragment reads, and the chase frame moves (`FIX=` for an offline world) | ~6min |
 | `node devtools/substrate-ab.mjs` | whether the substrate's classification draws a material or more noise: the inputs at six points, an interleaved one-boot A/B cropped to the near field, and the domain and amount dials swept (`TD=dom` paints the classification) | ~9min |
 | `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
@@ -9664,3 +9666,127 @@ glass and an id is a wire format.
 machinery can go with it. `devtools/ground-view.mjs` is the instrument — it
 asserts the chip sets the CHANNEL and bakes no sheet, that the legend names
 what is under the camera, and that the chase frame moves.
+
+## The sward reads the substrate's field, and the debug views join the key
+
+Two halves of the seat's ask: *finish the sward cover work, and expose the
+water/hydro/road substrate debug rendering in the same way as MATERIAL.*
+
+### One field seen twice, not two fields that agree
+
+The brief's own next step, verbatim: *if the shader says this location is 70%
+grassy and 30% exposed soil, the sward seeder should read essentially the same
+field. Then sward doesn't appear as arbitrary tufts pasted onto blank ground.*
+
+`swardRows` already held every input the classification reads — the true cover
+class, the slope, and the palette colour it had just computed for that texel —
+so the work was not gathering evidence, it was making the two computations the
+SAME computation.
+
+- **THE CONSTANTS ARE SHARED OUTRIGHT.** `SUB_K` in substrate-field.ts holds
+  the sixteen numbers of the weights and the three material transforms, and the
+  GLSL source interpolates them. Two hand-written copies would be two copies
+  that drift, and the drift would show as grass standing thick on a patch of
+  painted rock — which is the complaint this whole programme started from,
+  arrived at from the other side.
+- **THE NOISE IS WRITTEN TWICE AND THAT IS STATED.** There is no way to call a
+  fragment from the main thread, so `subDomainAt` is a port of `subDomain`:
+  the same construction at float64 instead of float32. The lattice wrap at 2048
+  that keeps the hash argument under 3e5 is what makes the difference
+  irrelevant — the two agree to about a part in 10^5, five orders below the
+  eighteen metres a patch spans.
+- **AND `SUB_MAT` IS THE SOURCE OF RECORD FOR THE KERNEL'S OWN TABLE.** The
+  kernel inlines its copy because its closure is stringified into a worker and
+  may not touch a module binding; that is a real constraint and not a
+  preference, so the duplicate is held honest by a check that parses the
+  kernel's source — the trick `perf-check.mjs` uses for `refreshVeg`.
+- **AND THE CHECK THAT NEARLY SHIPPED UNSOUND.** Its first cut asserted the
+  EMITTED GLSL does not contain `clamp(grain * 0.8`, meaning to catch a number
+  typed into the shader instead of the table. It cannot: a template literal
+  produces byte-identical text either way, which is the whole point of
+  interpolation. The sound check is on the SOURCE — the weight lines must read
+  through `K` — with 0.5 exempt because it is the domain's own midpoint in
+  `(dom - 0.5)`, the definition of "shift either way about the mean" rather
+  than a number anyone would tune.
+- **THE GRASS THINS ON THE MINERAL SHARE, NOT THE TURF WEIGHT.** Turf is "how
+  sward-like is this ground", which is most of what `GRASS_M2` already says
+  from the cover class; multiplying the two would thin every meadow in the
+  world by a third for nothing. The outcrop and the scree are what the cover
+  class cannot see and the domain draws. Regolith counts for less than half of
+  rock, because grass grows in dirt and not on stone.
+- **And a blade fades two thirds of the way toward the material it stands in**,
+  not all of it: the sward's own colour rules — the bank mineral, the reeds,
+  the altitude — are about the PLANT and this is about the ground under it.
+
+**Measured** (`devtools/sward-sub.mjs`, the Camps Bay fixture, `swardsub=0`
+against the default). **Two boots, and that is legitimate here only because the
+measurement is not pixels**: the switch is read once into a const at module
+init like every world switch, so there is no live A/B, and what makes the
+comparison honest is a fixture (no network, no arrival order) plus a CPU field
+that is deterministic. A frame diff across two boots would carry the wildlife,
+the sward phase and the cloud deck.
+
+| Camps Bay, 8,971 sward texels | `swardsub=0` | on |
+|---|---|---|
+| correlation, density against the substrate's grass factor | **0.099** | **0.31** |
+| mean density | 0.360 | 0.302 (−16.1%) |
+| share the substrate calls mineral enough to thin | 1.8% | 1.8% |
+
+**THE CONTROL IS NOT ZERO, AND THAT IS THE INTERESTING PART.** The two fields
+already shared ONE input — the cover class, which `GRASS_M2` and `TD_MAT` both
+key off — so 0.099 is what "two fields that happen to be near each other" looks
+like. What the shared DOMAIN is worth is the gap to 0.31.
+
+**AND THE SIGN IN THE PROBE'S OWN COMMENT WAS WRONG UNTIL THE NUMBER CAME
+BACK.** It said the correlation should be *strongly negative*; a high grass
+factor means the substrate ALLOWS grass, so it is positive. The measurement
+caught a false claim in the instrument before the instrument shipped, which is
+the argument for writing the expectation down where it can fail.
+
+Camps Bay is a mild case by construction — fynbos classifies as turf almost
+everywhere, so only 1.8% of the field is mineral enough to thin. The loud case
+is bare ground, which no fixture in the set carries; the live Yosemite spot is
+where it shows and where a two-boot comparison would not be deterministic.
+
+### WATER and SURFACE: the same key, a different mechanism, and why
+
+MATERIAL and COVER ride the geometry, so the fragment paints them everywhere.
+WATER and SURFACE cannot: their verdicts are `surfaceAt`,
+`sampleRestingSurface`, `channelAt`, `oceanAt` and the road grid — CPU walks
+over live state that no attribute can carry and no shader can call. So they are
+a classified raster painted around the truck and sampled in the same fragment:
+the mechanism `?wetdebug` has shipped for months, generalised to take a
+classifier.
+
+What they share with the channel is everything the reader touches — the same
+key, the same chips, the same radio group, the same legend, the same rule that
+a debug chip is offered only while the tile overlay is up and is never restored
+from storage. **The mechanism differs because the DATA differs**, and that is
+the honest reason rather than an inconsistency.
+
+- **ONE PAINTER, TWO CLASSIFIERS.** A second canvas, uniform and cadence would
+  be two mechanisms falling out of step about their box, their resolution and
+  their repaint, for no gain: the chips are a radio group so they cannot both
+  be on, and they sample the same world through the same 768 m window.
+- **SURFACE ANSWERS THE STRUCTURE QUESTION TOO.** A carriageway whose deck
+  stands more than `DECK_GAP` over the drawn ground is a STRUCTURE rather than
+  an earthwork — the same three metres `__railgrade` counts spans by, so the
+  overlay and that audit cannot disagree about what a bridge is.
+- **GROUND IS THE FAINTEST CLASS.** At 0.45 alpha it washed 87% of a chase
+  frame green and the classes worth looking at had to compete with it. A debug
+  overlay's contrast budget belongs to its rare classes.
+
+**Measured** at Yosemite, same boot, near field cropped, against a floor of
+1.48/255 and 6.4% of the pane:
+
+| chase | mean | moved | repaint |
+|---|---|---|---|
+| COVER | 7.33 | 73.9% | — |
+| MATERIAL | 88.3 | 95.0% | — |
+| SURFACE | 13.96 | 87.2% | 26 ms |
+| WATER | 0.55 | 2.6% | 60 ms |
+
+WATER moving almost nothing at Yosemite is the correct answer and worth
+knowing before it is read as a failure: the classifier returns "." for dry
+ground and paints nothing, and there is essentially no water at that spot. The
+Senqu fixtures are where it has something to say.

@@ -60,7 +60,12 @@ for (const cam of ['chase', 'top']) {
   const shots = [];
   for (const [tag, id, on] of [['off', 'cover', false], ['cover', 'cover', true],
     ['off-b', 'cover', false], ['substrate', 'substrate', true], ['eco', 'eco', true],
-    ['end', 'eco', false]]) {
+    // The two DEBUG RASTER views ride the same chips and the same key; their
+    // mechanism differs (a classified raster round the truck, not an
+    // attribute) and the assertion is the same one — the chip paints, and it
+    // paints in the camera the seat is actually in.
+    ['water', 'water', true], ['surface', 'surface', true],
+    ['end', 'surface', false]]) {
     const st = await q((a) => {
       const r = window.__chartlayers(a.id, a.on);
       return { view: r.view, viewLayer: r.viewLayer, theme: r.theme, sheets: r.sheets,
@@ -70,18 +75,21 @@ for (const cam of ['chase', 'top']) {
     await d.page.waitForTimeout(2500);
     const st2 = await q(() => {
       const r = window.__chartlayers();
+      const w = window.__wetdebug();
       return { view: r.view, theme: r.theme, sheets: r.sheets, tallied: r.tallied,
+        raster: w.on ? w.view : null, rasterMs: w.repaintMs,
         legend: r.legend.map((x) => x.name) };
     });
     writeFileSync(`${OUT}/${cam}-${tag}.png`, await d.page.screenshot({ timeout: 240000 }));
     shots.push(tag);
     console.log(`  [${cam}] ${tag.padEnd(10)} view=${String(st2.view).padEnd(9)}`
-      + ` sheet=${String(st2.theme)} sheets=${st2.sheets} tallied=${st2.tallied}`
-      + ` legend=[${st2.legend.join(' ')}]`);
+      + ` raster=${String(st2.raster).padEnd(8)}${st2.raster ? `${st2.rasterMs}ms ` : ''}`
+      + `sheet=${String(st2.theme)} sheets=${st2.sheets} tallied=${st2.tallied}`
+      + ` legend=[${st2.legend.slice(0, 5).join(' ')}]`);
     void st;
   }
   for (const [a, b, label] of [['off', 'off-b', 'floor'], ['off', 'cover', 'COVER'],
-    ['off', 'substrate', 'SUBSTRATE']]) {
+    ['off', 'substrate', 'MATERIAL'], ['off', 'water', 'WATER'], ['off', 'surface', 'SURFACE']]) {
     const out = execFileSync('node', [new URL('./imgdiff.mjs', import.meta.url).pathname,
       `${OUT}/${cam}-${a}.png`, `${OUT}/${cam}-${b}.png`, `${OUT}/${cam}-d-${label}.png`,
       crop, '--gain=4'], { encoding: 'utf8' });
