@@ -190,8 +190,7 @@ import {
 import { resolveProductionHydroReach } from './substrate/hydro-reach';
 import { blendProductionTerrainHydroBank } from './substrate/terrain-hydro';
 import {
-  buildCulvertBoreGeometry,
-  buildCulvertHeadwallGeometry,
+  buildProductionCulvert,
 } from './substrate/culvert-detail';
 import {
   VehicleWaterEvidence,
@@ -21986,141 +21985,72 @@ interface CulvertBuildOptions {
 function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   a: number, b: number, width: number, core0: number, core1: number,
   options: CulvertBuildOptions = {}): CulvertBuildResult {
-  if (b <= a) return { outcome: 'infeasible', availableClearanceM: null };
-  // Cover is measured over the BURIED CORE, not over the mouths. The run is
-  // extended a station past the tarmac at each end so the headwalls stand in
-  // open channel; those stations have almost no ground over them by
-  // construction, and letting them into the minimum sized every bore at zero.
-  // THE CEILING IS THE ROAD, not the ground. Cover was measured against the
-  // natural field — and a road in a cutting sits BELOW that field, so a bore
-  // sized to clear the ground rose straight through the carriageway. Reported
-  // as the conduit colliding with traffic on the road above, which is exactly
-  // what it was: a concrete box standing in the tarmac. The ceiling is now the
-  // lower of the ground and the deck itself, less the slab and cover a real
-  // culvert carries under a road.
-  let cover = Infinity;
-  for (let i = core0; i <= core1; i++) {
-    const deck = deckOver(dense[i][0], dense[i][1], 1.5);
-    const roof = deck === null ? g[i] : Math.min(g[i], deck - CULV_UNDER);
-    cover = Math.min(cover, roof - inv[i]);
-  }
-  if (!isFinite(cover)) return { outcome: 'infeasible', availableClearanceM: null };
-  const room = cover;
-  // No usable room is a real answer: the water passes at grade and there is
-  // nothing to build. The old 0.2m rejection sat BELOW CULV_CLR, then clamp
-  // enlarged a 0.2–0.35m gap to a 0.35m bore — geometry larger than the room
-  // that sized it. A clearance calculation may only shrink geometry.
-  if (room < CULV_CLR) {
-    culvertStats.tooTight++;
-    // A known road/channel overlap with no physical room for a conduit is an
-    // open at-grade crossing. Do not make that construction outcome depend on
-    // whether the asynchronously built hydro field happened to expose its
-    // resting surface during this pass.
-    if (options.allowWetFordFallback) {
-      return { outcome: 'ford-fallback', availableClearanceM: room, family: 'ford' };
-    }
-    return { outcome: 'no-room', availableClearanceM: room };
-  }
-
+  const deckY = dense.map(([x, z], station) =>
+    station >= a && station <= b ? deckOver(x, z, 1.5) : null);
   const ci = Math.floor((core0 + core1) / 2);
   const [cx, cz] = dense[ci];
   const cclim = climateAt(cx, cz, inv[ci] + baseElev);
   const [clat, clon] = localToLatLon(cx, cz);
   const conduitKey = `conduit:${Math.round(clat * 1e6)}:${Math.round(clon * 1e6)}`;
-  const conduitRecipe = pickInfrastructureRecipe({
-    key: conduitKey, kind: 'conduit', lengthM: Math.max(1, b - a) * 12,
-    spanM: width, roadWidthM: width, tier: 1,
-    taggedStructure: options.taggedFamily,
-    climate: cclim.w, temperatureC: cclim.tempC, moisture: cclim.moisture,
-    snow: snowLoad(cclim.w, cclim.elevAbs), reliefM: 0, sideSlope: 0,
-    coverM: room, daylightM: 0, waterWidthM: width, urbanity: 0.15,
-    bedrock: 'unknown',
-    regionSeed: seedAt(cultEnv, cx, cz, 'region'),
-    districtSeed: seedAt(cultEnv, cx, cz, 'district'),
-    settlementSeed: seedAt(cultEnv, cx, cz, 'settlement'),
-    availableClearanceM: room,
-  });
-  const crk = `conduit:${conduitRecipe.family}:${conduitRecipe.material}`;
-  spanStats.recipes[crk] = (spanStats.recipes[crk] ?? 0) + 1;
-  // Ford/none are intentionally geometry-free fallbacks: water continues at
-  // grade and no procedural solid can intrude into the deck above.
-  if (!conduitRecipe.feasible) {
-    return {
-      outcome: 'infeasible',
-      availableClearanceM: room,
-      family: conduitRecipe.family,
-    };
-  }
-  if (conduitRecipe.family === 'ford') {
-    return {
-      outcome: 'ford-fallback',
-      availableClearanceM: room,
-      family: conduitRecipe.family,
-    };
-  }
-
-  const rig = room >= CULV_RIG;
-  const H = rig ? CULV_RIG : Math.min(room, conduitRecipe.family === 'pipe' ? 1.45 : 1.8);
-  const W = Math.max(width, rig ? 4.4 : conduitRecipe.family === 'pipe' ? 1.6 : 2.2);
-  culvertStats.runs++;
-  if (rig) culvertStats.rigSized++;
-  const off = mitreOffsets(dense, a, b, W / 2);
-  const bore = buildCulvertBoreGeometry({
+  const built = buildProductionCulvert({
     stations: dense,
     invertY: inv,
-    offsets: off,
+    groundY: g,
+    deckY,
     start: a,
     end: b,
-    heightM: H,
-    family: conduitRecipe.family,
+    coreStart: core0,
+    coreEnd: core1,
+    widthM: width,
+    taggedFamily: options.taggedFamily,
+    allowWetFordFallback: options.allowWetFordFallback,
+    underDeckM: CULV_UNDER,
+    minimumClearanceM: CULV_CLR,
+    rigClearanceM: CULV_RIG,
+    recipeContext: {
+      key: conduitKey, tier: 1,
+      climate: cclim.w, temperatureC: cclim.tempC, moisture: cclim.moisture,
+      snow: snowLoad(cclim.w, cclim.elevAbs), reliefM: 0, sideSlope: 0,
+      daylightM: 0, urbanity: 0.15, bedrock: 'unknown',
+      regionSeed: seedAt(cultEnv, cx, cz, 'region'),
+      districtSeed: seedAt(cultEnv, cx, cz, 'district'),
+      settlementSeed: seedAt(cultEnv, cx, cz, 'settlement'),
+    },
   });
-  culvertStats.m += bore.lengthM;
+  if (built.tooTight) culvertStats.tooTight++;
+  if (built.recipe) {
+    const crk = `conduit:${built.recipe.family}:${built.recipe.material}`;
+    spanStats.recipes[crk] = (spanStats.recipes[crk] ?? 0) + 1;
+  }
+  if (!built.bore) {
+    return {
+      outcome: built.outcome,
+      availableClearanceM: built.availableClearanceM,
+      family: built.family,
+    };
+  }
+  culvertStats.runs++;
+  if (built.rigSized) culvertStats.rigSized++;
+  culvertStats.m += built.bore.lengthM;
   // NOTHING GOES IN THE WALL GRID. A road tunnel's walls are solid because
   // you drive BETWEEN them; a culvert is buried, and the only thing near
   // enough to hit its walls is the traffic on the road over the top. Putting
   // them in the grid gave every vehicle crossing the culvert a wall to bounce
   // off, which is the fault this pass exists to fix — the geometry was never
   // the whole problem, the collision was.
-  if (cover > culvertStats.deepest) culvertStats.deepest = cover;
-  // Measured on the BUILT geometry, not on the sizing arithmetic — the point is
-  // to catch a soffit in the tarmac however it got there.
-  for (let i = core0; i <= core1; i++) {
-    const deck = deckOver(dense[i][0], dense[i][1], 1.5);
-    if (deck === null) continue;
-    culvertStats.minUnder = Math.min(culvertStats.minUnder, deck - (inv[i] + H));
+  if ((built.availableClearanceM ?? -Infinity) > culvertStats.deepest) {
+    culvertStats.deepest = built.availableClearanceM as number;
+  }
+  if (built.minimumUnderDeckM !== null) {
+    culvertStats.minUnder = Math.min(culvertStats.minUnder, built.minimumUnderDeckM);
   }
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(bore.positions, 3));
+  geo.setAttribute('position', new THREE.BufferAttribute(built.bore.positions, 3));
   geo.computeVertexNormals();
   addStructureRenderGeometry(geo, MAT.tunnel, {
     userData: { culvert: true },
   });
-  // HEADWALLS. Without them the bore is a rectangular hole in a grass bank and
-  // reads as a hole in the world; with them it reads as something someone built.
-  for (const end of [a, b]) {
-    const i0 = end === a ? a : b - 1, i1 = end === a ? a + 1 : b;
-    const [x0, z0] = dense[i0], [x1, z1] = dense[i1];
-    const ang = Math.atan2(z1 - z0, x1 - x0);
-    const [px, pz] = dense[end];
-    // The headwall stands proud at the MOUTH, where there is no road overhead —
-    // but the mouth is only a station clear of the tarmac, so its top is held
-    // under the deck too if there happens to be one.
-    const hdeck = deckOver(px, pz, 1.5);
-    const hi = hdeck === null ? Infinity : hdeck - CULV_UNDER;
-    const top = Math.min(inv[end] + H + 0.7, hi);
-    const bottom = inv[end] - 0.4;
-    // Do not force a decorative minimum back through the deck ceiling. Where
-    // even a thin headwall will not fit, the safe visual is no headwall.
-    const wall = buildCulvertHeadwallGeometry({
-      x: px,
-      z: pz,
-      bottomY: bottom,
-      topY: top,
-      widthM: W + 2.4,
-      depthM: 0.7,
-      rotationY: ang + Math.PI / 2,
-    });
-    if (!wall) continue;
+  for (const wall of built.headwalls) {
     const wallGeometry = new THREE.BufferGeometry();
     wallGeometry.setAttribute(
       'position',
@@ -22135,9 +22065,9 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     addStructureRenderGeometry(wallGeometry, MAT.portal);
   }
   return {
-    outcome: 'culvert-built',
-    availableClearanceM: room,
-    family: conduitRecipe.family,
+    outcome: built.outcome,
+    availableClearanceM: built.availableClearanceM,
+    family: built.family,
   };
 }
 function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number[], a: number, b: number, width: number, lift: number, recipe?: StructureRecipe): void {

@@ -1,3 +1,10 @@
+import {
+  pickInfrastructureRecipe,
+  type InfrastructureContext,
+  type StructureRecipe,
+} from '../infrastructure';
+import type { CrossingStructureOutcome } from './crossing-authority';
+
 export type CulvertStructureFamily = 'pipe' | 'box' | 'twin-cell' | string;
 
 export interface CulvertBoreInput {
@@ -33,6 +40,84 @@ export interface CulvertHeadwallGeometry {
   index: Uint32Array<ArrayBuffer>;
 }
 
+export type ProductionCulvertRecipeContext = Omit<
+  InfrastructureContext,
+  | 'kind'
+  | 'lengthM'
+  | 'spanM'
+  | 'roadWidthM'
+  | 'taggedStructure'
+  | 'coverM'
+  | 'waterWidthM'
+  | 'availableClearanceM'
+>;
+
+export interface ProductionCulvertInput {
+  stations: readonly (readonly [x: number, z: number])[];
+  invertY: readonly number[];
+  groundY: readonly number[];
+  deckY: readonly (number | null)[];
+  start: number;
+  end: number;
+  coreStart: number;
+  coreEnd: number;
+  widthM: number;
+  recipeContext: ProductionCulvertRecipeContext;
+  taggedFamily?: string;
+  allowWetFordFallback?: boolean;
+  underDeckM?: number;
+  minimumClearanceM?: number;
+  rigClearanceM?: number;
+  nominalStationSpacingM?: number;
+}
+
+export interface ProductionCulvert {
+  outcome: CrossingStructureOutcome;
+  availableClearanceM: number | null;
+  family?: string;
+  recipe?: StructureRecipe;
+  bore?: CulvertBoreGeometry;
+  headwalls: CulvertHeadwallGeometry[];
+  heightM: number;
+  widthM: number;
+  rigSized: boolean;
+  tooTight: boolean;
+  minimumUnderDeckM: number | null;
+}
+
+const clamp = (value: number, lo: number, hi: number): number =>
+  Math.max(lo, Math.min(hi, value));
+
+const productionCulvertOffsets = (
+  stations: readonly (readonly [number, number])[],
+  start: number,
+  end: number,
+  halfWidthM: number,
+): Array<readonly [number, number]> => {
+  const bay = (index: number): readonly [number, number] => {
+    const station = clamp(index, start, end - 1);
+    const dx = stations[station + 1][0] - stations[station][0];
+    const dz = stations[station + 1][1] - stations[station][1];
+    const length = Math.hypot(dx, dz) || 1;
+    return [-dz / length, dx / length];
+  };
+  const offsets: Array<readonly [number, number]> = [];
+  for (let station = start; station <= end; station++) {
+    const [priorX, priorZ] = bay(station - 1);
+    const [nextX, nextZ] = bay(station);
+    const meanX = (priorX + nextX) * .5;
+    const meanZ = (priorZ + nextZ) * .5;
+    const magnitude = Math.hypot(meanX, meanZ);
+    if (magnitude < .2) {
+      offsets.push([nextX * halfWidthM, nextZ * halfWidthM]);
+      continue;
+    }
+    const scale = halfWidthM * clamp(1 / magnitude, 1, 2.4);
+    offsets.push([meanX / magnitude * scale, meanZ / magnitude * scale]);
+  }
+  return offsets;
+};
+
 const appendQuad = (
   output: number[],
   a: readonly [number, number, number],
@@ -45,8 +130,8 @@ const appendQuad = (
 
 /**
  * Renderer-free culvert shell authoring from an already resolved conduit.
- * Clearance and structure-family selection happen before this boundary; the
- * substrate builder owns the exact walls, soffit and optional cell divider.
+ * The production resolver below owns clearance and family selection; this
+ * lower-level builder owns the exact walls, soffit and optional cell divider.
  */
 export function buildCulvertBoreGeometry(
   input: CulvertBoreInput,
@@ -231,4 +316,167 @@ export function buildCulvertHeadwallGeometry(
     ], indexOffset);
   }
   return { positions, normals, uvs, index };
+}
+
+/**
+ * Resolve and author one production conduit from sampled terrain/deck facts.
+ *
+ * The live context supplies observations and cultural inputs, while this
+ * renderer-free boundary owns every construction decision and the resulting
+ * final geometry arrays.
+ */
+export function buildProductionCulvert(
+  input: ProductionCulvertInput,
+): ProductionCulvert {
+  const stationCount = input.stations.length;
+  if (
+    input.invertY.length !== stationCount
+    || input.groundY.length !== stationCount
+    || input.deckY.length !== stationCount
+    || input.start < 0
+    || input.end >= stationCount
+    || input.end <= input.start
+    || input.coreStart < input.start
+    || input.coreEnd > input.end
+    || input.coreEnd < input.coreStart
+  ) {
+    throw new Error('production culvert station arrays or bounds are invalid');
+  }
+  const empty = (
+    outcome: CrossingStructureOutcome,
+    availableClearanceM: number | null,
+    family?: string,
+    recipe?: StructureRecipe,
+    tooTight = false,
+  ): ProductionCulvert => ({
+    outcome,
+    availableClearanceM,
+    family,
+    recipe,
+    headwalls: [],
+    heightM: 0,
+    widthM: 0,
+    rigSized: false,
+    tooTight,
+    minimumUnderDeckM: null,
+  });
+
+  const underDeckM = input.underDeckM ?? .8;
+  const minimumClearanceM = input.minimumClearanceM ?? .35;
+  const rigClearanceM = input.rigClearanceM ?? 3.2;
+  if (
+    !Number.isFinite(input.widthM)
+    || input.widthM <= 0
+    || !Number.isFinite(underDeckM)
+    || underDeckM < 0
+    || !Number.isFinite(minimumClearanceM)
+    || minimumClearanceM < 0
+    || !Number.isFinite(rigClearanceM)
+    || rigClearanceM < minimumClearanceM
+  ) {
+    throw new Error('production culvert dimensions must be finite and ordered');
+  }
+
+  let room = Infinity;
+  for (let station = input.coreStart; station <= input.coreEnd; station++) {
+    const deck = input.deckY[station];
+    const roof = deck === null
+      ? input.groundY[station]
+      : Math.min(input.groundY[station], deck - underDeckM);
+    room = Math.min(room, roof - input.invertY[station]);
+  }
+  if (!Number.isFinite(room)) return empty('infeasible', null);
+  if (room < minimumClearanceM) {
+    return input.allowWetFordFallback
+      ? empty('ford-fallback', room, 'ford', undefined, true)
+      : empty('no-room', room, undefined, undefined, true);
+  }
+
+  const recipe = pickInfrastructureRecipe({
+    ...input.recipeContext,
+    kind: 'conduit',
+    lengthM: Math.max(1, input.end - input.start)
+      * (input.nominalStationSpacingM ?? 12),
+    spanM: input.widthM,
+    roadWidthM: input.widthM,
+    taggedStructure: input.taggedFamily,
+    coverM: room,
+    waterWidthM: input.widthM,
+    availableClearanceM: room,
+  });
+  if (!recipe.feasible) {
+    return empty('infeasible', room, recipe.family, recipe);
+  }
+  if (recipe.family === 'ford') {
+    return empty('ford-fallback', room, recipe.family, recipe);
+  }
+
+  const rigSized = room >= rigClearanceM;
+  const heightM = rigSized
+    ? rigClearanceM
+    : Math.min(room, recipe.family === 'pipe' ? 1.45 : 1.8);
+  const widthM = Math.max(
+    input.widthM,
+    rigSized ? 4.4 : recipe.family === 'pipe' ? 1.6 : 2.2,
+  );
+  const offsets = productionCulvertOffsets(
+    input.stations,
+    input.start,
+    input.end,
+    widthM / 2,
+  );
+  const bore = buildCulvertBoreGeometry({
+    stations: input.stations,
+    invertY: input.invertY,
+    offsets,
+    start: input.start,
+    end: input.end,
+    heightM,
+    family: recipe.family,
+  });
+
+  let minimumUnderDeckM = Infinity;
+  for (let station = input.coreStart; station <= input.coreEnd; station++) {
+    const deck = input.deckY[station];
+    if (deck === null) continue;
+    minimumUnderDeckM = Math.min(
+      minimumUnderDeckM,
+      deck - (input.invertY[station] + heightM),
+    );
+  }
+  const headwalls: CulvertHeadwallGeometry[] = [];
+  for (const end of [input.start, input.end]) {
+    const prior = end === input.start ? input.start : input.end - 1;
+    const next = end === input.start ? input.start + 1 : input.end;
+    const [x0, z0] = input.stations[prior];
+    const [x1, z1] = input.stations[next];
+    const [x, z] = input.stations[end];
+    const deck = input.deckY[end];
+    const ceiling = deck === null ? Infinity : deck - underDeckM;
+    const wall = buildCulvertHeadwallGeometry({
+      x,
+      z,
+      bottomY: input.invertY[end] - .4,
+      topY: Math.min(input.invertY[end] + heightM + .7, ceiling),
+      widthM: widthM + 2.4,
+      depthM: .7,
+      rotationY: Math.atan2(z1 - z0, x1 - x0) + Math.PI / 2,
+    });
+    if (wall) headwalls.push(wall);
+  }
+  return {
+    outcome: 'culvert-built',
+    availableClearanceM: room,
+    family: recipe.family,
+    recipe,
+    bore,
+    headwalls,
+    heightM,
+    widthM,
+    rigSized,
+    tooTight: false,
+    minimumUnderDeckM: Number.isFinite(minimumUnderDeckM)
+      ? minimumUnderDeckM
+      : null,
+  };
 }

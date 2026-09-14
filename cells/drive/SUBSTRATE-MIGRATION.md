@@ -235,12 +235,13 @@ copied into the immutable substrate tile beside the detail render packet;
 activation, revision replacement and invalidation consume that tile payload
 rather than the mutable authoring candidate registry.
 
-Culvert shell arrays have begun the same migration. Once crossing intent,
-clearance, conduit family and dimensions are resolved, the renderer-free
-`client/substrate/culvert-detail.ts` builder owns the exact side walls, soffit
-and optional twin-cell divider plus indexed, textured, oriented headwall
-geometry. Contextual recipe selection and clearance sampling still live at the
-legacy crossing build boundary.
+Culvert construction has completed the same migration. The live crossing
+context supplies sampled deck heights plus climate and culture facts to the
+renderer-free `client/substrate/culvert-detail.ts` resolver. That boundary owns
+minimum buried room, hard clearance and ford gates, deterministic conduit
+recipe, rig/compact dimensions, mitred side walls and soffit, optional twin-cell
+divider, deck-capped headwalls and the measured under-deck proof. The context
+only converts those final arrays into render packets and records telemetry.
 
 ### 4. Cut rendering over as one unit — terrain, drive and hydro guarded
 
@@ -416,8 +417,8 @@ the failed comparison can be reproduced.
   authoring boundary and retain no hidden mesh wrappers after commit. Rapid-bed
   placement, foam, facet/colour and collider generation has moved into the pure
   substrate package, and its collider witnesses are versioned in the production
-  tile. Culvert bore and headwall arrays are also substrate-built after the
-  legacy context resolver chooses their dimensions. The complete road
+  tile. Culvert clearance, recipe, dimensions, bore and headwall arrays are
+  substrate-owned from sampled context evidence. The complete road
   longitudinal authority now resolves in the pure substrate package: aligned
   branch selection and ruling grade, tunnel/bridge chords and clearance,
   engineered smoothing/deviation limits, cross-section seating and camber,

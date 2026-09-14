@@ -9,6 +9,7 @@ import {
   appendProductionRoadStud,
   buildCulvertBoreGeometry,
   buildCulvertHeadwallGeometry,
+  buildProductionCulvert,
   buildProductionHydroFixture,
   buildProductionRoadSurfaceGeometry,
   buildProductionSubstrateTile,
@@ -398,6 +399,67 @@ export function runSubstrateSelfTest(): void {
     rotationY: 0,
   }) === undefined,
   'culvert headwall must not exceed a constrained deck ceiling');
+  const culvertRecipeContext = {
+    key: 'conduit:test',
+    tier: 1 as const,
+    climate: [0, 0, 1, 0, 0],
+    temperatureC: 14,
+    moisture: .4,
+    snow: 0,
+    reliefM: 0,
+    sideSlope: 0,
+    daylightM: 0,
+    urbanity: .15,
+    bedrock: 'unknown' as const,
+    regionSeed: 11,
+    districtSeed: 22,
+    settlementSeed: 33,
+  };
+  const productionCulvertPlan = buildProductionCulvert({
+    stations: [[0, 0], [10, 0], [20, 4]],
+    invertY: [0, 0, 0],
+    groundY: [3, 3, 3],
+    deckY: [null, 2.3, null],
+    start: 0,
+    end: 2,
+    coreStart: 1,
+    coreEnd: 1,
+    widthM: 2,
+    taggedFamily: 'culvert',
+    recipeContext: culvertRecipeContext,
+  });
+  assert(productionCulvertPlan.outcome === 'culvert-built'
+    && productionCulvertPlan.family === 'pipe'
+    && productionCulvertPlan.bore
+    && productionCulvertPlan.headwalls.length === 2,
+  'production culvert solve must retain tagged family and author both mouths');
+  close(productionCulvertPlan.availableClearanceM ?? NaN, 1.5, 1e-12,
+    'production culvert clearance must use the lower deck ceiling');
+  close(productionCulvertPlan.heightM, 1.45, 1e-12,
+    'production pipe height must never exceed resolved room');
+  close(productionCulvertPlan.minimumUnderDeckM ?? NaN, .85, 1e-12,
+    'production culvert must prove the built soffit remains under the deck');
+  close(productionCulvertPlan.bore.lengthM, 10 + Math.hypot(10, 4), 1e-6,
+    'production culvert must retain exact curved run length');
+  assert(productionCulvertPlan.bore.positions.every(Number.isFinite),
+    'production culvert arrays must remain numerically safe');
+  const productionFordFallback = buildProductionCulvert({
+    stations: [[0, 0], [10, 0], [20, 0]],
+    invertY: [0, 0, 0],
+    groundY: [2, 2, 2],
+    deckY: [null, 1, null],
+    start: 0,
+    end: 2,
+    coreStart: 1,
+    coreEnd: 1,
+    widthM: 2,
+    allowWetFordFallback: true,
+    recipeContext: culvertRecipeContext,
+  });
+  assert(productionFordFallback.outcome === 'ford-fallback'
+    && productionFordFallback.tooTight
+    && !productionFordFallback.bore,
+  'a wet overlap without buried room must remain a geometry-free ford');
 
   const rapidStations = Array.from(
     { length: 20 },

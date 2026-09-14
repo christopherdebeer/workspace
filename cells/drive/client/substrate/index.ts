@@ -127,11 +127,15 @@ export { makeCrossingFixture, type CrossingFixtureOptions } from './fixtures';
 export {
   buildCulvertBoreGeometry,
   buildCulvertHeadwallGeometry,
+  buildProductionCulvert,
   type CulvertBoreGeometry,
   type CulvertBoreInput,
   type CulvertHeadwallGeometry,
   type CulvertHeadwallInput,
   type CulvertStructureFamily,
+  type ProductionCulvert,
+  type ProductionCulvertInput,
+  type ProductionCulvertRecipeContext,
 } from './culvert-detail';
 export {
   appendProductionRoadArch,
