@@ -33,7 +33,15 @@ import { cpSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { CELL, ROOT } from './harness.mjs';
 
-const REV = process.env.REV ?? 'HEAD';
+// ── THE CONTROL IS PINNED, AND IT HAS TO BE ──
+//
+// This defaulted to HEAD, which was right for exactly as long as HEAD was the
+// commit before the short-circuit: the moment it landed, HEAD's build-tile
+// became the SHIPPED one and the test would have compared the fix against
+// itself and passed vacuously. That is the `baseline-refresh.txt` trap — a
+// check whose control moves with the code it is checking — and it is caught
+// below by refusing a control that already carries the flag.
+const REV = process.env.REV ?? '71f79db';
 const cache = join(ROOT, 'node_modules/.cache/hydro-dry');
 rmSync(cache, { recursive: true, force: true });
 mkdirSync(cache, { recursive: true });
@@ -48,9 +56,17 @@ const fixDir = join(cache, 'fix');
 cpSync(join(CELL, 'client/hydro'), fixDir, { recursive: true });
 const ctlDir = join(cache, 'ctl');
 cpSync(join(CELL, 'client/hydro'), ctlDir, { recursive: true });
-writeFileSync(join(ctlDir, 'build-tile.ts'),
-  execFileSync('git', ['show', `${REV}:cells/drive/client/hydro/build-tile.ts`],
-    { cwd: ROOT, maxBuffer: 1 << 26 }));
+const ctlSrc = execFileSync('git', ['show', `${REV}:cells/drive/client/hydro/build-tile.ts`],
+  { cwd: ROOT, maxBuffer: 1 << 26 }).toString('utf8');
+// A CONTROL THAT ALREADY CARRIES THE CHANGE IS NOT A CONTROL. Refused loudly
+// rather than passing quietly, because the failure mode of a stale pin is a
+// green run that proves nothing.
+if (ctlSrc.includes('anyCoverage')) {
+  console.log(`\nthe control at ${REV} already has the short-circuit — it is not a control.`);
+  console.log('Pin REV to a revision before the change, or retire this check.');
+  process.exit(1);
+}
+writeFileSync(join(ctlDir, 'build-tile.ts'), ctlSrc);
 
 const FIX = await import(bundle(fixDir, join(cache, 'fix.mjs')));
 const CTL = await import(bundle(ctlDir, join(cache, 'ctl.mjs')));
