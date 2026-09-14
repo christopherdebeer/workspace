@@ -351,10 +351,12 @@ atomic crossing packet admission.
 
 The representative parity matrix now clears 1,920 probes across Senqu, Bixby,
 Camps Bay and the explicit-structures fixture with zero wet disagreement, tile
-fallback, unknown speed authority or unresolved crossing semantics. It includes
-the Camps Bay case where a road arrived after the legacy water flush and the
-Senqu bank probe where rollback previously measured ford depth against the
-wrong deck.
+fallback, unknown speed authority or unresolved crossing semantics. The
+September 2026 completion run retained 627 exact road/water overlap probes
+(57 Senqu, 109 Bixby and 461 Camps Bay), zero support/depth threshold failures
+and zero page errors. It includes the Camps Bay case where a road arrived after
+the legacy water flush and the Senqu bank probe where rollback previously
+measured ford depth against the wrong deck.
 
 `substrate-default-cutover.test.mjs` proves the ordinary URL selects canonical
 contact with zero loaded-tile consumer fallback, while `?substrate=legacy`
@@ -385,12 +387,17 @@ the failed comparison can be reproduced.
   placement, foam, facet/colour and collider generation has moved into the pure
   substrate package, and its collider witnesses are versioned in the production
   tile. Culvert bore and headwall arrays are also substrate-built after the
-  legacy context resolver chooses their dimensions. Bridge clearance and its
-  grade-constrained profile now resolve in the pure substrate package; the
-  remaining generation migration is to move the bench/profile inputs, other
-  array builders and reach/road/terrain solve authorities into the substrate
-  tile build, then retire the legacy builder entry points and road drape
-  registry.
+  legacy context resolver chooses their dimensions. The complete road
+  longitudinal authority now resolves in the pure substrate package: aligned
+  branch selection and ruling grade, tunnel/bridge chords and clearance,
+  engineered smoothing/deviation limits, cross-section seating and camber,
+  endpoint welds and host-plane junction warp. Substrate also owns the shared
+  kerb/mitre outline and final carriageway triangle, UV, paint and normal
+  arrays. The remaining generation migration is contextual rather than another
+  road-profile authority: move terrain/bench sampling, host-road crop/plane
+  fitting, apron/furniture/bridge-family arrays and the remaining terrain/hydro
+  reach solves into tile construction, then retire the legacy builder entry
+  points and road drape registry after rollback observation.
 - Contact/evidence is now the production default with `?substrate=legacy` as
   the observable rollback. Representative water drives, persistent evidence
   and the multi-world parity thresholds pass; a production observation window
