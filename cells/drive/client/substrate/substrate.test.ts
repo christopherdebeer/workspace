@@ -16,6 +16,7 @@ import {
   ProductionSubstrateStore,
   resolveFluidContact,
   resolveCrossingKind,
+  resolveProductionAlignedRoadProfile,
   resolveProductionSubstrateMode,
   resolveProductionBridgeProfile,
   resolveProductionEngineeredRoadProfile,
@@ -547,6 +548,49 @@ export function runSubstrateSelfTest(): void {
     && tunnelProfile.runs[0][0] === 1
     && tunnelProfile.runs[0][1] === 5,
   'automatic structure detection expands a sustained buried run to its portals');
+
+  let hintedSampledTerrain = false;
+  const alignedHints = resolveProductionAlignedRoadProfile({
+    stations: Array.from({ length: 5 }, (_, i) => [i * 10, 0] as const),
+    elevation: [0, 0, 0, 0, 0],
+    benchAt: () => 0,
+    hints: [0, null, 4, null, 8],
+    hinted: true,
+    mode: 'auto',
+    maxGrade: 1,
+    isChaotic: () => {
+      hintedSampledTerrain = true;
+      return true;
+    },
+  });
+  assert(alignedHints.branch === 1
+    && alignedHints.branchProfile.join(',') === '0,2,4,6,8',
+  'aligned substrate profiles interpolate complete chain hints');
+  assert(!hintedSampledTerrain,
+  'a hinted aligned profile does not resample terrain to choose a crumb branch');
+  const alignedCrumb = resolveProductionAlignedRoadProfile({
+    stations: [[0, 0], [10, 0], [20, 0], [30, 0]],
+    elevation: [1, 2, 3, 4],
+    benchAt: () => 2,
+    hints: [5, null, null, null],
+    hinted: false,
+    mode: 'auto',
+    maxGrade: .1,
+  });
+  assert(alignedCrumb.branch === 3
+    && alignedCrumb.profile.every((height) => height === 5),
+  'a short aligned fragment treats its hinted end as a continuity anchor');
+  const alignedDrape = resolveProductionAlignedRoadProfile({
+    stations: [[0, 0], [10, 0]],
+    elevation: [2, 3],
+    benchAt: () => 0,
+    hints: [],
+    hinted: false,
+    mode: 'none',
+    maxGrade: 0,
+  });
+  assert(alignedDrape.profile.join(',') === '2,3',
+  'an empty hint adapter preserves an ordinary terrain-draped profile');
 
   const engineeredProfile = resolveProductionEngineeredRoadProfile({
     stations: Array.from({ length: 11 }, (_, i) => [i * 10, 0] as const),

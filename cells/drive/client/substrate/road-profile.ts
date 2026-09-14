@@ -17,6 +17,28 @@ export interface ProductionRoadStructureProfile {
   chordProfile: number[];
 }
 
+export interface ProductionAlignedRoadProfileInput {
+  stations: readonly (readonly [x: number, z: number])[];
+  elevation: readonly number[];
+  benchAt: (station: number) => number;
+  hints?: readonly (number | null)[];
+  hinted: boolean;
+  mode: ProductionRoadStructureMode;
+  maxGrade: number;
+  anchorStart?: number | null;
+  anchorEnd?: number | null;
+  heldStations?: ArrayLike<unknown>;
+  isChaotic?: () => boolean;
+  solveAuto?: () => readonly number[];
+}
+
+export interface ProductionAlignedRoadProfile {
+  branchProfile: number[];
+  profile: number[];
+  branch: 1 | 2 | 3 | 4 | 5 | 6;
+  gradeLimit: number;
+}
+
 export interface ProductionEngineeredRoadProfileInput {
   stations: readonly (readonly [x: number, z: number])[];
   profile: readonly number[];
@@ -66,6 +88,122 @@ export interface ProductionRoadCrossSection {
 
 const clamp = (value: number, lo: number, hi: number): number =>
   Math.max(lo, Math.min(hi, value));
+
+/**
+ * Select the aligned longitudinal bench before structure decisions.
+ *
+ * This is the production branch authority: sufficiently complete chain hints
+ * interpolate exactly; short fragments use continuity anchors or the sampled
+ * bench; longer automatic fragments invoke the numerical DP supplied by the
+ * tile adapter; tagged structures pin portal endpoints to anchors/bench. Every
+ * non-draped result then passes through the same ruling-grade law while held
+ * junction and hinted-end stations remain exact.
+ */
+export function resolveProductionAlignedRoadProfile(
+  input: ProductionAlignedRoadProfileInput,
+): ProductionAlignedRoadProfile {
+  const n = input.elevation.length;
+  if (input.stations.length !== n) {
+    throw new Error('aligned road stations and elevation must have matching lengths');
+  }
+  if (input.hints?.length && input.hints.length !== n) {
+    throw new Error('aligned road hints and elevation must have matching lengths');
+  }
+  if (input.heldStations && input.heldStations.length !== n) {
+    throw new Error('aligned road held stations and elevation must have matching lengths');
+  }
+  const hints = input.hints?.length
+    ? input.hints
+    : Array.from({ length: n }, () => null);
+  const anchorStart = input.anchorStart ?? null;
+  const anchorEnd = input.anchorEnd ?? null;
+  const crumbStart = anchorStart ?? hints[0] ?? null;
+  const crumbEnd = anchorEnd ?? hints[n - 1] ?? null;
+  let profile = [...input.elevation];
+  let branch: ProductionAlignedRoadProfile['branch'] = 6;
+
+  let fragmentM = 0;
+  for (let station = 1; station < n; station++) {
+    fragmentM += Math.hypot(
+      input.stations[station][0] - input.stations[station - 1][0],
+      input.stations[station][1] - input.stations[station - 1][1],
+    );
+  }
+  const crumb = !input.hinted && input.mode === 'auto' && (
+    (n <= 16 && fragmentM <= 70)
+    || (n <= 40
+      && Boolean(input.isChaotic?.())
+      && (crumbStart !== null || crumbEnd !== null))
+  );
+
+  if (input.hinted) {
+    branch = 1;
+    const hintedStations: number[] = [];
+    for (let station = 0; station < n; station++) {
+      if (hints[station] !== null) hintedStations.push(station);
+    }
+    if (!hintedStations.length) {
+      throw new Error('aligned road marked hinted without any hint stations');
+    }
+    profile = input.stations.map((_, station) => {
+      let low = -1;
+      let high = -1;
+      for (const hintedStation of hintedStations) {
+        if (hintedStation <= station) low = hintedStation;
+        if (hintedStation >= station) {
+          high = hintedStation;
+          break;
+        }
+      }
+      if (low < 0) return hints[high] as number;
+      if (high < 0 || high === low) return hints[low] as number;
+      const fraction = (station - low) / (high - low);
+      return (hints[low] as number)
+        + ((hints[high] as number) - (hints[low] as number)) * fraction;
+    });
+    if (anchorStart !== null && Math.abs(profile[0] - anchorStart) < 4) {
+      profile[0] = anchorStart;
+    }
+    if (anchorEnd !== null && Math.abs(profile[n - 1] - anchorEnd) < 4) {
+      profile[n - 1] = anchorEnd;
+    }
+  } else if (crumb) {
+    if (crumbStart !== null && crumbEnd !== null) {
+      branch = 2;
+      profile = input.elevation.map((_, station) =>
+        crumbStart + ((crumbEnd - crumbStart) * station) / (n - 1));
+    } else if (crumbStart !== null || crumbEnd !== null) {
+      branch = 3;
+      const anchor = (crumbStart ?? crumbEnd) as number;
+      profile = input.elevation.map(() => anchor);
+    } else {
+      branch = 4;
+      profile = input.elevation.map((_, station) => input.benchAt(station));
+    }
+  } else if (input.mode === 'auto' && n > 4) {
+    branch = 5;
+    const solved = input.solveAuto?.();
+    if (!solved || solved.length !== n) {
+      throw new Error('aligned automatic road requires a complete solver profile');
+    }
+    profile = [...solved];
+  } else if (input.mode !== 'none') {
+    profile[0] = anchorStart ?? input.benchAt(0);
+    profile[n - 1] = anchorEnd ?? input.benchAt(n - 1);
+  }
+
+  const branchProfile = [...profile];
+  const gradeLimit = (input.maxGrade > 0 ? input.maxGrade : 0.15) * 1.2;
+  if (input.mode !== 'none' && n > 1) {
+    ruleGrade(
+      input.stations as Array<[number, number]>,
+      profile,
+      gradeLimit,
+      input.heldStations,
+    );
+  }
+  return { branchProfile, profile, branch, gradeLimit };
+}
 
 /**
  * Decide which aligned road spans become structures and construct their

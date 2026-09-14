@@ -61,7 +61,7 @@ import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
 import { RoadSolver, densifyPts, layerOf } from './roadsolve';
 import {
-  BENCH_OFFS, BENCH_K, BENCH_C, benchFlat, ruleGrade, latCands,
+  BENCH_OFFS, BENCH_K, BENCH_C, benchFlat, latCands,
   solveChain as solveProfile,
 } from './roadprofile';
 import { RoadProfileWorker } from './roadprofile-worker';
@@ -127,6 +127,7 @@ import {
   type ProductionCrossingRecord,
 } from './substrate/crossing-authority';
 import {
+  resolveProductionAlignedRoadProfile,
   resolveProductionEngineeredRoadProfile,
   resolveProductionRoadCrossSection,
   resolveProductionRoadStructureProfile,
@@ -17799,27 +17800,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       if (chaotic) { crumbDefer.set(dkey, seen + 1); unbuilt++; return; }
     }
   }
-  let alg = elev;
-  let pbranch = 6;
-  // A CRUMB'S HINTED END IS AN ANCHOR. The crumb branches below anchor only
-  // to BUILT decks, and a crumb that builds before the road it joins finds
-  // none there — measured at Vélizy as the worst seam on the capture: a
-  // three-station unnamed piece, one hinted station of three so under the
-  // hint gate, held LEVEL at its far end 0.92m under the pin at its near
-  // end, and the named road then built its through-station on that pin.
-  // The pin IS the deck the through road will build to, so where no deck
-  // stands yet the chain's hint at the end serves as the anchor. The end
-  // weld is untouched: it still reads built decks only.
-  const q0 = p0 ?? (hintEl[0] ?? null);
-  const q1 = p1 ?? (hintEl[n - 1] ?? null);
-  // A CRUMB CANNOT PROFILE ITSELF. OSM splits a mountain road at every
-  // structure change — Chapman's Peak alternates gallery / open road / gallery
-  // in 40-55m pieces — and a fragment eight stations long is too short for
-  // the smoothing, the clamp, or the DP to out-vote its own contaminated
-  // samples: one such crumb solved 80m up the cliff and every neighbour
-  // welded or ramped to it. For short fragments, continuity IS the profile:
-  // ramp between both anchors, hold a single anchor with the bench's drift,
-  // or stand on the per-station bench and let later neighbours join it.
+  // Terrain sampling remains an adapter. Substrate owns the branch authority:
+  // hint interpolation, crumb continuity, automatic DP selection, portal
+  // bench anchors and the first ruling-grade pass.
   const chaoticHere = (): boolean => {
     for (let i = 0; i < n; i++) {
       const cs = latCands(i);
@@ -17827,80 +17810,26 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
     return false;
   };
-  // A CRUMB IS SHORT IN METRES, NOT IN STATIONS. Sixteen stations is 40-55m
-  // of gallery at Chapman's and 110m of hillside at Senqu, where a fifteen-
-  // station piece with 10.7m of ground fall along it was held LEVEL at its
-  // one anchor: a causeway 11m over the ground when its neighbour built
-  // first, a trench 11m under it when the far tile did — and the neighbour
-  // then welded down to that. Past CRUMB_M a piece has room to be solved.
-  let fragM = 0;
-  for (let i = 1; i < n; i++) fragM += Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
-  const CRUMB_M = 70;
-  if (hinted) {
-    pbranch = 1;
-    const idxs: number[] = [];
-    for (let i = 0; i < n; i++) if (hintEl[i] !== null) idxs.push(i);
-    // BETWEEN hints, INTERPOLATE. The nearest-index snap made a staircase of
-    // hint plateaux wherever coverage was patchy but above the 80% gate, and
-    // ruleGrade then turned each riser into a ramp at 1.2x the class limit
-    // (audit finding 9). A station between two hinted neighbours now rides
-    // the line between them; before the first or past the last it holds the
-    // end hint, as the snap already did.
-    alg = dense.map((_, i) => {
-      let lo = -1, hi = -1;
-      for (const j of idxs) { if (j <= i) lo = j; if (j >= i) { hi = j; break; } }
-      if (lo < 0) return hintEl[hi] as number;
-      if (hi < 0 || hi === lo) return hintEl[lo] as number;
-      const t = (i - lo) / (hi - lo);
-      return (hintEl[lo] as number) + ((hintEl[hi] as number) - (hintEl[lo] as number)) * t;
-    });
-    if (p0 !== null && Math.abs(alg[0] - p0) < 4) alg[0] = p0;
-    if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
-  } else if (mode === 'auto' && ((n <= 16 && fragM <= CRUMB_M) || (n <= 40 && chaoticHere() && (q0 !== null || q1 !== null)))) {
-    if (q0 !== null && q1 !== null) {
-      pbranch = 2;
-      alg = elev.map((_, i) => q0 + ((q1 - q0) * i) / (n - 1));
-    } else if (q0 !== null || q1 !== null) {
-      // LEVEL, not drifted: every DEM-derived drift term tried here smuggled
-      // the plateau back in one crumb at a time — a 40-90m gallery shelf is
-      // engineered near-level, and holding the anchor is closer to truth.
-      pbranch = 3;
-      const a = (q0 ?? q1) as number;
-      alg = elev.map(() => a);
-    } else {
-      pbranch = 4;
-      alg = elev.map((_, i) => benchAt(i));
-    }
-  } else if (mode === 'auto' && n > 4) {
-    pbranch = 5;
-    alg = solveChainLocal(dense, maxGrade, p0, p1);
-  } else if (mode !== 'none') {
-    // Chord fragments (tagged tunnels and bridges) anchor their portal
-    // elevations to neighbours where they exist — and where they DON'T, to
-    // the bench estimate, never the raw centreline. A short tagged bridge
-    // that built first on the cliff took a chord between two contaminated
-    // samples and stood as an 80m sky-viaduct that every later neighbour
-    // then ramped up to meet.
-    alg = elev.slice();
-    alg[0] = p0 ?? benchAt(0);
-    alg[n - 1] = p1 ?? benchAt(n - 1);
-  }
-  // THE RULING GRADE IS A LAW OVER EVERY BRANCH, not a feature of one of them.
-  // It used to live only inside solveChain, so the four branches that do not
-  // call it — hints taken verbatim, the ramp, the hold, the bench — could emit
-  // anything at all. Measured on Highway 1 at Big Sur: 12.66m of rise over
-  // 8.2m of carriageway, a 154% wall on a road whose class ruling grade is 7%,
-  // built by the hint branch. A road that goes vertical is not a road, whatever
-  // produced the numbers, so the limit is applied where the profile LEAVES the
-  // solver rather than at one of the places it is made.
-  const gLim = (maxGrade > 0 ? maxGrade : 0.15) * 1.2;
-  stage('1-branch', alg);
+  const aligned = resolveProductionAlignedRoadProfile({
+    stations: dense,
+    elevation: elev,
+    benchAt,
+    hints: hintEl,
+    hinted,
+    mode,
+    maxGrade,
+    anchorStart: p0,
+    anchorEnd: p1,
+    heldStations: heldArr,
+    isChaotic: chaoticHere,
+    solveAuto: () => solveChainLocal(dense, maxGrade, p0, p1),
+  });
+  const alg = aligned.profile;
+  const pbranch = aligned.branch;
+  const gLim = aligned.gradeLimit;
+  stage('1-branch', aligned.branchProfile);
   for (const i of jn) { const r = stageLog.find((e) => e.fid === fid && e.i === i); if (r) r.pb = pbranch; }
   if (frag) frag.pb = pbranch;
-  if (mode !== 'none' && n > 1) {
-    alg = alg.slice();   // `alg` may still BE `elev`; the raw samples are read again below
-    ruleGrade(dense, alg, gLim, heldArr);
-  }
   stage('2-ruled', alg);
   // Roads get their own longitudinal PROFILE. Terrain draping alone sends a
   // road over every hill in its path; real roads keep grade and go THROUGH.

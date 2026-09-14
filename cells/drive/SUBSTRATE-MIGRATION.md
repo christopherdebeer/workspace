@@ -113,6 +113,9 @@ The production structures fixture verifies the open culvert, filled causeway
 and converged rebuild queue through `__substrate().crossingEarthworks`.
 
 The bridge clearance profile is now substrate-owned arithmetic:
+`resolveProductionAlignedRoadProfile` selects chain-hint interpolation,
+short-fragment continuity/bench handling or the automatic DP and applies the
+first ruling-grade pass;
 `resolveProductionBridgeProfile` constructs the portal chord around held
 junctions, consumes landmark/water decisions, samples lower-layer decks between
 sparse road stations and applies the two-pass ruling-grade cone before any
@@ -122,8 +125,8 @@ tunnel-run detection and tunnel chords;
 road/rail deviation-budget clamp; `resolveProductionRoadCrossSection` owns
 kerb seating, designed crossfall/superelevation, the post-seat ruling-grade
 pass and endpoint centre/camber welds. The legacy road builder supplies the
-aligned bench, terrain samples and streamed water/deck/neighbour callbacks,
-then consumes the resulting profile. `buildProductionRoadSurfaceGeometry`
+terrain/bench candidates and streamed water/deck/neighbour callbacks, then
+consumes the resulting profile. `buildProductionRoadSurfaceGeometry`
 owns the renderer-neutral carriageway triangles, UV/paint attributes, face
 normals and seam-normal smoothing from the final cropped bay corners. The
 remaining crossing migration is to move the aligned bench inputs plus
