@@ -367,6 +367,12 @@ export interface HydroBuildOptions {
   gutter: number;
   oceanLevelM: number;
   shoreDistanceLimitM: number;
+  /** A tile holding no water writes its field's constants instead of running
+   *  eleven full-grid passes to arrive at them (see buildHydroTile). False is
+   *  the exact A/B — `?hydrodry=0` — and the control the measurement needs,
+   *  since the saving is per BUILD and a session mean is dominated by the
+   *  handful of wet tiles whichever way this is set. */
+  dryShortCircuit: boolean;
   minimumDepthM: number;
   /** Solve the coast field (travel time and exposure) for coastal tiles. */
   coastField: boolean;
@@ -382,6 +388,7 @@ export const DEFAULT_HYDRO_BUILD: HydroBuildOptions = {
   gutter: 6,
   oceanLevelM: 0,
   shoreDistanceLimitM: 180,
+  dryShortCircuit: true,
   minimumDepthM: 0.08,
   coastField: true,
 };

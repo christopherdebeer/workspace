@@ -772,8 +772,24 @@ function areaCoverageRaster(
 /** WHERE A BUILD GOES, cumulative across the session: the instrument for a
  *  hydro build that costs more than its frame. Read via __hydro().buildProf. */
 export const HYDRO_BUILD_PROF = {
-  builds: 0, total: 0, max: 0, ocean: 0, analyse: 0, raster: 0, texels: 0, search: 0, sources: 0, rest: 0, coast: 0,
+  builds: 0, total: 0, max: 0, ocean: 0, analyse: 0, raster: 0, texels: 0, search: 0, sources: 0, coast: 0,
+  // `rest` WAS TWO THIRDS OF A BUILD, which is a phase name meaning "the rest
+  // of it". Measured on the Yosemite capture at 33.5 of 51.7 ms — the split
+  // below is what a phase called that is worth: every one of these is a FULL
+  // GRID pass, so on a flowing tile (flowingFieldResolution 256 against the
+  // dry 128) each costs four times what the same line costs elsewhere, and
+  // which of them dominates decides whether the cut is the resolution, the
+  // sampler or the transform.
+  fill: 0, majority: 0, occlude: 0, extent: 0, shore: 0, ground: 0, pack: 0,
   items: 0, areaItems: 0, flowingAreas: 0, searchTexels: 0, paints: 0,
+  /** Texels per build, so a phase can be read as ns/texel across resolutions. */
+  texelCount: 0,
+  /** HOW MUCH OF THE GRID THE WATER ACTUALLY OCCUPIES. Every phase after
+   *  `analyse` is a full-grid pass, so the build's price is set by the TILE
+   *  and not by the river in it; this pair is what says whether that is a
+   *  fair price. `dryBuilds` are the tiles that built a whole field for no
+   *  water at all. */
+  coveredTexels: 0, dryBuilds: 0, dryMs: 0, dryTexels: 0, wetBuilds: 0, wetMs: 0, wetTexels: 0,
 };
 export function buildHydroTile(
   input: HydroTileInput,
@@ -821,6 +837,15 @@ export function buildHydroTile(
   const flags = new Uint8Array(count);
   const rank = new Uint8Array(count);
   const bodyIds = new Set<string>();
+  // ── IS THERE ANY WATER IN THIS TILE AT ALL? ──
+  //
+  // Set by the two — and only two — things that can put coverage on a texel:
+  // `paint` below, and the last-known-good retention from the previous field.
+  // The 3x3 majority pass only RAISES a texel that already carries a flowing
+  // kind, and the occluders only lower, so once the item loop is done this
+  // flag is final. It is a flag rather than a scan because the scan it
+  // replaces would itself be one of the full-grid passes it exists to skip.
+  let anyCoverage = false;
   // River space, allocated only once a flowing texel actually lands — an
   // ocean tile never pays for it. See HydroTileField.structure.
   let structure: Float32Array | null = null;
@@ -877,6 +902,9 @@ export function buildHydroTile(
     fall?: readonly [number, number, number, number],
   ): void => {
     if (amount <= 0.005 || ix < 0 || iz < 0 || ix >= width || iz >= height) return;
+    // Before the rank guard on purpose: a paint this one loses to is a paint
+    // that already put coverage over the threshold on this texel.
+    anyCoverage = true;
     const i = iz * width + ix;
     const c = constsOf(body);
     const p = c.p;
@@ -920,7 +948,7 @@ export function buildHydroTile(
   const P = HYDRO_BUILD_PROF;
   const T0 = performance.now();
   let tMark = T0;
-  const lap = (k: 'ocean' | 'analyse' | 'sources' | 'rest' | 'coast'): void => { const now = performance.now(); P[k] += now - tMark; tMark = now; };
+  const lap = (k: 'ocean' | 'analyse' | 'sources' | 'coast' | 'fill' | 'majority' | 'occlude' | 'extent' | 'shore' | 'ground' | 'pack'): void => { const now = performance.now(); P[k] += now - tMark; tMark = now; };
   const ocean = registry.get('hydro:ocean');
   // Which texels the CURRENT coverage actually answered — ocean or dry. The
   // rest are unknown and keep the previous field's verdict below.
@@ -976,6 +1004,7 @@ export function buildHydroTile(
     for (let i = 0; i < count; i++) {
       if (answered[i]) continue;
       if (previous.geometry[i * 4] <= 0.005) continue;
+      anyCoverage = true;
       const prevKind = previous.material[i * 4];
       coverage[i] = previous.geometry[i * 4];
       level[i] = previous.elevationBaseM + previous.geometry[i * 4 + 2];
@@ -1201,6 +1230,47 @@ export function buildHydroTile(
   }
   tMark = performance.now();
 
+  // ── A TILE WITH NO WATER IN IT PAYS FOR NONE ──
+  //
+  // Everything from here to the packing loop is a FULL-GRID pass — the
+  // source map, the extension fill, the 3x3 majority, the occluder mask, the
+  // extent scan, two distance transforms and the pack — so a build is priced
+  // by the TILE and not by the water in it. Measured on the Yosemite capture
+  // (devtools/hydro-phases.mjs), where a dump from the seat put hydroBuild at
+  // 94.6 ms a build and 30% of every slow frame: 296 of 38,309 texels wet,
+  // 0.77% — and FIFTEEN OF TWENTY-TWO BUILDS HAD NO WATER AT ALL. Those
+  // fifteen ran eleven passes over a 258-square grid to produce a constant.
+  //
+  // The constant is exact, not an approximation, and each channel is the
+  // value the skipped code provably writes with `coverage` empty:
+  //  · sources are all zero, so `nearestSourceMap` answers -1 everywhere and
+  //    the fill writes nothing;
+  //  · the majority pass tests `kind[i]`, which only a paint sets;
+  //  · an occluder's loop `continue`s on every texel (coverage <= .005);
+  //  · `waterLevels` is empty, so `elevationBaseM` is the ocean level and
+  //    `waterBounds` is undefined — the mesh covers nothing;
+  //  · `wet` is all zero, so the signed shore distance is -toWet everywhere
+  //    and clamps to exactly -shoreDistanceLimitM;
+  //  · level, depth, flow, fetch, scale, kind, seed, turbidity and flags are
+  //    all still zero-initialised, so dynamics and material are zero and the
+  //    geometry's level channel is 0 - elevationBaseM.
+  //
+  // The ground channel is NOT skipped: it is the terrain under the tile, it
+  // is true whether or not there is water on it, and `shore-contour` reads it
+  // through `field.ground`. It is 10% of a dry build and the honest 10%.
+  //
+  // THE RETENTION IS UPSTREAM OF THIS FLAG, which is what makes it safe: a
+  // texel the new coverage could not answer has already taken the previous
+  // field's water by the time `anyCoverage` is read, so "dry" means dry after
+  // last-known-good and not merely "nothing arrived this time".
+  // WATERLESS IS THE TILE; DRY IS WHAT THIS BUILD DID ABOUT IT. They are kept
+  // apart so the `?hydrodry=0` control classifies the SAME population: with
+  // the short-circuit off every waterless tile still runs the long way, and
+  // the ledger has to say that it was a waterless tile that did so, or the
+  // A/B compares a mean over all builds against a mean over seven.
+  const waterless = !anyCoverage;
+  const dry = waterless && options.dryShortCircuit;
+  if (!dry) {
   // Extend body parameters outside the visible mask. The water mesh is much
   // coarser than this field, so its dry vertices still need the elevation of
   // the small masked body that may lie between them.
@@ -1225,6 +1295,7 @@ export function buildHydroTile(
       structure[i * 4 + 3] = structure[n * 4 + 3];
     }
   }
+  lap('fill');
 
   // ── A RIVER FROM THE COVER RASTER IS ONE RIVER ──
   //
@@ -1252,6 +1323,7 @@ export function buildHydroTile(
       if (mean >= 0.5 && src[i] < mean) coverage[i] = Math.min(1, Math.max(coverage[i], mean * 1.15));
     }
   }
+  lap('majority');
   // ── STRUCTURES OWN SURFACE VISIBILITY ──
   //
   // A culvert carries water below the road and a causeway blocks it with fill;
@@ -1281,19 +1353,25 @@ export function buildHydroTile(
       coverage[i] *= keep;
     }
   }
+  lap('occlude');
+  }
   const wet = new Uint8Array(count);
   const waterLevels: number[] = [];
   let hasWater = false;
-  for (let i = 0; i < count; i++) {
-    wet[i] = coverage[i] >= 0.5 ? 1 : 0;
-    if (coverage[i] > 0.005) { hasWater = true; waterLevels.push(level[i]); }
+  if (!dry) {
+    let cov = 0;
+    for (let i = 0; i < count; i++) {
+      wet[i] = coverage[i] >= 0.5 ? 1 : 0;
+      if (coverage[i] > 0.005) { hasWater = true; waterLevels.push(level[i]); cov++; }
+    }
+    P.coveredTexels += cov;
   }
   const elevationBaseM = quantile(waterLevels, 0.5) ?? options.oceanLevelM;
   // THE RECT THE MESH ONLY NEEDS TO COVER. Measured on the coverage that will
   // actually survive the fragment cut, then padded by a texel so the shore
   // fade and the wave displacement have somewhere to go.
   let waterBounds: WorldBounds | undefined;
-  {
+  if (!dry) {
     let wx0 = Infinity, wz0 = Infinity, wx1 = -Infinity, wz1 = -Infinity;
     for (let iz = 0; iz < height; iz++) for (let ix = 0; ix < width; ix++) {
       if (coverage[iz * width + ix] <= 0.005) continue;
@@ -1316,8 +1394,13 @@ export function buildHydroTile(
       };
     }
   }
-  const toDry = distanceTransform(wet, width, height, 0);
-  const toWet = distanceTransform(wet, width, height, 1);
+  lap('extent');
+  // A dry grid's two transforms are constants — every texel is dry, so `toDry`
+  // is zero everywhere and `toWet` never finds a target — and the pack below
+  // reads neither on that path.
+  const toDry = dry ? null : distanceTransform(wet, width, height, 0);
+  const toWet = dry ? null : distanceTransform(wet, width, height, 1);
+  lap('shore');
   const geometry = new Float32Array(count * 4);
   const dynamics = new Float32Array(count * 4);
   const material = new Uint8Array(count * 4);
@@ -1328,8 +1411,21 @@ export function buildHydroTile(
       ? sampled - elevationBaseM
       : 0;
   }
-  for (let i = 0; i < count; i++) {
-    const signedCells = wet[i] ? toDry[i] : -toWet[i];
+  lap('ground');
+  if (dry) {
+    // The whole field, written without a loop over its own arithmetic: a dry
+    // texel's shore distance is the clamp (it is further from water than the
+    // limit can express, in a grid that holds none) and its level channel is
+    // the datum's own negation. Everything else is the zero the arrays were
+    // born with, which is why only two of the twelve channels are touched.
+    const shoreDry = -options.shoreDistanceLimitM;
+    const levelDry = -elevationBaseM;
+    for (let i = 0; i < count; i++) {
+      geometry[i * 4 + 1] = shoreDry;
+      geometry[i * 4 + 2] = levelDry;
+    }
+  } else for (let i = 0; i < count; i++) {
+    const signedCells = wet[i] ? toDry![i] : -toWet![i];
     geometry[i * 4] = coverage[i];
     geometry[i * 4 + 1] = clamp(signedCells * pixelM, -options.shoreDistanceLimitM, options.shoreDistanceLimitM);
     geometry[i * 4 + 2] = level[i] - elevationBaseM;
@@ -1355,7 +1451,7 @@ export function buildHydroTile(
     material[i * 4 + 3] = flags[i];
   }
 
-  lap('rest');
+  lap('pack');
   // ── THE COAST FIELD ── only where the tile holds sea or lagoon; the swell
   // it is solved for is the shader's own for the body's fetch.
   let coast: Float32Array<ArrayBuffer> | undefined;
@@ -1376,13 +1472,18 @@ export function buildHydroTile(
     }
     if (any) {
       coast = solveCoastField({
-        width, height, pixelM, wet: standing, coastal, interior: oceanInterior, depth, toDry,
+        // `any` needs a wet ocean texel, which a dry grid cannot have, so the
+        // transform is non-null on every path that reaches here.
+        width, height, pixelM, wet: standing, coastal, interior: oceanInterior, depth, toDry: toDry!,
         swellWavelengthM: swellWavelengthM(fetchMax),
       }).data;
     }
   }
   lap('coast');
-  { const d = performance.now() - T0; P.builds++; P.total += d; if (d > P.max) P.max = d; }
+  { const d = performance.now() - T0;
+    P.builds++; P.total += d; P.texelCount += count; if (d > P.max) P.max = d;
+    if (waterless) { P.dryBuilds++; P.dryMs += d; P.dryTexels += count; }
+    else { P.wetBuilds++; P.wetMs += d; P.wetTexels += count; } }
   return {
     key: input.key,
     revision: input.revision,

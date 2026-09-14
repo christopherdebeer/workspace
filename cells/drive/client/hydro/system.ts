@@ -59,6 +59,8 @@ export interface HydroSystemOptions extends Partial<HydroBuildOptions> {
    * This is the guarded production-render cutover; false preserves rollback.
    */
   deferRendering?: boolean;
+  /** See HydroBuildOptions.dryShortCircuit — `?hydrodry=0` is the A/B. */
+  dryShortCircuit?: boolean;
 }
 
 export interface HydroTileBinding extends HydroTileGpuBinding {
@@ -471,6 +473,7 @@ class DefaultHydroSystem implements HydroSystem {
       shoreDistanceLimitM: options.shoreDistanceLimitM ?? DEFAULT_HYDRO_BUILD.shoreDistanceLimitM,
       minimumDepthM: options.minimumDepthM ?? DEFAULT_HYDRO_BUILD.minimumDepthM,
       coastField: options.coastField ?? DEFAULT_HYDRO_BUILD.coastField,
+      dryShortCircuit: options.dryShortCircuit ?? DEFAULT_HYDRO_BUILD.dryShortCircuit,
     };
     this.registry = new HydroBodyRegistry(this.buildOptions.oceanLevelM);
     this.scheduleBuild = options.scheduleBuild ?? immediateBuild;

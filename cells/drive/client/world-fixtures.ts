@@ -849,6 +849,12 @@ export const CAPTURE_INDEX: readonly CaptureCard[] = [
     label: 'GLENCAIRN — THE SOUTHERN LINE',
     note: 'Reported from the seat at -34.15905,18.43142: the railway ribbon is not railway-like. THE FIRST FIXTURE IN THIS REPO THAT CONTAINS A RAILWAY AT ALL — `railway` was missing from capture-world\'s own KEEP_TAGS as well as the game\'s, so all nine captures before this one held ZERO railway ways, Simon\'s Town included, and nothing deterministic could see one. Four ways of the PRASA Southern Line in a 700m box between the mountain and the beach, all `railway=rail usage=main gauge=1067 electrified=contact_line passenger_lines=1`, one of them a `bridge=yes layer=1` — so the gauge, the electrification and the bridge case are all in one capture. 103 highways beside them, and the M4 runs parallel for the whole length, which is the comparison a railway look has to survive.',
   },
+  {
+    id: 'at-yosemite', file: 'world-yosemite.json', heading: 90,
+    eco: { id: 366, biome: 5, name: 'Sierra Nevada forests', realm: 'Nearctic' },
+    label: 'YOSEMITE — THE VALLEY FLOOR',
+    note: 'Captured at 37.73606,-119.63732 r=1400m because a device dump named hydroBuild at 94.6 ms a build there — 30% of every slow frame — and nothing deterministic in this repo held the Merced. Cover classes 10/30/60/80 in the box, so the valley carries WorldCover water as well as the OSM waterway, which is the pair the flowing-area path is expensive on; 1,202-2,417 m of granite around it. The spot is the one the substrate work already measures at, so a hydro number and a substrate number here are about the same ground.',
+  },
 ];
 
 /**

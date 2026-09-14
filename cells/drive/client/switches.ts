@@ -195,6 +195,8 @@ export const SWITCHES = [
     note: 'lumasync=1 reads the luma map synchronously, as it used to' },
   { id: 'hydroskip', kind: 'toggle', marks: ['legacy'], fallback: 'skip',
     note: 'hydroskip=0 rebuilds a water tile even when nothing it reads has moved' },
+  { id: 'hydrodry', kind: 'toggle', marks: ['legacy'], fallback: 'short',
+    note: 'hydrodry=0 runs a waterless tile’s eleven full-grid passes anyway' },
   { id: 'vegseed', kind: 'toggle', marks: ['legacy'], fallback: 'budgeted',
     note: 'vegseed=0 seeds a whole ring in one call, as it did at 95 ms' },
   { id: 'relief', kind: 'toggle', marks: ['legacy'], fallback: 'on',

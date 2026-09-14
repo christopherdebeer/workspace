@@ -220,6 +220,8 @@ Nothing here is fast. Budget for it.
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
 | `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
 | `node devtools/bedding.mjs` | whether the substrate's bedding is geology or corduroy: the autocorrelation of its own contribution above its background, at a solved scale so two runs compare (`REV=` for a control, `ANALYSE=1` to re-read frames already on disk) | ~9min |
+| `node devtools/hydro-phases.mjs` | where a hydro build's milliseconds go, by phase and by ns/texel, with the wet/waterless build split and the wet share of the grid (`DRY=0` is the short-circuit's control, `FIX=`/`SPOT=` the place) | ~1min |
+| `node devtools/hydro-dry.test.mjs` | a waterless tile's short-circuit is the path it replaced, byte for byte, against the revision's own build-tile (`REV=`) | ~10s |
 | `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
 | `node devtools/sward-sub.mjs` | whether the sward's density follows the substrate's own field, as the correlation between them, with `swardsub=0` as the control (a fixture, and CPU numbers rather than pixels — see the note) | ~3min |
 | `node devtools/ground-view.mjs` | a ground view is a uniform, not a sheet: the chip sets the channel in every camera, the legend is tallied off the attribute the fragment reads, and the chase frame moves (`FIX=` for an offline world) | ~6min |
@@ -3230,6 +3232,134 @@ crossing OSM split into several ways: each fragment measures its own wet
 run, so a bridge cut into thirds asks for a third of the clearance. The
 entries cover the famous ones; the assembly already gathers the fragments,
 and teaching the measurement to read it is the next step.
+
+### A hydro build was priced by the tile, not by the water in it
+
+The seat's dump from Yosemite (409 s, chase): `hydroBuild` **94.6 ms a
+build, 240 max, 248 builds, 30% of all slow-frame time and top-of-frame in
+222 frames** — the largest identified cost in the session. The dump could
+not say which phase, because `HYDRO_BUILD_PROF` lives on `__hydro().buildProf`
+and a phone has no console. **The instrument first**, then the number.
+
+**THE DUMP CARRIES TWO NEW ROWS.** `look` states the switches this build was
+run with (`tdetail`, the substrate's amount and domain, the ground view,
+`swardsub`, `tilt`, `substrate`) so two dumps of the same drive can be
+compared at all — which is the only honest way to cost a fragment shader, and
+the answer to the question the Yosemite dump was pasted to ask. **Nothing in a
+telemetry report can attribute per-fragment work**: the substrate runs in the
+terrain's fragment and the only rows it could ever reach are `render` (the
+main thread ISSUING draws) and `gap`, which is a residual containing vsync,
+GC, layout and the GPU's work on 2.24M triangles. Reading the gap as "the
+shader" is the claim this file already withdrew once. `hydro phases` carries
+the build profile by phase. `search` is timed INSIDE the per-texel loop, so it
+is printed as a subset of `texels` rather than added twice, and `other` is the
+residual no lap covers, so the row sums to the mean and nothing can hide in it.
+
+**`rest` WAS TWO THIRDS OF A BUILD, WHICH IS A PHASE NAME MEANING "THE REST OF
+IT".** Split into `fill`, `majority`, `occlude`, `extent`, `shore`, `ground`
+and `pack` — and every one of those is a FULL-GRID pass, which is the finding.
+Measured on the Yosemite capture (`devtools/hydro-phases.mjs`, `at-yosemite`,
+settled, nodraw):
+
+| | mean | of a build |
+|---|---|---|
+| texels (the per-item paint loop) | 6.7 ms | 15% |
+| fill (extend body parameters past the mask) | 8.4 | 19% |
+| sources (the nearest-source map) | 6.1 | 14% |
+| majority (the 3x3 pinhole close) | 4.5 | 10% |
+| pack (geometry/dynamics/material) | 4.5 | 10% |
+| shore (two distance transforms) | 4.1 | 9% |
+| ground (sampleElevation per texel) | 3.7 | 9% |
+| ocean (the mask and the retention) | 3.3 | 8% |
+| extent, coast, analyse, raster, other | 2.0 | 5% |
+
+**AND 296 OF 38,309 TEXELS WERE WET — 0.77% — WITH FIFTEEN OF TWENTY-TWO
+BUILDS HOLDING NO WATER AT ALL.** A tile is charged for its AREA and not for
+the river in it. That is the whole story at Yosemite, and it is why the
+Breede's cut (candidates once per area, the search once per 2x2 block) could
+not help here: those were about the water, and this is about the tile.
+
+**A WATERLESS TILE NOW WRITES ITS FIELD'S CONSTANTS.** Every one of those
+passes provably produces a constant when the coverage array is empty — the
+source map answers -1 everywhere so the fill writes nothing, the majority pass
+tests a `kind` only a paint sets, an occluder's loop `continue`s on every
+texel, `waterLevels` is empty so the datum is the ocean level and the mesh
+bounds are undefined, `wet` is all zero so the signed shore distance clamps to
+exactly `-shoreDistanceLimitM`, and level, depth, flow, fetch, scale, kind,
+seed, turbidity and flags are all still zero-initialised. Two strided writes
+replace eleven passes. **The ground channel is NOT skipped**: it is the terrain
+under the tile, true whether or not there is water on it, and `shore-contour`
+reads `field.ground`.
+
+- **THE RETENTION IS UPSTREAM OF THE FLAG, WHICH IS WHAT MAKES IT SAFE.**
+  `anyCoverage` is set by `paint` AND by the last-known-good retention, so
+  "dry" means dry after the previous field has been consulted and not merely
+  "nothing arrived this time". A short-circuit reading only the paints would
+  take away the straight-edged rectangle of sea that retention exists to keep.
+- **IT IS A FLAG, NOT A SCAN**, because the scan it would replace is itself
+  one of the full-grid passes it exists to skip. Set before the rank guard in
+  `paint` on purpose: a paint this one loses to is a paint that has already
+  put coverage over the threshold on that texel.
+- **`waterless` AND `dry` ARE DIFFERENT THINGS.** The first is the tile, the
+  second is what this build did about it. Kept apart so `?hydrodry=0`
+  classifies the SAME population — otherwise the control's "mean over all
+  builds" would be compared against the fix's "mean over seven".
+
+**Measured**, `at-yosemite`, the switch the only difference:
+
+| | `?hydrodry=0` | short-circuit |
+|---|---|---|
+| a build with NO water (15 of 22) | **18.5 ms** over 19,600 texels | **4.0 ms** |
+| a build WITH water (7 of 22) | 120.8 ms over 78,400 texels | 127.6 — run noise, untouched |
+
+Held by `devtools/hydro-dry.test.mjs`, which drives the SHIPPED function
+beside the one it replaced (extracted with `git show REV:`, default HEAD) and
+requires every channel of every field to be identical — geometry, dynamics,
+material, ground, the scalars, structure, waterfalls and coast — on three
+fixtures: a waterless tile, a river tile that must take the untouched path,
+and a featureless rebuild handed a previous field, which is the retention case
+that could delete a sea. **The old code is the test's control**, the rule
+`clip.test.mjs` set; the negative control was run (a millimetre on the dry
+shore constant fails it).
+
+**WHAT IS LEFT, AND IT IS THE BIGGER HALF.** A build WITH water is 121-128 ms
+over 78,400 texels for 296 wet ones — 0.4% — and every pass above still walks
+all of it. The field is CONSTANT outside the shore-distance band
+(`shoreDistanceLimitM` 180 m, about 19 texels at a flowing tile's 9.4 m), so
+the honest next cut is to run `fill`, `majority`, `shore`, `ground` and `pack`
+over the covered texels' rect padded by that reach and fill the outside with
+the same constants the dry path already writes. It is not made here because
+`fill` deliberately extends a body's level BEYOND the visible mask and the CPU
+readers (`sampleRestingSurface`, `sampleBankField`, `drawnHydroAt`) sample the
+field anywhere in the tile — so the bound has to be shown not to move those
+answers, which is a measurement and not a reading.
+
+**AND `flowingFieldResolution` IS A 4x GRID, NOT THE 1.27x ITS COMMENT
+CLAIMS.** `hydro-resolution.test` reads 22.1 ms at 128 against 41.7 at 256 on
+its own fixture — 1.9x, fair, because the water fills that tile. At Yosemite a
+flowing tile is 78,400 texels against a waterless one's 19,600 and the river
+covers four texels in a thousand, so the same choice costs four times the
+grid to place a bank the player is a kilometre from. The dial is right where
+the water IS the tile and wrong where it is a thread through one; a resolution
+chosen from the covered SHARE rather than from "any flowing observation" is
+the other half of the cut above.
+
+`devtools/hydro-phases.mjs` is the instrument: the phase split, the ns/texel
+(which is what tells an expensive pass from a big grid), the wet share, and
+the wet/waterless build split, on a fixture or at a live `SPOT=`. **`nodraw`
+is safe here** — the measurement is CPU milliseconds inside a synchronous
+function, not pixels and not throughput, so the software renderer can only
+change how often the frame loop asks for a build, not what one costs.
+
+**AND THE BENCH THE DOCTRINE NAMED DID NOT EXIST.** `node_modules/.cache/hydrobench.ts`
+reproduced the Breede's 292 ms to the millisecond and is GONE — that directory
+is not in git — so this file named a tool nobody had. A capture answers the
+same question through the ACTUAL feed path (`hydroFeed` gathers the features,
+builds the ocean mask, traces the cover's inland water), needs no
+reconstruction to go stale, and is checked in beside the number it explains:
+`at-yosemite` (37.73606,-119.63732, r=1400 m, cover classes 10/30/60/80, the
+Merced and 1,202-2,417 m of granite) is the first fixture in the repo that
+holds the river the dump was about.
 
 ## The labs
 

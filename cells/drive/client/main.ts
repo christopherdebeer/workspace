@@ -3758,6 +3758,12 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
       // The coastal travel-time field (hydro/coast-field.ts): refraction in
       // the nearshore phase and shelter in the surf. `?coast=0` is the A/B.
       coastField: qsOn('coast', true),
+      // A tile with no water in it writes its field's constants instead of
+      // running eleven full-grid passes to reach them. `?hydrodry=0` is the
+      // exact A/B, and it has to be one: the saving is per BUILD and a
+      // session mean is set by the few tiles that DO hold water, so the
+      // dry-build row of the dump is the number that moves.
+      dryShortCircuit: qsOn('hydrodry', true),
       scheduleBuild: (job) =>
       new Promise((resolve, reject) => { hydroJobs.push({ job, resolve, reject }); }) });
     hydroSys.setDebugView(hydroView);
@@ -34745,7 +34751,9 @@ function repaintWetDebug(): void {
     buildProf: (() => {
       const P = HYDRO_BUILD_PROF, b = Math.max(1, P.builds);
       const ms = (v: number): number => +(v / b).toFixed(1);
-      return { builds: P.builds, meanMs: ms(P.total), maxMs: Math.round(P.max), ocean: ms(P.ocean), analyse: ms(P.analyse), raster: ms(P.raster), texels: ms(P.texels), search: ms(P.search), sources: ms(P.sources), rest: ms(P.rest), coast: ms(P.coast),
+      return { builds: P.builds, meanMs: ms(P.total), maxMs: Math.round(P.max), ocean: ms(P.ocean), analyse: ms(P.analyse), raster: ms(P.raster), texels: ms(P.texels), search: ms(P.search), sources: ms(P.sources), coast: ms(P.coast),
+        fill: ms(P.fill), majority: ms(P.majority), occlude: ms(P.occlude), extent: ms(P.extent), shore: ms(P.shore), ground: ms(P.ground), pack: ms(P.pack), texels_n: Math.round(P.texelCount / b), covered_n: Math.round(P.coveredTexels / b), dryBuilds: P.dryBuilds, dryMs: +(P.dryMs / Math.max(1, P.dryBuilds)).toFixed(1), dryTexels: Math.round(P.dryTexels / Math.max(1, P.dryBuilds)),
+        wetBuilds: P.wetBuilds, wetMs: +(P.wetMs / Math.max(1, P.wetBuilds)).toFixed(1), wetTexels: Math.round(P.wetTexels / Math.max(1, P.wetBuilds)),
         itemsPerBuild: +(P.items / b).toFixed(1), areaItems: +(P.areaItems / b).toFixed(1), flowingAreas: +(P.flowingAreas / b).toFixed(1), searchTexels: Math.round(P.searchTexels / b), paints: Math.round(P.paints / b) };
     })(),
     landcover: (() => {
@@ -43893,6 +43901,24 @@ function telemetryReport(): string {
   L.push(`device ${navigator.hardwareConcurrency ?? '?'} cores · dpr ${devicePixelRatio} · ${innerWidth}x${innerHeight} · ${gpu}`);
   L.push(`ua ${navigator.userAgent.slice(0, 90)}`);
   L.push(`settings tseg ${terrainSeg} · veg ${vegScale} · grass ${grassScale} · refine ${REFINE ? 'on' : 'off'} r${REFINE_R} · worker ${tworker && !tworker.disabled ? 'on' : 'off'} · luma ${lumaAsync ? 'async' : 'sync'}${mem ? ` · heap ${Math.round(mem.usedJSHeapSize / 1048576)}MB` : ''}`);
+  // ── THE LOOK SWITCHES, BECAUSE TWO DUMPS ARE THE ONLY WAY TO COST A
+  //    FRAGMENT SHADER ──
+  //
+  // Nothing in this report can attribute per-fragment work. The substrate runs
+  // in the terrain's fragment; the only rows it could ever appear in are
+  // `render` (the main thread ISSUING draws) and `gap`, and the gap is a
+  // residual that contains vsync, GC, layout and the GPU's own work on two and
+  // a quarter million triangles. Reading it as "the shader" is exactly the
+  // claim this file already withdrew once.
+  //
+  // What CAN answer it is two dumps of the same drive with the term off, and
+  // that only works if a dump says which build it is. So the switches ride
+  // here: a paste with `tdetail=flat` beside a default one makes the gap
+  // difference the measurement, and a paste that does not say cannot be
+  // compared to one that does.
+  L.push(`look tdetail ${TDETAIL} · sub ${tdU.uSubAmt.value} dom ${tdU.uSubDom.value}`
+    + ` · oct ${tdU.uTdOct.value} amt ${tdU.uTdAmt.value} · view ${groundView}`
+    + ` · swardsub ${SUB_SWARD ? 'on' : 'off'} · tilt ${TILT_MODE} · substrate ${SUBSTRATE_MODE.name}`);
   const _treePlacedByFamily = EZ_FAMILIES.map(f => ezTiers[f].reduce((n, t) => n + t.n, 0));
   const _treePlaced = _treePlacedByFamily.reduce((n, v) => n + v, 0);
   const _treeTris = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + t.n * t.tris, 0), 0);
@@ -43919,6 +43945,43 @@ function telemetryReport(): string {
   if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)} · feeds ${workerLedger.hydroFeeds} skipped ${workerLedger.hydroSkips} (dry ground ${workerLedger.hydroSkipsDry}) · built by dirty ${workerLedger.hydroWhyDirty} sig ${workerLedger.hydroWhySig} ground ${workerLedger.hydroWhyGround} first ${workerLedger.hydroWhyFirst}`);
     const pa = Math.max(1, workerLedger.applied);
     L.push(`post split ms/build reseat ${(workerLedger.reseatMs / pa).toFixed(1)} redrape ${(workerLedger.redrapeMs / pa).toFixed(1)} hydro ${(workerLedger.hydroMs / pa).toFixed(1)} batter ${(workerLedger.batterMs / pa).toFixed(1)} culvert ${(workerLedger.culvertMs / pa).toFixed(1)} · post max ${Math.round(workerLedger.postMax)} · dropped ${workerLedger.dropped}`); }
+  //    WHICH PHASE OF A HYDRO BUILD ──
+  //
+  // The worker line above says how much a hydro build costs and has never
+  // been able to say WHERE it goes. HYDRO_BUILD_PROF has answered that since
+  // the Breede River cut — it is on `__hydro().buildProf`, and a console is
+  // exactly what a phone does not have — so every device paste naming
+  // hydroBuild as the top slow-frame phase has been a report with no
+  // attribution in it. The phases are cumulative over the session and sum to
+  // `mean`: a build that is mostly `texels` is the per-texel paint loop, one
+  // that is mostly `search` is the flowing-area profile hunt, and one that is
+  // mostly `analyse` is the feature gather — three different cuts, and the
+  // number that chooses between them was a probe call away and out of reach.
+  //
+  // Unconditional, and deliberately outside the `tworker` block above: the
+  // hydro build runs on the main thread whether or not the terrain kernel is
+  // in a worker, so gating it on the worker would blank the row on the exact
+  // `?tworker=0` A/B that would want it most.
+  // The phases are DISJOINT as printed, and `search` is the one exception:
+  // it is timed inside the per-texel loop, so it is a subset of `texels` and
+  // is named as such rather than added twice. `other` is the residual the
+  // laps do not cover — the item loop's own bookkeeping — printed so the row
+  // sums to `mean` and a phase that grows into the gap cannot hide there.
+  { const P = HYDRO_BUILD_PROF, hb = Math.max(1, P.builds);
+    const hms = (v: number): string => (v / hb).toFixed(1);
+    const other = P.total - (P.ocean + P.analyse + P.raster + P.texels + P.sources + P.coast
+      + P.fill + P.majority + P.occlude + P.extent + P.shore + P.ground + P.pack);
+    L.push(`hydro phases ${P.builds} builds · mean ${hms(P.total)} max ${Math.round(P.max)} ms`
+      + ` · ocean ${hms(P.ocean)} analyse ${hms(P.analyse)} raster ${hms(P.raster)}`
+      + ` texels ${hms(P.texels)} (search ${hms(P.search)} of it) sources ${hms(P.sources)}`
+      + ` fill ${hms(P.fill)} majority ${hms(P.majority)} occlude ${hms(P.occlude)}`
+      + ` extent ${hms(P.extent)} shore ${hms(P.shore)} ground ${hms(P.ground)} pack ${hms(P.pack)}`
+      + ` coast ${hms(P.coast)} other ${hms(other)}`
+      + ` · per build items ${(P.items / hb).toFixed(1)} area ${(P.areaItems / hb).toFixed(1)}`
+      + ` flowing ${(P.flowingAreas / hb).toFixed(1)} searched texels ${Math.round(P.searchTexels / hb)}`
+      + ` paints ${Math.round(P.paints / hb)}`
+      + ` · wet builds ${P.wetBuilds} at ${(P.wetMs / Math.max(1, P.wetBuilds)).toFixed(1)} ms over ${Math.round(P.wetTexels / Math.max(1, P.wetBuilds))} texels`
+      + ` · dry builds ${P.dryBuilds} at ${(P.dryMs / Math.max(1, P.dryBuilds)).toFixed(1)} ms over ${Math.round(P.dryTexels / Math.max(1, P.dryBuilds))} texels`); }
   { const n = Math.min(drawStat.n, drawRing.length);
     const recent = Array.from(drawRing.subarray(0, n)).sort((a, b) => a - b);
     const q = (p: number): string => n ? (recent[Math.min(n - 1, Math.floor(p * n))] / 1e6).toFixed(2) : '?';
