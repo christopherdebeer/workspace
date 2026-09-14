@@ -17858,7 +17858,32 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const bridgeEntry = mode === 'bridge' && n > 1
       ? bridgeEntryFor(wayTags?.['bridge:name'] ?? wayTags?.name ?? null, dense[n >> 1][0], dense[n >> 1][1]) : null;
     const deckHint = bridgeEntry ? bridgeDeckHint(bridgeEntry) : null;
-    if (mode === 'bridge' && runs.length) {
+    // ── THE GATE READS THE MODE, NOT A LIST THIS PATH NEVER FILLS ──
+    //
+    // It read `runs.length`, and `runs` is filled in exactly one place: the
+    // `mode !== 'bridge'` branch above, which a bridge by definition does not
+    // take. So the whole block below — the chord, the flyover cone, the
+    // landmark deck hint and the water clearance — was unreachable for every
+    // tagged bridge in the world, and every one of them was draped on the
+    // terrain. Found from the seat at the uMngeni mouth in Durban, where the
+    // M4 and the Athlone Bridge both ran along the river bed; measured on the
+    // at-umgeni capture against the revision before the substrate migration,
+    // every deck 6-7 m lower with `2d-chord` absent from its own stage log.
+    //
+    // The pre-migration code pushed the whole-way run here (`runs.push([0,
+    // n - 1])` for a tunnel or a bridge) and the migration moved that into
+    // `resolveProductionRoadStructureProfile` — which the bridge path calls
+    // for itself, from inside `resolveProductionBridgeProfile`. So the run
+    // list was never the gate's business: the MODE is. `runs` is still filled
+    // from the result below, for the structure machinery downstream.
+    //
+    // The general lesson is the one this file keeps relearning: a condition
+    // that survives a refactor by reading a variable whose PRODUCER moved is
+    // a condition nobody has re-derived. `devtools/bridge-water.mjs` holds it
+    // now, and holds it on the stage log rather than on the height — a deck
+    // that happens to clear its water proves nothing about whether the
+    // machinery ran.
+    if (mode === 'bridge') {
       const gRamp = bridgeEntry?.bridge?.grade ?? gLim;
       const lifted = resolveProductionBridgeProfile({
         stations: dense,
@@ -23538,6 +23563,21 @@ const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterwa
   // Hydro's vocabulary: kind, width, level and regime of a water body.
   'water', 'width', 'intermittent', 'seasonal', 'tidal', 'water_level',
   // Infrastructure grammar: explicit facts always outrank procedural context.
+  // ── AND `bridge:name`, WHICH A RELOAD USED TO THROW AWAY ──
+  //
+  // It is read in exactly two places and was kept in none: the assembly key
+  // (`bridge:name` or `name` — how OSM says "these deck fragments are one
+  // structure") and the landmark lookup, which reads it FIRST. This list is
+  // what `writeTileCache` applies before a tile reaches IndexedDB, so the tag
+  // survived the first visit and not the second: on a reload the Ellis Brown
+  // Viaduct's two carriageways re-key to `bridge:ruth first highway`, and the
+  // Golden Gate — whose carriageway is named `Presidio Parkway` and which is
+  // reachable by its entry ONLY through this tag — silently loses its towers,
+  // its cables and its deck hint. The same shape as `railway` below: a tag
+  // read by the renderer and dropped by the cache is a feature that works
+  // once. Found at the uMngeni, where the two named bridges are the only
+  // thing separating the M4's viaduct from the M4.
+  'bridge:name',
   'bridge:structure', 'bridge:support', 'bridge:material', 'tunnel:type',
   'tunnel:lining', 'material', 'start_date', 'lanes', 'width', 'diameter',
   // ── THE RAILWAY VOCABULARY, AND `railway` ITSELF, WHICH WAS NEVER HERE ──

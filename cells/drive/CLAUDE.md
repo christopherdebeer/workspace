@@ -220,6 +220,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
 | `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
 | `node devtools/bedding.mjs` | whether the substrate's bedding is geology or corduroy: the autocorrelation of its own contribution above its background, at a solved scale so two runs compare (`REV=` for a control, `ANALYSE=1` to re-read frames already on disk) | ~9min |
+| `node devtools/bridge-water.mjs` | every tagged bridge at a crossing ran its chord (`2d-chord` in its own stage log) and stands over its water — the witness is the STAGE, the metre is the symptom (`FIX=`, `CROSSINGS=`) | ~1min |
 | `node devtools/hydro-phases.mjs` | where a hydro build's milliseconds go, by phase and by ns/texel, with the wet/waterless build split and the wet share of the grid (`DRY=0` is the short-circuit's control, `FIX=`/`SPOT=` the place) | ~1min |
 | `node devtools/hydro-dry.test.mjs` | a waterless tile's short-circuit is the path it replaced, byte for byte, against the revision's own build-tile (`REV=`) | ~10s |
 | `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
@@ -3246,6 +3247,122 @@ crossing OSM split into several ways: each fragment measures its own wet
 run, so a bridge cut into thirds asks for a third of the clearance. The
 entries cover the famous ones; the assembly already gathers the fragments,
 and teaching the measurement to read it is the next step.
+
+### Every bridge in the world was draped on the terrain, and the gate was one word
+
+Probed from the seat at the uMngeni mouth in Durban
+(`?lat=-29.81016&lon=31.03845&h=7&cam=top&z=7.3`): two tagged bridges 580 m
+apart, the M4's **Ellis Brown Viaduct** (two 471 m carriageways) and the
+**Athlone Bridge** upriver (412 m on TWO POINTS), both running ALONG THE RIVER
+BED. Live, the M4's deck descended 4.31 → 0.145 m across the estuary while the
+water rested at 0.4 m, and `__lifts` reported nothing lifted within 300 m.
+
+**THE STAGE LOG NAMED IT IN ONE LINE.** `__fragwhy` at the crossing:
+`1-branch` = `2-ruled` = `2e-lift` = `3-seated` = the chain's own hint at every
+station, and **`2d-chord` absent from the log entirely** — the portal-to-portal
+chord never ran. Read back to its gate:
+
+```ts
+const runs: Array<[number, number]> = [];
+if (mode !== 'none' && n > 4 && (!canopy || mode === 'bridge')) {
+  if (mode !== 'bridge') { …resolveProductionRoadStructureProfile…
+                           runs.push(...structure.runs…); }
+  …
+  if (mode === 'bridge' && runs.length) {   // ← can never be true
+```
+
+`runs` is filled in exactly one place, and it is the branch a bridge by
+definition does not take. **So the whole bridge block — the chord, the flyover
+cone, the landmark deck hint and the water clearance — was unreachable for
+every tagged bridge on earth.** The pre-substrate-migration code pushed the
+whole-way run right there (`if (mode === 'tunnel' || mode === 'bridge')
+runs.push([0, n - 1])`); the migration moved that into
+`resolveProductionRoadStructureProfile`, which the bridge path calls FOR
+ITSELF from inside `resolveProductionBridgeProfile` — so the run list stopped
+being the gate's business and nobody re-derived the gate. It reads the MODE
+now. **The general lesson: a condition that survives a refactor by reading a
+variable whose PRODUCER moved is a condition nobody has re-derived.**
+
+**Measured** on the `at-umgeni` capture, the same tool and the same crossings,
+against the revision before the migration (`devtools/bridge-water.mjs`):
+
+| fragment | control deck / clearance | broken | fixed |
+|---|---|---|---|
+| Ellis Brown, carriageway A | 5.82 m / 9.10 m | −0.56 / 2.72 | **5.82 / 9.10** |
+| Ellis Brown, carriageway B | 6.17 / 9.45 | −1.17 / 2.11 | **6.17 / 9.45** |
+| Ellis Brown, the footbridge | 5.04 / 8.32 | −0.40 / 2.88 | **5.04 / 8.32** |
+| Athlone Bridge | 12.51 / 12.43 | 5.54 / 5.46 | **12.42 / 12.34** |
+
+Every deck 6–7 m lower, and the fix restores the control to the centimetre —
+which is what says it is a restoration and not a new behaviour. Camps Bay's
+junctions are untouched (8 / 0 / 0.19 m), because nothing there is a bridge
+over water.
+
+**THE WITNESS IS THE STAGE LOG, NOT THE HEIGHT.** `devtools/bridge-water.mjs`
+reports both and fails on either, and the ordering is the point: a bridge whose
+deck happens to sit above its water proves nothing — a chord along flat banks
+does that by accident — so what says the machinery RAN is `2d-chord` in the
+fragment's own stages. A deck under the water with no `2d-chord` is the chord
+never running; a deck under the water WITH one is the lift deciding wrongly,
+which is a different fault in a different module. Neither number alone can tell
+them apart. **On this fixture the heights alone would have passed the broken
+build** (the capture's own sea datum puts the water at −3.28 m, so the drowned
+decks still cleared it) — the regression was caught by the stage log and would
+have been missed by the metre.
+
+### …and `bridge:name` was thrown away by the cache, so a bridge worked once
+
+Found while reading the same two bridges. `bridge:name` is read in exactly two
+places — the assembly key (`bridge:name ?? name`, which is how OSM says "these
+deck fragments are one structure") and the landmark lookup, which reads it
+FIRST — and it was in **no** `KEEP_TAGS`: not the client's, not the capture's.
+`writeTileCache` applies that list before a tile reaches IndexedDB, so the tag
+survived the first visit and not the second:
+
+- on a reload the Ellis Brown Viaduct's two carriageways re-key from
+  `bridge:ellis brown viaduct` to `bridge:ruth first highway` and merge with
+  four approach fragments that are not the same structure;
+- and **the Golden Gate loses its entry entirely** — its carriageway is named
+  `Presidio Parkway`, and this file already records that the entry reaches it
+  only through `bridge:name`. Deck hint, towers and cables, gone on the second
+  visit.
+
+The same shape as `railway` one tag over: **a tag the renderer reads and the
+cache drops is a feature that works once.** Both lists carry it now. A tile
+already in a player's IndexedDB still lacks it until it is re-fetched, which
+degrades to exactly today's behaviour.
+
+### What the uMngeni says that is NOT broken, and what is still open
+
+Established offline from the cell's own banked tiles and the estuary survey
+before any browser ran, which is what separates "absent" from "did not stream":
+
+- **Neither publisher carries these decks.** Mapterhorn and terrarium both read
+  0–1.2 m median over the water, peak 4–13 m, **0% over 30 m** — the ordinary
+  case (15 of the 16 surveyed estuary spans), so the DEM span repair correctly
+  does nothing here (`__respan`: `moved: false`) and the chord is the only
+  thing that can hold these decks up. That is why losing it drowned them.
+- **Both bridges are over 150 m and neither carries `bridge:structure`**, so
+  the recipe correctly refuses to roll a form and both stay `girder` — a deck
+  on piers. Right by the rule, and it costs the **Athlone Bridge**, which is a
+  concrete arch in life. That is the landmark-entry gap, not a defect.
+- **Zero `bridge:support` nodes reach the client.** The cell's query fetches
+  them (`index.ts`), but these tiles were banked before that change and a bank
+  has no expiry — so both bridges take the recipe's default pier spacing and
+  there is no way to get the map's piers short of a `TILE_V` bump. The two
+  `man_made=pier` areas in the block are jetties, not bridge supports.
+- **The Ellis Brown Viaduct is TWO assemblies.** Its river spans carry
+  `bridge:name`; its four approach viaducts carry only `name=Ruth First
+  Highway`, so they form `bridge:ruth first highway` separately. One structure,
+  two assemblies, and each measures its own wet run for the clearance rule —
+  the limitation task #128 already names, seen in the wild.
+- **The river's centreline crosses the M4 only 72 m from its south end** of a
+  471 m deck, and the Athlone 155 m along its 412 m. Most of both bridges is
+  over flood plain and interchange, not channel.
+
+`devtools/bridge-water.mjs` is the instrument (`FIX=`, `CROSSINGS=` as JSON),
+and `at-umgeni` the capture it runs on — the first fixture in this repo that
+holds a named, tagged bridge over tidal water.
 
 ### A hydro build was priced by the tile, not by the water in it
 

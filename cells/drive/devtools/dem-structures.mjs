@@ -64,6 +64,14 @@ const SPANS = [
   ['Prince of Wales', 'Severn estuary, UK', 51.5750, -2.6980],
   ['Tsing Ma', 'Ma Wan Channel, HK', 22.3517, 114.0742],
   ['Confederation', 'Northumberland Strait, CA', 46.2000, -63.7700],
+  // ── A TIDAL RIVER MOUTH RATHER THAN AN ESTUARY CROSSING ──
+  // Reported from the seat. Two bridges 580 m apart over the uMngeni at
+  // Durban, both ~1.2 km from the Indian Ocean and both far shorter than
+  // anything above: the box asks whether the publisher's deck problem reaches
+  // a river mouth this size, where the cover's water is a ribbon rather than
+  // a bay. A smaller box, because the channel is ~200 m wide, not 2 km.
+  ['Ellis Brown Viaduct (uMngeni)', 'Durban, ZA', -29.81136, 31.03829, 400],
+  ['Athlone Bridge (uMngeni)', 'Durban, ZA', -29.81003, 31.03252, 400],
   // ── CONTROLS: inland water with no major structure over it ──
   // The rule the spans suggest — a cover-water texel standing more than ten
   // metres above its own neighbourhood's water is not ground — has to be shown

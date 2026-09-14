@@ -855,6 +855,11 @@ export const CAPTURE_INDEX: readonly CaptureCard[] = [
     label: 'YOSEMITE — THE VALLEY FLOOR',
     note: 'Captured at 37.73606,-119.63732 r=1400m because a device dump named hydroBuild at 94.6 ms a build there — 30% of every slow frame — and nothing deterministic in this repo held the Merced. Cover classes 10/30/60/80 in the box, so the valley carries WorldCover water as well as the OSM waterway, which is the pair the flowing-area path is expensive on; 1,202-2,417 m of granite around it. The spot is the one the substrate work already measures at, so a hydro number and a substrate number here are about the same ground.',
   },
+  {
+    id: 'at-umgeni', file: 'world-umgeni.json', heading: 0,
+    label: 'uMNGENI MOUTH — TWO BRIDGES',
+    note: 'Probed from the seat at -29.81016,31.03845. Two tagged bridges 580 m apart over the uMngeni a kilometre from the Indian Ocean: the M4 Ellis Brown Viaduct (two 471 m carriageways, bridge:name, motorway) and the Athlone Bridge upriver (412 m on TWO POINTS, bridge:name, secondary). Neither carries bridge:structure and neither is in the landmark store, so both take the generic recipe; neither publisher carries their decks, so the chord is the only thing that can hold them over the water. THE FIXTURE THE BRIDGE CHORD REGRESSION WAS FOUND ON. No terrestrial ecoregion — the box is mostly estuary and sea, so `eco` is deliberately absent and the guild falls back to the climate path.',
+  },
 ];
 
 /**
