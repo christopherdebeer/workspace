@@ -115,7 +115,17 @@ for (const [name, cam, zoom] of [['chase', 'chase', 0], ['cab', 'cab', 0], ['top
     // question and the `mat` read-back above answers it.
     const ROUGH = process.env.ROUGH ? Number(process.env.ROUGH) : null;
     const GRAIN = process.env.GRAIN ? Number(process.env.GRAIN) : null;
-    if (ROUGH !== null) await q((o) => window.__tdetail(o), { rough: ROUGH, grain: GRAIN ?? 0.85 });
+    // …AND THE INSTRUMENT WITNESSES ITS OWN SETTING. The transect above prints
+    // `forced` BEFORE this runs, so it always reads null, and a reading of null
+    // there was mistaken for "the override never applied" — which could not be
+    // told apart from "the override is broken" without re-reading the source.
+    // A probe that cannot show the dial it was just handed is the same fault as
+    // a focal plane reported stale when tilt is off.
+    if (ROUGH !== null) {
+      const set = await q((o) => window.__tdetail(o), { rough: ROUGH, grain: GRAIN ?? 0.85 });
+      console.log(`  forced material: ${JSON.stringify(set.forced)}`
+        + ` (the ground's own here is ${JSON.stringify(set.mat)})`);
+    }
     // INTERLEAVED AND MATCHED. Each consecutive pair is one leg apart, so the
     // repeats (oct0 twice, oct3 twice) are the floor at the SAME separation as
     // the comparisons. The first attempt put the repeats four legs from their
