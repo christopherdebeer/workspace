@@ -2220,7 +2220,7 @@ const tdU = {
   // stepped on one settled world instead of four boots — the same reason the
   // ruler is a uniform. `tdetail=flat` pins it at 0, which is the exact A/B
   // for "what did the cascade add".
-  uTdOct: { value: TDETAIL === 'flat' ? 0 : 3 },
+  uTdOct: { value: TDETAIL === 'flat' || TDETAIL === 'off' ? 0 : 3 },
 };
 /** The footprint helper and the heat ramp, prepended to the terrain fragment
  *  shader. One string, so the measuring mode and the shipping mode cannot
@@ -6605,7 +6605,15 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
           gl_FragColor.rgb = mix(gl_FragColor.rgb, dc.rgb, dc.a * 0.8);
         }
       }`);
-    if (opts.detail) {
+    // ── off COMPILES THE BLOCK OUT; IT DOES NOT MULTIPLY IT BY ZERO ──
+    //
+    // The switch is marked `bench`, and a bench switch that leaves the work
+    // running measures nothing. Setting uTdAmt to 0 still evaluated the mottle,
+    // the footprint, two smoothsteps and — once the cascade landed — three
+    // value-noise octaves, twelve hashes, for a result multiplied away. The
+    // uniform stays for the live A/B, which is what uniforms are for; the URL
+    // switch omits the source, which is what a benchmark needs.
+    if (opts.detail && TDETAIL !== 'off') {
       // World-space mottle breaks the flat-shaded banding of the
       // vertex-coloured terrain without any texture upload — see TD_LAMBDA for
       // what its actual spectrum is, which is narrower than the 30-80m the
@@ -33182,9 +33190,21 @@ function aimFocus(): void {
   // datum from every camera: the chart is centred on it and the seat is on it.
   const gY = groundAt(state.x, state.z);
   const drop = -FOCUS_FWD.y;
+  // ── THE CEILING IS THE DRAW DISTANCE, NOT SIX KILOMETRES ──
+  //
   // A near-horizontal ray solves at the horizon, so the distance is clamped
-  // rather than trusted — and the floor keeps the plane off the bonnet.
-  const dist = clamp(drop > 0.02 ? (camera.position.y - gY) / drop : 1e9, 18, 6000);
+  // rather than trusted, and the floor keeps the plane off the bonnet. The
+  // CEILING was a flat 6000, which is fine from the seat and ruinous on the
+  // chart — the one camera that takes the preset in full. The chart climbs to
+  // GLOBE_ALT_MAX, twenty thousand kilometres, so 6 km binds over 99.97% of
+  // the zoom range: the focal plane sat six kilometres down a ray whose ground
+  // was hundreds of kilometres away, which is to say nowhere near the map it
+  // was supposed to be focusing. The shader's art-pixel maths was right at
+  // those scales all along; the plane simply was not there.
+  //
+  // camera.far is the honest bound. Nothing is drawn past it, so a focal plane
+  // past it cannot be focusing on anything, and it moves with the chart.
+  const dist = clamp(drop > 0.02 ? (camera.position.y - gY) / drop : 1e9, 18, Math.max(6000, camera.far));
   u.uFocusP.value.copy(FOCUS_FWD).multiplyScalar(dist).add(camera.position);
   // Vertical unless leaned back: see above. Straight down has no ground
   // direction, and there the truck's heading is the honest fallback — it is
