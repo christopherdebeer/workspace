@@ -178,6 +178,7 @@ import {
   type SubstrateContactConsumer,
 } from './substrate/availability';
 import { resolveProductionSubstrateMode } from './substrate/mode';
+import { ProductionRenderLayerStore } from './substrate/render-layer';
 import {
   SubstrateShadowMonitor,
   type SubstrateShadowObservation,
@@ -17085,26 +17086,13 @@ let ribBatch: Map<string, {
 let ribBatchTerrainOwner: string | null = null;
 let roadBatchMeshes: THREE.Mesh[] | null = null;
 let roadBatchPackets: ProductionDriveRenderMesh[] | null = null;
-interface ProductionRoadRenderCandidate {
-  generation: number;
-  meshes: Set<THREE.Mesh>;
-  meshCount: number;
-  directPacketCount: number;
-  packetTerrainRevision: number;
-  packets: readonly ProductionDriveRenderMesh[];
-  authoredAfterRedrape: boolean;
-}
-const productionRoadRenderCandidates = new Map<string, ProductionRoadRenderCandidate>();
-interface ProductionRoadBatterRenderCandidate {
-  generation: number;
-  packetTerrainRevision: number;
-  packets: readonly ProductionDriveRenderMesh[];
-}
+const productionRoadRenderLayers =
+  new ProductionRenderLayerStore<ProductionDriveRenderMesh>();
 /** Mutable batter arrays are a replaceable road-layer contribution. Their
  *  packets share the drape geometry arrays and become admissible only after
  *  the owning terrain revision has re-seated those arrays. */
-const productionRoadBatterRenderCandidates =
-  new Map<string, ProductionRoadBatterRenderCandidate>();
+const productionRoadBatterRenderLayers =
+  new ProductionRenderLayerStore<ProductionDriveRenderMesh>();
 const substrateRoadCommits = new Map<string, number>();
 const substrateRoadRenderMeshes = new Map<string, SubstrateRenderBinding>();
 const productionRenderMaterials = new Map<string, THREE.Material>();
@@ -17227,32 +17215,21 @@ function registerProductionRoadRenderBatch(
   directPackets: readonly ProductionDriveRenderMesh[] = [],
 ): void {
   if (!meshes.length && !directPackets.length) return;
-  let candidate = productionRoadRenderCandidates.get(owner);
-  if (!candidate) {
-    candidate = {
-      generation: 0,
-      meshes: new Set(),
-      meshCount: 0,
-      directPacketCount: 0,
-      packetTerrainRevision: -1,
-      packets: [],
-      authoredAfterRedrape: false,
-    };
-    productionRoadRenderCandidates.set(owner, candidate);
-  }
-  candidate.generation++;
-  candidate.meshCount += meshes.length + directPackets.length;
-  candidate.directPacketCount += directPackets.length;
-  for (const mesh of meshes) candidate.meshes.add(mesh);
-  candidate.packetTerrainRevision = -1;
-  candidate.authoredAfterRedrape = false;
-  candidate.packets = [...candidate.packets, ...directPackets];
-  appendProductionRoadRenderPackets(candidate, meshes);
+  const packets: ProductionDriveRenderMesh[] = [...directPackets];
+  let complete = true;
   for (const mesh of meshes) {
+    const packet = productionRenderMeshFromThree(mesh, false);
+    if (packet) packets.push(packet);
+    else complete = false;
     mesh.removeFromParent();
     mesh.geometry.dispose();
-    candidate.meshes.delete(mesh);
   }
+  productionRoadRenderLayers.append(owner, {
+    expectedCount: meshes.length + directPackets.length,
+    packets: complete ? packets : [],
+    directPacketCount: directPackets.length,
+  });
+  if (!complete) productionDrivePacketFailures++;
   substrateRoadCommits.delete(owner);
   // A yielded road build can overlap a terrain flush. Re-dirty at packet
   // registration so a tile assembled between the last segment and this flush
@@ -17263,25 +17240,18 @@ function appendProductionRoadBatterPacket(
   owner: string,
   packet: ProductionDriveRenderMesh,
 ): void {
-  let candidate = productionRoadBatterRenderCandidates.get(owner);
-  if (!candidate) {
-    candidate = {
-      generation: 0,
-      packetTerrainRevision: -1,
-      packets: [],
-    };
-    productionRoadBatterRenderCandidates.set(owner, candidate);
-  }
-  candidate.generation++;
-  candidate.packetTerrainRevision = -1;
-  candidate.packets = [...candidate.packets, packet];
+  productionRoadBatterRenderLayers.append(owner, {
+    expectedCount: 1,
+    packets: [packet],
+    directPacketCount: 1,
+  });
   substrateRoadCommits.delete(owner);
   markTerrainDirty(owner, 'drive-batter');
 }
 /** A refined corridor owns the wedge itself, so every earlier strip for this
  *  tile and its packet contribution retire together during the same build. */
 function dropProductionRoadBatterPackets(owner: string): void {
-  if (!productionRoadBatterRenderCandidates.delete(owner)) return;
+  if (!productionRoadBatterRenderLayers.delete(owner)) return;
   substrateRoadCommits.delete(owner);
   invalidateProductionSubstrateTile(owner);
 }
@@ -20465,44 +20435,16 @@ function authorProductionTerrainRenderPacket(
     authoredAtBuild: true,
   });
 }
-function appendProductionRoadRenderPackets(
-  candidate: ProductionRoadRenderCandidate,
-  meshes: readonly THREE.Mesh[],
-): void {
-  const packets: ProductionDriveRenderMesh[] = [...candidate.packets];
-  for (const mesh of meshes) {
-    // Position/normal arrays are shared with the drape registry. The tile is
-    // invalidated before a later terrain rebuild mutates them, and the next
-    // revision is bound only after redrape completes.
-    const packet = productionRenderMeshFromThree(mesh, false);
-    if (!packet) {
-      productionDrivePacketFailures++;
-      candidate.packets = [];
-      candidate.authoredAfterRedrape = false;
-      return;
-    }
-    packets.push(packet);
-  }
-  candidate.packets = packets;
-}
 function publishProductionRoadRenderPackets(
   key: string,
   terrainSourceRevision: number,
 ): void {
-  const candidate = productionRoadRenderCandidates.get(key);
-  if (candidate) {
-    if (candidate.packets.length !== candidate.meshCount) {
-      productionDrivePacketFailures++;
-      candidate.packetTerrainRevision = terrainSourceRevision;
-      candidate.packets = [];
-      candidate.authoredAfterRedrape = false;
-    } else {
-      candidate.packetTerrainRevision = terrainSourceRevision;
-      candidate.authoredAfterRedrape = true;
-    }
+  if (!productionRoadRenderLayers.bind(key, terrainSourceRevision)) {
+    productionDrivePacketFailures++;
   }
-  const batter = productionRoadBatterRenderCandidates.get(key);
-  if (batter) batter.packetTerrainRevision = terrainSourceRevision;
+  if (!productionRoadBatterRenderLayers.bind(key, terrainSourceRevision)) {
+    productionDrivePacketFailures++;
+  }
 }
 function publishProductionStructureRenderPackets(
   candidate: ProductionStructureRenderCandidate,
@@ -20561,15 +20503,10 @@ function productionDriveRenderMeshesFor(
   key: string,
   terrainSourceRevision: number,
 ): readonly ProductionDriveRenderMesh[] {
-  const candidate = productionRoadRenderCandidates.get(key);
-  const batter = productionRoadBatterRenderCandidates.get(key);
-  const packets: ProductionDriveRenderMesh[] = [];
-  if (candidate?.packetTerrainRevision === terrainSourceRevision) {
-    packets.push(...candidate.packets);
-  }
-  if (batter?.packetTerrainRevision === terrainSourceRevision) {
-    packets.push(...batter.packets);
-  }
+  const packets = [
+    ...productionRoadRenderLayers.packetsFor(key, terrainSourceRevision),
+    ...productionRoadBatterRenderLayers.packetsFor(key, terrainSourceRevision),
+  ];
   if (packets.length) return packets;
   // Registration can race an older asynchronous hydro completion: the new
   // packet arrays already exist, but they are deliberately unbound until the
@@ -20579,8 +20516,8 @@ function productionDriveRenderMeshesFor(
   return [];
 }
 function productionRoadRenderGenerationSignature(key: string): string {
-  return `${productionRoadRenderCandidates.get(key)?.generation ?? 0}:`
-    + `${productionRoadBatterRenderCandidates.get(key)?.generation ?? 0}`;
+  return `${productionRoadRenderLayers.snapshot(key)?.generation ?? 0}:`
+    + `${productionRoadBatterRenderLayers.snapshot(key)?.generation ?? 0}`;
 }
 function productionTerrainRenderMeshesFor(
   key: string,
@@ -20875,13 +20812,13 @@ function instantiateProductionRenderMesh(
 }
 function canCommitDriveRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
   if (!SUBSTRATE_RENDER_ON || productionSubstrate.tile(tile.key) !== tile) return false;
-  const candidate = productionRoadRenderCandidates.get(tile.key);
-  const batter = productionRoadBatterRenderCandidates.get(tile.key);
+  const candidate = productionRoadRenderLayers.snapshot(tile.key);
+  const batter = productionRoadBatterRenderLayers.snapshot(tile.key);
   const source = productionDriveSources.get(tile.key);
   return !!source && source.revision === tile.sourceRevisions.drive
     && source.signature.startsWith(`${productionRoadRenderGenerationSignature(tile.key)};`)
     && tile.driveRenderMeshes.length
-      === (candidate?.meshCount ?? 0) + (batter?.packets.length ?? 0)
+      === (candidate?.expectedCount ?? 0) + (batter?.expectedCount ?? 0)
     && tile.driveRenderMeshes.every((packet) =>
       !!packet.attributes.position
       && packet.materialKeys.length > 0
@@ -21176,13 +21113,12 @@ function substrateRenderSnapshot(): Record<string, number> {
   let legacyRoadCandidateMeshes = 0;
   let visibleRoads = 0;
   let uncommittedVisibleRoads = 0;
-  const roadCandidateTileKeys = new Set(productionRoadRenderCandidates.keys());
-  for (const candidate of productionRoadRenderCandidates.values()) {
-    roadCandidates += candidate.meshCount;
+  const roadCandidateTileKeys = new Set(productionRoadRenderLayers.keys());
+  for (const [, candidate] of productionRoadRenderLayers.entries()) {
+    roadCandidates += candidate.expectedCount;
     roadPacketMeshes += candidate.packets.length;
     roadDirectAuthoredPacketMeshes += candidate.directPacketCount;
-    retainedRoadSourceMeshes += candidate.meshes.size;
-    if (candidate.authoredAfterRedrape) {
+    if (candidate.boundSourceRevision >= 0) {
       roadRedrapeAuthoredPacketMeshes += candidate.packets.length;
     }
     for (const packet of candidate.packets) {
@@ -21208,14 +21144,14 @@ function substrateRenderSnapshot(): Record<string, number> {
   }
   let roadBatterCandidates = 0;
   let roadBatterPacketMeshes = 0;
-  for (const [key, candidate] of productionRoadBatterRenderCandidates) {
+  for (const [key, candidate] of productionRoadBatterRenderLayers.entries()) {
     roadCandidateTileKeys.add(key);
     roadBatterCandidates += candidate.packets.length;
     roadBatterPacketMeshes += candidate.packets.length;
     roadCandidates += candidate.packets.length;
     roadPacketMeshes += candidate.packets.length;
     roadDirectAuthoredPacketMeshes += candidate.packets.length;
-    if (candidate.packetTerrainRevision >= 0) {
+    if (candidate.boundSourceRevision >= 0) {
       roadRedrapeAuthoredPacketMeshes += candidate.packets.length;
     }
     for (const packet of candidate.packets) {
@@ -31364,18 +31300,11 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     productionDriveSources.clear();
     substrateRoadCommits.clear();
     // Visible packet instances were children of worldGroup and were disposed
-    // by the sweep above. Hidden legacy source meshes are not scene children
-    // and still need their own disposal below.
+    // by the sweep above. Packet authoring state is renderer-free.
     substrateRoadRenderMeshes.clear();
     productionDrivePacketFailures = 0;
-    for (const candidate of productionRoadRenderCandidates.values()) {
-      for (const mesh of candidate.meshes) {
-        mesh.removeFromParent();
-        mesh.geometry.dispose();
-      }
-    }
-    productionRoadRenderCandidates.clear();
-    productionRoadBatterRenderCandidates.clear();
+    productionRoadRenderLayers.clear();
+    productionRoadBatterRenderLayers.clear();
     substrateStructureCommits.clear();
     substrateStructureRenderMeshes.clear();
     productionStructurePacketFailures = 0;

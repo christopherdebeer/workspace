@@ -122,6 +122,11 @@ export {
   type ProductionSubstrateMode,
   type ProductionSubstrateModeName,
 } from './mode';
+export {
+  ProductionRenderLayerStore,
+  type ProductionRenderLayerAppend,
+  type ProductionRenderLayerSnapshot,
+} from './render-layer';
 export { buildProductionHydroFixture } from './hydro-fixture';
 export { makeCrossingFixture, type CrossingFixtureOptions } from './fixtures';
 export {

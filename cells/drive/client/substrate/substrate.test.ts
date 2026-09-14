@@ -24,6 +24,7 @@ import {
   pointInProductionCrossingFootprint,
   productionCrossingFootprint,
   ProductionCrossingRegistry,
+  ProductionRenderLayerStore,
   SubstrateFallbackMonitor,
   ProductionSubstrateStore,
   resolveFluidContact,
@@ -151,6 +152,27 @@ function assertCrossing(kind: CrossingKind): ResolvedSubstrateTile {
  * lab are inspecting one implementation rather than parallel demonstrations.
  */
 export function runSubstrateSelfTest(): void {
+  const renderLayer = new ProductionRenderLayerStore<{ id: string }>();
+  renderLayer.append('tile:ready', {
+    expectedCount: 1,
+    packets: [{ id: 'road' }],
+    directPacketCount: 1,
+  });
+  assert(renderLayer.packetsFor('tile:ready', 4).length === 0,
+    'render packets must remain unavailable before their source revision binds');
+  assert(renderLayer.bind('tile:ready', 4)
+    && renderLayer.packetsFor('tile:ready', 4)[0]?.id === 'road',
+  'a complete render layer must bind its authored packets to one source revision');
+  const failedRenderLayer = new ProductionRenderLayerStore<{ id: string }>();
+  failedRenderLayer.append('tile:failed', {
+    expectedCount: 2,
+    packets: [{ id: 'partial' }],
+    directPacketCount: 1,
+  });
+  assert(!failedRenderLayer.bind('tile:failed', 2)
+    && failedRenderLayer.packetsFor('tile:failed', 2).length === 0,
+  'an incomplete render batch must never become tile authority');
+
   const defaultMode = resolveProductionSubstrateMode(null);
   assert(defaultMode.name === 'contact' && defaultMode.contact && defaultMode.shadow
     && !defaultMode.render && !defaultMode.rollback,

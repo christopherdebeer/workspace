@@ -443,7 +443,10 @@ the failed comparison can be reproduced.
   bridge-family forms are too. Batter packets publish through the atomic tile
   road layer with no visible or retained source mesh; bridge assemblies publish
   their forms through the atomic tile structure layer. The batter reach/contact
-  solve is substrate-owned.
+  solve is substrate-owned. Road and batter packet generation, completeness,
+  redrape invalidation and terrain-revision binding now live in the
+  renderer-free `ProductionRenderLayerStore`; tile construction no longer
+  reconstructs readiness from renderer-owned candidate maps.
 - Contact/evidence is now the production default with `?substrate=legacy` as
   the observable rollback. Representative water drives, persistent evidence
   and the multi-world parity thresholds pass; a production observation window
