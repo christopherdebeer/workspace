@@ -17081,8 +17081,9 @@ let ribBatch: Map<string, {
   drive: boolean;
 }> | null = null;
 let ribBatchTerrainOwner: string | null = null;
-let roadBatchMeshes: THREE.Mesh[] | null = null;
 let roadBatchPackets: ProductionDriveRenderMesh[] | null = null;
+let roadBatchExpectedCount = 0;
+let roadBatchDirectCount = 0;
 const productionRoadRenderLayers =
   new ProductionRenderLayerStore<ProductionDriveRenderMesh>();
 /** Mutable batter arrays are a replaceable road-layer contribution. Their
@@ -17107,17 +17108,19 @@ const substrateStructureCommits = new Map<string, number>();
 const substrateStructureRenderMeshes = new Map<string, SubstrateRenderBinding>();
 let productionStructurePacketFailures = 0;
 let structureBatchOwner: string | null = null;
-let structureBatchMeshes: THREE.Mesh[] | null = null;
 let structureBatchPackets: ProductionRenderMesh[] | null = null;
+let structureBatchExpectedCount = 0;
+let structureBatchDirectCount = 0;
 const productionHydroDetailRenderLayers =
   new ProductionRenderLayerStore<ProductionRenderMesh, ProductionHydroDetailCollider>();
 const substrateHydroDetailCommits = new Map<string, number>();
 const substrateHydroDetailRenderMeshes =
   new Map<string, SubstrateHydroDetailRenderBinding>();
 let productionHydroDetailPacketFailures = 0;
-let hydroDetailBatchMeshes: THREE.Mesh[] | null = null;
 let hydroDetailBatchPackets: ProductionRenderMesh[] | null = null;
 let hydroDetailBatchRocks: RapidRock[] | null = null;
+let hydroDetailBatchExpectedCount = 0;
+let hydroDetailBatchDirectCount = 0;
 const IDENTITY_RENDER_MATRIX = new Float32Array([
   1, 0, 0, 0,
   0, 1, 0, 0,
@@ -17125,14 +17128,17 @@ const IDENTITY_RENDER_MATRIX = new Float32Array([
   0, 0, 0, 1,
 ]);
 function addRoadRenderMesh(mesh: THREE.Mesh): void {
-  // Source geometry may be sampled into a substrate packet, but in render
-  // cutover mode it must never be mistaken for the packet-owned scene mesh.
-  mesh.userData.productionDriveSource = true;
-  if (SUBSTRATE_RENDER_ON && ribBatchTerrainOwner && roadBatchMeshes) {
-    roadBatchMeshes.push(mesh);
-  } else {
-    worldGroup.add(mesh);
+  if (SUBSTRATE_RENDER_ON && ribBatchTerrainOwner && roadBatchPackets) {
+    roadBatchExpectedCount++;
+    const packet = productionRenderMeshFromThree(mesh, false);
+    if (packet) roadBatchPackets.push(packet);
+    else productionDrivePacketFailures++;
+    mesh.removeFromParent();
+    mesh.geometry.dispose();
+    return;
   }
+  mesh.userData.productionDriveSource = true;
+  worldGroup.add(mesh);
 }
 interface RoadRenderGeometryOptions {
   name?: string;
@@ -17170,6 +17176,8 @@ function addRoadRenderGeometry(
     }, false);
     if (packet) {
       roadBatchPackets.push(packet);
+      roadBatchExpectedCount++;
+      roadBatchDirectCount++;
       if (!options.retainGeometry) geometry.dispose();
       return true;
     }
@@ -17189,25 +17197,16 @@ function addRoadRenderGeometry(
 }
 function registerProductionRoadRenderBatch(
   owner: string,
-  meshes: THREE.Mesh[],
-  directPackets: readonly ProductionDriveRenderMesh[] = [],
+  packets: readonly ProductionDriveRenderMesh[],
+  expectedCount: number,
+  directPacketCount: number,
 ): void {
-  if (!meshes.length && !directPackets.length) return;
-  const packets: ProductionDriveRenderMesh[] = [...directPackets];
-  let complete = true;
-  for (const mesh of meshes) {
-    const packet = productionRenderMeshFromThree(mesh, false);
-    if (packet) packets.push(packet);
-    else complete = false;
-    mesh.removeFromParent();
-    mesh.geometry.dispose();
-  }
+  if (!expectedCount) return;
   productionRoadRenderLayers.append(owner, {
-    expectedCount: meshes.length + directPackets.length,
-    packets: complete ? packets : [],
-    directPacketCount: directPackets.length,
+    expectedCount,
+    packets,
+    directPacketCount,
   });
-  if (!complete) productionDrivePacketFailures++;
   substrateRoadCommits.delete(owner);
   // A yielded road build can overlap a terrain flush. Re-dirty at packet
   // registration so a tile assembled between the last segment and this flush
@@ -17234,12 +17233,17 @@ function dropProductionRoadBatterPackets(owner: string): void {
   invalidateProductionSubstrateTile(owner);
 }
 function addStructureRenderMesh(mesh: THREE.Mesh): void {
-  mesh.userData.productionStructureSource = true;
-  if (SUBSTRATE_RENDER_ON && structureBatchOwner && structureBatchMeshes) {
-    structureBatchMeshes.push(mesh);
-  } else {
-    worldGroup.add(mesh);
+  if (SUBSTRATE_RENDER_ON && structureBatchOwner && structureBatchPackets) {
+    structureBatchExpectedCount++;
+    const packet = productionRenderMeshFromThree(mesh, false);
+    if (packet) structureBatchPackets.push(packet);
+    else productionStructurePacketFailures++;
+    mesh.removeFromParent();
+    mesh.geometry.dispose();
+    return;
   }
+  mesh.userData.productionStructureSource = true;
+  worldGroup.add(mesh);
 }
 function addStructureRenderGeometry(
   geometry: THREE.BufferGeometry,
@@ -17264,6 +17268,8 @@ function addStructureRenderGeometry(
     }, false);
     if (packet) {
       structureBatchPackets.push(packet);
+      structureBatchExpectedCount++;
+      structureBatchDirectCount++;
       geometry.dispose();
       return true;
     }
@@ -17280,25 +17286,16 @@ function addStructureRenderGeometry(
 }
 function registerProductionStructureRenderBatch(
   owner: string,
-  meshes: THREE.Mesh[],
-  directPackets: readonly ProductionRenderMesh[] = [],
+  packets: readonly ProductionRenderMesh[],
+  expectedCount: number,
+  directPacketCount: number,
 ): void {
-  if (!meshes.length && !directPackets.length) return;
-  const packets: ProductionRenderMesh[] = [...directPackets];
-  let complete = true;
-  for (const mesh of meshes) {
-    const packet = captureProductionRenderMesh(mesh);
-    if (packet) packets.push(packet);
-    else complete = false;
-    mesh.removeFromParent();
-    mesh.geometry.dispose();
-  }
+  if (!expectedCount) return;
   productionStructureRenderLayers.append(owner, {
-    expectedCount: meshes.length + directPackets.length,
-    packets: complete ? packets : [],
-    directPacketCount: directPackets.length,
+    expectedCount,
+    packets,
+    directPacketCount,
   });
-  if (!complete) productionStructurePacketFailures++;
   advanceProductionStructureSource(owner);
 }
 function advanceProductionStructureSource(owner: string): void {
@@ -17336,12 +17333,17 @@ function setProductionBridgeStructurePacket(
   advanceProductionStructureSource(owner);
 }
 function addHydroDetailRenderMesh(mesh: THREE.Mesh): void {
-  mesh.userData.productionHydroDetailSource = true;
-  if (SUBSTRATE_RENDER_ON && ribBatchTerrainOwner && hydroDetailBatchMeshes) {
-    hydroDetailBatchMeshes.push(mesh);
-  } else {
-    worldGroup.add(mesh);
+  if (SUBSTRATE_RENDER_ON && ribBatchTerrainOwner && hydroDetailBatchPackets) {
+    hydroDetailBatchExpectedCount++;
+    const packet = productionRenderMeshFromThree(mesh, false);
+    if (packet) hydroDetailBatchPackets.push(packet);
+    else productionHydroDetailPacketFailures++;
+    mesh.removeFromParent();
+    mesh.geometry.dispose();
+    return;
   }
+  mesh.userData.productionHydroDetailSource = true;
+  worldGroup.add(mesh);
 }
 function addHydroDetailRenderGeometry(
   geometry: THREE.BufferGeometry,
@@ -17366,6 +17368,8 @@ function addHydroDetailRenderGeometry(
     }, false);
     if (packet) {
       hydroDetailBatchPackets.push(packet);
+      hydroDetailBatchExpectedCount++;
+      hydroDetailBatchDirectCount++;
       geometry.dispose();
       return true;
     }
@@ -17382,24 +17386,16 @@ function addHydroDetailRenderGeometry(
 }
 function registerProductionHydroDetailRenderBatch(
   owner: string,
-  meshes: THREE.Mesh[],
   rocks: RapidRock[],
-  directPackets: readonly ProductionRenderMesh[] = [],
+  packets: readonly ProductionRenderMesh[],
+  expectedCount: number,
+  directPacketCount: number,
 ): void {
-  if (!meshes.length && !rocks.length && !directPackets.length) return;
-  const packets: ProductionRenderMesh[] = [...directPackets];
-  let complete = true;
-  for (const mesh of meshes) {
-    const packet = captureProductionRenderMesh(mesh);
-    if (packet) packets.push(packet);
-    else complete = false;
-    mesh.removeFromParent();
-    mesh.geometry.dispose();
-  }
+  if (!expectedCount && !rocks.length) return;
   productionHydroDetailRenderLayers.append(owner, {
-    expectedCount: meshes.length + directPackets.length,
-    packets: complete ? packets : [],
-    directPacketCount: directPackets.length,
+    expectedCount,
+    packets,
+    directPacketCount,
     witnesses: rocks.map((rock) => ({
       kind: 'rapid-rock',
       x: rock.x,
@@ -17407,7 +17403,6 @@ function registerProductionHydroDetailRenderBatch(
       radiusM: rock.s,
     })),
   });
-  if (!complete) productionHydroDetailPacketFailures++;
   substrateHydroDetailCommits.delete(owner);
   // Rapid rocks alter both visual bed structure and vehicle collision. Force
   // the owning tile through the same terrain/hydro revision gate.
@@ -20367,11 +20362,6 @@ function productionRenderMeshFromThree(
     userData,
   }, copyArrays);
 }
-function captureProductionRenderMesh(
-  mesh: THREE.Mesh,
-): ProductionRenderMesh | undefined {
-  return productionRenderMeshFromThree(mesh, true);
-}
 function authorProductionTerrainRenderPacket(
   key: string,
   terrainSourceRevision: number,
@@ -21553,8 +21543,9 @@ const pendingWater: PendingWater[] = [];
 function flushCulverts(t: HeightTile): void {
   if (!pendingWater.length) return;
   structureBatchOwner = `${t.tx}/${t.ty}`;
-  structureBatchMeshes = [];
   structureBatchPackets = [];
+  structureBatchExpectedCount = 0;
+  structureBatchDirectCount = 0;
   let kept = 0;
   for (let w = 0; w < pendingWater.length; w++) {
     const p = pendingWater[w];
@@ -21719,12 +21710,19 @@ function flushCulverts(t: HeightTile): void {
   }
   pendingWater.length = kept;
   const owner = structureBatchOwner;
-  const meshes = structureBatchMeshes ?? [];
   const packets = structureBatchPackets ?? [];
+  const expectedCount = structureBatchExpectedCount;
+  const directCount = structureBatchDirectCount;
   structureBatchOwner = null;
-  structureBatchMeshes = null;
   structureBatchPackets = null;
-  if (owner) registerProductionStructureRenderBatch(owner, meshes, packets);
+  structureBatchExpectedCount = 0;
+  structureBatchDirectCount = 0;
+  if (owner) registerProductionStructureRenderBatch(
+    owner,
+    packets,
+    expectedCount,
+    directCount,
+  );
 }
 /** The bore itself: two walls, a soffit, a headwall at each mouth. Sized to
  *  take a rig where the cover allows one, and a pipe where it does not. */
@@ -24435,11 +24433,13 @@ async function renderWays(
   }
   ribBatch = new Map();
   ribBatchTerrainOwner = terrainOwner;
-  roadBatchMeshes = [];
   roadBatchPackets = [];
-  hydroDetailBatchMeshes = [];
   hydroDetailBatchPackets = [];
   hydroDetailBatchRocks = [];
+  roadBatchExpectedCount = 0;
+  roadBatchDirectCount = 0;
+  hydroDetailBatchExpectedCount = 0;
+  hydroDetailBatchDirectCount = 0;
   const ep = worldEpoch;
   buildUntil = performance.now() + BUILD_MS;
   // PRE-PASS: chain this tile's drivable ways end-to-end and solve each chain's
@@ -24449,11 +24449,13 @@ async function renderWays(
   if (ep !== worldEpoch) {
     ribBatch = null;
     ribBatchTerrainOwner = null;
-    roadBatchMeshes = null;
     roadBatchPackets = null;
-    hydroDetailBatchMeshes = null;
     hydroDetailBatchPackets = null;
     hydroDetailBatchRocks = null;
+    roadBatchExpectedCount = 0;
+    roadBatchDirectCount = 0;
+    hydroDetailBatchExpectedCount = 0;
+    hydroDetailBatchDirectCount = 0;
     return;
   }
   // WIDEST FIRST. The junction warp asks the segment grid what road it is
@@ -24602,11 +24604,13 @@ async function renderWays(
     if (ep !== worldEpoch) {
       ribBatch = null;
       ribBatchTerrainOwner = null;
-      roadBatchMeshes = null;
       roadBatchPackets = null;
-      hydroDetailBatchMeshes = null;
       hydroDetailBatchPackets = null;
       hydroDetailBatchRocks = null;
+      roadBatchExpectedCount = 0;
+      roadBatchDirectCount = 0;
+      hydroDetailBatchExpectedCount = 0;
+      hydroDetailBatchDirectCount = 0;
       return;
     }
     // Clipped lines carry their own key; areas still dedupe on the bare id, so
@@ -24785,24 +24789,34 @@ async function renderWays(
   flushAprons();
   flushRibbons();
   const renderOwner = ribBatchTerrainOwner;
-  const renderMeshes = roadBatchMeshes ?? [];
   const renderPackets = roadBatchPackets ?? [];
-  const hydroDetailMeshes = hydroDetailBatchMeshes ?? [];
   const hydroDetailPackets = hydroDetailBatchPackets ?? [];
   const hydroDetailRocks = hydroDetailBatchRocks ?? [];
+  const roadExpectedCount = roadBatchExpectedCount;
+  const roadDirectCount = roadBatchDirectCount;
+  const hydroDetailExpectedCount = hydroDetailBatchExpectedCount;
+  const hydroDetailDirectCount = hydroDetailBatchDirectCount;
   ribBatchTerrainOwner = null;
-  roadBatchMeshes = null;
   roadBatchPackets = null;
-  hydroDetailBatchMeshes = null;
   hydroDetailBatchPackets = null;
   hydroDetailBatchRocks = null;
+  roadBatchExpectedCount = 0;
+  roadBatchDirectCount = 0;
+  hydroDetailBatchExpectedCount = 0;
+  hydroDetailBatchDirectCount = 0;
   if (renderOwner) {
-    registerProductionRoadRenderBatch(renderOwner, renderMeshes, renderPackets);
+    registerProductionRoadRenderBatch(
+      renderOwner,
+      renderPackets,
+      roadExpectedCount,
+      roadDirectCount,
+    );
     registerProductionHydroDetailRenderBatch(
       renderOwner,
-      hydroDetailMeshes,
       hydroDetailRocks,
       hydroDetailPackets,
+      hydroDetailExpectedCount,
+      hydroDetailDirectCount,
     );
   }
   // The pre-grid lives for exactly one batch: it exists to make build order
@@ -31202,8 +31216,9 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     productionBridgeStructurePackets.clear();
     productionStructureSourceRevisions.clear();
     structureBatchOwner = null;
-    structureBatchMeshes = null;
     structureBatchPackets = null;
+    structureBatchExpectedCount = 0;
+    structureBatchDirectCount = 0;
     substrateHydroDetailCommits.clear();
     for (const binding of substrateHydroDetailRenderMeshes.values()) {
       for (const rock of binding.rocks) deactivateRapidRock(rock);
@@ -31265,11 +31280,13 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     roadSegs = []; roadLineWorld = []; roadLineKey = ''; roadLineAt = -1e9;
     ribBatch = null;
     ribBatchTerrainOwner = null;
-    roadBatchMeshes = null;
     roadBatchPackets = null;
-    hydroDetailBatchMeshes = null;
+    roadBatchExpectedCount = 0;
+    roadBatchDirectCount = 0;
     hydroDetailBatchPackets = null;
     hydroDetailBatchRocks = null;
+    hydroDetailBatchExpectedCount = 0;
+    hydroDetailBatchDirectCount = 0;
     carveCost.tiles = 0; carveCost.ms = 0; carveCost.relieved = 0;
     pois.clear(); areaGrid.clear(); survey.clear();
     vegGrid.clear(); vegSeeded.clear(); vegSeedStats.clear(); vegDeferredAt.clear();

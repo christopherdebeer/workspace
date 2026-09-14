@@ -222,6 +222,14 @@ visible source mesh; browser cutover requires publication parity, every road
 packet direct-authored, zero retained source meshes, source visibility and
 failures.
 
+The former per-batch road, structure and hydro-detail mesh capture arrays have
+also been retired. An unexpected compatibility path that still constructs a
+mesh is converted to a packet and disposed at that authoring boundary; its
+expected count remains in the versioned layer so conversion failure refuses
+the atomic tile instead of silently publishing a partial layer. Direct-packet
+diagnostics therefore remain a positive gate that those compatibility paths
+are dormant, rather than relying only on a post-commit retained-mesh count.
+
 Rapid-bed detail is also the first complete local detail builder moved behind
 the substrate contract. `client/substrate/rapid-detail.ts` deterministically
 resolves rock placement, side-weighted wakes and waterfall aeration, then emits
@@ -447,7 +455,9 @@ the failed comparison can be reproduced.
   generation, completeness, redrape invalidation and source-revision binding
   now live in the renderer-free `ProductionRenderLayerStore`; rapid-rock
   collider witnesses version with their visual packet layer. Tile construction
-  no longer reconstructs readiness from renderer-owned candidate maps.
+  no longer reconstructs readiness from renderer-owned candidate maps, and the
+  renderer no longer holds delayed road, structure or hydro-detail mesh capture
+  batches.
 - Contact/evidence is now the production default with `?substrate=legacy` as
   the observable rollback. Representative water drives, persistent evidence
   and the multi-world parity thresholds pass; a production observation window
