@@ -30,6 +30,7 @@ import {
   resolveProductionEngineeredRoadProfile,
   resolveProductionRoadCrossSection,
   resolveProductionRoadEndCrop,
+  resolveProductionRoadBatterReach,
   resolveProductionRoadHostPlane,
   resolveProductionRoadJunctionWarp,
   resolveProductionRoadKerbGeometry,
@@ -811,6 +812,62 @@ export function runSubstrateSelfTest(): void {
   'substrate road batter authors strip, cap, colours and seat mask atomically');
   assert(batterSeats.slice(-6).join(',') === '0,0,1,0,1,1',
   'substrate road batter preserves production toe-seat triangle order');
+  const batterReachBase = {
+    ax: 0,
+    az: 0,
+    bx: 10,
+    bz: 0,
+    normalAx: 0,
+    normalAz: 2.2,
+    normalBx: 0,
+    normalBz: 2.2,
+    kerbHeightA: 2,
+    kerbHeightB: 2,
+    normalReachM: 2.2,
+    bankSlope: .6,
+    cutSlope: .62,
+    vergeM: .6,
+    cutReachM: 8,
+    distancesM: [.6, 1.4, 2.4, 3.6],
+    shoulderColour: [.56, .52, .45] as const,
+    earthColour: [.42, .34, .26] as const,
+    rockColour: [.46, .45, .41] as const,
+    blockedAt: () => false,
+    hasGround: () => true,
+    waterAt: () => false,
+    groundAt: (_x: number, z: number) => 1.75 - z * .25,
+    terrainColourAt: () => [.2, .3, .4] as const,
+  };
+  const batterReach = resolveProductionRoadBatterReach(batterReachBase);
+  assert(batterReach.drawable
+    && batterReach.contactMet
+    && batterReach.steps.length === 3
+    && batterReach.steps[2][0] > 1.4
+    && batterReach.steps[2][0] < 2.4,
+  'substrate road batter resolves the exact toe between coarse reach steps');
+  const atGradeBatter = resolveProductionRoadBatterReach({
+    ...batterReachBase,
+    groundAt: () => 2,
+  });
+  assert(atGradeBatter.noGap
+    && !atGradeBatter.drawable
+    && atGradeBatter.steps.length === 0,
+  'substrate road batter suppresses an at-grade shoulder');
+  const unknownBatter = resolveProductionRoadBatterReach({
+    ...batterReachBase,
+    hasGround: (_x, z) => z < 1,
+  });
+  assert(unknownBatter.unknownAt?.z === 1.4
+    && !unknownBatter.drawable,
+  'substrate road batter parks a run at the first unknown ground sample');
+  const clippedBatter = resolveProductionRoadBatterReach({
+    ...batterReachBase,
+    blockedAt: (distance) => distance >= 1,
+  });
+  assert(clippedBatter.clipped
+    && clippedBatter.drawable
+    && Math.abs(clippedBatter.reachedM - .85) < 1e-9,
+  'substrate road batter clips to the last quarter-metre clear of another road');
   const kerbs = resolveProductionRoadKerbGeometry({
     stations: [[0, 0], [10, 0], [10, 10]],
     halfWidthM: 2,

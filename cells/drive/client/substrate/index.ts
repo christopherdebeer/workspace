@@ -147,8 +147,11 @@ export {
 } from './road-structure';
 export {
   appendProductionRoadBatter,
+  resolveProductionRoadBatterReach,
   type ProductionRoadBatterColour,
   type ProductionRoadBatterInput,
+  type ProductionRoadBatterReachInput,
+  type ProductionRoadBatterReachResult,
   type ProductionRoadBatterResult,
   type ProductionRoadBatterStep,
   type ProductionRoadBatterTint,

@@ -159,8 +159,7 @@ import {
 } from './substrate/road-structure';
 import {
   appendProductionRoadBatter,
-  type ProductionRoadBatterStep,
-  type ProductionRoadBatterTint,
+  resolveProductionRoadBatterReach,
 } from './substrate/road-batter';
 import {
   buildProductionSubstrateTile,
@@ -16529,22 +16528,6 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   // ground is the first or second step.
   const STEPS = [0.6, 1.4, 2.4, 3.6, 5, 7, 9.5, 12.5, 16, 20, 25, 30];
   const REACH = STEPS[STEPS.length - 1];
-  /** How far out this kerb may spread before it is over somebody else's tarmac.
-   *  Only asked when a coarse step says "blocked", because it costs a road-grid
-   *  walk per probe and the answer is `no limit` on almost every kerb. */
-  const clearTo = (b: Batter, lo: number, hi: number): number => {
-    let best = lo;
-    for (let d = lo + 0.25; d <= hi; d += 0.25) {
-      const f = d / 2.2;
-      // Their KERB LINE, not their reach: −0.8 cancels the slack `onCarriageway`
-      // adds for "near a road", so earth may run right up to the tarmac edge and
-      // stop, which is what a verge does.
-      if (onCarriageway(b.ax + b.nxA * f, b.az + b.nzA * f, -0.8, b.fid, b.nm).road
-        || onCarriageway(b.bx + b.nxB * f, b.bz + b.nzB * f, -0.8, b.fid, b.nm).road) break;
-      best = d;
-    }
-    return best;
-  };
   let kept = 0;
   for (let i = 0; i < pendingBatter.length; i++) {
     const b = pendingBatter[i];
@@ -16585,161 +16568,73 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       spanStats.fillCorridor++;
       continue;
     }
-    // [left distance, right distance, left height, right height, left seated?, right seated?, left ground, right ground]
-    const pts: ProductionRoadBatterStep[] = [];
-    // …and the tint at each end of each step, parallel to `pts`.
-    const tints: ProductionRoadBatterTint[] = [];
-    // NEVER OVER ANOTHER ROAD — but a junction is a reason to STOP SHORT, not a
-    // reason to draw nothing. This used to `break` out of the whole loop the
-    // moment a step landed on somebody else's tarmac, and at a junction the
-    // side road's carriageway is inside the very first step, so the kerb got no
-    // earth at all for as far as the junction reached: the bare apron beside
-    // every turning. Now the step is clipped to the last clear distance and the
-    // batter is drawn up to it.
-    let lim = REACH, clipped = false;
-    let met = false, wet = false, unknown = false;
-    let toe0 = -1, toe1 = -1;
-    for (const d0 of STEPS) {
-      let d = d0;
-      if (d > lim) break;
-      const blocked = (dd: number): boolean => {
-        const f = dd / 2.2;
-        return onCarriageway(b.ax + b.nxA * f, b.az + b.nzA * f, -0.8, b.fid, b.nm).road
-          || onCarriageway(b.bx + b.nxB * f, b.bz + b.nzB * f, -0.8, b.fid, b.nm).road;
-      };
-      if (blocked(d)) {
-        // Somewhere between the last good step and this one is the tarmac edge.
-        const last = pts.length ? Math.max(pts[pts.length - 1][0], pts[pts.length - 1][1]) : 0;
-        lim = clearTo(b, last, d);
-        clipped = true;
-        if (lim <= last + 0.2) break;
-        d = lim;
-      }
-      const f = d / 2.2;                 // nx/nz carry 2.2m of reach
-      const qx0 = b.ax + b.nxA * f, qz0 = b.az + b.nzA * f;
-      const qx1 = b.bx + b.nxB * f, qz1 = b.bz + b.nzB * f;
-      // ── THE GROUND HAS TO BE THERE TO BE READ ──
-      //
-      // Where no height tile is loaded, `groundAt` answers the field's zero
-      // fallback: relative height 0, which is the ORIGIN'S elevation, not this
-      // hillside's. A step landing on that is a step landing wherever the
-      // player started, and the wedge is drawn to it: a face climbing to a
-      // hill a hundred metres up, or a bank falling to a valley that is not
-      // there. Reported from the cab at Glencairn as a dark sheet from the
-      // verge into the sky over a hillside that was fine underneath — a bay
-      // flushed while its neighbour tile was on a retry. Measured with
-      // __stripAudit at the same spot: strips with vertices standing on no
-      // tile at all, spanning tens of metres. The stranded sweep guards the
-      // bay's OWN point; the steps reach thirty metres past it. A run that
-      // reaches unknown ground before it has met anything is parked on that
-      // point and tried again only when a tile has landed; nothing is drawn,
-      // and the kerb's own fascia keeps the road edge closed meanwhile, as it
-      // does for every bay still waiting.
-      if (!hasHeight(qx0, qz0) || !hasHeight(qx1, qz1)) {
-        b.waitX = hasHeight(qx0, qz0) ? qx1 : qx0;
-        b.waitZ = hasHeight(qx0, qz0) ? qz1 : qz0;
-        unknown = true; break;
-      }
-      // EARTH STOPS AT THE WATER. Letting the bank run all the way to the bed
-      // turns every river crossing into a causeway — measured at Noordhoek, the
-      // longer reach did exactly that to the Silvermine outflow, filling the
-      // channel the road bridges. Where the cover says water the bank ends and
-      // whatever is holding the road up stays visible, which is the truth.
-      if (coverWater(qx0, qz0) || coverWater(qx1, qz1)) {
-        wet = true; break;
-      }
-      // ── THE STRIP CLOSES THE GAP TO THE GROUND THAT IS DRAWN, AND NO MORE ──
-      //
-      // The wedge used to be clamped about the NATURAL surface and then kept
-      // going, on the ground, while the carved mesh lay below it — roofing the
-      // carve's bench out to thirty metres. On a coarse tile the bench is a
-      // whole cell, so beside every road the strip became a sheet with the
-      // mesh cell's straight edges, sampled at fixed step distances (Dakar,
-      // and every desert road once its tint stopped hiding it). The target
-      // is now the ground as rendered, `groundAt`: kerb above it, a bank
-      // falls to it; kerb below it, a face climbs to it; kerb at it, nothing.
-      // The bench is terrain and shows as terrain, which blends by
-      // construction; its depth is the carve's business, not this strip's.
-      const g0 = groundAt(qx0, qz0), g1 = groundAt(qx1, qz1);
-      const N0 = g0, N1 = g1;
-      // AT GRADE: nothing to draw.
-      if (!pts.length && Math.abs(N0 - b.y0) < 0.35 && Math.abs(N1 - b.y1) < 0.35) {
-        spanStats.fillNoGap++; met = true; break;
-      }
-      const dd = Math.max(0, d - VERGE);
-      const lo0 = b.y0 - dd * BATT, lo1 = b.y1 - dd * BATT;
-      const hi0 = b.y0 + dd * CUT_K, hi1 = b.y1 + dd * CUT_K;
-      let p0 = clamp(N0, lo0, hi0), p1 = clamp(N1, lo1, hi1);
-      let on0 = p0 === N0, on1 = p1 === N1;   // lying on the ground, not on a slope
-      let wall0 = false, wall1 = false;
-      if (d >= CUT_REACH) {
-        if (!on0 && N0 > hi0) { p0 = N0; on0 = true; wall0 = true; }
-        if (!on1 && N1 > hi1) { p1 = N1; on1 = true; wall1 = true; }
-      }
-      // THE TOE IS WHERE THE WEDGE CROSSES THE GROUND, not the next step out.
-      // The first step a side lands on the ground, the crossing between the
-      // previous step and this one is solved on the two gaps and that side's
-      // outer edge goes there — so the strip's width is the height difference
-      // over the slope, continuously, and the toe is a curve along the road
-      // rather than a staircase of step distances. A side that has landed
-      // holds a metre past its toe while the other side finishes its slope.
-      const prev = pts.length ? pts[pts.length - 1] : null;
-      const cut0 = !on0 && N0 > hi0, cut1 = !on1 && N1 > hi1;
-      const side = (on: boolean, wall: boolean, N: number, lo: number, hi: number, pp: number, pN: number, pd: number,
-        toe: number, ax: number, az: number, nx: number, nz: number): [number, number, number] => {
-        // [distance, height, toe distance (or -1)]
-        if (!on) return [d, N < lo ? lo : hi, -1];
-        if (wall) return [d, N, d];
-        if (toe >= 0) {
-          const e = Math.min(d, toe + 1);
-          const f2 = e / 2.2;
-          return [e, groundAt(ax + nx * f2, az + nz * f2), toe];
-        }
-        const gPrev = prev ? Math.abs(pp - pN) : 0;
-        const gNow = Math.max(0, Math.min(N - lo, hi - N));
-        const t = gPrev + gNow > 1e-6 ? gPrev / (gPrev + gNow) : 1;
-        const e = prev ? pd + t * (d - pd) : d;
-        const f2 = e / 2.2;
-        return [e, groundAt(ax + nx * f2, az + nz * f2), e];
-      };
-      const r0 = side(on0, wall0, N0, lo0, hi0, prev ? prev[2] : 0, prev ? prev[6] : 0, prev ? prev[0] : 0, toe0, b.ax, b.az, b.nxA, b.nzA);
-      const r1 = side(on1, wall1, N1, lo1, hi1, prev ? prev[3] : 0, prev ? prev[7] : 0, prev ? prev[1] : 0, toe1, b.bx, b.bz, b.nxB, b.nzB);
-      toe0 = r0[2]; toe1 = r1[2];
-      // [left distance, right distance, left height, right height, left seated, right seated, left ground, right ground]
-      pts.push([r0[0], r1[0], r0[1], r1[1], on0 ? 1 : 0, on1 ? 1 : 0, N0, N1]);
-      // EARTH ONLY WHERE THE GROUND WAS DUG. A fill bank is a grassed slope
-      // within a season, so it wears the terrain's own colour like the ground
-      // it lands on; a cut face — clamped from above, the hill cut back — is
-      // the one place fresh earth shows. Tinted all as earth, the inside of
-      // the Coast Road hairpin at Big Sur was one pale tan sheet.
-      tints.push([
-        d <= VERGE ? SHOULDER : wall0 ? ROCK : cut0 ? EARTH : tintAt(qx0, qz0, N0),
-        d <= VERGE ? SHOULDER : wall1 ? ROCK : cut1 ? EARTH : tintAt(qx1, qz1, N1),
-      ]);
-      // Met: both sides on the ground. Nothing follows the ground past that.
-      if (on0 && on1) { met = true; break; }
-      if (clipped) break;                // ran out of room, not out of slope
-    }
+    // The queue owns WHEN a bay may resolve. Substrate owns HOW the verge,
+    // fill/cut wedge, exact toe, road clip and wet/unknown stops resolve.
+    const solved = resolveProductionRoadBatterReach({
+      ax: b.ax,
+      az: b.az,
+      bx: b.bx,
+      bz: b.bz,
+      normalAx: b.nxA,
+      normalAz: b.nzA,
+      normalBx: b.nxB,
+      normalBz: b.nzB,
+      kerbHeightA: b.y0,
+      kerbHeightB: b.y1,
+      normalReachM: 2.2,
+      bankSlope: BATT,
+      cutSlope: CUT_K,
+      vergeM: VERGE,
+      cutReachM: CUT_REACH,
+      distancesM: STEPS,
+      shoulderColour: SHOULDER,
+      earthColour: EARTH,
+      rockColour: ROCK,
+      blockedAt: (distance) => {
+        const f = distance / 2.2;
+        return onCarriageway(
+          b.ax + b.nxA * f,
+          b.az + b.nzA * f,
+          -0.8,
+          b.fid,
+          b.nm,
+        ).road || onCarriageway(
+          b.bx + b.nxB * f,
+          b.bz + b.nzB * f,
+          -0.8,
+          b.fid,
+          b.nm,
+        ).road;
+      },
+      hasGround: hasHeight,
+      waterAt: coverWater,
+      groundAt,
+      terrainColourAt: tintAt,
+    });
+    if (solved.noGap) spanStats.fillNoGap++;
     // Unknown ground before the run met anything: parked, not drawn. A run
     // that had already met the ground, or stopped against tarmac or water,
     // broke out above and never gets here with `unknown` set.
-    if (unknown) {
+    if (solved.unknownAt) {
+      b.waitX = solved.unknownAt.x;
+      b.waitZ = solved.unknownAt.z;
       b.waitTiles = heightTiles.size;
       spanStats.fillUnknown++;
       pendingBatter[kept++] = b;
       continue;
     }
     b.waitTiles = undefined;
-    const reached = pts.length ? Math.max(pts[pts.length - 1][0], pts[pts.length - 1][1]) : 0;
+    const { steps: pts, tints } = solved;
     // Logged with what was actually DRAWN, not with what was computed. Once a
     // run that never met anything stopped being emitted, `pts.length > 0` was
     // reporting earth that is not there — an instrument lying about the thing
     // it exists to measure is worse than no instrument.
-    const drawn = pts.length > 0 && (met || clipped || wet);
+    const drawn = pts.length > 0
+      && (solved.contactMet || solved.clipped || solved.wet);
     if (edgeLog.length < 40000) {
       edgeLog.push({ x: (b.ax + b.bx) / 2, z: (b.az + b.bz) / 2, rail: b.rail,
-        batter: drawn, met, clip: clipped || wet,
-        gap: +(b.y0 - groundAt(b.ax, b.az)).toFixed(2), reach: reached });
+        batter: drawn, met: solved.contactMet, clip: solved.clipped || solved.wet,
+        gap: +(b.y0 - groundAt(b.ax, b.az)).toFixed(2), reach: solved.reachedM });
     }
     // A CLIPPED OR WET RUN IS STILL DRAWN — it stopped against something real,
     // another carriageway or a watercourse, and the earth abuts it. A run that
@@ -16748,13 +16643,7 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     // it was inventing an embankment that goes nowhere. It was being counted as
     // unmet and drawn anyway, which is how a shelf of earth came to hang off
     // the side of a road with nothing under it.
-    if (!pts.length) { spanStats.fillUnmet++; continue; }
-    // A CUT FACE THAT REACHED THE HILL IS MET, whether or not the carved mesh
-    // came back up to the natural ground within reach: the face is real and
-    // the strip beyond it is a roof over the bench, and stopping short there
-    // shows the bench rather than the hill.
-    if (!met && pts.some((p) => p[2] > b.y0 + 0.3 || p[3] > b.y1 + 0.3)) met = true;
-    if (!met && !clipped && !wet) { spanStats.fillUnmet++; continue; }
+    if (!solved.drawable) { spanStats.fillUnmet++; continue; }
     spanStats.fillDrawn++;
     // Substrate owns the exact strip/cap packet, including the seat-mask order
     // that keeps the kerb welded while later terrain rebuilds move the toe.
