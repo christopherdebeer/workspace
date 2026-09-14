@@ -1,4 +1,5 @@
 import type { CrossingKind } from './types';
+import { resolveProductionRoadStructureProfile } from './road-profile';
 
 export type ProductionCrossingKind = CrossingKind | 'unresolved';
 export type CrossingAuthority = 'explicit-tag' | 'built-structure' | 'unresolved';
@@ -124,8 +125,6 @@ export interface ProductionBridgeProfileInput {
   stations: readonly (readonly [x: number, z: number])[];
   /** Aligned road profile before the bridge chord is constructed. */
   profile: readonly number[];
-  /** Inclusive bridge runs in station indices. */
-  runs: readonly (readonly [start: number, end: number])[];
   /** Junction stations whose solved height the chord must preserve. */
   heldStations?: ArrayLike<number>;
   roadTags?: Readonly<Record<string, string>>;
@@ -144,6 +143,7 @@ export interface ProductionBridgeProfileInput {
 }
 
 export interface ProductionBridgeProfileResult {
+  runs: readonly (readonly [start: number, end: number])[];
   chordProfile: number[];
   profile: number[];
   maximumLiftM: number;
@@ -174,38 +174,15 @@ export function resolveProductionBridgeProfile(
     && input.heldStations.length !== input.profile.length) {
     throw new Error('bridge held stations and profile must have matching lengths');
   }
-  const runs = input.runs.map((run) => {
-    const start = run[0];
-    const end = run[1];
-    if (!Number.isInteger(start)
-      || !Number.isInteger(end)
-      || start < 0
-      || end >= input.profile.length
-      || end <= start) {
-      throw new Error('bridge run bounds are invalid');
-    }
-    return [start, end] as const;
+  const structure = resolveProductionRoadStructureProfile({
+    stations: input.stations,
+    alignedProfile: input.profile,
+    mode: 'bridge',
+    canopy: false,
+    heldStations: input.heldStations,
   });
-  // A chord breaks at every held junction. The pin is another road's solved
-  // deck, so a ramp merging onto a viaduct must meet it exactly instead of
-  // letting one portal-to-portal line overwrite it.
-  const chordProfile = [...input.profile];
-  for (const [start, end] of runs) {
-    const knots = [start];
-    for (let station = start + 1; station < end; station++) {
-      if (input.heldStations?.[station]) knots.push(station);
-    }
-    knots.push(end);
-    for (let knot = 0; knot + 1 < knots.length; knot++) {
-      const a = knots[knot];
-      const b = knots[knot + 1];
-      for (let station = a; station <= b; station++) {
-        chordProfile[station] = input.profile[a]
-          + ((input.profile[b] - input.profile[a])
-            * (station - a)) / (b - a || 1);
-      }
-    }
-  }
+  const runs = structure.runs;
+  const chordProfile = structure.chordProfile;
   const profile = [...chordProfile];
   const bridgeClearanceM = input.bridgeClearanceM
     ?? PRODUCTION_BRIDGE_CLEARANCE_M;
@@ -361,6 +338,7 @@ export function resolveProductionBridgeProfile(
   }
 
   return {
+    runs,
     chordProfile,
     profile,
     maximumLiftM,

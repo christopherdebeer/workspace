@@ -17,6 +17,7 @@ import {
   resolveCrossingKind,
   resolveProductionSubstrateMode,
   resolveProductionBridgeProfile,
+  resolveProductionRoadStructureProfile,
   resolveProductionCrossing,
   resolveProductionCrossingIntent,
   navigableClearance,
@@ -431,7 +432,6 @@ export function runSubstrateSelfTest(): void {
   const hintedProfile = resolveProductionBridgeProfile({
     stations: [[0, 0], [20, 0], [40, 0]],
     profile: [0, 0, 0],
-    runs: [[0, 2]],
     layer: 1,
     grade: .1,
     roadTags: { highway: 'trunk' },
@@ -449,7 +449,6 @@ export function runSubstrateSelfTest(): void {
   const unpinnedChord = resolveProductionBridgeProfile({
     stations: [[0, 0], [10, 0], [20, 0]],
     profile: [0, 9, 0],
-    runs: [[0, 2]],
     layer: 0,
     grade: .1,
     waterAt: () => null,
@@ -460,7 +459,6 @@ export function runSubstrateSelfTest(): void {
   const pinnedChord = resolveProductionBridgeProfile({
     stations: [[0, 0], [10, 0], [20, 0]],
     profile: [0, 9, 0],
-    runs: [[0, 2]],
     heldStations: new Uint8Array([0, 1, 0]),
     layer: 0,
     grade: .1,
@@ -475,7 +473,6 @@ export function runSubstrateSelfTest(): void {
   const waterProfile = resolveProductionBridgeProfile({
     stations: [[0, 0], [100, 0], [200, 0]],
     profile: [0, 0, 0],
-    runs: [[0, 2]],
     layer: 0,
     grade: .1,
     roadTags: { highway: 'primary' },
@@ -494,7 +491,6 @@ export function runSubstrateSelfTest(): void {
   const flyoverProfile = resolveProductionBridgeProfile({
     stations: [[0, 0], [12, 0], [24, 0]],
     profile: [0, 0, 0],
-    runs: [[0, 2]],
     layer: 1,
     grade: 1,
     waterAt: () => null,
@@ -514,7 +510,6 @@ export function runSubstrateSelfTest(): void {
   const shortProfile = resolveProductionBridgeProfile({
     stations: [[0, 0], [10, 0]],
     profile: [0, 0],
-    runs: [[0, 1]],
     layer: 1,
     grade: .1,
     waterAt: () => null,
@@ -526,7 +521,6 @@ export function runSubstrateSelfTest(): void {
   const coneProfile = resolveProductionBridgeProfile({
     stations: [[0, 0], [10, 0], [20, 0]],
     profile: [0, 0, 0],
-    runs: [[0, 2]],
     layer: 1,
     grade: .5,
     waterAt: () => null,
@@ -536,6 +530,19 @@ export function runSubstrateSelfTest(): void {
     && Math.abs(coneProfile.profile[1] - 15.5) < 0.01
     && Math.abs(coneProfile.profile[2] - 10.5) < 0.01,
   'the grade cone carries unavoidable short-span lift to both portals');
+
+  const tunnelProfile = resolveProductionRoadStructureProfile({
+    stations: Array.from({ length: 7 }, (_, i) => [i * 10, 0] as const),
+    alignedProfile: [0, 0, 8, 8, 8, 0, 0],
+    mode: 'auto',
+    canopy: false,
+    tunnelToleranceM: 1,
+    smoothingRadius: 1,
+  });
+  assert(tunnelProfile.runs.length === 1
+    && tunnelProfile.runs[0][0] === 1
+    && tunnelProfile.runs[0][1] === 5,
+  'automatic structure detection expands a sustained buried run to its portals');
   const recordedDeck = resolveProductionCrossing({
     ...productionCrossingBase, roadLayer: 1, roadTags: { bridge: 'yes' }, structureOutcome: 'bridge-deck',
     deckAuthority: 'landmark-hint',

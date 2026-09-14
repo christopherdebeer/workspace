@@ -126,6 +126,7 @@ import {
   type DeckAuthority,
   type ProductionCrossingRecord,
 } from './substrate/crossing-authority';
+import { resolveProductionRoadStructureProfile } from './substrate/road-profile';
 import {
   buildProductionSubstrateTile,
   findProductionDriveWaterOverlaps,
@@ -17936,48 +17937,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // the obstruction reported from the seat. The chord and the lift run for
   // every bridge; the roof then rides the lifted deck.
   if (mode !== 'none' && n > 4 && (!canopy || mode === 'bridge')) {
-    if (mode === 'tunnel' || mode === 'bridge') runs.push([0, n - 1]);
-    else {
-      const avg = (src: number[]): number[] => src.map((_, i) => {
-        let s = 0, c = 0;
-        for (let j = Math.max(0, i - 20); j <= Math.min(n - 1, i + 20); j++) { s += src[j]; c++; }
-        return s / c;
+    if (mode !== 'bridge') {
+      const structure = resolveProductionRoadStructureProfile({
+        stations: dense,
+        alignedProfile: alg,
+        mode,
+        canopy,
+        heldStations: held,
+        tunnelToleranceM: TUNNEL_TOL,
       });
-      const sm = avg(avg(alg));
-      let a = -1;
-      for (let i = 0; i < n; i++) {
-        const deep = alg[i] - sm[i] > TUNNEL_TOL;
-        if (deep && a < 0) a = i;
-        if ((!deep || i === n - 1) && a >= 0) {
-          if (i - a >= 2) runs.push([Math.max(0, a - 1), Math.min(n - 1, i)]);
-          a = -1;
-        }
-      }
+      runs.push(...structure.runs.map((run) => [run[0], run[1]] as [number, number]));
+      prof = structure.chordProfile;
+      stage('2d-chord', prof);
     }
-    // A CHORD BREAKS AT A PIN. The chord wrote portal to portal through every
-    // station between, held junction stations included — measured on Eldon
-    // Lane at Camps Bay as the one stage that moved a pin both chains agreed
-    // on (12.765 -> 12.343) while every stage that knows about `held` left it
-    // alone. A pinned station is another road's deck; the chord runs between
-    // consecutive pins instead, so a ramp merging onto a viaduct still meets
-    // it where the planner said.
-    for (const [a, b] of runs) {
-      if (mode === 'bridge') continue;
-      const knots = [a];
-      for (let i = a + 1; i < b; i++) if (held[i]) knots.push(i);
-      knots.push(b);
-      for (let k = 0; k + 1 < knots.length; k++) {
-        const p = knots[k], q = knots[k + 1];
-        for (let i = p; i <= q; i++) {
-          const chord = alg[p] + ((alg[q] - alg[p]) * (i - p)) / (q - p || 1);
-          // Tagged tunnels cap at the terrain: the z13 heightfield can't resolve
-          // small knolls, and an uncapped chord under flat data left a giant
-          // exposed tube sitting on the ground. Bridges ride the chord.
-          prof[i] = mode === 'tunnel' ? Math.min(chord, alg[i]) : chord;
-        }
-      }
-    }
-    if (mode !== 'bridge') stage('2d-chord', prof);
     // ── A FLYOVER CLEARS THE ROAD IT CROSSES ──
     //
     // The chord above is portal to portal, and the portals anchor to the
@@ -18032,7 +18004,6 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const lifted = resolveProductionBridgeProfile({
         stations: dense,
         profile: prof,
-        runs,
         heldStations: held,
         roadTags: wayTags,
         layer,
@@ -18042,6 +18013,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         deckBelow: (x, z) =>
           solver.deckBelow(x, z, layer, width / 2 + 1.5),
       });
+      runs.push(...lifted.runs.map((run) => [run[0], run[1]] as [number, number]));
       stage('2d-chord', lifted.chordProfile);
       const portalLift0 = lifted.profile[0] - lifted.chordProfile[0];
       const portalLift1 = lifted.profile[n - 1] - lifted.chordProfile[n - 1];

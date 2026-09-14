@@ -15,6 +15,12 @@ export {
   type SubstrateShadowSnapshot,
 } from './shadow';
 export {
+  resolveProductionRoadStructureProfile,
+  type ProductionRoadStructureMode,
+  type ProductionRoadStructureProfile,
+  type ProductionRoadStructureProfileInput,
+} from './road-profile';
+export {
   pointInProductionCrossingFootprint,
   productionCrossingFootprint,
   ProductionCrossingRegistry,

@@ -116,10 +116,12 @@ The bridge clearance profile is now substrate-owned arithmetic:
 `resolveProductionBridgeProfile` constructs the portal chord around held
 junctions, consumes landmark/water decisions, samples lower-layer decks between
 sparse road stations and applies the two-pass ruling-grade cone before any
-geometry exists. The legacy road builder supplies the aligned bench plus
-streamed water/deck callbacks and consumes the resulting profile. The remaining
-crossing migration is to move the aligned bench inputs and geometry authoring
-pipeline into tile construction, then emit it from the substrate tile itself.
+geometry exists. `resolveProductionRoadStructureProfile` also owns automatic
+tunnel-run detection and tunnel chords. The legacy road builder supplies the
+aligned bench plus streamed water/deck callbacks and consumes the resulting
+profile. The remaining crossing migration is to move the aligned bench inputs
+and geometry authoring pipeline into tile construction, then emit it from the
+substrate tile itself.
 
 ### 3. Build one production substrate authority tile — guarded authority landed
 
