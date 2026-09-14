@@ -22,6 +22,7 @@ import {
   resolveProductionEngineeredRoadProfile,
   resolveProductionRoadCrossSection,
   resolveProductionRoadEndCrop,
+  resolveProductionRoadHostPlane,
   resolveProductionRoadJunctionWarp,
   resolveProductionRoadKerbGeometry,
   resolveProductionRoadStructureProfile,
@@ -30,6 +31,7 @@ import {
   navigableClearance,
   resolveProductionDeck,
   sampleHydroContactLayers,
+  sampleProductionRoadHostPlane,
   sampleProductionSubstrateTile,
   sampleSubstrate,
   smoothProductionRoadSurfaceNormals,
@@ -732,6 +734,32 @@ export function runSubstrateSelfTest(): void {
   });
   assert(separatedCrop.reason === 'grade-separated',
   'substrate road crop leaves a flyover mouth intact');
+  const hostPlane = resolveProductionRoadHostPlane({
+    nodeX: 0,
+    nodeZ: 0,
+    nodeHeight: 10,
+    hostTangentX: 1,
+    hostTangentZ: 0,
+    hostHalfWidthM: 4,
+    sampleHeight: (x, z) => 10 + x * .1 + z * .05,
+  });
+  assert(Math.abs(hostPlane.gradientX - .1) < 1e-9
+    && Math.abs(hostPlane.gradientZ - .05) < 1e-9,
+  'substrate host-plane fitting recovers along grade and crossfall');
+  assert(Math.abs(sampleProductionRoadHostPlane(hostPlane, 20, -4) - 11.8) < 1e-9,
+  'substrate host-plane sampling extrapolates the fitted road surface');
+  const clampedHostPlane = resolveProductionRoadHostPlane({
+    nodeX: 0,
+    nodeZ: 0,
+    nodeHeight: 0,
+    hostTangentX: 1,
+    hostTangentZ: 0,
+    hostHalfWidthM: 4,
+    sampleHeight: (x, z) => x + z,
+  });
+  assert(Math.abs(clampedHostPlane.gradientX - .18) < 1e-9
+    && Math.abs(clampedHostPlane.gradientZ - .18) < 1e-9,
+  'substrate host-plane fitting clamps implausible sampled gradients');
   const junctionWarp = resolveProductionRoadJunctionWarp({
     stations: Array.from({ length: 5 }, (_, i) => [i * 10, 0] as const),
     profile: [0, 0, 0, 0, 0],

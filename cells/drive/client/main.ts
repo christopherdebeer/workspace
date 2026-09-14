@@ -130,8 +130,10 @@ import {
   resolveProductionAlignedRoadProfile,
   resolveProductionEngineeredRoadProfile,
   resolveProductionRoadCrossSection,
+  resolveProductionRoadHostPlane,
   resolveProductionRoadJunctionWarp,
   resolveProductionRoadStructureProfile,
+  sampleProductionRoadHostPlane,
 } from './substrate/road-profile';
 import {
   buildProductionRoadSurfaceGeometry,
@@ -18608,21 +18610,17 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // meeting, and the parapet across the line below is the whole point.
       if (Math.abs(hy0 - prof[i0]) > GRADE_SEP) { spanStats.warpNoHost++; continue; }
       spanStats.warped++;
-      const s8 = 8;
-      const cpx = -at0.uz, cpz = at0.ux;
-      const cw = Math.max(1.5, at0.hw * 0.6);
-      const hyA = roadHeightAt(nodeX + at0.ux * s8, nodeZ + at0.uz * s8, 1.2);
-      const hyB = roadHeightAt(nodeX - at0.ux * s8, nodeZ - at0.uz * s8, 1.2);
-      const hyC = roadHeightAt(nodeX + cpx * cw, nodeZ + cpz * cw, 1.2);
-      // Grades a real road can hold: the fit is three samples on a possibly
-      // curving host, and an unclamped gradient extrapolates its own fiction.
-      const gAlong = clamp(hyA !== null && hyB !== null ? (hyA - hyB) / (2 * s8)
-        : hyA !== null ? (hyA - hy0) / s8
-        : hyB !== null ? (hy0 - hyB) / s8 : 0, -0.18, 0.18);
-      const gCross = clamp(hyC !== null ? (hyC - hy0) / cw : 0, -0.18, 0.18);
-      const gx = at0.ux * gAlong + cpx * gCross;
-      const gz = at0.uz * gAlong + cpz * gCross;
-      const plane = (qx: number, qz: number): number => hy0 + (qx - nodeX) * gx + (qz - nodeZ) * gz;
+      const hostPlane = resolveProductionRoadHostPlane({
+        nodeX,
+        nodeZ,
+        nodeHeight: hy0,
+        hostTangentX: at0.ux,
+        hostTangentZ: at0.uz,
+        hostHalfWidthM: at0.hw,
+        sampleHeight: (x, z) => roadHeightAt(x, z, 1.2),
+      });
+      const plane = (qx: number, qz: number): number =>
+        sampleProductionRoadHostPlane(hostPlane, qx, qz);
       endPlane[end] = plane;
       // NO STATION MOVES FURTHER THAN THE NODE DID. The plane is three samples
       // on a host that curves, extrapolated up to sixty metres along this

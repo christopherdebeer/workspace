@@ -105,8 +105,95 @@ export interface ProductionRoadJunctionWarp {
   tilt: number[];
 }
 
+export interface ProductionRoadHostPlaneInput {
+  nodeX: number;
+  nodeZ: number;
+  nodeHeight: number;
+  hostTangentX: number;
+  hostTangentZ: number;
+  hostHalfWidthM: number;
+  sampleHeight(x: number, z: number): number | null;
+  alongProbeM?: number;
+  crossProbeScale?: number;
+  minimumCrossProbeM?: number;
+  gradientLimit?: number;
+}
+
+export interface ProductionRoadHostPlane {
+  originX: number;
+  originZ: number;
+  originHeight: number;
+  gradientX: number;
+  gradientZ: number;
+}
+
 const clamp = (value: number, lo: number, hi: number): number =>
   Math.max(lo, Math.min(hi, value));
+
+/**
+ * Fit the local host carriageway plane used by junction warp and mouth seats.
+ *
+ * Three contextual deck samples supply along-grade and crossfall evidence.
+ * Substrate owns sample placement, one-sided fallbacks and the gradient clamp
+ * so a curving host cannot extrapolate an impossible plane down the side road.
+ */
+export function resolveProductionRoadHostPlane(
+  input: ProductionRoadHostPlaneInput,
+): ProductionRoadHostPlane {
+  const alongProbeM = input.alongProbeM ?? 8;
+  const crossProbeM = Math.max(
+    input.minimumCrossProbeM ?? 1.5,
+    input.hostHalfWidthM * (input.crossProbeScale ?? 0.6),
+  );
+  const crossX = -input.hostTangentZ;
+  const crossZ = input.hostTangentX;
+  const forward = input.sampleHeight(
+    input.nodeX + input.hostTangentX * alongProbeM,
+    input.nodeZ + input.hostTangentZ * alongProbeM,
+  );
+  const backward = input.sampleHeight(
+    input.nodeX - input.hostTangentX * alongProbeM,
+    input.nodeZ - input.hostTangentZ * alongProbeM,
+  );
+  const cross = input.sampleHeight(
+    input.nodeX + crossX * crossProbeM,
+    input.nodeZ + crossZ * crossProbeM,
+  );
+  const limit = input.gradientLimit ?? 0.18;
+  const alongGradient = clamp(
+    forward !== null && backward !== null
+      ? (forward - backward) / (2 * alongProbeM)
+      : forward !== null
+        ? (forward - input.nodeHeight) / alongProbeM
+        : backward !== null
+          ? (input.nodeHeight - backward) / alongProbeM
+          : 0,
+    -limit,
+    limit,
+  );
+  const crossGradient = clamp(
+    cross !== null ? (cross - input.nodeHeight) / crossProbeM : 0,
+    -limit,
+    limit,
+  );
+  return {
+    originX: input.nodeX,
+    originZ: input.nodeZ,
+    originHeight: input.nodeHeight,
+    gradientX: input.hostTangentX * alongGradient + crossX * crossGradient,
+    gradientZ: input.hostTangentZ * alongGradient + crossZ * crossGradient,
+  };
+}
+
+export function sampleProductionRoadHostPlane(
+  plane: ProductionRoadHostPlane,
+  x: number,
+  z: number,
+): number {
+  return plane.originHeight
+    + (x - plane.originX) * plane.gradientX
+    + (z - plane.originZ) * plane.gradientZ;
+}
 
 /**
  * Select the aligned longitudinal bench before structure decisions.
