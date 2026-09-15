@@ -193,6 +193,8 @@ export const SWITCHES = [
     note: 'sward=cpu goes back to the old CPU lattice' },
   { id: 'lumasync', kind: 'toggle', marks: ['legacy'], fallback: 'asynchronous',
     note: 'lumasync=1 reads the luma map synchronously, as it used to' },
+  { id: 'hudbake', kind: 'toggle', marks: ['legacy'], fallback: 'baked',
+    note: 'hudbake=0 redraws the rig dial’s tick ring a pixel at a time, every frame, as it did' },
   { id: 'drapefast', kind: 'toggle', marks: ['legacy'], fallback: 'bound',
     note: 'drapefast=0 makes a redrape pay the tile lookup on every vertex again' },
   { id: 'hydroskip', kind: 'toggle', marks: ['legacy'], fallback: 'skip',

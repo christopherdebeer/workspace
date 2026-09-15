@@ -49747,6 +49747,65 @@ function hudSafeRects(): Array<[number, number, number, number]> {
     [0, HH - 30, Math.round(HW * 0.72), 30],         // the place line and coordinates
   ];
 }
+/** ── THE DIAL'S TICK RING IS STATIC, AND IT WAS DRAWN A PIXEL AT A TIME ──
+ *
+ *  Measured (devtools/hud-split.mjs): `riggauge` is 1.24 ms of a 3.11 ms HUD
+ *  in chase — the largest section of the largest steady phase after the gap
+ *  and terrainApply. Inside it, the open-arc bezel is 41 ticks, each setting
+ *  `fillStyle` from a STRING — parsed every assignment — and each filling one
+ *  or two 1x1 rects: about 50 draw calls and 41 colour parses a frame, for a
+ *  ring whose geometry depends on `DR`, `cx` and `cy` and therefore changes
+ *  only when the HUD is laid out.
+ *
+ *  So it is baked once into an offscreen canvas and blitted. THE ROUNDING IS
+ *  WHY THIS IS PIXEL-IDENTICAL AND NOT MERELY CLOSE: the original computes
+ *  `Math.round(cx + cos(a) * r)`, and the bake computes `Math.round(o + cos(a)
+ *  * r)` at its own centre `o`, drawn at `cx - o`. Those agree exactly for an
+ *  INTEGER offset — `round(c + d) === c + round(d)` when `c` is an integer —
+ *  and `cx`, `cy` and `o` all are, being HUD pixels. Baked at `hudDpr` and
+ *  blitted at HUD-pixel size under the same transform, so it is 1:1 with
+ *  smoothing off, not a resample.
+ *
+ *  The REV ARC stays dynamic — its colours are the whole point of it — but
+ *  its 54 positions are trigonometry over constants, so they are cached on
+ *  the same key and the per-frame loop is a colour and a rect.
+ *
+ *  `?hudbake=0` is the rollback and the A/B. */
+let dialCv: HTMLCanvasElement | null = null, dialKey = '';
+let revDx: Int16Array | null = null, revDy: Int16Array | null = null;
+const DIAL_A0 = (150 / 180) * Math.PI, DIAL_SWEEP = (240 / 180) * Math.PI;
+const REV_SEGS = 18;
+function dialBake(DR: number): HTMLCanvasElement {
+  const k = `${DR}/${hudDpr}`;
+  if (dialCv && dialKey === k) return dialCv;
+  const o = DR + 2, w = 2 * o;
+  const c = document.createElement('canvas');
+  c.width = Math.ceil(w * hudDpr); c.height = Math.ceil(w * hudDpr);
+  const x = c.getContext('2d')!;
+  x.setTransform(hudDpr, 0, 0, hudDpr, 0, 0);
+  x.imageSmoothingEnabled = false;
+  for (let i = 0; i <= 40; i++) {
+    const a = DIAL_A0 + (i / 40) * DIAL_SWEEP;
+    const major = i % 5 === 0;
+    x.fillStyle = major ? 'rgba(114,189,178,0.45)' : 'rgba(114,189,178,0.16)';
+    for (let r = DR; r <= DR + (major ? 1 : 0); r++) {
+      x.fillRect(Math.round(o + Math.cos(a) * r), Math.round(o + Math.sin(a) * r), 1, 1);
+    }
+  }
+  // The rev arc's own offsets, on the same key: three radii a segment, stored
+  // as the offset from the centre so an integer `cx` makes the sum exact.
+  const dx = new Int16Array(REV_SEGS * 3), dy = new Int16Array(REV_SEGS * 3);
+  for (let i = 0, n = 0; i < REV_SEGS; i++) {
+    const a = DIAL_A0 + ((i + 0.5) / REV_SEGS) * DIAL_SWEEP;
+    for (let r = DR - 7; r <= DR - 3; r += 2, n++) {
+      dx[n] = Math.round(Math.cos(a) * r) - 1; dy[n] = Math.round(Math.sin(a) * r) - 1;
+    }
+  }
+  revDx = dx; revDy = dy;
+  dialCv = c; dialKey = k;
+  return c;
+}
+const HUD_BAKE = qsOn('hudbake', true);
 /** ── WHERE THE HUD'S MILLISECONDS GO ──
  *
  *  `drawHud` reached 11.0% of a device session at 6.7 ms a call — the third
@@ -51134,13 +51193,18 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // whole way round; the instrument is now a 240° arc of sparse ticks
       // with its gap seated at the bottom, where the unit text and the gear
       // live — no enclosing circle, no disc, no panel.
-      const A0 = (150 / 180) * Math.PI, SWEEP = (240 / 180) * Math.PI;
-      for (let i = 0; i <= 40; i++) {
-        const a = A0 + (i / 40) * SWEEP;
-        const major = i % 5 === 0;
-        hctx.fillStyle = major ? 'rgba(114,189,178,0.45)' : 'rgba(114,189,178,0.16)';
-        for (let r = DR; r <= DR + (major ? 1 : 0); r++) {
-          hctx.fillRect(Math.round(cx + Math.cos(a) * r), Math.round(cy + Math.sin(a) * r), 1, 1);
+      const A0 = DIAL_A0, SWEEP = DIAL_SWEEP;
+      if (HUD_BAKE) {
+        const o = DR + 2;
+        hctx.drawImage(dialBake(DR), cx - o, cy - o, 2 * o, 2 * o);
+      } else {
+        for (let i = 0; i <= 40; i++) {
+          const a = A0 + (i / 40) * SWEEP;
+          const major = i % 5 === 0;
+          hctx.fillStyle = major ? 'rgba(114,189,178,0.45)' : 'rgba(114,189,178,0.16)';
+          for (let r = DR; r <= DR + (major ? 1 : 0); r++) {
+            hctx.fillRect(Math.round(cx + Math.cos(a) * r), Math.round(cy + Math.sin(a) * r), 1, 1);
+          }
         }
       }
       // The sweep: REVS, not speed. engRev runs 0..1.2 — the last sixth is
@@ -51155,8 +51219,12 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         let col = (i + 1) / SEGS > 0.83 ? UI.hot : UI.gold;
         if (on && i === lit - 1) col = rig.accel > 1.5 ? UI.good : rig.accel < -2.5 ? UI.bad : col;
         hctx.fillStyle = on ? col : 'rgba(87,201,176,0.22)';
-        for (let r = DR - 7; r <= DR - 3; r += 2) {
-          hctx.fillRect(Math.round(cx + Math.cos(a) * r) - 1, Math.round(cy + Math.sin(a) * r) - 1, 2, 2);
+        if (HUD_BAKE && revDx && revDy) {
+          for (let n = i * 3; n < i * 3 + 3; n++) hctx.fillRect(cx + revDx[n], cy + revDy[n], 2, 2);
+        } else {
+          for (let r = DR - 7; r <= DR - 3; r += 2) {
+            hctx.fillRect(Math.round(cx + Math.cos(a) * r) - 1, Math.round(cy + Math.sin(a) * r) - 1, 2, 2);
+          }
         }
       }
       // The card in the middle, top to bottom as the reference sets it:
