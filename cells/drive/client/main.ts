@@ -50877,6 +50877,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // answers about the vehicle, and they now share one corner. Drawn bare, with
   // the one-pixel ink outline the world labels use: a black box over a game
   // this dark is a hole in the picture, and none of this is a control.
+  hudLap('dockfrm');
   // ── the dock: always the view a tap will toggle TO ──
   // top → chase POV, chase → cab POV (both scissored in by the renderer, so
   // the HUD leaves an empty frame); cab → the chart minimap, drawn here.
@@ -51011,6 +51012,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         !a || auto.src === 'unchained' ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
     }
   }
+  hudLap('dockview');
   // ── where you are, and whether the world is still arriving ──
   {
     const shown = fit(placeLine || '', Math.round(HW * 0.62));
@@ -51109,6 +51111,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       fpsRect.x = Math.round((HW - textSW(fs)) / 2); fpsRect.y = infoY + 17 - 4; fpsRect.w = textSW(fs); fpsRect.h = 16;
     }
   }
+  hudLap('where');
   // ── the rig, bottom-right ──
   // The corner is three instruments now, and each owns its ground. The TABLE:
   // micro label RIGHT-ALIGNED above a right-aligned bar, no values — the bar
@@ -51310,7 +51313,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // overlays.ts, fed from stepOverlays below) — they behave like UI, not like
   // instruments, and they were the last text on this canvas that wanted real
   // layout.
-  hudLap('dock');
+  hudLap('riggauge');
   hudProfMs += performance.now() - hudEntry;
 }
 /** The task and the claim, as DOM state — pushed every frame, diffed there. */

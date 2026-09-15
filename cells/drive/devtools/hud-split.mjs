@@ -37,18 +37,29 @@ const d = await openDrive({
 });
 const q = (f, ...a) => d.page.evaluate(f, ...a);
 
-// A settle gate, so the HUD is drawing a world rather than a loading screen:
-// the POI lane solver and the chart's place names both scale with what has
-// streamed, and measuring them half-arrived measures the streaming.
-let quiet = 0, pb = -1, pc = -1;
-for (let i = 0; i < 60; i++) {
+// ── THE GATE, AND WHY IT IS SLOW HERE ──
+//
+// The POI lane solver, the chart's place names and the tile-debug grid all
+// scale with what has streamed, so a half-arrived world reports them as free.
+// THE FIRST RUN OF THIS TOOL DID EXACTLY THAT: it passed at 39 s on 269 road
+// cells of a fixture that settles at 3,138, and four sections read ~0 ms. Two
+// quiet polls is not a settle when drawing is on — the harness paints at three
+// frames a second and the world build is paced by the frame loop, so progress
+// is slow rather than finished. Four quiet polls, a poll budget that allows
+// six minutes, and the counts printed so a reader can judge the run rather
+// than trust the word `settled`.
+let quiet = 0, pb = -1, pc = -1, pw = -1;
+for (let i = 0; i < 120; i++) {
   await d.page.waitForTimeout(3000);
   const t = await q(() => window.__tstats());
-  quiet = (t.dirty === 0 && t.builds === pb && t.roadCells === pc && t.builds > 0) ? quiet + 1 : 0;
-  pb = t.builds; pc = t.roadCells;
-  if (quiet >= 2) break;
+  quiet = (t.dirty === 0 && t.builds === pb && t.roadCells === pc && t.seenWays === pw && t.builds > 0)
+    ? quiet + 1 : 0;
+  pb = t.builds; pc = t.roadCells; pw = t.seenWays;
+  if (quiet >= 4) break;
+  if (i % 8 === 0) console.log(`[${el()}] dirty ${t.dirty} builds ${t.builds} ways ${t.seenWays} cells ${t.roadCells}`);
 }
-console.log(`[${el()}] settled · builds ${pb} cells ${pc}`);
+const settled = quiet >= 4;
+console.log(`[${el()}] ${settled ? 'SETTLED' : 'NOT SETTLED'} · builds ${pb} ways ${pw} cells ${pc}`);
 
 async function window_(cam, secs) {
   await q((c) => window.__cam(c), cam);
@@ -77,4 +88,4 @@ for (const cam of ['chase', 'top']) {
   console.log(`  ${'other'.padEnd(9)} ${H.other.toFixed(3).padStart(7)} ms`
     + ` — the residual no lap covers`);
 }
-console.log(`\npage errors ${errs}`);
+console.log(`\npage errors ${errs} · world ${settled ? 'settled' : 'NOT SETTLED'}` + ` · ${pw} ways ${pc} road cells`);
