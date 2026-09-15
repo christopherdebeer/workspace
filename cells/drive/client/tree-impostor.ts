@@ -135,6 +135,10 @@ export interface ImpostorTuning {
   /** How much of the top card shows: 0 from the seat, 1 looking straight down.
    *  Set once a frame from the camera, never per instance. */
   top?: { value: number };
+  /** Where the dissolve toward the ground starts and ends, in metres. */
+  fade?: { value: THREE.Vector2 };
+  /** What it dissolves TOWARD: the local ground's own colour. */
+  ground?: { value: THREE.Color };
 }
 
 /**
@@ -151,11 +155,15 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
   });
   const wind = tuning.wind ?? { uTime: { value: 0 }, uGust: { value: new THREE.Vector2() }, uWindK: { value: 0 } };
   const uTop = tuning.top ?? { value: 0 };
+  const uFade = tuning.fade ?? { value: new THREE.Vector2(1e6, 2e6) };
+  const uGround = tuning.ground ?? { value: new THREE.Color(0.5, 0.5, 0.5) };
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = wind.uTime;
     sh.uniforms.uGust = wind.uGust;
     sh.uniforms.uWindK = wind.uWindK;
     sh.uniforms.uImpTop = uTop;
+    sh.uniforms.uImpFade = uFade;
+    sh.uniforms.uImpGround = uGround;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', [
         '#include <common>',
@@ -163,10 +171,13 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         'uniform float uImpTop;',
         'varying float vImpCard; varying float vImpForm; varying float vImpYaw;',
         'varying vec3 vImpRight; varying vec3 vImpOut; varying vec2 vImpUv;',
+        'varying float vImpFade;',
+        'uniform vec2 uImpFade;',
         FOLIAGE_WIND_UNIFORMS,
       ].join('\n'))
       .replace('#include <begin_vertex>', [
         '#include <begin_vertex>',
+        'vImpFade = 0.0;',
         '#ifdef USE_INSTANCING',
         // THE INSTANCE MATRIX IS TRANSLATION AND SCALE ONLY, which is what
         // makes this one line: a horizontal unit vector survives a scale that
@@ -180,6 +191,13 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         'vec3 impRight = vec3(impDir.y, 0.0, -impDir.x);',
         'vImpRight = impRight;',
         'vImpOut = vec3(impDir.x, 0.0, impDir.y);',
+        // ── THE DISSOLVE IS THE SHADER'S, NOT THE REFRESH'S ──
+        // It was a per-instance colour mixed on the CPU, which cost a terrain
+        // palette and a cover sample for every faded tree in every refresh —
+        // and STEPPED, because a refresh is a few times a second while the
+        // distance changes every frame. Here it is the camera's own distance,
+        // continuous, and it costs the pass nothing at all.
+        'vImpFade = clamp((impFl - uImpFade.x) / max(1.0, uImpFade.y - uImpFade.x), 0.0, 1.0);',
         'if (aCard < 0.5) {',
         '  transformed = impRight * position.x + vec3(0.0, position.y, 0.0);',
         '} else {',
@@ -204,9 +222,10 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', [
         '#include <common>',
-        'uniform float uImpTop;',
+        'uniform float uImpTop; uniform vec3 uImpGround;',
         'varying float vImpCard; varying float vImpForm; varying float vImpYaw;',
         'varying vec3 vImpRight; varying vec3 vImpOut; varying vec2 vImpUv;',
+        'varying float vImpFade;',
         IMPOSTOR_GLSL,
       ].join('\n'))
       // THE SILHOUETTE IS THE ALPHA, and the alpha is BINARY — the composite
@@ -242,6 +261,21 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         // size; anything finer is the twig detail this tier exists to discard.
         'diffuseColor.rgb *= 0.78 + 0.30 * impLo;',
       ].join('\n'))
+      // ── AND THE DISSOLVE GOES AFTER THE INSTANCE COLOUR, NOT BEFORE IT ──
+      // three's Lambert chain runs map_fragment and THEN color_fragment, so at
+      // the block above `diffuseColor` is still the material's white and the
+      // tree's own colour has not arrived. A mix toward the ground written
+      // there would be multiplied by the tree afterwards — a darkening rather
+      // than a tint, and darkest where the fade is strongest, which is the
+      // opposite of a dissolve. The shade term above is a multiply and
+      // commutes; this one does not.
+      .replace('#include <color_fragment>', [
+        '#include <color_fragment>',
+        // The same dissolve toward the ground the skeletons take at their own
+        // edge, over this tier's own reach — or the tier would trade the cap's
+        // hard edge for a hard edge of its own, one ring further out.
+        'diffuseColor.rgb = mix(diffuseColor.rgb, uImpGround, vImpFade * 0.7);',
+      ].join('\n'))
       // ── THE CROWN IS LIT AS AN ELLIPSOID ──
       // The card is flat and a flat normal would make a stand of impostors
       // flash as one surface when the sun moves. Treating the crown as a
@@ -249,15 +283,26 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
       // it has, which is what has to agree across the handoff — not the leaves.
       .replace('#include <normal_fragment_begin>', [
         '#include <normal_fragment_begin>',
+        // ── AND IT IS HANDED OVER IN VIEW SPACE, WHICH IS WHAT THE CHUNK MEANS ──
+        // The first cut built the crown normal out of vImpRight/vImpOut and
+        // assigned it straight to `normal`, which is WORLD space written into
+        // a variable three fills from `normalMatrix * objectNormal` — i.e. the
+        // view-space normal every lighting chunk downstream reads. The sun
+        // direction is view-space too, so the dot product was between two
+        // different frames: the stands read flat and dark, and their shading
+        // TURNED WITH THE CAMERA rather than with the sun. The rotation is one
+        // matrix multiply and it belongs here, at the handover.
+        'vec3 impWN;',
         'if (vImpCard < 0.5) {',
         '  float impNx = (vImpUv.x - 0.5) * 2.0;',
         '  float impNy = (impLo - 0.5) * 1.2;',
         '  float impNz = sqrt(max(0.06, 1.0 - min(0.94, impNx * impNx + impNy * impNy)));',
-        '  normal = normalize(vImpRight * impNx + vec3(0.0, impNy, 0.0) + vImpOut * impNz);',
+        '  impWN = vImpRight * impNx + vec3(0.0, impNy, 0.0) + vImpOut * impNz;',
         '} else {',
         '  vec2 impD = (vImpUv - 0.5) * 2.0;',
-        '  normal = normalize(vec3(impD.x * 0.7, 1.3, impD.y * 0.7));',
+        '  impWN = vec3(impD.x * 0.7, 1.3, impD.y * 0.7);',
         '}',
+        'normal = normalize((viewMatrix * vec4(normalize(impWN), 0.0)).xyz);',
       ].join('\n'));
   };
   return mat;

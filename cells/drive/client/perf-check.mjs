@@ -104,7 +104,12 @@ function context(code,range,ez,triCap) {
     IMPOSTOR_FORMS:['round','conic','columnar','umbrella','palm','bare'],
     IMPOSTOR_WIDTH:{round:0.9,conic:0.5,columnar:0.4,umbrella:1.2,palm:0.5,bare:0.35},
     impostorFormIndex:()=>0,impFormOf:new WeakMap(),
-    impProf:{drawn:0,offered:0,capped:0,formed:0,ms:0},
+    impProf:{drawn:0,offered:0,capped:0,formed:0,far:0,ms:0},
+    // HALF AGAIN THE DRAW RANGE, for the manifest's own reason one line down:
+    // the REACH dial's far gather has to RUN here, or the claim that a tier
+    // reaching past the draw ring disturbs nothing inside it is untested.
+    impostorReach:()=>range*1.5,impostorReachAsked:()=>range*1.5,impDensityMul:1,
+    impFadeU:{value:{set:()=>{}}},impGroundU:{value:{setRGB:()=>{}}},baseElev:0,
     impStage:{m:new Float32Array(512*16),c:new Float32Array(512*3),
       f:new Float32Array(512),y:new Float32Array(512)},
     impostors:impostorMesh(512),

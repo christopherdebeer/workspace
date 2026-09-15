@@ -11371,6 +11371,15 @@ const MANIFEST_K = 2;                       // …times the draw range
  *  every cell inside it holds its own site list for as long as it is in reach.
  *  1,089 is the largest odd square that fits. */
 const MANIFEST_MAX_CELLS = 1100;
+/** ── AND A WIDER CEILING WHEN SOMETHING ACTUALLY ASKS FOR ONE ──
+ *  The stock ceiling is sized for the manifest's own purpose: knowing a little
+ *  further than the geometry draws, so the far edge is a handoff rather than a
+ *  frontier. The impostor REACH dial is a different purpose — it asks the
+ *  manifest to be the population it draws — and clamping that to the stock
+ *  ceiling would make the dial's upper stops lie. So the ceiling lifts when it
+ *  is asked to, and the readout says when it binds. 6,241 cells is 38 rings at
+ *  220 m: about 8.4 km, and on the order of a third of a million sites held. */
+const MANIFEST_MAX_CELLS_WIDE = 6241;
 let manifestOverride = 0;
 {
   const m = Number(qs('treemanifest'));
@@ -11379,8 +11388,11 @@ let manifestOverride = 0;
 function manifestRange(): number {
   const draw = Math.max(VEG_RANGE, treeRange);
   if (manifestOverride) return Math.max(draw, manifestOverride);
-  const capReach = Math.floor((Math.sqrt(MANIFEST_MAX_CELLS) - 1) / 2);
-  return Math.max(draw, Math.min(draw * MANIFEST_K, capReach * VEG_CELL));
+  // What the manifest is FOR, plus what anything downstream has asked of it.
+  const want = Math.max(draw * MANIFEST_K, impostorReachAsked());
+  const cells = want > draw * MANIFEST_K ? MANIFEST_MAX_CELLS_WIDE : MANIFEST_MAX_CELLS;
+  const capReach = Math.floor((Math.sqrt(cells) - 1) / 2);
+  return Math.max(draw, Math.min(want, capReach * VEG_CELL));
 }
 let treeSizeScale = 1;
 let treeFormScale = 1;
@@ -11645,14 +11657,66 @@ const IMPOSTOR_ON = qsOn('impostor', true);
 let impostorDraw = IMPOSTOR_ON;
 /** Instance slots. Four triangles each, against ~1,045 for a baked skeleton:
  *  the whole tier at capacity is 32k triangles against the skeletons' 2.4M. */
-const IMPOSTOR_CAP = 8000;
+const IMPOSTOR_CAP = 32000;
 /** A FLOOR under the full-density radius, not the radius itself — see
  *  `impostorFullM`. */
 const IMPOSTOR_FULL_M = 260;
+/**
+ * ── HOW FAR THE CHEAP REPRESENTATION STANDS, AND HOW THICKLY ──
+ *
+ * Two dials, because the seat asked two different questions of this tier and
+ * one number cannot answer both. REACH is where the population ENDS: a
+ * multiple of the draw range, so a rack already set to 2.8 km asks for 5.6 or
+ * 11.2 and the answer is a horizon, not a wall. DENSITY is how much of the
+ * population inside that reach stands up: it scales the inverse-square keep
+ * probability, so 4X thickens a far wood without moving its edge and 0.25X
+ * thins it without bringing the edge in. Move either and the other holds.
+ *
+ * REACH IS A REQUEST, NOT A SETTING, and that distinction is the whole reason
+ * these report three numbers instead of one. A tree can only be drawn if it is
+ * KNOWN, and what is known is the manifest — which is bounded by cells, which
+ * is bounded by memory. So the dial asks, the manifest grants, and the readout
+ * says which of the two bound it. A dial that silently delivered 3.5 km when
+ * it said 22 would be the `MANIFEST_MAX_M` fault again, one layer up.
+ *
+ * The upper stops are deliberately unsafe, exactly as the rack's other tree
+ * stops are: 8X of 2.8 km is a hundred thousand sites held in memory, and it
+ * exists to find the wall rather than to promise there isn't one.
+ */
+const IMP_REACH_STEPS = [0, 0.5, 1, 2, 4, 8];
+let impReachMul = 1;
+/** Set only by `?impreach=`, and `impReachMul < 0` is what says so. */
+let impReachM = 0;
+const IMP_DENSITY_STEPS = [0.25, 0.5, 1, 2, 4, 1e9];    // the last stop is ALL
+let impDensityMul = 1;
+{
+  // Exact, unsaved overrides for a bench: reach in METRES (the unit the seat
+  // reads on the rack), density as a bare multiplier.
+  const r = Number(qs('impreach'));
+  if (Number.isFinite(r) && r >= 0) { impReachMul = -1; impReachM = clamp(r, 0, 40000); }
+  const d = Number(qs('impdensity'));
+  if (Number.isFinite(d) && d > 0) impDensityMul = clamp(d, 0.01, 1e9);
+}
+/** What this tier would draw to if nothing stopped it, metres. */
+function impostorReachAsked(): number {
+  if (impReachMul < 0) return impReachM;
+  return Math.max(VEG_RANGE, treeRange) * impReachMul;
+}
+/** And what it actually gets: the manifest cannot hand over trees it has not
+ *  seeded, so the grant is the smaller of the two. */
+function impostorReach(): number {
+  const asked = impostorReachAsked();
+  return asked <= 0 ? 0 : Math.min(asked, manifestRange());
+}
+/** Where the dissolve starts and ends, and what it dissolves toward — both set
+ *  once a refresh and read per FRAGMENT, so the fade is continuous in distance
+ *  rather than stepped at the refresh cadence. */
+const impFadeU = { value: new THREE.Vector2(1e6, 2e6) };
+const impGroundU = { value: new THREE.Color(0.5, 0.5, 0.5) };
 /** How much of the top card shows, set per RENDER from that render's own
  *  camera — see `aimSky`, which is where everything hung on the eye belongs. */
 const impTopU = { value: 0 };
-const impMat = impostorMaterial({ wind: windU, top: impTopU });
+const impMat = impostorMaterial({ wind: windU, top: impTopU, fade: impFadeU, ground: impGroundU });
 // The same weather as the skeletons beside it: a wood lit while the grass it
 // stands in is under a cloud is the fault `terrainFx` was chained onto the
 // skeletons to fix, and a new tier outside it would reopen exactly that.
@@ -11680,7 +11744,7 @@ const impStage = {
   y: new Float32Array(IMPOSTOR_CAP),
 };
 /** What the last refresh stood up, so the probe reports the rule that ran. */
-const impProf = { drawn: 0, offered: 0, capped: 0, formed: 0, ms: 0 };
+const impProf = { drawn: 0, offered: 0, capped: 0, formed: 0, far: 0, ms: 0 };
 /**
  * THE IMPOSTOR'S FORM IS THE TREE'S OWN, and it is cached per SITE because it
  * has to be both correct and cheap. Correct: if a tree is a cone at 400 m and
@@ -13873,7 +13937,8 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // The manifest's own reach — see the note by `manifestRange`. The draw ring
   // is walked for gather and place exactly as before; this one is walked for
   // SEEDING alone, and only over the annulus beyond the draw ring.
-  const mReach = Math.max(reach, Math.ceil(manifestRange() / VEG_CELL));
+  const mReach = Math.max(reach, Math.ceil(manifestRange() / VEG_CELL),
+    impostors && impostorDraw ? Math.ceil(impostorReach() / VEG_CELL) : 0);
   const vegR2 = VEG_RANGE * VEG_RANGE;
   const treeR2 = treeRange * treeRange;
   // NEAREST FIRST. Walk cells in rings outward from the truck, so when a pool
@@ -13910,6 +13975,15 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // HOISTED: the impostor tier reads the same candidates admission did, which
   // is the whole reason it costs no new walking.
   const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = ezRecord(() => [] as Array<[number, PlacedVegSite]>);
+  // ── AND THE ONES ONLY THE IMPOSTOR TIER WILL EVER SEE ──
+  //
+  // Kept in a SEPARATE list rather than appended to `cand`, and the separation
+  // is load-bearing: `cand[fam].length` is the demand the water-filling
+  // allocator divides the triangle budget by, so a tree six kilometres out
+  // joining that list would take slots from a tree at four hundred metres and
+  // move the admitted edge IN. Nothing beyond the draw range may vote on the
+  // geometry budget. It may only ask for a card.
+  const candFar: Record<EzFamily, Array<[number, PlacedVegSite]>> = ezRecord(() => [] as Array<[number, PlacedVegSite]>);
   if (EZ_ON) {
     for (const [gx, gz] of ring) {
       yield;
@@ -13924,6 +13998,31 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       }
     }
     vegMark('ezGather');
+    // The annulus between the draw ring and the impostor's reach. It walks the
+    // manifest's own cells — which is the point of the manifest — and seeds any
+    // the manifest has not reached yet, under the same slice budget, so a wide
+    // reach fills in over a few refreshes instead of stalling one.
+    {
+      const impR = impostors && impostorDraw ? impostorReach() : 0;
+      const impCells = Math.ceil(impR / VEG_CELL);
+      if (impR > treeRange && impCells > reach) {
+        const impR2 = impR * impR;
+        for (const [gx, gz] of squareRings(cx, cz, impCells, reach + 1)) {
+          yield;
+          if (vegSeedLeft <= 0) break;
+          seedCell(gx, gz);
+          const cell = vegGrid.get(`${gx},${gz}`);
+          if (!cell) continue;
+          for (const v of cell) {
+            if (!isEzKind(v.k)) continue;
+            const dx = v.x - state.x, dz = v.z - state.z;
+            const d2 = dx * dx + dz * dz;
+            if (d2 >= treeR2 && d2 < impR2) candFar[v.k].push([d2, v]);
+          }
+        }
+      }
+      vegMark('impGather');
+    }
     // ── THE BUDGET GOES TO WHAT IS ACTUALLY HERE ── see the note by
     // `ezTriPrice`. `cand[fam].length` is every candidate inside the draw range,
     // so `want` is what this place would plant if only its own cap stopped it;
@@ -14154,9 +14253,22 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // and `ezAdmit` says which of them became geometry. What is left is the
   // population the cap cuts — 54,815 of 57,112 on the seat's own rack — and
   // until now it was drawn as nothing at all.
-  let impN = 0, impOffered = 0, impFormed = 0;
+  let impN = 0, impOffered = 0, impFormed = 0, impFar = 0, impR2 = 0;
   if (impostors && impostorDraw) {
-    const fadeFrom = treeRange * 0.66;
+    // The dissolve's own span, handed to the shader once. It starts where the
+    // skeletons' does — two thirds of the way to the draw edge — and ends at
+    // this tier's own edge, which the REACH dial moves.
+    const impR = impostorReach();
+    impR2 = impR * impR;
+    // The dissolve is a fraction of THIS tier's reach, not the geometry's, so
+    // pulling the reach inside the draw ring still ends in a smudge rather
+    // than at a wall. At stock the two are the same number.
+    impFadeU.value.set(impR * 0.66, impR);
+    {
+      const gy = sampleHeight(state.x, state.z);
+      const [tr, tg, tb] = terrainPalette(gy + baseElev, 0, sampleCover(state.x, state.z), state.x, state.z);
+      impGroundU.value.setRGB(tr, tg, tb);
+    }
     for (const fam of EZ_FAMILIES) {
       const variants = ezVariants(fam);
       // ── FULL DENSITY STARTS WHERE THE GEOMETRY STOPS ──
@@ -14174,17 +14286,39 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       // adaptive in the right direction: a family the budget cuts hard has a
       // near edge and starts thinning early, one it barely cuts thins late.
       const full = Math.max(IMPOSTOR_FULL_M, ezEdge[fam]);
-      const full2 = full * full;
-      for (const [d2, v] of cand[fam]) {
+      // DENSITY SCALES THE KEEP PROBABILITY, WHICH IS THE SAME THING AS
+      // SCALING full^2 — so 4X reads as a full-density radius twice as wide
+      // and the inverse-square law past it is untouched. The edge does not
+      // move: that is the REACH dial's job, and the two stay independent.
+      const full2 = full * full * impDensityMul;
+      // Both lists, near first, so the cap — if it ever binds — takes the near
+      // trees. `candFar` is empty unless the REACH dial asks past the draw ring.
+      for (const list of [cand[fam], candFar[fam]]) {
+      // INDEXED, NOT for-of: this loop runs over every candidate in the world
+      // the tier can see — 55,000 at stock and several times that with REACH
+      // up — and the iterator protocol plus a tuple destructure per step is a
+      // measurable share of a pass that the dump already calls the largest
+      // tree phase.
+      for (let ci = 0; ci < list.length; ci++) {
+        const ent = list[ci], d2 = ent[0], v = ent[1];
+        if (d2 > impR2) continue;     // the REACH dial, and the cheapest test there is
         if (impN >= IMPOSTOR_CAP) { impProf.capped++; break; }
-        if (ezAdmit.has(v)) continue;
         impOffered++;
-        // THE CHEAPEST TEST FIRST, and it is also the one that decides
-        // membership: a stable hash on the tree's own position against a
-        // density that falls as the inverse square. Constant density on the
-        // GLASS, decided once per tree, the same from every vantage.
-        const keep = full2 / Math.max(d2, 1);
-        if (keep < 1 && hash2(Math.round(v.x * 8) + 7919, Math.round(v.z * 8) + 104729) > keep) continue;
+        // ── THE ADMITTED SET IS ONLY EVER INSIDE full ──
+        // Every tree the geometry took is within `ezEdge[fam]`, and `full` is
+        // at least that, so beyond it the membership test cannot collide with
+        // admission and the Set lookup is pure cost. Skipping it there takes
+        // an object-identity hash off the overwhelming majority of steps.
+        if (d2 <= full2) {
+          if (ezAdmit.has(v)) { impOffered--; continue; }
+        } else if (hash2(Math.round(v.x * 8) + 7919, Math.round(v.z * 8) + 104729) * d2 > full2) {
+          // A stable hash on the tree's own position against a density that
+          // falls as the inverse square: constant density on the GLASS,
+          // decided once per tree, the same from every vantage. Written as a
+          // multiply rather than `hash > full2 / d2` — same predicate, no
+          // divide, and this is the hottest line in the pass.
+          continue;
+        }
         let form = impFormOf.get(v);
         if (form === undefined) {
           if (impFormed >= IMPOSTOR_FORM_BUDGET) continue;
@@ -14201,28 +14335,33 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         const formSw = clamp(1 + ((v.sw ?? 1) - 1) * treeFormScale, 0.18, 4.5);
         const tall = EZ_M_PER_SCALE[fam] * v.s * formSy * treeSizeScale;
         const wide = tall * IMPOSTOR_WIDTH[IMPOSTOR_FORMS[form]] * formSw;
-        vegDummy.position.set(v.x, gy, v.z);
-        vegDummy.rotation.set(0, 0, 0);
-        vegDummy.scale.set(wide, tall, wide);
-        vegDummy.updateMatrix();
-        vegDummy.matrix.toArray(impStage.m, impN * 16);
-        // The same dissolve toward the ground the skeletons take at their own
-        // edge, over this tier's own reach — or the tier would trade the cap's
-        // hard edge for a hard edge of its own one ring further out.
-        const dist = Math.sqrt(d2);
-        if (dist > fadeFrom) {
-          const mixv = Math.min(1, (dist - fadeFrom) / Math.max(1, treeRange - fadeFrom)) * 0.7;
-          const [tr, tg, tb] = terrainPalette(gy + baseElev, 0, sampleCover(v.x, v.z), v.x, v.z);
-          swardCol.setRGB(v.c.r + (tr - v.c.r) * mixv, v.c.g + (tg - v.c.g) * mixv, v.c.b + (tb - v.c.b) * mixv);
-          swardCol.toArray(impStage.c, impN * 3);
-        } else v.c.toArray(impStage.c, impN * 3);
+        // ── THE MATRIX IS WRITTEN, NOT COMPOSED ──
+        // `vegDummy.updateMatrix()` builds a full TRS from a quaternion, and
+        // this instance has no rotation by CONTRACT — the vertex shader's
+        // billboard is one line precisely because the instance matrix carries
+        // translation and scale only. Writing the six live elements states
+        // that contract in the one place that could break it, and drops a
+        // quaternion-to-matrix per impostor per refresh.
+        const mo = impN * 16, M = impStage.m;
+        M[mo] = wide; M[mo + 1] = 0; M[mo + 2] = 0; M[mo + 3] = 0;
+        M[mo + 4] = 0; M[mo + 5] = tall; M[mo + 6] = 0; M[mo + 7] = 0;
+        M[mo + 8] = 0; M[mo + 9] = 0; M[mo + 10] = wide; M[mo + 11] = 0;
+        M[mo + 12] = v.x; M[mo + 13] = gy; M[mo + 14] = v.z; M[mo + 15] = 1;
+        // The tree's own colour, unfaded: the dissolve toward the ground is
+        // the FRAGMENT's now (see `impFadeU`), which is both cheaper — it cost
+        // a terrain palette and a cover sample per faded tree per refresh —
+        // and continuous, where a per-refresh mix stepped a few times a second.
+        const co = impN * 3;
+        impStage.c[co] = v.c.r; impStage.c[co + 1] = v.c.g; impStage.c[co + 2] = v.c.b;
         impStage.f[impN] = form;
         impStage.y[impN] = v.rot;
         impN++;
       }
+      }
+      impFar += candFar[fam].length;
     }
   }
-  impProf.drawn = impN; impProf.offered = impOffered; impProf.formed = impFormed;
+  impProf.drawn = impN; impProf.offered = impOffered; impProf.formed = impFormed; impProf.far = impFar;
   vegMark('impostor');
   // ── THE COMMIT: STAGING BECOMES THE INSTANCES, IN ONE SLICE ──
   // A mesh that has never been coloured has no colour attribute yet (three
@@ -33759,19 +33898,38 @@ function tapeKeep(): string {
   // per-refresh budget for working out a new tree's silhouette, and a nonzero
   // one means the form cache is still filling behind a newly seeded ring.
   out.impostor = impostors
-    ? { on: true, drawn: impProf.drawn, offered: impProf.offered,
+    ? { on: impostorDraw, drawn: impProf.drawn, offered: impProf.offered,
         formed: impProf.formed, cap: IMPOSTOR_CAP, fullM: IMPOSTOR_FULL_M,
+        far: impProf.far, capped: impProf.capped, ...impostorReachTally(),
         top: +impTopU.value.toFixed(3), tris: impProf.drawn * 4 }
     : { on: false };
   return out;
 };
 
+/**
+ * ── WHAT WAS ASKED, WHAT WAS GRANTED, AND WHICH ONE BOUND IT ──
+ * The manifest can only hand over trees it has seeded, so a reach dial past
+ * the manifest's own cell ceiling is a request that cannot be met. Reporting
+ * the grant ALONE would repeat `MANIFEST_MAX_M` exactly — a ceiling silently
+ * coinciding with a floor, and a row that reads plausibly while the dial above
+ * it does nothing. All three, every time.
+ */
+function impostorReachTally(): { asked: number; granted: number; bound: string; density: number } {
+  const asked = impostorReachAsked();
+  const granted = impostorReach();
+  return {
+    asked: Math.round(asked), granted: Math.round(granted),
+    bound: !impostorDraw ? 'OFF' : granted < asked - 1 ? 'MANIFEST' : 'ASKED',
+    density: impDensityMul,
+  };
+}
 /** The impostor tier on one settled world — see `impostorDraw`. Re-runs the
  *  refresh synchronously, so the caller may photograph immediately. */
 (window as unknown as { __impostor?: object }).__impostor = (on?: boolean): object => {
   if (on !== undefined && impostors) { impostorDraw = !!on; refreshVeg(); }
   return { built: !!impostors, drawing: impostorDraw, drawn: impProf.drawn,
-    offered: impProf.offered, tris: impProf.drawn * 4 };
+    offered: impProf.offered, far: impProf.far, tris: impProf.drawn * 4,
+    ...impostorReachTally() };
 };
 
 /** Every decoded variant's extent, for the harness: a bad bake shows here. */
@@ -44880,9 +45038,15 @@ function telemetryReport(): string {
     + ` · cells ${_m.seeded}/${_m.cells} annulus ${_m.annulus || 'NONE'}`
     + `${_m.deferred ? ` · ${_m.deferred} deferred` : ''}`
     + ` · known ${EZ_FAMILIES.map(f => `${f[0]}${_m.known[f]}`).join('/')}`);
-  L.push(`trees impostor ${impostors ? 'on' : 'off'}`
-    + `${impostors ? ` · drawn ${impProf.drawn}/${impProf.offered} offered · ${(impProf.drawn * 4 / 1000).toFixed(1)}k tris`
-      + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed} formed` : ''}` : ''}`);
+  {
+    const _i = impostorReachTally();
+    L.push(`trees impostor ${impostors && impostorDraw ? 'on' : 'off'}`
+      + `${impostors ? ` · reach ${_i.granted}m${_i.bound === 'MANIFEST' ? ` of ${_i.asked}m asked (MANIFEST)` : ''}`
+        + ` · density ${_i.density >= 1e6 ? 'ALL' : `${_i.density}x`}`
+        + ` · drawn ${impProf.drawn}/${impProf.offered} offered${impProf.far ? ` (${impProf.far} past the draw ring)` : ''}`
+        + ` · ${(impProf.drawn * 4 / 1000).toFixed(1)}k tris${impProf.capped ? ` · CAPPED at ${IMPOSTOR_CAP}` : ''}`
+        + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed} formed` : ''}` : ''}`);
+  }
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
@@ -50072,6 +50236,18 @@ const DIAL_GROUPS: DialGroup[] = [
         (i) => { treeFormScale = TREE_FORM_STEPS[i]; }, true),
       dial('tbnd', 'GROWTH BEND', ['OFF', 'SUBTLE', 'RICH', 'WILD', 'STORM', 'IMPOSSIBLE'], 0,
         (i) => { treeBendU.value = TREE_BEND_STEPS[i]; }, true),
+      // ── AND THE CHEAP REPRESENTATION'S OWN TWO ──
+      // REACH is a MULTIPLE of DRAW RANGE above, so the pair compose: the rack
+      // at 2.8 km and 4X asks for eleven kilometres of trees. What it actually
+      // gets is bounded by the manifest, and the telemetry row says so — see
+      // impostorReachTally. OFF stands the whole tier down, which is also the
+      // A/B that __impostor() drives.
+      dial('imprch', 'IMPOSTOR REACH', ['OFF', '0.5X', '1X', '2X', '4X', '8X'], 2, (i) => {
+        impReachMul = IMP_REACH_STEPS[i];
+        impostorDraw = IMPOSTOR_ON && impReachMul > 0;
+      }, true),
+      dial('impden', 'IMPOSTOR DENSITY', ['0.25X', '0.5X', '1X', '2X', '4X', 'ALL'], 2,
+        (i) => { impDensityMul = IMP_DENSITY_STEPS[i]; }, true),
     ],
   },
   {
