@@ -18,6 +18,7 @@
  */
 import * as THREE from 'three';
 import { EZ_BAKE, type EzBakedVariant, type EzForm } from './flora-ez-baked';
+import { FLORA_REFINED } from './flora-refined-baked';
 export type { EzForm };
 import { faceTone, mergeGeos } from './flora';
 
@@ -97,8 +98,28 @@ function bytes(b64: string): Uint8Array {
 const int16 = (b64: string): Int16Array => { const u = bytes(b64); return new Int16Array(u.buffer, u.byteOffset, u.byteLength >> 1); };
 const uint16 = (b64: string): Uint16Array => { const u = bytes(b64); return new Uint16Array(u.buffer, u.byteOffset, u.byteLength >> 1); };
 
+// Geometry quality is independent of the population allowance. These switches
+// keep the same sites available for an on-device comparison; no distance swap.
+const floraQuery = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
+export const EZ_REFINED = floraQuery.get('ezdetail') !== '0';
+export const EZ_GROWTH_FORMS = floraQuery.get('ezforms') !== '0';
+type GrowthVariant = EzBakedVariant & { habit?: string; pads?: string };
+const growthBake = new Map<EzFamily, GrowthVariant[]>();
+const bakedVariants = (family: EzFamily): GrowthVariant[] => {
+  let variants = growthBake.get(family);
+  if (!variants) {
+    variants = family === 'conifer' && EZ_GROWTH_FORMS
+      ? [...EZ_BAKE.families.conifer.variants, ...FLORA_REFINED.conifers as GrowthVariant[]]
+      : EZ_BAKE.families[family].variants;
+    growthBake.set(family, variants);
+  }
+  return variants;
+};
+const habitOf = (v: GrowthVariant): string => v.habit ?? `${v.form}:${v.name.replace(/ #[0-9]+$/, '')}`;
+
 function woodOf(v: EzBakedVariant, q: number): THREE.BufferGeometry {
-  const P = int16(v.pos), I = uint16(v.idx);
+  const reduced = (FLORA_REFINED.wood as Record<string, string>)[v.name];
+  const P = int16(v.pos), I = uint16(EZ_REFINED && reduced ? reduced : v.idx);
   const pos = new Float32Array(P.length);
   for (let i = 0; i < P.length; i++) pos[i] = P[i] / q;
   const g = new THREE.BufferGeometry();
@@ -130,7 +151,7 @@ function cardTone(g: THREE.BufferGeometry, spread = 0.2, foot = 0.22): THREE.Buf
   return g;
 }
 
-function crownOf(v: EzBakedVariant, q: number): THREE.BufferGeometry | null {
+function crownOf(v: GrowthVariant, q: number): THREE.BufferGeometry | null {
   const shape = v.crown.shape;
   if (shape === 'none') return null;
   if (shape === 'card') {
@@ -148,6 +169,7 @@ function crownOf(v: EzBakedVariant, q: number): THREE.BufferGeometry | null {
   if (!A.length) return null;
   const parts: THREE.BufferGeometry[] = [];
   const r = v.crown.r;
+  const pads = v.pads ? int16(v.pads) : null;
   for (let i = 0; i + 3 <= A.length; i += 3) {
     let g: THREE.BufferGeometry;
     if (shape === 'cone') {
@@ -158,6 +180,11 @@ function crownOf(v: EzBakedVariant, q: number): THREE.BufferGeometry | null {
       // eight triangles, and at sixty centimetres no eye tells it from twenty.
       g = shape === 'flat' ? new THREE.OctahedronGeometry(r, 0) : new THREE.IcosahedronGeometry(r, 0);
       if (shape === 'flat') g.scale(1, 0.45, 1);
+    }
+    if (pads) {
+      const p = i / 3 * 4;
+      g.scale(pads[p] / q / r, pads[p + 1] / q / (r * 0.45), pads[p + 2] / q / r);
+      g.rotateY(-pads[p + 3] / q * Math.PI * 2);
     }
     g.translate(A[i] / q, A[i + 1] / q, A[i + 2] / q);
     parts.push(g);
@@ -205,8 +232,7 @@ const cache = new Map<EzFamily, EzVariant[]>();
 export function ezVariants(family: EzFamily): EzVariant[] {
   let out = cache.get(family);
   if (out) return out;
-  const fam = EZ_BAKE.families[family];
-  out = fam.variants.map((v) => {
+  out = bakedVariants(family).map((v) => {
     const wood = woodOf(v, EZ_BAKE.q);
     const crown = crownOf(v, EZ_BAKE.q);
     const geometry = join(wood, crown);
@@ -220,7 +246,8 @@ export function ezVariants(family: EzFamily): EzVariant[] {
   for (const v of out) {
     const n = (seen.get(v.form) ?? 0) + 1;
     seen.set(v.form, n);
-    v.label = `${family} ${v.form} ${n}`;
+    const baked = bakedVariants(family)[out.indexOf(v)];
+    v.label = baked.habit ? `${family} ${baked.habit} ${n}` : `${family} ${v.form} ${n}`;
   }
   cache.set(family, out);
   return out;
@@ -236,7 +263,9 @@ export function ezCrownReach(family: EzFamily): number {
   return vs.length ? reach / vs.length : 0;
 }
 
-/** The triangles the world draws for one tree of a family, on average. */
+/** Historical admission price, intentionally unchanged by geometry refinement.
+ * Otherwise reducing geometry admits more trees and hides the triangle saving.
+ * Actual submitted triangles come from each decoded variant's index count. */
 export function ezMeanTris(family: EzFamily): number {
   return EZ_BAKE.families[family].meanDrawn;
 }
@@ -246,7 +275,7 @@ export function ezMeanTris(family: EzFamily): number {
  *  ONE/TWO/FOUR can prove what the atlas buys without changing where a tree
  *  stands, while ALL remains the shipping answer. */
 export function ezVariantFor(family: EzFamily, x: number, z: number, limit = Number.MAX_SAFE_INTEGER): number {
-  const available = EZ_BAKE.families[family].variants.length;
+  const available = bakedVariants(family).length;
   const n = Math.min(available, Math.max(1, Math.floor(limit)));
   const h = (Math.imul(Math.round(x * 8), 73856093) ^ Math.imul(Math.round(z * 8), 19349663)) >>> 0;
   return available ? h % n : 0;
@@ -279,7 +308,7 @@ export const EZ_PALETTE_N = 2;
 export function ezPalette(
   family: EzFamily, districtSeed: number, limit = Number.MAX_SAFE_INTEGER, forms?: readonly string[],
 ): number[] {
-  const all = EZ_BAKE.families[family].variants;
+  const all = bakedVariants(family);
   const n = Math.min(all.length, Math.max(1, Math.floor(limit)));
   if (n <= 1) return [0];
   // THE FORM FILTER IS A HOOK, AND TODAY IT IS A NO-OP BY CONSTRUCTION: every
@@ -292,7 +321,11 @@ export function ezPalette(
   // pass it is a caller that will not. An empty filter is IGNORED rather than
   // obeyed: a landscape with no matching silhouette must still grow trees.
   const pool: number[] = [];
-  for (let i = 0; i < n; i++) if (!forms?.length || forms.includes(all[i].form)) pool.push(i);
+  for (let i = 0; i < n; i++) if (!forms?.length || forms.includes(all[i].form)) {
+    // Districts choose growth habits, not seeds. Two individuals of the same
+    // habit must not exhaust the district's two-species vocabulary.
+    if (!EZ_GROWTH_FORMS || !pool.some(j => habitOf(all[j]) === habitOf(all[i]))) pool.push(i);
+  }
   const from = pool.length ? pool : Array.from({ length: n }, (_, i) => i);
   // Draw PALETTE_N distinct silhouettes, by walking the pool from a
   // seed-derived offset at a seed-derived stride. A stride coprime with the
@@ -311,9 +344,20 @@ export function ezPalette(
 }
 
 /** Which of the landscape's silhouettes THIS stand is. */
-export function ezPickVariant(palette: number[], standSeed: number): number {
+const habitPeers = new Map<string, number[]>();
+export function ezPickVariant(palette: number[], standSeed: number,
+  family?: EzFamily, individualSeed = 0, limit = Number.MAX_SAFE_INTEGER): number {
   if (!palette.length) return 0;
-  return palette[(standSeed >>> 5) % palette.length];
+  const chosen = palette[(standSeed >>> 5) % palette.length];
+  if (!family || !EZ_GROWTH_FORMS) return chosen;
+  const all = bakedVariants(family), habit = habitOf(all[chosen]);
+  const key = `${family}:${chosen}:${limit}`;
+  let peers = habitPeers.get(key);
+  if (!peers) {
+    peers = all.map((v,i) => ({v,i})).filter(({v,i}) => i < limit && habitOf(v) === habit).map(({i}) => i);
+    habitPeers.set(key, peers);
+  }
+  return peers.length ? peers[(individualSeed >>> 0) % peers.length] : chosen;
 }
 
 /** The one material for every skeleton: the crown wears the instance's

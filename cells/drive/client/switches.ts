@@ -229,6 +229,8 @@ export const SWITCHES = [
     note: 'swardsub=0 seeds the sward from cover and altitude alone, blind to the substrate — the A/B for what it is worth to have the grass thin on the same outcrop the shader draws' },
   { id: 'swardev', kind: 'toggle', marks: ['look', 'legacy'], fallback: 'on',
     note: 'swardev=0 takes the sward\u2019s base density straight off one nearest-neighbour cover texel again \u2014 the A/B for the hard rectilinear grass edges, which were the z12 raster\u2019s ~30m pixels arriving in the world undisguised' },
+  { id: 'swardforms', kind: 'toggle', marks: ['look', 'legacy'], fallback: 'on',
+    note: 'swardforms=0 draws every tuft as the plain nine-vertex blade again — the A/B for the structural expression that lets the same population read as a sedge fan, a broad understorey leaf, a crevice tuft or an upright culm' },
   { id: 'tilt', kind: 'choice', marks: ['look'], fallback: 'off',
     note: 'tilt=subtle|mini|hard puts a tilt-shift plane of focus in the world' },
 ] as const satisfies readonly SwitchDef[];

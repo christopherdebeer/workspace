@@ -100,6 +100,7 @@ import { REEL_DRIVES, type ReelDrive } from './reel-drives';
 import { autoDrive, autoMem, AUTO, type AutoOut, type Ground as AutoGround } from './autopilot';
 import { mkField, buildField, recenter as wxRecenter, wxAt, puddleAt, seedWet, WXF_N, WXF_SPAN } from './weatherfield';
 import { grainFx, grainU } from './grain';
+import { SWARD_STRUCTURE_GLSL } from './sward-structure';
 import {
   DEADWOOD, FOLIAGE_BANDS, STONE, STONE_MIX_ROWS, STONY, TRUNKED, VEG_CAP, VEG_MIX,
   VEG_SIZE, VEG_TREES, bandKind, coverKind as floraCoverKind, trunkReach,
@@ -11347,7 +11348,10 @@ function ezVariantAt(fam: EzFamily, x: number, z: number): number {
   // Amazon. Unsatisfiable preferences are ignored inside `ezPalette` — asking
   // for `round` must not empty the conifers.
   const pal = ezPalette(fam, seedAt(cultEnv, x, z, 'district'), treeVariantCap, guildNow(x, z)?.forms);
-  return ezPickVariant(pal, seedAt(cultEnv, x, z, 'stand'));
+  const [lat, lon] = localToLatLon(x, z);
+  const individual = Math.imul(Math.round(lat * 1e6), 73856093)
+    ^ Math.imul(Math.round(lon * 1e6), 19349663);
+  return ezPickVariant(pal, seedAt(cultEnv, x, z, 'stand'), fam, individual, treeVariantCap);
 }
 
 /**
@@ -12170,6 +12174,7 @@ const swardU = {
    *  standard everything else here is held to. 0 is the sward before phase D's
    *  remainder, exactly. */
   uSwardMic: { value: SUB_SWARD ? 1 : 0 },
+  uSwardStructure: { value: qsOn('swardforms', true) ? 1 : 0 },
   /** The outermost band's reach: the ONE curve every band thins along, so the
    *  fade cannot have a seam where two bands meet. */
   // The outermost fade's END, not a band's reach: everything past this is
@@ -12636,11 +12641,12 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform float uFlowerStrayWater; uniform float uFlowerStrayCliff;
         uniform float uFlowerStrayRuin; uniform float uFlowerPatchM;
         uniform float uFlowerSpeciesM; uniform float uFlowerDbg;
-        uniform float uSwardMic;
+        uniform float uSwardMic; uniform float uSwardStructure;
         uniform float uTime; uniform vec2 uGust;
         ${SWARD_FLOW_NAMES.map((n) => `uniform vec3 ${n};`).join(' ')}
         varying vec3 vSward;
-        ${SWARD_GLSL}`)
+        ${SWARD_GLSL}
+        ${SWARD_STRUCTURE_GLSL}`)
       // ── A BLADE IS LIT LIKE THE GROUND IT STANDS IN ──
       //
       // Reported: "grass still doesn't match terrain (outside of headlights),
@@ -12919,6 +12925,15 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
             sPosL.y = sHead.y + sTip * 0.09;
           }
         }
+        float sTall = 0.0, sStiffness = sIsReed ? 0.38 : 1.0;
+        if (!sIsFlower && !sIsStone && uSwardStructure > 0.001) {
+          float sNewStiff = 1.0;
+          vec3 sStructure = swStructure(position, aBlade, sCtx, sMineral,
+            sIsReed ? 1.0 : 0.0, sSize, sClumpN, sTall, sNewStiff);
+          sPosL = mix(sPosL, sStructure, uSwardStructure);
+          sStiffness = mix(sStiffness, sNewStiff, uSwardStructure);
+          sTall *= uSwardStructure;
+        }
         // AND THEY GROW HARDER THAN THEY DID. With the ground density falling
         // as the square of range, coverage would fall with it unless the blades
         // take some of it back — a blade at two hundred metres drawn four times
@@ -12927,6 +12942,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // Reeds cannot grow into trees, nor gravel into boulders in the far band.
         float sRangeScale = sIsStone ? 1.0 : sIsReed ? (1.0 + 0.35 * sT)
           : (1.0 + 3.2 * pow(sT, 0.75));
+        sRangeScale = mix(sRangeScale, 1.0 + 0.5 * sT, sTall);
         // ── AND STONY GROUND GROWS SHORT GRASS ──
         //
         // sSize is a pure hash and always has been — the ground it stands on
@@ -12952,7 +12968,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         float sGm = length(uGust);
         vec2 sGd = sGm > 1e-4 ? uGust / sGm : vec2(0.0, 1.0);
         float sPhase = dot(sP, sGd) * 0.42;
-        sLp.xz += uGust * (sIsStone ? 0.0 : (sIsReed ? 0.38 : 1.0))
+        sLp.xz += uGust * (sIsStone ? 0.0 : sStiffness)
           * (sLp.y * (0.55 + 0.45 * sin(uTime * 1.9 + sPhase)));
         // A dead slot collapses to a point: zero area, so it costs its vertices
         // and not one fragment. Cheaper than a branch around the whole shader.
@@ -34340,6 +34356,7 @@ function truckSpec(): Record<string, number> {
     // mineral the field is handing that shader. What it cannot report is the
     // drawn population; that is a frame, and band-d.mjs is where it is read.
     micro: swardU.uSwardMic.value,
+    structure: swardU.uSwardStructure.value,
     meanMineral: +(sm / Math.max(1, n)).toFixed(3),
     // …and whether the base rate came off a neighbourhood or off one texel.
     // A run that does not say which is a run nobody can compare.
@@ -34357,6 +34374,10 @@ function truckSpec(): Record<string, number> {
 (window as unknown as { __swardmic?: object }).__swardmic = (v?: number): object => {
   if (v !== undefined) swardU.uSwardMic.value = clamp(v, 0, 1);
   return { micro: swardU.uSwardMic.value, swardsub: SUB_SWARD };
+};
+(window as unknown as { __swardforms?: object }).__swardforms = (v?: number): object => {
+  if (v !== undefined) swardU.uSwardStructure.value = clamp(v, 0, 1);
+  return { structure: swardU.uSwardStructure.value, slots: 'unchanged' };
 };
 /**
  * ── THE COVER EVIDENCE, LIVE, BECAUSE THE FIELD CAN BE RE-SWEPT ──
