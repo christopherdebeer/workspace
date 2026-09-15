@@ -11263,6 +11263,15 @@ strength, live on the dial rack (`__tdetail({nrm})`, `?nscale=`), so the
 comparison is one settled world with one uniform flipped — the standard every
 other measurement in this programme is held to.
 
+**THE FAR SHELL STILL SWAPS, AND IT IS THE SAME TRAP ONE LAYER OUT.**
+`NRM_SCALE > 0 ? farMatFor(...) : farMat` survives, so at `nscale=0` a shell
+tile falls onto `farMat` — which carries the FINE terrain's tangent-space
+procedural map, this file having already recorded that a tile wearing it is
+lit by a vignette beside neighbours lit by the sphere. That is out of this
+unit's scope (the shell's map is a genuine object-space normal decoded by
+`sphereNormal`, not a residual) and it means **a reading of the SHELL taken at
+`nscale=0` is still a comparison of two normal maps.** Do not quote one.
+
 **AND THE PROBE REPORTS THE AUTHORITY, NOT THE NUMBER.** `__tdetail().nrm`
 carries `k` beside `tiles` and `own` — how many drawn terrain tiles wear their
 OWN per-tile material against how many there are — because the claim this rests
