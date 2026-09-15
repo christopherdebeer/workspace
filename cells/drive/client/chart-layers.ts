@@ -142,14 +142,19 @@ export const SURFACE_LEGEND: ReadonlyArray<DebugLegend> = Object.freeze([
 
 /** The substrate view's own legend. Fixed rather than tallied: these are not
  *  classes of a dataset that may or may not be in frame, they are the three
- *  components every fragment is a mixture of, and the reader wants to know
- *  which colour means which whether or not any of it is on screen. The inks
- *  are the channel assignment in the shader — red, green, blue — and nothing
- *  is free to choose them differently. */
+ *  LAYERS every fragment is a stack of, and the reader wants to know which
+ *  colour means which whether or not any of it is on screen. The inks are the
+ *  channel assignment in the shader — red, green, blue — and nothing is free
+ *  to choose them differently.
+ *
+ *  They are shares of what can be SEEN and not a partition, so they do not sum
+ *  to one and are not meant to: OUTCROP is the bedrock still showing through
+ *  whatever lies on it, MANTLE the regolith and debris over it, GRASS the
+ *  vegetation tinting the result. All three exist everywhere. */
 export const SUBSTRATE_LEGEND: ReadonlyArray<{ name: string; hex: string }> = Object.freeze([
   Object.freeze({ name: 'OUTCROP', hex: '#e03838' }),
-  Object.freeze({ name: 'TURF', hex: '#38e038' }),
-  Object.freeze({ name: 'REGOLITH', hex: '#3838e0' }),
+  Object.freeze({ name: 'GRASS', hex: '#38e038' }),
+  Object.freeze({ name: 'MANTLE', hex: '#3838e0' }),
 ]);
 
 export const CHART_LAYER_IDS: readonly ChartLayerId[] =

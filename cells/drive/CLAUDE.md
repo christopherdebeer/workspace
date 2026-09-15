@@ -219,7 +219,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
 | `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
-| `node devtools/bedding.mjs` | whether the substrate's bedding is geology or corduroy: the autocorrelation of its own contribution above its background, at a solved scale so two runs compare (`REV=` for a control, `ANALYSE=1` to re-read frames already on disk) | ~9min |
+| `node devtools/bedding.mjs` | the autocorrelation of the substrate's own contribution above its background, at a solved scale so two runs compare — READ THE LAG, not just the peak: the band holds the bedding comb AND the scree lobes and cannot tell them apart (`REV=` for a control, `ANALYSE=1` to re-read frames already on disk) | ~9min |
 | `node devtools/bridge-water.mjs` | every tagged bridge at a crossing ran its chord (`2d-chord` in its own stage log) and stands over its water — the witness is the STAGE, the metre is the symptom (`FIX=`, `CROSSINGS=`) | ~1min |
 | `node devtools/substrate-morph.test.mjs` | the geomorphic field says what it claims, on authored terrain: a face shows bedrock, nothing is shed above it, the apron is below and thins with distance, hollows hold water and soil, and the builder survives being shipped to the worker as text | ~10s |
 | `node devtools/substrate-views.mjs` | each channel of that field photographed over real ground, with the same-frame-twice floor and the share of the pane each view moves — a channel that paints a flat wash is the failure worth catching (`FIX=`, `CAM=`, `Z=`, `CH=`) | ~6min |
@@ -230,7 +230,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
 | `node devtools/sward-sub.mjs` | whether the sward's density follows the substrate's own field, as the correlation between them, with `swardsub=0` as the control (a fixture, and CPU numbers rather than pixels — see the note) | ~3min |
 | `node devtools/ground-view.mjs` | a ground view is a uniform, not a sheet: the chip sets the channel in every camera, the legend is tallied off the attribute the fragment reads, and the chase frame moves (`FIX=` for an offline world) | ~6min |
-| `node devtools/substrate-ab.mjs` | whether the substrate's classification draws a material or more noise: the inputs at six points, an interleaved one-boot A/B cropped to the near field, and the domain and amount dials swept (`TD=dom` paints the classification) | ~9min |
+| `node devtools/substrate-ab.mjs` | whether the substrate draws a landscape or more noise: the field and the three layer shares at six points, an interleaved one-boot A/B cropped to the near field, and the domain and amount dials swept (`TD=dom` paints the shares, `SPOT=` for a cliff) | ~9min |
 | `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
 | `node devtools/menu-survey.mjs` | every menu screen photographed, SETTINGS scrolled through | ~2min |
 | `node devtools/offline-ground.test.mjs` | and finds ground when it does | ~3min |
@@ -10342,3 +10342,242 @@ the threshold `tdBand` uses, so nothing that was drawing stops drawing and a
 fragment stops paying for what it could not have shown. **Not verified on a
 device**: the harness renders through SwiftShader at three frames a second and
 cannot say what a phone pays. The next telemetry paste is the verification.
+
+## Phase C: the ground is LAYERS now, and turf was never a substrate
+
+The seat's verdict on the material classifier was sharper than the one about
+the detail cascade, and it is the sentence this whole phase is built on:
+*turf is not a substrate. Grass is a layer on top of rock/regolith/soil;
+rockiness persists under and through it.* A classifier can only ever say "this
+patch is the grass one", so what it drew was procedural motifs stamped on a
+wash — three mutually exclusive materials, each with its own texture, none of
+them standing in any physical relation to the ones beside it.
+
+What replaced it is four LAYERS composited in the order they were deposited,
+off the ONE shared geomorphic field phases A and B built:
+
+| layer | what it is | how much of it you see |
+|---|---|---|
+| A · bedrock | the place's colour, chroma pulled out, cool cast | `exposure × (1 − cover)` |
+| B · mantle | regolith and debris, fines warm and scree pale | `soilDepth·0.85 + debris·0.75`, stretched |
+| C · grassy complement | the hue pulled toward turf, mineral tone softened | `grassPot` stretched, gated on the palette's own green |
+| D · sward instances | *(phase D — the seeder still runs the old classifier)* | — |
+
+```
+col = mix(base,  mantle, e.mantle);
+col = mix(col,   rock,   e.rock);
+col = mix(col,   grass,  e.grass);
+```
+
+**THE THREE SHARES ARE NOT A PARTITION, and that is the whole of phase C.**
+They are shares of what can be SEEN, not weights over a set of materials: the
+substrate exists everywhere, including under dense sward, and vegetation
+decides how much of it is visually EXPRESSED rather than whether it is there.
+So `rockVisible = exposure × (1 − coverSoftMask)` never reaches zero where
+there is any exposure at all — a meadow reads as grass with stones and bedrock
+through it, which is the thing a winner-take-all classifier cannot say at any
+amplitude. `subExpress` is that arithmetic, `subExpressOf` is the same thing on
+the CPU, and `devtools/substrate-field.test.mjs` asserts the claim directly:
+a meadow at exposure 0.15 still expresses **0.0225** of rock, a face at 0.92
+expresses **0.916** and sheds its mantle to 0.010.
+
+**THE MANTLE FILLS WHAT THE BEDROCK DOES NOT.** The first cut multiplied the
+supply by `(1 − exposure·k)` as well, which double-counts — rock visibility
+already takes the mantle off a face, and the field's own `soilDepth` already
+subtracts exposure. Worked through the field's OWN reading at the Stelvio
+(exposure 0.52, mantle 0.378, rock 0.447) that left **34% of a scree slope
+drawn as the untouched palette**: `(1 − mantle)(1 − rock)`, the arithmetic
+leftover of two independent mixes, standing in for a material nobody had
+named. That is a calculation from the probe rather than a pixel count, and it
+is the reason the correction was made before the frames were taken. The supply is stretched instead (`smoothstep(0.05, 0.55, …)`), so
+ground with any real loose material on it is fully mantled and the bedrock
+then cuts back through it by its own exposure.
+
+**AND THE ONE VETO THE FIELD CANNOT SUPPLY IS THE COVER CLASS'S.** Every
+channel is derived from the LANDFORM, which is blind to what is lying on it: a
+flat glacier in a cirque has soil depth and debris by every topographic
+argument there is, and the fines' oxidised warmth would turn it beige. `grain`
+is 0.00 for snow and open water and at least 0.05 for everything else on
+earth, so `smoothstep(0.005, 0.045, grain)` is a veto on two classes rather
+than a classifier — and the test holds both halves: the same ground reads
+mantle 0.000 under snow and 1.000 under bare. **The first cut of that veto
+asked the palette's own warmth, as the retired classifier did, and vetoed the
+Stelvio's scree** — a grey lichen pass reads warm 0.009 and grain 0.25, which
+is one gate short of a snowfield's on BOTH of the old routes. The same trap
+this file already records as "pale granite reads cool", one layer up.
+
+**THE FIELD IS BAND A AND THE DOMAIN IS BAND B.** The geomorphic lattice is
+about thirty-three metres — the brief's 30–150 m band, where the LANDFORM is —
+so on its own a hillside the field calls half-exposed would come out a uniform
+half. `subDomain` at eighteen metres shifts exposure and debris either way
+inside one cell, which is what makes outcrop stand OUT OF fill rather than
+average with it, and it is the only noise left in the model that decides
+anything. Everything below it is structure, not classification.
+
+### The structure: phase-aware, anisotropic, and chosen by family
+
+- **A LINE KNOWS ITS OWN PHASE NOW.** `subLine(u, w)` takes `fwidth(u)` — how
+  much of a period THIS fragment spans — widens the line to its own footprint
+  and fades it out before that footprint can alias it. Phase-aware rather than
+  band-limited in metres, and the difference is not cosmetic: a bedding phase
+  is warped, read along a dip and measured up the world Y, so the period it
+  presents to the screen is not the period it has in the ground. `tdBand` would
+  cut a line that is perfectly resolvable where the strata run across the view
+  and keep one that is not where they run into it. The derivative is the only
+  thing that knows which.
+- **WHICH FORCED A RULE ABOUT GATES.** A derivative is undefined for the helper
+  lanes of a quad that did not take the branch, so every gate above a call to
+  `subLine` has to be a quantity that is SMOOTH across the screen: the field's
+  own channels (bilinear over a 33 m lattice) or the art-pixel footprint. It
+  may not be the domain noise or anything built on it — which is exactly what
+  the classifier's weights were, and is why they could never have carried this.
+  The isotropic terms keep `tdBand`, which is the right filter for them.
+- **THE FAMILY IS THE FIELD'S, NOT A ROLL.** `rockFamily` is chosen by context
+  when the field is built — a steep high-exposure face is massive or jointed, a
+  hillside with contour expression is bedded, a debris zone is broken — and
+  `subFam` turns it into four tent weights that sum to one, interpolated across
+  the lattice, so a hillside changes character over thirty metres rather than
+  at a line. Bedded gets the bedding shadow, fractured two joint sets (square
+  to the dip and along it, which breaks a bed into blocks rather than slats),
+  massive a faint mottle and a few long fractures, loose no coherent line at
+  all and clasts instead. A random family per patch is the motif-stamping fault
+  the rewrite exists to end.
+- **SCREE IS A TONGUE, NOT A BLOB.** `subAniso` reads the fall line's own frame
+  off the field's flow channels — nearly four times longer downhill than across
+  for the apron's lobes, and a much narrower frame for the rills between them —
+  so a patch elongates the way scree actually lies. That is the anisotropy the
+  brief asked for, and it is the reason the debris channel walks the fall line
+  in the first place.
+- **AND THE MANTLE IS TWO SURFACES.** `debris / (debris + soilDepth)` decides
+  between a tongue of angular blocks and a wash of fines with stones in it.
+  Coarse scree is a third colour the classifier could not express at all: it is
+  broken ROCK, not dirt, so it is paler and cooler than the fines it rests on.
+
+### What was removed, and what deliberately was not
+
+`subWeights` and the turf material are gone from `SUB_GLSL` outright; the
+fragment no longer classifies anything. The CPU half — `subWeightsOf`,
+`subGrassFactor`, `subTintOf` — is kept WHOLE, on its own constants
+(`SUB_CLS_K`), because the sward seeder still reads it and phase D is where
+that moves. Changing the grass in the same unit as the ground it stands on
+would make the next frame impossible to attribute. The material TRANSFORMS are
+still shared (`SUB_K`), so a blade fading toward an outcrop fades toward the
+colour the fragment painted that outcrop.
+
+**AND THE PROBE WAS REPORTING A RULE THE RENDERER NO LONGER RUNS.**
+`__tdetail().mat` carried a hand-written THIRD copy of the classifier, at
+dom = 0.5, with its constants typed in as literals. It reads the tile's field
+and runs `subExpressOf` now. The same fault this file records for the terrain's
+cell table and for `BridgeAssembly.claim`, met a third time: a probe that
+reports the output of a rule nothing runs cannot witness anything.
+
+The MATERIAL view and its legend moved with it — OUTCROP · GRASS · MANTLE,
+red, green, blue, the shares in the shader's own channel order. It needs a
+field, so a tile without one paints nothing rather than guessing, which is the
+coverage claim every other ground view here makes.
+
+### Measured
+
+`devtools/substrate-ab.mjs`, one settled world per place, the substrate's
+strength flipped live, cropped to the near field, against the same-frame-twice
+floor at the same temporal separation:
+
+| | floor | SIGNAL (substrate off against on) |
+|---|---|---|
+| Yosemite chase | 1.39 /255 · 6.4% of the pane | **4.03 · 28.1%** |
+| Yosemite top | 0.98 · 3.7% | **3.35 · 25.6%** |
+| **Stelvio chase** | **0.00 · 0.0%** | **1.70 · 13.9%** |
+| Stelvio top | 1.33 · 6.5% | **3.78 · 26.4%** |
+
+**THE STELVIO CHASE FLOOR IS EXACTLY ZERO**, which is the cleanest attribution
+in this file: a bare alpine pass has no wildlife, no sward and no streaming
+left to do, so the two same-setting frames are identical pixel for pixel and
+every one of those 13.9% is the term under test.
+
+And the field at the Stelvio is the finding the numbers are only evidence for —
+six points, all different, all geologically legible:
+
+| offset | exposure | debris | soil | family | rock visible | mantle |
+|---|---|---|---|---|---|---|
+| 0,0 | 0.52 | 0.55 | 0.18 | **loose** | 0.32 | 1.00 |
+| 0,60 | 0.51 | 0.32 | 0.02 | **massive** | 0.44 | 0.38 |
+| −90,40 | 0.47 | 0.26 | 0.05 | **bedded** | 0.41 | 0.31 |
+| 150,150 | 0.80 | 0.47 | 0.00 | **fractured** | 0.60 | 0.64 |
+
+The pass floor is loose scree, fully mantled, with a third of its bedrock
+showing through; the walls are massive and bedded with almost no mantle; the
+face at exposure 0.80 shows 0.60 of rock. **That is four different surfaces
+within a hundred and fifty metres, chosen by the landform and not by a roll** —
+and the frames say the same thing: the control is a smooth tan slope with no
+structure in it at all, and the fix is the same slope in grey, broken by
+downslope-running tongues and channels.
+
+**AND IT MOVES LESS OF YOSEMITE THAN THE CLASSIFIER DID — 28% of the pane
+against 54%.** That is not a regression to be tuned away, it is the point: the
+classifier read the valley floor's cover class as BARE and painted it 46%
+outcrop and 54% regolith with the weights summing to one, so the whole surface
+was replaced. The field says the same ground is exposure 0.46, debris 0.44,
+soil 0.07 — an apron of its own debris, `fractured` — which is what it is, and
+which leaves rather less to repaint. **A quieter measurement of a truer claim.**
+
+Two more things the numbers say and the frames confirm:
+
+- **The domain still earns its place.** Yosemite chase: 18 m against 40 m moves
+  1.92/255 and 9.2% of the pane, 18 against 8 moves 0.54 and 4.6% — so the band
+  the seat asked for is the one that matters, and going finer buys little.
+- **A grey palette has little chroma to take away.** The Stelvio's chase signal
+  is the smallest of the four because `subRockC` DESATURATES, and a lichen pass
+  already reads (0.31, 0.32, 0.307). What draws there is the structure, not the
+  hue — which is why the frame changes visibly while the mean does not move
+  far, and why a mean alone could not have judged this.
+
+### What phase C does NOT do
+
+- **The sward still runs the retired classifier.** That is phase D, and it is
+  the reason `subWeightsOf` is kept whole rather than rewritten here.
+- **No normal perturbation.** The layers move colour only; a scree apron has no
+  relief of its own beyond what the tile's normal map already carries.
+- **The per-fragment cost is unmeasured on a device.** The harness renders
+  through SwiftShader at three frames a second and cannot say what a phone
+  pays. Every line term is gated on the field (smooth) and on the footprint,
+  and every isotropic term on `tdBand` at exactly its own threshold, so a
+  fragment pays only for what it could show — but the next telemetry paste is
+  the verification, and `?tdetail=flat` takes the cascade and the substrate out
+  together.
+
+### The corduroy is gone, and the bedding metric says the opposite
+
+`devtools/bedding.mjs` at the Stelvio, the same spot and the same solved scale
+(0.242 m a CSS pixel) the seat photographed, working tree against `REV=a9774a6`
+— the deployed build, which is the one the seat reported the ribs on:
+
+| | peak | at lag | background | above | rms |
+|---|---|---|---|---|---|
+| a9774a6, as deployed | 0.167 | **[0, −12] px = 2.9 m** | 0.024 | **0.143** | 6.02/255 |
+| working tree | 0.218 | **[0, −32] px = 7.7 m** | 0.036 | **0.181** | 5.85/255 |
+
+**The number went UP and the corduroy is gone.** The control's frame is an
+unmistakable cross-hatch of parallel ribs over the whole slope; the tree's has
+none at all — soft broad shading with faint downslope streaking in the
+upper left. Read the lag and the two rows stop contradicting each other: the
+control's peak is at **2.9 m**, which is the 1.2 m bed and the 3.2 m joint, and
+the tree's is at **7.7 m**, which is nothing the bedding draws and is the scree
+apron's own lobes (9 m across the fall line). The band the tool measures over,
+12–40 px, holds both.
+
+**SO THE METRIC HAS STOPPED ANSWERING THE QUESTION IT WAS BUILT FOR**, and that
+is worth more than the number. It was written to ask "is this bedding geology
+or corduroy", and it works by finding periodicity above background in a band —
+which cannot distinguish a comb from a scree tongue, because both are
+directional structure at the same scale. The file already records that a peak
+alone cannot say "comb"; the correction is that peak-above-background cannot
+either, once the term under test has legitimate directional structure of its
+own. **The lag is the discriminator and must be quoted with the peak.**
+
+**AND THE REASON THE COMB WENT IS THE FAMILY.** The field at that exact spot
+reads exposure 0.52, debris 0.55, soil 0.18 — `loose` — so `fam.y`, the bedded
+weight, is near zero and the bedding term barely draws at all. The old build
+drew bedding on every rock fragment in the world regardless of what the ground
+was. A scree slope showing no strata is not the filter working; it is the
+CLASSIFICATION working, which is the layer below the filter and the one the
+brief was actually about.

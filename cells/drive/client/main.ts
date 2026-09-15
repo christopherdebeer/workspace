@@ -83,7 +83,7 @@ import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight, uFacSun } fro
 import { roofFx } from './roof-fx';
 import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, SUBSTRATE_VIEWS, groundInkPixels, type GroundViewId } from './ground-view';
 import { SUB_GLSL, SUB_DOM_M, subDomainAt, subEvidence, subGrassFactor, subMatOf,
-  subTintOf, subWeightsOf, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
+  subTintOf, subWeightsOf, subExpressOf, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
   type SubstrateField } from './substrate-field';
 import { gramDecode } from './facade-grammar';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
@@ -6889,154 +6889,133 @@ function terrainFx(mat: THREE.Material, opts: {
         // undifferentiated wash with noise on it. It has to be — one palette
         // step is 0.07 sRGB and the loudest octave here is 0.085, so the whole
         // cascade lives inside a step and a half and can only ever say "a bit
-        // lighter, a bit darker". Nothing in it can say OUTCROP, SCREE, TURF.
+        // lighter, a bit darker". Nothing in it can say OUTCROP, SCREE, GRASS.
         //
-        // So the substrate is a classification rather than a texture, at the
-        // ten-to-fifty metres a driver reads a landscape at, and it moves
-        // CHROMA where the cascade moves luminance. See substrate-field.ts for
-        // why the three materials are transforms of the ground's own colour and
-        // not three colours.
+        // ── AND THE THING UNDER IT IS NOT A CLASSIFICATION EITHER ──
+        //
+        // The first substrate was three mutually competing materials — rock,
+        // regolith, turf — and the seat's verdict on THAT was the sharper one:
+        // turf is not a substrate. Grass is a layer on top of rock and
+        // regolith; rockiness persists under and through it. A classifier can
+        // only ever say "this patch is the grass one", which is why its output
+        // read as procedural motifs stamped on a wash rather than as a
+        // landscape.
+        //
+        // So what is drawn here is four LAYERS composited in the order they
+        // were deposited — bedrock, the mantle over it, the rock still showing
+        // through, the vegetation tinting what is left — off ONE shared
+        // geomorphic field that the terrain build derives from the landform
+        // itself (substrate-field.ts, buildSubstrateCells). Every feature is
+        // causally correlated because the field made it so: a convex shoulder
+        // is exposed, what it sheds lies downslope of it, fines collect in the
+        // concavities below that, and grass grows where the fines are.
         //
         // WATER IS EXEMPT AND HAS TO BE STATED. Cover class 80 is the one row
-        // of TD_MAT that is (0, 0), and a rough of zero walks straight into
-        // "no mineral evidence, no slope" — which the turf branch would read
-        // as deep sward. Open water would come out green. rough < 0.02 is
-        // class 80 and nothing else.
-        // ── THE SUBSTRATE, AND THE VIEW THAT PAINTS IT ──
+        // of TD_MAT that is (0, 0), and rough is the only thing here that can
+        // see it. rough < 0.02 is class 80 and nothing else.
         //
-        // Entered when the substrate is drawing OR when the channel is asking
-        // for its classification, because the classification is the thing the
-        // view paints and it is computed nowhere else. It is skipped outright
-        // for a class view (uGView >= 2), which reads a raster and needs none
-        // of this — the branch is coherent across the screen, so that is one
-        // compare for the whole frame.
-        if (uGView < 1.5 && (uSubAmt > 0.001 || uGView > 0.5) && rough > 0.02) {
+        // AND WITHOUT A FIELD THERE IS NO SUBSTRATE. uSubBox.z is the tile's
+        // own width, so a material with no field bound draws the palette and
+        // the cascade and stops — which is the far shell (no aTd either) and
+        // nothing else, because a fine tile's field is built by the same reply
+        // that builds its mesh.
+        if (uGView < 1.5 && (uSubAmt > 0.001 || uGView > 0.5)
+            && rough > 0.02 && uSubBox.z > 1.0) {
           vec3 pc = diffuseColor.rgb;
           float lum = dot(pc, vec3(0.2126, 0.7152, 0.0722));
-          // WHAT THE PALETTE ALREADY KNOWS, and the attribute cannot: whether
-          // anything grows here, and whether the ground is oxidised. Normalised
-          // by luminance so a shaded hillside and a sunlit one classify alike —
-          // the vertex colour carries the slope shade, and without the divide
-          // every north face in the world would read as a different material
-          // from the south face of the same hill.
+          // WHAT THE PALETTE ALREADY KNOWS, and the field cannot: whether
+          // anything grows here. Normalised by luminance so a shaded hillside
+          // and a sunlit one read alike — the vertex colour carries the slope
+          // shade, and without the divide every north face in the world would
+          // classify differently from the south face of the same hill.
           float veg = (pc.g - 0.5 * (pc.r + pc.b)) / max(lum, 1e-3);
-          float warm = (pc.r - pc.b) / max(lum, 1e-3);
-          // ── THE DOMAIN COLLAPSES TO ITS MEAN RATHER THAN ALIASING ──
+          // ── THE FIELD, BILINEAR, IN THE TILE'S OWN FRAME ──
           //
+          // The same two textures the CPU reads as arrays, so the sward and the
+          // fragment cannot hold different opinions about where the rock is.
+          vec2 sUV = (vWorldP.xz - uSubBox.xy) / uSubBox.zw;
+          vec4 fA = texture2D(uSubA, sUV), fB = texture2D(uSubB, sUV);
+          float ex = fA.r, db = fA.g, sd = fA.b, mo = fA.a;
+          float gpot = fB.r, family = fB.g;
+          vec2 down, across;
+          subBasis(vec2(fB.b, fB.a) * 2.0 - 1.0, down, across);
+          // ── BAND B: THE PATCHINESS INSIDE ONE FIELD CELL ──
+          //
+          // The field's lattice is about thirty-three metres, so on its own a
+          // hillside it calls half-exposed would be a uniform half. The domain
+          // shifts exposure and the mantle either way at eighteen metres, which
+          // is what makes outcrop stand OUT OF fill rather than average with it.
           // Past the range where a patch is narrower than an art pixel the
-          // field is replaced by its own mean, so the classification falls back
-          // on the vertex material — which is smooth, correct, and exactly what
-          // the far field should read. Switching the whole substrate off out
-          // there would be worse: this band is the one the brief singles out
-          // BECAUSE it survives into the middle distance, and at 18 m it is
-          // still drawing at nine metres a pixel, which from the seat is most
-          // of a kilometre.
-          // …and the field is not EVALUATED out there either. Twelve hashes
-          // for a value about to be mixed away to its own mean is the exact
-          // fault the tdetail=off switch was made to compile out one layer up.
+          // field collapses to its own mean rather than aliasing — and is not
+          // evaluated at all, because twelve hashes for a value about to be
+          // mixed away is the fault the tdetail switch compiles out one layer up.
           float domBand = tdBand(px, uSubDom * 1.7);
           float dom = domBand > 0.002 ? mix(0.5, subDomain(gp, uSubDom), domBand) : 0.5;
-          vec3 w = subWeights(vec3(rough, grain, vTd.z), veg, warm, dom);
-          // ── EACH MATERIAL'S OWN STRUCTURE, EACH IN ITS OWN BAND ──
+          ex = clamp(ex + (dom - 0.5) * 0.55 * (1.0 - abs(ex * 2.0 - 1.0) * 0.5), 0.0, 1.0);
+          db = clamp(db + (dom - 0.5) * 0.30, 0.0, 1.0);
+          // ── THE THREE SHARES, AND THEY ARE NOT A PARTITION ──
           //
-          // Tones, not weights: the classification decides WHAT this is and
-          // these decide what it looks like once you are close enough for the
-          // question to mean anything. All three are zero-mean, so a material
-          // seen from far enough that its structure has faded is the same
-          // average colour as one seen from the cab.
+          // grain is the cover class's own mineral verdict and is here for one
+          // reason: the field is derived from the LANDFORM and cannot tell a
+          // snowfield from the ground under it. See subExpress.
+          vec3 e = subExpress(ex, db, sd, gpot, veg, grain);
+          // ── EACH LAYER'S OWN STRUCTURE, EACH IN ITS OWN BAND ──
           //
-          // ── AND EACH IS ATTENUATED BY ITS OWN WEIGHT, WHICH SETS THE SCALE ──
+          // Tones, not weights: the field decides WHAT is here and these decide
+          // what it looks like once you are close enough for the question to
+          // mean anything. All three are zero-mean, so a layer seen from far
+          // enough that its structure has faded is the same average colour as
+          // one seen from the cab.
           //
-          // A tone here reaches the frame as tone x weight x the material's own
-          // colour, so at Yosemite — rock 0.46 on ground at 0.72 — an amplitude
-          // of 0.13 arrives as 0.043, which is six tenths of a palette step and
-          // spends its life modulating the dither. That is the cascade's own
-          // fault one layer down, and it was measured here before it was
-          // believed: the first cut's bedding was invisible in the frame at the
-          // seat's own spot while the classification under it was correct.
-          // These are therefore loud by the standards of a texture — the worst
-          // coincident bedding line is about two and a half steps — and they
-          // can afford to be, because every one of them is band-limited and a
-          // term close enough to see is a term far from Nyquist.
-          float rockT = 0.0, soilT = 0.0, turfT = 0.0;
-          // None of the structure is computed for the classification view: it
-          // paints the weights and would throw every tone away.
+          // ── AND EVERY GATE HERE IS A SMOOTH QUANTITY, WHICH IS NEW ──
           //
-          // ── AND EVERY TERM IS SKIPPED WHERE ITS OWN BAND IS SHUT ──
-          //
-          // tdBand is exactly zero once an art pixel spans half the wavelength,
-          // so a term past that was being EVALUATED — four to eight hashes —
-          // for a result multiplied by nothing. That is the same fault the
-          // tdetail=off switch compiles out one layer up and the domain field
-          // already guards against, and the seat's own frames are what made it
-          // worth fixing: at the Stelvio the MATERIAL view ran at 22 fps and
-          // the ordinary render at 17, and the only difference between them is
-          // that the classification view skips all of this.
-          //
-          // The guards are EXACT rather than conservative — px < lambda * 0.5
-          // is the same threshold tdBand uses — so nothing that was drawing
-          // stops drawing. What changes is only what a fragment pays for a term
-          // it could not have shown.
-          if (uGView < 0.5 && w.x > 0.004 && px < 3.5) {
-            // The dip is read inside the rock branch because only rock reads
-            // it — eight hashes a fragment for a meadow, otherwise.
-            vec2 dip = subDip(gp);
-            // ── THE WARP HAS TO BE FAST ENOUGH TO BE SEEN, AND THE FIRST ONE
-            //    WAS NOT ──
-            //
-            // A drift of one bed over ninety metres is under a bed across the
-            // whole frame, and measured at the seat's own scale it moved the
-            // comb's autocorrelation from 0.166 above background to 0.157 —
-            // nothing. Two octaves at forty and thirteen metres wander the
-            // spacing by a couple of beds inside one hillside, which is the
-            // scale a fold actually bends strata at and the scale the eye reads
-            // regularity over.
-            float bWarp = tdVN(gp * (1.0 / 40.0)) * 2.2 + tdVN(gp * (1.0 / 13.0)) * 0.55;
-            // AND AN OUTCROP IS NOT CONTINUOUS. Real bedding shows in patches
-            // where rock is exposed and is buried by scree and soil between
-            // them; drawn unbroken across a whole hillside it reads as
-            // corduroy however irregular its spacing. A coarse mask at about
-            // fourteen metres opens and closes the exposure, which is the same
-            // thing the domain does one scale up and the reason the lines stop
-            // being one continuous comb.
-            float bShow = 0.30 + 0.70 * smoothstep(-0.18, 0.16, tdVN(gp * (1.0 / 14.0)));
-            // Beds at 4.5 m and 1.2 m, and the joints that cut them. The
-            // bedding plane is a SHADOW — rock is read by its lines, and a
-            // line is the one feature this palette renders well.
-            if (px < 2.25) rockT -= 0.22 * bShow * subBed(vWorldP, dip, 4.5, bWarp) * tdBand(px, 4.5);
-            if (px < 0.6) rockT -= 0.16 * bShow * subBed(vWorldP, dip, 1.2, bWarp * 3.0) * tdBand(px, 1.2);
-            if (px < 1.6) rockT -= 0.12 * subJoint(gp, dip, 3.2) * tdBand(px, 3.2);
-            rockT += 0.09 * tdVN(gp * 0.14) * tdBand(px, 7.0);
+          // The structure is filtered on its own phase now (subLine, fwidth),
+          // and a derivative is undefined for the helper lanes of a quad that
+          // did not take the branch. So a gate may be the FIELD (bilinear over
+          // a 33 m lattice, smooth across the screen) or the art-pixel
+          // footprint (smooth by construction) and may not be the domain noise
+          // or anything built on it — which is exactly what the classifier's
+          // own weights were, and is why they could never have carried this.
+          float rockT = 0.0, mantleT = 0.0, grassT = 0.0;
+          if (uGView < 0.5 && e.y > 0.01) {
+            rockT = subRockTone(vWorldP, gp, down, across, subFam(family), px);
           }
-          if (uGView < 0.5 && w.y > 0.004 && px < 1.25) {
-            // Metre-scale tonal regions — damp and dry, fine and coarse — and
-            // then the clasts lying on them, which are LIGHTER than the fill
-            // they sit on because a stone catches the sky and the dirt does not.
-            soilT += 0.13 * tdVN(gp * 0.4) * tdBand(px, 2.5);
-            if (px < 0.45) soilT += 0.19 * (subStones(gp, 0.45, 0.62) - 0.12) * tdBand(px, 0.9);
+          if (uGView < 0.5 && e.x > 0.01) {
+            // The coarse share of the mantle: a tongue of angular blocks, or a
+            // wash of fines with a few stones in it, are quite different
+            // surfaces and the debris channel is what tells them apart.
+            mantleT = subMantleTone(gp, down, across, db / max(db + sd, 1e-3), mo, px);
           }
-          if (uGView < 0.5 && w.z > 0.004 && px < 2.25) {
-            // Clumped sward, at the scale a tussock actually holds.
-            if (px < 0.55) turfT += 0.13 * tdVN(gp * 0.9) * tdBand(px, 1.1);
-            turfT += 0.075 * tdVN(gp * 0.22) * tdBand(px, 4.5);
-          }
+          if (uGView < 0.5 && e.z > 0.01 && px < 2.25) grassT = subGrassTone(gp, px);
+          // ── THE COMPOSITE ──
+          float scree = db / max(db + sd, 1e-3);
+          vec3 mantleC = mix(subSoilC(pc), subScreeC(pc, lum), scree) * (1.0 + mantleT);
           vec3 rockC = subRockC(pc, lum) * (1.0 + rockT);
-          vec3 soilC = subSoilC(pc) * (1.0 + soilT);
-          vec3 turfC = subTurfC(pc) * (1.0 + turfT);
+          // A GRASSY COMPLEMENT SUBDUES; IT DOES NOT ERASE. It takes what is
+          // under it — the mantle and the rock already composited — and pulls
+          // the hue toward turf while softening the mineral tone rather than
+          // replacing it, so the major rock forms stand through a meadow.
+          vec3 under = subCompose(pc, mantleC, rockC, vec3(0.0), vec3(e.x, e.y, 0.0));
+          vec3 grassC = subGrassC(mix(under, pc, 0.35)) * (1.0 + grassT * 0.7);
+          vec3 subC = subCompose(pc, mantleC, rockC, grassC, e);
           // ── THE AMOUNT IS A DISPLACEMENT FROM THE PALETTE, NOT A WEIGHT ──
           //
-          // The first cut scaled the WEIGHTS by it, which is wrong in both
-          // directions and was measured being wrong: at Yosemite the weights
-          // already sum to one, so asking for two doubled the absolute colour
-          // rather than the material — 45/255 of mean luma and 94% of the pane
-          // moved, which is a brightness blowout and not a stronger substrate.
-          // Interpolating the finished colour makes the dial linear and
-          // monotone: 0 is the palette exactly, 1 is the classification, and
-          // above 1 mix() extrapolates along the same direction, which is what
-          // "show me more of this" has to mean for a seat to judge it.
-          vec3 subC = pc * max(1.0 - w.x - w.y - w.z, 0.0)
-            + rockC * w.x + soilC * w.y + turfC * w.z;
-          if (uGView > 0.5) diffuseColor.rgb = vec3(w.x, w.z, w.y);
+          // The first cut scaled the SHARES by it, which is wrong in both
+          // directions and was measured being wrong: where they already sum to
+          // one, asking for two doubled the absolute colour rather than the
+          // material — 45/255 of mean luma and 94% of the pane moved, a
+          // brightness blowout and not a stronger substrate. Interpolating the
+          // finished colour makes the dial linear and monotone: 0 is the
+          // palette exactly, 1 is the substrate, and above 1 mix() extrapolates
+          // along the same direction, which is what "show me more of this" has
+          // to mean for a seat to judge it.
+          //
+          // THE MATERIAL VIEW PAINTS THE THREE SHARES, in the legend's own
+          // order: red is rock still visible, green the grassy cover, blue the
+          // mantle over the bedrock. It is the layered model's own three and
+          // not a classification, because there is no longer a classification
+          // to paint.
+          if (uGView > 0.5) diffuseColor.rgb = vec3(e.y, e.z, e.x);
           else diffuseColor.rgb = mix(pc, subC, uSubAmt);
         }
         // ── A CLASS VIEW: THE RASTER'S OWN VERDICT, WHERE IT HAS ONE ──
@@ -7947,6 +7926,13 @@ function substrateTexFor(key: string, a: Uint8Array, b: Uint8Array): { a: THREE.
   const pair = { a: mk(a), b: mk(b) };
   // Capped like the normal maps and the materials beside them: drive far
   // enough and nothing prunes the tile maps, and this is 32 KB a tile.
+  //
+  // A DISPOSED TEXTURE IS NEVER STILL BOUND, and that is arithmetic rather
+  // than luck: terrainMats is keyed identically, is filled in the same order,
+  // and evicts its own oldest sixteen at 48 — so by the time this map reaches
+  // 64 the materials that referenced these keys have already been disposed and
+  // their meshes handed back the shared terrainMat, which carries no field. If
+  // either cap ever moves, the substrate's must stay the LARGER of the two.
   if (substrateTexes.size > 64) {
     for (const k of [...substrateTexes.keys()].slice(0, 16)) {
       if (k === key) continue;
@@ -34408,19 +34394,24 @@ function tdMatAt(x: number, z: number): object | null {
   if (best === Infinity) return null;
   const lum = Math.max(1e-3, 0.2126 * cr + 0.7152 * cg + 0.0722 * cb);
   const veg = (cg - 0.5 * (cr + cb)) / lum;
-  const warm = (cr - cb) / lum;
-  // The same arithmetic as subWeights in substrate-field.ts, at dom = 0.5 —
-  // where every domain term is identically zero, so this is the shader's own
-  // expression with three constants dropped rather than a paraphrase of it.
-  const sstep = (a: number, b: number, v: number): number => {
-    const t = clamp((v - a) / (b - a), 0, 1);
-    return t * t * (3 - 2 * t);
-  };
-  const rock = clamp(grain * 0.80 + slope * 0.85 - 0.22, 0, 1);
-  const turf = clamp((0.95 - rough) * 1.15, 0, 1) * sstep(0.05, 0.16, veg) * (1 - rock * 0.75);
-  const soil = clamp(0.85 - turf - rock * 0.55, 0, 1)
-    * Math.max(sstep(0.02, 0.18, warm), sstep(0.25, 0.60, grain));
-  const t = rock + soil + turf, n = t > 1 ? t : 1;
+  // ── AND THE SHARES THE FRAGMENT ACTUALLY COMPOSITES ──
+  //
+  // Phase C retired the three-material classifier from the shader, and this
+  // probe used to carry a hand-written third copy of it, at dom = 0.5, with
+  // its constants typed in as literals. A PROBE THAT REPORTS A RULE THE
+  // RENDERER NO LONGER RUNS CANNOT WITNESS ANYTHING — the same fault this file
+  // records for the cell table and for BridgeAssembly.claim — so it reads the
+  // tile's own geomorphic field and runs subExpressOf, which is subExpress
+  // term for term on the shared constants.
+  //
+  // At the domain's own mean, which is what the far field gets and is exact;
+  // the fragment shifts exposure and debris by (dom - 0.5) nearer in, and the
+  // domain is a noise no CPU reader should be pretending to reproduce here.
+  const fld = (ch: number): number | null => substrateAt(x, z, ch);
+  const ex = fld(SUB_CH.exposure), db = fld(SUB_CH.debris);
+  const sd = fld(SUB_CH.soilDepth), gpot = fld(SUB_CH.grassPot);
+  const e = ex === null || db === null || sd === null || gpot === null
+    ? null : subExpressOf(ex, db, sd, gpot, veg, grain);
   return {
     rough: +rough.toFixed(3), grain: +grain.toFixed(3), slope: +slope.toFixed(3),
     // The class the VIEW paints, read off the same vertex — so "the cover
@@ -34428,8 +34419,15 @@ function tdMatAt(x: number, z: number): object | null {
     // guess about which raster answered.
     cover, coverName: COVER_INK[cover]?.name ?? null,
     rgb: [+cr.toFixed(3), +cg.toFixed(3), +cb.toFixed(3)],
-    veg: +veg.toFixed(3), warm: +warm.toFixed(3),
-    midDom: { rock: +(rock / n).toFixed(3), soil: +(soil / n).toFixed(3), turf: +(turf / n).toFixed(3) },
+    veg: +veg.toFixed(3),
+    field: ex === null ? null : {
+      exposure: +ex.toFixed(3), debris: +(db ?? 0).toFixed(3),
+      soilDepth: +(sd ?? 0).toFixed(3), grassPot: +(gpot ?? 0).toFixed(3),
+      family: rockFamilyOf(fld(SUB_CH.rockFamily) ?? 0),
+    },
+    midDom: e === null ? null : {
+      rock: +e.rock.toFixed(3), mantle: +e.mantle.toFixed(3), grass: +e.grass.toFixed(3),
+    },
     dist: +Math.sqrt(best).toFixed(1),
   };
 }

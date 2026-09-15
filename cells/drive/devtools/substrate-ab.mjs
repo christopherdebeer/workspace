@@ -21,11 +21,12 @@
  *   is by construction unchanged, and a full-frame mean divides the signal by
  *   the area that could never have moved.
  *
- * The classification's own witness is `TD=dom`, which paints the shader's
- * answer — red outcrop, green turf, blue regolith — because a weight computed
- * on the CPU beside the shader is the drifting mirror this file keeps warning
- * about. `__tdetail().mat` reports every INPUT to that answer and the weights
- * at the domain's mean, which is what the far field gets and is exact.
+ * The layered model's own witness is `TD=dom`, which paints the shader's three
+ * SHARES — red the bedrock still visible, green the grassy cover, blue the
+ * mantle over it — because a share computed on the CPU beside the shader is the
+ * drifting mirror this file keeps warning about. `__tdetail().mat` reports the
+ * geomorphic field it read and the shares at the domain's own mean, which is
+ * what the far field gets and is exact.
  */
 import { openDrive } from './harness.mjs';
 import { execFileSync } from 'node:child_process';
@@ -76,9 +77,14 @@ const around = await q(() => {
   return [[0, 0], [60, 0], [0, 60], [-90, 40], [40, -90], [150, 150]]
     .map(([dx, dz]) => {
       const m = window.__submat(s.x + dx, s.z + dz);
-      return m ? `${dx},${dz}: rough ${m.rough} grain ${m.grain} slope ${m.slope}`
-        + ` veg ${m.veg} warm ${m.warm} -> rock ${m.midDom.rock} soil ${m.midDom.soil} turf ${m.midDom.turf}`
-        : `${dx},${dz}: no mesh`;
+      if (!m) return `${dx},${dz}: no mesh`;
+      const f = m.field, e = m.midDom;
+      // The FIELD is the evidence and the shares are what the fragment
+      // composites; the vertex attribute is beside them because rough is still
+      // the water gate and grain is still what the cover class says.
+      return `${dx},${dz}: rough ${m.rough} grain ${m.grain} veg ${m.veg}`
+        + (f ? ` | ex ${f.exposure} db ${f.debris} sd ${f.soilDepth} gp ${f.grassPot} ${f.family}` : ' | no field')
+        + (e ? ` -> rock ${e.rock} mantle ${e.mantle} grass ${e.grass}` : '');
     });
 });
 for (const line of around) console.log(`    ${line}`);

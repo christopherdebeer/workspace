@@ -2,15 +2,18 @@
 //
 //   node cells/drive/devtools/substrate-field.test.mjs
 //
-// The classification runs in a fragment (which paints it) and on the main
-// thread (where the sward seeder thins its grass on the same outcrop). Nothing
-// here can run GLSL, so what is held is the three things that could actually
-// make them disagree:
+// The substrate runs in a fragment (which paints it) and on the main thread
+// (where the sward seeder thins its grass on the same outcrop). Nothing here
+// can run GLSL, so what is held is the three things that could actually make
+// them disagree:
 //
 //   - the CONSTANTS. They live once in SUB_K and the shader source
 //     interpolates them, so the check is that every one of them is literally
 //     present in the emitted GLSL — which fails the moment someone types a
-//     number into the shader instead of the table.
+//     number into the shader instead of the table. SUB_CLS_K is the retiring
+//     classifier's own set and is deliberately NOT in the shader: phase C took
+//     that classifier out of the fragment, and the check says so out loud
+//     rather than letting a dead constant sit in the shared table unnoticed.
 //   - the MATERIAL TABLE. `SUB_MAT` is the source of record and the terrain
 //     kernel inlines a copy, because the kernel's closure is stringified into
 //     a worker and may not touch a module binding. That is a real constraint,
@@ -43,26 +46,39 @@ console.log('the constants reach the shader:');
   const glsl = M.SUB_GLSL;
   const missing = Object.entries(M.SUB_K)
     // A constant the shader has no use for would be a false failure; every one
-    // of these is read by subWeights or by a material transform, so all of them
+    // of these is read by a layer transform or by subExpress, so all of them
     // must appear. If that stops being true, name the exemption here.
     .filter(([, v]) => !glsl.includes(String(v)));
   check(missing.length === 0,
     `every SUB_K constant is in the emitted GLSL${missing.length ? ` — missing ${missing.map((m) => m[0]).join(', ')}` : ''}`);
+  // AND THE CLASSIFIER'S CONSTANTS ARE NOT. This is the check that fails if
+  // someone puts subWeights back into the fragment beside the layered model:
+  // two opinions about the same ground is the fault phase C exists to end, and
+  // it would show as a shader that classifies AND composites.
+  check(!glsl.includes('subWeights('),
+    'the retired classifier is not in the shader');
   // …AND THE CHECK THAT NEARLY SHIPPED UNSOUND. The first version of this
-  // asserted the EMITTED glsl does not contain `clamp(grain * 0.8`, meaning to
+  // asserted the EMITTED glsl does not contain a weight expression, meaning to
   // catch a number typed into the shader instead of the table. It cannot: a
   // template literal produces byte-identical text either way, which is the
-  // whole point of interpolation. The sound check is on the SOURCE — the
-  // weight lines must read through K.
+  // whole point of interpolation. The sound check is on the SOURCE.
+  //
+  // It is pointed at subExpress, which is where the shared arithmetic lives
+  // now: how much of each LAYER is expressed is the thing the sward will have
+  // to agree with in phase D. The structure functions beside it are the
+  // shader's alone — a wavelength in metres and an amplitude in palette steps
+  // are nobody else's business — and are literals by right, exactly as the
+  // detail cascade's are.
   const ts = readFileSync(join(CELL, 'client/substrate-field.ts'), 'utf8');
-  const weights = ts.slice(ts.indexOf('vec3 subWeights('), ts.indexOf('export const SUB_DOM_M'));
-  // 0.5 is exempt and is the only exemption: it is the domain's own midpoint in
-  // `(dom - 0.5)`, which is the DEFINITION of "shift either way about the mean"
-  // rather than a number anyone would tune. Everything else must read through K.
-  const literals = [...weights.matchAll(/[*+\-] (\d+\.\d+)/g)]
-    .map((m) => m[1]).filter((v) => v !== '0.5');
+  const expr = ts.slice(ts.indexOf('vec3 subExpress('), ts.indexOf('// ── AND THE COMPOSITE'));
+  check(expr.length > 100, 'subExpress is where this check looks for it');
+  // 0.0, 0.5 and 1.0 are exempt and are the only exemptions: they are clamp
+  // bounds and the domain's own midpoint, which is the DEFINITION of "shift
+  // either way about the mean" rather than a number anyone would tune.
+  const literals = [...expr.matchAll(/[*+\-] (\d+\.\d+)/g)]
+    .map((m) => m[1]).filter((v) => v !== '0.5' && v !== '0.0' && v !== '1.0');
   check(literals.length === 0,
-    `no weight constant is typed into the shader source as a literal${literals.length ? ` — ${literals.join(', ')}` : ''}`);
+    `no share constant is typed into the shader source as a literal${literals.length ? ` — ${literals.join(', ')}` : ''}`);
 }
 
 console.log('\nthe kernel\'s inlined material table matches the source of record:');
@@ -113,7 +129,44 @@ console.log('\nthe domain is the same field:');
   check(Math.abs(far) < 0.3, `forty metres apart is a different one (${far.toFixed(3)})`);
 }
 
-console.log('\nthe classification does what the doctrine says:');
+console.log('\nthe layered model expresses what the doctrine says:');
+{
+  // ── THE ONE CLAIM PHASE C IS ABOUT ── the three shares are not a partition:
+  // the substrate is everywhere, including under dense sward, and vegetation
+  // decides how much of it is VISUALLY EXPRESSED rather than whether it exists.
+  // So a well-grassed hillside must still show some rock, and a cliff must not
+  // lose its rock to a mantle.
+  // grain is the cover class's own [rough, grain] — 0.85 bare, 0.15 grassland,
+  // 0.00 snow — and it is here only as the snow veto. See subExpress.
+  const ex = (a) => M.subExpressOf(a.ex, a.db, a.sd, a.gpot, a.veg, a.grain ?? 0.85);
+  const meadow = ex({ ex: 0.15, db: 0.05, sd: 0.75, gpot: 0.72, veg: 0.22, grain: 0.15 });
+  check(meadow.grass > 0.4, `a meadow is grassed (${meadow.grass.toFixed(3)})`);
+  check(meadow.rock > 0.01,
+    `and its bedrock is still expressed through the sward (${meadow.rock.toFixed(4)}) — never zero`);
+  const cliff = ex({ ex: 0.92, db: 0.05, sd: 0.05, gpot: 0.15, veg: 0.05 });
+  check(cliff.rock > 0.8, `a face is mostly bare rock (${cliff.rock.toFixed(3)})`);
+  check(cliff.mantle < 0.15, `and sheds its mantle (${cliff.mantle.toFixed(3)})`);
+  check(cliff.rock > meadow.rock * 8, 'a face shows far more rock than a meadow does');
+  const apron = ex({ ex: 0.35, db: 0.80, sd: 0.20, gpot: 0.30, veg: 0.10 });
+  check(apron.mantle > 0.5, `an apron is mantled (${apron.mantle.toFixed(3)})`);
+  check(apron.rock < cliff.rock, 'and shows less rock than the face above it');
+  // A SNOWFIELD IS STILL VETOED BY THE PALETTE. grassPot is a topographic
+  // argument and is blind to climate, so without the palette's own green a flat
+  // high basin would grow a lawn on it.
+  const snow = ex({ ex: 0.10, db: 0.05, sd: 0.60, gpot: 0.80, veg: -0.02, grain: 0 });
+  check(snow.grass < 0.01, `a snowfield grows nothing (${snow.grass.toFixed(4)})`);
+  // ── AND THE VETO THE FIELD CANNOT SUPPLY ── a flat glacier in a cirque has
+  // soil depth and debris by every topographic argument there is, so without
+  // the cover class's own grain the mantle would paint it with the fines'
+  // oxidised warmth and it would come out beige.
+  check(snow.mantle + snow.rock < 0.01,
+    `and is left alone entirely (mantle ${snow.mantle.toFixed(4)}, rock ${snow.rock.toFixed(4)})`);
+  const thaw = ex({ ex: 0.10, db: 0.05, sd: 0.60, gpot: 0.80, veg: -0.02, grain: 0.85 });
+  check(thaw.mantle > 0.5,
+    `…and the SAME ground on a bare cover class is mantled (${thaw.mantle.toFixed(3)}) — a veto on two classes, not a classifier`);
+}
+
+console.log('\nthe retiring classifier still does what it did (phase D takes it):');
 {
   const ev = M.subEvidence(0.711, 0.727, 0.746);   // the Yosemite granite reading
   check(ev.warm < 0, `pale granite reads COOL (warm ${ev.warm.toFixed(3)}) — the gate the cover class had to rescue`);

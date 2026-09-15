@@ -50,28 +50,55 @@
 /**
  * ── ONE TABLE OF CONSTANTS, SUBSTITUTED INTO THE GLSL ──
  *
- * The classification has to run in two places: in the fragment, which paints
+ * The layered model has to run in two places: in the fragment, which paints
  * it, and on the CPU, where the sward seeder has to thin its grass on the SAME
- * outcrop the shader drew. Two hand-written copies of eleven numbers is two
- * copies that will disagree, and the disagreement would show as grass standing
- * thick on a patch of painted rock — which is the exact complaint this whole
- * programme started from, arrived at from the other side.
+ * outcrop the shader drew. Two hand-written copies is two copies that will
+ * disagree, and the disagreement would show as grass standing thick on a patch
+ * of painted rock — which is the exact complaint this whole programme started
+ * from, arrived at from the other side.
  *
  * So the numbers live here once and the shader source interpolates them. There
  * is nothing to keep in step.
  */
 export const SUB_K = Object.freeze({
-  rockGrain: 0.80, rockSlope: 0.85, rockBias: 0.22, rockDom: 0.70,
-  turfRough: 0.95, turfGain: 1.15, turfDom: 0.35, turfVegLo: 0.05, turfVegHi: 0.16,
-  turfRock: 0.75,
-  soilBase: 0.85, soilRock: 0.55, soilDom: 0.30,
-  soilWarmLo: 0.02, soilWarmHi: 0.18, soilGrainLo: 0.25, soilGrainHi: 0.60,
-  // …and the three material transforms, here for the same reason: a blade
-  // fading toward the outcrop it stands on has to fade toward the SAME colour
-  // the fragment painted that outcrop.
+  // ── THE LAYERS' COLOURS, AS TRANSFORMS OF THE GROUND'S OWN ──
+  // Bedrock: the place's colour with its chroma pulled out and a cool cast on
+  // it, because weathered stone is grey whatever the soil around it is.
   rockChroma: 0.34, rockR: 0.97, rockG: 0.99, rockB: 1.07,
+  // The fines: that colour oxidised warm.
   soilR: 1.13, soilG: 0.99, soilB: 0.82,
-  turfR: 0.91, turfG: 1.035, turfB: 0.85,
+  // …and the COARSE debris lying on the fines is a third colour, which the
+  // three-material classifier could not express at all: a scree of fresh
+  // fragments is broken ROCK, not dirt, so it is paler and cooler than the
+  // fines it rests on and a little lighter than either, because a field of
+  // angular faces catches the sky from every direction at once.
+  screeR: 1.02, screeG: 1.02, screeB: 1.05, screeLift: 0.07,
+  // The grassy complement. It is no longer a material — grass is a layer ON
+  // rock and regolith, not an alternative to them — so it pulls half as hard
+  // as the other two: the palette, the cover tint and the guild already speak
+  // for vegetated ground, and at the full pull a meadow came out a step
+  // greener than the place's own colour.
+  grassR: 0.91, grassG: 1.035, grassB: 0.85,
+  // ── AND HOW MUCH OF EACH LAYER IS EXPRESSED ──
+  // Not weights over a partition: the substrate is EVERYWHERE, including under
+  // dense sward, and these say how much of it can be SEEN through what lies on
+  // top. That distinction is the whole of phase C.
+  mantleSoil: 0.85, mantleDebris: 0.75, mantleLo: 0.05, mantleHi: 0.55,
+  // …and the ONE veto the field cannot supply. Its channels are derived from
+  // the landform, which is blind to what is lying on it: a flat glacier in a
+  // cirque has soil depth and debris by every topographic argument there is,
+  // and painting it with the fines' oxidised warmth would turn it beige. The
+  // cover class answers it outright — grain is 0.00 for snow and open water
+  // and at least 0.05 for everything else on earth — so this is a veto on two
+  // classes rather than a classifier, and it is the whole of what the palette
+  // evidence used to be asked for. (The first cut of it asked the palette's
+  // own warmth as the old classifier did, and vetoed the Stelvio's scree: a
+  // grey lichen pass reads warm 0.009 and grain 0.25, which is one gate short
+  // of a snowfield's on BOTH routes.)
+  snowLo: 0.005, snowHi: 0.045,
+  coverGrass: 0.8, coverMantle: 0.45, rockCover: 0.85,
+  grassLo: 0.28, grassHi: 0.82, grassVegLo: 0.01, grassVegHi: 0.13, grassFace: 0.55,
+  dampTone: 0.14,
 });
 const K = SUB_K;
 export const SUB_GLSL = `
@@ -86,46 +113,99 @@ export const SUB_GLSL = `
 vec2 subDip(vec2 gp) {
   return vec2(tdVN(gp * (1.0 / 1100.0)), tdVN(gp * (1.0 / 870.0) + 31.7)) * 0.55;
 }
-// ── THE DOMAIN: WHERE ONE MATERIAL GIVES WAY TO ANOTHER ──
+// ── THE DOMAIN: WHERE ONE MATERIAL GIVES WAY TO ANOTHER INSIDE ONE FIELD CELL ──
 //
-// Three octaves over the ground plane at the scale a patch of scree, a soil
-// terrace or an outcrop actually holds: with s = 18 m that is 47 m, 18 m and
-// 7.6 m, so a patch has a broad bias, an irregular body and a ragged edge.
-// Returned as 0..1 about a mean of a half, because the caller shifts a weight
-// by (dom - 0.5) and a field with a mean anywhere else would bias the whole
-// world toward one material.
+// The geomorphic field's own lattice is about thirty-three metres, which is the
+// brief's band A (30-150 m) and is where the LANDFORM lives. This is band B
+// (5-30 m): the patchiness inside one cell, so a hillside the field calls
+// half-exposed is outcrop and fill in patches rather than a uniform half.
+// Three octaves at s = 18 m are 47 m, 18 m and 7.6 m, so a patch has a broad
+// bias, an irregular body and a ragged edge. Returned about a mean of a half,
+// because every caller shifts by (dom - 0.5).
 float subDomain(vec2 gp, float s) {
   float d = tdVN(gp / (s * 2.6)) + tdVN(gp / s) * 0.55 + tdVN(gp / (s * 0.42)) * 0.25;
   return clamp(0.5 + d * 0.62, 0.0, 1.0);
 }
+// ── THE FALL LINE'S FRAME ──
+//
+// Every anisotropic term downstream is written in it, because gravity is what
+// organises a hillside: scree elongates down it, fines wash along it, strata
+// cross it. The field's flow channels carry the downhill unit vector; a flat
+// cell has no fall line at all, so the frame falls back to the world axes
+// rather than normalising a zero and producing a NaN that would paint black.
+void subBasis(vec2 flow, out vec2 down, out vec2 across) {
+  float m = length(flow);
+  down = m > 1.0e-3 ? flow / m : vec2(0.0, 1.0);
+  across = vec2(-down.y, down.x);
+}
+// Ground coordinates stretched along the fall line: ka metres a lattice unit
+// across it, kd metres along. Read any noise in this frame and its features
+// come out as tongues rather than blobs — which is what a scree apron, a wash
+// fan and a rill actually look like, and what an isotropic FBM can never say.
+vec2 subAniso(vec2 gp, vec2 down, vec2 across, float ka, float kd) {
+  return vec2(dot(gp, across) / ka, dot(gp, down) / kd);
+}
+// ── A LINE THAT KNOWS ITS OWN PHASE ──
+//
+// u is a phase in periods and the line sits at each half-integer. fwidth(u) is
+// how much of a period THIS fragment spans, so the line is widened to its own
+// footprint and then faded out before that footprint can alias it.
+//
+// PHASE-AWARE RATHER THAN BAND-LIMITED IN METRES, and the difference is not
+// cosmetic. A bedding phase is warped, read along a dip and measured up the
+// world Y, so the period it presents to the screen is not the period it has in
+// the ground: tdBand would cut a line that is still perfectly resolvable where
+// the strata run across the view, and keep one that is not where they run into
+// it. The derivative is the only thing that knows which.
+//
+// A NOTE ON WHERE THIS MAY BE CALLED FROM. A derivative is undefined for the
+// helper lanes of a quad that did not take the branch, so every gate above a
+// call to this has to be a quantity that is SMOOTH across the screen — the
+// field's own channels (bilinear over a 33 m lattice) and the art-pixel
+// footprint, never the domain noise or a classification built on it.
+float subLine(float u, float w) {
+  float fw = fwidth(u);
+  float fade = 1.0 - smoothstep(w * 1.2, w * 4.0, fw);
+  if (fade <= 0.001) return 0.0;
+  float d = abs(fract(u) - 0.5);
+  return (1.0 - smoothstep(w, w + fw * 0.75, d)) * fade;
+}
+// ── THE FOUR ROCK STRUCTURE FAMILIES, AS A SMOOTH PARTITION ──
+//
+// rockFamily rides in one byte as 0 massive, 1/3 bedded, 2/3 fractured,
+// 1 loose, and it is INTERPOLATED across the field's lattice — so a hillside
+// that changes character does it over thirty metres rather than at a line.
+// Tent functions three wide give weights that sum to one everywhere.
+//
+// CHOSEN BY CONTEXT, NEVER ROLLED. A steep high-exposure face is massive or
+// jointed, a broad hillside with contour expression is bedded, a debris zone
+// is broken; that decision is the field's (see buildSubstrateCells) and this
+// only reads it. A random family per patch is the motif-stamping fault the
+// whole rewrite exists to end.
+vec4 subFam(float f) {
+  return clamp(1.0 - abs(vec4(0.0, 0.3333, 0.6666, 1.0) - f) * 3.0, 0.0, 1.0);
+}
 // ── BEDDING, AND THE ONE LINE THAT MAKES ROCK READ AS ROCK ──
 //
 // A sedimentary bed is a near-horizontal layer, so the line where it meets the
-// hillside — its outcrop trace — is a contour of (y + dip·xz). PHASING ON THE
+// hillside — its outcrop trace — is a contour of (y + dip.xz). PHASING ON THE
 // WORLD Y IS THE WHOLE TRICK: the bands then wrap round a spur, climb a gully
 // and close up where the ground steepens, exactly as real strata do, for one
 // dot product. A purely horizontal noise, however well tuned, lies flat across
 // the slope and reads as paint on a hill rather than as the hill's own
 // structure. Returns 1 in the bedding plane's shadow and 0 on the bed's face.
 float subBed(vec3 p, vec2 dip, float thick, float warp) {
-  // ── A BED IS NOT A PERIOD, AND THE FIRST CUT MADE IT ONE ──
-  //
-  // fract(u) at one thickness is a perfectly regular comb, and over a whole
-  // alpine hillside that is not strata, it is CORDUROY — reported from the
-  // seat at the Stelvio as long parallel ribs running across the entire frame
-  // in one direction. Real bedding does two things this did not: its spacing
-  // wanders, and only SOME beds are resistant enough to stand out.
-  //
-  // The warp argument is a slow phase drift the caller reads at about ninety
-  // metres, so the spacing stretches and bunches instead of ticking.
+  // A BED IS NOT A PERIOD. fract(u) at one thickness is a perfectly regular
+  // comb, and over an alpine hillside that is not strata, it is CORDUROY —
+  // reported from the seat at the Stelvio as long parallel ribs running across
+  // the whole frame in one direction. The warp argument is the caller's slow
+  // phase drift, so the spacing stretches and bunches instead of ticking.
   float u = (p.y + dot(p.xz, dip)) / max(thick, 0.05) + warp;
-  float line = smoothstep(0.13, 0.035, abs(fract(u) - 0.5));
   // …and the strength is keyed on the bed INDEX, not the position, so a
-  // resistant bed is resistant along its whole outcrop — which is what makes
-  // a bedding plane read as one bed seen across a hillside rather than as a
-  // texture. It also thins the ink by a third on average, because most beds
-  // are now faint, which is both the honest look and the cheaper one.
-  return line * (0.22 + 0.78 * tdH(vec2(floor(u), 17.0)));
+  // resistant bed is resistant along its whole outcrop — which is what makes a
+  // bedding plane read as one bed seen across a hillside rather than as a
+  // texture.
+  return subLine(u, 0.10) * (0.22 + 0.78 * tdH(vec2(floor(u), 17.0)));
 }
 // The cross-fractures that break a bed into blocks. Square to the dip, because
 // a joint set forms perpendicular to the bedding it cuts.
@@ -138,8 +218,7 @@ float subJoint(vec2 gp, vec2 dip, float spacing) {
   // constant fallback is for the degenerate case and only for that.
   vec2 n = vec2(-dip.y, dip.x);
   vec2 dir = normalize(dot(n, n) > 2.5e-3 ? n : vec2(0.31, 0.95));
-  float f = abs(fract(dot(gp, dir) / max(spacing, 0.05)) - 0.5);
-  return smoothstep(0.10, 0.02, f);
+  return subLine(dot(gp, dir) / max(spacing, 0.05), 0.08);
 }
 // Sparse angular clasts: a thresholded noise, so most of the ground is bare of
 // them and a few per cent carries a stone. Not a scatter of dots — a cluster,
@@ -150,57 +229,145 @@ float subStones(vec2 gp, float scale, float cut) {
   float cluster = tdVN(gp / (scale * 7.0)) + 0.5;
   return smoothstep(cut, cut + 0.16, n * (0.55 + cluster * 0.9));
 }
-// ── THE THREE MATERIALS, AS TRANSFORMS OF THE GROUND'S OWN COLOUR ──
+// ── LAYER A: THE BEDROCK'S OWN STRUCTURE, BY FAMILY ──
+//
+// A tone, not a weight: the field decides WHERE rock shows and this decides
+// what it looks like once you are close enough for the question to mean
+// anything. Zero-mean, so rock seen from far enough that its structure has
+// faded is the same average colour as rock seen from the cab.
+//
+// EVERY TERM IS LOUD BY THE STANDARDS OF A TEXTURE, and can afford to be. A
+// tone reaches the frame as tone x visibility x the material's colour, so at
+// Yosemite — rock 0.46 on ground at 0.72 — an amplitude of 0.13 arrives as
+// 0.043, six tenths of a palette step, and spends its life modulating the
+// dither. The first cut's bedding was invisible in the frame while the
+// classification under it was correct.
+float subRockTone(vec3 p, vec2 gp, vec2 down, vec2 across, vec4 fam, float px) {
+  // BAND A (30-150 m): the massing every family shares — the broad tonal
+  // difference between one face of an outcrop and the next, which is what
+  // makes a cliff read as a cliff from a kilometre away.
+  float t = 0.10 * tdVN(gp * (1.0 / 70.0)) * tdBand(px, 70.0)
+          + 0.07 * tdVN(gp * (1.0 / 26.0)) * tdBand(px, 26.0);
+  if (px > 3.5) return t;
+  vec2 dip = subDip(gp);
+  // BAND B (5-30 m): the spacing wanders over forty and thirteen metres, which
+  // is the scale a fold actually bends strata at. A drift of one bed over
+  // ninety metres was the first attempt and it moved the comb's own
+  // autocorrelation by a twentieth — nothing.
+  float warp = tdVN(gp * (1.0 / 40.0)) * 2.2 + tdVN(gp * (1.0 / 13.0)) * 0.55;
+  // AND AN OUTCROP IS NOT CONTINUOUS. Real bedding shows where rock is exposed
+  // and is buried by scree and soil between; drawn unbroken across a hillside
+  // it reads as corduroy however irregular its spacing.
+  float show = 0.30 + 0.70 * smoothstep(-0.18, 0.16, tdVN(gp * (1.0 / 14.0)));
+  // BAND C (0.5-5 m): the lines themselves, each fading on its own phase.
+  float bed = subBed(p, dip, 4.5, warp) + 0.62 * subBed(p, dip, 1.2, warp * 3.0);
+  // Two joint sets for the fractured family — square to the dip and along it,
+  // which is what breaks a bed into blocks rather than into slats.
+  float joint = subJoint(gp, dip, 3.2) + 0.6 * subJoint(gp, vec2(dip.y, -dip.x), 5.1);
+  // A LOOSE, BROKEN FACE HAS NO COHERENT LINE AT ALL, so it gets clasts in the
+  // fall line's frame instead: a rubble slope's fragments lie in trains down
+  // the slope, not in a circular scatter.
+  float clast = 0.0;
+  if (px < 0.7) {
+    clast = (subStones(subAniso(gp, down, across, 1.4, 3.4), 0.5, 0.58) - 0.16) * tdBand(px, 1.4);
+  }
+  t -= 0.24 * show * fam.y * bed;
+  t -= 0.14 * show * (fam.x * 0.35 + fam.z) * joint;
+  t += 0.05 * fam.x * tdVN(gp * 0.30) * tdBand(px, 3.3);
+  t += 0.18 * fam.w * clast;
+  return t;
+}
+// ── LAYER B: THE REGOLITH, DEBRIS AND SOIL MANTLE ──
+//
+// scree is the coarse share of the mantle (debris against fines) and decides
+// which of two quite different surfaces this is: a tongue of angular blocks,
+// or a wash of fines with a few stones in it.
+float subMantleTone(vec2 gp, vec2 down, vec2 across, float scree, float mo, float px) {
+  // THE APRON IS A TONGUE, NOT A BLOB. Read in the fall line's own frame,
+  // nearly four times longer downhill than across, so a scree patch elongates
+  // the way scree lies. This is the anisotropy the brief asked for and the
+  // reason the debris channel walks the fall line at all.
+  float t = 0.0;
+  if (px < 5.0) {
+    vec2 lob = subAniso(gp, down, across, 9.0, 34.0);
+    t += (tdVN(lob) * 0.55 + tdVN(lob * 2.6) * 0.28) * scree * 0.30 * tdBand(px, 9.0);
+  }
+  if (px < 1.0) {
+    // Channels within the apron: a much narrower frame, so fines wash into
+    // rills between the coarse tongues rather than dusting them evenly.
+    t += tdVN(subAniso(gp, down, across, 1.8, 14.0)) * scree * 0.16 * tdBand(px, 1.8);
+  }
+  // The fines' own metre-scale tonal regions — damp and dry, fine and coarse.
+  t += 0.12 * tdVN(gp * 0.4) * (1.0 - scree * 0.6) * tdBand(px, 2.5);
+  if (px < 0.45) {
+    // …and the clasts lying on them, LIGHTER than the fill they sit on because
+    // a stone catches the sky and dirt does not.
+    t += 0.19 * (subStones(gp, 0.45, 0.62) - 0.12) * (0.35 + scree * 0.65) * tdBand(px, 0.9);
+  }
+  // Damp ground is darker. The moisture channel is the one thing here that the
+  // palette cannot say at all, and it is why a hollow reads as a hollow.
+  return t - mo * ${K.dampTone};
+}
+// ── LAYER C: THE GRASSY COMPLEMENT ──
+//
+// Clumped at the scale a tussock holds. It SUBDUES the mineral structure
+// rather than replacing it — see subExpress — so a meadow keeps the stones
+// showing through it.
+float subGrassTone(vec2 gp, float px) {
+  float t = 0.075 * tdVN(gp * 0.22) * tdBand(px, 4.5);
+  if (px < 0.55) t += 0.13 * tdVN(gp * 0.9) * tdBand(px, 1.1);
+  return t;
+}
+// ── THE LAYERS' COLOURS ──
 vec3 subRockC(vec3 c, float lum) { return mix(vec3(lum), c, ${K.rockChroma}) * vec3(${K.rockR}, ${K.rockG}, ${K.rockB}); }
 vec3 subSoilC(vec3 c) { return c * vec3(${K.soilR}, ${K.soilG}, ${K.soilB}); }
-// …and turf pulls HALF as hard as the other two, deliberately. The palette
-// already handles vegetated ground well — the cover tint, the guild and the
-// sward all speak for it — and the brief's complaint was about EXPOSED ground.
-// Measured at Camps Bay, where nearly every texel classifies as turf: at the
-// full pull the whole meadow went a step greener than the place's own palette,
-// which is the site model being overruled by a texture.
-vec3 subTurfC(vec3 c) { return c * vec3(${K.turfR}, ${K.turfG}, ${K.turfB}); }
-// ── THE FIRST-ORDER CLASSIFICATION ──
+vec3 subScreeC(vec3 c, float lum) {
+  return (mix(vec3(lum), c, ${K.rockChroma}) + ${K.screeLift}) * vec3(${K.screeR}, ${K.screeG}, ${K.screeB});
+}
+vec3 subGrassC(vec3 c) { return c * vec3(${K.grassR}, ${K.grassG}, ${K.grassB}); }
+// ── HOW MUCH OF EACH LAYER IS EXPRESSED ──
 //
-// m is (rough, grain, slope) from aTd; veg and warm are what the palette says
-// about this ground; dom is the domain field. The weights do NOT have to sum
-// to one: whatever is left over is the palette as the painter left it, which is
-// the honest answer for ground none of the three describes — a snowfield, open
-// water, a made surface. Only an over-subscribed sum is normalised.
-vec3 subWeights(vec3 m, float veg, float warm, float dom) {
-  float rough = m.x, grain = m.y, slope = m.z;
-  // BEDROCK shows where soil cannot stay: a steep face, and ground the cover
-  // already calls bare or broken. The domain then shifts it by a third either
-  // way, which is what turns a uniform verdict into outcrop standing out of
-  // fill — the thing the seat asked for and the thing a per-vertex material
-  // can never produce on its own.
-  float rock = clamp(grain * ${K.rockGrain} + slope * ${K.rockSlope} - ${K.rockBias} + (dom - 0.5) * ${K.rockDom}, 0.0, 1.0);
-  // TURF is the complement of mineral ground, and it is GATED ON THE PALETTE'S
-  // OWN GREEN. Without that gate a snowfield (grain 0.00, rough 0.25) reads as
-  // deep turf and comes out green, and a desert pavement picks up a lawn.
-  float turf = clamp((${K.turfRough} - rough) * ${K.turfGain} + (0.5 - dom) * ${K.turfDom}, 0.0, 1.0)
-             * smoothstep(${K.turfVegLo}, ${K.turfVegHi}, veg) * (1.0 - rock * ${K.turfRock});
-  // REGOLITH is the default fill — the dirt, gravel and weathered debris that
-  // covers most ground that is neither outcrop nor sward.
-  //
-  // ── AND ITS GATE NEEDS BOTH HALVES OF THE EVIDENCE, WHICH COST A RUN ──
-  //
-  // The first cut gated it on the palette's warmth alone: soil is oxidised and
-  // snow is not, which is true and is not sufficient. Measured at the seat's
-  // own Yosemite spot, the exposed granite apron reads (0.711, 0.727, 0.746) —
-  // pale and very slightly BLUE — so warm is −0.049, one gate short of a
-  // snowfield's, and the whole surface the brief was written about classified
-  // as 49% outcrop and 51% LEAVE IT ALONE. The pale sheet stayed a pale sheet.
-  //
-  // What actually separates granite grus from a glacier is the cover class,
-  // which is already in hand: bare and broken ground carries grain 0.85 and
-  // snow carries 0.00. So either piece of evidence opens the gate and a
-  // snowfield still has neither. Worked ground keeps its warmth route (crops
-  // are grain 0.05 and warm 0.36) and a made surface passes neither.
-  float soil = clamp(${K.soilBase} - turf - rock * ${K.soilRock} + (dom - 0.5) * ${K.soilDom}, 0.0, 1.0)
-             * max(smoothstep(${K.soilWarmLo}, ${K.soilWarmHi}, warm), smoothstep(${K.soilGrainLo}, ${K.soilGrainHi}, grain));
-  float t = rock + soil + turf;
-  return t > 1.0 ? vec3(rock, soil, turf) / t : vec3(rock, soil, turf);
+// Returns (mantle, rockVisible, grassCover). These are SHARES OF WHAT CAN BE
+// SEEN, not weights of a partition, and that is the whole difference between
+// phase C and what it replaced: rock, regolith and grass are not three
+// competing materials, they are three layers stacked on one another, and the
+// substrate exists under all of them whether or not anything is standing on it.
+//
+// gpot is stretched rather than read raw. Measured over Yosemite in phase B,
+// grassPot sits at 0.55-0.75 across most of the ground off the walls, so as a
+// modulator it has almost no dynamic range; the smoothstep spends the range it
+// does have on the band where it varies.
+vec3 subExpress(float ex, float db, float sd, float gpot, float veg, float grain) {
+  // THE MANTLE FILLS WHAT THE BEDROCK DOES NOT, and the supply is stretched
+  // rather than read raw. The first cut multiplied the supply by (1 - ex) as
+  // well, which double-counts: rock visibility already takes the mantle off a
+  // face, and the field's own soilDepth already subtracts exposure. Measured at
+  // the Stelvio, that left a third of a scree slope drawn as the untouched
+  // palette — an arithmetic leftover of two independent mixes standing in for a
+  // material nobody had named.
+  float mineral = smoothstep(${K.snowLo}, ${K.snowHi}, grain);
+  float mantle = smoothstep(${K.mantleLo}, ${K.mantleHi},
+    sd * ${K.mantleSoil} + db * ${K.mantleDebris}) * mineral;
+  // THE PALETTE STILL HOLDS THE VETO. grassPot is blind to climate — it is a
+  // topographic argument about where fines and water end up — so a snowfield
+  // and a desert pavement would both grow a lawn on it alone. The palette's
+  // own green is what says anything grows here at all.
+  float grass = smoothstep(${K.grassLo}, ${K.grassHi}, gpot)
+              * smoothstep(${K.grassVegLo}, ${K.grassVegHi}, veg)
+              * (1.0 - ex * ${K.grassFace});
+  float cover = clamp(grass * ${K.coverGrass} + mantle * ${K.coverMantle}, 0.0, 1.0);
+  return vec3(mantle, ex * (1.0 - cover * ${K.rockCover}) * mineral, grass);
+}
+// ── AND THE COMPOSITE, IN ORDER OF DEPOSITION ──
+//
+// The bedrock is the ground, the mantle lies on it, the rock that is still
+// exposed cuts back through, and the vegetation tints what is left. Layered,
+// never winner-take-all: at every point all four are present and what varies
+// is how much of each you can see.
+vec3 subCompose(vec3 base, vec3 mantleC, vec3 rockC, vec3 grassC, vec3 e) {
+  vec3 c = mix(base, mantleC, e.x);
+  c = mix(c, rockC, e.y);
+  return mix(c, grassC, e.z);
 }
 `;
 /** The domain's wavelength in metres — the scale a patch of outcrop, scree or
@@ -262,6 +429,32 @@ export function subDomainAt(x: number, z: number, s = SUB_DOM_M): number {
  *  `devtools/substrate-field.test.mjs` parses the kernel's copy and asserts
  *  the two agree, which is the same trick perf-check.mjs uses for refreshVeg
  *  and the only kind of check that can hold a duplicate honest. */
+/**
+ * ── THE CLASSIFIER'S OWN CONSTANTS, AND WHY THEY ARE NO LONGER THE SHADER'S ──
+ *
+ * Phase C retired the three-material classifier from the fragment: rock,
+ * regolith and grass are layers now, not competing weights, and `subWeights`
+ * is gone from SUB_GLSL entirely. What remains here is the CPU half the SWARD
+ * still reads — `subWeightsOf`, `subGrassFactor`, `subTintOf` — and it is kept
+ * verbatim on purpose. Phase D is where the seeder moves onto the geomorphic
+ * field; changing the grass under it in the same unit as the ground it stands
+ * on would make the next frame impossible to attribute.
+ *
+ * So these are stated as the CPU's OWN numbers rather than shared ones. They
+ * are not interpolated into any GLSL, nothing checks them against a shader,
+ * and when phase D lands they go with the functions that read them. The
+ * material transforms are NOT among them: those are still shared (SUB_K), so a
+ * blade fading toward an outcrop fades toward the colour the fragment painted
+ * that outcrop.
+ */
+export const SUB_CLS_K = Object.freeze({
+  rockGrain: 0.80, rockSlope: 0.85, rockBias: 0.22, rockDom: 0.70,
+  turfRough: 0.95, turfGain: 1.15, turfDom: 0.35, turfVegLo: 0.05, turfVegHi: 0.16,
+  turfRock: 0.75,
+  soilBase: 0.85, soilRock: 0.55, soilDom: 0.30,
+  soilWarmLo: 0.02, soilWarmHi: 0.18, soilGrainLo: 0.25, soilGrainHi: 0.60,
+});
+const C = SUB_CLS_K;
 export const SUB_MAT: Readonly<Record<number, readonly [number, number]>> = Object.freeze({
   10: [0.40, 0.30], 20: [0.60, 0.50], 30: [0.35, 0.15], 40: [0.28, 0.05],
   50: [0.50, 0.20], 60: [1.00, 0.85], 70: [0.25, 0.00], 80: [0.00, 0.00],
@@ -290,14 +483,18 @@ export function subEvidence(r: number, g: number, b: number): { veg: number; war
   return { veg: (g - 0.5 * (r + b)) / lum, warm: (r - b) / lum };
 }
 export interface SubW { rock: number; soil: number; turf: number }
-/** subWeights, term for term, on the shared constants. */
+/** The three-material classifier, on the CPU's own constants. THE FRAGMENT NO
+ *  LONGER RUNS THIS: phase C replaced it there with the layered model, and
+ *  this survives only because the sward seeder has not been moved yet — see
+ *  SUB_CLS_K. It is not a second opinion about what the ground looks like, it
+ *  is the OLD opinion, kept whole until phase D retires it in one piece. */
 export function subWeightsOf(m: SubMat, veg: number, warm: number, dom: number): SubW {
   const cl = (v: number): number => Math.min(1, Math.max(0, v));
-  const rock = cl(m.grain * K.rockGrain + m.slope * K.rockSlope - K.rockBias + (dom - 0.5) * K.rockDom);
-  const turf = cl((K.turfRough - m.rough) * K.turfGain + (0.5 - dom) * K.turfDom)
-    * sstep(K.turfVegLo, K.turfVegHi, veg) * (1 - rock * K.turfRock);
-  const soil = cl(K.soilBase - turf - rock * K.soilRock + (dom - 0.5) * K.soilDom)
-    * Math.max(sstep(K.soilWarmLo, K.soilWarmHi, warm), sstep(K.soilGrainLo, K.soilGrainHi, m.grain));
+  const rock = cl(m.grain * C.rockGrain + m.slope * C.rockSlope - C.rockBias + (dom - 0.5) * C.rockDom);
+  const turf = cl((C.turfRough - m.rough) * C.turfGain + (0.5 - dom) * C.turfDom)
+    * sstep(C.turfVegLo, C.turfVegHi, veg) * (1 - rock * C.turfRock);
+  const soil = cl(C.soilBase - turf - rock * C.soilRock + (dom - 0.5) * C.soilDom)
+    * Math.max(sstep(C.soilWarmLo, C.soilWarmHi, warm), sstep(C.soilGrainLo, C.soilGrainHi, m.grain));
   const t = rock + soil + turf;
   return t > 1 ? { rock: rock / t, soil: soil / t, turf: turf / t } : { rock, soil, turf };
 }
@@ -320,15 +517,16 @@ export function subGrassFactor(w: SubW): number {
   return 1 - 0.8 * Math.min(1, w.rock + w.soil * 0.45);
 }
 /** The material colour a blade should fade toward, so a tuft standing on an
- *  outcrop is the outcrop's colour rather than the tile's mean. The same three
- *  transforms the fragment applies, in the same order, weighted the same. */
+ *  outcrop is the outcrop's colour rather than the tile's mean. The transforms
+ *  ARE the fragment's (SUB_K) — that half is still shared and must stay so —
+ *  and only the weights in front of them are the retiring classifier's. */
 export function subTintOf(r: number, g: number, b: number, w: SubW): [number, number, number] {
   const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
   const rest = Math.max(0, 1 - w.rock - w.soil - w.turf);
   const rk = [(lum + (r - lum) * K.rockChroma) * K.rockR,
     (lum + (g - lum) * K.rockChroma) * K.rockG, (lum + (b - lum) * K.rockChroma) * K.rockB];
   const so = [r * K.soilR, g * K.soilG, b * K.soilB];
-  const tu = [r * K.turfR, g * K.turfG, b * K.turfB];
+  const tu = [r * K.grassR, g * K.grassG, b * K.grassB];
   return [
     r * rest + rk[0] * w.rock + so[0] * w.soil + tu[0] * w.turf,
     g * rest + rk[1] * w.rock + so[1] * w.soil + tu[1] * w.turf,
@@ -664,4 +862,40 @@ export function sampleSubstrate(f: SubstrateField, x: number, z: number, ch: num
   const bot = p(z1, x0) + (p(z1, x1) - p(z1, x0)) * tx;
   const v = top + (bot - top) * tz;
   return ch === SUB_CH.flowX || ch === SUB_CH.flowZ ? v * 2 - 1 : v;
+}
+
+/**
+ * ── HOW MUCH OF EACH LAYER IS EXPRESSED, ON THE CPU ──
+ *
+ * `subExpress`, term for term, on the same shared constants. The CONSTANTS
+ * cannot drift (SUB_K is substituted into the GLSL above); the ARITHMETIC is
+ * written twice because there is no way to call a fragment from the main
+ * thread, and that is stated rather than hidden — the same bargain
+ * `subDomainAt` makes with `subDomain`, and this one is exact rather than
+ * approximate, since it reads the field's own bytes rather than a noise.
+ *
+ * Nothing in the game calls it yet: phase D is where the sward stops asking
+ * the retired classifier and asks this instead. It exists now because it is
+ * what `devtools/substrate-field.test.mjs` holds the layered model's claims
+ * against, and a claim nothing can test is a claim nobody can argue with.
+ */
+export interface SubExpress {
+  /** Regolith and debris lying over the bedrock. */
+  mantle: number;
+  /** Bedrock still showing THROUGH whatever lies on it — never zero where
+   *  there is any exposure at all, which is the whole of phase C. */
+  rock: number;
+  /** Vegetation tinting the result; it subdues the mineral surface and does
+   *  not replace it. */
+  grass: number;
+}
+export function subExpressOf(ex: number, db: number, sd: number, gpot: number,
+  veg: number, grain: number): SubExpress {
+  const cl = (v: number): number => Math.min(1, Math.max(0, v));
+  const mineral = sstep(K.snowLo, K.snowHi, grain);
+  const mantle = sstep(K.mantleLo, K.mantleHi, sd * K.mantleSoil + db * K.mantleDebris) * mineral;
+  const grass = sstep(K.grassLo, K.grassHi, gpot) * sstep(K.grassVegLo, K.grassVegHi, veg)
+    * (1 - ex * K.grassFace);
+  const cover = cl(grass * K.coverGrass + mantle * K.coverMantle);
+  return { mantle, rock: ex * (1 - cover * K.rockCover) * mineral, grass };
 }
