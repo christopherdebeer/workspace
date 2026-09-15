@@ -91,6 +91,8 @@ export {
 export {
   buildProductionSubstrateTile,
   findProductionDriveWaterOverlaps,
+  productionDriveAuthoringRevision,
+  productionDriveAuthoringSignature,
   ProductionSubstrateStore,
   sampleProductionSubstrateTile,
   type ProductionDriveSample,

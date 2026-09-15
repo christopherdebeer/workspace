@@ -53,6 +53,35 @@ export interface ProductionDriveSegment {
 }
 
 /**
+ * Exact identity of the solved road authoring that enters one substrate tile.
+ *
+ * The packet generation is part of the identity because a geometry-only
+ * change (paint, kerb, batter or junction arrays) must invalidate the tile
+ * even when the contact segments retain the same centreline and profile.
+ */
+export function productionDriveAuthoringSignature(
+  segments: readonly ProductionDriveSegment[],
+  renderGeneration: string,
+): string {
+  return `${renderGeneration};${segments.map((segment) => [
+    segment.ax, segment.az, segment.bx, segment.bz,
+    segment.yaM, segment.ybM, segment.halfWidthM,
+    segment.material, segment.quality, segment.shoulderM ?? '',
+    segment.crossfallA ?? '', segment.crossfallB ?? '', segment.roadId,
+  ].join(',')).join('|')}`;
+}
+
+/** Compact diagnostic revision for the exact authoring signature above. */
+export function productionDriveAuthoringRevision(signature: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < signature.length; i++) {
+    hash ^= signature.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) || 1;
+}
+
+/**
  * Exact component storage for a renderer-neutral vertex attribute.
  *
  * Normalized integer attributes are materially different from eagerly
@@ -260,7 +289,6 @@ export interface ProductionSubstrateTileInput {
   revision: number;
   sourceRevisions: {
     terrain: number;
-    drive: number;
     structures: number;
     hydroDetails: number;
     hydro: number;
@@ -272,6 +300,7 @@ export interface ProductionSubstrateTileInput {
   terrainField?: SubstrateField;
   terrainRenderMeshes?: readonly ProductionRenderMesh[];
   driveSegments?: readonly ProductionDriveSegment[];
+  driveRenderGeneration: string;
   driveRenderMeshes?: readonly ProductionDriveRenderMesh[];
   structureRenderMeshes?: readonly ProductionRenderMesh[];
   hydroDetailRenderMeshes?: readonly ProductionRenderMesh[];
@@ -308,6 +337,7 @@ export interface ProductionSubstrateTile {
   terrainField?: SubstrateField;
   terrainRenderMeshes: readonly ProductionRenderMesh[];
   driveSegments: readonly ProductionDriveSegment[];
+  driveAuthoringSignature: string;
   /** Built on the first sample, see buildDriveIndex; never part of the
    *  tile's identity or revision. */
   driveIndex?: ProductionDriveIndex;
@@ -452,6 +482,24 @@ export function buildProductionSubstrateTile(
   input: ProductionSubstrateTileInput,
 ): ProductionSubstrateTile {
   const resolution = Math.max(3, Math.floor(input.resolution));
+  if (typeof input.driveRenderGeneration !== 'string') {
+    throw new Error(`production substrate ${input.key}: missing drive render generation`);
+  }
+  const driveSegments = (input.driveSegments ?? []).map((segment) => ({ ...segment }));
+  for (const segment of driveSegments) {
+    if (![segment.ax, segment.az, segment.bx, segment.bz,
+      segment.yaM, segment.ybM, segment.halfWidthM, segment.quality]
+      .every(Number.isFinite)
+      || segment.halfWidthM <= 0
+      || !segment.roadId) {
+      throw new Error(`production substrate ${input.key}: invalid drive authoring`);
+    }
+  }
+  const driveAuthoringSignature = productionDriveAuthoringSignature(
+    driveSegments,
+    input.driveRenderGeneration,
+  );
+  const driveRevision = productionDriveAuthoringRevision(driveAuthoringSignature);
   const terrainField = input.terrainField;
   if (terrainField) {
     const fieldCount = terrainField.n * terrainField.n * 4;
@@ -569,7 +617,7 @@ export function buildProductionSubstrateTile(
     source: 'production-substrate',
     key: input.key,
     revision: input.revision,
-    sourceRevisions: { ...input.sourceRevisions },
+    sourceRevisions: { ...input.sourceRevisions, drive: driveRevision },
     bounds: input.bounds,
     resolution,
     roadIds,
@@ -588,7 +636,8 @@ export function buildProductionSubstrateTile(
       },
     } : {}),
     terrainRenderMeshes: [...(input.terrainRenderMeshes ?? [])],
-    driveSegments: [...(input.driveSegments ?? [])],
+    driveSegments,
+    driveAuthoringSignature,
     driveRenderMeshes: [...(input.driveRenderMeshes ?? [])],
     structureRenderMeshes: [...(input.structureRenderMeshes ?? [])],
     hydroDetailRenderMeshes: [...(input.hydroDetailRenderMeshes ?? [])],
@@ -1103,6 +1152,7 @@ export class ProductionSubstrateStore {
       terrainRenderMeshes: tile.terrainRenderMeshes.length,
       exactHydro: !!tile.hydroField,
       driveSegments: tile.driveSegments.length,
+      driveAuthoring: tile.driveAuthoringSignature.length > 0,
       driveRenderMeshes: tile.driveRenderMeshes.length,
       structureRenderMeshes: tile.structureRenderMeshes.length,
       hydroDetailRenderMeshes: tile.hydroDetailRenderMeshes.length,

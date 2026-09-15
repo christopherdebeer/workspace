@@ -163,6 +163,8 @@ import {
 import {
   buildProductionSubstrateTile,
   findProductionDriveWaterOverlaps,
+  productionDriveAuthoringRevision,
+  productionDriveAuthoringSignature,
   ProductionSubstrateStore,
   type ProductionDriveRenderMesh,
   type ProductionDriveSample,
@@ -20538,11 +20540,6 @@ function productionDriveSegmentsFor(t: HeightTile): ProductionDriveSegment[] {
   }
   return out;
 }
-interface ProductionDriveSource {
-  signature: string;
-  revision: number;
-}
-const productionDriveSources = new Map<string, ProductionDriveSource>();
 let productionDrivePacketFailures = 0;
 const productionRenderPacketRejections: string[] = [];
 function noteProductionRenderPacketRejection(reason: string): void {
@@ -20814,30 +20811,15 @@ function productionDriveSnapshotFor(
 ): {
   segments: ProductionDriveSegment[];
   renderMeshes: readonly ProductionDriveRenderMesh[];
-  revision: number;
+  renderGeneration: string;
 } {
   const segments = productionDriveSegmentsFor(t);
   const renderMeshes = productionDriveRenderMeshesFor(key, terrainRevision.get(key) ?? 0);
-  // Exact source identity, not merely a count. A late road fragment, changed
-  // profile, crossfall or material must advance the drive layer even if the
-  // terrain and hydro inputs happened to retain their own revisions.
-  const renderGeneration = productionRoadRenderGenerationSignature(key);
-  const signature = `${renderGeneration};${segments.map((segment) => [
-    segment.ax, segment.az, segment.bx, segment.bz,
-    segment.yaM, segment.ybM, segment.halfWidthM,
-    segment.material, segment.quality, segment.shoulderM ?? '',
-    segment.crossfallA ?? '', segment.crossfallB ?? '', segment.roadId,
-  ].join(',')).join('|')}`;
-  const previous = productionDriveSources.get(key);
-  if (previous?.signature === signature) {
-    return { segments, renderMeshes, revision: previous.revision };
-  }
-  const source = {
-    signature,
-    revision: (previous?.revision ?? 0) + 1,
+  return {
+    segments,
+    renderMeshes,
+    renderGeneration: productionRoadRenderGenerationSignature(key),
   };
-  productionDriveSources.set(key, source);
-  return { segments, renderMeshes, revision: source.revision };
 }
 function productionGroundMeshFor(
   t: HeightTile,
@@ -21040,9 +21022,12 @@ function canCommitDriveRenderFromSubstrate(tile: ProductionSubstrateTile): boole
   if (!SUBSTRATE_RENDER_ON || productionSubstrate.tile(tile.key) !== tile) return false;
   const candidate = productionRoadRenderLayers.snapshot(tile.key);
   const batter = productionRoadBatterRenderLayers.snapshot(tile.key);
-  const source = productionDriveSources.get(tile.key);
-  return !!source && source.revision === tile.sourceRevisions.drive
-    && source.signature.startsWith(`${productionRoadRenderGenerationSignature(tile.key)};`)
+  const currentSignature = productionDriveAuthoringSignature(
+    tile.driveSegments,
+    productionRoadRenderGenerationSignature(tile.key),
+  );
+  return tile.driveAuthoringSignature === currentSignature
+    && tile.sourceRevisions.drive === productionDriveAuthoringRevision(currentSignature)
     && tile.driveRenderMeshes.length
       === (candidate?.expectedCount ?? 0) + (batter?.expectedCount ?? 0)
     && tile.driveRenderMeshes.every((packet) =>
@@ -21591,7 +21576,6 @@ function buildProductionSubstrateShadow(
     revision: ++productionSubstrateRevision,
     sourceRevisions: {
       terrain: terrainSourceRevision,
-      drive: drive.revision,
       structures: productionStructureSourceRevisions.get(key) ?? 0,
       hydroDetails: productionHydroDetailRenderLayers.snapshot(key)?.generation ?? 0,
       hydro: hydroRev.get(key) ?? 0,
@@ -21605,6 +21589,7 @@ function buildProductionSubstrateShadow(
     terrainField,
     terrainRenderMeshes: terrainPackets,
     driveSegments: drive.segments,
+    driveRenderGeneration: drive.renderGeneration,
     driveRenderMeshes: drive.renderMeshes,
     structureRenderMeshes: structures,
     hydroDetailRenderMeshes: hydroDetails,
@@ -31633,7 +31618,6 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
       if (pending.timer !== undefined) window.clearTimeout(pending.timer);
     }
     productionSubstrateShadowRetries.clear();
-    productionDriveSources.clear();
     substrateRoadCommits.clear();
     // Visible packet instances were children of worldGroup and were disposed
     // by the sweep above. Packet authoring state is renderer-free.

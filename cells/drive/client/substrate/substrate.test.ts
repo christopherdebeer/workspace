@@ -22,6 +22,8 @@ import {
   findProductionDriveWaterOverlaps,
   makeCrossingFixture,
   pointInProductionCrossingFootprint,
+  productionDriveAuthoringRevision,
+  productionDriveAuthoringSignature,
   productionCrossingFootprint,
   ProductionCrossingRegistry,
   ProductionRenderLayerStore,
@@ -1461,9 +1463,10 @@ export function runSubstrateSelfTest(): void {
       key: `production-${kind}`,
       revision: 7,
       sourceRevisions: {
-        terrain: 2, drive: 4, structures: 2, hydroDetails: 3,
+        terrain: 2, structures: 2, hydroDetails: 3,
         hydro: 3, crossings: 1,
       },
+      driveRenderGeneration: `test:${kind}:4`,
       bounds: { minX: -10, minZ: -10, maxX: 10, maxZ: 10 },
       resolution: 11,
       terrainField: productionTerrainField,
@@ -1505,8 +1508,14 @@ export function runSubstrateSelfTest(): void {
     assert(productionTile.revision === 7, `${kind}: production revision was lost`);
     assert(productionTile.sourceRevisions.hydro === 3,
       `${kind}: production source revisions were lost`);
-    assert(productionTile.sourceRevisions.drive === 4,
-      `${kind}: production drive revision was lost`);
+    const expectedDriveSignature = productionDriveAuthoringSignature(
+      productionTile.driveSegments,
+      productionTileInput.driveRenderGeneration,
+    );
+    assert(productionTile.driveAuthoringSignature === expectedDriveSignature
+      && productionTile.sourceRevisions.drive
+        === productionDriveAuthoringRevision(expectedDriveSignature),
+    `${kind}: production drive authoring identity was not tile-owned`);
     assert(productionTile.sourceRevisions.structures === 2,
       `${kind}: production structure revision was lost`);
     assert(productionTile.sourceRevisions.hydroDetails === 3,
@@ -1574,9 +1583,10 @@ export function runSubstrateSelfTest(): void {
     key: 'production-narrow-vector',
     revision: 8,
     sourceRevisions: {
-      terrain: 3, drive: 5, structures: 1, hydro: 4, crossings: 2,
+      terrain: 3, structures: 1, hydro: 4, crossings: 2,
       hydroDetails: 0,
     },
+    driveRenderGeneration: 'test:narrow:5',
     bounds: { minX: 0, minZ: 0, maxX: 100, maxZ: 100 },
     resolution: 3,
     driveSegments: [{
@@ -1741,9 +1751,10 @@ export function runSubstrateSelfTest(): void {
     key: 'production-shoulder-bridge',
     revision: 9,
     sourceRevisions: {
-      terrain: 3, drive: 6, structures: 1, hydro: 4, crossings: 2,
+      terrain: 3, structures: 1, hydro: 4, crossings: 2,
       hydroDetails: 0,
     },
+    driveRenderGeneration: 'test:shoulder:6',
     bounds: { minX: 0, minZ: 0, maxX: 100, maxZ: 100 },
     resolution: 3,
     driveSegments: [{
@@ -1791,9 +1802,10 @@ export function runSubstrateSelfTest(): void {
     key: 'production-exact-ground',
     revision: 9,
     sourceRevisions: {
-      terrain: 4, drive: 0, structures: 0, hydro: 0, crossings: 0,
+      terrain: 4, structures: 0, hydro: 0, crossings: 0,
       hydroDetails: 0,
     },
+    driveRenderGeneration: 'test:none:0',
     bounds: { minX: 0, minZ: 0, maxX: 10, maxZ: 10 },
     resolution: 3,
     groundMesh: {
@@ -1925,12 +1937,12 @@ export function runSubstrateSelfTest(): void {
     revision: 10,
     sourceRevisions: {
       terrain: 1,
-      drive: 0,
       structures: 0,
       hydroDetails: 0,
       hydro: matchedField.revision,
       crossings: 0,
     },
+    driveRenderGeneration: 'test:none:0',
     bounds: matchedField.bounds,
     resolution: 3,
     hydroField: matchedField,

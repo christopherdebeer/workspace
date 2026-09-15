@@ -108,6 +108,7 @@ ok('only substrate-committed terrain candidates enter the scene',
   state.substrate?.render);
 ok('the committed tile versions its exact drive layer',
   state.substrate?.at?.sourceRevisions?.drive > 0
+    && state.substrate?.at?.driveAuthoring
     && state.substrate?.at?.driveSegments > 0
     && state.substrate?.at?.driveRenderMeshes > 0,
   state.substrate?.at);

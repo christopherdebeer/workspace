@@ -162,8 +162,12 @@ landmark stations and samples foundation ground. Each assembly now publishes
 one replaceable packet through its stable owner tile's versioned structure
 layer; later fragments replace that packet rather than appending intermediate
 meshes, and no bridge-form source mesh enters the scene in render mode.
-The remaining crossing migration is to carry those solved road authoring
-inputs through tile construction and emit them from the substrate tile itself.
+Those solved road authoring inputs now pass through tile construction as exact
+immutable segments beside their renderer-neutral packets. Tile construction
+derives the drive source revision from that complete authoring signature, and
+render admission verifies the tile-owned signature against the current road
+and batter packet generations. The former context-side `productionDriveSources`
+signature/revision map has been retired.
 
 ### 3. Build one production substrate authority tile — guarded authority landed
 
@@ -441,9 +445,12 @@ the failed comparison can be reproduced.
   arrays; host-road crop hierarchy and kerb intersections are substrate-owned
   too, as are the local host-plane fit and its bounded junction fade. The
   remaining generation migration is contextual rather than another
-  road-profile or watercourse-reach authority: carry solved authoring through
-  tile construction, then retire legacy builder entry points and the road
-  drape registry after rollback observation. The final hydro-bank terrain
+  road-profile or watercourse-reach authority: the exact solved road segments
+  and packet-generation identity now enter tile construction, which derives
+  the drive revision and retains the signature used by render admission. The
+  duplicate context-side drive source map is gone. Legacy builder entry points
+  and the road drape registry remain for retirement after rollback observation.
+  The final hydro-bank terrain
   transform now runs through `client/substrate/terrain-hydro.ts` for both
   synchronous and worker terrain arrays; field sampling, slope derivation,
   mineral colour and array mutation no longer have separate context-owned
