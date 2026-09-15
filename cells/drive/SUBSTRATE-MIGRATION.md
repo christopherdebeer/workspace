@@ -331,8 +331,9 @@ drain, drips and terrain-hugging wet tracks. The production game and substrate
 lab consume that same state and renderer. Evidence lifetime uses integrated
 simulation time, so a slow frame or background resume cannot expire marks while
 leaving wetness integrated on a different clock. The authored Senqu browser
-drive passes this complete contact/evidence sequence. Default cutover still
-waits on broader parity and visual gates below.
+drive passes this complete contact/evidence sequence. Default cutover is
+landed; the explicit legacy rollback remains available during the deployed
+observation window described below.
 
 Production crossing audits now include the Bixby and Chapman's Peak seam
 worlds. Bixby's explicit low-clearance culvert remains a compact built conduit
@@ -405,11 +406,12 @@ atomic crossing packet admission.
 The representative parity matrix now clears 1,920 probes across Senqu, Bixby,
 Camps Bay and the explicit-structures fixture with zero wet disagreement, tile
 fallback, unknown speed authority or unresolved crossing semantics. The
-September 2026 completion run retained 627 exact road/water overlap probes
-(57 Senqu, 109 Bixby and 461 Camps Bay), zero support/depth threshold failures
-and zero page errors. It includes the Camps Bay case where a road arrived after
-the legacy water flush and the Senqu bank probe where rollback previously
-measured ford depth against the wrong deck.
+September 15, 2026 completion run retained 316 exact road/water overlap probes
+(98 Senqu, 109 Bixby and 109 Camps Bay), 1,707 immersed-depth comparisons,
+1,920 support comparisons, zero support/depth threshold failures and zero page
+errors. It includes the Camps Bay case where a road arrived after the legacy
+water flush and the Senqu bank probe where rollback previously measured ford
+depth against the wrong deck.
 
 `substrate-default-cutover.test.mjs` proves the ordinary URL selects canonical
 contact with zero loaded-tile consumer fallback, while `?substrate=legacy`
@@ -432,7 +434,14 @@ does not mix old support with new fluid contact or old terrain with new water.
 The canonical tile builder and diagnostics remain available after rollback so
 the failed comparison can be reproduced.
 
-## Known blockers
+## Release-removal blockers
+
+The code-local authority migration is complete: canonical tiles own exact
+terrain fields, ground/contact arrays, solved road inputs, road/structure
+packet identities, hydro fields, crossing semantics and atomic render
+admission. The remaining items gate removal of the observable legacy rollback
+and compatibility builders; they require deployed or visual evidence that this
+repository run cannot manufacture.
 
 - Terrain, road, structure and most hydro-detail arrays still originate in
   separate legacy builders, although all publish immutable packet data at their
