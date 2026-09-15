@@ -162,7 +162,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         'attribute float aCard; attribute float aForm; attribute float aYaw;',
         'uniform float uImpTop;',
         'varying float vImpCard; varying float vImpForm; varying float vImpYaw;',
-        'varying vec3 vImpRight; varying vec3 vImpOut;',
+        'varying vec3 vImpRight; varying vec3 vImpOut; varying vec2 vImpUv;',
         FOLIAGE_WIND_UNIFORMS,
       ].join('\n'))
       .replace('#include <begin_vertex>', [
@@ -189,6 +189,15 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         '}',
         '#endif',
         'vImpCard = aCard; vImpForm = aForm; vImpYaw = aYaw;',
+        // ── THE CARD'S OWN COORDINATE COMES FROM `position`, NOT FROM `uv` ──
+        // A Lambert material declares `vUv` only when something sets USE_UV —
+        // a map, an alpha map, a normal map — and this material has none, so
+        // reading it cost a link failure and a tier that drew nothing while
+        // logging to a console no phone has. `position` is always declared,
+        // and this geometry's positions ARE the card's frame: the side card
+        // spans x in [-0.5, 0.5] and y in [0, 1], the top card x and z.
+        'vImpUv = aCard < 0.5 ? vec2(position.x + 0.5, position.y)',
+        '                     : vec2(position.x + 0.5, position.z + 0.5);',
         // The rise is the card's own height, which is already normalised.
         foliageWind('max(0.0, transformed.y)', '1.0'),
       ].join('\n'));
@@ -197,7 +206,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         '#include <common>',
         'uniform float uImpTop;',
         'varying float vImpCard; varying float vImpForm; varying float vImpYaw;',
-        'varying vec3 vImpRight; varying vec3 vImpOut;',
+        'varying vec3 vImpRight; varying vec3 vImpOut; varying vec2 vImpUv;',
         IMPOSTOR_GLSL,
       ].join('\n'))
       // THE SILHOUETTE IS THE ALPHA, and the alpha is BINARY — the composite
@@ -205,20 +214,20 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
       // threshold noise rather than a soft edge.
       .replace('#include <map_fragment>', [
         '#include <map_fragment>',
-        'float impX = (vUv.x - 0.5) * 2.0;',
+        'float impX = (vImpUv.x - 0.5) * 2.0;',
         'float impCov;',
         'float impLo;',           // 0 at the crown base, 1 at its top
         'if (vImpCard < 0.5) {',
         '  float impCl = impClear(vImpForm);',
-        '  impLo = clamp((vUv.y - impCl) / max(0.05, 1.0 - impCl), 0.0, 1.0);',
+        '  impLo = clamp((vImpUv.y - impCl) / max(0.05, 1.0 - impCl), 0.0, 1.0);',
         '  float impW = impWidth(vImpForm, impLo, vImpYaw);',
         '  float impTrunk = 0.10 + 0.05 * step(4.5, vImpForm);',
-        '  bool impInCrown = vUv.y >= impCl && abs(impX) <= impW;',
-        '  bool impInWood = vUv.y < impCl + 0.04 && abs(impX) <= impTrunk;',
+        '  bool impInCrown = vImpUv.y >= impCl && abs(impX) <= impW;',
+        '  bool impInWood = vImpUv.y < impCl + 0.04 && abs(impX) <= impTrunk;',
         '  impCov = (impInCrown || impInWood) ? 1.0 : 0.0;',
         '  impCov *= 1.0 - uImpTop;',
         '} else {',
-        '  vec2 impD = (vUv - 0.5) * 2.0;',
+        '  vec2 impD = (vImpUv - 0.5) * 2.0;',
         '  float impR = length(impD);',
         '  float impA = atan(impD.y, impD.x);',
         '  float impW = 0.88 + 0.12 * sin(impA * 3.0 + vImpYaw) + 0.07 * sin(impA * 5.0 - vImpYaw);',
@@ -241,12 +250,12 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
       .replace('#include <normal_fragment_begin>', [
         '#include <normal_fragment_begin>',
         'if (vImpCard < 0.5) {',
-        '  float impNx = (vUv.x - 0.5) * 2.0;',
+        '  float impNx = (vImpUv.x - 0.5) * 2.0;',
         '  float impNy = (impLo - 0.5) * 1.2;',
         '  float impNz = sqrt(max(0.06, 1.0 - min(0.94, impNx * impNx + impNy * impNy)));',
         '  normal = normalize(vImpRight * impNx + vec3(0.0, impNy, 0.0) + vImpOut * impNz);',
         '} else {',
-        '  vec2 impD = (vUv - 0.5) * 2.0;',
+        '  vec2 impD = (vImpUv - 0.5) * 2.0;',
         '  normal = normalize(vec3(impD.x * 0.7, 1.3, impD.y * 0.7));',
         '}',
       ].join('\n'));
