@@ -260,6 +260,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/sward-edges.mjs` | whether the sward's hard rectilinear edges are the cover raster's — the density field's own gradient DIRECTIONS as \|cos 2θ\|, which is 1 on an axis and 0 on a diagonal, with `__swardev(0\|1)` re-sweeping the field on ONE settled world (`SPOT=`, `FIX=`, `SHOTS=0` for numbers only) | ~6min |
 | `node devtools/sward-cover.test.mjs` | the same claim in pure node: a transect across an authored grass/bare boundary, its transition width and level count, and that the edge wanders along its own length rather than being a blurred straight line | instant |
 | `node devtools/band-d.mjs` | the half-metre: whether the material draws it better than the cover class did, measured at the top camera's MINIMUM zoom where the whole pane is inside the band (a chase seat sees the ground at a grazing angle and the band is a strip a few metres deep at the bottom of it) — plus the sward's per-blade half and the generic cascade octave by octave against the substrate (`PHASE=band\|sward\|cascade`, one a process; `SPOT=`) | ~9min a phase |
+| `node devtools/normal-ab.mjs` | whether the DEM normal map is a residual on the mesh or a replacement of it: the MATERIAL count at both ends of the dial — the claim a pixel diff cannot witness — then the residual's own strength interleaved on one settled world (`SPOT=`, `FIX=`, `CAMS=`) | ~9min |
 | `node devtools/substrate-ab.mjs` | whether the substrate draws a landscape or more noise: the field and the three layer shares at six points, an interleaved one-boot A/B cropped to the near field, and the domain and amount dials swept (`TD=dom` paints the shares, `SPOT=` for a cliff) | ~9min |
 | `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
 | `node devtools/menu-survey.mjs` | every menu screen photographed, SETTINGS scrolled through | ~2min |
@@ -4558,8 +4559,11 @@ illegal. Use a lookup texture. (`markTins` in `facade.ts` is the worked
 example.)
 
 **A backtick inside a GLSL comment breaks the enclosing TS template literal.**
-This has now cost three separate rounds. Do not write `\`f\`` in shader
-comments.
+This has now cost FIVE separate rounds — two of them in one session, both in
+comments explaining a helper's own parameters, which is where the urge to quote
+an identifier is strongest. Do not write `\`f\`` in shader comments. The tell is
+a `TS1005` at a line number inside the shader string; `npx tsc --noEmit` finds
+it in thirty seconds and nothing else will.
 
 ---
 
@@ -11165,3 +11169,191 @@ wherever the ground does. `__swardedge` reports the density field's own gradient
 directions as |cos 2θ| — 1 on an axis, 0 on a diagonal. **The baseline is not a
 half:** a uniformly random direction averages 2/π ≈ 0.637, and that is the
 number a field with no preference scores.
+
+## An object-space normal map REPLACES the mesh's normal — for years, it did
+
+The seat's verdict on the normal stack, and it is a composition fault rather
+than a tuning one: *the raw DEM object-space normal REPLACES the final geometry
+normal.* It does. three's `normal_fragment_maps` under
+`USE_NORMALMAP_OBJECTSPACE` is one line —
+
+```glsl
+normal = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;  // overrides
+```
+
+— and `terrainMatFor` had declared every fine terrain tile object-space since
+the hill's own normals shipped. So the hierarchy in force was:
+
+```
+the final carved, refined, channel-cut, hydro-banked mesh normal
+    -> THROWN AWAY
+-> the raw DEM's normal, flattened toward up by nscale (0.35)
+-> the substrate's material relief on top
+```
+
+**Every bit of geometry work this file records was invisible to the LIGHTING.**
+The corridor refinement, the cut faces and fill toes, the carved channels, the
+bank fields: the raster those normals were generated from knows about none of
+them, so the shading reverted to what the unmodified elevation data thought the
+ground looked like, precisely where the most care had been taken. And
+flattening a whole normal rather than a residual lit a real slope as though it
+were a third as steep, which is most of the soft "normal-mapped sheet" quality
+the terrain had close up. The comment that flattening replaced is its own
+evidence: it recorded that taken RAW a sea cliff's normal went near-horizontal
+and Chapman's rock faces turned black under a high sun, and eased the gradient
+to stop it — a residual has nothing to go black, because the mesh already
+carries the cliff and what is added is only what the mesh could not hold.
+
+**THE MAP IS A RESIDUAL NOW**: `normalMapBytes` stores the fine gradient LESS
+the gradient at the mesh's own cell size (`nrmCoarsePx`, the lattice unit in
+raster pixels), clamped to ±`NRM_RES` in R and G with B at the encoding's own
+zero. That difference is the ~8 m detail a 20-40 m lattice cannot express and
+nothing else. `terrainFx` composes it by Mikkelsen's surface gradient —
+`n' = normalize(N - (g - N·dot(N, g)))`, the projection of a world height
+gradient into the tangent plane — which is the form that is correct on an
+ALREADY TILTED surface; adding the raw vector over-rotates a steep face and
+under-rotates a flat one.
+
+Four things about the wiring, each of which is a compile or a regression:
+
+- **THE CHUNK IS REPLACED, AND ONLY FOR THE MATERIAL THAT WANTS IT.**
+  `terrainFx` takes a `dem` option and `terrainMatFor` is its only caller,
+  for two reasons that each cost a link. Most callers of `terrainFx` have no
+  normal map at all (the leaves, the stones, the grass, the baked skeletons)
+  and the chunk's `#include` line is in every Lambert shader whether or not the
+  material uses it — so an unconditional replace injects a read of an
+  undeclared `normalMap` into four materials, which then fail to link SILENTLY
+  and draw as a flat-shaded world. And `sphereNormal` replaces the same chunk
+  for the far shell's two-channel decode: it runs AFTER `terrainFx` in the
+  `onBeforeCompile` chain, so a replace here consumes its needle and leaves the
+  whole shell unlit by its own map, with the ring still drawing.
+- **IT IS SAMPLED AT `vNormalMapUv`, NOT AT A WORLD BOX.** three sampled it
+  there, the bake's reversed rows were chosen to agree with it, and both
+  lattices emit it (the plain one as `ix/SEG, 1 - iz/SEG`; the refined one from
+  the position within the tile, which is the same mapping). The first cut
+  derived it from `uSubBox` and would have tied the DEM detail to the SUBSTRATE
+  field's arrival — a tile whose field is not yet committed has a zero box, and
+  every one of them would have been lit by its lattice alone until it was.
+- **`normalMapType` IS VESTIGIAL AND IS KEPT FOR THE CHEAPER PATH.** Neither
+  branch of the chunk runs any more, so what the flag selects is no longer how
+  the map is read; what it still decides is what the rest of the shader
+  compiles. Object-space declares `vNormalMapUv` and nothing else, where
+  tangent-space ALSO builds a TBN frame in `normal_fragment_begin` — three
+  screen derivatives and a Gram-Schmidt per fragment — for a `tbn` this
+  material never reads. The far material has carried the same vestigial
+  declaration, for the same reason, since `sphereNormal` shipped.
+- **AND `nrmScale` LEFT THE STORE WITH ITS LAST READER.** The strength is a
+  uniform now, so the kernel's copy was a constant nobody reads — the exact
+  thing this file keeps warning about — and it is gone from `TerrainStore`, the
+  worker job and all four construction sites.
+
+### `?nscale=0` WAS NEVER "NORMALS OFF", AND ANYTHING TUNED ON IT WAS TUNED WRONG
+
+The seat named this outright and it is the more important half. Both mesh sites
+read `NRM_SCALE > 0 ? terrainMatFor(t, key) : terrainMat` — so at zero the tile
+was swapped onto the SHARED material, and `terrainMat` carries
+`normalTex(256, 9001, 4, 9, 70)` at scale 0.32: a generic procedural normal map
+tiled every seventy metres. The A/B everyone reached for was therefore
+**repeating procedural normal against DEM normal**, not flat against
+normal-mapped terrain, and it moved a great deal of the frame for reasons that
+had nothing to do with the dial's name.
+
+Both sites take `terrainMatFor` unconditionally now and `uNrmK` is the
+strength, live on the dial rack (`__tdetail({nrm})`, `?nscale=`), so the
+comparison is one settled world with one uniform flipped — the standard every
+other measurement in this programme is held to.
+
+**AND THE PROBE REPORTS THE AUTHORITY, NOT THE NUMBER.** `__tdetail().nrm`
+carries `k` beside `tiles` and `own` — how many drawn terrain tiles wear their
+OWN per-tile material against how many there are — because the claim this rests
+on is not about a strength, it is that the MATERIAL no longer changes with the
+dial, and a pixel measurement cannot witness that: a swap and a strength change
+both move pixels. Same fault as `__cam` reporting the zoom and not the
+stand-off, and `__tdetail().mat` running a rule nothing ran.
+
+### Colour and relief are separate returns now, and one of them has no shape
+
+The relief pass differentiates a scalar and bends the normal by its screen
+gradient, and `subRockTone` / `subMantleTone` each returned ONE number — so
+every term they carried claimed to be a height. Most are not:
+
+- the rock's **70 m and 26 m broad massing** is the tonal difference between
+  one face of an outcrop and the next, colour at a scale the mesh already
+  carries as actual geometry; summed into the relief it lit a hillside as
+  though it were corrugated at seventy metres, on top of the hillside the mesh
+  had just drawn;
+- a **massive face's metre-scale mottle** is a weathering stain, not a form;
+- the mantle's **fines' tonal regions** are damp and dry, fine and coarse;
+- and **DAMP GROUND IS NOT A SHAPE** — `- mo * dampTone` darkens a hollow, and
+  in the relief it bent the normal along the wetness gradient, lighting a damp
+  patch as a dent in ground that is perfectly flat.
+
+Both builders take an `out float relief` and accumulate it separately: the
+bedding traces, the joint sets, the clasts, the apron lobes, the rills and band
+D, and nothing tonal. The colour is unchanged — every term still reaches the
+return value — and only the normal stops reading the ones that have no height.
+`substrate-field.test.mjs` holds it with a needle that no tonal variable may
+appear in the `subRelief` expression, checked against the form it replaces.
+
+### The normal gets a more conservative ruler than the albedo
+
+`tdPx` is the equal-area footprint — the geometric mean of `fwidth` — and its
+own note records why: the max confines every fine octave to a few metres around
+the camera and the cascade does visibly nothing, while the geometric mean keeps
+detail an order of magnitude further out at the cost of mild along-ray
+aliasing, *which this palette's dither hides better than a smooth renderer
+would*. That trade is right for COLOUR and wrong for a lighting normal: **an
+aliased albedo stipples the dither, an aliased normal FLICKERS**, because the
+shading it drives is a nonlinear function of it and the sun moves.
+
+`tdPxN` is `mix(sqrt(dx*dy), max(dx, dy), 0.5)` — half way to the worst
+direction, not at it, for exactly the reason `tdPx` is not the max — and
+`subNKeep(px, pxN, λ)` is `tdBand(pxN, λ)` written as a factor on the relief's
+share of a term whose band limit is already stated once. So a trace that has
+stopped catching the light is still a trace, and one that catches it at random
+is gone first. The bedding and joints are exempt: `subLine` already filters on
+its own phase's `fwidth`, which is direction-aware by construction.
+
+### …and the 1 m octave thins where the material has its own metre
+
+Band D's handover is total (`subMicro`, the mineral share): the material's
+crystal grain, crumb and chips describe the half-metre better than a cover
+class can. The metre is a weaker case and takes a weaker rule — `SUB_OCT_M`,
+0.55 — because the substrate DOES speak there (clasts at 0.9-1.4 m, rills at
+1.8) but only where there is debris or scree to carry them, where band D draws
+on every mineral surface there is. A named constant, so the next argument is
+with a number.
+
+### Measured
+
+`devtools/normal-ab.mjs`, the Stelvio, one settled world, the dial flipped
+live, cropped to the near field, interleaved so the repeats give the floor at
+the same temporal separation as the cross pairs. **The first line is the
+measurement; the rest are numbers.**
+
+```
+materials: k=1 own 25/25 · k=0 own 25/25 · k=1 own 25/25
+```
+
+| | floor | the residual (0 against 1) | the old 0.35 | twice it |
+|---|---|---|---|---|
+| chase | 0.30-0.55 /255 · 1.7-3.0% | **1.214 · 9.74%** | 0.956 · 6.94% | 3.686 · 20.47% |
+| top | 0.66-1.74 · 2-11% | **2.205 · 16.75%** | 0.966 · 5.47% | 3.148 · 21.95% |
+
+**WHAT THESE NUMBERS ARE NOT.** They are the residual's own contribution at a
+spot, and they say nothing about the composition fault this unit is about,
+because the old behaviour cannot be reached by a uniform — it is a different
+shader, and a tool that flips `uNrmK` on the old revision flips a uniform that
+does not exist there. That the mesh's geometry now reaches the lighting is
+CODE READING, and it is the kind this file already accepts as sufficient: the
+interpolated `normal` is the base of the composition where it used to be the
+left-hand side of an assignment, and the chunk that overwrote it is gone from
+this material's shader. The measurement's job was the other claim — that the
+dial no longer swaps the material — and that is the line above the table.
+
+**The Stelvio chase floor is no longer exactly zero** (phase C measured 0.000
+there). It is 0.30-0.55/255 over 1.7-3.0% of the pane, which is the substrate's
+own relief re-weaving the dither as the lighting normal moves between legs; the
+signal clears it by two to four times in the mean and by three to six in
+pixels. Quote the floor beside the signal, always: a near-field term measured
+without one is a number with no scale.
