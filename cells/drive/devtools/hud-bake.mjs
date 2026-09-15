@@ -47,18 +47,33 @@ async function shot(bake, tag) {
   return { f, geom, errs };
 }
 
+// ── THE FLOOR FIRST, AND THE FIRST RUN OF THIS TOOL DID NOT HAVE ONE ──
+//
+// It reported mean 1.229/255 and a worst of 150.5 over this crop and called
+// the claim failed. A worst of 150 is a glyph flipping, not a tick moving —
+// the rig cluster carries the odometer, and two boots have driven different
+// distances, so a digit differs and the crop is 4.73% different before the
+// bezel is considered at all. TWO BOOTS OF THE SAME BUILD ARE THE CONTROL,
+// exactly as every interleaved A/B in this repo uses the same setting twice:
+// without it, "not zero" cannot be told from "not the same boot".
 const a = await shot(1, 'hudbake-on');
+const a2 = await shot(1, 'hudbake-on-b');
 const b = await shot(0, 'hudbake-off');
-console.log(`[${el()}] shot both · ${a.geom.w}x${a.geom.h} css · errors ${a.errs}/${b.errs}`);
+console.log(`[${el()}] shot three · ${a.geom.w}x${a.geom.h} css · errors ${a.errs}/${a2.errs}/${b.errs}`);
 
 // The dial sits bottom-right; take the bottom-right quarter, which contains it
 // and the rest of the rig cluster and nothing that streams.
 const cw = Math.round(a.geom.w * 0.45), ch = Math.round(a.geom.h * 0.22);
 const cx = a.geom.w - cw, cy = a.geom.h - ch;
-const out = join(WORK, 'hudbake-diff');
-const r = execFileSync('node', [
-  new URL('./imgdiff.mjs', import.meta.url).pathname, a.f, b.f, out,
-  `--crop=${cx},${cy},${cw},${ch}`, '--zoom=3', '--label=baked,per-frame',
-], { encoding: 'utf8' });
-console.log(r.trim());
-console.log(`\nA mean of 0 over that crop is the claim: the bake draws the same pixels.`);
+const diff = (p, q, out, label) => execFileSync('node', [
+  new URL('./imgdiff.mjs', import.meta.url).pathname, p, q, join(WORK, out),
+  `--crop=${cx},${cy},${cw},${ch}`, '--zoom=3', `--label=${label}`,
+], { encoding: 'utf8' }).trim();
+
+console.log(`\nFLOOR — the same build, booted twice:`);
+console.log(diff(a.f, a2.f, 'hudbake-floor', 'baked,baked again'));
+console.log(`\nSIGNAL — baked against the per-frame bezel:`);
+console.log(diff(a.f, b.f, 'hudbake-diff', 'baked,per-frame'));
+console.log(`\nThe claim is that the SIGNAL is inside the FLOOR: two boots differ`);
+console.log(`by their odometers and their engine state whatever the bezel does, so`);
+console.log(`a signal no larger than that is a bezel drawing the same pixels.`);
