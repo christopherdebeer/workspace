@@ -281,6 +281,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/tree-spend.mjs` | where the tree triangle budget went: cap against placed, and what the allocator CHARGED against what the GPU was handed, per family — `?treeprice=0` charges the atlas mean again (`FIX=`, `SECS=`) | ~6min |
 | `node client/perf-check.mjs` | the tree refresh still refills byte-for-byte what the pre-slice one did, over a deterministic mock world — a SANDBOXED check, so it breaks on a new free variable and says nothing until it is run: it was red for three commits and two deploys before anyone noticed | ~5s |
 | `node devtools/tree-manifest.mjs` | KNOWN against DRAWN: whether a tree exists further out than it is built, with the placed counts and edges beside them as the live witness that nothing on screen moved — `?treemanifest=<m>` equal to the draw range is the single ring (`FIX=`, `SECS=`) | ~8min |
+| `node devtools/tree-impostor.mjs` | what the impostor tier stands up and what it changes on screen — ONE boot, off/on/off through `__impostor()`, so the repeat is the floor; read whole AND over the canopy band, because a chase frame is mostly sward and sky (`TRIS=` raw triangles, `BAND=`) | ~6min |
 | `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
@@ -4185,6 +4186,90 @@ counts and edges match the SETTLED first leg exactly, which is the comparison
 that matters. A gate that demands two signals be simultaneously still is
 stricter than either claim needs, and is worth loosening before the next run
 rather than being read as a failure.
+
+### A first-pass impostor: a tree acquires detail, not existence
+
+The seat's reframing after the budget work: *the tree cap is the wrong
+abstraction. A tree should be a persistent fact about the world; only its
+representation should become cheaper with distance.* The manifest made the fact
+reach past the geometry; this is what stands where the geometry does not.
+
+**IT DRAWS WHAT ADMISSION TURNED DOWN, not what is past the ring**, and the
+device dump is why: at the seat's rack the budget is spent to the last triangle
+and conifer's edge is 318 m inside a 2,800 m range. The population the player
+watches appear is cut by the CAP, well within the ring — and those trees are
+already gathered, so the tier costs no new walking at all.
+
+**MEMBERSHIP IS A STABLE HASH, NEVER A SECOND NEAREST-N.** `ezAdmit` spends
+9 ms selecting 2,297 of ~57,000; another selection of that shape over the
+remaining fifty-four thousand is neither affordable nor correct, because a rank
+that moves with the truck is the reshuffle this programme is removing. The hash
+is keyed on the tree's own position — decided once, the same from every vantage
+— and thins as the inverse square, which is constant density on the GLASS.
+
+**AND FULL DENSITY STARTS AT THE FAMILY'S OWN ADMITTED EDGE.** The first cut
+thinned from a fixed 260 m while the geometry stopped at 428, so every tree the
+tier could draw was already deep in the thinned region and ONE IN FIVE stood up
+(321 of 1,614). A tree a metre past the edge must be drawn with near-certainty
+or the handoff is a thinning, which is the pop wearing a gentler name. Anchored
+to `ezEdge[fam]`: 932 of 1,614, and the rule is adaptive in the right direction
+— a family the budget cuts hard starts thinning early, one it barely cuts thins
+late.
+
+Four more decisions, each with its reason in the code: the form is the TREE'S
+own, cached per site (a cone at 400 m that is a round crown at 200 has changed
+species in front of the player) at 400 new ones a refresh; the instance matrix
+is translation and scale only, so the billboard is one line and the tree's yaw
+phases the SILHOUETTE rather than turning the card; two cards weighted
+continuously by the camera's elevation, set in `aimSky` because the dock's POV
+is 1.3 m up while the chart's may be kilometres; and the ground is the raster,
+not `groundAt`, because nothing here is nearer than the cap edge and the mesh
+read is the refresh's dearest call.
+
+**Measured**, `devtools/tree-impostor.mjs` on `at-yosemite` at a 900,000
+triangle budget, ONE boot, interleaved off / on / off:
+
+| | |
+|---|---|
+| skeletons | 0.88M triangles, edges b689 / c428 / s482 |
+| impostors | **932 of 1,614 offered · 3.7k triangles · 0.42% of the vegetation bill** |
+| the off leg | drew 0 |
+| census (independent) | `veg-impostor` 3,728 triangles in the scene — 932 × 4, exactly |
+| whole frame: floor / signal | 0.904 / **2.248** /255 |
+| the canopy band: floor / signal | 0.325 / **10.673** /255 · 0.85% / 10.77% of pixels |
+
+**THE WHOLE-FRAME NUMBER UNDERSTATES IT BY AN ORDER OF MAGNITUDE, and the band
+is why.** A chase frame is mostly sward and sky; this tier draws in a strip at
+the treeline. Read whole it clears its floor by 2.5x, read over a band that
+still caught the grass by 3, and read over the canopy alone by **33**. The
+signal never moved — what changed is how much of the measurement was of
+something else. *A mean over pixels the term cannot reach is not a weaker
+measurement, it is a different one.*
+
+And the frames say what the numbers cannot: the wood's canopy had HOLES in it
+where the cap had cut trees, and the impostors fill them — dark green masses in
+the same tone as the skeletons beside them, not sprites standing out of a
+treeline. **That is the tier's real job stated as a picture**: the cap was not
+merely bringing the edge in, it was leaving gaps in the middle of a wood.
+
+**NOT DONE, DELIBERATELY:** the manifest's annulus is not drawn (it needs its
+own gather, and the cap is the louder fault); there is no geometry-impostor
+dissolve, because a dissolve between representations that do not yet agree
+hides the disagreement rather than fixing it; and the side card faces the
+camera about Y, so orbiting a NEAR impostor would turn its crown — a
+directional atlas is the answer, and the distances this tier draws at keep the
+swivel under the quantiser for now.
+
+**THE TOOL'S OWN FOUR FAULTS**, because every one of them reported a working
+tier as a broken one. `?treetris=` is in RAW TRIANGLES and was passed
+megatriangles, so the budget was one triangle and no skeleton was admitted at
+all — an A/B between nothing and impostors, which cannot show a handoff.
+`__census()` returns `byTris`/`byCount`, not `kind`/`tris`, so the independent
+witness read undefined and printed zero while 971 impostors were staged; and
+`byTris` is the TOP TWELVE, so absence there is not zero and must be printed as
+a different statement. `ez.placed` is an array of records (`[object Object]`,
+for the second time this session). And `imgdiff`'s last line is the output
+PATH, so the diff numbers were replaced by a filename.
 
 ### The polish pass — another agent, on the cell, two pushes apart
 

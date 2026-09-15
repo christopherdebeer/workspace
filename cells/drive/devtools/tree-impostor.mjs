@@ -62,9 +62,21 @@ const census = await q(() => window.__census());
 const errs = d.errors.slice(0, 4);
 await d.close();
 
-const diff = (a, b, out) => {
+// ── CROP TO WHERE THE TIER DRAWS ──
+// A frame-wide diff of a chase view is mostly sward and sky, and this tier
+// draws in a band at the treeline: read whole, a real change came out at 2.5x
+// its floor, and read over the band at eleven times it. A mean over pixels the
+// term cannot reach is not a weaker measurement, it is a different one.
+// AND THE BAND STOPS ABOVE THE SWARD. Taken 110 rows deep it reached the grass,
+// whose own clock moves it between legs: floor 3.203/255, signal 10.4, a ratio
+// of three. Seventy rows — the canopy alone — reads floor 0.325 and signal
+// 10.673, which is THIRTY-THREE times it. The signal never moved; what changed
+// is how much of the measurement was of something else.
+const BAND = process.env.BAND ?? '200,300,190,70';
+const diff = (a, b, out, crop) => {
   const t = execFileSync('node', [new URL('./imgdiff.mjs', import.meta.url).pathname,
-    `${OUT}/imp-${a}.png`, `${OUT}/imp-${b}.png`, `${OUT}/${out}`], { encoding: 'utf8' });
+    `${OUT}/imp-${a}.png`, `${OUT}/imp-${b}.png`, `${OUT}/${out}`,
+    ...(crop ? [`--crop=${BAND}`, '--zoom=4'] : [])], { encoding: 'utf8' });
   // The last line is the output PATH. The numbers are the line before it, and
   // taking the last one printed a filename where a measurement should be.
   const lines = t.trim().split('\n');
@@ -88,6 +100,10 @@ const inScene = census.byTris?.['veg-impostor'];
 console.log(`  census: ${inScene === undefined
   ? 'veg-impostor outside the top twelve by triangles — absent from this list is not zero'
   : `veg-impostor ${inScene} tris in the scene`}`);
-console.log(`\n  FLOOR  (off against off) ${diff('a1', 'a2', 'imp-floor.png')}`);
-console.log(`  SIGNAL (off against on)  ${diff('a1', 'b1', 'imp-signal.png')}`);
+console.log(`\n  whole frame`);
+console.log(`    FLOOR  (off against off) ${diff('a1', 'a2', 'imp-floor.png')}`);
+console.log(`    SIGNAL (off against on)  ${diff('a1', 'b1', 'imp-signal.png')}`);
+console.log(`  the band the tier draws in (${BAND})`);
+console.log(`    FLOOR  (off against off) ${diff('a1', 'a2', 'imp-band-floor.png', true)}`);
+console.log(`    SIGNAL (off against on)  ${diff('a1', 'b1', 'imp-band.png', true)}`);
 console.log(`\n  Frames in ${OUT}: imp-a1/b1/a2.png, imp-floor.png, imp-signal.png`);
