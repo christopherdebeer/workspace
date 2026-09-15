@@ -144,26 +144,40 @@ for (const station of (wants('band') ? ['near-chart', 'chase-strip'] : [])) {
     writeFileSync(`${OUT}/${station}-${tag}.png`, await d.page.screenshot({ timeout: 240000 }));
   }
   await q(() => window.__tdetail({ micro: 1, relief: 0.35 }));
-  // ── THE CROP IS THE CANVAS'S OWN RECT, NOT THE WINDOW'S ──
+  // ── THE CROP IS FOUND BY SCANNING, NOT BY ASKING THE DOM ──
   //
-  // The first cut cropped the chase station to the bottom fifth of the WINDOW
-  // and read exactly 0.000 on all six pairs including the floor — which is not
-  // a quiet term, it is a measurement of a region the renderer does not draw
-  // into. On this device the world ends about seventeen per cent above the
-  // window's foot. Diffed whole, the same pair reads 0.755/255 over 5.84% of
-  // the frame, and scanned by rows the near ground is 2.587 over 20.13%. A
-  // crop stated in window fractions is a crop of an assumption.
-  const box = await q(() => {
-    const c = document.querySelector('canvas');
-    const r = c ? c.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-    return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
-  });
-  // The near chart is band D edge to edge; from the seat the band is the
-  // NEAR GROUND — a strip a few tens of metres deep, which on a canvas this
-  // shape is its lower quarter and not its foot.
-  const crop = station === 'near-chart'
-    ? `--crop=${box.x + Math.round(box.w * 0.1)},${box.y + Math.round(box.h * 0.1)},${Math.round(box.w * 0.8)},${Math.round(box.h * 0.8)}`
-    : `--crop=${box.x + Math.round(box.w * 0.1)},${box.y + Math.round(box.h * 0.62)},${Math.round(box.w * 0.8)},${Math.round(box.h * 0.25)}`;
+  // Two cuts of this got it wrong and both failed the same way — an exactly
+  // 0.000 reading on all six pairs INCLUDING THE FLOOR, which is never a quiet
+  // term and always a crop of a region the renderer does not draw into. First
+  // it was the bottom fifth of the WINDOW (the world ends about seventeen per
+  // cent above the window's foot here); then it was
+  // `document.querySelector('canvas')`, which returns whichever canvas is
+  // FIRST in the DOM and that is the HUD's, not the renderer's.
+  //
+  // So the band is measured rather than assumed: diff the two extreme legs by
+  // rows and keep the rows that actually moved. That is what answered the
+  // question by hand, it needs no knowledge of the layout, and a station where
+  // NOTHING moved reports itself as such instead of reporting a floor.
+  const box = await q(() => ({ w: window.innerWidth, h: window.innerHeight }));
+  const rowBand = (aTag, bTag) => {
+    const H = 40, x0 = Math.round(box.w * 0.1), w0 = Math.round(box.w * 0.8);
+    let best = -1, bestV = 0, lo = -1, hi = -1;
+    for (let y = 0; y + H <= box.h; y += H) {
+      const out = execFileSync('node', [new URL('./imgdiff.mjs', import.meta.url).pathname,
+        `${OUT}/${station}-${aTag}.png`, `${OUT}/${station}-${bTag}.png`,
+        `${OUT}/${station}-scan.png`, `--crop=${x0},${y},${w0},${H}`, '--gain=8'], { encoding: 'utf8' });
+      const m = out.match(/mean luma delta ([\d.]+)\/255/);
+      const v = m ? Number(m[1]) : 0;
+      if (v > bestV) { bestV = v; best = y; }
+      if (v > 0.02) { if (lo < 0) lo = y; hi = y + H; }
+    }
+    return { best, bestV, lo: lo < 0 ? Math.round(box.h * 0.25) : lo, hi: hi < 0 ? Math.round(box.h * 0.8) : hi };
+  };
+  const band = rowBand('mic0', 'mic2');
+  console.log(`  [${station}] the band that MOVED: rows ${band.lo}-${band.hi}`
+    + ` (worst 40-row strip at ${band.best}, ${band.bestV}/255)`);
+  const crop = `--crop=${Math.round(box.w * 0.1)},${band.lo},`
+    + `${Math.round(box.w * 0.8)},${Math.max(40, band.hi - band.lo)}`;
   for (const [a, b, label] of pairs) {
     const out = execFileSync('node', [new URL('./imgdiff.mjs', import.meta.url).pathname,
       `${OUT}/${station}-${a}.png`, `${OUT}/${station}-${b}.png`, `${OUT}/${station}-d-${a}-${b}.png`,

@@ -257,6 +257,8 @@ Nothing here is fast. Budget for it.
 | `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
 | `node devtools/sward-sub.mjs` | whether the sward's density and the flora's habitat follow the geomorphic field, as the correlation and the habitat counts, with `swardsub=0` as the control (`FIX=` a fixture or `SPOT=` a live place; CPU numbers rather than pixels — see the note) | ~3min |
 | `node devtools/ground-view.mjs` | a ground view is a uniform, not a sheet: the chip sets the channel in every camera, the legend is tallied off the attribute the fragment reads, and the chase frame moves (`FIX=` for an offline world) | ~6min |
+| `node devtools/sward-edges.mjs` | whether the sward's hard rectilinear edges are the cover raster's — the density field's own gradient DIRECTIONS as \|cos 2θ\|, which is 1 on an axis and 0 on a diagonal, with `__swardev(0\|1)` re-sweeping the field on ONE settled world (`SPOT=`, `FIX=`, `SHOTS=0` for numbers only) | ~6min |
+| `node devtools/sward-cover.test.mjs` | the same claim in pure node: a transect across an authored grass/bare boundary, its transition width and level count, and that the edge wanders along its own length rather than being a blurred straight line | instant |
 | `node devtools/band-d.mjs` | the half-metre: whether the material draws it better than the cover class did, measured at the top camera's MINIMUM zoom where the whole pane is inside the band (a chase seat sees the ground at a grazing angle and the band is a strip a few metres deep at the bottom of it) — plus the sward's per-blade half and the generic cascade octave by octave against the substrate (`PHASE=band\|sward\|cascade`, one a process; `SPOT=`) | ~9min a phase |
 | `node devtools/substrate-ab.mjs` | whether the substrate draws a landscape or more noise: the field and the three layer shares at six points, an interleaved one-boot A/B cropped to the near field, and the domain and amount dials swept (`TD=dom` paints the shares, `SPOT=` for a cliff) | ~9min |
 | `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
@@ -10749,19 +10751,30 @@ different SURFACES and not as one noise at two gains.
   band D and the comparison is one settled boot. Every other measurement in
   this programme is held to that and this one had no way to meet it otherwise.
 
-**Measured**, the Stelvio (`46.5302, 10.4547`), one settled world, NOON, clear:
-
-| near chart, 0.07 m an art pixel | mean /255 | pixels moved >3 |
-|---|---|---|
-| floor (the same setting, twice) | **0.002 / 0.000** | 0.02% / 0% |
-| **SIGNAL, micro 0 against 1** | **1.642** | **12.77%** |
-| …of which colour alone (relief 0) | 0.767 | 7.62% |
-| micro 1 against 2 | 1.520 | 10.95% |
-
-…and from the SEAT, scanned by rows, the near ground reads **2.587/255 over
+**Measured**, the Stelvio (`46.5302, 10.4547`), one settled world, NOON, clear.
+**Quote the SEAT row and not the chart row**, for the reason under the table:
+from the chase camera, scanned by rows, the near ground reads **2.587/255 over
 20.13% of its band** against a floor of exactly 0.000 — the Stelvio chase floor
 has been exactly zero since phase C, which is what makes that attribution
 clean.
+
+| near chart, 0.07 m an art pixel | mean /255 | pixels moved >3 |
+|---|---|---|
+| floor (the same setting, twice) | 0.002 / 0.000 | 0.02% / 0% |
+| SIGNAL, micro 0 against 1 | 1.642 | 12.77% |
+| …of which colour alone (relief 0) | 0.767 | 7.62% |
+| micro 1 against 2 | 1.520 | 10.95% |
+
+**AND THAT CHART ROW DID NOT REPRODUCE, which is the more useful finding.** The
+same station on the tree after the producer rewrite read **0.077/255 over 0.6%**
+— twenty times less — and scanned by rows the frame moves in its top three
+hundred and NOWHERE below that. The top camera at ZOOM_MIN stands 22 m over a
+truck that is parked on a mountain PASS, so most of that pane is carriageway and
+shadow, and how much of it is ground depends on where the rig happened to stop.
+A station whose reading depends on the parking is not a station. The chase band
+is the honest one and is also the one a driver sees; the chart row is kept here
+because a number that moved by twenty times between two trees is worth being
+able to find again.
 
 **THE HAIRLINES ARE NEARLY INVISIBLE AND THAT IS CORRECT.** They are 3 cm wide
 on a 0.45 m spacing, and `subLine`'s own phase filter fades them out by about
@@ -10771,13 +10784,16 @@ and chips at 0.11-0.28 m, which are one and a half to four pixels there. They
 are right and quiet; widening them past what a crack is would be the opposite
 of the band limit.
 
-**AND THE TOOL'S FIRST CROP MEASURED A REGION THE RENDERER DOES NOT DRAW INTO.**
-`band-d.mjs` cropped the chase station to the bottom fifth of the WINDOW and
-read exactly 0.000 on all six pairs INCLUDING THE FLOOR — which is not a quiet
-term, it is a measurement of nothing. On this device the world ends about
-seventeen per cent above the window's foot. It crops to the canvas's own
-`getBoundingClientRect` now. A floor of exactly zero on every pair is the tell:
-a real floor has dither in it.
+**AND THE TOOL'S CROP GOT IT WRONG TWICE, THE SAME WAY BOTH TIMES.** An exactly
+**0.000** reading on all six pairs INCLUDING THE FLOOR is never a quiet term; it
+is a crop of a region the renderer does not draw into, and a real floor has
+dither in it. First it was the bottom fifth of the WINDOW — the world ends about
+seventeen per cent above the window's foot here. Then it was
+`document.querySelector('canvas')`, which returns whichever canvas is FIRST in
+the DOM, and that is the HUD's rather than the renderer's: same symptom, second
+cause, one more run spent. The band is SCANNED now — diff the two extreme legs
+by forty-row strips and keep the rows that moved — which needs no knowledge of
+the layout and reports a station where nothing moved as such.
 
 ## The producer, rebuilt: a cliff survives the downsample and the tile edge is gone
 
@@ -11008,8 +11024,144 @@ call, and `swardsub=0` is the exact A/B for it.
   one place that writes it so the next reader argues with the claim.
 - **Rock family is still procedural morphology standing in for lithology.** Not
   worth tuning hard until a regional geology seed exists to key it on.
-- **The 4 m and 1 m octaves of the cascade are untouched.** The review's point
-  that a loud generic luminance hierarchy competes with the material system
-  stands; with band D taking the half-metre and the pedestal fixed, the dials to
-  answer it with are now honest, and that is the next measurement rather than a
-  guess.
+- **The 4 m and 1 m octaves of the cascade are untouched** — and the
+  measurement that was owed here has now been taken, so what follows is a
+  finding rather than a plan.
+
+### THE LOUD PART OF THE CASCADE IS THE 15 m MOTTLE, NOT THE 4 m OCTAVE
+
+The review's objection was that a generic luminance hierarchy is still laid
+under an increasingly specific material model, and that **at 4 m especially**
+it occupies the same perceptual territory. Measured at the Stelvio, chase, over
+the drawn ground, each octave turned off in turn on one settled world
+(`band-d.mjs PHASE=cascade`):
+
+| | mean /255 | pixels moved >3 |
+|---|---|---|
+| floor (the same setting, twice) | 0.237 | 0.39% |
+| the 0.25 m octave alone | 0.417 | 0.57% |
+| the 1 m octave alone | 0.715 | 4.98% |
+| the 4 m octave alone | 0.557 | 4.67% |
+| **the 15 m mottle alone** | **2.345** | **17.71%** |
+| the whole cascade | 2.644 | 17.51% |
+| **the whole substrate** | **4.092** | **31.03%** |
+
+**The mottle is nine tenths of the cascade** (2.345 of 2.644) and the two
+octaves the objection named are each about half a palette step, barely twice
+the floor. So the thing competing with the material model is not the 4 m
+octave: it is the two crossed sines at ±0.045 that this renderer has drawn
+since before any of it existed, and which have no band limit worth the name
+because their own fade reads `uMpp` — zero from the seat, the dead term this
+file already records.
+
+**Read the floor before the rows.** At 0.237 the 0.25 m octave's 0.417 is under
+twice it and is not a measurement of anything; the mottle's 2.345 is ten times
+it and is. And this is ONE PLACE — a bare alpine pass where the substrate has a
+great deal to say (it moves 31% of the ground here). On vegetated ground the
+balance will differ and the same tool answers it.
+
+## The cover raster was drawing rectangles in the grass
+
+Reported from the seat with a frame: hard rectilinear boundaries in the sward,
+at a scale and a geometry that matched nothing in the blade lattice. The
+diagnosis was read straight off the code and is exact.
+
+```
+density = (cv === null ? 0.35 : GRASS_M2[cv] ?? 0.3) * lift;
+```
+
+`cv` is `sampleCover(wx, wz)` — a NEAREST-NEIGHBOUR read of a z12 raster, about
+30 m a pixel at mid latitude — and `GRASS_M2` has categorical jumps in it, grass
+0.85 beside bare 0. So the density field said *this 30 m square is meadow, the
+one next to it is nothing*, and the 8 m sward lattice, the field texture's
+`LinearFilter` and every distance-band fade downstream could only turn that into
+an 8–16 m ramp about a **geometrically straight** edge. The plateaus were
+square because the raster is square.
+
+**AND THE TERRAIN ALREADY KNEW BETTER.** `coverPaint` exists in main.ts for
+precisely this reason — do not let raster pixels appear literally in the world —
+and jitters its lookup so the ground COLOUR gets an organic boundary. The sward
+bypassed it and read the raw class. So the colour transition under the grass was
+irregular and the density transition was a rectangle laid over the top of it,
+which is the discrepancy the frame shows.
+
+**AND THE SUBSTRATE COULD NOT HAVE FIXED IT.** Phase D multiplies by
+`subGrassAllow`, which ranges from 1 down toward 0.2 — a modifier on an already
+categorical base. `0.85 × organic` is organic; `0 × organic` is still exactly
+zero. No amount of smooth geology softens a zero, which is the same shape of
+fault as the producer's: **categorical cover making a stronger statement than it
+should**, met one layer over.
+
+### The class becomes evidence, and the evidence is continuous
+
+`client/sward-cover.ts` is pure and is the one place both readers now call — the
+8 m density sweep and the shrub lattice were each doing their own `GRASS_M2`
+lookup off their own `sampleCover`, which is two chances to disagree about where
+the vegetation stops.
+
+- **NINE TAPS OVER ONE COVER TEXEL'S FOOTPRINT**, weighted 2 at the centre and 1
+  at each of eight ring points on two radii, so a boundary arrives as a ramp
+  instead of a step.
+- **TEN WEIGHT UNITS IS NOT AN ARBITRARY COUNT.** Over a binary boundary the
+  evidence can only take as many values as there are weight units, so the step
+  between adjacent levels is the class range over that count. Five taps gave six
+  levels and a **0.13** jump between them — a staircase, not a ramp. Ten gives a
+  worst step of 0.078.
+- **EVERY TAP IS WARPED, THE CENTRE INCLUDED, AND THAT IS THE WHOLE POINT.** The
+  first cut warped only the ring. Measured: the profile across a boundary DID
+  vary with z and the half-way crossing **did not move a metre in ninety** —
+  because the centre carries two weight units of eight, so its own flip is the
+  largest jump in the ramp and it happens exactly on the raster's straight line.
+  A soft ramp hung on a hard edge is still a hard edge. Warping the centre means
+  the class at a point is not always the class the raster holds there, which is
+  exactly what `coverPaint` has done for the ground colour for years.
+- **THE WARP IS ON THE SAMPLE, NOT ON THE RESULT.** Displacing where each tap
+  LOOKS bends the boundary; smoothing the answer afterwards only blurs a
+  straight line into a straight gradient. This is also why it is not simply a
+  blur of WorldCover: a blur costs the mapped boundaries — a field, a wood, a
+  lake margin — that are genuinely sharp and genuinely there.
+- **TWO CLASSES ARE SURFACES AND ARE NOT SOFTENED.** Water and snow are not
+  points on a vegetation continuum with a classifier's threshold drawn through
+  them; they are things lying on the ground whose edge the bank and shore rules
+  own. A kernel that averaged across them grows grass out over a lake — in the
+  arithmetic, a water texel with four grassy neighbours comes out at 0.57 of full
+  meadow. The centre's own class vetoes first, and only then does the
+  neighbourhood speak.
+- **AND BARE IS NO LONGER MATHEMATICALLY IMPOSSIBLE GRASS.** WorldCover's
+  "bare / sparse vegetation" is a categorical observation at raster scale and can
+  hold isolated tufts, weeds, dry grass between rocks and anything under its own
+  classification threshold. `bare` is 0.07 and `built` 0.08 — priors with floors
+  — and the continuous fields downstream do the rest. Water and snow stay the
+  two real zeroes.
+
+**Measured in pure node** (`devtools/sward-cover.test.mjs`), a transect across an
+authored grass/bare boundary in a 30 m raster:
+
+| | old (one texel) | new (the neighbourhood) |
+|---|---|---|
+| transition width | **0.0 m** — it changes between two adjacent pixels | **29.0 m** |
+| distinct levels across the transect | 2 | **8** |
+| where the ramp crosses its half-way point, along 180 m of the SAME edge | the same x throughout | **spread 16.0 m, sd 4.5 m** |
+| the meadow well inside it | 0.85 | 0.85 |
+| the bare ground well past it | 0.07 | 0.07 |
+
+The third row is the one that separates this from a blur: the boundary wanders
+along its own length. And `strength 0` reproduces the old nearest-neighbour
+table **to the bit**, which is what makes `?swardev=0` a control rather than an
+opinion.
+
+### …and it is a ONE-BOOT A/B, which nothing else about the sward has been
+
+`__swardev(0|1)` re-sweeps the field synchronously. Every other sward switch is
+read once at boot and has had to be measured across two boots under two skies —
+and a claim about a hard EDGE is exactly the claim two boots blur, because they
+differ in where every tile landed. This one does not.
+
+**THE LIVE METRIC IS NOT PIXELS EITHER.** A categorical raster boundary is
+**axis-aligned by construction**: WorldCover is a lat/lon grid and the sward
+field is in local metres off the same projection, so a step inherited from the
+raster runs exactly north-south or east-west while an ecological gradient points
+wherever the ground does. `__swardedge` reports the density field's own gradient
+directions as |cos 2θ| — 1 on an axis, 0 on a diagonal. **The baseline is not a
+half:** a uniformly random direction averages 2/π ≈ 0.637, and that is the
+number a field with no preference scores.

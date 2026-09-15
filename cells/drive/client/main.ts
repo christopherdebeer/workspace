@@ -86,6 +86,8 @@ import { SUB_GLSL, SUB_DOM_M, subDomainAt, subEvidence, subExpressOf, subGrainOf
   subGrassAllow, SUB_SWARD_K, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
   type SubstrateField } from './substrate-field';
 import { gramDecode } from './facade-grammar';
+import { GRASS_M2, GRASS_UNKNOWN, GRASS_DEFAULT, swardCoverEvidence, SWARD_EV }
+  from './sward-cover';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { startLab } from './labs';
 import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
@@ -2212,6 +2214,19 @@ const SUB_SWARD_TINT = 0.65;
  *  the field already calls bare cannot push past one, and a cut through a
  *  meadow lifts a great deal. Interpolated into the fragment. */
 const SUB_CUT_EX = 0.62, SUB_CUT_MANTLE = 0.34, SUB_CUT_GRASS = 0.85;
+/** ── THE SWARD'S BASE RATE, AS EVIDENCE RATHER THAN A CLASS ──
+ *
+ *  0 is the old nearest-neighbour read EXACTLY — the centre sample and nothing
+ *  else — so `?swardev=0` is a true control for the claim that the hard
+ *  rectilinear edges in the grass are the z12 raster's and not the lattice's.
+ *  See client/sward-cover.ts. */
+let swardEv = qsOn('swardev', true) ? 1 : 0;
+/** One call, two readers: the 8 m density sweep and the shrub lattice. They
+ *  were each doing their own GRASS_M2 lookup off their own sampleCover, which
+ *  is two chances to disagree about where the vegetation stops. */
+function swardCoverRate(x: number, z: number): number {
+  return swardCoverEvidence(sampleCover, x, z, swardEv);
+}
 /** `airblur=1` puts the aerial perspective's DISTANCE BLUR back — the term that
  *  mixed the far field toward `softTex` as well as toward the haze colour. Off
  *  by default: see `uAirBlur`. The exact A/B for the far-field sharpness. */
@@ -10882,22 +10897,11 @@ const vegSeedStats = new Map<string, VegSeedStats>();
 const VEG_RANGE = 700;                      // plants are shown within this
 const vegKey = (x: number, z: number): string => `${Math.floor(x / VEG_CELL)},${Math.floor(z / VEG_CELL)}`;
 
-// How many tufts a square metre carries, by cover class. Zero is the important
-// entry: a salt pan, a snowfield and open water grow nothing, and the whole
-// point of reading cover is that they stay bare.
-const GRASS_M2: Record<number, number> = {
-  10: 0.30,   // tree     — forest floor, thinner than open ground
-  20: 0.40,   // shrub
-  30: 0.85,   // grass    — the case this exists for
-  40: 0.55,   // crop
-  50: 0.10,   // built
-  60: 0,      // bare
-  70: 0,      // snow
-  80: 0,      // water
-  90: 0.70,   // wetland
-  95: 0.35,   // mangrove
-  100: 0.18,  // moss
-};
+// GRASS_M2 and the continuous evidence that replaced reading it directly live
+// in client/sward-cover.ts; see that file's header for why a categorical raster
+// was drawing rectangles in the grass. `swardCoverRate` is the one call the
+// sweep and the shrub lattice both make, so they cannot hold different
+// opinions about where the vegetation stops.
 // BANDED, because one lattice cannot be both dense and wide. A single 1m
 // spacing out to 130m is fifty thousand slots a pass; a single 3m spacing is
 // cheap and looks like a lawn someone mowed badly. So the step COARSENS with
@@ -12083,9 +12087,17 @@ function swardRows(from: number, to: number): void {
       const eEff = elevEffAt(wx, wz);
       const cl = climateAt(wx, wz, eEff);
       const lift = swardLift(eEff, cl.treeline);
+      // ── THE BASE RATE IS A NEIGHBOURHOOD, NOT A TEXEL ──
+      //
+      // This line read GRASS_M2[cv] with `cv` a nearest-neighbour sample of a
+      // ~30 m raster, so the field held square categorical plateaus — 0.85
+      // against 0 across a straight pixel boundary — and everything downstream
+      // could only ramp that over eight metres. The terrain's own colour has
+      // used a jittered lookup for exactly this reason since coverPaint was
+      // written; the sward bypassed it.
       let density = seaOn && h + baseElev < seaSurfaceAbs() - SWARD_SHALLOW
         ? 0
-        : (cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3)) * lift;
+        : swardCoverRate(wx, wz) * lift;
       const slope = Math.abs(groundAt(wx + SWARD_FM, wz) - h) / SWARD_FM;
       let [pr, pg, pb] = terrainPalette(h + baseElev, slope, bankPaint(wx, wz), wx, wz);
       // B/A were spare floats. They carry reed/mineral suitability on the
@@ -12107,7 +12119,7 @@ function swardRows(from: number, to: number): void {
           // fade; otherwise the coarse raster leaves a broad shaved corridor.
           if (bs && !bs.wet && cv === COVER.water) {
             const bankCover = bankPaint(wx, wz);
-            density = (bankCover === null ? 0.35 : (GRASS_M2[bankCover] ?? 0.3)) * lift;
+            density = (bankCover === null ? GRASS_UNKNOWN : (GRASS_M2[bankCover] ?? GRASS_DEFAULT)) * lift;
           }
           // A north/south bank must be as steep as an east/west one.
           // Pay the second ground read only in bank/wetland texels.
@@ -13116,7 +13128,7 @@ function refreshSward(): void {
           bx = qx; bz = qz;
           const px2 = qx * 8 + 4, pz2 = qz * 8 + 4;
           const cv = sampleCover(px2, pz2);
-          blockRate = cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3);
+          blockRate = swardCoverRate(px2, pz2);
           // The same palette the terrain verts were painted with, at this
           // block's own height, grade and cover — so the blend target IS the
           // ground here, not a generic dirt.
@@ -34163,6 +34175,9 @@ function truckSpec(): Record<string, number> {
     // drawn population; that is a frame, and band-d.mjs is where it is read.
     micro: swardU.uSwardMic.value,
     meanMineral: +(sm / Math.max(1, n)).toFixed(3),
+    // …and whether the base rate came off a neighbourhood or off one texel.
+    // A run that does not say which is a run nobody can compare.
+    ev: swardEv,
   };
 };
 /**
@@ -34176,6 +34191,82 @@ function truckSpec(): Record<string, number> {
 (window as unknown as { __swardmic?: object }).__swardmic = (v?: number): object => {
   if (v !== undefined) swardU.uSwardMic.value = clamp(v, 0, 1);
   return { micro: swardU.uSwardMic.value, swardsub: SUB_SWARD };
+};
+/**
+ * ── THE COVER EVIDENCE, LIVE, BECAUSE THE FIELD CAN BE RE-SWEPT ──
+ *
+ * 0 is the old nearest-neighbour read exactly and 1 the neighbourhood. Unlike
+ * every other world switch this one CAN be flipped on a settled world — the
+ * density field is a sweep, not a boot-time const — so the comparison is one
+ * boot with one thing changed rather than two boots under two skies, which is
+ * the standard the rest of this programme is held to and the one a claim about
+ * a hard EDGE most needs: two boots differ in where every tile landed.
+ *
+ * It forces the sweep synchronously, because the rate is only read when a
+ * texel is written and a dial nothing re-reads is a dial that does nothing.
+ */
+(window as unknown as { __swardev?: object }).__swardev = (v?: number): object => {
+  if (v !== undefined) {
+    swardEv = clamp(v, 0, 1);
+    const t0 = performance.now();
+    refreshSwardField(true);
+    swardSweepMs = performance.now() - t0;
+    refreshSward();
+  }
+  return { ev: swardEv, radiusM: SWARD_EV.radiusM, warpM: SWARD_EV.warpM, sweepMs: +swardSweepMs.toFixed(1) };
+};
+let swardSweepMs = 0;
+/**
+ * ── IS THE SWARD'S DENSITY FIELD DRAWING RECTANGLES? ──
+ *
+ * The decisive measurement, and it needs no pixels at all: a categorical
+ * raster boundary is AXIS-ALIGNED BY CONSTRUCTION. WorldCover's texels are a
+ * lat/lon grid and the sward field is in local metres off the same projection,
+ * so a step inherited from the raster runs exactly north-south or east-west,
+ * while a boundary that is a real ecological gradient points wherever the
+ * ground does.
+ *
+ * So: the gradient of the density field at every texel that has one, and how
+ * close its DIRECTION is to an axis — |cos 2θ|, which is 1 on an axis and 0 on
+ * a diagonal. THE BASELINE IS NOT A HALF. A uniformly random direction
+ * averages 2/π ≈ 0.637, so that is the number a field with no preference
+ * scores and the number to read these against; 0.5 would be a claim that
+ * diagonals are more likely than axes, which nothing says.
+ *
+ * `strong` is the share of texels whose gradient is a large fraction of the
+ * full density range — a categorical edge is not merely aligned, it is a
+ * cliff — and its mean magnitude says how much of one.
+ */
+(window as unknown as { __swardedge?: object }).__swardedge = (): object => {
+  let n = 0, align = 0, mag = 0, strong = 0, strongAlign = 0, strongMag = 0;
+  const F = SWARD_F, D = swardFieldData;
+  const at2 = (i: number, j: number): number => Math.max(0, D[(j * F + i) * 4 + 1]);
+  for (let j = 1; j < F - 1; j++) {
+    for (let i = 1; i < F - 1; i++) {
+      const gx = at2(i + 1, j) - at2(i - 1, j), gz = at2(i, j + 1) - at2(i, j - 1);
+      const m = Math.hypot(gx, gz);
+      if (m < 1e-4) continue;
+      // |cos 2θ| without a trig call: (gx² - gz²) / (gx² + gz²).
+      const a2 = Math.abs((gx * gx - gz * gz) / (gx * gx + gz * gz));
+      n++; align += a2; mag += m;
+      // A CLIFF, not a slope: an eighth of the table's full range across two
+      // eight-metre texels is a step no ecological gradient makes.
+      if (m > 0.10) { strong++; strongAlign += a2; strongMag += m; }
+    }
+  }
+  return {
+    ev: swardEv, n,
+    meanGradient: +(mag / Math.max(1, n)).toFixed(4),
+    axisAlignment: +(align / Math.max(1, n)).toFixed(3),
+    // The share that are steps rather than gradients, and how aligned THOSE
+    // are — which is the number the whole claim turns on.
+    strongShare: +(strong / Math.max(1, n)).toFixed(4),
+    strongAlignment: strong ? +(strongAlign / strong).toFixed(3) : null,
+    strongGradient: strong ? +(strongMag / strong).toFixed(3) : null,
+    /** What a field with no directional preference would score. */
+    randomBaseline: 0.637,
+    sweepMs: +swardSweepMs.toFixed(1),
+  };
 };
 (window as unknown as { __sward?: object }).__sward = (gpu?: boolean, rebuild?: boolean): object => {
   // The field rebuilds on 48m of travel or on the world growing, so a test that
