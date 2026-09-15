@@ -11337,8 +11337,27 @@ materials: k=1 own 25/25 · k=0 own 25/25 · k=1 own 25/25
 
 | | floor | the residual (0 against 1) | the old 0.35 | twice it |
 |---|---|---|---|---|
-| chase | 0.30-0.55 /255 · 1.7-3.0% | **1.214 · 9.74%** | 0.956 · 6.94% | 3.686 · 20.47% |
-| top | 0.66-1.74 · 2-11% | **2.205 · 16.75%** | 0.966 · 5.47% | 3.148 · 21.95% |
+| chase, item 1 only | 0.30-0.55 /255 · 1.7-3.0% | **1.214 · 9.74%** | 0.956 · 6.94% | 3.686 · 20.47% |
+| top, item 1 only | 0.66-1.74 · 2-11% | **2.205 · 16.75%** | 0.966 · 5.47% | 3.148 · 21.95% |
+| chase, all four | 0.18-0.27 · 0.9-1.3% | **0.419 · 3.19%** | 0.307 · 1.97% | 0.939 · 6.69% |
+| top, all four | 0.18-1.19 · 1.1-8.4% | **1.888 · 15.73%** | 0.492 · 4.67% | 2.25 · 18.89% |
+
+**THE TWO PAIRS ARE DIFFERENT PARKINGS AND MUST NOT BE SUBTRACTED.** The
+Stelvio is a live spot, the rig rolls to a stop wherever it stops, and the
+chase pane is mostly carriageway or mostly ground depending on where that was —
+the same fault the band D near-chart station was retired for. The tell is that
+in the second pair EVERYTHING fell by about the same factor, the floor
+included; a real change in the term would have moved the signal and left the
+floor alone. What the second run establishes is that the shader still LINKS
+(0 page errors, 0 harness errors, and the harness sniffs GLSL into the same
+list) and that the material claim still holds, not a before-and-after.
+
+**AND THE RELIEF SPLIT CANNOT BE A/B'd BY A UNIFORM AT ALL**, which is why no
+number is offered for it: it is a code path, not a dial, and a two-boot
+comparison at a live spot is what the paragraph above is about. A fixture would
+be the deterministic way to ask, and none of the fixtures is bare ground —
+which is the standing gap in the set that the whole substrate programme keeps
+meeting.
 
 **WHAT THESE NUMBERS ARE NOT.** They are the residual's own contribution at a
 spot, and they say nothing about the composition fault this unit is about,
@@ -11352,8 +11371,11 @@ this material's shader. The measurement's job was the other claim — that the
 dial no longer swaps the material — and that is the line above the table.
 
 **The Stelvio chase floor is no longer exactly zero** (phase C measured 0.000
-there). It is 0.30-0.55/255 over 1.7-3.0% of the pane, which is the substrate's
-own relief re-weaving the dither as the lighting normal moves between legs; the
-signal clears it by two to four times in the mean and by three to six in
-pixels. Quote the floor beside the signal, always: a near-field term measured
-without one is a number with no scale.
+there) and it is not the same number twice. It is the substrate's own relief
+re-weaving the dither as the lighting normal moves between legs, so it scales
+with however much ground the pane happens to hold — which is the parking
+caveat above, seen from the other side. The signal clears it by two to four
+times in the mean and by two to six in pixels on both runs. Quote the floor
+beside the signal, always: a near-field term measured without one is a number
+with no scale, and one measured against a floor from a different boot is worse
+than no number at all.
