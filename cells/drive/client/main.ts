@@ -7072,6 +7072,27 @@ function terrainFx(mat: THREE.Material, opts: {
           // snowfield from the ground under it. See subExpress.
           e = subExpress(ex, db, sd, gpot, veg, grain);
         }
+        // ── AND WHAT THE ENGINEERING CUT, WHICH THE LANDFORM CANNOT KNOW ──
+        //
+        // The field is derived from the DEM before the corridor is carved,
+        // so it describes the hillside that WAS there; a road cut is a fresh
+        // face in the mesh that the field still calls a grassy slope. The
+        // kernel marks those vertices by the SIGN of the bed slope (see
+        // mats[i*4+2]) — a channel the fragment read nowhere — and the zero
+        // crossing between a cut vertex and the natural ground at its toe is
+        // the blend a toe wants.
+        //
+        // It LIFTS what is latent rather than replacing it: a cut through a
+        // hillside exposes that hillside's own rock and regolith, which is
+        // the whole reason to route it through the field's vocabulary
+        // instead of painting a generic scar. And it takes the turf and the
+        // soil with it, because a bank cut last season has neither.
+        float cutFace = clamp(-vTd.z * 3.0, 0.0, 1.0);
+        if (cutFace > 0.002) {
+          e.y = clamp(e.y + cutFace * ${SUB_CUT_EX} * (1.0 - e.y), 0.0, 1.0);
+          e.x = clamp(e.x + cutFace * ${SUB_CUT_MANTLE} * (1.0 - e.x), 0.0, 1.0);
+          e.z *= 1.0 - cutFace * ${SUB_CUT_GRASS};
+        }
         // ── AND HOW MUCH OF THE HALF-METRE THE SUBSTRATE HAS TAKEN OVER ──
         //
         // The mineral share, scaled by the dial, because that is exactly how
@@ -7160,27 +7181,6 @@ function terrainFx(mat: THREE.Material, opts: {
           // layers onto a colour the frame never shows.
           vec3 pc = diffuseColor.rgb;
           float lum = dot(pc, vec3(0.2126, 0.7152, 0.0722));
-          // ── AND WHAT THE ENGINEERING CUT, WHICH THE LANDFORM CANNOT KNOW ──
-          //
-          // The field is derived from the DEM before the corridor is carved,
-          // so it describes the hillside that WAS there; a road cut is a fresh
-          // face in the mesh that the field still calls a grassy slope. The
-          // kernel marks those vertices by the SIGN of the bed slope (see
-          // mats[i*4+2]) — a channel the fragment read nowhere — and the zero
-          // crossing between a cut vertex and the natural ground at its toe is
-          // the blend a toe wants.
-          //
-          // It LIFTS what is latent rather than replacing it: a cut through a
-          // hillside exposes that hillside's own rock and regolith, which is
-          // the whole reason to route it through the field's vocabulary
-          // instead of painting a generic scar. And it takes the turf and the
-          // soil with it, because a bank cut last season has neither.
-          float cutFace = clamp(-vTd.z * 3.0, 0.0, 1.0);
-          if (cutFace > 0.002) {
-            e.y = clamp(e.y + cutFace * ${SUB_CUT_EX} * (1.0 - e.y), 0.0, 1.0);
-            e.x = clamp(e.x + cutFace * ${SUB_CUT_MANTLE} * (1.0 - e.x), 0.0, 1.0);
-            e.z *= 1.0 - cutFace * ${SUB_CUT_GRASS};
-          }
           // ── EACH LAYER'S OWN STRUCTURE, EACH IN ITS OWN BAND ──
           //
           // Tones, not weights: the field decides WHAT is here and these decide
@@ -7834,10 +7834,16 @@ const terrainMats = new Map<string, THREE.MeshLambertMaterial>();
  * rebuild of the same tile.
  */
 const terrainNormals = new Map<string, THREE.DataTexture>();
+const terrainNormalInputs = new WeakMap<THREE.DataTexture, { coarsePx: number; dem: Float32Array }>();
 function terrainNormalFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.DataTexture {
   const had = terrainNormals.get(key);
-  if (had) return had;
+  // The residual subtracts the mesh's coarse gradient. A changed mesh ruler
+  // or replacement DEM therefore needs a new residual, even at the same key.
+  const coarsePx = kStore.nrmCoarsePx;
+  if (had && terrainNormalInputs.get(had)?.coarsePx === coarsePx && terrainNormalInputs.get(had)?.dem === t.data) return had;
+  if (had) had.dispose();
   const tex = terrainNormalTex(t, bytes);
+  terrainNormalInputs.set(tex, { coarsePx, dem: t.data });
   terrainNormals.set(key, tex);
   // Bounded for the same reason the materials are, and kept LOOSER than them:
   // a texture whose material has already been evicted is exactly the one worth
@@ -12384,7 +12390,9 @@ function swardRows(from: number, to: number): void {
 /** The step's budget follows the frame: a sixth of it, so a 60 fps frame
  *  gives up 3 ms and a 30 fps frame 5, and the harness's two-second frames
  *  still take the old eight rows at once. */
-const swardStepMs = (): number => clamp(frameMs / 6, 3, 40);
+// A slow frame is not permission to spend more CPU on the next sweep.
+// Keep progress bounded while the last complete field remains on screen.
+const swardStepMs = (): number => 3;
 const SWARD_LAG_MS = 1500;
 let swardSweepAt = 0;
 const swardLedger = { sweeps: 0, steps: 0, stepMs: 0, stepMax: 0, deferred: 0, masks: 0, maskMs: 0, maskMax: 0 };
@@ -13826,10 +13834,10 @@ function refreshVeg(): void {
   while (!it.next().done) { /* every slice, now */ }
   vegMs = performance.now() - t0;
 }
-/** Milliseconds of a frame a refresh slice may take, at the floor; the
- *  budget is a sixth of the smoothed frame above it (the sward step's rule),
- *  so the harness's two-second frames run a refresh whole. `?vegstep=N`
- *  forces exactly N (0: the whole refresh in one call, the old behaviour). */
+/** Default CPU slice, independent of frame time: at 12 fps the old sixth-
+ *  of-frame rule spent another 14 ms maintaining that slow frame rate.
+ *  Generator work units may overshoot; the budget is not a hard deadline.
+ *  `?vegstep=N` forces N (0: the whole refresh, for parity probes). */
 const VEG_STEP_MS = 5;
 const VEG_STEP_FORCED = qsNum('vegstep', -1);
 let vegJobMs = 0;
@@ -13837,7 +13845,7 @@ let vegJobMs = 0;
 function stepVegRefresh(): boolean {
   if (!vegJob) return false;
   const budget = VEG_STEP_FORCED === 0 ? Infinity
-    : VEG_STEP_FORCED > 0 ? VEG_STEP_FORCED : clamp(frameMs / 6, VEG_STEP_MS, 400);
+    : VEG_STEP_FORCED > 0 ? VEG_STEP_FORCED : VEG_STEP_MS;
   const t0 = performance.now();
   // The phase marks measure from the last mark; across a frame gap that
   // would bill the gap to whichever phase was running, so a slice re-arms

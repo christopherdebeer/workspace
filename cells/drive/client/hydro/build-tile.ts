@@ -523,6 +523,7 @@ interface ProfileIndex {
   minZ: number;
   cols: number;
   buckets: Map<number, number[]>;
+  neighbourhoods: Map<string, number[]>;
 }
 function indexProfile(profile: Float32Array, widthM: number): ProfileIndex {
   const cell = Math.max(96, widthM * 1.5);
@@ -546,7 +547,7 @@ function indexProfile(profile: Float32Array, widthM: number): ProfileIndex {
       arr.push(i);
     }
   }
-  return { cell, minX, minZ, cols, buckets };
+  return { cell, minX, minZ, cols, buckets, neighbourhoods: new Map() };
 }
 /** One 2×2-texel block's answer from the nearest-profile search: the segment
  *  it found, from which every texel in the block derives its own distance,
@@ -584,12 +585,24 @@ function sampleProfileAt(
 ): ProfileHit | null {
   const cx = Math.floor((x - index.minX) / index.cell);
   const cz = Math.floor((z - index.minZ) / index.cell);
+  // Hundreds of texels ask the same bucket neighbourhood. Resolve it once,
+  // retaining first encounter order for ties, and test each segment only once.
+  // This cache lives with one build's profile index, never across revisions.
+  const key = cx + ',' + cz + ',' + searchCells;
+  let candidates = index.neighbourhoods.get(key);
+  if (!candidates) {
+    const seen = new Set<number>();
+    for (let dz = -searchCells; dz <= searchCells; dz++) {
+      for (let dx = -searchCells; dx <= searchCells; dx++) {
+        const arr = index.buckets.get((cz + dz) * index.cols + (cx + dx));
+        if (arr) for (const i of arr) seen.add(i);
+      }
+    }
+    candidates = [...seen];
+    index.neighbourhoods.set(key, candidates);
+  }
   let best = -1, bestD2 = Infinity, bestT = 0;
-  for (let dz = -searchCells; dz <= searchCells; dz++) {
-    for (let dx = -searchCells; dx <= searchCells; dx++) {
-    const arr = index.buckets.get((cz + dz) * index.cols + (cx + dx));
-    if (!arr) continue;
-    for (const i of arr) {
+  for (const i of candidates) {
       const o = i * 3, q = o + 3;
       const ax = profile[o], az = profile[o + 1];
       const vx = profile[q] - ax, vz = profile[q + 1] - az;
@@ -598,8 +611,6 @@ function sampleProfileAt(
       const qx = ax + vx * t, qz = az + vz * t;
       const d2 = (x - qx) * (x - qx) + (z - qz) * (z - qz);
       if (d2 < bestD2) { bestD2 = d2; best = i; bestT = t; }
-    }
-  }
   }
   if (best < 0) return null;
   const o = best * 3, q = o + 3;
@@ -1314,6 +1325,12 @@ export function buildHydroTile(
     for (let iz = 1; iz < height - 1; iz++) for (let ix = 1; ix < width - 1; ix++) {
       const i = iz * width + ix;
       if (kind[i] < HYDRO_KIND_ID.river || kind[i] > HYDRO_KIND_ID.canal) continue;
+      // Extension copies river kind across the whole tile, but cannot create
+      // coverage. A zero 3x3 neighbourhood cannot meet the majority threshold.
+      // Check the immutable source so newly raised texels never propagate.
+      if (src[i - width - 1] === 0 && src[i - width] === 0 && src[i - width + 1] === 0
+        && src[i - 1] === 0 && src[i] === 0 && src[i + 1] === 0
+        && src[i + width - 1] === 0 && src[i + width] === 0 && src[i + width + 1] === 0) continue;
       let sum = 0;
       for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
         const j = i + dz * width + dx;
