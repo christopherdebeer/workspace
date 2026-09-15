@@ -403,6 +403,14 @@ structure-render harnesses pass with zero page errors, exact flowing shoreline
 terrain constraints, one edge-blended body per committed flowing tile and
 atomic crossing packet admission.
 
+The deterministic Senqu production/render visual review also passes under the
+shipping palette and dither post-process. Bank, top and moving-wake frames show
+one continuous channel, seated crossing geometry, coherent shallow-bed reveal
+and no visible tile seam or duplicate terrain/road layer. Coverage, shore and
+depth diagnostic frames agree on the same footprint. The render capture
+completed 42 atomic commits with zero retained terrain, road or hydro-detail
+source meshes and zero page errors.
+
 The representative parity matrix now clears 1,920 probes across Senqu, Bixby,
 Camps Bay and the explicit-structures fixture with zero wet disagreement, tile
 fallback, unknown speed authority or unresolved crossing semantics. The
@@ -496,9 +504,9 @@ repository run cannot manufacture.
   the now-covered Senqu, Bixby, Camps Bay, Chapman's Peak and explicit-structure
   cases, especially untagged fords versus procedural bridges, before unresolved
   geometry can be retired.
-- Performance, field-memory and tile-build harnesses are green. Production
-  world captures still need to confirm cohesive banks, shallows, bed material,
-  turbulence, persistent evidence and seams under representative lighting and
-  global post-processing.
+- Performance, field-memory and tile-build harnesses are green, as is the
+  deterministic Senqu shipping-post-process visual review. Deployed multi-world
+  captures still need to confirm the same banks, shallows, bed material,
+  turbulence, persistent evidence and seams across representative lighting.
 - Duplicate legacy support, ford, shoreline and vehicle-water inference cannot
   be removed until default cutover and rollback observation are complete.

@@ -192,7 +192,14 @@ async function frame(mode) {
       window.__setcam?.('chase');
     }, placement);
     await d.simWait(1.1);
-    await d.shot(`substrate-visual-${mode.label}-wake`);
+    // A moving 1280×720 frame under SwiftShader can take longer than
+    // Playwright's default screenshot timeout even after simulation settles.
+    // This is capture headroom only; the world and evidence waits above retain
+    // their own bounded convergence gates.
+    await d.page.screenshot({
+      path: join(WORK, `substrate-visual-${mode.label}-wake.png`),
+      timeout: 90000,
+    });
 
     const diagnostics = await d.page.evaluate(() => ({
       substrate: window.__substrate?.(),
