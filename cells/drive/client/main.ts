@@ -82,8 +82,8 @@ import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight, uFacSun } from './facade';
 import { roofFx } from './roof-fx';
 import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, SUBSTRATE_VIEWS, groundInkPixels, type GroundViewId } from './ground-view';
-import { SUB_GLSL, SUB_DOM_M, subDomainAt, subEvidence, subGrassFactor, subMatOf,
-  subTintOf, subWeightsOf, subExpressOf, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
+import { SUB_GLSL, SUB_DOM_M, subEvidence, subExpressOf, subGrainOf, subLayerTint,
+  subGrassAllow, SUB_SWARD_K, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
   type SubstrateField } from './substrate-field';
 import { gramDecode } from './facade-grammar';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
@@ -7956,6 +7956,38 @@ function substrateAt(x: number, z: number, ch: number): number | null {
   const f = substrateFields.get(`${tx}/${ty}`);
   return f ? sampleSubstrate(f, x, z, ch) : null;
 }
+/**
+ * ── THE WHOLE CELL AT A POINT, WITH THE TILE RESOLVED ONCE ──
+ *
+ * `substrateAt` is right for a probe and wrong for a sweep: it projects the
+ * point, indexes the tile and looks the field up in a Map for EVERY channel,
+ * and the sward asks for four of them at each of nine thousand texels. This
+ * resolves the tile once and reads the four off the same arrays — and memoises
+ * the tile, because a sweep walks rows inside one tile for hundreds of texels
+ * at a time, so the projection and the lookup happen a handful of times a pass
+ * rather than tens of thousands.
+ *
+ * The memo is keyed on the tile AND on `substrateFields` itself being the one
+ * that answered: a rebuild replaces the field object under the same key, and a
+ * stale object would seed a whole sweep from the previous revision's ground.
+ */
+let subCellKey = '', subCellF: SubstrateField | null = null;
+function subCellAt(x: number, z: number): { ex: number; db: number; sd: number; gp: number } | null {
+  const [la, lo] = localToLatLon(x, z);
+  const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
+  const key = `${tx}/${ty}`;
+  if (key !== subCellKey || subCellF !== substrateFields.get(key)) {
+    subCellKey = key; subCellF = substrateFields.get(key) ?? null;
+  }
+  const f = subCellF;
+  if (!f) return null;
+  return {
+    ex: sampleSubstrate(f, x, z, SUB_CH.exposure),
+    db: sampleSubstrate(f, x, z, SUB_CH.debris),
+    sd: sampleSubstrate(f, x, z, SUB_CH.soilDepth),
+    gp: sampleSubstrate(f, x, z, SUB_CH.grassPot),
+  };
+}
 /** Every geomorphic-field channel at a point, named — the probe the seat and
  *  the field devtools read, and the one that makes "why is there scree here"
  *  answerable at all.
@@ -11101,6 +11133,15 @@ const SWARD_FLOWER = {
 const SWARD_STRUCT_R = 14;    // metres to a wall/ruin that still reads as "at it"
 const SWARD_WATER_R = 9;      // metres beyond a channel's edge that is still "at the water"
 const SWARD_CLIFF_SLOPE = 0.5;  // rise/run past which the ground reads as scree, not turf
+/** …and the SAME verdict from the geomorphic field, which sees what the local
+ *  slope cannot. A texel's rise over eight metres is one number off one DEM
+ *  pixel pair; the field's exposure is a landform read — slope over a third of
+ *  a hectare, convexity at two scales, relief over two hundred metres, and the
+ *  cover class's own word. A bench halfway up a crag reads flat to the first
+ *  and exposed to the second, and it is scree. Above this the habitat is
+ *  Cliff, which is what puts rocks and spires in the flora's draw and the
+ *  scree flower palette on the blades. */
+const SUB_CLIFF_EX = 0.55;
 /** Is there a building or ruin wall standing near (x,z)? Rails excluded — a
  *  guard rail runs beside every cliff road in the world and would make
  *  "near a structure" mean "near a road" instead. */
@@ -11138,6 +11179,14 @@ function swardCtxAt(x: number, z: number, cv: number | null, slope: number): Swa
   if (nearStructure(x, z, SWARD_STRUCT_R)) return SwardCtx.Ruin;
   if (cv === COVER.wetland || cv === COVER.mangrove || nearWaterway(x, z, SWARD_WATER_R)) return SwardCtx.Water;
   if (slope > SWARD_CLIFF_SLOPE) return SwardCtx.Cliff;
+  // THE FLORA READS THE SAME FIELD AS THE GROUND IT STANDS ON. Ruin and Water
+  // outrank it because both are statements about a THING that is there, and a
+  // crag with a ruin on it is still a ruin; exposure only ever promotes open
+  // or wooded ground to scree.
+  if (SUB_SWARD) {
+    const c = subCellAt(x, z);
+    if (c && c.ex > SUB_CLIFF_EX) return SwardCtx.Cliff;
+  }
   if (cv === COVER.tree) return SwardCtx.Wood;
   return SwardCtx.Open;
 }
@@ -11826,6 +11875,9 @@ function swardRows(from: number, to: number): void {
       // Query the cached hydro tile even beside lakes: a channel-only gate
       // misses every dry lake bank whose cover is grass rather than water.
       swardScratchF[k + 2] = 0; swardScratchF[k + 3] = 0;
+      // The substrate's own visible rock, filled in below and folded into the
+      // mineral channel once both sources have had their say.
+      let subMineral = 0;
       if (SHORE_ON && hydroSys && cv !== null) {
         const f = hydroSys.fieldAt(wx, wz);
         const bs = f ? sampleBankField(f, wx, wz, 12) : undefined;
@@ -11869,33 +11921,69 @@ function swardRows(from: number, to: number): void {
       // The brief: *if the shader says this location is 70% grassy and 30%
       // exposed soil, the sward seeder should read essentially the same field.
       // Then sward doesn't appear as arbitrary tufts pasted onto blank ground.*
-      // Every input is already in hand here — the true cover class, the slope,
-      // and the palette colour this texel just computed — so the classification
-      // is the same arithmetic on the same evidence, over the same 18 m domain.
-      // What makes it ONE field rather than two agreeing ones is that the
-      // constants and the material transforms live in substrate-field.ts and
-      // the fragment's source interpolates them.
       //
-      // THE GRASS THINS ON THE MINERAL SHARE, NOT ON THE TURF WEIGHT. Turf is
-      // "how sward-like is this ground", which is most of what GRASS_M2
-      // already says from the cover class; multiplying the two would thin every
-      // meadow in the world by a third for nothing. The outcrop and the scree
-      // are what the cover class cannot see and the domain draws.
+      // ── AND PHASE D IS WHERE THAT STOPPED BEING TWO FIELDS THAT AGREE ──
+      //
+      // It used to be the three-material classifier run a second time on the
+      // CPU: the same constants, the same arithmetic, the same 18 m domain
+      // ported from GLSL to float64, and a long note explaining why the port
+      // was honest. It WAS honest, and it was still a second computation of
+      // the same thing, which is a thing that can drift. This reads the ONE
+      // field the terrain build derived and the fragment samples — the same
+      // two textures, as arrays — and runs `subExpressOf`, which is the
+      // fragment's own `subExpress` on the shared constants.
+      //
+      // WHERE THERE IS NO FIELD THERE IS NO MODULATION, exactly as the
+      // fragment draws no substrate on a tile with none. A tile's field is
+      // built by the same reply that builds its mesh, so that is the first
+      // sweep over ground the worker has not answered for yet, and the sward
+      // behaves there as it did before any of this existed rather than
+      // guessing from a cover class.
       if (SUB_SWARD && density > 0) {
-        const ev = subEvidence(pr, pg, pb);
-        const w = subWeightsOf(subMatOf(cv, slope), ev.veg, ev.warm, subDomainAt(wx, wz));
-        density *= subGrassFactor(w);
-        // …and a blade fades toward the material it stands on rather than the
-        // tile's mean, so a tuft on an outcrop is the outcrop's colour. Held
-        // back to a share of the way: the sward's own colour rules (the bank
-        // mineral, the reeds, the altitude) are about the PLANT and this is
-        // about the ground it is standing in.
-        const [tr, tg, tb] = subTintOf(pr, pg, pb, w);
-        pr += (tr - pr) * SUB_SWARD_TINT;
-        pg += (tg - pg) * SUB_SWARD_TINT;
-        pb += (tb - pb) * SUB_SWARD_TINT;
+        const c = subCellAt(wx, wz);
+        if (c) {
+          const ev = subEvidence(pr, pg, pb);
+          const e = subExpressOf(c.ex, c.db, c.sd, c.gp, ev.veg, subGrainOf(cv));
+          // ── DENSITY THINS ON THE MINERAL SHARE, NOT ON THE GRASSY ONE ──
+          //
+          // A MULTIPLIER on what the cover class already asked for. The first
+          // cut used `e.grass` — the same number the fragment tints with, on
+          // the reasoning that one field should give one answer — and measured
+          // at Camps Bay that took the mean density down 43%, because a share
+          // of the SURFACE and a density per square metre are two different
+          // claims and multiplying them applies the cover class twice. See
+          // subGrassAllow. What the substrate knows that the cover does not is
+          // the stone: the bedrock the fragment draws through the cover, and
+          // the coarse debris under it.
+          density *= subGrassAllow(e, c.db, c.sd);
+          // …and a blade fades toward the ground it is standing in rather than
+          // the tile's mean, so a tuft on an outcrop is the colour the fragment
+          // painted that outcrop. Held back to a share of the way: the sward's
+          // own colour rules (the bank mineral, the reeds, the altitude) are
+          // about the PLANT and this is about the ground under it.
+          const [tr, tg, tb] = subLayerTint(pr, pg, pb, e);
+          pr += (tr - pr) * SUB_SWARD_TINT;
+          pg += (tg - pg) * SUB_SWARD_TINT;
+          pb += (tb - pb) * SUB_SWARD_TINT;
+          // ── AND THE BARE INTERRUPTIONS COST NOTHING, BECAUSE THE CHANNEL
+          //    ALREADY MEANS THIS ──
+          //
+          // The field's fourth float is the BANK's mineral share, and the
+          // vertex shader already reads it to turn a share of blades into
+          // stones (sIsStone), damped in the wind and never scaled up by
+          // range. "This ground is stony" is the same claim whether a river
+          // made it or a cliff did, so the substrate's own visible rock takes
+          // the maximum with it — and a scree apron grows stones through its
+          // grass with no shader change at all.
+          subMineral = e.rock;
+        }
       }
       swardScratchF[k + 1] = density;
+      // ONE CHANNEL, TWO SOURCES, THE MAXIMUM. A bank's mineral and an
+      // outcrop's are the same claim about the ground — the shader turns a
+      // share of blades into stones on either — and summing them would make a
+      // stony bank below a cliff twice as stony as either fact warrants.
+      if (subMineral > swardScratchF[k + 3]) swardScratchF[k + 3] = subMineral;
       swardScratchC[k] = Math.round(clamp(pr, 0, 1) * 255);
       swardScratchC[k + 1] = Math.round(clamp(pg, 0, 1) * 255);
       swardScratchC[k + 2] = Math.round(clamp(pb, 0, 1) * 255);
@@ -33747,14 +33835,21 @@ function truckSpec(): Record<string, number> {
  * Walked over the live field rather than recomputed from scratch, so it reports
  * what the BLADES were seeded from — the same rule as reading aTd off the mesh
  * rather than re-deriving it from the raster. One consequence to know when
- * reading it: the colour it takes the vegetation and warmth evidence from is
- * the sward's own STORED colour, which the tint has already moved, so the
- * factor it recomputes drifts about a per cent from the one the seeder used.
- * Under what the correlation resolves, and cheaper than storing a second
- * colour for a probe.
+ * reading it: the colour it takes the vegetation evidence from is the sward's
+ * own STORED colour, which the tint has already moved, so the share it
+ * recomputes drifts a little from the one the seeder used. Under what the
+ * correlation resolves, and cheaper than storing a second colour for a probe.
+ *
+ * ── AND SINCE PHASE D IT ASKS THE GEOMORPHIC FIELD, NOT A SECOND CLASSIFIER ──
+ *
+ * It used to run `subWeightsOf` here, which was the same second computation
+ * the seeder was running — so a drift between the seeder and the shader would
+ * have shown up in neither. It reads the tile's own field now, which is what
+ * the shader samples, so the two sides of the correlation come from one
+ * source and the number means what it says.
  */
 (window as unknown as { __swardsub?: object }).__swardsub = (): object => {
-  let n = 0, sd = 0, sg = 0, sdd = 0, sgg = 0, sdg = 0, thin = 0;
+  let n = 0, sd = 0, sg = 0, sdd = 0, sgg = 0, sdg = 0, thin = 0, off = 0, sr = 0;
   for (let j = 0; j < SWARD_F; j++) for (let i = 0; i < SWARD_F; i++) {
     const k = (j * SWARD_F + i) * 4;
     const dens = swardFieldData[k + 1];
@@ -33762,13 +33857,15 @@ function truckSpec(): Record<string, number> {
     const wx = swardPendX + (i + 0.5) * SWARD_FM, wz = swardPendZ + (j + 0.5) * SWARD_FM;
     const h = swardFieldData[k];
     const slope = Math.abs(groundAt(wx + SWARD_FM, wz) - h) / SWARD_FM;
+    const c = subCellAt(wx, wz);
+    if (!c) { off++; continue; }
     const ev = subEvidence(swardColData[k] / 255, swardColData[k + 1] / 255, swardColData[k + 2] / 255);
-    const w = subWeightsOf(subMatOf(sampleCover(wx, wz), slope), ev.veg, ev.warm, subDomainAt(wx, wz));
-    const g = subGrassFactor(w);
+    const e = subExpressOf(c.ex, c.db, c.sd, c.gp, ev.veg, subGrainOf(sampleCover(wx, wz)));
+    const g = subGrassAllow(e, c.db, c.sd);
     n++; sd += dens; sg += g; sdd += dens * dens; sgg += g * g; sdg += dens * g;
-    if (g < 0.6) thin++;
+    sr += e.rock; if (g < 0.6) thin++;
   }
-  if (n < 32) return { n, note: 'no sward field yet' };
+  if (n < 32) return { n, off, note: 'no sward field yet' };
   const cov = sdg / n - (sd / n) * (sg / n);
   const vd = Math.max(1e-9, sdd / n - (sd / n) ** 2), vg = Math.max(1e-9, sgg / n - (sg / n) ** 2);
   return {
@@ -33779,7 +33876,15 @@ function truckSpec(): Record<string, number> {
     correlation: +(cov / Math.sqrt(vd * vg)).toFixed(3),
     // How much of the field the substrate is calling mineral enough to thin.
     thinnedShare: +(thin / n).toFixed(3),
-    tint: SUB_SWARD_TINT,
+    // …and how much bedrock it is expressing, which is what turns a share of
+    // blades into stones through the same channel the bank uses.
+    meanRock: +(sr / n).toFixed(3),
+    // Texels the geomorphic field has not answered for. Not a failure — a
+    // tile's field lands with its mesh — but a sweep taken while it is large
+    // is a sweep of ground the substrate had no say over, and a correlation
+    // read off one would be a reading of the cover class alone.
+    noField: off,
+    thin: SUB_SWARD_K.thin, tint: SUB_SWARD_TINT,
   };
 };
 (window as unknown as { __sward?: object }).__sward = (gpu?: boolean, rebuild?: boolean): object => {

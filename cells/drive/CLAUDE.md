@@ -228,7 +228,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/hydro-phases.mjs` | where a hydro build's milliseconds go, by phase and by ns/texel, with the wet/waterless build split and the wet share of the grid (`DRY=0` is the short-circuit's control, `FIX=`/`SPOT=` the place) | ~1min |
 | `node devtools/hydro-dry.test.mjs` | a waterless tile's short-circuit is the path it replaced, byte for byte, against the revision's own build-tile (`REV=`) | ~10s |
 | `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
-| `node devtools/sward-sub.mjs` | whether the sward's density follows the substrate's own field, as the correlation between them, with `swardsub=0` as the control (a fixture, and CPU numbers rather than pixels — see the note) | ~3min |
+| `node devtools/sward-sub.mjs` | whether the sward's density and the flora's habitat follow the geomorphic field, as the correlation and the habitat counts, with `swardsub=0` as the control (`FIX=` a fixture or `SPOT=` a live place; CPU numbers rather than pixels — see the note) | ~3min |
 | `node devtools/ground-view.mjs` | a ground view is a uniform, not a sheet: the chip sets the channel in every camera, the legend is tallied off the attribute the fragment reads, and the chase frame moves (`FIX=` for an offline world) | ~6min |
 | `node devtools/substrate-ab.mjs` | whether the substrate draws a landscape or more noise: the field and the three layer shares at six points, an interleaved one-boot A/B cropped to the near field, and the domain and amount dials swept (`TD=dom` paints the shares, `SPOT=` for a cliff) | ~9min |
 | `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
@@ -10581,3 +10581,103 @@ drew bedding on every rock fragment in the world regardless of what the ground
 was. A scree slope showing no strata is not the filter working; it is the
 CLASSIFICATION working, which is the layer below the filter and the one the
 brief was actually about.
+
+## Phase D: the sward and the flora read the field, and the classifier is gone
+
+The brief's own next ask, verbatim: *if the shader says this location is 70%
+grassy and 30% exposed soil, the sward seeder should read essentially the same
+field. Then sward doesn't appear as arbitrary tufts pasted onto blank ground.*
+
+It nearly did already. Phase C's own note recorded the sward running the
+three-material classifier a SECOND time on the CPU — the same constants, the
+same arithmetic, the noise ported from GLSL to float64, and a long paragraph
+explaining why the port was honest. It was honest, and it was still a second
+computation of the same thing, which is a thing that can drift. The seeder
+reads the tile's own geomorphic field now — the same two textures the fragment
+samples, as arrays — and runs `subExpressOf`, which is the fragment's own
+`subExpress` on the shared constants.
+
+Four things came off that, and the fourth cost nothing at all:
+
+- **DENSITY THINS ON THE MINERAL SHARE, NOT ON THE GRASSY ONE.** The first cut
+  multiplied density by `e.grass`, the same number the fragment tints with, on
+  the reasoning that one field should give one answer. Measured at Camps Bay
+  that took the mean density down **43%** — because `e.grass` is a share of the
+  SURFACE and `GRASS_M2` is already a density per square metre, so multiplying
+  them applies the cover class twice and halves every meadow in the world,
+  which is the fault `SWARD_LUSH` exists to have fixed. `subGrassAllow` stays
+  near 1 on soft ground and thins on the stone the cover class cannot see: the
+  bedrock the fragment draws through the cover, and the coarse debris under it.
+- **A BLADE FADES TOWARD THE GROUND IT STANDS IN**, through `subLayerTint` —
+  `subCompose` term for term on the shared transforms, at the domain's own
+  mean. A blade is a centimetre object standing on a tuft; what it needs is the
+  material, not the material's own eighteen-metre speckle.
+- **AND THE FLORA READS THE SAME FIELD.** `swardCtxAt` had one route to Cliff,
+  the local slope — one number off one DEM pixel pair. The field's exposure is
+  a landform read (slope over a third of a hectare, convexity at two scales,
+  relief over two hundred metres, the cover's own word), and a bench halfway up
+  a crag reads flat to the first and exposed to the second, and it is scree.
+  Above `SUB_CLIFF_EX` the habitat is Cliff, which is what puts rocks and
+  spires in the flora's draw and the scree palette on the flowers. Ruin and
+  Water still outrank it: both are statements about a THING that is there.
+- **THE BARE INTERRUPTIONS COST NOTHING, because the channel already meant
+  this.** The sward field's fourth float is the BANK's mineral share and the
+  vertex shader already reads it to turn a share of blades into stones
+  (`sIsStone`), damped in the wind and never scaled up by range. "This ground
+  is stony" is the same claim whether a river made it or a cliff did, so the
+  substrate's own visible rock takes the MAXIMUM with it — not the sum, or a
+  stony bank below a cliff would be twice as stony as either fact warrants —
+  and a scree apron grows stones through its grass with no shader change.
+
+**AND WHERE THERE IS NO FIELD THERE IS NO MODULATION**, exactly as the fragment
+draws no substrate on a tile with none. `__swardsub().noField` counts those
+texels: a sweep taken while that number is large is a sweep of ground the
+substrate had no say over, and a correlation read off one is a reading of the
+cover class alone. It was 0 on every run below.
+
+### Measured
+
+`devtools/sward-sub.mjs`, two boots with `swardsub` the only difference —
+legitimate here only because the measurement is a CPU field over a fixture and
+not pixels (`SPOT=` is a live pair, so read its build counts beside it):
+
+| place | correlation off → on | mean density | thinned | mean rock | habitat cliff off → on |
+|---|---|---|---|---|---|
+| Camps Bay, fynbos | 0.119 → **0.278** | −13.5% | 1.0% | 0.059 | *(not sampled)* |
+| Simon's Town | 0.669 → **0.713** | −12.9% | 3.2% | 0.077 | 0 → 0 |
+| **Yosemite valley floor** | −0.102 → **−0.046** | **−0.8%** | **0.0%** | **0.003** | *(not sampled)* |
+| **Stelvio, live** | **0.046 → 0.321** | **−39.9%** | **57.5%** | **0.291** | **597 → 818** of 1,444 |
+
+**THE STELVIO IS THE ROW THE UNIT IS FOR** and the only one where the control
+is near zero: the pass is uniform lichen and bare to the cover class, so the
+one input the two fields already shared says nothing there, and 0.046 → 0.321
+is the geomorphic field's contribution with nothing else in it. The sward thins
+by 40% on a scree pass, which is what a scree pass should do to a meadow, and
+**221 of 1,444 sampled points that the local slope called open ground are
+called scree by the landform** — those get rocks, spires and the scree flower
+palette.
+
+**AND YOSEMITE IS THE CONTROL THAT MATTERS AS MUCH.** Its valley floor thins by
+0.8% and the substrate calls 0.0% of the field mineral: the rule does not fire
+on soft ground, which is the half of "it works" that a single strong result
+cannot show. Note what the probe can and cannot see there — it walks texels
+with density above zero, so on ground the cover class already calls bare there
+is no grass to thin and nothing to correlate. The instrument samples where
+grass grows, by construction.
+
+### What went with it
+
+`subWeightsOf`, `subGrassFactor`, `subTintOf`, `subMatOf`, `SUB_CLS_K`, `SubMat`
+and `SubW` are deleted: the sward was their last reader. `SUB_MAT` stays,
+because the terrain kernel inlines a copy of it and this is the source of record
+that copy is held against. **`subDomainAt` stays and is now TEST API** — nothing
+in the game calls it, and it exists because nothing here can run GLSL, so the
+only way to assert the domain's mean, range and decorrelation is to run the same
+construction in node. Its docstring says so, which is what stops the next
+dead-code sweep deleting the only check the shader's noise has.
+
+`devtools/substrate-field.test.mjs` lost the classifier's block and gained the
+transforms': bedrock pulls the chroma out and cools, fines oxidise warm, grass
+greens, **none of the three moves luminance by more than a fifth of a palette
+step**, a zero share leaves the palette exactly alone, and `subGrainOf` answers
+0 for snow and water and nothing else.

@@ -430,47 +430,20 @@ export function subDomainAt(x: number, z: number, s = SUB_DOM_M): number {
  *  the two agree, which is the same trick perf-check.mjs uses for refreshVeg
  *  and the only kind of check that can hold a duplicate honest. */
 /**
- * ── THE CLASSIFIER'S OWN CONSTANTS, AND WHY THEY ARE NO LONGER THE SHADER'S ──
+ * -- THE COVER CLASS'S OWN [rough, grain], AND WHY IT IS STILL HERE --
  *
- * Phase C retired the three-material classifier from the fragment: rock,
- * regolith and grass are layers now, not competing weights, and `subWeights`
- * is gone from SUB_GLSL entirely. What remains here is the CPU half the SWARD
- * still reads — `subWeightsOf`, `subGrassFactor`, `subTintOf` — and it is kept
- * verbatim on purpose. Phase D is where the seeder moves onto the geomorphic
- * field; changing the grass under it in the same unit as the ground it stands
- * on would make the next frame impossible to attribute.
- *
- * So these are stated as the CPU's OWN numbers rather than shared ones. They
- * are not interpolated into any GLSL, nothing checks them against a shader,
- * and when phase D lands they go with the functions that read them. The
- * material transforms are NOT among them: those are still shared (SUB_K), so a
- * blade fading toward an outcrop fades toward the colour the fragment painted
- * that outcrop.
+ * The three-material classifier that used to live under this heading is gone:
+ * phase C took it out of the fragment and phase D took it off the sward, which
+ * was its last reader. What survives is the TABLE, because the terrain kernel
+ * inlines a copy of it - its closure is stringified into a worker and may not
+ * touch a module binding - and this is the source of record that copy is held
+ * against. See devtools/substrate-field.test.mjs.
  */
-export const SUB_CLS_K = Object.freeze({
-  rockGrain: 0.80, rockSlope: 0.85, rockBias: 0.22, rockDom: 0.70,
-  turfRough: 0.95, turfGain: 1.15, turfDom: 0.35, turfVegLo: 0.05, turfVegHi: 0.16,
-  turfRock: 0.75,
-  soilBase: 0.85, soilRock: 0.55, soilDom: 0.30,
-  soilWarmLo: 0.02, soilWarmHi: 0.18, soilGrainLo: 0.25, soilGrainHi: 0.60,
-});
-const C = SUB_CLS_K;
 export const SUB_MAT: Readonly<Record<number, readonly [number, number]>> = Object.freeze({
   10: [0.40, 0.30], 20: [0.60, 0.50], 30: [0.35, 0.15], 40: [0.28, 0.05],
   50: [0.50, 0.20], 60: [1.00, 0.85], 70: [0.25, 0.00], 80: [0.00, 0.00],
   90: [0.30, 0.10], 95: [0.35, 0.20], 100: [0.45, 0.25],
 });
-export interface SubMat { rough: number; grain: number; slope: number }
-/** What the kernel would have written into `aTd` for this cover class and
- *  slope. Slope raises rough exactly as the kernel does, and the BED slope is
- *  returned separately, because those are two different questions (see
- *  TileBuild.mats). */
-export function subMatOf(cover: number | null, slope: number): SubMat {
-  const m = cover === null || cover === undefined ? undefined : SUB_MAT[cover];
-  const grain = m ? m[1] : 0.5;
-  const bed = Math.min(1, slope);
-  return { rough: Math.min(1, (m ? m[0] : 0.6) + bed * 0.6), grain, slope: bed };
-}
 const sstep = (a: number, b: number, v: number): number => {
   const t = Math.min(1, Math.max(0, (v - a) / (b - a)));
   return t * t * (3 - 2 * t);
@@ -482,58 +455,6 @@ export function subEvidence(r: number, g: number, b: number): { veg: number; war
   const lum = Math.max(1e-3, 0.2126 * r + 0.7152 * g + 0.0722 * b);
   return { veg: (g - 0.5 * (r + b)) / lum, warm: (r - b) / lum };
 }
-export interface SubW { rock: number; soil: number; turf: number }
-/** The three-material classifier, on the CPU's own constants. THE FRAGMENT NO
- *  LONGER RUNS THIS: phase C replaced it there with the layered model, and
- *  this survives only because the sward seeder has not been moved yet — see
- *  SUB_CLS_K. It is not a second opinion about what the ground looks like, it
- *  is the OLD opinion, kept whole until phase D retires it in one piece. */
-export function subWeightsOf(m: SubMat, veg: number, warm: number, dom: number): SubW {
-  const cl = (v: number): number => Math.min(1, Math.max(0, v));
-  const rock = cl(m.grain * C.rockGrain + m.slope * C.rockSlope - C.rockBias + (dom - 0.5) * C.rockDom);
-  const turf = cl((C.turfRough - m.rough) * C.turfGain + (0.5 - dom) * C.turfDom)
-    * sstep(C.turfVegLo, C.turfVegHi, veg) * (1 - rock * C.turfRock);
-  const soil = cl(C.soilBase - turf - rock * C.soilRock + (dom - 0.5) * C.soilDom)
-    * Math.max(sstep(C.soilWarmLo, C.soilWarmHi, warm), sstep(C.soilGrainLo, C.soilGrainHi, m.grain));
-  const t = rock + soil + turf;
-  return t > 1 ? { rock: rock / t, soil: soil / t, turf: turf / t } : { rock, soil, turf };
-}
-/**
- * HOW MUCH GRASS A SUBSTRATE ALLOWS, as a multiplier on whatever the cover
- * class and the altitude already asked for.
- *
- * Not the turf weight itself: turf is "how sward-like is this ground", which
- * is already most of what GRASS_M2 says from the cover class, and multiplying
- * the two would thin every meadow in the world by a third for nothing. What
- * the substrate adds is the MINERAL share — the outcrop and the scree the
- * fragment is drawing at ten to fifty metres — so the grass thins on the same
- * patch the shader roughened, and the patchwork the seat asked for is one
- * field seen twice rather than two fields that happen to be near each other.
- *
- * Regolith counts for less than half of rock: grass grows in dirt and does not
- * grow on stone.
- */
-export function subGrassFactor(w: SubW): number {
-  return 1 - 0.8 * Math.min(1, w.rock + w.soil * 0.45);
-}
-/** The material colour a blade should fade toward, so a tuft standing on an
- *  outcrop is the outcrop's colour rather than the tile's mean. The transforms
- *  ARE the fragment's (SUB_K) — that half is still shared and must stay so —
- *  and only the weights in front of them are the retiring classifier's. */
-export function subTintOf(r: number, g: number, b: number, w: SubW): [number, number, number] {
-  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  const rest = Math.max(0, 1 - w.rock - w.soil - w.turf);
-  const rk = [(lum + (r - lum) * K.rockChroma) * K.rockR,
-    (lum + (g - lum) * K.rockChroma) * K.rockG, (lum + (b - lum) * K.rockChroma) * K.rockB];
-  const so = [r * K.soilR, g * K.soilG, b * K.soilB];
-  const tu = [r * K.grassR, g * K.grassG, b * K.grassB];
-  return [
-    r * rest + rk[0] * w.rock + so[0] * w.soil + tu[0] * w.turf,
-    g * rest + rk[1] * w.rock + so[1] * w.soil + tu[1] * w.turf,
-    b * rest + rk[2] * w.rock + so[2] * w.soil + tu[2] * w.turf,
-  ];
-}
-
 /**
  * ════════════════════════════════════════════════════════════════════════════
  *  THE SHARED GEOMORPHIC SUBSTRATE FIELD
@@ -898,4 +819,86 @@ export function subExpressOf(ex: number, db: number, sd: number, gpot: number,
     * (1 - ex * K.grassFace);
   const cover = cl(grass * K.coverGrass + mantle * K.coverMantle);
   return { mantle, rock: ex * (1 - cover * K.rockCover) * mineral, grass };
+}
+
+/** The cover class's own mineral verdict, which is the snow-and-water veto
+ *  `subExpressOf` asks for. `subMatOf` returns it too, but that carries the
+ *  retiring classifier's slope arithmetic with it and this does not. */
+export function subGrainOf(cover: number | null): number {
+  const m = cover === null || cover === undefined ? undefined : SUB_MAT[cover];
+  return m ? m[1] : 0.5;
+}
+/**
+ * ── THE LAYERED COMPOSITE, ON THE CPU ──
+ *
+ * `subCompose` term for term, on the same shared transforms: the bedrock, the
+ * mantle over it, the rock still showing through, the grassy complement. What
+ * it is FOR is a blade fading toward the ground it is standing in — so a tuft
+ * on an outcrop is the colour the fragment painted that outcrop rather than
+ * the tile's mean — and that only works if it is the same arithmetic.
+ *
+ * At the domain's own mean, deliberately. The fragment shifts exposure and
+ * debris by (dom - 0.5) at eighteen metres, and a CPU reader pretending to
+ * reproduce a noise it cannot call is the drifting mirror this file keeps
+ * warning about. A blade is a centimetre object standing on a tuft; what it
+ * needs is the material, not the material's own speckle.
+ */
+export function subLayerTint(r: number, g: number, b: number, e: SubExpress): [number, number, number] {
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const rk: [number, number, number] = [
+    (lum + (r - lum) * K.rockChroma) * K.rockR,
+    (lum + (g - lum) * K.rockChroma) * K.rockG,
+    (lum + (b - lum) * K.rockChroma) * K.rockB];
+  const so: [number, number, number] = [r * K.soilR, g * K.soilG, b * K.soilB];
+  const gr: [number, number, number] = [r * K.grassR, g * K.grassG, b * K.grassB];
+  const mix3 = (a: number, c: number, t: number): number => a + (c - a) * t;
+  const out: [number, number, number] = [r, g, b];
+  const base: [number, number, number] = [r, g, b];
+  for (let i = 0; i < 3; i++) {
+    let c = mix3(base[i], so[i], e.mantle);
+    c = mix3(c, rk[i], e.rock);
+    out[i] = mix3(c, gr[i], e.grass);
+  }
+  return out;
+}
+
+/**
+ * ── HOW MUCH GRASS THE SUBSTRATE ALLOWS ──
+ *
+ * These constants are the SWARD'S OWN and are deliberately not in SUB_K: they
+ * decide how many BLADES stand, which is a question the fragment has no opinion
+ * about. What must be shared is the field and the transforms, and both are.
+ */
+export const SUB_SWARD_K = Object.freeze({
+  /** How much of the sward the most mineral ground can take away. A face still
+   *  carries a fifth of what the cover class asked for, which is the brief's
+   *  own *grass survives at exposure 0.5* and the difference between a hillside
+   *  that shades from meadow into scree and one with a line drawn across it. */
+  thin: 0.8,
+  /** …and coarse debris counts for less than half of bare rock. Grass grows
+   *  poorly in active scree and not at all on stone. */
+  scree: 0.45,
+});
+/**
+ * A MULTIPLIER ON WHAT THE COVER CLASS ALREADY ASKED FOR, which is why it is
+ * this shape and not the grassy cover share itself.
+ *
+ * The first cut multiplied density by `e.grass`, the same number the fragment
+ * tints with, on the reasoning that one field should give one answer. Measured
+ * at Camps Bay that took the mean density down **43%** — because `e.grass` is
+ * a share of the SURFACE ("how much of this ground looks grassy") and GRASS_M2
+ * is already a density ("how many tufts a square metre of this cover class
+ * grows"). Multiplying the two applies the same claim twice and halves every
+ * meadow in the world, which is the fault SWARD_LUSH exists to have fixed.
+ *
+ * What the substrate knows that the cover class does not is the MINERAL share:
+ * the bedrock the fragment is drawing through the cover, and the coarse debris
+ * under it. So this stays near 1 on soft ground and thins where there is stone,
+ * which leaves the correlation the sward is judged on and takes the blanket
+ * halving away.
+ */
+export function subGrassAllow(e: SubExpress, debris: number, soilDepth: number): number {
+  const scree = debris / Math.max(debris + soilDepth, 1e-3);
+  const mineral = Math.min(1, e.rock + scree * SUB_SWARD_K.scree * (1 - e.rock));
+  return 1 - SUB_SWARD_K.thin * mineral;
 }

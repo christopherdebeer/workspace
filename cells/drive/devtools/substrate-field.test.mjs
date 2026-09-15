@@ -10,10 +10,10 @@
 //   - the CONSTANTS. They live once in SUB_K and the shader source
 //     interpolates them, so the check is that every one of them is literally
 //     present in the emitted GLSL — which fails the moment someone types a
-//     number into the shader instead of the table. SUB_CLS_K is the retiring
-//     classifier's own set and is deliberately NOT in the shader: phase C took
-//     that classifier out of the fragment, and the check says so out loud
-//     rather than letting a dead constant sit in the shared table unnoticed.
+//     number into the shader instead of the table. The check that the RETIRED
+//     classifier is absent from the shader stands beside it: phase C took it
+//     out of the fragment and phase D took it off the sward, and two opinions
+//     about the same ground is the fault the rewrite exists to end.
 //   - the MATERIAL TABLE. `SUB_MAT` is the source of record and the terrain
 //     kernel inlines a copy, because the kernel's closure is stringified into
 //     a worker and may not touch a module binding. That is a real constraint,
@@ -22,8 +22,10 @@
 //     that can hold a duplicate honest.
 //   - the NOISE, by its statistics. subDomainAt is a float64 port of a float32
 //     shader function and cannot be compared value for value to something that
-//     does not run here; what the weights actually read of it is its mean, its
-//     range and that two samples a patch apart have decorrelated.
+//     does not run here; what the fragment actually reads of it is its mean,
+//     its range and that two samples a patch apart have decorrelated. Since
+//     phase D nothing in the GAME calls that port — it is test API, and this
+//     is the test it exists for.
 import { execSync } from 'node:child_process';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -180,24 +182,42 @@ console.log('\nthe layered model expresses what the doctrine says:');
     `…and the SAME ground on a bare cover class is mantled (${thaw.mantle.toFixed(3)}) — a veto on two classes, not a classifier`);
 }
 
-console.log('\nthe retiring classifier still does what it did (phase D takes it):');
+console.log('\nthe transforms the sward and the fragment share:');
 {
-  const ev = M.subEvidence(0.711, 0.727, 0.746);   // the Yosemite granite reading
-  check(ev.warm < 0, `pale granite reads COOL (warm ${ev.warm.toFixed(3)}) — the gate the cover class had to rescue`);
-  const bare = M.subWeightsOf(M.subMatOf(60, 0.03), ev.veg, ev.warm, 0.5);
-  check(bare.rock > 0.3 && bare.soil > 0.3,
-    `and still classifies as outcrop and regolith (rock ${bare.rock.toFixed(3)}, soil ${bare.soil.toFixed(3)})`);
-  const snow = M.subEvidence(0.92, 0.94, 0.97);
-  const ice = M.subWeightsOf(M.subMatOf(70, 0.05), snow.veg, snow.warm, 0.5);
-  check(ice.rock + ice.soil + ice.turf < 0.01,
-    `a snowfield is left alone entirely (${(ice.rock + ice.soil + ice.turf).toFixed(4)})`);
-  const sea = M.subWeightsOf(M.subMatOf(80, 0), 0, 0, 0.5);
-  check(sea.turf < 0.01, 'open water grows no turf');
-  // The grass factor is a multiplier, and the doctrine says which way it runs.
-  check(M.subGrassFactor({ rock: 0, soil: 0, turf: 1 }) > 0.95, 'turf allows grass');
-  check(M.subGrassFactor({ rock: 1, soil: 0, turf: 0 }) < 0.25, 'outcrop does not');
-  check(M.subGrassFactor({ rock: 0, soil: 1, turf: 0 }) > M.subGrassFactor({ rock: 1, soil: 0, turf: 0 }),
-    'and dirt allows more than stone');
+  // ── THE ONE THING PHASE D LEFT SHARED, AND IT HAS TO BE ── a blade fades
+  // toward the ground it stands in, so `subLayerTint` must be the fragment's
+  // own composite. What is checked is the CLAIM rather than the arithmetic:
+  // rock pulls the chroma out and cools, fines warm, grass greens, and none of
+  // the three moves luminance more than a fraction of a palette step (0.07
+  // sRGB), because a brightness difference reads as a different TONE and a hue
+  // difference reads as a different MATERIAL.
+  const lum = ([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const ground = [0.52, 0.50, 0.44];
+  const only = (k) => ({ mantle: 0, rock: 0, grass: 0, [k]: 1 });
+  const rock = M.subLayerTint(...ground, only('rock'));
+  const fines = M.subLayerTint(...ground, only('mantle'));
+  const grass = M.subLayerTint(...ground, only('grass'));
+  const chroma = ([r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b);
+  check(chroma(rock) < chroma(ground) * 0.5,
+    `bedrock pulls the chroma out (${chroma(ground).toFixed(3)} to ${chroma(rock).toFixed(3)})`);
+  check(rock[2] / rock[0] > ground[2] / ground[0], 'and cools it');
+  check(fines[0] / fines[2] > ground[0] / ground[2],
+    `the fines oxidise warm (${(fines[0] / fines[2]).toFixed(2)} against ${(ground[0] / ground[2]).toFixed(2)})`);
+  check(grass[1] / grass[0] > ground[1] / ground[0], 'and the grassy complement greens');
+  const step = 0.07;
+  for (const [name, c] of [['rock', rock], ['fines', fines], ['grass', grass]]) {
+    check(Math.abs(lum(c) - lum(ground)) < step * 0.8,
+      `${name} holds luminance to under a palette step (${(lum(c) - lum(ground)).toFixed(4)})`);
+  }
+  // Nothing is composited at all where the shares are zero: the painter's own
+  // colour is the honest answer for ground the layers do not describe.
+  const none = M.subLayerTint(...ground, { mantle: 0, rock: 0, grass: 0 });
+  check(none.every((v, i) => Math.abs(v - ground[i]) < 1e-9), 'no share leaves the palette alone');
+  // …and the snow veto's input comes off the same table the kernel copies.
+  check(M.subGrainOf(70) === 0 && M.subGrainOf(80) === 0,
+    'snow and water carry grain 0 — the veto is a veto on two classes');
+  check(M.subGrainOf(60) > 0.5 && M.subGrainOf(40) > 0 && M.subGrainOf(null) === 0.5,
+    'bare ground is mineral, cropland is not snow, and unmapped abstains');
 }
 
 console.log(fails ? `\n${fails} FAILURES` : '\nsubstrate-field: all ok');
