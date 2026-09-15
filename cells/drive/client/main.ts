@@ -11638,6 +11638,11 @@ if (EZ_ON) {
  * map it could reach does not exist.
  */
 const IMPOSTOR_ON = qsOn('impostor', true);
+/** Live, so the tier can be compared on ONE settled world. Every other tree
+ *  switch is read once into a const at boot, which forces its A/B across two
+ *  boots that differ by wildlife, sward phase and arrival order before they
+ *  differ by the thing under test; this one does not have to. */
+let impostorDraw = IMPOSTOR_ON;
 /** Instance slots. Four triangles each, against ~1,045 for a baked skeleton:
  *  the whole tier at capacity is 32k triangles against the skeletons' 2.4M. */
 const IMPOSTOR_CAP = 8000;
@@ -14151,7 +14156,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // population the cap cuts — 54,815 of 57,112 on the seat's own rack — and
   // until now it was drawn as nothing at all.
   let impN = 0, impOffered = 0, impFormed = 0;
-  if (impostors) {
+  if (impostors && impostorDraw) {
     const full2 = IMPOSTOR_FULL_M * IMPOSTOR_FULL_M;
     const fadeFrom = treeRange * 0.66;
     for (const fam of EZ_FAMILIES) {
@@ -33745,6 +33750,14 @@ function tapeKeep(): string {
         top: +impTopU.value.toFixed(3), tris: impProf.drawn * 4 }
     : { on: false };
   return out;
+};
+
+/** The impostor tier on one settled world — see `impostorDraw`. Re-runs the
+ *  refresh synchronously, so the caller may photograph immediately. */
+(window as unknown as { __impostor?: object }).__impostor = (on?: boolean): object => {
+  if (on !== undefined && impostors) { impostorDraw = !!on; refreshVeg(); }
+  return { built: !!impostors, drawing: impostorDraw, drawn: impProf.drawn,
+    offered: impProf.offered, tris: impProf.drawn * 4 };
 };
 
 /** Every decoded variant's extent, for the harness: a bad bake shows here. */

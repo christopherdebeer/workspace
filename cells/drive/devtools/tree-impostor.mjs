@@ -2,98 +2,89 @@
  * ── DOES A TREE ACQUIRE DETAIL, OR EXISTENCE? ──
  *
  *   node cells/drive/devtools/tree-impostor.mjs
- *   FIX=at-campsbay TRIS=0.4 node .../tree-impostor.mjs
+ *   FIX=at-campsbay TRIS=600000 node .../tree-impostor.mjs
  *
- * The impostor tier draws the candidates admission turned down. This boots the
- * same world twice with `?impostor=` the only difference and reports what the
- * tier stands up, what it costs in triangles, and — the reason the frames are
- * taken — what the ground past the geometry's edge LOOKS like either way.
+ * The impostor tier draws the candidates admission turned down. This measures
+ * what it stands up and what it changes on screen.
  *
- * `TRIS=` squeezes the triangle budget so the cap bites hard and the tier has
- * something to do: at the shipped budget on a fixture only one family is cut,
- * and a measurement of a tier at the setting where it barely fires is a
- * measurement of nothing. The seat's own rack (`range 2800m · pop 2x`) is the
- * case this stands in for — 54,815 of 57,112 candidates cut.
+ * ONE BOOT, INTERLEAVED. `__impostor(on)` re-runs the refresh synchronously, so
+ * off / on / off happen on the SAME settled world — the repeat is the noise
+ * floor at the same separation as the cross pair, and without it a two-boot
+ * comparison carries the wildlife, the sward's phase and the arrival order
+ * before it carries the tier. Every other tree switch is read once at boot and
+ * forces exactly that; this one does not.
+ *
+ * `TRIS` is RAW TRIANGLES, which is what `?treetris=` takes — the first two
+ * runs of this tool passed 0.35 and 1.2 meaning megatriangles, set the budget
+ * to ONE triangle, and admitted no skeletons at all. An A/B between nothing
+ * and impostors cannot show a handoff: there is nothing to hand off from.
  */
-import { openDrive } from './harness.mjs';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
+import { openDrive } from './harness.mjs';
 
 const FIX = process.env.FIX ?? 'at-yosemite';
-// 1.2M rather than the shipped 2.4: the cap then bites hard enough that both
-// tiers are on screen at once, which is the comparison. The first run of this
-// used 0.35 and admitted NO skeletons at all — an A/B between nothing and
-// impostors, which cannot show a handoff because there is nothing to hand off
-// from. A squeeze that removes one side of the comparison is not a squeeze.
-const TRIS = process.env.TRIS ?? '1.2';
-const SECS = Number(process.env.SECS ?? 150);
+const TRIS = Number(process.env.TRIS ?? 900000);
+const SECS = Number(process.env.SECS ?? 240);
 const OUT = process.env.DRIVE_WORK ?? '/tmp/drive-tools';
 mkdirSync(OUT, { recursive: true });
-const t0 = Date.now();
-const el = () => `${((Date.now() - t0) / 1000).toFixed(0)}s`;
 
-async function run(on) {
-  const d = await openDrive({
-    spot: `fixture=${FIX}&cam=chase&time=NOON&wx=clear&treetris=${TRIS}&impostor=${on}`,
-    tag: `impostor-${on}`, settle: 0, bootTimeout: 300000,
-  });
-  const q = (f, ...a) => d.page.evaluate(f, ...a);
-  // BOTH TIERS IN THE SIGNAL. Watching the skeletons' triangles alone reads a
-  // world with no skeletons as never settling, which is exactly the state a
-  // squeezed budget produces.
-  let quiet = 0, pp = '';
-  for (let i = 0; i < SECS / 3; i++) {
-    await d.page.waitForTimeout(3000);
-    const e = await q(() => window.__ez());
-    const n = `${e.tris ?? 0}/${e.impostor?.drawn ?? 0}`;
-    quiet = (n === pp && n !== '0/0') ? quiet + 1 : 0; pp = n;
-    if (quiet >= 3) break;
-  }
-  // The HUD off, so a frame is the world and not the instruments.
-  await q(() => window.__hud?.(false));
-  await d.page.waitForTimeout(1500);
-  await d.page.screenshot({ path: `${OUT}/impostor-${on}.png` });
-  // THE CENSUS IS THE INDEPENDENT WITNESS. `__ez` reports what the refresh
-  // WROTE; the census reports what is in the scene and drawn, which is the
-  // only thing that can tell a staged instance from a rendered one.
-  const r = await q(() => {
-    const c = window.__census?.() ?? {};
-    return {
-      ez: window.__ez(),
-      // Straight off the live mesh in the scene: index count over three times
-      // the instance count, bucketed by the name the mesh was given.
-      imp: { meshes: c.kind?.['veg-impostor'] ?? 0, tris: c.tris?.['veg-impostor'] ?? 0 },
-    };
-  });
-  const errs = d.errors.slice(0, 4);
-  await d.close();
-  return { ...r, settled: quiet >= 3, errs };
+const d = await openDrive({
+  spot: `fixture=${FIX}&cam=chase&time=NOON&wx=clear&treetris=${TRIS}`,
+  tag: 'impostor', settle: 0, bootTimeout: 300000,
+});
+const q = (f, ...a) => d.page.evaluate(f, ...a);
+
+let quiet = 0, pp = '';
+for (let i = 0; i < SECS / 3; i++) {
+  await d.page.waitForTimeout(3000);
+  const e = await q(() => window.__ez());
+  const n = `${e.tris ?? 0}/${e.impostor?.drawn ?? 0}`;
+  quiet = (n === pp && n !== '0/0') ? quiet + 1 : 0; pp = n;
+  if (quiet >= 3) break;
 }
+const settled = quiet >= 3;
+await q(() => window.__hud?.(false));
 
-const off = await run(0);
-console.log(`[${el()}] impostor off`);
-const on = await run(1);
-console.log(`[${el()}] impostor on\n`);
-
-console.log(`── ${FIX} · budget ${TRIS}M · ${off.settled && on.settled ? 'settled' : 'NOT SETTLED — provisional'}`);
-let bad = false;
-for (const [name, r] of [['off', off], ['on', on]]) {
-  if (r.errs.length) { bad = true; console.log(`  !! ${name} PAGE ERRORS: ${r.errs.join(' | ')}`); }
+const legs = [];
+for (const [tag, on] of [['a1', false], ['b1', true], ['a2', false]]) {
+  await q((v) => window.__impostor(v), on);
+  await d.page.waitForTimeout(1200);
+  await d.page.screenshot({ path: `${OUT}/imp-${tag}.png` });
+  legs.push(await q(() => ({ imp: window.__impostor(), ez: window.__ez() })));
 }
-// A GLSL link failure logs to the console and throws nothing, so the tier
-// draws as absent while every count above still reads correct. The errors are
-// the verdict, not a footnote.
-if (bad) console.log('  !! THE NUMBERS BELOW DESCRIBE A BUILD THAT DID NOT LINK. Read no further.');
-const row = (k, a, b) => console.log(`  ${k.padEnd(20)} ${String(a).padStart(10)} ${String(b).padStart(10)}`);
-console.log(`  ${''.padEnd(20)} ${'off'.padStart(10)} ${'on'.padStart(10)}`);
-row('skeletons placed', off.ez.placed, on.ez.placed);
-row('skeleton triangles', off.ez.tris, on.ez.tris);
-row('impostors drawn', off.ez.impostor?.drawn ?? '—', on.ez.impostor?.drawn ?? '—');
-row('of offered', off.ez.impostor?.offered ?? '—', on.ez.impostor?.offered ?? '—');
-row('impostor triangles', off.ez.impostor?.tris ?? '—', on.ez.impostor?.tris ?? '—');
-for (const f of Object.keys(on.ez.edge ?? {})) row(`${f} edge`, off.ez.edge[f], on.ez.edge[f]);
-const share = on.ez.impostor?.tris && on.ez.tris
-  ? ((on.ez.impostor.tris / (on.ez.tris + on.ez.impostor.tris)) * 100).toFixed(2) : '—';
-console.log(`\n  The tier stands up ${on.ez.impostor?.drawn ?? 0} trees for ${share}% of the`
-  + ` vegetation triangle bill — that ratio IS the argument.`);
-console.log(`  in scene: ${JSON.stringify(on.imp)}`);
-console.log(`  Frames: ${OUT}/impostor-0.png and impostor-1.png`);
+// Back on, and read the census for an INDEPENDENT witness: `__ez` reports what
+// the refresh WROTE, which a staged instance satisfies as well as a drawn one.
+// `byTris` is the top twelve by triangle count, so a small tier is absent
+// rather than zero — which is a different statement and must be printed as one.
+await q(() => window.__impostor(true));
+const census = await q(() => window.__census());
+const errs = d.errors.slice(0, 4);
+await d.close();
+
+const diff = (a, b, out) => {
+  const t = execFileSync('node', [new URL('./imgdiff.mjs', import.meta.url).pathname,
+    `${OUT}/imp-${a}.png`, `${OUT}/imp-${b}.png`, `${OUT}/${out}`], { encoding: 'utf8' });
+  return t.trim().split('\n').pop();
+};
+
+console.log(`\n── ${FIX} · budget ${TRIS} tris · ${settled ? 'settled' : 'NOT SETTLED — provisional'}`);
+if (errs.length) {
+  console.log(`  !! PAGE ERRORS: ${errs.join(' | ')}`);
+  console.log('  !! A GLSL link failure logs and throws nothing: the tier would be ABSENT');
+  console.log('     while every count below still read correct. Read no further.');
+}
+const [a1, b1] = legs;
+console.log(`  skeletons placed ${b1.ez.placed} · ${(b1.ez.tris / 1e6).toFixed(2)}M tris`);
+console.log(`  impostors drawn  ${b1.imp.drawn} of ${b1.imp.offered} offered`
+  + ` · ${(b1.imp.tris / 1000).toFixed(1)}k tris`
+  + ` · ${(b1.imp.tris / (b1.ez.tris + b1.imp.tris) * 100).toFixed(2)}% of the vegetation bill`);
+console.log(`  off leg drew ${a1.imp.drawn} (must be 0)`);
+console.log(`  edges ${JSON.stringify(b1.ez.edge)}`);
+const inScene = census.byTris?.['veg-impostor'];
+console.log(`  census: ${inScene === undefined
+  ? 'veg-impostor outside the top twelve by triangles — absent from this list is not zero'
+  : `veg-impostor ${inScene} tris in the scene`}`);
+console.log(`\n  FLOOR  (off against off) ${diff('a1', 'a2', 'imp-floor.png')}`);
+console.log(`  SIGNAL (off against on)  ${diff('a1', 'b1', 'imp-signal.png')}`);
+console.log(`\n  Frames in ${OUT}: imp-a1/b1/a2.png, imp-floor.png, imp-signal.png`);

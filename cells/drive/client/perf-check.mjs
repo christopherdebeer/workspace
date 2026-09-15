@@ -108,6 +108,7 @@ function context(code,range,ez,triCap) {
     impStage:{m:new Float32Array(512*16),c:new Float32Array(512*3),
       f:new Float32Array(512),y:new Float32Array(512)},
     impostors:impostorMesh(512),
+    impostorDraw:true,
     ezVariants:()=>[{form:'round'},{form:'conic'},{form:'columnar'}],
     sampleHeight:(x,z)=>Math.sin(x/30)+Math.cos(z/30),
     hash2:(a,b)=>((Math.imul(a,73856093)^Math.imul(b,19349663))>>>0)/4294967296,
