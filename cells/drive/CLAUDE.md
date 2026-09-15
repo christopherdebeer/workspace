@@ -242,6 +242,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~20s |
 | `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
 | `node devtools/switches.test.mjs` | the table cannot rot in either direction | instant |
+| `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the one fault class the harness is structurally blind to, its SwiftShader context being WebGL1 | instant |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
@@ -4557,6 +4558,22 @@ version of it.
 **GLSL ES 1.00**: dynamic indexing of a uniform array in a fragment shader is
 illegal. Use a lookup texture. (`markTins` in `facade.ts` is the worked
 example.)
+
+**AND A GLSL IDENTIFIER IS CHECKED AGAINST ES 3.00, NOT ES 1.00 — BY A TEST.**
+three compiles `#version 300 es` on a WebGL2 context and ES 1.00 on WebGL1,
+and the two reserve different words. **The harness's SwiftShader context is
+WebGL1**, so a shader naming a variable `patch`, `sample`, `filter` or `cast`
+compiles green here and fails to link on every phone — which is the worst
+arrangement a trap can have, and it is not hypothetical: the sward's
+structural expression shipped with a parameter called `patch` and the device
+dump came back with `ERROR: 0:224: 'patch' : Illegal use of reserved word` on
+TWO programs, with the world looking perfectly normal, because a program that
+fails to link logs to the console and throws nothing. `cast` in the façade
+shader was the same fault two years of sessions earlier. `devtools/glsl-reserved.test.mjs`
+scans every GLSL template literal in `client/` against the ES 3.00
+reserved-for-future list, with comments and three's own `#include <common>`
+chunk names stripped, and it carries the shipped form as its negative control.
+It is instant; run it with `tsc`.
 
 **A backtick inside a GLSL comment breaks the enclosing TS template literal.**
 This has now cost FIVE separate rounds — two of them in one session, both in
