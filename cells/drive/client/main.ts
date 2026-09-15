@@ -16682,22 +16682,35 @@ function meshTriAt(x: number, z: number): Array<{ x: number; y: number; z: numbe
   }
   return null;
 }
-/** ── AND THE LOOKUP IS NOT THE COST; THE TRIANGLE SOLVE IS ──
+/** ── THE LOOKUP AND THE SOLVE COST THE SAME, AND THAT DECIDES THE CUT ──
  *
- *  `meshSurfaceAt` is the hottest lookup in the client — a redrape alone asked
- *  it 930,560 times in an 84 s device session — and it opens by building a
- *  `${tx}/${ty}` for a tile it has almost certainly just been asked about.
- *  That reads like the cost and is not it. MEASURED (devtools/redrape-ga.mjs):
- *  memoising the key on the tile indices, so 2,492 string builds a redrape
- *  become one, moved the walk 2.01 → 2.16 ms a call against a floor of 0.49 —
- *  nothing, in the direction of worse. Reverted.
+ *  This is the hottest lookup in the client — a redrape alone asked it 930,560
+ *  times in an 84 s device session. MEASURED by substitution
+ *  (devtools/redrape-ga.mjs, four off legs against a 0.32 ms floor): a whole
+ *  `groundAt` is 654 ns, of which the LOCATE half — the `tileAt` arithmetic,
+ *  the `${tx}/${ty}`, the dirty Set and the two Maps, down to `cellTrisOf` —
+ *  is 322 ns, and the barycentric SOLVE over the cell's triangles is 332. Two
+ *  halves, near enough equal, both clearing the floor.
  *
- *  `locateOnly` is what turned that into an attribution rather than a shrug:
- *  it runs everything down to `cellTrisOf` and returns before the triangles,
- *  so the substitution probe can price the two halves separately. Nothing in
- *  the game passes it — the parameter exists so the measurement can be taken
- *  against the SHIPPED function rather than against a copy of it that drifts.
- *  See the redrape note above and CLAUDE.md. */
+ *  `locateOnly` is what made that an attribution rather than a guess: it runs
+ *  everything down to `cellTrisOf` and returns before the triangles. Nothing
+ *  in the game passes it — it exists so the probe prices the halves against
+ *  the SHIPPED function rather than against a copy of it that drifts.
+ *
+ *  SO THE STANDING CUT IS WORTH 38% OF A REDRAPE'S WALK AND NOT A PERCENT
+ *  MORE: `redrape` holds `t` and has already proved the vertex is inside its
+ *  box, so the locate chain is redundant there and can be resolved once a
+ *  call rather than once a vertex — the walk is synchronous, so neither
+ *  `terrainDirty` nor `terrainMeshes` can change inside it. The solve half is
+ *  not reachable that way; the triangle IS the answer.
+ *
+ *  AND A NULL THAT MISLED ME, KEPT BECAUSE THE INFERENCE WAS WRONG.
+ *  Memoising the key on the tile indices — 2,492 string builds a redrape
+ *  become one — moved the walk 2.01 to 2.16 ms against a floor of 0.49, so it
+ *  was reverted. From that I concluded the lookup was not the cost. False: the
+ *  memo removes ONE LINE of the locate chain and leaves `tileAt`, the Set,
+ *  both Maps, `segOf` and `cellTrisOf` standing, and those are the 322 ns. A
+ *  null from removing part of a thing says nothing about the whole of it. */
 function meshSurfaceAt(x: number, z: number, locateOnly = false): number | null {
   const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
   const key = `${tx}/${ty}`;

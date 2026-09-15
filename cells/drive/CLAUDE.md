@@ -11566,15 +11566,65 @@ again: an audit that ran the full walk beside the indexed one over 328 drapes
 found **0 vertices missed**, so the index was right and simply not worth
 having.
 
-**WHERE THE CUT ACTUALLY IS, then, and none of it is the scan:** `groundAt` per
-in-tile vertex, ~3,500 of them a build. It locates the tile, then the cell,
-then the triangle — and `redrape` ALREADY KNOWS THE TILE, because it was handed
-`t`. That is the same shape as the substrate contact sampler's `tileAt`, which
-cost 17% of a phone's CPU until it kept the last tile it answered for. Failing
-that, `reseat` (15.1 ms a build here, nearly redrape's equal and never
-suspected) and `batter` (9.9) are the other two thirds of a 47 ms post, and the
-standing task is to spread all three across frames rather than to make any one
-of them cleverer.
+**AND THE DEVICE SAID IT HARDER.** The dump on the deployed instrument
+(Paris, 84 s active, build 294eb1437bbd): `terrainApply` **68.6 ms a build over
+160 builds — 11.0 s of an 83.6 s session**, post split `reseat 6.8 · redrape
+45.6 · batter 13.7`, and within the redrape **walk 44.7 ms against normals
+0.8** — the recompute is **1.8%** there against 7% here. 28,902 vertices
+scanned to move 5,816, and one build's walk alone hit **431 ms**. The device is
+not simply slower: it walks 1.9x the vertices at 1.4x the cost each.
+
+### …and `groundAt` splits almost exactly in half, which decides the cut
+
+`performance.now()` cannot price a call of a microsecond or two — the clock is
+coarsened on iOS and half a million reads would cost more than the thing being
+read — so the measurement is a SUBSTITUTION with its own control
+(`devtools/redrape-ga.mjs`, `__gaprobe`): every vertex that reaches `groundAt`
+calls it a SECOND time and throws the answer away. Same vertices walked, same
+ones moved, counters identical on every leg — so the difference between legs IS
+the cost of those calls. Interleaved off·whole·off·locate, four off legs giving
+the floor. On `at-paris-west`, settled, 2,492 calls a redrape:
+
+| | ms a call | ns a call | of the walk |
+|---|---|---|---|
+| the walk itself | 2.09 | — | — |
+| **floor** (off against off) | **0.32** | — | — |
+| a whole `groundAt` | **1.63** | 654 | **78%** |
+| …its LOCATE half | **0.80** | 322 | **38%** |
+| …its SOLVE half | **0.83** | 332 | **40%** |
+
+Both halves clear the floor by two and a half and five times. **`locate` is the
+`tileAt` arithmetic, the `${tx}/${ty}`, the dirty Set and the two Maps; `solve`
+is the barycentric walk over the cell's triangles** at nine-plus
+`BufferAttribute` reads apiece. `meshSurfaceAt` takes a `locateOnly` parameter
+for exactly this and nothing in the game passes it — the point is to price the
+halves against the SHIPPED function rather than against a copy that drifts.
+
+**SO A TILE-AWARE `groundAt` IS WORTH 38% OF THE WALK AND NOT A PERCENT MORE.**
+`redrape` already holds `t`, and has already proved the vertex is inside its
+box, so the whole locate chain is redundant — and it can be resolved ONCE per
+redrape rather than per vertex, because the walk is synchronous and neither
+`terrainDirty` nor `terrainMeshes` can change inside it. On the device's own
+numbers that is ~17 ms of a 45.6 ms redrape and ~3% of the session. The solve
+half is untouchable this way: the triangle is the answer.
+
+**A NULL RESULT THAT MISLED ME, RECORDED BECAUSE THE INFERENCE WAS WRONG.**
+Before the split was measured, the key was memoised on the tile indices — a
+redrape's 2,492 string builds become one — and it moved the walk 2.01 to 2.16
+ms against a floor of 0.49: nothing, in the direction of worse. Reverted. From
+that null I concluded "the lookup is not the cost, it must be the solve", and
+that was FALSE: the memo removes one line of the locate chain (the allocation,
+and the hash the Map lookups then recompute) and leaves `tileAt`, the dirty
+Set, both Maps, `segOf` and `cellTrisOf` running. The direct measurement says
+the chain it left standing is 322 ns. **A null from removing part of a thing is
+not evidence about the whole of it** — and the general form is one this file
+already states about probes: measure the thing you mean to cut, not a
+neighbour of it.
+
+Failing all of that, `reseat` (6.8 ms a build on the device, never suspected)
+and `batter` (13.7) are the rest of a 68 ms post, and spreading all three
+across frames remains the standing alternative to making any one of them
+cleverer.
 
 `redrapeProf` and the telemetry's `redrape` row are what is kept. The index is
 not, and this section is here so it is not rediscovered as an idea.
