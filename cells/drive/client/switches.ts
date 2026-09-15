@@ -193,6 +193,8 @@ export const SWITCHES = [
     note: 'sward=cpu goes back to the old CPU lattice' },
   { id: 'lumasync', kind: 'toggle', marks: ['legacy'], fallback: 'asynchronous',
     note: 'lumasync=1 reads the luma map synchronously, as it used to' },
+  { id: 'drapefast', kind: 'toggle', marks: ['legacy'], fallback: 'bound',
+    note: 'drapefast=0 makes a redrape pay the tile lookup on every vertex again' },
   { id: 'hydroskip', kind: 'toggle', marks: ['legacy'], fallback: 'skip',
     note: 'hydroskip=0 rebuilds a water tile even when nothing it reads has moved' },
   { id: 'hydrodry', kind: 'toggle', marks: ['legacy'], fallback: 'short',

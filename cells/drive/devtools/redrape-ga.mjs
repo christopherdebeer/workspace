@@ -36,12 +36,19 @@ import { openDrive } from './harness.mjs';
 const FIX = process.env.FIX ?? 'at-paris-west';
 const SPOT = process.env.SPOT ?? '';
 const LEGS = Number(process.env.LEGS ?? 8);
+// THE ROLLBACK, AS THE A/B. `drapefast=0` pays the tile lookup per vertex as
+// it always did; the default binds it once a call. Two boots rather than one,
+// which is sound here and only here: the counters (verts walked, groundAt
+// calls) come out identical on every boot of a settled fixture, so the two
+// runs are measuring the same work.
+const FAST = process.env.FAST ?? '1';
+const AUDIT = process.env.AUDIT ?? '1';
 const t0 = Date.now();
 const el = () => `${((Date.now() - t0) / 1000).toFixed(0)}s`;
 
 const where = SPOT ? SPOT : `fixture=${FIX}`;
 const d = await openDrive({
-  spot: `${where}&cam=chase&time=NOON&wx=clear&nodraw=1`,
+  spot: `${where}&cam=chase&time=NOON&wx=clear&nodraw=1&drapefast=${FAST}`,
   tag: 'redrape-ga', settle: 0, bootTimeout: 420000, dpr: 1,
 });
 const q = (f, ...a) => d.page.evaluate(f, ...a);
@@ -81,6 +88,31 @@ async function leg(mode) {
   return { ...r, dirtied, done: still >= 2 };
 }
 
+// ── THE AUDIT FIRST, BECAUSE A FAST PATH THAT IS WRONG IS NOT FAST ──
+//
+// Every vertex answered by BOTH samplers, compared exactly. The standard is
+// the drape index's: zero disagreements, or the cut does not ship. Run before
+// the timing legs and disarmed after, since running both is the whole cost of
+// the thing twice over.
+if (AUDIT !== '0' && FAST !== '0') {
+  await q(() => window.__drapeaudit(true));
+  await q(() => window.__redirty());
+  let s2 = 0, pc2 = -1;
+  for (let i = 0; i < 80; i++) {
+    await d.page.waitForTimeout(2000);
+    const t = await q(() => window.__tstats());
+    const c = await q(() => window.__redrape().calls);
+    s2 = (t.dirty === 0 && c === pc2 && c > 0) ? s2 + 1 : 0; pc2 = c;
+    if (s2 >= 2) break;
+  }
+  const A = await q(() => window.__drapeaudit(false));
+  console.log(`[${el()}] AUDIT · bound ${A.bound}/${A.bound + A.fell} redrapes`
+    + ` · checked ${A.checked} vertices · MISMATCH ${A.mismatch}`
+    + ` · worst ${A.maxDelta.toExponential(2)} m`);
+  if (A.checked === 0) console.log('  NOTHING WAS CHECKED — the audit proves nothing here');
+  else if (A.mismatch > 0) console.log('  THE FAST PATH DISAGREES — do not ship it');
+}
+
 // off · whole · off · locate · off · whole … — the off legs interleave BOTH
 // probe modes so neither is compared against a floor taken only beside the
 // other, and the two halves are priced against the same baseline.
@@ -112,7 +144,7 @@ const dLocate = locates.length ? mean(locates, 'walkMs') - walkOff : NaN;
 const g = mean(offs, 'groundPerCall');
 const ns = (ms) => (ms * 1e6 / Math.max(1, g)).toFixed(0);
 
-console.log(`\n── ${where} · ${settled ? 'settled' : 'NOT SETTLED'} · page errors ${errs}`);
+console.log(`\n── ${where} · drapefast=${FAST} · ${settled ? 'settled' : 'NOT SETTLED'} · page errors ${errs}`);
 console.log(`  walk ms/call   off ${walkOff.toFixed(2)}`
   + `   +whole groundAt ${(walkOff + dWhole).toFixed(2)}`
   + (locates.length ? `   +locate only ${(walkOff + dLocate).toFixed(2)}` : ''));

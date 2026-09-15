@@ -16682,6 +16682,32 @@ function meshTriAt(x: number, z: number): Array<{ x: number; y: number; z: numbe
   }
   return null;
 }
+/** THE BARYCENTRIC WALK, ONCE. Two callers solve a cell for a height — the
+ *  general `meshSurfaceAt`, which must locate the tile first, and the
+ *  tile-BOUND sampler below it, which has been handed the tile. They are the
+ *  same rule and this file's whole doctrine is that a rule written twice is a
+ *  rule whose copies disagree, so it is written here and takes primitives: no
+ *  object is built, nothing is allocated, and the hot path pays a call rather
+ *  than a copy. `fx`/`fz` arrive already computed because each caller derives
+ *  them from its own bounds test and neither should do it twice. */
+function solveCell(pos: THREE.BufferAttribute, ct: CellTris, SEG: number,
+  fx: number, fz: number, ox: number, oz: number, x: number, z: number): number | null {
+  const kc = Math.floor(fz) * SEG + Math.floor(fx);
+  for (let h = ct.offs[kc]; h < ct.offs[kc + 1]; h++) {
+    const a = ct.tris[h * 3], b = ct.tris[h * 3 + 1], c = ct.tris[h * 3 + 2];
+    const ax = pos.getX(a) + ox, az = pos.getZ(a) + oz;
+    const bx = pos.getX(b) + ox, bz = pos.getZ(b) + oz;
+    const cx = pos.getX(c) + ox, cz = pos.getZ(c) + oz;
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(d) < 1e-9) continue;
+    const w1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d;
+    const w2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d;
+    const w3 = 1 - w1 - w2;
+    if (w1 < -1e-6 || w2 < -1e-6 || w3 < -1e-6) continue;
+    return w1 * pos.getY(a) + w2 * pos.getY(b) + w3 * pos.getY(c);
+  }
+  return null;
+}
 /** ── THE LOOKUP AND THE SOLVE COST THE SAME, AND THAT DECIDES THE CUT ──
  *
  *  This is the hottest lookup in the client — a redrape alone asked it 930,560
@@ -16732,22 +16758,7 @@ function meshSurfaceAt(x: number, z: number, locateOnly = false): number | null 
   if (fx < 0 || fz < 0 || fx >= SEG || fz >= SEG) return null;
   const ct = cellTrisOf(geo, SEG);
   if (locateOnly) return null;                // the probe's half — see the note above
-  const kc = Math.floor(fz) * SEG + Math.floor(fx);
-  const ox = t.xs + t.w / 2, oz = t.zs + t.h / 2;
-  for (let h = ct.offs[kc]; h < ct.offs[kc + 1]; h++) {
-    const a = ct.tris[h * 3], b = ct.tris[h * 3 + 1], c = ct.tris[h * 3 + 2];
-    const ax = pos.getX(a) + ox, az = pos.getZ(a) + oz;
-    const bx = pos.getX(b) + ox, bz = pos.getZ(b) + oz;
-    const cx = pos.getX(c) + ox, cz = pos.getZ(c) + oz;
-    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
-    if (Math.abs(d) < 1e-9) continue;
-    const w1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d;
-    const w2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d;
-    const w3 = 1 - w1 - w2;
-    if (w1 < -1e-6 || w2 < -1e-6 || w3 < -1e-6) continue;
-    return w1 * pos.getY(a) + w2 * pos.getY(b) + w3 * pos.getY(c);
-  }
-  return null;
+  return solveCell(pos, ct, SEG, fx, fz, t.xs + t.w / 2, t.zs + t.h / 2, x, z);
 }
 /**
  * THE GROUND — one surface, for everyone.
@@ -17223,6 +17234,73 @@ const redrapeProf = {
   calls: 0, near: 0, inBox: 0, touched: 0, verts: 0, moved: 0, ground: 0,
   walkMs: 0, normalsMs: 0, max: 0,
 };
+/** ── THE TILE-BOUND GROUND SAMPLER: THE LOCATE CHAIN, ONCE A CALL ──
+ *
+ *  Measured (see `meshSurfaceAt`): a whole `groundAt` is 654 ns, of which the
+ *  locate chain — the `tileAt` arithmetic, the key, the dirty Set, the two
+ *  Maps, `segOf` and `cellTrisOf` — is 322. A redrape pays it on every
+ *  in-tile vertex, ~5,800 of them a build on the device, to be told the tile
+ *  it was HANDED. Bound once a call instead, that is 38% of the walk.
+ *
+ *  THE WALK IS SYNCHRONOUS, WHICH IS WHAT MAKES ONCE-A-CALL SOUND. Nothing
+ *  inside it awaits, so `terrainDirty`, `terrainMeshes` and `heightTiles`
+ *  cannot change between the bind and the last vertex. Anything that makes
+ *  the walk yield — slicing it across frames, which is the standing
+ *  alternative for this cost — invalidates that and must re-bind per slice.
+ *
+ *  AND THE BIND REFUSES RATHER THAN GUESSES. `heightTiles.get(key) !== t` is
+ *  the load-bearing line: it is not enough that a tile with this key exists,
+ *  it must be the very object the caller was handed, or the geometry and the
+ *  bounds being solved against belong to different tiles. A dirty tile, a
+ *  missing mesh, a replaced tile or a degenerate lattice all fall back to the
+ *  ordinary `groundAt`, which is the answer this path is a fast copy of.
+ *
+ *  WHAT IT CANNOT PROMISE ON ITS OWN is that `tileAt`'s lat/lon round trip
+ *  agrees with the caller's world-metre box test at a tile EDGE — a vertex on
+ *  the boundary could resolve to the neighbour under `groundAt` and to `t`
+ *  here. That is what `__drapeaudit` is for, and it is the standard the drape
+ *  index was held to: run both for every vertex and require zero
+ *  disagreements before believing it. */
+interface BoundGround {
+  pos: THREE.BufferAttribute; ct: CellTris; SEG: number;
+  xs: number; zs: number; cell: number; cellH: number; ox: number; oz: number;
+}
+function bindGround(t: HeightTile): BoundGround | null {
+  const key = `${t.tx}/${t.ty}`;
+  if (terrainDirty.has(key)) return null;
+  const mesh = terrainMeshes.get(key);
+  if (!mesh || heightTiles.get(key) !== t) return null;
+  const geo = mesh.geometry;
+  const SEG = segOf(geo);
+  if (SEG < 1) return null;
+  return {
+    pos: geo.attributes.position as THREE.BufferAttribute,
+    ct: cellTrisOf(geo, SEG), SEG,
+    xs: t.xs, zs: t.zs, cell: t.w / SEG, cellH: t.h / SEG,
+    ox: t.xs + t.w / 2, oz: t.zs + t.h / 2,
+  };
+}
+/** `groundAt` for a point known to be in the bound tile — the same three
+ *  branches in the same order, with only the lookup skipped. Its fallbacks are
+ *  the real ones: outside the lattice, or a cell no triangle covers, and the
+ *  answer is `sampleHeight` under `roadCeiling` exactly as `groundAt` gives
+ *  it, because a fast path that answers differently at an edge is a fast path
+ *  that puts the physics and the picture on different floors. */
+function boundGroundAt(b: BoundGround, x: number, z: number): number {
+  const fx = (x - b.xs) / b.cell, fz = (z - b.zs) / b.cellH;
+  const m = (fx < 0 || fz < 0 || fx >= b.SEG || fz >= b.SEG)
+    ? null : solveCell(b.pos, b.ct, b.SEG, fx, fz, b.ox, b.oz, x, z);
+  if (m !== null) {
+    if (seaOn && m + baseElev < seaSurfaceAbs() - SEA_BED + 0.5) {
+      const h = sampleHeight(x, z);
+      if (h > m + 1) return h;
+    }
+    return m;
+  }
+  const h = sampleHeight(x, z);
+  const c = roadCeiling(x, z);
+  return c === null || c >= h ? h : c;
+}
 /** ── AND THE WALK IS `groundAt`, MEASURED BY CALLING IT TWICE ──
  *
  *  The walk is 44.7 ms a call on the device against 0.8 for the recompute, so
@@ -17242,6 +17320,16 @@ const redrapeProf = {
  *  probe is the recorded precedent for both the trick and the warning. */
 let gaDouble = 0;      // 0 off · 1 a whole groundAt · 2 the locate half only
 let gaSink = 0;
+/** The rollback for the bound sampler, and the A/B that priced it. A change to
+ *  what the PHYSICS reads deserves a switch the seat can throw, not only a
+ *  console probe: `?drapefast=0` pays the lookup per vertex exactly as before. */
+const DRAPE_FAST = qsOn('drapefast', true);
+/** Run BOTH samplers for every vertex and count where they disagree — the
+ *  standard the drape index was held to. Off by default: it is the whole cost
+ *  of the thing it is checking, twice over, so a walk measured with it on is
+ *  not a redrape number. */
+let drapeAudit = false;
+const drapeAuditProf = { checked: 0, mismatch: 0, maxDelta: 0, bound: 0, fell: 0 };
 /** Re-seat every draped vertex that falls inside a tile just rebuilt. */
 function redrape(t: HeightTile): void {
   const t0 = performance.now();
@@ -17251,6 +17339,11 @@ function redrape(t: HeightTile): void {
   terrainScan.drapes = near.size; terrainScan.ofDrapes = drapedWays.length;
   const P = redrapeProf;
   P.calls++; P.near += near.size;
+  // ONCE A CALL, NOT ONCE A VERTEX — see the note by `bindGround`. A refusal
+  // here is not a failure: it means the tile is dirty, unmeshed or has been
+  // replaced, and the ordinary sampler is the right answer for all three.
+  const B = DRAPE_FAST ? bindGround(t) : null;
+  if (DRAPE_FAST) { if (B) drapeAuditProf.bound++; else drapeAuditProf.fell++; }
   let normalsMs = 0;
   for (const d of near) {
     if (d.x1 < t.xs || d.x0 > tx1 || d.z1 < t.zs || d.z0 > tz1) continue;
@@ -17264,11 +17357,28 @@ function redrape(t: HeightTile): void {
       if (x < t.xs || z < t.zs || x >= tx1 || z >= tz1) continue;
       // Compare the stored float, not a double that rounds to the same float.
       P.ground++;
-      const y = Math.fround(groundAt(x, z) + d.lift);
+      const g = B !== null ? boundGroundAt(B, x, z) : groundAt(x, z);
+      // THE AUDIT IS THE OTHER SAMPLER, NOT A RE-DERIVATION. Comparing against
+      // a second implementation of the rule would prove the two copies agree;
+      // comparing against `groundAt` proves the fast path answers what the
+      // wheels and the picture would have got.
+      if (drapeAudit && B !== null) {
+        const ref = groundAt(x, z);
+        const A = drapeAuditProf;
+        A.checked++;
+        if (g !== ref) { A.mismatch++; A.maxDelta = Math.max(A.maxDelta, Math.abs(g - ref)); }
+      }
+      const y = Math.fround(g + d.lift);
       // The probe's second call — see the note by `gaDouble`. Deliberately
       // AFTER the first and before the early return, so it is paid on exactly
       // the vertices the first is paid on, moved or not.
-      if (gaDouble === 1) gaSink += groundAt(x, z);
+      // MODE 1 DOUBLES WHAT THE WALK ACTUALLY CALLED, or the probe prices a
+      // sampler the walk is not using: with the bound path in, doubling the
+      // unbound `groundAt` adds a dearer call than the one being measured and
+      // reads out over 100% for that reason alone. MODE 2 still doubles the
+      // LOCATE chain, which with the cut in is exactly the work the bound path
+      // no longer does — so it prices the saving rather than the cost.
+      if (gaDouble === 1) gaSink += B !== null ? boundGroundAt(B, x, z) : groundAt(x, z);
       else if (gaDouble === 2) gaSink += meshSurfaceAt(x, z, true) === null ? 1 : 0;
       if (pos.getY(i) === y) continue;
       pos.setY(i, y);
@@ -17308,6 +17418,14 @@ function redrape(t: HeightTile): void {
     P.verts = P.moved = P.ground = 0;
     P.walkMs = P.normalsMs = P.max = 0;
   }
+  return out;
+};
+/** The audit's own ledger, and the switch that arms it. */
+(window as unknown as { __drapeaudit?: object }).__drapeaudit = (on = true): object => {
+  drapeAudit = !!on;
+  const A = drapeAuditProf;
+  const out = { ...A, fast: DRAPE_FAST };
+  A.checked = A.mismatch = A.maxDelta = 0;
   return out;
 };
 (window as unknown as { __gaprobe?: object }).__gaprobe = (on: boolean | number = 1): object => {
@@ -44289,9 +44407,14 @@ function telemetryReport(): string {
     // the ratio that says whether the walk or the recompute is the cost.
     L.push(`redrape ${R.calls} calls · walk ${(R.walkMs / rc).toFixed(1)} normals ${(R.normalsMs / rc).toFixed(1)} ms/call · max ${Math.round(R.max)}`
       + ` · groundAt ${Math.round(R.ground / rc)}/call`
+      + ` · bound ${drapeAuditProf.bound}/${drapeAuditProf.bound + drapeAuditProf.fell}`
       + ` · near ${Math.round(R.near / rc)} inBox ${Math.round(R.inBox / rc)} touched ${Math.round(R.touched / rc)}`
       + ` · verts ${Math.round(R.verts / rc)} moved ${Math.round(R.moved / rc)}`); }
-  //    WHICH PHASE OF A HYDRO BUILD ──
+  { const H = (window as unknown as { __hudprof: (r?: boolean) => { calls: number; msPerCall: number; rows: Record<string, number>; other: number } }).__hudprof();
+    if (H.calls) {
+      const top = Object.entries(H.rows).filter(([, v]) => v >= 0.05).map(([k, v]) => `${k} ${v.toFixed(2)}`);
+      L.push(`hud ${H.calls} draws · ${H.msPerCall.toFixed(2)} ms/call · ${top.join(' · ')} · other ${H.other.toFixed(2)}`);
+    } }  //    WHICH PHASE OF A HYDRO BUILD ──
   //
   // The worker line above says how much a hydro build costs and has never
   // been able to say WHERE it goes. HYDRO_BUILD_PROF has answered that since
@@ -49624,6 +49747,44 @@ function hudSafeRects(): Array<[number, number, number, number]> {
     [0, HH - 30, Math.round(HW * 0.72), 30],         // the place line and coordinates
   ];
 }
+/** ── WHERE THE HUD'S MILLISECONDS GO ──
+ *
+ *  `drawHud` reached 11.0% of a device session at 6.7 ms a call — the third
+ *  largest phase after the gap and terrainApply, drawing on 1,383 of 1,566
+ *  frames. Its own note records it at 1.9 ms when the half-rate gate was
+ *  written and 4.5 when the gate was widened to 40 ms, so the GATE is working
+ *  as designed and the design's assumption — a cheap HUD — is what failed.
+ *
+ *  One number over 1,500 lines cannot say which of a luma map, a scale bar, a
+ *  tile-debug grid, a POI lane solver, a 72-tick compass and a live minimap to
+ *  cut, and this file has now twice recorded a guess at such a split being
+ *  wrong (the redrape's normals, the hydro build's `rest`). So the sections
+ *  are lapped at their OWN comment headers, which is also what keeps a lap
+ *  from drifting onto a neighbour when the code moves.
+ *
+ *  A lap is a subtraction and a property write, once a section, thirteen a
+ *  frame — under the noise of what it measures. `other` is the residual the
+ *  laps do not cover, so the rows sum to the whole and nothing can hide. */
+const hudProf: Record<string, number> = {};
+let hudProfCalls = 0, hudProfMs = 0, hudT0 = 0;
+function hudLap(k: string): void {
+  const n = performance.now();
+  hudProf[k] = (hudProf[k] ?? 0) + (n - hudT0);
+  hudT0 = n;
+}
+(window as unknown as { __hudprof?: object }).__hudprof = (reset = false): object => {
+  const c = Math.max(1, hudProfCalls);
+  const rows = Object.entries(hudProf)
+    .map(([k, v]) => [k, +(v / c).toFixed(3)] as [string, number])
+    .sort((a, b) => b[1] - a[1]);
+  const lapped = rows.reduce((n, r) => n + r[1], 0);
+  const out = {
+    calls: hudProfCalls, msPerCall: +(hudProfMs / c).toFixed(3),
+    rows: Object.fromEntries(rows), other: +(hudProfMs / c - lapped).toFixed(3),
+  };
+  if (reset) { for (const k of Object.keys(hudProf)) delete hudProf[k]; hudProfCalls = hudProfMs = 0; }
+  return out;
+};
 function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   hctx.clearRect(0, 0, HW, HH);
   // ── THE HUD OFF, FOR A MEASUREMENT ──
@@ -49647,11 +49808,16 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // any instrument left drawn here would show through that hole on top of the
   // truck.
   if (menu.tab() !== null) return;
+  // AFTER the early returns, so a frame the HUD stood down on is not counted
+  // as a cheap one: `calls` must be the calls that DREW.
+  const hudEntry = performance.now();
+  hudT0 = hudEntry; hudProfCalls++;
   if (xrayMode === 1 && lumaPrimed) drawLumaMap();
   const pad = 4;
   /** Bottom of the compass strip in HUD pixels: `pad` + the heading digits
    *  under the needle. Nothing else may be drawn through it. */
   const COMPASS_B = pad + 28;
+  hudLap('luma');
   // ── the clock, ON THE HEADING ROW — same baseline, same face, same gold,
   // left-aligned where the heading sits centred (asked from the seat: "same
   // row vertically and style as heading below compass, just aligned left").
@@ -49669,6 +49835,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     }
     clockRect = { x: pad, y: cy2 - 2, w: textSW(hhmm) + 4, h: 10 };
   } else clockRect.w = 0;
+  hudLap('clock');
   // ── the scale, on the chart ──
   // Under the clock's row, where the chart has room and a map keeps it; below
   // the tile-debug lines when those are up. The label first — the bar's
@@ -49842,6 +50009,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       hctx.fillRect(cx + w, y, 1, 1);
     }
   }
+  hudLap('scale');
   // ── the active way, under its markers (chart only) ──
   // The road the pips belong to, drawn as a line so the chart answers "which
   // way does it RUN" and not just "where are its markers". Ink seat first,
@@ -49881,6 +50049,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     }
     hctx.globalAlpha = 1;
   }
+  hudLap('way');
   // ── tile debug: the streaming machinery, made visible (chart only) ──
   // The z16 vector grid over the chart, each tile wearing its state: DONE a
   // green pip, ON THE WIRE a pulsing gold square, QUEUED its serving rank
@@ -50162,6 +50331,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       hctx.globalAlpha = 1;
     }
   }
+  hudLap('tiledbg');
   // ── checkpoint markers, under everything ──
   // Never a label and never a distance: the moment a checkpoint tells you how
   // far away it is you drive to IT instead of driving the road, which is the
@@ -50263,6 +50433,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.fillRect(x - 1, y, 3, 1);
     hctx.restore();
   }
+  hudLap('cps');
   // ── POI pins: beams out of the world, labels in lanes ──
   // Two changes over the old stem-and-head pins, both from driving cities:
   // 1) LANES. Distant pins in the same view piled their labels onto one
@@ -50494,6 +50665,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     textEdgeP(label, x + 2 + iw, y + 2, p.rng || p.pinned ? UI.gold : p.c);
     poiRects.push({ x: x - 3, y: y - 10, w: w + 8, h: 20, name: p.name, kind: p.kind, rng: p.rng });
   }
+  hudLap('poi');
   // ── the chart's place names ──
   // The wide view stopped being landform when the overview shell arrived; the
   // NAMES are what make it a chart. Rank is the budget: cities always, towns
@@ -50539,6 +50711,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       ovLabelsDrawn.push(p.name);
     }
   }
+  hudLap('places');
   // ── the rig's own marker on the chart ──
   // The minimap's amber heading wedge, at the truck's projected position —
   // drawn ONLY once the truck falls below legibility (about seven HUD pixels
@@ -50584,6 +50757,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       }
     }
   }
+  hudLap('rig');
   // ── compass: the full width of the screen, centred ──
   const cw = HW - pad * 2, cx0 = pad, cy0 = pad;
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
@@ -50618,6 +50792,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   }
   // The MENU button is DOM now (client/overlays.ts) — it opens a DOM menu,
   // and a canvas chip that existed to be a hit target was the wrong tool.
+  hudLap('compass');
   // ── THE MESSAGE RAIL ── one vertical for the transient voices, priority
   // ordered: a warning outranks a confirmation, and a confirmation that
   // arrives during one steps down a row instead of landing on a second,
@@ -50654,6 +50829,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     }
     if (performance.now() < flashUntil && flashMsg) say(flashMsg, UI.gold);
   }
+  hudLap('rail');
   // ── the co-driver: the next bend, DRAWN before it arrives ──
   // The arrow is the call; the words are the footnote. Severity is the
   // summed angle: a hairpin is not a sweeper.
@@ -50680,6 +50856,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const line = navBend.dist < 15 ? 'NOW' : `${Math.round(navBend.dist / 10) * 10}M`;
     textEdgeP(line, Math.round((HW - textPW(line)) / 2), acy + 15, '#f4f8f6');
   }
+  hudLap('bend');
   // ── the dock, bottom-left: whichever view ISN'T fullscreen ──
   // While charting, the renderer scissors a live POV preview into this square,
   // so the HUD must leave it EMPTY — blitting the minimap here painted straight
@@ -51133,6 +51310,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // overlays.ts, fed from stepOverlays below) — they behave like UI, not like
   // instruments, and they were the last text on this canvas that wanted real
   // layout.
+  hudLap('dock');
+  hudProfMs += performance.now() - hudEntry;
 }
 /** The task and the claim, as DOM state — pushed every frame, diffed there. */
 function stepOverlays(): void {
