@@ -4271,6 +4271,125 @@ a different statement. `ez.placed` is an array of records (`[object Object]`,
 for the second time this session). And `imgdiff`'s last line is the output
 PATH, so the diff numbers were replaced by a filename.
 
+### …and then the seat photographed it: the crown was lit in the wrong space
+
+Five frames and a device dump, sent together with no words. The frames show
+distant treelines as dark flat bands and very large dark masses in the drone
+shots; the dump names a cost regression. Two separate faults, and the first is
+one line.
+
+**`normal` AT `normal_fragment_begin` IS VIEW SPACE, AND THE CARD WROTE WORLD
+SPACE INTO IT.** three fills that variable from `normalMatrix * objectNormal` —
+the inverse-transpose of the MODEL-VIEW matrix, so view space — and it is the
+frame every lighting chunk downstream reads, and the frame the sun direction
+arrives in. The first cut built the crown's analytic ellipsoid normal out of
+`vImpRight` and `vImpOut`, which are WORLD directions built in the vertex
+shader, and assigned it straight across. So the Lambert dot product was between
+two different frames. Two consequences, and the second is the one the frames
+show: the stands read flat and dark, and **their shading TURNED WITH THE CAMERA
+rather than with the sun** — orbit the truck and a wood changes brightness. One
+matrix multiply at the handover (`normal = normalize((viewMatrix * vec4(n, 0.0))
+.xyz)`; three declares `viewMatrix` in every fragment shader it builds).
+
+**AND THE DISSOLVE MOVED TO THE FRAGMENT, which is cheaper AND better.** It was
+a per-instance colour mixed on the CPU — a `terrainPalette` and a `sampleCover`
+for every faded tree in every refresh — and it STEPPED, because a refresh is a
+few times a second while the distance to a tree changes every frame. It rides
+the camera's own distance as a varying now (the vertex shader already had
+`impFl`), continuous, and costs the membership pass nothing at all.
+
+**IT GOES AFTER `color_fragment`, NOT BEFORE IT.** three's Lambert chain runs
+`map_fragment` and THEN `color_fragment`, so at the block where the silhouette
+is cut `diffuseColor` is still the material's white and the tree's own instance
+colour has not arrived. A mix toward the ground written there is multiplied by
+the tree afterwards — a DARKENING, darkest where the fade is strongest, which is
+the opposite of a dissolve. The shade term beside it (`*= 0.78 + 0.30 * impLo`)
+is a multiply and commutes; this one does not. **The general rule: a chunk
+injection's correctness depends on where in the chain it lands, and a multiply
+and a mix do not have the same answer to that.**
+
+### The two dials, and why REACH has to report three numbers
+
+Asked from the seat: *is there a dial I can experiment with more or less
+aggressive imposters (range near and far? Beyond 2.8km?) — the dial should have
+wide extremes either side of 'stock'.* Two dials, because the seat was asking
+two different questions and one number cannot answer both:
+
+- **IMPOSTOR REACH** — `OFF · 0.5X · 1X · 2X · 4X · 8X` of the DRAW RANGE, so
+  the pair compose: a rack already at 2.8 km asks for 5.6 or 11.2 km and the
+  answer is a horizon rather than a wall. OFF stands the whole tier down, which
+  is also the A/B `__impostor()` drives.
+- **IMPOSTOR DENSITY** — `0.25X · 0.5X · 1X · 2X · 4X · ALL`, scaling the
+  inverse-square keep probability, which is the same thing as scaling the
+  full-density radius squared. So 4X thickens a far wood without moving its
+  edge and 0.25X thins it without bringing the edge in.
+
+**Move either and the other holds**, which is the property that makes them two
+dials rather than one aggressiveness slider. `?impreach=` is in METRES (the unit
+the rack reads) and `?impdensity=` a bare multiplier, both exact and unsaved.
+
+**REACH IS A REQUEST, NOT A SETTING, and that is why the readout carries three
+numbers instead of one.** A tree can only be drawn if it is KNOWN, and what is
+known is the manifest, which is bounded by cells, which is bounded by memory. So
+the dial ASKS, the manifest GRANTS, and the row says which of the two bound it:
+`reach 5600m of 11200m asked (MANIFEST)`. Reporting the grant alone would repeat
+`MANIFEST_MAX_M` exactly — a ceiling silently coinciding with a floor, and a row
+that reads plausibly while the dial above it does nothing.
+
+**AND THE MANIFEST'S CEILING LIFTS WHEN SOMETHING ASKS.** `MANIFEST_MAX_CELLS`
+(1,100, about 3.5 km) is sized for the manifest's OWN purpose — knowing a little
+further than the geometry draws, so the far edge is a handoff rather than a
+frontier. The REACH dial is a different purpose: it asks the manifest to BE the
+population it draws. Clamping that to the stock ceiling would make the dial's
+upper stops lie, so `MANIFEST_MAX_CELLS_WIDE` is 6,241 — 38 rings at 220 m,
+about 8.4 km, and on the order of a third of a million sites held in `vegGrid`.
+Deliberately unsafe at the top, exactly as the rack's other tree stops are: it
+exists to find the wall rather than to promise there is not one.
+
+**THE FAR CANDIDATES ARE A SEPARATE LIST, AND THE SEPARATION IS LOAD-BEARING.**
+`cand[fam].length` is the DEMAND the water-filling allocator divides the
+triangle budget by, so a tree six kilometres out joining that list would take
+slots from a tree at four hundred metres and move the admitted edge IN — the
+proportional-cut regression, arrived at by a different road. `candFar` is
+gathered in its own annulus in the `ezGather` phase (which already walks cells
+with a `yield` between them, and where the manifest's cells are), and nothing
+beyond the draw range may vote on the geometry budget. It may only ask for a
+card.
+
+### And the membership pass had become the largest tree phase
+
+The same dump: `impostor 12.6 ms/call (max 34)` in `tree phases`, above
+`ezAdmit 8.6` — because the pass walks all 54,997 offered candidates. Three
+cuts, each against something the dump named, and none of them cleverness:
+
+- **THE MATRIX IS WRITTEN, NOT COMPOSED.** `vegDummy.updateMatrix()` builds a
+  full TRS from a quaternion, and this instance has no rotation BY CONTRACT —
+  the vertex shader's billboard is one line precisely because the instance
+  matrix carries translation and scale only. Writing the six live elements
+  states that contract in the one place that could break it and drops a
+  quaternion-to-matrix per impostor per refresh.
+- **THE ADMITTED-SET LOOKUP IS SKIPPED WHERE IT CANNOT HIT.** Every tree the
+  geometry took is within `ezEdge[fam]`, and the full-density radius is at least
+  that, so beyond it the membership test cannot collide with admission and the
+  `Set.has` is pure cost — an object-identity hash on the overwhelming majority
+  of steps. And the density test is written as `hash * d2 > full2` rather than
+  `hash > full2 / d2`: same predicate, no divide, and it is the hottest line in
+  the pass.
+- **THE LOOP IS INDEXED.** A `for (const [d2, v] of list)` over tuples pays the
+  iterator protocol and a destructure per step, and at 55,000 candidates — more
+  with REACH up — that is a measurable share on its own.
+
+Not verified on a device: the harness's frames are seconds apart and cannot
+price a per-refresh CPU cost the way a phone can. The next telemetry paste is
+the verification, and the row to read is `impostor` in `tree phases`.
+
+**Measured after all of it** (`tree-impostor.mjs`, `at-yosemite`, one boot,
+interleaved off/on/off, at the stock dials so the comparison is against the
+recorded numbers): 933 of 1,617 offered, census `veg-impostor` **3,732 = 933 x
+4 exactly**, the canopy band's signal **10.416/255 against a floor of 0.252 —
+41x** — so the tier draws exactly what it drew before the fixes, with the
+lighting in the right frame.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the
