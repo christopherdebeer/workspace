@@ -11347,10 +11347,45 @@ const isEzKind = (k: VegKind): k is EzFamily => (EZ_FAMILIES as string[]).includ
  *  records that a shape-changing far tier was tried from the seat and
  *  rejected, because a tree that changes as you drive at it is worse than
  *  either shape. */
-function ezCostAt(want: Record<EzFamily, number>): number {
-  let cost = 0;
-  for (const fam of EZ_FAMILIES) cost += want[fam] * ezMeanTris(fam);
-  return cost;
+/** ── AND THE PRICE WAS THE FAMILY'S MEAN, NOT THIS PLACE'S TREE ──
+ *
+ *  With the budget filled rather than divided, conifer and snag were still cut
+ *  at Yosemite while the frame drew HALF the budget the allocator believed it
+ *  had spent: caps 601/953/306 priced at 2,399,694 triangles against 1,198,762
+ *  actually drawn. Placement was not the leak — 588 of 601, 946 of 953 and 304
+ *  of 306 admitted trees stood — so the arithmetic was simply wrong about what
+ *  a tree costs, and wrong by family:
+ *
+ *    broadleaf  mean 1107  drawn 1068  x1.04
+ *    conifer    mean 1713  drawn  543  x3.15   <- and this is the binding one
+ *    snag       mean  333  drawn  188  x1.77
+ *
+ *  `meanDrawn` is the mean over a family's WHOLE ATLAS and a place grows two
+ *  of its six silhouettes — the two-scale palette's own doing, and the thing
+ *  that makes a wood one wood. So the family whose cap actually binds is
+ *  priced by variants that are not standing here, and it was over-priced by
+ *  three times: conifer was charged 68% of the budget for 21% of the frame.
+ *
+ *  The refresh knows what a tree really cost, because it has just placed them
+ *  all and every tier carries its own triangle count. So the price is the LAST
+ *  refresh's realised cost per placed tree, and the family mean is only the
+ *  first refresh's guess. It converges in one sweep and stays converged, since
+ *  the palette is stable per district and does not reroll as you drive.
+ *
+ *  THE CLAMP IS THE INSURANCE AND NOT THE RULE. A place may honestly grow a
+ *  family's dearest silhouette, so the price must be free to exceed the mean;
+ *  what it may not do is run away on a sample taken mid-sweep. A quarter to
+ *  four times the mean bounds one refresh's overshoot and admits the 3.15x
+ *  measured above with room either side. A family with too few trees standing
+ *  to average has no price and keeps the mean. */
+const EZ_PRICE = qsOn('treeprice', true);
+const ezPriceNow: Record<EzFamily, number> = ezRecord(() => 0);
+/** Below this many placed, the realised mean is a sample of nothing. */
+const EZ_PRICE_MIN = 8;
+function ezTriPrice(fam: EzFamily): number {
+  const mean = ezMeanTris(fam);
+  const p = EZ_PRICE ? ezPriceNow[fam] : 0;   // ?treeprice=0 — the atlas mean
+  return p > 0 ? clamp(p, mean * 0.25, mean * 4) : mean;
 }
 /** The nominal cap: what the rack asks for, before any budget. */
 const ezCapNominal = (fam: EzFamily): number =>
@@ -13675,7 +13710,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     }
     vegMark('ezGather');
     // ── THE BUDGET GOES TO WHAT IS ACTUALLY HERE ── see the note by
-    // `ezCostAt`. `cand[fam].length` is every candidate inside the draw range,
+    // `ezTriPrice`. `cand[fam].length` is every candidate inside the draw range,
     // so `want` is what this place would plant if only its own cap stopped it;
     // an absent family wants nothing and is charged nothing.
     {
@@ -13706,14 +13741,14 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       let left = treeTriBudget;
       for (let round = 0; round < EZ_FAMILIES.length + 1 && pool.size; round++) {
         let share = 0;
-        for (const f of pool) share += ezCapNominal(f) * ezMeanTris(f);
+        for (const f of pool) share += ezCapNominal(f) * ezTriPrice(f);
         const sc = share > 0 ? clamp(left / share, 0, 1) : 1;
         // Anyone whose whole demand fits inside its share is settled here, at
         // its demand and not at its share.
         let settled = false;
         for (const f of [...pool]) {
           if (want[f] <= ezCapNominal(f) * sc) {
-            cap[f] = want[f]; left -= want[f] * ezMeanTris(f);
+            cap[f] = want[f]; left -= want[f] * ezTriPrice(f);
             pool.delete(f); settled = true;
           }
         }
@@ -13924,6 +13959,14 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   vegMark('upload');
   vegActiveRoles = activeRoles;
   ezEdgeLast = ezRecord((f) => Math.round(ezEdge[f]));
+  // WHAT A TREE COST HERE, for the next refresh's allocator — see the note by
+  // `ezTriPrice`. Taken after the commit, so it is the bill the GPU was
+  // actually handed and not an estimate of one.
+  for (const fam of EZ_FAMILIES) {
+    let n = 0, tris = 0;
+    for (const t of ezTiers[fam]) { n += t.n; tris += t.n * t.tris; }
+    if (n >= EZ_PRICE_MIN) ezPriceNow[fam] = tris / n;
+  }
   refreshShrubs();
   vegMark('shrubs');
   vegActiveAnchors = activeAnchors;
@@ -33344,6 +33387,10 @@ function tapeKeep(): string {
     edge: ezEdgeLast,
     caps: Object.fromEntries(EZ_FAMILIES.map((f) => [f, ezCapFor(f)])),
     meanTris: Object.fromEntries(EZ_FAMILIES.map((f) => [f, ezMeanTris(f)])),
+    // The price the ALLOCATOR ran on, which is the family mean only until a
+    // refresh has placed enough trees to know better. A probe that reported
+    // the mean alone could not witness the rule that priced the caps.
+    price: Object.fromEntries(EZ_FAMILIES.map((f) => [f, Math.round(ezTriPrice(f))])),
     tuning: {
       range: treeRange,
       population: treePopulationScale,
@@ -44476,8 +44523,12 @@ function telemetryReport(): string {
   const _treeCasting = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + (t.nNear > 0 && t.near.castShadow ? 1 : 0), 0), 0);
   const _treeVariants = treeVariantCap >= 1000 ? 'ALL' : String(treeVariantCap);
   const _treeMix = EZ_FAMILIES.map((f, i) => `${f[0]}${_treePlacedByFamily[i]}`).join('/');
+  // WHAT THE ALLOCATOR CHARGED PER TREE. The whole of the second tree fault was
+  // invisible from a device because the dump reported the caps and never their
+  // price — and the price is what the caps are a consequence of.
+  const _treePrice = EZ_FAMILIES.map(f => `${f[0]}${Math.round(ezTriPrice(f))}`).join('/');
   const _treeEdge = EZ_FAMILIES.map(f => `${f[0]}${ezEdgeLast[f]}`).join('/');
-  L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
+  L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
   L.push(`main thread: in tick ${(sessTick / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessTick)} of wall) recent ${n} ticks p50 ${tpct(0.5)} p95 ${tpct(0.95)} p99 ${tpct(0.99)} recent max ${tpct(1)} session max ${Math.round(sessTickMax)} · off-tick tasks ${(sessOff / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessOff)}) · gap ${((gapRow?.ms ?? 0) / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(gapRow?.ms ?? 0)}) — unmeasured time includes scheduling, GPU waits and uninstrumented work; not a GPU measurement`);

@@ -277,6 +277,8 @@ Nothing here is fast. Budget for it.
 | `node devtools/hud-bake.test.mjs` | whether a baked HUD element draws the pixels the per-frame one did — exact over nothing, within one rounding over a ground; no world, no WebGL, a canvas and two loops | ~5s |
 | `node devtools/hud-split.mjs` | where `drawHud`'s milliseconds go, by its own section headers, in BOTH cameras (drawing ON — `nodraw` skips the HUD entirely) | ~12min |
 | `node devtools/redrape-ga.mjs` | what a redrape's walk is made of: `groundAt` priced by calling it twice, split into its LOCATE and SOLVE halves, with the same-setting floor beside it (`FAST=0` is the rollback, `AUDIT=1` compares both samplers per vertex) | ~4min |
+| `node devtools/tree-edge.mjs` | how far out a tree actually appears, by family, with the caps beside the edges — `?treedemand=0` is the old all-families divisor and the A/B (`FIX=`, `SECS=`) | ~4min |
+| `node devtools/tree-spend.mjs` | where the tree triangle budget went: cap against placed, and what the allocator CHARGED against what the GPU was handed, per family — `?treeprice=0` charges the atlas mean again (`FIX=`, `SECS=`) | ~6min |
 | `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
@@ -3890,6 +3892,60 @@ one that proves the whole chain closes: the Serengeti returns *Southern
 Acacia-Commiphora bushlands* → the savanna guild → `forms {bare 6, umbrella 2}`,
 and the Sundarbans returns *Sundarbans mangroves* → the mangrove guild →
 `forms {bare 16, palm 11}`.
+
+### The tree budget was divided among families the place does not grow
+
+Reported from the seat, on the Yosemite build: *"I did see trees popping into
+view, I would expect them to come into view a lot further out."* The DRAW RANGE
+dial was 700 m and the dump read `edge b466/c223` — so the dial was not the
+distance, and the thing that set the distance was the triangle budget.
+
+`ezCapScale` divided `treeTriBudget` by the cost of EVERY family at its FULL
+nominal cap — five families, including the two the guild plants none of. At
+Yosemite the place grows no acacia and no palm, their 321 and 275 slots were in
+the divisor anyway, and the trees that are there sat pinned against a fraction
+of their caps with the budget a third unspent.
+
+**AND THE FIRST FIX FOR IT MOVED THE SEAT'S OWN COMPLAINT THE WRONG WAY.**
+Cutting each family PROPORTIONALLY to what it wants is the obvious rule and it
+punishes an under-supplied family: broadleaf has about 600 candidates against a
+nominal 1600, so the old over-allocation (1600 x 0.46 = 735 slots for 600 trees)
+let every one of them stand, while a proportional share (600 x 0.748 = 449) cut
+a quarter of them and brought the edge **IN from 700 m to 671**. Half a
+regression, and the half that regressed was the number the report was about.
+
+**SO THE BUDGET IS FILLED RATHER THAN DIVIDED.** Water-filling: a family that
+wants less than its share takes what it wants and hands the rest back, the round
+repeats until nobody is over-served, and what is left is split among the
+families that can still use it. Two properties the proportional rule lacks —
+nobody is capped below what they would have drawn anyway, and the total cannot
+exceed the budget. `?treedemand=0` is the old all-families divisor and the A/B.
+
+**Measured**, `devtools/tree-edge.mjs` on `at-yosemite`, settled, no page
+errors, two boots with the switch the only difference (sound here for the same
+reason the sward correlation is: the quantity is a CPU allocation over a fixture
+and the counters come out identical run to run):
+
+| | all-families divisor | water-filled |
+|---|---|---|
+| broadleaf cap · edge | 735 · **700** | 601 · **700** |
+| conifer cap · edge | 643 · 480 | **953 · 583** |
+| snag cap · edge | 206 · 553 | **306 · 629** |
+| acacia cap · palm cap | 321 · 275 | **0 · 0** — the place grows neither |
+| triangles drawn | 987,367 | 1,191,677 |
+
+**READ `edge` AGAINST THE RANGE, AND KNOW WHAT IT MEANS WHEN THEY ARE EQUAL.**
+`ezEdge` is initialised to `treeRange` and is only assigned where a family is
+actually cut (`list.length > cap`), so **edge == range means NOT CAPPED** — and
+that covers the degenerate case too: acacia and palm read 700 in both columns
+because they have no candidates at all, which is "no trees and therefore no
+edge" rather than "trees all the way out". A column of 700s is not a result
+until the cap beside it is read.
+
+So the water-filled column says three things and only the first is a win in the
+usual sense: conifer and snag gain a hundred metres apiece; broadleaf STOPS
+being cut, which is the regression removed; and acacia and palm take no budget,
+which is what the whole unit was about.
 
 ### The polish pass — another agent, on the cell, two pushes apart
 
