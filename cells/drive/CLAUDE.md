@@ -266,6 +266,9 @@ Nothing here is fast. Budget for it.
 | `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~20s |
 | `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
 | `node devtools/switches.test.mjs` | the table cannot rot in either direction | instant |
+| `node devtools/hud-bake.test.mjs` | whether a baked HUD element draws the pixels the per-frame one did — exact over nothing, within one rounding over a ground; no world, no WebGL, a canvas and two loops | ~5s |
+| `node devtools/hud-split.mjs` | where `drawHud`'s milliseconds go, by its own section headers, in BOTH cameras (drawing ON — `nodraw` skips the HUD entirely) | ~12min |
+| `node devtools/redrape-ga.mjs` | what a redrape's walk is made of: `groundAt` priced by calling it twice, split into its LOCATE and SOLVE halves, with the same-setting floor beside it (`FAST=0` is the rollback, `AUDIT=1` compares both samplers per vertex) | ~4min |
 | `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
@@ -11449,6 +11452,114 @@ times in the mean and by two to six in pixels on both runs. Quote the floor
 beside the signal, always: a near-field term measured without one is a number
 with no scale, and one measured against a floor from a different boot is worse
 than no number at all.
+
+## The HUD's dial was drawn a pixel at a time, and the frame diff could not see the fix
+
+`drawHud` reached **11.0% of a device session at 6.7 ms a call**, drawing on
+1,383 of 1,566 frames — third after the gap and `terrainApply`. Its own note
+records 1.9 ms when the half-rate gate was written and 4.5 when the gate was
+widened to 40 ms, so **the gate is doing what it was designed to do and the
+design's assumption — a cheap HUD — is what failed.**
+
+**THE SPLIT IS AT THE FUNCTION'S OWN SECTION HEADERS**, matched by their
+comment text so a moved line cannot shift a lap onto its neighbour, with
+`other` as the residual so the rows sum to the whole. Thirteen laps, a
+subtraction and a property write each — under the noise of what they measure.
+`devtools/hud-split.mjs` reads them in both cameras, and keeps drawing **ON**,
+unlike every other CPU measurement in this file: `nodraw` skips the HUD
+entirely and would report one that never ran.
+
+| at-paris-west | chase 3.11 ms/call | top 4.58 |
+|---|---|---|
+| `riggauge` | **1.238 (40%)** | **1.325 (29%)** |
+| `where` | **1.046 (34%)** | **1.100 (24%)** |
+| `poi` | 0.077 | 0.675 |
+| `scale` | 0.015 | 0.662 |
+| `dockview` · `compass` · `clock` | 0.346 · 0.262 · 0.108 | 0.313 · 0.287 · 0.138 |
+
+**READ THE STREAMING-DEPENDENT ROWS AS A FLOOR, NOT A FIGURE.** With drawing
+on, the harness paints at three frames a second and the world build is paced
+by the frame loop, so `at-paris-west` reached 2,344 ways of 5,663 in ten
+minutes and never settled. `poi`, `places`, `way` and `tiledbg` all scale with
+what has arrived and are therefore under-read. `riggauge` and `where` scale
+with neither, which is why those two are quotable here — and they are 74% of
+the chase HUD between them.
+
+**AND THE FIRST RUN SETTLED ON 269 ROAD CELLS.** Two quiet polls passed at
+39 s on a fixture that settles at 3,138, and the four streaming rows duly read
+about zero. Four quiet polls, `seenWays` in the signal, a six-minute budget
+and the counts printed beside the verdict — because "settled" is a word and
+the counts are the evidence. Third time this file has recorded that mistake.
+
+### …and inside `riggauge`, 41 string-parsed colours and fifty 1x1 rects
+
+The dial's open-arc bezel is 41 ticks. Each assigns `fillStyle` from a STRING
+— parsed on every assignment — and each fills one or two **1x1 rects**: about
+fifty draw calls and forty-one colour parses a frame, for a ring whose
+geometry depends on `DR`, `cx` and `cy` and therefore changes only when the
+HUD is laid out. Beside it the rev arc recomputed **54 sines and cosines** a
+frame for 54 positions that never move.
+
+Baked once into an offscreen canvas and blitted; the rev offsets cached on the
+same key. `?hudbake=0` is the rollback and the A/B.
+
+**THE ROUNDING IS WHY THE GEOMETRY IS EXACT.** The original computes
+`round(cx + cos(a) * r)`; the bake computes `round(o + cos(a) * r)` at its own
+centre and blits at `cx - o`. Those agree exactly for an INTEGER offset —
+`round(c + d) === c + round(d)` — and `cx = (HW - pad) - DR`, `cy`, `o` are all
+integers, being HUD pixels. Baked at `hudDpr` and blitted at HUD-pixel size
+under the same transform with smoothing already off: 1:1, not a resample.
+
+### THE FRAME DIFF WAS THE WRONG INSTRUMENT, TWICE OVER
+
+A draw-call cut that changes the picture is a regression with a good excuse,
+so the bake was checked against the per-frame bezel — and the check was wrong
+before the bake was.
+
+- **It had no floor.** It reported mean 1.229/255 with a worst of 150.5 over
+  the dial's corner and that read as "the bake changes the picture". A worst
+  of 150 is a GLYPH FLIPPING: the rig cluster carries the odometer, two boots
+  have driven different distances, and the crop differs before the bezel is
+  considered. **A diff with no same-setting control is a number with no
+  scale** — this file states that for milliseconds and it is just as true of
+  pixels.
+- **And with a floor it still could not resolve the question.** Same build
+  booted twice: mean **0.408**, worst 145.1, 1.51% moved. Baked against
+  per-frame: mean **1.192**, worst 150.5, 4.89%. Three times the floor — but
+  the floor is ONE PAIR of a quantity dominated by whether two boots' odometers
+  happen to agree, and the thing being looked for turns out to be sixteen
+  channels at one unit. **A frame diff cannot see a 1/255 difference under an
+  odometer that differs between boots**, and no number of re-runs would have
+  changed that.
+
+**SO THE RULE WAS TESTED INSTEAD OF THE FRAME** (`devtools/hud-bake.test.mjs`:
+no world, no WebGL, a canvas and the two loops, five seconds):
+
+| the ring, drawn straight against baked-and-blitted | channels differing | worst |
+|---|---|---|
+| over **nothing** | **0** | 0/255 |
+| over an **opaque ground** | **16** of 50,176 | **1/255** |
+
+Exact where there is no second blend — which is what says the geometry is
+right — and within a single rounding where there is. **DOUBLE-QUANTISED
+ALPHA** is the mechanism and it is not avoidable: a 0.16 tick blended once
+onto the HUD against the same tick blended into an 8-bit buffer and blended
+again. *Source-over is associative in the reals and is not in a byte.* One
+unit against a palette step of ~18 is the last bit of an 8-bit buffer, so the
+bake ships — and the test carries the bar (exact over nothing, at most one
+unit and a couple of hundred channels over a ground) rather than a bare
+"zero", because a bare zero is unachievable and a test that demands it would
+be turned off.
+
+**The general lesson, and it is the session's third of this shape:** when a
+claim is about a RULE, test the rule. A frame is where the rule's consequences
+land, and it carries everything else that moved.
+
+**Still open on the HUD:** `where` at 1.05 ms — 99 lines calling
+`worldStatus()`, `wayAt()` and `surveyHere()` every frame, plus six
+`textEdgeS` draws, for text that changes about once a second. Lookups against
+drawing, and the substitution trick prices it the same way it priced
+`groundAt`.
 
 ## The wet hydro build cannot be bounded to the shore band — the band IS the tile
 
