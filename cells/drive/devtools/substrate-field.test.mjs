@@ -55,6 +55,22 @@ console.log('the diagnostics keep their two authority contracts distinct:');
     `the geomorphic point probe owns __substrateField exactly once (${fieldAssignments.length})`);
   check(views.includes('window.__substrateField()') && !views.includes('window.__substrate()'),
     'the field visualizer reads the field probe, not the migration snapshot');
+
+  console.log('\nthe material relief is the substrate\'s own lighting layer:');
+  check(main.includes('sh.uniforms.uSubNrm = tdU.uSubNrm'),
+    'the live relief dial reaches every detailed terrain shader');
+  check(main.includes(".replace('#include <normal_fragment_maps>'"),
+    'material relief is layered after the DEM/object-space normal map');
+  check(main.includes('dFdx(subRelief)') && main.includes('dFdy(subRelief)'),
+    'the lighting normal differentiates the same scalar the material tones produced');
+  check(main.includes('subRelief = rockT * e.y') && main.includes('mantleT * e.x'),
+    'rock and mantle structure contribute relief');
+  check(!main.match(/subRelief\s*=.*grassT/),
+    'grass does not double-light the sward geometry');
+  check(main.includes('uSubNrm > 0.001 && uSubAmt > 0.001'),
+    'zero relief or zero substrate preserves the prior DEM-normal result');
+  check(main.includes('relief?: number') && main.includes('clamp(opts.relief, 0, 4)'),
+    '__tdetail exposes a 0..4 live relief dial');
 }
 
 console.log('the constants reach the shader:');

@@ -2279,7 +2279,7 @@ const tdU = {
   // ruler is a uniform. `tdetail=flat` pins it at 0, which is the exact A/B
   // for "what did the cascade add".
   uTdOct: { value: TDETAIL === 'flat' || TDETAIL === 'off' ? 0 : 3 },
-  // ── THE SUBSTRATE'S OWN TWO DIALS ──
+  // ── THE SUBSTRATE'S OWN THREE DIALS ──
   //
   // Amount scales the whole classification toward the plain palette, so 0 is
   // the exact A/B for "what did the substrate change" on ONE settled world —
@@ -2292,6 +2292,11 @@ const tdU = {
   // scree" is a judgement nobody can make from a constant in a file and the
   // seat has to be able to walk it up and down over one world.
   uSubDom: { value: SUB_DOM_M },
+  // The material structure's height contribution to the lighting normal.
+  // This is deliberately separate from uSubAmt: colour answers "what is this
+  // made of", relief answers "how hard does that structure catch the light".
+  // `tdetail=flat` still means the exact world before either contribution.
+  uSubNrm: { value: TDETAIL === 'flat' || TDETAIL === 'off' ? 0 : 0.35 },
 };
 /**
  * ── THE GROUND VIEW CHANNEL, AND WHY IT IS ONE UNIFORM AND NOT A LAYER ──
@@ -6823,6 +6828,7 @@ function terrainFx(mat: THREE.Material, opts: {
       sh.uniforms.uTdForce = tdU.uTdForce;
       sh.uniforms.uSubAmt = tdU.uSubAmt;
       sh.uniforms.uSubDom = tdU.uSubDom;
+      sh.uniforms.uSubNrm = tdU.uSubNrm;
       sh.uniforms.uGView = gvU.uGView;
       // A tile with no field yet (the shared material, the batter, the shell)
       // gets a 1x1 blank and a zero box, and every read of it is gated on the
@@ -6832,7 +6838,9 @@ function terrainFx(mat: THREE.Material, opts: {
       sh.uniforms.uSubB = { value: opts.sub ? opts.sub.b : blankTex() };
       sh.uniforms.uSubBox = { value: new THREE.Vector4(...(opts.sub ? opts.sub.box : [0, 0, 0, 0])) };
       sh.uniforms.uGLut = gvU.uGLut;
-      sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <color_fragment>', `float subRelief = 0.0;
+      #include <color_fragment>
       {
         vec2 gp = vWorldP.xz;
         float px = tdPx(gp);
@@ -6993,6 +7001,19 @@ function terrainFx(mat: THREE.Material, opts: {
           if (uGView < 0.5 && e.z > 0.01 && px < 2.25) grassT = subGrassTone(gp, px);
           // ── THE COMPOSITE ──
           float scree = db / max(db + sd, 1e-3);
+          // ── THE SAME STRUCTURE, AS RELIEF ──
+          //
+          // These are the tones the eye has already been shown, reused rather
+          // than a second noise field pretending to describe the same rock.
+          // A dark bedding trace therefore recesses and a pale clast stands
+          // proud in exactly the place its colour says it does. The numbers
+          // turn dimensionless tone into metres before uSubNrm scales it:
+          // rock may carry a few decimetres; loose mantle stays gentler.
+          //
+          // Grass is absent on purpose. The sward is real geometry and adding
+          // another grass normal here would light the same layer twice.
+          subRelief = rockT * e.y * 1.5
+            + mantleT * e.x * mix(0.45, 0.80, scree);
           vec3 mantleC = mix(subSoilC(pc), subScreeC(pc, lum), scree) * (1.0 + mantleT);
           vec3 rockC = subRockC(pc, lum) * (1.0 + rockT);
           // A GRASSY COMPLEMENT SUBDUES; IT DOES NOT ERASE. It takes what is
@@ -7051,10 +7072,30 @@ function terrainFx(mat: THREE.Material, opts: {
           diffuseColor.rgb = uGView > 8.5 ? gvFamily(v) : gvRamp(v);
         }
         ${TDETAIL === 'px' ? 'diffuseColor.rgb = tdHeat(px);' : ''}
-      }`);
+      }`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        // THE DEM NORMAL IS THE GROUND; THIS IS THE MATERIAL ON IT. The
+        // object-space tile normal above still supplies every ridge and gully.
+        // A screen derivative of the SAME scalar that painted bedding, joints
+        // and clasts adds only their sub-metre relief on top.
+        //
+        // The branch is uniform for a draw, so derivatives remain defined.
+        // sub=0 closes it too: that dial has always promised an exact A/B for
+        // everything the substrate contributes, not merely its colour.
+        if (uSubNrm > 0.001 && uSubAmt > 0.001 && uGView < 0.5 && uSubBox.z > 1.0) {
+          vec3 subDx = dFdx(-vViewPosition);
+          vec3 subDy = dFdy(-vViewPosition);
+          vec3 subR1 = cross(subDy, normal);
+          vec3 subR2 = cross(normal, subDx);
+          float subDet = dot(subDx, subR1) * faceDirection;
+          vec2 subDh = vec2(dFdx(subRelief), dFdy(subRelief));
+          subDh *= uSubNrm * clamp(uSubAmt, 0.0, 1.0);
+          vec3 subGrad = sign(subDet) * (subDh.x * subR1 + subDh.y * subR2);
+          normal = normalize(abs(subDet) * normal - subGrad);
+        }`);
       sh.fragmentShader = TD_HELPERS + SUB_GLSL + GV_GLSL
         + 'uniform float uTdRule;\nuniform float uTdAmt;\nuniform float uTdOct;\nuniform vec2 uTdForce;\n'
-        + 'uniform float uSubAmt;\nuniform float uSubDom;\n'
+        + 'uniform float uSubAmt;\nuniform float uSubDom;\nuniform float uSubNrm;\n'
         + 'uniform float uGView;\nuniform sampler2D uGLut;\n'
         + 'uniform sampler2D uSubA;\nuniform sampler2D uSubB;\nuniform vec4 uSubBox;\n'
         + sh.fragmentShader;
@@ -34611,7 +34652,7 @@ function tdMatAt(x: number, z: number): object | null {
  */
 (window as unknown as { __tdetail?: object }).__tdetail = (
   opts?: { rule?: 'px' | 'mpp'; amount?: number; oct?: number;
-    rough?: number | null; grain?: number | null; sub?: number; dom?: number },
+    rough?: number | null; grain?: number | null; sub?: number; dom?: number; relief?: number },
 ): object => {
   // null hands the ground back to its own attribute.
   if (opts?.rough !== undefined) tdU.uTdForce.value.x = opts.rough === null ? -1 : clamp(opts.rough, 0, 1);
@@ -34632,6 +34673,10 @@ function tdMatAt(x: number, z: number): object | null {
   // 10-50; the dial reaches either side of it so the seat can find out whether
   // the answer is inside that band at all.
   if (opts?.dom !== undefined) tdU.uSubDom.value = clamp(opts.dom, 3, 200);
+  // Material relief over the DEM normal, 0..4. At 0 the normal-map result
+  // above is returned untouched; the upper range is an inspection instrument,
+  // not a claim that four times the shipped relief is natural.
+  if (opts?.relief !== undefined) tdU.uSubNrm.value = clamp(opts.relief, 0, 4);
   const tanHalf = Math.tan((camera.fov * Math.PI) / 360);
   const rows = Math.max(2, pixSize.y);
   const eye = camera.position;
@@ -34666,9 +34711,9 @@ function tdMatAt(x: number, z: number): object | null {
   return {
     mode: TDETAIL, rule: tdU.uTdRule.value ? 'px' : 'mpp', amount: tdU.uTdAmt.value,
     oct: tdU.uTdOct.value, cam: camMode, pix: [pixSize.x, pixSize.y],
-    // The substrate's two dials, reported beside the value they were set to,
+    // The substrate's three dials, reported beside the value they were set to,
     // so a run's log says what it measured rather than what it asked for.
-    sub: tdU.uSubAmt.value, dom: tdU.uSubDom.value,
+    sub: tdU.uSubAmt.value, dom: tdU.uSubDom.value, relief: tdU.uSubNrm.value,
     // …and the range at which the domain has band-limited away, which is where
     // the classification falls back on the vertex material alone. Stated in the
     // footprint's own units, so it reads straight against a row of `ahead`.
@@ -43555,6 +43600,7 @@ function telemetryReport(): string {
   // difference the measurement, and a paste that does not say cannot be
   // compared to one that does.
   L.push(`look tdetail ${TDETAIL} · sub ${tdU.uSubAmt.value} dom ${tdU.uSubDom.value}`
+    + ` relief ${tdU.uSubNrm.value}`
     + ` · oct ${tdU.uTdOct.value} amt ${tdU.uTdAmt.value} · view ${groundView}`
     + ` · swardsub ${SUB_SWARD ? 'on' : 'off'} · tilt ${TILT_MODE} · substrate ${SUBSTRATE_MODE.name}`);
   const _treePlacedByFamily = EZ_FAMILIES.map(f => ezTiers[f].reduce((n, t) => n + t.n, 0));
