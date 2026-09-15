@@ -165,6 +165,8 @@ import {
   findProductionDriveWaterOverlaps,
   productionDriveAuthoringRevision,
   productionDriveAuthoringSignature,
+  productionStructureAuthoringRevision,
+  productionStructureAuthoringSignature,
   ProductionSubstrateStore,
   type ProductionDriveRenderMesh,
   type ProductionDriveSample,
@@ -17416,9 +17418,12 @@ const productionStructureRenderLayers =
 /** Globally assembled bridge forms are replaceable contributions to one
  *  stable owner tile. A null entry means authoring failed and deliberately
  *  keeps that tile inadmissible instead of resurrecting a direct scene mesh. */
+interface ProductionBridgeStructureLayer {
+  generation: number;
+  packets: Map<string, ProductionRenderMesh | null>;
+}
 const productionBridgeStructurePackets =
-  new Map<string, Map<string, ProductionRenderMesh | null>>();
-const productionStructureSourceRevisions = new Map<string, number>();
+  new Map<string, ProductionBridgeStructureLayer>();
 const substrateStructureCommits = new Map<string, number>();
 const substrateStructureRenderMeshes = new Map<string, SubstrateRenderBinding>();
 let productionStructurePacketFailures = 0;
@@ -17611,12 +17616,8 @@ function registerProductionStructureRenderBatch(
     packets,
     directPacketCount,
   });
-  advanceProductionStructureSource(owner);
-}
-function advanceProductionStructureSource(owner: string): void {
-  const revision = (productionStructureSourceRevisions.get(owner) ?? 0) + 1;
-  productionStructureSourceRevisions.set(owner, revision);
-  if (!productionStructureRenderLayers.bind(owner, revision)) {
+  const layer = productionStructureRenderLayers.snapshot(owner);
+  if (!layer || !productionStructureRenderLayers.bind(owner, layer.generation)) {
     productionStructurePacketFailures++;
   }
   substrateStructureCommits.delete(owner);
@@ -17633,19 +17634,20 @@ function setProductionBridgeStructurePacket(
   assemblyKey: string,
   packet: ProductionRenderMesh | null | undefined,
 ): void {
-  let packets = productionBridgeStructurePackets.get(owner);
-  if (!packets) {
+  let layer = productionBridgeStructurePackets.get(owner);
+  if (!layer) {
     if (packet === undefined) return;
-    packets = new Map();
-    productionBridgeStructurePackets.set(owner, packets);
+    layer = { generation: 0, packets: new Map() };
+    productionBridgeStructurePackets.set(owner, layer);
   }
   if (packet === undefined) {
-    if (!packets.delete(assemblyKey)) return;
-    if (!packets.size) productionBridgeStructurePackets.delete(owner);
+    if (!layer.packets.delete(assemblyKey)) return;
   } else {
-    packets.set(assemblyKey, packet);
+    layer.packets.set(assemblyKey, packet);
   }
-  advanceProductionStructureSource(owner);
+  layer.generation++;
+  substrateStructureCommits.delete(owner);
+  invalidateProductionSubstrateTile(owner);
 }
 function addHydroDetailRenderMesh(mesh: THREE.Mesh): void {
   if (SUBSTRATE_RENDER_ON && ribBatchTerrainOwner && hydroDetailBatchPackets) {
@@ -20776,16 +20778,22 @@ function productionTerrainRenderMeshesFor(
 function productionStructureRenderMeshesFor(
   key: string,
 ): readonly ProductionRenderMesh[] {
-  const revision = productionStructureSourceRevisions.get(key) ?? 0;
-  const packets = productionStructureRenderLayers.packetsFor(key, revision);
-  const bridgePackets = productionBridgeStructurePackets.get(key);
-  if (!bridgePackets) return packets;
+  const layer = productionStructureRenderLayers.snapshot(key);
+  const packets = layer
+    ? productionStructureRenderLayers.packetsFor(key, layer.generation)
+    : [];
+  const bridge = productionBridgeStructurePackets.get(key);
+  if (!bridge) return packets;
   return [
     ...packets,
-    ...[...bridgePackets.values()].filter(
+    ...[...bridge.packets.values()].filter(
       (packet): packet is ProductionRenderMesh => packet !== null,
     ),
   ];
+}
+function productionStructureRenderGenerationSignature(key: string): string {
+  return `${productionStructureRenderLayers.snapshot(key)?.generation ?? 0}:`
+    + `${productionBridgeStructurePackets.get(key)?.generation ?? 0}`;
 }
 function productionHydroDetailRenderMeshesFor(
   key: string,
@@ -21026,8 +21034,14 @@ function canCommitDriveRenderFromSubstrate(tile: ProductionSubstrateTile): boole
     tile.driveSegments,
     productionRoadRenderGenerationSignature(tile.key),
   );
+  const currentPackets = productionDriveRenderMeshesFor(
+    tile.key,
+    tile.sourceRevisions.terrain,
+  );
   return tile.driveAuthoringSignature === currentSignature
     && tile.sourceRevisions.drive === productionDriveAuthoringRevision(currentSignature)
+    && tile.driveRenderMeshes.length === currentPackets.length
+    && tile.driveRenderMeshes.every((packet, index) => packet === currentPackets[index])
     && tile.driveRenderMeshes.length
       === (candidate?.expectedCount ?? 0) + (batter?.expectedCount ?? 0)
     && tile.driveRenderMeshes.every((packet) =>
@@ -21063,9 +21077,17 @@ function commitDriveRenderFromSubstrate(tile: ProductionSubstrateTile): boolean 
 function canCommitStructureRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
   if (!SUBSTRATE_RENDER_ON || productionSubstrate.tile(tile.key) !== tile) return false;
   const candidate = productionStructureRenderLayers.snapshot(tile.key);
-  const bridgeCandidates = productionBridgeStructurePackets.get(tile.key)?.size ?? 0;
-  return (productionStructureSourceRevisions.get(tile.key) ?? 0)
-      === tile.sourceRevisions.structures
+  const bridgeCandidates =
+    productionBridgeStructurePackets.get(tile.key)?.packets.size ?? 0;
+  const currentSignature = productionStructureAuthoringSignature(
+    productionStructureRenderGenerationSignature(tile.key),
+  );
+  const currentPackets = productionStructureRenderMeshesFor(tile.key);
+  return tile.structureAuthoringSignature === currentSignature
+    && tile.sourceRevisions.structures
+      === productionStructureAuthoringRevision(currentSignature)
+    && tile.structureRenderMeshes.length === currentPackets.length
+    && tile.structureRenderMeshes.every((packet, index) => packet === currentPackets[index])
     && tile.structureRenderMeshes.length === (candidate?.expectedCount ?? 0) + bridgeCandidates
     && tile.structureRenderMeshes.every((packet) =>
       !!packet.attributes.position
@@ -21413,7 +21435,9 @@ function substrateRenderSnapshot(): Record<string, number> {
   }
   let bridgeStructureCandidates = 0;
   let bridgeStructurePacketMeshes = 0;
-  for (const [key, packets] of productionBridgeStructurePackets) {
+  for (const [key, layer] of productionBridgeStructurePackets) {
+    const packets = layer.packets;
+    if (!packets.size) continue;
     structureCandidateTileKeys.add(key);
     bridgeStructureCandidates += packets.size;
     for (const packet of packets.values()) {
@@ -21567,6 +21591,7 @@ function buildProductionSubstrateShadow(
   reconcileProductionWetCrossings(drive.segments, waterMotionSegments);
   const crossingRevision = productionCrossings.snapshot().revision;
   const structures = productionStructureRenderMeshesFor(key);
+  const structureRenderGeneration = productionStructureRenderGenerationSignature(key);
   const hydroDetails = productionHydroDetailRenderMeshesFor(
     key,
     terrainRevision.get(key) ?? 0,
@@ -21576,7 +21601,6 @@ function buildProductionSubstrateShadow(
     revision: ++productionSubstrateRevision,
     sourceRevisions: {
       terrain: terrainSourceRevision,
-      structures: productionStructureSourceRevisions.get(key) ?? 0,
       hydroDetails: productionHydroDetailRenderLayers.snapshot(key)?.generation ?? 0,
       hydro: hydroRev.get(key) ?? 0,
       crossings: crossingRevision,
@@ -21591,6 +21615,7 @@ function buildProductionSubstrateShadow(
     driveSegments: drive.segments,
     driveRenderGeneration: drive.renderGeneration,
     driveRenderMeshes: drive.renderMeshes,
+    structureRenderGeneration,
     structureRenderMeshes: structures,
     hydroDetailRenderMeshes: hydroDetails,
     hydroDetailColliders: productionHydroDetailCollidersFor(
@@ -31630,7 +31655,6 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     productionStructurePacketFailures = 0;
     productionStructureRenderLayers.clear();
     productionBridgeStructurePackets.clear();
-    productionStructureSourceRevisions.clear();
     structureBatchOwner = null;
     structureBatchPackets = null;
     structureBatchExpectedCount = 0;

@@ -208,6 +208,10 @@ letting ground colour and tile revision diverge. Profiled road decks, mutable
 draped tracks, junction/apron surfaces,
 gallery and tunnel shells, luminaires and portal fittings now publish directly
 from their geometry arrays without constructing a temporary renderer mesh.
+Structure tile construction derives its source revision from the direct and
+replaceable bridge packet generations, retains that authoring signature and
+the exact packet references, and admits rendering only while both still match.
+The former context-side `productionStructureSourceRevisions` map is retired.
 Draped tracks retain only their `BufferGeometry` in the terrain re-seat
 registry; packet attributes share those arrays and are admitted only after
 redrape. Culvert bores/headwalls and rapid-bed geometry likewise publish their
@@ -469,9 +473,12 @@ the failed comparison can be reproduced.
   now live in the renderer-free `ProductionRenderLayerStore`; rapid-rock
   collider witnesses version with their visual packet layer, and the exact
   geomorphic terrain-field arrays version as witnesses beside the terrain
-  packet. Tile construction no longer reconstructs readiness from
-  renderer-owned candidate maps, and the renderer no longer holds delayed
-  road, structure or hydro-detail mesh capture batches.
+  packet. Drive and structure source revisions are now derived inside tile
+  construction from their exact solved inputs and packet-layer generations;
+  the duplicate context-side source revision maps are gone. Tile construction
+  no longer reconstructs readiness from renderer-owned candidate maps, and
+  the renderer no longer holds delayed road, structure or hydro-detail mesh
+  capture batches.
 - Contact/evidence is now the production default with `?substrate=legacy` as
   the observable rollback. Representative water drives, persistent evidence
   and the multi-world parity thresholds pass; a production observation window

@@ -93,6 +93,8 @@ export {
   findProductionDriveWaterOverlaps,
   productionDriveAuthoringRevision,
   productionDriveAuthoringSignature,
+  productionStructureAuthoringRevision,
+  productionStructureAuthoringSignature,
   ProductionSubstrateStore,
   sampleProductionSubstrateTile,
   type ProductionDriveSample,

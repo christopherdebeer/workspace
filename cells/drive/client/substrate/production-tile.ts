@@ -71,14 +71,29 @@ export function productionDriveAuthoringSignature(
   ].join(',')).join('|')}`;
 }
 
-/** Compact diagnostic revision for the exact authoring signature above. */
-export function productionDriveAuthoringRevision(signature: string): number {
+function productionAuthoringRevision(signature: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < signature.length; i++) {
     hash ^= signature.charCodeAt(i);
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0) || 1;
+}
+
+/** Compact diagnostic revision for the exact drive authoring signature. */
+export function productionDriveAuthoringRevision(signature: string): number {
+  return productionAuthoringRevision(signature);
+}
+
+export function productionStructureAuthoringSignature(
+  renderGeneration: string,
+): string {
+  return renderGeneration;
+}
+
+/** Compact diagnostic revision for the exact structure authoring signature. */
+export function productionStructureAuthoringRevision(signature: string): number {
+  return productionAuthoringRevision(signature);
 }
 
 /**
@@ -289,7 +304,6 @@ export interface ProductionSubstrateTileInput {
   revision: number;
   sourceRevisions: {
     terrain: number;
-    structures: number;
     hydroDetails: number;
     hydro: number;
     crossings: number;
@@ -302,6 +316,7 @@ export interface ProductionSubstrateTileInput {
   driveSegments?: readonly ProductionDriveSegment[];
   driveRenderGeneration: string;
   driveRenderMeshes?: readonly ProductionDriveRenderMesh[];
+  structureRenderGeneration: string;
   structureRenderMeshes?: readonly ProductionRenderMesh[];
   hydroDetailRenderMeshes?: readonly ProductionRenderMesh[];
   hydroDetailColliders?: readonly ProductionHydroDetailCollider[];
@@ -342,6 +357,7 @@ export interface ProductionSubstrateTile {
    *  tile's identity or revision. */
   driveIndex?: ProductionDriveIndex;
   driveRenderMeshes: readonly ProductionDriveRenderMesh[];
+  structureAuthoringSignature: string;
   structureRenderMeshes: readonly ProductionRenderMesh[];
   hydroDetailRenderMeshes: readonly ProductionRenderMesh[];
   hydroDetailColliders: readonly ProductionHydroDetailCollider[];
@@ -500,6 +516,15 @@ export function buildProductionSubstrateTile(
     input.driveRenderGeneration,
   );
   const driveRevision = productionDriveAuthoringRevision(driveAuthoringSignature);
+  if (typeof input.structureRenderGeneration !== 'string') {
+    throw new Error(`production substrate ${input.key}: missing structure render generation`);
+  }
+  const structureAuthoringSignature = productionStructureAuthoringSignature(
+    input.structureRenderGeneration,
+  );
+  const structureRevision = productionStructureAuthoringRevision(
+    structureAuthoringSignature,
+  );
   const terrainField = input.terrainField;
   if (terrainField) {
     const fieldCount = terrainField.n * terrainField.n * 4;
@@ -617,7 +642,11 @@ export function buildProductionSubstrateTile(
     source: 'production-substrate',
     key: input.key,
     revision: input.revision,
-    sourceRevisions: { ...input.sourceRevisions, drive: driveRevision },
+    sourceRevisions: {
+      ...input.sourceRevisions,
+      drive: driveRevision,
+      structures: structureRevision,
+    },
     bounds: input.bounds,
     resolution,
     roadIds,
@@ -639,6 +668,7 @@ export function buildProductionSubstrateTile(
     driveSegments,
     driveAuthoringSignature,
     driveRenderMeshes: [...(input.driveRenderMeshes ?? [])],
+    structureAuthoringSignature,
     structureRenderMeshes: [...(input.structureRenderMeshes ?? [])],
     hydroDetailRenderMeshes: [...(input.hydroDetailRenderMeshes ?? [])],
     hydroDetailColliders: (input.hydroDetailColliders ?? []).map((collider) => ({
@@ -1154,6 +1184,7 @@ export class ProductionSubstrateStore {
       driveSegments: tile.driveSegments.length,
       driveAuthoring: tile.driveAuthoringSignature.length > 0,
       driveRenderMeshes: tile.driveRenderMeshes.length,
+      structureAuthoring: tile.structureAuthoringSignature.length > 0,
       structureRenderMeshes: tile.structureRenderMeshes.length,
       hydroDetailRenderMeshes: tile.hydroDetailRenderMeshes.length,
       hydroDetailColliders: tile.hydroDetailColliders.length,

@@ -107,7 +107,9 @@ ok('crossing earthwork invalidation converges',
     && state.now - latestCrossingRebuild.at > 3000,
   { now: state.now, crossingRebuilds, implementedCrossings, terrain: state.terrain });
 ok('the substrate captures a versioned structure candidate',
-  state.substrate?.render?.structureCandidateTiles > 0
+  state.substrate?.at?.structureAuthoring
+    && state.substrate?.at?.sourceRevisions?.structures > 0
+    && state.substrate?.render?.structureCandidateTiles > 0
     && state.substrate?.render?.structureCandidates >= 3
     && state.substrate?.render?.bridgeStructureCandidates === 1
     && state.substrate?.render?.bridgeStructurePacketMeshes === 1,
