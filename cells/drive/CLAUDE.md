@@ -3947,6 +3947,71 @@ usual sense: conifer and snag gain a hundred metres apiece; broadleaf STOPS
 being cut, which is the regression removed; and acacia and palm take no budget,
 which is what the whole unit was about.
 
+### …and then a tree was charged its family's mean, not this place's tree
+
+The budget was filled and the frame still drew half of it. Water-filled, settled
+at Yosemite, the allocator priced its caps at **2,399,673 triangles — the budget,
+to the last three hundred — while the GPU was handed 1,191,677.** Conifer and
+snag were still cut, so the budget was binding, and it was binding on arithmetic
+that was wrong by a factor of two.
+
+**PLACEMENT IS NOT THE LEAK, and that is the measurement that decides which fix
+this is.** 588 of 601 admitted broadleaf stood, 946 of 953 conifer, 304 of 306
+snag: admission IS placement, so the error is the PRICE of a tree and not the
+fate of one. Per family, charged against drawn:
+
+| | atlas mean | drawn per tree | |
+|---|---|---|---|
+| broadleaf | 1107 | 1068 | ×1.04 |
+| **conifer** | **1713** | **543** | **×3.15 — and this is the binding one** |
+| snag | 333 | 188 | ×1.77 |
+
+`meanDrawn` is the mean over a family's WHOLE ATLAS and a place grows two of its
+six silhouettes — the two-scale palette's own doing, and the thing that makes a
+wood one wood rather than confetti. So the family whose cap actually binds is
+priced by variants that are not standing here: **conifer was charged 68% of the
+budget for 21% of the frame.**
+
+The refresh knows what a tree really cost, because it has just placed them all
+and every tier carries its own triangle count. The price is the LAST refresh's
+realised cost per placed tree, with the family mean as the first sweep's guess;
+it converges in one sweep and stays converged, since the palette is stable per
+district and does not reroll as you drive. The clamp — a quarter to four times
+the mean — is INSURANCE against a sample taken mid-sweep and not the rule: a
+place may honestly grow a family's dearest silhouette, so the price must be free
+to exceed the mean. `?treeprice=0` charges the atlas mean again.
+
+**Measured**, `devtools/tree-spend.mjs` on `at-yosemite`, both legs settled, no
+page errors:
+
+| | atlas mean | as drawn |
+|---|---|---|
+| conifer price · cap · placed · edge | 1713 · 961 · 953 · **583** | **575 · 1400 · 1385 · 652** |
+| snag price · cap · placed · edge | 333 · 308 · 306 · **629** | **192 · 439 · 437 · 700** |
+| broadleaf price · cap · placed · edge | 1107 · 588 · 576 · 700 | 1068 · 600 · 576 · 700 |
+| charged | 2,399,673 | **1,530,088** |
+| drawn | 1,191,677 — **50% of what it was charged** | 1,495,767 — **98%** |
+
+**THE ESTIMATOR IS THE FIX AND THE ESTIMATOR IS NOW HONEST**: 98% against 50%,
+so the number the allocator reasons with is the number the GPU is handed. Forty
+per cent more conifer and snag stand, the bill rises 1.19M → 1.50M, and it is
+still well under the 2.4M budget that was previously reported as fully spent.
+
+**AND WHAT BRINGS CONIFER IN AT 652 m IS NO LONGER THE BUDGET.** Its cap is 1400
+— `VEG_CAP.conifer` times the rack's POPULATION CAP — so at Yosemite the
+triangle budget binds nothing at all now and the remaining edge is the
+population stop, which is a dial a player owns (0.25×–16×) and is meant to bind.
+That is the honest end of this thread: the pop-in the seat reported was three
+faults deep — a divisor counting absent families, a proportional cut that
+punished a thin wood, and a price three times the tree — and past them the
+levers are the rack's own.
+
+**THE DUMP COULD NOT HAVE SEEN ANY OF IT.** It reported the caps and never their
+price, and a cap is a CONSEQUENCE of a price — the same fault this file records
+for the terrain's cell table and for `BridgeAssembly.claim`, met again: a probe
+that reports the output of a rule cannot witness the rule. The trees row carries
+`price b1068/c543/s188` now and `__ez().price` sits beside the mean it replaced.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the
