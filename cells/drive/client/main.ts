@@ -16682,9 +16682,35 @@ function meshTriAt(x: number, z: number): Array<{ x: number; y: number; z: numbe
   }
   return null;
 }
+/** ── THE KEY IS A STRING, AND THE STRING WAS THE ALLOCATION ──
+ *
+ *  `meshSurfaceAt` is the hottest lookup in the client — a redrape alone asked
+ *  it 930,560 times in an 84 s device session — and the first thing it did was
+ *  build a fresh `${tx}/${ty}` for a tile it had almost certainly just been
+ *  asked about. Measured by substitution (devtools/redrape-ga.mjs), `groundAt`
+ *  is essentially the whole redrape walk at ~850 ns a call, and the reading
+ *  landing OVER 100% is the tell that the marginal call is dearer than the
+ *  average one, which allocation is and arithmetic is not.
+ *
+ *  So the key is memoised on the tile INDICES, which is sound with no
+ *  invalidation of any kind: the string is a pure function of (tx, ty) and
+ *  nothing else. Every lookup below it — the dirty test, the mesh, the tile —
+ *  is unchanged and still runs, so a mesh that was swapped, dirtied or evicted
+ *  between two calls answers exactly as it did before. One entry, because the
+ *  callers that matter (a redrape's inner loop, the four wheels, a batter
+ *  bay's steps) ask about the same tile thousands of times running.
+ *
+ *  What this does NOT do is memoise the three Map lookups. That wants a
+ *  revision counter covering `terrainDirty`, `terrainMeshes` and
+ *  `heightTiles`, and a missed bump there is the physics reading a hillside
+ *  that has been replaced — the picture-and-physics-disagree fault this file
+ *  warns about. Take the free half, measure, and decide the rest on a number. */
+let msKeyTx = NaN, msKeyTy = NaN, msKey = '';
 function meshSurfaceAt(x: number, z: number): number | null {
   const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
-  const key = `${tx}/${ty}`;
+  let key: string;
+  if (tx === msKeyTx && ty === msKeyTy) key = msKey;
+  else { key = msKey = `${tx}/${ty}`; msKeyTx = tx; msKeyTy = ty; }
   // A STALE MESH IS NOT AN AUTHORITY. A tile whose roads have changed still
   // holds the uncut hillside until `flushTerrain` gets to it — one tile every
   // 200ms — and for those frames the wheels would ride terrain standing over

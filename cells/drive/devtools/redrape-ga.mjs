@@ -112,10 +112,29 @@ if (delta <= floor) {
   console.log(`  DELTA ${delta.toFixed(2)} ms is INSIDE the floor — this instrument cannot resolve it`);
 } else {
   const perCall = delta * 1e6 / Math.max(1, g);
+  const share = 100 * delta / Math.max(0.001, walkOff);
   console.log(`  DELTA ${delta.toFixed(2)} ms — one extra groundAt on every counted vertex`);
-  console.log(`  so groundAt is ${(100 * delta / Math.max(0.001, walkOff)).toFixed(0)}% of the walk`
-    + `, at ${perCall.toFixed(0)} ns a call`);
-  console.log(`  and the rest of the walk is ${(walkOff - delta).toFixed(2)} ms`
-    + ` — the seat test, two attribute reads, the box test and the write`);
+  console.log(`  so groundAt is ${share.toFixed(0)}% of the walk, at ${perCall.toFixed(0)} ns a call`);
+  const rest = walkOff - delta;
+  // A SHARE OVER 100% IS NOT A RESULT, IT IS THE EDGE OF THE INSTRUMENT — and
+  // printing it flat would be a number nobody can act on. Two things put it
+  // there and they are not alike. The delta carries the floor's own noise, so
+  // anything within a floor of 100% is "essentially all of it" and no more can
+  // be said. And the substitution's MARGINAL call need not cost what the
+  // average call costs: `meshSurfaceAt` builds a `${tx}/${ty}` string per call,
+  // so doubling the calls doubles the allocation rate, and allocation is the
+  // one cost that gets dearer per unit as you make more of it. That the
+  // measurement lands over 100% is therefore evidence FOR the string being a
+  // real part of the price, which is the first thing the cut should take.
+  if (rest < floor) {
+    console.log(`  the rest of the walk is ${rest.toFixed(2)} ms — UNDER THE FLOOR (${floor.toFixed(2)}).`);
+    console.log(`  Read that as: groundAt is essentially the whole walk and this`);
+    console.log(`  instrument cannot resolve what is left. A share over 100% also says`);
+    console.log(`  the doubled leg's marginal call is DEARER than the average one —`);
+    console.log(`  most plausibly the per-call string allocation and its collection.`);
+  } else {
+    console.log(`  and the rest of the walk is ${rest.toFixed(2)} ms`
+      + ` — the seat test, two attribute reads, the box test and the write`);
+  }
 }
 console.log(`  normals ${mean(offs, 'normalsMs').toFixed(2)} ms/call (the recompute, for scale)`);
