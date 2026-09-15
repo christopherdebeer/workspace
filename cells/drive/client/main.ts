@@ -11316,15 +11316,53 @@ const isEzKind = (k: VegKind): k is EzFamily => (EZ_FAMILIES as string[]).includ
  * geometry may reach the GPU. Keeping them independent makes the upper stops
  * honest stress instruments instead of labels over a silently fixed pool.
  */
-function ezCapScale(): number {
-  let atCap = 0;
-  for (const fam of EZ_FAMILIES) {
-    atCap += VEG_CAP[fam] * vegScale * treePopulationScale * ezMeanTris(fam);
-  }
-  return atCap > 0 ? clamp(treeTriBudget / atCap, 0, 1) : 1;
+/** ── THE BUDGET WAS DIVIDED AMONG TREES THAT DO NOT GROW HERE ──
+ *
+ *  Reported from the seat as trees popping in too close, and the dump says it
+ *  exactly: `range 2800m` beside `edge b466/c223` — the DRAW RANGE is the
+ *  dial, and the ADMITTED EDGE is where a tree actually appears, 466 m for
+ *  broadleaf against a range six times that.
+ *
+ *  What set 466 was `cap 19%`, and 19% was this function. It divided the
+ *  triangle budget by what ALL FIVE families would cost at their full caps —
+ *  and a place grows two or three of them, never five. At Yosemite the guild
+ *  plants no acacia and no palm (`placed b304/c268/a0/p0/s86`), yet their
+ *  caps, 700 and 600 sites of skeleton apiece, were in the divisor. So the
+ *  families that were there got a fifth of their caps, both pinned exactly
+ *  against it — 1600 x 0.19 = 304, 450 x 0.19 = 85 — while **the budget
+ *  itself went unspent at 0.69M of 1.0M.** A budget with a third left in it
+ *  is not a budget that is binding; it is one being divided wrong.
+ *
+ *  So the scale is set by DEMAND: what each family would place if only its own
+ *  cap stopped it, which the refresh knows because it has just gathered the
+ *  candidates. A family with no candidates costs nothing and takes nothing. A
+ *  family with more candidates than its cap is unchanged. Nothing here raises
+ *  a cap above its nominal value — the triangle bill is still bounded by
+ *  `treeTriBudget`, and the rack's own stops are untouched.
+ *
+ *  WHAT THIS IS NOT: a way to get trees at a kilometre. It recovers the share
+ *  reserved for absent families and no more. Past that the edge is the budget
+ *  against the cost of a skeleton, and the honest levers are the rack's EZ TRI
+ *  CAP (which goes to 100M) or a cheaper far tree — and this file already
+ *  records that a shape-changing far tier was tried from the seat and
+ *  rejected, because a tree that changes as you drive at it is worse than
+ *  either shape. */
+function ezCostAt(want: Record<EzFamily, number>): number {
+  let cost = 0;
+  for (const fam of EZ_FAMILIES) cost += want[fam] * ezMeanTris(fam);
+  return cost;
 }
+/** The nominal cap: what the rack asks for, before any budget. */
+const ezCapNominal = (fam: EzFamily): number =>
+  Math.floor(VEG_CAP[fam] * vegScale * treePopulationScale);
+/** The scale and the caps the LAST refresh actually used, so the probe and the
+ *  dump report the rule that ran rather than one recomputed from nothing. */
+const EZ_DEMAND = qsOn('treedemand', true);
+let ezScaleNow = 1;
+let ezCapNow: Record<EzFamily, number> | null = null;
+function ezCapScale(): number { return ezScaleNow; }
 const ezCapFor = (fam: EzFamily): number =>
-  Math.floor(VEG_CAP[fam] * vegScale * treePopulationScale * ezCapScale());
+  ezCapNow ? ezCapNow[fam] : Math.floor(ezCapNominal(fam) * ezScaleNow);
 
 /**
  * ── WHICH SILHOUETTE THIS TREE IS ──
@@ -13636,6 +13674,18 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       }
     }
     vegMark('ezGather');
+    // ── THE BUDGET GOES TO WHAT IS ACTUALLY HERE ── see the note by
+    // `ezCostAt`. `cand[fam].length` is every candidate inside the draw range,
+    // so `want` is what this place would plant if only its own cap stopped it;
+    // an absent family wants nothing and is charged nothing.
+    {
+      const want = ezRecord((f) => EZ_DEMAND
+        ? Math.min(cand[f].length, ezCapNominal(f))
+        : ezCapNominal(f));            // ?treedemand=0 — the old all-families divisor
+      const cost = ezCostAt(want);
+      ezScaleNow = cost > 0 ? clamp(treeTriBudget / cost, 0, 1) : 1;
+      ezCapNow = ezRecord((f) => Math.floor(want[f] * ezScaleNow));
+    }
     for (const fam of EZ_FAMILIES) {
       let list = cand[fam];
       const cap = ezCapFor(fam);
