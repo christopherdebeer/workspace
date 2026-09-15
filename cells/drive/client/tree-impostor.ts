@@ -94,6 +94,27 @@ export function impostorGeometry(): THREE.BufferGeometry {
   // vertex path happy.
   g.setAttribute('normal', new THREE.Float32BufferAttribute(
     new Array(8).fill(0).flatMap(() => [0, 1, 0]), 3));
+  // ── AND A `color` OF ONES, WHICH IS NOT DECORATION: IT IS THE TIER ──
+  //
+  // `vertexColors: true` defines USE_COLOR, and three's `color_vertex` then
+  // runs BOTH of its multiplies — `vColor *= color` (the GEOMETRY attribute)
+  // and `vColor *= instanceColor` — while `color_fragment` applies vColor only
+  // under USE_COLOR. So an instanced mesh that carries its colour per INSTANCE
+  // and whose geometry has no `color` attribute is not merely missing a tint:
+  // an undeclared vertex attribute reads as (0, 0, 0, 1) in WebGL, so vColor is
+  // ZERO and `diffuseColor.rgb *= vColor` takes the whole tier to black.
+  //
+  // Reported from the seat as solid black trees with a perfect silhouette, at
+  // every distance and in every camera, and the frames carried the proof: a
+  // near impostor was pure black while the far treeline was a dark grey-green,
+  // which is this zero seen through the distance dissolve's own mix toward the
+  // ground. `flora-ez.ts` sets one on every baked skeleton, which is why the
+  // trees standing beside these were lit and these were not.
+  //
+  // Turning `vertexColors` OFF is the wrong repair: USE_INSTANCING_COLOR still
+  // computes vColor, and `color_fragment` in this three would then never apply
+  // it — the tier comes out white instead of black.
+  g.setAttribute('color', new THREE.Float32BufferAttribute(new Array(24).fill(1), 3));
   g.setIndex(idx);
   return g;
 }

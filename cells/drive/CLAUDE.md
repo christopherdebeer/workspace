@@ -4390,6 +4390,87 @@ recorded numbers): 933 of 1,617 offered, census `veg-impostor` **3,732 = 933 x
 41x** — so the tier draws exactly what it drew before the fixes, with the
 lighting in the right frame.
 
+### …and it was STILL solid black, because an undeclared attribute reads as zero
+
+The seat again, with three frames, range high and population low to force the
+tier: *impostors are still just solid black.* They were, and the view-space
+normal above — a real bug, correctly fixed — was never the cause of it.
+
+**`vertexColors: true` DEFINES `USE_COLOR`, AND `color_vertex` THEN MULTIPLIES
+BY THE GEOMETRY'S `color` ATTRIBUTE.** three 0.160:
+
+```glsl
+#ifdef USE_COLOR
+	vColor *= color;            // the GEOMETRY attribute
+#endif
+#ifdef USE_INSTANCING_COLOR
+	vColor.xyz *= instanceColor.xyz;
+#endif
+```
+
+`impostorGeometry()` sets position, uv, `aCard`, a normal and an index, and no
+`color`. **An undeclared vertex attribute reads as (0, 0, 0, 1) in WebGL**, so
+`vColor` is zero and `color_fragment`'s `diffuseColor.rgb *= vColor` takes the
+whole tier to black — silhouette perfect, alpha correct, lighting irrelevant.
+`flora-ez.ts` sets one on every baked skeleton (its `decode` writes `col`),
+which is exactly why the trees standing beside these were lit and these were
+not; every other `vertexColors: true` material in this client draws geometry
+that carries one, and the impostor is the only mesh whose geometry was written
+fresh.
+
+**TURNING `vertexColors` OFF IS THE WRONG REPAIR.** `USE_INSTANCING_COLOR` still
+computes `vColor`, and this three's `color_fragment` applies it only under
+`USE_COLOR` or `USE_COLOR_ALPHA` — so the tier would come out WHITE instead of
+black. The fix is a `color` of ones: `vColor = 1 x 1 x instanceColor`.
+
+**AND THE FRAMES CARRIED THE PROOF, which is worth knowing as a signature.** The
+near impostor was pure black and the distant treeline a dark grey-green — that
+second colour is the distance dissolve's own `mix(0, ground, 0.7)` running on
+top of the zero. A thing that is black close up and tinted far away has been
+multiplied by nothing, not lit wrongly.
+
+### THE DIFF SCORED THE BROKEN BUILD HIGHER, AND THAT IS THE LESSON
+
+`tree-impostor.mjs` measures how many pixels MOVED and by how much, against a
+same-frame floor. **A tier drawing solid black holes in a green hillside moves
+more luma than one drawing trees**, so the metric did not merely fail to catch
+this — it rewarded it. Measured at `at-yosemite`, the same fixture and crop, the
+broken build (`REV=42448df`) against the fix:
+
+| | broken | fixed |
+|---|---|---|
+| band SIGNAL (the metric this tool was built on) | **10.524/255** | **7.83** |
+| ink ON, over the pixels the tier changed | **18.3/255** — one palette step | **44.1** — two and a half |
+| the hillside it replaced | 110.1 | 115.1 |
+| changed pixels under 9/255 (half a step of black) | **27.3%** | **2.2%** |
+
+So the tool now reports the INK: the mean luma of the changed pixels in the ON
+frame beside what the OFF frame had there, and the share of them sitting at the
+bottom of the ramp. That is a statement about the COLOUR where every other
+number here is a statement about the CHANGE, and it is the fourth time this file
+has recorded the same shape — the terrain's cell table, `BridgeAssembly.claim`,
+`__tdetail().mat`, and now this: **a probe that reports that something happened
+cannot witness what happened.**
+
+**THE BAR IS IN PALETTE STEPS AND THE CONTROL IS ITS PROVENANCE.** One step is
+about 18/255, so the gate is two steps of ink (36) and a tenth of the pixels at
+the floor — and `REV=` was added to the tool for exactly this, because the first
+cut of the gate (`on < 18`, `dark > 50%`) did NOT fire on the broken build and
+was therefore decoration. A check that has not been shown to fail on the fault
+it names is not a check. The broken build clears both new bounds by a wide
+margin and the fix misses both by one.
+
+**AND THE TIER HAS NO NEAR LIMIT, BY DESIGN — which is what the seat's forced
+dials exposed.** Full density runs from the family's own admitted edge INWARD
+with `keep` capped at 1, so with POPULATION CAP low the geometry's edge collapses
+and a tree ten metres away is turned down by the cap and wears a card. That is
+the tier doing its job (it draws what admission refused, wherever that is) and
+it is also the module's own recorded caveat — *a directional atlas is the answer
+and the distances this tier draws at keep the swivel under the quantiser* — met
+at a setting where those distances are not the shipped ones. At stock dials the
+nearest impostor is past the skeletons' edge; forced, it is in your lap, and a
+two-card billboard at ten metres is a two-card billboard.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the
