@@ -49,6 +49,16 @@ const d = await openDrive({
 });
 const q = (f, ...a) => d.page.evaluate(f, ...a);
 
+// ── AND WHETHER A BOUND ON THOSE PASSES COULD COLLECT ANYTHING ──
+//
+// Off in the game (the counting is the same order of work as the passes it
+// sizes) and asked for here, BEFORE the settle, so every build the gate waits
+// through is counted. `BOUND=0` leaves it off, which is what to pass when the
+// milliseconds themselves are the question — the probe's own time is excluded
+// from the laps but not from a build's wall total.
+const BOUND = process.env.BOUND ?? '1';
+if (BOUND !== '0') await q(() => window.__hydrobound(true));
+
 // THE THREE-SIGNAL GATE, not a timeout: a world still building is a world
 // whose hydro builds are still the FIRST ones, and a first build is the one
 // case the skip can never take.
@@ -109,6 +119,22 @@ console.log(`  water: ${P.covered_n} of ${P.texels_n} texels wet `
   + `(${(100 * P.covered_n / Math.max(1, P.texels_n)).toFixed(2)}%)`);
 console.log(`  builds WITH water    ${P.wetBuilds} · ${P.wetMs} ms · ${P.wetTexels} texels each`);
 console.log(`  builds with NO water ${P.dryBuilds} · ${P.dryMs} ms · ${P.dryTexels} texels each   [hydrodry=${DRY}]`);
+// ── WHAT A BOUND WOULD LEAVE TO RUN ──
+//
+// The shape question, not the size one: 0.9% of a grid wet says nothing about
+// whether the passes can be bounded, because a river crossing a tile corner to
+// corner has a bounding box the size of the tile. `rect` is the wet bbox grown
+// by the shore band, `rows` the per-row spans grown by the same (which a
+// diagonal defeats the first of and not the second), and `band` the honest
+// floor — the texels actually within the band, which only a distance transform
+// finds and which no cheap bound beats. A row near 1.000 is a bound that
+// collects nothing and should not be written.
+if (P.boundBuilds) {
+  console.log(`  a bound would leave, of the grid: rect ${P.boundRect} · rows ${P.boundRows}`
+    + ` · band ${P.boundBand}   [over ${P.boundBuilds} wet builds]`);
+} else if (BOUND !== '0') {
+  console.log('  bound probe on and no wet build saw it — nothing to size');
+}
 console.log(`  store: feats ${r.feats} · cover-traced ${r.landcover.feats} (${r.landcover.rivers} rivers,`
   + ` ${r.landcover.pixels}px, maxPts ${r.landcover.maxPts}) · water tris ${r.mesh.tris}`);
 console.log(`  page/harness errors: ${errs}`);

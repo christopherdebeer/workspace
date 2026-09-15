@@ -782,6 +782,11 @@ function areaCoverageRaster(
 
 /** WHERE A BUILD GOES, cumulative across the session: the instrument for a
  *  hydro build that costs more than its frame. Read via __hydro().buildProf. */
+/** Whether to count what a bound on the full-grid passes would collect. Off
+ *  in the game: the count is three passes over the grid, the same order as
+ *  the passes it sizes. `devtools/hydro-phases.mjs` turns it on. */
+let boundProbe = false;
+export function setHydroBoundProbe(on: boolean): void { boundProbe = on; }
 export const HYDRO_BUILD_PROF = {
   builds: 0, total: 0, max: 0, ocean: 0, analyse: 0, raster: 0, texels: 0, search: 0, sources: 0, coast: 0,
   // `rest` WAS TWO THIRDS OF A BUILD, which is a phase name meaning "the rest
@@ -801,6 +806,28 @@ export const HYDRO_BUILD_PROF = {
    *  fair price. `dryBuilds` are the tiles that built a whole field for no
    *  water at all. */
   coveredTexels: 0, dryBuilds: 0, dryMs: 0, dryTexels: 0, wetBuilds: 0, wetMs: 0, wetTexels: 0,
+  /** ── AND WHETHER A BOUND COULD COLLECT THAT PRICE ──
+   *
+   *  The obvious cut for a wet build is to run the full-grid passes only
+   *  where the water can reach — the covered texels grown by the shore
+   *  band — and write the outside the constants the dry path already
+   *  writes. Whether that is worth anything is a question about the SHAPE of
+   *  the wet set and not about its size, and the two are not the same
+   *  question at all: 692 covered texels in 77,000 is 0.9%, and if they are a
+   *  river running corner to corner their BOUNDING BOX is the whole tile and
+   *  a rect bound collects nothing.
+   *
+   *  So both candidate bounds are counted, in texels, before either is
+   *  written: `boundRect` is the wet bbox grown by the band, `boundRows` the
+   *  per-row spans grown by the same — which a diagonal river defeats the
+   *  first of and not the second. `boundBand` is the honest floor, the texels
+   *  actually within the band of a wet one, which only a distance transform
+   *  can find and which no cheap bound will beat.
+   *
+   *  Measure before writing the bound. The doctrine's own note on this cut
+   *  says it "is a measurement and not a reading", and this is the
+   *  measurement. */
+  boundRect: 0, boundRows: 0, boundBand: 0, boundBuilds: 0,
 };
 export function buildHydroTile(
   input: HydroTileInput,
@@ -1341,6 +1368,77 @@ export function buildHydroTile(
     }
   }
   lap('majority');
+  // ── WHAT A BOUND WOULD COLLECT, COUNTED BEFORE ONE IS WRITTEN ──
+  //
+  // Coverage is final here, so this is the wet set the later full-grid passes
+  // would be bounded to. It is counted and not acted on: see the note on
+  // HYDRO_BUILD_PROF's bound counters for why the SHAPE of the set, not its
+  // size, decides whether the cut is worth taking.
+  //
+  // OFF BY DEFAULT, AND IT HAS TO BE. The dilation below is three passes over
+  // the grid, which is the same order as the passes it is sizing — measuring
+  // a build with it on would inflate the very total the saving is quoted
+  // against, which is the "a wall measurement offered for a CPU one" fault
+  // this repo has recorded three times. `setHydroBoundProbe(true)` is the
+  // devtool's switch, and the clock is re-armed afterwards so no phase after
+  // it is billed for the probe either.
+  if (boundProbe) {
+    const tProbe = performance.now();
+    const reach = Math.max(1, Math.ceil(options.shoreDistanceLimitM / Math.max(1e-3, pixelM)));
+    let minX = width, maxX = -1, minZ = height, maxZ = -1;
+    const rowLo = new Int32Array(height).fill(width);
+    const rowHi = new Int32Array(height).fill(-1);
+    const wetMask = new Uint8Array(count);
+    for (let iz = 0; iz < height; iz++) for (let ix = 0; ix < width; ix++) {
+      if (coverage[iz * width + ix] <= 0.005) continue;
+      wetMask[iz * width + ix] = 1;
+      if (ix < rowLo[iz]) rowLo[iz] = ix;
+      if (ix > rowHi[iz]) rowHi[iz] = ix;
+      if (ix < minX) minX = ix; if (ix > maxX) maxX = ix;
+      if (iz < minZ) minZ = iz; if (iz > maxZ) maxZ = iz;
+    }
+    if (maxX >= 0) {
+      P.boundBuilds++;
+      P.boundRect += (Math.min(width - 1, maxX + reach) - Math.max(0, minX - reach) + 1)
+        * (Math.min(height - 1, maxZ + reach) - Math.max(0, minZ - reach) + 1);
+      // A row's own span grown by the band, unioned down the reach: a row with
+      // no water of its own still lies within the band of one that has.
+      for (let iz = 0; iz < height; iz++) {
+        let lo = width, hi = -1;
+        for (let jz = Math.max(0, iz - reach); jz <= Math.min(height - 1, iz + reach); jz++) {
+          if (rowHi[jz] < 0) continue;
+          if (rowLo[jz] < lo) lo = rowLo[jz];
+          if (rowHi[jz] > hi) hi = rowHi[jz];
+        }
+        if (hi >= 0) P.boundRows += Math.min(width - 1, hi + reach) - Math.max(0, lo - reach) + 1;
+      }
+      // The floor: the Chebyshev dilation of the wet SET by the band, which is
+      // what a distance transform finds and what no cheap bound beats. It is
+      // separable — a box max is a horizontal pass then a vertical one — so it
+      // is two passes rather than a reach-squared window per texel.
+      const dil = new Uint8Array(count);
+      for (let iz = 0; iz < height; iz++) for (let ix = 0; ix < width; ix++) {
+        let on = 0;
+        for (let d = -reach; d <= reach && !on; d++) {
+          const jx = ix + d;
+          if (jx >= 0 && jx < width && wetMask[iz * width + jx]) on = 1;
+        }
+        dil[iz * width + ix] = on;
+      }
+      let band = 0;
+      for (let iz = 0; iz < height; iz++) for (let ix = 0; ix < width; ix++) {
+        let on = 0;
+        for (let d = -reach; d <= reach && !on; d++) {
+          const jz = iz + d;
+          if (jz >= 0 && jz < height && dil[jz * width + ix]) on = 1;
+        }
+        band += on;
+      }
+      P.boundBand += band;
+    }
+    // Re-arm: the probe's own milliseconds belong to no phase.
+    tMark += performance.now() - tProbe;
+  }
   // ── STRUCTURES OWN SURFACE VISIBILITY ──
   //
   // A culvert carries water below the road and a causeway blocks it with fill;

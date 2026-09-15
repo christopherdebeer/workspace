@@ -252,7 +252,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/substrate-views.mjs` | each channel of that field photographed over real ground, with the same-frame-twice floor and the share of the pane each view moves — a channel that paints a flat wash is the failure worth catching (`FIX=`, `CAM=`, `Z=`, `CH=`) | ~6min |
 | `node devtools/chart-bands.mjs` | which layer owns each band of the chart — a hide-diff of the fine world, the coarse shell and the globe over one settled frame, with the same-frame-twice floor beside it, the far/fine seam in luma, and the planet-sun ramp (`SPOT=`, `Z=`, `CLIP=0`) | ~8min |
 | `node devtools/bridge-landmarks.mjs` | who CLAIMED each bridge assembly — an entry's id, OSM's own `bridge:structure`, or the recipe — beside what the painter actually built; fails on a spec that names a form and paints nothing, and on a long span nobody claimed (`FIX=`, `LONG_M=`) | ~2min |
-| `node devtools/hydro-phases.mjs` | where a hydro build's milliseconds go, by phase and by ns/texel, with the wet/waterless build split and the wet share of the grid (`DRY=0` is the short-circuit's control, `FIX=`/`SPOT=` the place) | ~1min |
+| `node devtools/hydro-phases.mjs` | where a hydro build's milliseconds go, by phase and by ns/texel, with the wet/waterless build split, the wet share of the grid, and what a bound on the full-grid passes would leave to run — READ `BOUND=0` FOR THE MILLISECONDS, since the sizing probe is the same order of work as the passes it sizes and lands in `other` (`DRY=0` is the short-circuit's control, `FIX=`/`SPOT=` the place) | ~1min |
 | `node devtools/hydro-dry.test.mjs` | a waterless tile's short-circuit is the path it replaced, byte for byte, against the revision's own build-tile (`REV=`) | ~10s |
 | `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
 | `node devtools/sward-sub.mjs` | whether the sward's density and the flora's habitat follow the geomorphic field, as the correlation and the habitat counts, with `swardsub=0` as the control (`FIX=` a fixture or `SPOT=` a live place; CPU numbers rather than pixels — see the note) | ~3min |
@@ -11388,3 +11388,74 @@ times in the mean and by two to six in pixels on both runs. Quote the floor
 beside the signal, always: a near-field term measured without one is a number
 with no scale, and one measured against a floor from a different boot is worse
 than no number at all.
+
+## The wet hydro build cannot be bounded to the shore band — the band IS the tile
+
+A device dump from Yosemite (255 s, 20.4 fps, 29.7% of frames slow) put
+`hydroBuild` at **75.7 ms a build, 145 builds, 10% of all slow-frame time and
+top-of-frame in 112 frames** — the largest IDENTIFIED cost in the session, and
+the one this file already had a plan for: run the full-grid passes only where
+the water can reach and write the outside the constants the dry path writes.
+That plan was never taken because "the bound has to be shown not to move those
+answers, which is a measurement and not a reading". This is the measurement,
+and **it says not to write it.**
+
+**THE QUESTION IS THE SHAPE OF THE WET SET, NOT ITS SIZE**, and the two are
+not the same question at all. 296 of 38,309 texels wet is 0.77%, which sounds
+like a build that is 99% overhead — and if those texels are a river crossing
+the tile corner to corner, its BOUNDING BOX is the tile and a rect bound
+collects nothing. So all three candidate bounds are counted before any is
+written (`__hydrobound(true)`, `HYDRO_BUILD_PROF`'s `boundRect/Rows/Band`,
+printed by `hydro-phases.mjs`), as the share of the grid each would leave
+still to run:
+
+| bound | leaves | what it is |
+|---|---|---|
+| **rect** | **0.789** | the wet bbox grown by the shore band |
+| **rows** | **0.475** | per-row spans grown by the same — a diagonal defeats the rect and not this |
+| **band** | **0.443** | the floor: the texels actually within the band, which only a distance transform finds |
+
+**EVEN A PERFECT BOUND LEAVES 44% OF THE GRID**, and the reason is a constant
+nobody was looking at: `shoreDistanceLimitM` is **180 m**, a flowing tile's
+texel is ~9.4 m, so the reach is **19 texels in every direction** — a band 39
+texels wide around a river that crosses a 280² grid. The bound is not defeated
+by the river being thin; it is defeated by the band being thick.
+
+**What the cut is actually worth**, from the device's own split (the phases
+run only on the 121 wet builds of 145, so they scale by 145/121 for a wet one):
+fill 15.6 + majority 7.6 + shore 11.4 + pack 9.0 = **43.6 ms of an 88.2 ms wet
+build, 49%** — and 56% of that is **24 ms, a wet build from 88 to 64**. A 26%
+cut on the worst frames, bought by bounding `fill`, which extends a body's
+level BEYOND the visible mask on purpose and which `sampleRestingSurface`,
+`sampleBankField` and `drawnHydroAt` read anywhere in the tile. That is a poor
+trade, and the doctrine's own framing of this cut — which implied most of the
+build — was wrong by about half.
+
+**THE RESOLUTION IS THE BIGGER LEVER AND ALWAYS WAS.** A wet build is 78,400
+texels against a dry one's 19,600: `flowingFieldResolution` is a **4× grid**,
+chosen by "any flowing observation" rather than by the covered share, and this
+file already records that ("the dial is right where the water IS the tile and
+wrong where it is a thread through one"). Every full-grid pass scales with it,
+so halving it quarters all of them — 88 ms toward 25-30 — where the bound
+reaches 64, and it moves no sampler's contract: a coarser field is a question
+about accuracy, not about whether a reader's answer is still defined. That is
+where this task points now.
+
+**Two things about the instrument, both of which matter more than the number.**
+
+- **IT IS OFF IN THE GAME, AND MEASURED PROVING IT.** The counting is three
+  passes over the grid — the same order as the passes it sizes — so a build
+  measured with it on inflates the very total the saving is quoted against.
+  Its time is excluded from the laps (`tMark` is re-armed) but NOT from the
+  build's wall total, so it lands in `other`, and the control is the pair:
+  with the probe on, `other` is **22.9 ms and the largest row in the table**,
+  and a wet build reads 233.4 ms; with `BOUND=0`, `other` is **0.1 ms** and
+  the wet build 151.9. A residual that large is the instrument, and an
+  instrument that could not be switched off would have been reported as a
+  mystery phase.
+- **THE SHARES ARE THE MERCED'S, NOT A LAW.** A tile whose water is a compact
+  body — a pond, a lake corner, a reservoir head — bounds beautifully and the
+  rect would collect most of it. What Yosemite has is a river crossing the
+  tile, which is the common case for the layer and the case a bound must
+  survive. Run the probe at the place before believing either answer.
+

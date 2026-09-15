@@ -68,7 +68,7 @@ import { solveChain as solveProfile } from './roadprofile';
 import { RoadProfileWorker } from './roadprofile-worker';
 import { inlandComponents, inlandMask, maskSignature } from './inland-water';
 import { pointInPolygon } from './hydro/geometry';
-import { HYDRO_BUILD_PROF } from './hydro/build-tile';
+import { HYDRO_BUILD_PROF, setHydroBoundProbe } from './hydro/build-tile';
 import type { SceneShade } from './hydro/material';
 import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainCrossingMask, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
 import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-worker';
@@ -3705,6 +3705,17 @@ function oceanCoverageFor(t: HeightTile): OceanCoverage {
  *  filled or scanned it and missed. */
 const hydroFeedLog: Array<{ at: number; key: string; rev: number; store: number; fed: number }> = [];
 (window as unknown as { __hydrofeeds?: object }).__hydrofeeds = (): object => hydroFeedLog.slice(-120);
+/** ── SIZE THE BOUND BEFORE WRITING IT ──
+ *
+ *  Every phase of a wet hydro build after `analyse` is a full-grid pass, so a
+ *  build is priced by the tile and not by the river in it. The cut everyone
+ *  reaches for is to run them only where the water can reach; whether that
+ *  collects anything is a question about the SHAPE of the wet set, because a
+ *  river crossing a tile corner to corner has a bounding box the size of the
+ *  tile. This turns the counting on — it is off in the game, being the same
+ *  order of work as the passes it sizes — and `__hydro().buildProf` then
+ *  carries boundRect, boundRows and boundBand as shares of the grid. */
+(window as unknown as { __hydrobound?: object }).__hydrobound = (on = true): void => setHydroBoundProbe(!!on);
 /** The hydro system's elevation raster side — see hydroFeed. */
 const HYDRO_EN = 132;
 const HYDRO_SKIP = qs('hydroskip') !== '0';
@@ -34854,7 +34865,14 @@ function repaintWetDebug(): void {
       return { builds: P.builds, meanMs: ms(P.total), maxMs: Math.round(P.max), ocean: ms(P.ocean), analyse: ms(P.analyse), raster: ms(P.raster), texels: ms(P.texels), search: ms(P.search), sources: ms(P.sources), coast: ms(P.coast),
         fill: ms(P.fill), majority: ms(P.majority), occlude: ms(P.occlude), extent: ms(P.extent), shore: ms(P.shore), ground: ms(P.ground), pack: ms(P.pack), texels_n: Math.round(P.texelCount / b), covered_n: Math.round(P.coveredTexels / b), dryBuilds: P.dryBuilds, dryMs: +(P.dryMs / Math.max(1, P.dryBuilds)).toFixed(1), dryTexels: Math.round(P.dryTexels / Math.max(1, P.dryBuilds)),
         wetBuilds: P.wetBuilds, wetMs: +(P.wetMs / Math.max(1, P.wetBuilds)).toFixed(1), wetTexels: Math.round(P.wetTexels / Math.max(1, P.wetBuilds)),
-        itemsPerBuild: +(P.items / b).toFixed(1), areaItems: +(P.areaItems / b).toFixed(1), flowingAreas: +(P.flowingAreas / b).toFixed(1), searchTexels: Math.round(P.searchTexels / b), paints: Math.round(P.paints / b) };
+        itemsPerBuild: +(P.items / b).toFixed(1), areaItems: +(P.areaItems / b).toFixed(1), flowingAreas: +(P.flowingAreas / b).toFixed(1), searchTexels: Math.round(P.searchTexels / b), paints: Math.round(P.paints / b),
+        // What a bound on the full-grid passes would leave to run, as a share
+        // of the grid, over the builds the probe saw. Zero unless
+        // `__hydrobound(true)` asked for it — see setHydroBoundProbe.
+        boundBuilds: P.boundBuilds,
+        boundRect: +(P.boundRect / Math.max(1, P.boundBuilds) / Math.max(1, P.texelCount / b)).toFixed(3),
+        boundRows: +(P.boundRows / Math.max(1, P.boundBuilds) / Math.max(1, P.texelCount / b)).toFixed(3),
+        boundBand: +(P.boundBand / Math.max(1, P.boundBuilds) / Math.max(1, P.texelCount / b)).toFixed(3) };
     })(),
     landcover: (() => {
       let feats = 0, pixels = 0, rivers = 0, pts = 0, maxPts = 0;
