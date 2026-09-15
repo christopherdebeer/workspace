@@ -24,15 +24,45 @@ const d = await openDrive({
   settle: 14000,
   bootTimeout: 90000,
 });
-await d.page.waitForTimeout(9000);
 
-const state = await d.page.evaluate(() => ({
+// `meshSurfaceAt` can answer null while a terrain mesh is being swapped even
+// though no tile is missing. Hold the authoritative queues at zero, with an
+// unchanged build signature, before sampling crossing earthwork.
+let quiet = 0;
+let previousSignature = '';
+const settleDeadline = Date.now() + 60000;
+while (Date.now() < settleDeadline && quiet < 4) {
+  await d.page.waitForTimeout(500);
+  const settled = await d.page.evaluate(() => {
+    const terrain = window.__tstats?.();
+    const render = window.__substrate?.().render;
+    return {
+      ready: terrain?.dirty === 0
+        && terrain?.inFlight === 0
+        && terrain?.queued === 0
+        && render?.pendingReconciliations === 0,
+      signature: JSON.stringify([
+        terrain?.builds,
+        terrain?.seenWays,
+        terrain?.roadCells,
+        render?.atomicCommits,
+        render?.structureCandidates,
+        render?.structureInstantiatedMeshes,
+      ]),
+    };
+  });
+  quiet = settled.ready && settled.signature === previousSignature ? quiet + 1 : 0;
+  previousSignature = settled.signature;
+}
+
+const state = await d.page.evaluate((settled) => ({
   now: performance.now(),
   substrate: window.__substrate?.(),
   culverts: window.__culverts?.(),
   terrain: window.__tstats?.(),
   buildLog: window.__buildLog?.(),
-}));
+  settled,
+}), quiet >= 4);
 
 ok('the authored fixture builds a production conduit',
   state.culverts?.runs === 1 && state.substrate?.crossings?.culvert > 0,
@@ -71,7 +101,8 @@ const latestCrossingRebuild = crossingRebuilds.at(-1);
 const implementedCrossings = state.substrate?.crossingEarthworks?.filter((record) =>
   record.kind !== 'unresolved' && record.implementation !== 'missing').length ?? 0;
 ok('crossing earthwork invalidation converges',
-  crossingRebuilds.length > 0
+  state.settled
+    && crossingRebuilds.length > 0
     && crossingRebuilds.length <= implementedCrossings * 4
     && state.now - latestCrossingRebuild.at > 3000,
   { now: state.now, crossingRebuilds, implementedCrossings, terrain: state.terrain });

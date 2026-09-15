@@ -35,12 +35,24 @@ const exercise = async (mode) => {
       window.__drive.speed = 1.5;
     }, wet);
     await d.simWait(.7);
-    await d.page.evaluate(() => window.__substrateParityProbe?.());
   }
-  const state = await d.page.evaluate(() => ({
-    substrate: window.__substrate?.(),
-    evidence: window.__waterEvidence?.(),
-  }));
+  // Background surface/fluid consumers legitimately probe outside the loaded
+  // terrain ring and are counted as explicit `no-tile` fallbacks. Isolate the
+  // cutover assertion to the known loaded wet point: reset and exercise the
+  // shipping surface, fluid and wheel-support wrappers in one browser task, so
+  // no wildlife/frame query can enter between the calls and the snapshot.
+  const state = await d.page.evaluate((point) => {
+    window.__substrate?.('reset');
+    if (point) {
+      window.__waterinfo?.(point.x, point.z);
+      window.__contact?.(point.x, point.z);
+      window.__substrateParityProbe?.(point.x, point.z);
+    }
+    return {
+      substrate: window.__substrate?.(),
+      evidence: window.__waterEvidence?.(),
+    };
+  }, wet);
   report(d.errors);
   const errors = [...d.errors];
   await d.close();
