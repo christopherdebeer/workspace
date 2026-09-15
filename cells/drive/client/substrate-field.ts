@@ -297,6 +297,14 @@ float subMantleMicro(vec2 gp, float scree, float px) {
   }
   return t;
 }
+// How much of a term at wavelength L the RELIEF is allowed, given the colour
+// has already taken tdBand(px, L). It is exactly tdBand(pxN, L) written as a
+// factor, so the term's own band limit is stated once and the normal simply
+// takes the conservative ruler's share of it — never more than the colour,
+// and zero a little sooner. See tdPxN for why the two rulers differ at all.
+float subNKeep(float px, float pxN, float lam) {
+  return tdBand(pxN, lam) / max(tdBand(px, lam), 1e-3);
+}
 // ── LAYER A: THE BEDROCK'S OWN STRUCTURE, BY FAMILY ──
 //
 // A tone, not a weight: the field decides WHERE rock shows and this decides
@@ -310,7 +318,22 @@ float subMantleMicro(vec2 gp, float scree, float px) {
 // 0.043, six tenths of a palette step, and spends its life modulating the
 // dither. The first cut's bedding was invisible in the frame while the
 // classification under it was correct.
-float subRockTone(vec3 p, vec2 gp, vec2 down, vec2 across, vec4 fam, float px, float mic) {
+float subRockTone(vec3 p, vec2 gp, vec2 down, vec2 across, vec4 fam, float px, float pxN, float mic, out float relief) {
+  // ── COLOUR AND RELIEF ARE NOT THE SAME NUMBER, AND THEY USED TO BE ──
+  //
+  // The relief pass differentiates a scalar and bends the lighting normal by
+  // its screen gradient, so every term this function adds used to claim to be
+  // a HEIGHT. Most of them are not: the 70 m and 26 m massing below is the
+  // broad tonal difference between one face of an outcrop and the next —
+  // colour at a scale the mesh already carries as actual geometry — and
+  // bending the normal by it lit a hillside as though it were corrugated at
+  // seventy metres, on top of the hillside the mesh had already drawn.
+  //
+  // So the relief output accumulates only what genuinely stands proud or
+  // recesses at this material's own scale: the bedding, the joints, the clasts
+  // and band D's grain. The return value is those PLUS the tonal terms, so the
+  // colour is unchanged and only the normal stops reading them.
+  relief = 0.0;
   // BAND A (30-150 m): the massing every family shares — the broad tonal
   // difference between one face of an outcrop and the next, which is what
   // makes a cliff read as a cliff from a kilometre away.
@@ -339,50 +362,73 @@ float subRockTone(vec3 p, vec2 gp, vec2 down, vec2 across, vec4 fam, float px, f
   if (px < 0.7) {
     clast = (subStones(subAniso(gp, down, across, 1.4, 3.4), 0.5, 0.58) - 0.16) * tdBand(px, 1.4);
   }
-  t -= 0.24 * show * fam.y * bed;
-  t -= 0.14 * show * (fam.x * 0.35 + fam.z) * joint;
-  t += 0.05 * fam.x * tdVN(gp * 0.30) * tdBand(px, 3.3);
-  t += 0.18 * fam.w * clast;
+  // The traces themselves are phase-filtered by subLine on their own fwidth,
+  // which is already direction-aware, so colour and relief take them alike.
+  float lines = -0.24 * show * fam.y * bed - 0.14 * show * (fam.x * 0.35 + fam.z) * joint;
+  float r = lines;
+  t += lines;
+  // The clasts and band D are isotropically banded, so the relief takes the
+  // conservative ruler's share of each and the colour takes all of it.
+  float cl = 0.18 * fam.w * clast;
+  t += cl; r += cl * subNKeep(px, pxN, 1.4);
   // BAND D (0.1-0.5 m): the crystal grain, the hairlines and the pitting. It
-  // is inside the tone rather than beside it so that the relief pass — which
+  // is inside the relief rather than beside it so that the pass — which
   // differentiates this one number — catches it for nothing.
-  if (px < 0.36 && mic > 0.001) t += mic * subRockMicro(gp, dip, fam, px);
-  return t;
+  if (px < 0.36 && mic > 0.001) {
+    float m = mic * subRockMicro(gp, dip, fam, px);
+    t += m; r += m * subNKeep(px, pxN, 0.36);
+  }
+  relief = r;
+  // …and a massive face's faint metre-scale mottle, which is a WEATHERING
+  // stain rather than a form: it belongs to the colour and not to the height,
+  // for the same reason the massing above does.
+  return t + 0.05 * fam.x * tdVN(gp * 0.30) * tdBand(px, 3.3);
 }
 // ── LAYER B: THE REGOLITH, DEBRIS AND SOIL MANTLE ──
 //
 // scree is the coarse share of the mantle (debris against fines) and decides
 // which of two quite different surfaces this is: a tongue of angular blocks,
 // or a wash of fines with a few stones in it.
-float subMantleTone(vec2 gp, vec2 down, vec2 across, float scree, float mo, float px, float mic) {
+float subMantleTone(vec2 gp, vec2 down, vec2 across, float scree, float mo, float px, float pxN, float mic, out float relief) {
+  // Same split as the rock above, and the case that makes it obvious: DAMP
+  // GROUND IS NOT A SHAPE. The moisture term below darkens a hollow, and
+  // summed into the relief it bent the normal along the wetness gradient —
+  // lighting a damp patch as a dent in ground that is perfectly flat.
+  relief = 0.0;
   // THE APRON IS A TONGUE, NOT A BLOB. Read in the fall line's own frame,
   // nearly four times longer downhill than across, so a scree patch elongates
   // the way scree lies. This is the anisotropy the brief asked for and the
   // reason the debris channel walks the fall line at all.
-  float t = 0.0;
+  float t = 0.0, r = 0.0;
   if (px < 5.0) {
     vec2 lob = subAniso(gp, down, across, 9.0, 34.0);
-    t += (tdVN(lob) * 0.55 + tdVN(lob * 2.6) * 0.28) * scree * 0.30 * tdBand(px, 9.0);
+    float a = (tdVN(lob) * 0.55 + tdVN(lob * 2.6) * 0.28) * scree * 0.30 * tdBand(px, 9.0);
+    t += a; r += a * subNKeep(px, pxN, 9.0);
   }
   if (px < 1.0) {
     // Channels within the apron: a much narrower frame, so fines wash into
     // rills between the coarse tongues rather than dusting them evenly.
-    t += tdVN(subAniso(gp, down, across, 1.8, 14.0)) * scree * 0.16 * tdBand(px, 1.8);
+    float a = tdVN(subAniso(gp, down, across, 1.8, 14.0)) * scree * 0.16 * tdBand(px, 1.8);
+    t += a; r += a * subNKeep(px, pxN, 1.8);
   }
-  // The fines' own metre-scale tonal regions — damp and dry, fine and coarse.
-  t += 0.12 * tdVN(gp * 0.4) * (1.0 - scree * 0.6) * tdBand(px, 2.5);
   if (px < 0.45) {
     // …and the clasts lying on them, LIGHTER than the fill they sit on because
     // a stone catches the sky and dirt does not.
-    t += 0.19 * (subStones(gp, 0.45, 0.62) - 0.12) * (0.35 + scree * 0.65) * tdBand(px, 0.9);
+    float a = 0.19 * (subStones(gp, 0.45, 0.62) - 0.12) * (0.35 + scree * 0.65) * tdBand(px, 0.9);
+    t += a; r += a * subNKeep(px, pxN, 0.9);
   }
-  // Damp ground is darker. The moisture channel is the one thing here that the
   // BAND D (0.1-0.5 m): crumb on the fines, chips on the scree. Same reason
-  // it sits inside the tone: subRelief reads this number and nothing else.
-  if (px < 0.25 && mic > 0.001) t += mic * subMantleMicro(gp, scree, px);
-  // Damp ground is darker. The moisture channel is the one thing here that the
-  // palette cannot say at all, and it is why a hollow reads as a hollow.
-  return t - mo * ${K.dampTone};
+  // it sits inside the relief: the pass reads this one number and nothing else.
+  if (px < 0.25 && mic > 0.001) {
+    float m = mic * subMantleMicro(gp, scree, px);
+    t += m; r += m * subNKeep(px, pxN, 0.25);
+  }
+  relief = r;
+  // The fines' own metre-scale tonal regions — damp and dry, fine and coarse —
+  // and, darker still, the moisture the palette cannot say at all, which is
+  // why a hollow reads as a hollow. Both are colour: neither is a form.
+  return t + 0.12 * tdVN(gp * 0.4) * (1.0 - scree * 0.6) * tdBand(px, 2.5)
+           - mo * ${K.dampTone};
 }
 // ── LAYER C: THE GRASSY COMPLEMENT ──
 //

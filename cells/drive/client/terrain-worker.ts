@@ -26,7 +26,8 @@ export interface TerrainJob {
   /** Only the hydro raster: no build, no mesh — a refeed with no build behind it. */
   hydroOnly?: boolean;
   baseElev: number; seaAbs: number; seaOn: boolean; dryAt: boolean;
-  nrmScale: number; cutWash: number; cprobe: boolean; cutRelief: boolean;
+  nrmCoarsePx: number; nrmRes: number;
+  cutWash: number; cprobe: boolean; cutRelief: boolean;
   cutL: number; grid: number; water: number; built: number; waterTilt: number; coverPx: number;
   origin: { lat: number; lon: number; mLon: number };
   strips: Float64Array; stripCells: Array<[string, number[]]>;
@@ -129,7 +130,7 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
         hydroBreakLines: () => hydroBreakLines,
         onRoad: (x, z) => K.onRoadOf(strips, job.cutL, x, z),
         palette, areaTint: (x, z) => K.areaTintOf(job.areas, x, z),
-        borders, nrmScale: job.nrmScale, cutWash: job.cutWash, cprobe: job.cprobe, carveLog, cutRelief: job.cutRelief,
+        borders, nrmCoarsePx: job.nrmCoarsePx, nrmRes: job.nrmRes, cutWash: job.cutWash, cprobe: job.cprobe, carveLog, cutRelief: job.cutRelief,
       };
       if (job.hydroOnly) {
         const hydroElev = K.hydroElevation(S, t, job.hydroN || 132);

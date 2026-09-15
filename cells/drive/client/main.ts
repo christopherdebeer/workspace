@@ -2214,6 +2214,21 @@ const SUB_SWARD_TINT = 0.65;
  *  the field already calls bare cannot push past one, and a cut through a
  *  meadow lifts a great deal. Interpolated into the fragment. */
 const SUB_CUT_EX = 0.62, SUB_CUT_MANTLE = 0.34, SUB_CUT_GRASS = 0.85;
+/** ── HOW MUCH OF THE 1 m OCTAVE THE MATERIAL TAKES OVER ──
+ *
+ *  Band D's handover is total where the substrate expresses mineral surface:
+ *  the material's own crystal grain, crumb and chips describe the half-metre
+ *  better than a cover class can, so the cascade's third octave stands fully
+ *  down there. The metre is not the same case. The substrate DOES speak in it
+ *  — the clasts at 0.9-1.4 m, the rills at 1.8 — but only where there is
+ *  debris or scree to carry them, where band D draws on every mineral surface
+ *  there is. So the stand-down is partial: the generic grain thins to about
+ *  half on expressed rock and mantle rather than leaving, and the ground keeps
+ *  a metre-scale texture where the material has nothing to say at that scale.
+ *
+ *  It is a judgement, like every amplitude in the cascade, and it is here as a
+ *  named constant so the next argument is with a number and not a literal. */
+const SUB_OCT_M = 0.55;
 /** ── THE SWARD'S BASE RATE, AS EVIDENCE RATHER THAN A CLASS ──
  *
  *  0 is the old nearest-neighbour read EXACTLY — the centre sample and nothing
@@ -2285,6 +2300,26 @@ const TD_GONE = TD_LAMBDA / 2;
  * the quantiser can show.
  */
 const TDETAIL = ((v) => (v && ['on', 'flat', 'mpp', 'px', 'dom', 'off'].includes(v) ? v : 'on'))(qs('tdetail')?.toLowerCase());
+/** ── HOW MUCH OF THE DEM RESIDUAL TO APPLY ──
+ *
+ *  This USED to flatten the whole DEM normal toward up, because that normal
+ *  REPLACED the mesh's; it now scales a residual — the ~8 m detail the 20-40 m
+ *  lattice cannot hold — added on top of the geometry the mesh actually has.
+ *  1.0 is therefore the honest default and not a strength setting: it means
+ *  "restore all of the detail the mesh dropped, and none of what it kept".
+ *
+ *  AND `nscale=0` IS A REAL CONTROL NOW. It used to swap the mesh onto
+ *  `terrainMat`, which carries a GENERIC tiled procedural normal map at 0.32 —
+ *  so the A/B everyone reached for was "repeating procedural normal against
+ *  DEM normal", not "flat against normal-mapped", and anything tuned on it was
+ *  tuned against the wrong comparison. The material no longer changes; only
+ *  this number does. */
+const NRM_SCALE = Number(qs('nscale') ?? 1);
+/** The residual gradient's full-scale range for the byte encoding: tan 63
+ *  degrees, so one byte step is about nine tenths of a degree. A residual is
+ *  small by construction — it is a difference of two gradients over the same
+ *  ground — so the range is chosen for PRECISION rather than headroom. */
+const NRM_RES = 2.0;
 /** Which ruler is in force (1 = the fragment's footprint, 0 = the chart's
  *  uniform) and whether the mottle draws at all — both live, so `__tdetail`
  *  can flip them on one settled world rather than across two boots. */
@@ -2337,6 +2372,15 @@ const tdU = {
   // uniform flipped, and not two boots under two skies, which is the standard
   // every other measurement in this programme is held to.
   uSubMic: { value: TDETAIL === 'flat' || TDETAIL === 'off' ? 0 : 1 },
+  // ── THE DEM RESIDUAL'S OWN STRENGTH, AND WHY IT IS NOT A tdetail DIAL ──
+  //
+  // This scales the ~8 m detail the mesh's own lattice cannot hold, composed
+  // onto the geometry normal rather than replacing it. That is the TERRAIN's
+  // base shading, not the detail cascade and not the substrate, so
+  // `tdetail=flat` — which means "the exact world before either of those" —
+  // leaves it alone; `?nscale=` is its switch and `__tdetail({nrm})` moves it
+  // live, so the A/B is one settled world.
+  uNrmK: { value: NRM_SCALE },
 };
 /**
  * ── THE GROUND VIEW CHANNEL, AND WHY IT IS ONE UNIFORM AND NOT A LAYER ──
@@ -2452,6 +2496,27 @@ float tdPx(vec2 gp) {
   // sees.
   vec2 d = fwidth(gp);
   return max(sqrt(max(d.x, 1e-5) * max(d.y, 1e-5)), 1e-4);
+}
+/** ── AND THE NORMAL GETS A MORE CONSERVATIVE RULER THAN THE ALBEDO ──
+ *
+ *  The trade tdPx makes — the equal-area footprint, mild along-ray aliasing
+ *  bought with an order of magnitude more detail — is the right one for
+ *  COLOUR, because this palette's dither hides a stippled albedo well. It is
+ *  the wrong one for a lighting normal: an aliased normal does not stipple,
+ *  it FLICKERS, because the shading it drives is a nonlinear function of it
+ *  and the sun moves. So the relief is band-limited half way from the
+ *  equal-area footprint toward the worst direction.
+ *
+ *  Half way rather than at the worst direction, for the same reason tdPx is
+ *  not the max: the max confines every fine term to a few metres around the
+ *  camera and was measured doing visibly nothing. This keeps the material's
+ *  structure in the frame and stands its RELIEF down first, which is the
+ *  ordering the eye wants — a trace that has stopped catching the light is
+ *  still a trace, and one that catches it at random is a fault. */
+float tdPxN(vec2 gp) {
+  vec2 d = fwidth(gp);
+  float dx = max(d.x, 1e-5), dy = max(d.y, 1e-5);
+  return max(mix(sqrt(dx * dy), max(dx, dy), 0.5), 1e-4);
 }
 // Hashed value noise. The same shape as the cloud field's clh21/clvn, kept
 // separate because this one is read at a quarter of a metre and the cloud's is
@@ -6710,6 +6775,20 @@ function terrainFx(mat: THREE.Material, opts: {
    *  as (xs, zs, w, h). Per tile, so it cannot live in the shared uniform
    *  block the dials and the view selector use. */
   sub?: { a: THREE.Texture; b: THREE.Texture; box: [number, number, number, number] };
+  /** This material carries the tile's OWN DEM residual map, so three's
+   *  `normal_fragment_maps` chunk is replaced with the composition below.
+   *
+   *  IT IS AN OPTION AND NOT A DEDUCTION FROM `normalMap`, for two reasons
+   *  that each cost a compile. Most callers here have no normal map at all
+   *  (the leaves, the stones, the grass, the baked skeletons) and the chunk's
+   *  `#include` line is in every Lambert shader whether or not the material
+   *  uses it — so an unconditional replace injects a read of an undeclared
+   *  `normalMap` into four materials that would then fail to link, silently,
+   *  as a flat-shaded world. And the far shell's `sphereNormal` replaces the
+   *  same chunk for its own two-channel decode: it runs AFTER this in the
+   *  onBeforeCompile chain, so a replace here would consume the needle and
+   *  leave the whole shell unlit by its own map. */
+  dem?: boolean;
 } = {}): void {
   // THE SHADOW MAP HAS TO SEE THE FACES YOU CAN SEE. three's default for a
   // FrontSide material is to render BACK faces into the depth map — sound for a
@@ -6870,6 +6949,7 @@ function terrainFx(mat: THREE.Material, opts: {
       sh.uniforms.uSubDom = tdU.uSubDom;
       sh.uniforms.uSubNrm = tdU.uSubNrm;
       sh.uniforms.uSubMic = tdU.uSubMic;
+      sh.uniforms.uNrmK = tdU.uNrmK;
       sh.uniforms.uGView = gvU.uGView;
       // A tile with no field yet (the shared material, the batter, the shell)
       // gets a 1x1 blank and a zero box, and every read of it is gated on the
@@ -6885,6 +6965,10 @@ function terrainFx(mat: THREE.Material, opts: {
       {
         vec2 gp = vWorldP.xz;
         float px = tdPx(gp);
+        // The relief's own, more conservative ruler — see tdPxN. Computed once
+        // beside px because both come from the same fwidth and the substrate's
+        // two builders each need it.
+        float pxN = tdPxN(gp);
         float gn = sin(gp.x * 0.131 + sin(gp.y * 0.093) * 2.0) * sin(gp.y * 0.117 + sin(gp.x * 0.071) * 2.0);
         float bandPx = 1.0 - smoothstep(${TD_KEEP.toFixed(2)}, ${TD_GONE.toFixed(2)}, px);
         float bandMpp = 1.0 - smoothstep(15.0, 60.0, uMpp);
@@ -7004,7 +7088,9 @@ function terrainFx(mat: THREE.Material, opts: {
         if (rough > 0.01 && px < 2.0 && uTdOct > 0.5) {
           d += 0.055 * rough * tdVN(gp * 0.25) * tdBand(px, 4.0);
           if (px < 0.5 && uTdOct > 1.5) {
-            d += 0.070 * rough * tdGrain(tdVN(gp), grain) * tdBand(px, 1.0);
+            // …thinned where the material has its own metre — see SUB_OCT_M.
+            d += 0.070 * rough * tdGrain(tdVN(gp), grain) * tdBand(px, 1.0)
+               * (1.0 - subMicro * ${SUB_OCT_M});
             if (px < 0.125 && uTdOct > 2.5) {
               d += 0.085 * rough * tdGrain(tdVN(gp * 4.0), grain)
                  * tdBand(px, 0.25) * (1.0 - subMicro);
@@ -7113,31 +7199,42 @@ function terrainFx(mat: THREE.Material, opts: {
           // or anything built on it — which is exactly what the classifier's
           // own weights were, and is why they could never have carried this.
           float rockT = 0.0, mantleT = 0.0, grassT = 0.0;
+          // The same structure's HEIGHT, which is not the same number as its
+          // colour — see the tone builders. Declared beside the tones because
+          // GLSL has no way to return two things.
+          float rockR = 0.0, mantleR = 0.0;
           if (uGView < 0.5 && e.y > 0.01) {
-            rockT = subRockTone(vWorldP, gp, down, across, subFam(family), px, uSubMic);
+            rockT = subRockTone(vWorldP, gp, down, across, subFam(family), px, pxN, uSubMic, rockR);
           }
           if (uGView < 0.5 && e.x > 0.01) {
             // The coarse share of the mantle: a tongue of angular blocks, or a
             // wash of fines with a few stones in it, are quite different
             // surfaces and the debris channel is what tells them apart.
-            mantleT = subMantleTone(gp, down, across, db / max(db + sd, 1e-3), mo, px, uSubMic);
+            mantleT = subMantleTone(gp, down, across, db / max(db + sd, 1e-3), mo, px, pxN, uSubMic, mantleR);
           }
           if (uGView < 0.5 && e.z > 0.01 && px < 2.25) grassT = subGrassTone(gp, px);
           // ── THE COMPOSITE ──
           float scree = db / max(db + sd, 1e-3);
           // ── THE SAME STRUCTURE, AS RELIEF ──
           //
-          // These are the tones the eye has already been shown, reused rather
-          // than a second noise field pretending to describe the same rock.
-          // A dark bedding trace therefore recesses and a pale clast stands
-          // proud in exactly the place its colour says it does. The numbers
-          // turn dimensionless tone into metres before uSubNrm scales it:
-          // rock may carry a few decimetres; loose mantle stays gentler.
+          // The structure the eye has already been shown, reused rather than a
+          // second noise field pretending to describe the same rock — so a
+          // dark bedding trace recesses and a pale clast stands proud in
+          // exactly the place its colour says it does. The numbers turn
+          // dimensionless tone into metres before uSubNrm scales it: rock may
+          // carry a few decimetres; loose mantle stays gentler.
+          //
+          // IT IS THE RELIEF SHARE, NOT THE WHOLE TONE. Each builder returns
+          // its structure separately from its tonal terms, because summing
+          // them lit things that have no shape: the rock's 70 m and 26 m broad
+          // massing bent the normal as though a hillside were corrugated at
+          // seventy metres, over the hillside the mesh had already drawn, and
+          // the mantle's damp term lit a wet hollow as a dent in flat ground.
           //
           // Grass is absent on purpose. The sward is real geometry and adding
           // another grass normal here would light the same layer twice.
-          subRelief = rockT * e.y * 1.5
-            + mantleT * e.x * mix(0.45, 0.80, scree);
+          subRelief = rockR * e.y * 1.5
+            + mantleR * e.x * mix(0.45, 0.80, scree);
           vec3 mantleC = mix(subSoilC(pc), subScreeC(pc, lum), scree) * (1.0 + mantleT);
           vec3 rockC = subRockC(pc, lum) * (1.0 + rockT);
           // A GRASSY COMPLEMENT SUBDUES; IT DOES NOT ERASE. It takes what is
@@ -7197,9 +7294,47 @@ function terrainFx(mat: THREE.Material, opts: {
         }
         ${TDETAIL === 'px' ? 'diffuseColor.rgb = tdHeat(px);' : ''}
       }`)
-        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        // THE DEM NORMAL IS THE GROUND; THIS IS THE MATERIAL ON IT. The
-        // object-space tile normal above still supplies every ridge and gully.
+        .replace('#include <normal_fragment_maps>', (opts.dem ? `
+        // ── THE DEM NORMAL IS A RESIDUAL, AND IT IS ADDED, NOT SUBSTITUTED ──
+        //
+        // three's include is REPLACED here rather than appended to, which is
+        // the whole change. The tile's normal map used to be declared
+        // OBJECT-SPACE, and an object-space map does not perturb the
+        // interpolated normal — it REPLACES it. So every bit of geometry work
+        // this file records (the corridor refinement, the cut faces, the
+        // carved channels, the hydro banks) was invisible to the LIGHTING,
+        // which reverted to what the raw elevation raster thought the ground
+        // looked like; and the whole normal was flattened toward up by
+        // nscale, so a real slope was lit as though it were a third as steep.
+        // See normalMapBytes for the measurement and the comment it replaces.
+        //
+        // What the map stores now is the fine gradient LESS the gradient at
+        // the mesh's own cell size — the ~8 m detail a 20-40 m lattice cannot
+        // express and nothing else — and this composes it onto the normal the
+        // geometry actually has.
+        //
+        // Mikkelsen's surface gradient, which is the composition that is
+        // correct on an ALREADY TILTED surface: project the world height
+        // gradient into the tangent plane and subtract. Adding the raw vector
+        // would over-rotate a steep face and under-rotate a flat one.
+        //
+        // IT IS SAMPLED AT vNormalMapUv, WHICH IS THE GEOMETRY'S OWN uv AND
+        // NOT A WORLD BOX. three sampled it there through the object-space
+        // path, the bake's reversed rows were chosen to agree with it, and
+        // both lattices emit it (the plain one as ix/SEG, 1 - iz/SEG; the
+        // refined one from the position within the tile, which is the same
+        // mapping). Deriving it from uSubBox instead would have tied the DEM
+        // detail to the SUBSTRATE field's arrival — a tile whose field has not
+        // been committed has a zero box, and every one of them would have been
+        // lit by its lattice alone until it did.
+        if (uNrmK > 0.001) {
+          vec2 rg = texture2D(normalMap, vNormalMapUv).rg * 2.0 - 1.0;
+          vec3 gw = vec3(rg.x, 0.0, rg.y) * ${NRM_RES.toFixed(1)} * uNrmK;
+          vec3 gv = mat3(viewMatrix) * gw;
+          normal = normalize(normal - (gv - normal * dot(normal, gv)));
+        }` : '        #include <normal_fragment_maps>') + `
+        // THE DEM NORMAL IS THE GROUND; THIS IS THE MATERIAL ON IT.
+        //
         // A screen derivative of the SAME scalar that painted bedding, joints
         // and clasts adds only their sub-metre relief on top.
         //
@@ -7220,7 +7355,7 @@ function terrainFx(mat: THREE.Material, opts: {
       sh.fragmentShader = TD_HELPERS + SUB_GLSL + GV_GLSL
         + 'uniform float uTdRule;\nuniform float uTdAmt;\nuniform float uTdOct;\nuniform vec2 uTdForce;\n'
         + 'uniform float uSubAmt;\nuniform float uSubDom;\nuniform float uSubNrm;\n'
-        + 'uniform float uSubMic;\n'
+        + 'uniform float uSubMic;\nuniform float uNrmK;\n'
         + 'uniform float uGView;\nuniform sampler2D uGLut;\n'
         + 'uniform sampler2D uSubA;\nuniform sampler2D uSubB;\nuniform vec4 uSubBox;\n'
         + sh.fragmentShader;
@@ -7677,7 +7812,6 @@ let farClipOff = false;
 // `normal` tiles for the same ground, this agrees to a mean 13.0° at Big Sur
 // and 7.9° at Chapman's Peak — the residual being estimator convention, not
 // information, which is why the extra download is not worth making.
-const NRM_SCALE = Number(qs('nscale') ?? 0.35);
 const terrainMats = new Map<string, THREE.MeshLambertMaterial>();
 /**
  * THE NORMAL MAP OUTLIVES THE REBUILD THAT ASKED FOR IT.
@@ -7743,17 +7877,28 @@ function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.Me
     vertexColors: true,
     normalMap: terrainNormalFor(t, key, bytes),
   });
-  // Set after construction: three's Lambert PARAMETERS type omits
-  // `normalMapType` even though the material carries it and the shader honours
-  // it. Assigning the property is the same thing at runtime and type-checks.
+  // ── THE DECLARATION IS VESTIGIAL, AND IT IS KEPT FOR THE CHEAPER PATH ──
+  //
+  // terrainFx REPLACES three's `normal_fragment_maps` chunk for this material
+  // (see `dem` above), so neither of that chunk's branches ever runs and what
+  // this flag selects is no longer how the map is read. What it still decides
+  // is what the rest of the shader compiles: object-space declares
+  // `vNormalMapUv` and nothing else, where tangent-space ALSO builds a TBN
+  // frame in `normal_fragment_begin` — three screen derivatives and a
+  // Gram-Schmidt per fragment — for a `tbn` this material never reads. The
+  // far shell's material carries the same vestigial declaration for the same
+  // reason, `sphereNormal` having replaced the same chunk.
+  //
+  // (Set after construction because three's Lambert PARAMETERS type omits
+  // `normalMapType`, even though the material carries it.)
   m.normalMapType = THREE.ObjectSpaceNormalMap;
-  // normalScale has no meaning for an object-space map — the stored vector IS
-  // the normal — so strength is dialled by flattening toward up at build time.
+  // `normalScale` is likewise unread: the residual's strength is `uNrmK`, on
+  // the dial rack, so it can be swept on one settled world.
   // The tile's own geomorphic field, as this material's own uniforms: the
   // field is per tile, so it cannot be a shared uniform block the way uGView
   // and the dials are.
   const sub = substrateTexes.get(key);
-  terrainFx(m, { detail: true, sub: sub ? { a: sub.a, b: sub.b, box: [t.xs, t.zs, t.w, t.h] } : undefined });
+  terrainFx(m, { detail: true, dem: true, sub: sub ? { a: sub.a, b: sub.b, box: [t.xs, t.zs, t.w, t.h] } : undefined });
   terrainMats.set(key, m);
   return m;
 }
@@ -7820,7 +7965,8 @@ const kStore: TerrainStore = {
   palette: (elevAbs, slope, cover, x, z) => terrainPalette(elevAbs, slope, cover, x, z),
   areaTint: (x, z) => areaTintAt(x, z),
   get borders() { return refinedBorders; },
-  get nrmScale() { return NRM_SCALE; },
+  get nrmCoarsePx() { return Math.max(1, Math.round(256 / Math.max(1, terrainSeg))); },
+  get nrmRes() { return NRM_RES; },
   get cutWash() { return CUT_WASH; },
   get cprobe() { return CPROBE; },
   get carveLog() { return carveLog; },
@@ -7920,7 +8066,7 @@ function buildTerrainMesh(t: HeightTile): void {
   const old = terrainMeshes.get(key);
   if (old) retireTerrainSource(old);
   substrateTerrainCommits.delete(key);
-  const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key) : terrainMat);
+  const mesh = new THREE.Mesh(geo, terrainMatFor(t, key));
   mesh.userData.productionTerrainSource = true;
   // Terrain RECEIVES shadows and no longer throws them into the map — the sun
   // march does the ridge-over-valley job; objects on the ground still cast.
@@ -8032,7 +8178,8 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
     tile: { tx: t.tx, ty: t.ty, xs: t.xs, zs: t.zs, w: t.w, h: t.h, data },
     seg: SEG, corridor, refine: REFINE, hydroN: HYDRO_ON ? HYDRO_EN : 0,
     baseElev, seaAbs: seaSurfaceAbs(), seaOn, dryAt: !!dryAt,
-    nrmScale: NRM_SCALE, cutWash: CUT_WASH, cprobe: CPROBE, cutRelief: CUT_RELIEF,
+    nrmCoarsePx: Math.max(1, Math.round(256 / Math.max(1, terrainSeg))), nrmRes: NRM_RES,
+    cutWash: CUT_WASH, cprobe: CPROBE, cutRelief: CUT_RELIEF,
     cutL, grid: GRID, water: COVER.water, built: COVER.built, waterTilt: WATER_TILT, coverPx: COVER_PX,
     origin: { lat: origin.lat, lon: origin.lon, mLon: origin.mLon },
     strips: st.flat, stripCells: st.cells, channels: ch.flat, chanCells: ch.cells,
@@ -8250,7 +8397,7 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
   const old = terrainMeshes.get(key);
   if (old) retireTerrainSource(old);
   substrateTerrainCommits.delete(key);
-  const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key, r.normalMap) : terrainMat);
+  const mesh = new THREE.Mesh(geo, terrainMatFor(t, key, r.normalMap));
   mesh.userData.productionTerrainSource = true;
   shadowy(mesh, false, true);
   mesh.position.set(t.xs + t.w / 2, 0, t.zs + t.h / 2);
@@ -34959,7 +35106,7 @@ function tdMatAt(x: number, z: number): object | null {
 (window as unknown as { __tdetail?: object }).__tdetail = (
   opts?: { rule?: 'px' | 'mpp'; amount?: number; oct?: number;
     rough?: number | null; grain?: number | null; sub?: number; dom?: number; relief?: number;
-    micro?: number },
+    micro?: number; nrm?: number },
 ): object => {
   // null hands the ground back to its own attribute.
   if (opts?.rough !== undefined) tdU.uTdForce.value.x = opts.rough === null ? -1 : clamp(opts.rough, 0, 1);
@@ -34989,6 +35136,12 @@ function tdMatAt(x: number, z: number): object | null {
   // for it; 1 is the shipped handover. Above 1 the micro is louder than the
   // octave it replaced, which is an inspection instrument and not a claim.
   if (opts?.micro !== undefined) tdU.uSubMic.value = clamp(opts.micro, 0, 2);
+  // The DEM residual's strength, 0..4. This is the one dial here that is NOT
+  // part of the cascade or the substrate: it scales the detail the mesh's own
+  // lattice could not hold, so 0 is the terrain lit by its geometry alone —
+  // which is what `?nscale=0` now genuinely means, the material no longer
+  // being swapped for one carrying a generic tiled procedural map.
+  if (opts?.nrm !== undefined) tdU.uNrmK.value = clamp(opts.nrm, 0, 4);
   const tanHalf = Math.tan((camera.fov * Math.PI) / 360);
   const rows = Math.max(2, pixSize.y);
   const eye = camera.position;
@@ -35027,6 +35180,22 @@ function tdMatAt(x: number, z: number): object | null {
     // so a run's log says what it measured rather than what it asked for.
     sub: tdU.uSubAmt.value, dom: tdU.uSubDom.value, relief: tdU.uSubNrm.value,
     micro: tdU.uSubMic.value,
+    // ── THE DEM RESIDUAL, AND THE WITNESS THAT nscale IS A CONTROL ──
+    //
+    // `k` is the strength; `own` and `tiles` are how many drawn terrain tiles
+    // wear their OWN per-tile material against how many there are. They are
+    // here because the claim this unit rests on is not about a number, it is
+    // that the MATERIAL no longer changes with the dial: nscale=0 used to swap
+    // every tile onto the shared terrainMat, which carries a generic tiled
+    // procedural normal map at 0.32, so the A/B was "repeating procedural
+    // against DEM" and not "flat against residual". A probe that reported only
+    // the strength could not have witnessed that, which is the fault this file
+    // records against __cam, __meshAt and __tdetail's own `mat` before it.
+    nrm: {
+      k: tdU.uNrmK.value,
+      tiles: terrainMeshes.size,
+      own: [...terrainMeshes.values()].filter((m) => m.material !== terrainMat).length,
+    },
     // …and the range at which the domain has band-limited away, which is where
     // the classification falls back on the vertex material alone. Stated in the
     // footprint's own units, so it reads straight against a row of `ahead`.
@@ -43913,7 +44082,7 @@ function telemetryReport(): string {
   // difference the measurement, and a paste that does not say cannot be
   // compared to one that does.
   L.push(`look tdetail ${TDETAIL} · sub ${tdU.uSubAmt.value} dom ${tdU.uSubDom.value}`
-    + ` relief ${tdU.uSubNrm.value} micro ${tdU.uSubMic.value}`
+    + ` relief ${tdU.uSubNrm.value} micro ${tdU.uSubMic.value} nrm ${tdU.uNrmK.value}`
     + ` · oct ${tdU.uTdOct.value} amt ${tdU.uTdAmt.value} · view ${groundView}`
     + ` · swardsub ${SUB_SWARD ? 'on' : 'off'} · tilt ${TILT_MODE} · substrate ${SUBSTRATE_MODE.name}`);
   const _treePlacedByFamily = EZ_FAMILIES.map(f => ezTiers[f].reduce((n, t) => n + t.n, 0));

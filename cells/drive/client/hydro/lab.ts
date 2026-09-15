@@ -474,7 +474,7 @@ function makeTerrain(
     palette: (_elevAbs, _slope, _cover, x, z) => colourAt(x, z),
     areaTint: () => null,
     borders: new Map(),
-    nrmScale: 1,
+    nrmCoarsePx: 4, nrmRes: 2,
     cutWash: 0,
     cprobe: false,
     carveLog: new Map(),

@@ -67,8 +67,20 @@ console.log('the diagnostics keep their two authority contracts distinct:');
     'material relief is layered after the DEM/object-space normal map');
   check(main.includes('dFdx(subRelief)') && main.includes('dFdy(subRelief)'),
     'the lighting normal differentiates the same scalar the material tones produced');
-  check(main.includes('subRelief = rockT * e.y') && main.includes('mantleT * e.x'),
+  check(main.includes('subRelief = rockR * e.y') && main.includes('mantleR * e.x'),
     'rock and mantle structure contribute relief');
+  // ── AND IT IS THE STRUCTURE, NOT THE TONE ──
+  //
+  // Each builder returns its relief separately from its colour, because the
+  // relief pass bends the normal by a screen derivative and most of what a
+  // tone carries has no shape: the rock's 70 m and 26 m massing lit a
+  // hillside as though it were corrugated at seventy metres, over the
+  // hillside the mesh had already drawn, and the mantle's damp term lit a wet
+  // hollow as a dent in flat ground. A needle on the relief's own variables is
+  // what stops the two being summed back together by an edit that reads as
+  // tidying.
+  check(!/subRelief\s*=[^;]*\b(rockT|mantleT|grassT)\b/s.test(main),
+    'no tonal term bends the normal — colour and relief are separate returns');
   check(!main.match(/subRelief\s*=.*grassT/),
     'grass does not double-light the sward geometry');
   check(main.includes('uSubNrm > 0.001 && uSubAmt > 0.001'),
@@ -169,8 +181,8 @@ console.log('\nthe half-metre has one owner, not two:');
   // it can leave the half-metre drawn twice or drawn by nobody.
   check(/subMicro = clamp\(\(e\.x \+ e\.y\)[^;]*clamp\(uSubMic/s.test(main),
     'the stand-down is scaled by the same dial the micro terms are');
-  check(main.includes('subFam(family), px, uSubMic)') && main.includes('mo, px, uSubMic)'),
-    'and both tone builders are handed it');
+  check(main.includes('subFam(family), px, pxN, uSubMic, rockR)') && main.includes('mo, px, pxN, uSubMic, mantleR)'),
+    'and both tone builders are handed it, beside their relief out-parameter');
   check(main.includes("if (opts?.micro !== undefined) tdU.uSubMic.value = clamp(opts.micro, 0, 2)"),
     '__tdetail({micro}) is the 0..2 live A/B');
   check(/tdBand\(px, 0\.25\)\s*\*\s*\(1\.0 - subMicro\)/.test(main),

@@ -93,7 +93,13 @@ export interface TerrainStore {
   palette(elevAbs: number, slope: number, cover: number | null, x: number, z: number): Rgb;
   areaTint(x: number, z: number): Rgb | null;
   readonly borders: Map<string, Float64Array>;
-  readonly nrmScale: number;
+  /** The mesh's own cell, in raster pixels — what the geometry already
+   *  resolves, and so what the detail normal must NOT restate. */
+  readonly nrmCoarsePx: number;
+  /** The residual gradient's full-scale range, for the byte encoding. One
+   *  constant, read here and interpolated into the fragment that decodes it,
+   *  so the two cannot drift. */
+  readonly nrmRes: number;
   readonly cutWash: number;
   readonly cprobe: boolean;
   readonly carveLog: Map<string, CarveLog>;
@@ -1477,20 +1483,55 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
           const b = j === W - 1 ? beyond(i, W) : t.data[(j + 1) * W + i];
           if (a !== null && b !== null) dzdz = (b - a) / (2 * mpp);
         }
-        // World normal of the heightfield: y is up, and the surface falls away
-        // from the gradient in x and z.
-        // FLATTENED TOWARD UP by S.nrmScale. Taken raw, a 9.5m/px gradient on a
-        // sea cliff is a near-horizontal normal, and Chapman's rock faces went
-        // black under a high sun — physically defensible and much worse to look
-        // at than the smoothed mesh facets they replaced. Easing the gradient
-        // keeps the ridges and gullies the mesh cannot hold without pretending
-        // the whole cliff faces the camera.
-        const nx = -dzdx * S.nrmScale, ny = 1, nz = -dzdz * S.nrmScale;
-        const l = Math.hypot(nx, ny, nz) || 1;
+        // ── THIS IS A RESIDUAL NOW, NOT A NORMAL, AND THAT IS THE WHOLE FIX ──
+        //
+        // It used to store the DEM's own normal, flattened toward up by
+        // nrmScale, and the material declared it OBJECT-SPACE — which in three
+        // REPLACES the interpolated mesh normal rather than adding to it. So
+        // the hierarchy was:
+        //
+        //     final carved, refined, channel-cut mesh normal
+        //         -> THROWN AWAY
+        //     -> raw DEM normal at 0.35 of its own slope
+        //     -> substrate relief on top
+        //
+        // Two things follow and both were visible. Every bit of geometry work
+        // this file records — the corridor refinement, the cut faces, the
+        // carved channels, the hydro banks — was invisible to the LIGHTING,
+        // because the raster it was generated from knows about none of it: the
+        // shading reverted to what the unmodified elevation data thought the
+        // ground looked like, precisely where the most care had been taken.
+        // And flattening the whole normal rather than a residual lit a real
+        // slope as though it were a third as steep, which is most of the soft
+        // "normal-mapped sheet" quality the terrain had close up.
+        //
+        // The comment this replaces is itself the evidence: it recorded that
+        // taken RAW, a sea cliff's normal went near-horizontal and Chapman's
+        // rock faces turned black under a high sun, and eased the gradient to
+        // stop it. A residual has nothing to go black — the mesh already
+        // carries the cliff, and what is added is only what the mesh could not
+        // hold.
+        //
+        // So: the fine gradient less the gradient at the MESH's own cell size.
+        // The mesh's facets already carry everything at and below that scale;
+        // what is left is the ~8 m detail a 20-40 m lattice cannot express,
+        // which is exactly what a detail normal is for.
+        const q = Math.max(1, Math.round(S.nrmCoarsePx));
+        const ci0 = Math.max(0, i - q), ci1 = Math.min(W - 1, i + q);
+        const cj0 = Math.max(0, j - q), cj1 = Math.min(W - 1, j + q);
+        const cdx = (t.data[j * W + ci1] - t.data[j * W + ci0]) / Math.max(1e-6, (ci1 - ci0) * mpp);
+        const cdz = (t.data[cj1 * W + i] - t.data[cj0 * W + i]) / Math.max(1e-6, (cj1 - cj0) * mpp);
+        const R = S.nrmRes;
+        const rx = Math.max(-1, Math.min(1, (dzdx - cdx) / R));
+        const rz = Math.max(-1, Math.min(1, (dzdz - cdz) / R));
         const o = ((W - 1 - j) * W + i) * 4;     // rows reversed — see above
-        buf[o] = Math.round((nx / l * 0.5 + 0.5) * 255);
-        buf[o + 1] = Math.round((ny / l * 0.5 + 0.5) * 255);
-        buf[o + 2] = Math.round((nz / l * 0.5 + 0.5) * 255);
+        buf[o] = Math.round((rx * 0.5 + 0.5) * 255);
+        buf[o + 1] = Math.round((rz * 0.5 + 0.5) * 255);
+        // Blue is unused and held at the encoding's own zero, so a reader that
+        // still believes this is a normal gets a flat one rather than a wrong
+        // one — and __nrmEdge's "how many degrees do the two sides differ by"
+        // reads the residual, which is what it was always really measuring.
+        buf[o + 2] = 128;
         buf[o + 3] = 255;
       }
     }
