@@ -195,6 +195,8 @@ export const SWITCHES = [
     note: 'lumasync=1 reads the luma map synchronously, as it used to' },
   { id: 'treedemand', kind: 'toggle', marks: ['legacy'], fallback: 'by demand',
     note: 'treedemand=0 divides the tree triangle budget among all five families at cap, including ones the place does not grow' },
+  { id: 'impostor', kind: 'toggle', marks: ['legacy'], fallback: 'on',
+    note: 'impostor=0 leaves a tree the cap turned down as nothing at all, which is what it was before the cheap side+top card tier existed — the A/B for whether a tree acquires DETAIL rather than EXISTENCE' },
   { id: 'treemanifest', kind: 'number', marks: ['bench'], fallback: 'twice the draw range, capped at 2.8 km',
     note: 'metres out to which tree SITES are seeded — the manifest, which is wider than the range they are drawn at so a cheaper far representation has something to render; equal to the draw range restores the single ring' },
   { id: 'treeprice', kind: 'toggle', marks: ['legacy'], fallback: 'as drawn',

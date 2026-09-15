@@ -52,6 +52,15 @@ function mesh(n=64) {
   m.instanceColor=new THREE.InstancedBufferAttribute(new Float32Array(n*3),3);
   return m;
 }
+function impostorMesh(n) {
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(24),3));
+  for(const k of ['aForm','aYaw'])
+    g.setAttribute(k,new THREE.InstancedBufferAttribute(new Float32Array(n),1));
+  const m=new THREE.InstancedMesh(g,material,n);m.count=0;
+  m.instanceColor=new THREE.InstancedBufferAttribute(new Float32Array(n*3),3);
+  return m;
+}
 function functionSource(name) {
   const ts=require('typescript');
   const ast=ts.createSourceFile('main.ts',main,ts.ScriptTarget.Latest,true);
@@ -87,6 +96,21 @@ function context(code,range,ez,triCap) {
     // for a reason that is not a regression, and the check would then be
     // "loosened" until it meant nothing. The allocator still RUNS below, so an
     // exception in it fails here, which is what caught this file being red.
+    // THE IMPOSTOR TIER RUNS HERE TOO, against a real InstancedMesh with real
+    // instanced attributes, so the claim under test is that a tier drawing the
+    // candidates admission turned down does not disturb what admission KEPT.
+    // A stub of `impostors: null` would skip the pass and witness nothing.
+    IMPOSTOR_CAP:512,IMPOSTOR_FULL_M:260,IMPOSTOR_FORM_BUDGET:400,
+    IMPOSTOR_FORMS:['round','conic','columnar','umbrella','palm','bare'],
+    IMPOSTOR_WIDTH:{round:0.9,conic:0.5,columnar:0.4,umbrella:1.2,palm:0.5,bare:0.35},
+    impostorFormIndex:()=>0,impFormOf:new WeakMap(),
+    impProf:{drawn:0,offered:0,capped:0,formed:0,ms:0},
+    impStage:{m:new Float32Array(512*16),c:new Float32Array(512*3),
+      f:new Float32Array(512),y:new Float32Array(512)},
+    impostors:impostorMesh(512),
+    ezVariants:()=>[{form:'round'},{form:'conic'},{form:'columnar'}],
+    sampleHeight:(x,z)=>Math.sin(x/30)+Math.cos(z/30),
+    hash2:(a,b)=>((Math.imul(a,73856093)^Math.imul(b,19349663))>>>0)/4294967296,
     EZ_DEMAND:true,ezCapNominal:()=>triCap,ezMeanTris:()=>500,ezTriPrice:()=>500,
     ezPriceNow:record(()=>0),EZ_PRICE_MIN:8,treeTriBudget:2.4e6,
     ezCrownReach:()=>0.1,EZ_M_PER_SCALE:record(()=>5.7),

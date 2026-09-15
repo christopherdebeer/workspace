@@ -90,6 +90,7 @@ import { GRASS_M2, GRASS_UNKNOWN, GRASS_DEFAULT, swardCoverEvidence, SWARD_EV }
   from './sward-cover';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { startLab } from './labs';
+import { IMPOSTOR_FORMS, IMPOSTOR_WIDTH, impostorFormIndex, impostorGeometry, impostorMaterial } from './tree-impostor';
 import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
@@ -4649,7 +4650,21 @@ scene.add(skyDome);
  */
 /** Read by __docksky; written by blitPixelated at the render it describes. */
 const blitSky = { camY: 0, domeY: 0, scale: 1 };
+/** Scratch for the per-render camera terms; allocating one a render would be
+ *  three allocations a frame for a direction that is discarded immediately. */
+const impAim = new THREE.Vector3();
 function aimSky(cam: THREE.PerspectiveCamera): void {
+  // ── AND THE IMPOSTOR'S TOP CARD, which is a function of THIS camera ──
+  // A vertical card is right from the seat and collapses toward a line looking
+  // down; a flat canopy card is right from the chart and useless at a grazing
+  // angle. So both are drawn and their weights are redistributed by the
+  // camera's own elevation — continuously, because a switch is the artefact
+  // being removed. It belongs here for the reason this function exists: the
+  // scene is rendered more than once a frame, and the dock's POV is 1.3 m up
+  // while the chart's eye may be kilometres.
+  cam.getWorldDirection(impAim);
+  const overhead = Math.abs(impAim.y);
+  impTopU.value = clamp((overhead - 0.35) / 0.45, 0, 1);
   skyDome.position.copy(cam.position);
   skyDome.scale.setScalar(Math.max(1, (cam.near * 8) / 20000));
   (skyMat.uniforms.uCamXZ as { value: THREE.Vector2 }).value.set(cam.position.x, cam.position.z);
@@ -11593,6 +11608,93 @@ if (EZ_ON) {
     }
   }
 }
+/**
+ * ── THE IMPOSTOR TIER: WHAT STANDS WHERE THE GEOMETRY DOES NOT ──
+ *
+ * The device dump said where to point this, and it was not where the manifest
+ * work assumed. At the seat's own rack (`range 2800m · pop 2x`) the budget is
+ * spent to the last triangle (`tris 2.40M`, `cap 24%`) and CONIFER'S EDGE IS
+ * 318 m INSIDE A 2,800 m RANGE: the population the player sees appear is cut
+ * by the CAP, well within the ring, not at the ring's own edge. Those trees
+ * are already gathered as candidates, so this tier costs no new walking at
+ * all — it draws the candidates admission turned down.
+ *
+ * THE MANIFEST'S ANNULUS IS NOT DRAWN YET, deliberately. It needs its own
+ * gather over the outer cells, and the dump says the cap is the fault worth
+ * answering first; a tier that drew the far country while leaving a hard edge
+ * at 318 m would be solving the quieter half.
+ *
+ * MEMBERSHIP IS A STABLE HASH, NEVER A NEAREST-N. `ezAdmit` selects 2,297 of
+ * ~57,000 candidates at 9 ms a refresh, and a second selection of that shape
+ * over the remaining fifty-four thousand is not affordable and not correct
+ * either: a rank that moves with the truck is the reshuffle this whole
+ * programme is removing. The hash is keyed on the tree's own position, so
+ * whether a given tree wears an impostor is a fact about that tree — decided
+ * once, the same from every vantage — and the thinning with distance keeps the
+ * SCREEN density roughly even rather than the ground density.
+ *
+ * IT CASTS NO SHADOW, and that is geometry rather than thrift: `shadowSpan` is
+ * 80–150 m and nothing in this tier is nearer than the cap edge, so a shadow
+ * map it could reach does not exist.
+ */
+const IMPOSTOR_ON = qsOn('impostor', true);
+/** Instance slots. Four triangles each, against ~1,045 for a baked skeleton:
+ *  the whole tier at capacity is 32k triangles against the skeletons' 2.4M. */
+const IMPOSTOR_CAP = 8000;
+/** Out to here every unadmitted tree wears one; past it the hash thins as the
+ *  inverse square, which is constant density on the GLASS rather than on the
+ *  ground — the same reasoning the shrub lattice thins by. */
+const IMPOSTOR_FULL_M = 260;
+/** How much of the top card shows, set per RENDER from that render's own
+ *  camera — see `aimSky`, which is where everything hung on the eye belongs. */
+const impTopU = { value: 0 };
+const impMat = impostorMaterial({ wind: windU, top: impTopU });
+// The same weather as the skeletons beside it: a wood lit while the grass it
+// stands in is under a cloud is the fault `terrainFx` was chained onto the
+// skeletons to fix, and a new tier outside it would reopen exactly that.
+terrainFx(impMat);
+const impostors: THREE.InstancedMesh | null = (IMPOSTOR_ON && EZ_ON) ? (() => {
+  const m = new THREE.InstancedMesh(impostorGeometry(), impMat, IMPOSTOR_CAP);
+  m.name = 'veg-impostor';
+  m.count = 0;
+  m.frustumCulled = false;
+  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(IMPOSTOR_CAP * 3), 3);
+  for (const name of ['aForm', 'aYaw']) {
+    const a = new THREE.InstancedBufferAttribute(new Float32Array(IMPOSTOR_CAP), 1);
+    a.setUsage(THREE.DynamicDrawUsage);
+    m.geometry.setAttribute(name, a);
+  }
+  shadowy(m, false, false);
+  scene.add(m);
+  return m;
+})() : null;
+const impStage = {
+  m: new Float32Array(IMPOSTOR_CAP * 16),
+  c: new Float32Array(IMPOSTOR_CAP * 3),
+  f: new Float32Array(IMPOSTOR_CAP),
+  y: new Float32Array(IMPOSTOR_CAP),
+};
+/** What the last refresh stood up, so the probe reports the rule that ran. */
+const impProf = { drawn: 0, offered: 0, capped: 0, formed: 0, ms: 0 };
+/**
+ * THE IMPOSTOR'S FORM IS THE TREE'S OWN, and it is cached per SITE because it
+ * has to be both correct and cheap. Correct: if a tree is a cone at 400 m and
+ * a round crown at 200 the player has watched it change species, which is the
+ * representation pop this tier exists to remove — the identity must survive
+ * the handoff. Cheap: `ezVariantAt` costs about a microsecond (a guild lookup,
+ * two culture seeds and a projection), which over eight thousand impostors is
+ * a whole frame.
+ *
+ * A site is a stable object in `vegGrid`, so the answer is computed ONCE EVER
+ * per tree rather than once per refresh, and a refresh may only work out
+ * `IMPOSTOR_FORM_BUDGET` new ones. A tree whose form is not yet known simply
+ * has no impostor this sweep and gets one on the next: a fill-in latency of a
+ * refresh or two behind a newly seeded ring, which is a latency and not a pop.
+ */
+const impFormOf = new WeakMap<PlacedVegSite, number>();
+const IMPOSTOR_FORM_BUDGET = 400;
+
 /** What the last refresh stood up, for the harness. */
 let ezPlaced: Array<Record<string, number | string>> = [];
 /** The admitted edge per family last refresh, metres. */
@@ -13801,8 +13903,10 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // edge so a tree is a smudge before it is gone.
   const ezAdmit = new Set<PlacedVegSite>();
   const ezEdge: Record<EzFamily, number> = ezRecord(() => treeRange);
+  // HOISTED: the impostor tier reads the same candidates admission did, which
+  // is the whole reason it costs no new walking.
+  const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = ezRecord(() => [] as Array<[number, PlacedVegSite]>);
   if (EZ_ON) {
-    const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = ezRecord(() => [] as Array<[number, PlacedVegSite]>);
     for (const [gx, gz] of ring) {
       yield;
       seedCell(gx, gz);
@@ -14040,6 +14144,67 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     }
   }
   vegMark('place');
+  // ── THE IMPOSTOR TIER: THE CANDIDATES ADMISSION TURNED DOWN ──
+  //
+  // No new gathering: `cand` already holds every tree inside the draw range
+  // and `ezAdmit` says which of them became geometry. What is left is the
+  // population the cap cuts — 54,815 of 57,112 on the seat's own rack — and
+  // until now it was drawn as nothing at all.
+  let impN = 0, impOffered = 0, impFormed = 0;
+  if (impostors) {
+    const full2 = IMPOSTOR_FULL_M * IMPOSTOR_FULL_M;
+    const fadeFrom = treeRange * 0.66;
+    for (const fam of EZ_FAMILIES) {
+      const variants = ezVariants(fam);
+      for (const [d2, v] of cand[fam]) {
+        if (impN >= IMPOSTOR_CAP) { impProf.capped++; break; }
+        if (ezAdmit.has(v)) continue;
+        impOffered++;
+        // THE CHEAPEST TEST FIRST, and it is also the one that decides
+        // membership: a stable hash on the tree's own position against a
+        // density that falls as the inverse square. Constant density on the
+        // GLASS, decided once per tree, the same from every vantage.
+        const keep = full2 / Math.max(d2, 1);
+        if (keep < 1 && hash2(Math.round(v.x * 8) + 7919, Math.round(v.z * 8) + 104729) > keep) continue;
+        let form = impFormOf.get(v);
+        if (form === undefined) {
+          if (impFormed >= IMPOSTOR_FORM_BUDGET) continue;
+          impFormed++;
+          form = impostorFormIndex(variants[ezVariantAt(fam, v.x, v.z)]?.form ?? 'round');
+          impFormOf.set(v, form);
+        }
+        // The ground is the RASTER here, not `groundAt`. Nothing in this tier
+        // is nearer than the cap edge, where the mesh's own corridor cuts are
+        // under a pixel, and the mesh read is the single most expensive call
+        // the refresh makes (654 ns, measured).
+        const gy = sampleHeight(v.x, v.z);
+        const formSy = clamp(1 + ((v.sy ?? 1) - 1) * treeFormScale, 0.18, 4.5);
+        const formSw = clamp(1 + ((v.sw ?? 1) - 1) * treeFormScale, 0.18, 4.5);
+        const tall = EZ_M_PER_SCALE[fam] * v.s * formSy * treeSizeScale;
+        const wide = tall * IMPOSTOR_WIDTH[IMPOSTOR_FORMS[form]] * formSw;
+        vegDummy.position.set(v.x, gy, v.z);
+        vegDummy.rotation.set(0, 0, 0);
+        vegDummy.scale.set(wide, tall, wide);
+        vegDummy.updateMatrix();
+        vegDummy.matrix.toArray(impStage.m, impN * 16);
+        // The same dissolve toward the ground the skeletons take at their own
+        // edge, over this tier's own reach — or the tier would trade the cap's
+        // hard edge for a hard edge of its own one ring further out.
+        const dist = Math.sqrt(d2);
+        if (dist > fadeFrom) {
+          const mixv = Math.min(1, (dist - fadeFrom) / Math.max(1, treeRange - fadeFrom)) * 0.7;
+          const [tr, tg, tb] = terrainPalette(gy + baseElev, 0, sampleCover(v.x, v.z), v.x, v.z);
+          swardCol.setRGB(v.c.r + (tr - v.c.r) * mixv, v.c.g + (tg - v.c.g) * mixv, v.c.b + (tb - v.c.b) * mixv);
+          swardCol.toArray(impStage.c, impN * 3);
+        } else v.c.toArray(impStage.c, impN * 3);
+        impStage.f[impN] = form;
+        impStage.y[impN] = v.rot;
+        impN++;
+      }
+    }
+  }
+  impProf.drawn = impN; impProf.offered = impOffered; impProf.formed = impFormed;
+  vegMark('impostor');
   // ── THE COMMIT: STAGING BECOMES THE INSTANCES, IN ONE SLICE ──
   // A mesh that has never been coloured has no colour attribute yet (three
   // creates it on the first setColorAt); one slot through that path makes it.
@@ -14057,6 +14222,20 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     commit(vegMeshes[k], counts[k], true);
   }
   commit(trunks, trunkN, false);
+  if (impostors) {
+    (impostors.instanceMatrix.array as Float32Array).set(impStage.m.subarray(0, impN * 16));
+    impostors.count = impN;
+    uploadPrefix(impostors.instanceMatrix, impN);
+    if (impostors.instanceColor) {
+      (impostors.instanceColor.array as Float32Array).set(impStage.c.subarray(0, impN * 3));
+      uploadPrefix(impostors.instanceColor, impN);
+    }
+    for (const [name, src] of [['aForm', impStage.f], ['aYaw', impStage.y]] as Array<[string, Float32Array]>) {
+      const a = impostors.geometry.getAttribute(name) as THREE.InstancedBufferAttribute;
+      (a.array as Float32Array).set(src.subarray(0, impN));
+      uploadPrefix(a, impN);
+    }
+  }
   for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) {
     const tn = tierN.get(t)!;
     t.n = tn.n; t.nNear = tn.nNear; t.nFar = tn.nFar;
@@ -33556,6 +33735,15 @@ function tapeKeep(): string {
   // THE WHOLE POINT OF THE MANIFEST is that these are now two numbers: what
   // the world knows is there, and what the renderer has made geometry of.
   out.manifest = vegManifestTally();
+  // DRAWN against OFFERED: how many of the candidates admission turned down
+  // this tier stood up, and how many it was asked about. `formed` is the
+  // per-refresh budget for working out a new tree's silhouette, and a nonzero
+  // one means the form cache is still filling behind a newly seeded ring.
+  out.impostor = impostors
+    ? { on: true, drawn: impProf.drawn, offered: impProf.offered,
+        formed: impProf.formed, cap: IMPOSTOR_CAP, fullM: IMPOSTOR_FULL_M,
+        top: +impTopU.value.toFixed(3), tris: impProf.drawn * 4 }
+    : { on: false };
   return out;
 };
 
@@ -44665,6 +44853,9 @@ function telemetryReport(): string {
     + ` · cells ${_m.seeded}/${_m.cells} annulus ${_m.annulus || 'NONE'}`
     + `${_m.deferred ? ` · ${_m.deferred} deferred` : ''}`
     + ` · known ${EZ_FAMILIES.map(f => `${f[0]}${_m.known[f]}`).join('/')}`);
+  L.push(`trees impostor ${impostors ? 'on' : 'off'}`
+    + `${impostors ? ` · drawn ${impProf.drawn}/${impProf.offered} offered · ${(impProf.drawn * 4 / 1000).toFixed(1)}k tris`
+      + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed} formed` : ''}` : ''}`);
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
