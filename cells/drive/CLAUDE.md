@@ -11563,11 +11563,65 @@ be turned off.
 claim is about a RULE, test the rule. A frame is where the rule's consequences
 land, and it carries everything else that moved.
 
+### …and the device's own split, which says a mean can hide the whole fault
+
+First dump with the split shipped (Yosemite, 238 s, TOP camera, build
+da8434771d35):
+
+```
+hud 4991 draws · 2.86 ms/call · tiledbg 0.96 · where 0.71 · riggauge 0.69
+    · dockview 0.21 · compass 0.16 · clock 0.07 · other 0.00
+```
+
+**AND THE SLOW-FRAME LOG SAYS drawHud IS 13 TO 17 ms** — the second line of
+twenty-three of the last twenty-four slow frames, against that 2.86 mean and a
+53 ms max. Both numbers are true and they describe different frames: the
+section is cheap in a settled frame and five times that in one that drops, and
+**a session mean cannot show it.** Every lap keeps its own max now and the row
+prints `mean/max` a section, because the rule the top-level profiler already
+states for its own rows — a small total with a large slow-frame share is the
+thing causing drops — applies inside a phase exactly as it does between them.
+
+**`tiledbg` topping that list is the tile-debug OVERLAY**, which this session
+had switched on. It is a debug surface and its cost is the player's choice; it
+is named here so the next reader does not take it for a HUD the game always
+draws.
+
 **Still open on the HUD:** `where` at 1.05 ms — 99 lines calling
 `worldStatus()`, `wayAt()` and `surveyHere()` every frame, plus six
 `textEdgeS` draws, for text that changes about once a second. Lookups against
 drawing, and the substitution trick prices it the same way it priced
 `groundAt`.
+
+## TWO DUMPS AT DIFFERENT PLACES ARE NOT AN A/B
+
+The dump after the redrape cut shipped reads, on its face, like a triumph:
+
+```
+redrape 136 calls · walk 0.1 normals 0.0 ms/call · max 1 · groundAt 552/call
+  · bound 136/136 · near 1 inBox 1 touched 0 · verts 771 moved 110
+post split ms/build  reseat 0.0 redrape 0.1 hydro 1.2 batter 0.1 · post max 8
+terrainApply  547 ms total · 136 calls · 4.0 mean · 0.2% of session
+```
+
+against the previous dump's `redrape 45.6` and `terrainApply 68.6`. **It says
+nothing of the kind.** That dump was Paris in chase with 31,403 ways and
+28,902 vertices walked a call; this one is Yosemite in the top camera with 149
+ways and **771** — one thirty-seventh of the work. A redrape that costs 0.1 ms
+where there is nothing to redrape is not a cut, it is an empty scene.
+
+What the dump DOES establish, and it is worth having: **`bound 136/136`** —
+the tile bind never once refused on a real device, so the `heightTiles.get(key)
+!== t` guard is not silently sending every redrape down the fallback. And
+`groundAt 552/call` gives the next dense dump a per-call cost to divide by.
+
+**The general rule this file needs and did not have: a device dump is a
+measurement of a PLACE.** The telemetry carries the spot in its first line and
+the switches in its `look` row precisely so two dumps can be compared — and
+neither is enough on its own, because the scene is the other half. Compare a
+dump against a dump of the SAME place, camera and switches, or against nothing.
+A cut measured in the harness on `at-paris-west` and then "confirmed" by a
+dump from a granite valley is a fabricated witness with a real number in it.
 
 ## The wet hydro build cannot be bounded to the shore band — the band IS the tile
 

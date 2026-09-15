@@ -44410,10 +44410,15 @@ function telemetryReport(): string {
       + ` · bound ${drapeAuditProf.bound}/${drapeAuditProf.bound + drapeAuditProf.fell}`
       + ` · near ${Math.round(R.near / rc)} inBox ${Math.round(R.inBox / rc)} touched ${Math.round(R.touched / rc)}`
       + ` · verts ${Math.round(R.verts / rc)} moved ${Math.round(R.moved / rc)}`); }
-  { const H = (window as unknown as { __hudprof: (r?: boolean) => { calls: number; msPerCall: number; rows: Record<string, number>; other: number } }).__hudprof();
+  { const H = (window as unknown as { __hudprof: (r?: boolean) => { calls: number; msPerCall: number; maxMs: number; rows: Record<string, number>; other: number; max: Record<string, number> } }).__hudprof();
     if (H.calls) {
-      const top = Object.entries(H.rows).filter(([, v]) => v >= 0.05).map(([k, v]) => `${k} ${v.toFixed(2)}`);
-      L.push(`hud ${H.calls} draws · ${H.msPerCall.toFixed(2)} ms/call · ${top.join(' · ')} · other ${H.other.toFixed(2)}`);
+      // mean/MAX per section, because the mean is what a settled frame costs
+      // and the max is what dropped one. A section whose max dwarfs its mean
+      // is the one to look at, whatever its share of the total.
+      const top = Object.entries(H.rows).filter(([, v]) => v >= 0.05)
+        .map(([k, v]) => `${k} ${v.toFixed(2)}/${(H.max[k] ?? 0).toFixed(0)}`);
+      L.push(`hud ${H.calls} draws · ${H.msPerCall.toFixed(2)} ms/call max ${H.maxMs.toFixed(0)}`
+        + ` · mean/max ${top.join(' · ')} · other ${H.other.toFixed(2)}`);
     } }  //    WHICH PHASE OF A HYDRO BUILD ──
   //
   // The worker line above says how much a hydro build costs and has never
@@ -49824,11 +49829,23 @@ const HUD_BAKE = qsOn('hudbake', true);
  *  A lap is a subtraction and a property write, once a section, thirteen a
  *  frame — under the noise of what it measures. `other` is the residual the
  *  laps do not cover, so the rows sum to the whole and nothing can hide. */
+/** ── AND A MEAN HIDES A BIMODAL SECTION, WHICH IS WHAT THIS ONE IS ──
+ *
+ *  The first device dump with the split on read `drawHud 2.86 ms/call` and a
+ *  slow-frame log in which drawHud is 13 to 17 ms in FRAME AFTER FRAME — the
+ *  second line of twenty-three of the last twenty-four slow frames. Both are
+ *  true: the section is cheap most frames and five times that in the ones that
+ *  drop, and a session mean cannot show it. So each lap keeps its own MAX
+ *  beside its total, and the dump prints the worst beside the mean — a phase
+ *  with a small mean and a large max is the one causing the drops, which is
+ *  the rule the top-level profiler already states for its own rows. */
 const hudProf: Record<string, number> = {};
-let hudProfCalls = 0, hudProfMs = 0, hudT0 = 0;
+const hudProfMax: Record<string, number> = {};
+let hudProfCalls = 0, hudProfMs = 0, hudProfMaxMs = 0, hudT0 = 0;
 function hudLap(k: string): void {
-  const n = performance.now();
-  hudProf[k] = (hudProf[k] ?? 0) + (n - hudT0);
+  const n = performance.now(), d = n - hudT0;
+  hudProf[k] = (hudProf[k] ?? 0) + d;
+  if (d > (hudProfMax[k] ?? 0)) hudProfMax[k] = d;
   hudT0 = n;
 }
 (window as unknown as { __hudprof?: object }).__hudprof = (reset = false): object => {
@@ -49839,9 +49856,15 @@ function hudLap(k: string): void {
   const lapped = rows.reduce((n, r) => n + r[1], 0);
   const out = {
     calls: hudProfCalls, msPerCall: +(hudProfMs / c).toFixed(3),
+    maxMs: +hudProfMaxMs.toFixed(3),
     rows: Object.fromEntries(rows), other: +(hudProfMs / c - lapped).toFixed(3),
+    max: Object.fromEntries(rows.map(([k]) => [k, +(hudProfMax[k] ?? 0).toFixed(3)])),
   };
-  if (reset) { for (const k of Object.keys(hudProf)) delete hudProf[k]; hudProfCalls = hudProfMs = 0; }
+  if (reset) {
+    for (const k of Object.keys(hudProf)) delete hudProf[k];
+    for (const k of Object.keys(hudProfMax)) delete hudProfMax[k];
+    hudProfCalls = hudProfMs = hudProfMaxMs = 0;
+  }
   return out;
 };
 function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
@@ -51382,7 +51405,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // instruments, and they were the last text on this canvas that wanted real
   // layout.
   hudLap('riggauge');
-  hudProfMs += performance.now() - hudEntry;
+  const hudMs = performance.now() - hudEntry;
+  hudProfMs += hudMs;
+  if (hudMs > hudProfMaxMs) hudProfMaxMs = hudMs;
 }
 /** The task and the claim, as DOM state — pushed every frame, diffed there. */
 function stepOverlays(): void {
