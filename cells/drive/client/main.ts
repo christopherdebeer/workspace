@@ -17190,9 +17190,28 @@ function nearCells<T>(grid: Map<string, T[]>, t: HeightTile): Set<T> {
  *  Counters, not a timer per drape: the walk and the recompute are timed as
  *  two laps, and the counts say how much was scanned to move how little. */
 const redrapeProf = {
-  calls: 0, near: 0, inBox: 0, touched: 0, verts: 0, moved: 0,
+  calls: 0, near: 0, inBox: 0, touched: 0, verts: 0, moved: 0, ground: 0,
   walkMs: 0, normalsMs: 0, max: 0,
 };
+/** ── AND THE WALK IS `groundAt`, MEASURED BY CALLING IT TWICE ──
+ *
+ *  The walk is 44.7 ms a call on the device against 0.8 for the recompute, so
+ *  what is left to attribute is the per-vertex work — and `performance.now()`
+ *  cannot time it: the call is a microsecond or two, the clock is coarsened on
+ *  iOS, and half a million of those reads would cost more than the thing being
+ *  read. So the measurement is a SUBSTITUTION and its own control: with the
+ *  probe on, every vertex that reaches `groundAt` calls it a SECOND time and
+ *  throws the answer away. Nothing else changes — the same vertices are
+ *  walked, the same ones move, the counters agree — so the difference between
+ *  the two legs IS the cost of `P.ground` calls, and its share of the normal
+ *  walk is the answer.
+ *
+ *  Off by default, because the probe is the same order of work as the thing it
+ *  measures: on, the walk is (roughly) twice its own groundAt cost, so a leg
+ *  taken with it on must never be quoted as a redrape number. The hydro bound
+ *  probe is the recorded precedent for both the trick and the warning. */
+let gaDouble = false;
+let gaSink = 0;
 /** Re-seat every draped vertex that falls inside a tile just rebuilt. */
 function redrape(t: HeightTile): void {
   const t0 = performance.now();
@@ -17214,7 +17233,12 @@ function redrape(t: HeightTile): void {
       const x = pos.getX(i), z = pos.getZ(i);
       if (x < t.xs || z < t.zs || x >= tx1 || z >= tz1) continue;
       // Compare the stored float, not a double that rounds to the same float.
+      P.ground++;
       const y = Math.fround(groundAt(x, z) + d.lift);
+      // The probe's second call — see the note by `gaDouble`. Deliberately
+      // AFTER the first and before the early return, so it is paid on exactly
+      // the vertices the first is paid on, moved or not.
+      if (gaDouble) gaSink += groundAt(x, z);
       if (pos.getY(i) === y) continue;
       pos.setY(i, y);
       P.moved++;
@@ -17233,6 +17257,40 @@ function redrape(t: HeightTile): void {
   P.normalsMs += normalsMs; P.walkMs += ms - normalsMs;
   if (ms > P.max) P.max = ms;
 }
+/** The redrape ledger, and a reset so two legs can be compared in ONE boot —
+ *  which matters here because the counters accumulate over a session and a
+ *  fixture's second boot is not guaranteed to redrape the same set. */
+(window as unknown as { __redrape?: object }).__redrape = (reset = false): object => {
+  const P = redrapeProf, c = Math.max(1, P.calls);
+  const out = {
+    calls: P.calls, near: P.near, inBox: P.inBox, touched: P.touched,
+    verts: P.verts, moved: P.moved, ground: P.ground,
+    walkMs: +(P.walkMs / c).toFixed(3), normalsMs: +(P.normalsMs / c).toFixed(3),
+    max: +P.max.toFixed(1), probe: gaDouble,
+    // Per CALL, which is what the telemetry row reports and what two legs
+    // compare; the totals are there so a leg with a different build count
+    // cannot be mistaken for a leg with a different cost.
+    vertsPerCall: Math.round(P.verts / c), groundPerCall: Math.round(P.ground / c),
+  };
+  if (reset) {
+    P.calls = P.near = P.inBox = P.touched = 0;
+    P.verts = P.moved = P.ground = 0;
+    P.walkMs = P.normalsMs = P.max = 0;
+  }
+  return out;
+};
+(window as unknown as { __gaprobe?: object }).__gaprobe = (on = true): object => {
+  gaDouble = !!on;
+  return (window as unknown as { __redrape: (r?: boolean) => object }).__redrape(true);
+};
+/** Dirty every built terrain tile, so a settled world runs the post-steps
+ *  again on demand. `mark` rather than `way`, so WAY_HOLD_MS does not hold
+ *  them and the rebuild starts at once. */
+(window as unknown as { __redirty?: object }).__redirty = (): object => {
+  const keys = [...terrainMeshes.keys()];
+  for (const k of keys) markTerrainDirty(k, 'mark');
+  return { dirtied: keys.length };
+};
 /** Build the shoulders for every parked kerb inside this tile, against the
  *  ground as it now stands, and retire them. */
 /** The mean colour of `batterTex`, read once off its canvas: what a vertex
@@ -44199,6 +44257,7 @@ function telemetryReport(): string {
     // geometries had a vertex move at all — and `verts` against `moved` is
     // the ratio that says whether the walk or the recompute is the cost.
     L.push(`redrape ${R.calls} calls · walk ${(R.walkMs / rc).toFixed(1)} normals ${(R.normalsMs / rc).toFixed(1)} ms/call · max ${Math.round(R.max)}`
+      + ` · groundAt ${Math.round(R.ground / rc)}/call`
       + ` · near ${Math.round(R.near / rc)} inBox ${Math.round(R.inBox / rc)} touched ${Math.round(R.touched / rc)}`
       + ` · verts ${Math.round(R.verts / rc)} moved ${Math.round(R.moved / rc)}`); }
   //    WHICH PHASE OF A HYDRO BUILD ──
