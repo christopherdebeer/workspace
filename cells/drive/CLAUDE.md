@@ -4116,6 +4116,46 @@ caps changed three times in one day and has its own A/Bs (`tree-edge`,
 predates the allocator differ for a reason that is not a regression, and the
 check would then be loosened until it meant nothing.
 
+**AND THE FIRST DEPLOY'S CAP WAS IN THE WRONG UNIT, which a device dump caught
+in one row.** `MANIFEST_MAX_M` was 2,800 m — a generous-looking ceiling that is
+EXACTLY the tree rack's own widest DRAW stop. The seat drives at `range 2800m ·
+pop 2x`, so the manifest equalled the draw ring, the annulus was **zero cells**
+and the pass walked nothing — while the telemetry printed `manifest 2800m ·
+cells 729/729` as though it were filling. **A ceiling expressed in the wrong
+unit is a ceiling that can silently coincide with the floor**, and a row that
+cannot report its own no-op is a row that misleads: it says `annulus NONE` now,
+beside the draw range it is being compared against.
+
+The bound is in CELLS (`MANIFEST_MAX_CELLS`), because cells are what costs —
+the seed time is per cell and so, far more pressingly, is the MEMORY, since
+`vegGrid` holds every cell's site list inside `mReach + 3`. The same dump sizes
+that: **57,112 trees across 729 cells, about 78 a cell** before the non-tree
+kinds are counted. So: 225 cells at the 700 m default against the ring's 81,
+and 1,089 at the 2.8 km stop against 729 — an annulus of 360 rather than none.
+
+**WHAT THAT DUMP DID ESTABLISH**, on an iPhone at the widest rack stop, and it
+is the more useful half: the 729-cell ring is **fully seeded with nothing
+deferred**, so the 8 ms budget keeps up with a ring nine times the default's
+area; the manifest pass itself costs **0.0 ms**; and the world knows **57,112
+trees while drawing 2,297 — four per cent.** The other ninety-six are the
+headroom, and they are not where the previous section assumed: `cap 24%` with
+`tris 2.40M` exactly at budget puts **conifer's edge at 318 m inside a 2,800 m
+range**. At this rack setting the pop the seat sees is the CAP, well inside the
+ring, not the ring's own edge — so the first thing an impostor tier owes is the
+cap-cut trees, which are already gathered and need no manifest at all.
+
+**AND THE ADMISSION IS THE TREE COST NOW.** `ezAdmit 9.0 ms a call, max 22`
+against `ezGather 2.3` and `place 2.2`: a heap selection of 2,297 from ~57,000
+candidates, once a refresh, and `treeRefresh` is 4.5% of the session and the
+top non-gap phase in most of the slow frames. Whatever membership rule the
+impostor tier uses, **it must not be another nearest-N over that population** —
+the stable per-slot hash `refreshShrubs` already uses is the shape that scales.
+
+**AND THE TREES ARE 2.40M OF THE FRAME'S 3.51M TRIANGLES.** Sixty-nine per
+cent, at 185 draw calls and 22.9 fps with 73% of wall time in the unattributed
+gap. That is the performance case for an impostor stated in the only numbers
+that can make it: the triangle bill and the share of it vegetation owns.
+
 **Measured live** (`devtools/tree-manifest.mjs`, `at-yosemite`, `?treemanifest=700`
 — the single ring — against the default 1400 m, no page errors either leg):
 

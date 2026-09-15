@@ -11333,15 +11333,29 @@ let treePopulationScale = 1;
  * past any plausible manifest, so widening it needs no new streaming — the
  * failure mode a wider ring WOULD have had is simply not present.
  *
- * The cap is a bound on the cell count rather than a judgement about
- * landscape: at 220 m cells a 1.4 km manifest is 15x15 = 225 cells against the
- * draw ring's 9x9 = 81, and the rack's own 2.8 km draw stop would otherwise
- * ask for a 5.6 km manifest at 53x53 = 2,809. Capped, that stop asks 27x27 =
- * 729. `?treemanifest=` sets the metres exactly, and equal to `treeRange`
+ * THE CAP IS IN CELLS, AND IT WAS IN METRES FOR ONE DEPLOY. 2,800 m looked
+ * like a generous ceiling and is EXACTLY the rack's own widest DRAW stop, so
+ * at `range 2800m` the manifest equalled the draw ring and this pass walked
+ * nothing at all — while the telemetry printed `manifest 2800m · cells
+ * 729/729` as though it were doing something. A device dump from that rack
+ * setting is what said so. A ceiling expressed in the wrong unit is a ceiling
+ * that can silently coincide with the floor.
+ *
+ * Cells are the unit that costs. The seed time is per cell and, far more
+ * pressingly, so is the MEMORY: that same dump holds 57,112 trees across 729
+ * cells — about 78 a cell before the non-tree kinds are counted — and
+ * `vegGrid` keeps every cell inside `mReach + 3`. So the manifest asks for
+ * twice the draw range and takes whatever of that fits inside
+ * `MANIFEST_MAX_CELLS`: 225 cells at the 700 m default against the draw ring's
+ * 81, and 1,089 at the 2.8 km stop against 729 — an annulus of 360 rather than
+ * none. `?treemanifest=` sets the metres exactly, and equal to `treeRange`
  * restores the single ring this replaced.
  */
 const MANIFEST_K = 2;                       // …times the draw range
-const MANIFEST_MAX_M = 2800;                // …and no further, whatever the rack asks
+/** The manifest square's cell budget — a MEMORY bound wearing a count, since
+ *  every cell inside it holds its own site list for as long as it is in reach.
+ *  1,089 is the largest odd square that fits. */
+const MANIFEST_MAX_CELLS = 1100;
 let manifestOverride = 0;
 {
   const m = Number(qs('treemanifest'));
@@ -11349,7 +11363,9 @@ let manifestOverride = 0;
 }
 function manifestRange(): number {
   const draw = Math.max(VEG_RANGE, treeRange);
-  return Math.max(draw, manifestOverride || Math.min(draw * MANIFEST_K, MANIFEST_MAX_M));
+  if (manifestOverride) return Math.max(draw, manifestOverride);
+  const capReach = Math.floor((Math.sqrt(MANIFEST_MAX_CELLS) - 1) / 2);
+  return Math.max(draw, Math.min(draw * MANIFEST_K, capReach * VEG_CELL));
 }
 let treeSizeScale = 1;
 let treeFormScale = 1;
@@ -11446,7 +11462,8 @@ function ezTriPrice(fam: EzFamily): number {
  * before it settles is a reading of the budget rather than of the world.
  */
 function vegManifestTally(): {
-  rangeM: number; cells: number; seeded: number; deferred: number; known: Record<EzFamily, number>;
+  rangeM: number; cells: number; seeded: number; annulus: number; deferred: number;
+  known: Record<EzFamily, number>;
 } {
   const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
   const m = manifestRange();
@@ -11465,7 +11482,9 @@ function vegManifestTally(): {
       if (dx * dx + dz * dz <= r2) known[v.k]++;
     }
   }
-  return { rangeM: Math.round(m), cells, seeded, deferred: vegManifestDeferred, known };
+  const drawReach = Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL);
+  return { rangeM: Math.round(m), cells, seeded,
+    annulus: cells - (2 * drawReach + 1) ** 2, deferred: vegManifestDeferred, known };
 }
 /** The nominal cap: what the rack asks for, before any budget. */
 const ezCapNominal = (fam: EzFamily): number =>
@@ -44639,7 +44658,11 @@ function telemetryReport(): string {
   const _treePrice = EZ_FAMILIES.map(f => `${f[0]}${Math.round(ezTriPrice(f))}`).join('/');
   const _treeEdge = EZ_FAMILIES.map(f => `${f[0]}${ezEdgeLast[f]}`).join('/');
   const _m = vegManifestTally();
-  L.push(`trees manifest ${_m.rangeM}m · cells ${_m.seeded}/${_m.cells}`
+  // THE ANNULUS, SAID OUT LOUD. `cells 729/729` under a "manifest" label read
+  // as a manifest that was filling, on a rack setting where it walked no cells
+  // at all. A row that cannot report its own no-op is a row that misleads.
+  L.push(`trees manifest ${_m.rangeM}m vs draw ${Math.round(Math.max(VEG_RANGE, treeRange))}m`
+    + ` · cells ${_m.seeded}/${_m.cells} annulus ${_m.annulus || 'NONE'}`
     + `${_m.deferred ? ` · ${_m.deferred} deferred` : ''}`
     + ` · known ${EZ_FAMILIES.map(f => `${f[0]}${_m.known[f]}`).join('/')}`);
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
