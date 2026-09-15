@@ -61,18 +61,26 @@ a confusing module error):
 > 10:39:02  REPORT  Duration: 28332.01 ms  Memory Size: 1024 MB  Max Memory Used: 687 MB
 > 16:41:04  cell deployed  version 1789490463265  files 196  static 22
 > 16:41:04  REPORT  Duration: 32720.97 ms  Memory Size: 1024 MB  Max Memory Used: 714 MB
+> 18:06:03  cell deployed  version 1789495562377  files 196  static 22
+> 18:06:03  REPORT  Duration: 30987.79 ms  Memory Size: 1024 MB  Max Memory Used: 705 MB
 > ```
 >
-> **32.7 s of the 120 s timeout and 714 MB of the 1024 MB ceiling** — seven
-> tenths of the memory, a quarter of the clock. Everything below was written
-> against a 512 MB function, and at 512 this cell's deploy would now fail
-> EVERY time rather than intermittently: 714 is not a near miss. The failure
-> mode and its diagnosis still stand exactly as written; what has changed is
-> the headroom, and the number to watch is 714 against 1024 **and its slope**:
-> +27 MB and five files over ONE DAY of ordinary work, on a ceiling that does
-> not move. Two points are not a trend, and they are the only two there are —
-> so take the REPORT on every deploy from now on rather than discovering the
-> slope at the wall. At this rate the headroom is a question of months.
+> **About 700 MB of the 1024 MB ceiling and half a minute of the 120 s
+> timeout** — seven tenths of the memory, a quarter of the clock. Everything
+> below was written against a 512 MB function, and at 512 this cell's deploy
+> would now fail EVERY time rather than intermittently: 700 is not a near miss.
+>
+> **AND THERE IS NO SLOPE — THE THIRD MEASUREMENT SAYS SO, AND THE SECOND ONE
+> RAISED A FALSE ALARM.** Reading 687 then 714 the same day, this note said
+> "+27 MB and five files over ONE DAY of ordinary work" and called it a number
+> to watch. The next deploy added no files at all and came back at **705, nine
+> megabytes DOWN.** So the spread is run-to-run variance of at least that much
+> and the three points are 687 / 714 / 705 with no direction in them. The
+> original note said out loud that two points are not a trend; it then reasoned
+> from them anyway. **A difference smaller than the variance is not a
+> measurement, and the only way to know the variance is to repeat the
+> reading** — which costs a deploy here, so the honest habit is to take the
+> REPORT every time and compare against a RANGE rather than the last one.
 >
 > The per-file writes during a push sit at 249 MB and 85–420 ms each, so the
 > 714 is the BUNDLE step alone — one request (`26b1a0e0` on the first
