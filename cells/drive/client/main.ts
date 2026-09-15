@@ -16682,35 +16682,25 @@ function meshTriAt(x: number, z: number): Array<{ x: number; y: number; z: numbe
   }
   return null;
 }
-/** ── THE KEY IS A STRING, AND THE STRING WAS THE ALLOCATION ──
+/** ── AND THE LOOKUP IS NOT THE COST; THE TRIANGLE SOLVE IS ──
  *
  *  `meshSurfaceAt` is the hottest lookup in the client — a redrape alone asked
- *  it 930,560 times in an 84 s device session — and the first thing it did was
- *  build a fresh `${tx}/${ty}` for a tile it had almost certainly just been
- *  asked about. Measured by substitution (devtools/redrape-ga.mjs), `groundAt`
- *  is essentially the whole redrape walk at ~850 ns a call, and the reading
- *  landing OVER 100% is the tell that the marginal call is dearer than the
- *  average one, which allocation is and arithmetic is not.
+ *  it 930,560 times in an 84 s device session — and it opens by building a
+ *  `${tx}/${ty}` for a tile it has almost certainly just been asked about.
+ *  That reads like the cost and is not it. MEASURED (devtools/redrape-ga.mjs):
+ *  memoising the key on the tile indices, so 2,492 string builds a redrape
+ *  become one, moved the walk 2.01 → 2.16 ms a call against a floor of 0.49 —
+ *  nothing, in the direction of worse. Reverted.
  *
- *  So the key is memoised on the tile INDICES, which is sound with no
- *  invalidation of any kind: the string is a pure function of (tx, ty) and
- *  nothing else. Every lookup below it — the dirty test, the mesh, the tile —
- *  is unchanged and still runs, so a mesh that was swapped, dirtied or evicted
- *  between two calls answers exactly as it did before. One entry, because the
- *  callers that matter (a redrape's inner loop, the four wheels, a batter
- *  bay's steps) ask about the same tile thousands of times running.
- *
- *  What this does NOT do is memoise the three Map lookups. That wants a
- *  revision counter covering `terrainDirty`, `terrainMeshes` and
- *  `heightTiles`, and a missed bump there is the physics reading a hillside
- *  that has been replaced — the picture-and-physics-disagree fault this file
- *  warns about. Take the free half, measure, and decide the rest on a number. */
-let msKeyTx = NaN, msKeyTy = NaN, msKey = '';
-function meshSurfaceAt(x: number, z: number): number | null {
+ *  `locateOnly` is what turned that into an attribution rather than a shrug:
+ *  it runs everything down to `cellTrisOf` and returns before the triangles,
+ *  so the substitution probe can price the two halves separately. Nothing in
+ *  the game passes it — the parameter exists so the measurement can be taken
+ *  against the SHIPPED function rather than against a copy of it that drifts.
+ *  See the redrape note above and CLAUDE.md. */
+function meshSurfaceAt(x: number, z: number, locateOnly = false): number | null {
   const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
-  let key: string;
-  if (tx === msKeyTx && ty === msKeyTy) key = msKey;
-  else { key = msKey = `${tx}/${ty}`; msKeyTx = tx; msKeyTy = ty; }
+  const key = `${tx}/${ty}`;
   // A STALE MESH IS NOT AN AUTHORITY. A tile whose roads have changed still
   // holds the uncut hillside until `flushTerrain` gets to it — one tile every
   // 200ms — and for those frames the wheels would ride terrain standing over
@@ -16728,6 +16718,7 @@ function meshSurfaceAt(x: number, z: number): number | null {
   const fx = (x - t.xs) / cell, fz = (z - t.zs) / cellH;
   if (fx < 0 || fz < 0 || fx >= SEG || fz >= SEG) return null;
   const ct = cellTrisOf(geo, SEG);
+  if (locateOnly) return null;                // the probe's half — see the note above
   const kc = Math.floor(fz) * SEG + Math.floor(fx);
   const ox = t.xs + t.w / 2, oz = t.zs + t.h / 2;
   for (let h = ct.offs[kc]; h < ct.offs[kc + 1]; h++) {
@@ -17236,7 +17227,7 @@ const redrapeProf = {
  *  measures: on, the walk is (roughly) twice its own groundAt cost, so a leg
  *  taken with it on must never be quoted as a redrape number. The hydro bound
  *  probe is the recorded precedent for both the trick and the warning. */
-let gaDouble = false;
+let gaDouble = 0;      // 0 off · 1 a whole groundAt · 2 the locate half only
 let gaSink = 0;
 /** Re-seat every draped vertex that falls inside a tile just rebuilt. */
 function redrape(t: HeightTile): void {
@@ -17264,7 +17255,8 @@ function redrape(t: HeightTile): void {
       // The probe's second call — see the note by `gaDouble`. Deliberately
       // AFTER the first and before the early return, so it is paid on exactly
       // the vertices the first is paid on, moved or not.
-      if (gaDouble) gaSink += groundAt(x, z);
+      if (gaDouble === 1) gaSink += groundAt(x, z);
+      else if (gaDouble === 2) gaSink += meshSurfaceAt(x, z, true) === null ? 1 : 0;
       if (pos.getY(i) === y) continue;
       pos.setY(i, y);
       P.moved++;
@@ -17305,8 +17297,8 @@ function redrape(t: HeightTile): void {
   }
   return out;
 };
-(window as unknown as { __gaprobe?: object }).__gaprobe = (on = true): object => {
-  gaDouble = !!on;
+(window as unknown as { __gaprobe?: object }).__gaprobe = (on: boolean | number = 1): object => {
+  gaDouble = on === true ? 1 : on === false ? 0 : Number(on) | 0;
   return (window as unknown as { __redrape: (r?: boolean) => object }).__redrape(true);
 };
 /** Dirty every built terrain tile, so a settled world runs the post-steps

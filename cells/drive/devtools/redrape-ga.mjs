@@ -35,7 +35,7 @@ import { openDrive } from './harness.mjs';
 
 const FIX = process.env.FIX ?? 'at-paris-west';
 const SPOT = process.env.SPOT ?? '';
-const LEGS = Number(process.env.LEGS ?? 4);
+const LEGS = Number(process.env.LEGS ?? 8);
 const t0 = Date.now();
 const el = () => `${((Date.now() - t0) / 1000).toFixed(0)}s`;
 
@@ -65,8 +65,8 @@ console.log(`[${el()}] ${settled ? 'SETTLED' : 'NOT SETTLED'} · builds ${pb} wa
 
 /** One leg: set the probe (which resets the ledger), dirty everything, wait
  *  for the rebuilds to run out, read the ledger back. */
-async function leg(on) {
-  await q((v) => window.__gaprobe(v), on);
+async function leg(mode) {
+  await q((v) => window.__gaprobe(v), mode);
   const { dirtied } = await q(() => window.__redirty());
   let still = 0, pc = -1;
   for (let i = 0; i < 80; i++) {
@@ -81,51 +81,71 @@ async function leg(on) {
   return { ...r, dirtied, done: still >= 2 };
 }
 
+// off · whole · off · locate · off · whole … — the off legs interleave BOTH
+// probe modes so neither is compared against a floor taken only beside the
+// other, and the two halves are priced against the same baseline.
+const MODES = [0, 1, 0, 2, 0, 1, 0, 2];
 const out = [];
 for (let i = 0; i < LEGS; i++) {
-  const on = i % 2 === 1;
-  const r = await leg(on);
-  out.push({ on, ...r });
-  console.log(`[${el()}] leg ${i + 1}/${LEGS} probe ${on ? 'ON ' : 'off'}`
+  const mode = MODES[i % MODES.length];
+  const r = await leg(mode);
+  out.push({ mode, ...r });
+  const name = mode === 0 ? 'off   ' : mode === 1 ? 'WHOLE ' : 'LOCATE';
+  console.log(`[${el()}] leg ${i + 1}/${LEGS} probe ${name}`
     + ` · ${r.calls} calls${r.done ? '' : ' (NOT DRAINED)'}`
     + ` · walk ${r.walkMs} normals ${r.normalsMs} ms/call`
     + ` · verts ${r.vertsPerCall} groundAt ${r.groundPerCall}`);
 }
-await q(() => window.__gaprobe(false));
+await q(() => window.__gaprobe(0));
 const errs = d.errors.length;
 await d.close();
 
-const offs = out.filter((r) => !r.on), ons = out.filter((r) => r.on);
+const of = (m) => out.filter((r) => r.mode === m);
 const mean = (a, k) => a.reduce((n, r) => n + r[k], 0) / Math.max(1, a.length);
 const spread = (a, k) => a.length < 2 ? 0 : Math.max(...a.map((r) => r[k])) - Math.min(...a.map((r) => r[k]));
 
-const walkOff = mean(offs, 'walkMs'), walkOn = mean(ons, 'walkMs');
+const offs = of(0), wholes = of(1), locates = of(2);
+const walkOff = mean(offs, 'walkMs');
 const floor = spread(offs, 'walkMs');
-const delta = walkOn - walkOff;
+const dWhole = mean(wholes, 'walkMs') - walkOff;
+const dLocate = locates.length ? mean(locates, 'walkMs') - walkOff : NaN;
 const g = mean(offs, 'groundPerCall');
+const ns = (ms) => (ms * 1e6 / Math.max(1, g)).toFixed(0);
 
 console.log(`\n── ${where} · ${settled ? 'settled' : 'NOT SETTLED'} · page errors ${errs}`);
-console.log(`  walk ms/call   off ${walkOff.toFixed(2)}   on ${walkOn.toFixed(2)}`);
+console.log(`  walk ms/call   off ${walkOff.toFixed(2)}`
+  + `   +whole groundAt ${(walkOff + dWhole).toFixed(2)}`
+  + (locates.length ? `   +locate only ${(walkOff + dLocate).toFixed(2)}` : ''));
 console.log(`  FLOOR (off against off) ${floor.toFixed(2)} ms — a delta inside this says nothing`);
 console.log(`  groundAt ${Math.round(g)} calls a redrape · ${mean(offs, 'vertsPerCall').toFixed(0)} vertices walked`);
-if (delta <= floor) {
-  console.log(`  DELTA ${delta.toFixed(2)} ms is INSIDE the floor — this instrument cannot resolve it`);
+if (dWhole <= floor) {
+  console.log(`  DELTA ${dWhole.toFixed(2)} ms is INSIDE the floor — this instrument cannot resolve it`);
 } else {
-  const perCall = delta * 1e6 / Math.max(1, g);
-  const share = 100 * delta / Math.max(0.001, walkOff);
-  console.log(`  DELTA ${delta.toFixed(2)} ms — one extra groundAt on every counted vertex`);
-  console.log(`  so groundAt is ${share.toFixed(0)}% of the walk, at ${perCall.toFixed(0)} ns a call`);
-  const rest = walkOff - delta;
-  // A SHARE OVER 100% IS NOT A RESULT, IT IS THE EDGE OF THE INSTRUMENT — and
-  // printing it flat would be a number nobody can act on. Two things put it
-  // there and they are not alike. The delta carries the floor's own noise, so
-  // anything within a floor of 100% is "essentially all of it" and no more can
-  // be said. And the substitution's MARGINAL call need not cost what the
-  // average call costs: `meshSurfaceAt` builds a `${tx}/${ty}` string per call,
-  // so doubling the calls doubles the allocation rate, and allocation is the
-  // one cost that gets dearer per unit as you make more of it. That the
-  // measurement lands over 100% is therefore evidence FOR the string being a
-  // real part of the price, which is the first thing the cut should take.
+  const share = 100 * dWhole / Math.max(0.001, walkOff);
+  console.log(`  a whole groundAt: ${dWhole.toFixed(2)} ms — ${ns(dWhole)} ns a call, ${share.toFixed(0)}% of the walk`);
+  // ── AND WHICH HALF OF IT ──
+  //
+  // `locate` is everything down to cellTrisOf: the tileAt arithmetic, the
+  // `${tx}/${ty}` string, the dirty Set and the two Maps. `solve` is what is
+  // left — the barycentric walk over the cell's triangles, nine or more
+  // BufferAttribute reads apiece. The cut everyone reaches for first (redrape
+  // already HOLDS the tile, so skip the lookup) can only ever collect the
+  // first of those, so which is bigger decides whether that cut is worth
+  // writing at all.
+  if (locates.length) {
+    if (dLocate <= floor) {
+      console.log(`  of which LOCATE ${dLocate.toFixed(2)} ms — inside the floor: the lookup is NOT the cost`);
+      console.log(`  so essentially all of it is the triangle solve, and a tile-aware`);
+      console.log(`  groundAt — the obvious cut — would collect nothing.`);
+    } else {
+      const solve = dWhole - dLocate;
+      console.log(`  of which LOCATE ${dLocate.toFixed(2)} ms (${ns(dLocate)} ns)`
+        + ` · SOLVE ${solve.toFixed(2)} ms (${ns(solve)} ns)`);
+      console.log(`  a tile-aware groundAt can collect the LOCATE half and no more:`
+        + ` ${(100 * dLocate / Math.max(0.001, walkOff)).toFixed(0)}% of the walk.`);
+    }
+  }
+  const rest = walkOff - dWhole;
   if (rest < floor) {
     console.log(`  the rest of the walk is ${rest.toFixed(2)} ms — UNDER THE FLOOR (${floor.toFixed(2)}).`);
     console.log(`  Read that as: groundAt is essentially the whole walk and this`);
