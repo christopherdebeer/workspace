@@ -41,6 +41,29 @@ a confusing module error):
 5. Verify by fetching the live bundle and grepping for a symbol you just added:
    `curl -s https://c15r-drive.on.parc.land/app.js | grep -c mySymbol`
 
+> **THE DEPLOYER IS 1024 MB NOW, AND IT NEEDS 687.** Measured 2026-09-15 by
+> tailing `platform.logs {service: "cells"}` THROUGH a push rather than after
+> it, which is the only way to catch the line — the tail is a short live
+> window, not a searchable history, so a deploy's own REPORT is gone within
+> the minute:
+>
+> ```
+> 10:39:02  cell deployed  version 1789468740806  files 191  static 22
+> 10:39:02  REPORT  Duration: 28332.01 ms  Memory Size: 1024 MB  Max Memory Used: 687 MB
+> ```
+>
+> **28.3 s of the 120 s timeout and 687 MB of the 1024 MB ceiling** — two
+> thirds of the memory, a quarter of the clock. Everything below was written
+> against a 512 MB function, and at 512 this cell's deploy would now fail
+> EVERY time rather than intermittently: 687 is not a near miss. The failure
+> mode and its diagnosis still stand exactly as written; what has changed is
+> the headroom, and the number to watch is 687 against 1024, because the cell
+> is still growing and the ceiling is not.
+>
+> The per-file writes during a push sit at 253 MB and 85–320 ms each, so the
+> 687 is the BUNDLE step alone — one request, `26b1a0e0`, that reads every
+> file, transpiles `client/main.ts` and zips `static/`.
+
 **A DEPLOY THAT NEVER LEAVES `DEPLOYING` IS THE DEPLOYER OUT OF MEMORY, AND
 NOTHING TELLS YOU.** Root-caused on 2026-09-10 with `platform.logs
 {service: "cells"}`, which tails the cells service's own Lambda
@@ -69,7 +92,11 @@ Three things to do with it:
 
 - **Read the REPORT line, not the phase.** `platform.logs` needs the
   platform scope; the line to find is the one with `Status: error` or
-  `Status: timeout` beside a 512 MB `Max Memory Used`.
+  `Status: timeout` beside a `Max Memory Used` at the ceiling. **Tail it
+  DURING the push**: the window is seconds long, so a tail taken after the
+  deploy has finished shows only your own polling and can say nothing about
+  what the deploy used — which is how the 687 MB above went unmeasured for
+  as long as it did.
 - **Re-issue with `cells.deploy {cellId}`, not another push.** A push
   resends 133 files through the cells tools to arrive at the same deploy
   event; `cells.deploy` raises the event over the files already there. The
