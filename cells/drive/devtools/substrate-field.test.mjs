@@ -187,11 +187,19 @@ console.log('\nthe half-metre has one owner, not two:');
     '__tdetail({micro}) is the 0..2 live A/B');
   check(/tdBand\(px, 0\.25\)\s*\*\s*\(1\.0 - subMicro\)/.test(main),
     "the cascade's third octave stands down where the substrate draws band D");
-  // …AND ONLY THE THIRD. The coarser octaves are 1 m and 4 m features and the
-  // substrate says nothing at those scales through a micro term; standing them
-  // down too would take texture off ground that has none to spare.
-  check(!/tdBand\(px, 1\.0\)[^;]*subMicro/.test(main) && !/tdBand\(px, 4\.0\)[^;]*subMicro/.test(main),
-    'and the metre and four-metre octaves are left alone');
+  // …AND THE METRE THINS RATHER THAN LEAVING. This assertion used to require
+  // that NEITHER coarser octave saw the substrate at all, which was the rule
+  // before the material had anything to say in the metre; it now has (the
+  // clasts at 0.9-1.4 m, the rills at 1.8), but only where there is debris or
+  // scree to carry them, where band D draws on every mineral surface there is.
+  // So the 1 m octave takes a PARTIAL stand-down through SUB_OCT_M and the
+  // 4 m octave is still left alone entirely — and the pair is asserted rather
+  // than the absence, because an assertion that the metre is untouched is the
+  // old model wearing a green tick.
+  check(/tdBand\(px, 1\.0\)[^;]*\(1\.0 - subMicro \* \$\{SUB_OCT_M\}\)/.test(main),
+    'the metre octave thins by SUB_OCT_M where the material has its own metre');
+  check(!/tdBand\(px, 4\.0\)[^;]*subMicro/.test(main),
+    '…and the four-metre octave is left alone entirely');
 }
 
 console.log('\nthe sward reads the field per blade, not only per texel:');
