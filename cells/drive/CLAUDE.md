@@ -257,6 +257,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
 | `node devtools/sward-sub.mjs` | whether the sward's density and the flora's habitat follow the geomorphic field, as the correlation and the habitat counts, with `swardsub=0` as the control (`FIX=` a fixture or `SPOT=` a live place; CPU numbers rather than pixels — see the note) | ~3min |
 | `node devtools/ground-view.mjs` | a ground view is a uniform, not a sheet: the chip sets the channel in every camera, the legend is tallied off the attribute the fragment reads, and the chase frame moves (`FIX=` for an offline world) | ~6min |
+| `node devtools/band-d.mjs` | the half-metre: whether the material draws it better than the cover class did, measured at the top camera's MINIMUM zoom where the whole pane is inside the band (a chase seat sees the ground at a grazing angle and the band is a strip a few metres deep at the bottom of it) — plus the sward's per-blade half and the generic cascade octave by octave against the substrate (`PHASE=band\|sward\|cascade`, one a process; `SPOT=`) | ~9min a phase |
 | `node devtools/substrate-ab.mjs` | whether the substrate draws a landscape or more noise: the field and the three layer shares at six points, an interleaved one-boot A/B cropped to the near field, and the domain and amount dials swept (`TD=dom` paints the shares, `SPOT=` for a cliff) | ~9min |
 | `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
 | `node devtools/menu-survey.mjs` | every menu screen photographed, SETTINGS scrolled through | ~2min |
@@ -10972,11 +10973,29 @@ residual and of the habitat mix, not of the rule. What it does say is the
 DIRECTION: turning the rule on moves it toward zero, which is the thinning
 partly cancelling an anti-correlation the cover class had put there.
 
-The Stelvio is where the substrate has something to say — mean expressed rock
-0.485, 71.4% of the field mineral enough to thin — and there it reads
-**−0.059 → +0.302**. Quote that one, with its `meanRock` beside it; a
+The Stelvio is where the substrate has something to say, and there it reads
+**−0.059 → +0.319**. Quote that one, with its `meanRock` beside it; a
 correlation from a fixture whose `thinnedShare` is two per cent is a
 measurement of nothing, exactly as `noField` being large would be.
+
+**The whole sward picture after the producer rewrite**, both places, the
+`swardsub` switch the only difference (two boots, which is legitimate because
+this is a CPU field over deterministic ground and not pixels):
+
+| | Stelvio, live | Camps Bay fixture |
+|---|---|---|
+| correlation off → on | **−0.059 → +0.319** | −0.577 → −0.367 |
+| mean density | −44.5% | −12.9% |
+| the substrate calls mineral enough to thin | **67.2%** | 2.3% |
+| mean expressed rock | **0.470** | 0.058 |
+| habitat cliff, off → on | 588 → **954** of 1,444 | 1 → 24 |
+
+The Stelvio's expressed rock went 0.291 to 0.470 over the producer rewrite —
+the high-resolution cliff evidence and the latent exposure, on a pass that
+genuinely is rock — and with it 588 of its 1,444 sampled habitats became 954.
+A 2,800 m alpine pass losing 44.5% of the sward the cover class asked for is
+what an alpine pass should do to a meadow; whether it is too much is the seat's
+call, and `swardsub=0` is the exact A/B for it.
 
 ### What is NOT done, with the reason
 

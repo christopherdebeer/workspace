@@ -3,6 +3,7 @@
  *
  *   node cells/drive/devtools/band-d.mjs
  *   SPOT='lat=46.5302&lon=10.4547' node .../band-d.mjs     (the Stelvio)
+ *   PHASE=cascade node .../band-d.mjs          (one section a process — see below)
  *
  * Band D is the one band in this renderer with TWO possible owners: the detail
  * cascade's third octave, which has drawn at 0.25 m for years keyed on the
@@ -43,6 +44,15 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 const SPOT = process.env.SPOT ?? 'lat=46.5302&lon=10.4547';
 const FIX = process.env.FIX ?? '';
 const OUT = process.env.OUT ?? '/tmp/drive-tools/bandd';
+// ── ONE PHASE A PROCESS ──
+//
+// Three sections at seven legs each is twenty-five screenshots, and a
+// screenshot through SwiftShader with drawing on is minutes. The harness fuse
+// is twenty minutes and it KILLS the run rather than waiting, so the last
+// number printed would be from a process that was killed — which is the trap
+// chart-layers.mjs already carries a note about. PHASE=band|sward|cascade.
+const PHASE = process.env.PHASE ?? 'all';
+const wants = (p) => PHASE === 'all' || PHASE === p;
 mkdirSync(OUT, { recursive: true });
 const t0 = Date.now();
 const el = () => `${((Date.now() - t0) / 1000).toFixed(0)}s`;
@@ -97,7 +107,7 @@ const pairs = [
   ['mic1-flat', 'mic1', 'all substrate relief (NOT band D\'s share)'],
 ];
 
-for (const station of ['near-chart', 'chase-strip']) {
+for (const station of (wants('band') ? ['near-chart', 'chase-strip'] : [])) {
   if (station === 'near-chart') {
     await q(() => window.__cam('top'));
     // ZOOM_MIN: about 22 m over the truck, a frame ~23 m across — every art
@@ -163,6 +173,7 @@ for (const station of ['near-chart', 'chase-strip']) {
   }
 }
 // ── AND THE SWARD'S OWN PER-BLADE HALF, ON THE SAME BOOT ──
+// eslint-disable-next-line no-lone-blocks
 //
 // Phase D's remainder is two terms the seeder cannot reach — how tall a tuft
 // grows and what share of its plants are flowers — and `__swardmic` is their
@@ -170,7 +181,7 @@ for (const station of ['near-chart', 'chase-strip']) {
 // frame's lower half rather than the near chart: the sward draws to 140 m and
 // a 23 m box would measure a handful of tufts. A place with no grass in it
 // reads as the floor, correctly, and the head line above says which this was.
-{
+if (wants('sward')) {
   await q(() => window.__cam('chase'));
   await q(() => window.__tdetail({ micro: 1, relief: 0.35 }));
   await d.page.waitForTimeout(6000);
@@ -193,6 +204,60 @@ for (const station of ['near-chart', 'chase-strip']) {
       crop, '--gain=8'], { encoding: 'utf8' });
     const m = out.match(/mean luma delta[^\n]*/);
     console.log(`  [sward] ${label.padEnd(24)} ${m ? m[0].trim() : out.trim().split('\n').pop()}`);
+  }
+}
+// ── AND HOW LOUD THE GENERIC CASCADE IS AGAINST THE MATERIAL SYSTEM ──
+//
+// The review's standing objection: after building an increasingly specific
+// material model, a fairly loud GENERIC luminance hierarchy is still laid
+// under it — 15 m mottle, 4 m, 1 m, 0.25 m at amplitudes up to 0.085 — and at
+// 4 m especially that occupies the same perceptual territory as the substrate
+// it sits beneath. This answers it with numbers instead of an opinion.
+//
+// IT IS ONLY A MEASUREMENT NOW THAT THE PEDESTAL FOLLOWS THE DIAL. `amount 0`
+// used to leave the 0.955 base standing, so "cascade off" carried a 4.5%
+// luminance step of its own and no frame taken across that dial could separate
+// the cascade from a brightness change. See the note at the cascade itself.
+if (wants('cascade')) {
+  await q(() => window.__cam('chase'));
+  await q(() => window.__tdetail({ micro: 1, relief: 0.35, sub: 1, amount: 1, oct: 3 }));
+  await d.page.waitForTimeout(6000);
+  const cLegs = [
+    ['all', { oct: 3, amount: 1, sub: 1 }],
+    ['all-b', { oct: 3, amount: 1, sub: 1 }],
+    ['no-quarter', { oct: 2 }], ['no-metre', { oct: 1 }], ['mottle-only', { oct: 0 }],
+    ['cascade-off', { oct: 3, amount: 0 }],
+    ['substrate-off', { oct: 3, amount: 1, sub: 0 }],
+  ];
+  for (const [tag, o] of cLegs) {
+    await q((v) => window.__tdetail(v), o);
+    await d.page.waitForTimeout(500);
+    writeFileSync(`${OUT}/casc-${tag}.png`, await d.page.screenshot({ timeout: 240000 }));
+  }
+  await q(() => window.__tdetail({ oct: 3, amount: 1, sub: 1 }));
+  const box = await q(() => {
+    const c = document.querySelector('canvas');
+    const r = c ? c.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+  });
+  // The whole drawn ground, not just band D's strip: the 4 m and 1 m octaves
+  // reach a long way further out than the half-metre does.
+  const crop = `--crop=${box.x + Math.round(box.w * 0.1)},${box.y + Math.round(box.h * 0.25)},`
+    + `${Math.round(box.w * 0.8)},${Math.round(box.h * 0.55)}`;
+  for (const [a2, b2, label] of [
+    ['all', 'all-b', 'floor'],
+    ['all', 'no-quarter', 'the 0.25 m octave alone'],
+    ['no-quarter', 'no-metre', 'the 1 m octave alone'],
+    ['no-metre', 'mottle-only', 'the 4 m octave alone'],
+    ['mottle-only', 'cascade-off', 'the 15 m mottle alone'],
+    ['all', 'cascade-off', 'THE WHOLE CASCADE'],
+    ['all', 'substrate-off', 'THE WHOLE SUBSTRATE'],
+  ]) {
+    const out = execFileSync('node', [new URL('./imgdiff.mjs', import.meta.url).pathname,
+      `${OUT}/casc-${a2}.png`, `${OUT}/casc-${b2}.png`, `${OUT}/casc-d-${a2}-${b2}.png`,
+      crop, '--gain=8'], { encoding: 'utf8' });
+    const m = out.match(/mean luma delta[^\n]*/);
+    console.log(`  [cascade] ${label.padEnd(26)} ${m ? m[0].trim() : out.trim().split('\n').pop()}`);
   }
 }
 const errs = await q(() => window.__errors?.() ?? []);
