@@ -13682,9 +13682,49 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       const want = ezRecord((f) => EZ_DEMAND
         ? Math.min(cand[f].length, ezCapNominal(f))
         : ezCapNominal(f));            // ?treedemand=0 — the old all-families divisor
-      const cost = ezCostAt(want);
-      ezScaleNow = cost > 0 ? clamp(treeTriBudget / cost, 0, 1) : 1;
-      ezCapNow = ezRecord((f) => Math.floor(want[f] * ezScaleNow));
+      // ── WATER-FILLING, BECAUSE PROPORTIONAL CUTTING PUNISHES A THIN WOOD ──
+      //
+      // The first cut of this divided the budget in proportion to demand, and
+      // MEASURED WORSE for the family it was meant to help: at Yosemite
+      // broadleaf has about 600 candidates against a nominal cap of 1600, so
+      // the old rule's over-allocation (1600 x 0.46 = 735 slots for 600 trees)
+      // let every one of them stand, while a proportional share (600 x 0.748 =
+      // 449) cut a quarter of them and brought the edge IN from 700 m to 671.
+      // A fix that moves the number the seat complained about in the wrong
+      // direction is not a fix.
+      //
+      // So the budget is filled rather than divided: a family that wants less
+      // than its share TAKES WHAT IT WANTS and hands the rest back, and the
+      // round repeats until nobody is over-served. What is left over is split
+      // among the families that can still use it. This is the standard
+      // construction and it has the two properties the proportional rule
+      // lacked — nobody is capped below what they would have drawn anyway, and
+      // the total never exceeds the budget, which the "nominal x scale"
+      // shortcut cannot promise.
+      const pool = new Set(EZ_FAMILIES.filter((f) => want[f] > 0));
+      const cap = ezRecord(() => 0);
+      let left = treeTriBudget;
+      for (let round = 0; round < EZ_FAMILIES.length + 1 && pool.size; round++) {
+        let share = 0;
+        for (const f of pool) share += ezCapNominal(f) * ezMeanTris(f);
+        const sc = share > 0 ? clamp(left / share, 0, 1) : 1;
+        // Anyone whose whole demand fits inside its share is settled here, at
+        // its demand and not at its share.
+        let settled = false;
+        for (const f of [...pool]) {
+          if (want[f] <= ezCapNominal(f) * sc) {
+            cap[f] = want[f]; left -= want[f] * ezMeanTris(f);
+            pool.delete(f); settled = true;
+          }
+        }
+        if (!settled) { for (const f of pool) cap[f] = Math.floor(ezCapNominal(f) * sc); break; }
+      }
+      ezCapNow = cap;
+      // Reported as the share of the nominal caps the round ended on, which is
+      // what `cap %` has always meant in the dump.
+      let nom = 0, got = 0;
+      for (const f of EZ_FAMILIES) { nom += ezCapNominal(f); got += cap[f]; }
+      ezScaleNow = nom > 0 ? got / nom : 1;
     }
     for (const fam of EZ_FAMILIES) {
       let list = cand[fam];

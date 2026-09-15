@@ -35,11 +35,16 @@ async function run(demand) {
   const q = (f, ...a) => d.page.evaluate(f, ...a);
   // The population has to SETTLE: a refresh is sliced across frames and the
   // caps are re-derived every sweep, so an early read is of a half-filled ring.
+  // THE POPULATION SETTLES, NOT THE FRAME COUNT. A refresh is sliced across
+  // frames and the caps are re-derived every sweep, so an early read is of a
+  // half-filled ring — and `slots` is the ALLOCATION, which grows and never
+  // shrinks, so it settles long before the trees do. The signal is the drawn
+  // triangle count, which moves with every admission.
   let quiet = 0, pp = -1;
   for (let i = 0; i < SECS / 3; i++) {
     await d.page.waitForTimeout(3000);
     const e = await q(() => window.__ez());
-    const n = e.placed ?? e.slots ?? 0;
+    const n = e.tris ?? 0;
     quiet = (n === pp && n > 0) ? quiet + 1 : 0; pp = n;
     if (quiet >= 3) break;
   }
@@ -54,17 +59,28 @@ console.log(`[${el()}] all-families divisor read`);
 const on = await run(1);
 console.log(`[${el()}] demand divisor read\n`);
 
-const row = (k, a, b) => console.log(`  ${k.padEnd(14)} ${String(a).padStart(14)}   ${String(b).padStart(14)}`);
-console.log(`── ${FIX} · ${off.settled && on.settled ? 'settled' : 'NOT SETTLED'} · errors ${off.errs}/${on.errs}`);
-console.log(`  ${''.padEnd(14)} ${'treedemand=0'.padStart(14)}   ${'demand'.padStart(14)}`);
-for (const k of ['capScale', 'placed', 'tris', 'budget']) {
-  if (off.ez[k] !== undefined) row(k, off.ez[k], on.ez[k]);
-}
-const fams = Object.keys(off.ez.edge ?? off.ez.caps ?? {});
+const row = (k, a, b, note = '') => console.log(
+  `  ${k.padEnd(16)} ${String(a).padStart(9)} ${String(b).padStart(9)}  ${note}`);
+const fams = Object.keys(off.ez.caps ?? {});
+// `__ez()` reports a per-family object, not a flat count — the first cut of
+// this tool printed `[object Object]` for a whole column, which is a tool
+// reporting nothing and looking like it reported something.
+const drawn = (e, f) => (e[f]?.n ?? e[f]?.placed ?? '—');
+
+console.log(`── ${FIX} · ${off.settled && on.settled ? 'settled' : 'NOT SETTLED — read as provisional'}`
+  + ` · errors ${off.errs}/${on.errs}`);
+console.log(`  ${''.padEnd(16)} ${'all-fams'.padStart(9)} ${'demand'.padStart(9)}`);
+row('capScale', off.ez.capScale, on.ez.capScale);
+row('tris drawn', off.ez.tris ?? '—', on.ez.tris ?? '—', `of budget ${on.ez.budget}`);
 for (const f of fams) {
-  row(`edge ${f}`, off.ez.edge?.[f] ?? '—', on.ez.edge?.[f] ?? '—');
-  row(`cap ${f}`, off.ez.caps?.[f] ?? '—', on.ez.caps?.[f] ?? '—');
+  const grows = (off.ez.caps[f] ?? 0) > 0 || (on.ez.caps[f] ?? 0) > 0;
+  const absent = (on.ez.caps[f] ?? 0) === 0;
+  row(`${f} cap`, off.ez.caps?.[f] ?? '—', on.ez.caps?.[f] ?? '—',
+    absent ? '← the place grows none' : '');
+  row(`${f} edge`, off.ez.edge?.[f] ?? '—', on.ez.edge?.[f] ?? '—',
+    absent ? '' : (on.ez.edge?.[f] ?? 0) < (off.ez.edge?.[f] ?? 0) ? 'WORSE — came in' : '');
+  if (!grows) continue;
 }
-console.log(`\nThe edge is where a tree appears. A family the place does not grow`);
-console.log(`should move neither column; the ones it does grow should move out.`);
-console.log(JSON.stringify({ off: off.ez, on: on.ez }, null, 1).slice(0, 1400));
+console.log(`\n  range ${on.ez.tuning?.range}m — the EDGE is where a tree appears, and a family`);
+console.log(`  whose edge equals the range is not capped at all. A family the place does`);
+console.log(`  not grow should take no budget; one it grows should not come IN.`);
