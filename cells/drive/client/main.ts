@@ -82,7 +82,7 @@ import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight, uFacSun } from './facade';
 import { roofFx } from './roof-fx';
 import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, SUBSTRATE_VIEWS, groundInkPixels, type GroundViewId } from './ground-view';
-import { SUB_GLSL, SUB_DOM_M, subEvidence, subExpressOf, subGrainOf, subLayerTint,
+import { SUB_GLSL, SUB_DOM_M, subDomainAt, subEvidence, subExpressOf, subGrainOf, subLayerTint,
   subGrassAllow, SUB_SWARD_K, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
   type SubstrateField } from './substrate-field';
 import { gramDecode } from './facade-grammar';
@@ -2198,6 +2198,20 @@ const SUB_SWARD = qsOn('swardsub', true);
  *  Two thirds reads as grass growing out of that ground rather than as grass
  *  painted the colour of it. */
 const SUB_SWARD_TINT = 0.65;
+/** ── WHAT AN ENGINEERED CUT FACE EXPOSES ──
+ *
+ *  The geomorphic field is derived from the DEM before the corridor is carved,
+ *  so it describes the hillside that was there and a road cut is a fresh steep
+ *  face the field still calls a grassy slope. These three lift what is LATENT
+ *  rather than painting a scar: a cut through a hillside exposes that
+ *  hillside's own rock and its own regolith, which is the whole reason to
+ *  route it through the field's vocabulary. The turf goes because a bank cut
+ *  last season has none.
+ *
+ *  They are fractions of the room LEFT (x += k(1-x)), so a cut through ground
+ *  the field already calls bare cannot push past one, and a cut through a
+ *  meadow lifts a great deal. Interpolated into the fragment. */
+const SUB_CUT_EX = 0.62, SUB_CUT_MANTLE = 0.34, SUB_CUT_GRASS = 0.85;
 /** `airblur=1` puts the aerial perspective's DISTANCE BLUR back — the term that
  *  mixed the far field toward `softTex` as well as toward the haze colour. Off
  *  by default: see `uAirBlur`. The exact A/B for the far-field sharpness. */
@@ -6982,7 +6996,24 @@ function terrainFx(mat: THREE.Material, opts: {
             }
           }
         }
-        diffuseColor.rgb *= 0.955 + d * uTdAmt;
+        // ── THE PEDESTAL FOLLOWS THE DIAL, SO amount=0 IS AN EXACT A/B ──
+        //
+        // The base 0.955 is one minus the mottle's own amplitude and it is
+        // FIXED on purpose: every octave here has zero mean, so a pedestal
+        // that shrank as octaves faded would lift the far field by the whole
+        // cascade amplitude and draw a bright horizon against dark ground at
+        // the truck. That reasoning is about the live octave SUM and is
+        // untouched. What was wrong is that the pedestal did not follow the
+        // DIAL either — so an amount of 0, the control every cascade-versus-
+        // substrate comparison is taken against, still multiplied the world by
+        // 0.955 and carried a 4.5% luminance step no screenshot could separate
+        // from the thing under test.
+        //
+        // mix() fixes both at once: at amount 1 this is 0.955 + d exactly as
+        // before, at 0 it is 1.0 exactly, and at 4 it is a quadrupled
+        // amplitude under a quadrupled pedestal — which is the mean held, the
+        // property the fixed base exists for.
+        diffuseColor.rgb *= mix(1.0, 0.955 + d, uTdAmt);
         // ── AND UNDER THE TEXTURE, THE SUBSTRATE ──
         //
         // Everything above is a BRIGHTNESS at four wavelengths, and the seat's
@@ -7028,6 +7059,27 @@ function terrainFx(mat: THREE.Material, opts: {
           // layers onto a colour the frame never shows.
           vec3 pc = diffuseColor.rgb;
           float lum = dot(pc, vec3(0.2126, 0.7152, 0.0722));
+          // ── AND WHAT THE ENGINEERING CUT, WHICH THE LANDFORM CANNOT KNOW ──
+          //
+          // The field is derived from the DEM before the corridor is carved,
+          // so it describes the hillside that WAS there; a road cut is a fresh
+          // face in the mesh that the field still calls a grassy slope. The
+          // kernel marks those vertices by the SIGN of the bed slope (see
+          // mats[i*4+2]) — a channel the fragment read nowhere — and the zero
+          // crossing between a cut vertex and the natural ground at its toe is
+          // the blend a toe wants.
+          //
+          // It LIFTS what is latent rather than replacing it: a cut through a
+          // hillside exposes that hillside's own rock and regolith, which is
+          // the whole reason to route it through the field's vocabulary
+          // instead of painting a generic scar. And it takes the turf and the
+          // soil with it, because a bank cut last season has neither.
+          float cutFace = clamp(-vTd.z * 3.0, 0.0, 1.0);
+          if (cutFace > 0.002) {
+            e.y = clamp(e.y + cutFace * ${SUB_CUT_EX} * (1.0 - e.y), 0.0, 1.0);
+            e.x = clamp(e.x + cutFace * ${SUB_CUT_MANTLE} * (1.0 - e.x), 0.0, 1.0);
+            e.z *= 1.0 - cutFace * ${SUB_CUT_GRASS};
+          }
           // ── EACH LAYER'S OWN STRUCTURE, EACH IN ITS OWN BAND ──
           //
           // Tones, not weights: the field decides WHAT is here and these decide
@@ -8107,9 +8159,32 @@ function subCellAt(x: number, z: number): { ex: number; db: number; sd: number; 
   }
   const f = subCellF;
   if (!f) return null;
+  const ex0 = sampleSubstrate(f, x, z, SUB_CH.exposure);
+  const db0 = sampleSubstrate(f, x, z, SUB_CH.debris);
+  // ── AND THE 18 m EXPRESSION, WHICH THE SWARD WAS NOT SEEING ──
+  //
+  // The field's lattice is about thirty-three metres; the fragment then shifts
+  // exposure and the mantle either way by an 18 m domain noise, and THAT is
+  // what makes outcrop stand out of fill rather than average with it. So the
+  // shader's rock islands are an 18 m pattern and the sward was reading the
+  // 33 m field underneath them: the two agreed about the landform and could
+  // disagree entirely about which particular patch of it is stone — which is
+  // the scale a tuft actually stands at, and the comment claiming they cannot
+  // hold different opinions was not quite true.
+  //
+  // THIS IS THE PORT, AND IT IS THE INTERIM. `subDomainAt` is a float64
+  // re-implementation of the shader's `subDomain`, agreeing to about a part in
+  // 1e5, and held to the domain's own statistics by substrate-field.test. The
+  // better answer is a shared intermediate expression field — roughly 30 m for
+  // morphology, 8-15 m for surface fragmentation, and true microstructure left
+  // procedural in the fragment — so that every consumer reads one answer at
+  // ecologically meaningful scales rather than two implementations of one
+  // noise. That costs a finer lattice and its upload and is its own unit; this
+  // closes the disagreement that actually reaches the frame in the meantime.
+  const dom = subDomainAt(x, z, SUB_DOM_M);
   return {
-    ex: sampleSubstrate(f, x, z, SUB_CH.exposure),
-    db: sampleSubstrate(f, x, z, SUB_CH.debris),
+    ex: Math.max(0, Math.min(1, ex0 + (dom - 0.5) * 0.55 * (1 - Math.abs(ex0 * 2 - 1) * 0.5))),
+    db: Math.max(0, Math.min(1, db0 + (dom - 0.5) * 0.30)),
     sd: sampleSubstrate(f, x, z, SUB_CH.soilDepth),
     gp: sampleSubstrate(f, x, z, SUB_CH.grassPot),
   };
@@ -34702,7 +34777,7 @@ function tdMatAt(x: number, z: number): object | null {
   // Every built tile, nearest vertex wins. A probe, so the sweep is affordable
   // and worth more than a key lookup that could disagree with the geometry: the
   // question is what the SHADER got, not what the raster says.
-  let best = Infinity, rough = 0, grain = 0, slope = 0, cover = 0, cr = 0, cg = 0, cb = 0;
+  let best = Infinity, rough = 0, grain = 0, slope = 0, cut = 0, cover = 0, cr = 0, cg = 0, cb = 0;
   for (const mesh of terrainMeshes.values()) {
     const at = mesh.geometry.getAttribute('aTd');
     const pos = mesh.geometry.getAttribute('position');
@@ -34713,7 +34788,11 @@ function tdMatAt(x: number, z: number): object | null {
       const dx = pos.getX(i) + ox - x, dz = pos.getZ(i) + oz - z;
       const d = dx * dx + dz * dz;
       if (d < best) {
-        best = d; rough = at.getX(i); grain = at.getY(i); slope = at.getZ(i);
+        best = d; rough = at.getX(i); grain = at.getY(i);
+        // THE BED SLOPE CARRIES THE CUT FACE AS ITS SIGN — see mats[i*4+2] in
+        // the kernel. Reported as two numbers here because one signed float
+        // reads as a negative slope, which is not a thing.
+        const sl = at.getZ(i); slope = Math.abs(sl); cut = sl < 0 ? 1 : 0;
         cover = at.itemSize > 3 ? at.getW(i) : 0;
         if (col) { cr = col.getX(i); cg = col.getY(i); cb = col.getZ(i); }
       }
@@ -34742,6 +34821,11 @@ function tdMatAt(x: number, z: number): object | null {
     ? null : subExpressOf(ex, db, sd, gpot, veg, grain);
   return {
     rough: +rough.toFixed(3), grain: +grain.toFixed(3), slope: +slope.toFixed(3),
+    // …and whether the ENGINEERING cut this face. The field is derived from the
+    // DEM before the corridor is carved, so a road cut is the one surface the
+    // landform cannot describe; the kernel marks it as the sign of the bed
+    // slope and the fragment lifts the latent rock and regolith there.
+    cut,
     // The class the VIEW paints, read off the same vertex — so "the cover
     // layer says forest and the ground is bare" is one line rather than a
     // guess about which raster answered.

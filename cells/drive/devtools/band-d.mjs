@@ -88,8 +88,13 @@ const legs = [
 const pairs = [
   ['mic0', 'mic0-b', 'floor-off'], ['mic1', 'mic1-b', 'floor-on'],
   ['mic0', 'mic1', 'SIGNAL'], ['mic1', 'mic2', 'micro 1 vs 2'],
+  // Band D's COLOUR on its own, with the lighting normal taken out of both
+  // sides. Band D's own relief share is this subtracted from the SIGNAL —
+  // stated that way rather than as a pair, because mic1-flat against mic1 is
+  // the WHOLE substrate relief and not this band's part of it, which is what
+  // the first cut of this tool mislabelled it as.
   ['mic0-flat', 'mic1-flat', 'colour only (relief 0)'],
-  ['mic1-flat', 'mic1', 'the relief band D buys'],
+  ['mic1-flat', 'mic1', 'all substrate relief (NOT band D\'s share)'],
 ];
 
 for (const station of ['near-chart', 'chase-strip']) {
@@ -129,12 +134,26 @@ for (const station of ['near-chart', 'chase-strip']) {
     writeFileSync(`${OUT}/${station}-${tag}.png`, await d.page.screenshot({ timeout: 240000 }));
   }
   await q(() => window.__tdetail({ micro: 1, relief: 0.35 }));
-  const box = await q(() => ({ w: window.innerWidth, h: window.innerHeight }));
-  // The near chart is band D edge to edge; the chase frame is band D in the
-  // bottom fifth and the horizon everywhere above it.
+  // ── THE CROP IS THE CANVAS'S OWN RECT, NOT THE WINDOW'S ──
+  //
+  // The first cut cropped the chase station to the bottom fifth of the WINDOW
+  // and read exactly 0.000 on all six pairs including the floor — which is not
+  // a quiet term, it is a measurement of a region the renderer does not draw
+  // into. On this device the world ends about seventeen per cent above the
+  // window's foot. Diffed whole, the same pair reads 0.755/255 over 5.84% of
+  // the frame, and scanned by rows the near ground is 2.587 over 20.13%. A
+  // crop stated in window fractions is a crop of an assumption.
+  const box = await q(() => {
+    const c = document.querySelector('canvas');
+    const r = c ? c.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+  });
+  // The near chart is band D edge to edge; from the seat the band is the
+  // NEAR GROUND — a strip a few tens of metres deep, which on a canvas this
+  // shape is its lower quarter and not its foot.
   const crop = station === 'near-chart'
-    ? `--crop=${Math.round(box.w * 0.1)},${Math.round(box.h * 0.1)},${Math.round(box.w * 0.8)},${Math.round(box.h * 0.8)}`
-    : `--crop=${Math.round(box.w * 0.1)},${Math.round(box.h * 0.8)},${Math.round(box.w * 0.8)},${Math.round(box.h * 0.2)}`;
+    ? `--crop=${box.x + Math.round(box.w * 0.1)},${box.y + Math.round(box.h * 0.1)},${Math.round(box.w * 0.8)},${Math.round(box.h * 0.8)}`
+    : `--crop=${box.x + Math.round(box.w * 0.1)},${box.y + Math.round(box.h * 0.62)},${Math.round(box.w * 0.8)},${Math.round(box.h * 0.25)}`;
   for (const [a, b, label] of pairs) {
     const out = execFileSync('node', [new URL('./imgdiff.mjs', import.meta.url).pathname,
       `${OUT}/${station}-${a}.png`, `${OUT}/${station}-${b}.png`, `${OUT}/${station}-d-${a}-${b}.png`,

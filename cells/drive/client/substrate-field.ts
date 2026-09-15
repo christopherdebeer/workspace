@@ -98,6 +98,22 @@ export const SUB_K = Object.freeze({
   snowLo: 0.005, snowHi: 0.045,
   coverGrass: 0.8, coverMantle: 0.45, rockCover: 0.85,
   grassLo: 0.28, grassHi: 0.82, grassVegLo: 0.01, grassVegHi: 0.13, grassFace: 0.55,
+  // ── AND THE CANOPY, WHICH IS NOT GRASS AND CONCEALS MORE THAN GRASS DOES ──
+  //
+  // A wood's floor is covered — by litter, by shade, by shrubs — and none of
+  // that is grass, so it reached the expression through no term at all. It
+  // showed the moment vegetation left the LATENT channels, exactly as it
+  // should have: a 25 degree wooded hillside came out expressing 0.264 of rock
+  // against bare ground's 0.306, a fourteen per cent difference where a canopy
+  // should hide most of the stone.
+  //
+  // The two inputs are already here and neither is a new channel: `veg` is the
+  // palette's own greenness (a wood is green, a scree is not) and soil depth
+  // says whether there is anything for that green to be rooted in — so a green
+  // wash over a bare face, which is what the raster gives a lichen slope,
+  // conceals nothing. Grass keeps its own term because a meadow and a wood are
+  // different surfaces and the tint downstream is not the same.
+  canopyLo: 0.05, canopyHi: 0.28, canopySoil: 0.03, canopySoilHi: 0.22, coverCanopy: 0.62,
   dampTone: 0.14,
 });
 const K = SUB_K;
@@ -415,7 +431,13 @@ vec3 subExpress(float ex, float db, float sd, float gpot, float veg, float grain
   float grass = smoothstep(${K.grassLo}, ${K.grassHi}, gpot)
               * smoothstep(${K.grassVegLo}, ${K.grassVegHi}, veg)
               * (1.0 - ex * ${K.grassFace});
-  float cover = clamp(grass * ${K.coverGrass} + mantle * ${K.coverMantle}, 0.0, 1.0);
+  // A CANOPY IS NOT GRASS. See canopyLo in SUB_K: a wood's floor is concealed
+  // by litter and shade, which reached this arithmetic through no term at all
+  // once vegetation stopped deciding the latent channels.
+  float canopy = smoothstep(${K.canopyLo}, ${K.canopyHi}, veg)
+               * smoothstep(${K.canopySoil}, ${K.canopySoilHi}, sd);
+  float cover = clamp(grass * ${K.coverGrass} + mantle * ${K.coverMantle}
+    + canopy * ${K.coverCanopy}, 0.0, 1.0);
   return vec3(mantle, ex * (1.0 - cover * ${K.rockCover}) * mineral, grass);
 }
 // ── AND THE COMPOSITE, IN ORDER OF DEPOSITION ──
@@ -607,6 +629,19 @@ export interface SubstrateInput {
   /** WorldCover class at a world point, or null where the raster has not
    *  reached — which is a real answer and abstains rather than voting. */
   cover: (x: number, z: number) => number | null;
+  /** ── THE NEIGHBOUR'S GROUND, FOR THE GUTTER ──
+   *
+   *  Raw elevation at a world point in `data`'s OWN datum, or null where no
+   *  height tile has landed there. Every process in this file works at tens or
+   *  hundreds of metres — slope over 33, curvature over 100, relief over 200,
+   *  a debris walk over 200 — which is exactly the scale at which a terrain
+   *  tile's edge is an arbitrary line, and before this the whole model saw a
+   *  plateau beyond it. The worker already mirrors the neighbouring height
+   *  tiles and `S.sampleHeight` already crosses them; the builder simply never
+   *  asked. It is optional so the pure tests and any caller without a
+   *  heightfield around this one degrade to the old clamped behaviour rather
+   *  than failing. */
+  height?: (x: number, z: number) => number | null;
 }
 /**
  * ── THE DERIVATION ──
@@ -653,41 +688,131 @@ export function buildSubstrateCells(inp: SubstrateInput): { a: Uint8Array; b: Ui
   };
   const N = inp.n, cellM = inp.w / N;
   const step = 256 / N;                       // raster pixels a cell (4 at N=64)
-  // ── 1. THE LANDFORM, NOT THE PIXEL ── the mean of each block rather than a
-  // point sample: a point sample at 33 m carries every spike the DEM has, and
-  // the whole purpose of this lattice is to describe the shape of the hill.
-  const lo = new Float32Array(N * N);
-  for (let j = 0; j < N; j++) {
-    for (let i = 0; i < N; i++) {
-      let s = 0, m = 0;
-      for (let b = 0; b < step; b++) {
-        for (let a = 0; a < step; a++) { s += inp.data[(j * step + b) * 256 + (i * step + a)]; m++; }
+  // ── 0. THE GUTTER ── every process below works at tens or hundreds of
+  // metres and a tile edge is an arbitrary line at that scale, so the lattice
+  // is built G cells WIDER than the tile on every side and the central N² is
+  // emitted. G is 6 because the debris walk is the deepest reader — six cells
+  // of fall line — so with six the walk can leave the tile without ever
+  // running out of ground to walk over. Before this the whole model saw a
+  // PLATEAU past the edge: `at` clamped, the walk broke, and slope, curvature,
+  // relief and every apron below a cliff in the next tile were discontinuous
+  // along a line nobody chose.
+  const G = 6, M = N + 2 * G;
+  // The raster's 256 samples span the tile EDGE TO EDGE on a w/255 pitch, not
+  // at pixel centres on a w/256 one; extending pixel indices past the range
+  // and mapping them through that same pitch is what makes the gutter
+  // continuous with the interior by construction rather than by a fudge.
+  const pxW = inp.w / 255, pxH = inp.h / 255;
+  const H = inp.height;
+  const clampPx = (p: number): number => (p < 0 ? 0 : p > 255 ? 255 : p);
+  // ── 1. THE LANDFORM, AND THE CLIFF THE LANDFORM AVERAGES AWAY ──
+  //
+  // `lo` is the mean of each block, as it always was: a point sample at 33 m
+  // carries every spike the DEM has, and the whole purpose of this lattice is
+  // to describe the SHAPE of the hill.
+  //
+  // BUT A MEAN DESTROYS THE ONE FEATURE THIS MODEL IS MOST WANTED FOR. A
+  // narrow cliff, a rocky rib, an outcrop edge or a natural escarpment has a
+  // very high NATIVE gradient and a moderate mean-to-mean gradient across two
+  // 33 m cells — so the normal map drew the feature while the substrate model
+  // simultaneously decided it was not exposed rock, and the 18 m domain noise
+  // was left to invent outcrops somewhere else entirely. Two more numbers a
+  // cell fix that and they cost no extra READS at all: the block's height
+  // RANGE and the steepest ADJACENT-PIXEL step inside it, both accumulated in
+  // the pass that was already computing the mean. The window is (step+1)²
+  // rather than step² so a cliff lying exactly on a block boundary is seen by
+  // the blocks on both sides of it.
+  const lo = new Float32Array(M * M);
+  const hiRange = new Float32Array(M * M);    // metres of relief inside one cell
+  const hiStep = new Float32Array(M * M);     // steepest adjacent-sample rise
+  {
+    const row = new Float32Array(step + 1);
+    for (let jj = 0; jj < M; jj++) {
+      for (let ii = 0; ii < M; ii++) {
+        const bi = (ii - G) * step, bj = (jj - G) * step;
+        const k = jj * M + ii;
+        // THE GUTTER IS SAMPLED COARSER, AND THAT IS A BUDGET DECISION SAID
+        // OUT LOUD. A full (step+1)² window over the whole gutter is ~42,000
+        // sampler calls a tile against ~15,000 for a 3x3 — and what the gutter
+        // is FOR is the landform the interior's windows and the debris walk
+        // reach into, not its own micro-relief, which is emitted for no cell.
+        const inside = bi >= 0 && bj >= 0 && bi + step <= 255 && bj + step <= 255;
+        if (!inside && H) {
+          let sum = 0, cnt = 0, mn = Infinity, mx = -Infinity, dmax = 0;
+          const sp = step * 0.5;              // 3x3 over the cell, half-cell pitch
+          const g3: number[] = [];
+          for (let b = 0; b <= 2; b++) {
+            for (let a = 0; a <= 2; a++) {
+              const p = bi + a * sp, q = bj + b * sp;
+              let v = H(inp.xs + p * pxW, inp.zs + q * pxH);
+              // No neighbour loaded: the old clamped plateau, which is a worse
+              // answer and the only one there is.
+              if (v === null || v === undefined || v !== v) {
+                v = inp.data[clampPx(Math.round(q)) * 256 + clampPx(Math.round(p))];
+              }
+              g3.push(v); sum += v; cnt++;
+              if (v < mn) mn = v; if (v > mx) mx = v;
+            }
+          }
+          for (let b = 0; b < 3; b++) {
+            for (let a = 0; a < 3; a++) {
+              if (a < 2) { const d = Math.abs(g3[b * 3 + a + 1] - g3[b * 3 + a]); if (d > dmax) dmax = d; }
+              if (b < 2) { const d = Math.abs(g3[(b + 1) * 3 + a] - g3[b * 3 + a]); if (d > dmax) dmax = d; }
+            }
+          }
+          lo[k] = sum / cnt; hiRange[k] = mx - mn;
+          // The 3x3's steps are half a cell apart, not one raster pixel, so
+          // the rise is scaled back to the pixel pitch the interior reports in
+          // — otherwise the gutter would read as systematically gentler than
+          // the tile it surrounds and every edge would grow a false soft band.
+          hiStep[k] = dmax / Math.max(1, sp);
+          continue;
+        }
+        let sum = 0, cnt = 0, mn = Infinity, mx = -Infinity, dmax = 0, prev = 0;
+        for (let b = 0; b <= step; b++) {
+          for (let a = 0; a <= step; a++) {
+            const v = inp.data[clampPx(bj + b) * 256 + clampPx(bi + a)];
+            if (v < mn) mn = v; if (v > mx) mx = v;
+            if (a < step && b < step) { sum += v; cnt++; }
+            if (a > 0) { const d = v - prev; if (d > dmax) dmax = d; else if (-d > dmax) dmax = -d; }
+            prev = v;
+            if (b > 0) { const d = v - row[a]; if (d > dmax) dmax = d; else if (-d > dmax) dmax = -d; }
+            row[a] = v;
+          }
+        }
+        lo[k] = sum / Math.max(1, cnt); hiRange[k] = mx - mn; hiStep[k] = dmax;
       }
-      lo[j * N + i] = s / Math.max(1, m);
     }
   }
-  const at = (j: number, i: number): number =>
-    lo[Math.min(N - 1, Math.max(0, j)) * N + Math.min(N - 1, Math.max(0, i))];
-  // ── 2. THE EVIDENCE ── slope, aspect, curvature at two scales, relief and
-  // relative elevation over a ~200 m window.
-  const slope = new Float32Array(N * N), curv = new Float32Array(N * N);
-  const relief = new Float32Array(N * N), relEl = new Float32Array(N * N);
-  const gx = new Float32Array(N * N), gz = new Float32Array(N * N);
+  // Tile-cell coordinates, clamped to the GUTTERED lattice — so a window that
+  // reaches past the tile edge now finds the neighbour's ground, and only one
+  // past the gutter finds a plateau.
+  const gk = (j: number, i: number): number =>
+    Math.min(M - 1, Math.max(0, j + G)) * M + Math.min(M - 1, Math.max(0, i + G));
+  const at = (j: number, i: number): number => lo[gk(j, i)];
+    // ── 2. THE EVIDENCE ── slope, aspect, curvature at two scales, relief and
+  // relative elevation over a ~200 m window. All of it over the GUTTERED
+  // lattice, because every one of these is what the interior's own windows and
+  // the debris walk reach into.
+  const slope = new Float32Array(M * M), curv = new Float32Array(M * M);
+  const relief = new Float32Array(M * M), relEl = new Float32Array(M * M);
+  const gx = new Float32Array(M * M), gz = new Float32Array(M * M);
   const R = 3;
-  for (let j = 0; j < N; j++) {
-    for (let i = 0; i < N; i++) {
+  for (let jj = 0; jj < M; jj++) {
+    for (let ii = 0; ii < M; ii++) {
+      const j = jj - G, i = ii - G, k = jj * M + ii;
       const dx = (at(j, i + 1) - at(j, i - 1)) / (2 * cellM);
       const dz = (at(j + 1, i) - at(j - 1, i)) / (2 * cellM);
-      slope[j * N + i] = Math.hypot(dx, dz);
-      gx[j * N + i] = dx; gz[j * N + i] = dz;
-      const h = lo[j * N + i];
+      slope[k] = Math.hypot(dx, dz);
+      gx[k] = dx; gz[k] = dz;
+      const h = lo[k];
       // Two bands of curvature: the lattice's own ~33 m, which sees an
       // outcrop's shoulder, and ~100 m, which sees the hillside it sits on.
       const cNear = (at(j, i - 1) + at(j, i + 1) + at(j - 1, i) + at(j + 1, i)) * 0.25 - h;
       const cFar = (at(j, i - 3) + at(j, i + 3) + at(j - 3, i) + at(j + 3, i)) * 0.25 - h;
       // Normalised so that a pronounced shoulder or hollow — about a
       // twentieth of the span it is measured over — reads 1.
-      curv[j * N + i] = Math.max(-1, Math.min(1,
+      curv[k] = Math.max(-1, Math.min(1,
         (cNear / (cellM * 0.05)) * 0.45 + (cFar / (cellM * 3 * 0.05)) * 0.55));
       // relief and relEl are filled by the separable pass below — a square
       // window's min and max are two one-dimensional passes, 14 reads a cell
@@ -699,36 +824,45 @@ export function buildSubstrateCells(inp: SubstrateInput): { a: Uint8Array; b: Ui
   // instead of one of (2R+1)². Measured on a real-sized tile, and the figure
   // is the measurement rather than the estimate that was written here first:
   // 8.48 ms a build to 6.82. The window is a fifth of the cost, not all of it
-  // — the rest is the 65,536-pixel downsample and the per-cell cover read.
+  // — the rest is the downsample and the per-cell cover read.
   {
-    const rmn = new Float32Array(N * N), rmx = new Float32Array(N * N);
-    for (let j = 0; j < N; j++) {
-      for (let i = 0; i < N; i++) {
+    const rmn = new Float32Array(M * M), rmx = new Float32Array(M * M);
+    for (let jj = 0; jj < M; jj++) {
+      for (let ii = 0; ii < M; ii++) {
         let mn = Infinity, mx = -Infinity;
-        for (let a = -R; a <= R; a++) { const v = at(j, i + a); if (v < mn) mn = v; if (v > mx) mx = v; }
-        rmn[j * N + i] = mn; rmx[j * N + i] = mx;
+        for (let a = -R; a <= R; a++) { const v = at(jj - G, ii - G + a); if (v < mn) mn = v; if (v > mx) mx = v; }
+        rmn[jj * M + ii] = mn; rmx[jj * M + ii] = mx;
       }
     }
-    for (let j = 0; j < N; j++) {
-      for (let i = 0; i < N; i++) {
+    for (let jj = 0; jj < M; jj++) {
+      for (let ii = 0; ii < M; ii++) {
         let mn = Infinity, mx = -Infinity;
         for (let b = -R; b <= R; b++) {
-          const jj = Math.min(N - 1, Math.max(0, j + b));
-          if (rmn[jj * N + i] < mn) mn = rmn[jj * N + i];
-          if (rmx[jj * N + i] > mx) mx = rmx[jj * N + i];
+          const j2 = Math.min(M - 1, Math.max(0, jj + b));
+          if (rmn[j2 * M + ii] < mn) mn = rmn[j2 * M + ii];
+          if (rmx[j2 * M + ii] > mx) mx = rmx[j2 * M + ii];
         }
         const span = mx - mn;
-        relief[j * N + i] = span;
+        relief[jj * M + ii] = span;
         // A flat window has no floor and no crest, and dividing by its span
         // would turn float noise into a landform. Half is "neither".
-        relEl[j * N + i] = span > 1 ? (lo[j * N + i] - mn) / span : 0.5;
+        relEl[jj * M + ii] = span > 1 ? (lo[jj * M + ii] - mn) / span : 0.5;
       }
     }
   }
-  // ── 3. THE COVER'S OWN WORD ── a wood or a crop is a statement that soil is
-  // there and outranks a slope estimated from a 9.5 m DEM; bare ground argues
-  // the other way; snow hides whatever is under it and must not read as
-  // bedrock. Unmapped abstains.
+  // ── 3. THE COVER'S OWN WORD, AND WHERE IT IS NOW ALLOWED TO SPEAK ──
+  //
+  // A wood or a crop is a statement that SOIL is there; bare ground argues the
+  // other way; snow hides whatever is under it. Unmapped abstains.
+  //
+  // WHAT CHANGED IS WHICH QUESTION IT ANSWERS. It used to sit inside exposure
+  // and debris — so vegetation decided whether bedrock and scree EXISTED, and
+  // a grass-covered cliff stopped being a cliff at all. That is backwards for
+  // the model this has converged on: the landform says what is latently there,
+  // and the cover says how much of it is VISIBLE. So it is read only for the
+  // interior now (the gutter needs no cover at all, which is also why the
+  // guttered lattice costs no extra cover reads) and feeds soil, grass and
+  // the expression downstream rather than the latent channels.
   const bare = new Float32Array(N * N), veg = new Float32Array(N * N), grassBias = new Float32Array(N * N);
   for (let j = 0; j < N; j++) {
     for (let i = 0; i < N; i++) {
@@ -741,27 +875,53 @@ export function buildSubstrateCells(inp: SubstrateInput): { a: Uint8Array; b: Ui
       grassBias[k] = c === 30 ? 1 : c === 20 ? 0.7 : c === 40 ? 0.6 : c === 10 ? 0.45 : c === 100 ? 0.4 : c === 60 ? 0.12 : 0.1;
     }
   }
-  // ── 4. EXPOSURE — bedrock showing ── CONTINUOUS, never thresholded, because
-  // 0.3 must mean "grass with stones and bedrock peeking through" and 0.9 a
-  // bare face. A threshold here is what makes the whole thing read as a
-  // material classifier again.
-  const exposure = new Float32Array(N * N);
-  for (let k = 0; k < N * N; k++) {
-    const sl = sstepF(0.25, 0.90, slope[k]);
+  // ── 4. EXPOSURE — THE BEDROCK THAT IS LATENTLY THERE ── CONTINUOUS, never
+  // thresholded, because 0.3 must mean "grass with stones and bedrock peeking
+  // through" and 0.9 a bare face. A threshold here is what makes the whole
+  // thing read as a material classifier again.
+  //
+  // ── AND IT IS A STATEMENT ABOUT THE SHAPE OF THE GROUND, NOTHING ELSE ──
+  //
+  // Five terms, all geomorphic. The first three are the correction: a 33 m
+  // mean-to-mean slope cannot see a cliff narrower than its own cell, so the
+  // steepest native step inside the cell and the cell's own height range are
+  // read beside it. That is what turns real DEM structure into visible
+  // outcrops instead of asking an 18 m noise to invent them afterwards — the
+  // landform is full of rocky ribs and escarpments the mean averages flat.
+  //
+  // `bare` and `veg` are GONE from here on purpose (see section 3). A
+  // grass-covered cliff is still a cliff; what the grass decides is how much
+  // of it breaks through, and that decision belongs to subExpress.
+  const exposure = new Float32Array(M * M);
+  for (let k = 0; k < M * M; k++) {
+    const sl = sstepF(0.25, 0.90, slope[k]);                  // the landform's own grade
+    const peak = sstepF(0.30, 1.20, hiStep[k] / (cellM / step)); // the steepest native step in the cell
+    const rug = sstepF(2.5, 16.0, hiRange[k]);                // and how much relief it holds
     const convex = cl01(-curv[k]);
     const rlf = cl01(relief[k] / 120);
-    exposure[k] = cl01(sl * 0.45 + convex * 0.20 + rlf * 0.20 + bare[k] * 0.20 - veg[k] * 0.25);
+    exposure[k] = cl01(sl * 0.34 + peak * 0.26 + rug * 0.18 + convex * 0.10 + rlf * 0.12);
   }
   // ── 5. DEBRIS — what the face above shed ── this is the causal relationship
   // that reads instantly as geology: rock face above implies broken material
   // below. Walked UPHILL along the gradient, so the answer is "how much
   // exposed rock stands over me", and the walk is what makes a scree apron a
   // TONGUE rather than a blob.
+  //
+  // THE WALK NOW LEAVES THE TILE. It used to `break` at the edge, so an apron
+  // whose cliff stood in the next tile had no cliff above it at all and the
+  // scree simply stopped at a line on the map. It walks the guttered lattice
+  // instead — six cells of fall line, which is exactly why the gutter is six
+  // — and only runs out of ground past that.
+  //
+  // `bare` and `veg` are gone from here with the same reasoning as exposure:
+  // an apron is an apron whatever has colonised it, and WorldCover at 10 m
+  // calls a scree slope with tussocks on it grassland. What the tussocks
+  // decide is how much of it shows, and that is subExpress's decision.
   const debris = new Float32Array(N * N);
   const UP = 6;                                  // ~200 m of fall line
   for (let j = 0; j < N; j++) {
     for (let i = 0; i < N; i++) {
-      const k = j * N + i;
+      const k = j * N + i, kg = gk(j, i);
       // ── A WEIGHTED MAX, NOT A MEAN, AND THE TEST CAUGHT THE DIFFERENCE ──
       //
       // The first cut averaged the exposure along the walk and normalised by
@@ -773,56 +933,89 @@ export function buildSubstrateCells(inp: SubstrateInput): { a: Uint8Array; b: Ui
       // above me, and how far up" — a MAX over the walk, faded with distance.
       let fi = i, fj = j, best = 0;
       for (let s = 1; s <= UP; s++) {
-        const kk = Math.min(N - 1, Math.max(0, Math.round(fj))) * N + Math.min(N - 1, Math.max(0, Math.round(fi)));
+        const kk = gk(Math.round(fj), Math.round(fi));
         const g = Math.hypot(gx[kk], gz[kk]);
         if (g < 1e-4) break;
         fi += gx[kk] / g; fj += gz[kk] / g;      // +gradient is uphill
-        if (fi < 0 || fj < 0 || fi > N - 1 || fj > N - 1) break;
+        if (fi < -G || fj < -G || fi > N - 1 + G || fj > N - 1 + G) break;
         const w = 1 - (s - 1) / (UP + 1);        // the face just above counts most
-        const e = exposure[Math.round(fj) * N + Math.round(fi)] * w;
+        const e = exposure[gk(Math.round(fj), Math.round(fi))] * w;
         if (e > best) best = e;
       }
       const upslope = best;
-      const toe = cl01(curv[k]);                                   // material rests where it flattens
-      const mid = bump(slope[k], 0.45, 0.40);                      // steep enough to receive, shallow enough to hold
-      // The vegetation penalty is GENTLE here, where it is firm for exposure:
-      // WorldCover at 10 m calls a scree apron with tussocks in it grassland,
-      // and a penalty stiff enough to respect that erases the one landform
-      // this channel exists to draw. A face is unmistakable to the raster; an
-      // apron is not.
-      debris[k] = cl01(upslope * 0.52 + toe * 0.25 + mid * 0.20 + bare[k] * 0.20 - veg[k] * 0.12);
+      const toe = cl01(curv[kg]);                                  // material rests where it flattens
+      const mid = bump(slope[kg], 0.45, 0.40);                     // steep enough to receive, shallow enough to hold
+      // ── AND NOTHING RESTS ON A FACE ──
+      //
+      // Scree stands at its angle of repose, about 35 to 38 degrees; above
+      // that the material is in transit and not in residence. Measured at the
+      // Stelvio the moment vegetation left this channel and exposure rose to
+      // match the landform: the walk's own answer — "there is a face above
+      // me" — is loudest exactly ON the face, so debris went 0.26 to 0.55 on
+      // a wall, every cell on the pass crossed the family rule's `loose`
+      // threshold, and four rock families within a hundred and fifty metres
+      // (massive, bedded, fractured, loose) collapsed to rubble everywhere.
+      // The bedding, the joint sets and the massive mottle were written for
+      // precisely the surfaces that lost them.
+      const repose = 1 - sstepF(0.75, 1.15, slope[kg]);
+      debris[k] = cl01(upslope * 0.52 + toe * 0.24 + mid * 0.20) * repose;
     }
   }
-  // ── 6. MOISTURE, SOIL, GRASS ── a topographic wetness proxy and what grows
-  // on it. The hydro field remains the authority on actual water and the
-  // climate on how much there is to begin with; this is only about where it
-  // goes once it has fallen.
+  // ── 6. ACCUMULATION, SOIL, GRASS ── where water and fines END UP once they
+  // have fallen, and what grows on that. The hydro field remains the authority
+  // on actual water and the climate on how much there is to begin with.
+  //
+  // THE `moisture` CHANNEL IS AN ACCUMULATION POTENTIAL AND NOT A WETNESS, and
+  // it is worth saying so in the one place that writes it: it is pure
+  // topography, so an arid depression in the Karoo and a Scottish hollow score
+  // the same. Everything downstream that reads it as dampness — the damp tone
+  // in subMantleTone above all — inherits that. Multiplying it by the climate's
+  // own water here is the honest correction and it is NOT made in this unit:
+  // the builder closes over nothing and takes no climate, so it would need a
+  // new input threaded through the kernel and the worker, and that is its own
+  // change with its own measurement. Named here so the next reader argues with
+  // the claim rather than with the channel.
+  //
+  // ── AND THIS IS WHERE THE COVER CLASS SPEAKS NOW ──
+  //
+  // Vegetation left exposure and debris in this unit; soil and grass are where
+  // it belongs, and where it always partly was. A wood is a statement that
+  // there is rooting depth here, bare ground that there is not, and the
+  // expression system reads soil and grassPot to decide how much of the latent
+  // stone breaks through. That is the same evidence doing a better-posed job.
   const a = new Uint8Array(N * N * 4), bOut = new Uint8Array(N * N * 4);
-  for (let k = 0; k < N * N; k++) {
-    const concave = cl01(curv[k]);
-    const moisture = cl01(concave * 0.40 + (1 - relEl[k]) * 0.42 + (1 - cl01(slope[k])) * 0.18);
-    const soil = cl01((1 - cl01(slope[k] / 0.6)) * 0.30 + concave * 0.25 + moisture * 0.20 + veg[k] * 0.20
-      - exposure[k] * 0.35 - debris[k] * 0.20);
-    const grassPot = cl01(soil * 0.45 + moisture * 0.25 + bump(slope[k], 0.12, 0.5) * 0.15 + grassBias[k] * 0.25
-      - exposure[k] * 0.35 - debris[k] * 0.15);
-    // ── THE ROCK'S STRUCTURE, BY CONTEXT ── broken where the debris is, and
-    // between massive and bedded by whether the hillside has contour
-    // expression: high relief on a steep face is a cliff of blocks, moderate
-    // relief on a moderate slope is where ledges and bands read.
-    const ledge = bump(slope[k], 0.35, 0.35) * cl01(relief[k] / 90);
-    const family = debris[k] > 0.45 ? 1
-      : 0.333 * cl01(ledge * 1.6) + 0.666 * cl01((debris[k] - 0.25) * 2) * 0.5;
-    const g = Math.hypot(gx[k], gz[k]) || 1;
-    a[k * 4] = Math.round(exposure[k] * 255);
-    a[k * 4 + 1] = Math.round(debris[k] * 255);
-    a[k * 4 + 2] = Math.round(soil * 255);
-    a[k * 4 + 3] = Math.round(moisture * 255);
-    bOut[k * 4] = Math.round(grassPot * 255);
-    bOut[k * 4 + 1] = Math.round(cl01(family) * 255);
-    // Downhill, which is the axis every anisotropic warp downstream is written
-    // in: scree elongates along it, wet ground follows it, strata cross it.
-    bOut[k * 4 + 2] = Math.round((cl01(-gx[k] / g * 0.5 + 0.5)) * 255);
-    bOut[k * 4 + 3] = Math.round((cl01(-gz[k] / g * 0.5 + 0.5)) * 255);
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const k = j * N + i, kg = gk(j, i);
+      const concave = cl01(curv[kg]);
+      const moisture = cl01(concave * 0.40 + (1 - relEl[kg]) * 0.42 + (1 - cl01(slope[kg])) * 0.18);
+      const soil = cl01((1 - cl01(slope[kg] / 0.6)) * 0.28 + concave * 0.22 + moisture * 0.18
+        + veg[k] * 0.26 - bare[k] * 0.18
+        - exposure[kg] * 0.35 - debris[k] * 0.20);
+      const grassPot = cl01(soil * 0.45 + moisture * 0.22 + bump(slope[kg], 0.12, 0.5) * 0.13
+        + grassBias[k] * 0.30 - exposure[kg] * 0.32 - debris[k] * 0.15);
+      // ── THE ROCK'S STRUCTURE, BY CONTEXT ── broken where the debris is, and
+      // between massive and bedded by whether the hillside has contour
+      // expression: high relief on a steep face is a cliff of blocks, moderate
+      // relief on a moderate slope is where ledges and bands read. It remains
+      // procedural morphology standing in for lithology, and is not worth
+      // tuning hard until a regional geology seed exists to key it on.
+      const ledge = bump(slope[kg], 0.35, 0.35) * cl01(relief[kg] / 90);
+      const family = debris[k] > 0.45 ? 1
+        : 0.333 * cl01(ledge * 1.6) + 0.666 * cl01((debris[k] - 0.25) * 2) * 0.5;
+      const g = Math.hypot(gx[kg], gz[kg]) || 1;
+      a[k * 4] = Math.round(exposure[kg] * 255);
+      a[k * 4 + 1] = Math.round(debris[k] * 255);
+      a[k * 4 + 2] = Math.round(soil * 255);
+      a[k * 4 + 3] = Math.round(moisture * 255);
+      bOut[k * 4] = Math.round(grassPot * 255);
+      bOut[k * 4 + 1] = Math.round(cl01(family) * 255);
+      // Downhill, which is the axis every anisotropic warp downstream is
+      // written in: scree elongates along it, wet ground follows it, strata
+      // cross it.
+      bOut[k * 4 + 2] = Math.round((cl01(-gx[kg] / g * 0.5 + 0.5)) * 255);
+      bOut[k * 4 + 3] = Math.round((cl01(-gz[kg] / g * 0.5 + 0.5)) * 255);
+    }
   }
   return { a, b: bOut };
 }
@@ -877,7 +1070,8 @@ export function subExpressOf(ex: number, db: number, sd: number, gpot: number,
   const mantle = sstep(K.mantleLo, K.mantleHi, sd * K.mantleSoil + db * K.mantleDebris) * mineral;
   const grass = sstep(K.grassLo, K.grassHi, gpot) * sstep(K.grassVegLo, K.grassVegHi, veg)
     * (1 - ex * K.grassFace);
-  const cover = cl(grass * K.coverGrass + mantle * K.coverMantle);
+  const canopy = sstep(K.canopyLo, K.canopyHi, veg) * sstep(K.canopySoil, K.canopySoilHi, sd);
+  const cover = cl(grass * K.coverGrass + mantle * K.coverMantle + canopy * K.coverCanopy);
   return { mantle, rock: ex * (1 - cover * K.rockCover) * mineral, grass };
 }
 
@@ -958,7 +1152,20 @@ export const SUB_SWARD_K = Object.freeze({
  * halving away.
  */
 export function subGrassAllow(e: SubExpress, debris: number, soilDepth: number): number {
-  const scree = debris / Math.max(debris + soilDepth, 1e-3);
-  const mineral = Math.min(1, e.rock + scree * SUB_SWARD_K.scree * (1 - e.rock));
+  // ── AND THE COARSE SHARE IS A RATIO, WHICH IS NOT AN AMOUNT ──
+  //
+  // The first cut read `debris / (debris + soilDepth)` and thinned on that
+  // directly. A ratio answers "is what mantle there is coarse or fine", and on
+  // ground with almost no mantle at all — debris 0.05 over soil 0.01 — it
+  // answers 0.83, so a fixture the substrate expresses six per cent of rock on
+  // was losing a fifth of its sward to stones that are not there. Measured at
+  // Camps Bay: mean density -23.6% against a mean expressed rock of 0.061.
+  //
+  // Multiplying the ratio by the debris itself asks the question this actually
+  // wants — HOW MUCH coarse material is lying here — and leaves the ratio
+  // doing the one job it is good at, telling a scree apron from a silt flat.
+  const total = Math.max(debris + soilDepth, 1e-3);
+  const coarse = debris * (debris / total);
+  const mineral = Math.min(1, e.rock + coarse * SUB_SWARD_K.scree * (1 - e.rock));
   return 1 - SUB_SWARD_K.thin * mineral;
 }

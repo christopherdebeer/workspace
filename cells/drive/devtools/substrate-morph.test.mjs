@@ -31,7 +31,8 @@ mkdirSync(OUT, { recursive: true });
 const BUNDLE = join(OUT, 'substrate-field.mjs');
 execSync(`npx esbuild ${join(CELL, 'client/substrate-field.ts')} --bundle --platform=node --format=esm --outfile=${BUNDLE}`,
   { stdio: 'inherit' });
-const { buildSubstrateCells, sampleSubstrate, SUB_CH, SUB_FIELD_N, rockFamilyOf } = await import(BUNDLE);
+const { buildSubstrateCells, sampleSubstrate, SUB_CH, SUB_FIELD_N, rockFamilyOf,
+  subExpressOf, subGrainOf } = await import(BUNDLE);
 
 const TILE = 2150;                                  // metres, a z14 tile at 28N
 
@@ -131,16 +132,120 @@ const ok = (name, cond, detail = '') => {
   ok('the floor holds soil', floorS > 0.35, `soil ${floorS.toFixed(2)}`);
 }
 
-// ── THE COVER'S WORD ── the same hillside, mapped bare and mapped wooded.
+// ── THE COVER'S WORD, AND WHERE IT IS NOW ALLOWED TO SPEAK ──
+//
+// The same hillside, mapped bare and mapped wooded. This block used to assert
+// the opposite of what it asserts now, and the change is the point: latent
+// exposure is a statement about the SHAPE of the ground, so a grass-covered
+// cliff is still a cliff and the two must come out IDENTICAL. What the wood
+// decides is how much of that stone breaks through, which is subExpressOf's
+// job and is measured here beside it rather than assumed.
 {
   const hill = (u, v) => 1000 + v * 4;
   const bare = field(hill, () => 60), wood = field(hill, () => 10);
   const eb = at(bare, 128, 128, SUB_CH.exposure), ew = at(wood, 128, 128, SUB_CH.exposure);
   const gb = at(bare, 128, 128, SUB_CH.grassPot), gw = at(wood, 128, 128, SUB_CH.grassPot);
+  const sb = at(bare, 128, 128, SUB_CH.soilDepth), sw = at(wood, 128, 128, SUB_CH.soilDepth);
+  const db = at(bare, 128, 128, SUB_CH.debris), dw = at(wood, 128, 128, SUB_CH.debris);
   console.log(`one hillside: exposure bare ${eb.toFixed(2)} wooded ${ew.toFixed(2)}`
-    + ` · grassPot bare ${gb.toFixed(2)} wooded ${gw.toFixed(2)}`);
-  ok('bare ground reads as more exposed than a wood', eb > ew + 0.2, `${eb.toFixed(2)} vs ${ew.toFixed(2)}`);
-  ok('a wood is not bedrock', ew < 0.3, `exposure ${ew.toFixed(2)}`);
+    + ` · soil ${sb.toFixed(2)}/${sw.toFixed(2)} · grassPot ${gb.toFixed(2)}/${gw.toFixed(2)}`);
+  ok('the LATENT exposure is the landform\'s, whatever grows on it',
+    Math.abs(eb - ew) < 0.02, `${eb.toFixed(3)} vs ${ew.toFixed(3)}`);
+  ok('…and the debris it sheds is too', Math.abs(db - dw) < 0.02, `${db.toFixed(3)} vs ${dw.toFixed(3)}`);
+  ok('a wood holds more soil than bare ground', sw > sb + 0.08, `${sb.toFixed(2)} vs ${sw.toFixed(2)}`);
+  ok('…and more grass potential', gw > gb + 0.05, `${gb.toFixed(2)} vs ${gw.toFixed(2)}`);
+  // …AND THE EXPRESSION IS WHERE THE WOOD WINS. veg here is the PALETTE's own
+  // greenness, which this pure test has no palette for, so representative
+  // values are passed and named: bare ground is not green, a wood is.
+  const xb = subExpressOf(eb, db, sb, gb, 0.0, subGrainOf(60));
+  const xw = subExpressOf(ew, dw, sw, gw, 0.35, subGrainOf(10));
+  console.log(`  expressed rock: bare ${xb.rock.toFixed(3)} wooded ${xw.rock.toFixed(3)}`
+    + ` · grass ${xb.grass.toFixed(2)}/${xw.grass.toFixed(2)}`);
+  ok('far less of the stone breaks through a wood', xw.rock < xb.rock * 0.8,
+    `${xb.rock.toFixed(3)} vs ${xw.rock.toFixed(3)}`);
+  ok('…and it is never erased entirely — a wood on rock is still on rock', xw.rock > 0.0001,
+    `${xw.rock.toFixed(4)}`);
+}
+
+// ── A CLIFF NARROWER THAN A CELL SURVIVES THE DOWNSAMPLE ──
+//
+// The lattice is a 33 m mean and this is the feature it destroys: a 25 m step
+// over one 8 m raster pixel has an enormous NATIVE gradient and a mean-to-mean
+// gradient of about a third, so before the block's own height range and its
+// steepest adjacent step were carried beside the mean, the normal map drew the
+// escarpment and the substrate simultaneously decided it was not rock.
+{
+  const flat = field(() => 1000);
+  const rib = field((u, v) => 1000 + (v >= 128 ? 25 : 0));
+  const ef = at(flat, 128, 100, SUB_CH.exposure);
+  // SCANNED, NOT POINT-SAMPLED. `at` is bilinear over a 33 m lattice and the
+  // step is one raster pixel wide, so a reading taken exactly on it is the
+  // escarpment's cell averaged with the plain's — which is the right answer
+  // for a point and the wrong instrument for "does the model see this at all".
+  let er = 0, erAt = 0;
+  for (let v = 96; v <= 160; v++) {
+    const e = at(rib, 128, v, SUB_CH.exposure);
+    if (e > er) { er = e; erAt = v; }
+  }
+  console.log(`a one-pixel escarpment: peak exposure ${er.toFixed(2)} at v=${erAt}`
+    + ` (${at(rib, 128, 128, SUB_CH.exposure).toFixed(2)} sampled on the step itself)`
+    + ` against flat ground ${ef.toFixed(2)}`);
+  ok('the rib reads as exposed rock', er > 0.45, `exposure ${er.toFixed(2)}`);
+  ok('…and the plain beside it does not', ef < 0.1, `exposure ${ef.toFixed(2)}`);
+}
+
+// ── THE MORPHOLOGY CROSSES A TILE EDGE ──
+//
+// Slope over 33 m, curvature over 100, a relief window over 200 and a debris
+// walk over 200 are all processes at a scale where a terrain tile's boundary
+// is an arbitrary line — and the field used to see a PLATEAU past it: `at`
+// clamped and the walk `break`ed, so an apron whose cliff stood in the next
+// tile had no cliff above it and the scree stopped dead on the seam.
+//
+// The world here is flat up to the boundary and then rises 80 m over a hundred
+// metres just INSIDE the eastern neighbour. Tile A's own raster never sees that
+// face. With a height sampler it now walks into it; without one it cannot, and
+// the pair is the control — an assertion that does not fail on the behaviour it
+// names is decoration.
+{
+  // World metres: flat, then a face starting 40 m past tile A's eastern edge.
+  const W = (x) => {
+    const d = x - (TILE + 40);
+    return 1000 + (d <= 0 ? 0 : d >= 100 ? 80 : d * 0.8);
+  };
+  const tileAt = (xs, withSampler) => {
+    const data = new Float32Array(256 * 256);
+    for (let v = 0; v < 256; v++) for (let u = 0; u < 256; u++) data[v * 256 + u] = W(xs + (u / 255) * TILE);
+    const inp = { data, xs, zs: 0, w: TILE, h: TILE, n: SUB_FIELD_N, cover: () => 30 };
+    if (withSampler) inp.height = (x) => W(x);
+    const { a: fa, b: fb } = buildSubstrateCells(inp);
+    return { n: SUB_FIELD_N, xs, zs: 0, w: TILE, h: TILE, a: fa, b: fb };
+  };
+  // The easternmost interior cell of tile A, in world metres.
+  const eastX = TILE - (TILE / SUB_FIELD_N) * 0.5, midZ = TILE * 0.5;
+  const blind = tileAt(0, false), seeing = tileAt(0, true);
+  const dBlind = sampleSubstrate(blind, eastX, midZ, SUB_CH.debris);
+  const dSee = sampleSubstrate(seeing, eastX, midZ, SUB_CH.debris);
+  const eBlind = sampleSubstrate(blind, eastX, midZ, SUB_CH.exposure);
+  const eSee = sampleSubstrate(seeing, eastX, midZ, SUB_CH.exposure);
+  console.log(`across a tile edge: debris under a cliff in the NEXT tile`
+    + ` — blind ${dBlind.toFixed(2)}, with the neighbour ${dSee.toFixed(2)}`
+    + ` (exposure ${eBlind.toFixed(2)} -> ${eSee.toFixed(2)})`);
+  ok('the apron finds the face across the boundary', dSee > dBlind + 0.15,
+    `${dBlind.toFixed(2)} vs ${dSee.toFixed(2)}`);
+  ok('…and the control is blind to it, which is what makes that a measurement',
+    dBlind < 0.2, `blind debris ${dBlind.toFixed(2)}`);
+  // …AND THE TWO TILES AGREE ON THE SEAM. Both see the same neighbourhood now,
+  // so the shared edge is one landform read twice rather than two plateaux.
+  const east = tileAt(TILE, true);
+  const seamA = sampleSubstrate(seeing, TILE - 1, midZ, SUB_CH.exposure);
+  const seamB = sampleSubstrate(east, TILE + 1, midZ, SUB_CH.exposure);
+  const seamAb = sampleSubstrate(blind, TILE - 1, midZ, SUB_CH.exposure);
+  const seamBb = sampleSubstrate(tileAt(TILE, false), TILE + 1, midZ, SUB_CH.exposure);
+  console.log(`  the seam itself: ${seamA.toFixed(2)} | ${seamB.toFixed(2)}`
+    + ` (blind: ${seamAb.toFixed(2)} | ${seamBb.toFixed(2)})`);
+  ok('the two tiles agree across the seam', Math.abs(seamA - seamB) < 0.12,
+    `${seamA.toFixed(2)} vs ${seamB.toFixed(2)}`);
 }
 
 // ── FLOW POINTS DOWNHILL ── the axis every anisotropic warp downstream reads.

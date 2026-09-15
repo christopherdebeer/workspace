@@ -10708,3 +10708,289 @@ transforms': bedrock pulls the chroma out and cools, fines oxidise warm, grass
 greens, **none of the three moves luminance by more than a fifth of a palette
 step**, a zero share leaves the palette exactly alone, and `subGrainOf` answers
 0 for snow and water and nothing else.
+
+## Band D: the half-metre had two owners, and the cover class was one of them
+
+The brief put this band last and was right to — *5-50 m coherent domains +
+0.5-5 m material structure, not micro-detail first* — but the band was never
+EMPTY. The detail cascade's third octave has drawn at 0.25 m since long before
+any of this, keyed on the COVER class through `rough` and `grain`, so a metre
+from the wheel a granite face and a ploughed field wore the same speckle. A
+cover class is the one thing that cannot tell them apart.
+
+**EACH LAYER HAS ITS OWN NOW.** `subRockMicro` is crystal speckle (a sharpened
+noise, so it reads as flecks rather than a damp wash), hairline cracks square
+to the dip and along it, and pitting where the family is broken; `subMantleMicro`
+is crumb on fines and sparse thresholded chips on scree, so the two read as
+different SURFACES and not as one noise at two gains.
+
+- **THEY SIT INSIDE `subRockTone` AND `subMantleTone`, NOT BESIDE THEM**, and
+  that is what makes the relief free: `subRelief` differentiates those two
+  numbers and nothing else, so a crack recesses and a crystal stands proud with
+  no second field, no second uniform and no second decision about where the
+  light is. Measured: of the band's whole effect, **just over half is colour
+  and just under half is the relief it buys** (0.767 of 1.642).
+- **AND THE CASCADE'S THIRD OCTAVE STANDS DOWN WHERE THEY DRAW.** The
+  stand-down is the MINERAL share, `(e.x + e.y) × uSubAmt`, because that is
+  exactly how much of band D reaches the frame — the micro terms are weighted
+  by those shares in the composite. So a scree apron hands the band over
+  entirely and a meadow, where band D says almost nothing, keeps its octave
+  exactly where it was. The 1 m and 4 m octaves are untouched: the substrate
+  says nothing at those scales through a micro term.
+- **WHICH FORCED THE FIELD TO BE READ ONCE, ABOVE BOTH CONSUMERS.** The shares
+  used to be expressed inside the substrate block, below the cascade, because
+  nothing above them needed to know. A second read would have been a second
+  opinion about the same ground. `veg` moved up with it and is exactly
+  unchanged by the move — a chroma ratio over its own luminance is invariant
+  under the cascade's scalar multiply.
+- **`uSubMic` (`__tdetail({micro})`, 0..2) IS THE DIAL**, scaling the micro
+  terms and the stand-down together, so `micro 0` is the exact world before
+  band D and the comparison is one settled boot. Every other measurement in
+  this programme is held to that and this one had no way to meet it otherwise.
+
+**Measured**, the Stelvio (`46.5302, 10.4547`), one settled world, NOON, clear:
+
+| near chart, 0.07 m an art pixel | mean /255 | pixels moved >3 |
+|---|---|---|
+| floor (the same setting, twice) | **0.002 / 0.000** | 0.02% / 0% |
+| **SIGNAL, micro 0 against 1** | **1.642** | **12.77%** |
+| …of which colour alone (relief 0) | 0.767 | 7.62% |
+| micro 1 against 2 | 1.520 | 10.95% |
+
+…and from the SEAT, scanned by rows, the near ground reads **2.587/255 over
+20.13% of its band** against a floor of exactly 0.000 — the Stelvio chase floor
+has been exactly zero since phase C, which is what makes that attribution
+clean.
+
+**THE HAIRLINES ARE NEARLY INVISIBLE AND THAT IS CORRECT.** They are 3 cm wide
+on a 0.45 m spacing, and `subLine`'s own phase filter fades them out by about
+0.13 m an art pixel — so at the near chart's 0.07 they are half a pixel and
+already half gone. What actually carries band D is the isotropic grain, crumb
+and chips at 0.11-0.28 m, which are one and a half to four pixels there. They
+are right and quiet; widening them past what a crack is would be the opposite
+of the band limit.
+
+**AND THE TOOL'S FIRST CROP MEASURED A REGION THE RENDERER DOES NOT DRAW INTO.**
+`band-d.mjs` cropped the chase station to the bottom fifth of the WINDOW and
+read exactly 0.000 on all six pairs INCLUDING THE FLOOR — which is not a quiet
+term, it is a measurement of nothing. On this device the world ends about
+seventeen per cent above the window's foot. It crops to the canvas's own
+`getBoundingClientRect` now. A floor of exactly zero on every pair is the tell:
+a real floor has dither in it.
+
+## The producer, rebuilt: a cliff survives the downsample and the tile edge is gone
+
+The review that prompted this said the renderer and the sward had moved on and
+`buildSubstrateCells` had not, and it was exactly right. Five things, in the
+order they were sequenced.
+
+### 1. THE MEAN DESTROYED THE ONE FEATURE THE MODEL IS MOST WANTED FOR
+
+The lattice is a 4x4 mean of the 256² raster — a 33 m cell — and that is right
+for the SHAPE of a hill and fatal for a cliff. A narrow rib, an outcrop edge or
+a natural escarpment has a very high NATIVE gradient and a moderate mean-to-mean
+gradient across two cells, so the normal map drew the feature while the
+substrate simultaneously decided it was not exposed rock, and the 18 m domain
+noise was left to invent outcrops somewhere else entirely.
+
+Two more numbers a cell fix it and **they cost no extra reads at all**: the
+block's height RANGE and the steepest ADJACENT-PIXEL step inside it, both
+accumulated in the pass that was already computing the mean. The window is
+(step+1)² rather than step² so a cliff lying exactly on a block boundary is seen
+from both sides of it.
+
+Exposure is five geomorphic terms now — landform slope 0.34, peak native step
+0.26, cell ruggedness 0.18, convexity 0.10, relief 0.12 — and the first three
+are the correction.
+
+**Measured**, a 25 m step over ONE raster pixel on otherwise flat ground:
+**peak exposure 0.50 against the plain's 0.00.** (Point-sampled exactly on the
+step it reads 0.33: `sampleSubstrate` is bilinear over a 33 m lattice, so a
+reading taken on a one-pixel feature is the escarpment's cell averaged with the
+plain's. That is the right answer for a point and the wrong instrument for
+"does the model see this at all", which is why the check scans.)
+
+### 2. THE MORPHOLOGY STOPPED AT THE TILE EDGE, AND THE WORKER ALREADY HAD THE FIX
+
+Slope over 33 m, curvature over 100, a relief window over 200 and a debris walk
+over 200 are all processes at a scale where a terrain tile's boundary is an
+arbitrary line — and the field saw a PLATEAU past it: `at` clamped, and the
+walk `break`ed.
+
+The lattice is built **G = 6 cells wider on every side** and the central N² is
+emitted. Six because the debris walk is the deepest reader. The gutter is
+sampled through `S.sampleHeight`, which the worker has always had and the
+builder never asked for; no halo is transported. **The raster's 256 samples
+span the tile edge to edge on a w/255 pitch**, so extending pixel indices past
+the range and mapping them through that same pitch is what makes the gutter
+continuous with the interior by construction rather than by a fudge.
+
+- **THE GUTTER IS SAMPLED COARSER, AND THAT IS A BUDGET DECISION SAID OUT
+  LOUD.** A full (step+1)² window over the whole gutter is ~42,000 sampler calls
+  a tile against ~15,000 for a 3x3, and what the gutter is FOR is the landform
+  the interior's windows reach into, not its own micro-relief, which is emitted
+  for no cell. Its 3x3 steps are half a cell apart, so the rise is scaled back
+  to the pixel pitch the interior reports in — otherwise every tile edge would
+  grow a false soft band.
+- **The cover is read for the INTERIOR ONLY**, which is also why the guttered
+  lattice costs no extra cover reads: after item 3 the gutter needs no cover at
+  all.
+
+**Measured**, the same synthetic world as two tiles, a cliff standing 40 m
+inside the eastern neighbour: debris at tile A's eastern edge **0.00 blind,
+0.52 with the neighbour**, and the seam itself agrees 0.04 against 0.06 where
+the blind pair read 0.00 against 0.06. The blind column is the control and it
+is the half that makes that a measurement.
+
+**AND IT COST NOTHING.** The field-plus-colour phase at the Stelvio:
+**113.51 ms a tile on the control, 111.13 and 115.24 on two runs of the fix** —
+inside the run-to-run spread, on a pass the colour loop dominates.
+
+### 3. VEGETATION WAS DECIDING WHETHER BEDROCK EXISTED
+
+`exposure` carried `+ bare*0.20 - veg*0.25` and `debris` carried
+`+ bare*0.20 - veg*0.12`, so WorldCover decided whether rock and scree existed
+at all and a grass-covered cliff stopped being a cliff. The shader's own
+comments already described the better model — the field derives from the
+landform, vegetation decides what is VISIBLE — and the producer did not.
+
+Both are gone. The cover class speaks downstream instead, where it always
+partly did: soil, grassPot, and the expression.
+
+**AND THE MOMENT IT LEFT, THE MISSING TERM SHOWED.** A 25 degree wooded
+hillside came out expressing **0.264 of rock against bare ground's 0.306** — a
+fourteen per cent difference where a canopy should hide most of the stone —
+because the only vegetative concealment `subExpress` had was GRASS, through
+`grassPot`, and a wood is not grass. `grassPot` on that hillside is 0.10,
+under the 0.28 the grass layer starts at, so the wood expressed no cover at all.
+
+`canopy` is the fix and it needed no new channel: both its inputs are already
+arguments. `veg` is the palette's own greenness (a wood is green, a scree is
+not) and `sd` says whether there is anything for that green to be rooted in, so
+a green wash over a bare face — which is what the raster gives a lichen slope —
+conceals nothing. **Measured: 0.306 bare against 0.158 wooded**, and never zero,
+because a wood on rock is still on rock.
+
+### 4. AND NOTHING RESTS ON A FACE
+
+Caught by the Stelvio the moment exposure rose to match the landform: the
+debris walk's own answer — *there is a face above me* — is loudest exactly ON
+the face, so debris on a wall went 0.26 to 0.55, every cell on the pass crossed
+the family rule's `loose` threshold, and **four rock families within a hundred
+and fifty metres collapsed to rubble everywhere**. The bedding, the joint sets
+and the massive mottle were written for precisely the surfaces that lost them.
+
+Scree stands at its angle of repose, about 35 to 38 degrees; above that the
+material is in transit and not in residence. `1 - smoothstep(0.75, 1.15, slope)`
+is the whole fix.
+
+**Measured**, the same six points at the Stelvio, control against fix:
+
+| | control | fix |
+|---|---|---|
+| exposure at six points | 0.52 · 0.40 · 0.51 · 0.47 · 0.55 · 0.80 | **0.80 · 0.72 · 0.76 · 0.83 · 0.65 · 0.89** |
+| families | loose, loose, massive, bedded, loose, fractured | loose, loose, loose, **fractured**, loose, **bedded** |
+| expressed rock on the two walls | 0.41 · 0.60 | **0.61 · 0.70** |
+
+…and on the authored cliff, **debris 0.00 on the face with 0.77 ten metres
+below it**: a cliff is a source, the apron is the store.
+
+### 5. AN ENGINEERED CUT FACE IS FRESH SUBSTRATE
+
+`buildSubstrateCells` runs BEFORE `carveCorridors`, so the field describes the
+hillside that was there and a road cut is a genuinely steep new face in the mesh
+that the field goes on calling a grassy slope. These are close, screen-large
+surfaces in chase view — the one place an anthropogenic term is worth more than
+anything the original landform can say.
+
+It rides the **SIGN of the bed slope**, not a fifth float. Nothing in the
+fragment read that channel at all (only the probe), and a sign survives
+interpolation gracefully: between a cut vertex and the natural ground at its toe
+the value crosses zero, which is exactly the blend a toe wants, where an extra
+attribute would have cost four bytes a vertex on every terrain tile in the world
+for one of them. The fragment LIFTS what is latent (`x += k(1-x)`: rock 0.62,
+mantle 0.34) and takes the turf with it (0.85), so a cut through a hillside
+exposes that hillside's own rock and regolith rather than a generic scar.
+
+**What it does not reach: the SWARD.** The seeder reads the field, and the field
+knows nothing of the corridor, so grass still grows on a cut bank at the density
+the cover class asked for. That wants the corridor in the field, not another
+attribute.
+
+### AND THE CASCADE'S PEDESTAL WAS NOT A CONTROL
+
+`diffuseColor.rgb *= 0.955 + d * uTdAmt` — so `amount 0`, the control every
+cascade-versus-substrate comparison is taken against, still multiplied the world
+by 0.955 and carried a **4.5% luminance step** that no screenshot could separate
+from the thing under test. `mix(1.0, 0.955 + d, uTdAmt)` fixes it: at 1 it is
+identical, at 0 it is exactly the palette, at 4 it is a quadrupled amplitude
+under a quadrupled pedestal. The fixed-pedestal reasoning is about the live
+octave SUM and is untouched — a pedestal that shrank as octaves faded would lift
+the far field by the whole cascade amplitude.
+
+### The sward's mineral share was a RATIO, not an amount
+
+`subGrassAllow` read `debris / (debris + soilDepth)` and thinned on it directly.
+A ratio answers "is what mantle there is coarse or fine", and on ground with
+almost no mantle at all — debris 0.05 over soil 0.01 — it answers 0.83. Measured
+at Camps Bay, a fixture the substrate expresses **six per cent** of rock on was
+losing **23.6%** of its sward to stones that are not there. Multiplying the ratio
+by the debris itself asks the question this wants — how MUCH coarse material is
+lying here — and leaves the ratio telling a scree apron from a silt flat.
+
+### …and the sward now sees the 18 m expression, through the port
+
+The field's lattice is 33 m; the fragment then shifts exposure and the mantle by
+an 18 m domain noise, and THAT is what makes outcrop stand out of fill. So the
+shader's rock islands are an 18 m pattern and the sward was reading the 33 m
+field underneath them: the two agreed about the landform and could disagree
+entirely about which patch of it is stone — which is the scale a tuft stands at,
+and the comment claiming they cannot hold different opinions was not quite true.
+
+`subCellAt` applies the same shift through `subDomainAt`, the float64 port that
+already existed for the tests. **THIS IS THE INTERIM AND IS LABELLED AS ONE.**
+The better answer is a shared intermediate expression field — roughly 30 m for
+morphology, 8-15 m for surface fragmentation, true microstructure left
+procedural in the fragment — so every consumer reads one answer at ecologically
+meaningful scales rather than two implementations of one noise. That costs a
+finer lattice and its upload and is its own unit; this closes the disagreement
+that actually reaches the frame in the meantime.
+
+### AND THE SWARD CORRELATION IS NOT A SCORE — READ IT AT THE RIGHT PLACE
+
+`__swardsub`'s correlation is between the sward's density and
+`subGrassAllow`, and at Camps Bay it reads NEGATIVE — −0.581 with the rule off
+and −0.367 with it on. That is not a regression and it is not a win either;
+it is the metric being asked a question the place cannot answer.
+
+Camps Bay is 580 wood of 1,444 sampled habitats, the substrate expresses **six
+per cent** of rock over the whole fixture and calls **2.3%** of it mineral
+enough to thin — so `allow` is nearly constant near 0.91 while the density
+varies by a factor of several between a meadow and a wood floor. A correlation
+between a nearly-constant field and a strongly-varying one is a reading of the
+residual and of the habitat mix, not of the rule. What it does say is the
+DIRECTION: turning the rule on moves it toward zero, which is the thinning
+partly cancelling an anti-correlation the cover class had put there.
+
+The Stelvio is where the substrate has something to say — mean expressed rock
+0.485, 71.4% of the field mineral enough to thin — and there it reads
+**−0.059 → +0.302**. Quote that one, with its `meanRock` beside it; a
+correlation from a fixture whose `thinnedShare` is two per cent is a
+measurement of nothing, exactly as `noField` being large would be.
+
+### What is NOT done, with the reason
+
+- **`moisture` IS AN ACCUMULATION POTENTIAL, NOT A WETNESS.** It is pure
+  topography, so an arid depression in the Karoo and a Scottish hollow score the
+  same, and everything downstream that reads it as dampness — the damp tone
+  above all — inherits that. Multiplying it by the climate's own water is the
+  honest correction and the builder closes over nothing and takes no climate, so
+  it needs a new input threaded through the kernel and the worker. Named in the
+  one place that writes it so the next reader argues with the claim.
+- **Rock family is still procedural morphology standing in for lithology.** Not
+  worth tuning hard until a regional geology seed exists to key it on.
+- **The 4 m and 1 m octaves of the cascade are untouched.** The review's point
+  that a loud generic luminance hierarchy competes with the material system
+  stands; with band D taking the half-metre and the pedestal fixed, the dials to
+  answer it with are now honest, and that is the next measurement rather than a
+  guess.

@@ -139,6 +139,7 @@ export type SubstrateBuilder = (inp: {
   data: Float32Array | Int16Array | number[];
   xs: number; zs: number; w: number; h: number; n: number;
   cover: (x: number, z: number) => number | null;
+  height?: (x: number, z: number) => number | null;
 }) => { a: Uint8Array; b: Uint8Array };
 export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFieldN: number) {
   const cutSet = new Set<StripLike>();
@@ -1564,6 +1565,21 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     const sub = buildSubstrateCells({
       data: t.data, xs: t.xs, zs: t.zs, w: t.w, h: t.h, n: subFieldN,
       cover: (x: number, z: number): number | null => S.sampleCover(x, z),
+      // ── THE NEIGHBOUR'S GROUND, WHICH THIS WORKER HAS HAD ALL ALONG ──
+      //
+      // Slope, curvature, a 200 m relief window and a 200 m debris walk are
+      // all processes at a scale where a tile edge is an arbitrary line, and
+      // the field used to see a plateau past it. The height tiles around this
+      // one are already mirrored into the worker and `sampleHeight` already
+      // crosses them; the builder simply never asked, so it now gets a gutter
+      // sampler rather than a transported halo.
+      //
+      // IN THE RASTER'S FRAME. `t.data` is absolute elevation and
+      // `sampleHeight` is local (minus baseElev) — the same pair the normal
+      // map's `beyond` reads, and mixing them there once drew every tile edge
+      // as a black line the size of the base elevation.
+      height: (x: number, z: number): number | null =>
+        S.hasHeight(x, z) ? S.sampleHeightRaw(x, z) + S.baseElev : null,
     });
     for (let i = 0; i < (refined ? 0 : (pos.length / 3)); i++) {
       const ex = pos[(i) * 3] + cxm, ez = pos[(i) * 3 + 2] + czm;
@@ -1684,7 +1700,23 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       let rough = mt ? mt[0] : 0.6, grain = mt ? mt[1] : 0.5;
       rough = Math.min(1, rough + Math.min(slope, 1) * 0.6);
       if (kind === 2) { rough = Math.min(1, rough + 0.35); grain = Math.min(1, grain + 0.3); }
-      mats[i * 4] = rough; mats[i * 4 + 1] = grain; mats[i * 4 + 2] = bedSlope;
+      // ── AN ENGINEERED CUT FACE IS FRESH SUBSTRATE, AND IT RIDES THE SIGN ──
+      //
+      // The geomorphic field is derived from the DEM before carveCorridors
+      // runs, so it describes the hillside as it was — and a road cut makes a
+      // genuinely steep new face in the MESH that the field goes on calling a
+      // grassy slope. These are close, screen-large surfaces in chase view, so
+      // it is the one place an anthropogenic term is worth more than anything
+      // the original landform can say.
+      //
+      // It is carried as the SIGN of bedSlope rather than as a fifth float.
+      // Nothing in the fragment read that channel at all — only the probe —
+      // and a sign survives interpolation gracefully: between a cut vertex and
+      // the natural ground at its toe the value crosses zero, which is exactly
+      // the blend a toe wants, where an extra attribute would have cost four
+      // bytes a vertex on every terrain tile in the world for one of them.
+      mats[i * 4] = rough; mats[i * 4 + 1] = grain;
+      mats[i * 4 + 2] = kind === 2 ? -(bedSlope + 0.02) : bedSlope;
       // The class the raster actually holds, for the ground views. One extra
       // sampleCover a vertex: the colour above reads coverPaint, which is a
       // DITHERED pair of reads and deliberately cannot answer "which class is

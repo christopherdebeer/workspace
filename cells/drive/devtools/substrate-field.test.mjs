@@ -24,8 +24,12 @@
 //     shader function and cannot be compared value for value to something that
 //     does not run here; what the fragment actually reads of it is its mean,
 //     its range and that two samples a patch apart have decorrelated. Since
-//     phase D nothing in the GAME calls that port — it is test API, and this
-//     is the test it exists for.
+//     phase D's remainder the SWARD calls that port too: the fragment shifts
+//     exposure and the mantle by an 18 m domain noise and the seeder was
+//     reading the 33 m field underneath it, so the two agreed about the
+//     landform and could disagree entirely about which patch of it is stone.
+//     Which makes this the check that holds a port the game now depends on,
+//     rather than one that holds a function only this file calls.
 import { execSync } from 'node:child_process';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -150,8 +154,13 @@ console.log('\nthe half-metre has one owner, not two:');
   const express = main.match(/=\s*subExpress\(/g) ?? [];
   check(express.length === 1,
     `the fragment expresses the shares exactly once (${express.length})`);
-  check(main.indexOf('= subExpress(') < main.indexOf('diffuseColor.rgb *= 0.955'),
+  check(main.indexOf('= subExpress(') < main.indexOf('diffuseColor.rgb *= mix(1.0, 0.955'),
     'and does it above the cascade, which is the consumer that needed moving');
+  // AND THE CASCADE'S PEDESTAL FOLLOWS ITS DIAL. A fixed 0.955 left a 4.5%
+  // luminance step at amount 0, so the control every cascade-versus-substrate
+  // comparison is taken against was not a control at all.
+  check(main.includes('diffuseColor.rgb *= mix(1.0, 0.955 + d, uTdAmt)'),
+    'amount 0 is the palette exactly, not the palette times 0.955');
   check(main.includes('float subMicro = clamp((e.x + e.y)'),
     'the stand-down is the MINERAL share — a meadow expresses almost none of it and keeps its octave');
   // AND THE HANDOVER IS ONE NUMBER IN BOTH DIRECTIONS. uSubMic scales the
