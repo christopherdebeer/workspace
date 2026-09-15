@@ -41,6 +41,20 @@ const M = await import(BUNDLE);
 let fails = 0;
 const check = (ok, what) => { console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) fails++; };
 
+console.log('the diagnostics keep their two authority contracts distinct:');
+{
+  const main = readFileSync(join(CELL, 'client/main.ts'), 'utf8');
+  const views = readFileSync(join(CELL, 'devtools/substrate-views.mjs'), 'utf8');
+  const migrationAssignments = main.match(/\.__substrate\s*=/g) ?? [];
+  const fieldAssignments = main.match(/\.__substrateField\s*=/g) ?? [];
+  check(migrationAssignments.length === 1,
+    `the production migration owns __substrate exactly once (${migrationAssignments.length})`);
+  check(fieldAssignments.length === 1,
+    `the geomorphic point probe owns __substrateField exactly once (${fieldAssignments.length})`);
+  check(views.includes('window.__substrateField()') && !views.includes('window.__substrate()'),
+    'the field visualizer reads the field probe, not the migration snapshot');
+}
+
 console.log('the constants reach the shader:');
 {
   const glsl = M.SUB_GLSL;

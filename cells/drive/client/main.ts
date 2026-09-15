@@ -7956,9 +7956,17 @@ function substrateAt(x: number, z: number, ch: number): number | null {
   const f = substrateFields.get(`${tx}/${ty}`);
   return f ? sampleSubstrate(f, x, z, ch) : null;
 }
-/** Every channel at a point, named — the probe the seat and the devtools read,
- *  and the one that makes "why is there scree here" answerable at all. */
-(window as unknown as { __substrate?: object }).__substrate = (x = state.x, z = state.z): object | null => {
+/** Every geomorphic-field channel at a point, named — the probe the seat and
+ *  the field devtools read, and the one that makes "why is there scree here"
+ *  answerable at all.
+ *
+ * `__substrate` is the older production migration/control snapshot (including
+ * reset, crossings, parity and render admission). Reusing that name here
+ * silently replaced the migration authority probe and made every cutover gate
+ * read this one point sample instead. Keep the two contracts explicit.
+ */
+(window as unknown as { __substrateField?: object }).__substrateField =
+    (x = state.x, z = state.z): object | null => {
   const [la, lo] = localToLatLon(x, z);
   const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
   const f = substrateFields.get(`${tx}/${ty}`);

@@ -80,6 +80,6 @@ for (const ch of CH) {
   const r = band(P, A);
   console.log(`${ch.padEnd(11)} ${String(r.moved).padStart(12)}%  ${String(r.tones).padStart(14)}   ${shots[ch]}`);
 }
-console.log(`\nat the truck: ${JSON.stringify(await q(() => window.__substrate()))}`);
+console.log(`\nat the truck: ${JSON.stringify(await q(() => window.__substrateField()))}`);
 console.log(`pageerrors: ${JSON.stringify((await q(() => window.__pageErrors ?? [])).slice(0, 3))}`);
 await d.close();
