@@ -229,6 +229,58 @@ float subStones(vec2 gp, float scale, float cut) {
   float cluster = tdVN(gp / (scale * 7.0)) + 0.5;
   return smoothstep(cut, cut + 0.16, n * (0.55 + cluster * 0.9));
 }
+// ── BAND D: THE HALF-METRE, AND WHOSE HALF-METRE IT IS ──
+//
+// The brief put this band last and said so — *5-50 m coherent domains +
+// 0.5-5 m material structure. Not micro-detail first* — and that was right:
+// a landscape is read at the scale of its landforms, and no amount of grain
+// makes a wash into a hillside.
+//
+// But the band was never EMPTY. The detail cascade's third octave has been
+// drawing at 0.25 m since long before any of this, keyed on the COVER class
+// through the rough and grain attributes, so a metre from the wheel a granite
+// face and a ploughed field wore the same speckle — a cover class is the one
+// thing that cannot tell them apart. What follows is the same band with the
+// material's own answer in it, and the cascade's octave stands down where it
+// draws (see the fragment) so that two noises never describe one half-metre.
+//
+// EVERY TERM HERE IS LOUD, and that is the doctrine's own rule rather than a
+// choice: one palette step is 0.07 sRGB, and a term this close to the eye is
+// as far from Nyquist as anything in the renderer ever gets. What it must not
+// do is draw at all once it cannot be resolved, which is what the bands are.
+//
+// AND IT COSTS THE RELIEF NOTHING. The lighting normal differentiates these
+// same tones, so a crack recesses and a crystal stands proud without a second
+// field, a second uniform or a second decision about where the light is.
+float subRockMicro(vec2 gp, vec2 dip, vec4 fam, float px) {
+  // The crystal grain every rock has: a sharpened noise, so it reads as a
+  // scatter of light and dark flecks rather than as a damp wash.
+  float t = 0.10 * tdGrain(tdVN(gp * 5.5), 0.85) * tdBand(px, 0.18);
+  // Hairline cracks, square to the dip and along it — the joint sets one
+  // scale down, and a crack is a SHADOW, which is the one feature this
+  // palette renders well.
+  if (px < 0.12) {
+    vec2 n = vec2(-dip.y, dip.x);
+    vec2 dir = normalize(dot(n, n) > 2.5e-3 ? n : vec2(0.31, 0.95));
+    float hair = subLine(dot(gp, dir) / 0.45, 0.07)
+               + 0.7 * subLine(dot(gp, vec2(-dir.y, dir.x)) / 0.62, 0.07);
+    t -= 0.075 * (fam.x * 0.5 + fam.z) * hair;
+  }
+  // …and a broken face is pitted rather than cracked: there is no coherent
+  // plane left in it to crack along.
+  t += 0.08 * fam.w * tdVN(gp * 9.0) * tdBand(px, 0.11);
+  return t;
+}
+float subMantleMicro(vec2 gp, float scree, float px) {
+  // Fines are crumb — soil aggregates a centimetre or two across, gently
+  // sharpened. Coarse debris is chips, which are thresholded and sparse,
+  // so the two read as different SURFACES and not as one noise at two gains.
+  float t = 0.10 * (1.0 - scree) * tdGrain(tdVN(gp * 8.0), 0.55) * tdBand(px, 0.125);
+  if (px < 0.14) {
+    t += 0.13 * scree * (subStones(gp, 0.14, 0.55) - 0.10) * tdBand(px, 0.28);
+  }
+  return t;
+}
 // ── LAYER A: THE BEDROCK'S OWN STRUCTURE, BY FAMILY ──
 //
 // A tone, not a weight: the field decides WHERE rock shows and this decides
@@ -242,7 +294,7 @@ float subStones(vec2 gp, float scale, float cut) {
 // 0.043, six tenths of a palette step, and spends its life modulating the
 // dither. The first cut's bedding was invisible in the frame while the
 // classification under it was correct.
-float subRockTone(vec3 p, vec2 gp, vec2 down, vec2 across, vec4 fam, float px) {
+float subRockTone(vec3 p, vec2 gp, vec2 down, vec2 across, vec4 fam, float px, float mic) {
   // BAND A (30-150 m): the massing every family shares — the broad tonal
   // difference between one face of an outcrop and the next, which is what
   // makes a cliff read as a cliff from a kilometre away.
@@ -275,6 +327,10 @@ float subRockTone(vec3 p, vec2 gp, vec2 down, vec2 across, vec4 fam, float px) {
   t -= 0.14 * show * (fam.x * 0.35 + fam.z) * joint;
   t += 0.05 * fam.x * tdVN(gp * 0.30) * tdBand(px, 3.3);
   t += 0.18 * fam.w * clast;
+  // BAND D (0.1-0.5 m): the crystal grain, the hairlines and the pitting. It
+  // is inside the tone rather than beside it so that the relief pass — which
+  // differentiates this one number — catches it for nothing.
+  if (px < 0.36 && mic > 0.001) t += mic * subRockMicro(gp, dip, fam, px);
   return t;
 }
 // ── LAYER B: THE REGOLITH, DEBRIS AND SOIL MANTLE ──
@@ -282,7 +338,7 @@ float subRockTone(vec3 p, vec2 gp, vec2 down, vec2 across, vec4 fam, float px) {
 // scree is the coarse share of the mantle (debris against fines) and decides
 // which of two quite different surfaces this is: a tongue of angular blocks,
 // or a wash of fines with a few stones in it.
-float subMantleTone(vec2 gp, vec2 down, vec2 across, float scree, float mo, float px) {
+float subMantleTone(vec2 gp, vec2 down, vec2 across, float scree, float mo, float px, float mic) {
   // THE APRON IS A TONGUE, NOT A BLOB. Read in the fall line's own frame,
   // nearly four times longer downhill than across, so a scree patch elongates
   // the way scree lies. This is the anisotropy the brief asked for and the
@@ -304,6 +360,10 @@ float subMantleTone(vec2 gp, vec2 down, vec2 across, float scree, float mo, floa
     // a stone catches the sky and dirt does not.
     t += 0.19 * (subStones(gp, 0.45, 0.62) - 0.12) * (0.35 + scree * 0.65) * tdBand(px, 0.9);
   }
+  // Damp ground is darker. The moisture channel is the one thing here that the
+  // BAND D (0.1-0.5 m): crumb on the fines, chips on the scree. Same reason
+  // it sits inside the tone: subRelief reads this number and nothing else.
+  if (px < 0.25 && mic > 0.001) t += mic * subMantleMicro(gp, scree, px);
   // Damp ground is darker. The moisture channel is the one thing here that the
   // palette cannot say at all, and it is why a hollow reads as a hollow.
   return t - mo * ${K.dampTone};

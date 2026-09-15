@@ -89,6 +89,117 @@ console.log('the constants reach the shader:');
   // it would show as a shader that classifies AND composites.
   check(!glsl.includes('subWeights('),
     'the retired classifier is not in the shader');
+
+  // ── BAND D: THE HALF-METRE HAS ONE OWNER ──
+  //
+  // The band was never empty — the detail cascade's third octave has drawn at
+  // 0.25 m since long before any of this, keyed on the cover class, so a
+  // granite face and a ploughed field wore the same speckle a metre from the
+  // wheel. What is held here is that the material's own answer REPLACED it
+  // rather than joining it, in both directions: the micro terms are called
+  // (an uncalled function is a texture nobody sees) and the octave stands
+  // down where they draw (two noises describing one half-metre is worse than
+  // either alone).
+  const rockBody = glsl.slice(glsl.indexOf('float subRockTone('), glsl.indexOf('// ── LAYER B'));
+  const mantleBody = glsl.slice(glsl.indexOf('float subMantleTone('), glsl.indexOf('// ── LAYER C'));
+  check(rockBody.includes('subRockMicro(gp, dip, fam, px)'),
+    'the rock tone carries its own micro-structure');
+  check(mantleBody.includes('subMantleMicro(gp, scree, px)'),
+    'the mantle tone carries its own micro-structure');
+  // AND IT HAS A DIAL, because a band with two possible owners cannot be
+  // judged without handing it back to the other one on the same settled world.
+  check(/mic > 0\.001/.test(rockBody) && /mic > 0\.001/.test(mantleBody),
+    'both micro terms scale with the live band-D dial');
+  // AND IT IS INSIDE THE TONE, NOT BESIDE IT, which is what makes the relief
+  // free: subRelief differentiates rockT and mantleT and nothing else, so a
+  // micro term added anywhere else would be colour with no light on it.
+  check(!glsl.includes('subRockMicro') || glsl.indexOf('float subRockMicro(') < glsl.indexOf('float subRockTone('),
+    'subRockMicro is defined before its caller — GLSL ES has no forward declarations');
+  check(glsl.indexOf('float subMantleMicro(') < glsl.indexOf('float subMantleTone('),
+    'subMantleMicro is defined before its caller');
+  // EVERY MICRO TERM IS BAND-LIMITED. This is the band closest to the eye and
+  // therefore the one furthest from Nyquist where it draws — and the one that
+  // aliases hardest a few metres further on. Each term carries its own tdBand,
+  // and the hairlines and chips carry a px gate above them as well, so a
+  // fragment past the band pays a compare rather than eight hashes.
+  const micro = glsl.slice(glsl.indexOf('float subRockMicro('), glsl.indexOf('// ── LAYER A'));
+  //
+  // The HAIRLINES are the exemption and are exempt by construction: a line is
+  // filtered on its own phase by subLine (fwidth), which is the only filter
+  // that can be right for one — a crack read along a dip presents a different
+  // period to the screen than it has in the ground, and only the derivative
+  // knows which. They carry a px gate above them instead, so the exemption
+  // costs nothing at range either.
+  const bands = [...micro.matchAll(/tdBand\(px, ([\d.]+)\)/g)].map((m) => Number(m[1]));
+  check(bands.length === 4, `every isotropic micro term is band-limited (${bands.length} tdBand calls)`);
+  check(bands.every((b) => b <= 0.5), `and all of them inside band D (worst ${Math.max(...bands)} m)`);
+  const lines = [...micro.matchAll(/subLine\(/g)];
+  check(lines.length === 2 && /if \(px < 0\.1/.test(micro),
+    `the hairlines are phase-filtered and gated on the footprint (${lines.length} subLine calls)`);
+}
+
+console.log('\nthe half-metre has one owner, not two:');
+{
+  const main = readFileSync(join(CELL, 'client/main.ts'), 'utf8');
+  // THE FIELD IS READ ONCE, ABOVE BOTH CONSUMERS. The shares used to be
+  // computed with the substrate, below the cascade, because nothing above them
+  // needed to know; band D is what made the cascade need to know. A second
+  // read would be a second opinion, which is the fault this whole programme
+  // exists to end — so the check is that there is exactly one subExpress call
+  // in the fragment and the stand-down reads what it produced.
+  const express = main.match(/=\s*subExpress\(/g) ?? [];
+  check(express.length === 1,
+    `the fragment expresses the shares exactly once (${express.length})`);
+  check(main.indexOf('= subExpress(') < main.indexOf('diffuseColor.rgb *= 0.955'),
+    'and does it above the cascade, which is the consumer that needed moving');
+  check(main.includes('float subMicro = clamp((e.x + e.y)'),
+    'the stand-down is the MINERAL share — a meadow expresses almost none of it and keeps its octave');
+  // AND THE HANDOVER IS ONE NUMBER IN BOTH DIRECTIONS. uSubMic scales the
+  // micro terms and the stand-down together, so micro 0 is the octave whole
+  // with no micro under it — the exact world before band D — and no setting of
+  // it can leave the half-metre drawn twice or drawn by nobody.
+  check(/subMicro = clamp\(\(e\.x \+ e\.y\)[^;]*clamp\(uSubMic/s.test(main),
+    'the stand-down is scaled by the same dial the micro terms are');
+  check(main.includes('subFam(family), px, uSubMic)') && main.includes('mo, px, uSubMic)'),
+    'and both tone builders are handed it');
+  check(main.includes("if (opts?.micro !== undefined) tdU.uSubMic.value = clamp(opts.micro, 0, 2)"),
+    '__tdetail({micro}) is the 0..2 live A/B');
+  check(/tdBand\(px, 0\.25\)\s*\*\s*\(1\.0 - subMicro\)/.test(main),
+    "the cascade's third octave stands down where the substrate draws band D");
+  // …AND ONLY THE THIRD. The coarser octaves are 1 m and 4 m features and the
+  // substrate says nothing at those scales through a micro term; standing them
+  // down too would take texture off ground that has none to spare.
+  check(!/tdBand\(px, 1\.0\)[^;]*subMicro/.test(main) && !/tdBand\(px, 4\.0\)[^;]*subMicro/.test(main),
+    'and the metre and four-metre octaves are left alone');
+}
+
+console.log('\nthe sward reads the field per blade, not only per texel:');
+{
+  const main = readFileSync(join(CELL, 'client/main.ts'), 'utf8');
+  // PHASE D LEFT TWO THINGS BEHIND, both per-blade decisions the seeder cannot
+  // reach: how tall a tuft grows and what share of its plants are flowers. The
+  // field reaches the vertex shader through ONE channel — sF.a, the mineral
+  // share, which the sweep writes as a MAX of the bank's stony margin and the
+  // substrate's own expressed rock. What is held here is that both terms read
+  // that one channel and that neither restates the density rule.
+  check(/float sMineral = clamp\(sF\.a, 0\.0, 1\.0\) \* clamp\(uSwardMic/.test(main),
+    'the per-blade terms read the field texture\'s mineral channel');
+  check(main.includes('sFlowerChance *= 1.0 - 0.55 * sMineral'),
+    'the flower rate thins on it');
+  check(/float sShort = \(sIsStone \|\| sIsReed\) \? 1\.0 : 1\.0 - 0\.42 \* sMineral/.test(main),
+    'the tuft grows shorter on it — and a stone and a reed are exempt');
+  check(main.includes('* sShort * sRangeScale * sAlive'),
+    'and the shortening reaches the blade, not only a variable');
+  // THE MINERAL SHARE IS A MAX, NOT A SUM. A stony bank below a cliff is not
+  // twice as stony as either fact warrants, and a sum would take it past 1.
+  check(main.includes('if (subMineral > swardScratchF[k + 3]) swardScratchF[k + 3] = subMineral'),
+    'the sweep MAXes the substrate\'s rock with the bank\'s, and does not add them');
+  // AND IT HAS A DIAL, for the same reason band D does: swardsub is read once
+  // at boot, so without one the frame comparison would be two boots.
+  check(main.includes('uSwardMic: { value: SUB_SWARD ? 1 : 0 }'),
+    'swardsub=0 still turns the whole of phase D off, dial included');
+  check(main.includes('__swardmic') && main.includes('swardU.uSwardMic.value = clamp(v, 0, 1)'),
+    '__swardmic(0..1) is the live A/B');
   // …AND THE CHECK THAT NEARLY SHIPPED UNSOUND. The first version of this
   // asserted the EMITTED glsl does not contain a weight expression, meaning to
   // catch a number typed into the shader instead of the table. It cannot: a

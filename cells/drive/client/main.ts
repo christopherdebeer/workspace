@@ -2297,6 +2297,17 @@ const tdU = {
   // made of", relief answers "how hard does that structure catch the light".
   // `tdetail=flat` still means the exact world before either contribution.
   uSubNrm: { value: TDETAIL === 'flat' || TDETAIL === 'off' ? 0 : 0.35 },
+  // ── BAND D, ON ITS OWN DIAL, BECAUSE OTHERWISE IT CANNOT BE MEASURED ──
+  //
+  // The 0.1-0.5 m band has two possible owners — the detail cascade's third
+  // octave, keyed on the COVER class, and the substrate's own micro-structure,
+  // keyed on what the ground is made of — and this scales the handover between
+  // them: at 0 the octave draws in full and the micro not at all, which is the
+  // exact world before band D; at 1 the material owns the band wherever it
+  // expresses mineral surface. So the comparison is one settled world with a
+  // uniform flipped, and not two boots under two skies, which is the standard
+  // every other measurement in this programme is held to.
+  uSubMic: { value: TDETAIL === 'flat' || TDETAIL === 'off' ? 0 : 1 },
 };
 /**
  * ── THE GROUND VIEW CHANNEL, AND WHY IT IS ONE UNIFORM AND NOT A LAYER ──
@@ -6829,6 +6840,7 @@ function terrainFx(mat: THREE.Material, opts: {
       sh.uniforms.uSubAmt = tdU.uSubAmt;
       sh.uniforms.uSubDom = tdU.uSubDom;
       sh.uniforms.uSubNrm = tdU.uSubNrm;
+      sh.uniforms.uSubMic = tdU.uSubMic;
       sh.uniforms.uGView = gvU.uGView;
       // A tile with no field yet (the shared material, the batter, the shell)
       // gets a 1x1 blank and a zero box, and every read of it is gated on the
@@ -6884,12 +6896,89 @@ function terrainFx(mat: THREE.Material, opts: {
         // Nyquist.
         float rough = uTdForce.x >= 0.0 ? uTdForce.x : vTd.x;
         float grain = uTdForce.y >= 0.0 ? uTdForce.y : vTd.y;
+        // ── THE FIELD IS READ HERE, ABOVE THE CASCADE THAT IT SILENCES ──
+        //
+        // The shares used to be computed below, with the substrate, because
+        // nothing above them needed to know. Band D changed that: the cascade's
+        // finest octave and the substrate's micro-structure now describe the
+        // same half-metre, and the one that knows what the ground is MADE of
+        // should be the one drawing it. So the express runs once, before both,
+        // and each reads the same answer — the rule this whole programme is
+        // built on, applied to two consumers in one shader instead of to a
+        // shader and a seeder.
+        //
+        // The gate is the substrate's own, unchanged: no field bound (the far
+        // shell, uSubBox.z at 0), water (rough < 0.02 is cover class 80 and
+        // nothing else), or the dial at zero, and none of this is evaluated.
+        bool subOn = uGView < 1.5 && (uSubAmt > 0.001 || uGView > 0.5)
+          && rough > 0.02 && uSubBox.z > 1.0;
+        vec3 e = vec3(0.0);
+        vec2 down = vec2(1.0, 0.0), across = vec2(0.0, 1.0);
+        float family = 0.0, db = 0.0, sd = 0.0, mo = 0.0;
+        if (subOn) {
+          // WHAT THE PALETTE ALREADY KNOWS, and the field cannot: whether
+          // anything grows here. Normalised by luminance so a shaded hillside
+          // and a sunlit one read alike — the vertex colour carries the slope
+          // shade, and without the divide every north face in the world would
+          // classify differently from the south face of the same hill. It is
+          // read before the cascade multiplies the colour and is unchanged by
+          // that: a chroma ratio over its own luminance is invariant under any
+          // scalar, which is what lets this sit up here at all.
+          vec3 bc = diffuseColor.rgb;
+          float blum = dot(bc, vec3(0.2126, 0.7152, 0.0722));
+          float veg = (bc.g - 0.5 * (bc.r + bc.b)) / max(blum, 1e-3);
+          // ── THE FIELD, BILINEAR, IN THE TILE'S OWN FRAME ──
+          //
+          // The same two textures the CPU reads as arrays, so the sward and the
+          // fragment cannot hold different opinions about where the rock is.
+          vec2 sUV = (vWorldP.xz - uSubBox.xy) / uSubBox.zw;
+          vec4 fA = texture2D(uSubA, sUV), fB = texture2D(uSubB, sUV);
+          float ex = fA.r;
+          db = fA.g; sd = fA.b; mo = fA.a;
+          float gpot = fB.r;
+          family = fB.g;
+          subBasis(vec2(fB.b, fB.a) * 2.0 - 1.0, down, across);
+          // ── BAND B: THE PATCHINESS INSIDE ONE FIELD CELL ──
+          //
+          // The field's lattice is about thirty-three metres, so on its own a
+          // hillside it calls half-exposed would be a uniform half. The domain
+          // shifts exposure and the mantle either way at eighteen metres, which
+          // is what makes outcrop stand OUT OF fill rather than average with it.
+          // Past the range where a patch is narrower than an art pixel the
+          // field collapses to its own mean rather than aliasing — and is not
+          // evaluated at all, because twelve hashes for a value about to be
+          // mixed away is the fault the tdetail switch compiles out one layer up.
+          float domBand = tdBand(px, uSubDom * 1.7);
+          float dom = domBand > 0.002 ? mix(0.5, subDomain(gp, uSubDom), domBand) : 0.5;
+          ex = clamp(ex + (dom - 0.5) * 0.55 * (1.0 - abs(ex * 2.0 - 1.0) * 0.5), 0.0, 1.0);
+          db = clamp(db + (dom - 0.5) * 0.30, 0.0, 1.0);
+          // ── THE THREE SHARES, AND THEY ARE NOT A PARTITION ──
+          //
+          // grain is the cover class's own mineral verdict and is here for one
+          // reason: the field is derived from the LANDFORM and cannot tell a
+          // snowfield from the ground under it. See subExpress.
+          e = subExpress(ex, db, sd, gpot, veg, grain);
+        }
+        // ── AND HOW MUCH OF THE HALF-METRE THE SUBSTRATE HAS TAKEN OVER ──
+        //
+        // The mineral share, scaled by the dial, because that is exactly how
+        // much of band D actually reaches the frame: the micro terms ride
+        // inside subRockTone and subMantleTone, which the composite weights by
+        // e.y and e.x and the amount interpolates. So on a scree apron the
+        // cascade's third octave stands fully down and the material's own
+        // grain draws instead; on a meadow, where band D says almost nothing
+        // because there is almost no mineral surface expressed, the octave is
+        // left exactly where it was. Two noises never describe one half-metre,
+        // and neither does nothing.
+        float subMicro = clamp((e.x + e.y) * clamp(uSubAmt, 0.0, 1.0), 0.0, 1.0)
+          * clamp(uSubMic, 0.0, 1.0);
         if (rough > 0.01 && px < 2.0 && uTdOct > 0.5) {
           d += 0.055 * rough * tdVN(gp * 0.25) * tdBand(px, 4.0);
           if (px < 0.5 && uTdOct > 1.5) {
             d += 0.070 * rough * tdGrain(tdVN(gp), grain) * tdBand(px, 1.0);
             if (px < 0.125 && uTdOct > 2.5) {
-              d += 0.085 * rough * tdGrain(tdVN(gp * 4.0), grain) * tdBand(px, 0.25);
+              d += 0.085 * rough * tdGrain(tdVN(gp * 4.0), grain)
+                 * tdBand(px, 0.25) * (1.0 - subMicro);
             }
           }
         }
@@ -6931,46 +7020,14 @@ function terrainFx(mat: THREE.Material, opts: {
         // the cascade and stops — which is the far shell (no aTd either) and
         // nothing else, because a fine tile's field is built by the same reply
         // that builds its mesh.
-        if (uGView < 1.5 && (uSubAmt > 0.001 || uGView > 0.5)
-            && rough > 0.02 && uSubBox.z > 1.0) {
+        if (subOn) {
+          // The field, the shares and the fall line's frame were read above the
+          // cascade — see THE FIELD IS READ HERE. pc is taken here and not
+          // there because it must carry the cascade: the substrate composites
+          // over the texture, and a base sampled before it would paint the
+          // layers onto a colour the frame never shows.
           vec3 pc = diffuseColor.rgb;
           float lum = dot(pc, vec3(0.2126, 0.7152, 0.0722));
-          // WHAT THE PALETTE ALREADY KNOWS, and the field cannot: whether
-          // anything grows here. Normalised by luminance so a shaded hillside
-          // and a sunlit one read alike — the vertex colour carries the slope
-          // shade, and without the divide every north face in the world would
-          // classify differently from the south face of the same hill.
-          float veg = (pc.g - 0.5 * (pc.r + pc.b)) / max(lum, 1e-3);
-          // ── THE FIELD, BILINEAR, IN THE TILE'S OWN FRAME ──
-          //
-          // The same two textures the CPU reads as arrays, so the sward and the
-          // fragment cannot hold different opinions about where the rock is.
-          vec2 sUV = (vWorldP.xz - uSubBox.xy) / uSubBox.zw;
-          vec4 fA = texture2D(uSubA, sUV), fB = texture2D(uSubB, sUV);
-          float ex = fA.r, db = fA.g, sd = fA.b, mo = fA.a;
-          float gpot = fB.r, family = fB.g;
-          vec2 down, across;
-          subBasis(vec2(fB.b, fB.a) * 2.0 - 1.0, down, across);
-          // ── BAND B: THE PATCHINESS INSIDE ONE FIELD CELL ──
-          //
-          // The field's lattice is about thirty-three metres, so on its own a
-          // hillside it calls half-exposed would be a uniform half. The domain
-          // shifts exposure and the mantle either way at eighteen metres, which
-          // is what makes outcrop stand OUT OF fill rather than average with it.
-          // Past the range where a patch is narrower than an art pixel the
-          // field collapses to its own mean rather than aliasing — and is not
-          // evaluated at all, because twelve hashes for a value about to be
-          // mixed away is the fault the tdetail switch compiles out one layer up.
-          float domBand = tdBand(px, uSubDom * 1.7);
-          float dom = domBand > 0.002 ? mix(0.5, subDomain(gp, uSubDom), domBand) : 0.5;
-          ex = clamp(ex + (dom - 0.5) * 0.55 * (1.0 - abs(ex * 2.0 - 1.0) * 0.5), 0.0, 1.0);
-          db = clamp(db + (dom - 0.5) * 0.30, 0.0, 1.0);
-          // ── THE THREE SHARES, AND THEY ARE NOT A PARTITION ──
-          //
-          // grain is the cover class's own mineral verdict and is here for one
-          // reason: the field is derived from the LANDFORM and cannot tell a
-          // snowfield from the ground under it. See subExpress.
-          vec3 e = subExpress(ex, db, sd, gpot, veg, grain);
           // ── EACH LAYER'S OWN STRUCTURE, EACH IN ITS OWN BAND ──
           //
           // Tones, not weights: the field decides WHAT is here and these decide
@@ -6990,13 +7047,13 @@ function terrainFx(mat: THREE.Material, opts: {
           // own weights were, and is why they could never have carried this.
           float rockT = 0.0, mantleT = 0.0, grassT = 0.0;
           if (uGView < 0.5 && e.y > 0.01) {
-            rockT = subRockTone(vWorldP, gp, down, across, subFam(family), px);
+            rockT = subRockTone(vWorldP, gp, down, across, subFam(family), px, uSubMic);
           }
           if (uGView < 0.5 && e.x > 0.01) {
             // The coarse share of the mantle: a tongue of angular blocks, or a
             // wash of fines with a few stones in it, are quite different
             // surfaces and the debris channel is what tells them apart.
-            mantleT = subMantleTone(gp, down, across, db / max(db + sd, 1e-3), mo, px);
+            mantleT = subMantleTone(gp, down, across, db / max(db + sd, 1e-3), mo, px, uSubMic);
           }
           if (uGView < 0.5 && e.z > 0.01 && px < 2.25) grassT = subGrassTone(gp, px);
           // ── THE COMPOSITE ──
@@ -7096,6 +7153,7 @@ function terrainFx(mat: THREE.Material, opts: {
       sh.fragmentShader = TD_HELPERS + SUB_GLSL + GV_GLSL
         + 'uniform float uTdRule;\nuniform float uTdAmt;\nuniform float uTdOct;\nuniform vec2 uTdForce;\n'
         + 'uniform float uSubAmt;\nuniform float uSubDom;\nuniform float uSubNrm;\n'
+        + 'uniform float uSubMic;\n'
         + 'uniform float uGView;\nuniform sampler2D uGLut;\n'
         + 'uniform sampler2D uSubA;\nuniform sampler2D uSubB;\nuniform vec4 uSubBox;\n'
         + sh.fragmentShader;
@@ -11853,6 +11911,22 @@ const swardU = {
   uFlowerSpeciesM: { value: SWARD_FLOWER.speciesMetres },
   /** 1 paints patch flowers warm and solitary flowers cyan. Normal is 0. */
   uFlowerDbg: { value: 0 },
+  /** ── HOW HARD THE SUBSTRATE THINS AND SHORTENS THE SWARD, 0..1 ──
+   *
+   *  Phase D put the sward's DENSITY on the geomorphic field and left two
+   *  things behind that the seeder cannot reach: how TALL a tuft grows and how
+   *  many of the plants in it are flowering forbs. Both are per-blade decisions
+   *  in the vertex shader, and the field reaches that shader through exactly
+   *  one channel — `sF.a`, the mineral share, which carries the bank's stony
+   *  ground and the substrate's own expressed rock under a MAX.
+   *
+   *  It is a uniform and not a constant because these two are the only claims
+   *  in this programme that could not otherwise be A/B'd on one settled world:
+   *  `swardsub` is read once at boot like every world switch, so without this
+   *  dial the comparison would be two boots under two skies, which is the
+   *  standard everything else here is held to. 0 is the sward before phase D's
+   *  remainder, exactly. */
+  uSwardMic: { value: SUB_SWARD ? 1 : 0 },
   /** The outermost band's reach: the ONE curve every band thins along, so the
    *  fade cannot have a seam where two bands meet. */
   // The outermost fade's END, not a band's reach: everything past this is
@@ -12309,6 +12383,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform float uFlowerStrayWater; uniform float uFlowerStrayCliff;
         uniform float uFlowerStrayRuin; uniform float uFlowerPatchM;
         uniform float uFlowerSpeciesM; uniform float uFlowerDbg;
+        uniform float uSwardMic;
         uniform float uTime; uniform vec2 uGust;
         ${SWARD_FLOW_NAMES.map((n) => `uniform vec3 ${n};`).join(' ')}
         varying vec3 vSward;
@@ -12441,6 +12516,33 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
           : uFlowerStrayOpen;
         float sFlowerChance = max(sPatchChance, sStrayChance);
         float sBankPatch = (sF.b + sF.a > 0.02) ? bankPatch(sP) : 0.5;
+        // ── WHAT THE GROUND UNDER THE TUFT IS MADE OF ──
+        //
+        // sF.a is the mineral share the sward sweep wrote: the bank's stony
+        // margin and the substrate's own expressed rock, under a MAX rather
+        // than a sum, because a stony bank below a cliff is not twice as stony
+        // as either fact warrants. One channel is all the field gets into this
+        // shader — the field texture's four floats are height, density, reeds
+        // and this, and the colour texture beside it is LinearFilter, so a
+        // bitfield packed into its alpha would be silently interpolated
+        // between texels. Soil depth as a separate claim would need a second
+        // sampler and its own 147 KB upload every sweep; what it would buy
+        // over the mineral share is not obviously worth that, and saying so
+        // is cheaper than finding out twice.
+        float sMineral = clamp(sF.a, 0.0, 1.0) * clamp(uSwardMic, 0.0, 1.0);
+        // ── AND FEWER OF ITS PLANTS ARE FLOWERING FORBS ──
+        //
+        // NOT a second statement of the density rule, which phase D's first cut
+        // got wrong by multiplying a share of the surface into a density per
+        // square metre. Density says how many plants stand here and the seeder
+        // has already thinned it on this same mineral share; this says what
+        // the survivors ARE. A forb needs more rooting depth than a grass, so
+        // on a lithosol the composition shifts toward grass even where the
+        // count has already fallen — two different observations of one soil,
+        // and the product is the flowers per square metre, which is what an
+        // alpine scree actually looks like: sparse tufts, the occasional
+        // cushion, not a meadow at lower gain.
+        sFlowerChance *= 1.0 - 0.55 * sMineral;
         bool sIsReed = sH4 < sF.b * smoothstep(0.40, 0.70, sBankPatch) * 0.85;
         bool sIsStone = !sIsReed && sH4 > 1.0 - sF.a
           * (1.0 - smoothstep(0.30, 0.62, sBankPatch)) * 0.75;
@@ -12572,7 +12674,17 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // Reeds cannot grow into trees, nor gravel into boulders in the far band.
         float sRangeScale = sIsStone ? 1.0 : sIsReed ? (1.0 + 0.35 * sT)
           : (1.0 + 3.2 * pow(sT, 0.75));
-        vec3 sLp = sPosL * (0.45 + sSize * 1.30) * sRangeScale * sAlive;
+        // ── AND STONY GROUND GROWS SHORT GRASS ──
+        //
+        // sSize is a pure hash and always has been — the ground it stands on
+        // had no say in how tall a tuft grew, so a tussock on a scree apron
+        // came up the same height as one in a water meadow and the field's
+        // whole answer arrived as a count. A stone and a reed are exempt: a
+        // stone is not growing and a reed stands in the one place that is wet
+        // by definition, so shortening either would be the mineral share
+        // speaking about something it does not describe.
+        float sShort = (sIsStone || sIsReed) ? 1.0 : 1.0 - 0.42 * sMineral;
+        vec3 sLp = sPosL * (0.45 + sSize * 1.30) * sShort * sRangeScale * sAlive;
         sLp.xz = vec2(sCa * sLp.x - sSa * sLp.z, sSa * sLp.x + sCa * sLp.z);
         // Wind, from the blade's WORLD position so a gust crosses the field as
         // one front rather than every tuft nodding on its own clock.
@@ -33933,7 +34045,7 @@ function truckSpec(): Record<string, number> {
  * source and the number means what it says.
  */
 (window as unknown as { __swardsub?: object }).__swardsub = (): object => {
-  let n = 0, sd = 0, sg = 0, sdd = 0, sgg = 0, sdg = 0, thin = 0, off = 0, sr = 0;
+  let n = 0, sd = 0, sg = 0, sdd = 0, sgg = 0, sdg = 0, thin = 0, off = 0, sr = 0, sm = 0;
   for (let j = 0; j < SWARD_F; j++) for (let i = 0; i < SWARD_F; i++) {
     const k = (j * SWARD_F + i) * 4;
     const dens = swardFieldData[k + 1];
@@ -33947,7 +34059,7 @@ function truckSpec(): Record<string, number> {
     const e = subExpressOf(c.ex, c.db, c.sd, c.gp, ev.veg, subGrainOf(sampleCover(wx, wz)));
     const g = subGrassAllow(e, c.db, c.sd);
     n++; sd += dens; sg += g; sdd += dens * dens; sgg += g * g; sdg += dens * g;
-    sr += e.rock; if (g < 0.6) thin++;
+    sr += e.rock; sm += swardFieldData[k + 3]; if (g < 0.6) thin++;
   }
   if (n < 32) return { n, off, note: 'no sward field yet' };
   const cov = sdg / n - (sd / n) * (sg / n);
@@ -33969,7 +34081,26 @@ function truckSpec(): Record<string, number> {
     // read off one would be a reading of the cover class alone.
     noField: off,
     thin: SUB_SWARD_K.thin, tint: SUB_SWARD_TINT,
+    // The per-blade half of phase D, which no CPU tally can see: how tall a
+    // tuft grows and what share of the plants in it are flowering forbs are
+    // vertex-shader decisions off sF.a, so this reports the DIAL and the mean
+    // mineral the field is handing that shader. What it cannot report is the
+    // drawn population; that is a frame, and band-d.mjs is where it is read.
+    micro: swardU.uSwardMic.value,
+    meanMineral: +(sm / Math.max(1, n)).toFixed(3),
   };
+};
+/**
+ * THE PER-BLADE SUBSTRATE RESPONSE, AS A LIVE DIAL. 0 is the sward exactly as
+ * it stood before phase D's remainder — full-height tufts and the habitat's own
+ * flower rate — and 1 is the shipped rule. It exists because `swardsub` is read
+ * once at boot, so without it a frame comparison of these two terms would be
+ * two boots under two skies, which is the standard nothing else in this
+ * programme is allowed to fall to.
+ */
+(window as unknown as { __swardmic?: object }).__swardmic = (v?: number): object => {
+  if (v !== undefined) swardU.uSwardMic.value = clamp(v, 0, 1);
+  return { micro: swardU.uSwardMic.value, swardsub: SUB_SWARD };
 };
 (window as unknown as { __sward?: object }).__sward = (gpu?: boolean, rebuild?: boolean): object => {
   // The field rebuilds on 48m of travel or on the world growing, so a test that
@@ -34652,7 +34783,8 @@ function tdMatAt(x: number, z: number): object | null {
  */
 (window as unknown as { __tdetail?: object }).__tdetail = (
   opts?: { rule?: 'px' | 'mpp'; amount?: number; oct?: number;
-    rough?: number | null; grain?: number | null; sub?: number; dom?: number; relief?: number },
+    rough?: number | null; grain?: number | null; sub?: number; dom?: number; relief?: number;
+    micro?: number },
 ): object => {
   // null hands the ground back to its own attribute.
   if (opts?.rough !== undefined) tdU.uTdForce.value.x = opts.rough === null ? -1 : clamp(opts.rough, 0, 1);
@@ -34677,6 +34809,11 @@ function tdMatAt(x: number, z: number): object | null {
   // above is returned untouched; the upper range is an inspection instrument,
   // not a claim that four times the shipped relief is natural.
   if (opts?.relief !== undefined) tdU.uSubNrm.value = clamp(opts.relief, 0, 4);
+  // Band D's owner, 0..2. 0 hands the half-metre back to the cascade's third
+  // octave whole, which is the exact world before the material had an answer
+  // for it; 1 is the shipped handover. Above 1 the micro is louder than the
+  // octave it replaced, which is an inspection instrument and not a claim.
+  if (opts?.micro !== undefined) tdU.uSubMic.value = clamp(opts.micro, 0, 2);
   const tanHalf = Math.tan((camera.fov * Math.PI) / 360);
   const rows = Math.max(2, pixSize.y);
   const eye = camera.position;
@@ -34714,6 +34851,7 @@ function tdMatAt(x: number, z: number): object | null {
     // The substrate's three dials, reported beside the value they were set to,
     // so a run's log says what it measured rather than what it asked for.
     sub: tdU.uSubAmt.value, dom: tdU.uSubDom.value, relief: tdU.uSubNrm.value,
+    micro: tdU.uSubMic.value,
     // …and the range at which the domain has band-limited away, which is where
     // the classification falls back on the vertex material alone. Stated in the
     // footprint's own units, so it reads straight against a row of `ahead`.
@@ -43600,7 +43738,7 @@ function telemetryReport(): string {
   // difference the measurement, and a paste that does not say cannot be
   // compared to one that does.
   L.push(`look tdetail ${TDETAIL} · sub ${tdU.uSubAmt.value} dom ${tdU.uSubDom.value}`
-    + ` relief ${tdU.uSubNrm.value}`
+    + ` relief ${tdU.uSubNrm.value} micro ${tdU.uSubMic.value}`
     + ` · oct ${tdU.uTdOct.value} amt ${tdU.uTdAmt.value} · view ${groundView}`
     + ` · swardsub ${SUB_SWARD ? 'on' : 'off'} · tilt ${TILT_MODE} · substrate ${SUBSTRATE_MODE.name}`);
   const _treePlacedByFamily = EZ_FAMILIES.map(f => ezTiers[f].reduce((n, t) => n + t.n, 0));
