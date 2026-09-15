@@ -11496,3 +11496,61 @@ where this task points now.
   tile, which is the common case for the layer and the case a bound must
   survive. Run the probe at the place before believing either answer.
 
+
+## A redrape's cost is `groundAt`, not the scan — and indexing the scan is slower
+
+The Paris dump (403 s wall, but **83.7 s active and 318 hidden** — read the
+visibility line before any per-frame number) puts `terrainApply` at **24.3 ms a
+build, 518 ms worst, 22% of all slow-frame time**, and the post split names
+`redrape` as 14.9 of those 24. A phase split that stops there cannot say which
+of the two quite different things inside is expensive, so `redrapeProf` splits
+it into the vertex WALK and the normals RECOMPUTE, with counts for how much was
+scanned to move how little. Measured on `at-paris-west` (5,663 ways):
+
+```
+redrape 50 calls · walk 17.7 normals 1.3 ms/call · max 171
+  · near 10 inBox 7 touched 4 · verts 15575 moved 3490
+```
+
+**THE RECOMPUTE IS 7% OF IT.** The note by `redrape` guessed the cost was
+re-reading every vertex to recompute normals over a whole ribbon for the metre
+of it inside one tile; `computeVertexNormals` and `computeBoundingSphere`
+together are **1.3 ms against the walk's 17.7**. That guess is now measured
+wrong and the comment says so.
+
+**AND INDEXING THE WALK MADE IT SLOWER.** The obvious cut — bucket each drape's
+seated vertices by the same cell grid the drape index already uses, so a
+rebuild walks only the vertices standing in that tile — was written, audited
+and reverted. Same fixture, same build, the index the only difference:
+
+| | the plain walk | indexed |
+|---|---|---|
+| vertices walked a call | 15,575 | **7,629** |
+| walk ms a call | **17.7** | **21.2** |
+| vertices moved a call | 3,490 | 3,537 |
+
+**It halves the scan and costs 20% more.** The reason is in the third row: the
+vertices the index removes are the CHEAP ones — two attribute reads and a box
+test that fails — while the count that does not move is the in-tile vertices,
+each of which pays a `groundAt`. So the walk is ~5 µs a MOVED vertex and the
+index adds a Map lookup a cell, an Int32Array indirection a vertex, and a
+closure call the tight loop did not have. **A scan is not a cost; the work
+inside it is.**
+
+The correctness half did pass, for what it is worth to whoever tries this
+again: an audit that ran the full walk beside the indexed one over 328 drapes
+found **0 vertices missed**, so the index was right and simply not worth
+having.
+
+**WHERE THE CUT ACTUALLY IS, then, and none of it is the scan:** `groundAt` per
+in-tile vertex, ~3,500 of them a build. It locates the tile, then the cell,
+then the triangle — and `redrape` ALREADY KNOWS THE TILE, because it was handed
+`t`. That is the same shape as the substrate contact sampler's `tileAt`, which
+cost 17% of a phone's CPU until it kept the last tile it answered for. Failing
+that, `reseat` (15.1 ms a build here, nearly redrape's equal and never
+suspected) and `batter` (9.9) are the other two thirds of a 47 ms post, and the
+standing task is to spread all three across frames rather than to make any one
+of them cleverer.
+
+`redrapeProf` and the telemetry's `redrape` row are what is kept. The index is
+not, and this section is here so it is not rediscovered as an idea.

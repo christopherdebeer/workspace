@@ -17171,16 +17171,44 @@ function nearCells<T>(grid: Map<string, T[]>, t: HeightTile): Set<T> {
   }
   return out;
 }
+/** ── WHERE A REDRAPE'S MILLISECONDS GO ──
+ *
+ *  A Paris dump put `terrainApply` at 24.3 ms a build with a 518 ms worst and
+ *  22% of all slow-frame time, and the post split named `redrape` as 14.9 of
+ *  those 24 — but a split that stops at the phase cannot say WHICH of the two
+ *  quite different things in here is expensive — and the guess was wrong.
+ *
+ *  MEASURED on at-paris-west: walk 17.7 ms a call, normals 1.3, over 15,575
+ *  vertices scanned to move 3,490. So it is not `computeVertexNormals` over a
+ *  whole ribbon for the metre of it inside one tile, which is what the note
+ *  here used to say; that is 7% of it. And indexing the scan by cell — the
+ *  obvious cut, written and reverted — HALVES the vertices walked and costs
+ *  20% more, because the ones it removes are the cheap ones (two reads and a
+ *  failed box test) while every in-tile vertex still pays a `groundAt`. A
+ *  scan is not a cost; the work inside it is. See CLAUDE.md.
+ *
+ *  Counters, not a timer per drape: the walk and the recompute are timed as
+ *  two laps, and the counts say how much was scanned to move how little. */
+const redrapeProf = {
+  calls: 0, near: 0, inBox: 0, touched: 0, verts: 0, moved: 0,
+  walkMs: 0, normalsMs: 0, max: 0,
+};
 /** Re-seat every draped vertex that falls inside a tile just rebuilt. */
 function redrape(t: HeightTile): void {
+  const t0 = performance.now();
   const tx1 = t.xs + t.w, tz1 = t.zs + t.h;
   const near = nearCells(drapeGrid, t);
   for (const w of drapeWide) near.add(w);
   terrainScan.drapes = near.size; terrainScan.ofDrapes = drapedWays.length;
+  const P = redrapeProf;
+  P.calls++; P.near += near.size;
+  let normalsMs = 0;
   for (const d of near) {
     if (d.x1 < t.xs || d.x0 > tx1 || d.z1 < t.zs || d.z0 > tz1) continue;
+    P.inBox++;
     const pos = d.geo.attributes.position as THREE.BufferAttribute;
     let touched = false;
+    P.verts += pos.count;
     for (let i = 0; i < pos.count; i++) {
       if (d.seat !== undefined && d.seat[i] !== 1) continue;   // welded, not seated
       const x = pos.getX(i), z = pos.getZ(i);
@@ -17189,14 +17217,21 @@ function redrape(t: HeightTile): void {
       const y = Math.fround(groundAt(x, z) + d.lift);
       if (pos.getY(i) === y) continue;
       pos.setY(i, y);
+      P.moved++;
       touched = true;
     }
     if (touched) {
+      P.touched++;
       pos.needsUpdate = true;
+      const n0 = performance.now();
       d.geo.computeVertexNormals();
       d.geo.computeBoundingSphere();
+      normalsMs += performance.now() - n0;
     }
   }
+  const ms = performance.now() - t0;
+  P.normalsMs += normalsMs; P.walkMs += ms - normalsMs;
+  if (ms > P.max) P.max = ms;
 }
 /** Build the shoulders for every parked kerb inside this tile, against the
  *  ground as it now stands, and retire them. */
@@ -44158,6 +44193,14 @@ function telemetryReport(): string {
   if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)} · feeds ${workerLedger.hydroFeeds} skipped ${workerLedger.hydroSkips} (dry ground ${workerLedger.hydroSkipsDry}) · built by dirty ${workerLedger.hydroWhyDirty} sig ${workerLedger.hydroWhySig} ground ${workerLedger.hydroWhyGround} first ${workerLedger.hydroWhyFirst}`);
     const pa = Math.max(1, workerLedger.applied);
     L.push(`post split ms/build reseat ${(workerLedger.reseatMs / pa).toFixed(1)} redrape ${(workerLedger.redrapeMs / pa).toFixed(1)} hydro ${(workerLedger.hydroMs / pa).toFixed(1)} batter ${(workerLedger.batterMs / pa).toFixed(1)} culvert ${(workerLedger.culvertMs / pa).toFixed(1)} · post max ${Math.round(workerLedger.postMax)} · dropped ${workerLedger.dropped}`); }
+  { const R = redrapeProf, rc = Math.max(1, R.calls);
+    // WHAT WAS SCANNED TO MOVE HOW LITTLE. `near` is what the drape index
+    // offered, `inBox` what survived the box test, `touched` how many
+    // geometries had a vertex move at all — and `verts` against `moved` is
+    // the ratio that says whether the walk or the recompute is the cost.
+    L.push(`redrape ${R.calls} calls · walk ${(R.walkMs / rc).toFixed(1)} normals ${(R.normalsMs / rc).toFixed(1)} ms/call · max ${Math.round(R.max)}`
+      + ` · near ${Math.round(R.near / rc)} inBox ${Math.round(R.inBox / rc)} touched ${Math.round(R.touched / rc)}`
+      + ` · verts ${Math.round(R.verts / rc)} moved ${Math.round(R.moved / rc)}`); }
   //    WHICH PHASE OF A HYDRO BUILD ──
   //
   // The worker line above says how much a hydro build costs and has never
