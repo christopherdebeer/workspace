@@ -279,6 +279,8 @@ Nothing here is fast. Budget for it.
 | `node devtools/redrape-ga.mjs` | what a redrape's walk is made of: `groundAt` priced by calling it twice, split into its LOCATE and SOLVE halves, with the same-setting floor beside it (`FAST=0` is the rollback, `AUDIT=1` compares both samplers per vertex) | ~4min |
 | `node devtools/tree-edge.mjs` | how far out a tree actually appears, by family, with the caps beside the edges — `?treedemand=0` is the old all-families divisor and the A/B (`FIX=`, `SECS=`) | ~4min |
 | `node devtools/tree-spend.mjs` | where the tree triangle budget went: cap against placed, and what the allocator CHARGED against what the GPU was handed, per family — `?treeprice=0` charges the atlas mean again (`FIX=`, `SECS=`) | ~6min |
+| `node client/perf-check.mjs` | the tree refresh still refills byte-for-byte what the pre-slice one did, over a deterministic mock world — a SANDBOXED check, so it breaks on a new free variable and says nothing until it is run: it was red for three commits and two deploys before anyone noticed | ~5s |
+| `node devtools/tree-manifest.mjs` | KNOWN against DRAWN: whether a tree exists further out than it is built, with the placed counts and edges beside them as the live witness that nothing on screen moved — `?treemanifest=<m>` equal to the draw range is the single ring (`FIX=`, `SECS=`) | ~8min |
 | `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
@@ -4011,6 +4013,138 @@ price, and a cap is a CONSEQUENCE of a price — the same fault this file record
 for the terrain's cell table and for `BridgeAssembly.claim`, met again: a probe
 that reports the output of a rule cannot witness the rule. The trees row carries
 `price b1068/c543/s188` now and `__ez().price` sits beside the mean it replaced.
+
+### A tree should exist before it becomes geometry
+
+Asked from the seat, as the reframing after the budget work: *the tree cap is
+the wrong abstraction. A tree should be a persistent fact about the world; only
+its representation should become cheaper with distance.* Right, and the
+distinction it turns on is that "trees pop in" is two different transitions —
+**population pop** (the tree does not exist in the renderer until it enters a
+radius or a budget) and **representation pop** (it exists and changes
+abruptly). An impostor answers the second. It answers the first only if the
+cheap descriptor is known considerably further out than the geometry is built.
+
+**WHAT THE READ FOUND, and it is one function.** `vegRefreshSteps` walked ONE
+ring and did all three jobs on it:
+
+```
+reach = ceil(max(VEG_RANGE 700, treeRange) / VEG_CELL 220)
+pass 1  seedCell(cell)                  ← the MANIFEST was created here
+        cand[fam].push(site, d²)          if d² < treeR²
+pass 2  cap  = ezCapFor(fam)
+        list = nearestStable(list, cap)  ← MEMBERSHIP
+        ezEdge[fam] = √(list[cap-1].d²)  ← and the VISIBLE EDGE
+pass 3  seedCell(cell) again; admitted sites become matrices
+```
+
+So `ezCapFor` was doing three jobs at once — the triangle allocation, the
+population rule, and the horizon — and `seedCell` ran only inside the ring the
+geometry is drawn in. **Past `treeRange` there was no tree at all**: not a
+cheap one, not a mark, nothing to render.
+
+**THE DESCRIPTOR ALREADY EXISTED.** `PlacedVegSite` carries x, z, kind, scale,
+yaw, height, colour, non-uniform width and lean; the form comes from
+`ezVariantAt`, deterministic from the district and stand seeds in `culture.ts`
+and therefore stable under a world rebase; the wind phase is derived in-shader
+from world position, so anything drawn at that position leans with its
+neighbours for free. What was missing was not the record — it was the record's
+REACH.
+
+**AND THREE OF THE FOUR LAYERS ALREADY WORK THIS WAY**: the substrate is a
+persistent field, the sward is a persistent density field drawn as blades near
+and as terrain colour far, and `refreshShrubs` picks its membership by a STABLE
+PER-SLOT HASH against that field, thinned outward — which is the
+`rank = hash(id)` rule, already shipped, one layer down. Trees were the layer
+that conflated existence with geometry.
+
+#### The manifest is its own radius
+
+Sites seed out to `manifestRange` (twice the draw range, capped at 2.8 km,
+`?treemanifest=` in metres); candidates are gathered, admitted and drawn inside
+`treeRange` exactly as before. Four things make that safe, and each was a
+decision rather than a default:
+
+- **IT IS A SECOND WALK, NOT A WIDER `reach`.** The gather pass iterates every
+  site of every cell, and widening its ring pays that over four times the area
+  to throw the results away on a `d² < treeR²` test — a device dump already put
+  gathering at 14 ms over a 27×27 ring. `squareRings` takes a `from` now, so
+  the manifest pass covers only its own ANNULUS.
+- **IT RUNS LAST, after the commit.** `vegSeedLeft` is spent in walk order and
+  both walks are centre-out, so the near cells are always served first: a wider
+  manifest can only delay the far country, never the ground under the wheels.
+- **THE EVIDENCE IS ALREADY THERE at that radius**, which is what makes it
+  affordable at all. `seedCell` waits on the cover raster (z12, a 7×7 ring,
+  ~28 km) and the ecoregion (z5, ~1250 km tiles). Both reach far past any
+  plausible manifest, so this needs no new streaming — the failure a wider ring
+  would have had is simply not present. The same is true of height: `groundAt`
+  is read at PLACE time on every refresh rather than baked into the descriptor,
+  so a tree's Y follows the DEM as it refines and cannot pop when a finer tile
+  lands.
+- **THE CELL PRUNE FOLLOWS `mReach`.** It drops cells beyond `reach + 3`, and
+  left alone it would have deleted what the pass had just seeded.
+
+`vegManifestTally` reports KNOWN against DRAWN — two numbers that were one
+until now — on `__ez().manifest` and as its own telemetry row. It is walked on
+demand and never from the frame loop: it is the O(cells × sites) cost the
+gather pass is kept narrow to avoid, and a probe may be expensive where a
+refresh may not.
+
+#### …and the witness is in node, not in a frame
+
+The claim is that NOTHING ON SCREEN CHANGES, and `client/perf-check.mjs`
+asserts exactly that: it runs the shipped refresh against the pre-slice
+baseline over a deterministic mock world, with `manifestRange` stubbed at
+**twice** the draw range so the new pass actually executes rather than being
+skipped as a no-op. **20 of 20 production refills byte-identical** — the same
+matrices, colours and counts. A pair of browser boots could not have said this
+as strongly, and would have taken six minutes rather than one second.
+
+**THAT CHECK HAD BEEN RED FOR THREE COMMITS AND NOBODY NOTICED — including
+through two deploys.** Bisected: green at `7e45e50`, red from `8acecfe` (the
+demand allocator) onward, because the VM sandbox had no `EZ_DEMAND`,
+`ezCapNominal`, `ezTriPrice` or `treeTriBudget` and the refresh threw on its
+first call. The file's own doctrine already warns that its baseline goes stale
+on any change to the refresh; what it did not say, and now does, is that **a
+sandboxed check breaks on a new free variable, silently, and the only way to
+know is to run it.** It is in the ladder for that reason.
+
+**And the cap rule stays stubbed on both sides of it, deliberately.** The claim
+is that the refill is identical GIVEN THE SAME CAPS; the rule that sets the
+caps changed three times in one day and has its own A/Bs (`tree-edge`,
+`tree-spend`). Wiring `ezCapFor` to the allocator would make a baseline that
+predates the allocator differ for a reason that is not a regression, and the
+check would then be loosened until it meant nothing.
+
+**Measured live** (`devtools/tree-manifest.mjs`, `at-yosemite`, `?treemanifest=700`
+— the single ring — against the default 1400 m, no page errors either leg):
+
+| | one ring | manifest |
+|---|---|---|
+| cells seeded | 81/81 | **225/225** |
+| broadleaf known · placed · edge | 601 · 589 · 700 | **2,412** · 589 · 700 |
+| conifer known · placed · edge | 1,801 · 1,385 · 652 | **8,487** · 1,385 · 652 |
+| snag known · placed · edge | 439 · 437 · 700 | **1,644** · 437 · 700 |
+| **KNOWN total** | 2,841 | **12,543** |
+| **DRAWN total** | 2,411 | **2,411** |
+| of known, drawn | 85% | **19%** |
+
+**Every placed count and every edge is identical to the tree**, which is the
+second witness to `perf-check`'s byte-identity; the manifest fills COMPLETELY
+(225 of 225 cells) under the existing seed budget; and **four in five trees the
+world now knows about have no representation at all.** That last number is the
+headroom the impostor tier draws into, and it did not exist as a quantity
+before this unit — the renderer's reach and the world's reach were one number.
+
+**READ THE `settled` LINE: the second leg is flagged provisional.** Its gate
+wants the drawn triangles AND the seeded-cell count quiet for four consecutive
+polls, and over 327 s it never saw four in a row — the cells reached 225/225
+and held, so it is the triangle count moving by a tree or two on the harness's
+two-second frames. The identity claim does not rest on the gate: the placed
+counts and edges match the SETTLED first leg exactly, which is the comparison
+that matters. A gate that demands two signals be simultaneously still is
+stricter than either claim needs, and is worth loosening before the next run
+rather than being read as a failure.
 
 ### The polish pass — another agent, on the cell, two pushes apart
 
