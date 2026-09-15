@@ -11646,9 +11646,8 @@ let impostorDraw = IMPOSTOR_ON;
 /** Instance slots. Four triangles each, against ~1,045 for a baked skeleton:
  *  the whole tier at capacity is 32k triangles against the skeletons' 2.4M. */
 const IMPOSTOR_CAP = 8000;
-/** Out to here every unadmitted tree wears one; past it the hash thins as the
- *  inverse square, which is constant density on the GLASS rather than on the
- *  ground — the same reasoning the shrub lattice thins by. */
+/** A FLOOR under the full-density radius, not the radius itself — see
+ *  `impostorFullM`. */
 const IMPOSTOR_FULL_M = 260;
 /** How much of the top card shows, set per RENDER from that render's own
  *  camera — see `aimSky`, which is where everything hung on the eye belongs. */
@@ -14157,10 +14156,25 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // until now it was drawn as nothing at all.
   let impN = 0, impOffered = 0, impFormed = 0;
   if (impostors && impostorDraw) {
-    const full2 = IMPOSTOR_FULL_M * IMPOSTOR_FULL_M;
     const fadeFrom = treeRange * 0.66;
     for (const fam of EZ_FAMILIES) {
       const variants = ezVariants(fam);
+      // ── FULL DENSITY STARTS WHERE THE GEOMETRY STOPS ──
+      //
+      // The first cut thinned from a fixed 260 m, and measured its own mistake:
+      // at at-yosemite on a squeezed budget the admitted edge is 428 m, so
+      // EVERY tree this tier could draw was already deep in the thinned region
+      // and one in five stood up — 321 of 1,614. A tree a metre past the
+      // geometry's edge must be drawn with near-certainty or the handoff is a
+      // thinning, which is the pop wearing a gentler name.
+      //
+      // So the full-density radius is the family's OWN admitted edge (with a
+      // floor, for the case where nothing was admitted at all), and the
+      // inverse-square thinning begins beyond it. That also makes the rule
+      // adaptive in the right direction: a family the budget cuts hard has a
+      // near edge and starts thinning early, one it barely cuts thins late.
+      const full = Math.max(IMPOSTOR_FULL_M, ezEdge[fam]);
+      const full2 = full * full;
       for (const [d2, v] of cand[fam]) {
         if (impN >= IMPOSTOR_CAP) { impProf.capped++; break; }
         if (ezAdmit.has(v)) continue;

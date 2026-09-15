@@ -65,7 +65,10 @@ await d.close();
 const diff = (a, b, out) => {
   const t = execFileSync('node', [new URL('./imgdiff.mjs', import.meta.url).pathname,
     `${OUT}/imp-${a}.png`, `${OUT}/imp-${b}.png`, `${OUT}/${out}`], { encoding: 'utf8' });
-  return t.trim().split('\n').pop();
+  // The last line is the output PATH. The numbers are the line before it, and
+  // taking the last one printed a filename where a measurement should be.
+  const lines = t.trim().split('\n');
+  return lines.find((l) => l.includes('mean luma delta')) ?? lines.pop();
 };
 
 console.log(`\n── ${FIX} · budget ${TRIS} tris · ${settled ? 'settled' : 'NOT SETTLED — provisional'}`);
@@ -75,7 +78,7 @@ if (errs.length) {
   console.log('     while every count below still read correct. Read no further.');
 }
 const [a1, b1] = legs;
-console.log(`  skeletons placed ${b1.ez.placed} · ${(b1.ez.tris / 1e6).toFixed(2)}M tris`);
+console.log(`  skeletons placed ${b1.ez.placed?.length ?? '—'} logged · ${(b1.ez.tris / 1e6).toFixed(2)}M tris`);
 console.log(`  impostors drawn  ${b1.imp.drawn} of ${b1.imp.offered} offered`
   + ` · ${(b1.imp.tris / 1000).toFixed(1)}k tris`
   + ` · ${(b1.imp.tris / (b1.ez.tris + b1.imp.tris) * 100).toFixed(2)}% of the vegetation bill`);
