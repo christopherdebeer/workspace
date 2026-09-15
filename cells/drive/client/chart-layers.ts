@@ -50,7 +50,7 @@ export interface ChartLayer {
   debug?: boolean;
 }
 
-export type ChartLayerId = 'roads' | 'places' | 'cover' | 'eco' | 'substrate' | 'water' | 'surface';
+export type ChartLayerId = 'roads' | 'places' | 'cover' | 'eco' | 'substrate' | 'water' | 'surface' | 'ground';
 
 /**
  * THE TABLE. Order is the order on the key, and the key reads top-down as the
@@ -78,6 +78,15 @@ export const CHART_LAYERS: readonly ChartLayer[] = Object.freeze([
   // OF — where "substrate" names the renderer's module rather than the thing
   // the reader is looking at. The id stays `substrate`; a chip's label is a
   // word on glass and an id is a wire format.
+  // ── ONE CHIP, SIX CHANNELS ── the geomorphic field has more channels than
+  // the key has room for, and they are a set to be read in turn rather than a
+  // menu to choose from: a tap advances exposure → debris → soil → moisture →
+  // grass → family → off, and the legend names the one in force. A debug view
+  // like MATERIAL, so it is offered only while the tile overlay is up and is
+  // never restored from storage.
+  Object.freeze({ id: 'ground' as const, name: 'GROUND', kind: 'thematic' as const,
+    on: false, debug: true,
+    note: 'the shared geomorphic substrate field, one channel at a time — what the ground is made of, before anything grows on it' }),
   Object.freeze({ id: 'substrate' as const, name: 'MATERIAL', kind: 'thematic' as const,
     on: false, debug: true,
     note: 'what the renderer believes the ground is made of: outcrop, turf, regolith' }),

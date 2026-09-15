@@ -81,7 +81,7 @@ import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight, uFacSun } from './facade';
 import { roofFx } from './roof-fx';
-import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, groundInkPixels, type GroundViewId } from './ground-view';
+import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, SUBSTRATE_VIEWS, groundInkPixels, type GroundViewId } from './ground-view';
 import { SUB_GLSL, SUB_DOM_M, subDomainAt, subEvidence, subGrassFactor, subMatOf,
   subTintOf, subWeightsOf, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
   type SubstrateField } from './substrate-field';
@@ -2370,6 +2370,15 @@ function setGroundView(v: GroundViewId): void {
   if (v === 'cover' || v === 'eco') gvU.uGLut.value = gvLutFor(v);
   gvU.uGView.value = GROUND_VIEW[v];
 }
+/** Drive the channel by hand — what a devtool photographs the field with, and
+ *  the console's way in from a phone. The chip cycles; this picks. */
+(window as unknown as { __groundview?: (v?: string) => string }).__groundview = (v?: string): string => {
+  if (v && v in GROUND_VIEW) {
+    setGroundView(v as GroundViewId);
+    if (SUBSTRATE_VIEWS.includes(v as GroundViewId)) groundChannel = v as GroundViewId;
+  }
+  return groundView;
+};
 /** The footprint helper and the heat ramp, prepended to the terrain fragment
  *  shader. One string, so the measuring mode and the shipping mode cannot
  *  drift apart — the instrument must read the same number the term uses. */
@@ -6633,7 +6642,26 @@ const wetDbgU = {
 };
 let wetDbgOn = qsOn('wetdebug', false);
 let wetDbgAt = -1e9, wetDbgMs = 0;
-function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
+/** One 1x1 zero texture for every material that has no field of its own — the
+ *  shared terrain material, the batter, the far shell. A sampler uniform must
+ *  point at SOMETHING or three binds unit 0 and the fragment reads whatever
+ *  texture happened to be there; the zero box beside it is what actually gates
+ *  the read. */
+let blankTexCache: THREE.DataTexture | null = null;
+function blankTex(): THREE.DataTexture {
+  if (!blankTexCache) {
+    blankTexCache = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1, THREE.RGBAFormat);
+    blankTexCache.needsUpdate = true;
+  }
+  return blankTexCache;
+}
+function terrainFx(mat: THREE.Material, opts: {
+  detail?: boolean;
+  /** This tile's own geomorphic substrate field and the world box it covers,
+   *  as (xs, zs, w, h). Per tile, so it cannot live in the shared uniform
+   *  block the dials and the view selector use. */
+  sub?: { a: THREE.Texture; b: THREE.Texture; box: [number, number, number, number] };
+} = {}): void {
   // THE SHADOW MAP HAS TO SEE THE FACES YOU CAN SEE. three's default for a
   // FrontSide material is to render BACK faces into the depth map — sound for a
   // closed object, where the far wall is a free bias — and terrain is not a
@@ -6792,6 +6820,13 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
       sh.uniforms.uSubAmt = tdU.uSubAmt;
       sh.uniforms.uSubDom = tdU.uSubDom;
       sh.uniforms.uGView = gvU.uGView;
+      // A tile with no field yet (the shared material, the batter, the shell)
+      // gets a 1x1 blank and a zero box, and every read of it is gated on the
+      // box having width — an unloaded field must read as "no answer" rather
+      // than as bare rock with no soil and no grass.
+      sh.uniforms.uSubA = { value: opts.sub ? opts.sub.a : blankTex() };
+      sh.uniforms.uSubB = { value: opts.sub ? opts.sub.b : blankTex() };
+      sh.uniforms.uSubBox = { value: new THREE.Vector4(...(opts.sub ? opts.sub.box : [0, 0, 0, 0])) };
       sh.uniforms.uGLut = gvU.uGLut;
       sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
       {
@@ -7012,9 +7047,25 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         // class a reader is most certain of. Alpha is the coverage claim, so
         // ground no tile has answered for keeps its own colour and the view
         // says where the data IS rather than filling its gaps.
-        if (uGView > 1.5) {
+        if (uGView > 1.5 && uGView < 3.5) {
           vec4 gInk = gvInk(uGLut, vTd.w);
           diffuseColor.rgb = mix(diffuseColor.rgb, gInk.rgb, gInk.a);
+        }
+        // ── A CHANNEL OF THE GEOMORPHIC FIELD, AS A RAMP OVER THE LIT GROUND ──
+        //
+        // Views 4..9 are SUB_CH's own order, so the channel is arithmetic
+        // rather than a six-way branch: below four it is in texture A, above
+        // in B, and the component is the remainder. Where the tile has no
+        // field the box has no width and the ground keeps its own colour —
+        // the same coverage claim every other view here makes.
+        if (uGView > 3.5 && uSubBox.z > 1.0) {
+          vec2 sUV = (vWorldP.xz - uSubBox.xy) / uSubBox.zw;
+          vec4 sA = texture2D(uSubA, sUV), sB = texture2D(uSubB, sUV);
+          float ch = uGView - 4.0;
+          vec4 src = ch < 4.0 ? sA : sB;
+          float cc = mod(ch, 4.0);
+          float v = cc < 0.5 ? src.r : cc < 1.5 ? src.g : cc < 2.5 ? src.b : src.a;
+          diffuseColor.rgb = uGView > 8.5 ? gvFamily(v) : gvRamp(v);
         }
         ${TDETAIL === 'px' ? 'diffuseColor.rgb = tdHeat(px);' : ''}
       }`);
@@ -7022,6 +7073,7 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         + 'uniform float uTdRule;\nuniform float uTdAmt;\nuniform float uTdOct;\nuniform vec2 uTdForce;\n'
         + 'uniform float uSubAmt;\nuniform float uSubDom;\n'
         + 'uniform float uGView;\nuniform sampler2D uGLut;\n'
+        + 'uniform sampler2D uSubA;\nuniform sampler2D uSubB;\nuniform vec4 uSubBox;\n'
         + sh.fragmentShader;
     }
   };
@@ -7548,7 +7600,11 @@ function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.Me
   m.normalMapType = THREE.ObjectSpaceNormalMap;
   // normalScale has no meaning for an object-space map — the stored vector IS
   // the normal — so strength is dialled by flattening toward up at build time.
-  terrainFx(m, { detail: true });
+  // The tile's own geomorphic field, as this material's own uniforms: the
+  // field is per tile, so it cannot be a shared uniform block the way uGView
+  // and the dials are.
+  const sub = substrateTexes.get(key);
+  terrainFx(m, { detail: true, sub: sub ? { a: sub.a, b: sub.b, box: [t.xs, t.zs, t.w, t.h] } : undefined });
   terrainMats.set(key, m);
   return m;
 }
@@ -7871,8 +7927,39 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
  * longer exists would answer questions about ground nobody can see.
  */
 const substrateFields = new Map<string, SubstrateField>();
+/**
+ * …AND THE SAME TWO ARRAYS AS TEXTURES, so the fragment reads the field the
+ * CPU reads. LinearFilter on purpose: a 33 m lattice sampled nearest puts its
+ * own squares on the hillside, which is the blocky-motif fault one scale up
+ * and precisely what this model exists to stop drawing.
+ */
+const substrateTexes = new Map<string, { a: THREE.DataTexture; b: THREE.DataTexture }>();
+function substrateTexFor(key: string, a: Uint8Array, b: Uint8Array): { a: THREE.DataTexture; b: THREE.DataTexture } {
+  const old = substrateTexes.get(key);
+  if (old) { old.a.dispose(); old.b.dispose(); }
+  const mk = (src: Uint8Array): THREE.DataTexture => {
+    const tex = new THREE.DataTexture(src as Uint8Array<ArrayBuffer>, SUB_FIELD_N, SUB_FIELD_N, THREE.RGBAFormat);
+    tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping; tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.generateMipmaps = false; tex.needsUpdate = true;
+    return tex;
+  };
+  const pair = { a: mk(a), b: mk(b) };
+  // Capped like the normal maps and the materials beside them: drive far
+  // enough and nothing prunes the tile maps, and this is 32 KB a tile.
+  if (substrateTexes.size > 64) {
+    for (const k of [...substrateTexes.keys()].slice(0, 16)) {
+      if (k === key) continue;
+      const t2 = substrateTexes.get(k); if (!t2) continue;
+      t2.a.dispose(); t2.b.dispose(); substrateTexes.delete(k);
+    }
+  }
+  substrateTexes.set(key, pair);
+  return pair;
+}
 function noteSubstrateField(key: string, t: HeightTile, a: Uint8Array, b: Uint8Array): void {
   substrateFields.set(key, { n: SUB_FIELD_N, xs: t.xs, zs: t.zs, w: t.w, h: t.h, a, b });
+  substrateTexFor(key, a, b);
 }
 /** One channel of the substrate at a world point, or null where no tile has
  *  built — which is a real answer, and the callers all have a fallback for it
@@ -27642,13 +27729,13 @@ function saveChartLayers(): void {
  *  stored, so the one-at-a-time rule has a single place it can be true. */
 function themeLayer(): ChartLayerId | null {
   for (const l of CHART_LAYERS) {
-    if (l.kind === 'thematic' && chartOn[l.id] && !VIEW_FOR_LAYER[l.id] && !DBG_RASTER[l.id]) return l.id;
+    if (l.kind === 'thematic' && chartOn[l.id] && l.id !== 'ground' && !VIEW_FOR_LAYER[l.id] && !DBG_RASTER[l.id]) return l.id;
   }
   return null;
 }
 /** The chip that is driving the renderer's channel, or null. */
 function viewLayer(): ChartLayerId | null {
-  for (const l of CHART_LAYERS) if (chartOn[l.id] && VIEW_FOR_LAYER[l.id]) return l.id;
+  for (const l of CHART_LAYERS) if (chartOn[l.id] && (l.id === 'ground' || VIEW_FOR_LAYER[l.id])) return l.id;
   return null;
 }
 /** Turn the debug raster on for one classifier, or off. `wetDbgAt` is reset so
@@ -27662,9 +27749,24 @@ function setDebugRaster(v: 'water' | 'surface' | null): void {
 /** Which chips paint the raster rather than the channel. */
 const DBG_RASTER: Partial<Record<ChartLayerId, 'water' | 'surface'>> =
   { water: 'water', surface: 'surface' };
+/** Which channel of the geomorphic field the GROUND chip is showing. One chip
+ *  cycles the set rather than six chips competing for an eight-character key;
+ *  the legend names the one in force, because a false-colour ramp with no name
+ *  on it is a picture of nothing. */
+let groundChannel: GroundViewId = SUBSTRATE_VIEWS[0];
 function setChartLayer(id: ChartLayerId, on: boolean): void {
   const row = chartLayer(id);
   if (!row) return;
+  // ── A TAP ON THE CHIP ALREADY SHOWING ADVANCES IT, AND FALLS OFF THE END ──
+  // Six channels behind one chip only works if the second tap means "the next
+  // one"; turning the layer off on tap two would make five of the six
+  // unreachable from the glass.
+  if (id === 'ground' && on && chartOn.ground) {
+    const i = SUBSTRATE_VIEWS.indexOf(groundChannel) + 1;
+    if (i >= SUBSTRATE_VIEWS.length) { groundChannel = SUBSTRATE_VIEWS[0]; on = false; }
+    else { groundChannel = SUBSTRATE_VIEWS[i]; setGroundView(groundChannel); return; }
+  }
+  if (id === 'ground' && on && !chartOn.ground) groundChannel = SUBSTRATE_VIEWS[0];
   if (on && row.kind === 'thematic') for (const l of CHART_LAYERS) if (l.kind === 'thematic') chartOn[l.id] = false;
   chartOn[id] = on;
   saveChartLayers();
@@ -27674,7 +27776,7 @@ function setChartLayer(id: ChartLayerId, on: boolean): void {
     // `?tdetail=dom` asked for the substrate before any chip existed, and
     // turning a class view off should give that back rather than nothing.
     const v = viewLayer();
-    setGroundView(v ? (VIEW_FOR_LAYER[v] as GroundViewId) : baseGroundView);
+    setGroundView(v ? (v === 'ground' ? groundChannel : VIEW_FOR_LAYER[v] as GroundViewId) : baseGroundView);
     gvClassCounts.clear(); gvCountAt = 0;
     // …and the raster views the same way. They are in the same radio group, so
     // exactly one of the two mechanisms can be asking at a time and the other
@@ -28023,6 +28125,20 @@ function themeLegend(): Array<{ cls: number; name: string; hex: string; share: n
     return SUBSTRATE_LEGEND.map((r, i) => ({ cls: -1 - i, name: r.name, hex: r.hex, share: 0 }));
   }
   if (groundView === 'cover' || groundView === 'eco') return legendFor(groundView, gvClassCounts);
+  // ── A CHANNEL VIEW NAMES ITSELF AND ITS SCALE ──
+  // A false-colour ramp with no name on it is a picture of nothing, and with
+  // six channels behind one chip the name IS the reading. `family` is the odd
+  // one out because it is a choice among four rather than a scale, so it gets
+  // its four inks where the rest get the ramp's ends.
+  if (SUBSTRATE_VIEWS.includes(groundView)) {
+    const nm = groundView.toUpperCase();
+    if (groundView === 'family') {
+      return [['MASSIVE', '#b8b3a8'], ['BEDDED', '#d99e4d'], ['FRACTURED', '#738cc7'], ['LOOSE', '#9e4d8c']]
+        .map(([name, hex], i) => ({ cls: -1 - i, name, hex, share: 0 }));
+    }
+    return [[`${nm} 0`, '#0d1a59'], ['·', '#1a8cb3'], ['·', '#4db83f'], [`${nm} 1`, '#e63820']]
+      .map(([name, hex], i) => ({ cls: -1 - i, name, hex, share: 0 }));
+  }
   if (dbgView) {
     const rows = dbgView === 'surface' ? SURFACE_LEGEND : WATER_LEGEND;
     return rows.map((r, i) => ({ cls: -1 - i, name: r.name, hex: r.hex, share: 0 }));

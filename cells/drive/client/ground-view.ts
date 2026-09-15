@@ -42,12 +42,35 @@ import { COVER_INK, ECO_INK, type ChartLayerId } from './chart-layers';
  * about its coverage, and saying where the data IS is most of what these views
  * are for.
  */
-export type GroundViewId = 'off' | 'substrate' | 'cover' | 'eco';
+export type GroundViewId = 'off' | 'substrate' | 'cover' | 'eco'
+  | 'exposure' | 'debris' | 'soil' | 'moisture' | 'grass' | 'family';
+
+/**
+ * ── THE GEOMORPHIC FIELD'S OWN CHANNELS, ONE VIEW EACH ──
+ *
+ * The rule this whole programme runs on is that a rendering claim is
+ * unarguable until the field under it can be looked at: "the scree is in the
+ * wrong place" and "there is no scree channel" produce the same frame. Each of
+ * these paints ONE channel of the shared substrate field as a ramp over the
+ * lit ground, so an outcrop, an apron, a wet hollow and a grassy terrace are
+ * each a picture rather than a number in a probe.
+ *
+ * They are debug views and are never restored from storage — see the chip's
+ * own note. `family` is discrete where the others are continuous, because a
+ * rock family is a choice among four and a ramp would imply an ordering it
+ * does not have.
+ */
+export const SUBSTRATE_VIEWS: readonly GroundViewId[] =
+  Object.freeze(['exposure', 'debris', 'soil', 'moisture', 'grass', 'family']);
 
 /** What the uniform carries. Appended to, never reordered: the value is read
  *  by the shader and by every probe and log line that reports a view. */
 export const GROUND_VIEW: Record<GroundViewId, number> = Object.freeze({
   off: 0, substrate: 1, cover: 2, eco: 3,
+  // 4 and up are the geomorphic field's channels, in SUB_CH's own order so the
+  // shader can index the pair of textures with arithmetic rather than a
+  // six-way branch: (view - 4) picks the channel, < 4 is texture A.
+  exposure: 4, debris: 5, soil: 6, moisture: 7, grass: 8, family: 9,
 });
 
 /**
@@ -103,5 +126,24 @@ export function groundInkPixels(layer: 'cover' | 'eco'): Uint8Array<ArrayBuffer>
 export const GV_GLSL = `
 vec4 gvInk(sampler2D lut, float cls) {
   return texture2D(lut, vec2((floor(cls + 0.5) + 0.5) / 256.0, 0.5));
+}
+// A 0..1 ramp for a continuous channel: deep blue, cyan, green, yellow, red.
+// Ordered by LUMINANCE as well as by hue, so it survives the fourteen-level
+// composite and the dither — a ramp that is only a hue rotation comes back
+// from the quantiser as three flat bands.
+vec3 gvRamp(float v) {
+  float t = clamp(v, 0.0, 1.0);
+  vec3 c = mix(vec3(0.05, 0.10, 0.35), vec3(0.10, 0.55, 0.70), smoothstep(0.0, 0.33, t));
+  c = mix(c, vec3(0.30, 0.72, 0.25), smoothstep(0.25, 0.60, t));
+  c = mix(c, vec3(0.92, 0.82, 0.20), smoothstep(0.55, 0.82, t));
+  return mix(c, vec3(0.90, 0.22, 0.12), smoothstep(0.78, 1.0, t));
+}
+// …and four inks for the rock families, which are a CHOICE and not a scale.
+vec3 gvFamily(float v) {
+  float f = floor(clamp(v, 0.0, 1.0) * 3.0 + 0.5);
+  if (f < 0.5) return vec3(0.72, 0.70, 0.66);   // massive
+  if (f < 1.5) return vec3(0.85, 0.62, 0.30);   // bedded
+  if (f < 2.5) return vec3(0.45, 0.55, 0.78);   // fractured
+  return vec3(0.62, 0.30, 0.55);                // loose
 }
 `;
