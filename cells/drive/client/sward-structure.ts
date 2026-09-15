@@ -9,13 +9,14 @@
  *   THREE.WebGLProgram: Shader Error 0 - VALIDATE_STATUS false
  *   ERROR: 0:224: 'patch' : Illegal use of reserved word
  *
- * TWO PROGRAMS, AND THE WORLD LOOKED FINE. A shader that fails to link logs
- * to the console and throws nothing, and the harness's software renderer is
- * WebGL1, where `patch` is not reserved — so it compiles here and fails
- * there, which is the worst arrangement a trap can have. This repo already
- * records the same fault for `cast` in the façade shader; the general rule is
- * that a GLSL identifier wants checking against the ES 3.00 reserved list,
- * not the ES 1.00 one, however the local context compiles.
+ * TWO PROGRAMS, AND THE WORLD LOOKED FINE, because a program that fails to
+ * link logs to the console and throws nothing. The harness would have caught
+ * it — measured, not assumed: `openDrive` gets WebGL 2.0 / GLSL ES 3.00 over
+ * ANGLE and SwiftShader, and rejects this exact construct — but only once a
+ * tool DRAWS the material, a program being compiled on its first render. It
+ * shipped from an environment that could make no WebGL context at all. This
+ * repo already records the same fault for `cast` in the façade shader;
+ * `devtools/glsl-reserved.test.mjs` is what checks it now, in pure node.
  *
  * Structural expression of the EXISTING sward population. No additional
  * samples, instances, vertices or species-density rules. Mineral and emergent

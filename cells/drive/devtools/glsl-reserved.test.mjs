@@ -3,13 +3,21 @@
  *
  *   node cells/drive/devtools/glsl-reserved.test.mjs
  *
- * WHY THIS CANNOT BE LEFT TO A RUN. three compiles `#version 300 es` on a
- * WebGL2 context and ES 1.00 on WebGL1, and the two have different reserved
- * word lists — so a shader naming a variable `patch`, `sample`, `filter` or
- * `cast` compiles perfectly in the harness (whose SwiftShader context is
- * WebGL1) and fails to link on every phone. It cost a deploy: the sward's
- * structural expression shipped with a parameter called `patch` and the
- * device dump came back with
+ * WHY IT IS WORTH A TEST. three compiles `#version 300 es` on a WebGL2
+ * context and ES 1.00 on WebGL1, and the two have different reserved word
+ * lists — so a shader naming a variable `patch`, `sample`, `filter` or `cast`
+ * is legal on one profile and a link failure on the other.
+ *
+ * NOT BECAUSE THE HARNESS IS BLIND: measured, `openDrive` gets WebGL 2.0 /
+ * GLSL ES 3.00 over ANGLE and SwiftShader and rejects the construct exactly
+ * as the phone does, and its console sniffer folds that into `d.errors`. Two
+ * narrower things are true, and they are why this exists. A program is
+ * compiled on its FIRST RENDER, so a `nodraw=1` tool never triggers one and
+ * a green run proves nothing about a material it did not draw. And this runs
+ * in pure node — no GL, no minute — which is the case that actually shipped
+ * the fault: the sward's structural expression went out from an environment
+ * whose browser could not create a WebGL context at all, and the device dump
+ * came back with
  *
  *   ERROR: 0:224: 'patch' : Illegal use of reserved word
  *

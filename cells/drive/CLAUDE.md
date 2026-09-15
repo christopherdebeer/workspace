@@ -242,7 +242,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~20s |
 | `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
 | `node devtools/switches.test.mjs` | the table cannot rot in either direction | instant |
-| `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the one fault class the harness is structurally blind to, its SwiftShader context being WebGL1 | instant |
+| `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
@@ -4561,19 +4561,39 @@ example.)
 
 **AND A GLSL IDENTIFIER IS CHECKED AGAINST ES 3.00, NOT ES 1.00 — BY A TEST.**
 three compiles `#version 300 es` on a WebGL2 context and ES 1.00 on WebGL1,
-and the two reserve different words. **The harness's SwiftShader context is
-WebGL1**, so a shader naming a variable `patch`, `sample`, `filter` or `cast`
-compiles green here and fails to link on every phone — which is the worst
-arrangement a trap can have, and it is not hypothetical: the sward's
-structural expression shipped with a parameter called `patch` and the device
-dump came back with `ERROR: 0:224: 'patch' : Illegal use of reserved word` on
-TWO programs, with the world looking perfectly normal, because a program that
+and the two reserve different words, so an identifier legal on one profile can
+be a link failure on the other. It is not hypothetical: the sward's structural
+expression shipped with a parameter called `patch` and the device dump came
+back with `ERROR: 0:224: 'patch' : Illegal use of reserved word` on TWO
+programs, with the world looking perfectly normal — because a program that
 fails to link logs to the console and throws nothing. `cast` in the façade
-shader was the same fault two years of sessions earlier. `devtools/glsl-reserved.test.mjs`
-scans every GLSL template literal in `client/` against the ES 3.00
-reserved-for-future list, with comments and three's own `#include <common>`
-chunk names stripped, and it carries the shipped form as its negative control.
-It is instant; run it with `tsc`.
+shader was the same fault, sessions earlier.
+
+**THE HARNESS IS NOT BLIND TO THIS, AND A FIRST WRITE-UP HERE SAID IT WAS.**
+Measured rather than assumed, which is what the claim needed in the first
+place: `openDrive` gets
+
+```
+WebGL 2.0 (OpenGL ES 3.0 Chromium) · WebGL GLSL ES 3.00
+ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)
+```
+
+and compiling the exact construct on it answers `ERROR: 0:4: 'patch' : Illegal
+use of reserved word` under ES 3.00 and `compiles` under ES 1.00. So the
+harness reproduces the device's compiler, its console sniffer folds a GLSL
+error into `d.errors`, and any tool that DRAWS the material would have caught
+this. What is true is narrower and worth keeping: **a program compiles on its
+first render**, so a `nodraw=1` tool never triggers one, and the fault shipped
+because the agent that wrote it had no WebGL context at all in its own
+environment — its report says so outright, `GL_RENDERER Disabled` — and
+deployed with no browser validation.
+
+`devtools/glsl-reserved.test.mjs` earns its place for exactly that case rather
+than for a blindness the harness does not have: it is pure node, so it works
+where there is no GL, and it is instant against a boot's minute. It scans every
+GLSL template literal in `client/` against the ES 3.00 reserved-for-future
+list, with comments and three's own `#include <common>` chunk names stripped,
+and it carries the shipped form as its negative control. Run it with `tsc`.
 
 **A backtick inside a GLSL comment breaks the enclosing TS template literal.**
 This has now cost FIVE separate rounds — two of them in one session, both in
