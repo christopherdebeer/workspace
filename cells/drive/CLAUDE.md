@@ -21,6 +21,15 @@ tried and was wrong.
 > esbuild --log-level=error --outfile=/dev/null app.js` found it instantly
 > (`Syntax error "a"`, line 14569). Use esbuild.
 >
+> **AND A NEEDLE WITH A NON-ASCII CHARACTER IN IT READS 0.** The deploy
+> transpile emits ASCII, so a middle dot in a string literal — which every
+> telemetry row in this game is built from — arrives as `\xB7` and a grep for
+> the UTF-8 character finds nothing at all. Measured on the redrape
+> instrument's own check: `calls · walk ` 0, ` normals ` 5, `redrapeProf` 3, in
+> a bundle that plainly carries the row. That is a false negative shaped
+> exactly like a symbol that did not ship, and it is the second reason the
+> PARSE is the gate and the grep is a secondary.
+>
 > The break was a `String.replace()` filling a placeholder in the served
 > `app.js`. `replace` takes the FIRST occurrence, `client/runtime.ts` had been
 > using that same placeholder for years, and the substitution landed inside
@@ -41,28 +50,43 @@ a confusing module error):
 5. Verify by fetching the live bundle and grepping for a symbol you just added:
    `curl -s https://c15r-drive.on.parc.land/app.js | grep -c mySymbol`
 
-> **THE DEPLOYER IS 1024 MB NOW, AND IT NEEDS 687.** Measured 2026-09-15 by
-> tailing `platform.logs {service: "cells"}` THROUGH a push rather than after
-> it, which is the only way to catch the line — the tail is a short live
-> window, not a searchable history, so a deploy's own REPORT is gone within
-> the minute:
+> **THE DEPLOYER IS 1024 MB NOW, AND IT NEEDS 714 — WHICH WAS 687 THIS
+> MORNING.** Measured 2026-09-15, twice, by tailing `platform.logs {service:
+> "cells"}` THROUGH a push rather than after it, which is the only way to catch
+> the line — the tail is a short live window, not a searchable history, so a
+> deploy's own REPORT is gone within the minute:
 >
 > ```
 > 10:39:02  cell deployed  version 1789468740806  files 191  static 22
 > 10:39:02  REPORT  Duration: 28332.01 ms  Memory Size: 1024 MB  Max Memory Used: 687 MB
+> 16:41:04  cell deployed  version 1789490463265  files 196  static 22
+> 16:41:04  REPORT  Duration: 32720.97 ms  Memory Size: 1024 MB  Max Memory Used: 714 MB
 > ```
 >
-> **28.3 s of the 120 s timeout and 687 MB of the 1024 MB ceiling** — two
-> thirds of the memory, a quarter of the clock. Everything below was written
+> **32.7 s of the 120 s timeout and 714 MB of the 1024 MB ceiling** — seven
+> tenths of the memory, a quarter of the clock. Everything below was written
 > against a 512 MB function, and at 512 this cell's deploy would now fail
-> EVERY time rather than intermittently: 687 is not a near miss. The failure
+> EVERY time rather than intermittently: 714 is not a near miss. The failure
 > mode and its diagnosis still stand exactly as written; what has changed is
-> the headroom, and the number to watch is 687 against 1024, because the cell
-> is still growing and the ceiling is not.
+> the headroom, and the number to watch is 714 against 1024 **and its slope**:
+> +27 MB and five files over ONE DAY of ordinary work, on a ceiling that does
+> not move. Two points are not a trend, and they are the only two there are —
+> so take the REPORT on every deploy from now on rather than discovering the
+> slope at the wall. At this rate the headroom is a question of months.
 >
-> The per-file writes during a push sit at 253 MB and 85–320 ms each, so the
-> 687 is the BUNDLE step alone — one request, `26b1a0e0`, that reads every
-> file, transpiles `client/main.ts` and zips `static/`.
+> The per-file writes during a push sit at 249 MB and 85–420 ms each, so the
+> 714 is the BUNDLE step alone — one request (`26b1a0e0` on the first
+> measurement, `900dd031` on the second) that reads every file, transpiles
+> `client/main.ts` and zips `static/`.
+>
+> **CATCHING IT NEEDS THE TAIL TAKEN AT THE RIGHT MOMENT, AND THE MOMENT IS
+> AFTER.** The bundle request STARTs when the deploy is requested and its
+> REPORT is written ~33 s later, so a read taken while the push is still
+> writing files — or in the first half minute of the deploy — shows the START
+> and no REPORT, which is what happened here on the first attempt. Watch the
+> log for `deploying` to know the request went in, then read once the `✓
+> deployed` line lands: the REPORT is the last thing before cell-sync's own
+> polling.
 
 **A DEPLOY THAT NEVER LEAVES `DEPLOYING` IS THE DEPLOYER OUT OF MEMORY, AND
 NOTHING TELLS YOU.** Root-caused on 2026-09-10 with `platform.logs
