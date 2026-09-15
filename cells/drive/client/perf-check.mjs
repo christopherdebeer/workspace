@@ -79,8 +79,22 @@ function context(code,range,ez,triCap) {
     emptyVegRoles:()=>({interior:0,fringe:0}),vegActiveRoles:{},vegActiveAnchors:0,vegRoleDebug:false,
     isEzKind:k=>families.includes(k),isTreeKind:k=>families.includes(k),
     ezCapFor:()=>triCap,ezVariantAt:(f,x,z)=>Math.abs((Math.floor(x/32)^Math.floor(z/32)))%3,
+    // THE CAP RULE IS STUBBED ON BOTH SIDES AND MUST STAY THAT WAY. The claim
+    // here is that the refill is byte-identical GIVEN THE SAME CAPS; the rule
+    // that sets the caps has its own A/Bs (tree-edge, tree-spend) and changed
+    // three times in one day. Wiring ezCapFor to read the allocator's own
+    // ezCapNow would make the baseline — which predates the allocator — differ
+    // for a reason that is not a regression, and the check would then be
+    // "loosened" until it meant nothing. The allocator still RUNS below, so an
+    // exception in it fails here, which is what caught this file being red.
+    EZ_DEMAND:true,ezCapNominal:()=>triCap,ezMeanTris:()=>500,ezTriPrice:()=>500,
+    ezPriceNow:record(()=>0),EZ_PRICE_MIN:8,treeTriBudget:2.4e6,
     ezCrownReach:()=>0.1,EZ_M_PER_SCALE:record(()=>5.7),
     vegGrid:new Map(),vegSeeded:new Set(),vegSeedStats:new Map(),
+    // TWICE THE DRAW RANGE, so the manifest pass actually RUNS here rather than
+    // being skipped as a no-op: the claim under test is that seeding further
+    // out changes no mesh, and a pass that never executes cannot witness it.
+    manifestRange:()=>range*2,vegManifestDeferred:0,
     seedCell:()=>{},vegMark:()=>{},refreshShrubs:()=>{},
     groundAt:(x,z)=>Math.sin(x/30)+Math.cos(z/30),sampleCover:()=>10,
     terrainPalette:()=>[0.2,0.3,0.1],trunkReach:(k,h,s)=>h+s*0.38,

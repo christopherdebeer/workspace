@@ -11303,6 +11303,54 @@ let treePopulationScale = 1;
   const p = Number(qs('treepop'));
   if (Number.isFinite(p) && p > 0) treePopulationScale = clamp(p, 0.05, 32);
 }
+/**
+ * ── A TREE SHOULD EXIST BEFORE IT BECOMES GEOMETRY ──
+ *
+ * `treeRange` is how far out a tree is DRAWN. Until now it was also how far
+ * out a tree EXISTED: `vegRefreshSteps` walked one ring and called
+ * `seedCell` on it, so past that radius there was no tree — not a cheap one,
+ * not a mark on the ground, nothing at all. Every cheaper far representation
+ * this game might grow (an impostor, a canopy mark, a woodland mass) needs a
+ * DESCRIPTOR further out than the geometry, or it merely moves the pop it was
+ * built to remove: a billboard that first appears at the same radius the mesh
+ * used to is the same event wearing fewer triangles.
+ *
+ * So the manifest is its own radius. Sites are seeded out to `manifestRange`;
+ * candidates are still gathered, admitted and drawn inside `treeRange`
+ * exactly as before, so NOTHING ON SCREEN CHANGES — this is the horizon the
+ * next unit draws into, and the number that makes "known" and "drawn" two
+ * different quantities the probe can report.
+ *
+ * WHAT IT COSTS is seeding, and the existing budget already bounds it:
+ * `VEG_SEED_MS` is 8 ms a refresh less whatever the frame has already spent,
+ * and both walks are CENTRE-OUT, so the near cells are always served first and
+ * the far manifest takes the leftovers. A wider manifest therefore costs the
+ * far country latency, never the ground under the wheels.
+ *
+ * AND THE EVIDENCE IS ALREADY THERE at this range, which is what makes the
+ * radius affordable at all: `seedCell` waits on the cover raster (z12, a 7x7
+ * ring, about 28 km) and the ecoregion (z5, ~1250 km tiles). Both reach far
+ * past any plausible manifest, so widening it needs no new streaming — the
+ * failure mode a wider ring WOULD have had is simply not present.
+ *
+ * The cap is a bound on the cell count rather than a judgement about
+ * landscape: at 220 m cells a 1.4 km manifest is 15x15 = 225 cells against the
+ * draw ring's 9x9 = 81, and the rack's own 2.8 km draw stop would otherwise
+ * ask for a 5.6 km manifest at 53x53 = 2,809. Capped, that stop asks 27x27 =
+ * 729. `?treemanifest=` sets the metres exactly, and equal to `treeRange`
+ * restores the single ring this replaced.
+ */
+const MANIFEST_K = 2;                       // …times the draw range
+const MANIFEST_MAX_M = 2800;                // …and no further, whatever the rack asks
+let manifestOverride = 0;
+{
+  const m = Number(qs('treemanifest'));
+  if (Number.isFinite(m) && m > 0) manifestOverride = clamp(m, 100, 6000);
+}
+function manifestRange(): number {
+  const draw = Math.max(VEG_RANGE, treeRange);
+  return Math.max(draw, manifestOverride || Math.min(draw * MANIFEST_K, MANIFEST_MAX_M));
+}
 let treeSizeScale = 1;
 let treeFormScale = 1;
 let treeVariantCap: number = Number.MAX_SAFE_INTEGER;
@@ -11386,6 +11434,38 @@ function ezTriPrice(fam: EzFamily): number {
   const mean = ezMeanTris(fam);
   const p = EZ_PRICE ? ezPriceNow[fam] : 0;   // ?treeprice=0 — the atlas mean
   return p > 0 ? clamp(p, mean * 0.25, mean * 4) : mean;
+}
+/**
+ * WHAT IS KNOWN, against what is drawn. Walked on demand and never from the
+ * frame loop: it is O(cells x sites) over the manifest ring, which is the very
+ * cost the gather pass is kept inside the draw ring to avoid. A probe may be
+ * expensive; a refresh may not.
+ *
+ * `seeded` against `cells` is the manifest FILLING — a fresh hop starts near
+ * zero and climbs as the seed budget reaches the annulus, so a reading taken
+ * before it settles is a reading of the budget rather than of the world.
+ */
+function vegManifestTally(): {
+  rangeM: number; cells: number; seeded: number; deferred: number; known: Record<EzFamily, number>;
+} {
+  const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
+  const m = manifestRange();
+  const mReach = Math.max(Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL), Math.ceil(m / VEG_CELL));
+  const known = ezRecord(() => 0);
+  const r2 = m * m;
+  let cells = 0, seeded = 0;
+  for (const [gx, gz] of squareRings(cx, cz, mReach)) {
+    cells++;
+    const key = `${gx},${gz}`;
+    if (!vegSeeded.has(key)) continue;
+    seeded++;
+    for (const v of vegGrid.get(key) ?? []) {
+      if (!isEzKind(v.k)) continue;
+      const dx = v.x - state.x, dz = v.z - state.z;
+      if (dx * dx + dz * dz <= r2) known[v.k]++;
+    }
+  }
+  return { rangeM: Math.round(m), cells, seeded, deferred: vegManifestDeferred, known };
 }
 /** The nominal cap: what the rack asks for, before any budget. */
 const ezCapNominal = (fam: EzFamily): number =>
@@ -13486,6 +13566,10 @@ let vegSeedMsNow = 0;
  * frames without being spread over seconds. `?vegseed=0` is the exact A/B.
  */
 const VEG_SEED_MS = 8;
+/** Whether the manifest pass ran out of budget before the annulus was walked:
+ *  nonzero means the far manifest is still filling, which is a latency and not
+ *  a fault — the near ring is served first by construction. */
+let vegManifestDeferred = 0;
 const VEG_SEED_CATCHUP = 120;
 const VEG_SEED_BUDGET = qs('vegseed') !== '0';
 let vegSeedLeft = 0;
@@ -13661,6 +13745,10 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   let trunkN = 0;
   const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
   const reach = Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL);
+  // The manifest's own reach — see the note by `manifestRange`. The draw ring
+  // is walked for gather and place exactly as before; this one is walked for
+  // SEEDING alone, and only over the annulus beyond the draw ring.
+  const mReach = Math.max(reach, Math.ceil(manifestRange() / VEG_CELL));
   const vegR2 = VEG_RANGE * VEG_RANGE;
   const treeR2 = treeRange * treeRange;
   // NEAREST FIRST. Walk cells in rings outward from the truck, so when a pool
@@ -13969,6 +14057,25 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   }
   refreshShrubs();
   vegMark('shrubs');
+  // ── AND THE MANIFEST, PAST THE DRAW RING ──
+  //
+  // Last on purpose. `vegSeedLeft` is spent in walk order and both walks run
+  // centre-out, so by the time this one starts the near cells have had their
+  // turn: a wider manifest can only ever delay the far country, never the
+  // ground under the wheels. The inner square is skipped by `from` rather
+  // than re-walked — the two rings differ by a factor of two, and re-walking
+  // the smaller one is the cost this separation exists to avoid.
+  //
+  // Cells inside are already seeded and `seedCell` returns on a Set lookup,
+  // so the only real work here is the annulus, once.
+  vegManifestDeferred = 0;
+  if (mReach > reach) {
+    for (const [gx, gz] of squareRings(cx, cz, mReach, reach + 1)) {
+      if (vegSeedLeft <= 0) { vegManifestDeferred++; break; }
+      seedCell(gx, gz);
+    }
+  }
+  vegMark('manifest');
   vegActiveAnchors = activeAnchors;
   vegPhase.t0 = t0;   // the callers set vegMs: a sliced refresh is not one span
   // Forget buckets far behind so a long drive cannot grow the site list
@@ -13976,7 +14083,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   if (vegGrid.size > 900) {
     for (const key of vegGrid.keys()) {
       const [kx, kz] = key.split(',').map(Number);
-      if (Math.abs(kx - cx) > reach + 3 || Math.abs(kz - cz) > reach + 3) {
+      if (Math.abs(kx - cx) > mReach + 3 || Math.abs(kz - cz) > mReach + 3) {
         vegGrid.delete(key);
         vegSeeded.delete(key);
         vegSeedStats.delete(key);
@@ -33427,6 +33534,9 @@ function tapeKeep(): string {
   }
   out.tris = tris;
   out.placed = ezPlaced;
+  // THE WHOLE POINT OF THE MANIFEST is that these are now two numbers: what
+  // the world knows is there, and what the renderer has made geometry of.
+  out.manifest = vegManifestTally();
   return out;
 };
 
@@ -44528,6 +44638,10 @@ function telemetryReport(): string {
   // price — and the price is what the caps are a consequence of.
   const _treePrice = EZ_FAMILIES.map(f => `${f[0]}${Math.round(ezTriPrice(f))}`).join('/');
   const _treeEdge = EZ_FAMILIES.map(f => `${f[0]}${ezEdgeLast[f]}`).join('/');
+  const _m = vegManifestTally();
+  L.push(`trees manifest ${_m.rangeM}m · cells ${_m.seeded}/${_m.cells}`
+    + `${_m.deferred ? ` · ${_m.deferred} deferred` : ''}`
+    + ` · known ${EZ_FAMILIES.map(f => `${f[0]}${_m.known[f]}`).join('/')}`);
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
