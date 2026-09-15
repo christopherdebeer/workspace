@@ -7611,7 +7611,7 @@ function retireTerrainSource(old: THREE.Mesh): void {
   worldGroup.remove(old); old.geometry.dispose();
 }
 const productionTerrainRenderLayers =
-  new ProductionRenderLayerStore<ProductionRenderMesh>();
+  new ProductionRenderLayerStore<ProductionRenderMesh, SubstrateField>();
 let productionTerrainPacketFailures = 0;
 let substrateRenderInvalidations = 0;
 let substrateAtomicRenderCommits = 0;
@@ -7743,7 +7743,7 @@ function buildTerrainMesh(t: HeightTile): void {
   // it: bare ground has no tint entry, so it arrives at the fragment the same
   // colour as ochre scrub.
   geo.setAttribute('aTd', new THREE.BufferAttribute(b.mats, 4));
-  noteSubstrateField(key, t, b.sub.a, b.sub.b);
+  const terrainField = noteSubstrateField(key, t, b.sub.a, b.sub.b);
   geo.setIndex(new THREE.BufferAttribute(b.idx, 1));
   cellTrisCache.set(geo, b.cellTris);
   (geo.userData as { seg?: number }).seg = SEG;
@@ -7763,7 +7763,7 @@ function buildTerrainMesh(t: HeightTile): void {
   terrainMeshes.set(key, mesh);
   const revision = (terrainRevision.get(key) ?? 0) + 1;
   terrainRevision.set(key, revision);
-  authorProductionTerrainRenderPacket(key, revision, mesh);
+  authorProductionTerrainRenderPacket(key, revision, mesh, terrainField);
   if (!SUBSTRATE_RENDER_ON) worldGroup.add(mesh);
   // THE FOLLOWERS. This tile owns its east and its south edge; a neighbour
   // there built against an older row is rebuilt to take it — only when its
@@ -7902,10 +7902,10 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
  * from it, so a roughening of the ground and a thinning of the blades are one
  * decision rather than two models that happen to agree.
  *
- * Keyed and cleared exactly as `heightTiles` is — a field for a tile that no
- * longer exists would answer questions about ground nobody can see.
+ * The exact arrays are witnesses on the renderer-free terrain layer and bind
+ * to the same source revision as its packet. A field for an older terrain
+ * revision therefore cannot answer CPU probes or enter a canonical tile.
  */
-const substrateFields = new Map<string, SubstrateField>();
 /**
  * …AND THE SAME TWO ARRAYS AS TEXTURES, so the fragment reads the field the
  * CPU reads. LinearFilter on purpose: a 33 m lattice sampled nearest puts its
@@ -7943,9 +7943,31 @@ function substrateTexFor(key: string, a: Uint8Array, b: Uint8Array): { a: THREE.
   substrateTexes.set(key, pair);
   return pair;
 }
-function noteSubstrateField(key: string, t: HeightTile, a: Uint8Array, b: Uint8Array): void {
-  substrateFields.set(key, { n: SUB_FIELD_N, xs: t.xs, zs: t.zs, w: t.w, h: t.h, a, b });
+function noteSubstrateField(
+  key: string,
+  t: HeightTile,
+  a: Uint8Array,
+  b: Uint8Array,
+): SubstrateField {
+  const field = { n: SUB_FIELD_N, xs: t.xs, zs: t.zs, w: t.w, h: t.h, a, b };
   substrateTexFor(key, a, b);
+  return field;
+}
+function productionTerrainFieldFor(
+  key: string,
+  terrainSourceRevision = terrainRevision.get(key) ?? 0,
+): SubstrateField | undefined {
+  const layer = productionTerrainRenderLayers.snapshot(key);
+  return layer?.complete && layer.boundSourceRevision === terrainSourceRevision
+    ? layer.witnesses[0]
+    : undefined;
+}
+function productionTerrainFieldCount(): number {
+  let count = 0;
+  for (const [, layer] of productionTerrainRenderLayers.entries()) {
+    if (layer.complete && layer.witnesses.length === 1) count++;
+  }
+  return count;
 }
 /** One channel of the substrate at a world point, or null where no tile has
  *  built — which is a real answer, and the callers all have a fallback for it
@@ -7953,7 +7975,7 @@ function noteSubstrateField(key: string, t: HeightTile, a: Uint8Array, b: Uint8A
 function substrateAt(x: number, z: number, ch: number): number | null {
   const [la, lo] = localToLatLon(x, z);
   const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
-  const f = substrateFields.get(`${tx}/${ty}`);
+  const f = productionTerrainFieldFor(`${tx}/${ty}`);
   return f ? sampleSubstrate(f, x, z, ch) : null;
 }
 /**
@@ -7967,17 +7989,18 @@ function substrateAt(x: number, z: number, ch: number): number | null {
  * at a time, so the projection and the lookup happen a handful of times a pass
  * rather than tens of thousands.
  *
- * The memo is keyed on the tile AND on `substrateFields` itself being the one
- * that answered: a rebuild replaces the field object under the same key, and a
- * stale object would seed a whole sweep from the previous revision's ground.
+ * The memo is keyed on the tile AND on the terrain layer's current witness:
+ * a rebuild replaces the field object under the same key, and a stale object
+ * would seed a whole sweep from the previous revision's ground.
  */
 let subCellKey = '', subCellF: SubstrateField | null = null;
 function subCellAt(x: number, z: number): { ex: number; db: number; sd: number; gp: number } | null {
   const [la, lo] = localToLatLon(x, z);
   const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
   const key = `${tx}/${ty}`;
-  if (key !== subCellKey || subCellF !== substrateFields.get(key)) {
-    subCellKey = key; subCellF = substrateFields.get(key) ?? null;
+  const current = productionTerrainFieldFor(key);
+  if (key !== subCellKey || subCellF !== current) {
+    subCellKey = key; subCellF = current ?? null;
   }
   const f = subCellF;
   if (!f) return null;
@@ -8001,11 +8024,12 @@ function subCellAt(x: number, z: number): { ex: number; db: number; sd: number; 
     (x = state.x, z = state.z): object | null => {
   const [la, lo] = localToLatLon(x, z);
   const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
-  const f = substrateFields.get(`${tx}/${ty}`);
-  if (!f) return { tile: `${tx}/${ty}`, built: false, fields: substrateFields.size };
+  const f = productionTerrainFieldFor(`${tx}/${ty}`);
+  const fieldCount = productionTerrainFieldCount();
+  if (!f) return { tile: `${tx}/${ty}`, built: false, fields: fieldCount };
   const g = (ch: number): number => +sampleSubstrate(f, x, z, ch).toFixed(3);
   return {
-    tile: `${tx}/${ty}`, built: true, fields: substrateFields.size, n: f.n,
+    tile: `${tx}/${ty}`, built: true, fields: fieldCount, n: f.n,
     exposure: g(SUB_CH.exposure), debris: g(SUB_CH.debris), soilDepth: g(SUB_CH.soilDepth),
     moisture: g(SUB_CH.moisture), grassPot: g(SUB_CH.grassPot),
     rockFamily: rockFamilyOf(g(SUB_CH.rockFamily)), family: g(SUB_CH.rockFamily),
@@ -8026,7 +8050,7 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
   // it: bare ground has no tint entry, so it arrives at the fragment the same
   // colour as ochre scrub.
   geo.setAttribute('aTd', new THREE.BufferAttribute(r.mats, 4));
-  noteSubstrateField(key, t, r.subA, r.subB);
+  const terrainField = noteSubstrateField(key, t, r.subA, r.subB);
   geo.setIndex(new THREE.BufferAttribute(r.idx, 1));
   cellTrisCache.set(geo, { seg: SEG, offs: r.cellOffs, tris: r.cellTris });
   (geo.userData as { seg?: number }).seg = SEG;
@@ -8042,7 +8066,7 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
   terrainMeshes.set(key, mesh);
   const revision = (terrainRevision.get(key) ?? 0) + 1;
   terrainRevision.set(key, revision);
-  authorProductionTerrainRenderPacket(key, revision, mesh);
+  authorProductionTerrainRenderPacket(key, revision, mesh, terrainField);
   if (!SUBSTRATE_RENDER_ON) worldGroup.add(mesh);
   refinedBorders.set(key, r.border);
   if (r.carveLog) carveLog.set(key, r.carveLog);
@@ -20681,12 +20705,14 @@ function authorProductionTerrainRenderPacket(
   key: string,
   terrainSourceRevision: number,
   mesh: THREE.Mesh,
+  terrainField: SubstrateField,
 ): void {
   const packet = productionRenderMeshFromThree(mesh, false);
   productionTerrainRenderLayers.replace(key, {
     expectedCount: 1,
     packets: packet ? [packet] : [],
     directPacketCount: packet ? 1 : 0,
+    witnesses: [terrainField],
   });
   const complete = productionTerrainRenderLayers.bind(key, terrainSourceRevision);
   if (!packet || !complete) productionTerrainPacketFailures++;
@@ -20915,11 +20941,14 @@ function reconcileProductionWetCrossings(
   }
 }
 function canCommitTerrainRenderFromSubstrate(tile: ProductionSubstrateTile): boolean {
-  if (!SUBSTRATE_RENDER_ON || !tile.groundMesh || tile.terrainRenderMeshes.length !== 1) return false;
+  if (!SUBSTRATE_RENDER_ON || !tile.groundMesh || !tile.terrainField
+    || tile.terrainRenderMeshes.length !== 1) return false;
   if (productionSubstrate.tile(tile.key) !== tile) return false;
   const mesh = terrainMeshes.get(tile.key);
   if (!mesh || terrainDirty.has(tile.key)
     || terrainRevision.get(tile.key) !== tile.sourceRevisions.terrain) return false;
+  const field = productionTerrainFieldFor(tile.key, tile.sourceRevisions.terrain);
+  if (!field || field.a !== tile.terrainField.a || field.b !== tile.terrainField.b) return false;
   const position = mesh.geometry.attributes.position as THREE.BufferAttribute | undefined;
   const packet = tile.terrainRenderMeshes[0];
   return !!position
@@ -21546,6 +21575,8 @@ function buildProductionSubstrateShadow(
     || !terrainMeshes.has(key) || terrainDirty.has(key)) return;
   const terrainSourceRevision = terrainRevision.get(key) ?? 0;
   const terrainPackets = productionTerrainRenderMeshesFor(key, terrainSourceRevision);
+  const terrainField = productionTerrainFieldFor(key, terrainSourceRevision);
+  if (!terrainField) return;
   const drive = productionDriveSnapshotFor(t, key);
   const waterMotionSegments = productionWaterMotionSegmentsFor(t);
   reconcileProductionWetCrossings(drive.segments, waterMotionSegments);
@@ -21571,6 +21602,7 @@ function buildProductionSubstrateShadow(
     // without pretending this coarse witness is the final render field.
     resolution: 33,
     groundMesh: productionGroundMeshFor(t, key, terrainPackets[0]),
+    terrainField,
     terrainRenderMeshes: terrainPackets,
     driveSegments: drive.segments,
     driveRenderMeshes: drive.renderMeshes,
@@ -31581,7 +31613,6 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // the accident is gone and this has to be deliberate.
     coverWide.clear(); coverWideAsked.clear(); coverWideSorted = null;
     heightTiles.clear(); terrainReady.clear(); terrainMeshes.clear(); terrainDirty.clear(); terrainRevision.clear();
-    substrateFields.clear();
     // The spans are in LOCAL metres under the origin that was current when
     // they were built, so a hop leaves every one of them pointing at ground on
     // the other side of the world — the same trap the wide cover carries a
@@ -31634,7 +31665,11 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // textures for it is 24MB of nothing.
     for (const m of terrainMats.values()) m.dispose();
     for (const t of terrainNormals.values()) t.dispose();
-    terrainMats.clear(); terrainNormals.clear();
+    for (const field of substrateTexes.values()) {
+      field.a.dispose();
+      field.b.dispose();
+    }
+    terrainMats.clear(); terrainNormals.clear(); substrateTexes.clear();
     coverTiles.clear(); coverAsked.clear(); coverWaterMemo.clear();
     cutCells.clear(); cutSet.clear(); carveLog.clear(); refinedBorders.clear();
     tworker?.reset(); buildInFlight = null;

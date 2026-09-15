@@ -195,7 +195,13 @@ Rendering now follows the same ownership rule for every local geometric layer.
 Legacy terrain, road, structure and riverbed-detail builders still author
 geometry during migration, but tile assembly no longer captures those meshes.
 Terrain publishes its renderer-neutral packet while the kernel result is
-applied. Profiled road decks, mutable draped tracks, junction/apron surfaces,
+applied. Its geomorphic exposure/debris/soil/moisture/grass/family/flow field
+is now a witness on that same renderer-free terrain generation and enters the
+canonical tile as the exact two byte arrays used to create the material
+textures. CPU probes no longer read a separate field-authority map, and a
+missing, malformed or stale field refuses tile construction rather than
+letting ground colour and tile revision diverge. Profiled road decks, mutable
+draped tracks, junction/apron surfaces,
 gallery and tunnel shells, luminaires and portal fittings now publish directly
 from their geometry arrays without constructing a temporary renderer mesh.
 Draped tracks retain only their `BufferGeometry` in the terrain re-seat
@@ -454,10 +460,11 @@ the failed comparison can be reproduced.
   solve is substrate-owned. Terrain, road, batter, structure and hydro-detail packet
   generation, completeness, redrape invalidation and source-revision binding
   now live in the renderer-free `ProductionRenderLayerStore`; rapid-rock
-  collider witnesses version with their visual packet layer. Tile construction
-  no longer reconstructs readiness from renderer-owned candidate maps, and the
-  renderer no longer holds delayed road, structure or hydro-detail mesh capture
-  batches.
+  collider witnesses version with their visual packet layer, and the exact
+  geomorphic terrain-field arrays version as witnesses beside the terrain
+  packet. Tile construction no longer reconstructs readiness from
+  renderer-owned candidate maps, and the renderer no longer holds delayed
+  road, structure or hydro-detail mesh capture batches.
 - Contact/evidence is now the production default with `?substrate=legacy` as
   the observable rollback. Representative water drives, persistent evidence
   and the multi-world parity thresholds pass; a production observation window

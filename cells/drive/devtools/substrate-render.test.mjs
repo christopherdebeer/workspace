@@ -24,6 +24,7 @@ const d = await openDrive({
 });
 const readState = () => d.page.evaluate(() => ({
   substrate: window.__substrate?.(),
+  terrainField: window.__substrateField?.(),
   hydro: window.__hydro?.(),
   hydroTiles: window.__hydrotiles?.() ?? [],
   waterPoints: window.__substrateWaterPoints?.(32, 3000) ?? [],
@@ -76,6 +77,11 @@ ok('versioned substrate tiles capture exact production hydro',
     && state.substrate?.tiles?.waters > 0
     && state.waterPoints.length > 0,
   { tiles: state.substrate?.tiles, points: state.waterPoints.length });
+ok('the terrain packet and geomorphic field share one tile revision',
+  state.substrate?.at?.terrainField
+    && state.terrainField?.built
+    && state.terrainField?.tile === state.substrate?.at?.key,
+  { tile: state.substrate?.at, field: state.terrainField });
 ok('every observed production crossing has resolved semantics and implementation',
   state.substrate?.crossings?.total > 0
     && state.substrate?.crossings?.unresolved === 0

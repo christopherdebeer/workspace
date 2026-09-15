@@ -1425,6 +1425,15 @@ export function runSubstrateSelfTest(): void {
   assert(diagnosticRegistry.earthworkAt(unresolvedDiagnostic.x, unresolvedDiagnostic.z) === undefined,
     'registry earthwork lookup must ignore unresolved and missing records');
 
+  const productionTerrainField = {
+    n: 2,
+    xs: -10,
+    zs: -10,
+    w: 20,
+    h: 20,
+    a: new Uint8Array(16).fill(17),
+    b: new Uint8Array(16).fill(29),
+  };
   for (const kind of ['bridge', 'culvert', 'ford', 'causeway'] as const) {
     const roadTags: Readonly<Record<string, string>> | undefined =
       kind === 'bridge' ? { bridge: 'yes' }
@@ -1448,7 +1457,7 @@ export function runSubstrateSelfTest(): void {
       ...resolveProductionCrossing(crossingInput),
       revision: 1,
     };
-    const productionTile = buildProductionSubstrateTile({
+    const productionTileInput: Parameters<typeof buildProductionSubstrateTile>[0] = {
       key: `production-${kind}`,
       revision: 7,
       sourceRevisions: {
@@ -1457,6 +1466,7 @@ export function runSubstrateSelfTest(): void {
       },
       bounds: { minX: -10, minZ: -10, maxX: 10, maxZ: 10 },
       resolution: 11,
+      terrainField: productionTerrainField,
       sampleGround: () => ({ yM: 0, material: 'terrain' }),
       sampleDrive: (_x, z) => Math.abs(z) <= 2
         ? {
@@ -1490,7 +1500,8 @@ export function runSubstrateSelfTest(): void {
         return { water, fluid: resolveFluidContact(water, support) };
       },
       sampleCrossing: (x, z) => Math.hypot(x, z) <= 5 ? crossingRecord : undefined,
-    });
+    };
+    const productionTile = buildProductionSubstrateTile(productionTileInput);
     assert(productionTile.revision === 7, `${kind}: production revision was lost`);
     assert(productionTile.sourceRevisions.hydro === 3,
       `${kind}: production source revisions were lost`);
@@ -1500,6 +1511,25 @@ export function runSubstrateSelfTest(): void {
       `${kind}: production structure revision was lost`);
     assert(productionTile.sourceRevisions.hydroDetails === 3,
       `${kind}: production hydro-detail revision was lost`);
+    assert(productionTile.terrainField?.a === productionTerrainField.a
+      && productionTile.terrainField.b === productionTerrainField.b,
+    `${kind}: production terrain field was copied away from its versioned arrays`);
+    if (kind === 'bridge') {
+      let rejectedMalformedField = false;
+      try {
+        buildProductionSubstrateTile({
+          ...productionTileInput,
+          terrainField: {
+            ...productionTerrainField,
+            a: new Uint8Array(1),
+          },
+        });
+      } catch {
+        rejectedMalformedField = true;
+      }
+      assert(rejectedMalformedField,
+        'production tile must reject a partial terrain field instead of publishing it');
+    }
     const productionContact = sampleProductionSubstrateTile(productionTile, 0, 0);
     assert(productionContact?.crossing === kind, `${kind}: production tile lost crossing kind`);
     assert(productionContact.drive, `${kind}: production tile lost drive support`);

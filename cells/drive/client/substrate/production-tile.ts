@@ -1,6 +1,7 @@
 import type { HydroKind } from '../hydro/types';
 import { sampleFieldSurface } from '../hydro/field-sample';
 import type { HydroTileField } from '../hydro/types';
+import type { SubstrateField } from '../substrate-field';
 import { resolveFluidContact } from './contact';
 import type { HydroContactLayers } from './hydro-adapter';
 import type {
@@ -268,6 +269,7 @@ export interface ProductionSubstrateTileInput {
   bounds: SubstrateBounds;
   resolution: number;
   groundMesh?: ProductionGroundMesh;
+  terrainField?: SubstrateField;
   terrainRenderMeshes?: readonly ProductionRenderMesh[];
   driveSegments?: readonly ProductionDriveSegment[];
   driveRenderMeshes?: readonly ProductionDriveRenderMesh[];
@@ -303,6 +305,7 @@ export interface ProductionSubstrateTile {
   waterIds: readonly string[];
   crossings: readonly ProductionCrossingRecord[];
   groundMesh?: ProductionGroundMesh;
+  terrainField?: SubstrateField;
   terrainRenderMeshes: readonly ProductionRenderMesh[];
   driveSegments: readonly ProductionDriveSegment[];
   /** Built on the first sample, see buildDriveIndex; never part of the
@@ -449,6 +452,20 @@ export function buildProductionSubstrateTile(
   input: ProductionSubstrateTileInput,
 ): ProductionSubstrateTile {
   const resolution = Math.max(3, Math.floor(input.resolution));
+  const terrainField = input.terrainField;
+  if (terrainField) {
+    const fieldCount = terrainField.n * terrainField.n * 4;
+    const boundsMatch = terrainField.xs === input.bounds.minX
+      && terrainField.zs === input.bounds.minZ
+      && terrainField.w === input.bounds.maxX - input.bounds.minX
+      && terrainField.h === input.bounds.maxZ - input.bounds.minZ;
+    if (!Number.isInteger(terrainField.n) || terrainField.n < 2
+      || terrainField.a.length !== fieldCount
+      || terrainField.b.length !== fieldCount
+      || !boundsMatch) {
+      throw new Error(`production substrate ${input.key}: invalid terrain field`);
+    }
+  }
   const count = resolution * resolution;
   const groundY = new Float32Array(count);
   const groundMaterial = new Uint8Array(count);
@@ -559,6 +576,17 @@ export function buildProductionSubstrateTile(
     waterIds,
     crossings,
     ...(input.groundMesh ? { groundMesh: input.groundMesh } : {}),
+    ...(terrainField ? {
+      terrainField: {
+        n: terrainField.n,
+        xs: terrainField.xs,
+        zs: terrainField.zs,
+        w: terrainField.w,
+        h: terrainField.h,
+        a: terrainField.a,
+        b: terrainField.b,
+      },
+    } : {}),
     terrainRenderMeshes: [...(input.terrainRenderMeshes ?? [])],
     driveSegments: [...(input.driveSegments ?? [])],
     driveRenderMeshes: [...(input.driveRenderMeshes ?? [])],
@@ -1071,6 +1099,7 @@ export class ProductionSubstrateStore {
       revision: tile.revision,
       sourceRevisions: tile.sourceRevisions,
       exactGround: !!tile.groundMesh,
+      terrainField: !!tile.terrainField,
       terrainRenderMeshes: tile.terrainRenderMeshes.length,
       exactHydro: !!tile.hydroField,
       driveSegments: tile.driveSegments.length,
