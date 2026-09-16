@@ -30,6 +30,15 @@ tried and was wrong.
 > exactly like a symbol that did not ship, and it is the second reason the
 > PARSE is the gate and the grep is a secondary.
 >
+> **AND `app.js` IS EDGE-CACHED FOR SIXTY SECONDS, so the verification fetch
+> straight after a deploy can read the BUILD BEFORE IT.** Measured: a fetch
+> immediately after `✓ deployed` came back with `x-cache: Hit from cloudfront`
+> and no trace of a symbol that was plainly in the local source and in the
+> bundle a minute later. That reads exactly like a deploy that did not take.
+> Add a cache-buster (`?cb=$RANDOM`) or read `x-cache` in the headers before
+> believing a zero — a needle that is absent from a CACHED bundle is a
+> measurement of the cache.
+>
 > The break was a `String.replace()` filling a placeholder in the served
 > `app.js`. `replace` takes the FIRST occurrence, `client/runtime.ts` had been
 > using that same placeholder for years, and the substitution landed inside
