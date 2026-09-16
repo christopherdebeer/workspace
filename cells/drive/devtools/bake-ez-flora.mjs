@@ -90,12 +90,44 @@ const FORMS = ['round', 'columnar', 'conic', 'umbrella', 'palm', 'bare'];
  * changes `leafAs` cannot silently change what the shape is called.
  */
 function silhouette(crownPts) {
-  if (!crownPts.length) return { form: 'bare', clear: 1, width: 0, taper: 0 };
+  if (!crownPts.length) return { form: 'bare', clear: 1, width: 0, taper: 0, crownR: 0, lean: 0 };
   let lo = Infinity, width = 0;
   for (let i = 0; i < crownPts.length; i += 3) {
     lo = Math.min(lo, crownPts[i + 1]);
     width = Math.max(width, Math.hypot(crownPts[i], crownPts[i + 2]));
   }
+  // ── `width` IS MEASURED FROM THE TRUNK'S BASE, SO ON A LEANING TREE IT IS
+  //    THE LEAN ──
+  //
+  // Every radius above is `hypot(x, z)` about x = z = 0, which is where the
+  // trunk STARTS. That is the crown's own axis only for a tree that stands up
+  // straight, and the atlas's leaniest recipe is the palm: measured, its crown
+  // is a clump spanning x 0.168..0.238 and z -0.019..0.030, so `width` 0.238
+  // is **0.209 of lean and 0.029 of crown** and the crown's true radius is
+  // under an eighth of what the column reports.
+  //
+  // That matters because it is the number the palm was TUNED against. The
+  // recipe's own note records `branch.force` taking "the crown from 0.10 of the
+  // tree across to 0.22" and `length[1]` moving it "from 0.060 to 0.070 and no
+  // further" — both readings of a quantity that is mostly the lean, so the
+  // dial that appeared to work was tipping the tree over and the dial that
+  // appeared dead was the frond length.
+  //
+  // `crownR` is the crown's radius about ITS OWN centroid and `lean` is how far
+  // that centroid stands off the trunk's base. width ~= lean + crownR for a
+  // leaning tree and crownR alone for an upright one, so the two columns say
+  // which a recipe has. `width` is left exactly as it was: the form thresholds
+  // were set against it, and a vocabulary that moves under its own tests is
+  // worth less than a ruler that is honest about what it measures.
+  let cx = 0, cy = 0, cz = 0;
+  const n = crownPts.length / 3;
+  for (let i = 0; i < crownPts.length; i += 3) { cx += crownPts[i]; cy += crownPts[i + 1]; cz += crownPts[i + 2]; }
+  cx /= n; cy /= n; cz /= n;
+  let crownR = 0;
+  for (let i = 0; i < crownPts.length; i += 3) {
+    crownR = Math.max(crownR, Math.hypot(crownPts[i] - cx, crownPts[i + 2] - cz));
+  }
+  const lean = Math.hypot(cx, cz);
   // The radius in the crown's lower and upper halves, so a cone and a mushroom
   // part company. Empty bands fall back to the whole, which reads as no taper.
   const mid = lo + (1 - lo) / 2;
@@ -138,7 +170,7 @@ function silhouette(crownPts) {
       : taper < -0.28 ? 'conic'
         : width < 0.26 ? 'columnar'
           : 'round';
-  return { form, clear: lo, width, taper };
+  return { form, clear: lo, width, taper, crownR, lean };
 }
 
 /**
@@ -278,22 +310,52 @@ const RECIPES = {
   //     its fronds — exactly a palm — and level 2 would put twigs on the
   //     fronds. Setting levels 2 with children[1] = 0 produces NO LEAVES at
   //     all, because foliage hangs on the deepest level that exists.
-  //   branchStart[1] 0.9 — every frond leaves the trunk at the top.
-  //   force {0,−1,0} at 0.05 — see `patch`. Without it the fronds stand up
-  //     like a bottlebrush and the crown is a tenth of the tree across.
+  //   branchStart[1] 0.92 — every frond leaves the trunk at the top.
+  //   length[1] 200 and force at 0.02 — see below. These were 30 and 0.05 and
+  //     both were wrong, in opposite directions, for one reason.
   //
-  // The crown is an open CONE per anchor, four triangles: the same frond the
-  // conifer whorls already use, which is what a palm leaf is at this scale.
+  // ── WHAT THE OLD NUMBERS DREW, AND WHY NOBODY COULD SEE IT ──
+  //
+  // The recipe shipped for months producing a palm whose CROWN RADIUS was
+  // **0.045 of its height** — a tuft 9% of the tree across, wearing a decode
+  // element of 0.2, so every leaflet was four times the whole crown and the
+  // control sheet photographed a leaning pole with a solid green cone on top.
+  //
+  // It survived because `silhouette`'s `width` is `hypot(x, z)` about the
+  // trunk's BASE, and this is the atlas's leaniest recipe: of the 0.238 that
+  // column reported, **0.209 was lean and 0.029 was crown**. So the two dials
+  // were tuned against a number that was mostly the tree falling over, and the
+  // note that stood here recorded exactly the inversion that produces:
+  //
+  //   "force ... took the crown from 0.10 of the tree across to 0.22, while
+  //    length[1] — the obvious lever — moved it from 0.060 to 0.070"
+  //
+  // Measured again against `crownR`, the crown's radius about its OWN centroid:
+  // `force` is not the droop, it is the LEAN — it acts on the trunk as well as
+  // on the fronds, and 0.05 was bending the whole tree over (lean 0.209 at
+  // 0.05, **0.076 at 0.02**) while the crown it was credited with widening
+  // barely moved. And `length[1]`, recorded as dead, is the frond dial after
+  // all: 30 → 90 → 200 takes crownR **0.045 → 0.077 → 0.147**.
+  //
+  // 200 / 0.92 / 0.02 is a real coconut palm to two decimals — crownR 0.147
+  // against a real ~0.15, clear 0.67 against a real ~0.7 — where the shipped
+  // recipe was 0.045 and 0.83. The trade is genuine and is why `clear` fell:
+  // fronds long enough to make a crown hang down past the top of the trunk.
+  //
+  // The crown is an open CONE per anchor in the bake's terms; `crownOf` draws
+  // each one as a FROND — a tapered blade from the crown's heart out to its own
+  // anchor — because the anchors are frond tips on a shell and a ball at each
+  // one is a ball. `?ezpalm=0` is that A/B.
   palm: [
     { preset: 'Pine Small', seed: 44, form: 'palm',
-      opts: { levels: 1, branchStart: { 1: 0.9 }, branchAngle: { 1: 72 }, children: { 0: 10 },
-        length: { 0: 26, 1: 30 }, radius: { 0: 1.0 }, gnarliness: { 0: 0.01 }, twist: { 0: 0 },
-        force: { direction: { x: 0, y: -1, z: 0 }, strength: 0.05 }, leavesStart: 0.5 },
+      opts: { levels: 1, branchStart: { 1: 0.92 }, branchAngle: { 1: 72 }, children: { 0: 10 },
+        length: { 0: 26, 1: 200 }, radius: { 0: 1.0 }, gnarliness: { 0: 0.01 }, twist: { 0: 0 },
+        force: { direction: { x: 0, y: -1, z: 0 }, strength: 0.02 }, leavesStart: 0.5 },
       reduction: { levels: 1, sections: 0.6, segments: 0.5, children: 1, leaves: 0.35, leafScale: 3, billboard: 'single', leafAs: 'clump', clumpM: 1.6, clumpShape: 'cone', leafStart: 0.5 } },
     { preset: 'Pine Small', seed: 17, form: 'palm',
-      opts: { levels: 1, branchStart: { 1: 0.9 }, branchAngle: { 1: 76 }, children: { 0: 9 },
-        length: { 0: 30, 1: 30 }, radius: { 0: 0.9 }, gnarliness: { 0: 0.03 }, twist: { 0: 0 },
-        force: { direction: { x: 0, y: -1, z: 0 }, strength: 0.05 }, leavesStart: 0.5 },
+      opts: { levels: 1, branchStart: { 1: 0.92 }, branchAngle: { 1: 76 }, children: { 0: 9 },
+        length: { 0: 30, 1: 200 }, radius: { 0: 0.9 }, gnarliness: { 0: 0.03 }, twist: { 0: 0 },
+        force: { direction: { x: 0, y: -1, z: 0 }, strength: 0.02 }, leavesStart: 0.5 },
       reduction: { levels: 1, sections: 0.6, segments: 0.5, children: 1, leaves: 0.35, leafScale: 3, billboard: 'single', leafAs: 'clump', clumpM: 1.6, clumpShape: 'cone', leafStart: 0.5 } },
   ],
   snag: [
@@ -471,6 +533,7 @@ for (const [family, list] of Object.entries(RECIPES)) {
     console.log(`${family.padEnd(10)} ${v.name.padEnd(18)} wood ${String(v.tris).padStart(5)}t  crown ${v.crown.shape.padEnd(5)} ${String(v.crown.shape === 'card' ? v.CI.length / 3 : v.A.length / 3).padStart(4)} → ${String(v.drawn).padStart(6)}t drawn`
       + `  ${agrees ? ' ' : '!'}${form.padEnd(9)} clear ${v.sil.clear.toFixed(2)} width ${v.sil.width.toFixed(2)} taper ${v.sil.taper >= 0 ? '+' : ''}${v.sil.taper.toFixed(2)}`
       + `  card ${v.sil.card.toFixed(2)}${cardOk ? '' : ' !'}`
+      + `  crownR ${(v.sil.crownR ?? 0).toFixed(3)} lean ${(v.sil.lean ?? 0).toFixed(3)}`
       + (agrees ? '' : `  ← MEASURED ${v.sil.form}`));
     return { name: v.name, form, verts: v.verts, tris: v.tris, drawn: v.drawn, crown: v.crown,
       sil: { clear: +v.sil.clear.toFixed(3), width: +v.sil.width.toFixed(3), taper: +v.sil.taper.toFixed(3),

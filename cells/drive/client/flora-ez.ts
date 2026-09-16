@@ -103,6 +103,9 @@ const uint16 = (b64: string): Uint16Array => { const u = bytes(b64); return new 
 const floraQuery = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
 export const EZ_REFINED = floraQuery.get('ezdetail') !== '0';
 export const EZ_GROWTH_FORMS = floraQuery.get('ezforms') !== '0';
+/** `?ezpalm=0` draws a palm's leaflets as the balls the bake produced, which is
+ *  the exact control for the blade rule in `crownOf` below. */
+const EZ_PALM_BLADE = floraQuery.get('ezpalm') !== '0';
 /** How much a foliage cluster grows as the crown closes at distance. Shared:
  *  the decode insets the hull by exactly what this will add back, and the
  *  vertex shader interpolates toward it, so the far crown is the same SIZE as
@@ -320,6 +323,56 @@ function crownOf(v: GrowthVariant, q: number): THREE.BufferGeometry | null {
   const ancPts = new Float32Array(nAnc * 3);
   for (let k = 0; k < nAnc * 3; k++) ancPts[k] = A[k] / q;
   const skyOf = anchorSky(ancPts, r * fill.gain);
+  // ── A PALM'S LEAFLET IS A BLADE ALONG ITS OWN RADIUS, NOT A BALL AT ITS
+  //    ANCHOR ──
+  //
+  // The palm baked as `clumpShape: 'cone'` with `clumpM: 1.6`, and the numbers
+  // say what that draws: the crown's element radius is **0.20 of the tree's
+  // height** while the seventy anchors sit on a shell between **0.168 and
+  // 0.238** of it. Every leaflet is therefore as wide as the entire crown, and
+  // seventy of them at 0.84 of the crown's own radius are one solid ball. That
+  // is the "a palm is a leaning trunk with a green cone on top" the control
+  // sheet photographed, and it is the SAME FAULT this file already records one
+  // element-type over — a leaf sized against the TREE and judged against the
+  // crown, which is what made the columnar broadleaf a stack of plates.
+  //
+  // It is fixed here rather than in the bake because the bake cannot see it:
+  // `sil.width` is the ANCHOR SPREAD and the blob's own radius stands outside
+  // those points (this file's own note: "a palm measures ~0.2 narrower than it
+  // draws"), so the recipe's numbers all looked reasonable. What draws is the
+  // decode's, so the rule belongs where the geometry is made and the witness is
+  // the contact sheet, which measures pixels of the actual tree.
+  //
+  // THE ANCHOR SHELL ALREADY CARRIES THE CROWN'S ARCHITECTURE and nothing had
+  // been reading it: an anchor high on the shell is an upper frond and points
+  // out and UP, one low on it is an older frond and points out and DOWN, and
+  // the azimuth is the frond's own bearing. So the blade's axis is simply the
+  // anchor's own offset from the shell's centre — the same quantity `crownEnv`
+  // hands the shader to light the crown as one mass, used here to SHAPE it.
+  const isPalm = EZ_PALM_BLADE && v.form === 'palm' && shape === 'cone';
+  /** The shell's centre, so an anchor's offset from it is its frond's bearing. */
+  let pcx = 0, pcy = 0, pcz = 0;
+  if (isPalm && nAnc) {
+    for (let k = 0; k < nAnc; k++) { pcx += ancPts[k * 3]; pcy += ancPts[k * 3 + 1]; pcz += ancPts[k * 3 + 2]; }
+    pcx /= nAnc; pcy /= nAnc; pcz /= nAnc;
+  }
+  /** A FROND'S LENGTH IS NOT A CONSTANT — IT IS THE ANCHOR'S OWN OFFSET, and
+   *  the first cut of this rule got that wrong and the sheet said so at once.
+   *  Blades of a fixed 0.55 of the element radius, straddling their anchors,
+   *  drew a small dark smudge at the top of a bare pole: coverage 8.1% against
+   *  the ball's 13%, which is a different wrong tree. The anchors are not
+   *  scattered through a crown, they sit on a SHELL between 0.168 and 0.238 of
+   *  the tree's height — they are the frond TIPS — so a frond is the segment
+   *  from the crown's heart out to one of them, and drawing it as such
+   *  reproduces the parasol the bake already described and nobody was reading.
+   *
+   *  The width is still a fraction of the baked element radius, so a recipe
+   *  that bakes a smaller crown gets narrower fronds rather than the same ones.
+   *  0.12 puts about 10 m of frond tip round an 11.9 m rim on a 9 m palm — the
+   *  fronds touch at the edge without closing it, which is what separates a
+   *  parasol from a disc. */
+  const PALM_FROND_W = 0.12, PALM_TIP_W = 0.35;
+  const palmUp = new THREE.Vector3(0, 1, 0), palmDir = new THREE.Vector3(), palmQ = new THREE.Quaternion();
   for (let i = 0; i + 3 <= A.length; i += 3) {
     const ax = A[i] / q, ay = A[i + 1] / q, az = A[i + 2] / q;
     for (let k = 0; k < fill.n; k++) {
@@ -330,7 +383,25 @@ function crownOf(v: GrowthVariant, q: number): THREE.BufferGeometry | null {
       // of pass 2, and why `sc` is no longer 1 on the k = 0 path.
       const sc = (extra ? fill.scale : 1) * fill.gain;
       let g: THREE.BufferGeometry;
-      if (shape === 'cone') {
+      if (isPalm && Math.hypot(ax - pcx, ay - pcy, az - pcz) > 1e-6) {
+        // THE FROND SPANS THE CROWN'S HEART TO ITS OWN ANCHOR. Three sides and
+        // open: a frond is seen from one side and its far face is behind its
+        // near one, so a fourth costs a triangle each for nothing. Tapered
+        // rather than pointed, because a cone's tip is zero-width exactly where
+        // the fronds have separated from each other and there is nothing left
+        // to draw — 6 triangles a frond, 420 for the palm's seventy against the
+        // ball's 280, which is what the silhouette costs.
+        const len = Math.hypot(ax - pcx, ay - pcy, az - pcz);
+        const w = r * sc * PALM_FROND_W;
+        g = new THREE.CylinderGeometry(w * PALM_TIP_W, w, len, 3, 1, true);
+        // Built about its own middle: slide it so the TIP is at the origin and
+        // the butt at -len, and then the loop's own `translate(ax, ay, az)`
+        // below puts the tip on the anchor and the butt in the crown's heart.
+        g.translate(0, -len / 2, 0);
+        palmDir.set((ax - pcx) / len, (ay - pcy) / len, (az - pcz) / len);
+        palmQ.setFromUnitVectors(palmUp, palmDir);
+        g.applyQuaternion(palmQ);
+      } else if (shape === 'cone') {
         // Open at its base: a frond seen from the road never shows its underside.
         g = new THREE.ConeGeometry(r * sc, r * sc * 1.6, 4, 1, true);
       } else {

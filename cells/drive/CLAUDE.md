@@ -5150,6 +5150,105 @@ written into the doctrine as a fault, and the doctrine then defers the work.
 **When a long-failing assertion and a documented design contradict each other,
 one of them is stale, and which one is a question with an answer.**
 
+### The palm was a leaning pole with an ice-cream cone on it, and three numbers say why
+
+The control set's judgement on the palm — *both variants are a leaning trunk
+with a solid green cone on top and no fronds at all* — was right about the
+picture and wrong about the cause, and the note recorded here said
+`branch.force` was unused in the bake. It is used. What was wrong is arithmetic,
+and it took a new ruler to see any of it.
+
+**THE RULER: `width` IS MEASURED FROM THE TRUNK'S BASE, SO ON A LEANING TREE IT
+IS THE LEAN.** Every radius in `silhouette()` is `hypot(x, z)` about x = z = 0,
+which is the crown's own axis only for a tree that stands up straight. The palm
+is the atlas's leaniest recipe, and measured against its own crown's centroid:
+
+| | `width` (what the column said) | `crownR` | `lean` |
+|---|---|---|---|
+| Pine Small #44 | 0.238 | **0.045** | **0.209** |
+| Pine Small #17 | 0.288 | **0.049** | **0.255** |
+
+**The palm's whole crown was 0.09 of the tree across, and the decode was drawing
+an element of 0.2 at every one of its seventy anchors** — four times the crown's
+own radius, seventy times over. That is the solid cone, and it is the same fault
+this file already records one element-type over: *a leaf sized against the TREE
+and judged against the crown*, which made the columnar broadleaf a stack of
+plates. `crownR` and `lean` are columns in the bake's table now. `width` is left
+exactly as it was — the form thresholds were set against it and a vocabulary
+that moves under its own tests is worth less than a ruler that is honest about
+what it measures.
+
+**AND BOTH DIALS HAD BEEN TUNED AGAINST THAT NUMBER, so both readings were
+inverted.** The recipe's own note recorded `force` "taking the crown from 0.10
+of the tree across to 0.22" and `length[1]` moving it "from 0.060 to 0.070 and
+no further". Measured again against `crownR`:
+
+| | crownR | clear | lean |
+|---|---|---|---|
+| shipped: length 30 · start 0.90 · force 0.05 | 0.045 | 0.83 | 0.209 |
+| length 90 | 0.077 | 0.75 | 0.210 |
+| length 200 | 0.134 | 0.52 | 0.209 |
+| **length 200 · start 0.92 · force 0.02** | **0.147** | **0.67** | **0.076** |
+| length 200 · start 0.90 · force 0.02 | 0.207 | 0.64 | 0.069 |
+
+**`force` IS NOT THE DROOP, IT IS THE LEAN.** It acts on the trunk as well as on
+the fronds, so at 0.05 it was bending the whole tree over — lean 0.209 against
+0.076 at 0.02 — and the crown it was credited with widening barely moved.
+`length[1]`, recorded as dead, is the frond dial after all: 30 → 90 → 200 takes
+the crown 0.045 → 0.077 → 0.147. A dial measured through a confounded number
+reads as the other dial's effect.
+
+**The shipped recipe is 200 / 0.92 / 0.02, which is a coconut palm to two
+decimals** — crownR 0.147 against a real ~0.15, clear 0.67 against a real ~0.7.
+The trade is real and is why `clear` fell from 0.83: fronds long enough to make
+a crown hang below the top of the trunk. 0.83 was a palm with almost no crown.
+
+**AND A FROND IS A BLADE FROM THE CROWN'S HEART TO ITS OWN ANCHOR**, in
+`crownOf` rather than in the bake, because the bake cannot see what the decode
+draws. The anchors are frond TIPS on a shell, so the segment from the shell's
+centre to each of them IS that frond — no authored direction, no new attribute,
+and the crown's architecture comes from the geometry the bake already produced
+and nobody was reading. Tapered rather than pointed (a cone's tip is zero-width
+exactly where the fronds have separated and there is something to draw), three
+sides because a blade's far face is behind its near one: **420 triangles for
+seventy fronds against the ball's 280**, and the variant lands at 618 and 558
+drawn against 758 and 684 — **the palm gets its fronds and gets cheaper.**
+`?ezpalm=0` draws the balls again and is the exact A/B.
+
+**TWO WRONG CUTS FIRST, AND THE SHEET CAUGHT BOTH IN ONE FRAME EACH.** Blades of
+a fixed 0.55 of the element radius straddling their anchors drew a small dark
+smudge on a bare pole (coverage 8.1% against the ball's 15.2%) — a different
+wrong tree. Then blades from the heart to the anchor on the OLD bake drew an
+even smaller one, because on that bake the heart-to-anchor distance is 0.03 of
+the tree. **A shape rule and the geometry it reads have to be fixed in the same
+breath**, and the order to do it in is the geometry first: the decode can only
+draw what the anchors describe.
+
+**Measured**, `tree-forms.mjs` at 60 m, the shipped build against `?ezpalm=0` on
+the shipped bake, and against the atlas as it was:
+
+| | was (old bake · ball) | now (new bake · fronds) |
+|---|---|---|
+| coverage | 15.2% · 12.9% | **16.0% · 16.4%** |
+| parts | 1 · 1 | **6 · 6** |
+| triangles | 758 · 684 | **618 · 558** |
+| lum | 45 · 47 | 37 · 29 |
+| sky contrast, steps | 8.8 · 8.7 | 9.2 · 9.3 |
+
+**READ `parts` THE RIGHT WAY ROUND HERE.** 1 part is the ball: one closed blob,
+which is what a palm must not be. Six is six fronds resolving separately at 60 m,
+and the 200 m sheet is where the merge is supposed to close them again — the
+legibility bar in this tool is a 200 m bar and reading it at 60 m calls a
+visible crown structure a failure, which this file already says about conifers.
+
+**WHAT IS HONESTLY WORSE: the crown is darker** — lum 33 against the ball's 46,
+the darkest non-snag in the atlas. Thin blades present far more edge-on and
+away-facing area than a ball does, and `uEzEdge` darkens an edge-on face by
+design. It is the seat's own "black silhouettes" complaint in miniature and it
+is not fixed here; the lever is the same one that fixed it before — open the top
+of the shading window rather than lift everything — and it wants its own frame
+from the seat before it is turned.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the

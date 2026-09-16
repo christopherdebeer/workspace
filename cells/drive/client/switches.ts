@@ -259,6 +259,8 @@ export const SWITCHES = [
     fallback: 'the measured occlusion' },
   { id: 'ezfill', kind: 'number', marks: ['look', 'legacy'], fallback: '1',
     note: 'ezfill= scales the extra foliage pads clustered at each whorl anchor — 1 is shipped, 0 restores the crown the bake produced (the A/B for the closure pass), and 2 doubles the extras' },
+  { id: 'ezpalm', kind: 'toggle', marks: ['look', 'legacy'], fallback: 'on',
+    note: "ezpalm=0 draws a palm's leaflets as the balls the bake produced — one per anchor at 0.84 of the whole crown's radius, which is why a palm read as a leaning trunk with a solid green cone on top. The A/B for whether a palm has fronds" },
   { id: 'impink', kind: 'number', marks: ['bench'], fallback: '0',
     note: 'impink=1 draws the impostor tier as flat black silhouettes — the instrument for seeing where the cards are, how large, and whether their outline agrees with the skeletons beside them. TREES -> IMPOSTOR INK is the same control, live' },
   { id: 'impatlas', kind: 'toggle', marks: ['look', 'legacy'], fallback: 'on',
