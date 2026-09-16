@@ -52,7 +52,7 @@ try {
   if (!p) { console.log('NO __swardprofile — this revision predates the instrument'); process.exit(2); }
   console.log(`\nsites ${p.sites} · request ${p.dens}/m² · clamp ${p.clamp ? 'ON' : 'OFF'}`
     + ` · fall ${p.fall} from ${p.near} m`);
-  console.log(`GRASS dial ${p.grassScale}x → ${p.dialOnSize ? `tuft x${p.dial} (uniform)` : 'the point COUNT'}`
+  console.log(`GRASS dial ${p.grassScale}x on the point COUNT · tuft x${p.tuft} lateral`
     + ` · fullness cap x${p.fullMax}`);
   console.log(`bands  ${p.bands.map((b) => `${b.step}m ceil ${b.ceiling}/m² reach ${b.reach} slots ${b.slots}`).join('\n       ')}`);
   console.log(`slots total ${p.bands.reduce((a, b) => a + b.slots, 0)}`);

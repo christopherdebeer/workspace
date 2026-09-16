@@ -307,7 +307,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/tree-impostor.mjs` | what the impostor tier stands up and what it changes on screen — ONE boot, off/on/off through `__impostor()`, so the repeat is the floor; read whole AND over the canopy band, because a chase frame is mostly sward and sky (`TRIS=` raw triangles, `BAND=`) | ~6min |
 | `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
 | `node devtools/render-focus.test.mjs` | where the RENDERER is looking, and whether anything reads it — the authority's three cameras and the drone's own lead geometry driven for real, then each consumer and the sward's fast/slow ORDER as a source check; two controls in its header | instant |
-| `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds (`ARGS='swardcap=0&swardsites=14'` is the rule as it shipped) | ~40s |
+| `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
@@ -13629,6 +13629,80 @@ for sixty-four points a metre and silently placing five.
 **AND `SWARD_FULL_MAX` WENT 2.1 → 3.6** so the whole dial range is expressible:
 `sqrt(12.8)` is 3.58, and a cap under it makes HIGH and LUSH the same picture —
 a dial stop that does nothing.
+
+### And the seat rejected the currency: finer grass, denser near, a shorter fade
+
+Answering that fix, from the seat: *I don't like the broader/wider tufts. I'd
+rather finer grass (unless an actual botanical/variety is in force) and
+therefore would rather crank up the density closer to the vehicle/focal point
+and focus on ensuring the "fade" with distance is more dramatic/seamless
+(albeit nearer).*
+
+**THE ARITHMETIC OF THE COMPENSATION WAS RIGHT AND ITS CURRENCY WAS WRONG.**
+Coverage is sites × tuft area, so a tuft of radius `sqrt(want/got)` holds
+coverage exactly when the clamp removes points — and it does, and the profile
+said 100% at every radius. What it does not hold is the GRAIN. A metre at 20 m
+is fifteen art pixels of a 148-pixel frame, so a tuft's WIDTH is a directly
+visible quantity near the truck; ×3.58 of it is a blob, and a hundred per cent
+of the ground covered in blobs is still blobs. **Coverage is a number an eye
+does not look at directly; grain is the thing it is looking at.**
+
+**ALL THREE OF THE SEAT'S ASKS ARE PROPERTIES OF THE LADDER, NOT OF THE LAW.**
+A lattice of step *s* holds `1/s²` per square metre, so "denser near" is a FINER
+NEAR STEP and nothing else — and a finer step over the same slot budget reaches
+less far, which is "nearer" in the same sentence. The ladder went
+
+| | step | ceiling | reach | slots |
+|---|---|---|---|---|
+| near | 0.45 → **0.28** m | 4.94 → **12.76**/m² | 72 → **45** m | 102,400 → 104,976 |
+| mid | 1.50 → **0.84** m | 0.444 → **1.417**/m² | 195 → **123** m | 67,600 → 85,264 |
+| far | 4.60 → **2.52** m | 0.047 → **0.158**/m² | 359 → **232** m | 24,336 → 33,856 |
+
+— 194,336 slots to 224,096, **+15%**, for 2.6× the near capacity and a field
+that ends at 232 m instead of 359. The steps are now exactly 3× nested, which
+nothing uses yet: it is chosen so the nesting unit (#153) is a drop-in.
+
+With the ceiling raised the dial can go back on the COUNT, which is what the
+seat was asking for all along. `SWARD_SITES` 5 → 12; `SWARD_NEAR` 22 → 14 m and
+`SWARD_FALL` 2.2 → 2.4 make the falloff start sooner and bite harder; the GRASS
+dial is re-spaced from `[0, 1, 3.2, 6.4, 12.8]` to **`[0, 0.4, 0.8, 1, 1.06]`**,
+which is the FRACTION OF THE NEAR LATTICE the law may ask for. Its top stop is
+12.72/m² against a 12.76 ceiling — **the dial cannot leave the envelope, because
+its maximum IS the envelope.**
+
+| d | 2 | 14 | 24 | 32 | 40 | 60 | 80 | 120 | 176 |
+|---|---|---|---|---|---|---|---|---|---|
+| sites/m² before | 3.83 | 3.83 | 3.20 | 1.70 | 1.04 | 0.43 | 0.23 | 0.093 | 0.040 |
+| sites/m² after | **9.30** | **9.30** | 2.55 | 1.28 | 0.75 | 0.28 | 0.14 | 0.054 | 0.021 |
+
+**2.4× denser at the truck and about half as dense past 30 m** — and coverage at
+120 m relative to the near field is 0.049 against 0.140, so the fade is close to
+three times as steep. `SWARD_TUFT = 0.72` (`?swardtuft=`) takes a quarter off
+the tuft's width, LATERALLY ONLY: scaling height makes a lawn, not fine grass.
+Net near coverage is still ~1.25× what shipped — finer AND thicker, which is the
+combination that reads as a sward rather than a scatter.
+
+**AND `SWARD_FULL_MAX` WENT 3.6 → 1.15, WHICH IS THE POINT.** The compensation
+is now a safety valve, not the mechanism. Measured with `devtools/sward-profile.mjs`
+at four dial stops (0.4 / 0.8 / 1 / 1.06): **0 of 116 radii short, coverage 100%
+at every radius, and the tuft flat at ×1.00 everywhere — the valve never opens.**
+A profile that ever reports a fullness pinned at 1.15 means the LADDER is wrong
+and wants a finer step; widening is not the repair.
+
+#### A compensation keyed on a dial fattens the field when you shorten the reach
+
+Caught while shortening the reach, not by a test. `sRangeScale` grows a distant
+blade so it still subtends a pixel, and it was `1 + 3.2·(sD/uGReach)^0.75`.
+`uGReach` went 360 → 232, so at 176 m the same blade would have gone **×2.87 →
+×3.61**: the far field getting COARSER as a direct consequence of asking for the
+fade to end sooner. Pixel size is a function of METRES, so the growth law is
+too — `SWARD_GROW_REF = 360`, deliberately not a dial. `sT` still keys the
+ground-colour blend, because dissolving into the terrain genuinely IS a property
+of where the field stops.
+
+**The general form:** a compensation term must be keyed on the quantity it
+compensates for. Keyed on a dial instead, it turns every future tuning of that
+dial into a silent second change somewhere else.
 
 #### What else the dump says, with the numbers rather than a hunch
 

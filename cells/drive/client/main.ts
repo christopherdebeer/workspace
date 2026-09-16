@@ -11191,8 +11191,30 @@ const vegKey = (x: number, z: number): string => {
 // ending on a line. [outer radius, slot spacing].
 const GRASS_BANDS: Array<[number, number]> = [[40, 1.0], [82, 1.9], [140, 3.4]];
 const GRASS_SIGHT = 140;     // the outermost band; past this the ground texture works
-/** Density and reach multiplier from the RIG dial. */
-let grassScale = 1;
+/**
+ * ── THE GRASS DIAL, IN TWO CURRENCIES ──
+ *
+ * GRASS_STOPS is what the dial means to the GPU sward: the FRACTION of the near
+ * lattice's one-tuft-per-cell ceiling the density law may ask for. Its top stop
+ * is that lattice full (12 sites/m^2 nominal against a 12.76 ceiling at the
+ * 0.28 m step), so no setting can take the law outside the capacity envelope
+ * and no setting can flatten the falloff — which is what the old table, running
+ * to 12.8 and asking for 179 sites a square metre, did at its top two stops.
+ *
+ * GRASS_BUSHY is the SAME dial in the old units, kept for the two layers that
+ * were tuned against them and were never part of this argument: the `?sward=cpu`
+ * fallback field and the shrub understory both read the dial as "how bushy,
+ * where one is the original shipping density". Re-spacing a dial for one
+ * consumer must not silently retune the others, and quietly halving the shrub
+ * sight line is exactly the kind of drive-by a density unit should not make.
+ */
+const GRASS_STOPS = [0, 0.4, 0.8, 1, 1.06];
+const GRASS_BUSHY = [0, 1, 3.2, 6.4, 12.8];
+const GRASS_DEF = 2;
+/** The sward law's fraction of the near lattice. See GRASS_STOPS. */
+let grassScale = GRASS_STOPS[GRASS_DEF];
+/** The same dial in the legacy "how bushy" units. See GRASS_BUSHY. */
+let grassBushy = GRASS_BUSHY[GRASS_DEF];
 /** A stable 0..1 from a lattice slot. Same slot, same tuft, forever — which is
  *  what lets grass be regenerated every second instead of remembered. */
 function hash2(a: number, b: number): number {
@@ -12642,7 +12664,7 @@ function swardGround(x: number, z: number): number {
  * this costs 36% more per sweep at the same rate. The resolution per metre
  * (SWARD_FM) does not move, so nothing the field says about the ground changes.
  */
-const SWARD_F = 112;           // field texels across
+const SWARD_F = 80;            // field texels across
 const SWARD_FM = 8;            // metres per texel — 768m of field
 const SWARD_FW = SWARD_F * SWARD_FM;
 // Road/water mask texels. 256 was 3m each, and with linear filtering either
@@ -12654,14 +12676,23 @@ const SWARD_FW = SWARD_F * SWARD_FM;
 // coarsened the kerb by the same 17% — a ramp of 1.75 m where 1.5 was already
 // the number being defended. 600 over 896 m is 1.49 m a texel, which is the
 // number this comment was written about.
-const SWARD_MASKN = 600;
+const SWARD_MASKN = 432;
 /** How far inside a water body the mask stops, so reeds and rough grass can
  *  stand in the margin. A body masked to its own outline reads as shaved. */
 const SWARD_SHALLOW = 2.5;
 /** The density falloff with range, and the radius inside which it does not
  *  apply. See the band table: >2 is what buys the handover margin. */
-const SWARD_FALL = 2.2;
-const SWARD_NEAR = 22;
+// STEEPER THAN SCREEN-CONSTANT, DELIBERATELY. 2.0 holds sites-per-pixel flat;
+// above it the field genuinely thins with range, which is the "more dramatic"
+// fade the seat asked for. Measured as COVERAGE against the near field, 120 m
+// reads 0.049 of the near value where the old law read 0.140 — near three
+// times the fall — and it is still continuous, because the capacity envelope
+// and not the eye is what a discontinuity would come from.
+const SWARD_FALL = 2.4;
+// …and the plateau it falls from. 22 m was most of the near band; 14 m starts
+// the fall inside it, which is what puts the density THE SEAT SEES at the
+// truck rather than spread flat over a suburb.
+const SWARD_NEAR = 14;
 /** Rebuild the field once the truck is this far off its centre. The field is
  *  896m wide and the sward reaches 359, so this sits inside an 89m margin (see
  *  SWARD_F): at 25m/s it is a pass every two seconds against the old sward's
@@ -12705,14 +12736,35 @@ const SWARD_ABANDON = 160;
  * 0.047. 210k slots against 113k — the price of not having rings.
  */
 const SWARD_BANDS: Array<[number, number, [number, number, number, number]]> = [
-  [0.45, 320, [-1, 0, 56, 72]],
-  [1.5, 260, [56, 72, 160, 195]],
-  // Fade-out ENDS INSIDE the field and inside uGReach. It did not: the reach
-  // was 460m against a 384m field and a 368m uGReach, so the outermost "ring"
-  // was a hard circular cutoff that no fade ever got near. A constant left
-  // behind by a retune, and invisible to a density profile that never asked
-  // where the field stops.
-  [4.6, 156, [160, 195, 300, 356]],
+  // ── FINER, DENSER, AND IT ENDS NEARER ──
+  //
+  // Asked for from the seat, after the tuft-widening compensation shipped: *I
+  // don't like the broader/wider tufts. I'd rather finer grass and therefore
+  // crank up the density closer to the vehicle, and focus on the fade with
+  // distance being more dramatic and seamless, albeit nearer.* All three are
+  // properties of the LADDER and the LAW rather than of the compensation, and
+  // the compensation is what had to go.
+  //
+  // A lattice of step s holds 1/s² per square metre, so "denser near" is a
+  // FINER near step and nothing else: 0.45 m held 4.94/m² and 0.28 m holds
+  // 12.76. The same 320-odd slots then cover 45 m instead of 72, which is the
+  // "nearer" half of the same sentence — the near band buys its density with
+  // its reach, and that is the trade the seat asked for.
+  //
+  // THE STEPS ARE EXACTLY 3x NESTED (0.28 / 0.84 / 2.52), which they were not
+  // before (0.45 / 1.5 / 4.6 is 3.33x then 3.07x). Nothing here uses that yet;
+  // it is chosen so the nesting unit — where a coarse site becomes a
+  // deterministic 1-of-9 child of the finer lattice, so a handover thins one
+  // population instead of swapping two — is a drop-in rather than a re-tune.
+  [0.28, 324, [-1, 0, 32, 45]],
+  [0.84, 292, [32, 45, 104, 120]],
+  // Fade-out ENDS INSIDE the field and inside uGReach, and the profile probe
+  // asserts it now: the reach was once 460m against a 384m field and a 368m
+  // uGReach, so the outermost "ring" was a hard circular cutoff no fade ever
+  // got near — a constant left behind by a retune, invisible to a density
+  // profile that never asked where the field stops. 228 against a 231.8 reach,
+  // a 232 uGReach and a 320m half-field.
+  [2.52, 184, [104, 120, 175, 228]],
 ];
 /**
  * ── SITES PER SQUARE METRE IS NOT LUSHNESS, AND CONFLATING THEM MADE RINGS ──
@@ -12736,57 +12788,77 @@ const SWARD_BANDS: Array<[number, number, [number, number, number, number]]> = [
  * falloff gone entirely, and the field literally three flat discs. A rule that
  * a player's own dial can break is not a rule.
  *
- * So the two quantities are separated. SITES is a count the carriers can carry;
- * everything above it is TUFT FULLNESS — the same ground covered by fewer,
- * wider plants — which is what "lush" means to an eye and costs no slot at all.
- * Five is not a taste either: it is the largest nominal for which the target
- * curve stays under the capacity envelope (below) at both handovers, with 15 to
- * 21 per cent of margin. `?swardsites=` moves it for an A/B.
+ * SO THE LADDER CARRIES THE COUNT, AND THE COUNT ALONE. A carrier's ceiling is
+ * a property of its step, so the honest fix for "not enough grass near me" is a
+ * FINER NEAR STEP rather than a larger request: 0.28 m holds 12.76 tufts a
+ * square metre where 0.45 m held 4.94. Twelve is not a taste — it is that
+ * ceiling with a little air under it, so that the top of the grass dial asks
+ * for 12.72 and the near band is full rather than saturated, and every coarser
+ * band is under its own ceiling by the same construction (see the envelope
+ * below, which the profile probe asserts at every radius).
+ *
+ * `?swardsites=` moves it for an A/B.
  */
-const SWARD_SITES = qsNum('swardsites', 5);
+const SWARD_SITES = qsNum('swardsites', 12);
 /**
- * How much wider a tuft may grow to pay back what the capacity clamp removed.
- * Coverage is sites x tuft area, so a radius of sqrt(want/got) holds coverage
- * exactly — and it is capped, because at the top of the grass dial that ratio
- * is thirty-six and a tuft six times its width is a bush. Past the cap the
- * field genuinely thins, which is honest: what matters is that it thins
- * CONTINUOUSLY rather than stepping at a handover.
+ * ── THE COMPENSATION WAS THE WRONG CURRENCY, AND THE SEAT SAID SO ──
+ *
+ * For one build the GRASS dial widened the PLANT instead of raising the count:
+ * coverage is sites x tuft area, so a tuft of radius sqrt(want/got) holds
+ * coverage exactly when the clamp removes points, and that arithmetic is
+ * correct. What it is not is grass. From the seat: *I don't like the
+ * broader/wider tufts. I'd rather finer grass, and therefore crank up the
+ * density closer to the vehicle and make the fade with distance more dramatic
+ * and seamless, albeit nearer.* Coverage held; the GRAIN of the medium did not,
+ * and the grain is the thing being looked at. A 148-pixel-wide frame renders a
+ * tuft three and a half times its width as a blob, and a hundred blobs a
+ * hundred per cent covered is still a hundred blobs.
+ *
+ * So the dial is back on the count (where a finer ladder can now afford it),
+ * and this is only the safety valve: 1.15 is fifteen per cent of widening,
+ * enough to smooth the last few per cent the clamp ever takes now that the law
+ * sits under the envelope by construction, and far too little to read as a
+ * different plant. If the profile ever reports a fullness at this ceiling, the
+ * LADDER is wrong — that is the signal, and widening is not the repair.
  */
-const SWARD_FULL_MAX = qsNum('swardfull', 3.6);
+const SWARD_FULL_MAX = qsNum('swardfull', 1.15);
 /**
- * ── AND THE GRASS DIAL RAISES THE PLANT, NOT THE POINT COUNT ──
+ * ── FINER GRASS IS A NARROWER BLADE, AND NOTHING ELSE ──
  *
- * The first cut of the split left `grassScale` multiplying the REQUEST, so the
- * clamp did the whole job — and a device dump at the top stop showed what that
- * costs: at GRASS LUSH the request is 64 sites/m², the envelope at the first
- * handover is 0.889 falling to 0.444, and the fullness needed to pay that back
- * is 2.6 rising to 3.3. Capped, coverage went 100% at 56 m to 42% at 72 m —
- * **the ring, back, at the one dial setting a player reaches for when they want
- * to see grass.** A compensation with a ceiling is only continuous while the
- * ceiling is not reached.
+ * The lateral size of a tuft, as a plain multiplier. The medium is 148 art
+ * pixels wide and a metre at 20 m is fifteen of them, so a tuft's WIDTH is a
+ * visible quantity near the truck: at the old sizes a near tuft was a blob two
+ * or three pixels across and a field of them read as gravel rather than grass.
+ * 0.72 takes about a quarter off, which with the near lattice's 2.4x more
+ * points still leaves coverage ~1.25x what shipped — finer AND thicker, which
+ * is the combination that reads as a sward instead of a scatter.
  *
- * So the dial no longer asks for sites at all. `vegScale * SWARD_SITES` is at
- * most five, which is under the envelope at every radius, so the count follows
- * the law exactly and the clamp is a safety net rather than the mechanism; the
- * dial's lushness is a UNIFORM widening of `sqrt(grassScale)`, which is the
- * factor that holds coverage. Uniform is the whole point: a widening that
- * varies with range is a band of fatter grass, which is a ring wearing a
- * different hat.
- *
- * WHAT IT COSTS is the top of the dial being expressible only as very wide
- * tufts — at LUSH, five plants a square metre each three and a half times the
- * width, which is a solid meadow rather than a denser one. That is what the
- * carriers can actually do, and saying so with geometry is better than asking
- * for sixty-four points a metre and silently drawing five.
- *
- * `?swarddial=0` puts the dial back on the count for an A/B.
+ * LATERAL ONLY: height is sSize, sShort and the structure module's business,
+ * and scaling it here would make a lawn rather than fine grass.
  */
-const SWARD_DIAL_SIZE = qsOn('swarddial', true);
+const SWARD_TUFT = qsNum('swardtuft', 0.72);
 /**
- * The exact control. Off, the target is the perceptual curve unclamped and the
- * tufts do not widen — which is the rule as it shipped, so `?swardcap=0` with
- * `?swardsites=14` reproduces the build the seat photographed rings on, and
- * every number this unit quotes has something to be a number AGAINST.
+ * ── AND FAR BLADES GROW BY THE METRE, NOT BY THE FRACTION OF THE REACH ──
+ *
+ * sRangeScale grows a distant blade so it still subtends a pixel, and it was
+ * keyed on sD/uGReach. That makes the compensation a function of a DIAL: this
+ * unit shortened the reach from 360 m to 232, and on the old expression a tuft
+ * at 176 m would have gone from 2.9x to 3.6x — the far field getting COARSER
+ * as a consequence of asking for the fade to end sooner, which is the opposite
+ * of what was asked for. Pixel size is a function of metres, so the growth is
+ * too; this is the reference distance it is written against and it is
+ * deliberately not a dial.
+ */
+const SWARD_GROW_REF = 360;
+/**
+ * ── AND THE GRASS DIAL IS A COUNT AGAIN, RE-SPACED TO WHAT THE LADDER HOLDS ──
+ *
+ * `grassScale` once reached 12.8, which asked for 179 sites a square metre: the
+ * old carriers saturated over their whole extent, the falloff vanished and the
+ * field became three flat discs. A rule a player's own dial can break is not a
+ * rule — so the dial's stops are now the fraction of the near lattice the law
+ * may ask for, and its top stop is that lattice full. It cannot break the law
+ * because it cannot leave the envelope. See GRASS_STOPS.
  */
 const SWARD_CAP_ON = qsOn('swardcap', true);
 /**
@@ -12925,7 +12997,8 @@ const swardU = {
   uSwardKnee: { value: 0.72 },
   uSwardFall: { value: SWARD_FALL }, uSwardNear: { value: SWARD_NEAR },
   uSwardFull: { value: SWARD_FULL_MAX }, uSwardCapOn: { value: SWARD_CAP_ON ? 1 : 0 },
-  uSwardFullDial: { value: 1 },
+  /** Lateral tuft size. See SWARD_TUFT. */
+  uSwardTuft: { value: SWARD_TUFT },
   /** How much of the GROUND's own colour a blade wears at close range. The
    *  single number for "grass contrasts too much with the terrain".
    *
@@ -12974,7 +13047,7 @@ const swardU = {
    *  fade cannot have a seam where two bands meet. */
   // The outermost fade's END, not a band's reach: everything past this is
   // cut hard, so it has to sit beyond the last fade rather than inside it.
-  uGReach: { value: 360 },
+  uGReach: { value: 232 },
   // FLOWER COLOUR: three species per SwardCtx entry (see FLOWER_PAL and
   // SWARD_FLOW_NAMES), refreshed whenever the biome is read (see swardFrame)
   // — fifteen named uniforms rather than an array uniform, since nothing
@@ -13431,7 +13504,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform vec3 uSwardEye; uniform vec3 uSwardTint; uniform float uSwardDbg;
         uniform float uSwardFall; uniform float uSwardNear; uniform float uSwardMatch;
         uniform float uSwardFull; uniform float uSwardCapOn;
-        uniform float uSwardFullDial;
+        uniform float uSwardTuft;
         uniform float uSwardVary; uniform float uSwardUp;
         uniform float uFlowerPatchFill;
         uniform float uFlowerStrayOpen; uniform float uFlowerStrayWood;
@@ -13643,9 +13716,12 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         float sG = pow(uSwardNear / max(sD, uSwardNear), uSwardFall);
         float sWant = abs(sF.g) * uDens * sG;
         float sGot = uSwardCapOn > 0.5 ? min(sWant, swardCap(sD)) : sWant;
-        // What the clamp took, times what the dial asked for, capped ONCE.
-        float sFullNeed = sGot > 1.0e-6 ? max(1.0, sqrt(sWant / sGot)) : 1.0;
-        float sFull = min(uSwardFullDial * sFullNeed, uSwardFull);
+        // WHAT THE CLAMP TOOK, PAID BACK IN AREA, AND ONLY THE LAST FEW PER
+        // CENT OF IT. The law now sits under the envelope at every radius by
+        // construction, so this is a safety valve rather than the mechanism:
+        // uSwardFull is 1.15, and a fullness pinned there means the LADDER is
+        // wrong and wants a finer step, not a wider plant. See SWARD_FULL_MAX.
+        float sFull = clamp(sGot > 1.0e-6 ? sqrt(sWant / sGot) : 1.0, 1.0, uSwardFull);
         float sKeep = sGot * uStep * uStep * sW;
         // ── BLADES THIN OUT, THEY DO NOT BLINK OUT ──
         //
@@ -13751,9 +13827,13 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // the size subtends what a near one does, which is the whole reason an
         // eye accepts a thinner field out there.
         // Reeds cannot grow into trees, nor gravel into boulders in the far band.
-        float sRangeScale = sIsStone ? 1.0 : sIsReed ? (1.0 + 0.35 * sT)
-          : (1.0 + 3.2 * pow(sT, 0.75));
-        sRangeScale = mix(sRangeScale, 1.0 + 0.5 * sT, sTall);
+        // IN METRES, not in fractions of the reach — see SWARD_GROW_REF. sT
+        // still keys the colour blend below, because dissolving into the
+        // terrain IS a property of where the field stops.
+        float sTg = clamp(sD / ${SWARD_GROW_REF.toFixed(1)}, 0.0, 1.0);
+        float sRangeScale = sIsStone ? 1.0 : sIsReed ? (1.0 + 0.35 * sTg)
+          : (1.0 + 3.2 * pow(sTg, 0.75));
+        sRangeScale = mix(sRangeScale, 1.0 + 0.5 * sTg, sTall);
         // ── AND STONY GROUND GROWS SHORT GRASS ──
         //
         // sSize is a pure hash and always has been — the ground it stands on
@@ -13773,7 +13853,10 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // is what makes the grass dial safe at its top stop: the request goes
         // up, the carriers deliver what they can hold, and the difference is
         // paid in area — continuously, with no handover to step at.
-        sLp.xz *= sFull;
+        // uSwardTuft is the GRAIN and sFull is the safety valve; both are
+        // lateral, and they are separate numbers because one is a look and the
+        // other is an artefact of the clamp. See SWARD_TUFT / SWARD_FULL_MAX.
+        sLp.xz *= sFull * uSwardTuft;
         sLp.xz = vec2(sCa * sLp.x - sSa * sLp.z, sSa * sLp.x + sCa * sLp.z);
         // Wind, from the blade's WORLD position so a gust crosses the field as
         // one front rather than every tuft nodding on its own clock.
@@ -14042,10 +14125,6 @@ function swardFrame(): void {
     (swardU as unknown as Record<string, { value: THREE.Color }>)[SWARD_FLOW_NAMES[ci * 3 + si]]
       .value.setRGB(cr, cg, cb);
   }
-  // The dial's lushness, as a uniform widening. sqrt because coverage is area:
-  // a tuft standing in for four covers their ground at twice the width.
-  swardU.uSwardFullDial.value = SWARD_DIAL_SIZE
-    ? Math.min(Math.sqrt(Math.max(grassScale, 1e-4)), SWARD_FULL_MAX) : 1;
   for (const b of swardBands) {
     // SNAPPED to the step, so a slot's world position never moves under it.
     // The base cell, as an index and as metres. The INDEX is the authority: the
@@ -14055,12 +14134,12 @@ function swardFrame(): void {
     const bix = Math.round(fx / b.step), biz = Math.round(fz / b.step);
     b.uBaseI.value.set(bix, biz);
     b.uBase.value.set(bix * b.step, biz * b.step);
-    // THE REQUEST IS THE LAW'S, AND THE LAW'S ALONE — vegScale caps at 1, so
-    // this caps at SWARD_SITES and stays under the capacity envelope at every
-    // radius. The GRASS dial is not here: it widens the plant instead (see
-    // SWARD_DIAL_SIZE), because a dial that raises the count can only be paid
-    // back where the carriers have room, and where they do not it draws a ring.
-    b.uDens.value = vegScale * (SWARD_DIAL_SIZE ? 1 : grassScale) * SWARD_SITES * chartFade;
+    // THE REQUEST IS THE LAW'S, AND THE LAW'S ALONE — vegScale and grassScale
+    // both cap at their top stop, so this caps at SWARD_SITES and stays under
+    // the capacity envelope at every radius. The dial belongs HERE, on the
+    // count, because a count is what the seat is looking at; it is only safe
+    // here because its top stop was re-spaced to the near lattice's ceiling.
+    b.uDens.value = vegScale * grassScale * SWARD_SITES * chartFade;
     b.mesh.visible = grassScale > 0 && vegScale > 0 && !Number.isNaN(swardFX);
   }
   // ── AND NOW THE SLOW HALF: THE EVIDENCE FIELD ──
@@ -14105,7 +14184,7 @@ function refreshSward(): void {
   const t0 = performance.now();
   swardCache.clear();
   if (swardGpu) { vegMeshes.grass.count = 0; swardMs = 0; return; }
-  const cap = Math.floor(VEG_CAP.grass * vegScale * grassScale);
+  const cap = Math.floor(VEG_CAP.grass * vegScale * grassBushy);
   const gm = vegMeshes.grass;
   let n = 0;
   // Cover is 37m data and sampleCover walks every loaded tile, so asking it per
@@ -14119,7 +14198,7 @@ function refreshSward(): void {
   // the reach — the field dissolves into the terrain instead of stopping.
   let bx = Infinity, bz = Infinity, blockRate = 0;
   let blockR = 0, blockG = 0, blockB = 0;
-  const reach = GRASS_BANDS[GRASS_BANDS.length - 1][0] * Math.min(1.6, 0.55 + grassScale * 0.6);
+  const reach = GRASS_BANDS[GRASS_BANDS.length - 1][0] * Math.min(1.6, 0.55 + grassBushy * 0.6);
   let inner = 0;
   // THE LATTICE FOLLOWS THE VIEWED GROUND, as the GPU field's does. This is the
   // `?sward=cpu` path and it was centred on the rig outright — so the one place
@@ -14162,7 +14241,7 @@ function refreshSward(): void {
         // lattices read as one field thinning outward instead of three rings.
         const h1 = hash2(ix * 31 + Math.round(step * 10), iz);
         const fade = 1 - Math.sqrt(d2) / reach;
-        if (h1 > blockRate * area * grassScale * (0.22 + 0.78 * fade * fade)) continue;
+        if (h1 > blockRate * area * grassBushy * (0.22 + 0.78 * fade * fade)) continue;
         const h2 = hash2(ix + 9187, iz);
         const wx2 = sx + (h2 - 0.5) * step * 0.9;
         const wz2 = sz + (hash2(ix, iz + 4231) - 0.5) * step * 0.9;
@@ -14312,8 +14391,8 @@ function refreshShrubs(): void {
   shrubs.visible = camMode !== 'top';
   if (!SHRUB_ON || Number.isNaN(swardFX) || vegScale <= 0 || grassScale <= 0) { shrubs.count = 0; shrubN = 0; shrubNear = 0; return; }
   let near = 0;
-  const cap = Math.min(SHRUB_CAP, Math.floor(SHRUB_CAP * vegScale * Math.min(1, grassScale)));
-  const reach = SHRUB_SIGHT * Math.min(1.6, 0.55 + grassScale * 0.6);
+  const cap = Math.min(SHRUB_CAP, Math.floor(SHRUB_CAP * vegScale * Math.min(1, grassBushy)));
+  const reach = SHRUB_SIGHT * Math.min(1.6, 0.55 + grassBushy * 0.6);
   const R2 = reach * reach;
   // THE VIEWED GROUND, not the rig. The chart hides shrubs outright, so what
   // this buys is the DRONE: fly it away and the understory used to stay around
@@ -36473,9 +36552,7 @@ const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
   // harness is the default — and the setting that showed the fault is the top
   // one. It composes the two halves exactly as swardFrame does.
   const dens = grassAt === undefined ? swardBands[0].uDens.value as number
-    : vegScale * (SWARD_DIAL_SIZE ? 1 : grassAt) * SWARD_SITES;
-  const dial = grassAt === undefined ? swardU.uSwardFullDial.value as number
-    : (SWARD_DIAL_SIZE ? Math.min(Math.sqrt(Math.max(grassAt, 1e-4)), SWARD_FULL_MAX) : 1);
+    : vegScale * grassAt * SWARD_SITES;
   const rows: Array<Record<string, number | number[]>> = [];
   const fadeFrom = SWARD_BANDS[SWARD_BANDS.length - 1][2][2];
   let worst = { d: 0, ratio: 2 };
@@ -36483,7 +36560,7 @@ const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
     const want = g * dens * Math.pow(SWARD_NEAR / Math.max(d, SWARD_NEAR), SWARD_FALL);
     const cap = swardCapAt(d);
     const target = SWARD_CAP_ON ? Math.min(want, cap) : want;
-    const full = Math.min(dial * (target > 1e-6 ? Math.max(Math.sqrt(want / target), 1) : 1),
+    const full = Math.min(target > 1e-6 ? Math.max(Math.sqrt(want / target), 1) : 1,
       SWARD_FULL_MAX);
     let deliv = 0;
     const per: number[] = [];
@@ -36508,14 +36585,16 @@ const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
     // product is the want exactly. So `coverRatio` is the honest headline: it
     // is 1 wherever the fullness is not capped, whatever the count is doing,
     // and a ring is a place where it is not 1.
-    // ── AND THE DENOMINATOR CARRIES THE DIAL, so the two modes compare ──
+    // ── THE DIAL IS INSIDE `want`, so `asked` and `want` are one number ──
     //
-    // With the dial on the COUNT it is already inside `want`; with the dial on
-    // the PLANT it is not, and a ratio against the bare law would read 1280%
-    // at every radius and say nothing. `asked` is what the player asked for
-    // either way, so 100% means delivered and a step is a step.
+    // It was not always: for one build the GRASS dial widened the plant rather
+    // than raising the count, and a ratio against the bare law read 1280% at
+    // every radius and said nothing. The dial is back on the count, so the
+    // denominator is simply what the law asked for. `asked` is kept as a name
+    // because that is what it MEANS, and because a future dial that does not
+    // ride the count would need it back.
     const cover = deliv * full * full;
-    const asked = want * (SWARD_DIAL_SIZE ? dial * dial : 1);
+    const asked = want;
     rows.push({ d, want: +(want * SWARD_SHRINK_EFF).toFixed(4),
       target: +(target * SWARD_SHRINK_EFF).toFixed(4), cap: +Math.min(cap, 99).toFixed(4),
       deliv: +(deliv * SWARD_SHRINK_EFF).toFixed(4), ratio: +ratio.toFixed(3),
@@ -36525,8 +36604,7 @@ const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
       full: +full.toFixed(3), keep: per });
   }
   return { dens: +dens.toFixed(2), sites: SWARD_SITES, clamp: SWARD_CAP_ON,
-    dial: +dial.toFixed(3), dialOnSize: SWARD_DIAL_SIZE,
-    grassScale: grassAt ?? grassScale,
+    grassScale: grassAt ?? grassScale, tuft: SWARD_TUFT,
     fall: SWARD_FALL, near: SWARD_NEAR,
     fullMax: SWARD_FULL_MAX, fadeFrom, gReach: swardU.uGReach.value, fieldHalf: SWARD_FW / 2,
     // ── AND WHETHER THE EVIDENCE COVERS THE GROUND THAT IS DRAWN ──
@@ -36613,7 +36691,7 @@ const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
         hMin: +hMin.toFixed(1), hMax: +hMax.toFixed(1),
         // What the shader would compute for the near band right here.
         keepHere: +(F[((SWARD_F / 2) * SWARD_F + SWARD_F / 2) * 4 + 1]
-          * 0.45 * 0.45 * vegScale * grassScale).toFixed(4) };
+          * SWARD_BANDS[0][0] * SWARD_BANDS[0][0] * vegScale * grassScale).toFixed(4) };
     })(),
     // Does the GPU support filtering a float texture at all? Without this
     // extension a FloatType texture with LinearFilter is INCOMPLETE and every
@@ -46272,7 +46350,7 @@ function telemetryReport(): string {
   if (errRing.length) L.push(`errors ${errRing.length} · ${errRing.join(' ¶ ')}`);
   L.push(`device ${navigator.hardwareConcurrency ?? '?'} cores · dpr ${devicePixelRatio} · ${innerWidth}x${innerHeight} · ${gpu}`);
   L.push(`ua ${navigator.userAgent.slice(0, 90)}`);
-  L.push(`settings tseg ${terrainSeg} · veg ${vegScale} · grass ${grassScale} · refine ${REFINE ? 'on' : 'off'} r${REFINE_R} · worker ${tworker && !tworker.disabled ? 'on' : 'off'} · luma ${lumaAsync ? 'async' : 'sync'}${mem ? ` · heap ${Math.round(mem.usedJSHeapSize / 1048576)}MB` : ''}`);
+  L.push(`settings tseg ${terrainSeg} · veg ${vegScale} · grass ${grassScale}/${grassBushy} · refine ${REFINE ? 'on' : 'off'} r${REFINE_R} · worker ${tworker && !tworker.disabled ? 'on' : 'off'} · luma ${lumaAsync ? 'async' : 'sync'}${mem ? ` · heap ${Math.round(mem.usedJSHeapSize / 1048576)}MB` : ''}`);
   // ── THE LOOK SWITCHES, BECAUSE TWO DUMPS ARE THE ONLY WAY TO COST A
   //    FRAGMENT SHADER ──
   //
@@ -51423,14 +51501,23 @@ const DIAL_GROUPS: DialGroup[] = [
       dial('veg', 'VEGETATION', ['NONE', 'SPARSE', 'FULL'], 2, (i) => { vegScale = [0, 0.35, 1][i]; }),
       // Grass is the one layer whose cost is worth handing over: it is the
       // difference between a field and a golf course, and it is also the
-      // difference between a phone holding 60fps and not. Five steps, and the
-      // The upper stops are deliberately experimental. LOW retains the original
-      // shipping density, MEDIUM sits halfway to the former maximum, HIGH is
-      // that former 6.4 ceiling, and LUSH doubles it for device profiling.
-      // Density costs vertices on a 47,360-pixel target rather than CPU matrices —
-      // a slot the dither drops is three vertices and no fragments at all.
-      dial('grass', 'GRASS', ['OFF', 'LOW', 'MEDIUM', 'HIGH', 'LUSH'], 2, (i) => {
-        grassScale = [0, 1, 3.2, 6.4, 12.8][i];
+      // difference between a phone holding 60fps and not.
+      //
+      // THE STOPS ARE FRACTIONS OF WHAT THE CARRIERS HOLD, not multiples of an
+      // arbitrary one. The old table ran 1 / 3.2 / 6.4 / 12.8 and its top two
+      // stops asked for densities two of the three lattices cannot represent —
+      // so they delivered a ceiling instead, which is a flat disc, which is a
+      // ring at its rim. The dial now runs to the near lattice FULL and no
+      // further: LUSH is 12.72 sites a square metre against a 12.76 ceiling,
+      // MEDIUM is 9.6, and LOW is about what the whole field used to deliver
+      // near the truck. The falloff is the law's at every stop.
+      //
+      // Density costs vertices on a 47,360-pixel target rather than CPU matrices
+      // — a slot the dither drops is three vertices and no fragments at all.
+      // The dial persists its INDEX, so re-spacing needs no migration.
+      dial('grass', 'GRASS', ['OFF', 'LOW', 'MEDIUM', 'HIGH', 'LUSH'], GRASS_DEF, (i) => {
+        grassScale = GRASS_STOPS[i];
+        grassBushy = GRASS_BUSHY[i];
       }),
       // TERRAIN detail, and what it really buys is ROADS. A finer mesh means a
       // smaller cell, a smaller cell means the road cut reaches less far, and
