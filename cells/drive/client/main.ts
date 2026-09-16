@@ -11791,7 +11791,27 @@ const impProf = { drawn: 0, offered: 0, capped: 0, formed: 0, far: 0, farSeen: 0
  * refresh or two behind a newly seeded ring, which is a latency and not a pop.
  */
 const impFormOf = new WeakMap<PlacedVegSite, number>();
-const IMPOSTOR_FORM_BUDGET = 400;
+/**
+ * ── FOUR HUNDRED WAS A BUDGET ON THE WRONG THING, AND A DUMP SAID SO ──
+ *
+ * This bounds how many sites may be given a form (or, on the atlas path, an
+ * atlas slot) in one refresh, and 400 was chosen when deciding a form meant
+ * running `ezVariantAt` — a hash — for a tier drawing about a thousand cards.
+ * The seat's New Forest bench at POPULATION CAP 16X and a 40M triangle budget
+ * read `400 formed` with 129,205 candidates offered and THREE THOUSAND THREE
+ * HUNDRED AND SEVENTY-SIX drawn: the budget pinned, every refresh, and the
+ * tier turning away thirty-seven of every thirty-eight trees it was handed —
+ * while the geometry tier spent 37.74M triangles on the ones it kept. A cheap
+ * tier that stands down because its own bookkeeping is rationed is the exact
+ * inverse of what it is for.
+ *
+ * What actually needs rationing is the BAKE, and that has its own budget one
+ * constant down. A form is a Map lookup and a hash; twenty-four thousand of
+ * them is well under a millisecond. The dump prints it against its budget now
+ * and says PINNED when it is spent, because `400 formed` read as a plausible
+ * count for six hundred and fifty-six seconds.
+ */
+const IMPOSTOR_FORM_BUDGET = 24000;
 /**
  * ── ONE VARIANT BAKED A REFRESH, AND AN UNBAKED ONE SIMPLY WAITS ──
  *
@@ -11802,7 +11822,10 @@ const IMPOSTOR_FORM_BUDGET = 400;
  * is skipped for that sweep and stands up on the next, so a district's trees
  * arrive over about a second and nothing pops afterwards.
  */
-const IMPOSTOR_BAKE_PER_REFRESH = 1;
+// Two, not one: the device baked seven slots in 16 ms — about 2.3 ms each —
+// so a district's whole palette lands in the first refreshes rather than the
+// first seconds, and a hop does not spend a second drawing nothing.
+const IMPOSTOR_BAKE_PER_REFRESH = 2;
 let impBakedNow = 0;
 /** The slot for a baked variant, baking it if there is room and budget. Null
  *  means "not this sweep" — never "never". */
@@ -45289,7 +45312,7 @@ function telemetryReport(): string {
         + ` · density ${_i.density >= 1e6 ? 'ALL' : `${_i.density}x`}`
         + ` · drawn ${impProf.drawn}/${impProf.offered} offered${impProf.farSeen ? ` (${impProf.far} kept of ${impProf.farSeen} seen past the draw ring)` : ''}`
         + ` · ${(impProf.drawn * 4 / 1000).toFixed(1)}k tris${impProf.capped ? ` · CAPPED at ${IMPOSTOR_CAP}` : ''}`
-        + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed} formed` : ''}`
+        + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed}/${IMPOSTOR_FORM_BUDGET} formed${impProf.formed >= IMPOSTOR_FORM_BUDGET ? ' (PINNED)' : ''}` : ''}`
         + ` · atlas ${impAtlasRT ? `${impSlots.size}/${IMP_ATLAS_SLOTS} slots in ${impProf.bakeMs.toFixed(0)}ms` : 'OFF'}`
         + `${impProf.waiting ? ` · ${impProf.waiting} waiting on a bake` : ''}` : ''}`);
   }

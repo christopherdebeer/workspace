@@ -4678,6 +4678,60 @@ over every candidate and grew 16% here, and `vegGrid` holds every known site
 whether or not it is drawn — 200 a cell against 71, on a manifest bounded in
 cells.
 
+### The New Forest bench: 38.7M triangles, and the cheap tier rationed to nothing
+
+The seat's dump from a deliberately hard bench — POPULATION CAP 16X, DRAW
+RANGE 2.8 km, EZ TRI CAP 40M, FORM SPREAD 3X, top camera at the New Forest,
+656 s. It says three things, and only one of them is a bug.
+
+**THE FRAME IS THE GPU'S.** `world pass: triangles mean 11.81M max 38.74M · p95
+38.65M · 666 draw calls`, against a game that normally draws 3.5M. The tick is
+**14.4 ms of a 78 ms p50 frame** and off-tick work is 0.9; the other 36.8 ms a
+frame is the gap. This file's own rule stands — **the gap is a residual and
+cannot establish a GPU bottleneck** — but the triangle count is not a residual,
+it is a measurement, and 38.7M on an A-series phone at 19 fps is about
+740 Mtri/s of submitted geometry. The dials were turned up to find the wall and
+they found it.
+
+**`ezAdmit` IS 69.0 ms A CALL, MAX 211** — the largest identified CPU cost in
+the session and the whole of the one 336 ms frame in the log
+(`treeRefresh:182`). It is `nearestStable` over 129,205 candidates with a cap
+near fifty thousand, and it does not yield. Not fixed here, and the shape of
+the fix is known and worth writing down rather than rediscovering: **histogram
+d2 into a few hundred buckets, prefix-sum to the bucket where the cumulative
+count first reaches the cap, and keep everything up to that bucket's upper
+edge.** That prefix provably contains the cap-th nearest, so the selection
+afterwards is EXACT rather than approximate — two O(n) passes to cut the list
+by three or four times before the heap runs, with `nearestStable`'s own
+contract (and its tie rule, which `perf-check` holds) untouched.
+
+**AND THE IMPOSTOR TIER WAS RATIONED TO NOTHING, WHICH IS THE BUG.** The row:
+
+```
+drawn 3376/129205 offered · 13.5k tris · 400 formed
+```
+
+against `placed 51280 · tris 37.74M`. **The cheap tier carried four hundredths
+of one per cent of the vegetation bill on a frame that was drowning in
+geometry.** `400 formed` is `IMPOSTOR_FORM_BUDGET` exactly — pinned, every
+refresh, for six hundred and fifty-six seconds — and a site that cannot be
+given a form is skipped for that sweep. The budget was written when deciding a
+form meant one hash for a tier drawing a thousand cards; on the atlas path it
+is a Map lookup, and the thing that genuinely needs rationing is the BAKE,
+which has had its own budget since the atlas shipped. 24,000 now.
+
+**A COUNT THAT EQUALS ITS OWN BUDGET IS NOT A COUNT, AND THE ROW DID NOT SAY
+SO.** `400 formed` reads as a fact about the world; `400/400 formed (PINNED)`
+reads as a ration. That is the same fault as `edge == range` meaning NOT CAPPED
+rather than "trees all the way out", recorded two sections up, and as
+`__cam` reporting the zoom and not the stand-off. **Print a budgeted quantity
+against its budget, or it will be read as a measurement.**
+
+What the dump also confirms, quietly: the atlas cost **7 slots in 16 ms on the
+device** — about 2.3 ms a variant, once — so the bake-per-refresh went from one
+to two and a district's palette now lands in the first few refreshes rather
+than the first few seconds.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the
