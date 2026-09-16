@@ -4732,6 +4732,53 @@ device** — about 2.3 ms a variant, once — so the bake-per-refresh went from 
 to two and a district's palette now lands in the first few refreshes rather
 than the first few seconds.
 
+### Does a refresh re-place a tree it already drew? Yes, and that is not the flicker
+
+Asked from the seat: if a tree is still admitted, should the refresh not leave
+it alone? It does re-place it — every admitted tree is written into staging
+from scratch on every sweep — and **that costs nothing visually**, because the
+same tree produces the same matrix and the same colour whatever SLOT it lands
+in. The instance order changes; the frame does not.
+
+Three things in the place loop DO step at the refresh cadence, and they are
+worth knowing apart:
+
+- **THE DISTANCE FADE READS THIS REFRESH'S ADMITTED EDGE.** `tt = sqrt(d2) /
+  max(120, ezEdge[fam])` and `ezEdge` moves every sweep as the water-filling
+  allocator re-divides the triangle budget, so a tree in the outer third of the
+  ring can be mixed a different amount toward the ground colour a few times a
+  second. This is the fault the IMPOSTOR's own fade was moved to the fragment
+  to end — *a refresh is a few times a second while the distance to a tree
+  changes every frame* — and the skeletons were never given the same treatment.
+  The fix is the same one: a varying off the camera's own distance with the
+  edge as a uniform. It is not made here because it changes what the refill
+  writes, and `perf-check`'s baseline is a byte-for-byte record of exactly
+  that — re-snapshot it in the same commit or the check becomes a comparison
+  against a version two steps back.
+- **`casts` IS A HARD BOOLEAN AT `shadowSpan`.** A tree either goes in the
+  shadow-casting mesh or its twin, decided per refresh, so one sitting on that
+  radius can have its shadow blink on and off as the truck moves a metre.
+- **AND THE SET ITSELF CHANGES AT THE EDGE**, which is the pop the fade exists
+  to soften and is the tier's whole reason for being.
+
+What a refresh CANNOT move is the tree's identity: its variant, its height, its
+lean and its yaw are hashes on its own position. The ground under it is re-read
+(`groundAt`) and so follows the DEM as it refines, which is deliberate.
+
+### The silhouette ink: an instrument, not a look
+
+TREES -> **IMPOSTOR INK: STOCK | BLACK**, live, and `?impink=1`. Black takes
+every card's DIFFUSE to zero — not an emissive and not a post term — so a
+Lambert material multiplies every light by nothing and the tier is a true flat
+cut-out at any hour under any cloud.
+
+It exists because of an accident: the tier drew solid black for a week on a
+missing `color` attribute, and those frames were the clearest picture anyone
+has had of where the cards actually are. A silhouette answers by eye the three
+questions no pixel metric in this repo answers — **where is this tier drawing,
+how large is it there, and does its outline agree with the skeleton beside
+it** — and the last of those is the whole test of an impostor.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the

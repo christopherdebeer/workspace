@@ -251,6 +251,8 @@ export const SWITCHES = [
     note: 'tilt=subtle|mini|hard puts a tilt-shift plane of focus in the world' },
   { id: 'vegstems', kind: 'number', marks: ['world', 'legacy'], fallback: '1',
     note: 'vegstems= scales how far a cover class spreads its clumps past the open-ground rate — 1 is shipped, 0 seeds every class at the old uniform rate (the A/B for the closed canopy), and 2 doubles the excess. It is read once per cell at SEED time, so it needs a reload and a fresh world to mean anything' },
+  { id: 'impink', kind: 'number', marks: ['bench'], fallback: '0',
+    note: 'impink=1 draws the impostor tier as flat black silhouettes — the instrument for seeing where the cards are, how large, and whether their outline agrees with the skeletons beside them. TREES -> IMPOSTOR INK is the same control, live' },
   { id: 'impatlas', kind: 'toggle', marks: ['look', 'legacy'], fallback: 'on',
     note: 'impatlas=0 draws the impostor tier from its analytic width profile again instead of a photograph of the skeleton it stands in for — the A/B for whether a far tree is the same tree' },
 ] as const satisfies readonly SwitchDef[];

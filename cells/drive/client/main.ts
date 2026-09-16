@@ -11745,8 +11745,11 @@ const impSlots = new Map<string, ImpAtlasSlot>();
  *  the instance carries the slot and not the (family, variant) it came from. */
 const impSlotAt: Array<ImpAtlasSlot | undefined> = [];
 let impSlotNext = 0;
+/** The silhouette instrument: 0 stock, 1 a flat black cut-out. Live, because
+ *  it is a uniform — the one tree control that needs no reload. */
+const impInkU = { value: clamp(qsNum('impink', 0), 0, 1) };
 const impMat = impostorMaterial({ wind: windU, top: impTopU, fade: impFadeU, ground: impGroundU,
-  atlas: impAtlasU, bark: { value: new THREE.Color(0x4a3826) } });
+  atlas: impAtlasU, bark: { value: new THREE.Color(0x4a3826) }, ink: impInkU });
 // The same weather as the skeletons beside it: a wood lit while the grass it
 // stands in is under a cloud is the fault `terrainFx` was chained onto the
 // skeletons to fix, and a new tier outside it would reopen exactly that.
@@ -34194,7 +34197,7 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
     // from what is on screen. `atlas` is the switch, `slots` how many variants
     // have actually been photographed, and `waiting` how many sites stood
     // down this sweep for want of one.
-    atlas: !!impAtlasRT, slots: impSlots.size, slotCap: IMP_ATLAS_SLOTS,
+    atlas: !!impAtlasRT, slots: impSlots.size, slotCap: IMP_ATLAS_SLOTS, ink: impInkU.value,
     waiting: impProf.waiting, bakeMs: +impProf.bakeMs.toFixed(1),
     ...impostorReachTally() };
 };
@@ -45314,6 +45317,7 @@ function telemetryReport(): string {
         + ` · ${(impProf.drawn * 4 / 1000).toFixed(1)}k tris${impProf.capped ? ` · CAPPED at ${IMPOSTOR_CAP}` : ''}`
         + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed}/${IMPOSTOR_FORM_BUDGET} formed${impProf.formed >= IMPOSTOR_FORM_BUDGET ? ' (PINNED)' : ''}` : ''}`
         + ` · atlas ${impAtlasRT ? `${impSlots.size}/${IMP_ATLAS_SLOTS} slots in ${impProf.bakeMs.toFixed(0)}ms` : 'OFF'}`
+        + `${impInkU.value ? ' · INK BLACK (silhouette instrument)' : ''}`
         + `${impProf.waiting ? ` · ${impProf.waiting} waiting on a bake` : ''}` : ''}`);
   }
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
@@ -50517,6 +50521,12 @@ const DIAL_GROUPS: DialGroup[] = [
       }, true),
       dial('impden', 'IMPOSTOR DENSITY', ['0.25X', '0.5X', '1X', '2X', '4X', 'ALL'], 2,
         (i) => { impDensityMul = IMP_DENSITY_STEPS[i]; }, true),
+      // AN INSTRUMENT, NOT A LOOK. Black takes every card's diffuse to zero,
+      // so the tier reads as a flat cut-out and a frame answers by eye what no
+      // pixel metric here can: where the cards ARE, how large, and whether
+      // their outline agrees with the skeleton standing beside them.
+      dial('impink', 'IMPOSTOR INK', ['STOCK', 'BLACK'], 0,
+        (i) => { impInkU.value = i; }, true),
     ],
   },
   {

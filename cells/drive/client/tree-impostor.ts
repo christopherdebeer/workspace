@@ -182,6 +182,22 @@ export interface ImpostorTuning {
   /** The timber's own colour, for the wood the atlas marks in its G channel —
    *  the same bark `ezMaterial` gives the skeleton standing beside it. */
   bark?: { value: THREE.Color };
+  /**
+   * ── THE SILHOUETTE INK, WHICH IS AN INSTRUMENT AND NOT A LOOK ──
+   *
+   * 0 draws the tier as it ships. 1 takes every card's diffuse to black, so
+   * the whole tier reads as a flat cut-out against the world — which is the
+   * one thing a frame can be read for by eye: WHERE is this tier drawing, how
+   * big is it there, and does its outline agree with the skeleton beside it.
+   * The accident that taught this is in the file's own history: the tier drew
+   * black for a week because of a missing `color` attribute, and the black
+   * frames were the clearest picture anyone ever had of where the cards were.
+   *
+   * It is the DIFFUSE that goes to zero, not an emissive or a post term, so a
+   * Lambert material multiplies every light by nothing and the result is a
+   * true flat black at every hour and under any cloud.
+   */
+  ink?: { value: number };
 }
 
 /**
@@ -202,6 +218,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
   const uGround = tuning.ground ?? { value: new THREE.Color(0.5, 0.5, 0.5) };
   const uAtlas = tuning.atlas ?? { value: null };
   const uBark = tuning.bark ?? { value: new THREE.Color(0.32, 0.25, 0.19) };
+  const uInk = tuning.ink ?? { value: 0 };
   const ATLAS = !!uAtlas.value;
   // The atlas geometry is compile-time and the shader reads it as literals
   // rather than uniforms: a tile grid that could change between the bake and
@@ -218,6 +235,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
     sh.uniforms.uImpTop = uTop;
     sh.uniforms.uImpFade = uFade;
     sh.uniforms.uImpGround = uGround;
+    sh.uniforms.uImpInk = uInk;
     if (ATLAS) {
       sh.uniforms.uImpAtlas = uAtlas as { value: THREE.Texture };
       sh.uniforms.uImpBark = uBark;
@@ -304,7 +322,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', [
         '#include <common>',
-        'uniform float uImpTop; uniform vec3 uImpGround;',
+        'uniform float uImpTop; uniform vec3 uImpGround; uniform float uImpInk;',
         'varying float vImpCard; varying float vImpForm; varying float vImpYaw;',
         'varying vec3 vImpRight; varying vec3 vImpOut; varying vec2 vImpUv;',
         'varying float vImpFade;',
@@ -399,6 +417,9 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         // edge, over this tier's own reach — or the tier would trade the cap's
         // hard edge for a hard edge of its own, one ring further out.
         'diffuseColor.rgb = mix(diffuseColor.rgb, uImpGround, vImpFade * 0.7);',
+        // LAST, so the silhouette is flat whatever the distance, the hour or
+        // the cloud: everything above it is a colour and this is a switch.
+        'diffuseColor.rgb *= 1.0 - uImpInk;',
       ].join('\n'))
       // ── THE CROWN IS LIT AS AN ELLIPSOID ──
       // The card is flat and a flat normal would make a stand of impostors
