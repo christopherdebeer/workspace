@@ -39,6 +39,9 @@ const ELEVS = (process.env.ELEV ?? '8,35').split(',').map(Number);
 const PX = Number(process.env.PX ?? 224);
 const MAG = Number(process.env.MAG ?? 1);
 const COLS = Number(process.env.COLS ?? 6);
+// WHITE is the silhouette test and SKY is the honest one; `dark` is what the
+// first sheet used and is kept because a pale crown vanishes on white.
+const BG = process.env.BG ?? 'white';
 mkdirSync(OUT, { recursive: true });
 
 const t0 = Date.now();
@@ -58,8 +61,8 @@ await d.page.waitForTimeout(4000);
 const sheets = [];
 for (const elev of ELEVS) {
   console.log(`[${el()}] sheet at ${elev} degrees`);
-  const r = await q((o) => window.__ezsheet(o), { px: PX, mag: MAG, cols: COLS, elev });
-  const file = join(OUT, `tree-forms-e${elev}.png`);
+  const r = await q((o) => window.__ezsheet(o), { px: PX, mag: MAG, cols: COLS, elev, bg: BG });
+  const file = join(OUT, `tree-forms-${process.env.TAG ?? 'base'}-e${elev}.png`);
   writeFileSync(file, Buffer.from(r.sheet.split(',')[1], 'base64'));
   sheets.push({ elev, file, rows: r.rows });
 }

@@ -22,6 +22,16 @@ execFileSync('npx', ['esbuild', join(HERE, '../client/switches.ts'),
 const { SWITCHES, URL_OWNED, qs, qsOn, qsNum, switchRows, urlWithSwitches } = await import(pathToFileURL(built).href);
 const CLIENT = join(HERE, '../client');
 const main = readFileSync(join(CLIENT, 'main.ts'), 'utf8');
+// ── "SOMEWHERE" MEANS THE CLIENT, NOT main.ts ──
+// The unread check below read main.ts alone, so a switch consumed by a SIBLING
+// — `ezdetail` and `ezforms` in flora-ez.ts have been for as long as they have
+// existed — was invisible to it, and declaring a third one is what made the
+// gap fire. The table's contract is that nothing declared goes unread; which
+// file reads it is not part of the contract.
+const CLIENT_SRC = readdirSync(CLIENT)
+  .filter((f) => f.endsWith('.ts'))
+  .map((f) => readFileSync(join(CLIENT, f), 'utf8'))
+  .join('\n');
 
 let bad = 0;
 const ok = (name, cond, saw) => {
@@ -52,9 +62,9 @@ ok('main.ts no longer keeps its own owned list', !/const URL_OWNED = new Set\(\[
 // anyone inventing one.
 const unread = ids.filter((id) => {
   const re = new RegExp(`qs(?:Has|On|Num)?\\\\('${id}'\\\\)`);
-  if (re.test(main)) return false;
+  if (re.test(CLIENT_SRC)) return false;
   // read through a variable (the reel's two) or consumed as an owned key
-  if (new RegExp(`'${id}'`).test(main)) return false;
+  if (new RegExp(`'${id}'`).test(CLIENT_SRC)) return false;
   return !URL_OWNED.has(id);
 });
 ok('every declared switch is read somewhere', unread.length === 0, unread);

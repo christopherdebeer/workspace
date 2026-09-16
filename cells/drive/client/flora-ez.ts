@@ -151,6 +151,93 @@ function cardTone(g: THREE.BufferGeometry, spread = 0.2, foot = 0.22): THREE.Buf
   return g;
 }
 
+/**
+ * ── HOW MUCH FOLIAGE A WHORL CARRIES, AND WHY IT IS A CLIENT DIAL ──
+ *
+ * The control set (`devtools/tree-forms.mjs`) measured CLOSURE — the share of
+ * a tree's own bounding box its silhouette fills — across all twenty-nine
+ * variants, and the conifer family came back as two different bakes:
+ *
+ *   base `conic 1-4`   108-126 pads at r 0.075   22.0-24.9%   ~1,270 tris
+ *   the growth forms    28-41 pads at r 0.06      5.1-9.6%    469-651 tris
+ *
+ * A quarter of the foliage, and the frames show it: a bare pole with a dozen
+ * one-pixel dashes where the base recipe is an unmistakable spruce. The seat's
+ * report — *our real trees are a little too skeleton like* — is that row.
+ *
+ * PASS 1 CLUSTERED AND IT WAS NOT ENOUGH. Three pads an anchor, jittered
+ * within 0.9 of the pad radius, on the reasoning that a real branch carries a
+ * CLUSTER and that scaling the pad instead would read as a bead on a stick.
+ * Measured on the control set: closure 8.3 -> 10.8%, 9.6 -> 13.0%, 5.1 -> 6.9%,
+ * at roughly double the triangles (469-651 -> 917-1307). A third more silhouette
+ * for twice the cost, and still half the base recipe's 22-25%.
+ *
+ * THE LIMIT IS WHERE THE ANCHORS ARE, NOT HOW MANY PADS SIT ON EACH. Pads
+ * clustered inside 0.9r of one anchor OVERLAP, so their projected area barely
+ * adds; and the growth forms carry a quarter of the base recipe's anchors over
+ * the same crown, so the gaps that are empty are the ones BETWEEN the whorls,
+ * which no amount of clustering reaches.
+ *
+ * SO PASS 2 GROWS THE PAD ITSELF, on the physical argument the first pass
+ * argued against: an open-whorled or high-crown conifer HAS fewer branches, and
+ * a branch that is one of thirty carries a larger tuft than one of a hundred
+ * and twenty. The gain applies to EVERY pad, the cluster drops to two, and the
+ * spread widens past the gained radius so the pair reads as a lobed tuft rather
+ * than one blob. Pad area goes as the square of the gain, so 1.75 is 3.1x the
+ * area a pad drew and the pair is about five times the original crown — which
+ * is the base recipe's own 4.8x, arrived at by making the few branches fat
+ * instead of pretending there are more of them.
+ *
+ * NOTHING BUT A HABIT CONIFER IS TOUCHED. `crownFill` fires on `v.habit` with
+ * form `conic`, so the four base conifers — which the control set says already
+ * read at 22-25% — cannot be moved by tuning the eight that do not, and no
+ * broadleaf, palm, umbrella or snag is in this pass at all.
+ *
+ * `?ezfill=` is the A/B and 0 is an exact control: gain 1 and one pad an anchor
+ * is the k = 0 path with no jitter and no rescale, which decodes byte for byte
+ * as the shipped crown does.
+ */
+const EZ_FILL = (() => {
+  // THE ABSENT CASE IS CHECKED FIRST, and this file already records why: `get`
+  // answers null for a switch nobody set, `Number(null)` is ZERO, and zero is
+  // finite — so the obvious form silently reads "off" for every ordinary load.
+  // It cost this pass a whole run: the first sheet came back with the numbers
+  // unchanged to the decimal, which reads exactly like a change that does
+  // nothing and was a change that never ran.
+  const raw = floraQuery.get('ezfill');
+  if (raw === null || raw === '') return 1;
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= 0 ? Math.min(3, v) : 1;
+})();
+interface CrownFill { n: number; spread: number; scale: number; gain: number }
+function crownFill(v: GrowthVariant): CrownFill {
+  // Keyed on the HABIT, because that is what names a recipe rather than a
+  // seed: two wind-shaped conifers are the same recipe twice and must fill
+  // alike, or a district that draws both gets two different species.
+  const habit = v.habit;
+  if (habit && v.form === 'conic') {
+    // EVERY NUMBER HERE RIDES `EZ_FILL`, so `?ezfill=0` is the shipped crown
+    // byte for byte rather than an approximation of it: gain 1, one pad an
+    // anchor, no jitter. That is what makes the A/B a control.
+    const t = EZ_FILL;
+    return {
+      n: 1 + Math.round(t),               // 2 pads at the default
+      spread: 1.15,                       // past the gained radius: a pair, not a blob
+      scale: 0.78,                        // the second pad is the smaller one
+      gain: 1 + 0.75 * Math.min(t, 2),    // 1.75 at the default: 3.1x the pad's area
+    };
+  }
+  return { n: 1, spread: 0, scale: 1, gain: 1 };
+}
+
+/** A deterministic unit draw from two integers: the same tree every session,
+ *  and no two pads of one anchor in the same place. */
+function fillHash(a: number, b: number): number {
+  let x = Math.imul(a + 1, 2654435761) ^ Math.imul(b + 7, 2246822507);
+  x = Math.imul(x ^ (x >>> 15), 2654435761);
+  return ((x ^ (x >>> 13)) >>> 0) / 4294967296;
+}
+
 function crownOf(v: GrowthVariant, q: number): THREE.BufferGeometry | null {
   const shape = v.crown.shape;
   if (shape === 'none') return null;
@@ -170,24 +257,49 @@ function crownOf(v: GrowthVariant, q: number): THREE.BufferGeometry | null {
   const parts: THREE.BufferGeometry[] = [];
   const r = v.crown.r;
   const pads = v.pads ? int16(v.pads) : null;
+  const fill = crownFill(v);
   for (let i = 0; i + 3 <= A.length; i += 3) {
-    let g: THREE.BufferGeometry;
-    if (shape === 'cone') {
-      // Open at its base: a frond seen from the road never shows its underside.
-      g = new THREE.ConeGeometry(r, r * 1.6, 4, 1, true);
-    } else {
-      // A pad: an octahedron pressed flat, the way a spruce's foliage lies —
-      // eight triangles, and at sixty centimetres no eye tells it from twenty.
-      g = shape === 'flat' ? new THREE.OctahedronGeometry(r, 0) : new THREE.IcosahedronGeometry(r, 0);
-      if (shape === 'flat') g.scale(1, 0.45, 1);
+    const ax = A[i] / q, ay = A[i + 1] / q, az = A[i + 2] / q;
+    for (let k = 0; k < fill.n; k++) {
+      // k = 0 IS THE ORIGINAL: no jitter, no rescale, so a variant at fill 1
+      // decodes exactly as it always did and the extras only ever add.
+      const extra = k > 0;
+      // THE GAIN IS ON EVERY PAD, the first one included — which is the whole
+      // of pass 2, and why `sc` is no longer 1 on the k = 0 path.
+      const sc = (extra ? fill.scale : 1) * fill.gain;
+      let g: THREE.BufferGeometry;
+      if (shape === 'cone') {
+        // Open at its base: a frond seen from the road never shows its underside.
+        g = new THREE.ConeGeometry(r * sc, r * sc * 1.6, 4, 1, true);
+      } else {
+        // A pad: an octahedron pressed flat, the way a spruce's foliage lies —
+        // eight triangles, and at sixty centimetres no eye tells it from twenty.
+        g = shape === 'flat' ? new THREE.OctahedronGeometry(r * sc, 0) : new THREE.IcosahedronGeometry(r * sc, 0);
+        if (shape === 'flat') g.scale(1, 0.45, 1);
+      }
+      if (pads) {
+        const p = i / 3 * 4;
+        g.scale(pads[p] / q / r, pads[p + 1] / q / (r * 0.45), pads[p + 2] / q / r);
+        g.rotateY(-pads[p + 3] / q * Math.PI * 2 + (extra ? fillHash(i, k + 31) * Math.PI : 0));
+      } else if (extra) {
+        g.rotateY(fillHash(i, k + 31) * Math.PI * 2);
+      }
+      if (extra) {
+        // OUTWARD AND AROUND, not up: a whorl lies in a plane, so the cluster
+        // spreads across it and barely at all in height. Scaled by the pad's
+        // own radius so a small-padded recipe stays small.
+        const a = fillHash(i, k) * Math.PI * 2;
+        // MEASURED IN GAINED RADII, not in the baked one: a pad three times the
+        // area needs its partner further off or the two are one blob again.
+        const rg = r * fill.gain;
+        const d = (0.55 + 0.45 * fillHash(i, k + 11)) * fill.spread * rg;
+        g.translate(ax + Math.cos(a) * d, ay + (fillHash(i, k + 19) - 0.5) * 0.5 * fill.spread * rg,
+          az + Math.sin(a) * d);
+      } else {
+        g.translate(ax, ay, az);
+      }
+      parts.push(g);
     }
-    if (pads) {
-      const p = i / 3 * 4;
-      g.scale(pads[p] / q / r, pads[p + 1] / q / (r * 0.45), pads[p + 2] / q / r);
-      g.rotateY(-pads[p + 3] / q * Math.PI * 2);
-    }
-    g.translate(A[i] / q, A[i + 1] / q, A[i + 2] / q);
-    parts.push(g);
   }
   const crown = mergeGeos(parts);
   return shape === 'cone' ? faceTone(crown, 0.16, 0.3) : faceTone(crown);

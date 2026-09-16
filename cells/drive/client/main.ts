@@ -34230,7 +34230,7 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
  * what makes the coverage a fraction rather than a pixel count.
  */
 (window as unknown as { __ezsheet?: object }).__ezsheet = (opt: {
-  px?: number; elev?: number; az?: number; cols?: number; mag?: number;
+  px?: number; elev?: number; az?: number; cols?: number; mag?: number; bg?: string;
 } = {}): object => {
   const PX = Math.max(16, Math.min(512, Math.round(opt.px ?? 224)));
   const MAG = Math.max(1, Math.round(opt.mag ?? 1));
@@ -34299,7 +34299,21 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
   cv.width = cols * CW; cv.height = rowsN * (CW + LH);
   const cx = cv.getContext('2d') as CanvasRenderingContext2D;
   cx.imageSmoothingEnabled = false;
-  cx.fillStyle = '#20242a'; cx.fillRect(0, 0, cv.width, cv.height);
+  // ── THE BACKGROUND IS A CHOICE AND IT CHANGES WHAT YOU CAN READ ──
+  // WHITE is the silhouette test: dark foliage against paper, where a crown
+  // that does not close is obvious and a stray card reads as a stray card.
+  // SKY is the honest one — a pale sky over the ground tone, which is what the
+  // game actually puts behind a tree, and where a thin crown can hide. Keep
+  // both: a control set that only ever showed one would be answering only one
+  // of the two questions this pass is about.
+  const BG = opt.bg ?? 'white';
+  const label = BG === 'dark' ? '#c8d2e0' : '#1b2026';
+  if (BG === 'sky') {
+    const gr = cx.createLinearGradient(0, 0, 0, cv.height);
+    gr.addColorStop(0, '#b9cbdc'); gr.addColorStop(1, '#8a9470');
+    cx.fillStyle = gr;
+  } else cx.fillStyle = BG === 'dark' ? '#20242a' : '#f2f2ee';
+  cx.fillRect(0, 0, cv.width, cv.height);
   const tile = document.createElement('canvas');
   tile.width = PX; tile.height = PX;
   const tctx = tile.getContext('2d') as CanvasRenderingContext2D;
@@ -34313,11 +34327,12 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
     tctx.putImageData(img, 0, 0);
     const gx = (n % cols) * CW, gy = Math.floor(n / cols) * (CW + LH);
     cx.drawImage(tile, 0, 0, PX, PX, gx, gy, CW, CW);
-    cx.strokeStyle = '#3a4150'; cx.strokeRect(gx + 0.5, gy + 0.5, CW - 1, CW - 1);
-    cx.fillStyle = '#c8d2e0'; cx.font = '12px monospace';
+    cx.strokeStyle = BG === 'dark' ? '#3a4150' : '#c2c6bd';
+    cx.strokeRect(gx + 0.5, gy + 0.5, CW - 1, CW - 1);
+    cx.fillStyle = label; cx.font = '12px monospace';
     cx.fillText(cell.label, gx + 4, gy + CW + 12);
   });
-  return { rows, cols, px: PX, mag: MAG, elev: opt.elev ?? 8, sheet: cv.toDataURL('image/png') };
+  return { rows, cols, px: PX, mag: MAG, elev: opt.elev ?? 8, bg: BG, sheet: cv.toDataURL('image/png') };
 };
 
 (window as unknown as { __ezgeo?: object }).__ezgeo = (): object[] => {

@@ -4849,6 +4849,60 @@ What the rest of the sheet says, in the order worth fixing:
 by under two points between them, so the number is a property of the tree
 rather than of the framing. `PX=`, `MAG=` and `COLS=` size the cells.
 
+`BG=` is the sheet's background — `white` by default, since the seat asked for
+one and a dark sheet flatters a thin crown by lending it a silhouette it has
+not earned — plus `sky` and `dark`. `TAG=` names the files, so successive
+passes sit beside each other on disk.
+
+### …and filling that crown: clustering was the wrong lever, and the numbers said so
+
+Two passes at the eight growth-form conifers — the family the control set
+found at 5.1-9.6% against the base recipe's 22.0-24.9% — with the sheet shown
+to the seat at each. `?ezfill=` is the dial and 0 is an exact control: gain 1
+and one pad an anchor is the k = 0 path with no jitter and no rescale, which
+decodes byte for byte as the shipped crown does.
+
+**PASS 1 CLUSTERED, ON AN ARGUMENT THAT WAS PLAUSIBLE AND WRONG.** A real
+branch carries a cluster, and scaling the pad instead was expected to read as a
+bead on a stick — the shape the lab had already rejected for the columnar
+broadleaf. So three pads an anchor, jittered within 0.9 of the pad radius.
+
+**PASS 2 GREW THE PAD, which is the thing pass 1 argued against**, on the
+physical reading of the same recipe: an open-whorled or high-crown conifer HAS
+fewer branches, so a branch that is one of thirty carries a larger tuft than
+one of a hundred and twenty. Gain 1.75 on EVERY pad (the k = 0 one included),
+the cluster down to two, the spread measured in GAINED radii so the pair reads
+as a lobed tuft rather than one blob.
+
+| the eight growth forms, mean | closure | triangles |
+|---|---|---|
+| the bake, as it shipped | **7.6%** | 540 |
+| pass 1, three clustered pads | 10.1% (+33%) | 1,072 (+98%) |
+| **pass 2, the gain** | **15.2% (+100%)** | **806 (+49%)** |
+
+**READ THE COST COLUMN, NOT THE CLOSURE COLUMN.** Pass 1 bought a third more
+silhouette for twice the triangles — worse per triangle than the bake it was
+improving (0.0094 closure a triangle against 0.0141). Pass 2 is **0.0189**,
+which is better than the base recipe's own 0.0187: the growth forms have
+stopped being the cheap-because-empty variants that `ezTriPrice` was reading,
+and that is the same fact the tree-spend unit measured as a pricing bug
+arriving from the other side.
+
+**THE LIMIT WAS WHERE THE ANCHORS ARE, AND CLUSTERING CANNOT REACH IT.** Pads
+jittered inside 0.9r of one anchor OVERLAP, so their projected area barely
+adds; the growth forms carry 28-41 anchors against the base recipe's 108-126
+over the same crown, so what is empty is the gaps BETWEEN the whorls. Pad area
+goes as the SQUARE of the gain, which is why one lever moved twice what the
+other did at half the cost.
+
+What the frames say that the table does not: broken leader and open whorled 6
+read as recognisable young conifers at 19%; **wind shaped is still last at
+10.6-11.7% and partly should be** (w/h 0.86-0.99, so the box is wide and a
+windswept tree is genuinely sparse); and on all eight the pads are still
+individually legible as diamonds where `conic 1-4` is a mass — which is the
+anchor count again, and that lever is `children x0.3` in the reduction and
+needs a re-bake rather than a client dial.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the
