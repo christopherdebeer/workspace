@@ -293,6 +293,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/tree-impostor.mjs` | what the impostor tier stands up and what it changes on screen — ONE boot, off/on/off through `__impostor()`, so the repeat is the floor; read whole AND over the canopy band, because a chase frame is mostly sward and sky (`TRIS=` raw triangles, `BAND=`) | ~6min |
 | `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
 | `node devtools/render-focus.test.mjs` | where the RENDERER is looking, and whether anything reads it — the authority's three cameras and the drone's own lead geometry driven for real, then each consumer and the sward's fast/slow ORDER as a source check; two controls in its header | instant |
+| `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds (`ARGS='swardcap=0&swardsites=14'` is the rule as it shipped) | ~40s |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
@@ -13405,3 +13406,165 @@ on the next dump is `treeRefresh` with its `seedMsNow` beside it.
 these two: tree admission is still a focus-centred CIRCLE. Frustum and
 projected-size admission with a guard band is the next step, and it is the one
 that would stop the ring spending its budget on ground behind the camera.
+
+### The partition summed to one and the carriers could not carry it
+
+The seat's third report on the sward, and the sharpest: *the partition-of-unity
+logic is mathematically continuous, but the individual density bands cannot
+actually carry the density being handed to them. That capacity clamp recreates
+rings.* Every number in it was reproduced from the source before anything moved,
+and it is right — and **understated**, for a reason the report could not have
+known.
+
+**THE ARITHMETIC, AND IT IS EXACT.** A lattice of step s places at most ONE tuft
+per cell, so it cannot exceed 1/s² per square metre whatever its keep says:
+**4.94/m² at 0.45 m, 0.444 at 1.5, 0.047 at 4.6.** The shared target is
+`uDens · (22/d)^2.2` and every band's keep is `target · step² · weight`, so a
+band handed a keep above one delivers its ceiling **and reports nothing at all.**
+A probability clamped at 1 fails silently — which this file already said, in the
+comment above the band table, while shipping the fault it describes.
+
+**AND THE GRASS DIAL DEFAULTS TO 3.2x.** The report worked at `SWARD_LUSH = 14`;
+`uDens` is `vegScale · grassScale · SWARD_LUSH`, and the GRASS dial's default
+stop is MEDIUM. **The shipped default request is 44.8 sites/m²** — nine times the
+near band's ceiling and nine hundred and fifty times the far band's — so the
+whole field was capacity-limited nearly everywhere and the falloff had almost
+stopped existing. Measured on the shipped rule at the shipped default
+(`devtools/sward-profile.mjs`, `at-campsbay`): **149 of 179 radii short of their
+own target, worst 11%.**
+
+| d | delivered, as shipped | of target | delivered, now | of target | tuft |
+|---|---|---|---|---|---|
+| 2–24 m | 3.83 | **11%** | 3.83 | 100% | ×1.80 |
+| 40 | 3.83 | 41% | 3.33 | 100% | ×1.00 |
+| 56 | 3.83 | 86% | 1.59 | 100% | ×1.00 |
+| **72** | **0.344** | **14%** | 0.344 | 100% | ×1.63 |
+| 96 | 0.344 | 25% | 0.344 | 100% | ×1.19 |
+| 160 | 0.344 | 78% | 0.158 | 100% | ×1.00 |
+| 168 | 0.380 | 96% | 0.142 | 100% | ×1.00 |
+| **192** | **0.0374** | **14%** | 0.0374 | 100% | ×1.68 |
+| 240 | 0.0366 | 15% | 0.0366 | 100% | ×1.33 |
+
+Read the left column down and the rings are not an inference, they are the
+shape: **flat at 3.83 to 56 m, a cliff to 0.344 by 72, flat to 168 with a small
+spike where both bands contribute before the far one saturates, a cliff to
+0.0366 by 192, flat again.** Three plateaus and two cliffs. That is the
+photograph.
+
+#### Sites per square metre is not lushness, and conflating them made the rings
+
+`SWARD_LUSH = 14` existed for a good reason — GRASS_M2's values are the density
+the CPU sward could AFFORD, not the density a meadow has — and it is a number
+two of the three carriers cannot represent. The two quantities are separated now:
+
+- **`SWARD_SITES` (5/m², `?swardsites=`)** is a count the carriers can carry. It
+  is not a taste: it is the largest nominal for which the target curve stays
+  under the capacity envelope at both handovers, and the seat derived the same
+  five independently from the crossover distances (66 m and 184 m against the
+  existing 56–72 and 160–195 windows).
+- **everything above it is TUFT FULLNESS** — the same ground covered by fewer,
+  wider plants, which is what "lush" means to an eye and costs no slot at all.
+
+**THE CLAMP IS ON THE TARGET, NOT ON THE KEEP, and that is the whole fix.**
+`swardCap(d)` is `min over bands of 1/(w_b(d) · step_b²)` — the exact bound that
+keeps every band's keep at or under one — GENERATED FROM THE BAND TABLE rather
+than typed, so a second copy cannot drift and the profile probe measures against
+the same function the shader runs. A band clamping its OWN keep at one delivers
+less than the shared target and the other bands never hear about it; **one
+shared target that no band will saturate means every band delivers its exact
+share and the total is the target at any dial setting, by construction.**
+
+**AND THE DEFICIT IS NOT THROWN AWAY.** Where the clamp binds, the tuft widens
+by `sqrt(want/got)` — LATERALLY only, because grass does not grow taller because
+there is more of it — so **coverage, which is sites × tuft area, equals the
+perceptual curve at every radius.** Measured: coverage 100% of the law's request
+from 2 m to 300 m, against 11–86% before. The count follows the law where the
+carriers can hold it and the coverage follows it everywhere, which is the
+honest statement of what an eye is judging. `?swardfull=1` turns the
+compensation off for an A/B; the cap (2.1) exists because at the top of the
+grass dial the ratio is thirty-six and a tuft six times its width is a bush.
+
+**WHAT CHANGES ON SCREEN, said plainly rather than buried.** The near field
+(0–24 m) delivers exactly what it did — both builds ride the near ceiling —
+but its tufts are now **1.8× wider**, because the dial is asking for 16/m² and
+the lattice holds 4.94. The 45–70 m and 110–190 m bands get **about 2× thinner**,
+because those are precisely where the old build was riding a ceiling instead of
+following its own curve. Everything else is unchanged to the digit. Whether the
+fatter near tufts read as lush or as cabbages is the seat's call and
+`?swardfull=1` is the switch for it.
+
+#### The evidence field ran out from under the far edge
+
+Also from the report, and independently true: the field is 768 m wide — **384 m
+from the centre to an edge against a 359 m reach, so 25 m of margin** — while
+`SWARD_REBUILD` is 48, so the drawn edge could stand 23 m OUTSIDE the committed
+texture before a rebuild was even considered, and further while the replacement
+swept. `sUv` past [0,1] is refused by `sLive`, so what it draws out there is
+nothing: a thinning crescent travelling with the camera, which is one more wave
+to mistake for a ring.
+
+`SWARD_F` 96 → **112**: 896 m across, **89.2 m of margin against a 48 m
+trigger**. The alternative — rebuilding three times as often — costs three times
+the sweep for the same coverage where this costs 36% more per sweep at the same
+rate, and the resolution per metre does not move, so nothing the field says
+about the ground changes. `SWARD_MASKN` went 512 → 600 with it, because a mask
+stretched over a wider field at a fixed texel count coarsens the kerb by the
+same 17% — 1.49 m a texel, which is the number its own comment was written
+about.
+
+#### The instrument, and why `__sward()` could not have caught this
+
+`__swardprofile()` reports, per radius: the target the law asks for, the
+envelope the carriers can hold, each band's weight and keep, what is delivered,
+the coverage and the ratio. `__sward()` had every INPUT to this — it reported
+each band's ceiling and each band's blend window — and could not see it, because
+it never put the ceiling and the requested density **at the same range**. The
+fifth time this file has recorded the same shape: a probe that reports the
+output of a rule cannot witness the rule.
+
+`devtools/sward-profile.mjs` runs it on a fixture in about forty seconds, one
+boot, `nodraw` (the quantity is arithmetic over the live uniforms, not pixels),
+and fails on a coverage shortfall inside the outer fade or on a field margin
+under the rebuild trigger. `ARGS='swardcap=0&swardsites=14'` is the exact
+control and fails 149 of 179 radii — which is what makes the check a check.
+
+**AND `nodraw` COULD NOT HAVE VALIDATED THE SHADER.** A program compiles on its
+first RENDER, so the profile run says nothing about whether the new `swardCap`
+links. The frame was taken separately, with drawing on: 0 page errors, and the
+harness folds a GLSL error into that list.
+
+#### What is NOT done, and the arithmetic to start from
+
+**THE THREE CARRIERS ARE STILL THREE UNRELATED POINT PROCESSES.** The seat's
+fourth invariant, and the one they expect to make it *feel* like one field: the
+steps are 0.45 / 1.5 / 4.6, which are not integer multiples, so at a crossfade
+one random population fades out and a completely different one fades in at
+unrelated positions. Their proposal is exact 3× nesting — **0.45 / 1.35 /
+4.05** — with each coarse site a deterministic 1-of-9 child of the finer
+lattice, so the coarse tuft stands where a fine tuft stood, at the same size,
+colour and yaw, and the handover is a THINNING of one population rather than a
+swap of two. Sides resize to hold the reaches (320 / 292 / 180 → 220,064 slots,
++13%) and both coarse ceilings improve (0.549 and 0.061).
+
+It is deliberately NOT done in this commit, for two reasons and one piece of
+arithmetic:
+
+- **ATTRIBUTION.** The measurable defect is fixed and measured. Nesting's
+  benefit is a look claim about spatial-frequency identity that no instrument
+  here can measure — it needs the seat's eye — and landing both at once makes
+  the next frame unattributable.
+- **IT HAS A COST NOBODY HAS PRICED, and here it is.** With nesting the two
+  bands SHARE their children, so the delivered density is the UNION and not the
+  sum. Per m²: non-children contribute `0.8889·D·w_near` and children
+  `D·max(0.1111·w_near, w_mid)`, so the total is
+  `D·(0.8889·w_near + max(0.1111·w_near, w_mid))` — exactly D at either end of a
+  handover and **5.6% short at its midpoint**, where both weights are a half.
+  Well inside the ten per cent bar and far better than the 57% it replaces, but
+  it is real, and `__swardprofile` currently sums the bands and would report
+  100% where the truth is 94%. **Teach the probe the union rule in the same
+  commit as the nesting**, or the instrument will certify the thing it was built
+  to catch.
+- A child alive in the near band is also alive in the mid band (its keep is
+  nine times larger over the same hash), so it is drawn TWICE in the crossfade
+  annulus — identical geometry at an identical place, so no artefact, but some
+  overdraw. Worth knowing before it is read as a bug.

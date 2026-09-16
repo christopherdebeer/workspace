@@ -12623,14 +12623,38 @@ function swardGround(x: number, z: number): number {
  * the shadow pass uses its own depth material: without a matching injection
  * every blade would cast from the world origin, silently.
  */
-const SWARD_F = 96;            // field texels across
+/**
+ * ── THE EVIDENCE FIELD MUST COVER THE GROUND THAT IS DRAWN, WHILE IT MOVES ──
+ *
+ * This was 96, which is 768 m across and 384 m from the centre to an edge — and
+ * the sward reaches 359 m. Twenty-five metres of margin, against a rebuild that
+ * is not even CONSIDERED until the focus is `SWARD_REBUILD` (48 m) off centre.
+ * So the leading edge of the drawn field could stand twenty-three metres
+ * outside the committed texture before anything triggered, and further still
+ * while the replacement swept: `sUv` past [0,1] is refused by the guard at the
+ * end of sLive, so what it draws there is NOTHING — a thinning crescent that
+ * travels with you, which is another wave to mistake for a ring.
+ *
+ * 112 is 896 m and 448 from the centre: 89 m of margin against a 48 m trigger,
+ * so the edge is inside the field through the whole of a normal rebuild cycle
+ * and through an abandoned sweep as well. The alternative — rebuilding three
+ * times as often — costs three times the sweep for the same coverage, where
+ * this costs 36% more per sweep at the same rate. The resolution per metre
+ * (SWARD_FM) does not move, so nothing the field says about the ground changes.
+ */
+const SWARD_F = 112;           // field texels across
 const SWARD_FM = 8;            // metres per texel — 768m of field
 const SWARD_FW = SWARD_F * SWARD_FM;
 // Road/water mask texels. 256 was 3m each, and with linear filtering either
 // side of a kerb that is a six-metre ramp on top of the stroke's own width —
 // measured, a 9.5m carriageway blocked grass across about eighteen metres and
 // left every verge in the suburb bald. At 512 the ramp is a metre and a half.
-const SWARD_MASKN = 512;
+// SCALED WITH THE FIELD, not left where it was: the mask is stretched over
+// SWARD_FW metres, so widening the field at a fixed texel count would have
+// coarsened the kerb by the same 17% — a ramp of 1.75 m where 1.5 was already
+// the number being defended. 600 over 896 m is 1.49 m a texel, which is the
+// number this comment was written about.
+const SWARD_MASKN = 600;
 /** How far inside a water body the mask stops, so reeds and rough grass can
  *  stand in the margin. A body masked to its own outline reads as shaved. */
 const SWARD_SHALLOW = 2.5;
@@ -12639,8 +12663,9 @@ const SWARD_SHALLOW = 2.5;
 const SWARD_FALL = 2.2;
 const SWARD_NEAR = 22;
 /** Rebuild the field once the truck is this far off its centre. The field is
- *  768m wide, so this is generous: at 25m/s it is a pass every two seconds
- *  against the old sward's every seven hundred milliseconds. */
+ *  896m wide and the sward reaches 359, so this sits inside an 89m margin (see
+ *  SWARD_F): at 25m/s it is a pass every two seconds against the old sward's
+ *  every seven hundred milliseconds. */
 const SWARD_REBUILD = 48;
 /**
  * …and ABANDON a sweep in flight once the render focus is this far from the
@@ -12652,21 +12677,137 @@ const SWARD_REBUILD = 48;
  */
 const SWARD_ABANDON = 160;
 /**
- * HOW MUCH LUSHER THAN THE OLD FIELD, as one number.
+ * ── A LATTICE HAS A CEILING, AND THE PARTITION DID NOT KNOW ABOUT IT ──
  *
- * GRASS_M2 is in tufts per square metre and its values — 0.85 for open grass,
- * 0.35 for unknown — are the density the CPU sward could AFFORD, not the
- * density a meadow has. Ported straight across they reproduce exactly the look
- * being complained about: measured at Noordhoek the near band came out at 0.45
- * tufts/m², which at this pixel scale is invisible against green ground.
+ * Reported from the seat with a picture: "I can see the 3 rings of sward."
+ * Which is damning, because the previous round made the band weights sum to one
+ * so that density would be continuous BY CONSTRUCTION. The arithmetic was right
+ * and beside the point.
  *
- * The class values are kept because their RATIOS are real — bare ground grows
- * nothing, a built block grows a twelfth of what open grass does — and the
- * whole table is multiplied instead. Free to do: a slot the dither drops costs
- * three vertices and no fragments, so density is now paid for in vertex work
- * on a 47,360-pixel target rather than in CPU matrices.
+ * A band of step s can place at most ONE tuft per cell, so it can never exceed
+ * 1/s² per square metre whatever its keep says. Measured against a target of
+ * 4.9/m²: the near band's keep came out 0.99 and delivered it, the middle
+ * band's keep was ELEVEN and delivered 0.44, the far band's was ONE HUNDRED AND
+ * FOUR and delivered 0.047. Two order-of-magnitude cliffs, in exactly the three
+ * rings the photograph shows. ** A PROBABILITY CLAMPED AT 1 FAILS SILENTLY: **
+ * it does not warn, it just stops counting.
+ *
+ * So the target has to FALL with range until each band can deliver it, and the
+ * honest falloff is perceptual rather than arbitrary. Ground area per pixel
+ * grows as d², so a density going as 1/d² holds SCREEN density constant —
+ * which is what an eye judges — and happens to be the shape that fits under
+ * the ceilings. Slightly steeper than square (SWARD_FALL) buys handover margin.
+ *
+ * And the handovers must sit where the target has fallen BELOW the incoming
+ * band's ceiling, or the new band saturates the moment it takes over and the
+ * cliff simply moves. That is what sets the reaches: 72m needs 0.36/m² against
+ * the middle band's 0.44 ceiling, 195m needs 0.040 against the far band's
+ * 0.047. 210k slots against 113k — the price of not having rings.
  */
-const SWARD_LUSH = 14;
+const SWARD_BANDS: Array<[number, number, [number, number, number, number]]> = [
+  [0.45, 320, [-1, 0, 56, 72]],
+  [1.5, 260, [56, 72, 160, 195]],
+  // Fade-out ENDS INSIDE the field and inside uGReach. It did not: the reach
+  // was 460m against a 384m field and a 368m uGReach, so the outermost "ring"
+  // was a hard circular cutoff that no fade ever got near. A constant left
+  // behind by a retune, and invisible to a density profile that never asked
+  // where the field stops.
+  [4.6, 156, [160, 195, 300, 356]],
+];
+/**
+ * ── SITES PER SQUARE METRE IS NOT LUSHNESS, AND CONFLATING THEM MADE RINGS ──
+ *
+ * This was `SWARD_LUSH = 14`, and its reasoning was sound as far as it went:
+ * GRASS_M2's values are the density the CPU sward could AFFORD (0.85/m² for
+ * open grass) rather than the density a meadow has, so the whole table was
+ * multiplied until a meadow read as one.
+ *
+ * What it could not know is that a lattice of step s holds at most ONE tuft per
+ * cell — 4.94/m² at 0.45 m, 0.44 at 1.5, 0.047 at 4.6 — so fourteen is a number
+ * two of the three carriers cannot even represent. Asked for more than it can
+ * hold, a band delivers its ceiling and says nothing: measured on the shipped
+ * build, the radial profile tracks its target to 56 m, falls to **43% of it at
+ * 72 m**, holds a flat plateau to 106 m where the target catches back down,
+ * then does the same again — **41% at 196 m**, flat to 292. Two troughs and two
+ * plateaus, in exactly the places the seat photographed three rings.
+ *
+ * AND THE GRASS DIAL MADE IT WORSE BY DESIGN. `grassScale` reaches 12.8, so the
+ * request reaches 179/m²: every band saturated over its whole extent, the
+ * falloff gone entirely, and the field literally three flat discs. A rule that
+ * a player's own dial can break is not a rule.
+ *
+ * So the two quantities are separated. SITES is a count the carriers can carry;
+ * everything above it is TUFT FULLNESS — the same ground covered by fewer,
+ * wider plants — which is what "lush" means to an eye and costs no slot at all.
+ * Five is not a taste either: it is the largest nominal for which the target
+ * curve stays under the capacity envelope (below) at both handovers, with 15 to
+ * 21 per cent of margin. `?swardsites=` moves it for an A/B.
+ */
+const SWARD_SITES = qsNum('swardsites', 5);
+/**
+ * How much wider a tuft may grow to pay back what the capacity clamp removed.
+ * Coverage is sites x tuft area, so a radius of sqrt(want/got) holds coverage
+ * exactly — and it is capped, because at the top of the grass dial that ratio
+ * is thirty-six and a tuft six times its width is a bush. Past the cap the
+ * field genuinely thins, which is honest: what matters is that it thins
+ * CONTINUOUSLY rather than stepping at a handover.
+ */
+const SWARD_FULL_MAX = qsNum('swardfull', 2.1);
+/**
+ * The exact control. Off, the target is the perceptual curve unclamped and the
+ * tufts do not widen — which is the rule as it shipped, so `?swardcap=0` with
+ * `?swardsites=14` reproduces the build the seat photographed rings on, and
+ * every number this unit quotes has something to be a number AGAINST.
+ */
+const SWARD_CAP_ON = qsOn('swardcap', true);
+/**
+ * ── ONE DENSITY LAW, AND A CARRIER IS NEVER ASKED FOR MORE THAN IT HOLDS ──
+ *
+ * `swardCap(d)` is the most sites per square metre the CARRIERS can deliver at
+ * range d, and it is exact rather than a rule of thumb. Band b places at most
+ * one tuft per cell, so its own keep `D * w_b * step_b^2` may not exceed one,
+ * which bounds the shared target at `1 / (w_b * step_b^2)`; the envelope is the
+ * minimum of those over every band with weight here. A band with no weight
+ * bounds nothing (the max() is what makes that a very large number rather than
+ * a division by zero), so the envelope is continuous and rises back to infinity
+ * outside the field.
+ *
+ * Clamping the TARGET to it is the whole fix, and it is not the same thing as
+ * the clamp that was already happening. A band clamping its OWN keep at one
+ * silently delivers less than the shared target and the other bands never hear
+ * about it — that is the trough. One shared target that no band will saturate
+ * means every band delivers its exact share and the total is the target, at any
+ * dial setting, by construction rather than by tuning.
+ *
+ * GENERATED FROM THE BAND TABLE rather than typed, because a second copy of the
+ * steps and the handover windows is a copy that drifts — and the profile probe
+ * reads this same function, so an instrument cannot disagree with the shader
+ * about the ceiling it is measuring against.
+ */
+/** A GLSL float literal: `56` is an int in GLSL and `56.0` is not. */
+const swardF3 = (v: number): string => (Number.isInteger(v) ? `${v}.0` : `${v}`);
+const SWARD_CAP_GLSL = `
+        float swardCap(float d) {
+          float c = 1.0e6;
+${SWARD_BANDS.map(([step, , bl]) => `          c = min(c, 1.0 / max(1.0e-4, `
+  + `smoothstep(${swardF3(bl[0])}, ${swardF3(bl[1])}, d)`
+  + ` * (1.0 - smoothstep(${swardF3(bl[2])}, ${swardF3(bl[3])}, d))`
+  + ` * ${swardF3(+(step * step).toFixed(6))}));`).join(String.fromCharCode(10))}
+          return c;
+        }`;
+/** The same envelope on the CPU, for the profile probe. */
+function swardCapAt(d: number): number {
+  const ss = (a: number, b: number, x: number): number => {
+    const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  };
+  let c = 1e6;
+  for (const [step, , bl] of SWARD_BANDS) {
+    const w = ss(bl[0], bl[1], d) * (1 - ss(bl[2], bl[3], d));
+    c = Math.min(c, 1 / Math.max(1e-4, w * step * step));
+  }
+  return c;
+}
 const swardFieldData = new Float32Array(SWARD_F * SWARD_F * 4);
 const swardField = new THREE.DataTexture(
   swardFieldData, SWARD_F, SWARD_F, THREE.RGBAFormat, THREE.FloatType);
@@ -12754,6 +12895,7 @@ const swardU = {
    *  only a lamp a few metres away ever reaches it. */
   uSwardKnee: { value: 0.72 },
   uSwardFall: { value: SWARD_FALL }, uSwardNear: { value: SWARD_NEAR },
+  uSwardFull: { value: SWARD_FULL_MAX }, uSwardCapOn: { value: SWARD_CAP_ON ? 1 : 0 },
   /** How much of the GROUND's own colour a blade wears at close range. The
    *  single number for "grass contrasts too much with the terrain".
    *
@@ -13258,6 +13400,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform float uGReach;
         uniform vec3 uSwardEye; uniform vec3 uSwardTint; uniform float uSwardDbg;
         uniform float uSwardFall; uniform float uSwardNear; uniform float uSwardMatch;
+        uniform float uSwardFull; uniform float uSwardCapOn;
         uniform float uSwardVary; uniform float uSwardUp;
         uniform float uFlowerPatchFill;
         uniform float uFlowerStrayOpen; uniform float uFlowerStrayWood;
@@ -13269,6 +13412,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         ${SWARD_FLOW_NAMES.map((n) => `uniform vec3 ${n};`).join(' ')}
         varying vec3 vSward;
         ${SWARD_GLSL}
+        ${SWARD_CAP_GLSL}
         ${SWARD_STRUCTURE_GLSL}`)
       // ── A BLADE IS LIT LIKE THE GROUND IT STANDS IN ──
       //
@@ -13452,13 +13596,24 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // tuning. The thinning with range is then a single global curve, shared
         // by every band, so it cannot have a seam in it either.
         float sW = smoothstep(uBlend.x, uBlend.y, sD) * (1.0 - smoothstep(uBlend.z, uBlend.w, sD));
+        // ── THE CLAMP IS ON THE TARGET, NOT ON THE KEEP ──
+        //
+        // See swardCap. sWant is what the perceptual law asks for here and
+        // sGot is what the carriers can actually deliver; every band computes
+        // both from the same two numbers, so they cannot disagree about the
+        // target and no band is ever handed a keep above one. The deficit is
+        // not thrown away — it comes back as tuft SPREAD below, so coverage
+        // stays continuous where the count cannot.
         // THE TARGET IS A DENSITY, AND IT FALLS. Ground area per pixel grows
         // as the square of range, so a ground density falling at about that
         // rate holds SCREEN density steady — and it is what keeps every band
         // under its own one-tuft-per-cell ceiling, which is what the three
         // rings were. See SWARD_FALL.
         float sG = pow(uSwardNear / max(sD, uSwardNear), uSwardFall);
-        float sKeep = abs(sF.g) * uStep * uStep * uDens * sW * sG;
+        float sWant = abs(sF.g) * uDens * sG;
+        float sGot = uSwardCapOn > 0.5 ? min(sWant, swardCap(sD)) : sWant;
+        float sFull = sGot > 1.0e-6 ? clamp(sqrt(sWant / sGot), 1.0, uSwardFull) : 1.0;
+        float sKeep = sGot * uStep * uStep * sW;
         // ── BLADES THIN OUT, THEY DO NOT BLINK OUT ──
         //
         // Reported from the seat: blades visibly jump around at walking pace
@@ -13577,6 +13732,15 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // speaking about something it does not describe.
         float sShort = (sIsStone || sIsReed) ? 1.0 : 1.0 - 0.42 * sMineral;
         vec3 sLp = sPosL * (0.45 + sSize * 1.30) * sShort * sRangeScale * sAlive;
+        // ── AND THE LUSHNESS THE COUNT COULD NOT CARRY IS SPENT HERE ──
+        //
+        // LATERALLY ONLY. Grass does not grow taller because there is more of
+        // it; a denser sward covers more GROUND with the same blade length, so
+        // a tuft asked to stand in for several spreads rather than towers. This
+        // is what makes the grass dial safe at its top stop: the request goes
+        // up, the carriers deliver what they can hold, and the difference is
+        // paid in area — continuously, with no handover to step at.
+        sLp.xz *= sFull;
         sLp.xz = vec2(sCa * sLp.x - sSa * sLp.z, sSa * sLp.x + sCa * sLp.z);
         // Wind, from the blade's WORLD position so a gust crosses the field as
         // one front rather than every tuft nodding on its own clock.
@@ -13719,44 +13883,6 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
 // step, lattice side, and the handover window (in0,in1,out0,out1) in metres.
 // Adjacent bands share their edges exactly, which is what makes the weights
 // sum to one and the density continuous across a handover.
-/**
- * ── A LATTICE HAS A CEILING, AND THE PARTITION DID NOT KNOW ABOUT IT ──
- *
- * Reported from the seat with a picture: "I can see the 3 rings of sward."
- * Which is damning, because the previous round made the band weights sum to one
- * so that density would be continuous BY CONSTRUCTION. The arithmetic was right
- * and beside the point.
- *
- * A band of step s can place at most ONE tuft per cell, so it can never exceed
- * 1/s² per square metre whatever its keep says. Measured against a target of
- * 4.9/m²: the near band's keep came out 0.99 and delivered it, the middle
- * band's keep was ELEVEN and delivered 0.44, the far band's was ONE HUNDRED AND
- * FOUR and delivered 0.047. Two order-of-magnitude cliffs, in exactly the three
- * rings the photograph shows. ** A PROBABILITY CLAMPED AT 1 FAILS SILENTLY: **
- * it does not warn, it just stops counting.
- *
- * So the target has to FALL with range until each band can deliver it, and the
- * honest falloff is perceptual rather than arbitrary. Ground area per pixel
- * grows as d², so a density going as 1/d² holds SCREEN density constant —
- * which is what an eye judges — and happens to be the shape that fits under
- * the ceilings. Slightly steeper than square (SWARD_FALL) buys handover margin.
- *
- * And the handovers must sit where the target has fallen BELOW the incoming
- * band's ceiling, or the new band saturates the moment it takes over and the
- * cliff simply moves. That is what sets the reaches: 72m needs 0.36/m² against
- * the middle band's 0.44 ceiling, 195m needs 0.040 against the far band's
- * 0.047. 210k slots against 113k — the price of not having rings.
- */
-const SWARD_BANDS: Array<[number, number, [number, number, number, number]]> = [
-  [0.45, 320, [-1, 0, 56, 72]],
-  [1.5, 260, [56, 72, 160, 195]],
-  // Fade-out ENDS INSIDE the field and inside uGReach. It did not: the reach
-  // was 460m against a 384m field and a 368m uGReach, so the outermost "ring"
-  // was a hard circular cutoff that no fade ever got near. A constant left
-  // behind by a retune, and invisible to a density profile that never asked
-  // where the field stops.
-  [4.6, 156, [160, 195, 300, 356]],
-];
 const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
   const geo = new THREE.InstancedBufferGeometry();
   const src = grassGeo();
@@ -13892,7 +14018,10 @@ function swardFrame(): void {
     const bix = Math.round(fx / b.step), biz = Math.round(fz / b.step);
     b.uBaseI.value.set(bix, biz);
     b.uBase.value.set(bix * b.step, biz * b.step);
-    b.uDens.value = vegScale * grassScale * SWARD_LUSH * chartFade;
+    // THE REQUEST, which the shader then clamps to what the carriers can hold.
+    // The dial is free to ask for more than exists: what it buys past the
+    // ceiling is fuller tufts rather than impossible points. See SWARD_SITES.
+    b.uDens.value = vegScale * grassScale * SWARD_SITES * chartFade;
     b.mesh.visible = grassScale > 0 && vegScale > 0 && !Number.isNaN(swardFX);
   }
   // ── AND NOW THE SLOW HALF: THE EVIDENCE FIELD ──
@@ -36263,6 +36392,111 @@ let swardSweepMs = 0;
     sweepMs: +swardSweepMs.toFixed(1),
   };
 };
+/**
+ * ── THE ONE CURVE, AND EVERY BAND'S ABILITY TO CARRY IT, AT THE SAME RADIUS ──
+ *
+ * `__swardprofile()` — the instrument that would have caught three rings, and
+ * did not exist while they shipped twice.
+ *
+ * `__sward()` already reported each band's ceiling and each band's blend
+ * window, and it was not enough: a ceiling reported beside a density that is
+ * never quoted at the same range cannot say whether the one exceeds the other.
+ * A partition of unity can be perfect and the field can still step, because the
+ * arithmetic is continuous and the CARRIERS are not — a band asked for more
+ * than one tuft per cell delivers its ceiling and reports nothing at all.
+ * (The fifth time this file has needed the rule: a probe that reports the
+ * output of a rule cannot witness the rule.)
+ *
+ * Per radius: the target the law asks for, the envelope the carriers can hold,
+ * each band's weight and keep, what is actually delivered, and the ratio. Read
+ * `worst` — the lowest ratio INSIDE the outer fade, where a shortfall is a
+ * fault rather than the field ending on purpose.
+ *
+ * IT READS THE LIVE UNIFORMS, so it measures the build rather than the source:
+ * `uDens` carries the dials, and the envelope is `swardCapAt`, which is the
+ * same function the shader's own `swardCap` is generated from. What it does
+ * restate is the one-line perceptual curve and the one-line keep, and that is
+ * said out loud rather than hidden — they are two expressions, and if either
+ * moves in the shader alone this probe will quietly measure the old one.
+ *
+ * THE 0.775: a blade whose hash lands in the shrink window is drawn small
+ * rather than not at all (see sAlive), so the count of FULL tufts is about
+ * `keep * (1 - 0.45/2)`. It cancels in the ratio and is applied to both
+ * columns so the absolute numbers mean tufts rather than probability mass.
+ */
+const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
+(window as unknown as { __swardprofile?: object }).__swardprofile = (
+  step = 4, g = 1,
+): object => {
+  const dens = swardBands[0].uDens.value as number;
+  const rows: Array<Record<string, number | number[]>> = [];
+  const fadeFrom = SWARD_BANDS[SWARD_BANDS.length - 1][2][2];
+  let worst = { d: 0, ratio: 2 };
+  for (let d = 2; d <= Math.ceil(swardBands[swardBands.length - 1].reach); d += step) {
+    const want = g * dens * Math.pow(SWARD_NEAR / Math.max(d, SWARD_NEAR), SWARD_FALL);
+    const cap = swardCapAt(d);
+    const target = SWARD_CAP_ON ? Math.min(want, cap) : want;
+    const full = target > 1e-6
+      ? Math.min(Math.max(Math.sqrt(want / target), 1), SWARD_FULL_MAX) : 1;
+    let deliv = 0;
+    const per: number[] = [];
+    for (const b of swardBands) {
+      const bl = b.uBlend.value;
+      const ss = (a: number, z: number, x: number): number => {
+        const t = Math.max(0, Math.min(1, (x - a) / (z - a)));
+        return t * t * (3 - 2 * t);
+      };
+      const w = ss(bl.x, bl.y, d) * (1 - ss(bl.z, bl.w, d));
+      const keep = target * b.step * b.step * w;
+      per.push(+keep.toFixed(4));
+      deliv += Math.min(keep, 1) / (b.step * b.step);
+    }
+    const ratio = target > 1e-9 ? deliv / target : 1;
+    if (d < fadeFrom && ratio < worst.ratio) worst = { d, ratio };
+    // ── COVERAGE IS THE INVARIANT, AND THE COUNT IS ONLY ONE OF ITS TERMS ──
+    //
+    // What an eye judges is how much of the ground is grass, which is sites x
+    // tuft AREA. Where the carriers can hold the count the two are the same
+    // statement; where they cannot, the tufts widen by sqrt(want/got) and the
+    // product is the want exactly. So `coverRatio` is the honest headline: it
+    // is 1 wherever the fullness is not capped, whatever the count is doing,
+    // and a ring is a place where it is not 1.
+    const cover = deliv * full * full;
+    rows.push({ d, want: +(want * SWARD_SHRINK_EFF).toFixed(4),
+      target: +(target * SWARD_SHRINK_EFF).toFixed(4), cap: +Math.min(cap, 99).toFixed(4),
+      deliv: +(deliv * SWARD_SHRINK_EFF).toFixed(4), ratio: +ratio.toFixed(3),
+      cover: +(cover * SWARD_SHRINK_EFF).toFixed(4),
+      coverRatio: +(want > 1e-9 ? cover / want : 1).toFixed(3),
+      full: +full.toFixed(3), keep: per });
+  }
+  return { dens: +dens.toFixed(2), sites: SWARD_SITES, clamp: SWARD_CAP_ON,
+    fall: SWARD_FALL, near: SWARD_NEAR,
+    fullMax: SWARD_FULL_MAX, fadeFrom, gReach: swardU.uGReach.value, fieldHalf: SWARD_FW / 2,
+    // ── AND WHETHER THE EVIDENCE COVERS THE GROUND THAT IS DRAWN ──
+    //
+    // The two numbers that have to be read TOGETHER, and were not. A fade can
+    // end neatly inside the field and the field can still run out from under
+    // the far edge while it recentres: what bounds that is the margin between
+    // the outermost reach and the field's own half-width, against the distance
+    // the focus is allowed to travel before a rebuild is even considered.
+    // Negative headroom is a thinning crescent that travels with the camera.
+    margin: +(SWARD_FW / 2 - swardBands[swardBands.length - 1].reach).toFixed(1),
+    rebuildAt: SWARD_REBUILD, abandonAt: SWARD_ABANDON,
+    bands: swardBands.map((b) => ({ step: b.step, reach: +b.reach.toFixed(1),
+      ceiling: +(1 / (b.step * b.step)).toFixed(4), slots: b.side * b.side })),
+    worst: { d: worst.d, ratio: +worst.ratio.toFixed(3) },
+    coverWorst: (() => {
+      let w = { d: 0, r: 2 };
+      for (const r of rows) {
+        if ((r.d as number) >= fadeFrom) continue;
+        if ((r.coverRatio as number) < w.r) w = { d: r.d as number, r: r.coverRatio as number };
+      }
+      return { d: w.d, ratio: +w.r.toFixed(3) };
+    })(),
+    fullMaxSeen: +Math.max(...rows.map((r) => r.full as number)).toFixed(2),
+    saturated: rows.filter((r) => (r.ratio as number) < 0.98 && (r.d as number) < fadeFrom).length,
+    rows };
+};
 (window as unknown as { __sward?: object }).__sward = (gpu?: boolean, rebuild?: boolean): object => {
   // The field rebuilds on 48m of travel or on the world growing, so a test that
   // teleports and asks immediately gets the field from where it WAS. Forcing it
@@ -36284,7 +36518,7 @@ let swardSweepMs = 0;
       // that made three rings out of a partition that summed to one.
       blend: [b.uBlend.value.x, b.uBlend.value.y, b.uBlend.value.z, b.uBlend.value.w],
       ceiling: +(1 / (b.step * b.step)).toFixed(4) })),
-    fall: SWARD_FALL, near: SWARD_NEAR, lush: SWARD_LUSH,
+    fall: SWARD_FALL, near: SWARD_NEAR, sites: SWARD_SITES, fullMax: SWARD_FULL_MAX,
     // The two HARD limits every fade has to finish inside: the global cut, and
     // the field texture's own half-width. A fade that ends outside either is a
     // circular edge on the ground, and nothing about the density profile can
