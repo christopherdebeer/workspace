@@ -292,6 +292,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/tree-manifest.mjs` | KNOWN against DRAWN: whether a tree exists further out than it is built, with the placed counts and edges beside them as the live witness that nothing on screen moved — `?treemanifest=<m>` equal to the draw range is the single ring (`FIX=`, `SECS=`) | ~8min |
 | `node devtools/tree-impostor.mjs` | what the impostor tier stands up and what it changes on screen — ONE boot, off/on/off through `__impostor()`, so the repeat is the floor; read whole AND over the canopy band, because a chase frame is mostly sward and sky (`TRIS=` raw triangles, `BAND=`) | ~6min |
 | `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
+| `node devtools/render-focus.test.mjs` | where the RENDERER is looking, and whether anything reads it — the authority's three cameras and the drone's own lead geometry driven for real, then each consumer and the sward's fast/slow ORDER as a source check; two controls in its header | instant |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
@@ -13268,3 +13269,139 @@ cleverer.
 
 `redrapeProf` and the telemetry's `redrape` row are what is kept. The index is
 not, and this section is here so it is not rediscovered as an idea.
+
+### The renderer was centred on a vehicle nobody could see
+
+Reported from the seat, with the sequencing stated: introduce one canonical
+`renderFocusXZ()` and use it consistently in tree and EZ selection, impostor
+selection, GPU sward, CPU sward, shrubs and shadow centring; THEN make streaming
+cover the union of rig and render focus; and only after that evolve tree
+admission from a focus-centred circle into frustum and projected-size admission.
+Every claim in the report was checked against the source before anything moved,
+and every one was right.
+
+**THREE INTERESTS, AND THEY ARE NOT THE SAME POINT.** SIMULATION follows the
+RIG — collision, traction, the local physics, the vehicle's own audio — and must
+not move because a drone took off. RENDER follows THE GROUND THE CAMERA IS
+LOOKING AT. DATA is the union. Before this the renderer had no name for the
+second of those, so every expensive witness to what is on screen read `state`:
+fly the drone two kilometres out and the 2.4M-triangle tree budget stayed spent
+around a truck nobody can see while the drone flew into ground the renderer had
+decided was empty; pan the chart and the same thing happened sideways.
+
+**AND IT IS NOT `camera.position`.** The top camera stands hundreds of metres
+back at its 70° tilt and the drone's trailing lens sits 13 m behind the
+aircraft, so the camera's own x/z is the wrong point in both. What the player is
+looking AT is the authority, and the top camera already computes exactly that.
+
+**THE CLEAREST BUG IT CLOSES was a two-word difference.** The top camera targets
+`viewX() + panX` and the GPU sward read `state.x + panX` — the same point only
+while the drone is on the ground. With the drone up and the chart open the
+camera followed the aircraft and the grass grew round the truck, hundreds of
+metres apart, with nothing on the glass to say so.
+
+**THE DRONE'S FOCUS IS SOLVED, NOT PICKED.** Both its cameras aim at a FIXED
+DEPRESSION, measured out of the source: the nose view sits on the aircraft and
+aims 30 m ahead and 13 down (23.4°); the trailing view sits 13 back and 6.5 up
+and aims 26 ahead and 7 down, which is 39 ahead and 13.5 down from the lens
+(19.1°). So the ground the screen's centre lands on leads the aircraft by its
+height above ground times the cotangent of that angle — **2.31× from the nose,
+2.89× from the trailing view** — and it keeps working as the altitude changes,
+which a fixed lead would not. Capped at 45% of the draw range, or at three
+hundred metres up the geometry asks for eight hundred metres of lead and carries
+the ring off the ground under the aircraft entirely.
+
+**CHASE AND CAB STAY ON THE RIG, deliberately.** The camera's offsets there are
+metres against a tree range of hundreds, so chasing the suspension's own
+movement would rebuild fields for nothing.
+
+#### The sward had a fast half and a slow half sharing one return
+
+`swardFrame`'s early return for a sweep already in flight sat ABOVE everything —
+so `uSwardEye`, the flower palette and every band's lattice base were frozen for
+as long as a rebuild took. A rapid chart pan or a drone flight therefore stopped
+the grass following the camera while the thing it was waiting for was a field
+for ground the player had already left. The uniform writes are FAST and exact at
+whatever the focus is this frame; the field is SLOW and buffered, which is what
+it always was. The uniforms go first now and the field's branch is last.
+
+**AND A SWEEP CAN BE ABANDONED.** `SWARD_ABANDON` (160 m) is a JUMP, not a
+drive, and the numbers are the argument: an ordinary drive rebuilds at
+`SWARD_REBUILD` (48 m) once a sweep has LANDED, and a sweep costs a fifth of a
+second at 60 fps and at worst a second or two under `SWARD_LAG_MS` — fifty
+metres of driving at speed, comfortably inside it. So a truck never abandons a
+sweep and a focus that has genuinely gone somewhere else restarts one. It cannot
+thrash either: a restart re-centres the pending field on the focus, so the next
+abandon needs another 160 m. `swardLedger.abandoned` counts them.
+
+#### What moved, and the one thing that did not
+
+| consumer | was | is |
+|---|---|---|
+| GPU sward focus, bases, flowers | `state + pan` on the chart, rig otherwise | `renderFocusXZ()` |
+| CPU sward lattice (`?sward=cpu`) | the rig, outright | the focus |
+| shrub lattice | the rig | the focus (the chart hides shrubs, so this is the DRONE's case) |
+| the tree ring's centre and all three admission distances | the rig | the focus |
+| the impostor far gather, and the ground a card dissolves toward | the rig | the focus |
+| `vegManifestTally` | the rig | the focus — or it counts the ring round a place nothing is seeding |
+| the sun's shadow centre | `viewX()/viewZ()`, with no pan at all | the focus |
+| **the `vegGrid` prune** | the rig | **the UNION** |
+
+**THE PRUNE IS THE ONE THAT MUST NOT FOLLOW THE FOCUS**, and it is the honest
+half of "don't move the world away from the vehicle": `vegGrid` is also where
+the collision pass finds its boulders, and that pass reads the cells around the
+RIG. Pruning to the focus alone deletes the rocks under the wheels the moment
+the drone takes off. Trees are a render interest; a rock you can hit is not.
+
+#### Streaming: the union, without a second wedge
+
+`streamWorld` is handed the RIG and everything in it is built around the rig —
+the wedge, the corridor, the speed the ask set leans on — and that stays. What
+it gained is a SMALL RING for the focus: a 3×3 of z14 terrain (±3.5 km), a 3×3
+of z12 cover, and an OSM ring **sized to the sward's own field** (`SWARD_FW / 2`
+over `tileMetres(OSM_Z)`, clamped 1–2), because the mask that keeps grass off a
+carriageway is drawn over that field and the trees read the same roads through
+`onCarriageway`. A ring for what is DRAWN there, not a second world.
+
+- **IT IS NOT GATED ON A DISTANCE.** Where the focus IS the rig — chase and cab,
+  which is most of the time — every tile it names has already been asked and the
+  block costs a handful of Set lookups. A threshold would be one more number to
+  be wrong about.
+- **AND THE FOCUS'S OSM TILES ARE PINNED.** They are outside the rig's wedge BY
+  CONSTRUCTION, so `osmRelease` would drop every one of them the moment it
+  looked: asked each pass, dropped each pass, landed never. `osmFocusPin` is
+  rebuilt from scratch on every stream pass so it cannot leak — a focus that has
+  come home simply stops pinning. (`osmPinned` is the other exemption and is a
+  different thing: one-shot, for a tile a person asked for by hand, deleted when
+  that tile answers.) Ranked below the core disc and the corridor and above the
+  plain wedge: the ground under the wheels and the road ahead still go first.
+- The far shell and the overview vectors already streamed to the chart's centre
+  and are untouched — that rule predates this and is the same rule.
+
+#### Verified
+
+`npx tsc --noEmit` exit 0; `client/perf-check.mjs` **20 of 20 production refills
+byte-identical** (its sandbox gained a `renderFocusXZ` stub that returns the rig,
+which is not a simplification — it has no camera, no drone and no pan, so the rig
+IS the answer, and it is also what the baseline function reads inline);
+`switches`, `glsl-reserved`, `veg-anchor` and `boot` green (0 page errors);
+`tree-stand` all ok, 3,688 skeletons in 485 stands, 1.78 silhouettes a stand.
+
+**NOT VERIFIED BY EYE.** No frame has been taken of a drone flying away from its
+own trees, and the harness cannot easily take one: the thing to look at is a
+tree ring that follows the aircraft, which needs a flight rather than a settle.
+The seat's report against the deploy is the verification, and `?ez=0`,
+`?sward=cpu` and `?shrub=0` are the switches to take it apart with.
+
+**AND THE COST IS UNMEASURED ON A DEVICE.** `renderFocusXZ` is a compare and at
+worst one `groundAt` per call, and it is called a handful of times a frame — but
+the veg refresh's ring now moves with the camera, so a chart pan or a drone
+flight re-centres the ring and re-seeds cells exactly as driving does. The seed
+budget (`VEG_SEED_MS`, 8 ms less whatever the frame has already spent) is what
+bounds that, and it is the same bound a hop already lives under; the row to read
+on the next dump is `treeRefresh` with its `seedMsNow` beside it.
+
+**WHAT IS EXPLICITLY NOT DONE**, because the seat's own sequencing puts it after
+these two: tree admission is still a focus-centred CIRCLE. Frustum and
+projected-size admission with a guard band is the next step, and it is the one
+that would stop the ring spending its budget on ground behind the camera.

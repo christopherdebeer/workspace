@@ -9548,6 +9548,22 @@ const osmPinned = new Set<string>();
  * wide ribbon would spend that reach on verges.
  */
 const osmCorridor = new Map<string, number>();
+/**
+ * ── THE TILES THE RENDER FOCUS ASKED FOR, AND WHY THEY NEED A PIN ──
+ *
+ * The wedge below is the RIG's — its centre, its heading, its speed — and it is
+ * right that it is: the queue's job is to get the ground under the wheels and
+ * the road ahead. A tile asked for because the DRONE is over it, or because the
+ * chart is panned onto it, is by construction outside that wedge, so without an
+ * exemption it would be asked every pass and dropped every pass: a churn that
+ * looks like streaming and lands nothing.
+ *
+ * Rebuilt from scratch on every stream pass, so it cannot leak — a focus that
+ * has come home simply stops pinning, and the ordinary gate takes over again.
+ * `osmPinned` is the other exemption and is a different thing: it is one-shot,
+ * for a tile a person asked for by hand, and is deleted when that tile answers.
+ */
+const osmFocusPin = new Set<string>();
 function osmRelease(): void {
   let best = -1, bestD = Infinity;
   for (let i = 0; i < osmQueue.length; i++) {
@@ -9559,7 +9575,8 @@ function osmRelease(): void {
     // for a junction you might reach.
     const raw = Math.hypot(wx - osmCarX, wz - osmCarZ);
     const wk = `${w.x}/${w.y}`;
-    if (!osmPinned.has(wk) && !osmCorridor.has(wk) && raw > osmCoreR && wedgeCost(wx, wz) > osmRingR) {
+    if (!osmPinned.has(wk) && !osmFocusPin.has(wk) && !osmCorridor.has(wk)
+      && raw > osmCoreR && wedgeCost(wx, wz) > osmRingR) {
       osmQueue.splice(i, 1); i--;
       w.go(false);            // out of the wedge — a later pass can ask again
       continue;
@@ -11579,7 +11596,11 @@ function vegManifestTally(): {
   rangeM: number; cells: number; seeded: number; annulus: number; deferred: number;
   known: Record<EzFamily, number>;
 } {
-  const [cx, cz] = vegCellOf(state.x, state.z);
+  // The centre the refresh's own walk uses, or the tally counts the cells round
+  // a rig the manifest is no longer being seeded around and reports a ring that
+  // is filling as one that is empty.
+  const [rfx, rfz] = renderFocusXZ();
+  const [cx, cz] = vegCellOf(rfx, rfz);
   const m = manifestRange();
   const mReach = Math.max(Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL), Math.ceil(m / VEG_CELL));
   const known = ezRecord(() => 0);
@@ -11592,7 +11613,7 @@ function vegManifestTally(): {
     seeded++;
     for (const v of vegGrid.get(key) ?? []) {
       if (!isEzKind(v.k)) continue;
-      const dx = v.x - state.x, dz = v.z - state.z;
+      const dx = v.x - rfx, dz = v.z - rfz;
       if (dx * dx + dz * dz <= r2) known[v.k]++;
     }
   }
@@ -12622,6 +12643,15 @@ const SWARD_NEAR = 22;
  *  against the old sward's every seven hundred milliseconds. */
 const SWARD_REBUILD = 48;
 /**
+ * …and ABANDON a sweep in flight once the render focus is this far from the
+ * field it is building. Three and a third times the rebuild distance and under
+ * half the field's half-width, so a drive can never reach it inside one sweep
+ * (see the note at the field's own branch in swardFrame) and a chart pan or a
+ * drone flight reaches it at once. The field that lands is then the one the
+ * camera is over.
+ */
+const SWARD_ABANDON = 160;
+/**
  * HOW MUCH LUSHER THAN THE OLD FIELD, as one number.
  *
  * GRASS_M2 is in tufts per square metre and its values — 0.85 for open grass,
@@ -13004,7 +13034,7 @@ function swardRows(from: number, to: number): void {
 const swardStepMs = (): number => 3;
 const SWARD_LAG_MS = 1500;
 let swardSweepAt = 0;
-const swardLedger = { sweeps: 0, steps: 0, stepMs: 0, stepMax: 0, deferred: 0, masks: 0, maskMs: 0, maskMax: 0 };
+const swardLedger = { sweeps: 0, steps: 0, stepMs: 0, stepMax: 0, deferred: 0, abandoned: 0, masks: 0, maskMs: 0, maskMax: 0 };
 function swardMayStep(now: number): boolean {
   if (now - swardSweepAt > SWARD_LAG_MS || frameHeavyMs() < FRAME_HEAVY_MS) return true;
   swardLedger.deferred++;
@@ -13807,26 +13837,27 @@ function swardFrame(): void {
   // bare ground while the grass sits politely around a truck that is off the
   // edge of the screen. The far shell and the overview vectors already stream
   // to the chart's centre for exactly this reason.
-  const fx = camMode === 'top' ? state.x + panX : state.x;
-  const fz = camMode === 'top' ? state.z + panZ : state.z;
+  //
+  // IT WAS `state.x + panX` AND THE TOP CAMERA TARGETS `viewX() + panX`, which
+  // are the same point only while the drone is on the ground: fly it away and
+  // open the chart and the camera followed the aircraft while the grass grew
+  // around the rig. `renderFocusXZ` is the one authority now, so the pair
+  // cannot part again.
+  const [fx, fz] = renderFocusXZ();
   const now2 = performance.now();
-  // A sweep already under way finishes before another is considered.
-  if (swardRow >= 0) { if (swardMayStep(now2)) swardStep(); return; }
-  const moved = Number.isNaN(swardFX)
-    || Math.hypot(fx - (swardFX + SWARD_FW / 2), fz - (swardFZ + SWARD_FW / 2)) > SWARD_REBUILD;
-  if (moved) {
-    swardStart(fx, fz);
-    if (swardMayStep(now2)) swardStep();
-  } else if (swardGroundSeen !== swardGroundRev() && now2 - swardFieldAt > 2000) {
-    // Terrain was rebuilt — a road was cut into it, or the DEM landed — so the
-    // heights this field is standing its grass on are stale. Sweep again.
-    swardStart(fx, fz);
-    if (swardMayStep(now2)) swardStep();
-  } else if (swardRoadSeen !== swardRoadRev() && now2 - swardFieldAt > 1200) {
-    // Roads arrived with no rebuild behind them yet: redraw the mask so nothing
-    // grows through the new carriageway, and leave the heights alone.
-    refreshSwardField(false);
-  }
+  // ── FAST AND SLOW ARE DIFFERENT THINGS, AND THEY USED TO SHARE A RETURN ──
+  //
+  // Everything from here to the band loop is a UNIFORM WRITE — where the eye
+  // is, what colour the flowers are, which lattice cell each band is anchored
+  // to — and every one of them is exact at whatever the focus is THIS frame.
+  // The evidence field below is a buffered sweep that takes many frames.
+  //
+  // The early return for a sweep in flight used to sit ABOVE all of it, so a
+  // rapid chart pan or a drone flight froze the visual focus for as long as the
+  // rebuild took: the grass stopped following the camera while the thing it was
+  // waiting for was a field for ground the player had already left. The
+  // uniforms are fast and are written first; the field is slow and is buffered,
+  // which is what it always was.
   swardU.uSwardEye.value.set(fx, 0, fz);
   swardU.uSwardTint.value.copy(grassTint);
   // The biome barely changes and this is fifteen Color.set() calls — cheap
@@ -13864,6 +13895,43 @@ function swardFrame(): void {
     b.uDens.value = vegScale * grassScale * SWARD_LUSH * chartFade;
     b.mesh.visible = grassScale > 0 && vegScale > 0 && !Number.isNaN(swardFX);
   }
+  // ── AND NOW THE SLOW HALF: THE EVIDENCE FIELD ──
+  //
+  // A sweep already under way is allowed to finish, because the field on screen
+  // is the last complete one and swapping half a field in would be worse than
+  // waiting. What it is NOT allowed to do is finish a field for ground the
+  // focus has left: a chart pan or a drone dash can move the render focus
+  // faster than ninety-six rows can be walked, and the sweep would then land a
+  // field centred where nobody is looking and immediately be rebuilt.
+  //
+  // SWARD_ABANDON IS A JUMP, NOT A DRIVE, and the numbers are why. Driving
+  // rebuilds at SWARD_REBUILD (48 m) once a sweep has landed, and a sweep costs
+  // a fifth of a second at 60 fps and at worst a second or two under
+  // SWARD_LAG_MS — fifty metres of driving at speed, comfortably inside this.
+  // So a truck never abandons a sweep and a focus that has genuinely gone
+  // somewhere else restarts one. It cannot thrash either: a restart re-centres
+  // the pending field on the focus, so the next abandon needs another 160 m.
+  if (swardRow >= 0) {
+    const off = Math.hypot(fx - (swardPendX + SWARD_FW / 2), fz - (swardPendZ + SWARD_FW / 2));
+    if (off > SWARD_ABANDON) { swardLedger.abandoned++; swardStart(fx, fz); }
+    if (swardMayStep(now2)) swardStep();
+    return;
+  }
+  const moved = Number.isNaN(swardFX)
+    || Math.hypot(fx - (swardFX + SWARD_FW / 2), fz - (swardFZ + SWARD_FW / 2)) > SWARD_REBUILD;
+  if (moved) {
+    swardStart(fx, fz);
+    if (swardMayStep(now2)) swardStep();
+  } else if (swardGroundSeen !== swardGroundRev() && now2 - swardFieldAt > 2000) {
+    // Terrain was rebuilt — a road was cut into it, or the DEM landed — so the
+    // heights this field is standing its grass on are stale. Sweep again.
+    swardStart(fx, fz);
+    if (swardMayStep(now2)) swardStep();
+  } else if (swardRoadSeen !== swardRoadRev() && now2 - swardFieldAt > 1200) {
+    // Roads arrived with no rebuild behind them yet: redraw the mask so nothing
+    // grows through the new carriageway, and leave the heights alone.
+    refreshSwardField(false);
+  }
 }
 function refreshSward(): void {
   const t0 = performance.now();
@@ -13885,17 +13953,22 @@ function refreshSward(): void {
   let blockR = 0, blockG = 0, blockB = 0;
   const reach = GRASS_BANDS[GRASS_BANDS.length - 1][0] * Math.min(1.6, 0.55 + grassScale * 0.6);
   let inner = 0;
+  // THE LATTICE FOLLOWS THE VIEWED GROUND, as the GPU field's does. This is the
+  // `?sward=cpu` path and it was centred on the rig outright — so the one place
+  // the fallback differs from the shipping field is the one that matters, and
+  // a chart panned two hundred metres away drew its tufts around the truck.
+  const [fx, fz] = renderFocusXZ();
   for (const [bandR, step] of GRASS_BANDS) {
     const R = Math.min(bandR, reach), R2 = R * R, in2 = inner * inner;
     inner = R;
     if (R <= 0) continue;
-    const x0 = Math.floor((state.x - R) / step), x1 = Math.ceil((state.x + R) / step);
-    const z0 = Math.floor((state.z - R) / step), z1 = Math.ceil((state.z + R) / step);
+    const x0 = Math.floor((fx - R) / step), x1 = Math.ceil((fx + R) / step);
+    const z0 = Math.floor((fz - R) / step), z1 = Math.ceil((fz + R) / step);
     const area = step * step;
     for (let ix = x0; ix <= x1 && n < cap; ix++) {
       for (let iz = z0; iz <= z1 && n < cap; iz++) {
         const sx = ix * step, sz = iz * step;
-        const dx = sx - state.x, dz = sz - state.z;
+        const dx = sx - fx, dz = sz - fz;
         const d2 = dx * dx + dz * dz;
         if (d2 > R2 || d2 <= in2) continue;      // this band's annulus only
         const qx = Math.floor(sx / 8), qz = Math.floor(sz / 8);
@@ -14074,13 +14147,18 @@ function refreshShrubs(): void {
   const cap = Math.min(SHRUB_CAP, Math.floor(SHRUB_CAP * vegScale * Math.min(1, grassScale)));
   const reach = SHRUB_SIGHT * Math.min(1.6, 0.55 + grassScale * 0.6);
   const R2 = reach * reach;
-  const x0 = Math.floor((state.x - reach) / SHRUB_STEP), x1 = Math.ceil((state.x + reach) / SHRUB_STEP);
-  const z0 = Math.floor((state.z - reach) / SHRUB_STEP), z1 = Math.ceil((state.z + reach) / SHRUB_STEP);
+  // THE VIEWED GROUND, not the rig. The chart hides shrubs outright, so what
+  // this buys is the DRONE: fly it away and the understory used to stay around
+  // a truck the camera cannot see, over ground whose sward field had already
+  // followed the focus — grass with nothing standing in it.
+  const [fx, fz] = renderFocusXZ();
+  const x0 = Math.floor((fx - reach) / SHRUB_STEP), x1 = Math.ceil((fx + reach) / SHRUB_STEP);
+  const z0 = Math.floor((fz - reach) / SHRUB_STEP), z1 = Math.ceil((fz + reach) / SHRUB_STEP);
   let n = 0;
   for (let ix = x0; ix <= x1 && n < cap; ix++) {
     for (let iz = z0; iz <= z1 && n < cap; iz++) {
       const sx = ix * SHRUB_STEP, sz = iz * SHRUB_STEP;
-      const dx = sx - state.x, dz = sz - state.z;
+      const dx = sx - fx, dz = sz - fz;
       const d2 = dx * dx + dz * dz;
       if (d2 > R2) continue;
       // The sward's own field: the texel this slot stands in.
@@ -14183,7 +14261,21 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   const activeRoles = emptyVegRoles();
   let activeAnchors = 0;
   let trunkN = 0;
-  const [cx, cz] = vegCellOf(state.x, state.z);
+  // ── THE RENDER FOCUS, NOT THE RIG ──
+  //
+  // Every distance below — the ring's centre, the three admissions, the ground
+  // the impostors fade toward — is a question about what is ON SCREEN, and all
+  // of them read the rig. Fly the drone two kilometres away and the whole tree
+  // budget stayed spent around a truck nobody can see while the drone flew into
+  // ground the renderer had decided was empty; pan the chart and the same thing
+  // happens sideways. See `renderFocusXZ`.
+  //
+  // WHAT DOES NOT MOVE IS THE RETENTION. `vegGrid` is also the collision pass's
+  // source of boulders, and that pass reads the cells around the RIG — so the
+  // prune at the end of this function keeps the union of the two rather than
+  // following the focus. Trees are a render interest; a rock you can hit is not.
+  const [rfx, rfz] = renderFocusXZ();
+  const [cx, cz] = vegCellOf(rfx, rfz);
   const reach = Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL);
   // The manifest's own reach — see the note by `manifestRange`. The draw ring
   // is walked for gather and place exactly as before; this one is walked for
@@ -14247,7 +14339,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       if (!cell) continue;
       for (const v of cell) {
         if (!isEzKind(v.k)) continue;
-        const dx = v.x - state.x, dz = v.z - state.z;
+        const dx = v.x - rfx, dz = v.z - rfz;
         const d2 = dx * dx + dz * dz;
         if (d2 < treeR2) cand[v.k].push([d2, v]);
       }
@@ -14291,7 +14383,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
           if (!cell) continue;
           for (const v of cell) {
             if (!isEzKind(v.k)) continue;
-            const dx = v.x - state.x, dz = v.z - state.z;
+            const dx = v.x - rfx, dz = v.z - rfz;
             const d2 = dx * dx + dz * dz;
             if (d2 < treeR2 || d2 >= impR2) continue;
             impFarSeen++;
@@ -14405,7 +14497,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       const cell = vegGrid.get(`${gx},${gz}`);
       if (!cell) continue;
       for (const v of cell) {
-        const dx = v.x - state.x, dz = v.z - state.z;
+        const dx = v.x - rfx, dz = v.z - rfz;
         const d2v = dx * dx + dz * dz;
         const tree = isTreeKind(v.k);
         if (d2v > (tree ? treeR2 : vegR2)) continue;
@@ -14549,8 +14641,11 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     // than at a wall. At stock the two are the same number.
     impFadeU.value.set(impR * 0.66, impR);
     {
-      const gy = sampleHeight(state.x, state.z);
-      const [tr, tg, tb] = terrainPalette(gy + baseElev, 0, sampleCover(state.x, state.z), state.x, state.z);
+      // The ground a far card dissolves INTO, so it is the ground under the
+      // view rather than under the wheels — from a drone over a forest the
+      // rig's own tarmac was the colour every distant crown faded toward.
+      const gy = sampleHeight(rfx, rfz);
+      const [tr, tg, tb] = terrainPalette(gy + baseElev, 0, sampleCover(rfx, rfz), rfx, rfz);
       impGroundU.value.setRGB(tr, tg, tb);
     }
     // ── THE CAP IS SHARED OUT BY DEMAND, NOT CONSUMED IN FAMILY ORDER ──
@@ -14805,10 +14900,18 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   vegPhase.t0 = t0;   // the callers set vegMs: a sliced refresh is not one span
   // Forget buckets far behind so a long drive cannot grow the site list
   // without bound. They regenerate identically if you come back.
+  // THE UNION, NOT THE FOCUS. The ring above is centred on the render focus;
+  // this map is also where the collision pass finds its boulders, and that pass
+  // is the RIG's. Pruning to the focus alone would delete the rocks under the
+  // wheels the moment the drone took off — the world moving away from the
+  // vehicle because the camera did, which is exactly what must not happen.
   if (vegGrid.size > 900) {
+    const [vcx, vcz] = vegCellOf(state.x, state.z);
+    const far = (kx: number, kz: number, ax: number, az: number): boolean =>
+      Math.abs(kx - ax) > mReach + 3 || Math.abs(kz - az) > mReach + 3;
     for (const key of vegGrid.keys()) {
       const [kx, kz] = key.split(',').map(Number);
-      if (Math.abs(kx - cx) > mReach + 3 || Math.abs(kz - cz) > mReach + 3) {
+      if (far(kx, kz, cx, cz) && far(kx, kz, vcx, vcz)) {
         vegGrid.delete(key);
         vegSeeded.delete(key);
         vegSeedStats.delete(key);
@@ -27725,6 +27828,28 @@ function streamWorld(ex: number, ez: number): void {
   // Mid-hop the streamer stands down: the stores it fills are being emptied.
   if (hopping) return;
   const [lat, lon] = localToLatLon(ex, ez);
+  // ── DATA IS THE UNION OF THE TWO INTERESTS ──
+  //
+  // The caller hands this the RIG, and everything below is built around it —
+  // the wedge, the corridor, the speed the ask set leans on. That is right:
+  // the queue's first job is the ground under the wheels and the road ahead,
+  // and nothing here may move the world away from the vehicle because a camera
+  // went somewhere else.
+  //
+  // But the RENDER focus (see `renderFocusXZ`) is now what the sward, the
+  // trees, the shrubs and the shadow map are centred on, and all four read
+  // streamed evidence: heights for the ground they stand on, cover for what
+  // grows, roads for what must not. Fly the drone a couple of kilometres out or
+  // pan the chart onto the next valley and those layers were reading tiles
+  // nobody had asked for. So the focus asks for a SMALL RING OF ITS OWN —
+  // enough to cover the sward's field and the near trees, not a second world.
+  //
+  // It is not gated on a distance. Where the focus IS the rig (chase and cab,
+  // which is most of the time) every tile it names has already been asked and
+  // the block costs a handful of Set lookups; a threshold would be one more
+  // number to be wrong about.
+  const [rfx, rfz] = renderFocusXZ();
+  const focusOff = Math.hypot(rfx - ex, rfz - ez);
   const r = viewRadius();
   const [tx, ty] = tileAt(lat, lon, TERRAIN_Z);
   // Rings grow with the VIEW, not just the car. Zooming out used to change
@@ -27741,6 +27866,14 @@ function streamWorld(ex: number, ez: number): void {
       for (let dx = -d; dx <= d; dx++)
         for (let dy = -d; dy <= d; dy++)
           if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadTerrainTile(tx + dx, ty + dy);
+    // …and the ground under the view, which at 2.4 km a tile a 3x3 covers to
+    // three and a half kilometres either side of it. `loadTerrainTile` dedupes
+    // by key, so where the focus is the rig this asks for nothing new.
+    if (focusOff > 1) {
+      const [ftx, fty] = tileAt(...localToLatLon(rfx, rfz), TERRAIN_Z);
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++)
+        void loadTerrainTile(ftx + dx, fty + dy);
+    }
   }
   // Land cover, over the FULL terrain footprint rather than the road ring: it
   // paints the ground and plants the vegetation, so it has to reach as far as
@@ -27760,6 +27893,14 @@ function streamWorld(ex: number, ez: number): void {
         for (let dx = -d; dx <= d; dx++)
           for (let dy = -d; dy <= d; dy++)
             if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadCoverTile(cx0 + dx, cy0 + dy);
+      // The cover tile is ~10 km, so the rig's own ring almost always contains
+      // the focus already; this is the case where it does not — a chart panned
+      // a long way at a zoom the sward still draws at.
+      if (focusOff > 1) {
+        const [fcx, fcy] = tileAt(...localToLatLon(rfx, rfz), COVER_Z);
+        for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++)
+          void loadCoverTile(fcx + dx, fcy + dy);
+      }
     }
     // Cover also knows which ground is water, and water is the only honest
     // witness to where sea level sits in THIS DEM's datum. Kept OUTSIDE the
@@ -27851,6 +27992,7 @@ function streamWorld(ex: number, ez: number): void {
   // arrived — you cannot see round it, so you find out what is there by
   // getting there.
   osmCorridor.clear();
+  osmFocusPin.clear();
   {
     const road = wayAhead(ex, ez, state.heading, CORRIDOR_M, CORRIDOR_HOPS, false);
     let run = 0;
@@ -27906,6 +28048,33 @@ function streamWorld(ex: number, ez: number): void {
     if (asked.has(key)) continue;
     const sl = key.indexOf('/');
     want.push({ x: +key.slice(0, sl), y: +key.slice(sl + 1), c: along - 5e5 });
+  }
+  // ── AND THE ROADS UNDER THE VIEW ──
+  //
+  // Sized to the SWARD'S OWN FIELD rather than picked: the mask that keeps
+  // grass off a carriageway is drawn over `SWARD_FW` metres about the render
+  // focus, so a ring that does not cover it leaves the grass growing down the
+  // middle of a road nobody has fetched. The trees read the same roads through
+  // `onCarriageway`. That is the whole claim — a ring for what is DRAWN there,
+  // not a second wedge.
+  //
+  // PINNED, because these tiles are outside the rig's wedge by construction and
+  // `osmRelease` would otherwise drop every one of them the moment it looked:
+  // asked each pass, dropped each pass, landed never. Ranked below the core and
+  // the corridor and above the plain wedge — the ground under the wheels and
+  // the road ahead still go first.
+  if (focusOff > 1) {
+    const fRingM = clamp(Math.ceil((SWARD_FW / 2) / tm), 1, 2);
+    const [fox, foy] = tileAt(...localToLatLon(rfx, rfz), OSM_Z);
+    for (let dx = -fRingM; dx <= fRingM; dx++) for (let dy = -fRingM; dy <= fRingM; dy++) {
+      const key = `${fox + dx}/${foy + dy}`;
+      if (asked.has(key) || osmCorridor.has(key)) continue;
+      asked.add(key);
+      osmFocusPin.add(key);
+      const [cx2, cz2] = tileCentreLocal(fox + dx, foy + dy);
+      want.push({ x: fox + dx, y: foy + dy,
+        c: Math.hypot(cx2 - rfx, cz2 - rfz) - 2.5e5 });
+    }
   }
   // …AND OVER A FIXTURE, ONLY THE BOX. The wedge and the corridor are sized
   // for a planet — three kilometres of ask around the truck and further down
@@ -43420,6 +43589,67 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
 function viewX(): number { return drone.up ? drone.x : state.x; }
 function viewZ(): number { return drone.up ? drone.z : state.z; }
 function viewH(): number { return drone.up ? drone.heading : state.heading; }
+/**
+ * ── THREE INTERESTS, AND THEY ARE NOT THE SAME POINT ──
+ *
+ * SIMULATION follows the RIG: collision, traction, the local physics and the
+ * vehicle's own audio are about where the truck is, and they must not move
+ * because a drone took off.
+ *
+ * RENDER follows the GROUND THE CAMERA IS LOOKING AT, which is what this
+ * returns. Trees, impostors, sward, shrubs and the shadow centre are expensive
+ * witnesses to what is on screen, and every one of them was centred on the rig:
+ * fly the drone two kilometres away and the 2.4M-triangle tree budget stays
+ * spent around a vehicle nobody can see, while the drone flies into ground the
+ * renderer has decided is empty. Pan the chart and the same thing happens
+ * sideways — the cover raster says forest and the tree tier is off-screen.
+ *
+ * DATA is the union of the two, which is what `streamWorld` is now called for
+ * twice; see the note at its per-frame caller.
+ *
+ * IT IS NOT `camera.position`. The top camera stands hundreds of metres back
+ * because of its 70° tilt and the drone's chase camera sits 13 m behind the
+ * aircraft, so the camera's own x/z is the wrong point in both. What the player
+ * is looking AT is the authority, and the top camera already computes exactly
+ * that — `viewX() + panX` — which is what the chart's own streaming uses.
+ *
+ * THE ONE CLEAR BUG THIS CLOSES: the GPU sward read `state.x + panX` on the
+ * chart while the camera targets `viewX() + panX`. With the drone up and the
+ * chart open those are the rig and the aircraft — hundreds of metres apart, and
+ * the grass grew around the wrong one.
+ */
+function renderFocusXZ(): [number, number] {
+  if (camMode === 'top') return [viewX() + panX, viewZ() + panZ];
+  if (camMode === 'drone') return droneGroundFocus();
+  // CHASE AND CAB STAY ON THE RIG, deliberately. The camera's offsets there are
+  // metres against a tree range of hundreds, so chasing the suspension's own
+  // movement would rebuild fields for nothing.
+  return [state.x, state.z];
+}
+/**
+ * WHERE THE DRONE IS ACTUALLY LOOKING. Both its cameras aim at a FIXED
+ * DEPRESSION: the nose view sits on the aircraft and aims 30 m ahead and 13 m
+ * down (23.4°), the chase view sits 13 m back and 6.5 m up and aims 26 ahead
+ * and 7 down, which is 39 ahead and 13.5 down from the lens (19.1°). So the
+ * ground the screen's centre lands on is ahead of the aircraft by its height
+ * above ground over the tangent of that angle — 2.31x for the nose, 2.89x for
+ * the chase — and it keeps working as the altitude changes, which a fixed
+ * lead would not.
+ *
+ * THE LEAD IS CAPPED against the draw range. At three hundred metres up the
+ * geometry asks for eight hundred metres of lead, which would carry the ring
+ * off the ground under the aircraft entirely; at 45% of the tree range the
+ * focus is ahead of the drone and the drone is still comfortably inside its
+ * own ring.
+ */
+function droneGroundFocus(): [number, number] {
+  const g = groundAt(drone.x, drone.z);
+  const nose = lastPov === 'cab';
+  const eyeY = nose ? drone.y - 0.35 : drone.y + 6.5;
+  const k = nose ? 30 / 13 : 39 / 13.5;
+  const lead = Math.min(Math.max(0, eyeY - g) * k, treeRange * 0.45);
+  return [drone.x + Math.sin(drone.heading) * lead, drone.z - Math.cos(drone.heading) * lead];
+}
 /** The POV you drive in (chase or cab) — what the chart returns you to, and
  *  what the dock previews while you are up there. */
 let lastPov: CamMode = 'chase';
@@ -47851,7 +48081,14 @@ function tick(now: number): void {
     // daylight anyway: a beam is invisible against a lit road.
     headSpot.castShadow = headShadowOn && renderer.shadowMap.enabled && !up;
     if (up) {
-      shadowAt.set(viewX(), 0, viewZ());
+      // THE SHADOW MAP IS A RENDER INTEREST. It followed `viewX()/viewZ()` —
+      // the rig, or the drone — and took no account of the chart's pan, so a
+      // panned map drew a landscape whose shadow span was still centred on the
+      // vehicle and a field two hundred metres away had no shadows in it at
+      // all. It is the render focus now, like everything else that is a
+      // statement about what is on screen.
+      const [sfx, sfz] = renderFocusXZ();
+      shadowAt.set(sfx, 0, sfz);
       shadowAt.y = sampleHeight(shadowAt.x, shadowAt.z);
       snapShadowCentre(shadowAt);
       sun.target.position.copy(shadowAt);

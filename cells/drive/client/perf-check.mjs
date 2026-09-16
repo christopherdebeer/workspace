@@ -80,6 +80,15 @@ function context(code,range,ez,triCap) {
     vegPhase:{},vegPhaseAt:0,vegSeedNow:0,vegSeedMsNow:0,vegSeedDeferred:0,
     vegSeedLeft:0,VEG_SEED_BUDGET:true,VEG_SEED_MS:8,frameHeavyMs:()=>0,
     state:{x:15,z:-31},VEG_CELL:220,VEG_RANGE:700,treeRange:range,
+    // ── THE RENDER FOCUS IS THE RIG HERE, AND THAT IS NOT A SIMPLIFICATION ──
+    //
+    // `renderFocusXZ` answers the ground the CAMERA is looking at: the chart's
+    // panned centre, the drone's own ground focus, and otherwise the rig. This
+    // sandbox has no camera, no drone and no pan, so the rig IS the answer —
+    // which is also what the baseline function (written before the authority
+    // existed) reads inline, so the two stay comparable by construction rather
+    // than by a stub that makes them agree.
+    renderFocusXZ:()=>[c.state.x,c.state.z],
     ezRecord:record,EZ_FAMILIES:families,EZ_ON:ez,VEG_CAP:cap,vegScale:1,
     TREE_KINDS:families,treePopulationScale:1,treeFormScale:1,treeSizeScale:1,
     ezTiers:record(()=>Array.from({length:3},()=>({near:mesh(),far:mesh(),tris:500,n:0,nNear:0,nFar:0}))),
