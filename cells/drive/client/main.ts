@@ -92,7 +92,7 @@ import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture,
 import { startLab } from './labs';
 import { IMPOSTOR_FORMS, IMPOSTOR_WIDTH, impostorFormIndex, impostorGeometry, impostorMaterial } from './tree-impostor';
 import { IMP_ATLAS, IMP_ATLAS_SLOTS, bakeImpAtlasSlot, clearImpAtlas, makeImpAtlasTarget, type ImpAtlasSlot } from './tree-atlas';
-import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
+import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezHabitatsForSite, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPhenotypeForSite, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
@@ -11303,6 +11303,9 @@ const TREE_SIZE_STEPS = [0.5, 1, 1.5, 2, 3, 4] as const;
 const TREE_FORM_STEPS = [0, 1, 1.75, 3, 5] as const;
 const TREE_BEND_STEPS = [0, 0.08, 0.18, 0.35, 0.65, 1.1] as const;
 const TREE_VARIANT_STEPS = [1, 2, 4, Number.MAX_SAFE_INTEGER] as const;
+const TREE_LEAF_STEPS = [0, 0.5, 1, 1.5, 2] as const;
+const TREE_BARK_STEPS = [0, 0.36, 0.72, 1.08, 1.5] as const;
+const TREE_BUMP_STEPS = [0, 0.2, 0.42, 0.75, 1.2] as const;
 const treeTriUrl = Number(qs('treetris'));
 let treeTriBudget = Number.isFinite(treeTriUrl) && treeTriUrl > 0 ? treeTriUrl : 2400000;
 /**
@@ -11552,11 +11555,16 @@ function ezVariantAt(fam: EzFamily, x: number, z: number): number {
   // difference between a poplar on a French roadside and a poplar in the
   // Amazon. Unsatisfiable preferences are ignored inside `ezPalette` — asking
   // for `round` must not empty the conifers.
-  const pal = ezPalette(fam, seedAt(cultEnv, x, z, 'district'), treeVariantCap, guildNow(x, z)?.forms);
+  const guild = guildNow(x, z);
+  const site = siteNow(x, z);
+  const habitats = ezHabitatsForSite(fam, site, guild?.biome);
+  const pal = ezPalette(fam, seedAt(cultEnv, x, z, 'district'), treeVariantCap, guild?.forms, habitats);
   const [lat, lon] = localToLatLon(x, z);
   const individual = Math.imul(Math.round(lat * 1e6), 73856093)
     ^ Math.imul(Math.round(lon * 1e6), 19349663);
-  return ezPickVariant(pal, seedAt(cultEnv, x, z, 'stand'), fam, individual, treeVariantCap);
+  const phenotype = ezPhenotypeForSite(fam, site, individual,
+    sampleCover(x, z) === COVER.tree || (guild?.density ?? 0) > 0.92);
+  return ezPickVariant(pal, seedAt(cultEnv, x, z, 'stand'), fam, individual, treeVariantCap, phenotype);
 }
 
 /**
@@ -11574,19 +11582,24 @@ function ezVariantAt(fam: EzFamily, x: number, z: number): number {
 const EZ_TIER_SEED = 64;
 interface EzTier { near: THREE.InstancedMesh; far: THREE.InstancedMesh; tris: number; n: number; nNear: number; nFar: number }
 const ezTiers: Record<EzFamily, EzTier[]> = ezRecord(() => [] as EzTier[]);
-const ezMat = ezMaterial(0x4a3826, { bend: treeBendU, wind: windU });
+const ezMat = ezMaterial(0x4a3826, { bend: treeBendU, wind: windU, sun: { value: LIGHT_DIR } });
 // ── THE SURFACE, WITH ITS OWN EXACT A/B ──
 // Bark on the wood and the fade on a card seen edge-on: both were reported
 // from the flora lab at windscreen height, and both change the look of every
 // tree in the game, so both get a switch that costs nothing to try from the
 // seat. `?ezbark=0` is the flat prism the trunks were; `?ezedge=1` is the
 // bright one-pixel line a grazing card used to draw.
-{
+function applyEzLookUrl(): void {
   const bk = Number(qs('ezbark'));
   if (qsHas('ezbark') && Number.isFinite(bk)) ezLookU.uEzBark.value = clamp(bk, 0, 2);
   const ed = Number(qs('ezedge'));
   if (qsHas('ezedge') && Number.isFinite(ed)) ezLookU.uEzEdge.value = clamp(ed, 0, 1);
+  const lf = Number(qs('ezleaf'));
+  if (qsHas('ezleaf') && Number.isFinite(lf)) ezLookU.uEzLeaf.value = clamp(lf, 0, 2);
+  const bp = Number(qs('ezbump'));
+  if (qsHas('ezbump') && Number.isFinite(bp)) ezLookU.uEzBump.value = clamp(bp, 0, 2);
 }
+applyEzLookUrl();
 // THE SKELETONS STAND IN THE SAME WEATHER AS EVERYTHING ELSE. They were the
 // one thing in the landscape outside `terrainFx` — no cloud shadow, no terrain
 // self-shadowing — while the archetypes they replaced, the sward, the stones
@@ -50898,6 +50911,15 @@ const DIAL_GROUPS: DialGroup[] = [
         (i) => { treeFormScale = TREE_FORM_STEPS[i]; }, true),
       dial('tbnd', 'GROWTH BEND', ['OFF', 'SUBTLE', 'RICH', 'WILD', 'STORM', 'IMPOSSIBLE'], 0,
         (i) => { treeBendU.value = TREE_BEND_STEPS[i]; }, true),
+      // Surface controls are shader-only: they add no draw calls or geometry.
+      // OFF is the exact material A/B, while the upper stops deliberately
+      // exaggerate the effect so its contribution can be read from the seat.
+      dial('tleaf', 'LEAF OPTICS', ['OFF', 'LOW', 'STOCK', 'RICH', 'MAX'], 2,
+        (i) => { ezLookU.uEzLeaf.value = TREE_LEAF_STEPS[i]; }),
+      dial('tbark', 'BARK PATTERN', ['OFF', 'LOW', 'STOCK', 'RICH', 'MAX'], 2,
+        (i) => { ezLookU.uEzBark.value = TREE_BARK_STEPS[i]; }),
+      dial('tbump', 'BARK RELIEF', ['OFF', 'LOW', 'STOCK', 'RICH', 'MAX'], 2,
+        (i) => { ezLookU.uEzBump.value = TREE_BUMP_STEPS[i]; }),
       // ── AND THE CHEAP REPRESENTATION'S OWN TWO ──
       // REACH is a MULTIPLE of DRAW RANGE above, so the pair compose: the rack
       // at 2.8 km and 4X asks for eleven kilometres of trees. What it actually
@@ -54057,6 +54079,7 @@ loadSpots();
 applyDials();
 // A URL instrument outranks the remembered rack, as the other URL fixtures do.
 if (Number.isFinite(treeTriUrl) && treeTriUrl > 0) treeTriBudget = treeTriUrl;
+applyEzLookUrl();
 // The custom paint rides OVER whatever preset the dial just applied.
 if (customPaint) bodyMat?.color.set(customPaint);
 // …and THEN the URL, because a dial that persists to localStorage will happily

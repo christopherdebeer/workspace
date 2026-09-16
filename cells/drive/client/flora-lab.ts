@@ -15,8 +15,8 @@ import { guildAt, type Guild } from './guild';
 import { guildKind } from './guild';
 import { ecoBiomeName, type EcoHit } from './eco';
 import {
-  EZ_FAMILIES, EZ_M_PER_SCALE, ezCrownReach, ezLookU, ezMaterial, ezPalette, ezPickVariant,
-  ezVariantFor, ezVariants, type EzFamily,
+  EZ_FAMILIES, EZ_M_PER_SCALE, ezCrownReach, ezHabitatsForSite, ezLookU, ezMaterial, ezPalette,
+  ezPhenotypeForSite, ezPickVariant, ezVariantFor, ezVariants, type EzFamily,
 } from './flora-ez';
 import { seedAt, type CultureEnv } from './culture';
 import { coastKm } from './coast';
@@ -294,7 +294,8 @@ function makeStand(mount: HTMLElement): {
    */
   const ezBendU = { value: 0 };
   const ezWindU = { uTime: { value: 0 }, uGust: { value: new THREE.Vector2() }, uWindK: { value: 0.085 } };
-  const ezMat = ezMaterial(0x4a3826, { bend: ezBendU, wind: ezWindU });
+  const ezSunU = { value: new THREE.Vector3(0.45, 0.82, 0.35).normalize() };
+  const ezMat = ezMaterial(0x4a3826, { bend: ezBendU, wind: ezWindU, sun: ezSunU });
   // The world chains terrainFx in here as well — cloud shadow and weather
   // tint — which the lab has no sky for. The grain is the same call it makes.
   grainFx(ezMat, 'lab-ez', 0.95, 2.2);
@@ -334,9 +335,12 @@ function makeStand(mount: HTMLElement): {
     const el = (o.sunEl * Math.PI) / 180;
     sun.position.set(Math.cos(el) * 90, Math.sin(el) * 90, 40);
     sun.intensity = o.sunI;
+    ezSunU.value.copy(sun.position).normalize();
 
     ezBendU.value = o.bend;
     ezLookU.uEzBark.value = o.bark;
+    ezLookU.uEzLeaf.value = o.leaf;
+    ezLookU.uEzBump.value = o.bump;
     ezLookU.uEzEdge.value = o.cardEdge;
     ezWindU.uTime.value = now / 1000;
     // EXACTLY THE WORLD'S ARITHMETIC (see the wind step in main.ts): the gust
@@ -425,7 +429,8 @@ interface StandOpts {
    *  because that is where the guild's form preference and the district and
    *  stand seeds are known. */
   ez: boolean; ezPick: Map<VegSite, number>;
-  sizeScale: number; formScale: number; bend: number; bark: number; cardEdge: number;
+  sizeScale: number; formScale: number; bend: number;
+  bark: number; leaf: number; bump: number; cardEdge: number;
   windKmh: number; windDeg: number;
 }
 
@@ -518,10 +523,13 @@ export async function startFloraLab(): Promise<void> {
       { id: 'treeSize', label: 'HEIGHT x', kind: 'range', min: 0.4, max: 3, step: 0.1, value: 1 },
       { id: 'treeForm', label: 'FORM SPREAD x', kind: 'range', min: 0, max: 5, step: 0.25, value: 1 },
       { id: 'treeBend', label: 'GROWTH BEND', kind: 'range', min: 0, max: 1.1, step: 0.02, value: 0 },
-      // The two surface numbers, on dials because the frames that found them
-      // were taken here: a trunk that reads as a prism and a card that draws a
-      // bright line are both invisible from any distance but this one.
-      { id: 'bark', label: 'BARK', kind: 'range', min: 0, max: 1.5, step: 0.05, value: 0.55 },
+      // The surface numbers, on dials because the frames that found them were
+      // taken here. LEAF OPTICS controls the authored crown bands and
+      // transmission; BARK RELIEF lets the same generated field that colours
+      // the wood perturb its lighting normal.
+      { id: 'leaf', label: 'LEAF OPTICS', kind: 'range', min: 0, max: 2, step: 0.05, value: 1 },
+      { id: 'bark', label: 'BARK PATTERN', kind: 'range', min: 0, max: 1.5, step: 0.05, value: 0.72 },
+      { id: 'bump', label: 'BARK RELIEF', kind: 'range', min: 0, max: 1.5, step: 0.05, value: 0.42 },
       { id: 'cardEdge', label: 'CARD EDGE', kind: 'range', min: 0.2, max: 1, step: 0.02, value: 0.62 },
       { id: 'windKmh', label: 'WIND km/h', kind: 'range', min: 0, max: 130, step: 5, value: 0 },
       { id: 'windDeg', label: 'WIND FROM °', kind: 'range', min: 0, max: 350, step: 10, value: 220 },
@@ -602,7 +610,7 @@ export async function startFloraLab(): Promise<void> {
    *  fringe, and one member in six of a different species — a monoculture is
    *  the single most obvious way a wood stops reading as a wood. */
   const grow = (w: number[], treeline: number, effElev: number, band: AltBand,
-    guild: Guild | null, geo: { lat: number; lon: number }): void => {
+    guild: Guild | null, geo: { lat: number; lon: number }, climateSite: SiteClimate): void => {
     setFloraTuning({
       sizeMul: dials.num('sizeMul'), oddAutumn: dials.num('oddAutumn'),
       oddSilver: dials.num('oddSilver'), krummFloor: dials.num('krummFloor'),
@@ -695,8 +703,15 @@ export async function startFloraLab(): Promise<void> {
         if (guild && guild.scale !== 1 && !STONY.includes(kind)) site.s *= guild.scale;
         if (isEzFamily(kind)) {
           const standSeed = seedAt(cult, x, z, 'stand');
+          const individual = Math.imul(Math.round((geo.lat + x * 1e-5) * 1e6), 73856093)
+            ^ Math.imul(Math.round((geo.lon + z * 1e-5) * 1e6), 19349663);
+          const habitats = ezHabitatsForSite(kind, climateSite, guild?.biome);
+          const phenotype = ezPhenotypeForSite(kind, climateSite, individual,
+            cover === 10 || (guild?.density ?? 0) > 0.92);
           const vi = standOn
-            ? ezPickVariant(ezPalette(kind, seedAt(cult, x, z, 'district'), vCap, guild?.forms), standSeed)
+            ? ezPickVariant(
+              ezPalette(kind, seedAt(cult, x, z, 'district'), vCap, guild?.forms, habitats),
+              standSeed, kind, individual, vCap, phenotype)
             : ezVariantFor(kind, x, z, vCap);
           picks.set(site, vi);
           const nm = ezVariants(kind)[vi]?.label ?? `${kind} #${vi}`;
@@ -774,7 +789,7 @@ export async function startFloraLab(): Promise<void> {
     }
     const treeline = treelineAt(lat, moist);
     const eff0 = elev + dials.num('aspect');
-    grow(s.w, treeline, eff0, altBandAt(eff0, treeline), guild, { lat: latSigned, lon });
+    grow(s.w, treeline, eff0, altBandAt(eff0, treeline), guild, { lat: latSigned, lon }, site);
 
     ctx.fillStyle = '#0b0f11';
     ctx.fillRect(0, 0, cv.width, cv.height);
@@ -922,6 +937,8 @@ export async function startFloraLab(): Promise<void> {
     formScale: dials.num('treeForm'),
     bend: dials.num('treeBend'),
     bark: dials.num('bark'),
+    leaf: dials.num('leaf'),
+    bump: dials.num('bump'),
     cardEdge: dials.num('cardEdge'),
     windKmh: dials.num('windKmh'),
     windDeg: dials.num('windDeg'),

@@ -87,6 +87,12 @@ export interface EzVariant {
   geometry: THREE.BufferGeometry;
   tris: number;
   crown: string;
+  /** Architectural recipe shared by seed siblings. */
+  habit?: string;
+  /** Site affinities used by the ecology selector, never hard vetoes. */
+  habitats?: readonly string[];
+  /** A phenotype caused by a site or event, not a district species. */
+  state?: string;
 }
 
 function bytes(b64: string): Uint8Array {
@@ -112,13 +118,18 @@ const EZ_PALM_BLADE = floraQuery.get('ezpalm') !== '0';
  *  the near one and only solid. Two copies of this number is a tree that grows
  *  as you drive away from it. */
 export const EZ_MERGE_GROW = 2.2;
-type GrowthVariant = EzBakedVariant & { habit?: string; pads?: string };
+type GrowthVariant = EzBakedVariant & {
+  habit?: string; pads?: string; habitats?: readonly string[]; state?: string;
+};
 const growthBake = new Map<EzFamily, GrowthVariant[]>();
 const bakedVariants = (family: EzFamily): GrowthVariant[] => {
   let variants = growthBake.get(family);
   if (!variants) {
-    variants = family === 'conifer' && EZ_GROWTH_FORMS
-      ? [...EZ_BAKE.families.conifer.variants, ...FLORA_REFINED.conifers as GrowthVariant[]]
+    const refined = family === 'conifer' ? FLORA_REFINED.conifers
+      : family === 'broadleaf' ? FLORA_REFINED.broadleaves
+        : [];
+    variants = EZ_GROWTH_FORMS
+      ? [...EZ_BAKE.families[family].variants, ...refined as GrowthVariant[]]
       : EZ_BAKE.families[family].variants;
     growthBake.set(family, variants);
   }
@@ -141,6 +152,7 @@ const bakedVariants = (family: EzFamily): GrowthVariant[] => {
 export const ezHabitOf = (v: GrowthVariant): string =>
   v.habit ?? `${v.form}:${v.name.replace(/ #[0-9]+$/, '')}`;
 const habitOf = ezHabitOf;
+export const ezHabitatsOf = (v: GrowthVariant): readonly string[] => v.habitats ?? [];
 
 function woodOf(v: EzBakedVariant, q: number): THREE.BufferGeometry {
   const reduced = (FLORA_REFINED.wood as Record<string, string>)[v.name];
@@ -785,6 +797,32 @@ function join(wood: THREE.BufferGeometry, crown: THREE.BufferGeometry | null): T
   return g;
 }
 
+/**
+ * FAMILY-SPECIFIC OPTICS, BAKED AS CONSTANT ATTRIBUTES ON EACH VARIANT.
+ *
+ * One material still batches the whole atlas, but a spruce needle, an oak leaf
+ * and a palm frond no longer pretend to transmit light or carry bark alike.
+ * x leaf transmission, y authored crown tone, z bark fissure, w bark rings.
+ * Wood and crown share the attribute because aWood already selects the half
+ * that matters in the fragment.
+ */
+const EZ_SURFACE: Record<EzFamily, [number, number, number, number]> = {
+  broadleaf: [0.48, 0.82, 0.62, 0.08],
+  conifer: [0.20, 0.68, 0.86, 0.04],
+  acacia: [0.38, 0.76, 1.05, 0.08],
+  palm: [0.72, 0.60, 0.38, 0.95],
+  snag: [0, 0, 1.12, 0.06],
+};
+function surfaceProfile(g: THREE.BufferGeometry, family: EzFamily, v: GrowthVariant): void {
+  const p = EZ_SURFACE[family].slice() as [number, number, number, number];
+  if (v.habit === 'sclerophyll') { p[0] *= 0.55; p[1] *= 0.82; }
+  if (v.habit === 'mangrove') { p[0] *= 1.15; p[2] *= 0.75; }
+  const n = (g.getAttribute('position') as THREE.BufferAttribute).count;
+  const a = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) a.set(p, i * 4);
+  g.setAttribute('aEzSurf', new THREE.BufferAttribute(a, 4));
+}
+
 const cache = new Map<EzFamily, EzVariant[]>();
 
 /** Every baked variant of a family, decoded once. */
@@ -795,9 +833,10 @@ export function ezVariants(family: EzFamily): EzVariant[] {
     const wood = woodOf(v, EZ_BAKE.q);
     const crown = crownOf(v, EZ_BAKE.q);
     const geometry = join(wood, crown);
+    surfaceProfile(geometry, family, v);
     return { name: v.name, form: v.form, geometry,
       tris: (geometry.index as THREE.BufferAttribute).count / 3, crown: v.crown.shape,
-      label: '' };
+      habit: v.habit, habitats: v.habitats, state: v.state, label: '' };
   });
   // Numbered WITHIN a form, so "columnar 2" is the second columnar tree of
   // this family rather than the second variant that happens to be one.
@@ -816,7 +855,7 @@ export function ezVariants(family: EzFamily): EzVariant[] {
  *  world adds when it wants the whole tree under a given height. */
 export function ezCrownReach(family: EzFamily): number {
   // Cards were normalised with the wood, so they add nothing; a blob adds its radius.
-  const vs = EZ_BAKE.families[family].variants;
+  const vs = bakedVariants(family);
   let reach = 0;
   for (const v of vs) reach += v.crown.shape === 'cone' ? v.crown.r * 0.8 : v.crown.shape === 'card' || v.crown.shape === 'none' ? 0 : v.crown.r;
   return vs.length ? reach / vs.length : 0;
@@ -881,8 +920,42 @@ export function ezVariantFor(family: EzFamily, x: number, z: number, limit = Num
  * it subdivides one of its species. A new HABIT does.
  */
 export const EZ_PALETTE_N = 2;
+export interface EzSiteTraits {
+  salt: number; wetness: number; summerDry: number; waterMm: number; exposure: number;
+}
+/** The architectural vocabulary a site asks for, separate from the RNG that
+ * chooses within it. Shared by the world, the flora lab and the node tests. */
+export function ezHabitatsForSite(
+  family: EzFamily, site: EzSiteTraits, biome = 0,
+): readonly string[] | undefined {
+  if (family !== 'broadleaf') return undefined;
+  // A named mangrove ecoregion is stronger evidence than a missing local
+  // shoreline sample. The Sundarbans lab has no sea-distance raster and the
+  // coarse rainfall model under-rains monsoon Asia; neither may turn it into
+  // Mediterranean scrub after RESOLVE has already answered the biome.
+  if (biome === 14) return ['salt'];
+  if (site.salt > 0.35) return ['salt'];
+  if (site.wetness > 0.58) return ['wet'];
+  if (site.summerDry > 0.48 || site.waterMm < 520) return ['dry', 'mediterranean'];
+  if (biome === 7 || biome === 8) return ['grassland'];
+  return ['temperate'];
+}
+/** Site-caused conifer shape. Damage is individual; exposure and competition
+ * are stand-scale facts supplied by the caller. */
+export function ezPhenotypeForSite(
+  family: EzFamily, site: EzSiteTraits, individualSeed: number, closedStand: boolean,
+): string | undefined {
+  if (family !== 'conifer') return undefined;
+  const event = (individualSeed >>> 0) / 4294967296;
+  if (event < 0.018 + site.exposure * 0.025) return 'damage';
+  if (site.exposure > 0.62) return 'exposure';
+  if (closedStand && site.wetness > 0.38) return 'competition';
+  return undefined;
+}
+
 export function ezPalette(
-  family: EzFamily, districtSeed: number, limit = Number.MAX_SAFE_INTEGER, forms?: readonly string[],
+  family: EzFamily, districtSeed: number, limit = Number.MAX_SAFE_INTEGER,
+  forms?: readonly string[], habitats?: readonly string[],
 ): number[] {
   const all = bakedVariants(family);
   const n = Math.min(all.length, Math.max(1, Math.floor(limit)));
@@ -896,13 +969,22 @@ export function ezPalette(
   // guild's preference has to arrive, and a caller that has to be rewritten to
   // pass it is a caller that will not. An empty filter is IGNORED rather than
   // obeyed: a landscape with no matching silhouette must still grow trees.
+  // A phenotype is caused by THIS SITE. It cannot be one of a district's two
+  // characteristic species, or a whole country becomes "broken leader".
+  const genotypes = Array.from({ length: n }, (_, i) => i).filter((i) => !all[i].state);
+  const shaped = forms?.length ? genotypes.filter((i) => forms.includes(all[i].form)) : genotypes;
+  let eligible = shaped.length ? shaped : genotypes;
+  if (habitats?.length) {
+    const matched = eligible.filter((i) => ezHabitatsOf(all[i]).some((h) => habitats.includes(h)));
+    if (matched.length) eligible = matched;
+  }
   const pool: number[] = [];
-  for (let i = 0; i < n; i++) if (!forms?.length || forms.includes(all[i].form)) {
+  for (const i of eligible) {
     // Districts choose growth habits, not seeds. Two individuals of the same
     // habit must not exhaust the district's two-species vocabulary.
     if (!EZ_GROWTH_FORMS || !pool.some(j => habitOf(all[j]) === habitOf(all[i]))) pool.push(i);
   }
-  const from = pool.length ? pool : Array.from({ length: n }, (_, i) => i);
+  const from = pool.length ? pool : (genotypes.length ? genotypes : Array.from({ length: n }, (_, i) => i));
   // Draw PALETTE_N distinct silhouettes, by walking the pool from a
   // seed-derived offset at a seed-derived stride. A stride coprime with the
   // pool size visits every entry, so the draw cannot repeat and cannot fail —
@@ -922,11 +1004,17 @@ export function ezPalette(
 /** Which of the landscape's silhouettes THIS stand is. */
 const habitPeers = new Map<string, number[]>();
 export function ezPickVariant(palette: number[], standSeed: number,
-  family?: EzFamily, individualSeed = 0, limit = Number.MAX_SAFE_INTEGER): number {
+  family?: EzFamily, individualSeed = 0, limit = Number.MAX_SAFE_INTEGER, state?: string): number {
   if (!palette.length) return 0;
   const chosen = palette[(standSeed >>> 5) % palette.length];
   if (!family || !EZ_GROWTH_FORMS) return chosen;
-  const all = bakedVariants(family), habit = habitOf(all[chosen]);
+  const all = bakedVariants(family);
+  if (state) {
+    const states = all.map((v, i) => ({ v, i }))
+      .filter(({ v, i }) => i < limit && v.state === state).map(({ i }) => i);
+    if (states.length) return states[(individualSeed >>> 0) % states.length];
+  }
+  const habit = habitOf(all[chosen]);
   const key = `${family}:${chosen}:${limit}`;
   let peers = habitPeers.get(key);
   if (!peers) {
@@ -1008,15 +1096,20 @@ export const foliageWind = (wRise: string, wFlut: string): string => [
 ].join('\n');
 
 /**
- * ── TWO NUMBERS THE SKELETONS' SURFACE NEEDS, SHARED BY EVERY MATERIAL ──
+ * ── THE SKELETONS' SURFACE CONTROLS, SHARED BY EVERY MATERIAL ──
  *
  * `uEzBark` is how hard the wood's own vertical grain bites; `uEzEdge` is how
- * far a leaf card seen edge-on is pulled toward its neighbours. Live handles,
- * so a device can A/B them (`?ezbark=`, `?ezedge=`) and a lab can put them on
- * dials, exactly as the wind and the growth bend already are.
+ * far a leaf card seen edge-on is pulled toward its neighbours. `uEzLeaf`
+ * governs the authored crown tones and transmission; `uEzBump` turns the
+ * generated bark field into relief. Live handles let the rack, lab and URL
+ * fixtures all drive the same material.
  */
 export const ezLookU = {
-  uEzBark: { value: 0.55 }, uEzEdge: { value: 0.62 },
+  uEzBark: { value: 0.72 }, uEzEdge: { value: 0.62 },
+  /** Bespoke crown optics: authored light bands plus transmitted sunlight. */
+  uEzLeaf: { value: 1 },
+  /** Relief from the same procedural bark field that colours the wood. */
+  uEzBump: { value: 0.42 },
   /** How much of the crown's shading comes from the MEASURED sky exposure
    *  rather than from the radial approximation it replaced. `?ezsky=0` is the
    *  exact A/B and restores the old term to the bit. */
@@ -1056,17 +1149,25 @@ const EZ_NOISE_GLSL = `
 
 export function ezMaterial(
   bark: THREE.ColorRepresentation,
-  tuning: { bend?: { value: number }; wind?: { uTime: { value: number }; uGust: { value: THREE.Vector2 }; uWindK: { value: number } } } = {},
+  tuning: {
+    bend?: { value: number };
+    wind?: { uTime: { value: number }; uGust: { value: THREE.Vector2 }; uWindK: { value: number } };
+    sun?: { value: THREE.Vector3 };
+  } = {},
 ): THREE.MeshLambertMaterial {
   // Double-sided for the leaf cards: a quad has no back to cull.
   const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true, side: THREE.DoubleSide });
   const uWood = { value: new THREE.Color(bark) };
   const uEzBend = tuning.bend ?? { value: 0 };
   const wind = tuning.wind ?? { uTime: { value: 0 }, uGust: { value: new THREE.Vector2() }, uWindK: { value: 0 } };
+  const sun = tuning.sun ?? { value: new THREE.Vector3(0.45, 0.82, 0.35).normalize() };
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uWood = uWood;
     sh.uniforms.uEzBend = uEzBend;
     sh.uniforms.uEzBark = ezLookU.uEzBark;
+    sh.uniforms.uEzLeaf = ezLookU.uEzLeaf;
+    sh.uniforms.uEzBump = ezLookU.uEzBump;
+    sh.uniforms.uEzSun = sun;
     sh.uniforms.uEzSky = ezLookU.uEzSky;
     sh.uniforms.uEzMerge = ezLookU.uEzMerge;
     sh.uniforms.uEzPxH = ezLookU.uEzPxH;
@@ -1076,7 +1177,7 @@ export function ezMaterial(
     sh.uniforms.uGust = wind.uGust;
     sh.uniforms.uWindK = wind.uWindK;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', `#include <common>\nattribute float aWood; attribute float aSky; attribute vec3 aEnv; attribute vec3 aPad; attribute vec3 aHull;\nuniform vec3 uWood; uniform float uEzBend; uniform float uEzMerge; uniform float uEzPxH; uniform float uEzPxFix;\nvarying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky; varying vec3 vEzEnv;\n${FOLIAGE_WIND_UNIFORMS}`)
+      .replace('#include <common>', `#include <common>\nattribute float aWood; attribute float aSky; attribute vec3 aEnv; attribute vec3 aPad; attribute vec3 aHull; attribute vec4 aEzSurf;\nuniform vec3 uWood; uniform vec3 uEzSun; uniform float uEzBend; uniform float uEzMerge; uniform float uEzPxH; uniform float uEzPxFix;\nvarying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky; varying vec3 vEzEnv; varying vec3 vEzSun; varying vec4 vEzSurf;\n${FOLIAGE_WIND_UNIFORMS}`)
       .replace('#include <begin_vertex>', [
         '#include <begin_vertex>',
         // ── THE CROWN CLOSES AS THE TREE SHRINKS ──
@@ -1125,6 +1226,8 @@ export function ezMaterial(
         // hundred trees of one variant do not all wear the same knot.
         'vEzWood = aWood;',
         'vEzSky = aSky;',
+        'vEzSurf = aEzSurf;',
+        'vEzSun = normalize((viewMatrix * vec4(uEzSun, 0.0)).xyz);',
         // The envelope direction into the frame the lighting reads. The
         // instance's non-uniform width and height skew it a little and that is
         // accepted: a crown is a soft shape and its light is a soft claim.
@@ -1176,14 +1279,41 @@ export function ezMaterial(
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky;
-        varying vec3 vEzEnv;
+        varying vec3 vEzEnv; varying vec3 vEzSun; varying vec4 vEzSurf;
         uniform float uEzBark; uniform float uEzEdge; uniform float uEzSky;
+        uniform float uEzLeaf; uniform float uEzBump;
         ${EZ_NOISE_GLSL}`)
       .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
         if (vEzWood > 0.5) {
           if (uEzBark > 0.001) {
-            float ezB = ezNoise(vec3(vEzLocal.x * 150.0, vEzLocal.y * 14.0 + vEzJit * 37.0, vEzLocal.z * 150.0));
-            diffuseColor.rgb *= 1.0 + (ezB - 0.5) * uEzBark;
+            // Cylindrical coordinates are generated from the skeleton itself:
+            // no bitmap UV, and the relief follows the exact field colouring
+            // the bark so light and texture cannot slide apart.
+            float ezPhi = atan(vEzLocal.z, vEzLocal.x) / 6.2831853 + 0.5;
+            float ezCoarse = ezNoise(vec3(ezPhi * 18.0, vEzLocal.y * 10.0 + vEzJit * 29.0,
+              length(vEzLocal.xz) * 85.0));
+            float ezFine = ezNoise(vec3(vEzLocal.x * 185.0, vEzLocal.y * 26.0 + vEzJit * 41.0,
+              vEzLocal.z * 185.0));
+            float ezFurrow = 1.0 - abs(fract(ezPhi * (16.0 + 14.0 * vEzSurf.z)
+              + ezCoarse * 0.72) * 2.0 - 1.0);
+            float ezRing = 0.5 + 0.5 * sin(vEzLocal.y * 155.0 + ezCoarse * 5.0);
+            float ezField = mix(ezFurrow, ezRing, vEzSurf.w) * 0.62 + ezFine * 0.38;
+            float ezFissure = smoothstep(0.48, 0.78, ezField);
+            float ezBarkTone = mix(0.70, 1.18, ezFissure);
+            diffuseColor.rgb *= mix(1.0, ezBarkTone, min(1.0, uEzBark * vEzSurf.z));
+            if (uEzBump > 0.001 && length(vViewPosition) < 130.0) {
+              vec3 ezDx = dFdx(-vViewPosition);
+              vec3 ezDy = dFdy(-vViewPosition);
+              vec3 ezR1 = cross(ezDy, normal);
+              vec3 ezR2 = cross(normal, ezDx);
+              float ezDet = dot(ezDx, ezR1);
+              vec2 ezDh = vec2(dFdx(ezField), dFdy(ezField));
+              float ezSign = ezDet < 0.0 ? -1.0 : 1.0;
+              vec3 ezGrad = ezSign * (ezDh.x * ezR1 + ezDh.y * ezR2);
+              float ezNear = 1.0 - smoothstep(45.0, 130.0, length(vViewPosition));
+              normal = normalize(abs(ezDet) * normal
+                - ezGrad * uEzBump * vEzSurf.z * ezNear * 0.22);
+            }
           }
         } else {
           // ── THE CROWN'S OWN LIGHT AND DARK ──
@@ -1223,6 +1353,13 @@ export function ezMaterial(
           // place. 1.30 on a crown around 0.42 green is 0.55, under the 0.62
           // bloom cut with room to spare.
           diffuseColor.rgb *= mix(ezRad, mix(0.62, 1.30, vEzSky), uEzSky);
+          // THREE LARGE TONES, ALIGNED TO THE SUN. The post chain still owns
+          // the world palette; this chooses coherent crown masses before that
+          // quantiser instead of asking random facets to discover a tree.
+          float ezFacing = clamp(dot(normalize(vEzEnv), normalize(vEzSun)) * 0.5 + 0.5, 0.0, 0.999);
+          float ezBand = floor((ezFacing * 0.72 + vEzSky * 0.28) * 3.0) * 0.5;
+          float ezTone = mix(0.82, 1.16, ezBand);
+          diffuseColor.rgb *= mix(1.0, ezTone, uEzLeaf * vEzSurf.y);
           // ── AND THE WHOLE CROWN LIGHTS AS ONE MASS ──
           // A pad heap presents facets pointing every way, so Lambert answers a
           // different number on each and the crown gets a random tone per facet
@@ -1239,6 +1376,15 @@ export function ezMaterial(
           float ezNdv = abs(dot(normalize(normal), normalize(vViewPosition)));
           diffuseColor.rgb *= mix(uEzEdge, 1.0, smoothstep(0.0, 0.35, ezNdv));
           }
+        }`)
+      .replace('#include <lights_fragment_begin>', `#include <lights_fragment_begin>
+        if (vEzWood < 0.5 && uEzLeaf > 0.001) {
+          // Thin foliage transmits the direct sun through its shaded face.
+          // Needles, leathery sclerophyll and broad leaves carry different
+          // strengths through aEzSurf rather than sharing one green plastic.
+          float ezBack = pow(max(dot(normalize(normal), -normalize(vEzSun)), 0.0), 1.45);
+          reflectedLight.directDiffuse += diffuseColor.rgb
+            * ezBack * vEzSurf.x * uEzLeaf * 0.34;
         }`);
   };
   return mat;
