@@ -121,7 +121,23 @@ const bakedVariants = (family: EzFamily): GrowthVariant[] => {
   }
   return variants;
 };
-const habitOf = (v: GrowthVariant): string => v.habit ?? `${v.form}:${v.name.replace(/ #[0-9]+$/, '')}`;
+/**
+ * A VARIANT'S GROWTH HABIT, WHICH IS NOT ITS SEED. The bake carries several
+ * skeletons grown from one recipe under different seeds — `Oak Medium #387`,
+ * `#91` and `#12` are one tree three times — and a district that spent its
+ * two-species vocabulary on two seeds of the same oak would read as a
+ * monoculture while believing itself diverse. A conifer growth form states its
+ * habit outright; everything else is its form and its recipe with the seed
+ * stripped off.
+ *
+ * EXPORTED BECAUSE THE TEST MUST NOT RESTATE IT. The coverage contract below
+ * is two claims about this function's own equivalence classes, and a second
+ * copy of the rule in a devtool is a copy that drifts — at which point the
+ * check would be asserting something nobody runs.
+ */
+export const ezHabitOf = (v: GrowthVariant): string =>
+  v.habit ?? `${v.form}:${v.name.replace(/ #[0-9]+$/, '')}`;
+const habitOf = ezHabitOf;
 
 function woodOf(v: EzBakedVariant, q: number): THREE.BufferGeometry {
   const reduced = (FLORA_REFINED.wood as Record<string, string>)[v.name];
@@ -775,6 +791,23 @@ export function ezVariantFor(family: EzFamily, x: number, z: number, limit = Num
  * which are jittered Voronoi cells keyed on lat/lon, so a palette survives a
  * world rebase and a stand does not reroll when you drive past it. That
  * machinery already existed for bedrock; this is the second thing to use it.
+ *
+ * ── AND COVERAGE IS A PROPERTY OF THE WHOLE CHAIN, NOT OF THE PALETTE ──
+ *
+ * The palette draws over HABITS (`ezHabitOf`), so of `Oak Medium #387`, `#91`
+ * and `#12` — one recipe under three seeds — a district picks at most one, and
+ * the palette therefore CANNOT cover the atlas by construction. `ezPickVariant`
+ * then picks among that habit's own seeds per INDIVIDUAL, which is where the
+ * siblings are drawn. Measured over 40,000 districts × 4 stands × 6
+ * individuals: the palette reaches broadleaf [0,2,3,4,6] and the chain reaches
+ * **8 of 8**, conifer 12 of 12, acacia 3 of 3, palm 2 of 2, snag 4 of 4, with
+ * no variant below 5.5% of its family's ground.
+ *
+ * A HABIT'S SHARE IS SPLIT AMONG ITS SEEDS, which is the one consequence worth
+ * knowing before adding to the bake: `Oak Small` is one seed and takes 20% of
+ * the broadleaf ground, while `Oak Medium` is three seeds taking 6.7% each for
+ * the same 20%. Baking a fourth seed of a recipe does not widen a landscape —
+ * it subdivides one of its species. A new HABIT does.
  */
 export const EZ_PALETTE_N = 2;
 export function ezPalette(

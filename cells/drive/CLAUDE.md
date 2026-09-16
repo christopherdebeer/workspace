@@ -5086,20 +5086,69 @@ the largest, and so on) is a 200 m bar: at 60 m a crown SHOULD show its
 structure and `parts` of 10 is a conifer you can see between the branches of.
 Seven of twenty-nine "read" there and that is not a finding.
 
-### …and three of the eight broadleaf variants are never drawn anywhere
+### …and three of the eight broadleaf variants were NOT unreachable — the test was
 
-Found by `tree-stand.test.mjs` while verifying the above, PRE-EXISTING (it fails
-identically at the commit before this work) and not fixed here: over 572 sampled
-districts `ezPalette` picks broadleaf variants `[0, 2, 3, 4, 6]` and never 1, 5
-or 7. **Three of eight baked silhouettes — including one of the two columnar
-broadleaves — exist in the bundle, cost their bytes, and are drawn nowhere on
-Earth.**
+**THE SECTION THAT STOOD HERE WAS WRONG, AND IT WAS BLOCKING REAL WORK.** It
+read `tree-stand.test.mjs`'s failing `…and the world uses ALL of them across
+districts` — `saw [0,2,3,4,6]` — as a coverage fault, and concluded that three
+of eight baked broadleaf silhouettes "exist in the bundle, cost their bytes, and
+are drawn nowhere on Earth", with the rider that **adding habits is worth
+nothing while a third of the ones already baked are unreachable.** On that basis
+the atlas expansion the botanical review asked for was deferred. Nothing about
+it was true.
 
-It is the same shape as the ten forgotten switches one layer over, and it bears
-directly on the botanical review's ask for fifteen to twenty-five architectural
-habits: **adding habits is worth nothing while a third of the ones already baked
-are unreachable.** Whatever `ezPalette`'s draw is doing, it is not covering its
-own atlas, and that is the thing to fix before the atlas grows.
+**COVERAGE IS A PROPERTY OF THE CHAIN, AND THE ASSERTION ONLY LOOKED AT ITS
+FIRST LINK.** `ezPalette` draws over HABITS (`ezHabitOf`), not over variants:
+`Oak Medium #387`, `#91` and `#12` are one recipe under three seeds, and a
+district that spent its two-species vocabulary on two seeds of the same oak
+would read as a monoculture while believing itself diverse. So the palette
+covers 5 of 8 **by construction and on purpose**, and `ezPickVariant` — which
+main.ts calls with the family and a hash of the tree's own lat/lon — then picks
+among that habit's siblings per INDIVIDUAL. The assertion predates the habit
+dedupe and could never pass again.
+
+**Measured over 40,000 districts × 4 stands × 6 individuals**, which is the same
+three scopes the world walks:
+
+| family | palette reaches | the chain reaches | thinnest variant's share |
+|---|---|---|---|
+| broadleaf | 5 of 8 `[0,2,3,4,6]` | **8 of 8** | 6.6% |
+| conifer | 6 of 12 | **12 of 12** | 5.5% |
+| acacia | 1 of 3 | **3 of 3** | 33.1% |
+| palm | 1 of 2 | **2 of 2** | 50.0% |
+| snag | 3 of 4 | **4 of 4** | 16.7% |
+
+And the same file's own FIXTURE half had been saying so all along, in the line
+directly under the failure: the shipping per-stand census at Camps Bay draws
+`Aspen Small #11` — index 7, one of the three this section called unreachable —
+**twenty-four times**.
+
+**THE ONE CONSEQUENCE THAT IS REAL, and it is the thing to know before adding to
+the bake: a habit's share of the ground is split among its seeds.** `Oak Small`
+is one seed and takes 20% of the broadleaf ground; `Oak Medium` is three seeds
+taking 6.7% each for the same 20%. **Baking a fourth seed of a recipe does not
+widen a landscape — it subdivides one of its species.** A new HABIT does, which
+is exactly what the review's fifteen-to-twenty-five architectural habits are,
+and there is nothing standing in their way.
+
+The assertion is now the two claims the chain actually makes — the palette
+covers every habit, and district → stand → individual reaches every variant of
+every family — **and both are needed or neither means anything**: a palette
+covering every habit with a pick that ignored the siblings would still bury a
+third of the atlas, and a chain reaching every variant through a palette missing
+a habit would be drawing them as accidents rather than as species. Checked
+against a negative control, which is what the old assertion never had on the
+design it was failing: with the peer pick disabled in the built bundle the chain
+reads **5 of 8 broadleaf and 6 of 12 conifer** and both new claims fail.
+
+**THE GENERAL FAULT IS THE ONE THIS FILE KEEPS RECORDING FROM THE OTHER SIDE.**
+A probe that reports the output of a rule cannot witness the rule — and here a
+TEST asserting a rule that had been deliberately replaced reported the
+replacement as a defect, in a file whose own comment three lines above it
+explains why the replacement is right. A failing check nobody can attribute gets
+written into the doctrine as a fault, and the doctrine then defers the work.
+**When a long-failing assertion and a documented design contradict each other,
+one of them is stale, and which one is a question with an answer.**
 
 ### The polish pass — another agent, on the cell, two pushes apart
 
