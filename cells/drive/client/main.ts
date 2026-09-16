@@ -11782,7 +11782,10 @@ const impStage = {
   y: new Float32Array(IMPOSTOR_CAP),
 };
 /** What the last refresh stood up, so the probe reports the rule that ran. */
-const impProf = { drawn: 0, offered: 0, capped: 0, formed: 0, far: 0, farSeen: 0, ms: 0, bakeMs: 0, waiting: 0 };
+const impProf = {
+  drawn: 0, offered: 0, capped: 0, formed: 0, far: 0, farSeen: 0, ms: 0, bakeMs: 0, waiting: 0,
+  byFam: {} as Record<EzFamily, number>, capFam: {} as Record<EzFamily, number>,
+};
 /**
  * THE IMPOSTOR'S FORM IS THE TREE'S OWN, and it is cached per SITE because it
  * has to be both correct and cheap. Correct: if a tree is a cone at 400 m and
@@ -14447,8 +14450,43 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       const [tr, tg, tb] = terrainPalette(gy + baseElev, 0, sampleCover(state.x, state.z), state.x, state.z);
       impGroundU.value.setRGB(tr, tg, tb);
     }
+    // ── THE CAP IS SHARED OUT BY DEMAND, NOT CONSUMED IN FAMILY ORDER ──
+    //
+    // `IMPOSTOR_CAP` is one pool of 32,000 slots and the pass walked the
+    // families in `EZ_FAMILIES` order, breaking out the moment the pool ran
+    // dry. Reported from the seat as trees popping into view while driving,
+    // and the dump says it outright: at a Japanese forest the manifest knows
+    // b96721/c31205/a11203/p39260/s12546 and the row reads `drawn 32000/32000
+    // offered · CAPPED at 32000`. Broadleaf alone is three times the pool, so
+    // **broadleaf took every slot and conifer, snag, acacia and palm drew no
+    // impostor at all** — their only representation was the geometry tier,
+    // whose edges that session were 486, 455, 589 and 285 metres. Past those,
+    // nothing; approaching them, a tree out of thin air.
+    //
+    // A cap consumed in declaration order is not a cap, it is a priority list
+    // nobody wrote down. Water-filled, exactly as the triangle budget already
+    // is: a family wanting less than its share takes what it wants and hands
+    // the rest back, the round repeats, and what is left is split among the
+    // families that can still use it. Nobody is cut below what they would have
+    // drawn anyway and the total cannot exceed the pool.
+    const impWant = ezRecord((f) => cand[f].length + candFar[f].length);
+    const impCap = ezRecord(() => 0);
+    {
+      let pool = IMPOSTOR_CAP;
+      const open = EZ_FAMILIES.filter((f) => impWant[f] > 0);
+      while (open.length && pool > 0) {
+        const share = pool / open.length;
+        const under = open.filter((f) => impWant[f] <= share);
+        if (!under.length) { for (const f of open) impCap[f] = Math.floor(share); break; }
+        for (const f of under) {
+          impCap[f] = impWant[f]; pool -= impWant[f];
+          open.splice(open.indexOf(f), 1);
+        }
+      }
+    }
     for (const fam of EZ_FAMILIES) {
       const variants = ezVariants(fam);
+      let famN = 0;
       // ── FULL DENSITY STARTS WHERE THE GEOMETRY STOPS ──
       //
       // The first cut thinned from a fixed 260 m, and measured its own mistake:
@@ -14494,7 +14532,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         if ((ci & (IMPOSTOR_STEP - 1)) === 0 && ci > 0) yield;
         const ent = list[ci], d2 = ent[0], v = ent[1];
         if (d2 > impR2) continue;     // the REACH dial, and the cheapest test there is
-        if (impN >= IMPOSTOR_CAP) { impProf.capped++; break; }
+        if (famN >= impCap[fam] || impN >= IMPOSTOR_CAP) { impProf.capped++; break; }
         // WHAT THIS COUNTS NARROWED WHEN THE GATHER LEARNED TO THIN. It is
         // what the PASS considered — every near candidate, and the far ones
         // that already survived the gather's own density test — so it is no
@@ -14576,10 +14614,16 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         impStage.c[co] = v.c.r; impStage.c[co + 1] = v.c.g; impStage.c[co + 2] = v.c.b;
         impStage.f[impN] = form;
         impStage.y[impN] = v.rot;
-        impN++;
+        impN++; famN++;
       }
       }
       impFar += candFar[fam].length;
+      // PER FAMILY, AGAINST ITS OWN SHARE. A pool reported only as a total
+      // cannot say that four families of five drew nothing, which is exactly
+      // the fault above — and this file's own rule is that a budgeted quantity
+      // is printed against its budget or it will be read as a measurement.
+      impProf.byFam[fam] = famN;
+      impProf.capFam[fam] = impCap[fam];
     }
   }
   impProf.drawn = impN; impProf.offered = impOffered; impProf.formed = impFormed;
@@ -45656,6 +45700,10 @@ function telemetryReport(): string {
         + ` · density ${_i.density >= 1e6 ? 'ALL' : `${_i.density}x`}`
         + ` · drawn ${impProf.drawn}/${impProf.offered} offered${impProf.farSeen ? ` (${impProf.far} kept of ${impProf.farSeen} seen past the draw ring)` : ''}`
         + ` · ${(impProf.drawn * 4 / 1000).toFixed(1)}k tris${impProf.capped ? ` · CAPPED at ${IMPOSTOR_CAP}` : ''}`
+        // PER FAMILY, AGAINST ITS OWN SHARE OF THE POOL. The total alone read
+        // as a tier at capacity when what it actually was is one family at
+        // capacity and four drawing nothing.
+        + ` · cards ${EZ_FAMILIES.map(f => `${f[0]}${impProf.byFam[f] ?? 0}/${impProf.capFam[f] ?? 0}`).join(' ')}`
         + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed}/${IMPOSTOR_FORM_BUDGET} formed${impProf.formed >= IMPOSTOR_FORM_BUDGET ? ' (PINNED)' : ''}` : ''}`
         + ` · atlas ${impAtlasRT ? `${impSlots.size}/${IMP_ATLAS_SLOTS} slots in ${impProf.bakeMs.toFixed(0)}ms` : 'OFF'}`
         + `${impInkU.value ? ' · INK BLACK (silhouette instrument)' : ''}`

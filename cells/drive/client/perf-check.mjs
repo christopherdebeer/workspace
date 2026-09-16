@@ -110,7 +110,12 @@ function context(code,range,ez,triCap) {
     IMPOSTOR_FORMS:['round','conic','columnar','umbrella','palm','bare'],
     IMPOSTOR_WIDTH:{round:0.9,conic:0.5,columnar:0.4,umbrella:1.2,palm:0.5,bare:0.35},
     impostorFormIndex:()=>0,impFormOf:new WeakMap(),
-    impProf:{drawn:0,offered:0,capped:0,formed:0,far:0,ms:0},
+    // byFam/capFam are the per-family card tally: the impostor pool is water-
+    // filled across the families now rather than consumed in declaration order,
+    // and the pass writes both at the end of each family. A sandbox missing a
+    // record the refresh WRITES throws where one missing a value it reads would
+    // merely read undefined — which is the louder failure and the better one.
+    impProf:{drawn:0,offered:0,capped:0,formed:0,far:0,ms:0,byFam:{},capFam:{}},
     // HALF AGAIN THE DRAW RANGE, for the manifest's own reason one line down:
     // the REACH dial's far gather has to RUN here, or the claim that a tier
     // reaching past the draw ring disturbs nothing inside it is untested.
