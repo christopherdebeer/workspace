@@ -227,6 +227,20 @@ corrupted the five icons in the working tree, and the only thing that ever
 caught it was `git status` showing five modified PNGs after a pull that should
 have been a no-op.
 
+**AND A PULL RESURRECTS `devtools/` THAT A PUSH WILL NEVER CORRECT.** `cell-sync`'s
+`SKIP` set is `node_modules`, `devtools`, `native` — and it is applied to the
+PUSH's directory walk only. The cell still holds whatever was in `devtools/`
+before that rule existed, so every pull writes those stale copies over the
+working tree and the next push does not fix them: measured twice in one
+session, `devtools/globe-navigation.test.cjs` came back pre-sphere-pass and
+`devtools/refine-flora.mjs` came back without the conifer habit/state fields,
+both times, with a push in between. The remedy in the ritual is
+`git checkout -- cells/drive/devtools/` after every pull; the remedy in the cell
+is `cells.deleteFile` on those paths, which also takes dead weight out of a
+deployer already running at seven tenths of its memory ceiling. **Not done here
+— deleting files from a shared cell is not a thing to do unasked** — but it is
+the fix, and until someone does it this reversion happens on every deploy cycle.
+
 **COMMIT BEFORE YOU PULL.** `cell-sync pull` overwrites the working tree with
 the cell's copy of every file it has, and it does not care that you were
 mid-edit. It ate an uncommitted rewrite of `index.ts` and of this file during
