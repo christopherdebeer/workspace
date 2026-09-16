@@ -11062,6 +11062,12 @@ const VEG_CELL = 220;                       // spatial bucket, metres
 interface PlacedVegSite extends VegSite {
   role: VegetationRole;
   anchor?: boolean;
+  /** Where this plant stands on EARTH, in the absolute vegetation frame, taken
+   *  once when it is filed. Every geographic hash downstream — the impostor
+   *  tier's density thinning above all — reads these rather than `x`/`z`, which
+   *  are local metres and move with the origin. */
+  ax: number;
+  az: number;
 }
 interface VegSeedStats {
   proposedClumps: number;
@@ -11081,7 +11087,79 @@ interface VegSeedStats {
 const vegGrid = new Map<string, PlacedVegSite[]>();
 const vegSeedStats = new Map<string, VegSeedStats>();
 const VEG_RANGE = 700;                      // plants are shown within this
-const vegKey = (x: number, z: number): string => `${Math.floor(x / VEG_CELL)},${Math.floor(z / VEG_CELL)}`;
+/**
+ * ── THE VEGETATION LATTICE IS ANCHORED TO THE EARTH, NOT TO THE SPAWN ──
+ *
+ * Every hop and every fresh load puts the requested place at local (0, 0) and
+ * rebases the world about it. The vegetation lattice, its candidate hashes and
+ * its density field were all read in LOCAL metres, so all three moved with the
+ * origin — and the density field has an exact zero at (0, 0), because it is
+ * `fract(sin(px * 12.9898 + pz * 78.233) * 43758.5453)` and `sin(0)` is
+ * exactly 0. **Every spawn on Earth landed in a guaranteed hole in its own
+ * vegetation field.**
+ *
+ * Measured on the shipped field, replaying `seedCell`'s own accept logic with
+ * the cover ceiling held at full tree cover — the unit is THICKETS, because a
+ * density number cannot say what a driver sees:
+ *
+ *   | ring from the spawn | 0 m | 220 | 440 | 1100 | 4400 |
+ *   | groups per cell     | 0.00 | 0.38 | 0.94 | 1.18 | 1.15 |
+ *
+ * At density 0 `vegetationClumpChance` returns exactly 0 and
+ * `vegetationClumpRole` returns null, so EVERY group is refused while the
+ * stray floor runs at full strength: you spawn among scattered single plants
+ * with no thickets at all, and the group rate only recovers over about a
+ * kilometre. That is the reported "almost always very little trees in my
+ * immediate vicinity", and the "trees become abundant as I drive away" with
+ * it. The radial density profile is 0.000 / 0.001 / 0.004 / 0.017 / 0.062 /
+ * 0.205 / 0.420 at 0 / 25 / 50 / 100 / 200 / 400 / 700 m against a world mean
+ * of 0.4998.
+ *
+ * AND IT IS NOT ONLY THE TROUGH. The cell lattice itself was local, so the
+ * same geography seeded under two different origins produced different cell
+ * boundaries, different stratified candidates, different accept rolls and
+ * therefore different trees: driving to a place and loading at it disagreed
+ * about what grew there. `culture.ts` has solved exactly this for districts
+ * and stands since bedrock — `seedAt` works in the absolute frame so a palette
+ * survives a rebase — and the vegetation simply never used it.
+ *
+ * So the lattice, the hashes and the field all live in `absMetres`' sinusoidal
+ * frame now: northing is latitude times a degree, easting is longitude times a
+ * degree times the cosine of that latitude. `vegAbsOf` goes there, `vegLocalOf`
+ * comes back (northing carries latitude, so the inverse is direct), and a cell
+ * is a square of that frame. The degenerate zero is still there — it is now at
+ * 0°N 0°E, in the Gulf of Guinea, where it is one permanently thin patch of
+ * open ocean rather than a hole under the player.
+ *
+ * EVERY CONSUMER MUST USE THIS AUTHORITY, not just the generator. `vegGrid`,
+ * `rapidRocks`, the refresh's ring walk, the manifest tally, the collision
+ * bucket, the ambience sample and the debug probes all index the same lattice,
+ * and a generator that moved while a consumer did not would be stable and
+ * unreadable — which is worse than the bug.
+ */
+const vegAbsOf = (x: number, z: number): [number, number] => {
+  const [lat, lon] = localToLatLon(x, z);
+  return absMetres(lat, lon);
+};
+/** Back from the absolute frame. `cos` is floored so a polar cell cannot
+ *  divide by zero; nothing grows at 89.99° and the clamp keeps it finite. */
+const vegLocalOf = (ax: number, az: number): [number, number] => {
+  const lat = az / M_LAT;
+  const lon = ax / (M_LAT * Math.max(0.02, Math.cos((lat * Math.PI) / 180)));
+  return toLocal(lat, lon);
+};
+/** Which absolute vegetation cell a LOCAL point falls in. */
+const vegCellOf = (x: number, z: number): [number, number] => {
+  const [ax, az] = vegAbsOf(x, z);
+  return [Math.floor(ax / VEG_CELL), Math.floor(az / VEG_CELL)];
+};
+/** The LOCAL position of the (u, v) point of an absolute cell. */
+const vegCellPos = (gx: number, gz: number, u: number, v: number): [number, number] =>
+  vegLocalOf((gx + u) * VEG_CELL, (gz + v) * VEG_CELL);
+const vegKey = (x: number, z: number): string => {
+  const [gx, gz] = vegCellOf(x, z);
+  return `${gx},${gz}`;
+};
 
 // GRASS_M2 and the continuous evidence that replaced reading it directly live
 // in client/sward-cover.ts; see that file's header for why a categorical raster
@@ -11501,7 +11579,7 @@ function vegManifestTally(): {
   rangeM: number; cells: number; seeded: number; annulus: number; deferred: number;
   known: Record<EzFamily, number>;
 } {
-  const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
+  const [cx, cz] = vegCellOf(state.x, state.z);
   const m = manifestRange();
   const mReach = Math.max(Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL), Math.ceil(m / VEG_CELL));
   const known = ezRecord(() => 0);
@@ -12194,7 +12272,11 @@ function pushSite(
   // cannot reroll every member generated after it.
   let anchor = false;
   if (allowAnchor && (TRUNKED.includes(kind) || kind === 'bush')) {
-    const ax = Math.round(x * 8), az = Math.round(z * 8);
+    // ON EARTH, NOT ON THE SPAWN. This hash decided which tree is promoted to
+    // an anchor from LOCAL coordinates, so the same tree was promoted or not
+    // depending on where the session happened to start.
+    const [aax, aaz] = vegAbsOf(x, z);
+    const ax = Math.round(aax * 8), az = Math.round(aaz * 8);
     if (hash2(ax + 1709, az - 3253) < VEGETATION_DISTRIBUTION.anchorChance) {
       const ar = mulberry32(((ax * 73856093) ^ (az * 19349663) ^ 0x5f356495) >>> 0);
       promoteAnchor(site, ar);
@@ -12205,7 +12287,8 @@ function pushSite(
   const key = vegKey(x, z);
   let cell = vegGrid.get(key);
   if (!cell) vegGrid.set(key, (cell = []));
-  cell.push(Object.assign(site, { role, ...(anchor ? { anchor: true } : {}) }));
+  const [sax, saz] = vegAbsOf(x, z);
+  cell.push(Object.assign(site, { role, ax: sax, az: saz, ...(anchor ? { anchor: true } : {}) }));
   if (stats) stats.acceptedSites++;
   return true;
 }
@@ -12318,7 +12401,7 @@ function seedCell(gx: number, gz: number): void {
   // TIME. Starting their 30s ceiling here would make a busy frame look like a
   // missing tile.
   if (vegSeedLeft <= 0) { vegSeedDeferred++; return; }
-  const mx = gx * VEG_CELL + VEG_CELL / 2, mz = gz * VEG_CELL + VEG_CELL / 2;
+  const [mx, mz] = vegCellPos(gx, gz, 0.5, 0.5);
   // WHAT GROWS HERE IS A FACT, not a guess. The biome ceiling below stands in
   // only until WorldCover has this ground: it is one number for a whole world,
   // so the wheat field, the shelterbelt beside it and the bare hill behind
@@ -12357,7 +12440,12 @@ function seedCell(gx: number, gz: number): void {
   for (let i = 0; i < VEGETATION_DISTRIBUTION.clumpCandidates; i++) {
     stats.proposedClumps++;
     const c = vegetationCandidate(gx, gz, i, VEGETATION_DISTRIBUTION.clumpCandidates, 0x2a1f4d31);
-    const x = (gx + c.u) * VEG_CELL, z = (gz + c.v) * VEG_CELL;
+    // THE CANDIDATE IS PLACED IN THE ABSOLUTE FRAME and converted back, so the
+    // same geography proposes the same points under any origin. The density
+    // field is sampled at the ABSOLUTE position for the same reason — and
+    // because that is what takes its exact zero off the player's spawn.
+    const axC = (gx + c.u) * VEG_CELL, azC = (gz + c.v) * VEG_CELL;
+    const [x, z] = vegLocalOf(axC, azC);
     const cv = sampleCover(x, z);
     const ceiling = vegCeilingAt(x, z, cv);
     if (ceiling <= 0) { stats.rejectedCover++; continue; }
@@ -12365,7 +12453,7 @@ function seedCell(gx: number, gz: number): void {
     // a rainforest is mostly not, and until now both were the same field with
     // a different species list on it. Clamped, because `dens` also sizes the
     // clump below and the field's own callers assume 0..1.
-    const dens = clamp(vegDensity(x, z) * (guildNow(x, z)?.density ?? 1), 0, 1);
+    const dens = clamp(vegDensity(axC, azC) * (guildNow(x, z)?.density ?? 1), 0, 1);
     if (c.accept >= vegetationClumpChance(ceiling, dens)) continue;
     const role = vegetationClumpRole(dens, c.role);
     if (!role) continue;
@@ -12400,10 +12488,11 @@ function seedCell(gx: number, gz: number): void {
   for (let i = 0; i < VEGETATION_DISTRIBUTION.livingCandidates; i++) {
     stats.proposedLiving++;
     const c = vegetationCandidate(gx, gz, i, VEGETATION_DISTRIBUTION.livingCandidates, 0x6b8b4567);
-    const x = (gx + c.u) * VEG_CELL, z = (gz + c.v) * VEG_CELL;
+    const axC = (gx + c.u) * VEG_CELL, azC = (gz + c.v) * VEG_CELL;
+    const [x, z] = vegLocalOf(axC, azC);
     const cv = sampleCover(x, z);
     if (vegCeilingAt(x, z, cv) <= 0) { stats.rejectedCover++; continue; }
-    const dens = clamp(vegDensity(x, z) * (guildNow(x, z)?.density ?? 1), 0, 1);
+    const dens = clamp(vegDensity(axC, azC) * (guildNow(x, z)?.density ?? 1), 0, 1);
     const habitat = vegetationHabitatAt(x, z, cv);
     if (c.accept >= vegetationLivingChance(habitat, dens)) continue;
     const r = mulberry32(c.seed);
@@ -12429,7 +12518,8 @@ function seedCell(gx: number, gz: number): void {
     const k: VegKind = stony
       ? (roll < 0.72 ? 'rock' : 'spire')
       : roll < 0.4 ? 'rock' : roll < 0.68 ? 'snag' : roll < 0.9 ? 'log' : 'spire';
-    if (pushSite(gx * VEG_CELL + r() * VEG_CELL, gz * VEG_CELL + r() * VEG_CELL,
+    const [gex, gez] = vegCellPos(gx, gz, r(), r());
+    if (pushSite(gex, gez,
       k, r, tone, 'ground-event', stats, false)) stats.groundEvents++;
   }
   stats.ms = performance.now() - t0;
@@ -14093,7 +14183,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   const activeRoles = emptyVegRoles();
   let activeAnchors = 0;
   let trunkN = 0;
-  const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
+  const [cx, cz] = vegCellOf(state.x, state.z);
   const reach = Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL);
   // The manifest's own reach — see the note by `manifestRange`. The draw ring
   // is walked for gather and place exactly as before; this one is walked for
@@ -14208,7 +14298,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
             // Nothing out here is inside its family's full-density radius, so
             // the cheap branch the near list needs is not written: the hash
             // decides every one of them.
-            if (hash2(Math.round(v.x * 8) + 7919, Math.round(v.z * 8) + 104729) * d2 > farKeep2[v.k]) continue;
+            if (hash2(Math.round(v.ax * 8) + 7919, Math.round(v.az * 8) + 104729) * d2 > farKeep2[v.k]) continue;
             candFar[v.k].push([d2, v]);
           }
         }
@@ -21495,14 +21585,14 @@ const activeRapidRocks = new Set<RapidRock>();
 function activateRapidRock(rock: RapidRock): void {
   if (activeRapidRocks.has(rock)) return;
   activeRapidRocks.add(rock);
-  const key = `${Math.floor(rock.x / VEG_CELL)},${Math.floor(rock.z / VEG_CELL)}`;
+  const key = vegKey(rock.x, rock.z);
   let arr = rapidRocks.get(key);
   if (!arr) rapidRocks.set(key, arr = []);
   arr.push(rock);
 }
 function deactivateRapidRock(rock: RapidRock): void {
   if (!activeRapidRocks.delete(rock)) return;
-  const key = `${Math.floor(rock.x / VEG_CELL)},${Math.floor(rock.z / VEG_CELL)}`;
+  const key = vegKey(rock.x, rock.z);
   const arr = rapidRocks.get(key);
   if (!arr) return;
   const index = arr.indexOf(rock);
@@ -34014,7 +34104,7 @@ function tapeKeep(): string {
   const hues = new Set<string>(), stones = new Set<string>();
   let n = 0, sMin = Infinity, sMax = 0, wildest = 0;
   const c = new THREE.Color();
-  const cx = Math.floor(viewX() / VEG_CELL), cz = Math.floor(viewZ() / VEG_CELL);
+  const [cx, cz] = vegCellOf(viewX(), viewZ());
   const reach = Math.ceil(radius / VEG_CELL);
   for (let gx = cx - reach; gx <= cx + reach; gx++) {
     for (let gz = cz - reach; gz <= cz + reach; gz++) {
@@ -34062,7 +34152,7 @@ function tapeKeep(): string {
  */
 (window as unknown as { __vegdist?: object }).__vegdist = (debug?: boolean): object => {
   if (debug !== undefined) { vegRoleDebug = debug; refreshVeg(); }
-  const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
+  const [cx, cz] = vegCellOf(state.x, state.z);
   const reach = Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL);
   const sum = freshVegSeedStats();
   const roles = emptyVegRoles();
@@ -40945,7 +41035,7 @@ function noteTags(t: Record<string, string>): void {
   // Sites the scatter would DRAW — the same cull the draw loop applies.
   let onRoad = 0, onRoadDrawn = 0, off = 0;
   const g = Math.ceil(r / VEG_CELL);
-  const c0 = Math.floor(state.x / VEG_CELL), z0 = Math.floor(state.z / VEG_CELL);
+  const [c0, z0] = vegCellOf(state.x, state.z);
   for (let gx = c0 - g; gx <= c0 + g; gx++) for (let gz = z0 - g; gz <= z0 + g; gz++) {
     for (const v of vegGrid.get(`${gx},${gz}`) ?? []) {
       if (Math.hypot(v.x - state.x, v.z - state.z) > r) continue;
@@ -46504,8 +46594,10 @@ function tick(now: number): void {
   // the hull — and then the truck is past it. One charge per rock per second,
   // so a boulder field rattles rather than bricks.
   if (!real.on && groundedF > 0.25 && Math.abs(state.speed) > 1.2) {
-    const cx0 = Math.floor(state.x / VEG_CELL), cz0 = Math.floor(state.z / VEG_CELL);
-    const lx = state.x - cx0 * VEG_CELL, lz = state.z - cz0 * VEG_CELL;
+    const [cx0, cz0] = vegCellOf(state.x, state.z);
+    // The offset within the cell is measured in the cell's OWN frame.
+    const [tax, taz] = vegAbsOf(state.x, state.z);
+    const lx = tax - cx0 * VEG_CELL, lz = taz - cz0 * VEG_CELL;
     // The car spans one bucket; a neighbour only matters within reach of it.
     const xs = lx < 6 ? [cx0 - 1, cx0] : lx > VEG_CELL - 6 ? [cx0, cx0 + 1] : [cx0];
     const zs = lz < 6 ? [cz0 - 1, cz0] : lz > VEG_CELL - 6 ? [cz0, cz0 + 1] : [cz0];
@@ -47167,7 +47259,7 @@ function tick(now: number): void {
     // The room, on the same half-second tick as the rest of the bed: a hint
     // walk and a grid-cell walk are cheap, and a ceiling does not move.
     encTarget = enclosureAt(state.x, state.z, bodyY).e;
-    const cxA = Math.floor(state.x / VEG_CELL), czA = Math.floor(state.z / VEG_CELL);
+    const [cxA, czA] = vegCellOf(state.x, state.z);
     let rap = 0;
     for (let ox = -1; ox <= 1; ox++) {
       for (let oz = -1; oz <= 1; oz++) rap += (rapidRocks.get(`${cxA + ox},${czA + oz}`) ?? []).length;

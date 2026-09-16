@@ -144,6 +144,23 @@ function context(code,range,ez,triCap) {
     // out changes no mesh, and a pass that never executes cannot witness it.
     manifestRange:()=>range*2,vegManifestDeferred:0,
     seedCell:()=>{},vegMark:()=>{},refreshShrubs:()=>{},
+    // ── THE LATTICE IS STUBBED AS THE PLANE THIS SANDBOX ACTUALLY IS ──
+    //
+    // The shipped `vegCellOf` carries a local point through lat/lon into the
+    // absolute vegetation frame, so that the same geography seeds the same
+    // trees whatever the session's origin is (see `veg-anchor.test.mjs`, which
+    // is where THAT claim is held). There is no origin here and no projection:
+    // the mock world is a flat unprojected plane whose grid is keyed on local
+    // indices, so the honest stub is the identity on local metres.
+    //
+    // It matters that this is a STUB AND NOT THE RULE. Handing the sandbox the
+    // real transform would make the new refresh look up absolute cell keys in a
+    // locally-keyed map, find nothing, place no trees, and compare two empty
+    // worlds as equal — a check that passes by drawing nothing is worse than no
+    // check. What this file asserts is that the SLICED refresh refills what the
+    // pre-slice one did given the same cell walk; the walk's own frame is a
+    // different claim with a different test.
+    vegCellOf:(x,z)=>[Math.floor(x/220),Math.floor(z/220)],
     groundAt:(x,z)=>Math.sin(x/30)+Math.cos(z/30),sampleCover:()=>10,
     terrainPalette:()=>[0.2,0.3,0.1],trunkReach:(k,h,s)=>h+s*0.38,
     clamp:(v,a,b)=>Math.max(a,Math.min(b,v)),
@@ -157,7 +174,16 @@ function context(code,range,ez,triCap) {
     const cell=[];
     for(let i=0;i<80;i++) {
       const k=kinds[Math.floor(random()*kinds.length)];
-      cell.push({k,x:gx*220+random()*220,z:gz*220+random()*220,
+      // `ax`/`az` are where the plant stands on EARTH, which every geographic
+      // hash downstream reads instead of the local `x`/`z` that move with the
+      // origin. On this unprojected plane they ARE the same numbers, which is
+      // what keeps the two refreshes comparable: the old one hashed x/z and the
+      // new one hashes ax/az. Omit them and the impostor tier's thinning hashes
+      // NaN, which is never greater than its threshold, so it culls nothing —
+      // and this file's snapshot does not cover the impostor mesh, so that
+      // would pass while the tier quietly drew everything it was handed.
+      const sx=gx*220+random()*220, sz=gz*220+random()*220;
+      cell.push({k,x:sx,z:sz,ax:sx,az:sz,
         s:1+random()*2,h:families.includes(k)?2:0,rot:random()*6,
         sy:0.7+random()*0.6,sw:0.8+random()*0.4,tl:random()*0.1,
         c:new THREE.Color(0.2+random()*0.2,0.4,0.1),role:i%2?'interior':'fringe',anchor:i%13===0});

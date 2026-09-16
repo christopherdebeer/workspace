@@ -5249,6 +5249,115 @@ is not fixed here; the lever is the same one that fixed it before — open the t
 of the shading window rather than lift everything — and it wants its own frame
 from the seat before it is turned.
 
+### The vegetation was anchored to the spawn, and the spawn is a zero of its own field
+
+Reported from the seat with two screenshots of the same geography — one driven
+to, one loaded at — and a reading of the code. Both halves check out, and the
+second is the one nobody would have found from a frame.
+
+**`sin(0)` IS EXACTLY ZERO, AND SO IS THE FIELD AT EVERY SPAWN.**
+`vegetationDensity` is `fract(sin(px * 12.9898 + pz * 78.233) * 43758.5453)`
+bilinearly interpolated on a 909 m lattice, sampled in LOCAL metres — and every
+load and every hop puts the requested place at local (0, 0). So the density at
+the truck, on arrival, anywhere on Earth, was **0**. Measured radially, against
+a world mean of **0.4998**:
+
+| m from the spawn | 0 | 25 | 50 | 100 | 200 | 400 | 700 | 909 | 1200+ |
+|---|---|---|---|---|---|---|---|---|---|
+| mean density | 0.000 | 0.001 | 0.004 | 0.017 | 0.062 | 0.205 | 0.420 | 0.492 | 0.500 |
+
+**AND THE CONSEQUENCE IS NOT "THINNER", IT IS "NO THICKETS".** At density 0
+`vegetationClumpChance` returns exactly 0 and `vegetationClumpRole` returns
+null, so every GROUP is refused — while `vegetationLivingChance` has its `open`
+term at full strength, so the stray floor is untouched. Replaying `seedCell`'s
+own accept logic with the cover ceiling held constant:
+
+| ring from the spawn | 0 m | 220 | 440 | 1100 | 4400 |
+|---|---|---|---|---|---|
+| groups (thickets) per cell | **0.00** | 0.38 | 0.94 | 1.18 | 1.15 |
+| strays per cell | 1.00 | 1.25 | 0.50 | 0.38 | 0.60 |
+
+You spawn among scattered single plants with no thickets at all, and the group
+rate recovers over about a kilometre. That is "almost always very little trees
+in my immediate vicinity" and "trees become abundant as I drive away", and it
+is upstream of every impostor and streaming mechanism this file has chased.
+
+**THE LATTICE WAS LOCAL TOO, WHICH IS THE ARCHITECTURAL HALF.** `VEG_CELL`
+buckets, `vegetationCandidate`'s stratification and accept rolls, the anchor
+promotion and the impostor tier's density thinning all hashed LOCAL
+coordinates, so the same geography seeded different trees depending on where
+the session started. `culture.ts` has solved exactly this since bedrock —
+`seedAt` works in `absMetres`' frame so a district's palette survives a rebase
+— and the vegetation simply never used it.
+
+**SO THE WHOLE STOCHASTIC DOMAIN MOVED INTO THAT FRAME.** `vegAbsOf` goes
+local → lat/lon → absolute, `vegLocalOf` comes back (northing carries latitude,
+so the inverse is direct), `vegCellOf` is the one authority for which cell a
+point is in, and `vegCellPos` puts a cell's (u, v) back into local metres. A
+candidate is generated in the absolute frame and converted back before any
+cover or ground query. The degenerate zero still exists — it is now at 0°N 0°E,
+in the Gulf of Guinea, one permanently thin patch of open ocean.
+
+**EVERY CONSUMER, NOT JUST THE GENERATOR.** The seat's report named this as the
+implementation trap and it is the right warning: `vegGrid`'s key, the refresh's
+ring walk, the manifest tally, the collision bucket, the ambience sample, the
+debug probes, the far-impostor hash and `rapidRocks` — which shares the lattice
+with `vegGrid` and is read with the same index in the ambience tick — all take
+`vegCellOf`. A generator that moved while a consumer did not would be stable and
+unreadable, which is worse than the bug. `PlacedVegSite` carries `ax`/`az`, its
+place on Earth, taken once when it is filed, so no geographic hash downstream
+pays a cosine per site.
+
+**Measured**, `devtools/veg-anchor.test.mjs`, pure node, with the rule it
+replaced as its control at every claim:
+
+| | shipped | the old rule (control) |
+|---|---|---|
+| a place falls in one cell under every origin | yes | **fails at 5 of 5 places** |
+| a cell's candidates land at the same lat/lon | yes, to under a millimetre | — |
+| density at a place under every origin | identical to float round-trip | **spread > 0.1** |
+| density at the truck on arrival | an ordinary sample, mean 0.50 | **exactly 0, everywhere** |
+| thickets per cell at the spawn | **1.13**, against 1.13 five km out | **0.00**, against 1.13 |
+
+…and in a world (`tree-stand.test.mjs`, the Camps Bay fixture, whose origin is
+the capture's own centre and therefore sits in the trough): **159 skeletons in
+53 stands became 3,730 in 492** — 2.0 sites a cell, which is strays and ground
+events alone, becoming 46, which is strays plus full thicket membership.
+
+**WHAT THAT NUMBER IS NOT is a 23× denser world.** Past about 900 m the old
+field was already at its mean, so only the spawn's own neighbourhood changes
+count; everywhere else what changed is WHICH trees, not how many. The near
+field around a spawn now carries the load every other part of the map already
+carried.
+
+**AND `perf-check` NEEDED BOTH A STUB AND AN HONEST NOTE.** It broke exactly as
+this file predicts a sandboxed check breaks — `ReferenceError: vegCellOf is not
+defined` — and the fix is not to hand it the real transform: its mock world is
+a flat unprojected plane whose grid is keyed on local indices, so the real rule
+would look up absolute keys, find nothing, place no trees and compare two empty
+worlds as equal. **A check that passes by drawing nothing is worse than no
+check.** It stubs the lattice as the identity on local metres, says so, and
+keeps the claim it was written for — that the sliced refresh refills what the
+pre-slice one did GIVEN THE SAME CELL WALK. The walk's own frame is a different
+claim and `veg-anchor.test.mjs` is where it lives. Its mock sites gained
+`ax`/`az` for the same reason: without them the far tier's thinning hashes NaN,
+which is never greater than its threshold, so it culls nothing — and the
+snapshot does not cover the impostor mesh, so that would have passed silently.
+
+**Two traps in writing the test**, both the same shape as faults already in
+here: stripping TypeScript annotations with a regex produced a `toLocal` that
+was not a function (esbuild transpiles it now), and a `const` inside a `vm`
+script lives in that script's lexical scope and never becomes a property of the
+context — only a `function` declaration does, which is why the sibling globe
+test never met it. The helpers are published onto the context by hand.
+
+**What is NOT done here, deliberately:** nothing about population, LOD or
+impostor parameters, because the seat's own instruction was to fix this first
+and every one of those dials was tuned against a field with a hole in it. The
+antimeridian and the poles are discontinuities of the absolute frame — `lon`
+±180 lands in cells 19.9M apart and `cos(lat)` is floored at 0.02 — which
+`culture.ts` has always had and which nothing has yet driven across.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the
