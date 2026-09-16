@@ -34203,6 +34203,123 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
 };
 
 /** Every decoded variant's extent, for the harness: a bad bake shows here. */
+/**
+ * ── THE CONTROL SHEET: EVERY VARIANT, THE SAME FRAMING, WITH ITS NUMBER ──
+ *
+ * The seat's ask, in its own words: get a control set across forms and
+ * varieties first, then improve dramatically against that baseline. Judging a
+ * tree is a judgement, so the baseline has to be PICTURES — and a picture with
+ * no number beside it cannot say whether the next bake improved anything, so
+ * each cell carries the one quantity the bake has never measured.
+ *
+ * CLOSURE is that quantity: the share of the tree's OWN bounding box that the
+ * tree's silhouette fills, from the side. The bake already measures `clear`,
+ * `width`, `taper` and `card` — a card wider than a quarter of its crown is
+ * flagged, which is the stack-of-plates fault — and nothing measures whether
+ * the crown CLOSES. The atlas made it visible (a conifer at Yosemite fills 7
+ * to 10 per cent of its box) and this puts it beside the frame it explains.
+ *
+ * IT RENDERS THE SHIPPED GEOMETRY THROUGH THE SHIPPED MATERIAL, on an
+ * InstancedMesh of one: `ezMaterial`'s crown tint is a replace on
+ * `vColor.xyz *= instanceColor.xyz`, which three emits only under
+ * USE_INSTANCING_COLOR, so a plain Mesh would silently draw the bark rule for
+ * the whole tree and the sheet would be a picture of a material nobody ships.
+ *
+ * The ortho box is the geometry's own, so every cell is framed the same way
+ * whatever the tree's size — which is what makes two variants comparable and
+ * what makes the coverage a fraction rather than a pixel count.
+ */
+(window as unknown as { __ezsheet?: object }).__ezsheet = (opt: {
+  px?: number; elev?: number; az?: number; cols?: number; mag?: number;
+} = {}): object => {
+  const PX = Math.max(16, Math.min(512, Math.round(opt.px ?? 224)));
+  const MAG = Math.max(1, Math.round(opt.mag ?? 1));
+  const elev = ((opt.elev ?? 8) * Math.PI) / 180;
+  const az = ((opt.az ?? 0) * Math.PI) / 180;
+  const rt = new THREE.WebGLRenderTarget(PX, PX, {
+    minFilter: THREE.LinearFilter, magFilter: THREE.NearestFilter,
+    format: THREE.RGBAFormat, type: THREE.UnsignedByteType, depthBuffer: true, samples: 4,
+  });
+  // The world's own key and fill, so a crown reads as the game lights it.
+  const sc = new THREE.Scene();
+  const key = new THREE.DirectionalLight(0xffffff, 2.1);
+  key.position.set(-0.55, 0.72, 0.42);
+  sc.add(key, new THREE.HemisphereLight(0xbcd0e6, 0x4a4634, 1.15));
+  const mat = ezMaterial(0x4a3826, {});
+  const rows: Array<Record<string, unknown>> = [];
+  const cells: Array<{ px: Uint8Array; label: string }> = [];
+  const buf = new Uint8Array(PX * PX * 4);
+  const prevTarget = renderer.getRenderTarget();
+  for (const fam of EZ_FAMILIES) {
+    const vs = ezVariants(fam);
+    for (let i = 0; i < vs.length; i++) {
+      const g = vs[i].geometry;
+      if (!g.boundingBox) g.computeBoundingBox();
+      const bb = g.boundingBox as THREE.Box3;
+      const hx = Math.max(1e-3, Math.max(Math.abs(bb.min.x), Math.abs(bb.max.x),
+        Math.abs(bb.min.z), Math.abs(bb.max.z)) * 1.06);
+      const hy = Math.max(1e-3, (bb.max.y - bb.min.y) * 0.5 * 1.06);
+      const cy = (bb.min.y + bb.max.y) * 0.5;
+      const m = new THREE.InstancedMesh(g, mat, 1);
+      m.setMatrixAt(0, new THREE.Matrix4());
+      m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array([0.30, 0.42, 0.20]), 3);
+      m.frustumCulled = false;
+      sc.add(m);
+      const cam = new THREE.OrthographicCamera(-hx, hx, hy, -hy, 0.01, 40);
+      const c = Math.cos(elev);
+      cam.position.set(Math.sin(az) * c * 8, cy + Math.sin(elev) * 8, Math.cos(az) * c * 8);
+      cam.lookAt(0, cy, 0);
+      cam.updateProjectionMatrix();
+      renderer.setRenderTarget(rt);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear(true, true, true);
+      renderer.render(sc, cam);
+      renderer.readRenderTargetPixels(rt, 0, 0, PX, PX, buf);
+      sc.remove(m);
+      m.dispose();
+      let cov = 0;
+      for (let k = 3; k < buf.length; k += 4) if (buf[k] >= 128) cov++;
+      const closure = cov / (PX * PX);
+      rows.push({ fam, i, label: vs[i].label, form: vs[i].form, crown: vs[i].crown,
+        tris: vs[i].tris, hx: +hx.toFixed(3), hy: +hy.toFixed(3),
+        closure: +closure.toFixed(3) });
+      cells.push({ px: buf.slice(), label: `${vs[i].label}  ${(closure * 100).toFixed(0)}%  ${vs[i].tris}t` });
+    }
+  }
+  renderer.setRenderTarget(prevTarget);
+  rt.dispose();
+  mat.dispose();
+  // ── THE SHEET ITSELF, ASSEMBLED IN THE PAGE ──
+  // A 2D canvas and one toDataURL, because the alternative is encoding a PNG
+  // in node from raw bytes and the browser already has an encoder.
+  const cols = Math.max(1, Math.round(opt.cols ?? 6));
+  const CW = PX * MAG, LH = 16;
+  const rowsN = Math.ceil(cells.length / cols);
+  const cv = document.createElement('canvas');
+  cv.width = cols * CW; cv.height = rowsN * (CW + LH);
+  const cx = cv.getContext('2d') as CanvasRenderingContext2D;
+  cx.imageSmoothingEnabled = false;
+  cx.fillStyle = '#20242a'; cx.fillRect(0, 0, cv.width, cv.height);
+  const tile = document.createElement('canvas');
+  tile.width = PX; tile.height = PX;
+  const tctx = tile.getContext('2d') as CanvasRenderingContext2D;
+  const img = tctx.createImageData(PX, PX);
+  cells.forEach((cell, n) => {
+    // A render target's rows run from the bottom; a canvas's run from the top.
+    for (let y = 0; y < PX; y++) {
+      const src = (PX - 1 - y) * PX * 4;
+      img.data.set(cell.px.subarray(src, src + PX * 4), y * PX * 4);
+    }
+    tctx.putImageData(img, 0, 0);
+    const gx = (n % cols) * CW, gy = Math.floor(n / cols) * (CW + LH);
+    cx.drawImage(tile, 0, 0, PX, PX, gx, gy, CW, CW);
+    cx.strokeStyle = '#3a4150'; cx.strokeRect(gx + 0.5, gy + 0.5, CW - 1, CW - 1);
+    cx.fillStyle = '#c8d2e0'; cx.font = '12px monospace';
+    cx.fillText(cell.label, gx + 4, gy + CW + 12);
+  });
+  return { rows, cols, px: PX, mag: MAG, elev: opt.elev ?? 8, sheet: cv.toDataURL('image/png') };
+};
+
 (window as unknown as { __ezgeo?: object }).__ezgeo = (): object[] => {
   const rows: object[] = [];
   for (const fam of EZ_FAMILIES) {

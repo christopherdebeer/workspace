@@ -4788,6 +4788,67 @@ questions no pixel metric in this repo answers — **where is this tier drawing,
 how large is it there, and does its outline agree with the skeleton beside
 it** — and the last of those is the whole test of an impostor.
 
+### The control set: twenty-nine variants, one framing, one number
+
+The seat's instruction, verbatim: *first to get a control set across forms and
+varieties and then look to improve dramatically against that baseline.*
+`devtools/tree-forms.mjs` is that control — every EZ variant rendered through
+the SHIPPED material, framed by its own bounding box so two trees of different
+size are comparable, with **closure** beside it: the share of that box the
+silhouette fills. No world, no streaming, no arrival order, so the sheet is the
+same every run, which is what makes it a baseline rather than a snapshot.
+
+| form | n | min | mean | max |
+|---|---|---|---|---|
+| round | 6 | 17.0% | 23.7% | 28.0% |
+| columnar | 2 | 25.9% | 27.6% | 29.4% |
+| **conic** | **12** | **5.1%** | **13.0%** | **24.9%** |
+| umbrella | 3 | 19.2% | 20.5% | 22.5% |
+| palm | 2 | 13.0% | 14.1% | 15.2% |
+| bare | 4 | 2.1% | 2.6% | 3.3% |
+
+**THE CONIFER FAMILY IS TWO DIFFERENT BAKES AND THE NUMBERS SAY SO.** Its first
+four variants — `conic 1-4`, the frond recipe the lab measured and approved —
+read 22.0 to 24.9% at **1,261-1,302 triangles**, and the frames show a whorled
+spruce that is unmistakable at a glance. The other EIGHT are the growth forms
+(`open whorled`, `high crown`, `wind shaped`, `broken leader`) at **5.1 to
+9.6%** and 469-651 triangles, and the frames show a bare pole with a dozen
+one-pixel dashes on it. They are not thin trees; they are not trees.
+
+**AND THE DISTRICT PALETTE PICKS TWO OF THE TWELVE.** At Yosemite the atlas
+reported the live slots as `conifer:4, 6, 8, 9` — open whorled, high crown and
+both wind-shaped — **four of the eight poles and none of the four good ones**.
+So the seat's Yosemite frames were not bad luck about lighting or distance:
+that district genuinely grows the thinnest silhouettes in the atlas.
+
+**AND THIS IS THE SAME FACT THIS FILE ALREADY RECORDED AS A PRICING BUG.** The
+tree-spend unit measured conifer charged at its atlas mean of 1,713 triangles
+while DRAWING 543, called the gap an estimator fault, and fixed the estimator.
+It was also a QUALITY fault and nobody could see it: the realised 543 is the
+mean of the cheap growth forms, and they are cheap because they are empty. A
+per-tree price three times under the family mean was evidence about the
+silhouette all along, and there was no instrument that could say so.
+
+What the rest of the sheet says, in the order worth fixing:
+
+- **The palm is a cone.** Both variants are a leaning trunk with a solid green
+  cone on top and no fronds at all — 13-15% closure, and what closure it has is
+  a filled shape rather than a crown. The lab's own note says `branch.force` is
+  what makes a palm a palm; the bake is not using it.
+- **A broadleaf is six to twelve large flat cards on a bare stick.** No branch
+  structure survives the reduction (`children x0.3` is what sets the number of
+  crown anchors, so the crown is thin at the root), and at 17-28% the canopy
+  never closes. `round 4` is 391 triangles and 17.0%.
+- **The columnar broadleaf is not columnar** — both variants are a leaning
+  sapling with its leaves at the top, which is a different tree from the one
+  the vocabulary names.
+- **The snags are right at 2-3%**, by definition, and are the control that says
+  the metric is measuring what it claims.
+
+`ELEV=` takes a sheet per elevation (8 and 35 degrees by default); closure moves
+by under two points between them, so the number is a property of the tree
+rather than of the framing. `PX=`, `MAG=` and `COLS=` size the cells.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the
