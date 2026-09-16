@@ -4833,11 +4833,63 @@ distance:
 | coverage ratio, round / conic / umbrella | 0.54 / 0.44 / 0.50 | **1.02 / 1.00 / 0.96** |
 
 The ratio goes to one across every form, so the whole deficit is the merge and
-none of it is the tile's resolution or the alpha test. **Not fixed here, and
-deliberately:** the y-axis fix changes what every impostor in the game draws
-and wants the seat's eye on its own frame; the merge wants `ezMaterial`'s merge
-block EXPORTED so the bake reads one string rather than a second copy, which is
-the same rule `IMP_ATLAS_GLSL` and `FOLIAGE_WIND_UNIFORMS` already follow.
+none of it is the tile's resolution or the alpha test.
+
+**THE MERGE IS `EZ_MERGE_GLSL` NOW, AND THE BAKE READS THE SAME STRING.** It
+was eight lines inside `ezMaterial`'s `begin_vertex` block; it is a function
+(`ezMergeAt`) beside `EZ_MERGE_GROW`, which the material calls per instance
+from the camera and `bakeMaterial` calls at a stated size on a plain mesh with
+no instance matrix at all. A second copy of it is the fault the file already
+records one constant up: the hull is inset by exactly what the growth adds
+back, so two copies of either number is *a tree whose far crown is a different
+SIZE from its near one*.
+
+**AND THE BAKE STANDS AT THE BOTTOM OF THE BAND (`EZ_MERGE_PX[0]`, 26 px), not
+at some middle.** The tier only ever draws past the skeletons' own admitted
+edge — a 20 m conifer at 428 m is fourteen art pixels — so every card is used
+where its tree would be fully merged, and a crown that opened back up at the
+swap would be the pop this tier exists to remove. A card drawn NEARER than the
+band is the tier's own recorded caveat and happens only when the population cap
+is forced low enough to collapse the geometry's edge.
+
+**IT READS `uEzMerge`, so `?ezmerge=0` stays a true A/B for BOTH halves.** A
+bake that merged while the skeleton did not would turn that switch into a
+comparison of two different things — which is exactly how the deficit above was
+attributed, so keeping the switch honest is not tidiness.
+
+**Measured**, the same sheet, the bake the only change:
+
+| at-yosemite, elev 8° | before | **at 200 m** | **at 450 m** |
+|---|---|---|---|
+| mean IoU (all 37) | 0.438 | **0.823** | **0.827** |
+| round (12) | 0.53 · cov 0.54 | **0.95 · 1.03** | **0.96 · 1.04** |
+| conic (12) | 0.40 · cov 0.44 | **0.86 · 1.13** | **0.90 · 1.05** |
+| umbrella (5) | 0.49 · cov 0.50 | **0.92 · 1.01** | **0.89 · 0.98** |
+| columnar (2) | 0.54 · cov 0.56 | **0.92 · 1.08** | **0.97 · 1.03** |
+| palm (2) | 0.56 · cov 0.63 | **0.92 · 1.06** | **0.95 · 1.02** |
+
+**READ THE TWO DISTANCE COLUMNS AGAINST EACH OTHER AND THE CONIC ROW EXPLAINS
+ITSELF.** At 200 m a conifer is 31 art pixels, which is INSIDE the merge band,
+so the skeleton there is only about five sixths merged while the card is fully
+merged — hence a coverage ratio of 1.13, the card carrying more than the tree.
+At 450 m, which is the range the tier actually draws at, the skeleton is under
+the band too and the ratio falls to 1.05. **The over-coverage at 200 m is not
+an error to tune away; it is the sheet being read at a distance the handover
+does not happen at**, and a bake tuned to make that column 1.00 would be wrong
+everywhere the cards are used.
+
+The atlas's own tiles say the same thing without a frame — `__impatlas`'s
+`sideMean`, the number this file's own note said nothing measured: conifer:9
+**0.158 → 0.372**, conifer:11 0.237 → 0.487, conifer:10 0.266 → 0.542 on the
+live Yosemite atlas. And the tier on screen is unchanged in shape: 896 drawn,
+census `veg-impostor` 3,584 = 896 × 4 exactly, 0 of 240 upright tiles empty,
+ink 0.39× the ground against a 0.25 gate.
+
+**The four snags stay at IoU 0 and that is the honest answer.** A snag at 200 m
+is two or three isolated black pixels — 1% of its own box — and the merge does
+nothing for a tree with no crown to close. A 32 px tile cannot carry that under
+a binary alpha test, which is a statement about the snag rather than about the
+bake, and the tool counts them apart for exactly that reason.
 
 **WHAT THE SHEET IS, in one paragraph.** Each cell is one variant twice — the
 skeleton left, its baked card right — through ONE ortho camera, ONE quantiser

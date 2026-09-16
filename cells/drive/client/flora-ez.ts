@@ -118,6 +118,37 @@ const EZ_PALM_BLADE = floraQuery.get('ezpalm') !== '0';
  *  the near one and only solid. Two copies of this number is a tree that grows
  *  as you drive away from it. */
 export const EZ_MERGE_GROW = 2.2;
+/**
+ * The band the merge runs over, in ART PIXELS of the tree's projected height:
+ * above the upper bound the crown is exactly what it was baked as, holes and
+ * all, and below the lower bound it is one closed mass.
+ *
+ * EXPORTED BECAUSE THE IMPOSTOR ATLAS STANDS AT THE BOTTOM OF IT. The tier
+ * only ever draws past the skeletons' own admitted edge — a 20 m conifer at
+ * 428 m is fourteen art pixels — so every card is used where the tree it
+ * replaces would be fully merged, and the bake has to photograph it that way
+ * or the handover is a crown opening back up at the swap.
+ */
+export const EZ_MERGE_PX = [26, 58] as const;
+/**
+ * ── THE MERGE, WRITTEN ONCE, BECAUSE TWO COPIES ARE TWO CROWNS ──
+ *
+ * `ezMaterial` applies it per instance from the camera; `bakeImpAtlasSlot`
+ * applies it at a stated size to a plain mesh with no instance matrix at all.
+ * Those are different callers and the same arithmetic, and a second copy of it
+ * is the fault this file already carries a note about one constant up: a tree
+ * whose far crown is a different SIZE from its near one.
+ *
+ * NO BACKTICKS IN HERE — it is a TS template literal by the time it reaches
+ * the shader, and the repo records six rounds lost to exactly that.
+ */
+export const EZ_MERGE_GLSL = [
+  'vec3 ezMergeAt(vec3 p, vec3 pad, vec3 hull, float px, float amt) {',
+  `  float m = (1.0 - smoothstep(${EZ_MERGE_PX[0].toFixed(1)}, ${EZ_MERGE_PX[1].toFixed(1)}, px)) * amt;`,
+  `  vec3 far = hull + (p - pad) * mix(1.0, ${EZ_MERGE_GROW.toFixed(2)}, m);`,
+  '  return mix(p, far, m);',
+  '}',
+].join('\n');
 type GrowthVariant = EzBakedVariant & {
   habit?: string; pads?: string; habitats?: readonly string[]; state?: string;
 };
@@ -1177,7 +1208,7 @@ export function ezMaterial(
     sh.uniforms.uGust = wind.uGust;
     sh.uniforms.uWindK = wind.uWindK;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', `#include <common>\nattribute float aWood; attribute float aSky; attribute vec3 aEnv; attribute vec3 aPad; attribute vec3 aHull; attribute vec4 aEzSurf;\nuniform vec3 uWood; uniform vec3 uEzSun; uniform float uEzBend; uniform float uEzMerge; uniform float uEzPxH; uniform float uEzPxFix;\nvarying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky; varying vec3 vEzEnv; varying vec3 vEzSun; varying vec4 vEzSurf;\n${FOLIAGE_WIND_UNIFORMS}`)
+      .replace('#include <common>', `#include <common>\nattribute float aWood; attribute float aSky; attribute vec3 aEnv; attribute vec3 aPad; attribute vec3 aHull; attribute vec4 aEzSurf;\nuniform vec3 uWood; uniform vec3 uEzSun; uniform float uEzBend; uniform float uEzMerge; uniform float uEzPxH; uniform float uEzPxFix;\nvarying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky; varying vec3 vEzEnv; varying vec3 vEzSun; varying vec4 vEzSurf;\n${EZ_MERGE_GLSL}\n${FOLIAGE_WIND_UNIFORMS}`)
       .replace('#include <begin_vertex>', [
         '#include <begin_vertex>',
         // ── THE CROWN CLOSES AS THE TREE SHRINKS ──
@@ -1203,9 +1234,9 @@ export function ezMaterial(
         '    float ezTall = length(instanceMatrix[1].xyz);',
         '    ezPx = ezTall * uEzPxH * projectionMatrix[1][1] * 0.5 / max(1.0, distance(cameraPosition, ezAt));',
         '  }',
-        '  float ezM = (1.0 - smoothstep(26.0, 58.0, ezPx)) * uEzMerge;',
-        `  vec3 ezFar = aHull + (transformed - aPad) * mix(1.0, ${EZ_MERGE_GROW.toFixed(2)}, ezM);`,
-        '  transformed = mix(transformed, ezFar, ezM);',
+        // The arithmetic itself is `EZ_MERGE_GLSL`, so the atlas's bake applies
+        // the same crown at the same band — see the note on EZ_MERGE_PX.
+        '  transformed = ezMergeAt(transformed, aPad, aHull, ezPx, uEzMerge);',
         '}',
         '#endif',
         '#ifdef USE_INSTANCING',

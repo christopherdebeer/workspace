@@ -49,6 +49,7 @@
  * for the same reason.
  */
 import * as THREE from 'three';
+import { EZ_MERGE_GLSL, EZ_MERGE_PX, ezLookU } from './flora-ez';
 
 /** One slot's tile grid: azimuths across, elevations down, then the plan view
  *  alone on the last row. Sized against what a tree is actually DRAWN at: the
@@ -243,20 +244,56 @@ export const IMP_ATLAS_GLSL = [
  * material with an analytic crown normal, so the sun is applied at draw time
  * and moves with the day; baking a sun into the atlas would freeze the world's
  * light into the far half of every wood.
+ *
+ * ── AND IT PHOTOGRAPHS THE CLOSED CROWN, WHICH IT DID NOT ──
+ *
+ * This was a plain `projectionMatrix * modelViewMatrix * position` and the
+ * skeleton it stands in for is drawn through `ezMaterial`, whose crown slides
+ * onto its own silhouette hull and grows into one mass below `EZ_MERGE_PX[0]`
+ * art pixels. So the atlas held the OPEN crown — holes and all — and the card
+ * stood where the CLOSED one would: measured on the contact sheet at
+ * at-yosemite, a card carried about HALF its tree's lit pixels (coverage ratio
+ * 0.54 round, 0.44 conic, 0.50 umbrella) and three to five times its
+ * fragments. Re-run with `?ezmerge=0`, which draws the skeleton exactly as
+ * baked at every distance, the ratio went to 1.02 / 1.00 / 0.96 and the mean
+ * silhouette IoU from 0.438 to 0.731 — so the whole deficit was the merge and
+ * none of it was the tile's resolution or the alpha test.
+ *
+ * IT BAKES AT THE BOTTOM OF THE BAND, not at some middle. The tier only ever
+ * draws past the skeletons' own admitted edge, where the tree is already well
+ * under the band (a 20 m conifer at 428 m is fourteen art pixels), so every
+ * card is used where its tree would be fully merged. A card drawn NEARER than
+ * that is the tier's own recorded caveat — it happens only when the population
+ * cap is forced low enough to collapse the geometry's edge — and a crown that
+ * opened back up at the swap would be the pop this whole tier exists to remove.
+ *
+ * AND IT READS `uEzMerge`, so `?ezmerge=0` remains a true A/B for BOTH halves.
+ * A bake that merged while the skeleton did not would make that switch a
+ * comparison of two different things, which is exactly how the deficit above
+ * was attributed in the first place.
  */
 function bakeMaterial(topY: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     vertexColors: true,
     side: THREE.DoubleSide,
     blending: THREE.NoBlending,
-    uniforms: { uTopY: { value: Math.max(1e-3, topY) } },
+    uniforms: {
+      uTopY: { value: Math.max(1e-3, topY) },
+      uMergePx: { value: EZ_MERGE_PX[0] },
+      uMergeAmt: ezLookU.uEzMerge,
+    },
     vertexShader: [
-      'attribute float aWood;',
-      'uniform float uTopY;',
+      'attribute float aWood; attribute vec3 aPad; attribute vec3 aHull;',
+      'uniform float uTopY; uniform float uMergePx; uniform float uMergeAmt;',
       'varying float vW; varying vec3 vC; varying float vH;',
+      EZ_MERGE_GLSL,
       'void main() {',
-      '  vW = aWood; vC = color; vH = clamp(position.y / uTopY, 0.0, 1.0);',
-      '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+      '  vec3 p = position;',
+      '  if (uMergeAmt > 0.001 && aWood < 0.5) p = ezMergeAt(p, aPad, aHull, uMergePx, uMergeAmt);',
+      // THE TONE RAMP FOLLOWS THE DRAWN VERTEX, not the baked one: a cluster
+      // that has slid up onto the hull is lit as the height it is drawn at.
+      '  vW = aWood; vC = color; vH = clamp(p.y / uTopY, 0.0, 1.0);',
+      '  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);',
       '}',
     ].join('\n'),
     fragmentShader: [
