@@ -39,6 +39,7 @@
  */
 import * as THREE from 'three';
 import { FOLIAGE_WIND_UNIFORMS, foliageWind } from './flora-ez';
+import { IMP_ATLAS, IMP_ATLAS_GLSL } from './tree-atlas';
 
 /** The vocabulary the bake already measures its skeletons against, so an
  *  impostor and the tree it stands in for are asking for the same shape. */
@@ -72,11 +73,19 @@ export const IMPOSTOR_WIDTH: Record<ImpostorForm, number> = {
  *
  * FOUR TRIANGLES A TREE, against about a thousand for a baked skeleton.
  */
-export function impostorGeometry(): THREE.BufferGeometry {
+export function impostorGeometry(atlas = false): THREE.BufferGeometry {
   const g = new THREE.BufferGeometry();
   const pos: number[] = [], uv: number[] = [], card: number[] = [], idx: number[] = [];
+  // ── THE CARD IS CENTRED ON THE ATLAS PATH AND STANDS ON THE GROUND OFF IT ──
+  // A baked tile is the whole tree inside an ortho box, so the card is that
+  // box: the instance's translation is the box's CENTRE and the card spans
+  // [-0.5, 0.5] either way. The analytic path has no box — its silhouette is
+  // written in a frame that runs from the tree's foot to its top — so it keeps
+  // the instance at the foot and the card from y=0 to y=1. The world writes
+  // the matrix for whichever path is live and the two never mix.
+  const y0 = atlas ? -0.5 : 0, y1 = atlas ? 0.5 : 1;
   // The side card: x across, y up, in the instance's unit frame.
-  pos.push(-0.5, 0, 0, 0.5, 0, 0, 0.5, 1, 0, -0.5, 1, 0);
+  pos.push(-0.5, y0, 0, 0.5, y0, 0, 0.5, y1, 0, -0.5, y1, 0);
   uv.push(0, 0, 1, 0, 1, 1, 0, 1);
   card.push(0, 0, 0, 0);
   idx.push(0, 1, 2, 0, 2, 3);
@@ -160,6 +169,19 @@ export interface ImpostorTuning {
   fade?: { value: THREE.Vector2 };
   /** What it dissolves TOWARD: the local ground's own colour. */
   ground?: { value: THREE.Color };
+  /**
+   * The baked atlas, and the switch. A texture here puts the card on the
+   * ATLAS path — it samples the variant the world baked into `aForm`'s slot
+   * instead of drawing a width profile — and `null` keeps the analytic
+   * silhouette that shipped first. Both are compiled from this one function
+   * because the difference is a handful of lines in two chunks, and a second
+   * material would be a second place for the wind, the fade, the dissolve and
+   * the crown normal to drift.
+   */
+  atlas?: { value: THREE.Texture | null };
+  /** The timber's own colour, for the wood the atlas marks in its G channel —
+   *  the same bark `ezMaterial` gives the skeleton standing beside it. */
+  bark?: { value: THREE.Color };
 }
 
 /**
@@ -178,6 +200,17 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
   const uTop = tuning.top ?? { value: 0 };
   const uFade = tuning.fade ?? { value: new THREE.Vector2(1e6, 2e6) };
   const uGround = tuning.ground ?? { value: new THREE.Color(0.5, 0.5, 0.5) };
+  const uAtlas = tuning.atlas ?? { value: null };
+  const uBark = tuning.bark ?? { value: new THREE.Color(0.32, 0.25, 0.19) };
+  const ATLAS = !!uAtlas.value;
+  // The atlas geometry is compile-time and the shader reads it as literals
+  // rather than uniforms: a tile grid that could change between the bake and
+  // the lookup is a class of fault this file already carries a note about.
+  const K = {
+    az: IMP_ATLAS.az + '.0', cols: IMP_ATLAS.cols + '.0', rows: IMP_ATLAS.rows + '.0',
+    sc: IMP_ATLAS.slotCols + '.0', planRow: IMP_ATLAS.el.length + '.0',
+    e0: ((IMP_ATLAS.el[0] + IMP_ATLAS.el[1]) * 0.5).toFixed(2), e1: ((IMP_ATLAS.el[1] + IMP_ATLAS.el[2]) * 0.5).toFixed(2),
+  };
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = wind.uTime;
     sh.uniforms.uGust = wind.uGust;
@@ -185,20 +218,32 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
     sh.uniforms.uImpTop = uTop;
     sh.uniforms.uImpFade = uFade;
     sh.uniforms.uImpGround = uGround;
+    if (ATLAS) {
+      sh.uniforms.uImpAtlas = uAtlas as { value: THREE.Texture };
+      sh.uniforms.uImpBark = uBark;
+      sh.uniforms.uImpAtlasK = { value: new THREE.Vector4(
+        IMP_ATLAS.tile, IMP_ATLAS.cols, IMP_ATLAS.rows, IMP_ATLAS.size) };
+    }
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', [
         '#include <common>',
+        // ── `aForm` IS THE ATLAS SLOT ON ONE PATH AND THE FORM ON THE OTHER ──
+        // They are never both live: an atlas slot names a baked VARIANT and a
+        // form names one of six analytic width profiles, and the world writes
+        // whichever the material it built is reading.
         'attribute float aCard; attribute float aForm; attribute float aYaw;',
         'uniform float uImpTop;',
         'varying float vImpCard; varying float vImpForm; varying float vImpYaw;',
         'varying vec3 vImpRight; varying vec3 vImpOut; varying vec2 vImpUv;',
         'varying float vImpFade;',
         'uniform vec2 uImpFade;',
+        ATLAS ? 'varying vec2 vImpBlock; varying float vImpAz; varying float vImpEl;' : '',
         FOLIAGE_WIND_UNIFORMS,
       ].join('\n'))
       .replace('#include <begin_vertex>', [
         '#include <begin_vertex>',
         'vImpFade = 0.0;',
+        ATLAS ? 'vImpBlock = vec2(0.0); vImpAz = 0.0; vImpEl = 0.0;' : '',
         '#ifdef USE_INSTANCING',
         // THE INSTANCE MATRIX IS TRANSLATION AND SCALE ONLY, which is what
         // makes this one line: a horizontal unit vector survives a scale that
@@ -219,12 +264,26 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         // distance changes every frame. Here it is the camera's own distance,
         // continuous, and it costs the pass nothing at all.
         'vImpFade = clamp((impFl - uImpFade.x) / max(1.0, uImpFade.y - uImpFade.x), 0.0, 1.0);',
+        ...(ATLAS ? [
+          // ── WHERE THIS TREE'S BLOCK IS, AND WHICH WAY THE CAMERA STANDS ──
+          // The azimuth is taken in the TREE'S own frame — the view azimuth
+          // less its yaw — so a stand of one variant shows a different face
+          // per tree from the same seat, which is what the analytic path's
+          // silhouette phase bought and is kept for the same reason.
+          'vImpBlock = vec2(mod(aForm, ' + K.sc + ') * ' + K.cols + ',',
+          '                 floor(aForm / ' + K.sc + ') * ' + K.rows + ');',
+          'vImpAz = atan(impDir.x, impDir.y) - aYaw;',
+          'float impLen = max(1e-4, length(impToCam));',
+          'vImpEl = degrees(asin(clamp(impToCam.y / impLen, -1.0, 1.0)));',
+        ] : []),
         'if (aCard < 0.5) {',
         '  transformed = impRight * position.x + vec3(0.0, position.y, 0.0);',
         '} else {',
         // The top card lies at the crown's own middle so it reads as the
-        // canopy rather than as a lid on the ground.
-        '  transformed = vec3(position.x, 0.72, position.z);',
+        // canopy rather than as a lid on the ground. On the atlas path the
+        // instance is ALREADY at the box centre, so it needs no lift at all.
+        ATLAS ? '  transformed = vec3(position.x, 0.0, position.z);'
+              : '  transformed = vec3(position.x, 0.72, position.z);',
         '}',
         '#endif',
         'vImpCard = aCard; vImpForm = aForm; vImpYaw = aYaw;',
@@ -233,12 +292,14 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         // a map, an alpha map, a normal map — and this material has none, so
         // reading it cost a link failure and a tier that drew nothing while
         // logging to a console no phone has. `position` is always declared,
-        // and this geometry's positions ARE the card's frame: the side card
-        // spans x in [-0.5, 0.5] and y in [0, 1], the top card x and z.
-        'vImpUv = aCard < 0.5 ? vec2(position.x + 0.5, position.y)',
-        '                     : vec2(position.x + 0.5, position.z + 0.5);',
+        // and this geometry's positions ARE the card's frame.
+        ATLAS
+          ? 'vImpUv = aCard < 0.5 ? vec2(position.x + 0.5, position.y + 0.5)\n'
+            + '                     : vec2(position.x + 0.5, position.z + 0.5);'
+          : 'vImpUv = aCard < 0.5 ? vec2(position.x + 0.5, position.y)\n'
+            + '                     : vec2(position.x + 0.5, position.z + 0.5);',
         // The rise is the card's own height, which is already normalised.
-        foliageWind('max(0.0, transformed.y)', '1.0'),
+        foliageWind(ATLAS ? 'clamp(position.y + 0.5, 0.0, 1.0)' : 'max(0.0, transformed.y)', '1.0'),
       ].join('\n'));
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', [
@@ -247,51 +308,93 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         'varying float vImpCard; varying float vImpForm; varying float vImpYaw;',
         'varying vec3 vImpRight; varying vec3 vImpOut; varying vec2 vImpUv;',
         'varying float vImpFade;',
-        IMPOSTOR_GLSL,
+        ATLAS ? 'varying vec2 vImpBlock; varying float vImpAz; varying float vImpEl;' : '',
+        ATLAS ? 'uniform vec3 uImpBark;' : '',
+        ATLAS ? IMP_ATLAS_GLSL : IMPOSTOR_GLSL,
       ].join('\n'))
       // THE SILHOUETTE IS THE ALPHA, and the alpha is BINARY — the composite
       // quantises to fourteen levels and dithers, so a soft edge is a smear of
       // threshold noise rather than a soft edge.
       .replace('#include <map_fragment>', [
         '#include <map_fragment>',
-        'float impX = (vImpUv.x - 0.5) * 2.0;',
-        'float impCov;',
-        'float impLo;',           // 0 at the crown base, 1 at its top
-        'if (vImpCard < 0.5) {',
-        '  float impCl = impClear(vImpForm);',
-        '  impLo = clamp((vImpUv.y - impCl) / max(0.05, 1.0 - impCl), 0.0, 1.0);',
-        '  float impW = impWidth(vImpForm, impLo, vImpYaw);',
-        '  float impTrunk = 0.10 + 0.05 * step(4.5, vImpForm);',
-        '  bool impInCrown = vImpUv.y >= impCl && abs(impX) <= impW;',
-        '  bool impInWood = vImpUv.y < impCl + 0.04 && abs(impX) <= impTrunk;',
-        '  impCov = (impInCrown || impInWood) ? 1.0 : 0.0;',
-        '  impCov *= 1.0 - uImpTop;',
-        '} else {',
-        '  vec2 impD = (vImpUv - 0.5) * 2.0;',
-        '  float impR = length(impD);',
-        '  float impA = atan(impD.y, impD.x);',
-        '  float impW = 0.88 + 0.12 * sin(impA * 3.0 + vImpYaw) + 0.07 * sin(impA * 5.0 - vImpYaw);',
-        '  if (vImpForm > 3.5 && vImpForm < 4.5) impW *= 0.62 + 0.38 * abs(sin(impA * 4.0 + vImpYaw));',
-        '  impLo = 1.0 - impR;',
-        '  impCov = impR <= impW ? 1.0 : 0.0;',
-        '  impCov *= uImpTop;',
-        '}',
+        'float impCov; float impLo; float impShade = 1.0; float impWood = 0.0;',
+        ...(ATLAS ? [
+          // ── TWO AZIMUTHS, MIXED; ONE ELEVATION, NEAREST ──
+          // Turning past a tree changes the azimuth continuously and the
+          // elevation hardly at all, so the axis that would POP is the one
+          // worth a second texture read. Mixing two silhouettes is a
+          // cross-fade rather than a morph, and under a binary alpha test that
+          // reads as the shape stepping between two neighbours a few degrees
+          // at a time instead of snapping forty-five.
+          'if (vImpCard < 0.5) {',
+          '  float impA = vImpAz * ' + K.az + ' / 6.2831853;',
+          '  float impA0 = floor(impA), impAf = impA - impA0;',
+          '  float impI0 = mod(impA0, ' + K.az + ');',
+          '  float impI1 = mod(impA0 + 1.0, ' + K.az + ');',
+          '  float impRow = vImpEl < ' + K.e0 + ' ? 0.0 : (vImpEl < ' + K.e1 + ' ? 1.0 : 2.0);',
+          '  vec4 impT = mix(impAtlasAt(vImpBlock, impI0, impRow, vImpUv),',
+          '                  impAtlasAt(vImpBlock, impI1, impRow, vImpUv), impAf);',
+          '  impCov = impT.a * (1.0 - uImpTop);',
+          '  vec3 impU = impUnpre(impT);',
+          '  impShade = impU.r; impWood = step(0.5, impU.g);',
+          '  impLo = clamp(vImpUv.y, 0.0, 1.0);',
+          '} else {',
+          // ── THE PLAN VIEW IS TURNED BY THE TREE, NOT BY THE CAMERA ──
+          // The card lies flat and carries no rotation, so the yaw is applied
+          // to the SAMPLE: the tile's u runs along world +x and its v along
+          // world -z (see the plan camera's up in tree-atlas.ts), so a
+          // rotation by -yaw of the card's own xz is the tree turned by +yaw.
+          '  vec2 impP = vImpUv - 0.5;',
+          '  float impC = cos(vImpYaw), impS = sin(vImpYaw);',
+          '  vec2 impQ = vec2(impP.x * impC + impP.y * impS, -impP.x * impS + impP.y * impC);',
+          '  vec4 impT = impAtlasAt(vImpBlock, 0.0, ' + K.planRow + ', vec2(0.5 + impQ.x, 0.5 - impQ.y));',
+          '  impCov = impT.a * uImpTop;',
+          '  vec3 impU = impUnpre(impT);',
+          '  impShade = impU.r; impWood = step(0.5, impU.g);',
+          '  impLo = clamp(1.0 - length(impP) * 2.0, 0.0, 1.0);',
+          '}',
+        ] : [
+          'float impX = (vImpUv.x - 0.5) * 2.0;',
+          'if (vImpCard < 0.5) {',
+          '  float impCl = impClear(vImpForm);',
+          '  impLo = clamp((vImpUv.y - impCl) / max(0.05, 1.0 - impCl), 0.0, 1.0);',
+          '  float impW = impWidth(vImpForm, impLo, vImpYaw);',
+          '  float impTrunk = 0.10 + 0.05 * step(4.5, vImpForm);',
+          '  bool impInCrown = vImpUv.y >= impCl && abs(impX) <= impW;',
+          '  bool impInWood = vImpUv.y < impCl + 0.04 && abs(impX) <= impTrunk;',
+          '  impCov = (impInCrown || impInWood) ? 1.0 : 0.0;',
+          '  impCov *= 1.0 - uImpTop;',
+          '} else {',
+          '  vec2 impD = (vImpUv - 0.5) * 2.0;',
+          '  float impR = length(impD);',
+          '  float impA = atan(impD.y, impD.x);',
+          '  float impW = 0.88 + 0.12 * sin(impA * 3.0 + vImpYaw) + 0.07 * sin(impA * 5.0 - vImpYaw);',
+          '  if (vImpForm > 3.5 && vImpForm < 4.5) impW *= 0.62 + 0.38 * abs(sin(impA * 4.0 + vImpYaw));',
+          '  impLo = 1.0 - impR;',
+          '  impCov = impR <= impW ? 1.0 : 0.0;',
+          '  impCov *= uImpTop;',
+          '}',
+          // ── TWO BROAD TONE REGIONS AND NO MORE ──
+          // A lit crown top and a shaded underside is most of what reads at
+          // this size; anything finer is the twig detail this tier discards.
+          'impShade = 0.78 + 0.30 * impLo;',
+        ]),
         'diffuseColor.a *= impCov;',
-        // ── TWO BROAD TONE REGIONS AND NO MORE ──
-        // A lit crown top and a shaded underside is most of what reads at this
-        // size; anything finer is the twig detail this tier exists to discard.
-        'diffuseColor.rgb *= 0.78 + 0.30 * impLo;',
       ].join('\n'))
-      // ── AND THE DISSOLVE GOES AFTER THE INSTANCE COLOUR, NOT BEFORE IT ──
+      // ── AND THE TINT GOES AFTER THE INSTANCE COLOUR, NOT BEFORE IT ──
       // three's Lambert chain runs map_fragment and THEN color_fragment, so at
       // the block above `diffuseColor` is still the material's white and the
       // tree's own colour has not arrived. A mix toward the ground written
       // there would be multiplied by the tree afterwards — a darkening rather
       // than a tint, and darkest where the fade is strongest, which is the
-      // opposite of a dissolve. The shade term above is a multiply and
-      // commutes; this one does not.
+      // opposite of a dissolve.
       .replace('#include <color_fragment>', [
         '#include <color_fragment>',
+        // THE WOOD IS BARK AND THE CROWN IS THE TREE'S OWN COLOUR, which is
+        // exactly the split `ezMaterial` makes one tier in — so a trunk does
+        // not turn green at the handoff. The atlas marks it per texel.
+        ATLAS ? 'diffuseColor.rgb = mix(diffuseColor.rgb, uImpBark, impWood);' : '',
+        'diffuseColor.rgb *= impShade;',
         // The same dissolve toward the ground the skeletons take at their own
         // edge, over this tier's own reach — or the tier would trade the cap's
         // hard edge for a hard edge of its own, one ring further out.
@@ -311,8 +414,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         // view-space normal every lighting chunk downstream reads. The sun
         // direction is view-space too, so the dot product was between two
         // different frames: the stands read flat and dark, and their shading
-        // TURNED WITH THE CAMERA rather than with the sun. The rotation is one
-        // matrix multiply and it belongs here, at the handover.
+        // TURNED WITH THE CAMERA rather than with the sun.
         'vec3 impWN;',
         'if (vImpCard < 0.5) {',
         '  float impNx = (vImpUv.x - 0.5) * 2.0;',

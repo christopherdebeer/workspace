@@ -35,7 +35,14 @@ mkdirSync(OUT, { recursive: true });
 // the fault lives in tree-impostor.ts, a sibling.
 const REV = process.env.REV;
 const d = await openDrive({
-  spot: `fixture=${FIX}&cam=chase&time=NOON&wx=clear&treetris=${TRIS}`,
+  // ── THE SCENE IS HELD AT THE OLD SEED DENSITY, DELIBERATELY ──
+  // `vegstems=0` is the uniform per-clump rate the game shipped with. This
+  // tool measures what the IMPOSTOR tier adds to a frame, and the canopy
+  // change closes the wood the tier draws into — so on the shipped density the
+  // skeletons already fill the band and the tier's own contribution reads as
+  // noise, which is a measurement of the canopy and not of the cards. Pin it,
+  // and every number here stays comparable to the ones recorded before it.
+  spot: `fixture=${FIX}&cam=chase&time=NOON&wx=clear&treetris=${TRIS}&vegstems=${process.env.STEMS ?? 0}`,
   tag: 'impostor', settle: 0, bootTimeout: 300000, ...(REV ? { rev: REV } : {}),
 });
 const q = (f, ...a) => d.page.evaluate(f, ...a);
@@ -64,6 +71,7 @@ for (const [tag, on] of [['a1', false], ['b1', true], ['a2', false]]) {
 // rather than zero — which is a different statement and must be printed as one.
 await q(() => window.__impostor(true));
 const census = await q(() => window.__census());
+const atlas = await q(() => (window.__impatlas ? window.__impatlas() : null));
 const errs = d.errors.slice(0, 4);
 await d.close();
 
@@ -175,6 +183,30 @@ console.log(`  impostors drawn  ${b1.imp.drawn} of ${b1.imp.offered} offered`
   + ` · ${(b1.imp.tris / 1000).toFixed(1)}k tris`
   + ` · ${(b1.imp.tris / (b1.ez.tris + b1.imp.tris) * 100).toFixed(2)}% of the vegetation bill`);
 console.log(`  off leg drew ${a1.imp.drawn} (must be 0)`);
+// THE AUTHORITY, NOT THE OUTPUT. A card drawn from a baked tile and one
+// drawn from a width profile are the same pixels to a diff, so whether the
+// atlas is what drew this frame has to be asked rather than inferred — the
+// fault this file records for the terrain's cell table, BridgeAssembly.claim
+// and __tdetail().mat, which is three times too many to keep re-learning.
+console.log(`  atlas ${b1.imp.atlas ? `ON · ${b1.imp.slots}/${b1.imp.slotCap} variants photographed`
+  + ` in ${b1.imp.bakeMs}ms${b1.imp.waiting ? ` · ${b1.imp.waiting} sites waiting` : ''}` : 'OFF (analytic profile)'}`);
+// ── AND WHAT IS IN THE TILES, WHICH THE DIFF CANNOT SEE ──
+// A card sampling an empty tile draws something and a card sampling a tree
+// draws something; only the atlas itself says which. `sideMean` is the share
+// of an upright tile carrying any coverage at all, and a variant whose tiles
+// are empty, full, or wildly uneven across azimuths is a bake that framed the
+// tree wrongly rather than a tier that looks wrong.
+if (atlas && atlas.atlas) {
+  console.log(`  atlas tiles · ${atlas.slots} slots, ${atlas.cols}x${atlas.rows} of ${atlas.tile}px`);
+  for (const t of atlas.tiles.slice(0, 6)) {
+    console.log(`    ${t.key.padEnd(14)} hx ${t.hx} hy ${t.hy} cy ${t.cy}`
+      + ` · side coverage min ${t.sideMin} mean ${t.sideMean} max ${t.sideMax} · plan ${t.plan}`);
+  }
+  const flat = atlas.tiles.flatMap((t) => t.cov.slice(0, atlas.cols * (atlas.rows - 1)));
+  const empty = flat.filter((v) => v < 0.01).length;
+  console.log(`    ${empty} of ${flat.length} upright tiles carry nothing`
+    + `${empty > flat.length * 0.05 ? '  <-- A BAKE THAT DREW NOWHERE' : ''}`);
+}
 console.log(`  edges ${JSON.stringify(b1.ez.edge)}`);
 const inScene = census.byTris?.['veg-impostor'];
 console.log(`  census: ${inScene === undefined
@@ -191,9 +223,27 @@ if (!ink.n) {
   console.log('  !! the tier changed no pixel in the band — it is not drawing here');
 } else {
   console.log(`\n  the ink the tier laid down, over the ${ink.n} band pixels it changed`);
+  const ratio = ink.off > 0 ? ink.on / ink.off : 1;
   console.log(`    mean luma  ON ${ink.on}/255  ·  the hillside it replaced ${ink.off}/255`
-    + `  ·  ${ink.darkShare}% under half a palette step of black`);
-  if (ink.on < 36 || ink.darkShare > 10) {
+    + `  ·  ${ratio.toFixed(2)}x the ground  ·  ${ink.darkShare}% under half a palette step of black`);
+  // ── THE BAR IS RELATIVE, AND THE ABSOLUTE ONE NAMED A SCENE ──
+  //
+  // The first version of this gate was two palette steps of INK (36) and a
+  // tenth of the changed pixels at the floor, set against a band whose
+  // hillside read 111/255. Measured again on a band whose hillside reads 38 —
+  // the same fixture, a different treeline — a perfectly healthy tier read
+  // 26% at the floor and the gate fired: a check calibrated on one scene is a
+  // check that names the scene rather than the fault.
+  //
+  // What separates a multiply-by-zero from a dark tree is the RATIO to the
+  // ground it replaced, and the three builds this has been run on space out
+  // cleanly on it: the broken build 18.3/110.1 = 0.17, the analytic fix
+  // 44.1/115.1 = 0.38, the atlas 43.3/38.4 = 1.13. A quarter sits a factor of
+  // one and a half from the broken build on one side and from the nearest good
+  // one on the other, which is the widest bar the measurements support. The
+  // absolute ink and the dark share are still PRINTED, because they are the
+  // evidence; they are no longer what decides.
+  if (ratio < 0.25) {
     console.log('  !! THE TIER IS DRAWING BLACK, and the diff above cannot tell you so:');
     console.log('     a hole moves as many pixels as a tree. Check the geometry carries a');
     console.log("     `color` attribute — vertexColors defines USE_COLOR, three's color_vertex");

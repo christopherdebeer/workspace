@@ -249,6 +249,10 @@ export const SWITCHES = [
     note: 'swardforms=0 draws every tuft as the plain nine-vertex blade again — the A/B for the structural expression that lets the same population read as a sedge fan, a broad understorey leaf, a crevice tuft or an upright culm' },
   { id: 'tilt', kind: 'choice', marks: ['look'], fallback: 'off',
     note: 'tilt=subtle|mini|hard puts a tilt-shift plane of focus in the world' },
+  { id: 'vegstems', kind: 'number', marks: ['world', 'legacy'], fallback: '1',
+    note: 'vegstems= scales how far a cover class spreads its clumps past the open-ground rate — 1 is shipped, 0 seeds every class at the old uniform rate (the A/B for the closed canopy), and 2 doubles the excess. It is read once per cell at SEED time, so it needs a reload and a fresh world to mean anything' },
+  { id: 'impatlas', kind: 'toggle', marks: ['look', 'legacy'], fallback: 'on',
+    note: 'impatlas=0 draws the impostor tier from its analytic width profile again instead of a photograph of the skeleton it stands in for — the A/B for whether a far tree is the same tree' },
 ] as const satisfies readonly SwitchDef[];
 
 /** Every declared id, as a type. An undeclared read does not compile, which is

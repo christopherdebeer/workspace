@@ -4527,6 +4527,157 @@ what this proves is that the near path and the commit are untouched. The next
 dump at REACH 8X is the measurement, and the row is still `impostor` in `tree
 phases`.
 
+### The atlas: the far tree is the near tree, photographed — and it is see-through
+
+The seat's verdict on the first impostor was that it is a placeholder, and on
+the skeletons beside it that they are *a little too skeleton like in general*,
+with the ask stated plainly: get the impostors good enough and the ranges can
+be tuned to make headroom for fuller trees. The headroom arithmetic is not in
+doubt — an impostor is **4 triangles** against a drawn broadleaf's **1,068**
+and a conifer's **543**, so anything the cards take over is returned to the
+near field at about 130 to 1.
+
+**IT IS BAKED ON THE DEVICE, AT RUNTIME, AND THAT WAS A DECISION.** The obvious
+alternative is a devtool writing an atlas into the bundle beside
+`flora-ez-baked.ts`. Three things against it, each a fault this file already
+carries: the deploy transpile runs at seven tenths of the deployer's memory
+ceiling and 27% of the bundle is already baked data; a baked asset goes STALE
+the moment a recipe changes, and the thing it must agree with is itself
+generated; and WHICH variants matter is the district palette's answer, which is
+a fact about where the truck is standing and cannot be known offline. The cost
+is thirty-three renders of a few hundred triangles per variant, one variant a
+refresh, and a site whose variant has no slot yet simply waits a sweep.
+
+**EIGHT AZIMUTHS, THREE ELEVATIONS AND A PLAN VIEW, ON THE CARDS THAT WERE
+ALREADY THERE.** A full octahedral impostor — one view-aligned quad over a
+hemisphere — was designed and REJECTED: the frame of a view-aligned quad is
+undefined when the camera looks straight down, the chart camera looks 89.9
+degrees down, and every candidate for that missing roll either spins with the
+map or snaps at a tile boundary. An upright card has world up for its up at
+every azimuth, which is exactly the frame the bake uses, so there is nothing to
+resolve; the plan view is its own tile and its rotation is the TREE'S yaw,
+which is a fact about the tree rather than the camera. The azimuth is read in
+the tree's own frame and the two nearest tiles are MIXED, so turning past a
+tree cross-fades rather than snapping forty-five degrees.
+
+**`renderer.setViewport` IS READ BY NOTHING WHILE A RENDER TARGET IS BOUND, and
+it cost a whole measurement.** three's `setRenderTarget` copies the live
+viewport and scissor from `renderTarget.viewport` / `.scissor`, so a per-tile
+`renderer.setViewport(...)` sets the CANVAS viewport and is then overwritten.
+Every tile was rendered over the whole 1024-square atlas at full size, each
+variant erasing the last, and the tier came back drawing a tenth of its pixels
+with its ink under the black gate. The fix is two lines; what found it is that
+the tool reports the tier's INK rather than only that pixels moved.
+
+**AND THE PROBE READS THE ATLAS BACK, because the diff cannot.** A card
+sampling an empty tile draws something and a card sampling a tree draws
+something. `__impatlas()` returns, per baked slot, the share of every tile
+carrying any coverage at all — so a bake that rendered into the wrong viewport,
+or framed the tree outside its own box, is a number before it is a frame. The
+fifth time this file has needed the same rule: **a probe that reports the
+output of a rule cannot witness the rule.**
+
+**THE INK GATE HAD NAMED A SCENE, NOT A FAULT.** Its first form was two palette
+steps of absolute ink (36) and a tenth of the changed pixels at the floor, set
+against a band whose hillside read 111/255. On a band whose hillside reads 38 —
+the same fixture, a different treeline — a healthy tier reads 26% at the floor
+and the gate fires. What separates a multiply-by-zero from a dark tree is the
+RATIO to the ground it replaced, and the three builds this has run on space out
+cleanly: the broken build **0.17**, the analytic fix **0.38**, the atlas
+**0.43**. The bar is a quarter, a factor of one and a half from the broken
+build on one side and the nearest good one on the other; the absolute ink and
+the dark share are still printed as evidence and no longer decide.
+
+**MEASURED**, `at-yosemite`, one boot, off/on/off, the seed density pinned to
+the old rate (`vegstems=0`) so the scene is the one the analytic numbers were
+taken in:
+
+| | analytic | atlas |
+|---|---|---|
+| drawn / offered | 931 / 1611 | **932 / 1614** |
+| census `veg-impostor` | 3,724 = 931 x 4 | **3,728 = 932 x 4** |
+| edges b / c / s | 689 / 428 / 482 | **689 / 428 / 482 — identical** |
+| ink, ON against the ground it replaced | 44.1 vs 115.1 (0.38x) | **41 vs 94.7 (0.43x)** |
+| band pixels the tier changed | **1,420** | **171** |
+| tiles carrying no coverage | — | **0 of 312** |
+| slots photographed | — | 13 of 18, in **71 ms** |
+
+**THE PLACEMENT IS IDENTICAL AND THE COVERAGE IS AN EIGHTH, AND THAT IS THE
+FINDING.** The same trees stand in the same places wearing the same budget;
+what changed is that the card now draws the tree instead of a width profile,
+and the tree is mostly gaps. The atlas measures it directly: **a conifer's own
+silhouette fills 7 to 10 per cent of its bounding box and a broadleaf's 13 to
+24.** The analytic card filled most of its own card, so the far wood used to be
+denser than the near wood and nobody could see that the near wood was thin.
+
+So the seat's second sentence — *our real trees are a little too skeleton like*
+— is now a number rather than an impression, and it is the blocker rather than
+the impostor. **The bake has a check for the opposite fault and none for this
+one**: `sil.card` flags a leaf card wider than a quarter of its crown, which is
+the stack-of-plates failure, and nothing measures how much of the crown the
+cards FILL. `__impatlas().tiles[].sideMean` is that number now, and the next
+unit is a re-bake judged against it.
+
+### …and a forest covers its own ground: the ceiling could not buy that, and the candidate budget is why
+
+The other half of the same ask: *especially where cover says forest, tree
+density needs to go way way up.* The obvious lever is `COVER_VEG`, the per-cover
+clump ceiling, and it is **already spent**. Worked through the shipped rule at a
+tree-cover cell of mean density: demand is 18 x 0.775 = 13.95 against a
+candidate budget of 25 x 0.6, so acceptance is 0.93 and **twenty-three of
+twenty-five candidates already stand up**. Raising the ceiling to 30 takes it to
+25 of 25 and raising it to 60 takes it nowhere at all — a proposal set is a hard
+ceiling on population, and a forest has been sitting against it.
+
+| ceiling | density 0.3 | 0.5 | 0.7 |
+|---|---|---|---|
+| 18 (shipped) | 18.7 / ha | 34.6 | 54.9 |
+| 30 | 25.8 | 37.2 | 56.5 |
+| 60 | **25.8 — identical** | **37.2** | **56.5** |
+
+**WHAT IS THIN IS COVERAGE, NOT THE NUMBER OF THICKETS.** A clump's radius is 6
+to 22 m, so its mean area at mid density is about 600 m2 and twenty-three of
+them cover 14,000 m2 of a 48,400 m2 cell — **twenty-nine per cent**. That is a
+wooded hillside with three quarters of it showing through, which is what the
+seat's frames show. `COVER_CANOPY` grows the clump's AREA and its membership
+together — the radius by the square root and the count in full — so the density
+INSIDE a thicket is exactly what it was (no trunks start overlapping) and the
+cover goes from 29% to about 100%. **3.4 is not a taste: it is 48,400 / 14,000**,
+the multiplier at which a forest cell's own thickets tile it, which is what the
+words "closed canopy" mean. `?vegstems=` scales the excess over 1 and 0 is the
+exact A/B; it is read at SEED time, once per cell, so it needs a reload rather
+than a dial.
+
+**Measured** (`devtools/canopy-ab.mjs`, `at-yosemite`, two boots — legitimate
+because the quantity is counts over a fixture rather than pixels):
+
+| | `vegstems=0` | shipped |
+|---|---|---|
+| trees KNOWN (broadleaf / conifer / snag) | 2,389 / 8,350 / 1,630 | **4,932 / 18,902 / 2,768** |
+| per seeded cell | 71 | **200** |
+| plants placed within 300 m | 612 (21.6/ha) | 673 (23.8/ha) |
+| drawn triangles | 1.51M | 1.81M |
+| edges, conifer / snag | 651 / 700 | **573 / 647** |
+| `ezAdmit` | 8.7 ms | 10.1 |
+| seeding, total | 217 ms | 518 |
+
+**THE WORLD KNOWS 2.2x MORE TREES AND DRAWS ABOUT THE SAME, WITH ITS EDGES
+PULLED IN — which is the whole point and must not be read as a failure.** The
+triangle budget is 2.4M and only 1.81M is spent, so what binds is `VEG_CAP`
+times the rack's POPULATION CAP: the population stop, a dial the player owns.
+What the density buys is a POPULATION for the cheap tier to draw — measured on
+the same build, the impostors went from 932 to **1,382** — and the lever that
+turns it into trees on screen is the rack's, now that there is something for it
+to spend on. Raising the seed density while the caps bind cannot put a tree on
+screen by itself, and saying otherwise would be the fabricated witness this
+file keeps warning about.
+
+The costs are honest and are the next thing to watch on a device: the seed is
+2.4x (spread over the 8 ms a refresh may spend), `ezAdmit` is a heap selection
+over every candidate and grew 16% here, and `vegGrid` holds every known site
+whether or not it is drawn — 200 a cell against 71, on a manifest bounded in
+cells.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the

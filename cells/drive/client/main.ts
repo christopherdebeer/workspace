@@ -91,6 +91,7 @@ import { GRASS_M2, GRASS_UNKNOWN, GRASS_DEFAULT, swardCoverEvidence, SWARD_EV }
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { startLab } from './labs';
 import { IMPOSTOR_FORMS, IMPOSTOR_WIDTH, impostorFormIndex, impostorGeometry, impostorMaterial } from './tree-impostor';
+import { IMP_ATLAS, IMP_ATLAS_SLOTS, bakeImpAtlasSlot, clearImpAtlas, makeImpAtlasTarget, type ImpAtlasSlot } from './tree-atlas';
 import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
@@ -11716,13 +11717,42 @@ const impGroundU = { value: new THREE.Color(0.5, 0.5, 0.5) };
 /** How much of the top card shows, set per RENDER from that render's own
  *  camera — see `aimSky`, which is where everything hung on the eye belongs. */
 const impTopU = { value: 0 };
-const impMat = impostorMaterial({ wind: windU, top: impTopU, fade: impFadeU, ground: impGroundU });
+/**
+ * ── THE ATLAS, AND WHY IT IS BUILT HERE RATHER THAN SHIPPED ──
+ *
+ * The card's silhouette is a photograph of the variant standing beside it
+ * (see tree-atlas.ts for the whole argument), and the photographs are taken on
+ * the device the first time the tier wants one. `?impatlas=0` restores the
+ * analytic profile that shipped first — which is the A/B, and also the
+ * fallback: a context that cannot give us a render target keeps a tier.
+ */
+const IMPOSTOR_ATLAS = IMPOSTOR_ON && EZ_ON && qsOn('impatlas', true);
+const impAtlasRT = IMPOSTOR_ATLAS ? (() => {
+  try {
+    const rt = makeImpAtlasTarget();
+    clearImpAtlas(renderer, rt);
+    return rt;
+  } catch { return null; }
+})() : null;
+const impAtlasU: { value: THREE.Texture | null } = { value: impAtlasRT ? impAtlasRT.texture : null };
+/** Which atlas slot a (family, variant) pair was baked into, and what the box
+ *  it was baked in measures. A district's palette asks for about ten of the
+ *  eighteen; a slot is never re-used, so a hop that changes the palette can
+ *  run out — and running out is a tier that draws what it has, which is the
+ *  right failure and is counted in the probe. */
+const impSlots = new Map<string, ImpAtlasSlot>();
+/** The same records again, by slot index — what the placement reads, because
+ *  the instance carries the slot and not the (family, variant) it came from. */
+const impSlotAt: Array<ImpAtlasSlot | undefined> = [];
+let impSlotNext = 0;
+const impMat = impostorMaterial({ wind: windU, top: impTopU, fade: impFadeU, ground: impGroundU,
+  atlas: impAtlasU, bark: { value: new THREE.Color(0x4a3826) } });
 // The same weather as the skeletons beside it: a wood lit while the grass it
 // stands in is under a cloud is the fault `terrainFx` was chained onto the
 // skeletons to fix, and a new tier outside it would reopen exactly that.
 terrainFx(impMat);
 const impostors: THREE.InstancedMesh | null = (IMPOSTOR_ON && EZ_ON) ? (() => {
-  const m = new THREE.InstancedMesh(impostorGeometry(), impMat, IMPOSTOR_CAP);
+  const m = new THREE.InstancedMesh(impostorGeometry(!!impAtlasRT), impMat, IMPOSTOR_CAP);
   m.name = 'veg-impostor';
   m.count = 0;
   m.frustumCulled = false;
@@ -11744,7 +11774,7 @@ const impStage = {
   y: new Float32Array(IMPOSTOR_CAP),
 };
 /** What the last refresh stood up, so the probe reports the rule that ran. */
-const impProf = { drawn: 0, offered: 0, capped: 0, formed: 0, far: 0, farSeen: 0, ms: 0 };
+const impProf = { drawn: 0, offered: 0, capped: 0, formed: 0, far: 0, farSeen: 0, ms: 0, bakeMs: 0, waiting: 0 };
 /**
  * THE IMPOSTOR'S FORM IS THE TREE'S OWN, and it is cached per SITE because it
  * has to be both correct and cheap. Correct: if a tree is a cone at 400 m and
@@ -11762,6 +11792,36 @@ const impProf = { drawn: 0, offered: 0, capped: 0, formed: 0, far: 0, farSeen: 0
  */
 const impFormOf = new WeakMap<PlacedVegSite, number>();
 const IMPOSTOR_FORM_BUDGET = 400;
+/**
+ * ── ONE VARIANT BAKED A REFRESH, AND AN UNBAKED ONE SIMPLY WAITS ──
+ *
+ * A slot is thirty-three renders of a few hundred triangles into a render
+ * target — cheap, and not free, and it happens inside the refresh's own time
+ * slice. Baking the whole palette on the first sweep would be a hitch at the
+ * one moment a hop has already cost one. A site whose variant has no slot yet
+ * is skipped for that sweep and stands up on the next, so a district's trees
+ * arrive over about a second and nothing pops afterwards.
+ */
+const IMPOSTOR_BAKE_PER_REFRESH = 1;
+let impBakedNow = 0;
+/** The slot for a baked variant, baking it if there is room and budget. Null
+ *  means "not this sweep" — never "never". */
+function impSlotFor(fam: EzFamily, vi: number): ImpAtlasSlot | null {
+  const key = `${fam}:${vi}`;
+  const got = impSlots.get(key);
+  if (got) return got;
+  if (!impAtlasRT || impSlotNext >= IMP_ATLAS_SLOTS) return null;
+  if (impBakedNow >= IMPOSTOR_BAKE_PER_REFRESH) return null;
+  const geo = ezVariants(fam)[vi]?.geometry;
+  if (!geo) return null;
+  impBakedNow++;
+  const t0 = performance.now();
+  const slot = bakeImpAtlasSlot(renderer, impAtlasRT, geo, impSlotNext++);
+  impProf.bakeMs += performance.now() - t0;
+  impSlots.set(key, slot);
+  impSlotAt[slot.slot] = slot;
+  return slot;
+}
 /** How many candidates the membership pass walks between yields. A power of two
  *  so the test is a mask rather than a modulo, and 4,096 because at the seat's
  *  measured ~80 ns a step that is a third of a millisecond — under the slice
@@ -11914,6 +11974,47 @@ function swardCtxAt(x: number, z: number, cv: number | null, slope: number): Swa
 // Thickets per VEG_CELL by land-cover class. The point of the spread is that
 // the ground now differs from itself: a forest cell and the ploughed field
 // beside it are 18 and 1, where before both took the biome's single number.
+/**
+ * ── A FOREST IS COVERAGE, AND THE CEILING ABOVE COULD NOT BUY IT ──
+ *
+ * Reported from the seat over Yosemite: where cover says forest the tree
+ * density needs to go way, way up. The obvious lever is `COVER_VEG` below —
+ * and it is already spent. Worked through the shipped rule at a tree-cover
+ * cell of mean density: the demand is 18 x 0.775 = 13.95 against a candidate
+ * budget of 25 x 0.6, so the acceptance is 0.93 and TWENTY-THREE OF
+ * TWENTY-FIVE candidates already stand up. Raising the ceiling to 30 takes it
+ * to 25 of 25 and raising it to 60 takes it nowhere at all: the proposal set
+ * is a hard ceiling on population and a forest has been sitting against it.
+ *
+ * What is actually thin is not the number of thickets, it is how much GROUND
+ * they cover. A clump's radius is 6 to 22 m, so its mean area at mid density
+ * is about 600 m2 and twenty-three of them cover 14,000 m2 of a 48,400 m2
+ * cell — TWENTY-NINE PER CENT. That is a wooded hillside with three quarters
+ * of it showing through, which is exactly what the seat's frames show.
+ *
+ * So the multiplier here grows the clump's AREA and its membership together —
+ * the radius by its square root and the count in full — which leaves the
+ * density INSIDE a thicket exactly where it was (trees do not start
+ * overlapping) and takes the cover from 29% to about 100%. 3.4 is not a taste:
+ * it is 48,400 / 14,000, the number at which a forest cell's own thickets tile
+ * it, which is what the words "closed canopy" mean in the table below.
+ *
+ * `?vegstems=` scales the excess over 1, so 0 is the uniform rate the game
+ * shipped with and is the exact A/B. It is read at SEED time, once per cell
+ * and never again, so it needs a reload rather than a dial — which is why it
+ * is a switch and not a row on the tree rack.
+ */
+const COVER_CANOPY: Record<number, number> = {
+  10: 3.4,   // tree     — closed canopy, and now drawn as one
+  95: 3.0,   // mangrove — dense, and structurally a forest
+  20: 1.3,   // shrub    — scrub is meant to have ground between it
+  90: 1.15,  // wetland  — reed and carr, patchy by nature
+};
+const VEG_STEMS = clamp(qsNum('vegstems', 1), 0, 8);
+function canopyMul(cover: number | null): number {
+  const k = cover === null ? 1 : (COVER_CANOPY[cover] ?? 1);
+  return 1 + (k - 1) * VEG_STEMS;
+}
 const COVER_VEG: Record<number, number> = {
   10: 18,   // tree     — closed canopy
   20: 8,    // shrub
@@ -12233,6 +12334,14 @@ function seedCell(gx: number, gz: number): void {
       rad *= VEGETATION_DISTRIBUTION.fringeRadiusMul;
       count = Math.max(2, Math.round(count * VEGETATION_DISTRIBUTION.fringeCountMul));
     }
+    // ── AND THE COVER CLASS SPREADS THE THICKET, NOT THICKENS IT ──
+    // The area by the multiplier and the membership with it, so the spacing
+    // between two trees in one thicket is what it always was and what changes
+    // is how much of the cell has trees on it at all. Applied AFTER the fringe
+    // rule so a forest's loose edge spreads by the same law as its interior,
+    // and after both `r()` draws so no other clump in the world rerolls.
+    const cpy = canopyMul(cv);
+    if (cpy !== 1) { rad *= Math.sqrt(cpy); count = Math.max(2, Math.round(count * cpy)); }
     plantClump(x, z, rad, count, dominant, r, role, stats);
   }
 
@@ -14290,6 +14399,8 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // population the cap cuts — 54,815 of 57,112 on the seat's own rack — and
   // until now it was drawn as nothing at all.
   let impN = 0, impOffered = 0, impFormed = 0, impFar = 0, impR2 = 0;
+  impBakedNow = 0;
+  impProf.waiting = 0;
   if (impostors && impostorDraw) {
     // The dissolve's own span, handed to the shader once. It starts where the
     // skeletons' does — two thirds of the way to the draw edge — and ends at
@@ -14379,7 +14490,19 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         if (form === undefined) {
           if (impFormed >= IMPOSTOR_FORM_BUDGET) continue;
           impFormed++;
-          form = impostorFormIndex(variants[ezVariantAt(fam, v.x, v.z)]?.form ?? 'round');
+          const vi = ezVariantAt(fam, v.x, v.z);
+          if (impAtlasRT) {
+            // ── THE CARD IS A PHOTOGRAPH OF THIS TREE'S OWN VARIANT ──
+            // Not of its FORM: two round oaks of different spread are two
+            // different trees at this distance, and the whole point of the
+            // atlas is that the far tree is the near tree. The slot index is
+            // what rides on the instance.
+            const slot = impSlotFor(fam, vi);
+            if (!slot) { impFormed--; impOffered--; impProf.waiting++; continue; }
+            form = slot.slot;
+          } else {
+            form = impostorFormIndex(variants[vi]?.form ?? 'round');
+          }
           impFormOf.set(v, form);
         }
         // The ground is the RASTER here, not `groundAt`. Nothing in this tier
@@ -14390,7 +14513,18 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         const formSy = clamp(1 + ((v.sy ?? 1) - 1) * treeFormScale, 0.18, 4.5);
         const formSw = clamp(1 + ((v.sw ?? 1) - 1) * treeFormScale, 0.18, 4.5);
         const tall = EZ_M_PER_SCALE[fam] * v.s * formSy * treeSizeScale;
-        const wide = tall * IMPOSTOR_WIDTH[IMPOSTOR_FORMS[form]] * formSw;
+        // ── THE CARD IS THE BOX THE TILE WAS RENDERED IN ──
+        // On the atlas path the slot's own half-extents ARE the card, measured
+        // off the geometry at bake time, so a columnar aspen's card is as
+        // narrow as the aspen and a spreading oak's is as wide as the oak —
+        // where the analytic path had one width per FORM and could not tell
+        // two round trees apart. `cy` lifts the instance to the box's centre,
+        // which is where the centred card expects to be.
+        const aSlot = impAtlasRT ? impSlotAt[form] : undefined;
+        const wide = aSlot ? 2 * aSlot.hx * tall * formSw
+                           : tall * IMPOSTOR_WIDTH[IMPOSTOR_FORMS[form]] * formSw;
+        const high = aSlot ? 2 * aSlot.hy * tall : tall;
+        const baseY = aSlot ? gy + aSlot.cy * tall : gy;
         // ── THE MATRIX IS WRITTEN, NOT COMPOSED ──
         // `vegDummy.updateMatrix()` builds a full TRS from a quaternion, and
         // this instance has no rotation by CONTRACT — the vertex shader's
@@ -14400,9 +14534,9 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         // quaternion-to-matrix per impostor per refresh.
         const mo = impN * 16, M = impStage.m;
         M[mo] = wide; M[mo + 1] = 0; M[mo + 2] = 0; M[mo + 3] = 0;
-        M[mo + 4] = 0; M[mo + 5] = tall; M[mo + 6] = 0; M[mo + 7] = 0;
+        M[mo + 4] = 0; M[mo + 5] = high; M[mo + 6] = 0; M[mo + 7] = 0;
         M[mo + 8] = 0; M[mo + 9] = 0; M[mo + 10] = wide; M[mo + 11] = 0;
-        M[mo + 12] = v.x; M[mo + 13] = gy; M[mo + 14] = v.z; M[mo + 15] = 1;
+        M[mo + 12] = v.x; M[mo + 13] = baseY; M[mo + 14] = v.z; M[mo + 15] = 1;
         // The tree's own colour, unfaded: the dissolve toward the ground is
         // the FRAGMENT's now (see `impFadeU`), which is both cheaper — it cost
         // a terrain palette and a cover sample per faded tree per refresh —
@@ -33982,10 +34116,63 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
 }
 /** The impostor tier on one settled world — see `impostorDraw`. Re-runs the
  *  refresh synchronously, so the caller may photograph immediately. */
+/**
+ * ── WHAT IS ACTUALLY IN THE ATLAS, TILE BY TILE ──
+ *
+ * The tier's own diff cannot witness this: a card sampling an empty tile and a
+ * card sampling a tree both draw SOMETHING, and a frame measurement reports
+ * that pixels moved rather than what moved them. This reads the render target
+ * back and reports the share of each tile that carries any coverage at all —
+ * so a bake that rendered into the wrong viewport, or framed the tree outside
+ * its own box, is a number here before it is a frame anywhere.
+ *
+ * It is a synchronous glReadPixels of a few hundred kilobytes and has no
+ * business in a frame; a probe may be expensive where a refresh may not.
+ */
+(window as unknown as { __impatlas?: object }).__impatlas = (): object => {
+  if (!impAtlasRT) return { atlas: false };
+  const T = IMP_ATLAS.tile, C = IMP_ATLAS.cols, R = IMP_ATLAS.rows;
+  const buf = new Uint8Array(C * T * R * T * 4);
+  const rows: object[] = [];
+  for (const [key, sl] of impSlots) {
+    const sx = (sl.slot % IMP_ATLAS.slotCols) * C * T;
+    const sy = Math.floor(sl.slot / IMP_ATLAS.slotCols) * R * T;
+    // The read is in TEXTURE rows, which run from the bottom; the block grid
+    // is written top-down, which is the same flip the bake's viewport makes.
+    renderer.readRenderTargetPixels(impAtlasRT, sx, IMP_ATLAS.size - sy - R * T, C * T, R * T, buf);
+    const cov: number[] = [];
+    for (let ty = 0; ty < R; ty++) {
+      for (let tx = 0; tx < C; tx++) {
+        let n = 0;
+        for (let y = 0; y < T; y++) {
+          // Flip the tile row back, so tile (0,0) is the block's top-left.
+          const py = (R * T - 1) - (ty * T + y);
+          for (let x = 0; x < T; x++) if (buf[(py * C * T + tx * T + x) * 4 + 3] >= 128) n++;
+        }
+        cov.push(+(n / (T * T)).toFixed(3));
+      }
+    }
+    const side = cov.slice(0, C * (R - 1));
+    rows.push({ key, slot: sl.slot,
+      hx: +sl.hx.toFixed(3), hy: +sl.hy.toFixed(3), cy: +sl.cy.toFixed(3),
+      sideMin: Math.min(...side), sideMean: +(side.reduce((a, b) => a + b, 0) / side.length).toFixed(3),
+      sideMax: Math.max(...side), plan: cov[C * (R - 1)], cov });
+  }
+  return { atlas: true, tile: T, cols: C, rows: R, slots: rows.length, bakeMs: +impProf.bakeMs.toFixed(1), tiles: rows };
+};
+
 (window as unknown as { __impostor?: object }).__impostor = (on?: boolean): object => {
   if (on !== undefined && impostors) { impostorDraw = !!on; refreshVeg(); }
   return { built: !!impostors, drawing: impostorDraw, drawn: impProf.drawn,
     offered: impProf.offered, far: impProf.far, farSeen: impProf.farSeen, tris: impProf.drawn * 4,
+    // ── THE PROBE REPORTS THE AUTHORITY, NOT ONLY THE OUTPUT ──
+    // A card drawn from a baked tile and a card drawn from a width profile
+    // look alike to a pixel count, so "is the atlas on" cannot be inferred
+    // from what is on screen. `atlas` is the switch, `slots` how many variants
+    // have actually been photographed, and `waiting` how many sites stood
+    // down this sweep for want of one.
+    atlas: !!impAtlasRT, slots: impSlots.size, slotCap: IMP_ATLAS_SLOTS,
+    waiting: impProf.waiting, bakeMs: +impProf.bakeMs.toFixed(1),
     ...impostorReachTally() };
 };
 
@@ -45102,7 +45289,9 @@ function telemetryReport(): string {
         + ` · density ${_i.density >= 1e6 ? 'ALL' : `${_i.density}x`}`
         + ` · drawn ${impProf.drawn}/${impProf.offered} offered${impProf.farSeen ? ` (${impProf.far} kept of ${impProf.farSeen} seen past the draw ring)` : ''}`
         + ` · ${(impProf.drawn * 4 / 1000).toFixed(1)}k tris${impProf.capped ? ` · CAPPED at ${IMPOSTOR_CAP}` : ''}`
-        + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed} formed` : ''}` : ''}`);
+        + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed} formed` : ''}`
+        + ` · atlas ${impAtlasRT ? `${impSlots.size}/${IMP_ATLAS_SLOTS} slots in ${impProf.bakeMs.toFixed(0)}ms` : 'OFF'}`
+        + `${impProf.waiting ? ` · ${impProf.waiting} waiting on a bake` : ''}` : ''}`);
   }
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);

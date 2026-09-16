@@ -119,6 +119,13 @@ function context(code,range,ez,triCap) {
     impStage:{m:new Float32Array(512*16),c:new Float32Array(512*3),
       f:new Float32Array(512),y:new Float32Array(512)},
     impostors:impostorMesh(512),
+    // THE ANALYTIC PATH, DELIBERATELY. The atlas needs a GL context and a
+    // render target, which this check has neither of and does not want: the
+    // claim it holds is that the tier's MEMBERSHIP does not disturb what
+    // admission kept, and that claim is about the pass rather than about
+    // what the card samples. A stub atlas would exercise a branch whose
+    // real behaviour is a photograph nothing here can take.
+    impAtlasRT:null,impSlotAt:[],impSlotFor:()=>null,impBakedNow:0,
     impostorDraw:true,
     ezVariants:()=>[{form:'round'},{form:'conic'},{form:'columnar'}],
     sampleHeight:(x,z)=>Math.sin(x/30)+Math.cos(z/30),
