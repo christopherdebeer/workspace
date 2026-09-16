@@ -308,6 +308,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
 | `node devtools/render-focus.test.mjs` | where the RENDERER is looking, and whether anything reads it — the authority's three cameras and the drone's own lead geometry driven for real, then each consumer and the sward's fast/slow ORDER as a source check; two controls in its header | instant |
 | `node devtools/imp-atlas.test.mjs` | the impostor atlas holds EVERY variant that exists (40 slots against 37 keys) and the bake's packing agrees with the shader's, tile for tile over all 1,000 — pure node, instant, and the gate that fails when a new EZ form takes the total past the ceiling | instant |
+| `node devtools/imp-sheet.mjs` | every variant's SKELETON beside its own baked IMPOSTOR card, one camera, one quantiser, one metric block, at the art-pixel size the game draws that tree at — with the silhouette IoU between the halves, which is the only column that compares them. `DIST=`, `ELEV=`, `AZ=` (0 is exactly on a baked tile, 22.5 the worst case between two), `INK=1`. Drawing is ON by design: a `nodraw` run never compiles the card's shader at all | ~2min |
 | `node devtools/imp-demand.mjs` | what the impostor atlas was ASKED for beside what it holds: the ceiling computed offline from the bake (pure, instant, no browser), then the live census by key — refused keys with their tree counts, baked slots with theirs, and how many of the eighteen are serving nobody. `KM=0 FIX=` measures one arrived world; `SPOT=` with a leg drives across districts and needs a device or a warm relay to mean anything | ~2min |
 | `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
@@ -4745,6 +4746,124 @@ with `cov.slice(0, atlas.cols * (atlas.rows - 1))` — the rectangular block's
 shape — and `cols`/`rows` no longer exist, so it printed `undefinedxundefined`
 and checked nothing at all for a whole run. **A field that prints `undefined` is
 a field the tool has stopped measuring**, and a zero beside it is not a result.
+
+### …and the contact sheet found the atlas reading the wrong tile, every tile
+
+The seat's report: *I'm concerned that imposters don't look enough like their
+counterparts, noticeable when swapped. Can we show a contact sheet of imposters
+and their reals side by side?* The sheet is `__impsheet` — `__ezsheet` with a
+second cell — and on its first run **every one of the thirty-seven cards drew
+nothing at all.**
+
+**THE BAKE COUNTS TILE ROWS FROM THE TOP AND A TEXTURE COUNTS THEM FROM THE
+BOTTOM.** `bakeImpAtlasSlot` places a view's viewport at `vy = size - py - T`,
+and its own comment says why: `viewOrigin` returns a grid whose row 0 is the
+TOP, and a render target's rows run from the bottom. `__impatlas` reads the
+atlas back the same way. `impTileRect` — the shader — took `floor(t / G)`
+straight as a v offset, so it read row `G - 1 - ty` for every tile in the
+atlas:
+
+| slot · view | tile | grid | the bake writes at row | the shader read row |
+|---|---|---|---|---|
+| 0 · 0 | 0 | (0, 0) | **992** | **0** |
+| 5 · 3 | 128 | (0, 4) | **864** | **128** |
+| 39 · 24 | 999 | (7, 31) | **0** | **992** |
+
+They agree for no tile at all. In the SHEET, where a private atlas holds one
+slot and the other 999 tiles are cleared, every card read an unwritten tile and
+drew nothing — which is why the fault was visible there and nowhere else. **In
+the WORLD, where a thousand tiles are occupied, the same fault reads as trees
+wearing each other's faces**: a card samples some other variant at some other
+elevation, correctly lit, correctly sized, and plausibly a tree. That is the
+seat's report exactly, and it is the third time this file has recorded a bake
+and a lookup disagreeing about where a tile is.
+
+**AND `imp-atlas.test.mjs` PASSED THROUGHOUT, because it was checking the wrong
+unit.** It compared `[t % G, floor(t / G)]` against `viewOrigin` — the same
+expression twice, true whichever way the y axis runs — and the whole fault was
+in that axis. The claim is made in FRAMEBUFFER ROWS now, where the two sides
+can be wrong independently: the row the bake writes a view at must be the row
+the shader samples it from. **With the negative control the old form fails on
+1,000 of 1,000 tiles**, which is what says the check can now see the fault it
+names; the form it replaced could not have, and a check that cannot fail on its
+own subject is decoration.
+
+**Measured**, `at-yosemite`, 200 m, elev 8°, the sheet's own private atlas:
+
+| | before | after |
+|---|---|---|
+| cards drawing anything | **0 of 37** | **35 of 37** |
+| mean silhouette IoU against the skeleton | 0.000 | **0.438** |
+| the two that still draw nothing | — | snags at 14 px whose own tree is 1% of its box |
+
+`tree-impostor.mjs` reads the same as it did (891 drawn, census 3,564 = 891 × 4
+exactly, 0 of 240 upright tiles empty, ink 0.54× the ground) — **and it could
+not have caught this**, which is worth knowing before it is reached for: it
+reads the atlas back through `viewOrigin`, which agrees with the bake, and its
+pixel metrics cannot tell a card drawing the wrong tree from one drawing the
+right one. The witnesses here are the pure test's negative control and the
+sheet's before/after.
+
+### …and the card is baked from a crown the skeleton has already closed
+
+The sheet's second finding, and it is the one the seat's sentence is about once
+the tile is right. At 200 m a card carries **about half** the lit pixels of the
+tree it stands in for:
+
+| by form, at 200 m | IoU | coverage, card ÷ tree | parts, tree → card |
+|---|---|---|---|
+| round (12) | 0.53 | **0.54** | 1 → 2.2 |
+| conic (12) | 0.40 | **0.44** | 1.5 → 5.6 |
+| umbrella (5) | 0.49 | 0.50 | 1 → 2.4 |
+| columnar (2) | 0.54 | 0.56 | 1 → 2 |
+| palm (2) | 0.56 | 0.63 | 1 → 1 |
+
+**IT IS THE CROWN MERGE, AND THE A/B SAYS SO OUTRIGHT.** `bakeImpAtlasSlot`
+renders through `bakeMaterial`, which is a plain
+`projectionMatrix * modelViewMatrix * position` — no merge at all — while the
+skeleton it replaces is drawn through `ezMaterial`, whose crown slides onto its
+own silhouette hull and grows into one mass below 58 art pixels. So the atlas
+photographs the OPEN crown and the card stands where the CLOSED one would.
+Re-run with `?ezmerge=0`, which draws the skeleton exactly as baked at every
+distance:
+
+| | shipped | `?ezmerge=0` |
+|---|---|---|
+| mean IoU | 0.438 | **0.731** |
+| coverage ratio, round / conic / umbrella | 0.54 / 0.44 / 0.50 | **1.02 / 1.00 / 0.96** |
+
+The ratio goes to one across every form, so the whole deficit is the merge and
+none of it is the tile's resolution or the alpha test. **Not fixed here, and
+deliberately:** the y-axis fix changes what every impostor in the game draws
+and wants the seat's eye on its own frame; the merge wants `ezMaterial`'s merge
+block EXPORTED so the bake reads one string rather than a second copy, which is
+the same rule `IMP_ATLAS_GLSL` and `FOLIAGE_WIND_UNIFORMS` already follow.
+
+**WHAT THE SHEET IS, in one paragraph.** Each cell is one variant twice — the
+skeleton left, its baked card right — through ONE ortho camera, ONE quantiser
+and ONE metric block, at the art-pixel size the game draws that tree at from
+`DIST` metres. The two halves share their box by construction: the atlas's bake
+frames its tiles with exactly the `hx`/`hy`/`cy` this sheet's camera was already
+framed by, and the world scales the card to `2*hx` by `2*hy` about `cy`, so a
+disagreement between the halves is the impostor's and not the framing's.
+**IoU is the column the ask is about** — it is the only statistic that compares
+the halves rather than describing each — with `cov`, `h` and `w` saying which
+way a card is wrong and `dlum` saying whether it is the light rather than the
+shape.
+
+**AND IT SPENDS NONE OF THE WORLD'S ATLAS.** `impSlotFor` is append-only and a
+slot is never reclaimed, so a sheet that baked all thirty-seven variants into
+the game's atlas would leave the district's own variants locked out for the rest
+of the session — the exact fault the forty-slot repack was written to end. The
+probe allocates a target of its own and re-bakes slot zero per variant, which
+photographs what the world's bake would produce and costs the world nothing.
+
+**`EMPTY` AND `SUB-PIXEL` ARE COUNTED APART.** A snag at 200 m is two or three
+isolated black pixels — one per cent of its own box — and a 32 px tile cannot
+carry that under a binary alpha test. That is a statement about the snag, not
+about the bake, so the tool's gate is 3% of the cell and the control that says
+it is not a bar moved to pass is that before the y-axis fix **thirty-five of the
+thirty-seven were over it**.
 
 ### The atlas: the far tree is the near tree, photographed — and it is see-through
 

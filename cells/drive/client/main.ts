@@ -34974,10 +34974,55 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
  * whatever the tree's size — which is what makes two variants comparable and
  * what makes the coverage a fraction rather than a pixel count.
  */
-(window as unknown as { __ezsheet?: object }).__ezsheet = (opt: {
+/**
+ * ── AND THE SAME SHEET AGAIN WITH THE IMPOSTOR BESIDE IT ──
+ *
+ * The seat's ask, verbatim: *I'm concerned that imposters don't look enough
+ * like their counterparts, noticeable when swapped. Can we show a contact
+ * sheet of imposters and their reals side by side?*
+ *
+ * `pair` renders each variant TWICE into the same cell — the skeleton on the
+ * left, its baked impostor card on the right — and the reason this is one
+ * function rather than a second probe is the only thing that makes the
+ * comparison mean anything: **one camera, one quantiser, one set of metrics.**
+ * Two sheets taken by two probes differ by every constant either of them
+ * happens to have typed, and a difference read off such a pair is a
+ * measurement of the instruments.
+ *
+ * THE TWO HALVES SHARE A BOX BY CONSTRUCTION, which is the gift that makes
+ * this exact. `bakeImpAtlasSlot` frames its tiles with `hx` = the larger
+ * horizontal half-extent times FIT, `hy` = half the height times FIT and `cy`
+ * = the box's own centre; this sheet's ortho camera was already framed by the
+ * identical three numbers. So the card — which in the world is scaled to
+ * exactly `2*hx` by `2*hy` about `cy` — fills the same frame the skeleton
+ * does, and any disagreement between them is the impostor's rather than the
+ * framing's.
+ *
+ * AND THE SHEET BAKES INTO ITS OWN ATLAS, NEVER THE WORLD'S. `impSlotFor` is
+ * append-only by design and a slot is never reclaimed, so a sheet that spent
+ * the game's slots on all thirty-seven variants would leave nothing for the
+ * ones the district actually grows — for the rest of the session. It allocates
+ * a target of its own, clears it and re-bakes SLOT ZERO per variant, which
+ * photographs exactly what the world's bake would produce and costs the world
+ * nothing at all.
+ *
+ * WHAT THE PAIR REPORTS is `iou` above everything: the intersection over union
+ * of the two silhouettes, which is the one number that answers the question as
+ * the seat asked it. Beside it the same metric block for both halves, so a
+ * card that matches the outline and gets the crown's light wrong is visibly a
+ * different failure from one that matches the light and misses the outline.
+ */
+interface EzSheetOpt {
   dist?: number; px?: number; elev?: number; az?: number; cols?: number; mag?: number;
   bg?: string; post?: boolean; ink?: boolean; scale?: number;
-} = {}): object => {
+  /** Draw the baked impostor card beside each skeleton, in the same box. */
+  pair?: boolean;
+  /** The tree's own yaw. The card phases its silhouette by it (the azimuth is
+   *  read in the TREE'S frame), so it is the one thing that can make the two
+   *  halves show different faces — which is why it is here and defaults to 0. */
+  yaw?: number;
+}
+const ezSheetOf = (opt: EzSheetOpt = {}): object => {
   // ── THE FRAMING IS A DISTANCE, NOT A PIXEL COUNT ──
   // `PIX_H` is 320 rendered rows and the chase lens is 55 degrees vertical, so
   // a metre at distance d is ROWS / (2 tan(fov/2) d) art pixels — 307.3/d. The
@@ -34996,6 +35041,8 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
   const az = ((opt.az ?? 0) * Math.PI) / 180;
   const POST = opt.post !== false;
   const INK = !!opt.ink;
+  const PAIR = !!opt.pair;
+  const YAW = opt.yaw ?? 0;
   // ── NO MSAA, BECAUSE THE GAME HAS NONE ──
   // `rtScene.samples = 0` with the comment "MSAA would soften exactly the edges
   // we want hard". A control sheet taken at 4x was measuring a renderer nobody
@@ -35011,6 +35058,42 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
   key.position.set(-0.55, 0.72, 0.42);
   sc.add(key, new THREE.HemisphereLight(0xbcd0e6, 0x4a4634, 1.15));
   const mat = ezMaterial(0x4a3826, {});
+  // ── THE IMPOSTOR HALF: ITS OWN ATLAS, ITS OWN MATERIAL, ITS OWN UNIFORMS ──
+  //
+  // Its own material rather than the world's `impMat` for two reasons, and the
+  // second is the one that would have made the sheet a lie: `impMat` carries
+  // `terrainFx`, so a card drawn through it would take the world's cloud
+  // shadow and weather tint while the skeleton beside it — `ezMaterial` here,
+  // as `__ezsheet` has always built it — would not. And `impFadeU`,
+  // `impGroundU` and `impTopU` are written every frame by the refresh and by
+  // `aimSky`, so a sheet reading them would photograph whatever the camera
+  // happened to be doing when it was asked.
+  const impTop = { value: clamp((Math.abs(Math.sin(elev)) - 0.35) / 0.45, 0, 1) };
+  const impGeo = PAIR ? impostorGeometry(true) : null;
+  const impRT = PAIR ? makeImpAtlasTarget() : null;
+  const impMatS = impRT ? impostorMaterial({
+    wind: { uTime: { value: 0 }, uGust: { value: new THREE.Vector2() }, uWindK: { value: 0 } },
+    top: impTop,
+    // Far enough that `vImpFade` is zero at the sheet's own 8-unit stand-off:
+    // the dissolve toward the ground is a fact about the tier's outer edge and
+    // would be a second, uncontrolled difference between the halves.
+    fade: { value: new THREE.Vector2(1e6, 2e6) },
+    ground: { value: new THREE.Color(0.5, 0.5, 0.5) },
+    atlas: { value: impRT.texture },
+    // THE SAME BARK THE SKELETON WEARS. `ezMaterial(0x4a3826)` above, and the
+    // world hands `impMat` the identical colour — so a trunk that differs
+    // between the halves differs in SHAPE and not in paint.
+    bark: { value: new THREE.Color(0x4a3826) },
+    ink: { value: 0 },
+  }) : null;
+  const impMesh = (impGeo && impMatS) ? (() => {
+    const m = new THREE.InstancedMesh(impGeo, impMatS, 1);
+    m.frustumCulled = false;
+    m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array([0.30, 0.42, 0.20]), 3);
+    m.geometry.setAttribute('aForm', new THREE.InstancedBufferAttribute(new Float32Array([0]), 1));
+    m.geometry.setAttribute('aYaw', new THREE.InstancedBufferAttribute(new Float32Array([YAW]), 1));
+    return m;
+  })() : null;
   // ── THE COMPOSITE'S OWN QUANTISER, IN JS ──
   // `ditherQuant` with the shipped uniforms: 14 levels, bayer4, amplitude 1,
   // bias 0.5, ONE threshold for all three channels (uDChan 0). Ported rather
@@ -35030,10 +35113,190 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
   const luma = (r: number, g: number, b: number): number => 0.2126 * r + 0.7152 * g + 0.0722 * b;
   const STEP = 0.07;                                // one palette step, in sRGB
   const rows: Array<Record<string, unknown>> = [];
-  const cells: Array<{ rgb: Uint8ClampedArray; px: number; l1: string; l2: string }> = [];
+  const cells: Array<{ a: Uint8ClampedArray; b: Uint8ClampedArray | null; px: number;
+    l1: string; l2: string; l3: string }> = [];
   const buf = new Uint8Array(MAXPX * MAXPX * 4);
   const prevTarget = renderer.getRenderTarget();
   const prevView = rt.viewport.clone(), prevSci = rt.scissor.clone();
+  // The clear colour is the RENDERER'S and outlives this call; the first cut of
+  // this sheet set it to transparent black and never put it back.
+  const prevClear = new THREE.Color();
+  renderer.getClearColor(prevClear);
+  const prevClearA = renderer.getClearAlpha();
+  /** One cell, rendered and read back into `buf`. The viewport is set on the
+   *  TARGET and not on the renderer — `setRenderTarget` copies the target's own
+   *  and overwrites the canvas one, the lesson the impostor atlas paid a whole
+   *  measurement for. */
+  const shoot = (obj: THREE.Object3D, cam: THREE.Camera, PX: number): void => {
+    sc.add(obj);
+    rt.viewport.set(0, 0, PX, PX);
+    rt.scissor.set(0, 0, PX, PX);
+    rt.scissorTest = true;
+    renderer.setRenderTarget(rt);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear(true, true, true);
+    renderer.render(sc, cam);
+    renderer.readRenderTargetPixels(rt, 0, 0, PX, PX, buf);
+    sc.remove(obj);
+  };
+  interface Half {
+    rgb: Uint8ClampedArray; mask: Uint8Array; n: number;
+    cov: number; parts: number; big: number; stipple: number;
+    steps: number; spread: number; mass: number; lum: number;
+    leaf: number; tones: number; box: [number, number, number, number];
+  }
+  /** Composite what `shoot` just read over the sheet's background, quantise and
+   *  dither it, and measure it. Both halves go through this and nothing else,
+   *  which is what makes their columns comparable. */
+  const analyse = (PX: number): Half => {
+    const N = PX * PX;
+    const rgb = new Uint8ClampedArray(N * 3);
+    const mask = new Uint8Array(N);
+    let inkSum = 0, bgSum = 0, cov = 0;
+    let x0 = PX, y0 = PX, x1 = -1, y1 = -1;
+    const toneSet = new Set<number>();
+    for (let y = 0; y < PX; y++) {
+      // The render target's rows run from the bottom; everything below is in
+      // canvas order, so the flip happens once, here.
+      const sy = PX - 1 - y;
+      const t = PX > 1 ? y / (PX - 1) : 0;
+      for (let x = 0; x < PX; x++) {
+        const s = (sy * PX + x) * 4, d = (y * PX + x) * 3;
+        const a = buf[s + 3] >= 128 ? 1 : 0;
+        let r: number, gg: number, bl: number;
+        const br = SKY[0] + (GND[0] - SKY[0]) * t;
+        const bg2 = SKY[1] + (GND[1] - SKY[1]) * t;
+        const bb2 = SKY[2] + (GND[2] - SKY[2]) * t;
+        if (INK) { r = a ? 0 : br; gg = a ? 0 : bg2; bl = a ? 0 : bb2; }
+        else if (a) { r = buf[s] / 255; gg = buf[s + 1] / 255; bl = buf[s + 2] / 255; }
+        else { r = br; gg = bg2; bl = bb2; }
+        if (POST && !INK) {
+          const th = b4(x, y);
+          r = quant(r, th); gg = quant(gg, th); bl = quant(bl, th);
+        }
+        rgb[d] = r * 255; rgb[d + 1] = gg * 255; rgb[d + 2] = bl * 255;
+        mask[y * PX + x] = a;
+        if (a) {
+          cov++; inkSum += luma(r, gg, bl); bgSum += luma(br, bg2, bb2);
+          if (x < x0) x0 = x; if (x > x1) x1 = x;
+          if (y < y0) y0 = y; if (y > y1) y1 = y;
+          toneSet.add(((rgb[d] << 16) | (rgb[d + 1] << 8) | rgb[d + 2]) >>> 0);
+        }
+      }
+    }
+    // ── COMPONENTS, LARGEST SHARE AND STIPPLE ──
+    // Closure cannot tell a mass from confetti, which is the whole difference
+    // between a tree that reads at 25 px and one that does not. Eight-connected
+    // so a diagonal chain of pads counts as one thing; the stipple share is
+    // four-connected, because a pixel touching nothing on its own edges is the
+    // thing that flickers as the truck moves.
+    const seen = new Uint8Array(N);
+    const stack: number[] = [];
+    let parts = 0, big = 0;
+    for (let p = 0; p < N; p++) {
+      if (!mask[p] || seen[p]) continue;
+      parts++; let sz = 0; stack.push(p); seen[p] = 1;
+      while (stack.length) {
+        const q = stack.pop() as number; sz++;
+        const qx = q % PX, qy = (q / PX) | 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const nx = qx + dx, ny = qy + dy;
+          if (nx < 0 || ny < 0 || nx >= PX || ny >= PX) continue;
+          const k = ny * PX + nx;
+          if (mask[k] && !seen[k]) { seen[k] = 1; stack.push(k); }
+        }
+      }
+      if (sz > big) big = sz;
+    }
+    let lone = 0;
+    for (let p = 0; p < N; p++) {
+      if (!mask[p]) continue;
+      const px2 = p % PX, py2 = (p / PX) | 0;
+      let n = 0;
+      if (px2 > 0 && mask[p - 1]) n++;
+      if (px2 < PX - 1 && mask[p + 1]) n++;
+      if (py2 > 0 && mask[p - PX]) n++;
+      if (py2 < PX - 1 && mask[p + PX]) n++;
+      if (n <= 1) lone++;
+    }
+    const steps = cov ? Math.abs(inkSum - bgSum) / cov / STEP : 0;
+    // ── AND WHETHER THE CROWN HAS ANY FORM IN IT ──
+    // `steps` is the crown against the SKY and it passes everywhere, because
+    // near-black on pale blue is eight palette steps whatever the crown is
+    // made of. What both reviews say is missing is the crown's own light and
+    // dark, which is a spread WITHIN it: the tenth to ninetieth percentile of
+    // its luma, in palette steps. Percentiles rather than the range, because
+    // one stray lit pixel is not a lit side.
+    //
+    // AND IT IS THE FOLIAGE'S SPREAD, NOT THE TREE'S. The first cut measured
+    // every lit pixel and came back at 3.7 steps for twenty-five variants in
+    // a row — a number that does not move is a number measuring something
+    // else, and it was the dark BARK against the green crown. The crown is
+    // the green half (the instance colour is 0.30/0.42/0.20 and the bark
+    // 0x4a3826, so g > r separates them with nothing to tune) — and the card
+    // is handed the same two colours, so one rule reads both halves.
+    const cl: number[] = [];
+    for (let p = 0; p < N; p++) {
+      if (!mask[p]) continue;
+      if (rgb[p * 3 + 1] <= rgb[p * 3] + 4) continue;
+      cl.push(luma(rgb[p * 3] / 255, rgb[p * 3 + 1] / 255, rgb[p * 3 + 2] / 255));
+    }
+    cl.sort((a2, b22) => a2 - b22);
+    const pct = (f: number): number => cl.length ? cl[Math.min(cl.length - 1, Math.floor(f * cl.length))] : 0;
+    const spread = cl.length ? (pct(0.9) - pct(0.1)) / STEP : 0;
+    // ── AND WHETHER THAT LIGHT IS IN MASSES OR IN SPECKS ──
+    // A spread says how far the crown's light and dark reach; it cannot tell
+    // a lit side from salt-and-pepper, and under an ordered dither those are
+    // the two things worth telling apart. `mass` is the largest CONNECTED
+    // region of foliage carrying one quantised colour, as a share of the
+    // foliage — high is a crown with sides, low is foliage noise.
+    const fmask = new Uint8Array(N);
+    let nLeaf = 0;
+    for (let p = 0; p < N; p++) {
+      if (mask[p] && rgb[p * 3 + 1] > rgb[p * 3] + 4) { fmask[p] = 1; nLeaf++; }
+    }
+    const seen2 = new Uint8Array(N);
+    let massBig = 0;
+    for (let p = 0; p < N; p++) {
+      if (!fmask[p] || seen2[p]) continue;
+      const key0 = (rgb[p * 3] << 16) | (rgb[p * 3 + 1] << 8) | rgb[p * 3 + 2];
+      let sz = 0; stack.length = 0; stack.push(p); seen2[p] = 1;
+      while (stack.length) {
+        const qq = stack.pop() as number; sz++;
+        const qx = qq % PX, qy = (qq / PX) | 0;
+        const nb = [qx > 0 ? qq - 1 : -1, qx < PX - 1 ? qq + 1 : -1,
+          qy > 0 ? qq - PX : -1, qy < PX - 1 ? qq + PX : -1];
+        for (const k of nb) {
+          if (k < 0 || seen2[k] || !fmask[k]) continue;
+          if (((rgb[k * 3] << 16) | (rgb[k * 3 + 1] << 8) | rgb[k * 3 + 2]) !== key0) continue;
+          seen2[k] = 1; stack.push(k);
+        }
+      }
+      if (sz > massBig) massBig = sz;
+    }
+    const mass = nLeaf ? massBig / nLeaf : 0;
+    // ── AND HOW DARK THE FOLIAGE ACTUALLY IS ──
+    // `sky` is a CONTRAST and says nothing about which side of the palette a
+    // crown sits on; a tree reading as a black silhouette and a tree reading
+    // as a lit canopy against the same sky differ by this number and by
+    // nothing else the sheet reports. 0..255 on the composite's own output.
+    // NOTE THE SHEET HAS NO ATMOSPHERE. The game hazes a tree at 200 m toward
+    // the sky and this does not, so read `lum` as the floor of what a distant
+    // crown draws, not as what the frame shows.
+    const lum = cl.length ? Math.round(255 * (cl.reduce((a2, b22) => a2 + b22, 0) / cl.length)) : 0;
+    return { rgb, mask, n: N,
+      cov: cov / N, parts, big: cov ? big / cov : 0, stipple: cov ? lone / cov : 0,
+      steps, spread, mass, lum, leaf: cl.length, tones: toneSet.size,
+      box: [x0 > x1 ? 0 : x0, y0 > y1 ? 0 : y0, x1 < 0 ? 0 : x1, y1 < 0 ? 0 : y1] };
+  };
+  const num = (h: Half): Record<string, number> => ({
+    cov: +h.cov.toFixed(3), parts: h.parts, big: +h.big.toFixed(3),
+    steps: +h.steps.toFixed(2), spread: +h.spread.toFixed(2), mass: +h.mass.toFixed(3),
+    lum: h.lum, leaf: h.leaf, tones: h.tones, stipple: +h.stipple.toFixed(3),
+  });
+  const brief = (h: Half): string =>
+    `${h.parts}p ${Math.round(h.big * 100)}%big ${h.spread.toFixed(1)}sp`
+    + ` ${Math.round(h.mass * 100)}%ms ${Math.round(h.stipple * 100)}%st l${h.lum}`;
   for (const fam of EZ_FAMILIES) {
     const vs = ezVariants(fam);
     for (let i = 0; i < vs.length; i++) {
@@ -35052,189 +35315,95 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
       const PX = opt.px !== undefined
         ? Math.max(4, Math.min(MAXPX, Math.round(opt.px)))
         : Math.max(4, Math.min(MAXPX, Math.round((spanM * PX_PER_M_AT_1M) / DIST)));
-      const m = new THREE.InstancedMesh(g, mat, 1);
-      m.setMatrixAt(0, new THREE.Matrix4());
-      m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array([0.30, 0.42, 0.20]), 3);
-      m.frustumCulled = false;
-      sc.add(m);
       const cam = new THREE.OrthographicCamera(-hx, hx, hy, -hy, 0.01, 40);
       const c = Math.cos(elev);
       cam.position.set(Math.sin(az) * c * 8, cy + Math.sin(elev) * 8, Math.cos(az) * c * 8);
       cam.lookAt(0, cy, 0);
       cam.updateProjectionMatrix();
-      // A render target's viewport is copied by setRenderTarget, so the cell's
-      // own size is set on the TARGET and not on the renderer — the lesson the
-      // impostor atlas paid a whole measurement for.
       // THE CELL IS ITS OWN DISTANCE. The crown's merge reads the instance's
       // projected height off the camera, and an ortho camera framed to a
       // bounding box has no such thing — so the sheet says outright how many
       // art pixels tall this cell is, which is exactly what the framing means.
+      const m = new THREE.InstancedMesh(g, mat, 1);
+      m.setMatrixAt(0, new THREE.Matrix4());
+      m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array([0.30, 0.42, 0.20]), 3);
+      m.frustumCulled = false;
       ezLookU.uEzPxFix.value = PX;
-      rt.viewport.set(0, 0, PX, PX);
-      rt.scissor.set(0, 0, PX, PX);
-      rt.scissorTest = true;
-      renderer.setRenderTarget(rt);
-      renderer.setClearColor(0x000000, 0);
-      renderer.clear(true, true, true);
-      renderer.render(sc, cam);
-      renderer.readRenderTargetPixels(rt, 0, 0, PX, PX, buf);
-      sc.remove(m);
+      shoot(m, cam, PX);
       m.dispose();
-      // ── COMPOSITE OVER THE BACKGROUND, THEN QUANTISE AND DITHER ──
-      const N = PX * PX;
-      const rgb = new Uint8ClampedArray(N * 3);
-      const mask = new Uint8Array(N);
-      let inkSum = 0, bgSum = 0, cov = 0;
-      const toneSet = new Set<number>();
-      for (let y = 0; y < PX; y++) {
-        // The render target's rows run from the bottom; everything below is in
-        // canvas order, so the flip happens once, here.
-        const sy = PX - 1 - y;
-        const t = PX > 1 ? y / (PX - 1) : 0;
-        for (let x = 0; x < PX; x++) {
-          const s = (sy * PX + x) * 4, d = (y * PX + x) * 3;
-          const a = buf[s + 3] >= 128 ? 1 : 0;
-          let r: number, gg: number, bl: number;
-          const br = SKY[0] + (GND[0] - SKY[0]) * t;
-          const bg2 = SKY[1] + (GND[1] - SKY[1]) * t;
-          const bb2 = SKY[2] + (GND[2] - SKY[2]) * t;
-          if (INK) { r = a ? 0 : br; gg = a ? 0 : bg2; bl = a ? 0 : bb2; }
-          else if (a) { r = buf[s] / 255; gg = buf[s + 1] / 255; bl = buf[s + 2] / 255; }
-          else { r = br; gg = bg2; bl = bb2; }
-          if (POST && !INK) {
-            const th = b4(x, y);
-            r = quant(r, th); gg = quant(gg, th); bl = quant(bl, th);
-          }
-          rgb[d] = r * 255; rgb[d + 1] = gg * 255; rgb[d + 2] = bl * 255;
-          mask[y * PX + x] = a;
-          if (a) {
-            cov++; inkSum += luma(r, gg, bl); bgSum += luma(br, bg2, bb2);
-            toneSet.add(((rgb[d] << 16) | (rgb[d + 1] << 8) | rgb[d + 2]) >>> 0);
-          }
-        }
+      const A = analyse(PX);
+      let B: Half | null = null;
+      let slot: ImpAtlasSlot | null = null;
+      if (impRT && impMesh) {
+        // ── SLOT ZERO, CLEARED FIRST, ONE VARIANT AT A TIME ──
+        // The bake writes alpha 1 on every fragment it DRAWS and leaves the
+        // rest of a tile as it found it, so re-baking a slot over a previous
+        // tree keeps that tree's silhouette wherever the new one does not
+        // cover it. Clearing is the whole atlas and costs nothing here.
+        clearImpAtlas(renderer, impRT);
+        slot = bakeImpAtlasSlot(renderer, impRT, g, 0);
+        // ── THE CARD IS THE BOX, AT UNIT HEIGHT ──
+        // The world writes scale (2*hx*tall*formSw, 2*hy*tall, …) at
+        // (x, gy + cy*tall, z); here `tall` is 1 because the skeleton beside it
+        // is drawn in its own unit frame, and `formSw` is 1 because a per-tree
+        // width draw is a fact about a site and not about the variant.
+        const M = new THREE.Matrix4();
+        M.elements[0] = 2 * slot.hx; M.elements[5] = 2 * slot.hy; M.elements[10] = 2 * slot.hx;
+        M.elements[13] = slot.cy;
+        impMesh.setMatrixAt(0, M);
+        impMesh.instanceMatrix.needsUpdate = true;
+        shoot(impMesh, cam, PX);
+        B = analyse(PX);
       }
-      // ── COMPONENTS, LARGEST SHARE AND STIPPLE ──
-      // Closure cannot tell a mass from confetti, which is the whole difference
-      // between a tree that reads at 25 px and one that does not. Eight-connected
-      // so a diagonal chain of pads counts as one thing; the stipple share is
-      // four-connected, because a pixel touching nothing on its own edges is the
-      // thing that flickers as the truck moves.
-      const seen = new Uint8Array(N);
-      const stack: number[] = [];
-      let parts = 0, big = 0;
-      for (let p = 0; p < N; p++) {
-        if (!mask[p] || seen[p]) continue;
-        parts++; let sz = 0; stack.push(p); seen[p] = 1;
-        while (stack.length) {
-          const q = stack.pop() as number; sz++;
-          const qx = q % PX, qy = (q / PX) | 0;
-          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-            const nx = qx + dx, ny = qy + dy;
-            if (nx < 0 || ny < 0 || nx >= PX || ny >= PX) continue;
-            const k = ny * PX + nx;
-            if (mask[k] && !seen[k]) { seen[k] = 1; stack.push(k); }
-          }
-        }
-        if (sz > big) big = sz;
-      }
-      let lone = 0;
-      for (let p = 0; p < N; p++) {
-        if (!mask[p]) continue;
-        const px2 = p % PX, py2 = (p / PX) | 0;
-        let n = 0;
-        if (px2 > 0 && mask[p - 1]) n++;
-        if (px2 < PX - 1 && mask[p + 1]) n++;
-        if (py2 > 0 && mask[p - PX]) n++;
-        if (py2 < PX - 1 && mask[p + PX]) n++;
-        if (n <= 1) lone++;
-      }
-      const steps = cov ? Math.abs(inkSum - bgSum) / cov / STEP : 0;
-      // ── AND WHETHER THE CROWN HAS ANY FORM IN IT ──
-      // `steps` is the crown against the SKY and it passes everywhere, because
-      // near-black on pale blue is eight palette steps whatever the crown is
-      // made of. What both reviews say is missing is the crown's own light and
-      // dark, which is a spread WITHIN it: the tenth to ninetieth percentile of
-      // its luma, in palette steps. Percentiles rather than the range, because
-      // one stray lit pixel is not a lit side.
-      //
-      // AND IT IS THE FOLIAGE'S SPREAD, NOT THE TREE'S. The first cut measured
-      // every lit pixel and came back at 3.7 steps for twenty-five variants in
-      // a row — a number that does not move is a number measuring something
-      // else, and it was the dark BARK against the green crown. The crown is
-      // the green half (the instance colour is 0.30/0.42/0.20 and the bark
-      // 0x4a3826, so g > r separates them with nothing to tune).
-      const cl: number[] = [];
-      for (let p = 0; p < N; p++) {
-        if (!mask[p]) continue;
-        if (rgb[p * 3 + 1] <= rgb[p * 3] + 4) continue;
-        cl.push(luma(rgb[p * 3] / 255, rgb[p * 3 + 1] / 255, rgb[p * 3 + 2] / 255));
-      }
-      cl.sort((a2, b2) => a2 - b2);
-      const pct = (f: number): number => cl.length ? cl[Math.min(cl.length - 1, Math.floor(f * cl.length))] : 0;
-      const spread = cl.length ? (pct(0.9) - pct(0.1)) / STEP : 0;
-      // ── AND WHETHER THAT LIGHT IS IN MASSES OR IN SPECKS ──
-      // A spread says how far the crown's light and dark reach; it cannot tell
-      // a lit side from salt-and-pepper, and under an ordered dither those are
-      // the two things worth telling apart. `mass` is the largest CONNECTED
-      // region of foliage carrying one quantised colour, as a share of the
-      // foliage — high is a crown with sides, low is foliage noise. It is the
-      // metric the whole "move the variation unit up to the cluster" argument
-      // is about, and neither review had a number for it.
-      const fmask = new Uint8Array(N);
-      let nLeaf = 0;
-      for (let p = 0; p < N; p++) {
-        if (mask[p] && rgb[p * 3 + 1] > rgb[p * 3] + 4) { fmask[p] = 1; nLeaf++; }
-      }
-      const seen2 = new Uint8Array(N);
-      let massBig = 0;
-      for (let p = 0; p < N; p++) {
-        if (!fmask[p] || seen2[p]) continue;
-        const key0 = (rgb[p * 3] << 16) | (rgb[p * 3 + 1] << 8) | rgb[p * 3 + 2];
-        let sz = 0; stack.length = 0; stack.push(p); seen2[p] = 1;
-        while (stack.length) {
-          const qq = stack.pop() as number; sz++;
-          const qx = qq % PX, qy = (qq / PX) | 0;
-          const nb = [qx > 0 ? qq - 1 : -1, qx < PX - 1 ? qq + 1 : -1,
-            qy > 0 ? qq - PX : -1, qy < PX - 1 ? qq + PX : -1];
-          for (const k of nb) {
-            if (k < 0 || seen2[k] || !fmask[k]) continue;
-            if (((rgb[k * 3] << 16) | (rgb[k * 3 + 1] << 8) | rgb[k * 3 + 2]) !== key0) continue;
-            seen2[k] = 1; stack.push(k);
-          }
-        }
-        if (sz > massBig) massBig = sz;
-      }
-      const mass = nLeaf ? massBig / nLeaf : 0;
-      // ── AND HOW DARK THE FOLIAGE ACTUALLY IS ──
-      // `sky` is a CONTRAST and says nothing about which side of the palette a
-      // crown sits on; a tree reading as a black silhouette and a tree reading
-      // as a lit canopy against the same sky differ by this number and by
-      // nothing else the sheet reports. 0..255 on the composite's own output,
-      // with the background's own luma beside it.
-      // NOTE THE SHEET HAS NO ATMOSPHERE. The game hazes a tree at 200 m toward
-      // the sky and this does not, so read `lum` as the floor of what a distant
-      // crown draws, not as what the frame shows.
-      const lum = cl.length ? Math.round(255 * (cl.reduce((a2, b2) => a2 + b2, 0) / cl.length)) : 0;
-      const row = {
+      const row: Record<string, unknown> = {
         fam, i, label: vs[i].label, form: vs[i].form, crown: vs[i].crown, tris: vs[i].tris,
         px: PX, heightM: +(2 * hy * mPerUnit).toFixed(1),
-        cov: +(cov / N).toFixed(3),
-        parts, big: +(cov ? big / cov : 0).toFixed(3),
-        steps: +steps.toFixed(2), spread: +spread.toFixed(2), mass: +mass.toFixed(3), lum,
-        leaf: cl.length, tones: toneSet.size,
-        stipple: +(cov ? lone / cov : 0).toFixed(3),
+        ...num(A), box: A.box,
       };
+      if (B && slot) {
+        // ── THE ONE NUMBER THE SEAT ASKED FOR ──
+        // Intersection over union of the two silhouettes. It is the only
+        // statistic here that compares the halves rather than describing each;
+        // every other column can agree between a card and a tree that are
+        // plainly different shapes.
+        let inter = 0, uni = 0;
+        for (let p = 0; p < A.n; p++) {
+          const a2 = A.mask[p], b22 = B.mask[p];
+          if (a2 || b22) uni++;
+          if (a2 && b22) inter++;
+        }
+        const hA = A.box[3] - A.box[1] + 1, hB = B.box[3] - B.box[1] + 1;
+        const wA = A.box[2] - A.box[0] + 1, wB = B.box[2] - B.box[0] + 1;
+        row.imp = num(B);
+        row.impBox = B.box;
+        row.diff = {
+          iou: +(uni ? inter / uni : 0).toFixed(3),
+          covR: +(A.cov > 0 ? B.cov / A.cov : 0).toFixed(3),
+          hR: +(hA > 0 ? hB / hA : 0).toFixed(3),
+          wR: +(wA > 0 ? wB / wA : 0).toFixed(3),
+          dLum: B.lum - A.lum,
+          dParts: B.parts - A.parts,
+        };
+        row.slot = { hx: +slot.hx.toFixed(3), hy: +slot.hy.toFixed(3), cy: +slot.cy.toFixed(3) };
+      }
       rows.push(row);
-      cells.push({ rgb, px: PX,
-        l1: vs[i].label,
-        l2: `${PX}px ${parts}p ${Math.round(row.big * 100)}%big ${spread.toFixed(1)}sp ${Math.round(mass * 100)}%ms ${Math.round(row.stipple * 100)}%st` });
+      const d2 = row.diff as { iou: number; covR: number } | undefined;
+      cells.push({ a: A.rgb, b: B ? B.rgb : null, px: PX,
+        l1: PAIR ? `${vs[i].label}  iou ${d2 ? d2.iou.toFixed(2) : '--'}` : vs[i].label,
+        l2: `${PAIR ? 'real ' : ''}${PX}px ${brief(A)}`,
+        l3: B ? `imp  ${PX}px ${brief(B)}` : '' });
     }
   }
   ezLookU.uEzPxFix.value = 0;
   rt.viewport.copy(prevView); rt.scissor.copy(prevSci); rt.scissorTest = false;
   renderer.setRenderTarget(prevTarget);
+  renderer.setClearColor(prevClear, prevClearA);
   rt.dispose();
   mat.dispose();
+  if (impMesh) impMesh.dispose();
+  if (impMatS) impMatS.dispose();
+  if (impGeo) impGeo.dispose();
+  if (impRT) impRT.dispose();
   // ── ONE SHEET PIXEL IS THE SAME ART PIXEL IN EVERY CELL ──
   // Each variant renders at its OWN size, because a snag at 200 m really is
   // fourteen pixels where a conifer is twenty-nine and a sheet that hid that
@@ -35242,11 +35411,17 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
   // magnification is common; what differs is how much of the box a tree fills.
   const maxPx = cells.reduce((a, c) => Math.max(a, c.px), 1);
   const mag = MAG || Math.max(1, Math.min(16, Math.round(260 / maxPx)));
-  const cols = Math.max(1, Math.round(opt.cols ?? 6));
-  const CW = maxPx * mag, LH = 30;
+  const cols = Math.max(1, Math.round(opt.cols ?? (PAIR ? 3 : 6)));
+  const CW = maxPx * mag, LH = PAIR ? 46 : 30;
+  // ── THE PAIR IS ONE CELL, NOT TWO ──
+  // Two cells on a grid can be split by a row break, and a comparison whose
+  // halves are on different lines is not a comparison. The cell is two square
+  // images with a gutter, and the row that names them sits under both.
+  const GAP = PAIR ? 8 : 0;
+  const IW = PAIR ? CW * 2 + GAP : CW;
   const rowsN = Math.ceil(cells.length / cols);
   const cv = document.createElement('canvas');
-  cv.width = cols * CW; cv.height = rowsN * (CW + LH);
+  cv.width = cols * IW; cv.height = rowsN * (CW + LH);
   const cx = cv.getContext('2d') as CanvasRenderingContext2D;
   cx.imageSmoothingEnabled = false;
   const BG = opt.bg ?? 'sky';
@@ -35259,30 +35434,41 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
   cx.fillRect(0, 0, cv.width, cv.height);
   const tile = document.createElement('canvas');
   const tctx = tile.getContext('2d') as CanvasRenderingContext2D;
-  cells.forEach((cell, n) => {
-    tile.width = cell.px; tile.height = cell.px;
-    const img = tctx.createImageData(cell.px, cell.px);
-    for (let p = 0; p < cell.px * cell.px; p++) {
-      img.data[p * 4] = cell.rgb[p * 3];
-      img.data[p * 4 + 1] = cell.rgb[p * 3 + 1];
-      img.data[p * 4 + 2] = cell.rgb[p * 3 + 2];
+  const blit = (src: Uint8ClampedArray, px: number, gx: number, gy: number): void => {
+    tile.width = px; tile.height = px;
+    const img = tctx.createImageData(px, px);
+    for (let p = 0; p < px * px; p++) {
+      img.data[p * 4] = src[p * 3];
+      img.data[p * 4 + 1] = src[p * 3 + 1];
+      img.data[p * 4 + 2] = src[p * 3 + 2];
       img.data[p * 4 + 3] = 255;
     }
     tctx.putImageData(img, 0, 0);
-    const gx = (n % cols) * CW, gy = Math.floor(n / cols) * (CW + LH);
-    const w = cell.px * mag, off = Math.round((CW - w) / 2);
-    cx.drawImage(tile, 0, 0, cell.px, cell.px, gx + off, gy + off, w, w);
+    const w = px * mag, off = Math.round((CW - w) / 2);
+    cx.drawImage(tile, 0, 0, px, px, gx + off, gy + off, w, w);
+  };
+  cells.forEach((cell, n) => {
+    const gx = (n % cols) * IW, gy = Math.floor(n / cols) * (CW + LH);
+    blit(cell.a, cell.px, gx, gy);
+    if (cell.b) blit(cell.b, cell.px, gx + CW + GAP, gy);
     cx.strokeStyle = BG === 'dark' ? '#3a4150' : '#c2c6bd';
     cx.strokeRect(gx + 0.5, gy + 0.5, CW - 1, CW - 1);
+    if (cell.b) cx.strokeRect(gx + CW + GAP + 0.5, gy + 0.5, CW - 1, CW - 1);
     cx.fillStyle = label; cx.font = '12px monospace';
     cx.fillText(cell.l1, gx + 4, gy + CW + 12);
     cx.fillText(cell.l2, gx + 4, gy + CW + 25);
+    if (cell.l3) cx.fillText(cell.l3, gx + 4, gy + CW + 38);
   });
   return { rows, cols, dist: DIST, scale: SCALE, mag, maxPx, post: POST, ink: INK,
-    elev: opt.elev ?? 8, bg: BG,
+    elev: opt.elev ?? 8, bg: BG, pair: PAIR, yaw: YAW, top: +impTop.value.toFixed(3),
     design: { rows: ROWS, fov: FOV }, live: { rows: pixSize.y, fov: +camera.fov.toFixed(1) },
     sheet: cv.toDataURL('image/png') };
 };
+(window as unknown as { __ezsheet?: object }).__ezsheet = ezSheetOf;
+/** The contact sheet the seat asked for: each variant's skeleton with its own
+ *  baked impostor card beside it, in the same box, under the same light. */
+(window as unknown as { __impsheet?: object }).__impsheet = (o: EzSheetOpt = {}): object =>
+  ezSheetOf({ ...o, pair: true });
 
 (window as unknown as { __ezgeo?: object }).__ezgeo = (): object[] => {
   const rows: object[] = [];

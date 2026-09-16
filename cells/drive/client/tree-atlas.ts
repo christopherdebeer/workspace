@@ -192,10 +192,29 @@ export const IMP_ATLAS_GLSL = [
   // tile reaching into its neighbour — and it matters MORE now, because a
   // tile's neighbour is no longer guaranteed to be another view of the same
   // tree: the last tile of one slot sits beside the first of the next.
+  // ── AND THE GRID RUNS TOP-DOWN WHILE A TEXTURE RUNS BOTTOM-UP ──
+  //
+  // `viewOrigin` counts tile ROWS from the top, because that is how the bake's
+  // own viewport is placed (`vy = size - py - T`) and how `__impatlas` reads
+  // the atlas back. A texture's v runs from the BOTTOM, so a lookup that takes
+  // `floor(t / G)` as a v offset reads row `G - 1 - ty` instead of row `ty` —
+  // a different variant's tile entirely, on an atlas that is nearly full.
+  //
+  // IT SHIPPED THAT WAY AND THE CONTACT SHEET IS WHAT CAUGHT IT: every card
+  // rendered against a privately baked one-slot atlas drew NOTHING, because
+  // slot 0 view 0 is written at framebuffer row 992 and was being read at row
+  // 0. In the world, where a thousand tiles are occupied, the same fault reads
+  // as trees wearing each other's faces rather than as an absence — which is
+  // the fault this repo already records twice, and is exactly the seat's
+  // report that impostors do not look enough like their counterparts.
+  //
+  // `devtools/imp-atlas.test.mjs` now holds the claim in FRAMEBUFFER ROWS,
+  // where the fault lives; the tile-index form it held before is true of both
+  // the broken and the fixed arithmetic and could not have seen this.
   'vec4 impTileRect(float slot, float view) {',
   '  float T = uImpAtlasK.x, G = uImpAtlasK.y, V = uImpAtlasK.z, A = uImpAtlasK.w;',
   '  float t = slot * V + view;',
-  '  vec2 o = vec2(mod(t, G), floor(t / G)) * T;',
+  '  vec2 o = vec2(mod(t, G), G - 1.0 - floor(t / G)) * T;',
   '  return vec4((o + 0.5) / A, (o + T - 0.5) / A);',
   '}',
   'vec4 impAtlasAt(float slot, float view, vec2 uv) {',

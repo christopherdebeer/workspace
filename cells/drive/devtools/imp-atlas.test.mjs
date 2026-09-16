@@ -26,10 +26,18 @@
  * **THE PACKING.** A slot's twenty-five views are a contiguous LINEAR run of
  * tiles that wraps across rows, and two implementations write that: `viewOrigin`
  * on the CPU, for the bake, and `impTileRect` in GLSL, for the lookup. Nothing
- * here can run GLSL, so the test re-derives the shader's arithmetic from its
- * own source text and requires it to land on the same tile — which catches the
- * class of fault this repo already records twice: a bake and a lookup that
- * disagree about where a tile is, drawn as trees wearing each other's faces.
+ * here can run GLSL, so the test re-derives both from their own source text and
+ * requires them to land on the same FRAMEBUFFER ROW — which catches the class
+ * of fault this repo already records twice: a bake and a lookup that disagree
+ * about where a tile is, drawn as trees wearing each other's faces.
+ *
+ * **AND THE ROW IS THE UNIT BECAUSE THE TILE INDEX WAS NOT.** This check
+ * compared `[t % G, floor(t / G)]` against `viewOrigin` — the same expression
+ * twice — and passed for as long as the compact packing has existed, while the
+ * shipped lookup was reading row `G - 1 - ty` for every tile in the atlas: the
+ * grid counts rows from the top (the bake's viewport and `__impatlas` both do)
+ * and a texture's v counts them from the bottom. The contact sheet found it;
+ * this could not have, and the negative control below is what says it can now.
  */
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
@@ -95,30 +103,54 @@ ok(overlap === 0, 'no two views share a tile', `${overlap} collisions`);
 ok(seen.size === IMP_ATLAS_SLOTS * IMP_ATLAS.views,
   '…and every view has one', `${seen.size} tiles used of ${IMP_ATLAS.grid ** 2}`);
 
-// ── THE SHADER'S ARITHMETIC LANDS ON THE SAME TILE ──
-// Read from the GLSL's own source so a change there fails here. The expression
-// is `t = slot*V + view; o = vec2(mod(t, G), floor(t / G)) * T` — restated,
-// deliberately, because restating it is what makes the disagreement visible.
+// ── THE SHADER'S ARITHMETIC LANDS ON THE SAME PIXELS ──
+//
+// THE TILE INDEX WAS THE WRONG UNIT AND THIS CHECK PASSED ON A BROKEN BUILD.
+// It compared `[t % G, floor(t / G)]` against `viewOrigin`, which is the same
+// expression twice and is true whichever way the atlas's y axis runs — while
+// the fault that shipped was ENTIRELY in that axis: `viewOrigin` counts tile
+// rows from the TOP (which is how the bake places its viewport and how
+// `__impatlas` reads the atlas back) and a texture's v runs from the BOTTOM,
+// so the lookup was reading row `G - 1 - ty` for every tile in the atlas.
+//
+// The claim is therefore made in FRAMEBUFFER ROWS, where both sides can be
+// wrong independently: the row the BAKE writes a view at, and the row the
+// SHADER samples it from, must be the same row.
 const glsl = IMP_ATLAS_GLSLtext();
 function IMP_ATLAS_GLSLtext() { return atlas.IMP_ATLAS_GLSL; }
+const src = readFileSync(join(CELL, 'client/tree-atlas.ts'), 'utf8');
 ok(glsl.includes('float t = slot * V + view;'),
   'the shader indexes a slot\'s run linearly');
-ok(glsl.includes('vec2 o = vec2(mod(t, G), floor(t / G)) * T;'),
-  '…and wraps it across the tile grid');
+ok(glsl.includes('vec2 o = vec2(mod(t, G), G - 1.0 - floor(t / G)) * T;'),
+  '…and flips the row, because the grid is top-down and a texture is not');
 ok(!glsl.includes('blockTile'),
   '…with no rectangular block origin left in it');
+ok(src.includes('const vy = IMP_ATLAS.size - py - T;'),
+  'the bake places its viewport from the top');
 
-const G = IMP_ATLAS.grid, V = IMP_ATLAS.views;
-let drift = 0;
+const G = IMP_ATLAS.grid, V = IMP_ATLAS.views, T = IMP_ATLAS.tile, A = IMP_ATLAS.size;
+// Both sides restated from the source above: the bake's viewport y, and the
+// shader's uv lower edge turned back into framebuffer rows.
+const bakeRow = (ty) => A - ty * T - T;
+const shaderRow = (ty) => (G - 1 - ty) * T;
+const wasRow = (ty) => ty * T;              // the form that shipped
+let drift = 0, control = 0;
 for (let s = 0; s < IMP_ATLAS_SLOTS; s++) {
   for (let v = 0; v < V; v++) {
     const t = s * V + v;
-    const [gx, gy] = [t % G, Math.floor(t / G)];
     const [cx, cy] = viewOrigin(s, v);
-    if (gx !== cx || gy !== cy) drift++;
+    if (cx !== t % G || cy !== Math.floor(t / G)) drift++;
+    else if (bakeRow(cy) !== shaderRow(cy)) drift++;
+    if (bakeRow(cy) !== wasRow(cy)) control++;
   }
 }
-ok(drift === 0, 'the bake and the lookup agree about every tile', `${drift} disagree`);
+ok(drift === 0, 'the bake and the lookup agree about every tile, in pixels',
+  `${drift} disagree`);
+// THE NEGATIVE CONTROL, because a check that has not been shown to fail on the
+// fault it names is decoration — and this one had not been.
+ok(control === IMP_ATLAS_SLOTS * V,
+  '…and the arithmetic it replaced disagreed about every one of them',
+  `${control} of ${IMP_ATLAS_SLOTS * V}`);
 
 // ── AND A FLOAT32 CAN STILL COUNT THE TILES ──
 // `mod(t, G)` runs on a float in the fragment; t reaches slots*views.
