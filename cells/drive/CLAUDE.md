@@ -5012,6 +5012,95 @@ identical in both legs to the digit. Shading cannot join a crown that is thirtee
 separate pieces of foliage — that is phase 3, the cluster crown and the distance
 merge.
 
+### Phase 3: the crown closes as the tree shrinks, and 12 of 29 becomes 24
+
+The fault phase 2 could not touch. At 200 m a conifer is four to thirteen
+separate pieces of foliage with up to a third of its lit pixels touching at most
+one neighbour, and with no MSAA and a nearest magnify a pad near a pixel does
+not get smaller as the tree recedes — it gets INTERMITTENT, covering a pixel or
+not by sub-pixel phase, changing every frame the truck moves, with the ordered
+dither amplifying it.
+
+**BOTH TARGETS ARE SATISFIABLE ONLY BY A CROWN THAT IS OPEN NEAR AND CLOSED
+FAR.** The botanical review wants crown porosity — real holes between foliage
+masses — which is right at thirty to a hundred metres. Its own headline target
+is that a biome be unmistakable AS A BLACK SILHOUETTE at 150-300 m, which is a
+solid shape. A hole at 200 m is one pixel. Neither target is wrong; they are
+statements about different scales, and the mechanism that serves both is an LOD
+on the crown's OPENNESS.
+
+**EACH CLUSTER CARRIES WHERE IT WOULD SIT ON THE CROWN'S OWN SILHOUETTE HULL**
+— a surface of revolution measured off the crown's radius at each height, so a
+conifer's hull is a cone, a round tree's a dome, an umbrella's a plate and a
+column's a column; nothing is authored and nothing is a sphere. The vertex
+shader slides the cluster onto that hull and grows it over a band read from the
+INSTANCE's projected height in art pixels: untouched above 58 px (about 110 m
+for a 20 m conifer), one closed mass below 26 px (about 250 m). The scale comes
+from `projectionMatrix`, so it is right in the chase lens, right through the
+speed kick and right on the chart.
+
+No second geometry, no popping (the blend is continuous in the instance's own
+distance), no re-upload, and **nothing for the refresh to do** — `refreshVeg`
+writes exactly the matrices it wrote before, which is why `perf-check` is still
+20 of 20 production refills byte-identical with the merge shipped.
+
+**Measured**, at 200 m, the switch the only difference:
+
+| by form | parts | | big | | stipple | | `form` | |
+|---|---|---|---|---|---|---|---|---|
+| | off | **on** | off | **on** | off | **on** | off | **on** |
+| conic (12) | 7.5 | **1.6** | 68% | **97%** | 19% | **3%** | 2.5 | **2.9** |
+| round (6) | 2.0 | **1.0** | 82% | **100%** | 5% | **2%** | 2.6 | 2.8 |
+| umbrella (3) | 2.0 | **1.0** | 88% | **100%** | 8% | **3%** | 3.0 | 3.0 |
+| columnar (2) | 1.5 | **1.0** | 83% | **100%** | 4% | **1%** | 2.0 | 2.0 |
+| palm (2) | 1.5 | **1.0** | 93% | **100%** | 7% | **1%** | 3.0 | 3.0 |
+
+**12 of 29 variants read at 200 m becomes 24**, and the five that still fail are
+the four snags (which have no crown, so the merge correctly does nothing) and
+one columnar broadleaf on its crown's own light. The conifer family goes from
+0 of 12 to 12 of 12.
+
+**AND THE NEAR FIELD IS UNTOUCHED, WHICH IS THE CONTROL THAT MATTERS.** At 60 m
+every form above the 58 px bound reads identically with the merge on and off, to
+the digit. The one difference is the acacia (3.3 parts against 3.7), and that is
+the rule working rather than leaking: an umbrella thorn is a 10 m tree, so at
+60 m it is 49 art pixels and genuinely inside the band.
+
+**THE HULL IS INSET BY EXACTLY WHAT THE GROWTH WILL ADD BACK, and the first cut
+was not.** Putting the clusters ON the silhouette and THEN growing them stood a
+merged crown about twice as wide as the tree it was baked as — **a tree that
+GROWS as you drive away from it**, which is a worse fault than the stipple it
+fixes, and the control sheet showed it at once because every round broadleaf
+clipped its own cell. Two profiles are measured now, the silhouette's (every
+vertex) and the clusters' (their centres); the difference between them at a
+height IS the pad's radius there, and the hull is set where a pad grown by
+`EZ_MERGE_GROW` lands on the original silhouette, in the vertical as well as the
+radial. **One constant, exported, interpolated into the GLSL** — two copies of
+that number is the growing tree again, arrived at by a different road.
+
+`?ezmerge=0` draws the crown exactly as baked at every distance; 2 overshoots,
+which is a way to see the mechanism rather than a setting.
+
+**WHAT THE 60 m COLUMN IS NOT.** The legibility bar (at most three parts, 70% in
+the largest, and so on) is a 200 m bar: at 60 m a crown SHOULD show its
+structure and `parts` of 10 is a conifer you can see between the branches of.
+Seven of twenty-nine "read" there and that is not a finding.
+
+### …and three of the eight broadleaf variants are never drawn anywhere
+
+Found by `tree-stand.test.mjs` while verifying the above, PRE-EXISTING (it fails
+identically at the commit before this work) and not fixed here: over 572 sampled
+districts `ezPalette` picks broadleaf variants `[0, 2, 3, 4, 6]` and never 1, 5
+or 7. **Three of eight baked silhouettes — including one of the two columnar
+broadleaves — exist in the bundle, cost their bytes, and are drawn nowhere on
+Earth.**
+
+It is the same shape as the ten forgotten switches one layer over, and it bears
+directly on the botanical review's ask for fifteen to twenty-five architectural
+habits: **adding habits is worth nothing while a third of the ones already baked
+are unreachable.** Whatever `ezPalette`'s draw is doing, it is not covering its
+own atlas, and that is the thing to fix before the atlas grows.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the

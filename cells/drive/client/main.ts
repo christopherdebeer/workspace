@@ -5541,6 +5541,11 @@ resizePost = () => {
   rtD.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   rtM.setSize(w, Math.max(2, h));
   pixSize.set(w, Math.max(2, h));
+  // The tree crowns turn a distance into ART PIXELS to decide how far to close
+  // onto their own hull, and the art grid is this number. Set here rather than
+  // per frame because it only moves on a resize or a PIXEL-dial change, both of
+  // which come through here.
+  ezLookU.uEzPxH.value = Math.max(2, h);
 };
 resizePost();
 // EVERYTHING AFTER THE SCENE PASS, from whatever is already sitting in
@@ -34320,6 +34325,11 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
       // A render target's viewport is copied by setRenderTarget, so the cell's
       // own size is set on the TARGET and not on the renderer — the lesson the
       // impostor atlas paid a whole measurement for.
+      // THE CELL IS ITS OWN DISTANCE. The crown's merge reads the instance's
+      // projected height off the camera, and an ortho camera framed to a
+      // bounding box has no such thing — so the sheet says outright how many
+      // art pixels tall this cell is, which is exactly what the framing means.
+      ezLookU.uEzPxFix.value = PX;
       rt.viewport.set(0, 0, PX, PX);
       rt.scissor.set(0, 0, PX, PX);
       rt.scissorTest = true;
@@ -34470,6 +34480,7 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
         l2: `${PX}px ${parts}p ${Math.round(row.big * 100)}%big ${spread.toFixed(1)}sp ${Math.round(mass * 100)}%ms ${Math.round(row.stipple * 100)}%st` });
     }
   }
+  ezLookU.uEzPxFix.value = 0;
   rt.viewport.copy(prevView); rt.scissor.copy(prevSci); rt.scissorTest = false;
   renderer.setRenderTarget(prevTarget);
   rt.dispose();

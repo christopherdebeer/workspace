@@ -103,6 +103,12 @@ const uint16 = (b64: string): Uint16Array => { const u = bytes(b64); return new 
 const floraQuery = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
 export const EZ_REFINED = floraQuery.get('ezdetail') !== '0';
 export const EZ_GROWTH_FORMS = floraQuery.get('ezforms') !== '0';
+/** How much a foliage cluster grows as the crown closes at distance. Shared:
+ *  the decode insets the hull by exactly what this will add back, and the
+ *  vertex shader interpolates toward it, so the far crown is the same SIZE as
+ *  the near one and only solid. Two copies of this number is a tree that grows
+ *  as you drive away from it. */
+export const EZ_MERGE_GROW = 2.2;
 type GrowthVariant = EzBakedVariant & { habit?: string; pads?: string };
 const growthBake = new Map<EzFamily, GrowthVariant[]>();
 const bakedVariants = (family: EzFamily): GrowthVariant[] => {
@@ -274,6 +280,14 @@ function crownOf(v: GrowthVariant, q: number): THREE.BufferGeometry | null {
     }
     g.setAttribute('aSky', new THREE.BufferAttribute(sky, 1));
     g.setAttribute('aEnv', new THREE.BufferAttribute(crownEnv(g), 3));
+    const padOf = new Float32Array(sky.length * 3);
+    for (let i = 0; i < sky.length; i++) {
+      const c = Math.min(nc - 1, i >> 2);
+      padOf[i * 3] = cen[c * 3]; padOf[i * 3 + 1] = cen[c * 3 + 1]; padOf[i * 3 + 2] = cen[c * 3 + 2];
+    }
+    const hull = crownHull(g, padOf);
+    g.setAttribute('aPad', new THREE.BufferAttribute(hull.pad, 3));
+    g.setAttribute('aHull', new THREE.BufferAttribute(hull.hull, 3));
     return cardTone(g);
   }
   const A = int16(v.anc);
@@ -425,6 +439,7 @@ function crownShade(crown: THREE.BufferGeometry, parts: THREE.BufferGeometry[],
   const n = pos.count;
   const col = new Float32Array(n * 3);
   const sky = new Float32Array(n);
+  const padOf = new Float32Array(n * 3);
   const env = crownEnv(crown);
   const tone = new Float32Array(Math.max(1, nAnc));
   for (let j = 0; j < tone.length; j++) {
@@ -446,6 +461,7 @@ function crownShade(crown: THREE.BufferGeometry, parts: THREE.BufferGeometry[],
       // Within a cluster the top and the outward face see more sky than the
       // underside and the side facing the trunk. The pad's own centre gives
       // that direction without needing a normal the merge has not built yet.
+      padOf[vi * 3] = cxp; padOf[vi * 3 + 1] = cyp; padOf[vi * 3 + 2] = czp;
       const nx = pos.getX(vi) - cxp, ny = pos.getY(vi) - cyp, nz = pos.getZ(vi) - czp;
       const nl = Math.hypot(nx, ny, nz) || 1;
       const up = 0.5 + 0.5 * (ny / nl);
@@ -458,7 +474,127 @@ function crownShade(crown: THREE.BufferGeometry, parts: THREE.BufferGeometry[],
   crown.setAttribute('color', new THREE.BufferAttribute(col, 3));
   crown.setAttribute('aSky', new THREE.BufferAttribute(sky, 1));
   crown.setAttribute('aEnv', new THREE.BufferAttribute(env, 3));
+  const hull = crownHull(crown, padOf);
+  crown.setAttribute('aPad', new THREE.BufferAttribute(hull.pad, 3));
+  crown.setAttribute('aHull', new THREE.BufferAttribute(hull.hull, 3));
   return crown;
+}
+
+/**
+ * ── AND THE CROWN CLOSES AS IT SHRINKS ──
+ *
+ * The control set at 200 m says the conifers are four to thirteen SEPARATE
+ * pieces of foliage with up to a third of their lit pixels touching at most one
+ * neighbour. With no MSAA and a nearest magnify, a pad near a pixel does not
+ * get smaller as the tree recedes — it gets INTERMITTENT, covering a pixel or
+ * not by sub-pixel phase, and the phase changes every frame the truck moves.
+ * The ordered dither then amplifies it. That is the crawling stipple, and no
+ * amount of shading reaches it: phase 2 moved `parts` and `stipple` by nothing
+ * at all, to the digit.
+ *
+ * Both reviews of the atlas want crown POROSITY — real holes between foliage
+ * masses — and they are right at thirty to a hundred metres and wrong past two
+ * hundred, where a hole is one pixel. The seat's own target for the far field
+ * is that a biome be unmistakable AS A BLACK SILHOUETTE, which is a solid
+ * shape. Both are satisfiable at once only by a crown that is open near and
+ * closed far.
+ *
+ * So each foliage cluster carries where it would sit on the crown's own
+ * SILHOUETTE HULL — a surface of revolution measured off the crown's radius at
+ * each height, so a conifer's hull is a cone, a round tree's a dome, an
+ * umbrella's a plate and a column's a column — and the vertex shader slides the
+ * cluster onto that hull, and grows it, as the tree's projected height falls.
+ * An LOD with no second geometry, no popping (the blend is continuous in the
+ * instance's own distance), no re-upload, and nothing for the refresh to do:
+ * `refreshVeg` writes exactly the matrices it wrote before, which is what keeps
+ * `perf-check` byte-identical.
+ *
+ * MEASURED AT A PERCENTILE, NOT AT THE MAXIMUM. One stray card thrown wide by
+ * the reduction would otherwise set the hull's radius for its whole height band
+ * and inflate the far silhouette by however far it was thrown.
+ */
+function crownHull(crown: THREE.BufferGeometry, padOf: Float32Array): {
+  pad: Float32Array; hull: Float32Array;
+} {
+  const pos = crown.getAttribute('position') as THREE.BufferAttribute;
+  const n = pos.count;
+  crown.computeBoundingBox();
+  const bb = crown.boundingBox as THREE.Box3;
+  const y0 = bb.min.y, span = Math.max(1e-4, bb.max.y - y0);
+  const BINS = 12;
+  const prof = (radius: (i: number) => number, height: (i: number) => number): Float32Array => {
+    const bins: number[][] = Array.from({ length: BINS }, () => []);
+    for (let i = 0; i < n; i++) {
+      const b = Math.min(BINS - 1, Math.max(0, Math.floor(((height(i) - y0) / span) * BINS)));
+      bins[b].push(radius(i));
+    }
+    const out = new Float32Array(BINS);
+    for (let b = 0; b < BINS; b++) {
+      const a = bins[b];
+      if (!a.length) { out[b] = 0; continue; }
+      a.sort((x, y) => x - y);
+      out[b] = a[Math.min(a.length - 1, Math.floor(a.length * 0.86))];
+    }
+    // One smoothing pass, so a band that happened to catch few clusters does
+    // not pinch the hull into a waist.
+    const sm = new Float32Array(BINS);
+    for (let b = 0; b < BINS; b++) {
+      const l = out[Math.max(0, b - 1)], r = out[Math.min(BINS - 1, b + 1)];
+      sm[b] = Math.max(out[b], (l + 2 * out[b] + r) * 0.25);
+    }
+    return sm;
+  };
+  // ── THE HULL IS INSET BY WHAT THE GROWTH WILL ADD ──
+  //
+  // The first cut put the clusters ON the silhouette and THEN grew them, so a
+  // merged crown stood about twice as wide as the tree it was baked as — and
+  // in the world that is a tree that GROWS as you drive away from it, which is
+  // a worse fault than the stipple it fixes. The control sheet showed it at
+  // once: every round broadleaf clipped its own cell.
+  //
+  // So two profiles are measured, the silhouette's (every vertex) and the
+  // clusters' own (their centres), and the difference between them at a given
+  // height IS the pad's radius there. The hull is then set where a pad grown by
+  // EZ_MERGE_GROW lands exactly on the original silhouette. The far crown is
+  // the same size as the near crown and merely solid.
+  const vert = prof((i) => Math.hypot(pos.getX(i), pos.getZ(i)), (i) => pos.getY(i));
+  const cent = prof((i) => Math.hypot(padOf[i * 3], padOf[i * 3 + 2]), (i) => padOf[i * 3 + 1]);
+  const sm = new Float32Array(BINS);
+  for (let b = 0; b < BINS; b++) {
+    sm[b] = Math.max(0, vert[b] - Math.max(0, vert[b] - cent[b]) * EZ_MERGE_GROW);
+  }
+  // The same argument in the vertical: a top cluster grows upward too, so the
+  // hull's heights are compressed toward the crown's centre by whatever the
+  // growth will add back.
+  let topV = -1e9, topC = -1e9, botV = 1e9, botC = 1e9;
+  for (let i = 0; i < n; i++) {
+    topV = Math.max(topV, pos.getY(i)); botV = Math.min(botV, pos.getY(i));
+    topC = Math.max(topC, padOf[i * 3 + 1]); botC = Math.min(botC, padOf[i * 3 + 1]);
+  }
+  const cy = (topV + botV) * 0.5;
+  const yk = (h: number, c: number): number => {
+    const halfPad = Math.max(0, h - c), reach = c - cy;
+    return Math.abs(reach) < 1e-4 ? 1
+      : Math.min(1, Math.max(0, (h - halfPad * EZ_MERGE_GROW - cy) / reach));
+  };
+  const kUp = yk(topV, topC), kDn = yk(-botV, -botC);
+  const pad = new Float32Array(n * 3);
+  const hull = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const px = padOf[i * 3], py = padOf[i * 3 + 1], pz = padOf[i * 3 + 2];
+    pad[i * 3] = px; pad[i * 3 + 1] = py; pad[i * 3 + 2] = pz;
+    const t = Math.min(BINS - 1, Math.max(0, ((py - y0) / span) * BINS - 0.5));
+    const b0 = Math.floor(t), b1 = Math.min(BINS - 1, b0 + 1), f = t - b0;
+    const r = sm[b0] * (1 - f) + sm[b1] * f;
+    const rho = Math.hypot(px, pz);
+    // A cluster already on the axis has no direction to be pushed along, and
+    // the axis is inside the hull in any case, so it stays where it is.
+    const k = rho > 1e-4 ? r / rho : 1;
+    hull[i * 3] = px * k;
+    hull[i * 3 + 1] = cy + (py - cy) * (py >= cy ? kUp : kDn);
+    hull[i * 3 + 2] = pz * k;
+  }
+  return { pad, hull };
 }
 
 /**
@@ -511,6 +647,8 @@ function join(wood: THREE.BufferGeometry, crown: THREE.BufferGeometry | null): T
   const cc = crown?.getAttribute('color') as THREE.BufferAttribute | undefined;
   const csk = crown?.getAttribute('aSky') as THREE.BufferAttribute | undefined;
   const cev = crown?.getAttribute('aEnv') as THREE.BufferAttribute | undefined;
+  const cpd = crown?.getAttribute('aPad') as THREE.BufferAttribute | undefined;
+  const chl = crown?.getAttribute('aHull') as THREE.BufferAttribute | undefined;
   const nW = wp.count, nC = cp ? cp.count : 0;
   const pos = new Float32Array((nW + nC) * 3);
   const col = new Float32Array((nW + nC) * 3);
@@ -520,6 +658,14 @@ function join(wood: THREE.BufferGeometry, crown: THREE.BufferGeometry | null): T
   // the day someone moves that branch.
   const skF = new Float32Array(nW + nC).fill(1);
   const evF = new Float32Array((nW + nC) * 3);
+  // THE WOOD IS ITS OWN HULL. The merge lerps toward `aHull` about `aPad`, so
+  // writing the vertex into both leaves the timber exactly where it is at any
+  // distance — a trunk that slid onto the crown's cone would be a catastrophe
+  // wearing a continuous blend.
+  const pdF = new Float32Array((nW + nC) * 3);
+  const hlF = new Float32Array((nW + nC) * 3);
+  pdF.set(wp.array as Float32Array, 0);
+  hlF.set(wp.array as Float32Array, 0);
   pos.set(wp.array as Float32Array, 0);
   col.set(wc.array as Float32Array, 0);
   wdF.fill(1, 0, nW);
@@ -528,6 +674,10 @@ function join(wood: THREE.BufferGeometry, crown: THREE.BufferGeometry | null): T
     col.set(cc.array as Float32Array, nW * 3);
     if (csk) skF.set(csk.array as Float32Array, nW);
     if (cev) evF.set(cev.array as Float32Array, nW * 3);
+    if (cpd) pdF.set(cpd.array as Float32Array, nW * 3);
+    else pdF.set(cp.array as Float32Array, nW * 3);
+    if (chl) hlF.set(chl.array as Float32Array, nW * 3);
+    else hlF.set(cp.array as Float32Array, nW * 3);
   }
   const ci = crown?.index as THREE.BufferAttribute | null | undefined;
   const nCI = ci ? ci.count : nC;
@@ -541,6 +691,8 @@ function join(wood: THREE.BufferGeometry, crown: THREE.BufferGeometry | null): T
   g.setAttribute('aWood', new THREE.BufferAttribute(wdF, 1));
   g.setAttribute('aSky', new THREE.BufferAttribute(skF, 1));
   g.setAttribute('aEnv', new THREE.BufferAttribute(evF, 3));
+  g.setAttribute('aPad', new THREE.BufferAttribute(pdF, 3));
+  g.setAttribute('aHull', new THREE.BufferAttribute(hlF, 3));
   g.setIndex(new THREE.BufferAttribute(idx, 1));
   g.computeVertexNormals();
   return g;
@@ -765,6 +917,21 @@ export const ezLookU = {
    *  rather than from the radial approximation it replaced. `?ezsky=0` is the
    *  exact A/B and restores the old term to the bit. */
   uEzSky: { value: floraQuery.get('ezsky') === '0' ? 0 : 1 },
+  /** How hard the far crown closes onto its own silhouette hull. 0 is the
+   *  crown exactly as baked at every distance — the A/B — and above 1 it
+   *  overshoots, which is a way to see the mechanism rather than a setting. */
+  uEzMerge: { value: (() => {
+    const raw = floraQuery.get('ezmerge');
+    if (raw === null || raw === '') return 1;
+    const v = Number(raw);
+    return Number.isFinite(v) && v >= 0 ? Math.min(3, v) : 1;
+  })() },
+  /** The art-grid height, so the shader can turn a distance into art pixels.
+   *  main.ts keeps it at `pixSize.y`; 320 is the design value. */
+  uEzPxH: { value: 320 },
+  /** A control sheet frames its cell by construction and has no distance to
+   *  read, so it states the size outright. 0 means read the camera. */
+  uEzPxFix: { value: 0 },
 };
 /** A hash and a value noise of our own. `grain.ts` has the same pair under
  *  different names and IS chained onto this material — declaring `grNoise`
@@ -797,14 +964,45 @@ export function ezMaterial(
     sh.uniforms.uEzBend = uEzBend;
     sh.uniforms.uEzBark = ezLookU.uEzBark;
     sh.uniforms.uEzSky = ezLookU.uEzSky;
+    sh.uniforms.uEzMerge = ezLookU.uEzMerge;
+    sh.uniforms.uEzPxH = ezLookU.uEzPxH;
+    sh.uniforms.uEzPxFix = ezLookU.uEzPxFix;
     sh.uniforms.uEzEdge = ezLookU.uEzEdge;
     sh.uniforms.uTime = wind.uTime;
     sh.uniforms.uGust = wind.uGust;
     sh.uniforms.uWindK = wind.uWindK;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', `#include <common>\nattribute float aWood; attribute float aSky; attribute vec3 aEnv; uniform vec3 uWood; uniform float uEzBend;\nvarying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky; varying vec3 vEzEnv;\n${FOLIAGE_WIND_UNIFORMS}`)
+      .replace('#include <common>', `#include <common>\nattribute float aWood; attribute float aSky; attribute vec3 aEnv; attribute vec3 aPad; attribute vec3 aHull;\nuniform vec3 uWood; uniform float uEzBend; uniform float uEzMerge; uniform float uEzPxH; uniform float uEzPxFix;\nvarying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky; varying vec3 vEzEnv;\n${FOLIAGE_WIND_UNIFORMS}`)
       .replace('#include <begin_vertex>', [
         '#include <begin_vertex>',
+        // ── THE CROWN CLOSES AS THE TREE SHRINKS ──
+        //
+        // Each foliage cluster slides onto the crown's own silhouette hull and
+        // grows, over a band read from the INSTANCE's projected height in art
+        // pixels — so it is per tree, continuous, and costs the refresh
+        // nothing. Above 58 px (about 110 m for a 20 m conifer) the tree is
+        // exactly what it was baked as, holes and all; below 26 px (about 250
+        // m) it is one closed mass, which is what a biome read as a black
+        // silhouette needs and what stops a 2 px pad flickering on and off by
+        // sub-pixel phase with no MSAA under it.
+        //
+        // The scale comes from projectionMatrix, so it is right in the chase
+        // lens, right through the speed kick and right on the chart; uEzPxFix
+        // is the control sheet's way in, since a sheet frames its cell by
+        // construction and has no distance to read.
+        '#ifdef USE_INSTANCING',
+        'if (uEzMerge > 0.001 && aWood < 0.5) {',
+        '  float ezPx = uEzPxFix;',
+        '  if (ezPx <= 0.0) {',
+        '    vec3 ezAt = (modelMatrix * instanceMatrix[3]).xyz;',
+        '    float ezTall = length(instanceMatrix[1].xyz);',
+        '    ezPx = ezTall * uEzPxH * projectionMatrix[1][1] * 0.5 / max(1.0, distance(cameraPosition, ezAt));',
+        '  }',
+        '  float ezM = (1.0 - smoothstep(26.0, 58.0, ezPx)) * uEzMerge;',
+        `  vec3 ezFar = aHull + (transformed - aPad) * mix(1.0, ${EZ_MERGE_GROW.toFixed(2)}, ezM);`,
+        '  transformed = mix(transformed, ezFar, ezM);',
+        '}',
+        '#endif',
         '#ifdef USE_INSTANCING',
         'float ezBx = fract(sin(dot(instanceMatrix[3].xz, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;',
         'float ezBz = fract(sin(dot(instanceMatrix[3].zx, vec2(39.3468, 11.135))) * 24634.6345) - 0.5;',
