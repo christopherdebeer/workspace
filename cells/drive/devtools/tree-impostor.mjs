@@ -197,12 +197,17 @@ console.log(`  atlas ${b1.imp.atlas ? `ON · ${b1.imp.slots}/${b1.imp.slotCap} v
 // are empty, full, or wildly uneven across azimuths is a bake that framed the
 // tree wrongly rather than a tier that looks wrong.
 if (atlas && atlas.atlas) {
-  console.log(`  atlas tiles · ${atlas.slots} slots, ${atlas.cols}x${atlas.rows} of ${atlas.tile}px`);
+  // THE LAYOUT IS A LINEAR RUN OF TILES NOW, not a grid of rectangular blocks:
+  // `cols`/`rows` were the block's shape and read `undefined` here for a whole
+  // run before anyone noticed. A field that prints `undefined` is a field the
+  // tool is no longer measuring.
+  console.log(`  atlas tiles · ${atlas.slots}/${atlas.slotCap} slots`
+    + ` · ${atlas.views} views of ${atlas.tile}px on a ${atlas.grid}x${atlas.grid} grid`);
   for (const t of atlas.tiles.slice(0, 6)) {
     console.log(`    ${t.key.padEnd(14)} hx ${t.hx} hy ${t.hy} cy ${t.cy}`
       + ` · side coverage min ${t.sideMin} mean ${t.sideMean} max ${t.sideMax} · plan ${t.plan}`);
   }
-  const flat = atlas.tiles.flatMap((t) => t.cov.slice(0, atlas.cols * (atlas.rows - 1)));
+  const flat = atlas.tiles.flatMap((t) => t.cov.slice(0, atlas.views - 1));
   const empty = flat.filter((v) => v < 0.01).length;
   console.log(`    ${empty} of ${flat.length} upright tiles carry nothing`
     + `${empty > flat.length * 0.05 ? '  <-- A BAKE THAT DREW NOWHERE' : ''}`);

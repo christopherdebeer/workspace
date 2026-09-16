@@ -224,8 +224,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
   // rather than uniforms: a tile grid that could change between the bake and
   // the lookup is a class of fault this file already carries a note about.
   const K = {
-    az: IMP_ATLAS.az + '.0', cols: IMP_ATLAS.cols + '.0', rows: IMP_ATLAS.rows + '.0',
-    sc: IMP_ATLAS.slotCols + '.0', planRow: IMP_ATLAS.el.length + '.0',
+    az: IMP_ATLAS.az + '.0', planView: IMP_ATLAS.planView + '.0',
     e0: ((IMP_ATLAS.el[0] + IMP_ATLAS.el[1]) * 0.5).toFixed(2), e1: ((IMP_ATLAS.el[1] + IMP_ATLAS.el[2]) * 0.5).toFixed(2),
   };
   mat.onBeforeCompile = (sh) => {
@@ -240,7 +239,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
       sh.uniforms.uImpAtlas = uAtlas as { value: THREE.Texture };
       sh.uniforms.uImpBark = uBark;
       sh.uniforms.uImpAtlasK = { value: new THREE.Vector4(
-        IMP_ATLAS.tile, IMP_ATLAS.cols, IMP_ATLAS.rows, IMP_ATLAS.size) };
+        IMP_ATLAS.tile, IMP_ATLAS.grid, IMP_ATLAS.views, IMP_ATLAS.size) };
     }
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', [
@@ -255,13 +254,13 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         'varying vec3 vImpRight; varying vec3 vImpOut; varying vec2 vImpUv;',
         'varying float vImpFade;',
         'uniform vec2 uImpFade;',
-        ATLAS ? 'varying vec2 vImpBlock; varying float vImpAz; varying float vImpEl;' : '',
+        ATLAS ? 'varying float vImpSlot; varying float vImpAz; varying float vImpEl;' : '',
         FOLIAGE_WIND_UNIFORMS,
       ].join('\n'))
       .replace('#include <begin_vertex>', [
         '#include <begin_vertex>',
         'vImpFade = 0.0;',
-        ATLAS ? 'vImpBlock = vec2(0.0); vImpAz = 0.0; vImpEl = 0.0;' : '',
+        ATLAS ? 'vImpSlot = 0.0; vImpAz = 0.0; vImpEl = 0.0;' : '',
         '#ifdef USE_INSTANCING',
         // THE INSTANCE MATRIX IS TRANSLATION AND SCALE ONLY, which is what
         // makes this one line: a horizontal unit vector survives a scale that
@@ -283,13 +282,16 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         // continuous, and it costs the pass nothing at all.
         'vImpFade = clamp((impFl - uImpFade.x) / max(1.0, uImpFade.y - uImpFade.x), 0.0, 1.0);',
         ...(ATLAS ? [
-          // ── WHERE THIS TREE'S BLOCK IS, AND WHICH WAY THE CAMERA STANDS ──
+          // ── WHICH SLOT THIS TREE IS, AND WHICH WAY THE CAMERA STANDS ──
+          // `aForm` IS the slot on this path, and with the compact packing
+          // that is all the fragment needs: a view's tile falls out of the
+          // slot and the view index arithmetically. The block origin this
+          // used to compute was the rectangular layout's one contribution.
           // The azimuth is taken in the TREE'S own frame — the view azimuth
           // less its yaw — so a stand of one variant shows a different face
           // per tree from the same seat, which is what the analytic path's
           // silhouette phase bought and is kept for the same reason.
-          'vImpBlock = vec2(mod(aForm, ' + K.sc + ') * ' + K.cols + ',',
-          '                 floor(aForm / ' + K.sc + ') * ' + K.rows + ');',
+          'vImpSlot = aForm;',
           'vImpAz = atan(impDir.x, impDir.y) - aYaw;',
           'float impLen = max(1e-4, length(impToCam));',
           'vImpEl = degrees(asin(clamp(impToCam.y / impLen, -1.0, 1.0)));',
@@ -326,7 +328,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         'varying float vImpCard; varying float vImpForm; varying float vImpYaw;',
         'varying vec3 vImpRight; varying vec3 vImpOut; varying vec2 vImpUv;',
         'varying float vImpFade;',
-        ATLAS ? 'varying vec2 vImpBlock; varying float vImpAz; varying float vImpEl;' : '',
+        ATLAS ? 'varying float vImpSlot; varying float vImpAz; varying float vImpEl;' : '',
         ATLAS ? 'uniform vec3 uImpBark;' : '',
         ATLAS ? IMP_ATLAS_GLSL : IMPOSTOR_GLSL,
       ].join('\n'))
@@ -350,8 +352,11 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
           '  float impI0 = mod(impA0, ' + K.az + ');',
           '  float impI1 = mod(impA0 + 1.0, ' + K.az + ');',
           '  float impRow = vImpEl < ' + K.e0 + ' ? 0.0 : (vImpEl < ' + K.e1 + ' ? 1.0 : 2.0);',
-          '  vec4 impT = mix(impAtlasAt(vImpBlock, impI0, impRow, vImpUv),',
-          '                  impAtlasAt(vImpBlock, impI1, impRow, vImpUv), impAf);',
+          // A side view's index within the slot's run: elevation rows of
+          // azimuths, the same order `sideView` writes on the CPU.
+          '  float impV = impRow * ' + K.az + ';',
+          '  vec4 impT = mix(impAtlasAt(vImpSlot, impV + impI0, vImpUv),',
+          '                  impAtlasAt(vImpSlot, impV + impI1, vImpUv), impAf);',
           '  impCov = impT.a * (1.0 - uImpTop);',
           '  vec3 impU = impUnpre(impT);',
           '  impShade = impU.r; impWood = step(0.5, impU.g);',
@@ -365,7 +370,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
           '  vec2 impP = vImpUv - 0.5;',
           '  float impC = cos(vImpYaw), impS = sin(vImpYaw);',
           '  vec2 impQ = vec2(impP.x * impC + impP.y * impS, -impP.x * impS + impP.y * impC);',
-          '  vec4 impT = impAtlasAt(vImpBlock, 0.0, ' + K.planRow + ', vec2(0.5 + impQ.x, 0.5 - impQ.y));',
+          '  vec4 impT = impAtlasAt(vImpSlot, ' + K.planView + ', vec2(0.5 + impQ.x, 0.5 - impQ.y));',
           '  impCov = impT.a * uImpTop;',
           '  vec3 impU = impUnpre(impT);',
           '  impShade = impU.r; impWood = step(0.5, impU.g);',

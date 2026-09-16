@@ -55,7 +55,35 @@ import * as THREE from 'three';
  *  art frame is about 148x320 and a 20 m tree at the tier's near edge (260 m)
  *  subtends about 25 rows, so a 40 px tile is already over its drawn size. */
 export const IMP_ATLAS = {
-  tile: 40,
+  /**
+   * ── THIRTY-TWO, AND THE ATLAS PACKS TILES RATHER THAN RECTANGLES ──
+   *
+   * It was 40, in a 8x4 rectangular block a variant — 32 tile cells reserved
+   * to hold 25 views, the last row reading `TOP . . . . . . .` with seven
+   * cells wasted. Three by six of those blocks is EIGHTEEN slots, and a slot
+   * is never reclaimed, so a nineteenth variant met anywhere in a session was
+   * locked out for the rest of it: the tree had no card, drew nothing at all,
+   * and popped into existence when it later crossed into the geometry tier.
+   *
+   * THE CAPACITY HAS TO BE THE WHOLE VARIANT SPACE, not a district's demand.
+   * With an append-only allocator the working set is the union of everywhere
+   * the truck has been, so sizing against one district's worst case (24) is
+   * sizing against the wrong quantity — `devtools/imp-atlas.test.mjs` asserts
+   * against the total instead, and today that is 37.
+   *
+   * 1024 / 32 = 32 tiles a side = 1,024 cells; packed COMPACTLY at 25 views a
+   * variant that is **40 slots**, with three spare over the whole atlas. The
+   * same 1024 RGBA8 target, no eviction, no indirection, and slot indices stay
+   * permanent — which is what lets an instance carry one. A 2048 atlas would
+   * have given 72 and cost four times the texture memory for a tier whose
+   * whole argument is that it is cheap.
+   *
+   * WHAT IT COSTS is a fifth of every card's resolution, and this record's own
+   * note already argued that is affordable: a 20 m tree at the tier's near
+   * edge subtends about 25 rows, so 32 is still over its drawn size where 40
+   * was well over it.
+   */
+  tile: 32,
   /** Azimuths round the tree. Eight is 45 degrees a step, and the fragment
    *  blends the two nearest, so what a driver sees turning past a tree is a
    *  cross-fade rather than a snap. */
@@ -64,18 +92,28 @@ export const IMP_ATLAS = {
    *  what a low drone sees, and what a high drone sees. Past the last one the
    *  plan card takes over, which is what `uImpTop` already weights. */
   el: [8, 32, 58] as const,
-  /** Tiles across and down in one slot's block: the azimuths, the elevation
-   *  rows, and one more row carrying the plan view in its first column. */
-  get cols(): number { return this.az; },
-  get rows(): number { return this.el.length + 1; },
-  /** Slots across and down the atlas. Eighteen is comfortably more than the
-   *  ten a district's palettes can ask for (five families at EZ_PALETTE_N). */
-  slotCols: 3,
-  slotRows: 6,
+  /** How many TILES a variant occupies: every azimuth at every elevation, plus
+   *  the plan. Twenty-five — and the old rectangular block reserved 32. */
+  get views(): number { return this.az * this.el.length + 1; },
+  /** The plan view's own index in that run, which is the last one. */
+  get planView(): number { return this.az * this.el.length; },
+  /** Tiles across and down the whole atlas. */
+  get grid(): number { return Math.floor(this.size / this.tile); },
   size: 1024,
 } as const;
 
-export const IMP_ATLAS_SLOTS = IMP_ATLAS.slotCols * IMP_ATLAS.slotRows;
+/**
+ * ── THE SLOTS ARE A LINEAR RUN OF TILES, NOT A GRID OF BLOCKS ──
+ *
+ * Slot s owns tile cells `[s*views, s*views + views)`, which WRAP across rows
+ * — a variant's twenty-five tiles are contiguous in the linear index and are
+ * not a rectangle in the atlas. Nothing needs them to be: the bake renders
+ * each tile into its own viewport and the shader derives a tile's position
+ * arithmetically, so the only thing a rectangle ever bought was the seven
+ * wasted cells it padded to.
+ */
+export const IMP_ATLAS_SLOTS = Math.floor(
+  (IMP_ATLAS.grid * IMP_ATLAS.grid) / IMP_ATLAS.views);
 
 /**
  * What the world needs to know about a baked slot to place its card: the
@@ -104,10 +142,17 @@ export interface ImpAtlasSlot {
  *  its own edge and bleed into the neighbour under bilinear minification. */
 const FIT = 1.06;
 
-/** Where a slot's block starts, in tiles. */
-export function slotOrigin(slot: number): [number, number] {
-  const sx = slot % IMP_ATLAS.slotCols, sy = Math.floor(slot / IMP_ATLAS.slotCols);
-  return [sx * IMP_ATLAS.cols, sy * IMP_ATLAS.rows];
+/** A view's own tile cell, in tiles across and down the whole atlas. The one
+ *  place the packing is written on the CPU; the shader's is `impTileRect`,
+ *  and `devtools/imp-atlas.test.mjs` holds the two to the same answer. */
+export function viewOrigin(slot: number, view: number): [number, number] {
+  const t = slot * IMP_ATLAS.views + view;
+  return [t % IMP_ATLAS.grid, Math.floor(t / IMP_ATLAS.grid)];
+}
+
+/** A side view's index within a slot's run: elevation rows of azimuths. */
+export function sideView(ax: number, row: number): number {
+  return row * IMP_ATLAS.az + ax;
 }
 
 /**
@@ -135,17 +180,26 @@ export function tileDirection(ax: number, row: number): THREE.Vector3 {
  */
 export const IMP_ATLAS_GLSL = [
   'uniform sampler2D uImpAtlas;',
-  'uniform vec4 uImpAtlasK;',   // tile px, cols, rows, atlas px
-  // A tile's rect in atlas uv, given the slot's block origin in tiles and the
-  // tile within it. The half-texel inset is what stops a bilinear read at the
-  // very edge of a tile reaching into its neighbour.
-  'vec4 impTileRect(vec2 blockTile, float tx, float ty) {',
-  '  float T = uImpAtlasK.x, A = uImpAtlasK.w;',
-  '  vec2 o = (blockTile + vec2(tx, ty)) * T;',
+  'uniform vec4 uImpAtlasK;',   // tile px, tiles a side, views a slot, atlas px
+  // ── A VIEW IS A TILE IN A LINEAR RUN, NOT A CELL IN A BLOCK ──
+  //
+  // Slot s owns tiles [s*V, s*V+V) and they wrap across rows, so a variant is
+  // contiguous in the index and is not a rectangle in the texture. That is
+  // what turns 1024 tile cells into 40 slots instead of 32: the rectangular
+  // form padded 25 views up to a 8x4 block and wasted seven cells a variant.
+  //
+  // The half-texel inset is what stops a bilinear read at the very edge of a
+  // tile reaching into its neighbour — and it matters MORE now, because a
+  // tile's neighbour is no longer guaranteed to be another view of the same
+  // tree: the last tile of one slot sits beside the first of the next.
+  'vec4 impTileRect(float slot, float view) {',
+  '  float T = uImpAtlasK.x, G = uImpAtlasK.y, V = uImpAtlasK.z, A = uImpAtlasK.w;',
+  '  float t = slot * V + view;',
+  '  vec2 o = vec2(mod(t, G), floor(t / G)) * T;',
   '  return vec4((o + 0.5) / A, (o + T - 0.5) / A);',
   '}',
-  'vec4 impAtlasAt(vec2 blockTile, float tx, float ty, vec2 uv) {',
-  '  vec4 r = impTileRect(blockTile, tx, ty);',
+  'vec4 impAtlasAt(float slot, float view, vec2 uv) {',
+  '  vec4 r = impTileRect(slot, view);',
   '  return texture2D(uImpAtlas, mix(r.xy, r.zw, clamp(uv, 0.0, 1.0)));',
   '}',
   // ── UN-PREMULTIPLY, BECAUSE THE BAKE IS MULTISAMPLED ──
@@ -247,7 +301,6 @@ export function bakeImpAtlasSlot(
   const cam = new THREE.OrthographicCamera(-hx, hx, hy, -hy, 0.01, 20);
   const centre = new THREE.Vector3(0, cy, 0);
 
-  const [bx, by] = slotOrigin(slot);
   const T = IMP_ATLAS.tile;
   const prevTarget = renderer.getRenderTarget();
   const prevAuto = renderer.autoClear;
@@ -266,14 +319,15 @@ export function bakeImpAtlasSlot(
   const prevRtScissor = rt.scissor.clone();
   const prevRtTest = rt.scissorTest;
   rt.scissorTest = true;
-  const draw = (tx: number, ty: number, dir: THREE.Vector3, up: THREE.Vector3, sq: boolean): void => {
+  const draw = (view: number, dir: THREE.Vector3, up: THREE.Vector3, sq: boolean): void => {
     cam.left = -hx; cam.right = hx;
     cam.top = sq ? hx : hy; cam.bottom = sq ? -hx : -hy;
     cam.up.copy(up);
     cam.position.copy(centre).addScaledVector(dir, 6);
     cam.lookAt(centre);
     cam.updateProjectionMatrix();
-    const px = (bx + tx) * T, py = (by + ty) * T;
+    const [tx, ty] = viewOrigin(slot, view);
+    const px = tx * T, py = ty * T;
     // THE Y AXIS IS THE TEXTURE'S, NOT THE BLOCK'S. A render target's rows run
     // from the bottom, and the tile grid above is written top-down, so a
     // viewport placed at the block's own y would put row 0 at the bottom and
@@ -287,7 +341,7 @@ export function bakeImpAtlasSlot(
   };
   for (let row = 0; row < IMP_ATLAS.el.length; row++) {
     for (let ax = 0; ax < IMP_ATLAS.az; ax++) {
-      draw(ax, row, tileDirection(ax, row), new THREE.Vector3(0, 1, 0), false);
+      draw(sideView(ax, row), tileDirection(ax, row), new THREE.Vector3(0, 1, 0), false);
     }
   }
   // ── THE PLAN VIEW'S UP IS -Z, AND THE CARD'S UV DEPENDS ON IT ──
@@ -295,7 +349,7 @@ export function bakeImpAtlasSlot(
   // (0, d, 0) looking down with up = (0, 0, -1) that is world +x, and screen
   // up is world -z. So the tile's u runs along world +x and its v along -z,
   // which is the mapping the flat card writes.
-  draw(0, IMP_ATLAS.el.length, new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1), true);
+  draw(IMP_ATLAS.planView, new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1), true);
 
   rt.viewport.copy(prevRtView);
   rt.scissor.copy(prevRtScissor);

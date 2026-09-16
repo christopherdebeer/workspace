@@ -307,6 +307,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/tree-impostor.mjs` | what the impostor tier stands up and what it changes on screen — ONE boot, off/on/off through `__impostor()`, so the repeat is the floor; read whole AND over the canopy band, because a chase frame is mostly sward and sky (`TRIS=` raw triangles, `BAND=`) | ~6min |
 | `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
 | `node devtools/render-focus.test.mjs` | where the RENDERER is looking, and whether anything reads it — the authority's three cameras and the drone's own lead geometry driven for real, then each consumer and the sward's fast/slow ORDER as a source check; two controls in its header | instant |
+| `node devtools/imp-atlas.test.mjs` | the impostor atlas holds EVERY variant that exists (40 slots against 37 keys) and the bake's packing agrees with the shader's, tile for tile over all 1,000 — pure node, instant, and the gate that fails when a new EZ form takes the total past the ceiling | instant |
 | `node devtools/imp-demand.mjs` | what the impostor atlas was ASKED for beside what it holds: the ceiling computed offline from the bake (pure, instant, no browser), then the live census by key — refused keys with their tree counts, baked slots with theirs, and how many of the eighteen are serving nobody. `KM=0 FIX=` measures one arrived world; `SPOT=` with a leg drives across districts and needs a device or a warm relay to mean anything | ~2min |
 | `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
@@ -4621,25 +4622,129 @@ what this needs, and cannot drive across districts, so it measures one place's
 demand well and the ratchet not at all. The tool prints `INCONCLUSIVE` rather
 than a zero: **a census of a world that did not stream is a census of nothing.**
 
-**THE FIX IS NOT MADE HERE, and the arithmetic for it is.** A slot is
-`IMP_ATLAS.az × tile` by `(el.length + 1) × tile` = 320 × 160 px, and the atlas
-is 1024², so 3 × 6 = 18 slots use 960 × 960 of it. Two ways out and they are not
-alike:
+### …and the fix: forty slots, because a permanent store is sized by the WHOLE space
 
-- **`tile` 40 → 32** gives a 256 × 128 slot and **4 × 8 = 32 slots in exactly
-  1024²** — no extra memory, no extra bake time, and past the 24 a district can
-  want. The atlas's own comment already argues it is affordable: *"a 20 m tree
-  at the tier's near edge (260 m) subtends about 25 rows, so a 40 px tile is
-  already over its drawn size"* — 32 is still over 25. It costs a fifth of the
-  card's resolution on every impostor in the game, which is a LOOK change and
-  the seat's call.
-- **a 2048² atlas** gives 6 × 12 = 72 slots at the same tile size and costs
-  **4× the texture memory** (4 MB → 16 MB) for a tier whose whole argument is
-  that it is cheap.
+The seat took the diagnosis and corrected the proposed fix, and the correction
+is the important part. **Thirty-two slots is a good local fix to eighteen and
+stops five short of making the invariant true.** The live build defaults EZ
+VARIANTS to ALL and the variant space is broadleaf 16, conifer 12, acacia 3,
+palm 2, snag 4 — **37 globally addressable keys** — so a 32-slot atlas leaves
+this perfectly legal state: `atlas 32/32`, five variants met later, permanently
+locked out. **You do not size an append-only cache against the maximum demand
+of one district.** There are two internally consistent designs — a PERMANENT
+atlas where every possible variant fits and no eviction is needed, and a
+WORKING-SET atlas with safe indirection and eviction — and this one is clearly
+trying to be the first, so the right move is to finish that design.
 
-Reclaiming a slot is the third option and is the risky one: an instance carries
-its SLOT INDEX, not its key, so re-baking a slot silently re-dresses every tree
+**AND THE RECTANGLE WAS WASTING SEVEN CELLS A VARIANT.** A slot reserved an
+8 × 4 block for 25 views — eight azimuths at three elevations, plus the plan —
+so its last row read `TOP . . . . . . .`. At 40 px a 1024² atlas is a 25 × 25
+tile grid = 625 cells, which is 25 variants packed compactly: still not enough.
+At **32 px it is 32 × 32 = 1,024 cells, and 1024 / 25 = 40 variants.**
+
+| | tile | layout | slots | memory |
+|---|---|---|---|---|
+| shipped | 40 px | 3 × 6 blocks of 8 × 4 | **18** | 4 MB |
+| the local fix | 32 px | 4 × 8 blocks of 8 × 4 | 32 | 4 MB |
+| **built** | **32 px** | **compact, 25 tiles a slot** | **40** | **4 MB** |
+| the other way | 40 px | 6 × 12 blocks | 72 | **16 MB** |
+
+Forty fits all 37 with three spare, in the existing 1024² RGBA8 target, with no
+eviction, no indirection and no cache invalidation — so **slot indices stay
+permanent, which is what lets an instance carry one.** Reclaiming was the third
+option and is the risky one for exactly that reason: an instance carries its
+slot INDEX, not its key, so re-baking a slot silently re-dresses every tree
 already standing on it.
+
+**A SLOT IS A LINEAR RUN OF TILES, NOT A RECTANGLE.** Slot *s* owns tile cells
+`[s·25, s·25+25)` and they WRAP across rows, so a variant is contiguous in the
+index and is not a rectangle in the texture. Nothing needed it to be: the bake
+renders each tile into its own viewport and the fragment derives a tile from
+the slot and the view index arithmetically. What the rectangle bought was the
+padding it forced. Two consequences worth knowing:
+
+- **the half-texel inset matters MORE**, because a tile's neighbour is no
+  longer another view of the same tree — the last tile of one slot sits beside
+  the first of the next;
+- **and `__impatlas` reads the whole atlas once** (4 MB, one round trip) rather
+  than a rect per slot, because there is no rect. A read per tile would be a
+  thousand `glReadPixels` calls.
+
+**THE INVARIANT IS ASSERTED, IN PURE NODE, INSTANTLY**
+(`devtools/imp-atlas.test.mjs`): `IMP_ATLAS_SLOTS >= Σ ezVariants(fam).length`,
+40 ≥ 37 today. **If someone bakes a fifth conifer habit and takes the total to
+41, that fails rather than silently reintroducing trees that disappear** — the
+whole reason it is a test and not a comment. It also holds the packing itself:
+no view outside the atlas, no two views sharing a tile, all 1,000 cells
+distinct, the tile index exact in a float32, and — the fault this file already
+records twice — **`viewOrigin` on the CPU and `impTileRect` in GLSL landing on
+the same tile for every one of the 1,000**, checked by re-deriving the shader's
+arithmetic from its own source text.
+
+### …and a pending key borrows a sibling rather than drawing nothing
+
+Capacity is only half of it, and the Yosemite reading proves the other null path
+is visually real: `82 waiting / 0 locked / 6 of 40`. The bake budget is two
+variants a refresh at roughly 900 ms a refresh, so a cold footprint takes
+several seconds to photograph its palette — and this remains legal even with
+forty slots:
+
+```
+tree needs an unbaked variant → atlas has room → today's two tokens spent
+→ continue → tree absent → 0.9 s later, maybe
+```
+
+That is the programme's own rule broken in the small: **representation may
+degrade; existence may not.** The budget stays — it protects frame time — and
+the refusal now falls back instead of vanishing.
+
+**THE STAND-IN IS A RESIDENT SIBLING OF THE SAME FAMILY**, not the analytic
+width profile the no-atlas path uses: a real conifer silhouette for a conifer,
+through the same shader path, at no extra cost, correctly lit and correctly
+dissolved. `impFamSlot` holds the FIRST slot baked per family, first so the
+choice is stable across sweeps and a pending tree does not change silhouette
+every refresh while it waits. What it is NOT is the right tree — the card is
+sized by the stand-in's own box, so a columnar aspen standing in for a
+spreading oak is the wrong width for a few seconds. **Wrong width beats
+absent.**
+
+**AND IT IS DELIBERATELY NOT CACHED.** `impFormOf` is what makes a form choice
+permanent; a cached stand-in would never upgrade. The cost is that those sites
+re-run `ezVariantAt` next sweep, which is the form budget doing exactly what it
+is for. Measured, `at-yosemite` settled: **7 waiting, 7 stood, 0 absent.**
+
+Not done, and worth saying: there is **no cross-fade** between the stand-in and
+the tree's own card. The swap happens at a refresh boundary at impostor
+distance, so it is a sub-pixel change of silhouette — but a short stable-dither
+overlap is the honest finish, and it needs a second atlas sample and a blend
+factor.
+
+**Measured**, `devtools/tree-impostor.mjs` on `at-yosemite`, the working tree
+against `REV=608e212` (the packing the only difference), settled:
+
+| | 18 slots, rectangular | 40 slots, compact |
+|---|---|---|
+| impostors, census `veg-impostor` | **3,540 tris** | **3,540 — identical** |
+| edges b / c / s | 675 / 351 / 340 | 674 / 351 / 340 |
+| ink, ON against the ground it replaced | 31.1 vs 31.4 (0.99×) | 30.0 vs 27.7 (1.08×) |
+| changed pixels under half a palette step | 9.4% | 12.4% |
+| side tiles carrying nothing | 0 of 0 *(the tool read a stale field)* | **0 of 240** |
+| atlas | 10/18 in 74.6 ms | 10/40 in 129.7 ms |
+
+**THE PIXEL COLUMNS CANNOT RESOLVE A DIFFERENCE AND SHOULD NOT BE READ AS
+ONE.** Three runs of this tool on this fixture changed 25, 105 and 159 band
+pixels, and their own same-frame floors ranged over ten times — so the spread
+is the instrument, not the change. What IS sound is the identical census, the
+identical edges, the ink well clear of the black gate, and **`0 of 240` — every
+side tile of every baked slot carrying silhouette, read back through
+`viewOrigin` in the new layout.** The claim rests on those plus the pure test;
+the frames show a correct treeline with no black and no smearing.
+
+**AND `0 of 0` IS WHAT A STALE FIELD LOOKS LIKE.** The tool counted empty tiles
+with `cov.slice(0, atlas.cols * (atlas.rows - 1))` — the rectangular block's
+shape — and `cols`/`rows` no longer exist, so it printed `undefinedxundefined`
+and checked nothing at all for a whole run. **A field that prints `undefined` is
+a field the tool has stopped measuring**, and a zero beside it is not a result.
 
 ### The atlas: the far tree is the near tree, photographed — and it is see-through
 

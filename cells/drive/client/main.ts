@@ -91,7 +91,7 @@ import { GRASS_M2, GRASS_UNKNOWN, GRASS_DEFAULT, swardCoverEvidence, SWARD_EV }
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { startLab } from './labs';
 import { IMPOSTOR_FORMS, IMPOSTOR_WIDTH, impostorFormIndex, impostorGeometry, impostorMaterial } from './tree-impostor';
-import { IMP_ATLAS, IMP_ATLAS_SLOTS, bakeImpAtlasSlot, clearImpAtlas, makeImpAtlasTarget, type ImpAtlasSlot } from './tree-atlas';
+import { IMP_ATLAS, IMP_ATLAS_SLOTS, bakeImpAtlasSlot, clearImpAtlas, makeImpAtlasTarget, viewOrigin, type ImpAtlasSlot } from './tree-atlas';
 import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezHabitatsForSite, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPhenotypeForSite, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
@@ -11940,6 +11940,11 @@ const impProf = {
   /** Refused because the ATLAS IS FULL — these will never draw, this session,
    *  wherever the truck goes. Kept apart from `waiting`, which drains. */
   locked: 0,
+  /** Refused and DREW ANYWAY, on a sibling of the same family. The difference
+   *  between `waiting` and `stood` is how many of the pending trees the world
+   *  managed to keep on screen; the gap is trees genuinely absent, which on a
+   *  family with no slot at all is the first sweep and nothing after it. */
+  stood: 0,
 };
 /**
  * THE IMPOSTOR'S FORM IS THE TREE'S OWN, and it is cached per SITE because it
@@ -11998,6 +12003,29 @@ let impBakedNow = 0;
  *  the test. Reset with the rest of the per-sweep census. */
 let impSlotFull = false;
 /**
+ * ── A PENDING KEY BORROWS A SIBLING RATHER THAN DRAWING NOTHING ──
+ *
+ * The bake budget is two variants a refresh and a refresh is about a second,
+ * so a cold district takes several seconds to photograph its palette — and
+ * every tree whose variant has not landed yet drew NOTHING at all, then
+ * appeared as full geometry when it later crossed the admission ring. That is
+ * the programme's own rule broken in the small: **representation may degrade;
+ * existence may not.**
+ *
+ * The stand-in is the first slot baked for the same FAMILY — a real conifer
+ * silhouette for a conifer, through the same shader path, at no extra cost,
+ * rather than the analytic width profile the no-atlas path uses. What it is
+ * NOT is the right tree: the card is sized by the stand-in's own box, so a
+ * columnar aspen standing in for a spreading oak is the wrong width until its
+ * own slot bakes. Wrong width beats absent, and it lasts seconds.
+ *
+ * DELIBERATELY NOT CACHED in `impFormOf`: a cached stand-in would be permanent
+ * and the tree would never acquire its own photograph. The cost is that those
+ * sites re-run `ezVariantAt` next sweep, which is the form budget doing
+ * exactly what it is for.
+ */
+const impFamSlot = new Map<EzFamily, number>();
+/**
  * The slot for a baked variant, baking it if there is room and budget.
  *
  * ── NULL MEANT TWO OPPOSITE THINGS, AND THE COUNTER MEANT ONE ──
@@ -12026,6 +12054,10 @@ function impSlotFor(fam: EzFamily, vi: number): ImpAtlasSlot | null {
   impProf.bakeMs += performance.now() - t0;
   impSlots.set(key, slot);
   impSlotAt[slot.slot] = slot;
+  // The FIRST slot of a family is the one its siblings stand in on while they
+  // wait — first, so the choice is stable across sweeps and a pending tree
+  // does not change silhouette every refresh while it waits for its own.
+  if (!impFamSlot.has(fam)) impFamSlot.set(fam, slot.slot);
   return slot;
 }
 /** How many candidates the membership pass walks between yields. A power of two
@@ -14924,6 +14956,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   impBakedNow = 0;
   impProf.waiting = 0;
   impProf.locked = 0;
+  impProf.stood = 0;
   impProf.refused.clear();
   impProf.bySlot.length = 0;
   if (impostors && impostorDraw) {
@@ -15068,13 +15101,22 @@ function* vegRefreshSteps(): Generator<void, void, void> {
               const rk = `${fam}:${vi}`;
               impProf.refused.set(rk, (impProf.refused.get(rk) ?? 0) + 1);
               if (impSlotFull) impProf.locked++; else impProf.waiting++;
-              impFormed--; impOffered--; continue;
+              // ── DEGRADE, DO NOT DISAPPEAR. See impFamSlot. ──
+              // Not written to impFormOf, so the next sweep asks again and the
+              // tree takes its own photograph the moment one exists.
+              const stand = impFamSlot.get(fam);
+              if (stand === undefined) { impFormed--; impOffered--; continue; }
+              impProf.stood++;
+              impFormed--;
+              form = stand;
+            } else {
+              form = slot.slot;
+              impFormOf.set(v, form);
             }
-            form = slot.slot;
           } else {
             form = impostorFormIndex(variants[vi]?.form ?? 'round');
+            impFormOf.set(v, form);
           }
-          impFormOf.set(v, form);
         }
         // The ground is the RASTER here, not `groundAt`. Nothing in this tier
         // is nearer than the cap edge, where the mesh's own corridor cuts are
@@ -34785,34 +34827,39 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
  */
 (window as unknown as { __impatlas?: object }).__impatlas = (): object => {
   if (!impAtlasRT) return { atlas: false };
-  const T = IMP_ATLAS.tile, C = IMP_ATLAS.cols, R = IMP_ATLAS.rows;
-  const buf = new Uint8Array(C * T * R * T * 4);
+  const T = IMP_ATLAS.tile, A = IMP_ATLAS.size, V = IMP_ATLAS.views;
+  // ── ONE READ OF THE WHOLE ATLAS, BECAUSE A SLOT IS NO LONGER A RECTANGLE ──
+  //
+  // The compact packing puts a variant's twenty-five tiles in a contiguous
+  // LINEAR run that wraps across rows, so there is no rect to read per slot.
+  // A read per TILE would be a thousand glReadPixels calls; one read of the
+  // 1024 square is 4 MB and a single round trip, and this is a probe — it has
+  // no business in a frame either way.
+  const buf = new Uint8Array(A * A * 4);
+  renderer.readRenderTargetPixels(impAtlasRT, 0, 0, A, A, buf);
   const rows: object[] = [];
   for (const [key, sl] of impSlots) {
-    const sx = (sl.slot % IMP_ATLAS.slotCols) * C * T;
-    const sy = Math.floor(sl.slot / IMP_ATLAS.slotCols) * R * T;
-    // The read is in TEXTURE rows, which run from the bottom; the block grid
-    // is written top-down, which is the same flip the bake's viewport makes.
-    renderer.readRenderTargetPixels(impAtlasRT, sx, IMP_ATLAS.size - sy - R * T, C * T, R * T, buf);
     const cov: number[] = [];
-    for (let ty = 0; ty < R; ty++) {
-      for (let tx = 0; tx < C; tx++) {
-        let n = 0;
-        for (let y = 0; y < T; y++) {
-          // Flip the tile row back, so tile (0,0) is the block's top-left.
-          const py = (R * T - 1) - (ty * T + y);
-          for (let x = 0; x < T; x++) if (buf[(py * C * T + tx * T + x) * 4 + 3] >= 128) n++;
-        }
-        cov.push(+(n / (T * T)).toFixed(3));
+    for (let v = 0; v < V; v++) {
+      const [tx, ty] = viewOrigin(sl.slot, v);
+      let n = 0;
+      for (let y = 0; y < T; y++) {
+        // THE READ IS IN TEXTURE ROWS, which run from the bottom, and the tile
+        // grid is written top-down — the same flip the bake's viewport makes.
+        const py = A - 1 - (ty * T + y);
+        for (let x = 0; x < T; x++) if (buf[(py * A + tx * T + x) * 4 + 3] >= 128) n++;
       }
+      cov.push(+(n / (T * T)).toFixed(3));
     }
-    const side = cov.slice(0, C * (R - 1));
+    const side = cov.slice(0, IMP_ATLAS.planView);
     rows.push({ key, slot: sl.slot,
       hx: +sl.hx.toFixed(3), hy: +sl.hy.toFixed(3), cy: +sl.cy.toFixed(3),
       sideMin: Math.min(...side), sideMean: +(side.reduce((a, b) => a + b, 0) / side.length).toFixed(3),
-      sideMax: Math.max(...side), plan: cov[C * (R - 1)], cov });
+      sideMax: Math.max(...side), plan: cov[IMP_ATLAS.planView], cov });
   }
-  return { atlas: true, tile: T, cols: C, rows: R, slots: rows.length, bakeMs: +impProf.bakeMs.toFixed(1), tiles: rows };
+  return { atlas: true, tile: T, views: V, grid: IMP_ATLAS.grid,
+    slots: rows.length, slotCap: IMP_ATLAS_SLOTS,
+    bakeMs: +impProf.bakeMs.toFixed(1), tiles: rows };
 };
 
 /**
@@ -34861,7 +34908,7 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
     need, over: need - IMP_ATLAS_SLOTS,
     idle, inUse: served.length - idle, servedN,
     refusedKeys: refused.length, refusedN,
-    waiting: impProf.waiting, locked: impProf.locked,
+    waiting: impProf.waiting, locked: impProf.locked, stood: impProf.stood,
     /**
      * ── THE VERDICT, AND THE FIRST CUT OF IT WAS WRONG ──
      *
@@ -34895,7 +34942,7 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
     // have actually been photographed, and `waiting` how many sites stood
     // down this sweep for want of one.
     atlas: !!impAtlasRT, slots: impSlots.size, slotCap: IMP_ATLAS_SLOTS, ink: impInkU.value,
-    waiting: impProf.waiting, locked: impProf.locked,
+    waiting: impProf.waiting, locked: impProf.locked, stood: impProf.stood,
     bakeMs: +impProf.bakeMs.toFixed(1),
     ...impostorReachTally() };
 };
@@ -46539,7 +46586,8 @@ function telemetryReport(): string {
         + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed}/${IMPOSTOR_FORM_BUDGET} formed${impProf.formed >= IMPOSTOR_FORM_BUDGET ? ' (PINNED)' : ''}` : ''}`
         + ` · atlas ${impAtlasRT ? `${impSlots.size}/${IMP_ATLAS_SLOTS} slots in ${impProf.bakeMs.toFixed(0)}ms` : 'OFF'}`
         + `${impInkU.value ? ' · INK BLACK (silhouette instrument)' : ''}`
-        + `${impProf.waiting ? ` · ${impProf.waiting} waiting on a bake` : ''}`
+        + `${impProf.waiting ? ` · ${impProf.waiting} waiting on a bake`
+          + `${impProf.stood ? ` (${impProf.stood} on a sibling)` : ''}` : ''}`
         // THE ONE THAT CANNOT DRAIN, said in different words on purpose.
         + `${impProf.locked ? ` · ${impProf.locked} LOCKED OUT (atlas full)` : ''}` : ''}`);
   }

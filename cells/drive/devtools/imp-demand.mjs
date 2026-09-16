@@ -8,23 +8,26 @@
  *   SETTLE=45000 …             how long to let the tier fill
  *   ARGS='ezstand=0' …         switches
  *
- * THE QUESTION. A device dump reported **5,108 impostors waiting on a bake
- * with the atlas at 18/18 slots** — five thousand trees that cannot draw,
- * against a store the same line calls full. Two readings fit that sentence and
- * they want opposite fixes:
+ * THE QUESTION IT WAS BUILT FOR. A device dump reported **5,108 impostors
+ * waiting on a bake with the atlas at 18/18 slots** — five thousand trees that
+ * cannot draw, against a store the same line calls full — and `waiting` alone
+ * could not say whether the atlas was TOO SMALL (every slot carrying trees and
+ * the footprint wanting more) or STALE (slots baked somewhere the truck has
+ * left, serving nobody). This reports the demand BY NAME instead: refused keys
+ * with their tree counts, against how many baked slots serve zero.
  *
- *   TOO SMALL — the footprint genuinely wants more than eighteen distinct
- *     (family, variant) pairs, and every slot is carrying trees. Then the
- *     atlas wants enlarging, or the demand wants narrowing.
- *   STALE — the eighteen were baked somewhere the truck has since left and are
- *     serving nobody. `impSlotFor` never re-uses a slot, so this is a ratchet:
- *     drive far enough and the atlas is full of scenery you cannot see. Then it
- *     wants reclaiming, and enlarging it only moves the wall.
+ * THE ANSWER WAS TOO SMALL, AND THE ATLAS IS 40 SLOTS NOW — enough for the
+ * whole variant space (37), so `locked` is an assertion-level bug rather than
+ * a state the renderer is expected to handle. **This tool FAILS on it.**
+ * `devtools/imp-atlas.test.mjs` holds the capacity invariant in pure node and
+ * is the cheaper gate; this one is the live witness.
  *
- * `waiting` alone cannot tell them apart, which is why it was filed rather
- * than fixed. `__impdemand()` reports the demand BY NAME — how many distinct
- * keys were refused and how many trees each, against how many baked slots are
- * serving zero — and those two numbers decide it.
+ * WHAT IS LEFT IS LATENCY, AND IT NO LONGER HIDES A TREE. The bake budget is
+ * two variants a refresh, so a cold district takes several seconds to
+ * photograph its palette — and a tree whose variant has not landed yet borrows
+ * a RESIDENT SIBLING of its own family rather than drawing nothing. `stood`
+ * counts those; `waiting - stood` is the trees genuinely absent, which is a
+ * family with no slot at all and lasts one sweep.
  *
  * IT MUST BE A DRIVEN WORLD, not a fixture snap. `impSlotFor` never re-uses a
  * slot and a district's palette is a 6 km cell, so the demand can only be a
@@ -119,6 +122,7 @@ const d = await openDrive({
   tag: 'impdemand', settle: SETTLE,
 });
 let inconclusive = false;
+let dem = null;
 try {
   const set = DIALS.split(',').filter(Boolean).map((s) => s.split('='));
   await d.page.evaluate((rows) => {
@@ -162,12 +166,14 @@ try {
     console.log('NO SPAWN COORDINATES — a fixture has no lat/lon to drive from; use SPOT= or KM=0');
     process.exit(2);
   }
-  console.log('  km   drawn  offered  slots  need  inUse  idle  refusedN  keys  verdict');
+  console.log('  km   drawn  offered  slots  need  inUse  idle  refusedN  keys  stood  verdict');
+  console.log('  (stood = waiting trees that borrowed a sibling rather than vanishing)');
   const row = (km, x) => console.log(`${String(km).padStart(4)}  ${String(x.imp.drawn).padStart(6)}`
     + `  ${String(x.imp.offered).padStart(7)}  ${String(x.dem.slots).padStart(5)}`
     + `  ${String(x.dem.need).padStart(4)}  ${String(x.dem.inUse).padStart(5)}`
     + `  ${String(x.dem.idle).padStart(4)}  ${String(x.dem.refusedN).padStart(8)}`
-    + `  ${String(x.dem.refusedKeys).padStart(4)}  ${x.dem.verdict}`);
+    + `  ${String(x.dem.refusedKeys).padStart(4)}  ${String(x.dem.stood).padStart(5)}`
+    + `  ${x.dem.verdict}`);
   row(0, c);
   for (let km = STEP_KM; canDrive && km <= KM; km += STEP_KM) {
     // Due north: latitude is the one axis whose metres-per-degree does not
@@ -177,7 +183,8 @@ try {
     c = await census();
     row(km, c);
   }
-  const dem = c.dem, imp = c.imp;
+  dem = c.dem;
+  const imp = c.imp;
   console.log(`\ntier  reach ${imp.granted}m · drawn ${imp.drawn}/${imp.offered} offered`
     + ` · far ${imp.far}/${imp.farSeen} · atlas ${dem.slots}/${dem.slotCap} slots`);
 
@@ -188,6 +195,12 @@ try {
   console.log(`REFUSED ${dem.refusedN} trees over ${dem.refusedKeys} keys`
     + ` — ${dem.waiting} WAITING on the bake budget (drains),`
     + ` ${dem.locked} LOCKED OUT by a full atlas (never draws)`);
+  // THE ONE THAT SAYS WHETHER THE HOLE WAS FILLED. A pending key borrows a
+  // resident sibling of its own family, so a waiting tree still stands — and
+  // the gap between `waiting` and `stood` is trees genuinely absent, which is
+  // a family with no slot baked at all and lasts one sweep.
+  console.log(`        of the waiting, ${dem.stood} DREW ANYWAY on a sibling of`
+    + ` their own family; ${dem.waiting - dem.stood} had no sibling yet and are absent`);
 
   if (dem.served.length) {
     console.log('\n  baked slot                        instances');
