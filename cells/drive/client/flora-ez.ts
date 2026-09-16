@@ -250,14 +250,46 @@ function crownOf(v: GrowthVariant, q: number): THREE.BufferGeometry | null {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setIndex(new THREE.BufferAttribute(CI, 1));
+    // A CARD IS ITS OWN CLUSTER, so the same occlusion runs over card centres.
+    // `cardTone` already varies by card, which is the right unit here — what it
+    // could not do is say which cards are INSIDE the crown, and that is the
+    // half that makes a canopy read as a canopy rather than as a heap.
+    const nc = pos.length / 12;
+    const cen = new Float32Array(Math.max(1, nc) * 3);
+    let rad = 0;
+    for (let c = 0; c < nc; c++) {
+      let cx = 0, cy = 0, cz = 0;
+      for (let k = 0; k < 4; k++) { cx += pos[(c * 4 + k) * 3]; cy += pos[(c * 4 + k) * 3 + 1]; cz += pos[(c * 4 + k) * 3 + 2]; }
+      cen[c * 3] = cx / 4; cen[c * 3 + 1] = cy / 4; cen[c * 3 + 2] = cz / 4;
+      rad += Math.hypot(pos[c * 12] - cen[c * 3], pos[c * 12 + 1] - cen[c * 3 + 1], pos[c * 12 + 2] - cen[c * 3 + 2]);
+    }
+    rad = nc ? rad / nc : 0.05;
+    const cs = anchorSky(cen, rad);
+    const sky = new Float32Array(pos.length / 3);
+    for (let i = 0; i < sky.length; i++) {
+      const c = Math.min(nc - 1, i >> 2);
+      const nx = pos[i * 3] - cen[c * 3], ny = pos[i * 3 + 1] - cen[c * 3 + 1], nz = pos[i * 3 + 2] - cen[c * 3 + 2];
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      sky[i] = Math.min(1, Math.max(0.05, cs[c] * (0.55 + 0.45 * (0.5 + 0.5 * (ny / nl)))));
+    }
+    g.setAttribute('aSky', new THREE.BufferAttribute(sky, 1));
+    g.setAttribute('aEnv', new THREE.BufferAttribute(crownEnv(g), 3));
     return cardTone(g);
   }
   const A = int16(v.anc);
   if (!A.length) return null;
   const parts: THREE.BufferGeometry[] = [];
+  /** Which anchor each part hangs on, and where its own centre landed — the
+   *  two things the tone and the occlusion need and the merge throws away. */
+  const partAnchor: number[] = [];
+  const partCentre: number[] = [];
   const r = v.crown.r;
   const pads = v.pads ? int16(v.pads) : null;
   const fill = crownFill(v);
+  const nAnc = Math.floor(A.length / 3);
+  const ancPts = new Float32Array(nAnc * 3);
+  for (let k = 0; k < nAnc * 3; k++) ancPts[k] = A[k] / q;
+  const skyOf = anchorSky(ancPts, r * fill.gain);
   for (let i = 0; i + 3 <= A.length; i += 3) {
     const ax = A[i] / q, ay = A[i + 1] / q, az = A[i + 2] / q;
     for (let k = 0; k < fill.n; k++) {
@@ -293,16 +325,181 @@ function crownOf(v: GrowthVariant, q: number): THREE.BufferGeometry | null {
         // area needs its partner further off or the two are one blob again.
         const rg = r * fill.gain;
         const d = (0.55 + 0.45 * fillHash(i, k + 11)) * fill.spread * rg;
-        g.translate(ax + Math.cos(a) * d, ay + (fillHash(i, k + 19) - 0.5) * 0.5 * fill.spread * rg,
-          az + Math.sin(a) * d);
+        const cxp = ax + Math.cos(a) * d;
+        const cyp = ay + (fillHash(i, k + 19) - 0.5) * 0.5 * fill.spread * rg;
+        const czp = az + Math.sin(a) * d;
+        g.translate(cxp, cyp, czp);
+        partCentre.push(cxp, cyp, czp);
       } else {
         g.translate(ax, ay, az);
+        partCentre.push(ax, ay, az);
       }
       parts.push(g);
+      partAnchor.push(i / 3);
     }
   }
   const crown = mergeGeos(parts);
-  return shape === 'cone' ? faceTone(crown, 0.16, 0.3) : faceTone(crown);
+  return crownShade(crown, parts, partAnchor, partCentre, skyOf, nAnc,
+    shape === 'cone' ? 0.16 : 0.2);
+}
+
+/**
+ * ── HOW MUCH SKY EACH FOLIAGE ANCHOR CAN SEE ──
+ *
+ * The material's crown shading was `smoothstep(length(vEzLocal.xz))` against
+ * `smoothstep(vEzLocal.y)` — a RADIAL approximation that assumes a crown
+ * centred on the trunk and knows nothing about where the foliage actually is.
+ * It is right for a round oak and wrong for everything the atlas is about to
+ * grow: an umbrella acacia, a one-sided wind-flagged conifer, a high crown, a
+ * palm's fronds.
+ *
+ * So the occlusion is MEASURED, once per variant at decode, against the tree's
+ * own anchors: nine rays over the upper hemisphere, blocked by any other
+ * anchor's own foliage sphere. It costs anchors x 9 x anchors — about fourteen
+ * thousand operations for a conifer, once, for the life of the page — and it
+ * is what turns the crown's light and dark from an assumption into a fact
+ * about the geometry. No runtime cost at all: it lands in an attribute.
+ *
+ * THIS IS THE BAKE'S JOB EVENTUALLY. Doing it at decode rather than in
+ * `bake-ez-flora.mjs` means it needs no re-bake and no new tooling, and the
+ * baked atlas stays exactly the bytes it is; when the bake learns to carry
+ * branch order and cluster ids this moves there with them.
+ */
+function anchorSky(P: Float32Array, rad: number): Float32Array {
+  const n = Math.floor(P.length / 3);
+  const out = new Float32Array(n);
+  // A card crown has hundreds of clusters and the occlusion is an ESTIMATE, so
+  // the occluder set is strided rather than complete: the cost is n x 9 x 140
+  // whatever the crown, and a tenth of the cards give the same answer to well
+  // inside a palette step.
+  const st = Math.max(1, Math.ceil(n / 140));
+  // Nine directions: straight up, then two rings of four. Weighted to the
+  // zenith, because that is where a canopy's light comes from.
+  const dirs: Array<[number, number, number, number]> = [[0, 1, 0, 2]];
+  for (let k = 0; k < 4; k++) {
+    const a = (k / 4) * Math.PI * 2 + 0.4;
+    dirs.push([Math.cos(a) * 0.5, 0.87, Math.sin(a) * 0.5, 1.4]);
+    dirs.push([Math.cos(a + 0.78) * 0.87, 0.5, Math.sin(a + 0.78) * 0.87, 1]);
+  }
+  const wTot = dirs.reduce((t, d) => t + d[3], 0);
+  const R2 = rad * rad;
+  for (let j = 0; j < n; j++) {
+    const jx = P[j * 3], jy = P[j * 3 + 1], jz = P[j * 3 + 2];
+    let open = 0;
+    for (const [dx, dy, dz, w] of dirs) {
+      let hit = false;
+      for (let k = 0; k < n && !hit; k += st) {
+        if (k === j) continue;
+        const ex = P[k * 3] - jx, ey = P[k * 3 + 1] - jy, ez = P[k * 3 + 2] - jz;
+        const t = ex * dx + ey * dy + ez * dz;
+        // Behind the ray, or so far along it that the foliage between would
+        // have shaded this anchor anyway: neither is an occluder.
+        if (t < rad * 0.4 || t > rad * 7) continue;
+        const px = ex - dx * t, py = ey - dy * t, pz = ez - dz * t;
+        if (px * px + py * py + pz * pz < R2) hit = true;
+      }
+      if (!hit) open += w;
+    }
+    out[j] = open / wTot;
+  }
+  return out;
+}
+
+/**
+ * ── THE VARIATION UNIT IS THE CLUSTER, NOT THE FACE ──
+ *
+ * `faceTone` hashes every TRIANGLE independently. On a six-pixel pad under a
+ * fourteen-level palette and an ordered dither that is high-frequency tonal
+ * noise at exactly the dither's own frequency — the crown gets busier without
+ * getting more detailed, which is the opposite of what a coarse palette wants.
+ * Real foliage correlates: a sunlit outer branch is light AS A GROUP.
+ *
+ * So the hash moves up to the ANCHOR — one tone for a whole foliage cluster —
+ * and the shading within the crown comes from the measured sky exposure above
+ * rather than from a per-face draw. Fewer numbers, more form.
+ */
+function crownShade(crown: THREE.BufferGeometry, parts: THREE.BufferGeometry[],
+  partAnchor: number[], partCentre: number[], skyOf: Float32Array, nAnc: number,
+  spread: number): THREE.BufferGeometry {
+  const pos = crown.getAttribute('position') as THREE.BufferAttribute;
+  const n = pos.count;
+  const col = new Float32Array(n * 3);
+  const sky = new Float32Array(n);
+  const env = crownEnv(crown);
+  const tone = new Float32Array(Math.max(1, nAnc));
+  for (let j = 0; j < tone.length; j++) {
+    let x = Math.imul(j + 1, 2654435761);
+    x = Math.imul(x ^ (x >>> 15), 2246822507);
+    tone[j] = 1 + (((x ^ (x >>> 13)) >>> 0) / 4294967296 - 0.5) * spread;
+  }
+  let o = 0;
+  for (let k = 0; k < parts.length; k++) {
+    const g = parts[k];
+    const pc = g.index ? g.index.count : (g.getAttribute('position') as THREE.BufferAttribute).count;
+    const aj = partAnchor[k];
+    const t = tone[Math.min(tone.length - 1, aj)];
+    const s0 = skyOf.length ? skyOf[Math.min(skyOf.length - 1, aj)] : 1;
+    const cxp = partCentre[k * 3], cyp = partCentre[k * 3 + 1], czp = partCentre[k * 3 + 2];
+    for (let i = 0; i < pc; i++) {
+      const vi = o + i;
+      col[vi * 3] = t; col[vi * 3 + 1] = t; col[vi * 3 + 2] = t;
+      // Within a cluster the top and the outward face see more sky than the
+      // underside and the side facing the trunk. The pad's own centre gives
+      // that direction without needing a normal the merge has not built yet.
+      const nx = pos.getX(vi) - cxp, ny = pos.getY(vi) - cyp, nz = pos.getZ(vi) - czp;
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      const up = 0.5 + 0.5 * (ny / nl);
+      const rl = Math.hypot(pos.getX(vi), pos.getZ(vi)) || 1;
+      const out2 = 0.5 + 0.5 * ((pos.getX(vi) * nx + pos.getZ(vi) * nz) / (rl * nl));
+      sky[vi] = Math.min(1, Math.max(0.05, s0 * (0.40 + 0.38 * up + 0.22 * out2)));
+    }
+    o += pc;
+  }
+  crown.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  crown.setAttribute('aSky', new THREE.BufferAttribute(sky, 1));
+  crown.setAttribute('aEnv', new THREE.BufferAttribute(env, 3));
+  return crown;
+}
+
+/**
+ * ── THE CROWN LIGHTS AS ONE ENVELOPE, NOT AS A HEAP OF FACETS ──
+ *
+ * A crown built from pads or cards presents facets pointing every way, so
+ * Lambert's dot product is a different number on every triangle and the crown
+ * gets a random tone per facet instead of a LIT SIDE. At three to six pixels a
+ * pad, under fourteen levels and an ordered dither, that is the foliage noise
+ * both reviews of the atlas named — and it is why a tree reads as a texture
+ * rather than as a solid object standing in the sun.
+ *
+ * So every crown vertex carries the direction from the crown's own CENTRE,
+ * normalised by the crown's own extent so the envelope is the ellipsoid the
+ * foliage actually occupies rather than a sphere. The surface pass then turns
+ * the shading normal toward it, and the whole crown lights as one mass: one
+ * sunlit flank, one shaded flank, coherent across every cluster in it.
+ *
+ * It costs three floats a crown vertex at decode and nothing at runtime, and
+ * it is the attribute phase 3's bough merge will want anyway.
+ */
+function crownEnv(crown: THREE.BufferGeometry): Float32Array {
+  const pos = crown.getAttribute('position') as THREE.BufferAttribute;
+  const n = pos.count;
+  const env = new Float32Array(n * 3);
+  crown.computeBoundingBox();
+  const bb = crown.boundingBox as THREE.Box3;
+  const cx = (bb.min.x + bb.max.x) * 0.5, cy = (bb.min.y + bb.max.y) * 0.5, cz = (bb.min.z + bb.max.z) * 0.5;
+  const ex = Math.max(1e-4, (bb.max.x - bb.min.x) * 0.5);
+  const ey = Math.max(1e-4, (bb.max.y - bb.min.y) * 0.5);
+  const ez = Math.max(1e-4, (bb.max.z - bb.min.z) * 0.5);
+  for (let i = 0; i < n; i++) {
+    let dx = (pos.getX(i) - cx) / ex, dy = (pos.getY(i) - cy) / ey, dz = (pos.getZ(i) - cz) / ez;
+    // A vertex AT the centre has no direction; up is the honest default, since
+    // the one thing every interior point of a canopy agrees on is where the
+    // sky is.
+    const l = Math.hypot(dx, dy, dz);
+    if (l < 1e-5) { dx = 0; dy = 1; dz = 0; } else { dx /= l; dy /= l; dz /= l; }
+    env[i * 3] = dx; env[i * 3 + 1] = dy; env[i * 3 + 2] = dz;
+  }
+  return env;
 }
 
 /** Wood (indexed) and crown (soup) into one indexed geometry with `aWood`. */
@@ -312,16 +509,25 @@ function join(wood: THREE.BufferGeometry, crown: THREE.BufferGeometry | null): T
   const wi = wood.index as THREE.BufferAttribute;
   const cp = crown?.getAttribute('position') as THREE.BufferAttribute | undefined;
   const cc = crown?.getAttribute('color') as THREE.BufferAttribute | undefined;
+  const csk = crown?.getAttribute('aSky') as THREE.BufferAttribute | undefined;
+  const cev = crown?.getAttribute('aEnv') as THREE.BufferAttribute | undefined;
   const nW = wp.count, nC = cp ? cp.count : 0;
   const pos = new Float32Array((nW + nC) * 3);
   const col = new Float32Array((nW + nC) * 3);
   const wdF = new Float32Array(nW + nC);
+  // THE WOOD IS FULLY EXPOSED BY CONVENTION. It is never read — the surface
+  // pass branches on `aWood` first — and a zero here would be a black trunk
+  // the day someone moves that branch.
+  const skF = new Float32Array(nW + nC).fill(1);
+  const evF = new Float32Array((nW + nC) * 3);
   pos.set(wp.array as Float32Array, 0);
   col.set(wc.array as Float32Array, 0);
   wdF.fill(1, 0, nW);
   if (cp && cc) {
     pos.set(cp.array as Float32Array, nW * 3);
     col.set(cc.array as Float32Array, nW * 3);
+    if (csk) skF.set(csk.array as Float32Array, nW);
+    if (cev) evF.set(cev.array as Float32Array, nW * 3);
   }
   const ci = crown?.index as THREE.BufferAttribute | null | undefined;
   const nCI = ci ? ci.count : nC;
@@ -333,6 +539,8 @@ function join(wood: THREE.BufferGeometry, crown: THREE.BufferGeometry | null): T
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
   g.setAttribute('aWood', new THREE.BufferAttribute(wdF, 1));
+  g.setAttribute('aSky', new THREE.BufferAttribute(skF, 1));
+  g.setAttribute('aEnv', new THREE.BufferAttribute(evF, 3));
   g.setIndex(new THREE.BufferAttribute(idx, 1));
   g.computeVertexNormals();
   return g;
@@ -551,7 +759,13 @@ export const foliageWind = (wRise: string, wFlut: string): string => [
  * so a device can A/B them (`?ezbark=`, `?ezedge=`) and a lab can put them on
  * dials, exactly as the wind and the growth bend already are.
  */
-export const ezLookU = { uEzBark: { value: 0.55 }, uEzEdge: { value: 0.62 } };
+export const ezLookU = {
+  uEzBark: { value: 0.55 }, uEzEdge: { value: 0.62 },
+  /** How much of the crown's shading comes from the MEASURED sky exposure
+   *  rather than from the radial approximation it replaced. `?ezsky=0` is the
+   *  exact A/B and restores the old term to the bit. */
+  uEzSky: { value: floraQuery.get('ezsky') === '0' ? 0 : 1 },
+};
 /** A hash and a value noise of our own. `grain.ts` has the same pair under
  *  different names and IS chained onto this material — declaring `grNoise`
  *  twice is a redefinition, and a shader that fails to link logs to the
@@ -582,12 +796,13 @@ export function ezMaterial(
     sh.uniforms.uWood = uWood;
     sh.uniforms.uEzBend = uEzBend;
     sh.uniforms.uEzBark = ezLookU.uEzBark;
+    sh.uniforms.uEzSky = ezLookU.uEzSky;
     sh.uniforms.uEzEdge = ezLookU.uEzEdge;
     sh.uniforms.uTime = wind.uTime;
     sh.uniforms.uGust = wind.uGust;
     sh.uniforms.uWindK = wind.uWindK;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', `#include <common>\nattribute float aWood; uniform vec3 uWood; uniform float uEzBend;\nvarying float vEzWood; varying vec3 vEzLocal; varying float vEzJit;\n${FOLIAGE_WIND_UNIFORMS}`)
+      .replace('#include <common>', `#include <common>\nattribute float aWood; attribute float aSky; attribute vec3 aEnv; uniform vec3 uWood; uniform float uEzBend;\nvarying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky; varying vec3 vEzEnv;\n${FOLIAGE_WIND_UNIFORMS}`)
       .replace('#include <begin_vertex>', [
         '#include <begin_vertex>',
         '#ifdef USE_INSTANCING',
@@ -607,6 +822,11 @@ export function ezMaterial(
         // scales with the trunk for free), and a per-instance jitter so a
         // hundred trees of one variant do not all wear the same knot.
         'vEzWood = aWood;',
+        'vEzSky = aSky;',
+        // The envelope direction into the frame the lighting reads. The
+        // instance's non-uniform width and height skew it a little and that is
+        // accepted: a crown is a soft shape and its light is a soft claim.
+        'vEzEnv = normalMatrix * aEnv;',
         'vEzLocal = position;',
         '#ifdef USE_INSTANCING',
         'vEzJit = fract(sin(dot(instanceMatrix[3].xz, vec2(21.7, 47.3))) * 7351.3);',
@@ -653,8 +873,9 @@ export function ezMaterial(
      */
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying float vEzWood; varying vec3 vEzLocal; varying float vEzJit;
-        uniform float uEzBark; uniform float uEzEdge;
+        varying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky;
+        varying vec3 vEzEnv;
+        uniform float uEzBark; uniform float uEzEdge; uniform float uEzSky;
         ${EZ_NOISE_GLSL}`)
       .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
         if (vEzWood > 0.5) {
@@ -663,12 +884,43 @@ export function ezMaterial(
             diffuseColor.rgb *= 1.0 + (ezB - 0.5) * uEzBark;
           }
         } else {
-          // Broad object-space depth survives pixel reduction: the sheltered
-          // interior receives less sky, while outer foliage keeps its colour.
-          // No emissive rim, additional texture, or extra draw pass.
+          // ── THE CROWN'S OWN LIGHT AND DARK ──
+          //
+          // The radial pair below was the whole of it: outer foliage keeps its
+          // colour, the sheltered interior loses some. It is cheap, it needs no
+          // attribute, and it is an APPROXIMATION OF A CENTRED CROWN — it reads
+          // length(vEzLocal.xz) and vEzLocal.y and knows nothing about
+          // where this tree's foliage actually is. Right for a round oak;
+          // wrong for an umbrella acacia, a one-sided wind-flagged conifer, a
+          // high crown, a palm's fronds — which is most of what the atlas is
+          // about to grow.
+          //
+          // aSky is the MEASURED version: nine rays over the upper
+          // hemisphere per foliage cluster at decode, blocked by the tree's own
+          // other clusters (anchorSky). It costs nothing at runtime — it is
+          // an attribute — and it quantises into large coherent masses rather
+          // than a smooth radial ramp, which is what fourteen levels want.
+          //
+          // The range is wider than the radial term's 0.74..1.0 on purpose:
+          // both reviews of the atlas said the same thing, that the crowns
+          // carry no light at all. 1.06 at the top is still well under the
+          // bloom cut for a crown colour around 0.3-0.42.
           float ezOuter = smoothstep(0.06, 0.42, length(vEzLocal.xz));
           float ezUpper = smoothstep(0.30, 1.0, vEzLocal.y);
-          diffuseColor.rgb *= mix(0.74, 1.0, max(ezOuter, ezUpper));
+          float ezRad = mix(0.74, 1.0, max(ezOuter, ezUpper));
+          diffuseColor.rgb *= mix(ezRad, mix(0.62, 1.06, vEzSky), uEzSky);
+          // ── AND THE WHOLE CROWN LIGHTS AS ONE MASS ──
+          // A pad heap presents facets pointing every way, so Lambert answers a
+          // different number on each and the crown gets a random tone per facet
+          // rather than a sunlit side. Turning the shading normal toward the
+          // crown's own envelope (aEnv, measured at decode) is what gives it
+          // one lit flank and one shaded flank — coherent over every cluster,
+          // which is the only kind of light fourteen levels can carry.
+          // Not all the way: a little of the facet keeps the crown from
+          // reading as a painted ball.
+          if (uEzSky > 0.001 && dot(vEzEnv, vEzEnv) > 1e-6) {
+            normal = normalize(mix(normal, normalize(vEzEnv), 0.78 * uEzSky));
+          }
           if (uEzEdge < 0.999) {
           float ezNdv = abs(dot(normalize(normal), normalize(vViewPosition)));
           diffuseColor.rgb *= mix(uEzEdge, 1.0, smoothstep(0.0, 0.35, ezNdv));

@@ -4903,6 +4903,115 @@ individually legible as diamonds where `conic 1-4` is a mass — which is the
 anchor count again, and that lever is `children x0.3` in the reduction and
 needs a re-bake rather than a client dial.
 
+### …and then the control set itself was found to be measuring the wrong picture
+
+The seat revoked the premise the two passes above were aimed at — *the frond
+recipe the lab approved* — and asked for a critique from first principles.
+`TREE-FORM-2026-09-16.md` is that, and its finding invalidates every number in
+the section above as a TARGET (they are still true as measurements):
+
+**THE SHEET WAS FOUR TO TEN TIMES THE SIZE THE GAME DRAWS A TREE, WITH MSAA THE
+RENDERER DOES NOT HAVE, AND NO POST CHAIN.** 224 px cells at `samples: 4`, read
+straight off the render target. The frame is 148 x 320 art pixels, `rtScene`
+has no MSAA at all, and the composite quantises to fourteen levels and
+Bayer-dithers; a metre at distance d is 307/d art pixels, so a 16 m conifer is
+49 px at 100 m and 25 px at 200 m, its pads 7.4 and 3.7 px, and its trunk 1.1
+and 0.54 px. Re-rendered honestly, `conic 1-4` — the recipe everything was
+being tuned toward — are the LEAST legible cells on the sheet.
+
+**`__ezsheet` IS FRAMED BY A DISTANCE NOW.** Every variant renders at the
+art-pixel size the game would draw it at from `DIST` metres, computed from its
+own metric height (`EZ_M_PER_SCALE` times the rack's mid size draw) through the
+chase lens into 320 rows, at `samples: 0`, then through the composite's own
+quantiser and bayer4 in JS. One sheet pixel is the same art pixel in every
+cell, so a snag at 200 m is visibly fourteen pixels where a conifer is
+twenty-nine. `DIST=`, `INK=1` for black silhouettes, `POST=0` for before the
+quantiser, `QS=` to A/B a boot-time switch, and `PX=` is still there as a
+close-up and prints "NOT a control" when used.
+
+**AND CLOSURE IS ONE COLUMN OF SIX.** It cannot tell a mass from confetti,
+which at 25 px is the whole difference. Beside it: `parts` (connected
+components — a tree is ONE thing), `big` (the share in the largest), `sky` (the
+crown's contrast against the sky in palette steps), `form` (the tenth-to-
+ninetieth percentile of the FOLIAGE's own luma, in steps), `mass` (the largest
+connected region of one quantised colour, as a share of the foliage) and
+`stipple` (lit pixels touching at most one neighbour — the ones that flicker as
+the truck moves).
+
+**Twelve of twenty-nine variants read at 200 m**, on a bar of at most three
+parts, 70% in the largest, a step and a half of sky contrast, a step and a half
+of the crown's own light and dark, and at most 12% stipple. **The whole conifer
+family fails — all twelve** — on fragmentation (4 to 13 parts) and stipple (7 to
+34%). **All four snags fail at 100% stipple**: at 200 m a snag is two to four
+isolated black pixels, drawn with 135 to 224 triangles.
+
+Two faults in the instrument, both caught by numbers that did not move:
+
+- **`form` read 3.7 for twenty-five variants in a row** on its first cut. A
+  number that does not move is measuring something else, and it was the dark
+  BARK against the green crown rather than the crown's own light. Restricted to
+  the foliage (the instance colour is 0.30/0.42/0.20 and the bark 0x4a3826, so
+  `g > r` separates them with nothing to tune).
+- **`Math.max(1, mag) || 0` is never 0**, so the auto-magnification never fired
+  and the first sheet came out at 1x — twenty-nine trees at 23 pixels each, on a
+  sheet 310 pixels wide.
+
+### The crown's own light: the occlusion was neutral and the envelope was the win
+
+Phase 2 of that document — the cheapest item on the list, a material change
+touching no bake — and it took two attempts, of which the first is the more
+useful.
+
+**A MEASURED SKY EXPOSURE, AT DECODE.** The crown's shading was
+`smoothstep(length(vEzLocal.xz))` against `smoothstep(vEzLocal.y)`: a RADIAL
+approximation that assumes a crown centred on the trunk and knows nothing about
+where this tree's foliage is — right for a round oak, wrong for an umbrella
+acacia, a wind-flagged conifer, a high crown or a palm. `anchorSky` replaces it
+with nine rays over the upper hemisphere per foliage cluster, blocked by the
+tree's own other clusters, run once per variant at decode and carried as
+`aSky`. Zero runtime cost. **It is also, on its own, WORTH NOTHING at 200 m**:
+
+| by form, at 200 m | `mass`, radial | + measured occlusion | + envelope normal |
+|---|---|---|---|
+| round | 5% | 6% | **11%** |
+| conic | 4% | 4% | **7%** |
+| umbrella | 11% | 11% | **19%** |
+| columnar | 7% | 6% | **9%** |
+| palm | 32% | 11% | 9% |
+
+The reason is scale: occlusion varies between CLUSTERS, a cluster is three to
+five art pixels, so it produces variation at the same frequency the per-face
+hash did — a different noise, not a form. **An ambient term is interior-versus-
+exterior; what makes a tree read as a solid object is a LIT SIDE, which is
+directional and which no amount of AO supplies.**
+
+**SO THE CROWN LIGHTS AS ONE ENVELOPE.** Every crown vertex carries `aEnv`, the
+direction from the crown's own centre normalised by the crown's own extent (an
+ellipsoid, not a sphere), and the surface pass turns the shading normal 78% of
+the way toward it. A pad heap presents facets pointing every way, so Lambert
+answers a different number on each and the crown gets a random tone per facet;
+against the envelope the whole crown has one sunlit flank and one shaded flank,
+coherent across every cluster in it. That is the only kind of light fourteen
+levels can carry, and it is what both reviews meant by "the crowns have no
+light". Three floats a crown vertex at decode, nothing at runtime, and it is
+the attribute the bough merge will want anyway.
+
+**AND THE VARIATION UNIT MOVED UP.** `faceTone`'s per-TRIANGLE hash is
+high-frequency tonal noise at exactly the dither's own frequency; the hash is on
+the ANCHOR now, so a whole foliage cluster shares a tone. Measured: it left the
+crown's luma spread unchanged (3.1 steps for round, either way) — so it removed
+noise without removing light, which is what it was for.
+
+`?ezsky=0` restores the radial term AND the facet normal exactly, so the pair is
+one build with one uniform. **The palm goes the wrong way** (32% → 9%) and that
+is honest: its crown is a solid cone whose facets were already coherent, and it
+is the one form the design document has down for a bespoke rebuild.
+
+**What phase 2 did NOT move, and could not:** `parts`, `big` and `stipple` are
+identical in both legs to the digit. Shading cannot join a crown that is thirteen
+separate pieces of foliage — that is phase 3, the cluster crown and the distance
+merge.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the

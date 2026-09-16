@@ -34230,26 +34230,65 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
  * what makes the coverage a fraction rather than a pixel count.
  */
 (window as unknown as { __ezsheet?: object }).__ezsheet = (opt: {
-  px?: number; elev?: number; az?: number; cols?: number; mag?: number; bg?: string;
+  dist?: number; px?: number; elev?: number; az?: number; cols?: number; mag?: number;
+  bg?: string; post?: boolean; ink?: boolean; scale?: number;
 } = {}): object => {
-  const PX = Math.max(16, Math.min(512, Math.round(opt.px ?? 224)));
-  const MAG = Math.max(1, Math.round(opt.mag ?? 1));
+  // ── THE FRAMING IS A DISTANCE, NOT A PIXEL COUNT ──
+  // `PIX_H` is 320 rendered rows and the chase lens is 55 degrees vertical, so
+  // a metre at distance d is ROWS / (2 tan(fov/2) d) art pixels — 307.3/d. The
+  // DESIGN values are used rather than the live ones on purpose: a control set
+  // has to render the same cells on a phone, a desktop and the harness, and
+  // `pixSize.y` is min(320, innerHeight) while `camera.fov` carries the speed
+  // kick. The live pair is reported beside them so a divergence is visible.
+  const ROWS = 320, FOV = 55;
+  const PX_PER_M_AT_1M = ROWS / (2 * Math.tan((FOV * Math.PI) / 360));
+  const DIST = Math.max(5, opt.dist ?? 200);
+  const SCALE = opt.scale ?? 2.5;   // the mid of the rack's own size draw
+  // 0 means "choose one" — and it has to be written this way round, because
+  // Math.max(1, x) || 0 is never 0 and the sheet came out at 1x.
+  const MAG = Math.round(opt.mag ?? 0) >= 1 ? Math.round(opt.mag as number) : 0;
   const elev = ((opt.elev ?? 8) * Math.PI) / 180;
   const az = ((opt.az ?? 0) * Math.PI) / 180;
-  const rt = new THREE.WebGLRenderTarget(PX, PX, {
-    minFilter: THREE.LinearFilter, magFilter: THREE.NearestFilter,
-    format: THREE.RGBAFormat, type: THREE.UnsignedByteType, depthBuffer: true, samples: 4,
+  const POST = opt.post !== false;
+  const INK = !!opt.ink;
+  // ── NO MSAA, BECAUSE THE GAME HAS NONE ──
+  // `rtScene.samples = 0` with the comment "MSAA would soften exactly the edges
+  // we want hard". A control sheet taken at 4x was measuring a renderer nobody
+  // ships, and it is why a 3 px pad read as a soft grey smear here and as
+  // crawling stipple on the device.
+  const MAXPX = 512;
+  const rt = new THREE.WebGLRenderTarget(MAXPX, MAXPX, {
+    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+    format: THREE.RGBAFormat, type: THREE.UnsignedByteType, depthBuffer: true, samples: 0,
   });
-  // The world's own key and fill, so a crown reads as the game lights it.
   const sc = new THREE.Scene();
   const key = new THREE.DirectionalLight(0xffffff, 2.1);
   key.position.set(-0.55, 0.72, 0.42);
   sc.add(key, new THREE.HemisphereLight(0xbcd0e6, 0x4a4634, 1.15));
   const mat = ezMaterial(0x4a3826, {});
+  // ── THE COMPOSITE'S OWN QUANTISER, IN JS ──
+  // `ditherQuant` with the shipped uniforms: 14 levels, bayer4, amplitude 1,
+  // bias 0.5, ONE threshold for all three channels (uDChan 0). Ported rather
+  // than called because the composite is a full-screen pass over `rtScene` and
+  // this is a 29-pixel cell; the arithmetic is six lines and the constants are
+  // read from the same place the shader's are.
+  const b2 = (x: number, y: number): number => {
+    const fx = Math.floor(x), fy = Math.floor(y);
+    const v = fx * 0.5 + fy * fy * 0.75;
+    return v - Math.floor(v);
+  };
+  const b4 = (x: number, y: number): number => b2(x * 0.5, y * 0.5) * 0.25 + b2(x, y);
+  const LEVELS = 14, AMT = 1, BIAS = 0.5;
+  const quant = (v: number, t: number): number =>
+    Math.min(1, Math.max(0, Math.floor(v * LEVELS + (t - 0.5) * AMT + BIAS) / LEVELS));
+  const SKY = [0.725, 0.796, 0.863], GND = [0.541, 0.580, 0.439];
+  const luma = (r: number, g: number, b: number): number => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const STEP = 0.07;                                // one palette step, in sRGB
   const rows: Array<Record<string, unknown>> = [];
-  const cells: Array<{ px: Uint8Array; label: string }> = [];
-  const buf = new Uint8Array(PX * PX * 4);
+  const cells: Array<{ rgb: Uint8ClampedArray; px: number; l1: string; l2: string }> = [];
+  const buf = new Uint8Array(MAXPX * MAXPX * 4);
   const prevTarget = renderer.getRenderTarget();
+  const prevView = rt.viewport.clone(), prevSci = rt.scissor.clone();
   for (const fam of EZ_FAMILIES) {
     const vs = ezVariants(fam);
     for (let i = 0; i < vs.length; i++) {
@@ -34260,6 +34299,14 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
         Math.abs(bb.min.z), Math.abs(bb.max.z)) * 1.06);
       const hy = Math.max(1e-3, (bb.max.y - bb.min.y) * 0.5 * 1.06);
       const cy = (bb.min.y + bb.max.y) * 0.5;
+      // The cell spans 2*hy of the skeleton's unit frame; a metre of it is
+      // EZ_M_PER_SCALE times the size draw, so the cell's own art-pixel size
+      // falls out of the distance and nothing has to be typed.
+      const mPerUnit = EZ_M_PER_SCALE[fam] * SCALE;
+      const spanM = 2 * hy * mPerUnit;
+      const PX = opt.px !== undefined
+        ? Math.max(4, Math.min(MAXPX, Math.round(opt.px)))
+        : Math.max(4, Math.min(MAXPX, Math.round((spanM * PX_PER_M_AT_1M) / DIST)));
       const m = new THREE.InstancedMesh(g, mat, 1);
       m.setMatrixAt(0, new THREE.Matrix4());
       m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array([0.30, 0.42, 0.20]), 3);
@@ -34270,6 +34317,12 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
       cam.position.set(Math.sin(az) * c * 8, cy + Math.sin(elev) * 8, Math.cos(az) * c * 8);
       cam.lookAt(0, cy, 0);
       cam.updateProjectionMatrix();
+      // A render target's viewport is copied by setRenderTarget, so the cell's
+      // own size is set on the TARGET and not on the renderer — the lesson the
+      // impostor atlas paid a whole measurement for.
+      rt.viewport.set(0, 0, PX, PX);
+      rt.scissor.set(0, 0, PX, PX);
+      rt.scissorTest = true;
       renderer.setRenderTarget(rt);
       renderer.setClearColor(0x000000, 0);
       renderer.clear(true, true, true);
@@ -34277,36 +34330,165 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
       renderer.readRenderTargetPixels(rt, 0, 0, PX, PX, buf);
       sc.remove(m);
       m.dispose();
-      let cov = 0;
-      for (let k = 3; k < buf.length; k += 4) if (buf[k] >= 128) cov++;
-      const closure = cov / (PX * PX);
-      rows.push({ fam, i, label: vs[i].label, form: vs[i].form, crown: vs[i].crown,
-        tris: vs[i].tris, hx: +hx.toFixed(3), hy: +hy.toFixed(3),
-        closure: +closure.toFixed(3) });
-      cells.push({ px: buf.slice(), label: `${vs[i].label}  ${(closure * 100).toFixed(0)}%  ${vs[i].tris}t` });
+      // ── COMPOSITE OVER THE BACKGROUND, THEN QUANTISE AND DITHER ──
+      const N = PX * PX;
+      const rgb = new Uint8ClampedArray(N * 3);
+      const mask = new Uint8Array(N);
+      let inkSum = 0, bgSum = 0, cov = 0;
+      const toneSet = new Set<number>();
+      for (let y = 0; y < PX; y++) {
+        // The render target's rows run from the bottom; everything below is in
+        // canvas order, so the flip happens once, here.
+        const sy = PX - 1 - y;
+        const t = PX > 1 ? y / (PX - 1) : 0;
+        for (let x = 0; x < PX; x++) {
+          const s = (sy * PX + x) * 4, d = (y * PX + x) * 3;
+          const a = buf[s + 3] >= 128 ? 1 : 0;
+          let r: number, gg: number, bl: number;
+          const br = SKY[0] + (GND[0] - SKY[0]) * t;
+          const bg2 = SKY[1] + (GND[1] - SKY[1]) * t;
+          const bb2 = SKY[2] + (GND[2] - SKY[2]) * t;
+          if (INK) { r = a ? 0 : br; gg = a ? 0 : bg2; bl = a ? 0 : bb2; }
+          else if (a) { r = buf[s] / 255; gg = buf[s + 1] / 255; bl = buf[s + 2] / 255; }
+          else { r = br; gg = bg2; bl = bb2; }
+          if (POST && !INK) {
+            const th = b4(x, y);
+            r = quant(r, th); gg = quant(gg, th); bl = quant(bl, th);
+          }
+          rgb[d] = r * 255; rgb[d + 1] = gg * 255; rgb[d + 2] = bl * 255;
+          mask[y * PX + x] = a;
+          if (a) {
+            cov++; inkSum += luma(r, gg, bl); bgSum += luma(br, bg2, bb2);
+            toneSet.add(((rgb[d] << 16) | (rgb[d + 1] << 8) | rgb[d + 2]) >>> 0);
+          }
+        }
+      }
+      // ── COMPONENTS, LARGEST SHARE AND STIPPLE ──
+      // Closure cannot tell a mass from confetti, which is the whole difference
+      // between a tree that reads at 25 px and one that does not. Eight-connected
+      // so a diagonal chain of pads counts as one thing; the stipple share is
+      // four-connected, because a pixel touching nothing on its own edges is the
+      // thing that flickers as the truck moves.
+      const seen = new Uint8Array(N);
+      const stack: number[] = [];
+      let parts = 0, big = 0;
+      for (let p = 0; p < N; p++) {
+        if (!mask[p] || seen[p]) continue;
+        parts++; let sz = 0; stack.push(p); seen[p] = 1;
+        while (stack.length) {
+          const q = stack.pop() as number; sz++;
+          const qx = q % PX, qy = (q / PX) | 0;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const nx = qx + dx, ny = qy + dy;
+            if (nx < 0 || ny < 0 || nx >= PX || ny >= PX) continue;
+            const k = ny * PX + nx;
+            if (mask[k] && !seen[k]) { seen[k] = 1; stack.push(k); }
+          }
+        }
+        if (sz > big) big = sz;
+      }
+      let lone = 0;
+      for (let p = 0; p < N; p++) {
+        if (!mask[p]) continue;
+        const px2 = p % PX, py2 = (p / PX) | 0;
+        let n = 0;
+        if (px2 > 0 && mask[p - 1]) n++;
+        if (px2 < PX - 1 && mask[p + 1]) n++;
+        if (py2 > 0 && mask[p - PX]) n++;
+        if (py2 < PX - 1 && mask[p + PX]) n++;
+        if (n <= 1) lone++;
+      }
+      const steps = cov ? Math.abs(inkSum - bgSum) / cov / STEP : 0;
+      // ── AND WHETHER THE CROWN HAS ANY FORM IN IT ──
+      // `steps` is the crown against the SKY and it passes everywhere, because
+      // near-black on pale blue is eight palette steps whatever the crown is
+      // made of. What both reviews say is missing is the crown's own light and
+      // dark, which is a spread WITHIN it: the tenth to ninetieth percentile of
+      // its luma, in palette steps. Percentiles rather than the range, because
+      // one stray lit pixel is not a lit side.
+      //
+      // AND IT IS THE FOLIAGE'S SPREAD, NOT THE TREE'S. The first cut measured
+      // every lit pixel and came back at 3.7 steps for twenty-five variants in
+      // a row — a number that does not move is a number measuring something
+      // else, and it was the dark BARK against the green crown. The crown is
+      // the green half (the instance colour is 0.30/0.42/0.20 and the bark
+      // 0x4a3826, so g > r separates them with nothing to tune).
+      const cl: number[] = [];
+      for (let p = 0; p < N; p++) {
+        if (!mask[p]) continue;
+        if (rgb[p * 3 + 1] <= rgb[p * 3] + 4) continue;
+        cl.push(luma(rgb[p * 3] / 255, rgb[p * 3 + 1] / 255, rgb[p * 3 + 2] / 255));
+      }
+      cl.sort((a2, b2) => a2 - b2);
+      const pct = (f: number): number => cl.length ? cl[Math.min(cl.length - 1, Math.floor(f * cl.length))] : 0;
+      const spread = cl.length ? (pct(0.9) - pct(0.1)) / STEP : 0;
+      // ── AND WHETHER THAT LIGHT IS IN MASSES OR IN SPECKS ──
+      // A spread says how far the crown's light and dark reach; it cannot tell
+      // a lit side from salt-and-pepper, and under an ordered dither those are
+      // the two things worth telling apart. `mass` is the largest CONNECTED
+      // region of foliage carrying one quantised colour, as a share of the
+      // foliage — high is a crown with sides, low is foliage noise. It is the
+      // metric the whole "move the variation unit up to the cluster" argument
+      // is about, and neither review had a number for it.
+      const fmask = new Uint8Array(N);
+      let nLeaf = 0;
+      for (let p = 0; p < N; p++) {
+        if (mask[p] && rgb[p * 3 + 1] > rgb[p * 3] + 4) { fmask[p] = 1; nLeaf++; }
+      }
+      const seen2 = new Uint8Array(N);
+      let massBig = 0;
+      for (let p = 0; p < N; p++) {
+        if (!fmask[p] || seen2[p]) continue;
+        const key0 = (rgb[p * 3] << 16) | (rgb[p * 3 + 1] << 8) | rgb[p * 3 + 2];
+        let sz = 0; stack.length = 0; stack.push(p); seen2[p] = 1;
+        while (stack.length) {
+          const qq = stack.pop() as number; sz++;
+          const qx = qq % PX, qy = (qq / PX) | 0;
+          const nb = [qx > 0 ? qq - 1 : -1, qx < PX - 1 ? qq + 1 : -1,
+            qy > 0 ? qq - PX : -1, qy < PX - 1 ? qq + PX : -1];
+          for (const k of nb) {
+            if (k < 0 || seen2[k] || !fmask[k]) continue;
+            if (((rgb[k * 3] << 16) | (rgb[k * 3 + 1] << 8) | rgb[k * 3 + 2]) !== key0) continue;
+            seen2[k] = 1; stack.push(k);
+          }
+        }
+        if (sz > massBig) massBig = sz;
+      }
+      const mass = nLeaf ? massBig / nLeaf : 0;
+      const row = {
+        fam, i, label: vs[i].label, form: vs[i].form, crown: vs[i].crown, tris: vs[i].tris,
+        px: PX, heightM: +(2 * hy * mPerUnit).toFixed(1),
+        cov: +(cov / N).toFixed(3),
+        parts, big: +(cov ? big / cov : 0).toFixed(3),
+        steps: +steps.toFixed(2), spread: +spread.toFixed(2), mass: +mass.toFixed(3),
+        leaf: cl.length, tones: toneSet.size,
+        stipple: +(cov ? lone / cov : 0).toFixed(3),
+      };
+      rows.push(row);
+      cells.push({ rgb, px: PX,
+        l1: vs[i].label,
+        l2: `${PX}px ${parts}p ${Math.round(row.big * 100)}%big ${spread.toFixed(1)}sp ${Math.round(mass * 100)}%ms ${Math.round(row.stipple * 100)}%st` });
     }
   }
+  rt.viewport.copy(prevView); rt.scissor.copy(prevSci); rt.scissorTest = false;
   renderer.setRenderTarget(prevTarget);
   rt.dispose();
   mat.dispose();
-  // ── THE SHEET ITSELF, ASSEMBLED IN THE PAGE ──
-  // A 2D canvas and one toDataURL, because the alternative is encoding a PNG
-  // in node from raw bytes and the browser already has an encoder.
+  // ── ONE SHEET PIXEL IS THE SAME ART PIXEL IN EVERY CELL ──
+  // Each variant renders at its OWN size, because a snag at 200 m really is
+  // fourteen pixels where a conifer is twenty-nine and a sheet that hid that
+  // would be the 224 px sheet again. So the cells are a common box and the
+  // magnification is common; what differs is how much of the box a tree fills.
+  const maxPx = cells.reduce((a, c) => Math.max(a, c.px), 1);
+  const mag = MAG || Math.max(1, Math.min(16, Math.round(260 / maxPx)));
   const cols = Math.max(1, Math.round(opt.cols ?? 6));
-  const CW = PX * MAG, LH = 16;
+  const CW = maxPx * mag, LH = 30;
   const rowsN = Math.ceil(cells.length / cols);
   const cv = document.createElement('canvas');
   cv.width = cols * CW; cv.height = rowsN * (CW + LH);
   const cx = cv.getContext('2d') as CanvasRenderingContext2D;
   cx.imageSmoothingEnabled = false;
-  // ── THE BACKGROUND IS A CHOICE AND IT CHANGES WHAT YOU CAN READ ──
-  // WHITE is the silhouette test: dark foliage against paper, where a crown
-  // that does not close is obvious and a stray card reads as a stray card.
-  // SKY is the honest one — a pale sky over the ground tone, which is what the
-  // game actually puts behind a tree, and where a thin crown can hide. Keep
-  // both: a control set that only ever showed one would be answering only one
-  // of the two questions this pass is about.
-  const BG = opt.bg ?? 'white';
+  const BG = opt.bg ?? 'sky';
   const label = BG === 'dark' ? '#c8d2e0' : '#1b2026';
   if (BG === 'sky') {
     const gr = cx.createLinearGradient(0, 0, 0, cv.height);
@@ -34315,24 +34497,30 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
   } else cx.fillStyle = BG === 'dark' ? '#20242a' : '#f2f2ee';
   cx.fillRect(0, 0, cv.width, cv.height);
   const tile = document.createElement('canvas');
-  tile.width = PX; tile.height = PX;
   const tctx = tile.getContext('2d') as CanvasRenderingContext2D;
-  const img = tctx.createImageData(PX, PX);
   cells.forEach((cell, n) => {
-    // A render target's rows run from the bottom; a canvas's run from the top.
-    for (let y = 0; y < PX; y++) {
-      const src = (PX - 1 - y) * PX * 4;
-      img.data.set(cell.px.subarray(src, src + PX * 4), y * PX * 4);
+    tile.width = cell.px; tile.height = cell.px;
+    const img = tctx.createImageData(cell.px, cell.px);
+    for (let p = 0; p < cell.px * cell.px; p++) {
+      img.data[p * 4] = cell.rgb[p * 3];
+      img.data[p * 4 + 1] = cell.rgb[p * 3 + 1];
+      img.data[p * 4 + 2] = cell.rgb[p * 3 + 2];
+      img.data[p * 4 + 3] = 255;
     }
     tctx.putImageData(img, 0, 0);
     const gx = (n % cols) * CW, gy = Math.floor(n / cols) * (CW + LH);
-    cx.drawImage(tile, 0, 0, PX, PX, gx, gy, CW, CW);
+    const w = cell.px * mag, off = Math.round((CW - w) / 2);
+    cx.drawImage(tile, 0, 0, cell.px, cell.px, gx + off, gy + off, w, w);
     cx.strokeStyle = BG === 'dark' ? '#3a4150' : '#c2c6bd';
     cx.strokeRect(gx + 0.5, gy + 0.5, CW - 1, CW - 1);
     cx.fillStyle = label; cx.font = '12px monospace';
-    cx.fillText(cell.label, gx + 4, gy + CW + 12);
+    cx.fillText(cell.l1, gx + 4, gy + CW + 12);
+    cx.fillText(cell.l2, gx + 4, gy + CW + 25);
   });
-  return { rows, cols, px: PX, mag: MAG, elev: opt.elev ?? 8, bg: BG, sheet: cv.toDataURL('image/png') };
+  return { rows, cols, dist: DIST, scale: SCALE, mag, maxPx, post: POST, ink: INK,
+    elev: opt.elev ?? 8, bg: BG,
+    design: { rows: ROWS, fov: FOV }, live: { rows: pixSize.y, fov: +camera.fov.toFixed(1) },
+    sheet: cv.toDataURL('image/png') };
 };
 
 (window as unknown as { __ezgeo?: object }).__ezgeo = (): object[] => {
