@@ -13682,6 +13682,14 @@ the tuft's width, LATERALLY ONLY: scaling height makes a lawn, not fine grass.
 Net near coverage is still ~1.25× what shipped — finer AND thicker, which is the
 combination that reads as a sward rather than a scatter.
 
+**AND IT DOES NOT FLATTEN THE BOTANY,** which was the seat's one caveat —
+*unless an actual botanical/variety is in force.* `swStructure` sets a form's
+own width BEFORE `uSwardTuft` multiplies it (0.28 an upright culm, 1.35 a
+crevice tuft, 1.5 a sedge fan, 2.5 a broad understorey leaf), and a uniform
+factor preserves every one of those ratios exactly. The broad leaf is still
+nine times the culm; what got finer is the grain of the field, not the
+vocabulary standing in it.
+
 **AND `SWARD_FULL_MAX` WENT 3.6 → 1.15, WHICH IS THE POINT.** The compensation
 is now a safety valve, not the mechanism. Measured with `devtools/sward-profile.mjs`
 at four dial stops (0.4 / 0.8 / 1 / 1.06): **0 of 116 radii short, coverage 100%

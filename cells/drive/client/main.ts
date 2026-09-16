@@ -12835,6 +12835,14 @@ const SWARD_FULL_MAX = qsNum('swardfull', 1.15);
  *
  * LATERAL ONLY: height is sSize, sShort and the structure module's business,
  * and scaling it here would make a lawn rather than fine grass.
+ *
+ * AND IT DOES NOT FLATTEN THE BOTANY, which was the seat's one caveat —
+ * *unless an actual botanical variety is in force.* swStructure sets a form's
+ * own width before this multiplies it: 0.28 for an upright culm, 1.35 for a
+ * crevice tuft, 1.5 for a sedge fan, 2.5 for a broad understorey leaf. A
+ * uniform factor preserves every one of those ratios exactly — the broad leaf
+ * is still nine times the culm — so what changes is the GRAIN of the field and
+ * not the vocabulary standing in it.
  */
 const SWARD_TUFT = qsNum('swardtuft', 0.72);
 /**
