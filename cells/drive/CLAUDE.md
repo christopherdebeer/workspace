@@ -13582,3 +13582,89 @@ arithmetic:
   nine times larger over the same hash), so it is drawn TWICE in the crossfade
   annulus — identical geometry at an identical place, so no artefact, but some
   overdraw. Worth knowing before it is read as a bug.
+
+### …and the device ran it at the top of the dial, where the compensation ran out
+
+A dump from the seat on **build `29001e4a3760` — the sha1 of the bundle that fix
+deployed as**, so it is the fixed build measured, not the one before it. Nagato,
+chase, 487 s, 11.5 fps, and **`settings … grass 12.8`**: GRASS at LUSH, its top
+stop.
+
+**THE RING IS BACK AT THAT SETTING, and the profile says so exactly.**
+`uDens` was `vegScale · grassScale · SWARD_SITES`, so LUSH asks for **64
+sites/m²**; the envelope at the first handover falls 4.94 → 0.889 → 0.444, and
+the fullness needed to pay that back is 2.6 rising to 3.3 against a cap of 2.1.
+Measured with `GRASS=12.8 ARGS='swarddial=0&swardfull=2.1'`, which is the
+deployed rule:
+
+| d | 16 | 32 | 48 | 56 | **64** | **72** | 96 | 160 | 176 | **192** | 240 | 288 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| coverage | **34%** | 78% | 100% | 100% | **64%** | **42%** | 78% | 100% | 73% | **39%** | 63% | 93% |
+| tuft | ×2.10 | ×2.10 | ×1.53 | ×1.29 | ×2.10 | ×2.10 | ×2.10 | ×1.35 | ×2.10 | ×2.10 | ×2.10 | ×2.10 |
+
+**A COMPENSATION WITH A CEILING IS ONLY CONTINUOUS WHILE THE CEILING IS NOT
+REACHED** — and the second row is a second fault the first one hides: even with
+the cap lifted, the widening swings 1.29 → 3.26 → 1.35 → 3.36 across the two
+handovers. That is a band of much fatter grass travelling with the camera, which
+is a ring in GRAIN rather than in coverage. Fixing the cap alone would have
+traded one for the other.
+
+**SO THE DIAL NO LONGER ASKS FOR SITES.** `vegScale` caps at 1, so
+`vegScale · SWARD_SITES` is at most five and stays under the envelope at every
+radius: the count follows the law exactly and the clamp is a SAFETY NET rather
+than the mechanism. The dial's lushness is a UNIFORM widening of
+`sqrt(grassScale)` — the factor that holds coverage, applied at every range, so
+it cannot draw a band. Measured at the same LUSH setting: **count 100% of the
+law at every radius, coverage 100% of what the dial asked for at every radius,
+tuft a flat ×3.58.** `?swarddial=0` puts the dial back on the count for an A/B.
+
+**WHAT IT COSTS, said plainly:** the top of the dial is now expressible only as
+very wide tufts — five plants a square metre at three and a half times the
+width, which is a solid meadow rather than a denser one — and in the mid field
+the alive count is roughly half what LUSH used to draw (0.285/m² at 72 m against
+0.344, 0.020 at 240 against 0.037) with each tuft covering 12.8× the ground.
+That is what the carriers can actually do, and drawing it is better than asking
+for sixty-four points a metre and silently placing five.
+
+**AND `SWARD_FULL_MAX` WENT 2.1 → 3.6** so the whole dial range is expressible:
+`sqrt(12.8)` is 3.58, and a cap under it makes HIGH and LUSH the same picture —
+a dial stop that does nothing.
+
+#### What else the dump says, with the numbers rather than a hunch
+
+Nothing below is fixed here; it is attributed so the next unit starts from a
+measurement. Every dial in this session was at or near its top stop (grass 12.8,
+impostor reach 2800 m at density ALL, tree range 2800 m, form 3×, tile debug
+on), which is the rack working as designed — *the upper stops are deliberately
+allowed far beyond frame budget* — so read these as "what binds when you ask for
+everything", not as a regression.
+
+- **`gap` 45.7% and `world pass: triangles mean 6.27M · 418 draw calls`.** The
+  gap is a residual and cannot establish a GPU bottleneck (this file's own
+  rule), but the triangle count is a measurement and it is 1.8× the 3.5M this
+  file last recorded as the whole frame. `trees ez … tris 0.26M` and the
+  impostors' 108.3k are NOT it; 63 terrain tiles at `tseg 128` are 2–3.5M of
+  it, and the sward's 194,336 slots are 583k whether or not a slot is alive.
+- **`treeRefresh` 10.2% (49.5 s), and its phases name the culprit:**
+  `impostor 23.8 ms/call (66)`, `ezAdmit 10.0 (61)`, `manifest 9.5 (75)`. The
+  impostor membership pass is now the largest tree phase, above the admission
+  this file cut twice. Its own cut list is already written down two sections up.
+- **`5108 waiting on a bake` with `atlas 18/18 slots`.** Five thousand impostors
+  that cannot draw because no atlas slot exists for their variant, on an atlas
+  reported as fully baked. Either the slot allocator is full at eighteen and
+  the palette wants more, or `impProf.waiting` is counting something else —
+  worth one probe before it is read either way.
+- **`drawHud` 8.9%, of which `tiledbg 3.70/262`.** The tile-debug overlay is
+  more than half the HUD here. It is a debug surface and its cost is the
+  player's choice; it is named so nobody attributes it to the HUD itself.
+- **`hydroBuild` 57.3 ms a build, 199 builds, `wet builds 188 at 60.1 ms over
+  54317 texels`.** The open item this file already argues: the shore-band bound
+  is worth ~26% and the flowing field's 4× RESOLUTION is the bigger lever.
+- **`swardFrame` 3.2% (15.4 s) is almost exactly the field sweep** — `sward
+  sweeps 82 · steps 4134 ms 3.6` is 14.9 s of it — so widening the field 96 →
+  112 for the margin cost about **36% of 11 s, near four seconds of a 487 s
+  session**. Owned rather than hidden. The cure the seat already named is a
+  SCROLLING field: a 48 m recentre exposes 5.4% of an 896 m field, so sweeping
+  only the new strip is roughly an eighteenfold cut, and it pays the widening
+  back many times over. Not done — every sampler that reads `uFieldOrg` would
+  have to wrap — and it is the next thing to do to the sward after the nesting.

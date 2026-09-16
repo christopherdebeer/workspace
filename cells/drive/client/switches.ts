@@ -245,6 +245,8 @@ export const SWITCHES = [
     note: 'airblur=1 puts back the aerial perspective’s distance BLUR — the term that softened a road toward its vanishing point' },
   { id: 'tdetail', kind: 'choice', marks: ['look', 'bench'], fallback: 'on',
     note: 'the terrain’s procedural surface renderer: on = the octave cascade plus the substrate classification (rock, regolith, turf over 10-50m domains), flat = the 15m mottle alone, with neither the fine octaves nor the substrate — the A/B for what both added, mpp = the legacy chart-uniform fade, which is identically zero from the seat and so never faded anything there, px = paint the art-pixel footprint as a heat map instead of the ground, dom = paint the substrate classification instead (red outcrop, green turf, blue regolith), off = no detail at all' },
+  { id: 'swarddial', kind: 'toggle', marks: ['look', 'legacy'], fallback: 'on',
+    note: 'swarddial=0 puts the GRASS dial back on the sward\u2019s point COUNT instead of on the size of the plant. A lattice holds one tuft per cell, so past the top of the dial the count cannot rise and the compensation has a ceiling \u2014 which is a ring at exactly the setting a player picks when they want to see grass' },
   { id: 'swardfull', kind: 'number', marks: ['look', 'bench'], fallback: '2.1\u00d7',
     note: 'swardfull= how much wider a tuft may grow to pay back the sites the carriers could not hold. 1 turns the compensation off entirely, which is the A/B for whether the near field reads as fat grass or as the density the dial asked for' },
   { id: 'swardcap', kind: 'toggle', marks: ['look', 'legacy', 'bench'], fallback: 'on',

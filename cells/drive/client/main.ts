@@ -12752,7 +12752,36 @@ const SWARD_SITES = qsNum('swardsites', 5);
  * field genuinely thins, which is honest: what matters is that it thins
  * CONTINUOUSLY rather than stepping at a handover.
  */
-const SWARD_FULL_MAX = qsNum('swardfull', 2.1);
+const SWARD_FULL_MAX = qsNum('swardfull', 3.6);
+/**
+ * ── AND THE GRASS DIAL RAISES THE PLANT, NOT THE POINT COUNT ──
+ *
+ * The first cut of the split left `grassScale` multiplying the REQUEST, so the
+ * clamp did the whole job — and a device dump at the top stop showed what that
+ * costs: at GRASS LUSH the request is 64 sites/m², the envelope at the first
+ * handover is 0.889 falling to 0.444, and the fullness needed to pay that back
+ * is 2.6 rising to 3.3. Capped, coverage went 100% at 56 m to 42% at 72 m —
+ * **the ring, back, at the one dial setting a player reaches for when they want
+ * to see grass.** A compensation with a ceiling is only continuous while the
+ * ceiling is not reached.
+ *
+ * So the dial no longer asks for sites at all. `vegScale * SWARD_SITES` is at
+ * most five, which is under the envelope at every radius, so the count follows
+ * the law exactly and the clamp is a safety net rather than the mechanism; the
+ * dial's lushness is a UNIFORM widening of `sqrt(grassScale)`, which is the
+ * factor that holds coverage. Uniform is the whole point: a widening that
+ * varies with range is a band of fatter grass, which is a ring wearing a
+ * different hat.
+ *
+ * WHAT IT COSTS is the top of the dial being expressible only as very wide
+ * tufts — at LUSH, five plants a square metre each three and a half times the
+ * width, which is a solid meadow rather than a denser one. That is what the
+ * carriers can actually do, and saying so with geometry is better than asking
+ * for sixty-four points a metre and silently drawing five.
+ *
+ * `?swarddial=0` puts the dial back on the count for an A/B.
+ */
+const SWARD_DIAL_SIZE = qsOn('swarddial', true);
 /**
  * The exact control. Off, the target is the perceptual curve unclamped and the
  * tufts do not widen — which is the rule as it shipped, so `?swardcap=0` with
@@ -12896,6 +12925,7 @@ const swardU = {
   uSwardKnee: { value: 0.72 },
   uSwardFall: { value: SWARD_FALL }, uSwardNear: { value: SWARD_NEAR },
   uSwardFull: { value: SWARD_FULL_MAX }, uSwardCapOn: { value: SWARD_CAP_ON ? 1 : 0 },
+  uSwardFullDial: { value: 1 },
   /** How much of the GROUND's own colour a blade wears at close range. The
    *  single number for "grass contrasts too much with the terrain".
    *
@@ -13401,6 +13431,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform vec3 uSwardEye; uniform vec3 uSwardTint; uniform float uSwardDbg;
         uniform float uSwardFall; uniform float uSwardNear; uniform float uSwardMatch;
         uniform float uSwardFull; uniform float uSwardCapOn;
+        uniform float uSwardFullDial;
         uniform float uSwardVary; uniform float uSwardUp;
         uniform float uFlowerPatchFill;
         uniform float uFlowerStrayOpen; uniform float uFlowerStrayWood;
@@ -13612,7 +13643,9 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         float sG = pow(uSwardNear / max(sD, uSwardNear), uSwardFall);
         float sWant = abs(sF.g) * uDens * sG;
         float sGot = uSwardCapOn > 0.5 ? min(sWant, swardCap(sD)) : sWant;
-        float sFull = sGot > 1.0e-6 ? clamp(sqrt(sWant / sGot), 1.0, uSwardFull) : 1.0;
+        // What the clamp took, times what the dial asked for, capped ONCE.
+        float sFullNeed = sGot > 1.0e-6 ? max(1.0, sqrt(sWant / sGot)) : 1.0;
+        float sFull = min(uSwardFullDial * sFullNeed, uSwardFull);
         float sKeep = sGot * uStep * uStep * sW;
         // ── BLADES THIN OUT, THEY DO NOT BLINK OUT ──
         //
@@ -14009,6 +14042,10 @@ function swardFrame(): void {
     (swardU as unknown as Record<string, { value: THREE.Color }>)[SWARD_FLOW_NAMES[ci * 3 + si]]
       .value.setRGB(cr, cg, cb);
   }
+  // The dial's lushness, as a uniform widening. sqrt because coverage is area:
+  // a tuft standing in for four covers their ground at twice the width.
+  swardU.uSwardFullDial.value = SWARD_DIAL_SIZE
+    ? Math.min(Math.sqrt(Math.max(grassScale, 1e-4)), SWARD_FULL_MAX) : 1;
   for (const b of swardBands) {
     // SNAPPED to the step, so a slot's world position never moves under it.
     // The base cell, as an index and as metres. The INDEX is the authority: the
@@ -14018,10 +14055,12 @@ function swardFrame(): void {
     const bix = Math.round(fx / b.step), biz = Math.round(fz / b.step);
     b.uBaseI.value.set(bix, biz);
     b.uBase.value.set(bix * b.step, biz * b.step);
-    // THE REQUEST, which the shader then clamps to what the carriers can hold.
-    // The dial is free to ask for more than exists: what it buys past the
-    // ceiling is fuller tufts rather than impossible points. See SWARD_SITES.
-    b.uDens.value = vegScale * grassScale * SWARD_SITES * chartFade;
+    // THE REQUEST IS THE LAW'S, AND THE LAW'S ALONE — vegScale caps at 1, so
+    // this caps at SWARD_SITES and stays under the capacity envelope at every
+    // radius. The GRASS dial is not here: it widens the plant instead (see
+    // SWARD_DIAL_SIZE), because a dial that raises the count can only be paid
+    // back where the carriers have room, and where they do not it draws a ring.
+    b.uDens.value = vegScale * (SWARD_DIAL_SIZE ? 1 : grassScale) * SWARD_SITES * chartFade;
     b.mesh.visible = grassScale > 0 && vegScale > 0 && !Number.isNaN(swardFX);
   }
   // ── AND NOW THE SLOW HALF: THE EVIDENCE FIELD ──
@@ -36426,9 +36465,17 @@ let swardSweepMs = 0;
  */
 const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
 (window as unknown as { __swardprofile?: object }).__swardprofile = (
-  step = 4, g = 1,
+  step = 4, g = 1, grassAt?: number,
 ): object => {
-  const dens = swardBands[0].uDens.value as number;
+  // `grassAt` asks what the build WOULD do at a given GRASS dial rather than at
+  // the one this session happens to hold. The dial lives in localStorage and a
+  // device sets it by hand, so without this the only setting measurable from a
+  // harness is the default — and the setting that showed the fault is the top
+  // one. It composes the two halves exactly as swardFrame does.
+  const dens = grassAt === undefined ? swardBands[0].uDens.value as number
+    : vegScale * (SWARD_DIAL_SIZE ? 1 : grassAt) * SWARD_SITES;
+  const dial = grassAt === undefined ? swardU.uSwardFullDial.value as number
+    : (SWARD_DIAL_SIZE ? Math.min(Math.sqrt(Math.max(grassAt, 1e-4)), SWARD_FULL_MAX) : 1);
   const rows: Array<Record<string, number | number[]>> = [];
   const fadeFrom = SWARD_BANDS[SWARD_BANDS.length - 1][2][2];
   let worst = { d: 0, ratio: 2 };
@@ -36436,8 +36483,8 @@ const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
     const want = g * dens * Math.pow(SWARD_NEAR / Math.max(d, SWARD_NEAR), SWARD_FALL);
     const cap = swardCapAt(d);
     const target = SWARD_CAP_ON ? Math.min(want, cap) : want;
-    const full = target > 1e-6
-      ? Math.min(Math.max(Math.sqrt(want / target), 1), SWARD_FULL_MAX) : 1;
+    const full = Math.min(dial * (target > 1e-6 ? Math.max(Math.sqrt(want / target), 1) : 1),
+      SWARD_FULL_MAX);
     let deliv = 0;
     const per: number[] = [];
     for (const b of swardBands) {
@@ -36461,15 +36508,25 @@ const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
     // product is the want exactly. So `coverRatio` is the honest headline: it
     // is 1 wherever the fullness is not capped, whatever the count is doing,
     // and a ring is a place where it is not 1.
+    // ── AND THE DENOMINATOR CARRIES THE DIAL, so the two modes compare ──
+    //
+    // With the dial on the COUNT it is already inside `want`; with the dial on
+    // the PLANT it is not, and a ratio against the bare law would read 1280%
+    // at every radius and say nothing. `asked` is what the player asked for
+    // either way, so 100% means delivered and a step is a step.
     const cover = deliv * full * full;
+    const asked = want * (SWARD_DIAL_SIZE ? dial * dial : 1);
     rows.push({ d, want: +(want * SWARD_SHRINK_EFF).toFixed(4),
       target: +(target * SWARD_SHRINK_EFF).toFixed(4), cap: +Math.min(cap, 99).toFixed(4),
       deliv: +(deliv * SWARD_SHRINK_EFF).toFixed(4), ratio: +ratio.toFixed(3),
       cover: +(cover * SWARD_SHRINK_EFF).toFixed(4),
-      coverRatio: +(want > 1e-9 ? cover / want : 1).toFixed(3),
+      asked: +(asked * SWARD_SHRINK_EFF).toFixed(4),
+      coverRatio: +(asked > 1e-9 ? cover / asked : 1).toFixed(3),
       full: +full.toFixed(3), keep: per });
   }
   return { dens: +dens.toFixed(2), sites: SWARD_SITES, clamp: SWARD_CAP_ON,
+    dial: +dial.toFixed(3), dialOnSize: SWARD_DIAL_SIZE,
+    grassScale: grassAt ?? grassScale,
     fall: SWARD_FALL, near: SWARD_NEAR,
     fullMax: SWARD_FULL_MAX, fadeFrom, gReach: swardU.uGReach.value, fieldHalf: SWARD_FW / 2,
     // ── AND WHETHER THE EVIDENCE COVERS THE GROUND THAT IS DRAWN ──

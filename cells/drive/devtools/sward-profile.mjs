@@ -26,6 +26,11 @@ import { openDrive } from './harness.mjs';
 const FIX = process.env.FIX ?? 'at-campsbay';
 const ARGS = process.env.ARGS ?? '';
 const REV = process.env.REV ?? '';
+// The GRASS dial lives in localStorage, so a harness only ever sees its
+// default. GRASS= asks the probe what this build would do at another stop —
+// which is how the top stop, where the device dump found the fault, is
+// measurable at all from here.
+const GRASS = process.env.GRASS ? Number(process.env.GRASS) : undefined;
 
 const d = await openDrive({
   spot: `fixture=${FIX}&nodraw=1&time=NOON&wx=clear${ARGS ? `&${ARGS}` : ''}`,
@@ -39,13 +44,16 @@ try {
   await d.page.waitForFunction(
     () => window.__swardprofile && window.__sward().bands[0].dens > 0,
     null, { timeout: 60000, polling: 100 });
+  if (GRASS !== undefined) await d.page.evaluate((g) => { window.__GRASS_AT = g; }, GRASS);
   const p = await d.page.evaluate(() => {
     const w = window;
-    return w.__swardprofile ? w.__swardprofile(2) : null;
+    return w.__swardprofile ? w.__swardprofile(2, 1, window.__GRASS_AT) : null;
   });
   if (!p) { console.log('NO __swardprofile — this revision predates the instrument'); process.exit(2); }
   console.log(`\nsites ${p.sites} · request ${p.dens}/m² · clamp ${p.clamp ? 'ON' : 'OFF'}`
     + ` · fall ${p.fall} from ${p.near} m`);
+  console.log(`GRASS dial ${p.grassScale}x → ${p.dialOnSize ? `tuft x${p.dial} (uniform)` : 'the point COUNT'}`
+    + ` · fullness cap x${p.fullMax}`);
   console.log(`bands  ${p.bands.map((b) => `${b.step}m ceil ${b.ceiling}/m² reach ${b.reach} slots ${b.slots}`).join('\n       ')}`);
   console.log(`slots total ${p.bands.reduce((a, b) => a + b.slots, 0)}`);
   console.log(`fade from ${p.fadeFrom} m · gReach ${p.gReach} · field half ${p.fieldHalf}`);
