@@ -10585,6 +10585,113 @@ is still staged. A pending commitment nothing announces is the same shape of
 fault as a switch nobody remembers. The count rides in the header now — the one
 element every screen has — as a gold `⚑ n` chip that taps through to ADVANCED.
 
+### The seat's rack became the defaults, and a default change is not a migration
+
+Twenty-eight dials took the seat's own tuned values, pasted from their device.
+`v` is 5 and **there is no value migration, deliberately** — the distinction is
+the one `loadDials` already draws and it is worth keeping straight:
+
+- the v2, v3 and v4 migrations exist because a stored INDEX came to name a
+  different thing (the TIME list grew in the middle, PALETTE grew an entry at
+  the front, `water` could not be told from unset). Leaving those alone would
+  have silently changed a setting somebody chose.
+- a default change renames nothing. So a v4 record keeps every value in it and
+  the new defaults reach a device that has never saved a rack.
+
+**AND STAMPING THEM OVER A STORED RECORD CANNOT BE DONE HONESTLY**, which is
+the half worth writing down: `saveDials` persists the WHOLE rack on any change,
+so a player who once moved one dial has the old defaults frozen into every
+other key, and there is no way left to tell "never chose it" from "chose the
+old default". A migration that guessed would overwrite real choices.
+
+**FOUR OF THEM ARE INSTRUMENTS OR CEILINGS, and they are named here rather than
+buried in a diff**, because each is a thing this file elsewhere argues should
+NOT be a default:
+
+| dial | now | what it is |
+|---|---|---|
+| `impink` | **BLACK** | the silhouette INSTRUMENT — its own note says so outright. Every impostor draws as a flat black cut-out |
+| `tdbg` | **ON** | the tile-debug overlay, measured at **3.70 ms a call** on a device — more than half the HUD |
+| `time` | **DUSK** | a fixed 18:00, so a fresh boot no longer runs the 24x CYCLE |
+| `trng` · `imprch` · `impden` · `grass` | 2.8 km · 8X · ALL · LUSH | the rack's own upper stops, which this file records as *deliberately allowed far beyond frame budget* — the New Forest bench config |
+
+They are the seat's call and they shipped as asked; each is one integer to
+undo. `pix` is 240P, so the art frame is 111x240 rather than 148x320, and every
+art-pixel number in this file was stated against 320 rows — read a fresh
+measurement against `__tdetail().pix` rather than against the design value.
+
+### Tilt shift is a dial, and the chart and the seat are different lenses
+
+It was `?tilt=` and nothing else, so a look could only be reached by a devtool
+— and the composite runs at three frames a second in the harness, which made
+every comparison a boot apart. `tiltMode` is a `let` that `aimFocus` reads each
+frame, so the dial takes effect on the next one; `?tilt=` still outranks a
+saved dial, the rule `?time=` already has and for the same reason.
+
+**A PRESET STATES A BAND PER CAMERA NOW.** It was one band with a per-camera
+WEIGHT — chart 1, seat 0.34, cab 0 — which is right for *how strong* and wrong
+for *how wide*, and the seat's ask pulls those apart in opposite directions:
+**wider vertical focal area on top/down, and more pronounced in chase**. One
+band cannot serve both, because widening it for the chart widens it at the seat
+and makes the seat LESS pronounced. `off`, `subtle`, `mini` and `hard` are
+written so their chase row is the old weight times the old band, so nothing
+anybody had chosen moved.
+
+**STOCK is the new default and the row to refine.** Measured on `at-campsbay`
+with `__tilt()` in both cameras:
+
+| | chart | seat |
+|---|---|---|
+| amount | 1 (hard: 1) | **0.60** (hard: 0.34) |
+| sharp band | **0.34** of a half-frame, 40.8 px (hard: 0.20, 24 px) | 0.20, 24 px |
+| full blur past | 0.72, 86.4 px | 0.50, 60 px |
+| what that is on the ground | sharp about 168–209 m about a plane at 176 m | sharp about 49–61 m about a plane at 54.5 m |
+
+**THE RIG ITSELF SITS IN THE NEAR BLUR FROM THE CHASE SEAT, and no band fixes
+that.** The focal plane is placed where the view ray meets the ground, which
+from the chase camera is about 54 m ahead while the truck is at 15 — so
+`|1 - D/d|` at the truck is 2.73 and the confusion there is 647 px against a
+saturation ceiling of 230. Nothing under a full amount keeps it sharp. That is
+inherent to putting the plane on the ground the camera is aimed at, it is why
+the seat was scaled to a third in the first place, and "more pronounced in
+chase" necessarily means the rig goes softer. The cab stays exempt: *a narrow
+depth of field while you are the one steering is a tax on exactly the
+information you are steering by.*
+
+`__tilt({mode})` moves the preset AND the dial together, so a devtool can sweep
+the table on one settled world rather than a boot per row.
+
+### A crash is a shot, not a frame
+
+Reported from the seat: *when a drone depletes battery and crashes to the
+ground, I want to linger on the crash site a little longer before returning to
+rig view.* The impact called `camFlyTo(lastPov)` on the frame it landed, so the
+one moment the whole battery rule exists to produce — the thing you were
+flying, in the dirt, where you now have to go and get it — was a puff of dust
+nobody saw. `DRONE.LINGER` is four seconds, and a thumb on the stick ends it
+early: the same rule the launch ceremony already keeps, and here the thumb is
+also how you set off to collect it.
+
+Two things it needed that are not the timer:
+
+- **`droneEye()`, because where the CAMERA is and where the drone is FLYING are
+  different questions.** `drone.up` is the flight state and everything that
+  reasons about flying reads it — the battery, the autopilot pairing, the
+  recall, whether the rack is charging — and for the length of a linger the two
+  disagree: the aircraft is down and the eye is still out there. `viewX`,
+  `viewZ` and `viewH` read the eye, so the streaming, the far shell and the
+  render focus stay on the wreck instead of snapping back to a truck that is
+  not on screen yet. (`renderFocusXZ` already keyed on `camMode === 'drone'`
+  rather than on `drone.up`, so it needed nothing.)
+- **`droneNose()`, because a nose camera is a view FROM an aircraft and after a
+  crash there is not one.** Its eye sits 35 cm under the airframe, which on the
+  ground is buried, aimed thirteen metres into the earth. A linger is always
+  the external view whatever chip the seat had chosen.
+
+The linger is only armed when `camMode === 'drone'` — cutting away when the
+seat was never in the drone view is the old behaviour, correctly — and it is
+cleared on launch, on dock and on recovery so it can never outlive its wreck.
+
 ### TWO CHECKS IN line-boot AND about WERE ALREADY RED, AND ONE STILL IS
 
 `THE LINE leads the hub stack` asserted `shown[0] === 'THE LINE'` while THE LINE

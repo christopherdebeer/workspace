@@ -2621,18 +2621,59 @@ vec3 tdHeat(float px) {
  * impossibly, because the scale comes from the live art resolution rather than
  * being guessed.
  */
-const TILT_PRESETS: Record<string, { amt: number; sharp: number; blur: number }> = {
-  off: { amt: 0, sharp: 0.36, blur: 0.75 },
+/**
+ * ── AND THE CHART AND THE SEAT ARE DIFFERENT LENSES, NOT ONE SCALED ──
+ *
+ * They were one band with a per-camera WEIGHT: the chart took the preset in
+ * full, the seat a third of it, the cab none. That is right for "how strong"
+ * and wrong for "how wide", and the seat's ask pulls the two apart in opposite
+ * directions — *wider vertical focal area on top/down, and more pronounced in
+ * chase* — which one band cannot serve, because widening it for the chart
+ * widens it at the seat and makes the seat LESS pronounced.
+ *
+ * So a preset states a band per camera. THE CAB IS STILL EXEMPT AND STILL BY
+ * DESIGN: a narrow depth of field while you are the one steering is a tax on
+ * exactly the information you are steering by.
+ *
+ * `off`, `subtle`, `mini` and `hard` are written so their chase row is the old
+ * weight times the old band — `amt * 0.34`, same sharp, same blur — so this
+ * change moves nothing anybody had already chosen, and STOCK is the only new
+ * look in the table.
+ */
+interface TiltBand { amt: number; sharp: number; blur: number }
+const TILT_PRESETS: Record<string, { top: TiltBand; chase: TiltBand }> = {
+  off: { top: { amt: 0, sharp: 0.36, blur: 0.75 }, chase: { amt: 0, sharp: 0.36, blur: 0.75 } },
   // A long band that only softens the extreme fore and background: sharp over
   // most of a chart frame, and at the seat a far field that never quite goes.
-  subtle: { amt: 0.5, sharp: 0.55, blur: 1.3 },
+  subtle: { top: { amt: 0.5, sharp: 0.55, blur: 1.3 }, chase: { amt: 0.17, sharp: 0.55, blur: 1.3 } },
   // The model-railway band: the middle third of a chart frame sharp, the edges
   // gone; at the seat roughly [0.85 D, 1.25 D] sharp and past 1.6 D a wash.
-  mini: { amt: 0.9, sharp: 0.36, blur: 0.75 },
+  mini: { top: { amt: 0.9, sharp: 0.36, blur: 0.75 }, chase: { amt: 0.306, sharp: 0.36, blur: 0.75 } },
   // A macro lens: a narrow slab, and the rest of the world a wash.
-  hard: { amt: 1, sharp: 0.2, blur: 0.5 },
+  hard: { top: { amt: 1, sharp: 0.2, blur: 0.5 }, chase: { amt: 0.34, sharp: 0.2, blur: 0.5 } },
+  // ── STOCK: hard, opened up on the chart and leant on at the seat ──
+  // The chart keeps a third of its frame sharp rather than a fifth (0.34
+  // against hard's 0.20, so the sharp slab is about 70% wider) and gives the
+  // rest up sooner; the seat keeps hard's narrow slab and takes nearly twice
+  // as much of it (0.60 against 0.34). Written as the thing to refine: it is
+  // the one row in this table nobody has judged from a frame yet.
+  stock: { top: { amt: 1, sharp: 0.34, blur: 0.72 }, chase: { amt: 0.6, sharp: 0.2, blur: 0.5 } },
 };
-const TILT_MODE = ((v) => (v && v in TILT_PRESETS ? v : 'off'))(qs('tilt')?.toLowerCase());
+const TILT_MODES = ['off', 'subtle', 'mini', 'stock', 'hard'] as const;
+/**
+ * ── IT IS A DIAL NOW, AND THE URL STILL OUTRANKS IT ──
+ *
+ * `let`, not `const`, because `aimFocus` reads it every frame: the dial's
+ * apply writes it and the next frame has the new look, with no reload. That is
+ * the whole reason a look belongs on a dial rather than in the query string —
+ * the composite runs at three frames a second in the harness and a reload a
+ * guess is how the first cut of this effect was tuned wrong twice.
+ *
+ * `?tilt=` still wins, the same rule `?time=` has and for the same reason: a
+ * switch is there to make a comparison reproducible, and a saved dial silently
+ * overruling it makes the shot depend on which browser profile took it.
+ */
+let tiltMode = ((v) => (v && v in TILT_PRESETS ? v : 'stock'))(qs('tilt')?.toLowerCase());
 /**
  * ── A DEVTOOLS PANEL FOR A PHONE ──
  *
@@ -11210,7 +11251,7 @@ const GRASS_SIGHT = 140;     // the outermost band; past this the ground texture
  */
 const GRASS_STOPS = [0, 0.4, 0.8, 1, 1.06];
 const GRASS_BUSHY = [0, 1, 3.2, 6.4, 12.8];
-const GRASS_DEF = 2;
+const GRASS_DEF = 4;
 /** The sward law's fraction of the near lattice. See GRASS_STOPS. */
 let grassScale = GRASS_STOPS[GRASS_DEF];
 /** The same dial in the legacy "how bushy" units. See GRASS_BUSHY. */
@@ -35987,10 +36028,11 @@ let tiltK = 1;
 let tiltHalf = 1;
 function aimFocus(): void {
   const u = compMat.uniforms;
-  const preset = TILT_PRESETS[TILT_MODE];
-  // The cab is deliberately exempt; the chart is where the look belongs.
-  const byCam = camMode === 'top' ? 1 : camMode === 'cab' ? 0 : 0.34;
-  const amt = tiltOver.amt ?? preset.amt * byCam;
+  const preset = TILT_PRESETS[tiltMode] ?? TILT_PRESETS.off;
+  // The cab is deliberately exempt; the chart is where the look belongs, and
+  // the seat has a band of its own — see TILT_PRESETS.
+  const band = camMode === 'top' ? preset.top : preset.chase;
+  const amt = tiltOver.amt ?? (camMode === 'cab' ? 0 : band.amt);
   u.uTiltAmt.value = amt;
   // THE PLANE IS PLACED EVEN WHEN THE EFFECT IS OFF, so `__tilt` always reports
   // a live one. An early return here saved a handful of vector operations and
@@ -36008,9 +36050,9 @@ function aimFocus(): void {
   // against the wrong one of them is how the first cut went wrong. See
   // TILT_PRESETS.
   const half = Math.max(1, pixSize.y) / 2;
-  const sharpPx = tiltOver.sharp ?? preset.sharp * half;
+  const sharpPx = tiltOver.sharp ?? band.sharp * half;
   u.uTiltSharp.value = sharpPx;
-  u.uTiltBlur.value = Math.max(tiltOver.blur ?? preset.blur * half, sharpPx + 1);
+  u.uTiltBlur.value = Math.max(tiltOver.blur ?? band.blur * half, sharpPx + 1);
   tiltHalf = half;
   tiltK = half / Math.max(tanHalf, 1e-3);
   camera.getWorldDirection(FOCUS_FWD);
@@ -37811,11 +37853,21 @@ function tdMatAt(x: number, z: number): object | null {
   };
 };
 (window as unknown as { __tilt?: object }).__tilt = (
-  opts?: { amount?: number | null; angle?: number; sharp?: number | null; blur?: number | null;
-    sky?: number; air?: number },
+  opts?: { mode?: string; amount?: number | null; angle?: number; sharp?: number | null;
+    blur?: number | null; sky?: number; air?: number },
   at?: [number, number],
 ): object => {
   const u = compMat.uniforms;
+  // THE PRESET ITSELF, so a devtool can sweep the table on one settled world
+  // rather than a boot per row — which is what every A/B in this file is
+  // written against, and what the dial exists to make possible from the seat.
+  // It moves the DIAL too, so the panel and the look cannot disagree.
+  if (opts?.mode !== undefined && opts.mode.toLowerCase() in TILT_PRESETS) {
+    tiltMode = opts.mode.toLowerCase();
+    const d = DIALS.find((x) => x.key === 'tilt');
+    const j = TILT_MODES.indexOf(tiltMode as typeof TILT_MODES[number]);
+    if (d && j >= 0) d.at = j;
+  }
   // A dial write goes to the OVERRIDE, not the uniform: aimFocus rewrites the
   // uniform every frame and would have eaten it. `null` puts the preset back.
   if (opts?.amount !== undefined) tiltOver.amt = opts.amount === null ? undefined : clamp(opts.amount, 0, 1);
@@ -37824,8 +37876,8 @@ function tdMatAt(x: number, z: number): object | null {
   if (opts?.blur !== undefined) tiltOver.blur = opts.blur === null ? undefined : opts.blur;
   // Put the override on the uniforms NOW rather than a frame from now, so a
   // screenshot taken on the next tick is of what was asked for.
-  if (opts?.amount !== undefined || opts?.sharp !== undefined || opts?.blur !== undefined
-    || opts?.angle !== undefined) aimFocus();
+  if (opts?.mode !== undefined || opts?.amount !== undefined || opts?.sharp !== undefined
+    || opts?.blur !== undefined || opts?.angle !== undefined) aimFocus();
   if (opts?.sky !== undefined) u.uTiltSky.value = clamp(opts.sky, 0, 1);
   if (opts?.air !== undefined) u.uAirBlur.value = clamp(opts.air, 0, 1);
   const P = u.uFocusP.value as THREE.Vector3, N = u.uFocusN.value as THREE.Vector3;
@@ -37873,7 +37925,7 @@ function tdMatAt(x: number, z: number): object | null {
   else { dx /= flat; dz /= flat; }
   const ox = camera.position.x, oz = camera.position.z;
   return {
-    mode: TILT_MODE, cam: camMode, amount: +(u.uTiltAmt.value as number).toFixed(3),
+    mode: tiltMode, cam: camMode, amount: +(u.uTiltAmt.value as number).toFixed(3),
     angleDeg: +((tiltTiltRad * 180) / Math.PI).toFixed(2),
     sharpPx: +(u.uTiltSharp.value as number).toFixed(1), blurPx: +(u.uTiltBlur.value as number).toFixed(1),
     // The two scales a band can be read against. `halfPx` is what the presets
@@ -41459,6 +41511,7 @@ function noteTags(t: Record<string, string>): void {
  *  of the three states it is in. */
 (window as unknown as { __drone?: object }).__drone = (): object =>
   ({ up: drone.up, downed: drone.downed, falling: drone.falling, recall: drone.recall,
+    linger: +drone.linger.toFixed(2), eye: droneEye(), nose: droneNose(),
     rigSpeed: +state.speed.toFixed(3), rigAt: [+state.x.toFixed(2), +state.z.toFixed(2)],
     range: Math.round(drone.batt * DRONE.LIFE * DRONE.SPEED),
     batt: +drone.batt.toFixed(3), cam: camMode,
@@ -43835,6 +43888,18 @@ const DRONE = {
   // instead of a quarter of an hour later.
   FILL_S: 90,         // seconds on the rack to fill a flat pack
   RSV: 0.15,          // …and the rig charge it will not draw the truck below
+  /**
+   * ── AND THE CAMERA STAYS ON THE WRECK ──
+   *
+   * The impact used to cut to the seat on the frame it landed, so the one
+   * moment the whole battery rule exists to produce — the thing you were
+   * flying, in the dirt, where you now have to go and get it — was a puff of
+   * dust nobody saw. Four seconds is long enough for the debris to fall and
+   * for the DRONE DOWN pin to register, and short enough that it is not a
+   * cutscene; a thumb on the stick ends it early, the same rule the launch
+   * ceremony already keeps and for the same reason.
+   */
+  LINGER: 4,          // seconds held on the crash before the cut back to the rig
 };
 const drone = {
   up: false,          // in the air and under your control
@@ -43853,7 +43918,27 @@ const drone = {
   rotor: 0,           // accumulated blade angle, radians
   launch: 0,          // seconds left of the liftoff sequence
   stow: 0,            // seconds left of the fold-down, mesh up but drone not
+  linger: 0,          // seconds left holding the camera on a crash — see LINGER
 };
+/**
+ * ── WHERE THE CAMERA IS, WHICH IS NOT THE SAME AS WHERE THE DRONE IS FLYING ──
+ *
+ * `drone.up` is the flight state and everything that reasons about flying
+ * reads it: the battery, the autopilot pairing, the recall, whether the rack
+ * is charging. The camera is a different question, and for the length of a
+ * crash linger the two disagree — the aircraft is down and the eye is still
+ * out there looking at it. Keeping them apart is what lets the streaming, the
+ * far shell and the render focus stay on the wreck for those seconds instead
+ * of snapping back to a truck that is not on screen yet.
+ */
+const droneEye = (): boolean => drone.up || drone.linger > 0;
+/**
+ * The nose camera is a view FROM an aircraft, and after a crash there is not
+ * one: its eye sits 35 cm under the airframe, which on the ground is buried,
+ * aimed thirteen metres into the earth. A linger is always the external view,
+ * whatever chip the seat had chosen.
+ */
+const droneNose = (): boolean => lastPov === 'cab' && drone.linger <= 0;
 /** ON THE RACK, where the charger can reach it. Not flying, not falling, and
  *  not lying in a field somewhere — a drone you have to go and collect is not
  *  plugged into anything, which is the whole cost of running it flat. */
@@ -44000,6 +44085,7 @@ function droneToggle(): void {
   }
   drone.up = true;
   drone.falling = false;
+  drone.linger = 0;
   drone.recall = false;
   pois.set(RIG_POI, { name: RIG_POI, x: state.x, z: state.z, kind: 'rig', pinned: true });
   // IT STARTS ON THE RACK, folded, with the rotors stopped. It used to appear
@@ -44037,6 +44123,7 @@ function droneDock(): void {
   // which made the battery a rule about one flight rather than a resource with a
   // price. It charges off the rig now, at the rig's expense, over minutes.
   drone.up = false; drone.falling = false; drone.downed = false;
+  drone.linger = 0;
   drone.recall = false;
   drone.heading = state.heading;      // however it arrived, it stows square
   drone.pitch = 0; drone.roll = 0;
@@ -44104,6 +44191,14 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
   }
   if (!drone.up && !drone.downed) return;
   if (drone.downed) {
+    if (drone.linger > 0) {
+      // A THUMB ENDS IT, and here the thumb is also how you set off to collect
+      // the thing — so touching the controls is exactly the moment the shot has
+      // stopped being worth watching.
+      drone.linger = (Math.abs(throttle) > 0.2 || Math.abs(steer) > 0.2)
+        ? 0 : Math.max(0, drone.linger - dt);
+      if (drone.linger <= 0 && camMode === 'drone') camFlyTo(lastPov);
+    }
     // Collected by driving to it. The rig is the only recovery vehicle.
     if (Math.hypot(drone.dx - state.x, drone.dz - state.z) < 9) {
       // Recovered FLAT, which is how you found it. Driving out to a dead drone
@@ -44111,6 +44206,7 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
       // was the drive and nothing else; now the drive is how you get the thing
       // back and the charger is how it becomes useful again.
       drone.downed = false;
+      drone.linger = 0;
       pois.delete(DRONE_POI);
       if (droneMesh) droneMesh.visible = false;
       hudFlash('DRONE RECOVERED — CHARGING');
@@ -44143,7 +44239,10 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
       }
       pois.set(DRONE_POI, { name: DRONE_POI, x: drone.x, z: drone.z, kind: 'drone', pinned: true });
       pois.delete(RIG_POI);
-      camFlyTo(lastPov);
+      // HOLD ON IT, if that is what is on screen. Cutting away on the frame of
+      // impact threw away the moment; cutting away when the seat was never in
+      // the drone view in the first place is just the old behaviour, correctly.
+      if (camMode === 'drone') drone.linger = DRONE.LINGER; else camFlyTo(lastPov);
       hudFlash('DRONE DOWN');
     }
     dronePose();
@@ -44318,9 +44417,9 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
  * the edge chips point. The rig's own `state` stays the truck's, because the
  * truck is still a truck — it is parked, not relocated.
  */
-function viewX(): number { return drone.up ? drone.x : state.x; }
-function viewZ(): number { return drone.up ? drone.z : state.z; }
-function viewH(): number { return drone.up ? drone.heading : state.heading; }
+function viewX(): number { return droneEye() ? drone.x : state.x; }
+function viewZ(): number { return droneEye() ? drone.z : state.z; }
+function viewH(): number { return droneEye() ? drone.heading : state.heading; }
 /**
  * ── THREE INTERESTS, AND THEY ARE NOT THE SAME POINT ──
  *
@@ -44376,7 +44475,7 @@ function renderFocusXZ(): [number, number] {
  */
 function droneGroundFocus(): [number, number] {
   const g = groundAt(drone.x, drone.z);
-  const nose = lastPov === 'cab';
+  const nose = droneNose();
   const eyeY = nose ? drone.y - 0.35 : drone.y + 6.5;
   const k = nose ? 30 / 13 : 39 / 13.5;
   const lead = Math.min(Math.max(0, eyeY - g) * k, treeRange * 0.45);
@@ -46732,7 +46831,7 @@ function telemetryReport(): string {
   L.push(`look tdetail ${TDETAIL} · sub ${tdU.uSubAmt.value} dom ${tdU.uSubDom.value}`
     + ` relief ${tdU.uSubNrm.value} micro ${tdU.uSubMic.value} nrm ${tdU.uNrmK.value}`
     + ` · oct ${tdU.uTdOct.value} amt ${tdU.uTdAmt.value} · view ${groundView}`
-    + ` · swardsub ${SUB_SWARD ? 'on' : 'off'} · tilt ${TILT_MODE} · substrate ${SUBSTRATE_MODE.name}`);
+    + ` · swardsub ${SUB_SWARD ? 'on' : 'off'} · tilt ${tiltMode} · substrate ${SUBSTRATE_MODE.name}`);
   const _treePlacedByFamily = EZ_FAMILIES.map(f => ezTiers[f].reduce((n, t) => n + t.n, 0));
   const _treePlaced = _treePlacedByFamily.reduce((n, v) => n + v, 0);
   const _treeTris = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + t.n * t.tris, 0), 0);
@@ -48507,7 +48606,7 @@ function tick(now: number): void {
     ovGroup.visible = false;
     themeGroup.visible = false;   // a thematic sheet is chart furniture
     const dfx = Math.sin(drone.heading), dfz = -Math.cos(drone.heading);
-    if (lastPov === 'cab') {
+    if (droneNose()) {
       setNear(0.3, 30000);
       camPos.set(drone.x, drone.y - 0.35, drone.z);
       camAim.set(drone.x + dfx * 30, drone.y - 13, drone.z + dfz * 30);
@@ -51658,7 +51757,7 @@ const DIAL_GROUPS: DialGroup[] = [
   {
     title: 'RENDER',
     dials: [
-      dial('pix', 'PIXEL', ['240P', '320P', '480P', 'FULL'], 1, (i) => {
+      dial('pix', 'PIXEL', ['240P', '320P', '480P', 'FULL'], 0, (i) => {
         PIX_H = [240, 320, 480, 4096][i];
         resizePost?.();
       }),
@@ -51673,7 +51772,7 @@ const DIAL_GROUPS: DialGroup[] = [
       // shallow gradients plateau instead of weaving. HEAVY overdrives the
       // pattern across 1.6 steps: grainier, and at coarse palettes it buys
       // back tonal range the step count gave up.
-      dial('dith', 'DITHER', ['OFF', 'HALF', 'FULL', 'HEAVY'], 2, (i) => { cu.uDither.value = [0, 0.5, 1, 1.6][i]; }),
+      dial('dith', 'DITHER', ['OFF', 'HALF', 'FULL', 'HEAVY'], 1, (i) => { cu.uDither.value = [0, 0.5, 1, 1.6][i]; }),
       // WHAT SHAPE THE GREY IS MADE OF. BAYER4 is the shipped weave; BAYER8
       // trades pattern visibility for more apparent tones; CHECK is the chunky
       // 2x2; GRAIN is a static hash — newsprint; LINES thresholds by row —
@@ -51693,15 +51792,15 @@ const DIAL_GROUPS: DialGroup[] = [
       // each channel its own, so a pixel can land between two palette entries
       // and the palette carries more apparent colour than it has levels, at the
       // cost of a little chroma fringing on a shallow ramp.
-      dial('dchan', 'DITHER CH', ['GREY', 'RGB'], 0,
+      dial('dchan', 'DITHER CH', ['GREY', 'RGB'], 1,
         (i) => { cu.uDChan.value = i; }),
       // The quantiser's rounding constant. On the 1-bit looks this IS the ink
       // point: minus floods shadows to black, plus lifts midtones to paper.
-      dial('thr', 'THRESHOLD', ['-2', '-1', '0', '+1', '+2'], 2,
+      dial('thr', 'THRESHOLD', ['-2', '-1', '0', '+1', '+2'], 0,
         (i) => { cu.uBias.value = [0.26, 0.38, 0.5, 0.62, 0.74][i]; }),
       // Pre-quantise gain about mid-grey. Two tones need the midtones to pick
       // a side; CRUSH is the photocopier that has given up on grey entirely.
-      dial('con', 'CONTRAST', ['SOFT', 'STOCK', 'HARD', 'CRUSH'], 1,
+      dial('con', 'CONTRAST', ['SOFT', 'STOCK', 'HARD', 'CRUSH'], 0,
         (i) => { cu.uCon.value = [0.8, 1, 1.35, 1.9][i]; }),
       // GREEN and AMBER are MONO through a phosphor — the tint multiplies the
       // QUANTISED tone (tinting first would split the channels and break the
@@ -51717,7 +51816,7 @@ const DIAL_GROUPS: DialGroup[] = [
       // overwrite the very dials it set the moment you tuned one by hand.
       dial('look', 'PRESET', ['—', 'STOCK', 'PRINT', 'XEROX', 'ETCH', 'TERM'], 0,
         (i) => { applyLook(i); }, false, true),
-      dial('scan', 'SCANLINES', ['OFF', 'LOW', 'HIGH'], 1, (i) => { cu.uScan.value = [0, 0.06, 0.14][i]; }),
+      dial('scan', 'SCANLINES', ['OFF', 'LOW', 'HIGH'], 0, (i) => { cu.uScan.value = [0, 0.06, 0.14][i]; }),
       // Into `bloomDial`, not straight into the uniform: the weather step
       // rewrites uBloom every frame and would eat the setting.
       // THE ONE THAT CHANGES WHAT DRIVING IS. ARCADE is the model this game
@@ -51731,11 +51830,31 @@ const DIAL_GROUPS: DialGroup[] = [
       // take at 110 — and a survey campaign is a lot of legs. The truthful
       // model is a choice, not the house style.
       dial('trac', 'TRACTION', ['ARCADE', 'LOOSE', 'REAL'], 0, (i) => { tractionMode = i; }),
-      dial('bloom', 'BLOOM', ['OFF', 'LOW', 'MED', 'HIGH'], 2, (i) => {
+      dial('bloom', 'BLOOM', ['OFF', 'LOW', 'MED', 'HIGH'], 0, (i) => {
         bloomDial = [0, 0.4, 0.75, 1.2][i];
         cu.uBloom.value = bloomDial;
       }),
       dial('flare', 'LENS FLARE', ['OFF', 'ON'], 1, (i) => { cu.uFlare.value = i; }),
+      /**
+       * ── TILT SHIFT: A LOOK, SO IT IS A DIAL AND NOT A QUERY STRING ──
+       *
+       * It was `?tilt=` and nothing else, which made it a thing only a devtool
+       * could reach — and a look cannot be judged that way: the composite runs
+       * at three frames a second in the harness, so every comparison was a
+       * boot apart, and the seat could not turn it at all. `tiltMode` is read
+       * by `aimFocus` every frame, so this takes effect on the next one.
+       *
+       * The plane is VERTICAL, leaned back by `__tilt({angle})` — a plane
+       * perpendicular to a near-nadir chart camera is a horizontal slab that
+       * flat ground lies inside, and it measured an exact zero at every
+       * station out to three kilometres. Tilting the lens is what the
+       * photographs this is named after actually do.
+       *
+       * STOCK is the shipped look and the row to refine; the bands, and why
+       * the chart and the seat carry their own, are in TILT_PRESETS.
+       */
+      dial('tilt', 'TILT SHIFT', ['OFF', 'SUBTLE', 'MINI', 'STOCK', 'HARD'], 3,
+        (i) => { tiltMode = TILT_MODES[clamp(i, 0, TILT_MODES.length - 1)]; }),
       // ── X-RAY: the debug eyes, from the seat ──
       // DEPTH paints the 40x88 map the HUD's occlusion verdicts read — sky
       // blue, terrain grey by log distance — under the live pins, so a wrong
@@ -51847,7 +51966,7 @@ const DIAL_GROUPS: DialGroup[] = [
       // whole frame; 540 and 720 are impossible on film and exist for the
       // arcade long-exposure look. The pass earned its keep — the earlier OFF
       // default was caution about a chain it had just joined.
-      dial('mblur', 'MOTION BLUR', ['OFF', '90', '180', '360', '540', '720'], 2, (i) => { mblurFrac = MBLUR_FRAC[i]; }),
+      dial('mblur', 'MOTION BLUR', ['OFF', '90', '180', '360', '540', '720'], 1, (i) => { mblurFrac = MBLUR_FRAC[i]; }),
       // Where the dust and the spray sit between a volume and a sprite. SOFT is
       // an honest airborne plume; HARD is a few flat tone steps that agree with
       // the palette quantiser instead of being banded by it. Water and grit keep
@@ -51891,7 +52010,7 @@ const DIAL_GROUPS: DialGroup[] = [
       // Measured at Noordhoek: the cut goes from 9.5m deep to 6.2m across the
       // three steps, and the frame goes from 280k triangles to 870k. Rebuilds
       // every tile in sight, so it costs a few seconds of streaming too.
-      dial('tseg', 'TERRAIN', ['COARSE', 'FINE', 'FINEST'], 0, (i) => {
+      dial('tseg', 'TERRAIN', ['COARSE', 'FINE', 'FINEST'], 1, (i) => {
         const want = [128, 192, 256][i];
         if (want === terrainSeg) return;
         terrainSeg = want;
@@ -51914,7 +52033,7 @@ const DIAL_GROUPS: DialGroup[] = [
       // One extra scene pass, so the right setting is a property of the phone
       // rather than of the scene. MED is the shipped default; LOW is the one to
       // reach for when the frame counter in the corner goes gold.
-      dial('shq', 'SHADOWS', ['OFF', 'LOW', 'MED', 'HIGH'], 2, (i) => { setShadowQ(i); }),
+      dial('shq', 'SHADOWS', ['OFF', 'LOW', 'MED', 'HIGH'], 3, (i) => { setShadowQ(i); }),
       // Free in frame time — it only ever runs when the sun's pass is already
       // off — but it is the difference between a beam that lights a wall and
       // one that passes through it.
@@ -51922,10 +52041,10 @@ const DIAL_GROUPS: DialGroup[] = [
       // How dark the shadowed side goes. Costs nothing — it is a number in a
       // shader, not a pass — and it is the dial that decides whether this
       // world reads as overcast or as high desert.
-      dial('sdark', 'SHADOW DEPTH', ['OFF', 'SOFT', 'MID', 'FULL'], 2, (i) => { setShadowDark(i); }),
+      dial('sdark', 'SHADOW DEPTH', ['OFF', 'SOFT', 'MID', 'FULL'], 3, (i) => { setShadowDark(i); }),
       // LIVE is the real sun over the real place at this moment. The rest force
       // a LOCAL SOLAR hour, so "noon" means the same thing at every longitude.
-      dial('time', 'TIME', [...TIME_MODES], 0, (i) => { timeMode = i; }),
+      dial('time', 'TIME', [...TIME_MODES], 6, (i) => { timeMode = i; }),
       // How much a checkpoint tells you about itself. HIDDEN is the design as
       // asked for — you feel the tally move and nothing else. The other two
       // exist because "invisible" is a claim about feel that can only be
@@ -51943,7 +52062,7 @@ const DIAL_GROUPS: DialGroup[] = [
       // Turned on here, it appears; turned off, it disengages as well as
       // vanishing, because a hidden control that is still driving is worse
       // than either.
-      dial('auto', 'AUTOPILOT', ['OFF', 'HUD TAB'], 0, (i) => {
+      dial('auto', 'AUTOPILOT', ['OFF', 'HUD TAB'], 1, (i) => {
         autoTab = i > 0;
         if (!autoTab) { auto.on = false; auto.out = null; }
       }),
@@ -51958,7 +52077,7 @@ const DIAL_GROUPS: DialGroup[] = [
         hudSize = HUD_SIZES[i];
         hudResize();
       }),
-      dial('tdbg', 'TILE DEBUG', ['OFF', 'ON'], 0, (i) => { tileDbg = i === 1; }),
+      dial('tdbg', 'TILE DEBUG', ['OFF', 'ON'], 1, (i) => { tileDbg = i === 1; }),
     ],
   },
   {
@@ -51969,9 +52088,9 @@ const DIAL_GROUPS: DialGroup[] = [
       // not a promise that a phone can render them.
       dial('tpop', 'POPULATION CAP', ['0.25X', '0.5X', '1X', '2X', '4X', '8X', '16X'], 2,
         (i) => { treePopulationScale = TREE_POP_STEPS[i]; }, true),
-      dial('trng', 'DRAW RANGE', ['350M', '700M', '1.4KM', '2.1KM', '2.8KM'], 1,
+      dial('trng', 'DRAW RANGE', ['350M', '700M', '1.4KM', '2.1KM', '2.8KM'], 4,
         (i) => { treeRange = TREE_RANGE_STEPS[i]; }, true),
-      dial('ttri', 'EZ TRI CAP', ['0.3M', '1M', '2.4M', '6M', '15M', '40M', '100M'], 2,
+      dial('ttri', 'EZ TRI CAP', ['0.3M', '1M', '2.4M', '6M', '15M', '40M', '100M'], 0,
         (i) => { treeTriBudget = TREE_TRI_STEPS[i]; }, true),
       dial('tvar', 'EZ VARIANTS', ['ONE', 'TWO', 'FOUR', 'ALL'], 3,
         (i) => { treeVariantCap = TREE_VARIANT_STEPS[i]; }, true),
@@ -51980,18 +52099,18 @@ const DIAL_GROUPS: DialGroup[] = [
       // creates another draw call or asks the runtime EZ package to generate.
       dial('tsiz', 'HEIGHT', ['0.5X', '1X', '1.5X', '2X', '3X', '4X'], 1,
         (i) => { treeSizeScale = TREE_SIZE_STEPS[i]; }, true),
-      dial('tfrm', 'FORM SPREAD', ['EVEN', 'STOCK', 'RICH', 'WILD', 'EXTREME'], 1,
+      dial('tfrm', 'FORM SPREAD', ['EVEN', 'STOCK', 'RICH', 'WILD', 'EXTREME'], 3,
         (i) => { treeFormScale = TREE_FORM_STEPS[i]; }, true),
-      dial('tbnd', 'GROWTH BEND', ['OFF', 'SUBTLE', 'RICH', 'WILD', 'STORM', 'IMPOSSIBLE'], 0,
+      dial('tbnd', 'GROWTH BEND', ['OFF', 'SUBTLE', 'RICH', 'WILD', 'STORM', 'IMPOSSIBLE'], 2,
         (i) => { treeBendU.value = TREE_BEND_STEPS[i]; }, true),
       // Surface controls are shader-only: they add no draw calls or geometry.
       // OFF is the exact material A/B, while the upper stops deliberately
       // exaggerate the effect so its contribution can be read from the seat.
-      dial('tleaf', 'LEAF OPTICS', ['OFF', 'LOW', 'STOCK', 'RICH', 'MAX'], 2,
+      dial('tleaf', 'LEAF OPTICS', ['OFF', 'LOW', 'STOCK', 'RICH', 'MAX'], 3,
         (i) => { ezLookU.uEzLeaf.value = TREE_LEAF_STEPS[i]; }),
-      dial('tbark', 'BARK PATTERN', ['OFF', 'LOW', 'STOCK', 'RICH', 'MAX'], 2,
+      dial('tbark', 'BARK PATTERN', ['OFF', 'LOW', 'STOCK', 'RICH', 'MAX'], 3,
         (i) => { ezLookU.uEzBark.value = TREE_BARK_STEPS[i]; }),
-      dial('tbump', 'BARK RELIEF', ['OFF', 'LOW', 'STOCK', 'RICH', 'MAX'], 2,
+      dial('tbump', 'BARK RELIEF', ['OFF', 'LOW', 'STOCK', 'RICH', 'MAX'], 3,
         (i) => { ezLookU.uEzBump.value = TREE_BUMP_STEPS[i]; }),
       // ── AND THE CHEAP REPRESENTATION'S OWN TWO ──
       // REACH is a MULTIPLE of DRAW RANGE above, so the pair compose: the rack
@@ -51999,17 +52118,17 @@ const DIAL_GROUPS: DialGroup[] = [
       // gets is bounded by the manifest, and the telemetry row says so — see
       // impostorReachTally. OFF stands the whole tier down, which is also the
       // A/B that __impostor() drives.
-      dial('imprch', 'IMPOSTOR REACH', ['OFF', '0.5X', '1X', '2X', '4X', '8X'], 2, (i) => {
+      dial('imprch', 'IMPOSTOR REACH', ['OFF', '0.5X', '1X', '2X', '4X', '8X'], 4, (i) => {
         impReachMul = IMP_REACH_STEPS[i];
         impostorDraw = IMPOSTOR_ON && impReachMul > 0;
       }, true),
-      dial('impden', 'IMPOSTOR DENSITY', ['0.25X', '0.5X', '1X', '2X', '4X', 'ALL'], 2,
+      dial('impden', 'IMPOSTOR DENSITY', ['0.25X', '0.5X', '1X', '2X', '4X', 'ALL'], 5,
         (i) => { impDensityMul = IMP_DENSITY_STEPS[i]; }, true),
       // AN INSTRUMENT, NOT A LOOK. Black takes every card's diffuse to zero,
       // so the tier reads as a flat cut-out and a frame answers by eye what no
       // pixel metric here can: where the cards ARE, how large, and whether
       // their outline agrees with the skeleton standing beside them.
-      dial('impink', 'IMPOSTOR INK', ['STOCK', 'BLACK'], 0,
+      dial('impink', 'IMPOSTOR INK', ['STOCK', 'BLACK'], 1,
         (i) => { impInkU.value = i; }, true),
     ],
   },
@@ -52017,7 +52136,7 @@ const DIAL_GROUPS: DialGroup[] = [
     title: 'VEHICLE',
     dials: [
       dial('wear', 'WEATHERING', ['CLEAN', 'WORN', 'BEATEN'], 1, (i) => { wearU.value = [0.15, 1, 1.8][i]; }),
-      dial('paint', 'PAINT', BODY_COLORS.map(([n]) => n), 0, (i) => { bodyMat?.color.setHex(BODY_COLORS[i][1]); }),
+      dial('paint', 'PAINT', BODY_COLORS.map(([n]) => n), 3, (i) => { bodyMat?.color.setHex(BODY_COLORS[i][1]); }),
     ],
   },
   {
@@ -52027,14 +52146,14 @@ const DIAL_GROUPS: DialGroup[] = [
       // and a little extra stand-back so AERIAL reads as a crane, not a mast.
       dial('chaseh', 'CHASE HEIGHT', ['LOW', 'STOCK', 'HIGH', 'AERIAL'], 1,
         (i) => { chaseH = [0.7, 1, 1.45, 2.1][i]; }, true),
-      dial('cabfov', 'CAB FOV', ['60', '68', '76', '84'], 1, (i) => {
+      dial('cabfov', 'CAB FOV', ['60', '68', '76', '84'], 3, (i) => {
         cabFov = [60, 68, 76, 84][i];
         if (camMode === 'cab') { camera.fov = cabFov; camera.updateProjectionMatrix(); }
       }, true),
       // How far the menu's slow circle stands from the rig. MID is the shipped
       // default — NEAR is the old framing, close enough that a canopy or a cut
       // bank can crowd the shot; FAR reads as an establishing shot.
-      dial('orbit', 'SPLASH ORBIT', ['NEAR', 'MID', 'FAR'], 1,
+      dial('orbit', 'SPLASH ORBIT', ['NEAR', 'MID', 'FAR'], 2,
         (i) => { splashOrbitR = [8.5, 11.5, 15][i]; }, true),
     ],
   },
@@ -52069,7 +52188,7 @@ function saveDials(): void {
   try {
     // `v` rides along with the dial values so a future reordering can tell a
     // migrated record from a stale one, the way this one had to.
-    const rec: Record<string, number> = { v: 4 };
+    const rec: Record<string, number> = { v: 5 };
     for (const d of DIALS) rec[d.key] = d.at;
     localStorage.setItem('drive.dials', JSON.stringify(rec));
   } catch { /* fine */ }
@@ -52094,6 +52213,24 @@ function loadDials(): void {
     // from unset (see waterFromDials), so the rack is pointed at whatever
     // actually booted rather than at a zero nobody chose.
     if (ver < 4) raw['water'] = HYDRO_ON ? 1 : 0;
+    // ── v5: THE DEFAULTS MOVED, AND A STORED RACK IS NOT MIGRATED ──
+    //
+    // Twenty-eight dials took the seat's own tuned values as their defaults.
+    // That is a change of TASTE, not of meaning, and the two want opposite
+    // treatment: the migrations above exist because a stored INDEX came to
+    // name a different thing (the TIME list grew in the middle, PALETTE grew
+    // an entry at the front), so leaving them alone would have silently
+    // changed a setting somebody chose. Nothing here renames anything.
+    //
+    // So a v4 record keeps every value in it, and the new defaults reach a
+    // device that has never saved a rack. The alternative — stamping the new
+    // defaults over a stored record — cannot be done honestly: `saveDials`
+    // writes the WHOLE rack on any change, so a player who once moved one
+    // dial has the old defaults frozen into every other key, and there is no
+    // way left to tell "never chose it" from "chose the old default". A
+    // migration that guesses would overwrite real choices; this one declines
+    // to guess, and the stamp is what lets a later reader know which era a
+    // record is from.
     for (const d of DIALS) if (Number.isInteger(raw[d.key])) d.at = clamp(raw[d.key], 0, d.opts.length - 1);
     // …except a clock the URL asked for. ?time= is there to make a lighting
     // comparison reproducible, and a saved dial silently overruling it makes
@@ -52101,6 +52238,14 @@ function loadDials(): void {
     if (qsHas('time')) {
       const d = DIALS.find((x) => x.key === 'time');
       if (d) d.at = timeMode;
+    }
+    // …and the same for `?tilt=`, for the same reason: it is there to make a
+    // look comparison reproducible, and a saved dial overruling it would make
+    // the shot depend on which browser profile took it.
+    if (qsHas('tilt')) {
+      const d = DIALS.find((x) => x.key === 'tilt');
+      const j = TILT_MODES.indexOf(tiltMode as typeof TILT_MODES[number]);
+      if (d && j >= 0) d.at = j;
     }
   } catch { /* fine */ }
 }
