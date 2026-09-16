@@ -11744,7 +11744,7 @@ const impStage = {
   y: new Float32Array(IMPOSTOR_CAP),
 };
 /** What the last refresh stood up, so the probe reports the rule that ran. */
-const impProf = { drawn: 0, offered: 0, capped: 0, formed: 0, far: 0, ms: 0 };
+const impProf = { drawn: 0, offered: 0, capped: 0, formed: 0, far: 0, farSeen: 0, ms: 0 };
 /**
  * THE IMPOSTOR'S FORM IS THE TREE'S OWN, and it is cached per SITE because it
  * has to be both correct and cheap. Correct: if a tree is a cone at 400 m and
@@ -11762,6 +11762,11 @@ const impProf = { drawn: 0, offered: 0, capped: 0, formed: 0, far: 0, ms: 0 };
  */
 const impFormOf = new WeakMap<PlacedVegSite, number>();
 const IMPOSTOR_FORM_BUDGET = 400;
+/** How many candidates the membership pass walks between yields. A power of two
+ *  so the test is a mask rather than a modulo, and 4,096 because at the seat's
+ *  measured ~80 ns a step that is a third of a millisecond — under the slice
+ *  budget's own floor, so the yield can never be the thing that overruns it. */
+const IMPOSTOR_STEP = 4096;
 
 /** What the last refresh stood up, for the harness. */
 let ezPlaced: Array<Record<string, number | string>> = [];
@@ -13984,6 +13989,10 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // move the admitted edge IN. Nothing beyond the draw range may vote on the
   // geometry budget. It may only ask for a card.
   const candFar: Record<EzFamily, Array<[number, PlacedVegSite]>> = ezRecord(() => [] as Array<[number, PlacedVegSite]>);
+  // How many trees past the draw ring the gather LOOKED at, which is what says
+  // whether the manifest is earning its memory — the list below is what
+  // survived the thinning and is a much smaller number.
+  let impFarSeen = 0;
   if (EZ_ON) {
     for (const [gx, gz] of ring) {
       yield;
@@ -14007,6 +14016,27 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       const impCells = Math.ceil(impR / VEG_CELL);
       if (impR > treeRange && impCells > reach) {
         const impR2 = impR * impR;
+        // ── AND IT DECIDES MEMBERSHIP HERE, NOT IN THE PASS ──
+        //
+        // A list is a thing you allocate and then walk twice. At the seat's own
+        // REACH 8X the manifest knows 482,657 trees and the tier drew 17,709 of
+        // them, so the first cut built a 384,669-entry array of tuples every
+        // refresh — several megabytes of short-lived allocation — and then
+        // walked all of it to throw 96% away. The density test needs only the
+        // tree's own position and its family's full-density radius, both of
+        // which are in hand at the moment the site is read, so it is taken
+        // WHERE THE SITE IS READ and only survivors are kept.
+        //
+        // THE RADIUS IS LAST REFRESH'S EDGE, which is the same construction
+        // `ezTriPrice` uses for the same reason: the number this refresh needs
+        // is decided by an admission that has not run yet, and the previous
+        // sweep's answer converges in one and then stays converged, because the
+        // palette and the budget are stable per district. The first sweep after
+        // a hop draws a thinner far country and the second is right.
+        const farKeep2 = ezRecord((f) => {
+          const full = Math.max(IMPOSTOR_FULL_M, ezEdgeLast[f] || 0);
+          return full * full * impDensityMul;
+        });
         for (const [gx, gz] of squareRings(cx, cz, impCells, reach + 1)) {
           yield;
           if (vegSeedLeft <= 0) break;
@@ -14017,7 +14047,13 @@ function* vegRefreshSteps(): Generator<void, void, void> {
             if (!isEzKind(v.k)) continue;
             const dx = v.x - state.x, dz = v.z - state.z;
             const d2 = dx * dx + dz * dz;
-            if (d2 >= treeR2 && d2 < impR2) candFar[v.k].push([d2, v]);
+            if (d2 < treeR2 || d2 >= impR2) continue;
+            impFarSeen++;
+            // Nothing out here is inside its family's full-density radius, so
+            // the cheap branch the near list needs is not written: the hash
+            // decides every one of them.
+            if (hash2(Math.round(v.x * 8) + 7919, Math.round(v.z * 8) + 104729) * d2 > farKeep2[v.k]) continue;
+            candFar[v.k].push([d2, v]);
           }
         }
       }
@@ -14292,24 +14328,44 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       // move: that is the REACH dial's job, and the two stay independent.
       const full2 = full * full * impDensityMul;
       // Both lists, near first, so the cap — if it ever binds — takes the near
-      // trees. `candFar` is empty unless the REACH dial asks past the draw ring.
-      for (const list of [cand[fam], candFar[fam]]) {
+      // trees. `candFar` is empty unless the REACH dial asks past the draw
+      // ring, and everything in it has ALREADY passed the density test — the
+      // gather took it where the site was read, so nothing here re-decides it.
+      for (let li = 0; li < 2; li++) {
+      const list = li === 0 ? cand[fam] : candFar[fam];
+      const preFiltered = li === 1;
       // INDEXED, NOT for-of: this loop runs over every candidate in the world
       // the tier can see — 55,000 at stock and several times that with REACH
       // up — and the iterator protocol plus a tuple destructure per step is a
       // measurable share of a pass that the dump already calls the largest
       // tree phase.
       for (let ci = 0; ci < list.length; ci++) {
+        // ── AND IT YIELDS, LIKE EVERY OTHER PHASE OF THIS REFRESH ──
+        // The refresh is a generator precisely so no one sweep can hold a frame,
+        // and this was the one phase that never gave one back: measured on the
+        // seat's own device at REACH 8X, 39.7 ms a call with an 85 ms worst,
+        // five times `ezAdmit` and the top phase in a hundred and thirty slow
+        // frames. Staging is separate from the instances and the commit is one
+        // slice at the end, so a frame drawn between two of these shows the
+        // previous sweep whole — which is the property the whole design rests
+        // on and is what makes yielding here free.
+        if ((ci & (IMPOSTOR_STEP - 1)) === 0 && ci > 0) yield;
         const ent = list[ci], d2 = ent[0], v = ent[1];
         if (d2 > impR2) continue;     // the REACH dial, and the cheapest test there is
         if (impN >= IMPOSTOR_CAP) { impProf.capped++; break; }
+        // WHAT THIS COUNTS NARROWED WHEN THE GATHER LEARNED TO THIN. It is
+        // what the PASS considered — every near candidate, and the far ones
+        // that already survived the gather's own density test — so it is no
+        // longer the population the tier was offered. `farSeen` is that
+        // number now, and the readout prints the pair rather than one of them.
         impOffered++;
         // ── THE ADMITTED SET IS ONLY EVER INSIDE full ──
         // Every tree the geometry took is within `ezEdge[fam]`, and `full` is
         // at least that, so beyond it the membership test cannot collide with
         // admission and the Set lookup is pure cost. Skipping it there takes
         // an object-identity hash off the overwhelming majority of steps.
-        if (d2 <= full2) {
+        if (preFiltered) { /* the gather already decided; nothing to re-test */ }
+        else if (d2 <= full2) {
           if (ezAdmit.has(v)) { impOffered--; continue; }
         } else if (hash2(Math.round(v.x * 8) + 7919, Math.round(v.z * 8) + 104729) * d2 > full2) {
           // A stable hash on the tree's own position against a density that
@@ -14361,7 +14417,8 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       impFar += candFar[fam].length;
     }
   }
-  impProf.drawn = impN; impProf.offered = impOffered; impProf.formed = impFormed; impProf.far = impFar;
+  impProf.drawn = impN; impProf.offered = impOffered; impProf.formed = impFormed;
+  impProf.far = impFar; impProf.farSeen = impFarSeen;
   vegMark('impostor');
   // ── THE COMMIT: STAGING BECOMES THE INSTANCES, IN ONE SLICE ──
   // A mesh that has never been coloured has no colour attribute yet (three
@@ -33900,7 +33957,7 @@ function tapeKeep(): string {
   out.impostor = impostors
     ? { on: impostorDraw, drawn: impProf.drawn, offered: impProf.offered,
         formed: impProf.formed, cap: IMPOSTOR_CAP, fullM: IMPOSTOR_FULL_M,
-        far: impProf.far, capped: impProf.capped, ...impostorReachTally(),
+        far: impProf.far, farSeen: impProf.farSeen, capped: impProf.capped, ...impostorReachTally(),
         top: +impTopU.value.toFixed(3), tris: impProf.drawn * 4 }
     : { on: false };
   return out;
@@ -33928,7 +33985,7 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
 (window as unknown as { __impostor?: object }).__impostor = (on?: boolean): object => {
   if (on !== undefined && impostors) { impostorDraw = !!on; refreshVeg(); }
   return { built: !!impostors, drawing: impostorDraw, drawn: impProf.drawn,
-    offered: impProf.offered, far: impProf.far, tris: impProf.drawn * 4,
+    offered: impProf.offered, far: impProf.far, farSeen: impProf.farSeen, tris: impProf.drawn * 4,
     ...impostorReachTally() };
 };
 
@@ -45043,7 +45100,7 @@ function telemetryReport(): string {
     L.push(`trees impostor ${impostors && impostorDraw ? 'on' : 'off'}`
       + `${impostors ? ` · reach ${_i.granted}m${_i.bound === 'MANIFEST' ? ` of ${_i.asked}m asked (MANIFEST)` : ''}`
         + ` · density ${_i.density >= 1e6 ? 'ALL' : `${_i.density}x`}`
-        + ` · drawn ${impProf.drawn}/${impProf.offered} offered${impProf.far ? ` (${impProf.far} past the draw ring)` : ''}`
+        + ` · drawn ${impProf.drawn}/${impProf.offered} offered${impProf.farSeen ? ` (${impProf.far} kept of ${impProf.farSeen} seen past the draw ring)` : ''}`
         + ` · ${(impProf.drawn * 4 / 1000).toFixed(1)}k tris${impProf.capped ? ` · CAPPED at ${IMPOSTOR_CAP}` : ''}`
         + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed} formed` : ''}` : ''}`);
   }

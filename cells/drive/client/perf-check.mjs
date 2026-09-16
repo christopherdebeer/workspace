@@ -101,6 +101,12 @@ function context(code,range,ez,triCap) {
     // candidates admission turned down does not disturb what admission KEPT.
     // A stub of `impostors: null` would skip the pass and witness nothing.
     IMPOSTOR_CAP:512,IMPOSTOR_FULL_M:260,IMPOSTOR_FORM_BUDGET:400,
+    // SIXTY-FOUR, not the game's 4096, because the claim the yield rests on
+    // is that staging is separate from the instances and the commit is one
+    // slice at the end — so a mid-pass yield may not change a single byte.
+    // At the game's step this fixture's candidate lists never reach one, and
+    // a yield that never fires cannot witness that.
+    IMPOSTOR_STEP:64,
     IMPOSTOR_FORMS:['round','conic','columnar','umbrella','palm','bare'],
     IMPOSTOR_WIDTH:{round:0.9,conic:0.5,columnar:0.4,umbrella:1.2,palm:0.5,bare:0.35},
     impostorFormIndex:()=>0,impFormOf:new WeakMap(),

@@ -4471,6 +4471,62 @@ at a setting where those distances are not the shipped ones. At stock dials the
 nearest impostor is past the skeletons' edge; forced, it is in your lap, and a
 two-card billboard at ten metres is a two-card billboard.
 
+### …and the device priced the membership pass: a list you allocate to throw away
+
+The verification the section above asked for arrived as a dump, at the seat's
+own forced dials (REACH 8X, DENSITY 4X, Yosemite, 462 s, chase): `impostor
+39.7 ms/call (max 85)` in `tree phases` — **five times `ezAdmit`**, the largest
+tree phase, and the one phase in a deliberately resumable refresh that never
+yielded. Beside it the row that explains it: `drawn 17709/450174 offered
+(384669 past the draw ring)`.
+
+**A LIST IS A THING YOU ALLOCATE AND THEN WALK TWICE.** Three hundred and
+eighty-four thousand tuples built every refresh — several megabytes of
+short-lived allocation — and then walked in full to throw away 96% of it on a
+hash the gather could have run where the site was already in hand. The density
+test needs the tree's position and its family's full-density radius and nothing
+else, so it moved into the `ezGather` far annulus and `candFar` now holds only
+survivors. **Reject at gather time, not in the pass** — the same shape as
+`onCarriageway` being asked only of sites that survived admission, one layer up.
+
+**THE RADIUS IT TESTS AGAINST IS LAST REFRESH'S EDGE, and that is the
+`ezTriPrice` construction again**: the number this refresh needs is decided by
+an admission that has not run yet, and the previous sweep's answer converges in
+one and then stays converged, because the palette and the budget are stable per
+district. So the far set is NOT byte-identical to the one the pass used to
+build — it is one sweep behind after a hop and right from the second — and that
+is the trade, stated rather than hidden.
+
+**AND THE PASS YIELDS NOW, LIKE EVERY OTHER PHASE OF THE REFRESH.** One line,
+every `IMPOSTOR_STEP` (4,096) candidates. What makes it free is the property the
+sliced refresh already rests on: **staging is separate from the instances and
+the commit is one slice at the end**, so a frame drawn between two slices shows
+the previous sweep whole. A phase that writes into the instance buffers directly
+could not have taken this line at any step size.
+
+**THE READOUT PRINTS A PAIR NOW, BECAUSE ONE OF THE NUMBERS NARROWED.**
+`offered` is what the PASS considered — every near candidate, and the far ones
+that already survived the gather — so it is no longer the population the tier
+was offered, and quoting it alone would understate the manifest by twenty-five
+times. `impFarSeen` counts what the gather LOOKED at past the draw ring, and the
+row reads `drawn A/B offered (C kept of D seen past the draw ring)`. A counter
+whose meaning changes under a cut has to be renamed or paired; leaving it to be
+read the old way is how a measurement quietly becomes a fiction.
+
+**Verified, not measured.** `perf-check.mjs` is 20 of 20 production refills
+byte-identical (its sandbox learned `IMPOSTOR_STEP` — at **64** there rather than
+the game's 4,096, because at the game's step this fixture's lists never reach one
+and a yield that never fires cannot witness that the commit is unaffected);
+`tree-impostor.mjs` at stock dials draws **931 of 1611 offered, census
+`veg-impostor` 3,724 = 931 × 4 exactly**, edges b689/c428/s482 unchanged, ink
+**44/255 against the hillside's 111.2 with 2.3% at the floor** — the same
+numbers as the run before the cut. **The cost itself is not verified here**: the
+harness's frames are seconds apart and cannot price a per-refresh CPU cost, and
+stock dials never run the far gather at all (`impR > treeRange` is false), so
+what this proves is that the near path and the commit are untouched. The next
+dump at REACH 8X is the measurement, and the row is still `impostor` in `tree
+phases`.
+
 ### The polish pass — another agent, on the cell, two pushes apart
 
 Astra (a ChatGPT-6 client on the same workspace) worked directly on the
