@@ -124,7 +124,14 @@ function context(code,range,ez,triCap) {
     // and the pass writes both at the end of each family. A sandbox missing a
     // record the refresh WRITES throws where one missing a value it reads would
     // merely read undefined — which is the louder failure and the better one.
-    impProf:{drawn:0,offered:0,capped:0,formed:0,far:0,ms:0,byFam:{},capFam:{}},
+    // THE CENSUS FIELDS ARE PART OF THE SHAPE, not decoration: the refresh
+    // clears and writes them every sweep, so a stub without them throws on
+    // the first call and the whole check says nothing. This is the fault the
+    // doctrine names — a sandboxed check breaks on a new free variable and
+    // only running it can tell you.
+    impProf:{drawn:0,offered:0,capped:0,formed:0,far:0,ms:0,byFam:{},capFam:{},
+      waiting:0,locked:0,refused:new Map(),bySlot:[]},
+    impSlotFull:false,
     // HALF AGAIN THE DRAW RANGE, for the manifest's own reason one line down:
     // the REACH dial's far gather has to RUN here, or the claim that a tier
     // reaching past the draw ring disturbs nothing inside it is untested.

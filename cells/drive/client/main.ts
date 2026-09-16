@@ -11919,6 +11919,27 @@ const impStage = {
 const impProf = {
   drawn: 0, offered: 0, capped: 0, formed: 0, far: 0, farSeen: 0, ms: 0, bakeMs: 0, waiting: 0,
   byFam: {} as Record<EzFamily, number>, capFam: {} as Record<EzFamily, number>,
+  /**
+   * ── WHAT THE FOOTPRINT ASKED FOR AND DID NOT GET, BY NAME ──
+   *
+   * `waiting` is a count, and a count cannot say WHY. Two readings fit
+   * "5,108 waiting on a bake against atlas 18/18" and they want opposite
+   * fixes: either the footprint genuinely wants more than eighteen distinct
+   * (family, variant) pairs, in which case the atlas is too small; or the
+   * eighteen it holds were baked somewhere the truck has since left and are
+   * serving nobody, in which case it wants reclaiming rather than enlarging.
+   *
+   * These two maps separate them and cost nothing to keep: `refused` is
+   * written at the one place a key is turned down, where the key is already
+   * in hand, and `bySlot` is one increment per instance that was going to be
+   * written anyway. Together — how many DISTINCT keys were refused, and how
+   * many of the eighteen slots are serving zero trees — they decide it.
+   */
+  refused: new Map<string, number>(),
+  bySlot: [] as number[],
+  /** Refused because the ATLAS IS FULL — these will never draw, this session,
+   *  wherever the truck goes. Kept apart from `waiting`, which drains. */
+  locked: 0,
 };
 /**
  * THE IMPOSTOR'S FORM IS THE TREE'S OWN, and it is cached per SITE because it
@@ -11972,13 +11993,30 @@ const IMPOSTOR_FORM_BUDGET = 24000;
 // first seconds, and a hop does not spend a second drawing nothing.
 const IMPOSTOR_BAKE_PER_REFRESH = 2;
 let impBakedNow = 0;
-/** The slot for a baked variant, baking it if there is room and budget. Null
- *  means "not this sweep" — never "never". */
+/** Set by the last refusal that was the atlas's CEILING rather than the bake
+ *  budget, so the refusal site can file it under `locked` without repeating
+ *  the test. Reset with the rest of the per-sweep census. */
+let impSlotFull = false;
+/**
+ * The slot for a baked variant, baking it if there is room and budget.
+ *
+ * ── NULL MEANT TWO OPPOSITE THINGS, AND THE COUNTER MEANT ONE ──
+ *
+ * The docstring said null is "not this sweep — never 'never'", and that is
+ * true of the BUDGET and false of the CEILING: a slot is never re-used and
+ * `impSlotNext` never decreases, so once the atlas is full a key it does not
+ * already hold can never be baked, at any point in the session. Both returned
+ * null, both incremented `impProf.waiting`, and the telemetry printed one
+ * phrase — so a device reporting "5,108 waiting on a bake" against an atlas at
+ * 18/18 was reporting five thousand trees that will never draw, in the words
+ * of a queue that drains. `locked` is the second case and is counted apart.
+ */
 function impSlotFor(fam: EzFamily, vi: number): ImpAtlasSlot | null {
   const key = `${fam}:${vi}`;
   const got = impSlots.get(key);
   if (got) return got;
-  if (!impAtlasRT || impSlotNext >= IMP_ATLAS_SLOTS) return null;
+  if (!impAtlasRT) return null;
+  if (impSlotNext >= IMP_ATLAS_SLOTS) { impSlotFull = true; return null; }
   if (impBakedNow >= IMPOSTOR_BAKE_PER_REFRESH) return null;
   const geo = ezVariants(fam)[vi]?.geometry;
   if (!geo) return null;
@@ -14885,6 +14923,9 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   let impN = 0, impOffered = 0, impFormed = 0, impFar = 0, impR2 = 0;
   impBakedNow = 0;
   impProf.waiting = 0;
+  impProf.locked = 0;
+  impProf.refused.clear();
+  impProf.bySlot.length = 0;
   if (impostors && impostorDraw) {
     // The dissolve's own span, handed to the shader once. It starts where the
     // skeletons' does — two thirds of the way to the draw edge — and ends at
@@ -15019,8 +15060,16 @@ function* vegRefreshSteps(): Generator<void, void, void> {
             // different trees at this distance, and the whole point of the
             // atlas is that the far tree is the near tree. The slot index is
             // what rides on the instance.
+            impSlotFull = false;
             const slot = impSlotFor(fam, vi);
-            if (!slot) { impFormed--; impOffered--; impProf.waiting++; continue; }
+            if (!slot) {
+              // BY NAME, not only by count — see impProf.refused. And WAITING
+              // is not LOCKED: one drains in a few refreshes, the other never.
+              const rk = `${fam}:${vi}`;
+              impProf.refused.set(rk, (impProf.refused.get(rk) ?? 0) + 1);
+              if (impSlotFull) impProf.locked++; else impProf.waiting++;
+              impFormed--; impOffered--; continue;
+            }
             form = slot.slot;
           } else {
             form = impostorFormIndex(variants[vi]?.form ?? 'round');
@@ -15067,6 +15116,9 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         impStage.c[co] = v.c.r; impStage.c[co + 1] = v.c.g; impStage.c[co + 2] = v.c.b;
         impStage.f[impN] = form;
         impStage.y[impN] = v.rot;
+        // Which of the eighteen this instance is actually standing on. A slot
+        // that never appears here is baked and serving nobody.
+        impProf.bySlot[form] = (impProf.bySlot[form] ?? 0) + 1;
         impN++; famN++;
       }
       }
@@ -34763,6 +34815,75 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
   return { atlas: true, tile: T, cols: C, rows: R, slots: rows.length, bakeMs: +impProf.bakeMs.toFixed(1), tiles: rows };
 };
 
+/**
+ * ── THE ATLAS'S DEMAND, NOT ITS CONTENTS ──
+ *
+ * `__impatlas` photographs what IS baked and `__impostor` counts what stood
+ * down; neither can say whether "5,108 waiting on a bake" against a full
+ * eighteen slots means the atlas is TOO SMALL or merely STALE, and those want
+ * opposite fixes. This reports the last refresh's demand beside its supply:
+ *
+ * - `need` — distinct (family, variant) keys the footprint asked for, which is
+ *   the baked ones still in use plus the refused ones. **Against `slotCap`
+ *   this is the whole question:** need over cap is too small, need under cap
+ *   with idle slots is stale.
+ * - `refused` — every key turned down, with how many trees wanted it. A short
+ *   list with a huge count is a few common variants locked out, which is the
+ *   worst case for the eye: whole stands missing rather than a thin scatter.
+ * - `idle` — baked slots serving ZERO instances this sweep. Slots are never
+ *   re-used, so every one of these is a photograph of somewhere the truck has
+ *   left, held against trees standing in front of it now.
+ * - `served` — per baked key, how many instances it carries, so "eighteen
+ *   slots" can be read as a distribution rather than a capacity.
+ *
+ * It reads only what the refresh already recorded, so it is cheap and — more
+ * to the point — it reports the rule that RAN rather than a restatement of it.
+ */
+(window as unknown as { __impdemand?: object }).__impdemand = (): object => {
+  const bySlotKey = new Map<number, string>();
+  for (const [key, sl] of impSlots) bySlotKey.set(sl.slot, key);
+  const served: Array<{ key: string; slot: number; n: number }> = [];
+  let idle = 0, servedN = 0;
+  for (const [slot, key] of bySlotKey) {
+    const n = impProf.bySlot[slot] ?? 0;
+    if (n === 0) idle++; else servedN += n;
+    served.push({ key, slot, n });
+  }
+  served.sort((a, b) => b.n - a.n);
+  const refused = [...impProf.refused.entries()]
+    .map(([key, n]) => ({ key, n })).sort((a, b) => b.n - a.n);
+  const refusedN = refused.reduce((a, r) => a + r.n, 0);
+  // The keys the footprint actually wants: the baked ones it is still using,
+  // plus the ones it was refused. An idle baked key is NOT demand.
+  const need = (served.length - idle) + refused.length;
+  return {
+    atlas: !!impAtlasRT, slots: impSlots.size, slotCap: IMP_ATLAS_SLOTS,
+    need, over: need - IMP_ATLAS_SLOTS,
+    idle, inUse: served.length - idle, servedN,
+    refusedKeys: refused.length, refusedN,
+    waiting: impProf.waiting, locked: impProf.locked,
+    /**
+     * ── THE VERDICT, AND THE FIRST CUT OF IT WAS WRONG ──
+     *
+     * It read "refused with no idle slots" as too-small, and reported that on
+     * an atlas at 4 of 18 — where the only thing refusing was the two-bakes-a-
+     * refresh budget and every one of those trees would have a slot within a
+     * few sweeps. **An atlas with room is never too small, whatever it happens
+     * to be refusing this frame.** That is the distinction `locked` now draws
+     * at the refusal site: a refusal that drains against one that cannot. So
+     * being FULL is the precondition for every verdict but `filling`.
+     */
+    full: impSlots.size >= IMP_ATLAS_SLOTS,
+    verdict: refused.length === 0 ? 'satisfied'
+      : impSlots.size < IMP_ATLAS_SLOTS ? 'filling'
+      : idle > 0 && need <= IMP_ATLAS_SLOTS ? 'stale'
+      : idle > 0 ? 'both' : 'too-small',
+    refused, served,
+    bakePerRefresh: IMPOSTOR_BAKE_PER_REFRESH, formBudget: IMPOSTOR_FORM_BUDGET,
+    paletteN: EZ_PALETTE_N, variantCap: treeVariantCap,
+  };
+};
+
 (window as unknown as { __impostor?: object }).__impostor = (on?: boolean): object => {
   if (on !== undefined && impostors) { impostorDraw = !!on; refreshVeg(); }
   return { built: !!impostors, drawing: impostorDraw, drawn: impProf.drawn,
@@ -34774,7 +34895,8 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
     // have actually been photographed, and `waiting` how many sites stood
     // down this sweep for want of one.
     atlas: !!impAtlasRT, slots: impSlots.size, slotCap: IMP_ATLAS_SLOTS, ink: impInkU.value,
-    waiting: impProf.waiting, bakeMs: +impProf.bakeMs.toFixed(1),
+    waiting: impProf.waiting, locked: impProf.locked,
+    bakeMs: +impProf.bakeMs.toFixed(1),
     ...impostorReachTally() };
 };
 
@@ -46417,7 +46539,9 @@ function telemetryReport(): string {
         + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed}/${IMPOSTOR_FORM_BUDGET} formed${impProf.formed >= IMPOSTOR_FORM_BUDGET ? ' (PINNED)' : ''}` : ''}`
         + ` · atlas ${impAtlasRT ? `${impSlots.size}/${IMP_ATLAS_SLOTS} slots in ${impProf.bakeMs.toFixed(0)}ms` : 'OFF'}`
         + `${impInkU.value ? ' · INK BLACK (silhouette instrument)' : ''}`
-        + `${impProf.waiting ? ` · ${impProf.waiting} waiting on a bake` : ''}` : ''}`);
+        + `${impProf.waiting ? ` · ${impProf.waiting} waiting on a bake` : ''}`
+        // THE ONE THAT CANNOT DRAIN, said in different words on purpose.
+        + `${impProf.locked ? ` · ${impProf.locked} LOCKED OUT (atlas full)` : ''}` : ''}`);
   }
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);

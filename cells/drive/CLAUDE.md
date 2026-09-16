@@ -307,6 +307,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/tree-impostor.mjs` | what the impostor tier stands up and what it changes on screen — ONE boot, off/on/off through `__impostor()`, so the repeat is the floor; read whole AND over the canopy band, because a chase frame is mostly sward and sky (`TRIS=` raw triangles, `BAND=`) | ~6min |
 | `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
 | `node devtools/render-focus.test.mjs` | where the RENDERER is looking, and whether anything reads it — the authority's three cameras and the drone's own lead geometry driven for real, then each consumer and the sward's fast/slow ORDER as a source check; two controls in its header | instant |
+| `node devtools/imp-demand.mjs` | what the impostor atlas was ASKED for beside what it holds: the ceiling computed offline from the bake (pure, instant, no browser), then the live census by key — refused keys with their tree counts, baked slots with theirs, and how many of the eighteen are serving nobody. `KM=0 FIX=` measures one arrived world; `SPOT=` with a leg drives across districts and needs a device or a warm relay to mean anything | ~2min |
 | `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
@@ -4551,6 +4552,94 @@ stock dials never run the far gather at all (`impR > treeRange` is false), so
 what this proves is that the near path and the commit are untouched. The next
 dump at REACH 8X is the measurement, and the row is still `impostor` in `tree
 phases`.
+
+### …and "waiting on a bake" was two opposite facts in one phrase
+
+The probe that row asked for, and it overturns the row's own wording. `waiting`
+counted BOTH refusals `impSlotFor` can make, and they are not alike:
+
+```ts
+if (impSlotNext >= IMP_ATLAS_SLOTS) return null;        // NEVER. no slot is ever re-used
+if (impBakedNow >= IMPOSTOR_BAKE_PER_REFRESH) return null;  // this sweep. two a refresh
+```
+
+**A SLOT IS NEVER RECLAIMED AND `impSlotNext` NEVER DECREASES**, so once the
+atlas is full a key it does not already hold can never be baked, at any point in
+the session. Both paths returned null, both incremented one counter, and the
+telemetry printed one sentence — so a device reporting five thousand trees
+"waiting" was reporting five thousand trees that will **never draw**, in the
+words of a queue that drains. `impProf.locked` is the second case now and the
+row says `LOCKED OUT (atlas full)` in different words on purpose.
+
+**AND THE CEILING SAYS EIGHTEEN IS STRUCTURALLY TOO FEW.** The atlas's own
+comment sizes it at *"comfortably more than the ten a district's palettes can
+ask for (five families at EZ_PALETTE_N)"* — and that counts HABITS. `ezPalette`
+does draw over habits; `ezPickVariant` then reaches **every PEER of the habit it
+landed on**, by the individual seed, and a phenotype state reaches outside the
+palette entirely. Counted from the bake, offline, in `devtools/imp-demand.mjs`:
+
+| family | variants | habits (sizes) | a district can want |
+|---|---|---|---|
+| broadleaf | 16 | 9 [3,2,2,2,2,2,1,1,1] | 5 |
+| **conifer** | 12 | 4 [6,3,2,1] | **9, or 11 with a phenotype** |
+| acacia | 3 | 1 [3] | 3 |
+| palm | 2 | 1 [2] | 2 |
+| snag | 4 | 3 [2,1,1] | 3 |
+
+**24 distinct keys in the worst single district against 18 slots** — and a
+2.8 km reach spans up to four 6 km district cells, so the true demand over a
+drive is a multiple of that. The atlas fills, latches, and every variant met
+afterwards is locked out for the session. That is the seat's dump exactly.
+
+**THE FIRST VERDICT THE PROBE GAVE WAS WRONG, AND CATCHING IT IS THE POINT.**
+It read "refused with no idle slots" as too-small and reported that on an atlas
+at **4 of 18**, where the only thing refusing was the two-bakes-a-refresh budget
+and every one of those trees would have had a slot within a few sweeps. **An
+atlas with room is never too small, whatever it happens to be refusing this
+frame.** Being FULL is the precondition for every verdict but `filling`, and the
+shipped counter had no way to say it — which is the same fault as the phrase it
+was diagnosing, met inside the diagnosis.
+
+**Measured**, `at-yosemite`, settled, `KM=0`:
+
+```
+atlas 6/18 · need 8 keys · 6 in use · 0 idle
+REFUSED 82 trees over 2 keys — 82 WAITING on the bake budget, 0 LOCKED OUT
+FILLING — the atlas has ROOM
+```
+
+…and the per-slot distribution beside it, which is the other thing the count
+could not say: `conifer:8` carries 559 trees and `conifer:11` carries 20, so a
+slot is not a unit of anything. `snag:1` (74 trees) and `snag:2` (8) were the
+two still waiting.
+
+**THE HARNESS CANNOT REPRODUCE THE LOCKED CASE AND SAYS SO.** A driven 24 km
+leg at Nagato through the curl relay streamed **nothing** — 0 impostors drawn,
+2 slots baked and both idle — because a 2.8 km tree ring does not fill over a
+relay at three frames a second. A FIXTURE has already arrived, which is exactly
+what this needs, and cannot drive across districts, so it measures one place's
+demand well and the ratchet not at all. The tool prints `INCONCLUSIVE` rather
+than a zero: **a census of a world that did not stream is a census of nothing.**
+
+**THE FIX IS NOT MADE HERE, and the arithmetic for it is.** A slot is
+`IMP_ATLAS.az × tile` by `(el.length + 1) × tile` = 320 × 160 px, and the atlas
+is 1024², so 3 × 6 = 18 slots use 960 × 960 of it. Two ways out and they are not
+alike:
+
+- **`tile` 40 → 32** gives a 256 × 128 slot and **4 × 8 = 32 slots in exactly
+  1024²** — no extra memory, no extra bake time, and past the 24 a district can
+  want. The atlas's own comment already argues it is affordable: *"a 20 m tree
+  at the tier's near edge (260 m) subtends about 25 rows, so a 40 px tile is
+  already over its drawn size"* — 32 is still over 25. It costs a fifth of the
+  card's resolution on every impostor in the game, which is a LOOK change and
+  the seat's call.
+- **a 2048² atlas** gives 6 × 12 = 72 slots at the same tile size and costs
+  **4× the texture memory** (4 MB → 16 MB) for a tier whose whole argument is
+  that it is cheap.
+
+Reclaiming a slot is the third option and is the risky one: an instance carries
+its SLOT INDEX, not its key, so re-baking a slot silently re-dresses every tree
+already standing on it.
 
 ### The atlas: the far tree is the near tree, photographed — and it is see-through
 
@@ -13731,11 +13820,8 @@ everything", not as a regression.
   `impostor 23.8 ms/call (66)`, `ezAdmit 10.0 (61)`, `manifest 9.5 (75)`. The
   impostor membership pass is now the largest tree phase, above the admission
   this file cut twice. Its own cut list is already written down two sections up.
-- **`5108 waiting on a bake` with `atlas 18/18 slots`.** Five thousand impostors
-  that cannot draw because no atlas slot exists for their variant, on an atlas
-  reported as fully baked. Either the slot allocator is full at eighteen and
-  the palette wants more, or `impProf.waiting` is counting something else —
-  worth one probe before it is read either way.
+- **`5108 waiting on a bake` with `atlas 18/18 slots`** — answered below, and
+  the answer is that the counter was two different facts wearing one phrase.
 - **`drawHud` 8.9%, of which `tiledbg 3.70/262`.** The tile-debug overlay is
   more than half the HUD here. It is a debug surface and its cost is the
   player's choice; it is named so nobody attributes it to the HUD itself.
