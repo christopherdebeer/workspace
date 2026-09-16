@@ -1106,7 +1106,19 @@ export function ezMaterial(
           float ezOuter = smoothstep(0.06, 0.42, length(vEzLocal.xz));
           float ezUpper = smoothstep(0.30, 1.0, vEzLocal.y);
           float ezRad = mix(0.74, 1.0, max(ezOuter, ezUpper));
-          diffuseColor.rgb *= mix(ezRad, mix(0.62, 1.06, vEzSky), uEzSky);
+          //
+          // THE LIT FLANK CARRIES THE LIFT, NOT THE WHOLE CROWN. Reported from
+          // the seat the moment the crown closed: every tree reads as a black
+          // silhouette. Measured on the control sheet, the foliage's mean luma
+          // at 200 m went 59 to 40 of 255 for a conifer — a full palette step —
+          // and the cause is the merge doing its job: the bright sky between
+          // the whorls became foliage. A blanket lift would undo that and give
+          // back the haze-coloured mush; opening the TOP of the window instead
+          // leaves the shaded flank where it is and lets the sunlit one climb,
+          // which is the light the crown was said to be missing in the first
+          // place. 1.30 on a crown around 0.42 green is 0.55, under the 0.62
+          // bloom cut with room to spare.
+          diffuseColor.rgb *= mix(ezRad, mix(0.62, 1.30, vEzSky), uEzSky);
           // ── AND THE WHOLE CROWN LIGHTS AS ONE MASS ──
           // A pad heap presents facets pointing every way, so Lambert answers a
           // different number on each and the crown gets a random tone per facet

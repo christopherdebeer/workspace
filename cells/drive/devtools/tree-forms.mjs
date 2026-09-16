@@ -104,12 +104,12 @@ console.log(`   design ${meta.design.rows} rows at ${meta.design.fov}° · live 
   + ` · magnified ${meta.mag}x`);
 console.log(`  ${'variant'.padEnd(22)}${'form'.padEnd(10)}${'m'.padStart(5)}${'px'.padStart(4)}`
   + `${'tris'.padStart(6)}${'cov'.padStart(7)}${'parts'.padStart(6)}${'big'.padStart(6)}`
-  + `${'sky'.padStart(6)}${'form'.padStart(6)}${'mass'.padStart(6)}${'stip'.padStart(6)}`);
+  + `${'lum'.padStart(5)}${'sky'.padStart(6)}${'form'.padStart(6)}${'mass'.padStart(6)}${'stip'.padStart(6)}`);
 for (const r of rows) {
   console.log(`  ${r.label.padEnd(22)}${r.form.padEnd(10)}${r.heightM.toFixed(0).padStart(5)}`
     + `${String(r.px).padStart(4)}${String(r.tris).padStart(6)}`
     + `${(r.cov * 100).toFixed(1).padStart(6)}%${String(r.parts).padStart(6)}`
-    + `${(r.big * 100).toFixed(0).padStart(5)}%${r.steps.toFixed(1).padStart(6)}`
+    + `${(r.big * 100).toFixed(0).padStart(5)}%${String(r.lum).padStart(5)}${r.steps.toFixed(1).padStart(6)}`
     + `${r.spread.toFixed(1).padStart(6)}${(r.mass * 100).toFixed(0).padStart(5)}%${(r.stipple * 100).toFixed(0).padStart(5)}%`);
 }
 // ── THE SUMMARY IS BY FORM, because that is the unit a guild asks for ──
@@ -123,11 +123,11 @@ for (const r of rows) {
 const mean = (a, f) => a.reduce((x, y) => x + f(y), 0) / a.length;
 console.log(`\n  by form, at ${DIST} m`);
 console.log(`    ${'form'.padEnd(11)}${'n'.padStart(3)}${'px'.padStart(5)}${'parts'.padStart(7)}`
-  + `${'big'.padStart(7)}${'sky'.padStart(7)}${'form'.padStart(7)}${'mass'.padStart(7)}${'stipple'.padStart(9)}`);
+  + `${'big'.padStart(7)}${'lum'.padStart(6)}${'sky'.padStart(7)}${'form'.padStart(7)}${'mass'.padStart(7)}${'stipple'.padStart(9)}`);
 for (const [form, a] of [...byForm].sort()) {
   console.log(`    ${form.padEnd(11)}${String(a.length).padStart(3)}`
     + `${mean(a, (r) => r.px).toFixed(0).padStart(5)}${mean(a, (r) => r.parts).toFixed(1).padStart(7)}`
-    + `${(mean(a, (r) => r.big) * 100).toFixed(0).padStart(6)}%${mean(a, (r) => r.steps).toFixed(1).padStart(7)}`
+    + `${(mean(a, (r) => r.big) * 100).toFixed(0).padStart(6)}%${mean(a, (r) => r.lum).toFixed(0).padStart(6)}${mean(a, (r) => r.steps).toFixed(1).padStart(7)}`
     + `${mean(a, (r) => r.spread).toFixed(1).padStart(7)}${(mean(a, (r) => r.mass) * 100).toFixed(0).padStart(6)}%`
     + `${(mean(a, (r) => r.stipple) * 100).toFixed(0).padStart(8)}%`);
 }

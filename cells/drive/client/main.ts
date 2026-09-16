@@ -34465,12 +34465,22 @@ function impostorReachTally(): { asked: number; granted: number; bound: string; 
         if (sz > massBig) massBig = sz;
       }
       const mass = nLeaf ? massBig / nLeaf : 0;
+      // ── AND HOW DARK THE FOLIAGE ACTUALLY IS ──
+      // `sky` is a CONTRAST and says nothing about which side of the palette a
+      // crown sits on; a tree reading as a black silhouette and a tree reading
+      // as a lit canopy against the same sky differ by this number and by
+      // nothing else the sheet reports. 0..255 on the composite's own output,
+      // with the background's own luma beside it.
+      // NOTE THE SHEET HAS NO ATMOSPHERE. The game hazes a tree at 200 m toward
+      // the sky and this does not, so read `lum` as the floor of what a distant
+      // crown draws, not as what the frame shows.
+      const lum = cl.length ? Math.round(255 * (cl.reduce((a2, b2) => a2 + b2, 0) / cl.length)) : 0;
       const row = {
         fam, i, label: vs[i].label, form: vs[i].form, crown: vs[i].crown, tris: vs[i].tris,
         px: PX, heightM: +(2 * hy * mPerUnit).toFixed(1),
         cov: +(cov / N).toFixed(3),
         parts, big: +(cov ? big / cov : 0).toFixed(3),
-        steps: +steps.toFixed(2), spread: +spread.toFixed(2), mass: +mass.toFixed(3),
+        steps: +steps.toFixed(2), spread: +spread.toFixed(2), mass: +mass.toFixed(3), lum,
         leaf: cl.length, tones: toneSet.size,
         stipple: +(cov ? lone / cov : 0).toFixed(3),
       };
