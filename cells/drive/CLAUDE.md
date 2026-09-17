@@ -14665,3 +14665,55 @@ A slice now adds its own span to a CARRY, and the next `vegMark` spends it on
 the phase that just ended — marks name a phase retrospectively, so mid-slice
 there is nothing to credit it to. Every measurement of a tree phase taken before
 this is wrong, and wrong in the same direction: far too small.
+
+## With the clock fixed, the sweep was three quarters one phase
+
+The corrected phase attribution landed and inverted the previous reading
+completely:
+
+```
+tree phases ms/call (max): ezGather 44.3 (322) · impGather 897.8 (7459)
+                           · ezAdmit 8.2 (14) · place 61.9 (456) · impostor 64.3 (223)
+```
+
+**`impGather` is 898 ms a call, 7.5 seconds at worst.** The sweep before this
+fix reported it at 1.8 ms, and on that number this file concluded — in writing —
+that opening up the far gather "did not meaningfully lengthen the sweep" and
+that `ezAdmit` was where the time went. `ezAdmit` is 8.2 ms. It was the opposite,
+and it was the opposite *because of the bug the same reading then exposed*: a
+phase spanning ninety slices was credited its last slice alone, and `ezAdmit` is
+one unyielding block while `impGather` spans the whole sweep.
+
+The lesson is not about trees. **An instrument that under-reports by a factor of
+five hundred does not look broken; it looks like an answer**, and three separate
+conclusions were drawn from it here before the arithmetic was made to close.
+
+### The floor bounds the gather, not just the draw
+
+The far walk visits 5,512 annulus cells and allocates a tuple for every site in
+them — **485,438 on the device** — to draw at most 32,000. The tallest family is
+conifer at 7.2 m per scale unit, so at a floor of 2.88 px nothing beyond about
+2.3 km can clear it, against a reach of 8.58 km. Ninety per cent of that gather
+was allocation for trees that were refused before anything looked at them twice.
+
+So the floor is applied where the site is read. **Half the floor, not the
+floor** — a kept list that stops exactly at the threshold can never let the
+threshold FALL, because nothing below it is evidence again, and the number
+ratchets up and sticks. Half gives it twice the radius to fall into. And the
+refused are still COUNTED into both the census and `impWant`, the second
+mattering as much as the first: a demand total that shrank with the filter would
+tell the allocator the world had emptied and drop the very floor doing the
+filtering.
+
+### An accumulator inside a loop that now runs twice
+
+`drawn 32000/32000 offered (970876 kept of 485438 seen past the draw ring)` —
+a kept count larger than the population it was drawn from, and exactly 2×. The
+family loop runs twice now (bands, then the floor) and `impFar +=
+candFar[fam].length` did not notice. Everything else in that loop is an
+assignment and survives being written twice; an accumulator does not.
+
+Worth stating as a rule: **when a loop gains a pass, every `+=` inside it is a
+bug until checked.** The dump caught this one only because the arithmetic was
+impossible on its face — a smaller total would have read as a plausible number
+and stayed.

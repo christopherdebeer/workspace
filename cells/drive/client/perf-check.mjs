@@ -151,6 +151,12 @@ function context(code,range,ez,triCap) {
     // this file has met the trap it documents: the refresh reads free variables
     // and only running the check finds a new one.
     IMP_PX_BINS:1024,IMP_PX_MAX:32,IMP_PX_PER_BIN:1024/32,IMP_HANDOVER_M:200,
+    // The gather now applies half of LAST sweep's floor where the site is read,
+    // so the threshold is module state that persists between sweeps and the
+    // sandbox has to carry it too — the fourth time this file has met the trap
+    // it documents. Left at 0 so the first sweep filters nothing, exactly as
+    // production's first sweep does.
+    impPxFloorLast:0,
     impHisto:new Int32Array(1024),
     // HALF AGAIN THE DRAW RANGE, for the manifest's own reason one line down:
     // the REACH dial's far gather has to RUN here, or the claim that a tier

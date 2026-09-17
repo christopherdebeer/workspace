@@ -12210,6 +12210,31 @@ const IMPOSTOR_SEED_PER_REFRESH = EZ_FAMILIES.length;
  * instead of a few thousand, and it is tied to the thing that makes the gap.
  */
 const IMP_HANDOVER_M = 200;
+/**
+ * ── AND THE FLOOR BOUNDS THE GATHER, NOT ONLY THE DRAW ──
+ *
+ * With the phase clock fixed, `impGather` read **897.8 ms a call, 7,459 ms at
+ * worst** — three quarters of a 4.8-second sweep, and the reason a tree waits
+ * that long to change tier. It walks 5,512 annulus cells and allocates a tuple
+ * for every site in them: 485,438 of them on the device, to draw at most
+ * 32,000.
+ *
+ * Almost all of that work is refused before it is looked at twice. The tallest
+ * family is conifer at 7.2 m per scale unit, so at a floor of 2.88 px nothing
+ * beyond about 2.3 km can clear it — against a reach of 8.58 km, which is
+ * ninety per cent of the annulus gathered to be thrown away.
+ *
+ * So the gather applies the floor where the site is read. HALF the floor, not
+ * the floor itself: a kept list that stops exactly at the threshold can never
+ * let the threshold FALL, because nothing below it is ever evidence again, and
+ * the number would ratchet up and stick. Half gives it twice the radius to fall
+ * into, which converges downward in a sweep or two the same way `ezEdgeLast`
+ * and the handover band do.
+ *
+ * The refused are still COUNTED — the census is the whole reason this tier can
+ * be reasoned about — they are simply not kept. A counter is not an allocation.
+ */
+let impPxFloorLast = 0;
 const IMP_PX_BINS = 1024;
 /** Above this a tree is near enough that the geometry tier owns it anyway, so
  *  the top bin is a catch-all rather than a resolution the histogram spends on. */
@@ -14934,6 +14959,8 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // Counted in the GATHER and folded into the census after the reset below,
   // because the reset runs after this walk and would wipe a direct write.
   let impFarThin = 0, impFarThinBig = 0;
+  // Sites the floor turned away at the gather: never allocated, always counted.
+  let impFarSkip = 0, impFarSkipBig = 0;
   if (EZ_ON) {
     for (const [gx, gz] of ring) {
       yield;
@@ -15026,6 +15053,20 @@ function* vegRefreshSteps(): Generator<void, void, void> {
               impFarThin++;
               const tk = IMP_PERCEPTIBLE_K * EZ_M_PER_SCALE[v.k] * v.s * treeSizeScale;
               if (tk * tk > d2) impFarThinBig++;
+              continue;
+            }
+            // ── THE FLOOR, WHERE THE SITE IS READ ──
+            // A tree too small to have cleared last sweep's threshold with room
+            // to spare cannot be drawn this sweep either. Counted, not kept.
+            const fTall = EZ_M_PER_SCALE[v.k] * v.s * treeSizeScale;
+            if (impPxFloorLast > 0 && d2 > impBand2[v.k]
+              && IMP_PERCEPTIBLE_K * fTall < 0.5 * impPxFloorLast * Math.sqrt(d2)) {
+              impFarSkip++;
+              const sk = IMP_PERCEPTIBLE_K * fTall;
+              if (sk * sk > d2) impFarSkipBig++;
+              // Demand stays honest, or the allocator would think the world had
+              // emptied and drop the floor that is doing the filtering.
+              impWant++;
               continue;
             }
             candFar[v.k].push([d2, v]);
@@ -15295,6 +15336,10 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   };
   // The far gather's own thinning, decided where the site was read.
   if (impFarThin) { impProf.why['none:density'] = impFarThin; impProf.whyBig['none:density'] = impFarThinBig; }
+  if (impFarSkip) {
+    impProf.why['none:imp-cap'] = (impProf.why['none:imp-cap'] ?? 0) + impFarSkip;
+    impProf.whyBig['none:imp-cap'] = (impProf.whyBig['none:imp-cap'] ?? 0) + impFarSkipBig;
+  }
   if (impostors && impostorDraw) {
     // The dissolve's own span, handed to the shader once. It starts where the
     // skeletons' does — two thirds of the way to the draw edge — and ends at
@@ -15351,6 +15396,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       impPxFloor = Math.max(0, bin) / IMP_PX_PER_BIN;
     }
     impProf.pxFloor = impPxFloor;
+    impPxFloorLast = impPxFloor;
     // ── AND THE RESERVE IS TAKEN FIRST, OR IT IS NOT A RESERVE ──
     //
     // Holding cards back for the handover bands and then walking the families
@@ -15596,7 +15642,14 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         impN++; famN[fam]++;
       }
       }
-      impFar += candFar[fam].length;
+      // ── ONE PASS ONLY: THIS IS A TALLY, NOT A DECISION ──
+      // The family loop runs twice now (bands, then the floor) and this line
+      // did not notice, so the dump read `970876 kept of 485438 seen` — a kept
+      // count larger than the population it was drawn from, which is exactly
+      // the kind of arithmetic that cannot be true and is therefore worth
+      // printing. Everything else in this loop is an assignment and survives
+      // being written twice; an accumulator does not.
+      if (bandPass) impFar += candFar[fam].length;
       // PER FAMILY, AGAINST ITS OWN SHARE. A pool reported only as a total
       // cannot say that four families of five drew nothing, which is exactly
       // the fault above — and this file's own rule is that a budgeted quantity
