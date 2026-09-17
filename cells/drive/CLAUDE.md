@@ -15359,3 +15359,75 @@ of the budget on distance is the same move, and it is not made here.
 
 `DIST=` is the control on `devtools/imp-sheet.mjs`; one process a distance (the
 harness fuse is twenty minutes and the tool takes no list).
+
+
+### …and the device said the mismatch is OUT OF RANGE, which is the more useful answer
+
+The section above measured where a card and its tree diverge and then said the
+open question was whether it bites. A dump from the seat (Nagato, 288 s, chase,
+POPULATION 8X, DRAW RANGE 1400 m, build `d3bdf4dd81e9`) answers it, and the
+answer is no:
+
+```
+trees ez … edge b163/c333/a524/p166/s512
+trees impostor … card reach b2709m/c3160m/a1224m/p2257m/s1093m
+1px at 307m per m of height
+```
+
+A card is drawn from the geometry's own edge outward, so the LARGEST a card is
+ever drawn is its size at that edge:
+
+| family | edge | card px there | at its far reach |
+|---|---|---|---|
+| broadleaf | 163 m | **16.0** | 1.0 |
+| palm | 166 m | **16.7** | 1.2 |
+| conifer | 333 m | 9.7 | 1.0 |
+| acacia | 524 m | 4.4 | 1.9 |
+| snag | 512 m | 3.6 | 1.7 |
+
+**No card on that device is drawn above seventeen art pixels**, and the
+divergence starts above thirty. The whole measured band of the section above is
+unreachable at this rack. **A measurement of where a rule WOULD fail is not a
+finding until something shows the rule is asked there** — and the row that
+settles it is `edge`, which costs a double tap.
+
+**AND THE SHEET AT THE REAL DISTANCE SAYS THE HANDOVER IS SOUND.** Run at
+DIST=163 — the distance a broadleaf card is actually swapped at — on a baked
+azimuth and at the worst case between two:
+
+| form | IoU az 0 | IoU az 22.5 | cov | w | **dlum** |
+|---|---|---|---|---|---|
+| round (12) | 0.920 | 0.885 | 1.08 | 1.01 | **−9 / −13** |
+| umbrella (5) | 0.925 | 0.876 | 1.06 | 1.00 | −6 / −9 |
+| columnar (2) | 0.924 | 0.917 | 1.06 | 1.00 | −1 / −6 |
+| palm (2) | 0.925 | 0.833 | 1.03 | 1.00 | +13 / +5 |
+| *conic (12)* | *0.662* | *0.615* | *1.50* | *1.10* | *−7 / −15* |
+
+**READ THE CONIC ROW AS OUT OF RANGE.** Conifer's own edge is 333 m, so no
+conifer card is ever drawn at 163 m; its 0.66 is what conifer WOULD look like if
+the budget collapsed its edge to a broadleaf's, and it is the one row that says
+what the near band costs. The forms that are actually swapped there —
+broadleaf and palm — read **0.92**.
+
+**THE EIGHT-AZIMUTH CHOICE COSTS 0.03 TO 0.09 OF IoU**, which is the first
+measurement of that trade and is small: the mixing of the two nearest tiles is
+doing its job.
+
+**WHAT IS LEFT AT THE SWAP IS THE LIGHT, NOT THE SHAPE.** `dlum` is −9 to −13 on
+the commonest form and −15 on conic at the worst azimuth: the card is up to
+**fifteen of 255 darker than the skeleton it replaces, which is eight tenths of
+a palette step**, through a quantiser with fourteen levels and an ordered
+dither. A tree brightening as it converts is exactly the kind of one-step change
+this palette turns into a visible flip, and it is the only column at 163 m that
+is not already within a per cent. The palm's **+13** is the same fault with the
+sign reversed. Not fixed here, and it is the cheap one: it is a calibration
+between the bake's light and the world's, not a change to the atlas or the merge.
+
+**AND THE THING THAT IS ACTUALLY CLOSE IS THE GEOMETRY.** A broadleaf is a flat
+card until 163 m of a 1400 m draw range — twelve per cent of the ring — because
+the triangle budget is spent: `cap 28%`, `tris 2.20M` of 2.4M, with conifer
+alone taking 1.14M at 1134 triangles a tree. That is not a card fault and it
+cannot be bought off, because the same session reads **15.1 fps, 83.6% of frames
+slow, 8.5M triangles and 352-501 draw calls**, with trees 2.2M of the total.
+Whatever makes a tree solid nearer than 163 m has to come out of that, not out
+of the impostor.
