@@ -12697,6 +12697,46 @@ function pushSite(
   if (stats) stats.acceptedSites++;
   return true;
 }
+/**
+ * ── THE WORLD'S VETO, ASKED AGAIN WHERE IT CAN FINALLY BE ANSWERED ──
+ *
+ * `pushSite` refuses tarmac and water at SEED time, which is the right layer
+ * and cannot be the only one. A veg cell is seeded ONCE, on first visit, and
+ * `seedCell` waits for the cover raster and the ecoregion — not for OSM. The
+ * roads through that cell arrive afterwards, always, and so do the rivers OSM
+ * carries as ways. So the manifest's own cull is made against evidence that
+ * has not turned up yet, and a cell seeded before its road kept a hedge down
+ * the middle of it.
+ *
+ * The geometry tier has re-asked the road half at PLACE time for years, for
+ * exactly that reason — and it asks it only of trees `ezAdmit` took, because
+ * that is the cheap set. THE CARD TIER DRAWS THE SET ADMISSION REFUSED, so the
+ * two populations do not overlap at all: every tree the geometry tier tests is
+ * a tree the card tier never sees, and every card was drawn without the
+ * question being put. Reported from the seat as impostors standing on the road
+ * ahead, met while driving, before the geometry tier had caught up — and it
+ * would never catch up, because crossing into the admitted set is precisely
+ * where the card stops being drawn and the skeleton is refused.
+ *
+ * It is asked per sweep rather than latched, because the answer CHANGES: a
+ * tree eight kilometres out stands on ground no road data covers, and the only
+ * honest answer there is "not yet". A flag would freeze that no into a yes.
+ * Both halves are cheap where it matters — the road is one `roadGrid` lookup,
+ * and `hydroWet` returns on a missing sample before it touches the mesh — and
+ * both are asked only of a tree a tier is about to DRAW, never of a candidate.
+ *
+ * ROCK IS EXEMPT, as it is at place time: a boulder that has come down onto
+ * the road is a hazard worth meeting, and one sitting in a river is a ford's
+ * own furniture. The tier this serves draws neither.
+ */
+function vegSurfaceVeto(x: number, z: number): 'road' | 'water' | null {
+  // The margin is the geometry tier's own: it keeps scrub off the shoulder the
+  // wheels run along, which no `surfaceAt` answer has, and it is the cheaper
+  // of the two questions so it is asked first.
+  const on = onCarriageway(x, z, 1.2);
+  if (on.road || on.track) return 'road';
+  return hydroWet(x, z) ? 'water' : null;
+}
 function plantClump(
   cx: number, cz: number, rad: number, count: number, dominant: VegKind, r: () => number,
   role: 'interior' | 'fringe' | 'polygon' = 'interior', stats?: VegSeedStats,
@@ -15311,10 +15351,19 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         // the one kind the truck already knows how to hit. A stable per-site
         // hash keeps the same quarter of them every frame instead of a verge
         // that flickers.
-        const on = onCarriageway(v.x, v.z, 1.2);
-        if (on.road || on.track) {
+        //
+        // AND THE WATER HALF WAS MISSING ENTIRELY. `pushSite` refuses both at
+        // seed time and only the road was ever re-asked here, so a river OSM
+        // carries as a way — which lands long after the cell was seeded, like
+        // every road — left a wood standing in it. One rule for both now, in
+        // `vegSurfaceVeto`, which the card tier asks as well.
+        const veto = vegSurfaceVeto(v.x, v.z);
+        if (veto) {
           if (v.k !== 'rock') continue;
-          if ((((v.x * 73856093) ^ (v.z * 19349663)) >>> 0) % 4 !== 0) continue;
+          // A boulder in a river is a ford's own furniture and stays whole;
+          // only the road thins them.
+          if (veto === 'road'
+            && (((v.x * 73856093) ^ (v.z * 19349663)) >>> 0) % 4 !== 0) continue;
         }
         if (EZ_ON && isEzKind(v.k)) {
           // A skeleton instead of the archetype and its trunk, stood at the
@@ -15644,6 +15693,27 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         // longer the population the tier was offered. `farSeen` is that
         // number now, and the readout prints the pair rather than one of them.
         impOffered++;
+        // ── AND NOW THE WORLD'S OWN VETO, WHICH THIS TIER HAD NEVER ASKED ──
+        //
+        // The geometry tier re-tests the tarmac at place time and asks it only
+        // of trees `ezAdmit` took; this tier draws the set admission REFUSED.
+        // The two populations are disjoint by construction, so every card in
+        // the game was stood up without the question being put — reported from
+        // the seat as impostors on the road ahead, met while driving, "before
+        // convert to 3d has caught up". It never would: crossing into the
+        // admitted set is exactly where the card stops being drawn and the
+        // skeleton is then refused for standing on tarmac.
+        //
+        // ASKED HERE, AFTER THE BUDGET AND BEFORE THE FORM, so it is put only
+        // of a tree that would actually be drawn — at most `IMPOSTOR_CAP` of
+        // them a sweep, against the half-million the gather reads — and so a
+        // vetoed tree never spends one of the sweep's form-budget slots.
+        //
+        // `veto:` and not `none:`, because this is not a tree losing its
+        // representation: it is a tree the world says is not there. The census
+        // fails on a perceptible NONE and must not fail on this.
+        const impVeto = vegSurfaceVeto(v.x, v.z);
+        if (impVeto) { impWhy(`veto:${impVeto}`, d2, tallM); continue; }
         let form = impFormOf.get(v);
         let fallback = false;
         if (form === undefined) {
@@ -47607,6 +47677,12 @@ function telemetryReport(): string {
     L.push(`trees representation · NONE ${nn} · perceptible ${pn}${pn ? ' ← SHOULD BE 0' : ''}`
       + `${nk.length ? ` · ${nk.map(k => `${k.slice(5)} ${why[k]}${(big[k] ?? 0) ? `(${big[k]} big)` : ''}`).join(' ')}` : ''}`
       + ` · had ${why['geometry'] ?? 0} 3d, ${why['impostor:exact'] ?? 0} exact + ${why['impostor:fallback'] ?? 0} fallback cards`
+      // NOT a NONE — a tree the world says is not there. Printed because a
+      // number that should be small and is enormous means the manifest is
+      // seeding through a town, and because a ZERO here on a road means the
+      // veto never fired at all.
+      + `${(why['veto:road'] ?? 0) + (why['veto:water'] ?? 0)
+        ? ` · vetoed ${why['veto:road'] ?? 0} on tarmac, ${why['veto:water'] ?? 0} in water` : ''}`
       + ` · manifest ${unseeded} seed-budget, ${_m.deferred} data-pending (cells)`
       + ` · 1px at ${IMP_PERCEPTIBLE_K.toFixed(0)}m per m of height`);
   }

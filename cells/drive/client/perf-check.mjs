@@ -74,6 +74,12 @@ function functionSource(name) {
 const newRefresh=functionSource('vegRefreshSteps')+'\n'+functionSource('refreshVeg');
 const oldRefresh=fs.readFileSync(new URL('./baseline-refresh.txt',import.meta.url),'utf8');
 const capacity=functionSource('ensureVegCapacity');
+// ── THE VETO IS THE PRODUCTION FUNCTION, NOT A STUB OF IT ──
+// A stub that always answers `null` would let every card through and this
+// file would certify the fault it was written to catch. Extracted like the
+// refresh and run over stubbed `onCarriageway`/`hydroWet`, so what is tested
+// is the rule and what is faked is only the world it asks about.
+const vetoSrc=functionSource('vegSurfaceVeto');
 function context(code,range,ez,triCap) {
   const c={THREE,performance,console,Math,Map,Set,WeakMap,Float32Array,
     nearestStable,squareRings,uploadPrefix,renderer:{},
@@ -209,6 +215,12 @@ function context(code,range,ez,triCap) {
     ezPlaced:[],ezEdgeLast:{},vegMs:0,roadCalls:0,roads:false,vegStaging:new WeakMap(),vegJob:null,
   };
   c.onCarriageway=(x,z)=>{c.roadCalls++;return {road:c.roads&&Math.abs(x%100)<18,track:false};};
+  // THIS FIXTURE HAS NO WATER, and says so rather than implying it: the road
+  // half is the systematic fault (`seedCell` waits for cover and the ecoregion,
+  // never for OSM, so a road is ALWAYS later than the cell it crosses) and the
+  // water half is the residual — the rivers OSM carries as ways. Only the first
+  // can be put under a deterministic plane with no hydro system in it.
+  c.hydroWet=()=>false;
   // Deterministic dense fixture. Include multiple roles, styles, equal distances
   // and roadside sites. The full production refill runs; world samplers are pure.
   seed=185;
@@ -233,7 +245,7 @@ function context(code,range,ez,triCap) {
     c.vegGrid.set(`${gx},${gz}`,cell);
   }
   vm.createContext(c);
-  vm.runInContext(esbuild.transformSync(capacity+'\n'+code,{loader:'ts'}).code,c);
+  vm.runInContext(esbuild.transformSync(capacity+'\n'+vetoSrc+'\n'+code,{loader:'ts'}).code,c);
   return c;
 }
 function snapshot(c) {
@@ -301,8 +313,46 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
     `a refused tree projects ${uni.max.toFixed(3)}px, larger than the smallest one given a card `
     + `(${uni.min.toFixed(3)}px) — the budget is not being spent on apparent size`);
 
+  // ── AND NO CARD STANDS ON THE TARMAC ──
+  //
+  // The geometry tier has re-tested the road at place time for years and asks
+  // it ONLY of the trees `ezAdmit` took; this tier draws the set admission
+  // REFUSED. The two populations are disjoint by construction, so every card
+  // in the game was stood up without the question being put, and no check in
+  // this file could see it: the snapshot does not cover the impostor mesh and
+  // `roadChecksAfter` counts the geometry tier's queries alone.
+  //
+  // Read off the STAGED INSTANCES the production pass wrote, against the same
+  // stub the production rule asked — so a veto that fired and then staged the
+  // card anyway would still fail this.
+  let onRoadCards = 0;
+  for (let i = 0; i < c.impostors.count; i++) {
+    const m = c.impStage.m, o = i * 16;
+    if (c.onCarriageway(m[o + 12], m[o + 14], 1.2).road) onRoadCards++;
+  }
+  // THE COUNT FIRST, so the control reports the fault rather than the guard:
+  // with the card tier's veto removed this reads `77 of 400 impostors stand on
+  // a carriageway` — a fifth of the tier. The guard under it is what stops a fixture with no roads in
+  // it passing this vacuously.
+  assert.equal(onRoadCards, 0,
+    `${onRoadCards} of ${c.impostors.count} impostors stand on a carriageway`);
+  assert.ok((c.impProf.why['veto:road'] ?? 0) > 0,
+    'no card was vetoed for standing on tarmac: this check witnesses nothing');
+  // AND A VETO IS NOT A NONE. The census fails on a perceptible `none:`, and a
+  // tree the world says is not there has not lost its representation — so the
+  // reason is named apart, and this is the assertion that keeps it that way.
+  assert.ok(!Object.keys(c.impProf.why).some(k => k.startsWith('none:veto')),
+    'a surface veto was filed as a NONE: the census will read it as a vanished tree');
+
   seed = 77;
   c.IMPOSTOR_CAP = 8000;
+  // ── AND THE ROADS COME OFF FOR THE CULL LEG ──
+  // The veto is applied AFTER the budget decision, so a vetoed tree costs the
+  // pool a slot it never fills: with a third of this fixture's x-space under
+  // tarmac the pool cannot reach `IMPOSTOR_CAP`, `impPoolFullLast` stays false
+  // and the cull correctly turns itself off — which is the gate working, and
+  // a fixture where a different limit binds first tests nothing it claims to.
+  c.roads = false;
   // ── AND THE FORM BUDGET MUST NOT BE THE THING THAT BINDS ──
   // At the stub's 400 the tier drew 800 of 8,151 offered and the POOL never
   // filled, so every check downstream was measuring the form budget wearing the
@@ -395,4 +445,4 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
 const data=Array.from({length:100000},(_,i)=>({d:random()*1e6,id:i}));
 function time(fn,n=15){const a=[];for(let i=0;i<n+5;i++){const t=performance.now();fn();if(i>=5)a.push(performance.now()-t);}return a.sort((a,b)=>a-b)[Math.floor(n/2)];}
 const bench={n:data.length,k:8,oldMs:time(()=>data.slice().sort((a,b)=>a.d-b.d).slice(0,8)),newMs:time(()=>nearestStable(data.slice(),8,v=>v.d))};
-console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons, card budget spent on apparent size, largest refused <= smallest drawn, handover band unbroken, cell cull changes nothing drawn',reports,selectionBenchmark:bench},null,2));
+console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons, card budget spent on apparent size, largest refused <= smallest drawn, handover band unbroken, cell cull changes nothing drawn, no card on a carriageway',reports,selectionBenchmark:bench},null,2));

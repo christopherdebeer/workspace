@@ -14826,3 +14826,149 @@ being debugged on when the rack's defaults were pasted from a device. A fresh
 load should show the world, not the measurement. `client/switches.ts` already
 had `fallback: '0'`; only the dial's own default index was wrong, which is why
 `?impink=` behaved and the panel did not.
+
+## The manifest DOES cull the tarmac — and the two tiers ask disjoint questions
+
+Asked from the seat: *impostors don't seem to be culled when on roads/water, so
+I encounter them as I drive, before convert to 3d has caught up — shouldn't
+candidates have been culled at the manifest layer?*
+
+**They are.** `pushSite`'s first line is `surfaceAt(x, z) !== 'ground'`, which
+refuses tarmac and water before a site is ever filed. The cull is at the
+manifest layer, it is the right layer, and it cannot be enough — for a reason
+the place loop's own comment has carried for as long as it has existed:
+
+> **A cell is seeded ONCE and the roads through it stream in afterwards.**
+
+`seedCell` waits for the cover raster and the ecoregion; it does not wait for
+OSM, and nothing makes it. So a road is ALWAYS later than the cell it crosses,
+and the manifest's veto is made against evidence that has not turned up. The
+geometry tier has re-asked it at PLACE time for years for exactly that reason.
+
+### The two tiers were asking about disjoint populations
+
+The re-test is asked **only of trees `ezAdmit` took** — the polish pass's own
+optimisation, which cut road queries 18,335 → 1,160 and is right on its own
+terms. And **the card tier draws the set admission REFUSED.** So:
+
+| | tested for tarmac | drawn by |
+|---|---|---|
+| admitted | **yes**, every sweep | the geometry tier |
+| refused by admission | **never** | the card tier |
+
+The two sets do not intersect at all. Every impostor in the game was stood up
+without the question being put, and no instrument could see it: the census's
+exits were all about budgets, `perf-check`'s snapshot does not cover the
+impostor mesh, and `roadChecksAfter` counts the geometry tier's queries alone.
+
+**And the symptom is exactly what was reported, including the "before 3D has
+caught up".** It never would catch up, because crossing into the admitted set
+is precisely where the card stops being drawn (`ezAdmit.has(v)` files the tree
+as `geometry` and the walk moves on) and the skeleton is then refused for
+standing on tarmac. A tree on a road is drawn as a card up to the geometry's
+edge and by nobody inside it — so you drive at a billboard in the carriageway
+and it vanishes when you reach it.
+
+### …and the water half was missing from the re-test entirely
+
+`pushSite` refuses both surfaces; the place loop re-asked **only**
+`onCarriageway`. Water arrives on two different clocks and only one of them is
+early: the ocean mask and the cover-traced lakes come off the COVER raster,
+which `seedCell` already waits for — so most water IS known at seed time. What
+is not is the water OSM carries as WAYS, which lands with the roads, long
+after. A river the cover cannot see (the doctrine records the 37 m raster
+missing a channel entirely) left a wood standing in it, in both tiers, for
+ever.
+
+`vegSurfaceVeto` is one rule for both, asked by both tiers: `onCarriageway` at
+the geometry tier's own 1.2 m shoulder margin first because it is the cheaper
+question, then `hydroWet`. **ROCK IS EXEMPT**, as it already was at place time —
+a boulder that has come down onto the road is a hazard worth meeting and one
+sitting in a river is a ford's own furniture. The card tier draws neither.
+
+### It is asked per sweep, not latched, and that is deliberate
+
+The obvious economy is a flag on the site: ask once, remember. It is wrong,
+because **the answer changes**. A tree eight kilometres out stands on ground no
+road data covers and the only honest answer there is *not yet*; a flag would
+freeze that no into a permanent yes. What makes the per-sweep cost bearable is
+WHERE it is asked — after the budget decision and before the form — so it is
+put only of a tree that would actually be drawn, at most `IMPOSTOR_CAP` a
+sweep, against the half-million the gather reads.
+
+- **`veto:` and not `none:`.** The census fails on a perceptible `none:`, and a
+  tree the world says is not there has not lost its representation. Named apart,
+  and `perf-check` asserts no veto is ever filed under a `none:` key.
+- **A vetoed tree costs the pool a slot it never fills.** The histogram that
+  sets the pixel floor is built in the GATHER, before the veto can be known, so
+  the budget is rationed against a demand that includes trees about to be
+  refused and the pool comes up short of `IMPOSTOR_CAP` by roughly the vetoed
+  fraction. Real, small where roads are a small share of ground, and NOT worth
+  fixing by asking the veto in the gather — that is half a million queries a
+  sweep to save a few hundred cards.
+- **Which turns the cell cull off, correctly.** `impPoolFullLast` is the cull's
+  gate, so a world with a lot of tarmac under the tier stops culling — the gate
+  doing what its own note says it does, *a cull that costs the tier its capacity
+  turns itself off the sweep after*. It also means `perf-check`'s cull leg must
+  run with its roads OFF, or a different limit binds first and the leg tests
+  nothing it claims to.
+
+### Measured
+
+`perf-check`'s uniform leg runs with its road stub on (a ~36 m band every
+100 m in x). Reading the STAGED INSTANCES the production pass wrote, against
+the same stub the production rule asks:
+
+| | cards on a carriageway |
+|---|---|
+| card tier's veto removed (the control) | **77 of 400 — a fifth of the tier** |
+| shipped | **0 of 400** |
+
+…and live, `imp-census.mjs` on `at-paris-west` (5,663 ways, the densest road
+fixture in the set) reads the exit firing and the census still clean:
+
+```
+  geometry        1054   1054        veto:road    5    5
+  impostor:exact   687    135        NONE 0 of which 0 perceptible
+```
+
+**Five, and not five hundred, because the harness is manifest-bound** — 108 of
+6,241 cells seeded at 1.7% of the reach, the limit this file already records —
+so what that run demonstrates is that the exit FIRES and that a veto does not
+read as a vanished tree. The population number has to come off a device.
+
+The road-query count is the cost, and it is stated rather than hidden:
+`roadChecksAfter` went **560 → 1,672** at 700 m / cap 120 and **1,160 → 7,072**
+at 2,800 m / cap 1200 in the sandbox — the card tier's own queries, bounded by
+`IMPOSTOR_CAP` a sweep, plus the geometry tier's new `hydroWet` per admitted
+tree. **Not measured on a device**: the harness cannot price a per-refresh CPU
+cost. The row to read on the next dump is `impostor` under `tree phases`, and
+the row that says the rule fired at all is `vetoed N on tarmac, M in water` on
+`trees representation`.
+
+**A ZERO IN THAT ROW WHILE DRIVING THROUGH A TOWN MEANS THE VETO NEVER FIRED**,
+which is why it is printed at all rather than only when non-zero being the
+interesting case: the counter that hides itself when its number is alarming is
+the fault this file recorded one section ago.
+
+### …and the water half rides a LINEAR SCAN, which is affordable and should not be
+
+`HydroSystem.sampleRestingSurface` walks **every hydro record** testing bounds
+before it samples, and its own comment says what to do about it: *"Active rings
+are small. If this grows, index records by the world tile key already known to
+the caller rather than introducing another grid."* The ring is 25 to 49 tiles,
+so a miss is up to 49 bounds tests — the exact shape of the substrate contact
+sampler that cost a phone 17% of its CPU before it got a cell index.
+
+The arithmetic says ship it anyway, and says why: the geometry tier asks it of
+roughly thirty thousand sites a sweep and the card tier of at most
+`IMPOSTOR_CAP`, so call it seventy thousand at a few hundred nanoseconds — **six
+to twelve milliseconds against a sweep the device already measures at 1,368 ms**,
+under one per cent, spread across some two hundred and eighty slices. What makes
+that a reading rather than a hope is that the refresh is SLICED: the same number
+landing in one synchronous call would be two dropped frames.
+
+**It is written down because the next caller may not have that budget.** The
+index the comment asks for is one `records.get(tileKeyOf(x, z))`, and the day
+something asks this question per frame rather than per sweep is the day it has
+to exist.
