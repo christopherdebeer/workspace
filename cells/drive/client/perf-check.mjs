@@ -131,7 +131,7 @@ function context(code,range,ez,triCap) {
     // only running it can tell you.
     impProf:{drawn:0,offered:0,capped:0,formed:0,far:0,ms:0,byFam:{},capFam:{},
       waiting:0,locked:0,refused:new Map(),bySlot:[],why:{},whyBig:{},sweeps:0,
-      horizon:{broadleaf:0,conifer:0,acacia:0,palm:0,snag:0},pxFloor:0,pxMinDrawn:Infinity,pxMaxRefused:0,hold:0,gapM:Infinity},
+      horizon:{broadleaf:0,conifer:0,acacia:0,palm:0,snag:0},pxFloor:0,pxMinDrawn:Infinity,pxMaxRefused:0,hold:0,gapM:Infinity,farCull:0,farWalk:0},
     impSlotFull:false,
     // ── AND THE INVARIANT'S OWN TWO ──
     // `impThinnable` decides whether a tree's absence can be carried by a
@@ -156,7 +156,7 @@ function context(code,range,ez,triCap) {
     // sandbox has to carry it too — the fourth time this file has met the trap
     // it documents. Left at 0 so the first sweep filters nothing, exactly as
     // production's first sweep does.
-    impPxFloorLast:0,
+    impPxFloorLast:0,impTallestM:0,impPoolFullLast:false,VEG_CELL:220,
     impHisto:new Int32Array(1024),
     // HALF AGAIN THE DRAW RANGE, for the manifest's own reason one line down:
     // the REACH dial's far gather has to RUN here, or the claim that a tier
@@ -303,13 +303,26 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
 
   seed = 77;
   c.IMPOSTOR_CAP = 8000;
+  // ── AND THE FORM BUDGET MUST NOT BE THE THING THAT BINDS ──
+  // At the stub's 400 the tier drew 800 of 8,151 offered and the POOL never
+  // filled, so every check downstream was measuring the form budget wearing the
+  // cap's name. Raised with the pool: the leg exists to put the card cap under
+  // pressure, and a fixture where a different limit binds first tests nothing
+  // it claims to.
+  c.IMPOSTOR_FORM_BUDGET = 8000;
   c.impStage = { m: new Float32Array(8000 * 16), c: new Float32Array(8000 * 3),
     f: new Float32Array(8000), y: new Float32Array(8000) };
   c.impostors = impostorMesh(8000);
   c.vegGrid.clear();
-  for (const [gx, gz] of squareRings(0, 0, Math.ceil(2800 / 220) + 2)) {
+  // REACH FAR ENOUGH THAT THE CULL HAS SOMETHING TO CULL. At the default
+  // 1.5x range the cull radius came out beyond the tier's own reach and the
+  // check witnessed nothing — a fixture whose world ends before the mechanism
+  // starts. Eight kilometres is the device's, with fewer sites per cell so the
+  // check stays a check rather than a benchmark.
+  c.impostorReach = () => 8000; c.impostorReachAsked = () => 8000;
+  for (const [gx, gz] of squareRings(0, 0, Math.ceil(8000 / 220) + 1)) {
     const cell = [];
-    for (let i = 0; i < 80; i++) {
+    for (let i = 0; i < 24; i++) {
       // Nine broadleaf to one acacia: one family sets the floor, the other gets
       // a far skeleton edge and nothing above it.
       const k = random() < 0.9 ? 'broadleaf' : 'acacia';
@@ -337,6 +350,35 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
   // by luck is the count of trees refused INSIDE a band, which the walk names
   // apart for exactly this reason. `hold` proves the reserve is live, or a band
   // of zero width would satisfy the invariant by having nothing to break.
+  // ── THE CULL MUST CHANGE NOTHING THAT IS DRAWN ──
+  //
+  // It is the one optimisation here with no witness of its own: a culled tree is
+  // never recorded as refused, so culling too hard LOWERS `pxMaxRefused` and the
+  // floor check above passes more easily. An optimisation that makes its own
+  // test easier is not tested at all.
+  //
+  // The claim is exact — the cull only retires trees below half the floor, and
+  // nothing below the floor is ever drawn — so the same world gathered without
+  // it must draw the same cards. `impPxFloorLast` at zero disables both the cell
+  // cull and the site filter, which is the control.
+  // WHAT THIS PINS AND WHAT IT DOES NOT. It pins the MECHANISM: it caught the
+  // cull retiring trees the budget could still afford (800 drawn with it, 1,200
+  // without) when the floor was high for the bands' sake rather than distance's.
+  // It does NOT pin the MARGINS — halve either one and this still passes,
+  // because every tree here is about the same height and the floor is steady.
+  // The margins are insurance against a taller tree than any yet seen and
+  // against a floor that needs to fall, and this fixture creates neither.
+  const withCull = { drawn: c.impProf.drawn, floor: c.impProf.pxFloor, culled: c.impProf.farCull };
+  assert.ok(withCull.culled > 0, 'no cell was culled: this check witnesses nothing');
+  c.impPxFloorLast = 0; c.impTallestM = 0;
+  c.refreshVeg();
+  assert.equal(c.impProf.farCull, 0, 'the control still culled: it is not a control');
+  assert.equal(c.impProf.drawn, withCull.drawn,
+    `culling changed what is drawn: ${withCull.drawn} cards with the cull, `
+    + `${c.impProf.drawn} without — the cull is retiring trees the tier would have used`);
+  assert.equal(c.impProf.pxFloor.toFixed(3), withCull.floor.toFixed(3),
+    `culling moved the floor: ${withCull.floor} with, ${c.impProf.pxFloor} without`);
+
   assert.ok(c.impProf.hold > 0, 'no card was reserved for a handover band: this check witnesses nothing');
   assert.equal(c.impProf.why['none:handover'] ?? 0, 0,
     `${c.impProf.why['none:handover']} trees were refused a card INSIDE their family's handover `
@@ -346,4 +388,4 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
 const data=Array.from({length:100000},(_,i)=>({d:random()*1e6,id:i}));
 function time(fn,n=15){const a=[];for(let i=0;i<n+5;i++){const t=performance.now();fn();if(i>=5)a.push(performance.now()-t);}return a.sort((a,b)=>a-b)[Math.floor(n/2)];}
 const bench={n:data.length,k:8,oldMs:time(()=>data.slice().sort((a,b)=>a.d-b.d).slice(0,8)),newMs:time(()=>nearestStable(data.slice(),8,v=>v.d))};
-console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons, card budget spent on apparent size, largest refused <= smallest drawn, handover band unbroken',reports,selectionBenchmark:bench},null,2));
+console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons, card budget spent on apparent size, largest refused <= smallest drawn, handover band unbroken, cell cull changes nothing drawn',reports,selectionBenchmark:bench},null,2));

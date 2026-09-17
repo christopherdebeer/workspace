@@ -14717,3 +14717,58 @@ Worth stating as a rule: **when a loop gains a pass, every `+=` inside it is a
 bug until checked.** The dump caught this one only because the arithmetic was
 impossible on its face — a smaller total would have read as a plausible number
 and stayed.
+
+## The allocation was never the cost — the walk was
+
+Filtering where the site is read cut what the far gather KEEPS by ninety per
+cent — `56454 kept of 507115 seen`, against 485,438 the sweep before — and
+`impGather` went from 898 ms to 792. **Half a million sites are read per sweep**
+across 5,512 annulus cells, and each costs a distance, a kind test and two
+bounds tests before anything can decide it does not matter. Keeping fewer of
+them changes nothing about that.
+
+A cell is 220 m square and its nearest corner bounds every tree in it, so one
+distance per CELL retires ninety-two sites unread — and the seed, the Map lookup
+and the iterator with them. Measured in `perf-check`: **4,035 of 4,896 annulus
+cells retired, 82%**, with identical cards drawn.
+
+### Three things the cull needed before it was safe
+
+**The tallest tree is measured, not assumed.** `VegSite.s` has no declared
+ceiling, so a guessed maximum silently deletes anything above it — the worst bug
+this tier can have. A running high-water mark is zero on the first sweep, culls
+nothing, and is converged by the second.
+
+**A floor above zero does not mean candidates are scarce.** It can be above zero
+because the handover bands took the pool, and then it is a fact about the
+reserve, not about distance. Caught by the control below: **800 cards with the
+cull and 1,200 without**. Both culls now wait on the pool having actually been
+spent — `drawn >= IMPOSTOR_CAP` last sweep — and the gate self-heals, because a
+cull that costs the tier its capacity turns itself off the sweep after.
+
+**Margins multiply, and cost area squared.** A quarter of headroom and half the
+floor read as modest and compound to 2.5× the radius — six times the area, which
+on an 8.58 km reach is a 22% cut where an order of magnitude was wanted. 1.1 and
+0.8, with the reason for each written where it is applied.
+
+### The control, and what it does not pin
+
+The cull is the one optimisation here with no witness of its own: a culled tree
+is never recorded as refused, so **culling too hard LOWERS `pxMaxRefused` and
+makes the floor check pass more easily**. An optimisation that makes its own
+test easier is not tested. So the claim is asserted directly — the same world
+gathered without the cull must draw the same cards — with `impPxFloorLast = 0`
+as the control.
+
+It pins the mechanism and **not the margins**: halve either and it still passes,
+because every tree in the fixture is about the same height and the floor is
+steady. The margins are insurance against a taller tree than any yet seen and
+against a floor that needs to fall, and the fixture creates neither. That is a
+limit of the check, stated rather than papered over.
+
+Two fixture faults were found getting there, both of the same kind — **a limit
+other than the one under test binding first**. `IMPOSTOR_FORM_BUDGET` at 400
+meant the tier drew 800 of 8,151 offered and the pool never filled, so every
+check downstream was measuring the form budget wearing the cap's name. And the
+default reach put the cull radius beyond the tier's own horizon, so the world
+ended before the mechanism started.

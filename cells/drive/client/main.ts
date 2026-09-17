@@ -12046,6 +12046,8 @@ const impProf = {
   pxMaxRefused: 0,
   /** Cards reserved for handover bands, off the top of the pool. */
   hold: 0,
+  /** Annulus cells the floor retired unread, and cells actually walked. */
+  farCull: 0, farWalk: 0,
   /** ── THE BAND, MEASURED FROM THE OTHER END ──
    *  How far beyond its family's skeleton edge the NEAREST refused tree stands.
    *  The reserve is supposed to guarantee this is at least IMP_HANDOVER_M: a
@@ -12235,6 +12237,48 @@ const IMP_HANDOVER_M = 200;
  * be reasoned about — they are simply not kept. A counter is not an allocation.
  */
 let impPxFloorLast = 0;
+/**
+ * ── AND THE CULL HAS TO BE AT THE CELL, NOT THE SITE ──
+ *
+ * Filtering where the site is read cut what the gather KEEPS by ninety per cent
+ * — `56454 kept of 507115 seen`, against 485,438 kept the sweep before — and
+ * `impGather` barely moved: 898 ms to 792. So the allocation was never the
+ * cost. **The walk is.** Half a million sites are read per sweep across 5,512
+ * annulus cells, and each one costs a distance, a kind test and two bounds
+ * tests before anything can decide it does not matter.
+ *
+ * A cell is 220 m square and its nearest corner bounds every tree standing in
+ * it, so ONE distance per cell can retire ninety-two sites unread — and the
+ * seed, the Map lookup and the iterator with them. The radius is the floor's
+ * again: past `K · tallest / floor` no tree clears the threshold, whatever
+ * family it belongs to.
+ *
+ * THE TALLEST IS MEASURED, NOT ASSUMED. `VegSite.s` has no declared ceiling, so
+ * a guessed maximum would silently delete any tree that exceeded it — the worst
+ * bug this tier can have and the one this whole section exists to remove. The
+ * gather keeps a running high-water mark instead: zero on the first sweep,
+ * which culls nothing, converged by the second.
+ */
+let impTallestM = 0;
+/**
+ * ── AND NEITHER CULL IS SAFE UNLESS THE POOL WAS ACTUALLY SPENT ──
+ *
+ * A floor above zero does not mean the tier is short of candidates. It can be
+ * above zero because the HANDOVER BANDS took the pool, and then the floor is
+ * about the reserve rather than about distance — discarding far candidates on
+ * it throws away trees the budget could still have paid for.
+ *
+ * Caught by the control that says the cull must change nothing drawn: **800
+ * cards with it and 1,200 without**, on a fixture whose bands ate the budget.
+ * The cull was not wrong about which trees are small; it was wrong that
+ * smallness was the binding constraint.
+ *
+ * So both culls wait on the tier having genuinely filled its pool. If the last
+ * sweep did not spend the budget, this one gathers everything and finds out
+ * why. On a device at `drawn 32000/32000` that is every sweep, which is where
+ * the saving was wanted.
+ */
+let impPoolFullLast = false;
 const IMP_PX_BINS = 1024;
 /** Above this a tree is near enough that the geometry tier owns it anyway, so
  *  the top bin is a catch-all rather than a resolution the histogram spends on. */
@@ -14961,6 +15005,12 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   let impFarThin = 0, impFarThinBig = 0;
   // Sites the floor turned away at the gather: never allocated, always counted.
   let impFarSkip = 0, impFarSkipBig = 0;
+  // Annulus cells retired whole — no seed, no lookup, no site read — and cells
+  // actually walked. The census covers the cells the gather WALKED, so these are
+  // printed beside it rather than folded into it: the trees in a culled cell
+  // were never measured, only bounded, and a census must not claim what it did
+  // not look at.
+  let impFarCull = 0, impFarWalk = 0;
   if (EZ_ON) {
     for (const [gx, gz] of ring) {
       yield;
@@ -15005,8 +15055,43 @@ function* vegRefreshSteps(): Generator<void, void, void> {
           const full = Math.max(IMPOSTOR_FULL_M, ezEdgeLast[f] || 0);
           return full * full * impDensityMul;
         });
+        // ── THE RADIUS ONE CELL TEST RETIRES NINETY-TWO SITES WITH ──
+        // A quarter of headroom over the tallest tree ever seen, and half the
+        // floor for the same reason the site filter takes half: a bound sitting
+        // exactly on the threshold can never let the threshold fall. Infinite
+        // until both are known, which culls nothing — that is the first sweep.
+        let impCull2 = Infinity;
+        if (impPoolFullLast && impPxFloorLast > 0 && impTallestM > 0) {
+          // ── THE MARGINS ARE MULTIPLIED, AND THEY COST AREA SQUARED ──
+          // A quarter of headroom over the tallest tree and half the floor look
+          // modest and compound to 2.5x the true radius — SIX TIMES the area,
+          // which on the device's 8.58 km reach left a 22% cut where an order of
+          // magnitude was wanted. Tightened with the reasons stated:
+          //   1.1  a taller tree than any yet seen. `impTallestM` is a measured
+          //        high-water mark over a session, so it is already an upper
+          //        bound on everything the gather has met.
+          //   0.8  room for the floor to FALL. A bound sitting exactly on the
+          //        threshold freezes it, since nothing below is evidence again;
+          //        a fifth of headroom lets it drop that much per sweep, which
+          //        at five seconds a sweep converges as fast as driving does.
+          // The control below is what makes this safe to tune: it asserts the
+          // cull changes nothing drawn, so a margin cut too far fails loudly
+          // rather than quietly deleting far trees.
+          let r = (IMP_PERCEPTIBLE_K * impTallestM * 1.1) / (0.8 * impPxFloorLast);
+          // Never inside a handover band: that one is a guarantee, not a budget.
+          for (const f of EZ_FAMILIES) r = Math.max(r, Math.sqrt(impBand2[f]));
+          const rc = Math.min(r, impR);
+          impCull2 = rc * rc;
+        }
         for (const [gx, gz] of squareRings(cx, cz, impCells, reach + 1)) {
           yield;
+          if (impCull2 < Infinity) {
+            // The cell's nearest corner bounds every tree standing in it.
+            const bx = gx * VEG_CELL, bz = gz * VEG_CELL;
+            const ddx = Math.max(bx - rfx, 0, rfx - (bx + VEG_CELL));
+            const ddz = Math.max(bz - rfz, 0, rfz - (bz + VEG_CELL));
+            if (ddx * ddx + ddz * ddz > impCull2) { impFarCull++; continue; }
+          }
           // ── A BUDGET FOR SEEDING MAY NOT DELETE TREES THAT ALREADY EXIST ──
           //
           // This walk used to `break` on `vegSeedLeft <= 0`, copied from the
@@ -15037,6 +15122,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
           if (vegSeedLeft > 0) seedCell(gx, gz);
           const cell = vegGrid.get(`${gx},${gz}`);
           if (!cell) continue;
+          impFarWalk++;
           for (const v of cell) {
             if (!isEzKind(v.k)) continue;
             const dx = v.x - rfx, dz = v.z - rfz;
@@ -15059,7 +15145,8 @@ function* vegRefreshSteps(): Generator<void, void, void> {
             // A tree too small to have cleared last sweep's threshold with room
             // to spare cannot be drawn this sweep either. Counted, not kept.
             const fTall = EZ_M_PER_SCALE[v.k] * v.s * treeSizeScale;
-            if (impPxFloorLast > 0 && d2 > impBand2[v.k]
+            if (fTall > impTallestM) impTallestM = fTall;
+            if (impPoolFullLast && impPxFloorLast > 0 && d2 > impBand2[v.k]
               && IMP_PERCEPTIBLE_K * fTall < 0.5 * impPxFloorLast * Math.sqrt(d2)) {
               impFarSkip++;
               const sk = IMP_PERCEPTIBLE_K * fTall;
@@ -15664,6 +15751,10 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   }
   impProf.drawn = impN; impProf.offered = impOffered; impProf.formed = impFormed;
   impProf.far = impFar; impProf.farSeen = impFarSeen;
+  impProf.farCull = impFarCull; impProf.farWalk = impFarWalk;
+  // The gate on both culls next sweep: a budget that was not spent has no
+  // business discarding candidates.
+  impPoolFullLast = impN >= IMPOSTOR_CAP;
   // ── AND THE SWEEP SAYS IT FINISHED ──
   // The census is cleared at the top of this phase and written as it walks, so
   // a refresh that never reaches this line leaves every counter at zero — and
@@ -35388,7 +35479,8 @@ function tapeKeep(): string {
     // sounds like a horizon and means "do not extend tree existence past the
     // geometry horizon". Printed rather than left to be inferred.
     ring: { drawRange: Math.round(treeRange), ...impostorReachTally(),
-      farRing: Math.max(0, Math.round(impR - treeRange)) },
+      farRing: Math.max(0, Math.round(impR - treeRange)),
+      cellsWalked: impProf.farWalk, cellsCulled: impProf.farCull },
     // The threshold in art pixels, and the furthest card each family placed.
     pxFloor: +impProf.pxFloor.toFixed(3),
     handoverHeld: impProf.hold,
@@ -47429,7 +47521,8 @@ function telemetryReport(): string {
     L.push(`trees impostor ${impostors && impostorDraw ? 'on' : 'off'}`
       + `${impostors ? ` · reach ${_i.granted}m${_i.bound === 'MANIFEST' ? ` of ${_i.asked}m asked (MANIFEST)` : ''}`
         + ` · density ${_i.density >= 1e6 ? 'ALL' : `${_i.density}x`}`
-        + ` · drawn ${impProf.drawn}/${impProf.offered} offered${impProf.farSeen ? ` (${impProf.far} kept of ${impProf.farSeen} seen past the draw ring)` : ''}`
+        + ` · drawn ${impProf.drawn}/${impProf.offered} offered${impProf.farSeen ? ` (${impProf.far} kept of ${impProf.farSeen} seen past the draw ring`
+          + `${impProf.farCull ? `, ${impProf.farCull} of ${impProf.farCull + impProf.farWalk} cells retired unread` : ''})` : ''}`
         + ` · ${(impProf.drawn * 4 / 1000).toFixed(1)}k tris${impProf.capped ? ` · CAPPED at ${IMPOSTOR_CAP}` : ''}`
         // PER FAMILY, AGAINST ITS OWN SHARE OF THE POOL. The total alone read
         // as a tier at capacity when what it actually was is one family at
