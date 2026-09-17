@@ -92,7 +92,7 @@ import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture,
 import { startLab } from './labs';
 import { IMPOSTOR_FORMS, IMPOSTOR_WIDTH, impostorFormIndex, impostorGeometry, impostorMaterial } from './tree-impostor';
 import { IMP_ATLAS, IMP_ATLAS_SLOTS, bakeImpAtlasSlot, clearImpAtlas, makeImpAtlasTarget, viewOrigin, type ImpAtlasSlot } from './tree-atlas';
-import { EZ_FAMILIES, EZ_MERGE_PX, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezDecodeProf, ezHabitatsForSite, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPhenotypeForSite, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
+import { EZ_FAMILIES, EZ_MERGE_PX, EZ_M_PER_SCALE, EZ_NOISE_GLSL, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezDecodeProf, ezHabitatsForSite, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPhenotypeForSite, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
@@ -312,7 +312,32 @@ const CAR = { accel: 16, brake: 26, maxRev: 9, wheelbase: 2.9, steerMax: 0.6 };
 const CAM = { base: 175, tilt: 70, fov: 55 };
 /** The chart HUD may pitch the map from an oblique relief view toward nadir.
  *  Kept out of CAM because this one is live state, not a camera constant. */
-const CHART_TILT_MIN = 45, CHART_TILT_MAX = 89.5;
+/**
+ * ── THE TILT SLIDER RUNS TO THE HORIZON ──
+ *
+ * The slider shipped 89.5° down to 45°, and the seat asked for the floor to
+ * go all the way. At 0° the chart is a horizontal look across the map from
+ * the focus's own ground level, which is a view nothing else in the game
+ * gives — the seat is 7° down and the drone's trailing lens 19° — so it is
+ * worth having, and three things had to be true for it to be safe:
+ *
+ * - THE EYE MUST NOT GO UNDERGROUND. The camera stands `dist · cos(tilt)`
+ *   behind the focus at `dist · sin(tilt)` above the focus's ground, so at
+ *   low tilt it is near ground level a long way from the focus, where the
+ *   ground may be higher. `CHART_EYE_CLEAR` lifts it above the ground under
+ *   the camera itself; above about 20° the lift is a no-op.
+ * - THE STREAMING REACH MUST NOT BLOW UP. `viewRadius` stretches the frame's
+ *   far edge by `1 / cos(90° − tilt)`, which is infinite at 0° and would ask
+ *   the far shell for the whole planet from a 22 m zoom. The stretch is taken
+ *   at no less than `CHART_TILT_REACH_MIN`, which at a 200 m stand-off asks
+ *   about what the chase view already streams.
+ * - The tap unproject is planar and reads the tilt through `cos`, so it is
+ *   still finite at 0°; what it answers there is a point on the focus's own
+ *   plane, which is the honest limit of a planar unproject looking sideways.
+ */
+const CHART_TILT_MIN = 0, CHART_TILT_MAX = 89.5;
+const CHART_TILT_REACH_MIN = 12;
+const CHART_EYE_CLEAR = 2.2;
 let chartTiltDeg = CAM.tilt;
 // 44 put the camera 6.8km up over a 4.8×8.3km view — a regional chart, but
 // only just, and the streaming never followed it out there. 260 reaches ~40km
@@ -11637,6 +11662,15 @@ function ensureVegCapacity(m: THREE.InstancedMesh, need: number): void {
 // White base colours: every plant's hue arrives through instanceColor, and the
 // baked tone rides underneath it (three multiplies the two).
 const leafMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true });
+/**
+ * A SUCCULENT IS NOT LEAVES. `leafMat` cuts its surface into leaf clusters up
+ * close (see `foliageClose` below and `uEzCut` in flora-ez.ts), and a cactus
+ * is one solid green body that must not — so it wears a material of its own,
+ * through exactly the same chain, with the cut left out. Kept as a separate
+ * object rather than a flag on the geometry because the cut is a property of
+ * the MATERIAL's fragment and the chain hooks are per material.
+ */
+const cactusMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true });
 // THE ARCHETYPES AND THE UNDERSTOREY LEAN TOO — palms, acacias, bushes, the
 // sward's shrubs, and the whole archetype set under ?ez=0. They reach the wind
 // by a different route from the skeletons: no `aWood` to separate crown from
@@ -11647,17 +11681,64 @@ const leafMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: tr
 // FIRST IN THE CHAIN, so terrainFx and grainFx find it and call it — see the
 // note on those: one slot, three helpers, and the grass lost its wind for
 // months to a hook assigned straight over the top of another.
-leafMat.onBeforeCompile = (sh) => {
+/**
+ * ── UP CLOSE, A BUSH IS LEAVES TOO ──
+ *
+ * The archetypes and the sward's shrubs are blobs of flat faces, and at the
+ * kerb a bush is a green polyhedron. The same two terms the skeletons take
+ * (`uEzCut`, `uEzGrain` on `ezLookU`, so one dial and one switch drive both):
+ * a leaf-scale cut-out in the plant's OWN frame (`vLeafLocal` is the vertex
+ * before the wind moved it, so the holes ride the sway with the leaf), and a
+ * leaf-scale grain whose gradient bends the normal. GATED ON VIEW DISTANCE
+ * rather than projected size, because an archetype carries no `vEzPx`: whole
+ * inside 16 m, gone by 36, which for a two-metre bush is about the same
+ * eighty-odd art pixels the skeletons' ramp uses. The archetype units are
+ * about a metre, so 9 cells a unit is a ~10 cm leaf.
+ */
+const foliageClose = (sh: THREE.WebGLProgramParametersWithUniforms, cut: boolean): void => {
+  sh.uniforms.uEzCut = ezLookU.uEzCut;
+  sh.uniforms.uEzGrain = ezLookU.uEzGrain;
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', `#include <common>\nvarying vec3 vLeafLocal;`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>\nvLeafLocal = position;`);
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', `#include <common>\nvarying vec3 vLeafLocal; uniform float uEzCut; uniform float uEzGrain;\n${EZ_NOISE_GLSL}`)
+    .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+      {
+        float lfClose = 1.0 - smoothstep(16.0, 36.0, length(vViewPosition));
+        if (lfClose > 0.001) {
+          ${cut ? 'float lfN = ezNoise(vLeafLocal * 9.0); if (lfN < uEzCut * 0.85 * lfClose) discard;' : ''}
+          vec3 lfP = vLeafLocal * 21.0;
+          float lfFoot = fwidth(lfP.x) + fwidth(lfP.y) + fwidth(lfP.z);
+          float lfVis = (1.0 - smoothstep(0.6, 1.6, lfFoot)) * lfClose;
+          float lfG = ezNoise(lfP);
+          diffuseColor.rgb *= mix(1.0, mix(0.80, 1.14, lfG), uEzGrain * lfVis);
+          if (lfVis > 0.02 && uEzGrain > 0.001) {
+            vec3 lfDx = dFdx(-vViewPosition), lfDy = dFdy(-vViewPosition);
+            vec3 lfR1 = cross(lfDy, normal), lfR2 = cross(normal, lfDx);
+            float lfDet = dot(lfDx, lfR1);
+            vec2 lfDh = vec2(dFdx(lfG), dFdy(lfG));
+            vec3 lfGrad = (lfDet < 0.0 ? -1.0 : 1.0) * (lfDh.x * lfR1 + lfDh.y * lfR2);
+            normal = normalize(abs(lfDet) * normal - lfGrad * uEzGrain * lfVis * 0.35);
+          }
+        }
+      }`);
+};
+const foliageWindHook = (cut: boolean) => (sh: THREE.WebGLProgramParametersWithUniforms): void => {
   sh.uniforms.uTime = windU.uTime;
   sh.uniforms.uGust = windU.uGust;
   sh.uniforms.uWindK = windU.uWindK;
   sh.vertexShader = sh.vertexShader
     .replace('#include <common>', `#include <common>\nattribute float aSway;\n${FOLIAGE_WIND_UNIFORMS}`)
     .replace('#include <begin_vertex>', `#include <begin_vertex>\n${foliageWind('aSway', 'aSway')}`);
+  foliageClose(sh, cut);
 };
+leafMat.onBeforeCompile = foliageWindHook(true);
+cactusMat.onBeforeCompile = foliageWindHook(false);
 const woodMat = new THREE.MeshLambertMaterial({ color: 0x4a3826, flatShading: true, vertexColors: true });
 const stoneMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true });
 terrainFx(leafMat);
+terrainFx(cactusMat);
 terrainFx(stoneMat);
 // Stone takes the most, and gets the coarsest cells: lichen and weathering
 // read as patches on a boulder, not as a fine speckle. Leaves are clumps of
@@ -11684,6 +11765,7 @@ terrainFx(stoneMat);
 // middle out past the quantiser. __grain(mul) still scales the whole set live.
 grainFx(stoneMat, 'grain-stone', 1.25, 3.4);
 grainFx(leafMat, 'grain-leaf', 0.95, 1.9);
+grainFx(cactusMat, 'grain-cactus', 0.95, 1.9);
 grainFx(woodMat, 'grain-wood', 0.95, 2.6);
 // ── wind, in the vertex shader ─────────────────────────────────────
 // Never from JavaScript. Animating instance matrices would mean rewriting and
@@ -11745,7 +11827,7 @@ const vegMeshes: Record<VegKind, THREE.InstancedMesh> = {
   acacia: vegMesh(swayWeight(faceTone(acaciaGeo(), 0.18, 0.12), 1.2), leafMat, VEG_CAP.acacia),
   // A saguaro in a gale is a saguaro. Not zero — an arm does flex — but a
   // fifteenth of a palm, which at this scale is a couple of centimetres.
-  cactus: vegMesh(swayWeight(faceTone(cactusGeo(), 0.2, 0.22), 0.1), leafMat, VEG_CAP.cactus),
+  cactus: vegMesh(swayWeight(faceTone(cactusGeo(), 0.2, 0.22), 0.1), cactusMat, VEG_CAP.cactus),
   // The fern takes the SWARD's material, so the understorey leans in the same
   // wind as the grass around it — two layers of one ground cover, not a stiff
   // plastic frond standing in a moving field.
@@ -12120,6 +12202,10 @@ function applyEzLookUrl(): void {
   if (qsHas('ezleaf') && Number.isFinite(lf)) ezLookU.uEzLeaf.value = clamp(lf, 0, 2);
   const bp = Number(qs('ezbump'));
   if (qsHas('ezbump') && Number.isFinite(bp)) ezLookU.uEzBump.value = clamp(bp, 0, 2);
+  const ct = Number(qs('ezcut'));
+  if (qsHas('ezcut') && Number.isFinite(ct)) ezLookU.uEzCut.value = clamp(ct, 0, 0.7);
+  const gr = Number(qs('ezgrain'));
+  if (qsHas('ezgrain') && Number.isFinite(gr)) ezLookU.uEzGrain.value = clamp(gr, 0, 2);
 }
 applyEzLookUrl();
 // THE SKELETONS STAND IN THE SAME WEATHER AS EVERYTHING ELSE. They were the
@@ -13507,6 +13593,35 @@ const SWARD_FALL = 2.4;
 // the fall inside it, which is what puts the density THE SEAT SEES at the
 // truck rather than spread flat over a suburb.
 const SWARD_NEAR = 14;
+/**
+ * ── AND A BOOST AT THE FOCUS, CARRIED BY A LATTICE OF ITS OWN ──
+ *
+ * Asked from the seat: *sward density at the vehicle/focus should be 2-4x'd.*
+ * The law's plateau is `SWARD_SITES` (12/m²) inside `SWARD_NEAR`, and that
+ * number is the 0.28 m lattice's own ceiling with a little air under it, so
+ * asking the law for more at the truck is asking a carrier for more than it
+ * holds — the rings fault, again. The boost is therefore two things at once:
+ * a fourth band at half the near step (0.14 m, 51/m², `SWARD_BANDS`) reaching
+ * `SWARD_NEAR_R`, and a multiplier on the law that fades out over the same
+ * radius, so the target never leaves the envelope and no ring is drawn where
+ * the extra carrier hands back to the near band. `?swardnear=` is the
+ * multiplier (1 is the law as it was, the exact A/B); the seat asked for two
+ * to four and the default is between them until a frame says otherwise.
+ *
+ * WHY A MULTIPLIER AND NOT A STEEPER LAW: raising `SWARD_SITES` and pulling
+ * `SWARD_NEAR` in would thin the whole field past 14 m by the same factor
+ * (the law is one curve), which is not what was asked. A bump that fades to
+ * one leaves everything past its radius exactly as it was.
+ */
+const SWARD_NEAR_X = clamp(qsNum('swardnear', 3), 1, 4);
+const SWARD_NEAR_R = 14;
+/** The boost's own shape, on the CPU for the profile probe: 1 past the radius,
+ *  `SWARD_NEAR_X` inside a third of it, a smoothstep between. */
+function swardBoostAt(d: number): number {
+  const a = SWARD_NEAR_R * 0.35, b = SWARD_NEAR_R;
+  const t = Math.max(0, Math.min(1, (d - a) / (b - a)));
+  return 1 + (SWARD_NEAR_X - 1) * (1 - t * t * (3 - 2 * t));
+}
 /** Rebuild the field once the truck is this far off its centre. The field is
  *  896m wide and the sward reaches 359, so this sits inside an 89m margin (see
  *  SWARD_F): at 25m/s it is a pass every two seconds against the old sward's
@@ -13570,7 +13685,25 @@ const SWARD_BANDS: Array<[number, number, [number, number, number, number]]> = [
   // it is chosen so the nesting unit — where a coarse site becomes a
   // deterministic 1-of-9 child of the finer lattice, so a handover thins one
   // population instead of swapping two — is a drop-in rather than a re-tune.
-  [0.28, 324, [-1, 0, 32, 45]],
+  // …and its inner edge is now a HANDOVER from the focus band below it, not
+  // the origin: inside SWARD_NEAR_R * 0.7 the 0.14 m lattice carries the
+  // whole target alone. The first cut left this band at full weight under
+  // the new one, "drawing under it", and the profile read every radius
+  // inside 10 m delivering TWICE its target — two full carriers is not a
+  // partition, and the cap (the min over bands of what each can hold) had
+  // no way to see the sum. Weights sum to one across every handover or the
+  // envelope is a fiction.
+  [0.28, 324, [SWARD_NEAR_R * 0.7, SWARD_NEAR_R, 32, 45]],
+  // ── THE BOOST'S OWN CARRIER: HALF THE NEAR STEP, TO SWARD_NEAR_R ──
+  // Listed second so `SWARD_BANDS[0]` stays the 0.28 m lattice every reader
+  // of "the near band" means, and the last entry stays the outermost. Its
+  // ceiling — 51/m² — is what lets the law ask for four times the plateau
+  // inside its reach without saturating; at the handover the envelope is the
+  // min over both weighted ceilings, and the boost has faded to under it by
+  // construction (see swardBoostAt: the fade spans the same two radii). Half
+  // the step is a 1-of-4 nesting rather than the 1-of-9 the other rungs are
+  // spaced for.
+  [0.14, 200, [-1, 0, SWARD_NEAR_R * 0.7, SWARD_NEAR_R]],
   [0.84, 292, [32, 45, 104, 120]],
   // Fade-out ENDS INSIDE the field and inside uGReach, and the profile probe
   // asserts it now: the reach was once 460m against a 384m field and a 368m
@@ -13818,6 +13951,7 @@ const swardU = {
    *  only a lamp a few metres away ever reaches it. */
   uSwardKnee: { value: 0.72 },
   uSwardFall: { value: SWARD_FALL }, uSwardNear: { value: SWARD_NEAR },
+  uSwardBoost: { value: SWARD_NEAR_X - 1 }, uSwardBoostR: { value: SWARD_NEAR_R },
   uSwardFull: { value: SWARD_FULL_MAX }, uSwardCapOn: { value: SWARD_CAP_ON ? 1 : 0 },
   /** Lateral tuft size. See SWARD_TUFT. */
   uSwardTuft: { value: SWARD_TUFT },
@@ -14325,6 +14459,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform float uGReach;
         uniform vec3 uSwardEye; uniform vec3 uSwardTint; uniform float uSwardDbg;
         uniform float uSwardFall; uniform float uSwardNear; uniform float uSwardMatch;
+        uniform float uSwardBoost; uniform float uSwardBoostR;
         uniform float uSwardFull; uniform float uSwardCapOn;
         uniform float uSwardTuft;
         uniform float uSwardVary; uniform float uSwardUp;
@@ -14536,6 +14671,9 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // under its own one-tuft-per-cell ceiling, which is what the three
         // rings were. See SWARD_FALL.
         float sG = pow(uSwardNear / max(sD, uSwardNear), uSwardFall);
+        // The focus boost — see SWARD_NEAR_X. The same smoothstep as
+        // swardBoostAt, so the profile probe and the field agree.
+        sG *= 1.0 + uSwardBoost * (1.0 - smoothstep(uSwardBoostR * 0.35, uSwardBoostR, sD));
         float sWant = abs(sF.g) * uDens * sG;
         float sGot = uSwardCapOn > 0.5 ? min(sWant, swardCap(sD)) : sWant;
         // WHAT THE CLAMP TOOK, PAID BACK IN AREA, AND ONLY THE LAST FEW PER
@@ -29182,6 +29320,15 @@ function globeDegPerPx(): number {
  * unproject — or they would disagree about where the ground under a finger is.
  */
 function chartTilt(): number { return chartTiltDeg + (89.9 - chartTiltDeg) * globeOn(); }
+/** How much of the CHART's lens a tilted chart still wears: 1 at and above the
+ *  old 45° floor, 0 at 15° and below, smooth between. `aimFocus` blends the
+ *  tilt-shift band from the chart's row to the seat's on it — see the note
+ *  there. `CHART_TILT_LENS` is the pair of degrees. */
+const CHART_TILT_LENS: [number, number] = [15, 45];
+function chartLensK(): number {
+  const t = clamp((chartTilt() - CHART_TILT_LENS[0]) / (CHART_TILT_LENS[1] - CHART_TILT_LENS[0]), 0, 1);
+  return t * t * (3 - 2 * t);
+}
 function viewRadius(): number {
   if (camMode !== 'top') return 900;
   const dist = chartDist();
@@ -29191,7 +29338,7 @@ function viewRadius(): number {
   // the whole planet. SIGHT_MAX is that cap, and ZOOM_MAX is derived from it —
   // so the clamp is now reached exactly at the ceiling instead of a third of
   // the way to it.
-  return Math.min(SIGHT_MAX, dist * halfV * Math.max(1, 1 / Math.cos(((90 - chartTilt()) * Math.PI) / 180)) * 1.35);
+  return Math.min(SIGHT_MAX, dist * halfV * Math.max(1, 1 / Math.cos(((90 - Math.max(CHART_TILT_REACH_MIN, chartTilt())) * Math.PI) / 180)) * 1.35);
 }
 /**
  * THE SAME REACH, WITHOUT THE CEILING — for the BACKDROP alone.
@@ -29221,7 +29368,7 @@ function backdropRadius(): number {
   const dist = chartDist();
   const halfV = Math.tan(((camera.fov / 2) * Math.PI) / 180);
   return Math.min(EARTH_R * Math.PI,
-    dist * halfV * Math.max(1, 1 / Math.cos(((90 - chartTilt()) * Math.PI) / 180)) * 1.35);
+    dist * halfV * Math.max(1, 1 / Math.cos(((90 - Math.max(CHART_TILT_REACH_MIN, chartTilt())) * Math.PI) / 180)) * 1.35);
 }
 // Two budgets, and they are budgets rather than radii because the cost of the
 // two layers is nothing alike. A terrain tile is a PNG and a mesh; an OSM tile
@@ -37301,7 +37448,24 @@ function aimFocus(): void {
   const preset = TILT_PRESETS[tiltMode] ?? TILT_PRESETS.off;
   // The cab is deliberately exempt; the chart is where the look belongs, and
   // the seat has a band of its own — see TILT_PRESETS.
-  const band = camMode === 'top' ? preset.top : preset.chase;
+  //
+  // ── A CHART TILTED TO THE HORIZON IS A CHASE VIEW ON A TRIPOD ──
+  // The chart row was written for a frame looking down, where the band is a
+  // slab across the ground and the sharp third of it holds the junction. Once
+  // the tilt slider ran below its old 45° floor (CHART_TILT_MIN is 0 now) the
+  // same row met a camera looking ALONG the ground: at 10° and 0° the frames
+  // came back with a sharp stripe at the focal distance and everything nearer
+  // — most of the pane — a wash. So the band is read from the chart row at
+  // 45° and above (nothing the slider could reach before this moves) and
+  // slides to the SEAT's row by 15°, where the geometry is the seat's; the
+  // chase near-scale rides the same blend, or the foreground would still be
+  // washed at 0° by a plane the chart has no truck in front of.
+  const lensK = camMode === 'top' ? chartLensK() : 0;
+  const band: TiltBand = camMode !== 'top' ? preset.chase : {
+    amt: preset.chase.amt + (preset.top.amt - preset.chase.amt) * lensK,
+    sharp: preset.chase.sharp + (preset.top.sharp - preset.chase.sharp) * lensK,
+    blur: preset.chase.blur + (preset.top.blur - preset.chase.blur) * lensK,
+  };
   const amt = tiltOver.amt ?? (camMode === 'cab' ? 0 : band.amt);
   u.uTiltAmt.value = amt;
   // THE PLANE IS PLACED EVEN WHEN THE EFFECT IS OFF, so `__tilt` always reports
@@ -37320,14 +37484,14 @@ function aimFocus(): void {
   // against the wrong one of them is how the first cut went wrong. See
   // TILT_PRESETS.
   const half = Math.max(1, pixSize.y) / 2;
-  const chartScale = camMode === 'top' ? chartBandScale : 1;
+  const chartScale = camMode === 'top' ? 1 + (chartBandScale - 1) * lensK : 1;
   const sharpPx = tiltOver.sharp ?? band.sharp * half * chartScale;
   u.uTiltSharp.value = sharpPx;
   u.uTiltBlur.value = Math.max(tiltOver.blur ?? band.blur * half * chartScale, sharpPx + 1);
   // A vertical focus plane naturally puts the chase camera deep in its near
   // half. Preserve some foreground blur, but do not let it wash through the
   // truck's immediate road surface; the far half keeps scale 1.
-  u.uTiltNearScale.value = camMode === 'chase' ? 0.08 : 1;
+  u.uTiltNearScale.value = camMode === 'chase' ? 0.08 : camMode === 'top' ? 0.08 + 0.92 * lensK : 1;
   tiltHalf = half;
   tiltK = half / Math.max(tanHalf, 1e-3);
   camera.getWorldDirection(FOCUS_FWD);
@@ -38254,7 +38418,7 @@ const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
   const fadeFrom = SWARD_BANDS[SWARD_BANDS.length - 1][2][2];
   let worst = { d: 0, ratio: 2 };
   for (let d = 2; d <= Math.ceil(swardBands[swardBands.length - 1].reach); d += step) {
-    const want = g * dens * Math.pow(SWARD_NEAR / Math.max(d, SWARD_NEAR), SWARD_FALL);
+    const want = g * dens * Math.pow(SWARD_NEAR / Math.max(d, SWARD_NEAR), SWARD_FALL) * swardBoostAt(d);
     const cap = swardCapAt(d);
     const target = SWARD_CAP_ON ? Math.min(want, cap) : want;
     const full = Math.min(target > 1e-6 ? Math.max(Math.sqrt(want / target), 1) : 1,
@@ -39311,6 +39475,9 @@ function tdMatAt(x: number, z: number): object | null {
   const ox = camera.position.x, oz = camera.position.z;
   return {
     mode: tiltMode, cam: camMode, amount: +(u.uTiltAmt.value as number).toFixed(3),
+    // How much of the chart's row the band is read from (1 at 45° of tilt and
+    // above, 0 at 15° and below) — the blend `aimFocus` makes on a tilted chart.
+    lens: +(camMode === 'top' ? chartLensK() : 0).toFixed(3),
     angleDeg: +((tiltTiltRad * 180) / Math.PI).toFixed(2),
     sharpPx: +(u.uTiltSharp.value as number).toFixed(1), blurPx: +(u.uTiltBlur.value as number).toFixed(1),
     nearScale: +(u.uTiltNearScale.value as number).toFixed(2),
@@ -50149,6 +50316,10 @@ function tick(now: number): void {
     camPos.set(tvx + panX - Math.sin(mrot) * back,
       tgtY + dist * Math.sin(tiltRad),
       tvz + panZ + Math.cos(mrot) * back);
+    // THE EYE STAYS ABOVE THE GROUND UNDER IT — see CHART_TILT_MIN. Read
+    // through the same low-passed floor the target uses, so a hill under the
+    // camera lifts it smoothly rather than stepping it.
+    if (tiltRad < 0.5) camPos.y = Math.max(camPos.y, chartGround(camPos.x, camPos.z) + CHART_EYE_CLEAR);
     // PUSH THE NEAR PLANE OUT with the camera. Depth precision is governed by
     // the near/far RATIO, and at 1:30000 a lake drape sitting a few centimetres
     // over the terrain lands in the same depth bucket as the ground — which is

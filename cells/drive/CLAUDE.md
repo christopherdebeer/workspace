@@ -15615,3 +15615,140 @@ checks pass there by construction.
 - The sheet compares the RAW crowns, above the merge band; below the line both
   rungs close onto the same hull, so the swap at the line is the worst case
   and the certification is taken there on purpose.
+
+
+## The chart tilts to the horizon, and a chart on the horizon is a chase view
+
+Asked from the seat: the chart's tilt slider ran from face-on (90°) to 45°,
+and the 45° floor should go *all the way, to 0°*. It does — `CHART_TILT_MIN`
+is 0 and `CHART_TILT_MAX` 89.5 — and three rules had to go in with it, each
+of which the arithmetic of the old floor had never needed:
+
+- **THE EYE STAYS OUT OF THE GROUND.** The top camera stands `dist·cos(tilt)`
+  behind its target and `dist·sin(tilt)` above `chartGround(target)`, so at 0°
+  it stands at the target's own ground height, 122 m away across whatever
+  the ground does in between — inside the first rise of a valley floor.
+  Below half a radian the eye is lifted to `CHART_EYE_CLEAR` (2.2 m, the cab's
+  own eye) over the ground under IT, `chartGround(camPos)`, which the remote
+  raster answers anywhere the chart can look. What that does NOT do is keep
+  the RIG in sight: at 0° over the Yosemite floor the sweep frame shows sky,
+  the treeline and a metre of grass, and the truck is behind the ground
+  between. A 10° tilt keeps it; 0° is eye level and reads as such.
+- **THE REACH IS FLOORED AT 12°.** `viewRadius` and `backdropRadius` stretch
+  by `1/cos(90 − tilt)` so a tilted chart streams the ground its far edge
+  looks over — a stretch that is 1.4 at 45°, 5.8 at 10° and INFINITE at 0°,
+  where the frame's far edge is the horizon and every layer would have been
+  asked for `SIGHT_MAX` and the whole tile ladder with it, for a frame whose
+  ground past a hundred metres is a strip a few art pixels tall.
+  `CHART_TILT_REACH_MIN` clamps the angle the stretch is computed from; the
+  camera's own tilt is not clamped.
+- **AND THE TILT-SHIFT BAND SLIDES TO THE SEAT'S.** `aimFocus` read the
+  preset's chart row whenever `camMode` was `top`, and that row was written
+  for a frame looking DOWN, where the band is a slab across the ground with a
+  junction in its sharp third. On the first sweep the 10° and 0° frames came
+  back as a sharp stripe at the focal distance and everything nearer — most
+  of the pane — a wash, because a camera looking ALONG the ground meets a
+  vertical focus plane the way the chase seat does, and the chase row exists
+  precisely because that geometry wants a different band. `chartLensK()` is
+  1 at 45° and above (nothing the old slider could reach moves) and 0 at 15°
+  and below; the band, the HUD's band scale and the chase near-scale all
+  blend on it. `__tilt().lens` reports it.
+
+Measured with a one-boot sweep at Yosemite (`?cam=top&time=NOON&wx=clear`,
+zoom 0.7, `__chartlens({tilt})` at 89.5 / 70 / 45 / 25 / 10 / 0): camera
+distance 122–132 m throughout, no page errors, and `d.page.screenshot` with
+a 240 s timeout — `d.shot()`'s default times out on a DRAWN chart. The
+frames are the judgement and were sent to the seat; the lens blend was made
+after them and the 25 / 10 / 0 frames re-taken with it.
+
+**NOT VERIFIED ON A DEVICE, AND NOT DEPLOYED:** the seat asked for local
+iteration on screenshots with no deploy and no pull until it says so, and
+that is the state this ships in — committed on the branch, nothing pushed.
+
+## The sward is two to four times denser at the focus, on a lattice of its own
+
+*Sward density at the vehicle/focus should be 2–4×'d.* The law's plateau is
+`SWARD_SITES` (12/m²) inside `SWARD_NEAR` (14 m), and 12 is the 0.28 m
+lattice's own ceiling (12.76) with a little air under it — so asking the law
+for twenty-four at the truck is asking a carrier for twice what it holds,
+which is the partition-of-unity fault this file already records as rings.
+The boost is therefore two things at once, or it is a ring:
+
+- **A FOURTH BAND AT HALF THE NEAR STEP.** `[0.14, 200, [−1, 0, R·0.7, R]]`
+  in `SWARD_BANDS`: 51/m² of capacity to `SWARD_NEAR_R` (14 m), 40,000
+  slots. It is the second entry, not the first — `SWARD_BANDS[0]` is read
+  elsewhere as the 0.28 band and the last entry as the outermost, and both
+  stay where they were.
+- **A MULTIPLIER ON THE LAW THAT FADES OVER THE SAME RADIUS.** `swardBoostAt`
+  is `SWARD_NEAR_X` inside 0.35·R, 1 past R, a smoothstep between; the GPU
+  field carries the identical expression (`uSwardBoost`, `uSwardBoostR`) so
+  the profile probe and the field agree by construction. `?swardnear=` is
+  the multiplier, 1 is the law exactly as it was and the exact A/B, 3 is the
+  default until a frame says otherwise.
+- **AND THE NEAR BAND HANDS OVER, OR THE FIRST CUT'S PROFILE SAYS WHY NOT.**
+  With the 0.28 band left at full weight under the new one, `__swardprofile`
+  read the field delivering **200% of its target inside 10 m** and failed on
+  coverage steps: two carriers both at their full share of one law is the
+  sum, not the law. The 0.28 band's inner blend is a handover now
+  (`[R·0.7, R, 32, 45]`), so inside 0.7 R the 0.14 lattice carries the lot
+  and the two cross over exactly where the boost is fading out.
+
+Measured (`devtools/sward-profile.mjs`, `at-campsbay`, `ARGS='swardnear=N'`):
+at 3× the law wants **29.6/m² inside 8 m** against the 0.14 band's 51/m²,
+at 4× **39.4**, and both pass — *coverage follows the law at every radius,
+0 of 116 short* — with the tuft fullness flat at ×1.00, so the compensation
+valve never opens. Slots 224,096 → **264,096, +18%**, all of it in the new
+band. Past 14 m nothing moves: the law, the bands and the fade out to 232 m
+are exactly what shipped.
+
+**WHY NOT A STEEPER LAW:** raising `SWARD_SITES` and pulling `SWARD_NEAR` in
+thins the whole field past 14 m by the same factor, because the law is one
+curve; a bump that fades to one leaves everything past its radius alone,
+which is the half of the ask that was not asked.
+
+## Up close, a crown is leaves and a bush is not a polyhedron
+
+Deferred from the impostor and mid-rung work and asked for again: *fine
+fragment shader details in trees and shrubs (leaves and depth to "hide"
+geometry) when viewed up close.* Two materials, one pair of dials, and the
+rule for WHERE it draws is the rule the rung and the card already use.
+
+- **THE SKELETONS (`ezMaterial`) GATE ON ART PIXELS.** `ezClose` is
+  `smoothstep(64, 128, vEzPx)`: nothing below 64 — above the merge band's top
+  (58), so every tree the contact sheets certify and every tree a card stands
+  in for is untouched to the pixel — and whole by 128, which is a 10 m tree
+  at 24 m. Inside it a leaf-scale value noise in the skeleton's OWN frame
+  (`vEzLocal`, the vertex before the wind moved it, so the holes ride the
+  sway with the leaf; `vEzJit` per instance, so two trees of one variant are
+  not the same tree) is DISCARDED below `uEzCut · ezClose` — binary alpha,
+  as the rendering doctrine wants, and a card seen through its own holes is
+  the depth the ask was about. A finer grain (`ezLfP`, 105 cells a unit
+  height) modulates the diffuse 0.80–1.14 and its screen gradient bends the
+  shading normal by 0.35, band-limited by `fwidth` so it fades before it can
+  alias; the constants are on `ezLookU` (`uEzCut` 0.40, `uEzGrain` 0.9).
+- **THE ARCHETYPES AND THE SHRUBS (`leafMat`) GATE ON DISTANCE**, whole
+  inside 16 m and gone by 36, because an archetype carries no `vEzPx`; for a
+  two-metre bush that is about the same eighty art pixels. `foliageClose` is
+  chained INTO the wind hook (first in the chain, so `terrainFx` and
+  `grainFx` still find and call it — the one-slot trap this file records
+  under the wind), with `vLeafLocal = position` before the wind. **A cactus
+  is a solid and takes no cut**: `cactusMat` is the same material without it,
+  because the object was one shared `leafMat` and the cut is a property of
+  the material's fragment.
+- **`?ezcut=` (0–0.7) and `?ezgrain=` (0–2) are the switches**, 0 the exact
+  A/B for each; the flora lab carries them as LEAF CUT-OUT and LEAF GRAIN so
+  the numbers can be argued with on one stand.
+
+Measured in the lab first (`flora-guild.mjs --places="YOSEMITE,CAPE PENINSULA"
+--dist=14 --eye=2.2 --turn=0.6`, the same frames before and after, no page
+errors — which is the GLSL link check, since the lab DRAWS both materials):
+the Yosemite crowns go from flat green cards on sticks to porous spotted
+masses, the columnar aspens most of all; the Cape's fynbos, which at 14 m had
+filled the frame with hard dark facets, reads as blotchy leaf-mass shading
+with holes through to the bush behind. Then from the seat at `at-campsbay`
+and `at-yosemite`, chase and cab, with `?ezcut=0&ezgrain=0` as the control.
+
+**NOT MEASURED: the fragment cost on a device.** A `discard` inside 128 px
+costs early-z for the near crowns' fragments only, and the grain is one
+noise and two derivatives on those same fragments; the harness cannot price
+it. The next telemetry paste from a stand of near trees is the verification.

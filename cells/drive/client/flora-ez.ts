@@ -1451,6 +1451,28 @@ export const ezLookU = {
   uEzLeaf: { value: 1 },
   /** Relief from the same procedural bark field that colours the wood. */
   uEzBump: { value: 0.42 },
+  /**
+   * ── UP CLOSE, THE CROWN STOPS BEING PLATES ──
+   *
+   * Deferred when the skeletons shipped and asked for from the seat: *fine
+   * fragment detail in trees and shrubs — leaves and depth to hide the
+   * geometry — when viewed up close.* A leaf card is a flat quad with one tone
+   * and a pad is a faceted solid; past about a hundred art pixels of tree they
+   * read as exactly that. Two terms, both GATED ON THE TREE'S PROJECTED SIZE
+   * so that nothing at the ranges the sheets and the impostors are judged at
+   * (58 px and under) changes by a bit:
+   *
+   * `uEzCut` is the share of a card or pad cut away at leaf scale — a noise
+   * field in the skeleton's own frame, discarded below a threshold that ramps
+   * in with size, so a plate becomes a cluster of leaves with the leaves and
+   * the sky BEHIND it showing through the gaps (which is the depth). Binary,
+   * as the rendering doctrine wants. `uEzGrain` is leaf-scale light and dark
+   * from the same field a step finer, band-limited by its own footprint, and
+   * its gradient bends the normal so each leaf takes the sun on its own.
+   * `?ezcut=0` and `?ezgrain=0` are the A/Bs.
+   */
+  uEzCut: { value: 0.40 },
+  uEzGrain: { value: 0.9 },
   /** How much of the crown's shading comes from the MEASURED sky exposure
    *  rather than from the radial approximation it replaced. `?ezsky=0` is the
    *  exact A/B and restores the old term to the bit. */
@@ -1476,7 +1498,7 @@ export const ezLookU = {
  *  twice is a redefinition, and a shader that fails to link logs to the
  *  console and throws nothing, which in this engine means a wood that simply
  *  does not draw. */
-const EZ_NOISE_GLSL = `
+export const EZ_NOISE_GLSL = `
   float ezHash(vec3 p){ return fract(sin(dot(p, vec3(113.5, 271.9, 124.6))) * 43758.5453); }
   float ezNoise(vec3 p){
     vec3 i = floor(p), f = fract(p);
@@ -1508,6 +1530,8 @@ export function ezMaterial(
     sh.uniforms.uEzBark = ezLookU.uEzBark;
     sh.uniforms.uEzLeaf = ezLookU.uEzLeaf;
     sh.uniforms.uEzBump = ezLookU.uEzBump;
+    sh.uniforms.uEzCut = ezLookU.uEzCut;
+    sh.uniforms.uEzGrain = ezLookU.uEzGrain;
     sh.uniforms.uEzSun = sun;
     sh.uniforms.uEzSky = ezLookU.uEzSky;
     sh.uniforms.uEzMerge = ezLookU.uEzMerge;
@@ -1630,6 +1654,7 @@ export function ezMaterial(
         varying vec3 vEzEnv; varying vec3 vEzSun; varying vec4 vEzSurf;
         uniform float uEzBark; uniform float uEzEdge; uniform float uEzSky;
         uniform float uEzLeaf; uniform float uEzBump;
+        uniform float uEzCut; uniform float uEzGrain;
         ${EZ_NOISE_GLSL}`)
       .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
         if (vEzWood > 0.5) {
@@ -1744,6 +1769,35 @@ export function ezMaterial(
           if (uEzEdge < 0.999) {
           float ezNdv = abs(dot(normalize(normal), normalize(vViewPosition)));
           diffuseColor.rgb *= mix(uEzEdge, 1.0, smoothstep(0.0, 0.35, ezNdv));
+          }
+          // ── UP CLOSE, A CARD IS A CLUSTER OF LEAVES AND A PAD IS A TUFT ──
+          // See uEzCut. The ramp starts above the merge band's top (58 px), so
+          // a tree the sheets certify and a tree the card stands in for are
+          // untouched; by 128 px — a 10 m tree at 24 m — the cut is whole.
+          float ezClose = smoothstep(64.0, 128.0, vEzPx);
+          if (ezClose > 0.001 && uEzCut > 0.001) {
+            // In the skeleton's own frame, so the holes ride the wind with the
+            // leaf; jittered per instance, so a stand is not one tree's holes
+            // repeated. 46 cells per unit height is a ~20 cm leaf on a 10 m tree.
+            float ezLeafN = ezNoise(vEzLocal * 46.0 + vEzJit * 13.0);
+            if (ezLeafN < uEzCut * ezClose) discard;
+            // The leaf's own light and dark, a step finer, band-limited by its
+            // own footprint so it never becomes moving dither at range.
+            vec3 ezLfP = vEzLocal * 105.0 + vEzJit * 7.0;
+            float ezLfFoot = fwidth(ezLfP.x) + fwidth(ezLfP.y) + fwidth(ezLfP.z);
+            float ezLfVis = (1.0 - smoothstep(0.6, 1.6, ezLfFoot)) * ezClose;
+            float ezLfN = ezNoise(ezLfP);
+            diffuseColor.rgb *= mix(1.0, mix(0.80, 1.14, ezLfN), uEzGrain * ezLfVis);
+            // …and its gradient is the leaf's own facet, the same construction
+            // the bark relief uses, so a flat card takes the sun leaf by leaf.
+            if (ezLfVis > 0.02 && uEzGrain > 0.001) {
+              vec3 ezLDx = dFdx(-vViewPosition), ezLDy = dFdy(-vViewPosition);
+              vec3 ezLR1 = cross(ezLDy, normal), ezLR2 = cross(normal, ezLDx);
+              float ezLDet = dot(ezLDx, ezLR1);
+              vec2 ezLDh = vec2(dFdx(ezLfN), dFdy(ezLfN));
+              vec3 ezLGrad = (ezLDet < 0.0 ? -1.0 : 1.0) * (ezLDh.x * ezLR1 + ezLDh.y * ezLR2);
+              normal = normalize(abs(ezLDet) * normal - ezLGrad * uEzGrain * ezLfVis * 0.35);
+            }
           }
         }`)
       .replace('#include <lights_fragment_begin>', `#include <lights_fragment_begin>

@@ -342,6 +342,8 @@ function makeStand(mount: HTMLElement): {
     ezLookU.uEzLeaf.value = o.leaf;
     ezLookU.uEzBump.value = o.bump;
     ezLookU.uEzEdge.value = o.cardEdge;
+    ezLookU.uEzCut.value = o.leafCut;
+    ezLookU.uEzGrain.value = o.leafGrain;
     ezWindU.uTime.value = now / 1000;
     // EXACTLY THE WORLD'S ARITHMETIC (see the wind step in main.ts): the gust
     // is metres of tip travel per metre of blade, clamped, and the trees take
@@ -431,6 +433,7 @@ interface StandOpts {
   ez: boolean; ezPick: Map<VegSite, number>;
   sizeScale: number; formScale: number; bend: number;
   bark: number; leaf: number; bump: number; cardEdge: number;
+  leafCut: number; leafGrain: number;
   windKmh: number; windDeg: number;
 }
 
@@ -531,6 +534,11 @@ export async function startFloraLab(): Promise<void> {
       { id: 'bark', label: 'BARK PATTERN', kind: 'range', min: 0, max: 1.5, step: 0.05, value: 0.72 },
       { id: 'bump', label: 'BARK RELIEF', kind: 'range', min: 0, max: 1.5, step: 0.05, value: 0.42 },
       { id: 'cardEdge', label: 'CARD EDGE', kind: 'range', min: 0.2, max: 1, step: 0.02, value: 0.62 },
+      // The close-up terms: how much of a card or pad is cut into leaves, and
+      // the leaf-scale grain with its facet. Both ramp in with the tree's size
+      // on screen, so drag DISTANCE in to see them.
+      { id: 'leafCut', label: 'LEAF CUT-OUT', kind: 'range', min: 0, max: 0.7, step: 0.02, value: 0.4 },
+      { id: 'leafGrain', label: 'LEAF GRAIN', kind: 'range', min: 0, max: 2, step: 0.05, value: 0.9 },
       { id: 'windKmh', label: 'WIND km/h', kind: 'range', min: 0, max: 130, step: 5, value: 0 },
       { id: 'windDeg', label: 'WIND FROM °', kind: 'range', min: 0, max: 350, step: 10, value: 220 },
       // ── THE STAND ──
@@ -940,6 +948,8 @@ export async function startFloraLab(): Promise<void> {
     leaf: dials.num('leaf'),
     bump: dials.num('bump'),
     cardEdge: dials.num('cardEdge'),
+    leafCut: dials.num('leafCut'),
+    leafGrain: dials.num('leafGrain'),
     windKmh: dials.num('windKmh'),
     windDeg: dials.num('windDeg'),
     patch: dials.num('patch'),
