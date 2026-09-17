@@ -319,6 +319,7 @@ Nothing here is fast. Budget for it.
 | `node client/perf-check.mjs` | the tree refresh still refills byte-for-byte what the pre-slice one did, over a deterministic mock world — a SANDBOXED check, so it breaks on a new free variable and says nothing until it is run: it was red for three commits and two deploys before anyone noticed | ~5s |
 | `node devtools/tree-manifest.mjs` | KNOWN against DRAWN: whether a tree exists further out than it is built, with the placed counts and edges beside them as the live witness that nothing on screen moved — `?treemanifest=<m>` equal to the draw range is the single ring (`FIX=`, `SECS=`) | ~8min |
 | `node devtools/tree-impostor.mjs` | what the impostor tier stands up and what it changes on screen — ONE boot, off/on/off through `__impostor()`, so the repeat is the floor; read whole AND over the canopy band, because a chase frame is mostly sward and sky (`TRIS=` raw triangles, `BAND=`) | ~6min |
+| `node devtools/orientation.test.mjs` | a rotation keeps the art buffer, the art pixel's size on the glass and the HUD grid, and the viewport chain recovers from an event that carried stale metrics — a real rotation in the browser at DPR 3, with the rule it replaced computed beside it as the control | ~30s |
 | `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
 | `node devtools/render-focus.test.mjs` | where the RENDERER is looking, and whether anything reads it — the authority's three cameras and the drone's own lead geometry driven for real, then each consumer and the sward's fast/slow ORDER as a source check; two controls in its header | instant |
 | `node devtools/imp-atlas.test.mjs` | the impostor atlas holds EVERY variant that exists (40 slots against 37 keys) and the bake's packing agrees with the shader's, tile for tile over all 1,000 — pure node, instant, and the gate that fails when a new EZ form takes the total past the ceiling | instant |
@@ -15110,3 +15111,151 @@ leg around a nonzero earth origin — the zero-centred one made absolute and loc
 identical, which is exactly why every check passed over a bug this size. The
 negative control fires the assertion added two commits earlier, in its own
 words: *the cull retired the whole annulus: the far tier is off, not cheap*.
+
+
+## A rotation was three different changes of mind, and nothing re-checked
+
+Asked from the seat, mid-test: *look into `resize` and mobile orientation change
+so it doesn't break the viewport/render.* Three things key off
+`innerWidth`/`innerHeight` and every one of them answered differently when the
+phone was turned. None of them is a viewport bug in the usual sense — the camera
+aspect and the render targets were always updated and nothing stretched — which
+is why it had survived: what changed was the COST and the LOOK.
+
+**THE WHOLE CHAIN IS THREE `resize` LISTENERS AND NOTHING ELSE.** `resize`
+(5457, the renderer, the camera and `resizePost`'s ten render targets),
+`updateStickHome` (43521) and `hudResize` (51032), in that registration order,
+each reading the metrics at the instant it runs. There is no `orientationchange`
+handler, no `visualViewport` listener and no `ResizeObserver` anywhere in
+`client/` or `static/` — measured, not assumed.
+
+### The art buffer was pinned to ROWS, and rows are the long axis of an upright phone
+
+`resizePost` sized the world's art buffer as `h = min(PIX_H, innerHeight)` and
+derived `w` from the aspect. `PIX_H` is a count of rows, and on a phone held
+upright rows are the LONG axis — so turning the phone did not keep the buffer
+still, it grew it with the aspect. Measured on a 390x844 phone:
+
+| dial | upright | turned | |
+|---|---|---|---|
+| 240P | 111x240 = **26,640** px · 3.52 CSS per art px | 519x240 = **124,560** · **1.63** | **4.68x** |
+| 320P | 148x320 = 47,360 · 2.64 | 693x320 = 221,760 · 1.22 | 4.68x |
+| 480P | 222x480 = 106,560 · 1.76 | **844x390** = 329,160 · **1.00** | 3.09x |
+
+**IT IS A LOOK CHANGE BEFORE IT IS A COST.** The art pixel is what shrinks —
+3.52 CSS pixels across upright, 1.63 turned — so rotating halved the size of the
+pixels the whole game is drawn in, and at the 480P stop the clamp lands on
+844x390: one art pixel per CSS pixel, which is not pixel art at all. The cost is
+the other half, on a device this file already records at 11-20 fps.
+
+**AND NO ROTATION-INVARIANT RULE CAN LEAVE A DESKTOP ALONE — which is why the
+fix is SCOPED and not general.** Every invariant measure of a window (the long
+axis, the diagonal, the root of the area) is larger than its height on a
+landscape display, so any of them coarsens a 1440x900 desktop from 384x240 to
+about 240x150. That is a visible change, and it would move the frame every
+art-pixel number in this file was taken against — the harness itself runs
+390x844. So: **on a handset the dial measures the LONG axis; on anything larger
+the vertical rule stands untouched.** A handset is the case where the two
+orientations are the same device a minute apart and must cost and read the same;
+a desktop window is whatever someone made it. Measured after: portrait, desktop
+and the harness are **byte-identical**, and the turned phone is 26,640 px at
+3.51 CSS per art pixel — the same buffer and the same pixel, either way up.
+
+The scale is one number for both axes (`k = ref / min(PIX_H, ref)`), because the
+art pixel must stay SQUARE: the composite magnifies `rtScene` by
+`innerWidth / w` horizontally and `innerHeight / h` vertically, and `chartScale`
+reads `innerHeight / pixSize.y` as THE CSS scale. A rule that capped one axis
+would have made them disagree.
+
+### A phone stopped being a phone when it was laid down
+
+`hudResize` picked its grid with `innerWidth < 760` — a question about which way
+the thing is being held. On a 390x844 phone that is true upright and false
+turned, so a rotation promoted the HUD to the DESKTOP grid: 2 CSS pixels per HUD
+pixel becoming 3, a HUD 1.6x chunkier at exactly the moment the height it has to
+fit in fell from 844 to 390. Measured at the TRIM stop on a DPR-3 phone:
+
+| | hudS | HW x HH |
+|---|---|---|
+| upright | 1.667 | 234 x 506 |
+| turned, as shipped | **2.667** | 317 x **146** |
+| turned, short-side test | 1.667 | 506 x **234** |
+
+The HUD's vertical layout — the rig gauge, the transport row, the message rail
+at 0.26 of HH — has no room at 146. `HANDSET_PX` is the named test now and both
+readers take it: **a handset is a device, not an orientation.**
+
+### An orientation change is not one resize event
+
+Every consumer hangs off `resize` and reads the metrics when it runs, which is
+right while the event can be trusted. iOS can deliver one DURING the rotation
+animation carrying the metrics from before it — and there is no second path
+here: a `resize` handler is the only thing that resizes the ten render targets,
+the camera's aspect and the HUD's grid, so one badly-timed event leaves the
+world rendered for the wrong frame until the next resize, which on a phone held
+in one hand may be never.
+
+So the METRICS are watched rather than the event. `viewportSync` re-dispatches a
+resize when `innerWidth`/`innerHeight` have moved since the last one anybody
+acted on, and is a no-op when they have not — every consumer stays exactly where
+it is, because this is a second CHANCE to run and not a second path. An
+`orientationchange` arms three tries (the next frame, 120 ms and 400 ms, which
+brackets the iOS animation) and `visualViewport` is watched because it moves on
+a URL-bar collapse where the window's own metrics may not.
+
+- **THE RECORDER IS ITS OWN LISTENER, not a line inside `resize()`.** The one
+  thing it has to observe is a real event that ran with STALE metrics; recording
+  inside the resize would file the stale pair as the truth and the deferred
+  check would then agree with it and do nothing.
+- **AND THE RECOVERY CANNOT BE REACHED BY RESIZING.** A harness resize always
+  carries the true metrics, so the state this exists for has to be asked for:
+  `__viewport('forget')` is a test hook and nothing in the game calls it.
+
+### …and the inset windows were drawn on the dial rather than the buffer
+
+`blitPixelated` computed its grid as `PIX_H / innerHeight` — the dial, not the
+buffer. The dial is a REQUEST and the buffer is what the request survived (the
+long-axis rule, and the `min(PIX_H, …)` clamp under it), so on a short window
+the two part company and the POV dock and the vehicle bay are drawn on a finer
+grid than the world they sit in. It reads `pixSize.y`, which is what "the same
+pixels per metre as the world" actually means.
+
+### Measured, with the rule it replaced as the control
+
+`devtools/orientation.test.mjs` drives a real rotation at DPR 3 on a fixture
+(no world, no streaming, ~30 s) and computes the old rule beside the new one —
+**it must AGREE in portrait and DIFFER when turned**, because a check that
+cannot tell the two apart is not a check. Nine claims pass; reverting the three
+rules fails **exactly six** of them and leaves the three that are about nothing
+having moved still passing:
+
+```
+FAIL the rotated buffer is the same size as the upright one   {upPx:26640, flatPx:124560, ratio:4.68}
+FAIL the art pixel is the same size on the glass either way   {up:3.52, flat:1.63}
+FAIL the HUD grid does not change when the phone is turned    {up:506 rows, flat:146}
+FAIL an orientationchange re-runs the chain                   {n:0, stale:true}
+ok   UPRIGHT IS UNCHANGED: the old rule and this one agree exactly
+```
+
+`__viewport()` reports what the chain last acted on beside what the window says
+NOW: a pair that disagrees is a resize nobody re-ran, which is the whole fault
+and is not otherwise observable from the seat.
+
+### What this does NOT fix, and it is the next thing a landscape frame will show
+
+**THE CANVAS HUD HAS NO NOTION OF A SAFE AREA AT ALL, and most of the DOM
+overlays only have the vertical ones.** The shell is served
+`viewport-fit=cover`, so on a notched iPhone in LANDSCAPE
+`env(safe-area-inset-left/right)` become tens of pixels — and the HUD is drawn
+across the full `innerWidth` in HUD pixels with no inset, while `overlays.ts`
+positions `#ov-menu`, `#ov-task` and `#ov-route` at a bare `left: 10px` /
+`right: 10px` (`menu.ts` does carry all four insets). So a turned phone puts the
+clock, the compass, the MENU chip and the task chip under the notch and the home
+indicator. That is a layout decision rather than a defect in the resize chain,
+which is why it is written down here rather than guessed at: the honest fix is a
+set of inset numbers the HUD lays out against, and it wants a frame from the
+seat to judge.
+
+Nothing here has been seen on a device. The harness cannot rotate a real phone,
+and every number above is either arithmetic or a Playwright viewport change; the
+seat's own report on a turned phone is the verification.

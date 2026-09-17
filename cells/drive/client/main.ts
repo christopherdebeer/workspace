@@ -5452,6 +5452,15 @@ scene.add(worldGroup);
   };
 }
 
+/**
+ * A HANDSET IS A DEVICE, NOT AN ORIENTATION — so the test reads the SHORT side.
+ * Two things key off it (the art buffer's rule and the HUD's grid) and both
+ * used to ask `innerWidth < 760`, which is a question about which way the thing
+ * is being held: on a 390x844 phone it answers "handset" upright and "desktop"
+ * turned, and each of them then changed its mind mid-drive. 760 is unchanged
+ * and is where it always was — the smallest short side that is not a phone.
+ */
+const HANDSET_PX = 760;
 let resizePost: (() => void) | null = null; // set by the atmosphere pipeline below
 function resize(): void {
   const w = innerWidth, h = innerHeight;
@@ -5462,6 +5471,68 @@ function resize(): void {
 }
 addEventListener('resize', resize);
 resize();
+/**
+ * ── AN ORIENTATION CHANGE IS NOT ONE RESIZE EVENT ──
+ *
+ * Every viewport consumer in this client hangs off `resize` and off nothing
+ * else — this one, `updateStickHome`, `hudResize` — and each reads
+ * `innerWidth`/`innerHeight` at the instant it runs. That is exactly right
+ * while the event is trustworthy, and a rotation is the case where it is not:
+ * iOS delivers `resize` DURING the rotation animation and can deliver it with
+ * the metrics the page had before the turn, and nothing here re-checks
+ * afterwards. There is no self-healing path either — a `resize` handler is the
+ * only thing that resizes the ten render targets, the camera's aspect and the
+ * HUD's grid — so one badly-timed event leaves the world rendered for the wrong
+ * frame until the next resize, which on a phone held in one hand may be never.
+ *
+ * So the metrics are watched rather than the event: `viewportSync` re-dispatches
+ * a resize when `innerWidth`/`innerHeight` have actually moved since the last
+ * one anybody acted on, and is a no-op when they have not. That keeps every
+ * consumer where it is — this is a second CHANCE to run, not a second path —
+ * and it is idempotent by construction, so scheduling it generously costs
+ * nothing: an `orientationchange` arms three tries (the next frame, then 120 ms
+ * and 400 ms, which brackets the iOS rotation animation), and `visualViewport`
+ * is watched because it moves on a URL-bar collapse and a keyboard where the
+ * window's own metrics may not.
+ *
+ * The recorder is a plain listener rather than a line inside `resize()`,
+ * because the one thing it must observe is a real event that ran with STALE
+ * metrics — recording inside the resize would file the stale pair as the truth
+ * and the deferred check would then agree with it and do nothing.
+ */
+let vpW = innerWidth, vpH = innerHeight;
+function viewportSync(): void {
+  if (innerWidth === vpW && innerHeight === vpH) return;
+  vpW = innerWidth; vpH = innerHeight;
+  dispatchEvent(new Event('resize'));
+}
+function viewportRecheck(): void {
+  requestAnimationFrame(viewportSync);
+  setTimeout(viewportSync, 120);
+  setTimeout(viewportSync, 400);
+}
+addEventListener('resize', () => { vpW = innerWidth; vpH = innerHeight; });
+addEventListener('orientationchange', viewportRecheck);
+window.visualViewport?.addEventListener('resize', viewportSync);
+/** What the viewport chain last acted on, beside what the window says NOW — a
+ *  pair that disagrees is a resize nobody re-ran, which is the whole fault this
+ *  block exists for and is not otherwise observable from the seat. */
+(window as unknown as Record<string, unknown>).__viewport = (cmd?: string) => {
+  // 'forget' is the only way to stand the recovery path up from a test. A real
+  // resize through the harness always carries the true metrics, so the state
+  // this block exists for — the chain having acted on a pair the window has
+  // since moved off — cannot be reached by resizing the page; it has to be
+  // asked for. It is a TEST HOOK and nothing in the game calls it.
+  if (cmd === 'forget') { vpW = -1; vpH = -1; }
+  return {
+  seen: { w: vpW, h: vpH },
+  now: { w: innerWidth, h: innerHeight },
+  stale: innerWidth !== vpW || innerHeight !== vpH,
+  art: { w: pixSize.x, h: pixSize.y, cssPerArt: innerHeight / Math.max(2, pixSize.y) },
+  hud: { s: hudS, w: HW, h: HH },
+  orientation: innerWidth >= innerHeight ? 'landscape' : 'portrait',
+  };
+};
 
 // ── fog of war ─────────────────────────────────────────────────────
 const fogCanvas = document.createElement('canvas');
@@ -5616,8 +5687,37 @@ const rtM = mkRT(false, true);
 const MBLUR_FRAC = [0, 0.25, 0.5, 1, 1.5, 2];
 let mblurFrac = 0;
 resizePost = () => {
-  const h = Math.min(PIX_H, Math.round(innerHeight));
-  const w = Math.max(2, Math.round((innerWidth / innerHeight) * h));
+  // ── ON A HANDSET THE DIAL MEASURES THE LONG AXIS ──
+  //
+  // `PIX_H` is a count of ROWS, and rows are the long axis of a phone held
+  // upright. Turn the phone and they become the short one, so a buffer pinned
+  // to PIX_H rows does not hold still, it grows with the aspect. Measured on a
+  // 390x844 phone at the 240P stop: 111x240 art pixels upright against 519x240
+  // turned — FOUR AND TWO THIRDS the fragments for the same scene, on a device
+  // this file already records at 11-20 fps. And it is a LOOK change before it
+  // is a cost, because the art pixel is what shrinks: 3.52 CSS pixels across
+  // upright and 1.63 turned, so rotating halves the size of the pixels the
+  // whole game is drawn in, and at the 480P stop it lands on 844x390 — one art
+  // pixel per CSS pixel, which is not pixel art at all.
+  //
+  // NO ROTATION-INVARIANT RULE CAN LEAVE A DESKTOP ALONE, and that is why this
+  // is scoped rather than general. Every invariant measure of a window (the
+  // long axis, the diagonal, the root of the area) is LARGER than its height on
+  // a landscape display, so any of them would coarsen a 1440x900 desktop from
+  // 384x240 to something near 240x150 — a visible change, and one that would
+  // move the frame every art-pixel measurement in this file was taken against
+  // (the harness itself runs 390x844). A handset is the case where both
+  // orientations are the same device a minute apart and must cost and read the
+  // same; a desktop window is whatever someone made it, and the vertical rule
+  // has been right there for years. So: a handset is sized by the long axis, a
+  // larger display by its height, and the scale `k` is then one number for both
+  // axes — the art pixel stays SQUARE, which the composite's single
+  // magnification and `chartScale`'s CSS reading both depend on.
+  const ref = Math.min(innerWidth, innerHeight) < HANDSET_PX
+    ? Math.max(innerWidth, innerHeight) : innerHeight;
+  const k = ref / Math.max(2, Math.min(PIX_H, Math.round(ref)));   // CSS px per art px
+  const w = Math.max(2, Math.round(innerWidth / k));
+  const h = Math.max(2, Math.round(innerHeight / k));
   rtScene.setSize(w, Math.max(2, h));
   rtA.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   rtB.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
@@ -50561,7 +50661,12 @@ function tick(now: number): void {
 function blitPixelated(
   what: THREE.Scene, cam: THREE.Camera, vx: number, vy: number, vw: number, vh: number, clear = 0x05070c,
 ): void {
-  const grid = PIX_H / Math.max(1, innerHeight);   // same pixels per metre as the world
+  // THE ART GRID IS `pixSize.y`, NOT `PIX_H`. The dial is a request and the
+  // buffer is what the request survived — the long-axis rule above, and the
+  // `min(PIX_H, …)` clamp under it — so on a short window the two part company
+  // and the inset is drawn on a finer grid than the world it sits in. Reading
+  // the buffer is what "same pixels per metre as the world" actually means.
+  const grid = Math.max(2, pixSize.y) / Math.max(1, innerHeight);
   const rw = Math.max(2, Math.round(vw * grid)), rh = Math.max(2, Math.round(vh * grid));
   rtVeh.setSize(rw, rh);
   vehCopyMat.uniforms.uPix.value.set(rw, rh);
@@ -51009,7 +51114,14 @@ function hudResize(): void {
   // of device pixels (whole-unit drawing stays crisp even when the backing
   // pixel is fractional-device; half-step detail additionally wants an even
   // count, which STOCK and FINE both give).
-  const target = (innerWidth < 760 ? 2 : 3) * hudSize;
+  // A PHONE IS A PHONE WHEN IT IS LYING DOWN — see HANDSET_PX. This read the
+  // WIDTH, so rotating a 390x844 phone promoted the HUD to the desktop grid: 2
+  // CSS pixels per HUD pixel becoming 3, a HUD 1.6x chunkier at exactly the
+  // moment the height it has to fit in fell from 844 to 390. Measured at the
+  // TRIM stop on a DPR-3 phone, HH went 506 upright to 146 turned, against 234
+  // with the short-side test — and the vertical layout (the rig gauge, the
+  // transport row, the message rail at 0.26 of HH) has no room at 146.
+  const target = (Math.min(innerWidth, innerHeight) < HANDSET_PX ? 2 : 3) * hudSize;
   const n = Math.max(hudDpr, Math.round(target * dpr));   // device px per HUD px
   hudS = n / dpr;
   HW = Math.max(80, Math.round(innerWidth / hudS));
