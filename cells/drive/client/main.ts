@@ -310,6 +310,10 @@ const CAR = { accel: 16, brake: 26, maxRev: 9, wheelbase: 2.9, steerMax: 0.6 };
 // left at zero: see `chartDist`, which is now the one place the chart's stand-off
 // is computed. A constant nobody reads is the thing this file keeps warning about.
 const CAM = { base: 175, tilt: 70, fov: 55 };
+/** The chart HUD may pitch the map from an oblique relief view toward nadir.
+ *  Kept out of CAM because this one is live state, not a camera constant. */
+const CHART_TILT_MIN = 45, CHART_TILT_MAX = 89.5;
+let chartTiltDeg = CAM.tilt;
 // 44 put the camera 6.8km up over a 4.8×8.3km view — a regional chart, but
 // only just, and the streaming never followed it out there. 260 reaches ~40km
 // across, which is a whole mountain range, a coastline, or the far end of a
@@ -2674,6 +2678,11 @@ const TILT_MODES = ['off', 'subtle', 'mini', 'stock', 'hard'] as const;
  * overruling it makes the shot depend on which browser profile took it.
  */
 let tiltMode = ((v) => (v && v in TILT_PRESETS ? v : 'stock'))(qs('tilt')?.toLowerCase());
+/** Chart-only scale over the named miniature band. The HUD exposes this as a
+ *  diagnostic ruler without changing the chase lens or stamping an override
+ *  into `__tilt`, whose pixel values deliberately apply to every camera. */
+const CHART_BAND_MIN = 0.5, CHART_BAND_MAX = 1.75;
+let chartBandScale = 1;
 /**
  * ── DEPTH OF FIELD IS A LENS, TILT SHIFT IS A FOCUS GEOMETRY ──
  *
@@ -6107,6 +6116,10 @@ const compMat = new THREE.ShaderMaterial({
     // shader for why a metric slab cannot work across this camera system.
     uTiltSharp: { value: 34 },
     uTiltBlur: { value: 92 },
+    // Foreground-side compression for the chase miniature. The truck itself is
+    // protected by alpha; this keeps the ROAD around it from becoming a soft
+    // moat while leaving the far miniature field at full authored strength.
+    uTiltNearScale: { value: 1 },
     uTanHalfFov: { value: Math.tan((55 * Math.PI) / 360) },
     // How defocused the sky is when the effect is on. Not 1: a fully smeared
     // sunset fights the horizon treatment the sky branch already does.
@@ -6206,7 +6219,8 @@ const compMat = new THREE.ShaderMaterial({
     uniform float uHazeDbg; uniform float uHazeWarm; uniform float uMpp;
     uniform float uHazeE; uniform float uHazeAmt; uniform float uSkyD;
     uniform float uAirBlur; uniform float uTiltAmt; uniform vec3 uFocusP; uniform vec3 uFocusN;
-    uniform float uTiltSharp; uniform float uTiltBlur; uniform float uTanHalfFov; uniform float uTiltSky;
+    uniform float uTiltSharp; uniform float uTiltBlur; uniform float uTiltNearScale;
+    uniform float uTanHalfFov; uniform float uTiltSky;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
 ${DITHER_GLSL}
     // The warm argument is HOW MUCH OF THE SUNWARD LOBE THIS CALLER WANTS. The sky wants
@@ -6487,6 +6501,7 @@ const dofPrepMat = new THREE.ShaderMaterial({
     uFocusP: { value: new THREE.Vector3() }, uFocusN: { value: new THREE.Vector3(0, 0, -1) },
     uFocusDist: { value: 40 }, uMode: { value: 0 }, uMaxPx: { value: 7 },
     uTiltAmt: { value: 0 }, uTiltSharp: { value: 34 }, uTiltBlur: { value: 92 },
+    uTiltNearScale: { value: 1 },
     uTiltSky: { value: 0.7 }, uTanHalfFov: { value: Math.tan((55 * Math.PI) / 360) },
     uPix: { value: pixSize }, uSkyD: { value: 45000 },
   },
@@ -6495,7 +6510,7 @@ const dofPrepMat = new THREE.ShaderMaterial({
     uniform sampler2D sceneTex; uniform sampler2D depthTex;
     uniform mat4 invPV; uniform vec3 camPos; uniform vec3 uFocusP; uniform vec3 uFocusN;
     uniform float uFocusDist; uniform float uMode; uniform float uMaxPx;
-    uniform float uTiltAmt; uniform float uTiltSharp; uniform float uTiltBlur;
+    uniform float uTiltAmt; uniform float uTiltSharp; uniform float uTiltBlur; uniform float uTiltNearScale;
     uniform float uTiltSky; uniform float uTanHalfFov; uniform vec2 uPix; uniform float uSkyD;
     varying vec2 vUv;
     void main(){
@@ -6524,7 +6539,12 @@ const dofPrepMat = new THREE.ShaderMaterial({
             float fd = dot(wp - uFocusP, uFocusN);
             float mpp = max(2.0 * t * uTanHalfFov / max(uPix.y, 1.0), 1e-4);
             float planePx = fd / mpp;
-            float k = smoothstep(uTiltSharp, uTiltBlur, abs(planePx));
+            // The chase camera sits inside the nominal foreground half of a
+            // vertical miniature plane. Compress only that signed side so the
+            // road at and just ahead of the truck stays readable; background
+            // blur, and both sides of the chart band, remain unchanged.
+            float bandPx = abs(planePx) * (planePx < 0.0 ? uTiltNearScale : 1.0);
+            float k = smoothstep(uTiltSharp, uTiltBlur, bandPx);
             radius = sign(planePx) * k * uMaxPx * uTiltAmt;
           }
         }
@@ -6678,6 +6698,7 @@ composite = (amt: number): void => {
     pu.uTiltAmt.value = cu.uTiltAmt.value;
     pu.uTiltSharp.value = cu.uTiltSharp.value;
     pu.uTiltBlur.value = cu.uTiltBlur.value;
+    pu.uTiltNearScale.value = cu.uTiltNearScale.value;
     pu.uTiltSky.value = cu.uTiltSky.value;
     pu.uTanHalfFov.value = cu.uTanHalfFov.value;
     pu.uSkyD.value = cu.uSkyD.value;
@@ -28963,7 +28984,7 @@ function globeDegPerPx(): number {
  * the camera's own placement, `viewRadius`'s horizon stretch and the tap
  * unproject — or they would disagree about where the ground under a finger is.
  */
-function chartTilt(): number { return CAM.tilt + (89.9 - CAM.tilt) * globeOn(); }
+function chartTilt(): number { return chartTiltDeg + (89.9 - chartTiltDeg) * globeOn(); }
 function viewRadius(): number {
   if (camMode !== 'top') return 900;
   const dist = chartDist();
@@ -37075,9 +37096,14 @@ function aimFocus(): void {
   // against the wrong one of them is how the first cut went wrong. See
   // TILT_PRESETS.
   const half = Math.max(1, pixSize.y) / 2;
-  const sharpPx = tiltOver.sharp ?? band.sharp * half;
+  const chartScale = camMode === 'top' ? chartBandScale : 1;
+  const sharpPx = tiltOver.sharp ?? band.sharp * half * chartScale;
   u.uTiltSharp.value = sharpPx;
-  u.uTiltBlur.value = Math.max(tiltOver.blur ?? band.blur * half, sharpPx + 1);
+  u.uTiltBlur.value = Math.max(tiltOver.blur ?? band.blur * half * chartScale, sharpPx + 1);
+  // A vertical focus plane naturally puts the chase camera deep in its near
+  // half. Preserve some foreground blur, but do not let it wash through the
+  // truck's immediate road surface; the far half keeps scale 1.
+  u.uTiltNearScale.value = camMode === 'chase' ? 0.08 : 1;
   tiltHalf = half;
   tiltK = half / Math.max(tanHalf, 1e-3);
   camera.getWorldDirection(FOCUS_FWD);
@@ -39024,7 +39050,7 @@ function tdMatAt(x: number, z: number): object | null {
     const t = Math.hypot(x - camera.position.x, y - camera.position.y, z - camera.position.z);
     const fd = (x - P.x) * N.x + (y - P.y) * N.y + (z - P.z) * N.z;
     const mpp = Math.max((2 * t * (u.uTanHalfFov.value as number)) / Math.max(pixSize.y, 1), 1e-4);
-    const px = Math.abs(fd) / mpp;
+    const px = Math.abs(fd) / mpp * (fd < 0 ? u.uTiltNearScale.value as number : 1);
     const sh = u.uTiltSharp.value as number, bl = u.uTiltBlur.value as number;
     const k = clamp((px - sh) / Math.max(bl - sh, 1e-4), 0, 1);
     const coc = k * k * (3 - 2 * k) * (u.uTiltAmt.value as number);
@@ -39063,6 +39089,7 @@ function tdMatAt(x: number, z: number): object | null {
     mode: tiltMode, cam: camMode, amount: +(u.uTiltAmt.value as number).toFixed(3),
     angleDeg: +((tiltTiltRad * 180) / Math.PI).toFixed(2),
     sharpPx: +(u.uTiltSharp.value as number).toFixed(1), blurPx: +(u.uTiltBlur.value as number).toFixed(1),
+    nearScale: +(u.uTiltNearScale.value as number).toFixed(2),
     // The two scales a band can be read against. `halfPx` is what the presets
     // state: half the frame, and all a near-nadir chart ever spans. `satPx` is
     // the ceiling on receding ground — nothing past the plane, at any distance,
@@ -43513,9 +43540,74 @@ const setStickFrom = (e: PointerEvent): void => {
   stick.dx = len ? (rx / len) * mag : 0;
   stick.dy = len ? (ry / len) * mag : 0;
 };
+type ChartLensControl = 'tilt' | 'band';
+type HudRect = { x: number; y: number; w: number; h: number };
+let chartTiltRect: HudRect = { x: 0, y: 0, w: 0, h: 0 };
+let chartBandRect: HudRect = { x: 0, y: 0, w: 0, h: 0 };
+let chartLensDrag: { id: number; kind: ChartLensControl } | null = null;
+const CHART_SLIDER_HEAD = 20, CHART_SLIDER_FOOT = 4;
+function chartSliderTrack(r: HudRect): { top: number; bottom: number } {
+  return { top: r.y + CHART_SLIDER_HEAD, bottom: r.y + r.h - CHART_SLIDER_FOOT };
+}
+function chartLensSet(kind: ChartLensControl, clientY: number): void {
+  const r = kind === 'tilt' ? chartTiltRect : chartBandRect;
+  const tr = chartSliderTrack(r);
+  const f = clamp(1 - (clientY / hudS - tr.top) / Math.max(1, tr.bottom - tr.top), 0, 1);
+  if (kind === 'tilt') chartTiltDeg = CHART_TILT_MIN + f * (CHART_TILT_MAX - CHART_TILT_MIN);
+  else {
+    chartBandScale = CHART_BAND_MIN + f * (CHART_BAND_MAX - CHART_BAND_MIN);
+    // The band uniforms are otherwise refreshed once per frame. Write them now
+    // so a held thumb and the glass move together even on a slow debug frame.
+    aimFocus();
+  }
+}
+function chartLensDown(e: PointerEvent): boolean {
+  if (camMode !== 'top' || menu.tab() !== null || document.body.classList.contains('clean')) return false;
+  const x = e.clientX / hudS, y = e.clientY / hudS;
+  const hit = (r: HudRect): boolean =>
+    r.w > 0 && x >= r.x - 4 && x <= r.x + r.w + 4 && y >= r.y - 4 && y <= r.y + r.h + 4;
+  const kind: ChartLensControl | null = hit(chartTiltRect) ? 'tilt' : hit(chartBandRect) ? 'band' : null;
+  if (!kind) return false;
+  chartLensDrag = { id: e.pointerId, kind };
+  chartLensSet(kind, e.clientY);
+  return true;
+}
+function chartLensMove(e: PointerEvent): boolean {
+  if (chartLensDrag?.id !== e.pointerId) return false;
+  chartLensSet(chartLensDrag.kind, e.clientY);
+  return true;
+}
+function chartLensUp(e: PointerEvent): boolean {
+  if (chartLensDrag?.id !== e.pointerId) return false;
+  const kind = chartLensDrag.kind;
+  chartLensDrag = null;
+  if (e.type === 'pointerup') {
+    audio.stone();
+    hudFlash(kind === 'tilt'
+      ? `CHART TILT ${Math.round(chartTiltDeg)} DEG`
+      : `MINIATURE BAND ${Math.round(chartBandScale * 100)}%`);
+  }
+  return true;
+}
+(window as unknown as { __chartlens?: object }).__chartlens = (
+  opts?: { tilt?: number; band?: number },
+): object => {
+  if (opts?.tilt !== undefined) chartTiltDeg = clamp(opts.tilt, CHART_TILT_MIN, CHART_TILT_MAX);
+  if (opts?.band !== undefined) chartBandScale = clamp(opts.band, CHART_BAND_MIN, CHART_BAND_MAX);
+  aimFocus();
+  return {
+    tiltDeg: +chartTiltDeg.toFixed(1),
+    bandScale: +chartBandScale.toFixed(2),
+    bandMode: dofMode === 'miniature' ? tiltMode : 'inactive',
+    range: { tilt: [CHART_TILT_MIN, CHART_TILT_MAX], band: [CHART_BAND_MIN, CHART_BAND_MAX] },
+    hudScale: hudS,
+    rects: { tilt: { ...chartTiltRect }, band: { ...chartBandRect } },
+  };
+};
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   // Each instrument swallows the DOWN; hudPtrs makes it swallow the UP too.
+  if (chartLensDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (fpsDown(e) || layerDown(e) || autoDown(e) || poiDown(e)) { hudPtrs.add(e.pointerId); return; }
   if (rewindDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (clockDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
@@ -43573,6 +43665,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (chartLensMove(e)) return;
   if (rewindMove(e)) return;
   if (clockMove(e)) return;
   if (stick?.id === e.pointerId) { setStickFrom(e); return; }
@@ -44157,6 +44250,7 @@ const endStick = (e: PointerEvent): void => {
   // event type, so a cancel clears it too; `lastUp` is set so the window's
   // copy of the same up (this handler is on both) does not ask the chart.
   const hud = hudPtrs.delete(e.pointerId);
+  if (chartLensUp(e)) { lastUp = e; return; }
   if (e.type === 'pointerup' && rewindUp(e)) return;
   if (e.type === 'pointerup' && clockUp(e)) return;
   if (hud) { lastUp = e; return; }
@@ -44254,7 +44348,10 @@ canvas.addEventListener('pointercancel', endStick);
 // Belt to the capture's braces: any release anywhere clears these too.
 addEventListener('pointerup', endStick);
 addEventListener('pointercancel', endStick);
-addEventListener('blur', () => { stick = null; brakeId = null; lift = null; panPtrs.clear(); keys.clear(); updateStickHome(); });
+addEventListener('blur', () => {
+  stick = null; brakeId = null; lift = null; chartLensDrag = null;
+  panPtrs.clear(); keys.clear(); updateStickHome();
+});
 // The controls as the truck last received them — so a harness can drive the
 // stick with synthetic pointers and read what the driver would actually get,
 // rather than inferring it from how the truck moved.
@@ -53597,9 +53694,10 @@ function hudSafeRects(): Array<[number, number, number, number]> {
     [0, 0, HW, 34 + (camMode === 'top' && tileDbg ? 22 : 0)],  // compass strip + the justified top row
     [0, 32, 74, 18],                                 // the task chip, under the top row
     [HW - 56, 18, 56, 18],                           // MENU, on the heading row
-    [0, my - 200, 17, 200],                          // the ENV gauge stack, seated on the map
+    [0, my - 200, camMode === 'top' ? 24 : 17, 200], // ENV stack, or the chart tilt rail
     [0, my - 2, mw + 84, HH - my + 2],               // dock, the control matrix, the info lines
-    [HW - 17, HH - 236, 17, 164],                    // the RIG gauge stack, up the right edge
+    [HW - (camMode === 'top' ? 24 : 17), HH - 236, camMode === 'top' ? 24 : 17, 164],
+                                                        // RIG stack, or the chart band rail
     [HW - 80, HH - 72, 80, 72],                      // dial, its radial lamps, trip
     [0, HH - 30, Math.round(HW * 0.72), 30],         // the place line and coordinates
   ];
@@ -55204,52 +55302,109 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       hctx.fillRect(wx2 - 2, yT0, 1, yB0 - yT0 + 1); hctx.fillRect(wx2 + 2, yT0, 1, yB0 - yT0 + 1);
       hctx.fillRect(wx2 - 2, clamp(yOf(cMid), yT0 + 1, yB0 - 1), 5, 1);
     };
-    // ── RIG, outer-right (Glass spec §5.7): the same gauge mirrored, one
-    // rigid group anchored above the dial, candles carrying the session.
-    {
+    if (camMode === 'top') {
+      // The chart has no use for drivetrain history or a weather forecast down
+      // its edges. Those two vertical rails become the two camera facts that
+      // can only be judged while looking at the chart: its pitch, and the
+      // authored miniature band's width.
+      const H = 136;
+      chartTiltRect = { x: 0, y: my - 6 - H, w: 23, h: H };
       const stackB = cy - DR - 9;
-      const slotY = (i: number): number => stackB - (4 - i) * GSLOT + 6;
-      gauge(slotY(0), rig.batt, rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good, false, -1, 'batt', 'BATT');
-      gauge(slotY(1), rig.tyre, rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft, rig.tyre >= 0.6, -1, 'tyre', 'TYRE');
-      gauge(slotY(2), rig.hull, rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft, rig.hull >= 0.75, -1, 'hull', 'HULL');
-      gauge(slotY(3), rig.susp, rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft, rig.susp >= 0.6, -1, 'susp', 'SUSP');
-    }
-
-    // ── ENV, outer-left (Glass spec §5.3): the stack SEATS ON THE MAP — the
-    // bottom row is always 3g above the dock, present rows packing downward,
-    // so an absent WET/FOG never leaves a hole between the group and its
-    // anchor (photographed: an 80px gap where two empty slots used to be).
-    // Candles here are FORECASTS — see the gauge's own note.
-    {
-      const ahx = state.x + Math.sin(state.heading) * 500;
-      const ahz = state.z - Math.cos(state.heading) * 500;
-      const wa = wxAt(wxField, ahx, ahz);
-      const windKmh = live.on ? live.windKmh : 12;
-      const wlvl = clamp(windKmh / 60, 0, 1);
-      const wh = gaugeHist.get('wind');
-      const rows: Array<[string, string, number, string, boolean, number]> = [];
-      // Wind has no field to sample ahead, so its forecast is its own trend,
-      // leaned on twice as hard as the smoothing that measured it.
-      rows.push(['wind', 'WIND', wlvl, windKmh > 38 ? UI.gold : UI.soft, windKmh <= 38,
-        clamp(wlvl + (wh ? (wlvl - wh.m) * 2 : 0), 0, 1)]);
-      const w = WX[wx.sky];
-      rows.push(['sky', w.label, wx.cloud,
-        wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft,
-        wx.sky !== 'storm' && wx.rain <= 0.1, wa.cover]);
-      const sname = surf === 'water' ? 'WATER' : sq >= 0.8 ? 'ROAD' : sq >= 0.45 ? 'TRACK' : 'ROUGH';
-      const scol = sname === 'ROAD' ? UI.good : sname === 'TRACK' ? UI.edge : UI.hot;
-      // The surface forecast is the ground 250m up the heading — the argument
-      // the wheels are about to be standing on.
-      surfaceAt(state.x + Math.sin(state.heading) * 250, state.z - Math.cos(state.heading) * 250);
-      rows.push(['surf', sname, grip, scol, false, clamp(surfQ, 0, 1)]);
-      if (wx.wet > 0.02 || wa.wet > 0.06) {
-        rows.push(['wet', 'WET', wx.wet, wx.wet > 0.5 ? UI.bad : UI.edge, wx.wet <= 0.5, wa.wet]);
+      chartBandRect = { x: HW - 23, y: stackB - H, w: 23, h: H };
+      const slider = (r: HudRect, label: string, value: string, frac: number,
+        side: 1 | -1, col: string, band?: TiltBand): void => {
+        const tr = chartSliderTrack(r);
+        const x = side === 1 ? 5 : HW - 6;
+        textEdgeS(label, side === 1 ? 1 : HW - 1 - textSW(label), r.y, col);
+        textEdgeS(value, side === 1 ? 1 : HW - 1 - textSW(value), r.y + 8, UI.dim);
+        // Sparse ruled rail: the same edge language as the gauges, but one
+        // continuous handle because this is a control rather than a reading.
+        hctx.fillStyle = 'rgba(114,189,178,0.25)';
+        hctx.fillRect(x, tr.top, 1, tr.bottom - tr.top + 1);
+        for (let i = 0; i <= 10; i++) {
+          const y = Math.round(tr.top + (i / 10) * (tr.bottom - tr.top));
+          const n = i % 5 === 0 ? 5 : i % 2 === 0 ? 3 : 2;
+          hctx.fillRect(side === 1 ? x : x - n + 1, y, n, 1);
+        }
+        const hy = Math.round(tr.bottom - clamp(frac, 0, 1) * (tr.bottom - tr.top));
+        hctx.fillStyle = col;
+        hctx.fillRect(side === 1 ? x : x - 6, hy - 1, 7, 3);
+        const tx = side === 1 ? 1 : HW - 2;
+        for (let c = 0; c < 3; c++) hctx.fillRect(tx + side * c, hy - (2 - c), 1, 5 - 2 * c);
+        if (!band) return;
+        // A literal miniature-band ruler: inner caps are the fully sharp core,
+        // outer caps the point of full blur. Both expand around the focus line
+        // as BAND changes, so the diagnostic describes what it is tuning.
+        const presetHalf = (tr.bottom - tr.top) * 0.5;
+        const mid = Math.round((tr.top + tr.bottom) * 0.5);
+        const bracket = (f: number, bx: number, c: string): void => {
+          const d = Math.round(Math.min(presetHalf, f * presetHalf));
+          hctx.fillStyle = c;
+          hctx.fillRect(bx, mid - d, 1, d * 2 + 1);
+          hctx.fillRect(bx - 2, mid - d, 3, 1);
+          hctx.fillRect(bx - 2, mid + d, 3, 1);
+        };
+        bracket(band.blur * chartBandScale, HW - 15, 'rgba(114,189,178,0.35)');
+        bracket(band.sharp * chartBandScale, HW - 18, col);
+        hctx.fillRect(HW - 19, mid, 5, 1);
+      };
+      slider(chartTiltRect, 'TILT', `${Math.round(chartTiltDeg)} DEG`,
+        (chartTiltDeg - CHART_TILT_MIN) / (CHART_TILT_MAX - CHART_TILT_MIN),
+        1, chartLensDrag?.kind === 'tilt' ? UI.text : UI.edge);
+      const activeBand = dofMode === 'miniature' && tiltMode !== 'off';
+      const band = (TILT_PRESETS[tiltMode] ?? TILT_PRESETS.off).top;
+      slider(chartBandRect, 'BAND', `${Math.round(chartBandScale * 100)}%`,
+        (chartBandScale - CHART_BAND_MIN) / (CHART_BAND_MAX - CHART_BAND_MIN),
+        -1, chartLensDrag?.kind === 'band' ? UI.text : activeBand ? UI.gold : UI.dim, band);
+    } else {
+      chartTiltRect.w = chartBandRect.w = 0;
+      // ── RIG, outer-right (Glass spec §5.7): the same gauge mirrored, one
+      // rigid group anchored above the dial, candles carrying the session.
+      {
+        const stackB = cy - DR - 9;
+        const slotY = (i: number): number => stackB - (4 - i) * GSLOT + 6;
+        gauge(slotY(0), rig.batt, rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good, false, -1, 'batt', 'BATT');
+        gauge(slotY(1), rig.tyre, rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft, rig.tyre >= 0.6, -1, 'tyre', 'TYRE');
+        gauge(slotY(2), rig.hull, rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft, rig.hull >= 0.75, -1, 'hull', 'HULL');
+        gauge(slotY(3), rig.susp, rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft, rig.susp >= 0.6, -1, 'susp', 'SUSP');
       }
-      if (wxL.fog > 0.12 || wa.fog > 0.2) rows.push(['fog', 'FOG', wxL.fog, UI.soft, false, wa.fog]);
-      const stackB = my - 6;
-      rows.forEach((r, i) => {
-        gauge(stackB - (rows.length - i) * GSLOT + 6, r[2], r[3], r[4], 1, r[0], r[1], r[5]);
-      });
+
+      // ── ENV, outer-left (Glass spec §5.3): the stack SEATS ON THE MAP — the
+      // bottom row is always 3g above the dock, present rows packing downward,
+      // so an absent WET/FOG never leaves a hole between the group and its
+      // anchor (photographed: an 80px gap where two empty slots used to be).
+      // Candles here are FORECASTS — see the gauge's own note.
+      {
+        const ahx = state.x + Math.sin(state.heading) * 500;
+        const ahz = state.z - Math.cos(state.heading) * 500;
+        const wa = wxAt(wxField, ahx, ahz);
+        const windKmh = live.on ? live.windKmh : 12;
+        const wlvl = clamp(windKmh / 60, 0, 1);
+        const wh = gaugeHist.get('wind');
+        const rows: Array<[string, string, number, string, boolean, number]> = [];
+        // Wind has no field to sample ahead, so its forecast is its own trend,
+        // leaned on twice as hard as the smoothing that measured it.
+        rows.push(['wind', 'WIND', wlvl, windKmh > 38 ? UI.gold : UI.soft, windKmh <= 38,
+          clamp(wlvl + (wh ? (wlvl - wh.m) * 2 : 0), 0, 1)]);
+        const w = WX[wx.sky];
+        rows.push(['sky', w.label, wx.cloud,
+          wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft,
+          wx.sky !== 'storm' && wx.rain <= 0.1, wa.cover]);
+        const sname = surf === 'water' ? 'WATER' : sq >= 0.8 ? 'ROAD' : sq >= 0.45 ? 'TRACK' : 'ROUGH';
+        const scol = sname === 'ROAD' ? UI.good : sname === 'TRACK' ? UI.edge : UI.hot;
+        // The surface forecast is the ground 250m up the heading — the argument
+        // the wheels are about to be standing on.
+        surfaceAt(state.x + Math.sin(state.heading) * 250, state.z - Math.cos(state.heading) * 250);
+        rows.push(['surf', sname, grip, scol, false, clamp(surfQ, 0, 1)]);
+        if (wx.wet > 0.02 || wa.wet > 0.06) {
+          rows.push(['wet', 'WET', wx.wet, wx.wet > 0.5 ? UI.bad : UI.edge, wx.wet <= 0.5, wa.wet]);
+        }
+        if (wxL.fog > 0.12 || wa.fog > 0.2) rows.push(['fog', 'FOG', wxL.fog, UI.soft, false, wa.fog]);
+        const stackB = my - 6;
+        rows.forEach((r, i) => {
+          gauge(stackB - (rows.length - i) * GSLOT + 6, r[2], r[3], r[4], 1, r[0], r[1], r[5]);
+        });
+      }
     }
   }
   // The mission card and the survey-claim toast are DOM now (client/
