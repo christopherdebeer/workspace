@@ -1,41 +1,42 @@
 /**
- * ── WHAT SOFTENS A DISTANT ROAD, AND WHAT A FOCAL PLANE DOES INSTEAD ──
+ * ── REAL-TIME DEPTH OF FIELD: ONE WORLD, ALL CONTROLS ──
  *
- *   node devtools/focus-ab.mjs              (the fix: air blur off, tilt off)
- *   AIR=1 node devtools/focus-ab.mjs        (the control: the old coupling)
- *   TILT=mini node devtools/focus-ab.mjs    (the focal plane, on the chart)
+ *   node devtools/focus-ab.mjs
+ *   FIX=at-campsbay OUT=docs/images/dof-2026-09-17 node devtools/focus-ab.mjs
  *
- * ONE VARIANT PER PROCESS. The harness fuse is twenty minutes and a settled
- * fixture with drawing on is minutes; two variants in one run is a run killed
- * with its last number half written.
+ * The run settles one fixture, then changes only live lens uniforms and the
+ * art-resolution dial. It captures:
  *
- * The instrument is `__tilt()`, which reports the two softening terms — the
- * air's and the focal plane's — SEPARATELY at a transect of points straight
- * ahead. That separation is the whole point of the change, and a frame cannot
- * show it: a soft pixel looks the same whichever term produced it.
+ *   - DOF off against camera DOF with the truck left visible;
+ *   - a near-to-far focus pull, including an in-flight frame;
+ *   - the same camera lens at 240P, 320P and 480P;
+ *   - miniature mode against off on the top camera, including water.
  *
- * The frames are taken with the quantiser and dither LEFT ON, because the
- * question is not whether this resembles photographic depth of field in a
- * smooth image. It is whether the defocused region collapses into broad,
- * quiet pixel clusters while the focal band keeps Drive's fine detail.
+ * Headless Drive can take many wall seconds per frame. Every capture therefore
+ * waits for COMPLETED game frames through `__clock().frames`; a timeout alone
+ * can photograph the cleared framebuffer while a large frame is still being
+ * rasterised and manufacture a byte-identical black A/B.
  */
 import { openDrive } from './harness.mjs';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
-const AIR = process.env.AIR ?? '0';
-const TILT = process.env.TILT ?? 'off';
 const FIX = process.env.FIX ?? 'at-campsbay';
 const OUT = process.env.OUT ?? '/tmp/drive-tools/focus';
 mkdirSync(OUT, { recursive: true });
-const TAG = `air${AIR}-tilt${TILT}`;
 const t0 = Date.now();
-const el = () => `${((Date.now() - t0) / 1000).toFixed(0)}s`;
+const elapsed = () => `${((Date.now() - t0) / 1000).toFixed(0)}s`;
 
 const d = await openDrive({
-  spot: `fixture=${FIX}&cam=top&time=NOON&wx=clear&nodraw=1&airblur=${AIR}&tilt=${TILT}`,
-  tag: `focus-${TAG}`, settle: 0, bootTimeout: 240000, dpr: 1,
+  spot: `fixture=${FIX}&cam=chase&time=NOON&wx=clear&nodraw=1&airblur=0&dof=off&tilt=stock`,
+  tag: 'dof-contact', settle: 0, bootTimeout: 240000, dpr: 1,
+  headed: process.env.HEADED === '1',
 });
 const q = (f, ...a) => d.page.evaluate(f, ...a);
+async function waitFrames(count = 2) {
+  const from = (await q(() => window.__clock())).frames;
+  await d.page.waitForFunction(({ from: f, count: n }) => window.__clock().frames >= f + n,
+    { from, count }, { timeout: 240000, polling: 100 });
+}
 
 let quiet = 0, pw = -1, pc = -1, pb = -1;
 for (let i = 0; i < 90; i++) {
@@ -46,79 +47,65 @@ for (let i = 0; i < 90; i++) {
   pw = t.seenWays; pc = t.roadCells; pb = t.builds;
   if (quiet >= 4) break;
 }
-console.log(`[${el()}] settled: ways ${pw}, roadCells ${pc}, builds ${pb}`);
-
-// PUT THE TRUCK ON A ROAD FIRST. The transect runs along the camera's own
-// ground ray from under the eye, and from open veld it measures the veld.
+console.log(`[${elapsed()}] settled: ways ${pw}, roadCells ${pc}, builds ${pb}`);
 await q(() => window.__toroad?.(400));
-for (const cam of ['chase', 'top']) {
-  await q((m) => window.__cam(m), cam);
-  await d.page.waitForTimeout(2500);
-  const t = await q(() => window.__tilt());
-  const { ahead, at, ...head } = t;
-  console.log(`  [${cam}] ${JSON.stringify(head)}`);
-  console.log(`    under the rig: ${JSON.stringify(at)}`);
-  console.log('    ahead (m: air / coc / blur):');
-  console.log('      ' + ahead.map((r) => `${r.t}m ${r.air.toFixed(3)}/${r.coc.toFixed(3)}/${r.blur.toFixed(3)}`).join('  '));
+await q(() => { window.__draw(true); window.__hud(false); });
+await waitFrames(2);
+
+const pixIndex = { 240: 0, 320: 1, 480: 2 };
+async function lens(opts) {
+  return q((o) => window.__dof(o), opts);
+}
+async function setPix(px) {
+  await q((i) => window.__dial('pix', i), pixIndex[px]);
+}
+async function shot(name, { waitMs = 0, frames = 2 } = {}) {
+  if (waitMs) await d.page.waitForTimeout(waitMs);
+  await waitFrames(frames);
+  const probe = await q(() => window.__dof());
+  const buffers = probe.active ? await q(() => window.__dofbuf()) : null;
+  writeFileSync(`${OUT}/${name}.png`, await d.page.screenshot({ timeout: 240000 }));
+  console.log(`  [${elapsed()}] ${name}: ${JSON.stringify(probe)}`);
+  if (buffers) console.log(`    buffers: ${JSON.stringify(buffers)}`);
 }
 
-// ── THE HONEST A/B IS ONE PROCESS, TWO UNIFORM VALUES ──
-//
-// Two separate boots of the same fixture are NOT a control: the wildlife, the
-// sward's phase and the streaming order all differ, so a diff between them
-// carries the change plus whatever the world did. Measured that way the first
-// time: mean 0.85/255 with a worst pixel of 133.9, and the 133.9 was nothing
-// to do with the blur.
-//
-// `__tilt({air})` sets the uniform live, so these two frames come from one
-// boot, one settled world, one clock — and differ by exactly the term under
-// test. The same trick the dither rack uses: re-composite what is already in
-// rtScene rather than rendering the world twice.
-if (process.env.AB === '1') {
-  await q(() => { window.__draw(true); window.__hud(false); window.__hide('rig'); });
-  await q(() => window.__cam('chase'));
-  await d.page.waitForTimeout(9000);
-  for (const air of [1, 0]) {
-    await q((a) => window.__tilt({ air: a }), air);
-    await d.page.waitForTimeout(1200);
-    writeFileSync(`${OUT}/ab-air${air}.png`, await d.page.screenshot({ timeout: 240000 }));
-    console.log(`  shot ab-air${air}`);
-  }
-  // …and the same for the focal plane, so the two softenings can be told apart
-  // in pixels and not only in the probe.
-  // THE FOCAL PLANE, ON BOTH CAMERAS AND FROM ONE BOOT. `amount: null` puts
-  // the preset back rather than pinning a number, so the ON frame is the look
-  // as it actually ships on that camera — full on the chart, a third in chase.
-  // The band itself is never set here in bare pixels: the preset states it as
-  // a fraction of `halfPx`, half the art frame, which is the scale a viewer
-  // can actually predict. `satPx` is printed beside it because it is the
-  // ceiling on receding ground — a band at or over it never resolves.
-  for (const cam of ['chase', 'top']) {
-    await q((m) => window.__cam(m), cam);
-    if (cam === 'top') await q(() => window.__zoom(0.9));
-    await d.page.waitForTimeout(9000);
-    for (const on of [0, 1]) {
-      await q((v) => window.__tilt({ air: 0, amount: v ? null : 0 }), on);
-      await d.page.waitForTimeout(1200);
-      const t = await q(() => window.__tilt());
-      writeFileSync(`${OUT}/ab-${cam}-tilt${on}.png`, await d.page.screenshot({ timeout: 240000 }));
-      console.log(`  shot ab-${cam}-tilt${on}  amt ${t.amount} D ${t.focusDistM}m`
-        + ` band ${t.sharpPx}-${t.blurPx} of half ${t.halfPx} / sat ${t.satPx}`
-        + ` N ${JSON.stringify(t.focusN)}`);
-    }
-  }
+await q(() => window.__cam('chase'));
+await setPix(320);
+await lens({ mode: 'off' });
+await shot('01-chase-off-320');
+
+await lens({ mode: 'camera', quality: 'high', aperture: 3, focus: 30, snap: true });
+await shot('02-chase-camera-30m-320');
+
+// A focus pull, not two teleports. The transition frame is three completed
+// renders after the target moves; the settled endpoint is then snapped so the
+// screenshot matrix remains practical under SwiftShader.
+await lens({ focus: 15, snap: true });
+await shot('03-focus-near-15m-settled');
+await lens({ focus: 150 });
+await shot('04-focus-far-transition', { frames: 3 });
+await lens({ focus: 150, snap: true });
+await shot('05-focus-far-150m-settled');
+
+// Same camera, subject and aperture; only the art grid changes.
+await lens({ focus: 30, snap: true });
+for (const px of [240, 320, 480]) {
+  await setPix(px);
+  await shot(`06-camera-resolution-${px}`);
 }
-if (process.env.SHOTS !== '0' && process.env.AB !== '1') {
-  await q(() => { window.__draw(true); window.__hud(false); window.__hide('rig'); });
-  for (const [name, cam, zoom] of [['chase', 'chase', 0], ['top', 'top', 0.9]]) {
-    await q((m) => window.__cam(m), cam);
-    if (zoom) await q((z) => window.__zoom(z), zoom);
-    await d.page.waitForTimeout(9000);
-    writeFileSync(`${OUT}/${name}-${TAG}.png`, await d.page.screenshot({ timeout: 240000 }));
-    console.log(`  shot ${name}`);
-  }
-  console.log(`  frames in ${OUT}`);
-}
+
+// The chart is the miniature mode's native view. Camps Bay keeps sea and
+// shoreline in the frame, exercising depth-writing water beside land.
+await q(() => window.__cam('top'));
+await q(() => window.__zoom(0.9));
+await setPix(320);
+await lens({ mode: 'off' });
+await shot('07-top-off-water-320', { waitMs: 6000 });
+await lens({ mode: 'miniature', quality: 'high', aperture: 3, focus: 'auto' });
+await q(() => window.__tilt({ mode: 'stock', amount: null }));
+await shot('08-top-miniature-water-320');
+
 const errs = await q(() => window.__errors?.() ?? []);
-console.log(`  page errors: ${errs.length}${errs.length ? ' ' + JSON.stringify(errs.slice(0, 3)) : ''}`);
+console.log(`  page errors: ${errs.length}${errs.length ? ' ' + JSON.stringify(errs.slice(0, 5)) : ''}`);
 await d.close();
+if (errs.length) process.exitCode = 1;

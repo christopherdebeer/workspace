@@ -2675,6 +2675,36 @@ const TILT_MODES = ['off', 'subtle', 'mini', 'stock', 'hard'] as const;
  */
 let tiltMode = ((v) => (v && v in TILT_PRESETS ? v : 'stock'))(qs('tilt')?.toLowerCase());
 /**
+ * ── DEPTH OF FIELD IS A LENS, TILT SHIFT IS A FOCUS GEOMETRY ──
+ *
+ * The old effect used `tiltMode` to choose both WHERE focus lives and HOW the
+ * image is softened. Those are separate decisions now:
+ *
+ *   CAMERA      a conventional fronto-parallel focus plane, aimed at the
+ *               rendered subject under the centre of the glass;
+ *   MINIATURE   the existing tilted world-space plane and its named bands;
+ *   OFF         no dedicated DOF passes (atmosphere still owns `softTex`).
+ *
+ * Keeping MINIATURE as the default preserves the authored Drive look while
+ * making CAMERA an honest photographic alternative instead of silently
+ * changing what "tilt shift" means.
+ */
+const DOF_MODES = ['off', 'camera', 'miniature'] as const;
+type DofMode = typeof DOF_MODES[number];
+const DOF_QUALITIES = ['low', 'med', 'high'] as const;
+const DOF_TAPS = [6, 10, 16] as const;
+const DOF_RADII = [4, 7, 11, 15] as const; // maximum circle radius, in art pixels
+const DOF_FOCUS_M = [0, 15, 30, 60, 150, 600] as const; // 0 means rendered centre subject
+let dofMode: DofMode = ((v): DofMode =>
+  v && (DOF_MODES as readonly string[]).includes(v) ? v as DofMode : 'miniature'
+)(qs('dof')?.toLowerCase());
+let dofQuality = ((v): number => {
+  const i = DOF_QUALITIES.indexOf(v as typeof DOF_QUALITIES[number]);
+  return i >= 0 ? i : 1;
+})(qs('dofq')?.toLowerCase() ?? 'med');
+let dofRadiusAt = clamp(Math.round(qsNum('aperture', 1)), 0, DOF_RADII.length - 1);
+let dofFocusAt = clamp(Math.round(qsNum('focus', 0)), 0, DOF_FOCUS_M.length - 1);
+/**
  * ── A DEVTOOLS PANEL FOR A PHONE ──
  *
  * Every fault this file records from the seat was found on a device with no
@@ -5555,6 +5585,10 @@ rtScene.samples = 0; // MSAA would soften exactly the edges we want hard
 rtScene.depthTexture = new THREE.DepthTexture(2, 2);
 const rtA = mkRT(false), rtB = mkRT(false);
 const rtC = mkRT(false), rtD = mkRT(false); // bright-pass ping-pong for bloom
+// Dedicated half-resolution DOF buffers. PREP stores foreground/background
+// circle radii separately; FAR and NEAR never share colour, because sharing is
+// what lets a soft background bleed through a sharp silhouette.
+const rtDofPrep = mkRT(false), rtDofFar = mkRT(false), rtDofNear = mkRT(false);
 // THE SHUTTER'S OWN TARGET. Full pixel-grid size and NEAREST like rtScene,
 // not half like the blur pair: this is not a soft copy of the frame, it IS
 // the frame, and everything downstream reads it in rtScene's place.
@@ -5580,6 +5614,9 @@ resizePost = () => {
   rtB.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   rtC.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   rtD.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
+  rtDofPrep.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
+  rtDofFar.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
+  rtDofNear.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   rtM.setSize(w, Math.max(2, h));
   pixSize.set(w, Math.max(2, h));
   // The tree crowns turn a distance into ART PIXELS to decide how far to close
@@ -5924,7 +5961,7 @@ const mblurMat = new THREE.ShaderMaterial({
       // a corner the whole yaw. Left in, it softened the silhouette that does
       // all the work at this pixel scale and smeared the x-ray screen-door into
       // teal bands, which is the ghost corridor's charge sheet over again.
-      if (c0.a < 0.25) { gl_FragColor = vec4(c0.rgb, 1.0); return; }
+      if (c0.a < 0.25) { gl_FragColor = c0; return; }
       float z = texture2D(depthTex, vUv).r;
       vec4 far = invPV * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
       vec3 dir = normalize(far.xyz / far.w - camPos);
@@ -5939,14 +5976,14 @@ const mblurMat = new THREE.ShaderMaterial({
       if (distance(wp, camPos) >= uSkyD) wp = camPos + dir * 60000.0;
       vec4 pc = prevVP * vec4(wp, 1.0);
       // Behind last frame's camera: it was not on screen to travel from.
-      if (pc.w <= 0.0) { gl_FragColor = vec4(c0.rgb, 1.0); return; }
+      if (pc.w <= 0.0) { gl_FragColor = c0; return; }
       vec2 prevUv = (pc.xy / pc.w) * 0.5 + 0.5;
       vec2 vel = (vUv - prevUv) * uAmt;
       float len = length(vel * uPix);
       if (len > uMaxPx) vel *= uMaxPx / len;
       // Under a texel of travel there is nothing to integrate, and sampling it
       // anyway only softens a pixel that has earned the right to stay hard.
-      if (len < 0.9) { gl_FragColor = vec4(c0.rgb, 1.0); return; }
+      if (len < 0.9) { gl_FragColor = c0; return; }
       // A box, walked BACKWARDS along the travel: the shutter closed at this
       // instant, so the trail belongs behind the pixel, not around it. An even
       // weight is what an open shutter actually does.
@@ -5964,7 +6001,7 @@ const mblurMat = new THREE.ShaderMaterial({
         acc += t.rgb * w;
         wsum += w;
       }
-      gl_FragColor = vec4(acc / wsum, 1.0);
+      gl_FragColor = vec4(acc / wsum, c0.a);
     }`,
 });
 // Last frame's view-projection, and where the camera stood when it was taken.
@@ -5995,6 +6032,10 @@ const compMat = new THREE.ShaderMaterial({
   uniforms: {
     sceneTex: { value: null },
     softTex: { value: null },
+    dofPrepTex: { value: null },
+    dofFarTex: { value: null },
+    dofNearTex: { value: null },
+    uDofOn: { value: 0 },
     depthTex: { value: rtScene.depthTexture },
     mask: { value: fogTex },
     invPV: { value: new THREE.Matrix4() },
@@ -6070,6 +6111,13 @@ const compMat = new THREE.ShaderMaterial({
     // How defocused the sky is when the effect is on. Not 1: a fully smeared
     // sunset fights the horizon treatment the sky branch already does.
     uTiltSky: { value: 0.7 },
+    // The dedicated DOF pass writes an actual signed circle radius. These are
+    // kept on the composite's uniform block too because the live probes read
+    // one authoritative lens state, even though filtering happens upstream.
+    uDofMode: { value: 2 },
+    uDofFocusDist: { value: 40 },
+    uDofMaxPx: { value: DOF_RADII[dofRadiusAt] },
+    uDofTaps: { value: DOF_TAPS[dofQuality] },
     // Metres a pixel on the chart (shared by reference): what the aerial
     // perspective fades on past the fine world. See `deep` below.
     uMpp: mppU,
@@ -6141,6 +6189,8 @@ const compMat = new THREE.ShaderMaterial({
   vertexShader: QUAD_VS,
   fragmentShader: `
     uniform sampler2D sceneTex; uniform sampler2D softTex; uniform sampler2D depthTex;
+    uniform sampler2D dofPrepTex; uniform sampler2D dofFarTex; uniform sampler2D dofNearTex;
+    uniform float uDofOn;
     uniform sampler2D bloomTex; uniform float uBloom; uniform float uScan;
     uniform float uLevels; uniform float uFow; uniform float uFlare;
     uniform float uDither; uniform float uMono;
@@ -6224,62 +6274,28 @@ ${DITHER_GLSL}
       vec3 wp = wp4.xyz / wp4.w;
       float t = distance(wp, camPos);
       /**
-       * ── TILT-SHIFT: A PLANE OF FOCUS IN THE WORLD, NOT A BAND ON THE GLASS ──
+       * ── PHOTOGRAPHIC DOF, ALREADY FILTERED AND STILL BEFORE THE GRADE ──
        *
-       * The usual cheap miniature effect blurs by distance from a horizontal
-       * strip of the screen, which is a lie that shows the moment anything
-       * vertical crosses the strip: a tower blurs at its feet and sharpens at
-       * its top for no reason. This composite already reconstructs the true
-       * world position of every fragment (wp, above, for the fog) so it can
-       * afford the real thing — a plane, given as a point and a normal, and a
-       * signed distance to it.
-       *
-       * THE UNIT IS ART PIXELS, NOT METRES, and that is the whole reason this
-       * works across Drive's cameras. A 50 m focal slab is the entire frame
-       * from the cab and less than one pixel on a 300 km chart. Metres per art
-       * pixel at this fragment is 2 t tan(fov/2) / uPix.y, so dividing the
-       * plane distance by it gives a quantity that means the same thing at
-       * every altitude and at 240P, 320P and 480P alike.
-       *
-       * ONE BLUR SCALE, INTERPOLATED — not a varying circle of confusion.
-       * softTex is already built every frame for the atmosphere (four
-       * separable passes at half art resolution) and is reused here, so the
-       * whole effect costs a dot product, a divide and a smoothstep: no extra
-       * pass, no extra target, no change to __passes(). At fourteen palette
-       * levels with a Bayer dither over the top, a continuous CoC radius is
-       * not what the eye is being given anyway — what it sees is a defocused
-       * region collapsing into broader, quieter pixel clusters, and one broad
-       * blur does that. If halos appear around silhouettes, THAT is the signal
-       * to build a depth-aware blur of its own, and not before.
+       * Prep stores foreground and background radius independently. FAR is
+       * only allowed back onto a far-defocused centre pixel; NEAR carries a
+       * coverage alpha gathered from neighbouring foreground discs, so it can
+       * soften PAST the original silhouette instead of leaving a cut-out edge.
+       * The rig/noBlur alpha remains final authority at the centre pixel.
        */
-      float coc = 0.0;
-      if (uTiltAmt > 0.001) {
-        if (t >= uSkyD) {
-          // The sky writes no depth, so its reconstructed position is the far
-          // plane and its distance to any focal plane is meaningless. It is
-          // classified rather than measured: soft, because a miniature camera's
-          // backdrop is, but not fully — uTiltSky is 0.7 because a completely
-          // smeared sunset fights the horizon treatment the sky branch does.
-          coc = uTiltSky;
-        } else {
-          float fd = dot(wp - uFocusP, uFocusN);
-          float mpp = max(2.0 * t * uTanHalfFov / max(uPix.y, 1.0), 1e-4);
-          coc = smoothstep(uTiltSharp, uTiltBlur, abs(fd) / mpp);
-        }
-        // THE RIG IS NEVER DEFOCUSED BY A PLANE IT IS NOT ON. noBlur already
-        // writes alpha 0 for everything that is not world to smear — the truck
-        // above all — and the motion blur has read that convention for years.
-        // Reusing it costs nothing: the alpha came with the sample.
-        if (sharp4.a < 0.25) coc = 0.0;
-        coc *= uTiltAmt;
+      vec3 focused = sharp;
+      if (uDofOn > 0.5 && sharp4.a >= 0.25) {
+        vec4 dm = texture2D(dofPrepTex, vUv);
+        vec4 df = texture2D(dofFarTex, vUv);
+        vec4 dn = texture2D(dofNearTex, vUv);
+        focused = mix(focused, df.rgb, clamp(df.a * dm.g, 0.0, 1.0));
+        focused = mix(focused, dn.rgb, clamp(dn.a, 0.0, 1.0));
       }
       vec3 col;
       if (t >= uSkyD) {
         // Nothing drawn here (the sky dome writes no depth): crisp sky with a
         // soft luminous band hugging the horizon.
         float band = exp(-abs(dir.y) * 26.0);
-        col = mix(sharp, mix(soft, hazeAt(dir, 1.0), 0.5), band * 0.5);
-        col = mix(col, soft, coc);
+        col = mix(focused, mix(soft, hazeAt(dir, 1.0), 0.5), band * 0.5);
       } else {
         // Fog by the pixel's TRUE surface point: distance sets how much it
         // blurs and dims (aerial perspective); the fog-of-war mask at that
@@ -6313,25 +6329,17 @@ ${DITHER_GLSL}
         // horizon keeps its haze.
         float deep = (1.0 - exp(-t / uHazeE)) * vFac * step(uHazeDbg, 1.5)
           * (1.0 - smoothstep(15.0, 60.0, uMpp));
-        // ── THREE THINGS CAN SOFTEN A PIXEL, AND ONLY TWO OF THEM SHOULD ──
-        //
-        // The fog of war hides what has not been explored, and hiding it by
-        // blur is the point. The FOCUS PLANE defocuses what is off it. And the
-        // AIR used to do it by distance, which is the term the seat has been
-        // reading as roads dissolving toward their vanishing point — see
-        // uAirBlur, which is 0 by default and restores it at 1.
-        //
-        // Composed as a product of what each one LEAVES sharp rather than a
-        // sum, so two of them at 60% give 84% and never a clipped 100%.
+        // Fog-of-war and optional air blur still use the broad atmospheric
+        // copy. Lens DOF has already produced focused above and remains a
+        // separate operation, so focus cannot be confused with thick air.
         float fowBlur = clamp(m * (0.1 + 0.9 * near) + deep * uHazeAmt * uAirBlur, 0.0, 1.0);
-        float blurF = 1.0 - (1.0 - fowBlur) * (1.0 - coc);
         // …AND THE DIM TERM IS UNTOUCHED, which is the point of the split:
         // aerial perspective keeps every bit of its contrast and colour work,
         // it has simply stopped taking the focus with it. Never fully opaque:
         // the unexplored world stays a SUGGESTION behind the haze — you can
         // make out a coastline or a ridge to steer toward.
         float dimF = min(m * mix(0.10, 0.86, near) + (1.0 - m) * deep * uHazeAmt, 0.86);
-        col = mix(sharp, soft, blurF);
+        col = mix(focused, soft, fowBlur);
         col = mix(col, hazeAt(dir, uHazeWarm), dimF);
       }
       // The fog, applied to sky and ground alike — being inside a bank hides
@@ -6464,7 +6472,170 @@ ${DITHER_GLSL}
       gl_FragColor = vec4(clamp(enc, 0.0, 1.0), 1.0);
     }`,
 });
+/**
+ * SIGNED CIRCLE-OF-CONFUSION PREPARATION.
+ *
+ * R is foreground radius, G is background radius, both normalised by the live
+ * maximum art-pixel radius. B is the protected/noBlur mask. Splitting the sign
+ * here means the filters can never accidentally average foreground and
+ * background into one colour field.
+ */
+const dofPrepMat = new THREE.ShaderMaterial({
+  uniforms: {
+    sceneTex: { value: null }, depthTex: { value: rtScene.depthTexture },
+    invPV: { value: new THREE.Matrix4() }, camPos: { value: new THREE.Vector3() },
+    uFocusP: { value: new THREE.Vector3() }, uFocusN: { value: new THREE.Vector3(0, 0, -1) },
+    uFocusDist: { value: 40 }, uMode: { value: 0 }, uMaxPx: { value: 7 },
+    uTiltAmt: { value: 0 }, uTiltSharp: { value: 34 }, uTiltBlur: { value: 92 },
+    uTiltSky: { value: 0.7 }, uTanHalfFov: { value: Math.tan((55 * Math.PI) / 360) },
+    uPix: { value: pixSize }, uSkyD: { value: 45000 },
+  },
+  vertexShader: QUAD_VS,
+  fragmentShader: `
+    uniform sampler2D sceneTex; uniform sampler2D depthTex;
+    uniform mat4 invPV; uniform vec3 camPos; uniform vec3 uFocusP; uniform vec3 uFocusN;
+    uniform float uFocusDist; uniform float uMode; uniform float uMaxPx;
+    uniform float uTiltAmt; uniform float uTiltSharp; uniform float uTiltBlur;
+    uniform float uTiltSky; uniform float uTanHalfFov; uniform vec2 uPix; uniform float uSkyD;
+    varying vec2 vUv;
+    void main(){
+      vec4 c0 = texture2D(sceneTex, vUv);
+      float z = texture2D(depthTex, vUv).r;
+      vec4 wp4 = invPV * vec4(vUv * 2.0 - 1.0, z * 2.0 - 1.0, 1.0);
+      vec3 wp = wp4.xyz / wp4.w;
+      float t = distance(wp, camPos);
+      float radius = 0.0;
+      if (c0.a >= 0.25 && uMode > 0.5) {
+        if (uMode < 1.5) {
+          // Conventional camera DOF: distance ALONG the optical axis. The
+          // relative-distance form approaches uMaxPx at infinity and grows
+          // naturally toward the lens in the foreground.
+          if (t >= uSkyD) radius = uMaxPx;
+          else {
+            float axial = max(dot(wp - camPos, uFocusN), 0.25);
+            radius = clamp((axial - uFocusDist) / axial, -1.0, 1.0) * uMaxPx;
+            if (abs(radius) < 0.35) radius = 0.0; // one sub-pixel sharp well
+          }
+        } else {
+          // Miniature mode keeps the authored tilted plane, but its old blend
+          // weight now opens a real circle instead of revealing one fixed blur.
+          if (t >= uSkyD) radius = uMaxPx * uTiltSky * uTiltAmt;
+          else {
+            float fd = dot(wp - uFocusP, uFocusN);
+            float mpp = max(2.0 * t * uTanHalfFov / max(uPix.y, 1.0), 1e-4);
+            float planePx = fd / mpp;
+            float k = smoothstep(uTiltSharp, uTiltBlur, abs(planePx));
+            radius = sign(planePx) * k * uMaxPx * uTiltAmt;
+          }
+        }
+      }
+      float invR = 1.0 / max(uMaxPx, 1.0);
+      gl_FragColor = vec4(clamp(-radius * invR, 0.0, 1.0),
+        clamp(radius * invR, 0.0, 1.0), c0.a < 0.25 ? 1.0 : 0.0, 1.0);
+    }`,
+  depthTest: false,
+  depthWrite: false,
+});
+/** Background gather. Only samples carrying FAR CoC may contribute, so a
+ * foreground edge cannot leak the colour behind it into itself. */
+const dofFarMat = new THREE.ShaderMaterial({
+  uniforms: {
+    src: { value: null }, cocTex: { value: rtDofPrep.texture },
+    uPix: { value: pixSize }, uMaxPx: { value: 7 }, uTaps: { value: 10 },
+  },
+  vertexShader: QUAD_VS,
+  fragmentShader: `
+    uniform sampler2D src; uniform sampler2D cocTex;
+    uniform vec2 uPix; uniform float uMaxPx; uniform float uTaps; varying vec2 vUv;
+    void farTap(vec2 disk, float coc, float radius, inout vec3 acc, inout float wsum){
+      vec2 uv = clamp(vUv + disk * radius / uPix, vec2(0.001), vec2(0.999));
+      vec4 m = texture2D(cocTex, uv);
+      vec4 c = texture2D(src, uv);
+      float w = step(0.25, c.a) * step(max(0.008, coc * 0.28), m.g);
+      acc += c.rgb * w; wsum += w;
+    }
+    void main(){
+      vec4 c0 = texture2D(src, vUv);
+      vec4 m0 = texture2D(cocTex, vUv);
+      float coc = m0.g;
+      if (coc < 0.008 || c0.a < 0.25) { gl_FragColor = vec4(c0.rgb, 0.0); return; }
+      float radius = max(0.75, coc * uMaxPx);
+      vec3 acc = vec3(0.0); float wsum = 0.0;
+      farTap(vec2(0.0), coc, radius, acc, wsum);
+      farTap(vec2(0.52, 0.06), coc, radius, acc, wsum);
+      farTap(vec2(-0.42, 0.34), coc, radius, acc, wsum);
+      farTap(vec2(0.14, -0.54), coc, radius, acc, wsum);
+      farTap(vec2(0.78, 0.60), coc, radius, acc, wsum);
+      farTap(vec2(-0.74, -0.58), coc, radius, acc, wsum);
+      if (uTaps > 6.5) {
+        farTap(vec2(-0.08, 0.82), coc, radius, acc, wsum);
+        farTap(vec2(0.88, -0.30), coc, radius, acc, wsum);
+        farTap(vec2(-0.92, 0.06), coc, radius, acc, wsum);
+        farTap(vec2(0.34, 0.94), coc, radius, acc, wsum);
+      }
+      if (uTaps > 10.5) {
+        farTap(vec2(-0.30, -0.92), coc, radius, acc, wsum);
+        farTap(vec2(0.62, -0.76), coc, radius, acc, wsum);
+        farTap(vec2(-0.62, 0.72), coc, radius, acc, wsum);
+        farTap(vec2(0.22, 0.46), coc, radius, acc, wsum);
+        farTap(vec2(-0.20, -0.38), coc, radius, acc, wsum);
+        farTap(vec2(0.96, 0.20), coc, radius, acc, wsum);
+      }
+      gl_FragColor = vec4(wsum > 0.0 ? acc / wsum : c0.rgb, 1.0);
+    }`,
+  depthTest: false,
+  depthWrite: false,
+});
+/** Foreground gather. Every sampled foreground pixel asks whether its OWN
+ * circle reaches this output pixel. The resulting alpha is expanded coverage,
+ * which is the missing silhouette operation in a simple depth-dependent blur. */
+const dofNearMat = new THREE.ShaderMaterial({
+  uniforms: {
+    src: { value: null }, cocTex: { value: rtDofPrep.texture },
+    uPix: { value: pixSize }, uMaxPx: { value: 7 }, uTaps: { value: 10 },
+  },
+  vertexShader: QUAD_VS,
+  fragmentShader: `
+    uniform sampler2D src; uniform sampler2D cocTex;
+    uniform vec2 uPix; uniform float uMaxPx; uniform float uTaps; varying vec2 vUv;
+    void nearTap(vec2 disk, inout vec3 acc, inout float wsum, inout float coverage){
+      vec2 uv = clamp(vUv + disk * uMaxPx / uPix, vec2(0.001), vec2(0.999));
+      vec4 m = texture2D(cocTex, uv);
+      vec4 c = texture2D(src, uv);
+      float reach = smoothstep(max(length(disk) - 0.14, 0.0), length(disk) + 0.08, m.r);
+      float w = reach * step(0.25, c.a);
+      acc += c.rgb * w; wsum += w; coverage = max(coverage, w);
+    }
+    void main(){
+      vec4 c0 = texture2D(src, vUv);
+      vec3 acc = vec3(0.0); float wsum = 0.0; float coverage = 0.0;
+      nearTap(vec2(0.0), acc, wsum, coverage);
+      nearTap(vec2(0.52, 0.06), acc, wsum, coverage);
+      nearTap(vec2(-0.42, 0.34), acc, wsum, coverage);
+      nearTap(vec2(0.14, -0.54), acc, wsum, coverage);
+      nearTap(vec2(0.78, 0.60), acc, wsum, coverage);
+      nearTap(vec2(-0.74, -0.58), acc, wsum, coverage);
+      if (uTaps > 6.5) {
+        nearTap(vec2(-0.08, 0.82), acc, wsum, coverage);
+        nearTap(vec2(0.88, -0.30), acc, wsum, coverage);
+        nearTap(vec2(-0.92, 0.06), acc, wsum, coverage);
+        nearTap(vec2(0.34, 0.94), acc, wsum, coverage);
+      }
+      if (uTaps > 10.5) {
+        nearTap(vec2(-0.30, -0.92), acc, wsum, coverage);
+        nearTap(vec2(0.62, -0.76), acc, wsum, coverage);
+        nearTap(vec2(-0.62, 0.72), acc, wsum, coverage);
+        nearTap(vec2(0.22, 0.46), acc, wsum, coverage);
+        nearTap(vec2(-0.20, -0.38), acc, wsum, coverage);
+        nearTap(vec2(0.96, 0.20), acc, wsum, coverage);
+      }
+      gl_FragColor = vec4(wsum > 0.0 ? acc / wsum : c0.rgb, clamp(coverage, 0.0, 1.0));
+    }`,
+  depthTest: false,
+  depthWrite: false,
+});
 composite = (amt: number): void => {
+
   // The shutter runs FIRST, so everything after it — the depth-of-field blur,
   // the bright pass, the haze, the grade and the palette step — is working on
   // one already-exposed frame rather than on an instant.
@@ -6483,6 +6654,47 @@ composite = (amt: number): void => {
   blurMat.uniforms.src.value = rtA.texture; blurMat.uniforms.dirPx.value.set(0, 1 / rtA.height); runPass(blurMat, rtB);
   blurMat.uniforms.src.value = rtB.texture; blurMat.uniforms.dirPx.value.set(2 / rtA.width, 0); runPass(blurMat, rtA);
   blurMat.uniforms.src.value = rtA.texture; blurMat.uniforms.dirPx.value.set(0, 2 / rtA.height); runPass(blurMat, rtB);
+  // Lens DOF is its own bounded chain. The broad atmospheric copy above still
+  // exists because fog-of-war, optional air blur and the sky horizon consume
+  // it independently. OFF genuinely skips all three extra passes.
+  const cu = compMat.uniforms;
+  const dofOn = dofMode === 'camera'
+    || (dofMode === 'miniature' && (cu.uTiltAmt.value as number) > 0.001);
+  cu.uDofOn.value = dofOn ? 1 : 0;
+  cu.uDofMode.value = dofMode === 'camera' ? 1 : dofMode === 'miniature' ? 2 : 0;
+  cu.uDofMaxPx.value = DOF_RADII[dofRadiusAt];
+  cu.uDofTaps.value = DOF_TAPS[dofQuality];
+  if (dofOn) {
+    const pu = dofPrepMat.uniforms;
+    pu.sceneTex.value = srcTex;
+    pu.depthTex.value = rtScene.depthTexture;
+    pu.invPV.value.copy(cu.invPV.value as THREE.Matrix4);
+    pu.camPos.value.copy(cu.camPos.value as THREE.Vector3);
+    pu.uFocusP.value.copy(cu.uFocusP.value as THREE.Vector3);
+    pu.uFocusN.value.copy(cu.uFocusN.value as THREE.Vector3);
+    pu.uFocusDist.value = cu.uDofFocusDist.value;
+    pu.uMode.value = cu.uDofMode.value;
+    pu.uMaxPx.value = cu.uDofMaxPx.value;
+    pu.uTiltAmt.value = cu.uTiltAmt.value;
+    pu.uTiltSharp.value = cu.uTiltSharp.value;
+    pu.uTiltBlur.value = cu.uTiltBlur.value;
+    pu.uTiltSky.value = cu.uTiltSky.value;
+    pu.uTanHalfFov.value = cu.uTanHalfFov.value;
+    pu.uSkyD.value = cu.uSkyD.value;
+    runPass(dofPrepMat, rtDofPrep);
+
+    dofFarMat.uniforms.src.value = srcTex;
+    dofFarMat.uniforms.cocTex.value = rtDofPrep.texture;
+    dofFarMat.uniforms.uMaxPx.value = cu.uDofMaxPx.value;
+    dofFarMat.uniforms.uTaps.value = cu.uDofTaps.value;
+    runPass(dofFarMat, rtDofFar);
+
+    dofNearMat.uniforms.src.value = srcTex;
+    dofNearMat.uniforms.cocTex.value = rtDofPrep.texture;
+    dofNearMat.uniforms.uMaxPx.value = cu.uDofMaxPx.value;
+    dofNearMat.uniforms.uTaps.value = cu.uDofTaps.value;
+    runPass(dofNearMat, rtDofNear);
+  }
   // Bright-pass, then two blur rounds of its own — bloom must not reuse the
   // depth-of-field blur, which is built from the WHOLE image.
   //
@@ -6505,6 +6717,9 @@ composite = (amt: number): void => {
   }
   compMat.uniforms.sceneTex.value = srcTex;
   compMat.uniforms.softTex.value = rtB.texture;
+  compMat.uniforms.dofPrepTex.value = rtDofPrep.texture;
+  compMat.uniforms.dofFarTex.value = rtDofFar.texture;
+  compMat.uniforms.dofNearTex.value = rtDofNear.texture;
   compMat.uniforms.bloomTex.value = rtC.texture;
   runPass(compMat, null);
   passCount.last = passCount.now;
@@ -36777,8 +36992,32 @@ const tiltOver: { amt?: number; sharp?: number; blur?: number } = {};
  *  ground — and the half-frame the presets are actually stated against. */
 let tiltK = 1;
 let tiltHalf = 1;
+let dofFocusCurrent = 40;
+let dofFocusTarget = 40;
+let dofFocusClock = 0;
+let dofFocusReady = false;
+let dofFocusSource = 'aim';
+let dofFocusOverrideM: number | null = null;
+/** Distance to the surface actually drawn under the centre reticle. The luma
+ * readback already carries linear depth, so autofocus costs no new readback. */
+function centreSubjectDistance(): number | null {
+  if (!lumaPrimed) return null;
+  const values: number[] = [];
+  const cx = Math.floor(LUMA_W / 2), cy = Math.floor(LUMA_H / 2);
+  for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+    const i = ((cy + oy) * LUMA_W + (cx + ox)) * 4;
+    const d = ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar;
+    if (d > camera.near * 1.2 && d < Math.min(lumaFar, camera.far) * 0.88) values.push(d);
+  }
+  if (!values.length) return null;
+  values.sort((a, b) => a - b);
+  return values[Math.floor(values.length / 2)];
+}
 function aimFocus(): void {
   const u = compMat.uniforms;
+  u.uDofMode.value = dofMode === 'camera' ? 1 : dofMode === 'miniature' ? 2 : 0;
+  u.uDofMaxPx.value = DOF_RADII[dofRadiusAt];
+  u.uDofTaps.value = DOF_TAPS[dofQuality];
   const preset = TILT_PRESETS[tiltMode] ?? TILT_PRESETS.off;
   // The cab is deliberately exempt; the chart is where the look belongs, and
   // the seat has a band of its own — see TILT_PRESETS.
@@ -36807,37 +37046,54 @@ function aimFocus(): void {
   tiltHalf = half;
   tiltK = half / Math.max(tanHalf, 1e-3);
   camera.getWorldDirection(FOCUS_FWD);
-  // The ground the ray is aimed at. `groundAt` under the truck is the right
-  // datum from every camera: the chart is centred on it and the seat is on it.
-  const gY = groundAt(state.x, state.z);
-  const drop = -FOCUS_FWD.y;
-  // ── THE CEILING IS THE DRAW DISTANCE, NOT SIX KILOMETRES ──
-  //
-  // A near-horizontal ray solves at the horizon, so the distance is clamped
-  // rather than trusted, and the floor keeps the plane off the bonnet. The
-  // CEILING was a flat 6000, which is fine from the seat and ruinous on the
-  // chart — the one camera that takes the preset in full. The chart climbs to
-  // GLOBE_ALT_MAX, twenty thousand kilometres, so 6 km binds over 99.97% of
-  // the zoom range: the focal plane sat six kilometres down a ray whose ground
-  // was hundreds of kilometres away, which is to say nowhere near the map it
-  // was supposed to be focusing. The shader's art-pixel maths was right at
-  // those scales all along; the plane simply was not there.
-  //
-  // camera.far is the honest bound. Nothing is drawn past it, so a focal plane
-  // past it cannot be focusing on anything, and it moves with the chart.
-  const dist = clamp(drop > 0.02 ? (camera.position.y - gY) / drop : 1e9, 18, Math.max(6000, camera.far));
-  u.uFocusP.value.copy(FOCUS_FWD).multiplyScalar(dist).add(camera.position);
-  // Vertical unless leaned back: see above. Straight down has no ground
-  // direction, and there the truck's heading is the honest fallback — it is
-  // what the chart is oriented to, so the band lies across the map either way.
-  FOCUS_RIGHT.crossVectors(FOCUS_FWD, FOCUS_UP).normalize();
-  const flat = Math.hypot(FOCUS_FWD.x, FOCUS_FWD.z);
-  if (flat > 1e-4) u.uFocusN.value.set(FOCUS_FWD.x / flat, 0, FOCUS_FWD.z / flat);
-  else u.uFocusN.value.set(Math.sin(state.heading), 0, -Math.cos(state.heading));
-  if (tiltTiltRad !== 0 && FOCUS_RIGHT.lengthSq() > 1e-6) {
-    u.uFocusN.value.applyAxisAngle(FOCUS_RIGHT, tiltTiltRad);
+  if (dofMode === 'camera') {
+    // AUTO is a subject target, not a ground-plane guess: the centre 3×3 cells
+    // of the rendered depth readback choose the surface the lens is pointed at.
+    // An explicit distance bypasses that sensor. camFlyAim is the fallback for
+    // a sky centre or an as-yet-unprimed readback.
+    const manual = dofFocusOverrideM ?? DOF_FOCUS_M[dofFocusAt];
+    const subject = manual > 0 ? null : centreSubjectDistance();
+    dofFocusTarget = manual > 0 ? manual
+      : subject ?? camera.position.distanceTo(camFlyAim);
+    dofFocusSource = dofFocusOverrideM !== null ? 'override'
+      : manual > 0 ? 'distance' : subject === null ? 'aim' : 'depth';
+    dofFocusTarget = clamp(dofFocusTarget, Math.max(camera.near * 1.5, 1), camera.far * 0.88);
+    const now = performance.now() * 0.001;
+    const focusDt = dofFocusClock > 0 ? Math.min(0.1, now - dofFocusClock) : 0;
+    dofFocusClock = now;
+    if (!dofFocusReady) {
+      dofFocusCurrent = dofFocusTarget;
+      dofFocusReady = true;
+    } else {
+      // A damped pull: quick enough to acquire a subject, slow enough that a
+      // depth cell changing at an edge does not make the lens chatter.
+      dofFocusCurrent += (dofFocusTarget - dofFocusCurrent) * (1 - Math.exp(-4.2 * focusDt));
+    }
+    u.uDofFocusDist.value = dofFocusCurrent;
+    u.uFocusP.value.copy(FOCUS_FWD).multiplyScalar(dofFocusCurrent).add(camera.position);
+    u.uFocusN.value.copy(FOCUS_FWD).normalize();
+  } else {
+    // MINIATURE keeps the existing world-space tilted plane. It is placed on
+    // the ground under the viewing ray and then stood up across that ray.
+    const gY = groundAt(state.x, state.z);
+    const drop = -FOCUS_FWD.y;
+    const dist = clamp(drop > 0.02 ? (camera.position.y - gY) / drop : 1e9,
+      18, Math.max(6000, camera.far));
+    u.uDofFocusDist.value = dist;
+    u.uFocusP.value.copy(FOCUS_FWD).multiplyScalar(dist).add(camera.position);
+    FOCUS_RIGHT.crossVectors(FOCUS_FWD, FOCUS_UP).normalize();
+    const flat = Math.hypot(FOCUS_FWD.x, FOCUS_FWD.z);
+    if (flat > 1e-4) u.uFocusN.value.set(FOCUS_FWD.x / flat, 0, FOCUS_FWD.z / flat);
+    else u.uFocusN.value.set(Math.sin(state.heading), 0, -Math.cos(state.heading));
+    if (tiltTiltRad !== 0 && FOCUS_RIGHT.lengthSq() > 1e-6) {
+      u.uFocusN.value.applyAxisAngle(FOCUS_RIGHT, tiltTiltRad);
+    }
+    u.uFocusN.value.normalize();
+    dofFocusCurrent = dist;
+    dofFocusTarget = dist;
+    dofFocusSource = 'tilted-plane';
+    dofFocusReady = false;
   }
-  u.uFocusN.value.normalize();
 }
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
  *  (negative on the carriageway), and the road's own surface height there. */
@@ -38601,6 +38857,99 @@ function tdMatAt(x: number, z: number): object | null {
     mpp: +envU.uMpp.value.toFixed(2),
     eyeY: +eye.y.toFixed(1), groundY: +groundAt(state.x, state.z).toFixed(1),
     ahead: [10, 25, 50, 100, 200, 400, 800, 1600, 3200, 8000].map(at),
+  };
+};
+/** Read the three dedicated lens targets. A screenshot can prove that a frame
+ * changed; this proves WHICH stage carried radius or coverage when it did not. */
+(window as unknown as { __dofbuf?: object }).__dofbuf = (): object => {
+  const stats = (rt: THREE.WebGLRenderTarget): object => {
+    const w = rt.width, h = rt.height, half = rtType === THREE.HalfFloatType;
+    const buf = half ? new Uint16Array(w * h * 4) : new Uint8Array(w * h * 4);
+    renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+    const h2f = (u: number): number => {
+      const sg = (u & 0x8000) >> 15, e = (u & 0x7c00) >> 10, f = u & 0x03ff;
+      if (e === 0) return (sg ? -1 : 1) * 2 ** -14 * (f / 1024);
+      if (e === 31) return f ? 0 : (sg ? -1 : 1) * Infinity;
+      return (sg ? -1 : 1) * 2 ** (e - 15) * (1 + f / 1024);
+    };
+    const sum = [0, 0, 0, 0], max = [0, 0, 0, 0], nz = [0, 0, 0, 0];
+    for (let i = 0; i < w * h; i++) for (let c = 0; c < 4; c++) {
+      const raw = (buf as unknown as { [k: number]: number })[i * 4 + c];
+      const v = half ? h2f(raw) : raw / 255;
+      if (!Number.isFinite(v)) continue;
+      sum[c] += v; max[c] = Math.max(max[c], v); if (v > 0.01) nz[c]++;
+    }
+    return { size: [w, h], mean: sum.map((v) => +(v / (w * h)).toFixed(4)),
+      max: max.map((v) => +v.toFixed(4)), pct: nz.map((v) => +((v / (w * h)) * 100).toFixed(2)) };
+  };
+  return { prep: stats(rtDofPrep), far: stats(rtDofFar), near: stats(rtDofNear) };
+};
+(window as unknown as { __dof?: object }).__dof = (
+  opts?: { mode?: string; quality?: string | number; aperture?: number;
+    focus?: number | 'auto' | null; snap?: boolean },
+): object => {
+  if (opts?.mode !== undefined) {
+    const mode = opts.mode.toLowerCase();
+    const j = DOF_MODES.indexOf(mode as DofMode);
+    if (j >= 0) {
+      dofMode = DOF_MODES[j];
+      const d = DIALS.find((x) => x.key === 'dof');
+      if (d) d.at = j;
+      dofFocusReady = false;
+    }
+  }
+  if (opts?.quality !== undefined) {
+    const j = typeof opts.quality === 'number'
+      ? clamp(Math.round(opts.quality), 0, DOF_QUALITIES.length - 1)
+      : DOF_QUALITIES.indexOf(opts.quality.toLowerCase() as typeof DOF_QUALITIES[number]);
+    if (j >= 0) {
+      dofQuality = j;
+      const d = DIALS.find((x) => x.key === 'dofq');
+      if (d) d.at = j;
+    }
+  }
+  if (opts?.aperture !== undefined) {
+    dofRadiusAt = clamp(Math.round(opts.aperture), 0, DOF_RADII.length - 1);
+    const d = DIALS.find((x) => x.key === 'aperture');
+    if (d) d.at = dofRadiusAt;
+  }
+  if (opts?.focus !== undefined) {
+    if (opts.focus === null || opts.focus === 'auto') {
+      dofFocusOverrideM = null;
+      dofFocusAt = 0;
+      const d = DIALS.find((x) => x.key === 'focus');
+      if (d) d.at = 0;
+    } else {
+      dofFocusOverrideM = clamp(opts.focus, 1, camera.far * 0.88);
+      if (opts.snap) {
+        dofFocusCurrent = dofFocusOverrideM;
+        dofFocusTarget = dofFocusOverrideM;
+        dofFocusReady = true;
+      }
+    }
+  }
+  aimFocus();
+  const u = compMat.uniforms;
+  const radiusAt = (d: number): number => {
+    if (dofMode !== 'camera') return 0;
+    return +Math.min(DOF_RADII[dofRadiusAt],
+      Math.abs((d - dofFocusCurrent) / Math.max(d, 0.25)) * DOF_RADII[dofRadiusAt]).toFixed(2);
+  };
+  const active = dofMode === 'camera'
+    || (dofMode === 'miniature' && (u.uTiltAmt.value as number) > 0.001);
+  return {
+    mode: dofMode,
+    active,
+    quality: DOF_QUALITIES[dofQuality], taps: DOF_TAPS[dofQuality],
+    aperture: dofRadiusAt, maxRadiusPx: DOF_RADII[dofRadiusAt],
+    focus: dofFocusOverrideM ?? (DOF_FOCUS_M[dofFocusAt] || 'auto'),
+    focusM: +dofFocusCurrent.toFixed(2), targetM: +dofFocusTarget.toFixed(2),
+    source: dofFocusSource, centreDepthM: centreSubjectDistance(),
+    focusP: (u.uFocusP.value as THREE.Vector3).toArray().map((v) => +v.toFixed(2)),
+    focusN: (u.uFocusN.value as THREE.Vector3).toArray().map((v) => +v.toFixed(3)),
+    dedicatedPasses: active ? 3 : 0, lastFramePasses: passCount.last,
+    cameraRadiusPx: [5, 10, 15, 30, 60, 150, 600].map((m) => [m, radiusAt(m)]),
+    protectedBy: 'scene alpha < 0.25',
   };
 };
 (window as unknown as { __tilt?: object }).__tilt = (
@@ -52657,6 +53006,17 @@ const DIAL_GROUPS: DialGroup[] = [
         cu.uBloom.value = bloomDial;
       }),
       dial('flare', 'LENS FLARE', ['OFF', 'ON'], 1, (i) => { cu.uFlare.value = i; }),
+      /** The lens and the miniature plane are independent choices. CAMERA uses
+       * the rendered centre subject (or a named metric distance); MINIATURE
+       * uses the TILT SHIFT band below. */
+      dial('dof', 'DEPTH OF FIELD', ['OFF', 'CAMERA', 'MINIATURE'], DOF_MODES.indexOf(dofMode),
+        (i) => { dofMode = DOF_MODES[clamp(i, 0, DOF_MODES.length - 1)]; dofFocusReady = false; }),
+      dial('dofq', 'DOF QUALITY', ['LOW', 'MED', 'HIGH'], dofQuality,
+        (i) => { dofQuality = clamp(i, 0, DOF_QUALITIES.length - 1); }),
+      dial('aperture', 'APERTURE', ['NARROW', 'STOCK', 'WIDE', 'MAX'], dofRadiusAt,
+        (i) => { dofRadiusAt = clamp(i, 0, DOF_RADII.length - 1); }),
+      dial('focus', 'FOCUS TARGET', ['AUTO', '15M', '30M', '60M', '150M', 'FAR'], dofFocusAt,
+        (i) => { dofFocusAt = clamp(i, 0, DOF_FOCUS_M.length - 1); dofFocusOverrideM = null; }),
       /**
        * ── TILT SHIFT: A LOOK, SO IT IS A DIAL AND NOT A QUERY STRING ──
        *
@@ -53071,6 +53431,25 @@ function loadDials(): void {
       const d = DIALS.find((x) => x.key === 'tilt');
       const j = TILT_MODES.indexOf(tiltMode as typeof TILT_MODES[number]);
       if (d && j >= 0) d.at = j;
+    }
+    // A focus harness needs the whole lens stated by its URL, not inherited
+    // from whichever rack the browser profile last saved.
+    if (qsHas('dof')) {
+      const d = DIALS.find((x) => x.key === 'dof');
+      const j = DOF_MODES.indexOf(dofMode);
+      if (d && j >= 0) d.at = j;
+    }
+    if (qsHas('dofq')) {
+      const d = DIALS.find((x) => x.key === 'dofq');
+      if (d) d.at = dofQuality;
+    }
+    if (qsHas('aperture')) {
+      const d = DIALS.find((x) => x.key === 'aperture');
+      if (d) d.at = dofRadiusAt;
+    }
+    if (qsHas('focus')) {
+      const d = DIALS.find((x) => x.key === 'focus');
+      if (d) d.at = dofFocusAt;
     }
   } catch { /* fine */ }
 }
