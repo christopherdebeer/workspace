@@ -14378,3 +14378,120 @@ longer anywhere inside that ring for it to act.
   cannot be counted by construction — the honest unit is the cell, and the
   number means "how much of the reach has no descriptors in it yet", which is
   the manifest filling rather than trees going missing.
+
+## Three ways a card budget loses trees it never meant to refuse
+
+The census went to a device and came back with a number, which is what a census
+is for. 447 seconds at Yosemite, POPULATION 8X, DRAW RANGE 2.8 km, REACH 4X:
+
+```
+trees representation · NONE 51302 · perceptible 48563 ← SHOULD BE 0
+                     · imp-cap 51302(48563 big)
+                     · had 15972 3d, 30072 exact + 0 fallback cards
+cards b9344/10666  c10666/10666  s10062/10666
+trees impostor ... reach 8580m ... (282 kept of 282 seen past the draw ring)
+```
+
+The good news first, because it is what the instrument was for: **`0 fallback
+cards` and no `none:no-family-fallback` at all.** The seeding bake holds on a
+real drive — atlas 18/40, every family served. The exit that was 18% of the
+tier is gone.
+
+What replaced it was `none:imp-cap`, and three separate faults were hiding
+inside that one word.
+
+### 1. A budget for SEEDING was deleting trees that already existed
+
+`282 kept of 282 seen past the draw ring` — over a 5,512-cell annulus, with the
+manifest holding 741,850 trees and 4,466 cells seeded. The far tier was not
+thin. It was **absent**.
+
+The gather's annulus walk opened with `if (vegSeedLeft <= 0) break;`, copied
+from the manifest walk twelve hundred lines down — where it belongs, because
+that walk's only job is to seed. This walk's job is to READ, and `seedCell`
+already budgets itself: an already-seeded cell returns on a Set lookup. So the
+guard abandoned the whole remaining annulus over cells sitting in `vegGrid`
+full of trees, for want of time to seed cells that needed no seeding.
+
+And the budget is `VEG_SEED_MS - frameHeavyMs()`, which is **zero on exactly
+the device that needs the far tier most**. The far tier did not degrade with
+frame time; it vanished with it — the same fault as the near ring's hash, in a
+budget's clothes rather than a probability's.
+
+The guard now gates the seeding and not the looking. Removing it outright was
+measured wrong in the other direction: with `?vegseed=0` the walk seeded all
+5,512 cells in one sweep, no sweep completed, and the tier drew nothing at all.
+
+### 2. The cap counted demand the geometry was about to take
+
+`cards b9344/10666` — broadleaf holding 1,322 slots it could not use. The
+water-fill divided the pool by `cand.length + candFar.length`, which counts
+every tree the SKELETONS are about to draw: broadleaf's demand was inflated by
+its own 8,135 3D trees, so it was allocated slots it had no candidates for
+while conifer sat pinned at its share. Demand is now what it always should have
+been — trees that want a CARD — kept as a running count during the gather and
+decremented as admission claims each tree.
+
+### 3. And the cap bound in ring order, which this file already knew was wrong
+
+The geometry tier's own doctrine, at `ezAdmit`, says it in full:
+
+> a cap that binds in RING order is a cap that rerolls: the rings are square,
+> 220 m a step … crossing a cell boundary re-centred the rings and admitted a
+> different subset of trees. Seen from the seat as vegetation popping in and out
+> and rerolling as you drive.
+
+That was fixed **there**, with `nearestStable`, which keeps the nearest N by
+true distance and reports the radius it ended on as `ezEdge`. The card tier was
+never given the same treatment. It walked candidates in ring order and `break`,
+so it refused trees NEARER than ones it had already accepted, and its horizon
+was a jittering square.
+
+A sort is the wrong tool at this size — `nearestStable` falls back to a full
+sort once `k*4 >= n`, and here k is ten thousand against hundreds of thousands.
+What is wanted is not the exact nearest N but a **stable circular horizon**, and
+a histogram of d² gives that for one increment per candidate, taken where the
+site is already read. Bins linear in d² are equal-area annuli, so they fill
+evenly; walking them outward until the budget is spent yields the radius the
+budget buys. The residue is one bin, and the outermost bin is `reach / 2048` —
+about four metres at an 8.6 km reach.
+
+The dump now prints that radius as `card horizon`, to be read against `trees ez
+… edge`: the geometry's edge is where skeletons stop, the horizon is where cards
+stop, and the gap between them is the band the tier is actually carrying.
+
+### The census can lie in one specific way, and now says so
+
+Every number above is cleared at the top of a sweep and written as the sweep
+walks. A refresh that never reaches the end leaves the whole census at zero —
+and zero reads exactly like *the tier drew nothing*, which is a different and
+much more alarming claim. Met head-on while measuring this: `?vegseed=0` made
+the gather seed without a budget, no sweep completed, and an empty census table
+looked like a regression in the tier rather than a stall in the instrument. It
+was read as a mid-sweep race first, which it was not.
+
+`impProf.sweeps` only advances at the end of the phase. `__impwhy().sweeps` is
+the first field, `imp-census.mjs` FAILS on zero before believing anything else,
+and no reading of this census is valid without checking it.
+
+### What is verified, and what a device still has to answer
+
+`client/perf-check.mjs` runs the production refresh with `IMPOSTOR_CAP` at 512
+against ~28,000 candidates, so **the cap binds on every run of it** — and
+nothing asserted on it, because (as its own fixture note says) the snapshot does
+not cover the impostor mesh. That is precisely where the ring-order cap hid for
+as long as it did: the pass ran, the comparison passed, and the tier was
+refusing the wrong trees the whole time. It now asserts that the cap bound at
+all (or the check witnesses nothing) and that no staged card stands beyond the
+horizon its budget bought. Negative control: shrink the horizon 40% and it fails
+400 of 400.
+
+**THE HARNESS CANNOT REACH THE CAP-BOUND STATE, and there is no switch for it.**
+At `at-yosemite` it seeds roughly half a cell a second against the device's ten,
+so after 100 seconds 1% of an 8.6 km reach is manifested and the MANIFEST binds,
+not the cap. `?vegseed=0` fills it by removing the budget — and then no sweep
+completes (§ above). Both measured. So the census devtool proves the invariant
+(all three DENSITY stops byte-identical, `perceptible NONE` 0) and cannot prove
+the cap arithmetic; that reading comes off a device's own `trees representation`
+row, and the three numbers to read there are `imp-cap`, `card horizon`, and
+`kept of seen past the draw ring`.

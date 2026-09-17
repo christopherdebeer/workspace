@@ -130,7 +130,8 @@ function context(code,range,ez,triCap) {
     // doctrine names — a sandboxed check breaks on a new free variable and
     // only running it can tell you.
     impProf:{drawn:0,offered:0,capped:0,formed:0,far:0,ms:0,byFam:{},capFam:{},
-      waiting:0,locked:0,refused:new Map(),bySlot:[],why:{},whyBig:{}},
+      waiting:0,locked:0,refused:new Map(),bySlot:[],why:{},whyBig:{},sweeps:0,
+      horizon:{broadleaf:0,conifer:0,acacia:0,palm:0,snag:0}},
     impSlotFull:false,
     // ── AND THE INVARIANT'S OWN TWO ──
     // `impThinnable` decides whether a tree's absence can be carried by a
@@ -140,6 +141,14 @@ function context(code,range,ez,triCap) {
     // fault the note above names, met again by the change that wrote it.
     impThinnable:(v)=>!v.anchor&&(v.role==='interior'||v.role==='polygon'),
     IMP_PERCEPTIBLE_K:320/(2*Math.tan((55*Math.PI)/360)),
+    // ── AND THE CARD HORIZON'S BINS, which is the same trap for the third
+    // time: the cap became a histogram walk and the histogram is module state,
+    // so the refresh reads two more free variables than the sweep before it.
+    // They are REAL here, not stubs — the selection this check exists to pin
+    // down is now partly decided by them.
+    IMP_HORIZON_BINS:1024,
+    impHisto:{broadleaf:new Int32Array(1024),conifer:new Int32Array(1024),
+      acacia:new Int32Array(1024),palm:new Int32Array(1024),snag:new Int32Array(1024)},
     // HALF AGAIN THE DRAW RANGE, for the manifest's own reason one line down:
     // the REACH dial's far gather has to RUN here, or the claim that a tier
     // reaching past the draw ring disturbs nothing inside it is untested.
@@ -238,7 +247,39 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
   }
   reports.push({range,ez,cap:k,roadChecksBefore:a.roadCalls,roadChecksAfter:b.roadCalls,before:uploads(a),after:uploads(b)});
 }
+// ── THE CARD HORIZON, ASSERTED ON THE REAL REFRESH ──
+//
+// `IMPOSTOR_CAP` is 512 here against roughly twenty-eight thousand candidates,
+// so the card cap BINDS in this sandbox on every run — and nothing asserted on
+// it, because (as the fixture's own note says) the snapshot does not cover the
+// impostor mesh. That is exactly where the ring-order cap hid: the pass ran,
+// the comparison passed, and the tier was refusing trees nearer than ones it
+// had accepted the whole time.
+//
+// Two claims, both read off the STAGED INSTANCES the production pass wrote:
+//   1. the cap bound and produced a finite horizon — or this proves nothing;
+//   2. no card was placed beyond it. A histogram bin is a tolerance, not an
+//      error: the last bin is admitted whole and `famN` trims inside it, so a
+//      card may sit anywhere in that bin and the bound is the bin's far edge.
+{
+  const c = context(newRefresh, 2800, true, 120);
+  c.state = { x: 250, z: 30 }; c.roads = true; c.treeSizeScale = 1;
+  c.refreshVeg();
+  const horizon = c.impProf.horizon, fams = Object.keys(horizon).filter(f => horizon[f] > 0);
+  assert.ok(c.impProf.sweeps > 0, 'no impostor sweep completed — the census is unwritten');
+  assert.ok(fams.length, 'the card cap never bound: this check witnesses nothing');
+  // One bin of slack, measured in RADIUS at the horizon rather than in d2.
+  const reach = c.impostorReach(), slack = reach / (2 * c.IMP_HORIZON_BINS) + 1e-6;
+  const worst = Math.max(...fams.map(f => horizon[f]));
+  let over = 0;
+  for (let i = 0; i < c.impProf.drawn; i++) {
+    const m = c.impStage.m, o = i * 16;
+    const dx = m[o + 12] - c.state.x, dz = m[o + 14] - c.state.z;
+    if (Math.sqrt(dx * dx + dz * dz) > worst + slack) over++;
+  }
+  assert.equal(over, 0, `${over} of ${c.impProf.drawn} cards stand beyond the horizon their budget bought`);
+}
 const data=Array.from({length:100000},(_,i)=>({d:random()*1e6,id:i}));
 function time(fn,n=15){const a=[];for(let i=0;i<n+5;i++){const t=performance.now();fn();if(i>=5)a.push(performance.now()-t);}return a.sort((a,b)=>a-b)[Math.floor(n/2)];}
 const bench={n:data.length,k:8,oldMs:time(()=>data.slice().sort((a,b)=>a.d-b.d).slice(0,8)),newMs:time(()=>nearestStable(data.slice(),8,v=>v.d))};
-console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons',reports,selectionBenchmark:bench},null,2));
+console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons, card horizon bounds every placed card',reports,selectionBenchmark:bench},null,2));

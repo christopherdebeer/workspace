@@ -72,6 +72,7 @@ try {
   const legs = [];
   for (const den of DENS) {
     const c = await read(den);
+    let stalled = false;
     legs.push({ den, ...c });
     const w = c.why;
     console.log(`\n[${el()}] DENSITY ${DEN_LABEL[den] ?? den}`
@@ -81,6 +82,44 @@ try {
       + ` · far ring ${w.ring.farRing}m${w.ring.farRing ? '' : ' (EMPTY — the tier stops where the geometry does)'}`);
     console.log(`  manifest ${w.manifest.seeded}/${w.manifest.cells} cells seeded`
       + ` · ${w.manifest['none:seed-budget']} unseeded · ${w.manifest['none:data-pending']} awaiting data`);
+    // ── WHERE EACH TIER ACTUALLY STOPS ──
+    // The geometry's edge and the card budget's horizon, side by side. A
+    // horizon of 0 means the family's whole demand fit and nothing was
+    // refused; a horizon at or near the geometry's edge means the card tier is
+    // carrying no band at all and the handover has nowhere to happen.
+    const fams = Object.keys(w.horizon ?? {}).filter((f) => w.edge[f] || w.horizon[f]);
+    if (fams.length) {
+      console.log(`  tiers  ${fams.map((f) => `${f} 3d<${w.edge[f]}m`
+        + ` card<${w.horizon[f] ? `${w.horizon[f]}m` : 'all'}`).join(' · ')}`);
+    }
+    // ── A STALLED SWEEP IS NOT AN EMPTY WORLD ──
+    // The census is cleared at the top of a sweep and written as it walks, so
+    // an unfinished sweep prints zeros that read like a tier drawing nothing.
+    // Checked before anything else is believed.
+    if (!w.sweeps) {
+      console.log(`  FAIL: no impostor sweep has COMPLETED — every number here is`
+        + ` an unwritten census, not a measurement. The gather is not finishing`
+        + ` inside its slice (a seed budget switched off, or a reach the manifest`
+        + ` cannot walk in one pass).`);
+      bad++;
+      stalled = true;
+    }
+    // A manifest this empty cannot bind a cap, and saying so stops a PASS here
+    // being read as a PASS on the seat's own rack.
+    //
+    // AND THERE IS NO LOCAL LEVER FOR IT, which is worth stating rather than
+    // leaving for the next person to discover. `?vegseed=0` fills the manifest
+    // by removing the seeding budget — and then the gather seeds every cell it
+    // walks in one sweep, no sweep completes, and the census is the zeros
+    // above. Measured both ways at `at-yosemite`. The harness seeds roughly
+    // half a cell a second here against the device's ten, so the cap-bound
+    // state this tool most wants to read is reachable only from a real drive:
+    // read it off a device dump's `trees representation` row instead.
+    if (!stalled && w.manifest.seeded * 4 < w.manifest.cells) {
+      console.log(`  NOTE: only ${(100 * w.manifest.seeded / w.manifest.cells).toFixed(1)}%`
+        + ` of the reach is seeded — the MANIFEST binds here, not the cap,`
+        + ` and no switch reaches that state locally (see the note in this file).`);
+    }
     console.log(`  reason                       trees      perceptible`);
     for (const r of w.rows) {
       const flag = r.reason.startsWith('none:') && r.big ? '  ← A TREE VANISHED' : '';
