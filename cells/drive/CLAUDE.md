@@ -14495,3 +14495,89 @@ completes (§ above). Both measured. So the census devtool proves the invariant
 the cap arithmetic; that reading comes off a device's own `trees representation`
 row, and the three numbers to read there are `imp-cap`, `card horizon`, and
 `kept of seen past the draw ring`.
+
+## An even split of the card budget buys a wildly uneven picture
+
+The device came back with the far tier alive — `147801 kept of 147801 seen past
+the draw ring`, against 282 the run before — and with the card cap pinned:
+
+```
+cards   b6400/6400  c6400/6400  a6400/6400  p6400/6400  s6400/6400
+horizon b929m       c1631m      a4534m      p1199m      s3022m
+known   b198388     c63437      a14452      p52451      s26712
+```
+
+Every family wanted more than its share, so the water-fill fell to its **even
+split** — and an even split by COUNT buys wildly uneven DISTANCE, because
+density is not uniform across families. The commonest tree in the place, a
+hundred and ninety-eight thousand broadleaf, was cut off at **929 m inside a
+2,800 m draw range**, while fourteen thousand acacia were carried to four and a
+half kilometres. The budget was shared fairly between families; the picture was
+not fair at all.
+
+### So the rule has no family in it, and no distance either
+
+A tree earns a card by **how large it is on screen**: `px = K · height /
+distance`, K being the design frame's pixels-per-metre at one metre. The budget
+is spent from the biggest down and what it buys is a FLOOR in art pixels —
+*everything above 1.8 px wears a card*. Three things fall out for free:
+
+- a tall tree is carried further than a short one, which is what an eye does;
+- a dense family takes more of the pool than a sparse one, because it fills
+  more of the frame — no allocator, no shares, no rounds;
+- the floor is in **the same unit as the census's own perceptibility test**, so
+  the budget and the metric that judges it can finally be compared. `perceptible
+  NONE` counts trees above 1 px with no representation; the floor says what the
+  budget can actually afford. Two numbers, one ruler.
+
+Kept as a histogram of `px` taken where the site is already read, bins linear in
+px so they are finest where the floor lands. `card floor` and the measured
+`card reach` per family are both in the dump.
+
+### The check had become a tautology, and the negative control says by how much
+
+The first version of this asserted that no card stands beyond `impProf.horizon`
+— which is the furthest card placed. The same expression twice: exactly the
+fault this file caught once already in `imp-atlas.test.mjs`. The walk now
+records **the smallest tree given a card and the largest refused one**, from
+opposite sides of the decision, and the rule is that the second cannot exceed
+the first by more than one bin. Restore the old ring-order cap and it fails
+with the fault stated in one number:
+
+> a refused tree projects **9.902px**, larger than the smallest one given a card
+> (**1.514px**) — the budget is not being spent on apparent size
+
+A tree six times bigger on screen was being thrown away for a smaller one.
+
+## What a card actually waits for, to become a skeleton
+
+Asked from the seat: *I drive out to the edge and the impostors are still cards
+when I reach them — what is the refresh period and priority?* The honest answer
+was only derivable by arithmetic over `treeRefresh`'s slice count, so it is now
+a row: `trees refresh N sweeps · every Xms in Y slices of 5ms · cooldown …`.
+
+**The period is a whole sweep plus a cooldown.** Nothing changes tier until a
+sweep COMPLETES, because staging is committed in one slice at the end — that
+property is what makes yielding safe, and it is also the LOD latency of the
+entire tree system. The cooldown is `vegAt = now + 900`, or `VEG_SEED_CATCHUP`
+(120 ms) while the manifest is still seeding. The slice is `VEG_STEP_MS = 5` ms
+a frame, but a work unit may overshoot and one of them is enormous: `ezAdmit`
+does the water-fill and a `nearestStable` per family **without a single yield**,
+measured at 28.9 ms mean and 65 ms worst on a device.
+
+**There is no priority, in two separate senses, and both are by construction:**
+
+1. **No distance trigger.** `vegAt` is a clock. Standing still and driving flat
+   out re-decide the world at exactly the same rate; moving 100 m buys nothing.
+2. **No ordering inside a sweep.** The phases are fixed — ring, ezGather,
+   impGather, ezAdmit, place, impostor, upload, shrubs, manifest — so the near
+   tier's admission waits behind the far tier's gather every time, and the
+   commit takes them together. A tree at 400 m cannot be promoted early because
+   a tree at 8 km has not been counted yet.
+
+The far gather is cheap (`impGather 1.8 ms/call` even at 147,801 candidates), so
+opening it up did not meaningfully lengthen the sweep — `ezAdmit` is where the
+sweep's time goes. But the *structure* is what it is: one clock, one order, one
+commit. Two things would change it, neither done here and both real: give the
+near tier its own commit after `place`, and run the far annulus on a slower
+cadence than the near ring, since you must drive kilometres for it to matter.

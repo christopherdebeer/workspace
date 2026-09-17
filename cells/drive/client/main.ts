@@ -12030,10 +12030,20 @@ const impProf = {
    *  is the initial value of a census that has never been written — see the
    *  note where it is incremented. Never cleared by the per-sweep reset. */
   sweeps: 0,
-  /** The radius each family's card budget actually bought, metres — the card
-   *  tier's answer to the geometry tier's `ezEdge`. Zero means unbounded: the
-   *  family's whole demand fit and nothing was refused. */
+  /** The furthest card each family actually stood up, metres — the card tier's
+   *  answer to the geometry tier's `ezEdge`, measured rather than derived. */
   horizon: ezRecord(() => 0) as Record<EzFamily, number>,
+  /** The apparent size, in art pixels, a tree must reach to be given a card.
+   *  Zero means the budget refused nobody. */
+  pxFloor: 0,
+  /** ── THE TWO NUMBERS THAT PROVE THE RULE, FROM OPPOSITE SIDES ──
+   *  The smallest tree that GOT a card and the largest that was REFUSED one.
+   *  If the budget is spent on apparent size, the second cannot exceed the
+   *  first by more than the histogram's own bin. Recorded rather than derived
+   *  precisely because a threshold compared against the cards it selected is
+   *  a tautology — the fault this file already caught once in the atlas test. */
+  pxMinDrawn: Infinity,
+  pxMaxRefused: 0,
   /** Refused because the ATLAS IS FULL — these will never draw, this session,
    *  wherever the truck goes. Kept apart from `waiting`, which drains. */
   locked: 0,
@@ -12118,33 +12128,49 @@ let impBakedNow = 0;
  */
 const IMPOSTOR_SEED_PER_REFRESH = EZ_FAMILIES.length;
 /**
- * ── AND THE CARD CAP MUST BIND ON A CIRCLE, FOR THE REASON ALREADY WRITTEN ──
+ * ── THE CARD BUDGET IS SPENT ON APPARENT SIZE, NOT ON DISTANCE OR FAMILY ──
  *
- * The geometry tier's own doctrine, at `ezAdmit`, says it in full: *a cap that
- * binds in RING order is a cap that rerolls* — the rings are square, 220 m a
- * step, and crossing a cell boundary re-centres them and admits a different
- * subset. That was fixed there with `nearestStable`, which keeps the nearest N
- * by TRUE distance and reports the radius it ended on as `ezEdge`. The card
- * tier was never given the same treatment: it walked the candidates in ring
- * order and `break`, so it refused trees NEARER than ones it had accepted, and
- * its horizon was a jittering square that rerolled as the truck drove.
+ * The geometry tier's own doctrine, at `ezAdmit`, says the first half of this:
+ * *a cap that binds in RING order is a cap that rerolls* — the rings are
+ * square, 220 m a step, and crossing a cell boundary re-centres them and
+ * admits a different subset. That was fixed there with `nearestStable`. The
+ * card tier walked candidates in ring order and `break`, so it refused trees
+ * NEARER than ones it had accepted, on a horizon that was a jittering square.
  *
- * A SORT IS THE WRONG TOOL AT THIS SIZE. `nearestStable` falls back to a full
- * sort once k*4 >= n, and the card cap's k is ten thousand against a candidate
- * list of hundreds of thousands — so it would sort, every refresh, per family.
- * What is actually wanted is not the exact nearest N but a STABLE CIRCULAR
- * HORIZON, and a histogram of d² gives that for one increment per candidate:
- * bins linear in d² are equal-area annuli, so they fill evenly, and walking
- * them outward until the budget runs out yields the radius the budget buys.
+ * THE FIRST FIX FOR IT WAS A PER-FAMILY RADIUS, AND A DEVICE SHOWED WHY THAT
+ * IS NOT ENOUGH. Every family wanted more than its share, so the water-fill
+ * fell back to an even split — and an even split by COUNT buys wildly uneven
+ * DISTANCE, because density is not uniform across families. Measured in a
+ * Japanese forest, five families at exactly 6,400 cards each:
  *
- * The residue is one bin wide and that bin is thin where it matters: with
- * 1,024 bins the outermost is `reach / 2048` — about four metres at an 8.6 km
- * reach — and inside it the old ring order still decides, which at four metres
- * is not a decision anybody can see.
+ *     known    b198388  c63437  a14452  p52451  s26712
+ *     horizon  b929m    c1631m  a4534m  p1199m  s3022m
+ *
+ * The commonest tree in the place — a hundred and ninety-eight thousand
+ * broadleaf — was cut off at 929 m inside a 2,800 m draw range, while fourteen
+ * thousand acacia were carried to four and a half kilometres. The budget was
+ * shared fairly between families and the PICTURE was not fair at all.
+ *
+ * SO THERE IS NO FAMILY IN THE RULE, AND NO DISTANCE EITHER. A tree earns a
+ * card by how large it is ON SCREEN: `px = K · height / distance`, K being the
+ * design frame's pixels-per-metre at one metre. The budget is spent from the
+ * biggest down, and what it buys is a FLOOR in art pixels — "everything above
+ * 1.8 px wears a card". A tall tree is carried further than a short one
+ * automatically, which is what an eye does; a dense family takes more of the
+ * pool than a sparse one, because it fills more of the frame; and the floor is
+ * in the same unit as the census's own perceptibility test, so the budget and
+ * the metric that judges it can finally be compared.
+ *
+ * Bins are linear in px so they are finest where the floor lands. The residue
+ * is one bin, 32/1024 of a pixel, and inside it the old ring order still
+ * decides — which at a thirtieth of a pixel is not a decision anyone can see.
  */
-const IMP_HORIZON_BINS = 1024;
-const impHisto: Record<EzFamily, Int32Array> =
-  ezRecord(() => new Int32Array(IMP_HORIZON_BINS));
+const IMP_PX_BINS = 1024;
+/** Above this a tree is near enough that the geometry tier owns it anyway, so
+ *  the top bin is a catch-all rather than a resolution the histogram spends on. */
+const IMP_PX_MAX = 32;
+const IMP_PX_PER_BIN = IMP_PX_BINS / IMP_PX_MAX;
+const impHisto = new Int32Array(IMP_PX_BINS);
 let impSeedNow = 0;
 /** Set by the last refusal that was the atlas's CEILING rather than the bake
  *  budget, so the refusal site can file it under `locked` without repeating
@@ -14795,24 +14821,26 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // HOISTED: the impostor tier reads the same candidates admission did, which
   // is the whole reason it costs no new walking.
   const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = ezRecord(() => [] as Array<[number, PlacedVegSite]>);
-  // ── THE CARD HORIZON'S EVIDENCE, TAKEN WHERE THE SITE IS READ ──
+  // ── THE CARD BUDGET'S EVIDENCE, TAKEN WHERE THE SITE IS READ ──
   // One bin increment per candidate, at the moment its distance is already in
   // a register — the same principle the far gather's own thinning follows, and
   // the reason this costs no second walk over several hundred thousand sites.
-  // `impWant` is the running sum, which is also the CARD demand the allocator
-  // needs: it used to be `cand.length + candFar.length`, which counts every
-  // tree the GEOMETRY is about to take. The device showed the price of that —
-  // `cards b9344/10666` — broadleaf holding 1,322 slots it could not use
-  // because its demand was inflated by 8,135 trees drawn as skeletons.
+  // `impWant` is the running sum, which is also the CARD demand: it used to be
+  // `cand.length + candFar.length`, which counts every tree the GEOMETRY is
+  // about to take. A device showed the price of that — `cards b9344/10666` —
+  // broadleaf holding 1,322 slots it could not use because its demand was
+  // inflated by 8,135 trees drawn as skeletons.
   const impRAll = impostors && impostorDraw ? impostorReach() : 0;
   const impRAll2 = impRAll * impRAll;
-  const impBinK = impRAll2 > 0 ? IMP_HORIZON_BINS / impRAll2 : 0;
-  const impWant = ezRecord(() => 0);
-  for (const f of EZ_FAMILIES) impHisto[f].fill(0);
-  const impSeen = (fam: EzFamily, d2: number, by: number): void => {
-    if (impBinK <= 0 || d2 >= impRAll2) return;
-    impHisto[fam][Math.min(IMP_HORIZON_BINS - 1, (d2 * impBinK) | 0)] += by;
-    impWant[fam] += by;
+  let impWant = 0;
+  impHisto.fill(0);
+  /** How many art pixels tall this tree is drawn at, from where it stands. */
+  const impPxOf = (v: PlacedVegSite, d2: number): number =>
+    (IMP_PERCEPTIBLE_K * EZ_M_PER_SCALE[v.k as EzFamily] * v.s * treeSizeScale) / Math.sqrt(d2);
+  const impSeen = (v: PlacedVegSite, d2: number, by: number): void => {
+    if (impRAll2 <= 0 || d2 >= impRAll2) return;
+    impHisto[Math.min(IMP_PX_BINS - 1, (impPxOf(v, d2) * IMP_PX_PER_BIN) | 0)] += by;
+    impWant += by;
   };
   // ── AND THE ONES ONLY THE IMPOSTOR TIER WILL EVER SEE ──
   //
@@ -14840,7 +14868,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         if (!isEzKind(v.k)) continue;
         const dx = v.x - rfx, dz = v.z - rfz;
         const d2 = dx * dx + dz * dz;
-        if (d2 < treeR2) { cand[v.k].push([d2, v]); impSeen(v.k, d2, 1); }
+        if (d2 < treeR2) { cand[v.k].push([d2, v]); impSeen(v, d2, 1); }
       }
     }
     vegMark('ezGather');
@@ -14925,7 +14953,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
               continue;
             }
             candFar[v.k].push([d2, v]);
-            impSeen(v.k, d2, 1);
+            impSeen(v, d2, 1);
           }
         }
       }
@@ -14995,7 +15023,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         // Off the card tier's books: a tree the skeletons are drawing is not a
         // tree the card budget has to find room for, and counting it as demand
         // is what stranded broadleaf's slots above.
-        impSeen(fam, d2, -1);
+        impSeen(v, d2, -1);
         const vi = ezVariantAt(fam, v.x, v.z);
         ezVariant.set(v, vi);
         ezNeed[fam][vi] = (ezNeed[fam][vi] ?? 0) + 1;
@@ -15176,6 +15204,8 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   impProf.why = {};
   impProf.whyBig = {};
   impProf.horizon = ezRecord(() => 0);
+  impProf.pxMinDrawn = Infinity;
+  impProf.pxMaxRefused = 0;
   /**
    * One tree's verdict. `tallM` is the height it would be DRAWN at, so the
    * perceptibility test is about the thing on screen rather than about the
@@ -15220,48 +15250,25 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     // nothing; approaching them, a tree out of thin air.
     //
     // A cap consumed in declaration order is not a cap, it is a priority list
-    // nobody wrote down. Water-filled, exactly as the triangle budget already
-    // is: a family wanting less than its share takes what it wants and hands
-    // the rest back, the round repeats, and what is left is split among the
-    // families that can still use it. Nobody is cut below what they would have
-    // drawn anyway and the total cannot exceed the pool.
-    const impCap = ezRecord(() => 0);
-    {
-      let pool = IMPOSTOR_CAP;
-      const open = EZ_FAMILIES.filter((f) => impWant[f] > 0);
-      while (open.length && pool > 0) {
-        const share = pool / open.length;
-        const under = open.filter((f) => impWant[f] <= share);
-        if (!under.length) { for (const f of open) impCap[f] = Math.floor(share); break; }
-        for (const f of under) {
-          impCap[f] = impWant[f]; pool -= impWant[f];
-          open.splice(open.indexOf(f), 1);
-        }
+    // nobody wrote down. The first fix for that was a per-family water-fill,
+    // and the fix after it deleted the families from the rule entirely — see
+    // IMP_PX_BINS for the device reading that forced it. What is left here is
+    // ONE floor, in art pixels, spent from the largest tree down.
+    //
+    // A family whose whole demand fits inside the pool keeps a floor of zero:
+    // there is no threshold when nothing is refused.
+    let impPxFloor = 0;
+    if (impWant > IMPOSTOR_CAP) {
+      let n = 0, bin = IMP_PX_BINS - 1;
+      for (; bin >= 0; bin--) {
+        if (n + impHisto[bin] > IMPOSTOR_CAP) break;
+        n += impHisto[bin];
       }
+      // The LOWER edge of the bin the budget dies in: everything above it is
+      // admitted outright, and `impN` trims the last thirtieth of a pixel.
+      impPxFloor = Math.max(0, bin) / IMP_PX_PER_BIN;
     }
-    // ── AND THE RADIUS THAT CAP BUYS, WALKED OUT OF THE HISTOGRAM ──
-    // Bins are linear in d2, so they are equal-area annuli and fill evenly.
-    // Walking them outward until the budget is spent turns a COUNT the seat
-    // cannot picture into a DISTANCE it can: the card horizon, reported beside
-    // the geometry's own `edge` in the dump, and stable under motion because a
-    // circle centred on the render focus does not reroll when the cell grid
-    // shifts under it. A family whose demand fits its cap keeps Infinity —
-    // there is no horizon when nothing is refused.
-    const impHoriz2 = ezRecord(() => Infinity);
-    for (const fam of EZ_FAMILIES) {
-      if (impWant[fam] <= impCap[fam]) continue;
-      if (impCap[fam] <= 0) { impHoriz2[fam] = 0; continue; }
-      const bins = impHisto[fam];
-      let n = 0, b = 0;
-      for (; b < IMP_HORIZON_BINS; b++) {
-        if (n + bins[b] > impCap[fam]) break;
-        n += bins[b];
-      }
-      // Through the far edge of the bin the budget dies in: everything inside
-      // is admitted outright, and `famN` trims the last few metres of it.
-      impHoriz2[fam] = impBinK > 0 ? Math.min(impRAll2, (b + 1) / impBinK) : 0;
-      impProf.horizon[fam] = Math.sqrt(impHoriz2[fam]);
-    }
+    impProf.pxFloor = impPxFloor;
     for (const fam of EZ_FAMILIES) {
       const variants = ezVariants(fam);
       let famN = 0;
@@ -15343,17 +15350,22 @@ function* vegRefreshSteps(): Generator<void, void, void> {
           // invariant hands over FROM.
           impWhy('geometry', d2, tallM); continue;
         }
-        // ── AND THE CAP IS A HORIZON, NOT A POSITION IN A LIST ──
+        // ── AND THE CAP IS A FLOOR IN ART PIXELS, NOT A POSITION IN A LIST ──
         // `break` on ring order refused trees NEARER than ones it had already
         // taken, and its edge was the square the rings are, so it rerolled as
-        // the truck crossed a cell. This is a circle, it keeps the nearest, and
-        // it counts every tree it turns away rather than charging a thousand to
-        // the one the walk stopped on. `famN` remains as the exact backstop
-        // inside the last bin; `impN` can no longer bind, since the per-family
-        // caps sum to the pool, and is kept as an assertion.
-        if (d2 > impHoriz2[fam] || famN >= impCap[fam] || impN >= IMPOSTOR_CAP) {
-          impProf.capped++; impWhy('none:imp-cap', d2, tallM); continue;
+        // the truck crossed a cell. This is one threshold on apparent size: it
+        // keeps the biggest, it carries a tall tree further than a short one
+        // without being told to, it does not care which family a tree belongs
+        // to, and it counts every tree it turns away rather than charging a
+        // thousand to the one the walk stopped on. `impN` is the exact backstop
+        // inside the last bin.
+        const px = (IMP_PERCEPTIBLE_K * tallM) / Math.sqrt(d2);
+        if (px < impPxFloor || impN >= IMPOSTOR_CAP) {
+          impProf.capped++; impWhy('none:imp-cap', d2, tallM);
+          if (px > impProf.pxMaxRefused) impProf.pxMaxRefused = px;
+          continue;
         }
+        if (px < impProf.pxMinDrawn) impProf.pxMinDrawn = px;
         // WHAT THIS COUNTS NARROWED WHEN THE GATHER LEARNED TO THIN. It is
         // what the PASS considered — every near candidate, and the far ones
         // that already survived the gather's own density test — so it is no
@@ -15460,6 +15472,10 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         // that never appears here is baked and serving nobody.
         impProf.bySlot[form] = (impProf.bySlot[form] ?? 0) + 1;
         impWhy(fallback ? 'impostor:fallback' : 'impostor:exact', d2, tallM);
+        // MEASURED, not derived: the furthest card this family actually stood
+        // up. One floor in pixels puts a tall family's cards further out than a
+        // short one's, and this is where that shows.
+        if (d2 > impProf.horizon[fam] ** 2) impProf.horizon[fam] = Math.sqrt(d2);
         impN++; famN++;
       }
       }
@@ -15469,7 +15485,10 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       // the fault above — and this file's own rule is that a budgeted quantity
       // is printed against its budget or it will be read as a measurement.
       impProf.byFam[fam] = famN;
-      impProf.capFam[fam] = impCap[fam];
+      // What the family WANTED, now that nothing rations it by family: the pair
+      // reads `drawn of wanted` rather than `drawn of its share`, which is the
+      // only honest thing to print once the share no longer exists.
+      impProf.capFam[fam] = cand[fam].length + candFar[fam].length;
     }
   }
   impProf.drawn = impN; impProf.offered = impOffered; impProf.formed = impFormed;
@@ -15595,6 +15614,24 @@ function refreshVeg(): void {
 const VEG_STEP_MS = 5;
 const VEG_STEP_FORCED = qsNum('vegstep', -1);
 let vegJobMs = 0;
+/**
+ * ── HOW OFTEN THE WORLD'S TREES ARE RE-DECIDED, AS A MEASUREMENT ──
+ *
+ * Asked from the seat: *I drive out to the edge and the impostors are still
+ * cards when I reach them — what is the refresh period and priority?* The
+ * answer was only derivable by arithmetic over `treeRefresh`'s slice count, so
+ * it is recorded instead. A sweep is the unit: a tree cannot change tier until
+ * one COMPLETES, because staging is committed in one slice at the end.
+ *
+ * There is no distance trigger anywhere in this — `vegAt` is a clock, so
+ * standing still and driving flat out re-decide the world at the same rate —
+ * and no priority inside a sweep either: the phase order is fixed, and the near
+ * tier's admission waits behind the far tier's gather every time.
+ */
+let vegSweepSlices = 0, vegSweepAt = 0;
+/** Completed sweeps, the mean wall gap between them, and the mean slices each
+ *  took. The period is what a promotion from card to skeleton waits for. */
+const vegSweep = { n: 0, ms: 0, slices: 0 };
 /** One slice of the running refresh; true when it finished this frame. */
 function stepVegRefresh(): boolean {
   if (!vegJob) return false;
@@ -15609,7 +15646,19 @@ function stepVegRefresh(): boolean {
   let done = false;
   while (performance.now() - t0 < budget) { if (vegJob.next().done) { done = true; break; } }
   vegJobMs += performance.now() - t0;
-  if (done) { vegJob = null; vegMs = vegJobMs; vegJobMs = 0; }
+  vegSweepSlices++;
+  if (done) {
+    vegJob = null; vegMs = vegJobMs; vegJobMs = 0;
+    const at = performance.now();
+    // The first sweep of a session has no previous one to measure against, so
+    // it sets the clock and contributes no period.
+    if (vegSweepAt) {
+      vegSweep.n++;
+      vegSweep.ms += at - vegSweepAt;
+      vegSweep.slices += vegSweepSlices;
+    }
+    vegSweepAt = at; vegSweepSlices = 0;
+  }
   return done;
 }
 
@@ -35166,7 +35215,10 @@ function tapeKeep(): string {
     // geometry horizon". Printed rather than left to be inferred.
     ring: { drawRange: Math.round(treeRange), ...impostorReachTally(),
       farRing: Math.max(0, Math.round(impR - treeRange)) },
-    // Where each family's card budget ran out. 0 means it never did.
+    // The threshold in art pixels, and the furthest card each family placed.
+    pxFloor: +impProf.pxFloor.toFixed(3),
+    pxMinDrawn: Number.isFinite(impProf.pxMinDrawn) ? +impProf.pxMinDrawn.toFixed(3) : null,
+    pxMaxRefused: +impProf.pxMaxRefused.toFixed(3),
     horizon: ezRecord((f) => Math.round(impProf.horizon[f])),
     edge: ezRecord((f) => Math.round(ezEdgeLast[f] || 0)),
     perceptiblePxAt1m: +IMP_PERCEPTIBLE_K.toFixed(1),
@@ -47207,14 +47259,16 @@ function telemetryReport(): string {
         // as a tier at capacity when what it actually was is one family at
         // capacity and four drawing nothing.
         + ` · cards ${EZ_FAMILIES.map(f => `${f[0]}${impProf.byFam[f] ?? 0}/${impProf.capFam[f] ?? 0}`).join(' ')}`
-        // ── WHERE THE BUDGET RAN OUT, IN METRES ──
+        // ── WHERE THE BUDGET RAN OUT, IN BOTH UNITS ──
         // `cards c10666/10666` says a family is at its cap and cannot say what
-        // that costs the picture. The radius can, and it is the number to read
-        // against `trees ez … edge`: the geometry's edge is where skeletons
-        // stop, this is where cards stop, and the gap between them is the band
-        // the tier is actually carrying.
+        // that costs the picture. The FLOOR says it in the same unit the census
+        // judges by — every tree above this many art pixels wears a card — and
+        // the per-family reach says where that landed, to be read against
+        // `trees ez … edge`: skeletons stop at one, cards at the other, and the
+        // gap between them is the band this tier is actually carrying.
+        + `${impProf.pxFloor > 0 ? ` · card floor ${impProf.pxFloor.toFixed(2)}px` : ''}`
         + `${EZ_FAMILIES.some(f => impProf.horizon[f] > 0)
-          ? ` · card horizon ${EZ_FAMILIES.filter(f => impProf.horizon[f] > 0)
+          ? ` · card reach ${EZ_FAMILIES.filter(f => impProf.horizon[f] > 0)
             .map(f => `${f[0]}${Math.round(impProf.horizon[f])}m`).join('/')}` : ''}`
         + ` · top ${impTopU.value.toFixed(2)}${impProf.formed ? ` · ${impProf.formed}/${IMPOSTOR_FORM_BUDGET} formed${impProf.formed >= IMPOSTOR_FORM_BUDGET ? ' (PINNED)' : ''}` : ''}`
         + ` · atlas ${impAtlasRT ? `${impSlots.size}/${IMP_ATLAS_SLOTS} slots in ${impProf.bakeMs.toFixed(0)}ms` : 'OFF'}`
@@ -47253,6 +47307,18 @@ function telemetryReport(): string {
       + ` · had ${why['geometry'] ?? 0} 3d, ${why['impostor:exact'] ?? 0} exact + ${why['impostor:fallback'] ?? 0} fallback cards`
       + ` · manifest ${unseeded} seed-budget, ${_m.deferred} data-pending (cells)`
       + ` · 1px at ${IMP_PERCEPTIBLE_K.toFixed(0)}m per m of height`);
+  }
+  {
+    // ── THE PERIOD A CARD WAITS TO BECOME A SKELETON ──
+    // Nothing changes tier until a sweep finishes: the commit is one slice at
+    // the end. So this, not the frame rate, is the latency of every LOD change
+    // in the tree system — and the cadence is a CLOCK, not a distance, so
+    // driving fast does not buy a faster answer.
+    const n = Math.max(1, vegSweep.n);
+    L.push(`trees refresh ${vegSweep.n} sweeps · every ${Math.round(vegSweep.ms / n)}ms`
+      + ` in ${(vegSweep.slices / n).toFixed(1)} slices of ${VEG_STEP_MS}ms`
+      + ` · cooldown ${vegSeedDeferred ? `${VEG_SEED_CATCHUP}ms (seeding behind)` : '900ms'}`
+      + ` · no distance trigger, no priority: the near tier commits with the far one`);
   }
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);

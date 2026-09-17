@@ -131,7 +131,7 @@ function context(code,range,ez,triCap) {
     // only running it can tell you.
     impProf:{drawn:0,offered:0,capped:0,formed:0,far:0,ms:0,byFam:{},capFam:{},
       waiting:0,locked:0,refused:new Map(),bySlot:[],why:{},whyBig:{},sweeps:0,
-      horizon:{broadleaf:0,conifer:0,acacia:0,palm:0,snag:0}},
+      horizon:{broadleaf:0,conifer:0,acacia:0,palm:0,snag:0},pxFloor:0,pxMinDrawn:Infinity,pxMaxRefused:0},
     impSlotFull:false,
     // ── AND THE INVARIANT'S OWN TWO ──
     // `impThinnable` decides whether a tree's absence can be carried by a
@@ -146,9 +146,12 @@ function context(code,range,ez,triCap) {
     // so the refresh reads two more free variables than the sweep before it.
     // They are REAL here, not stubs — the selection this check exists to pin
     // down is now partly decided by them.
-    IMP_HORIZON_BINS:1024,
-    impHisto:{broadleaf:new Int32Array(1024),conifer:new Int32Array(1024),
-      acacia:new Int32Array(1024),palm:new Int32Array(1024),snag:new Int32Array(1024)},
+    // The cap's rationing became ONE histogram in ART PIXELS — no family in it
+    // and no metres — so the sandbox's copy changes shape with it. Third time
+    // this file has met the trap it documents: the refresh reads free variables
+    // and only running the check finds a new one.
+    IMP_PX_BINS:1024,IMP_PX_MAX:32,IMP_PX_PER_BIN:1024/32,
+    impHisto:new Int32Array(1024),
     // HALF AGAIN THE DRAW RANGE, for the manifest's own reason one line down:
     // the REACH dial's far gather has to RUN here, or the claim that a tier
     // reaching past the draw ring disturbs nothing inside it is untested.
@@ -268,18 +271,20 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
   const horizon = c.impProf.horizon, fams = Object.keys(horizon).filter(f => horizon[f] > 0);
   assert.ok(c.impProf.sweeps > 0, 'no impostor sweep completed — the census is unwritten');
   assert.ok(fams.length, 'the card cap never bound: this check witnesses nothing');
-  // One bin of slack, measured in RADIUS at the horizon rather than in d2.
-  const reach = c.impostorReach(), slack = reach / (2 * c.IMP_HORIZON_BINS) + 1e-6;
-  const worst = Math.max(...fams.map(f => horizon[f]));
-  let over = 0;
-  for (let i = 0; i < c.impProf.drawn; i++) {
-    const m = c.impStage.m, o = i * 16;
-    const dx = m[o + 12] - c.state.x, dz = m[o + 14] - c.state.z;
-    if (Math.sqrt(dx * dx + dz * dz) > worst + slack) over++;
-  }
-  assert.equal(over, 0, `${over} of ${c.impProf.drawn} cards stand beyond the horizon their budget bought`);
+  // THE CLAIM, FROM BOTH SIDES. Comparing the floor against the cards it
+  // selected proves nothing — it is the same expression twice, which is the
+  // tautology this repo already caught once in the atlas test. So the walk
+  // records the smallest tree it GAVE a card and the largest it REFUSED one,
+  // and the rule says the refused one cannot be bigger, give or take the bin
+  // the budget died in.
+  const P = c.impProf, slack = 1 / c.IMP_PX_PER_BIN + 1e-9;
+  assert.ok(P.pxFloor > 0, 'the card budget refused nobody: this check witnesses nothing');
+  assert.ok(Number.isFinite(P.pxMinDrawn), 'no card was placed at all');
+  assert.ok(P.pxMaxRefused <= P.pxMinDrawn + slack,
+    `a refused tree projects ${P.pxMaxRefused.toFixed(3)}px, larger than the smallest one given a card `
+    + `(${P.pxMinDrawn.toFixed(3)}px) — the budget is not being spent on apparent size`);
 }
 const data=Array.from({length:100000},(_,i)=>({d:random()*1e6,id:i}));
 function time(fn,n=15){const a=[];for(let i=0;i<n+5;i++){const t=performance.now();fn();if(i>=5)a.push(performance.now()-t);}return a.sort((a,b)=>a-b)[Math.floor(n/2)];}
 const bench={n:data.length,k:8,oldMs:time(()=>data.slice().sort((a,b)=>a.d-b.d).slice(0,8)),newMs:time(()=>nearestStable(data.slice(),8,v=>v.d))};
-console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons, card horizon bounds every placed card',reports,selectionBenchmark:bench},null,2));
+console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons, card budget spent on apparent size, largest refused <= smallest drawn',reports,selectionBenchmark:bench},null,2));
