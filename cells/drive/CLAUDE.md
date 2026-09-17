@@ -310,6 +310,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/imp-atlas.test.mjs` | the impostor atlas holds EVERY variant that exists (40 slots against 37 keys) and the bake's packing agrees with the shader's, tile for tile over all 1,000 — pure node, instant, and the gate that fails when a new EZ form takes the total past the ceiling | instant |
 | `node devtools/imp-sheet.mjs` | every variant's SKELETON beside its own baked IMPOSTOR card, one camera, one quantiser, one metric block, at the art-pixel size the game draws that tree at — with the silhouette IoU between the halves, which is the only column that compares them. `DIST=`, `ELEV=`, `AZ=` (0 is exactly on a baked tile, 22.5 the worst case between two), `INK=1`. Drawing is ON by design: a `nodraw` run never compiles the card's shader at all | ~2min |
 | `node devtools/imp-demand.mjs` | what the impostor atlas was ASKED for beside what it holds: the ceiling computed offline from the bake (pure, instant, no browser), then the live census by key — refused keys with their tree counts, baked slots with theirs, and how many of the eighteen are serving nobody. `KM=0 FIX=` measures one arrived world; `SPOT=` with a leg drives across districts and needs a device or a warm relay to mean anything | ~2min |
+| `node devtools/imp-census.mjs` | **why a manifested tree has no representation at all** — the gather's EXITS by name, with the ones large enough to be seen counted apart (`h · 307 / d > 1` art pixel). Sweeps the DENSITY dial and FAILS on any perceptible NONE, and on a density exit with an empty far ring: an invariant is only demonstrated by trying to break it. `FIX=`, `DENS=0,2,5`, `DIALS='imprch=2'` | ~2min |
 | `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
@@ -14219,3 +14220,147 @@ everything", not as a regression.
   only the new strip is roughly an eighteenfold cut, and it pays the widening
   back many times over. Not done — every sampler that reads `uFieldOrg` would
   have to wrap — and it is the next thing to do to the sward after the nesting.
+
+## The pop was never the LOD. It was a tree with no representation at all
+
+The complaint from the seat was that trees skip the impostor tier entirely and
+arrive as full 3D skeletons. Three separate faults produced that one symptom,
+and only the third was found by measuring rather than by reading.
+
+### The instrument first, because the fault is an ABSENCE
+
+Every impostor readout this file had counted things **drawn**: `drawn/offered`,
+`cards` per family, `bySlot`, `waiting`, `stood`. A count of things drawn cannot
+report a tree that was drawn by nobody — and a pop is precisely that: no
+representation one frame, a twelve-metre pine the next. So the gather now counts
+its **exits**. Every path out of the near-ring walk files a reason:
+
+| reason | what it means |
+| --- | --- |
+| `geometry` | the skeleton owns it — the best representation there is |
+| `impostor:exact` | its own variant's photograph |
+| `impostor:fallback` | a resident sibling's card while its own bakes |
+| `none:range` | outside the REACH dial's tier (the player asked for this one) |
+| `none:density` | thinned by the DENSITY dial — **far annulus only** |
+| `none:imp-cap` | the 32k instance cap bound |
+| `none:form-cap` | the per-refresh form budget bound |
+| `none:no-family-fallback` | no slot of its own and no sibling to borrow |
+| `none:seed-budget` | the manifest has not seeded that cell (counted in CELLS) |
+| `none:data-pending` | the cell is waiting on data (counted in CELLS) |
+
+and each is counted **twice**: once for every tree, and once for the trees large
+enough to be seen. PERCEPTIBLE is `IMP_PERCEPTIBLE_K · height > distance`, with
+K the design frame's pixels-per-metre at one metre — 320 rows at 55° gives 307,
+so a 10 m tree is perceptible out to 3.07 km. Below one art pixel a tree cannot
+pop because it cannot be seen, and its absence is free. **`perceptible NONE` is
+the number, and the target is zero** — not small, zero, because one conspicuous
+tree arriving out of nothing is the entire complaint.
+
+`__impwhy()` returns it, the device dump carries it as `trees representation`,
+and `devtools/imp-census.mjs` sweeps the DENSITY dial and fails on it.
+
+### Fault 1 — the near ring was gambling with existence
+
+The tier thinned by a distance-weighted hash *inside the draw ring*: at DENSITY
+1X an eligible tree's chance of a card was 75% at 300 m, 42% at 400 m, 27% at
+500 m. That is a deliberate hole exactly where the geometry is about to take
+over, and a tree in the hole has **nothing** until it crosses the admission ring
+and appears whole. The thinning survived review because `full = max(260,
+ezEdge[fam])` usually sat near the geometry edge, so at 1X the two radii nearly
+coincided and the hole was mostly outside the frame — until the dial moved.
+
+The invariant is absolute now, and it is the seat's own words: *inside the
+detailed-tree range, a tree in the manifest is either owned by the geometry or
+wears a card.* No hash, no probability, no exceptions. The DENSITY dial governs
+the **far annulus** alone — past the draw ring, where thinning removes a tree
+the geometry was never going to draw — and `impThinnable` narrows even that to
+interior and polygon fill, so a stray, a fringe plant and a clump's anchor are
+never statistically erased.
+
+Two things fell out of removing it. `ezAdmit` is asked **unconditionally** now:
+it used to sit inside the `d2 <= full2` branch on the reasoning that the
+admitted set is only ever within `full` — true at 1X and false the moment the
+dial shrinks `full2` below the geometry edge, which 0.25X and 0.5X both do, and
+there a tree between the two radii was drawn as a skeleton AND as a card, in the
+same place, at once. And `IMPOSTOR_CAP` (32k) is the binding constraint now
+rather than the hash; `cand` is built centre-out by `squareRings`, so the cap's
+`break` drops roughly the furthest first, and the remainder is walked for the
+size test so a thousand missing trees are not reported as one.
+
+### Fault 2 — REACH 1X is a zero-width annulus, and the readout now says so
+
+`impostorReach()` at 1X is the draw range exactly, so the impostor tier stops
+where the geometry stops and the far ring is **empty by construction**. The dial
+stop reads like a horizon and means "do not extend tree existence past the
+geometry horizon". The arithmetic is left alone — it is a legitimate setting —
+but `__impwhy().ring` prints `farRing` in metres and the census labels a zero
+one `EMPTY`, so it can no longer be mistaken for a tier that is failing to fill.
+
+### Fault 3 — a family's first slot queued behind another family's whole palette
+
+This is the one that was still live, and it was invisible until the census ran.
+
+The atlas fallback is: a tree whose variant has not baked borrows a **resident
+sibling of its own family** rather than drawing nothing. That works only if the
+family has *some* slot. `impSlotFor` baked two variants a refresh, spent in
+`EZ_FAMILIES` order — so the first family photographed its entire palette before
+the second family got its first slot, and every conifer in the world drew
+**nothing at all** in the meantime.
+
+Measured at `at-yosemite`, sixty seconds after boot, with the atlas at 8/40
+slots and `locked 0`:
+
+```
+  reason                       trees      perceptible
+  impostor:exact                 5131            5131
+  none:no-family-fallback        1205            1205   ← A TREE VANISHED
+  geometry                        348             348
+  impostor:fallback               178             178
+  NONE 1205 of which 1205 perceptible
+```
+
+**1,205 trees, every one of them large enough to see, with no representation at
+all** — 18% of the tier, permanently, on a stock rack. That is the pop.
+
+Two bakes a refresh is the right budget for a family's *second* slot and the
+wrong one for its first: one is a tree's own photograph replacing a near-enough
+sibling's, the other is the difference between a silhouette and empty ground. A
+seeding bake is charged to its own budget now (`IMPOSTOR_SEED_PER_REFRESH =
+EZ_FAMILIES.length`), so the worst case is five bakes at ~2.3 ms on the first
+refresh of a session — about 12 ms, once — against a fault that otherwise lasts
+the whole drive.
+
+### Measured, before and after
+
+`node cells/drive/devtools/imp-census.mjs`, `at-yosemite`, DRAW RANGE 2.8 km,
+REACH 4X, EZ VARIANTS ALL, sweeping the DENSITY dial:
+
+| DENSITY | before: NONE / perceptible | after: NONE / perceptible |
+| --- | --- | --- |
+| 0.25X | 1002 / 998 | **0 / 0** |
+| 1X | 1304 / 1300 | **0 / 0** |
+| ALL | 1304 / 1300 | **0 / 0** |
+
+and at REACH 1X, where the far annulus is zero-width, 0.25X and ALL now return
+**byte-identical** censuses (5680 exact + 664 fallback + 348 geometry at both) —
+which is the invariant demonstrated rather than asserted: the density dial
+cannot change whether a tree inside the draw ring exists, because there is no
+longer anywhere inside that ring for it to act.
+
+### What this unit does NOT do
+
+- **The representation ladder stops at two rungs.** Geometry and card are the
+  only representations; the seat's rungs 3–4 — a stand/canopy aggregate, and a
+  terrain-level woodland signal — are not built. Past the impostor reach a tree
+  still simply does not exist, which is correct only because the reach is beyond
+  the manifest at every stop tested.
+- **The far annulus was never exercised.** At `at-yosemite` the manifest seeds
+  ~44 of 6,241 cells inside an 8.6 km reach, so `candFar` was empty and
+  `none:density` never fired in any run above. The far thinning is restricted to
+  `impThinnable` sites by construction, not by measurement.
+- **`none:seed-budget` and `none:data-pending` are CELL counts, not tree
+  counts,** and they are enormous (6,197 of 6,241 cells at `at-yosemite`). A
+  cell the budget has not reached holds no descriptors at all, so its trees
+  cannot be counted by construction — the honest unit is the cell, and the
+  number means "how much of the reach has no descriptors in it yet", which is
+  the manifest filling rather than trees going missing.

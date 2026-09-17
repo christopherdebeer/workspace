@@ -130,8 +130,16 @@ function context(code,range,ez,triCap) {
     // doctrine names — a sandboxed check breaks on a new free variable and
     // only running it can tell you.
     impProf:{drawn:0,offered:0,capped:0,formed:0,far:0,ms:0,byFam:{},capFam:{},
-      waiting:0,locked:0,refused:new Map(),bySlot:[]},
+      waiting:0,locked:0,refused:new Map(),bySlot:[],why:{},whyBig:{}},
     impSlotFull:false,
+    // ── AND THE INVARIANT'S OWN TWO ──
+    // `impThinnable` decides whether a tree's absence can be carried by a
+    // canopy, which only the FAR gather asks; `IMP_PERCEPTIBLE_K` turns a
+    // height into art pixels for the census. Both are free variables of the
+    // refresh and both broke this check the moment they landed — which is the
+    // fault the note above names, met again by the change that wrote it.
+    impThinnable:(v)=>!v.anchor&&(v.role==='interior'||v.role==='polygon'),
+    IMP_PERCEPTIBLE_K:320/(2*Math.tan((55*Math.PI)/360)),
     // HALF AGAIN THE DRAW RANGE, for the manifest's own reason one line down:
     // the REACH dial's far gather has to RUN here, or the claim that a tier
     // reaching past the draw ring disturbs nothing inside it is untested.

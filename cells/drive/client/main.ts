@@ -11843,6 +11843,37 @@ const IMPOSTOR_CAP = 32000;
  *  `impostorFullM`. */
 const IMPOSTOR_FULL_M = 260;
 /**
+ * ── WHOSE ABSENCE A CANOPY CAN CARRY, AND WHOSE IT CANNOT ──
+ *
+ * The seat's rule, and it is the one the blind hash was missing: *thinning
+ * makes sense inside a closed stand where omitted individuals are perceptually
+ * carried by canopy mass. It makes very little sense for an isolated tree
+ * against open ground or skyline.*
+ *
+ * The descriptor already says which is which and it cost nothing to ask.
+ * `interior` is a plant inside a clump and `polygon` is one inside a mapped
+ * wood — drop one and the mass either side closes over it. A `living-stray` is
+ * a lone tree in open country, a `fringe` plant is the stand's own outline
+ * against the sky, and an ANCHOR is the largest tree of its clump: every one
+ * of those is a silhouette somebody would notice going missing, and none of
+ * them is ever thinned however far away it is.
+ */
+const impThinnable = (v: PlacedVegSite): boolean =>
+  !v.anchor && (v.role === 'interior' || v.role === 'polygon');
+/**
+ * ── AND WHAT COUNTS AS PERCEPTIBLE, IN THE ONLY UNIT THAT MATTERS ──
+ *
+ * A metre at distance d is `ROWS / (2 tan(fov/2) d)` art pixels, so a tree of
+ * height h clears one art pixel while `K * h > d`. Squared, because the
+ * census runs in the hottest loop this refresh has and a sqrt there is not
+ * free — and `d2` is already in hand at every site the pass touches.
+ *
+ * It is the DESIGN resolution rather than the live one, deliberately: the
+ * bar has to mean the same thing on a 240P frame and a 480P one, or a census
+ * taken on one device cannot be compared with a census taken on another.
+ */
+const IMP_PERCEPTIBLE_K = 320 / (2 * Math.tan((55 * Math.PI) / 360));
+/**
  * ── HOW FAR THE CHEAP REPRESENTATION STANDS, AND HOW THICKLY ──
  *
  * Two dials, because the seat asked two different questions of this tier and
@@ -11978,6 +12009,23 @@ const impProf = {
    */
   refused: new Map<string, number>(),
   bySlot: [] as number[],
+  /**
+   * ── WHY EACH TREE HAS THE REPRESENTATION IT HAS ──
+   *
+   * The seat's ask, and the reason a count of impostors was never the
+   * question: *how many manifested trees large enough to be perceptible
+   * currently have representation NONE, and why? That number should
+   * ultimately be zero.* A single `drawn` figure cannot answer it, and neither
+   * can `offered` — a tree the pass turned down and a tree it never saw look
+   * the same from outside.
+   *
+   * Every candidate the pass considers lands in exactly one of these, and
+   * `big` is the same tally over the trees that clear one art pixel — which is
+   * the population the invariant is actually about. A `none*` row with a big
+   * count in it is a tree somebody can see missing.
+   */
+  why: {} as Record<string, number>,
+  whyBig: {} as Record<string, number>,
   /** Refused because the ATLAS IS FULL — these will never draw, this session,
    *  wherever the truck goes. Kept apart from `waiting`, which drains. */
   locked: 0,
@@ -12039,6 +12087,29 @@ const IMPOSTOR_FORM_BUDGET = 24000;
 // first seconds, and a hop does not spend a second drawing nothing.
 const IMPOSTOR_BAKE_PER_REFRESH = 2;
 let impBakedNow = 0;
+/**
+ * ── A FAMILY'S FIRST SLOT IS NOT A VARIANT BAKE, AND MAY NOT QUEUE BEHIND ONE ──
+ *
+ * THE FAULT THE CENSUS FOUND, and it was the whole of the remaining pop. The
+ * stand-in below only works if the family has SOME slot; with none, the tree
+ * drew nothing at all. And the bake budget is spent in family order, so the
+ * first family in `EZ_FAMILIES` took every bake for its whole palette before
+ * the second family got its first — measured at `at-yosemite`, sixty seconds
+ * after boot, atlas 8/40 slots, locked 0: **1,205 trees, every one of them
+ * large enough to see, with no representation at all**, waiting on a first
+ * conifer while the broadleaf palette photographed itself.
+ *
+ * Two bakes a refresh is the right budget for the SECOND slot of a family and
+ * the wrong one for the first: one is a tree's own photograph replacing a
+ * near-enough sibling's, the other is the difference between a silhouette and
+ * an empty patch of ground. So a seeding bake — the first slot of a family
+ * that has none — is allowed beside the budget rather than inside it. The cap
+ * is the family count, so the worst case is the five of them at once on the
+ * very first refresh of a session: about 12 ms, once, against a fault that
+ * otherwise lasts as long as the drive.
+ */
+const IMPOSTOR_SEED_PER_REFRESH = EZ_FAMILIES.length;
+let impSeedNow = 0;
 /** Set by the last refusal that was the atlas's CEILING rather than the bake
  *  budget, so the refusal site can file it under `locked` without repeating
  *  the test. Reset with the rest of the per-sweep census. */
@@ -12086,10 +12157,14 @@ function impSlotFor(fam: EzFamily, vi: number): ImpAtlasSlot | null {
   if (got) return got;
   if (!impAtlasRT) return null;
   if (impSlotNext >= IMP_ATLAS_SLOTS) { impSlotFull = true; return null; }
-  if (impBakedNow >= IMPOSTOR_BAKE_PER_REFRESH) return null;
+  // The one bake that buys a whole family its silhouette, charged to its own
+  // budget — see IMPOSTOR_SEED_PER_REFRESH. Everything else waits its turn.
+  const seeding = !impFamSlot.has(fam);
+  if (seeding ? impSeedNow >= IMPOSTOR_SEED_PER_REFRESH
+              : impBakedNow >= IMPOSTOR_BAKE_PER_REFRESH) return null;
   const geo = ezVariants(fam)[vi]?.geometry;
   if (!geo) return null;
-  impBakedNow++;
+  if (seeding) impSeedNow++; else impBakedNow++;
   const t0 = performance.now();
   const slot = bakeImpAtlasSlot(renderer, impAtlasRT, geo, impSlotNext++);
   impProf.bakeMs += performance.now() - t0;
@@ -14697,6 +14772,9 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // whether the manifest is earning its memory — the list below is what
   // survived the thinning and is a much smaller number.
   let impFarSeen = 0;
+  // Counted in the GATHER and folded into the census after the reset below,
+  // because the reset runs after this walk and would wipe a direct write.
+  let impFarThin = 0, impFarThinBig = 0;
   if (EZ_ON) {
     for (const [gx, gz] of ring) {
       yield;
@@ -14753,10 +14831,18 @@ function* vegRefreshSteps(): Generator<void, void, void> {
             const d2 = dx * dx + dz * dz;
             if (d2 < treeR2 || d2 >= impR2) continue;
             impFarSeen++;
-            // Nothing out here is inside its family's full-density radius, so
-            // the cheap branch the near list needs is not written: the hash
-            // decides every one of them.
-            if (hash2(Math.round(v.ax * 8) + 7919, Math.round(v.az * 8) + 104729) * d2 > farKeep2[v.k]) continue;
+            // ── AND ONLY A TREE INSIDE A STAND IS THINNED ──
+            // The hash used to decide every one of them, which is how a lone
+            // tree against open ground got deleted outright — see
+            // `impThinnable`. A stray, a fringe plant and a clump's anchor now
+            // go through whatever the density dial says.
+            if (impThinnable(v)
+              && hash2(Math.round(v.ax * 8) + 7919, Math.round(v.az * 8) + 104729) * d2 > farKeep2[v.k]) {
+              impFarThin++;
+              const tk = IMP_PERCEPTIBLE_K * EZ_M_PER_SCALE[v.k] * v.s * treeSizeScale;
+              if (tk * tk > d2) impFarThinBig++;
+              continue;
+            }
             candFar[v.k].push([d2, v]);
           }
         }
@@ -14995,11 +15081,26 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // until now it was drawn as nothing at all.
   let impN = 0, impOffered = 0, impFormed = 0, impFar = 0, impR2 = 0;
   impBakedNow = 0;
+  impSeedNow = 0;
   impProf.waiting = 0;
   impProf.locked = 0;
   impProf.stood = 0;
   impProf.refused.clear();
   impProf.bySlot.length = 0;
+  impProf.why = {};
+  impProf.whyBig = {};
+  /**
+   * One tree's verdict. `tallM` is the height it would be DRAWN at, so the
+   * perceptibility test is about the thing on screen rather than about the
+   * site's nominal scale, and `d2` is the square the pass already holds.
+   */
+  const impWhy = (reason: string, d2: number, tallM: number): void => {
+    impProf.why[reason] = (impProf.why[reason] ?? 0) + 1;
+    const k = IMP_PERCEPTIBLE_K * tallM;
+    if (k * k > d2) impProf.whyBig[reason] = (impProf.whyBig[reason] ?? 0) + 1;
+  };
+  // The far gather's own thinning, decided where the site was read.
+  if (impFarThin) { impProf.why['none:density'] = impFarThin; impProf.whyBig['none:density'] = impFarThinBig; }
   if (impostors && impostorDraw) {
     // The dissolve's own span, handed to the shader once. It starts where the
     // skeletons' does — two thirds of the way to the draw edge — and ends at
@@ -15055,26 +15156,41 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     for (const fam of EZ_FAMILIES) {
       const variants = ezVariants(fam);
       let famN = 0;
-      // ── FULL DENSITY STARTS WHERE THE GEOMETRY STOPS ──
+      // ── INSIDE THE DRAW RING, EXISTENCE IS NOT A PROBABILITY ──
       //
-      // The first cut thinned from a fixed 260 m, and measured its own mistake:
-      // at at-yosemite on a squeezed budget the admitted edge is 428 m, so
-      // EVERY tree this tier could draw was already deep in the thinned region
-      // and one in five stood up — 321 of 1,614. A tree a metre past the
-      // geometry's edge must be drawn with near-certainty or the handoff is a
-      // thinning, which is the pop wearing a gentler name.
+      // There used to be a full-density radius here — the family's own
+      // admitted edge, with the inverse-square hash thinning beyond it — and
+      // the seat's reading of the live build found the hole it left:
       //
-      // So the full-density radius is the family's OWN admitted edge (with a
-      // floor, for the case where nothing was admitted at all), and the
-      // inverse-square thinning begins beyond it. That also makes the rule
-      // adaptive in the right direction: a family the budget cuts hard has a
-      // near edge and starts thinning early, one it barely cuts thins late.
-      const full = Math.max(IMPOSTOR_FULL_M, ezEdge[fam]);
-      // DENSITY SCALES THE KEEP PROBABILITY, WHICH IS THE SAME THING AS
-      // SCALING full^2 — so 4X reads as a full-density radius twice as wide
-      // and the inverse-square law past it is untouched. The edge does not
-      // move: that is the REACH dial's job, and the two stay independent.
-      const full2 = full * full * impDensityMul;
+      //     full = max(260, ezEdge[fam])
+      //
+      // so wherever a family's geometry edge is past 260 m the two boundaries
+      // are THE SAME BOUNDARY, and the band between them has zero width. A
+      // tree a metre outside the edge went through the hash and could be
+      // turned down; a metre inside it, the nearest-N admission took it and it
+      // was a full skeleton. **Nothing in between.** Drive at it and the
+      // admitted set moves over it, so it goes
+      //
+      //     399 m NONE · 350 m NONE · 310 m NONE · 299 m FULL 3D TREE
+      //
+      // which is the direct nothing-to-geometry pop, permitted by design and
+      // sitting exactly where it is most visible. At the 260 m floor with the
+      // density dial at 1X an eligible tree's chance of a card was 75% at
+      // 300 m, 42% at 400 and 27% at 500 — so a conspicuous solitary tree at
+      // five hundred metres was three times in four deliberately absent.
+      //
+      // THE INVARIANT, and it is absolute inside this ring: a tree in the
+      // manifest is either owned by the geometry or wears a card. The
+      // representation may degrade; existence may not. No hash, no
+      // probability, no exceptions — the DENSITY dial has nothing to decide
+      // here and now says so (it governs the far ring alone).
+      //
+      // AND `ezAdmit` IS ASKED UNCONDITIONALLY NOW. It used to be inside the
+      // `d2 <= full2` branch on the reasoning that the admitted set is only
+      // ever within `full` — true at 1X and FALSE the moment the density dial
+      // shrinks `full2` below the geometry edge, which 0.25X and 0.5X both do.
+      // There a tree between the two radii skipped the test entirely and was
+      // drawn as a skeleton AND as a card, in the same place, at once.
       // Both lists, near first, so the cap — if it ever binds — takes the near
       // trees. `candFar` is empty unless the REACH dial asks past the draw
       // ring, and everything in it has ALREADY passed the density test — the
@@ -15099,33 +15215,45 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         // on and is what makes yielding here free.
         if ((ci & (IMPOSTOR_STEP - 1)) === 0 && ci > 0) yield;
         const ent = list[ci], d2 = ent[0], v = ent[1];
-        if (d2 > impR2) continue;     // the REACH dial, and the cheapest test there is
-        if (famN >= impCap[fam] || impN >= IMPOSTOR_CAP) { impProf.capped++; break; }
+        // The height this tree would be DRAWN at, which is what the card is
+        // sized by and what the census measures perceptibility against.
+        const tallM = EZ_M_PER_SCALE[fam] * v.s * treeSizeScale;
+        // The REACH dial, and the cheapest test there is. It IS a NONE exit —
+        // at 0.5X the tier's edge is inside the draw ring, so a tree the
+        // geometry refused between the two has nothing — but it is the one
+        // the player asked for by name, so it is counted rather than overruled.
+        if (d2 > impR2) { impWhy('none:range', d2, tallM); continue; }
+        if (famN >= impCap[fam] || impN >= IMPOSTOR_CAP) {
+          // ── AND THE REMAINDER IS COUNTED, NOT JUST THE FRAME IT STOPPED ON ──
+          // `break` abandons everything after this index, so charging one tree
+          // to the cap would report a thousand missing trees as one. The tail
+          // is walked for the size test alone — a multiply and a compare each,
+          // no lookups — and only ever when the cap actually binds.
+          impProf.capped++;
+          for (let k = ci; k < list.length; k++) {
+            const kd2 = list[k][0];
+            if (kd2 > impR2) continue;
+            const kt = IMP_PERCEPTIBLE_K * EZ_M_PER_SCALE[fam] * list[k][1].s * treeSizeScale;
+            impProf.why['none:imp-cap'] = (impProf.why['none:imp-cap'] ?? 0) + 1;
+            if (kt * kt > kd2) impProf.whyBig['none:imp-cap'] = (impProf.whyBig['none:imp-cap'] ?? 0) + 1;
+          }
+          break;
+        }
         // WHAT THIS COUNTS NARROWED WHEN THE GATHER LEARNED TO THIN. It is
         // what the PASS considered — every near candidate, and the far ones
         // that already survived the gather's own density test — so it is no
         // longer the population the tier was offered. `farSeen` is that
         // number now, and the readout prints the pair rather than one of them.
         impOffered++;
-        // ── THE ADMITTED SET IS ONLY EVER INSIDE full ──
-        // Every tree the geometry took is within `ezEdge[fam]`, and `full` is
-        // at least that, so beyond it the membership test cannot collide with
-        // admission and the Set lookup is pure cost. Skipping it there takes
-        // an object-identity hash off the overwhelming majority of steps.
-        if (preFiltered) { /* the gather already decided; nothing to re-test */ }
-        else if (d2 <= full2) {
-          if (ezAdmit.has(v)) { impOffered--; continue; }
-        } else if (hash2(Math.round(v.x * 8) + 7919, Math.round(v.z * 8) + 104729) * d2 > full2) {
-          // A stable hash on the tree's own position against a density that
-          // falls as the inverse square: constant density on the GLASS,
-          // decided once per tree, the same from every vantage. Written as a
-          // multiply rather than `hash > full2 / d2` — same predicate, no
-          // divide, and this is the hottest line in the pass.
-          continue;
+        if (!preFiltered && ezAdmit.has(v)) {
+          // The geometry owns it. Not a refusal — the best representation
+          // there is, and the one the invariant hands over FROM.
+          impWhy('geometry', d2, tallM); impOffered--; continue;
         }
         let form = impFormOf.get(v);
+        let fallback = false;
         if (form === undefined) {
-          if (impFormed >= IMPOSTOR_FORM_BUDGET) continue;
+          if (impFormed >= IMPOSTOR_FORM_BUDGET) { impWhy('none:form-cap', d2, tallM); continue; }
           impFormed++;
           const vi = ezVariantAt(fam, v.x, v.z);
           if (impAtlasRT) {
@@ -15146,10 +15274,29 @@ function* vegRefreshSteps(): Generator<void, void, void> {
               // Not written to impFormOf, so the next sweep asks again and the
               // tree takes its own photograph the moment one exists.
               const stand = impFamSlot.get(fam);
-              if (stand === undefined) { impFormed--; impOffered--; continue; }
+              if (stand === undefined) {
+                // ── THE ONE REMAINING NONE INSIDE THE RING, AND IT SHOULD
+                // NOW BE UNREACHABLE ──
+                // No slot of its own and no sibling of its family baked yet to
+                // borrow. It was called a first-ever-family transient and
+                // counted so the claim could be checked rather than assumed —
+                // and the check failed: sixty seconds after boot at
+                // `at-yosemite`, atlas 8/40 and locked 0, **1,205 trees sat
+                // here, every one of them large enough to see**, because the
+                // bake budget was spent in family order and the conifers were
+                // behind the whole broadleaf palette. A family's first slot has
+                // its own budget now (IMPOSTOR_SEED_PER_REFRESH), so reaching
+                // this line means the seeding bake itself was refused — an
+                // atlas at its ceiling with an unserved family, which 40 slots
+                // over a 37-variant space makes impossible. If the census shows
+                // it again, the thing that moved is the ceiling.
+                impWhy('none:no-family-fallback', d2, tallM);
+                impFormed--; impOffered--; continue;
+              }
               impProf.stood++;
               impFormed--;
               form = stand;
+              fallback = true;
             } else {
               form = slot.slot;
               impFormOf.set(v, form);
@@ -15202,6 +15349,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         // Which of the eighteen this instance is actually standing on. A slot
         // that never appears here is baked and serving nobody.
         impProf.bySlot[form] = (impProf.bySlot[form] ?? 0) + 1;
+        impWhy(fallback ? 'impostor:fallback' : 'impostor:exact', d2, tallM);
         impN++; famN++;
       }
       }
@@ -34835,6 +34983,69 @@ function tapeKeep(): string {
 };
 
 /**
+ * ── HOW MANY TREES SOMEBODY CAN SEE ARE DRAWN AS NOTHING, AND WHY ──
+ *
+ * The seat's ask, and the reason no counter in this file could answer it
+ * before: *the key metric is not "how many impostors are drawn". It is how
+ * many manifested trees large enough to be perceptible currently have
+ * representation NONE, and why? That number should ultimately be zero.*
+ *
+ * `drawn`, `offered`, `waiting`, `locked` and `capped` are all counts of one
+ * outcome each, and a tree the pass turned down looks exactly like a tree it
+ * never reached. This reports the WHOLE population the pass considered, split
+ * by the verdict each tree got — and again over the trees that clear one art
+ * pixel, which is the population the invariant is actually about.
+ *
+ * TWO REASONS ARE NOT THE PASS'S TO COUNT, and they are reported from the
+ * manifest instead: a cell inside the reach that the seed budget has not
+ * reached yet, and one deferred waiting on its cover raster or ecoregion. In
+ * both there is no tree descriptor for an impostor to represent, which is a
+ * different fault from a descriptor the tier refused — it explains a stand
+ * arriving late rather than a clean pop at the geometry frontier.
+ *
+ * It reads what the refresh already recorded plus a walk over CELLS (not
+ * sites), so it is cheap; and, like every probe here, it is never called from
+ * the frame loop.
+ */
+(window as unknown as { __impwhy?: object }).__impwhy = (): object => {
+  const keys = Object.keys(impProf.why).sort((a, b) => impProf.why[b] - impProf.why[a]);
+  const rows = keys.map((k) => ({ reason: k, n: impProf.why[k], big: impProf.whyBig[k] ?? 0 }));
+  const none = rows.filter((r) => r.reason.startsWith('none:'));
+  // ── THE MANIFEST'S OWN TWO, BY CELL ──
+  // A cell the budget has not reached holds no sites at all, so counting its
+  // trees is impossible by construction; the CELL is the honest unit and the
+  // number is "how much of the reach has no descriptors in it yet".
+  const impR = impostorReach();
+  const cells = Math.ceil(impR / VEG_CELL);
+  const [cx, cz] = vegCellOf(...renderFocusXZ());
+  let unseeded = 0, deferred = 0, seeded = 0;
+  if (impR > 0) {
+    for (let gz = cz - cells; gz <= cz + cells; gz++) {
+      for (let gx = cx - cells; gx <= cx + cells; gx++) {
+        const key = `${gx},${gz}`;
+        if (vegSeeded.has(key)) { seeded++; continue; }
+        if (vegDeferredAt.has(key)) deferred++; else unseeded++;
+      }
+    }
+  }
+  return {
+    // THE HEADLINE, and it is the only number that answers the question.
+    perceptibleNone: none.reduce((a, r) => a + r.big, 0),
+    none: none.reduce((a, r) => a + r.n, 0),
+    rows,
+    manifest: { cells: seeded + deferred + unseeded, seeded,
+      'none:seed-budget': unseeded, 'none:data-pending': deferred },
+    // The far ring's own width, because REACH 1X means the tier stops exactly
+    // where the geometry does and the annulus is EMPTY — a dial stop that
+    // sounds like a horizon and means "do not extend tree existence past the
+    // geometry horizon". Printed rather than left to be inferred.
+    ring: { drawRange: Math.round(treeRange), ...impostorReachTally(),
+      farRing: Math.max(0, Math.round(impR - treeRange)) },
+    perceptiblePxAt1m: +IMP_PERCEPTIBLE_K.toFixed(1),
+  };
+};
+
+/**
  * ── WHAT WAS ASKED, WHAT WAS GRANTED, AND WHICH ONE BOUND IT ──
  * The manifest can only hand over trees it has seeded, so a reach dial past
  * the manifest's own cell ceiling is a request that cannot be met. Reporting
@@ -46875,6 +47086,36 @@ function telemetryReport(): string {
           + `${impProf.stood ? ` (${impProf.stood} on a sibling)` : ''}` : ''}`
         // THE ONE THAT CANNOT DRAIN, said in different words on purpose.
         + `${impProf.locked ? ` · ${impProf.locked} LOCKED OUT (atlas full)` : ''}` : ''}`);
+  }
+  {
+    // ── WHY A MANIFESTED TREE HAS NO REPRESENTATION ──
+    // The row above reports what was DRAWN, and a count of things drawn cannot
+    // report an absence. A pop is precisely an absence: a tree that had no
+    // representation one frame and a full skeleton the next. So this row is a
+    // census of the exits — every path out of the gather that leaves a
+    // manifested tree with nothing — and it is ranked by the only number that
+    // matters, the trees big enough to be seen going missing.
+    //
+    // PERCEPTIBLE means the tree would project above roughly one art pixel at
+    // its distance: `IMP_PERCEPTIBLE_K * height > distance`, with K the design
+    // frame's pixels-per-metre at one metre (320 rows, 55°). A tree below that
+    // cannot pop because it cannot be seen; a tree above it can, and so
+    // `perceptible NONE` is the number that should read zero on every rack.
+    const why = impProf.why, big = impProf.whyBig;
+    const nk = Object.keys(why).filter(k => k.startsWith('none:'))
+      .sort((a, b) => (big[b] ?? 0) - (big[a] ?? 0) || why[b] - why[a]);
+    const pn = nk.reduce((a, k) => a + (big[k] ?? 0), 0);
+    const nn = nk.reduce((a, k) => a + why[k], 0);
+    // The manifest's own two exits are counted in CELLS, not sites: a cell the
+    // seed budget has not reached holds no descriptors at all, so its trees
+    // cannot be counted by construction. Reported beside the render-side
+    // census rather than folded into it, because they are a different claim.
+    const unseeded = Math.max(0, _m.cells - _m.seeded - _m.deferred);
+    L.push(`trees representation · NONE ${nn} · perceptible ${pn}${pn ? ' ← SHOULD BE 0' : ''}`
+      + `${nk.length ? ` · ${nk.map(k => `${k.slice(5)} ${why[k]}${(big[k] ?? 0) ? `(${big[k]} big)` : ''}`).join(' ')}` : ''}`
+      + ` · had ${why['geometry'] ?? 0} 3d, ${why['impostor:exact'] ?? 0} exact + ${why['impostor:fallback'] ?? 0} fallback cards`
+      + ` · manifest ${unseeded} seed-budget, ${_m.deferred} data-pending (cells)`
+      + ` · 1px at ${IMP_PERCEPTIBLE_K.toFixed(0)}m per m of height`);
   }
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
