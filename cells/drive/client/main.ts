@@ -15172,6 +15172,15 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // prune at the end of this function keeps the union of the two rather than
   // following the focus. Trees are a render interest; a rock you can hit is not.
   const [rfx, rfz] = renderFocusXZ();
+  // THE CELL LATTICE IS ABSOLUTE, even though every tree it contains is handed
+  // back to the renderer in local metres. The far-cell cull originally compared
+  // `gx * VEG_CELL` directly with `rfx`: an absolute easting against a local x.
+  // Once the floor-refusal gate made the cull live, every annulus cell therefore
+  // looked thousands of kilometres away and all 648 were retired together. The
+  // next sweep saw an empty far ring, dropped the floor and reopened it, producing
+  // the reported forest-wide flash every refresh. Carry the focus into the
+  // lattice once and keep the cheap cell bound wholly in that frame.
+  const [rfax, rfaz] = vegAbsOf(rfx, rfz);
   const [cx, cz] = vegCellOf(rfx, rfz);
   const reach = Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL);
   // The manifest's own reach — see the note by `manifestRange`. The draw ring
@@ -15385,10 +15394,11 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         for (const [gx, gz] of squareRings(cx, cz, impCells, reach + 1)) {
           yield;
           if (impCull2 < Infinity) {
-            // The cell's nearest corner bounds every tree standing in it.
+            // The cell's nearest corner bounds every tree standing in it. Both
+            // sides are in the absolute vegetation frame; `rfx`/`rfz` are local.
             const bx = gx * VEG_CELL, bz = gz * VEG_CELL;
-            const ddx = Math.max(bx - rfx, 0, rfx - (bx + VEG_CELL));
-            const ddz = Math.max(bz - rfz, 0, rfz - (bz + VEG_CELL));
+            const ddx = Math.max(bx - rfax, 0, rfax - (bx + VEG_CELL));
+            const ddz = Math.max(bz - rfaz, 0, rfaz - (bz + VEG_CELL));
             if (ddx * ddx + ddz * ddz > impCull2) { impFarCull++; continue; }
           }
           // ── A BUDGET FOR SEEDING MAY NOT DELETE TREES THAT ALREADY EXIST ──

@@ -208,6 +208,7 @@ function context(code,range,ez,triCap) {
     // check. What this file asserts is that the SLICED refresh refills what the
     // pre-slice one did given the same cell walk; the walk's own frame is a
     // different claim with a different test.
+    vegAbsOf:(x,z)=>[x,z],
     vegCellOf:(x,z)=>[Math.floor(x/220),Math.floor(z/220)],
     groundAt:(x,z)=>Math.sin(x/30)+Math.cos(z/30),sampleCover:()=>10,
     terrainPalette:()=>[0.2,0.3,0.1],trunkReach:(k,h,s)=>h+s*0.38,
@@ -365,20 +366,38 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
     f: new Float32Array(8000), y: new Float32Array(8000) };
   c.impostors = impostorMesh(8000);
   c.vegGrid.clear();
+  // ── THE CELL CULL RUNS IN THE EARTH-FIXED VEGETATION FRAME ──
+  //
+  // The production lattice is indexed by absolute metre cells while the
+  // renderer's focus is local. The first cell cull subtracted the latter from
+  // `gx * VEG_CELL`, so every real-world cell looked thousands of kilometres
+  // away and the whole annulus disappeared whenever the gate opened. The
+  // original zero-centred sandbox made absolute and local coordinates equal,
+  // masking the fault. Put this leg around a nonzero earth origin: the shipped
+  // broken subtraction retires every cell and fails `farWalk > 0`; carrying the
+  // focus through `vegAbsOf` preserves the same selection as the local control.
+  const absGX = -60483, absGZ = 19059;
+  c.vegAbsOf = (x, z) => [x + absGX * 220, z + absGZ * 220];
+  c.vegCellOf = (x, z) => {
+    const [ax, az] = c.vegAbsOf(x, z);
+    return [Math.floor(ax / 220), Math.floor(az / 220)];
+  };
   // REACH FAR ENOUGH THAT THE CULL HAS SOMETHING TO CULL. At the default
   // 1.5x range the cull radius came out beyond the tier's own reach and the
   // check witnessed nothing — a fixture whose world ends before the mechanism
   // starts. Eight kilometres is the device's, with fewer sites per cell so the
   // check stays a check rather than a benchmark.
   c.impostorReach = () => 8000; c.impostorReachAsked = () => 8000;
-  for (const [gx, gz] of squareRings(0, 0, Math.ceil(8000 / 220) + 1)) {
+  const [absCX, absCZ] = c.vegCellOf(c.state.x, c.state.z);
+  for (const [gx, gz] of squareRings(absCX, absCZ, Math.ceil(8000 / 220) + 1)) {
     const cell = [];
     for (let i = 0; i < 24; i++) {
       // Nine broadleaf to one acacia: one family sets the floor, the other gets
       // a far skeleton edge and nothing above it.
       const k = random() < 0.9 ? 'broadleaf' : 'acacia';
-      const sx = gx * 220 + random() * 220, sz = gz * 220 + random() * 220;
-      cell.push({ k, x: sx, z: sz, ax: sx, az: sz,
+      const ax = gx * 220 + random() * 220, az = gz * 220 + random() * 220;
+      const sx = ax - absGX * 220, sz = az - absGZ * 220;
+      cell.push({ k, x: sx, z: sz, ax, az,
         s: 1 + random() * 2, h: 2, rot: random() * 6,
         sy: 0.7 + random() * 0.6, sw: 0.8 + random() * 0.4, tl: random() * 0.1,
         c: new THREE.Color(0.2, 0.4, 0.1), role: i % 2 ? 'interior' : 'fringe', anchor: i % 13 === 0 });
