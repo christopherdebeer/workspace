@@ -1208,7 +1208,7 @@ export function ezMaterial(
     sh.uniforms.uGust = wind.uGust;
     sh.uniforms.uWindK = wind.uWindK;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', `#include <common>\nattribute float aWood; attribute float aSky; attribute vec3 aEnv; attribute vec3 aPad; attribute vec3 aHull; attribute vec4 aEzSurf;\nuniform vec3 uWood; uniform vec3 uEzSun; uniform float uEzBend; uniform float uEzMerge; uniform float uEzPxH; uniform float uEzPxFix;\nvarying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky; varying vec3 vEzEnv; varying vec3 vEzSun; varying vec4 vEzSurf;\n${EZ_MERGE_GLSL}\n${FOLIAGE_WIND_UNIFORMS}`)
+      .replace('#include <common>', `#include <common>\nattribute float aWood; attribute float aSky; attribute vec3 aEnv; attribute vec3 aPad; attribute vec3 aHull; attribute vec4 aEzSurf;\nuniform vec3 uWood; uniform vec3 uEzSun; uniform float uEzBend; uniform float uEzMerge; uniform float uEzPxH; uniform float uEzPxFix;\nvarying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky; varying float vEzPx; varying vec3 vEzEnv; varying vec3 vEzSun; varying vec4 vEzSurf;\n${EZ_MERGE_GLSL}\n${FOLIAGE_WIND_UNIFORMS}`)
       .replace('#include <begin_vertex>', [
         '#include <begin_vertex>',
         // ── THE CROWN CLOSES AS THE TREE SHRINKS ──
@@ -1227,17 +1227,24 @@ export function ezMaterial(
         // is the control sheet's way in, since a sheet frames its cell by
         // construction and has no distance to read.
         '#ifdef USE_INSTANCING',
+        // Projected height is useful beyond the crown merge: the surface pass
+        // uses the SAME art-pixel measure to retire facet-scale lighting as a
+        // tree shrinks, so detail disappears by resolvability rather than by
+        // an unrelated distance threshold.
+        'float ezPxNow = uEzPxFix;',
+        'if (ezPxNow <= 0.0) {',
+        '  vec3 ezAt = (modelMatrix * instanceMatrix[3]).xyz;',
+        '  float ezTall = length(instanceMatrix[1].xyz);',
+        '  ezPxNow = ezTall * uEzPxH * projectionMatrix[1][1] * 0.5 / max(1.0, distance(cameraPosition, ezAt));',
+        '}',
         'if (uEzMerge > 0.001 && aWood < 0.5) {',
-        '  float ezPx = uEzPxFix;',
-        '  if (ezPx <= 0.0) {',
-        '    vec3 ezAt = (modelMatrix * instanceMatrix[3]).xyz;',
-        '    float ezTall = length(instanceMatrix[1].xyz);',
-        '    ezPx = ezTall * uEzPxH * projectionMatrix[1][1] * 0.5 / max(1.0, distance(cameraPosition, ezAt));',
-        '  }',
         // The arithmetic itself is `EZ_MERGE_GLSL`, so the atlas's bake applies
         // the same crown at the same band — see the note on EZ_MERGE_PX.
-        '  transformed = ezMergeAt(transformed, aPad, aHull, ezPx, uEzMerge);',
+        '  transformed = ezMergeAt(transformed, aPad, aHull, ezPxNow, uEzMerge);',
         '}',
+        'vEzPx = ezPxNow;',
+        '#else',
+        'vEzPx = uEzPxFix > 0.0 ? uEzPxFix : 999.0;',
         '#endif',
         '#ifdef USE_INSTANCING',
         'float ezBx = fract(sin(dot(instanceMatrix[3].xz, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;',
@@ -1309,7 +1316,7 @@ export function ezMaterial(
      */
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky;
+        varying float vEzWood; varying vec3 vEzLocal; varying float vEzJit; varying float vEzSky; varying float vEzPx;
         varying vec3 vEzEnv; varying vec3 vEzSun; varying vec4 vEzSurf;
         uniform float uEzBark; uniform float uEzEdge; uniform float uEzSky;
         uniform float uEzLeaf; uniform float uEzBump;
@@ -1323,16 +1330,28 @@ export function ezMaterial(
             float ezPhi = atan(vEzLocal.z, vEzLocal.x) / 6.2831853 + 0.5;
             float ezCoarse = ezNoise(vec3(ezPhi * 18.0, vEzLocal.y * 10.0 + vEzJit * 29.0,
               length(vEzLocal.xz) * 85.0));
-            float ezFine = ezNoise(vec3(vEzLocal.x * 185.0, vEzLocal.y * 26.0 + vEzJit * 41.0,
-              vEzLocal.z * 185.0));
-            float ezFurrow = 1.0 - abs(fract(ezPhi * (16.0 + 14.0 * vEzSurf.z)
+            // Fine bark is only useful while the art raster can resolve it.
+            // Filtering the procedural bands here prevents bark detail from
+            // turning into moving dither as trunks become sub-pixel wide.
+            float ezFineFoot = max(fwidth(vEzLocal.x * 185.0),
+              max(fwidth(vEzLocal.y * 26.0), fwidth(vEzLocal.z * 185.0)));
+            float ezFineVis = 1.0 - smoothstep(0.32, 0.92, ezFineFoot);
+            float ezFine = mix(0.5, ezNoise(vec3(vEzLocal.x * 185.0,
+              vEzLocal.y * 26.0 + vEzJit * 41.0, vEzLocal.z * 185.0)), ezFineVis);
+            float ezFurrowFreq = 16.0 + 14.0 * vEzSurf.z;
+            float ezFurrow = 1.0 - abs(fract(ezPhi * ezFurrowFreq
               + ezCoarse * 0.72) * 2.0 - 1.0);
-            float ezRing = 0.5 + 0.5 * sin(vEzLocal.y * 155.0 + ezCoarse * 5.0);
+            float ezRingPhase = vEzLocal.y * 155.0 + ezCoarse * 5.0;
+            float ezRingVis = 1.0 - smoothstep(0.35, 1.15, fwidth(ezRingPhase));
+            float ezRing = mix(0.5, 0.5 + 0.5 * sin(ezRingPhase), ezRingVis);
             float ezField = mix(ezFurrow, ezRing, vEzSurf.w) * 0.62 + ezFine * 0.38;
             float ezFissure = smoothstep(0.48, 0.78, ezField);
-            float ezBarkTone = mix(0.70, 1.18, ezFissure);
+            // A second, very low-frequency weathering term gives the timber
+            // large coherent patches without confusing colour with relief.
+            float ezWeather = ezNoise(vec3(ezPhi * 3.2, vEzLocal.y * 2.1 + vEzJit * 7.0, 0.0));
+            float ezBarkTone = mix(0.70, 1.18, ezFissure) * mix(0.92, 1.08, ezWeather);
             diffuseColor.rgb *= mix(1.0, ezBarkTone, min(1.0, uEzBark * vEzSurf.z));
-            if (uEzBump > 0.001 && length(vViewPosition) < 130.0) {
+            if (uEzBump > 0.001 && length(vViewPosition) < 130.0 && ezFineVis > 0.02) {
               vec3 ezDx = dFdx(-vViewPosition);
               vec3 ezDy = dFdy(-vViewPosition);
               vec3 ezR1 = cross(ezDy, normal);
@@ -1343,7 +1362,7 @@ export function ezMaterial(
               vec3 ezGrad = ezSign * (ezDh.x * ezR1 + ezDh.y * ezR2);
               float ezNear = 1.0 - smoothstep(45.0, 130.0, length(vViewPosition));
               normal = normalize(abs(ezDet) * normal
-                - ezGrad * uEzBump * vEzSurf.z * ezNear * 0.22);
+                - ezGrad * uEzBump * vEzSurf.z * ezNear * ezFineVis * 0.22);
             }
           }
         } else {
@@ -1387,21 +1406,30 @@ export function ezMaterial(
           // THREE LARGE TONES, ALIGNED TO THE SUN. The post chain still owns
           // the world palette; this chooses coherent crown masses before that
           // quantiser instead of asking random facets to discover a tree.
-          float ezFacing = clamp(dot(normalize(vEzEnv), normalize(vEzSun)) * 0.5 + 0.5, 0.0, 0.999);
+          vec3 ezEnvN = dot(vEzEnv, vEzEnv) > 1e-6 ? normalize(vEzEnv) : normalize(normal);
+          vec3 ezSunN = normalize(vEzSun);
+          float ezFacing = clamp(dot(ezEnvN, ezSunN) * 0.5 + 0.5, 0.0, 0.999);
           float ezBand = floor((ezFacing * 0.72 + vEzSky * 0.28) * 3.0) * 0.5;
           float ezTone = mix(0.82, 1.16, ezBand);
           diffuseColor.rgb *= mix(1.0, ezTone, uEzLeaf * vEzSurf.y);
+          // Treat the crown as a participating volume as well as a surface.
+          // aSky is a measured exposure term, so its complement is a cheap
+          // canopy-depth estimate. Foliage on the shaded/interior side sees a
+          // longer path through leaves than exposed foliage on the lit flank.
+          // This produces broad coherent depth without per-leaf shadow maps.
+          float ezDepth = clamp(1.0 - vEzSky, 0.0, 1.0);
+          float ezSunPath = ezDepth * (1.10 + 0.75 * (1.0 - ezFacing));
+          float ezCanopyTrans = exp(-1.35 * ezSunPath);
+          diffuseColor.rgb *= mix(1.0, mix(0.90, 1.03, ezCanopyTrans), uEzLeaf * vEzSurf.y);
           // ── AND THE WHOLE CROWN LIGHTS AS ONE MASS ──
-          // A pad heap presents facets pointing every way, so Lambert answers a
-          // different number on each and the crown gets a random tone per facet
-          // rather than a sunlit side. Turning the shading normal toward the
-          // crown's own envelope (aEnv, measured at decode) is what gives it
-          // one lit flank and one shaded flank — coherent over every cluster,
-          // which is the only kind of light fourteen levels can carry.
-          // Not all the way: a little of the facet keeps the crown from
-          // reading as a painted ball.
+          // The envelope normal dominates only once the tree is small enough
+          // that facet normals have become visual noise. Close trees keep most
+          // of their actual pad/leaf normal; far trees converge continuously
+          // toward a single coherent crown volume in ART pixels, not metres.
           if (uEzSky > 0.001 && dot(vEzEnv, vEzEnv) > 1e-6) {
-            normal = normalize(mix(normal, normalize(vEzEnv), 0.78 * uEzSky));
+            float ezNearStructure = smoothstep(38.0, 96.0, vEzPx);
+            float ezEnvW = mix(0.82, 0.34, ezNearStructure) * uEzSky;
+            normal = normalize(mix(normal, ezEnvN, ezEnvW));
           }
           if (uEzEdge < 0.999) {
           float ezNdv = abs(dot(normalize(normal), normalize(vViewPosition)));
@@ -1413,9 +1441,16 @@ export function ezMaterial(
           // Thin foliage transmits the direct sun through its shaded face.
           // Needles, leathery sclerophyll and broad leaves carry different
           // strengths through aEzSurf rather than sharing one green plastic.
-          float ezBack = pow(max(dot(normalize(normal), -normalize(vEzSun)), 0.0), 1.45);
+          vec3 ezN = normalize(normal), ezL = normalize(vEzSun);
+          float ezBack = pow(max(dot(ezN, -ezL), 0.0), 1.45);
           reflectedLight.directDiffuse += diffuseColor.rgb
             * ezBack * vEzSurf.x * uEzLeaf * 0.34;
+          // Leaves are not Lambertian paper. A restrained wrap term lets sky
+          // and scattered light reach surfaces just beyond the terminator,
+          // keeping the crown volumetric without making its dark side glow.
+          float ezWrap = clamp((dot(ezN, ezL) + 0.32) / 1.32, 0.0, 1.0);
+          reflectedLight.indirectDiffuse += diffuseColor.rgb
+            * ezWrap * (0.035 + 0.045 * vEzSky) * uEzLeaf;
         }`);
   };
   return mat;

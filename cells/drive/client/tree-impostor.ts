@@ -337,7 +337,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
       // threshold noise rather than a soft edge.
       .replace('#include <map_fragment>', [
         '#include <map_fragment>',
-        'float impCov; float impLo; float impShade = 1.0; float impWood = 0.0;',
+        'float impCov; float impLo; float impShade = 1.0; float impWood = 0.0; float impSky = 1.0;',
         ...(ATLAS ? [
           // ── TWO AZIMUTHS, MIXED; ONE ELEVATION, NEAREST ──
           // Turning past a tree changes the azimuth continuously and the
@@ -359,7 +359,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
           '                  impAtlasAt(vImpSlot, impV + impI1, vImpUv), impAf);',
           '  impCov = impT.a * (1.0 - uImpTop);',
           '  vec3 impU = impUnpre(impT);',
-          '  impShade = impU.r; impWood = step(0.5, impU.g);',
+          '  impShade = impU.r; impWood = step(0.5, impU.g); impSky = impU.b;',
           '  impLo = clamp(vImpUv.y, 0.0, 1.0);',
           '} else {',
           // ── THE PLAN VIEW IS TURNED BY THE TREE, NOT BY THE CAMERA ──
@@ -373,7 +373,7 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
           '  vec4 impT = impAtlasAt(vImpSlot, ' + K.planView + ', vec2(0.5 + impQ.x, 0.5 - impQ.y));',
           '  impCov = impT.a * uImpTop;',
           '  vec3 impU = impUnpre(impT);',
-          '  impShade = impU.r; impWood = step(0.5, impU.g);',
+          '  impShade = impU.r; impWood = step(0.5, impU.g); impSky = impU.b;',
           '  impLo = clamp(1.0 - length(impP) * 2.0, 0.0, 1.0);',
           '}',
         ] : [
@@ -417,7 +417,13 @@ export function impostorMaterial(tuning: ImpostorTuning = {}): THREE.MeshLambert
         // exactly the split `ezMaterial` makes one tier in — so a trunk does
         // not turn green at the handoff. The atlas marks it per texel.
         ATLAS ? 'diffuseColor.rgb = mix(diffuseColor.rgb, uImpBark, impWood);' : '',
-        'diffuseColor.rgb *= impShade;',
+        // Preserve the near skeleton's measured canopy exposure in the card.
+        // The atlas B channel is aSky: dark sheltered foliage remains dark and
+        // exposed foliage stays open to the sky instead of the whole card
+        // collapsing to one tone at the handoff.
+        ATLAS ? 'float impCanopy = mix(1.0, mix(0.84, 1.06, impSky), 1.0 - impWood);'
+              : 'float impCanopy = 1.0;',
+        'diffuseColor.rgb *= impShade * impCanopy;',
         // The same dissolve toward the ground the skeletons take at their own
         // edge, over this tier's own reach — or the tier would trade the cap's
         // hard edge for a hard edge of its own, one ring further out.

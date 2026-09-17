@@ -237,8 +237,9 @@ export const IMP_ATLAS_GLSL = [
  * R is the SHADE — the skeleton's own faceTone, lifted toward the crown's top
  * so a stand reads as bodies rather than as flat cut-outs. G is the WOOD flag,
  * so the card can tint the crown with the tree's own colour and the timber
- * with bark, which is exactly what `ezMaterial` does one tier in. A is
- * coverage. B is spare and is written zero rather than left undefined.
+ * with bark, which is exactly what `ezMaterial` does one tier in. B carries
+ * the skeleton's measured sky exposure (`aSky`), so sheltered and exposed
+ * crown masses survive the handoff. A is coverage.
  *
  * THERE IS NO DIRECTIONAL LIGHT IN HERE, deliberately. The card is a Lambert
  * material with an analytic crown normal, so the sun is applied at draw time
@@ -283,24 +284,27 @@ function bakeMaterial(topY: number): THREE.ShaderMaterial {
       uMergeAmt: ezLookU.uEzMerge,
     },
     vertexShader: [
-      'attribute float aWood; attribute vec3 aPad; attribute vec3 aHull;',
+      'attribute float aWood; attribute float aSky; attribute vec3 aPad; attribute vec3 aHull;',
       'uniform float uTopY; uniform float uMergePx; uniform float uMergeAmt;',
-      'varying float vW; varying vec3 vC; varying float vH;',
+      'varying float vW; varying vec3 vC; varying float vH; varying float vS;',
       EZ_MERGE_GLSL,
       'void main() {',
       '  vec3 p = position;',
       '  if (uMergeAmt > 0.001 && aWood < 0.5) p = ezMergeAt(p, aPad, aHull, uMergePx, uMergeAmt);',
       // THE TONE RAMP FOLLOWS THE DRAWN VERTEX, not the baked one: a cluster
       // that has slid up onto the hull is lit as the height it is drawn at.
-      '  vW = aWood; vC = color; vH = clamp(p.y / uTopY, 0.0, 1.0);',
+      '  vW = aWood; vC = color; vH = clamp(p.y / uTopY, 0.0, 1.0); vS = aSky;',
       '  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);',
       '}',
     ].join('\n'),
     fragmentShader: [
-      'varying float vW; varying vec3 vC; varying float vH;',
+      'varying float vW; varying vec3 vC; varying float vH; varying float vS;',
       'void main() {',
       '  float tone = dot(vC, vec3(0.299, 0.587, 0.114));',
-      '  gl_FragColor = vec4(clamp(tone * (0.70 + 0.40 * vH), 0.0, 1.0), vW, 0.0, 1.0);',
+      // B now carries the same measured sky-exposure signal as the skeleton.
+      // The card can therefore preserve crown interior/exterior structure at
+      // runtime instead of collapsing the atlas to one baked tone.
+      '  gl_FragColor = vec4(clamp(tone * (0.70 + 0.40 * vH), 0.0, 1.0), vW, clamp(vS, 0.0, 1.0), 1.0);',
       '}',
     ].join('\n'),
   });
