@@ -12263,6 +12263,10 @@ const impProf = {
   hold: 0,
   /** Annulus cells the floor retired unread, and cells actually walked. */
   farCull: 0, farWalk: 0,
+  /** Trees the PIXEL FLOOR turned away. It is the cull's gate: a floor refusal
+   *  can only happen with a floor above zero, and a floor above zero means the
+   *  demand exceeded the pool — so nothing below it was ever going to draw. */
+  floorRefused: 0,
   /** ── THE BAND, MEASURED FROM THE OTHER END ──
    *  How far beyond its family's skeleton edge the NEAREST refused tree stands.
    *  The reserve is supposed to guarantee this is at least IMP_HANDOVER_M: a
@@ -15280,6 +15284,23 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   let impFarThin = 0, impFarThinBig = 0;
   // Sites the floor turned away at the gather: never allocated, always counted.
   let impFarSkip = 0, impFarSkipBig = 0;
+  // ── WHAT "THE POOL WAS SPENT" ACTUALLY MEANS ──
+  // The cull's gate was `impN >= IMPOSTOR_CAP`, an EXACT hit, and the floor's
+  // own construction makes that almost impossible: the histogram walk keeps
+  // whole bins while they fit and stops, so the admitted count lands just
+  // UNDER the cap by the partial bin. The surface veto then takes another
+  // slot per vetoed tree, after the budget decision, and can never give it
+  // back. Measured on a device at `drawn 30871/32635 · CAPPED at 32000`: the
+  // gate read false, `0/2584 cells retired unread`, `371393 kept of 371393
+  // seen`, and `impGather` stood at 614 ms a sweep against the 131 ms the
+  // cull was built to reach. Both cuts had been off in production all along.
+  //
+  // A floor refusal is the exact precondition instead, and it is exact in the
+  // logical sense: `px < impPxFloor` can only fire with the floor above zero,
+  // the floor is only set when demand exceeded capacity, and nothing below it
+  // is ever drawn — which is the whole safety argument for retiring a cell
+  // below HALF of it.
+  let impFloorRefused = 0;
   // Annulus cells retired whole — no seed, no lookup, no site read — and cells
   // actually walked. The census covers the cells the gather WALKED, so these are
   // printed beside it rather than folded into it: the trees in a culled cell
@@ -15891,6 +15912,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
           // reach here, and only when the bands alone exceed it — named apart so
           // the census can fail on it rather than averaging it into the rest.
           impWhy(inBand ? 'none:handover' : 'none:imp-cap', d2, tallM);
+          if (!inBand) impFloorRefused++;
           if (!inBand && px > impProf.pxMaxRefused) impProf.pxMaxRefused = px;
           const gap = Math.sqrt(d2) - ezEdge[fam];
           if (gap < impProf.gapM) impProf.gapM = gap;
@@ -16060,8 +16082,11 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   impProf.far = impFar; impProf.farSeen = impFarSeen;
   impProf.farCull = impFarCull; impProf.farWalk = impFarWalk;
   // The gate on both culls next sweep: a budget that was not spent has no
-  // business discarding candidates.
-  impPoolFullLast = impN >= IMPOSTOR_CAP;
+  // business discarding candidates. THE POOL IS "SPENT" WHEN THE FLOOR TURNED
+  // SOMEBODY AWAY, not when the admitted count lands on the cap exactly — see
+  // `impFloorRefused` above for the device reading that caught the difference.
+  impPoolFullLast = impFloorRefused > 0 || impN >= IMPOSTOR_CAP;
+  impProf.floorRefused = impFloorRefused;
   // ── AND THE SWEEP SAYS IT FINISHED ──
   // The census is cleared at the top of this phase and written as it walks, so
   // a refresh that never reaches this line leaves every counter at zero — and
@@ -47931,7 +47956,15 @@ function telemetryReport(): string {
   L.push(`look tdetail ${TDETAIL} · sub ${tdU.uSubAmt.value} dom ${tdU.uSubDom.value}`
     + ` relief ${tdU.uSubNrm.value} micro ${tdU.uSubMic.value} nrm ${tdU.uNrmK.value}`
     + ` · oct ${tdU.uTdOct.value} amt ${tdU.uTdAmt.value} · view ${groundView}`
-    + ` · swardsub ${SUB_SWARD ? 'on' : 'off'} · tilt ${tiltMode} · substrate ${SUBSTRATE_MODE.name}`);
+    + ` · swardsub ${SUB_SWARD ? 'on' : 'off'} · tilt ${tiltMode} · substrate ${SUBSTRATE_MODE.name}`
+    // THE LENS BELONGS ON THIS ROW LIKE EVERY OTHER LOOK SWITCH. It shipped
+    // with four dials and none of them here, so the first dump taken on it
+    // could not say whether the dedicated chain had run — and a dump that
+    // cannot state its own conditions cannot be compared with the next one,
+    // which is the whole reason this row exists.
+    + ` · dof ${dofMode}${dofMode === 'off' ? ''
+      : `/${DOF_QUALITIES[dofQuality]} f${DOF_RADII[dofRadiusAt]}px`
+        + ` @${dofFocusOverrideM ?? (DOF_FOCUS_M[dofFocusAt] || 'auto')}`}`);
   const _treePlacedByFamily = EZ_FAMILIES.map(f => ezTiers[f].reduce((n, t) => n + t.n, 0));
   const _treePlaced = _treePlacedByFamily.reduce((n, v) => n + v, 0);
   const _treeTris = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + t.n * t.tris, 0), 0);
@@ -48011,19 +48044,44 @@ function telemetryReport(): string {
     // PERCEPTIBLE means the tree would project above roughly one art pixel at
     // its distance: `IMP_PERCEPTIBLE_K * height > distance`, with K the design
     // frame's pixels-per-metre at one metre (320 rows, 55°). A tree below that
-    // cannot pop because it cannot be seen; a tree above it can, and so
-    // `perceptible NONE` is the number that should read zero on every rack.
+    // cannot pop because it cannot be seen; a tree above it can — but see the
+    // split below for WHICH perceptible absences a rack can actually be held
+    // to, because the budget's own floor is a second threshold and it is not
+    // one art pixel.
     const why = impProf.why, big = impProf.whyBig;
     const nk = Object.keys(why).filter(k => k.startsWith('none:'))
       .sort((a, b) => (big[b] ?? 0) - (big[a] ?? 0) || why[b] - why[a]);
     const pn = nk.reduce((a, k) => a + (big[k] ?? 0), 0);
     const nn = nk.reduce((a, k) => a + why[k], 0);
+    // ── "SHOULD BE 0" IS A CLAIM ABOUT THE DRAW RING, AND THIS ROW SUMS THE
+    //    WHOLE REACH ──
+    //
+    // A device at reach 5,600 m with 371,393 far candidates and a pool of
+    // 32,000 read `perceptible 202561 ← SHOULD BE 0`, and every one of them was
+    // `none:imp-cap`: a tree the PIXEL FLOOR could not afford. That is not a
+    // tree losing its representation, it is a budget that has been spent on the
+    // biggest — which is the rule working, and no rack can make it zero while
+    // the candidates outnumber the pool by eleven to one.
+    //
+    // The two perceptibility thresholds are different numbers and the row was
+    // comparing against the wrong one: the census's is ONE art pixel, the
+    // budget's is the live floor. So the floor's refusals are reported apart,
+    // and what must read zero is everything else — a form budget, a missing
+    // family fallback, a tree refused inside its own handover band. THE FLOOR
+    // IS ALSO THE FAR POP SIZE: a card appears out of nothing at exactly that
+    // many art pixels at the card horizon, which is the number to argue with.
+    const bk = 'none:imp-cap';
+    const budget = why[bk] ?? 0, budgetBig = big[bk] ?? 0;
+    const restBig = pn - budgetBig;
     // The manifest's own two exits are counted in CELLS, not sites: a cell the
     // seed budget has not reached holds no descriptors at all, so its trees
     // cannot be counted by construction. Reported beside the render-side
     // census rather than folded into it, because they are a different claim.
     const unseeded = Math.max(0, _m.cells - _m.seeded - _m.deferred);
-    L.push(`trees representation · NONE ${nn} · perceptible ${pn}${pn ? ' ← SHOULD BE 0' : ''}`
+    L.push(`trees representation · NONE ${nn} · perceptible ${pn}`
+      + `${budgetBig ? ` · ${budgetBig} of them under the ${impProf.pxFloor.toFixed(2)}px card floor`
+        + ` (the budget, spent: ${impProf.floorRefused} refused)` : ''}`
+      + ` · unaffordable aside, ${restBig}${restBig ? ' ← SHOULD BE 0' : ''}`
       + `${nk.length ? ` · ${nk.map(k => `${k.slice(5)} ${why[k]}${(big[k] ?? 0) ? `(${big[k]} big)` : ''}`).join(' ')}` : ''}`
       + ` · had ${why['geometry'] ?? 0} 3d, ${why['impostor:exact'] ?? 0} exact + ${why['impostor:fallback'] ?? 0} fallback cards`
       // NOT a NONE — a tree the world says is not there. Printed because a

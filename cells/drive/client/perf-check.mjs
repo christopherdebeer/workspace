@@ -346,13 +346,14 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
 
   seed = 77;
   c.IMPOSTOR_CAP = 8000;
-  // ── AND THE ROADS COME OFF FOR THE CULL LEG ──
-  // The veto is applied AFTER the budget decision, so a vetoed tree costs the
-  // pool a slot it never fills: with a third of this fixture's x-space under
-  // tarmac the pool cannot reach `IMPOSTOR_CAP`, `impPoolFullLast` stays false
-  // and the cull correctly turns itself off — which is the gate working, and
-  // a fixture where a different limit binds first tests nothing it claims to.
-  c.roads = false;
+  // ── AND THE ROADS STAY ON, WHICH IS WHAT PUTS THE POOL UNDER ITS CAP ──
+  // The surface veto is applied AFTER the budget decision, so a vetoed tree
+  // costs the pool a slot it never fills. Under the old exact-cap gate that
+  // turned the cull off and this leg had to run with its roads down; under the
+  // floor-refusal gate it is the device's own condition — pool short of the
+  // cap, floor still refusing — and it is the only way this fixture reaches it,
+  // because the handover bands alone fill it to exactly 8000/8000 otherwise.
+  c.roads = true;
   // ── AND THE FORM BUDGET MUST NOT BE THE THING THAT BINDS ──
   // At the stub's 400 the tier drew 800 of 8,151 offered and the POOL never
   // filled, so every check downstream was measuring the form budget wearing the
@@ -420,6 +421,23 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
   // against a floor that needs to fall, and this fixture creates neither.
   const withCull = { drawn: c.impProf.drawn, floor: c.impProf.pxFloor, culled: c.impProf.farCull };
   assert.ok(withCull.culled > 0, 'no cell was culled: this check witnesses nothing');
+  // ── AND THE GATE IS NOT AN EXACT CAP HIT ──
+  // It was `impN >= IMPOSTOR_CAP`, which the floor's own construction makes
+  // almost impossible: the histogram keeps whole bins while they fit, so the
+  // admitted count lands UNDER the cap by the partial bin, and the surface veto
+  // takes another slot per vetoed tree after the budget decision. A device read
+  // `drawn 30871 · CAPPED at 32000` with `0/2584 cells retired unread` and
+  // `impGather` at 614 ms against the 131 ms the cull was built to reach —
+  // both cuts off in production, for the whole life of the cull.
+  //
+  // So this leg must witness the cull firing WITHOUT the cap being reached. A
+  // fixture that happens to land on the cap exactly would pass the old gate and
+  // prove nothing about the new one.
+  assert.ok(c.impProf.drawn < c.IMPOSTOR_CAP,
+    `the pool filled exactly (${c.impProf.drawn}/${c.IMPOSTOR_CAP}): this leg cannot tell `
+    + 'the floor-refusal gate from the exact-cap gate it replaced');
+  assert.ok(c.impProf.floorRefused > 0,
+    'the floor refused nobody, so the cull is running on a budget that was not spent');
   // ── AND IT MAY NEVER RETIRE THE ANNULUS WHOLE ──
   // A device printed no far tally at all with every card reach inside the draw
   // ring: the cull radius had collapsed under `treeRange` and switched the far
@@ -445,4 +463,4 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
 const data=Array.from({length:100000},(_,i)=>({d:random()*1e6,id:i}));
 function time(fn,n=15){const a=[];for(let i=0;i<n+5;i++){const t=performance.now();fn();if(i>=5)a.push(performance.now()-t);}return a.sort((a,b)=>a-b)[Math.floor(n/2)];}
 const bench={n:data.length,k:8,oldMs:time(()=>data.slice().sort((a,b)=>a.d-b.d).slice(0,8)),newMs:time(()=>nearestStable(data.slice(),8,v=>v.d))};
-console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons, card budget spent on apparent size, largest refused <= smallest drawn, handover band unbroken, cell cull changes nothing drawn, no card on a carriageway',reports,selectionBenchmark:bench},null,2));
+console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons, card budget spent on apparent size, largest refused <= smallest drawn, handover band unbroken, cell cull changes nothing drawn and fires under the cap, no card on a carriageway',reports,selectionBenchmark:bench},null,2));

@@ -14972,3 +14972,98 @@ landing in one synchronous call would be two dropped frames.
 index the comment asks for is one `records.get(tileKeyOf(x, z))`, and the day
 something asks this question per frame rather than per sweep is the day it has
 to exist.
+
+## The cull's gate was an exact cap hit, and the floor makes that impossible
+
+The dump that followed (Yosemite, 272 s, chart at 2.5 m/px, reach 5,600 m, pop
+8X) reads:
+
+```
+drawn 30871/32635 offered (371393 kept of 371393 seen past the draw ring,
+  0/2584 cells retired unread) · CAPPED at 32000 · card floor 3.03px
+tree phases … impGather 614.4 (9983) …
+trees refresh 37 sweeps · every 7171ms in 100.5 slices of 5ms
+```
+
+**`0/2584 cells retired unread` and `371393 kept of 371393 seen`: BOTH cuts were
+off**, and `impGather` stood at **614 ms a sweep** against the **131.5 ms** the
+cell cull was built to reach. It is 70% of a 911 ms sweep, and the sweep period
+is over seven seconds.
+
+**THE GATE WAS `impN >= IMPOSTOR_CAP`, AND THE FLOOR'S OWN CONSTRUCTION MAKES
+THAT ALMOST IMPOSSIBLE.** The histogram walk keeps whole bins while they fit and
+stops at the first one that would overflow, so the admitted count lands *under*
+the cap by the partial bin — by design, and stated in that code. The surface
+veto then takes one more slot per vetoed tree (`vetoed 1333 on tarmac, 431 in
+water`), after the budget decision, and can never give it back. 30,871 of
+32,000: the gate read false, every sweep, and the row beside it said `CAPPED`
+because `impProf.capped` counts REFUSALS and the two are different facts.
+
+So the cull has been off in production for its whole life, and **`perf-check`
+could not have seen it**: its fixture fills the pool to `8000/8000` exactly,
+because there the handover bands alone exceed the pool and the `impN >=
+IMPOSTOR_CAP` backstop clamps on the nose. A gate satisfied by luck in the
+sandbox and never on a device.
+
+**THE PRECONDITION IS A FLOOR REFUSAL, and it is exact in the logical sense.**
+`px < impPxFloor` can only fire with the floor above zero; the floor is only set
+when demand exceeded capacity; and nothing below it is ever drawn. That is the
+entire safety argument for retiring a cell below HALF of it, stated directly
+rather than through a proxy. `impFloorRefused > 0 || impN >= IMPOSTOR_CAP`.
+
+The old worry the exact-cap gate was standing in for — *a floor above zero does
+not mean candidates are scarce, it can be the bands taking the pool* — is
+answered by the same sentence: whatever made the floor high, a tree below it is
+not drawn, so retiring one below half of it costs nothing. The assertion that
+holds it is unchanged and is the one that matters: the same world gathered
+without the cull must draw the same cards.
+
+**`perf-check` now has to witness the cull firing WITHOUT the cap being
+reached**, or it is testing the gate it replaced:
+
+```js
+assert.ok(c.impProf.drawn < c.IMPOSTOR_CAP,
+  'the pool filled exactly: this leg cannot tell the floor-refusal gate from
+   the exact-cap gate it replaced');
+```
+
+…which fails on the fixture as it stood (`8000/8000`) and passes once the cull
+leg keeps its ROADS ON. That is the device's own condition — pool short of the
+cap because the veto took slots, floor still refusing — and it is the only way
+this fixture reaches it. The leg had its roads taken off one commit earlier
+*because* the old gate turned the cull off under a veto; under the new gate that
+is exactly the case worth running. Negative control: restore the exact-cap gate
+and the leg reports **no cell was culled**.
+
+### …and "SHOULD BE 0" is a claim about the draw ring, summed over the reach
+
+The same dump: `NONE 357420 · perceptible 202561 ← SHOULD BE 0`, every one of
+them `none:imp-cap`. **No rack can make that zero.** The reach is 5,600 m, the
+manifest holds 371,393 trees past the draw ring, and the pool is 32,000 — eleven
+to one. A tree the pixel floor could not afford has not lost its
+representation; it is a budget spent on the biggest, which is the rule working.
+
+**The two perceptibility thresholds are different numbers and the row compared
+against the wrong one.** The census's is ONE art pixel — below which a tree
+cannot be seen to appear. The budget's is the LIVE FLOOR, 3.03 px here. Between
+them sits a population that is visible and unaffordable, and calling it a fault
+makes the one number that should read zero unreadable.
+
+So the floor's refusals are reported apart and the zero claim is made on the
+rest — a form budget, a missing family fallback, a tree refused inside its own
+handover band, each of which is a real defect. And **the floor is also the far
+pop size**: a card appears out of nothing at exactly that many art pixels at the
+card horizon. Three art pixels is the number to argue with from the seat; the
+row prints it.
+
+The invariant at the geometry handover is untouched and healthy in that dump —
+`none:handover` absent, `2227 held for handover`, `nearest refusal 200m past the
+skeletons`. That is the one that governs a 12-metre pine arriving out of
+nothing, and it is the one `imp-census.mjs` fails on.
+
+### And the lens was not on the `look` row
+
+The depth-of-field unit shipped four dials and put none of them in the row whose
+whole job is to let two dumps of the same drive be compared. The first dump
+taken on it cannot say whether the dedicated chain ran. `dof <mode>/<quality>
+f<N>px @<focus>` now, beside `tilt`.
