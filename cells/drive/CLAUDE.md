@@ -15259,3 +15259,103 @@ seat to judge.
 Nothing here has been seen on a device. The harness cannot rotate a real phone,
 and every number above is either arithmetic or a Playwright viewport change; the
 seat's own report on a turned phone is the verification.
+
+
+## The impostor's fidelity is a function of ART PIXELS, and it falls off a cliff at thirty
+
+Asked from the seat: *impostors tend to pop in quite close — compare them at
+closer distances using the contact sheet.* Four sheets on `at-yosemite`, elev 8,
+az 0, one process a distance, the same 37 variants each time. **Read the `px`
+column and not the metres**: the answer is a function of the tree's projected
+size and of nothing else, and the metres are only how a family of a given height
+gets there.
+
+| form | 200 m | 150 m | 100 m | 60 m |
+|---|---|---|---|---|
+| round (12) | **0.950** | 0.863 | 0.498 | 0.478 |
+| umbrella (5) | 0.923 | 0.884 | 0.733 | 0.452 |
+| palm (2) | 0.921 | 0.924 | 0.521 | 0.506 |
+| columnar (2) | 0.915 | 0.903 | 0.522 | 0.491 |
+| **conic (12)** | **0.861** | **0.580** | **0.355** | **0.352** |
+
+…and the same three variants tabulated against `px` rather than distance, which
+is what says it is one curve and not five:
+
+| art px | 103 | 77 | 62 | 49 | 46 | 41 | 31 | 29 | 23 | 20 | 15 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| conifer conic 9 | 0.23 | | 0.23 | | | 0.43 | **0.82** | | | | |
+| broadleaf round 3 | | 0.40 | | | 0.46 | | **0.90** | | 0.94 | | |
+| acacia umbrella 1 | | | | 0.41 | | | | **0.90** | | 0.93 | 0.90 |
+
+**THE BREAKPOINT IS THE CROWN MERGE BAND, TO THE PIXEL.** `EZ_MERGE_PX` is
+`[26, 58]`: a skeleton is untouched above 58 art pixels, fully closed onto its
+own silhouette hull below 26, and **the card is photographed at 26** — the bake
+stands at the bottom of the band on purpose, because *the tier only ever draws
+past the skeletons' own admitted edge, so every card is used where its tree
+would be fully merged.* That assumption is the whole thing, and it is an
+assumption about DISTANCE holding while the cap is free to move the edge.
+
+So above about 30 px the two halves are drawing different crowns, and the sheet
+says which way: at 60 m the card is **2.0 to 2.7 times the coverage** of the
+tree it stands in for and **10 to 25 per cent wider** (conic 2.73 / 1.23, round
+2.08 / 1.19), with height right to a per cent. The `real` column reads 11, 23,
+25 separate pieces of foliage filling 10-36% of the box; the `imp` column reads
+**one piece at 100%, filling 30-75%**. A porous branchy crown against a solid
+blob — which is exactly what a swap at close range looks like, and it is the
+seat's report stated as a number.
+
+**AND THE ATLAS'S OWN COMMENT ALREADY NAMED THE CEILING, which is the second
+witness and is independent of the merge.** `IMP_ATLAS.tile` is 32 px, sized —
+in its own words — against *"a 20 m tree at the tier's near edge (260 m)
+subtends about 25 rows, so a 40 px tile is already over its drawn size."* At
+60 m a conifer subtends **103 art pixels**, so the card is a 32-texel tile
+magnified 3.2x. Even with the merge states matched, a card cannot carry more
+detail than its tile, and the tile was sized for a 25-pixel tree.
+
+Two mechanisms, one number: **a card is honest below about 30 art pixels and
+should not be asked to stand in above it.** For a 10 m tree that is 100 m; for
+the 20 m conifer the atlas was sized against, 200.
+
+Metres per family, from `IMP_PERCEPTIBLE_K` (307.4 px per metre at 1 m) and
+`EZ_M_PER_SCALE` at the rack's mid size draw:
+
+| family | height | fully OPEN nearer than | fully MERGED beyond |
+|---|---|---|---|
+| conifer | 10.5 m | 56 m | **124 m** |
+| palm | 9.0 | 48 | 106 |
+| broadleaf | 8.5 | 45 | 100 |
+| acacia | 7.5 | 40 | 89 |
+| snag | 6.0 | 32 | 71 |
+
+**CONIFER IS WORST AND IS WORST FOR A REASON**: it is the tallest family, so it
+crosses 58 px furthest out (124 m against broadleaf's 100), and its open form
+carries the most structure to lose. It is also the family whose geometry edge
+the budget cuts hardest — the two meet.
+
+**READ `bare` APART.** The four snags read 0.107 at 200 m and 0.415 at 60 m, the
+only row that gets BETTER as it comes closer, and it is not a finding about the
+bake: a snag at 200 m is two or three isolated black pixels — 1% of its own box
+— which a 32 px tile cannot carry under a binary alpha test. That is a statement
+about the snag, and the sheet counts EMPTY and SUB-PIXEL apart for it.
+
+### What this does and does not say about the world
+
+It says where a card and its tree diverge. It does NOT say a card is ever
+actually drawn there — that depends on where the geometry's admitted edge falls,
+which is the population cap's business and moves with the rack. The device dump
+carries it (`trees ez … edge b…/c…/s…`): a run at POPULATION 8X read
+**b325m / c526m / a1729m / p761m / s421m**, and broadleaf at 325 m is 8 art
+pixels, comfortably inside the honest band. **The fault only bites where the cap
+collapses an edge inside the merge band**, and the row that says whether it did
+is `edge` beside the `card floor` on the same line.
+
+So the open question is not the measurement, it is the rule: **admission ranks
+by distance and spends a triangle budget, and nothing in it knows that a tree
+over thirty art pixels is one the card tier cannot cover for.** The shape of the
+answer is the card tier's own, one layer over — that tier stopped rationing by
+count and started rationing by apparent size, and the geometry tier has not.
+Reserving the geometry for everything above the horizon before spending the rest
+of the budget on distance is the same move, and it is not made here.
+
+`DIST=` is the control on `devtools/imp-sheet.mjs`; one process a distance (the
+harness fuse is twenty minutes and the tool takes no list).
