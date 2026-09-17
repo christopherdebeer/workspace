@@ -370,6 +370,13 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
   // against a floor that needs to fall, and this fixture creates neither.
   const withCull = { drawn: c.impProf.drawn, floor: c.impProf.pxFloor, culled: c.impProf.farCull };
   assert.ok(withCull.culled > 0, 'no cell was culled: this check witnesses nothing');
+  // ── AND IT MAY NEVER RETIRE THE ANNULUS WHOLE ──
+  // A device printed no far tally at all with every card reach inside the draw
+  // ring: the cull radius had collapsed under `treeRange` and switched the far
+  // tier off entirely, which reads in the dump as a saving. The radius is now
+  // floored at the draw range, so cells just past it are always walked.
+  assert.ok(c.impProf.farWalk > 0,
+    'the cull retired the whole annulus: the far tier is off, not cheap');
   c.impPxFloorLast = 0; c.impTallestM = 0;
   c.refreshVeg();
   assert.equal(c.impProf.farCull, 0, 'the control still culled: it is not a control');

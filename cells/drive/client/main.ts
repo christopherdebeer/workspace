@@ -14981,6 +14981,26 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     (IMP_PERCEPTIBLE_K * EZ_M_PER_SCALE[v.k as EzFamily] * v.s * treeSizeScale) / Math.sqrt(d2);
   const impSeen = (v: PlacedVegSite, d2: number, by: number): void => {
     if (impRAll2 <= 0 || d2 >= impRAll2) return;
+    // ── THE HIGH-WATER MARK IS FED BY THE NEAR RING, NOT THE FAR ONE ──
+    //
+    // It was updated only inside the far gather, and the far gather is the thing
+    // the mark is used to CULL. That is a ratchet pointing the wrong way: a mark
+    // set low once shrinks the cull radius, the smaller radius retires the cells
+    // where the tall trees stand, and the mark can never grow again.
+    //
+    // The device showed it closed all the way. The row printed no far tally at
+    // all and every `card reach` sat inside the 2,800 m draw ring — the annulus
+    // was being culled whole while `impPoolFullLast` stayed true, because the
+    // near ring alone can fill a 32,000 pool at eight times population. A cull
+    // radius under the draw range is not a cull, it is the far tier switched off
+    // by a number that measured itself.
+    //
+    // The near ring is never culled, so a mark fed from here is honest by
+    // construction. `by > 0` because admission hands trees BACK through this.
+    if (by > 0) {
+      const t = EZ_M_PER_SCALE[v.k as EzFamily] * v.s * treeSizeScale;
+      if (t > impTallestM) impTallestM = t;
+    }
     // A tree in the handover band is RESERVED, not budgeted: it never enters
     // the histogram, and its count comes off the top of the pool.
     if (d2 <= impBand2[v.k as EzFamily]) { impHold += by; return; }
@@ -15080,7 +15100,10 @@ function* vegRefreshSteps(): Generator<void, void, void> {
           let r = (IMP_PERCEPTIBLE_K * impTallestM * 1.1) / (0.8 * impPxFloorLast);
           // Never inside a handover band: that one is a guarantee, not a budget.
           for (const f of EZ_FAMILIES) r = Math.max(r, Math.sqrt(impBand2[f]));
-          const rc = Math.min(r, impR);
+          // NEVER INSIDE THE DRAW RING. The near gather owns that ground and
+          // the annulus starts at its edge, so a radius below `treeRange` culls
+          // the entire far tier and calls it a saving.
+          const rc = Math.min(Math.max(r, treeRange), impR);
           impCull2 = rc * rc;
         }
         for (const [gx, gz] of squareRings(cx, cz, impCells, reach + 1)) {
@@ -15145,7 +15168,6 @@ function* vegRefreshSteps(): Generator<void, void, void> {
             // A tree too small to have cleared last sweep's threshold with room
             // to spare cannot be drawn this sweep either. Counted, not kept.
             const fTall = EZ_M_PER_SCALE[v.k] * v.s * treeSizeScale;
-            if (fTall > impTallestM) impTallestM = fTall;
             if (impPoolFullLast && impPxFloorLast > 0 && d2 > impBand2[v.k]
               && IMP_PERCEPTIBLE_K * fTall < 0.5 * impPxFloorLast * Math.sqrt(d2)) {
               impFarSkip++;
@@ -47521,8 +47543,16 @@ function telemetryReport(): string {
     L.push(`trees impostor ${impostors && impostorDraw ? 'on' : 'off'}`
       + `${impostors ? ` · reach ${_i.granted}m${_i.bound === 'MANIFEST' ? ` of ${_i.asked}m asked (MANIFEST)` : ''}`
         + ` · density ${_i.density >= 1e6 ? 'ALL' : `${_i.density}x`}`
-        + ` · drawn ${impProf.drawn}/${impProf.offered} offered${impProf.farSeen ? ` (${impProf.far} kept of ${impProf.farSeen} seen past the draw ring`
-          + `${impProf.farCull ? `, ${impProf.farCull} of ${impProf.farCull + impProf.farWalk} cells retired unread` : ''})` : ''}`
+        + ` · drawn ${impProf.drawn}/${impProf.offered} offered`
+        // ── THE FAR TALLY PRINTS EVEN AT ZERO, BECAUSE ZERO IS THE FINDING ──
+        // Nested inside `farSeen ?`, the cull counters vanished exactly when the
+        // cull had retired everything — the one state worth seeing. A readout
+        // that hides itself when the number is alarming is worse than none.
+        + `${impProf.farCull + impProf.farWalk > 0
+          ? ` (${impProf.far} kept of ${impProf.farSeen} seen past the draw ring`
+            + `, ${impProf.farCull}/${impProf.farCull + impProf.farWalk} cells retired unread`
+            + `${impProf.farWalk === 0 ? ' — THE WHOLE ANNULUS' : ''})`
+          : ''}`
         + ` · ${(impProf.drawn * 4 / 1000).toFixed(1)}k tris${impProf.capped ? ` · CAPPED at ${IMPOSTOR_CAP}` : ''}`
         // PER FAMILY, AGAINST ITS OWN SHARE OF THE POOL. The total alone read
         // as a tier at capacity when what it actually was is one family at
@@ -52844,7 +52874,10 @@ const DIAL_GROUPS: DialGroup[] = [
       // so the tier reads as a flat cut-out and a frame answers by eye what no
       // pixel metric here can: where the cards ARE, how large, and whether
       // their outline agrees with the skeleton standing beside them.
-      dial('impink', 'IMPOSTOR INK', ['STOCK', 'BLACK'], 1,
+      // STOCK by default: BLACK is a silhouette INSTRUMENT, and it shipped as
+      // the default because it was the setting the cards were being debugged
+      // on. A fresh load should show the world, not the measurement.
+      dial('impink', 'IMPOSTOR INK', ['STOCK', 'BLACK'], 0,
         (i) => { impInkU.value = i; }, true),
     ],
   },

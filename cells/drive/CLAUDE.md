@@ -14772,3 +14772,57 @@ meant the tier drew 800 of 8,151 offered and the pool never filled, so every
 check downstream was measuring the form budget wearing the cap's name. And the
 default reach put the cull radius beyond the tier's own horizon, so the world
 ended before the mechanism started.
+
+## …and the cull was fed by the walk it culls, so it retired the annulus whole
+
+The next dump carried no far tally at all — and `card reach b2681m/c2799m/
+a1803m/p2360m/s589m`, every value inside a 2,800 m draw ring on a rack asking
+for 8,580 m of reach. The far tier was not thin, and it was not slow. It was
+**off**, and had switched itself off with a number that measured itself.
+
+`impTallestM` is the high-water mark the cull's radius is derived from — how
+tall the tallest tree seen is, so a radius can be solved at which nothing could
+clear the pixel floor. It was updated in exactly one place: inside the far
+gather's own walk. **The thing the mark is used to cull was the only thing
+feeding it.** That is a ratchet pointing the wrong way, and it closes in one
+step: a mark set low on some early sweep shrinks the radius, the smaller radius
+retires the cells where the tall trees stand, those trees are never read, the
+mark cannot grow, and the radius never opens again. Nothing recovers it, because
+the evidence that would is behind the cull.
+
+**And it could collapse below the draw ring, which is not a cull at all.**
+`Math.min(r, impR)` bounded it above and nothing bounded it below, so a small
+`r` retired every annulus cell there is — including the ones a metre past the
+skeletons' edge, where the handover lives. `impPoolFullLast` stayed true
+throughout, because at eight times population the near ring alone fills a 32,000
+pool, so the gate that was supposed to make the cull self-healing was reading a
+pool filled by the tier's other half.
+
+Three things, and the first is the one that generalises:
+
+- **the mark is fed from `impSeen`, which BOTH gathers call.** The near ring is
+  never culled, so a mark fed from there is honest by construction — there is no
+  arrangement of the cull that can starve it. The far gather's own update is
+  gone: a cull may not be its own witness.
+- **the radius is floored at `treeRange`.** The near gather owns everything
+  inside the draw ring and the annulus starts at its edge, so a radius under
+  that number retires the whole far tier and reports it as a saving.
+- **and the far tally prints at zero.** It was nested inside `farSeen ?`, so the
+  cull counters vanished exactly when the cull had retired everything — the one
+  state worth seeing. It now prints unconditionally and appends **`— THE WHOLE
+  ANNULUS`** when `farWalk` is 0. *A readout that hides itself when its number
+  is alarming is worse than no readout*, and this is the second time in this
+  tier: `impProf.sweeps` exists because an empty census read as an empty tier.
+
+`perf-check` gained the assertion the fixture could witness and did not:
+`farWalk > 0`, with the message naming the failure rather than the number —
+*the cull retired the whole annulus: the far tier is off, not cheap*. Negative
+control: collapse the radius to `r * 0.05` and it fires.
+
+**A note on what was fixed at the same time, deliberately kept separate in the
+reading.** IMPOSTOR INK defaulted to BLACK — the silhouette instrument, which
+takes every card's diffuse to zero — because that was the setting the cards were
+being debugged on when the rack's defaults were pasted from a device. A fresh
+load should show the world, not the measurement. `client/switches.ts` already
+had `fallback: '0'`; only the dial's own default index was wrong, which is why
+`?impink=` behaved and the panel did not.
