@@ -277,6 +277,20 @@ rescued it.
 The reverse also happens: the cell can be **behind** git when someone commits
 without deploying. Check the direction of each diff before restoring anything.
 
+**IT HAPPENED AGAIN ON 2026-09-17, AND THE DIRECTION WAS DIFFERENT PER FILE.**
+A pull before deploying the impostor census brought back eight modified files.
+Three were the cell **ahead** — `client/flora-ez.ts`, `client/tree-atlas.ts`,
+`client/tree-impostor.ts`, carrying another author's canopy-depth work: the
+skeleton's measured `aSky` routed through the impostor atlas's spare B channel,
+a Beer-Lambert transmission through the crown, bark detail retired by `fwidth`
+rather than by distance, and the envelope normal weighted in ART PIXELS. Three
+were the cell **behind** — `client/main.ts`, `client/perf-check.mjs` and this
+file, byte-identical to the commit before the one being deployed. Two were the
+`devtools/` resurrection above. **The test that made this cheap is
+`git diff <the commit before yours> -- <file>`:** an empty diff means the cell
+is simply behind and yours is safe to restore; a non-empty one is work that
+exists nowhere else and must be committed verbatim before anything is pushed.
+
 ---
 
 ## Verification ladder
