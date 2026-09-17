@@ -12044,6 +12044,15 @@ const impProf = {
    *  a tautology — the fault this file already caught once in the atlas test. */
   pxMinDrawn: Infinity,
   pxMaxRefused: 0,
+  /** Cards reserved for handover bands, off the top of the pool. */
+  hold: 0,
+  /** ── THE BAND, MEASURED FROM THE OTHER END ──
+   *  How far beyond its family's skeleton edge the NEAREST refused tree stands.
+   *  The reserve is supposed to guarantee this is at least IMP_HANDOVER_M: a
+   *  refusal closer than that is a tree that will arrive as a full skeleton
+   *  having never been a card. Recorded because the band is otherwise untestable
+   *  — zeroing its width changed no number this file could see. */
+  gapM: Infinity,
   /** Refused because the ATLAS IS FULL — these will never draw, this session,
    *  wherever the truck goes. Kept apart from `waiting`, which drains. */
   locked: 0,
@@ -12165,6 +12174,42 @@ const IMPOSTOR_SEED_PER_REFRESH = EZ_FAMILIES.length;
  * is one bin, 32/1024 of a pixel, and inside it the old ring order still
  * decides — which at a thirtieth of a pixel is not a decision anyone can see.
  */
+/**
+ * ── AND THE HANDOVER BAND IS NOT DISCRETIONARY ──
+ *
+ * One floor on apparent size is the right way to spend what is LEFT. It is the
+ * wrong way to decide whether the handover happens at all, because the two
+ * tiers ration by different things: the geometry tier keeps the nearest N under
+ * a TRIANGLE budget, the card tier keeps the biggest under a COUNT. For a
+ * sparse family those disagree badly. Measured in a Japanese forest:
+ *
+ *     acacia   3d<1729m   cards 1 of 13864   card reach 1806m
+ *
+ * Seventeen thousand acacia, sparse enough that the skeletons reached 1,729 m
+ * on a triangle budget — past where a 2.59 px floor set by three hundred
+ * thousand broadleaf could carry them. Seventy-seven metres of band and a
+ * single card in it: an acacia crossing that edge went from NOTHING to a full
+ * skeleton, which is the original complaint, alive in one family.
+ *
+ * So the band is reserved before the floor is computed, and the floor is then
+ * spent on what remains.
+ *
+ * ITS WIDTH IS A DISTANCE, NOT A MULTIPLE, and the distance comes from the
+ * refresh cadence — because that is the actual cause. Tiers change only when a
+ * sweep completes, and a sweep on a device measured **six seconds**; the band
+ * has to be wider than the ground covered in one, or a tree can cross the whole
+ * of it between two decisions and arrive as a skeleton anyway. 200 m covers
+ * 120 km/h, which is faster than this truck goes.
+ *
+ * A MULTIPLE OF THE EDGE WAS THE FIRST ATTEMPT AND IT ATE THE POOL. Twice the
+ * edge is defensible in the pixel rule's own terms — halving apparent size IS
+ * doubling distance — but it scales the reserve with the SQUARE of an edge the
+ * card tier does not control, and in `perf-check`'s fixture the bands alone
+ * consumed the whole budget: every card placed was a band card and the floor
+ * rule drew nobody. An annulus of fixed width is a few hundred trees per family
+ * instead of a few thousand, and it is tied to the thing that makes the gap.
+ */
+const IMP_HANDOVER_M = 200;
 const IMP_PX_BINS = 1024;
 /** Above this a tree is near enough that the geometry tier owns it anyway, so
  *  the top bin is a catch-all rather than a resolution the histogram spends on. */
@@ -14590,9 +14635,28 @@ const VEG_SEED_CATCHUP = 120;
 const VEG_SEED_BUDGET = qs('vegseed') !== '0';
 let vegSeedLeft = 0;
 let vegSeedDeferred = 0;
+/**
+ * ── A PHASE THAT SPANS SLICES WAS CREDITED ONLY ITS LAST ONE ──
+ *
+ * Every slice re-arms `vegPhaseAt` so the frame gap between slices is not
+ * billed to whichever phase was running — correct, and it threw away the WORK
+ * too. A phase spanning ninety slices was reported at the cost of its last
+ * slice alone. Caught by arithmetic that would not close: a device put
+ * `treeRefresh` at 41,051 ms over 30 sweeps — **1,368 ms of CPU per sweep** —
+ * while the phase line summed to 32 ms. Ninety-eight per cent of the sweep was
+ * unattributed, and the one phase this file has spent three passes trying to
+ * cut was being read from the wrong number the whole time.
+ *
+ * The carry is what a slice hands to the phase that has not named itself yet:
+ * marks name a phase RETROSPECTIVELY, so mid-slice there is nothing to credit
+ * it to. The slice adds its own span to the carry, and the next `vegMark`
+ * spends it on the phase that just ended.
+ */
+let vegPhaseCarry = 0;
 const vegMark = (name: string): void => {
   const now = performance.now();
-  const ms = now - vegPhaseAt;
+  const ms = now - vegPhaseAt + vegPhaseCarry;
+  vegPhaseCarry = 0;
   vegPhase[name] = (vegPhase[name] ?? 0) + ms;
   const total = vegPhaseTotals.get(name);
   if (total) { total.ms += ms; total.n++; total.max = Math.max(total.max, ms); }
@@ -14751,7 +14815,9 @@ let vegJob: Generator<void, void, void> | null = null;
 function* vegRefreshSteps(): Generator<void, void, void> {
   const t0 = performance.now();
   for (const k of Object.keys(vegPhase)) delete vegPhase[k];
-  vegPhaseAt = t0;
+  // A sweep starts owing nothing: a carry left by an abandoned one would be
+  // charged to this sweep's first phase.
+  vegPhaseAt = t0; vegPhaseCarry = 0;
   vegSeedNow = 0;
   vegSeedMsNow = 0;
   vegSeedDeferred = 0;
@@ -14832,13 +14898,23 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // inflated by 8,135 trees drawn as skeletons.
   const impRAll = impostors && impostorDraw ? impostorReach() : 0;
   const impRAll2 = impRAll * impRAll;
-  let impWant = 0;
+  let impWant = 0, impHold = 0;
   impHisto.fill(0);
+  // LAST sweep's admitted edge, which is the same construction `farKeep2` uses
+  // and for the same reason: the number this sweep needs is decided by an
+  // admission that has not run yet, and the previous answer converges in one.
+  const impBand2 = ezRecord((f) => {
+    const e = Math.min((ezEdgeLast[f] || 0) + IMP_HANDOVER_M, impRAll);
+    return e * e;
+  });
   /** How many art pixels tall this tree is drawn at, from where it stands. */
   const impPxOf = (v: PlacedVegSite, d2: number): number =>
     (IMP_PERCEPTIBLE_K * EZ_M_PER_SCALE[v.k as EzFamily] * v.s * treeSizeScale) / Math.sqrt(d2);
   const impSeen = (v: PlacedVegSite, d2: number, by: number): void => {
     if (impRAll2 <= 0 || d2 >= impRAll2) return;
+    // A tree in the handover band is RESERVED, not budgeted: it never enters
+    // the histogram, and its count comes off the top of the pool.
+    if (d2 <= impBand2[v.k as EzFamily]) { impHold += by; return; }
     impHisto[Math.min(IMP_PX_BINS - 1, (impPxOf(v, d2) * IMP_PX_PER_BIN) | 0)] += by;
     impWant += by;
   };
@@ -15206,6 +15282,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   impProf.horizon = ezRecord(() => 0);
   impProf.pxMinDrawn = Infinity;
   impProf.pxMaxRefused = 0;
+  impProf.gapM = Infinity;
   /**
    * One tree's verdict. `tallM` is the height it would be DRAWN at, so the
    * perceptibility test is about the thing on screen rather than about the
@@ -15258,10 +15335,15 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     // A family whose whole demand fits inside the pool keeps a floor of zero:
     // there is no threshold when nothing is refused.
     let impPxFloor = 0;
-    if (impWant > IMPOSTOR_CAP) {
+    // What the reserved handover bands have already spoken for. Clamped at the
+    // pool: if the bands alone exceed it the floor buys nothing, and the dump
+    // says so rather than quietly drawing a different world.
+    const impFree = Math.max(0, IMPOSTOR_CAP - impHold);
+    impProf.hold = impHold;
+    if (impWant > impFree) {
       let n = 0, bin = IMP_PX_BINS - 1;
       for (; bin >= 0; bin--) {
-        if (n + impHisto[bin] > IMPOSTOR_CAP) break;
+        if (n + impHisto[bin] > impFree) break;
         n += impHisto[bin];
       }
       // The LOWER edge of the bin the budget dies in: everything above it is
@@ -15269,9 +15351,24 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       impPxFloor = Math.max(0, bin) / IMP_PX_PER_BIN;
     }
     impProf.pxFloor = impPxFloor;
+    // ── AND THE RESERVE IS TAKEN FIRST, OR IT IS NOT A RESERVE ──
+    //
+    // Holding cards back for the handover bands and then walking the families
+    // in order does not hold anything back: the first family spends the pool on
+    // its own floor admissions and the hard backstop refuses the last family's
+    // BAND. Caught by the check below on a fixture skewed nine broadleaf to one
+    // acacia — *the nearest card refusal is 1 m past the skeletons' edge* — and
+    // 1 m is not a band, it is the fault the band was written to prevent.
+    //
+    // So every band in the world is filled before any floor admission is made.
+    // Two traversals, and the first is a distance compare per candidate against
+    // a radius already in hand: the price of a guarantee that does not depend on
+    // the order five families happen to be declared in.
+    const famN = ezRecord(() => 0);
+    for (let pass = 0; pass < 2; pass++) {
+    const bandPass = pass === 0;
     for (const fam of EZ_FAMILIES) {
       const variants = ezVariants(fam);
-      let famN = 0;
       // ── INSIDE THE DRAW RING, EXISTENCE IS NOT A PROBABILITY ──
       //
       // There used to be a full-density radius here — the family's own
@@ -15360,12 +15457,32 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         // thousand to the one the walk stopped on. `impN` is the exact backstop
         // inside the last bin.
         const px = (IMP_PERCEPTIBLE_K * tallM) / Math.sqrt(d2);
-        if (px < impPxFloor || impN >= IMPOSTOR_CAP) {
-          impProf.capped++; impWhy('none:imp-cap', d2, tallM);
-          if (px > impProf.pxMaxRefused) impProf.pxMaxRefused = px;
+        // The band is checked against THIS sweep's edge, because the guarantee
+        // is exact where the reserve above was only an estimate.
+        const band = Math.min(ezEdge[fam] + IMP_HANDOVER_M, impR);
+        const inBand = d2 <= band * band;
+        // Each tree is considered in exactly one pass: its band pass or its
+        // floor pass. The other pass walks past it without a decision.
+        if (inBand !== bandPass) continue;
+        if ((!inBand && px < impPxFloor) || impN >= IMPOSTOR_CAP) {
+          impProf.capped++;
+          // ── THE ONE THAT MUST BE ZERO ──
+          // A tree refused INSIDE its handover band is a tree that will appear
+          // as a full skeleton out of nothing. Only the pool's hard backstop can
+          // reach here, and only when the bands alone exceed it — named apart so
+          // the census can fail on it rather than averaging it into the rest.
+          impWhy(inBand ? 'none:handover' : 'none:imp-cap', d2, tallM);
+          if (!inBand && px > impProf.pxMaxRefused) impProf.pxMaxRefused = px;
+          const gap = Math.sqrt(d2) - ezEdge[fam];
+          if (gap < impProf.gapM) impProf.gapM = gap;
           continue;
         }
-        if (px < impProf.pxMinDrawn) impProf.pxMinDrawn = px;
+        // ── BOTH SIDES OF THE FLOOR, AND ONLY THE FLOOR ──
+        // A handover-band tree is admitted BELOW the floor on purpose, so
+        // counting it here would compare two different rules and fail the check
+        // that proves either of them. The pair brackets the floor's decision
+        // alone; the band's is proved by `none:handover` being zero.
+        if (!inBand && px < impProf.pxMinDrawn) impProf.pxMinDrawn = px;
         // WHAT THIS COUNTS NARROWED WHEN THE GATHER LEARNED TO THIN. It is
         // what the PASS considered — every near candidate, and the far ones
         // that already survived the gather's own density test — so it is no
@@ -15476,7 +15593,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         // up. One floor in pixels puts a tall family's cards further out than a
         // short one's, and this is where that shows.
         if (d2 > impProf.horizon[fam] ** 2) impProf.horizon[fam] = Math.sqrt(d2);
-        impN++; famN++;
+        impN++; famN[fam]++;
       }
       }
       impFar += candFar[fam].length;
@@ -15484,11 +15601,12 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       // cannot say that four families of five drew nothing, which is exactly
       // the fault above — and this file's own rule is that a budgeted quantity
       // is printed against its budget or it will be read as a measurement.
-      impProf.byFam[fam] = famN;
+      impProf.byFam[fam] = famN[fam];
       // What the family WANTED, now that nothing rations it by family: the pair
       // reads `drawn of wanted` rather than `drawn of its share`, which is the
       // only honest thing to print once the share no longer exists.
       impProf.capFam[fam] = cand[fam].length + candFar[fam].length;
+    }
     }
   }
   impProf.drawn = impN; impProf.offered = impOffered; impProf.formed = impFormed;
@@ -15645,6 +15763,9 @@ function stepVegRefresh(): boolean {
   vegSeedLeft = VEG_SEED_BUDGET ? Math.max(0, Math.min(VEG_SEED_MS, budget) - frameHeavyMs()) : Infinity;
   let done = false;
   while (performance.now() - t0 < budget) { if (vegJob.next().done) { done = true; break; } }
+  // The slice's own span, carried to whichever phase names itself next. Taken
+  // BEFORE `vegJobMs` so the two measure the same window.
+  vegPhaseCarry += performance.now() - vegPhaseAt;
   vegJobMs += performance.now() - t0;
   vegSweepSlices++;
   if (done) {
@@ -35217,6 +35338,8 @@ function tapeKeep(): string {
       farRing: Math.max(0, Math.round(impR - treeRange)) },
     // The threshold in art pixels, and the furthest card each family placed.
     pxFloor: +impProf.pxFloor.toFixed(3),
+    handoverHeld: impProf.hold,
+    nearestRefusalBeyondEdgeM: Number.isFinite(impProf.gapM) ? Math.round(impProf.gapM) : null,
     pxMinDrawn: Number.isFinite(impProf.pxMinDrawn) ? +impProf.pxMinDrawn.toFixed(3) : null,
     pxMaxRefused: +impProf.pxMaxRefused.toFixed(3),
     horizon: ezRecord((f) => Math.round(impProf.horizon[f])),
@@ -47267,6 +47390,9 @@ function telemetryReport(): string {
         // `trees ez … edge`: skeletons stop at one, cards at the other, and the
         // gap between them is the band this tier is actually carrying.
         + `${impProf.pxFloor > 0 ? ` · card floor ${impProf.pxFloor.toFixed(2)}px` : ''}`
+        + `${Number.isFinite(impProf.gapM)
+          ? ` · nearest refusal ${Math.round(impProf.gapM)}m past the skeletons${impProf.gapM < IMP_HANDOVER_M ? ` (BAND IS ${IMP_HANDOVER_M}m)` : ''}` : ''}`
+        + `${impProf.hold ? ` · ${impProf.hold} held for handover${impProf.hold >= IMPOSTOR_CAP ? ' (POOL SPENT ON BANDS ALONE)' : ''}` : ''}`
         + `${EZ_FAMILIES.some(f => impProf.horizon[f] > 0)
           ? ` · card reach ${EZ_FAMILIES.filter(f => impProf.horizon[f] > 0)
             .map(f => `${f[0]}${Math.round(impProf.horizon[f])}m`).join('/')}` : ''}`

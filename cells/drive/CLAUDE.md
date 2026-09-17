@@ -14581,3 +14581,87 @@ sweep's time goes. But the *structure* is what it is: one clock, one order, one
 commit. Two things would change it, neither done here and both real: give the
 near tier its own commit after `place`, and run the far annulus on a slower
 cadence than the near ring, since you must drive kilometres for it to matter.
+
+## The card floor works, and a sparse family still walked off the end of it
+
+`card floor 2.59px`, and the rationing changed completely — broadleaf went from
+6,400 cards at 929 m to **19,460 at 3,592 m**, which is the fix doing exactly
+what it was for. Then this, in the same row:
+
+```
+cards b19460/264972  c10843/88714  a1/13864  p970/55117  s726/34061
+edge  b325m  c526m  a1729m  p761m  s421m
+```
+
+**Acacia: one card out of 13,864**, with skeletons reaching 1,729 m and cards
+1,806 m. Seventy-seven metres of handover band and a single card in it — an
+acacia crossing that edge goes from NOTHING to a full skeleton. The original
+complaint, alive in one family.
+
+The cause is that the two tiers ration by different things. The geometry tier
+keeps the nearest N under a TRIANGLE budget, so a sparse family gets a FAR edge
+— acacia is 3% of the trees here, which is precisely why its skeletons reach
+1.7 km. The card tier keeps the biggest under one floor set by whatever is
+abundant. For a sparse family those disagree, and the gap between them is where
+a tree has no representation at all.
+
+### The handover band is reserved, and its width comes from the cadence
+
+A tree within `IMP_HANDOVER_M` of its family's skeleton edge wears a card
+whatever the floor says, and the floor is spent on what remains.
+
+**The width is a distance, not a multiple of the edge**, and the distance comes
+from the refresh period — because that is the actual mechanism. Tiers change
+only when a sweep completes, and a sweep measured **six seconds** on a device;
+the band must be wider than the ground covered in one, or a tree crosses the
+whole of it between two decisions and arrives as a skeleton anyway. 200 m covers
+120 km/h. A multiple of the edge was the first attempt and it ate the pool: it
+scales with the SQUARE of an edge the card tier does not control, and in
+`perf-check` the bands alone consumed the whole budget.
+
+**And the reserve is filled first, or it is not a reserve.** Holding cards back
+and then walking families in order holds nothing back — the first family spends
+the pool on its own floor admissions and the backstop refuses the last family's
+band. Caught by the check below: *the nearest card refusal is 1 m past the
+skeletons' edge*, and 1 m is not a band. Every band in the world is now filled
+in a first pass before any floor admission is made, so the guarantee does not
+depend on the order five families happen to be declared in.
+
+### A uniform wood cannot produce the fault, so the fixture stopped being one
+
+`perf-check` drew every kind with equal probability, so no family was sparse —
+and sparseness is the whole condition. Three mutations of the production code
+were run against it and **all three passed**: the band could be cut to a tenth,
+the reserve could be skipped, and nothing moved. A check that cannot fail is not
+a check.
+
+The fixture now has a second leg, nine broadleaf to one acacia, with the pool
+sized to it (8,000 against ~70,000 candidates — the ratio the device runs). And
+the two claims are asserted on the legs that can witness them, which is not the
+same leg:
+
+| claim | leg | control |
+| --- | --- | --- |
+| largest refused ≤ smallest drawn | uniform | ring order restored → fails |
+| `none:handover` is zero | skewed | pool below the bands → 307 trees |
+
+The first claim excludes band cards from both sides: they are admitted BELOW the
+floor on purpose, and counting them compares two different rules — which it did,
+and which broke the check until it was split.
+
+## 1,368 ms a sweep, and the phase line summed to 32
+
+Every slice re-arms `vegPhaseAt` so the frame gap between slices is not billed
+to whichever phase was running. Correct — and it threw away the WORK too: a
+phase spanning ninety slices was credited the cost of its last slice alone.
+
+Caught by arithmetic that would not close. A device put `treeRefresh` at
+41,051 ms over 30 sweeps — **1,368 ms of CPU per sweep** — while `tree phases`
+summed to 32 ms. Ninety-eight per cent of the sweep unattributed, and the one
+phase this file has spent three passes trying to cut was being read from the
+wrong number the whole time.
+
+A slice now adds its own span to a CARRY, and the next `vegMark` spends it on
+the phase that just ended — marks name a phase retrospectively, so mid-slice
+there is nothing to credit it to. Every measurement of a tree phase taken before
+this is wrong, and wrong in the same direction: far too small.

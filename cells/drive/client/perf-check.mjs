@@ -131,7 +131,7 @@ function context(code,range,ez,triCap) {
     // only running it can tell you.
     impProf:{drawn:0,offered:0,capped:0,formed:0,far:0,ms:0,byFam:{},capFam:{},
       waiting:0,locked:0,refused:new Map(),bySlot:[],why:{},whyBig:{},sweeps:0,
-      horizon:{broadleaf:0,conifer:0,acacia:0,palm:0,snag:0},pxFloor:0,pxMinDrawn:Infinity,pxMaxRefused:0},
+      horizon:{broadleaf:0,conifer:0,acacia:0,palm:0,snag:0},pxFloor:0,pxMinDrawn:Infinity,pxMaxRefused:0,hold:0,gapM:Infinity},
     impSlotFull:false,
     // ── AND THE INVARIANT'S OWN TWO ──
     // `impThinnable` decides whether a tree's absence can be carried by a
@@ -150,7 +150,7 @@ function context(code,range,ez,triCap) {
     // and no metres — so the sandbox's copy changes shape with it. Third time
     // this file has met the trap it documents: the refresh reads free variables
     // and only running the check finds a new one.
-    IMP_PX_BINS:1024,IMP_PX_MAX:32,IMP_PX_PER_BIN:1024/32,
+    IMP_PX_BINS:1024,IMP_PX_MAX:32,IMP_PX_PER_BIN:1024/32,IMP_HANDOVER_M:200,
     impHisto:new Int32Array(1024),
     // HALF AGAIN THE DRAW RANGE, for the manifest's own reason one line down:
     // the REACH dial's far gather has to RUN here, or the claim that a tier
@@ -277,14 +277,67 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
   // records the smallest tree it GAVE a card and the largest it REFUSED one,
   // and the rule says the refused one cannot be bigger, give or take the bin
   // the budget died in.
-  const P = c.impProf, slack = 1 / c.IMP_PX_PER_BIN + 1e-9;
-  assert.ok(P.pxFloor > 0, 'the card budget refused nobody: this check witnesses nothing');
-  assert.ok(Number.isFinite(P.pxMinDrawn), 'no card was placed at all');
-  assert.ok(P.pxMaxRefused <= P.pxMinDrawn + slack,
-    `a refused tree projects ${P.pxMaxRefused.toFixed(3)}px, larger than the smallest one given a card `
-    + `(${P.pxMinDrawn.toFixed(3)}px) — the budget is not being spent on apparent size`);
+  // ── LEG ONE: THE FLOOR, ON THE UNIFORM WOOD ──
+  // Read and FROZEN here, because the skewed leg below re-runs the refresh into
+  // the same `impProf` and the numbers would silently become the other leg's.
+  const slack = 1 / c.IMP_PX_PER_BIN + 1e-9;
+  const uni = { floor: c.impProf.pxFloor, min: c.impProf.pxMinDrawn, max: c.impProf.pxMaxRefused };
+  assert.ok(uni.floor > 0, 'the card budget refused nobody: this check witnesses nothing');
+  assert.ok(Number.isFinite(uni.min), 'no card was placed by the floor rule at all');
+  // THE CLAIM, FROM BOTH SIDES. Comparing the floor against the cards it
+  // selected proves nothing — it is the same expression twice, the tautology
+  // this repo already caught once in the atlas test. So the walk records the
+  // smallest tree it GAVE a card and the largest it REFUSED one, and the rule
+  // says the refused one cannot be bigger, give or take the bin the budget
+  // died in. Handover-band cards are excluded from both sides: they are
+  // admitted BELOW the floor on purpose and would compare two different rules.
+  assert.ok(uni.max <= uni.min + slack,
+    `a refused tree projects ${uni.max.toFixed(3)}px, larger than the smallest one given a card `
+    + `(${uni.min.toFixed(3)}px) — the budget is not being spent on apparent size`);
+
+  seed = 77;
+  c.IMPOSTOR_CAP = 8000;
+  c.impStage = { m: new Float32Array(8000 * 16), c: new Float32Array(8000 * 3),
+    f: new Float32Array(8000), y: new Float32Array(8000) };
+  c.impostors = impostorMesh(8000);
+  c.vegGrid.clear();
+  for (const [gx, gz] of squareRings(0, 0, Math.ceil(2800 / 220) + 2)) {
+    const cell = [];
+    for (let i = 0; i < 80; i++) {
+      // Nine broadleaf to one acacia: one family sets the floor, the other gets
+      // a far skeleton edge and nothing above it.
+      const k = random() < 0.9 ? 'broadleaf' : 'acacia';
+      const sx = gx * 220 + random() * 220, sz = gz * 220 + random() * 220;
+      cell.push({ k, x: sx, z: sz, ax: sx, az: sz,
+        s: 1 + random() * 2, h: 2, rot: random() * 6,
+        sy: 0.7 + random() * 0.6, sw: 0.8 + random() * 0.4, tl: random() * 0.1,
+        c: new THREE.Color(0.2, 0.4, 0.1), role: i % 2 ? 'interior' : 'fringe', anchor: i % 13 === 0 });
+    }
+    c.vegGrid.set(`${gx},${gz}`, cell);
+  }
+  // Twice: the band is sized from LAST sweep's edge, so the first run on a new
+  // population is the one that converges and the second is the one to read.
+  c.refreshVeg(); c.refreshVeg();
+
+  // ── AND THE BAND, FROM THE OTHER END ──
+  // The floor check above cannot see the handover band at all: zeroing its
+  // width changed no number this file could read, which makes it untested and
+  // therefore not a guarantee. This is the claim directly — nothing is refused
+  // within IMP_HANDOVER_M of the edge the skeletons stop at, so no tree can
+  // cross that edge inward without having been a card first.
+  // THE EXACT CLAIM, not a proxy for it. `gapM >= IMP_HANDOVER_M` reads like the
+  // same thing and is trivially true whenever nothing happens to be refused near
+  // an edge — it passed with the band cut to a tenth. What cannot be satisfied
+  // by luck is the count of trees refused INSIDE a band, which the walk names
+  // apart for exactly this reason. `hold` proves the reserve is live, or a band
+  // of zero width would satisfy the invariant by having nothing to break.
+  assert.ok(c.impProf.hold > 0, 'no card was reserved for a handover band: this check witnesses nothing');
+  assert.equal(c.impProf.why['none:handover'] ?? 0, 0,
+    `${c.impProf.why['none:handover']} trees were refused a card INSIDE their family's handover `
+    + `band — each one arrives as a full skeleton having never been a card`);
+
 }
 const data=Array.from({length:100000},(_,i)=>({d:random()*1e6,id:i}));
 function time(fn,n=15){const a=[];for(let i=0;i<n+5;i++){const t=performance.now();fn();if(i>=5)a.push(performance.now()-t);}return a.sort((a,b)=>a-b)[Math.floor(n/2)];}
 const bench={n:data.length,k:8,oldMs:time(()=>data.slice().sort((a,b)=>a.d-b.d).slice(0,8)),newMs:time(()=>nearestStable(data.slice(),8,v=>v.d))};
-console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons, card budget spent on apparent size, largest refused <= smallest drawn',reports,selectionBenchmark:bench},null,2));
+console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons, card budget spent on apparent size, largest refused <= smallest drawn, handover band unbroken',reports,selectionBenchmark:bench},null,2));
