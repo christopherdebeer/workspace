@@ -15067,3 +15067,46 @@ The depth-of-field unit shipped four dials and put none of them in the row whose
 whole job is to let two dumps of the same drive be compared. The first dump
 taken on it cannot say whether the dedicated chain ran. `dof <mode>/<quality>
 f<N>px @<focus>` now, beside `tilt`.
+
+### …and the moment it ran, the cull was comparing two different frames
+
+Pulled from the branch the same evening (`351e3d0`, not mine): the cell cull's
+bound was
+
+```ts
+const bx = gx * VEG_CELL, bz = gz * VEG_CELL;     // ABSOLUTE metres
+const ddx = Math.max(bx - rfx, 0, rfx - (bx + VEG_CELL));   // rfx is LOCAL
+```
+
+`vegCellOf` indexes the lattice in the **earth-fixed** vegetation frame — that
+is the whole point of the anchoring unit — so `gx * VEG_CELL` is an absolute
+easting, and `renderFocusXZ()` answers local metres. Every annulus cell
+therefore measured thousands of kilometres away and **all of them were retired
+together**; the next sweep saw an empty far ring, dropped the floor, and
+reopened it. Reported from the seat as the whole far forest flashing on every
+refresh, at the sweep's own period.
+
+**IT WAS WRITTEN WRONG THE DAY THE CULL WAS WRITTEN AND COULD NOT SHOW UNTIL
+THE GATE OPENED.** That is the second latent fault the same gate has hidden —
+the `impTallestM` ratchet was the first — and it is the general lesson: **code
+behind a gate that never opens is code that has never run.** The day a gate
+starts firing, everything behind it is new code and wants reading as such.
+
+The fix carries the FOCUS into the lattice once per sweep (`vegAbsOf(rfx, rfz)`)
+rather than each cell back out of it, which is the cheaper direction by the
+number of cells. It is metrically sound and the reason is worth writing down,
+because the two frames are not related by a translation: absolute northing is
+`lat · M_LAT` while local z is `−(lat − lat₀) · M_LAT`, a REFLECTION, and
+absolute easting carries `cos(lat)` where local x carries `cos(lat₀)`. Neither
+matters here — the box test is symmetric, so the reflection is invisible to it,
+and over a 5.6 km annulus the two cosines differ by about 0.07%, four orders
+under the cull's own 1.1 headroom.
+
+**AND THE SANDBOX CAN ONLY CATCH THE OFFSET.** Its `vegAbsOf` stub is a pure
+translation, so the leg proves the frames are not mixed and proves nothing about
+a sign or a scale; the paragraph above is the argument for those, and it is code
+reading rather than a measurement. What the fixture DOES now do is run the cull
+leg around a nonzero earth origin — the zero-centred one made absolute and local
+identical, which is exactly why every check passed over a bug this size. The
+negative control fires the assertion added two commits earlier, in its own
+words: *the cull retired the whole annulus: the far tier is off, not cheap*.
