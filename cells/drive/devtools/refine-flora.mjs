@@ -8,12 +8,35 @@ const text = fs.readFileSync(new URL('client/flora-ez-baked.ts', root), 'utf8');
 const source = JSON.parse(text.slice(text.indexOf('= {') + 2).trim().replace(/;$/, ''));
 const decode = (s, Type) => { const b = Buffer.from(s, 'base64'); return new Type(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); };
 const encode = (a, Type = Int16Array) => Buffer.from(new Type(a).buffer).toString('base64');
-const wood = {}, report = [];
-for (const [family, f] of Object.entries(source.families)) for (const v of f.variants) {
-  const pos = Float32Array.from(decode(v.pos, Int16Array), n => n / source.q);
-  const idx = Uint32Array.from(decode(v.idx, Uint16Array));
-  // Weld coincident positions before simplification; bark/facet colour is baked
-  // afterwards. Keep positions, crown anchors and fork locations in their frame.
+/**
+ * ── THE MID RUNG'S WOOD: THE SAME VERTICES, A FIFTH OF THE TRIANGLES ──
+ *
+ * `wood` is the refined index the game draws by default (48% of the bake's
+ * triangles, error 0.0015 of the tree's height). `woodMid` is a second index
+ * over the SAME positions for the representation drawn between the impostor
+ * card and the full skeleton — a tree between about 30 and 60 art pixels,
+ * where a trunk is one to three pixels wide and a branch is under one.
+ *
+ * It is a simplification and not a re-generation on purpose: EZ-Tree consumes
+ * its random draws per section, so a recipe re-run with fewer sections is a
+ * DIFFERENT tree, and a tree that changes shape as you drive at it is the
+ * fault the seat already rejected once. Collapsing edges of the geometry that
+ * is already there keeps every branch where it was to within the error bound.
+ *
+ * MEASURED before the numbers were chosen, over all thirty-seven variants: at
+ * a 20% target the EZ-bake variants land at 17-20% with error 0.002-0.004
+ * (two to four centimetres on a ten-metre tree) before the bound binds at
+ * all. The procedural broadleaves are the exception — five-sided trunk tubes
+ * and prop roots that refuse to go under 58% at 0.004 — and reach 14-18% at
+ * 0.008. Eight centimetres on a 23 cm trunk, at a range where that trunk is
+ * two pixels wide, is not a thing anyone can see; the bound is 0.008 for all.
+ */
+const MID_RATIO = 0.20, MID_ERR = 0.008;
+/** Weld coincident positions, simplify to `ratio` of the triangles within
+ *  `err` of the tree's height, and hand back an index in the ORIGINAL vertex
+ *  ids — so the reduced mesh reads the very same positions, colours and
+ *  frame the full one does. Bark/facet colour is baked afterwards. */
+function simplified(pos, idx, ratio, err) {
   const unique = new Map(), remap = [], verts = [];
   for (let i = 0; i < pos.length; i += 3) {
     const key = `${pos[i]},${pos[i+1]},${pos[i+2]}`;
@@ -22,13 +45,20 @@ for (const [family, f] of Object.entries(source.families)) for (const v of f.var
   }
   const p = Float32Array.from(verts), indices = Uint32Array.from(idx, i => remap[i]);
   const [out, error] = MeshoptSimplifier.simplify(indices, p, 3,
-    Math.floor(indices.length * 0.48 / 3) * 3, 0.0015, []);
-  // Convert back to original vertex IDs, preserving the original position data.
+    Math.floor(indices.length * ratio / 3) * 3, err, []);
   const first = [];
   remap.forEach((r,i) => { if (first[r] === undefined) first[r] = i; });
-  const reduced = Array.from(out, i => first[i]);
-  wood[v.name] = encode(reduced, Uint16Array);
-  report.push({family,name:v.name,before:idx.length/3,after:out.length/3,error});
+  return { index: Array.from(out, i => first[i]), tris: out.length / 3, error };
+}
+const wood = {}, woodMid = {}, report = [];
+for (const [family, f] of Object.entries(source.families)) for (const v of f.variants) {
+  const pos = Float32Array.from(decode(v.pos, Int16Array), n => n / source.q);
+  const idx = Uint32Array.from(decode(v.idx, Uint16Array));
+  const fine = simplified(pos, idx, 0.48, 0.0015);
+  const mid = simplified(pos, idx, MID_RATIO, MID_ERR);
+  wood[v.name] = encode(fine.index, Uint16Array);
+  woodMid[v.name] = encode(mid.index, Uint16Array);
+  report.push({family,name:v.name,before:idx.length/3,after:fine.tris,error:fine.error,mid:mid.tris,midError:mid.error});
 }
 const rng = seed => () => { seed |= 0; seed = seed + 0x6d2b79f5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t ^= t + Math.imul(t ^ t >>> 7, 61 | t); return ((t ^ t >>> 14) >>> 0) / 4294967296; };
 const cross = (a,b) => [a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
@@ -184,7 +214,16 @@ function broadleaf(profile, seed) {
     pos:encode(quant(P)),idx:encode(I,Uint16Array),cards:'',cardIdx:'',anc:encode(quant(anchors))};
 }
 const broadleaves=broadProfiles.flatMap((p,i)=>[broadleaf(p,43+i*89),broadleaf(p,211+i*67)]);
-const result={wood,conifers,broadleaves};
+// The growth forms carry their own wood and are not in `wood` (their tubes
+// are already three- to five-sided); the mid rung wants them cut the same way.
+for (const v of [...conifers, ...broadleaves]) {
+  const pos = Float32Array.from(decode(v.pos, Int16Array), n => n / source.q);
+  const idx = Uint32Array.from(decode(v.idx, Uint16Array));
+  const mid = simplified(pos, idx, MID_RATIO, MID_ERR);
+  woodMid[v.name] = encode(mid.index, Uint16Array);
+  report.push({family:v.habit,name:v.name,before:idx.length/3,after:idx.length/3,error:0,mid:mid.tris,midError:mid.error});
+}
+const result={wood,woodMid,conifers,broadleaves};
 fs.writeFileSync(new URL('client/flora-refined-baked.ts',root),
   '// GENERATED by devtools/refine-flora.mjs from flora-ez-baked.ts.\n'+
   'export const FLORA_REFINED = '+JSON.stringify(result,null,2)+';\n');

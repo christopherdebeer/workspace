@@ -6,6 +6,7 @@
  *   ELEV=8,32 node .../imp-sheet.mjs                 (two elevation rows)
  *   AZ=22 node .../imp-sheet.mjs                     (between two atlas tiles)
  *   INK=1 node .../imp-sheet.mjs                     (black silhouettes)
+ *   MID=1 node .../imp-sheet.mjs                    (the MID RUNG beside the full skeleton, not the card)
  *
  * The seat's ask, verbatim: *I'm concerned that imposters don't look enough
  * like their counterparts, noticeable when swapped. Can we show a contact
@@ -66,6 +67,10 @@ const COLS = Number(process.env.COLS ?? 3);
 const INK = process.env.INK === '1';
 const POST = process.env.POST !== '0';
 const BG = process.env.BG ?? 'sky';
+// MID=1 puts the MID RUNG in the right-hand cell instead of the card: the same
+// camera, quantiser and metric block, so the full↔mid handover is certified by
+// the same IoU column the skeleton↔card one is.
+const MID = process.env.MID === '1';
 mkdirSync(OUT, { recursive: true });
 
 const t0 = Date.now();
@@ -88,10 +93,10 @@ await d.page.waitForTimeout(6000);
 const sheets = [];
 for (const elev of ELEVS) {
   console.log(`[${el()}] sheet at ${elev} degrees, az ${AZ}`);
-  const r = await q((o) => window.__impsheet(o), {
+  const r = await q((o) => (o.mid ? window.__ezsheet(o) : window.__impsheet(o)), {
     dist: DIST, scale: SCALE, px: PX, mag: MAG, cols: COLS,
-    elev, az: AZ, yaw: YAW, bg: BG, ink: INK, post: POST });
-  const file = join(OUT, `imp-sheet-${process.env.TAG ?? 'base'}-e${elev}-a${AZ}.png`);
+    elev, az: AZ, yaw: YAW, bg: BG, ink: INK, post: POST, mid: MID });
+  const file = join(OUT, `imp-sheet-${process.env.TAG ?? 'base'}${MID ? '-mid' : ''}-e${elev}-a${AZ}.png`);
   writeFileSync(file, Buffer.from(r.sheet.split(',')[1], 'base64'));
   sheets.push({ elev, file, rows: r.rows, meta: r });
 }

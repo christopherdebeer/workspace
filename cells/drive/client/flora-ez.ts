@@ -86,6 +86,17 @@ export interface EzVariant {
   /** Wood and crown in one, with `aWood` per vertex and faceTone in `color`. */
   geometry: THREE.BufferGeometry;
   tris: number;
+  /** THE MID RUNG: the same tree at about a fifth of the wood's triangles and
+   *  half the crown's clusters, for the band between the impostor card and the
+   *  full skeleton — see the note above `EZ_MID_GROW`. Decoded from the same
+   *  bake, so every branch stands where the full one's does to within the
+   *  simplifier's bound, and the same attributes ride on it. */
+  mid: THREE.BufferGeometry;
+  midTris: number;
+  /** The growth the mid crown's survivors were solved to (`calibrateGrow`):
+   *  1 where pairing changed nothing, the bracket's end where it could not
+   *  match. Reported, never read by the renderer. */
+  midGrow: number;
   crown: string;
   /** Architectural recipe shared by seed siblings. */
   habit?: string;
@@ -130,6 +141,117 @@ export const EZ_MERGE_GROW = 2.2;
  * or the handover is a crown opening back up at the swap.
  */
 export const EZ_MERGE_PX = [26, 58] as const;
+/**
+ * ── THE MID RUNG: A REPRESENTATION FOR THIRTY TO SIXTY ART PIXELS ──
+ *
+ * The ladder had two rungs a hundred to one apart: a 4-triangle card, honest
+ * below about 30 art pixels (the contact sheet reads IoU 0.89-0.95 there and
+ * 0.23-0.43 above 40, because the card is photographed at the bottom of the
+ * merge band and the skeleton above it is still an open crown), and the full
+ * skeleton at 450 to 1,134 triangles. Under a triangle budget the geometry's
+ * admitted edge is set by the budget and not by what a card can cover for —
+ * a device dump read broadleaf skeletons stopping at 163 m of a 1,400 m ring
+ * with conifer alone taking 1.14M of a 2.4M budget — so the only way to put
+ * a solid tree nearer than that is to make the tree between the card and the
+ * skeleton cheaper. A tree at thirty to sixty pixels has a trunk one to three
+ * pixels wide and a branch under one; a fifth of the wood's triangles and
+ * half its clusters draw the same silhouette there.
+ *
+ * DERIVED, NOT RE-GENERATED, and that is the whole design. EZ-Tree consumes
+ * its random draws per section, so a recipe re-run at lower detail is a
+ * different tree, and a tree that changes shape as you drive at it is the
+ * fault the seat already rejected once. The wood is the SAME baked vertices
+ * under a meshoptimizer index (`FLORA_REFINED.woodMid`, target 20%, error
+ * 0.008 of the tree's height); the crown is the same anchors and cards paired
+ * two into one at their midpoint, each survivor grown by root two so its
+ * projected area is the pair's, on the cheapest primitive that still has a
+ * silhouette. Every attribute the full geometry carries — `aSky`, `aEnv`,
+ * `aPad`, `aHull`, `aEzSurf` — is computed on the mid one by the same code,
+ * so the merge, the light and the surface pass treat both alike and the hand
+ * over between them is a change of triangle count and not of look.
+ */
+export const EZ_MID_GROW: readonly [number, number] = [1, 2.6];
+/**
+ * ── THE GROWTH IS SOLVED PER VARIANT, BECAUSE ROOT TWO WAS WRONG BOTH WAYS ──
+ *
+ * The first cut grew every survivor by √2 — a pair's area, on paper — and the
+ * contact sheet read the paired-cluster conifers at 0.56-0.63 of their full
+ * coverage (the dropped partner pads and the gaps between the survivors) and
+ * the card crowns at 1.22-1.33 (cards overlap, so a pair's silhouette is far
+ * less than the sum of its cards'). A crown that fattens or thins by a quarter
+ * as it crosses the pixel line is the tree that changes shape as you drive at
+ * it, wearing a new name. So the growth is found by bisection against the
+ * full crown's own silhouette: both are rasterised in two side projections on
+ * a coarse grid and the mid crown is grown until it covers what the full one
+ * covers. Coverage is monotone in the growth, the bracket is a decode-time
+ * constant, and the answer is stored on the geometry (`userData.midGrow`) so
+ * the probes and the sheet can report it. It costs a few milliseconds a
+ * variant, once, at decode.
+ */
+const MID_CAL_N = 56, MID_CAL_ITERS = 7;
+/** What the calibration cost this page, in milliseconds and variants — read
+ *  by `__ez().decode`, because a decode-time cost is a boot-time cost and a
+ *  phone pays it before its first frame. */
+export const ezDecodeProf = { calibrateMs: 0, calibrated: 0 };
+function silCover(pos: Float32Array, box: number[]): number {
+  const N = MID_CAL_N;
+  const grid = new Uint8Array(N * N * 2);
+  const [x0, x1, y0, y1, z0, z1] = box;
+  const sx = N / (x1 - x0), sy = N / (y1 - y0), sz = N / (z1 - z0);
+  const raster = (o: number, ax: number, ay: number, bx: number, by: number, cx: number, cy: number): void => {
+    const i0 = Math.max(0, Math.floor(Math.min(ax, bx, cx))), i1 = Math.min(N - 1, Math.ceil(Math.max(ax, bx, cx)));
+    const j0 = Math.max(0, Math.floor(Math.min(ay, by, cy))), j1 = Math.min(N - 1, Math.ceil(Math.max(ay, by, cy)));
+    const area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    if (Math.abs(area) < 1e-9) return;
+    const sgn = area > 0 ? 1 : -1;
+    for (let j = j0; j <= j1; j++) {
+      const py = j + 0.5;
+      for (let i = i0; i <= i1; i++) {
+        const px = i + 0.5;
+        const w0 = ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) * sgn;
+        const w1 = ((cx - bx) * (py - by) - (cy - by) * (px - bx)) * sgn;
+        const w2 = ((ax - cx) * (py - cy) - (ay - cy) * (px - cx)) * sgn;
+        if (w0 >= 0 && w1 >= 0 && w2 >= 0) grid[o + j * N + i] = 1;
+      }
+    }
+  };
+  for (let t = 0; t + 9 <= pos.length; t += 9) {
+    raster(0, (pos[t] - x0) * sx, (pos[t + 1] - y0) * sy, (pos[t + 3] - x0) * sx, (pos[t + 4] - y0) * sy, (pos[t + 6] - x0) * sx, (pos[t + 7] - y0) * sy);
+    raster(N * N, (pos[t + 2] - z0) * sz, (pos[t + 1] - y0) * sy, (pos[t + 5] - z0) * sz, (pos[t + 4] - y0) * sy, (pos[t + 8] - z0) * sz, (pos[t + 7] - y0) * sy);
+  }
+  let n = 0;
+  for (let i = 0; i < grid.length; i++) n += grid[i];
+  return n / grid.length;
+}
+/** The growth at which `build(grow)`'s silhouette covers what `full` covers,
+ *  by bisection over `EZ_MID_GROW`; the bracket's end where it cannot. */
+function calibrateGrow(full: Float32Array, build: (grow: number) => Float32Array): number {
+  const t0 = performance.now();
+  try { return calibrateGrowAt(full, build); }
+  finally { ezDecodeProf.calibrateMs += performance.now() - t0; ezDecodeProf.calibrated++; }
+}
+function calibrateGrowAt(full: Float32Array, build: (grow: number) => Float32Array): number {
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (let i = 0; i + 3 <= full.length; i += 3) {
+    x0 = Math.min(x0, full[i]); x1 = Math.max(x1, full[i]);
+    y0 = Math.min(y0, full[i + 1]); y1 = Math.max(y1, full[i + 1]);
+    z0 = Math.min(z0, full[i + 2]); z1 = Math.max(z1, full[i + 2]);
+  }
+  if (!(x1 > x0) || !(y1 > y0) || !(z1 > z0)) return 1;
+  // A margin, because a grown survivor can stand outside the full crown's box
+  // and a box it cannot leave would count that growth as free.
+  const mx = (x1 - x0) * 0.25, my = (y1 - y0) * 0.25, mz = (z1 - z0) * 0.25;
+  const box = [x0 - mx, x1 + mx, y0 - my, y1 + my, z0 - mz, z1 + mz];
+  const target = silCover(full, box);
+  let [lo, hi] = EZ_MID_GROW;
+  if (silCover(build(lo), box) >= target) return lo;
+  if (silCover(build(hi), box) < target) return hi;
+  for (let it = 0; it < MID_CAL_ITERS; it++) {
+    const m = (lo + hi) / 2;
+    if (silCover(build(m), box) < target) lo = m; else hi = m;
+  }
+  return (lo + hi) / 2;
+}
 /**
  * ── THE MERGE, WRITTEN ONCE, BECAUSE TWO COPIES ARE TWO CROWNS ──
  *
@@ -185,9 +307,13 @@ export const ezHabitOf = (v: GrowthVariant): string =>
 const habitOf = ezHabitOf;
 export const ezHabitatsOf = (v: GrowthVariant): readonly string[] => v.habitats ?? [];
 
-function woodOf(v: EzBakedVariant, q: number): THREE.BufferGeometry {
+function woodOf(v: EzBakedVariant, q: number, mid = false): THREE.BufferGeometry {
   const reduced = (FLORA_REFINED.wood as Record<string, string>)[v.name];
-  const P = int16(v.pos), I = uint16(EZ_REFINED && reduced ? reduced : v.idx);
+  // The mid index over the SAME positions; a variant the bake has no mid
+  // index for (there are none today, and `imp-atlas.test` counts the keys)
+  // draws its full wood rather than nothing.
+  const midIdx = (FLORA_REFINED.woodMid as Record<string, string>)[v.name];
+  const P = int16(v.pos), I = uint16(mid && midIdx ? midIdx : EZ_REFINED && reduced ? reduced : v.idx);
   const pos = new Float32Array(P.length);
   for (let i = 0; i < P.length; i++) pos[i] = P[i] / q;
   const g = new THREE.BufferGeometry();
@@ -306,16 +432,103 @@ function fillHash(a: number, b: number): number {
   return ((x ^ (x >>> 13)) >>> 0) / 4294967296;
 }
 
-function crownOf(v: GrowthVariant, q: number): THREE.BufferGeometry | null {
+/**
+ * GREEDY NEAREST-NEIGHBOUR PAIRING of `n` points, for the mid rung's crown.
+ * Walks the points in bake order and pairs each unpaired one with its nearest
+ * unpaired neighbour; an odd one out stands alone. Deterministic — the same
+ * variant pairs the same way every session, which is what lets the two rungs
+ * be compared on a contact sheet — and O(n²) over at most a few hundred
+ * points, once per variant for the life of the page. Returns, per survivor,
+ * the two source indices (the second −1 for a single).
+ */
+function pairNearest(pts: ArrayLike<number>, n: number): Array<[number, number]> {
+  const used = new Uint8Array(n);
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < n; i++) {
+    if (used[i]) continue;
+    used[i] = 1;
+    let best = -1, bd = Infinity;
+    for (let j = i + 1; j < n; j++) {
+      if (used[j]) continue;
+      const dx = pts[j * 3] - pts[i * 3], dy = pts[j * 3 + 1] - pts[i * 3 + 1], dz = pts[j * 3 + 2] - pts[i * 3 + 2];
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < bd) { bd = d; best = j; }
+    }
+    if (best >= 0) used[best] = 1;
+    out.push([i, best]);
+  }
+  return out;
+}
+
+/** The cards paired two into one: the survivor is the FIRST card's quad, in
+ *  place, grown about its own centre by `grow` so it stands in for the pair.
+ *  The index pattern is read off the bake's own first card rather than
+ *  assumed. */
+function pairCards(pos: Float32Array, CI: Uint16Array, grow: number): { pos: Float32Array; idx: Uint16Array } {
+  const nc = pos.length / 12;
+  const cen = new Float32Array(nc * 3);
+  for (let c = 0; c < nc; c++) {
+    let cx = 0, cy = 0, cz = 0;
+    for (let k = 0; k < 4; k++) { cx += pos[(c * 4 + k) * 3]; cy += pos[(c * 4 + k) * 3 + 1]; cz += pos[(c * 4 + k) * 3 + 2]; }
+    cen[c * 3] = cx / 4; cen[c * 3 + 1] = cy / 4; cen[c * 3 + 2] = cz / 4;
+  }
+  const pairs = pairNearest(cen, nc);
+  const out = new Float32Array(pairs.length * 12);
+  for (let p = 0; p < pairs.length; p++) {
+    const [a, b] = pairs[p];
+    // THE SURVIVOR STAYS WHERE IT WAS. Moving it to the pair's midpoint reads
+    // as the more even choice and measured worse: with every card displaced,
+    // the two rungs' silhouettes overlap only where the crown is dense, and
+    // the conifers — thin pads a few pixels wide — read IoU 0.45 at matched
+    // coverage. Kept in place, half the crown coincides with the full rung's
+    // exactly and only the growth differs.
+    const gk = b >= 0 ? grow : 1;
+    const mx = cen[a * 3], my = cen[a * 3 + 1], mz = cen[a * 3 + 2];
+    for (let k = 0; k < 4; k++) {
+      const si = (a * 4 + k) * 3, di = (p * 4 + k) * 3;
+      out[di] = mx + (pos[si] - cen[a * 3]) * gk;
+      out[di + 1] = my + (pos[si + 1] - cen[a * 3 + 1]) * gk;
+      out[di + 2] = mz + (pos[si + 2] - cen[a * 3 + 2]) * gk;
+    }
+  }
+  // The per-card index pattern, taken from the first card and checked to be
+  // one: a bake that indexed its cards any other way would fall back to the
+  // plain two-triangle quad rather than draw garbage.
+  let pat = [0, 1, 2, 0, 2, 3];
+  if (CI.length >= 6) {
+    const base = Math.min(CI[0], CI[1], CI[2], CI[3], CI[4], CI[5]);
+    const cand = [0, 1, 2, 3, 4, 5].map((k) => CI[k] - base);
+    if (cand.every((k) => k >= 0 && k < 4)) pat = cand;
+  }
+  const idx = new Uint16Array(pairs.length * 6);
+  for (let p = 0; p < pairs.length; p++) for (let k = 0; k < 6; k++) idx[p * 6 + k] = p * 4 + pat[k];
+  return { pos: out, idx };
+}
+
+function crownOf(v: GrowthVariant, q: number, mid = false): THREE.BufferGeometry | null {
   const shape = v.crown.shape;
   if (shape === 'none') return null;
   if (shape === 'card') {
     // The package's own leaf quads, opaque, as they stood on the skeleton.
-    const C = int16(v.cards), CI = uint16(v.cardIdx);
-    if (!C.length || !CI.length) return null;
-    const pos = new Float32Array(C.length);
+    const C = int16(v.cards), CI0 = uint16(v.cardIdx);
+    if (!C.length || !CI0.length) return null;
+    let pos: Float32Array = new Float32Array(C.length);
     for (let i = 0; i < C.length; i++) pos[i] = C[i] / q;
+    let CI: Uint16Array = CI0;
+    let midGrow = 1;
+    if (mid) {
+      // Cards overlap, so a pair's area is not the sum of its cards': the
+      // growth that keeps the crown's SILHOUETTE is solved, not assumed.
+      const soup = (P: Float32Array, I: Uint16Array): Float32Array => {
+        const out = new Float32Array(I.length * 3);
+        for (let i = 0; i < I.length; i++) { out[i * 3] = P[I[i] * 3]; out[i * 3 + 1] = P[I[i] * 3 + 1]; out[i * 3 + 2] = P[I[i] * 3 + 2]; }
+        return out;
+      };
+      midGrow = calibrateGrow(soup(pos, CI0), (g) => { const p2 = pairCards(pos, CI0, g); return soup(p2.pos, p2.idx); });
+      ({ pos, idx: CI } = pairCards(pos, CI0, midGrow));
+    }
     const g = new THREE.BufferGeometry();
+    g.userData.midGrow = midGrow;
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setIndex(new THREE.BufferAttribute(CI, 1));
     // A CARD IS ITS OWN CLUSTER, so the same occlusion runs over card centres.
@@ -352,20 +565,30 @@ function crownOf(v: GrowthVariant, q: number): THREE.BufferGeometry | null {
     g.setAttribute('aHull', new THREE.BufferAttribute(hull.hull, 3));
     return cardTone(g);
   }
-  const A = int16(v.anc);
-  if (!A.length) return null;
-  const parts: THREE.BufferGeometry[] = [];
-  /** Which anchor each part hangs on, and where its own centre landed — the
-   *  two things the tone and the occlusion need and the merge throws away. */
-  const partAnchor: number[] = [];
-  const partCentre: number[] = [];
+  const A0 = int16(v.anc);
+  if (!A0.length) return null;
   const r = v.crown.r;
-  const pads = v.pads ? int16(v.pads) : null;
-  const fill = crownFill(v);
-  const nAnc = Math.floor(A.length / 3);
-  const ancPts = new Float32Array(nAnc * 3);
-  for (let k = 0; k < nAnc * 3; k++) ancPts[k] = A[k] / q;
-  const skyOf = anchorSky(ancPts, r * fill.gain);
+  const pads0 = v.pads ? int16(v.pads) : null;
+  const fill0 = crownFill(v);
+  /**
+   * WHICH HALF THE MID RUNG DROPS. A recipe that fills each anchor with a
+   * CLUSTER (the growth-form conifers: two pads an anchor, pass 2 of the fill)
+   * keeps every anchor and drops the cluster's partner, so each surviving pad
+   * stands exactly where the full rung's does; a recipe with one pad an anchor
+   * pairs the anchors instead. Measured on the sheet at the handover: pairing
+   * the anchors of a sparse whorled crown read IoU 0.45-0.50 at matched
+   * coverage — thin pads a few pixels wide, half of them moved, overlap only
+   * where the crown is dense — where the partner drop keeps the survivors in
+   * place. Same triangle count either way (n anchors x one 4-triangle pad
+   * against n/2 x two).
+   */
+  const dropPartner = fill0.n > 1;
+  /** The fill a RUNG draws with — decided per build and not per call, because
+   *  the calibration below builds the full crown as its reference from inside
+   *  a mid decode, and a reference drawn with the partner already dropped
+   *  matched the mid crown to two thirds of the real one (the first cut did
+   *  exactly that, and the sheet read the conifers at cov 0.7-0.8). */
+  const fillFor = (rung: boolean): CrownFill => rung && dropPartner ? { n: 1, spread: 0, scale: 1, gain: fill0.gain } : fill0;
   // ── A PALM'S LEAFLET IS A BLADE ALONG ITS OWN RADIUS, NOT A BALL AT ITS
   //    ANCHOR ──
   //
@@ -393,12 +616,6 @@ function crownOf(v: GrowthVariant, q: number): THREE.BufferGeometry | null {
   // anchor's own offset from the shell's centre — the same quantity `crownEnv`
   // hands the shader to light the crown as one mass, used here to SHAPE it.
   const isPalm = EZ_PALM_BLADE && v.form === 'palm' && shape === 'cone';
-  /** The shell's centre, so an anchor's offset from it is its frond's bearing. */
-  let pcx = 0, pcy = 0, pcz = 0;
-  if (isPalm && nAnc) {
-    for (let k = 0; k < nAnc; k++) { pcx += ancPts[k * 3]; pcy += ancPts[k * 3 + 1]; pcz += ancPts[k * 3 + 2]; }
-    pcx /= nAnc; pcy /= nAnc; pcz /= nAnc;
-  }
   /** A FROND'S LENGTH IS NOT A CONSTANT — IT IS THE ANCHOR'S OWN OFFSET, and
    *  the first cut of this rule got that wrong and the sheet said so at once.
    *  Blades of a fixed 0.55 of the element radius, straddling their anchors,
@@ -416,75 +633,160 @@ function crownOf(v: GrowthVariant, q: number): THREE.BufferGeometry | null {
    *  parasol from a disc. */
   const PALM_FROND_W = 0.12, PALM_TIP_W = 0.35;
   const palmUp = new THREE.Vector3(0, 1, 0), palmDir = new THREE.Vector3(), palmQ = new THREE.Quaternion();
-  for (let i = 0; i + 3 <= A.length; i += 3) {
-    const ax = A[i] / q, ay = A[i + 1] / q, az = A[i + 2] / q;
-    for (let k = 0; k < fill.n; k++) {
-      // k = 0 IS THE ORIGINAL: no jitter, no rescale, so a variant at fill 1
-      // decodes exactly as it always did and the extras only ever add.
-      const extra = k > 0;
-      // THE GAIN IS ON EVERY PAD, the first one included — which is the whole
-      // of pass 2, and why `sc` is no longer 1 on the k = 0 path.
-      const sc = (extra ? fill.scale : 1) * fill.gain;
-      let g: THREE.BufferGeometry;
-      if (isPalm && Math.hypot(ax - pcx, ay - pcy, az - pcz) > 1e-6) {
-        // THE FROND SPANS THE CROWN'S HEART TO ITS OWN ANCHOR. Three sides and
-        // open: a frond is seen from one side and its far face is behind its
-        // near one, so a fourth costs a triangle each for nothing. Tapered
-        // rather than pointed, because a cone's tip is zero-width exactly where
-        // the fronds have separated from each other and there is nothing left
-        // to draw — 6 triangles a frond, 420 for the palm's seventy against the
-        // ball's 280, which is what the silhouette costs.
-        const len = Math.hypot(ax - pcx, ay - pcy, az - pcz);
-        const w = r * sc * PALM_FROND_W;
-        g = new THREE.CylinderGeometry(w * PALM_TIP_W, w, len, 3, 1, true);
-        // Built about its own middle: slide it so the TIP is at the origin and
-        // the butt at -len, and then the loop's own `translate(ax, ay, az)`
-        // below puts the tip on the anchor and the butt in the crown's heart.
-        g.translate(0, -len / 2, 0);
-        palmDir.set((ax - pcx) / len, (ay - pcy) / len, (az - pcz) / len);
-        palmQ.setFromUnitVectors(palmUp, palmDir);
-        g.applyQuaternion(palmQ);
-      } else if (shape === 'cone') {
-        // Open at its base: a frond seen from the road never shows its underside.
-        g = new THREE.ConeGeometry(r * sc, r * sc * 1.6, 4, 1, true);
-      } else {
-        // A pad: an octahedron pressed flat, the way a spruce's foliage lies —
-        // eight triangles, and at sixty centimetres no eye tells it from twenty.
-        g = shape === 'flat' ? new THREE.OctahedronGeometry(r * sc, 0) : new THREE.IcosahedronGeometry(r * sc, 0);
-        if (shape === 'flat') g.scale(1, 0.45, 1);
+  /**
+   * THE CROWN'S PARTS, at one rung and one growth. The full rung is `rung`
+   * false at growth 1 — byte for byte the crown this function has always
+   * built. The mid rung pairs the anchors two into one at their midpoint (the
+   * survivor carrying the first anchor's pad, so a whorl stays a whorl), keeps
+   * the fill's cluster partner (the lobed tuft is what stops a crown of half
+   * the clusters reading as beads), draws every primitive at its cheapest
+   * (three-sided cones, pressed tetrahedra, octahedra, two-triangle fronds)
+   * and grows each by `grow` — which is not a constant, see `calibrateGrow`.
+   */
+  const blobParts = (rung: boolean, grow: number): {
+    parts: THREE.BufferGeometry[]; partAnchor: number[]; partCentre: number[]; ancPts: Float32Array; nAnc: number;
+  } => {
+    const fill = fillFor(rung);
+    let A: ArrayLike<number> = A0, pads: ArrayLike<number> | null = pads0;
+    /** The full rung's index of each anchor — its own, or for the mid rung
+     *  the FIRST of its pair — so the fill's hashes draw the same partner in
+     *  the same place on both rungs and the mid crown is a subset of the
+     *  full one, grown, rather than a re-roll of it. */
+    let src: (i: number) => number = (i) => i;
+    if (rung && !dropPartner) {
+      const n0 = Math.floor(A0.length / 3);
+      const pairs = pairNearest(A0, n0);
+      const A1 = new Float32Array(pairs.length * 3);
+      const P1 = pads0 ? new Float32Array(pairs.length * 4) : null;
+      const S1 = new Int32Array(pairs.length);
+      for (let p = 0; p < pairs.length; p++) {
+        const [a] = pairs[p];
+        S1[p] = a;
+        for (let k = 0; k < 3; k++) A1[p * 3 + k] = A0[a * 3 + k];
+        if (P1 && pads0) for (let k = 0; k < 4; k++) P1[p * 4 + k] = pads0[a * 4 + k];
       }
-      if (pads) {
-        const p = i / 3 * 4;
-        g.scale(pads[p] / q / r, pads[p + 1] / q / (r * 0.45), pads[p + 2] / q / r);
-        g.rotateY(-pads[p + 3] / q * Math.PI * 2 + (extra ? fillHash(i, k + 31) * Math.PI : 0));
-      } else if (extra) {
-        g.rotateY(fillHash(i, k + 31) * Math.PI * 2);
-      }
-      if (extra) {
-        // OUTWARD AND AROUND, not up: a whorl lies in a plane, so the cluster
-        // spreads across it and barely at all in height. Scaled by the pad's
-        // own radius so a small-padded recipe stays small.
-        const a = fillHash(i, k) * Math.PI * 2;
-        // MEASURED IN GAINED RADII, not in the baked one: a pad three times the
-        // area needs its partner further off or the two are one blob again.
-        const rg = r * fill.gain;
-        const d = (0.55 + 0.45 * fillHash(i, k + 11)) * fill.spread * rg;
-        const cxp = ax + Math.cos(a) * d;
-        const cyp = ay + (fillHash(i, k + 19) - 0.5) * 0.5 * fill.spread * rg;
-        const czp = az + Math.sin(a) * d;
-        g.translate(cxp, cyp, czp);
-        partCentre.push(cxp, cyp, czp);
-      } else {
-        g.translate(ax, ay, az);
-        partCentre.push(ax, ay, az);
-      }
-      parts.push(g);
-      partAnchor.push(i / 3);
+      A = A1; pads = P1; src = (i) => S1[i];
     }
-  }
-  const crown = mergeGeos(parts);
-  return crownShade(crown, parts, partAnchor, partCentre, skyOf, nAnc,
-    shape === 'cone' ? 0.16 : 0.2);
+    const nAnc = Math.floor(A.length / 3);
+    const ancPts = new Float32Array(nAnc * 3);
+    for (let k = 0; k < nAnc * 3; k++) ancPts[k] = A[k] / q;
+    /** The shell's centre, so an anchor's offset from it is its frond's bearing. */
+    let pcx = 0, pcy = 0, pcz = 0;
+    if (isPalm && nAnc) {
+      for (let k = 0; k < nAnc; k++) { pcx += ancPts[k * 3]; pcy += ancPts[k * 3 + 1]; pcz += ancPts[k * 3 + 2]; }
+      pcx /= nAnc; pcy /= nAnc; pcz /= nAnc;
+    }
+    const parts: THREE.BufferGeometry[] = [];
+    /** Which anchor each part hangs on, and where its own centre landed — the
+     *  two things the tone and the occlusion need and the merge throws away. */
+    const partAnchor: number[] = [];
+    const partCentre: number[] = [];
+    for (let i = 0; i + 3 <= A.length; i += 3) {
+      const ax = A[i] / q, ay = A[i + 1] / q, az = A[i + 2] / q;
+      /** The hash index: the full rung's own byte offset for this anchor. */
+      const hi = src(i / 3) * 3;
+      for (let k = 0; k < fill.n; k++) {
+        // k = 0 IS THE ORIGINAL: no jitter, no rescale, so a variant at fill 1
+        // decodes exactly as it always did and the extras only ever add.
+        const extra = k > 0;
+        // THE GAIN IS ON EVERY PAD, the first one included — which is the whole
+        // of pass 2, and why `sc` is no longer 1 on the k = 0 path.
+        const sc = (extra ? fill.scale : 1) * fill.gain * grow;
+        let g: THREE.BufferGeometry;
+        if (isPalm && rung && Math.hypot(ax - pcx, ay - pcy, az - pcz) > 1e-6) {
+          // THE MID FROND IS ONE TAPERED QUAD — two triangles for the three-
+          // sided blade's six. At thirty pixels a frond is a stroke a pixel
+          // wide; what it needs is its length and its bearing, which are the
+          // anchor's.
+          const len = Math.hypot(ax - pcx, ay - pcy, az - pcz);
+          const w = r * sc * PALM_FROND_W, wt = w * PALM_TIP_W;
+          g = new THREE.BufferGeometry();
+          g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+            -w, -len, 0, w, -len, 0, wt, 0, 0, -wt, 0, 0]), 3));
+          g.setIndex(new THREE.BufferAttribute(new Uint16Array([0, 1, 2, 0, 2, 3]), 1));
+          palmDir.set((ax - pcx) / len, (ay - pcy) / len, (az - pcz) / len);
+          palmQ.setFromUnitVectors(palmUp, palmDir);
+          g.applyQuaternion(palmQ);
+        } else if (isPalm && Math.hypot(ax - pcx, ay - pcy, az - pcz) > 1e-6) {
+          // THE FROND SPANS THE CROWN'S HEART TO ITS OWN ANCHOR. Three sides and
+          // open: a frond is seen from one side and its far face is behind its
+          // near one, so a fourth costs a triangle each for nothing. Tapered
+          // rather than pointed, because a cone's tip is zero-width exactly where
+          // the fronds have separated from each other and there is nothing left
+          // to draw — 6 triangles a frond, 420 for the palm's seventy against the
+          // ball's 280, which is what the silhouette costs.
+          const len = Math.hypot(ax - pcx, ay - pcy, az - pcz);
+          const w = r * sc * PALM_FROND_W;
+          g = new THREE.CylinderGeometry(w * PALM_TIP_W, w, len, 3, 1, true);
+          // Built about its own middle: slide it so the TIP is at the origin and
+          // the butt at -len, and then the loop's own `translate(ax, ay, az)`
+          // below puts the tip on the anchor and the butt in the crown's heart.
+          g.translate(0, -len / 2, 0);
+          palmDir.set((ax - pcx) / len, (ay - pcy) / len, (az - pcz) / len);
+          palmQ.setFromUnitVectors(palmUp, palmDir);
+          g.applyQuaternion(palmQ);
+        } else if (shape === 'cone') {
+          // Open at its base: a frond seen from the road never shows its underside.
+          // The mid rung's cone has three sides for the four: a triangle in any
+          // projection, which at thirty pixels is all a cone ever was.
+          g = new THREE.ConeGeometry(r * sc, r * sc * 1.6, rung ? 3 : 4, 1, true);
+        } else if (rung) {
+          // THE CHEAPEST SOLID WITH A SILHOUETTE: a pad is a tetrahedron pressed
+          // flat (four triangles for the octahedron's eight), a blob an
+          // octahedron (eight for the icosahedron's twenty). Both are convex and
+          // close, so the merge's hull and the envelope normal read them exactly
+          // as they read the full crown's primitives.
+          g = shape === 'flat' ? new THREE.TetrahedronGeometry(r * sc, 0) : new THREE.OctahedronGeometry(r * sc, 0);
+          if (shape === 'flat') g.scale(1, 0.45, 1);
+        } else {
+          // A pad: an octahedron pressed flat, the way a spruce's foliage lies —
+          // eight triangles, and at sixty centimetres no eye tells it from twenty.
+          g = shape === 'flat' ? new THREE.OctahedronGeometry(r * sc, 0) : new THREE.IcosahedronGeometry(r * sc, 0);
+          if (shape === 'flat') g.scale(1, 0.45, 1);
+        }
+        if (pads) {
+          const p = i / 3 * 4;
+          g.scale(pads[p] / q / r, pads[p + 1] / q / (r * 0.45), pads[p + 2] / q / r);
+          g.rotateY(-pads[p + 3] / q * Math.PI * 2 + (extra ? fillHash(hi, k + 31) * Math.PI : 0));
+        } else if (extra) {
+          g.rotateY(fillHash(hi, k + 31) * Math.PI * 2);
+        }
+        if (extra) {
+          // OUTWARD AND AROUND, not up: a whorl lies in a plane, so the cluster
+          // spreads across it and barely at all in height. Scaled by the pad's
+          // own radius so a small-padded recipe stays small.
+          const a = fillHash(hi, k) * Math.PI * 2;
+          // MEASURED IN GAINED RADII, not in the baked one: a pad three times the
+          // area needs its partner further off or the two are one blob again.
+          const rg = r * fill.gain * grow;
+          const d = (0.55 + 0.45 * fillHash(hi, k + 11)) * fill.spread * rg;
+          const cxp = ax + Math.cos(a) * d;
+          const cyp = ay + (fillHash(hi, k + 19) - 0.5) * 0.5 * fill.spread * rg;
+          const czp = az + Math.sin(a) * d;
+          g.translate(cxp, cyp, czp);
+          partCentre.push(cxp, cyp, czp);
+        } else {
+          g.translate(ax, ay, az);
+          partCentre.push(ax, ay, az);
+        }
+        parts.push(g);
+        partAnchor.push(i / 3);
+      }
+    }
+    return { parts, partAnchor, partCentre, ancPts, nAnc };
+  };
+  const finish = (b: ReturnType<typeof blobParts>, grow: number): THREE.BufferGeometry => {
+    const skyOf = anchorSky(b.ancPts, r * fill0.gain * grow);
+    const crown = mergeGeos(b.parts);
+    crown.userData.midGrow = grow;
+    return crownShade(crown, b.parts, b.partAnchor, b.partCentre, skyOf, b.nAnc,
+      shape === 'cone' ? 0.16 : 0.2);
+  };
+  if (!mid) return finish(blobParts(false, 1), 1);
+  const soup = (b: ReturnType<typeof blobParts>): Float32Array =>
+    (mergeGeos(b.parts).getAttribute('position') as THREE.BufferAttribute).array as Float32Array;
+  const grow = calibrateGrow(soup(blobParts(false, 1)), (g) => soup(blobParts(true, g)));
+  return finish(blobParts(true, grow), grow);
 }
 
 /**
@@ -865,8 +1167,16 @@ export function ezVariants(family: EzFamily): EzVariant[] {
     const crown = crownOf(v, EZ_BAKE.q);
     const geometry = join(wood, crown);
     surfaceProfile(geometry, family, v);
+    // The mid rung, through the same join and the same surface profile, so
+    // the two geometries differ in their index and their crown's primitives
+    // and in nothing the material reads.
+    const midCrown = crownOf(v, EZ_BAKE.q, true);
+    const mid = join(woodOf(v, EZ_BAKE.q, true), midCrown);
+    surfaceProfile(mid, family, v);
     return { name: v.name, form: v.form, geometry,
       tris: (geometry.index as THREE.BufferAttribute).count / 3, crown: v.crown.shape,
+      mid, midTris: (mid.index as THREE.BufferAttribute).count / 3,
+      midGrow: +((midCrown?.userData.midGrow as number | undefined) ?? 1).toFixed(3),
       habit: v.habit, habitats: v.habitats, state: v.state, label: '' };
   });
   // Numbered WITHIN a form, so "columnar 2" is the second columnar tree of

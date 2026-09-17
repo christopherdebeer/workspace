@@ -80,7 +80,19 @@ const capacity=functionSource('ensureVegCapacity');
 // refresh and run over stubbed `onCarriageway`/`hydroWet`, so what is tested
 // is the rule and what is faked is only the world it asks about.
 const vetoSrc=functionSource('vegSurfaceVeto');
-function context(code,range,ez,triCap) {
+// ── THE RUNG RULE AND THE RUNG PRICE ARE THE PRODUCTION FUNCTIONS TOO ──
+// `ezRungOf` decides which mesh an admitted tree stands in from its projected
+// height; `ezTierTris` is the bill the allocator reads back. Both are read by
+// the refresh as free variables and both are extracted rather than stubbed, so
+// the leg below that asserts the rung fires is asserting the shipped rule.
+const rungSrc=functionSource('ezRungOf')+'\n'+functionSource('ezTierTris');
+// `fullPx` is the pixel line the rung is chosen at. ZERO ON EVERY LEG BUT ONE:
+// at zero every tree is on the full rung and the per-mesh byte identity against
+// the baseline — which predates the rung — is the original claim, exactly. The
+// mid leg sets it to the game's 58 and asserts a different, weaker thing (see
+// there). Wiring the game's default in here would make every leg fail for a
+// reason that is not a regression.
+function context(code,range,ez,triCap,fullPx=0) {
   const c={THREE,performance,console,Math,Map,Set,WeakMap,Float32Array,
     nearestStable,squareRings,uploadPrefix,renderer:{},
     vegPhase:{},vegPhaseAt:0,vegSeedNow:0,vegSeedMsNow:0,vegSeedDeferred:0,
@@ -97,7 +109,10 @@ function context(code,range,ez,triCap) {
     renderFocusXZ:()=>[c.state.x,c.state.z],
     ezRecord:record,EZ_FAMILIES:families,EZ_ON:ez,VEG_CAP:cap,vegScale:1,
     TREE_KINDS:families,treePopulationScale:1,treeFormScale:1,treeSizeScale:1,
-    ezTiers:record(()=>Array.from({length:3},()=>({near:mesh(),far:mesh(),tris:500,n:0,nNear:0,nFar:0}))),
+    ezTiers:record(()=>Array.from({length:3},()=>({near:mesh(),far:mesh(),tris:500,midNear:mesh(),midFar:mesh(),midTris:100,n:0,nNear:0,nFar:0,nMid:0,nMidNear:0,nMidFar:0}))),
+    // The design frame's pixels per metre at one metre (320 rows, a 55° lens),
+    // which is what the game's constant is; the sandbox has no camera to read.
+    IMP_PERCEPTIBLE_K:320/(2*Math.tan((55*Math.PI)/360)),EZ_FULL_PX:fullPx,
     vegMeshes:Object.fromEntries(kinds.map(k=>[k,mesh(cap[k])])),trunks:mesh(3600),
     vegDummy:new THREE.Object3D(),swardCol:new THREE.Color(),baseElev:90,shadowSpan:120,
     emptyVegRoles:()=>({interior:0,fringe:0}),vegActiveRoles:{},vegActiveAnchors:0,vegRoleDebug:false,
@@ -246,14 +261,18 @@ function context(code,range,ez,triCap) {
     c.vegGrid.set(`${gx},${gz}`,cell);
   }
   vm.createContext(c);
-  vm.runInContext(esbuild.transformSync(capacity+'\n'+vetoSrc+'\n'+code,{loader:'ts'}).code,c);
+  vm.runInContext(esbuild.transformSync(capacity+'\n'+vetoSrc+'\n'+rungSrc+'\n'+code,{loader:'ts'}).code,c);
   return c;
 }
-function snapshot(c) {
+// `placed` carries a `rung` field since the mid rung and the baseline's records
+// do not; it is the one key stripped, because the leg that reads it asserts
+// the rung separately and every other leg runs with the rung off.
+const stripRung=list=>list.map(({rung,...r})=>r);
+function snapshot(c,withEz=true) {
   const snap=m=>({n:m.count,m:Array.from(m.instanceMatrix.array.subarray(0,m.count*16)),c:m.instanceColor?Array.from(m.instanceColor.array.subarray(0,m.count*3)):[]});
   return JSON.stringify({meshes:Object.fromEntries(kinds.filter(k=>k!=='grass').map(k=>[k,snap(c.vegMeshes[k])])),
-    trunks:snap(c.trunks),ez:record(f=>c.ezTiers[f].map(t=>[snap(t.near),snap(t.far),t.n])),
-    placed:c.ezPlaced,edges:c.ezEdgeLast,roles:c.vegActiveRoles,anchors:c.vegActiveAnchors});
+    trunks:snap(c.trunks),ez:withEz?record(f=>c.ezTiers[f].map(t=>[snap(t.near),snap(t.far),t.n])):null,
+    placed:stripRung(c.ezPlaced),edges:c.ezEdgeLast,roles:c.vegActiveRoles,anchors:c.vegActiveAnchors});
 }
 function uploads(c) {
   const meshes=[...Object.entries(c.vegMeshes).filter(([k])=>k!=='grass').map(([,m])=>m),c.trunks,
@@ -268,6 +287,44 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
     assert.equal(snapshot(b),snapshot(a),`refill changed at ${range}/${ez}/${k}/${x}/${roads}`);
   }
   reports.push({range,ez,cap:k,roadChecksBefore:a.roadCalls,roadChecksAfter:b.roadCalls,before:uploads(a),after:uploads(b)});
+}
+// ── THE MID RUNG MOVES TREES BETWEEN MESHES AND CHANGES NOTHING ELSE ──
+// With the pixel line at the game's 58, an admitted tree lands in its variant's
+// full pair or its mid pair by projected height — so the per-mesh byte identity
+// above cannot hold and is not claimed. What is claimed is the MULTISET: every
+// instance row (matrix and colour) the baseline wrote into a variant's near
+// mesh is in the tree's near OR midNear mesh, and nothing else is; the same
+// for far; every count agrees; the rung fired both ways; and the rest of the
+// snapshot — the archetypes, the trunks, the placed records less their rung,
+// the edges, the roles — is byte-identical. Negative control, RUN: `FULL_PX`
+// at 1e9 fails on `full > 0` (every tree goes to the mid pair, and the
+// multiset checks then pass by construction, since a row that moved WITH its
+// neighbours is still in the union). What the multiset checks catch is a tree
+// lost, duplicated or re-placed between the rungs — a slot counter that did
+// not advance, a matrix written into the wrong pair — and a dropped `tn.nMid++`
+// fails the count line beneath them.
+{
+  const FULL_PX=58;
+  const a=context(oldRefresh,2800,true,1200),b=context(newRefresh,2800,true,1200,FULL_PX);
+  const rows=m=>{const out=[];for(let i=0;i<m.count;i++)out.push(JSON.stringify([
+    Array.from(m.instanceMatrix.array.subarray(i*16,i*16+16)),Array.from(m.instanceColor.array.subarray(i*3,i*3+3))]));return out.sort();};
+  let mid=0,full=0;
+  for(const [x,z,roads,scale] of [[15,-31,false,1],[250,30,true,2]]) {
+    for(const c of [a,b]){c.state={x,z};c.roads=roads;c.treeSizeScale=scale;c.roadCalls=0;c.refreshVeg();}
+    assert.equal(snapshot(b,false),snapshot(a,false),`the rest of the refill changed under the mid rung at ${x}/${roads}`);
+    for(const f of families) a.ezTiers[f].forEach((ta,i)=>{
+      const tb=b.ezTiers[f][i];
+      assert.deepEqual([...rows(tb.near),...rows(tb.midNear)].sort(),rows(ta.near),`the near set differs at ${f}/${i} (${x}/${roads})`);
+      assert.deepEqual([...rows(tb.far),...rows(tb.midFar)].sort(),rows(ta.far),`the far set differs at ${f}/${i} (${x}/${roads})`);
+      assert.equal(tb.n,ta.n,`the count differs at ${f}/${i}`);
+      assert.equal(tb.nMid,tb.midNear.count+tb.midFar.count,`nMid disagrees with the mid meshes at ${f}/${i}`);
+      assert.equal(tb.n-tb.nMid,tb.near.count+tb.far.count,`the full count disagrees with the full meshes at ${f}/${i}`);
+      mid+=tb.nMid; full+=tb.n-tb.nMid;
+    });
+  }
+  assert.ok(mid>0,'the mid rung never fired at 58 px');
+  assert.ok(full>0,'no tree was near enough for the full rung at 58 px');
+  reports.push({leg:'mid-rung',fullPx:FULL_PX,mid,full});
 }
 // ── THE CARD HORIZON, ASSERTED ON THE REAL REFRESH ──
 //

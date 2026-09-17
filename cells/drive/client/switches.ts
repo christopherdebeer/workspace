@@ -155,6 +155,8 @@ export const SWITCHES = [
     note: 'tree draw range, unsaved and exact' },
   { id: 'treepop', kind: 'number', marks: ['bench'], fallback: '1×',
     note: 'tree population multiplier, unsaved and exact' },
+  { id: 'ezfullpx', kind: 'number', marks: ['bench'], fallback: '58 px',
+    note: 'the projected height in art pixels above which an admitted tree wears its full skeleton rather than the cheaper mid rung; 0 puts every tree on the full rung, the exact A/B' },
   { id: 'refr', kind: 'number', marks: ['bench'], fallback: '1100 m',
     note: 'how far from the truck the terrain takes its road corridor' },
 

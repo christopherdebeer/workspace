@@ -323,7 +323,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
 | `node devtools/render-focus.test.mjs` | where the RENDERER is looking, and whether anything reads it — the authority's three cameras and the drone's own lead geometry driven for real, then each consumer and the sward's fast/slow ORDER as a source check; two controls in its header | instant |
 | `node devtools/imp-atlas.test.mjs` | the impostor atlas holds EVERY variant that exists (40 slots against 37 keys) and the bake's packing agrees with the shader's, tile for tile over all 1,000 — pure node, instant, and the gate that fails when a new EZ form takes the total past the ceiling | instant |
-| `node devtools/imp-sheet.mjs` | every variant's SKELETON beside its own baked IMPOSTOR card, one camera, one quantiser, one metric block, at the art-pixel size the game draws that tree at — with the silhouette IoU between the halves, which is the only column that compares them. `DIST=`, `ELEV=`, `AZ=` (0 is exactly on a baked tile, 22.5 the worst case between two), `INK=1`. Drawing is ON by design: a `nodraw` run never compiles the card's shader at all | ~2min |
+| `node devtools/imp-sheet.mjs` | every variant's SKELETON beside its own baked IMPOSTOR card, one camera, one quantiser, one metric block, at the art-pixel size the game draws that tree at — with the silhouette IoU between the halves, which is the only column that compares them. `DIST=`, `ELEV=`, `AZ=` (0 is exactly on a baked tile, 22.5 the worst case between two), `INK=1`; **`MID=1` puts the MID RUNG in the right cell instead of the card**, same camera and metric block, so the full↔mid handover is certified by the same IoU column | ~2min |
 | `node devtools/imp-demand.mjs` | what the impostor atlas was ASKED for beside what it holds: the ceiling computed offline from the bake (pure, instant, no browser), then the live census by key — refused keys with their tree counts, baked slots with theirs, and how many of the eighteen are serving nobody. `KM=0 FIX=` measures one arrived world; `SPOT=` with a leg drives across districts and needs a device or a warm relay to mean anything | ~2min |
 | `node devtools/imp-census.mjs` | **why a manifested tree has no representation at all** — the gather's EXITS by name, with the ones large enough to be seen counted apart (`h · 307 / d > 1` art pixel). Sweeps the DENSITY dial and FAILS on any perceptible NONE, and on a density exit with an empty far ring: an invariant is only demonstrated by trying to break it. `FIX=`, `DENS=0,2,5`, `DIALS='imprch=2'` | ~2min |
 | `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
@@ -15431,3 +15431,187 @@ cannot be bought off, because the same session reads **15.1 fps, 83.6% of frames
 slow, 8.5M triangles and 352-501 draw calls**, with trees 2.2M of the total.
 Whatever makes a tree solid nearer than 163 m has to come out of that, not out
 of the impostor.
+
+
+## The ladder has a middle rung: the same tree at a fifth of its triangles, chosen by art pixels
+
+The seat's direction after the device dump: *step back and think deeply about
+how to solve this properly, not just another patch.* The fault the dumps and
+the sheets had circled is structural — the representation ladder had TWO rungs
+a hundred to one apart, a 4-triangle card honest below about 30 art pixels and
+a 450-to-1,134-triangle skeleton, and under a triangle budget the step between
+them landed wherever the triangles ran out: broadleaf skeletons stopping at
+163 m of a 1,400 m ring, drawn at 16 px, with conifer alone spending 1.14M of
+2.2M. Nothing in the card can be tuned to cover for a tree at forty pixels, and
+nothing in the budget can make a skeleton cheaper. What was missing was the
+representation for thirty to sixty pixels, where a trunk is one to three
+pixels wide and a branch is under one.
+
+**IT IS DERIVED FROM THE SAME BAKE, NOT RE-GENERATED, and that is the whole
+design.** EZ-Tree consumes its random draws per section, so a recipe re-run at
+lower detail is a DIFFERENT tree, and a tree that changes shape as you drive at
+it is the fault the seat rejected once already. So:
+
+- **the wood is the same vertices under a second index** — `FLORA_REFINED.woodMid`,
+  meshoptimizer over the welded bake at a 20% target and an error bound of
+  0.008 of the tree's height (`devtools/refine-flora.mjs`). The EZ variants
+  land at 17-20% before the bound binds; the procedural growth forms' five-
+  sided tubes refuse to go under 58% at 0.004 and reach 14-18% at 0.008. Eight
+  centimetres on a 23 cm trunk, at a range where the trunk is two pixels wide.
+- **the crown is halved, and the survivors GROW to keep the silhouette.** A
+  card crown pairs its cards by nearest neighbour and keeps the first of each
+  pair, in place, grown about its own centre; a whorled crown with a cluster
+  partner (the eight growth-form conifers) keeps every anchor and drops the
+  partner pad; a one-pad-an-anchor crown pairs the anchors. Every primitive is
+  its cheapest: three-sided cones, pressed tetrahedra for the pads, octahedra
+  for the blobs, a two-triangle tapered quad for a palm frond.
+- **and it goes through the same `join`, the same surface profile and the same
+  material**, so `aSky`, `aEnv`, `aPad`, `aHull` and `aEzSurf` ride on it,
+  the merge closes it onto the same hull, and the two rungs differ in their
+  index and their crown's primitives and in nothing the shader reads.
+
+**THE RUNG IS A FUNCTION OF PROJECTED HEIGHT AND OF NOTHING ELSE.** `ezRungOf`
+reads `K · height / distance` — the same art-pixel ruler the impostor census
+and the card floor are stated in — and puts a tree on the full skeleton at or
+above `EZ_FULL_PX` (58, `?ezfullpx=`) and on the mid rung below it. Fifty-eight
+is `EZ_MERGE_PX[1]`: above it the crown merge leaves a skeleton untouched, so
+the mid rung is judged against the full one exactly where the merge is not
+already closing both onto one hull. `?ezfullpx=0` is every admitted tree on the
+full rung, the exact A/B. Each tier carries a mid pair beside its full pair
+(`veg-ez-mid`, `veg-ez-mid-far`, the same shadow split), admission grows all
+four to the counts they will take, the place loop writes each tree into its
+rung's mesh, and **the price the allocator is charged is per rung**
+(`ezTierTris`) — which is what lets the rung push the edge out through the
+existing allocator rather than a new one. No hysteresis: a tree crossing the
+line changes rung at the next refresh, and the certification below is what
+says that is a change of triangle count and not of look.
+
+### The growth was solved, because root two was wrong both ways
+
+The first cut grew every survivor by √2 — a pair's area, on paper — and the
+contact sheet at the handover read the whorled conifers at **0.56-0.63 of their
+full coverage** (IoU 0.45-0.53) and the card crowns at **1.22-1.33** (IoU
+0.72-0.80). The first because the dropped partner pads and the gaps between
+survivors are not one pad's area; the second because cards overlap, so a pair's
+silhouette is far less than the sum of its cards'. A crown that fattens or
+thins by a quarter as it crosses the pixel line is the growing tree, wearing a
+new name.
+
+So `calibrateGrow` rasterises the full crown and the mid crown in two side
+projections on a 56² grid and bisects the growth until the mid crown covers
+what the full one covers. Per variant, at decode, stored on the geometry
+(`EzVariant.midGrow`, on `__ezgeo` and the sheet's rows). Three more things it
+took to get there, each caught by the sheet and not by reasoning:
+
+- **Survivors stay where they were.** Moving a survivor to its pair's midpoint
+  reads as the more even choice and measured as a wash (mean IoU 0.749 against
+  0.745): with every card displaced the two rungs overlap only where the crown
+  is dense. In place, half the crown coincides with the full rung's exactly.
+- **A whorled crown drops the partner, not the anchor.** Pairing the anchors of
+  a sparse conifer — thin pads a few pixels wide, half of them moved — read
+  IoU 0.45-0.50 at matched coverage; keeping every anchor and dropping the
+  cluster's partner pad reads 0.60-0.68 at the same triangle count
+  (n anchors × one 4-triangle pad against n/2 × two).
+- **AND THE CALIBRATOR'S REFERENCE WAS BUILT WITH THE PARTNER ALREADY
+  DROPPED.** `fill` was chosen per call rather than per rung, so from inside a
+  mid decode the "full" crown the bisection matched against had no partner pads
+  either: the conifers came out at cov 0.68-0.79 with the calibrator reporting
+  a match. A reference drawn by the rule under test is the fabricated witness
+  this file keeps recording, met inside an instrument built to catch it. The
+  fill is `fillFor(rung)` now, and the conifers' solved growth went 1.18-1.26
+  → 1.44-1.63.
+
+### Measured: the atlas, the sheet, the world
+
+**The decode** (a pure-node script over the bundled module, the whole atlas):
+
+| form | n | full tris | mid tris | ratio | solved growth |
+|---|---|---|---|---|---|
+| round | 12 | 573 | 191 | 0.31 | 1.06-1.39 |
+| columnar | 2 | 1,068 | 500 | 0.47 | 1.09-1.12 |
+| umbrella | 5 | 580 | 188 | 0.33 | 1.08-1.28 |
+| conic | 12 | 962 | 231 | 0.23 | 1.29-1.63 |
+| palm | 2 | 590 | 134 | 0.23 | 1.58-2.02 |
+| bare | 4 | 189 | 63 | 0.34 | 1 |
+| **atlas** | 37 | **25,386** | **7,518** | **0.30** | |
+
+The columnar broadleaf is the dearest mid at 0.47 — its 1,068 triangles are
+three times the cards of a round oak's (the stack-of-plates fix), and half of
+many cards is still many cards.
+
+**The sheet** (`MID=1 node devtools/imp-sheet.mjs`, `at-yosemite`, elev 8°, az
+0, each form read at the distance where it crosses the pixel line — round and
+columnar at 80 m (58 px), conic at 100 m (59-63 px for the frond recipe,
+49-63 for the growth forms), umbrella and bare at 50 m (57-59 px), palm at 80 m
+(55 px)):
+
+| form | IoU | cov | h | w | dlum |
+|---|---|---|---|---|---|
+| round, the six EZ oaks and aspens | **0.80-0.94** | 0.99-1.05 | 0.98-1.04 | 0.98-1.04 | −6..+6 |
+| columnar | **0.91** | 1.01 | 1.00 | 1.01 | 1 |
+| umbrella (acacia and mangrove) | **0.81-0.83** | 0.98-1.01 | 1.01-1.03 | 1.04-1.08 | −1 |
+| palm | **0.89** | 1.05 | 1.00 | 1.00 | 7 |
+| bare | **0.85-0.91** | 0.87-0.94 | 0.86-0.89 | 0.58-0.73 | 0 |
+| conic 1-4, the frond recipe | **0.77-0.85** | 0.95-1.03 | 0.98-1.00 | 0.96-1.00 | −3..+1 |
+| **conic 5-12, the growth forms** | **0.57-0.68** | 0.89-1.05 | 0.98-1.00 | 0.78-1.07 | −1..+8 |
+
+Mean IoU over all 37 is 0.78-0.79 at every distance from 50 to 100 m, against
+0.73 for the √2 cut. **Read the last row as the open item.** Coverage, height
+and luminance agree, and the mass reads the same on the sheet; what differs is
+WHERE half the pads sit, which for a sparse whorled crown at sixty pixels is a
+reshuffle of three-pixel pads at the swap. Keeping every pad of those eight
+variants at four triangles would take their mid from 135-189 triangles to
+about 255-360 (0.35 of full instead of 0.19) and is the honest next cut if the
+seat sees it; moving their line lower, into the band where the merge has begun
+closing both crowns onto one hull, is the other. `bare`'s low `w` is the
+sheet's own note about snags at sixty pixels (two or three isolated pixels),
+not the rung's.
+
+**The world** (`at-yosemite`, chase, `nodraw`, two boots with `?ezfullpx=` the
+only difference, settled on the placed count; the harness seeds its rack at a
+0.3M EZ TRI CAP, so the budget is small and the RATIOS are the reading):
+
+| same 0.3M budget | `?ezfullpx=0` | 58 px |
+|---|---|---|
+| placed b / c / s | 153 / 136 / 44 | **384 / 342 / 110** |
+| on the mid rung | 0 | 376 / 308 / 110 |
+| edge b / c / s | 311 / 190 / 206 m | **533 / 260 / 279 m** |
+| price b / c / s | 1,068 / 834 / 191 | **512 / 239 / 60** |
+| triangles drawn | 0.29M | **0.28M** |
+| cap | 7% | 18% |
+
+Two and a half times the trees at the same triangle bill, and the admitted edge
+71% further out for broadleaf, 37% for conifer, 35% for snag. The first live run
+also caught the price clamp binding: conifer read exactly 428 = 0.25 × 1,713
+and snag exactly 83 = 0.25 × 333, both families charged about twice what the
+GPU was handed. The floor is a tenth of the mean now — the mid rung honestly
+costs a fifth — and the second run reads 239 and 60, off the clamp.
+
+**And the sandbox** (`client/perf-check.mjs`): every original leg runs with
+the line at zero, where the per-mesh byte identity against the pre-rung
+baseline is the original claim exactly; a new leg at 58 px asserts the MULTISET
+— every instance row the baseline wrote into a variant's near mesh is in the
+tree's near or mid-near mesh and nothing else is, the same for far, every
+count agrees, the rung fired both ways (10,868 mid, 41 full on the fixture),
+and the rest of the snapshot is byte-identical. Negative control run: the line
+at 1e9 fails on `full > 0`, and the comment beside it says why the multiset
+checks pass there by construction.
+
+### What it costs, and what is not verified
+
+- **Decode is about twice what it was.** The calibration is 360-570 ms over
+  thirty-three crowns in node (noisy under load), on top of the mid decode
+  itself; the whole atlas is now about a second in node, paid at boot before
+  the first frame, and a phone is slower. `__ez().decode` reports it. The cut,
+  when it is wanted, is to bake the solved growth into the refined file.
+- **The refined bake was regenerated**, and four fine-wood indices moved by a
+  triangle or two (`Pine Small #44`, `#17`, `Aspen Small #71`, `Oak Small
+  #37`): the checked-in file predated the current bake, and two runs of the
+  script now agree byte for byte. The growth forms' section is unchanged.
+- **Nothing here has been seen on a device.** The handover from the seat, the
+  frame rate with 2.5× the trees standing, and the boot-time decode on a phone
+  are the next dump's to answer; the row to read is `trees ez … mid b…/c…/s…
+  at 58px` beside `edge`, and `tree phases` for the refresh.
+- The sheet compares the RAW crowns, above the merge band; below the line both
+  rungs close onto the same hull, so the swap at the line is the worst case
+  and the certification is taken there on purpose.

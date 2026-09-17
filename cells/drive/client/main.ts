@@ -92,7 +92,7 @@ import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture,
 import { startLab } from './labs';
 import { IMPOSTOR_FORMS, IMPOSTOR_WIDTH, impostorFormIndex, impostorGeometry, impostorMaterial } from './tree-impostor';
 import { IMP_ATLAS, IMP_ATLAS_SLOTS, bakeImpAtlasSlot, clearImpAtlas, makeImpAtlasTarget, viewOrigin, type ImpAtlasSlot } from './tree-atlas';
-import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezHabitatsForSite, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPhenotypeForSite, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
+import { EZ_FAMILIES, EZ_MERGE_PX, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezDecodeProf, ezHabitatsForSite, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPhenotypeForSite, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
@@ -11968,18 +11968,30 @@ const isEzKind = (k: VegKind): k is EzFamily => (EZ_FAMILIES as string[]).includ
  *
  *  THE CLAMP IS THE INSURANCE AND NOT THE RULE. A place may honestly grow a
  *  family's dearest silhouette, so the price must be free to exceed the mean;
- *  what it may not do is run away on a sample taken mid-sweep. A quarter to
+ *  what it may not do is run away on a sample taken mid-sweep. A tenth to
  *  four times the mean bounds one refresh's overshoot and admits the 3.15x
  *  measured above with room either side. A family with too few trees standing
- *  to average has no price and keeps the mean. */
+ *  to average has no price and keeps the mean.
+ *
+ *  THE FLOOR WAS A QUARTER AND THE MID RUNG WALKED INTO IT. The mean is the
+ *  atlas's FULL skeleton, and a family whose ring is mostly mid trees (a fifth
+ *  of the wood, half the crown) honestly costs a fifth of that: measured on the
+ *  first live run of the rung, conifer read a price of exactly 428 = 0.25 x
+ *  1713 and snag exactly 83 = 0.25 x 333 — both clamps binding, both families
+ *  charged about twice what the GPU was handed, both under-admitted for it.
+ *  A tenth is under the cheapest rung's honest share and still a bound. */
 const EZ_PRICE = qsOn('treeprice', true);
 const ezPriceNow: Record<EzFamily, number> = ezRecord(() => 0);
 /** Below this many placed, the realised mean is a sample of nothing. */
 const EZ_PRICE_MIN = 8;
+/** What a tier's standing trees cost the GPU this sweep, rung by rung. */
+function ezTierTris(t: EzTier): number {
+  return (t.n - t.nMid) * t.tris + t.nMid * t.midTris;
+}
 function ezTriPrice(fam: EzFamily): number {
   const mean = ezMeanTris(fam);
   const p = EZ_PRICE ? ezPriceNow[fam] : 0;   // ?treeprice=0 — the atlas mean
-  return p > 0 ? clamp(p, mean * 0.25, mean * 4) : mean;
+  return p > 0 ? clamp(p, mean * 0.1, mean * 4) : mean;
 }
 /**
  * WHAT IS KNOWN, against what is drawn. Walked on demand and never from the
@@ -12078,7 +12090,19 @@ function ezVariantAt(fam: EzFamily, x: number, z: number): number {
  *  1.6x, so this only has to be small enough not to waste and large enough
  *  that a sparse family never reallocates at all. */
 const EZ_TIER_SEED = 64;
-interface EzTier { near: THREE.InstancedMesh; far: THREE.InstancedMesh; tris: number; n: number; nNear: number; nFar: number }
+/**
+ * A tier is one variant's INSTANCE MESHES: the full skeleton in a shadow-
+ * casting mesh and its non-casting twin (`near`/`far`, split at `shadowSpan`),
+ * and since the mid rung the same pair over the variant's MID geometry. `n`
+ * counts every tree standing on the variant whatever rung it wears; `nMid` the
+ * share of it on the mid meshes, so the price the allocator reads is
+ * `(n - nMid) * tris + nMid * midTris` and not one triangle count for both.
+ */
+interface EzTier {
+  near: THREE.InstancedMesh; far: THREE.InstancedMesh; tris: number;
+  midNear: THREE.InstancedMesh; midFar: THREE.InstancedMesh; midTris: number;
+  n: number; nNear: number; nFar: number; nMid: number; nMidNear: number; nMidFar: number;
+}
 const ezTiers: Record<EzFamily, EzTier[]> = ezRecord(() => [] as EzTier[]);
 const ezMat = ezMaterial(0x4a3826, { bend: treeBendU, wind: windU, sun: { value: LIGHT_DIR } });
 // ── THE SURFACE, WITH ITS OWN EXACT A/B ──
@@ -12133,7 +12157,15 @@ if (EZ_ON) {
       const far = vegMesh(v.geometry, ezMat, EZ_TIER_SEED);
       far.name = 'veg-ez-far';
       shadowy(far, false, false);
-      ezTiers[fam].push({ near, far, tris: v.tris, n: 0, nNear: 0, nFar: 0 });
+      // The mid rung's pair, same material, same seed, same shadow split —
+      // named apart so `__census` can bill the rungs separately.
+      const midNear = vegMesh(v.mid, ezMat, EZ_TIER_SEED);
+      midNear.name = 'veg-ez-mid';
+      const midFar = vegMesh(v.mid, ezMat, EZ_TIER_SEED);
+      midFar.name = 'veg-ez-mid-far';
+      shadowy(midFar, false, false);
+      ezTiers[fam].push({ near, far, tris: v.tris, midNear, midFar, midTris: v.midTris,
+        n: 0, nNear: 0, nFar: 0, nMid: 0, nMidNear: 0, nMidFar: 0 });
     }
   }
 }
@@ -12209,6 +12241,46 @@ const impThinnable = (v: PlacedVegSite): boolean =>
  * taken on one device cannot be compared with a census taken on another.
  */
 const IMP_PERCEPTIBLE_K = 320 / (2 * Math.tan((55 * Math.PI) / 360));
+/**
+ * ── WHICH RUNG A TREE WEARS, BY ITS SIZE ON THE GLASS ──
+ *
+ * The ladder was two rungs a hundred to one apart — a 4-triangle card and a
+ * 450-to-1,134-triangle skeleton — and the budget put the step between them
+ * wherever the triangles ran out: a device dump read broadleaf skeletons
+ * stopping at 163 m of a 1,400 m ring, with the card honest below about 30
+ * art pixels and the tree at that edge drawn at 16. What sits between is the
+ * MID rung (`EzVariant.mid`): the same skeleton at a fifth of the wood and
+ * half the crown's clusters, for a tree between the card's ceiling and the
+ * merge band's top.
+ *
+ * The rung is a function of the tree's PROJECTED HEIGHT in art pixels — the
+ * same `K * height / distance` the impostor census and the card floor are
+ * stated in — and of nothing else: not the family, not the budget, not the
+ * order the ring was walked in. Full above `EZ_FULL_PX`, mid below it. Above
+ * `EZ_MERGE_PX[1]` (58) the crown merge leaves a skeleton untouched, so that
+ * is the natural top of the band: a tree the full rung draws is a tree whose
+ * crown is open, and the mid rung's paired clusters are judged against the
+ * full rung's inside the band the merge is already closing. `?ezfullpx=0`
+ * puts every admitted tree on the full rung, which is the exact A/B.
+ *
+ * It rides the existing allocator on purpose: admission still keeps the
+ * nearest N under the triangle budget, and what changes is the PRICE the
+ * next sweep is charged per placed tree (`ezTriPrice` reads the realised
+ * bill), which falls as the mid rung takes the far half of the ring and
+ * pushes the admitted edge out. A tree crossing the pixel line changes rung
+ * at the next refresh, with no hysteresis: the two rungs are certified to
+ * agree in silhouette at that line (the contact sheet's MID column), so the
+ * flip is a change of triangle count and not of look.
+ */
+const EZ_FULL_PX = qsNum('ezfullpx', EZ_MERGE_PX[1]);
+function ezRungOf(fam: EzFamily, v: { s: number; sy?: number }, d2: number): 'full' | 'mid' {
+  if (EZ_FULL_PX <= 0) return 'full';
+  const formSy = clamp(1 + ((v.sy ?? 1) - 1) * treeFormScale, 0.18, 4.5);
+  const tall = EZ_M_PER_SCALE[fam] * v.s * formSy * treeSizeScale;
+  // `K * h >= px * d`, squared nowhere: one sqrt per admitted tree, which is
+  // thousands a sweep and not the half-million the gather reads.
+  return IMP_PERCEPTIBLE_K * tall >= EZ_FULL_PX * Math.sqrt(d2) ? 'full' : 'mid';
+}
 /**
  * ── HOW FAR THE CHEAP REPRESENTATION STANDS, AND HOW THICKLY ──
  *
@@ -15318,14 +15390,19 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   const ring = squareRings(cx, cz, reach);
   const ezCounts: Record<EzFamily, number> = ezRecord(() => 0);
   const ezVariant = new WeakMap<PlacedVegSite, number>();
+  /** The rung admission chose for each tree, read back at place time so the
+   *  two halves of the sweep cannot disagree about which mesh it stands in. */
+  const ezRung = new WeakMap<PlacedVegSite, 'full' | 'mid'>();
   const ezNeed: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
   const ezNeedNear: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
+  const ezNeedMid: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
+  const ezNeedMidNear: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
   // The tiers' counts are the job's until the commit: a probe reading them
   // between two slices would see a refresh half done (the harness read
   // __ez().tris as 0 for exactly that reason), and the slot a tree takes is
   // the job's own counter, not the tier's live one.
-  const tierN = new Map<EzTier, { n: number; nNear: number; nFar: number }>();
-  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) tierN.set(t, { n: 0, nNear: 0, nFar: 0 });
+  const tierN = new Map<EzTier, { n: number; nNear: number; nFar: number; nMid: number; nMidNear: number; nMidFar: number }>();
+  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) tierN.set(t, { n: 0, nNear: 0, nFar: 0, nMid: 0, nMidNear: 0, nMidFar: 0 });
   const placed: Array<Record<string, number | string>> = [];
   vegMark('ring');
   // ── THE TREES ARE ADMITTED BY DISTANCE, NOT BY CELL ──
@@ -15659,8 +15736,18 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         impSeen(v, d2, -1);
         const vi = ezVariantAt(fam, v.x, v.z);
         ezVariant.set(v, vi);
-        ezNeed[fam][vi] = (ezNeed[fam][vi] ?? 0) + 1;
-        if (d2 < shadowSpan * shadowSpan) ezNeedNear[fam][vi]++;
+        // The rung is decided HERE, on the same distance admission ranked by,
+        // so the capacity the meshes are grown to is the count each will take.
+        const rung = ezRungOf(fam, v, d2);
+        ezRung.set(v, rung);
+        const nearBy = d2 < shadowSpan * shadowSpan;
+        if (rung === 'mid') {
+          ezNeedMid[fam][vi] = (ezNeedMid[fam][vi] ?? 0) + 1;
+          if (nearBy) ezNeedMidNear[fam][vi]++;
+        } else {
+          ezNeed[fam][vi] = (ezNeed[fam][vi] ?? 0) + 1;
+          if (nearBy) ezNeedNear[fam][vi]++;
+        }
       }
       ezTiers[fam].forEach((t, vi) => {
         const need = ezNeed[fam][vi] ?? 0;
@@ -15669,6 +15756,10 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         const nearNeed = ezNeedNear[fam][vi] ?? 0;
         ensureVegCapacity(t.near, nearNeed);
         ensureVegCapacity(t.far, need - nearNeed);
+        const needMid = ezNeedMid[fam][vi] ?? 0;
+        const nearMid = ezNeedMidNear[fam][vi] ?? 0;
+        ensureVegCapacity(t.midNear, nearMid);
+        ensureVegCapacity(t.midFar, needMid - nearMid);
       });
     }
   }
@@ -15751,9 +15842,11 @@ function* vegRefreshSteps(): Generator<void, void, void> {
           vegDummy.scale.set(H * formSw, H, H * formSw);
           vegDummy.updateMatrix();
           const casts = d2v < shadowSpan * shadowSpan;
-          const mesh = casts ? tier.near : tier.far;
+          const rung = ezRung.get(v) ?? 'full';
+          const mesh = rung === 'mid' ? (casts ? tier.midNear : tier.midFar) : (casts ? tier.near : tier.far);
           const tn = tierN.get(tier)!;
-          const slot = casts ? tn.nNear++ : tn.nFar++;
+          const slot = rung === 'mid' ? (casts ? tn.nMidNear++ : tn.nMidFar++) : (casts ? tn.nNear++ : tn.nFar++);
+          if (rung === 'mid') tn.nMid++;
           vegDummy.matrix.toArray(stg(mesh).m, slot * 16);
           // Distance over the ADMITTED edge, not the plant range: the budget's
           // edge is where a tree vanishes, so that is where it must fade.
@@ -15769,7 +15862,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
           } else v.c.toArray(stg(mesh).c, slot * 3);
           tn.n++;
           ezCounts[fam]++;
-          if (placed.length < 600) placed.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +formSy.toFixed(2), sw: +formSw.toFixed(2), variant: vi, H: +H.toFixed(2), casts: casts ? 1 : 0 });
+          if (placed.length < 600) placed.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +formSy.toFixed(2), sw: +formSw.toFixed(2), variant: vi, H: +H.toFixed(2), casts: casts ? 1 : 0, rung: rung === 'mid' ? 1 : 0 });
           activeRoles[v.role]++;
           if (v.anchor) activeAnchors++;
           continue;
@@ -16264,7 +16357,9 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) {
     const tn = tierN.get(t)!;
     t.n = tn.n; t.nNear = tn.nNear; t.nFar = tn.nFar;
+    t.nMid = tn.nMid; t.nMidNear = tn.nMidNear; t.nMidFar = tn.nMidFar;
     commit(t.near, t.nNear, true); commit(t.far, t.nFar, true);
+    commit(t.midNear, t.nMidNear, true); commit(t.midFar, t.nMidFar, true);
   }
   ezPlaced = placed;
   vegMark('upload');
@@ -16275,7 +16370,9 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // actually handed and not an estimate of one.
   for (const fam of EZ_FAMILIES) {
     let n = 0, tris = 0;
-    for (const t of ezTiers[fam]) { n += t.n; tris += t.n * t.tris; }
+    // Each rung at its own price: this is what lets the mid rung push the
+    // admitted edge out, since a cheaper far half is a cheaper mean tree.
+    for (const t of ezTiers[fam]) { n += t.n; tris += ezTierTris(t); }
     if (n >= EZ_PRICE_MIN) ezPriceNow[fam] = tris / n;
   }
   refreshShrubs();
@@ -35844,23 +35941,32 @@ function tapeKeep(): string {
   // this should track what is standing rather than the sum of the caps.
   let slots = 0;
   for (const fam of EZ_FAMILIES) {
-    for (const t of ezTiers[fam]) slots += t.near.instanceMatrix.count + t.far.instanceMatrix.count;
+    for (const t of ezTiers[fam]) slots += t.near.instanceMatrix.count + t.far.instanceMatrix.count
+      + t.midNear.instanceMatrix.count + t.midFar.instanceMatrix.count;
   }
   out.slots = slots;
-  out.slotsIfCapped = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].length * 2 * VEG_CAP[f], 0);
+  out.slotsIfCapped = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].length * 4 * VEG_CAP[f], 0);
+  // The pixel line the rung is chosen at — 0 is every tree on the full rung.
+  out.fullPx = EZ_FULL_PX;
+  // What the mid crowns' calibration cost at decode: a boot-time number, paid
+  // before the first frame, and the one to read if boot ever slows on a phone.
+  out.decode = { calibrateMs: +ezDecodeProf.calibrateMs.toFixed(1), calibrated: ezDecodeProf.calibrated };
   for (const fam of EZ_FAMILIES) {
     const per = ezTiers[fam].map((t) => t.n);
     const variants = ezTiers[fam].length;
     out[fam] = {
       placed: per.reduce((p, q) => p + q, 0),
+      // Of the placed, how many wear the MID rung; the rest are full skeletons.
+      mid: ezTiers[fam].reduce((p, t) => p + t.nMid, 0),
       perVariant: per,
       variants,
       activeVariants: Math.min(variants, treeVariantCap),
       capacity: ezTiers[fam].map((t) => t.near.instanceMatrix.count),
-      casting: ezTiers[fam].reduce((p, t) => p + t.nNear, 0),
+      casting: ezTiers[fam].reduce((p, t) => p + t.nNear + t.nMidNear, 0),
       mPerScale: EZ_M_PER_SCALE[fam],
+      midTris: ezTiers[fam].map((t) => t.midTris),
     };
-    for (const t of ezTiers[fam]) tris += t.n * t.tris;
+    for (const t of ezTiers[fam]) tris += ezTierTris(t);
   }
   out.tris = tris;
   out.placed = ezPlaced;
@@ -36180,6 +36286,10 @@ interface EzSheetOpt {
   bg?: string; post?: boolean; ink?: boolean; scale?: number;
   /** Draw the baked impostor card beside each skeleton, in the same box. */
   pair?: boolean;
+  /** Draw the MID rung beside each skeleton instead — the same geometry
+   *  family, through the same material and merge, so the sheet certifies the
+   *  full↔mid handover exactly as it certifies the skeleton↔card one. */
+  mid?: boolean;
   /** The tree's own yaw. The card phases its silhouette by it (the azimuth is
    *  read in the TREE'S frame), so it is the one thing that can make the two
    *  halves show different faces — which is why it is here and defaults to 0. */
@@ -36205,6 +36315,7 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
   const POST = opt.post !== false;
   const INK = !!opt.ink;
   const PAIR = !!opt.pair;
+  const MID = !PAIR && !!opt.mid;
   const YAW = opt.yaw ?? 0;
   // ── NO MSAA, BECAUSE THE GAME HAS NONE ──
   // `rtScene.samples = 0` with the comment "MSAA would soften exactly the edges
@@ -36517,13 +36628,25 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
         impMesh.instanceMatrix.needsUpdate = true;
         shoot(impMesh, cam, PX);
         B = analyse(PX);
+      } else if (MID) {
+        // THE MID RUNG IN THE SAME BOX: the full geometry framed the cell, and
+        // the mid one is drawn into that frame unchanged, so a mid tree that
+        // is wider or taller than its full self shows as such.
+        const m2 = new THREE.InstancedMesh(vs[i].mid, mat, 1);
+        m2.setMatrixAt(0, new THREE.Matrix4());
+        m2.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array([0.30, 0.42, 0.20]), 3);
+        m2.frustumCulled = false;
+        shoot(m2, cam, PX);
+        m2.dispose();
+        B = analyse(PX);
       }
       const row: Record<string, unknown> = {
         fam, i, label: vs[i].label, form: vs[i].form, crown: vs[i].crown, tris: vs[i].tris,
+        midTris: vs[i].midTris, midGrow: vs[i].midGrow,
         px: PX, heightM: +(2 * hy * mPerUnit).toFixed(1),
         ...num(A), box: A.box,
       };
-      if (B && slot) {
+      if (B) {
         // ── THE ONE NUMBER THE SEAT ASKED FOR ──
         // Intersection over union of the two silhouettes. It is the only
         // statistic here that compares the halves rather than describing each;
@@ -36547,14 +36670,14 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
           dLum: B.lum - A.lum,
           dParts: B.parts - A.parts,
         };
-        row.slot = { hx: +slot.hx.toFixed(3), hy: +slot.hy.toFixed(3), cy: +slot.cy.toFixed(3) };
+        if (slot) row.slot = { hx: +slot.hx.toFixed(3), hy: +slot.hy.toFixed(3), cy: +slot.cy.toFixed(3) };
       }
       rows.push(row);
       const d2 = row.diff as { iou: number; covR: number } | undefined;
       cells.push({ a: A.rgb, b: B ? B.rgb : null, px: PX,
-        l1: PAIR ? `${vs[i].label}  iou ${d2 ? d2.iou.toFixed(2) : '--'}` : vs[i].label,
-        l2: `${PAIR ? 'real ' : ''}${PX}px ${brief(A)}`,
-        l3: B ? `imp  ${PX}px ${brief(B)}` : '' });
+        l1: B ? `${vs[i].label}  iou ${d2 ? d2.iou.toFixed(2) : '--'}` : vs[i].label,
+        l2: `${B ? 'full ' : ''}${PX}px ${brief(A)}`,
+        l3: B ? `${MID ? 'mid ' : 'imp '} ${PX}px ${brief(B)}` : '' });
     }
   }
   ezLookU.uEzPxFix.value = 0;
@@ -36623,7 +36746,7 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
     if (cell.l3) cx.fillText(cell.l3, gx + 4, gy + CW + 38);
   });
   return { rows, cols, dist: DIST, scale: SCALE, mag, maxPx, post: POST, ink: INK,
-    elev: opt.elev ?? 8, bg: BG, pair: PAIR, yaw: YAW, top: +impTop.value.toFixed(3),
+    elev: opt.elev ?? 8, bg: BG, pair: PAIR, mid: MID, yaw: YAW, top: +impTop.value.toFixed(3),
     design: { rows: ROWS, fov: FOV }, live: { rows: pixSize.y, fov: +camera.fov.toFixed(1) },
     sheet: cv.toDataURL('image/png') };
 };
@@ -36637,7 +36760,7 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
   const rows: object[] = [];
   for (const fam of EZ_FAMILIES) {
     ezTiers[fam].forEach((t, i) => {
-      for (const [part, g] of [['tree', t.near.geometry]] as Array<[string, THREE.BufferGeometry | undefined]>) {
+      for (const [part, g] of [['tree', t.near.geometry], ['mid', t.midNear.geometry]] as Array<[string, THREE.BufferGeometry | undefined]>) {
         if (!g) continue;
         g.computeBoundingBox();
         const p = g.getAttribute('position') as THREE.BufferAttribute;
@@ -36645,6 +36768,7 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
         for (let k = 0; k < p.count * 3; k++) if (!Number.isFinite((p.array as Float32Array)[k])) nan++;
         const bb = g.boundingBox;
         rows.push({ fam, i, part, n: p.count, idx: g.index ? g.index.count : 0, nan,
+          tris: part === 'mid' ? t.midTris : t.tris, midGrow: part === 'mid' ? ezVariants(fam)[i]?.midGrow : undefined,
           min: bb ? [+bb.min.x.toFixed(2), +bb.min.y.toFixed(2), +bb.min.z.toFixed(2)] : null,
           max: bb ? [+bb.max.x.toFixed(2), +bb.max.y.toFixed(2), +bb.max.z.toFixed(2)] : null,
           count: t.near.count + t.far.count });
@@ -48174,14 +48298,18 @@ function telemetryReport(): string {
         + ` @${dofFocusOverrideM ?? (DOF_FOCUS_M[dofFocusAt] || 'auto')}`}`);
   const _treePlacedByFamily = EZ_FAMILIES.map(f => ezTiers[f].reduce((n, t) => n + t.n, 0));
   const _treePlaced = _treePlacedByFamily.reduce((n, v) => n + v, 0);
-  const _treeTris = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + t.n * t.tris, 0), 0);
-  const _treeBatches = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + Number(t.nNear > 0) + Number(t.nFar > 0), 0), 0);
+  const _treeTris = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + ezTierTris(t), 0), 0);
+  const _treeBatches = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + Number(t.nNear > 0) + Number(t.nFar > 0) + Number(t.nMidNear > 0) + Number(t.nMidFar > 0), 0), 0);
+  // THE MID RUNG'S SHARE, per family, beside the pixel line it is chosen at:
+  // a row reading `mid 0/…` at `fullpx 58` on a ring that reaches past the
+  // point a tree is 58 px is the rung not firing, and is worth a look.
+  const _treeMid = EZ_FAMILIES.map(f => `${f[0]}${ezTiers[f].reduce((n, t) => n + t.nMid, 0)}`).join('/');
   // `t.mesh` as merged from the cell: EzTier carries the NEAR/FAR shadow split
   // (only the near half is inside the shadow map and casts), so there is no
   // single mesh and this read `undefined.castShadow` — a crash the moment the
   // overlay opened. esbuild strips the types, so it reached the deployed cell
   // without a murmur; tsc is the only reason it is not still there.
-  const _treeCasting = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + (t.nNear > 0 && t.near.castShadow ? 1 : 0), 0), 0);
+  const _treeCasting = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + (t.nNear > 0 && t.near.castShadow ? 1 : 0) + (t.nMidNear > 0 && t.midNear.castShadow ? 1 : 0), 0), 0);
   const _treeVariants = treeVariantCap >= 1000 ? 'ALL' : String(treeVariantCap);
   const _treeMix = EZ_FAMILIES.map((f, i) => `${f[0]}${_treePlacedByFamily[i]}`).join('/');
   // WHAT THE ALLOCATOR CHARGED PER TREE. The whole of the second tree fault was
@@ -48312,7 +48440,7 @@ function telemetryReport(): string {
       + ` · cooldown ${vegSeedDeferred ? `${VEG_SEED_CATCHUP}ms (seeding behind)` : '900ms'}`
       + ` · no distance trigger, no priority: the near tier commits with the far one`);
   }
-  L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
+  L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge} · mid ${_treeMid} at ${EZ_FULL_PX}px`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
   L.push(`main thread: in tick ${(sessTick / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessTick)} of wall) recent ${n} ticks p50 ${tpct(0.5)} p95 ${tpct(0.95)} p99 ${tpct(0.99)} recent max ${tpct(1)} session max ${Math.round(sessTickMax)} · off-tick tasks ${(sessOff / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessOff)}) · gap ${((gapRow?.ms ?? 0) / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(gapRow?.ms ?? 0)}) — unmeasured time includes scheduling, GPU waits and uninstrumented work; not a GPU measurement`);
