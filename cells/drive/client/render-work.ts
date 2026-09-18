@@ -2,10 +2,16 @@
 
 /** Square rings in the original x-major order. Visit the perimeter directly:
  * scanning the interior of every ring costs cubic work at the range dial's
- * upper stops, although the output contains only a square's worth of cells. */
-export function squareRings(cx: number, cz: number, reach: number): Array<[number, number]> {
-  const out: Array<[number, number]> = [[cx, cz]];
-  for (let d = 1; d <= reach; d++) {
+ * upper stops, although the output contains only a square's worth of cells.
+ *
+ * `from` skips the rings a caller has already walked, so a wider pass over the
+ * same centre covers only its own ANNULUS. Without it a second pass re-walks
+ * the first one's square — which is not free once the two differ by a factor
+ * of two, and is the reason the tree manifest is a separate walk rather than a
+ * wider `reach` on the existing one. */
+export function squareRings(cx: number, cz: number, reach: number, from = 0): Array<[number, number]> {
+  const out: Array<[number, number]> = from <= 0 ? [[cx, cz]] : [];
+  for (let d = Math.max(1, Math.floor(from)); d <= reach; d++) {
     for (let x = cx - d; x <= cx + d; x++) {
       if (x === cx - d || x === cx + d) {
         for (let z = cz - d; z <= cz + d; z++) out.push([x, z]);

@@ -181,7 +181,7 @@ const BASE: Record<number, BaseGuild> = {
     mix: [['rock', 5], ['bush', 3], ['cactus', 3], ['acacia', 2], ['spire', 2], ['snag', 1]],
     scale: 0.7, density: 0.25 },
   14: { name: 'mangrove',
-    forms: ['palm', 'round'],
+    forms: ['palm', 'umbrella', 'round'],
     mix: [['palm', 4], ['broadleaf', 4], ['fern', 3]],
     scale: 0.9, density: 1.0 },
 };
@@ -222,6 +222,7 @@ export function guildAt(site: SiteClimate, eco: EcoHit | null): Guild | null {
   let mix = base.mix.slice() as GuildMix;
   let scale = base.scale;
   let density = base.density;
+  let forms = base.forms ?? [];
   const why: string[] = [];
 
   // ── VETOES: things that simply cannot live here ──
@@ -286,6 +287,7 @@ export function guildAt(site: SiteClimate, eco: EcoHit | null): Guild | null {
     mix = [['palm', 4], ['broadleaf', 3], ['fern', 3], ['bush', 2]];
     scale = 0.85;
     density = 0.9 + site.salt * 0.2;
+    forms = ['palm', 'umbrella', 'round'];
     why.push('salt: the tide reaches this ground');
   }
 
@@ -316,7 +318,7 @@ export function guildAt(site: SiteClimate, eco: EcoHit | null): Guild | null {
   return {
     biome: eco.biome,
     name: base.name,
-    forms: base.forms ?? [],
+    forms,
     mix: mix.filter(([, w]) => w > 0),
     trees: trees.length ? trees : [['bush', 1]],
     scale, density, why,

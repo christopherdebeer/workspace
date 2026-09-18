@@ -160,6 +160,20 @@ const KEEP_TAGS = new Set([
   'incline', 'maxheight',
   // …and the carriageway-width evidence the renderer does not read yet.
   'lanes', 'lanes:forward', 'lanes:backward', 'oneway', 'width', 'junction', 'ref',
+  // THE RAILWAY VOCABULARY. `railway` was missing here as well as from the
+  // game's own KEEP_TAGS, and the consequence is measurable: ZERO railway
+  // ways across all nine shipped captures — Simon's Town included, which the
+  // Southern Line runs straight through and terminates at. Every deterministic
+  // instrument in this repo was blind to railways, which is why the first
+  // report of one came from the seat.
+  'railway', 'gauge', 'electrified', 'usage', 'tracks', 'passenger_lines', 'service',
+  // THE BRIDGE'S OWN NAME, for the same reason and with the same consequence:
+  // without it no capture can carry a named structure, so the landmark-entry
+  // path — which reads `bridge:name` before `name` — is unreachable from any
+  // deterministic world in this repo. The uMngeni capture was the first to
+  // want it: its two bridges ARE `bridge:name`, and without the tag they read
+  // as anonymous stretches of the roads that cross them.
+  'bridge:name', 'bridge:structure', 'bridge:material',
 ]);
 const keepTags = (t) => {
   const out = {};

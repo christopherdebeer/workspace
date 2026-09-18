@@ -458,7 +458,7 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
   {
     id: 'structures',
     label: 'HOSTILE STRUCTURE CROSSINGS',
-    note: 'A tagged arch bridge whose nominal pier rhythm lands on three roads, a bored tunnel under a live surface crossing, and a stream conduit under a cutting. The geometry is intentionally hostile: every decorative support has a tempting but illegal place to stand. Clearance counters should report refusals while all carriageways remain open.',
+    note: 'A tagged arch bridge whose nominal pier rhythm lands on three roads, a bored tunnel under a live surface crossing, an explicit stream conduit under a cutting, and a tagged causeway that must not acquire a second conduit. The geometry is intentionally hostile: every decorative support has a tempting but illegal place to stand. Clearance counters should report refusals while all carriageways remain open.',
     spawn: { lat: HOME.lat, lon: HOME.lon, heading: 90 },
     height: (e, s, t) => {
       const base = t.lift + 320;
@@ -489,8 +489,14 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
         pts: through(420, 0, 90, 480) },
       { id: 7, tags: { highway: 'secondary', name: 'Conduit Road', surface: t.surface },
         pts: through(-420, 0, 90, 520) },
-      { id: 8, tags: { waterway: 'stream', name: 'Conduit Stream', width: '4' },
+      { id: 8, tags: { waterway: 'stream', name: 'Conduit Stream', width: '4',
+          tunnel: 'culvert' },
         pts: through(-420, 0, 0, 480) },
+      { id: 9, tags: { highway: 'secondary', name: 'Causeway Road', surface: t.surface,
+          embankment: 'yes' },
+        pts: through(650, 260, 90, 360) },
+      { id: 10, tags: { waterway: 'stream', name: 'Causeway Stream', width: '4' },
+        pts: through(650, 260, 0, 300) },
     ],
   },
   {
@@ -836,6 +842,28 @@ export const CAPTURE_INDEX: readonly CaptureCard[] = [
     eco: { id: 89, biome: 12, name: 'Fynbos shrubland', realm: 'Afrotropic' },
     label: 'SIMON\'S TOWN — THE JOINS',
     note: 'Reported from the seat at -34.19511,18.44192 heading 246: at the junctions the batter stops short of the join and leaves a gap, the arms do not meet on one closed plane, the batter is a picture the truck drives into rather than ground it stands on, and a mis-joined arm can put a guard rail across the carriageway. A steep peninsula suburb — 181 highways over 437m of relief in a 1.4km box — so nearly every junction is a joiner meeting a host on a cross-slope, which is where all four live.',
+  },
+  {
+    id: 'at-glencairn', file: 'world-glencairn.json', heading: 20,
+    eco: { id: 89, biome: 12, name: 'Fynbos shrubland', realm: 'Afrotropic' },
+    label: 'GLENCAIRN — THE SOUTHERN LINE',
+    note: 'Reported from the seat at -34.15905,18.43142: the railway ribbon is not railway-like. THE FIRST FIXTURE IN THIS REPO THAT CONTAINS A RAILWAY AT ALL — `railway` was missing from capture-world\'s own KEEP_TAGS as well as the game\'s, so all nine captures before this one held ZERO railway ways, Simon\'s Town included, and nothing deterministic could see one. Four ways of the PRASA Southern Line in a 700m box between the mountain and the beach, all `railway=rail usage=main gauge=1067 electrified=contact_line passenger_lines=1`, one of them a `bridge=yes layer=1` — so the gauge, the electrification and the bridge case are all in one capture. 103 highways beside them, and the M4 runs parallel for the whole length, which is the comparison a railway look has to survive.',
+  },
+  {
+    id: 'at-yosemite', file: 'world-yosemite.json', heading: 90,
+    eco: { id: 366, biome: 5, name: 'Sierra Nevada forests', realm: 'Nearctic' },
+    label: 'YOSEMITE — THE VALLEY FLOOR',
+    note: 'Captured at 37.73606,-119.63732 r=1400m because a device dump named hydroBuild at 94.6 ms a build there — 30% of every slow frame — and nothing deterministic in this repo held the Merced. Cover classes 10/30/60/80 in the box, so the valley carries WorldCover water as well as the OSM waterway, which is the pair the flowing-area path is expensive on; 1,202-2,417 m of granite around it. The spot is the one the substrate work already measures at, so a hydro number and a substrate number here are about the same ground.',
+  },
+  {
+    id: 'at-umgeni', file: 'world-umgeni.json', heading: 0,
+    label: 'uMNGENI MOUTH — TWO BRIDGES',
+    note: 'Probed from the seat at -29.81016,31.03845. Two tagged bridges 580 m apart over the uMngeni a kilometre from the Indian Ocean: the M4 Ellis Brown Viaduct (two 471 m carriageways, bridge:name, motorway) and the Athlone Bridge upriver (412 m on TWO POINTS, bridge:name, secondary). Neither carries bridge:structure and neither is in the landmark store, so both take the generic recipe; neither publisher carries their decks, so the chord is the only thing that can hold them over the water. THE FIXTURE THE BRIDGE CHORD REGRESSION WAS FOUND ON. No terrestrial ecoregion — the box is mostly estuary and sea, so `eco` is deliberately absent and the guild falls back to the climate path.',
+  },
+  {
+    id: 'at-forth', file: 'world-forth.json', heading: 0,
+    label: 'THE FORTH — THREE BRIDGES, THREE CLAIMS',
+    note: 'Asked for from the seat at 56.00636,-3.39091 as the landmark test case, and it is the best one there is: three famous bridges in a row over the Firth of Forth, each reaching the painter by a DIFFERENT path. The 1890 Forth Bridge is four `rail` ways named for the East Coast (Northern) Line with no bridge:name at all, so its entry can only claim it BY POSITION; the Queensferry Crossing carries its own `bridge:structure=cable-stayed` and needs no entry; the Forth Road Bridge is named exactly that, carries no structure tag and matches no entry, so it is claimed by nobody. They also stand ~250 m apart at their nearest, which is inside BRIDGE_ON_R — so this is the fixture where a positional claim can cross from one bridge to the next.',
   },
 ];
 

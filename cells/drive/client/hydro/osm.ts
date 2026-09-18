@@ -1,4 +1,11 @@
-import type { HydroFeature, HydroKind, HydroPolygon, PackedXZ } from './types';
+import type {
+  HydroBedMaterial,
+  HydroBankMaterial,
+  HydroFeature,
+  HydroKind,
+  HydroPolygon,
+  PackedXZ,
+} from './types';
 
 export interface OsmHydroPoint {
   lat: number;
@@ -106,6 +113,33 @@ function taggedElevation(tags: Record<string, string>): number | undefined {
   return metricNumber(tags.water_level) ?? metricNumber(tags.ele);
 }
 
+function taggedBedMaterial(
+  tags: Record<string, string>,
+  kind: HydroKind,
+): HydroBedMaterial | undefined {
+  const raw = [tags.bed, tags.surface, tags.material]
+    .filter(Boolean).join(';').toLowerCase();
+  if (/(mud|silt|clay|earth)/.test(raw)) return 'silt';
+  if (/sand/.test(raw)) return 'sand';
+  if (/(gravel|shingle)/.test(raw)) return 'gravel';
+  if (/(pebble|cobble)/.test(raw)) return 'pebble';
+  if (/(bedrock|rock|stone)/.test(raw)) return 'rock';
+  if (kind === 'river') return 'gravel';
+  if (kind === 'stream') return 'pebble';
+  if (kind === 'canal' || kind === 'wetland') return 'silt';
+  return undefined;
+}
+
+function taggedBankMaterial(tags: Record<string, string>): HydroBankMaterial | undefined {
+  const raw = [tags['bank:material'], tags.bank]
+    .filter(Boolean).join(';').toLowerCase();
+  if (/(mud|clay)/.test(raw)) return 'mud';
+  if (/(gravel|shingle|pebble|cobble)/.test(raw)) return 'gravel';
+  if (/(bedrock|rock|stone)/.test(raw)) return 'rock';
+  if (/(earth|soil|sand)/.test(raw)) return 'soil';
+  return undefined;
+}
+
 /**
  * Normalize the water subset of OSM. Coastlines are intentionally ignored:
  * an unclosed coastline is not an ocean polygon; ocean coverage enters via
@@ -129,6 +163,8 @@ export function extractOsmHydro(
       source: 'osm' as const,
       kind,
       taggedLevelM: taggedElevation(tags),
+      bedMaterial: taggedBedMaterial(tags, kind),
+      bankMaterial: taggedBankMaterial(tags),
       intermittent: tags.intermittent === 'yes' || tags.seasonal === 'yes',
       tidal: tags.tidal === 'yes' || tags.water === 'tidal',
     };

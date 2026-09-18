@@ -36,6 +36,12 @@ export interface LabEntry {
 
 export const LABS: readonly LabEntry[] = [
   {
+    slug: 'substrate',
+    label: 'SUBSTRATE',
+    note: 'Terrain, road, river and crossing resolved as one layered tile: bridge, culvert, ford and causeway with vehicle support, immersion and retained evidence.',
+    start: () => import('./substrate/lab').then((m) => m.startSubstrateLab()),
+  },
+  {
     slug: 'hydro',
     label: 'HYDRO',
     note: 'Water fields, coastlines and river profiles over authored terrain fixtures.',
@@ -46,6 +52,12 @@ export const LABS: readonly LabEntry[] = [
     label: 'MARKS',
     note: 'Graffiti on a wall: the production façade shader, with the culture, the density and the reachable band on dials.',
     start: () => import('./marks-lab').then((m) => m.startMarksLab()),
+  },
+  {
+    slug: 'facade',
+    label: 'FAÇADE',
+    note: 'One building at the survey\'s own stand-off: the production façade shader and roof, the culture\'s wall and roof canvases, and the massing, the plinth and the whole opening grammar on dials.',
+    start: () => import('./facade-lab').then((m) => m.startFacadeLab()),
   },
   {
     slug: 'roads',

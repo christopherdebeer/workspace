@@ -24,13 +24,18 @@ const SPOTS = [
   { tag: 'chapmans', spot: 'lat=-34.09885&lon=18.380684&h=255&cam=chase&time=NOON&sunalt=55&wx=clear',
     minJoins: 10, bars: { p95M: 0.15, over: 2, worstM: 0.15, meetWorstM: 0.5 } },
 ];
+const only = process.env.ONLY ?? '';
+const substrateRender = process.env.SUBSTRATE === 'render';
 let fails = 0;
 const ok = (name, cond, detail = '') => {
   console.log(`${cond ? 'ok   ' : 'FAIL '} ${name}${detail ? '  (' + detail + ')' : ''}`);
   if (!cond) fails++;
 };
-for (const s of SPOTS) {
-  const d = await openDrive({ spot: s.spot, tag: `seam-${s.tag}` });
+for (const s of SPOTS.filter((spot) => !only || spot.tag === only)) {
+  const d = await openDrive({
+    spot: `${s.spot}${substrateRender ? '&substrate=render' : ''}`,
+    tag: `seam-${s.tag}${substrateRender ? '-substrate' : ''}`,
+  });
   // WAIT FOR THE WORLD TO SETTLE, NOT A COUNT. The honest join counts are
   // too small for absolute floors to mean "streamed in"; what matters is
   // that the numbers stopped moving. Flat at zero is an unbuilt world, not
@@ -55,6 +60,24 @@ for (const s of SPOTS) {
   ok(`${s.tag} main joins over 10cm`, ks.mainOver10cm <= s.bars.over, `${ks.mainOver10cm} <= ${s.bars.over}`);
   ok(`${s.tag} main worst step`, ks.mainWorstM <= s.bars.worstM, `${ks.mainWorstM} <= ${s.bars.worstM}`);
   ok(`${s.tag} worst meet`, ks.meetWorstM <= s.bars.meetWorstM, `${ks.meetWorstM} <= ${s.bars.meetWorstM} at ${ks.meetAt}`);
+  if (substrateRender) {
+    const substrate = await d.page.evaluate(() => window.__substrate?.());
+    ok(`${s.tag} road pixels are substrate packet-owned`,
+      substrate?.render?.roadPacketMeshes > 0
+        && substrate.render.roadPacketMeshes >= substrate.render.roadInstantiatedMeshes
+        && substrate.render.roadInstantiatedMeshes === substrate.render.visibleRoads
+        && substrate.render.legacyRoadCandidateMeshes === 0
+        && substrate.render.drivePacketFailures === 0
+        && substrate.render.uncommittedVisibleRoads === 0
+        && substrate?.crossings?.unresolved === 0
+        && substrate?.crossings?.missingImplementation === 0,
+      JSON.stringify({
+        render: substrate?.render,
+        renderPacketRejections: substrate?.renderPacketRejections,
+        crossings: substrate?.crossings,
+        crossingRecords: substrate?.crossingRecords,
+      }));
+  }
   for (const b of (ks.bad ?? []).slice(0, 6)) console.log(`  bad: ${JSON.stringify(b)}`);
   report(d.errors);
   await d.close();

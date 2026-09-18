@@ -66,6 +66,13 @@ export const CSP = [
   // Mapterhorn was brought in to replace, including the -13,029m hole at
   // Chapman's Peak. Nothing reported it, because a silent fallback was the
   // designed behaviour for a genuinely missing tile.
+  //
+  // BOTH ELEVATION HOSTS ARE FALLBACKS NOW and the line keeps them anyway. The
+  // primary path is `~/dem/v1/` on this origin (see serveDem), so a policy
+  // that dropped these two would work perfectly right up until the deploy that
+  // needs them — which is the same invisible failure as the paragraph above,
+  // with the fallback removed instead of the source. They come out of this
+  // line on the day the client stops naming them, and not before.
   // …and the apex, for the OAuth endpoints ALONE. `/state` is same-origin on
   // this cell's own host, so signing in is the only thing that reaches off it
   // (docs/cell-origin-isolation.md §4.5).
@@ -110,6 +117,13 @@ const SHELL = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#071215">
+<!-- WHICH BUNDLE IS THIS? The cell stamps its own app.js here (a hash of the
+     file it will serve — see stampOf) so the running code can say which build
+     a reader is looking at, and so a stale SHELL is self-reporting: a cached
+     shell carries the stamp it was cached with, and /build answers with the
+     one the server has now. A meta tag rather than an inline script because
+     the CSP is script-src 'self' and an inline one would be refused. -->
+<meta name="drive-build" content="__DRIVE_BUILD_STAMP__">
 <meta name="color-scheme" content="dark">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -180,10 +194,6 @@ const WEB_ASSETS: Record<string, { file: string; type: string }> = {
   '/icons/drive-192.png': { file: 'icons/drive-192.png', type: 'image/png' },
   '/icons/drive-512.png': { file: 'icons/drive-512.png', type: 'image/png' },
   '/icons/drive-maskable-512.png': { file: 'icons/drive-maskable-512.png', type: 'image/png' },
-  // The planet the wide chart is painted on — see client/globe.ts. Immutable
-  // for a day like the icons: it changes only when the bake is re-run, and a
-  // deploy is what publishes it.
-  '/globe-base.png': { file: 'globe-base.png', type: 'image/png' },
 };
 
 /**
@@ -215,6 +225,22 @@ function stampOf(): string {
     } catch { bundleStamp = 'unstamped'; }
   }
   return bundleStamp;
+}
+/** The shell, with the bundle's stamp in it. A `.replace` per request is a
+ *  string scan of a few kilobytes against a Lambda that has just read and
+ *  hashed three megabytes; the shell is not worth caching per stamp. */
+function shellHtml(): string {
+  return SHELL.replace('__DRIVE_BUILD_STAMP__', stampOf());
+}
+/** WHAT THE SERVER HAS RIGHT NOW, never from a cache. The ABOUT page asks
+ *  this and compares it with the stamp baked into the shell it booted from:
+ *  equal is "you are on the current build", different is "you are looking at
+ *  a cached one, reload". The service worker does not intercept it — it
+ *  handles only the shell's own paths — so this is always the network. */
+function serveBuild() {
+  return respond(200, 'application/json; charset=utf-8',
+    JSON.stringify({ build: stampOf(), cell: process.env.CELL_ID ?? null, at: Date.now() }),
+    { 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
 }
 function serveServiceWorker() {
   const body = webText('sw.js').replace('__DRIVE_SW_BUILD__', stampOf());
@@ -327,7 +353,33 @@ function serveWebAsset(path: string) {
 // written — otherwise every ocean tile is a permanent miss and therefore a
 // permanent invocation — and (2) a failure must never be written, or one bad
 // minute upstream becomes our bad week.
-const TILE_RE = /^\/~\/osm\/v[2-4]\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;   // v4: water relations
+/**
+ * ── THE TILE VERSION IS THE ONLY WAY THE BANK HEALS ──
+ *
+ * A banked tile is an S3 object whose key IS this path, and CloudFront serves
+ * it from S3 without ever reaching this code again: `serveTile` runs on a
+ * cache MISS and nothing else. So a wrong answer, once written, is permanent
+ * — there is no expiry, no re-check, and no request that could trigger one.
+ * Bumping this number is a fresh keyspace and the only remedy there is.
+ *
+ * IT WAS BUMPED TO 5 ON A WRONG DIAGNOSIS AND PUT BACK. The Golden Gate
+ * looked like a poisoned bank: `10472/25319..25322` banked with an empty way
+ * list, 44 bytes each, beside a tile carrying the bridge's sidewalk. The tile
+ * arithmetic was off by one column. Tile 10472 begins at lon −122.4756 and
+ * the bridge stands at −122.4783, so the empty column is the open water east
+ * of it — genuinely empty, correctly banked. Checked against v5 afterwards:
+ * the tiles that DO hold the bridge answer with identical bytes on both
+ * keyspaces (1,678 at the deck, 13,891 at the north tower, 907 at the Forth
+ * Road Bridge). Nothing was ever poisoned, and a bump costs the world a
+ * re-fetch for nothing.
+ *
+ * The lesson kept from it is in `askMirror`: any `remark` is a refusal, so
+ * an unclean answer is never banked in the first place.
+ *
+ *   v4: water relations
+ */
+const TILE_V = 4;
+const TILE_RE = new RegExp(`^/~/osm/v[2-${TILE_V}]/(\\d{1,2})/(\\d{1,7})/(\\d{1,7})$`);
 const COVER_RE = /^\/~\/cover\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // THREE upstreams, not one. Measured on a 12km corridor through Death Valley:
 // 7 of 25 cold tiles came back 503 at 9–12.5s because the single upstream was
@@ -607,6 +659,247 @@ async function serveCover(path: string, m: RegExpMatchArray) {
   };
 }
 
+// ── the coarse cover: baked once, because the COGs cannot reach ────
+//
+// `~/cover/v1/` builds its tile by range-reading ESA WorldCover's 3-degree
+// COGs, and that is cheap only while a tile lands on one or two of them. It
+// does not stay cheap — measured by `devtools/cover-reach.mjs`, one tile
+// touches 6 source files at z6, 20 at z5, 64 at z4, 210 at z3 and 690 at z2.
+// So the wide end of the ladder has been painted from a 9.8km texel at best
+// and from nothing at all past that, and the whole planet has been a picture.
+//
+// There is no global overview to escape to: the bucket has the 3-degree COGs
+// and, under `macrotiles/`, multi-gigabyte ZIPS of the same 10m data. The ESA
+// web viewer is Terrascope's own pre-rendered WMTS, which is a third party
+// with no cache of ours — precisely what `ne-wide.ts` refused for the roads.
+//
+// So this route answers from a BAKE, exactly as the overview's coarse rungs
+// do, and for the sentence in that module's own header. What is baked is the
+// INPUT — a class-index raster — not a picture, so the client still runs
+// `climCompute` over it and the wide ground is coloured by the same rules as
+// the hillside under the wheels. `devtools/bake-cover-wide.mjs` builds it out
+// of every COG's own coarsest overview.
+const COVERW_RE = /^\/~\/cover\/w1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+const CW_SPAN = 3;                       // degrees per source cell
+const CW_PER = 34;                       // output texels per source cell
+const CW_W = (360 / CW_SPAN) * CW_PER;   // 4080
+const CW_H = (180 / CW_SPAN) * CW_PER;   // 2040
+/** The finest zoom this route answers. Past it `~/cover/v1/` is both cheaper
+ *  and far better: one source file, 38m texels, the real ground. */
+const COVERW_MAX_Z = 7;
+/** `undefined` not yet read, `null` read and unusable — so a missing or
+ *  corrupt bake costs one read rather than one per request. */
+let cwRaster: Uint8Array | null | undefined;
+function coverWideRaster(): Uint8Array | null {
+  if (cwRaster !== undefined) return cwRaster;
+  try {
+    // Base64 text for the same reason ne-wide.b64 is: `cell-sync push` sends a
+    // binary asset in ONE signed request and that request 403s somewhere past
+    // a megabyte, while text is chunked with appendToFile and decoded whole.
+    const raw = readFileSync(join(__dirname, 'static', 'cover-wide.b64'), 'utf8');
+    const buf = inflateSync(Buffer.from(raw, 'base64'));
+    cwRaster = buf.length === CW_W * CW_H ? new Uint8Array(buf) : null;
+  } catch { cwRaster = null; }
+  return cwRaster;
+}
+
+function serveCoverWide(path: string, m: RegExpMatchArray) {
+  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (z < 0 || z > COVERW_MAX_Z || x >= 2 ** z || y >= 2 ** z) {
+    return respond(400, 'application/json', JSON.stringify({ error: 'tile out of range' }));
+  }
+  const src = coverWideRaster();
+  if (!src) {
+    // No bake deployed. A 503 and no object: the client falls back to the
+    // finer route exactly as it did before this existed, and the day the bake
+    // lands nothing has a stored 404 to unlearn.
+    return respond(503, 'application/json', JSON.stringify({ error: 'no coarse cover baked' }), {
+      'retry-after': '3600', 'cache-control': 'no-store',
+    });
+  }
+  const n = 2 ** z;
+  const out = new Uint8Array(COVER_PX * COVER_PX);
+  const lonOf = (px: number): number => ((x + px / COVER_PX) / n) * 360 - 180;
+  const latOf = (py: number): number => {
+    const t = Math.PI * (1 - (2 * (y + py / COVER_PX)) / n);
+    return (Math.atan(Math.sinh(t)) * 180) / Math.PI;
+  };
+  // THE MAJORITY, NOT THE POINT — the same argument the bake makes one level
+  // up. A z2 tile's texel is 39km and this raster's is 9.8, so a nearest
+  // sample is whichever of the four the arithmetic landed on, and a continent
+  // comes out as a dither of unrelated biomes rather than a map. Four by four
+  // is enough: past z4 the tile texel is finer than the raster and the loop
+  // reads the same pixel sixteen times, which costs nothing worth avoiding.
+  const SUB = 4;
+  const hist = new Uint16Array(256);
+  for (let py = 0; py < COVER_PX; py++) {
+    for (let px = 0; px < COVER_PX; px++) {
+      hist.fill(0);
+      let best = 0, bestN = 0;
+      for (let sy = 0; sy < SUB; sy++) {
+        const lat = latOf(py + (sy + 0.5) / SUB);
+        // Equirect rows run from +90 DOWN, which is how the bake writes them.
+        const ry = Math.min(CW_H - 1, Math.max(0, Math.floor(((90 - lat) / 180) * CW_H)));
+        for (let sx = 0; sx < SUB; sx++) {
+          const lon = lonOf(px + (sx + 0.5) / SUB);
+          const rx = Math.min(CW_W - 1, Math.max(0, Math.floor(((lon + 180) / 360) * CW_W)));
+          const v = src[ry * CW_W + rx];
+          if (!v) continue;
+          const c = ++hist[v];
+          if (c > bestN) { bestN = c; best = v; }
+        }
+      }
+      out[py * COVER_PX + px] = best;
+    }
+  }
+  const png = greyPng(out, COVER_PX);
+  // An all-zero tile is a REAL answer here too — open ocean has no land class
+  // — and storing it is what stops every sea tile being a permanent
+  // invocation. Same rule as the cover route this one stands beside.
+  void putTile(path, png, 'image/png', null).catch(() => { /* serve now, store best-effort */ });
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'image/png',
+      'cache-control': 'public, max-age=604800, immutable',
+      'access-control-allow-origin': '*',
+    },
+    body: Buffer.from(png).toString('base64'),
+    isBase64Encoded: true,
+  };
+}
+
+// ── the elevation tiles: the one source that used to skip this cell ────
+//
+// Every other raster and vector the game reads has come through a `~/` route
+// for a long time; the DEM never did. `API-AUDIT-2026-09-11.md` has the
+// measurement — 83 to 136 direct requests to tiles.mapterhorn.com in the first
+// half-minute of driving, 37% of the game's data bytes in a dense city and
+// 94–96% everywhere else — but the shape of it is simple: the cover, vector
+// and ecoregion layers ask their upstream ONCE FOR EVERYBODY and bank the
+// answer, and elevation asked once per player per tile, forever.
+//
+// ── TERRARIUM IS THE ENCODING; MAPTERHORN IS THE SOURCE ──
+//
+// Worth saying once, plainly, because the client's names have drifted into
+// each other. "Terrarium" is Mapzen's RGB height packing — `r*256 + g + b/256
+// - 32768` metres — and BOTH sources speak it, which is why the client has one
+// decoder. "Mapterhorn" is the publisher this cell reads: Copernicus GLO-30
+// with national LiDAR where it exists, 512px lossless WebP, CORS-open. The
+// legacy AWS mosaic (`elevation-tiles-prod`) is the other publisher of the
+// same encoding, 256px PNG, unmaintained and measurably corrupt over this
+// project's own ground.
+//
+// So the ROUTE is named for neither: `~/dem/v1/` is a promise about the
+// PAYLOAD — terrarium-encoded bytes for this tile — and which publisher
+// answered it is this cell's business and nobody else's. That is the whole
+// ambiguity cleanup: encoding in the contract, source behind the route.
+//
+// ── AND IT DOES NOT DECODE ANYTHING ──
+//
+// The cover route computes: range-reads a COG, inflates blocks, renders a PNG.
+// This one deliberately does not. A Lambda with no image library cannot decode
+// lossless WebP without shipping a decoder, and it does not have to: the
+// client's pyramid climb, its 2×2 downsample, its bilinear re-projection and
+// its four repair passes are hard-won code (read the comments around
+// `fetchMapterhorn`) that works on the bytes as published. The cell's job here
+// is to be the one who asks upstream, and to remember the answer.
+//
+// ── AN ABSENCE IS AN ANSWER, AND IT IS THE COMMON ONE ──
+//
+// Mapterhorn 404s every pure-ocean tile and every level past what the local
+// source resolves, and most of the planet is one or the other. A 404 cannot be
+// banked as an object, so a route that simply passed the 404 on would send
+// every ocean tile to this Lambda, for every player, forever — the exact
+// invocation pattern the namespace exists to stop, and the one that made the
+// cover route store its all-zero tiles.
+//
+// So an absence is stored as a REAL OBJECT: a tiny `text/plain` body, which
+// the client tells from a tile by the content type. And because the client's
+// next move after an absence is always to climb, the body carries WHERE TO
+// CLIMB TO — `ABSENT 9/271/307`, the nearest ancestor that exists, found here
+// with HEADs. One request instead of up to fourteen, and the answer is banked,
+// so the second player pays a CDN hit for it.
+const DEM_RE = /^\/~\/dem\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+/** Terrarium-encoded 512px lossless WebP over Copernicus GLO-30 + national
+ *  LiDAR. The publisher behind `~/dem/v1/`. */
+const DEM_URL = 'https://tiles.mapterhorn.com';
+/** The floor of the climb. Mapterhorn publishes a whole planet at z0 (one
+ *  512px tile, 239KB) and full land coverage from z1 up — measured, not
+ *  assumed — so there is ground at every level and no reason to stop above 0. */
+const DEM_Z_MIN = 0;
+const DEM_MS = 20000;
+
+/** Does the publisher hold this tile? A HEAD, because the climb only needs to
+ *  know THAT it exists and the body is up to a quarter of a megabyte. */
+async function demHas(z: number, x: number, y: number): Promise<boolean> {
+  const ctl = new AbortController();
+  const bail = setTimeout(() => ctl.abort(), DEM_MS);
+  try {
+    const r = await fetch(`${DEM_URL}/${z}/${x}/${y}.webp`, { method: 'HEAD', signal: ctl.signal });
+    return r.ok;
+  } catch { return false; } finally { clearTimeout(bail); }
+}
+
+async function serveDem(path: string, m: RegExpMatchArray) {
+  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  // z14 is the fine terrain level and z5 the widest the far shell asks for;
+  // the ceiling is where the publisher's own pyramid ends.
+  if (z < DEM_Z_MIN || z > 15 || x >= 2 ** z || y >= 2 ** z) {
+    return respond(400, 'application/json', JSON.stringify({ error: 'tile out of range' }));
+  }
+  let body: Buffer | null = null;
+  try {
+    const ctl = new AbortController();
+    const bail = setTimeout(() => ctl.abort(), DEM_MS);
+    try {
+      const res = await fetch(`${DEM_URL}/${z}/${x}/${y}.webp`, { signal: ctl.signal });
+      // A 404 is a REAL ANSWER — see the block above. Anything else is the
+      // upstream failing us, and a failure is retried, never stored.
+      if (res.status === 404) body = null;
+      else if (!res.ok) throw new Error(`dem HTTP ${res.status}`);
+      else body = Buffer.from(await res.arrayBuffer());
+    } finally { clearTimeout(bail); }
+  } catch (err) {
+    return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
+      'retry-after': '5', 'cache-control': 'no-store',
+    });
+  }
+  if (body) {
+    // WebP is already compressed; declaring gzip on it would hand the browser
+    // a file it cannot decode (the same trap the cover route's PNG notes).
+    try { await putTile(path, body, 'image/webp', null); } catch { /* best effort */ }
+    return {
+      statusCode: 200,
+      headers: {
+        'content-type': 'image/webp',
+        'cache-control': 'public, max-age=604800, immutable',
+        'access-control-allow-origin': '*',
+      },
+      body: body.toString('base64'),
+      isBase64Encoded: true,
+    };
+  }
+  // Absent here. Find the nearest ancestor that IS published, so the client
+  // makes one more request rather than one per level.
+  let hint = '';
+  for (let up = 1; z - up >= DEM_Z_MIN; up++) {
+    const [az, ax, ay] = [z - up, x >> up, y >> up];
+    if (await demHas(az, ax, ay)) { hint = ` ${az}/${ax}/${ay}`; break; }
+  }
+  const sentinel = Buffer.from(`ABSENT${hint}\n`, 'utf8');
+  try { await putTile(path, sentinel, 'text/plain; charset=utf-8', null); } catch { /* best effort */ }
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'public, max-age=604800, immutable',
+      'access-control-allow-origin': '*',
+    },
+    body: sentinel.toString('utf8'),
+  };
+}
+
 // ── the overview tiles: the chart's coarse vector source ───────────
 // The fine tiles stop at OSM_RING_MAX because covering a 47km chart at z16 is
 // 8649 Overpass queries — "anything more honest needs a coarser road source",
@@ -807,6 +1100,9 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
   if (z < NE_MIN_Z || z > 13 || x >= 2 ** z || y >= 2 ** z) {
     return respond(400, 'application/json', JSON.stringify({ error: 'overview tile out of range' }));
   }
+  // z0 IS ONE TILE AND IT IS THE WORLD. Nothing below the bake's ceiling asks
+  // an upstream, so the widest rungs cost a little arithmetic and bank like
+  // any other tile; see NE_MIN_Z for what each weighs.
   // ── THE WIDE RUNGS DO NOT ASK ANYONE ───────────────────────────────
   //
   // z7, z8 and z9 come from the Natural Earth bake in `ne-wide.ts`. They used
@@ -1202,6 +1498,7 @@ function overpassQuery(z: number, x: number, y: number): string {
       nwr["historic"~"^(castle|fort|monument|memorial|ruins|archaeological_site|city_gate|citywalls|aqueduct)$"](${bbox});
       nwr["power"="generator"]["generator:source"="wind"](${bbox});
       way["waterway"~"^(dam|weir)$"](${bbox});
+      nwr["bridge:support"](${bbox});
     );out geom 2000;`;
 }
 
@@ -1243,7 +1540,15 @@ async function askMirror(url: string, query: string, ms: number): Promise<RawWay
   // and cached in every browser that fetched it. Never seen in the wild here
   // (a 25-tile corridor audit found zero disagreements with Overpass), which
   // is precisely why it is worth closing before it is.
-  if (json.remark && /timed out|out of memory|runtime error/i.test(json.remark)) {
+  // ANY remark, not a list of the ones we thought of. The list was
+  // `timed out|out of memory|runtime error`, and the reasoning behind it was
+  // sound for the failures it named — but a bank with no expiry cannot
+  // afford a guess about which remarks are benign. Overpass says something
+  // in `remark` when the answer is not clean; that is the whole signal, and
+  // the cost of heeding all of it is one 503 and a retry, against a wrong
+  // tile written down for ever. The Golden Gate's empty column (see TILE_V)
+  // is what a missed one looks like.
+  if (json.remark) {
     throw new Error(`remark: ${json.remark.slice(0, 120)}`);
   }
   return json.elements ?? [];
@@ -1981,6 +2286,10 @@ export const handler = async (event: {
     if (tile) return serveTile(path, tile);
     const cover = path.match(COVER_RE);
     if (cover) return serveCover(path, cover);
+    const dem = path.match(DEM_RE);
+    if (dem) return serveDem(path, dem);
+    const cw = path.match(COVERW_RE);
+    if (cw) return serveCoverWide(path, cw);
     const ov = path.match(OV_RE);
     if (ov) return serveOverview(path, ov);
     const pk = path.match(PEAK_RE);
@@ -1995,6 +2304,7 @@ export const handler = async (event: {
   }
   try {
     if (path === '/sw.js') return serveServiceWorker();
+    if (path === '/build') return serveBuild();
     const asset = serveWebAsset(path);
     if (asset) return asset;
     if (path.startsWith('/fixtures/')) {
@@ -2013,6 +2323,6 @@ export const handler = async (event: {
   // A load that asked for the dev console gets the policy that lets its
   // prompt run — see CSP_EVAL — and is never stored as the shell.
   return erudaOn(event.rawQueryString)
-    ? respond(200, 'text/html; charset=utf-8', SHELL, { 'content-security-policy': CSP_EVAL, 'cache-control': 'no-store' })
-    : respond(200, 'text/html; charset=utf-8', SHELL, { 'content-security-policy': CSP });
+    ? respond(200, 'text/html; charset=utf-8', shellHtml(), { 'content-security-policy': CSP_EVAL, 'cache-control': 'no-store' })
+    : respond(200, 'text/html; charset=utf-8', shellHtml(), { 'content-security-policy': CSP });
 };

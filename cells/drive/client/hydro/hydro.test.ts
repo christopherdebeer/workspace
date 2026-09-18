@@ -1,6 +1,12 @@
 import { HydroBodyRegistry } from './body-registry';
 import { analyseHydroTile, buildHydroTile } from './build-tile';
 import { sampleFieldSurface } from './system';
+import { extractOsmHydro } from './osm';
+import {
+  extractFlowingHydroShoreSegments,
+  extractHydroShoreSegments,
+} from './shore-contour';
+import { sampleBankField, WATERLINE_CUT } from '../shoreline';
 import { HYDRO_KIND_ID, type HydroFeature, type HydroTileInput } from './types';
 import { HYDRO_FRAGMENT_SHADER } from './shaders';
 
@@ -28,11 +34,42 @@ export function runHydroSelfTest(): void {
     && HYDRO_FRAGMENT_SHADER.includes('terrainCoupling'),
   'surface colour continuously includes sky reflection and shallow terrain tint');
   assert(HYDRO_FRAGMENT_SHADER.includes('cobbleColour')
-    && HYDRO_FRAGMENT_SHADER.includes('bedVisibility'),
+    && HYDRO_FRAGMENT_SHADER.includes('bedVisibility')
+    && HYDRO_FRAGMENT_SHADER.includes('pebbleSpeck')
+    && HYDRO_FRAGMENT_SHADER.includes('gravelMineral')
+    && HYDRO_FRAGMENT_SHADER.includes('float bedMixCap = mix(0.95, 0.82, vFlowing)'),
   'clear shallows reveal a stable sediment, pebble and cobble bed');
+  assert(!HYDRO_FRAGMENT_SHADER.includes('terrainC * 1.32')
+    && !HYDRO_FRAGMENT_SHADER.includes('mix(1.12, 1.30, overhead)'),
+  'flowing shallow beds stay in the local bank key instead of drawing a cream rim');
+  assert(HYDRO_FRAGMENT_SHADER.includes('stoneCluster')
+    && HYDRO_FRAGMENT_SHADER.includes('stoneGrain')
+    && HYDRO_FRAGMENT_SHADER.includes('vec2 bedFlowP = bedP')
+    && HYDRO_FRAGMENT_SHADER.includes('vec2(0.012, 0.026)'),
+  'world-anchored mineral texture and river-aligned gravel bars retain production-scale structure');
+  assert(HYDRO_FRAGMENT_SHADER.includes('float bedClass')
+    && HYDRO_FRAGMENT_SHADER.includes('stonePresence')
+    && HYDRO_FRAGMENT_SHADER.includes('siltSediment'),
+  'the shader resolves canonical silt, sand, gravel, pebble and rock beds');
+  assert(HYDRO_FRAGMENT_SHADER.includes('float bankClass')
+    && HYDRO_FRAGMENT_SHADER.includes('mudBank')
+    && HYDRO_FRAGMENT_SHADER.includes('edgeMaterial'),
+  'the body edge resolves canonical soil, mud, gravel and rock material');
+  const taggedBed = extractOsmHydro([{
+    id: 7,
+    tags: { waterway: 'stream', surface: 'bedrock', 'bank:material': 'gravel' },
+    geometry: [{ lat: 0, lon: 0 }, { lat: 0, lon: .001 }],
+  }], { project: (lat, lon) => [lon * 1000, lat * 1000] });
+  assert(taggedBed[0]?.bedMaterial === 'rock',
+    'OSM bed and surface tags enter the canonical bed-material contract');
+  assert(taggedBed[0]?.bankMaterial === 'gravel',
+    'OSM bank tags enter the canonical bank-material contract');
   assert(HYDRO_FRAGMENT_SHADER.includes('shallowRapid')
-    && HYDRO_FRAGMENT_SHADER.includes('rapidChop'),
-  'shallow high-energy reaches receive a distinct broken rapid response');
+    && HYDRO_FRAGMENT_SHADER.includes('rapidChop')
+    && HYDRO_FRAGMENT_SHADER.includes('rapidTongue')
+    && HYDRO_FRAGMENT_SHADER.includes('tongueEnergy = max(energyGate, shallowRapid')
+    && HYDRO_FRAGMENT_SHADER.includes('tongueReach = mix(0.38, 1.0, rapidReach)'),
+  'shallow high-energy reaches receive coherent flow-aligned rapid tongues');
   assert(HYDRO_FRAGMENT_SHADER.includes('riverEddyField')
     && HYDRO_FRAGMENT_SHADER.includes('riverEddyTone'),
   'bend-driven eddies affect both normals and restrained water tone');
@@ -41,6 +78,22 @@ export function runHydroSelfTest(): void {
   'recent wetted vehicle positions leave an ageing surface trail');
   assert(!HYDRO_FRAGMENT_SHADER.includes('edgeDither'),
     'river coverage does not duplicate the global dither pipeline');
+  assert(HYDRO_FRAGMENT_SHADER.includes('#ifdef HYDRO_EDGE_BLEND')
+    && HYDRO_FRAGMENT_SHADER.includes('waterBlend = mix(1.0, waterBlend'),
+  'inland bank cohesion is a controllable blend inside the single water body');
+  assert(HYDRO_FRAGMENT_SHADER.includes('vec3 edgeGround = mix(terrainC')
+    && HYDRO_FRAGMENT_SHADER.includes('float riverFadeM = clamp(1.65')
+    && HYDRO_FRAGMENT_SHADER.includes('min(bankMetres, geometryField.g)')
+    && HYDRO_FRAGMENT_SHADER.includes('coverageInterior = smoothstep(bodyCut'),
+  'river edges use the rendered coverage contour before widening into shallows');
+  assert(!HYDRO_FRAGMENT_SHADER.includes('edgeDither'),
+    'bank feather does not implement local dithering');
+  assert(HYDRO_FRAGMENT_SHADER.includes(
+    '(bankPatch(vAbsoluteXZ) - 0.5) * 0.08',
+  ), 'rendered inland waterline uses the shared narrow contour perturbation');
+  const riverCut = WATERLINE_CUT(123.4, 456.7, 'river');
+  assert(riverCut >= 0.46 && riverCut <= 0.54,
+    `CPU inland waterline stays close to the canonical contour (saw ${riverCut})`);
   const coastalMain = HYDRO_FRAGMENT_SHADER.indexOf('bool coastalKind');
   const terrainDeclaration = HYDRO_FRAGMENT_SHADER.indexOf(
     'vec3 terrainC = uTerrainColour', coastalMain,
@@ -94,7 +147,9 @@ export function runHydroSelfTest(): void {
   const slope = new Float32Array(16 * 16);
   for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) slope[z * 16 + x] = 40 - z * 2;
   const river: HydroFeature = {
-    id: 'osm:river', source: 'osm', kind: 'river', intermittent: false, tidal: false,
+    id: 'osm:river', source: 'osm', kind: 'river', intermittent: true, tidal: true,
+    bedMaterial: 'pebble',
+    bankMaterial: 'rock',
     geometry: { type: 'line', widthM: 8, points: ring(300, 80, 300, 220, 300, 380, 300, 520) },
   };
   const riverInput = { ...constantInput([river], 0), elevation: { width: 16, height: 16, data: slope } };
@@ -127,7 +182,59 @@ export function runHydroSelfTest(): void {
   // downstream is +z and s should increase with z.
   const riverRegistry = new HydroBodyRegistry(0);
   riverRegistry.updateTile(riverInput.key, riverAnalysis.observations);
+  assert(riverRegistry.get(river.id)?.bedMaterial === 'pebble',
+    'registry preserves explicit categorical bed material');
+  assert(riverRegistry.get(river.id)?.bankMaterial === 'rock',
+    'registry preserves explicit categorical bank material');
   const riverField = buildHydroTile(riverInput, riverRegistry, riverAnalysis, { fieldResolution: 128 });
+  assert(riverField.ground.length === riverField.width * riverField.height
+    && riverField.ground.every(Number.isFinite),
+  'the immutable field carries finite terrain elevation at every texel');
+  const shoreSegments = extractHydroShoreSegments(riverField);
+  assert(shoreSegments.length > 8
+    && shoreSegments.every((segment) =>
+      Number.isFinite(segment.a.groundM)
+      && Number.isFinite(segment.b.groundM)
+      && Math.hypot(segment.b.x - segment.a.x, segment.b.z - segment.a.z) > 0),
+  'coverage extraction produces finite terrain-attached shoreline segments');
+  const flowingShoreSegments = extractFlowingHydroShoreSegments(
+    riverField,
+    .5,
+    true,
+  );
+  assert(flowingShoreSegments.length >= shoreSegments.length
+    && flowingShoreSegments.every((segment) =>
+      Number.isFinite(segment.a.x)
+      && Number.isFinite(segment.a.z)
+      && Number.isFinite(segment.b.x)
+      && Number.isFinite(segment.b.z)),
+  'flowing terrain contours preserve the river shoreline through the gutter pass');
+  const riverSample = sampleFieldSurface(riverField, 300, 300, .1);
+  assert(riverSample?.bedMaterial === 'pebble',
+    'packed field samples preserve explicit bed material');
+  assert(riverSample?.bankMaterial === 'rock',
+    'packed field samples preserve explicit bank material');
+  assert(riverSample?.intermittent && riverSample.tidal,
+    'packed bed and bank classes do not corrupt intermittent and tidal flags');
+  let dryBankDistance = -1;
+  for (let iz = riverField.gutter; iz < riverField.gutter + riverField.resolution; iz++) {
+    for (let ix = riverField.gutter; ix < riverField.gutter + riverField.resolution; ix++) {
+      const i = iz * riverField.width + ix;
+      if (riverField.geometry[i * 4] >= 0.5) continue;
+      const x = riverField.bounds.minX
+        + ((ix - riverField.gutter + 0.5) / riverField.resolution) * 600;
+      const z = riverField.bounds.minZ
+        + ((iz - riverField.gutter + 0.5) / riverField.resolution) * 600;
+      const bank = sampleBankField(riverField, x, z, 12);
+      if (bank && !bank.wet) {
+        dryBankDistance = bank.shoreDistanceM;
+        break;
+      }
+    }
+    if (dryBankDistance >= 0) break;
+  }
+  assert(dryBankDistance > 0 && dryBankDistance <= 12,
+    `dry bank reports positive metre distance to water (saw ${dryBankDistance})`);
   assert(!!riverField.structure, 'a flowing tile carries the structure field');
   if (riverField.structure) {
     const st = riverField.structure;
@@ -149,6 +256,29 @@ export function runHydroSelfTest(): void {
       `n changes sign across the channel (saw ${st[left * 4 + 1].toFixed(2)} / ${st[right * 4 + 1].toFixed(2)})`);
     assert(Math.abs(st[up * 4 + 3] - 4) < 0.01, 'half-width rides in the fourth channel');
   }
+
+  const culvertInput: HydroTileInput = {
+    ...riverInput,
+    key: 'test/culvert',
+    surfaceOccluders: [{
+      kind: 'culvert',
+      x: 300,
+      z: 300,
+      roadTangent: [1, 0],
+      roadHalfWidthM: 8,
+      halfLengthM: 12,
+    }],
+  };
+  const culvertAnalysis = analyseHydroTile(culvertInput);
+  const culvertRegistry = new HydroBodyRegistry(0);
+  culvertRegistry.updateTile(culvertInput.key, culvertAnalysis.observations);
+  const culvertField = buildHydroTile(
+    culvertInput, culvertRegistry, culvertAnalysis, { fieldResolution: 128 },
+  );
+  assert(!sampleFieldSurface(culvertField, 300, 300, .5),
+    'culvert structure suppresses the visible free surface under the road');
+  assert(!!sampleFieldSurface(culvertField, 300, 250, .5),
+    'culvert mouths retain open water beyond the carriageway');
 
   // ── A SUB-TEXEL DIAGONAL IS STILL ONE RIVER ── production field texels are
   // ~18.75m across while an unnamed stream defaults to 4m. If its visual mask

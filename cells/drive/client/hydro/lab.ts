@@ -1,16 +1,31 @@
 import * as THREE from 'three';
 import { createDials } from '../lab-dials';
 import {
+  createTerrainKernel,
+  type BreakLine,
+  type HeightTile,
+  type Rgb,
+  type TerrainStore,
+} from '../terrain-kernel';
+import { buildSubstrateCells, SUB_FIELD_N } from '../substrate-field';
+import {
   analyseHydroTile,
   FLOWING_NOMINAL_DEPTH_M,
   type HydroTileAnalysis,
 } from './build-tile';
 import { nearestSegment } from './geometry';
+import { extractFlowingHydroShoreSegments } from './shore-contour';
 import { createHydroSystem, type HydroSystem } from './system';
-import { bankHabitat, bankPatch, WATERLINE_CUT } from '../shoreline';
+import {
+  bankHabitat,
+  bankPatch,
+  bankWetMargin,
+  sampleBankField,
+  WATERLINE_CUT,
+} from '../shoreline';
 import type {
   CoverageGrid, ElevationGrid, HydroDebugView, HydroFeature, HydroKind,
-  HydroSample, HydroTileInput, HydroTuning, WorldBounds,
+  HydroSample, HydroTileField, HydroTileInput, HydroTuning, WorldBounds,
 } from './types';
 
 interface Fixture {
@@ -31,20 +46,21 @@ const pts = (...v: number[]): Float64Array => new Float64Array(v);
 
 function area(
   id: string, kind: HydroKind, level: number, outer: number[], holes: number[][] = [],
-  tuning: Partial<Pick<HydroFeature, 'roughness' | 'turbidity' | 'intermittent' | 'tidal'>> = {},
+  tuning: Partial<Pick<HydroFeature, 'roughness' | 'turbidity' | 'bedMaterial' | 'bankMaterial' | 'intermittent' | 'tidal'>> = {},
 ): HydroFeature {
   return {
     id, source: 'authored', kind, taggedLevelM: level,
     intermittent: tuning.intermittent ?? false,
     tidal: tuning.tidal ?? false,
     roughness: tuning.roughness, turbidity: tuning.turbidity,
+    bedMaterial: tuning.bedMaterial, bankMaterial: tuning.bankMaterial,
     geometry: { type: 'area', polygons: [{ outer: pts(...outer), holes: holes.map((h) => pts(...h)) }] },
   };
 }
 
 function channel(
   id: string, kind: 'river' | 'stream' | 'canal', widthM: number, points: number[],
-  tuning: Partial<Pick<HydroFeature, 'roughness' | 'turbidity' | 'taggedLevelM'>> = {},
+  tuning: Partial<Pick<HydroFeature, 'roughness' | 'turbidity' | 'bedMaterial' | 'bankMaterial' | 'taggedLevelM'>> = {},
 ): HydroFeature {
   return {
     id, source: 'authored', kind, intermittent: false, tidal: false, ...tuning,
@@ -86,7 +102,7 @@ const FIXTURES: readonly Fixture[] = [
     features: [
       channel('lab:canal', 'canal', 12,
         [-145,-260, -120,-160, -138,-55, -90,45, -105,155, -62,260],
-        { taggedLevelM: -2.7, roughness: .12, turbidity: .45 }),
+        { taggedLevelM: -2.7, roughness: .12, turbidity: .45, bedMaterial: 'silt', bankMaterial: 'soil' }),
       area('lab:reservoir', 'reservoir', -3,
         [35,-85, 145,-92, 184,-22, 145,62, 42,78, 8,-8], [],
         { roughness: .15, turbidity: .38 }),
@@ -126,7 +142,7 @@ const FIXTURES: readonly Fixture[] = [
     features: [
       channel('lab:river', 'river', 15,
         [-28,-285, 35,-225, 68,-150, 50,-75, -18,0, -76,85, -62,165, 4,238, 38,285],
-        { roughness: .72, turbidity: .42 }),
+        { roughness: .72, turbidity: .42, bedMaterial: 'gravel', bankMaterial: 'soil' }),
     ],
   },
   {
@@ -142,7 +158,7 @@ const FIXTURES: readonly Fixture[] = [
       channel('lab:shallows', 'river', 26,
         [54,-285, -10,-230, -72,-165, -88,-95, -42,-25,
           48,45, 94,110, 62,175, -18,235, -70,285],
-        { roughness: .48, turbidity: .12 }),
+        { roughness: .48, turbidity: .12, bedMaterial: 'pebble', bankMaterial: 'gravel' }),
     ],
     rocks: [
       [-74,-151,2.2,1.2], [-82,-127,1.5,.9], [75,91,1.8,1.0],
@@ -164,7 +180,7 @@ const FIXTURES: readonly Fixture[] = [
       channel('lab:rapids', 'river', 18,
         [12,-285, -36,-225, -41,-165, -46,-130, -54,-95, -31,-30,
           40,40, 54,70, 53,100, 42,150, 38,220, -12,285],
-        { roughness: .92, turbidity: .35 }),
+        { roughness: .92, turbidity: .35, bedMaterial: 'rock', bankMaterial: 'rock' }),
     ],
     rocks: [
       [-49,-145,3.8,2.5], [-41,-126,2.5,1.7], [-55,-111,1.8,1.25],
@@ -228,15 +244,15 @@ const STYLE = [
   '.row output{text-align:right;color:#e6d694;font:9px ui-monospace,monospace}.row input[type=range]{width:100%;accent-color:#67bea0}',
   '.row input[type=number],.row select{width:100%;min-width:0;color:#dce8d5;background:#0c211c;border:1px solid #31534b;padding:5px;font-size:9px}',
   '.check{display:flex;gap:8px;align-items:center;color:#aabcb2;font-size:9px;min-height:27px}.check input{accent-color:#67bea0}',
-  '.status{position:fixed;left:16px;bottom:14px;z-index:4;max-width:min(540px,calc(100vw - 350px));background:#07100fdd;border-left:3px solid #5ca78f;padding:8px 10px;color:#b8c8bf;font:10px/1.45 ui-monospace,monospace;white-space:pre-wrap}',
+  '.status{margin:10px 0 0;background:#07100fdd;border-left:3px solid #5ca78f;padding:8px 10px;color:#b8c8bf;font:10px/1.45 ui-monospace,monospace;white-space:pre-wrap}',
   // The chrome eats 43vh on a phone, which is most of the thing you came to
   // look at. `bare` takes all of it away; the toggle itself never hides, or
   // there would be no way back.
   '.uibtn{position:fixed;right:12px;top:12px;z-index:9;min-width:34px;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;'
     + 'color:#9fd8c2;background:#07100fee;border:1px solid #31534b;font:9px/1 ui-monospace,monospace;letter-spacing:.1em;cursor:pointer;user-select:none;-webkit-user-select:none}',
   '.uibtn:active{background:#0f2a24}',
-  'body.bare .head,body.bare .hint,body.bare .panel,body.bare .status{display:none}',
-  '@media(max-width:700px){.panel{top:auto;height:43vh;width:calc(100vw - 24px)}.status{bottom:calc(43vh + 22px);max-width:calc(100vw - 32px)}.hint{display:none}}',
+  'body.bare .head,body.bare .hint,body.bare .panel,body.bare .status,body.bare .lab-dials{display:none}',
+  '@media(max-width:700px){body:not(.bare) #hydro-canvas{bottom:auto;height:57vh}.panel{top:auto;height:43vh;width:calc(100vw - 24px)}.hint{display:none}}',
 ].join('');
 
 function range(id: string, label: string, min: number, max: number, step: number, value: number): string {
@@ -256,13 +272,14 @@ function page(): string {
     + '<div class="uibtn" id="uibtn" title="hide the panels (H)">HIDE</div>'
     + '<aside class="panel"><h2>WATER FIELD / GPU SURFACE</h2><div class="note" id="note"></div>'
     + '<div class="row wide"><label>FIXTURE</label><select id="fixture">' + fixtureOptions + '</select></div>'
-    + '<div class="row wide"><label>CAMERA</label><select id="cameraMode"><option>OVERVIEW</option><option>DETAIL</option></select></div>'
+    + '<div class="row wide"><label>CAMERA</label><select id="cameraMode"><option>OVERVIEW</option><option>DETAIL</option><option>GRAZING</option></select></div>'
     + '<div class="row wide"><label>VIEW</label><select id="debug">' + debugOptions + '</select></div>'
     + '<details class="section" data-section="weather" open><summary class="st">WEATHER</summary>'
     + range('wind','WIND m/s',0,22,.1,5) + range('direction','WIND °',0,359,1,35) + range('rain','RAIN',0,1,.01,.1)
     + '<div class="row"><label>OCEAN m</label><input id="ocean" type="number" step=".1" value="0"><output></output></div></details>'
     + '<details class="section" data-section="surface" open><summary class="st">SURFACE</summary>'
     + range('amplitude','WAVE AMP',0,3,.01,1) + range('length','WAVE LENGTH',.2,3,.01,1)
+    + range('chop','CREST CHOP',0,3,.01,1)
     + range('ripple','RIPPLE',0,3,.01,1) + range('foam','FOAM',0,3,.01,1) + range('shore','SHORE FADE',.2,3,.01,1)
     + '</details><details class="section" data-section="river" open><summary class="st">RIVER DETAIL</summary>'
     + '<div class="row wide"><label>ISOLATE</label><select id="detailPreset">'
@@ -270,17 +287,19 @@ function page(): string {
     + '<option>EDDIES</option><option>RAPIDS</option><option>WAKE</option><option>CUSTOM</option></select></div>'
     + range('bed','BED DETAIL',0,3,.01,1) + range('edge','BANK EDGE',0,3,.01,1)
     + range('turbulence','TURBULENCE',0,3,.01,1) + range('eddies','EDDIES',0,3,.01,1)
+    + '<label class="check"><input id="bankFeather" type="checkbox" checked> continuous bank feather</label>'
     + '<label class="check"><input id="wakeDemo" type="checkbox"> vehicle wake demo</label>'
     + range('wakeSpeed','WAKE m/s',1,12,.1,5)
     + '</details><details class="section" data-section="sampling" open><summary class="st">SAMPLING</summary>'
-    // The 600m lab at 32/8 has the same physical sampling as a production
-    // 2.4km tile at 128/32: 18.75m field texels and 75m ocean mesh cells.
-    // Default to that honest view; higher settings remain useful microscopes.
-    + '<div class="row wide"><label>FIELD px</label><select id="field"><option selected value="32">32 · PROD SCALE</option><option>64</option><option>128</option><option>256</option></select></div>'
+    // Flowing production tiles now use 256 samples across 2.4km. The 600m lab
+    // therefore uses 64 for the same 9.375m texel. Eight cells still match the
+    // production base lattice; coastal water automatically receives the same
+    // 3× geometry tier as production (shown in status).
+    + '<div class="row wide"><label>FIELD px</label><select id="field"><option value="32">32 · BASE TIER</option><option selected value="64">64 · FLOW PROD</option><option>128</option><option>256</option></select></div>'
     + '<div class="row wide"><label>MESH seg</label><select id="mesh"><option selected value="8">8 · PROD SCALE</option><option>16</option><option>32</option><option>64</option></select></div>'
     + '<label class="check"><input id="wire" type="checkbox"> water wireframe</label>'
-    + '<label class="check"><input id="ground" type="checkbox" checked> terrain visible</label></details></aside>'
-    + '<div class="status" id="status">building hydro fixture…</div></body>';
+    + '<label class="check"><input id="ground" type="checkbox" checked> terrain visible</label></details>'
+    + '<div class="status" id="status">building hydro fixture…</div></aside></body>';
 }
 
 /**
@@ -289,9 +308,15 @@ function page(): string {
  * monotone river surface disappeared under every local ground hump and broke
  * into islands in close views. Carve only the display mesh from the analysed
  * profile; hydro still receives the raw elevation and therefore builds the
- * exact profile this carve is based on.
+ * exact profile this carve is based on. Its topology is now built by the same
+ * renderer-neutral terrain kernel as production and split by the exact
+ * flowing-water contour.
  */
-function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
+function makeTerrain(
+  f: Fixture,
+  analysis: HydroTileAnalysis,
+  field: HydroTileField | undefined,
+): THREE.Mesh {
   const channels: Array<{
     profile: Float32Array;
     halfW: number;
@@ -326,22 +351,23 @@ function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
     }
     return ground;
   };
-  // Shore inspection needs a finer display terrain than the broad water mesh:
-  // coarse, flat-shaded bank triangles otherwise masquerade as a hydro edge
-  // defect when the camera comes down for pebble/eddy work.
-  const geometry = new THREE.PlaneGeometry(600, 600, 192, 192);
-  geometry.rotateX(-Math.PI / 2);
-  const p = geometry.attributes.position as THREE.BufferAttribute;
-  const colour = new Float32Array(p.count * 3);
-  const low = new THREE.Color(0x506352), high = new THREE.Color(0x967c55);
-  const mineral = new THREE.Color(0x5c5238), damp = new THREE.Color(0x39483b);
+  const low = new THREE.Color(0x506352);
+  const high = new THREE.Color(0x967c55);
+  const mineral = new THREE.Color(0x5c5238);
+  const damp = new THREE.Color(0x39483b);
   const reed = new THREE.Color(0x667033);
-  const scratch = new THREE.Color();
-  for (let i = 0; i < p.count; i++) {
-    const x = p.getX(i), z = p.getZ(i);
-    const h = carvedHeight(x, z);
-    p.setY(i, h - f.originY);
-    scratch.copy(low).lerp(high, Math.max(0, Math.min(1, .45 + (h - f.originY) / 70)));
+  const colourAt = (x: number, z: number, h = carvedHeight(x, z)): Rgb => {
+    const elevationMix = THREE.MathUtils.clamp(.45 + (h - f.originY) / 70, 0, 1);
+    const colour: Rgb = [
+      THREE.MathUtils.lerp(low.r, high.r, elevationMix),
+      THREE.MathUtils.lerp(low.g, high.g, elevationMix),
+      THREE.MathUtils.lerp(low.b, high.b, elevationMix),
+    ];
+    const blend = (target: THREE.Color, weight: number): void => {
+      colour[0] = THREE.MathUtils.lerp(colour[0], target.r, weight);
+      colour[1] = THREE.MathUtils.lerp(colour[1], target.g, weight);
+      colour[2] = THREE.MathUtils.lerp(colour[2], target.b, weight);
+    };
     let nearest: {
       distanceM: number;
       halfW: number;
@@ -364,55 +390,143 @@ function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
         flow: [dx / length, dz / length],
       };
     }
-    if (nearest) {
-      const bankDistance = nearest.distanceM - nearest.halfW;
+    const fieldBank = field ? sampleBankField(field, x, z, 14) : undefined;
+    if (fieldBank || nearest) {
+      // The lab's geometry follows the exact field contour, so its colour must
+      // use that contour too. The centreline half-width remains only a fallback
+      // for fixtures whose field has not built.
+      const bankDistance = fieldBank
+        ? (fieldBank.wet ? -fieldBank.shoreDistanceM : fieldBank.shoreDistanceM)
+        : (nearest!.distanceM - nearest!.halfW);
       if (bankDistance > -.5 && bankDistance < 14) {
         const slope = Math.min(.6, Math.hypot(
           f.height(x + 2, z) - f.height(x - 2, z),
           f.height(x, z + 2) - f.height(x, z - 2),
         ) / 4);
-        const habitat = bankHabitat(null, .58, 14, slope, true, h, {
-          kind: nearest.kind,
-          restingLevelM: nearest.surfaceM,
-          depthM: Math.max(0, nearest.surfaceM - h),
+        const water = fieldBank ?? {
+          kind: nearest!.kind,
+          restingLevelM: nearest!.surfaceM,
+          depthM: Math.max(0, nearest!.surfaceM - h),
           shoreDistanceM: Math.max(0, bankDistance),
-          flow: nearest.flow,
-        });
+          flow: nearest!.flow,
+        };
+        const habitat = bankHabitat(null, .58, 14, slope, true, h, water);
         const patch = bankPatch(x, z);
         const bankFade = 1 - THREE.MathUtils.smoothstep(bankDistance, 7, 14);
         const mineralWeight = habitat.mineral * bankFade
           * THREE.MathUtils.smoothstep(patch, .18, .72);
         const reedWeight = habitat.reeds * bankFade
           * THREE.MathUtils.smoothstep(patch, .48, .82);
-        // A patch-varying damp fringe continues the shallow water's local
-        // terrain colour onto dry ground. It breaks the silhouette without
-        // alpha stipple, shader dithering, or a second fake water surface.
-        const wetWidth = 2.4 + patch * 3.8;
-        const dampWeight = 1 - THREE.MathUtils.smoothstep(bankDistance, 0, wetWidth);
-        scratch.lerp(damp, Math.min(.68, dampWeight * .68));
-        scratch.lerp(mineral, Math.min(.78, mineralWeight * .82));
-        scratch.lerp(reed, Math.min(.58, reedWeight * .58));
+        // The same metre-space wet margin production bakes into the sward
+        // colour field. It makes the dry bank begin before the mesh contour,
+        // without alpha stipple or a second fake water surface.
+        const dampWeight = bankWetMargin(bankDistance, patch);
+        blend(damp, Math.min(.52, dampWeight * .52));
+        blend(mineral, Math.min(.78, mineralWeight * .82));
+        blend(reed, Math.min(.58, reedWeight * .58));
       }
     }
-    colour[i*3] = scratch.r; colour[i*3+1] = scratch.g; colour[i*3+2] = scratch.b;
-  }
-  geometry.setAttribute('color', new THREE.BufferAttribute(colour, 3));
-  geometry.computeVertexNormals();
+    return colour;
+  };
+
+  const shoreSegments = field
+    ? extractFlowingHydroShoreSegments(field, 0.5, false)
+    : [];
+  const breakLines: BreakLine[] = shoreSegments.map((segment) => ({
+    ax: segment.a.x,
+    az: segment.a.z,
+    bx: segment.b.x,
+    bz: segment.b.z,
+  }));
+  // 128 segments over a 2.4km production tile is 18.75m per broad cell.
+  // Thirty-two over this 600m fixture keeps the same scale; the contour
+  // splitter spends extra vertices only where the waterline crosses it.
+  const terrainSegments = 32;
+  const heightTile: HeightTile = {
+    tx: 0,
+    ty: 0,
+    xs: BOUNDS.minX,
+    zs: BOUNDS.minZ,
+    w: BOUNDS.maxX - BOUNDS.minX,
+    h: BOUNDS.maxZ - BOUNDS.minZ,
+    // The lab height source is analytic and `hasHeight` is always true, so
+    // this production-raster compatibility array is never sampled.
+    data: new Float32Array(256 * 256),
+  };
+  const store: TerrainStore = {
+    heights: new Map([['0/0', heightTile]]),
+    hasHeight: () => true,
+    sampleHeight: (x, z) => carvedHeight(x, z) - f.originY,
+    sampleHeightRaw: (x, z) => carvedHeight(x, z) - f.originY,
+    sampleCover: () => null,
+    coverPaint: () => null,
+    coverWater: () => false,
+    crossingAt: () => null,
+    cover: { water: 1, built: 2 },
+    seaAbs: () => f.oceanLevelM,
+    baseElev: f.originY,
+    strips: new Map(),
+    cutL: heightTile.w / terrainSegments,
+    channels: new Map(),
+    grid: heightTile.w / terrainSegments,
+    hydroBreakLines: () => breakLines,
+    onRoad: () => false,
+    palette: (_elevAbs, _slope, _cover, x, z) => colourAt(x, z),
+    areaTint: () => null,
+    borders: new Map(),
+    nrmCoarsePx: 4, nrmRes: 2,
+    cutWash: 0,
+    cprobe: false,
+    carveLog: new Map(),
+    cutRelief: false,
+  };
+  const built = createTerrainKernel(buildSubstrateCells, SUB_FIELD_N).buildTile(
+    store,
+    heightTile,
+    terrainSegments,
+    false,
+    true,
+  );
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(built.pos, 3));
+  geometry.setAttribute('uv', new THREE.BufferAttribute(built.uv, 2));
+  geometry.setAttribute('color', new THREE.BufferAttribute(built.colors, 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(built.normals, 3));
+  geometry.setIndex(new THREE.BufferAttribute(built.idx, 1));
+  geometry.computeBoundingSphere();
   const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
     vertexColors: true, roughness: .94, metalness: 0, flatShading: false,
   }));
   // The production hydro shader samples the sward colour field beneath each
   // fragment. Give the isolated lab the same evidence instead of a single
   // fallback green, so shallow water and exposed banks share a palette.
-  const rgba = new Uint8Array(p.count * 4);
-  for (let i = 0; i < p.count; i++) {
-    rgba[i * 4] = Math.round(THREE.MathUtils.clamp(colour[i * 3], 0, 1) * 255);
-    rgba[i * 4 + 1] = Math.round(THREE.MathUtils.clamp(colour[i * 3 + 1], 0, 1) * 255);
-    rgba[i * 4 + 2] = Math.round(THREE.MathUtils.clamp(colour[i * 3 + 2], 0, 1) * 255);
-    rgba[i * 4 + 3] = 255;
+  // The constrained mesh is irregular, while a sampled shader field must
+  // remain regular. Both still share `colourAt`, so there is one bank palette.
+  const terrainFieldSize = 193;
+  const rgba = new Uint8Array(terrainFieldSize * terrainFieldSize * 4);
+  for (let iz = 0; iz < terrainFieldSize; iz++) {
+    const z = THREE.MathUtils.lerp(
+      BOUNDS.minZ,
+      BOUNDS.maxZ,
+      iz / (terrainFieldSize - 1),
+    );
+    for (let ix = 0; ix < terrainFieldSize; ix++) {
+      const x = THREE.MathUtils.lerp(
+        BOUNDS.minX,
+        BOUNDS.maxX,
+        ix / (terrainFieldSize - 1),
+      );
+      const colour = colourAt(x, z);
+      const i = iz * terrainFieldSize + ix;
+      rgba[i * 4] = Math.round(THREE.MathUtils.clamp(colour[0], 0, 1) * 255);
+      rgba[i * 4 + 1] = Math.round(THREE.MathUtils.clamp(colour[1], 0, 1) * 255);
+      rgba[i * 4 + 2] = Math.round(THREE.MathUtils.clamp(colour[2], 0, 1) * 255);
+      rgba[i * 4 + 3] = 255;
+    }
   }
   const terrainField = new THREE.DataTexture(
-    rgba, 193, 193, THREE.RGBAFormat, THREE.UnsignedByteType,
+    rgba, terrainFieldSize, terrainFieldSize,
+    THREE.RGBAFormat, THREE.UnsignedByteType,
   );
   terrainField.flipY = false;
   terrainField.minFilter = THREE.LinearFilter;
@@ -420,6 +534,8 @@ function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
   terrainField.generateMipmaps = false;
   terrainField.needsUpdate = true;
   mesh.userData.terrainField = terrainField;
+  mesh.userData.hydroShoreSegments = shoreSegments.length;
+  mesh.userData.refined = built.refined;
   return mesh;
 }
 
@@ -578,7 +694,8 @@ function sampleText(s: HydroSample | undefined, x: number, z: number): string {
   if (!s) return 'x ' + x.toFixed(1) + '  z ' + z.toFixed(1) + '  · DRY';
   return 'x ' + x.toFixed(1) + '  z ' + z.toFixed(1) + '  · ' + s.kind.toUpperCase()
     + '\nlevel ' + s.restingLevelM.toFixed(2) + 'm  depth ' + s.depthM.toFixed(2)
-    + 'm  shore ' + s.shoreDistanceM.toFixed(1) + 'm'
+    + 'm  shore ' + s.shoreDistanceM.toFixed(1) + 'm  bed ' + s.bedMaterial.toUpperCase()
+    + ' / bank ' + s.bankMaterial.toUpperCase()
     + '\nflow ' + s.flow[0].toFixed(2) + ',' + s.flow[1].toFixed(2)
     + '  fetch ' + s.fetchM.toFixed(0) + 'm';
 }
@@ -623,9 +740,21 @@ export async function startHydroLab(): Promise<void> {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0b1715);
   scene.fog = new THREE.Fog(0x0b1715, 480, 1100);
-  scene.add(new THREE.HemisphereLight(0xbad8cf, 0x332d25, 1.55));
+  const hemi = new THREE.HemisphereLight(0xbad8cf, 0x332d25, 1.55);
+  scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xffd48b, 2.25);
   sun.position.set(260, 430, 180); scene.add(sun);
+  // Hydro receives terrain albedo, while MeshStandardMaterial shades that
+  // albedo with the lab lights. Supply the same reference-noon gain that
+  // production computes in main.ts or the isolated water is reviewed at
+  // roughly half the terrain luminance and every bank looks like a dark cut.
+  const sunUp = sun.position.y / sun.position.length();
+  const labGroundGain = {
+    r: (sun.color.r * sun.intensity * sunUp + hemi.color.r * hemi.intensity) / Math.PI,
+    g: (sun.color.g * sun.intensity * sunUp + hemi.color.g * hemi.intensity) / Math.PI,
+    b: (sun.color.b * sun.intensity * sunUp + hemi.color.b * hemi.intensity) / Math.PI,
+  };
+  const labSkyColour = { r: hemi.color.r, g: hemi.color.g, b: hemi.color.b };
 
   const camera = new THREE.PerspectiveCamera(46, innerWidth / innerHeight, .5, 2200);
   const target = new THREE.Vector3();
@@ -676,15 +805,35 @@ export async function startHydroLab(): Promise<void> {
   const setCameraMode = (mode: string): void => {
     target.set(0, 0, 0);
     yaw = HOME.yaw;
-    if (mode === 'DETAIL') {
-      pitch = .72;
-      distance = 245;
+    if (mode === 'GRAZING') {
+      // A wave can have metres of height and still look flat from the plan
+      // cameras. This profile view stands just offshore and looks shoreward,
+      // exposing silhouette, crest asymmetry and horizontal displacement.
+      target.set(fixture.id === 'coast' ? -22 : 0, 0, 0);
+      yaw = fixture.id === 'coast' ? -Math.PI / 2 : HOME.yaw;
+      pitch = .045;
+      distance = 115;
+    } else if (mode === 'DETAIL') {
+      // A low grazing view lets the near bank hide the channel, especially in
+      // the phone layout where controls own the lower 43% of the screen. The
+      // detail view is an inspection plan: steep enough to keep both banks,
+      // shallows and the downstream rapid visible together.
+      pitch = 1.12;
+      distance = 175;
     } else {
       pitch = HOME.pitch;
       distance = HOME.distance;
     }
     placeCamera();
   };
+  const resizeView = (): void => {
+    const width = Math.max(1, canvas.clientWidth);
+    const height = Math.max(1, canvas.clientHeight);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height, false);
+  };
+  resizeView();
   placeCamera();
 
   let hydro: HydroSystem | undefined;
@@ -708,7 +857,7 @@ export async function startHydroLab(): Promise<void> {
   scene.add(rigMarker);
 
   const tune = (): HydroTuning => ({
-    waveAmplitude: number('amplitude'), waveLength: number('length'),
+    waveAmplitude: number('amplitude'), waveLength: number('length'), waveChop: number('chop'),
     rippleStrength: number('ripple'), foamStrength: number('foam'), shoreFade: number('shore'),
     shallowBedStrength: number('bed'), riverEdgeStrength: number('edge'),
     turbulenceStrength: number('turbulence'), eddyStrength: number('eddies'),
@@ -719,7 +868,13 @@ export async function startHydroLab(): Promise<void> {
     hydro.setTuning(tune());
     hydro.object3d.traverse((o) => {
       const m = o as THREE.Mesh;
-      if (m.material instanceof THREE.ShaderMaterial) m.material.wireframe = get<HTMLInputElement>('wire').checked;
+      if (m.material instanceof THREE.ShaderMaterial) {
+        m.material.wireframe = get<HTMLInputElement>('wire').checked;
+        if (m.name.endsWith(':edge-blend')) {
+          const edge = m.material.uniforms.uEdgeBlendEnabled;
+          if (edge) edge.value = get<HTMLInputElement>('bankFeather').checked ? 1 : 0;
+        }
+      }
     });
   };
 
@@ -729,7 +884,10 @@ export async function startHydroLab(): Promise<void> {
     fixture = FIXTURES.find((f) => f.id === get<HTMLSelectElement>('fixture').value) ?? FIXTURES[0];
     get('note').textContent = fixture.note;
     get<HTMLInputElement>('ocean').value = String(fixture.oceanLevelM);
-    hydro?.dispose();
+    if (hydro) {
+      hydro.object3d.removeFromParent();
+      hydro.dispose();
+    }
     if (terrain) {
       terrain.removeFromParent(); terrain.geometry.dispose(); (terrain.material as THREE.Material).dispose();
     }
@@ -741,12 +899,6 @@ export async function startHydroLab(): Promise<void> {
     }
     const input = tileInput(fixture, ++revision);
     analysis = analyseHydroTile(input);
-    terrain = makeTerrain(fixture, analysis);
-    terrainField = terrain.userData.terrainField as THREE.DataTexture | undefined;
-    terrain.visible = get<HTMLInputElement>('ground').checked;
-    scene.add(terrain);
-    riverDetails = makeRiverDetails(fixture, analysis);
-    scene.add(riverDetails);
     hydro = createHydroSystem({
       fieldResolution: Number(get<HTMLSelectElement>('field').value),
       meshResolution: Number(get<HTMLSelectElement>('mesh').value),
@@ -754,6 +906,16 @@ export async function startHydroLab(): Promise<void> {
     });
     scene.add(hydro.object3d);
     await hydro.upsertTile(input);
+    const field = hydro.fieldAt(
+      (BOUNDS.minX + BOUNDS.maxX) * .5,
+      (BOUNDS.minZ + BOUNDS.maxZ) * .5,
+    );
+    terrain = makeTerrain(fixture, analysis, field);
+    terrainField = terrain.userData.terrainField as THREE.DataTexture | undefined;
+    terrain.visible = get<HTMLInputElement>('ground').checked;
+    scene.add(terrain);
+    riverDetails = makeRiverDetails(fixture, analysis);
+    scene.add(riverDetails);
     apply(); inspected = ''; probe.visible = false; rebuilding = false;
   };
 
@@ -780,7 +942,7 @@ export async function startHydroLab(): Promise<void> {
       'BED / SHALLOWS': [2, .45, 0, 0, .08],
       'BANK EDGES': [.35, 2.2, 0, 0, .05],
       'EDDIES': [.45, .55, .25, 2.3, .08],
-      'RAPIDS': [.25, .65, 1.8, .3, 1.35],
+      'RAPIDS': [.25, .65, 1.8, .3, .9],
       'WAKE': [.6, .8, .25, .5, .3],
     };
     const values = settings[preset];
@@ -815,6 +977,7 @@ export async function startHydroLab(): Promise<void> {
     setCameraMode(get<HTMLSelectElement>('cameraMode').value);
   });
   get<HTMLInputElement>('wire').addEventListener('change', apply);
+  get<HTMLInputElement>('bankFeather').addEventListener('change', apply);
   get<HTMLInputElement>('wakeDemo').addEventListener('change', () => {
     if (!get<HTMLInputElement>('wakeDemo').checked) rigMarker.visible = false;
   });
@@ -919,6 +1082,10 @@ export async function startHydroLab(): Promise<void> {
     document.body.classList.toggle('bare', on);
     uibtn.textContent = on ? 'SHOW' : 'HIDE';
     uibtn.title = on ? 'show the panels (H)' : 'hide the panels (H)';
+    // The phone canvas owns only the space above the dial rack. Recompute its
+    // real drawing buffer when the rack is removed/restored instead of
+    // stretching a full-screen camera behind an opaque panel.
+    requestAnimationFrame(resizeView);
   };
   uibtn.addEventListener('click', () => setBare(!document.body.classList.contains('bare')));
   addEventListener('keydown', (e) => {
@@ -929,9 +1096,7 @@ export async function startHydroLab(): Promise<void> {
     if (e.key === 'r' || e.key === 'R') resetView();
   });
 
-  addEventListener('resize', () => {
-    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight, false);
-  });
+  addEventListener('resize', resizeView);
 
   // ── THE SAME BARGAIN AS EVERY OTHER LAB ──
   // This lab built its own controls long before there was a shared panel, so
@@ -941,9 +1106,9 @@ export async function startHydroLab(): Promise<void> {
   createDials({
     slug: 'hydro',
     adopt: ['fixture', 'debug', 'ocean', 'field', 'mesh', 'wire', 'ground',
-      'wind', 'direction', 'rain', 'amplitude', 'length', 'ripple', 'foam', 'shore',
+      'wind', 'direction', 'rain', 'amplitude', 'length', 'chop', 'ripple', 'foam', 'shore',
       'cameraMode', 'detailPreset', 'bed', 'edge', 'turbulence', 'eddies',
-      'wakeDemo', 'wakeSpeed'],
+      'bankFeather', 'wakeDemo', 'wakeSpeed'],
   });
 
   await rebuild();
@@ -970,6 +1135,10 @@ export async function startHydroLab(): Promise<void> {
       wind: { x: Math.cos(angle), z: Math.sin(angle), speedMps: number('wind') },
       rain: number('rain'),
       sunDirection: { x: sun.position.x, y: sun.position.y, z: sun.position.z },
+      skyColour: labSkyColour,
+      zenithColour: labSkyColour,
+      sceneLight: { r: 1, g: 1, b: 1 },
+      groundGain: labGroundGain,
       terrainColour: { r: .12, g: .16, b: .11 },
       terrainField: terrainField ? {
         texture: terrainField,
@@ -985,10 +1154,23 @@ export async function startHydroLab(): Promise<void> {
     if (now - lastStatus > 180) {
       lastStatus = now;
       const stats = hydro?.stats();
+      const mesh = hydro?.debugTiles()[0] as {
+        coastalMesh?: boolean;
+        meshSegments?: number[];
+      } | undefined;
+      let edgeBodies = 0;
+      hydro?.object3d.traverse((o) => {
+        if ((o as THREE.Mesh).name.endsWith(':edge-blend')) edgeBodies++;
+      });
       get('status').textContent = fixture.label + ' · FIELD ' + get<HTMLSelectElement>('field').value
-        + '² · MESH ' + get<HTMLSelectElement>('mesh').value + '²\n'
+        + '² · MESH ' + get<HTMLSelectElement>('mesh').value + '² BASE'
+        + (mesh?.coastalMesh ? ' / ' + (mesh.meshSegments ?? []).join('×') + ' COAST' : '') + '\n'
         + (stats?.visibleTiles ?? 0) + ' WATER TILE · ' + renderer.info.render.triangles.toLocaleString()
         + ' TRIANGLES · ' + get<HTMLSelectElement>('debug').value.toUpperCase() + '\n'
+        + 'SHORE TOPOLOGY ' + Number(terrain?.userData.hydroShoreSegments ?? 0).toLocaleString()
+        + ' SEGMENTS · TERRAIN ' + (terrain?.userData.refined ? 'CONSTRAINED' : 'PLAIN') + '\n'
+        + 'BANK FEATHER ' + (get<HTMLInputElement>('bankFeather').checked ? 'ON' : 'OFF')
+        + ' · ' + edgeBodies + ' BODY' + (edgeBodies === 1 ? '' : 'IES') + '\n'
         + (inspected || 'point at the terrain to inspect the CPU hydro sample');
     }
     requestAnimationFrame(frame);

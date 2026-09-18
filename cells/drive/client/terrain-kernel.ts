@@ -28,7 +28,46 @@ export interface CellTris { seg: number; offs: Int32Array; tris: Int32Array }
 export interface RefinedMesh { pos: Float32Array; uv: Float32Array; idx: Uint32Array; kinds: Uint8Array; cells: number; tris: number; cellTris: CellTris }
 export interface TileBuild {
   pos: Float32Array; uv: Float32Array; idx: Uint32Array; colors: Float32Array; normals: Float32Array;
+  /** Per vertex, FOUR numbers the substrate renderer and the ground views need
+   *  and the colour cannot carry: ROUGH (how strongly fine detail draws here — bare rock
+   *  and a fresh cut face loud, a crop field almost silent, open water
+   *  nothing), GRAIN (its character — 1 is stony scatter, 0 a smooth
+   *  wash) and SLOPE (the ground's own gradient, 0 flat and 1 at forty-five
+   *  degrees and steeper). Decided here rather than in the shader because the
+   *  cover class is known here and is thrown away by the palette: `bare`
+   *  deliberately has NO tint entry, so bare ground and ochre scrub come out
+   *  the same colour and no fragment could tell them apart afterwards. The
+   *  fourth is the COVER CLASS BYTE itself — 10 tree, 60 bare, 80 water, 0 for
+   *  ground no tile has answered for — which is what lets `?view=cover` paint
+   *  the raster's own verdict into the terrain's fragment at the raster's own
+   *  resolution, in every camera. It is the UNDITHERED read (`sampleCover`,
+   *  not `coverPaint`): the colour wants the dither so a 38 m block edge
+   *  dissolves, and a data view wants the class.
+   *
+   *  SLOPE RIDES SEPARATELY EVEN THOUGH ROUGH ALREADY CARRIES IT, and the
+   *  reason is that they answer different questions. Rough is a detail
+   *  amplitude and a steep face rightly raises it; the substrate needs to
+   *  know how much of what it is looking at is STEEP, because a slope is
+   *  where soil has left and bedrock is showing, and a cliff of the same
+   *  cover class as the meadow below it is a different material. Reading
+   *  that back out of rough means inverting the cover table in the shader,
+   *  which is the kind of cleverness that breaks the first time a row moves. */
+  mats: Float32Array;
+  /** The tile's shared geomorphic substrate field: `a` is exposure, debris,
+   *  soil depth, moisture and `b` is grass potential, rock family, flow x and
+   *  z, each a normalized byte on a `subFieldN` square lattice. Read by the
+   *  terrain fragment AND by the sward seeder — which is the point of it. */
+  sub: { a: Uint8Array; b: Uint8Array };
   kinds: Uint8Array | null; cellTris: CellTris; refined: boolean; corridor: boolean;
+}
+export type TerrainCrossingKind = 'bridge' | 'culvert' | 'ford' | 'causeway';
+export interface TerrainCrossingMask {
+  kind: TerrainCrossingKind;
+  x: number;
+  z: number;
+  roadTangent: readonly [number, number];
+  halfLengthM: number;
+  halfWidthM: number;
 }
 /** The world, as the build asks it. Getters on the main thread; a mirror in a worker. */
 export interface TerrainStore {
@@ -39,6 +78,7 @@ export interface TerrainStore {
   sampleCover(x: number, z: number): number | null;
   coverPaint(x: number, z: number): number | null;
   coverWater(x: number, z: number): boolean;
+  crossingAt(x: number, z: number): TerrainCrossingKind | null;
   readonly cover: { water: number; built: number };
   seaAbs(): number;
   readonly baseElev: number;
@@ -46,11 +86,20 @@ export interface TerrainStore {
   readonly cutL: number;
   readonly channels: Map<string, StripLike[]>;
   readonly grid: number;
+  /** Canonical hydro coverage contours crossing this tile. These are geometry
+   * constraints only: channel carving still owns their elevation. */
+  hydroBreakLines(t: HeightTile): readonly BreakLine[];
   onRoad(x: number, z: number): boolean;
   palette(elevAbs: number, slope: number, cover: number | null, x: number, z: number): Rgb;
   areaTint(x: number, z: number): Rgb | null;
   readonly borders: Map<string, Float64Array>;
-  readonly nrmScale: number;
+  /** The mesh's own cell, in raster pixels — what the geometry already
+   *  resolves, and so what the detail normal must NOT restate. */
+  readonly nrmCoarsePx: number;
+  /** The residual gradient's full-scale range, for the byte encoding. One
+   *  constant, read here and interpolated into the fragment that decodes it,
+   *  so the two cannot drift. */
+  readonly nrmRes: number;
   readonly cutWash: number;
   readonly cprobe: boolean;
   readonly carveLog: Map<string, CarveLog>;
@@ -88,7 +137,17 @@ export interface AreaPatchLike { pts: Array<[number, number]>; tint: Rgb; x0: nu
  * here may reach a module-scope binding of this file — types only, which
  * erase — or the worker would throw on its first job.
  */
-export function createTerrainKernel() {
+/** The self-contained geomorphic builder and its lattice size, handed IN
+ *  rather than imported, because this whole factory is stringified into a Blob
+ *  worker and a module binding inside it throws on the first job. See
+ *  `buildSubstrateCells`'s own header and `terrainWorkerSource`. */
+export type SubstrateBuilder = (inp: {
+  data: Float32Array | Int16Array | number[];
+  xs: number; zs: number; w: number; h: number; n: number;
+  cover: (x: number, z: number) => number | null;
+  height?: (x: number, z: number) => number | null;
+}) => { a: Uint8Array; b: Uint8Array };
+export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFieldN: number) {
   const cutSet = new Set<StripLike>();
   /** A relief step smaller than this is not worth a pass. */
   const RELIEF_MIN = 0.06;
@@ -101,6 +160,32 @@ export function createTerrainKernel() {
   const TOE_REACH = 16;       // how far out a bank or a face is looked for at all
   const DECK_GAP_T = 3;       // a crest this far above the ground is a structure: no bank
   const EARTH_T: Rgb = [0.42, 0.34, 0.26];
+  /**
+   * ── WHAT EACH LAND COVER IS MADE OF, as [rough, grain] ──
+   *
+   * ROUGH scales how loudly the fine octaves draw; GRAIN chooses their
+   * character, 1 being stony scatter and 0 a smooth wash. The keys are the
+   * WorldCover classes the palette already reads.
+   *
+   * Bare is the loud one, and it is the whole reason this table exists: the
+   * palette gives bare ground NO tint — the biome ramp is already sand and
+   * rock — so bare and ochre scrub arrive at the fragment as the same colour
+   * and nothing downstream could have told them apart. Water is silent, and
+   * has to be: a lake with grit on it is a lake with grit on it.
+   */
+  const TD_MAT: Record<number, [number, number]> = {
+    10: [0.40, 0.30],   // tree     — leaf litter under a canopy
+    20: [0.60, 0.50],   // shrub    — broken scrub and stone between the bushes
+    30: [0.35, 0.15],   // grass    — tussock patchiness, no scatter
+    40: [0.28, 0.05],   // crop     — worked ground, deliberately smooth
+    50: [0.50, 0.20],   // built    — a made surface, and its edges
+    60: [1.00, 0.85],   // bare     — stony scatter: the loud one
+    70: [0.25, 0.00],   // snow     — drift, smooth
+    80: [0.00, 0.00],   // water    — nothing at all
+    90: [0.30, 0.10],   // wetland
+    95: [0.35, 0.20],   // mangrove
+    100: [0.45, 0.25],  // moss/lichen on rock
+  };
   /** The corridor is built into tiles this close to the truck; further out a
    *  tile keeps the plain grid and the carve, and STITCHES to any refined
    *  neighbour along their shared border. A tile that comes into range while
@@ -179,6 +264,31 @@ export function createTerrainKernel() {
   function nanScan(pos: Float32Array, phase: string, key: string): void {
     if (plainCost.nan) return;
     for (let i = 1; i < pos.length; i += 3) if (!Number.isFinite(pos[i])) { plainCost.nan = `${phase} ${key} v${(i - 1) / 3} x=${pos[i - 1]} z=${pos[i + 1]}`; return; }
+  }
+
+  function crossingKindAt(
+    crossings: readonly TerrainCrossingMask[],
+    x: number,
+    z: number,
+  ): TerrainCrossingKind | null {
+    let best: TerrainCrossingMask | null = null;
+    let bestDistance = Infinity;
+    for (const crossing of crossings) {
+      const tx = crossing.roadTangent[0];
+      const tz = crossing.roadTangent[1];
+      const length = Math.hypot(tx, tz) || 1;
+      const ux = tx / length;
+      const uz = tz / length;
+      const dx = x - crossing.x;
+      const dz = z - crossing.z;
+      if (Math.abs(dx * ux + dz * uz) > crossing.halfLengthM
+        || Math.abs(dx * -uz + dz * ux) > crossing.halfWidthM) continue;
+      const distance = dx * dx + dz * dz;
+      if (distance >= bestDistance) continue;
+      best = crossing;
+      bestDistance = distance;
+    }
+    return best?.kind ?? null;
   }
 
   /** How far out along (ox,oz) from a crest point (cx,cz) whose floor is y the
@@ -453,8 +563,14 @@ export function createTerrainKernel() {
       } else {
         const bank = y - f.out * BANK_K;
         if (bank <= N) continue;
-        // Water takes no bank, and neither does a deck standing in the air.
-        if (wet === null) wet = S.coverWater(x, z);
+        // Ordinary wet ground takes no road bank. Canonical culverts, fords
+        // and causeways do: their road earthwork is real, while a bridge
+        // remains an open deck and an unresolved overlap retains the legacy
+        // conservative answer.
+        if (wet === null) {
+          const crossing = S.crossingAt(x, z);
+          wet = S.coverWater(x, z) && (crossing === null || crossing === 'bridge');
+        }
         if (wet || y - crestGround(S, s, x, z) > DECK_GAP_T) continue;
         up = Math.max(up, bank);
       }
@@ -466,7 +582,10 @@ export function createTerrainKernel() {
       // embankment is solid — unless the road stands clear, or this is water.
       if (N >= floor) return { h: floor, k: 1 };
       const structure = nearY - crestGround(S, near, x, z) > DECK_GAP_T;
-      return structure || S.coverWater(x, z) ? { h: N, k: 0 } : { h: floor, k: 1 };
+      const crossing = S.crossingAt(x, z);
+      const waterBlocksFill = S.coverWater(x, z)
+        && (crossing === null || crossing === 'bridge');
+      return structure || waterBlocksFill ? { h: N, k: 0 } : { h: floor, k: 1 };
     }
     if (up > -Infinity) return { h: up, k: 3 };
     if (down < Infinity) return { h: down, k: 2 };
@@ -557,15 +676,71 @@ export function createTerrainKernel() {
         if (Math.abs(x - (t.xs + ix * cw)) > 1e-3 || Math.abs(z - (t.zs + iz * ch)) > 1e-3) extraSeed = true;
       }
     }
+    const hydroLines = S.hydroBreakLines(t);
     // Lattice-only seeds are pins the plain path applies itself; only a
     // neighbour's extra edge points need the ring machinery.
-    if (!near.size && !extraSeed) return null;
+    if (!near.size && !extraSeed && !hydroLines.length) return null;
     // The break lines, and the cells each one crosses. A cell within reach of
     // any strip is `close`: its vertices take the corridor profile, the rest
     // take the ground and never pay for the lookup.
-    const lines: BreakLine[] = [];
+    // The waterline is not an inferred centreline offset. It is the exact
+    // coverage isoline the hydro field renders and contact samples. Splitting
+    // the ground along it prevents a coarse terrain triangle from bridging
+    // across the channel and presenting a serrated silhouette over the water.
+    const lines: BreakLine[] = [...hydroLines];
     const ordered = [...near].sort((a, b) => b.hw - a.hw);
     for (const s of ordered) for (const L of stripBreakLines(S, s)) lines.push(L);
+    // A NARROW CHANNEL MUST BE TOPOLOGY AT A ROAD CROSSING, not merely a
+    // height query against whatever road-refined vertices happen to exist.
+    //
+    // Channel carving used to lower vertices inside the bed after the road
+    // mesh was triangulated. Where no vertex landed on the centreline, one
+    // triangle bridged the trench: the production culvert probe measured its
+    // terrain 2.43m above the recorded invert even though channelFloorAt had
+    // the correct answer. Split the crossing cells along the channel centre
+    // and bed edges first. Those lines become actual triangle edges, so the
+    // later carve constrains the interpolated surface all the way through the
+    // road without refining every river tile in the world.
+    const crossingChannels = new Set<StripLike>();
+    if (near.size) {
+      const gx0 = Math.floor(t.xs / S.grid) - 1;
+      const gx1 = Math.floor((t.xs + t.w) / S.grid) + 1;
+      const gz0 = Math.floor(t.zs / S.grid) - 1;
+      const gz1 = Math.floor((t.zs + t.h) / S.grid) + 1;
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gz = gz0; gz <= gz1; gz++) {
+          for (const channel of S.channels.get(`${gx},${gz}`) ?? []) {
+            const touchesRoad = ordered.some((road) => {
+              const reach = road.hw + channel.hw + 3;
+              return segTouchesBox(
+                channel,
+                Math.min(road.ax, road.bx) - reach,
+                Math.max(road.ax, road.bx) + reach,
+                Math.min(road.az, road.bz) - reach,
+                Math.max(road.az, road.bz) + reach,
+              );
+            });
+            if (touchesRoad) crossingChannels.add(channel);
+          }
+        }
+      }
+    }
+    for (const channel of crossingChannels) {
+      const dx = channel.bx - channel.ax;
+      const dz = channel.bz - channel.az;
+      const length = Math.hypot(dx, dz);
+      if (length < .5) continue;
+      const nx = -dz / length;
+      const nz = dx / length;
+      for (const offset of [-channel.hw, 0, channel.hw]) {
+        lines.push({
+          ax: channel.ax + nx * offset,
+          az: channel.az + nz * offset,
+          bx: channel.bx + nx * offset,
+          bz: channel.bz + nz * offset,
+        });
+      }
+    }
     const cellLines = new Map<number, number[]>();
     const close = new Uint8Array(SEG * SEG);
     for (const s of near) {
@@ -1095,24 +1270,11 @@ export function createTerrainKernel() {
   }
   const chanSet = new Set<StripLike>();
   /**
-   * THE BED, as a ceiling on the terrain — but never under a carriageway.
+   * THE BED, as a ceiling on the terrain — controlled by crossing authority.
    *
-   * A watercourse cuts its own channel, or it is a blue stripe lying on top of
-   * the countryside. The exception is the whole point of a culvert: where a road
-   * passes over, the ground must stay up to hold the road, and the water goes
-   * through the bore instead. So this returns null on tarmac, which leaves an
-   * open channel on each side and a plug of earth between them for the road to
-   * sit on and the bore to pass through.
-   */
-  /**
-   * THE BED, as a ceiling on the terrain — but never under a carriageway.
-   *
-   * A watercourse cuts its own channel, or it is a blue stripe lying on top of
-   * the countryside. The exception is the whole point of a culvert: where a road
-   * passes over, the ground must stay up to hold the road, and the water goes
-   * through the bore instead. So this returns null on tarmac, which leaves an
-   * open channel on each side and a plug of earth between them for the road to
-   * sit on and the bore to pass through.
+   * Bridge, culvert and ford channels remain continuous under the road.
+   * Causeways deliberately retain the earth plug. An unresolved overlap keeps
+   * the legacy plug until a real authority exists.
    */
   function channelFloorAt(S: TerrainStore, x: number, z: number, ceiling: number): number | null {
     chanSet.clear();
@@ -1135,7 +1297,10 @@ export function createTerrainKernel() {
     // The vertex is only interesting if the bed would actually lower it, and that
     // is a handful of arithmetic; the walk is asked of those alone.
     if (best === null || best >= ceiling) return null;
-    if (S.onRoad(x, z)) return null;   // the road's plug of earth
+    if (S.onRoad(x, z)) {
+      const crossing = S.crossingAt(x, z);
+      if (crossing === null || crossing === 'causeway') return null;
+    }
     return best;
   }
   /**
@@ -1318,20 +1483,55 @@ export function createTerrainKernel() {
           const b = j === W - 1 ? beyond(i, W) : t.data[(j + 1) * W + i];
           if (a !== null && b !== null) dzdz = (b - a) / (2 * mpp);
         }
-        // World normal of the heightfield: y is up, and the surface falls away
-        // from the gradient in x and z.
-        // FLATTENED TOWARD UP by S.nrmScale. Taken raw, a 9.5m/px gradient on a
-        // sea cliff is a near-horizontal normal, and Chapman's rock faces went
-        // black under a high sun — physically defensible and much worse to look
-        // at than the smoothed mesh facets they replaced. Easing the gradient
-        // keeps the ridges and gullies the mesh cannot hold without pretending
-        // the whole cliff faces the camera.
-        const nx = -dzdx * S.nrmScale, ny = 1, nz = -dzdz * S.nrmScale;
-        const l = Math.hypot(nx, ny, nz) || 1;
+        // ── THIS IS A RESIDUAL NOW, NOT A NORMAL, AND THAT IS THE WHOLE FIX ──
+        //
+        // It used to store the DEM's own normal, flattened toward up by
+        // nrmScale, and the material declared it OBJECT-SPACE — which in three
+        // REPLACES the interpolated mesh normal rather than adding to it. So
+        // the hierarchy was:
+        //
+        //     final carved, refined, channel-cut mesh normal
+        //         -> THROWN AWAY
+        //     -> raw DEM normal at 0.35 of its own slope
+        //     -> substrate relief on top
+        //
+        // Two things follow and both were visible. Every bit of geometry work
+        // this file records — the corridor refinement, the cut faces, the
+        // carved channels, the hydro banks — was invisible to the LIGHTING,
+        // because the raster it was generated from knows about none of it: the
+        // shading reverted to what the unmodified elevation data thought the
+        // ground looked like, precisely where the most care had been taken.
+        // And flattening the whole normal rather than a residual lit a real
+        // slope as though it were a third as steep, which is most of the soft
+        // "normal-mapped sheet" quality the terrain had close up.
+        //
+        // The comment this replaces is itself the evidence: it recorded that
+        // taken RAW, a sea cliff's normal went near-horizontal and Chapman's
+        // rock faces turned black under a high sun, and eased the gradient to
+        // stop it. A residual has nothing to go black — the mesh already
+        // carries the cliff, and what is added is only what the mesh could not
+        // hold.
+        //
+        // So: the fine gradient less the gradient at the MESH's own cell size.
+        // The mesh's facets already carry everything at and below that scale;
+        // what is left is the ~8 m detail a 20-40 m lattice cannot express,
+        // which is exactly what a detail normal is for.
+        const q = Math.max(1, Math.round(S.nrmCoarsePx));
+        const ci0 = Math.max(0, i - q), ci1 = Math.min(W - 1, i + q);
+        const cj0 = Math.max(0, j - q), cj1 = Math.min(W - 1, j + q);
+        const cdx = (t.data[j * W + ci1] - t.data[j * W + ci0]) / Math.max(1e-6, (ci1 - ci0) * mpp);
+        const cdz = (t.data[cj1 * W + i] - t.data[cj0 * W + i]) / Math.max(1e-6, (cj1 - cj0) * mpp);
+        const R = S.nrmRes;
+        const rx = Math.max(-1, Math.min(1, (dzdx - cdx) / R));
+        const rz = Math.max(-1, Math.min(1, (dzdz - cdz) / R));
         const o = ((W - 1 - j) * W + i) * 4;     // rows reversed — see above
-        buf[o] = Math.round((nx / l * 0.5 + 0.5) * 255);
-        buf[o + 1] = Math.round((ny / l * 0.5 + 0.5) * 255);
-        buf[o + 2] = Math.round((nz / l * 0.5 + 0.5) * 255);
+        buf[o] = Math.round((rx * 0.5 + 0.5) * 255);
+        buf[o + 1] = Math.round((rz * 0.5 + 0.5) * 255);
+        // Blue is unused and held at the encoding's own zero, so a reader that
+        // still believes this is a normal gets a flat one rather than a wrong
+        // one — and __nrmEdge's "how many degrees do the two sides differ by"
+        // reads the residual, which is what it was always really measuring.
+        buf[o + 2] = 128;
         buf[o + 3] = 255;
       }
     }
@@ -1397,6 +1597,31 @@ export function createTerrainKernel() {
     const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
     const cell = t.w / SEG;
     const colors = new Float32Array(pos.length);
+    const mats = new Float32Array((pos.length / 3) * 4);
+    // ── THE SHARED GEOMORPHIC FIELD FOR THIS TILE ──
+    // Off the tile's own heightfield, once, here in the worker — so the ground
+    // model costs the main thread nothing and the same two arrays serve the
+    // fragment and the sward seeder. See substrate-field.ts for what the
+    // channels mean and why turf is not among them.
+    const sub = buildSubstrateCells({
+      data: t.data, xs: t.xs, zs: t.zs, w: t.w, h: t.h, n: subFieldN,
+      cover: (x: number, z: number): number | null => S.sampleCover(x, z),
+      // ── THE NEIGHBOUR'S GROUND, WHICH THIS WORKER HAS HAD ALL ALONG ──
+      //
+      // Slope, curvature, a 200 m relief window and a 200 m debris walk are
+      // all processes at a scale where a tile edge is an arbitrary line, and
+      // the field used to see a plateau past it. The height tiles around this
+      // one are already mirrored into the worker and `sampleHeight` already
+      // crosses them; the builder simply never asked, so it now gets a gutter
+      // sampler rather than a transported halo.
+      //
+      // IN THE RASTER'S FRAME. `t.data` is absolute elevation and
+      // `sampleHeight` is local (minus baseElev) — the same pair the normal
+      // map's `beyond` reads, and mixing them there once drew every tile edge
+      // as a black line the size of the base elevation.
+      height: (x: number, z: number): number | null =>
+        S.hasHeight(x, z) ? S.sampleHeightRaw(x, z) + S.baseElev : null,
+    });
     for (let i = 0; i < (refined ? 0 : (pos.length / 3)); i++) {
       const ex = pos[(i) * 3] + cxm, ez = pos[(i) * 3 + 2] + czm;
       const cv = S.sampleCover(ex, ez);
@@ -1475,8 +1700,18 @@ export function createTerrainKernel() {
       // the earth the batter strip used to.
       const kind = kinds ? kinds[i] : 0;
       let slope = Math.hypot(du, dv) / Math.max(cell, 1);
+      // THE BED'S OWN GRADIENT, kept before the corridor forces it. The
+      // substrate reads this to decide where soil has left and rock is
+      // showing; a cut face is already declared by `kind` and takes its
+      // material from that, and letting CUTF_K stand in for a hillside would
+      // paint every road's earthworks as outcrop.
+      const bedSlope = Math.min(1, slope);
       if (kind === 2) slope = Math.max(slope, CUTF_K); else if (kind === 3) slope = Math.max(slope, BANK_K);
-      let [r, g, bb] = S.palette(elevAbs, slope, S.coverPaint(ex, ez), ex, ez);
+      // ONE READ, TWO CONSUMERS. coverPaint is two sampleCover calls and two
+      // hashes; the colour and the detail material both want the same answer
+      // at the same point, and it was being asked twice.
+      const cp = S.coverPaint(ex, ez);
+      let [r, g, bb] = S.palette(elevAbs, slope, cp, ex, ez);
       if (kind === 2) { r += (EARTH_T[0] - r) * 0.6; g += (EARTH_T[1] - g) * 0.6; bb += (EARTH_T[2] - bb) * 0.6; }
       // …and then whoever actually drew this ground. The 38m raster says what is
       // growing across a landscape; an OSM area says where a particular wood
@@ -1488,13 +1723,54 @@ export function createTerrainKernel() {
         r += (at2[0] - r) * AREA_MIX; g += (at2[1] - g) * AREA_MIX; bb += (at2[2] - bb) * AREA_MIX;
       }
       colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
+      // ── AND WHAT THE GROUND IS MADE OF, for the detail cascade ──
+      //
+      // The cover read above is reused, so this really does cost one table
+      // lookup — the first cut of this comment CLAIMED that while calling
+      // coverPaint a second time, and the comment is the reason the duplicate
+      // survived review. What the duplicate did NOT cost is worth recording
+      // beside it, because the obvious story is wrong: measured at Yosemite,
+      // 68.87ms a tile in the colour phase with the duplicate and 69.83
+      // without it — no change, and the 69ms is this loop's own long-standing
+      // price (the kernel split measured the same figure before aTd or this
+      // table existed). Do not call a thing twice; do not expect that to be
+      // where the time is. SLOPE RAISES ROUGHNESS because a steep face sheds
+      // its soil: the same class on a cliff is exposed rock. A cut face
+      // (kind 2) is fresh earth and the roughest thing in the world.
+      const mt = cp === null || cp === undefined ? null : TD_MAT[cp];
+      let rough = mt ? mt[0] : 0.6, grain = mt ? mt[1] : 0.5;
+      rough = Math.min(1, rough + Math.min(slope, 1) * 0.6);
+      if (kind === 2) { rough = Math.min(1, rough + 0.35); grain = Math.min(1, grain + 0.3); }
+      // ── AN ENGINEERED CUT FACE IS FRESH SUBSTRATE, AND IT RIDES THE SIGN ──
+      //
+      // The geomorphic field is derived from the DEM before carveCorridors
+      // runs, so it describes the hillside as it was — and a road cut makes a
+      // genuinely steep new face in the MESH that the field goes on calling a
+      // grassy slope. These are close, screen-large surfaces in chase view, so
+      // it is the one place an anthropogenic term is worth more than anything
+      // the original landform can say.
+      //
+      // It is carried as the SIGN of bedSlope rather than as a fifth float.
+      // Nothing in the fragment read that channel at all — only the probe —
+      // and a sign survives interpolation gracefully: between a cut vertex and
+      // the natural ground at its toe the value crosses zero, which is exactly
+      // the blend a toe wants, where an extra attribute would have cost four
+      // bytes a vertex on every terrain tile in the world for one of them.
+      mats[i * 4] = rough; mats[i * 4 + 1] = grain;
+      mats[i * 4 + 2] = kind === 2 ? -(bedSlope + 0.02) : bedSlope;
+      // The class the raster actually holds, for the ground views. One extra
+      // sampleCover a vertex: the colour above reads coverPaint, which is a
+      // DITHERED pair of reads and deliberately cannot answer "which class is
+      // this" — it answers "which colour should this be", and the dither is
+      // the point of it.
+      mats[i * 4 + 3] = S.sampleCover(ex, ez) ?? 0;
     }
     const p6 = performance.now();
     const normals = vertexNormals(pos, idx);
     const p7 = performance.now();
     plainCost.builds++; plainCost.refine += p1 - p0; plainCost.heights += p2 - p1; plainCost.carve += p3 - p2; plainCost.channels += p4 - p3;
     plainCost.pins += p5 - p4; plainCost.colour += p6 - p5; plainCost.normals += p7 - p6;
-    return { pos, uv, idx, colors, normals, kinds: refined ? refined.kinds : null, cellTris, refined: !!refined, corridor };
+    return { pos, uv, idx, colors, normals, mats, sub, kinds: refined ? refined.kinds : null, cellTris, refined: !!refined, corridor };
   }
 
   const M_LAT = 111320, TERRAIN_Z = 14;
@@ -1800,6 +2076,7 @@ export function createTerrainKernel() {
   return {
     buildTile, borderShared, roadFloorHard, corridorH, stripBreakLines, stripFloor, cellTable, normalMapBytes, plainLattice, vertexNormals,
     refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear, makeSampler, makePalette, areaTintOf, onRoadOf, hydroElevation,
+    crossingKindAt,
     BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX, RELIEF_MIN,
   };
 }

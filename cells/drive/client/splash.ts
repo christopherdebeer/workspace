@@ -17,25 +17,19 @@ import * as THREE from 'three';
  * all. Forty independent balls can never make that shape however they are
  * tuned, because the shape is not made of balls.
  *
- * THREE RULES, ALL FROM THE POST PIPELINE.
+ * THREE RULES, WITH THE DISPLAY LOOK LEFT TO THE POST PIPELINE.
  *
- * BINARY ALPHA. The composite quantises to fourteen levels and Bayer-dithers
- * at DISPLAY resolution, so any alpha ramp is banded or crawls — the particle
- * shader's own `partHard` note says as much. A sprite has no ramp: a pixel is
- * water or it is not, and `discard` is the whole of the edge. Nothing here is
- * left for the dither to chew on.
+ * A CLEAN SILHOUETTE. The sprite clips only outside the connected thrown-water
+ * shape. Its interior shading remains continuous; palette quantisation and
+ * display dithering are owned exclusively by the global composite.
  *
- * FLAT TONES, STEPPED IN THE SHAPE. Three of them — a bright torn rim, a body,
- * a darker base — assigned by distance INTO the silhouette rather than by any
- * smooth lighting term. This is the one place a hard edge is wanted, and the
- * quantiser agrees with it instead of inventing its own.
+ * WATER DEPTH IN THE SHAPE. The torn rim is brighter and the root darker, but
+ * the transition is continuous so this material does not build a second,
+ * effect-local palette.
  *
- * AND IT IS ANIMATED IN FRAMES. Life is quantised to five, held about a
- * twelfth of a second each, and the silhouette is a different shape in each:
- * a tight column, a rising crown, a wide sheet, a torn edge, fingers. Smooth
- * interpolation at sixty frames is what makes particles read as particles;
- * discrete frames are what make them read as drawn. This is the single
- * strongest reason the effect stops looking like a physics demo.
+ * AND IT CHANGES SHAPE THROUGH LIFE: a tight column, a rising crown, a wide
+ * sheet, a torn edge, fingers. The motion stays continuous here; the global
+ * low-resolution composite supplies the game's cadence.
  *
  * The caller supplies the colour (the body's own water, lit by the day) and
  * the throw direction. Nothing in here knows what a truck is.
@@ -49,10 +43,6 @@ import * as THREE from 'three';
 export const SPLASH_TALL_MAX = 1.45;
 /** Sheets live and die fast; a pool this size never ran dry at speed. */
 const N = 28;
-/** Animation frames. Five is enough to read as drawn and few enough that each
- *  one is a distinct silhouette rather than a tween. */
-const FRAMES = 5;
-
 export interface SplashEmit {
   /** Waterline position, world metres — the sprite stands ON this. */
   x: number;
@@ -151,11 +141,9 @@ export function createSplash(): SplashSystem {
       varying float vLean; varying vec3 vTint;
       void main() {
         if (vLife <= 0.0) discard;
-        // ── THE FRAME, HELD ──
-        // Life quantised to FRAMES steps. Everything below reads that step,
-        // so the silhouette CHANGES in steps and holds — the cadence of a
-        // drawn animation rather than a tween.
-        float f = floor(clamp(1.0 - vLife, 0.0, 0.9999) * ${FRAMES}.0) / ${FRAMES - 1}.0;
+        // Continuous life. Pixel cadence, palette and dithering are supplied
+        // by the global post process, never reconstructed in this material.
+        float f = clamp(1.0 - vLife, 0.0, 1.0);
         // Local coordinates: x across (-0.5..0.5), y up from the waterline.
         float u = vLocal.x * 2.0;               // -1..1
         float y = vLocal.y;                     // 0..1
@@ -179,15 +167,13 @@ export function createSplash(): SplashSystem {
         // rather than as a fence standing in the river.
         float root = 0.18 * smoothstep(0.25, 1.0, f) * (1.0 - abs(u));
         if (y < root * (0.35 + 0.65 * finger)) discard;
-        // ── THREE FLAT TONES, BY DEPTH INTO THE SHAPE ──
-        // Bright at the torn edge (thin water catches the light), body in the
-        // middle, darker at the root. Assigned by distance from the top edge
-        // and STEPPED — no smooth term reaches the quantiser.
+        // ── DEPTH INTO THE SHAPE ──
+        // Bright at the torn edge (thin water catches the light), darker at
+        // the root, with a continuous response for the global palette pass.
         float into = clamp((top - y) / max(top, 0.001), 0.0, 1.0);
-        vec3 col = into < 0.14 ? vTint * 1.30          // torn rim, catching the sky
-                 : into < 0.52 ? vTint * 0.92          // body
-                 : vTint * 0.66;                       // root, in its own shadow
-        // Binary alpha, and the only fade is the LAST frame vanishing whole.
+        float rim = 1.0 - smoothstep(0.04, 0.24, into);
+        float rootShade = smoothstep(0.42, 0.92, into);
+        vec3 col = vTint * (0.94 + rim * 0.30) * (1.0 - rootShade * 0.28);
         gl_FragColor = vec4(col, 1.0);
       }`,
   });

@@ -100,6 +100,9 @@ uniform sampler2D uHydroMaterial;
 #ifdef HYDRO_FLOWING
 uniform sampler2D uHydroStructure;
 #endif
+#ifdef HYDRO_COAST
+uniform sampler2D uHydroCoast;
+#endif
 uniform vec4 uFieldUv;
 uniform vec2 uHydroTexel;
 uniform vec2 uFieldMeters;
@@ -109,6 +112,7 @@ uniform vec3 uWorldOrigin;
 uniform vec3 uWind;
 uniform float uWaveAmplitude;
 uniform float uWaveLength;
+uniform float uWaveChop;
 uniform float uShoreFade;
 
 varying vec2 vHydroUv;
@@ -122,6 +126,7 @@ varying float vShorePhase;
 varying float vSurfaceWave;
 varying float vSurfaceEnergy;
 varying float vShoal;
+varying float vExposure;
 
 #include <common>
 #include <fog_pars_vertex>
@@ -150,6 +155,30 @@ void main() {
   float depth = max(0.0, geometryField.a);
   float signedShoreDist = geometryField.g;
   float shoreDist = max(0.0, signedShoreDist);
+  // ── THE NEARSHORE PHASE RIDES TRAVEL TIME, NOT DISTANCE ──
+  // Shore distance is continuous, so its isolines were the crests: a first
+  // approximation that draws a crest the same sixty metres off a steep rock
+  // shore and off a shelving beach, and wraps a headland in contour lines.
+  // A real crest slows where the water shallows. The coast field (build-
+  // tile, coast-field.ts) carries the travel time from the waterline over
+  // the bathymetry in DEEP-WATER METRES — the same continuous coordinate
+  // with refraction in it: equal to the distance where the water is deep,
+  // growing faster over a shoal so the crests bunch and turn parallel to the
+  // beach as they come in, bending round a headland instead of wrapping it.
+  // The dry side keeps signed shore distance (the run-up phase is untouched)
+  // and the two meet at zero on the waterline, so the phase stays
+  // continuous — direction is still never inside it. Its alpha is EXPOSURE,
+  // how much open sea the texel's seaward fan reaches: a harbour behind its
+  // arm is quiet, a bay is half, an open beach breaks at full height.
+#ifdef HYDRO_COAST
+  vec4 coast = texture2D(uHydroCoast, vHydroUv);
+  float phaseCoord = signedShoreDist < 0.0 ? signedShoreDist : max(0.0, coast.r);
+  float exposure = clamp(coast.a, 0.0, 1.0);
+#else
+  float phaseCoord = signedShoreDist;
+  float exposure = 1.0;
+#endif
+  vExposure = exposure;
   // Only ocean and lagoon coverage carries the terrain-relative coastal ramp.
   // Reading the already-bound material field at vertices lets the cheap
   // run-up approximation remain coastal rather than pulsing every pond bank.
@@ -157,36 +186,143 @@ void main() {
   float coastalStanding = (1.0 - vFlowing)
     * step(0.5, vertexKind) * (1.0 - step(2.5, vertexKind));
 
+  // ── THE SEA HAS NO SOUNDINGS, AND THE BREAK GATES MUST NOT BELIEVE ITS
+  //    DEPTH ──
+  //
+  // Terrarium encodes open water as ZERO, not as bathymetry, so a sea
+  // texel's depth is the resting datum minus that zero: 0.40 m at Camps Bay
+  // — at every sample out to a kilometre and a half, measured with __wave.
+  // Every gate below reads that number in metres, so the whole Atlantic sat
+  // permanently in the post-break collapse (postBreak 0.32, vShoal pinned at
+  // 1, and a breaker band that could never form because the depth delta's
+  // exponential was 0.045). It cost half the wave: 0.347 m of peak rise
+  // where the same sea state in deep water gives about 0.67.
+  //
+  // So the WAVE terms read an ordinary beach profile instead of the fill:
+  // zero at the waterline and one in seventeen seaward. That slope is a
+  // rendering proxy, chosen so the whole profile — wash, break, shoal, deep
+  // — fits inside the 180 m the shore-distance field can actually measure
+  // (it clamps there): the wash is the first forty metres, the break lands
+  // around forty-three, the shoaling boost fades by a hundred and eighty,
+  // and past that the sea is deep and the swell is its own honest height.
+  // The DEEPER of the two always wins, so a tile that does carry soundings
+  // keeps them and nothing is ever made shallower than the data says.
+  // Coastal standing water only: a mountain lake's basin IS real land data
+  // and a river owns its channel. Contact, colour and the bed are untouched;
+  // this is only the geometry's idea of how far down the bottom is.
+  float waveDepth = mix(depth, max(depth, shoreDist * 0.06), coastalStanding);
+
   vec4 renderPosition = modelMatrix * vec4(position, 1.0);
   vAbsoluteXZ = renderPosition.xz + uWorldOrigin.xz;
 
   // ── BODY SCALE BELONGS TO GEOMETRY ──
   //
-  // A production ocean tile is 2.4km wide and the default mesh is 32 cells:
-  // roughly 75m between vertices. The old 9-34m displacement could not exist
-  // on that lattice. Geometric wavelength is now fetch-scaled and never below
-  // 38m for small, tightly meshed bodies; open-ocean swell is ~300m: four
-  // production cells per dominant wave, rather than the barely perceptible
-  // 360m sheet, while remaining above the lattice's aliasing floor. The
-  // fragment still owns all shorter structure.
+  // Coastal bodies receive a denser lattice than rivers (system.ts), so the
+  // open sea no longer has to stretch one wave over four enormous triangles.
+  // Small bodies retain the 38m floor; the dominant swell is the number that
+  // was measured, twice, and moved.
+  //
+  // A SEA THAT LOOKS FLAT IS NOT SHORT OF AMPLITUDE, IT IS SHORT OF
+  // STEEPNESS. Reported from the seat as no vertex height at all, offshore,
+  // at dusk, with the quantiser and the dither turned off. The vertex path
+  // was proved sound first and the proof is worth keeping: hiding the hydro
+  // mesh, the sea plane and the far shell in turn showed the visible water
+  // IS this mesh, and the amplitude dial at 1x, 4x and 8x — the last of them
+  // 23.6m of wave height — all read as a flat plate. The same 8x with the
+  // wavelength quartered heaves. So height was never the lever.
+  //
+  // ── THE WAVE THIS WIND ACTUALLY MAKES IS SHORTER THAN THE MESH ──
+  //
+  // Fetch-limited, at the 12.6 m/s and 50 km this sea state stands for:
+  // Hs 1.44 m at a peak period of 5.35 s, which is a wavelength of FORTY-FIVE
+  // METRES and a slope Hs/L of 0.032. Production's coastal lattice is 21.1 m
+  // between vertices — Nyquist is 42 m — so the honest wavelength is exactly
+  // the one this mesh cannot carry, and no amount of tuning changes that.
+  //
+  // SO THE WAVE IS DRAWN LONG AND THE SLOPE IS KEPT, because slope is what
+  // the eye reads and length is what it forgives. 140 m is 6.6 samples a
+  // wave (a crest drawn at 89% of its height wherever the phase falls);
+  // the amplitude below then puts H/L at 0.032, the real sea's own. THE
+  // STATED COST is that the wave is about three times too TALL for its wind
+  // — a right slope on a wrong length has to be. That is a judgement, and it
+  // is the one the seat asked for: at 240 m the same sea stood at H/L 0.012,
+  // a gradient of one in eighty, which is a level floor with a slow tilt in
+  // it and no face anywhere to catch a low sun.
+  //
+  // MATCH THE REAL SLOPE; DO NOT BEAT IT. A first cut stood at H/L 0.042 —
+  // the reasoning being that the quantiser eats shallow gradients, so lean
+  // past the truth — and there is no evidence for that and one good argument
+  // against: this sea is already three times too tall, and a slope chosen by
+  // taste is a number nobody can ever check. 0.032 is checkable.
+  //
+  // (The frame that first argued for backing it off argued wrongly, and the
+  // trap is worth the line: the surf station's photographs came back from
+  // INSIDE the water column, which read as a crest swallowing the camera.
+  // It was not. The probe prints the body's height beside the resting
+  // surface now, and at that station the rig stands on a seabed 5.8 m down
+  // whatever the sea is doing — the camera is under water in the control
+  // too. A frame is evidence of what is in it, not of why.)
   float speed = max(0.2, uWind.z);
   float fetchScale = clamp(log2(max(fetchM, 80.0) / 80.0) / 8.0, 0.0, 1.0);
-  float wavelength = mix(38.0, 300.0, fetchScale) * max(0.2, uWaveLength);
+  float wavelength = mix(38.0, 140.0, fetchScale) * max(0.2, uWaveLength);
   float k = 6.28318530718 / wavelength;
   float omega = 0.34 + speed * 0.055;
+  float windSea = smoothstep(0.5, 15.0, speed);
+  // Sea state carries established swell. Local wind changes its height, but
+  // cannot halve an energetic ocean merely because the beach is currently
+  // under a light breeze; wind contributes the shorter skin and chop below.
+  float standingState = clamp(energy * (0.78 + windSea * 0.42), 0.0, 1.0);
   vec2 windDir = normalize(uWind.xy + vec2(0.00001, 0.0));
   vec2 windCross = vec2(-windDir.y, windDir.x);
   vec2 secondaryDir = normalize(windDir + windCross * 0.46);
+  vec2 windWaveDir = normalize(windDir - windCross * 0.34);
+  // 0.32 of the dominant is 45m now, which the lattice cannot carry, so the
+  // floor is what this layer actually is: 72m, 3.4 samples a wave, the
+  // shortest wave on the production tier whose crest does not pulse badly as
+  // it travels. The shore wave below sits on the same floor for the same
+  // reason.
+  float windWaveLength = max(72.0, wavelength * 0.32);
+  float windWaveK = 6.28318530718 / windWaveLength;
 
   // Each phase has one constant direction. Their amplitudes mix; their
   // directions never vary inside dot(p,d), preserving the fingerprint fix.
-  float swellA = sin(dot(vAbsoluteXZ, windDir) * k - uTime * omega);
-  float swellB = sin(dot(vAbsoluteXZ, secondaryDir) * k * 1.62
-    - uTime * omega * 1.14 + 1.7);
+  float swellPhaseA = dot(vAbsoluteXZ, windDir) * k - uTime * omega;
+  float swellPhaseB = dot(vAbsoluteXZ, secondaryDir) * k * 1.62
+    - uTime * omega * 1.14 + 1.7;
+  float windWavePhase = dot(vAbsoluteXZ, windWaveDir) * windWaveK
+    - uTime * (omega * 1.72 + 0.16) + 4.1;
+  float swellA = sin(swellPhaseA);
+  float swellB = sin(swellPhaseB);
   // A swell arrives in sets. The envelope travels more slowly than the
   // crests and varies amplitude only, preserving continuous wave phase.
   float waveSet = 0.82 + 0.18 * sin(dot(vAbsoluteXZ, windDir) * k * 0.23 - uTime * omega * 0.31);
-  float swell = (swellA * 0.74 + swellB * 0.26) * waveSet;
+  // EXPOSURE IS NOT IN THE ENVELOPE. It was, for a day: the swell carried
+  // mix(0.35, 1, exposure) and the shore wave mix(0.45, 1, exposure), which
+  // took a third of the wave height and — because crest whitening is a steep
+  // smoothstep on this same envelope — almost all of the whitecaps wherever
+  // the fan read sheltered, including a great deal of open water it had no
+  // business shading (the fan's own faults, since fixed). Shelter belongs to
+  // what shelter actually stops: the breakers, their foam and the spill,
+  // damped by vExposure below and in the fragment. A quiet harbour is quiet
+  // because nothing breaks in it, not because its swell is shorter.
+  // This is still geometry, not ripple-normal paint: the coastal lattice was
+  // introduced specifically so an intermediate wind wave can carry visible
+  // faces between the 240m swell and the fragment skin.
+  // LEANT ON HARDER WITH THE SHORTER SWELL. This is the only layer between
+  // the dominant and the fragment skin that carries real faces, and at a
+  // 140m dominant it is half the visible slope rather than a texture on top
+  // of it: 0.26 to 0.56 of the swell's own amplitude by wind, against 0.20
+  // to 0.42 before. Its own steepness stays mild (H/L about 0.019 at a fresh
+  // wind) — what it adds is a second period, so a crest is not a single
+  // hundred-metre roll with nothing on it.
+  float windWaveWeight = (0.26 + windSea * 0.30)
+    * smoothstep(0.10, 0.72, standingState);
+  float swell = (swellA * 0.74 + swellB * 0.26) * waveSet
+    + sin(windWavePhase) * windWaveWeight;
+  vec2 swellHorizontal = (
+    windDir * cos(swellPhaseA) * 0.74
+    + secondaryDir * cos(swellPhaseB) * 0.26
+  ) * waveSet + windWaveDir * cos(windWavePhase) * windWaveWeight;
 
   // Shore-following geometry is also macro scale. The 5-30m crest structure
   // belongs in the analytic normal and foam response, not a 75m vertex grid.
@@ -194,13 +330,25 @@ void main() {
   float shoreK = 6.28318530718 / shoreWavelength;
   // Signed distance keeps the phase continuous through the waterline:
   // clamping the dry side to zero made every run-up vertex move in lockstep.
-  float shorePhase = signedShoreDist * shoreK + uTime * omega * 0.86;
-  float steepen = 1.0 - smoothstep(0.8, 4.5, depth);
+  float shorePhase = phaseCoord * shoreK + uTime * omega * 0.86;
+  float steepen = 1.0 - smoothstep(0.8, 4.5, waveDepth);
   float shoreWave = sin(shorePhase)
     + sin(shorePhase * 2.0) * 0.24 * steepen;
-  float nearShore = (1.0 - smoothstep(22.0, 120.0, shoreDist))
+  // The coast field's direction points seaward. This phase travels toward
+  // decreasing travel time, so its horizontal motion is shoreward.
+#ifdef HYDRO_COAST
+  vec2 shoreward = -normalize(coast.gb + vec2(0.00001, 0.0));
+#else
+  vec2 shoreward = windDir;
+#endif
+  vec2 shoreHorizontal = shoreward
+    * (cos(shorePhase) + cos(shorePhase * 2.0) * 0.12 * steepen);
+  // The crossfade to the shore wave rides the same coordinate, so over a
+  // shoal the shore-following crests persist as far out as the slowing does.
+  float nearShore = (1.0 - smoothstep(22.0, 120.0, max(0.0, phaseCoord)))
     * (1.0 - vFlowing);
   float standingWave = mix(swell, shoreWave, nearShore);
+  vec2 standingHorizontal = mix(swellHorizontal, shoreHorizontal, nearShore);
   vShorePhase = sin(shorePhase);
 
 #ifdef HYDRO_FLOWING
@@ -226,22 +374,29 @@ void main() {
 
   // ── SHOAL, BREAK, THEN COLLAPSE ──
   float breakerDepth = mix(0.55, 2.7, energy);
-  float depthDelta = (depth - breakerDepth) / max(0.28, breakerDepth * 0.48);
-  vBreaker = (1.0 - vFlowing) * exp(-depthDelta * depthDelta) * geometryField.r;
+  float depthDelta = (waveDepth - breakerDepth) / max(0.28, breakerDepth * 0.48);
+  vBreaker = (1.0 - vFlowing) * exp(-depthDelta * depthDelta) * geometryField.r
+    * mix(0.15, 1.0, exposure);
   vShoal = (1.0 - vFlowing)
-    * (1.0 - smoothstep(breakerDepth, max(breakerDepth + 0.1, 10.0), depth));
+    * (1.0 - smoothstep(breakerDepth, max(breakerDepth + 0.1, 10.0), waveDepth));
   float postBreak = mix(0.28, 1.0,
-    smoothstep(0.12, max(0.3, breakerDepth * 0.85), depth));
+    smoothstep(0.12, max(0.3, breakerDepth * 0.85), waveDepth));
 
   vWaveCrest = smoothstep(0.48, 0.94, standingWave) * (1.0 - vFlowing);
 
   // Macro volume remains with distance. Only fragment-scale skin is allowed
-  // to fade. Body roughness supplies persistent swell, but wind now opens the
-  // range substantially: the previous linear multiplier compressed calm sea,
-  // moderate weather and gale into variations of the same shallow sheet.
-  float windSea = smoothstep(0.5, 15.0, speed);
-  float standingState = clamp(energy * (0.50 + windSea * 0.75), 0.0, 1.0);
-  float standingAmplitude = mix(0.012, 1.05, pow(standingState, 1.60))
+  // to fade. Established swell is primarily body state; current wind broadens
+  // the range without erasing that swell during a lull.
+  //
+  // The ceiling rose with the wavelength above, and it is SOLVED from it
+  // rather than chosen: at a full sea state the vertical envelope is
+  // 1 + windWaveWeight = 1.54, so a ceiling of 1.45 m of peak rise reads as
+  // 4.46 m of wave on a 140 m length — H/L 0.0319 against the fetch-limited
+  // sea's own 0.0322 (the arithmetic is at the wavelength above). Well
+  // inside the 1/7 a deep-water wave breaks at, and low enough that a
+  // shoaling crest, which is this times 1.62, stays under the chase camera.
+  // Raising this ALONE was measured and does nothing: see the wavelength.
+  float standingAmplitude = mix(0.012, 1.45, pow(standingState, 1.60))
     * (1.0 + vShoal * 0.62) * postBreak;
   float riverAmplitude = mix(0.006, 0.21, pow(energy, 1.35));
   float amplitude = mix(standingAmplitude, riverAmplitude, vFlowing)
@@ -256,6 +411,14 @@ void main() {
   vSurfaceWave = clamp(wave, -1.0, 1.0);
   vSurfaceEnergy = clamp(amplitude / mix(0.55, 0.15, vFlowing), 0.0, 1.0);
   float displaced = wave * amplitude * geometryField.r;
+  // A vertical sine is a breathing sheet. Trochoidal horizontal displacement
+  // makes the same continuous phases form narrower crests and broader troughs,
+  // which gives the wave parallax and silhouette instead of merely changing
+  // its colour. Rivers keep their own heave and receive none of this motion.
+  float chopState = smoothstep(0.08, 0.86, standingState);
+  float chopMetres = amplitude * mix(0.10, 0.82, chopState)
+    * clamp(uWaveChop, 0.0, 3.0) * geometryField.r * (1.0 - vFlowing);
+  renderPosition.xz += standingHorizontal * chopMetres;
 
   // Only the shoreline-only fine mesh advances onto the dry coastal ramp.
   // Its coverage encodes level-ground+0.35, so the amount needed to clear the
@@ -299,6 +462,9 @@ uniform sampler2D uHydroMaterial;
 #ifdef HYDRO_FLOWING
 uniform sampler2D uHydroStructure;
 #endif
+#ifdef HYDRO_COAST
+uniform sampler2D uHydroCoast;
+#endif
 uniform float uTime;
 uniform vec3 uWorldOrigin;
 uniform vec3 uWind;
@@ -324,6 +490,7 @@ uniform float uShallowBedStrength;
 uniform float uRiverEdgeStrength;
 uniform float uTurbulenceStrength;
 uniform float uEddyStrength;
+uniform float uEdgeBlendEnabled;
 uniform vec2 uHydroTexel;
 uniform vec2 uFieldMeters;
 ${BANK_GLSL}
@@ -338,6 +505,7 @@ varying float vShorePhase;
 varying float vSurfaceWave;
 varying float vSurfaceEnergy;
 varying float vShoal;
+varying float vExposure;
 
 #include <common>
 #include <fog_pars_fragment>
@@ -397,7 +565,7 @@ vec4 rigTrailField(vec2 p, vec2 flow) {
 // ground darkened and greyed, never a sand constant: a grassland river has a
 // dark green-grey bed and a desert river a pale one, because their banks do.
 // The sward's bank paint applies the same rule on the ground side
-// (bankMineralOf in main.ts), so the two meet in one colour at the waterline.
+// (bankMineralColour in shoreline.ts), so the two meet in one colour at the waterline.
 vec3 wetGround(vec3 t) {
   return mix(t, vec3(dot(t, vec3(0.333))), 0.22) * 0.78;
 }
@@ -523,6 +691,12 @@ void main() {
   vec4 geometryField = texture2D(uHydroGeometry, vHydroUv);
   vec4 materialField = texture2D(uHydroMaterial, vHydroUv);
   float kind = floor(materialField.r * 255.0 + 0.5);
+  float flagsByte = floor(materialField.a * 255.0 + 0.5);
+  // Bits 3..5 carry the canonical bed class:
+  // 1 silt, 2 sand, 3 gravel, 4 pebble, 5 rock.
+  float bedClass = mod(floor(flagsByte / 8.0), 8.0);
+  // Bits 6..7 carry bank material: 0 soil, 1 mud, 2 gravel, 3 rock.
+  float bankClass = floor(flagsByte / 64.0);
   // Linear coverage can reach a texel whose nearest class is still unknown.
   // The CPU cannot call that water either; don't render an unclassified skirt.
   if (kind < 0.5) discard;
@@ -535,6 +709,7 @@ void main() {
   // Keep the texture sample after discard so rejected surf fragments pay
   // nothing for it.
   vec3 terrainC = uTerrainColour;
+  float coverageInterior = 1.0;
 #ifdef HYDRO_SURF
   if (!coastalKind || abs(geometryField.g) > 96.0) discard;
   float coverageCut = 0.5;
@@ -562,8 +737,17 @@ void main() {
   // way, so the edge is the same broken line on both sides of it.
   // The coastal body shares the surf strip's 0.5 boundary; a ragged body
   // cut there would reveal a gap whenever the separate surf mesh retreats.
-  float bodyCut = coastalKind ? 0.5 : 0.5 + (bankPatch(vAbsoluteXZ) - 0.5) * 0.24;
+  // Terrain topology is constrained to the canonical 0.5 contour. Preserve a
+  // little natural irregularity, but keep the rendered edge within roughly a
+  // metre of that shared line at the production field tier.
+  float bodyCut = coastalKind ? 0.5 : 0.5 + (bankPatch(vAbsoluteXZ) - 0.5) * 0.08;
   if (geometryField.r < bodyCut) discard;
+  // Coverage owns the literal fragment boundary. Signed distance and river N
+  // are smooth physical coordinates, but their zeroes can sit between
+  // different field samples after antialiasing. This ramp guarantees that
+  // the first visible fragment at the cut carries ground, then becomes
+  // shallow water continuously over the interior coverage shoulder.
+  coverageInterior = smoothstep(bodyCut, min(0.98, bodyCut + 0.22), geometryField.r);
   // THE GROUND'S OWN COLOUR, HERE. uTerrainColour is the ground under the
   // truck; the sward's colour field is the palette at THIS fragment's XZ
   // wherever it reaches (a 768 m square around the truck), and the frame
@@ -601,6 +785,9 @@ void main() {
   // the foam, the rapids and the turbulence tone toward the middle; the
   // riffles stay at the shallow margins where they belong.
   energy *= mix(1.0, 0.3, smoothstep(0.9, 3.5, geometryField.a));
+  // Sheltered sea is calmer sea: the chop and its foam gates follow exposure
+  // on standing water; a river's energy is its own.
+  energy *= mix(0.55, 1.0, mix(vExposure, 1.0, vFlowing));
 #ifdef HYDRO_FLOWING
   // River space, texel-accurate — the mesh lattice can be wider than the
   // whole channel, so "n" has to come from the field, not from a varying.
@@ -627,9 +814,20 @@ void main() {
     } else if (uDebugView < 4.5) {
       vec3 directionColour = vec3(dynamics.xy * 0.5 + 0.5, 0.28);
       debugColour = mix(directionColour, vec3(1.0, 0.24, 0.07), max(vTurbulence, vBreaker) * 0.88);
-    } else {
+    } else if (uDebugView < 5.5) {
       float hue = fract(kind * 0.173 + 0.07);
       debugColour = 0.55 + 0.45 * cos(6.28318 * (hue + vec3(0.0, 0.67, 0.33)));
+    } else {
+      // THE COAST FIELD: exposure red→green, an isoline of travel every 30 m
+      // (the crest lines the phase will draw), dry ground grey.
+#ifdef HYDRO_COAST
+      vec4 coast = texture2D(uHydroCoast, vHydroUv);
+      float band = smoothstep(0.38, 0.5, abs(fract(coast.r / 30.0) - 0.5));
+      debugColour = mix(vec3(0.75, 0.2, 0.15), vec3(0.15, 0.7, 0.35), coast.a) * mix(0.3, 1.0, band);
+      if (geometryField.g < 0.0) debugColour = vec3(0.25);
+#else
+      debugColour = vec3(0.1, 0.1, 0.3);
+#endif
     }
     gl_FragColor = vec4(debugColour, 1.0);
     #include <tonemapping_fragment>
@@ -716,7 +914,7 @@ void main() {
       vec3 eddy = riverEddyField(
         riverS, riverCross, max(riverField.a, 1.0), riverField.b, energy, seed
       );
-      gradient += (flowDirection * eddy.x + acrossDirection * eddy.y) * 0.14;
+      gradient += (flowDirection * eddy.x + acrossDirection * eddy.y) * 0.24;
       riverEddyTone = eddy.z;
     }
 #else
@@ -803,10 +1001,23 @@ void main() {
   if (vFlowing > 0.5 && flowingKind) {
     // Bank width follows metres and depth, not 30% of every channel.
     float bankMetres = max(0.0, (1.0 - abs(riverField.g)) * riverField.a);
-    float bankSlope = geometryField.a / max(0.35, bankMetres);
-    float riverFadeM = clamp(0.42 / max(0.08, bankSlope), 0.45, 4.0);
-    float channelWet = smoothstep(0.0, riverFadeM, bankMetres);
-    shoreWetness = clamp(channelWet * mix(0.38, 1.0, depthWet), 0.0, 1.0);
+    // Coverage distance owns the rendered contour. River-space N owns the
+    // channel section, but bends and rasterised area banks can place N=±1 a
+    // few metres away from the actual coverage cut. Shading from N alone let
+    // bright water run all the way to a differently shaped terrain edge.
+    // Taking the nearer of both coordinates guarantees zero wetness on the
+    // exact contour while retaining the smooth vector-space shelf inward.
+    float shoreMetres = max(0.0, min(bankMetres, geometryField.g));
+    float bankSlope = geometryField.a / max(0.35, shoreMetres);
+    // A sub-half-metre fade vanished into one display pixel from the
+    // production camera and left a hard cut-out. Keep a real shallow shelf
+    // on even a steep bank, widening naturally where the channel is gentle.
+    // This is a continuous material transition inside the resolved body, not
+    // alpha stipple or local post-processing.
+    float riverFadeM = clamp(1.65 / max(0.08, bankSlope), 2.4, 8.0);
+    float channelWet = smoothstep(0.0, riverFadeM, shoreMetres);
+    shoreWetness = clamp(channelWet * mix(0.08, 1.0, depthWet)
+      * coverageInterior, 0.0, 1.0);
   }
 #endif
 
@@ -825,10 +1036,23 @@ void main() {
   // the middle keeps the texel's depth and goes dark. This is the shape of
   // the bed, which is what the chart sees; the physics keeps the texel.
   float bedDepth = geometryField.a;
+  float pointBar = 0.0;
 #ifdef HYDRO_FLOWING
   if (vFlowing > 0.5) {
     float across = clamp(abs(riverField.g), 0.0, 1.0);
-    float trough = mix(0.18, 1.0, sqrt(max(0.0, 1.0 - across * across)));
+    // Most natural channels carry a narrower thalweg between broad shallow
+    // shoulders. The old semicircle retained two thirds of full depth at
+    // eighty percent of the half-width, so the bed appeared only as a hairline
+    // at the bank. This continuous section exposes bars and pebbles across a
+    // useful margin without changing the physics depth stored in the field.
+    float trough = mix(0.08, 1.0, pow(max(0.0, 1.0 - across), 0.62));
+    // A bend deposits a coherent shelf on its INSIDE bank. Curvature and side
+    // choose the place; broad cross-channel position shapes it. This is a
+    // geomorphic signal, not extra texture noise, so bars turn with the river
+    // and remain stable through the global post pipeline.
+    pointBar = smoothstep(0.0015, 0.009, abs(riverField.b))
+      * (1.0 - outerBank) * smoothstep(0.30, 0.94, across);
+    trough *= mix(1.0, 0.48, pointBar);
     visualDepth *= trough;
     bedDepth *= trough;
   }
@@ -850,18 +1074,23 @@ void main() {
   // river; standing water uses world space. Turbidity, depth, rapid aeration
   // and distance all remove the detail continuously.
   if (nearWater) {
-    float clearDepthM = mix(3.4, 0.72, turbidity);
+    float clearDepthM = mix(3.8, 0.86, turbidity);
     float bedVisibility = (1.0 - smoothstep(0.10, clearDepthM, bedDepth))
-      * (1.0 - turbidity * 0.78) * bedLod
+      * (1.0 - turbidity * 0.64) * bedLod
       * mix(0.62, 1.0, vFlowing) * (1.0 - shallowRapid * 0.48)
       * clamp(uShallowBedStrength, 0.0, 3.0);
+    bedVisibility *= 1.0 + pointBar * 0.65;
     // Deep water and opaque silt skip every bed-noise evaluation.
     if (bedVisibility > 0.015) {
       vec2 bedP = vAbsoluteXZ;
+      vec2 bedFlowP = bedP;
       float grainScale = 1.0;
 #ifdef HYDRO_FLOWING
       if (vFlowing > 0.5) {
-        bedP = vec2(riverS, riverCross);
+        // The field-resolution river chart is the right coordinate for broad
+        // bars that turn with the channel. It is far too coarse to parameterise
+        // metre-scale pebbles: doing so exposed every 18.75m production texel.
+        bedFlowP = vec2(riverS, riverCross);
         float channelScale = clamp((riverField.a - 1.5) / 11.0, 0.0, 1.0);
         grainScale = mix(0.72, 1.55, channelScale);
       }
@@ -872,41 +1101,80 @@ void main() {
         - vec2(5.2, seed * 7.0));
       // Broad gravel/sand patches survive the production camera and global
       // quantiser; the finer pebble signal takes over only when close.
-      float gravelBar = valueNoise(bedP * vec2(0.062, 0.105) / grainScale
-        + vec2(seed * 3.0, -4.6));
+      float gravelBar = smoothstep(0.28, 0.72,
+        valueNoise(bedFlowP * vec2(0.012, 0.026) / grainScale
+          + vec2(seed * 3.0, -4.6)));
+      float sandBed = 1.0 - clamp(abs(bedClass - 2.0), 0.0, 1.0);
+      float coarseBed = smoothstep(2.2, 4.2, bedClass);
+      float stonePresence = smoothstep(2.6, 4.1, bedClass);
+      float rockBed = smoothstep(4.2, 5.0, bedClass);
+      // Silt stays broad and quiet; sand introduces bars; gravel, pebbles and
+      // rock retain the full patch structure supplied by the substrate.
+      float bedPatch = mix(
+        0.5 + (gravelBar - 0.5) * 0.18,
+        gravelBar,
+        smoothstep(1.5, 3.2, bedClass)
+      );
+      bedPatch = max(bedPatch, pointBar * mix(0.62, 0.92, gravelBar));
       float cobble = smoothstep(0.54, 0.79,
         valueNoise(bedP * vec2(0.22, 0.31) / grainScale
           + vec2(seed * 5.0, -8.0)));
-      // Individual rounded stones at 1.5–3m scale. This is albedo structure,
-      // not a coverage trick: the global post pass remains the only dither.
-      vec2 stoneP = bedP / (vec2(2.4, 1.85) * grainScale);
-      vec2 stoneCell = floor(stoneP);
-      vec2 stoneCentre = vec2(
-        hash21(stoneCell + vec2(seed * 19.0, 3.0)),
-        hash21(stoneCell + vec2(7.0, seed * 23.0))
-      );
-      float stoneShape = 1.0 - smoothstep(0.17, 0.39,
-        length((fract(stoneP) - stoneCentre) * vec2(1.0, 1.18)));
-      float stonePick = smoothstep(0.42, 0.76,
-        hash21(stoneCell + vec2(11.0, seed * 31.0)));
-      float bedStone = stoneShape * stonePick;
+      // Submerged pebbles are a continuous clustered mineral texture. One
+      // synthetic object per procedural cell survived the camera as a grid of
+      // dark tiles; actual protruding rocks remain production geometry and
+      // colliders instead. This is albedo structure, never local dithering.
+      float stoneCluster = smoothstep(0.48, 0.74,
+        valueNoise(bedP * vec2(0.29, 0.41) / grainScale
+          + vec2(seed * 17.0, 3.1)) * 0.62
+        + valueNoise(bedP * vec2(0.57, 0.73) / grainScale
+          - vec2(4.2, seed * 13.0)) * 0.38);
+      float stoneGrain = valueNoise(bedP * vec2(1.12, 1.46) / grainScale
+        + vec2(seed * 29.0, -7.3));
       // The bed is the bank's own material: wet ground, and a bar's dry
       // top at most a touch lighter than the ground beside it. The sand
       // constants that stood here painted a beach into a grassland.
-      vec3 sediment = mix(terrainC * 0.88, wetGround(terrainC),
-        0.5 + turbidity * 0.3);
-      vec3 paleGravel = mix(sediment, terrainC * 1.06, 0.34);
+      vec3 siltSediment = wetGround(terrainC) * mix(0.92, 1.0, turbidity);
+      vec3 coarseSediment = mix(terrainC * 0.96, wetGround(terrainC) * 1.04,
+        0.34 + turbidity * 0.30);
+      vec3 sandSediment = mix(terrainC * 1.08, wetGround(terrainC) * 1.02, 0.36);
+      vec3 sediment = mix(siltSediment, coarseSediment, coarseBed);
+      sediment = mix(sediment, sandSediment, sandBed);
+      // Gravel is a change in mineral structure, not a cream outline around
+      // every channel. The old path could raise local ground by 32% here and
+      // another 30% below, then replace 95% of the water with it: from above,
+      // the entire shallow shelf became one pale ribbon. Keep the bed in the
+      // bank's own key, with only enough lift for bars to survive global post.
+      vec3 gravelMineral = mix(
+        sediment,
+        mix(terrainC, wetGround(terrainC), 0.18) * 1.08,
+        0.34 + coarseBed * 0.22
+      );
       // From above the bars and pools are the read, so their contrast opens
       // with the view's overhead component; the fine grain fades with range.
-      vec3 bedColour = mix(sediment * mix(0.78, 0.64, overhead), paleGravel * mix(1.08, 1.16, overhead), gravelBar)
-        * (0.94 + ((pebble - 0.5) * 0.30 + (bar - 0.5) * 0.24) * detailLod);
+      vec3 bedColour = mix(
+        sediment * mix(0.86, 0.76, overhead),
+        gravelMineral * mix(1.02, 1.12, overhead),
+        bedPatch
+      ) * (0.96 + ((pebble - 0.5) * mix(0.10, 0.34, coarseBed)
+        + (bar - 0.5) * mix(0.14, 0.26, coarseBed)
+        + (stoneGrain - 0.5) * 0.18 * stonePresence) * detailLod);
       // Cobble is a darker aggregate in the sediment, not an object silhouette.
       // Protruding rocks are real production geometry and carry the stronger read.
       vec3 cobbleColour = mix(sediment * 0.62, terrainC * 0.76, 0.38);
       bedColour = mix(bedColour, cobbleColour,
-        cobble * mix(0.24, 0.12, turbidity) * (1.0 + 0.7 * overhead));
+        cobble * mix(0.30, 0.14, turbidity) * coarseBed
+          * (1.0 + 0.7 * overhead));
+      bedColour = mix(bedColour, cobbleColour * mix(0.74, 0.60, rockBed),
+        stoneCluster * stonePresence * mix(0.46, 0.22, turbidity)
+          * mix(0.58, 1.0, detailLod));
+      // Pebbles need a close-range read distinct from the broad gravel bars.
+      // This is a smooth mineral mask in world space, not a screen-space
+      // stipple: it remains stationary and the global pipeline alone decides
+      // how the final image is quantised.
+      float pebbleSpeck = smoothstep(0.62, 0.82, stoneGrain)
+        * stonePresence * detailLod;
       bedColour = mix(bedColour, cobbleColour * 0.82,
-        bedStone * mix(0.46, 0.22, turbidity) * detailLod);
+        pebbleSpeck * mix(0.30, 0.16, turbidity));
       // THE BED IS SEEN THROUGH THE WATER, NOT BESIDE IT. The bed's colour
       // was mixed in as painted — dry sand at any depth it was visible at —
       // so a river a metre and a half deep read from above as a cream
@@ -915,22 +1183,40 @@ void main() {
       // green and blue: at 1.3 m the bed keeps half its red and three
       // quarters of its blue and goes the dark olive a real riverbed is.
       // Silt shortens the path further.
-      bedColour *= exp(-vec3(0.62, 0.30, 0.20) * bedDepth * (1.0 + turbidity * 2.5));
+      float opticalBedDepth = max(0.0, bedDepth - 0.08);
+      bedColour *= exp(-vec3(0.42, 0.21, 0.14) * opticalBedDepth
+        * (1.0 + turbidity * 2.0));
+      // Retain a real water column over flowing shallows. Without this cap the
+      // bed replaced virtually the whole surface at the bank, so removing the
+      // bed term made the river disappear and enabling it drew a hard mineral
+      // stripe. Standing-water behaviour is unchanged.
+      float bedMixCap = mix(0.95, 0.82, vFlowing);
       colour = mix(colour, bedColour,
-        clamp(bedVisibility * mix(0.84, 0.52, turbidity), 0.0, 0.86));
+        clamp(bedVisibility * mix(1.0, 0.64, turbidity), 0.0, bedMixCap));
     }
   }
 
   // The edge is damp terrain becoming shallow water, never a separately dark
   // contact stripe. Depth and distance both contribute, so the transition
   // remains broad at an ocean and compact at a river or pond.
+  // At coverage zero the body must reproduce the terrain underneath exactly.
+  // Darkening from a wet film begins only after entering the channel; doing it
+  // at the contour drew a serrated trench even when terrain and water shared
+  // the same topology.
+  float dampFilm = smoothstep(0.08, 0.58, shoreWetness);
+  vec3 edgeGround = mix(terrainC, wetGround(terrainC),
+    dampFilm * mix(0.52, 0.74, turbidity));
   vec3 dampTerrain = mix(
-    terrainC * mix(0.78, 0.9, 1.0 - turbidity),
+    edgeGround,
     colour,
-    wetlandKind ? 0.34 : 0.22
+    (wetlandKind ? 0.30 : 0.10) * dampFilm
   );
 #ifdef HYDRO_FLOWING
   if (vFlowing > 0.5 && flowingKind) {
+    // The waterline is the same local material as the ground, darkened by a
+    // film of water. Holding this over the metre-scale fade prevents the
+    // opaque river body from meeting terrain as two unrelated palette blocks.
+    dampTerrain = mix(edgeGround, colour, 0.10 * dampFilm);
     // The last wet metre contains gravel bars, damp sediment and broken
     // reflected water rather than one dark contact stripe. This lies inside
     // the opaque surface and meets the physical coverage waterline at the bank.
@@ -944,17 +1230,32 @@ void main() {
       riverCross * 0.82 + riverS * 0.009
     ));
     float bankPatch = smoothstep(0.22, 0.78, bankGrain * 0.42 + bankBar * 0.58)
-      * bankNear * detailLod * clamp(uRiverEdgeStrength, 0.0, 3.0);
-    vec3 gravelBank = mix(
+      * bankNear * smoothstep(0.12, 0.48, shoreWetness)
+      * detailLod * clamp(uRiverEdgeStrength, 0.0, 3.0);
+    vec3 soilEdge = mix(
       terrainC * 0.72,
       wetGround(terrainC) * 1.1,
       0.28 + (1.0 - turbidity) * 0.18
     );
-    colour = mix(colour, mix(dampTerrain, gravelBank, 0.52),
+    float mudBank = 1.0 - clamp(abs(bankClass - 1.0), 0.0, 1.0);
+    float gravelBank = 1.0 - clamp(abs(bankClass - 2.0), 0.0, 1.0);
+    float rockBank = 1.0 - clamp(abs(bankClass - 3.0), 0.0, 1.0);
+    vec3 edgeMaterial = soilEdge;
+    edgeMaterial = mix(edgeMaterial, wetGround(terrainC) * 0.74, mudBank);
+    edgeMaterial = mix(edgeMaterial,
+      mix(terrainC * 0.88, wetGround(terrainC) * 1.16, bankGrain * 0.48),
+      gravelBank);
+    edgeMaterial = mix(edgeMaterial,
+      mix(terrainC * 0.58, wetGround(terrainC) * 0.82, bankBar * 0.32),
+      rockBank);
+    colour = mix(colour, mix(dampTerrain, edgeMaterial, 0.52),
       clamp(bankPatch * 0.55, 0.0, 0.74));
   }
 #endif
-  float waterBlend = smoothstep(0.035, 0.96, shoreWetness);
+  float waterBlend = smoothstep(0.07, 0.92, shoreWetness);
+#ifdef HYDRO_EDGE_BLEND
+  waterBlend = mix(1.0, waterBlend, step(0.5, uEdgeBlendEnabled));
+#endif
   colour = mix(dampTerrain, colour, waterBlend);
 
   // Geometry supplies the cheapest and most important structure signal.
@@ -1007,7 +1308,7 @@ void main() {
     // A small tonal counterpart lets an eddy read under diffuse light, when
     // its normal alone would disappear. It remains water-coloured and never
     // crosses into white foam.
-    colour *= 1.0 + riverEddyTone * 0.09 * detailLod;
+    colour *= 1.0 + riverEddyTone * 0.16 * detailLod;
 #endif
   }
   // ── A FLAT FIELD DOES NOT SURVIVE THE QUANTISER ──
@@ -1140,21 +1441,57 @@ void main() {
     float causalEnergy = energy;
     float energyGate = max(smoothstep(0.57, 0.84, causalEnergy),
       shallowRapid * 0.56);
-    float foamStreak = valueNoise(vec2(downstream * 0.16 - uTime * foamRate,
-      across * 0.31 + seed * 13.0));
-    float foamBreak = smoothstep(0.54, 0.79,
-      valueNoise(vec2(downstream * 0.43 - uTime * 1.78,
-        across * 0.84 - seed * 9.0)));
-    float riverFoam = vFlowing * energyGate
-      * smoothstep(0.66, 0.90, foamStreak + grain * 0.10)
-      * foamBreak * 0.54 * clamp(uTurbulenceStrength, 0.0, 3.0);
+    // Rapids occupy reaches, not every energetic square metre. A stationary
+    // low-frequency gate groups the moving streaks into riffle tongues and
+    // leaves pools of working, water-coloured turbulence between them.
+    float rapidReach = smoothstep(0.50, 0.76,
+      valueNoise(vec2(downstream * 0.032 + seed * 19.0, seed * 7.0 + 3.0)));
+    // Whitewater gathers into broad downstream tongues. Cross-stream noise
+    // used to be almost metre-scale and presented as evenly scattered white
+    // flecks; this slow lane field gives each rapid a coherent head and tail.
+    float rapidTongue = 1.0;
+#ifdef HYDRO_FLOWING
+    if (vFlowing > 0.5) {
+      float laneCentre = (valueNoise(vec2(
+        downstream * 0.018 + seed * 7.0, seed * 23.0 + 5.0
+      )) - 0.5) * 0.82;
+      float primaryTongue = 1.0 - smoothstep(0.18, 0.54,
+        abs(riverField.g - laneCentre));
+      float splitTongue = (1.0 - smoothstep(0.12, 0.34,
+        abs(riverField.g + laneCentre * 0.46)))
+        * smoothstep(0.54, 0.84, causalEnergy);
+      rapidTongue = max(primaryTongue, splitTongue * 0.55);
+    }
+#endif
+    float foamStreak = valueNoise(vec2(downstream * 0.085 - uTime * foamRate,
+      across * 0.20 + seed * 13.0));
+    float foamBreak = smoothstep(0.64, 0.84,
+      valueNoise(vec2(downstream * 0.34 - uTime * 1.78,
+        across * 0.32 - seed * 9.0)));
+    float brokenFoam = vFlowing * energyGate
+      * smoothstep(0.72, 0.92, foamStreak + grain * 0.08)
+      * foamBreak * rapidReach * rapidTongue * 0.14
+      * clamp(uTurbulenceStrength, 0.0, 3.0);
+    // A low-opacity connected body underneath the broken crest fragments
+    // makes the rapid read as one tongue of aerated water rather than a bag
+    // of white confetti. It retains water colour and follows the same lane.
+    float tongueEnergy = max(energyGate, shallowRapid * 0.90);
+    // The stationary reach mask may suppress broken crests completely, but a
+    // physically shallow high-energy reach must still read as working water.
+    // Keep a restrained aeration floor for the connected tongue only.
+    float tongueReach = mix(0.38, 1.0, rapidReach);
+    float tongueBody = vFlowing * tongueEnergy * tongueReach * rapidTongue
+      * (0.10 + foamStreak * 0.075)
+      * clamp(uTurbulenceStrength, 0.0, 3.0);
+    float riverFoam = max(brokenFoam, tongueBody);
     // A second, shorter chop breaks shallow high-energy reaches into flecks.
     // Deep energetic water keeps boil and long streaks; it does not become a
     // uniformly white rapid merely because its profile is steep.
-    float rapidChop = shallowRapid * smoothstep(0.58, 0.84,
-      valueNoise(vec2(downstream * 0.28 - uTime * 1.72,
-        across * 0.52 + seed * 5.0)));
-    riverFoam = max(riverFoam, rapidChop * foamBreak * 0.22);
+    float rapidChop = shallowRapid * smoothstep(0.64, 0.86,
+      valueNoise(vec2(downstream * 0.45 - uTime * 1.72,
+        across * 0.82 + seed * 5.0)));
+    riverFoam = max(riverFoam,
+      rapidChop * foamBreak * rapidReach * rapidTongue * 0.035);
     // ── BOIL: THE TEXTURE OF WATER THAT IS WORKING BUT NOT BREAKING ──
     // Below the white-foam threshold a reach still churns; that reads as
     // luminance mottling riding the same advected streak field the foam
@@ -1179,14 +1516,15 @@ void main() {
     float spentWash = smoothstep(-0.75, 0.35, vShorePhase)
       * (1.0 - smoothstep(0.35, 0.92, vShorePhase));
     float breakerFoam = (1.0 - vFlowing) * vBreaker
-      * max(crestPick, spentWash * 0.42) * fragmentNoise;
+      * max(crestPick, spentWash * 0.42) * fragmentNoise * mix(0.2, 1.0, vExposure);
     // ── SPILLING CRESTS, JUST SEAWARD OF THE BREAK ──
     // Shoaling steepens a crest before the depth band catches it; its top
     // whitens faintly as it comes in. Gated by the same fragment noise as
     // the breakers so the pre-surf stays broken patches, and by depth so
     // open-water crests never wear it.
     float spill = (1.0 - vFlowing) * smoothstep(0.78, 0.98, vWaveCrest)
-      * (1.0 - smoothstep(2.2, 6.0, geometryField.a)) * fragmentNoise * 0.35;
+      * (1.0 - smoothstep(2.2, 6.0, geometryField.a)) * fragmentNoise * 0.35
+      * mix(0.2, 1.0, vExposure);
     // Swash foam is a texture inside the SAME wetness band used by the body
     // colour and moving cutoff. It may break into flecks, but it cannot form a
     // detached second shoreline with a dark moat between itself and the sea.
@@ -1207,7 +1545,7 @@ void main() {
     if (vFlowing > 0.5) {
       // River aeration carries the water's own hue. Pure sea-foam white made a
       // rapid read as paint laid over its bed and bank.
-      foamColour = mix(colour * 1.18, foamColour, 0.56);
+      foamColour = mix(colour * 1.18, foamColour, 0.42);
     }
 #endif
     colour = mix(colour, foamColour, foam);

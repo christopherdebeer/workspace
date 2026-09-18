@@ -118,7 +118,17 @@ const hub = await d.page.evaluate(() => {
   window.__menutab(0);
   return [...document.querySelectorAll('#menu .m-navrow')].map((r) => r.querySelector('.name')?.textContent);
 });
-check('THE LINE leads the hub stack', hub[0] === 'THE LINE', hub);
+// ── THE PRIMARY STACK, IN ITS DOCUMENTED ORDER ──
+// This asserted `shown[0] === 'THE LINE'` and had been failing since before
+// the splash gained its device toggles — measured on the parent commit, which
+// fails it identically. RIG-MENU-2026-09-08.md states the order outright:
+// "Primary navigation is Rig, Drives, Surveys, The Line", and THE LINE is
+// appended to the nav LAST, so the assertion contradicted the shipped design
+// rather than catching a regression in it. Asserting the whole documented
+// order is stricter than the line it replaces, not looser: it would catch a
+// reshuffle of any of the four, which `[0]` never could.
+check('the primary stack is RIG · DRIVES · SURVEYS · THE LINE',
+  ['RIG', 'DRIVES', 'SURVEYS', 'THE LINE'].every((n, i) => hub[i] === n), hub);
 const screen = await d.page.evaluate(() => {
   window.__menutab(5);
   return document.querySelector('#menu')?.textContent ?? '';
@@ -149,7 +159,7 @@ check('the boot carried marks to lose', carried.missions === 1 && carried.statio
 // can land BETWEEN two protocol taps and swallow the armed state (on a
 // phone it is a 16ms flicker no thumb can beat). Settle first, then both
 // taps in ONE evaluate with an in-page pause.
-await d.page.evaluate(() => window.__menutab(4));
+await d.page.evaluate(() => window.__menutab(8));   // ADVANCED owns the resets now
 await d.page.waitForTimeout(1200);
 const armed = await d.page.evaluate(async () => {
   const find = (re) => [...document.querySelectorAll('#menu button')]

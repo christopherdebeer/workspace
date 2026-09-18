@@ -222,12 +222,42 @@ export function globeGeometry(seg = 128, rings = 64): THREE.BufferGeometry {
 }
 
 export interface GlobeUniforms {
-  uBase: { value: THREE.Texture | null };
   /** The sun as a direction in the GLOBE frame — see `subsolar`. */
   uSun: { value: THREE.Vector3 };
   /** The night side's floor: no city lights are modelled, so it is moonlight. */
   uNight: { value: number };
 }
+
+/**
+ * THE DAY/NIGHT TERM, AS ONE STRING, BECAUSE TWO LAYERS DRAW THIS PLANET.
+ *
+ * The globe is the backdrop and the far shell is painted over it wherever it
+ * has streamed, and the shell had no terminator at all — it is Lambert ground
+ * under the scene's ONE directional light, which at planet scale is a single
+ * direction for the whole world, so it read as a flat lit patch standing over
+ * a globe that was at least trying. Two copies of this arithmetic would drift
+ * in a week; main.ts splices this same string into the shell's material.
+ *
+ * `d` is the cosine between the surface's own radial and the subsolar
+ * direction, both in the planet's frame. THE TERMINATOR IS A BAND, NOT A
+ * LINE: twilight on Earth is about eighteen degrees of arc — the sun below
+ * the horizon and the sky still lit — which is 0.31 of a radian, and a hard
+ * step there reads as a rendering fault. It is the one place on this planet
+ * where a soft edge is the honest one.
+ */
+export const PLANET_SUN_GLSL = `
+  float planetLit(float d) { return smoothstep(-0.31, 0.10, d); }
+  // The day side takes the sun's ANGLE, not a flat "it is daytime", floored
+  // so the limb does not go out before the terminator reaches it.
+  float planetLam(float d) { return 0.42 + 0.58 * clamp(d, 0.0, 1.0); }
+  // Warmth along the terminator, for the same reason the sky has a twilight
+  // band: the light that reaches it has come the long way through the air.
+  float planetDusk(float d) { return (1.0 - abs(d) / 0.31) * step(abs(d), 0.31); }
+  vec3 planetSun(vec3 base, float d, float night) {
+    float lit = planetLit(d);
+    return base * mix(night, planetLam(d), lit)
+      + base * vec3(0.28, 0.13, 0.04) * planetDusk(d) * 0.6;
+  }`;
 
 /**
  * OPAQUE, AND THERE IS NO CROSS-FADE. The first cut carried a `uOn` and drew
@@ -238,11 +268,43 @@ export interface GlobeUniforms {
  * for free and cannot get out of step with. All that is left is a visibility
  * flag, so 16k triangles are not drawn at a driving zoom where nothing could
  * see them.
+ *
+ * ── AND IT IS A GRATICULE NOW, NOT A PICTURE ──
+ *
+ * It was `globe-base.png`, a 1024x512 equirectangular bake coloured by this
+ * game's own `climCompute`/`groundColourAt` so it could not read as another
+ * game's map. Two things retired it. The far shell's ladder now reaches z3
+ * and `fRing` is chosen so the 5x5 ring spans the view, so the STREAMED
+ * ground covers the visible face by construction — the bake was painting
+ * under a layer that had arrived. And the bake is 39km a pixel, so wherever
+ * it did show through it was a blurred picture beside crisp streamed tiles.
+ *
+ * What a backdrop is still for is saying WHERE YOU ARE on a sphere when the
+ * tiles have not landed, and a graticule does that better than a blur: it is
+ * the same at every zoom, it costs no asset and no fetch, and it cannot go
+ * stale against a palette change the way a baked picture does.
+ *
+ * THE LINES CARRY THE DAY/NIGHT, WHICH THE FILL CANNOT. A dark sphere times
+ * 0.42 and the same sphere times 0.14 are both black to a fourteen-level
+ * quantiser — measured on the bake it replaces, where the terminator came out
+ * as a ratio of 0.6, about ONE palette step, and read as nothing at all. A
+ * graticule is a compact feature with a large tonal step across it, so the
+ * line tone is what announces the terminator, and it survives the dither.
+ *
+ * AND THEY ARE DIM ON PURPOSE. "Narrow bright features become white contour
+ * diagrams" is this renderer's own doctrine and a wireframe is exactly that
+ * shape, so the ink sits well under the 0.62 bloom cut and reads as a drawn
+ * line rather than a lit one.
  */
 
 export function globeMaterial(u: GlobeUniforms): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: u as unknown as Record<string, THREE.IUniform>,
+    // A SCREEN-CONSTANT LINE NEEDS DERIVATIVES. `fwidth` gives degrees per
+    // pixel at this fragment, which is what keeps a meridian the same weight
+    // at 2,000km and at 20,000 — and makes the poles, where the meridians
+    // converge, widen in lon-space rather than alias into a smear.
+    extensions: { derivatives: true } as unknown as THREE.ShaderMaterialParameters['extensions'],
     vertexShader: `
       // TWO NORMALS, IN TWO FRAMES, AND THE FIRST CUT USED ONE FOR BOTH.
       //
@@ -273,41 +335,58 @@ export function globeMaterial(u: GlobeUniforms): THREE.ShaderMaterial {
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `
-      uniform sampler2D uBase;
       uniform vec3 uSun;
       uniform float uNight;
       varying vec3 vN;
       varying vec3 vNv;
       varying vec3 vView;
       varying vec2 vUv;
+      ${PLANET_SUN_GLSL}
+      // How close this fragment is to a line every "period" degrees, as an
+      // antialiased 0..1, with "w" the half-width in the same degrees.
+      // (NO BACKTICKS IN GLSL COMMENTS — this file is a TS template literal
+      // and one backtick ends it. CLAUDE.md has said so three times; this is
+      // the fourth.)
+      float grat(float deg, float period, float w) {
+        float d = abs(fract(deg / period + 0.5) - 0.5) * period;
+        return 1.0 - smoothstep(0.0, w, d);
+      }
       void main() {
-        vec3 base = texture2D(uBase, vUv).rgb;
-        // THE TERMINATOR IS A BAND, NOT A LINE. Twilight on Earth is about
-        // eighteen degrees of arc — the sun below the horizon and the sky
-        // still lit — which is 0.31 of a radian and a visible width of planet
-        // at this scale. A hard step there reads as a rendering fault; this
-        // is the one place on the globe where a soft edge is the honest one.
+        // The lattice is 2.25 degrees a quad and uv is linear across each, so
+        // reading lat/lon from uv rather than from the normal is a fraction of
+        // a quad's worth of wobble on a line — invisible, and it costs no
+        // trig. (The frame is mirrored, so a normal would have to unmirror.)
+        float lon = vUv.x * 360.0 - 180.0;
+        float lat = 90.0 - vUv.y * 180.0;
+        // Degrees per pixel, so the weight is the same at every altitude.
+        float wLon = fwidth(lon) * 0.75;
+        float wLat = fwidth(lat) * 0.75;
+        // MERIDIANS FADE OUT AT THE POLES, where they converge on a point and
+        // any fixed spacing becomes a solid cap of ink.
+        float poleFade = smoothstep(0.02, 0.30, cos(radians(lat)));
+        float minor = max(grat(lon, 15.0, wLon) * poleFade, grat(lat, 15.0, wLat));
+        // The equator, the prime meridian and the tropics are the lines a
+        // reader actually navigates by, so they are the ones that carry.
+        float major = max(
+          max(grat(lon, 90.0, wLon * 1.3) * poleFade, grat(lat, 90.0, wLat * 1.3)),
+          grat(abs(lat) - 23.44, 1000.0, wLat));
+        float line = max(minor * 0.55, major);
+        // ── THE SURFACE ──
+        // A deep, nearly black ocean-blue: this is a backdrop that the shell
+        // paints over, and anything lighter competes with real ground.
+        vec3 fill = vec3(0.030, 0.052, 0.082);
+        vec3 ink = vec3(0.20, 0.44, 0.52);
+        vec3 base = mix(fill, ink, line);
         float d = dot(vN, uSun);
-        float lit = smoothstep(-0.31, 0.10, d);
-        // AND THE DAY SIDE TAKES THE SUN'S ANGLE, not a flat "it is daytime".
-        // The streamed shell beside it is Lambert ground under the same sun,
-        // so a globe lit evenly from terminator to terminator meets the shell
-        // at a step wherever the two are both on screen — which is the whole
-        // hand-over band. lam is that cosine, floored so the limb does not
-        // go to nothing before the terminator reaches it.
-        float lam = 0.42 + 0.58 * clamp(d, 0.0, 1.0);
-        // Warmth along the terminator, for the same reason the sky has a
-        // twilight band: the light that reaches it has come the long way
-        // through the atmosphere.
-        float dusk = (1.0 - abs(d) / 0.31) * step(abs(d), 0.31);
-        vec3 col = base * mix(uNight, lam, lit);
-        col += base * vec3(0.28, 0.13, 0.04) * dusk * 0.6;
+        vec3 col = planetSun(base, d, uNight);
         // THE LIMB, which is the whole of the atmosphere this view can show.
         // Fresnel on the view, so it is a rim wherever you stand rather than a
         // ring painted at a fixed place — and lit, so the night side's limb
-        // goes out.
+        // goes out. Its night share is 0.10 and not 0.25: at 0.25 the rim was
+        // most of what the night side emitted and it flattened the very
+        // terminator this material exists to show.
         float rim = pow(1.0 - clamp(dot(vNv, vView), 0.0, 1.0), 3.5);
-        col += vec3(0.20, 0.34, 0.52) * rim * (0.25 + 0.75 * lit);
+        col += vec3(0.20, 0.34, 0.52) * rim * (0.10 + 0.90 * planetLit(d));
         gl_FragColor = vec4(col, 1.0);
       }`,
     // THE BACKDROP WRITES NO DEPTH. It is painted first (renderOrder −5) and

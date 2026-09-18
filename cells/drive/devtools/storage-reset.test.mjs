@@ -98,7 +98,7 @@ try {
   });
   check('the device was seeded', seeded, null);
 
-  await page.evaluate(() => window.__menutab(4), T_SYSTEM);
+  await page.evaluate(() => window.__menutab(8), T_SYSTEM);   // ADVANCED owns STORAGE now
   const before = await page.evaluate(() => window.__storage());
   check('ours is on the device', before.local.length >= 3 && before.session.length === 1, before);
   check('and so is the world cache', before.ways === 8 && before.tiles === 8, before);

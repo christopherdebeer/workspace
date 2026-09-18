@@ -1,4 +1,15 @@
-import { HYDRO_ID_KIND, HydroFlags, type HydroSample, type HydroTileField } from './types';
+import {
+  HYDRO_BED_MASK,
+  HYDRO_BED_SHIFT,
+  HYDRO_BANK_MASK,
+  HYDRO_BANK_SHIFT,
+  HYDRO_ID_BED,
+  HYDRO_ID_BANK,
+  HYDRO_ID_KIND,
+  HydroFlags,
+  type HydroSample,
+  type HydroTileField,
+} from './types';
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 /** Match texture2D: geometry/dynamics are LINEAR; class/flags are NEAREST.
  * build-tile places texel centres at (i-gutter+0.5)*span/resolution.
@@ -23,9 +34,11 @@ export function sampleFieldSurface(field: HydroTileField, x: number, z: number,
   const kind=HYDRO_ID_KIND[field.material[i]];
   if (!kind) return undefined;
   const flag=field.material[i+3];
+  const bedMaterial=HYDRO_ID_BED[(flag&HYDRO_BED_MASK)>>HYDRO_BED_SHIFT] ?? 'silt';
+  const bankMaterial=HYDRO_ID_BANK[(flag&HYDRO_BANK_MASK)>>HYDRO_BANK_SHIFT] ?? 'soil';
   return {kind,coverage,restingLevelM:field.elevationBaseM+bilinear(field.geometry,2),
     shoreDistanceM:bilinear(field.geometry,1),depthM:bilinear(field.geometry,3),
     flow:[bilinear(field.dynamics,0),bilinear(field.dynamics,1)],
-    fetchM:bilinear(field.dynamics,2),
+    fetchM:bilinear(field.dynamics,2),bedMaterial,bankMaterial,
     intermittent:(flag&HydroFlags.Intermittent)!==0,tidal:(flag&HydroFlags.Tidal)!==0};
 }

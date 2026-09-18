@@ -21,6 +21,24 @@ tried and was wrong.
 > esbuild --log-level=error --outfile=/dev/null app.js` found it instantly
 > (`Syntax error "a"`, line 14569). Use esbuild.
 >
+> **AND A NEEDLE WITH A NON-ASCII CHARACTER IN IT READS 0.** The deploy
+> transpile emits ASCII, so a middle dot in a string literal — which every
+> telemetry row in this game is built from — arrives as `\xB7` and a grep for
+> the UTF-8 character finds nothing at all. Measured on the redrape
+> instrument's own check: `calls · walk ` 0, ` normals ` 5, `redrapeProf` 3, in
+> a bundle that plainly carries the row. That is a false negative shaped
+> exactly like a symbol that did not ship, and it is the second reason the
+> PARSE is the gate and the grep is a secondary.
+>
+> **AND `app.js` IS EDGE-CACHED FOR SIXTY SECONDS, so the verification fetch
+> straight after a deploy can read the BUILD BEFORE IT.** Measured: a fetch
+> immediately after `✓ deployed` came back with `x-cache: Hit from cloudfront`
+> and no trace of a symbol that was plainly in the local source and in the
+> bundle a minute later. That reads exactly like a deploy that did not take.
+> Add a cache-buster (`?cb=$RANDOM`) or read `x-cache` in the headers before
+> believing a zero — a needle that is absent from a CACHED bundle is a
+> measurement of the cache.
+>
 > The break was a `String.replace()` filling a placeholder in the served
 > `app.js`. `replace` takes the FIRST occurrence, `client/runtime.ts` had been
 > using that same placeholder for years, and the substitution landed inside
@@ -40,6 +58,52 @@ a confusing module error):
 4. `auth.revokeToken {tokenId}` — do not leave a token open
 5. Verify by fetching the live bundle and grepping for a symbol you just added:
    `curl -s https://c15r-drive.on.parc.land/app.js | grep -c mySymbol`
+
+> **THE DEPLOYER IS 1024 MB NOW, AND IT NEEDS 714 — WHICH WAS 687 THIS
+> MORNING.** Measured 2026-09-15, twice, by tailing `platform.logs {service:
+> "cells"}` THROUGH a push rather than after it, which is the only way to catch
+> the line — the tail is a short live window, not a searchable history, so a
+> deploy's own REPORT is gone within the minute:
+>
+> ```
+> 10:39:02  cell deployed  version 1789468740806  files 191  static 22
+> 10:39:02  REPORT  Duration: 28332.01 ms  Memory Size: 1024 MB  Max Memory Used: 687 MB
+> 16:41:04  cell deployed  version 1789490463265  files 196  static 22
+> 16:41:04  REPORT  Duration: 32720.97 ms  Memory Size: 1024 MB  Max Memory Used: 714 MB
+> 18:06:03  cell deployed  version 1789495562377  files 196  static 22
+> 18:06:03  REPORT  Duration: 30987.79 ms  Memory Size: 1024 MB  Max Memory Used: 705 MB
+> ```
+>
+> **About 700 MB of the 1024 MB ceiling and half a minute of the 120 s
+> timeout** — seven tenths of the memory, a quarter of the clock. Everything
+> below was written against a 512 MB function, and at 512 this cell's deploy
+> would now fail EVERY time rather than intermittently: 700 is not a near miss.
+>
+> **AND THERE IS NO SLOPE — THE THIRD MEASUREMENT SAYS SO, AND THE SECOND ONE
+> RAISED A FALSE ALARM.** Reading 687 then 714 the same day, this note said
+> "+27 MB and five files over ONE DAY of ordinary work" and called it a number
+> to watch. The next deploy added no files at all and came back at **705, nine
+> megabytes DOWN.** So the spread is run-to-run variance of at least that much
+> and the three points are 687 / 714 / 705 with no direction in them. The
+> original note said out loud that two points are not a trend; it then reasoned
+> from them anyway. **A difference smaller than the variance is not a
+> measurement, and the only way to know the variance is to repeat the
+> reading** — which costs a deploy here, so the honest habit is to take the
+> REPORT every time and compare against a RANGE rather than the last one.
+>
+> The per-file writes during a push sit at 249 MB and 85–420 ms each, so the
+> 714 is the BUNDLE step alone — one request (`26b1a0e0` on the first
+> measurement, `900dd031` on the second) that reads every file, transpiles
+> `client/main.ts` and zips `static/`.
+>
+> **CATCHING IT NEEDS THE TAIL TAKEN AT THE RIGHT MOMENT, AND THE MOMENT IS
+> AFTER.** The bundle request STARTs when the deploy is requested and its
+> REPORT is written ~33 s later, so a read taken while the push is still
+> writing files — or in the first half minute of the deploy — shows the START
+> and no REPORT, which is what happened here on the first attempt. Watch the
+> log for `deploying` to know the request went in, then read once the `✓
+> deployed` line lands: the REPORT is the last thing before cell-sync's own
+> polling.
 
 **A DEPLOY THAT NEVER LEAVES `DEPLOYING` IS THE DEPLOYER OUT OF MEMORY, AND
 NOTHING TELLS YOU.** Root-caused on 2026-09-10 with `platform.logs
@@ -69,7 +133,11 @@ Three things to do with it:
 
 - **Read the REPORT line, not the phase.** `platform.logs` needs the
   platform scope; the line to find is the one with `Status: error` or
-  `Status: timeout` beside a 512 MB `Max Memory Used`.
+  `Status: timeout` beside a `Max Memory Used` at the ceiling. **Tail it
+  DURING the push**: the window is seconds long, so a tail taken after the
+  deploy has finished shows only your own polling and can say nothing about
+  what the deploy used — which is how the 687 MB above went unmeasured for
+  as long as it did.
 - **Re-issue with `cells.deploy {cellId}`, not another push.** A push
   resends 133 files through the cells tools to arrive at the same deploy
   event; `cells.deploy` raises the event over the files already there. The
@@ -159,6 +227,20 @@ corrupted the five icons in the working tree, and the only thing that ever
 caught it was `git status` showing five modified PNGs after a pull that should
 have been a no-op.
 
+**AND A PULL RESURRECTS `devtools/` THAT A PUSH WILL NEVER CORRECT.** `cell-sync`'s
+`SKIP` set is `node_modules`, `devtools`, `native` — and it is applied to the
+PUSH's directory walk only. The cell still holds whatever was in `devtools/`
+before that rule existed, so every pull writes those stale copies over the
+working tree and the next push does not fix them: measured twice in one
+session, `devtools/globe-navigation.test.cjs` came back pre-sphere-pass and
+`devtools/refine-flora.mjs` came back without the conifer habit/state fields,
+both times, with a push in between. The remedy in the ritual is
+`git checkout -- cells/drive/devtools/` after every pull; the remedy in the cell
+is `cells.deleteFile` on those paths, which also takes dead weight out of a
+deployer already running at seven tenths of its memory ceiling. **Not done here
+— deleting files from a shared cell is not a thing to do unasked** — but it is
+the fix, and until someone does it this reversion happens on every deploy cycle.
+
 **COMMIT BEFORE YOU PULL.** `cell-sync pull` overwrites the working tree with
 the cell's copy of every file it has, and it does not care that you were
 mid-edit. It ate an uncommitted rewrite of `index.ts` and of this file during
@@ -195,6 +277,20 @@ rescued it.
 The reverse also happens: the cell can be **behind** git when someone commits
 without deploying. Check the direction of each diff before restoring anything.
 
+**IT HAPPENED AGAIN ON 2026-09-17, AND THE DIRECTION WAS DIFFERENT PER FILE.**
+A pull before deploying the impostor census brought back eight modified files.
+Three were the cell **ahead** — `client/flora-ez.ts`, `client/tree-atlas.ts`,
+`client/tree-impostor.ts`, carrying another author's canopy-depth work: the
+skeleton's measured `aSky` routed through the impostor atlas's spare B channel,
+a Beer-Lambert transmission through the crown, bark detail retired by `fwidth`
+rather than by distance, and the envelope normal weighted in ART PIXELS. Three
+were the cell **behind** — `client/main.ts`, `client/perf-check.mjs` and this
+file, byte-identical to the commit before the one being deployed. Two were the
+`devtools/` resurrection above. **The test that made this cheap is
+`git diff <the commit before yours> -- <file>`:** an empty diff means the cell
+is simply behind and yours is safe to restore; a non-empty one is work that
+exists nowhere else and must be committed verbatim before anything is pushed.
+
 ---
 
 ## Verification ladder
@@ -214,6 +310,45 @@ Nothing here is fast. Budget for it.
 | `node devtools/appshell.test.mjs` | the worker precaches only what the cell serves | instant |
 | `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~20s |
 | `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
+| `node devtools/switches.test.mjs` | the table cannot rot in either direction | instant |
+| `node devtools/hud-bake.test.mjs` | whether a baked HUD element draws the pixels the per-frame one did — exact over nothing, within one rounding over a ground; no world, no WebGL, a canvas and two loops | ~5s |
+| `node devtools/hud-split.mjs` | where `drawHud`'s milliseconds go, by its own section headers, in BOTH cameras (drawing ON — `nodraw` skips the HUD entirely) | ~12min |
+| `node devtools/redrape-ga.mjs` | what a redrape's walk is made of: `groundAt` priced by calling it twice, split into its LOCATE and SOLVE halves, with the same-setting floor beside it (`FAST=0` is the rollback, `AUDIT=1` compares both samplers per vertex) | ~4min |
+| `node devtools/tree-edge.mjs` | how far out a tree actually appears, by family, with the caps beside the edges — `?treedemand=0` is the old all-families divisor and the A/B (`FIX=`, `SECS=`) | ~4min |
+| `node devtools/tree-spend.mjs` | where the tree triangle budget went: cap against placed, and what the allocator CHARGED against what the GPU was handed, per family — `?treeprice=0` charges the atlas mean again (`FIX=`, `SECS=`) | ~6min |
+| `node client/perf-check.mjs` | the tree refresh still refills byte-for-byte what the pre-slice one did, over a deterministic mock world — a SANDBOXED check, so it breaks on a new free variable and says nothing until it is run: it was red for three commits and two deploys before anyone noticed | ~5s |
+| `node devtools/tree-manifest.mjs` | KNOWN against DRAWN: whether a tree exists further out than it is built, with the placed counts and edges beside them as the live witness that nothing on screen moved — `?treemanifest=<m>` equal to the draw range is the single ring (`FIX=`, `SECS=`) | ~8min |
+| `node devtools/tree-impostor.mjs` | what the impostor tier stands up and what it changes on screen — ONE boot, off/on/off through `__impostor()`, so the repeat is the floor; read whole AND over the canopy band, because a chase frame is mostly sward and sky (`TRIS=` raw triangles, `BAND=`) | ~6min |
+| `node devtools/orientation.test.mjs` | a rotation keeps the art buffer, the art pixel's size on the glass and the HUD grid, and the viewport chain recovers from an event that carried stale metrics — a real rotation in the browser at DPR 3, with the rule it replaced computed beside it as the control | ~30s |
+| `node devtools/glsl-reserved.test.mjs` | no shader names a variable with a word GLSL ES 3.00 reserves — the harness DOES reproduce this (it is WebGL2), but only once a tool draws the material, and this costs no GL and no minute | instant |
+| `node devtools/render-focus.test.mjs` | where the RENDERER is looking, and whether anything reads it — the authority's three cameras and the drone's own lead geometry driven for real, then each consumer and the sward's fast/slow ORDER as a source check; two controls in its header | instant |
+| `node devtools/imp-atlas.test.mjs` | the impostor atlas holds EVERY variant that exists (40 slots against 37 keys) and the bake's packing agrees with the shader's, tile for tile over all 1,000 — pure node, instant, and the gate that fails when a new EZ form takes the total past the ceiling | instant |
+| `node devtools/imp-sheet.mjs` | every variant's SKELETON beside its own baked IMPOSTOR card, one camera, one quantiser, one metric block, at the art-pixel size the game draws that tree at — with the silhouette IoU between the halves, which is the only column that compares them. `DIST=`, `ELEV=`, `AZ=` (0 is exactly on a baked tile, 22.5 the worst case between two), `INK=1`; **`MID=1` puts the MID RUNG in the right cell instead of the card**, same camera and metric block, so the full↔mid handover is certified by the same IoU column | ~2min |
+| `node devtools/imp-demand.mjs` | what the impostor atlas was ASKED for beside what it holds: the ceiling computed offline from the bake (pure, instant, no browser), then the live census by key — refused keys with their tree counts, baked slots with theirs, and how many of the eighteen are serving nobody. `KM=0 FIX=` measures one arrived world; `SPOT=` with a leg drives across districts and needs a device or a warm relay to mean anything | ~2min |
+| `node devtools/imp-census.mjs` | **why a manifested tree has no representation at all** — the gather's EXITS by name, with the ones large enough to be seen counted apart (`h · 307 / d > 1` art pixel). Sweeps the DENSITY dial and FAILS on any perceptible NONE, and on a density exit with an empty far ring: an invariant is only demonstrated by trying to break it. `FIX=`, `DENS=0,2,5`, `DIALS='imprch=2'` | ~2min |
+| `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
+| `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
+| `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
+| `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
+| `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
+| `node devtools/bedding.mjs` | the autocorrelation of the substrate's own contribution above its background, at a solved scale so two runs compare — READ THE LAG, not just the peak: the band holds the bedding comb AND the scree lobes and cannot tell them apart (`REV=` for a control, `ANALYSE=1` to re-read frames already on disk) | ~9min |
+| `node devtools/bridge-water.mjs` | every tagged bridge at a crossing ran its chord (`2d-chord` in its own stage log) and stands over its water — the witness is the STAGE, the metre is the symptom (`FIX=`, `CROSSINGS=`) | ~1min |
+| `node devtools/substrate-morph.test.mjs` | the geomorphic field says what it claims, on authored terrain: a face shows bedrock, nothing is shed above it, the apron is below and thins with distance, hollows hold water and soil, and the builder survives being shipped to the worker as text | ~10s |
+| `node devtools/substrate-views.mjs` | each channel of that field photographed over real ground, with the same-frame-twice floor and the share of the pane each view moves — a channel that paints a flat wash is the failure worth catching (`FIX=`, `CAM=`, `Z=`, `CH=`) | ~6min |
+| `node devtools/chart-bands.mjs` | which layer owns each band of the chart — a hide-diff of the fine world, the coarse shell and the globe over one settled frame, with the same-frame-twice floor beside it, the far/fine seam in luma, and the planet-sun ramp (`SPOT=`, `Z=`, `CLIP=0`) | ~8min |
+| `node devtools/bridge-landmarks.mjs` | who CLAIMED each bridge assembly — an entry's id, OSM's own `bridge:structure`, or the recipe — beside what the painter actually built; fails on a spec that names a form and paints nothing, and on a long span nobody claimed (`FIX=`, `LONG_M=`) | ~2min |
+| `node devtools/hydro-phases.mjs` | where a hydro build's milliseconds go, by phase and by ns/texel, with the wet/waterless build split, the wet share of the grid, and what a bound on the full-grid passes would leave to run — READ `BOUND=0` FOR THE MILLISECONDS, since the sizing probe is the same order of work as the passes it sizes and lands in `other` (`DRY=0` is the short-circuit's control, `FIX=`/`SPOT=` the place) | ~1min |
+| `node devtools/hydro-dry.test.mjs` | a waterless tile's short-circuit is the path it replaced, byte for byte, against the revision's own build-tile (`REV=`) | ~10s |
+| `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
+| `node devtools/sward-sub.mjs` | whether the sward's density and the flora's habitat follow the geomorphic field, as the correlation and the habitat counts, with `swardsub=0` as the control (`FIX=` a fixture or `SPOT=` a live place; CPU numbers rather than pixels — see the note) | ~3min |
+| `node devtools/ground-view.mjs` | a ground view is a uniform, not a sheet: the chip sets the channel in every camera, the legend is tallied off the attribute the fragment reads, and the chase frame moves (`FIX=` for an offline world) | ~6min |
+| `node devtools/sward-edges.mjs` | whether the sward's hard rectilinear edges are the cover raster's — the density field's own gradient DIRECTIONS as \|cos 2θ\|, which is 1 on an axis and 0 on a diagonal, with `__swardev(0\|1)` re-sweeping the field on ONE settled world (`SPOT=`, `FIX=`, `SHOTS=0` for numbers only) | ~6min |
+| `node devtools/sward-cover.test.mjs` | the same claim in pure node: a transect across an authored grass/bare boundary, its transition width and level count, and that the edge wanders along its own length rather than being a blurred straight line | instant |
+| `node devtools/band-d.mjs` | the half-metre: whether the material draws it better than the cover class did, measured at the top camera's MINIMUM zoom where the whole pane is inside the band (a chase seat sees the ground at a grazing angle and the band is a strip a few metres deep at the bottom of it) — plus the sward's per-blade half and the generic cascade octave by octave against the substrate (`PHASE=band\|sward\|cascade`, one a process; `SPOT=`) | ~9min a phase |
+| `node devtools/normal-ab.mjs` | whether the DEM normal map is a residual on the mesh or a replacement of it: the MATERIAL count at both ends of the dial — the claim a pixel diff cannot witness — then the residual's own strength interleaved on one settled world (`SPOT=`, `FIX=`, `CAMS=`) | ~9min |
+| `node devtools/substrate-ab.mjs` | whether the substrate draws a landscape or more noise: the field and the three layer shares at six points, an interleaved one-boot A/B cropped to the near field, and the domain and amount dials swept (`TD=dom` paints the shares, `SPOT=` for a cliff) | ~9min |
+| `node devtools/settings-switches.test.mjs` | the switches are on the glass and a tap stages one | ~1min |
+| `node devtools/menu-survey.mjs` | every menu screen photographed, SETTINGS scrolled through | ~2min |
 | `node devtools/offline-ground.test.mjs` | and finds ground when it does | ~3min |
 | `node devtools/<name>.test.mjs` | 66 of them; pick what you touched | varies |
 
@@ -248,6 +383,21 @@ migration was bounded. If you ever unpin either one, they will drift again and
 the two checks will disagree in silence.
 
 ### Tests that fail for reasons that are not you
+
+**`substrate-structure-render.test.mjs`'s causeway check is a RACE, on both
+sides.** "the causeway terrain retains solid fill to the authored road" reads
+`meshSurfaceAt` at the crossing through `__substrate().crossingEarthworks`, at
+a fixed settle, and that sample can land inside a rebuild: measured 2 of 3
+failures on the pre-substrate-migration control as well as on the tree that
+followed it. **One control run is not an attribution** — the first control run
+here passed and the failure was written up as a regression before the other
+two came back. What the underlying quantity actually does, traced at the point
+every 500 ms for 40 s: 7 transient nulls after the migration against the
+control's 10, first at ~5 s, last at ~18 s, **and none at all once `dirty`
+reaches 0** in either. `__tileholes()` reads 0 throughout, so no tile is
+missing its mesh — it is the cell-triangle lookup answering null mid-swap. The
+honest fix is a settle gate on that assertion rather than a fixed wait; until
+then, read it against three runs of a control, not one.
 
 `sward.test.mjs` and anything else that needs a road under the car depend on
 **Overpass**, a busy public service that fails for whole sessions at a time.
@@ -313,6 +463,13 @@ Other harness facts learned the hard way:
   capture against fourteen seconds on Camps Bay, all of it before the script's
   own gate started counting. A measurement with its own settle gate passes
   `settle: 0`; the option exists for tests that integrate physics.
+- **THE HARNESS'S OWN CELL BUNDLE IS ESM, SO IT HAS NO `__dirname`.** Every
+  route that reads a baked asset off disk (`~/cover/w1`, `~/osm/ov1`'s wide
+  rungs) threw on its first call and answered 503 for as long as those routes
+  have existed — see "…and the harness had never served the baked routes at
+  all" below for the measurement and the fix. And `cellRoute` gunzips now: a
+  route that answers `content-encoding: gzip` reached the page as bytes it
+  could not parse.
 - Screenshots land in `/tmp/drive-tools/` (`$DRIVE_WORK`).
 - A bundle built for a test must be written **inside the repo** (e.g.
   `node_modules/.cache`) — `--external:three` resolves from where the file
@@ -340,6 +497,93 @@ fixture world possible:
 | terrarium height tile | `fetchHeights(x, y, z)` | z14 |
 | WorldCover class tile | `loadCoverTile(x, y)` | z12 |
 | OSM vector tile | `proxyTile(x, y)` / `readTileCache` | z16 |
+
+All three come through the cell's `~/` routes now, where CloudFront reads S3
+first and the Lambda banks what it computed. The DEM was the last one in: it
+went straight to tiles.mapterhorn.com from every player's device until
+2026-09-11, and it was 37% of the game's data bytes in a dense city and 94–96%
+everywhere else. `~/dem/v1/` is a byte proxy, not a compute route (no Lambda
+can decode lossless WebP without shipping a decoder), and its one piece of
+cleverness is that an ABSENT tile is answered with a stored `text/plain`
+sentinel naming the ancestor to climb to — a 404 cannot be banked, and most of
+the planet is an absent tile. The publishers stay in the client as the
+bad-deploy fallback, exactly as `proxyTile` keeps the Overpass mirrors.
+
+TERRARIUM IS THE ENCODING, MAPTERHORN IS A PUBLISHER, and the route is named
+for neither: `~/dem/v1/` promises terrarium bytes for a tile and the cell
+decides who answered. The full reasoning is by `serveDem` in `index.ts`.
+
+The climb floor was z6 on a guess and is 0 on a measurement: Mapterhorn
+publishes every tile at z0 (one 512px tile, 239KB), z1 and z2. The old floor
+meant `FAR_LEVELS`' widest level, z5, ran an EMPTY climb loop and took every
+z5 shell tile from the corrupt legacy AWS mosaic without ever asking.
+
+`API-AUDIT-2026-09-11.md` has all of it.
+
+## AND THE LADDER STOPS FIVE RUNGS ABOVE THE DATA
+
+Said in that same audit that the globe could not be live tiles. That was
+wrong, and `LADDER-BELOW-Z5-2026-09-11.md` is the measurement that says so.
+The short version, because it is the kind of thing that costs a session:
+
+- **From the equator the shell never leaves z6.** `farLevelFor` is fed a
+  radius capped at SIGHT_MAX (1,500km) and a z6 5x5 ring reaches 1,565km
+  there, so **z5, the last rung of FAR_LEVELS, is unreachable at that
+  latitude** and a 375x zoom-out moves nothing. The shell covers a 1,565km
+  disc of a 12,742km planet — 12% of the face — and the rest is the bake.
+  `devtools/ladder-audit.mjs` prints that table.
+- **`globe-base.png` is 39 km A PIXEL.** It is downsampled from a 4096²
+  mosaic, so the bake's INPUTS are not its output and comparing tiles against
+  the inputs (which is what the audit did) overstates the cost by 4x.
+  Mapterhorn z2 is 19.6 km/px: twice the bake's delivered resolution, 16 tiles.
+- **Geometry is not the constraint.** The whole planet at z2, at the geometric
+  budget `globeGeometry(160, 80)` already spends, is ~51k triangles and 16
+  draws — cheaper than the 25-draw, 200k-triangle ring drawn today. What is
+  wrong is that `farSeg` is metres-per-VERTEX, which is the right dial only
+  while a tile is bigger than the screen.
+- **Cover is the one real blocker, and it is 90KB.** `~/cover/v1/` range-reads
+  3-degree COGs and a coarse tile lands on many — z5 on 20, z4 on 64, z2 on
+  690 (`devtools/cover-reach.mjs`), which is why COVER_WIDE_LEVELS ends at 4.
+  There is no global overview in the ESA bucket. So bake it, exactly as
+  `ne-wide.ts` bakes the roads for exactly the same reason — measured at 0.044
+  bytes a texel, the whole planet at z2 resolution is ~90KB.
+
+The principle worth keeping out of all of it: **bake the INPUTS, not the
+output.** A baked picture freezes the palette, the weather and the biome rules
+into an image; a baked class raster is the cover layer arriving by a different
+road, and `climCompute` carries on.
+
+### …and it is all built now. Four things to know before touching it
+
+- **The shell's reach is not the plane's.** `viewRadius` caps at SIGHT_MAX
+  because the equirectangular tangent plane stops being honest there;
+  `backdropRadius` is the same expression WITHOUT the cap, and it exists
+  because the shell is built on the sphere and does not live in that plane.
+  Feeding the capped radius to `farLevelFor` is what pinned the ladder at z6.
+- **`shellOn` no longer hides the shell.** It used to carry
+  `&& globeFree() === 0`, which switched twenty-five BUILT tiles off past the
+  hand-over. `globeFree` still owns the GESTURE and is untouched; the two were
+  tied so they could not drift, and they are untied because the thing that
+  needed protecting — a spun globe under a static shell — cannot happen: a
+  "spin" is `setChartFocus`, and `planetGroup` is placed from that one focus.
+- **Finer sits higher, by level.** `farLift` is a radial offset derived from
+  FAR_LEVELS' own span, so the ordering between levels is total and does not
+  depend on which was retired. It replaced a sink applied to the outgoing ring,
+  which is right for a curtain and backwards for a pyramid. The span is derived
+  rather than fixed BECAUSE a fixed 1.5m a rung was 15m over ten rungs and
+  would have lifted z13 through the fine world it hides under (FAR_DROP is 12).
+- **The coarse rings wrap in x and clip in y.** `loadFarTile` takes raw
+  indices; harmless at z9, not at z3, where a 12,500km ring asks for negative x
+  past ~70 degrees from the prime meridian and 404s a silent quarter of the
+  backdrop. There is no tile above the mercator cut at 85 degrees — that seam
+  is the baked sphere's one remaining job, along with the first frame.
+
+`node devtools/api-audit.mjs [--spot=] [--drive=] [--nodraw] [--json=]` is the
+instrument: it boots the real bundle and reports every request by host, split
+into what goes through the cache and what does not. A host it has not been told
+about prints as UNCLASSIFIED, so a new upstream shows up as a line nobody
+wrote. It cannot speak to REACHABILITY — the relay bypasses CSP, see the
+harness notes above.
 
 Answer those three from an authored fixture and the **entire production
 pipeline** runs with no network: terrain build, corridor carve, ribbon, batter,
@@ -1811,9 +2055,10 @@ nobody re-litigates them:
 **Still standing, and not yet explained:** a large pure-black region in the
 Suresnes b1 cab frame, present before this work as well as after, on a surface
 that is not obviously a lifted wall or a lifted soffit. Worth one raycast.
-Also open: one bay grid for the planet (2.75m × 3.1m, fixed in `facade.ts`, no
-per-culture or per-class window rhythm), and no chimneys, parapets, cornices or
-balconies anywhere.
+Also open: one bay grid for the planet (2.75m × 3.1m — `FACADE_GRAMMAR` in
+`facade.ts` now, on uniforms and on the façade lab's dials, but still one set
+for every building on earth), and no chimneys, parapets, cornices or balconies
+anywhere.
 
 **AND THE MARK TINS ARE STILL ABSOLUTE, which is the glass fault one surface
 over.** A tin is mixed in at `fadeMin + fadeVar` of its own colour regardless of
@@ -1824,6 +2069,1636 @@ CONTRAST problem, so the suite cannot see it. The fix is the same shape as the
 glass one: carry the tin toward the wall's own value rather than mixing a fixed
 colour over it.
 
+### Phase 0 of the building work: instruments before opinions
+
+Asked from the seat: buildings are generic blocks with procedural repeating
+windows — how do we get real local and cultural diversity? The answer agreed
+was a HAND-AUTHORED tradition atlas keyed on geography (the way `LANDMARKS`
+and `conventionFor` already are), intact stock before ruins, and, before any
+of that, three instruments — because every earlier building change in this
+file was judged off a frame that happened to be facing a wall, and the
+review's own open items ("one bay grid for the planet", "no ground floor")
+were claims nobody could put a number on.
+
+**THE CENSUS: the footprints say what the tags cannot.** `client/morphology.ts`
+is pure — rings in, rows and a summary out — and it runs in three places
+that cannot disagree because there is one of it: `devtools/building-census.mjs`
+over the nine `static/fixtures/world-*.json` captures, `__bldcensus(r?)` in
+the world, and `devtools/morphology.test.mjs` on authored rings.
+
+| capture | n | attached | runs · median · max | plot m² p25 / p50 / p75 / p95 | grid |
+|---|---|---|---|---|---|
+| paris-west | 3,794 | **74%** | 692 · 3 · **38** | 19 / 61 / 102 / 335 | 63% |
+| paris-south | 1,302 | **73%** | 245 · 3 · 19 | 20 / 66 / 97 / 651 | 57% |
+| campsbay | 627 | 7% | 21 · 2 · 3 | 153 / 216 / 284 / 483 | 38% |
+| simonstown | 660 | 7% | 20 · 2 · 5 | 87 / 153 / 223 / 812 | 55% |
+| carmel-a | 656 | 10% | 19 · 3 · 6 | 110 / 162 / 225 / 340 | 32% |
+| carmel-b | 66 | 8% | 2 · 3 · 3 | 202 / 265 / 337 / 886 | 44% |
+
+7,114 footprints: `building=yes` 75%, `house` 14.5%, `apartments` 4%;
+`building:levels` 5.1%, `roof:shape` 1.7%, `height` 0.0%, material 0.3%,
+colour 0.4%. A Haussmann perimeter block and a hillside of villas are
+different PLACES in the rings alone — three quarters attached against a
+tenth, 60 m² plots against 200, runs of thirty-eight against three — which
+is what the atlas and the morphology phases will read. Three rules in the
+module, each of which the first cut got wrong:
+
+- **A footprint must not attach to itself.** Every closed ring in a capture
+  repeats its first vertex last; keyed naively, every building in Camps Bay
+  was "attached" and the suburb read 100% terraces.
+- **Two shared vertices is a wall; one is a corner touch** that a mapper's
+  snapping produces between buildings that never meet.
+- **Within 0.2 m is a DISTANCE, not a cell.** The first rule keyed vertices
+  by their 0.2 m cell, and the test's fifteen-centimetre gap fell either
+  side of a boundary — 10.0 in cell 50, 10.15 in cell 51 — so a wall the
+  rule meant to join read as an alley. The route solver's lesson ("match
+  endpoints, do not quantise them") and the border's (`mmNear`), a third
+  time: the hash finds candidates over the 3×3 of cells and the distance
+  decides.
+
+**AND THE IN-WORLD PROBE READS `bldRings`, NOT `plotGrid`.** `claimSolid`
+files no plot for a ruin by design (a ruin is a place you may be, and the
+plot exists to shove the truck out of a room), so a census over the plots
+was a census of whichever 58% the ruin roll left standing: Camps Bay read
+350 rings, 3.4% attached, six runs. `building()` now records every footprint
+it sees by OSM id, and the probe reads 559 rings, **7.5% attached, 20 runs
+of 2–3** — against the devtool's 627 / 7% / 21 on the same capture. The 68
+missing are rings that never reach `building()` at all (not yet attributed;
+the two numbers are close enough to say the probe measures the rule the
+world runs).
+
+**THE FAÇADE LAB (`/lab/facade`, `client/facade-lab.ts`)** is the marks lab
+widened to the whole façade: one footprint extruded exactly as `polygon()`
+does it, sunk by the same plinth, wearing the culture's own canvases, roofed
+by `roofGeo`, at the building survey's 26 m stand-off with the eye at the
+cab's 1.3 m. Forty-odd dials — the culture and its paints, width, depth,
+storeys, the plinth, the roof and its ridge, a terrace count, every grammar
+number, the sun, night with its lit share, the eye, and a PIXEL dial that
+renders at a fraction of the glass and magnifies nearest — and COPY writes
+`export const FACADE_GRAMMAR`. `__facade()` reports what the grammar makes of
+the massing, which is how `lab.test.mjs` holds it. Three extractions made it
+possible, each pure, each verbatim: `client/rng.ts` (one `mulberry32`, where
+there were two and about to be three — a canvas seeded from a drifted copy
+would be a different canvas in the lab and the game), `client/wall-tex.ts`
+(`makeCanvasTex(aniso)` and `wallTextures()`, so the lab bakes the same
+canvases under its own renderer's anisotropy), `client/roof.ts` (`roofGeo`).
+And `FACADE_GRAMMAR` itself: the shader's sixteen literals on four vec4s,
+defaults equal to the literals to the digit — no pixel changes; the numbers
+moved house. A per-tradition grammar will arrive as a vertex attribute the
+way `aMark` did, because buildings batch per tile and a uniform is per draw.
+
+**WHAT THE LAB SHOWED BEFORE A DIAL WAS TURNED**, read off `__facade()` and
+then seen in the frames:
+
+- **EVERY GROUND FLOOR IS 1.4 m UNDERGROUND.** `polygon()` sinks an intact
+  building by a plinth — `clamp(maxG − minG + 1.4, 1.4, 14)` — and `aBase`
+  is the sunk bottom, so the shader's rows count from below the grass. On
+  flat ground the ground row is 1.7 m tall, a door's head stands **0.46 m**
+  above the pavement, and the first upper sill is at 2.75 m; on a slope the
+  uphill wall has no ground row at all. Plinth 0 in the lab: row 3.10 m,
+  door head 1.86, sill 4.15 — the façade the shader was written for. The
+  control frames agree: the doors in Suresnes are dark stubs at the grass
+  line, where the grass does not hide them entirely. The fix is one number
+  in the batch (aBase as the ground line, not the plinth bottom) and it is
+  NOT made here, because phase 0 is the instruments and the fix belongs with
+  the grammar it will be judged against.
+- **THE ROWS DO NOT FOLLOW THE STOREYS.** `BuildCulture.storeyM` sets a
+  building's height (timber 2.7, adobe 3.3) and the shader's row is 3.1 for
+  everyone, so a two-storey timber house is 5.4 m of wall carrying 1.74 rows
+  of windows. ROWS = STOREYS on the lab ties them; the atlas will.
+- **CAMPS BAY BUILDS IN BRICK UNDER SLATE.** `__culture` on that capture:
+  `brick`, pitch 0.59, because the cultures are picked by CLIMATE weights and
+  a temperate coast is temperate; Suresnes is `limewash`. The atlas is the
+  answer and this is the frame to hold it to.
+
+**THE CONTROL FRAMES** (`devtools/building-survey.mjs`, `REV=8e11b60`, the
+six captures, in `/tmp/drive-tools/bldg-control/`): four buildings a capture,
+high sun, low sun and a chase frame each, and the planform. **Six captures
+in one process is fifty-five minutes and the harness fuse is twenty**
+(`HARNESS_FUSE_MIN`): the first run was killed after Camps Bay's first
+building with `exit 9` and the log's own FUSE BLOWN line, having finished
+Paris west and south cleanly. One process per capture from then on. And a
+lab suite started beside a survey drew the same random harness port
+(8800–8889) once in ninety and died on `EADDRINUSE` before its first lab —
+the log said so plainly; re-run, not a fault.
+
+**Not done here, deliberately:** the plinth fix, the atlas (`traditionFor`),
+party walls and runs from the morphology, roofs, ruins per material, the
+landmarks, stations and covers — phases 1 to 6, in that order.
+
+### Phase 1: the ground line, and the atlas
+
+Two units, in the order the lab made them safe to do.
+
+**THE FAÇADE'S BASE IS THE GROUND LINE.** `polygon()` hands the batch the
+MEAN of the ground it sampled under the footprint as the building's `aBase`,
+where it used to hand the sunk bottom of the box. The plinth is unchanged —
+it still keeps daylight out from under the downhill wall — only the number
+the shader measures its rows, its ivy and its marks band from moved. Ruins
+take `minH` for the same reason (their foot is 0.6 m under it). Measured,
+`__facade()` in the lab with the BASE = GROUND toggle as the only difference:
+
+| | base at the plinth bottom | base at the ground line |
+|---|---|---|
+| ground row above the grass | 1.70 m | 3.10 m |
+| door head above the pavement | 0.46 m | 1.86 m |
+| first upper sill | 2.75 m | 4.15 m |
+
+`lab.test.mjs` asserts both rows — the shipped rule and, with the toggle off,
+the rule it replaced — so the A/B cannot rot into a test of one number. In
+the game (`devtools/building-survey.mjs` on the working tree against the
+`8e11b60` control, Suresnes, same four spots because the spots come from the
+fixture): on the red-roofed house at b2 the upper windows moved from mid-wall
+to under the eave and the ground row's openings appeared at the grass line
+behind the hedge. On a slope the mean puts the ground row half a basement
+into the uphill side, which is what a house on a hill does; a per-wall base
+is the next refinement if a frame ever asks for it.
+
+**THE TRADITION ATLAS** (`client/traditions.ts`, `traditionFor(lat, lon)`).
+Twenty-three hand-authored entries — Paris inside the périphérique and its
+suburbs, the Cape, Lesotho, the platteland, East Africa, the Sahel, North
+Africa, the Mediterranean rim, the Alps, the Swiss plateau, the Low
+Countries, Britain, Scandinavia, temperate Europe, coastal California, the
+Sierra, the Southwest, the rest of the US, the Altiplano, Amazonia, the
+Ganges delta, Australia — each a base culture, the paints, the wall and roof
+canvases, the pitch and the storey that make the place, and an OPENING
+GRAMMAR as overrides of `FACADE_DEFAULTS`. Each carries a note saying what it
+is modelled on, because the palettes are judgements and the lab is where they
+get argued with. Regions are lat/lon boxes, first match wins, specific
+before broad; `devtools/traditions.test.mjs` names forty-two driven places
+and the tradition each must answer, so a box that drifts fails a case that
+says which town it lost. Three rules:
+
+- **The atlas first, the climate second** — `buildLook` asks `traditionFor`
+  and hands `buildLookAt` the tradition's culture as `forced`; everywhere the
+  atlas is silent (Reykjavik, Irkutsk, the sea) the climate pick answers
+  exactly as before. `BuildLook.tradition` and `__culture().tradition` say
+  which happened.
+- **An atlas pitch is stated, not steepened.** `snowLoad` steepens a
+  climate-picked pitch by half at full load and vetoes pantiles under snow;
+  for a forced culture only the district scatter applies, because the alpine
+  entry already says what a chalet's roof does about snow, and a person
+  authored it knowing whether it snows there.
+- **The stone override stands down where the atlas states the stone.** A
+  stone village is still built of the hill behind it (the bedrock palette),
+  unless the entry carries its own `wall`.
+
+**THE GRAMMAR IN FORCE WAS THE TRADITION UNDER THE TRUCK, for one commit.**
+`FACADE_GRAMMAR` is a uniform — one grammar per draw, and the walls batch per
+tile — so phase 1 read the truck's `buildLook` once a second and set the
+uniforms to its tradition's grammar, and said so as an interim. Phase 3
+below replaced it the same day with the per-building attribute; the
+paragraph stays because the interim is the shape the next "one uniform for
+the world" will want to take, and should not.
+
+**Measured in the world** (`scratchpad/atlas-world.mjs`, the fixtures, nodraw,
+no page errors): Camps Bay `cape` — render under corrugated, palette
+`#f3f0e8 #cfd3cf #e9e5d9`, pitch 0.20, grammar bay 3.3 m / open 0.88 in
+force; Suresnes `ile-de-france` — render under pantile, creams, pitch 0.48,
+bay 3.0 m in force. Before: `brick` under slate and `limewash`. **The Camps Bay survey pair**
+(`/tmp/drive-tools/bldg-control` against `bldg-fix`, same four spots): the
+b1 block at low sun is a dark oxide-red brick wall with a scatter of small
+windows on the control and a white rendered wall with the Cape's wide glass
+in a regular grid on the working tree — the same building, the same frame,
+and the first frame in this file where a building says where it is. The
+lab's CULTURE dial lists every entry as `t:<key>`; choosing one sets the grammar
+dials to what it states, once, and the dials are the record from then on.
+Five traditions photographed on the same wall with no page errors
+(`facade-trad.mjs`): the Haussmann block's floor-to-ceiling windows, the
+Dutch terrace's tall sashes under its gables, the Altiplano's slits.
+
+**What the atlas did not reach in phase 1, by design:** roof FORMS (Camps Bay
+was `cape` with pitch 0.20 and still gabled 132 of its 351 intact buildings,
+because `building()`'s flat gate was `pitch < 0.2` and the district scatter
+straddled it), storeys per tradition, party walls and runs, and how each
+material ruins. The first two arrived as phase 4 below; the `Tradition`
+interface carries a field only once something consumes it.
+
+**AND THE HARNESS RE-DRAWS A COLLIDING PORT.** Unless the caller pinned one,
+`openDrive` picks a port in 8800–8889; two harness processes side by side
+drew the same one and the lab suite died on `EADDRINUSE` before its first
+lab. It retries another draw a dozen times now, so a survey and a suite can
+run together.
+
+### Phase 3: the grammar rides per building, as a row of a texture
+
+`FACADE_GRAMMAR` is a uniform and buildings batch per tile, so a per-building
+grammar cannot be a uniform and sixteen floats cannot ride on every vertex.
+The route is the one the marks took for their tins, for the same GLSL ES 1.00
+reason (no dynamically indexed uniform arrays in a fragment shader, and a
+one-column lookup texture costs one sample): **one float attribute, `aGram`,
+the building's tradition row plus one, and a 4×N RGBA8 texture of every
+tradition's full grammar** — four texels a row under the scales in
+`GRAM_FIELDS`, a bay stored as eighths of a metre, ivy as halves, the rest as
+shares. `aGram` 0 is "the uniforms", which the game keeps at
+`FACADE_DEFAULTS` and the lab drives; the shader picks per fragment
+(`vGram > 0.5`). The tile batch packs `aGram` from `BldPiece.gram` beside
+`aBase` and `aMark`; ruins carry their tradition's row too (a Paris shell has
+Paris bays), rubble carries 0.
+
+- **`client/facade-grammar.ts` is pure, and that is why it exists.** The
+  interface, the frozen defaults and the byte encode/decode moved out of
+  facade.ts (which needs THREE and a document) so the atlas can encode its
+  rows and the node test can decode them back. facade.ts re-exports the
+  names it always exported; nothing that imported them changed.
+- **The bytes are held to half a step.** `traditions.test.mjs` decodes every
+  row and asserts every field within 3 cm (bay, storey), 0.4% (a share) and
+  1/255 (ivy) of the authored number. That is precision under a composite
+  that quantises to fourteen levels, and it is the reason the two roads
+  below agree.
+- **The two roads agree, and the lab proves it on one wall.** VIA ATTRIBUTE
+  in `/lab/facade` parks the uniforms at the defaults and hands the wall its
+  tradition's row through `aGram`, exactly as a building in the world gets
+  it; off, the dials drive the uniforms and `aGram` is 0. Photographed both
+  ways for the Dutch terrace and the Haussmann block (`facade-roads.mjs`),
+  the wall pane diffed with `imgdiff.mjs`: **mean 1.7–1.9/255, 4% of pixels
+  moved by more than 3, the same frame against itself 0** — the moved pixels
+  are the edges of windows whose bay rounded from 3.0 to 3.012 m, one pixel
+  here and there, and nothing else. `lab.test.mjs` holds the report
+  (`gramIndex`, `viaAttribute`, the uniforms parked) rather than the pixels.
+- **`__tradition()` reports what a wall READS, not what was authored:** `row`
+  (its aGram), `grammar` decoded from the bytes, `uniforms`, and `batches`
+  with the set of rows seen across the building meshes. Camps Bay reads
+  `rows: [0, 3]` — the rubble at 0, every wall on `cape`'s row — with the
+  row's bay at 3.294 for an authored 3.3.
+- **`TRADITION_LIST` order is a wire format.** Row i is entry i of the table
+  in insertion order; an entry MOVED re-dresses every building on the next
+  deploy. Append.
+
+### Phase 4: the atlas states the storeys and the roof forms
+
+Two more fields on a `Tradition`, both read by `building()`, both authored
+for all twenty-three entries and held by `traditions.test.mjs`:
+
+- **`storeys: [lo, hi]`** — the untyped dwelling's range. `massHeight` runs
+  it on the stand norm (a terrace agrees with itself) and moves it half a
+  storey on the building's own draw: Haussmann five to seven whatever the
+  plan, the Cape one or two. Blocks keep their plan-and-density rule, and so
+  does a big untyped footprint in a dense place (over 300 m² with
+  `builtUpAt` past a half), because that is a block by another name — the
+  atlas describes the dwelling, not the flats. Halls, sheds and canopies
+  keep their typology.
+- **`roofs: {form: weight}`** — a weighted draw (`roofFormFor`, the weights
+  laid end to end) replaces the culture's `pitch < 0.2` gate. A flat draw is
+  the cap for ANY kind — a shed in a flat-roofed town is flat too — and a
+  pitched draw then meets the typologies: a lean-to is still what a shed
+  wears, a barn is still a long gable, a true block is still capped, a small
+  block takes the drawn form. The test draws ten thousand for the Cape and
+  holds each form to its stated share within 0.2%.
+
+**Measured**, the two fixtures, nodraw, no page errors, same code either side
+but the two fields (`scratchpad/mass-world.mjs`; `__built().roofs` and the
+3 m `hist`):
+
+| | Camps Bay before | after | Suresnes before | after |
+|---|---|---|---|---|
+| gabled / hipped / skillion / flat | 131 / 69 / 10 / 141 | **57 / 96 / 25 / 173** | 907 / 178 / 530 / 566 | 574 / **367** / 463 / 777 |
+| intact by height, 0–3 / 3–6 / 6–9 m | 12 / 118 / 124 | 12 / **173** / 138 | 557 / 1049 / 321 | 416 / 1083 / **564** |
+| 9–12 / 12–15 / 15–18 m | 46 / 37 / 12 | **6 / 13 / 7** | 114 / 105 / 23 | **42 / 42** / 22 |
+
+The Cape lost its four-storey suburban guesses (46 → 6 in the 9–12 m bucket)
+and gables in favour of flat and hipped; Suresnes gained its third storeys
+(321 → 564) and its hips, and the flat count rose by the 15% the entry states
+for a dwelling. Both are what the entries say, and neither was measurable
+before the survey and the probe existed.
+
+### Phase 2: a terrace is one height, and one roof
+
+The 32 m stand norm made neighbours agree; it could not make a RUN agree,
+because a run of thirty-eight in Paris spans five stands and a stand boundary
+falls through the middle of a terrace. `renderWays` now runs `morphology()`
+— the census module, the same rule the probe and the devtool run — over each
+batch's footprints before any building stands, and files every attached
+footprint with its run's size and the run's seed (its lowest OSM id, the
+same whichever order the batch builds in). `massHeight` takes the run's norm
+for an attached building and the stand's for a detached one; the roof form
+draw is the run's too, so a terrace wears one roof.
+
+- **A member takes the run's storey outright, and is the odd one out on a
+  twelve-percent draw.** The first cut kept a half-storey jitter on the
+  shared norm, and whenever the norm landed near a half the run came out a
+  coin toss between two storeys — measured as a 3.7 m mean spread against
+  4.05 with no rule at all. `?bldruns=0` is the stand norm alone, declared
+  in the switch table as the A/B.
+- **`__runs()` reads the spread twice**: over every member, and over the
+  dwelling-sized members alone (55 m² and up), because the shed on the end
+  of a terrace is a shed and its height is right to differ.
+
+**Measured** on Suresnes (`scratchpad/runs-world.mjs`, nodraw, no page
+errors; 704 runs of two or more, the longest 38):
+
+| | stand norm alone | the run rule |
+|---|---|---|
+| every member: mean spread / seated within 0.3 m | 4.07 m / 16% | 3.70 m / 21% |
+| dwellings only: mean spread / seated | 2.51 m / 39% | **1.69 m / 63%** |
+
+What is left is the data and the typologies: a level-tagged or surveyed
+member, an `apartments` block in a run of houses (its plan-and-density
+rule), a big untyped footprint in a dense place, and the sheds. **A run cut
+by a tile edge is two runs**, one either side, and may seat two heights —
+real, and the next thing to measure if a frame ever shows it.
+
+### Phase 5: a ruin is the material it was built of
+
+The ruin path stood every building on earth down the same way — half to 85%
+of its height, one bay in eight gone, 55 to 67 cm walls, one grey
+(`0x9a8f7c`) — and the review had it down as culture-blind. `RUIN_BY_MATERIAL`
+(traditions.ts) keys a profile on the wall material the tradition, or the
+climate-picked culture, built with: the standing share and its floor in
+metres, the bay loss, the bay width, the thickness, how ragged the skyline
+is, and how far the paint has gone to grey. The colour is the building's own
+paint — the tradition's palette through `paintFor`, or the typology's oxide
+for a barn — pulled that far toward the old grey, so a brick shell is red, a
+limewash one grey, a stone one the hill's colour, a timber one a few silvered
+stubs. The fallen slabs carry a third of the wall's paint.
+
+- **THE FLOOR IS THE MATERIAL'S TOO, and the first cut forgot it.** A single
+  2.4 m minimum standing height, right for masonry, put timber at a mean
+  share of **0.60** against a stated 0.15–0.45: two storeys of 2.9 m is
+  5.8 m, and 2.4 is already 0.41 of it. `floorM` per material (1.1 m for a
+  burnt frame, 1.6 for earth, 2.4 for masonry) took Carmel's timber ruins to
+  **0.34**. A profile with a clamp under it is the clamp.
+- **`__built().ruinBy`** counts ruins by material with their mean standing
+  share — Suresnes `render` 1,582 at 0.73, Carmel `timber` 163 at 0.34 — so
+  a material whose ruins do not read as stated is a number before it is a
+  frame. `RUIN_SKYLIT`, the skylight lift's stand-in for the mean vertex
+  colour, is still one mid tone; a brick ruin's lift is a little cool and a
+  limewash one a little warm for it, under one palette step.
+- **What this is not:** a ruin still carries no map, because the batch draws
+  every ruin in one material and a material per wall texture would be five
+  more draws a tile for a texture that is sub-pixel past thirty metres. The
+  material shows in the massing and the colour, which at 12 px/m is what
+  can show.
+- **Photographed** (`scratchpad/ruin-shots.mjs`: the three ruins nearest the
+  origin, 18 m off, cab, the sun at 30°, control `6fe14dd` against the
+  working tree, in `/tmp/drive-tools/ruins/`): at Carmel the control's
+  warm-grey shell at chest height is a few low silvered stubs in the grass on
+  the fix — which is the profile, and also the finding: **a burnt timber
+  house reads as nothing from the seat once the sward is a metre tall.** The
+  thing a burnt frame leaves standing in life is its chimney; one bay kept at
+  the building's full height for the timber profile is the next cut, and it
+  is not made here. At Suresnes the render shell keeps its height and takes
+  the tradition's cream, a step warmer than the grey it was.
+
+### The wall has depth, and the roof has courses
+
+The phases above gave the buildings a place — a palette, a grammar, a roof
+form, a storey count per tradition — and the critique from the seat was exact:
+"I was expecting the shader to approach far greater realism, not just making
+the limited palette and blocky texture diverse." True. Every wall was still a
+flat quad with darker rectangles on it, and a roof was a plane wearing a
+canvas mapped in world plan. What follows is the fidelity unit, judged in the
+lab at the survey's stand-off and then in the two captures.
+
+**THE OPENINGS ARE DRAWN AS THEIR SHADOWS.** What makes a wall read as a
+building in a frame twelve pixels to the metre is not the colour of the glass
+but that the glass is set BACK: the reveal's jamb throws the sun across the
+top and the sun side of every pane, the sill projects and casts under itself,
+the eave and the balcony slab lay a band down the wall, and all of it moves
+with the sun. `uFacSun` is a world-space unit vector toward the sun (main.ts
+copies `SUN_DIR` each frame; the lab its light), and in the fragment the
+wall's own frame — `u` along the face, `nOut` outward (the geometric normal
+flipped for a back face, so a soffit does not read the sun through the wall),
+`sn`/`su`/`sy` the sun's components — makes every shadow one line: the
+caster's depth times the tangential over the normal component. Sixteen more
+grammar fields carry the articulation (`revealM sillM frame mullion glassSky
+stringCourse cornice plinthM shutters balcony streaks dampM trim shutterCol
+shopfront eaveM`), so the row is 32 bytes, the texture eight texels wide, and
+uniforms E–H beside A–D; the trim and shutter paints are indices into eight
+colours in the shader (`trimCol`), because GLSL ES 1.00 cannot index an array
+by a float. The wall top rides in as `aTop` beside `aBase` for the cornice and
+the eave; every piece the batch packs carries it.
+
+- **THE SHADOW WENT ON THE VOID FIRST, AND VANISHED.** The first cut shadowed
+  the glass as it was — a fifth of the wall — and a 55% darkening of a thing
+  already dark was under the quantiser at every stand-off: the low-sun lab
+  frame was pixel-identical to the high-sun one. A real window shows the
+  band because the pane REFLECTS THE SKY, and the jamb's shadow takes the
+  sky away. So the glass is two things now: the void (a fraction of the wall,
+  the curtain in a share of them) and the sky in the pane (absolute, because
+  it is the sky's brightness, stronger toward the head), and the reveal
+  shadows the second. A share of the reflection goes to EMISSIVE: on a face
+  turned from the sun the glass is the lightest thing on it, and a reflection
+  is not diffuse — the same lesson as the lit windows at night, one
+  surface earlier. `glassSky` per tradition is the lever.
+- **`cast` IS A RESERVED WORD IN GLSL ES 1.00.** Every lab frame of the first
+  run came back with `'cast' : Illegal use of reserved word` and
+  `useProgram: program not valid` in `d.errors` — the wall drew as flat
+  Lambert and looked plausible. Read the errors before the frames.
+- **What is on the wall now, per fragment and per tradition:** the reveal's
+  cast and ambient, the painted frame with a mullion on a wide window and a
+  transom on a tall one, the sill and its shadow, shutters open (a leaf each
+  side, slatted) and a fifth of them closed, the balcony (rail, lit slab
+  edge, slab shadow, the door behind), the shopfront under its fascia, the
+  door in the shutter paint with a fanlight and a threshold, the string
+  course, the plinth's dado with a lit top, the cornice band, the eave's
+  shadow, rain streaks from the sill corners, the damp band from the ground,
+  and a downpipe on a share of the bay lines. The old staining is at three
+  fifths, a texture over the weather rather than the weather.
+
+**THE ROOF IS COURSES, AND THE COURSES RUN WITH THE SLOPE** (`client/roof-fx.ts`,
+`roofFx(mat, kind)` on every roof material in main.ts and the lab's). The
+roof canvas was mapped by world plan (`roofGeo`'s uv is x, z), so the pantile
+rows ran along world z whatever way the ridge ran, its row was 0.78 m against
+a real course of 0.3, and at twelve pixels to the metre it mip-filtered to a
+tone with a grid in it. Per fragment now: down-slope is gravity projected
+into the plane, across is the eave, and (across, down) is a coordinate in
+metres on the surface in which a course is a row, a unit a cell and the
+broken bond half a cell on alternate rows — pantile barrels, slate's wide
+thin units, shingle's small ones, corrugated ribs DOWN the slope with sheet
+laps across (the one roof whose units run the other way), and the flat cap
+keeps its felt in plan. The canvas is sampled in the same frame, so the moss
+sits on the courses, and it carries TONE ONLY now — the recipes in
+`wall-tex.ts` lost their rows, because a canvas still drawing them lays a
+second, coarser, wrongly-turned set under the shader's. The last course sits
+in the gutter's shadow off `aTop`. **The gate on "pitched" is three degrees,
+not fourteen**: a cap is exactly level, and the first cut's 0.97 drew a Cape
+skillion at eight degrees as felt. No ridge line yet — a fragment cannot
+know where its plane ends, and the ridge would be a fifth attribute.
+
+**THE ROOFLINE: A RIDGE COURSE AND A CHIMNEY.** A ridge was two planes
+meeting on a line, and from the street that line was whatever the two
+slopes' shading did; `roofGeo` lays a course of ridge tiles along it now — a
+narrow flat top, lit square to a high sun so it reads lighter than either
+slope, with skirts steeper than the roof — on every gable and hip, none on a
+pyramid. And a stack: `chimneyGeo` (roof.ts, on `roofBox`, the oriented box
+`roofGeo` itself is built on, so it refuses where the roof refused) stands
+one on the ridge a metre in from the gable end, two on a plan over 160 m²,
+buried to half the ridge so it meets the slope at any pitch. `Tradition.chimneys`
+is the share of pitched roofs that carry one — the Alps and Britain nine in
+ten, the Sahel none — drawn off the id by a constant nothing else uses.
+**The stack is its own piece with `aGram` −1, the shader's BLANK wall**: a
+chimney is 0.64 m wide, the bay grid falls across it however it falls, and
+the first thought — put it in the roof piece — would have drawn a door on it
+somewhere in every town. Blank keeps the cornice band at its top, which on a
+stack is its cap. The lab has a CHIMNEY toggle.
+
+**Photographed** (`scratchpad/facade-fid.mjs` and `roof-fid.mjs`, the lab,
+`/tmp/drive-tools/facade-fid/`; `building-survey.mjs` on the two captures
+against `/tmp/drive-tools/bldg-fix2/`): the Camps Bay block at b1 went from
+dark rectangles on a white slab to sky-reflecting panes with frames, sills,
+balcony rails and the reveal's band at noon; the Mediterranean wall in the
+lab wears blue shutters, the Dutch terrace its white sashes under the gables,
+the Haussmann block its balconies and shopfronts; the pantile roof at 12 m is
+barrels in courses. Judgement, not anchors: the seat's report is the
+verification, and every number above is a dial.
+
+### The far bake, from the seat's dump: a climate field at the shell's scale, and slices
+
+The seat's telemetry on the wide chart (z4, 14.7 km a pixel, 98 s):
+`far:bake` 216 ms a tile, 137 tiles, 30% of the session, top of 123 of 575
+slow frames and 36% of their time; the frame at 11 fps with half of them
+over 50 ms. Two causes, both in the bake's vertex loop, and neither was the
+loop's own arithmetic:
+
+- **EVERY VERTEX MISSED THE CLIMATE MEMO FOUR TIMES.** `terrainPalette` asks
+  `climateAt` per vertex, and the fine field's corner lattice is `CLIM_G`,
+  2 km. At z4 the vertices are 2.4 km apart, so each one needed four fresh
+  corners — four `climCompute`s — and a 1,200 km tile has 360,000 corners
+  against `CLIM_CACHE_MAX` of 20,000: the cache was cleared several times
+  per bake and nothing was ever reused. Right for the fine world (8 m
+  vertices under 2 km cells), exactly wrong for the shell. `ClimateField`
+  takes a cell size now and `farClimField` keeps one per size: a
+  twenty-fourth of the tile, never finer than the fine field's, its corners
+  shared across the ring, its cover read through `sampleCoverShell` so a
+  corner over the wide raster counts as evidenced and is not recomputed on
+  every cover arrival. The fine field never sees the shell.
+- **AND THE LOOP RAN OFF THE TICK, WHOLE.** Inside the fetch's continuation,
+  where nothing paced it — the same shape the route solver had. It is a job
+  now (`farBakeJobs`, `stepFarBakes` beside the hydro drain): `FAR_BAKE_MS`
+  of a frame, standing down in a frame that already carried a heavy build,
+  and dropping a tile whose level or ring moved on while it was sliced.
+
+**Measured** (`scratchpad/farbake-ab.mjs`: the seat's own spot and zoom,
+`0115fe6` against the working tree, 180 s each, the harness's software
+renderer at 0.6 fps so only the main-thread rows carry):
+
+| | control | fix |
+|---|---|---|
+| `far:bake` per call, mean / max | 608 / 767 ms (a call is a tile) | **4.0 / 9 ms** (a call is a slice) |
+| main thread per tile baked | 608 ms | **17 ms** (261 ms over 15 tiles) |
+| tiles home in the window | 25 | 15 |
+
+The per-tile cut is the memo — thirty-five times in the harness, where
+`climCompute` is dearer than on the phone; on the phone the loop's own nine
+microseconds a vertex remain, sliced. **The fewer tiles are the harness's
+frame rate**: a slice is a frame, a z4 tile is three of them, and at 0.6 fps
+that is five seconds a tile where a phone at 30 fps takes a tenth. Any
+devtool that waits for the ring (`globe-view.mjs`, `globe-spin.test.mjs`,
+`park-ab.mjs`) now waits on frames rather than fetches; the budget scales
+with the smoothed frame so a slow harness bakes a tile a frame and a phone
+keeps its six milliseconds. `far:geo` and `far:nrm` are unchanged. The
+worker remains the honest next cut for the nine microseconds.
+
+### The tree refresh is resumable work
+
+The next dump from the seat (Honfleur, chase, 27 fps): the far bake gone
+from the slow frames (1.8 ms a slice, 10 max), and `treeRefresh` at 33 ms a
+call, 240 calls in a hundred seconds, top of 185 of the 488 slow frames —
+more frames than anything else. Its split was honest and unhelpful: 14 ms
+gathering candidates over a 27x27 ring of cells, 3.5 admitting the nearest,
+14 placing nine hundred trees (a ground read, a matrix and a colour each).
+No one phase to cut, and all of it in one synchronous call every 900 ms, or
+every 120 while a hop's seeding was catching up.
+
+`refreshVeg` is a generator now (`vegRefreshSteps`): it yields after every
+ring cell of the gather, after the admit, and after every cell of the place,
+and the tick runs it in slices of a sixth of the smoothed frame, five
+milliseconds at the floor, until it is done. Two rules make that safe:
+
+- **THE PLACE WRITES INTO STAGING, NOT INTO THE INSTANCES.** A frame drawn
+  between two slices of a refresh that wrote the instance buffers directly
+  would show the first k slots re-assigned and the rest still last refresh's
+  — a tree twice where the order shifted, none where it had not yet. Every
+  matrix and colour goes into a staging array per mesh, sized to its
+  capacity and kept across refreshes, and the whole set is committed in one
+  slice at the end with the counts. A mesh that has never been coloured has
+  no colour attribute until its first `setColorAt`; the commit makes one.
+- **ONE JOB AT A TIME, AND A WHOLE CALL CANCELS IT.** The tick starts a job
+  only when none is running, so a cadence that fell behind coalesces rather
+  than stacks; `refreshVeg()` — the debug toggle, the hop — drops any job in
+  flight and runs the same generator to completion in one call. That is also
+  what `perf-check.mjs` holds against its baseline (it extracts both halves
+  now), so the sliced and the whole refresh cannot drift apart: **20 of 20
+  production refills byte-identical** to the pre-slice function.
+
+The seed budget is per slice, so seeding cannot spend more than the slice;
+the deferral count accumulates over the job and sets the next cadence as
+before. `?vegstep=N` forces a slice of exactly N ms (0 is the whole refresh
+in one call, the A/B), because the harness's two-second frames run a refresh
+whole under the frame-scaled rule and could not otherwise show a slice.
+
+**Measured** (`scratchpad/vegjob-ab.mjs`, the Camps Bay fixture, a minute
+settled then forty seconds driving, `vegstep=0` against `vegstep=5`; the
+harness's frames are seconds so the whole refresh is cheaper there than on
+the phone, and the ratio is the number):
+
+| | whole (`vegstep=0`) | sliced (`vegstep=5`) |
+|---|---|---|
+| `treeRefresh` per call, mean / max | 13.5 / 55 ms (a call is a refresh) | **5.7 / 11 ms** (a call is a slice) |
+| stand forms within 300 m | bare 5 · columnar 3 · round 8 | the same |
+
+Two things the first sliced run taught: **the tiers' counts are the job's
+until the commit** — `__ez().tris` read 0 mid-refresh because it sums
+`t.n × tris` and the generator had zeroed them at its start; the slots and
+the counts are the job's own now and land with the meshes — and **the phase
+marks measure from the last mark**, so across a frame gap they billed the
+gap to whichever phase was running (ezGather read 4.5 s a call); a slice
+re-arms the clock at its start.
+
+### The water rebuilt for a millimetre of ground
+
+The Pont de Normandie dump, at 27 fps with the far bake and the tree refresh
+already cut: `hydroBuild` 67 ms a build, 234 builds in 112 s, 14% of the
+session and **49% of every slow frame**, top of 170 of them. And beside it
+`feeds 199 skipped 36` — the skip built for five feeds in six.
+
+**THE FIRST GUESS WAS WRONG AND THE MEASUREMENT SAID SO.** The skip compares
+the elevation raster, and `sampleHeight` carries every road carve, so the
+obvious story was that terrain churn a kilometre inland was rebuilding the
+estuary. That is real, and it is not what dominates: masking the comparison
+to a band round the water (`?hydroground`, the features' own boxes and the
+ocean mask's non-dry texels, dilated) saved **nothing at all** at Simon's
+Town — a fixture that is mostly sea, so the band is the tile. Guessing a
+second time was the temptation; counting was the fix.
+
+**SO THE FEED SAYS WHY IT BUILT**, in four words the ledger line carries —
+`dirty` (a body changed elsewhere and the tile was marked stale, which
+bypasses the raster entirely), `sig` (a feature or the ocean mask moved),
+`ground` (the raster moved where the water reads it), `first`. Measured:
+
+| | Senqu ford | Simon's Town |
+|---|---|---|
+| feeds | 27 | 49 |
+| built by `first` | 20 | 20 |
+| built by `sig` | 0 | 4 |
+| built by `ground` | **6** | **24** |
+| built by `dirty` | 0 | 0 |
+
+The body cascade never fires on a settled fixture; one build a tile is the
+floor; everything else is the ground. **And the ground comparison was EXACT
+FLOAT EQUALITY.** The water reads the raster as a bed depth and a waterline,
+in metres; `sampleHeight` jitters below a centimetre as roads seat, weld and
+re-drape. A texel must move by `?hydroeps` metres — two centimetres, under
+the field's own vertical resolution — before it counts. Measured, the same
+two fixtures, the tolerance the only change:
+
+| | exact | 2 cm |
+|---|---|---|
+| Simon's Town: built by ground / skipped | 24 / 1 | **0 / 30** |
+| Senqu ford: built by ground / skipped | 6 / 1 | **0 / 7** |
+| Senqu ford: ms a build, mean / max | 30.0 / 165 | 20.0 / 149 |
+
+Every ground-driven rebuild at both places was a sub-centimetre wobble.
+
+**THE TOLERANCE IS SAFE BECAUSE THE STORED RASTER IS THE ONE THAT LAST
+BUILT**, not the one last fed: drift is measured from the field's own input,
+so a bank creeping a centimetre a rebuild is caught on the rebuild that
+takes it past two, rather than never. And a ground change cannot create
+water on its own — inland water is a FEATURE and the sea is the ocean mask,
+both already in the signature — so the band may drop a texel without
+dropping a body. An unknown mask texel counts as wet-relevant (the build
+keeps the previous field's answer there) and a tile whose mask never arrived
+keeps the exact comparison.
+
+`?hydroground=0` and `?hydroeps=0` restore the old rule, separately.
+
+### The bridge in the elevation data: sixteen estuary spans
+
+The Pont de Normandie, reported from the seat as footpaths in the air and
+water in the sky, is the primary DEM publisher serving the deck and its pylons
+as TERRAIN. Measured there: 137.5 m of "ground" standing over an estuary the
+land cover calls water, and everything downstream believing it — `baseElev`
+62.1 m mid-river (the origin's own texel), a river body resting at 37.61 m, the
+carriageway solved to −1.3 m absolute, 63 m under the ridge it belongs to, and
+the rig drowned with all 961 sampled points wet.
+
+Before fixing that by letting the ROADS tell the terrain, the question is how
+general it is. `devtools/dem-structures.mjs` asks sixteen major estuary spans,
+both publishers through ONE sampler in the browser, on the same world grid:
+over the texels the land cover calls water, how far does the elevation stand
+above the sea, how narrow is the highest thing it finds, how much of the box is
+water, and what does OSM say. The controls are five inland waters.
+
+| span | mth peak | >10 m | deck | aws peak | aws spread | water | span | osm |
+|---|---|---|---|---|---|---|---|---|
+| **Pont de Normandie** | **137.5 m** | **1.3%** | **30 m** | 0.8 m | 0.5 m | 67% | 1,185 m | 4/4 L1 |
+| Øresund | 0.6 | 0 | 15 | −6.4 | 0.6 | 84% | 1,980 | 1/1 L4 |
+| Golden Gate | 0.0 | 0 | 15 | −24.4 | **66.5** | 96% | 2,565 | 4/4 L1 |
+| Bay Bridge west | 0.0 | 0 | 15 | 1.8 | 14.8 | 95% | 885 | 2/2 L1,2 |
+| Humber | −2.1 | 0 | 15 | −1.7 | 0.2 | 96% | 1,770 | 5/5 L1 |
+| Queensferry Crossing | −0.5 | 0 | 15 | 15.5 | 13.1 | 95% | 1,425 | 4/4 L1,2 |
+| Vasco da Gama | 0.0 | 0 | 15 | 0.0 | 0 | 60% | 1,830 | 2/2 L1 |
+| Storebælt East | 6.5 | 0 | 15 | 2.0 | 8.4 | 89% | 1,830 | — |
+| Akashi Kaikyō | 0.0 | 0 | 15 | 0.0 | 0 | 95% | 1,905 | 2/2 L2 |
+| Hangzhou Bay | 0.0 | 0 | 15 | 0.0 | 0 | 98% | 2,160 | — |
+| Sydney Harbour | 14.9 | 0.2% | 75 | 26.1 | 10.1 | 75% | 45 | 6/28 L1 |
+| Chesapeake Bay | 0.0 | 0 | 15 | 0.0 | 0 | 78% | 2,490 | 2/2 L1 |
+| Rio–Niterói | 0.0 | 0 | 15 | −1.0 | 1.1 | 99% | 3,630 | 2/2 L2 |
+| Prince of Wales | −0.5 | 0 | 15 | −0.6 | 4.7 | 93% | 1,020 | 503 |
+| Tsing Ma | 0.0 | 0 | 15 | 1.2 | 1.0 | 68% | 1,575 | 4/4 L2,3 |
+| Confederation | 0.3 | 0 | 15 | 0.0 | 0 | 100% | 2,475 | 1/1 L1 |
+| *(control)* Loch Ness | 16.0 | **100%** | 2,415 | 16.0 | 0 | 100% | 3,075 | — |
+| *(control)* Senqu · Rhône · Merced · Breede | *no cover-water within 200 m at any of the four* ||||||||
+
+**ONE SPAN IN SIXTEEN CARRIES ITS BRIDGE.** Everywhere else the estuary is
+flat in both publishers: Mapterhorn is a LAND model and answers a nodata 0 over
+open water (and at Hangzhou, Tsing Ma and Rio has no z14 tile at all, so the
+game climbs to z12), while AWS terrarium is either the same 0 or real
+bathymetry — the Golden Gate's channel at −92.9 m, the Bay Bridge's at −24.1.
+Neither carries the Humber, the Forth, the Great Belt, Akashi, Chesapeake or
+Confederation decks, all of which stand 30–60 m over the water in life. The
+Normandie is a DSM's surface where a national source filled the gap, and 1.3%
+of the water texels in its box — the deck, 30 m wide — is the whole fault.
+
+**And the two inputs option 1 needs are both there.** The cover calls the peak
+texel water at all sixteen, water is 60–100% of every box, and the cell's own
+z16 tile answers `bridge` on 13 of the 16 with a `layer` on every one of them.
+So the trigger and the gate are present, and they are present at the ONE place
+the trigger is needed.
+
+Three traps, each of which cost a run and each of which is the general lesson:
+
+- **A DEM READ WITHOUT `RAW_BITMAP` IS A READING OF CHROMIUM'S COLOUR
+  MANAGEMENT.** The first cut decoded the WebP with the default
+  `createImageBitmap` options and the ridge came back as 5.2 m: a terrarium R
+  channel moved by one unit is 256 m of elevation, so a colour-managed tile is
+  not a noisy measurement, it is a different planet. main.ts asks for
+  `colorSpaceConversion: 'none'`; anything reading these tiles must too.
+- **THE SPOT IS NOT THE MEASUREMENT.** A hand-typed coordinate lands anywhere
+  along a three-kilometre bridge: the first run sampled 640 m north of the
+  pylon the game had measured at 146 m, read 1.9 m, and would have reported the
+  fault as ABSENT at the one place it is worst. The measure is the peak over a
+  box, which is publisher-symmetric and does not depend on aim.
+- **AND THE DATUM MUST BE THE WATER, NOT THE BOX.** Taking the box's tenth
+  percentile as "the water" is right over an estuary and wrong the moment a
+  publisher carries bathymetry: at the Golden Gate the tenth percentile was the
+  100 m channel bed, so the narrowest run above it marched the whole box and
+  reported a 1,575 m deck. Over the texels the cover calls water, against the
+  sea, there is no such tail.
+
+**WHAT THE CONTROLS SAY ABOUT THE CHEAP FIX.** The obvious rule needs no roads
+at all — over cover-water, ground standing more than ten metres above the water
+is not ground — and the controls say exactly which form of it is safe:
+
+- against the SEA it deletes Loch Ness, whose surface is 16 m up and 100% of
+  whose texels are "over 10 m" in both publishers;
+- against the LOCAL WATER MEDIAN it fires on 1.48% of the Normandie's water
+  texels, 0.00% at the other fifteen spans AND at Loch Ness on the publisher
+  the game reads — but on 28.9% of the Golden Gate's under the FALLBACK, where
+  the median is the deep channel and the shallows stand 60 m over it;
+- and at four inland river points — the Senqu, the Rhône at Obergoms, the
+  Merced and the Breede — there is no cover-water within 200 m at all, so no
+  cover-gated rule of any form fires at a small river bridge. WorldCover at
+  37 m a pixel does not see a channel; the same fact is already recorded
+  against hydro's own inland water.
+
+So the honest statement is that a local-median veto is clean on the primary
+publisher at every one of the seventeen places measured and unsafe on the
+fallback at one of them, and that the cover gate is blind inland. That is the
+argument FOR option 1 rather than against it: the roads say which high texel is
+a structure without needing a water surface that is itself derived from the DEM.
+
+### …and what option 1 would cost, read off the code
+
+Not built — this is the survey's other half, and each item is a place the rule
+would have to touch.
+
+- **THE REPAIR BELONGS IN THE RASTER, NOT IN THE MESH.** `sampleHeight` is the
+  one height of the world (97 call sites) and the mesh is built from the same
+  rasters in a worker. Patch only the mesh and the picture and the physics
+  disagree about the floor, which is the fault `sampleHeight`'s own comment
+  exists to record.
+- **AND `mirrorHeight` IS SEND-ONCE, AND TRANSFERS THE BUFFER.** The worker
+  keeps the first copy of every tile it is given (`mirrored.has('h'+key)`), so a
+  raster patched after the mirror never reaches the build. A patched tile needs
+  a revision and a re-send, or the ridge stays in the mesh for ever while the
+  wheels stop believing it.
+- **`demrepair.ts` IS THE CONCEPTUAL HOME AND CANNOT BE THE ACTUAL ONE.** It is
+  pure per-tile, and it must stay that way: `capture-world.mjs` runs it so a
+  fixture is conditioned exactly as the game conditions it. A structure repair
+  reads the ways and the cover, which a per-tile function does not have — so it
+  is a second pass, and the capture needs the same pass or a captured estuary
+  reproduces a defect the game has repaired. That is the fabricated-witness
+  trap this file already records twice.
+- **THE ORDER IS WRONG BY CONSTRUCTION.** A z14 DEM tile is ~2.4 km and lands
+  long before the z16 vector tiles that carry the bridge, so the repair is
+  necessarily retroactive: patch on the ways' arrival, dirty the terrain tile,
+  re-mirror, re-feed hydro. The way-dirty path and `WAY_HOLD_MS` already bound
+  that churn, and the patch moves the raster by tens of metres, so the hydro
+  skip's 2 cm tolerance correctly lets exactly one rebuild through.
+- **IT CANNOT FIX THE ORIGIN, AND THE ORIGIN IS HALF THE DAMAGE.** `baseElev`
+  is ONE texel of the anchor tile, read at boot before any way exists
+  (`baseElev = anchor[v * 256 + u]`), and the whole world's metres are relative
+  to it — there is no rebase short of a hop. At the Normandie that one texel
+  was 62.1 m. A robust statistic over a small box would have read about zero,
+  and it is a cheaper, independent fix that needs no roads.
+- **THE CROSSING REGISTRY ALREADY RESOLVES THE TAGS — AND ITS FOOTPRINT IS THE
+  WRONG SHAPE.** `resolveProductionCrossingIntent` already answers
+  bridge/culvert/ford/causeway from explicit tags, the kernel already consumes
+  `TerrainCrossingMask[]` per build job, and `corridorH` already reads
+  `crossingAt` beside `coverWater`. But a footprint is a POINT with
+  `halfLength = waterHalfWidth + 4`, sized by the water feature at the crossing
+  — built for a road over a river, not for a 2 km span — and `at()` and
+  `earthworkAt()` are linear scans over every record, which is the exact shape
+  of the substrate contact sampler that cost 17% of a phone's CPU. Option 1
+  wants the bridge WAY's own polyline between its portals, in a cell index.
+- **THE BED MUST NOT BE RAMPED FROM THE BANKS.** "Interpolate from the banks"
+  is 1,185 m at the Normandie and 2,565 m at the Golden Gate, and the banks are
+  a 20 m cliff at plenty of estuaries. The water's own surface — the sea datum,
+  or the body's resting level — is the honest fill, and the veto must only ever
+  LOWER ground standing above it, never raise a bed the fallback publisher
+  actually sounded.
+- **THE GAME ALREADY KNOWS THOSE TEXELS ARE NOT WATER.** `coverWater` vetoes a
+  water class whose ground tilts more than 9% or stands 1.2 m proud of its
+  neighbours — a 137 m deck fails both — so the deck's texels are already
+  classified as LAND. The cover is not wrong about the estuary; the DEM is
+  wrong about the deck, and only a rule that can say so will move it.
+- **WHAT IT WOULD NOT REACH:** a viaduct over dry land, where a DSM carries the
+  same structure with no water to gate on; a ship, a crane or a pier in a port,
+  which no road tags; and every small river bridge, where the cover has no
+  water (above). A hydro-field gate rather than a cover gate would reach the
+  last of those.
+
+### …and the bridge comes out of the elevation
+
+Built, measured at the Pont de Normandie, and gated by `?bridgedem=0`.
+
+**THE SHAPE REPAIR TAKES THE PYLONS AND LEAVES THE DECK, and the numbers say
+why in its own terms** (`devtools/dem-ridges.mjs`, which decodes the real tile
+exactly as `decodeTerrarium` does and hands it to the SHIPPED module): the
+tallest blob is 161.8 m over a ground of −3.2 with the tile's relief at the
+30 m floor, its equivalent radius 0.51 of what the slope allows, and
+`repairDem` diffuses its 1,085 px away. What is left standing is 76.6 m of
+carriageway — **under the 80 m rise the blob walk even considers**, and under
+the `3 × relief` a blob must dwarf. The anchor texel under the seat's own
+spawn reads 61.6 m after the repair, which is the 62.1 the game booted with.
+
+**AND NO WIDENING OF THAT RULE COULD REACH IT.** Twenty-one tiles, the
+hardest narrow landforms on earth among them, measured with the same tool:
+
+| | peak | width by erosion | of the width its height allows |
+|---|---|---|---|
+| Pont de Normandie, the deck | 79 m | 37 m | **0.40** |
+| Old Man of Hoy, the stack | 77 m | 30 m | **0.33** |
+
+At six metres a pixel a sea stack and a carriageway are the same object, and
+the sea stack survives today only because the dwarf test spares it. The one
+thing that separates them is that somebody mapped a `bridge` over one of them
+— which is the survey's conclusion arrived at from the other side, and the
+reason this is `client/dem-spans.ts` and not a looser `demrepair.ts`.
+
+**THE RULE, AND THE FOUR THINGS THAT KEEP IT HONEST.** A way tagged `bridge`
+(and not `tunnel`) registers its densified centreline with `roadHalf + 10 m`;
+every texel inside that mask walks SQUARE to the deck, both ways, and:
+
+- **it only ever LOWERS.** A span with no structure under it is a no-op, which
+  is fifteen of the sixteen surveyed estuary spans;
+- **it interpolates ACROSS the deck, never along it**, so the ground it reads
+  is twenty metres away and the bed under a 1,185 m span is never guessed from
+  its banks;
+- **both sides must find ground**, or the texel is refused — one side is not
+  evidence, and at the edge of a mis-tagged embankment the outward walk finds
+  ground while the inward one never leaves the structure;
+- **and the COVER'S WATER beats a smear.** A surface model does not stop at
+  the carriageway: 23 m of deck leaves 37 m of "ground", with the pylons wider
+  still, so the first texel off the mask is more bridge. Measured, with the
+  first cut standing on it: **62.55 m came down to 32.45 and stopped.** A side
+  that reaches cover-water takes the water's level, and where any side is water
+  the water is the bed — the higher-of-two rule is right for a deck along a
+  shoreline and wrong for one whose other flank is its own pylon. The
+  prominence guard (`riseM`, 12 m — the slope times the half mask on a 45%
+  hillside is nine) is what keeps an abutment and every hill safe.
+
+**THE WIRING HAS TWO CALLERS AND ONE RE-MIRROR, all three from the survey's
+own list of what this would cost:** a z14 height tile lands long before the
+z16 vectors that carry the bridge, so a span repairs whatever is loaded when
+it arrives and every tile repairs whatever it has when IT arrives (the repair
+only lowers, so the second pass over a cleared span moves nothing); and
+`TerrainWorkerClient.remirrorHeight` exists because the height mirror is
+send-once by design — without it the wheels would read the repaired ground
+while the MESH kept the ridge, which is the picture and the physics
+disagreeing about the floor. `bridgeSpans` clears on a hop: they are in local
+metres under the origin that built them.
+
+**AND THE WORLD'S DATUM IS NO LONGER ONE TEXEL.** `baseElev` was
+`anchor[v * 256 + u]`, read at boot and on every hop before any way exists, and
+at the Normandie that texel is the deck. `anchorElevation` (demrepair.ts, pure,
+so the capture tool can run it) keeps the texel unless it stands more than 25 m
+over the median of its own fifty metres, and the landform tiles set that
+threshold with room to spare: the Normandie's anchor is **55.2 m** over its own
+median, Half Dome's rim 14.2 and El Capitan's — the default spawn — **4.5**.
+
+**MEASURED**, the seat's own spawn, `?bridgedem=0` against the fix, one build,
+180 s settled, no page errors (the second column is the first cut; the third
+is the rule as it stands after the seat's photograph, below):
+
+| at the Pont de Normandie | repair off | first cut | now |
+|---|---|---|---|
+| `baseElev` (the world's datum) | 62.1 m¹ | **6.5 m** (`raw 62.08, median 6.48`) | 6.5 m |
+| DEM 120 m north of the spawn | 57.77 m | **3.30 m** | −2.23 m |
+| DEM at the spawn | 62.55 m | **7.71 m** | 7.71 m |
+| the river's resting level there | **37.76 m** | **4.27 m** | 0.17 m |
+| texels lowered / of them flank / worst / refused | — | 361 / — / 69.6 m / 0 | **1,618 / 1,159 / 78.9 m / 0** |
+| the north pylon's crown, 720 m north, 53 m off the axis | 44.2 m | 44.2 m | **−1.75 m** |
+| the logistics shed 640 m south-south-west, 236 m off any span | 12.23 m | 12.23 m | 12.23 m — untouched |
+
+¹ Measured before the anchor rule landed; `bridgedem` gates the span repair
+and not the anchor, so `?bridgedem=0` reads 6.5 m today as well.
+
+The first cut's write-up called the 44.2 m row its control — "a structure
+nobody tagged as a bridge, left exactly where it is". It was the north pylon's
+own flank, and the seat photographed it. The shed is the control: a 200 m
+block the surface model carries at twelve to twenty metres, land to the cover,
+far off any span, and nothing here may touch it.
+
+### …and the seat's photograph: two white towers and two green mounds
+
+Sent with no words, from the top camera at `49.4261 0.2773`, beside the real
+bridge: the deck now runs over the water — and two tall pale cylinders stand
+where the pylons are, and two dark-green wedges stand on the far bank either
+side of the deck. Both are attributed, one is fixed, one is proposed.
+
+**THE TOWERS ARE OSM BUILDINGS.** The cell's banked z16 tiles carry the
+pylons as footprints: ways `1085528281` and `1085528282` at the south pylon's
+two legs (`building=yes`, `height=214`, nine points each, 46 m apart) and
+`1085528283` at the north pylon (`building=service`, `height=214`). `building()`
+reads the surveyed height, clamps it to **90 m** (`lineOn ? 26 : 90`), takes a
+flat roof and the region's tradition paint — a near-white cream — and hands
+the nine-point ring to the batch, which at phone scale is a pale cylinder
+ninety metres tall. `mmThing()` is not involved (`__built().mm` is 0: no
+`man_made` here), and the cable family builds no towers of its own —
+`supportSpacingM` is 0 for `cable` in infrastructure.ts, so a cable-stayed
+bridge gets a rail and nothing under it. **What stands at the pylons is the
+data drawn as the wrong thing**, in the right place at half the height. The
+proposal, not built: a `building` footprint whose surveyed height is far over
+any storey count, with no `building:levels`, whose centroid lies within a
+bridge span's corridor, is a pylon — a tapered concrete column of the
+footprint's radius at the surveyed height, concrete grey, the way `mmThing`
+builds a `tower`. The corridor test is the guard: a slender skyscraper mapped
+with `height` alone would otherwise become a pylon. The order in which a
+tile's ways build means the bridge way may not have registered its span when
+the footprint builds, so the test has to read the tile's own bridge-tagged
+highways as well as the registry.
+
+**THE MOUNDS WERE THE NORTH PYLON, AND THEY WERE THE RULE'S OWN FAULT.** Read
+from a spawn at `49.4395 0.2725` (still in the estuary — the Seine is a
+kilometre wide here, and the north bank is further than it looks), the relief
+map ±750 m showed a mound 230 m across and 76 m high straddling the span at
+the north pylon, with the deck strip through its middle **still at 63–76 m**:
+`__respan` — a probe that runs the repair again on the tile under a point with
+every span known and the cover loaded — moved nothing there (`cover 80,
+touching 14, before 74.24, after 74.24`). So it was not the order things
+arrived in; the rule refused the place. Two reasons, both in the walk:
+
+1. **The walk asked the cover before the mask.** WorldCover calls every texel
+   of an estuary span water — the survey found this at all sixteen — so the
+   first step off a deck texel landed on its neighbour, which was water to the
+   cover and deck to the field, and the "water" the deck was lowered to was
+   its own height. Nothing moved wherever the cover calls the deck water,
+   which is the whole channel; the south side worked only because the cover
+   there is trees, built and bare (rows 49–52 of the cover tile), so the walk
+   had to step over the mask to find its reference. The self-test never saw
+   it because every water case authored `wet` OUTSIDE the smear. Now a masked
+   texel is never the reference, whatever the cover says of it, and the
+   `all water` case (`() => true`) fails on the old module — `cleared to 60,
+   wanted the water + 1` — and passes on this one.
+2. **The first water is not the bed.** Off a pylon the first unmasked water
+   is the blob's own flank at sixty metres; with the reach at 14 texels there
+   is nothing else within it. The walk now carries on to its reach and keeps
+   the LOWEST water it saw, and a deck the cover itself calls water walks
+   **40 texels** (~190 m) for it — `waterReachPx` — while a deck the cover
+   calls land keeps the short reach and so a bluff road keeps its bank.
+
+That cut the slot: the strip at −1 to −2.3 across all three sections. **And
+left the two wedges standing either side of it** — 72.5 m and 76.2 m at the
+blob's widest row — because the mask is the deck's width and the blob is two
+hundred metres wide. Which is the photograph. So the structure's own flank
+comes down with the deck: from every lowered deck texel, a fill grows through
+texels the cover calls water that stand more than `blobM` (4 m) over that
+texel's target, on a leash of `waterReachPx` hops, and gives them the same
+target. The cover is the fence — a hill, an island under a span and the wall
+of a dam are land to it and stop the fill at their first texel, and the lake
+behind a dam is never reached because the dam is in the way (both held by
+the self-test). Measured, the north pylon's three cross-sections read −0.8 to
+−2.3 m across the full ±150 m; the tile's ledger went from 222 texels moved
+to 1,181, of them 832 flank; `__respan` afterwards moves nothing.
+
+**WHAT IT STILL DOES NOT REACH:** a viaduct over dry land (no water to take
+the reference from, so only the smear-free case moves — the south approach's
+`embankment=yes` ways run on a real 20 m earthwork the DSM shows and the road
+drapes over, which is right); a ship, a crane or a pier, which no road tags; a
+small river bridge, where the cover has no water at all; and the pylons
+themselves, standing as 90 m cream buildings until the proposal above is
+built. A cover tile that arrives AFTER a span is patched still does not
+re-run the repair; `__respan(x, z)` is the seat's way to ask.
+
+Held by `devtools/dem-spans.test.mjs` (pure: the deck cleared, a hill and a
+steep hill kept, an embankment refused, a cutting left alone, the water rule
+both ways, the water-called deck, the pylon blob with the cover calling the
+deck water and calling it land, the hill by a lake, the lake behind a dam)
+and `devtools/dem-ridges.mjs` for the tile arithmetic. `boot.mjs` and
+`through-node.test.mjs` are green (Camps Bay 8 / 0 / 0.19 m, unchanged);
+**`fixture-world.test.mjs` fails three checks — crossroads and tee "built sward
+meshes", village "built ribbon meshes" — and the control worktree at `b3efe88`
+fails the same three with the same mesh lists**, so they are not this work's.
+
+### Bridges are landmarks
+
+The seat's verdict on the deck repair: we were going down the wrong path.
+Large bridges are landmarks — their architecture and materials distinct and
+well known — and while the substrate and the hydro field should handle any
+crossing, a famous bridge needs its profile to be recognisable. The question
+was whether there are general bridge morphologies to paint even the famous
+ones from. There are, and they are few.
+
+**WHERE THE CODE STOOD.** `infrastructure.ts` named six bridge families and
+a silhouette per family, and nothing in main.ts read the silhouette. A bridge
+was a deck ribbon, a rail, and round piers at a spacing for four families;
+the cable family had `supportSpacingM` 0 and got nothing under it at all. The
+Pont de Normandie's pylons existed only because OSM happens to map them as
+buildings (`building=yes height=214`, clamped to 90 m and painted cream). The
+landmarks store — "the world the data cannot draw", authored by hand, in git,
+wire-format ready — had pyramids, an obelisk, a spire and a ring.
+
+**THE MORPHOLOGIES, AND WHAT IDENTIFIES AN INSTANCE.** Structural
+engineering's own taxonomy, read for what a driver recognises from a
+kilometre off at this pixel scale:
+
+| family | what identifies an instance | famous instances |
+|---|---|---|
+| girder / viaduct | pier rhythm, deck depth | Øresund's approach, Confederation |
+| arch | through, deck or tied; rise over span; open or filled spandrels; hangers | Sydney Harbour (through, 0.27, granite end pylons), Hell Gate, Pont du Gard (three tiers), Charles Bridge (16 stone arches) |
+| truss / cantilever | web pattern, through or deck, balanced cantilever | the Forth (three tubular cantilevers, red oxide) |
+| suspension | **tower style**, cable sag, side spans, truss or box deck, colour | Golden Gate (deco portal, International Orange), Brooklyn (gothic stone), Humber (plain portal), Akashi (braced), Tsing Ma and Verrazzano (double deck) |
+| cable-stayed | **pylon form**: A, inverted Y, H, mast, diamond; fan, semi-fan or harp; pylon count | Normandie (inverted Y, white), Millau (seven A-frames on 245 m piers), Øresund (H, harp, double deck), Rion–Antirrio (four A-frames), Erasmus and Alamillo (one mast) |
+| movable | bascule with towers, swing, lift, transporter | Tower Bridge (gothic pair, high walkway) |
+
+The dozen parameters per entry: family; span stations; tower style; cable
+pattern; arch placement and rise; deck section; rail; material and colour;
+end features. **Nine tower styles cover the famous bridges** — `portal`,
+`deco-portal`, `braced-portal`, `gothic`, `a-frame`, `inverted-y`, `h-frame`,
+`mast`, `cantilever` — with four cable patterns (`fan`, `semi-fan`, `harp`,
+`suspension`) and two arch placements. That is the vocabulary
+`substrate/bridge-forms.ts` paints from.
+
+**THE TABLE, as authored in `landmarks.ts` (kind `bridge`):**
+
+| bridge | form | tower | cables | tower over deck | stations | colour |
+|---|---|---|---|---|---|---|
+| Pont de Normandie | cable-stayed | inverted-y | semi-fan | 160 m | the two OSM pylon footprints | white concrete |
+| Golden Gate | suspension | deco-portal | suspension, sag 0.11 | 152 m | two, 1,280 m apart | International Orange `f04a00` |
+| Sydney Harbour | arch, through, rise 0.27 | — | hangers | — | the arch's two ends; granite pylon pairs | grey steel, sandstone |
+| Tower Bridge | bascule | gothic | — | 55 m | the two towers | Portland stone, blue steel |
+| Brooklyn | suspension | gothic | suspension, sag 0.08 | 48 m | two, 486 m apart | granite, grey cable |
+| Forth | truss, through | cantilever | — | 100 m | three | red oxide `9b3b2c` |
+| Millau | cable-stayed | a-frame | fan | 87 m | seven, as fractions | white |
+| Øresund | cable-stayed | h-frame | harp | 145 m | two | grey, double deck |
+| Akashi Kaikyō | suspension | braced-portal | suspension | 200 m | two, 1,991 m apart | grey-green |
+| Humber | suspension | portal | suspension | 125 m | two | concrete |
+| Tsing Ma | suspension | portal | suspension | 144 m | two | grey, double deck |
+| Rion–Antirrio | cable-stayed | a-frame | fan | 113 m | four, as fractions | white |
+| Erasmus | cable-stayed | mast | harp | 127 m | one | pale blue |
+| Verrazzano-Narrows | suspension | portal | suspension | 141 m | two | grey, double deck |
+| 25 de Abril | suspension | portal | suspension | 120 m | two | red `c4472f`, double deck |
+| Bosphorus | suspension | portal | suspension | 101 m | two | grey |
+| Hell Gate | arch, through, rise 0.2 | — | hangers | — | stone end pylons | red-brown steel |
+| Alamillo | cable-stayed | mast | harp | 142 m | one | white |
+| Severn | suspension | portal | suspension | 100 m | two, 988 m apart | pale grey |
+
+Charles Bridge and the Pont du Gard need no entry: a stone multi-arch at
+16–35 m spans is what the recipe's `arch` family already paints between its
+piers (the spandrel walls, `gap` 8–45 m). What the entries cannot say yet:
+Alamillo's mast leans and Erasmus's is bent, Brooklyn's stays are diagonal
+as well as vertical, and the Forth's truss deepens at the towers. Those are
+the next four parameters, each a small addition to a style that exists.
+
+**THE PAINTER** (`client/substrate/bridge-forms.ts`, pure). A bridge is an ASSEMBLY of
+deck fragments — OSM splits a long bridge into several ways, one per
+carriageway and again at the pylons, each rendered as its own ribbon in its
+own tile — gathered by the bridge's name (`bridge:name` or `name`; unnamed
+bridges are assemblies of one) and rebuilt from every fragment known each
+time one arrives. The principal axis is the line between the assembly's two
+most distant ends; stations are authored points, mapped `bridge:support`
+nodes, or fractions of the axis; a station stands BETWEEN the fragments it
+finds (a twin carriageway gets one tower, not two beside it) and only an
+authored point's position along the axis is used, so a coordinate a few tens
+of metres wide of the deck still puts the tower on the bridge. Towers are
+boxes from the ground (the DEM under the station — after the deck repair,
+the bed) to the deck as a foundation and legs above by style; stays are
+crossed thin quads from the tower to every deck edge within half the
+distance to the next tower; the suspension cable is a parabola between tower
+tops with the textbook sag and hangers to the deck edge every step; a
+through arch is a pair of ribs outside the kerbs with hangers down and cross
+bracing on top, a deck arch the same rib below on footings with columns up;
+a truss is chords, verticals and Warren diagonals on both sides. One mesh per
+bridge with vertex colours, in the world group like a landmark and not in a
+tile's road batch, so the north pylon does not vanish when the tile that
+carried the south carriageway is evicted. `?bridgeforms=0` is the A/B.
+
+**THE PAINTER NEVER GUESSES A FORM ON A LONG BRIDGE.** Measured at the
+untagged Severn Bridge: the recipe's family is a weighted roll made per way,
+and it came up `cable` on one boot (two A-frames and 210 stays on a
+suspension bridge) and `truss` on the next (a 6,428-quad lattice along two
+kilometres). Above 150 m only a `bridge:structure` tag or a landmark entry
+names a form; an untagged long bridge stays what it was, a deck on piers,
+and the assembly takes the majority family across its fragments for the
+short ones. The Severn got an entry.
+
+**THE LANDMARK KIND.** A `bridge` entry claims an assembly by name within
+`reach` metres of its position and overrides the generic spec's fields; its
+stations become the towers; `pad` metres round each station an OSM building
+stands down, which is how the Normandie's 214 m "buildings" leave. A bridge
+entry flattens no pad and stands no group up of its own — `liveLandmarks`
+filters it out — its geometry is the assembly's.
+
+**THE MAP'S OWN PYLONS.** The cell's query and the client's fallback now
+fetch `nwr["bridge:support"]`; `renderWays` notes each one in local metres
+before any ribbon asks, and an assembly with no authored stations takes the
+pylons and piers within 40 m of its fragments as its stations. Banked tiles
+predate the query change and carry none until they are refetched.
+
+**MEASURED at the Pont de Normandie**, from the deck at the south pylon,
+150 s settled, no page errors: the assembly `bridge:pont de normandie:1`
+gathered **16 fragments** (both carriageways, split at the pylons and at the
+tile edges), matched the entry, and stood up **2 towers, 268 stays, 576
+quads** in 16 rebuilds; `__built()` reports no intact building — the two
+214 m pylon "buildings" stood down inside the entry's pads. From mid-span
+looking north the frame is the bridge: the inverted-Y pylon with its legs
+meeting into a mast, the semi-fan of stays converging on it from both deck
+edges, the estuary either side. From the south approach the pylon rises out
+of the frame with the fan hanging off it. `boot.mjs` and
+`through-node.test.mjs` green, Camps Bay 8 / 0 / 0.19 m unchanged.
+
+Held by `devtools/bridge-forms.test.mjs`: the tags name the family, a girder
+paints nothing, two towers at the default stations with the right height and
+a foundation to the ground, one tower between twin decks, authored stations
+fix only the position along, the suspension tower height, the through arch's
+crown and the deck arch's footing, the truss's depth, the bascule's pair, the
+end pylons, and the attribute arrays agree.
+
+### …and the deck stands clear of the water
+
+The seat found the Pont de Normandie's deck at water level at
+`49.42481 0.27555` and asked whether the substrate needed finishing, and
+whether known bridges needed landmark hints. Measured there, in
+`substrate=render` and in the default alike: the drivable surface equalled
+the terrain at every sample along the axis — 7 m over the marsh, then −1.6 to
+−3.2 m over the Seine with the water resting at −1 to −2.7 — and `__decks`
+reported the bridge's segments with 0.2 m of daylight. `substrate=render`
+was not the variable.
+
+**ROOT CAUSE.** A bridge-mode way takes a whole-way run and the run's
+profile is the portal-to-portal chord: a line between the terrain heights at
+the fragment's ends. Nothing else supplies a deck height over water — the
+layer lift raises a deck only over a lower-layer ROAD ("bridges over
+nothing find no deck and keep their chord"), the crossing registry records
+`deckY` as an input read from the road, and the hydro field was never asked.
+Before the deck repair the surface model's smear carried the deck at 60–76 m
+and the chord stood on it: right by accident. The repair lowered the terrain
+under the deck to the bed and the chord followed it down, towers and all.
+The regression was this work's, not an old one.
+
+**THE FIX rides the flyover's own cone.** In the lift block, before the
+lower-deck scan, every station is asked for a water want, and the two-pass
+ramp then descends from any raised station at the ruling grade exactly as
+it does for a flyover:
+
+- **A landmark entry's deck profile** where one claims the way (`deckM`,
+  the deck's height over the water at the towers, and `grade`): level
+  between the outer towers, falling at the grade beyond them until the chord
+  takes over. It is a function of position, so every fragment — the
+  approach viaduct included, whichever tile built first — reads the same
+  height at the shared node and the ends agree without a weld. That is what
+  makes the hint the right tool: the ordering that defeats the weld on a
+  flyover cannot arise.
+- **The water plus a clearance by class** (10 m motorway and trunk, 7 m
+  primary and secondary, 4.5 m otherwise) with no entry, and ONLY at a
+  station whose chord would otherwise lie in the water. An ordinary river
+  bridge whose chord already spans bank to bank keeps it, so its approaches
+  keep their welds; the generic rule is confined to the failure the repair
+  created.
+
+`waterUnder` is the hydro field's resting level, or — where the field has
+not built yet — the cover's word with the bed as the level, capped two
+metres over the sea so an unrepaired smear cannot pose as the water. The
+eighteen entries over water carry their deck heights (Normandie 52 m at
+6 %, Golden Gate 67, Verrazzano 69.5, Akashi 65, Bosphorus 64, Tsing Ma 62,
+Øresund 57, Rion–Antirrio 52, Sydney 49, Forth 46, Brooklyn and Hell Gate
+41, Severn 37, Humber 30, Erasmus 12.5, Alamillo 10, Tower Bridge 8.6).
+`__lifts()` now says which rule lifted a way: `hint`, `water` or `deck`.
+
+**THE HINT'S DATUM IS AUTHORED, NOT SAMPLED.** The first cut read the water
+at the towers from the live field, which makes the hint a function of what
+has streamed as well as of position: each fragment built its own idea of the
+deck from whatever the hydro or the cover said at that moment, and the
+fragments disagreed. Measured at the Normandie across two runs of the same
+build, the assembly's deck spread **15.6-54 m** on one and **15.6-86.2 m**
+on the next. The datum is now the entry's own — `deckM` over `waterEleM`,
+the water's elevation above sea level, zero for a tidal crossing, which is
+every entry so far — so the hint is the same number before and after any
+tile lands.
+
+**MEASURED** at the seat's spot, 150 s settled, no page errors: `__lifts`
+lists the Normandie's fragments lifted by `hint` — 33 to 39 m over their
+chords — and `__decks` puts the fragment under the rig at **18.7–25.1 m**
+with 24.8 m of daylight where it had 0.2; the assembly's deck runs
+**15.6 m at the approach to 54 m over the water**, and the towers rise from
+it. From mid-span the deck now soars over the estuary with the pylon's foot
+in the water below it. `boot.mjs` and `through-node.test.mjs` green, Camps
+Bay 8 / 0 / 0.19 m unchanged — the generic rule moved nothing there, which
+is the confinement working.
+
+**A SPAWN BESIDE A VIADUCT LANDS BESIDE IT, and that is left as it is.**
+The seat's URL is 43 m east of the carriageway, on the marsh; the truck
+spawns on the terrain, the road arrives afterwards, and a wheel takes a
+deck only within four metres of where it already is (`tyreHeight`). Before
+this work the deck was at marsh level and the truck stood beside it; now it
+stands beside a 25 m deck. A seat rule was tried in this round — wait for
+the nearest deck standing over four metres above the truck within sixty
+metres and put the truck on it — and not shipped: the first such deck to
+arrive was the embankment track at 4.6 m, then a side road at 6.3 m, never
+the bridge, because the fragments arrive in tile order and the rule cannot
+know a taller one is coming; and a teleport onto a track's centreline did
+not seat the truck on it either. The honest version waits for the tile to
+finish and then takes the tallest deck, and needs the tyre gate opened for
+it; measured with `__seatwhy` over four runs and left for its own round.
+Spawn on the deck itself (`49.4283 0.2745`, the seat's earlier spawn, is
+on it) or use `__toroad()`.
+
+**AND THE FIELD IS ASKED ONLY WHERE THE ANSWER TURNS ON IT.** The first cut
+of the decision loop asked `sampleRestingSurface` at every station of every
+bridge, where the rule it replaced asked only at the non-portal stations of
+a bridge with no hint. That is real work inside the six-millisecond build
+budget, and it showed as a TIMING fault a long way from the bridge: on the
+structures fixture the causeway's terrain mesh was absent at the probe's
+instant in **two runs of five, against none in four of the control**. A
+hint over the chord decides on its own and a portal is the approach's
+business either way, so neither asks; the call count is the old one exactly
+and the authority still makes the decision.
+
+**AND THE AUTHORITY DECIDES IT.** The three station rules live in
+`substrate/crossing-authority.ts` as `resolveProductionDeck`, and the complete
+run solve now lives beside them as `resolveProductionBridgeProfile`: it owns
+the portal chord around held junctions, lazy water reads, contiguous wet-span
+measurement, between-station lower-deck scan and two-pass ruling-grade cone.
+Both are pure and tested in `substrate.test.ts`; the ribbon supplies the aligned
+bench plus streamed water/deck callbacks and consumes the returned chord and
+profile without reinterpreting the evidence. Who decided each way's deck is
+kept by way key, handed to the registry when it records the crossing, carried
+on the record as `deckAuthority` with `deck by landmark-hint` in its evidence,
+and counted in the snapshot as `deckByHint` and `deckByWater`. What the
+substrate still owes after this is the aligned bench solve and GEOMETRY — the
+registry still learns of a crossing after the road is built, from the built
+road, even though its crossing profile is now decided before geometry.
+
+### The empty tile bank: a wrong diagnosis, and what it taught
+
+The seat drove the Forth and the Golden Gate and found both bridges in the
+water. Beside the Golden Gate sat a column of tiles banked with an empty way
+list — `10472/25319..25322`, 44 bytes each — next to a tile carrying 48 ways
+including the bridge's own sidewalk. Written up as a poisoned bank, fixed
+with a keyspace bump, deployed.
+
+**IT WAS THE TILE ARITHMETIC.** Tile 10472 begins at lon −122.4756 and the
+bridge stands at −122.4783, so that column is the open water EAST of the
+bridge: genuinely empty, correctly banked. The bridge's own column is 10471
+and always had its ways. Checked against the new keyspace afterwards, the
+tiles that hold the bridge answer with identical bytes on both — 1,678 at
+the deck, 13,891 at the north tower, 907 at the Forth Road Bridge. Nothing
+was ever poisoned. `TILE_V` went back to 4; a bump costs the world a
+re-fetch and there was nothing to heal.
+
+**WHAT SURVIVES IT.** Two things worth keeping. `askMirror` refuses ANY
+Overpass `remark` now rather than three by name: a bank with no expiry
+cannot afford a guess about which remarks are benign, and the cost of
+heeding all of them is one 503 and a retry. And the mechanism the panic
+uncovered is real and worth writing down: a banked tile is an S3 object
+whose key IS the request path, CloudFront serves it without the cell's code
+running, and `serveTile` runs on a cache MISS and nothing else. There is no
+expiry, no re-check, and no request that could trigger one. If a tile is
+ever wrong, the version constant is the only remedy there is.
+
+**AND THE REAL FAULTS AT THOSE TWO SPOTS**, found while disproving the
+first: the Golden Gate's carriageway is named `Presidio Parkway` and carries
+`bridge:name=Golden Gate Bridge`, which the entry lookup reads first, so the
+hint reaches it. The Forth Road Bridge is named exactly that, and the store's
+`forth-bridge` entry matches `forth bridge` and `forth rail` — neither is a
+substring of "Forth Road Bridge" — so it has no entry at all, and its ways
+carry no `bridge:structure`, which means the recipe rolls a beam and plants
+a support every 24 metres across the firth.
+
+### …and the clearance is proportional to the crossing
+
+The seat's next question answered itself: *surely the clearance from water
+is at minimum proportional to waterway width?* The first generic rule was a
+flat 4.5 to 10 m by road class, fired only where the chord lay IN the water.
+Both halves were wrong. Ten metres over a two-kilometre estuary still reads
+as a bridge lying in it, and a deck a metre ABOVE the water is as wrong as
+one a metre under.
+
+`navigableClearance` takes a twentieth of the wet span, floored at the class
+minimum and capped at 65 m. The ratio is read off the store's own bridges,
+deck height over main span:
+
+| bridge | span | deck | ratio |
+|---|---|---|---|
+| Golden Gate | 1,280 m | 67 m | 0.052 |
+| Pont de Normandie | 856 m | 52 m | 0.061 |
+| Brooklyn | 486 m | 41 m | 0.084 |
+| Severn | 988 m | 37 m | 0.037 |
+| Akashi Kaikyō | 1,991 m | 65 m | 0.033 |
+| Humber | 1,410 m | 30 m | 0.021 |
+| Tower Bridge | 61 m | 8.6 m | 0.14 |
+
+A twentieth sits in the middle and lands within a few metres of the real
+thing on the big ones: 64 m against 67 at the Golden Gate, 43 against 52 at
+the Normandie. The cap is about the tallest air draught built anywhere, so a
+mis-measured estuary cannot raise a road into the stratosphere; the floor
+keeps a ditch from lowering one into the water; an entry overrides both with
+the surveyed number.
+
+**THE WET SPAN IS MEASURED ALONG THE DECK** — the longest CONTIGUOUS run of
+stations with water under them, so a causeway hopping islands is measured by
+its channel rather than by its total length — and only for a deck already
+known to be low, which is the one case that needs a number. A bridge with a
+landmark entry costs no water samples at all. What it cannot see is a
+crossing OSM split into several ways: each fragment measures its own wet
+run, so a bridge cut into thirds asks for a third of the clearance. The
+entries cover the famous ones; the assembly already gathers the fragments,
+and teaching the measurement to read it is the next step.
+
+### Every bridge in the world was draped on the terrain, and the gate was one word
+
+Probed from the seat at the uMngeni mouth in Durban
+(`?lat=-29.81016&lon=31.03845&h=7&cam=top&z=7.3`): two tagged bridges 580 m
+apart, the M4's **Ellis Brown Viaduct** (two 471 m carriageways) and the
+**Athlone Bridge** upriver (412 m on TWO POINTS), both running ALONG THE RIVER
+BED. Live, the M4's deck descended 4.31 → 0.145 m across the estuary while the
+water rested at 0.4 m, and `__lifts` reported nothing lifted within 300 m.
+
+**THE STAGE LOG NAMED IT IN ONE LINE.** `__fragwhy` at the crossing:
+`1-branch` = `2-ruled` = `2e-lift` = `3-seated` = the chain's own hint at every
+station, and **`2d-chord` absent from the log entirely** — the portal-to-portal
+chord never ran. Read back to its gate:
+
+```ts
+const runs: Array<[number, number]> = [];
+if (mode !== 'none' && n > 4 && (!canopy || mode === 'bridge')) {
+  if (mode !== 'bridge') { …resolveProductionRoadStructureProfile…
+                           runs.push(...structure.runs…); }
+  …
+  if (mode === 'bridge' && runs.length) {   // ← can never be true
+```
+
+`runs` is filled in exactly one place, and it is the branch a bridge by
+definition does not take. **So the whole bridge block — the chord, the flyover
+cone, the landmark deck hint and the water clearance — was unreachable for
+every tagged bridge on earth.** The pre-substrate-migration code pushed the
+whole-way run right there (`if (mode === 'tunnel' || mode === 'bridge')
+runs.push([0, n - 1])`); the migration moved that into
+`resolveProductionRoadStructureProfile`, which the bridge path calls FOR
+ITSELF from inside `resolveProductionBridgeProfile` — so the run list stopped
+being the gate's business and nobody re-derived the gate. It reads the MODE
+now. **The general lesson: a condition that survives a refactor by reading a
+variable whose PRODUCER moved is a condition nobody has re-derived.**
+
+**Measured** on the `at-umgeni` capture, the same tool and the same crossings,
+against the revision before the migration (`devtools/bridge-water.mjs`):
+
+| fragment | control deck / clearance | broken | fixed |
+|---|---|---|---|
+| Ellis Brown, carriageway A | 5.82 m / 9.10 m | −0.56 / 2.72 | **5.82 / 9.10** |
+| Ellis Brown, carriageway B | 6.17 / 9.45 | −1.17 / 2.11 | **6.17 / 9.45** |
+| Ellis Brown, the footbridge | 5.04 / 8.32 | −0.40 / 2.88 | **5.04 / 8.32** |
+| Athlone Bridge | 12.51 / 12.43 | 5.54 / 5.46 | **12.42 / 12.34** |
+
+Every deck 6–7 m lower, and the fix restores the control to the centimetre —
+which is what says it is a restoration and not a new behaviour. Camps Bay's
+junctions are untouched (8 / 0 / 0.19 m), because nothing there is a bridge
+over water.
+
+**THE WITNESS IS THE STAGE LOG, NOT THE HEIGHT.** `devtools/bridge-water.mjs`
+reports both and fails on either, and the ordering is the point: a bridge whose
+deck happens to sit above its water proves nothing — a chord along flat banks
+does that by accident — so what says the machinery RAN is `2d-chord` in the
+fragment's own stages. A deck under the water with no `2d-chord` is the chord
+never running; a deck under the water WITH one is the lift deciding wrongly,
+which is a different fault in a different module. Neither number alone can tell
+them apart. **On this fixture the heights alone would have passed the broken
+build** (the capture's own sea datum puts the water at −3.28 m, so the drowned
+decks still cleared it) — the regression was caught by the stage log and would
+have been missed by the metre.
+
+### …and `bridge:name` was thrown away by the cache, so a bridge worked once
+
+Found while reading the same two bridges. `bridge:name` is read in exactly two
+places — the assembly key (`bridge:name ?? name`, which is how OSM says "these
+deck fragments are one structure") and the landmark lookup, which reads it
+FIRST — and it was in **no** `KEEP_TAGS`: not the client's, not the capture's.
+`writeTileCache` applies that list before a tile reaches IndexedDB, so the tag
+survived the first visit and not the second:
+
+- on a reload the Ellis Brown Viaduct's two carriageways re-key from
+  `bridge:ellis brown viaduct` to `bridge:ruth first highway` and merge with
+  four approach fragments that are not the same structure;
+- and **the Golden Gate loses its entry entirely** — its carriageway is named
+  `Presidio Parkway`, and this file already records that the entry reaches it
+  only through `bridge:name`. Deck hint, towers and cables, gone on the second
+  visit.
+
+The same shape as `railway` one tag over: **a tag the renderer reads and the
+cache drops is a feature that works once.** Both lists carry it now. A tile
+already in a player's IndexedDB still lacks it until it is re-fetched, which
+degrades to exactly today's behaviour.
+
+### What the uMngeni says that is NOT broken, and what is still open
+
+Established offline from the cell's own banked tiles and the estuary survey
+before any browser ran, which is what separates "absent" from "did not stream":
+
+- **Neither publisher carries these decks.** Mapterhorn and terrarium both read
+  0–1.2 m median over the water, peak 4–13 m, **0% over 30 m** — the ordinary
+  case (15 of the 16 surveyed estuary spans), so the DEM span repair correctly
+  does nothing here (`__respan`: `moved: false`) and the chord is the only
+  thing that can hold these decks up. That is why losing it drowned them.
+- **Both bridges are over 150 m and neither carries `bridge:structure`**, so
+  the recipe correctly refuses to roll a form and both stay `girder` — a deck
+  on piers. Right by the rule, and it costs the **Athlone Bridge**, which is a
+  concrete arch in life. That is the landmark-entry gap, not a defect.
+- **Zero `bridge:support` nodes reach the client.** The cell's query fetches
+  them (`index.ts`), but these tiles were banked before that change and a bank
+  has no expiry — so both bridges take the recipe's default pier spacing and
+  there is no way to get the map's piers short of a `TILE_V` bump. The two
+  `man_made=pier` areas in the block are jetties, not bridge supports.
+- **The Ellis Brown Viaduct is TWO assemblies.** Its river spans carry
+  `bridge:name`; its four approach viaducts carry only `name=Ruth First
+  Highway`, so they form `bridge:ruth first highway` separately. One structure,
+  two assemblies, and each measures its own wet run for the clearance rule —
+  the limitation task #128 already names, seen in the wild.
+- **The river's centreline crosses the M4 only 72 m from its south end** of a
+  471 m deck, and the Athlone 155 m along its 412 m. Most of both bridges is
+  over flood plain and interchange, not channel.
+
+`devtools/bridge-water.mjs` is the instrument (`FIX=`, `CROSSINGS=` as JSON),
+and `at-umgeni` the capture it runs on — the first fixture in this repo that
+holds a named, tagged bridge over tidal water.
+
+### A hydro build was priced by the tile, not by the water in it
+
+The seat's dump from Yosemite (409 s, chase): `hydroBuild` **94.6 ms a
+build, 240 max, 248 builds, 30% of all slow-frame time and top-of-frame in
+222 frames** — the largest identified cost in the session. The dump could
+not say which phase, because `HYDRO_BUILD_PROF` lives on `__hydro().buildProf`
+and a phone has no console. **The instrument first**, then the number.
+
+**THE DUMP CARRIES TWO NEW ROWS.** `look` states the switches this build was
+run with (`tdetail`, the substrate's amount and domain, the ground view,
+`swardsub`, `tilt`, `substrate`) so two dumps of the same drive can be
+compared at all — which is the only honest way to cost a fragment shader, and
+the answer to the question the Yosemite dump was pasted to ask. **Nothing in a
+telemetry report can attribute per-fragment work**: the substrate runs in the
+terrain's fragment and the only rows it could ever reach are `render` (the
+main thread ISSUING draws) and `gap`, which is a residual containing vsync,
+GC, layout and the GPU's work on 2.24M triangles. Reading the gap as "the
+shader" is the claim this file already withdrew once. `hydro phases` carries
+the build profile by phase. `search` is timed INSIDE the per-texel loop, so it
+is printed as a subset of `texels` rather than added twice, and `other` is the
+residual no lap covers, so the row sums to the mean and nothing can hide in it.
+
+**`rest` WAS TWO THIRDS OF A BUILD, WHICH IS A PHASE NAME MEANING "THE REST OF
+IT".** Split into `fill`, `majority`, `occlude`, `extent`, `shore`, `ground`
+and `pack` — and every one of those is a FULL-GRID pass, which is the finding.
+Measured on the Yosemite capture (`devtools/hydro-phases.mjs`, `at-yosemite`,
+settled, nodraw):
+
+| | mean | of a build |
+|---|---|---|
+| texels (the per-item paint loop) | 6.7 ms | 15% |
+| fill (extend body parameters past the mask) | 8.4 | 19% |
+| sources (the nearest-source map) | 6.1 | 14% |
+| majority (the 3x3 pinhole close) | 4.5 | 10% |
+| pack (geometry/dynamics/material) | 4.5 | 10% |
+| shore (two distance transforms) | 4.1 | 9% |
+| ground (sampleElevation per texel) | 3.7 | 9% |
+| ocean (the mask and the retention) | 3.3 | 8% |
+| extent, coast, analyse, raster, other | 2.0 | 5% |
+
+**AND 296 OF 38,309 TEXELS WERE WET — 0.77% — WITH FIFTEEN OF TWENTY-TWO
+BUILDS HOLDING NO WATER AT ALL.** A tile is charged for its AREA and not for
+the river in it. That is the whole story at Yosemite, and it is why the
+Breede's cut (candidates once per area, the search once per 2x2 block) could
+not help here: those were about the water, and this is about the tile.
+
+**A WATERLESS TILE NOW WRITES ITS FIELD'S CONSTANTS.** Every one of those
+passes provably produces a constant when the coverage array is empty — the
+source map answers -1 everywhere so the fill writes nothing, the majority pass
+tests a `kind` only a paint sets, an occluder's loop `continue`s on every
+texel, `waterLevels` is empty so the datum is the ocean level and the mesh
+bounds are undefined, `wet` is all zero so the signed shore distance clamps to
+exactly `-shoreDistanceLimitM`, and level, depth, flow, fetch, scale, kind,
+seed, turbidity and flags are all still zero-initialised. Two strided writes
+replace eleven passes. **The ground channel is NOT skipped**: it is the terrain
+under the tile, true whether or not there is water on it, and `shore-contour`
+reads `field.ground`.
+
+- **THE RETENTION IS UPSTREAM OF THE FLAG, WHICH IS WHAT MAKES IT SAFE.**
+  `anyCoverage` is set by `paint` AND by the last-known-good retention, so
+  "dry" means dry after the previous field has been consulted and not merely
+  "nothing arrived this time". A short-circuit reading only the paints would
+  take away the straight-edged rectangle of sea that retention exists to keep.
+- **IT IS A FLAG, NOT A SCAN**, because the scan it would replace is itself
+  one of the full-grid passes it exists to skip. Set before the rank guard in
+  `paint` on purpose: a paint this one loses to is a paint that has already
+  put coverage over the threshold on that texel.
+- **`waterless` AND `dry` ARE DIFFERENT THINGS.** The first is the tile, the
+  second is what this build did about it. Kept apart so `?hydrodry=0`
+  classifies the SAME population — otherwise the control's "mean over all
+  builds" would be compared against the fix's "mean over seven".
+
+**Measured**, `at-yosemite`, the switch the only difference:
+
+| | `?hydrodry=0` | short-circuit |
+|---|---|---|
+| a build with NO water (15 of 22) | **18.5 ms** over 19,600 texels | **4.0 ms** |
+| a build WITH water (7 of 22) | 120.8 ms over 78,400 texels | 127.6 — run noise, untouched |
+
+Held by `devtools/hydro-dry.test.mjs`, which drives the SHIPPED function
+beside the one it replaced (extracted with `git show REV:`, default HEAD) and
+requires every channel of every field to be identical — geometry, dynamics,
+material, ground, the scalars, structure, waterfalls and coast — on three
+fixtures: a waterless tile, a river tile that must take the untouched path,
+and a featureless rebuild handed a previous field, which is the retention case
+that could delete a sea. **The old code is the test's control**, the rule
+`clip.test.mjs` set; the negative control was run (a millimetre on the dry
+shore constant fails it).
+
+**WHAT IS LEFT, AND IT IS THE BIGGER HALF.** A build WITH water is 121-128 ms
+over 78,400 texels for 296 wet ones — 0.4% — and every pass above still walks
+all of it. The field is CONSTANT outside the shore-distance band
+(`shoreDistanceLimitM` 180 m, about 19 texels at a flowing tile's 9.4 m), so
+the honest next cut is to run `fill`, `majority`, `shore`, `ground` and `pack`
+over the covered texels' rect padded by that reach and fill the outside with
+the same constants the dry path already writes. It is not made here because
+`fill` deliberately extends a body's level BEYOND the visible mask and the CPU
+readers (`sampleRestingSurface`, `sampleBankField`, `drawnHydroAt`) sample the
+field anywhere in the tile — so the bound has to be shown not to move those
+answers, which is a measurement and not a reading.
+
+**AND `flowingFieldResolution` IS A 4x GRID, NOT THE 1.27x ITS COMMENT
+CLAIMS.** `hydro-resolution.test` reads 22.1 ms at 128 against 41.7 at 256 on
+its own fixture — 1.9x, fair, because the water fills that tile. At Yosemite a
+flowing tile is 78,400 texels against a waterless one's 19,600 and the river
+covers four texels in a thousand, so the same choice costs four times the
+grid to place a bank the player is a kilometre from. The dial is right where
+the water IS the tile and wrong where it is a thread through one; a resolution
+chosen from the covered SHARE rather than from "any flowing observation" is
+the other half of the cut above.
+
+`devtools/hydro-phases.mjs` is the instrument: the phase split, the ns/texel
+(which is what tells an expensive pass from a big grid), the wet share, and
+the wet/waterless build split, on a fixture or at a live `SPOT=`. **`nodraw`
+is safe here** — the measurement is CPU milliseconds inside a synchronous
+function, not pixels and not throughput, so the software renderer can only
+change how often the frame loop asks for a build, not what one costs.
+
+**AND THE BENCH THE DOCTRINE NAMED DID NOT EXIST.** `node_modules/.cache/hydrobench.ts`
+reproduced the Breede's 292 ms to the millisecond and is GONE — that directory
+is not in git — so this file named a tool nobody had. A capture answers the
+same question through the ACTUAL feed path (`hydroFeed` gathers the features,
+builds the ocean mask, traces the cover's inland water), needs no
+reconstruction to go stale, and is checked in beside the number it explains:
+`at-yosemite` (37.73606,-119.63732, r=1400 m, cover classes 10/30/60/80, the
+Merced and 1,202-2,417 m of granite) is the first fixture in the repo that
+holds the river the dump was about.
+
+### The Forth: three bridges, three claim paths, and one of them reached its entry
+
+Asked for from the seat as the landmark test case — *"see forth bridges as a
+test case/fixture as well, especially as named/well known landmark cases"* —
+and it is the best one on earth: three famous bridges in a row over one firth,
+each reaching the painter by a DIFFERENT route. Captured as `at-forth`
+(56.00636,-3.39091, r=1200 m; the first capture attempt timed out at 900 s on
+64 cold tiles and was re-run in the background).
+
+**A BRIDGE IS CLAIMED THREE WAYS, AND ONLY ONE OF THEM IS A NAME.**
+
+| path | what decides | at the Forth |
+|---|---|---|
+| a landmark entry, by NAME | `bridge:name ?? name` contains one of the entry's `match` strings, within `reach` (1.6–2.4 km) | the Queensferry Crossing and the Forth Road Bridge, once they had entries |
+| a landmark entry, by POSITION | the name says nothing either way, and the assembly's centroid is within `BRIDGE_ON_R` (420 m) of the entry | the 1890 Forth Bridge — its four ways are named `East Coast (Northern) Line` and carry no `bridge:name` at all |
+| OSM's own `bridge:structure` | the recipe reads the tag | the Queensferry Crossing, before it had an entry |
+| the recipe | nothing said anything; a family is rolled, and REFUSED past 150 m | the Forth Road Bridge, before it had one — a 1,006 m suspension bridge drawn as a deck on piers |
+
+**AND NOTHING COULD SAY WHICH HAD HAPPENED.** `__bridges()` reported the form
+and not the authority, and a `truss` that came out of a roll is
+indistinguishable from a `truss` an entry asked for — so "is the Forth Bridge
+claimed?" could only be answered by inferring it from the output. That is the
+same fault this file records for the terrain's cell table one layer down: **a
+probe that reports the OUTPUT and not the AUTHORITY cannot witness a claim.**
+`BridgeAssembly.claim` is the entry's id, `tags`, or `recipe`, and `spanM` —
+the LONGEST FRAGMENT, not the total, because a bridge split into eight deck
+pieces would otherwise read as eight times its own length — is beside it.
+
+**THE GUARD THE GEOMETRY FORCED, AND IT HAD TO GO IN FIRST.** The Forth Road
+Bridge and the Queensferry Crossing stand about 250 m apart at their nearest,
+which is INSIDE the 420 m positional radius — a radius sized against a firth
+with two bridges in it, and this is a firth with three. So the moment the road
+bridge had an entry, any Queensferry fragment not carrying the crossing's own
+name (an approach, a slip, a ramp) became a positional candidate for a
+SUSPENSION bridge it is not, and would have worn portal towers and a catenary.
+`bridgeEntryFor` takes a `tagged` flag now: **a positional claim stands down to
+OSM's own `bridge:structure`, and a NAME match still beats it** — an entry
+saying "this is the Humber Bridge" is more specific than a tag saying "this is
+cable-stayed", and a positional GUESS is weaker evidence than a surveyor's tag.
+It was written BEFORE the two entries, from reading the geometry; it is the one
+hazard in this unit that a frame would have shown as a plausible-looking wrong
+bridge rather than as an absence.
+
+**Measured**, `at-forth`, settled, the two entries the only difference:
+
+| bridge | before | after |
+|---|---|---|
+| Forth Bridge (rail) | `forth-bridge` **by position** · truss / cantilever · 3 towers, 1,568 panels | unchanged |
+| Queensferry Crossing | **`tags`** · cable-stayed / a-frame · 1 tower, 94 stays | **`queensferry-crossing`** · mast / fan · 2 towers, 120 stays, deck to 50 m |
+| Forth Road Bridge | **`recipe`** · girder · **built nothing** | **`forth-road-bridge`** · suspension / portal · 2 towers, 588 hangers, 1,800 quads, deck to 44 m |
+
+One of three reached its entry before; three of three do now, and the rail
+bridge — the one that never had a name to match on — is the one that already
+worked, because its entry's coordinate was doing the job all along. The other
+three assemblies in the box (Fife Circle Line, Hopetoun Road, and one unnamed
+way) are 16–23 m and correctly stay `recipe` · girder, building nothing.
+
+**AND `spanM` IS A FRAGMENT, WHICH AT THE FORTH IS MOST OF THE PROBLEM.** The
+longest fragment of the Forth Road Bridge measures **342 m** and the crossing's
+**363 m**, against bridges of 1,006 m and 2,700 m — OSM splits a long bridge at
+its towers, at its carriageways and at every tile edge, and each piece is a way
+of its own. So the tool's "a long span nobody claimed" check is a check on
+FRAGMENTS, and so is the clearance rule's wet-span measurement, and so is the
+recipe's own 150 m refusal. That is the limitation this file already records
+from the uMngeni (one structure, two assemblies), met again at a bridge whose
+assembly is right and whose longest way is a third of it: **the assembly
+already gathers the fragments, and teaching the measurements to read IT rather
+than the way is the open work.**
+
+**THE QUEENSFERRY CROSSING GOT TWO TOWERS AND ITS ENTRY AUTHORS THREE, and
+that is reported as observed rather than claimed.** A station stands BETWEEN
+the fragments it finds (a twin carriageway gets one tower, not two beside it),
+so a station with no fragment on one side of it stands nothing up; the capture
+holds ten fragments and they do not span the whole crossing. Whether the centre
+tower appears on the live world with the full set streamed is untested — the
+fixture is what was measured, and the fixture is 1.2 km of a 2.7 km bridge.
+Its real stay cables also overlap at that centre tower, which is the one thing
+in its silhouette the painter cannot draw at all.
+
+`devtools/bridge-landmarks.mjs` is the instrument and it REPORTS rather than
+asserting a form per bridge: what a famous bridge should look like is a
+judgement in `landmarks.ts`, and a test restating it here would be the same
+table twice. What it FAILS on is structural — an assembly whose spec names a
+non-girder form and whose painter built nothing, and a span over `LONG_M`
+(150 m) that nobody claimed, which is the landmark-entry gap rather than a
+defect and is printed as one.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.
@@ -1832,6 +3707,7 @@ colour over it.
 |---|---|
 | `hydro` | water fields, coastlines, river profiles |
 | `marks` | the production façade shader and its graffiti |
+| `facade` | one building at the survey's stand-off: the production façade shader and roof, the culture's own wall and roof canvases, and the massing, the plinth and the whole opening grammar on dials |
 | `roads` | the bench-search profile solver, as a section |
 | `flora` | the climate ladder **and** a real stand of the shipping plants |
 | `weather` | the 48×48 weather lattice, with time on a dial |
@@ -2063,6 +3939,1821 @@ one that proves the whole chain closes: the Serengeti returns *Southern
 Acacia-Commiphora bushlands* → the savanna guild → `forms {bare 6, umbrella 2}`,
 and the Sundarbans returns *Sundarbans mangroves* → the mangrove guild →
 `forms {bare 16, palm 11}`.
+
+### The tree budget was divided among families the place does not grow
+
+Reported from the seat, on the Yosemite build: *"I did see trees popping into
+view, I would expect them to come into view a lot further out."* The DRAW RANGE
+dial was 700 m and the dump read `edge b466/c223` — so the dial was not the
+distance, and the thing that set the distance was the triangle budget.
+
+`ezCapScale` divided `treeTriBudget` by the cost of EVERY family at its FULL
+nominal cap — five families, including the two the guild plants none of. At
+Yosemite the place grows no acacia and no palm, their 321 and 275 slots were in
+the divisor anyway, and the trees that are there sat pinned against a fraction
+of their caps with the budget a third unspent.
+
+**AND THE FIRST FIX FOR IT MOVED THE SEAT'S OWN COMPLAINT THE WRONG WAY.**
+Cutting each family PROPORTIONALLY to what it wants is the obvious rule and it
+punishes an under-supplied family: broadleaf has about 600 candidates against a
+nominal 1600, so the old over-allocation (1600 x 0.46 = 735 slots for 600 trees)
+let every one of them stand, while a proportional share (600 x 0.748 = 449) cut
+a quarter of them and brought the edge **IN from 700 m to 671**. Half a
+regression, and the half that regressed was the number the report was about.
+
+**SO THE BUDGET IS FILLED RATHER THAN DIVIDED.** Water-filling: a family that
+wants less than its share takes what it wants and hands the rest back, the round
+repeats until nobody is over-served, and what is left is split among the
+families that can still use it. Two properties the proportional rule lacks —
+nobody is capped below what they would have drawn anyway, and the total cannot
+exceed the budget. `?treedemand=0` is the old all-families divisor and the A/B.
+
+**Measured**, `devtools/tree-edge.mjs` on `at-yosemite`, settled, no page
+errors, two boots with the switch the only difference (sound here for the same
+reason the sward correlation is: the quantity is a CPU allocation over a fixture
+and the counters come out identical run to run):
+
+| | all-families divisor | water-filled |
+|---|---|---|
+| broadleaf cap · edge | 735 · **700** | 601 · **700** |
+| conifer cap · edge | 643 · 480 | **953 · 583** |
+| snag cap · edge | 206 · 553 | **306 · 629** |
+| acacia cap · palm cap | 321 · 275 | **0 · 0** — the place grows neither |
+| triangles drawn | 987,367 | 1,191,677 |
+
+**READ `edge` AGAINST THE RANGE, AND KNOW WHAT IT MEANS WHEN THEY ARE EQUAL.**
+`ezEdge` is initialised to `treeRange` and is only assigned where a family is
+actually cut (`list.length > cap`), so **edge == range means NOT CAPPED** — and
+that covers the degenerate case too: acacia and palm read 700 in both columns
+because they have no candidates at all, which is "no trees and therefore no
+edge" rather than "trees all the way out". A column of 700s is not a result
+until the cap beside it is read.
+
+So the water-filled column says three things and only the first is a win in the
+usual sense: conifer and snag gain a hundred metres apiece; broadleaf STOPS
+being cut, which is the regression removed; and acacia and palm take no budget,
+which is what the whole unit was about.
+
+### …and then a tree was charged its family's mean, not this place's tree
+
+The budget was filled and the frame still drew half of it. Water-filled, settled
+at Yosemite, the allocator priced its caps at **2,399,673 triangles — the budget,
+to the last three hundred — while the GPU was handed 1,191,677.** Conifer and
+snag were still cut, so the budget was binding, and it was binding on arithmetic
+that was wrong by a factor of two.
+
+**PLACEMENT IS NOT THE LEAK, and that is the measurement that decides which fix
+this is.** 588 of 601 admitted broadleaf stood, 946 of 953 conifer, 304 of 306
+snag: admission IS placement, so the error is the PRICE of a tree and not the
+fate of one. Per family, charged against drawn:
+
+| | atlas mean | drawn per tree | |
+|---|---|---|---|
+| broadleaf | 1107 | 1068 | ×1.04 |
+| **conifer** | **1713** | **543** | **×3.15 — and this is the binding one** |
+| snag | 333 | 188 | ×1.77 |
+
+`meanDrawn` is the mean over a family's WHOLE ATLAS and a place grows two of its
+six silhouettes — the two-scale palette's own doing, and the thing that makes a
+wood one wood rather than confetti. So the family whose cap actually binds is
+priced by variants that are not standing here: **conifer was charged 68% of the
+budget for 21% of the frame.**
+
+The refresh knows what a tree really cost, because it has just placed them all
+and every tier carries its own triangle count. The price is the LAST refresh's
+realised cost per placed tree, with the family mean as the first sweep's guess;
+it converges in one sweep and stays converged, since the palette is stable per
+district and does not reroll as you drive. The clamp — a quarter to four times
+the mean — is INSURANCE against a sample taken mid-sweep and not the rule: a
+place may honestly grow a family's dearest silhouette, so the price must be free
+to exceed the mean. `?treeprice=0` charges the atlas mean again.
+
+**Measured**, `devtools/tree-spend.mjs` on `at-yosemite`, both legs settled, no
+page errors:
+
+| | atlas mean | as drawn |
+|---|---|---|
+| conifer price · cap · placed · edge | 1713 · 961 · 953 · **583** | **575 · 1400 · 1385 · 652** |
+| snag price · cap · placed · edge | 333 · 308 · 306 · **629** | **192 · 439 · 437 · 700** |
+| broadleaf price · cap · placed · edge | 1107 · 588 · 576 · 700 | 1068 · 600 · 576 · 700 |
+| charged | 2,399,673 | **1,530,088** |
+| drawn | 1,191,677 — **50% of what it was charged** | 1,495,767 — **98%** |
+
+**THE ESTIMATOR IS THE FIX AND THE ESTIMATOR IS NOW HONEST**: 98% against 50%,
+so the number the allocator reasons with is the number the GPU is handed. Forty
+per cent more conifer and snag stand, the bill rises 1.19M → 1.50M, and it is
+still well under the 2.4M budget that was previously reported as fully spent.
+
+**AND WHAT BRINGS CONIFER IN AT 652 m IS NO LONGER THE BUDGET.** Its cap is 1400
+— `VEG_CAP.conifer` times the rack's POPULATION CAP — so at Yosemite the
+triangle budget binds nothing at all now and the remaining edge is the
+population stop, which is a dial a player owns (0.25×–16×) and is meant to bind.
+That is the honest end of this thread: the pop-in the seat reported was three
+faults deep — a divisor counting absent families, a proportional cut that
+punished a thin wood, and a price three times the tree — and past them the
+levers are the rack's own.
+
+**THE DUMP COULD NOT HAVE SEEN ANY OF IT.** It reported the caps and never their
+price, and a cap is a CONSEQUENCE of a price — the same fault this file records
+for the terrain's cell table and for `BridgeAssembly.claim`, met again: a probe
+that reports the output of a rule cannot witness the rule. The trees row carries
+`price b1068/c543/s188` now and `__ez().price` sits beside the mean it replaced.
+
+### A tree should exist before it becomes geometry
+
+Asked from the seat, as the reframing after the budget work: *the tree cap is
+the wrong abstraction. A tree should be a persistent fact about the world; only
+its representation should become cheaper with distance.* Right, and the
+distinction it turns on is that "trees pop in" is two different transitions —
+**population pop** (the tree does not exist in the renderer until it enters a
+radius or a budget) and **representation pop** (it exists and changes
+abruptly). An impostor answers the second. It answers the first only if the
+cheap descriptor is known considerably further out than the geometry is built.
+
+**WHAT THE READ FOUND, and it is one function.** `vegRefreshSteps` walked ONE
+ring and did all three jobs on it:
+
+```
+reach = ceil(max(VEG_RANGE 700, treeRange) / VEG_CELL 220)
+pass 1  seedCell(cell)                  ← the MANIFEST was created here
+        cand[fam].push(site, d²)          if d² < treeR²
+pass 2  cap  = ezCapFor(fam)
+        list = nearestStable(list, cap)  ← MEMBERSHIP
+        ezEdge[fam] = √(list[cap-1].d²)  ← and the VISIBLE EDGE
+pass 3  seedCell(cell) again; admitted sites become matrices
+```
+
+So `ezCapFor` was doing three jobs at once — the triangle allocation, the
+population rule, and the horizon — and `seedCell` ran only inside the ring the
+geometry is drawn in. **Past `treeRange` there was no tree at all**: not a
+cheap one, not a mark, nothing to render.
+
+**THE DESCRIPTOR ALREADY EXISTED.** `PlacedVegSite` carries x, z, kind, scale,
+yaw, height, colour, non-uniform width and lean; the form comes from
+`ezVariantAt`, deterministic from the district and stand seeds in `culture.ts`
+and therefore stable under a world rebase; the wind phase is derived in-shader
+from world position, so anything drawn at that position leans with its
+neighbours for free. What was missing was not the record — it was the record's
+REACH.
+
+**AND THREE OF THE FOUR LAYERS ALREADY WORK THIS WAY**: the substrate is a
+persistent field, the sward is a persistent density field drawn as blades near
+and as terrain colour far, and `refreshShrubs` picks its membership by a STABLE
+PER-SLOT HASH against that field, thinned outward — which is the
+`rank = hash(id)` rule, already shipped, one layer down. Trees were the layer
+that conflated existence with geometry.
+
+#### The manifest is its own radius
+
+Sites seed out to `manifestRange` (twice the draw range, capped at 2.8 km,
+`?treemanifest=` in metres); candidates are gathered, admitted and drawn inside
+`treeRange` exactly as before. Four things make that safe, and each was a
+decision rather than a default:
+
+- **IT IS A SECOND WALK, NOT A WIDER `reach`.** The gather pass iterates every
+  site of every cell, and widening its ring pays that over four times the area
+  to throw the results away on a `d² < treeR²` test — a device dump already put
+  gathering at 14 ms over a 27×27 ring. `squareRings` takes a `from` now, so
+  the manifest pass covers only its own ANNULUS.
+- **IT RUNS LAST, after the commit.** `vegSeedLeft` is spent in walk order and
+  both walks are centre-out, so the near cells are always served first: a wider
+  manifest can only delay the far country, never the ground under the wheels.
+- **THE EVIDENCE IS ALREADY THERE at that radius**, which is what makes it
+  affordable at all. `seedCell` waits on the cover raster (z12, a 7×7 ring,
+  ~28 km) and the ecoregion (z5, ~1250 km tiles). Both reach far past any
+  plausible manifest, so this needs no new streaming — the failure a wider ring
+  would have had is simply not present. The same is true of height: `groundAt`
+  is read at PLACE time on every refresh rather than baked into the descriptor,
+  so a tree's Y follows the DEM as it refines and cannot pop when a finer tile
+  lands.
+- **THE CELL PRUNE FOLLOWS `mReach`.** It drops cells beyond `reach + 3`, and
+  left alone it would have deleted what the pass had just seeded.
+
+`vegManifestTally` reports KNOWN against DRAWN — two numbers that were one
+until now — on `__ez().manifest` and as its own telemetry row. It is walked on
+demand and never from the frame loop: it is the O(cells × sites) cost the
+gather pass is kept narrow to avoid, and a probe may be expensive where a
+refresh may not.
+
+#### …and the witness is in node, not in a frame
+
+The claim is that NOTHING ON SCREEN CHANGES, and `client/perf-check.mjs`
+asserts exactly that: it runs the shipped refresh against the pre-slice
+baseline over a deterministic mock world, with `manifestRange` stubbed at
+**twice** the draw range so the new pass actually executes rather than being
+skipped as a no-op. **20 of 20 production refills byte-identical** — the same
+matrices, colours and counts. A pair of browser boots could not have said this
+as strongly, and would have taken six minutes rather than one second.
+
+**THAT CHECK HAD BEEN RED FOR THREE COMMITS AND NOBODY NOTICED — including
+through two deploys.** Bisected: green at `7e45e50`, red from `8acecfe` (the
+demand allocator) onward, because the VM sandbox had no `EZ_DEMAND`,
+`ezCapNominal`, `ezTriPrice` or `treeTriBudget` and the refresh threw on its
+first call. The file's own doctrine already warns that its baseline goes stale
+on any change to the refresh; what it did not say, and now does, is that **a
+sandboxed check breaks on a new free variable, silently, and the only way to
+know is to run it.** It is in the ladder for that reason.
+
+**And the cap rule stays stubbed on both sides of it, deliberately.** The claim
+is that the refill is identical GIVEN THE SAME CAPS; the rule that sets the
+caps changed three times in one day and has its own A/Bs (`tree-edge`,
+`tree-spend`). Wiring `ezCapFor` to the allocator would make a baseline that
+predates the allocator differ for a reason that is not a regression, and the
+check would then be loosened until it meant nothing.
+
+**AND THE FIRST DEPLOY'S CAP WAS IN THE WRONG UNIT, which a device dump caught
+in one row.** `MANIFEST_MAX_M` was 2,800 m — a generous-looking ceiling that is
+EXACTLY the tree rack's own widest DRAW stop. The seat drives at `range 2800m ·
+pop 2x`, so the manifest equalled the draw ring, the annulus was **zero cells**
+and the pass walked nothing — while the telemetry printed `manifest 2800m ·
+cells 729/729` as though it were filling. **A ceiling expressed in the wrong
+unit is a ceiling that can silently coincide with the floor**, and a row that
+cannot report its own no-op is a row that misleads: it says `annulus NONE` now,
+beside the draw range it is being compared against.
+
+The bound is in CELLS (`MANIFEST_MAX_CELLS`), because cells are what costs —
+the seed time is per cell and so, far more pressingly, is the MEMORY, since
+`vegGrid` holds every cell's site list inside `mReach + 3`. The same dump sizes
+that: **57,112 trees across 729 cells, about 78 a cell** before the non-tree
+kinds are counted. So: 225 cells at the 700 m default against the ring's 81,
+and 1,089 at the 2.8 km stop against 729 — an annulus of 360 rather than none.
+
+**WHAT THAT DUMP DID ESTABLISH**, on an iPhone at the widest rack stop, and it
+is the more useful half: the 729-cell ring is **fully seeded with nothing
+deferred**, so the 8 ms budget keeps up with a ring nine times the default's
+area; the manifest pass itself costs **0.0 ms**; and the world knows **57,112
+trees while drawing 2,297 — four per cent.** The other ninety-six are the
+headroom, and they are not where the previous section assumed: `cap 24%` with
+`tris 2.40M` exactly at budget puts **conifer's edge at 318 m inside a 2,800 m
+range**. At this rack setting the pop the seat sees is the CAP, well inside the
+ring, not the ring's own edge — so the first thing an impostor tier owes is the
+cap-cut trees, which are already gathered and need no manifest at all.
+
+**AND THE ADMISSION IS THE TREE COST NOW.** `ezAdmit 9.0 ms a call, max 22`
+against `ezGather 2.3` and `place 2.2`: a heap selection of 2,297 from ~57,000
+candidates, once a refresh, and `treeRefresh` is 4.5% of the session and the
+top non-gap phase in most of the slow frames. Whatever membership rule the
+impostor tier uses, **it must not be another nearest-N over that population** —
+the stable per-slot hash `refreshShrubs` already uses is the shape that scales.
+
+**AND THE TREES ARE 2.40M OF THE FRAME'S 3.51M TRIANGLES.** Sixty-nine per
+cent, at 185 draw calls and 22.9 fps with 73% of wall time in the unattributed
+gap. That is the performance case for an impostor stated in the only numbers
+that can make it: the triangle bill and the share of it vegetation owns.
+
+**Measured live** (`devtools/tree-manifest.mjs`, `at-yosemite`, `?treemanifest=700`
+— the single ring — against the default 1400 m, no page errors either leg):
+
+| | one ring | manifest |
+|---|---|---|
+| cells seeded | 81/81 | **225/225** |
+| broadleaf known · placed · edge | 601 · 589 · 700 | **2,412** · 589 · 700 |
+| conifer known · placed · edge | 1,801 · 1,385 · 652 | **8,487** · 1,385 · 652 |
+| snag known · placed · edge | 439 · 437 · 700 | **1,644** · 437 · 700 |
+| **KNOWN total** | 2,841 | **12,543** |
+| **DRAWN total** | 2,411 | **2,411** |
+| of known, drawn | 85% | **19%** |
+
+**Every placed count and every edge is identical to the tree**, which is the
+second witness to `perf-check`'s byte-identity; the manifest fills COMPLETELY
+(225 of 225 cells) under the existing seed budget; and **four in five trees the
+world now knows about have no representation at all.** That last number is the
+headroom the impostor tier draws into, and it did not exist as a quantity
+before this unit — the renderer's reach and the world's reach were one number.
+
+**READ THE `settled` LINE: the second leg is flagged provisional.** Its gate
+wants the drawn triangles AND the seeded-cell count quiet for four consecutive
+polls, and over 327 s it never saw four in a row — the cells reached 225/225
+and held, so it is the triangle count moving by a tree or two on the harness's
+two-second frames. The identity claim does not rest on the gate: the placed
+counts and edges match the SETTLED first leg exactly, which is the comparison
+that matters. A gate that demands two signals be simultaneously still is
+stricter than either claim needs, and is worth loosening before the next run
+rather than being read as a failure.
+
+### A first-pass impostor: a tree acquires detail, not existence
+
+The seat's reframing after the budget work: *the tree cap is the wrong
+abstraction. A tree should be a persistent fact about the world; only its
+representation should become cheaper with distance.* The manifest made the fact
+reach past the geometry; this is what stands where the geometry does not.
+
+**IT DRAWS WHAT ADMISSION TURNED DOWN, not what is past the ring**, and the
+device dump is why: at the seat's rack the budget is spent to the last triangle
+and conifer's edge is 318 m inside a 2,800 m range. The population the player
+watches appear is cut by the CAP, well within the ring — and those trees are
+already gathered, so the tier costs no new walking at all.
+
+**MEMBERSHIP IS A STABLE HASH, NEVER A SECOND NEAREST-N.** `ezAdmit` spends
+9 ms selecting 2,297 of ~57,000; another selection of that shape over the
+remaining fifty-four thousand is neither affordable nor correct, because a rank
+that moves with the truck is the reshuffle this programme is removing. The hash
+is keyed on the tree's own position — decided once, the same from every vantage
+— and thins as the inverse square, which is constant density on the GLASS.
+
+**AND FULL DENSITY STARTS AT THE FAMILY'S OWN ADMITTED EDGE.** The first cut
+thinned from a fixed 260 m while the geometry stopped at 428, so every tree the
+tier could draw was already deep in the thinned region and ONE IN FIVE stood up
+(321 of 1,614). A tree a metre past the edge must be drawn with near-certainty
+or the handoff is a thinning, which is the pop wearing a gentler name. Anchored
+to `ezEdge[fam]`: 932 of 1,614, and the rule is adaptive in the right direction
+— a family the budget cuts hard starts thinning early, one it barely cuts thins
+late.
+
+Four more decisions, each with its reason in the code: the form is the TREE'S
+own, cached per site (a cone at 400 m that is a round crown at 200 has changed
+species in front of the player) at 400 new ones a refresh; the instance matrix
+is translation and scale only, so the billboard is one line and the tree's yaw
+phases the SILHOUETTE rather than turning the card; two cards weighted
+continuously by the camera's elevation, set in `aimSky` because the dock's POV
+is 1.3 m up while the chart's may be kilometres; and the ground is the raster,
+not `groundAt`, because nothing here is nearer than the cap edge and the mesh
+read is the refresh's dearest call.
+
+**Measured**, `devtools/tree-impostor.mjs` on `at-yosemite` at a 900,000
+triangle budget, ONE boot, interleaved off / on / off:
+
+| | |
+|---|---|
+| skeletons | 0.88M triangles, edges b689 / c428 / s482 |
+| impostors | **932 of 1,614 offered · 3.7k triangles · 0.42% of the vegetation bill** |
+| the off leg | drew 0 |
+| census (independent) | `veg-impostor` 3,728 triangles in the scene — 932 × 4, exactly |
+| whole frame: floor / signal | 0.904 / **2.248** /255 |
+| the canopy band: floor / signal | 0.325 / **10.673** /255 · 0.85% / 10.77% of pixels |
+
+**THE WHOLE-FRAME NUMBER UNDERSTATES IT BY AN ORDER OF MAGNITUDE, and the band
+is why.** A chase frame is mostly sward and sky; this tier draws in a strip at
+the treeline. Read whole it clears its floor by 2.5x, read over a band that
+still caught the grass by 3, and read over the canopy alone by **33**. The
+signal never moved — what changed is how much of the measurement was of
+something else. *A mean over pixels the term cannot reach is not a weaker
+measurement, it is a different one.*
+
+And the frames say what the numbers cannot: the wood's canopy had HOLES in it
+where the cap had cut trees, and the impostors fill them — dark green masses in
+the same tone as the skeletons beside them, not sprites standing out of a
+treeline. **That is the tier's real job stated as a picture**: the cap was not
+merely bringing the edge in, it was leaving gaps in the middle of a wood.
+
+**NOT DONE, DELIBERATELY:** the manifest's annulus is not drawn (it needs its
+own gather, and the cap is the louder fault); there is no geometry-impostor
+dissolve, because a dissolve between representations that do not yet agree
+hides the disagreement rather than fixing it; and the side card faces the
+camera about Y, so orbiting a NEAR impostor would turn its crown — a
+directional atlas is the answer, and the distances this tier draws at keep the
+swivel under the quantiser for now.
+
+**THE TOOL'S OWN FOUR FAULTS**, because every one of them reported a working
+tier as a broken one. `?treetris=` is in RAW TRIANGLES and was passed
+megatriangles, so the budget was one triangle and no skeleton was admitted at
+all — an A/B between nothing and impostors, which cannot show a handoff.
+`__census()` returns `byTris`/`byCount`, not `kind`/`tris`, so the independent
+witness read undefined and printed zero while 971 impostors were staged; and
+`byTris` is the TOP TWELVE, so absence there is not zero and must be printed as
+a different statement. `ez.placed` is an array of records (`[object Object]`,
+for the second time this session). And `imgdiff`'s last line is the output
+PATH, so the diff numbers were replaced by a filename.
+
+### …and then the seat photographed it: the crown was lit in the wrong space
+
+Five frames and a device dump, sent together with no words. The frames show
+distant treelines as dark flat bands and very large dark masses in the drone
+shots; the dump names a cost regression. Two separate faults, and the first is
+one line.
+
+**`normal` AT `normal_fragment_begin` IS VIEW SPACE, AND THE CARD WROTE WORLD
+SPACE INTO IT.** three fills that variable from `normalMatrix * objectNormal` —
+the inverse-transpose of the MODEL-VIEW matrix, so view space — and it is the
+frame every lighting chunk downstream reads, and the frame the sun direction
+arrives in. The first cut built the crown's analytic ellipsoid normal out of
+`vImpRight` and `vImpOut`, which are WORLD directions built in the vertex
+shader, and assigned it straight across. So the Lambert dot product was between
+two different frames. Two consequences, and the second is the one the frames
+show: the stands read flat and dark, and **their shading TURNED WITH THE CAMERA
+rather than with the sun** — orbit the truck and a wood changes brightness. One
+matrix multiply at the handover (`normal = normalize((viewMatrix * vec4(n, 0.0))
+.xyz)`; three declares `viewMatrix` in every fragment shader it builds).
+
+**AND THE DISSOLVE MOVED TO THE FRAGMENT, which is cheaper AND better.** It was
+a per-instance colour mixed on the CPU — a `terrainPalette` and a `sampleCover`
+for every faded tree in every refresh — and it STEPPED, because a refresh is a
+few times a second while the distance to a tree changes every frame. It rides
+the camera's own distance as a varying now (the vertex shader already had
+`impFl`), continuous, and costs the membership pass nothing at all.
+
+**IT GOES AFTER `color_fragment`, NOT BEFORE IT.** three's Lambert chain runs
+`map_fragment` and THEN `color_fragment`, so at the block where the silhouette
+is cut `diffuseColor` is still the material's white and the tree's own instance
+colour has not arrived. A mix toward the ground written there is multiplied by
+the tree afterwards — a DARKENING, darkest where the fade is strongest, which is
+the opposite of a dissolve. The shade term beside it (`*= 0.78 + 0.30 * impLo`)
+is a multiply and commutes; this one does not. **The general rule: a chunk
+injection's correctness depends on where in the chain it lands, and a multiply
+and a mix do not have the same answer to that.**
+
+### The two dials, and why REACH has to report three numbers
+
+Asked from the seat: *is there a dial I can experiment with more or less
+aggressive imposters (range near and far? Beyond 2.8km?) — the dial should have
+wide extremes either side of 'stock'.* Two dials, because the seat was asking
+two different questions and one number cannot answer both:
+
+- **IMPOSTOR REACH** — `OFF · 0.5X · 1X · 2X · 4X · 8X` of the DRAW RANGE, so
+  the pair compose: a rack already at 2.8 km asks for 5.6 or 11.2 km and the
+  answer is a horizon rather than a wall. OFF stands the whole tier down, which
+  is also the A/B `__impostor()` drives.
+- **IMPOSTOR DENSITY** — `0.25X · 0.5X · 1X · 2X · 4X · ALL`, scaling the
+  inverse-square keep probability, which is the same thing as scaling the
+  full-density radius squared. So 4X thickens a far wood without moving its
+  edge and 0.25X thins it without bringing the edge in.
+
+**Move either and the other holds**, which is the property that makes them two
+dials rather than one aggressiveness slider. `?impreach=` is in METRES (the unit
+the rack reads) and `?impdensity=` a bare multiplier, both exact and unsaved.
+
+**REACH IS A REQUEST, NOT A SETTING, and that is why the readout carries three
+numbers instead of one.** A tree can only be drawn if it is KNOWN, and what is
+known is the manifest, which is bounded by cells, which is bounded by memory. So
+the dial ASKS, the manifest GRANTS, and the row says which of the two bound it:
+`reach 5600m of 11200m asked (MANIFEST)`. Reporting the grant alone would repeat
+`MANIFEST_MAX_M` exactly — a ceiling silently coinciding with a floor, and a row
+that reads plausibly while the dial above it does nothing.
+
+**AND THE MANIFEST'S CEILING LIFTS WHEN SOMETHING ASKS.** `MANIFEST_MAX_CELLS`
+(1,100, about 3.5 km) is sized for the manifest's OWN purpose — knowing a little
+further than the geometry draws, so the far edge is a handoff rather than a
+frontier. The REACH dial is a different purpose: it asks the manifest to BE the
+population it draws. Clamping that to the stock ceiling would make the dial's
+upper stops lie, so `MANIFEST_MAX_CELLS_WIDE` is 6,241 — 38 rings at 220 m,
+about 8.4 km, and on the order of a third of a million sites held in `vegGrid`.
+Deliberately unsafe at the top, exactly as the rack's other tree stops are: it
+exists to find the wall rather than to promise there is not one.
+
+**THE FAR CANDIDATES ARE A SEPARATE LIST, AND THE SEPARATION IS LOAD-BEARING.**
+`cand[fam].length` is the DEMAND the water-filling allocator divides the
+triangle budget by, so a tree six kilometres out joining that list would take
+slots from a tree at four hundred metres and move the admitted edge IN — the
+proportional-cut regression, arrived at by a different road. `candFar` is
+gathered in its own annulus in the `ezGather` phase (which already walks cells
+with a `yield` between them, and where the manifest's cells are), and nothing
+beyond the draw range may vote on the geometry budget. It may only ask for a
+card.
+
+### And the membership pass had become the largest tree phase
+
+The same dump: `impostor 12.6 ms/call (max 34)` in `tree phases`, above
+`ezAdmit 8.6` — because the pass walks all 54,997 offered candidates. Three
+cuts, each against something the dump named, and none of them cleverness:
+
+- **THE MATRIX IS WRITTEN, NOT COMPOSED.** `vegDummy.updateMatrix()` builds a
+  full TRS from a quaternion, and this instance has no rotation BY CONTRACT —
+  the vertex shader's billboard is one line precisely because the instance
+  matrix carries translation and scale only. Writing the six live elements
+  states that contract in the one place that could break it and drops a
+  quaternion-to-matrix per impostor per refresh.
+- **THE ADMITTED-SET LOOKUP IS SKIPPED WHERE IT CANNOT HIT.** Every tree the
+  geometry took is within `ezEdge[fam]`, and the full-density radius is at least
+  that, so beyond it the membership test cannot collide with admission and the
+  `Set.has` is pure cost — an object-identity hash on the overwhelming majority
+  of steps. And the density test is written as `hash * d2 > full2` rather than
+  `hash > full2 / d2`: same predicate, no divide, and it is the hottest line in
+  the pass.
+- **THE LOOP IS INDEXED.** A `for (const [d2, v] of list)` over tuples pays the
+  iterator protocol and a destructure per step, and at 55,000 candidates — more
+  with REACH up — that is a measurable share on its own.
+
+Not verified on a device: the harness's frames are seconds apart and cannot
+price a per-refresh CPU cost the way a phone can. The next telemetry paste is
+the verification, and the row to read is `impostor` in `tree phases`.
+
+**Measured after all of it** (`tree-impostor.mjs`, `at-yosemite`, one boot,
+interleaved off/on/off, at the stock dials so the comparison is against the
+recorded numbers): 933 of 1,617 offered, census `veg-impostor` **3,732 = 933 x
+4 exactly**, the canopy band's signal **10.416/255 against a floor of 0.252 —
+41x** — so the tier draws exactly what it drew before the fixes, with the
+lighting in the right frame.
+
+### …and it was STILL solid black, because an undeclared attribute reads as zero
+
+The seat again, with three frames, range high and population low to force the
+tier: *impostors are still just solid black.* They were, and the view-space
+normal above — a real bug, correctly fixed — was never the cause of it.
+
+**`vertexColors: true` DEFINES `USE_COLOR`, AND `color_vertex` THEN MULTIPLIES
+BY THE GEOMETRY'S `color` ATTRIBUTE.** three 0.160:
+
+```glsl
+#ifdef USE_COLOR
+	vColor *= color;            // the GEOMETRY attribute
+#endif
+#ifdef USE_INSTANCING_COLOR
+	vColor.xyz *= instanceColor.xyz;
+#endif
+```
+
+`impostorGeometry()` sets position, uv, `aCard`, a normal and an index, and no
+`color`. **An undeclared vertex attribute reads as (0, 0, 0, 1) in WebGL**, so
+`vColor` is zero and `color_fragment`'s `diffuseColor.rgb *= vColor` takes the
+whole tier to black — silhouette perfect, alpha correct, lighting irrelevant.
+`flora-ez.ts` sets one on every baked skeleton (its `decode` writes `col`),
+which is exactly why the trees standing beside these were lit and these were
+not; every other `vertexColors: true` material in this client draws geometry
+that carries one, and the impostor is the only mesh whose geometry was written
+fresh.
+
+**TURNING `vertexColors` OFF IS THE WRONG REPAIR.** `USE_INSTANCING_COLOR` still
+computes `vColor`, and this three's `color_fragment` applies it only under
+`USE_COLOR` or `USE_COLOR_ALPHA` — so the tier would come out WHITE instead of
+black. The fix is a `color` of ones: `vColor = 1 x 1 x instanceColor`.
+
+**AND THE FRAMES CARRIED THE PROOF, which is worth knowing as a signature.** The
+near impostor was pure black and the distant treeline a dark grey-green — that
+second colour is the distance dissolve's own `mix(0, ground, 0.7)` running on
+top of the zero. A thing that is black close up and tinted far away has been
+multiplied by nothing, not lit wrongly.
+
+### THE DIFF SCORED THE BROKEN BUILD HIGHER, AND THAT IS THE LESSON
+
+`tree-impostor.mjs` measures how many pixels MOVED and by how much, against a
+same-frame floor. **A tier drawing solid black holes in a green hillside moves
+more luma than one drawing trees**, so the metric did not merely fail to catch
+this — it rewarded it. Measured at `at-yosemite`, the same fixture and crop, the
+broken build (`REV=42448df`) against the fix:
+
+| | broken | fixed |
+|---|---|---|
+| band SIGNAL (the metric this tool was built on) | **10.524/255** | **7.83** |
+| ink ON, over the pixels the tier changed | **18.3/255** — one palette step | **44.1** — two and a half |
+| the hillside it replaced | 110.1 | 115.1 |
+| changed pixels under 9/255 (half a step of black) | **27.3%** | **2.2%** |
+
+So the tool now reports the INK: the mean luma of the changed pixels in the ON
+frame beside what the OFF frame had there, and the share of them sitting at the
+bottom of the ramp. That is a statement about the COLOUR where every other
+number here is a statement about the CHANGE, and it is the fourth time this file
+has recorded the same shape — the terrain's cell table, `BridgeAssembly.claim`,
+`__tdetail().mat`, and now this: **a probe that reports that something happened
+cannot witness what happened.**
+
+**THE BAR IS IN PALETTE STEPS AND THE CONTROL IS ITS PROVENANCE.** One step is
+about 18/255, so the gate is two steps of ink (36) and a tenth of the pixels at
+the floor — and `REV=` was added to the tool for exactly this, because the first
+cut of the gate (`on < 18`, `dark > 50%`) did NOT fire on the broken build and
+was therefore decoration. A check that has not been shown to fail on the fault
+it names is not a check. The broken build clears both new bounds by a wide
+margin and the fix misses both by one.
+
+**AND THE TIER HAS NO NEAR LIMIT, BY DESIGN — which is what the seat's forced
+dials exposed.** Full density runs from the family's own admitted edge INWARD
+with `keep` capped at 1, so with POPULATION CAP low the geometry's edge collapses
+and a tree ten metres away is turned down by the cap and wears a card. That is
+the tier doing its job (it draws what admission refused, wherever that is) and
+it is also the module's own recorded caveat — *a directional atlas is the answer
+and the distances this tier draws at keep the swivel under the quantiser* — met
+at a setting where those distances are not the shipped ones. At stock dials the
+nearest impostor is past the skeletons' edge; forced, it is in your lap, and a
+two-card billboard at ten metres is a two-card billboard.
+
+### …and the device priced the membership pass: a list you allocate to throw away
+
+The verification the section above asked for arrived as a dump, at the seat's
+own forced dials (REACH 8X, DENSITY 4X, Yosemite, 462 s, chase): `impostor
+39.7 ms/call (max 85)` in `tree phases` — **five times `ezAdmit`**, the largest
+tree phase, and the one phase in a deliberately resumable refresh that never
+yielded. Beside it the row that explains it: `drawn 17709/450174 offered
+(384669 past the draw ring)`.
+
+**A LIST IS A THING YOU ALLOCATE AND THEN WALK TWICE.** Three hundred and
+eighty-four thousand tuples built every refresh — several megabytes of
+short-lived allocation — and then walked in full to throw away 96% of it on a
+hash the gather could have run where the site was already in hand. The density
+test needs the tree's position and its family's full-density radius and nothing
+else, so it moved into the `ezGather` far annulus and `candFar` now holds only
+survivors. **Reject at gather time, not in the pass** — the same shape as
+`onCarriageway` being asked only of sites that survived admission, one layer up.
+
+**THE RADIUS IT TESTS AGAINST IS LAST REFRESH'S EDGE, and that is the
+`ezTriPrice` construction again**: the number this refresh needs is decided by
+an admission that has not run yet, and the previous sweep's answer converges in
+one and then stays converged, because the palette and the budget are stable per
+district. So the far set is NOT byte-identical to the one the pass used to
+build — it is one sweep behind after a hop and right from the second — and that
+is the trade, stated rather than hidden.
+
+**AND THE PASS YIELDS NOW, LIKE EVERY OTHER PHASE OF THE REFRESH.** One line,
+every `IMPOSTOR_STEP` (4,096) candidates. What makes it free is the property the
+sliced refresh already rests on: **staging is separate from the instances and
+the commit is one slice at the end**, so a frame drawn between two slices shows
+the previous sweep whole. A phase that writes into the instance buffers directly
+could not have taken this line at any step size.
+
+**THE READOUT PRINTS A PAIR NOW, BECAUSE ONE OF THE NUMBERS NARROWED.**
+`offered` is what the PASS considered — every near candidate, and the far ones
+that already survived the gather — so it is no longer the population the tier
+was offered, and quoting it alone would understate the manifest by twenty-five
+times. `impFarSeen` counts what the gather LOOKED at past the draw ring, and the
+row reads `drawn A/B offered (C kept of D seen past the draw ring)`. A counter
+whose meaning changes under a cut has to be renamed or paired; leaving it to be
+read the old way is how a measurement quietly becomes a fiction.
+
+**Verified, not measured.** `perf-check.mjs` is 20 of 20 production refills
+byte-identical (its sandbox learned `IMPOSTOR_STEP` — at **64** there rather than
+the game's 4,096, because at the game's step this fixture's lists never reach one
+and a yield that never fires cannot witness that the commit is unaffected);
+`tree-impostor.mjs` at stock dials draws **931 of 1611 offered, census
+`veg-impostor` 3,724 = 931 × 4 exactly**, edges b689/c428/s482 unchanged, ink
+**44/255 against the hillside's 111.2 with 2.3% at the floor** — the same
+numbers as the run before the cut. **The cost itself is not verified here**: the
+harness's frames are seconds apart and cannot price a per-refresh CPU cost, and
+stock dials never run the far gather at all (`impR > treeRange` is false), so
+what this proves is that the near path and the commit are untouched. The next
+dump at REACH 8X is the measurement, and the row is still `impostor` in `tree
+phases`.
+
+### …and "waiting on a bake" was two opposite facts in one phrase
+
+The probe that row asked for, and it overturns the row's own wording. `waiting`
+counted BOTH refusals `impSlotFor` can make, and they are not alike:
+
+```ts
+if (impSlotNext >= IMP_ATLAS_SLOTS) return null;        // NEVER. no slot is ever re-used
+if (impBakedNow >= IMPOSTOR_BAKE_PER_REFRESH) return null;  // this sweep. two a refresh
+```
+
+**A SLOT IS NEVER RECLAIMED AND `impSlotNext` NEVER DECREASES**, so once the
+atlas is full a key it does not already hold can never be baked, at any point in
+the session. Both paths returned null, both incremented one counter, and the
+telemetry printed one sentence — so a device reporting five thousand trees
+"waiting" was reporting five thousand trees that will **never draw**, in the
+words of a queue that drains. `impProf.locked` is the second case now and the
+row says `LOCKED OUT (atlas full)` in different words on purpose.
+
+**AND THE CEILING SAYS EIGHTEEN IS STRUCTURALLY TOO FEW.** The atlas's own
+comment sizes it at *"comfortably more than the ten a district's palettes can
+ask for (five families at EZ_PALETTE_N)"* — and that counts HABITS. `ezPalette`
+does draw over habits; `ezPickVariant` then reaches **every PEER of the habit it
+landed on**, by the individual seed, and a phenotype state reaches outside the
+palette entirely. Counted from the bake, offline, in `devtools/imp-demand.mjs`:
+
+| family | variants | habits (sizes) | a district can want |
+|---|---|---|---|
+| broadleaf | 16 | 9 [3,2,2,2,2,2,1,1,1] | 5 |
+| **conifer** | 12 | 4 [6,3,2,1] | **9, or 11 with a phenotype** |
+| acacia | 3 | 1 [3] | 3 |
+| palm | 2 | 1 [2] | 2 |
+| snag | 4 | 3 [2,1,1] | 3 |
+
+**24 distinct keys in the worst single district against 18 slots** — and a
+2.8 km reach spans up to four 6 km district cells, so the true demand over a
+drive is a multiple of that. The atlas fills, latches, and every variant met
+afterwards is locked out for the session. That is the seat's dump exactly.
+
+**THE FIRST VERDICT THE PROBE GAVE WAS WRONG, AND CATCHING IT IS THE POINT.**
+It read "refused with no idle slots" as too-small and reported that on an atlas
+at **4 of 18**, where the only thing refusing was the two-bakes-a-refresh budget
+and every one of those trees would have had a slot within a few sweeps. **An
+atlas with room is never too small, whatever it happens to be refusing this
+frame.** Being FULL is the precondition for every verdict but `filling`, and the
+shipped counter had no way to say it — which is the same fault as the phrase it
+was diagnosing, met inside the diagnosis.
+
+**Measured**, `at-yosemite`, settled, `KM=0`:
+
+```
+atlas 6/18 · need 8 keys · 6 in use · 0 idle
+REFUSED 82 trees over 2 keys — 82 WAITING on the bake budget, 0 LOCKED OUT
+FILLING — the atlas has ROOM
+```
+
+…and the per-slot distribution beside it, which is the other thing the count
+could not say: `conifer:8` carries 559 trees and `conifer:11` carries 20, so a
+slot is not a unit of anything. `snag:1` (74 trees) and `snag:2` (8) were the
+two still waiting.
+
+**THE HARNESS CANNOT REPRODUCE THE LOCKED CASE AND SAYS SO.** A driven 24 km
+leg at Nagato through the curl relay streamed **nothing** — 0 impostors drawn,
+2 slots baked and both idle — because a 2.8 km tree ring does not fill over a
+relay at three frames a second. A FIXTURE has already arrived, which is exactly
+what this needs, and cannot drive across districts, so it measures one place's
+demand well and the ratchet not at all. The tool prints `INCONCLUSIVE` rather
+than a zero: **a census of a world that did not stream is a census of nothing.**
+
+### …and the fix: forty slots, because a permanent store is sized by the WHOLE space
+
+The seat took the diagnosis and corrected the proposed fix, and the correction
+is the important part. **Thirty-two slots is a good local fix to eighteen and
+stops five short of making the invariant true.** The live build defaults EZ
+VARIANTS to ALL and the variant space is broadleaf 16, conifer 12, acacia 3,
+palm 2, snag 4 — **37 globally addressable keys** — so a 32-slot atlas leaves
+this perfectly legal state: `atlas 32/32`, five variants met later, permanently
+locked out. **You do not size an append-only cache against the maximum demand
+of one district.** There are two internally consistent designs — a PERMANENT
+atlas where every possible variant fits and no eviction is needed, and a
+WORKING-SET atlas with safe indirection and eviction — and this one is clearly
+trying to be the first, so the right move is to finish that design.
+
+**AND THE RECTANGLE WAS WASTING SEVEN CELLS A VARIANT.** A slot reserved an
+8 × 4 block for 25 views — eight azimuths at three elevations, plus the plan —
+so its last row read `TOP . . . . . . .`. At 40 px a 1024² atlas is a 25 × 25
+tile grid = 625 cells, which is 25 variants packed compactly: still not enough.
+At **32 px it is 32 × 32 = 1,024 cells, and 1024 / 25 = 40 variants.**
+
+| | tile | layout | slots | memory |
+|---|---|---|---|---|
+| shipped | 40 px | 3 × 6 blocks of 8 × 4 | **18** | 4 MB |
+| the local fix | 32 px | 4 × 8 blocks of 8 × 4 | 32 | 4 MB |
+| **built** | **32 px** | **compact, 25 tiles a slot** | **40** | **4 MB** |
+| the other way | 40 px | 6 × 12 blocks | 72 | **16 MB** |
+
+Forty fits all 37 with three spare, in the existing 1024² RGBA8 target, with no
+eviction, no indirection and no cache invalidation — so **slot indices stay
+permanent, which is what lets an instance carry one.** Reclaiming was the third
+option and is the risky one for exactly that reason: an instance carries its
+slot INDEX, not its key, so re-baking a slot silently re-dresses every tree
+already standing on it.
+
+**A SLOT IS A LINEAR RUN OF TILES, NOT A RECTANGLE.** Slot *s* owns tile cells
+`[s·25, s·25+25)` and they WRAP across rows, so a variant is contiguous in the
+index and is not a rectangle in the texture. Nothing needed it to be: the bake
+renders each tile into its own viewport and the fragment derives a tile from
+the slot and the view index arithmetically. What the rectangle bought was the
+padding it forced. Two consequences worth knowing:
+
+- **the half-texel inset matters MORE**, because a tile's neighbour is no
+  longer another view of the same tree — the last tile of one slot sits beside
+  the first of the next;
+- **and `__impatlas` reads the whole atlas once** (4 MB, one round trip) rather
+  than a rect per slot, because there is no rect. A read per tile would be a
+  thousand `glReadPixels` calls.
+
+**THE INVARIANT IS ASSERTED, IN PURE NODE, INSTANTLY**
+(`devtools/imp-atlas.test.mjs`): `IMP_ATLAS_SLOTS >= Σ ezVariants(fam).length`,
+40 ≥ 37 today. **If someone bakes a fifth conifer habit and takes the total to
+41, that fails rather than silently reintroducing trees that disappear** — the
+whole reason it is a test and not a comment. It also holds the packing itself:
+no view outside the atlas, no two views sharing a tile, all 1,000 cells
+distinct, the tile index exact in a float32, and — the fault this file already
+records twice — **`viewOrigin` on the CPU and `impTileRect` in GLSL landing on
+the same tile for every one of the 1,000**, checked by re-deriving the shader's
+arithmetic from its own source text.
+
+### …and a pending key borrows a sibling rather than drawing nothing
+
+Capacity is only half of it, and the Yosemite reading proves the other null path
+is visually real: `82 waiting / 0 locked / 6 of 40`. The bake budget is two
+variants a refresh at roughly 900 ms a refresh, so a cold footprint takes
+several seconds to photograph its palette — and this remains legal even with
+forty slots:
+
+```
+tree needs an unbaked variant → atlas has room → today's two tokens spent
+→ continue → tree absent → 0.9 s later, maybe
+```
+
+That is the programme's own rule broken in the small: **representation may
+degrade; existence may not.** The budget stays — it protects frame time — and
+the refusal now falls back instead of vanishing.
+
+**THE STAND-IN IS A RESIDENT SIBLING OF THE SAME FAMILY**, not the analytic
+width profile the no-atlas path uses: a real conifer silhouette for a conifer,
+through the same shader path, at no extra cost, correctly lit and correctly
+dissolved. `impFamSlot` holds the FIRST slot baked per family, first so the
+choice is stable across sweeps and a pending tree does not change silhouette
+every refresh while it waits. What it is NOT is the right tree — the card is
+sized by the stand-in's own box, so a columnar aspen standing in for a
+spreading oak is the wrong width for a few seconds. **Wrong width beats
+absent.**
+
+**AND IT IS DELIBERATELY NOT CACHED.** `impFormOf` is what makes a form choice
+permanent; a cached stand-in would never upgrade. The cost is that those sites
+re-run `ezVariantAt` next sweep, which is the form budget doing exactly what it
+is for. Measured, `at-yosemite` settled: **7 waiting, 7 stood, 0 absent.**
+
+Not done, and worth saying: there is **no cross-fade** between the stand-in and
+the tree's own card. The swap happens at a refresh boundary at impostor
+distance, so it is a sub-pixel change of silhouette — but a short stable-dither
+overlap is the honest finish, and it needs a second atlas sample and a blend
+factor.
+
+**Measured**, `devtools/tree-impostor.mjs` on `at-yosemite`, the working tree
+against `REV=608e212` (the packing the only difference), settled:
+
+| | 18 slots, rectangular | 40 slots, compact |
+|---|---|---|
+| impostors, census `veg-impostor` | **3,540 tris** | **3,540 — identical** |
+| edges b / c / s | 675 / 351 / 340 | 674 / 351 / 340 |
+| ink, ON against the ground it replaced | 31.1 vs 31.4 (0.99×) | 30.0 vs 27.7 (1.08×) |
+| changed pixels under half a palette step | 9.4% | 12.4% |
+| side tiles carrying nothing | 0 of 0 *(the tool read a stale field)* | **0 of 240** |
+| atlas | 10/18 in 74.6 ms | 10/40 in 129.7 ms |
+
+**THE PIXEL COLUMNS CANNOT RESOLVE A DIFFERENCE AND SHOULD NOT BE READ AS
+ONE.** Three runs of this tool on this fixture changed 25, 105 and 159 band
+pixels, and their own same-frame floors ranged over ten times — so the spread
+is the instrument, not the change. What IS sound is the identical census, the
+identical edges, the ink well clear of the black gate, and **`0 of 240` — every
+side tile of every baked slot carrying silhouette, read back through
+`viewOrigin` in the new layout.** The claim rests on those plus the pure test;
+the frames show a correct treeline with no black and no smearing.
+
+**AND `0 of 0` IS WHAT A STALE FIELD LOOKS LIKE.** The tool counted empty tiles
+with `cov.slice(0, atlas.cols * (atlas.rows - 1))` — the rectangular block's
+shape — and `cols`/`rows` no longer exist, so it printed `undefinedxundefined`
+and checked nothing at all for a whole run. **A field that prints `undefined` is
+a field the tool has stopped measuring**, and a zero beside it is not a result.
+
+### …and the contact sheet found the atlas reading the wrong tile, every tile
+
+The seat's report: *I'm concerned that imposters don't look enough like their
+counterparts, noticeable when swapped. Can we show a contact sheet of imposters
+and their reals side by side?* The sheet is `__impsheet` — `__ezsheet` with a
+second cell — and on its first run **every one of the thirty-seven cards drew
+nothing at all.**
+
+**THE BAKE COUNTS TILE ROWS FROM THE TOP AND A TEXTURE COUNTS THEM FROM THE
+BOTTOM.** `bakeImpAtlasSlot` places a view's viewport at `vy = size - py - T`,
+and its own comment says why: `viewOrigin` returns a grid whose row 0 is the
+TOP, and a render target's rows run from the bottom. `__impatlas` reads the
+atlas back the same way. `impTileRect` — the shader — took `floor(t / G)`
+straight as a v offset, so it read row `G - 1 - ty` for every tile in the
+atlas:
+
+| slot · view | tile | grid | the bake writes at row | the shader read row |
+|---|---|---|---|---|
+| 0 · 0 | 0 | (0, 0) | **992** | **0** |
+| 5 · 3 | 128 | (0, 4) | **864** | **128** |
+| 39 · 24 | 999 | (7, 31) | **0** | **992** |
+
+They agree for no tile at all. In the SHEET, where a private atlas holds one
+slot and the other 999 tiles are cleared, every card read an unwritten tile and
+drew nothing — which is why the fault was visible there and nowhere else. **In
+the WORLD, where a thousand tiles are occupied, the same fault reads as trees
+wearing each other's faces**: a card samples some other variant at some other
+elevation, correctly lit, correctly sized, and plausibly a tree. That is the
+seat's report exactly, and it is the third time this file has recorded a bake
+and a lookup disagreeing about where a tile is.
+
+**AND `imp-atlas.test.mjs` PASSED THROUGHOUT, because it was checking the wrong
+unit.** It compared `[t % G, floor(t / G)]` against `viewOrigin` — the same
+expression twice, true whichever way the y axis runs — and the whole fault was
+in that axis. The claim is made in FRAMEBUFFER ROWS now, where the two sides
+can be wrong independently: the row the bake writes a view at must be the row
+the shader samples it from. **With the negative control the old form fails on
+1,000 of 1,000 tiles**, which is what says the check can now see the fault it
+names; the form it replaced could not have, and a check that cannot fail on its
+own subject is decoration.
+
+**Measured**, `at-yosemite`, 200 m, elev 8°, the sheet's own private atlas:
+
+| | before | after |
+|---|---|---|
+| cards drawing anything | **0 of 37** | **35 of 37** |
+| mean silhouette IoU against the skeleton | 0.000 | **0.438** |
+| the two that still draw nothing | — | snags at 14 px whose own tree is 1% of its box |
+
+`tree-impostor.mjs` reads the same as it did (891 drawn, census 3,564 = 891 × 4
+exactly, 0 of 240 upright tiles empty, ink 0.54× the ground) — **and it could
+not have caught this**, which is worth knowing before it is reached for: it
+reads the atlas back through `viewOrigin`, which agrees with the bake, and its
+pixel metrics cannot tell a card drawing the wrong tree from one drawing the
+right one. The witnesses here are the pure test's negative control and the
+sheet's before/after.
+
+### …and the card is baked from a crown the skeleton has already closed
+
+The sheet's second finding, and it is the one the seat's sentence is about once
+the tile is right. At 200 m a card carries **about half** the lit pixels of the
+tree it stands in for:
+
+| by form, at 200 m | IoU | coverage, card ÷ tree | parts, tree → card |
+|---|---|---|---|
+| round (12) | 0.53 | **0.54** | 1 → 2.2 |
+| conic (12) | 0.40 | **0.44** | 1.5 → 5.6 |
+| umbrella (5) | 0.49 | 0.50 | 1 → 2.4 |
+| columnar (2) | 0.54 | 0.56 | 1 → 2 |
+| palm (2) | 0.56 | 0.63 | 1 → 1 |
+
+**IT IS THE CROWN MERGE, AND THE A/B SAYS SO OUTRIGHT.** `bakeImpAtlasSlot`
+renders through `bakeMaterial`, which is a plain
+`projectionMatrix * modelViewMatrix * position` — no merge at all — while the
+skeleton it replaces is drawn through `ezMaterial`, whose crown slides onto its
+own silhouette hull and grows into one mass below 58 art pixels. So the atlas
+photographs the OPEN crown and the card stands where the CLOSED one would.
+Re-run with `?ezmerge=0`, which draws the skeleton exactly as baked at every
+distance:
+
+| | shipped | `?ezmerge=0` |
+|---|---|---|
+| mean IoU | 0.438 | **0.731** |
+| coverage ratio, round / conic / umbrella | 0.54 / 0.44 / 0.50 | **1.02 / 1.00 / 0.96** |
+
+The ratio goes to one across every form, so the whole deficit is the merge and
+none of it is the tile's resolution or the alpha test.
+
+**THE MERGE IS `EZ_MERGE_GLSL` NOW, AND THE BAKE READS THE SAME STRING.** It
+was eight lines inside `ezMaterial`'s `begin_vertex` block; it is a function
+(`ezMergeAt`) beside `EZ_MERGE_GROW`, which the material calls per instance
+from the camera and `bakeMaterial` calls at a stated size on a plain mesh with
+no instance matrix at all. A second copy of it is the fault the file already
+records one constant up: the hull is inset by exactly what the growth adds
+back, so two copies of either number is *a tree whose far crown is a different
+SIZE from its near one*.
+
+**AND THE BAKE STANDS AT THE BOTTOM OF THE BAND (`EZ_MERGE_PX[0]`, 26 px), not
+at some middle.** The tier only ever draws past the skeletons' own admitted
+edge — a 20 m conifer at 428 m is fourteen art pixels — so every card is used
+where its tree would be fully merged, and a crown that opened back up at the
+swap would be the pop this tier exists to remove. A card drawn NEARER than the
+band is the tier's own recorded caveat and happens only when the population cap
+is forced low enough to collapse the geometry's edge.
+
+**IT READS `uEzMerge`, so `?ezmerge=0` stays a true A/B for BOTH halves.** A
+bake that merged while the skeleton did not would turn that switch into a
+comparison of two different things — which is exactly how the deficit above was
+attributed, so keeping the switch honest is not tidiness.
+
+**Measured**, the same sheet, the bake the only change:
+
+| at-yosemite, elev 8° | before | **at 200 m** | **at 450 m** |
+|---|---|---|---|
+| mean IoU (all 37) | 0.438 | **0.823** | **0.827** |
+| round (12) | 0.53 · cov 0.54 | **0.95 · 1.03** | **0.96 · 1.04** |
+| conic (12) | 0.40 · cov 0.44 | **0.86 · 1.13** | **0.90 · 1.05** |
+| umbrella (5) | 0.49 · cov 0.50 | **0.92 · 1.01** | **0.89 · 0.98** |
+| columnar (2) | 0.54 · cov 0.56 | **0.92 · 1.08** | **0.97 · 1.03** |
+| palm (2) | 0.56 · cov 0.63 | **0.92 · 1.06** | **0.95 · 1.02** |
+
+**READ THE TWO DISTANCE COLUMNS AGAINST EACH OTHER AND THE CONIC ROW EXPLAINS
+ITSELF.** At 200 m a conifer is 31 art pixels, which is INSIDE the merge band,
+so the skeleton there is only about five sixths merged while the card is fully
+merged — hence a coverage ratio of 1.13, the card carrying more than the tree.
+At 450 m, which is the range the tier actually draws at, the skeleton is under
+the band too and the ratio falls to 1.05. **The over-coverage at 200 m is not
+an error to tune away; it is the sheet being read at a distance the handover
+does not happen at**, and a bake tuned to make that column 1.00 would be wrong
+everywhere the cards are used.
+
+The atlas's own tiles say the same thing without a frame — `__impatlas`'s
+`sideMean`, the number this file's own note said nothing measured: conifer:9
+**0.158 → 0.372**, conifer:11 0.237 → 0.487, conifer:10 0.266 → 0.542 on the
+live Yosemite atlas. And the tier on screen is unchanged in shape: 896 drawn,
+census `veg-impostor` 3,584 = 896 × 4 exactly, 0 of 240 upright tiles empty,
+ink 0.39× the ground against a 0.25 gate.
+
+**The four snags stay at IoU 0 and that is the honest answer.** A snag at 200 m
+is two or three isolated black pixels — 1% of its own box — and the merge does
+nothing for a tree with no crown to close. A 32 px tile cannot carry that under
+a binary alpha test, which is a statement about the snag rather than about the
+bake, and the tool counts them apart for exactly that reason.
+
+**WHAT THE SHEET IS, in one paragraph.** Each cell is one variant twice — the
+skeleton left, its baked card right — through ONE ortho camera, ONE quantiser
+and ONE metric block, at the art-pixel size the game draws that tree at from
+`DIST` metres. The two halves share their box by construction: the atlas's bake
+frames its tiles with exactly the `hx`/`hy`/`cy` this sheet's camera was already
+framed by, and the world scales the card to `2*hx` by `2*hy` about `cy`, so a
+disagreement between the halves is the impostor's and not the framing's.
+**IoU is the column the ask is about** — it is the only statistic that compares
+the halves rather than describing each — with `cov`, `h` and `w` saying which
+way a card is wrong and `dlum` saying whether it is the light rather than the
+shape.
+
+**AND IT SPENDS NONE OF THE WORLD'S ATLAS.** `impSlotFor` is append-only and a
+slot is never reclaimed, so a sheet that baked all thirty-seven variants into
+the game's atlas would leave the district's own variants locked out for the rest
+of the session — the exact fault the forty-slot repack was written to end. The
+probe allocates a target of its own and re-bakes slot zero per variant, which
+photographs what the world's bake would produce and costs the world nothing.
+
+**`EMPTY` AND `SUB-PIXEL` ARE COUNTED APART.** A snag at 200 m is two or three
+isolated black pixels — one per cent of its own box — and a 32 px tile cannot
+carry that under a binary alpha test. That is a statement about the snag, not
+about the bake, so the tool's gate is 3% of the cell and the control that says
+it is not a bar moved to pass is that before the y-axis fix **thirty-five of the
+thirty-seven were over it**.
+
+### The atlas: the far tree is the near tree, photographed — and it is see-through
+
+The seat's verdict on the first impostor was that it is a placeholder, and on
+the skeletons beside it that they are *a little too skeleton like in general*,
+with the ask stated plainly: get the impostors good enough and the ranges can
+be tuned to make headroom for fuller trees. The headroom arithmetic is not in
+doubt — an impostor is **4 triangles** against a drawn broadleaf's **1,068**
+and a conifer's **543**, so anything the cards take over is returned to the
+near field at about 130 to 1.
+
+**IT IS BAKED ON THE DEVICE, AT RUNTIME, AND THAT WAS A DECISION.** The obvious
+alternative is a devtool writing an atlas into the bundle beside
+`flora-ez-baked.ts`. Three things against it, each a fault this file already
+carries: the deploy transpile runs at seven tenths of the deployer's memory
+ceiling and 27% of the bundle is already baked data; a baked asset goes STALE
+the moment a recipe changes, and the thing it must agree with is itself
+generated; and WHICH variants matter is the district palette's answer, which is
+a fact about where the truck is standing and cannot be known offline. The cost
+is thirty-three renders of a few hundred triangles per variant, one variant a
+refresh, and a site whose variant has no slot yet simply waits a sweep.
+
+**EIGHT AZIMUTHS, THREE ELEVATIONS AND A PLAN VIEW, ON THE CARDS THAT WERE
+ALREADY THERE.** A full octahedral impostor — one view-aligned quad over a
+hemisphere — was designed and REJECTED: the frame of a view-aligned quad is
+undefined when the camera looks straight down, the chart camera looks 89.9
+degrees down, and every candidate for that missing roll either spins with the
+map or snaps at a tile boundary. An upright card has world up for its up at
+every azimuth, which is exactly the frame the bake uses, so there is nothing to
+resolve; the plan view is its own tile and its rotation is the TREE'S yaw,
+which is a fact about the tree rather than the camera. The azimuth is read in
+the tree's own frame and the two nearest tiles are MIXED, so turning past a
+tree cross-fades rather than snapping forty-five degrees.
+
+**`renderer.setViewport` IS READ BY NOTHING WHILE A RENDER TARGET IS BOUND, and
+it cost a whole measurement.** three's `setRenderTarget` copies the live
+viewport and scissor from `renderTarget.viewport` / `.scissor`, so a per-tile
+`renderer.setViewport(...)` sets the CANVAS viewport and is then overwritten.
+Every tile was rendered over the whole 1024-square atlas at full size, each
+variant erasing the last, and the tier came back drawing a tenth of its pixels
+with its ink under the black gate. The fix is two lines; what found it is that
+the tool reports the tier's INK rather than only that pixels moved.
+
+**AND THE PROBE READS THE ATLAS BACK, because the diff cannot.** A card
+sampling an empty tile draws something and a card sampling a tree draws
+something. `__impatlas()` returns, per baked slot, the share of every tile
+carrying any coverage at all — so a bake that rendered into the wrong viewport,
+or framed the tree outside its own box, is a number before it is a frame. The
+fifth time this file has needed the same rule: **a probe that reports the
+output of a rule cannot witness the rule.**
+
+**THE INK GATE HAD NAMED A SCENE, NOT A FAULT.** Its first form was two palette
+steps of absolute ink (36) and a tenth of the changed pixels at the floor, set
+against a band whose hillside read 111/255. On a band whose hillside reads 38 —
+the same fixture, a different treeline — a healthy tier reads 26% at the floor
+and the gate fires. What separates a multiply-by-zero from a dark tree is the
+RATIO to the ground it replaced, and the three builds this has run on space out
+cleanly: the broken build **0.17**, the analytic fix **0.38**, the atlas
+**0.43**. The bar is a quarter, a factor of one and a half from the broken
+build on one side and the nearest good one on the other; the absolute ink and
+the dark share are still printed as evidence and no longer decide.
+
+**MEASURED**, `at-yosemite`, one boot, off/on/off, the seed density pinned to
+the old rate (`vegstems=0`) so the scene is the one the analytic numbers were
+taken in:
+
+| | analytic | atlas |
+|---|---|---|
+| drawn / offered | 931 / 1611 | **932 / 1614** |
+| census `veg-impostor` | 3,724 = 931 x 4 | **3,728 = 932 x 4** |
+| edges b / c / s | 689 / 428 / 482 | **689 / 428 / 482 — identical** |
+| ink, ON against the ground it replaced | 44.1 vs 115.1 (0.38x) | **41 vs 94.7 (0.43x)** |
+| band pixels the tier changed | **1,420** | **171** |
+| tiles carrying no coverage | — | **0 of 312** |
+| slots photographed | — | 13 of 18, in **71 ms** |
+
+**THE PLACEMENT IS IDENTICAL AND THE COVERAGE IS AN EIGHTH, AND THAT IS THE
+FINDING.** The same trees stand in the same places wearing the same budget;
+what changed is that the card now draws the tree instead of a width profile,
+and the tree is mostly gaps. The atlas measures it directly: **a conifer's own
+silhouette fills 7 to 10 per cent of its bounding box and a broadleaf's 13 to
+24.** The analytic card filled most of its own card, so the far wood used to be
+denser than the near wood and nobody could see that the near wood was thin.
+
+So the seat's second sentence — *our real trees are a little too skeleton like*
+— is now a number rather than an impression, and it is the blocker rather than
+the impostor. **The bake has a check for the opposite fault and none for this
+one**: `sil.card` flags a leaf card wider than a quarter of its crown, which is
+the stack-of-plates failure, and nothing measures how much of the crown the
+cards FILL. `__impatlas().tiles[].sideMean` is that number now, and the next
+unit is a re-bake judged against it.
+
+### …and a forest covers its own ground: the ceiling could not buy that, and the candidate budget is why
+
+The other half of the same ask: *especially where cover says forest, tree
+density needs to go way way up.* The obvious lever is `COVER_VEG`, the per-cover
+clump ceiling, and it is **already spent**. Worked through the shipped rule at a
+tree-cover cell of mean density: demand is 18 x 0.775 = 13.95 against a
+candidate budget of 25 x 0.6, so acceptance is 0.93 and **twenty-three of
+twenty-five candidates already stand up**. Raising the ceiling to 30 takes it to
+25 of 25 and raising it to 60 takes it nowhere at all — a proposal set is a hard
+ceiling on population, and a forest has been sitting against it.
+
+| ceiling | density 0.3 | 0.5 | 0.7 |
+|---|---|---|---|
+| 18 (shipped) | 18.7 / ha | 34.6 | 54.9 |
+| 30 | 25.8 | 37.2 | 56.5 |
+| 60 | **25.8 — identical** | **37.2** | **56.5** |
+
+**WHAT IS THIN IS COVERAGE, NOT THE NUMBER OF THICKETS.** A clump's radius is 6
+to 22 m, so its mean area at mid density is about 600 m2 and twenty-three of
+them cover 14,000 m2 of a 48,400 m2 cell — **twenty-nine per cent**. That is a
+wooded hillside with three quarters of it showing through, which is what the
+seat's frames show. `COVER_CANOPY` grows the clump's AREA and its membership
+together — the radius by the square root and the count in full — so the density
+INSIDE a thicket is exactly what it was (no trunks start overlapping) and the
+cover goes from 29% to about 100%. **3.4 is not a taste: it is 48,400 / 14,000**,
+the multiplier at which a forest cell's own thickets tile it, which is what the
+words "closed canopy" mean. `?vegstems=` scales the excess over 1 and 0 is the
+exact A/B; it is read at SEED time, once per cell, so it needs a reload rather
+than a dial.
+
+**Measured** (`devtools/canopy-ab.mjs`, `at-yosemite`, two boots — legitimate
+because the quantity is counts over a fixture rather than pixels):
+
+| | `vegstems=0` | shipped |
+|---|---|---|
+| trees KNOWN (broadleaf / conifer / snag) | 2,389 / 8,350 / 1,630 | **4,932 / 18,902 / 2,768** |
+| per seeded cell | 71 | **200** |
+| plants placed within 300 m | 612 (21.6/ha) | 673 (23.8/ha) |
+| drawn triangles | 1.51M | 1.81M |
+| edges, conifer / snag | 651 / 700 | **573 / 647** |
+| `ezAdmit` | 8.7 ms | 10.1 |
+| seeding, total | 217 ms | 518 |
+
+**THE WORLD KNOWS 2.2x MORE TREES AND DRAWS ABOUT THE SAME, WITH ITS EDGES
+PULLED IN — which is the whole point and must not be read as a failure.** The
+triangle budget is 2.4M and only 1.81M is spent, so what binds is `VEG_CAP`
+times the rack's POPULATION CAP: the population stop, a dial the player owns.
+What the density buys is a POPULATION for the cheap tier to draw — measured on
+the same build, the impostors went from 932 to **1,382** — and the lever that
+turns it into trees on screen is the rack's, now that there is something for it
+to spend on. Raising the seed density while the caps bind cannot put a tree on
+screen by itself, and saying otherwise would be the fabricated witness this
+file keeps warning about.
+
+The costs are honest and are the next thing to watch on a device: the seed is
+2.4x (spread over the 8 ms a refresh may spend), `ezAdmit` is a heap selection
+over every candidate and grew 16% here, and `vegGrid` holds every known site
+whether or not it is drawn — 200 a cell against 71, on a manifest bounded in
+cells.
+
+### The New Forest bench: 38.7M triangles, and the cheap tier rationed to nothing
+
+The seat's dump from a deliberately hard bench — POPULATION CAP 16X, DRAW
+RANGE 2.8 km, EZ TRI CAP 40M, FORM SPREAD 3X, top camera at the New Forest,
+656 s. It says three things, and only one of them is a bug.
+
+**THE FRAME IS THE GPU'S.** `world pass: triangles mean 11.81M max 38.74M · p95
+38.65M · 666 draw calls`, against a game that normally draws 3.5M. The tick is
+**14.4 ms of a 78 ms p50 frame** and off-tick work is 0.9; the other 36.8 ms a
+frame is the gap. This file's own rule stands — **the gap is a residual and
+cannot establish a GPU bottleneck** — but the triangle count is not a residual,
+it is a measurement, and 38.7M on an A-series phone at 19 fps is about
+740 Mtri/s of submitted geometry. The dials were turned up to find the wall and
+they found it.
+
+**`ezAdmit` IS 69.0 ms A CALL, MAX 211** — the largest identified CPU cost in
+the session and the whole of the one 336 ms frame in the log
+(`treeRefresh:182`). It is `nearestStable` over 129,205 candidates with a cap
+near fifty thousand, and it does not yield. Not fixed here, and the shape of
+the fix is known and worth writing down rather than rediscovering: **histogram
+d2 into a few hundred buckets, prefix-sum to the bucket where the cumulative
+count first reaches the cap, and keep everything up to that bucket's upper
+edge.** That prefix provably contains the cap-th nearest, so the selection
+afterwards is EXACT rather than approximate — two O(n) passes to cut the list
+by three or four times before the heap runs, with `nearestStable`'s own
+contract (and its tie rule, which `perf-check` holds) untouched.
+
+**AND THE IMPOSTOR TIER WAS RATIONED TO NOTHING, WHICH IS THE BUG.** The row:
+
+```
+drawn 3376/129205 offered · 13.5k tris · 400 formed
+```
+
+against `placed 51280 · tris 37.74M`. **The cheap tier carried four hundredths
+of one per cent of the vegetation bill on a frame that was drowning in
+geometry.** `400 formed` is `IMPOSTOR_FORM_BUDGET` exactly — pinned, every
+refresh, for six hundred and fifty-six seconds — and a site that cannot be
+given a form is skipped for that sweep. The budget was written when deciding a
+form meant one hash for a tier drawing a thousand cards; on the atlas path it
+is a Map lookup, and the thing that genuinely needs rationing is the BAKE,
+which has had its own budget since the atlas shipped. 24,000 now.
+
+**A COUNT THAT EQUALS ITS OWN BUDGET IS NOT A COUNT, AND THE ROW DID NOT SAY
+SO.** `400 formed` reads as a fact about the world; `400/400 formed (PINNED)`
+reads as a ration. That is the same fault as `edge == range` meaning NOT CAPPED
+rather than "trees all the way out", recorded two sections up, and as
+`__cam` reporting the zoom and not the stand-off. **Print a budgeted quantity
+against its budget, or it will be read as a measurement.**
+
+What the dump also confirms, quietly: the atlas cost **7 slots in 16 ms on the
+device** — about 2.3 ms a variant, once — so the bake-per-refresh went from one
+to two and a district's palette now lands in the first few refreshes rather
+than the first few seconds.
+
+### Does a refresh re-place a tree it already drew? Yes, and that is not the flicker
+
+Asked from the seat: if a tree is still admitted, should the refresh not leave
+it alone? It does re-place it — every admitted tree is written into staging
+from scratch on every sweep — and **that costs nothing visually**, because the
+same tree produces the same matrix and the same colour whatever SLOT it lands
+in. The instance order changes; the frame does not.
+
+Three things in the place loop DO step at the refresh cadence, and they are
+worth knowing apart:
+
+- **THE DISTANCE FADE READS THIS REFRESH'S ADMITTED EDGE.** `tt = sqrt(d2) /
+  max(120, ezEdge[fam])` and `ezEdge` moves every sweep as the water-filling
+  allocator re-divides the triangle budget, so a tree in the outer third of the
+  ring can be mixed a different amount toward the ground colour a few times a
+  second. This is the fault the IMPOSTOR's own fade was moved to the fragment
+  to end — *a refresh is a few times a second while the distance to a tree
+  changes every frame* — and the skeletons were never given the same treatment.
+  The fix is the same one: a varying off the camera's own distance with the
+  edge as a uniform. It is not made here because it changes what the refill
+  writes, and `perf-check`'s baseline is a byte-for-byte record of exactly
+  that — re-snapshot it in the same commit or the check becomes a comparison
+  against a version two steps back.
+- **`casts` IS A HARD BOOLEAN AT `shadowSpan`.** A tree either goes in the
+  shadow-casting mesh or its twin, decided per refresh, so one sitting on that
+  radius can have its shadow blink on and off as the truck moves a metre.
+- **AND THE SET ITSELF CHANGES AT THE EDGE**, which is the pop the fade exists
+  to soften and is the tier's whole reason for being.
+
+What a refresh CANNOT move is the tree's identity: its variant, its height, its
+lean and its yaw are hashes on its own position. The ground under it is re-read
+(`groundAt`) and so follows the DEM as it refines, which is deliberate.
+
+### The silhouette ink: an instrument, not a look
+
+TREES -> **IMPOSTOR INK: STOCK | BLACK**, live, and `?impink=1`. Black takes
+every card's DIFFUSE to zero — not an emissive and not a post term — so a
+Lambert material multiplies every light by nothing and the tier is a true flat
+cut-out at any hour under any cloud.
+
+It exists because of an accident: the tier drew solid black for a week on a
+missing `color` attribute, and those frames were the clearest picture anyone
+has had of where the cards actually are. A silhouette answers by eye the three
+questions no pixel metric in this repo answers — **where is this tier drawing,
+how large is it there, and does its outline agree with the skeleton beside
+it** — and the last of those is the whole test of an impostor.
+
+### The control set: twenty-nine variants, one framing, one number
+
+The seat's instruction, verbatim: *first to get a control set across forms and
+varieties and then look to improve dramatically against that baseline.*
+`devtools/tree-forms.mjs` is that control — every EZ variant rendered through
+the SHIPPED material, framed by its own bounding box so two trees of different
+size are comparable, with **closure** beside it: the share of that box the
+silhouette fills. No world, no streaming, no arrival order, so the sheet is the
+same every run, which is what makes it a baseline rather than a snapshot.
+
+| form | n | min | mean | max |
+|---|---|---|---|---|
+| round | 6 | 17.0% | 23.7% | 28.0% |
+| columnar | 2 | 25.9% | 27.6% | 29.4% |
+| **conic** | **12** | **5.1%** | **13.0%** | **24.9%** |
+| umbrella | 3 | 19.2% | 20.5% | 22.5% |
+| palm | 2 | 13.0% | 14.1% | 15.2% |
+| bare | 4 | 2.1% | 2.6% | 3.3% |
+
+**THE CONIFER FAMILY IS TWO DIFFERENT BAKES AND THE NUMBERS SAY SO.** Its first
+four variants — `conic 1-4`, the frond recipe the lab measured and approved —
+read 22.0 to 24.9% at **1,261-1,302 triangles**, and the frames show a whorled
+spruce that is unmistakable at a glance. The other EIGHT are the growth forms
+(`open whorled`, `high crown`, `wind shaped`, `broken leader`) at **5.1 to
+9.6%** and 469-651 triangles, and the frames show a bare pole with a dozen
+one-pixel dashes on it. They are not thin trees; they are not trees.
+
+**AND THE DISTRICT PALETTE PICKS TWO OF THE TWELVE.** At Yosemite the atlas
+reported the live slots as `conifer:4, 6, 8, 9` — open whorled, high crown and
+both wind-shaped — **four of the eight poles and none of the four good ones**.
+So the seat's Yosemite frames were not bad luck about lighting or distance:
+that district genuinely grows the thinnest silhouettes in the atlas.
+
+**AND THIS IS THE SAME FACT THIS FILE ALREADY RECORDED AS A PRICING BUG.** The
+tree-spend unit measured conifer charged at its atlas mean of 1,713 triangles
+while DRAWING 543, called the gap an estimator fault, and fixed the estimator.
+It was also a QUALITY fault and nobody could see it: the realised 543 is the
+mean of the cheap growth forms, and they are cheap because they are empty. A
+per-tree price three times under the family mean was evidence about the
+silhouette all along, and there was no instrument that could say so.
+
+What the rest of the sheet says, in the order worth fixing:
+
+- **The palm is a cone.** Both variants are a leaning trunk with a solid green
+  cone on top and no fronds at all — 13-15% closure, and what closure it has is
+  a filled shape rather than a crown. The lab's own note says `branch.force` is
+  what makes a palm a palm; the bake is not using it.
+- **A broadleaf is six to twelve large flat cards on a bare stick.** No branch
+  structure survives the reduction (`children x0.3` is what sets the number of
+  crown anchors, so the crown is thin at the root), and at 17-28% the canopy
+  never closes. `round 4` is 391 triangles and 17.0%.
+- **The columnar broadleaf is not columnar** — both variants are a leaning
+  sapling with its leaves at the top, which is a different tree from the one
+  the vocabulary names.
+- **The snags are right at 2-3%**, by definition, and are the control that says
+  the metric is measuring what it claims.
+
+`ELEV=` takes a sheet per elevation (8 and 35 degrees by default); closure moves
+by under two points between them, so the number is a property of the tree
+rather than of the framing. `PX=`, `MAG=` and `COLS=` size the cells.
+
+`BG=` is the sheet's background — `white` by default, since the seat asked for
+one and a dark sheet flatters a thin crown by lending it a silhouette it has
+not earned — plus `sky` and `dark`. `TAG=` names the files, so successive
+passes sit beside each other on disk.
+
+### …and filling that crown: clustering was the wrong lever, and the numbers said so
+
+Two passes at the eight growth-form conifers — the family the control set
+found at 5.1-9.6% against the base recipe's 22.0-24.9% — with the sheet shown
+to the seat at each. `?ezfill=` is the dial and 0 is an exact control: gain 1
+and one pad an anchor is the k = 0 path with no jitter and no rescale, which
+decodes byte for byte as the shipped crown does.
+
+**PASS 1 CLUSTERED, ON AN ARGUMENT THAT WAS PLAUSIBLE AND WRONG.** A real
+branch carries a cluster, and scaling the pad instead was expected to read as a
+bead on a stick — the shape the lab had already rejected for the columnar
+broadleaf. So three pads an anchor, jittered within 0.9 of the pad radius.
+
+**PASS 2 GREW THE PAD, which is the thing pass 1 argued against**, on the
+physical reading of the same recipe: an open-whorled or high-crown conifer HAS
+fewer branches, so a branch that is one of thirty carries a larger tuft than
+one of a hundred and twenty. Gain 1.75 on EVERY pad (the k = 0 one included),
+the cluster down to two, the spread measured in GAINED radii so the pair reads
+as a lobed tuft rather than one blob.
+
+| the eight growth forms, mean | closure | triangles |
+|---|---|---|
+| the bake, as it shipped | **7.6%** | 540 |
+| pass 1, three clustered pads | 10.1% (+33%) | 1,072 (+98%) |
+| **pass 2, the gain** | **15.2% (+100%)** | **806 (+49%)** |
+
+**READ THE COST COLUMN, NOT THE CLOSURE COLUMN.** Pass 1 bought a third more
+silhouette for twice the triangles — worse per triangle than the bake it was
+improving (0.0094 closure a triangle against 0.0141). Pass 2 is **0.0189**,
+which is better than the base recipe's own 0.0187: the growth forms have
+stopped being the cheap-because-empty variants that `ezTriPrice` was reading,
+and that is the same fact the tree-spend unit measured as a pricing bug
+arriving from the other side.
+
+**THE LIMIT WAS WHERE THE ANCHORS ARE, AND CLUSTERING CANNOT REACH IT.** Pads
+jittered inside 0.9r of one anchor OVERLAP, so their projected area barely
+adds; the growth forms carry 28-41 anchors against the base recipe's 108-126
+over the same crown, so what is empty is the gaps BETWEEN the whorls. Pad area
+goes as the SQUARE of the gain, which is why one lever moved twice what the
+other did at half the cost.
+
+What the frames say that the table does not: broken leader and open whorled 6
+read as recognisable young conifers at 19%; **wind shaped is still last at
+10.6-11.7% and partly should be** (w/h 0.86-0.99, so the box is wide and a
+windswept tree is genuinely sparse); and on all eight the pads are still
+individually legible as diamonds where `conic 1-4` is a mass — which is the
+anchor count again, and that lever is `children x0.3` in the reduction and
+needs a re-bake rather than a client dial.
+
+### …and then the control set itself was found to be measuring the wrong picture
+
+The seat revoked the premise the two passes above were aimed at — *the frond
+recipe the lab approved* — and asked for a critique from first principles.
+`TREE-FORM-2026-09-16.md` is that, and its finding invalidates every number in
+the section above as a TARGET (they are still true as measurements):
+
+**THE SHEET WAS FOUR TO TEN TIMES THE SIZE THE GAME DRAWS A TREE, WITH MSAA THE
+RENDERER DOES NOT HAVE, AND NO POST CHAIN.** 224 px cells at `samples: 4`, read
+straight off the render target. The frame is 148 x 320 art pixels, `rtScene`
+has no MSAA at all, and the composite quantises to fourteen levels and
+Bayer-dithers; a metre at distance d is 307/d art pixels, so a 16 m conifer is
+49 px at 100 m and 25 px at 200 m, its pads 7.4 and 3.7 px, and its trunk 1.1
+and 0.54 px. Re-rendered honestly, `conic 1-4` — the recipe everything was
+being tuned toward — are the LEAST legible cells on the sheet.
+
+**`__ezsheet` IS FRAMED BY A DISTANCE NOW.** Every variant renders at the
+art-pixel size the game would draw it at from `DIST` metres, computed from its
+own metric height (`EZ_M_PER_SCALE` times the rack's mid size draw) through the
+chase lens into 320 rows, at `samples: 0`, then through the composite's own
+quantiser and bayer4 in JS. One sheet pixel is the same art pixel in every
+cell, so a snag at 200 m is visibly fourteen pixels where a conifer is
+twenty-nine. `DIST=`, `INK=1` for black silhouettes, `POST=0` for before the
+quantiser, `QS=` to A/B a boot-time switch, and `PX=` is still there as a
+close-up and prints "NOT a control" when used.
+
+**AND CLOSURE IS ONE COLUMN OF SIX.** It cannot tell a mass from confetti,
+which at 25 px is the whole difference. Beside it: `parts` (connected
+components — a tree is ONE thing), `big` (the share in the largest), `sky` (the
+crown's contrast against the sky in palette steps), `form` (the tenth-to-
+ninetieth percentile of the FOLIAGE's own luma, in steps), `mass` (the largest
+connected region of one quantised colour, as a share of the foliage) and
+`stipple` (lit pixels touching at most one neighbour — the ones that flicker as
+the truck moves).
+
+**Twelve of twenty-nine variants read at 200 m**, on a bar of at most three
+parts, 70% in the largest, a step and a half of sky contrast, a step and a half
+of the crown's own light and dark, and at most 12% stipple. **The whole conifer
+family fails — all twelve** — on fragmentation (4 to 13 parts) and stipple (7 to
+34%). **All four snags fail at 100% stipple**: at 200 m a snag is two to four
+isolated black pixels, drawn with 135 to 224 triangles.
+
+Two faults in the instrument, both caught by numbers that did not move:
+
+- **`form` read 3.7 for twenty-five variants in a row** on its first cut. A
+  number that does not move is measuring something else, and it was the dark
+  BARK against the green crown rather than the crown's own light. Restricted to
+  the foliage (the instance colour is 0.30/0.42/0.20 and the bark 0x4a3826, so
+  `g > r` separates them with nothing to tune).
+- **`Math.max(1, mag) || 0` is never 0**, so the auto-magnification never fired
+  and the first sheet came out at 1x — twenty-nine trees at 23 pixels each, on a
+  sheet 310 pixels wide.
+
+### The crown's own light: the occlusion was neutral and the envelope was the win
+
+Phase 2 of that document — the cheapest item on the list, a material change
+touching no bake — and it took two attempts, of which the first is the more
+useful.
+
+**A MEASURED SKY EXPOSURE, AT DECODE.** The crown's shading was
+`smoothstep(length(vEzLocal.xz))` against `smoothstep(vEzLocal.y)`: a RADIAL
+approximation that assumes a crown centred on the trunk and knows nothing about
+where this tree's foliage is — right for a round oak, wrong for an umbrella
+acacia, a wind-flagged conifer, a high crown or a palm. `anchorSky` replaces it
+with nine rays over the upper hemisphere per foliage cluster, blocked by the
+tree's own other clusters, run once per variant at decode and carried as
+`aSky`. Zero runtime cost. **It is also, on its own, WORTH NOTHING at 200 m**:
+
+| by form, at 200 m | `mass`, radial | + measured occlusion | + envelope normal |
+|---|---|---|---|
+| round | 5% | 6% | **11%** |
+| conic | 4% | 4% | **7%** |
+| umbrella | 11% | 11% | **19%** |
+| columnar | 7% | 6% | **9%** |
+| palm | 32% | 11% | 9% |
+
+The reason is scale: occlusion varies between CLUSTERS, a cluster is three to
+five art pixels, so it produces variation at the same frequency the per-face
+hash did — a different noise, not a form. **An ambient term is interior-versus-
+exterior; what makes a tree read as a solid object is a LIT SIDE, which is
+directional and which no amount of AO supplies.**
+
+**SO THE CROWN LIGHTS AS ONE ENVELOPE.** Every crown vertex carries `aEnv`, the
+direction from the crown's own centre normalised by the crown's own extent (an
+ellipsoid, not a sphere), and the surface pass turns the shading normal 78% of
+the way toward it. A pad heap presents facets pointing every way, so Lambert
+answers a different number on each and the crown gets a random tone per facet;
+against the envelope the whole crown has one sunlit flank and one shaded flank,
+coherent across every cluster in it. That is the only kind of light fourteen
+levels can carry, and it is what both reviews meant by "the crowns have no
+light". Three floats a crown vertex at decode, nothing at runtime, and it is
+the attribute the bough merge will want anyway.
+
+**AND THE VARIATION UNIT MOVED UP.** `faceTone`'s per-TRIANGLE hash is
+high-frequency tonal noise at exactly the dither's own frequency; the hash is on
+the ANCHOR now, so a whole foliage cluster shares a tone. Measured: it left the
+crown's luma spread unchanged (3.1 steps for round, either way) — so it removed
+noise without removing light, which is what it was for.
+
+`?ezsky=0` restores the radial term AND the facet normal exactly, so the pair is
+one build with one uniform. **The palm goes the wrong way** (32% → 9%) and that
+is honest: its crown is a solid cone whose facets were already coherent, and it
+is the one form the design document has down for a bespoke rebuild.
+
+**What phase 2 did NOT move, and could not:** `parts`, `big` and `stipple` are
+identical in both legs to the digit. Shading cannot join a crown that is thirteen
+separate pieces of foliage — that is phase 3, the cluster crown and the distance
+merge.
+
+### Phase 3: the crown closes as the tree shrinks, and 12 of 29 becomes 24
+
+The fault phase 2 could not touch. At 200 m a conifer is four to thirteen
+separate pieces of foliage with up to a third of its lit pixels touching at most
+one neighbour, and with no MSAA and a nearest magnify a pad near a pixel does
+not get smaller as the tree recedes — it gets INTERMITTENT, covering a pixel or
+not by sub-pixel phase, changing every frame the truck moves, with the ordered
+dither amplifying it.
+
+**BOTH TARGETS ARE SATISFIABLE ONLY BY A CROWN THAT IS OPEN NEAR AND CLOSED
+FAR.** The botanical review wants crown porosity — real holes between foliage
+masses — which is right at thirty to a hundred metres. Its own headline target
+is that a biome be unmistakable AS A BLACK SILHOUETTE at 150-300 m, which is a
+solid shape. A hole at 200 m is one pixel. Neither target is wrong; they are
+statements about different scales, and the mechanism that serves both is an LOD
+on the crown's OPENNESS.
+
+**EACH CLUSTER CARRIES WHERE IT WOULD SIT ON THE CROWN'S OWN SILHOUETTE HULL**
+— a surface of revolution measured off the crown's radius at each height, so a
+conifer's hull is a cone, a round tree's a dome, an umbrella's a plate and a
+column's a column; nothing is authored and nothing is a sphere. The vertex
+shader slides the cluster onto that hull and grows it over a band read from the
+INSTANCE's projected height in art pixels: untouched above 58 px (about 110 m
+for a 20 m conifer), one closed mass below 26 px (about 250 m). The scale comes
+from `projectionMatrix`, so it is right in the chase lens, right through the
+speed kick and right on the chart.
+
+No second geometry, no popping (the blend is continuous in the instance's own
+distance), no re-upload, and **nothing for the refresh to do** — `refreshVeg`
+writes exactly the matrices it wrote before, which is why `perf-check` is still
+20 of 20 production refills byte-identical with the merge shipped.
+
+**Measured**, at 200 m, the switch the only difference:
+
+| by form | parts | | big | | stipple | | `form` | |
+|---|---|---|---|---|---|---|---|---|
+| | off | **on** | off | **on** | off | **on** | off | **on** |
+| conic (12) | 7.5 | **1.6** | 68% | **97%** | 19% | **3%** | 2.5 | **2.9** |
+| round (6) | 2.0 | **1.0** | 82% | **100%** | 5% | **2%** | 2.6 | 2.8 |
+| umbrella (3) | 2.0 | **1.0** | 88% | **100%** | 8% | **3%** | 3.0 | 3.0 |
+| columnar (2) | 1.5 | **1.0** | 83% | **100%** | 4% | **1%** | 2.0 | 2.0 |
+| palm (2) | 1.5 | **1.0** | 93% | **100%** | 7% | **1%** | 3.0 | 3.0 |
+
+**12 of 29 variants read at 200 m becomes 24**, and the five that still fail are
+the four snags (which have no crown, so the merge correctly does nothing) and
+one columnar broadleaf on its crown's own light. The conifer family goes from
+0 of 12 to 12 of 12.
+
+**AND THE NEAR FIELD IS UNTOUCHED, WHICH IS THE CONTROL THAT MATTERS.** At 60 m
+every form above the 58 px bound reads identically with the merge on and off, to
+the digit. The one difference is the acacia (3.3 parts against 3.7), and that is
+the rule working rather than leaking: an umbrella thorn is a 10 m tree, so at
+60 m it is 49 art pixels and genuinely inside the band.
+
+**THE HULL IS INSET BY EXACTLY WHAT THE GROWTH WILL ADD BACK, and the first cut
+was not.** Putting the clusters ON the silhouette and THEN growing them stood a
+merged crown about twice as wide as the tree it was baked as — **a tree that
+GROWS as you drive away from it**, which is a worse fault than the stipple it
+fixes, and the control sheet showed it at once because every round broadleaf
+clipped its own cell. Two profiles are measured now, the silhouette's (every
+vertex) and the clusters' (their centres); the difference between them at a
+height IS the pad's radius there, and the hull is set where a pad grown by
+`EZ_MERGE_GROW` lands on the original silhouette, in the vertical as well as the
+radial. **One constant, exported, interpolated into the GLSL** — two copies of
+that number is the growing tree again, arrived at by a different road.
+
+`?ezmerge=0` draws the crown exactly as baked at every distance; 2 overshoots,
+which is a way to see the mechanism rather than a setting.
+
+**WHAT THE 60 m COLUMN IS NOT.** The legibility bar (at most three parts, 70% in
+the largest, and so on) is a 200 m bar: at 60 m a crown SHOULD show its
+structure and `parts` of 10 is a conifer you can see between the branches of.
+Seven of twenty-nine "read" there and that is not a finding.
+
+### …and three of the eight broadleaf variants were NOT unreachable — the test was
+
+**THE SECTION THAT STOOD HERE WAS WRONG, AND IT WAS BLOCKING REAL WORK.** It
+read `tree-stand.test.mjs`'s failing `…and the world uses ALL of them across
+districts` — `saw [0,2,3,4,6]` — as a coverage fault, and concluded that three
+of eight baked broadleaf silhouettes "exist in the bundle, cost their bytes, and
+are drawn nowhere on Earth", with the rider that **adding habits is worth
+nothing while a third of the ones already baked are unreachable.** On that basis
+the atlas expansion the botanical review asked for was deferred. Nothing about
+it was true.
+
+**COVERAGE IS A PROPERTY OF THE CHAIN, AND THE ASSERTION ONLY LOOKED AT ITS
+FIRST LINK.** `ezPalette` draws over HABITS (`ezHabitOf`), not over variants:
+`Oak Medium #387`, `#91` and `#12` are one recipe under three seeds, and a
+district that spent its two-species vocabulary on two seeds of the same oak
+would read as a monoculture while believing itself diverse. So the palette
+covers 5 of 8 **by construction and on purpose**, and `ezPickVariant` — which
+main.ts calls with the family and a hash of the tree's own lat/lon — then picks
+among that habit's siblings per INDIVIDUAL. The assertion predates the habit
+dedupe and could never pass again.
+
+**Measured over 40,000 districts × 4 stands × 6 individuals**, which is the same
+three scopes the world walks:
+
+| family | palette reaches | the chain reaches | thinnest variant's share |
+|---|---|---|---|
+| broadleaf | 5 of 8 `[0,2,3,4,6]` | **8 of 8** | 6.6% |
+| conifer | 6 of 12 | **12 of 12** | 5.5% |
+| acacia | 1 of 3 | **3 of 3** | 33.1% |
+| palm | 1 of 2 | **2 of 2** | 50.0% |
+| snag | 3 of 4 | **4 of 4** | 16.7% |
+
+And the same file's own FIXTURE half had been saying so all along, in the line
+directly under the failure: the shipping per-stand census at Camps Bay draws
+`Aspen Small #11` — index 7, one of the three this section called unreachable —
+**twenty-four times**.
+
+**THE ONE CONSEQUENCE THAT IS REAL, and it is the thing to know before adding to
+the bake: a habit's share of the ground is split among its seeds.** `Oak Small`
+is one seed and takes 20% of the broadleaf ground; `Oak Medium` is three seeds
+taking 6.7% each for the same 20%. **Baking a fourth seed of a recipe does not
+widen a landscape — it subdivides one of its species.** A new HABIT does, which
+is exactly what the review's fifteen-to-twenty-five architectural habits are,
+and there is nothing standing in their way.
+
+The assertion is now the two claims the chain actually makes — the palette
+covers every habit, and district → stand → individual reaches every variant of
+every family — **and both are needed or neither means anything**: a palette
+covering every habit with a pick that ignored the siblings would still bury a
+third of the atlas, and a chain reaching every variant through a palette missing
+a habit would be drawing them as accidents rather than as species. Checked
+against a negative control, which is what the old assertion never had on the
+design it was failing: with the peer pick disabled in the built bundle the chain
+reads **5 of 8 broadleaf and 6 of 12 conifer** and both new claims fail.
+
+**THE GENERAL FAULT IS THE ONE THIS FILE KEEPS RECORDING FROM THE OTHER SIDE.**
+A probe that reports the output of a rule cannot witness the rule — and here a
+TEST asserting a rule that had been deliberately replaced reported the
+replacement as a defect, in a file whose own comment three lines above it
+explains why the replacement is right. A failing check nobody can attribute gets
+written into the doctrine as a fault, and the doctrine then defers the work.
+**When a long-failing assertion and a documented design contradict each other,
+one of them is stale, and which one is a question with an answer.**
+
+### The palm was a leaning pole with an ice-cream cone on it, and three numbers say why
+
+The control set's judgement on the palm — *both variants are a leaning trunk
+with a solid green cone on top and no fronds at all* — was right about the
+picture and wrong about the cause, and the note recorded here said
+`branch.force` was unused in the bake. It is used. What was wrong is arithmetic,
+and it took a new ruler to see any of it.
+
+**THE RULER: `width` IS MEASURED FROM THE TRUNK'S BASE, SO ON A LEANING TREE IT
+IS THE LEAN.** Every radius in `silhouette()` is `hypot(x, z)` about x = z = 0,
+which is the crown's own axis only for a tree that stands up straight. The palm
+is the atlas's leaniest recipe, and measured against its own crown's centroid:
+
+| | `width` (what the column said) | `crownR` | `lean` |
+|---|---|---|---|
+| Pine Small #44 | 0.238 | **0.045** | **0.209** |
+| Pine Small #17 | 0.288 | **0.049** | **0.255** |
+
+**The palm's whole crown was 0.09 of the tree across, and the decode was drawing
+an element of 0.2 at every one of its seventy anchors** — four times the crown's
+own radius, seventy times over. That is the solid cone, and it is the same fault
+this file already records one element-type over: *a leaf sized against the TREE
+and judged against the crown*, which made the columnar broadleaf a stack of
+plates. `crownR` and `lean` are columns in the bake's table now. `width` is left
+exactly as it was — the form thresholds were set against it and a vocabulary
+that moves under its own tests is worth less than a ruler that is honest about
+what it measures.
+
+**AND BOTH DIALS HAD BEEN TUNED AGAINST THAT NUMBER, so both readings were
+inverted.** The recipe's own note recorded `force` "taking the crown from 0.10
+of the tree across to 0.22" and `length[1]` moving it "from 0.060 to 0.070 and
+no further". Measured again against `crownR`:
+
+| | crownR | clear | lean |
+|---|---|---|---|
+| shipped: length 30 · start 0.90 · force 0.05 | 0.045 | 0.83 | 0.209 |
+| length 90 | 0.077 | 0.75 | 0.210 |
+| length 200 | 0.134 | 0.52 | 0.209 |
+| **length 200 · start 0.92 · force 0.02** | **0.147** | **0.67** | **0.076** |
+| length 200 · start 0.90 · force 0.02 | 0.207 | 0.64 | 0.069 |
+
+**`force` IS NOT THE DROOP, IT IS THE LEAN.** It acts on the trunk as well as on
+the fronds, so at 0.05 it was bending the whole tree over — lean 0.209 against
+0.076 at 0.02 — and the crown it was credited with widening barely moved.
+`length[1]`, recorded as dead, is the frond dial after all: 30 → 90 → 200 takes
+the crown 0.045 → 0.077 → 0.147. A dial measured through a confounded number
+reads as the other dial's effect.
+
+**The shipped recipe is 200 / 0.92 / 0.02, which is a coconut palm to two
+decimals** — crownR 0.147 against a real ~0.15, clear 0.67 against a real ~0.7.
+The trade is real and is why `clear` fell from 0.83: fronds long enough to make
+a crown hang below the top of the trunk. 0.83 was a palm with almost no crown.
+
+**AND A FROND IS A BLADE FROM THE CROWN'S HEART TO ITS OWN ANCHOR**, in
+`crownOf` rather than in the bake, because the bake cannot see what the decode
+draws. The anchors are frond TIPS on a shell, so the segment from the shell's
+centre to each of them IS that frond — no authored direction, no new attribute,
+and the crown's architecture comes from the geometry the bake already produced
+and nobody was reading. Tapered rather than pointed (a cone's tip is zero-width
+exactly where the fronds have separated and there is something to draw), three
+sides because a blade's far face is behind its near one: **420 triangles for
+seventy fronds against the ball's 280**, and the variant lands at 618 and 558
+drawn against 758 and 684 — **the palm gets its fronds and gets cheaper.**
+`?ezpalm=0` draws the balls again and is the exact A/B.
+
+**TWO WRONG CUTS FIRST, AND THE SHEET CAUGHT BOTH IN ONE FRAME EACH.** Blades of
+a fixed 0.55 of the element radius straddling their anchors drew a small dark
+smudge on a bare pole (coverage 8.1% against the ball's 15.2%) — a different
+wrong tree. Then blades from the heart to the anchor on the OLD bake drew an
+even smaller one, because on that bake the heart-to-anchor distance is 0.03 of
+the tree. **A shape rule and the geometry it reads have to be fixed in the same
+breath**, and the order to do it in is the geometry first: the decode can only
+draw what the anchors describe.
+
+**Measured**, `tree-forms.mjs` at 60 m, the shipped build against `?ezpalm=0` on
+the shipped bake, and against the atlas as it was:
+
+| | was (old bake · ball) | now (new bake · fronds) |
+|---|---|---|
+| coverage | 15.2% · 12.9% | **16.0% · 16.4%** |
+| parts | 1 · 1 | **6 · 6** |
+| triangles | 758 · 684 | **618 · 558** |
+| lum | 45 · 47 | 37 · 29 |
+| sky contrast, steps | 8.8 · 8.7 | 9.2 · 9.3 |
+
+**READ `parts` THE RIGHT WAY ROUND HERE.** 1 part is the ball: one closed blob,
+which is what a palm must not be. Six is six fronds resolving separately at 60 m,
+and the 200 m sheet is where the merge is supposed to close them again — the
+legibility bar in this tool is a 200 m bar and reading it at 60 m calls a
+visible crown structure a failure, which this file already says about conifers.
+
+**WHAT IS HONESTLY WORSE: the crown is darker** — lum 33 against the ball's 46,
+the darkest non-snag in the atlas. Thin blades present far more edge-on and
+away-facing area than a ball does, and `uEzEdge` darkens an edge-on face by
+design. It is the seat's own "black silhouettes" complaint in miniature and it
+is not fixed here; the lever is the same one that fixed it before — open the top
+of the shading window rather than lift everything — and it wants its own frame
+from the seat before it is turned.
+
+### The vegetation was anchored to the spawn, and the spawn is a zero of its own field
+
+Reported from the seat with two screenshots of the same geography — one driven
+to, one loaded at — and a reading of the code. Both halves check out, and the
+second is the one nobody would have found from a frame.
+
+**`sin(0)` IS EXACTLY ZERO, AND SO IS THE FIELD AT EVERY SPAWN.**
+`vegetationDensity` is `fract(sin(px * 12.9898 + pz * 78.233) * 43758.5453)`
+bilinearly interpolated on a 909 m lattice, sampled in LOCAL metres — and every
+load and every hop puts the requested place at local (0, 0). So the density at
+the truck, on arrival, anywhere on Earth, was **0**. Measured radially, against
+a world mean of **0.4998**:
+
+| m from the spawn | 0 | 25 | 50 | 100 | 200 | 400 | 700 | 909 | 1200+ |
+|---|---|---|---|---|---|---|---|---|---|
+| mean density | 0.000 | 0.001 | 0.004 | 0.017 | 0.062 | 0.205 | 0.420 | 0.492 | 0.500 |
+
+**AND THE CONSEQUENCE IS NOT "THINNER", IT IS "NO THICKETS".** At density 0
+`vegetationClumpChance` returns exactly 0 and `vegetationClumpRole` returns
+null, so every GROUP is refused — while `vegetationLivingChance` has its `open`
+term at full strength, so the stray floor is untouched. Replaying `seedCell`'s
+own accept logic with the cover ceiling held constant:
+
+| ring from the spawn | 0 m | 220 | 440 | 1100 | 4400 |
+|---|---|---|---|---|---|
+| groups (thickets) per cell | **0.00** | 0.38 | 0.94 | 1.18 | 1.15 |
+| strays per cell | 1.00 | 1.25 | 0.50 | 0.38 | 0.60 |
+
+You spawn among scattered single plants with no thickets at all, and the group
+rate recovers over about a kilometre. That is "almost always very little trees
+in my immediate vicinity" and "trees become abundant as I drive away", and it
+is upstream of every impostor and streaming mechanism this file has chased.
+
+**THE LATTICE WAS LOCAL TOO, WHICH IS THE ARCHITECTURAL HALF.** `VEG_CELL`
+buckets, `vegetationCandidate`'s stratification and accept rolls, the anchor
+promotion and the impostor tier's density thinning all hashed LOCAL
+coordinates, so the same geography seeded different trees depending on where
+the session started. `culture.ts` has solved exactly this since bedrock —
+`seedAt` works in `absMetres`' frame so a district's palette survives a rebase
+— and the vegetation simply never used it.
+
+**SO THE WHOLE STOCHASTIC DOMAIN MOVED INTO THAT FRAME.** `vegAbsOf` goes
+local → lat/lon → absolute, `vegLocalOf` comes back (northing carries latitude,
+so the inverse is direct), `vegCellOf` is the one authority for which cell a
+point is in, and `vegCellPos` puts a cell's (u, v) back into local metres. A
+candidate is generated in the absolute frame and converted back before any
+cover or ground query. The degenerate zero still exists — it is now at 0°N 0°E,
+in the Gulf of Guinea, one permanently thin patch of open ocean.
+
+**EVERY CONSUMER, NOT JUST THE GENERATOR.** The seat's report named this as the
+implementation trap and it is the right warning: `vegGrid`'s key, the refresh's
+ring walk, the manifest tally, the collision bucket, the ambience sample, the
+debug probes, the far-impostor hash and `rapidRocks` — which shares the lattice
+with `vegGrid` and is read with the same index in the ambience tick — all take
+`vegCellOf`. A generator that moved while a consumer did not would be stable and
+unreadable, which is worse than the bug. `PlacedVegSite` carries `ax`/`az`, its
+place on Earth, taken once when it is filed, so no geographic hash downstream
+pays a cosine per site.
+
+**Measured**, `devtools/veg-anchor.test.mjs`, pure node, with the rule it
+replaced as its control at every claim:
+
+| | shipped | the old rule (control) |
+|---|---|---|
+| a place falls in one cell under every origin | yes | **fails at 5 of 5 places** |
+| a cell's candidates land at the same lat/lon | yes, to under a millimetre | — |
+| density at a place under every origin | identical to float round-trip | **spread > 0.1** |
+| density at the truck on arrival | an ordinary sample, mean 0.50 | **exactly 0, everywhere** |
+| thickets per cell at the spawn | **1.13**, against 1.13 five km out | **0.00**, against 1.13 |
+
+…and in a world (`tree-stand.test.mjs`, the Camps Bay fixture, whose origin is
+the capture's own centre and therefore sits in the trough): **159 skeletons in
+53 stands became 3,730 in 492** — 2.0 sites a cell, which is strays and ground
+events alone, becoming 46, which is strays plus full thicket membership.
+
+**WHAT THAT NUMBER IS NOT is a 23× denser world.** Past about 900 m the old
+field was already at its mean, so only the spawn's own neighbourhood changes
+count; everywhere else what changed is WHICH trees, not how many. The near
+field around a spawn now carries the load every other part of the map already
+carried.
+
+**AND `perf-check` NEEDED BOTH A STUB AND AN HONEST NOTE.** It broke exactly as
+this file predicts a sandboxed check breaks — `ReferenceError: vegCellOf is not
+defined` — and the fix is not to hand it the real transform: its mock world is
+a flat unprojected plane whose grid is keyed on local indices, so the real rule
+would look up absolute keys, find nothing, place no trees and compare two empty
+worlds as equal. **A check that passes by drawing nothing is worse than no
+check.** It stubs the lattice as the identity on local metres, says so, and
+keeps the claim it was written for — that the sliced refresh refills what the
+pre-slice one did GIVEN THE SAME CELL WALK. The walk's own frame is a different
+claim and `veg-anchor.test.mjs` is where it lives. Its mock sites gained
+`ax`/`az` for the same reason: without them the far tier's thinning hashes NaN,
+which is never greater than its threshold, so it culls nothing — and the
+snapshot does not cover the impostor mesh, so that would have passed silently.
+
+**Two traps in writing the test**, both the same shape as faults already in
+here: stripping TypeScript annotations with a regex produced a `toLocal` that
+was not a function (esbuild transpiles it now), and a `const` inside a `vm`
+script lives in that script's lexical scope and never becomes a property of the
+context — only a `function` declaration does, which is why the sibling globe
+test never met it. The helpers are published onto the context by hand.
+
+**What is NOT done here, deliberately:** nothing about population, LOD or
+impostor parameters, because the seat's own instruction was to fix this first
+and every one of those dials was tuned against a field with a hole in it. The
+antimeridian and the poles are discontinuities of the absolute frame — `lon`
+±180 lands in cells 19.9M apart and `cos(lat)` is floored at 0.02 — which
+`culture.ts` has always had and which nothing has yet driven across.
 
 ### The polish pass — another agent, on the cell, two pushes apart
 
@@ -2767,9 +6458,48 @@ version of it.
 illegal. Use a lookup texture. (`markTins` in `facade.ts` is the worked
 example.)
 
+**AND A GLSL IDENTIFIER IS CHECKED AGAINST ES 3.00, NOT ES 1.00 — BY A TEST.**
+three compiles `#version 300 es` on a WebGL2 context and ES 1.00 on WebGL1,
+and the two reserve different words, so an identifier legal on one profile can
+be a link failure on the other. It is not hypothetical: the sward's structural
+expression shipped with a parameter called `patch` and the device dump came
+back with `ERROR: 0:224: 'patch' : Illegal use of reserved word` on TWO
+programs, with the world looking perfectly normal — because a program that
+fails to link logs to the console and throws nothing. `cast` in the façade
+shader was the same fault, sessions earlier.
+
+**THE HARNESS IS NOT BLIND TO THIS, AND A FIRST WRITE-UP HERE SAID IT WAS.**
+Measured rather than assumed, which is what the claim needed in the first
+place: `openDrive` gets
+
+```
+WebGL 2.0 (OpenGL ES 3.0 Chromium) · WebGL GLSL ES 3.00
+ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)
+```
+
+and compiling the exact construct on it answers `ERROR: 0:4: 'patch' : Illegal
+use of reserved word` under ES 3.00 and `compiles` under ES 1.00. So the
+harness reproduces the device's compiler, its console sniffer folds a GLSL
+error into `d.errors`, and any tool that DRAWS the material would have caught
+this. What is true is narrower and worth keeping: **a program compiles on its
+first render**, so a `nodraw=1` tool never triggers one, and the fault shipped
+because the agent that wrote it had no WebGL context at all in its own
+environment — its report says so outright, `GL_RENDERER Disabled` — and
+deployed with no browser validation.
+
+`devtools/glsl-reserved.test.mjs` earns its place for exactly that case rather
+than for a blindness the harness does not have: it is pure node, so it works
+where there is no GL, and it is instant against a boot's minute. It scans every
+GLSL template literal in `client/` against the ES 3.00 reserved-for-future
+list, with comments and three's own `#include <common>` chunk names stripped,
+and it carries the shipped form as its negative control. Run it with `tsc`.
+
 **A backtick inside a GLSL comment breaks the enclosing TS template literal.**
-This has now cost three separate rounds. Do not write `\`f\`` in shader
-comments.
+This has now cost FIVE separate rounds — two of them in one session, both in
+comments explaining a helper's own parameters, which is where the urge to quote
+an identifier is strongest. Do not write `\`f\`` in shader comments. The tell is
+a `TS1005` at a line number inside the shader string; `npx tsc --noEmit` finds
+it in thirty seconds and nothing else will.
 
 ---
 
@@ -4883,6 +8613,12 @@ cos(origin.lat) and the curve compensation is first-order — so past it there i
 a sphere. `client/globe.ts`, `static/globe-base.png`, `devtools/bake-globe.mjs`,
 `devtools/globe.test.mjs`, `devtools/globe-view.mjs`.
 
+> **THE BAKE IS RETIRED** — the surface is a graticule drawn in the fragment
+> shader, and the asset, its route and its baker are deleted (see "The globe is
+> a graticule…" below). Everything about the SPHERE in this section still
+> stands; what it says about the texture is history, and git has the baker if
+> the bake is ever wanted back.
+
 **IT IS A BACKDROP, NOT A MODE, AND THAT IS THE WHOLE DESIGN.** The instinct is
 a globe VIEW with a cross-fade over a zoom band. It is not needed: the far
 shell already sinks by d²/2R, which IS the sphere to second order, so a sphere
@@ -5149,6 +8885,29 @@ that it is purely so.
 **Still open:** `NE_MIN_Z` could drop to serve trunk roads and capitals on the
 globe — the asset already holds them — and the globe has no place names of its
 own, so between the shell's hand-over and the limb the chart is silent.
+
+## A WebGL blit answers to no overlay
+
+Reported from the seat: open the hub from the chart and the cab/chase dock
+stays floating over the menu while the whole rest of the HUD has correctly
+gone. Every other instrument stands down through one of two mechanisms — the
+HUD canvas (`drawHud` returns on `menu.tab() !== null`) or the DOM overlay's
+own display rules — and the dock is in NEITHER. It is a scissored render of
+the live scene through `miniCam`, taken after the composite, straight onto the
+canvas. Nothing above it can hide it; the gate has to be written on it.
+
+**AND ITS RECT GOES STALE RATHER THAN EMPTY, which is why it is intermittent.**
+`dockRect` is assigned inside `drawHud`, so once the HUD stands down the rect
+keeps whatever it last held. A page booted straight into the hub has a rect of
+zeroes and blits nothing — the fault is invisible there. Chart first, so the
+HUD lays the dock out, THEN open the menu, and the blit runs on a live rect
+behind a shut HUD. Measured both ways: `{x:4, y:334, w:58, h:58}` with the menu
+shut and the identical rect with it open.
+
+Verified in pixels, because a WebGL blit is not in the DOM and no probe reports
+it: the dock is in the frame with the menu shut and absent with it open
+(`scratchpad/dock.mjs` in the session). The control matters — a test that opens
+the menu first passes without the fix.
 
 ## The chart states its scale, as a map would
 
@@ -5462,6 +9221,1114 @@ pixel of difference at the top. The table had no lowercase at all —
 had been drawing a capital Z all along too. `z: '00v248v'` is five rows at
 x-height and cannot be read as a digit.
 
+## The dump can see the planet, a retired ring is one ring, and the globe has mass
+
+Asked from the seat: is the FPS-tap telemetry enough to diagnose the globe's
+frame rate, and can the spin have momentum. The first answer was no, and the
+reason is in the phone's own status line on the India frames: `FAR Z5 83/87`
+at 3 fps — 83 shell meshes on a ring of 25 — and not one row of the dump
+could have named it. Every phase in the report is CPU time; the profiler's
+`render` row is the main thread ISSUING draws, and `gap (unmeasured)`
+"cannot establish a GPU bottleneck" by its own note. A chart that is slow
+because it draws three retired rings of 128² lattice under the live one is
+slow somewhere the dump did not look.
+
+**What the dump carries now** (`__telemetry()`, the double tap on the FPS
+readout; `devtools/globe-poke.mjs` prints these rows at the end of a run):
+
+- `chart …` — camera mode, zoom, m/px, home or browsed with the focus, globe
+  on/off and `free`, fling on/off, the far ring as `z5 25/25 retired 0
+  inflight 0 queued 0`, the overview the same with its places and the labels
+  actually DRAWN.
+- `world pass: draw calls … triangles …` — off `renderer.info` right after
+  `renderer.render(scene, camera)`, every frame: session mean and max, the
+  recent window's p50 and p95, the last pass. A frame rate that falls with
+  every CPU phase flat is fill or triangles, and this row says which count
+  moved. (`renderer.info` autoResets at the next render() and the last
+  render of a frame is the composite's two triangles — `__gpu` draws its own
+  frame to read it; the sample here is taken between the two.)
+- Each slow frame in the log carries its own `M tris / calls` beside its top
+  three phases, so a 400 ms frame reads `render:12 hud+misc:9 … · 2.7M tris
+  91 calls` and the blame is on the line.
+- `farBuild`, `ovBuild` and `stepGlobe` are phases. A z5 tile's 128² bake
+  with its normal map and a Natural Earth tile's ribbon build used to fall
+  into `world:stream`; the planet's placement into `camera`.
+
+**And the 83 meshes were a bug, not a budget.** `setFarLevel` pushed the
+whole previous ring into `farRetired` on every level change, and
+`dropRetiredFar` waited for the NEW ring to land completely (`farInFlight
+=== 0 && farQueue.length === 0`) — which one tile on a retry backoff defers
+for as long as it retries. A browse from the seat's zoom to the planet swaps
+the level three times in a few seconds, so three rings stacked, each drawn
+every frame under the live one, and the four tiles that never landed kept
+all of them. The overview had the same shape (`ovRetired`). Now the previous
+level is the ONLY ring held — the globe backs whatever it does not cover,
+which it could not while it wrote depth — and `cullRetiredFar` drops each
+retired tile on its own evidence: coarser now, when its one ancestor at the
+new level has landed; finer now, when every descendant the ring asked for
+has landed; and at `FAR_RETIRED_MS` (20 s) whatever happened. The material
+cache grew from 30 to 56 with it, two rings' worth, or the eviction handed
+LIVE tiles the tangent-space fallback and lit them with a vignette beside
+neighbours lit by the sphere.
+
+**AND THE RING LEAVES TILES BEHIND, which is the other half of the 83.** With
+the retired stack gone the reproduction still read `far 45/45` at the ring
+line — forty-five CURRENT-level tiles on a ring of twenty-five — and `ov
+28/50`. The stream pass asks a 5×5 around the chart's focus every ~1.2 s,
+and a focus turning from California to India asks a fresh ring at every step
+of the way; nothing ever took the old ones down, because the only eviction
+the shell had was the cover-dirtied REBUILD. So the pass records the ring it
+asked (`farRingAt`, `ovRingAt`), drops every landed tile more than one ring's
+margin outside it (all six maps a far tile lives in, its material included,
+the dateline wrapped), and a fetch that comes home outside the ring is not
+built at all. Measured on the reproduction (India from Mariposa, the ring
+home): the far ring line went from `far 45/45` to
+**`25/25 retired 0`**, the world pass from **116 draw calls and 2.05M
+triangles to 76 and 1.38M** at the seat's own zoom, the lattice and the
+labels unchanged (0.081 / 0.009, fourteen South Asian names). The overview
+then read `15/25` with nothing in flight, nothing failed and nothing
+demless — `__ov().missing` names the ten — and the ten are open ocean: an
+EMPTY tile keeps its key and makes no mesh, and `ovMeshes.size` was the
+"have", so the status line would have said `MAP z5 · 15/25` over the Indian
+Ocean for as long as the chart stayed. Empty landings count as home now
+(`ovEmpty`, `ovHave`), and the stragglers that used to pad the count are
+gone from the asked sets as well as the meshes.
+
+**What the new rows said on their first run, and what is next.** In the
+harness the far build read 618 ms a tile on the main thread (50 tiles, 35%
+of all slow-frame time); then the seat's first dump with the rows in it
+(iPhone, 96 s, a browse from Mono Lake to Newfoundland at z11) put the
+number where it counts: **146 ms a tile, 259 tiles, 37.8 s of a 96 s
+session, 87% of every slow frame and top of 148 of the 162** — the whole of
+the 12.3 ms/frame "off-tick tasks" row, with `render` at 1.2 ms and the tick
+at 4 ms p50. A z11 ring is twenty-kilometre tiles and a pan across an
+ocean re-centres it every stream pass, so the browse asks and BUILDS rings
+all the way. The build runs by phase now — `far:bake` (the lattice and the
+vertex loop: a cover sample, the palette and the sphere per vertex),
+`far:geo` (attributes and normals), `far:nrm` (the normal map) — as the
+only wrappers, so the off-tick total counts it once. **In the harness the
+split is 614 / 5 / 7 ms: the vertex loop is 98% of the build**, the normal
+map and the geometry are noise, and the loop is one function over a raster,
+a cover raster and the palette — the shape the terrain kernel already runs
+in a worker. That is the next unit, and `far:bake` is the row that will
+measure it. The same dump also read `places 800 · labels 0`: the place table
+is keyed by name and capped, and the browse had filled it with every town
+it passed over, so nothing at Newfoundland could register; places leave
+with the ring now, by its own box in degrees. And `ov z11 0/30` with
+nothing in flight is a question the row can answer since it carries
+`failing` and `demless` — z11 is live Overpass, and a refused ring waits out
+`OV_RETRY_MS` between asks.
+
+(This paragraph was written once before, uncommitted, and eaten by the
+deploy ritual's own pull — the trap the top of this file describes, walked
+into by the author of the section above it. Commit before you pull.)
+
+**The fling.** A drag on the planet stopped dead under the lifted finger,
+which at 20,000 km reads as a map stuck to the glass. `dragGlobe` keeps a
+running velocity — an EMA over about 50 ms of moves, in degrees a second,
+the drag's own units — and a lift within `GLOBE_FLING_HOLD_MS` (90) of the
+last move releases it; `stepGlobe` feeds it into the retained focus a frame
+at a time and decays it with `GLOBE_FLING_TAU` (0.45 s: a flick at 135°/s
+coasts about 60°), capped at 180°/s, at rest under 0.05°/s, dead at the
+pole's clamp. A finger that rested before lifting throws nothing (a rest is
+a place); a touch stops a spinning planet; a second finger is a pinch and
+never throws; leaving the chart drops it. It is a change of focus like the
+drag it continues, so the rig, the streamers and the hand-over know nothing
+new. `?fling=0` and `__fling(false)` turn the release off; `__globe().fling`
+and `__fling().vel` report it. Measured (`devtools/globe-spin.test.mjs`, its
+throw block): released at 6.18°/s westward off an eight-move
+harness drag, the planet coasted 2.85° further, the spin read zero after
+1.6 s and the focus moved 0.000° in the 300 ms after; the same drag with the
+finger resting 250 ms before the lift threw 0.000°. (The first cut clamped
+`dt` at 100 ms and decayed per FRAME, so on the harness's slow frames the
+coast ran in frame-time and the planet was still turning 0.5° per 300 ms
+long after it should have rested; the closed form `v·τ·(1−e^(−T/τ))` is
+exact for any frame length and needs no clamp.).
+
+**AND THE DOUBLE TAP DROPPED A FIX UNDER THE READOUT.** Reported the
+moment the rows shipped: the telemetry copied, and a fix appeared where the
+FPS figure is, its record written to the clipboard over the telemetry.
+`fpsDown` swallowed the pointerdown; the pointerup still reached `endStick`,
+whose chart tap logic is "any up without a stick", and the readout's two
+taps were the chart's double tap. Every instrument that takes a down now
+puts the pointer's id in `hudPtrs`, and `endStick` ends on that id before
+the chart is asked anything — for a cancel too, and for the window's copy
+of the same up (`lastUp`). `devtools/fps-tap.test.mjs` double-taps the
+readout by its own rectangle (`__fpsTap()`) and asserts one copy and no
+fix, then double-taps open chart and asserts a fix — the control that keeps
+the first assertion from being vacuous.
+
+**Two traps, one round each:**
+
+- **Moves under 4 ms apart update no velocity.** A synthetic drag dispatched
+  in one task — the navigation test calling `dragGlobe` directly, a
+  `page.evaluate` — has no clock in it; without the floor every such drag
+  would have thrown, and every gesture test would have measured the coast on
+  top of the rate. The harness's real pointer stream at 12–30 ms a move
+  throws exactly as a thumb does, so the spin test's rate checks run with
+  `fling=0` and its throw has its own block with `__fling(true)`.
+- **A test that asserts SOURCE ORDER by literal text breaks when the text
+  changes.** `globe-navigation.test.cjs` proves the zoom is advanced before
+  `stepGlobe();` by comparing two `indexOf`s; wrapping the call for the
+  profiler turned the needle into −1 and the assertion into a falsehood
+  about ordering. The needle follows the wrapped call now.
+
+## The globe is a graticule, the shell has a terminator, and a baked tile survives eviction
+
+Four reports from one test drive over the wide chart, and three of them are one
+unit: drop the baked globe for a lat/lon wireframe; why are loaded tiles dropped
+("what a waste?"), at what threshold, and do the `~/` routes allow client
+caching; and the world has no sun on it. (The fourth was the dock over the
+menus — "A WebGL blit answers to no overlay", above.)
+
+### The surface is drawn now, not fetched
+
+`static/globe-base.png` was a 1024x512 equirect bake — 317KB, 39km a pixel —
+fetched on the first wide chart, and `globeFree` stayed 0 until it landed, so
+the first browse of a session waited on an asset before a drag meant anything.
+`globeMaterial` computes a graticule instead: 15 degree minor lines at 0.55 of
+the ink, 90 degree majors and the tropics at |lat| - 23.44 at full weight, over
+a nearly-black ocean-blue fill that the shell is meant to paint over.
+
+- **A SCREEN-CONSTANT LINE NEEDS DERIVATIVES.** The widths come from
+  `fwidth(lon) * 0.75` in degrees, which is what keeps a meridian the same
+  weight at 2,000km and at 20,000 instead of aliasing into a smear as the disc
+  shrinks. `extensions: { derivatives: true }` on the material, because this is
+  a WebGL1-compatible ShaderMaterial and the extension is not free.
+- **MERIDIANS FADE AT THE POLES**, where any fixed spacing converges into a
+  solid cap of ink: `poleFade = smoothstep(0.02, 0.30, cos(radians(lat)))`.
+- **LAT/LON COME FROM `vUv`, NOT FROM THE NORMAL.** The lattice is 2.25 degrees
+  a quad and uv is linear across each one, so the error is a fraction of a
+  quad's width on a line — invisible — and it costs no trig. The frame is
+  mirrored (see the sphere section), so a normal would have to unmirror first.
+- `GlobeUniforms` is `{uSun, uNight}`; `uBase` and `globeTexture()` are gone,
+  and with them the fetch, the retry and the "asked / failed" state the probe
+  used to carry. `__globe()` reports `wire` where it reported `tex`, and
+  `globe-spin.test.mjs` lost the thirty-second poll that waited for the asset.
+- **A BACKTICK IN A GLSL COMMENT ENDS THE TS TEMPLATE LITERAL**, and it cost
+  another round here — in a comment describing a helper's own parameters, of
+  all places. The rule is absolute: no backticks in shader comments, ever.
+- **AND THEN REMOVED, IN FIVE PLACES**, because an asset nobody fetches is
+  324KB of payload on a deployer that already runs at its memory ceiling every
+  time — and a baker still pointed at it is a resurrection waiting to happen.
+  The file, its route in `index.ts`, the harness's local serve of it, the
+  `ON_DEMAND` exemption in `appshell.test.mjs` (kept as an empty set: the next
+  asset of that shape needs the exemption to exist) and `devtools/bake-globe.mjs`
+  itself. **`cells.deleteFile` is what takes it off the cell** — a push sends
+  what is local and does not delete what is not, so a file removed only from
+  the working tree comes back on the next pull. And the deployed BUNDLE keeps
+  its copy until the next deploy re-zips `static/`, so the cleanup is a deploy
+  as much as a delete.
+- **THE CLEANUP UNCOVERED A CHECK THAT HAD BEEN FAILING SINCE `cover-wide.b64`
+  ARRIVED.** `appshell.test.mjs` asserts no static asset is read through a
+  UTF-8 decode — the fault that once served inflated mojibake PNGs behind a 200
+  — and its needle matched `join(__dirname, 'static', <anything>), 'utf8'`,
+  which is `cover-wide.b64`: a base64 TEXT file the handler reads by name and
+  decodes itself, correctly. The needle is the asset-serving call now
+  (`'static', file`), which is the only one that can carry a binary. It fails
+  at HEAD and at the commit before it; a check that fires on the right code
+  doing the right thing is a check nobody reads.
+
+### The terminator was on the globe, and the globe is not what you are looking at
+
+Measured before changing anything: the globe's own day/night term is real, and
+at DUSK it puts the night side at 0.6 of the day side — about one step of a
+fourteen-level palette, which is why it reads as no terminator at all. And the
+far shell, which is what actually covers the frame at every zoom where the
+planet is up, had NONE: it is Lambert ground under the SCENE's sun, and the
+scene's sun is the rig's local sun, so the whole visible face of the Earth was
+lit as though it were the truck's hour everywhere.
+
+- **ONE COPY OF THE TERM, SHARED.** `PLANET_SUN_GLSL` in globe.ts is
+  `planetLit` / `planetLam` / `planetDusk` / `planetSun`; the globe material
+  includes it, and `planetSunFx(mat)` chains it onto every far tile's material
+  (and onto the fallback `farMat`). Chained, never assigned: `terrainFx` owns
+  `worldpos_vertex`, `lights_fragment_begin` and `dithering_fragment`, `grain`
+  owns `color_fragment`, `sphereNormal` owns `normal_fragment_maps`, so this
+  one hangs its varying off `begin_vertex` and captures the previous
+  `onBeforeCompile`.
+- **THE SUN ARRIVES TWICE, IN TWO FRAMES.** `uSun` is in the GLOBE's frame,
+  because the mesh is a child of `planetGroup` and the rotation is in its model
+  matrix; `uPlanetSun` is the same direction in WORLD space, because the
+  shell's fragment reconstructs its own radial in world space. One vector for
+  both is the fresnel fault from the globe's first day, one section up.
+- **IT IS A CHART TERM.** `uPlanetMix` ramps over `uMpp` 15 to 60 — the same
+  ramp the cloud shadows and the mottle already stand down over — and is 0 in
+  any camera but `top`, so from the seat the shell keeps the scene's own sun
+  exactly and nothing a driver sees changes.
+- The globe's rim took its night share from 0.25 to 0.10 with it: a limb
+  brighter than the ground it wraps is the blue veil again, in miniature.
+
+**Measured**, Letsemeng, zoom 110,000, one scanline through the middle of the
+frame, `?wx=clear` and the clock pinned:
+
+| clock | before | after |
+|---|---|---|
+| NOON | 88-107, flat | 88-107, flat (unchanged, correctly) |
+| DUSK | 107 to 88 | **107 in the west, 27-28 in the east** |
+| NIGHT | ~88 | 28-29, flat |
+
+The night side is a quarter of the day side where it was three fifths, and the
+ramp between them crosses the frame where the terminator is.
+
+### The tiles were not evicted for memory, and what was thrown away was the bake
+
+The seat's question was three questions, and they have three separate answers:
+
+- **The eviction is GEOMETRIC.** `evictFarOutside` drops every far tile more
+  than one ring's margin outside the 5x5 the stream pass last asked for. There
+  is no byte budget and no LRU; that rule is the fix that took a browse from 45
+  tiles on a 25-tile ring (116 draw calls, 2.05M triangles) down to 25.
+- **The routes DO allow client caching, and always did.** `~/dem/v1/`,
+  `~/cover/v1/` and the OSM routes answer `public, max-age=604800, immutable`
+  (a month for summits), the S3-served copies carry an ETag, and the client
+  keeps DEM bytes in its own IndexedDB raster store on top of that. A
+  re-entered tile costs no download at any of the three levels.
+- **What it costs to come back is the BAKE**, and that is a device number: 146ms
+  a tile on the phone (259 tiles in a 96s browse, 87% of every slow frame), of
+  which 98% is the vertex loop — a cover sample, the palette and `sphereRTC`
+  per vertex — plus the tile's own normal map. The bytes were never the cost.
+
+So a tile leaving the ring is PARKED rather than destroyed: the GPU buffers go
+(`geometry.dispose()`), the arrays the bake wrote stay, and re-entering the
+ring is `farGroup.add(mesh)` and a re-upload. **Draw calls and triangles are
+exactly what they were** — the ring still decides what is in the scene, which
+is the fault the ring was added to fix, and nothing here touches it.
+
+- **BOUNDED IN BYTES, NOT TILES**, because a tile is not one size: the lattice
+  is `farSeg(z)` a side and the levels do not agree. Least-recently-seen goes
+  first. Per tile, by level, **as the park first shipped** — attrs is position,
+  colour and normal as vec3 Float32 plus uv as vec2 Float32; the index is Uint16
+  under 65,536 vertices; the map is the tile's own 256x256 **RGBA** object-space
+  normal map. (The next section took every row of this to about a third; the
+  table is kept because the cut is only legible against it, and
+  `devtools/park-bytes.mjs` prints both columns.)
+
+| seg | levels | vertices | attrs | index | map | tile | ring of 25 |
+|---|---|---|---|---|---|---|---|
+| 32 | z13 | 1,089 | 0.05 | 0.01 | 0.25 | **0.31MB** | 7.7MB |
+| 64 | z11 | 4,225 | 0.18 | 0.05 | 0.25 | **0.47MB** | 11.9MB |
+| 128 | z9, z7 | 16,641 | 0.70 | 0.19 | 0.25 | **1.14MB** | 28.4MB |
+| 112 | z6 and coarser | 12,769 | 0.54 | 0.14 | 0.25 | **0.93MB** | 23.2MB |
+
+  The 23.2MB the park reported at planet zoom is the last row exactly, which is
+  what says the arithmetic and the measurement agree. `devtools/park-bytes.mjs`
+  re-derives the table in pure node (it re-runs `farSeg`'s own rule), so a
+  change to the lattice can be costed without booting anything. **The earlier note here
+  quoted a 128-lattice breakdown beside the 112-lattice total and had the
+  normal map at RGB**: the map is RGBA and 0.25MB, and at the coarse end it is
+  the largest single item in the tile — 27% of it, for a texture 2.3x finer
+  than the lattice it is on.
+- **A CAP THAT HOLDS ONE RING IS A CAP THAT NEVER PAYS.** The first cut was
+  24MB, which is 25 tiles — exactly one ring — so a spin out and back always
+  evicted what it was meant to keep: the outgoing ring parked at 23.2MB and the
+  trim had dropped it to make room for the ring in between, `hits 0`. 48MB is
+  two rings and a bit. `?farpark=<MB>` moves it and 0 parks nothing, which is
+  the exact A/B, because the right number is a property of the device and this
+  one is a desktop's guess.
+- **A TILE OWED A RE-BAKE IS NOT PARKED** (its colours are stale by
+  definition), and neither is one whose material the normal-map cache has
+  already taken — it would come back wearing the tangent-space fallback, lit by
+  a vignette beside neighbours lit by the sphere. For the same reason a parked
+  tile's material comes OUT of `farMats`: that cache is capped at two rings and
+  DISPOSES what it drops, and a park outlives it by design.
+
+**Measured**, the same browse out and back, the only difference the park:
+
+| | tiles parked | MB | hits | tiles fetched |
+|---|---|---|---|---|
+| spun away | 25 | 23.2 | 0 | 50 |
+| came back | 25 | 23.2 | **25** | **50** |
+
+Before the park the same pair read **75 fetched**: the return cost a whole ring
+of bakes, and now it costs nothing. `__far().park` and the telemetry's `chart`
+row report tiles, MB, cap and hits.
+
+**THE HONEST NEXT CUT IS THE PER-TILE COST, NOT THE CAP** — this is what was
+proposed from the 0.93MB row, and the section after it is what was actually
+done, which differs in its first line for a reason worth reading:
+
+| cut | saves | why it is safe, and what it costs |
+|---|---|---|
+| the normal map at 128² for coarse levels | 0.19MB | at z5 a 256² map over a 1,085km tile is 4.2km a texel against 9.7km a vertex — it is already finer than the mesh it shades, and the chart is 22,000 m/px there |
+| uv + index owned by the LEVEL, not the tile | 0.24MB | both depend only on `farSeg(z)` and are byte-identical across a ring; needs the lattice built by hand instead of from PlaneGeometry, and an owner, because `geometry.dispose()` frees the GPU buffer of every attribute it references and the next tile to go would take the level's uv with it |
+| colours as normalized Uint8 | 0.11MB | the palette answers 0..1 and the composite quantises to 14 levels — 8 bits is four times the precision that survives the dither |
+
+0.93MB becomes about **0.39**, and the same 48MB then holds a hundred and
+twenty tiles rather than fifty. A fourth is worth measuring before it is
+believed: the vertex NORMAL attribute (0.15MB) may be dead weight, since the
+shell wears an OBJECT-SPACE normal map and `sphereNormal` rebuilds the frame
+from the fragment's own position — but three wants a normal on a Lambert
+material, so that is a claim to test, not to assume.
+
+*(What landed: the first row's argument was wrong and was replaced by a
+two-channel map at full resolution, the other two landed as written, and the
+fourth turned out to be needed by the fallback material. 0.93 → 0.340,
+measured live. See below.)*
+
+### …and the next cut was taken: 0.93 MB a tile becomes 0.34
+
+Three of the four items above landed, one was replaced by something better, and
+the fourth was answered by reading the code rather than measuring it.
+
+- **THE NORMAL MAP KEEPS ITS RESOLUTION AND LOSES A CHANNEL.** Halving it to
+  128² was the proposal and the argument for it was wrong: "already finer than
+  the mesh it shades" is what a normal map is FOR. The honest comparison is
+  against the SCREEN, and at the BAND FLOOR of every coarse level — the closest
+  zoom at which that level is ever drawn, which is what `farSeg` already
+  computes — a 256 map is about **1.5 texels a pixel**. Halving would be
+  visibly soft at the near end of every band. What is actually redundant is the
+  third channel: `normalMapBytes` writes east, up, south, 255, and a
+  heightfield's UP is always positive, so `sqrt(1 - x² - z²)` recovers it
+  exactly. `farNormalTex` packs the pair into RG8 and `sphereNormal` — which
+  already replaces three's whole `normal_fragment_maps` chunk and decodes the
+  texel itself — reconstructs the third. **0.25 MB → 0.125, at the same
+  resolution and the same precision in what is stored.** RG8 is WebGL2; on a
+  WebGL1 context the same pair goes into RGBA, so the shader's `.xy` means one
+  thing everywhere and there is one decode, not two.
+- **THE uv AND THE INDEX BELONG TO THE LEVEL.** Both depend only on `farSeg(z)`
+  and were byte-identical across a ring — twenty-five copies of 0.31 MB at the
+  128 lattice. `farLattice(seg)` holds one of each per segment count (the clamp
+  gives four across the whole ladder, 0.655 MB for all of them together), and
+  the bake builds its own lattice rather than taking `PlaneGeometry` — which is
+  the cost: the layout has to reproduce
+  `PlaneGeometry(w, h, seg, seg).rotateX(-π/2)` EXACTLY, rows north to south,
+  uv `(ix/seg, 1 - iz/seg)`, triangles wound a-b-d / b-c-d, because the normal
+  map's rows are stored reversed against that mapping and a lattice that
+  disagreed would light every shell tile upside down. (`plainLattice` in the
+  kernel is the same construction for the fine tiles and is the thing to read
+  beside it.) The index is Uint16 while the lattice is under 65,536 vertices,
+  which `farSeg`'s 128 clamp guarantees; PlaneGeometry hands out Uint32 at that
+  size, so the sharing pays twice.
+- **COLOURS AS NORMALIZED Uint8, NORMALS AS NORMALIZED Int8.** `terrainPalette`
+  answers 0..1 and the composite quantises to fourteen levels, so eight bits is
+  several times the precision that can reach the glass; a normal is a unit
+  vector and a byte a component is about half a degree. **`Uint8Array` WRAPS
+  rather than clamping**, so a palette that ever answered over 1 would come
+  back as a dark vertex instead of a bright one — one wrong pixel in a ring of
+  twenty-five tiles, which is the kind of thing nobody finds. Clamped
+  explicitly.
+- **AND THE VERTEX NORMAL IS NOT DEAD WEIGHT, which is why it is still there.**
+  It looked droppable: `sphereNormal` replaces `normal` outright from the map,
+  so on a tile wearing its own material nothing reads it. But the shared
+  fallback `farMat` — what a tile wears when `NRM_SCALE` is 0 or the material
+  cache has taken its own away — carries the fine terrain's TANGENT-space map
+  and shades through three's standard path, which builds its frame from the
+  geometry normal. Code reading, not an A/B: the claim was testable and turned
+  out not to need a test.
+
+**Measured in a live page** (`devtools/park-ab.mjs`, Letsemeng, `wx=clear`,
+`time=NOON`, the same spin out and back the park was built against, run once on
+the working tree and once on a control worktree at HEAD):
+
+| | control | fix |
+|---|---|---|
+| z5 ring (seg 112) | **0.930 MB a tile** | **0.340** |
+| z7 ring (seg 128) | 1.14 (derived) | **0.420** |
+| parked / hits on the return | 10 / 10 | 10 / 10 |
+| page errors | 0 | 0 |
+
+`devtools/park-bytes.mjs` derives the same table in pure node and agrees to the
+millibyte. The 48 MB budget now holds about a hundred and forty z5 tiles rather
+than fifty — five rings and a half, so a browse across a continent and back is
+free where a spin out and back was.
+
+**AND THE PICTURE IS THE SAME PICTURE, with a control that says how much
+"same" is worth.** Two runs of the SAME build, frame against frame over the
+terrain band: **mean 0/255, worst 1.9, nothing moved by more than 3** — the
+clock is pinned and the tiles are the same tiles, so the renderer is
+deterministic there and any difference is attributable. Control against fix
+over that band: **mean 0.211/255, worst 12.6, 2.47% of pixels moved by more
+than 3** — under one palette step (0.07 sRGB is 18/255) everywhere, which is
+the quantiser flipping pixels that were already sitting on a level boundary.
+**The full frame's worst is 112.9 and it is NOT the terrain**: the same 112.9
+appears control-against-control, and the diff panel puts it on the status line
+(`MAP z5 · 18/25 · 7 RETRY` against `· 16/25 · 2 ON THE WIRE` — the overview
+ring's streaming state, which is the relay's timing) and on the cab dock's live
+preview. A worst-pixel number over a frame that contains a HUD is a
+measurement of the HUD.
+
+### `qsNum` answered 0 for every switch that was not there
+
+`qs` answers `null` for an absent switch, `Number(null)` is **0**, and 0 is
+finite — so `qsNum` returned 0 rather than the default for every numeric switch
+that was not in the URL. It had been that way since the typed reader shipped,
+and nothing noticed because until `farpark` no caller had a default whose
+absence was visible: a 0MB park budget parks nothing and reports `hits 0`,
+which looks exactly like a park that does not work.
+
+`switches.test.mjs` gained the case it was missing — absent, empty, and a
+garbage value all fall back — and it is the case the table's whole contract is
+about. **A typed reader is only as good as the test that reads what it answers
+when asked for nothing.**
+
+### Three stale assertions, and the control that said which were mine
+
+The far-ladder merge and the sphere pass each retired something a globe test
+still asserted, and running the suites at HEAD before touching them is what
+separated the three:
+
+- `globe-navigation.test.cjs` called `chartShellMatrix`, which the sphere pass
+  deleted with the paraboloid. Replaced by the contract that succeeded it: the
+  `sphereRTC` / `sphereLatLon` round trip is exact at four tile centres from
+  the equator to 84N, and a parked tile's vertices stay within 2e6 metres of
+  their own centre (which is what keeps the Float32 upload honest). Checked
+  against a control with the sign flipped in `sphereLatLon`, where it fails on
+  the first non-zero longitude.
+- The same file proved the zoom is advanced before `stepGlobe` by comparing two
+  `indexOf`s, and the needle `'  stepGlobe();'` stopped matching when the call
+  was wrapped for the profiler — so the assertion became a true statement about
+  -1. **Both needles are required to exist now**, and the needle is
+  `profAdd('stepGlobe'`, which only the call site carries. This is the second
+  time this exact check has gone vacuous.
+- `globe-spin.test.mjs` required the shell to be OFF at planet zoom. `shellOn`
+  carried `&& globeFree() === 0` when that was written; both backdrops are
+  children of `planetGroup` now and are placed from one focus, so they cannot
+  disagree and hiding the ring would open an edge rather than close one. It
+  asserts the pair instead — both drawn, the GESTURE handed over — which fails
+  if anyone re-ties them.
+
+And one that was neither stale nor mine: the fling block asked for zoom 40,000
+with a bare `__zoom` and a fixed 600ms wait. `__zoom` sets a TARGET the frame
+loop eases toward, the harness runs at two to four frames a second, and the
+block before it left the chart at z900 — so the drag happened below the
+hand-over, where it is a flat pan that records no spin, and the throw reported
+`released at 0°/s`. It polls with `zoomTo` now, and the same drag then throws
+at **-26.43°/s and coasts 11.88 degrees** — the fling was never broken, the
+test was measuring a chart that had not finished arriving. **The zoom and
+everything else live on different clocks** — the same trap `chart-dist.mjs`
+carries a note about, met from the other side.
+
+
+## The substrate's contact sampler was a linear scan, and it was on every URL
+
+The substrate migration (`SUBSTRATE-MIGRATION.md`, pulled from the branch on
+2026-09-10 and deployed the same hour) routes `surfaceAt`, `waterInfoAt`,
+`splashWet` and `tyreHeight` through `productionContactAt` on ORDINARY URLs —
+canonical contact is the default, `?substrate=legacy` the rollback,
+`?substrate=render` the guarded water renderer on top. The seat's first dump
+on it, under `render`: 14.6 fps, 59% of frames slow, the tick at 48.5 ms a
+frame — `stepWildlife` **14.5 ms every frame** (0.3 on the build before),
+`sim:suspension` 4.1 (0.1), `treeRefresh` 62 ms a call with `shrubs` at 31
+(12 and 4), `hydroBuild` 111 ms a build (5). The fixture A/B
+(`scratchpad/substrate-ab.mjs`: at-campsbay, chase, nodraw, 60 s a mode)
+put it on the DEFAULT path, not the flag: stepWildlife 0.8 → 4.9 ms a
+frame, sim:suspension 0.2 → 1.4, treeRefresh 12 → 40 with shrubs 3.6 → 30,
+and `render` the same plus a little.
+
+**The cause is two loops, not the design.** `tileAt` scanned every tile in
+the store for every query, and the sampler walked every drive segment of
+the tile for every query — validating each with an eight-element array
+allocated per segment per query — on a 2 km tile carrying thousands of
+them. The ground mesh beside it already had a cell index. Now each tile
+files its segments once, at its first sample, into 32 m cells by their
+reach (halfWidth + shoulder: the sampler keeps a segment only within that
+distance, and a box grown by it contains every such point), a query reads
+its own cell's list, validation happens at the filing, and `tileAt` keeps
+the last tile answered under the store revision it answered under — a
+wheel, an animal, a lattice point asks thousands of times inside one tile.
+The substrate's self-test is unchanged. Measured after, same A/B:
+default stepWildlife **4.9 → 0.6 ms a frame**, sim:suspension **1.4 →
+0.1**, treeRefresh **40 → 12 ms** with shrubs **30 → 2.4**; `render` the
+same (5.2 → 0.6, 1.4 → 0.1, 40 → 11.5) with its tick 11.0 → 3.8 ms a frame;
+every mode at 56 fps, indistinguishable from `legacy`, no page errors.
+
+**Two things to know from it:**
+
+- **A switch read round `qs` is on no list.** `?substrate=` was read with
+  `new URLSearchParams(location.search).get('substrate')`, so it was
+  declared nowhere, absent from SETTINGS and invisible to `switches.test`
+  — which is exactly what the typed reader was built to make impossible,
+  and it was walked round in one line. It is a `choice` switch now.
+- **A per-query cost is a device number.** The migration's own gates
+  ("frame time … within the existing production budgets") were green on a
+  harness build-budget run that measured the tile BUILD; nothing measured a
+  contact query, and a query that is cheap once is a frame when it is
+  called ten thousand times. The dump's phase rows are what caught it, on
+  the phone, in one paste; `stepWildlife` is the canary because it is the
+  caller with the most queries a frame. What is still unexplained: the
+  phone's `hydroBuild` at 111 ms a build under `render` (26 ms on the
+  fixture; the migration's 23.3 ms is a harness number too) and the terrain
+  worker at 334 ms a build (70 before) — both under the flag only, both
+  awaiting a device dump on the fixed build.
+
+## The tile that popped out: invalidation forgets the commit, not the picture
+
+The Senqu report, chart z11.9 with tile debug on, `?substrate=render` (the
+switch persists — it is not `owned` — so a phone that tried it once is still
+on it): the z14 boxes "keep rendering and then popping out and rendering
+again". Status line `REBUILD 31 · COV Z10 25`, several 2 km squares filled
+navy. Read from the code, then measured.
+
+**The mechanism.** `markTerrainDirty` → `invalidateProductionSubstrateTile`,
+and in render mode that pulled every admitted mesh of the tile out of the
+world — terrain, carriageways, structures, rapid detail — and unrendered its
+water, the moment the tile was dirtied. The tile was then a hole until its
+rebuild landed (one heavy job a frame, a 100–400 ms `workerGap` between
+builds, thirty-one deep), the substrate re-assembled it (a microtask, or a
+retry ladder of 40 ms → 12 s when the commit was refused — 48 refusals in
+75 s here, most of them the hydro field not yet renderable), and the atomic
+commit put a whole new revision back. A cover raster landing over the fine
+ring dirties every tile under it at once, so this was a wave of holes, one
+per cover arrival. The legacy path never showed it: `applyTileBuild` swaps
+the mesh in the same call. **The navy is the globe.** The far shell would
+have shown through a fine hole (it sits 12 m under), but `coverDirtiedFar`
+removed the shell tile under the rig at the same cover arrival and forgot
+the ask, so both layers were gone together and the frame was the planet's
+own tint — the harness frame at 26 s is one flat dithered field edge to
+edge, with `far z11 25/25` back a moment later.
+
+**The rule now: the authority goes at once, the picture stays until the next
+one is admitted.** Invalidation forgets the four commits (and stands the
+rapid-rock colliders down — a rock the next revision moves must not still
+be hit); `productionSubstrate.remove` still drops contact to the legacy
+sampler, which reads the new build the moment it exists. Every commit
+function already kept its `previous` binding and, on a different revision,
+removed and disposed the old meshes in the call that added the new — that
+swap was always there, it was just never reached with anything to swap. The
+hydro system does the same in deferred mode: `installField` keeps the old
+field's parts, `renderField` swaps them on admission (`renderedField` is
+what the parts were built from — `parts.length` used to mean "rendered",
+and would have made the new field a no-op behind the old picture). The build
+slots leave a substrate-owned old mesh where it is (`retireTerrainSource`);
+the binding disposes it at the swap. The far shell: `coverDirtiedFar` marks
+a tile `farStale` and keeps its mesh and bake records, `loadFarTile` asks a
+stale key again, and the landing swaps the mesh in the same breath the new
+one is built; `farAsking` stops a second cover arrival during the fetch
+asking a third time.
+
+**Measured** (`scratchpad/holes.mjs`: the Senqu spot, top cam, render mode,
+NOON, 75 s at 200 ms, a hole = a built fine tile with no mesh in the world):
+
+| | samples with a hole | mean holes | max | invalidations | refusals |
+|---|---|---|---|---|---|
+| before (f57f15c) | **40%** (76/192) | 1.17 | 6 | 53 | 48 |
+| after | **0%** (0/187) | 0 | 0 | 52 | 39 |
+
+Same invalidations, same refusals: nothing about the churn changed, only
+what the churn takes off the screen. The `hydro-render-cutover`,
+`substrate-render`, `globe-navigation` and `fps-tap` tests pass; the
+`substrate-render` assertion `uncommittedVisibleTerrain === 0` still holds at
+its settled state — mid-rebuild that counter is now the stale-but-shown
+count, by design.
+
+**The instruments.** `auditGroundHoles` runs every frame over `terrainMeshes`
+(a ring is under a hundred keys): `holes` now, `unshown` (built, never yet
+admitted — first-admission latency, not a pop), `pops` (a tile that WAS
+shown going dark), hidden time and the longest stretch. `__tileholes()`
+carries them with the open holes and the far `asked/stale/inflight`; the
+dump has them as the `ground:` row under `chart`. A settled render mode reads
+`holes 0 · pop-outs 0`. **The tile-debug overlay has a key now** — see
+"The layer ladder, and the key that names it" below for what it says and
+where it sits.
+
+**What to take from it:** a remove-then-wait is a hole for as long as the
+wait, and the wait is the whole rebuild queue. Anything that replaces a
+visible thing asynchronously keeps the old one up until the new one is
+ready — the route solver learned this ("old route live until the new one
+lands"), the far level swap learned it (the retired ring), and the substrate
+commit had the swap written and was bypassed by its own invalidation.
+
+## …and then it still read flat, because the sea was not STEEP
+
+The seat again, after the soundings fix: "I am still convinced we're not
+seeing any vertex shader height to waves — relocated offshore, drone, near
+sunset, pixel quantisation and dither off, and the ocean is totally flat.
+Do we need to set height to something arbitrarily large to confirm?" The
+answer to the last question is no, and doing it is what settled the first.
+
+**THE VERTEX PATH WAS PROVED SOUND BEFORE ANYTHING WAS TUNED**, and the
+proof is the part worth keeping. At the seat's own coordinates, hiding the
+hydro mesh, the legacy sea plane and the far shell in turn showed the
+visible water IS the hydro mesh. Then the amplitude dial: ×1, ×4 and ×8 —
+the last of them **23.6 m of wave height** — all photographed as a flat
+plate. The same ×8 with the wavelength quartered visibly heaves. So the
+displacement works, height was never the lever, and "make it bigger" would
+have gone on failing at any size.
+
+**WHAT THE EYE READS IS H/L.** At the 240 m dominant this sea stood at
+**0.012** — a gradient of one in eighty, which is a level floor with a slow
+tilt in it and no face anywhere for a low sun to catch.
+
+**AND THE HONEST WAVE FOR THIS WIND IS SHORTER THAN THE MESH.** Fetch-
+limited at the 12.6 m/s and 50 km the sea state stands for: Hs **1.44 m**,
+Tp 5.35 s, wavelength **44.7 m**, slope **0.032**. Production's coastal
+lattice is 21.1 m between vertices, so Nyquist is 42 m: the wavelength this
+wind actually makes is precisely the one the mesh cannot carry, and no
+tuning reaches it. Going shorter without a denser mesh buys a crest that
+pulses as it travels through the sample points, which reads worse than the
+plate did.
+
+**So the wave is drawn long and the SLOPE is kept.** Dominant 240 → **140 m**
+(6.6 samples a wave, a crest drawn at 89% of its height wherever the phase
+falls); the amplitude ceiling 1.05 → **1.45 m** of peak rise, which is not
+chosen but SOLVED — at a full sea state the vertical envelope is
+1 + windWaveWeight = 1.54, so 1.45 reads as 4.46 m of wave on 140 m, H/L
+**0.0319** against the real sea's 0.0322. The wind-wave layer, the only one
+between the dominant and the fragment skin that carries real faces, is
+leant on harder (0.20 + windSea·0.22 → **0.26 + windSea·0.30**) and its
+length floor goes 64 → **72 m**, which is 3.4 samples and the same floor the
+shore wave already sits on. **The stated cost is that the sea is about three
+times too TALL for its wind** — a right slope on a wrong length has to be —
+and that trade is the whole change.
+
+**AND THE COAST FIELD'S SWELL MOVED WITH IT.** `swellWavelengthM` in
+`coast-field.ts` is a second copy of the shader's ramp, and it has to be:
+the field is the travel time of the wave the vertex draws, so solved for a
+longer swell than the one being phased on it the refraction bends the wrong
+crests and the shoaling starts in water that swell would not yet feel. A
+shorter swell feels the bottom later, so the crawl now begins closer in.
+
+**Measured**, Kommetjie, one sky (`wx=clear`), one sun (14°), the same three
+stations, the build the only difference:
+
+| station | control L / H | control H/L | fix L / H | fix H/L |
+|---|---|---|---|---|
+| beach | 184 m / 2.70 m | 0.0147 | 113 m / 3.85 m | **0.0341** |
+| shallows | 217 m / 2.65 m | 0.0122 | 129 m / 3.82 m | **0.0297** |
+| surf | 236 m / 2.56 m | 0.0109 | 138 m / 3.72 m | **0.0270** |
+
+…and in the frame itself, over the sea band of the beach station's own
+photograph: luma spread **17.2 → 20.3**, vertical gradient 4.16 → 4.38,
+tones 40 → 41. **A real change and a modest one** — the numbers are the
+stronger evidence, and the seat's report against the deploy is the rest.
+
+**THREE TRAPS, ALL THREE PAID FOR IN RUNS:**
+
+- **A/B THE WEATHER OR YOU ARE COMPARING TWO SKIES.** Weather is rolled per
+  boot. The first photographic comparison came back with the control under
+  crisp cloud and the fix under an overcast — two sea colours, two suns, two
+  haze depths — and was offered as a comparison of a wave constant. `wx=` is
+  the pin, and `wave-shots.mjs` now passes `WX` (default `clear`) always.
+  The same run's `windMps` moves with it, so the absolute peaks in the table
+  above are lower than the live-weather run's and only the PAIR means
+  anything.
+- **`__place` SETS A POSITION; THE RIG HAS TO LAND.** The tool shot 2.6 s
+  after placing, which at the harness's two to four frames a second is a
+  handful of frames — so one run photographed a truck still falling from a
+  camera still flying, and the next the same station settled. Six seconds,
+  and the body's height is printed beside the wave's numbers.
+- **A FRAME IS EVIDENCE OF WHAT IS IN IT, NOT OF WHY.** The surf station's
+  photographs come back from inside the water column, and that read as a
+  crest tall enough to swallow the camera — an argument that nearly set the
+  amplitude by it. It is not: the rig stands on a seabed **5.8 m** below the
+  resting surface at that station, and the control's camera is under water
+  there too. `body -7.41 over sea -1.60` in the tool's own line is what said
+  so.
+
+**WHAT THIS DOES NOT FIX.** The honest wave is still three times shorter
+than the lattice can draw, so the only real cure is a denser coastal tier —
+at 10 m between vertices a 45 m wave is 4.5 samples and the height could
+come back down to its true 1.4 m. That is a mesh change with a cost, and it
+is the next thing to measure if the sea still reads wrong from the seat.
+
+## The sea had no soundings, so the waves had no height
+
+From the seat: "did we lose vertical height/volume on ocean waves at some
+point?" Yes, twice, and neither was a change to the amplitude constants —
+those have not moved since the original hydro shading commits. What changed
+is what multiplies them. `__wave(x, z)` is the instrument the question
+needed: the vertex's displacement chain cannot be read back off the GPU, so
+it replays the chain on the CPU from the same field — sea state, depth,
+shoal, the post-break collapse, the shelter — and reports the peak rise in
+metres. Peak rise is half the wave's height.
+
+**The big one, and it was old. Terrarium encodes open water as ZERO, not as
+bathymetry.** A sea texel's depth is therefore the resting datum minus that
+zero: 0.40 m at Camps Bay, at every sample out to a kilometre and a half.
+Every gate in the wave's chain reads metres, so the whole Atlantic sat
+permanently in the post-break collapse — `postBreak` 0.32, `vShoal` pinned
+at 1, `vBreaker` 0.045 so no breaker could ever form, anywhere, at any
+distance. The sea was a flat 0.3 m sheet from the waterline to the horizon.
+The gates are right; the number they were reading was fill.
+
+So the wave terms read an ordinary beach profile instead: zero at the
+waterline, **one in seventeen** seaward, the deeper of profile and datum
+always winning so a tile that does carry soundings keeps them. The slope is
+a rendering proxy chosen so the whole profile fits inside the 180 m the
+shore-distance field can actually measure (it clamps there). The coast
+field's solver reads the same shelf — fed the fill it had no depth gradient
+at all, so its dispersion was uniformly at the 3× cap and there was **no
+refraction**, only a threefold phase stretch; the test now holds it to a
+gradient (112.5 → 90.6 m of travel per two texels on a fill-flat sea).
+
+Measured on the live Camps Bay beach, the same spot before and after:
+
+| offshore | peak rise before | after | breaker after |
+|---|---|---|---|
+| 0 m (the wash) | 0.20 m | 0.30 m | 0.10 |
+| 25 m | 0.30 m | **1.11 m** | **0.75** |
+| 50 m | 0.30 m | 1.08 m | 0.31 |
+| 100 m | 0.32 m | 0.90 m | 0 |
+| 200 m and out | 0.29–0.35 m | 0.68 m | 0 |
+
+A profile where there was a sheet: deep-water swell at 0.68, rising through
+the shoaling band, breaking at twenty-five to fifty metres, collapsing into
+the wash. Mean over seventeen sea samples, 0.322 → 0.947 m.
+
+**The small one was a day old and mine.** The coast field's exposure
+multiplied the wave ENVELOPE — the swell by mix(0.35, 1, exposure), the
+shore wave by mix(0.45, 1, exposure) — which took a third of the height
+where the fan read sheltered and, because crest whitening is a steep
+smoothstep on that same envelope, took the whitecaps almost entirely
+(crest 1.00 → 0.31 on the at-simonstown fixture). Shelter now damps only
+what shelter stops: the breakers, their foam and the spill. **A quiet
+harbour is quiet because nothing breaks in it, not because its swell is
+shorter.**
+
+And the fan itself was wrong twice over, both from the demo's assumptions
+about an authored seabed. It walled off water of another KIND, so the
+land-cover polygon lying over False Bay — 62,578 pixels — killed five of
+seven rays on open water; and it attenuated 0.87 a step over anything under
+two metres, which on fill-flat depth fired on every step of every ray
+(0.9^28 = 0.05) and drove whole coastlines to the floor. Only LAND stops a
+swell now. The solve's medium is any STANDING water, whatever body owns it:
+foreign water was also outside the medium, which made it a SOURCE at travel
+zero — a false waterline emitting crests from its own rim, the very defect
+the travel field exists to remove.
+
+## A coastal spawn set the sea ten metres up, and the ocean stopped existing
+
+The live coast at Simon's Town had no ocean AT ALL: `__hydrotile` showed
+two `lake` bodies and the mask refusing all 62,578 pixels of the False Bay
+tile with a datum of 10.4 m. The sea was drawn as the land-cover polygons
+over it — sea state 0.34 instead of 0.72, short fetch, and because lake is
+not a coastal kind, no surf strip, no run-up, no breakers and no coast
+field. Camps Bay, ten kilometres away, was healthy at 85–100% ocean.
+
+The cause is one line in `measureSeaDatum`, and the mask had already
+learned the same lesson for its own pixels. The radial scan pushes
+`sampleHeight(x, z) + baseElev` for every cover-water sample, and
+`sampleHeight` answers 0 — the spawn's own level — anywhere it has no tile.
+Cover arrives well ahead of terrain, so the first scan of a coastal session
+is mostly such samples and the datum it sets is the SPAWN ELEVATION: ten
+metres at Simon's Town, which is where the town sits. Everything downstream
+then failed honestly against a false number. A sample with no terrain does
+not vote now, and `__sea().scan` reports what the last accepted scan
+actually saw (wet and dry counts, the water median, the dry twentieth
+percentile it had to stay under) so the next occurrence is one call to
+diagnose.
+
+Measured live at Simon's Town, before and after: datum **10.4 → 0.4 m**;
+the False Bay tile's mask **0% ocean and 62,578 refused → 95.5% and 6**;
+the tile's bodies **lake, lake → ocean**; ocean texels in a three-kilometre
+scan **0 → 1,365**. The bay is sea again, with everything that follows from
+being sea.
+
+**What to take from both:** a fill value is not a measurement, and the
+difference is invisible at the call site. `sampleHeight` returning 0 and
+terrarium's ocean returning 0 are the same trap at two scales — one flattened
+every wave in the world, the other deleted an ocean — and in both cases the
+code downstream was correct and reading a number that meant "I do not know".
+
+## The coast field: the sea's crests ride travel time, and a harbour is quiet
+
+Gleaned from the ocean demo the seat was shown (its eikonal coast was the
+one piece worth taking — see the comparison in the session). The nearshore
+wave phased on the signed shore distance because a distance is continuous
+and its isolines are crest lines "to a first approximation" (the sea
+shader's own words). The approximation drew a crest the same sixty metres
+off a steep rock shore and off a shelving beach and wrapped a headland in
+contour lines. A real crest slows where the water shallows.
+
+**What was built** (`hydro/coast-field.ts`, wired in `build-tile`): per
+tile with sea or lagoon in it, the TRAVEL TIME from the waterline over the
+bathymetry — the eikonal |∇T| = 1/c(h) by monotone Godunov sweeps, c from
+the finite-depth dispersion for the shader's own swell wavelength (300 m on
+the open sea) — stored as T·c₀ in deep-water metres, so it IS the shore
+distance where the water is deep and grows faster over a shoal. The shader
+phases the nearshore crests on it in place of the distance; the dry side
+keeps signed shore distance, and the two meet at zero on the waterline, so
+the phase stays continuous and direction is still never inside it. The
+fourth channel is EXPOSURE: seven rays over ±72° about the open-sea
+direction, marched about a kilometre over the wet mask; land ends a ray,
+a shallow thins it, leaving the grid counts as open. It damps the shore
+wave, the offshore swell, the breakers, the spill and the standing-water
+chop. `?coast=0` builds none; `__hydroview('coast')` paints exposure red to
+green with a travel isoline every 30 m; `__coast(x, z)` reads a texel; the
+dump's hydro `buildProf.coast` carries the cost.
+
+**Four things the first cut got wrong, each caught by a number:**
+
+- **The crawl is capped at three times deep.** Half a metre of water
+  carries a 300 m swell at two metres a second against twenty-two, so the
+  last wet texel was worth ten texels of deep-water metres — a wavelength
+  and a half of phase inside the 18.75 m the field can resolve. Aliasing,
+  not shoaling. At three times the crests bunch to a third of their
+  offshore spacing, two texels apart at the tightest; the refraction needs
+  only the relative speeds across a section and keeps its shape.
+- **The sweep is a band; the far field is grown from it.** The whole grid
+  swept was 7 ms a tile warm at 140²; the shader phases on the travel only
+  inside its 120 m crossfade. Sixteen texels are swept and the sea beyond
+  is filled by a two-pass chamfer seeded with the band's values at the
+  deep step (the eikonal at constant speed, to the chamfer's four per
+  cent) — and the band texels are its seeds, never lowered by it, or a
+  deep step through a band texel erases the slowing the sweep put there
+  (the test caught that: "travel outruns distance, 131 vs 131"). Warm:
+  about 6 ms a mostly-sea tile on the desktop; the Cape fixtures' builds
+  read `coast` 2–4 ms a build averaged over every tile.
+- **A sea texel no shore reaches carries the plain distance.** A tile
+  wholly at sea has no source, and a zero there reads as the waterline —
+  a full, phase-flat shore wave over the whole open tile. It carries the
+  distance transform's own clamp instead, well past the crossfade, which
+  is what the phase read before.
+- **The exposure fan faces the open sea, not the travel's gradient.** From
+  between a beach and a rock the gradient points at the beach, and Camps
+  Bay's surf zone read a fifth as exposed as the water beyond it. The fan
+  now faces down the distance to the mask's interior.
+
+**And one thing the field found about the data.** Camps Bay's beach carries
+an OSM `natural=water` polygon three texels wide between the sand and the
+sea, and Simon's Town's harbour is one. Painted as LAKE (their tag) they
+kept the surf strip and the run-up off that shore — those compile for
+coastal kinds only — and gave the coast field a band with no sea in it:
+travel started 60 m out and measured from the polygon's rim. A standing-
+water area whose interior samples mostly read confirmed ocean is observed
+as a **lagoon** now (`seaTouching`, sampled the way `areaEvidence` samples a
+level); a lake behind a beach has no sample under the mask. And the
+registry took a body's kind from its FIRST observation across tiles, so the
+bay polygon stayed a lake because one tile — analysed before its coverage
+arrived, or holding only the polygon's landward clip — said so first; the
+top-down field frame over the harbour showed the basin's own texels
+solved and the open bay beside them green and empty. A polygon any tile
+has seen under the mask is coastal everywhere: the sea-touching kind wins
+the merge. What stays a lake on the at-simonstown FIXTURE is the WorldCover
+water polygon over False Bay itself (4,382 pixels): `__hydrotile` shows the
+mask answering confirmed DRY at every one of its 110 samples, because the
+fixture carries no OSM coastline for the bay and the terrain under it reads
+at the datum — a fixture limit, not the rule's. The mask's unknowns do not
+vote, so a polygon the mask has only partly judged is decided by the part
+it has. `__hydrotile(x, z)` is the instrument: the tile's features, each
+one's sea-touching arithmetic, the coverage state and the bodies' settled
+kinds, in one call.
+
+**Measured at Simon's Town** (`scratchpad/coast-shots2.mjs`: the rig placed
+on the shore the field itself found): the harbour shore reads exposure
+**0.12**, the beach by the town **0.67**, the open False Bay shore
+**0.85**; with `coast=0` every wet texel reads 1. Travel at the harbour's
+waterline runs 47 → 62 → 88 m over the first 40 m of shore distance (the
+shelf's crawl), 33 → 46 at the town beach. Camps Bay's beach is not a
+visual case: the fixture's DEM there stands above the water, so the sea is
+under the sand until well offshore, and a shore frame shows grass. What
+this does NOT do: a directional swell (the wind turns the offshore swell;
+the coast field's refraction is from the shore outward), and shadowing of
+one bay by a headland in the next tile — each tile's field ends at its
+gutter. The demo's swash history, Jacobian whitecaps and footprint
+roughness are still to glean.
+
+## The layer ladder, and the key that names it
+
+The first key sat on the scale bar's label — exactly the rows it was meant
+to read beside — and named the MARKS, when what was asked for was a legend
+for the BOXES: which dashed square is which layer, at what zoom, how wide.
+So the ladder, in the words the code and this file already use, from the
+truck outward:
+
+| name | zoom | one tile here | what it is | drawn as |
+|---|---|---|---|---|
+| FINE · vectors | z16 | ~600 m (× cos lat) | the OSM ring: roads, water, buildings streamed round the truck | the grid of small cells, a pip per cell |
+| FINE · terrain | z14 | ~2.4 km | the height tiles the world is built on, `terrainMeshes` | the medium dashed boxes |
+| SHELL | z11 (the level moves with the zoom) | ~19 km | the far ground on the sphere, baked from the coarse DEM and painted by COVER | the large boxes, only past the fold |
+| COVER | z10 / z12 | ~40 km / ~10 km | the WorldCover raster that tints the shell and the fine tiles; no boxes | the header's `COV` count |
+| OVERVIEW | z13 down to z5 with the zoom | ~5 km to ~1,200 km | the chart's coarse road and place vectors; no boxes | the dump's `ov` figures |
+| GLOBE | — | — | the planet under everything | the sphere |
+
+"FINE" is the streamed world you can drive on; "SHELL" is what fills the
+horizon and the wide chart; "beyond" is the globe. A ring FOLDS when its
+cells fall under eight HUD pixels: it is then drawn as one box round the
+whole ring, and the key says so.
+
+The key itself sits UNDER the scale bar (its label is at `pad + 56` with
+tile debug on; the key starts twenty below), one row per layer that draws
+boxes: `Z16 526M VECTORS` then the pip vocabulary in its inks — WIRE
+(pulsing gold, on the wire), QUEUE (soft pip and its serving rank), FAIL
+(red X in its 30 s backoff), DONE (green), ASKED (dim dot, requested and
+unsettled); `Z14 2.1KM TERRAIN` then MESH (teal box), WAIT (gold, DEM
+asked), REBUILD (orange, dirty); `Z11 19KM SHELL` then MESH and ASKED while
+the shell boxes draw; and `ONE BOX: THE WHOLE RING, FOLDED` while a ring is
+folded. The metres are computed from the latitude, not quoted. A row wraps
+under its name on a narrow HUD. The header's words are the key's words.
+
+**Every marker answers a tap the same way now.** `poiUnder` searched only
+the pins, so a finger on a summit's triangle dropped a fresh fix beside it
+and opened THAT — a mark on nothing, next to the thing reached for. It
+searches the summits and the wide chart's places too: the same site card
+opens, its record reads the ground there, GOAL points the truck at it, and
+GO stays withheld as it is for any pin that is not a survey mark.
+`__poimarks()` lists what is on the glass and everything tappable in world
+coordinates; `__tapat(x, z)` makes the chart's choice without the pointer,
+which is how the harness proves a summit opens its own card.
+
+### The chart's pale outer ground is the SHELL, and the clip had left it a ring to paint
+
+Two questions from the seat, over Zagor Town in Xizang
+(`?lat=28.5108&lon=87.0714&cam=top`, the chart at `2 KM · 1:53K · z13.3`, tile
+debug on): why is the outer chart far lighter and flatter than the middle, and
+what is the outer strip that looks as though it only PARTLY paints, letting the
+lighter layer through? Both were read as the globe showing through. Neither is
+the globe — it is a near-black graticule and at that zoom the streamed world
+covers it completely — and the two are one mechanism seen twice.
+
+**THE INSTRUMENT IS A HIDE-DIFF WITH ITS OWN FLOOR** (`devtools/chart-bands.mjs`).
+Three layers can be under any pixel out there and from a still frame they are a
+matter of opinion about a grey shape, so: one settled world, the same frame
+photographed with everything, with `__hide('far')` and with `__hide('terrain')`
+— the pixels that CHANGE when a layer goes are that layer's — and, first of
+all, **the same frame twice with nothing changed**, which is the only thing
+that makes the rest readable. Measured floor: **0.0% over the top two thirds of
+the frame and 9.7% in one band around the truck**, which is the dither
+re-weaving over the sward. That band was 9.7% "shell" in the attribution too,
+and is therefore not shell at all; the first reading of this frame counted it
+as one.
+
+**WHAT THE OUTER GROUND IS.** The coarse shell — z11, 19 km tiles at ~150 m a
+vertex — drawn where the fine world is not protected by the clip. Hiding the
+far group turns those pixels back into the fine world's own darker relief;
+hiding the fine terrain leaves a flat blue-grey where the clip's hole is (the
+sky, at luma 133 ± 7 with no structure in it), not a planet.
+
+**WHY IT IS LIGHTER, AND TWO THIRDS OF IT IS ONE UNIFORM.** Over the 1,792 art
+pixels the shell actually painted, at 36 m an art pixel:
+
+| | luma |
+|---|---|
+| the shell, as drawn | **160.0** |
+| the fine world underneath it | **133.7** |
+| the shell with `__planetmix(0)` — the scene's sun, as the fine world has it | **142.4** |
+
+A **26-luma seam, a palette step and a half**, of which **17.6 is the planet's
+own sun** (`uPlanetMix`, 0.45 at that zoom). At full strength that term
+REPLACES the shell's Lambert shading — of the tile's own DEM normal map — with
+`planetSun(albedo, radial·sun)`, which has no slope in it at all: flat albedo
+under a sphere's cosine. That is why the outer ground reads not merely brighter
+but FLATTER, and it is the fault the section above it ("THE FAR/FINE DIFFERENCE
+SHOULD BE MESH DETAIL AND NOTHING ELSE") was written to end, reintroduced at
+chart zooms by a ramp. The remaining 8.7 luma is the honest difference: a
+150 m lattice, the coarse cover, no substrate.
+
+**THE RAMP WAS THE CLOUD SHADOWS', AND THOSE TWO ANSWER DIFFERENT QUESTIONS.**
+`uPlanetMix` faded in over `uMpp` 15→60 to match the cloud fade and the mottle,
+"so the chart changes its rules in one place" — but 15 m an art pixel is a
+2.2 km frame and 60 is a 9 km one. A noise field going sub-pixel is a question
+about RESOLUTION; whether the shell is a planet or the horizon of a tangent
+world is a question about REACH. It is 400→2,000 m an art pixel now — a 60 km
+frame to a 300 km one — and every wide-chart number in this file was taken at
+6,000 m an art pixel or more, where the mix is 1 either way.
+
+**AND THE "PARTLY PAINTED" STRIP IS TWO LAYERS FIGHTING OVER ONE BAND.** Where
+the shell is not clipped away it does not replace the fine world, it competes
+with it: both are drawn, and the shell wins only where its 150 m chords stand
+above the fine surface. `__far().seam` reads **−61.1 to +11.7 m** here against a
+`FAR_DROP` of 12 — so across a Himalayan valley the coarse triangle is within a
+whisker of the drop everywhere and over it in patches. That interleaving IS the
+partial paint, and it is why the band reads as a wash with the ground showing
+through rather than as a clean edge.
+
+**THE CLIP HAD LEFT IT A WHOLE RING, BY ARITHMETIC.** `stepFineRing` walked
+complete rings to `TERRAIN_RING` (2) while the streamer asks `tRing` — up to
+`TERRAIN_RING_MAX` (3) — whenever the view is wide, which on the chart it
+always is. Measured at Zagor Town: **49 height tiles loaded (7×7, 15.0 km)
+against a clip box of 10.7 km**. One full ring of fine ground, built and drawn,
+outside the rectangle the shell is discarded inside, at every chart zoom there
+has ever been.
+
+**AND ONE LATE TILE COLLAPSED THE WHOLE BLOCK.** The box was the complete
+RINGS, which is all-or-nothing: a single tile of ring 1 still on the wire — or
+one the DEM refused, which never arrives — took a 7×7 block down to the truck's
+own tile and handed the shell everything else. The seat's own frame is what
+that looks like, and the screenshot can be measured: its scale bar is 369 px
+for 2 km, its two strongest grid lines stand 396 px apart — 2.15 km, the z14
+tile at that latitude — and **the frame's luminance steps sit on them**, at
+x 360 and x 756 with the truck at 603. The pale ground begins at the edges of
+the truck's OWN tile, which is a `CLIP 1x1`. That is a reading of a photograph
+rather than a probe, so it is offered as consistent-with rather than proven;
+the header above now answers it outright. It is the largest RECTANGLE of loaded
+tiles around the truck's own now, grown a whole row or column at a time, so it
+still cannot contain a tile the fine world has not built and a missing corner
+costs one row rather than everything.
+
+**Measured**, same spot, same zoom, same settled world, the two changes the
+only difference (`devtools/chart-bands.mjs`; the rows are art rows of a 320-row
+frame, the floor is the same-frame-twice control):
+
+| | before | after | floor |
+|---|---|---|---|
+| clip block | 5×5 tiles · 10.7 km | **7×7 · 15.0 km** | — |
+| planet-sun mix at this zoom | 0.45 | **0.00** | — |
+| rows 0–19, the horizon past the loaded world | 80.0% shell · seam **+26.3 luma** | 49.2% · **+10.9** | 0.0% |
+| rows 20–59, the partly-painted band | **19.6% shell** · +32.7 | **3.5%** · +17.0 | 0.0% |
+| rows 62–139 | 0.0% | 0.1% | 0.1% |
+| rows 140–199 | 9.7% | 9.7% | **9.7% — all of it the floor** |
+
+The horizon is still the shell's and must be — that is what the layer is for.
+What changed is that it is no longer a palette step and a half brighter than the
+ground it continues, and that it stops at the edge of the world the fine
+terrain has actually built rather than a ring inside it. The ramp, checked at
+six zooms on the build that ships it: **0.000 at 36, 113 and 396 m an art pixel
+· 0.443 at 1,139 · 1.000 at 3,416 and 11,197** — the wide chart's terminator
+measurements were all taken at 6,263 m an art pixel and up.
+
+**AND THE FRAME SAYS IT NOW.** The tile-debug header carries `CLIP w×h`, the
+block in tiles, beside MESH and REBUILD; `__far().fineBlock` is the same number.
+A chart whose outer ground looks pale and flat with `CLIP 1x1` on the line is
+this, and needs no investigation at all — which is the whole reason the number
+is on the glass rather than in a probe.
+
+**`__planetmix(v)` is the override the measurement needed**, and it is there for
+the reason this file has recorded twice: the term is written every frame from
+`uMpp`, so a console write survives until the next animation frame and no
+longer. `__farclip(true)` lifts the clip; `__faralign`, which a comment beside
+it has pointed at for months, **does not exist** — the same class of fault as
+the hydro bench this file once named.
+
+## The Senqu river stands on the hillside: its line runs 30–60 m off the DEM's floor
+
+Reported from the cab at `lat=-30.94647&lon=27.46395&h=153&cam=chase`
+(`substrate=render`, but the field is the same in every mode — the default
+run gives the same numbers): "the river seems raised from the terrain".
+Measured with `__ground` (DEM, drawn mesh and standing ground at a point,
+with the water's resting level beside them — `scratchpad/river3.mjs`,
+`river4.mjs`), west–east sections through the river at the rig's row and
+100 m either side, every 5 m:
+
+| section | DEM floor | drawn river (east of rig) | DEM under it | resting level | river above the floor | west edge above its ground |
+|---|---|---|---|---|---|---|
+| at the rig | 1530.1 m at +5 m | 35–45 m | 1532.9–1534.7 | 1534.3 | **2.6–4.2 m**, 35 m west | +1.4 m |
+| 100 m south | 1529.5 m at +35 m | 80–95 m | 1535.5–1541.4 | 1538.1–1539.3 | **8.6–9.8 m**, 50 m west | +2.5 m |
+| 100 m north | 1530.0 m at −30 m | −5…+5 m | 1532.6–1534.5 | 1534.0 | **4.0 m**, 30 m west | +1.4 m |
+
+The ground rises east at 18–25 m per 100 m; the valley floor the DEM has
+runs 30–60 m WEST of where the OSM waterway line runs, up the eastern slope.
+The profile's station level is the DEM sampled ON the line (`buildProfile`:
+carved invert + nominal depth where there is a carve, else
+`sampleElevation` at the station, smoothed, then the monotone descending
+fit), and the per-texel ceiling is that same foot plus 0.6 m — so the water
+is exactly right for the ground under the line and 3–10 m above the valley
+floor next to it. The sheet is flat across its drawn width, so its western
+edge floats 1.4–2.5 m over the ground (the wet overlay's `E`/`W` there) and
+its eastern edge is buried in the rising bank (`U`). From the floor, where
+the truck sits, that is a river standing on the hillside 40 m away; 70 m
+south-east, inside the drawn width, the truck is under 2.5 m of water and
+the HUD says WATER. Nothing in render mode or the substrate caused it — the
+same field draws in `legacy` — and the mesh follows the DEM to 0.2 m at the
+rig, so "which terrain" is answered: the DEM's, and the DEM's floor is not
+under the line. Which of the two is wrong on the ground is not decidable
+here (OSM traces the river from imagery to ~5–10 m; the terrarium z14 pixel
+is 9.5 m but its source in Lesotho is a 30 m product, which does not resolve
+a channel in a gorge and smears the floor sideways) — but the mesh IS the
+DEM, so the river has to sit in the valley the mesh has.
+
+**Not fixed; the shape of the fix:** seat each station on the DEM's floor —
+at profile build, scan the DEM across ±60–80 m perpendicular to the line
+(the DEM's own spacing, a dozen samples a station, cheap against the
+raster loop) and move the station onto the lowest point, with continuity
+along the line so a meander does not hop valleys; then the level, the
+carve and the drawn ribbon all follow the terrain's valley. Lowering the
+level alone would sink the river under the hillside where it is drawn.
+The carve (`channelsNear` in the kernel) and the field must move together
+or the carve cuts a trench up the slope and the water sits in the floor
+beside it.
+
 ## Globe navigation: retain the place, not a disposable spin
 
 The seat reported that spinning the planet then zooming in returned to the
@@ -5570,17 +10437,293 @@ closes the other direction — a switch declared and no longer read fails.
   about a second after boot (found while measuring species mixes with a world
   pinned to ARID that reported temperate ten seconds later). It was a second
   hand-maintained list of the same thing; now it is the `owned` rows.
-- **SEVENTEEN ARE MARKED `legacy`** — the non-default value keeps a superseded
+- **TWENTY ARE MARKED `legacy`** — the non-default value keeps a superseded
   implementation alive, so each one is a retirement candidate and the question
   "what can we retire" is a filter rather than an archaeology expedition:
   `ez ezstand guild refine tworker sward lumasync hydroskip vegseed relief
-  shfade shsnap shrub treewind ezbark ezedge imu`.
+  shfade shsnap shrub treewind ezbark ezedge imu substrate wetdebug shore`.
   **Not all of them are retirable, and the mark does not claim they are.**
   `refine=0` and `guild=0` both restore paths that are still LIVE for another
   reason — the plain lattice is what builds past `REFINE_R`, and the climate
   path is what runs wherever `guildAt` returns null (the sea, a fixture, a tile
   in flight). Retiring one of these means proving the other branch is
-  unreachable, not just unfashionable.
+  unreachable, not just unfashionable. **Do not quote a count from this file:**
+  it was seventeen here and twenty in the table for as long as it took to read
+  one and not the other. `switches.test.mjs` prints both numbers on every run
+  and that is the copy to trust.
+
+### …AND SEVEN MORE WERE READ BY REGEX, WHICH THE TEST COULD NOT SEE
+
+The lesson above — a switch read round `qs` is declared nowhere, listed nowhere
+in SETTINGS and invisible to `switches.test` — was written into `main.ts` when
+`?substrate=` was caught. Nineteen lines ABOVE that comment, `HYDRO_ON` was
+reading `/[?&]hydro=([01])/.exec(location.search)`. Six others were doing the
+same: `dem`, `cprobe`, `nodraw`, `noweld`, `nopins`, `nofill` — among them the
+flag the harness itself depends on to measure without drawing.
+
+**The test's guard matched one spelling.** It counted
+`new URLSearchParams(location.search)` and required no more than two; a regex
+against `location.search` is not that string, so it cost nothing to add and the
+table never saw it. `?substrate=` was fixed one switch at a time and seven of
+the same kind stayed live.
+
+All seven are declared now and read through `qs`, and the assertion is on the
+SHAPE rather than on a count: **no client module may match the query string with
+a regex**, over the whole directory, because the next one will not be in
+main.ts. The guard was checked by putting the old form back — it fails, which is
+the only thing that makes a regression test worth having. Two readers widened
+slightly in the conversion: `?cprobe=2` and `?hydro=anything` now read as on,
+where the regexes demanded `=1` exactly. That is `qsOn`'s rule for every other
+toggle in the table, which is the point of the table.
+
+### AND SETTINGS CAN SET THEM
+
+The panel rendered all sixty-seven rows through `kvTable`, which has no click
+handler — so the one thing SETTINGS could not do was set a setting, and the
+documented way to change a switch was to edit the query string by hand, which a
+phone cannot do at all. Three changes, and the third is what makes the other two
+honest:
+
+- **Filter by mark.** Sixty-seven rows in one scroll is a list nobody reads. The
+  marks were carried on every row and rendered on none but `legacy`, so a bench
+  probe and the spawn latitude looked alike. They are chips with counts now
+  (`ALL 67 · SET 6 · WORLD 13 · LOOK 17 · BENCH 28 · LEGACY 20`), and the
+  LEGACY chip is the retirement list as a filter, which is what the mark was
+  for.
+- **A tap STAGES; it does not apply.** Every switch is read once into a `const`
+  while the module initialises — that is not a defect to fix, it is what makes
+  the world buildable before there is a frame — so a control that flipped one
+  live would lie about when it takes effect. A toggle cycles the three states
+  the reader actually distinguishes (on, off, absent — "unset" is not "set to
+  the default"); anything with a value is typed. The foot shows the diff and
+  one RELOAD spends the lot, which is also what an A/B usually wants.
+- **`urlWithSwitches` preserves every key it is not changing**, the same rule
+  and the same reason as `URL_OWNED`'s: the art-direction and instrumentation
+  flags are not ours to drop. Asserted in `switches.test.mjs`, without a
+  browser.
+
+**`RELOAD · n STAGED`, not `RELOAD WITH n`** — STORAGE offers RELOAD WITH
+CONSOLE one section further down, and two buttons on one page opening with the
+same two words is a misread waiting to happen. Found by a test that matched the
+wrong one.
+
+**AND THE TAP TARGETS.** The panel sizes its back, close, carousel and chip
+controls to 44px and then laid out the bulk of its own surface — every dial row,
+every list row — at 3px of padding. `.m-row.hit` and `.m-dial` are 44 now;
+`.m-row` flat is NOT, because a credit, a spec line and a dimensions row are not
+tappable and giving them a thumb's height adds a screen of scrolling to pages
+nobody taps.
+
+### AND IT COST THE PAGE ITS LENGTH, WHICH NOTHING WAS MEASURING
+
+`devtools/menu-survey.mjs` scrolls SETTINGS a screenful at a time and
+photographs each, because one screenshot of a scroll region is the first
+screenful and an assumption about the rest. Measured on the same spot and
+window, the change above against its parent:
+
+| | before | after |
+|---|---|---|
+| SETTINGS scroll height | 3,238 px | **6,139 px** |
+| screenfuls of a 678 px window | 4.8 | **9.1** |
+| switch rows | 60, as kv text | 67, tappable, with notes |
+| dial row height | 24 px | 44 px |
+
+Two thirds of the growth is the switch list and one third the dial tap
+targets, and the list sits FIRST — so sign-in, RESET THE LINE, STORAGE, the
+dev console, the tape recorder and all forty-six dials are now behind five
+screenfuls of reference material. The filter chips only half answer it,
+because the default is ALL 67 and the panel's own doctrine is that the list
+renders whole ("a list that hides the ones nobody set hides exactly the ones
+nobody remembers"). **Reference before action is the fault**; the ordering, or
+a screen of its own for the switches, is the fix, and neither is made here.
+
+### TWO SCREENS, SPLIT BY WHO THE ROW IS FOR
+
+The owner's call, and it is the fix for the length above rather than a
+reordering: **SETTINGS keeps what a player tunes; ADVANCED takes the developer
+levers and the buttons that delete.** Splash treatment, sign-in and the
+RENDER/WORLD/TREES rack stay; the switch table, the tape recorder, the eruda
+console, RESET THE LINE and STORAGE go one deliberate tap deeper, ordered from
+harmless to final so the last thing on the page is the one that hands the
+device back. Measured, same spot, same window:
+
+| | before | after |
+|---|---|---|
+| SETTINGS | 6,139 px · 9.1 screens | **2,299 px · 3.1 screens** |
+| ADVANCED | — | 3,816 px |
+
+The content did not shrink; it stopped being one scroll. `T_ADVANCED = 8` is
+the probe index, and three suites that drove SETTINGS by number were moved with
+it — `storage-reset`, `line-boot` and `settings-switches`, which now also
+asserts the switch table renders on ADVANCED and **not** on SETTINGS, because a
+table on both pages is the old scroll with a second door.
+
+**AND CAMERA WENT TO THE RIG.** `dialGroups` split the rack by excluding
+VEHICLE and SETUP, which put CHASE HEIGHT, CAB FOV and the splash orbit at the
+bottom of the longest scroll in the menu — on the page whose siblings are
+RENDER and TREES, not on the page whose subtitle is TUNE AND DRESS THE TRUCK.
+The rig set is named rather than derived by exclusion now, so a group added
+later lands in SETTINGS by default: an unclassified dial shows in the wrong
+place rather than in neither.
+
+### THE FOOT IS A PER-SCREEN ACTION BAR, AND SOUND WAS NEVER AN ACTION
+
+`menu-survey.mjs` printed the foot per tab and settled what it is: DRIVES
+stacks four page actions in it, THE LINE puts one full-width CTA there, the hub
+and rig-live hide it in CSS, and SURVEYS, ABOUT and PROGRESS leave it empty —
+so it is a per-screen slot, not a persistent bar, and the two global toggles
+sitting in SETTINGS' foot were teaching the wrong thing about the slot.
+
+SOUND and HIDE HUD now bracket the splash's utilities strip — `SOUND · SETTINGS
+· ABOUT · [SIGN IN|PROGRESS] · HIDE HUD` — on the screen every BACK returns to.
+Left and right rather than inline, because a toggle is not a destination.
+**HIDE HUD was deliberately NOT put in the header beside the X**: it is an exit
+as much as a toggle, and two exits a thumb's width apart with different side
+effects is worse than the scroll it replaced.
+
+**SIGN IN and PROGRESS are one slot.** Both were on the splash at once — the
+redundancy was visible in the first screenshot anyone took of it — and at most
+one ever meant anything: signed out, PROGRESS was the only tile in the row with
+no icon and no subtitle, whose whole job was to hop to a page; signed in, SIGN
+IN hid itself and left that orphan behind.
+
+**And `worldRows` and `systemRows` are gone.** The first was fully implemented,
+carried real data and was called by NOTHING — the same class of fault as the
+forgotten switches, one layer up. The second reported whether the sound was on,
+and the control that changes it now says so itself on the splash. An empty foot
+no longer spends its padding either (`.m-foot:empty`).
+
+**AND A STAGED SET IS INVISIBLE THE MOMENT YOU LEAVE.** `swStaged` is closure
+state so it survives a tab change and a close, while `RELOAD · n STAGED` is
+built only inside `renderSettings`. Measured: stage one, go to RIG — nothing on
+the screen says anything is pending — close the menu, reopen SETTINGS, and it
+is still staged. A pending commitment nothing announces is the same shape of
+fault as a switch nobody remembers. The count rides in the header now — the one
+element every screen has — as a gold `⚑ n` chip that taps through to ADVANCED.
+
+### The seat's rack became the defaults, and a default change is not a migration
+
+Twenty-eight dials took the seat's own tuned values, pasted from their device.
+`v` is 5 and **there is no value migration, deliberately** — the distinction is
+the one `loadDials` already draws and it is worth keeping straight:
+
+- the v2, v3 and v4 migrations exist because a stored INDEX came to name a
+  different thing (the TIME list grew in the middle, PALETTE grew an entry at
+  the front, `water` could not be told from unset). Leaving those alone would
+  have silently changed a setting somebody chose.
+- a default change renames nothing. So a v4 record keeps every value in it and
+  the new defaults reach a device that has never saved a rack.
+
+**AND STAMPING THEM OVER A STORED RECORD CANNOT BE DONE HONESTLY**, which is
+the half worth writing down: `saveDials` persists the WHOLE rack on any change,
+so a player who once moved one dial has the old defaults frozen into every
+other key, and there is no way left to tell "never chose it" from "chose the
+old default". A migration that guessed would overwrite real choices.
+
+**FOUR OF THEM ARE INSTRUMENTS OR CEILINGS, and they are named here rather than
+buried in a diff**, because each is a thing this file elsewhere argues should
+NOT be a default:
+
+| dial | now | what it is |
+|---|---|---|
+| `impink` | **BLACK** | the silhouette INSTRUMENT — its own note says so outright. Every impostor draws as a flat black cut-out |
+| `tdbg` | **ON** | the tile-debug overlay, measured at **3.70 ms a call** on a device — more than half the HUD |
+| `time` | **DUSK** | a fixed 18:00, so a fresh boot no longer runs the 24x CYCLE |
+| `trng` · `imprch` · `impden` · `grass` | 2.8 km · 8X · ALL · LUSH | the rack's own upper stops, which this file records as *deliberately allowed far beyond frame budget* — the New Forest bench config |
+
+They are the seat's call and they shipped as asked; each is one integer to
+undo. `pix` is 240P, so the art frame is 111x240 rather than 148x320, and every
+art-pixel number in this file was stated against 320 rows — read a fresh
+measurement against `__tdetail().pix` rather than against the design value.
+
+### Tilt shift is a dial, and the chart and the seat are different lenses
+
+It was `?tilt=` and nothing else, so a look could only be reached by a devtool
+— and the composite runs at three frames a second in the harness, which made
+every comparison a boot apart. `tiltMode` is a `let` that `aimFocus` reads each
+frame, so the dial takes effect on the next one; `?tilt=` still outranks a
+saved dial, the rule `?time=` already has and for the same reason.
+
+**A PRESET STATES A BAND PER CAMERA NOW.** It was one band with a per-camera
+WEIGHT — chart 1, seat 0.34, cab 0 — which is right for *how strong* and wrong
+for *how wide*, and the seat's ask pulls those apart in opposite directions:
+**wider vertical focal area on top/down, and more pronounced in chase**. One
+band cannot serve both, because widening it for the chart widens it at the seat
+and makes the seat LESS pronounced. `off`, `subtle`, `mini` and `hard` are
+written so their chase row is the old weight times the old band, so nothing
+anybody had chosen moved.
+
+**STOCK is the new default and the row to refine.** Measured on `at-campsbay`
+with `__tilt()` in both cameras:
+
+| | chart | seat |
+|---|---|---|
+| amount | 1 (hard: 1) | **0.60** (hard: 0.34) |
+| sharp band | **0.34** of a half-frame, 40.8 px (hard: 0.20, 24 px) | 0.20, 24 px |
+| full blur past | 0.72, 86.4 px | 0.50, 60 px |
+| what that is on the ground | sharp about 168–209 m about a plane at 176 m | sharp about 49–61 m about a plane at 54.5 m |
+
+**THE RIG ITSELF SITS IN THE NEAR BLUR FROM THE CHASE SEAT, and no band fixes
+that.** The focal plane is placed where the view ray meets the ground, which
+from the chase camera is about 54 m ahead while the truck is at 15 — so
+`|1 - D/d|` at the truck is 2.73 and the confusion there is 647 px against a
+saturation ceiling of 230. Nothing under a full amount keeps it sharp. That is
+inherent to putting the plane on the ground the camera is aimed at, it is why
+the seat was scaled to a third in the first place, and "more pronounced in
+chase" necessarily means the rig goes softer. The cab stays exempt: *a narrow
+depth of field while you are the one steering is a tax on exactly the
+information you are steering by.*
+
+`__tilt({mode})` moves the preset AND the dial together, so a devtool can sweep
+the table on one settled world rather than a boot per row.
+
+### A crash is a shot, not a frame
+
+Reported from the seat: *when a drone depletes battery and crashes to the
+ground, I want to linger on the crash site a little longer before returning to
+rig view.* The impact called `camFlyTo(lastPov)` on the frame it landed, so the
+one moment the whole battery rule exists to produce — the thing you were
+flying, in the dirt, where you now have to go and get it — was a puff of dust
+nobody saw. `DRONE.LINGER` is four seconds, and a thumb on the stick ends it
+early: the same rule the launch ceremony already keeps, and here the thumb is
+also how you set off to collect it.
+
+Two things it needed that are not the timer:
+
+- **`droneEye()`, because where the CAMERA is and where the drone is FLYING are
+  different questions.** `drone.up` is the flight state and everything that
+  reasons about flying reads it — the battery, the autopilot pairing, the
+  recall, whether the rack is charging — and for the length of a linger the two
+  disagree: the aircraft is down and the eye is still out there. `viewX`,
+  `viewZ` and `viewH` read the eye, so the streaming, the far shell and the
+  render focus stay on the wreck instead of snapping back to a truck that is
+  not on screen yet. (`renderFocusXZ` already keyed on `camMode === 'drone'`
+  rather than on `drone.up`, so it needed nothing.)
+- **`droneNose()`, because a nose camera is a view FROM an aircraft and after a
+  crash there is not one.** Its eye sits 35 cm under the airframe, which on the
+  ground is buried, aimed thirteen metres into the earth. A linger is always
+  the external view whatever chip the seat had chosen.
+
+The linger is only armed when `camMode === 'drone'` — cutting away when the
+seat was never in the drone view is the old behaviour, correctly — and it is
+cleared on launch, on dock and on recovery so it can never outlive its wreck.
+
+### TWO CHECKS IN line-boot AND about WERE ALREADY RED, AND ONE STILL IS
+
+`THE LINE leads the hub stack` asserted `shown[0] === 'THE LINE'` while THE LINE
+is appended to the nav LAST, and `RIG-MENU-2026-09-08.md` states the intended
+order outright — "Primary navigation is Rig, Drives, Surveys, The Line". It
+contradicted the shipped design rather than catching a regression in it, and
+**the parent commit fails it identically**, which is how that was established
+rather than assumed. Both copies now assert the whole documented order, which
+is stricter than the line they replace: `[0]` could not have caught a reshuffle
+of the other three.
+
+`line-boot`'s `…and the docket is handed back` still times out, **and also fails
+identically on the parent** — the wipe is polled for 20 s against a harness
+whose init script re-seeds localStorage on every navigation, and the reboot then
+never arrives. Not this work's, not fixed here, and recorded rather than left
+for the next session to attribute.
 
 ## Stationary rig shadow: diagnose rotation, not only translation
 
@@ -5649,6 +10792,420 @@ texels/frame); the real shadow may still move as illumination changes.
 Telemetry regression tests and main syntax checks also pass. These are
 geometry/matrix tests, not on-device GPU visual validation.
 
+## The chart's tiles: the level rule, the ladder to z0, and no empty frames
+
+Reported from the seat: *"zooming out provides inconsistent and laggy
+(sometimes empty) chart."* Three different faults share that one symptom and
+nothing could tell them apart — the RULE picking a level its ring cannot
+cover, the WIRE not having landed the tiles yet, and the PICTURE being thrown
+away mid-gesture — so the first thing built was the instrument that separates
+them. `devtools/ov-sweep.mjs` walks the ladder rung by rung (the level, the
+frame's own half-diagonal in ground metres, the ground the ring reaches,
+whether it covers, and how long the ring took) and then sweeps the whole zoom
+range in one continuous pull-out, sampling four times a second and counting
+the samples where **nothing of this layer is drawn at all**. That last number
+is the seat's "sometimes empty", and it is not `have < want`: an incomplete
+map is a map.
+
+**THE COVERAGE TEST BELONGS TO THE TOOL, NOT TO THE BUILD.** The first cut
+read `__ov().covers`, which is part of the change under test and does not
+exist on an older revision — so the control reported the rule as failing on
+every sample and said nothing. Both halves are derived in the tool now, from
+numbers every build has carried since the scale bar shipped.
+
+Four faults, and the first two are arithmetic:
+
+- **THE LEVEL RULE ASKED FOR HALF A TILE MORE THAN THE RING REACHES.**
+  `ovLevelFor` took the finest level with `radius <= tileMetres(z) * (R + 0.5)`
+  where R is `OV_RING_MAX`. A ring of R tiles about the tile holding the view
+  centre guarantees R tiles of reach and **no more** — the centre can sit
+  anywhere inside its own tile, and in the worst case it is against the far
+  edge. So at the wide end of every band the chart's own corners had no data
+  and could not get any until the zoom crossed into the next band. Reach
+  exactly what the ring reaches.
+- **AND THE LADDER STOPPED FIVE RUNGS SHORT OF THE VIEW.** `OV_LEVELS` ended at
+  z5 — about 2,000km of ring at mid latitude — while the cover ladder reaches
+  z2 and the far shell z3. Measured at the Golden Gate: at zoom 30,000 the
+  frame is 3,011km across and the ring reached 1,979km; at 110,000 it is
+  10,970km against the same 1,979km. The vector map was the one layer that ran
+  out before the view did, and most of a globe-wide chart had no roads and no
+  names on it. z4 through z0 cost nothing to serve — they are arithmetic over
+  the baked Natural Earth array, never an upstream — and **one z0 tile is the
+  whole planet: 4,293 features, 82.8KB gzipped, 51ms through the handler (6ms
+  of that is the slice).** `NE_MIN_Z` is 0, the
+  rank rows run down to it, and `ovLevelFor`'s ring reaches the ceiling.
+- **THE RETIRED RING WAS DROPPED BEFORE THE NEW ONE HAD ANYTHING.**
+  `setOvLevel` called `dropRetiredOv()` at the top, and three build paths
+  called it again whenever the queue happened to empty. A zoom-out crossing
+  three bands in a second therefore threw away everything the previous swap
+  had retained and was left holding only the newest band, which had nothing
+  landed in it. `cullRetiredOv` already drops a mesh the moment the new level
+  covers it, or after twenty seconds; all the swap needs is a CAP, so a long
+  sweep cannot accumulate for ever. `OV_RETIRED_GENS` is three.
+- **…AND HOLDING THREE BROKE THE ORDERING, which is `farLift`'s lesson one
+  layer over.** `ovMat` has `depthTest: false`, so the depth buffer decides
+  nothing and draw order is the only law; the retirement used to sink the
+  outgoing ring fifteen metres, which works through the transparent sort and
+  works only while exactly ONE ring is retired. Three rings at one sunk radius
+  is a tie, and the winner is whichever three ordered last. The order is a
+  function of the LEVEL now and of nothing else — `ovOrderFor`, finest last
+  hence on top, `renderOrder` 40 upward, nothing else in the scene above 40 —
+  so a retained z13 patch stays over a new z5 ring, which is the better data in
+  the few kilometres it covers. The note by `farLift` says the same thing about
+  the same mistake: a sink on the outgoing ring is right for a curtain and
+  backwards for a pyramid.
+
+Two smaller things went with them. The ring is asked **centre-out** and its
+indices are wrapped in x and clipped in y, because at the widest rungs the ring
+is wider than the grid and an index off the end is a 400 the loader would hold
+against that tile for the whole retry window (`ovWant` is the deduplicated ask,
+so z0 asks for one tile and z1 for four). And a tile the chart is **looking at**
+is re-asked after `OV_RETRY_NEAR_MS` (6s) rather than the full 45: the long
+window is right for a tile the view has left behind and is forty-five seconds
+of hole in the middle of the map for one inside the current ring.
+
+**MEASURED at the Golden Gate**, control against the working tree, same spot,
+same harness, `nodraw`:
+
+| zoom | frame | control level / reach | covers | fix level / reach | covers |
+|---|---|---|---|---|---|
+| 120 | 12.0 km | z12 / 15.5 km | yes | z11 / 30.9 km | yes |
+| 500 | 50.2 km | z10 / 61.8 km | yes | z9 / 123.7 km | yes |
+| 2,000 | 200.7 km | z8 / 247.3 km | yes | z7 / 494.6 km | yes |
+| 8,000 | 802.8 km | z6 / 989.3 km | yes | z5 / 1,978.6 km | yes |
+| **30,000** | **3,010.6 km** | **z5 / 1,978.6 km** | **NO** | **z4 / 3,957.1 km** | yes |
+| **110,000** | **10,970 km** | **z5 / 1,978.6 km** | **NO** | **z2 / 15,828.5 km** | yes |
+
+and the gesture itself — one continuous pull-out from zoom 4 to 110,000 over
+90 seconds, sampled every 250ms:
+
+| | control | fix |
+|---|---|---|
+| samples with NOTHING drawn | **22 of 328 (7%)** | **0 of 325** |
+| longest blank run | **5.5 s** | **0** |
+| rungs that land | 25/25 to z5, then nothing wider exists | 25/25 at every rung, 16/16 at z0–z2 |
+| ring home, z2,000 / z8,000 / z30,000 | 8 s / 6 s / 3 s | 3 s / 3 s / 2 s |
+
+The level rule picking one rung COARSER at the same zoom is not a loss of
+detail, it is the ring finally covering the frame — and at the wide end it
+lands the chart on the bake sooner, which is why the rings come home faster.
+What the pair cannot separate is how much of the blank-frame fix is the
+retirement and how much is the ladder; the retirement is the only mechanism
+that can blank a frame the control could otherwise draw, and the ladder only
+adds rungs past where the control had z5 permanently drawn, but that is
+reasoning and not a measurement.
+
+### …and the harness had never served the baked routes at all
+
+Found while making the wide rungs measurable, and it invalidates more than this
+change. The harness runs `~/dem/v1/`, `~/cover/v1/` and `~/cover/w1/` through
+the cell's own handler, bundled with esbuild as **ESM** — and **`__dirname`
+does not exist in an ESM bundle**. Every route that reads a baked asset off
+disk threw on its first call. Measured on the bundle the harness produces:
+
+```
+/~/cover/w1/4/8/6    503 {"error":"no coarse cover baked"}
+/~/osm/ov1/7/19/48   503 … 43s … {"bakeMissing":"__dirname is not defined"}
+```
+
+The comment beside the symlink in `cellRoute` says it was added to fix the
+coarse cover and could not have. **Every harness run since `cover-wide.b64`
+shipped has been measuring the fallback** — the shell's wide cover has been
+absent in this rig throughout, and any harness reading of `__cover().wide` from
+that period is a reading of nothing. `--define:__dirname=<dir>` is the fix (and
+note the quoting: through `execSync` it needs a doubled `JSON.stringify`,
+because the shell eats one layer — through `execFile`'s argument array it needs
+one, which is the trap `ov-wide-size.mjs` already recorded from the other side).
+The handler's own error strings are what said so, which is exactly why
+`serveOverview` reports `bakeMissing`.
+
+Two more, both in the same route:
+
+- **THE OVERVIEW IS TWO ROUTES WEARING ONE PATH.** The fine rungs (z10 and in)
+  are Overpass queries and must be read from the BANK — re-earning them locally
+  is minutes of a public service per run — and the wide rungs are arithmetic
+  over a file in this repo. The harness splits on the zoom now: z9 and out
+  through the handler, z10 and in proxied to the deploy. Without the split a
+  rung ADDED to the bake is a 400 here until a deploy, which reads exactly like
+  a broken client, and the ladder above could not have been measured before it
+  shipped.
+- **AND `cellRoute` DROPPED `content-encoding`.** `serveOverview` answers
+  gzipped; `serveDem` and the cover routes do not, which is why nobody had met
+  it. The harness wrote a bare `content-type`, so the page got gzip bytes and
+  tried to parse them as JSON: every coarse chart tile threw, every one was
+  filed in `ovFailedAt`, and the chart read `0/25 · 25 RETRY` against a route
+  answering 200 in fourteen milliseconds. It is gunzipped in `cellRoute` now,
+  once, so the disk cache stays plain and every consumer route is unchanged.
+
+`__ov()` carries `sightM`, `reachM`, `covers`, `ring` and `levels` for the same
+reason: the rule is arithmetic between two numbers and neither was reported, so
+"the chart's corners are empty" could not be told from "the tiles have not
+landed". Held by `devtools/ne-wide.test.mjs` (every rung z4 out to z0 answers, is
+a skeleton rather than a wall, draws motorways only, and slices in single-digit
+milliseconds; z0 names 68 capitals) and measured by `devtools/ov-sweep.mjs`.
+`boot.mjs`, `switches.test.mjs` and `through-node.test.mjs` green — Camps Bay
+8 / 0 / 0.19 m unchanged.
+
+**What is NOT done here**, and is the next unit the seat asked for: the chart
+is still ONE layer. Splitting it so cities draw at the wide views, roads closer
+in, and cover and eco polygons can be toggled with a key and a legend is the
+work this was the prerequisite for.
+
+## The chart is several maps now, and the key is the switch
+
+The second half of the same ask: *"I wonder if it's possible to have overview
+separate into layers (not just OSM) so that I can easily toggle say cover or
+eco polygons with a key/legend"*, and then — *"cities only at wide views, roads
+closer in, and togglable cover/eco regions"*.
+
+The chart had exactly ONE layer and no surface on which to say so. Its roads
+and its place names arrive in the same tile and were drawn by the same pass,
+gated on the same `ovGroup.visible`. The land cover existed as a raster only
+the terrain painter read; the ecoregions existed as polygons only the guild
+read. **Neither had ever been drawn on the map it describes**, and nothing on
+the glass told a player they existed.
+
+**`client/chart-layers.ts` is the table and the palettes, and it is pure** — no
+THREE, no DOM, no world state — so `devtools/chart-layers.test.mjs` drives the
+shipping functions in node in a second, and the colour in the sheet's texture
+and the colour in the key's swatch are the same call. A legend whose ink is a
+second copy of the layer's ink goes wrong silently; that is the whole reason
+for a module rather than a record literal in main.ts.
+
+**TWO KINDS OF LAYER, AND THEY COST NOTHING ALIKE.** A VECTOR layer (`roads`,
+`places`) is already drawn and switching it is a boolean on a pass that was
+running anyway. A THEMATIC layer (`cover`, `eco`) is a class per texel, sampled
+per far-shell tile over that tile's own world-metre box and uploaded as a
+texture the shell's own geometry wears — so it has a BAKE, and a bake is what
+this file has twice measured at the top of a phone's slow frames.
+
+- **The sheet rides the shell's geometry and builds none of its own.** One
+  extra `Mesh` per far tile sharing that tile's `BufferGeometry`, positioned
+  where the far mesh is, which buys the sphere placement, the RTC centre and
+  the lift for nothing. `refreshTheme` reconciles against `farMeshes` once a
+  stream pass: a tile that left the ring (or was PARKED, which releases its
+  geometry's GPU buffers) loses its sheet in the same breath, and a tile
+  without one gets a bake queued.
+- **A decal, not a lift.** The sheet is coplanar with what it lies on, and a
+  radial offset cannot fix that at chart distances where the depth buffer spans
+  thousands of kilometres and two metres is nothing. `polygonOffset` −4/−4,
+  `depthWrite: false`, `renderOrder` 35 — under the chart's ink at 40, over the
+  shell. `depthTest` stays ON so the fine world still occludes it; turning it
+  off would paint a class map over the streets.
+- **ONE THEMATIC LAYER AT A TIME**, and not as a budget dodge: two class sheets
+  over each other is neither map, and the legend — which is the point of a
+  thematic layer — can only name the classes of one. `setChartLayer` makes the
+  thematic chips a radio group.
+- **It stands down at street scale**, above `THEME_MPP_MIN` (15 m/px) only.
+  WorldCover is 10 m data and RESOLVE is simplified to five kilometres; both are
+  statements about REGIONS, and a class sheet over a junction is a flat wash
+  over the one scale that can already show what is there. 15 m/px is the same
+  boundary the cloud shadows and the ground mottle already stand down at, so
+  the chart changes its rules in one place rather than three.
+- **The eco layer streams its own tiles.** `ecoAt` asks for ONE z5 tile because
+  the guild's question is about the ground under the wheels; a sheet over a
+  chart is a question about the frame. One tile a pass, centre-out from the
+  CHART's focus, bounded by the store's own 24-tile cap.
+
+**THE KEY IS THE SWITCH**, under the scale bar: a chip a layer, filled swatch
+and bright text for a layer that is drawing, hollow and dim for one that is
+not, tappable (`layerDown` swallows the DOWN through `hudPtrs`, or the same
+press would also drop a chart fix). A chip that is off still shows, because a
+key that hides what you do not have cannot teach. Under it, the LEGEND — built
+from the tallies the bake kept, so it names the classes actually on screen,
+commonest first, capped at six. `__chartlayers(id?, on?)` reports the lot and
+makes the same choice a finger does; the telemetry dump carries a `chart
+layers` row, because a seat report about a chart that does not say which layers
+were on is a report about a map nobody can reproduce.
+
+**THE PALETTE SITS ON A LATTICE OF 42, AND THE TEST IS WHY.** The composite
+quantises to fourteen levels, so one palette step is about 18/255 and two
+classes one step apart are one colour. Every class is snapped to
+14/56/98/140/182/224 in each channel with no two in a layer sharing a point,
+which puts any pair at least two and a third steps apart in at least one
+channel. **The first cut was hand-picked and the test measured its tropical
+conifer against its mangrove at EIGHT of 255** — half a palette step, two
+greens that were one green on the glass — and its bare ground against its
+lichen at 34. Neither is findable by looking at a legend.
+
+**CITIES ONLY AT WIDE VIEWS** is one rung added to a ladder that was one short:
+`maxRank` was `r > 26000 ? 1 : r > 12000 ? 2 : 4`, so a two-hundred-kilometre
+frame and a twenty-seven-kilometre one drew the same class of settlement. Past
+200 km it is rank 0 — cities — because a town's name there is a claim about a
+place the frame cannot show the shape of, and sixteen of them is the whole
+label budget spent before a capital is drawn. The radius is `backdropRadius()`,
+not `viewRadius()`, for the reason the chart's own ring now uses it: the capped
+one saturates and every wide band reads the same.
+
+**AND THE PLACES PASS NO LONGER RIDES ON THE ROADS' SWITCH.** It read
+`ovGroup.visible`, which was the only record that the coarse map was allowed to
+draw — fine while roads and names were one layer and wrong the moment they were
+two, since switching ROADS off would have taken every name with it. `ovBandOn`
+is the ZOOM claim; the layers are the PLAYER's.
+
+**Measured** (`devtools/chart-layers.mjs`, Cape Town, chart at 4,555 m/px, the
+far ring home):
+
+| | result |
+|---|---|
+| COVER on | 25/25 shell tiles carry a sheet, **1.6 ms a tile** |
+| its legend | GRASS 41% · SCRUB 29% · BARE 13% · FOREST 6% · WATER 6% · CROPS 5% |
+| ECO on | 25/25 sheets, **1.8 ms a tile** |
+| its legend | MEDITERRANEAN 58% · DESERT 42% |
+| ROADS off | roads gone, the place labels still drawn |
+| PLACES off | labels 0, roads still drawn |
+| at 2 m/px | `theme cover`, `drawing false` — the sheet stands down |
+
+The eco sheet at the Cape is the Fynbos against the Succulent Karoo, which is
+the right answer and the one the guild has been reading for months without
+anybody being able to see it. The frames are `layers-*.png` in `$DRIVE_WORK`.
+
+**THE FIRST BAKE MEASUREMENT WAS 209 MS A TILE AND WAS A READING OF THE FRAME
+RATE.** It timed from the start of the job to its last slice — which in a
+harness at two frames a second is sixty-four slices spread over wall time, not
+work. **A sliced job's price is the sum of its slices and nothing else.** The
+row timer sums inside the slice now and reports 1.6; `theme:bake` is the same
+number on a device's own telemetry. This is the third time in this file a wall
+measurement has been offered for a CPU one, and it is always the same shape.
+
+Two smaller things worth keeping:
+
+- **DATA ROW 0 IS THE SOUTH EDGE.** The shell's lattice runs north to south
+  with uv `(ix/seg, 1 - iz/seg)`, so v = 0 is the south row and a `DataTexture`'s
+  first row is v = 0. Backwards, every sheet is mirrored about its own parallel
+  — which on a class map of a coastline looks like bad data rather than like a
+  flipped texture.
+- **0 IS NOT A CLASS.** An unknown texel is written fully transparent, so a
+  sheet never paints over ground nothing has measured. An overlay that fills
+  its gaps with a colour is lying about its coverage, and saying where the data
+  IS is most of what these layers are for — at the Cape the eco sheet visibly
+  stops where its z5 tile does.
+
+**What is NOT done here.** The sheets are per far tile, so at a zoom where the
+shell has handed over to the globe there is no sheet either; a globe-wide cover
+map wants the coarse bake, not this path. There is no way to see a class's name
+by tapping the map (the legend names them; the site card already answers for a
+point). And `COVER_NAME` in main.ts is still a second list of the same eleven
+class names — harmless, and the next thing to collapse into the table.
+
+### …and then the seat photographed it loading badly
+
+Five frames and an exact report: *"only some of the viewport loading eco and
+then not proceeding, and then loading and then throwing away on zoom in when
+its replacement isn't yet built. Do we prioritise focus area? Why discard on
+zoom in/out — surely just replace when finer detail available."* Three separate
+faults with one look, and the answers are the three rules the far shell and the
+chart ink already live by, which the sheet had been written without.
+
+- **A SHEET BELONGS TO A SHELL TILE, NOT TO A TILE KEY.** `refreshTheme`
+  reconciled against `farMeshes`, which is the CURRENT ring and is not what is
+  on the screen: `setFarLevel` moves the outgoing ring into `farRetired`, where
+  those meshes go on being DRAWN until the new level covers them — that
+  retention is the whole reason a zoom does not blink, and it is three sections
+  up in this file. Keyed by the key, every sheet was dropped at the instant its
+  tile was retired, so the RELIEF stayed and the class map vanished and came
+  back a tile at a time. It is keyed by the far MESH now, so a sheet lives
+  exactly as long as the thing it is drawn on — current, retired, whatever —
+  and dies when that mesh leaves the group (evicted, or parked, which releases
+  the very geometry the sheet is drawn with). `far.parent` is the whole test.
+  **This is the third time in this file that a second lifetime kept beside a
+  first has drifted from it**, and the fix is the same every time: do not keep
+  two, derive one.
+- **NEAREST THE FOCUS FIRST.** Asked directly, and the answer was no — the
+  tiles were baked in `farMeshes` insertion order, which is the order the shell
+  happened to land them, which at the widest zooms is most of a hemisphere away
+  from what the player is looking at. Sorted by distance from the chart's own
+  focus (`viewX() + panX`), in the tangent plane, which is exact enough to
+  order twenty-five tiles by and needs no sphere.
+- **A SHEET BAKED OVER A HALF-ARRIVED SOURCE IS A HOLE NOTHING WOULD FILL.**
+  One shot, from whatever had streamed at that moment — and the cover rasters
+  and the ecoregion tiles arrive over seconds. That is the "not proceeding"
+  half exactly. `themeSrcRev` is bumped wherever a cover or eco tile lands, a
+  sheet records the revision and the count of texels that came out with NO
+  class, and a sheet with unknowns is baked again when the revision has moved:
+  **one a pass, nearest first**, because a cover ring landing bumps the
+  revision twenty-five times and re-baking every incomplete sheet on each would
+  be the ring's work several times over for a map that is already drawn.
+
+**AND THE FINE WORLD WAS PUNCHING A HOLE IN THE MIDDLE OF IT.** The first cut
+kept `depthTest` on with a polygonOffset, reasoning that turning it off would
+paint a class map over the streets. What it actually did was let the fine ring
+occlude the sheet: at the seat's own ten-kilometre frame the fine ring is a
+quarter of the glass, and the photograph is a class map with a block of bare
+terrain in the middle of it. A thematic sheet is a statement about the whole
+frame or it is noise. `depthTest: false` now, and **`THEME_MPP_MIN` is what
+makes that honest** — past 15 m/px a street is one pixel and there is nothing
+under the sheet that the sheet is hiding. With depth off, draw order is the
+only law, so the sheet takes the same total-order-by-level the chart ink and
+the shell's lift already use (`themeOrderFor`, 20 + z): a retained finer sheet
+stays over a new coarse one, and the whole band sits between the shell at 0 and
+the ink at 40, so a class map is always a GROUND.
+
+**AND A SILENT SHEET NOW SAYS WHY.** The first cut had four states and covered
+three: on-and-below-the-zoom-gate said "zoom out", on-and-drawing-with-a-legend
+drew the legend, and **on, past the gate, with nothing baked yet fell through
+every branch and printed nothing at all** — which is the state the seat
+photographed with `FAR 25 0/25` on the status line and a COVER chip that looked
+broken. Four branches now: ZOOM OUT FOR THE SHEET · SHEET NEEDS THE SHELL ·
+SHEET LOADING · the legend. And the legend carries a dim `+` while any sheet
+still has unknown texels, because "is that everything or is it still coming" is
+the question the report asked three different ways and nothing answered.
+
+**AND "STILL LOADING" IS WORK OUTSTANDING, NOT TEXELS MISSING.** The first
+version of the re-bake rule tested `unknown > 0`, which is wrong twice over.
+Over OCEAN it is permanent and correct — measured on a wide Cape zoom,
+**84,353 of 102,400 texels unknown with the ring fully home**, which is the sea,
+that WorldCover does not map and the ecoregions do not claim — so the legend's
+`+` would have been on for ever and the re-bake would have fired on every cover
+tile that landed anywhere. And a sheet with unknowns whose SOURCE has not moved
+since it baked has nothing to wait for. So a sheet settles the moment a re-bake
+fails to LOWER its unknown count (or after `THEME_REBAKE_MAX` tries), and
+`themeWork()` — tiles in the ring with no sheet, bakes in flight, unsettled
+sheets a newly-landed source has left behind — is what the `+` and the probe's
+`filling` report. Zero means the map is as complete as the data allows.
+
+**Measured** (`devtools/chart-layers.mjs PHASE=sweep SHOTS=0`, Cape Town,
+primed at zoom 300 then jumped to 20,000, sampled ~500ms for a minute), the
+working tree against `f4f046c`:
+
+| | control | fix |
+|---|---|---|
+| sheets held on RETIRED shell tiles (the mechanism) | **0**, structurally | **39** |
+| samples with the shell drawing and the sheet empty | 3 of 128 (2%), longest 0.8s | **0 of 101** |
+| shell levels crossed during the sample | (the control's probe cannot say) | 11 → 6 → 5 |
+| sheets at the end, for a 25-tile ring | 25 | 50 (25 current + a retained ring) |
+
+**The first number is the one to read.** A sheet keyed by its tile KEY cannot
+be on a retired tile — it is dropped the instant the key leaves the current
+ring — so the control's zero is structural rather than lucky, and the fix's 39
+is the class map surviving two level swaps. The blank count is the SYMPTOM, and
+a harness can barely sample it: a bake is 1.6 ms and a tile here lands off a
+warm relay, so the window the seat sees over a real network is a frame or two
+here. `scratchpad/sheettrace.mjs`-style tracing showed it directly — level 7
+with 4 sheets all current, then the swap to 5 with `retiredSheets 4` holding
+for the rest of the trace while the new ring streamed.
+
+`__chartlayers()` carries `sheets`, `retiredSheets`, `unknown`, `filling`,
+`rebaked` and `asking`; the telemetry's `chart layers` row carries the same, so
+a seat report says whether a sheet was still filling.
+
+**AND ONE PHASE A PROCESS.** All three sections of `chart-layers.mjs` in one
+run blew the twenty-minute harness fuse, which kills the run rather than
+waiting — so the last number printed was from a process that was killed, and no
+number from such a run should be quoted. `PHASE=basic|sweep|near`, and
+`SHOTS=0` for a phase whose answer is numbers: with drawing on, one probe round
+trip is five seconds and a sixty-second sweep is TWELVE samples, which is not a
+sample of anything.
+
+**Still not done, and now with a reason rather than a shrug:** a sheet is per
+far tile, so where the shell has handed over to the globe there is none — the
+globe is a graticule, not a tiled surface, and a planet-wide class map is a
+BAKE (the same argument as `globe-base.png`'s, one layer over). And the sheet
+is a `MeshBasicMaterial` and takes no day/night term, so on the night side it
+would draw at full brightness; it matches the chart's other unlit furniture
+(the road ink does the same), and whether a thematic overlay should be lit at
+all is a judgement nobody has made yet.
+
 ## Big shapes worth knowing
 
 - **`client/main.ts` is ~36k lines** and holds the world's module state. Do not
@@ -5683,3 +11240,4560 @@ geometry/matrix tests, not on-device GPU visual validation.
   else pushed to the repository.
 - Report outcomes faithfully. If a test fails, say so with the output; if a
   check was skipped or interrupted, say that rather than implying green.
+
+## The flat roofs were black, and the reason was the winding
+
+Reported from the seat: *"we recently iterated on buildings (facades and roofs)
+but I'm seeing that flat roofs still render black. They should not be dead
+black, they should be proper flat roofs, often with small protrusions and
+miscellaneous structures on top? With an edge/small wall?"*
+
+Two separate faults with one look, and **"dead black" was not a figure of
+speech**. Measured at Suresnes on a 663 m² flat-roofed block, noon, clear sky,
+four sample points each verified by raycast to be on the building's own mesh:
+**sRGB [0,1,0], luminance 0.0001**, with the grass beside it at 0.0500. Two of
+the four samples read exactly zero.
+
+### A mirror is not a rotation
+
+`polygon` builds its extrusion as `ExtrudeGeometry` → `rotateX(90°)` →
+`scale(1, −1, 1)`, and that last step is a MIRROR. `BufferGeometry.scale`
+transforms the NORMAL attribute through the normal matrix, correctly — and it
+does not touch the index, so the triangle WINDING reverses and the two stop
+agreeing. Measured on the shipped construction, a plain 12 × 8 box:
+
+```
+cap triangles: attr-up 2, attr-down 2
+winding vs attribute: agree 0, DISAGREE 4
+wall triangles:       agree 0, DISAGREE 8
+```
+
+Every triangle, caps and walls alike. The material is `DoubleSide`, and three's
+`normal_fragment_begin` does `normal *= faceDirection` there — so from OUTSIDE
+the building every face is back-facing, the shading normal flips to point
+INWARD, and Lambert's `dot(N, L)` clamps to zero. The buildings have been lit
+from the wrong side since the day the extrusion was written.
+
+**WHY THE WALLS SURVIVED IT AND THE ROOFS DID NOT.** A wall has three other
+sources of value — `bldSkylit`'s emissive lift, the façade shader's sky
+reflection in the glass, and its own drawn detail — so an unlit wall reads as a
+flat wall rather than as a hole. A flat roof has ONE: `bldRoofSkylit`'s lift at
+HALF the wall's (`lift * 0.5`, about 0.026 of its own colour at noon), and the
+hemisphere light then hands a downward-facing normal its GROUND colour, which
+is what those samples are. That is the "dead black", and it is not that the
+roof was dark: it was receiving no sunlight at all.
+
+**AND `roofGeo` AND `chimneyGeo` WERE INSIDE OUT TOO**, by a different
+mechanism: they emit their own triangles and `computeVertexNormals` derives the
+attribute FROM the winding, so the two agree and both point the wrong way —
+which DoubleSide hides completely, because a consistently inverted surface is
+lit toward the viewer from either side. Same 12 × 8 plan:
+
+```
+roofGeo gabled    roof 0 outward, 10 INWARD   wall 1 outward, 1 INWARD
+roofGeo hipped    roof 0 outward, 12 INWARD
+roofGeo pyramidal roof 0 outward,  4 INWARD
+chimneyGeo        cap  0 outward,  2 INWARD   wall 2 outward, 6 INWARD
+```
+
+The gable ends are the tell: the two triangles are written in the same (u, v)
+order at opposite ends of the ridge, so one faces out and one faces in — which
+**no blanket reversal can fix** (the first attempt was exactly that, and left
+them 1/1 the other way round). So the rule is stated once and enforced in
+`faceOut`, in terms of what these generators actually emit: every face is either
+EXACTLY VERTICAL (a gable end, a skillion's eave wall, a stack's side) or an
+upward-facing surface (a plane, a hip, a cap, a ridge tile), so a vertical face
+points away from the piece's own axis and everything else points up.
+
+- **THE FIRST CUT PUT THE WALL TEST AT 0.55** — the façade shader's own — and
+  the ridge cap's skirts measure |ny| **0.537**: steeper than the shader calls
+  a roof, and sitting ON the ridge, where "away from the plan's centre" means
+  nothing. One skirt of every gable and hip in the world came out pointing
+  down. A threshold that has to separate a 57° tile from a wall is the wrong
+  threshold; a wall is vertical, and 0.05 is float noise.
+- **A CHIMNEY IS NOT AT THE PLAN'S CENTRE.** It stands a metre in from the
+  gable end, so the shared reference calls three of its four sides outward and
+  the fourth one in. Each stack is oriented about its own axis, over its own
+  slice of the arrays.
+- **AND THE CLOSING VERTEX DOES NOT VOTE.** An OSM way repeats its first node,
+  so on a four-corner rectangle the repeat drags the centroid a metre off its
+  own middle — enough, measured, to call a correct gable end inward.
+
+`?bldface=0` restores the inside-out world exactly, and
+`devtools/roof-wind.test.mjs` holds all of it in pure node in under a second,
+with the mirrored extrusion as a CONTROL that must fail both halves.
+
+### A flat roof is not a lid
+
+The other half of the report, and it needed no fix because there was nothing to
+fix: **`roofGeo` returns null for 'flat'**, so the roof of a third of the
+stock (439 of 1,204 intact at Suresnes, measured) was the extrusion's own cap — one horizontal quad, flush with the
+wall, with nothing on it and no edge to it. Even lit correctly that is a lid,
+and from the chart a town of them is a sheet of paper.
+
+`flatRoofGeo` (roof.ts, pure) builds the three things a real flat roof has:
+
+- **A PARAPET.** The wall runs on past the roof as a low upstand with a coping,
+  which is what stops the covering peeling and what stops people falling off —
+  and from the street it is the building's top EDGE. An inset ring mitred on
+  the angle bisector (clamped at about three times the thickness, so a sharp
+  spike in an OSM footprint cannot throw its inner corner across the roof),
+  with an outer face, a coping and an inner face per edge. Height
+  `0.26 + 0.035 × height` capped at 1.15 m: a course or two of brick on a house,
+  waist high on a block.
+- **PLANT.** One lift overrun or tank housing and then the miscellany — vents,
+  ducts, condensers — square to the footprint's own oriented box, one to four by
+  the plan's area, each placed only where all four of its corners plus the
+  parapet's clearance lie inside the ring.
+- **NOTHING WHERE THERE IS NO ROOM.** Under 20 m² a lean-to keeps its lid; the
+  parapet wants 40 m² or a 6 m height; the plant wants 120 m². **And a plan
+  narrower than two parapets is refused outright** — OSM tags walls, platforms
+  and lean-tos as buildings, a 40 m × 0.5 m ring clears 20 m² comfortably, and
+  its inset ring would cross itself and turn every inner face inside out along
+  its length.
+
+**IT IS ONE PIECE AT `aGram` −1 — the façade shader's BLANK wall — for the
+chimney's reason**: the bay grid falls across a parapet however it falls, and a
+door on one is the kind of thing that gets photographed. Blank still wears the
+cornice band at its own `aTop`, which on a parapet IS its coping, so the street
+reads wall, cornice at the eave line, parapet, coping. Deterministic off the
+OSM id by a constant nothing else uses, so an A/B of the massing, the ruin roll,
+the roof form or this is a comparison of that one thing.
+
+**AND `roofShape` SAYS 'flat' OUTRIGHT NOW.** It answered `undefined` in six
+places and `undefined` is what `intactSink` reads as "no roof". The one case
+that genuinely has no roof is a CANOPY — a sheet on posts with no attic — and
+`__built().roofs` counts it separately, where it used to be filed under flat.
+
+### Measured
+
+`devtools/flat-roof-ab.mjs`, at-paris-west, `time=NOON&wx=clear&sunalt=62`, the
+same building and the same sample points in all three runs, one variant per
+process:
+
+| | flat roof, median luminance | buildings, triangles |
+|---|---|---|
+| `bldface=0 bldpara=0` — as shipped | **0.0001** (samples 0, 0, 0.0002, 0.0006) | 135,588 |
+| `bldface=1 bldpara=0` — the winding | **0.0330** (0.0322 … 0.0340) | 135,588 |
+| `bldface=1 bldpara=1` — and the roof | **0.0392** (0.0323 … 0.0480) | 161,166 |
+
+with the grass beside the building at 0.0500 in all three. Over the terrain
+pane: the winding moved **35.9%** of it (mean 18.7/255), the parapet and plant
+another **6.1%** (mean 4.4), and the pane's own luma went 0.0413 → 0.0624. The
+frames are the argument: in the control the block is a solid black wedge in a
+lit street; in the fix it is slate felt with a cream coping running the whole
+perimeter. **+18.9% on the building triangle bill** for parapets and plant on
+115 flat roofs — the same order as the pitched roofs' +3.5%, on a stock that is
+cheap (10 draw calls at Suresnes, 11% of the scene's triangles).
+
+### …and from the street, in the lab
+
+A parapet is a thing you see from the pavement, and the chart cannot judge it.
+`devtools/flat-roof-lab.mjs` drives the façade lab with ROOF = FLAT at three
+traditions, two suns each — which is what the lab is for and why its flat entry
+now draws something instead of nothing. Twenty seconds, no world, no HUD, no
+page errors. The frames: on the Île-de-France block the parapet is a band of
+wall above the last row of windows with the cornice's lit line at its head and
+a plant box standing over it at the corner; on the Sahel's adobe block, two.
+
+Two things the first run of that tool taught, both about the lab and not about
+the roof. **The dials panel is most of the glass at 390 px** — the first frames
+were photographs of the dials; `H` is the lab's own fold key and gives the
+gutter back. And **the lab's lens is horizontal** (`camera.lookAt(0, eye, 0)`),
+so the survey's 26 m stand-off at a 1.3 m cab eye puts a four-storey building's
+top edge off the top of a portrait frame — the one part of it this tool exists
+to photograph. There is no number in that tool, deliberately: the lab's light
+rig is not the game's (no `bldSkylit`), so a luminance read there would not be
+the world's.
+
+### Three instruments, because the first three attempts measured something else
+
+Every one of these cost a run, and all three are the same shape of fault — a
+sample that could not be shown to be on the surface it named.
+
+- **THE TRUCK IS ALWAYS AT THE CENTRE OF A TOP VIEW.** Standing the rig on a
+  footprint so its roof lands under the middle of the frame puts the RIG under
+  the middle of the frame. Measured: the control and the fix returned sRGB
+  [78,48,37] and [78,48,37] — the same bonnet, twice. That is also what made
+  `roof-light.mjs` inconclusive when it was written; its three sample boxes
+  "all read the same green" because they were on the truck.
+  `__hide('rig')` is new and hides the model — **and `attractStop` put it back
+  about sixteen milliseconds later**, because `stepAttract` runs every frame
+  and calls it on every frame the hub is not open. Anything that asserts a
+  visibility every frame outranks anything that assigns one once; the rig's
+  visibility is derived from `hideSet` now.
+- **AND THE HUD DRAWS ITS OWN VEHICLE MARKER THERE**, on a canvas no scene
+  switch reaches. `__hud(false)` clears the instruments off the frame — not the
+  player's HIDE HUD, which is `setClean` and hides the DOM controls only — and
+  takes the camera-dock rects with it, or the dock goes on blitting the live
+  scene into a stale rectangle (the fault this file already records).
+- **A BOX AT A FRACTION OF THE FRAME IS A BOX OF UNKNOWN SIZE.** It is sized
+  from `__scale().mppCss` and stated in metres now, the zoom is POLLED until it
+  settles (`__zoom` sets a target the frame loop eases toward: two runs
+  photographed after a fixed wait came back at a 45 m frame and a 32 m frame,
+  which is not an A/B), and **every sample asks `__pick` what it is standing
+  on** and is dropped unless the answer is `building`. The sample sets are not
+  identical between variants by construction — a parapet stands a metre higher
+  than the lid it replaced, so a ray that used to pass over the roof and hit
+  the rig behind it now hits the parapet — so the comparison is the median over
+  the samples that hit a building in EVERY run.
+
+Two probes came out of it and are worth knowing: `__bldroofs(r, form?)` lists
+every footprint `building()` gave a roof to with its centroid, area, short side,
+height, form and ring (`__built().roofs` is a histogram: it can say a town is
+half flat and not WHICH half, which is why a tool had to guess and guessed
+wrong), and `__pick` now names the mesh it hits.
+
+**Not done here:** the parapet is one height round a whole building, where a
+real one steps with the roof's own levels; nothing drains, so there are no
+outlets or upstands at a gutter; the plant is boxes, not plant; and `roof:shape`
+values this game does not model (dome, onion, gambrel — a tenth of a percent of
+the stock) take the flat treatment, which is what they already wore.
+
+## A railway is engineered, and `drivable` was the one flag saying so
+
+Reported from the seat after the ballast and sleepers shipped: *"I've taken a
+look at rails live (minor: sleeper gaps can be 4x) and it seems like railways
+are not participating in the road ribbon's solved grading — a special case for
+rail, far more straight, and thereby likely to be cutting or raised on bridges
+etc."* Both halves are right, and the second is one flag.
+
+### `drivable` was five jobs, and the split was WRONG about one of them
+
+Every railway in the world was drawn as
+`ribbon(pts, w, mat, lift, /* drivable */ false, /* mode */ 'none', …)`, which
+drapes a way over the heightfield exactly as a footpath is draped. It was not
+an oversight about railways: `drivable` gates FIVE separate things and there
+was no way to ask for some of them.
+
+| job | what reads it | a railway wants it? |
+|---|---|---|
+| the solved longitudinal profile | `hintEl`, `flat`, `solveChainLocal`, `ruleGrade` | yes |
+| `roadGrid` | the physics surface, `surfaceAt`, `wayAhead`, `juncNodeGrid`, the router, `__toroad` | **yes — see below** |
+| `segsOf` → `rasterizeCut` | the corridor carve and the kernel's break lines | yes |
+| `dirtyTerrainAround` | the tiles rebuild so the corridor shows | yes |
+| (with `!track`) the apron — batter, fascia, soffit, piers, parapet, `daylight` | the earthworks and the structure | **yes** |
+| (with `!track`) cat's eyes, chevrons, hazard boards | the carriageway's furniture | no |
+
+**THE FIRST CUT PUT `roadGrid` IN THE "NEVER" COLUMN, AND THAT WAS THE NEXT
+BUG.** It kept railways in a `railGrid` of their own on the reasoning that
+nothing in the physics, `surfaceAt`, `wayAhead`, the junction registry or the
+router should ever find a track under the wheels. The seat's report on that
+build was exact: *"Still not seeing bridges and batter apply to railways. And I
+think for the purposes of this game they should be fully driveable (any
+concrete reason not to?)"* — and the two halves are the same half.
+
+**`apronOn` is `drivable && !track`.** It gates the batter, the fascia, the deck
+soffit, the piers, the parapet and `daylight` — and `daylight` is what
+`maxDaylight` is computed from, which is what decides whether a way is a
+STRUCTURE at all. So a railway that is not drivable **cannot have earthworks or
+a bridge by construction**, however carefully its profile is solved. The first
+cut moved `noteBridgeForm`'s gate off `drivable` and thought that was enough; it
+was not, because `maxDaylight` was still 0 and the whole apron was still off.
+One flag, five jobs, and withholding it withheld four.
+
+**And there is no concrete reason to withhold it.** This is a game about driving
+anywhere; a ballasted formation is a perfectly good surface to put a truck on;
+and a rail alignment through a mountain is exactly the sort of shortcut a player
+should be allowed to find.
+
+**The router needed no special pleading, and the arithmetic says why.** An edge
+costs `len × (1 + (GOAL_NARROW − 1) × clamp((5 − hw) / 4, 0, 1))`, so a metre of
+Cape-gauge formation (hw 1.66) costs **2.00**, a metre of residential street (hw
+3.75) **1.38**, and a metre of motorway **1.00** — the track is half as dear
+again as the street beside it and twice a trunk road, so a plan takes it only
+where it genuinely is the way. And `wayAhead` will not turn onto one by
+accident: `chainScore` docks a candidate the full 0.3 its width step allows for
+a road-to-rail change, and a level crossing is near enough perpendicular to fail
+`AHEAD_MIN_DOT` (0.12, about 83°) outright.
+
+So a graded railway is drivable in full, `railGrid` is gone, and what survives
+of the split is **the dressing**: `railway` gates off the road furniture — cat's
+eyes down the middle of a main line, chevrons and hazard boards along a cutting
+— because those are captions for a carriageway rather than facts about a
+surface. It keeps the parapet and the reflector posts, which are about an edge
+you can fall off and the truck can now be on this one. The paint needs no gate
+at all: markings live in the road TEXTURE and a railway wears `railMat`.
+
+**BALLAST IS NOT TARMAC, AND `sq` IS WHERE THAT IS SAID.** `Seg.sq` is the
+surface quality the wheels read (`Q_ROAD` 1, `Q_TRACK` 0.55, `Q_GROUND` 0.2); a
+formation is handed `Q_TRACK` and a siding 0.4, so driving a main line feels
+like a graded gravel road with something hard every two thirds of a metre.
+`Seg.rw` marks a formation inside a grid that is otherwise all roads — it is
+what `__railgrade` finds them by, now that they are not in a store of their own.
+
+**The one thing still NOT derived from `drivable` is the hint lookup.** The
+chain planner chains ways by NAME and solves them as one profile; a railway
+asking `hintAt` would find a road's profile within two and a half metres and
+take a carriageway's deck at every level crossing there is. `hintEl` stays on
+the planner's own ways, and a rail fragment solves locally (`solveChainLocal`).
+
+### The ruling grade is the whole difference, and so is the deviation budget
+
+Steel on steel has about a tenth of the adhesion of rubber on tarmac, so where
+a road climbs at ten or fifteen per cent a main line will not exceed two —
+which is *why* a railway cuts through what a road goes over. `RailSpec` states
+it per kind (`gradeMax`): a funicular 0.5 (a cable, not adhesion), narrow gauge
+and miniature 0.05, light rail and heritage 0.04, a siding or an industrial
+branch 0.035, **a main line 0.022**. And `graded` says which kinds get a
+formation at all — every kind but `tram`, whose rails are laid in a carriageway
+that already has a profile and whose corridor would be a cutting down a city
+street.
+
+**AND FIVE METRES IS A ROAD'S DEVIATION BUDGET.** `DEV` in the grade clamp is
+the number that decides who wins when the ruling grade and the ground disagree,
+and its own note says why it is small: so that a San Francisco street at 20%
+stays a street instead of becoming a viaduct through the neighbourhood. That is
+right for a road, which mostly follows the ground. A railway is the opposite
+object — straying from the ground is what it IS — and under a five-metre budget
+the 2.2% clamp simply loses every argument and the track goes back to being
+draped. `DEV` is **24 m for rail**. The grade line's smoothing window goes with
+it (±16 stations, about ±200 m, against a road's ±8): a road's gradient
+genuinely changes over a couple of hundred metres and a main line's does not.
+
+### Measured at Glencairn
+
+`devtools/rail-grade.mjs`, `at-glencairn` (four ways of the PRASA Southern Line,
+no network at all so the answer is the same every run), three-signal settle gate
+including the terrain build count. **The A/B is the SWITCH** (`?railgrade=0`),
+not a pinned revision — both columns come from the same bundle and the only
+difference is the rule, which a `rev` cannot promise once a change lives in
+three files.
+
+| | `railgrade=0` (draped) | engineered |
+|---|---|---|
+| rail segments with a solved deck | **0** | **190** |
+| of them cutting / embankment | — | **80 / 46** |
+| mean \|deck − natural ground\| | 0 by construction | **2.05 m** |
+| worst cutting / embankment | — | 24.2 m / 3.52 m |
+| drawn mesh against the deck, mean | — | **0.51 m** |
+| corridor strips in the carve | 4,776 | 5,248 |
+| terrain triangles | 569,260 | 575,177 |
+| roadCells (the control within the frame) | 1,074 | **1,074** |
+
+…and the gradient, which is the actual argument. A draped railway carries the
+ground's gradient exactly, because it IS the ground plus a lift — so the ground
+column is also the control's answer and needs no second run:
+
+| fragment | length | deck grade p95 / max | the ground it crosses, p95 / max |
+|---|---|---|---|
+| 10 | **1,229 m** | **1.8% / 2.6%** | **66.4% / 144.3%** |
+| 9 | 258 m | 0.0% / 0.0% | 5.9% / 6.0% |
+| 30 | 212 m | 2.6% / 2.6% | 6.3% / 6.3% |
+
+2.6% is `gLim` exactly (0.022 × 1.2), so the longest fragment is running at its
+ruling grade and nowhere near it otherwise. Read the profile in order rather
+than the worst rows — `__railgrade().profiles` chains each fragment by its own
+endpoints — and the shape is the point: over the last three hundred metres the
+DEM swings **−26.0 → −12.2 → −13.9 → −29.1** between samples thirty metres
+apart, and the deck holds −25.9 through all of it. Draped, the track rode that.
+
+**The 24.2 m "cutting" is that same DEM noise, not a hill**: its station reads
+−2.39 with neighbours at −12 to −26. The honest summary is the mean (2.05 m)
+and the gradient table; a worst-case over a coastal z14 tile is a measurement of
+the raster.
+
+### Three things that follow, and one that is left under the hill
+
+- **A DEEP CUTTING BECOMES HIDDEN TRACK, by the road rule.** `elevMin[i] −
+  prof[i] > TUNNEL_H + 0.6` sets `tn` — no carve, the way left under intact
+  ground — and it exists so our own arithmetic cannot dig a crater through a
+  town. With a 2.2% ruling it fires far more often on rail than on road: 8 of
+  190 segments here. That is the right silent failure and it is visible in
+  `__railgrade().tn`, not dressed up as a feature.
+- **A RAIL TUNNEL TAKES THE EXEMPTION AND NO BORE.** `tunnelTube` builds a road
+  tunnel — a `TUNNEL_H` shell sized for a carriageway — and a 3.3 m formation
+  inside a 5 m road bore is neither thing. A `railway=* tunnel=yes` way now
+  takes `mode: 'tunnel'`, runs on its portal-to-portal chord under the hill and
+  is simply not seen. **Before this it was drawn on the surface, over the top of
+  the mountain it is tunnelling through** — the subway filter was the only
+  tunnel gate in `railSpec`, so every main-line bore in the world was painted on
+  the hillside above itself.
+- **AND THE FORTH BRIDGE CAN FINALLY FIRE.** `noteBridgeForm` — what registers a
+  deck fragment with the bridge ASSEMBLY, so a landmark entry can stand its
+  towers, cantilevers or truss up — hangs off `infraRecipe`, `infraRecipe` hangs
+  off `apronOn`, and `apronOn` is `drivable && !track`. So while a railway was
+  not drivable the `forth-bridge` entry could never once fire: the Forth Bridge
+  carries no road. **Every famous truss and cantilever on earth is a railway
+  bridge**, so that gate was excluding the family it was written for.
+- **What a 3.3 m formation costs the plain lattice is unmeasured.** Past
+  `REFINE_R` the corridor is the old grid carve, whose lattice unit is the
+  terrain cell (~21 m), and `rasterizeCut`'s own note records a 3 m footpath
+  excavating a 40 m shelf. A Cape-gauge formation is 3.32 m against the
+  narrowest road that carves at all — `ROAD_W`'s `service` at 4.5 m — and,
+  unlike a footpath, it has a solved deck rather than contaminated drape
+  heights, so it is in the same class as a back lane rather than the class the
+  track exclusion was written for. Said here rather than asserted: nothing has
+  been photographed at that range.
+
+### …and a bridge way's name is the ROUTE's, which is why the Forth still missed
+
+With the apron on, the Forth Bridge's assembly formed and was still a flat
+ribbon, and the reason had nothing to do with railways. Read straight out of the
+cell's own banked z16 tiles (`16/32150/20404-20406`, by hand, before anything
+was changed):
+
+```
+4074164    railway=rail bridge=yes layer=1  name="East Coast (Northern) Line"
+312411250  railway=rail bridge=yes layer=1  name="East Coast (Northern) Line"
+4337906    railway=rail bridge=yes layer=1  name="East Coast (Northern) Line"
+312411253  railway=rail bridge=yes layer=1  name="East Coast (Northern) Line"
+```
+
+**Four ways, no `bridge:name`, and the `name` is the LINE.** The store's entry
+matches `forth bridge` and `forth rail`, and neither is a substring of "East
+Coast (Northern) Line", so `bridgeEntryFor` returned null and the assembly fell
+through to the generic recipe.
+
+This file already records the same fault twice without generalising it — "the
+Forth Road Bridge is named exactly that, and neither match is a substring", and
+`noteBridgeForm`'s own comment that "a road's name is often the only name a
+bridge way carries — A29 on every bridge the A29 crosses". **It is the rule, not
+the exception**: a bridge way carries the route's identity, because that is what
+a router needs, and the bridge's own name is an optional extra key that most
+mappers never add. A landmark store that claims by name alone will keep missing
+the bridges it was authored for, one famous structure at a time.
+
+So an entry claims an assembly **two** ways now, and the second is what the
+entry's coordinate was always for:
+
+- **by NAME within `reach`** — unchanged, 1.6–2.4 km, because a name is strong
+  evidence and a bridge's fragments spread;
+- **by POSITION within `BRIDGE_ON_R` (420 m)** when the name says nothing
+  either way. A fifth of a reach, deliberately: the assembly has to be
+  essentially ON the entry rather than merely in the same estuary. A positive
+  name match for another entry still wins, so this can only fill a silence.
+
+**The Forth is the case that sets that radius, because three bridges cross the
+same firth.** Measured on the fix, live, one settle:
+
+| assembly | fragments | form | claimed by |
+|---|---|---|---|
+| East Coast (Northern) Line | 8 | **truss · cantilever · 3 towers · 1,788 panels** | the `forth-bridge` entry, **by position** |
+| Queensferry Crossing | 10 | cable-stayed · a-frame · semi-fan · 166 stays | its own OSM `bridge:structure`, no entry |
+| Forth Road Bridge | 12 | girder | nothing — it has no entry, and 420 m keeps the Forth's off it |
+| Ferrytoll Viaduct · Fife Circle Line · Station Road | 4 · 2 · 1 | girder | nothing |
+
+A 1.6 km positional radius would have put the Forth's cantilevers on the road
+bridge a kilometre west, which is a suspension bridge. 420 m claims the rail
+bridge and nothing else. `__bridges()` is the readout.
+
+And the deck goes up with it: `__lifts` reports the two 2.4 km fragments raised
+**40.89 m and 33.88 m** with `src: "hint"` — the entry's own `deckM` 46 at
+`grade` 0.02 — against a firth at sea level, and `__decks` at the seat's spot
+reads the deck at **38.4–41.2 m over terrain at −5.8 to 4.1**.
+
+The earthworks on the same run, over 39 railway ways and 823 formation segments
+in a 2.5 km radius — with the spans separated out, which is the whole reason
+they now are:
+
+| | at the Forth |
+|---|---|
+| span (standing clear of the drawn ground) / worst | **527** / 52.4 m |
+| cutting / embankment | 100 / 105 |
+| worst cutting / embankment | 12.6 m / 4.8 m |
+| mean \|deck − natural ground\| over the earthworks | **2.31 m** |
+| drawn mesh against the deck, mean | **0.63 m** |
+| deck gradient, the two 2.4 km fragments | p95 **1.7%** |
+| the ground they cross | p95 **36.6%** and **30.0%** |
+
+### The instrument
+
+`__railgrade(r)` is the probe the question needed, and it needs three numbers at
+a station that nothing else reported together: the solved DECK (`railGrid`'s own
+`ya`), the NATURAL ground (the height raster — the corridor lives in the terrain
+MESH, so the raster is still the untouched hillside) and the DRAWN ground
+(`meshSurfaceAt`). Deck minus natural is the cutting or the bank; drawn minus
+deck says whether the carve actually reached the mesh rather than merely being
+asked for. It also chains each fragment into an ORDERED profile with its
+gradient statistics, because sorted by depth a cutting and an embankment two
+kilometres apart sit next to each other and the SHAPE is invisible.
+
+**AND A DECK IS NOT AN EMBANKMENT.** The first cut of this probe read, at the
+Forth: *620 embankments, worst 46.89 m, mean 22.16*. Every one of those numbers
+was the BRIDGE — 2.4 km of deck forty metres over an estuary with the natural
+ground at sea level under it. "Deck minus ground" says *this way is high above
+the land*, which is equally true of a bank and of a span, and a mean that mixes
+them describes neither. The DRAWN MESH tells them apart and was already being
+read: an embankment is ground the carve RAISED to meet the deck, so the mesh
+comes up with it; a structure stands clear and the mesh stays where the ground
+is. A station standing more than three metres (`ribbon`'s own `DECK_GAP`) over
+its drawn ground is counted as `span`, and the earthwork statistics — including
+`meshOff`, the number that says the carve reached the terrain — are taken over
+the rest.
+
+`?railgrade=0` is the exact A/B. `devtools/rail-grade.mjs` runs it on the
+Glencairn fixture and `devtools/forth-rail.mjs` at the Forth, one variant per
+process. The Forth tool is a LIVE run and says so: the tiles were read by hand
+first, so a run that finds no railway there reports a streaming failure rather
+than an absent bridge.
+
+### And the sleeper gaps really were 4×
+
+The other half of the report, and it was one line of the canvas. The first cut
+drew a 0.34 m sleeper with a 0.17 m shadow, so 0.51 m of a 0.65 m pitch was dark
+and the pale ballast between was 3.4 of 16 canvas pixels — **twenty-two per
+cent**. A feature that thin on that pitch beats against the screen's own grid
+under minification and what survives is every second or every fourth gap, which
+the eye reads as sleepers laid four times too far apart. A real sleeper is
+0.25 m on a 0.65 m pitch: **the gap is about sixty per cent of a railway**, and
+drawing the bars fat inverts the thing that makes track read as track. 0.24 m
+with a 0.05 m hairline shadow leaves 55% pale and an 8.9-pixel gap with room to
+survive a mip level.
+
+## Atmosphere is contrast; focus is sharpness — and a plane of focus has a scale
+
+Two reports arrived together: one asking for a tilt-shift miniature, one
+finding that the aerial perspective's `deep` term was already doubling as a
+defocus. They are the same subject from opposite ends, and the second is the
+reason the first was worth doing carefully.
+
+**The air's blur is now off by default, behind `?airblur=1`.** `deep` mixed the
+far field toward `softTex` as well as toward the haze colour, so a road's
+vanishing point went soft because it was far — which is atmosphere doing
+optics' job. Haze is a CONTRAST effect: distant things lose contrast against
+the sky, they do not lose focus. Split, each can be judged.
+
+### A plane of focus perpendicular to a near-nadir camera does nothing at all
+
+The first cut made the plane fronto-parallel — normal = the camera's forward,
+which is what a lens without tilt gives you. On the chart that measured
+
+```
+167m:0.00 168m:0.00 170m:0.00 176m:0.00 189m:0.00 209m:0.00 253m:0.00 ... 3000m:0.00
+```
+
+an exact zero at every station out to three kilometres, and **no amount of
+retuning would have moved it**. A plane perpendicular to a near-nadir view is a
+horizontal slab; flat ground lies inside it; a depth of field over ground that
+is all at one depth has nothing to blur. Only relief could ever have registered,
+and the transect was not crossing any.
+
+Which is precisely why the photographs the look is named after are taken with
+the lens TILTED. **The normal is the camera's forward flattened to the
+horizontal**, so the plane stands vertical and the band lies across the view.
+It costs nothing at the seat — a camera looking 7° down has a forward and a
+ground direction a few art pixels apart over a hundred metres, and the chase
+band moved from 0.18 to 0.20 at 130 m — and it is the entire effect on the
+chart. `__tilt({angle})` now leans the plane BACK from vertical, which is the
+Scheimpflug direction proper: at 90° minus the camera's pitch the plane lies
+along the ground and level land comes back into focus. Swept and confirmed at
+0/30/55/70/80/88°.
+
+### The band is a fraction of the frame, and getting that scale wrong is silent
+
+On ground receding from the eye, with the plane at distance `D`,
+
+```
+px = |fd| / mpp = K · |1 − D/d|,      K = uPix.y / (2·tan(fov/2))
+```
+
+so **the circle of confusion SATURATES at K** — about 307 at a 55° lens over
+320 art rows. Nothing past the plane, at any distance, blurs more. A band asked
+for near or above K never resolves; a small one is absurdly tight. The first
+presets were bare pixel counts written against nothing: `mini` asked for sharp
+under 30 px, i.e. `|1 − D/d| < 0.098`, a **ten-metre** sharp slab at a 53 m
+focus, and 84 px for full blur meant everything past ~73 m sat at one value.
+The measurement came back a flat 0.306 at every station out to five kilometres
+and was right to. **The band was real and almost nothing was in it.**
+
+K is the natural scale for a receding view and a hopeless one for the chart. At
+a near-nadir camera the ground offset along the view ray maps all but
+one-for-one onto art rows, so the whole visible frame spans about `uPix.y / 2`
+— **half of K**. Stated against K, `mini` put its sharp edge two thirds of the
+way to the frame edge and its full-blur edge outside the frame entirely: the
+chart A/B moved 7.3% of pixels, nearly all of it dither, one softened road at
+the top edge and nothing else. Stated against **half the frame** the same words
+mean the middle third sharp and the edges gone — 20.3% moved, foreground and
+horizon band both plainly soft — and the seat keeps a real far field anyway
+because K is nearly twice the frame and the far field saturates past it.
+
+`__tilt` reports BOTH (`halfPx`, `satPx`) with the band as a fraction of each,
+because a band read against the wrong scale is how this went wrong twice.
+
+### An instrument that the frame loop overwrites is not a dial
+
+`__tilt({amount, sharp, blur})` promised to set the look live at 3 fps without
+a reload. It did not: `aimFocus` rewrites all three uniforms EVERY FRAME from
+the preset, so a console write survived until the next animation frame and no
+longer. **Every A/B ever taken through those three dials was an A/B of
+nothing** — and that is exactly why the air term, the one dial `aimFocus` does
+not touch, was the only one that had ever shown a difference. Writes go to an
+override the frame loop lays the preset under; `null` clears a field back.
+
+The same class of fault, twice in one unit: an early return in `aimFocus` had
+the probe reporting a stale focal point whenever tilt was off. **An instrument
+that lies when the feature is off is worse than the operations it saves.**
+
+### And the transect must run along the CAMERA's ray
+
+It walked out along `state.heading` from the truck, which on the chart is the
+one ray guaranteed to say nothing: the top camera looks down a line of its own,
+the band lies across THAT line, and the truck's nose can cross it at any angle
+including ninety degrees. It now runs along the camera's forward flattened to
+the ground, from the point under the EYE — so `t ≈ d` and a row reads directly
+against `focusDistM` — with the heading kept only for the straight-down limit,
+where there is no ground direction to use. The ray and its origin are reported.
+
+**A two-boot image diff is not a control.** The first air A/B diffed frames
+from separate boots: mean 0.85/255, 5.09% moved, worst 133.9 — and the 133.9
+was wildlife, not blur. Wildlife, sward phase and streaming order all differ
+between boots. `devtools/focus-ab.mjs` with `AB=1` flips the uniform live on
+one settled world, which is the only honest form of this measurement.
+
+| preset | amount | sharp | blur | what it means |
+|---|---|---|---|---|
+| `off` | 0 | — | — | the default |
+| `subtle` | 0.5 | 0.55 | 1.30 | fore and far background only |
+| `mini` | 0.9 | 0.36 | 0.75 | the model-railway band |
+| `hard` | 1.0 | 0.20 | 0.50 | a macro slab |
+
+`sharp`/`blur` are fractions of half the art frame. A per-camera scale sits on
+top: the chart takes the preset in full, chase a third of it, **the cab none** —
+a narrow depth of field while you are the one steering is a tax on exactly the
+information you are steering by.
+
+## The terrain mottle's fade has never once fired, and the ruler was the reason
+
+A report arrived proposing a procedural surface-detail system: per-fragment
+art-pixel band-limiting for terrain, material-aware functions, a shared
+generated-coordinate chunk, façade materials, normal perturbation. Before any
+of it, two of its premises had to be checked against this build.
+
+**The report describes code that is not here.** `terrainHash`, `uTerrainRough`,
+`tdAppear`, `vTerrainMpp` — `grep -c` returns **0** for every one. The actual
+term is two crossed sines at ±0.045, six lines, in `terrainFx(mat, {detail})`.
+
+**And its fade is dead.** `1 - smoothstep(15, 60, uMpp)`, where `uMpp` is
+`chartMpp()`, which returns **0 unless `camMode === 'top'`**. Measured by
+`__tdetail()` at every station on all three cameras:
+
+```
+keep(mpp) = 1.000 everywhere — chase, cab AND chart
+```
+
+Not approximate. Not "mostly right from the seat". It has never removed any of
+this term anywhere, and on the chart it only begins to at a 3 km view.
+
+### The defence was true across the view and wrong along it by 10³
+
+`uMpp`'s own comment argues the fade is unnecessary from the seat: "from the
+seat nothing is ever wider than a pixel at the range the shell begins". That is
+true of the **across-ray** footprint and irrelevant, because **ground is seen at
+a grazing angle** and along the ray the footprint is the across-ray one divided
+by the sine of that angle:
+
+| from the chase seat | across | **along** |
+|---|---|---|
+| 50 m | 0.16 m | 4.1 m |
+| 100 m | 0.33 m | **10.3 m** |
+| 800 m | 2.61 m | **29.2 m** |
+| 3.2 km | 10.41 m | **424.7 m** |
+| 8 km | 26.03 m | **34.8 km** |
+
+Against which: **the mottle's shortest wavelength is 15.3 m, not the 30–80 m
+its comment claims.** 30–80 m is the BLOB size. The sines are phase-modulated
+with index 2, which spreads sidebands, and their product carries the sum
+frequency, so the top of the band is
+
+```
+|∇A|max + |∇B|max = hypot(0.131, 2·0.093) + hypot(2·0.071, 0.117)
+                  = 0.2275 + 0.1841 = 0.4116 rad/m  →  λ = 15.3 m
+```
+
+So from 100 m outward the term has been drawing a moiré against the palette
+dither, and at 8 km it is being point-sampled at a hundredth of a pixel.
+
+`fwidth` measures that anisotropy per fragment for one derivative instruction
+and no uniform. `?tdetail=px` paints it as a heat ramp and the picture agrees
+with the table exactly: blue foreground, cyan to about 50 m, green on the far
+hillside, yellow at the ridge.
+
+### Both rulers are compiled in and chosen by a uniform, because otherwise the A/B is two boots
+
+Baking the mode into the shader source makes the comparison two processes, and
+two boots of this world differ by wildlife, sward phase and streaming order
+before they differ by the term. One smoothstep and a mix per fragment buys a
+`__tdetail({rule})` that flips it live. Per-fragment is where this renderer has
+room; per-boot is where its measurements go to die.
+
+### And the pixel consequence is honestly small — measured against a floor
+
+The pass is **interleaved** — mpp, px, mpp, px — so the two same-setting frames
+give the noise floor at the same temporal separation as the cross pairs. The
+first cut skipped that and read a worst pixel of 126; the 126 was a deer.
+
+| | floor (same setting) | signal (ruler change) |
+|---|---|---|
+| chase | 0.13–0.22 /255 | 0.28–0.49 |
+| cab | 0.21–0.40 | 0.32–0.47 |
+| chart | 0.83–1.19 | 0.88–1.16 |
+
+Chase clears the floor by about 2×; **cab and chart are inside it.** The whole
+term, on versus off, is 0.68–1.02 against those same floors. So the ruler is
+right for reasons that are geometric and not in doubt — the correction is
+simply quiet, because the thing being corrected is quiet.
+
+**What is NOT established**: an amplitude ladder to ×4 grew the mean delta only
+2.2×, which looks like quantisation (±0.045 is 0.64 of a palette step, so most
+of the term only decides which side of the dither threshold a pixel falls). But
+the band limit also shrinks the affected AREA, and a frame-wide mean cannot
+separate the two. A region-restricted measurement is owed before the report's
+larger programme is designed against an amplitude floor.
+
+### The same fade is on the cloud shadow, an order of magnitude louder
+
+`terrainFx`'s cloud-shadow term uses the identical `1 - smoothstep(15, 60,
+uMpp)`. Its field is `clfbm` at `CLOUD_SCALE` 0.0016 — 625 m per noise unit, 4
+octaves at ×2.07, so a finest feature near **70 m**, sharpened further by
+`clCov` — and its amplitude is up to **0.5 darkening, about seven palette
+steps** against the mottle's 0.64. Same fault, ten times as loud. Not measured
+here: the fixture runs `wx=clear`, so `covL` was ~0 and the term never drew.
+
+## The substrate: the ground is a material now, not a wash with noise on it
+
+The seat's verdict on the detail cascade, after driving it: over exposed ground
+the world is one undifferentiated surface with some texture on it, and what it
+wants is *less "terrain texture" and more a procedural substrate renderer* —
+three strongly differentiated components for ground no land-cover class
+describes, with the priority stated outright: **5–50 m coherent substrate
+domains + 0.5–5 m material structure. Not micro-detail first.**
+
+The cascade could never have got there, and the arithmetic says why in one
+line. Every term in it is a BRIGHTNESS, one palette step is 0.07 sRGB, and its
+loudest octave is 0.085 — so the whole four-octave cascade lives inside a step
+and a half and can only say "a bit lighter, a bit darker". It cannot say
+OUTCROP, SCREE or TURF, at any amplitude, because those are not brightnesses.
+
+So `client/substrate-field.ts` is the layer under the texture: a first-order
+CLASSIFICATION into rock, regolith and turf, coherent over the ten to fifty
+metres a driver reads a landscape at, moving CHROMA where the cascade moves
+luminance.
+
+- **THE MATERIALS ARE TRANSFORMS OF THE PLACE'S OWN COLOUR, NOT THREE
+  COLOURS.** The palette has already decided what country this is — the climate
+  ramps, the bedrock family, the cover tint, the guild standing on it — and a
+  substrate that painted a fixed granite grey over all of that would undo the
+  whole site model to gain a texture. Rock is the ground's colour with its
+  chroma pulled out and a cool cast on it (weathered stone is grey whatever the
+  soil around it is), regolith is that colour oxidised warm, turf is it pulled
+  green. **And every transform holds luminance to within a few per cent**,
+  deliberately: fourteen levels and a dither turn a brightness difference into
+  a different TONE and a hue difference into a different MATERIAL, and it is
+  materials this draws. The differentials are one to two and a half palette
+  steps in the chroma channels and under one in luminance.
+- **THE EVIDENCE IS THE ATTRIBUTE AND THE VERTEX COLOUR, AND BOTH ARE NEEDED.**
+  `aTd` is three floats now — rough, grain and the bed's own slope — which say
+  how mineral and how steep this is; the colour says whether anything grows
+  here (`veg`) and whether the ground is oxidised (`warm`), both normalised by
+  luminance so a shaded face and a sunlit one classify alike. Neither half is
+  enough on its own, and the case that proves it is snow.
+- **SLOPE RIDES SEPARATELY EVEN THOUGH ROUGH ALREADY CARRIES IT.** The kernel
+  adds slope into rough because a steep face rightly draws louder detail; the
+  substrate needs to know how much of what it sees is STEEP, because a slope is
+  where soil has left. Reading that back out of rough means inverting the cover
+  table in the shader — the kind of cleverness that breaks the first time a row
+  moves. And the slope it carries is the BED's, captured before the corridor's
+  cut and bank faces force it, or every road's earthworks would paint as
+  outcrop.
+- **BEDDING IS PHASED ON THE WORLD Y, AND THAT IS THE WHOLE TRICK.** A
+  sedimentary bed is a near-horizontal layer, so the line where it meets the
+  hillside is a contour of `y + dip·xz`: the bands then wrap round a spur,
+  climb a gully and close up where the ground steepens, exactly as real strata
+  do, for one dot product. A purely horizontal noise, however well tuned, lies
+  flat across the slope and reads as paint on a hill rather than as the hill's
+  own structure. The dip itself comes from two very low-frequency reads, so a
+  hillside's beds all dip the same way and the direction turns over about a
+  kilometre — which is the scale a fold belt actually varies at, and it needs
+  no district table and no upload.
+- **THE DOMAIN COLLAPSES TO ITS MEAN RATHER THAN ALIASING, AND IS NOT
+  EVALUATED PAST THAT.** Beyond the range where a patch is narrower than an art
+  pixel the field is replaced by its own mean and the classification falls back
+  on the vertex material, which is smooth and is exactly what the far field
+  should read. Switching the substrate off out there would be worse: this band
+  is the one the brief singles out BECAUSE it survives into the middle
+  distance, and at 18 m it is still drawing at nine metres a pixel — most of a
+  kilometre from the chase seat.
+
+### What it draws, and the three things the measurement overturned
+
+`devtools/substrate-ab.mjs` is the instrument: the classification's inputs at
+six points around the truck, an **interleaved one-boot A/B** (sub0, sub1,
+sub0-b, sub1-b — the repeats are the same setting at the same separation as the
+cross pairs, so their diff is the floor), **cropped to the near field** because
+the domain band-limits away and a full-frame mean of a near-field term divides
+the signal by the sky. `?tdetail=dom` paints the shader's own answer — red
+outcrop, green turf, blue regolith — which is the only honest witness for a
+weight computed in a fragment.
+
+**Measured at the seat's own Yosemite spot** (`lat=37.73606&lon=-119.63732`,
+NOON, clear, one settled boot, the lower half and middle three quarters of the
+pane):
+
+| | chase | top |
+|---|---|---|
+| floor, substrate off / on | 1.57 / 1.05 (7.0% / 5.1% of pixels) | 1.34 / 0.40 (4.6% / 1.5%) |
+| **SIGNAL, off vs on** | **5.07 /255, 53.9% moved** | **4.96 /255, 44.1% moved** |
+| domain 18 m vs 8 m | 1.02, 8.8% | 0.93, 9.9% |
+| domain 18 m vs 40 m | 1.92, 10.1% | 1.58, 15.2% |
+| amount 1 vs 2 | 4.67, 52.4% | 4.69, 48.5% |
+
+Three to five times the floor in the mean and eight to thirty times in pixels
+moved, on a term that is meant to change the ground and nothing else. For
+contrast, the ruler change one section up sat INSIDE its own floor on two
+cameras of three — that is what a real effect and a true-but-quiet one look
+like on the same instrument.
+
+And three things this found that reasoning had got wrong:
+
+- **THE REGOLITH GATE WAS BLIND AT EXACTLY THE SPOT THE BRIEF WAS ABOUT.** It
+  gated on the palette's warmth alone — soil is oxidised, snow is not — which
+  is true and insufficient. Yosemite's exposed granite reads (0.711, 0.727,
+  0.746): pale and very slightly BLUE, so `warm` is −0.049, one gate short of a
+  snowfield's, and the surface the seat photographed classified as 49% outcrop
+  and **51% leave-it-alone**. The pale sheet stayed a pale sheet, and the whole
+  unit would have shipped doing very little where it was wanted most. What
+  separates granite grus from a glacier is the cover class, already in hand:
+  bare ground carries grain 0.85 and snow 0.00. Either piece of evidence opens
+  the gate now and snow still has neither. **The signal went 2.11 → 5.07 and
+  13.2% → 53.9% of the pane on that one change.**
+- **A STRUCTURE'S AMPLITUDE IS ATTENUATED BY ITS OWN MATERIAL'S WEIGHT.** A
+  tone reaches the frame as tone × weight × the material's colour, so at
+  Yosemite — rock 0.46 on ground at 0.72 — the bedding's 0.13 arrived as 0.043,
+  six tenths of a palette step, and was invisible in the frame while the
+  classification under it was correct. **That is the cascade's own fault one
+  layer down**: an amplitude chosen against the palette step is under it by the
+  time it draws. The bedding, joints, tonal regions and clasts are loud by the
+  standards of a texture now (a coincident bedding line is about two and a half
+  steps) and can afford to be, because every one is band-limited.
+- **THE AMOUNT DIAL WAS A BRIGHTNESS, NOT A MATERIAL.** Scaling the WEIGHTS by
+  it is wrong in both directions: at Yosemite they already sum to one, so
+  asking for two doubled the absolute colour — 45/255 of mean luma and 94% of
+  the pane, a blowout rather than a stronger substrate. It interpolates the
+  finished colour now (`mix(palette, substrate, amt)`), so 0 is the palette
+  exactly, 1 the classification, and above 1 it extrapolates along the same
+  direction: monotone, and 4.7/255 at amt 2 rather than 45.
+
+**And the turf pulls half as hard as the other two, from the Camps Bay run.**
+Nearly every texel of that fixture classifies as turf, and at the full pull the
+whole meadow came out a step greener than the place's own palette — the site
+model overruled by a texture. The palette already handles vegetated ground
+well; the brief's complaint was about exposed ground, and that is where the
+chroma belongs.
+
+### What it does NOT do yet, stated
+
+- **THE SWARD DOES NOT SHARE THE FIELD**, which is the brief's own next ask:
+  *if the shader says this location is 70% grassy and 30% exposed soil, the
+  sward seeder should read essentially the same field.* It does not — blades
+  take their colour from `swardColData` and their density from the sward's own
+  habitat rule, so grass still stands on a rock domain as though it were
+  meadow. That is the next unit and it is the one that stops sward reading as
+  tufts pasted onto blank ground.
+- **THE BATTER STRIP WEARS NO SUBSTRATE.** `MAT.batter` does not wear
+  `terrainFx` at all (so it takes no cloud shadow either — pre-existing), and
+  it carries no `aTd`. On a refined tile it draws nothing, so this can only
+  show beyond `REFINE_R`, where the domain has band-limited away and the
+  classification is the vertex material's — but the mean colour still moves
+  there, so a distant cut face can differ from the ground it is cut into. Not
+  measured; recorded.
+- **THE FAR SHELL IS EXEMPT AND SHOULD BE.** Its geometry carries no `aTd`, so
+  `vTd` is the zero vector, `rough` is 0 and the gate closes. At 63 m a pixel
+  the domain is band-limited away in any case.
+- **THE PER-FRAGMENT COST IS UNMEASURED ON A DEVICE.** Worst case is the domain
+  (three value-noise reads, twelve hashes) plus a material's own structure; the
+  domain is not evaluated past its band and the dip is read only inside the
+  rock branch, so the far field pays a compare. The harness renders through
+  SwiftShader at three frames a second and cannot say what a phone pays — the
+  next telemetry paste is the verification, and `?tdetail=flat` is the A/B that
+  takes both the fine octaves and the substrate out.
+
+## A ground view is a channel in the renderer, not a layer over it
+
+The seat, on `?tdetail=dom`: *I really like the data exposure of that and can't
+help but feel that is how we should be showing the overview layers — instead of
+rendering a new layer in top-down it should apply more generally, into the
+actual renderer, and consider showing the substrate debug the same way when
+tile debug is on.* Right, and the investigation says so in three numbers.
+
+**WHAT THE SHEETS ACTUALLY WERE.** `bakeThemeTile` reads `farRasters` — the FAR
+SHELL's own height raster — so a thematic layer was never a map of the world,
+it was a decal on the shell, in the top camera, past 15 m a pixel. Three
+consequences, none of them chosen:
+
+- it cannot answer the question from the SEAT, which is where every fault in
+  this file was found;
+- it reads the SHELL's cover — a 19 km tile at 64 texels, about 300 m a texel —
+  and draws it over a fine world holding the z12 raster at 38 m, so the layer
+  was four times coarser than the ground it was describing;
+- and it carries a bake, a re-bake ladder, a settle rule, a lifetime keyed to a
+  mesh and a draw-order band: 341 lines of main.ts, every one of which exists
+  because the sheet is a second object with a second lifetime.
+
+A fragment term has none of that. `uGView` is one uniform on the terrain
+material, so the view applies in every camera, on the fine ring and the shell
+alike, with no bake, no reach limit, no cadence and no waiting states — which
+is why the key's four legend states are three for a channel view: it can only
+ever be short of ground that has streamed.
+
+- **THE PALETTE IS A 256-WIDE LOOKUP INDEXED BY THE CLASS BYTE ITSELF.** GLSL
+  ES 1.00 forbids dynamically indexing a uniform array in a fragment shader
+  (markTins is the worked example), so a palette must be a texture; making it
+  256 wide and indexing it by the RAW byte — 10, 20, … 95, 100 for WorldCover,
+  1..14 for RESOLVE — means there is no ordinal mapping in the kernel, in the
+  shader or in `ground-view.ts`. The cover classes are not contiguous, so that
+  mapping would have been a real one, and a table in two places is a table that
+  will disagree. A kilobyte of texture buys its absence.
+- **ALPHA IS THE COVERAGE CLAIM**, as it was for the sheets and for the same
+  reason: a class the dataset does not define is alpha 0 and the ground keeps
+  its own colour, so the view says where the data IS rather than filling its
+  gaps. On the shell that means the class it paints is `cv`, the raster's own
+  answer — NOT `cvv`, which carries the country's modal class and the sea
+  inferred from bathymetry. Those are inferences the PAINTER is entitled to
+  make and a data view is not.
+- **AND THE CLASS VIEW SITS OUTSIDE THE SUBSTRATE'S GATE**, which is not
+  tidiness. Water is cover class 80 and carries rough 0, so anything inside
+  that gate could never paint the sea — and on a cover view the sea is the one
+  class a reader is most certain of.
+- **THE FALSE COLOUR IS STILL LIT.** It is assigned to `diffuseColor` and takes
+  the sun, the cloud shadow and the sun march like any other ground, so the
+  landform reads THROUGH the classification. A flat unlit wash would be a truer
+  map and a worse instrument.
+
+**COVER RIDES THE GEOMETRY; ECO CANNOT YET, AND THE REASON IS THE DATA PATH.**
+The kernel already samples the class per vertex and the shell's bake already
+reads it, so `aTd.w` costs one extra `sampleCover` and the view is then exact
+at the raster's own resolution with no reach limit and no repaint. (It is the
+UNDITHERED read: the colour wants `coverPaint`'s dither so a 38 m block edge
+dissolves, and a data view wants the class.) An ecoregion is a point-in-polygon
+over a z5 tile, which the terrain kernel cannot do at all — it runs in a worker
+that has never heard of the eco store — and which costs about 7 ms a tile to
+fill in on the main thread at apply time. Affordable ON DEMAND, when the view
+is asked for, and its own unit. **Until then the eco chip keeps its sheet**,
+and `themeLayer()` is now "a thematic layer that the channel does not serve".
+
+**MEASURED**, at the seat's Yosemite spot, one settled boot, the near field
+cropped, the chip flipped live:
+
+| | chase | top |
+|---|---|---|
+| floor (view off, twice) | 1.49 /255, 6.8% moved | 1.66, 8.0% |
+| **COVER** | **7.73, 75.5% moved** | **15.31, 88.2%** |
+| **MATERIAL** (the substrate) | 88.4, 95.5% | 79.2, 99.6% |
+| sheets baked | **0** | **0** |
+| legend, tallied off the attribute | FOREST · GRASS · BARE | the same |
+
+The chase column is the finding: the old mechanism could not draw in that
+camera at all, and the legend under it names classes read from the very
+attribute the fragment paints.
+
+**Three rules that came out of building it:**
+
+- **THE LEGEND IS TALLIED OFF THE GEOMETRY, AND IT IS NOT A TALLY OF THE
+  FRAME.** The sheets counted classes as they wrote texels; a fragment view
+  writes none, so `gvTally` reads every sixteenth vertex of every built terrain
+  tile and every shell tile in the scene, on the stream pass's cadence. That is
+  the honest source — it is literally what the fragment will read — and it
+  over-reports whatever is behind you, exactly as the sheets did. Named here
+  rather than implying a frustum test nobody wrote.
+- **A DEBUG CHIP IS NEVER RESTORED FROM STORAGE.** MATERIAL's chip is drawn
+  only while the tile overlay is up, so a stored `substrate: true` would come
+  back as a false-coloured world with no control on the glass to turn it off.
+  The settings panel's own lesson about a staged change nothing announces, one
+  surface over.
+- **AND A VIEW THAT IS ON SAYS SO WHEREVER YOU ARE.** The channel applies in
+  every camera and its switch is a chip on the chart's key, which is in exactly
+  one of them. Off the chart the active view keeps one chip under the clock,
+  pushed into the same `layerRects` the key uses so the tap cannot take a
+  different code path. This is the route banner's rule and the third time this
+  file has recorded it.
+
+**MATERIAL, not SUBSTRATE, on the chip** — the key's eight-character budget
+forced the question and the shorter word is the better one. Beside COVER and
+ECO the three read as one vocabulary: what grows here, what biome this is, what
+the ground is made of. The id stays `substrate`; a chip's label is a word on
+glass and an id is a wire format.
+
+**What is left:** eco on the channel (above), and then the 341 lines of sheet
+machinery can go with it. `devtools/ground-view.mjs` is the instrument — it
+asserts the chip sets the CHANNEL and bakes no sheet, that the legend names
+what is under the camera, and that the chase frame moves.
+
+## The sward reads the substrate's field, and the debug views join the key
+
+Two halves of the seat's ask: *finish the sward cover work, and expose the
+water/hydro/road substrate debug rendering in the same way as MATERIAL.*
+
+### One field seen twice, not two fields that agree
+
+The brief's own next step, verbatim: *if the shader says this location is 70%
+grassy and 30% exposed soil, the sward seeder should read essentially the same
+field. Then sward doesn't appear as arbitrary tufts pasted onto blank ground.*
+
+`swardRows` already held every input the classification reads — the true cover
+class, the slope, and the palette colour it had just computed for that texel —
+so the work was not gathering evidence, it was making the two computations the
+SAME computation.
+
+- **THE CONSTANTS ARE SHARED OUTRIGHT.** `SUB_K` in substrate-field.ts holds
+  the sixteen numbers of the weights and the three material transforms, and the
+  GLSL source interpolates them. Two hand-written copies would be two copies
+  that drift, and the drift would show as grass standing thick on a patch of
+  painted rock — which is the complaint this whole programme started from,
+  arrived at from the other side.
+- **THE NOISE IS WRITTEN TWICE AND THAT IS STATED.** There is no way to call a
+  fragment from the main thread, so `subDomainAt` is a port of `subDomain`:
+  the same construction at float64 instead of float32. The lattice wrap at 2048
+  that keeps the hash argument under 3e5 is what makes the difference
+  irrelevant — the two agree to about a part in 10^5, five orders below the
+  eighteen metres a patch spans.
+- **AND `SUB_MAT` IS THE SOURCE OF RECORD FOR THE KERNEL'S OWN TABLE.** The
+  kernel inlines its copy because its closure is stringified into a worker and
+  may not touch a module binding; that is a real constraint and not a
+  preference, so the duplicate is held honest by a check that parses the
+  kernel's source — the trick `perf-check.mjs` uses for `refreshVeg`.
+- **AND THE CHECK THAT NEARLY SHIPPED UNSOUND.** Its first cut asserted the
+  EMITTED GLSL does not contain `clamp(grain * 0.8`, meaning to catch a number
+  typed into the shader instead of the table. It cannot: a template literal
+  produces byte-identical text either way, which is the whole point of
+  interpolation. The sound check is on the SOURCE — the weight lines must read
+  through `K` — with 0.5 exempt because it is the domain's own midpoint in
+  `(dom - 0.5)`, the definition of "shift either way about the mean" rather
+  than a number anyone would tune.
+- **THE GRASS THINS ON THE MINERAL SHARE, NOT THE TURF WEIGHT.** Turf is "how
+  sward-like is this ground", which is most of what `GRASS_M2` already says
+  from the cover class; multiplying the two would thin every meadow in the
+  world by a third for nothing. The outcrop and the scree are what the cover
+  class cannot see and the domain draws. Regolith counts for less than half of
+  rock, because grass grows in dirt and not on stone.
+- **And a blade fades two thirds of the way toward the material it stands in**,
+  not all of it: the sward's own colour rules — the bank mineral, the reeds,
+  the altitude — are about the PLANT and this is about the ground under it.
+
+**Measured** (`devtools/sward-sub.mjs`, the Camps Bay fixture, `swardsub=0`
+against the default). **Two boots, and that is legitimate here only because the
+measurement is not pixels**: the switch is read once into a const at module
+init like every world switch, so there is no live A/B, and what makes the
+comparison honest is a fixture (no network, no arrival order) plus a CPU field
+that is deterministic. A frame diff across two boots would carry the wildlife,
+the sward phase and the cloud deck.
+
+| Camps Bay, 8,971 sward texels | `swardsub=0` | on |
+|---|---|---|
+| correlation, density against the substrate's grass factor | **0.099** | **0.31** |
+| mean density | 0.360 | 0.302 (−16.1%) |
+| share the substrate calls mineral enough to thin | 1.8% | 1.8% |
+
+**THE CONTROL IS NOT ZERO, AND THAT IS THE INTERESTING PART.** The two fields
+already shared ONE input — the cover class, which `GRASS_M2` and `TD_MAT` both
+key off — so 0.099 is what "two fields that happen to be near each other" looks
+like. What the shared DOMAIN is worth is the gap to 0.31.
+
+**AND THE SIGN IN THE PROBE'S OWN COMMENT WAS WRONG UNTIL THE NUMBER CAME
+BACK.** It said the correlation should be *strongly negative*; a high grass
+factor means the substrate ALLOWS grass, so it is positive. The measurement
+caught a false claim in the instrument before the instrument shipped, which is
+the argument for writing the expectation down where it can fail.
+
+Camps Bay is a mild case by construction — fynbos classifies as turf almost
+everywhere, so only 1.8% of the field is mineral enough to thin. The loud case
+is bare ground, which no fixture in the set carries; the live Yosemite spot is
+where it shows and where a two-boot comparison would not be deterministic.
+
+### WATER and SURFACE: the same key, a different mechanism, and why
+
+MATERIAL and COVER ride the geometry, so the fragment paints them everywhere.
+WATER and SURFACE cannot: their verdicts are `surfaceAt`,
+`sampleRestingSurface`, `channelAt`, `oceanAt` and the road grid — CPU walks
+over live state that no attribute can carry and no shader can call. So they are
+a classified raster painted around the truck and sampled in the same fragment:
+the mechanism `?wetdebug` has shipped for months, generalised to take a
+classifier.
+
+What they share with the channel is everything the reader touches — the same
+key, the same chips, the same radio group, the same legend, the same rule that
+a debug chip is offered only while the tile overlay is up and is never restored
+from storage. **The mechanism differs because the DATA differs**, and that is
+the honest reason rather than an inconsistency.
+
+- **ONE PAINTER, TWO CLASSIFIERS.** A second canvas, uniform and cadence would
+  be two mechanisms falling out of step about their box, their resolution and
+  their repaint, for no gain: the chips are a radio group so they cannot both
+  be on, and they sample the same world through the same 768 m window.
+- **SURFACE ANSWERS THE STRUCTURE QUESTION TOO.** A carriageway whose deck
+  stands more than `DECK_GAP` over the drawn ground is a STRUCTURE rather than
+  an earthwork — the same three metres `__railgrade` counts spans by, so the
+  overlay and that audit cannot disagree about what a bridge is.
+- **GROUND IS THE FAINTEST CLASS.** At 0.45 alpha it washed 87% of a chase
+  frame green and the classes worth looking at had to compete with it. A debug
+  overlay's contrast budget belongs to its rare classes.
+
+**Measured** at Yosemite, same boot, near field cropped, against a floor of
+1.48/255 and 6.4% of the pane:
+
+| chase | mean | moved | repaint |
+|---|---|---|---|
+| COVER | 7.33 | 73.9% | — |
+| MATERIAL | 88.3 | 95.0% | — |
+| SURFACE | 13.96 | 87.2% | 26 ms |
+| WATER | 0.55 | 2.6% | 60 ms |
+
+WATER moving almost nothing at Yosemite is the correct answer and worth
+knowing before it is read as a failure: the classifier returns "." for dry
+ground and paints nothing, and there is essentially no water at that spot. The
+Senqu fixtures are where it has something to say.
+
+## The bedding was corduroy, and the first fix for it did nothing
+
+Four frames from the seat at the Stelvio (46.5302, 10.4547, the chart at
+`20 M · 1:910 · z18.8`). Two findings, and the second one is about this file's
+own method rather than about rock.
+
+**THE CLASSIFICATION IS RIGHT THERE AND THE LOOK IS NOT.** The MATERIAL view
+paints the whole pass red and magenta — outcrop, and outcrop over regolith —
+with no turf anywhere, which for a 2,800 m alpine pass of rock and scree is the
+correct answer. The ordinary render underneath it is the problem: long parallel
+diagonal ribs, evenly spaced, running edge to edge across the entire hillside
+in one direction. Strata drawn as a weave.
+
+It has to be, and the arithmetic says why in one line: `fract(u)` at one
+thickness is a perfectly regular comb. Real bedding does two things that comb
+does not — its spacing wanders, and an outcrop is not continuous, it shows in
+patches between the scree and soil that bury it.
+
+**AND THE FIRST FIX FOR IT MOVED NOTHING, WHICH IS THE PART WORTH KEEPING.**
+A phase warp read at ninety metres and a per-bed strength keyed on the bed
+index. Measured at the seat's own scale, the comb's autocorrelation above its
+own background went **0.166 → 0.157**: a twentieth, inside the noise. Both
+terms were reasonable and both were beside the point —
+
+- a drift of one bed over ninety metres is under a bed across the whole frame,
+  so the spacing did not visibly wander;
+- and a strength keyed on the bed index randomises each bed's AMPLITUDE while
+  leaving every bed's POSITION exactly where the comb put it, which is what an
+  autocorrelation reads. It made the ink prettier and the period identical.
+
+What worked was a warp fast enough to be seen (two octaves at forty and
+thirteen metres, so the spacing wanders by a couple of beds inside one
+hillside — the scale a fold actually bends strata at) and an exposure mask at
+about fourteen metres, so the bedding shows in patches and stops between them.
+**0.166 → 0.109**, same zoom, same settled world.
+
+| the Stelvio chart, 0.242 m a CSS pixel | peak | background | above |
+|---|---|---|---|
+| as deployed (`a9774a6`) | 0.191 | 0.025 | **0.166** |
+| warp at 90 m + per-bed strength | 0.190 | 0.032 | **0.157** |
+| warp at 40/13 m + an exposure mask | 0.132 | 0.023 | **0.109** |
+
+The frames are the argument the number supports: the control is unbroken ribs
+from one edge to the other, and the fix is traces that group, wander and stop.
+
+### Two things about measuring it, both of which cost a run
+
+- **THE FIRST METRIC NAMED THE WRONG PERIOD.** It set `__zoom` to a number,
+  photographed whatever frame that gave, and reported the strongest
+  autocorrelation over lags from five pixels out — which came back at SIX
+  PIXELS in every run. At that zoom six pixels is not a four-metre bed; it is
+  the Bayer dither. A number that measures the wrong thing is not a weaker
+  measurement, it is a different one, and it would have made any change look
+  like an improvement or a regression at random. `devtools/bedding.mjs` now
+  SOLVES the zoom for a target metres-per-CSS-pixel — the seat's own 0.241, so
+  the frame is the frame that was reported — and the lag window is 12–40 px,
+  which at that scale can only be the coarse bedding.
+- **A PEAK ALONE CANNOT SAY "COMB".** A noisier frame has a larger variance and
+  therefore a smaller correlation at every lag, so a peak that fell might mean
+  only that the term got broader. What says comb is how far the peak stands
+  above the BACKGROUND of its own lag window, and that is the column to read.
+
+### …and the cost, which the seat's own frames raised
+
+The Stelvio frames read **22 fps with MATERIAL on and 17 with it off**, and the
+only difference between those two is that the classification view skips every
+structure term. That is the first device evidence about what the substrate
+costs per fragment, and it is confounded (both frames say `RETRYING WORLD DATA`,
+so the streaming differed) — but it points at a real omission: `tdBand` is
+exactly zero once an art pixel spans half a wavelength, and a term past that
+was still being EVALUATED, four to eight hashes for a result multiplied by
+nothing. Every structure term now carries its own footprint guard at exactly
+the threshold `tdBand` uses, so nothing that was drawing stops drawing and a
+fragment stops paying for what it could not have shown. **Not verified on a
+device**: the harness renders through SwiftShader at three frames a second and
+cannot say what a phone pays. The next telemetry paste is the verification.
+
+## Phase C: the ground is LAYERS now, and turf was never a substrate
+
+The seat's verdict on the material classifier was sharper than the one about
+the detail cascade, and it is the sentence this whole phase is built on:
+*turf is not a substrate. Grass is a layer on top of rock/regolith/soil;
+rockiness persists under and through it.* A classifier can only ever say "this
+patch is the grass one", so what it drew was procedural motifs stamped on a
+wash — three mutually exclusive materials, each with its own texture, none of
+them standing in any physical relation to the ones beside it.
+
+What replaced it is four LAYERS composited in the order they were deposited,
+off the ONE shared geomorphic field phases A and B built:
+
+| layer | what it is | how much of it you see |
+|---|---|---|
+| A · bedrock | the place's colour, chroma pulled out, cool cast | `exposure × (1 − cover)` |
+| B · mantle | regolith and debris, fines warm and scree pale | `soilDepth·0.85 + debris·0.75`, stretched |
+| C · grassy complement | the hue pulled toward turf, mineral tone softened | `grassPot` stretched, gated on the palette's own green |
+| D · sward instances | *(phase D — the seeder still runs the old classifier)* | — |
+
+```
+col = mix(base,  mantle, e.mantle);
+col = mix(col,   rock,   e.rock);
+col = mix(col,   grass,  e.grass);
+```
+
+**THE THREE SHARES ARE NOT A PARTITION, and that is the whole of phase C.**
+They are shares of what can be SEEN, not weights over a set of materials: the
+substrate exists everywhere, including under dense sward, and vegetation
+decides how much of it is visually EXPRESSED rather than whether it is there.
+So `rockVisible = exposure × (1 − coverSoftMask)` never reaches zero where
+there is any exposure at all — a meadow reads as grass with stones and bedrock
+through it, which is the thing a winner-take-all classifier cannot say at any
+amplitude. `subExpress` is that arithmetic, `subExpressOf` is the same thing on
+the CPU, and `devtools/substrate-field.test.mjs` asserts the claim directly:
+a meadow at exposure 0.15 still expresses **0.0225** of rock, a face at 0.92
+expresses **0.916** and sheds its mantle to 0.010.
+
+**THE MANTLE FILLS WHAT THE BEDROCK DOES NOT.** The first cut multiplied the
+supply by `(1 − exposure·k)` as well, which double-counts — rock visibility
+already takes the mantle off a face, and the field's own `soilDepth` already
+subtracts exposure. Worked through the field's OWN reading at the Stelvio
+(exposure 0.52, mantle 0.378, rock 0.447) that left **34% of a scree slope
+drawn as the untouched palette**: `(1 − mantle)(1 − rock)`, the arithmetic
+leftover of two independent mixes, standing in for a material nobody had
+named. That is a calculation from the probe rather than a pixel count, and it
+is the reason the correction was made before the frames were taken. The supply is stretched instead (`smoothstep(0.05, 0.55, …)`), so
+ground with any real loose material on it is fully mantled and the bedrock
+then cuts back through it by its own exposure.
+
+**AND THE ONE VETO THE FIELD CANNOT SUPPLY IS THE COVER CLASS'S.** Every
+channel is derived from the LANDFORM, which is blind to what is lying on it: a
+flat glacier in a cirque has soil depth and debris by every topographic
+argument there is, and the fines' oxidised warmth would turn it beige. `grain`
+is 0.00 for snow and open water and at least 0.05 for everything else on
+earth, so `smoothstep(0.005, 0.045, grain)` is a veto on two classes rather
+than a classifier — and the test holds both halves: the same ground reads
+mantle 0.000 under snow and 1.000 under bare. **The first cut of that veto
+asked the palette's own warmth, as the retired classifier did, and vetoed the
+Stelvio's scree** — a grey lichen pass reads warm 0.009 and grain 0.25, which
+is one gate short of a snowfield's on BOTH of the old routes. The same trap
+this file already records as "pale granite reads cool", one layer up.
+
+**THE FIELD IS BAND A AND THE DOMAIN IS BAND B.** The geomorphic lattice is
+about thirty-three metres — the brief's 30–150 m band, where the LANDFORM is —
+so on its own a hillside the field calls half-exposed would come out a uniform
+half. `subDomain` at eighteen metres shifts exposure and debris either way
+inside one cell, which is what makes outcrop stand OUT OF fill rather than
+average with it, and it is the only noise left in the model that decides
+anything. Everything below it is structure, not classification.
+
+### The structure: phase-aware, anisotropic, and chosen by family
+
+- **A LINE KNOWS ITS OWN PHASE NOW.** `subLine(u, w)` takes `fwidth(u)` — how
+  much of a period THIS fragment spans — widens the line to its own footprint
+  and fades it out before that footprint can alias it. Phase-aware rather than
+  band-limited in metres, and the difference is not cosmetic: a bedding phase
+  is warped, read along a dip and measured up the world Y, so the period it
+  presents to the screen is not the period it has in the ground. `tdBand` would
+  cut a line that is perfectly resolvable where the strata run across the view
+  and keep one that is not where they run into it. The derivative is the only
+  thing that knows which.
+- **WHICH FORCED A RULE ABOUT GATES.** A derivative is undefined for the helper
+  lanes of a quad that did not take the branch, so every gate above a call to
+  `subLine` has to be a quantity that is SMOOTH across the screen: the field's
+  own channels (bilinear over a 33 m lattice) or the art-pixel footprint. It
+  may not be the domain noise or anything built on it — which is exactly what
+  the classifier's weights were, and is why they could never have carried this.
+  The isotropic terms keep `tdBand`, which is the right filter for them.
+- **THE FAMILY IS THE FIELD'S, NOT A ROLL.** `rockFamily` is chosen by context
+  when the field is built — a steep high-exposure face is massive or jointed, a
+  hillside with contour expression is bedded, a debris zone is broken — and
+  `subFam` turns it into four tent weights that sum to one, interpolated across
+  the lattice, so a hillside changes character over thirty metres rather than
+  at a line. Bedded gets the bedding shadow, fractured two joint sets (square
+  to the dip and along it, which breaks a bed into blocks rather than slats),
+  massive a faint mottle and a few long fractures, loose no coherent line at
+  all and clasts instead. A random family per patch is the motif-stamping fault
+  the rewrite exists to end.
+- **SCREE IS A TONGUE, NOT A BLOB.** `subAniso` reads the fall line's own frame
+  off the field's flow channels — nearly four times longer downhill than across
+  for the apron's lobes, and a much narrower frame for the rills between them —
+  so a patch elongates the way scree actually lies. That is the anisotropy the
+  brief asked for, and it is the reason the debris channel walks the fall line
+  in the first place.
+- **AND THE MANTLE IS TWO SURFACES.** `debris / (debris + soilDepth)` decides
+  between a tongue of angular blocks and a wash of fines with stones in it.
+  Coarse scree is a third colour the classifier could not express at all: it is
+  broken ROCK, not dirt, so it is paler and cooler than the fines it rests on.
+
+### What was removed, and what deliberately was not
+
+`subWeights` and the turf material are gone from `SUB_GLSL` outright; the
+fragment no longer classifies anything. The CPU half — `subWeightsOf`,
+`subGrassFactor`, `subTintOf` — is kept WHOLE, on its own constants
+(`SUB_CLS_K`), because the sward seeder still reads it and phase D is where
+that moves. Changing the grass in the same unit as the ground it stands on
+would make the next frame impossible to attribute. The material TRANSFORMS are
+still shared (`SUB_K`), so a blade fading toward an outcrop fades toward the
+colour the fragment painted that outcrop.
+
+**AND THE PROBE WAS REPORTING A RULE THE RENDERER NO LONGER RUNS.**
+`__tdetail().mat` carried a hand-written THIRD copy of the classifier, at
+dom = 0.5, with its constants typed in as literals. It reads the tile's field
+and runs `subExpressOf` now. The same fault this file records for the terrain's
+cell table and for `BridgeAssembly.claim`, met a third time: a probe that
+reports the output of a rule nothing runs cannot witness anything.
+
+The MATERIAL view and its legend moved with it — OUTCROP · GRASS · MANTLE,
+red, green, blue, the shares in the shader's own channel order. It needs a
+field, so a tile without one paints nothing rather than guessing, which is the
+coverage claim every other ground view here makes.
+
+### Measured
+
+`devtools/substrate-ab.mjs`, one settled world per place, the substrate's
+strength flipped live, cropped to the near field, against the same-frame-twice
+floor at the same temporal separation:
+
+| | floor | SIGNAL (substrate off against on) |
+|---|---|---|
+| Yosemite chase | 1.39 /255 · 6.4% of the pane | **4.03 · 28.1%** |
+| Yosemite top | 0.98 · 3.7% | **3.35 · 25.6%** |
+| **Stelvio chase** | **0.00 · 0.0%** | **1.70 · 13.9%** |
+| Stelvio top | 1.33 · 6.5% | **3.78 · 26.4%** |
+
+**THE STELVIO CHASE FLOOR IS EXACTLY ZERO**, which is the cleanest attribution
+in this file: a bare alpine pass has no wildlife, no sward and no streaming
+left to do, so the two same-setting frames are identical pixel for pixel and
+every one of those 13.9% is the term under test.
+
+And the field at the Stelvio is the finding the numbers are only evidence for —
+six points, all different, all geologically legible:
+
+| offset | exposure | debris | soil | family | rock visible | mantle |
+|---|---|---|---|---|---|---|
+| 0,0 | 0.52 | 0.55 | 0.18 | **loose** | 0.32 | 1.00 |
+| 0,60 | 0.51 | 0.32 | 0.02 | **massive** | 0.44 | 0.38 |
+| −90,40 | 0.47 | 0.26 | 0.05 | **bedded** | 0.41 | 0.31 |
+| 150,150 | 0.80 | 0.47 | 0.00 | **fractured** | 0.60 | 0.64 |
+
+The pass floor is loose scree, fully mantled, with a third of its bedrock
+showing through; the walls are massive and bedded with almost no mantle; the
+face at exposure 0.80 shows 0.60 of rock. **That is four different surfaces
+within a hundred and fifty metres, chosen by the landform and not by a roll** —
+and the frames say the same thing: the control is a smooth tan slope with no
+structure in it at all, and the fix is the same slope in grey, broken by
+downslope-running tongues and channels.
+
+**AND IT MOVES LESS OF YOSEMITE THAN THE CLASSIFIER DID — 28% of the pane
+against 54%.** That is not a regression to be tuned away, it is the point: the
+classifier read the valley floor's cover class as BARE and painted it 46%
+outcrop and 54% regolith with the weights summing to one, so the whole surface
+was replaced. The field says the same ground is exposure 0.46, debris 0.44,
+soil 0.07 — an apron of its own debris, `fractured` — which is what it is, and
+which leaves rather less to repaint. **A quieter measurement of a truer claim.**
+
+Two more things the numbers say and the frames confirm:
+
+- **The domain still earns its place.** Yosemite chase: 18 m against 40 m moves
+  1.92/255 and 9.2% of the pane, 18 against 8 moves 0.54 and 4.6% — so the band
+  the seat asked for is the one that matters, and going finer buys little.
+- **A grey palette has little chroma to take away.** The Stelvio's chase signal
+  is the smallest of the four because `subRockC` DESATURATES, and a lichen pass
+  already reads (0.31, 0.32, 0.307). What draws there is the structure, not the
+  hue — which is why the frame changes visibly while the mean does not move
+  far, and why a mean alone could not have judged this.
+
+### What phase C does NOT do
+
+- **The sward still runs the retired classifier.** That is phase D, and it is
+  the reason `subWeightsOf` is kept whole rather than rewritten here.
+- **No normal perturbation.** The layers move colour only; a scree apron has no
+  relief of its own beyond what the tile's normal map already carries.
+- **The per-fragment cost is unmeasured on a device.** The harness renders
+  through SwiftShader at three frames a second and cannot say what a phone
+  pays. Every line term is gated on the field (smooth) and on the footprint,
+  and every isotropic term on `tdBand` at exactly its own threshold, so a
+  fragment pays only for what it could show — but the next telemetry paste is
+  the verification, and `?tdetail=flat` takes the cascade and the substrate out
+  together.
+
+### The corduroy is gone, and the bedding metric says the opposite
+
+`devtools/bedding.mjs` at the Stelvio, the same spot and the same solved scale
+(0.242 m a CSS pixel) the seat photographed, working tree against `REV=a9774a6`
+— the deployed build, which is the one the seat reported the ribs on:
+
+| | peak | at lag | background | above | rms |
+|---|---|---|---|---|---|
+| a9774a6, as deployed | 0.167 | **[0, −12] px = 2.9 m** | 0.024 | **0.143** | 6.02/255 |
+| working tree | 0.218 | **[0, −32] px = 7.7 m** | 0.036 | **0.181** | 5.85/255 |
+
+**The number went UP and the corduroy is gone.** The control's frame is an
+unmistakable cross-hatch of parallel ribs over the whole slope; the tree's has
+none at all — soft broad shading with faint downslope streaking in the
+upper left. Read the lag and the two rows stop contradicting each other: the
+control's peak is at **2.9 m**, which is the 1.2 m bed and the 3.2 m joint, and
+the tree's is at **7.7 m**, which is nothing the bedding draws and is the scree
+apron's own lobes (9 m across the fall line). The band the tool measures over,
+12–40 px, holds both.
+
+**SO THE METRIC HAS STOPPED ANSWERING THE QUESTION IT WAS BUILT FOR**, and that
+is worth more than the number. It was written to ask "is this bedding geology
+or corduroy", and it works by finding periodicity above background in a band —
+which cannot distinguish a comb from a scree tongue, because both are
+directional structure at the same scale. The file already records that a peak
+alone cannot say "comb"; the correction is that peak-above-background cannot
+either, once the term under test has legitimate directional structure of its
+own. **The lag is the discriminator and must be quoted with the peak.**
+
+**AND THE REASON THE COMB WENT IS THE FAMILY.** The field at that exact spot
+reads exposure 0.52, debris 0.55, soil 0.18 — `loose` — so `fam.y`, the bedded
+weight, is near zero and the bedding term barely draws at all. The old build
+drew bedding on every rock fragment in the world regardless of what the ground
+was. A scree slope showing no strata is not the filter working; it is the
+CLASSIFICATION working, which is the layer below the filter and the one the
+brief was actually about.
+
+## Phase D: the sward and the flora read the field, and the classifier is gone
+
+The brief's own next ask, verbatim: *if the shader says this location is 70%
+grassy and 30% exposed soil, the sward seeder should read essentially the same
+field. Then sward doesn't appear as arbitrary tufts pasted onto blank ground.*
+
+It nearly did already. Phase C's own note recorded the sward running the
+three-material classifier a SECOND time on the CPU — the same constants, the
+same arithmetic, the noise ported from GLSL to float64, and a long paragraph
+explaining why the port was honest. It was honest, and it was still a second
+computation of the same thing, which is a thing that can drift. The seeder
+reads the tile's own geomorphic field now — the same two textures the fragment
+samples, as arrays — and runs `subExpressOf`, which is the fragment's own
+`subExpress` on the shared constants.
+
+Four things came off that, and the fourth cost nothing at all:
+
+- **DENSITY THINS ON THE MINERAL SHARE, NOT ON THE GRASSY ONE.** The first cut
+  multiplied density by `e.grass`, the same number the fragment tints with, on
+  the reasoning that one field should give one answer. Measured at Camps Bay
+  that took the mean density down **43%** — because `e.grass` is a share of the
+  SURFACE and `GRASS_M2` is already a density per square metre, so multiplying
+  them applies the cover class twice and halves every meadow in the world,
+  which is the fault `SWARD_LUSH` exists to have fixed. `subGrassAllow` stays
+  near 1 on soft ground and thins on the stone the cover class cannot see: the
+  bedrock the fragment draws through the cover, and the coarse debris under it.
+- **A BLADE FADES TOWARD THE GROUND IT STANDS IN**, through `subLayerTint` —
+  `subCompose` term for term on the shared transforms, at the domain's own
+  mean. A blade is a centimetre object standing on a tuft; what it needs is the
+  material, not the material's own eighteen-metre speckle.
+- **AND THE FLORA READS THE SAME FIELD.** `swardCtxAt` had one route to Cliff,
+  the local slope — one number off one DEM pixel pair. The field's exposure is
+  a landform read (slope over a third of a hectare, convexity at two scales,
+  relief over two hundred metres, the cover's own word), and a bench halfway up
+  a crag reads flat to the first and exposed to the second, and it is scree.
+  Above `SUB_CLIFF_EX` the habitat is Cliff, which is what puts rocks and
+  spires in the flora's draw and the scree palette on the flowers. Ruin and
+  Water still outrank it: both are statements about a THING that is there.
+- **THE BARE INTERRUPTIONS COST NOTHING, because the channel already meant
+  this.** The sward field's fourth float is the BANK's mineral share and the
+  vertex shader already reads it to turn a share of blades into stones
+  (`sIsStone`), damped in the wind and never scaled up by range. "This ground
+  is stony" is the same claim whether a river made it or a cliff did, so the
+  substrate's own visible rock takes the MAXIMUM with it — not the sum, or a
+  stony bank below a cliff would be twice as stony as either fact warrants —
+  and a scree apron grows stones through its grass with no shader change.
+
+**AND WHERE THERE IS NO FIELD THERE IS NO MODULATION**, exactly as the fragment
+draws no substrate on a tile with none. `__swardsub().noField` counts those
+texels: a sweep taken while that number is large is a sweep of ground the
+substrate had no say over, and a correlation read off one is a reading of the
+cover class alone. It was 0 on every run below.
+
+### Measured
+
+`devtools/sward-sub.mjs`, two boots with `swardsub` the only difference —
+legitimate here only because the measurement is a CPU field over a fixture and
+not pixels (`SPOT=` is a live pair, so read its build counts beside it):
+
+| place | correlation off → on | mean density | thinned | mean rock | habitat cliff off → on |
+|---|---|---|---|---|---|
+| Camps Bay, fynbos | 0.119 → **0.278** | −13.5% | 1.0% | 0.059 | *(not sampled)* |
+| Simon's Town | 0.669 → **0.713** | −12.9% | 3.2% | 0.077 | 0 → 0 |
+| **Yosemite valley floor** | −0.102 → **−0.046** | **−0.8%** | **0.0%** | **0.003** | *(not sampled)* |
+| **Stelvio, live** | **0.046 → 0.321** | **−39.9%** | **57.5%** | **0.291** | **597 → 818** of 1,444 |
+
+**THE STELVIO IS THE ROW THE UNIT IS FOR** and the only one where the control
+is near zero: the pass is uniform lichen and bare to the cover class, so the
+one input the two fields already shared says nothing there, and 0.046 → 0.321
+is the geomorphic field's contribution with nothing else in it. The sward thins
+by 40% on a scree pass, which is what a scree pass should do to a meadow, and
+**221 of 1,444 sampled points that the local slope called open ground are
+called scree by the landform** — those get rocks, spires and the scree flower
+palette.
+
+**AND YOSEMITE IS THE CONTROL THAT MATTERS AS MUCH.** Its valley floor thins by
+0.8% and the substrate calls 0.0% of the field mineral: the rule does not fire
+on soft ground, which is the half of "it works" that a single strong result
+cannot show. Note what the probe can and cannot see there — it walks texels
+with density above zero, so on ground the cover class already calls bare there
+is no grass to thin and nothing to correlate. The instrument samples where
+grass grows, by construction.
+
+### What went with it
+
+`subWeightsOf`, `subGrassFactor`, `subTintOf`, `subMatOf`, `SUB_CLS_K`, `SubMat`
+and `SubW` are deleted: the sward was their last reader. `SUB_MAT` stays,
+because the terrain kernel inlines a copy of it and this is the source of record
+that copy is held against. **`subDomainAt` stays and is now TEST API** — nothing
+in the game calls it, and it exists because nothing here can run GLSL, so the
+only way to assert the domain's mean, range and decorrelation is to run the same
+construction in node. Its docstring says so, which is what stops the next
+dead-code sweep deleting the only check the shader's noise has.
+
+`devtools/substrate-field.test.mjs` lost the classifier's block and gained the
+transforms': bedrock pulls the chroma out and cools, fines oxidise warm, grass
+greens, **none of the three moves luminance by more than a fifth of a palette
+step**, a zero share leaves the palette exactly alone, and `subGrainOf` answers
+0 for snow and water and nothing else.
+
+## Band D: the half-metre had two owners, and the cover class was one of them
+
+The brief put this band last and was right to — *5-50 m coherent domains +
+0.5-5 m material structure, not micro-detail first* — but the band was never
+EMPTY. The detail cascade's third octave has drawn at 0.25 m since long before
+any of this, keyed on the COVER class through `rough` and `grain`, so a metre
+from the wheel a granite face and a ploughed field wore the same speckle. A
+cover class is the one thing that cannot tell them apart.
+
+**EACH LAYER HAS ITS OWN NOW.** `subRockMicro` is crystal speckle (a sharpened
+noise, so it reads as flecks rather than a damp wash), hairline cracks square
+to the dip and along it, and pitting where the family is broken; `subMantleMicro`
+is crumb on fines and sparse thresholded chips on scree, so the two read as
+different SURFACES and not as one noise at two gains.
+
+- **THEY SIT INSIDE `subRockTone` AND `subMantleTone`, NOT BESIDE THEM**, and
+  that is what makes the relief free: `subRelief` differentiates those two
+  numbers and nothing else, so a crack recesses and a crystal stands proud with
+  no second field, no second uniform and no second decision about where the
+  light is. Measured: of the band's whole effect, **just over half is colour
+  and just under half is the relief it buys** (0.767 of 1.642).
+- **AND THE CASCADE'S THIRD OCTAVE STANDS DOWN WHERE THEY DRAW.** The
+  stand-down is the MINERAL share, `(e.x + e.y) × uSubAmt`, because that is
+  exactly how much of band D reaches the frame — the micro terms are weighted
+  by those shares in the composite. So a scree apron hands the band over
+  entirely and a meadow, where band D says almost nothing, keeps its octave
+  exactly where it was. The 1 m and 4 m octaves are untouched: the substrate
+  says nothing at those scales through a micro term.
+- **WHICH FORCED THE FIELD TO BE READ ONCE, ABOVE BOTH CONSUMERS.** The shares
+  used to be expressed inside the substrate block, below the cascade, because
+  nothing above them needed to know. A second read would have been a second
+  opinion about the same ground. `veg` moved up with it and is exactly
+  unchanged by the move — a chroma ratio over its own luminance is invariant
+  under the cascade's scalar multiply.
+- **`uSubMic` (`__tdetail({micro})`, 0..2) IS THE DIAL**, scaling the micro
+  terms and the stand-down together, so `micro 0` is the exact world before
+  band D and the comparison is one settled boot. Every other measurement in
+  this programme is held to that and this one had no way to meet it otherwise.
+
+**Measured**, the Stelvio (`46.5302, 10.4547`), one settled world, NOON, clear.
+**Quote the SEAT row and not the chart row**, for the reason under the table:
+from the chase camera, scanned by rows, the near ground reads **2.587/255 over
+20.13% of its band** against a floor of exactly 0.000 — the Stelvio chase floor
+has been exactly zero since phase C, which is what makes that attribution
+clean.
+
+| near chart, 0.07 m an art pixel | mean /255 | pixels moved >3 |
+|---|---|---|
+| floor (the same setting, twice) | 0.002 / 0.000 | 0.02% / 0% |
+| SIGNAL, micro 0 against 1 | 1.642 | 12.77% |
+| …of which colour alone (relief 0) | 0.767 | 7.62% |
+| micro 1 against 2 | 1.520 | 10.95% |
+
+**AND THAT CHART ROW DID NOT REPRODUCE, which is the more useful finding.** The
+same station on the tree after the producer rewrite read **0.077/255 over 0.6%**
+— twenty times less — and scanned by rows the frame moves in its top three
+hundred and NOWHERE below that. The top camera at ZOOM_MIN stands 22 m over a
+truck that is parked on a mountain PASS, so most of that pane is carriageway and
+shadow, and how much of it is ground depends on where the rig happened to stop.
+A station whose reading depends on the parking is not a station. The chase band
+is the honest one and is also the one a driver sees; the chart row is kept here
+because a number that moved by twenty times between two trees is worth being
+able to find again.
+
+**THE HAIRLINES ARE NEARLY INVISIBLE AND THAT IS CORRECT.** They are 3 cm wide
+on a 0.45 m spacing, and `subLine`'s own phase filter fades them out by about
+0.13 m an art pixel — so at the near chart's 0.07 they are half a pixel and
+already half gone. What actually carries band D is the isotropic grain, crumb
+and chips at 0.11-0.28 m, which are one and a half to four pixels there. They
+are right and quiet; widening them past what a crack is would be the opposite
+of the band limit.
+
+**AND THE TOOL'S CROP GOT IT WRONG TWICE, THE SAME WAY BOTH TIMES.** An exactly
+**0.000** reading on all six pairs INCLUDING THE FLOOR is never a quiet term; it
+is a crop of a region the renderer does not draw into, and a real floor has
+dither in it. First it was the bottom fifth of the WINDOW — the world ends about
+seventeen per cent above the window's foot here. Then it was
+`document.querySelector('canvas')`, which returns whichever canvas is FIRST in
+the DOM, and that is the HUD's rather than the renderer's: same symptom, second
+cause, one more run spent. The band is SCANNED now — diff the two extreme legs
+by forty-row strips and keep the rows that moved — which needs no knowledge of
+the layout and reports a station where nothing moved as such.
+
+## The producer, rebuilt: a cliff survives the downsample and the tile edge is gone
+
+The review that prompted this said the renderer and the sward had moved on and
+`buildSubstrateCells` had not, and it was exactly right. Five things, in the
+order they were sequenced.
+
+### 1. THE MEAN DESTROYED THE ONE FEATURE THE MODEL IS MOST WANTED FOR
+
+The lattice is a 4x4 mean of the 256² raster — a 33 m cell — and that is right
+for the SHAPE of a hill and fatal for a cliff. A narrow rib, an outcrop edge or
+a natural escarpment has a very high NATIVE gradient and a moderate mean-to-mean
+gradient across two cells, so the normal map drew the feature while the
+substrate simultaneously decided it was not exposed rock, and the 18 m domain
+noise was left to invent outcrops somewhere else entirely.
+
+Two more numbers a cell fix it and **they cost no extra reads at all**: the
+block's height RANGE and the steepest ADJACENT-PIXEL step inside it, both
+accumulated in the pass that was already computing the mean. The window is
+(step+1)² rather than step² so a cliff lying exactly on a block boundary is seen
+from both sides of it.
+
+Exposure is five geomorphic terms now — landform slope 0.34, peak native step
+0.26, cell ruggedness 0.18, convexity 0.10, relief 0.12 — and the first three
+are the correction.
+
+**Measured**, a 25 m step over ONE raster pixel on otherwise flat ground:
+**peak exposure 0.50 against the plain's 0.00.** (Point-sampled exactly on the
+step it reads 0.33: `sampleSubstrate` is bilinear over a 33 m lattice, so a
+reading taken on a one-pixel feature is the escarpment's cell averaged with the
+plain's. That is the right answer for a point and the wrong instrument for
+"does the model see this at all", which is why the check scans.)
+
+### 2. THE MORPHOLOGY STOPPED AT THE TILE EDGE, AND THE WORKER ALREADY HAD THE FIX
+
+Slope over 33 m, curvature over 100, a relief window over 200 and a debris walk
+over 200 are all processes at a scale where a terrain tile's boundary is an
+arbitrary line — and the field saw a PLATEAU past it: `at` clamped, and the
+walk `break`ed.
+
+The lattice is built **G = 6 cells wider on every side** and the central N² is
+emitted. Six because the debris walk is the deepest reader. The gutter is
+sampled through `S.sampleHeight`, which the worker has always had and the
+builder never asked for; no halo is transported. **The raster's 256 samples
+span the tile edge to edge on a w/255 pitch**, so extending pixel indices past
+the range and mapping them through that same pitch is what makes the gutter
+continuous with the interior by construction rather than by a fudge.
+
+- **THE GUTTER IS SAMPLED COARSER, AND THAT IS A BUDGET DECISION SAID OUT
+  LOUD.** A full (step+1)² window over the whole gutter is ~42,000 sampler calls
+  a tile against ~15,000 for a 3x3, and what the gutter is FOR is the landform
+  the interior's windows reach into, not its own micro-relief, which is emitted
+  for no cell. Its 3x3 steps are half a cell apart, so the rise is scaled back
+  to the pixel pitch the interior reports in — otherwise every tile edge would
+  grow a false soft band.
+- **The cover is read for the INTERIOR ONLY**, which is also why the guttered
+  lattice costs no extra cover reads: after item 3 the gutter needs no cover at
+  all.
+
+**Measured**, the same synthetic world as two tiles, a cliff standing 40 m
+inside the eastern neighbour: debris at tile A's eastern edge **0.00 blind,
+0.52 with the neighbour**, and the seam itself agrees 0.04 against 0.06 where
+the blind pair read 0.00 against 0.06. The blind column is the control and it
+is the half that makes that a measurement.
+
+**AND IT COST NOTHING.** The field-plus-colour phase at the Stelvio:
+**113.51 ms a tile on the control, 111.13 and 115.24 on two runs of the fix** —
+inside the run-to-run spread, on a pass the colour loop dominates.
+
+### 3. VEGETATION WAS DECIDING WHETHER BEDROCK EXISTED
+
+`exposure` carried `+ bare*0.20 - veg*0.25` and `debris` carried
+`+ bare*0.20 - veg*0.12`, so WorldCover decided whether rock and scree existed
+at all and a grass-covered cliff stopped being a cliff. The shader's own
+comments already described the better model — the field derives from the
+landform, vegetation decides what is VISIBLE — and the producer did not.
+
+Both are gone. The cover class speaks downstream instead, where it always
+partly did: soil, grassPot, and the expression.
+
+**AND THE MOMENT IT LEFT, THE MISSING TERM SHOWED.** A 25 degree wooded
+hillside came out expressing **0.264 of rock against bare ground's 0.306** — a
+fourteen per cent difference where a canopy should hide most of the stone —
+because the only vegetative concealment `subExpress` had was GRASS, through
+`grassPot`, and a wood is not grass. `grassPot` on that hillside is 0.10,
+under the 0.28 the grass layer starts at, so the wood expressed no cover at all.
+
+`canopy` is the fix and it needed no new channel: both its inputs are already
+arguments. `veg` is the palette's own greenness (a wood is green, a scree is
+not) and `sd` says whether there is anything for that green to be rooted in, so
+a green wash over a bare face — which is what the raster gives a lichen slope —
+conceals nothing. **Measured: 0.306 bare against 0.158 wooded**, and never zero,
+because a wood on rock is still on rock.
+
+### 4. AND NOTHING RESTS ON A FACE
+
+Caught by the Stelvio the moment exposure rose to match the landform: the
+debris walk's own answer — *there is a face above me* — is loudest exactly ON
+the face, so debris on a wall went 0.26 to 0.55, every cell on the pass crossed
+the family rule's `loose` threshold, and **four rock families within a hundred
+and fifty metres collapsed to rubble everywhere**. The bedding, the joint sets
+and the massive mottle were written for precisely the surfaces that lost them.
+
+Scree stands at its angle of repose, about 35 to 38 degrees; above that the
+material is in transit and not in residence. `1 - smoothstep(0.75, 1.15, slope)`
+is the whole fix.
+
+**Measured**, the same six points at the Stelvio, control against fix:
+
+| | control | fix |
+|---|---|---|
+| exposure at six points | 0.52 · 0.40 · 0.51 · 0.47 · 0.55 · 0.80 | **0.80 · 0.72 · 0.76 · 0.83 · 0.65 · 0.89** |
+| families | loose, loose, massive, bedded, loose, fractured | loose, loose, loose, **fractured**, loose, **bedded** |
+| expressed rock on the two walls | 0.41 · 0.60 | **0.61 · 0.70** |
+
+…and on the authored cliff, **debris 0.00 on the face with 0.77 ten metres
+below it**: a cliff is a source, the apron is the store.
+
+### 5. AN ENGINEERED CUT FACE IS FRESH SUBSTRATE
+
+`buildSubstrateCells` runs BEFORE `carveCorridors`, so the field describes the
+hillside that was there and a road cut is a genuinely steep new face in the mesh
+that the field goes on calling a grassy slope. These are close, screen-large
+surfaces in chase view — the one place an anthropogenic term is worth more than
+anything the original landform can say.
+
+It rides the **SIGN of the bed slope**, not a fifth float. Nothing in the
+fragment read that channel at all (only the probe), and a sign survives
+interpolation gracefully: between a cut vertex and the natural ground at its toe
+the value crosses zero, which is exactly the blend a toe wants, where an extra
+attribute would have cost four bytes a vertex on every terrain tile in the world
+for one of them. The fragment LIFTS what is latent (`x += k(1-x)`: rock 0.62,
+mantle 0.34) and takes the turf with it (0.85), so a cut through a hillside
+exposes that hillside's own rock and regolith rather than a generic scar.
+
+**What it does not reach: the SWARD.** The seeder reads the field, and the field
+knows nothing of the corridor, so grass still grows on a cut bank at the density
+the cover class asked for. That wants the corridor in the field, not another
+attribute.
+
+### AND THE CASCADE'S PEDESTAL WAS NOT A CONTROL
+
+`diffuseColor.rgb *= 0.955 + d * uTdAmt` — so `amount 0`, the control every
+cascade-versus-substrate comparison is taken against, still multiplied the world
+by 0.955 and carried a **4.5% luminance step** that no screenshot could separate
+from the thing under test. `mix(1.0, 0.955 + d, uTdAmt)` fixes it: at 1 it is
+identical, at 0 it is exactly the palette, at 4 it is a quadrupled amplitude
+under a quadrupled pedestal. The fixed-pedestal reasoning is about the live
+octave SUM and is untouched — a pedestal that shrank as octaves faded would lift
+the far field by the whole cascade amplitude.
+
+### The sward's mineral share was a RATIO, not an amount
+
+`subGrassAllow` read `debris / (debris + soilDepth)` and thinned on it directly.
+A ratio answers "is what mantle there is coarse or fine", and on ground with
+almost no mantle at all — debris 0.05 over soil 0.01 — it answers 0.83. Measured
+at Camps Bay, a fixture the substrate expresses **six per cent** of rock on was
+losing **23.6%** of its sward to stones that are not there. Multiplying the ratio
+by the debris itself asks the question this wants — how MUCH coarse material is
+lying here — and leaves the ratio telling a scree apron from a silt flat.
+
+### …and the sward now sees the 18 m expression, through the port
+
+The field's lattice is 33 m; the fragment then shifts exposure and the mantle by
+an 18 m domain noise, and THAT is what makes outcrop stand out of fill. So the
+shader's rock islands are an 18 m pattern and the sward was reading the 33 m
+field underneath them: the two agreed about the landform and could disagree
+entirely about which patch of it is stone — which is the scale a tuft stands at,
+and the comment claiming they cannot hold different opinions was not quite true.
+
+`subCellAt` applies the same shift through `subDomainAt`, the float64 port that
+already existed for the tests. **THIS IS THE INTERIM AND IS LABELLED AS ONE.**
+The better answer is a shared intermediate expression field — roughly 30 m for
+morphology, 8-15 m for surface fragmentation, true microstructure left
+procedural in the fragment — so every consumer reads one answer at ecologically
+meaningful scales rather than two implementations of one noise. That costs a
+finer lattice and its upload and is its own unit; this closes the disagreement
+that actually reaches the frame in the meantime.
+
+### AND THE SWARD CORRELATION IS NOT A SCORE — READ IT AT THE RIGHT PLACE
+
+`__swardsub`'s correlation is between the sward's density and
+`subGrassAllow`, and at Camps Bay it reads NEGATIVE — −0.581 with the rule off
+and −0.367 with it on. That is not a regression and it is not a win either;
+it is the metric being asked a question the place cannot answer.
+
+Camps Bay is 580 wood of 1,444 sampled habitats, the substrate expresses **six
+per cent** of rock over the whole fixture and calls **2.3%** of it mineral
+enough to thin — so `allow` is nearly constant near 0.91 while the density
+varies by a factor of several between a meadow and a wood floor. A correlation
+between a nearly-constant field and a strongly-varying one is a reading of the
+residual and of the habitat mix, not of the rule. What it does say is the
+DIRECTION: turning the rule on moves it toward zero, which is the thinning
+partly cancelling an anti-correlation the cover class had put there.
+
+The Stelvio is where the substrate has something to say, and there it reads
+**−0.059 → +0.319**. Quote that one, with its `meanRock` beside it; a
+correlation from a fixture whose `thinnedShare` is two per cent is a
+measurement of nothing, exactly as `noField` being large would be.
+
+**The whole sward picture after the producer rewrite**, both places, the
+`swardsub` switch the only difference (two boots, which is legitimate because
+this is a CPU field over deterministic ground and not pixels):
+
+| | Stelvio, live | Camps Bay fixture |
+|---|---|---|
+| correlation off → on | **−0.059 → +0.319** | −0.577 → −0.367 |
+| mean density | −44.5% | −12.9% |
+| the substrate calls mineral enough to thin | **67.2%** | 2.3% |
+| mean expressed rock | **0.470** | 0.058 |
+| habitat cliff, off → on | 588 → **954** of 1,444 | 1 → 24 |
+
+The Stelvio's expressed rock went 0.291 to 0.470 over the producer rewrite —
+the high-resolution cliff evidence and the latent exposure, on a pass that
+genuinely is rock — and with it 588 of its 1,444 sampled habitats became 954.
+A 2,800 m alpine pass losing 44.5% of the sward the cover class asked for is
+what an alpine pass should do to a meadow; whether it is too much is the seat's
+call, and `swardsub=0` is the exact A/B for it.
+
+### What is NOT done, with the reason
+
+- **`moisture` IS AN ACCUMULATION POTENTIAL, NOT A WETNESS.** It is pure
+  topography, so an arid depression in the Karoo and a Scottish hollow score the
+  same, and everything downstream that reads it as dampness — the damp tone
+  above all — inherits that. Multiplying it by the climate's own water is the
+  honest correction and the builder closes over nothing and takes no climate, so
+  it needs a new input threaded through the kernel and the worker. Named in the
+  one place that writes it so the next reader argues with the claim.
+- **Rock family is still procedural morphology standing in for lithology.** Not
+  worth tuning hard until a regional geology seed exists to key it on.
+- **The 4 m and 1 m octaves of the cascade are untouched** — and the
+  measurement that was owed here has now been taken, so what follows is a
+  finding rather than a plan.
+
+### THE LOUD PART OF THE CASCADE IS THE 15 m MOTTLE, NOT THE 4 m OCTAVE
+
+The review's objection was that a generic luminance hierarchy is still laid
+under an increasingly specific material model, and that **at 4 m especially**
+it occupies the same perceptual territory. Measured at the Stelvio, chase, over
+the drawn ground, each octave turned off in turn on one settled world
+(`band-d.mjs PHASE=cascade`):
+
+| | mean /255 | pixels moved >3 |
+|---|---|---|
+| floor (the same setting, twice) | 0.237 | 0.39% |
+| the 0.25 m octave alone | 0.417 | 0.57% |
+| the 1 m octave alone | 0.715 | 4.98% |
+| the 4 m octave alone | 0.557 | 4.67% |
+| **the 15 m mottle alone** | **2.345** | **17.71%** |
+| the whole cascade | 2.644 | 17.51% |
+| **the whole substrate** | **4.092** | **31.03%** |
+
+**The mottle is nine tenths of the cascade** (2.345 of 2.644) and the two
+octaves the objection named are each about half a palette step, barely twice
+the floor. So the thing competing with the material model is not the 4 m
+octave: it is the two crossed sines at ±0.045 that this renderer has drawn
+since before any of it existed, and which have no band limit worth the name
+because their own fade reads `uMpp` — zero from the seat, the dead term this
+file already records.
+
+**Read the floor before the rows.** At 0.237 the 0.25 m octave's 0.417 is under
+twice it and is not a measurement of anything; the mottle's 2.345 is ten times
+it and is. And this is ONE PLACE — a bare alpine pass where the substrate has a
+great deal to say (it moves 31% of the ground here). On vegetated ground the
+balance will differ and the same tool answers it.
+
+## The cover raster was drawing rectangles in the grass
+
+Reported from the seat with a frame: hard rectilinear boundaries in the sward,
+at a scale and a geometry that matched nothing in the blade lattice. The
+diagnosis was read straight off the code and is exact.
+
+```
+density = (cv === null ? 0.35 : GRASS_M2[cv] ?? 0.3) * lift;
+```
+
+`cv` is `sampleCover(wx, wz)` — a NEAREST-NEIGHBOUR read of a z12 raster, about
+30 m a pixel at mid latitude — and `GRASS_M2` has categorical jumps in it, grass
+0.85 beside bare 0. So the density field said *this 30 m square is meadow, the
+one next to it is nothing*, and the 8 m sward lattice, the field texture's
+`LinearFilter` and every distance-band fade downstream could only turn that into
+an 8–16 m ramp about a **geometrically straight** edge. The plateaus were
+square because the raster is square.
+
+**AND THE TERRAIN ALREADY KNEW BETTER.** `coverPaint` exists in main.ts for
+precisely this reason — do not let raster pixels appear literally in the world —
+and jitters its lookup so the ground COLOUR gets an organic boundary. The sward
+bypassed it and read the raw class. So the colour transition under the grass was
+irregular and the density transition was a rectangle laid over the top of it,
+which is the discrepancy the frame shows.
+
+**AND THE SUBSTRATE COULD NOT HAVE FIXED IT.** Phase D multiplies by
+`subGrassAllow`, which ranges from 1 down toward 0.2 — a modifier on an already
+categorical base. `0.85 × organic` is organic; `0 × organic` is still exactly
+zero. No amount of smooth geology softens a zero, which is the same shape of
+fault as the producer's: **categorical cover making a stronger statement than it
+should**, met one layer over.
+
+### The class becomes evidence, and the evidence is continuous
+
+`client/sward-cover.ts` is pure and is the one place both readers now call — the
+8 m density sweep and the shrub lattice were each doing their own `GRASS_M2`
+lookup off their own `sampleCover`, which is two chances to disagree about where
+the vegetation stops.
+
+- **NINE TAPS OVER ONE COVER TEXEL'S FOOTPRINT**, weighted 2 at the centre and 1
+  at each of eight ring points on two radii, so a boundary arrives as a ramp
+  instead of a step.
+- **TEN WEIGHT UNITS IS NOT AN ARBITRARY COUNT.** Over a binary boundary the
+  evidence can only take as many values as there are weight units, so the step
+  between adjacent levels is the class range over that count. Five taps gave six
+  levels and a **0.13** jump between them — a staircase, not a ramp. Ten gives a
+  worst step of 0.078.
+- **EVERY TAP IS WARPED, THE CENTRE INCLUDED, AND THAT IS THE WHOLE POINT.** The
+  first cut warped only the ring. Measured: the profile across a boundary DID
+  vary with z and the half-way crossing **did not move a metre in ninety** —
+  because the centre carries two weight units of eight, so its own flip is the
+  largest jump in the ramp and it happens exactly on the raster's straight line.
+  A soft ramp hung on a hard edge is still a hard edge. Warping the centre means
+  the class at a point is not always the class the raster holds there, which is
+  exactly what `coverPaint` has done for the ground colour for years.
+- **THE WARP IS ON THE SAMPLE, NOT ON THE RESULT.** Displacing where each tap
+  LOOKS bends the boundary; smoothing the answer afterwards only blurs a
+  straight line into a straight gradient. This is also why it is not simply a
+  blur of WorldCover: a blur costs the mapped boundaries — a field, a wood, a
+  lake margin — that are genuinely sharp and genuinely there.
+- **TWO CLASSES ARE SURFACES AND ARE NOT SOFTENED.** Water and snow are not
+  points on a vegetation continuum with a classifier's threshold drawn through
+  them; they are things lying on the ground whose edge the bank and shore rules
+  own. A kernel that averaged across them grows grass out over a lake — in the
+  arithmetic, a water texel with four grassy neighbours comes out at 0.57 of full
+  meadow. The centre's own class vetoes first, and only then does the
+  neighbourhood speak.
+- **AND BARE IS NO LONGER MATHEMATICALLY IMPOSSIBLE GRASS.** WorldCover's
+  "bare / sparse vegetation" is a categorical observation at raster scale and can
+  hold isolated tufts, weeds, dry grass between rocks and anything under its own
+  classification threshold. `bare` is 0.07 and `built` 0.08 — priors with floors
+  — and the continuous fields downstream do the rest. Water and snow stay the
+  two real zeroes.
+
+**Measured in pure node** (`devtools/sward-cover.test.mjs`), a transect across an
+authored grass/bare boundary in a 30 m raster:
+
+| | old (one texel) | new (the neighbourhood) |
+|---|---|---|
+| transition width | **0.0 m** — it changes between two adjacent pixels | **29.0 m** |
+| distinct levels across the transect | 2 | **8** |
+| where the ramp crosses its half-way point, along 180 m of the SAME edge | the same x throughout | **spread 16.0 m, sd 4.5 m** |
+| the meadow well inside it | 0.85 | 0.85 |
+| the bare ground well past it | 0.07 | 0.07 |
+
+The third row is the one that separates this from a blur: the boundary wanders
+along its own length. And `strength 0` reproduces the old nearest-neighbour
+table **to the bit**, which is what makes `?swardev=0` a control rather than an
+opinion.
+
+### …and it is a ONE-BOOT A/B, which nothing else about the sward has been
+
+`__swardev(0|1)` re-sweeps the field synchronously. Every other sward switch is
+read once at boot and has had to be measured across two boots under two skies —
+and a claim about a hard EDGE is exactly the claim two boots blur, because they
+differ in where every tile landed. This one does not.
+
+**THE LIVE METRIC IS NOT PIXELS EITHER.** A categorical raster boundary is
+**axis-aligned by construction**: WorldCover is a lat/lon grid and the sward
+field is in local metres off the same projection, so a step inherited from the
+raster runs exactly north-south or east-west while an ecological gradient points
+wherever the ground does. `__swardedge` reports the density field's own gradient
+directions as |cos 2θ| — 1 on an axis, 0 on a diagonal. **The baseline is not a
+half:** a uniformly random direction averages 2/π ≈ 0.637, and that is the
+number a field with no preference scores.
+
+## An object-space normal map REPLACES the mesh's normal — for years, it did
+
+The seat's verdict on the normal stack, and it is a composition fault rather
+than a tuning one: *the raw DEM object-space normal REPLACES the final geometry
+normal.* It does. three's `normal_fragment_maps` under
+`USE_NORMALMAP_OBJECTSPACE` is one line —
+
+```glsl
+normal = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;  // overrides
+```
+
+— and `terrainMatFor` had declared every fine terrain tile object-space since
+the hill's own normals shipped. So the hierarchy in force was:
+
+```
+the final carved, refined, channel-cut, hydro-banked mesh normal
+    -> THROWN AWAY
+-> the raw DEM's normal, flattened toward up by nscale (0.35)
+-> the substrate's material relief on top
+```
+
+**Every bit of geometry work this file records was invisible to the LIGHTING.**
+The corridor refinement, the cut faces and fill toes, the carved channels, the
+bank fields: the raster those normals were generated from knows about none of
+them, so the shading reverted to what the unmodified elevation data thought the
+ground looked like, precisely where the most care had been taken. And
+flattening a whole normal rather than a residual lit a real slope as though it
+were a third as steep, which is most of the soft "normal-mapped sheet" quality
+the terrain had close up. The comment that flattening replaced is its own
+evidence: it recorded that taken RAW a sea cliff's normal went near-horizontal
+and Chapman's rock faces turned black under a high sun, and eased the gradient
+to stop it — a residual has nothing to go black, because the mesh already
+carries the cliff and what is added is only what the mesh could not hold.
+
+**THE MAP IS A RESIDUAL NOW**: `normalMapBytes` stores the fine gradient LESS
+the gradient at the mesh's own cell size (`nrmCoarsePx`, the lattice unit in
+raster pixels), clamped to ±`NRM_RES` in R and G with B at the encoding's own
+zero. That difference is the ~8 m detail a 20-40 m lattice cannot express and
+nothing else. `terrainFx` composes it by Mikkelsen's surface gradient —
+`n' = normalize(N - (g - N·dot(N, g)))`, the projection of a world height
+gradient into the tangent plane — which is the form that is correct on an
+ALREADY TILTED surface; adding the raw vector over-rotates a steep face and
+under-rotates a flat one.
+
+Four things about the wiring, each of which is a compile or a regression:
+
+- **THE CHUNK IS REPLACED, AND ONLY FOR THE MATERIAL THAT WANTS IT.**
+  `terrainFx` takes a `dem` option and `terrainMatFor` is its only caller,
+  for two reasons that each cost a link. Most callers of `terrainFx` have no
+  normal map at all (the leaves, the stones, the grass, the baked skeletons)
+  and the chunk's `#include` line is in every Lambert shader whether or not the
+  material uses it — so an unconditional replace injects a read of an
+  undeclared `normalMap` into four materials, which then fail to link SILENTLY
+  and draw as a flat-shaded world. And `sphereNormal` replaces the same chunk
+  for the far shell's two-channel decode: it runs AFTER `terrainFx` in the
+  `onBeforeCompile` chain, so a replace here consumes its needle and leaves the
+  whole shell unlit by its own map, with the ring still drawing.
+- **IT IS SAMPLED AT `vNormalMapUv`, NOT AT A WORLD BOX.** three sampled it
+  there, the bake's reversed rows were chosen to agree with it, and both
+  lattices emit it (the plain one as `ix/SEG, 1 - iz/SEG`; the refined one from
+  the position within the tile, which is the same mapping). The first cut
+  derived it from `uSubBox` and would have tied the DEM detail to the SUBSTRATE
+  field's arrival — a tile whose field is not yet committed has a zero box, and
+  every one of them would have been lit by its lattice alone until it was.
+- **`normalMapType` IS VESTIGIAL AND IS KEPT FOR THE CHEAPER PATH.** Neither
+  branch of the chunk runs any more, so what the flag selects is no longer how
+  the map is read; what it still decides is what the rest of the shader
+  compiles. Object-space declares `vNormalMapUv` and nothing else, where
+  tangent-space ALSO builds a TBN frame in `normal_fragment_begin` — three
+  screen derivatives and a Gram-Schmidt per fragment — for a `tbn` this
+  material never reads. The far material has carried the same vestigial
+  declaration, for the same reason, since `sphereNormal` shipped.
+- **AND `nrmScale` LEFT THE STORE WITH ITS LAST READER.** The strength is a
+  uniform now, so the kernel's copy was a constant nobody reads — the exact
+  thing this file keeps warning about — and it is gone from `TerrainStore`, the
+  worker job and all four construction sites.
+
+### `?nscale=0` WAS NEVER "NORMALS OFF", AND ANYTHING TUNED ON IT WAS TUNED WRONG
+
+The seat named this outright and it is the more important half. Both mesh sites
+read `NRM_SCALE > 0 ? terrainMatFor(t, key) : terrainMat` — so at zero the tile
+was swapped onto the SHARED material, and `terrainMat` carries
+`normalTex(256, 9001, 4, 9, 70)` at scale 0.32: a generic procedural normal map
+tiled every seventy metres. The A/B everyone reached for was therefore
+**repeating procedural normal against DEM normal**, not flat against
+normal-mapped terrain, and it moved a great deal of the frame for reasons that
+had nothing to do with the dial's name.
+
+Both sites take `terrainMatFor` unconditionally now and `uNrmK` is the
+strength, live on the dial rack (`__tdetail({nrm})`, `?nscale=`), so the
+comparison is one settled world with one uniform flipped — the standard every
+other measurement in this programme is held to.
+
+**THE FAR SHELL STILL SWAPS, AND IT IS THE SAME TRAP ONE LAYER OUT.**
+`NRM_SCALE > 0 ? farMatFor(...) : farMat` survives, so at `nscale=0` a shell
+tile falls onto `farMat` — which carries the FINE terrain's tangent-space
+procedural map, this file having already recorded that a tile wearing it is
+lit by a vignette beside neighbours lit by the sphere. That is out of this
+unit's scope (the shell's map is a genuine object-space normal decoded by
+`sphereNormal`, not a residual) and it means **a reading of the SHELL taken at
+`nscale=0` is still a comparison of two normal maps.** Do not quote one.
+
+**AND THE PROBE REPORTS THE AUTHORITY, NOT THE NUMBER.** `__tdetail().nrm`
+carries `k` beside `tiles` and `own` — how many drawn terrain tiles wear their
+OWN per-tile material against how many there are — because the claim this rests
+on is not about a strength, it is that the MATERIAL no longer changes with the
+dial, and a pixel measurement cannot witness that: a swap and a strength change
+both move pixels. Same fault as `__cam` reporting the zoom and not the
+stand-off, and `__tdetail().mat` running a rule nothing ran.
+
+### Colour and relief are separate returns now, and one of them has no shape
+
+The relief pass differentiates a scalar and bends the normal by its screen
+gradient, and `subRockTone` / `subMantleTone` each returned ONE number — so
+every term they carried claimed to be a height. Most are not:
+
+- the rock's **70 m and 26 m broad massing** is the tonal difference between
+  one face of an outcrop and the next, colour at a scale the mesh already
+  carries as actual geometry; summed into the relief it lit a hillside as
+  though it were corrugated at seventy metres, on top of the hillside the mesh
+  had just drawn;
+- a **massive face's metre-scale mottle** is a weathering stain, not a form;
+- the mantle's **fines' tonal regions** are damp and dry, fine and coarse;
+- and **DAMP GROUND IS NOT A SHAPE** — `- mo * dampTone` darkens a hollow, and
+  in the relief it bent the normal along the wetness gradient, lighting a damp
+  patch as a dent in ground that is perfectly flat.
+
+Both builders take an `out float relief` and accumulate it separately: the
+bedding traces, the joint sets, the clasts, the apron lobes, the rills and band
+D, and nothing tonal. The colour is unchanged — every term still reaches the
+return value — and only the normal stops reading the ones that have no height.
+`substrate-field.test.mjs` holds it with a needle that no tonal variable may
+appear in the `subRelief` expression, checked against the form it replaces.
+
+### The normal gets a more conservative ruler than the albedo
+
+`tdPx` is the equal-area footprint — the geometric mean of `fwidth` — and its
+own note records why: the max confines every fine octave to a few metres around
+the camera and the cascade does visibly nothing, while the geometric mean keeps
+detail an order of magnitude further out at the cost of mild along-ray
+aliasing, *which this palette's dither hides better than a smooth renderer
+would*. That trade is right for COLOUR and wrong for a lighting normal: **an
+aliased albedo stipples the dither, an aliased normal FLICKERS**, because the
+shading it drives is a nonlinear function of it and the sun moves.
+
+`tdPxN` is `mix(sqrt(dx*dy), max(dx, dy), 0.5)` — half way to the worst
+direction, not at it, for exactly the reason `tdPx` is not the max — and
+`subNKeep(px, pxN, λ)` is `tdBand(pxN, λ)` written as a factor on the relief's
+share of a term whose band limit is already stated once. So a trace that has
+stopped catching the light is still a trace, and one that catches it at random
+is gone first. The bedding and joints are exempt: `subLine` already filters on
+its own phase's `fwidth`, which is direction-aware by construction.
+
+### …and the 1 m octave thins where the material has its own metre
+
+Band D's handover is total (`subMicro`, the mineral share): the material's
+crystal grain, crumb and chips describe the half-metre better than a cover
+class can. The metre is a weaker case and takes a weaker rule — `SUB_OCT_M`,
+0.55 — because the substrate DOES speak there (clasts at 0.9-1.4 m, rills at
+1.8) but only where there is debris or scree to carry them, where band D draws
+on every mineral surface there is. A named constant, so the next argument is
+with a number.
+
+### Measured
+
+`devtools/normal-ab.mjs`, the Stelvio, one settled world, the dial flipped
+live, cropped to the near field, interleaved so the repeats give the floor at
+the same temporal separation as the cross pairs. **The first line is the
+measurement; the rest are numbers.**
+
+```
+materials: k=1 own 25/25 · k=0 own 25/25 · k=1 own 25/25
+```
+
+| | floor | the residual (0 against 1) | the old 0.35 | twice it |
+|---|---|---|---|---|
+| chase, item 1 only | 0.30-0.55 /255 · 1.7-3.0% | **1.214 · 9.74%** | 0.956 · 6.94% | 3.686 · 20.47% |
+| top, item 1 only | 0.66-1.74 · 2-11% | **2.205 · 16.75%** | 0.966 · 5.47% | 3.148 · 21.95% |
+| chase, all four | 0.18-0.27 · 0.9-1.3% | **0.419 · 3.19%** | 0.307 · 1.97% | 0.939 · 6.69% |
+| top, all four | 0.18-1.19 · 1.1-8.4% | **1.888 · 15.73%** | 0.492 · 4.67% | 2.25 · 18.89% |
+
+**THE TWO PAIRS ARE DIFFERENT PARKINGS AND MUST NOT BE SUBTRACTED.** The
+Stelvio is a live spot, the rig rolls to a stop wherever it stops, and the
+chase pane is mostly carriageway or mostly ground depending on where that was —
+the same fault the band D near-chart station was retired for. The tell is that
+in the second pair EVERYTHING fell by about the same factor, the floor
+included; a real change in the term would have moved the signal and left the
+floor alone. What the second run establishes is that the shader still LINKS
+(0 page errors, 0 harness errors, and the harness sniffs GLSL into the same
+list) and that the material claim still holds, not a before-and-after.
+
+**AND THE RELIEF SPLIT CANNOT BE A/B'd BY A UNIFORM AT ALL**, which is why no
+number is offered for it: it is a code path, not a dial, and a two-boot
+comparison at a live spot is what the paragraph above is about. A fixture would
+be the deterministic way to ask, and none of the fixtures is bare ground —
+which is the standing gap in the set that the whole substrate programme keeps
+meeting.
+
+**WHAT THESE NUMBERS ARE NOT.** They are the residual's own contribution at a
+spot, and they say nothing about the composition fault this unit is about,
+because the old behaviour cannot be reached by a uniform — it is a different
+shader, and a tool that flips `uNrmK` on the old revision flips a uniform that
+does not exist there. That the mesh's geometry now reaches the lighting is
+CODE READING, and it is the kind this file already accepts as sufficient: the
+interpolated `normal` is the base of the composition where it used to be the
+left-hand side of an assignment, and the chunk that overwrote it is gone from
+this material's shader. The measurement's job was the other claim — that the
+dial no longer swaps the material — and that is the line above the table.
+
+**The Stelvio chase floor is no longer exactly zero** (phase C measured 0.000
+there) and it is not the same number twice. It is the substrate's own relief
+re-weaving the dither as the lighting normal moves between legs, so it scales
+with however much ground the pane happens to hold — which is the parking
+caveat above, seen from the other side. The signal clears it by two to four
+times in the mean and by two to six in pixels on both runs. Quote the floor
+beside the signal, always: a near-field term measured without one is a number
+with no scale, and one measured against a floor from a different boot is worse
+than no number at all.
+
+## The HUD's dial was drawn a pixel at a time, and the frame diff could not see the fix
+
+`drawHud` reached **11.0% of a device session at 6.7 ms a call**, drawing on
+1,383 of 1,566 frames — third after the gap and `terrainApply`. Its own note
+records 1.9 ms when the half-rate gate was written and 4.5 when the gate was
+widened to 40 ms, so **the gate is doing what it was designed to do and the
+design's assumption — a cheap HUD — is what failed.**
+
+**THE SPLIT IS AT THE FUNCTION'S OWN SECTION HEADERS**, matched by their
+comment text so a moved line cannot shift a lap onto its neighbour, with
+`other` as the residual so the rows sum to the whole. Thirteen laps, a
+subtraction and a property write each — under the noise of what they measure.
+`devtools/hud-split.mjs` reads them in both cameras, and keeps drawing **ON**,
+unlike every other CPU measurement in this file: `nodraw` skips the HUD
+entirely and would report one that never ran.
+
+| at-paris-west | chase 3.11 ms/call | top 4.58 |
+|---|---|---|
+| `riggauge` | **1.238 (40%)** | **1.325 (29%)** |
+| `where` | **1.046 (34%)** | **1.100 (24%)** |
+| `poi` | 0.077 | 0.675 |
+| `scale` | 0.015 | 0.662 |
+| `dockview` · `compass` · `clock` | 0.346 · 0.262 · 0.108 | 0.313 · 0.287 · 0.138 |
+
+**READ THE STREAMING-DEPENDENT ROWS AS A FLOOR, NOT A FIGURE.** With drawing
+on, the harness paints at three frames a second and the world build is paced
+by the frame loop, so `at-paris-west` reached 2,344 ways of 5,663 in ten
+minutes and never settled. `poi`, `places`, `way` and `tiledbg` all scale with
+what has arrived and are therefore under-read. `riggauge` and `where` scale
+with neither, which is why those two are quotable here — and they are 74% of
+the chase HUD between them.
+
+**AND THE FIRST RUN SETTLED ON 269 ROAD CELLS.** Two quiet polls passed at
+39 s on a fixture that settles at 3,138, and the four streaming rows duly read
+about zero. Four quiet polls, `seenWays` in the signal, a six-minute budget
+and the counts printed beside the verdict — because "settled" is a word and
+the counts are the evidence. Third time this file has recorded that mistake.
+
+### …and inside `riggauge`, 41 string-parsed colours and fifty 1x1 rects
+
+The dial's open-arc bezel is 41 ticks. Each assigns `fillStyle` from a STRING
+— parsed on every assignment — and each fills one or two **1x1 rects**: about
+fifty draw calls and forty-one colour parses a frame, for a ring whose
+geometry depends on `DR`, `cx` and `cy` and therefore changes only when the
+HUD is laid out. Beside it the rev arc recomputed **54 sines and cosines** a
+frame for 54 positions that never move.
+
+Baked once into an offscreen canvas and blitted; the rev offsets cached on the
+same key. `?hudbake=0` is the rollback and the A/B.
+
+**THE ROUNDING IS WHY THE GEOMETRY IS EXACT.** The original computes
+`round(cx + cos(a) * r)`; the bake computes `round(o + cos(a) * r)` at its own
+centre and blits at `cx - o`. Those agree exactly for an INTEGER offset —
+`round(c + d) === c + round(d)` — and `cx = (HW - pad) - DR`, `cy`, `o` are all
+integers, being HUD pixels. Baked at `hudDpr` and blitted at HUD-pixel size
+under the same transform with smoothing already off: 1:1, not a resample.
+
+### THE FRAME DIFF WAS THE WRONG INSTRUMENT, TWICE OVER
+
+A draw-call cut that changes the picture is a regression with a good excuse,
+so the bake was checked against the per-frame bezel — and the check was wrong
+before the bake was.
+
+- **It had no floor.** It reported mean 1.229/255 with a worst of 150.5 over
+  the dial's corner and that read as "the bake changes the picture". A worst
+  of 150 is a GLYPH FLIPPING: the rig cluster carries the odometer, two boots
+  have driven different distances, and the crop differs before the bezel is
+  considered. **A diff with no same-setting control is a number with no
+  scale** — this file states that for milliseconds and it is just as true of
+  pixels.
+- **And with a floor it still could not resolve the question.** Same build
+  booted twice: mean **0.408**, worst 145.1, 1.51% moved. Baked against
+  per-frame: mean **1.192**, worst 150.5, 4.89%. Three times the floor — but
+  the floor is ONE PAIR of a quantity dominated by whether two boots' odometers
+  happen to agree, and the thing being looked for turns out to be sixteen
+  channels at one unit. **A frame diff cannot see a 1/255 difference under an
+  odometer that differs between boots**, and no number of re-runs would have
+  changed that.
+
+**SO THE RULE WAS TESTED INSTEAD OF THE FRAME** (`devtools/hud-bake.test.mjs`:
+no world, no WebGL, a canvas and the two loops, five seconds):
+
+| the ring, drawn straight against baked-and-blitted | channels differing | worst |
+|---|---|---|
+| over **nothing** | **0** | 0/255 |
+| over an **opaque ground** | **16** of 50,176 | **1/255** |
+
+Exact where there is no second blend — which is what says the geometry is
+right — and within a single rounding where there is. **DOUBLE-QUANTISED
+ALPHA** is the mechanism and it is not avoidable: a 0.16 tick blended once
+onto the HUD against the same tick blended into an 8-bit buffer and blended
+again. *Source-over is associative in the reals and is not in a byte.* One
+unit against a palette step of ~18 is the last bit of an 8-bit buffer, so the
+bake ships — and the test carries the bar (exact over nothing, at most one
+unit and a couple of hundred channels over a ground) rather than a bare
+"zero", because a bare zero is unachievable and a test that demands it would
+be turned off.
+
+**The general lesson, and it is the session's third of this shape:** when a
+claim is about a RULE, test the rule. A frame is where the rule's consequences
+land, and it carries everything else that moved.
+
+### …and the device's own split, which says a mean can hide the whole fault
+
+First dump with the split shipped (Yosemite, 238 s, TOP camera, build
+da8434771d35):
+
+```
+hud 4991 draws · 2.86 ms/call · tiledbg 0.96 · where 0.71 · riggauge 0.69
+    · dockview 0.21 · compass 0.16 · clock 0.07 · other 0.00
+```
+
+**AND THE SLOW-FRAME LOG SAYS drawHud IS 13 TO 17 ms** — the second line of
+twenty-three of the last twenty-four slow frames, against that 2.86 mean and a
+53 ms max. Both numbers are true and they describe different frames: the
+section is cheap in a settled frame and five times that in one that drops, and
+**a session mean cannot show it.** Every lap keeps its own max now and the row
+prints `mean/max` a section, because the rule the top-level profiler already
+states for its own rows — a small total with a large slow-frame share is the
+thing causing drops — applies inside a phase exactly as it does between them.
+
+**`tiledbg` topping that list is the tile-debug OVERLAY**, which this session
+had switched on. It is a debug surface and its cost is the player's choice; it
+is named here so the next reader does not take it for a HUD the game always
+draws.
+
+**Still open on the HUD:** `where` at 1.05 ms — 99 lines calling
+`worldStatus()`, `wayAt()` and `surveyHere()` every frame, plus six
+`textEdgeS` draws, for text that changes about once a second. Lookups against
+drawing, and the substitution trick prices it the same way it priced
+`groundAt`.
+
+## TWO DUMPS AT DIFFERENT PLACES ARE NOT AN A/B
+
+The dump after the redrape cut shipped reads, on its face, like a triumph:
+
+```
+redrape 136 calls · walk 0.1 normals 0.0 ms/call · max 1 · groundAt 552/call
+  · bound 136/136 · near 1 inBox 1 touched 0 · verts 771 moved 110
+post split ms/build  reseat 0.0 redrape 0.1 hydro 1.2 batter 0.1 · post max 8
+terrainApply  547 ms total · 136 calls · 4.0 mean · 0.2% of session
+```
+
+against the previous dump's `redrape 45.6` and `terrainApply 68.6`. **It says
+nothing of the kind.** That dump was Paris in chase with 31,403 ways and
+28,902 vertices walked a call; this one is Yosemite in the top camera with 149
+ways and **771** — one thirty-seventh of the work. A redrape that costs 0.1 ms
+where there is nothing to redrape is not a cut, it is an empty scene.
+
+What the dump DOES establish, and it is worth having: **`bound 136/136`** —
+the tile bind never once refused on a real device, so the `heightTiles.get(key)
+!== t` guard is not silently sending every redrape down the fallback. And
+`groundAt 552/call` gives the next dense dump a per-call cost to divide by.
+
+**The general rule this file needs and did not have: a device dump is a
+measurement of a PLACE.** The telemetry carries the spot in its first line and
+the switches in its `look` row precisely so two dumps can be compared — and
+neither is enough on its own, because the scene is the other half. Compare a
+dump against a dump of the SAME place, camera and switches, or against nothing.
+A cut measured in the harness on `at-paris-west` and then "confirmed" by a
+dump from a granite valley is a fabricated witness with a real number in it.
+
+## The wet hydro build cannot be bounded to the shore band — the band IS the tile
+
+A device dump from Yosemite (255 s, 20.4 fps, 29.7% of frames slow) put
+`hydroBuild` at **75.7 ms a build, 145 builds, 10% of all slow-frame time and
+top-of-frame in 112 frames** — the largest IDENTIFIED cost in the session, and
+the one this file already had a plan for: run the full-grid passes only where
+the water can reach and write the outside the constants the dry path writes.
+That plan was never taken because "the bound has to be shown not to move those
+answers, which is a measurement and not a reading". This is the measurement,
+and **it says not to write it.**
+
+**THE QUESTION IS THE SHAPE OF THE WET SET, NOT ITS SIZE**, and the two are
+not the same question at all. 296 of 38,309 texels wet is 0.77%, which sounds
+like a build that is 99% overhead — and if those texels are a river crossing
+the tile corner to corner, its BOUNDING BOX is the tile and a rect bound
+collects nothing. So all three candidate bounds are counted before any is
+written (`__hydrobound(true)`, `HYDRO_BUILD_PROF`'s `boundRect/Rows/Band`,
+printed by `hydro-phases.mjs`), as the share of the grid each would leave
+still to run:
+
+| bound | leaves | what it is |
+|---|---|---|
+| **rect** | **0.789** | the wet bbox grown by the shore band |
+| **rows** | **0.475** | per-row spans grown by the same — a diagonal defeats the rect and not this |
+| **band** | **0.443** | the floor: the texels actually within the band, which only a distance transform finds |
+
+**EVEN A PERFECT BOUND LEAVES 44% OF THE GRID**, and the reason is a constant
+nobody was looking at: `shoreDistanceLimitM` is **180 m**, a flowing tile's
+texel is ~9.4 m, so the reach is **19 texels in every direction** — a band 39
+texels wide around a river that crosses a 280² grid. The bound is not defeated
+by the river being thin; it is defeated by the band being thick.
+
+**What the cut is actually worth**, from the device's own split (the phases
+run only on the 121 wet builds of 145, so they scale by 145/121 for a wet one):
+fill 15.6 + majority 7.6 + shore 11.4 + pack 9.0 = **43.6 ms of an 88.2 ms wet
+build, 49%** — and 56% of that is **24 ms, a wet build from 88 to 64**. A 26%
+cut on the worst frames, bought by bounding `fill`, which extends a body's
+level BEYOND the visible mask on purpose and which `sampleRestingSurface`,
+`sampleBankField` and `drawnHydroAt` read anywhere in the tile. That is a poor
+trade, and the doctrine's own framing of this cut — which implied most of the
+build — was wrong by about half.
+
+**THE RESOLUTION IS THE BIGGER LEVER AND ALWAYS WAS.** A wet build is 78,400
+texels against a dry one's 19,600: `flowingFieldResolution` is a **4× grid**,
+chosen by "any flowing observation" rather than by the covered share, and this
+file already records that ("the dial is right where the water IS the tile and
+wrong where it is a thread through one"). Every full-grid pass scales with it,
+so halving it quarters all of them — 88 ms toward 25-30 — where the bound
+reaches 64, and it moves no sampler's contract: a coarser field is a question
+about accuracy, not about whether a reader's answer is still defined. That is
+where this task points now.
+
+**Two things about the instrument, both of which matter more than the number.**
+
+- **IT IS OFF IN THE GAME, AND MEASURED PROVING IT.** The counting is three
+  passes over the grid — the same order as the passes it sizes — so a build
+  measured with it on inflates the very total the saving is quoted against.
+  Its time is excluded from the laps (`tMark` is re-armed) but NOT from the
+  build's wall total, so it lands in `other`, and the control is the pair:
+  with the probe on, `other` is **22.9 ms and the largest row in the table**,
+  and a wet build reads 233.4 ms; with `BOUND=0`, `other` is **0.1 ms** and
+  the wet build 151.9. A residual that large is the instrument, and an
+  instrument that could not be switched off would have been reported as a
+  mystery phase.
+- **THE SHARES ARE THE MERCED'S, NOT A LAW.** A tile whose water is a compact
+  body — a pond, a lake corner, a reservoir head — bounds beautifully and the
+  rect would collect most of it. What Yosemite has is a river crossing the
+  tile, which is the common case for the layer and the case a bound must
+  survive. Run the probe at the place before believing either answer.
+
+
+## A redrape's cost is `groundAt`, not the scan — and indexing the scan is slower
+
+The Paris dump (403 s wall, but **83.7 s active and 318 hidden** — read the
+visibility line before any per-frame number) puts `terrainApply` at **24.3 ms a
+build, 518 ms worst, 22% of all slow-frame time**, and the post split names
+`redrape` as 14.9 of those 24. A phase split that stops there cannot say which
+of the two quite different things inside is expensive, so `redrapeProf` splits
+it into the vertex WALK and the normals RECOMPUTE, with counts for how much was
+scanned to move how little. Measured on `at-paris-west` (5,663 ways):
+
+```
+redrape 50 calls · walk 17.7 normals 1.3 ms/call · max 171
+  · near 10 inBox 7 touched 4 · verts 15575 moved 3490
+```
+
+**THE RECOMPUTE IS 7% OF IT.** The note by `redrape` guessed the cost was
+re-reading every vertex to recompute normals over a whole ribbon for the metre
+of it inside one tile; `computeVertexNormals` and `computeBoundingSphere`
+together are **1.3 ms against the walk's 17.7**. That guess is now measured
+wrong and the comment says so.
+
+**AND INDEXING THE WALK MADE IT SLOWER.** The obvious cut — bucket each drape's
+seated vertices by the same cell grid the drape index already uses, so a
+rebuild walks only the vertices standing in that tile — was written, audited
+and reverted. Same fixture, same build, the index the only difference:
+
+| | the plain walk | indexed |
+|---|---|---|
+| vertices walked a call | 15,575 | **7,629** |
+| walk ms a call | **17.7** | **21.2** |
+| vertices moved a call | 3,490 | 3,537 |
+
+**It halves the scan and costs 20% more.** The reason is in the third row: the
+vertices the index removes are the CHEAP ones — two attribute reads and a box
+test that fails — while the count that does not move is the in-tile vertices,
+each of which pays a `groundAt`. So the walk is ~5 µs a MOVED vertex and the
+index adds a Map lookup a cell, an Int32Array indirection a vertex, and a
+closure call the tight loop did not have. **A scan is not a cost; the work
+inside it is.**
+
+The correctness half did pass, for what it is worth to whoever tries this
+again: an audit that ran the full walk beside the indexed one over 328 drapes
+found **0 vertices missed**, so the index was right and simply not worth
+having.
+
+**AND THE DEVICE SAID IT HARDER.** The dump on the deployed instrument
+(Paris, 84 s active, build 294eb1437bbd): `terrainApply` **68.6 ms a build over
+160 builds — 11.0 s of an 83.6 s session**, post split `reseat 6.8 · redrape
+45.6 · batter 13.7`, and within the redrape **walk 44.7 ms against normals
+0.8** — the recompute is **1.8%** there against 7% here. 28,902 vertices
+scanned to move 5,816, and one build's walk alone hit **431 ms**. The device is
+not simply slower: it walks 1.9x the vertices at 1.4x the cost each.
+
+### …and `groundAt` splits almost exactly in half, which decides the cut
+
+`performance.now()` cannot price a call of a microsecond or two — the clock is
+coarsened on iOS and half a million reads would cost more than the thing being
+read — so the measurement is a SUBSTITUTION with its own control
+(`devtools/redrape-ga.mjs`, `__gaprobe`): every vertex that reaches `groundAt`
+calls it a SECOND time and throws the answer away. Same vertices walked, same
+ones moved, counters identical on every leg — so the difference between legs IS
+the cost of those calls. Interleaved off·whole·off·locate, four off legs giving
+the floor. On `at-paris-west`, settled, 2,492 calls a redrape:
+
+| | ms a call | ns a call | of the walk |
+|---|---|---|---|
+| the walk itself | 2.09 | — | — |
+| **floor** (off against off) | **0.32** | — | — |
+| a whole `groundAt` | **1.63** | 654 | **78%** |
+| …its LOCATE half | **0.80** | 322 | **38%** |
+| …its SOLVE half | **0.83** | 332 | **40%** |
+
+Both halves clear the floor by two and a half and five times. **`locate` is the
+`tileAt` arithmetic, the `${tx}/${ty}`, the dirty Set and the two Maps; `solve`
+is the barycentric walk over the cell's triangles** at nine-plus
+`BufferAttribute` reads apiece. `meshSurfaceAt` takes a `locateOnly` parameter
+for exactly this and nothing in the game passes it — the point is to price the
+halves against the SHIPPED function rather than against a copy that drifts.
+
+**SO A TILE-AWARE `groundAt` IS WORTH 38% OF THE WALK AND NOT A PERCENT MORE.**
+`redrape` already holds `t`, and has already proved the vertex is inside its
+box, so the whole locate chain is redundant — and it can be resolved ONCE per
+redrape rather than per vertex, because the walk is synchronous and neither
+`terrainDirty` nor `terrainMeshes` can change inside it. On the device's own
+numbers that is ~17 ms of a 45.6 ms redrape and ~3% of the session. The solve
+half is untouchable this way: the triangle is the answer.
+
+**A NULL RESULT THAT MISLED ME, RECORDED BECAUSE THE INFERENCE WAS WRONG.**
+Before the split was measured, the key was memoised on the tile indices — a
+redrape's 2,492 string builds become one — and it moved the walk 2.01 to 2.16
+ms against a floor of 0.49: nothing, in the direction of worse. Reverted. From
+that null I concluded "the lookup is not the cost, it must be the solve", and
+that was FALSE: the memo removes one line of the locate chain (the allocation,
+and the hash the Map lookups then recompute) and leaves `tileAt`, the dirty
+Set, both Maps, `segOf` and `cellTrisOf` running. The direct measurement says
+the chain it left standing is 322 ns. **A null from removing part of a thing is
+not evidence about the whole of it** — and the general form is one this file
+already states about probes: measure the thing you mean to cut, not a
+neighbour of it.
+
+Failing all of that, `reseat` (6.8 ms a build on the device, never suspected)
+and `batter` (13.7) are the rest of a 68 ms post, and spreading all three
+across frames remains the standing alternative to making any one of them
+cleverer.
+
+`redrapeProf` and the telemetry's `redrape` row are what is kept. The index is
+not, and this section is here so it is not rediscovered as an idea.
+
+### The renderer was centred on a vehicle nobody could see
+
+Reported from the seat, with the sequencing stated: introduce one canonical
+`renderFocusXZ()` and use it consistently in tree and EZ selection, impostor
+selection, GPU sward, CPU sward, shrubs and shadow centring; THEN make streaming
+cover the union of rig and render focus; and only after that evolve tree
+admission from a focus-centred circle into frustum and projected-size admission.
+Every claim in the report was checked against the source before anything moved,
+and every one was right.
+
+**THREE INTERESTS, AND THEY ARE NOT THE SAME POINT.** SIMULATION follows the
+RIG — collision, traction, the local physics, the vehicle's own audio — and must
+not move because a drone took off. RENDER follows THE GROUND THE CAMERA IS
+LOOKING AT. DATA is the union. Before this the renderer had no name for the
+second of those, so every expensive witness to what is on screen read `state`:
+fly the drone two kilometres out and the 2.4M-triangle tree budget stayed spent
+around a truck nobody can see while the drone flew into ground the renderer had
+decided was empty; pan the chart and the same thing happened sideways.
+
+**AND IT IS NOT `camera.position`.** The top camera stands hundreds of metres
+back at its 70° tilt and the drone's trailing lens sits 13 m behind the
+aircraft, so the camera's own x/z is the wrong point in both. What the player is
+looking AT is the authority, and the top camera already computes exactly that.
+
+**THE CLEAREST BUG IT CLOSES was a two-word difference.** The top camera targets
+`viewX() + panX` and the GPU sward read `state.x + panX` — the same point only
+while the drone is on the ground. With the drone up and the chart open the
+camera followed the aircraft and the grass grew round the truck, hundreds of
+metres apart, with nothing on the glass to say so.
+
+**THE DRONE'S FOCUS IS SOLVED, NOT PICKED.** Both its cameras aim at a FIXED
+DEPRESSION, measured out of the source: the nose view sits on the aircraft and
+aims 30 m ahead and 13 down (23.4°); the trailing view sits 13 back and 6.5 up
+and aims 26 ahead and 7 down, which is 39 ahead and 13.5 down from the lens
+(19.1°). So the ground the screen's centre lands on leads the aircraft by its
+height above ground times the cotangent of that angle — **2.31× from the nose,
+2.89× from the trailing view** — and it keeps working as the altitude changes,
+which a fixed lead would not. Capped at 45% of the draw range, or at three
+hundred metres up the geometry asks for eight hundred metres of lead and carries
+the ring off the ground under the aircraft entirely.
+
+**CHASE AND CAB STAY ON THE RIG, deliberately.** The camera's offsets there are
+metres against a tree range of hundreds, so chasing the suspension's own
+movement would rebuild fields for nothing.
+
+#### The sward had a fast half and a slow half sharing one return
+
+`swardFrame`'s early return for a sweep already in flight sat ABOVE everything —
+so `uSwardEye`, the flower palette and every band's lattice base were frozen for
+as long as a rebuild took. A rapid chart pan or a drone flight therefore stopped
+the grass following the camera while the thing it was waiting for was a field
+for ground the player had already left. The uniform writes are FAST and exact at
+whatever the focus is this frame; the field is SLOW and buffered, which is what
+it always was. The uniforms go first now and the field's branch is last.
+
+**AND A SWEEP CAN BE ABANDONED.** `SWARD_ABANDON` (160 m) is a JUMP, not a
+drive, and the numbers are the argument: an ordinary drive rebuilds at
+`SWARD_REBUILD` (48 m) once a sweep has LANDED, and a sweep costs a fifth of a
+second at 60 fps and at worst a second or two under `SWARD_LAG_MS` — fifty
+metres of driving at speed, comfortably inside it. So a truck never abandons a
+sweep and a focus that has genuinely gone somewhere else restarts one. It cannot
+thrash either: a restart re-centres the pending field on the focus, so the next
+abandon needs another 160 m. `swardLedger.abandoned` counts them.
+
+#### What moved, and the one thing that did not
+
+| consumer | was | is |
+|---|---|---|
+| GPU sward focus, bases, flowers | `state + pan` on the chart, rig otherwise | `renderFocusXZ()` |
+| CPU sward lattice (`?sward=cpu`) | the rig, outright | the focus |
+| shrub lattice | the rig | the focus (the chart hides shrubs, so this is the DRONE's case) |
+| the tree ring's centre and all three admission distances | the rig | the focus |
+| the impostor far gather, and the ground a card dissolves toward | the rig | the focus |
+| `vegManifestTally` | the rig | the focus — or it counts the ring round a place nothing is seeding |
+| the sun's shadow centre | `viewX()/viewZ()`, with no pan at all | the focus |
+| **the `vegGrid` prune** | the rig | **the UNION** |
+
+**THE PRUNE IS THE ONE THAT MUST NOT FOLLOW THE FOCUS**, and it is the honest
+half of "don't move the world away from the vehicle": `vegGrid` is also where
+the collision pass finds its boulders, and that pass reads the cells around the
+RIG. Pruning to the focus alone deletes the rocks under the wheels the moment
+the drone takes off. Trees are a render interest; a rock you can hit is not.
+
+#### Streaming: the union, without a second wedge
+
+`streamWorld` is handed the RIG and everything in it is built around the rig —
+the wedge, the corridor, the speed the ask set leans on — and that stays. What
+it gained is a SMALL RING for the focus: a 3×3 of z14 terrain (±3.5 km), a 3×3
+of z12 cover, and an OSM ring **sized to the sward's own field** (`SWARD_FW / 2`
+over `tileMetres(OSM_Z)`, clamped 1–2), because the mask that keeps grass off a
+carriageway is drawn over that field and the trees read the same roads through
+`onCarriageway`. A ring for what is DRAWN there, not a second world.
+
+- **IT IS NOT GATED ON A DISTANCE.** Where the focus IS the rig — chase and cab,
+  which is most of the time — every tile it names has already been asked and the
+  block costs a handful of Set lookups. A threshold would be one more number to
+  be wrong about.
+- **AND THE FOCUS'S OSM TILES ARE PINNED.** They are outside the rig's wedge BY
+  CONSTRUCTION, so `osmRelease` would drop every one of them the moment it
+  looked: asked each pass, dropped each pass, landed never. `osmFocusPin` is
+  rebuilt from scratch on every stream pass so it cannot leak — a focus that has
+  come home simply stops pinning. (`osmPinned` is the other exemption and is a
+  different thing: one-shot, for a tile a person asked for by hand, deleted when
+  that tile answers.) Ranked below the core disc and the corridor and above the
+  plain wedge: the ground under the wheels and the road ahead still go first.
+- The far shell and the overview vectors already streamed to the chart's centre
+  and are untouched — that rule predates this and is the same rule.
+
+#### Verified
+
+`npx tsc --noEmit` exit 0; `client/perf-check.mjs` **20 of 20 production refills
+byte-identical** (its sandbox gained a `renderFocusXZ` stub that returns the rig,
+which is not a simplification — it has no camera, no drone and no pan, so the rig
+IS the answer, and it is also what the baseline function reads inline);
+`switches`, `glsl-reserved`, `veg-anchor` and `boot` green (0 page errors);
+`tree-stand` all ok, 3,688 skeletons in 485 stands, 1.78 silhouettes a stand.
+
+**NOT VERIFIED BY EYE.** No frame has been taken of a drone flying away from its
+own trees, and the harness cannot easily take one: the thing to look at is a
+tree ring that follows the aircraft, which needs a flight rather than a settle.
+The seat's report against the deploy is the verification, and `?ez=0`,
+`?sward=cpu` and `?shrub=0` are the switches to take it apart with.
+
+**AND THE COST IS UNMEASURED ON A DEVICE.** `renderFocusXZ` is a compare and at
+worst one `groundAt` per call, and it is called a handful of times a frame — but
+the veg refresh's ring now moves with the camera, so a chart pan or a drone
+flight re-centres the ring and re-seeds cells exactly as driving does. The seed
+budget (`VEG_SEED_MS`, 8 ms less whatever the frame has already spent) is what
+bounds that, and it is the same bound a hop already lives under; the row to read
+on the next dump is `treeRefresh` with its `seedMsNow` beside it.
+
+**WHAT IS EXPLICITLY NOT DONE**, because the seat's own sequencing puts it after
+these two: tree admission is still a focus-centred CIRCLE. Frustum and
+projected-size admission with a guard band is the next step, and it is the one
+that would stop the ring spending its budget on ground behind the camera.
+
+### The partition summed to one and the carriers could not carry it
+
+The seat's third report on the sward, and the sharpest: *the partition-of-unity
+logic is mathematically continuous, but the individual density bands cannot
+actually carry the density being handed to them. That capacity clamp recreates
+rings.* Every number in it was reproduced from the source before anything moved,
+and it is right — and **understated**, for a reason the report could not have
+known.
+
+**THE ARITHMETIC, AND IT IS EXACT.** A lattice of step s places at most ONE tuft
+per cell, so it cannot exceed 1/s² per square metre whatever its keep says:
+**4.94/m² at 0.45 m, 0.444 at 1.5, 0.047 at 4.6.** The shared target is
+`uDens · (22/d)^2.2` and every band's keep is `target · step² · weight`, so a
+band handed a keep above one delivers its ceiling **and reports nothing at all.**
+A probability clamped at 1 fails silently — which this file already said, in the
+comment above the band table, while shipping the fault it describes.
+
+**AND THE GRASS DIAL DEFAULTS TO 3.2x.** The report worked at `SWARD_LUSH = 14`;
+`uDens` is `vegScale · grassScale · SWARD_LUSH`, and the GRASS dial's default
+stop is MEDIUM. **The shipped default request is 44.8 sites/m²** — nine times the
+near band's ceiling and nine hundred and fifty times the far band's — so the
+whole field was capacity-limited nearly everywhere and the falloff had almost
+stopped existing. Measured on the shipped rule at the shipped default
+(`devtools/sward-profile.mjs`, `at-campsbay`): **149 of 179 radii short of their
+own target, worst 11%.**
+
+| d | delivered, as shipped | of target | delivered, now | of target | tuft |
+|---|---|---|---|---|---|
+| 2–24 m | 3.83 | **11%** | 3.83 | 100% | ×1.80 |
+| 40 | 3.83 | 41% | 3.33 | 100% | ×1.00 |
+| 56 | 3.83 | 86% | 1.59 | 100% | ×1.00 |
+| **72** | **0.344** | **14%** | 0.344 | 100% | ×1.63 |
+| 96 | 0.344 | 25% | 0.344 | 100% | ×1.19 |
+| 160 | 0.344 | 78% | 0.158 | 100% | ×1.00 |
+| 168 | 0.380 | 96% | 0.142 | 100% | ×1.00 |
+| **192** | **0.0374** | **14%** | 0.0374 | 100% | ×1.68 |
+| 240 | 0.0366 | 15% | 0.0366 | 100% | ×1.33 |
+
+Read the left column down and the rings are not an inference, they are the
+shape: **flat at 3.83 to 56 m, a cliff to 0.344 by 72, flat to 168 with a small
+spike where both bands contribute before the far one saturates, a cliff to
+0.0366 by 192, flat again.** Three plateaus and two cliffs. That is the
+photograph.
+
+#### Sites per square metre is not lushness, and conflating them made the rings
+
+`SWARD_LUSH = 14` existed for a good reason — GRASS_M2's values are the density
+the CPU sward could AFFORD, not the density a meadow has — and it is a number
+two of the three carriers cannot represent. The two quantities are separated now:
+
+- **`SWARD_SITES` (5/m², `?swardsites=`)** is a count the carriers can carry. It
+  is not a taste: it is the largest nominal for which the target curve stays
+  under the capacity envelope at both handovers, and the seat derived the same
+  five independently from the crossover distances (66 m and 184 m against the
+  existing 56–72 and 160–195 windows).
+- **everything above it is TUFT FULLNESS** — the same ground covered by fewer,
+  wider plants, which is what "lush" means to an eye and costs no slot at all.
+
+**THE CLAMP IS ON THE TARGET, NOT ON THE KEEP, and that is the whole fix.**
+`swardCap(d)` is `min over bands of 1/(w_b(d) · step_b²)` — the exact bound that
+keeps every band's keep at or under one — GENERATED FROM THE BAND TABLE rather
+than typed, so a second copy cannot drift and the profile probe measures against
+the same function the shader runs. A band clamping its OWN keep at one delivers
+less than the shared target and the other bands never hear about it; **one
+shared target that no band will saturate means every band delivers its exact
+share and the total is the target at any dial setting, by construction.**
+
+**AND THE DEFICIT IS NOT THROWN AWAY.** Where the clamp binds, the tuft widens
+by `sqrt(want/got)` — LATERALLY only, because grass does not grow taller because
+there is more of it — so **coverage, which is sites × tuft area, equals the
+perceptual curve at every radius.** Measured: coverage 100% of the law's request
+from 2 m to 300 m, against 11–86% before. The count follows the law where the
+carriers can hold it and the coverage follows it everywhere, which is the
+honest statement of what an eye is judging. `?swardfull=1` turns the
+compensation off for an A/B; the cap (2.1) exists because at the top of the
+grass dial the ratio is thirty-six and a tuft six times its width is a bush.
+
+**WHAT CHANGES ON SCREEN, said plainly rather than buried.** The near field
+(0–24 m) delivers exactly what it did — both builds ride the near ceiling —
+but its tufts are now **1.8× wider**, because the dial is asking for 16/m² and
+the lattice holds 4.94. The 45–70 m and 110–190 m bands get **about 2× thinner**,
+because those are precisely where the old build was riding a ceiling instead of
+following its own curve. Everything else is unchanged to the digit. Whether the
+fatter near tufts read as lush or as cabbages is the seat's call and
+`?swardfull=1` is the switch for it.
+
+#### The evidence field ran out from under the far edge
+
+Also from the report, and independently true: the field is 768 m wide — **384 m
+from the centre to an edge against a 359 m reach, so 25 m of margin** — while
+`SWARD_REBUILD` is 48, so the drawn edge could stand 23 m OUTSIDE the committed
+texture before a rebuild was even considered, and further while the replacement
+swept. `sUv` past [0,1] is refused by `sLive`, so what it draws out there is
+nothing: a thinning crescent travelling with the camera, which is one more wave
+to mistake for a ring.
+
+`SWARD_F` 96 → **112**: 896 m across, **89.2 m of margin against a 48 m
+trigger**. The alternative — rebuilding three times as often — costs three times
+the sweep for the same coverage where this costs 36% more per sweep at the same
+rate, and the resolution per metre does not move, so nothing the field says
+about the ground changes. `SWARD_MASKN` went 512 → 600 with it, because a mask
+stretched over a wider field at a fixed texel count coarsens the kerb by the
+same 17% — 1.49 m a texel, which is the number its own comment was written
+about.
+
+#### The instrument, and why `__sward()` could not have caught this
+
+`__swardprofile()` reports, per radius: the target the law asks for, the
+envelope the carriers can hold, each band's weight and keep, what is delivered,
+the coverage and the ratio. `__sward()` had every INPUT to this — it reported
+each band's ceiling and each band's blend window — and could not see it, because
+it never put the ceiling and the requested density **at the same range**. The
+fifth time this file has recorded the same shape: a probe that reports the
+output of a rule cannot witness the rule.
+
+`devtools/sward-profile.mjs` runs it on a fixture in about forty seconds, one
+boot, `nodraw` (the quantity is arithmetic over the live uniforms, not pixels),
+and fails on a coverage shortfall inside the outer fade or on a field margin
+under the rebuild trigger. `ARGS='swardcap=0&swardsites=14'` is the exact
+control and fails 149 of 179 radii — which is what makes the check a check.
+
+**AND `nodraw` COULD NOT HAVE VALIDATED THE SHADER.** A program compiles on its
+first RENDER, so the profile run says nothing about whether the new `swardCap`
+links. The frame was taken separately, with drawing on: 0 page errors, and the
+harness folds a GLSL error into that list.
+
+#### What is NOT done, and the arithmetic to start from
+
+**THE THREE CARRIERS ARE STILL THREE UNRELATED POINT PROCESSES.** The seat's
+fourth invariant, and the one they expect to make it *feel* like one field: the
+steps are 0.45 / 1.5 / 4.6, which are not integer multiples, so at a crossfade
+one random population fades out and a completely different one fades in at
+unrelated positions. Their proposal is exact 3× nesting — **0.45 / 1.35 /
+4.05** — with each coarse site a deterministic 1-of-9 child of the finer
+lattice, so the coarse tuft stands where a fine tuft stood, at the same size,
+colour and yaw, and the handover is a THINNING of one population rather than a
+swap of two. Sides resize to hold the reaches (320 / 292 / 180 → 220,064 slots,
++13%) and both coarse ceilings improve (0.549 and 0.061).
+
+It is deliberately NOT done in this commit, for two reasons and one piece of
+arithmetic:
+
+- **ATTRIBUTION.** The measurable defect is fixed and measured. Nesting's
+  benefit is a look claim about spatial-frequency identity that no instrument
+  here can measure — it needs the seat's eye — and landing both at once makes
+  the next frame unattributable.
+- **IT HAS A COST NOBODY HAS PRICED, and here it is.** With nesting the two
+  bands SHARE their children, so the delivered density is the UNION and not the
+  sum. Per m²: non-children contribute `0.8889·D·w_near` and children
+  `D·max(0.1111·w_near, w_mid)`, so the total is
+  `D·(0.8889·w_near + max(0.1111·w_near, w_mid))` — exactly D at either end of a
+  handover and **5.6% short at its midpoint**, where both weights are a half.
+  Well inside the ten per cent bar and far better than the 57% it replaces, but
+  it is real, and `__swardprofile` currently sums the bands and would report
+  100% where the truth is 94%. **Teach the probe the union rule in the same
+  commit as the nesting**, or the instrument will certify the thing it was built
+  to catch.
+- A child alive in the near band is also alive in the mid band (its keep is
+  nine times larger over the same hash), so it is drawn TWICE in the crossfade
+  annulus — identical geometry at an identical place, so no artefact, but some
+  overdraw. Worth knowing before it is read as a bug.
+
+### …and the device ran it at the top of the dial, where the compensation ran out
+
+A dump from the seat on **build `29001e4a3760` — the sha1 of the bundle that fix
+deployed as**, so it is the fixed build measured, not the one before it. Nagato,
+chase, 487 s, 11.5 fps, and **`settings … grass 12.8`**: GRASS at LUSH, its top
+stop.
+
+**THE RING IS BACK AT THAT SETTING, and the profile says so exactly.**
+`uDens` was `vegScale · grassScale · SWARD_SITES`, so LUSH asks for **64
+sites/m²**; the envelope at the first handover falls 4.94 → 0.889 → 0.444, and
+the fullness needed to pay that back is 2.6 rising to 3.3 against a cap of 2.1.
+Measured with `GRASS=12.8 ARGS='swarddial=0&swardfull=2.1'`, which is the
+deployed rule:
+
+| d | 16 | 32 | 48 | 56 | **64** | **72** | 96 | 160 | 176 | **192** | 240 | 288 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| coverage | **34%** | 78% | 100% | 100% | **64%** | **42%** | 78% | 100% | 73% | **39%** | 63% | 93% |
+| tuft | ×2.10 | ×2.10 | ×1.53 | ×1.29 | ×2.10 | ×2.10 | ×2.10 | ×1.35 | ×2.10 | ×2.10 | ×2.10 | ×2.10 |
+
+**A COMPENSATION WITH A CEILING IS ONLY CONTINUOUS WHILE THE CEILING IS NOT
+REACHED** — and the second row is a second fault the first one hides: even with
+the cap lifted, the widening swings 1.29 → 3.26 → 1.35 → 3.36 across the two
+handovers. That is a band of much fatter grass travelling with the camera, which
+is a ring in GRAIN rather than in coverage. Fixing the cap alone would have
+traded one for the other.
+
+**SO THE DIAL NO LONGER ASKS FOR SITES.** `vegScale` caps at 1, so
+`vegScale · SWARD_SITES` is at most five and stays under the envelope at every
+radius: the count follows the law exactly and the clamp is a SAFETY NET rather
+than the mechanism. The dial's lushness is a UNIFORM widening of
+`sqrt(grassScale)` — the factor that holds coverage, applied at every range, so
+it cannot draw a band. Measured at the same LUSH setting: **count 100% of the
+law at every radius, coverage 100% of what the dial asked for at every radius,
+tuft a flat ×3.58.** `?swarddial=0` puts the dial back on the count for an A/B.
+
+**WHAT IT COSTS, said plainly:** the top of the dial is now expressible only as
+very wide tufts — five plants a square metre at three and a half times the
+width, which is a solid meadow rather than a denser one — and in the mid field
+the alive count is roughly half what LUSH used to draw (0.285/m² at 72 m against
+0.344, 0.020 at 240 against 0.037) with each tuft covering 12.8× the ground.
+That is what the carriers can actually do, and drawing it is better than asking
+for sixty-four points a metre and silently placing five.
+
+**AND `SWARD_FULL_MAX` WENT 2.1 → 3.6** so the whole dial range is expressible:
+`sqrt(12.8)` is 3.58, and a cap under it makes HIGH and LUSH the same picture —
+a dial stop that does nothing.
+
+### And the seat rejected the currency: finer grass, denser near, a shorter fade
+
+Answering that fix, from the seat: *I don't like the broader/wider tufts. I'd
+rather finer grass (unless an actual botanical/variety is in force) and
+therefore would rather crank up the density closer to the vehicle/focal point
+and focus on ensuring the "fade" with distance is more dramatic/seamless
+(albeit nearer).*
+
+**THE ARITHMETIC OF THE COMPENSATION WAS RIGHT AND ITS CURRENCY WAS WRONG.**
+Coverage is sites × tuft area, so a tuft of radius `sqrt(want/got)` holds
+coverage exactly when the clamp removes points — and it does, and the profile
+said 100% at every radius. What it does not hold is the GRAIN. A metre at 20 m
+is fifteen art pixels of a 148-pixel frame, so a tuft's WIDTH is a directly
+visible quantity near the truck; ×3.58 of it is a blob, and a hundred per cent
+of the ground covered in blobs is still blobs. **Coverage is a number an eye
+does not look at directly; grain is the thing it is looking at.**
+
+**ALL THREE OF THE SEAT'S ASKS ARE PROPERTIES OF THE LADDER, NOT OF THE LAW.**
+A lattice of step *s* holds `1/s²` per square metre, so "denser near" is a FINER
+NEAR STEP and nothing else — and a finer step over the same slot budget reaches
+less far, which is "nearer" in the same sentence. The ladder went
+
+| | step | ceiling | reach | slots |
+|---|---|---|---|---|
+| near | 0.45 → **0.28** m | 4.94 → **12.76**/m² | 72 → **45** m | 102,400 → 104,976 |
+| mid | 1.50 → **0.84** m | 0.444 → **1.417**/m² | 195 → **123** m | 67,600 → 85,264 |
+| far | 4.60 → **2.52** m | 0.047 → **0.158**/m² | 359 → **232** m | 24,336 → 33,856 |
+
+— 194,336 slots to 224,096, **+15%**, for 2.6× the near capacity and a field
+that ends at 232 m instead of 359. The steps are now exactly 3× nested, which
+nothing uses yet: it is chosen so the nesting unit (#153) is a drop-in.
+
+With the ceiling raised the dial can go back on the COUNT, which is what the
+seat was asking for all along. `SWARD_SITES` 5 → 12; `SWARD_NEAR` 22 → 14 m and
+`SWARD_FALL` 2.2 → 2.4 make the falloff start sooner and bite harder; the GRASS
+dial is re-spaced from `[0, 1, 3.2, 6.4, 12.8]` to **`[0, 0.4, 0.8, 1, 1.06]`**,
+which is the FRACTION OF THE NEAR LATTICE the law may ask for. Its top stop is
+12.72/m² against a 12.76 ceiling — **the dial cannot leave the envelope, because
+its maximum IS the envelope.**
+
+| d | 2 | 14 | 24 | 32 | 40 | 60 | 80 | 120 | 176 |
+|---|---|---|---|---|---|---|---|---|---|
+| sites/m² before | 3.83 | 3.83 | 3.20 | 1.70 | 1.04 | 0.43 | 0.23 | 0.093 | 0.040 |
+| sites/m² after | **9.30** | **9.30** | 2.55 | 1.28 | 0.75 | 0.28 | 0.14 | 0.054 | 0.021 |
+
+**2.4× denser at the truck and about half as dense past 30 m** — and coverage at
+120 m relative to the near field is 0.049 against 0.140, so the fade is close to
+three times as steep. `SWARD_TUFT = 0.72` (`?swardtuft=`) takes a quarter off
+the tuft's width, LATERALLY ONLY: scaling height makes a lawn, not fine grass.
+Net near coverage is still ~1.25× what shipped — finer AND thicker, which is the
+combination that reads as a sward rather than a scatter.
+
+**AND IT DOES NOT FLATTEN THE BOTANY,** which was the seat's one caveat —
+*unless an actual botanical/variety is in force.* `swStructure` sets a form's
+own width BEFORE `uSwardTuft` multiplies it (0.28 an upright culm, 1.35 a
+crevice tuft, 1.5 a sedge fan, 2.5 a broad understorey leaf), and a uniform
+factor preserves every one of those ratios exactly. The broad leaf is still
+nine times the culm; what got finer is the grain of the field, not the
+vocabulary standing in it.
+
+**AND `SWARD_FULL_MAX` WENT 3.6 → 1.15, WHICH IS THE POINT.** The compensation
+is now a safety valve, not the mechanism. Measured with `devtools/sward-profile.mjs`
+at four dial stops (0.4 / 0.8 / 1 / 1.06): **0 of 116 radii short, coverage 100%
+at every radius, and the tuft flat at ×1.00 everywhere — the valve never opens.**
+A profile that ever reports a fullness pinned at 1.15 means the LADDER is wrong
+and wants a finer step; widening is not the repair.
+
+#### A compensation keyed on a dial fattens the field when you shorten the reach
+
+Caught while shortening the reach, not by a test. `sRangeScale` grows a distant
+blade so it still subtends a pixel, and it was `1 + 3.2·(sD/uGReach)^0.75`.
+`uGReach` went 360 → 232, so at 176 m the same blade would have gone **×2.87 →
+×3.61**: the far field getting COARSER as a direct consequence of asking for the
+fade to end sooner. Pixel size is a function of METRES, so the growth law is
+too — `SWARD_GROW_REF = 360`, deliberately not a dial. `sT` still keys the
+ground-colour blend, because dissolving into the terrain genuinely IS a property
+of where the field stops.
+
+**The general form:** a compensation term must be keyed on the quantity it
+compensates for. Keyed on a dial instead, it turns every future tuning of that
+dial into a silent second change somewhere else.
+
+#### What else the dump says, with the numbers rather than a hunch
+
+Nothing below is fixed here; it is attributed so the next unit starts from a
+measurement. Every dial in this session was at or near its top stop (grass 12.8,
+impostor reach 2800 m at density ALL, tree range 2800 m, form 3×, tile debug
+on), which is the rack working as designed — *the upper stops are deliberately
+allowed far beyond frame budget* — so read these as "what binds when you ask for
+everything", not as a regression.
+
+- **`gap` 45.7% and `world pass: triangles mean 6.27M · 418 draw calls`.** The
+  gap is a residual and cannot establish a GPU bottleneck (this file's own
+  rule), but the triangle count is a measurement and it is 1.8× the 3.5M this
+  file last recorded as the whole frame. `trees ez … tris 0.26M` and the
+  impostors' 108.3k are NOT it; 63 terrain tiles at `tseg 128` are 2–3.5M of
+  it, and the sward's 194,336 slots are 583k whether or not a slot is alive.
+- **`treeRefresh` 10.2% (49.5 s), and its phases name the culprit:**
+  `impostor 23.8 ms/call (66)`, `ezAdmit 10.0 (61)`, `manifest 9.5 (75)`. The
+  impostor membership pass is now the largest tree phase, above the admission
+  this file cut twice. Its own cut list is already written down two sections up.
+- **`5108 waiting on a bake` with `atlas 18/18 slots`** — answered below, and
+  the answer is that the counter was two different facts wearing one phrase.
+- **`drawHud` 8.9%, of which `tiledbg 3.70/262`.** The tile-debug overlay is
+  more than half the HUD here. It is a debug surface and its cost is the
+  player's choice; it is named so nobody attributes it to the HUD itself.
+- **`hydroBuild` 57.3 ms a build, 199 builds, `wet builds 188 at 60.1 ms over
+  54317 texels`.** The open item this file already argues: the shore-band bound
+  is worth ~26% and the flowing field's 4× RESOLUTION is the bigger lever.
+- **`swardFrame` 3.2% (15.4 s) is almost exactly the field sweep** — `sward
+  sweeps 82 · steps 4134 ms 3.6` is 14.9 s of it — so widening the field 96 →
+  112 for the margin cost about **36% of 11 s, near four seconds of a 487 s
+  session**. Owned rather than hidden. The cure the seat already named is a
+  SCROLLING field: a 48 m recentre exposes 5.4% of an 896 m field, so sweeping
+  only the new strip is roughly an eighteenfold cut, and it pays the widening
+  back many times over. Not done — every sampler that reads `uFieldOrg` would
+  have to wrap — and it is the next thing to do to the sward after the nesting.
+
+## The pop was never the LOD. It was a tree with no representation at all
+
+The complaint from the seat was that trees skip the impostor tier entirely and
+arrive as full 3D skeletons. Three separate faults produced that one symptom,
+and only the third was found by measuring rather than by reading.
+
+### The instrument first, because the fault is an ABSENCE
+
+Every impostor readout this file had counted things **drawn**: `drawn/offered`,
+`cards` per family, `bySlot`, `waiting`, `stood`. A count of things drawn cannot
+report a tree that was drawn by nobody — and a pop is precisely that: no
+representation one frame, a twelve-metre pine the next. So the gather now counts
+its **exits**. Every path out of the near-ring walk files a reason:
+
+| reason | what it means |
+| --- | --- |
+| `geometry` | the skeleton owns it — the best representation there is |
+| `impostor:exact` | its own variant's photograph |
+| `impostor:fallback` | a resident sibling's card while its own bakes |
+| `none:range` | outside the REACH dial's tier (the player asked for this one) |
+| `none:density` | thinned by the DENSITY dial — **far annulus only** |
+| `none:imp-cap` | the 32k instance cap bound |
+| `none:form-cap` | the per-refresh form budget bound |
+| `none:no-family-fallback` | no slot of its own and no sibling to borrow |
+| `none:seed-budget` | the manifest has not seeded that cell (counted in CELLS) |
+| `none:data-pending` | the cell is waiting on data (counted in CELLS) |
+
+and each is counted **twice**: once for every tree, and once for the trees large
+enough to be seen. PERCEPTIBLE is `IMP_PERCEPTIBLE_K · height > distance`, with
+K the design frame's pixels-per-metre at one metre — 320 rows at 55° gives 307,
+so a 10 m tree is perceptible out to 3.07 km. Below one art pixel a tree cannot
+pop because it cannot be seen, and its absence is free. **`perceptible NONE` is
+the number, and the target is zero** — not small, zero, because one conspicuous
+tree arriving out of nothing is the entire complaint.
+
+`__impwhy()` returns it, the device dump carries it as `trees representation`,
+and `devtools/imp-census.mjs` sweeps the DENSITY dial and fails on it.
+
+### Fault 1 — the near ring was gambling with existence
+
+The tier thinned by a distance-weighted hash *inside the draw ring*: at DENSITY
+1X an eligible tree's chance of a card was 75% at 300 m, 42% at 400 m, 27% at
+500 m. That is a deliberate hole exactly where the geometry is about to take
+over, and a tree in the hole has **nothing** until it crosses the admission ring
+and appears whole. The thinning survived review because `full = max(260,
+ezEdge[fam])` usually sat near the geometry edge, so at 1X the two radii nearly
+coincided and the hole was mostly outside the frame — until the dial moved.
+
+The invariant is absolute now, and it is the seat's own words: *inside the
+detailed-tree range, a tree in the manifest is either owned by the geometry or
+wears a card.* No hash, no probability, no exceptions. The DENSITY dial governs
+the **far annulus** alone — past the draw ring, where thinning removes a tree
+the geometry was never going to draw — and `impThinnable` narrows even that to
+interior and polygon fill, so a stray, a fringe plant and a clump's anchor are
+never statistically erased.
+
+Two things fell out of removing it. `ezAdmit` is asked **unconditionally** now:
+it used to sit inside the `d2 <= full2` branch on the reasoning that the
+admitted set is only ever within `full` — true at 1X and false the moment the
+dial shrinks `full2` below the geometry edge, which 0.25X and 0.5X both do, and
+there a tree between the two radii was drawn as a skeleton AND as a card, in the
+same place, at once. And `IMPOSTOR_CAP` (32k) is the binding constraint now
+rather than the hash; `cand` is built centre-out by `squareRings`, so the cap's
+`break` drops roughly the furthest first, and the remainder is walked for the
+size test so a thousand missing trees are not reported as one.
+
+### Fault 2 — REACH 1X is a zero-width annulus, and the readout now says so
+
+`impostorReach()` at 1X is the draw range exactly, so the impostor tier stops
+where the geometry stops and the far ring is **empty by construction**. The dial
+stop reads like a horizon and means "do not extend tree existence past the
+geometry horizon". The arithmetic is left alone — it is a legitimate setting —
+but `__impwhy().ring` prints `farRing` in metres and the census labels a zero
+one `EMPTY`, so it can no longer be mistaken for a tier that is failing to fill.
+
+### Fault 3 — a family's first slot queued behind another family's whole palette
+
+This is the one that was still live, and it was invisible until the census ran.
+
+The atlas fallback is: a tree whose variant has not baked borrows a **resident
+sibling of its own family** rather than drawing nothing. That works only if the
+family has *some* slot. `impSlotFor` baked two variants a refresh, spent in
+`EZ_FAMILIES` order — so the first family photographed its entire palette before
+the second family got its first slot, and every conifer in the world drew
+**nothing at all** in the meantime.
+
+Measured at `at-yosemite`, sixty seconds after boot, with the atlas at 8/40
+slots and `locked 0`:
+
+```
+  reason                       trees      perceptible
+  impostor:exact                 5131            5131
+  none:no-family-fallback        1205            1205   ← A TREE VANISHED
+  geometry                        348             348
+  impostor:fallback               178             178
+  NONE 1205 of which 1205 perceptible
+```
+
+**1,205 trees, every one of them large enough to see, with no representation at
+all** — 18% of the tier, permanently, on a stock rack. That is the pop.
+
+Two bakes a refresh is the right budget for a family's *second* slot and the
+wrong one for its first: one is a tree's own photograph replacing a near-enough
+sibling's, the other is the difference between a silhouette and empty ground. A
+seeding bake is charged to its own budget now (`IMPOSTOR_SEED_PER_REFRESH =
+EZ_FAMILIES.length`), so the worst case is five bakes at ~2.3 ms on the first
+refresh of a session — about 12 ms, once — against a fault that otherwise lasts
+the whole drive.
+
+### Measured, before and after
+
+`node cells/drive/devtools/imp-census.mjs`, `at-yosemite`, DRAW RANGE 2.8 km,
+REACH 4X, EZ VARIANTS ALL, sweeping the DENSITY dial:
+
+| DENSITY | before: NONE / perceptible | after: NONE / perceptible |
+| --- | --- | --- |
+| 0.25X | 1002 / 998 | **0 / 0** |
+| 1X | 1304 / 1300 | **0 / 0** |
+| ALL | 1304 / 1300 | **0 / 0** |
+
+and at REACH 1X, where the far annulus is zero-width, 0.25X and ALL now return
+**byte-identical** censuses (5680 exact + 664 fallback + 348 geometry at both) —
+which is the invariant demonstrated rather than asserted: the density dial
+cannot change whether a tree inside the draw ring exists, because there is no
+longer anywhere inside that ring for it to act.
+
+### What this unit does NOT do
+
+- **The representation ladder stops at two rungs.** Geometry and card are the
+  only representations; the seat's rungs 3–4 — a stand/canopy aggregate, and a
+  terrain-level woodland signal — are not built. Past the impostor reach a tree
+  still simply does not exist, which is correct only because the reach is beyond
+  the manifest at every stop tested.
+- **The far annulus was never exercised.** At `at-yosemite` the manifest seeds
+  ~44 of 6,241 cells inside an 8.6 km reach, so `candFar` was empty and
+  `none:density` never fired in any run above. The far thinning is restricted to
+  `impThinnable` sites by construction, not by measurement.
+- **`none:seed-budget` and `none:data-pending` are CELL counts, not tree
+  counts,** and they are enormous (6,197 of 6,241 cells at `at-yosemite`). A
+  cell the budget has not reached holds no descriptors at all, so its trees
+  cannot be counted by construction — the honest unit is the cell, and the
+  number means "how much of the reach has no descriptors in it yet", which is
+  the manifest filling rather than trees going missing.
+
+## Three ways a card budget loses trees it never meant to refuse
+
+The census went to a device and came back with a number, which is what a census
+is for. 447 seconds at Yosemite, POPULATION 8X, DRAW RANGE 2.8 km, REACH 4X:
+
+```
+trees representation · NONE 51302 · perceptible 48563 ← SHOULD BE 0
+                     · imp-cap 51302(48563 big)
+                     · had 15972 3d, 30072 exact + 0 fallback cards
+cards b9344/10666  c10666/10666  s10062/10666
+trees impostor ... reach 8580m ... (282 kept of 282 seen past the draw ring)
+```
+
+The good news first, because it is what the instrument was for: **`0 fallback
+cards` and no `none:no-family-fallback` at all.** The seeding bake holds on a
+real drive — atlas 18/40, every family served. The exit that was 18% of the
+tier is gone.
+
+What replaced it was `none:imp-cap`, and three separate faults were hiding
+inside that one word.
+
+### 1. A budget for SEEDING was deleting trees that already existed
+
+`282 kept of 282 seen past the draw ring` — over a 5,512-cell annulus, with the
+manifest holding 741,850 trees and 4,466 cells seeded. The far tier was not
+thin. It was **absent**.
+
+The gather's annulus walk opened with `if (vegSeedLeft <= 0) break;`, copied
+from the manifest walk twelve hundred lines down — where it belongs, because
+that walk's only job is to seed. This walk's job is to READ, and `seedCell`
+already budgets itself: an already-seeded cell returns on a Set lookup. So the
+guard abandoned the whole remaining annulus over cells sitting in `vegGrid`
+full of trees, for want of time to seed cells that needed no seeding.
+
+And the budget is `VEG_SEED_MS - frameHeavyMs()`, which is **zero on exactly
+the device that needs the far tier most**. The far tier did not degrade with
+frame time; it vanished with it — the same fault as the near ring's hash, in a
+budget's clothes rather than a probability's.
+
+The guard now gates the seeding and not the looking. Removing it outright was
+measured wrong in the other direction: with `?vegseed=0` the walk seeded all
+5,512 cells in one sweep, no sweep completed, and the tier drew nothing at all.
+
+### 2. The cap counted demand the geometry was about to take
+
+`cards b9344/10666` — broadleaf holding 1,322 slots it could not use. The
+water-fill divided the pool by `cand.length + candFar.length`, which counts
+every tree the SKELETONS are about to draw: broadleaf's demand was inflated by
+its own 8,135 3D trees, so it was allocated slots it had no candidates for
+while conifer sat pinned at its share. Demand is now what it always should have
+been — trees that want a CARD — kept as a running count during the gather and
+decremented as admission claims each tree.
+
+### 3. And the cap bound in ring order, which this file already knew was wrong
+
+The geometry tier's own doctrine, at `ezAdmit`, says it in full:
+
+> a cap that binds in RING order is a cap that rerolls: the rings are square,
+> 220 m a step … crossing a cell boundary re-centred the rings and admitted a
+> different subset of trees. Seen from the seat as vegetation popping in and out
+> and rerolling as you drive.
+
+That was fixed **there**, with `nearestStable`, which keeps the nearest N by
+true distance and reports the radius it ended on as `ezEdge`. The card tier was
+never given the same treatment. It walked candidates in ring order and `break`,
+so it refused trees NEARER than ones it had already accepted, and its horizon
+was a jittering square.
+
+A sort is the wrong tool at this size — `nearestStable` falls back to a full
+sort once `k*4 >= n`, and here k is ten thousand against hundreds of thousands.
+What is wanted is not the exact nearest N but a **stable circular horizon**, and
+a histogram of d² gives that for one increment per candidate, taken where the
+site is already read. Bins linear in d² are equal-area annuli, so they fill
+evenly; walking them outward until the budget is spent yields the radius the
+budget buys. The residue is one bin, and the outermost bin is `reach / 2048` —
+about four metres at an 8.6 km reach.
+
+The dump now prints that radius as `card horizon`, to be read against `trees ez
+… edge`: the geometry's edge is where skeletons stop, the horizon is where cards
+stop, and the gap between them is the band the tier is actually carrying.
+
+### The census can lie in one specific way, and now says so
+
+Every number above is cleared at the top of a sweep and written as the sweep
+walks. A refresh that never reaches the end leaves the whole census at zero —
+and zero reads exactly like *the tier drew nothing*, which is a different and
+much more alarming claim. Met head-on while measuring this: `?vegseed=0` made
+the gather seed without a budget, no sweep completed, and an empty census table
+looked like a regression in the tier rather than a stall in the instrument. It
+was read as a mid-sweep race first, which it was not.
+
+`impProf.sweeps` only advances at the end of the phase. `__impwhy().sweeps` is
+the first field, `imp-census.mjs` FAILS on zero before believing anything else,
+and no reading of this census is valid without checking it.
+
+### What is verified, and what a device still has to answer
+
+`client/perf-check.mjs` runs the production refresh with `IMPOSTOR_CAP` at 512
+against ~28,000 candidates, so **the cap binds on every run of it** — and
+nothing asserted on it, because (as its own fixture note says) the snapshot does
+not cover the impostor mesh. That is precisely where the ring-order cap hid for
+as long as it did: the pass ran, the comparison passed, and the tier was
+refusing the wrong trees the whole time. It now asserts that the cap bound at
+all (or the check witnesses nothing) and that no staged card stands beyond the
+horizon its budget bought. Negative control: shrink the horizon 40% and it fails
+400 of 400.
+
+**THE HARNESS CANNOT REACH THE CAP-BOUND STATE, and there is no switch for it.**
+At `at-yosemite` it seeds roughly half a cell a second against the device's ten,
+so after 100 seconds 1% of an 8.6 km reach is manifested and the MANIFEST binds,
+not the cap. `?vegseed=0` fills it by removing the budget — and then no sweep
+completes (§ above). Both measured. So the census devtool proves the invariant
+(all three DENSITY stops byte-identical, `perceptible NONE` 0) and cannot prove
+the cap arithmetic; that reading comes off a device's own `trees representation`
+row, and the three numbers to read there are `imp-cap`, `card horizon`, and
+`kept of seen past the draw ring`.
+
+## An even split of the card budget buys a wildly uneven picture
+
+The device came back with the far tier alive — `147801 kept of 147801 seen past
+the draw ring`, against 282 the run before — and with the card cap pinned:
+
+```
+cards   b6400/6400  c6400/6400  a6400/6400  p6400/6400  s6400/6400
+horizon b929m       c1631m      a4534m      p1199m      s3022m
+known   b198388     c63437      a14452      p52451      s26712
+```
+
+Every family wanted more than its share, so the water-fill fell to its **even
+split** — and an even split by COUNT buys wildly uneven DISTANCE, because
+density is not uniform across families. The commonest tree in the place, a
+hundred and ninety-eight thousand broadleaf, was cut off at **929 m inside a
+2,800 m draw range**, while fourteen thousand acacia were carried to four and a
+half kilometres. The budget was shared fairly between families; the picture was
+not fair at all.
+
+### So the rule has no family in it, and no distance either
+
+A tree earns a card by **how large it is on screen**: `px = K · height /
+distance`, K being the design frame's pixels-per-metre at one metre. The budget
+is spent from the biggest down and what it buys is a FLOOR in art pixels —
+*everything above 1.8 px wears a card*. Three things fall out for free:
+
+- a tall tree is carried further than a short one, which is what an eye does;
+- a dense family takes more of the pool than a sparse one, because it fills
+  more of the frame — no allocator, no shares, no rounds;
+- the floor is in **the same unit as the census's own perceptibility test**, so
+  the budget and the metric that judges it can finally be compared. `perceptible
+  NONE` counts trees above 1 px with no representation; the floor says what the
+  budget can actually afford. Two numbers, one ruler.
+
+Kept as a histogram of `px` taken where the site is already read, bins linear in
+px so they are finest where the floor lands. `card floor` and the measured
+`card reach` per family are both in the dump.
+
+### The check had become a tautology, and the negative control says by how much
+
+The first version of this asserted that no card stands beyond `impProf.horizon`
+— which is the furthest card placed. The same expression twice: exactly the
+fault this file caught once already in `imp-atlas.test.mjs`. The walk now
+records **the smallest tree given a card and the largest refused one**, from
+opposite sides of the decision, and the rule is that the second cannot exceed
+the first by more than one bin. Restore the old ring-order cap and it fails
+with the fault stated in one number:
+
+> a refused tree projects **9.902px**, larger than the smallest one given a card
+> (**1.514px**) — the budget is not being spent on apparent size
+
+A tree six times bigger on screen was being thrown away for a smaller one.
+
+## What a card actually waits for, to become a skeleton
+
+Asked from the seat: *I drive out to the edge and the impostors are still cards
+when I reach them — what is the refresh period and priority?* The honest answer
+was only derivable by arithmetic over `treeRefresh`'s slice count, so it is now
+a row: `trees refresh N sweeps · every Xms in Y slices of 5ms · cooldown …`.
+
+**The period is a whole sweep plus a cooldown.** Nothing changes tier until a
+sweep COMPLETES, because staging is committed in one slice at the end — that
+property is what makes yielding safe, and it is also the LOD latency of the
+entire tree system. The cooldown is `vegAt = now + 900`, or `VEG_SEED_CATCHUP`
+(120 ms) while the manifest is still seeding. The slice is `VEG_STEP_MS = 5` ms
+a frame, but a work unit may overshoot and one of them is enormous: `ezAdmit`
+does the water-fill and a `nearestStable` per family **without a single yield**,
+measured at 28.9 ms mean and 65 ms worst on a device.
+
+**There is no priority, in two separate senses, and both are by construction:**
+
+1. **No distance trigger.** `vegAt` is a clock. Standing still and driving flat
+   out re-decide the world at exactly the same rate; moving 100 m buys nothing.
+2. **No ordering inside a sweep.** The phases are fixed — ring, ezGather,
+   impGather, ezAdmit, place, impostor, upload, shrubs, manifest — so the near
+   tier's admission waits behind the far tier's gather every time, and the
+   commit takes them together. A tree at 400 m cannot be promoted early because
+   a tree at 8 km has not been counted yet.
+
+The far gather is cheap (`impGather 1.8 ms/call` even at 147,801 candidates), so
+opening it up did not meaningfully lengthen the sweep — `ezAdmit` is where the
+sweep's time goes. But the *structure* is what it is: one clock, one order, one
+commit. Two things would change it, neither done here and both real: give the
+near tier its own commit after `place`, and run the far annulus on a slower
+cadence than the near ring, since you must drive kilometres for it to matter.
+
+## The card floor works, and a sparse family still walked off the end of it
+
+`card floor 2.59px`, and the rationing changed completely — broadleaf went from
+6,400 cards at 929 m to **19,460 at 3,592 m**, which is the fix doing exactly
+what it was for. Then this, in the same row:
+
+```
+cards b19460/264972  c10843/88714  a1/13864  p970/55117  s726/34061
+edge  b325m  c526m  a1729m  p761m  s421m
+```
+
+**Acacia: one card out of 13,864**, with skeletons reaching 1,729 m and cards
+1,806 m. Seventy-seven metres of handover band and a single card in it — an
+acacia crossing that edge goes from NOTHING to a full skeleton. The original
+complaint, alive in one family.
+
+The cause is that the two tiers ration by different things. The geometry tier
+keeps the nearest N under a TRIANGLE budget, so a sparse family gets a FAR edge
+— acacia is 3% of the trees here, which is precisely why its skeletons reach
+1.7 km. The card tier keeps the biggest under one floor set by whatever is
+abundant. For a sparse family those disagree, and the gap between them is where
+a tree has no representation at all.
+
+### The handover band is reserved, and its width comes from the cadence
+
+A tree within `IMP_HANDOVER_M` of its family's skeleton edge wears a card
+whatever the floor says, and the floor is spent on what remains.
+
+**The width is a distance, not a multiple of the edge**, and the distance comes
+from the refresh period — because that is the actual mechanism. Tiers change
+only when a sweep completes, and a sweep measured **six seconds** on a device;
+the band must be wider than the ground covered in one, or a tree crosses the
+whole of it between two decisions and arrives as a skeleton anyway. 200 m covers
+120 km/h. A multiple of the edge was the first attempt and it ate the pool: it
+scales with the SQUARE of an edge the card tier does not control, and in
+`perf-check` the bands alone consumed the whole budget.
+
+**And the reserve is filled first, or it is not a reserve.** Holding cards back
+and then walking families in order holds nothing back — the first family spends
+the pool on its own floor admissions and the backstop refuses the last family's
+band. Caught by the check below: *the nearest card refusal is 1 m past the
+skeletons' edge*, and 1 m is not a band. Every band in the world is now filled
+in a first pass before any floor admission is made, so the guarantee does not
+depend on the order five families happen to be declared in.
+
+### A uniform wood cannot produce the fault, so the fixture stopped being one
+
+`perf-check` drew every kind with equal probability, so no family was sparse —
+and sparseness is the whole condition. Three mutations of the production code
+were run against it and **all three passed**: the band could be cut to a tenth,
+the reserve could be skipped, and nothing moved. A check that cannot fail is not
+a check.
+
+The fixture now has a second leg, nine broadleaf to one acacia, with the pool
+sized to it (8,000 against ~70,000 candidates — the ratio the device runs). And
+the two claims are asserted on the legs that can witness them, which is not the
+same leg:
+
+| claim | leg | control |
+| --- | --- | --- |
+| largest refused ≤ smallest drawn | uniform | ring order restored → fails |
+| `none:handover` is zero | skewed | pool below the bands → 307 trees |
+
+The first claim excludes band cards from both sides: they are admitted BELOW the
+floor on purpose, and counting them compares two different rules — which it did,
+and which broke the check until it was split.
+
+## 1,368 ms a sweep, and the phase line summed to 32
+
+Every slice re-arms `vegPhaseAt` so the frame gap between slices is not billed
+to whichever phase was running. Correct — and it threw away the WORK too: a
+phase spanning ninety slices was credited the cost of its last slice alone.
+
+Caught by arithmetic that would not close. A device put `treeRefresh` at
+41,051 ms over 30 sweeps — **1,368 ms of CPU per sweep** — while `tree phases`
+summed to 32 ms. Ninety-eight per cent of the sweep unattributed, and the one
+phase this file has spent three passes trying to cut was being read from the
+wrong number the whole time.
+
+A slice now adds its own span to a CARRY, and the next `vegMark` spends it on
+the phase that just ended — marks name a phase retrospectively, so mid-slice
+there is nothing to credit it to. Every measurement of a tree phase taken before
+this is wrong, and wrong in the same direction: far too small.
+
+## With the clock fixed, the sweep was three quarters one phase
+
+The corrected phase attribution landed and inverted the previous reading
+completely:
+
+```
+tree phases ms/call (max): ezGather 44.3 (322) · impGather 897.8 (7459)
+                           · ezAdmit 8.2 (14) · place 61.9 (456) · impostor 64.3 (223)
+```
+
+**`impGather` is 898 ms a call, 7.5 seconds at worst.** The sweep before this
+fix reported it at 1.8 ms, and on that number this file concluded — in writing —
+that opening up the far gather "did not meaningfully lengthen the sweep" and
+that `ezAdmit` was where the time went. `ezAdmit` is 8.2 ms. It was the opposite,
+and it was the opposite *because of the bug the same reading then exposed*: a
+phase spanning ninety slices was credited its last slice alone, and `ezAdmit` is
+one unyielding block while `impGather` spans the whole sweep.
+
+The lesson is not about trees. **An instrument that under-reports by a factor of
+five hundred does not look broken; it looks like an answer**, and three separate
+conclusions were drawn from it here before the arithmetic was made to close.
+
+### The floor bounds the gather, not just the draw
+
+The far walk visits 5,512 annulus cells and allocates a tuple for every site in
+them — **485,438 on the device** — to draw at most 32,000. The tallest family is
+conifer at 7.2 m per scale unit, so at a floor of 2.88 px nothing beyond about
+2.3 km can clear it, against a reach of 8.58 km. Ninety per cent of that gather
+was allocation for trees that were refused before anything looked at them twice.
+
+So the floor is applied where the site is read. **Half the floor, not the
+floor** — a kept list that stops exactly at the threshold can never let the
+threshold FALL, because nothing below it is evidence again, and the number
+ratchets up and sticks. Half gives it twice the radius to fall into. And the
+refused are still COUNTED into both the census and `impWant`, the second
+mattering as much as the first: a demand total that shrank with the filter would
+tell the allocator the world had emptied and drop the very floor doing the
+filtering.
+
+### An accumulator inside a loop that now runs twice
+
+`drawn 32000/32000 offered (970876 kept of 485438 seen past the draw ring)` —
+a kept count larger than the population it was drawn from, and exactly 2×. The
+family loop runs twice now (bands, then the floor) and `impFar +=
+candFar[fam].length` did not notice. Everything else in that loop is an
+assignment and survives being written twice; an accumulator does not.
+
+Worth stating as a rule: **when a loop gains a pass, every `+=` inside it is a
+bug until checked.** The dump caught this one only because the arithmetic was
+impossible on its face — a smaller total would have read as a plausible number
+and stayed.
+
+## The allocation was never the cost — the walk was
+
+Filtering where the site is read cut what the far gather KEEPS by ninety per
+cent — `56454 kept of 507115 seen`, against 485,438 the sweep before — and
+`impGather` went from 898 ms to 792. **Half a million sites are read per sweep**
+across 5,512 annulus cells, and each costs a distance, a kind test and two
+bounds tests before anything can decide it does not matter. Keeping fewer of
+them changes nothing about that.
+
+A cell is 220 m square and its nearest corner bounds every tree in it, so one
+distance per CELL retires ninety-two sites unread — and the seed, the Map lookup
+and the iterator with them. Measured in `perf-check`: **4,035 of 4,896 annulus
+cells retired, 82%**, with identical cards drawn.
+
+### Three things the cull needed before it was safe
+
+**The tallest tree is measured, not assumed.** `VegSite.s` has no declared
+ceiling, so a guessed maximum silently deletes anything above it — the worst bug
+this tier can have. A running high-water mark is zero on the first sweep, culls
+nothing, and is converged by the second.
+
+**A floor above zero does not mean candidates are scarce.** It can be above zero
+because the handover bands took the pool, and then it is a fact about the
+reserve, not about distance. Caught by the control below: **800 cards with the
+cull and 1,200 without**. Both culls now wait on the pool having actually been
+spent — `drawn >= IMPOSTOR_CAP` last sweep — and the gate self-heals, because a
+cull that costs the tier its capacity turns itself off the sweep after.
+
+**Margins multiply, and cost area squared.** A quarter of headroom and half the
+floor read as modest and compound to 2.5× the radius — six times the area, which
+on an 8.58 km reach is a 22% cut where an order of magnitude was wanted. 1.1 and
+0.8, with the reason for each written where it is applied.
+
+### The control, and what it does not pin
+
+The cull is the one optimisation here with no witness of its own: a culled tree
+is never recorded as refused, so **culling too hard LOWERS `pxMaxRefused` and
+makes the floor check pass more easily**. An optimisation that makes its own
+test easier is not tested. So the claim is asserted directly — the same world
+gathered without the cull must draw the same cards — with `impPxFloorLast = 0`
+as the control.
+
+It pins the mechanism and **not the margins**: halve either and it still passes,
+because every tree in the fixture is about the same height and the floor is
+steady. The margins are insurance against a taller tree than any yet seen and
+against a floor that needs to fall, and the fixture creates neither. That is a
+limit of the check, stated rather than papered over.
+
+Two fixture faults were found getting there, both of the same kind — **a limit
+other than the one under test binding first**. `IMPOSTOR_FORM_BUDGET` at 400
+meant the tier drew 800 of 8,151 offered and the pool never filled, so every
+check downstream was measuring the form budget wearing the cap's name. And the
+default reach put the cull radius beyond the tier's own horizon, so the world
+ended before the mechanism started.
+
+## …and the cull was fed by the walk it culls, so it retired the annulus whole
+
+The next dump carried no far tally at all — and `card reach b2681m/c2799m/
+a1803m/p2360m/s589m`, every value inside a 2,800 m draw ring on a rack asking
+for 8,580 m of reach. The far tier was not thin, and it was not slow. It was
+**off**, and had switched itself off with a number that measured itself.
+
+`impTallestM` is the high-water mark the cull's radius is derived from — how
+tall the tallest tree seen is, so a radius can be solved at which nothing could
+clear the pixel floor. It was updated in exactly one place: inside the far
+gather's own walk. **The thing the mark is used to cull was the only thing
+feeding it.** That is a ratchet pointing the wrong way, and it closes in one
+step: a mark set low on some early sweep shrinks the radius, the smaller radius
+retires the cells where the tall trees stand, those trees are never read, the
+mark cannot grow, and the radius never opens again. Nothing recovers it, because
+the evidence that would is behind the cull.
+
+**And it could collapse below the draw ring, which is not a cull at all.**
+`Math.min(r, impR)` bounded it above and nothing bounded it below, so a small
+`r` retired every annulus cell there is — including the ones a metre past the
+skeletons' edge, where the handover lives. `impPoolFullLast` stayed true
+throughout, because at eight times population the near ring alone fills a 32,000
+pool, so the gate that was supposed to make the cull self-healing was reading a
+pool filled by the tier's other half.
+
+Three things, and the first is the one that generalises:
+
+- **the mark is fed from `impSeen`, which BOTH gathers call.** The near ring is
+  never culled, so a mark fed from there is honest by construction — there is no
+  arrangement of the cull that can starve it. The far gather's own update is
+  gone: a cull may not be its own witness.
+- **the radius is floored at `treeRange`.** The near gather owns everything
+  inside the draw ring and the annulus starts at its edge, so a radius under
+  that number retires the whole far tier and reports it as a saving.
+- **and the far tally prints at zero.** It was nested inside `farSeen ?`, so the
+  cull counters vanished exactly when the cull had retired everything — the one
+  state worth seeing. It now prints unconditionally and appends **`— THE WHOLE
+  ANNULUS`** when `farWalk` is 0. *A readout that hides itself when its number
+  is alarming is worse than no readout*, and this is the second time in this
+  tier: `impProf.sweeps` exists because an empty census read as an empty tier.
+
+`perf-check` gained the assertion the fixture could witness and did not:
+`farWalk > 0`, with the message naming the failure rather than the number —
+*the cull retired the whole annulus: the far tier is off, not cheap*. Negative
+control: collapse the radius to `r * 0.05` and it fires.
+
+**A note on what was fixed at the same time, deliberately kept separate in the
+reading.** IMPOSTOR INK defaulted to BLACK — the silhouette instrument, which
+takes every card's diffuse to zero — because that was the setting the cards were
+being debugged on when the rack's defaults were pasted from a device. A fresh
+load should show the world, not the measurement. `client/switches.ts` already
+had `fallback: '0'`; only the dial's own default index was wrong, which is why
+`?impink=` behaved and the panel did not.
+
+## The manifest DOES cull the tarmac — and the two tiers ask disjoint questions
+
+Asked from the seat: *impostors don't seem to be culled when on roads/water, so
+I encounter them as I drive, before convert to 3d has caught up — shouldn't
+candidates have been culled at the manifest layer?*
+
+**They are.** `pushSite`'s first line is `surfaceAt(x, z) !== 'ground'`, which
+refuses tarmac and water before a site is ever filed. The cull is at the
+manifest layer, it is the right layer, and it cannot be enough — for a reason
+the place loop's own comment has carried for as long as it has existed:
+
+> **A cell is seeded ONCE and the roads through it stream in afterwards.**
+
+`seedCell` waits for the cover raster and the ecoregion; it does not wait for
+OSM, and nothing makes it. So a road is ALWAYS later than the cell it crosses,
+and the manifest's veto is made against evidence that has not turned up. The
+geometry tier has re-asked it at PLACE time for years for exactly that reason.
+
+### The two tiers were asking about disjoint populations
+
+The re-test is asked **only of trees `ezAdmit` took** — the polish pass's own
+optimisation, which cut road queries 18,335 → 1,160 and is right on its own
+terms. And **the card tier draws the set admission REFUSED.** So:
+
+| | tested for tarmac | drawn by |
+|---|---|---|
+| admitted | **yes**, every sweep | the geometry tier |
+| refused by admission | **never** | the card tier |
+
+The two sets do not intersect at all. Every impostor in the game was stood up
+without the question being put, and no instrument could see it: the census's
+exits were all about budgets, `perf-check`'s snapshot does not cover the
+impostor mesh, and `roadChecksAfter` counts the geometry tier's queries alone.
+
+**And the symptom is exactly what was reported, including the "before 3D has
+caught up".** It never would catch up, because crossing into the admitted set
+is precisely where the card stops being drawn (`ezAdmit.has(v)` files the tree
+as `geometry` and the walk moves on) and the skeleton is then refused for
+standing on tarmac. A tree on a road is drawn as a card up to the geometry's
+edge and by nobody inside it — so you drive at a billboard in the carriageway
+and it vanishes when you reach it.
+
+### …and the water half was missing from the re-test entirely
+
+`pushSite` refuses both surfaces; the place loop re-asked **only**
+`onCarriageway`. Water arrives on two different clocks and only one of them is
+early: the ocean mask and the cover-traced lakes come off the COVER raster,
+which `seedCell` already waits for — so most water IS known at seed time. What
+is not is the water OSM carries as WAYS, which lands with the roads, long
+after. A river the cover cannot see (the doctrine records the 37 m raster
+missing a channel entirely) left a wood standing in it, in both tiers, for
+ever.
+
+`vegSurfaceVeto` is one rule for both, asked by both tiers: `onCarriageway` at
+the geometry tier's own 1.2 m shoulder margin first because it is the cheaper
+question, then `hydroWet`. **ROCK IS EXEMPT**, as it already was at place time —
+a boulder that has come down onto the road is a hazard worth meeting and one
+sitting in a river is a ford's own furniture. The card tier draws neither.
+
+### It is asked per sweep, not latched, and that is deliberate
+
+The obvious economy is a flag on the site: ask once, remember. It is wrong,
+because **the answer changes**. A tree eight kilometres out stands on ground no
+road data covers and the only honest answer there is *not yet*; a flag would
+freeze that no into a permanent yes. What makes the per-sweep cost bearable is
+WHERE it is asked — after the budget decision and before the form — so it is
+put only of a tree that would actually be drawn, at most `IMPOSTOR_CAP` a
+sweep, against the half-million the gather reads.
+
+- **`veto:` and not `none:`.** The census fails on a perceptible `none:`, and a
+  tree the world says is not there has not lost its representation. Named apart,
+  and `perf-check` asserts no veto is ever filed under a `none:` key.
+- **A vetoed tree costs the pool a slot it never fills.** The histogram that
+  sets the pixel floor is built in the GATHER, before the veto can be known, so
+  the budget is rationed against a demand that includes trees about to be
+  refused and the pool comes up short of `IMPOSTOR_CAP` by roughly the vetoed
+  fraction. Real, small where roads are a small share of ground, and NOT worth
+  fixing by asking the veto in the gather — that is half a million queries a
+  sweep to save a few hundred cards.
+- **Which turns the cell cull off, correctly.** `impPoolFullLast` is the cull's
+  gate, so a world with a lot of tarmac under the tier stops culling — the gate
+  doing what its own note says it does, *a cull that costs the tier its capacity
+  turns itself off the sweep after*. It also means `perf-check`'s cull leg must
+  run with its roads OFF, or a different limit binds first and the leg tests
+  nothing it claims to.
+
+### Measured
+
+`perf-check`'s uniform leg runs with its road stub on (a ~36 m band every
+100 m in x). Reading the STAGED INSTANCES the production pass wrote, against
+the same stub the production rule asks:
+
+| | cards on a carriageway |
+|---|---|
+| card tier's veto removed (the control) | **77 of 400 — a fifth of the tier** |
+| shipped | **0 of 400** |
+
+…and live, `imp-census.mjs` on `at-paris-west` (5,663 ways, the densest road
+fixture in the set) reads the exit firing and the census still clean:
+
+```
+  geometry        1054   1054        veto:road    5    5
+  impostor:exact   687    135        NONE 0 of which 0 perceptible
+```
+
+**Five, and not five hundred, because the harness is manifest-bound** — 108 of
+6,241 cells seeded at 1.7% of the reach, the limit this file already records —
+so what that run demonstrates is that the exit FIRES and that a veto does not
+read as a vanished tree. The population number has to come off a device.
+
+The road-query count is the cost, and it is stated rather than hidden:
+`roadChecksAfter` went **560 → 1,672** at 700 m / cap 120 and **1,160 → 7,072**
+at 2,800 m / cap 1200 in the sandbox — the card tier's own queries, bounded by
+`IMPOSTOR_CAP` a sweep, plus the geometry tier's new `hydroWet` per admitted
+tree. **Not measured on a device**: the harness cannot price a per-refresh CPU
+cost. The row to read on the next dump is `impostor` under `tree phases`, and
+the row that says the rule fired at all is `vetoed N on tarmac, M in water` on
+`trees representation`.
+
+**A ZERO IN THAT ROW WHILE DRIVING THROUGH A TOWN MEANS THE VETO NEVER FIRED**,
+which is why it is printed at all rather than only when non-zero being the
+interesting case: the counter that hides itself when its number is alarming is
+the fault this file recorded one section ago.
+
+### …and the water half rides a LINEAR SCAN, which is affordable and should not be
+
+`HydroSystem.sampleRestingSurface` walks **every hydro record** testing bounds
+before it samples, and its own comment says what to do about it: *"Active rings
+are small. If this grows, index records by the world tile key already known to
+the caller rather than introducing another grid."* The ring is 25 to 49 tiles,
+so a miss is up to 49 bounds tests — the exact shape of the substrate contact
+sampler that cost a phone 17% of its CPU before it got a cell index.
+
+The arithmetic says ship it anyway, and says why: the geometry tier asks it of
+roughly thirty thousand sites a sweep and the card tier of at most
+`IMPOSTOR_CAP`, so call it seventy thousand at a few hundred nanoseconds — **six
+to twelve milliseconds against a sweep the device already measures at 1,368 ms**,
+under one per cent, spread across some two hundred and eighty slices. What makes
+that a reading rather than a hope is that the refresh is SLICED: the same number
+landing in one synchronous call would be two dropped frames.
+
+**It is written down because the next caller may not have that budget.** The
+index the comment asks for is one `records.get(tileKeyOf(x, z))`, and the day
+something asks this question per frame rather than per sweep is the day it has
+to exist.
+
+## The cull's gate was an exact cap hit, and the floor makes that impossible
+
+The dump that followed (Yosemite, 272 s, chart at 2.5 m/px, reach 5,600 m, pop
+8X) reads:
+
+```
+drawn 30871/32635 offered (371393 kept of 371393 seen past the draw ring,
+  0/2584 cells retired unread) · CAPPED at 32000 · card floor 3.03px
+tree phases … impGather 614.4 (9983) …
+trees refresh 37 sweeps · every 7171ms in 100.5 slices of 5ms
+```
+
+**`0/2584 cells retired unread` and `371393 kept of 371393 seen`: BOTH cuts were
+off**, and `impGather` stood at **614 ms a sweep** against the **131.5 ms** the
+cell cull was built to reach. It is 70% of a 911 ms sweep, and the sweep period
+is over seven seconds.
+
+**THE GATE WAS `impN >= IMPOSTOR_CAP`, AND THE FLOOR'S OWN CONSTRUCTION MAKES
+THAT ALMOST IMPOSSIBLE.** The histogram walk keeps whole bins while they fit and
+stops at the first one that would overflow, so the admitted count lands *under*
+the cap by the partial bin — by design, and stated in that code. The surface
+veto then takes one more slot per vetoed tree (`vetoed 1333 on tarmac, 431 in
+water`), after the budget decision, and can never give it back. 30,871 of
+32,000: the gate read false, every sweep, and the row beside it said `CAPPED`
+because `impProf.capped` counts REFUSALS and the two are different facts.
+
+So the cull has been off in production for its whole life, and **`perf-check`
+could not have seen it**: its fixture fills the pool to `8000/8000` exactly,
+because there the handover bands alone exceed the pool and the `impN >=
+IMPOSTOR_CAP` backstop clamps on the nose. A gate satisfied by luck in the
+sandbox and never on a device.
+
+**THE PRECONDITION IS A FLOOR REFUSAL, and it is exact in the logical sense.**
+`px < impPxFloor` can only fire with the floor above zero; the floor is only set
+when demand exceeded capacity; and nothing below it is ever drawn. That is the
+entire safety argument for retiring a cell below HALF of it, stated directly
+rather than through a proxy. `impFloorRefused > 0 || impN >= IMPOSTOR_CAP`.
+
+The old worry the exact-cap gate was standing in for — *a floor above zero does
+not mean candidates are scarce, it can be the bands taking the pool* — is
+answered by the same sentence: whatever made the floor high, a tree below it is
+not drawn, so retiring one below half of it costs nothing. The assertion that
+holds it is unchanged and is the one that matters: the same world gathered
+without the cull must draw the same cards.
+
+**`perf-check` now has to witness the cull firing WITHOUT the cap being
+reached**, or it is testing the gate it replaced:
+
+```js
+assert.ok(c.impProf.drawn < c.IMPOSTOR_CAP,
+  'the pool filled exactly: this leg cannot tell the floor-refusal gate from
+   the exact-cap gate it replaced');
+```
+
+…which fails on the fixture as it stood (`8000/8000`) and passes once the cull
+leg keeps its ROADS ON. That is the device's own condition — pool short of the
+cap because the veto took slots, floor still refusing — and it is the only way
+this fixture reaches it. The leg had its roads taken off one commit earlier
+*because* the old gate turned the cull off under a veto; under the new gate that
+is exactly the case worth running. Negative control: restore the exact-cap gate
+and the leg reports **no cell was culled**.
+
+### …and "SHOULD BE 0" is a claim about the draw ring, summed over the reach
+
+The same dump: `NONE 357420 · perceptible 202561 ← SHOULD BE 0`, every one of
+them `none:imp-cap`. **No rack can make that zero.** The reach is 5,600 m, the
+manifest holds 371,393 trees past the draw ring, and the pool is 32,000 — eleven
+to one. A tree the pixel floor could not afford has not lost its
+representation; it is a budget spent on the biggest, which is the rule working.
+
+**The two perceptibility thresholds are different numbers and the row compared
+against the wrong one.** The census's is ONE art pixel — below which a tree
+cannot be seen to appear. The budget's is the LIVE FLOOR, 3.03 px here. Between
+them sits a population that is visible and unaffordable, and calling it a fault
+makes the one number that should read zero unreadable.
+
+So the floor's refusals are reported apart and the zero claim is made on the
+rest — a form budget, a missing family fallback, a tree refused inside its own
+handover band, each of which is a real defect. And **the floor is also the far
+pop size**: a card appears out of nothing at exactly that many art pixels at the
+card horizon. Three art pixels is the number to argue with from the seat; the
+row prints it.
+
+The invariant at the geometry handover is untouched and healthy in that dump —
+`none:handover` absent, `2227 held for handover`, `nearest refusal 200m past the
+skeletons`. That is the one that governs a 12-metre pine arriving out of
+nothing, and it is the one `imp-census.mjs` fails on.
+
+### And the lens was not on the `look` row
+
+The depth-of-field unit shipped four dials and put none of them in the row whose
+whole job is to let two dumps of the same drive be compared. The first dump
+taken on it cannot say whether the dedicated chain ran. `dof <mode>/<quality>
+f<N>px @<focus>` now, beside `tilt`.
+
+### …and the moment it ran, the cull was comparing two different frames
+
+Pulled from the branch the same evening (`351e3d0`, not mine): the cell cull's
+bound was
+
+```ts
+const bx = gx * VEG_CELL, bz = gz * VEG_CELL;     // ABSOLUTE metres
+const ddx = Math.max(bx - rfx, 0, rfx - (bx + VEG_CELL));   // rfx is LOCAL
+```
+
+`vegCellOf` indexes the lattice in the **earth-fixed** vegetation frame — that
+is the whole point of the anchoring unit — so `gx * VEG_CELL` is an absolute
+easting, and `renderFocusXZ()` answers local metres. Every annulus cell
+therefore measured thousands of kilometres away and **all of them were retired
+together**; the next sweep saw an empty far ring, dropped the floor, and
+reopened it. Reported from the seat as the whole far forest flashing on every
+refresh, at the sweep's own period.
+
+**IT WAS WRITTEN WRONG THE DAY THE CULL WAS WRITTEN AND COULD NOT SHOW UNTIL
+THE GATE OPENED.** That is the second latent fault the same gate has hidden —
+the `impTallestM` ratchet was the first — and it is the general lesson: **code
+behind a gate that never opens is code that has never run.** The day a gate
+starts firing, everything behind it is new code and wants reading as such.
+
+The fix carries the FOCUS into the lattice once per sweep (`vegAbsOf(rfx, rfz)`)
+rather than each cell back out of it, which is the cheaper direction by the
+number of cells. It is metrically sound and the reason is worth writing down,
+because the two frames are not related by a translation: absolute northing is
+`lat · M_LAT` while local z is `−(lat − lat₀) · M_LAT`, a REFLECTION, and
+absolute easting carries `cos(lat)` where local x carries `cos(lat₀)`. Neither
+matters here — the box test is symmetric, so the reflection is invisible to it,
+and over a 5.6 km annulus the two cosines differ by about 0.07%, four orders
+under the cull's own 1.1 headroom.
+
+**AND THE SANDBOX CAN ONLY CATCH THE OFFSET.** Its `vegAbsOf` stub is a pure
+translation, so the leg proves the frames are not mixed and proves nothing about
+a sign or a scale; the paragraph above is the argument for those, and it is code
+reading rather than a measurement. What the fixture DOES now do is run the cull
+leg around a nonzero earth origin — the zero-centred one made absolute and local
+identical, which is exactly why every check passed over a bug this size. The
+negative control fires the assertion added two commits earlier, in its own
+words: *the cull retired the whole annulus: the far tier is off, not cheap*.
+
+
+## A rotation was three different changes of mind, and nothing re-checked
+
+Asked from the seat, mid-test: *look into `resize` and mobile orientation change
+so it doesn't break the viewport/render.* Three things key off
+`innerWidth`/`innerHeight` and every one of them answered differently when the
+phone was turned. None of them is a viewport bug in the usual sense — the camera
+aspect and the render targets were always updated and nothing stretched — which
+is why it had survived: what changed was the COST and the LOOK.
+
+**THE WHOLE CHAIN IS THREE `resize` LISTENERS AND NOTHING ELSE.** `resize`
+(5457, the renderer, the camera and `resizePost`'s ten render targets),
+`updateStickHome` (43521) and `hudResize` (51032), in that registration order,
+each reading the metrics at the instant it runs. There is no `orientationchange`
+handler, no `visualViewport` listener and no `ResizeObserver` anywhere in
+`client/` or `static/` — measured, not assumed.
+
+### The art buffer was pinned to ROWS, and rows are the long axis of an upright phone
+
+`resizePost` sized the world's art buffer as `h = min(PIX_H, innerHeight)` and
+derived `w` from the aspect. `PIX_H` is a count of rows, and on a phone held
+upright rows are the LONG axis — so turning the phone did not keep the buffer
+still, it grew it with the aspect. Measured on a 390x844 phone:
+
+| dial | upright | turned | |
+|---|---|---|---|
+| 240P | 111x240 = **26,640** px · 3.52 CSS per art px | 519x240 = **124,560** · **1.63** | **4.68x** |
+| 320P | 148x320 = 47,360 · 2.64 | 693x320 = 221,760 · 1.22 | 4.68x |
+| 480P | 222x480 = 106,560 · 1.76 | **844x390** = 329,160 · **1.00** | 3.09x |
+
+**IT IS A LOOK CHANGE BEFORE IT IS A COST.** The art pixel is what shrinks —
+3.52 CSS pixels across upright, 1.63 turned — so rotating halved the size of the
+pixels the whole game is drawn in, and at the 480P stop the clamp lands on
+844x390: one art pixel per CSS pixel, which is not pixel art at all. The cost is
+the other half, on a device this file already records at 11-20 fps.
+
+**AND NO ROTATION-INVARIANT RULE CAN LEAVE A DESKTOP ALONE — which is why the
+fix is SCOPED and not general.** Every invariant measure of a window (the long
+axis, the diagonal, the root of the area) is larger than its height on a
+landscape display, so any of them coarsens a 1440x900 desktop from 384x240 to
+about 240x150. That is a visible change, and it would move the frame every
+art-pixel number in this file was taken against — the harness itself runs
+390x844. So: **on a handset the dial measures the LONG axis; on anything larger
+the vertical rule stands untouched.** A handset is the case where the two
+orientations are the same device a minute apart and must cost and read the same;
+a desktop window is whatever someone made it. Measured after: portrait, desktop
+and the harness are **byte-identical**, and the turned phone is 26,640 px at
+3.51 CSS per art pixel — the same buffer and the same pixel, either way up.
+
+The scale is one number for both axes (`k = ref / min(PIX_H, ref)`), because the
+art pixel must stay SQUARE: the composite magnifies `rtScene` by
+`innerWidth / w` horizontally and `innerHeight / h` vertically, and `chartScale`
+reads `innerHeight / pixSize.y` as THE CSS scale. A rule that capped one axis
+would have made them disagree.
+
+### A phone stopped being a phone when it was laid down
+
+`hudResize` picked its grid with `innerWidth < 760` — a question about which way
+the thing is being held. On a 390x844 phone that is true upright and false
+turned, so a rotation promoted the HUD to the DESKTOP grid: 2 CSS pixels per HUD
+pixel becoming 3, a HUD 1.6x chunkier at exactly the moment the height it has to
+fit in fell from 844 to 390. Measured at the TRIM stop on a DPR-3 phone:
+
+| | hudS | HW x HH |
+|---|---|---|
+| upright | 1.667 | 234 x 506 |
+| turned, as shipped | **2.667** | 317 x **146** |
+| turned, short-side test | 1.667 | 506 x **234** |
+
+The HUD's vertical layout — the rig gauge, the transport row, the message rail
+at 0.26 of HH — has no room at 146. `HANDSET_PX` is the named test now and both
+readers take it: **a handset is a device, not an orientation.**
+
+### An orientation change is not one resize event
+
+Every consumer hangs off `resize` and reads the metrics when it runs, which is
+right while the event can be trusted. iOS can deliver one DURING the rotation
+animation carrying the metrics from before it — and there is no second path
+here: a `resize` handler is the only thing that resizes the ten render targets,
+the camera's aspect and the HUD's grid, so one badly-timed event leaves the
+world rendered for the wrong frame until the next resize, which on a phone held
+in one hand may be never.
+
+So the METRICS are watched rather than the event. `viewportSync` re-dispatches a
+resize when `innerWidth`/`innerHeight` have moved since the last one anybody
+acted on, and is a no-op when they have not — every consumer stays exactly where
+it is, because this is a second CHANCE to run and not a second path. An
+`orientationchange` arms three tries (the next frame, 120 ms and 400 ms, which
+brackets the iOS animation) and `visualViewport` is watched because it moves on
+a URL-bar collapse where the window's own metrics may not.
+
+- **THE RECORDER IS ITS OWN LISTENER, not a line inside `resize()`.** The one
+  thing it has to observe is a real event that ran with STALE metrics; recording
+  inside the resize would file the stale pair as the truth and the deferred
+  check would then agree with it and do nothing.
+- **AND THE RECOVERY CANNOT BE REACHED BY RESIZING.** A harness resize always
+  carries the true metrics, so the state this exists for has to be asked for:
+  `__viewport('forget')` is a test hook and nothing in the game calls it.
+
+### …and the inset windows were drawn on the dial rather than the buffer
+
+`blitPixelated` computed its grid as `PIX_H / innerHeight` — the dial, not the
+buffer. The dial is a REQUEST and the buffer is what the request survived (the
+long-axis rule, and the `min(PIX_H, …)` clamp under it), so on a short window
+the two part company and the POV dock and the vehicle bay are drawn on a finer
+grid than the world they sit in. It reads `pixSize.y`, which is what "the same
+pixels per metre as the world" actually means.
+
+### Measured, with the rule it replaced as the control
+
+`devtools/orientation.test.mjs` drives a real rotation at DPR 3 on a fixture
+(no world, no streaming, ~30 s) and computes the old rule beside the new one —
+**it must AGREE in portrait and DIFFER when turned**, because a check that
+cannot tell the two apart is not a check. Nine claims pass; reverting the three
+rules fails **exactly six** of them and leaves the three that are about nothing
+having moved still passing:
+
+```
+FAIL the rotated buffer is the same size as the upright one   {upPx:26640, flatPx:124560, ratio:4.68}
+FAIL the art pixel is the same size on the glass either way   {up:3.52, flat:1.63}
+FAIL the HUD grid does not change when the phone is turned    {up:506 rows, flat:146}
+FAIL an orientationchange re-runs the chain                   {n:0, stale:true}
+ok   UPRIGHT IS UNCHANGED: the old rule and this one agree exactly
+```
+
+`__viewport()` reports what the chain last acted on beside what the window says
+NOW: a pair that disagrees is a resize nobody re-ran, which is the whole fault
+and is not otherwise observable from the seat.
+
+### What this does NOT fix, and it is the next thing a landscape frame will show
+
+**THE CANVAS HUD HAS NO NOTION OF A SAFE AREA AT ALL, and most of the DOM
+overlays only have the vertical ones.** The shell is served
+`viewport-fit=cover`, so on a notched iPhone in LANDSCAPE
+`env(safe-area-inset-left/right)` become tens of pixels — and the HUD is drawn
+across the full `innerWidth` in HUD pixels with no inset, while `overlays.ts`
+positions `#ov-menu`, `#ov-task` and `#ov-route` at a bare `left: 10px` /
+`right: 10px` (`menu.ts` does carry all four insets). So a turned phone puts the
+clock, the compass, the MENU chip and the task chip under the notch and the home
+indicator. That is a layout decision rather than a defect in the resize chain,
+which is why it is written down here rather than guessed at: the honest fix is a
+set of inset numbers the HUD lays out against, and it wants a frame from the
+seat to judge.
+
+Nothing here has been seen on a device. The harness cannot rotate a real phone,
+and every number above is either arithmetic or a Playwright viewport change; the
+seat's own report on a turned phone is the verification.
+
+
+## The impostor's fidelity is a function of ART PIXELS, and it falls off a cliff at thirty
+
+Asked from the seat: *impostors tend to pop in quite close — compare them at
+closer distances using the contact sheet.* Four sheets on `at-yosemite`, elev 8,
+az 0, one process a distance, the same 37 variants each time. **Read the `px`
+column and not the metres**: the answer is a function of the tree's projected
+size and of nothing else, and the metres are only how a family of a given height
+gets there.
+
+| form | 200 m | 150 m | 100 m | 60 m |
+|---|---|---|---|---|
+| round (12) | **0.950** | 0.863 | 0.498 | 0.478 |
+| umbrella (5) | 0.923 | 0.884 | 0.733 | 0.452 |
+| palm (2) | 0.921 | 0.924 | 0.521 | 0.506 |
+| columnar (2) | 0.915 | 0.903 | 0.522 | 0.491 |
+| **conic (12)** | **0.861** | **0.580** | **0.355** | **0.352** |
+
+…and the same three variants tabulated against `px` rather than distance, which
+is what says it is one curve and not five:
+
+| art px | 103 | 77 | 62 | 49 | 46 | 41 | 31 | 29 | 23 | 20 | 15 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| conifer conic 9 | 0.23 | | 0.23 | | | 0.43 | **0.82** | | | | |
+| broadleaf round 3 | | 0.40 | | | 0.46 | | **0.90** | | 0.94 | | |
+| acacia umbrella 1 | | | | 0.41 | | | | **0.90** | | 0.93 | 0.90 |
+
+**THE BREAKPOINT IS THE CROWN MERGE BAND, TO THE PIXEL.** `EZ_MERGE_PX` is
+`[26, 58]`: a skeleton is untouched above 58 art pixels, fully closed onto its
+own silhouette hull below 26, and **the card is photographed at 26** — the bake
+stands at the bottom of the band on purpose, because *the tier only ever draws
+past the skeletons' own admitted edge, so every card is used where its tree
+would be fully merged.* That assumption is the whole thing, and it is an
+assumption about DISTANCE holding while the cap is free to move the edge.
+
+So above about 30 px the two halves are drawing different crowns, and the sheet
+says which way: at 60 m the card is **2.0 to 2.7 times the coverage** of the
+tree it stands in for and **10 to 25 per cent wider** (conic 2.73 / 1.23, round
+2.08 / 1.19), with height right to a per cent. The `real` column reads 11, 23,
+25 separate pieces of foliage filling 10-36% of the box; the `imp` column reads
+**one piece at 100%, filling 30-75%**. A porous branchy crown against a solid
+blob — which is exactly what a swap at close range looks like, and it is the
+seat's report stated as a number.
+
+**AND THE ATLAS'S OWN COMMENT ALREADY NAMED THE CEILING, which is the second
+witness and is independent of the merge.** `IMP_ATLAS.tile` is 32 px, sized —
+in its own words — against *"a 20 m tree at the tier's near edge (260 m)
+subtends about 25 rows, so a 40 px tile is already over its drawn size."* At
+60 m a conifer subtends **103 art pixels**, so the card is a 32-texel tile
+magnified 3.2x. Even with the merge states matched, a card cannot carry more
+detail than its tile, and the tile was sized for a 25-pixel tree.
+
+Two mechanisms, one number: **a card is honest below about 30 art pixels and
+should not be asked to stand in above it.** For a 10 m tree that is 100 m; for
+the 20 m conifer the atlas was sized against, 200.
+
+Metres per family, from `IMP_PERCEPTIBLE_K` (307.4 px per metre at 1 m) and
+`EZ_M_PER_SCALE` at the rack's mid size draw:
+
+| family | height | fully OPEN nearer than | fully MERGED beyond |
+|---|---|---|---|
+| conifer | 10.5 m | 56 m | **124 m** |
+| palm | 9.0 | 48 | 106 |
+| broadleaf | 8.5 | 45 | 100 |
+| acacia | 7.5 | 40 | 89 |
+| snag | 6.0 | 32 | 71 |
+
+**CONIFER IS WORST AND IS WORST FOR A REASON**: it is the tallest family, so it
+crosses 58 px furthest out (124 m against broadleaf's 100), and its open form
+carries the most structure to lose. It is also the family whose geometry edge
+the budget cuts hardest — the two meet.
+
+**READ `bare` APART.** The four snags read 0.107 at 200 m and 0.415 at 60 m, the
+only row that gets BETTER as it comes closer, and it is not a finding about the
+bake: a snag at 200 m is two or three isolated black pixels — 1% of its own box
+— which a 32 px tile cannot carry under a binary alpha test. That is a statement
+about the snag, and the sheet counts EMPTY and SUB-PIXEL apart for it.
+
+### What this does and does not say about the world
+
+It says where a card and its tree diverge. It does NOT say a card is ever
+actually drawn there — that depends on where the geometry's admitted edge falls,
+which is the population cap's business and moves with the rack. The device dump
+carries it (`trees ez … edge b…/c…/s…`): a run at POPULATION 8X read
+**b325m / c526m / a1729m / p761m / s421m**, and broadleaf at 325 m is 8 art
+pixels, comfortably inside the honest band. **The fault only bites where the cap
+collapses an edge inside the merge band**, and the row that says whether it did
+is `edge` beside the `card floor` on the same line.
+
+So the open question is not the measurement, it is the rule: **admission ranks
+by distance and spends a triangle budget, and nothing in it knows that a tree
+over thirty art pixels is one the card tier cannot cover for.** The shape of the
+answer is the card tier's own, one layer over — that tier stopped rationing by
+count and started rationing by apparent size, and the geometry tier has not.
+Reserving the geometry for everything above the horizon before spending the rest
+of the budget on distance is the same move, and it is not made here.
+
+`DIST=` is the control on `devtools/imp-sheet.mjs`; one process a distance (the
+harness fuse is twenty minutes and the tool takes no list).
+
+
+### …and the device said the mismatch is OUT OF RANGE, which is the more useful answer
+
+The section above measured where a card and its tree diverge and then said the
+open question was whether it bites. A dump from the seat (Nagato, 288 s, chase,
+POPULATION 8X, DRAW RANGE 1400 m, build `d3bdf4dd81e9`) answers it, and the
+answer is no:
+
+```
+trees ez … edge b163/c333/a524/p166/s512
+trees impostor … card reach b2709m/c3160m/a1224m/p2257m/s1093m
+1px at 307m per m of height
+```
+
+A card is drawn from the geometry's own edge outward, so the LARGEST a card is
+ever drawn is its size at that edge:
+
+| family | edge | card px there | at its far reach |
+|---|---|---|---|
+| broadleaf | 163 m | **16.0** | 1.0 |
+| palm | 166 m | **16.7** | 1.2 |
+| conifer | 333 m | 9.7 | 1.0 |
+| acacia | 524 m | 4.4 | 1.9 |
+| snag | 512 m | 3.6 | 1.7 |
+
+**No card on that device is drawn above seventeen art pixels**, and the
+divergence starts above thirty. The whole measured band of the section above is
+unreachable at this rack. **A measurement of where a rule WOULD fail is not a
+finding until something shows the rule is asked there** — and the row that
+settles it is `edge`, which costs a double tap.
+
+**AND THE SHEET AT THE REAL DISTANCE SAYS THE HANDOVER IS SOUND.** Run at
+DIST=163 — the distance a broadleaf card is actually swapped at — on a baked
+azimuth and at the worst case between two:
+
+| form | IoU az 0 | IoU az 22.5 | cov | w | **dlum** |
+|---|---|---|---|---|---|
+| round (12) | 0.920 | 0.885 | 1.08 | 1.01 | **−9 / −13** |
+| umbrella (5) | 0.925 | 0.876 | 1.06 | 1.00 | −6 / −9 |
+| columnar (2) | 0.924 | 0.917 | 1.06 | 1.00 | −1 / −6 |
+| palm (2) | 0.925 | 0.833 | 1.03 | 1.00 | +13 / +5 |
+| *conic (12)* | *0.662* | *0.615* | *1.50* | *1.10* | *−7 / −15* |
+
+**READ THE CONIC ROW AS OUT OF RANGE.** Conifer's own edge is 333 m, so no
+conifer card is ever drawn at 163 m; its 0.66 is what conifer WOULD look like if
+the budget collapsed its edge to a broadleaf's, and it is the one row that says
+what the near band costs. The forms that are actually swapped there —
+broadleaf and palm — read **0.92**.
+
+**THE EIGHT-AZIMUTH CHOICE COSTS 0.03 TO 0.09 OF IoU**, which is the first
+measurement of that trade and is small: the mixing of the two nearest tiles is
+doing its job.
+
+**WHAT IS LEFT AT THE SWAP IS THE LIGHT, NOT THE SHAPE.** `dlum` is −9 to −13 on
+the commonest form and −15 on conic at the worst azimuth: the card is up to
+**fifteen of 255 darker than the skeleton it replaces, which is eight tenths of
+a palette step**, through a quantiser with fourteen levels and an ordered
+dither. A tree brightening as it converts is exactly the kind of one-step change
+this palette turns into a visible flip, and it is the only column at 163 m that
+is not already within a per cent. The palm's **+13** is the same fault with the
+sign reversed. Not fixed here, and it is the cheap one: it is a calibration
+between the bake's light and the world's, not a change to the atlas or the merge.
+
+**AND THE THING THAT IS ACTUALLY CLOSE IS THE GEOMETRY.** A broadleaf is a flat
+card until 163 m of a 1400 m draw range — twelve per cent of the ring — because
+the triangle budget is spent: `cap 28%`, `tris 2.20M` of 2.4M, with conifer
+alone taking 1.14M at 1134 triangles a tree. That is not a card fault and it
+cannot be bought off, because the same session reads **15.1 fps, 83.6% of frames
+slow, 8.5M triangles and 352-501 draw calls**, with trees 2.2M of the total.
+Whatever makes a tree solid nearer than 163 m has to come out of that, not out
+of the impostor.
+
+
+## The ladder has a middle rung: the same tree at a fifth of its triangles, chosen by art pixels
+
+The seat's direction after the device dump: *step back and think deeply about
+how to solve this properly, not just another patch.* The fault the dumps and
+the sheets had circled is structural — the representation ladder had TWO rungs
+a hundred to one apart, a 4-triangle card honest below about 30 art pixels and
+a 450-to-1,134-triangle skeleton, and under a triangle budget the step between
+them landed wherever the triangles ran out: broadleaf skeletons stopping at
+163 m of a 1,400 m ring, drawn at 16 px, with conifer alone spending 1.14M of
+2.2M. Nothing in the card can be tuned to cover for a tree at forty pixels, and
+nothing in the budget can make a skeleton cheaper. What was missing was the
+representation for thirty to sixty pixels, where a trunk is one to three
+pixels wide and a branch is under one.
+
+**IT IS DERIVED FROM THE SAME BAKE, NOT RE-GENERATED, and that is the whole
+design.** EZ-Tree consumes its random draws per section, so a recipe re-run at
+lower detail is a DIFFERENT tree, and a tree that changes shape as you drive at
+it is the fault the seat rejected once already. So:
+
+- **the wood is the same vertices under a second index** — `FLORA_REFINED.woodMid`,
+  meshoptimizer over the welded bake at a 20% target and an error bound of
+  0.008 of the tree's height (`devtools/refine-flora.mjs`). The EZ variants
+  land at 17-20% before the bound binds; the procedural growth forms' five-
+  sided tubes refuse to go under 58% at 0.004 and reach 14-18% at 0.008. Eight
+  centimetres on a 23 cm trunk, at a range where the trunk is two pixels wide.
+- **the crown is halved, and the survivors GROW to keep the silhouette.** A
+  card crown pairs its cards by nearest neighbour and keeps the first of each
+  pair, in place, grown about its own centre; a whorled crown with a cluster
+  partner (the eight growth-form conifers) keeps every anchor and drops the
+  partner pad; a one-pad-an-anchor crown pairs the anchors. Every primitive is
+  its cheapest: three-sided cones, pressed tetrahedra for the pads, octahedra
+  for the blobs, a two-triangle tapered quad for a palm frond.
+- **and it goes through the same `join`, the same surface profile and the same
+  material**, so `aSky`, `aEnv`, `aPad`, `aHull` and `aEzSurf` ride on it,
+  the merge closes it onto the same hull, and the two rungs differ in their
+  index and their crown's primitives and in nothing the shader reads.
+
+**THE RUNG IS A FUNCTION OF PROJECTED HEIGHT AND OF NOTHING ELSE.** `ezRungOf`
+reads `K · height / distance` — the same art-pixel ruler the impostor census
+and the card floor are stated in — and puts a tree on the full skeleton at or
+above `EZ_FULL_PX` (58, `?ezfullpx=`) and on the mid rung below it. Fifty-eight
+is `EZ_MERGE_PX[1]`: above it the crown merge leaves a skeleton untouched, so
+the mid rung is judged against the full one exactly where the merge is not
+already closing both onto one hull. `?ezfullpx=0` is every admitted tree on the
+full rung, the exact A/B. Each tier carries a mid pair beside its full pair
+(`veg-ez-mid`, `veg-ez-mid-far`, the same shadow split), admission grows all
+four to the counts they will take, the place loop writes each tree into its
+rung's mesh, and **the price the allocator is charged is per rung**
+(`ezTierTris`) — which is what lets the rung push the edge out through the
+existing allocator rather than a new one. No hysteresis: a tree crossing the
+line changes rung at the next refresh, and the certification below is what
+says that is a change of triangle count and not of look.
+
+### The growth was solved, because root two was wrong both ways
+
+The first cut grew every survivor by √2 — a pair's area, on paper — and the
+contact sheet at the handover read the whorled conifers at **0.56-0.63 of their
+full coverage** (IoU 0.45-0.53) and the card crowns at **1.22-1.33** (IoU
+0.72-0.80). The first because the dropped partner pads and the gaps between
+survivors are not one pad's area; the second because cards overlap, so a pair's
+silhouette is far less than the sum of its cards'. A crown that fattens or
+thins by a quarter as it crosses the pixel line is the growing tree, wearing a
+new name.
+
+So `calibrateGrow` rasterises the full crown and the mid crown in two side
+projections on a 56² grid and bisects the growth until the mid crown covers
+what the full one covers. Per variant, at decode, stored on the geometry
+(`EzVariant.midGrow`, on `__ezgeo` and the sheet's rows). Three more things it
+took to get there, each caught by the sheet and not by reasoning:
+
+- **Survivors stay where they were.** Moving a survivor to its pair's midpoint
+  reads as the more even choice and measured as a wash (mean IoU 0.749 against
+  0.745): with every card displaced the two rungs overlap only where the crown
+  is dense. In place, half the crown coincides with the full rung's exactly.
+- **A whorled crown drops the partner, not the anchor.** Pairing the anchors of
+  a sparse conifer — thin pads a few pixels wide, half of them moved — read
+  IoU 0.45-0.50 at matched coverage; keeping every anchor and dropping the
+  cluster's partner pad reads 0.60-0.68 at the same triangle count
+  (n anchors × one 4-triangle pad against n/2 × two).
+- **AND THE CALIBRATOR'S REFERENCE WAS BUILT WITH THE PARTNER ALREADY
+  DROPPED.** `fill` was chosen per call rather than per rung, so from inside a
+  mid decode the "full" crown the bisection matched against had no partner pads
+  either: the conifers came out at cov 0.68-0.79 with the calibrator reporting
+  a match. A reference drawn by the rule under test is the fabricated witness
+  this file keeps recording, met inside an instrument built to catch it. The
+  fill is `fillFor(rung)` now, and the conifers' solved growth went 1.18-1.26
+  → 1.44-1.63.
+
+### Measured: the atlas, the sheet, the world
+
+**The decode** (a pure-node script over the bundled module, the whole atlas):
+
+| form | n | full tris | mid tris | ratio | solved growth |
+|---|---|---|---|---|---|
+| round | 12 | 573 | 191 | 0.31 | 1.06-1.39 |
+| columnar | 2 | 1,068 | 500 | 0.47 | 1.09-1.12 |
+| umbrella | 5 | 580 | 188 | 0.33 | 1.08-1.28 |
+| conic | 12 | 962 | 231 | 0.23 | 1.29-1.63 |
+| palm | 2 | 590 | 134 | 0.23 | 1.58-2.02 |
+| bare | 4 | 189 | 63 | 0.34 | 1 |
+| **atlas** | 37 | **25,386** | **7,518** | **0.30** | |
+
+The columnar broadleaf is the dearest mid at 0.47 — its 1,068 triangles are
+three times the cards of a round oak's (the stack-of-plates fix), and half of
+many cards is still many cards.
+
+**The sheet** (`MID=1 node devtools/imp-sheet.mjs`, `at-yosemite`, elev 8°, az
+0, each form read at the distance where it crosses the pixel line — round and
+columnar at 80 m (58 px), conic at 100 m (59-63 px for the frond recipe,
+49-63 for the growth forms), umbrella and bare at 50 m (57-59 px), palm at 80 m
+(55 px)):
+
+| form | IoU | cov | h | w | dlum |
+|---|---|---|---|---|---|
+| round, the six EZ oaks and aspens | **0.80-0.94** | 0.99-1.05 | 0.98-1.04 | 0.98-1.04 | −6..+6 |
+| columnar | **0.91** | 1.01 | 1.00 | 1.01 | 1 |
+| umbrella (acacia and mangrove) | **0.81-0.83** | 0.98-1.01 | 1.01-1.03 | 1.04-1.08 | −1 |
+| palm | **0.89** | 1.05 | 1.00 | 1.00 | 7 |
+| bare | **0.85-0.91** | 0.87-0.94 | 0.86-0.89 | 0.58-0.73 | 0 |
+| conic 1-4, the frond recipe | **0.77-0.85** | 0.95-1.03 | 0.98-1.00 | 0.96-1.00 | −3..+1 |
+| **conic 5-12, the growth forms** | **0.57-0.68** | 0.89-1.05 | 0.98-1.00 | 0.78-1.07 | −1..+8 |
+
+Mean IoU over all 37 is 0.78-0.79 at every distance from 50 to 100 m, against
+0.73 for the √2 cut. **Read the last row as the open item.** Coverage, height
+and luminance agree, and the mass reads the same on the sheet; what differs is
+WHERE half the pads sit, which for a sparse whorled crown at sixty pixels is a
+reshuffle of three-pixel pads at the swap. Keeping every pad of those eight
+variants at four triangles would take their mid from 135-189 triangles to
+about 255-360 (0.35 of full instead of 0.19) and is the honest next cut if the
+seat sees it; moving their line lower, into the band where the merge has begun
+closing both crowns onto one hull, is the other. `bare`'s low `w` is the
+sheet's own note about snags at sixty pixels (two or three isolated pixels),
+not the rung's.
+
+**The world** (`at-yosemite`, chase, `nodraw`, two boots with `?ezfullpx=` the
+only difference, settled on the placed count; the harness seeds its rack at a
+0.3M EZ TRI CAP, so the budget is small and the RATIOS are the reading):
+
+| same 0.3M budget | `?ezfullpx=0` | 58 px |
+|---|---|---|
+| placed b / c / s | 153 / 136 / 44 | **384 / 342 / 110** |
+| on the mid rung | 0 | 376 / 308 / 110 |
+| edge b / c / s | 311 / 190 / 206 m | **533 / 260 / 279 m** |
+| price b / c / s | 1,068 / 834 / 191 | **512 / 239 / 60** |
+| triangles drawn | 0.29M | **0.28M** |
+| cap | 7% | 18% |
+
+Two and a half times the trees at the same triangle bill, and the admitted edge
+71% further out for broadleaf, 37% for conifer, 35% for snag. The first live run
+also caught the price clamp binding: conifer read exactly 428 = 0.25 × 1,713
+and snag exactly 83 = 0.25 × 333, both families charged about twice what the
+GPU was handed. The floor is a tenth of the mean now — the mid rung honestly
+costs a fifth — and the second run reads 239 and 60, off the clamp.
+
+**And the sandbox** (`client/perf-check.mjs`): every original leg runs with
+the line at zero, where the per-mesh byte identity against the pre-rung
+baseline is the original claim exactly; a new leg at 58 px asserts the MULTISET
+— every instance row the baseline wrote into a variant's near mesh is in the
+tree's near or mid-near mesh and nothing else is, the same for far, every
+count agrees, the rung fired both ways (10,868 mid, 41 full on the fixture),
+and the rest of the snapshot is byte-identical. Negative control run: the line
+at 1e9 fails on `full > 0`, and the comment beside it says why the multiset
+checks pass there by construction.
+
+### What it costs, and what is not verified
+
+- **Decode is about twice what it was.** The calibration is 360-570 ms over
+  thirty-three crowns in node (noisy under load), on top of the mid decode
+  itself; the whole atlas is now about a second in node, paid at boot before
+  the first frame, and a phone is slower. `__ez().decode` reports it. The cut,
+  when it is wanted, is to bake the solved growth into the refined file.
+- **The refined bake was regenerated**, and four fine-wood indices moved by a
+  triangle or two (`Pine Small #44`, `#17`, `Aspen Small #71`, `Oak Small
+  #37`): the checked-in file predated the current bake, and two runs of the
+  script now agree byte for byte. The growth forms' section is unchanged.
+- **Nothing here has been seen on a device.** The handover from the seat, the
+  frame rate with 2.5× the trees standing, and the boot-time decode on a phone
+  are the next dump's to answer; the row to read is `trees ez … mid b…/c…/s…
+  at 58px` beside `edge`, and `tree phases` for the refresh.
+- The sheet compares the RAW crowns, above the merge band; below the line both
+  rungs close onto the same hull, so the swap at the line is the worst case
+  and the certification is taken there on purpose.
+
+
+## The chart tilts to the horizon, and a chart on the horizon is a chase view
+
+Asked from the seat: the chart's tilt slider ran from face-on (90°) to 45°,
+and the 45° floor should go *all the way, to 0°*. It does — `CHART_TILT_MIN`
+is 0 and `CHART_TILT_MAX` 89.5 — and three rules had to go in with it, each
+of which the arithmetic of the old floor had never needed:
+
+- **THE EYE STAYS OUT OF THE GROUND.** The top camera stands `dist·cos(tilt)`
+  behind its target and `dist·sin(tilt)` above `chartGround(target)`, so at 0°
+  it stands at the target's own ground height, 122 m away across whatever
+  the ground does in between — inside the first rise of a valley floor.
+  Below half a radian the eye is lifted to `CHART_EYE_CLEAR` (2.2 m, the cab's
+  own eye) over the ground under IT, `chartGround(camPos)`, which the remote
+  raster answers anywhere the chart can look. What that does NOT do is keep
+  the RIG in sight: at 0° over the Yosemite floor the sweep frame shows sky,
+  the treeline and a metre of grass, and the truck is behind the ground
+  between. A 10° tilt keeps it; 0° is eye level and reads as such.
+- **THE REACH IS FLOORED AT 12°.** `viewRadius` and `backdropRadius` stretch
+  by `1/cos(90 − tilt)` so a tilted chart streams the ground its far edge
+  looks over — a stretch that is 1.4 at 45°, 5.8 at 10° and INFINITE at 0°,
+  where the frame's far edge is the horizon and every layer would have been
+  asked for `SIGHT_MAX` and the whole tile ladder with it, for a frame whose
+  ground past a hundred metres is a strip a few art pixels tall.
+  `CHART_TILT_REACH_MIN` clamps the angle the stretch is computed from; the
+  camera's own tilt is not clamped.
+- **AND THE TILT-SHIFT BAND SLIDES TO THE SEAT'S.** `aimFocus` read the
+  preset's chart row whenever `camMode` was `top`, and that row was written
+  for a frame looking DOWN, where the band is a slab across the ground with a
+  junction in its sharp third. On the first sweep the 10° and 0° frames came
+  back as a sharp stripe at the focal distance and everything nearer — most
+  of the pane — a wash, because a camera looking ALONG the ground meets a
+  vertical focus plane the way the chase seat does, and the chase row exists
+  precisely because that geometry wants a different band. `chartLensK()` is
+  1 at 45° and above (nothing the old slider could reach moves) and 0 at 15°
+  and below; the band, the HUD's band scale and the chase near-scale all
+  blend on it. `__tilt().lens` reports it.
+
+Measured with a one-boot sweep at Yosemite (`?cam=top&time=NOON&wx=clear`,
+zoom 0.7, `__chartlens({tilt})` at 89.5 / 70 / 45 / 25 / 10 / 0): camera
+distance 122–132 m throughout, no page errors, and `d.page.screenshot` with
+a 240 s timeout — `d.shot()`'s default times out on a DRAWN chart. The
+frames are the judgement and were sent to the seat; the lens blend was made
+after them and the 25 / 10 / 0 frames re-taken with it: at 25° the frame is
+sharp with soft edges, at 10° the rig and the road are in focus over a mildly
+soft foreground, and at 0° the near grass came back where the first set had a
+wash from the treeline down.
+
+**NOT VERIFIED ON A DEVICE, AND NOT DEPLOYED:** the seat asked for local
+iteration on screenshots with no deploy and no pull until it says so, and
+that is the state this ships in — committed on the branch, nothing pushed.
+
+## The sward is two to four times denser at the focus, on a lattice of its own
+
+*Sward density at the vehicle/focus should be 2–4×'d.* The law's plateau is
+`SWARD_SITES` (12/m²) inside `SWARD_NEAR` (14 m), and 12 is the 0.28 m
+lattice's own ceiling (12.76) with a little air under it — so asking the law
+for twenty-four at the truck is asking a carrier for twice what it holds,
+which is the partition-of-unity fault this file already records as rings.
+The boost is therefore two things at once, or it is a ring:
+
+- **A FOURTH BAND AT HALF THE NEAR STEP.** `[0.14, 200, [−1, 0, R·0.7, R]]`
+  in `SWARD_BANDS`: 51/m² of capacity to `SWARD_NEAR_R` (14 m), 40,000
+  slots. It is the second entry, not the first — `SWARD_BANDS[0]` is read
+  elsewhere as the 0.28 band and the last entry as the outermost, and both
+  stay where they were.
+- **A MULTIPLIER ON THE LAW THAT FADES OVER THE SAME RADIUS.** `swardBoostAt`
+  is `SWARD_NEAR_X` inside 0.35·R, 1 past R, a smoothstep between; the GPU
+  field carries the identical expression (`uSwardBoost`, `uSwardBoostR`) so
+  the profile probe and the field agree by construction. `?swardnear=` is
+  the multiplier, 1 is the law exactly as it was and the exact A/B, 3 is the
+  default until a frame says otherwise.
+- **AND THE NEAR BAND HANDS OVER, OR THE FIRST CUT'S PROFILE SAYS WHY NOT.**
+  With the 0.28 band left at full weight under the new one, `__swardprofile`
+  read the field delivering **200% of its target inside 10 m** and failed on
+  coverage steps: two carriers both at their full share of one law is the
+  sum, not the law. The 0.28 band's inner blend is a handover now
+  (`[R·0.7, R, 32, 45]`), so inside 0.7 R the 0.14 lattice carries the lot
+  and the two cross over exactly where the boost is fading out.
+
+Measured (`devtools/sward-profile.mjs`, `at-campsbay`, `ARGS='swardnear=N'`):
+at 3× the law wants **29.6/m² inside 8 m** against the 0.14 band's 51/m²,
+at 4× **39.4**, and both pass — *coverage follows the law at every radius,
+0 of 116 short* — with the tuft fullness flat at ×1.00, so the compensation
+valve never opens. Slots 224,096 → **264,096, +18%**, all of it in the new
+band. Past 14 m nothing moves: the law, the bands and the fade out to 232 m
+are exactly what shipped. From the cab at Camps Bay (`?swardnear=1/2/3/4`,
+one boot each, HUD off, noon): the foreground goes from scattered tufts at
+1× to a thick meadow at 3× and thicker again at 4×, and the field past the
+radius reads the same in all four frames by eye.
+
+**WHY NOT A STEEPER LAW:** raising `SWARD_SITES` and pulling `SWARD_NEAR` in
+thins the whole field past 14 m by the same factor, because the law is one
+curve; a bump that fades to one leaves everything past its radius alone,
+which is the half of the ask that was not asked.
+
+## Up close, a crown is leaves and a bush is not a polyhedron
+
+Deferred from the impostor and mid-rung work and asked for again: *fine
+fragment shader details in trees and shrubs (leaves and depth to "hide"
+geometry) when viewed up close.* Two materials, one pair of dials, and the
+rule for WHERE it draws is the rule the rung and the card already use.
+
+- **THE SKELETONS (`ezMaterial`) GATE ON ART PIXELS.** `ezClose` is
+  `smoothstep(64, 128, vEzPx)`: nothing below 64 — above the merge band's top
+  (58), so every tree the contact sheets certify and every tree a card stands
+  in for is untouched to the pixel — and whole by 128, which is a 10 m tree
+  at 24 m. Inside it a leaf-scale value noise in the skeleton's OWN frame
+  (`vEzLocal`, the vertex before the wind moved it, so the holes ride the
+  sway with the leaf; `vEzJit` per instance, so two trees of one variant are
+  not the same tree) is DISCARDED below `uEzCut · ezClose` — binary alpha,
+  as the rendering doctrine wants, and a card seen through its own holes is
+  the depth the ask was about. A finer grain (`ezLfP`, 105 cells a unit
+  height) modulates the diffuse 0.80–1.14 and its screen gradient bends the
+  shading normal by 0.35, band-limited by `fwidth` so it fades before it can
+  alias; the constants are on `ezLookU` (`uEzCut` 0.40, `uEzGrain` 0.9).
+- **THE ARCHETYPES AND THE SHRUBS (`leafMat`) GATE ON DISTANCE**, whole
+  inside 16 m and gone by 36, because an archetype carries no `vEzPx`; for a
+  two-metre bush that is about the same eighty art pixels. `foliageClose` is
+  chained INTO the wind hook (first in the chain, so `terrainFx` and
+  `grainFx` still find and call it — the one-slot trap this file records
+  under the wind), with `vLeafLocal = position` before the wind. **A cactus
+  is a solid and takes no cut**: `cactusMat` is the same material without it,
+  because the object was one shared `leafMat` and the cut is a property of
+  the material's fragment.
+- **`?ezcut=` (0–0.7) and `?ezgrain=` (0–2) are the switches**, 0 the exact
+  A/B for each; the flora lab carries them as LEAF CUT-OUT and LEAF GRAIN so
+  the numbers can be argued with on one stand.
+
+Measured in the lab first (`flora-guild.mjs --places="YOSEMITE,CAPE PENINSULA"
+--dist=14 --eye=2.2 --turn=0.6`, the same frames before and after, no page
+errors — which is the GLSL link check, since the lab DRAWS both materials):
+the Yosemite crowns go from flat green cards on sticks to porous spotted
+masses, the columnar aspens most of all; the Cape's fynbos, which at 14 m had
+filled the frame with hard dark facets, reads as blotchy leaf-mass shading
+with holes through to the bush behind. Then from the seat, one boot a leg
+with `?ezcut=0&ezgrain=0` as the control: at `at-campsbay` the sclerophyll
+crown beside the cab goes from solid green cards to leaf masses with holes
+through them, and the fynbos on the chase frame's flanks loses its facets.
+**At `at-yosemite`'s spawn the pair is IDENTICAL, and that is the gate**: no
+tree stands inside 128 art pixels there (a 10.5 m conifer has to be within
+25 m), so nothing was cut — the null the gate predicts, not the term
+failing. Photograph a stand from inside it or the frames say nothing.
+
+**NOT MEASURED: the fragment cost on a device.** A `discard` inside 128 px
+costs early-z for the near crowns' fragments only, and the grain is one
+noise and two derivatives on those same fragments; the harness cannot price
+it. The next telemetry paste from a stand of near trees is the verification.
+
+### …and the pull after it was half landed, for the second time
+
+Pulled the cell after the three units above (the seat approved the push and
+asked for a pull; no deploy). The cell held another agent's sky and rain
+work on top of `b982807` — rain curtains in the composite, weather terms in
+`terrainFx`, `fetchLiveWeather`/`stepWeather` reading an advected travel,
+`advectX/advectZ` on `WxTargets` — and none of the three units, so four of
+the five files here were the cell simply BEHIND (empty diff against the
+commit before mine, restored) and `main.ts` was both: their 160 insertions
+re-applied over `275bba7` as a three-way patch, clean, committed verbatim as
+NOT MINE (`f041b59`).
+
+**AND IT DID NOT TYPE-CHECK, exactly as the polish-pass pull did not.**
+`main.ts` reads `qs('raincurtain')` and the cell's `switches.ts` has no
+such row, so the typed reader refused it — which is the reader doing its
+one job. The row is declared in the commit after theirs, so their diff is
+theirs exactly and the tree is green. **Read `tsc` before reading a pulled
+diff**: a snapshot of another editor is not a release, and the second pull
+is what completes the first.
+
+**And the second pull, ten minutes later, was half landed too** (`a31ebdb`,
+the other agent's building fabric: `building-fabric.ts`, `fabric-shader.ts`,
+`facade.ts`, the lab, seven `main.ts` hunks). `facade.ts` wrote
+`extensions` on a `MeshLambertMaterial`, which three's program builder reads
+on any material and `@types/three` declares only on `ShaderMaterial`; the
+structural cast in the commit after it is the whole fix. Two pulls, two
+`tsc` failures, both theirs to the letter and neither a runtime fault:
+**the other author does not run the type check, so the pull's first act is
+`tsc`, and the fix is always a commit of its own after the verbatim one.**
+A second copy of `main.ts` from the previous pull is what makes the second
+pull cheap — `diff -u` between the two cell copies is exactly the new work,
+and `patch` lays it over the branch's head with offsets and no conflicts.

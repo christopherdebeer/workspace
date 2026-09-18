@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { HydroBodyRegistry } from './body-registry';
-import { analyseHydroTile, buildHydroTile, type HydroTileAnalysis } from './build-tile';
+import { analyseHydroTile, buildHydroTile, seaTouching, seaTouchingStats, type HydroTileAnalysis } from './build-tile';
 import { clamp, sampleElevation } from './geometry';
 import { sampleFieldSurface } from './field-sample';
+import { extractHydroShoreSegments } from './shore-contour';
 import {
   createHydroFrameUniforms,
   createHydroMaterial,
@@ -33,13 +34,33 @@ import {
 export interface HydroSystemOptions extends Partial<HydroBuildOptions> {
   /** Broad displacement geometry only; shoreline precision comes from fields. */
   meshResolution?: number;
+  /**
+   * Ocean/lagoon geometry tier relative to the broad river/lake lattice.
+   * Production's 32-cell base becomes 96 cells across coastal tiles: enough
+   * for geometric swell and crest shape without charging every river tile.
+   */
+  coastalMeshMultiplier?: number;
   /** Registry-induced rebuilds admitted per frame. */
   rebuildsPerFrame?: number;
+  /**
+   * Higher field tier for river/stream/canal tiles. Dry and standing-water
+   * records retain `fieldResolution`, avoiding a fourfold memory tax across
+   * the streamed ring solely to place narrow channel banks more precisely.
+   */
+  flowingFieldResolution?: number;
   /** Replace with a worker bridge without changing the public lifecycle. */
   scheduleBuild?: (job: () => HydroTileField) => Promise<HydroTileField>;
   /** The scene's own darkening of a lit surface — the cloud deck's shadow —
    *  so the water shades where the ground beside it shades. */
   sceneShade?: SceneShade;
+  /**
+   * Build and retain fields without creating render resources. A versioned
+   * substrate tile can then commit that exact field through `renderField`.
+   * This is the guarded production-render cutover; false preserves rollback.
+   */
+  deferRendering?: boolean;
+  /** See HydroBuildOptions.dryShortCircuit — `?hydrodry=0` is the A/B. */
+  dryShortCircuit?: boolean;
 }
 
 export interface HydroTileBinding extends HydroTileGpuBinding {
@@ -73,6 +94,23 @@ export interface HydroSystem {
   getTuning(): Readonly<HydroTuning>;
   update(frame: HydroFrame): void;
   getTileBinding(key: TileKey): HydroTileBinding | undefined;
+  debugTile(key: TileKey): object | null;
+  /**
+   * True only when `field` is the exact immutable field currently retained
+   * for its tile and can therefore be committed without changing authority.
+   * Substrate uses this as the non-mutating half of an atomic render preflight.
+   */
+  canRenderField(field: HydroTileField): boolean;
+  /**
+   * Commit the exact field retained by this system to GPU rendering.
+   * Returns false for stale, foreign, or superseded fields.
+   */
+  renderField(field: HydroTileField): boolean;
+  /**
+   * Remove a tile's render resources while retaining its immutable field.
+   * Substrate invalidation uses this while a replacement tile is assembled.
+   */
+  unrenderTile(key: TileKey): void;
   /**
    * Sample the field at a caller-owned coverage cut. The default preserves
    * the field's canonical 0.5 classification; rendering/physics callers pass
@@ -105,7 +143,15 @@ interface TileRecord {
   textures?: HydroTileTextures;
   /** Standing, flowing, and (for coastal tiles) a narrow swash overlay. */
   parts: TilePart[];
+  /** The field `parts` were built from. In deferred mode it lags `field`:
+   *  the old picture stays up until the substrate admits the new one. */
+  renderedField?: HydroTileField;
   binding?: HydroTileBinding;
+  shoreRefinedCells: number;
+  meshSegmentsX: number;
+  meshSegmentsZ: number;
+  coastalMesh: boolean;
+  meshTriangles: number;
 }
 
 const immediateBuild = async (job: () => HydroTileField): Promise<HydroTileField> => job();
@@ -152,6 +198,15 @@ interface WaterGeometries {
   flowing?: THREE.BufferGeometry;
   /** Coastal cells only, locally subdivided for connected swash/run-up. */
   surf?: THREE.BufferGeometry;
+  /** The corresponding body contains an inland shore and therefore compiles
+   *  the continuous edge blend into that body rather than adding an overlay. */
+  standingEdgeBlend: boolean;
+  flowingEdgeBlend: boolean;
+  /** Parent cells crossed by the canonical inland coverage contour and
+   *  tessellated inside the same body. */
+  shoreRefinedCells: number;
+  segmentsX: number;
+  segmentsZ: number;
 }
 function waterGeometry(field: HydroTileField, segments: number): WaterGeometries {
   const rect = field.waterBounds ?? field.bounds;
@@ -184,10 +239,13 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
   // cell — see the regime note above).
   const keep = new Uint8Array(segmentsX * segmentsZ);
   const fallKeep = new Uint8Array(segmentsX * segmentsZ);
+  const shoreKeep = new Uint8Array(segmentsX * segmentsZ);
   // The surf strip is independent of the broad water cull: it is allowed into
   // the one-texel dry margin around waterBounds, but only where the propagated
   // body class is ocean/lagoon and signed distance says this is truly shore.
   const surfKeep = new Uint8Array(segmentsX * segmentsZ);
+  let standingEdgeBlend = false;
+  let flowingEdgeBlend = false;
   for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
     const x0 = rect.minX + (i / segmentsX) * rectSpanX;
     const x1 = rect.minX + ((i + 1) / segmentsX) * rectSpanX;
@@ -199,14 +257,27 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     const iz1 = Math.min(field.height - 1, Math.ceil(fieldIz(z1)) + 1);
     let regime = 0;
     let coastalShore = false;
+    let inlandKind = false;
+    let minCoverage = 1;
+    let maxCoverage = 0;
     for (let iz = iz0; iz <= iz1; iz++) {
       for (let ix = ix0; ix <= ix1; ix++) {
         const t = iz * field.width + ix;
         const coverage = field.geometry[t * 4];
         const kind = field.material[t * 4];
         const signedShore = field.geometry[t * 4 + 1];
+        minCoverage = Math.min(minCoverage, coverage);
+        maxCoverage = Math.max(maxCoverage, coverage);
         if ((kind === 1 || kind === 2) && Math.abs(signedShore) <= 96) {
           coastalShore = true;
+        }
+        if (kind >= 3 && Math.abs(signedShore) <= 48) {
+          inlandKind = true;
+          if ((field.material[t * 4 + 3] & HydroFlags.Flowing) !== 0) {
+            flowingEdgeBlend = true;
+          } else {
+            standingEdgeBlend = true;
+          }
         }
         if (coverage <= 0.005) continue;
         if (field.waterfalls && (field.waterfalls[t * 4] > 0.01 || field.waterfalls[t * 4 + 2] > 0.05))
@@ -218,16 +289,17 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     const cell = j * segmentsX + i;
     keep[cell] = regime;
     surfKeep[cell] = coastalShore ? 1 : 0;
+    shoreKeep[cell] = inlandKind && minCoverage < .62 && maxCoverage > .38 ? 1 : 0;
   }
   const build = (regime: number): THREE.BufferGeometry | undefined => {
     const pos: number[] = [], uvs: number[] = [], idx: number[] = [];
     // Only connected drops and their landing regions need the fine grid.
     // Coarse neighbours stitch to fine edges, so this saving creates no
     // T-junctions whose displaced midpoint could open a crack.
-    const subdivision = regime === 2 ? Math.min(4, Math.max(1, Math.ceil(Math.max(
+    const subdivision = Math.min(8, Math.max(1, Math.ceil(Math.max(
       rectSpanX / segmentsX / (spanX / (field.resolution - 1)),
       rectSpanZ / segmentsZ / (spanZ / (field.resolution - 1)),
-    )))) : 1;
+    ))));
     const fineX = segmentsX * subdivision, fineZ = segmentsZ * subdivision;
     const vert = new Map<string, number>();
     const at = (i: number, j: number): number => {
@@ -244,9 +316,11 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
       if (keep[j * segmentsX + i] !== regime) continue;
       const x = i * subdivision, z = j * subdivision;
-      const fine = (a: number, b: number): boolean => regime === 2
-        && a >= 0 && b >= 0 && a < segmentsX && b < segmentsZ
-        && keep[b * segmentsX + a] === 2 && fallKeep[b * segmentsX + a] !== 0;
+      const fine = (a: number, b: number): boolean =>
+        a >= 0 && b >= 0 && a < segmentsX && b < segmentsZ
+        && keep[b * segmentsX + a] === regime
+        && (shoreKeep[b * segmentsX + a] !== 0
+          || regime === 2 && fallKeep[b * segmentsX + a] !== 0);
       if (fine(i, j)) {
         for (let dz = 0; dz < subdivision; dz++) for (let dx = 0; dx < subdivision; dx++) {
           const a = at(x + dx, z + dz), b = at(x + dx + 1, z + dz);
@@ -278,7 +352,6 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     geo.computeBoundingSphere();
     return geo;
   };
-
   // A production coastal cell is about 75m wide. Eight local subdivisions
   // bring only the swash cells down to about 9m without tessellating the open
   // ocean. Vertices are shared across neighbouring parent cells.
@@ -317,7 +390,25 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     geo.computeBoundingSphere();
     return geo;
   };
-  return { standing: build(1), flowing: build(2), surf: buildSurf() };
+  return {
+    standing: build(1),
+    flowing: build(2),
+    surf: buildSurf(),
+    standingEdgeBlend,
+    flowingEdgeBlend,
+    shoreRefinedCells: shoreKeep.reduce((sum, refined) => sum + refined, 0),
+    segmentsX,
+    segmentsZ,
+  };
+}
+
+function hasCoastalWater(field: HydroTileField): boolean {
+  for (let i = 0; i < field.width * field.height; i++) {
+    if (field.geometry[i * 4] <= 0.005) continue;
+    const kind = field.material[i * 4];
+    if (kind === 1 || kind === 2) return true;
+  }
+  return false;
 }
 
 function worldToUv(field: HydroTileField): THREE.Matrix3 {
@@ -358,8 +449,11 @@ class DefaultHydroSystem implements HydroSystem {
   private readonly frameUniforms: HydroFrameUniforms = createHydroFrameUniforms();
   private readonly buildOptions: HydroBuildOptions;
   private readonly meshSegments: number;
+  private readonly coastalMeshMultiplier: number;
+  private readonly flowingFieldResolution: number;
   private readonly scheduleBuild: (job: () => HydroTileField) => Promise<HydroTileField>;
   private readonly sceneShade: SceneShade | undefined;
+  private readonly deferRendering: boolean;
   private readonly rebuildsPerFrame: number;
   private disposed = false;
   private tuning: HydroTuning = { ...DEFAULT_HYDRO_TUNING };
@@ -378,12 +472,24 @@ class DefaultHydroSystem implements HydroSystem {
       oceanLevelM: options.oceanLevelM ?? DEFAULT_HYDRO_BUILD.oceanLevelM,
       shoreDistanceLimitM: options.shoreDistanceLimitM ?? DEFAULT_HYDRO_BUILD.shoreDistanceLimitM,
       minimumDepthM: options.minimumDepthM ?? DEFAULT_HYDRO_BUILD.minimumDepthM,
+      coastField: options.coastField ?? DEFAULT_HYDRO_BUILD.coastField,
+      dryShortCircuit: options.dryShortCircuit ?? DEFAULT_HYDRO_BUILD.dryShortCircuit,
     };
     this.registry = new HydroBodyRegistry(this.buildOptions.oceanLevelM);
     this.scheduleBuild = options.scheduleBuild ?? immediateBuild;
     this.sceneShade = options.sceneShade;
+    this.deferRendering = options.deferRendering ?? false;
     this.rebuildsPerFrame = Math.max(1, Math.floor(options.rebuildsPerFrame ?? 1));
     this.meshSegments = Math.max(4, Math.floor(options.meshResolution ?? 32));
+    this.coastalMeshMultiplier = clamp(
+      Math.floor(options.coastalMeshMultiplier ?? 3),
+      1,
+      4,
+    );
+    this.flowingFieldResolution = Math.max(
+      this.buildOptions.fieldResolution,
+      Math.floor(options.flowingFieldResolution ?? this.buildOptions.fieldResolution),
+    );
     this.object3d.name = 'hydro-system';
   }
 
@@ -399,7 +505,8 @@ class DefaultHydroSystem implements HydroSystem {
     if (!record) {
       record = {
         input, analysis, generation: 1, dirty: true, building: false,
-        chain: Promise.resolve(), parts: [],
+        chain: Promise.resolve(), parts: [], shoreRefinedCells: 0,
+        meshSegmentsX: 0, meshSegmentsZ: 0, coastalMesh: false, meshTriangles: 0,
       };
       this.records.set(input.key, record);
     } else {
@@ -429,7 +536,7 @@ class DefaultHydroSystem implements HydroSystem {
   }
 
   setDebugView(view: HydroDebugView): void {
-    const views: HydroDebugView[] = ['surface', 'coverage', 'shore', 'depth', 'flow', 'class'];
+    const views: HydroDebugView[] = ['surface', 'coverage', 'shore', 'depth', 'flow', 'class', 'coast'];
     this.frameUniforms.uDebugView.value = Math.max(0, views.indexOf(view));
   }
 
@@ -439,6 +546,7 @@ class DefaultHydroSystem implements HydroSystem {
     this.tuning = {
       waveAmplitude: finite(patch.waveAmplitude, this.tuning.waveAmplitude),
       waveLength: finite(patch.waveLength, this.tuning.waveLength),
+      waveChop: finite(patch.waveChop, this.tuning.waveChop),
       rippleStrength: finite(patch.rippleStrength, this.tuning.rippleStrength),
       foamStrength: finite(patch.foamStrength, this.tuning.foamStrength),
       shoreFade: finite(patch.shoreFade, this.tuning.shoreFade),
@@ -449,6 +557,7 @@ class DefaultHydroSystem implements HydroSystem {
     };
     this.frameUniforms.uWaveAmplitude.value = this.tuning.waveAmplitude;
     this.frameUniforms.uWaveLength.value = this.tuning.waveLength;
+    this.frameUniforms.uWaveChop.value = this.tuning.waveChop;
     this.frameUniforms.uRippleStrength.value = this.tuning.rippleStrength;
     this.frameUniforms.uFoamStrength.value = this.tuning.foamStrength;
     this.frameUniforms.uShoreFade.value = this.tuning.shoreFade;
@@ -530,13 +639,17 @@ class DefaultHydroSystem implements HydroSystem {
     time: number,
     rig: HydroFrame['rig'],
   ): void {
-    const wading = !!rig && rig.wadeM > 0.02;
+    const wading = !!rig && (rig.wakeStrength ?? rig.wadeM) > 0.02;
     this.rigTrail = this.rigTrail.filter((p) => time - p.born < 14);
 
     if (wading && rig) {
       const speed = Math.hypot(rig.vx, rig.vz);
-      const strength = clamp(rig.wadeM / 0.55, 0, 1)
-        * clamp(0.38 + speed * 0.09, 0.38, 1);
+      const strength = clamp(
+        rig.wakeStrength
+          ?? clamp(rig.wadeM / 0.55, 0, 1) * clamp(0.38 + speed * 0.09, 0.38, 1),
+        0,
+        1,
+      );
       const latest = this.rigTrail[0];
       const gap = latest ? Math.hypot(rig.x - latest.x, rig.z - latest.z) : Infinity;
 
@@ -565,7 +678,12 @@ class DefaultHydroSystem implements HydroSystem {
       const speed = Math.hypot(rig.vx, rig.vz);
       upload[count++].set(
         rig.x, rig.z, 0,
-        clamp(rig.wadeM / 0.55, 0, 1) * clamp(0.38 + speed * 0.09, 0.38, 1),
+        clamp(
+          rig.wakeStrength
+            ?? clamp(rig.wadeM / 0.55, 0, 1) * clamp(0.38 + speed * 0.09, 0.38, 1),
+          0,
+          1,
+        ),
       );
     }
     for (const point of this.rigTrail) {
@@ -578,6 +696,53 @@ class DefaultHydroSystem implements HydroSystem {
 
   getTileBinding(key: TileKey): HydroTileBinding | undefined {
     return this.records.get(key)?.binding;
+  }
+
+  /** WHAT WATER IS HERE, AND WHY: the tile's features as they were handed
+   *  in, what the analysis makes of each (`seaTouching`), the coverage's
+   *  state, and the bodies the field was painted from with the kind the
+   *  registry settled on — because "why is this water a lake" took a
+   *  screenshot, a probe and a guess before this answered it in one call. */
+  debugTile(key: TileKey): object | null {
+    const record = this.records.get(key);
+    if (!record) return null;
+    const input = record.input;
+    return {
+      key, revision: input.revision, oceanCoverage: input.oceanCoverage.status,
+      features: input.features.map((f) => ({
+        id: f.id, kind: f.kind, geometry: f.geometry.type,
+        seaTouching: seaTouching(input, f),
+        ...seaTouchingStats(input, f),
+      })),
+      bodies: (record.field?.bodyIds ?? []).map((id) => {
+        const body = this.registry.get(id);
+        return { id, kind: body?.kind ?? null, level: body?.level.type ?? null };
+      }),
+    };
+  }
+
+  canRenderField(field: HydroTileField): boolean {
+    if (this.disposed) return false;
+    const record = this.records.get(field.key);
+    return !!record && record.field === field && record.input.revision === field.revision;
+  }
+
+  renderField(field: HydroTileField): boolean {
+    if (!this.canRenderField(field)) return false;
+    const record = this.records.get(field.key)!;
+    // Identity matters as well as revision. A substrate tile must commit the
+    // immutable field it captured, not an equal-looking field reconstructed
+    // after the renderer's record advanced. And "already rendered" is asked
+    // of the FIELD, not of the parts: in deferred mode the parts on screen
+    // may be the previous field's, kept up until this admission swaps them.
+    if (record.renderedField === field) return true;
+    this.installRender(record, field);
+    return true;
+  }
+
+  unrenderTile(key: TileKey): void {
+    const record = this.records.get(key);
+    if (record) this.releaseRender(record);
   }
 
   sampleRestingSurface(x: number, z: number, coverageCut = 0.5): HydroSample | undefined {
@@ -612,12 +777,16 @@ class DefaultHydroSystem implements HydroSystem {
       const i = iz * field.width + ix;
       const bodies = this.registry.bodiesForTile(key).map((b) => ({
         id: b.id, kind: b.kind, level: b.level.type,
+        bedMaterial: b.bedMaterial,
+        bankMaterial: b.bankMaterial,
         elevationM: b.level.type === 'profile' ? null : +b.level.elevationM.toFixed(2),
         stations: b.level.type === 'profile' ? b.level.stations.length / 3 : 0,
         flow: [+b.flow[0].toFixed(2), +b.flow[1].toFixed(2)],
       }));
       const obs = record.analysis.observations.map((o) => ({
         id: o.id, kind: o.kind,
+        bedMaterial: o.bedMaterial ?? null,
+        bankMaterial: o.bankMaterial ?? null,
         cand: o.candidateLevelM === undefined ? null : +o.candidateLevelM.toFixed(2),
         tagged: o.taggedLevelM === undefined ? null : +o.taggedLevelM.toFixed(2),
         stations: o.profile ? o.profile.length / 3 : 0,
@@ -667,15 +836,42 @@ class DefaultHydroSystem implements HydroSystem {
           if (c > max) max = c;
         }
       }
+      const shore = field ? extractHydroShoreSegments(field) : [];
+      let shoreGroundMin = Infinity;
+      let shoreGroundMax = -Infinity;
+      for (const segment of shore) {
+        shoreGroundMin = Math.min(
+          shoreGroundMin,
+          segment.a.groundM,
+          segment.b.groundM,
+        );
+        shoreGroundMax = Math.max(
+          shoreGroundMax,
+          segment.a.groundM,
+          segment.b.groundM,
+        );
+      }
       out.push({
         key, feats: record.input.features.length,
         kinds: record.input.features.map((f) => f.kind),
         ocean: record.input.oceanCoverage.status,
         built: !!field, hasWater: field?.hasWater ?? null,
+        resolution: field?.resolution ?? null,
+        gutter: field?.gutter ?? null,
         touched, wet, maxCov: +max.toFixed(3),
+        shoreSegments: shore.length,
+        shoreGroundSpanM: shore.length
+          ? +(shoreGroundMax - shoreGroundMin).toFixed(3)
+          : null,
+        shoreRefinedCells: record.shoreRefinedCells,
+        meshSegments: [record.meshSegmentsX, record.meshSegmentsZ],
+        coastalMesh: record.coastalMesh,
+        meshTriangles: record.meshTriangles,
         mesh: record.parts.length > 0,
+        renderDeferred: this.deferRendering,
         flowingMesh: record.parts.some((p) => p.mesh.name.includes(':flowing')),
         surfMesh: record.parts.some((p) => p.mesh.name.endsWith(':surf')),
+        edgeBlendMesh: record.parts.some((p) => p.mesh.name.endsWith(':edge-blend')),
         dirty: record.dirty, building: record.building,
       });
     }
@@ -713,8 +909,24 @@ class DefaultHydroSystem implements HydroSystem {
       // may add knowledge, never destroy it (see buildHydroTile).
       const previous = live.field;
       try {
+        const flowing = live.analysis.observations.some((observation) =>
+          observation.kind === 'river'
+          || observation.kind === 'stream'
+          || observation.kind === 'canal');
+        const fieldResolution = flowing
+          ? this.flowingFieldResolution : this.buildOptions.fieldResolution;
+        // Preserve the gutter's metre reach when flowing texels halve.
+        const gutter = Math.max(
+          this.buildOptions.gutter,
+          Math.ceil(this.buildOptions.gutter
+            * fieldResolution / this.buildOptions.fieldResolution),
+        );
         const field = await this.scheduleBuild(() => buildHydroTile(
-          live.input, this.registry, live.analysis, this.buildOptions, previous,
+          live.input,
+          this.registry,
+          live.analysis,
+          { ...this.buildOptions, fieldResolution, gutter },
+          previous,
         ));
         const current = this.records.get(key);
         if (!current || current.generation !== generation || this.disposed) return;
@@ -736,14 +948,35 @@ class DefaultHydroSystem implements HydroSystem {
   }
 
   private installField(record: TileRecord, field: HydroTileField): void {
-    this.releaseGpu(record);
     record.field = field;
     this.bankRev++;
+    // Immediate mode swaps the picture here (installRender releases the old
+    // parts first). Deferred mode keeps the OLD parts up: the substrate
+    // admits the new field with the rest of its tile and `renderField` swaps
+    // then. Releasing here is what made every hydro re-feed in render mode
+    // take the water off the map until the tile was re-admitted.
+    if (!this.deferRendering) this.installRender(record, field);
+  }
+
+  private installRender(record: TileRecord, field: HydroTileField): void {
+    this.releaseRender(record);
+    // Rendered even when it comes to no mesh: "no water" is this field's
+    // picture, and a second admission of it must not rebuild the cull.
+    record.renderedField = field;
     if (!field.hasWater) return;
     // The cull first: a tile can report water and still keep no cell, when the
     // coverage is a sliver the lattice cannot resolve. Building the textures
     // before finding that out would leak the float RGBA uploads per tile.
-    const geometries = waterGeometry(field, this.meshSegments);
+    const coastalMesh = hasCoastalWater(field);
+    const geometrySegments = Math.min(
+      128,
+      this.meshSegments * (coastalMesh ? this.coastalMeshMultiplier : 1),
+    );
+    const geometries = waterGeometry(field, geometrySegments);
+    record.shoreRefinedCells = geometries.shoreRefinedCells;
+    record.meshSegmentsX = geometries.segmentsX;
+    record.meshSegmentsZ = geometries.segmentsZ;
+    record.coastalMesh = coastalMesh;
     if (!geometries.standing && !geometries.flowing && !geometries.surf) return;
     const textures = createHydroTextures(field);
     // ── THE MESH COVERS THE WATER, NOT THE TILE ──
@@ -770,8 +1003,11 @@ class DefaultHydroSystem implements HydroSystem {
       geometry: THREE.BufferGeometry,
       flowing: boolean,
       surf = false,
+      edgeBlend = false,
     ): void => {
-      const material = createHydroMaterial(field, textures, this.frameUniforms, flowing, surf, this.sceneShade);
+      const material = createHydroMaterial(
+        field, textures, this.frameUniforms, flowing, surf, this.sceneShade, edgeBlend,
+      );
       const mesh = new THREE.Mesh(geometry, material);
       mesh.scale.set(spanX, 1, spanZ);
       mesh.position.set(
@@ -784,13 +1020,19 @@ class DefaultHydroSystem implements HydroSystem {
       // unit plane incorrectly cull a mountain lake.
       mesh.frustumCulled = false;
       mesh.renderOrder = surf ? 3 : 2;
-      mesh.name = `hydro-tile:${field.key}${flowing ? ':flowing' : ''}${surf ? ':surf' : ''}`;
+      mesh.name = `hydro-tile:${field.key}${flowing ? ':flowing' : ''}${surf ? ':surf' : ''}${edgeBlend ? ':edge-blend' : ''}`;
       this.object3d.add(mesh);
       record.parts.push({ mesh, geometry, material });
     };
-    if (geometries.standing) install(geometries.standing, false);
-    if (geometries.flowing) install(geometries.flowing, true);
+    if (geometries.standing) {
+      install(geometries.standing, false, false, geometries.standingEdgeBlend);
+    }
+    if (geometries.flowing) {
+      install(geometries.flowing, true, false, geometries.flowingEdgeBlend);
+    }
     if (geometries.surf) install(geometries.surf, false, true);
+    record.meshTriangles = record.parts.reduce((sum, part) =>
+      sum + ((part.geometry.index?.count ?? 0) / 3), 0);
     const base = hydroBinding(field, textures);
     record.textures = textures;
     record.binding = {
@@ -801,6 +1043,11 @@ class DefaultHydroSystem implements HydroSystem {
   }
 
   private releaseGpu(record: TileRecord): void {
+    this.releaseRender(record);
+    record.field = undefined;
+  }
+
+  private releaseRender(record: TileRecord): void {
     // Per-tile now, so it is per-tile to dispose — the shared grid never was.
     for (const part of record.parts) {
       part.mesh.removeFromParent();
@@ -808,10 +1055,15 @@ class DefaultHydroSystem implements HydroSystem {
       part.material.dispose();
     }
     record.parts = [];
+    record.renderedField = undefined;
+    record.shoreRefinedCells = 0;
+    record.meshSegmentsX = 0;
+    record.meshSegmentsZ = 0;
+    record.coastalMesh = false;
+    record.meshTriangles = 0;
     if (record.textures) disposeHydroTextures(record.textures);
     record.textures = undefined;
     record.binding = undefined;
-    record.field = undefined;
   }
 
   private placeMesh(

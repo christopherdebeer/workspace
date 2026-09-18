@@ -27,7 +27,7 @@
  * `simWait`, never on a timeout.
  */
 import { execSync, execFile } from 'node:child_process';
-import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,7 +52,15 @@ function shell() {
   const m = idx.match(/<head>[\s\S]*?<\/body>/);
   if (!m) throw new Error('could not find the page shell in index.ts');
   return `<!doctype html><html>${m[0]}</html>`
-    .replace(/\$\{[^}]*\}/g, '');   // the shell is a template literal
+    .replace(/\$\{[^}]*\}/g, '')    // the shell is a template literal
+    // THE HARNESS STAMPS ITS SHELL TOO. The deployed cell puts a hash of the
+    // app.js it served in this meta (index.ts, stampOf) and the client reads
+    // it back to say which build is running; a harness page left it as the
+    // raw placeholder, so the one screen that reports it could never be
+    // exercised here. `HARNESS_BUILD` is what this page claims to be and
+    // `HARNESS_SERVED` (below) what the server will admit to — set them apart
+    // and the STALE path is reproducible without deploying anything.
+    .replace('__DRIVE_BUILD_STAMP__', process.env.HARNESS_BUILD ?? 'harnessbuild');
 }
 
 /**
@@ -95,7 +103,7 @@ export async function openDrive(opts = {}) {
   armFuse();
   const {
     spot = 'lat=-34.09905&lon=18.37835&h=0&cam=chase',
-    port = 8800 + Math.floor(Math.random() * 90),
+    port: askPort = 8800 + Math.floor(Math.random() * 90),
     tag = 'app',
     menu = true,
     settle = 0,
@@ -167,24 +175,72 @@ export async function openDrive(opts = {}) {
   const cellRoute = async (p) => {
     if (cellHandler === undefined) {
       try {
-        const out = join(WORK, 'cell-index.mjs');
+        // IN A DIRECTORY WITH `static/` BESIDE IT. The handler reads baked
+        // assets off disk relative to its own __dirname — ne-wide.b64 for the
+        // overview, cover-wide.b64 for the coarse cover — exactly as it does
+        // from /var/task on the deploy. Bundled loose into WORK it finds
+        // neither, and the routes that need them answer 503 with nothing to
+        // say why: measured, every ~/cover/w1 tile in the harness.
+        const dir = join(WORK, 'cell');
+        mkdirSync(dir, { recursive: true });
+        try { rmSync(join(dir, 'static'), { force: true }); } catch { /* first run */ }
+        symlinkSync(join(CELL, 'static'), join(dir, 'static'), 'dir');
+        const out = join(dir, 'index.mjs');
+        // …AND THE BUNDLE HAS TO KNOW WHERE IT IS. `__dirname` DOES NOT EXIST
+        // IN AN ESM BUNDLE — esbuild leaves the identifier alone and node
+        // throws `__dirname is not defined` the first time a route reads an
+        // asset. The symlink above was added to fix the coarse cover and could
+        // not have: measured on the bundle this line produces,
+        // `~/cover/w1/4/8/6` answered `503 {"error":"no coarse cover baked"}`
+        // and `~/osm/ov1/7/19/48` fell past its bake to a 43s Overpass timeout
+        // with `bakeMissing: "__dirname is not defined"` in the body. Every
+        // harness run since those routes shipped has been testing the fallback.
+        // The handler's own error strings are what say so — `serveOverview`
+        // reports why the bake did not answer, which is the whole reason that
+        // field exists.
         execSync(`npx esbuild ${join(CELL, 'index.ts')} --bundle --platform=node --format=esm`
-          + ` --packages=external --outfile=${out}`, { stdio: 'pipe', cwd: ROOT });
+          + ` --packages=external --define:__dirname=${JSON.stringify(JSON.stringify(dir))}`
+          + ` --outfile=${out}`, { stdio: 'pipe', cwd: ROOT });
         cellHandler = (await import(`${out}?t=${Date.now()}`)).handler;
       } catch { cellHandler = null; }
     }
     if (!cellHandler) return null;
     const key = join(cellCache, createHash('sha1').update(p).digest('hex'));
-    if (existsSync(key)) return { body: readFileSync(key), type: 'image/png' };
+    // THE TYPE IS CACHED BESIDE THE BODY. This returned a hardcoded
+    // 'image/png' on a cache hit, which was true while ~/cover was the only
+    // route through here and silently wrong the moment a second one arrived:
+    // ~/dem/v1 answers image/webp for a tile and text/plain for an absence,
+    // and the client tells those two apart BY THE CONTENT TYPE.
+    if (existsSync(key)) {
+      const type = existsSync(`${key}.type`) ? readFileSync(`${key}.type`, 'utf8') : 'image/png';
+      return { body: readFileSync(key), type };
+    }
     const r = await cellHandler({ rawPath: p, requestContext: { http: { method: 'GET' } } });
     if (r.statusCode !== 200) return null;
-    const body = r.isBase64Encoded ? Buffer.from(r.body, 'base64') : Buffer.from(String(r.body));
-    try { writeFileSync(key, body); } catch { /* best effort */ }
-    return { body, type: r.headers?.['content-type'] ?? 'application/octet-stream' };
+    let body = r.isBase64Encoded ? Buffer.from(r.body, 'base64') : Buffer.from(String(r.body));
+    const type = r.headers?.['content-type'] ?? 'application/octet-stream';
+    // AND THE ENCODING IS UNWOUND HERE, ONCE. `serveOverview` answers gzip;
+    // `serveDem` and the cover routes do not, which is why this was invisible
+    // until a vector route came through. The server below writes a bare
+    // content-type, so a gzipped body reached the page as bytes it then tried
+    // to parse as JSON: every coarse chart tile threw, every one was filed in
+    // `ovFailedAt`, and the chart read `0/25 · 25 RETRY` with a route that was
+    // answering 200 in fourteen milliseconds. Decoding here keeps the disk
+    // cache plain and leaves every consumer route as it was.
+    if (r.headers?.['content-encoding'] === 'gzip') body = zlib.gunzipSync(body);
+    try { writeFileSync(key, body); writeFileSync(`${key}.type`, type); } catch { /* best effort */ }
+    return { body, type };
   };
   const server = http.createServer((req, res) => {
     const p = req.url.split('?')[0];
     if (p === '/app.js') { res.writeHead(200, { 'content-type': 'application/javascript' }); res.end(readFileSync(bundle)); }
+    // What the SERVER says it is serving — the cell's own /build route (see
+    // index.ts). The ABOUT page asks this and compares it with the stamp in
+    // the shell it booted from, so a test can put them apart deliberately.
+    else if (p === '/build') {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ build: process.env.HARNESS_SERVED ?? process.env.HARNESS_BUILD ?? 'harnessbuild', cell: 'harness', at: Date.now() }));
+    }
     // ── THE CAPTURED FIXTURES, WHICH ARE NO LONGER IN THE BUNDLE ──
     //
     // They were `import world-bixby.json`, so they arrived inside app.js and
@@ -261,7 +317,13 @@ export async function openDrive(opts = {}) {
     // and for the same reason: read what is banked rather than re-earning it.
     // The client's mirror fallback still exists and is still what a bad deploy
     // degrades to; it just stops being the harness's PRIMARY source.
-    else if (p.startsWith('/~/osm/v3/') && opts.osm !== false) {
+    //
+    // MATCHED BY SHAPE, NOT BY VERSION. This read `/~/osm/v3/` while the
+    // client had moved to `~/osm/v4/` (water relations), so every fine tile
+    // 404'd here and every harness run silently drove the client's Overpass
+    // mirror fallback — the exact thing the paragraph above says it stopped
+    // being. The cell's own TILE_RE accepts v2..v4; match the same shape.
+    else if (/^\/~\/osm\/v\d+\//.test(p) && opts.osm !== false) {
       fetch(`https://c15r-drive.on.parc.land${p}`)
         .then(async (r) => {
           if (!r.ok) { res.writeHead(r.status); res.end('{}'); return; }
@@ -270,8 +332,25 @@ export async function openDrive(opts = {}) {
         })
         .catch(() => { res.writeHead(503); res.end('{}'); });
     }
+    // THE OVERVIEW IS TWO ROUTES WEARING ONE PATH, and the harness has to
+    // split them or it can only ever test the half that is already deployed.
+    // The fine rungs (z10 and in) are Overpass queries and must be read from
+    // the BANK, exactly as the fine vectors are — re-earning them here would
+    // be minutes of a public service per run. The wide rungs (z9 and out) are
+    // arithmetic over `static/ne-wide.b64`, a file in this repo: running them
+    // through the handler costs nothing, exercises the route code the phone
+    // will run, and — the reason this exists — lets a change to the LADDER be
+    // measured before it is deployed. A rung added to the bake is otherwise a
+    // 400 here until a deploy, which reads as a broken client.
     else if (p.startsWith('/~/osm/ov1/')) {
-      fetch(`https://c15r-drive.on.parc.land${p}`)
+      const oz = Number(p.split('/')[4]);
+      if (Number.isFinite(oz) && oz <= 9) {
+        cellRoute(p).then((out) => {
+          if (!out) { res.writeHead(404); res.end('{}'); return; }
+          res.writeHead(200, { 'content-type': out.type });
+          res.end(out.body);
+        }).catch(() => { res.writeHead(503); res.end('{}'); });
+      } else fetch(`https://c15r-drive.on.parc.land${p}`)
         .then(async (r) => {
           if (!r.ok) { res.writeHead(r.status); res.end('{}'); return; }
           res.writeHead(200, { 'content-type': 'application/json' });
@@ -304,6 +383,31 @@ export async function openDrive(opts = {}) {
         })
         .catch(() => { res.writeHead(503); res.end('{}'); });
     }
+    // ── THE ELEVATION TILES, THROUGH THE CELL'S OWN HANDLER ──
+    //
+    // Through the handler rather than proxied to the deploy, unlike the
+    // vectors: `serveDem` is a proxy and a HEAD walk, not an Overpass budget,
+    // so running it locally costs one upstream request and exercises the route
+    // code the phone will run. Both of its answers matter here — a tile is
+    // image/webp and an absence is a text/plain sentinel naming where to climb
+    // — which is why cellRoute had to learn to remember a content type.
+    // The coarse cover, from the bake in static/ — through the handler for the
+    // same reason ~/cover/v1 is: it is compute over an asset in this repo, and
+    // running it locally proves the route rather than the deploy.
+    else if (p.startsWith('/~/cover/w1/')) {
+      cellRoute(p).then((out) => {
+        if (!out) { res.writeHead(404); res.end('{}'); return; }
+        res.writeHead(200, { 'content-type': out.type });
+        res.end(out.body);
+      }).catch(() => { res.writeHead(503); res.end('{}'); });
+    }
+    else if (p.startsWith('/~/dem/v1/') && opts.dem !== false) {
+      cellRoute(p).then((out) => {
+        if (!out) { res.writeHead(404); res.end('{}'); return; }
+        res.writeHead(200, { 'content-type': out.type });
+        res.end(out.body);
+      }).catch(() => { res.writeHead(503); res.end('{}'); });
+    }
     else if (p.startsWith('/~/cover/v1/')) {
       cellRoute(p).then((out) => {
         if (!out) { res.writeHead(404); res.end('{}'); return; }
@@ -311,21 +415,26 @@ export async function openDrive(opts = {}) {
         res.end(out.body);
       }).catch(() => { res.writeHead(503); res.end('{}'); });
     }
-    // THE PLANET, SERVED FROM THE FILE THE DEPLOY WOULD SERVE. The globe's
-    // base is a static asset, not a tile route, and the harness 404s anything
-    // it does not know — which would leave every wide-chart frame here with a
-    // textureless globe and no error, the exact shape of failure `loadEcoTile`
-    // needed this list for. Read off disk rather than proxied: it is in the
-    // repo, and a test should not need the deploy to be current.
-    else if (p === '/globe-base.png') {
-      try {
-        res.writeHead(200, { 'content-type': 'image/png' });
-        res.end(readFileSync(join(CELL, 'static', 'globe-base.png')));
-      } catch { res.writeHead(404); res.end('{}'); }
-    }
     else { res.writeHead(404); res.end('{}'); }
   });
-  await new Promise((r) => server.listen(port, r));
+  // A RANDOM PORT COLLIDES ONCE IN NINETY, AND IT USED TO BE FATAL. Two harness
+  // runs side by side — a survey and the lab suite — drew the same port and
+  // the suite died on EADDRINUSE before its first lab. Unless the caller
+  // pinned a port, a collision is a re-draw, not a failure.
+  let port = askPort;
+  await new Promise((resolve, reject) => {
+    let tries = 0;
+    const attempt = () => {
+      server.once('error', (e) => {
+        if (e && e.code === 'EADDRINUSE' && opts.port === undefined && tries++ < 12) {
+          port = 8800 + Math.floor(Math.random() * 90);
+          attempt();
+        } else reject(e);
+      });
+      server.listen(port, () => { server.removeAllListeners('error'); resolve(); });
+    };
+    attempt();
+  });
   // A listening socket is a live handle, and a live handle means node cannot
   // exit. When a run threw between here and its `close()`, this server alone
   // held the process open — measured once at three hours and eight minutes for

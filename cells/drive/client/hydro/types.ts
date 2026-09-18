@@ -66,6 +66,11 @@ export type HydroKind =
   | 'canal'
   | 'wetland';
 
+/** Physical material visible through shallow water and exposed at its bed. */
+export type HydroBedMaterial = 'silt' | 'sand' | 'gravel' | 'pebble' | 'rock';
+/** Material exposed along the damp transition between terrain and water. */
+export type HydroBankMaterial = 'soil' | 'mud' | 'gravel' | 'rock';
+
 /** Packed x,z pairs. The final pair need not repeat the first for a ring. */
 export type PackedXZ = Float64Array;
 
@@ -91,6 +96,8 @@ export interface HydroFeature {
   /** Optional authored overrides; otherwise the registry derives them. */
   roughness?: number;
   turbidity?: number;
+  bedMaterial?: HydroBedMaterial;
+  bankMaterial?: HydroBankMaterial;
 }
 
 export interface HydroTileInput {
@@ -116,6 +123,22 @@ export interface HydroTileInput {
   elevation: ElevationGrid;
   features: readonly HydroFeature[];
   oceanCoverage: OceanCoverage;
+  /**
+   * Explicit structures that suppress the visible free surface while water
+   * continues below (culvert) or is blocked by fill (causeway).
+   */
+  surfaceOccluders?: readonly HydroSurfaceOccluder[];
+}
+
+export interface HydroSurfaceOccluder {
+  kind: 'culvert' | 'causeway';
+  x: number;
+  z: number;
+  /** Unit direction along the road deck/fill. */
+  roadTangent: readonly [number, number];
+  roadHalfWidthM: number;
+  /** Reach along the road needed to span the channel and its banks. */
+  halfLengthM: number;
 }
 
 export type HydroLevelModel =
@@ -135,6 +158,8 @@ export interface HydroBody {
   seed: number;
   roughness: number;
   turbidity: number;
+  bedMaterial: HydroBedMaterial;
+  bankMaterial: HydroBankMaterial;
   intermittent: boolean;
   tidal: boolean;
   version: number;
@@ -152,6 +177,8 @@ export interface HydroBodyObservation {
   fetchM: number;
   roughness?: number;
   turbidity?: number;
+  bedMaterial?: HydroBedMaterial;
+  bankMaterial?: HydroBankMaterial;
   intermittent: boolean;
   tidal: boolean;
 }
@@ -168,7 +195,7 @@ export interface ResolvedHydroFeature {
  *
  * geometry RGBA = coverage, signed shore distance m, level delta m, depth m
  * dynamics RGBA = flow x, flow z, fetch m, wave scale
- * material RGBA8 = class id, stable seed, turbidity, flags
+ * material RGBA8 = class id, stable seed, turbidity, flags + bed material
  * structure RGBA = river s (m downstream), river n (-1..1 across),
  *                  signed curvature (1/m), channel half-width (m)
  */
@@ -181,6 +208,11 @@ export interface HydroTileField {
   width: number;
   height: number;
   elevationBaseM: number;
+  /** Terrain elevation at every field texel, stored relative to
+   * `elevationBaseM`. Coverage contour generation consumes this exact array so
+   * shoreline geometry and water classification cannot drift onto separate
+   * terrain samples. */
+  ground: Float32Array<ArrayBuffer>;
   geometry: Float32Array<ArrayBuffer>;
   dynamics: Float32Array<ArrayBuffer>;
   material: Uint8Array<ArrayBuffer>;
@@ -219,6 +251,16 @@ export interface HydroTileField {
    * water at all.
    */
   waterBounds?: WorldBounds;
+  /**
+   * ── THE COAST FIELD ── travel time from the waterline in deep-water
+   * metres (R), the seaward direction (G, B) and exposure (A), per texel,
+   * for tiles with sea or lagoon in them — see coast-field.ts. The shader
+   * phases the nearshore crests on R instead of the shore distance, which
+   * puts refraction into the same continuous coordinate, and damps the
+   * shore wave, breakers and chop by A. Absent when the build was asked not
+   * to (`coastField: false`, `?coast=0`) or the tile has no coast.
+   */
+  coast?: Float32Array<ArrayBuffer>;
   bodyIds: readonly string[];
 }
 
@@ -230,6 +272,8 @@ export interface HydroSample {
   depthM: number;
   flow: readonly [number, number];
   fetchM: number;
+  bedMaterial: HydroBedMaterial;
+  bankMaterial: HydroBankMaterial;
   intermittent: boolean;
   tidal: boolean;
 }
@@ -265,7 +309,17 @@ export interface HydroFrame {
   /** The vehicle, when it is IN the water: absolute x/z, velocity in m/s and
    *  how deep it is wading. Omit (or wadeM 0) and the surface ignores it —
    *  the water only answers a hull that is actually displacing it. */
-  rig?: { x: number; z: number; vx: number; vz: number; wadeM: number };
+  rig?: {
+    x: number;
+    z: number;
+    vx: number;
+    vz: number;
+    wadeM: number;
+    /** Canonical vehicle-water history may provide the already resolved wake
+     *  response. Omit for labs and legacy callers that still derive it from
+     *  depth and speed. */
+    wakeStrength?: number;
+  };
   /** THE GROUND'S OWN COLOUR, LOCALLY. `terrainColour` is one colour for the
    *  whole frame — the ground under the truck — and every shallow, bed and
    *  damp bank in view took it, so a river forty metres off wore the road's
@@ -275,11 +329,13 @@ export interface HydroFrame {
   terrainField?: { texture: object | null; originX: number; originZ: number; widthM: number };
 }
 
-export type HydroDebugView = 'surface' | 'coverage' | 'shore' | 'depth' | 'flow' | 'class';
+export type HydroDebugView = 'surface' | 'coverage' | 'shore' | 'depth' | 'flow' | 'class' | 'coast';
 
 export interface HydroTuning {
   waveAmplitude: number;
   waveLength: number;
+  /** Horizontal trochoidal displacement of standing-water crests. */
+  waveChop: number;
   rippleStrength: number;
   foamStrength: number;
   shoreFade: number;
@@ -296,6 +352,7 @@ export interface HydroTuning {
 export const DEFAULT_HYDRO_TUNING: HydroTuning = {
   waveAmplitude: 1,
   waveLength: 1,
+  waveChop: 1,
   rippleStrength: 1,
   foamStrength: 1,
   shoreFade: 1,
@@ -310,7 +367,15 @@ export interface HydroBuildOptions {
   gutter: number;
   oceanLevelM: number;
   shoreDistanceLimitM: number;
+  /** A tile holding no water writes its field's constants instead of running
+   *  eleven full-grid passes to arrive at them (see buildHydroTile). False is
+   *  the exact A/B — `?hydrodry=0` — and the control the measurement needs,
+   *  since the saving is per BUILD and a session mean is dominated by the
+   *  handful of wet tiles whichever way this is set. */
+  dryShortCircuit: boolean;
   minimumDepthM: number;
+  /** Solve the coast field (travel time and exposure) for coastal tiles. */
+  coastField: boolean;
 }
 
 export const DEFAULT_HYDRO_BUILD: HydroBuildOptions = {
@@ -323,7 +388,9 @@ export const DEFAULT_HYDRO_BUILD: HydroBuildOptions = {
   gutter: 6,
   oceanLevelM: 0,
   shoreDistanceLimitM: 180,
+  dryShortCircuit: true,
   minimumDepthM: 0.08,
+  coastField: true,
 };
 
 export const HYDRO_KIND_ID: Record<HydroKind, number> = {
@@ -348,3 +415,30 @@ export const HydroFlags = {
   Tidal: 2,
   Flowing: 4,
 } as const;
+
+/** Bed material occupies bits 3..5 of the packed material flag byte. */
+export const HYDRO_BED_SHIFT = 3;
+export const HYDRO_BED_MASK = 0x38;
+export const HYDRO_BED_ID: Record<HydroBedMaterial, number> = {
+  silt: 1,
+  sand: 2,
+  gravel: 3,
+  pebble: 4,
+  rock: 5,
+};
+export const HYDRO_ID_BED: Record<number, HydroBedMaterial> = Object.fromEntries(
+  Object.entries(HYDRO_BED_ID).map(([material, id]) => [id, material]),
+) as Record<number, HydroBedMaterial>;
+
+/** Bank material occupies the final two bits of the packed material byte. */
+export const HYDRO_BANK_SHIFT = 6;
+export const HYDRO_BANK_MASK = 0xc0;
+export const HYDRO_BANK_ID: Record<HydroBankMaterial, number> = {
+  soil: 0,
+  mud: 1,
+  gravel: 2,
+  rock: 3,
+};
+export const HYDRO_ID_BANK: Record<number, HydroBankMaterial> = Object.fromEntries(
+  Object.entries(HYDRO_BANK_ID).map(([material, id]) => [id, material]),
+) as Record<number, HydroBankMaterial>;

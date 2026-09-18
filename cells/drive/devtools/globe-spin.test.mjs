@@ -32,7 +32,10 @@ import { join } from 'node:path';
 // Letsemeng: the same spot globe-view.mjs stands at, so the two tools' numbers
 // are comparable. `nodraw` because nothing here is judged by eye unless SHOT
 // asks for it, and the harness paints at three frames a second.
-const SPOT = 'lat=-29.9872&lon=24.7765&h=0&cam=top&wx=clear&nodraw=1';
+// fling=0: the drags below measure the RATE of a drag, and a lift that
+// throws the planet would add the coast to every reading. The throw has its
+// own block at the end, with the switch turned on for it.
+const SPOT = 'lat=-29.9872&lon=24.7765&h=0&cam=top&wx=clear&nodraw=1&fling=0';
 const PLANET_Z = 40000, CHART_Z = 8;
 const { page, close } = await openDrive({ spot: `${SPOT}&z=${PLANET_Z}`, tag: 'globespin', menu: true, settle: 0 });
 
@@ -95,17 +98,27 @@ async function focusOn(lat, lon) {
 
 console.log('\n=== the planet has the frame ===');
 await zoomTo(PLANET_Z);
-// The base texture is fetched on the first wide chart, and nothing is free to
-// browse until it has landed — `globeFree` is 0 with no planet to browse.
-for (let i = 0; i < 60; i++) {
-  if ((await globe()).tex) break;
-  await page.waitForTimeout(500);
-}
+// THERE IS NOTHING LEFT TO WAIT FOR. The surface used to be a 317KB baked
+// equirect PNG fetched on the first wide chart, and `globeFree` stayed 0 until
+// it landed — so this block spent up to thirty seconds polling `tex` before it
+// could ask anything. The graticule is drawn in the fragment shader, so the
+// planet is browsable on the frame the chart reaches it, and `wire` reports
+// which surface the build carries where `tex` used to report the fetch.
 let g = await globe();
 console.log(`  ${JSON.stringify(g)}`);
-check(g.tex, 'the base texture landed');
+check(g.wire, 'the surface is drawn, not fetched');
 check(g.shown, 'the planet is drawn');
-check(!g.shell, 'the streamed shell has handed over');
+// THE PICTURE DOES NOT HAND OVER; THE GESTURE DOES. This line used to require
+// the shell to be OFF here, because `shellOn` carried `&& globeFree() === 0`:
+// a spun globe standing beside a shell fixed under the truck would carry two
+// different places through neighbouring pixels. Both are children of
+// `planetGroup` now and are placed from ONE focus every frame, so they cannot
+// disagree, and the ladder reaches z5 — the ring is 10,847km across against an
+// 8,030km frame at the ceiling, so hiding it would open an edge rather than
+// close one. What changes hands at `globeFree` is the drag. Asserting the pair:
+// both backdrops drawn, and the gesture the planet's. Re-tying the two would
+// fail this line rather than pass it.
+check(g.shell && g.shown, 'both backdrops draw; only the gesture hands over');
 check(g.free === 1, `globeFree is 1 (${g.free})`);
 check(g.pin, 'the rig has a pin on it');
 
@@ -256,6 +269,50 @@ if (process.env.SHOT) {
   console.log(`\n  frame: ${shot}`);
 }
 
+// ── THE FLING: a throw coasts and comes to rest; a hold throws nothing ──
+await focusOn(-29.9872, 24.7765);
+// `__zoom` SETS A TARGET THE FRAME LOOP EASES TOWARD, and the harness runs at
+// two to four frames a second, so a fixed wait after it is a wait on nothing:
+// this block asked for 40,000 from the z900 the survey check left behind, slept
+// 600ms, and dragged at whatever zoom the ease had reached — under the
+// hand-over, where a drag is a flat pan and records no spin at all, which the
+// throw then reported as "released at 0°/s". `zoomTo` polls until the zoom has
+// actually arrived. (The same trap is written up in CLAUDE.md against
+// `chart-dist.mjs`: the zoom and everything else live on different clocks.)
+await zoomTo(40000);
+await page.evaluate(() => { window.__fling(true); });
+await page.waitForTimeout(600);
+{
+  const throwIt = async (restMs) => {
+    const x0 = 195, y0 = 300;
+    await page.mouse.move(x0, y0); await page.mouse.down();
+    for (let i = 1; i <= 8; i++) { await page.mouse.move(x0 + 15 * i, y0); await page.waitForTimeout(12); }
+    if (restMs) await page.waitForTimeout(restMs);
+    await page.mouse.up();
+    await page.waitForTimeout(60);
+    return (await globe()).focus;
+  };
+  const f1 = await throwIt(0);
+  const v1 = (await page.evaluate(() => window.__fling())).fling;
+  // Rest is when the spin reads zero, not a window guessed from the release:
+  // at τ 0.45 s a 9°/s throw is under the stop threshold after ~2.3 s.
+  let restMs = 0;
+  for (; restMs < 5000; restMs += 100) {
+    const f = (await page.evaluate(() => window.__fling())).fling;
+    if (!f[0] && !f[1]) break;
+    await page.waitForTimeout(100);
+  }
+  const f2 = (await globe()).focus;
+  await page.waitForTimeout(300);
+  const f3 = (await globe()).focus;
+  check(dLon(f2[1], f1[1]) < -0.5, `a throw coasts on after the lift (released at ${v1[1]}°/s, ${dLon(f2[1], f1[1]).toFixed(2)}° more, westward)`);
+  check(restMs < 5000 && Math.abs(dLon(f3[1], f2[1])) < 0.02, `and comes to rest (spin zero after ${restMs}ms, ${dLon(f3[1], f2[1]).toFixed(3)}° in the 300ms after)`);
+  const g1 = await throwIt(250);
+  await page.waitForTimeout(600);
+  const g2 = (await globe()).focus;
+  check(Math.abs(dLon(g2[1], g1[1])) < 0.02, `a finger that rested before lifting throws nothing (${dLon(g2[1], g1[1]).toFixed(3)}°)`);
+  await page.evaluate(() => window.__fling(false));
+}
 const errs = await page.evaluate(() => window.__pageErrors ?? []);
 check(errs.length === 0, `no page errors ${JSON.stringify(errs.slice(0, 2))}`);
 await close();

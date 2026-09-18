@@ -1,4 +1,15 @@
-import { HYDRO_ID_KIND, HydroFlags, type HydroTileField, type HydroSample } from './hydro/types';
+import {
+  HYDRO_BED_MASK,
+  HYDRO_BED_SHIFT,
+  HYDRO_BANK_MASK,
+  HYDRO_BANK_SHIFT,
+  HYDRO_ID_BED,
+  HYDRO_ID_BANK,
+  HYDRO_ID_KIND,
+  HydroFlags,
+  type HydroTileField,
+  type HydroSample,
+} from './hydro/types';
 import { sampleFieldSurface } from './hydro/field-sample';
 /** Shared inland-bank art rules. No water is invented when the field is absent.
  * Geometry/depth remain the hydro system's authority; these are habitat weights. */
@@ -48,10 +59,46 @@ export function bankNoise(px: number, pz: number): number {
 export function bankPatch(px: number, pz: number): number {
   return bankNoise(px * 0.17, pz * 0.17) * 0.72 + bankNoise(px * 0.043, pz * 0.043) * 0.28;
 }
+/** Continuous dry-ground wet margin shared by production sward paint and the
+ * hydro lab. It reaches several metres beyond the coverage contour so the
+ * terrain visibly becomes bank before it becomes water. Patch variation moves
+ * only the width; it never decides coverage and contains no screen-space
+ * dither or quantisation. */
+export function bankWetMargin(distanceM: number, patch = 0.5): number {
+  const widthM = 4.5 + unit(patch) * 5.5;
+  const t = unit(Math.max(0, distanceM) / widthM);
+  const smooth = t * t * (3 - 2 * t);
+  return 1 - smooth;
+}
+/** The mineral bank is the local ground, darkened and pulled slightly toward
+ * neutral. Keeping this rule shared prevents terrain, sward and water from
+ * inventing separate "river sand" colours at the same physical edge. */
+export function bankMineralColour(r: number, g: number, b: number): [number, number, number] {
+  const l = (r + g + b) / 3;
+  return [
+    (r + (l - r) * 0.22) * 0.78,
+    (g + (l - g) * 0.22) * 0.78,
+    (b + (l - b) * 0.22) * 0.78,
+  ];
+}
+/** How strongly visible ground should become local bank mineral.
+ *
+ * Dry ground fades over the same patch-varied metre-space margin as the
+ * habitat field. Inland submerged ground is predominantly bank/bed material,
+ * not WorldCover's coarse class-80 tint; the hydro shader adds the canonical
+ * silt/sand/gravel/pebble/rock structure on top. Oceans retain their existing
+ * bathymetric palette. */
+export function bankGroundMineralMix(water: BankWater, patch = 0.5): number {
+  if (water.kind === 'ocean' || water.kind === 'lagoon') return 0;
+  if (water.wet === false) return bankWetMargin(water.shoreDistanceM, patch) * 0.58;
+  const shallow = unit(1 - Math.max(0, water.depthM) / 1.5);
+  const edge = unit(1 - Math.max(0, water.shoreDistanceM) / 4);
+  return unit(0.78 + shallow * 0.12 + edge * 0.08);
+}
 /** The fragment cut the water shader applies to coverage at this point —
  *  the one number the physics and the overlay must share with it. */
 export const WATERLINE_CUT = (px: number, pz: number, kind?: string): number =>
-  kind === 'ocean' || kind === 'lagoon' ? 0.5 : 0.5 + (bankPatch(px, pz) - 0.5) * 0.24;
+  kind === 'ocean' || kind === 'lagoon' ? 0.5 : 0.5 + (bankPatch(px, pz) - 0.5) * 0.08;
 
 /** Continuous, stationary metre-space patches shared by hydro and sward.
  * No time or tile seed: streamed tiles cannot disagree at their boundaries. */
@@ -104,10 +151,17 @@ export function sampleBankField(f: HydroTileField, x: number, z: number,
   }
   if (best < 0) return undefined;
   const flags = f.material[best+3];
+  const bedMaterial = HYDRO_ID_BED[(flags & HYDRO_BED_MASK) >> HYDRO_BED_SHIFT] ?? 'silt';
+  const bankMaterial = HYDRO_ID_BANK[(flags & HYDRO_BANK_MASK) >> HYDRO_BANK_SHIFT] ?? 'soil';
   return { wet: false, kind: HYDRO_ID_KIND[f.material[best]], coverage: drawn?.coverage ?? 0,
     restingLevelM: f.elevationBaseM+f.geometry[best+2],
-    shoreDistanceM: Math.min(0, f.geometry[centre+1]), depthM: f.geometry[best+3],
+    // `bankHabitat` consumes metres AWAY from the water on dry ground. The
+    // signed field value here is negative, which previously collapsed every
+    // dry texel in the 12m search radius to a zero-distance bank. Use the
+    // measured distance to the nearest wet texel footprint instead.
+    shoreDistanceM: Math.sqrt(bestD), depthM: f.geometry[best+3],
     flow: [f.dynamics[best],f.dynamics[best+1]], fetchM: f.dynamics[best+2],
+    bedMaterial, bankMaterial,
     intermittent: (flags & HydroFlags.Intermittent)!==0,
     tidal: (flags & HydroFlags.Tidal)!==0 };
 }

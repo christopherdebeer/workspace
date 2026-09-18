@@ -36,7 +36,10 @@ const tmp = mkdtempSync(join(tmpdir(), 'ezpal-'));
 const built = join(tmp, 'ez.mjs');
 execFileSync('npx', ['esbuild', join(HERE, '../client/flora-ez.ts'), '--bundle', '--format=esm',
   `--outfile=${built}`, '--log-level=error'], { cwd: join(HERE, '../../..'), stdio: 'inherit' });
-const { ezPalette, ezPickVariant, ezVariants, EZ_PALETTE_N } = await import(pathToFileURL(built).href);
+const {
+  ezPalette, ezPickVariant, ezVariants, ezHabitOf, ezHabitatsForSite, ezPhenotypeForSite,
+  EZ_PALETTE_N,
+} = await import(pathToFileURL(built).href);
 
 const FAMS = ['broadleaf', 'conifer', 'acacia', 'palm', 'snag'];
 console.log('\nthe atlas:');
@@ -67,8 +70,58 @@ for (let seed = 1; seed < 4000; seed += 7) {
 }
 ok(`a palette is ${EZ_PALETTE_N} distinct silhouettes, always`, true);
 ok('…and is the same every time it is asked', allSame);
-ok('…and the world uses ALL of them across districts',
-  everSeen.size === ezVariants('broadleaf').length, [...everSeen]);
+
+// ── COVERAGE IS A CLAIM ABOUT THE WHOLE CHAIN, NOT ABOUT THE PALETTE ─────
+//
+// THIS ASSERTION USED TO READ `everSeen.size === ezVariants('broadleaf').length`
+// AND FAILED FOR A YEAR ON A DESIGN THAT IS WORKING. It was written before the
+// palette learned to draw over HABITS rather than over variants, and it can
+// never pass again: `Oak Medium #387`, `#91` and `#12` are one recipe under
+// three seeds, a district picks at most one of them on purpose (a two-species
+// vocabulary must not be spent twice on one oak), and so the palette alone
+// covers 5 of 8 BY CONSTRUCTION. Read as a fault it said three baked
+// silhouettes were "drawn nowhere on Earth", which was recorded in the doctrine
+// and is false — the fixture half of this very file draws `Aspen Small #11`,
+// one of the three, twenty-four times.
+//
+// The honest contract is the two claims the chain actually makes, and it needs
+// BOTH or neither means anything: a palette that covered every habit while the
+// pick ignored the siblings would still bury a third of the atlas, and a chain
+// that reached every variant through a palette missing a habit would be drawing
+// them as accidents rather than as species.
+const blAll = ezVariants('broadleaf');
+const habitsIn = (idx) => new Set(idx.map((i) => ezHabitOf(blAll[i])));
+const allHabits = habitsIn(blAll.map((v, i) => v.state ? -1 : i).filter((i) => i >= 0));
+ok('a palette covers every HABIT across districts',
+  habitsIn([...everSeen]).size === allHabits.size,
+  { seen: [...habitsIn([...everSeen])], want: [...allHabits] });
+// …and the district → stand → individual chain reaches every VARIANT of every
+// family. The individual seed is main.ts's own construction (a hash of the
+// tree's lat/lon), so this walks the same three scopes the world walks.
+const DISTRICT_SAMPLES = 40000;
+for (const fam of FAMS) {
+  const all = ezVariants(fam);
+  const genotypes = all.map((v, i) => v.state ? -1 : i).filter((i) => i >= 0);
+  const chain = new Set();
+  for (let d = 1; d < 1 + DISTRICT_SAMPLES * 7; d += 7) {
+    const p = ezPalette(fam, d);
+    for (let st = 0; st < 4; st++) {
+      const standSeed = (d * 2654435761 + st * 40503) >>> 0;
+      for (let k = 0; k < 6; k++) {
+        chain.add(ezPickVariant(p, standSeed, fam, (standSeed ^ (k * 2246822519)) >>> 0));
+      }
+    }
+  }
+  ok(`…and the chain reaches every ${fam} genotype`,
+    genotypes.every((i) => chain.has(i)) && [...chain].every((i) => genotypes.includes(i)),
+    { reached: [...chain].sort((a, b) => a - b), want: genotypes });
+  for (const state of new Set(all.map((v) => v.state).filter(Boolean))) {
+    const p = ezPalette(fam, 1771);
+    const picked = ezPickVariant(p, 991, fam, 7351, Number.MAX_SAFE_INTEGER, state);
+    ok(`…and ${fam} phenotype ${state} is site-selectable`, all[picked]?.state === state,
+      { picked, variant: all[picked]?.name, state: all[picked]?.state });
+  }
+}
 // A one-variant family cannot fail.
 ok('a family with one variant still answers', ezPalette('palm', 12345).length >= 1, ezPalette('palm', 12345));
 ok('a limit of 1 collapses the palette', ezPalette('broadleaf', 999, 1).length === 1, ezPalette('broadleaf', 999, 1));
@@ -93,6 +146,25 @@ ok('an impossible form filter still grows trees',
 ok('…and an unsatisfiable one does not empty the conifers',
   ezPalette('conifer', 42, 99, ['round', 'columnar']).length >= 1,
   ezPalette('conifer', 42, 99, ['round', 'columnar']));
+const dry = ezPalette('broadleaf', 42, 99, ['round'], ['dry']);
+ok('dry habitat selects sclerophyll architecture',
+  dry.length > 0 && dry.every((i) => bl[i].habit === 'sclerophyll'),
+  dry.map((i) => ({ name: bl[i].name, habit: bl[i].habit, habitats: bl[i].habitats })));
+const salt = ezPalette('broadleaf', 42, 99, ['umbrella', 'round'], ['salt']);
+ok('salt habitat selects mangrove architecture',
+  salt.length > 0 && salt.every((i) => bl[i].habit === 'mangrove'),
+  salt.map((i) => ({ name: bl[i].name, habit: bl[i].habit, habitats: bl[i].habitats })));
+ok('an unknown habitat preference falls back instead of emptying a family',
+  ezPalette('broadleaf', 42, 99, ['round'], ['impossible']).length >= 1,
+  ezPalette('broadleaf', 42, 99, ['round'], ['impossible']));
+const neutralSite = { salt: 0, wetness: 0.3, summerDry: 0, waterMm: 900, exposure: 0.2 };
+ok('a named mangrove biome outranks a missing shoreline sample',
+  ezHabitatsForSite('broadleaf', neutralSite, 14)?.includes('salt'),
+  ezHabitatsForSite('broadleaf', neutralSite, 14));
+ok('exposure produces a coherent conifer phenotype',
+  ezPhenotypeForSite('conifer', { ...neutralSite, exposure: 0.9 }, 0x80000000, false) === 'exposure');
+ok('every tree geometry carries the bespoke surface profile',
+  FAMS.every((f) => ezVariants(f).every((v) => v.geometry.getAttribute('aEzSurf')?.itemSize === 4)));
 // A stand picks from its palette and nowhere else.
 const pal = ezPalette('broadleaf', 77);
 let outside = 0;

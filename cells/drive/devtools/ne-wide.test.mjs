@@ -229,7 +229,7 @@ console.log('\nthe empty ocean answers, and answers empty:');
 }
 
 check(NE_MAX_Z === 9, 'z10 and finer are still Overpass\'s job');
-check(NE_MIN_Z === 5, 'z5 is the widest rung the plane asks for; the globe lowers this');
+check(NE_MIN_Z === 0, 'the ladder reaches the whole planet — one tile at z0');
 {
   // A z5 tile is a thousand kilometres: the whole of southern Africa in four.
   // It must carry the trunk network of a subcontinent and its capitals, and
@@ -241,6 +241,38 @@ check(NE_MIN_Z === 5, 'z5 is the widest rung the plane asks for; the globe lower
   check(roads.length > 5 && roads.length < 1500, `a z5 tile is a network, not a wall (${roads.length} roads)`);
   check(roads.every((w) => w.tags.highway === 'motorway'), 'at z5 only motorways are drawn — the class cut where the rank has no rung');
   check(places.length > 0 && places.length < 40, `a z5 tile names its capitals and little else (${places.length})`);
+}
+// ── AND THE RUNGS BELOW z5, WHICH ARE THE GLOBE'S ─────────────────────
+// The chart's ring reaches two tiles, so a frame wider than a z5 ring
+// (~2,000km at this latitude) had no vector map at all before these existed.
+// Each is one arithmetic pass over the same baked array; what has to hold is
+// that the rank cut keeps them a SKELETON rather than a wall, and that the
+// widest of them is one tile carrying the whole planet.
+console.log('\nthe globe\'s own rungs, z4 out to z0:');
+for (const z of [4, 3, 2, 1, 0]) {
+  const [x, y] = tileOf(-29.0, 25.0, z);
+  const t0 = Date.now();
+  const ways = neWideTile(z, x, y) ?? [];
+  const ms = Date.now() - t0;
+  const roads = ways.filter((w) => w.tags?.highway), places = ways.filter((w) => w.tags?.place);
+  console.log(`  z${z}: ${roads.length} roads, ${places.length} places, ${ms}ms`);
+  check(ways.length > 0, `z${z} answers — a rung in OV_LEVELS the bake refuses is a blank chart`);
+  // The whole planet at z0 is the worst case there is, and 82KB of it is a
+  // tenth of what a dense z12 Overpass tile costs. The bound is the wall test,
+  // not a budget: a rung that carried every road on earth would be one.
+  check(ways.length < 9000, `z${z} is a skeleton, not a wall (${ways.length} features)`);
+  check(roads.every((w) => w.tags.highway === 'motorway'),
+    `at z${z} only motorways are drawn — the class cut below NE_WIDE_CLASS_Z`);
+  check(ms < 300, `z${z} slices in ${ms}ms`);
+}
+{
+  // z0 IS THE PLANET, and it is the one tile where "does the cut leave enough
+  // to read" can be asked of the whole map at once.
+  const ways = neWideTile(0, 0, 0) ?? [];
+  const places = ways.filter((w) => w.tags?.place);
+  console.log(`  z0 is one tile for the Earth: ${ways.length} features, ${places.length} places`);
+  check(places.length > 20 && places.length < 600,
+    `z0 names the world's capitals and little else (${places.length})`);
 }
 rmSync(BUNDLE, { force: true });
 rmSync(OUT, { recursive: true, force: true });

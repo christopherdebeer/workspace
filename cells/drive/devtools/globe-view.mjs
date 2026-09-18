@@ -23,11 +23,11 @@ for (const z of ZOOMS) {
     if (at) break;
     await new Promise((r) => setTimeout(r, 250));
   }
-  // The texture is fetched on the first wide chart; give it a moment to land.
-  for (let i = 0; i < 40; i++) {
-    if (await page.evaluate(() => window.__globe().tex)) break;
-    await new Promise((r) => setTimeout(r, 500));
-  }
+  // THERE IS NO TEXTURE TO WAIT FOR. This polled `__globe().tex` for up to
+  // twenty seconds a zoom; the surface is a graticule the fragment shader
+  // draws, so the planet is complete on the frame the chart reaches it, and a
+  // poll on a field that no longer exists is twenty seconds of waiting for
+  // `undefined` to become true.
   // AND THE RING. A frame taken while the shell is still landing is a frame
   // of one tile standing on the planet with its neighbours missing — which is
   // exactly what a broken placement would look like, and proves nothing. The

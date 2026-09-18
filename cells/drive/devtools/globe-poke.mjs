@@ -58,8 +58,8 @@ let last = null;
 for (let i = 0; i < 200; i++) {
   last = await page.evaluate(() => {
     const x = window.__far(), o = window.__ov();
-    return { far: `${x.tiles}/${x.asked} inFlight ${x.inFlight} queued ${x.queued}`, home: x.inFlight === 0 && x.queued === 0 && x.tiles >= x.asked && x.asked > 0,
-      ov: `${o.have}/${o.want} inFlight ${o.inFlight}`, ovHome: o.want > 0 && o.have >= o.want };
+    return { far: `${x.tiles}/${x.asked} retired ${x.retired} inFlight ${x.inFlight} queued ${x.queued}`, home: x.inFlight === 0 && x.queued === 0 && x.tiles >= x.asked && x.asked > 0,
+      ov: `${o.have}/${o.want} retired ${o.retired} inFlight ${o.inFlight}`, ovHome: o.want > 0 && o.have >= o.want };
   });
   if (last.home && (last.ovHome || i > 150)) break;
   if (i % 10 === 0) log(`waiting  far ${last.far}  ov ${last.ov}`);
@@ -97,6 +97,12 @@ if (await page.evaluate(() => window.__hide().layers.includes('globe'))) {
   await page.evaluate(() => window.__hide('globe', false));
 }
 const errs = await page.evaluate(() => window.__pageErrors ?? []);
+// The telemetry's chart rows and the phases this view costs, as the seat's
+// double tap would copy them — the dump is the instrument the phone has.
+const tele = await page.evaluate(() => (typeof window.__telemetry === 'function' ? window.__telemetry() : ''));
+for (const line of tele.split('\n')) {
+  if (/^(chart |world pass|render |stepGlobe|far:|ovBuild|hud\+misc|world:stream|camera )/.test(line)) log(`telemetry  ${line}`);
+}
 await close();
 
 // ── the numbers ──

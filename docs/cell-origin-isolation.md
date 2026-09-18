@@ -145,6 +145,16 @@ own origin), stays under a single `*.on.parc.land` cert, is human-readable, and 
 **collision-free** because `(username, cellname)` is already unique in the cell
 registry.
 
+> **The bargain, and its bill (ADR-0096).** "The hostname carries the cell's
+> identity" is what buys one wildcard for ever — and **nine** sites now cash it
+> in by testing the `.on.parc.land` suffix and splitting the label on its first
+> hyphen (the two edge functions, four kernel-client helpers, two `oauth.ts`
+> paths, and `/mcp` CORS). A host that does *not* encode owner and name — a
+> vanity domain like `drive.parc.land` — fails all nine, and only the first fails
+> loudly; the rest yield a cell that loads and cannot find itself. ADR-0096
+> replaces the guess with a fact the server already holds (`CELL_OWNER` /
+> `SERVICE_NAME`). Any *tenth* consumer should read the fact, not the label.
+
 | Scheme | Granularity | Cert |
 | --- | --- | --- |
 | **`<username>-<cellname>.on.parc.land`** (recommended) | **per cell**, readable, collision-free | one `*.on.parc.land` |

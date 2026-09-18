@@ -35,8 +35,8 @@ import { ICON, ICON_FONT, loadIcons } from './icons';
 
 // Screen indices are the probe API (__menutab) and predate the redesign:
 // 0 was the DRIVE tab and is now the splash hub; the rest keep their numbers.
-export const T_DRIVE = 0, T_SURVEY = 1, T_RIG = 2, T_WORLD = 3, T_SYSTEM = 4, T_LINE = 5, T_ABOUT = 6, T_PROGRESS = 7;
-const TITLES: Record<number, string> = { [T_SURVEY]: 'SURVEYS', [T_RIG]: 'RIG', [T_WORLD]: 'DRIVES', [T_SYSTEM]: 'SETTINGS', [T_LINE]: 'THE LINE', [T_ABOUT]: 'ABOUT', [T_PROGRESS]: 'PROGRESS' };
+export const T_DRIVE = 0, T_SURVEY = 1, T_RIG = 2, T_WORLD = 3, T_SYSTEM = 4, T_LINE = 5, T_ABOUT = 6, T_PROGRESS = 7, T_ADVANCED = 8;
+const TITLES: Record<number, string> = { [T_SURVEY]: 'SURVEYS', [T_RIG]: 'RIG', [T_WORLD]: 'DRIVES', [T_SYSTEM]: 'SETTINGS', [T_LINE]: 'THE LINE', [T_ABOUT]: 'ABOUT', [T_PROGRESS]: 'PROGRESS', [T_ADVANCED]: 'ADVANCED' };
 
 export interface Rect { x: number; y: number; w: number; h: number }
 
@@ -76,13 +76,23 @@ export interface MenuCtx {
   /** -1 is home; 0..n-1 are the reel's stops. */
   reelGo?(i: number): void;
   driveStats(): Array<[string, string]>;
-  worldRows(): Array<[string, string]>;
-  systemRows(): Array<[string, string]>;
+  // `worldRows` and `systemRows` were here and are gone. The first was
+  // implemented, carried real data (place, biome, heading, odometer, vectors)
+  // and was called by NOTHING — found by the survey that built the switch
+  // table, which is the same class of fault one layer up. The second was one
+  // row reporting whether the sound was on, and the control that changes it
+  // now lives on the splash and says so itself, so the readout was a status
+  // for a button on another screen.
   /** Every switch this build has, from `switches.ts`, with what THIS session is
    *  running. Rendered whole and not filtered: the panel exists so that a
    *  switch cannot be forgotten, and a list that hides the ones nobody set
    *  hides exactly the ones nobody remembers. Optional: older ctx builds. */
-  switches?(): Array<{ id: string; value: string; set: boolean; marks: readonly string[] }>;
+  switches?(): Array<{ id: string; note: string; kind: string; value: string; raw: string | null;
+    set: boolean; marks: readonly string[] }>;
+  /** This page's URL with a staged set of switch changes applied and
+   *  everything else preserved — what RELOAD spends. Built in `switches.ts`
+   *  so the preservation rule lives beside the table it preserves. */
+  switchUrl?(changes: Record<string, string | null>): string;
   /** The build's own identity, for the foot of ABOUT — a page that credits
    *  everyone and cannot say WHICH build the reader is looking at is half a
    *  page, and the first question of any report is which version it was. */
@@ -269,6 +279,10 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu table.m-kv td { padding: 1px 1.2em 1px 0; vertical-align: baseline; }
   #menu table.m-kv td:first-child { color: ${C.dim}; padding-right: 1.6em; white-space: nowrap; }
   #menu .m-foot { padding: 8px 12px 0; display: grid; gap: 5px; justify-items: start; }
+  /* SURVEYS, ABOUT, PROGRESS and now SETTINGS put nothing in the foot, and an
+     empty grid still spends its padding — a strip of dead glass under four
+     screens. The foot is a per-screen action bar, so no action means no bar. */
+  #menu .m-foot:empty { display: none; }
   #menu .m-btn { letter-spacing: 1px; cursor: pointer; min-width: 14em;
     text-align: left; padding: 5px 10px 4px; background: rgba(8,20,23,0.78); border: 1px solid; font-size: 12px; }
   /* The paste field. A real input, because a link is far too long to retype
@@ -287,8 +301,18 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu .m-cta.alt { font-size: 12px; font-weight: 400; padding: 6px 10px 5px;
     color: ${C.hot}; border-color: ${C.hot}; background: rgba(8,20,23,0.5); }
   #menu .m-nav { margin-top: 10px; display: grid; gap: 5px; }
-  #menu .m-navrow { display: flex; align-items: baseline; gap: 8px; cursor: pointer;
-    border: 1px solid ${C.dim}; background: rgba(8,20,23,0.5); padding: 7px 10px 6px; }
+  #menu .m-navrow { display: flex; align-items: center; gap: 8px; cursor: pointer;
+    min-height: 44px; border: 1px solid ${C.dim}; background: rgba(8,20,23,0.5); padding: 7px 10px 6px; }
+  /* A toggle in the utilities strip is not a destination: no chevron, no
+     subtitle, and its label IS its state, so it reads as a switch beside the
+     places to go rather than as one of them. */
+  #menu .m-toggle .name { letter-spacing: 1px; }
+  #menu.hub .m-utilities .m-toggle { border: 1px solid ${C.dim}; }
+  /* The staged count, in the one element every screen has. Gold because it is
+     the same claim the staged rows make on the page that owns them. */
+  #menu .m-staged { margin-left: auto; min-height: 44px; min-width: 44px; cursor: pointer;
+    color: ${C.gold}; border: 1px solid ${C.gold}; background: rgba(190,152,77,0.12);
+    font: inherit; font-size: 11px; letter-spacing: 1px; padding: 0 8px; }
   #menu .m-navrow .name { font-size: 16px; color: ${C.text}; white-space: nowrap; }
   #menu .m-navrow .sub { margin-left: auto; color: ${C.dim}; font-size: 10px; text-align: right; }
   #menu .m-navrow .chev { color: ${C.gold}; font-size: 16px; }
@@ -310,7 +334,37 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu .m-row .del { color: ${C.soft}; cursor: pointer; padding: 0 6px; flex-shrink: 0; }
   #menu .m-meter { display: inline-flex; gap: 1px; align-self: center; flex-shrink: 0; }
   #menu .m-meter i { width: 4px; height: 4px; background: rgba(87,201,176,0.16); }
-  #menu .m-dial { display: flex; align-items: baseline; gap: 8px; padding: 3px 2px; cursor: pointer; }
+  /* ── A ROW YOU CAN TAP IS 44px, AND ONLY A ROW YOU CAN TAP ──
+     The panel already sized its back, close, carousel and chip controls to 44
+     and then laid the bulk of its actual surface — every dial, every list row
+     — out at 3px of padding, which is most of SETTINGS, DRIVES and SURVEYS.
+     The fix is on .hit and .m-dial rather than on .m-row flat, because
+     the rows that are NOT tappable (a credit, a spec line, a dimensions
+     table) do not need a thumb's worth of height and blowing those up would
+     add a screen of scrolling to pages nobody taps. */
+  #menu .m-row.hit { min-height: 44px; align-items: center; }
+  #menu .m-switches { display: flex; flex-direction: column; }
+  #menu .m-switch { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 8px;
+    align-items: center; min-height: 44px; padding: 4px 2px; cursor: pointer;
+    border-bottom: 1px solid rgba(87,201,176,0.08); }
+  #menu .m-switch:focus-visible { outline: 1px solid ${C.gold}; outline-offset: -1px; }
+  #menu .m-switch .sw-id { color: ${C.soft}; font-size: 12px; }
+  #menu .m-switch .sw-val { grid-column: 3; color: ${C.gold}; font-size: 12px; text-align: right;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+  #menu .m-switch .sw-val.unset { color: ${C.dim}; }
+  #menu .m-switch .sw-note { grid-column: 1 / -1; color: ${C.dim}; font-size: 9px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #menu .m-switch .sw-marks { display: flex; gap: 4px; flex-wrap: wrap; }
+  #menu .m-switch .tag { font-style: normal; font-size: 8px; letter-spacing: 1px;
+    padding: 1px 3px; border: 1px solid ${C.dim}; color: ${C.dim}; }
+  /* The marks that change what you are looking at read warm; the ones that
+     only matter to a bench stay quiet; legacy is the retirement list and is
+     the one worth spotting from across the page. */
+  #menu .m-switch .tag.look, #menu .m-switch .tag.world { color: ${C.soft}; border-color: ${C.soft}; }
+  #menu .m-switch .tag.legacy { color: ${C.hot}; border-color: ${C.hot}; }
+  #menu .m-switch.staged { background: rgba(190,152,77,0.10); }
+  #menu .m-switch.staged .sw-id { color: ${C.gold}; }
+  #menu .m-dial { display: flex; align-items: center; gap: 8px; padding: 3px 2px; cursor: pointer; min-height: 44px; }
   #menu .m-dial .lab { color: ${C.soft}; font-size: 12px; }
   #menu .m-dial .val { margin-left: auto; color: ${C.gold}; font-size: 12px; }
   #menu input[type=color] { margin-left: auto; width: 38px; height: 20px; padding: 1px;
@@ -555,15 +609,35 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     head.replaceChildren();
     const x = el('button', 'm-x', 'X');
     x.addEventListener('click', () => close());
+    // ── A PENDING CHANGE FOLLOWS YOU, OR IT IS NOT PENDING ──
+    //
+    // A staged switch set lives in this closure, so it survives a tab change
+    // AND a close — while the RELOAD button that spends it is built only inside
+    // ADVANCED. Measured: stage one, go to RIG, and nothing on the screen says
+    // anything is waiting; shut the menu, reopen, and it is still staged. That
+    // is the same fault as a switch nobody remembers, one level up: an
+    // intention the surface has stopped mentioning. The count rides in the
+    // header, which is the one element every screen has, and taps back to the
+    // page that can spend it.
+    const n = Object.keys(swStaged).length;
+    const chip = n ? el('button', 'm-staged', `⚑ ${n}`) : null;
+    if (chip) {
+      chip.type = 'button';
+      chip.setAttribute('aria-label', `${n} switch${n === 1 ? '' : 'es'} staged, not yet reloaded`);
+      chip.addEventListener('click', () => setTab(T_ADVANCED));
+      // .m-x carries margin-left:auto; with a chip beside it the chip takes
+      // that job, or the two would be pushed to opposite ends of the header.
+      x.style.marginLeft = '6px';
+    }
     if (tab === T_DRIVE || tab === null) {
       const t = el('div', 'm-title');
       t.append(el('span', 'at', '@c15r/'), 'drive');
-      head.append(t, x);
+      head.append(t, ...(chip ? [chip] : []), x);
       subT.style.display = 'none';
     } else {
       const back = el('button', 'm-back', '< BACK');
       back.addEventListener('click', () => setTab(T_DRIVE));
-      head.append(back, el('div', 'm-title', TITLES[tab] ?? ''), x);
+      head.append(back, el('div', 'm-title', TITLES[tab] ?? ''), ...(chip ? [chip] : []), x);
       subT.style.display = 'none';
     }
   }
@@ -571,6 +645,12 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   // ── state ──────────────────────────────────────────────────────────
   let tab: number | null = null;
   let rigLive = true;
+  /** Which marks the SWITCHES list is showing, and what a tap has staged but
+   *  not yet reloaded. Both live here rather than in renderSettings because a
+   *  re-render rebuilds that function's whole DOM tree and would otherwise
+   *  throw away the filter mid-scroll and the staged set mid-edit. */
+  let swMark: string = 'all';
+  let swStaged: Record<string, string | null> = {};
   let bayEl: HTMLElement | null = null;
   let bayGridFor = '';           // last grid applied, so refresh doesn't redo it
   let currentStatus: { s: string; bad: boolean } | null = null;   // the CURRENT row's transient state
@@ -713,6 +793,31 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     const nav = el('nav', 'm-nav');
     nav.setAttribute('aria-label', 'Explore Drive');
     const utilities = el('div', 'm-utilities');
+    // ── THE TWO DEVICE TOGGLES, ONE EITHER SIDE OF THE UTILITIES ──
+    //
+    // Sound and the HUD are not settings. They are the state of THIS device
+    // right now, wanted in one tap and wanted often — and they were in the FOOT
+    // of the SETTINGS page, which is to say nine screenfuls in, behind every
+    // switch and every dial, on the one screen whose own job is tuning. Worse,
+    // the foot is not a persistent bar: DRIVES stacks four page actions in it
+    // and THE LINE puts a single CTA there, so two global toggles in that slot
+    // taught the wrong thing about what the slot is for.
+    //
+    // They bracket the utilities on the splash instead — the screen every BACK
+    // returns to — with the navigation between them. Left and right rather than
+    // in the row: a toggle is not a destination, and putting it inline with
+    // SETTINGS and ABOUT would read as one.
+    const sndRow = el('button', 'm-navrow m-toggle');
+    const sndIco = ico(ICON.sound), sndName = el('span', 'name', '');
+    sndRow.append(sndIco, sndName);
+    sndRow.addEventListener('click', () => { ctx.soundTap(); refresh(); });
+    updaters.push(() => {
+      const col = tone(ctx.soundTone());
+      sndName.textContent = ctx.soundLabel();
+      sndName.style.color = col;
+      sndIco.style.color = col;
+    });
+    utilities.appendChild(sndRow);
     // THE LINE is an optional journey alongside the free-drive destinations.
     const lineRow = el('button', 'm-navrow');
     const lnIco = ico(ICON.road), lnName = el('span', 'name', 'THE LINE'),
@@ -737,50 +842,51 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       row.addEventListener('click', () => setTab(t));
       if (t === T_SYSTEM) utilities.appendChild(row); else nav.appendChild(row);
     }
-    // …and SIGN IN, in the same stack rather than shouting above it. A player
-    // who never taps it loses nothing, so it reads as one more section — but it
-    // is ON THE SPLASH, because a sign-in buried three screens down is a sign-in
-    // nobody finds until after they have driven a thousand kilometres.
-    //
-    // ONLY WHEN IT IS A SIGN-IN. Signed in, this row said PROGRESS and did
-    // nothing but hop to SETTINGS — a whole line of the first screen anyone
-    // sees, spent on a redirect to a page already one row above it. The sync
-    // state it reported lives in SETTINGS beside the button that changes it,
-    // which is where a status belongs. Signing out is a destructive tap and
-    // does not belong on the screen you land on either.
-    const signRow = el('button', 'm-navrow');
-    const signIco = ico(ICON.save), signName = el('span', 'name', ''),
-      signSub = el('span', 'sub', ''), signChev = el('span', 'chev', '>');
-    signRow.append(signIco, signName, signSub, signChev);
-    signRow.addEventListener('click', () => {
-      if (ctx.syncPhase() === 'off') ctx.syncTap();      // …which navigates to the apex
-      else setTab(T_SYSTEM);
-    });
-    updaters.push(() => {
-      const out = ctx.syncPhase() === 'off';
-      signRow.style.display = out ? 'flex' : 'none';
-      signName.textContent = 'SIGN IN';
-      signName.style.color = C.gold;
-      signSub.textContent = 'PROGRESS ON EVERY DEVICE';
-      signSub.style.color = C.dim;
-      signChev.style.color = C.gold;
-    });
-    utilities.appendChild(signRow);
-    // ABOUT, and it is not decoration: this world is built out of other
-    // people's surveys — OpenStreetMap's roads, a dozen nations' elevation
-    // data, ESA's land cover — and most of those are given on terms that ASK
-    // to be credited. A game that ships them with no visible attribution is
-    // taking something. It sits on the splash rather than three screens down
-    // for the same reason the sign-in does.
+    // ABOUT is not decoration: this world is built out of other people's
+    // surveys — OpenStreetMap's roads, a dozen nations' elevation data, ESA's
+    // land cover — and most of those are given on terms that ASK to be
+    // credited. A game that ships them with no visible attribution is taking
+    // something. It sits on the splash rather than three screens down.
     const aboutRow = el('button', 'm-navrow');
     aboutRow.append(ico(ICON.map), el('span', 'name', 'ABOUT'),
       el('span', 'sub', 'WHOSE MAPS THIS IS BUILT FROM'), el('span', 'chev', '>'));
     aboutRow.addEventListener('click', () => setTab(T_ABOUT));
     utilities.appendChild(aboutRow);
-    const progress = el('button', 'm-navrow');
-    progress.append(el('span', 'name', 'PROGRESS'));
-    progress.addEventListener('click', () => setTab(T_PROGRESS));
-    utilities.appendChild(progress);
+    // ── ONE SLOT, WHICHEVER SIDE OF THE SIGN-IN THIS DEVICE IS ON ──
+    //
+    // SIGN IN and PROGRESS were two rows of the same strip and at most one of
+    // them ever meant anything — signed out, PROGRESS was the only tile in the
+    // row with no icon and no subtitle, whose whole job was to hop to a page;
+    // signed in, SIGN IN hid itself and left that orphan behind. Both were on
+    // the splash at once, which is how the redundancy was visible in the first
+    // screenshot anyone took of it. One slot now, and it says which side of the
+    // line the device is on: SIGN IN while there is something to gain by it,
+    // PROGRESS once there is something to look at.
+    const acctRow = el('button', 'm-navrow');
+    const acctIco = ico(ICON.save), acctName = el('span', 'name', ''),
+      acctSub = el('span', 'sub', ''), acctChev = el('span', 'chev', '>');
+    acctRow.append(acctIco, acctName, acctSub, acctChev);
+    acctRow.addEventListener('click', () => {
+      if (ctx.syncPhase() === 'off') ctx.syncTap();      // …which navigates to the apex
+      else setTab(T_PROGRESS);
+    });
+    updaters.push(() => {
+      const out = ctx.syncPhase() === 'off';
+      acctName.textContent = out ? 'SIGN IN' : 'PROGRESS';
+      acctName.style.color = out ? C.gold : C.text;
+      acctSub.textContent = out ? 'PROGRESS ON EVERY DEVICE' : ctx.syncNote();
+      acctSub.style.color = C.dim;
+      acctChev.style.color = C.gold;
+    });
+    utilities.appendChild(acctRow);
+    // …and the HUD toggle closes the strip. It is an EXIT as much as a toggle —
+    // it shuts the menu and goes chromeless — which is why it is last and why
+    // it never went in the header beside the X: two exits a thumb's width apart
+    // with different side effects is worse than the scroll it replaced.
+    const hudRow = el('button', 'm-navrow m-toggle');
+    hudRow.append(ico(ICON.hide), el('span', 'name', 'HIDE HUD'));
+    hudRow.addEventListener('click', () => { close(); ctx.hideHud(); });
+    utilities.appendChild(hudRow);
     nav.appendChild(lineRow);
     Array.from(nav.children).forEach((row, i) => (row as HTMLElement).dataset.index = `0${i + 1}`);
     for (const b of [...Array.from(nav.children), ...Array.from(utilities.children)]) (b as HTMLButtonElement).type = 'button';
@@ -1226,25 +1332,6 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       variants.appendChild(b);
     });
     body.appendChild(variants);
-    body.appendChild(kvTable(ctx.systemRows));
-    // ── EVERY SWITCH, WHETHER OR NOT IT IS ON ──
-    //
-    // Fifty-three query-string switches had grown up one at a time and nothing
-    // listed them: ten appeared in no note, no test and no devtool. They are
-    // declared in one table now and this is that table, so the surface cannot
-    // drift out of a reader's reach again. A `•` is one this URL set; LEGACY
-    // marks a switch whose other position keeps a superseded path alive, which
-    // is the list to read when asking what can be retired.
-    const sw = ctx.switches?.() ?? [];
-    if (sw.length) {
-      const legacy = sw.filter((x) => x.marks.includes('legacy')).length;
-      const set = sw.filter((x) => x.set).length;
-      body.append(el('div', 'm-sect', 'SWITCHES'));
-      body.append(el('div', 'm-dimline',
-        `${sw.length} in this build · ${legacy} keep an older path alive · ${set} set by this link`));
-      body.appendChild(kvTable(() => (ctx.switches?.() ?? []).map((x) =>
-        [`${x.set ? '• ' : ''}?${x.id}${x.marks.includes('legacy') ? '  LEGACY' : ''}`, x.value] as [string, string])));
-    }
     // SIGNING IN IS OPTIONAL AND SAYS SO. A player who never touches this keeps
     // playing exactly as before, with progress on the device — so the row leads
     // with what it does rather than with a demand.
@@ -1262,6 +1349,236 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       syncNote.style.color = ctx.syncTone() === 'bad' ? C.bad : C.dim;
     });
     body.append(sync, syncNote);
+    dialsInto(body, ctx.dialGroups('system'));
+    // ── THE DOOR TO THE DEEP END ──
+    //
+    // SETTINGS was nine screenfuls of a 678px window and the first five were
+    // the switch table — so sign-in, the dial rack and every ordinary
+    // preference sat behind a wall of reference material, and the two genuinely
+    // dangerous buttons in the cell sat in the same scroll as the PIXEL dial.
+    // Two screens, split by who the row is FOR rather than by what subsystem it
+    // belongs to: what a player tunes stays here, and what can delete their
+    // world or turn on a superseded code path is one deliberate tap away.
+    body.append(el('div', 'm-sect', 'MORE'));
+    const adv = el('button', 'm-navrow');
+    adv.type = 'button';
+    adv.append(ico(ICON.wrench), el('span', 'name', 'ADVANCED'),
+      el('span', 'sub', 'SWITCHES · CONSOLE · STORAGE · RESETS'), el('span', 'chev', '>'));
+    adv.addEventListener('click', () => setTab(T_ADVANCED));
+    body.appendChild(adv);
+  }
+
+  /**
+   * ── ADVANCED: THE SWITCHES, THE CONSOLE, AND THE TWO BUTTONS THAT DELETE ──
+   *
+   * Everything here is either a developer's lever or destructive, and the two
+   * belong together for one reason: both are things a player should be able to
+   * REACH and should never arrive at by scrolling. The order runs from harmless
+   * to final — the switch table, the recorder, the console, then the resets —
+   * so the last thing on the page is the thing that hands the device back.
+   */
+  function renderAdvanced(): void {
+    body.append(el('div', 'm-dimline',
+      'DEVELOPER LEVERS AND THE BUTTONS THAT DELETE. NOTHING HERE IS NEEDED TO DRIVE.'));
+    // ── EVERY SWITCH, WHETHER OR NOT IT IS ON ──
+    //
+    // Fifty-three query-string switches had grown up one at a time and nothing
+    // listed them: ten appeared in no note, no test and no devtool. They are
+    // declared in one table now and this is that table, so the surface cannot
+    // drift out of a reader's reach again. A `•` is one this URL set; LEGACY
+    // marks a switch whose other position keeps a superseded path alive, which
+    // is the list to read when asking what can be retired.
+    const sw = ctx.switches?.() ?? [];
+    if (sw.length) {
+      // ── EVERY SWITCH, AND NOW REACHABLE ──
+      //
+      // This was a kvTable: sixty-seven rows of text with no click handler, so
+      // the one thing a player could not do on the SETTINGS panel was set a
+      // setting. The list was honest about WHAT EXISTS and silent about how to
+      // reach any of it, and the answer — edit the query string by hand and
+      // reload — is not one a phone can carry out at all.
+      //
+      // Three things fix that, and the third is the one that makes the other
+      // two safe:
+      //
+      //   FILTER BY MARK. Sixty-seven rows in one scroll is a list nobody
+      //   reads. The marks were already carried on every row and rendered on
+      //   none of them except `legacy`, so a bench probe and the spawn
+      //   latitude looked identical. They are chips now, and the count beside
+      //   each says how many it would show.
+      //
+      //   TAP TO STAGE, NOT TO APPLY. A switch is read once into a `const`
+      //   while the module initialises — see `urlWithSwitches` — so a control
+      //   that flipped one live would be lying about when it takes effect. A
+      //   tap stages; the foot says what is staged; one RELOAD spends the lot.
+      //   Staging also means a set of changes arrives together, which is what
+      //   an A/B usually needs and what hand-editing a URL made tedious.
+      //
+      //   AND THE STAGED SET IS SHOWN AS THE DIFF IT IS. `?id` in gold with
+      //   its new value beside the old one, so the reload is never a surprise.
+      const marks = ['all', 'set', 'world', 'look', 'bench', 'legacy'] as const;
+      const showing = (x: { set: boolean; marks: readonly string[] }): boolean =>
+        swMark === 'all' ? true : swMark === 'set' ? x.set : x.marks.includes(swMark);
+      const staged = (): number => Object.keys(swStaged).length;
+
+      body.append(el('div', 'm-sect', 'SWITCHES'));
+      body.append(el('div', 'm-dimline',
+        `${sw.length} in this build · ${sw.filter((x) => x.marks.includes('legacy')).length} keep an older path alive · ${sw.filter((x) => x.set).length} set by this link`));
+
+      const chips = el('div', 'm-choice m-swfilter');
+      for (const m of marks) {
+        const n = m === 'all' ? sw.length
+          : m === 'set' ? sw.filter((x) => x.set).length
+            : sw.filter((x) => x.marks.includes(m)).length;
+        const b = el('button', '', `${m.toUpperCase()} ${n}`);
+        b.setAttribute('aria-pressed', String(swMark === m));
+        b.addEventListener('click', () => { swMark = m; render(); });
+        chips.appendChild(b);
+      }
+      body.appendChild(chips);
+
+      const list = el('div', 'm-switches');
+      for (const x of sw) {
+        if (!showing(x)) continue;
+        const row = el('div', 'm-switch');
+        const has = Object.prototype.hasOwnProperty.call(swStaged, x.id);
+        const now = has ? swStaged[x.id] : x.raw;
+        if (has) row.classList.add('staged');
+        const name = el('div', 'sw-id', `?${x.id}`);
+        // A mark is what KIND of switch this is, and the row says so rather
+        // than leaving it to be inferred from the id.
+        const tags = el('div', 'sw-marks');
+        for (const m of x.marks) tags.appendChild(el('i', `tag ${m}`, m));
+        const val = el('div', 'sw-val', now === null ? x.value : (now === '' ? 'on' : now));
+        if (now === null) val.classList.add('unset');
+        const note = el('div', 'sw-note', x.note);
+        row.append(name, tags, val, note);
+
+        // A toggle cycles through the three states it really has — the URL
+        // says on, the URL says off, the URL says nothing — because "unset"
+        // is not the same as "set to the default" and the reader (`qsOn`)
+        // already draws that distinction.
+        const cycle = (): void => {
+          if (x.kind === 'toggle') {
+            const next = now === null ? '1' : now === '1' ? '0' : null;
+            if (next === x.raw) delete swStaged[x.id]; else swStaged[x.id] = next;
+            render();
+            return;
+          }
+          // Anything with a value is typed, because six named steps do not
+          // cover a latitude. An empty box clears the switch.
+          const typed = prompt(`?${x.id} — ${x.note}\n\nwithout it: ${x.value}`, now ?? '');
+          if (typed === null) return;
+          const next = typed.trim() === '' ? null : typed.trim();
+          if (next === x.raw) delete swStaged[x.id]; else swStaged[x.id] = next;
+          render();
+        };
+        row.addEventListener('click', cycle);
+        row.tabIndex = 0;
+        row.addEventListener('keydown', (e) => {
+          if ((e as KeyboardEvent).key === 'Enter' || (e as KeyboardEvent).key === ' ') { e.preventDefault(); cycle(); }
+        });
+        list.appendChild(row);
+      }
+      body.appendChild(list);
+      if (!list.childElementCount) body.append(el('div', 'm-dimline', 'NONE WITH THIS MARK'));
+
+      if (staged()) {
+        const diff = Object.entries(swStaged)
+          .map(([id, v]) => (v === null ? `?${id} CLEARED` : `?${id}=${v === '' ? 'on' : v}`)).join(' · ');
+        body.append(el('div', 'm-sect', 'STAGED'));
+        body.append(el('div', 'm-dimline', diff));
+        const bar = el('div', 'm-choice');
+        // NOT "RELOAD WITH n" — STORAGE already offers RELOAD WITH CONSOLE a
+        // screen further down, and two buttons on one page that begin with the
+        // same two words are a misread waiting to happen.
+        bar.appendChild(button(`RELOAD · ${staged()} STAGED`, C.gold, () => {
+          // An EMPTY query is a real answer — it is what clearing the last
+          // switch produces — so the guard is on the method being absent, not
+          // on the string being falsy, and the path is put back in front of
+          // it. `location.href = ''` reloads the URL you are already on, which
+          // would have made "clear the only switch set" do nothing at all.
+          const q = ctx.switchUrl?.(swStaged);
+          if (q === undefined) return;
+          swStaged = {};
+          location.href = location.pathname + q;
+        }, ICON.gear));
+        bar.appendChild(button('CLEAR', C.soft, () => { swStaged = {}; render(); }));
+        body.appendChild(bar);
+      }
+    }
+    // ── the recorder ──
+    // A DEV INSTRUMENT FIRST. It sits under the dials rather than in the deck
+    // because nothing here is wanted mid-corner: you notice something, you
+    // stop, you keep the last two minutes and play them back.
+    const tapeNote = el('div', 'm-dimline', '');
+    const keep = button('KEEP LAST RUN', C.soft, () => {
+      tapeNote.textContent = ctx.tapeKeep();
+      refresh();
+    }, ICON.save);
+    // CUT: the ring is always turning, so a run KEPT off it starts wherever
+    // the trimming left it. This says "start here" — the deck's RING clock
+    // drops to 0:00 and the next KEEP holds exactly what you drove after it.
+    const cut = button('CUT RING - START HERE', C.soft, () => {
+      bankNote.style.display = '';
+      bankNote.textContent = ctx.tapeClear?.() ?? '';
+      refresh();
+    }, ICON.flag);
+    // BANK: the kept run, made durable and shareable. Its OWN note line: the
+    // recorder's status updater rewrites tapeNote every tick, so the BANKED
+    // line (with the public URL in it) survived less than a second there —
+    // which read as the bank not working at all (owner-caught).
+    const bankNote = el('div', 'm-dimline', '');
+    bankNote.style.display = 'none';
+    const bank = button('BANK KEPT RUN', C.soft, () => {
+      bankNote.style.display = '';
+      bankNote.textContent = 'BANKING…';
+      void ctx.tapeBank?.().then((s) => { bankNote.textContent = s; });
+    }, ICON.gps);
+    const play = button('PLAY LAST RUN', C.soft, () => {
+      const t = ctx.tape();
+      if (t.playing || t.armed) { ctx.tapeStopPlay(); } else { ctx.tapePlay(); close(); }
+      refresh();
+    }, ICON.gps);
+    updaters.push(() => {
+      const t = ctx.tape();
+      const mm = Math.floor(t.ring / 60), ss = String(Math.round(t.ring % 60)).padStart(2, '0');
+      // The status says what it HOLDS and whether it is worth keeping, which is
+      // the one thing a tape of moving ground cannot tell you afterwards.
+      tapeNote.textContent = t.playing
+        ? `PLAYING ${t.at}/${t.of} · DRIFT ${t.drift}M`
+        : `RING ${mm}:${ss} · ${t.kb}KB${t.settled ? '' : ' · GROUND STILL ARRIVING'}`;
+      tapeNote.style.color = t.settled || t.playing ? C.dim : C.bad;
+      setLab(play, t.playing || t.armed ? 'STOP PLAYBACK' : 'PLAY LAST RUN');
+      setLab(keep, t.kept ? `KEEP LAST RUN (${t.kept})` : 'KEEP LAST RUN');
+    });
+    body.append(cut, keep, bank, play, tapeNote, bankNote);
+    // ── the dev console ──
+    // A devtools panel ON the page, for the phone, which has no other. Loaded
+    // only when asked, from a pinned build; `?eruda=1` does the same at boot.
+    // Reading is the point — the page forbids eval, so its prompt cannot run
+    // code here; the probe module in index.ts is how that is done without a
+    // CSP hole.
+    const devNote = el('div', 'm-dimline',
+      'CONSOLE, NETWORK, ELEMENTS AND STORAGE, ON THE PAGE — FOR READING WHAT THE GAME DID ON THIS PHONE. ON AN ORDINARY LOAD ITS PROMPT CANNOT RUN CODE; RELOAD WITH CONSOLE SERVES THIS PAGE UNDER A POLICY THAT LETS IT.');
+    const dev = button('DEV CONSOLE', C.soft, () => {
+      ctx.devConsole((s, bad) => {
+        devNote.textContent = s;
+        devNote.style.color = bad ? C.bad : C.dim;
+      });
+    }, ICON.gear);
+    // THE SAME PLACE, RELOADED WITH `?eruda=1`: the only load the cell serves
+    // with eval allowed, so the prompt works. A reload costs the streamed
+    // world and not the record — pagehide flushes the survey, the marks and
+    // the docket first.
+    const devReload = button('RELOAD WITH CONSOLE', C.soft, () => {
+      ctx.devReload((s, bad) => {
+        devNote.textContent = s;
+        devNote.style.color = bad ? C.bad : C.dim;
+      });
+    }, ICON.gear);
+    body.append(dev, devReload, devNote);
+
     // THE CAMPAIGN RESET. Destructive, so deliberately two-tap: the first
     // arms, the second wipes — and the armed state stands down on its own if
     // the second tap never comes. It hands the docket back (run, missions,
@@ -1345,87 +1662,6 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     }, ICON.warn);
     body.append(wipe, wipeNote);
 
-    // ── the dev console ──
-    // A devtools panel ON the page, for the phone, which has no other. Loaded
-    // only when asked, from a pinned build; `?eruda=1` does the same at boot.
-    // Reading is the point — the page forbids eval, so its prompt cannot run
-    // code here; the probe module in index.ts is how that is done without a
-    // CSP hole.
-    const devNote = el('div', 'm-dimline',
-      'CONSOLE, NETWORK, ELEMENTS AND STORAGE, ON THE PAGE — FOR READING WHAT THE GAME DID ON THIS PHONE. ON AN ORDINARY LOAD ITS PROMPT CANNOT RUN CODE; RELOAD WITH CONSOLE SERVES THIS PAGE UNDER A POLICY THAT LETS IT.');
-    const dev = button('DEV CONSOLE', C.soft, () => {
-      ctx.devConsole((s, bad) => {
-        devNote.textContent = s;
-        devNote.style.color = bad ? C.bad : C.dim;
-      });
-    }, ICON.gear);
-    // THE SAME PLACE, RELOADED WITH `?eruda=1`: the only load the cell serves
-    // with eval allowed, so the prompt works. A reload costs the streamed
-    // world and not the record — pagehide flushes the survey, the marks and
-    // the docket first.
-    const devReload = button('RELOAD WITH CONSOLE', C.soft, () => {
-      ctx.devReload((s, bad) => {
-        devNote.textContent = s;
-        devNote.style.color = bad ? C.bad : C.dim;
-      });
-    }, ICON.gear);
-    body.append(dev, devReload, devNote);
-
-    // ── the recorder ──
-    // A DEV INSTRUMENT FIRST. It sits under the dials rather than in the deck
-    // because nothing here is wanted mid-corner: you notice something, you
-    // stop, you keep the last two minutes and play them back.
-    const tapeNote = el('div', 'm-dimline', '');
-    const keep = button('KEEP LAST RUN', C.soft, () => {
-      tapeNote.textContent = ctx.tapeKeep();
-      refresh();
-    }, ICON.save);
-    // CUT: the ring is always turning, so a run KEPT off it starts wherever
-    // the trimming left it. This says "start here" — the deck's RING clock
-    // drops to 0:00 and the next KEEP holds exactly what you drove after it.
-    const cut = button('CUT RING - START HERE', C.soft, () => {
-      bankNote.style.display = '';
-      bankNote.textContent = ctx.tapeClear?.() ?? '';
-      refresh();
-    }, ICON.flag);
-    // BANK: the kept run, made durable and shareable. Its OWN note line: the
-    // recorder's status updater rewrites tapeNote every tick, so the BANKED
-    // line (with the public URL in it) survived less than a second there —
-    // which read as the bank not working at all (owner-caught).
-    const bankNote = el('div', 'm-dimline', '');
-    bankNote.style.display = 'none';
-    const bank = button('BANK KEPT RUN', C.soft, () => {
-      bankNote.style.display = '';
-      bankNote.textContent = 'BANKING…';
-      void ctx.tapeBank?.().then((s) => { bankNote.textContent = s; });
-    }, ICON.gps);
-    const play = button('PLAY LAST RUN', C.soft, () => {
-      const t = ctx.tape();
-      if (t.playing || t.armed) { ctx.tapeStopPlay(); } else { ctx.tapePlay(); close(); }
-      refresh();
-    }, ICON.gps);
-    updaters.push(() => {
-      const t = ctx.tape();
-      const mm = Math.floor(t.ring / 60), ss = String(Math.round(t.ring % 60)).padStart(2, '0');
-      // The status says what it HOLDS and whether it is worth keeping, which is
-      // the one thing a tape of moving ground cannot tell you afterwards.
-      tapeNote.textContent = t.playing
-        ? `PLAYING ${t.at}/${t.of} · DRIFT ${t.drift}M`
-        : `RING ${mm}:${ss} · ${t.kb}KB${t.settled ? '' : ' · GROUND STILL ARRIVING'}`;
-      tapeNote.style.color = t.settled || t.playing ? C.dim : C.bad;
-      setLab(play, t.playing || t.armed ? 'STOP PLAYBACK' : 'PLAY LAST RUN');
-      setLab(keep, t.kept ? `KEEP LAST RUN (${t.kept})` : 'KEEP LAST RUN');
-    });
-    body.append(cut, keep, bank, play, tapeNote, bankNote);
-    dialsInto(body, ctx.dialGroups('system'));
-    const snd = button('', C.soft, () => { ctx.soundTap(); refresh(); }, ICON.sound);
-    updaters.push(() => {
-      const col = tone(ctx.soundTone());
-      setLab(snd, ctx.soundLabel());
-      snd.style.color = col;
-      snd.style.borderColor = col;
-    });
-    foot.append(snd, button('HIDE HUD', C.soft, () => { close(); ctx.hideHud(); }, ICON.hide));
   }
 
   // ── render / refresh ───────────────────────────────────────────────
@@ -1450,6 +1686,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     renderHead();
     ([
       renderHome, renderSurveys, renderRig, renderDrives, renderSettings, renderLine, renderAbout, renderProgress,
+      renderAdvanced,
     ][tab] ?? renderHome)();
     // FILL THE VALUES BEFORE THE SCREEN IS SEEN. Everything dynamic here is
     // created empty and written by an updater, and the updaters only ran on the

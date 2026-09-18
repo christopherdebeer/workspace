@@ -14,7 +14,8 @@
  * rasterised; shipping the few hundred near the tile costs tens of
  * kilobytes and cannot go stale.
  */
-import { createTerrainKernel, type HeightTile, type CoverTile, type StripLike, type Rgb, type AreaPatchLike, type TerrainStore, type CarveLog } from './terrain-kernel';
+import { buildSubstrateCells, SUB_FIELD_N } from './substrate-field';
+import { createTerrainKernel, type HeightTile, type CoverTile, type StripLike, type Rgb, type AreaPatchLike, type TerrainCrossingMask, type TerrainStore, type CarveLog, type BreakLine } from './terrain-kernel';
 
 export interface TerrainJob {
   id: number; epoch: number; key: string;
@@ -25,11 +26,14 @@ export interface TerrainJob {
   /** Only the hydro raster: no build, no mesh — a refeed with no build behind it. */
   hydroOnly?: boolean;
   baseElev: number; seaAbs: number; seaOn: boolean; dryAt: boolean;
-  nrmScale: number; cutWash: number; cprobe: boolean; cutRelief: boolean;
+  nrmCoarsePx: number; nrmRes: number;
+  cutWash: number; cprobe: boolean; cutRelief: boolean;
   cutL: number; grid: number; water: number; built: number; waterTilt: number; coverPx: number;
   origin: { lat: number; lon: number; mLon: number };
   strips: Float64Array; stripCells: Array<[string, number[]]>;
   channels: Float64Array; chanCells: Array<[string, number[]]>;
+  hydroBreakLines: Float64Array;
+  crossings: TerrainCrossingMask[];
   areas: AreaPatchLike[];
   pads: Float64Array;
   clim: Float32Array; climN: number; climK: number;
@@ -38,6 +42,14 @@ export interface TerrainJob {
 export interface TerrainReply {
   id: number; key: string; epoch: number; error?: string; hydroOnly?: boolean;
   pos: Float32Array; uv: Float32Array; idx: Uint32Array; colors: Float32Array; normals: Float32Array;
+  /** Per vertex [rough, grain, slope, coverClass] for the substrate renderer
+   *  and the ground views — see the kernel's TileBuild.mats. */
+  mats: Float32Array;
+  /** The tile's geomorphic substrate field — see the kernel's TileBuild.sub.
+   *  Two RGBA byte lattices, retained on the main thread for the sward and
+   *  uploaded as the terrain material's own pair of textures. */
+  subA: Uint8Array;
+  subB: Uint8Array;
   kinds: Uint8Array | null; cellOffs: Int32Array; cellTris: Int32Array;
   border: Float64Array; normalMap: Uint8Array; refined: boolean; corridor: boolean;
   hydroElev: Float32Array | null;
@@ -81,6 +93,15 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
       const sampler = K.makeSampler({ heights, cover, origin: job.origin, baseElev: job.baseElev, pads: job.pads, waterTilt: job.waterTilt, coverPx: job.coverPx });
       const strips = unflat(job.strips, job.stripCells);
       const channels = unflat(job.channels, job.chanCells);
+      const hydroBreakLines: BreakLine[] = [];
+      for (let i = 0; i + 3 < job.hydroBreakLines.length; i += 4) {
+        hydroBreakLines.push({
+          ax: job.hydroBreakLines[i],
+          az: job.hydroBreakLines[i + 1],
+          bx: job.hydroBreakLines[i + 2],
+          bz: job.hydroBreakLines[i + 3],
+        });
+      }
       const N = job.climN, KW = job.climK, t = job.tile;
       const climate = (x: number, z: number): ArrayLike<number> | null => {
         if (!N) return null;
@@ -102,12 +123,14 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
         sampleCover: sampler.sampleCover,
         coverPaint: (x, z) => sampler.coverPaint(x, z, job.water),
         coverWater: (x, z) => sampler.coverWater(x, z, job.water),
+        crossingAt: (x, z) => K.crossingKindAt(job.crossings, x, z),
         cover: { water: job.water, built: job.built },
         seaAbs: () => job.seaAbs, baseElev: job.baseElev,
         strips, cutL: job.cutL, channels, grid: job.grid,
+        hydroBreakLines: () => hydroBreakLines,
         onRoad: (x, z) => K.onRoadOf(strips, job.cutL, x, z),
         palette, areaTint: (x, z) => K.areaTintOf(job.areas, x, z),
-        borders, nrmScale: job.nrmScale, cutWash: job.cutWash, cprobe: job.cprobe, carveLog, cutRelief: job.cutRelief,
+        borders, nrmCoarsePx: job.nrmCoarsePx, nrmRes: job.nrmRes, cutWash: job.cutWash, cprobe: job.cprobe, carveLog, cutRelief: job.cutRelief,
       };
       if (job.hydroOnly) {
         const hydroElev = K.hydroElevation(S, t, job.hydroN || 132);
@@ -125,12 +148,13 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
       }
       const reply: TerrainReply = {
         id: job.id, key: job.key, epoch: job.epoch,
-        pos: b.pos, uv: b.uv, idx: b.idx, colors: b.colors, normals: b.normals, kinds: b.kinds,
+        pos: b.pos, uv: b.uv, idx: b.idx, colors: b.colors, normals: b.normals, mats: b.mats, kinds: b.kinds,
+        subA: b.sub.a, subB: b.sub.b,
         cellOffs: b.cellTris.offs, cellTris: b.cellTris.tris, border, normalMap, refined: b.refined, corridor: b.corridor,
         hydroElev, followers, workerMs: performance.now() - t0, carveLog: carveLog.get(job.key) ?? null,
         refineCost: { ...K.refineCost }, plainCost: { ...K.plainCost }, carveCost: { ...K.carveCost },
       };
-      const transfer = [b.pos.buffer, b.uv.buffer, b.idx.buffer, b.colors.buffer, b.normals.buffer, b.cellTris.offs.buffer, b.cellTris.tris.buffer, normalMap.buffer] as unknown as Transferable[];
+      const transfer = [b.pos.buffer, b.uv.buffer, b.idx.buffer, b.colors.buffer, b.normals.buffer, b.mats.buffer, b.sub.a.buffer, b.sub.b.buffer, b.cellTris.offs.buffer, b.cellTris.tris.buffer, normalMap.buffer] as unknown as Transferable[];
       if (b.kinds) transfer.push(b.kinds.buffer as unknown as Transferable);
       if (hydroElev) transfer.push(hydroElev.buffer as unknown as Transferable);
       (self as unknown as { postMessage(m: unknown, t: Transferable[]): void }).postMessage(reply, transfer);
@@ -140,7 +164,12 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
   };
 }
 export function terrainWorkerSource(): string {
-  return `'use strict';\n(${terrainWorkerMain.toString()})((${createTerrainKernel.toString()})());`;
+  // THE GEOMORPHIC BUILDER TRAVELS AS TEXT, not as a hand-copy. It is written
+  // to close over nothing for exactly this line; `substrate-morph.test.mjs`
+  // re-evaluates it with no scope and requires byte-identical output, which is
+  // the check that fails instead of the worker throwing on its first job.
+  return `'use strict';\n(${terrainWorkerMain.toString()})((${createTerrainKernel.toString()})(`
+    + `${buildSubstrateCells.toString()}, ${SUB_FIELD_N}));`;
 }
 interface Pending { at: number; resolve: (r: TerrainReply) => void; reject: (e: Error) => void }
 export class TerrainWorker {
@@ -160,6 +189,21 @@ export class TerrainWorker {
       this.ensureWorker().postMessage({ type: 'height', key, tile: { tx: t.tx, ty: t.ty, xs: t.xs, zs: t.zs, w: t.w, h: t.h, data } }, [data.buffer as unknown as Transferable]);
       this.mirrored.add('h' + key); this.stats.mirrored++;
     } catch { this.disabled = true; }
+  }
+  /**
+   * A raster that has CHANGED since it was mirrored.
+   *
+   * The guard above exists so a tile is sent once rather than with every job,
+   * and it is exactly right until something repairs a raster in place — a
+   * bridge's deck taken out of the elevation (see noteBridgeSpan in main.ts).
+   * Without this the worker keeps the first copy for ever: the wheels, the
+   * water and the road solve read the repaired ground while the MESH is still
+   * built from the ridge, which is the picture and the physics disagreeing
+   * about the floor.
+   */
+  remirrorHeight(key: string, t: HeightTile): void {
+    this.mirrored.delete('h' + key);
+    this.mirrorHeight(key, t);
   }
   mirrorCover(key: string, t: CoverTile): void {
     if (this.disabled || this.mirrored.has('c' + key)) return;

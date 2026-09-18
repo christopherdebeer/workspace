@@ -132,7 +132,13 @@ for (const [name, spot, cap, tone] of [
   // The shell stands on the same ground here, so this is the tight one.
   ['senqu', 'lat=-30.6944&lon=27.7642&h=329&cam=chase&wx=clear&t=NOON', 0.34, 8],
 ]) {
-  const d = await openDrive({ spot, tag: `far-${name}`, settle: 45000 });
+  // `REV=<sha>` builds the client from that revision instead, so this suite can
+  // be its own control. CLAUDE.md asks for that before blaming a change, and
+  // this file needed it: the `fineR` check fails at isterdalen and senqu on
+  // HEAD and on the parent alike — 45s of WALL time is not enough for the fine
+  // ring to report a radius at two to four frames a second — so without a
+  // control those two reasonably look like whatever you just touched.
+  const d = await openDrive({ spot, tag: `far-${name}`, settle: 45000, ...(process.env.REV ? { rev: process.env.REV } : {}) });
   const far = await d.page.evaluate(() => window.__far());
   check(`${name}: the fine ring has a measured radius to clip against`,
     far.fineR > 0 && far.fineR >= far.tileM, { fineR: far.fineR, tileM: far.tileM });

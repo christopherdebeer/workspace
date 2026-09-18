@@ -27,6 +27,7 @@ export interface HydroFrameUniforms {
   uDebugView: { value: number };
   uWaveAmplitude: { value: number };
   uWaveLength: { value: number };
+  uWaveChop: { value: number };
   uRippleStrength: { value: number };
   uFoamStrength: { value: number };
   uShoreFade: { value: number };
@@ -44,6 +45,7 @@ export interface HydroTileTextures {
    *  flowing water, and only ever bound by the flowing material variant. */
   structure?: THREE.DataTexture;
   waterfalls?: THREE.DataTexture;
+  coast?: THREE.DataTexture;
 }
 
 export interface HydroTileGpuBinding {
@@ -76,6 +78,7 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uDebugView: { value: 0 },
     uWaveAmplitude: { value: 1 },
     uWaveLength: { value: 1 },
+    uWaveChop: { value: 1 },
     uRippleStrength: { value: 1 },
     uFoamStrength: { value: 1 },
     uShoreFade: { value: 1 },
@@ -156,6 +159,11 @@ export function createHydroTextures(field: HydroTileField): HydroTileTextures {
     structure: field.structure ? configure(new THREE.DataTexture(
       field.structure, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
     ), true) : undefined,
+    // Travel time is locally linear like s; exposure is smooth by
+    // construction (a lattice read back bilinearly). Linear filtering.
+    coast: field.coast ? configure(new THREE.DataTexture(
+      field.coast, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
+    ), true) : undefined,
   };
 }
 
@@ -181,16 +189,21 @@ export function createHydroMaterial(
   flowing = false,
   surf = false,
   shade?: SceneShade,
+  edgeBlend = false,
 ): THREE.ShaderMaterial {
   const centralScale = field.resolution / field.width;
   const offset = field.gutter / field.width;
-  const suffix = `${flowing ? ':flowing' : ''}${surf ? ':surf' : ''}`;
+  const suffix = `${flowing ? ':flowing' : ''}${surf ? ':surf' : ''}${edgeBlend ? ':edge-blend' : ''}`;
   return new THREE.ShaderMaterial({
     name: `hydro:${field.key}${suffix}`,
     defines: {
       ...(flowing ? { HYDRO_FLOWING: 1 } : {}),
       ...(flowing && textures.waterfalls ? { HYDRO_FALLS: 1 } : {}),
       ...(surf ? { HYDRO_SURF: 1 } : {}),
+      // The standing and surf variants read the coast field when the tile
+      // has one; the river variant has no sea to refract.
+      ...(!flowing && textures.coast ? { HYDRO_COAST: 1 } : {}),
+      ...(edgeBlend ? { HYDRO_EDGE_BLEND: 1 } : {}),
       ...(shade ? { HYDRO_SCENE_SHADE: 1 } : {}),
     },
     vertexShader: HYDRO_VERTEX_SHADER,
@@ -226,6 +239,7 @@ export function createHydroMaterial(
       // carrying the key costs nothing and keeps this call-site unbranched.
       uHydroStructure: { value: textures.structure ?? null },
       uHydroFalls: { value: textures.waterfalls ?? null },
+      uHydroCoast: { value: textures.coast ?? null },
       // Both the V flip and the water-rect sub-mapping live in one place —
       // see `fieldUvFor`.
       uFieldUv: { value: fieldUvFor(field, centralScale, offset) },
@@ -258,6 +272,7 @@ export function createHydroMaterial(
       uDebugView: frame.uDebugView,
       uWaveAmplitude: frame.uWaveAmplitude,
       uWaveLength: frame.uWaveLength,
+      uWaveChop: frame.uWaveChop,
       uRippleStrength: frame.uRippleStrength,
       uFoamStrength: frame.uFoamStrength,
       uShoreFade: frame.uShoreFade,
@@ -265,6 +280,7 @@ export function createHydroMaterial(
       uRiverEdgeStrength: frame.uRiverEdgeStrength,
       uTurbulenceStrength: frame.uTurbulenceStrength,
       uEddyStrength: frame.uEddyStrength,
+      uEdgeBlendEnabled: { value: edgeBlend ? 1 : 0 },
     },
     // ── A SURFACE YOU CAN BE UNDERNEATH ──
     //
@@ -276,6 +292,9 @@ export function createHydroMaterial(
     // the substance of that; this is so the remaining centimetre of it does
     // not disappear rather than showing a surface.
     side: THREE.DoubleSide,
+    // Inland edge cohesion is an opaque terrain-colour handoff inside the
+    // depth-writing body. Transparency exposed the terrain mesh's triangles
+    // through the river and created a worse sawtooth fringe.
     transparent: false,
     depthTest: true,
     depthWrite: true,
@@ -310,4 +329,5 @@ export function disposeHydroTextures(textures: HydroTileTextures): void {
   textures.material.dispose();
   textures.structure?.dispose();
   textures.waterfalls?.dispose();
+  textures.coast?.dispose();
 }

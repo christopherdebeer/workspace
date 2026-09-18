@@ -102,7 +102,62 @@ for (const lab of LABS) {
       links.length >= 3 && links.every((h) => h.includes('fixture=')), links);
   } else {
     ok(`${lab.slug}: it put a canvas up`, seen.canvases > 0 && seen.painted, seen);
+    if (lab.slug === 'hydro') {
+      const hydro = await d.page.evaluate(() => ({
+        sections: [...document.querySelectorAll('details.section > summary')]
+          .map((summary) => summary.textContent?.trim() ?? ''),
+        status: document.getElementById('status')?.textContent ?? '',
+      }));
+      ok('hydro: weather, surface, river and sampling controls are collapsible',
+        ['WEATHER', 'SURFACE', 'RIVER DETAIL', 'SAMPLING']
+          .every((section) => hydro.sections.includes(section)),
+        hydro.sections);
+      ok('hydro: canonical shoreline topology is visible in the lab',
+        /SHORE TOPOLOGY [1-9][0-9,]* SEGMENTS · TERRAIN CONSTRAINED/
+          .test(hydro.status),
+        hydro.status);
+    }
   }
+  errors.push(...d.errors);
+  await d.close();
+}
+
+// ── SUBSTRATE AUTHORITY IS INSPECTABLE, NOT JUST COUNTED ─────────
+{
+  const d = await openDrive({ pagePath: '/lab/substrate', tag: 'lab-substrate-authority',
+    settle: 6000, bootTimeout: 45000 });
+  await d.page.waitForTimeout(2500);
+  const initial = await d.page.evaluate(() => ({
+    sections: [...document.querySelectorAll('.lab-dials .sec .sh span:first-child')]
+      .map((s) => s.textContent),
+    options: [...document.querySelectorAll('#authorityCase option')].map((o) => o.value),
+    status: document.getElementById('substrate-status')?.textContent ?? '',
+  }));
+  ok('substrate lab exposes a collapsible authority/parity section',
+    initial.sections.includes('AUTHORITY / PARITY'), initial.sections);
+  ok('substrate lab offers matching, missing, procedural and unresolved evidence',
+    ['matching', 'missing', 'procedural', 'unresolved']
+      .every((value) => initial.options.includes(value)), initial.options);
+  ok('substrate lab reports the selected crossing authority and implementation',
+    initial.status.includes('AUTH FORD · EXPLICIT-TAG · NOT-REQUIRED')
+      && initial.status.includes('EARTHWORK OPEN CHANNEL · FORD SUPPORT')
+      && initial.status.includes('SOURCE MESHES RETIRED AFTER COMMIT')
+      && initial.status.includes('CUTOVER GATES WET Δ <0.1%'),
+    initial.status);
+
+  await d.page.evaluate(() => {
+    const select = document.getElementById('authorityCase');
+    select.value = 'unresolved';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await d.page.waitForTimeout(300);
+  const unresolved = await d.page.evaluate(() =>
+    document.getElementById('substrate-status')?.textContent ?? '');
+  ok('substrate lab makes unresolved production evidence visible',
+    unresolved.includes('AUTH UNRESOLVED · UNRESOLVED · MISSING')
+      && unresolved.includes('structure outcome=none')
+      && unresolved.includes('EARTHWORK WITHHELD · CONSERVATIVE ROAD PLUG'),
+    unresolved);
   errors.push(...d.errors);
   await d.close();
 }
@@ -148,6 +203,90 @@ for (const lab of LABS) {
   await d.page.waitForTimeout(3500);
   const back = await d.page.evaluate(() => document.getElementById('sizeMin')?.value);
   ok('the tuning survives a reload', back === '2.75', back);
+  errors.push(...d.errors);
+  await d.close();
+}
+
+// ── THE FAÇADE LAB KEEPS THE SAME BARGAIN ────────────────────────
+// A second lab on the same panel, held to the same three promises — and to a
+// fourth that is its own: the numbers it reports are the numbers the world
+// would build, so the plinth finding (a door head 0.46 m above the pavement
+// on flat ground) has to be READABLE off the probe, not eyeballed off a frame.
+{
+  const d = await openDrive({ pagePath: '/lab/facade', tag: 'lab-facade',
+    settle: 6000, bootTimeout: 45000 });
+  await d.page.waitForTimeout(2500);
+  const dialCount = await d.page.evaluate(() =>
+    document.querySelectorAll('.lab-dials .d').length);
+  ok('the façade lab is liberal with its dials', dialCount >= 30, dialCount);
+  const rep = await d.page.evaluate(() => window.__facade?.());
+  ok('it reports the grammar against the massing',
+    !!rep && typeof rep.bays === 'number' && typeof rep.doorHeadAboveGround === 'number'
+      && rep.grammar?.bayM === 2.75 && rep.grammar?.storeyM === 3.1, rep);
+  // THE GAME'S RULE NOW: the base is the ground line, so a 3.1 m row stands
+  // 3.1 m over the grass and a door's head at 0.6 x 3.1, whatever the plinth.
+  ok('…and the base is the ground line, whatever the plinth',
+    !!rep && Math.abs(rep.row1AboveGround - 3.1) < 1e-6 && Math.abs(rep.doorHeadAboveGround - 1.86) < 1e-6, rep);
+  // …AND THE RULE IT REPLACED IS ONE TOGGLE AWAY, so the A/B stays honest: a
+  // 1.4 m plinth under a 3.1 m row put the ground row 1.7 m above the grass
+  // and the door's head at 0.46 m, which is what every building had.
+  await d.page.evaluate(() => {
+    const el = document.getElementById('baseGround');
+    el.checked = false;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await d.page.waitForTimeout(400);
+  const old = await d.page.evaluate(() => window.__facade?.());
+  ok('…and BASE = GROUND off is the plinth-bottom rule the lab found',
+    !!old && Math.abs(old.row1AboveGround - 1.7) < 1e-6 && Math.abs(old.doorHeadAboveGround - 0.46) < 1e-6, old);
+  await d.page.evaluate(() => {
+    const el = document.getElementById('bayM');
+    el.value = '3.25';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await d.page.waitForTimeout(400);
+  const moved = await d.page.evaluate(() => window.__facade?.().grammar.bayM);
+  ok('a dial moves the ENGINE\'s grammar, not a slider', moved === 3.25, moved);
+  const stored = await d.page.evaluate(() => localStorage.getItem('drive.lab.facade.dials'));
+  ok('the grammar is saved as it is turned',
+    !!stored && JSON.parse(stored).bayM === 3.25, stored?.slice(0, 90));
+  const text = await d.page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.lab-dials button')].find((b) => b.textContent === 'COPY');
+    btn?.click();
+    return document.querySelector('.lab-dials')?.dataset.lastCopy ?? '';
+  });
+  ok('copy writes the FACADE_GRAMMAR literal',
+    typeof text === 'string' && text.includes('FACADE_GRAMMAR') && text.includes('bayM: 3.25'),
+    String(text).slice(0, 120));
+  await d.page.reload({ waitUntil: 'domcontentloaded' });
+  await d.page.waitForTimeout(3500);
+  const back = await d.page.evaluate(() => document.getElementById('bayM')?.value);
+  ok('the grammar survives a reload', back === '3.25', back);
+  // A TRADITION ON THE SAME WALL, BY EITHER ROAD. Choosing t:cape sets the
+  // grammar dials to what the atlas states (the uniforms' road); VIA ATTRIBUTE
+  // parks the uniforms at the defaults and hands the wall its row through
+  // aGram (the world's road). The report says which is in force.
+  await d.page.evaluate(() => {
+    const el = document.getElementById('culture');
+    el.value = 't:cape';
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await d.page.waitForTimeout(600);
+  const cape = await d.page.evaluate(() => window.__facade?.());
+  ok('choosing a tradition dresses the wall as the atlas states',
+    !!cape && cape.tradition === 'cape' && cape.gramIndex === 0 && Math.abs(cape.grammar.bayM - 3.3) < 1e-9, cape);
+  await d.page.evaluate(() => {
+    const el = document.getElementById('viaAttr');
+    el.checked = true;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await d.page.waitForTimeout(600);
+  const via = await d.page.evaluate(() => window.__facade?.());
+  ok('…and VIA ATTRIBUTE hands it the row instead, with the uniforms at the defaults',
+    !!via && via.viaAttribute === true && via.gramIndex > 0 && Math.abs(via.grammar.bayM - 2.75) < 1e-9, via);
+  // Put it back, so the next lab run — and anyone opening the lab on this
+  // browser profile — starts from the engine's defaults.
+  await d.page.evaluate(() => localStorage.removeItem('drive.lab.facade.dials'));
   errors.push(...d.errors);
   await d.close();
 }
