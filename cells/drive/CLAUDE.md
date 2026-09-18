@@ -16044,3 +16044,128 @@ the field, and five weather shaders compiling with no errors.
 **The cost on a device is the `stepWeather` row of the next dump**, which
 read 0.1 ms a frame before this; the emulation says a threshold write is
 0.06 ms and a skipped frame 0.004, so the row should not move.
+
+## The herd is there and unseen: the pulled wildlife extraction, read against the seat's report
+
+**Pulled 2026-09-18, after the weather units, on the seat's word: "I haven't
+seen herds since it landed."** The cell carried another agent's extraction of
+the birds and herds out of `main.ts` into `client/wildlife.ts`,
+`wildlife-models.ts` and `wildlife-motion.ts` (+1 line in `wildlife-wire.ts`),
+413 lines out of `main.ts` and 65 in — a support sampler over `groundAt`,
+`roadHeightAt`, the substrate contact, the drawn hydro, `insidePlot` and the
+wall grid; a path trace that sweeps centre, flanks and both body ends; a
+no-pop spawn rule; a legged gait with sampled feet; and a `__wildlife()`
+diagnostics probe. Committed verbatim as NOT MINE (`9459a6c`), the `main.ts`
+hunks lifted against the deploy commit and applied over the weather and
+admission work the cell does not carry. **It was half-landed the same way the
+façade was:** `extensions` written through `MeshLambertMaterial`, which tsc
+refuses; typed structurally in `7308ca2`. Three pulls, three type errors in
+pulled code: read `tsc` before reading a pulled diff, every time.
+
+### What the new module does that the old one did not
+
+- **Nothing is born in view.** An animal spawns only where the camera's
+  frustum does not reach and nothing is within 45 m of the camera, at
+  100–235 m from the camera (`BOX*0.18..0.42`) in one of three WORLD-FIXED
+  sectors (`grp*2π/3 + 0.45 ± 0.6 rad`), after a habitability sample and a
+  1 cm trace. The old populations were placed in a clump around the spawn
+  point with no sight test at all, and wrapped round a 560 m box thereafter.
+- **Every frame is a sweep.** The animal's own step is traced (`tracePath`:
+  middle, both flanks at its body radius, both body ends at half its length,
+  a wall check between stations) and a refused sweep zeroes its velocity —
+  `stats.blocked`. The old step was a force model plus a ground read.
+- **Out of sight and far is recycled**, not wrapped: unseen for 1.5 s and
+  more than 364 m from the camera → respawn under the rule above.
+- Birds: the same, with a rain gate and a wet counter instead of the old
+  `birds.visible = rain < 0.5`.
+
+### Measured, Camps Bay, harness, CPU only, against the deploy commit as control
+
+The control is `7978267` built by the harness's `rev` (its whole `client/`,
+per the rev doctrine); its herd read through its own `__herd()` and
+`__life()`, the new one through `__wildlife()` — the census is
+`scratchpad/herdprobe.mjs` (stationary), `herddrive.mjs` (autopilot) and
+`herdwalk.mjs` (a 4 km hop-walk at 20 m/s, `walkTo`-style, down Victoria
+Road). "Windscreen" below is within 25° of the heading; "in frustum" is the
+new module's own `seen` test, which at `CAM.fov` 55° on a portrait frame is a
+wedge of about ±15° — an animal 95 m out at 22° off-axis reads unseen.
+
+| | new (`9459a6c`) | old (`7978267`) |
+|---|---|---|
+| stationary at arrival: nearest herd animal | 91–114 m | 22–35 m |
+| stationary at arrival: in the windscreen | 0–1 | 7 |
+| stationary 100 s: sweep refusals | 54,794 ≈ every animal, every frame | — |
+| autopilot's first 75 m: nearest / in frustum | 8–36 m / 5–7 | 22–60 m, then wandered to 150 m |
+| 4 km walk: samples with a herd in the windscreen | 6% | 3% |
+| 4 km walk: samples with one within 120 m | 48% | 22% |
+| 4 km walk: median nearest | 120 m | 161 m |
+| 4 km walk: drawn | 30 always | 0–9 of 30 for stretches (over the sea) |
+| 4 km walk: recycles / unhabitable refusals | 714 / 26,345 | — |
+| step cost, harness | 1.4–9.5 ms; 9–13k support samples/s | (not attributed) |
+
+**What refused the sweep**, from the counter added for this reading
+(`stoppedBy`, 100 s stationary): step 15,229 · end 14,489 · middle 12,583 ·
+flank 9,304 · endSlope 2,217 · flankSlope 972. `step` is "the ground under
+me is more than 0.16×size from where I stand"; `middle`/`end`/`flank` are
+"my own station, or a body end, is no longer habitable". All of these passed
+at spawn — the spawn's 1 cm trace runs the same checks — so the ground
+CHANGED under the animal after it was placed: terrain tiles refine, walls
+and plots arrive, the substrate contact comes live. **And a refused sweep
+never re-seats the animal**: `c.y` is only written on a complete trace, so a
+`step` refusal is permanent, and a herd that spawned into a still-streaming
+tile stands where it spawned for the rest of the session. About half the
+Camps Bay herd was frozen this way; the other half walked, at 2.4 m/s, with
+cohesion.
+
+### The reading
+
+Three things, and only two of them are new:
+
+1. **On arrival there is no herd.** The old build put a clump beside you
+   (seven in the windscreen at t=0); the new one cannot, by rule — nothing
+   within 45 m, nothing in the wedge — and its nearest animal is a hundred
+   metres out behind the trees. The frame `herdshot2-new.png` is the truck
+   turned to face its nearest animal at 94 m: woods. The old frame at 29 m
+   is the same woods.
+2. **What it has does not move.** Half the herd is frozen by the permanent
+   refusal above, so it never wanders into the road or the wedge the way the
+   old force model's animals did, and a still animal at 100 m is scenery.
+3. **At speed, neither build shows a herd on a straight road** — 6% of
+   samples against 3% — because the new rule respawns them 100–235 m out
+   in sectors outside the wedge, and the old wrap left anything inside its
+   57° cone behind. On a bend they enter the wedge at 100 m as a dot. This
+   one is not a regression; it is how it always was, measured for the first
+   time.
+
+So the seat's "since it landed" is 1 + 2. The shader, the wire, the depth
+and distance materials all compile (`errors []` on every run) and the meshes
+draw all 30 — it is not a rendering fault.
+
+### What to do about it — NOT DONE, it is the other agent's module
+
+- **Re-seat instead of freezing.** On a refused zero-displacement sweep,
+  write `c.y = middle.y` when the middle is habitable; when the animal's own
+  station is no longer habitable and it is unseen, recycle it (it is out of
+  view — that is what the rule is for). The `step` and `middle` rows above go
+  to zero on stable ground.
+- **Spawn relative to the heading, not the world.** Put the sectors in the
+  truck's frame: the front half-plane just outside the wedge (heading ±
+  20–60°) at 60–160 m, so the road's own motion and any bend carry them in;
+  and allow a spawn INSIDE the wedge beyond ~250 m, where an animal is under
+  an art pixel — a dot appearing on the horizon is not a pop.
+- **An arrival clump.** On `initialize`/`reset`, place the first herd
+  without the seen gate, 25–60 m off the road: the first frame of a place
+  is not a pop either, and it is the frame the seat remembers.
+- **The cost row.** 9–13k support samples a second through
+  `productionContactAt('surface')`, `drawnHydroAt`, `insidePlot` and the
+  wall grid, every frame; on the phone that is a `stepWildlife` row the next
+  dump will show, and every one of those samples is counted by the substrate
+  fallback monitor as a `surface` query. The plan trace already breaks on
+  the first complete candidate; the per-frame sweep could run every third
+  frame for an unseen animal.
+
+**The counters stay** (`a7c8dac`): `__wildlife()` carries
+`refused{noGround,unhabitable,trace,rain,seen,truck}`, `spawned`,
+`stoppedBy{…}` and each actor's `seenAgo` and `speed`, so the seat can read
+"they are there, 120 m out, frozen" from the console instead of driving for
+an hour to conclude "no herds".
