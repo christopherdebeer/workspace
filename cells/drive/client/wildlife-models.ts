@@ -169,7 +169,11 @@ normal=normalize(abs(wd)*normal-sign(wd)*(dFdx(wildRelief)*wr1+dFdy(wildRelief)*
   };
   mat.customProgramCacheKey = () => `wildlife-2-${air}-${sp}-${surface}-${mat.type}`;
   if (surface) {
-    (mat as THREE.MeshLambertMaterial).extensions = { derivatives: true };
+    // `extensions` is read by three's program builder on any material but
+    // declared by @types/three only on ShaderMaterial, so the write is typed
+    // structurally (the same shape facade.ts uses). Same runtime.
+    const ext = mat as THREE.Material & { extensions?: { derivatives?: boolean } };
+    ext.extensions = { ...ext.extensions, derivatives: true };
     mat.userData.wildlifeDeform = (wire: THREE.Material) => wildlifeMaterial(air, sp, wire);
   }
   return mat;
