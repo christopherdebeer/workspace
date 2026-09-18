@@ -17169,3 +17169,218 @@ change adds no new symbol, so the usual grep for a name has nothing to find; the
 honest check is that the new expression is in the bundle AND the old one is not.
 A grep that can only succeed is as useless as one that can only fail — the
 absent-old half is what makes the pair a verification.
+
+## Stages C and D: the bank owns its region, and three counts that equalled their own budget
+
+Stage C is the composition rule and Stage D is the wiring; what they cost was
+three faults that no amount of reading would have found, because each of them
+produces a plausible number.
+
+**THE RULE: THE BANK OWNS ITS REGION AND THE CARVE STANDS DOWN THERE.** Every
+vertex a station spoke for — resolved or refused — is flagged, and
+`carveChannels` skips it. **The two are NOT composed by `min()`**, which is the
+obvious thing and is wrong for a reason worth keeping: both rules only ever
+LOWER, so a min() looks like a safe union — and a bank's whole job at a fringe
+is to STOP. Short of a rock face it refused to cut, short of ground it has
+already met. A min() with the carve digs through every refusal the resolver was
+careful to make, which is the resolver's careful refusals costing nothing.
+Outside a station's stated reach the carve is still the only thing that knows
+where the bed is, and it runs exactly as it did.
+
+**AND A REFUSAL OWNS ITS LAND SIDE.** An unresolved station carries a protect
+reach and no target: it means *nothing may change here*, and that has to bind
+the carve too. Outward only — the bank failed on the land side, and the bed
+inside is the carve's and the field's.
+
+**STAGE D** is two breaklines a resolved station (the outer join and the inner
+toe, on the station's own tangent, two along-reaches long so consecutive
+stations abut into a polyline without needing to know their neighbours), the
+packet through the terrain job, the worker's store and the transfer list, and
+the packet cleared on a hop beside the floor and the lines. Refused stations
+contribute no crease: they are shaping nothing, and a crease across ground
+nobody is cutting is a crease for its own sake.
+
+### The pass is indexed, because a shoreline is hundreds of stations
+
+A contour at half a field texel is hundreds of stations on a river tile and a
+refined tile carries tens of thousands of vertices, so the obvious
+station-driven loop with a box test per vertex is their PRODUCT — tens of
+millions of iterations for a build the whole of which used to cost a hundred
+milliseconds. `carveChannels` gets away with that shape because it can BREAK on
+the first box a vertex falls in; a bank cannot, because the lowest of several
+overlapping stations wins. So: one insertion pass over the stations into a grid
+of the store's own cell size, then one pass over the vertices asking only its
+own cell. **The grid is padded by two cells**, because a refined tile's vertex
+set is not confined to the half-open box — a border seed is on the edge exactly
+and a neighbour's pinned point can sit a hair outside — and a vertex whose cell
+index fell off the end would silently lose its bank.
+
+### Three counts that equalled their own budget
+
+**THE STATION CAP TRUNCATED THE SHORELINE INSTEAD OF THINNING IT.** The census
+read **exactly 512 stations on one tile and exactly 1024 on two**, and this file
+already records what that shape means. The resolver's own stats said it
+outright: `segments 1024, stations 512, dropped 512` — half the shore taken
+finely and the other half left to the carve. The spacing is solved from the
+shoreline's OWN length against the budget now, so a long shore is described
+coarsely end to end rather than finely for its first few hundred metres, and the
+ceiling stays as a backstop that `dropped` reports.
+
+**AND A TRUNCATED SHORELINE IS WORSE THAN NO BANK AT ALL, which the census
+said outright before anything was reasoned about it.** At the Senqu top the
+truncated build read **drawn 805, fringe 180, interior 162** against the
+control's **994 / 95 / 45** — a fifth of the drawn water gone and three and a
+half times the interior burial. That is what a bank shaped along half a shore
+does: it owns its region, so the carve stands down inside it, and where the
+stations ran out neither rule is holding the ground. **A partial authority is
+not a partial fix, it is a hole with an owner.**
+
+**AND THE THINNING HAD TO BECOME SPATIAL.** "Further than the spacing from the
+last one I kept" thins by whatever order the segments arrive in, and marching
+squares emits them in no order at all — so it can leave one stretch bare while
+crowding another. A hash at the spacing asks the question the spacing means —
+is any station already standing here — and answers it the same whatever the
+order.
+
+**AND THE ALONG-SHORE REACH WAS THE SEGMENT'S, NOT THE SPACING'S.** A station
+stands in for the stretch of shore between it and its neighbours; bounding its
+influence by the contour segment's own half-length leaves the bank a comb of
+narrow slats with bare shore between every pair of teeth. Measured at the Senqu
+ford before the fix: **512 stations on the tile and not one of them reaching a
+single point of a transect driven straight through the shoreline** — the `bank`
+column null and `own` unset at all sixty-one stations of it. That is the same
+hole as the first cut's cross-bank bound, met again in a new place, and it is
+the one a count alone could never have shown: the tile had its stations.
+
+**THE PROBE IS WHAT CAUGHT IT, AND ONLY BECAUSE IT REPORTS OWNERSHIP.** A
+transect that printed heights would have shown a bank column of nulls and read
+as "no water here". `bankOwned` and `bankRefused` per station are what say the
+difference between *the bank shaped this*, *the bank refused it and the carve
+stood down anyway*, and *no station reached this at all*.
+
+### The underwater face stopped a metre in, where the burial is four to eight
+
+`innerReachM` was the slope's own run — the depth over the profile's gradient,
+about **one metre** for half a metre of water on a gravel bank. The census reads
+fringe-buried points lying a median **4 m** and a p90 **8 m** inside the mask.
+So the face stopped three-quarters short of the burial it exists to remove.
+
+**AND THE PUBLISHED FLOOR CANNOT TAKE OVER THERE**, which is the half that makes
+it structural rather than a tuning error. `publishHydroFloor` writes an
+`HYDRO_EN` (132) lattice per tile — about **18 m** over a z14 tile — and applies
+only where all four corners carry a bed, so **a line river never has four wet
+corners**: this file already records it as measured, and the ford's transect
+reads `bed` null at every one of its sixty-one stations. Between the bank's
+metre and the floor's eighteen, the interior fringe was owned by nobody.
+
+The face marches inward now, the way it already marched outward, and stops where
+the ground is at or under the bed the field states, capped by the profile's own
+reach. **That is not the flat-bottomed trench the plan forbids**: `bankProfileY`
+smoothsteps from the waterline to the bed over that reach, so a wide river gets
+a wide concave face and a narrow one a short toe, and a rock margin asserts four
+metres where an alluvial one asserts eighteen.
+
+### One profile, two traversals — and the probe reads the kernel
+
+`bankProfileY` is the only copy of the shape. The pass lowers ground to it,
+station-driven through the grid; `bankTargetAtPacked` answers a point query by
+walking every station, which is what the diagnostic asks and the build never
+needs. The two cannot disagree about the PROFILE however they differ about how
+they reach it, and `bank-pass.test.mjs` is what says they do not disagree about
+which stations they reach either: every vertex must end at the lower of its own
+height and the query's, `owned` must match the query's own flag, a road vertex
+must be owned and not lowered, and a refused station must own its land side
+while moving nothing. **The control is the bundle re-imported with the insertion
+box narrowed to a single cell**, on which every one of those fails.
+
+### And the algorithm version cannot be a runtime identity
+
+The plan asks for the bank-profile version in the terrain job's dependency
+identity. Within one build there is exactly one of it — the kernel is
+stringified out of the same bundle — so it cannot distinguish anything at run
+time, and a check on it would be decoration. What it CAN do is ride every
+number the diagnostics print, so a reading taken today is comparable with one
+taken after the resolver changes. That is the telemetry dump's `look` row
+arrived at from the other side, and it is why `__banktransect` and
+`__bankfringe` both carry `bankVer` and the switch's state.
+
+What DOES carry the dependency at run time is the publication cadence: the
+lines, the floor and the bank are solved from one `field` at one revision and
+published together, and any of the three moving dirties the terrain once.
+
+### The breaklines have the same budget and had to learn the same lesson TWICE
+
+`bankBreakLines` caps at `BANK_LINE_CAP` (1024) and a tile with 700 stations
+wants 1400, so the cap binds at the Senqu top exactly as the station budget
+did. Striding the stations to spread the creases along the whole shore is the
+obvious repair and **measured much worse than the truncation it replaced** —
+`drawn 810, fringe 177, interior 158` against `1004 / 63 / 40`.
+
+The reason is the slat again, one layer over: a crease is a segment two
+along-reaches long centred on its station, so skipping stations without
+LENGTHENING the survivors leaves a gap between every pair of them, and a cell
+spanning an uncreased bank is the ramp through the water these lines exist to
+prevent. A skipped station's share of the shore goes to the one standing in for
+it (`alongM * stride`), and the same fixture then reads **1004 / 63 / 40 —
+identical on every column to the truncating cap** while covering the whole
+contour instead of half of it.
+
+**Two budgets, three attempts, one lesson: when a budget forces a thinning, the
+survivors must inherit the span of what they replaced.** Neither the station's
+along-reach nor the crease's length is a property of the feature it was cut
+from; both are properties of the SPACING.
+
+### Measured: the census, with `?bank=0` as the control
+
+Same build both columns, the switch the only difference
+(`devtools/bank-census.mjs`, `ARGS='bank=0'`, `__bankfringe(384, 129)` on each
+fixture, 75 s settle, nodraw). `drawn` is texels of drawn water in the window,
+`fringe` and `interior` the burial taxonomy, `over` the metres of triangle
+standing above the water where it is buried:
+
+| fixture | control: drawn / fringe / interior | bank on | fringe |
+|---|---|---|---|
+| at-senqu-ford | 548 / 109 / 3 | **565 / 73 / 4** · 367 stn | **−33%** |
+| at-senqu-top | 994 / 95 / 45 | **1004 / 63 / 40** · 700 stn | **−34%** |
+| at-umgeni | 5765 / 359 / 668 | 5684 / 370 / 625 · 350 stn | +3% |
+| at-bixby | 298 / 142 / 0 | **337 / 60 / 0** · 317 stn | **−58%** |
+| at-glencairn | 4522 / 167 / 339 | **4555 / 126 / 338** · 328 stn | **−25%** |
+| at-campsbay | 308 / 20 / 1 | **311 / 4 / 1** · 317 stn | **−80%** |
+
+**Fringe burial 891 → 696 over the six, −22%; −39% over the five that are not
+the uMngeni.** Drawn water is up at five of six and the total is +0.2%, so
+nothing was bought by drawing less water.
+
+**AND EVERY `over` MEDIAN ROSE, which is the fix working rather than against
+it.** The bank removes the shallow burials — the ones its profile can cut
+within its stated reach — and refuses the deep ones as `too-deep`, so what
+survives the census is deeper on average than what it started with. A count
+that falls while its median rises is the easy cases going first, and saying so
+is the difference between a measurement and a headline.
+
+**THE uMNGENI IS THE ONE THAT DOES NOT MOVE, and its shape says why.** Its
+burial is a blob deep inside the riverbank polygon — 625 interior against 370
+fringe — and a station's inner reach is capped by its profile at twelve to
+eighteen metres, so nothing at the shoreline can speak for ground a hundred
+metres in. That interior is the published floor's, whose ~18 m lattice CAN
+apply on a body that wide, and it moved 668 → 625 on its own.
+
+### What stages A–D do NOT do, stated
+
+- **THE RESOLVER ONLY SEES FLOWING SHORE.** `extractFlowingHydroShoreSegments`
+  keeps `river`, `stream` and `canal` and nothing else, so a lake, a reservoir,
+  a lagoon, a dam and the coast get no stations, no creases and no bank at all.
+  That is stage A–D's own scope — inland flowing water first — and it is #170.
+- **THE INTERIOR PAST A PROFILE'S REACH IS STILL THE FLOOR'S**, and the floor's
+  lattice is ~18 m over a tile. Between them a wide body's middle is covered
+  and a narrow one's is not; the ford's transect reads `bed` null at every one
+  of its sixty-one stations.
+- **A REFUSAL IS STILL A REFUSAL.** `too-deep` and `no-join` stations change
+  nothing and stop the carve changing anything either, so a cliff at the water
+  and a level estimated far too low both keep their burial by design. The
+  census counts them and `__banktransect`'s `bankRefused` names them per
+  station; making them cut is not a tuning, it is #169's constrained section.
+- **AND NOTHING HERE HAS BEEN SEEN FROM THE SEAT.** Every number above is a CPU
+  census over deterministic fixtures. No frame has been taken of a bank, and
+  the seat's report against `?bank=0` is the verification.
+

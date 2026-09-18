@@ -1472,7 +1472,23 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     if (!packed || !packed.length) return [];
     const S12 = 12, n = (packed.length / S12) | 0;
     const out: BreakLine[] = [];
-    for (let i = 0; i < n && out.length < BANK_LINE_CAP; i++) {
+    // AND THE CAP THINS RATHER THAN TRUNCATES, for the reason the resolver's
+    // own station budget had to learn one file over: a shoreline described
+    // finely for its first few hundred metres and not at all after that is a
+    // crease pattern that stops dead, and the refinement then spans the rest of
+    // the bank with the coarse triangles the creases exist to prevent. Two
+    // lines a station, so a stride of ceil(2n/cap) spreads whatever the budget
+    // buys along the whole contour.
+    const stride = Math.max(1, Math.ceil((n * 2) / BANK_LINE_CAP));
+    // AND A SKIPPED STATION'S SHARE OF THE SHORE GOES TO THE ONE THAT STANDS
+    // IN FOR IT. Striding without lengthening leaves a gap between every pair
+    // of kept creases — the same slat the resolver's along-reach had — and
+    // measured at the Senqu top it is worse than truncating: fringe 63 with
+    // dense creases over half the shore against 177 with gapped creases over
+    // all of it. A cell spanning an uncreased bank is the ramp through the
+    // water these lines exist to prevent, and it does not care whether the
+    // reason is a budget or a stride.
+    for (let i = 0; i < n && out.length < BANK_LINE_CAP; i += stride) {
       const o = i * S12;
       if (packed[o + 11]) continue;                       // refused: nothing to crease
       const sx = packed[o], sz = packed[o + 1];
@@ -1482,7 +1498,8 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       for (const d of [outR, -inR]) {
         if (Math.abs(d) < 0.5) continue;                  // nothing to separate
         const cx = sx + nx * d, cz = sz + nz * d;
-        out.push({ ax: cx - tx * alongM, az: cz - tz * alongM, bx: cx + tx * alongM, bz: cz + tz * alongM });
+        const half = alongM * stride;
+        out.push({ ax: cx - tx * half, az: cz - tz * half, bx: cx + tx * half, bz: cz + tz * half });
       }
     }
     return out;
