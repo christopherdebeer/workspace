@@ -17384,3 +17384,35 @@ apply on a body that wide, and it moved 668 → 625 on its own.
   census over deterministic fixtures. No frame has been taken of a bank, and
   the seat's report against `?bank=0` is the verification.
 
+### The Senqu and San Miguel checks
+
+**THE SENQU FORD'S TRANSECT NOW HAS A BANK COLUMN**, which is the whole
+difference from the run that diagnosed the slats. `stations 367, dropped 0,
+shoreM 6657, spacingM 13` — six and a half kilometres of shoreline in one tile
+at thirteen metres — with `resolved 177, nothingToCut 130, too-deep 57,
+no-join 3`, and the transect reads `own Y` across the wet band with the bank
+running 1788.48 → 1789.65 up from the bed toward the waterline.
+
+**AND IT IS OWNED WITHOUT BEING LOWERED THERE, which is the road veto rather
+than a failure.** That transect crosses the Joggemspruit at the culvert this
+file already records, so `S.onRoad` refuses the cut and the carve stands down
+beside it: exactly the composition rule at a crossing, and the reason the
+CENSUS rather than this transect is the instrument for the bank. A spot check
+that lands on a crossing measures the crossing.
+
+**SAN MIGUEL, LIVE at the seat's own url** (`37.86119, -107.87094`), 10 tiles,
+**2,323 stations, dropped 0**, 8.1 km of shoreline a tile at 15.8 m: the mesh
+tracks the natural ground within about half a metre across the whole 120 m
+transect, so the trench the carve fix removed has not been replaced by one of
+the bank's. Its station outcomes are the finding — **`resolved 74,
+nothingToCut 123, too-deep 119, no-join 35`** — a steep Colorado valley where
+the resolver refuses a third of its stations outright rather than cutting two
+and a half metres into a mountainside. That is the instruction's *bounded cuts,
+and fill requires explicit authority* doing its job, and it is why `too-deep`
+is counted and named rather than clamped away.
+
+**NO CONTROL WAS TAKEN AT SAN MIGUEL**, and a live spot cannot honestly have
+one: a second boot streams a different world. Its numbers are a statement about
+this build at that place, not a comparison; the six-fixture census above is the
+comparison.
+
