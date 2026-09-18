@@ -81,6 +81,7 @@ import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight, uFacSun } from './facade';
 import { roofFx } from './roof-fx';
+import { registerBuildingFabric, inheritBuildingFabric, attachBuildingFabric, setBuildingCondition, type BuildingCondition } from './building-fabric';
 import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, SUBSTRATE_VIEWS, groundInkPixels, type GroundViewId } from './ground-view';
 import { SUB_GLSL, SUB_DOM_M, subDomainAt, subEvidence, subExpressOf, subGrainOf, subLayerTint,
   subGrassAllow, SUB_SWARD_K, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
@@ -25999,6 +26000,8 @@ function flushBuildings(): void {
   type Seats = Array<{ pts: Array<[number, number]>; ranges: Array<{ start: number; count: number }> }>;
   const finish = (geo: THREE.BufferGeometry, mat: THREE.Material | THREE.Material[],
     seats: Seats, opts: { noCast?: boolean; ruinLod?: boolean } = {}): void => {
+    // The seats already delimit each building's vertices, including split material groups.
+    if (!opts.noCast) attachBuildingFabric(geo, seats);
     const mesh = new THREE.Mesh(geo, mat);
     if (opts.noCast) mesh.userData.noCast = true;
     mesh.name = opts.ruinLod ? 'ruin' : 'building';
@@ -26139,6 +26142,9 @@ function flushBuildings(): void {
  *  interior and pay double rasterisation for nothing. Swapped per tile
  *  batch, on a slow clock — the boundary is beyond the detail ring and the
  *  materials are visually identical from outside. */
+// Contextual occupation is explicit; survey building types never switch lights on.
+(window as any).__buildingCondition = (id: number, patch: Partial<BuildingCondition> | null) =>
+  setBuildingCondition(id, patch, worldGroup);
 const RUIN_NEAR = 700;
 let ruinLodAt = 0;
 function stepRuinLod(now: number): void {
@@ -26421,6 +26427,7 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // the culture (see BuildCulture.storeyM) rather than a global 3.1m. It is a
   // cached lookup on position and has no dependency on anything below.
   const look = buildLook(ctrX, ctrZ);
+  registerBuildingFabric(pts, id, look.culture.wallTex);
   // The opening grammar this building's walls read: its tradition's row of
   // the atlas texture, or 0 for the defaults where the atlas is silent.
   const gram = traditionIndex(look.tradition);
@@ -26613,6 +26620,7 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
       const [tx, tz] = pts[0];
       const tw = 3.2;
       const sq: Array<[number, number]> = [[tx - tw, tz - tw], [tx + tw, tz - tw], [tx + tw, tz + tw], [tx - tw, tz + tw]];
+      inheritBuildingFabric(sq, pts);
       polygon(sq, B_MATS[0], 0.9, clamp(height * 2 + 4, 12, 34), 'solid',
         (geo, base, top) => {
           const batch = openBldBatch();
@@ -26722,6 +26730,7 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // Into the tile batch, baked at world height with the foot as the facade's
   // ground line — see flushBuildings.
   const batch = openBldBatch();
+  registerBuildingFabric(pts, id, look.culture.wallTex, true);
   const wallsGeo = mergeParts(parts);
   wallsGeo.translate(0, foot, 0);
   // aBase is the ground the ruin stands on, not the buried foot: the same
@@ -26733,7 +26742,7 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     const rubbleGeo = mergeParts(rubble);
     rubbleGeo.translate(0, foot, 0);
     // Rubble takes no marks: a heap of broken slab has no wall to write on.
-    batch.rubble.push({ geo: rubbleGeo, base: foot, mark: 0, gram: 0, top: foot, pts });
+    batch.rubble.push({ geo: rubbleGeo, base: foot, mark: 0, gram: -1, top: foot, pts });
   }
   mapPoly(pts, 'rgba(70,66,58,0.9)');
   claimSolid(pts, foot + tallest, true);

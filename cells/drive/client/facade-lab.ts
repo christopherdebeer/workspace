@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { BUILD_CULTURES, type BuildCulture } from './culture';
 import { FACADE_DEFAULTS, FACADE_GRAMMAR, facade, setFacadeGrammar, uFacNight, uFacSun, type FacadeGrammar } from './facade';
 import { roofFx } from './roof-fx';
+import { registerBuildingFabric, attachBuildingFabric, setBuildingCondition } from './building-fabric';
 import { TRADITIONS, roofFormFor, traditionCulture, traditionIndex, type Tradition } from './traditions';
 import { createDials, type DialValues } from './lab-dials';
 import { clamp } from './num';
@@ -149,6 +150,9 @@ export async function startFacadeLab(): Promise<void> {
     slug: 'facade',
     spec: [
       { id: 'sBld', label: 'THE BUILDING', kind: 'section' },
+      { id: 'fabricSeed', label: 'BUILDING SEED', kind: 'range', min: 1, max: 4096, step: 1, value: 17 },
+      { id: 'decay', label: 'DECAY', kind: 'range', min: 0, max: 1, step: .01, value: .78 },
+      { id: 'inhabited', label: 'HABITATION', kind: 'range', min: 0, max: 1, step: .01, value: 0 },
       { id: 'culture', label: 'CULTURE', kind: 'select', value: BUILD_CULTURES[0].key, options: CULTURE_OPTIONS },
       { id: 'wallPick', label: 'WALL PAINT #', kind: 'range', min: 0, max: 6, step: 1, value: 0 },
       { id: 'roofPick', label: 'ROOF PAINT #', kind: 'range', min: 0, max: 3, step: 1, value: 0 },
@@ -369,6 +373,14 @@ export async function startFacadeLab(): Promise<void> {
     const chimney = bool(v, 'chimney');
     const key = [w, d, height, plinth, aBase, gram, roofShape, ridge, terrace, chimney].join('|');
     if (key !== builtKey) { builtKey = key; rebuild(w, d, height, plinth, aBase, gram, roofShape, ridge, terrace, chimney); }
+    const fabricRing: Array<[number, number]> = [[0, 0]];
+    const fabricId = Math.round(num(v, 'fabricSeed'));
+    setBuildingCondition(fabricId, { decay: num(v, 'decay'), inhabited: num(v, 'inhabited') });
+    registerBuildingFabric(fabricRing, fabricId, culture.wallTex);
+    group.traverse((obj) => {
+      const geo = (obj as THREE.Mesh).geometry;
+      if (geo) attachBuildingFabric(geo, [{ pts: fabricRing, ranges: [{ start: 0, count: geo.attributes.position.count }] }]);
+    });
     // The light. At night the sun is the moon and the sky is a floor; the
     // game's skylight lift (bldSkylit) is not reproduced, so a night wall here
     // reads darker than in the world — the lit bays are what this is for.

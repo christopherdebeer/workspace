@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { FABRIC_GLSL, FABRIC_NORMAL } from './fabric-shader';
 import { MARK_COLS, MARK_PALETTE, drawMarkAtlas } from './graffiti';
 import { mulberry32 } from './rng';
 import { FACADE_DEFAULTS, type FacadeGrammar } from './facade-grammar';
@@ -113,7 +114,7 @@ const uMarkB = { value: new THREE.Vector4() };
 /**
  * ── NIGHT, AND WHAT A BUILDING IS AFTER DARK ──
  *
- * x = how much night (1 − dayF), y = what share of the openings are lit.
+ * x = how much night (1 − dayF), y = the lit share of explicitly reclaimed bays.
  *
  * Measured before this existed: at `?time=NIGHT` a Suresnes wall renders at
  * sRGB 13 and a linear luminance of 0.0052, against ground beside it at 0.13.
@@ -122,10 +123,9 @@ const uMarkB = { value: new THREE.Vector4() };
  * standing in for the missing bounce is `bldSkylit`'s emissive lift and that is
  * scaled by daylight, correctly, to nothing.
  *
- * A lit window is the cheapest realism in the game: per-fragment work is the
- * abundant resource here (the frame is ~148x320) and this is a hash, a step and
- * an add. It is also the one thing that makes a town read as INHABITED, which
- * no amount of daytime surface detail does.
+ * Stock buildings and ruins are abandoned: aFabric defaults to zero habitation.
+ * Contextual gameplay can reclaim individual buildings through setBuildingCondition;
+ * only those bays can light up. The ambient skylight lift is independent.
  *
  * Written by main.ts beside the skylight lift, where dayF already lives.
  */
@@ -237,6 +237,8 @@ export function setFacadeGrammar(patch: Partial<FacadeGrammar>): FacadeGrammar {
 }
 
 export function facade(mat: THREE.Material): void {
+  (mat as THREE.MeshLambertMaterial).extensions = { ...(mat as THREE.MeshLambertMaterial).extensions, derivatives: true };
+  mat.customProgramCacheKey = () => 'facade-fabric-v1';
   mat.onBeforeCompile = (sh) => {
     // Shared by reference: one atlas and one palette for the whole world, so
     // a material per paint costs nothing extra.
@@ -263,7 +265,7 @@ export function facade(mat: THREE.Material): void {
     // its own building's base in aBase instead, and re-seating shifts the
     // attribute alongside the positions.
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aBase;\nattribute float aMark;\nattribute float aGram;\nattribute float aTop;\nvarying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark; varying float vGram; varying float vFacTop;')
+      .replace('#include <common>', '#include <common>\nattribute float aBase;\nattribute float aMark;\nattribute float aGram;\nattribute float aTop;\nattribute vec4 aFabric; varying vec4 vFabric;\nvarying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark; varying float vGram; varying float vFacTop;')
       .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
         vec4 facW = modelMatrix * vec4(transformed, 1.0);
         vFacW = facW.xyz;
@@ -271,9 +273,11 @@ export function facade(mat: THREE.Material): void {
         vFacH = facW.y - aBase;
         vMark = aMark;
         vGram = aGram;
-        vFacTop = aTop - aBase;`);
+        vFacTop = aTop - aBase;
+        vFabric = aFabric;`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
+        ${FABRIC_GLSL}
         varying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark; varying float vGram; varying float vFacTop;
         uniform sampler2D uMarks; uniform sampler2D uMarkTins;
         uniform vec4 uMarkA; uniform vec4 uMarkB; uniform vec2 uFacNight;
@@ -296,9 +300,15 @@ export function facade(mat: THREE.Material): void {
           c = mix(c, vec3(0.10, 0.10, 0.11), step(6.5, i));
           return c;
         }`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FABRIC_NORMAL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
+      float facRelief = 0.0;
       {
         vec3 fn = normalize(vFacN);
+        vec3 condition = fbCondition();
+        float habitation = condition.x, decay = condition.y;
+        float buildingSeed = vFabric.z > .5 ? vFabric.w : 17.0;
+        vec2 localWall = vFacW.xz - vFabric.xy;
         // ── WHOSE GRAMMAR: THE BUILDING'S TRADITION, OR THE UNIFORMS ──
         // aGram > 0 names a row of the atlas texture (see gramTex); 0 is the
         // uniforms, which the game keeps at FACADE_DEFAULTS and the lab drives.
@@ -343,7 +353,13 @@ export function facade(mat: THREE.Material): void {
           // height. A shadow's length on the wall is the depth of the thing
           // that casts it times the tangential over the normal component,
           // which is why every shadow below divides by snc.
-          float u = abs(fn.x) > abs(fn.z) ? vFacW.z : vFacW.x;
+          float u = abs(fn.x) > abs(fn.z) ? localWall.y : localWall.x;
+          // Rubble/vegetation has no fabric attribute and remains untouched.
+          if (vFabric.z > .5) {
+            vec4 fabric = fbSurface(vec2(u, vFacH), vFacTop, condition, buildingSeed);
+            diffuseColor.rgb *= fabric.rgb;
+            facRelief = fabric.a;
+          }
           vec3 tu = abs(fn.x) > abs(fn.z) ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
           vec3 nOut = gl_FrontFacing ? fn : -fn;
           float sn = dot(uFacSun, nOut), su = dot(uFacSun, tu), sy = uFacSun.y;
@@ -357,12 +373,18 @@ export function facade(mat: THREE.Material): void {
           // uniforms, or the building's tradition row). Rows count from the
           // ground line (aBase), so row 0 is the ground floor.
           vec2 cell = vec2(u / gA.x, vFacH / gA.y);
-          vec2 idc = floor(cell), f = fract(cell);
+          vec2 idc = floor(cell) + vec2(mod(buildingSeed, 251.0), floor(buildingSeed / 251.0)), f = fract(cell);
           float r = fah(idc + vec2(7.13, 3.31));
           float ground = step(vFacH, gA.y);
           // topD: metres below the wall top, for the eave and the cornice.
           float topD = vFacTop - vFacH;
           vec3 trim = trimCol(gH.x), shutC = trimCol(gH.y);
+          float peeled = smoothstep(.42,.78,fbNoise(vec2(u,vFacH)*3.2+buildingSeed)) * decay;
+          trim = mix(trim,vec3(.40,.36,.29),peeled*.65);
+          shutC = mix(shutC,vec3(.32,.29,.23),peeled*.75);
+          float reclaimed = 1.0-step(habitation, fah(idc+vec2(83.2,16.4)));
+          float brokenBay = (1.0-step(decay*.72, fah(idc+vec2(47.1,9.3))))*(1.0-reclaimed);
+          float boarded = brokenBay*step(.58,fah(idc+vec2(51.4,2.7)));
           // What this bay is. The draws are per bay from the bay's own hash so
           // a building is the same building from every side and every frame;
           // the shares are the tradition's.
@@ -419,10 +441,10 @@ export function facade(mat: THREE.Material): void {
           // on a face turned from the sun the glass IS the lightest thing.
           float shade = gC.w + gD.x * fah(idc + vec2(2.7));
           vec3 void_ = diffuseColor.rgb * shade + vec3(0.012, 0.014, 0.020);
-          float curtain = step(0.72, fah(idc + vec2(17.7, 3.3))) * (1.0 - isShop) * (1.0 - isDoor);
+          float curtain = step(0.72, fah(idc + vec2(17.7, 3.3))) * (1.0 - isShop) * (1.0 - isDoor) * reclaimed;
           void_ = mix(void_, diffuseColor.rgb * 0.62 + vec3(0.03), curtain * 0.7);
           float ty = clamp((f.y - y0) / max(y1 - y0, 0.01), 0.0, 1.0);
-          float skyW = gF.x * (0.35 + 0.65 * ty) * (1.0 - uFacNight.x) * (1.0 - 0.85 * revSh) * ao;
+          float skyW = (1.0-brokenBay*.9) * gF.x * (0.35 + 0.65 * ty) * (1.0 - uFacNight.x) * (1.0 - 0.85 * revSh) * ao;
           vec3 skyRef = vec3(0.30, 0.36, 0.44) * skyW;
           vec3 glass = void_ * (1.0 - 0.3 * revSh) * ao + skyRef;
           totalEmissiveRadiance += skyRef * 0.22 * open * (1.0 - isDoor) * (1.0 - shutClosed);
@@ -451,12 +473,32 @@ export function facade(mat: THREE.Material): void {
           // The shopfront's fascia: a band of the shutter paint over the glass.
           float fascia = isShop * step(0.76, f.y) * step(f.y, 0.9) * step(0.06, f.x) * step(f.x, 0.94);
           diffuseColor.rgb = mix(diffuseColor.rgb, shutC * 0.7, fascia * hasOpen);
+          // Jagged surviving panes and weathered boards, inside the existing opening mask.
+          vec2 pane = f*vec2(3.0,2.0), shard = fract(pane);
+          float shardSeed = fah(floor(pane)+idc);
+          float shardEdge = shard.x + shard.y*(.7+shardSeed) - (.3+shardSeed*.8);
+          float shardAA = max(fwidth(shardEdge),.015);
+          float paneBreak = smoothstep(-shardAA,shardAA,shardEdge)*(1.0-bar);
+          vec3 brokenGlass = mix(glass,vec3(.028,.031,.030),paneBreak);
+          float boardPx = max(length(fwidth(vec2(u,vFacH))),.0001);
+          float boardJoint = (1.0-smoothstep(.012,.028+boardPx, min(fract(vFacH/.22),1.0-fract(vFacH/.22))*.22))
+            * fbBand(boardPx,.22);
+          vec3 boardColor = vec3(.27,.23,.17)*(1.0-boardJoint*.55
+            + (fbNoise(vec2(u*3.0,vFacH*35.0)+buildingSeed)-.5)*.22*fbBand(boardPx,.05));
+          glass = mix(glass,brokenGlass,brokenBay);
+          glass = mix(glass,boardColor,boarded);
           diffuseColor.rgb = mix(diffuseColor.rgb, glass, open * 0.92);
+          // Millimetre relief only: deep window recesses stay in the existing shadow model.
+          facRelief = mix(facRelief,(-.008-boardJoint*.008)*boarded,open);
           // ── THE SILL ──
           // A ledge under every window: its front face in the trim, lit a
           // little more when the sun is high, and the shadow it casts on the
           // wall below it, of the sill's projection times tan(sun angle).
           float belowSill = (y0 - f.y) * gA.y;
+          float rustTrail = exp(-max(0.0,belowSill)*1.8)*step(0.0,belowSill)
+            * (1.0-smoothstep(.015,.09+fwidth(u),abs(f.x-x0)*gA.x))
+            * decay*hasOpen*step(.45,fah(idc+vec2(63.7,4.1)));
+          diffuseColor.rgb = mix(diffuseColor.rgb,diffuseColor.rgb*vec3(.64,.39,.20),rustTrail*.65);
           float winBay = hasOpen * (1.0 - isDoor) * (1.0 - isShop) * (1.0 - hasBalc);
           float sillHere = step(0.02, gE.y) * winBay * step(-0.04, dL) * step(-0.04, dR);
           float sillLine = sillHere * step(0.0, belowSill) * step(belowSill, 0.08);
@@ -546,9 +588,9 @@ export function facade(mat: THREE.Material): void {
           // Deliberately above the 0.62 bright-pass cut: a lit window at night
           // SHOULD bloom, the way the cat's eyes and the retroreflective signs
           // already do. Scaled by uFacNight.x so it is absent by day.
-          float litBay = step(fah(idc + vec2(23.1, 6.7)), uFacNight.y);
+          float litBay = (1.0-step(uFacNight.y, fah(idc + vec2(23.1, 6.7)))) * reclaimed;
           totalEmissiveRadiance += vec3(1.0, 0.74, 0.38) * 0.72
-            * open * litBay * uFacNight.x * (1.0 - shutClosed);
+            * open * litBay * uFacNight.x * (1.0 - shutClosed) * (1.0 - bar) * (1.0 - isDoor);
           // IVY. Whole columns of wall get claimed, thickest at the base and
           // thinning as it climbs — which is what makes a ruin read as reclaimed
           // rather than merely dirty.
