@@ -16295,4 +16295,13 @@ cliff face.
 **Deployed without a pull, on the seat's instruction** — the pull was an
 hour old and the seat said "no pull this time". The other agent's edits in
 that hour, if any, are overwritten on the cell and exist in git only if
-they were pushed there; the next pull will say.
+they were pushed there; the next pull will say. **Live as v1789730253250**
+(cell-sync's "deploying" line named v1789730221968 and its "deployed" line
+this one — read the live bundle, not the wait): `app.js?cb=` came back
+`x-cache: Miss`, 3.93 MB, parses under esbuild, and carries `wildPatch`,
+`HERD_DOT_M`, `stuckRecycled`, `wedgeDeg`, `nearestPrefix`, `synWeather`
+and `WX_NOISE_STEP`, with no `float patch` — so this one deploy took the
+shader fix, the owned herd, the admission histogram cut and yield, and the
+weather stair fix and drift out together. The phone's next dump is the cost
+check for all four (`stepWildlife`, `ezAdmit`, `stepWeather`), and a stop at
+any spawn is the herd's verification.
