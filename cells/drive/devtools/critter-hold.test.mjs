@@ -52,7 +52,13 @@ await d.page.evaluate(() => { window.__drive.speed = 26; });
 let jumps = [];
 let watched = 0;
 let prev = await snap();
-for (let i = 0; i < 26; i++) {
+// LONG ENOUGH FOR A RENEWAL. A herd born ahead flees the truck at 22 m/s
+// against its 26, so for the first half-minute nothing is passed, nothing
+// falls 364 m behind and nothing is reborn — 26 ticks of that proved the law
+// over a drive that never recycled an animal. A hundred ticks (70 s, 1.8 km
+// of salt flat) sees the herd overtaken, left behind, reborn ahead and passed
+// again, which is where a pop would be.
+for (let i = 0; i < 100; i++) {
   await d.page.evaluate(() => { window.__drive.speed = 26; });
   await d.page.waitForTimeout(700);
   const now = await snap();
