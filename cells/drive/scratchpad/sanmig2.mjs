@@ -5,7 +5,7 @@ import { writeFileSync } from 'node:fs';
 const d = await openDrive({
   spot: 'lat=37.86119&lon=-107.87094&h=321&cam=chase&tdbg=0&wxlive=0&time=NOON',
   tag: 'sanmig2', settle: 0, bootTimeout: 300000,
-  src: '/home/user/workspace/cells/drive/client/.xsec.ts',
+  src: '/home/user/workspace/cells/drive/client/__xsec-rev.ts',
 });
 const q = (f, ...a) => d.page.evaluate(f, ...a);
 await d.page.waitForTimeout(240000);
