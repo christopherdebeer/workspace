@@ -16735,3 +16735,20 @@ cell was a version behind rather than ahead. All five restored, nothing
 committed verbatim, nothing lost. Worth recording because the ritual's
 usual outcome is the opposite one, and the same three-line test decides
 both.
+
+**Then deployed as v1789748140155**, the two streams merged: the other
+agent's live VECTOR ROAD authoring (fast-forwarded, `tsc` clean, its new
+node test green beside `world-authoring-dem`, `world-authoring-raster`,
+`substrate`, `terrain-crossing`, `hydro` and `glsl-reserved`) on top of the
+water floor, the stale-revision rule and everything before. The live bundle
+reads `x-cache: Miss`, 4.01 MB, parses, carries `PolylinePaintSession`,
+`remirrorCover`, `publishHydroFloor`, `stale-terrain`, `wildPatch` and
+`barRise`, shows the lab's VECTORS surface, and `/lab/world` answers 200.
+
+**A LIVE-BUNDLE GREP MUST NAME A RUNTIME SYMBOL.** `AuthoredPolyline` and
+`PolylineResult` read zero in the deployed bundle and neither is missing:
+they are TypeScript types, which esbuild erases. The class beside them
+(`PolylinePaintSession`) is the honest witness. A type name in a
+verification grep is a false alarm waiting to happen — and the inverse of
+the `nodraw` lesson above: a check that cannot fail proves nothing, and a
+check that cannot succeed cries wolf.
