@@ -41588,7 +41588,19 @@ function meshHeightAt(x: number, z: number): number | null {
   fogTop: Math.round(wxField.fogTop), wetMean: +wxField.wetMean.toFixed(3),
   grid: { ox: wxField.ox, oz: wxField.oz },
   wind: { x: +wxWind.x.toFixed(2), z: +wxWind.z.toFixed(2), kmh: Math.round(wxWind.kmh) },
+  // Milliseconds since the field was last rebuilt: the number that says
+  // whether a value read from `local` is this frame's or a stair's.
+  builtAgo: Math.round(performance.now() - wxBuiltAt), next: wx.next,
 });
+/** Ask for a front, the way `__windset` asks for a gale: a test that wants to
+ *  watch a sky arrive cannot wait on the synthetic roll's minutes or on the
+ *  live feed's quarter hour. Holds the roll off for ten minutes; a pin still
+ *  wins, because a pin is a fixture. */
+(window as unknown as { __wxnext?: object }).__wxnext = (sky: Sky): string => {
+  if (WX_PIN) return `pinned ${WX_PIN}`;
+  wx.next = sky; wx.at = performance.now() + 600000;
+  return sky;
+};
 /** Which palette the world settled on, and whether real cover chose it or the
  *  latitude guess is still standing in. */
 /**
