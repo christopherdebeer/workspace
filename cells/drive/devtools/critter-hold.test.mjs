@@ -28,7 +28,9 @@ const check = (name, cond, saw) => {
 
 // Open ground, so the herd is on land and in the open rather than penned by a
 // coastline. Uyuni: flat, empty, and the same every run.
-const d = await openDrive({ spot: 'lat=-20.1338&lon=-67.4891&h=45&cam=chase&wx=clear&time=NOON', tag: 'herd-hold', settle: 20000 });
+// nodraw: the law is about positions, and a drawn frame under load takes seconds,
+// which starves module time (dt caps at 50 ms) and makes a 70 s drive a 5 s one.
+const d = await openDrive({ spot: 'lat=-20.1338&lon=-67.4891&h=45&cam=chase&wx=clear&time=NOON&nodraw=1', tag: 'herd-hold', settle: 20000 });
 
 /** One sample: every animal, plus where the truck is and which way it looks. */
 // THE FRAME IS THE MODULE'S OWN FRUSTUM TEST, not a cone. The old 57° cone
@@ -39,11 +41,13 @@ const d = await openDrive({ spot: 'lat=-20.1338&lon=-67.4891&h=45&cam=chase&wx=c
 // tick"; the guard below that something was watched keeps it honest. And
 // past HERD_DOT_M an appearance inside the wedge is two art pixels — the dot
 // spawn — which the law allows as it always allowed one past 900 m.
-const snap = () => d.page.evaluate(() => ({
-  herd: window.__wildlife().actors.slice(0, 30).filter((a) => a.active)
+// Distances are from the CAMERA, which is what the module's dot rule and its
+// frustum test measure from; the truck sits some ten metres ahead of it.
+const snap = () => d.page.evaluate(() => { const w = window.__wildlife(); return {
+  herd: w.actors.slice(0, 30).filter((a) => a.active)
     .map((a) => ({ id: a.id, x: a.x, z: a.z, seen: a.seenAgo < 0.8 })),
-  x: window.__drive.x, z: window.__drive.z, h: window.__drive.heading,
-}));
+  x: w.camera[0], z: w.camera[1], h: window.__drive.heading, born: w.born,
+}; });
 const DOT_M = 300; // HERD_DOT_M in client/wildlife.ts
 
 // Drive. The wrap edge is only crossed by moving, and the fault needs enough

@@ -20,7 +20,7 @@ export interface Critter {
   x:number;y:number;z:number;vx:number;vy:number;vz:number;ph:number;
   active:boolean;yaw:number;bank:number;seen:number;nextPlan:number;
   turn:number;safeSpeed:number;wet:number;nextSpawn:number;cycle:number;
-  feet:Foot[];lastNear:boolean;nextSeat:number;stuckSince:number;
+  feet:Foot[];lastNear:boolean;nextSeat:number;stuckSince:number;placed:boolean;
 }
 const ALT=[34,22,58], BOX=[560,820], N=[30,52], GROUPS=[3,4];
 export const HERD_CLEAR=4.8;
@@ -29,9 +29,11 @@ export const HERD_CLEAR=4.8;
  *  field, not a pop. Below the 364 m recycle radius so it is not reclaimed the
  *  frame it arrives. The clearance test reads the same number. */
 export const HERD_DOT_M=300;
-/** The first spawn after a hop is an ARRIVAL: the wedge is empty, nothing was
- *  on the glass, so the herd is placed in view beside the road ahead. */
-const ARRIVAL_S=12;
+/** The first placement of an animal after a hop is an ARRIVAL: the wedge is
+ *  empty, nothing was on the glass, so the herd is placed in view beside the
+ *  road ahead. A PLACEMENT, not a time window: module time runs slower than
+ *  the clock when frames are slow (dt is capped at 50 ms), and a 12 s window
+ *  once covered a whole 1.8 km drive — every recycle was born in frame. */
 /** An animal refused its sweep for this long while nobody is looking is
  *  standing where the ground changed under it — respawn it somewhere it can
  *  walk. A watched one stays (a vanish is a pop too). */
@@ -42,7 +44,7 @@ export function createWildlife(env:Environment) {
   for(const m of herds) env.shadow(m);
   const birds={get visible(){return birdMeshes[0].visible;},set visible(v:boolean){for(const m of birdMeshes)m.visible=v;}};
   const flock:Critter[]=[],graze:Critter[]=[];
-  let time=0,initialized=false,closest=Infinity,climatePending=false,arrivalUntil=0;
+  let time=0,initialized=false,closest=Infinity,climatePending=false;
   const frustum=new THREE.Frustum(),vp=new THREE.Matrix4(),sphere=new THREE.Sphere(),dummy=new THREE.Object3D();
   dummy.rotation.order='YXZ';
   const stats={steps:0,samples:0,blocked:0,recycles:0,spawnAttempts:0,footSamples:0,constrainedClearance:0,ms:0,
@@ -72,12 +74,12 @@ export function createWildlife(env:Environment) {
         const c:Critter={id:i,seed:rng(),sp:species[i%GROUPS[k]],grp:i%GROUPS[k],sz:air?.78+s*.5:.72+s*s*.62,
           tint:new THREE.Color(),x:truck.x,y:0,z:truck.z,vx:(rng()-.5)*6,vy:0,vz:(rng()-.5)*6,ph:rng()*Math.PI*2,
           active:false,yaw:0,bank:0,seen:-100,nextPlan:rng()*.2,turn:0,safeSpeed:22,wet:0,nextSpawn:0,cycle:0,
-          feet:[],lastNear:false,nextSeat:0,stuckSince:-1};
+          feet:[],lastNear:false,nextSeat:0,stuckSince:-1,placed:false};
         // seed is a [0,1) shader attribute; retain its bits for deterministic choices.
         c.seed=Math.floor(c.seed*0xffffff)/0xffffff;tint(c,air);pop.push(c);
       }
     }
-    initialized=true;arrivalUntil=time+ARRIVAL_S;
+    initialized=true;
   }
   /** Half the horizontal field of view: the wedge the seat can see. */
   const halfH=()=>{const cam=env.camera as THREE.PerspectiveCamera;const fov=(cam.fov??55)*Math.PI/360;return Math.atan(Math.tan(fov)*(cam.aspect??.5));};
@@ -86,7 +88,7 @@ export function createWildlife(env:Environment) {
     c.nextSpawn=time+.7+(c.id%5)*.09;
     const k=+air,rng=random(((c.seed*0xffffff)|0) ^ (++c.cycle)*11779),truck=env.truck();
     const centre=env.camera.position;
-    const arrival=!air&&time<arrivalUntil;
+    const arrival=!air&&!c.placed;
     for(let attempt=0;attempt<12;attempt++){
       stats.spawnAttempts++;
       let x:number,z:number,kind:'arrival'|'dot'|'flank'|'bird';
@@ -134,7 +136,7 @@ export function createWildlife(env:Environment) {
       if(!exempt&&seen(x,y+(air?0:1),z,air?3:3*c.sz)){stats.refused.seen++;continue;}
       if(Math.hypot(x-truck.x,z-truck.z)<HERD_CLEAR+8){stats.refused.truck++;continue;}
       c.x=x;c.y=y;c.z=z;c.active=true;c.feet=[];c.lastNear=false;c.vy=0;c.wet=0;
-      c.nextPlan=0;c.safeSpeed=22;c.turn=0;c.seen=time-3;c.stuckSince=-1;c.nextSeat=time+.3;
+      c.nextPlan=0;c.safeSpeed=22;c.turn=0;c.seen=time-3;c.stuckSince=-1;c.nextSeat=time+.3;c.placed=true;
       if(recycle)stats.recycles++;stats.spawned++;stats.born[kind]++;
       return true;
     }
@@ -297,9 +299,9 @@ export function createWildlife(env:Environment) {
       stepPop(flock,birdMeshes,true,dt);stepPop(graze,herds,false,dt);stats.steps++;stats.ms=performance.now()-start;
     },
     refreshClimate(){climatePending=true;},
-    reset(){flock.length=0;graze.length=0;initialized=false;climatePending=false;closest=Infinity;arrivalUntil=0;for(const m of [...birdMeshes,...herds])m.count=0;},
+    reset(){flock.length=0;graze.length=0;initialized=false;climatePending=false;closest=Infinity;for(const m of [...birdMeshes,...herds])m.count=0;},
     consumeClosest(){const d=closest;closest=Infinity;return{closest:Number.isFinite(d)?+d.toFixed(2):null,clearance:HERD_CLEAR,constrained:stats.constrainedClearance};},
-    diagnostics(){return{...stats,arrival:time<arrivalUntil,wedgeDeg:+(halfH()*180/Math.PI).toFixed(1),activeBirds:flock.filter(c=>c.active).length,activeHerd:graze.filter(c=>c.active).length,
+    diagnostics(){return{...stats,unplaced:graze.filter(c=>!c.placed).length,time:+time.toFixed(2),camera:[+env.camera.position.x.toFixed(1),+env.camera.position.z.toFixed(1)],wedgeDeg:+(halfH()*180/Math.PI).toFixed(1),activeBirds:flock.filter(c=>c.active).length,activeHerd:graze.filter(c=>c.active).length,
       trianglesPerSpecies:[...herds,...birdMeshes].map(m=>m.geometry.attributes.position.count/3),climatePending,
       actors:[...graze,...flock].map(c=>({id:c.id,seed:c.seed,sp:c.sp,active:c.active,x:c.x,y:c.y,z:c.z,phase:c.ph,feet:c.feet,seenAgo:+(time-c.seen).toFixed(2),speed:+Math.hypot(c.vx,c.vz).toFixed(2)}))};},
   };

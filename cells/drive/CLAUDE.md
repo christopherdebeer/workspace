@@ -16387,3 +16387,203 @@ bug into invented flooded terrain.
 **NOT DEPLOYED.** Committed on the branch; the seat was testing the herd
 deploy when this was read, and it goes out on the seat's word with the
 next deploy.
+
+## The open ledger, catalogued, and the forward plan from the contact fix outward
+
+**Asked for by the seat on 2026-09-18** before proceeding with the water
+analysis's larger direction: every open task, summarised and grouped, and a
+detailed plan. Deployed at the time: v1789730253250 (the owned herd, the
+shader fix, the admission cut, the weather units), with the contact-sampler
+fix going out as the next version. The ledger below is the task list as it
+stood; the numbers are task ids.
+
+### A. Water, terrain and contact — the direction the seat chose
+
+| id | task | state | what it is |
+|---|---|---|---|
+| #167 | the precise field's dry is final; the wet diagnostic corrected | done, deploying | the analysis's item 1 and 2 |
+| #171 | sample the seat's red patches at runtime with the corrected diagnostic | new | the analysis's own unconfirmed step: gone / pink / blue / unavailable per patch |
+| #168 | one resolved boundary: terrain, hydro and contact at compatible revisions | new | item 3: hydro samples the heightfield, contact the carved mesh; revisions ride the tile unchecked |
+| #169 | genuine buried water: constrained channel sections, steep rock banks kept | new | item 4, rivers: bottom, toes, tops as stations; section varies with slope, width, substrate |
+| #170 | shoreline topology for lakes, reservoirs, dams and coasts | new | item 5: breaklines beyond rivers, per-kind constraints (body level with islands; crest, two levels, spillway; shelving beach; narrow rocky shore) |
+| #63 | an untagged road × river crossing dips the deck to the water, no culvert | pending, wants the seat's go-ahead | changes how roads meet rivers everywhere; the Joggemspruit is a culvert by construction |
+| #133 | hydro: cut the flowing field's RESOLUTION, the shore-band bound is worth 26% | pending | 88 → 64 ms best case by bounding; quartering the 4× flowing grid moves no sampler contract |
+| #90 | ocean gleanings: eikonal travel-time field, swash history, Jacobian whitecaps, slope-variance roughness | in progress (paused) | the coastal water's motion, not its boundary |
+
+### B. Performance on the device — measured, not started
+
+| id | task | state | the number |
+|---|---|---|---|
+| #70 | treeRefresh as resumable work under a per-frame budget | pending | 25 ms mean, 131 max at Hout Bay; the histogram cut (#163) took the sort out of ezAdmit, the loop remains |
+| #71 | a tile-aware groundAt inside redrape, with the drape index's audit first | pending | bounded at 38% of a 45.6 ms walk; the audit (0 mismatches at tile edges) is the gate |
+| #72 | POI occlusion throttled: project per frame, sight-test a few times a second | pending | updatePois 1.7–2.4 ms a frame |
+| #155 | a scrolling (toroidal) sward field: sweep the new strip | pending | swardFrame 3.2% of a session, ~18× available |
+| #153 | one nested carrier population (0.45 / 1.35 / 4.05) | pending | a handover thins one population instead of swapping two |
+| #156 | 5108 impostors waiting on a bake with the atlas reported 18/18 | pending | one probe before it is read either way |
+| — | the device's `stepWildlife`, `ezAdmit`, `stepWeather` rows | not a task | the next dump is the cost check for the three units deployed today |
+| — | `camera` phase spikes on the Nagato dump | not a task | unattributed |
+
+### C. Picture — band limits, shells, shadows
+
+| id | task | state | what it is |
+|---|---|---|---|
+| #129 | cloud shadow reads the dead uMpp fade, seven palette steps loud | pending | measure under cover, then the same tdPx band limit; the ruler is fwidth(hit) |
+| #130 | façade sub-cell trim is not footprint-band-limited (roof done) | pending | mix toward a mean façade tone on sdBand; measure at 100/200/400 m |
+| #145 | the far shell swaps its material at nscale=0 | pending | a separate strength uniform on the shell's object-space path |
+| #141 | phase D remainder: tuft scale and flower rate read the field | in progress | sward vertex shader, channels already uploaded |
+| #142 | band D: material-aware micro-detail at 0.1–0.5 m with relief | in progress | per-layer micro-structure, the cascade's finest octave stands down |
+
+### D. Structures and rail
+
+| id | task | state | what it is |
+|---|---|---|---|
+| #127 | a rail bore: a tunnel-tagged railway is hidden, not built | pending | a rail-sized bore and portal in tunnelTube |
+| #128 | a bridge assembly wears one form over its approaches too | pending | fragments outside the outermost stations take the generic viaduct |
+| #134 | the uMngeni's two bridges want landmark entries; no piers reach Durban | pending | a TILE_V bump decision |
+
+### E. HUD
+
+| id | task | state | what it is |
+|---|---|---|---|
+| #157 | landscape safe-area insets for the canvas HUD and overlays | pending | a layout decision, wants a frame from the seat |
+
+### F. Housekeeping on the ledger
+
+| id | state | note |
+|---|---|---|
+| #166 | in progress → done | the owned herd: deployed and measured; the clearance test rewritten to drive (it never had) and to read births; the arrival rule made a placement, not a time window, after the first real drive showed recycles born in frame |
+| #90, #141, #142 | in progress by name only | no session is on them; they read as pending |
+
+### The forward plan: from the contact fix outward to one boundary
+
+**Read against the code before it was written** (a sweep of `client/hydro`,
+`terrain-kernel.ts`, `client/substrate` and `main.ts`, file:line in the
+task descriptions). The picture it found is five independent boundaries
+where one is needed:
+
+1. **Hydro reads the DEM, never the carved mesh.** `hydroElevation`
+   (`terrain-kernel.ts:2041`) fills the hydro tile's elevation raster from
+   `sampleHeight`; every level, bed and ground inside `hydro/build-tile.ts`
+   reads that grid; nothing under `client/hydro/` calls `meshSurfaceAt`,
+   `groundAt` or `wheelGround`.
+2. **The carve knows nothing of the field.** `channelFloorAt`
+   (`terrain-kernel.ts:1281`) lowers the mesh to the line invert −0.15 m
+   over a CLASS half-width (`WATER_W` river 14, canal 9, stream 4.5) with a
+   1:1 rise and a reach of `hw + 3`; no material rides it; the drawn water's
+   width is the field's coverage, a different number.
+3. **Breaklines are flowing-only.** `extractFlowingHydroShoreSegments`
+   (`hydro/shore-contour.ts:103`) keeps river, stream and canal; lakes,
+   reservoirs, lagoons and the coast get coarse triangles that bridge their
+   own waterline.
+4. **The bank pass paints.** `blendProductionTerrainHydroBank`
+   (`substrate/terrain-hydro.ts:65`) moves colours, never positions.
+5. **The only vertical reconciliation is coastal.** `SEA_BED` = 6 m under
+   water-classified vertices within 2 m of the sea (`terrain-kernel.ts:1002`,
+   `:1647`); inland the terrain never moves to meet a resting level.
+6. **Revisions ride unchecked.** `sourceRevisions {terrain, hydroDetails,
+   hydro, crossings}` are set at `main.ts:24759`; the store's `lookup`
+   returns any tile it holds; consumers check terrain, drive, structures and
+   hydro-details generations one by one (`main.ts:24093-24296`), and the
+   hydro check (`:24365`) is field identity, never against `hydroRev` and
+   never cross-checked with the terrain generation the field was built on.
+7. **A lake is one flat quantile.** `body-registry.ts:362` gives standing
+   bodies a `flat` level from a DEM quantile (`build-tile.ts:244-273`), no
+   island handling, no dam or spillway model anywhere.
+
+The plan, in the order the analysis gave and the code confirms. Each step
+names its mechanism, its files, and the gate it must pass before the next.
+
+**Step 1 — the witness (#171, first, and kept for every later step).** A
+devtool `wet-census.mjs`: boot a fixture, sweep `wetClassAt` over the
+overlay's 768 m window around the truck (the painter already does 16k
+classifications in 40 ms), print the tally per class (W drawn · D deck ·
+U buried · E waterline band · F ford · C channel · O ocean · X contact-wet
+field-dry · c cover-only) and save the raster. Run it on the river fixtures
+(at-senqu-ford, at-senqu-top, at-umgeni, at-yosemite), the coast
+(at-campsbay, at-simonstown, at-glencairn) and the plain (at-bixby). That
+table is the control every step below is measured against, the way the
+building census's six control frames were. And at the seat's own red-patch
+places, once named, classify each former patch: gone (it was the raster),
+pink (genuinely buried → step 3), blue (contact agrees now), or unavailable
+(→ step 2). Gate: the table exists and the seat's patches are tallied.
+
+**Step 2 — one boundary (#168), three moves, each with the witness rerun.**
+- *2a. Revisions consumed, not just carried.* `ProductionSubstrateStore.lookup`
+  answers `unavailable` with a reason (`stale-terrain`, `stale-hydro`) when
+  the tile's `sourceRevisions.terrain` is not the current terrain revision
+  for that key or its `sourceRevisions.hydro` is not `hydroRev.get(key)`;
+  the fallback monitor counts the reason; `__substrate` shows it. A stale
+  tile then goes to the legacy path explicitly, never to an implicit wet.
+  Gate: substrate self-test cases for both reasons; the census unchanged on
+  a settled world.
+- *2b. Hydro reads the carved ground.* The kernel carves after
+  `carveCorridors` (`:1663`) and builds `hydroElevation` from the DEM; move
+  the hydro elevation sample AFTER the carve and read the tile's carved
+  heights, so hydro's bed, ground and levels are the mesh's. The circularity
+  to guard: the carve reads the line invert, hydro's river profile reads the
+  invert too — consistent by construction; the standing-body quantile then
+  sees the carved bed only where a river enters a lake, which is right.
+  Gate: `U` at the river fixtures drops (the buried count is the number this
+  move exists for); `X` does not rise; a Senqu profile frame.
+- *2c. One resolved water surface.* A `resolvedWaterAt(x, z)` in the
+  substrate: {level, bed from the mesh, coverage, kind, revisionOk} read by
+  `surfaceAt`, `waterInfoAt`, the wheels, the splash and `wetClassAt` alike;
+  the legacy channel-grid path stands down wherever a field covers the
+  point. "Water exists" means this committed surface, never the mesh's
+  visibility or LOD. Gate: the census's `X` is zero except where the field
+  is unavailable; the ford fixture's wading depth unchanged; `weather-world`
+  and `substrate` tests green.
+
+**Step 3 — genuine buried water (#169).** Replace `channelFloorAt`'s class
+half-width and 1:1 rise with a SECTION read from the field: the bottom at
+the field's bed (resting level − depth), the toes at the field's shore
+(coverage cut, shore distance 0), the bank tops at toe + bankWidth where
+bankWidth is a function of slope, width and substrate — a soil bank at
+1:2, a steep rock bank (substrate cliff or outcrop, or DEM slope over 35°)
+kept within a metre of the toe. Reach = field half-width + bankWidth, not
+`hw + 3`. The field has to reach the kernel the way breaklines do
+(`S.hydroBreakLines`); publish a section sampler beside them. Only where
+the witness is pink; never for red. Gate: `U` at the river fixtures near
+zero; the Senqu and Umgeni profiles photographed; no cliff softened
+(compare the DEM slope histogram within 20 m of a bank before and after).
+
+**Step 4 — shoreline topology beyond rivers (#170).** Drop the flowing-kind
+filter and give each kind its constraint at the kernel's breakline split:
+- *lakes, reservoirs, lagoons:* one body level (the registry's, coherent
+  across tiles), vertices inside the footprint at or below the level to the
+  body's floor (a shelving profile within the shore band, the deeper floor
+  beyond); vertices outside untouched; islands are where the field's
+  coverage says land inside the footprint — untouched by construction, and
+  the census must show no `W` on them.
+- *dams:* the crest is the `waterway=dam` / `man_made=dam` way (check the
+  fetch carries it; if not, that is the first sub-step); no vertex on the
+  crest lowered; upstream is the reservoir body, downstream the river
+  profile, the boundary between them the crest; the spillway a later,
+  separate model. No smoothing may cross the crest.
+- *beaches vs cliffs:* the substrate field already classes cliff and
+  outcrop; a beach shore gets the shelving profile (slope ≤ 1:12 for the
+  first 30 m, a swash band), a rocky shore keeps the DEM face and gets the
+  breakline only. "Smoother" is fewer raster artefacts; a cliff never
+  softens.
+Gate: the coast and lake fixtures' census before and after; frames at
+Camps Bay, Simon's Town and Glencairn; the wave-shots devtool unchanged in
+its numbers (the water's motion is not touched).
+
+**Step 5 — after the boundary is one.** #63 (an untagged crossing dips to
+the water; the seat's go-ahead) and #133 (the flowing field's resolution,
+now load-bearing for the carve, so its cost is measured again). #90's ocean
+motion sits on top of step 4's coast, not before it.
+
+**What must not happen at any step.** No carving of a red patch (a
+contact bug is not terrain). No flattening of a cliff to meet a waterline.
+No implicit wet from any fallback. No step deployed without its census
+before and after, and no pull-less deploy except on the seat's word.
+
+**Deployed meanwhile as v1789731647241** (the contact-sampler fix and the
+corrected diagnostic; `hydroFieldCovers` in the live bundle, `x-cache:
+Miss`), and the herd's arrival rule corrected: an arrival is an animal's
+FIRST placement after a hop, not a 12 s window of module time — the first
+real drive of the clearance test (the truck hopped; it had never moved)
+showed a 12 s window covering a whole 1.8 km drive when frames are slow,
+every recycle born in frame (52 jumps). Under nodraw with placement
+arrivals: 675 in-frame animal-ticks, 0 jumps, renewals out of frame, green.
