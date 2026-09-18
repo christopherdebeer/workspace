@@ -17117,3 +17117,35 @@ measurement of the rule that was supposed to have cut it.**
 failures on the parent rule; `terrain-crossing`, `hydro`, `inland-water`,
 `substrate`, `substrate-field` and `glsl-reserved` green.
 
+
+**AND THE TRENCH IS GONE AT THE PLACE THE SEAT PHOTOGRAPHED.** `sanmig5` boots
+the seat's own url on the fixed build and reads the same transect through the
+drawn river at [30,−50], with the mesh and the natural ground from one probe
+(`__ground`), absolute metres:
+
+| t | natural | SHIPPED mesh, before | mesh, after | level | cov |
+|---|---|---|---|---|---|
+| −52 | 2801.62 | **2792.55** | **2801.46** | — | — |
+| −40 | 2798.73 | **2792.55** | 2798.71 | — | — |
+| −24 | 2794.97 | **2792.55** | 2794.54 | — | — |
+| −12 | 2790.25 | 2783.51 | 2790.57 | — | — |
+| 0 | 2793.19 | 2787.90 | 2792.41 | 2792.98 | 0.66 |
+| +16 | 2797.55 | 2790.72 | 2796.50 | 2796.29 | 0.64 |
+| +36 | 2800.00 | **2792.55** | 2800.00 | 2799.98 | 0.51 |
+| +56 | 2801.95 | **2792.70** | 2801.90 | — | — |
+
+The 112 m flat-bottomed cut with a shelf at one endpoint's invert at either end
+is a hillside again, and the water sits IN it: 0.57 m of water on the mesh at
+the centreline. Over 3,721 posts on a 10 m grid, natural − mesh reads **med
+0.02 m, p90 0.63, max 7.89**, and over the 142 DRAWN-WET posts **med 0.40, p90
+3.29** — against the investigation's same reading on the shipped rule, **med
+4.52 m and max 23.01 under the water**. What is left at t=+4 (level 2793.60
+under a mesh at 2793.88) is the fringe burial the census counts: a texel of
+drawn water 28 cm under its own bank, which is `#169`.
+
+**What this does NOT fix, unchanged from the investigation:** the channel
+section is still a class half-width with a 1:1 rise rather than a bed, toes and
+bank tops read from the field, so a correctly-placed carve is still the wrong
+SHAPE (`#169`); and `publishHydroFloor` still lowers ground to the field's bed
+on its own lattice, with the shore band at that lattice's resolution unreached
+(`#170`).
