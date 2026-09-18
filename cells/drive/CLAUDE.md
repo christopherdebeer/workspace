@@ -17149,3 +17149,23 @@ bank tops read from the field, so a correctly-placed carve is still the wrong
 SHAPE (`#169`); and `publishHydroFloor` still lowers ground to the field's bed
 on its own lattice, with the shore band at that lattice's resolution unreached
 (`#170`).
+
+**Live as v1789759959945** (cell-sync's "deploying" line named v1789759921724 and
+its "deployed" line this one — read the live bundle, not the wait). The pull
+before it found the cell BEHIND with nothing stranded: `client/terrain-kernel.ts`
+diffed EMPTY against the commit before this work, and `CLAUDE.md` read **0
+insertions against 185 deletions** — the cell lacking the investigation section
+and adding nothing of its own — so both were restored, with the usual
+`devtools/` resurrection (`globe-navigation.test.cjs`, `refine-flora.mjs`)
+checked out. `tsc` clean, the live `app.js` 4,012,663 bytes at `x-cache: Miss`,
+parses under esbuild, and carries the fix verbatim: `const across =
+Math.hypot(x - px, z - pz)` and `Math.sign(signedAcross) * across /
+Math.max(0.5, c.hw)` present, **`const across = Math.abs(signedAcross)` absent**,
+with `publishHydroFloor`, `hydroFloorAt`, `wildPatch`, `barRise` and
+`PolylinePaintSession` all still there.
+
+**THE WITNESS FOR A ONE-LINE CHANGE IS THE EXPRESSION, NOT AN IDENTIFIER.** This
+change adds no new symbol, so the usual grep for a name has nothing to find; the
+honest check is that the new expression is in the bundle AND the old one is not.
+A grep that can only succeed is as useless as one that can only fail — the
+absent-old half is what makes the pair a verification.
