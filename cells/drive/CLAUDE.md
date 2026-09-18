@@ -16833,7 +16833,21 @@ was returned to, and zeroes the counter, beside the existing `mapFeats`
 clear. `__minimap()` reports `{anchor, feats, known, ink}` and its `ink`
 pixel count is the witness.
 
-VERIFY_TABLE
+### Verified, same rig, hop to the same coordinates (`scratchpad/hopfix.mjs`)
+
+| at the Senqu ford | before the hop | just after | settled |
+|---|---|---|---|
+| draw calls moved by toggling the water | 1 | **1** (was 0) | 1 |
+| triangles moved by the same toggle | 13,212 | **13,212** (was 0) | 13,212 |
+| hydro tiles the field holds | 20 | 0 (swept) | 20 |
+| minimap ink pixels | 28 | **14** (blanked, new strokes only) | 28 |
+| minimap ways known | 14 | **4** (reset, recounting) | 14 |
+| minimap features in the replay list | 1,007 | 741 | 1,007 |
+| terrain tiles | 235 | 0 (swept) | 243 |
+
+The water is in the scene again after a hop and the canvas starts from the
+background. `tsc` clean; no page errors on either side of the hop.
+
 
 **The lesson, and it is the third of its kind here:** a guard that names
 OBJECTS by identity is a guard that a later refactor can silently retire.
