@@ -37334,6 +37334,177 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
     water: wet ? { kind: wet.kind, resting: +wet.restingLevelM.toFixed(2), depth: +wet.depthM.toFixed(2), coverage: +wet.coverage.toFixed(2), shore: +wet.shoreDistanceM.toFixed(1) } : null,
   };
 };
+/** The nearest channel SEGMENT to a point, whatever its half width — which is
+ *  not `channelAt`, whose job is "am I in the water" and which answers null a
+ *  metre outside the ribbon. A bank station is outside the ribbon by
+ *  definition, so a probe about banks needs the other question. */
+function nearestChannelSeg(x: number, z: number, reachM = 120): { seg: Seg; t: number; d: number } | null {
+  let best: { seg: Seg; t: number; d: number } | null = null;
+  const r = Math.ceil(reachM / GRID);
+  const cx = Math.floor(x / GRID), cz = Math.floor(z / GRID);
+  for (let ax = cx - r; ax <= cx + r; ax++) {
+    for (let az = cz - r; az <= cz + r; az++) {
+      for (const c of channelGrid.get(`${ax},${az}`) ?? []) {
+        const dx = c.bx - c.ax, dz = c.bz - c.az;
+        const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+        const d = Math.hypot(x - (c.ax + dx * t), z - (c.az + dz * t));
+        if (!best || d < best.d) best = { seg: c, t, d };
+      }
+    }
+  }
+  return best && best.d <= reachM ? best : null;
+}
+/**
+ * ── ONE CROSS-SECTION OF A BANK, WITH EVERY AUTHORITY AT EVERY STATION ──
+ *
+ * `__banktransect(x, z, bearingDeg?, halfM?, step?)`. The census counts how
+ * many points disagree; this says WHY one does, and it is the instrument the
+ * bank work is measured with.
+ *
+ * Per station, from ONE revision pair (the tile's terrain generation and its
+ * hydro field's, both reported, so a reading taken across a rebuild is visible
+ * as such rather than averaged into the answer):
+ *
+ *   nat     the DEM, before anything hydro has an opinion — the reference a
+ *           profile must be solved against, never the previous build's mesh
+ *   bed     the published hydro floor's target here, or null outside it
+ *   carve   what the channel carve would offer, or null where it stands down
+ *   bank    the resolved bank target — null until a resolver exists
+ *   tri     the FINAL TRIANGLE under the point, which is what the wheels and
+ *           the eye get
+ *   triMax  the highest of that triangle's three corners. A triangle can
+ *           bridge above the water while every corner sample beside it looks
+ *           acceptable, and no vertex-wise reading can see that.
+ *   level, cov, kind, shore   what the field says
+ *   owner   the LOWEST of the candidate targets, since every rule here only
+ *           lowers — so this is the rule actually in force, not a guess
+ *   triOff  tri minus that target. Large and positive is a triangle nobody
+ *           lowered (a bridge across the channel, or a pin); large and
+ *           negative is something below every stated target.
+ *
+ * The default bearing is square to the nearest channel, because a transect
+ * along a bank measures nothing. `halfM` either side, `step` metres apart.
+ */
+(window as unknown as { __banktransect?: object }).__banktransect = (
+  x = state.x, z = state.z, bearingDeg?: number, halfM = 60, step = 2,
+): object => {
+  const near = nearestChannelSeg(x, z);
+  let ux = 1, uz = 0;
+  if (bearingDeg !== undefined) {
+    const a = bearingDeg * Math.PI / 180;
+    ux = Math.sin(a); uz = -Math.cos(a);
+  } else if (near) {
+    const dx = near.seg.bx - near.seg.ax, dz = near.seg.bz - near.seg.az;
+    const L = Math.hypot(dx, dz) || 1;
+    ux = -dz / L; uz = dx / L;                       // square to the channel
+  }
+  const t = heightTileAt(x, z);
+  const key = t ? `${t.tx}/${t.ty}` : null;
+  const fl = key ? hydroFloors.get(key) : undefined;
+  const floor = fl ? { n: HYDRO_EN, data: fl } : null;
+  const f2 = (v: number | null): number | null => v === null || !Number.isFinite(v) ? null : +v.toFixed(2);
+  const stations: object[] = [];
+  for (let s = -halfM; s <= halfM; s += step) {
+    const sx = x + ux * s, sz = z + uz * s;
+    const nat = hasHeight(sx, sz) ? sampleHeight(sx, sz) + baseElev : null;
+    const bed = floor && t ? K.hydroFloorAt(floor, t, sx, sz) : null;
+    // Infinity as the ceiling asks what the carve WOULD offer rather than
+    // whether it would win here, which is the question a transect wants; the
+    // road and crossing vetoes inside it still apply, so a causeway reads null.
+    //
+    // AND IT ANSWERS IN THE KERNEL'S OWN FRAME. `channelFloorAt` is compared
+    // against `pos[]`, which is local metres, while the floor, the field and
+    // `meshSurfaceAt` here are absolute — so the first run of this probe put
+    // the carve at −0.03 beside a river at 1790 and called the difference a
+    // triOff of 1789.79. Two authorities in one table must be in one datum or
+    // the table is a fiction.
+    const carveLocal = channelGrid.size ? K.channelFloorAt(kStore, sx, sz, Infinity) : null;
+    const carve = carveLocal === null ? null : carveLocal + baseElev;
+    const meshY = meshSurfaceAt(sx, sz);
+    const tri = meshY !== null && Number.isFinite(meshY) ? meshY + baseElev : null;
+    const corners = meshTriAt(sx, sz);
+    const triMax = corners ? Math.max(...corners.map((c) => c.y)) + baseElev : null;
+    const w = HYDRO_ON ? hydroSys?.sampleRestingSurface(sx, sz, 0.005) : undefined;
+    const cands: Array<[string, number]> = [];
+    if (nat !== null) cands.push(['natural', nat]);
+    if (bed !== null) cands.push(['bed', bed]);
+    if (carve !== null) cands.push(['carve', carve]);
+    let owner: string | null = null, target: number | null = null;
+    for (const [name, v] of cands) if (target === null || v < target) { target = v; owner = name; }
+    const crossing = productionCrossings.earthworkAt(sx, sz);
+    stations.push({
+      s: +s.toFixed(1), x: Math.round(sx), z: Math.round(sz),
+      nat: f2(nat), bed: f2(bed), carve: f2(carve), bank: null,
+      tri: f2(tri), triMax: f2(triMax),
+      level: f2(w ? w.restingLevelM : null), cov: w ? +w.coverage.toFixed(2) : null,
+      kind: w?.kind ?? null, shore: w ? +w.shoreDistanceM.toFixed(1) : null,
+      owner, triOff: tri !== null && target !== null ? +(tri - target).toFixed(2) : null,
+      road: onCarriageway(sx, sz, 0.6).road,
+      crossing: crossing ? crossing.kind : null,
+      cls: wetClassAt(sx, sz),
+    });
+  }
+  return {
+    at: [Math.round(x), Math.round(z)],
+    bearing: +(((Math.atan2(ux, -uz) * 180 / Math.PI) + 360) % 360).toFixed(1),
+    channel: near ? { d: +near.d.toFixed(1), hw: near.seg.hw, invert: f2(near.seg.ya === undefined ? null : near.seg.ya + baseElev) } : null,
+    tile: key,
+    // THE REVISION PAIR. A transect read while the tile is rebuilding is a
+    // reading of two generations, and the only way to know is to be told.
+    terrainRev: key ? terrainRevision.get(key) ?? null : null,
+    hydroRev: key ? hydroRev.get(key) ?? null : null,
+    fringeM: +bankFringeM(x, z).toFixed(1),
+    stations,
+  };
+};
+/**
+ * ── THE BANK FAULT AS A DISTRIBUTION, NOT A COUNT ──
+ *
+ * The census says how MANY points are buried at the fringe; this says how far
+ * the ground stands over its own water where they are, which is the quantity a
+ * bank profile has to remove and the only one that can show a half-fix.
+ *
+ * `over` is the drawn water's resting level subtracted from the TRIANGLE under
+ * it, at every fringe-buried point in the window — so a metre of it is a metre
+ * of bank standing proud of the water it is supposed to hold, whatever the
+ * count of such points happens to be. `reach` is how far those points lie
+ * inside the wet mask: a fringe that reaches further than a texel is no longer
+ * a fringe and the reading should say so rather than being read as one.
+ */
+(window as unknown as { __bankfringe?: object }).__bankfringe = (halfM = 384, n = 129): object => {
+  const cx = state.x, cz = state.z;
+  const over: number[] = [], reach: number[] = [];
+  const worst: object[] = [];
+  let drawn = 0, fringe = 0, interior = 0, protectedN = 0;
+  for (let iz = 0; iz < n; iz++) {
+    const z = cz - halfM + (iz / (n - 1)) * halfM * 2;
+    for (let ix = 0; ix < n; ix++) {
+      const x = cx - halfM + (ix / (n - 1)) * halfM * 2;
+      const c = wetClassAt(x, z);
+      if (c === 'W' || c === 'D') { drawn++; continue; }
+      if (c === 'I') { interior++; continue; }
+      if (c === 'P') { protectedN++; continue; }
+      if (c !== 'U') continue;
+      fringe++;
+      const w = hydroSys?.sampleRestingSurface(x, z, 0.005);
+      const m = meshSurfaceAt(x, z);
+      if (!w || m === null || !Number.isFinite(m)) continue;
+      const d = (m + baseElev) - w.restingLevelM;
+      over.push(d); reach.push(w.shoreDistanceM);
+      worst.push({ x: Math.round(x), z: Math.round(z), over: +d.toFixed(2), shore: +w.shoreDistanceM.toFixed(1), cov: +w.coverage.toFixed(2) });
+    }
+  }
+  const stat = (a: number[]): object => {
+    if (!a.length) return { n: 0, med: null, p90: null, max: null };
+    const s = a.slice().sort((p, q) => p - q);
+    return { n: s.length, med: +s[s.length >> 1].toFixed(2), p90: +s[Math.floor(s.length * .9)].toFixed(2), max: +s[s.length - 1].toFixed(2) };
+  };
+  worst.sort((a, b) => (b as { over: number }).over - (a as { over: number }).over);
+  return {
+    window: [halfM, n], drawn, buried: { fringe, interior, protected: protectedN },
+    over: stat(over), reach: stat(reach), worst: worst.slice(0, 8),
+  };
+};
 /**
  * ── WHERE THE PLANE OF FOCUS GOES, EACH FRAME ──
  *
@@ -38719,7 +38890,20 @@ const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
  *  question a screenshot of the surface cannot answer. */
 /** One letter per point: what says water here, and whether the eye would
  *  see it. The overlay and `__wetmap` share this so they cannot disagree. */
-type WetClass = 'W' | 'D' | 'U' | 'E' | 'F' | 'C' | 'O' | 'c' | 'X' | '.';
+type WetClass = 'W' | 'D' | 'U' | 'I' | 'P' | 'E' | 'F' | 'C' | 'O' | 'c' | 'X' | '.';
+/**
+ * ONE FIELD TEXEL, which is the honest width of "the shoreline transition"
+ * for a diagnostic: the field cannot resolve a bank finer than its own sample
+ * spacing, so a burial nearer the waterline than that is inside the band no
+ * lattice-resolution rule can reach. A flowing tile's texel is about 9 m and a
+ * waterless one's about 19; the fallback is the flowing figure, for the case
+ * where no field is loaded and the answer is a guess either way.
+ */
+function bankFringeM(x: number, z: number): number {
+  const f = hydroSys?.fieldAt(x, z);
+  if (!f) return 10;
+  return (f.bounds.maxX - f.bounds.minX) / Math.max(1, f.resolution);
+}
 /** What the wheels read, and whether the deck under the point is a STRUCTURE
  *  standing clear of the terrain — which is the other half of every "why is
  *  the truck on a road here" and "is that a bridge or an embankment" the seat
@@ -38764,7 +38948,30 @@ function wetClassAt(x: number, z: number): WetClass {
   // low-coverage fringe texel whose ground stands above the level is simply
   // dry land near water — counting it as buried put the whole shore band in
   // pink and made the first census read half of every river as buried.
-  if (wet && !above) return wet.coverage >= cut ? 'U' : '.';
+  //
+  // AND A BURIAL IS THREE DIFFERENT FAULTS WEARING ONE LETTER, which is why
+  // the census could say a river was buried and never which rule had failed.
+  // `U + I + P` reproduces the old `U` exactly, so the tables already in this
+  // file stay comparable.
+  if (wet && !above) {
+    if (wet.coverage < cut) return '.';
+    // STRUCTURE-PROTECTED. A causeway keeps its earth plug and an unresolved
+    // overlap keeps the legacy plug — the same two cases channelFloorAt
+    // refuses to carve for. Water under that ground is the crossing authority
+    // working, and counting it with the failures makes a correct causeway
+    // read as a defect.
+    if (onCarriageway(x, z, 0.6).road) {
+      const crossing = productionCrossings.earthworkAt(x, z);
+      const kind = crossing && crossing.kind !== 'unresolved' ? crossing.kind : null;
+      if (kind === null || kind === 'causeway') return 'P';
+    }
+    // INTERIOR against FRINGE, and no rule reaches both. A body's own
+    // interior standing above its own level is the published floor's business
+    // — the Umgeni's riverbank polygon, one blob. Water buried within a texel
+    // of its own shoreline is the BANK's, and lowering the interior harder
+    // cannot touch it: there is no interior there to lower.
+    return wet.shoreDistanceM >= bankFringeM(x, z) ? 'I' : 'U';
+  }
   // A ford is a DECK with water over it. The old test also required the
   // surface to be water, which a deck never is, so 'F' was unreachable.
   if (onDeck && fordDepthAt(x, z) > FORD_MIN_M) return 'F';
@@ -38775,7 +38982,11 @@ function wetClassAt(x: number, z: number): WetClass {
   return '.';
 }
 const WET_RGBA: Record<WetClass, string> = {
-  W: 'rgba(40,110,255,0.75)', D: 'rgba(255,150,30,0.8)', U: 'rgba(230,40,220,0.8)', E: 'rgba(250,230,40,0.7)',
+  W: 'rgba(40,110,255,0.75)', D: 'rgba(255,150,30,0.8)', U: 'rgba(230,40,220,0.8)',
+  // The bank's own failure keeps the pink everyone knows; the interior's is a
+  // deeper violet beside it, and a burial the crossing authority MEANT is a
+  // muted earth that must not compete with either — it is not a fault.
+  I: 'rgba(140,20,200,0.8)', P: 'rgba(150,110,60,0.45)', E: 'rgba(250,230,40,0.7)',
   F: 'rgba(30,220,255,0.85)', C: 'rgba(60,220,220,0.7)', O: 'rgba(20,30,140,0.7)', c: 'rgba(160,170,190,0.55)',
   X: 'rgba(255,40,40,0.9)', '.': 'rgba(0,0,0,0)',
 };

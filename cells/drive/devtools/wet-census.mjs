@@ -9,9 +9,21 @@
  * 45 s and 75 s after boot, so a tally still moving is visible as such. The
  * ASCII raster of the second reading is saved beside the log.
  *
- * Classes: W drawn · D deck · U buried (level below the CARVED mesh) ·
- * E waterline band · F ford · C channel · O ocean · c cover-only ·
- * X surface says water, field says not drawn · . dry.
+ * Classes: W drawn · D deck · E waterline band · F ford · C channel ·
+ * O ocean · c cover-only · X surface says water, field says not drawn · . dry
+ * — and the BURIAL taxonomy, because "buried" was three different faults
+ * wearing one letter and the census could never say which had failed:
+ *
+ *   U  bank-fringe-buried — within one field texel of its own shoreline. The
+ *      BANK's failure. No amount of lowering a body's interior reaches it.
+ *   I  interior-buried — a body's own interior standing above its own level,
+ *      away from the shore. The published floor's failure.
+ *   P  structure-protected — a causeway's earth plug or an unresolved road
+ *      overlap, which the crossing authority keeps BY DESIGN. Not a fault,
+ *      and counting it with the failures makes a correct causeway read as one.
+ *
+ * `U + I + P` reproduces the old single `U` exactly, so every census table
+ * already in CLAUDE.md stays comparable against these.
  *
  * This is the control table for every step toward one water boundary: the
  * counts before, the counts after, per fixture, same rig, same day. A step
@@ -22,7 +34,7 @@ import { openDrive } from './harness.mjs';
 import { writeFileSync, mkdirSync } from 'node:fs';
 const fixtures = process.argv.slice(2).length ? process.argv.slice(2)
   : ['at-senqu-ford', 'at-senqu-top', 'at-umgeni', 'at-yosemite', 'at-campsbay', 'at-simonstown', 'at-glencairn', 'at-bixby'];
-const CLASSES = ['W', 'D', 'U', 'E', 'F', 'C', 'O', 'c', 'X', '.'];
+const CLASSES = ['W', 'D', 'U', 'I', 'P', 'E', 'F', 'C', 'O', 'c', 'X', '.'];
 mkdirSync('/tmp/drive-tools/wet-census', { recursive: true });
 console.log(`fixture           t     ${CLASSES.map((c) => c.padStart(6)).join('')}   ms`);
 for (const fixture of fixtures) {
