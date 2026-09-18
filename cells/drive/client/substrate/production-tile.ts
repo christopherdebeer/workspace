@@ -407,8 +407,20 @@ export type ProductionSubstrateLookup =
   }
   | {
     status: 'unavailable';
-    reason: 'no-tile' | 'invalid-tile';
+    reason: 'no-tile' | 'invalid-tile' | 'stale-terrain' | 'stale-hydro';
+    tileKey?: string;
+    tileRevision?: number;
   };
+
+/** What the world currently holds for a tile key, asked of the store's
+ *  revision source at lookup time: the terrain revision the mesh was built
+ *  at and the hydro field revision. A tile whose `sourceRevisions` disagree
+ *  is STALE — its ground raster is another mesh's, its water rasters another
+ *  field's — and stale is an explicit `unavailable`, never an answer. */
+export interface ProductionCurrentRevisions {
+  terrain: number;
+  hydro: number;
+}
 
 export interface ProductionWaterProbe {
   tileKey: string;
@@ -1136,6 +1148,22 @@ export function sampleProductionSubstrateTile(
 export class ProductionSubstrateStore {
   private readonly tiles = new Map<string, ProductionSubstrateTile>();
   private revision = 0;
+  private currentRevisions: ((key: string) => ProductionCurrentRevisions | undefined) | null = null;
+
+  /** Install the world's view of current revisions per key. Without one the
+   *  store answers from whatever it holds (the tests' pure tiles). */
+  setRevisionSource(source: ((key: string) => ProductionCurrentRevisions | undefined) | null): void {
+    this.currentRevisions = source;
+  }
+
+  /** Why a held tile would not be served: stale against the world, or fresh. */
+  staleness(tile: ProductionSubstrateTile): 'stale-terrain' | 'stale-hydro' | null {
+    const current = this.currentRevisions?.(tile.key);
+    if (!current) return null;
+    if (tile.sourceRevisions.terrain !== current.terrain) return 'stale-terrain';
+    if (tile.sourceRevisions.hydro !== current.hydro) return 'stale-hydro';
+    return null;
+  }
 
   upsert(tile: ProductionSubstrateTile): void {
     const previous = this.tiles.get(tile.key);
@@ -1160,6 +1188,13 @@ export class ProductionSubstrateStore {
   lookup(x: number, z: number): ProductionSubstrateLookup {
     const tile = this.tileAt(x, z);
     if (!tile) return { status: 'unavailable', reason: 'no-tile' };
+    // REVISIONS ARE CONSUMED HERE, not only carried. A tile built on terrain
+    // revision 3 answering for a mesh at revision 4 gives the wheels another
+    // mesh's ground and the splash another field's water for the frames
+    // between the rebuild being queued and landing. Those frames go to the
+    // legacy sampler explicitly, counted, rather than to a stale answer.
+    const stale = this.staleness(tile);
+    if (stale) return { status: 'unavailable', reason: stale, tileKey: tile.key, tileRevision: tile.revision };
     const contact = sampleProductionSubstrateTile(tile, x, z);
     // `tileAt` and the sampler deliberately share the same bounds. Keep this
     // defensive state explicit: a malformed/revised tile may use rollback,

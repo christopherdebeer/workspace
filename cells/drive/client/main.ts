@@ -2842,6 +2842,15 @@ const productionCrossings = new ProductionCrossingRegistry();
 /** Last crossing revision consumed by terrain/hydro invalidation. */
 const crossingAppliedRevision = new Map<string, number>();
 const productionSubstrate = new ProductionSubstrateStore();
+// The store asks these at every lookup: the same two maps the tile is built
+// from (`terrainRevision.get(key) ?? 0`, `hydroRev.get(key) ?? 0`), so a
+// tile whose sourceRevisions disagree is stale and answers `unavailable`
+// until the rebuild that terrain apply or the hydro build already queued
+// lands. Installed lazily: the maps are declared thousands of lines below.
+queueMicrotask(() => productionSubstrate.setRevisionSource((key) => ({
+  terrain: terrainRevision.get(key) ?? 0,
+  hydro: hydroRev.get(key) ?? 0,
+})));
 const substrateFallbacks = new SubstrateFallbackMonitor();
 function productionContactAt(
   x: number,

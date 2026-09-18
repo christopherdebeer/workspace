@@ -22,13 +22,15 @@ export interface SubstrateFallbackSnapshot {
   reasons: {
     noTile: number;
     invalidTile: number;
+    staleTerrain: number;
+    staleHydro: number;
   };
   byConsumer: Record<SubstrateContactConsumer, SubstrateConsumerAvailability>;
   lastFallback: {
     consumer: SubstrateContactConsumer;
     x: number;
     z: number;
-    reason: 'no-tile' | 'invalid-tile';
+    reason: 'no-tile' | 'invalid-tile' | 'stale-terrain' | 'stale-hydro';
   } | null;
 }
 
@@ -63,6 +65,8 @@ export class SubstrateFallbackMonitor {
   private fallbackQueries = 0;
   private noTile = 0;
   private invalidTile = 0;
+  private staleTerrain = 0;
+  private staleHydro = 0;
   private byConsumer = emptyAvailability();
   private lastFallback: SubstrateFallbackSnapshot['lastFallback'] = null;
 
@@ -72,6 +76,8 @@ export class SubstrateFallbackMonitor {
     this.fallbackQueries = 0;
     this.noTile = 0;
     this.invalidTile = 0;
+    this.staleTerrain = 0;
+    this.staleHydro = 0;
     this.byConsumer = emptyAvailability();
     this.lastFallback = null;
   }
@@ -93,6 +99,8 @@ export class SubstrateFallbackMonitor {
     this.fallbackQueries++;
     counts.fallback++;
     if (lookup.reason === 'no-tile') this.noTile++;
+    else if (lookup.reason === 'stale-terrain') this.staleTerrain++;
+    else if (lookup.reason === 'stale-hydro') this.staleHydro++;
     else this.invalidTile++;
     this.lastFallback = { consumer, x, z, reason: lookup.reason };
     return undefined;
@@ -111,6 +119,8 @@ export class SubstrateFallbackMonitor {
       reasons: {
         noTile: this.noTile,
         invalidTile: this.invalidTile,
+        staleTerrain: this.staleTerrain,
+        staleHydro: this.staleHydro,
       },
       byConsumer,
       lastFallback: this.lastFallback ? { ...this.lastFallback } : null,

@@ -2043,6 +2043,35 @@ export function runSubstrateSelfTest(): void {
     && exactLookup.tileKey === exactHydroTile.key
     && exactLookup.tileRevision === exactHydroTile.revision,
   'an admitted production tile must expose revisioned availability');
+  // REVISIONS CONSUMED AT LOOKUP. A tile built on terrain 1 / hydro 5 must
+  // not answer for a world at terrain 2 or hydro 6: stale is an explicit
+  // unavailable with its reason, never a stale ground or another field's
+  // water, and the monitor counts each reason.
+  const staleStore = new ProductionSubstrateStore();
+  staleStore.upsert(exactHydroTile);
+  let world = { terrain: 1, hydro: exactHydroTile.sourceRevisions.hydro };
+  staleStore.setRevisionSource(() => world);
+  assert(staleStore.lookup(0, 34).status === 'available', 'a tile at the world\'s revisions is served');
+  world = { terrain: 2, hydro: exactHydroTile.sourceRevisions.hydro };
+  const staleTerrain = staleStore.lookup(0, 34);
+  assert(staleTerrain.status === 'unavailable' && staleTerrain.reason === 'stale-terrain'
+    && staleTerrain.tileKey === exactHydroTile.key,
+    'a tile built on another terrain revision is stale-terrain, not served');
+  world = { terrain: 1, hydro: exactHydroTile.sourceRevisions.hydro + 1 };
+  const staleHydro = staleStore.lookup(0, 34);
+  assert(staleHydro.status === 'unavailable' && staleHydro.reason === 'stale-hydro',
+    'a tile built on another hydro field revision is stale-hydro, not served');
+  const staleMonitor = new SubstrateFallbackMonitor();
+  assert(!staleMonitor.consume('wheel-support', 0, 34, staleHydro), 'a stale lookup reaches the legacy consumer');
+  assert(!staleMonitor.consume('surface', 0, 34, staleTerrain), 'a stale lookup reaches the legacy consumer');
+  const staleSnapshot = staleMonitor.snapshot();
+  assert(staleSnapshot.reasons.staleHydro === 1 && staleSnapshot.reasons.staleTerrain === 1
+    && staleSnapshot.lastFallback?.reason === 'stale-terrain',
+    'the monitor counts stale-terrain and stale-hydro apart from no-tile');
+  world = { terrain: 1, hydro: exactHydroTile.sourceRevisions.hydro };
+  assert(staleStore.lookup(0, 34).status === 'available', 'the same tile is served again once the world agrees');
+  staleStore.setRevisionSource(null);
+
   const fallbackMonitor = new SubstrateFallbackMonitor();
   assert(fallbackMonitor.consume('fluid', 0, 34, exactLookup)?.water,
     'available contact consumers must receive the tile contact');
