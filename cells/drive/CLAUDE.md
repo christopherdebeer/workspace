@@ -16587,3 +16587,42 @@ real drive of the clearance test (the truck hopped; it had never moved)
 showed a 12 s window covering a whole 1.8 km drive when frames are slow,
 every recycle born in frame (52 jumps). Under nodraw with placement
 arrivals: 675 in-frame animal-ticks, 0 jumps, renewals out of frame, green.
+
+## Step 1 and 2a: the witness reads, and a stale substrate tile is an explicit unavailable
+
+**The witness's first table was wrong, and said so by its own numbers.**
+`wet-census` on the corrected diagnostic read the Senqu ford as 555 drawn
+against 735 BURIED, Senqu top 994 against 1,026, the Umgeni 4,284 against
+2,951 — half of every river underground. That was the classifier, not the
+river: `U` fired for any texel the field returned at coverage ≥ 0.005 whose
+level sat below the mesh, which is the whole low-coverage fringe of dry
+land beside water. Nothing is drawn below the coverage cut, so nothing
+there can be buried. `U` now means water the field DRAWS (coverage at or
+over the cut) with its level under the carved mesh; the Senqu ford reads
+107 buried against 555 drawn, one sixth, which is the number step 2b and
+#169 exist for. The half-finished table on the old definition is kept in
+the scratchpad as `wet-census-0-oldU.log`; the control table is the one on
+the corrected class.
+
+**Step 2a, revisions consumed at lookup (`356c848`).** The production
+substrate store takes a revision source — the world's `terrainRevision`
+and `hydroRev` maps, the same two a tile's `sourceRevisions` are written
+from — and answers `unavailable` with `stale-terrain` or `stale-hydro` (and
+the tile key) for a tile that disagrees, so the frames between a rebuild
+being queued (terrain apply and the hydro build already queue one) and
+landing go to the legacy sampler explicitly, counted by the fallback
+monitor, never to another mesh's ground or another field's water. Measured
+at the Senqu ford, hopping the truck 12 m/s for a minute through streaming:
+**stale-terrain 0, stale-hydro 0** of 2.5 M lookups; no-tile 270 k at boot
+(21%) falling to 11% as tiles arrive. So the rule is a fence with no
+observed cost; it is there for the case the sweep found possible — a tile
+committed with a terrain packet and a field from another terrain
+generation — which the running world does not currently produce. The
+substrate self-test covers both reasons, the count and the recovery.
+
+**A reserved-word test existed all along.** `glsl-reserved.test.mjs` scans
+every GLSL-looking template literal under `client/` for the ES 3.00
+reserved words, `patch` among them, and it is green on the renamed
+wildlife shader. It would have caught the pulled one. The lesson is not a
+new test; it is that pulled code gets the existing suite run over it
+before it is judged.

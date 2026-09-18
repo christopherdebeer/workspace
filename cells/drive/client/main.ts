@@ -38659,7 +38659,12 @@ function wetClassAt(x: number, z: number): WetClass {
   const onDeck = surf === 'road' || surf === 'track';
   if (wet && Math.abs(wet.coverage - cut) < 0.12 && above) return 'E';
   if (drawn) return onDeck ? 'D' : surf === 'water' ? 'W' : 'X';
-  if (wet && !above) return 'U';
+  // BURIED means water the field DRAWS (coverage at or over the cut) with
+  // its level under the carved mesh. Below the cut nothing is drawn, so a
+  // low-coverage fringe texel whose ground stands above the level is simply
+  // dry land near water — counting it as buried put the whole shore band in
+  // pink and made the first census read half of every river as buried.
+  if (wet && !above) return wet.coverage >= cut ? 'U' : '.';
   // A ford is a DECK with water over it. The old test also required the
   // surface to be water, which a deck never is, so 'F' was unreachable.
   if (onDeck && fordDepthAt(x, z) > FORD_MIN_M) return 'F';
