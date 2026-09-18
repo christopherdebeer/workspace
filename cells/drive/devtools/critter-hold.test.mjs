@@ -31,10 +31,20 @@ const check = (name, cond, saw) => {
 const d = await openDrive({ spot: 'lat=-20.1338&lon=-67.4891&h=45&cam=chase&wx=clear&time=NOON', tag: 'herd-hold', settle: 20000 });
 
 /** One sample: every animal, plus where the truck is and which way it looks. */
+// THE FRAME IS THE MODULE'S OWN FRUSTUM TEST, not a cone. The old 57° cone
+// stood in for a frustum that is ±15° on a portrait phone; now that herd
+// animals are BORN just outside the real wedge (a flank spawn at 20° off-axis
+// is out of frame, not a pop) the proxy would flag the law's own remedy.
+// `seenAgo` is the module's word for "in the frustum or within 45 m this
+// tick"; the guard below that something was watched keeps it honest. And
+// past HERD_DOT_M an appearance inside the wedge is two art pixels — the dot
+// spawn — which the law allows as it always allowed one past 900 m.
 const snap = () => d.page.evaluate(() => ({
-  herd: window.__herd().map((c) => [c.x, c.z]),
+  herd: window.__wildlife().actors.slice(0, 30).filter((a) => a.active)
+    .map((a) => ({ id: a.id, x: a.x, z: a.z, seen: a.seenAgo < 0.8 })),
   x: window.__drive.x, z: window.__drive.z, h: window.__drive.heading,
 }));
+const DOT_M = 300; // HERD_DOT_M in client/wildlife.ts
 
 // Drive. The wrap edge is only crossed by moving, and the fault needs enough
 // ground covered to push a whole box past the camera.
@@ -51,18 +61,22 @@ for (let i = 0; i < 26; i++) {
   // wrap from behind you, which is out of frame at the start of the tick and
   // squarely in frame at the end of it. That is the pop-into-view, and it is
   // the same event as the vanishing seen from the other side.
-  const seen = (s, x, z) => {
-    const dx = x - s.x, dz = z - s.z, dist = Math.hypot(dx, dz);
-    if (dist > 900) return false;
+  const seen = (s, a) => {
+    const dist = Math.hypot(a.x - s.x, a.z - s.z);
+    if (dist >= DOT_M) return false;
     if (dist < 45) return true;
-    return (dx * Math.sin(s.h) + dz * -Math.cos(s.h)) / dist > 0.55;
+    return a.seen;
   };
-  for (let k = 0; k < now.herd.length && k < prev.herd.length; k++) {
-    const [px, pz] = prev.herd[k];
-    const [nx, nz] = now.herd[k];
-    const was = seen(prev, px, pz), is = seen(now, nx, nz);
+  const before = new Map(prev.herd.map((a) => [a.id, a]));
+  for (const a of now.herd) {
+    const b = before.get(a.id);
+    if (!b) continue;
+    const [px, pz] = [b.x, b.z];
+    const [nx, nz] = [a.x, a.z];
+    const was = seen(prev, b), is = seen(now, a);
     if (!was && !is) continue;
     watched++;
+    const k = a.id;
     const moved = Math.hypot(nx - px, nz - pz);
     // A deer at full flight covers a few metres in 700ms. Fifty is generous
     // for that and nowhere near a wrap, which moves a whole box at once.

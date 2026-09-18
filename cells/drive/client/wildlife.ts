@@ -20,22 +20,36 @@ export interface Critter {
   x:number;y:number;z:number;vx:number;vy:number;vz:number;ph:number;
   active:boolean;yaw:number;bank:number;seen:number;nextPlan:number;
   turn:number;safeSpeed:number;wet:number;nextSpawn:number;cycle:number;
-  feet:Foot[];lastNear:boolean;
+  feet:Foot[];lastNear:boolean;nextSeat:number;stuckSince:number;
 }
 const ALT=[34,22,58], BOX=[560,820], N=[30,52], GROUPS=[3,4];
 export const HERD_CLEAR=4.8;
+/** A herd animal may be born INSIDE the frustum from this far: at PIX_H 320 a
+ *  1 m animal at 300 m is two art pixels, a bison three — a dot on the far
+ *  field, not a pop. Below the 364 m recycle radius so it is not reclaimed the
+ *  frame it arrives. The clearance test reads the same number. */
+export const HERD_DOT_M=300;
+/** The first spawn after a hop is an ARRIVAL: the wedge is empty, nothing was
+ *  on the glass, so the herd is placed in view beside the road ahead. */
+const ARRIVAL_S=12;
+/** An animal refused its sweep for this long while nobody is looking is
+ *  standing where the ground changed under it — respawn it somewhere it can
+ *  walk. A watched one stays (a vanish is a pop too). */
+const STUCK_S=3;
 export function createWildlife(env:Environment) {
   const birdMeshes=wildlifeMeshes(true,N[1]),herds=wildlifeMeshes(false,N[0]);
   for(const m of [...birdMeshes,...herds]) env.scene.add(m);
   for(const m of herds) env.shadow(m);
   const birds={get visible(){return birdMeshes[0].visible;},set visible(v:boolean){for(const m of birdMeshes)m.visible=v;}};
   const flock:Critter[]=[],graze:Critter[]=[];
-  let time=0,initialized=false,closest=Infinity,climatePending=false;
+  let time=0,initialized=false,closest=Infinity,climatePending=false,arrivalUntil=0;
   const frustum=new THREE.Frustum(),vp=new THREE.Matrix4(),sphere=new THREE.Sphere(),dummy=new THREE.Object3D();
   dummy.rotation.order='YXZ';
   const stats={steps:0,samples:0,blocked:0,recycles:0,spawnAttempts:0,footSamples:0,constrainedClearance:0,ms:0,
     // Why a spawn attempt was refused, so the seat can tell an empty plain from a herd that is there and unseen.
     refused:{noGround:0,unhabitable:0,trace:0,rain:0,seen:0,truck:0},spawned:0,
+    // Where herd animals were born: in view on arrival, a dot ahead, a flank outside the wedge.
+    born:{arrival:0,dot:0,flank:0,bird:0},reseated:0,stuckRecycled:0,
     // Which check of the per-frame sweep stopped an animal (a frozen herd is one of these, every frame).
     stoppedBy:{} as Record<string,number>};
   const sample:SampleSupport=(...args)=>{stats.samples++;return env.sample(...args);};
@@ -58,24 +72,55 @@ export function createWildlife(env:Environment) {
         const c:Critter={id:i,seed:rng(),sp:species[i%GROUPS[k]],grp:i%GROUPS[k],sz:air?.78+s*.5:.72+s*s*.62,
           tint:new THREE.Color(),x:truck.x,y:0,z:truck.z,vx:(rng()-.5)*6,vy:0,vz:(rng()-.5)*6,ph:rng()*Math.PI*2,
           active:false,yaw:0,bank:0,seen:-100,nextPlan:rng()*.2,turn:0,safeSpeed:22,wet:0,nextSpawn:0,cycle:0,
-          feet:[],lastNear:false};
+          feet:[],lastNear:false,nextSeat:0,stuckSince:-1};
         // seed is a [0,1) shader attribute; retain its bits for deterministic choices.
         c.seed=Math.floor(c.seed*0xffffff)/0xffffff;tint(c,air);pop.push(c);
       }
     }
-    initialized=true;
+    initialized=true;arrivalUntil=time+ARRIVAL_S;
   }
+  /** Half the horizontal field of view: the wedge the seat can see. */
+  const halfH=()=>{const cam=env.camera as THREE.PerspectiveCamera;const fov=(cam.fov??55)*Math.PI/360;return Math.atan(Math.tan(fov)*(cam.aspect??.5));};
   function spawn(c:Critter,air:boolean,recycle:boolean):boolean{
     if(time<c.nextSpawn)return false;
     c.nextSpawn=time+.7+(c.id%5)*.09;
     const k=+air,rng=random(((c.seed*0xffffff)|0) ^ (++c.cycle)*11779),truck=env.truck();
     const centre=env.camera.position;
+    const arrival=!air&&time<arrivalUntil;
     for(let attempt=0;attempt<12;attempt++){
       stats.spawnAttempts++;
-      const groupAngle=c.grp*Math.PI*2/GROUPS[k]+.45;
-      const radius=BOX[k]*(.18+rng()*.24);
-      const angle=groupAngle+(rng()-.5)*1.25;
-      const x=centre.x+Math.sin(angle)*radius,z=centre.z+Math.cos(angle)*radius;
+      let x:number,z:number,kind:'arrival'|'dot'|'flank'|'bird';
+      if(air){
+        // Birds keep their world sectors: they cross the sky on their own.
+        const groupAngle=c.grp*Math.PI*2/GROUPS[k]+.45;
+        const radius=BOX[k]*(.18+rng()*.24),angle=groupAngle+(rng()-.5)*1.25;
+        x=centre.x+Math.sin(angle)*radius;z=centre.z+Math.cos(angle)*radius;kind='bird';
+      }else{
+        // THE HERD IS BORN IN THE TRUCK'S FRAME, NOT THE WORLD'S. A point outside
+        // the wedge never enters it under forward motion (its bearing only
+        // grows), so a world-fixed sector is a herd you meet only on a bend.
+        // Three sectors instead: ARRIVAL (the first seconds after a hop, in view
+        // beside the road ahead — the wedge was empty, nothing pops), DOT (ahead
+        // inside the wedge but beyond HERD_DOT_M, where it is two art pixels
+        // and grows as you drive up), FLANK (just outside the wedge, ahead of
+        // abeam, found by a turn of the wheel or of the head).
+        const hx=Math.sin(truck.heading),hz=-Math.cos(truck.heading),wedge=halfH();
+        // One sector per GROUP (cohesion must not drag a group across the
+        // road), and the sectors rotate among the groups every 90 s so the
+        // species ahead is not always the same one.
+        const role=(c.grp+Math.floor(time/90))%3;
+        // The sector is tight for the first attempts and opens out after: a
+        // road along a cliff has no field 300 m ahead and no flank inland, and
+        // a herd that cannot be born anywhere is a herd left a kilometre back.
+        // The last attempts are the old wide ring, any bearing the gate allows.
+        const wide=attempt>=4,ring=attempt>=8;
+        let ahead:number,side:number;
+        if(arrival){ahead=40+rng()*70;side=(c.grp-1)*22+(rng()-.5)*16;kind='arrival';}
+        else if(ring){const dist=100+rng()*135,bearing=(rng()-.5)*Math.PI*1.6;ahead=Math.cos(bearing)*dist;side=Math.sin(bearing)*dist;kind='flank';}
+        else if(role===0){ahead=HERD_DOT_M+rng()*40;side=(rng()<.5?-1:1)*(6+rng()*(wide?64:44));kind='dot';}
+        else{const dist=wide?60+rng()*140:70+rng()*60,bearing=(role===1?-1:1)*(wedge+.14+rng()*(wide?1.0:.38));ahead=Math.cos(bearing)*dist;side=Math.sin(bearing)*dist;kind='flank';}
+        x=truck.x+hx*ahead-hz*side;z=truck.z+hz*ahead+hx*side;
+      }
       const ground=env.ground(x,z);if(ground===null){stats.refused.noGround++;continue;}
       let y=ground+ALT[c.sp];
       if(!air){
@@ -84,13 +129,13 @@ export function createWildlife(env:Environment) {
         const probe={...c,x,y:s.y,z};const check=trace(probe,x+.01,z);
         if(!check.complete){stats.refused.trace++;continue;}y=check.y;
       }else if(env.rain(x,z)>.72){stats.refused.rain++;continue;}
-      // Initial arrival follows the same no-pop rule as recycling. If the
-      // drone sees all available terrain, wait for an unseen valid site.
-      if(seen(x,y+(air?0:1),z,air?3:3*c.sz)){stats.refused.seen++;continue;}
+      // No pop: not on the glass, unless it is an arrival or a far dot.
+      const exempt=kind==='arrival'||(kind==='dot'&&Math.hypot(x-centre.x,z-centre.z)>=HERD_DOT_M);
+      if(!exempt&&seen(x,y+(air?0:1),z,air?3:3*c.sz)){stats.refused.seen++;continue;}
       if(Math.hypot(x-truck.x,z-truck.z)<HERD_CLEAR+8){stats.refused.truck++;continue;}
       c.x=x;c.y=y;c.z=z;c.active=true;c.feet=[];c.lastNear=false;c.vy=0;c.wet=0;
-      c.nextPlan=0;c.safeSpeed=22;c.turn=0;c.seen=time-3;
-      if(recycle)stats.recycles++;stats.spawned++;
+      c.nextPlan=0;c.safeSpeed=22;c.turn=0;c.seen=time-3;c.stuckSince=-1;c.nextSeat=time+.3;
+      if(recycle)stats.recycles++;stats.spawned++;stats.born[kind]++;
       return true;
     }
     return false;
@@ -149,8 +194,21 @@ export function createWildlife(env:Environment) {
       c.vx=c.vx/v*speed;c.vz=c.vz/v*speed;
       const oldX=c.x,oldZ=c.z,oldYaw=c.yaw;
       if(!air){
+        // RE-SEAT. The ground under a placed animal changes — tiles refine,
+        // walls and plots arrive, the substrate contact comes live — and the
+        // sweep below refuses a station that no longer matches c.y, forever,
+        // because only a complete sweep writes c.y. So the station is read on
+        // its own clock: a habitable one re-seats the animal; one that is no
+        // longer habitable recycles it once nobody is looking.
+        if(time>=c.nextSeat){
+          c.nextSeat=time+(offscreen?.6:.25)+(c.id%4)*.03;
+          const st=sample(c.x,c.z,c.y,[.31,.56,.38][c.sp]*c.sz);
+          if(habitable(st,c.sz,LEG[c.sp])){if(Math.abs(st.y-c.y)>.02){c.y=st.y;c.feet=[];stats.reseated++;}}
+          else if(offscreen){if(spawn(c,air,true)){stats.stuckRecycled++;continue;}}
+        }
         if(time>=c.nextPlan){
-          c.nextPlan=time+.13+(c.id%4)*.015;
+          // An unseen animal plans a third as often: nobody is watching it think.
+          c.nextPlan=time+(offscreen?.4:.13)+(c.id%4)*.015;
           const yaw=Math.atan2(c.vx,c.vz),distance=Math.min(16,1.3+speed*.3+speed*speed/24);
           let best=-Infinity,bestTurn=0,bestDistance=0;
           for(const turn of [0,.45,-.45,.95,-.95,1.65,-1.65,Math.PI]){
@@ -164,9 +222,20 @@ export function createWildlife(env:Environment) {
         // Bound the speed by stopping distance, then sweep the actual frame.
         const yaw=Math.atan2(c.vx,c.vz)+c.turn*Math.min(1,dt*7),allowed=Math.min(speed,c.safeSpeed);
         c.vx=Math.sin(yaw)*allowed;c.vz=Math.cos(yaw)*allowed;
-        const t=trace(c,c.x+c.vx*dt,c.z+c.vz*dt);
-        c.x=t.x;c.y=t.y;c.z=t.z;
-        if(!t.complete){c.vx=0;c.vz=0;stats.blocked++;const w=t.why??'?';stats.stoppedBy[w]=(stats.stoppedBy[w]??0)+1;}
+        // A standing animal is not swept (its station is read above); a moving
+        // one is, and one refused for STUCK_S while unseen is reborn elsewhere.
+        if(Math.hypot(c.vx,c.vz)*dt>1e-3){
+          const t=trace(c,c.x+c.vx*dt,c.z+c.vz*dt);
+          c.x=t.x;c.y=t.y;c.z=t.z;
+          if(!t.complete){c.vx=0;c.vz=0;stats.blocked++;const w=t.why??'?';stats.stoppedBy[w]=(stats.stoppedBy[w]??0)+1;
+            if(c.stuckSince<0)c.stuckSince=time;
+            else if(offscreen&&time-c.stuckSince>STUCK_S&&spawn(c,air,true)){stats.stuckRecycled++;continue;}
+          }else c.stuckSince=-1;
+        }else if(c.safeSpeed<.05){
+          // Planned to a standstill: every direction refused. Stuck by the plan.
+          if(c.stuckSince<0)c.stuckSince=time;
+          else if(offscreen&&time-c.stuckSince>STUCK_S&&spawn(c,air,true)){stats.stuckRecycled++;continue;}
+        }else c.stuckSince=-1;
         let d=Math.hypot(c.x-truck.x,c.z-truck.z);
         if(d<HERD_CLEAR){
           let rescued=false;
@@ -228,9 +297,9 @@ export function createWildlife(env:Environment) {
       stepPop(flock,birdMeshes,true,dt);stepPop(graze,herds,false,dt);stats.steps++;stats.ms=performance.now()-start;
     },
     refreshClimate(){climatePending=true;},
-    reset(){flock.length=0;graze.length=0;initialized=false;climatePending=false;closest=Infinity;for(const m of [...birdMeshes,...herds])m.count=0;},
+    reset(){flock.length=0;graze.length=0;initialized=false;climatePending=false;closest=Infinity;arrivalUntil=0;for(const m of [...birdMeshes,...herds])m.count=0;},
     consumeClosest(){const d=closest;closest=Infinity;return{closest:Number.isFinite(d)?+d.toFixed(2):null,clearance:HERD_CLEAR,constrained:stats.constrainedClearance};},
-    diagnostics(){return{...stats,activeBirds:flock.filter(c=>c.active).length,activeHerd:graze.filter(c=>c.active).length,
+    diagnostics(){return{...stats,arrival:time<arrivalUntil,wedgeDeg:+(halfH()*180/Math.PI).toFixed(1),activeBirds:flock.filter(c=>c.active).length,activeHerd:graze.filter(c=>c.active).length,
       trianglesPerSpecies:[...herds,...birdMeshes].map(m=>m.geometry.attributes.position.count/3),climatePending,
       actors:[...graze,...flock].map(c=>({id:c.id,seed:c.seed,sp:c.sp,active:c.active,x:c.x,y:c.y,z:c.z,phase:c.ph,feet:c.feet,seenAgo:+(time-c.seen).toFixed(2),speed:+Math.hypot(c.vx,c.vz).toFixed(2)}))};},
   };
