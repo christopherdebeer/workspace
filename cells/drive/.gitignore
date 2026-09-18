@@ -17,9 +17,14 @@
 # is visible while it exists, rather than committed by a tidy-up.
 client/__rev-main.ts
 client/__*-rev.ts
-# The same thing for a PROBE shim: a copy of main.ts with extra window.__*
-# appended, so a measurement can reach a module-scope binding no probe
-# exposes. Same two rules — it lives in client/ so the relative imports
-# resolve, and it is deleted the moment the run ends.
-client/.xsec.ts
+# A PROBE shim is the same thing: a copy of main.ts carrying extra window.__*
+# so a measurement can reach a binding no shipped probe exposes. Two rules of
+# its own, each learnt the hard way. It must be INSERTED before the file's
+# last brace, never appended — main.ts's whole body is the else-clause of one
+# `if (startLab(...))`, so code after it is module scope and sees none of the
+# world's bindings (`kStore is not defined`, at the probe's first call). And
+# it must NOT be a dotfile: tsconfig's include is `["client"]` and a wildcard
+# include does not match a leading dot, so `client/.probe.ts` is never type
+# checked and `tsc` passing is a check that could not fail. Name it to match
+# the pattern above and both problems go away.
 .DS_Store
