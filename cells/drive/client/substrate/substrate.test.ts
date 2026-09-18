@@ -1,3 +1,4 @@
+import type { SupportContact } from './types';
 import {
   appendProductionRoadArch,
   appendProductionRoadBatter,
@@ -1982,6 +1983,56 @@ export function runSubstrateSelfTest(): void {
     'exact channel speed authority must remain explicit');
   assert(exactHydroContact.water.waterId === 'water:exact',
     'exact channel identity must survive in production contact');
+  // THE PRECISE FIELD'S "DRY" IS FINAL. The sampler asked the exact hydro
+  // field first and, finding no water at the point, fell through to the
+  // 33x33 witness raster — which treated "the precise field says dry" as
+  // "precise information is unavailable". A wet raster cell 60-70 m wide
+  // then resurrected water contact 24 m from an 8 m channel: wet, two metres
+  // deep, where the field said dry. Reported from the seat as block-shaped
+  // wet patches beside rivers, with the surface classifier, the wheels and
+  // the splash all consuming the invented fluid.
+  const rasterWetEverywhere = (x: number, z: number, support: SupportContact) =>
+    sampleHydroContactLayers(matchedField, 0, 0, support);
+  const coarseWetTile = buildProductionSubstrateTile({
+    key: 'production-coarse-wet',
+    revision: 11,
+    sourceRevisions: { terrain: 1, hydroDetails: 0, hydro: matchedField.revision, crossings: 0 },
+    driveRenderGeneration: 'test:none:0',
+    structureRenderGeneration: 'test:none:structure:0',
+    bounds: matchedField.bounds,
+    resolution: 3,
+    hydroField: matchedField,
+    waterCoverageCutAt: () => .5,
+    sampleGround: () => ({ yM: matchedCentre.ground.yM }),
+    sampleDrive: () => undefined,
+    sampleWater: rasterWetEverywhere,
+    sampleCrossing: () => undefined,
+  });
+  assert(sampleHydroContactLayers(matchedField, 24, 0, at(matchedTile, 24, 0).support) === undefined,
+    'the precise field must be dry 24 m from the channel centre');
+  const insideChannel = sampleProductionSubstrateTile(coarseWetTile, 0, 0);
+  assert(insideChannel?.water && insideChannel.water.coverage > .5,
+    'inside the channel the precise field answers wet');
+  const besideChannel = sampleProductionSubstrateTile(coarseWetTile, 24, 0);
+  assert(besideChannel && !besideChannel.water && !besideChannel.fluid,
+    `24 m from the channel the precise field's dry is final — the coarse raster must not resurrect water (saw ${
+      besideChannel?.water ? `${besideChannel.water.kind} ${besideChannel.water.depthM.toFixed(2)} m deep` : 'none'})`);
+  const noFieldTile = buildProductionSubstrateTile({
+    key: 'production-no-field',
+    revision: 12,
+    sourceRevisions: { terrain: 1, hydroDetails: 0, hydro: 0, crossings: 0 },
+    driveRenderGeneration: 'test:none:0',
+    structureRenderGeneration: 'test:none:structure:0',
+    bounds: matchedField.bounds,
+    resolution: 3,
+    sampleGround: () => ({ yM: matchedCentre.ground.yM }),
+    sampleDrive: () => undefined,
+    sampleWater: rasterWetEverywhere,
+    sampleCrossing: () => undefined,
+  });
+  assert(sampleProductionSubstrateTile(noFieldTile, 24, 0)?.water,
+    'without a precise field the raster is still the fallback');
+
   const exactHydroStore = new ProductionSubstrateStore();
   const emptyLookup = exactHydroStore.lookup(0, 0);
   assert(emptyLookup.status === 'unavailable' && emptyLookup.reason === 'no-tile',

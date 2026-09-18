@@ -38636,7 +38636,14 @@ function wetClassAt(x: number, z: number): WetClass {
   // whole transition band, including fragments the ragged cut admits below
   // the canonical 0.5 field classification.
   const wet = HYDRO_ON ? hydroSys?.sampleRestingSurface(x, z, 0.005) : undefined;
-  const ground = hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
+  // THE CARVED TERRAIN, NOT THE HEIGHTFIELD. `sampleHeight` is the raster
+  // the channel carve starts from, so a river the carve had exposed still
+  // read BURIED against the higher pre-carve ground — pink was not evidence
+  // that more excavation was needed. The mesh is what the wheels and the eye
+  // get; the raster is the fallback where no tile has been built yet.
+  const carved = meshSurfaceAt(x, z);
+  const ground = carved !== null && Number.isFinite(carved) ? carved + baseElev
+    : hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
   const above = !!wet && (!Number.isFinite(ground) || wet.restingLevelM > ground + 0.02);
   const cut = WATERLINE_CUT(x, z, wet?.kind);
   const drawn = !!wet && above && wet.coverage >= cut;
@@ -38644,7 +38651,9 @@ function wetClassAt(x: number, z: number): WetClass {
   if (wet && Math.abs(wet.coverage - cut) < 0.12 && above) return 'E';
   if (drawn) return onDeck ? 'D' : surf === 'water' ? 'W' : 'X';
   if (wet && !above) return 'U';
-  if (surf === 'water' && fordDepthAt(x, z) > FORD_MIN_M && onDeck) return 'F';
+  // A ford is a DECK with water over it. The old test also required the
+  // surface to be water, which a deck never is, so 'F' was unreachable.
+  if (onDeck && fordDepthAt(x, z) > FORD_MIN_M) return 'F';
   if (surf === 'water' && channelAt(x, z)) return 'C';
   if (surf === 'water' && oceanAt(x, z)) return 'O';
   if (surf === 'water') return 'X';

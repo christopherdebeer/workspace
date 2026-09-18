@@ -16305,3 +16305,68 @@ shader fix, the owned herd, the admission histogram cut and yield, and the
 weather stair fix and drift out together. The phone's next dump is the cost
 check for all four (`stepWildlife`, `ezAdmit`, `stepWeather`), and a stop at
 any spawn is the herd's verification.
+
+## The precise field's "dry" is final: the contact sampler no longer resurrects water from the witness raster
+
+**From an analysis the seat handed over while testing v1789730253250**, of
+block-shaped wet patches beside rivers that the surface classifier, the
+wheels and the splash all honoured. Read against the code and reproduced
+in the substrate self-test before anything was changed; the analysis was
+right on every point it confirmed and honest about the one it had not (a
+runtime sample at each red patch in the seat's frames).
+
+**The defect.** `sampleProductionSubstrateTile` asks the exact hydro field
+first (`sampleFieldSurface`, then the tile's own coverage cut) and, finding
+no water, fell through to the 33×33 witness raster — `else if (!exactHydro
+&& …waterState exposed|hidden)`. `sampleFieldSurface` returns the same
+`undefined` for three different facts: the point is OUTSIDE the field's
+bounds (unavailable), the point is inside and the coverage is under the cut
+(dry), the point is inside and the material is no water (dry). So "the
+precise field says dry" read as "precise information is unavailable", and a
+raster cell 60–70 m wide (33 samples across a terrain tile) that was wet at
+its sample point painted water contact over everything the cell covered.
+**Reproduced in `substrate.test.ts`** with the ford fixture's 8 m
+half-width river and a raster that is wet everywhere: at the channel centre
+the precise field answers wet; 24 m from the centre the precise field is
+dry and the sampler returned `river 0.63 m deep`. That contact is what
+`surfaceAt` (through the `surface` consumer) turns into `'water'`, what
+`waterInfoAt` turns into wheel immersion, and what the splash reads.
+
+**The fix** (`production-tile.ts`): three answers, not two. `hydroFieldCovers`
+(inside the field's bounds, usable resolution) decides whether the precise
+field has an answer at all; when it has, wet or dry is final and the raster
+is never consulted; the raster remains the fallback only when there is no
+field or the point is outside it. The reproduction now reads no water and
+no fluid at 24 m, water at the centre, and water from the raster on a tile
+with no field — so rollback still works where it should.
+
+**The diagnostic was wrong twice** (`wetClassAt`, the `__wetdebug` overlay):
+`U` (BURIED, pink) compared the resting level against `sampleHeight`, the
+heightfield the channel carve starts from, so a river the carve had exposed
+still read buried against the higher pre-carve ground — pink was not
+evidence that more excavation was needed. It reads the carved mesh now
+(`meshSurfaceAt`, the raster only where no tile is built). And `F` (ford)
+required the surface to be water AND a deck, which no point is, so it was
+unreachable; it is a deck with legacy ford depth over it now. The red `X`
+— surface says water, the precise field says not drawn — was exactly the
+defect's signature; after the fix it can only come from a raster where the
+field is genuinely unavailable, which is what it should mean.
+
+**Not done, and named as the larger work** (the analysis's items 3–5):
+terrain, hydro and contact should agree on ONE resolved boundary at
+compatible revisions (hydro's elevation raster samples the heightfield
+while contact can read the final mesh; comments claim more agreement than
+the code guarantees); the remaining genuine buried-water cases want a
+constrained channel section (bottom, bank toes, bank tops, steep rock
+banks kept); and the shoreline breaklines that keep coarse triangles from
+bridging a channel are restricted to rivers, streams and canals — lakes,
+reservoirs, dams and coasts get none, and each wants its own constraint
+(a coherent body level with islands kept; a protected crest with upstream
+and downstream levels and a separate spillway; broad shelving beaches; and
+narrow rocky transitions where "smoother" must never mean "softer"). None
+of that is a red patch to carve: carving every red patch turns a contact
+bug into invented flooded terrain.
+
+**NOT DEPLOYED.** Committed on the branch; the seat was testing the herd
+deploy when this was read, and it goes out on the seat's word with the
+next deploy.

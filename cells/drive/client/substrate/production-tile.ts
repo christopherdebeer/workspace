@@ -768,6 +768,17 @@ function sampleGroundMesh(
   return undefined;
 }
 
+/** Whether the precise field has an answer at (x, z) at all — inside its
+ *  bounds with a usable resolution. Its answer may then be wet or dry; only
+ *  outside this is the witness raster consulted. Mirrors the bounds test at
+ *  the top of `sampleFieldSurface`, which folds "outside" into the same
+ *  undefined as "dry". */
+function hydroFieldCovers(field: HydroTileField, x: number, z: number): boolean {
+  const b = field.bounds;
+  if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) return false;
+  const sx = (b.maxX - b.minX) / field.resolution, sz = (b.maxZ - b.minZ) / field.resolution;
+  return sx > 0 && sz > 0;
+}
 function sampleWaterMotion(
   segments: readonly ProductionWaterMotionSegment[],
   x: number,
@@ -1019,7 +1030,15 @@ export function sampleProductionSubstrateTile(
     };
   }
 
-  let exactHydro = tile.hydroField
+  // THREE ANSWERS FROM THE PRECISE FIELD, NOT TWO. Known wet, known dry, and
+  // unavailable (no field, or the point outside its bounds). The dry answer is
+  // FINAL: the 33x33 witness raster below is a fallback for the unavailable
+  // case only. Before this, "dry" and "unavailable" were the same undefined,
+  // and a wet raster cell 60-70 m wide resurrected water contact 24 m from an
+  // 8 m channel — wet, 0.63 m deep, where the field said dry — which the
+  // surface classifier, the wheels and the splash all consumed.
+  const hydroKnown = !!tile.hydroField && hydroFieldCovers(tile.hydroField, x, z);
+  let exactHydro = hydroKnown && tile.hydroField
     ? sampleFieldSurface(tile.hydroField, x, z, 0)
     : undefined;
   if (exactHydro) {
@@ -1063,7 +1082,7 @@ export function sampleProductionSubstrateTile(
     contact.fluid = crossing === 'bridge' && contact.support.kind === 'drive'
       ? undefined
       : resolveFluidContact(contact.water, contact.support);
-  } else if (!exactHydro && crossing !== 'causeway'
+  } else if (!hydroKnown && crossing !== 'causeway'
     && (tile.waterState[i] === WATER_STATE.exposed || tile.waterState[i] === WATER_STATE.hidden)) {
     const kind = HYDRO_KINDS[tile.waterKind[i] - 1];
     const waterId = tile.waterIds[tile.waterIndex[i] - 1] ?? 'production-water:unknown';
