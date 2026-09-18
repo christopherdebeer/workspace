@@ -16871,3 +16871,171 @@ this box's proxy CA is trusted by node and curl but not by Chromium's NSS
 store, and there is no `certutil` here to add it. Disabling verification to
 get a green line is not a verification. So the live check is the artifact's:
 the deployed bundle is the bundle that was measured.
+
+## San Miguel: the carve measures to a segment's INFINITE LINE, so a watercourse digs straight on past its own end
+
+Reported from the seat at `?lat=37.86119&lon=-107.87094&h=321&cam=chase`
+(pixel full, dither off, full palette, dof off), with a frame: a sheet of water
+standing above the terrain with gaps down both sides, holes you can drive
+through, and the river's underside visible from below. Four probes, and the
+third overturned the second.
+
+**THE WATER IS NOT RAISED. THE MESH WAS DUG OUT FROM UNDER IT.** Over 282
+drawn-wet posts on an 8 m grid: level − field bed med **0.00**, level − natural
+ground med **+0.15** (+0.4 to +1.3 m through the channel) — so the hydro field
+is standing where it should. What is wrong is the ground: natural − mesh med
+**+4.52 m**, max **+23.01**, and only under the water (the whole grid reads
++0.06). And the mesh IS the carve: mesh − `channelFloorAt` med **+0.05 m** over
+122 posts. So `channelFloorAt` is the digger, and the hydro side is innocent.
+
+**THEN THE CARVE RETURNED A FLOOR BELOW EVERY SEGMENT THAT COULD OFFER ONE**,
+which its own arithmetic makes impossible: `y = invert + barRise + max(0, out)`
+and both added terms are non-negative, so the minimum cannot fall below the
+lowest invert in the set. Measured at six points, `channelFloorAt` stood 0.57 to
+**11.28 m** below the lowest offer of every segment within reach, with the
+invert spread among them only 0.44–2.73 m — far too small to be a noisy invert
+field. That contradiction is the whole finding, and it took a fourth probe to
+resolve because the right answer was that **the two enumerations were not the
+same set**.
+
+### One line, and it is a different distance from every sibling's
+
+```ts
+const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+const px = c.ax + dx * t, pz = c.az + dz * t;
+const signedAcross = (dx * (z - pz) - dz * (x - px)) / length;   // ← the fault
+const across = Math.abs(signedAcross);
+if (across - c.hw > 3) continue;
+```
+
+With `t` INTERIOR, `(px,pz)` is the foot of the perpendicular and that
+expression is the distance to the segment. With `t` CLAMPED — which is every
+point beyond either end — `(px,pz)` is an ENDPOINT, and the cross product of the
+unit direction with the vector to the point is the offset from the segment's
+**infinite line**: the along-line overshoot is discarded entirely. So a point
+sixty metres past the end of a five-metre stretch of river, but near its line,
+reads as two metres from the channel centre, is admitted by the `out > 3` gate,
+and is offered that endpoint's invert.
+
+Replayed in pure node on a segment (0,0)–(100,0) with `hw` 7
+(`scratchpad/lineclamp.mjs`):
+
+| point | t | kernel `across` | distance to the SEGMENT | kernel takes it | segment rule |
+|---|---|---|---|---|---|
+| (50, 2) | 0.5 | 2 | 2 | yes | yes |
+| (120, 2) | 1 | **2** | **20.1** | **yes** | no |
+| (160, 2) | 1 | **2** | **60.0** | **yes** | no |
+| (300, 2) | 1 | **2** | **200.0** | **yes** | no |
+| (160, 30) | 1 | 30 | 67.1 | no | no |
+
+**AND `channelFloorAt` IS THE ONLY PLACE IN THE CLIENT THAT MEASURES THIS WAY.**
+`channelAt` (main.ts:23198), `channelInvertAt`, the two strip tests at 23661 and
+23698, `junctionNear`, `corridorH`'s reach (terrain-kernel.ts:411) and
+`onRoadOf` (2119) all use `Math.hypot(x - px, z - pz)` against the same clamped
+`t` — the distance to the SEGMENT. Every test of *is there water here* uses one
+rule and the single test of *how deep do I dig* uses another, and it is the
+digging one that is odd. `channelInvertAt`'s own comment says the two agree
+("the terrain's own carve takes the lowest bed for exactly this reason
+(channelFloorAt); so does this") — they agree on the MINIMUM and disagree about
+which segments are in scope.
+
+### Measured in the world, the kernel's loop replayed beside a segment rule
+
+`scratchpad/sanmig4.mjs` (`__chanwhy` rewritten to replay `channelFloorAt`
+verbatim — `barRise` included — while computing both distances per segment),
+61×61 posts on a 10 m grid at the spot:
+
+| | |
+|---|---|
+| replay agrees with `K.channelFloorAt` | **295 of 295** |
+| posts whose WINNING segment reaches past its own end | **290 of 295 (98%)** |
+| posts carved ONLY by the line rule (no segment within true reach at all) | **153 of 295** |
+| trench depth (natural − floor), THE SHIPPED RULE | med **6.59 m**, p90 14.53, max 23.5 |
+| trench depth, distance to the SEGMENT | med **0.58 m**, p90 4.2 |
+| metres past a segment's end, worst per post | med **46.7**, p90 58.3, max **74.5** |
+
+The replay agreeing 295 of 295 is what closes it: the arithmetic is the
+kernel's, so the whole of the earlier impossibility is the distance measure and
+nothing else.
+
+**THE SEGMENTS ARE SHORT, WHICH IS WHY THE REACH IS SO LONG RELATIVE TO THEM.**
+The winners in the six worst dumps are densified stretches of 5, 9, 10, 11 and
+12 m, each carving ground 52–58 m beyond its own end — ten times its own length
+— at `t: 0`, so the offer is its own endpoint invert transplanted across the
+valley. At [70,−50]: a 5 m Howard Fork segment, `across 0.2`, **true distance
+57.9 m**, offering 2788.29 into ground standing at 2808.42. A twenty-metre cut
+by a segment that is nowhere near.
+
+**AND THE REACH IS BOUNDED BY THE INDEX, NOT BY ANY INTENT.** `channelsNear`
+walks the 3×3 of `GRID` (24 m) cells, so a point can reach a segment ~48 m away
+in plan, and `addSeg` inserts each segment into every cell of its box padded by
+`hw + 8`, which widens that further. The measured median overshoot of 46.7 m is
+therefore the neighbourhood's own size: **the line rule carves as far as the
+channel index can see**, which is why the trench measures about fifty metres
+either side of a river fifteen metres wide.
+
+### The cross-section, which is the seat's screenshot as numbers
+
+Through the drawn river at [30,−50], on the channel's own bearing, absolute
+metres (`mesh` read null throughout this boot — the tiles under the section had
+not built; the mesh↔carve identity is the 122-post distribution above, from the
+previous run):
+
+| t | natural | SHIPPED floor | segment-rule floor | taken / seg-taken / reaching |
+|---|---|---|---|---|
+| −52 | 2801.62 | **2792.55** | — | 3 / 0 / 3 |
+| −40 | 2798.73 | **2792.55** | — | 3 / 0 / 3 |
+| −24 | 2794.97 | **2792.55** | — | 6 / 0 / 6 |
+| −12 | 2790.25 | 2783.51 | 2790.49 | 15 / 5 / 10 |
+| 0 | 2793.19 | 2787.90 | 2792.48 | 13 / 4 / 9 |
+| +16 | 2797.55 | 2790.72 | 2796.41 | 10 / 2 / 8 |
+| +36 | 2800.00 | **2792.55** | 2800.65 | 10 / 2 / 8 |
+| +56 | 2801.95 | **2792.70** | 2805.04 | 9 / 1 / 8 |
+
+A **112 m wide flat-bottomed trench** (t −52 to +60) with a shelf at exactly
+2792.55 at both ends — one endpoint's invert, projected along its line for
+twenty-eight metres in each direction — under a river about fifteen metres
+across. The segment rule tracks the natural ground within a metre or two the
+whole way and answers null where there is no channel. At every station 7 to 14
+of the segments admitted are reaching past an end.
+
+That is the seat's report, exactly: the sheet is at the right height on a bed
+the hydro field solved correctly, the ground either side has been cut to a flat
+shelf several metres below it, so the sheet's rim hangs over open dry trench —
+gaps at the sides, holes to drive through, and the water's underside visible
+from beneath.
+
+### The instrument lesson, which runs the opposite way to this file's usual one
+
+This file repeatedly records that a probe reporting a rule's OUTPUT cannot
+witness the rule. The corollary, met here for the first time: **a probe that
+replays a rule verbatim can only ever confirm it.** `__chanwhy` was written to
+report the INPUTS to `channelFloorAt`'s minimum — "not a copy of its rule", in
+its own comment — and measured each segment's distance the way every other
+consumer in the client measures it. That refusal to copy is what produced the
+impossible table, and the impossible table was the bug. Had it copied the
+kernel's arithmetic it would have agreed to the centimetre at all six points and
+explained nothing. The verbatim replay was written LAST, to prove the
+disagreement was the distance and not my own arithmetic (295 of 295), which is
+the order those two probes want to be written in.
+
+### The fix, described and NOT made
+
+One line: measure to the SEGMENT, as every sibling does. `across` becomes
+`Math.hypot(x - px, z - pz)`; `signedAcross` is still needed for `barRise`'s
+side test (`n`), which is a question about which bank you are on and is
+meaningful only where the point is beside the segment at all. It loses nothing —
+at a bend the union of segment capsules already tiles the corridor, and the
+only ground it stops carving is ground no watercourse passes through. What it
+would change is large and visible (med 6.59 m of trench becoming 0.58), so it
+wants its own before/after census at the river fixtures (`wet-census`, the
+at-senqu pair, at-umgeni, at-glencairn, at-bixby) and a look from the seat
+before it goes anywhere near a deploy. **No change has been made and none is
+proposed beyond this paragraph without the seat's word.**
+
+Two things it would NOT fix, which belong to #169 and #170: the channel section
+is still a class half-width with a 1:1 rise rather than a bed, toes and bank
+tops read from the field, so a correctly-placed carve is still the wrong SHAPE;
+and the hydro floor (`publishHydroFloor`) lowers ground to the field's own bed
+independently, which is what currently keeps the water sitting on something at
+all where the carve misses.
