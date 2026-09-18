@@ -15896,3 +15896,82 @@ phases`.** What the sandbox can say is that the selection is 2.8× cheaper at
 this shape and the output is the same to the byte; what it cannot say is the
 per-tree loop's cost on a phone, which is why the yield went in beside the
 cut rather than after the next dump.
+
+## The weather steps because the field is rebuilt on a clock and its targets ease per frame
+
+Reported from the seat: *stopped, watching the sky with time cycling — lovely
+visuals — but the weather "steps" instead of developing continuously.*
+Investigated, measured, and NOT yet fixed; this is the reading.
+
+**EVERYTHING LOCAL READS THE FIELD, AND THE FIELD IS A SNAPSHOT.** The sky
+deck's coverage threshold (`covL = mix(uCloud, texture(uWxTex).r, clInLattice)`
+— the texture wins everywhere inside the 12 km lattice), the torn scud under
+it (the rain channel), the composite's mist and rain, the ground's cloud
+shadow and the road's wet all sample `wxTex`. `stepWeather` rebuilds that
+texture when the truck has moved a cell or `now − wxBuiltAt > 1800` — every
+1.8 s, standing still — and the regional scalars it bakes in ease EVERY
+FRAME: `wx.cloud += (target − wx.cloud) · min(1, dt · 0.12)`, an 8.3-second
+constant, and `wxFogT` follows `dayF`, which under CYCLE moves 24× faster
+than the sun does. The cloud NOISE (`clfbm(p + uWind)`) drifts per frame, so
+the pattern glides while its coverage jumps: a front arrives as a staircase.
+`uFogTop` is written at the same rebuild, so the mist slab's gate snaps.
+
+**Measured in pure node with the real `buildField`** (`wxstair-node.mjs`,
+the session's scratch: the game's own ease at 60 fps, clear-to-storm, the
+field sampled at one point every frame):
+
+| rebuild | changes of the local cover in 16 s | largest change in one frame |
+|---|---|---|
+| every 1.8 s (the game) | **8** | **0.149** |
+| every frame | 485 | 0.004 |
+
+Read down the cadence column of the trace and it is the picture: local cover
+0.182 for 1.8 s, then 0.331 for 1.8 s, then 0.453 — each stair a seventh of
+the sky's cover in one frame — and the rain at the truck arrives as 0 → 0.019
+→ 0.072 → 0.146 in three jumps while its regional value climbs smoothly
+through them. A change of 0.15 in `covL` is a visible fraction of the deck
+appearing at once, four or five times over an eight-second front.
+
+**THE HARNESS CANNOT SHOW THIS, AND THE FIRST ATTEMPT SAID WHY.** With
+drawing on its frames are ~25 s apart, so the rebuild fires every frame there
+and the field tracks the target exactly; and the ease is per FRAME with `dt`
+clamped, so a front that takes 8 s on a phone takes ten minutes in the
+harness (0.22 → 0.51 over 850 s in the run). The forced-front trace
+(`__wxnext('storm')`, `__wx().builtAgo`) confirmed the coupling and nothing
+else. The stair is a device-rate phenomenon and the pure-node emulation with
+the shipping module is the honest witness of it.
+
+**Two smaller things the same reading found.** Inside the lattice the sky
+reads the stale texture and outside it the per-frame `uCloud`, so during a
+front the far sky past ~6 km leads the deck overhead by up to a rebuild —
+a faint moving ring at `clInLattice`'s fade. And the wet channel dries in
+1.8 s increments, which nobody has ever seen because it is slow.
+
+**THE FIX, PROPOSED AND NOT MADE.** The rebuild is expensive because of the
+NOISE (2,304 cells × three fbm calls, one to three milliseconds on a phone),
+and the noise changes only with the advect — a few metres a rebuild against
+a 2.8 km front pattern. The thresholds are what move per frame and they are
+cheap. So: keep the three raw noise values per cell in a side array,
+recompute them only on a recentre or once the advect has carried them a
+fraction of a cell (`WXF_M / 16`, 16 m — invisible against 2.8 km, a
+recompute every few seconds at most), and RE-THRESHOLD every frame — cover,
+rain, fog from `wx.cloud`, `wx.rain`, `wxFogT`, wet integrated with the
+frame's own `dt` — writing the 9 KB texture each frame. About forty
+microseconds a frame, no shader touched, all five read sites and `wxAt`
+unchanged, and `uFogTop` set per frame with it. The alternative is a GPU lerp
+between two builds (`uWxMix` over the cadence), which also smooths the advect
+hop but costs a second sample at every read site and a shader edit at each;
+the CPU route is the one to take. `weatherfield.test.mjs` asserts
+determinism, the pins, the downwind move and the wet memory, and must stay
+green; the node emulation above is the regression check for the stair.
+
+**And the other "step", which is a design and not a fault.** The synthetic
+chain is a six-entry table rolled every 1.5–4 minutes and eased in over
+eight seconds, so the sky holds for minutes and then changes in a few
+seconds — and under CYCLE, where a day passes in an hour, that reads as
+weather that jumps between states rather than developing with the day. A
+continuous drift of the regional cover and rain over the sim clock — a slow
+noise in sim hours, biased by the biome, so a watched afternoon builds
+cloud and a night clears — is the change that would make the field DEVELOP,
+and it is a separate unit from the stair. The live feed (Open-Meteo every
+fifteen minutes) is a step by nature and is eased the same way.
