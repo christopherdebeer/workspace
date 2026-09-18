@@ -16204,3 +16204,95 @@ exception, no missing mesh count, thirty instances reported drawn by
 `stoppedBy{…}` and each actor's `seenAgo` and `speed`, so the seat can read
 "they are there, 120 m out, frozen" from the console instead of driving for
 an hour to conclude "no herds".
+
+## The herd is born in the truck's frame, re-seats itself, and is recycled only when stuck and unseen
+
+**Taken over on the seat's word after the review above** ("fix the issues
+with your proposals, take ownership, then deploy, no pull"). The module is
+now mine to keep; the other agent's sampler, trace, gait and feet stand as
+they were. What changed, in `client/wildlife.ts`:
+
+- **Re-seat, do not freeze.** An animal's own station is read on its own
+  clock (every 0.25 s seen, 0.6 s unseen): habitable → `c.y` follows the
+  ground (`stats.reseated`); no longer habitable and nobody looking →
+  respawned (`stats.stuckRecycled`). A STANDING animal is not swept at all —
+  the station read covers it — which is also where most of the old 9–13k
+  samples a second went. A moving one refused for `STUCK_S` = 3 s while
+  unseen, or planned to a standstill for that long, is respawned; a watched
+  one stays, because a vanish is a pop too.
+- **Spawn sectors in the truck's frame, not the world's.** The geometry that
+  made the old rule blind on a straight road: a point outside the wedge
+  never enters it under forward motion, its bearing only grows. So three
+  sectors, one per GROUP (cohesion must not drag a group across the road),
+  the roles rotating among the groups every 90 s so the species ahead is not
+  always the same one:
+  - **ARRIVAL** — for `ARRIVAL_S` = 12 s after `initialize`/`reset` (a hop),
+    40–110 m ahead, 14–30 m either side of the axis and one group astride
+    it, WITHOUT the seen gate: the wedge was empty, nothing was on the
+    glass, and the first frame of a place is the one the seat remembers.
+  - **DOT** — ahead inside the wedge, `HERD_DOT_M` = 300 to 340 m along the
+    heading, 6–50 m off the axis, exempt from the seen gate beyond 300 m: at
+    PIX_H 320 a 1 m animal there is two art pixels, a bison three. It grows
+    as you drive up, which is a herd standing in the field ahead. Below the
+    364 m recycle radius so it is not reclaimed on arrival.
+  - **FLANK** — 70–130 m out at 8°–30° beyond the wedge's half-angle (read
+    from the camera: `atan(tan(fov/2)·aspect)`, 13.5° portrait, ~47°
+    landscape), left for one group and right for the other. Out of frame by
+    the frustum's own test, found by a turn of the wheel or of the head.
+  - Birds keep their world sectors; they cross the sky on their own.
+- **Cadence.** Unseen animals plan every 0.4 s instead of 0.13, re-seat
+  every 0.6 s instead of 0.25.
+- `__wildlife()` adds `born{arrival,dot,flank,bird}`, `reseated`,
+  `stuckRecycled`, `arrival` and `wedgeDeg`.
+
+**The clearance test reads the module's own sight test now.**
+`critter-hold.test.mjs` judged "in frame" by a 57° cone to 900 m, a proxy
+for a frustum that is ±13.5° on a portrait phone; a flank spawn at 20°
+off-axis is out of frame by the frustum and a pop by the proxy, so the proxy
+would have flagged the law's own remedy. It now pairs animals by id, takes
+`seenAgo < 0.8` or within 45 m as "in frame", and past `HERD_DOT_M` nothing
+counts as seen — the dot rule, where the old test allowed an appearance past
+900 m. The guard that something was watched keeps the module's word honest. Its
+third check used to read the farthest animal at the end (> 200 m, a proxy
+for the old box size); with births in the truck's frame a herd the truck
+bears down on flees ahead of it at 22 m/s and the whole population can sit
+within 110 m at the last tick while every birth happened at 60–340 m — it
+read 108 m and failed. It now reads the births themselves: dot or flank
+births happened, none in frame.
+
+### Measured, the same rigs as the review
+
+| | pulled (`9459a6c`) | owned |
+|---|---|---|
+| arrival, Senqu highland at 30 s: born in view / in frustum / nearest | 0 / 0–1 / 91–114 m | 30 / 22 of 30 / 46 m ahead (`herdarrive-senqu.png`: two on the riverbank at 50 m) |
+| Camps Bay, 100 s: sweep refusals | 54,794 | 5,136 (`step` 779 from 15,229; the rest `flank`/`end`, the mountainside) |
+| Camps Bay, 100 s: re-seated / stuck-recycled | — | 39 / 43 |
+| Camps Bay, 100 s: nearest at the end | 104–134 m | 38–66 m |
+| Camps Bay, 100 s: born dot / flank | — | 16 / 35 |
+| step cost, harness | 1.4–9.5 ms | 2–5 ms (unseen cadence; the sweep gone for standing animals) |
+| 4 km walk, Victoria Road: samples with a herd in the frustum / within 60 m / within 120 m / median nearest | 6% / 6% / 48% / 120 m | 61% / 56% / 72% / 52 m |
+| `critter-hold.test.mjs` (the law) | green (old proxy): 260 in-frame animal-ticks, 0 jumps | green (the module's sight test): 593 in-frame animal-ticks, 0 jumps |
+
+The DOT births are fewer than the flank ones on the coast road (46 against
+202 over the walk) because 300 m ahead along Victoria Road is sea or
+mountainside more often than field — the rule asks for habitable ground and
+takes the flank when there is none.
+
+**The sectors widen with the attempts, and the first version did not.** The
+first walk with tight sectors (dot ±6–50 m, flank 70–130 m at 8°–30° beyond
+the wedge) left the whole herd 600–1,230 m behind for a minute along the
+cliffs south of Bakoven: 32,546 unhabitable refusals, no sector with a
+field in it, and a stuck counter that climbed on every failed attempt
+(2,956). Attempts 4–7 now open the dot to ±70 m and the flank to 60–200 m at
+8°–65°, attempts 8–11 fall back to the old ring (100–235 m, any bearing the
+seen gate allows), and the counter counts recycles that happened. The same
+walk then reads 15,628 refusals, the herd back within 120 m by the end of
+the cliffs instead of a kilometre back, and the frustum share 61% against
+54%. The residue — 127–151 s of the walk at 205–650 m — is the stretch where
+there is no habitable ground in any sector, and no rule places a herd on a
+cliff face.
+
+**Deployed without a pull, on the seat's instruction** — the pull was an
+hour old and the seat said "no pull this time". The other agent's edits in
+that hour, if any, are overwritten on the cell and exist in git only if
+they were pushed there; the next pull will say.

@@ -90,14 +90,17 @@ check('the drive actually watched some animals', watched > 40, { watched });
 check('nothing was teleported into or out of frame', jumps.length === 0, jumps.slice(0, 5));
 console.log(`        ${watched} in-frame animal-ticks, ${jumps.length} jumps`);
 
-// …and they are not all crowded against the camera: the box has to be big
-// enough that arrivals happen out where a body is a mark rather than a shape.
-const far = await d.page.evaluate(() => {
-  const s = window.__drive;
-  return Math.max(...window.__herd().map((c) => Math.hypot(c.x - s.x, c.z - s.z)));
-});
-check('the population reaches out past sight, not just past the bonnet',
-  far > 200, { farthest: Math.round(far) });
+// …and the population is RENEWED out of frame, not in it. This used to read
+// the farthest animal at the end (> 200 m, a proxy for the old box being big
+// enough that wraps landed where a body is a mark). With births in the
+// truck's frame that distance says nothing: a herd the truck bears down on
+// flees ahead of it at 22 m/s and the whole population can sit within
+// 110 m at the final tick while every birth happened at 60-340 m. So read the
+// births themselves: after the arrival window, every one is a DOT (ahead,
+// beyond HERD_DOT_M) or a FLANK (outside the wedge), and there were some.
+const born = await d.page.evaluate(() => window.__wildlife().born);
+check('the population is renewed out of frame (dot or flank births, none in it)',
+  born.dot + born.flank > 0, born);
 
 report(d.errors);
 await d.close();
