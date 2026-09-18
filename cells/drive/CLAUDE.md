@@ -16854,3 +16854,20 @@ OBJECTS by identity is a guard that a later refactor can silently retire.
 The reserved-word shader and the `nodraw` census were checks that could not
 fail; this was a check that could not match. All three read green while
 doing nothing.
+
+### Deployed `v1789752274579`
+
+Both hop fixes are live, with no cell pull. The live `/app.js` (4,012,639
+bytes, `x-cache: Miss`) parses under esbuild and carries them verbatim:
+`const hopKeep = [planetGroup]` in the sweep, and the canvas blank —
+`mapKnown = 0; mapAnchorX = 0; mapAnchorZ = 0;` then the `#141b14` fill —
+beside the `mapFeats` clear.
+
+The behavioural run in the table above is the harness on this exact commit,
+not on the deployed bytes, and it cannot be otherwise from here: the harness
+serves the cell's own handler over `localhost` by design, and a browser
+pointed at the deployed origin is stopped at `ERR_CERT_AUTHORITY_INVALID` —
+this box's proxy CA is trusted by node and curl but not by Chromium's NSS
+store, and there is no `certutil` here to add it. Disabling verification to
+get a green line is not a verification. So the live check is the artifact's:
+the deployed bundle is the bundle that was measured.
