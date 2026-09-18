@@ -217,6 +217,13 @@ export class TerrainWorker {
       this.mirrored.add('c' + key); this.stats.mirrored++;
     } catch { this.disabled = true; }
   }
+  /** The authoring surface changes canonical cover bytes in place. As with a
+   * repaired height tile, the worker's first mirrored copy must be retired
+   * before the new authority is sent. */
+  remirrorCover(key: string, t: CoverTile): void {
+    this.mirrored.delete('c' + key);
+    this.mirrorCover(key, t);
+  }
   reset(): void {
     this.mirrored.clear();
     if (this.worker) try { this.worker.postMessage({ type: 'reset' }); } catch { /* the next job will fail and disable */ }

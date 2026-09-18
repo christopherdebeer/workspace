@@ -43,7 +43,8 @@ import { COVER_INK, ECO_INK, type ChartLayerId } from './chart-layers';
  * are for.
  */
 export type GroundViewId = 'off' | 'substrate' | 'cover' | 'eco'
-  | 'exposure' | 'debris' | 'soil' | 'moisture' | 'grass' | 'family';
+  | 'exposure' | 'debris' | 'soil' | 'moisture' | 'grass' | 'family'
+  | 'elevation';
 
 /**
  * ── THE GEOMORPHIC FIELD'S OWN CHANNELS, ONE VIEW EACH ──
@@ -71,6 +72,7 @@ export const GROUND_VIEW: Record<GroundViewId, number> = Object.freeze({
   // shader can index the pair of textures with arithmetic rather than a
   // six-way branch: (view - 4) picks the channel, < 4 is texture A.
   exposure: 4, debris: 5, soil: 6, moisture: 7, grass: 8, family: 9,
+  elevation: 10,
 });
 
 /**

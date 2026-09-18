@@ -31,7 +31,10 @@ export interface LabEntry {
    *  looking happens in the game. Declared rather than inferred so the lab
    *  test can hold everything else to "it put a canvas up". */
   chooser?: boolean;
-  start: () => Promise<void>;
+  /** An embedded lab keeps the shipping game bootstrap and adds instruments
+   *  only after its live authorities exist. */
+  embedded?: boolean;
+  start?: () => Promise<void>;
 }
 
 export const LABS: readonly LabEntry[] = [
@@ -94,6 +97,12 @@ export const LABS: readonly LabEntry[] = [
     label: 'WEATHER',
     note: 'Twelve kilometres of sky flat on a table: cover, rain, fog and the wet channel that remembers, with time on a dial.',
     start: () => import('./weather-lab').then((m) => m.startWeatherLab()),
+  },
+  {
+    slug: 'world-edit',
+    label: 'WORLD · AUTHOR',
+    embedded: true,
+    note: 'The complete shipping game with live raster/vector authoring adapters: inspect an input channel, paint its canonical data, and watch production rebuilds land.',
   },
   {
     slug: 'world',
@@ -195,13 +204,21 @@ function clearShell(): void {
 export function startLab(pathname: string): boolean {
   const route = labRoute(pathname);
   if (!route) return false;
-  clearShell();
-  if (route.slug === null) { renderIndex(); return true; }
+  if (route.slug === null) { clearShell(); renderIndex(); return true; }
   const lab = LABS.find((l) => l.slug === route.slug);
-  if (!lab) { renderIndex(route.slug); return true; }
-  void lab.start().catch((error) => {
+  if (!lab) { clearShell(); renderIndex(route.slug); return true; }
+  if (lab.embedded) return false;
+  clearShell();
+  void lab.start!().catch((error) => {
     console.error(`[lab:${lab.slug}]`, error);
     document.body.textContent = `lab "${lab.slug}" failed: ${String(error)}`;
   });
   return true;
+}
+
+/** The game-side half of an embedded lab route. */
+export function embeddedLab(pathname: string): LabEntry | null {
+  const route = labRoute(pathname);
+  if (!route?.slug) return null;
+  return LABS.find((lab) => lab.slug === route.slug && lab.embedded) ?? null;
 }

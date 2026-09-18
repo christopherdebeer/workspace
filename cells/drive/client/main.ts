@@ -95,7 +95,10 @@ import { gramDecode } from './facade-grammar';
 import { GRASS_M2, GRASS_UNKNOWN, GRASS_DEFAULT, swardCoverEvidence, SWARD_EV }
   from './sward-cover';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
-import { startLab } from './labs';
+import { embeddedLab, startLab } from './labs';
+import { RasterPaintSession, type EditableRasterTile } from './world-authoring-raster';
+import { DemPaintSession, type DemBrush, type EditableDemTile } from './world-authoring-dem';
+import { startWorldAuthoringLab, type AuthoringLayer } from './world-authoring-lab';
 import { IMPOSTOR_FORMS, IMPOSTOR_WIDTH, impostorFormIndex, impostorGeometry, impostorMaterial } from './tree-impostor';
 import { IMP_ATLAS, IMP_ATLAS_SLOTS, bakeImpAtlasSlot, clearImpAtlas, makeImpAtlasTarget, viewOrigin, type ImpAtlasSlot } from './tree-atlas';
 import { EZ_FAMILIES, EZ_MERGE_PX, EZ_M_PER_SCALE, EZ_NOISE_GLSL, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezDecodeProf, ezHabitatsForSite, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPhenotypeForSite, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
@@ -225,9 +228,9 @@ import { createVehicleWaterEvidenceRenderer } from './substrate/vehicle-water-re
 // no route here that would want a different one.
 registerAppShell();
 
-// A DISTINCT EXECUTION SURFACE. The labs share the production modules, and
-// the route branch guarantees the game bootstrap and a lab never run
-// together. One branch for all of them now — see labs.ts.
+// A DISTINCT EXECUTION SURFACE. Isolated labs own the page and stop here.
+// Embedded authoring labs deliberately fall through: their subject is this
+// complete game, and their overlay attaches after its authorities exist.
 if (startLab(location.pathname)) {
   // a lab owns the page
 } else {
@@ -2451,6 +2454,7 @@ function gvLutFor(layer: 'cover' | 'eco'): THREE.DataTexture {
 const gvU = {
   uGView: { value: TDETAIL === 'dom' ? GROUND_VIEW.substrate : GROUND_VIEW.off },
   uGLut: { value: gvLutFor('cover') },
+  uGHeightRange: { value: new THREE.Vector2(-50, 50) },
 };
 let groundView: GroundViewId = TDETAIL === 'dom' ? 'substrate' : 'off';
 /** What the channel returns to when no chip is asking for a view. `tdetail=dom`
@@ -7478,6 +7482,8 @@ function terrainFx(mat: THREE.Material, opts: {
       sh.uniforms.uSubMic = tdU.uSubMic;
       sh.uniforms.uNrmK = tdU.uNrmK;
       sh.uniforms.uGView = gvU.uGView;
+      sh.uniforms.uGHeightRange = gvU.uGHeightRange;
+      sh.uniforms.uGDem = { value: opts.dem ? 1 : 0 };
       // A tile with no field yet (the shared material, the batter, the shell)
       // gets a 1x1 blank and a zero box, and every read of it is gated on the
       // box having width — an unloaded field must read as "no answer" rather
@@ -7788,7 +7794,7 @@ function terrainFx(mat: THREE.Material, opts: {
           // mantle over the bedrock. It is the layered model's own three and
           // not a classification, because there is no longer a classification
           // to paint.
-          if (uGView > 0.5) diffuseColor.rgb = vec3(e.y, e.z, e.x);
+          if (uGView > 0.5 && uGView < 1.5) diffuseColor.rgb = vec3(e.y, e.z, e.x);
           else diffuseColor.rgb = mix(pc, subC, uSubAmt);
         }
         // ── A CLASS VIEW: THE RASTER'S OWN VERDICT, WHERE IT HAS ONE ──
@@ -7810,7 +7816,7 @@ function terrainFx(mat: THREE.Material, opts: {
         // in B, and the component is the remainder. Where the tile has no
         // field the box has no width and the ground keeps its own colour —
         // the same coverage claim every other view here makes.
-        if (uGView > 3.5 && uSubBox.z > 1.0) {
+        if (uGView > 3.5 && uGView < 9.5 && uSubBox.z > 1.0) {
           vec2 sUV = (vWorldP.xz - uSubBox.xy) / uSubBox.zw;
           vec4 sA = texture2D(uSubA, sUV), sB = texture2D(uSubB, sUV);
           float ch = uGView - 4.0;
@@ -7818,6 +7824,16 @@ function terrainFx(mat: THREE.Material, opts: {
           float cc = mod(ch, 4.0);
           float v = cc < 0.5 ? src.r : cc < 1.5 ? src.g : cc < 2.5 ? src.b : src.a;
           diffuseColor.rgb = uGView > 8.5 ? gvFamily(v) : gvRamp(v);
+        }
+        // ── THE LIVE DEM, IN THE SAME FRAME THE GEOMETRY USES ──
+        //
+        // Only a material carrying its tile's DEM residual map may answer:
+        // leaves, roads and generic terrainFx users have world positions too,
+        // but they are not the elevation authority this view is inspecting.
+        if (uGView > 9.5 && uGDem > 0.5) {
+          float h = (vWorldP.y - uGHeightRange.x)
+            / max(1.0, uGHeightRange.y - uGHeightRange.x);
+          diffuseColor.rgb = gvRamp(h);
         }
         ${TDETAIL === 'px' ? 'diffuseColor.rgb = tdHeat(px);' : ''}
       }`)
@@ -7884,6 +7900,7 @@ function terrainFx(mat: THREE.Material, opts: {
         + 'uniform float uSubAmt;\nuniform float uSubDom;\nuniform float uSubNrm;\n'
         + 'uniform float uSubMic;\nuniform float uNrmK;\n'
         + 'uniform float uGView;\nuniform sampler2D uGLut;\n'
+        + 'uniform vec2 uGHeightRange;\nuniform float uGDem;\n'
         + 'uniform sampler2D uSubA;\nuniform sampler2D uSubB;\nuniform vec4 uSubBox;\n'
         + sh.fragmentShader;
     }
@@ -43723,8 +43740,12 @@ const DITHER_PATS = ['bayer4', 'bayer8', 'check', 'grain', 'lines', 'bayer16', '
 };
 
 // ── input: keyboard + a VISIBLE one-thumb stick, second finger = brake ──
+/** The embedded authoring lab has two explicit input owners. In PAINT mode the
+ * editor owns the canvas and the game must not create persistent stick, pan,
+ * brake or keyboard state underneath the stroke. */
+let authoringInputCaptured = false;
 const keys = new Set<string>();
-addEventListener('keydown', (e) => { keys.add(e.key.toLowerCase()); });
+addEventListener('keydown', (e) => { if (!authoringInputCaptured) keys.add(e.key.toLowerCase()); });
 addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); });
 
 // The stick appears WHERE the thumb lands (no fixed gutter to find blind),
@@ -43947,6 +43968,7 @@ function chartLensUp(e: PointerEvent): boolean {
   };
 };
 canvas.addEventListener('pointerdown', (e) => {
+  if (authoringInputCaptured) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   // Each instrument swallows the DOWN; hudPtrs makes it swallow the UP too.
   if (chartLensDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
@@ -44007,6 +44029,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (authoringInputCaptured) return;
   if (chartLensMove(e)) return;
   if (rewindMove(e)) return;
   if (clockMove(e)) return;
@@ -44108,6 +44131,7 @@ canvas.addEventListener('pointermove', (e) => {
   panPtrs.set(e.pointerId, cur);
 });
 addEventListener('wheel', (e) => {
+  if (authoringInputCaptured) { e.preventDefault(); return; }
   if (camMode !== 'top') return;
   zoomT = clamp(zoomT * Math.exp(e.deltaY * 0.0012), ZOOM_MIN, ZOOM_MAX);
   e.preventDefault();
@@ -44588,6 +44612,7 @@ const tapCanMark = (e: PointerEvent): boolean => {
   return e.clientY < innerHeight * 0.5;
 };
 const endStick = (e: PointerEvent): void => {
+  if (authoringInputCaptured) return;
   // Taken by an instrument on the down — see hudPtrs. Deleted whatever the
   // event type, so a cancel clears it too; `lastUp` is set so the window's
   // copy of the same up (this handler is on both) does not ask the chart.
@@ -44694,6 +44719,18 @@ addEventListener('blur', () => {
   stick = null; brakeId = null; lift = null; chartLensDrag = null;
   panPtrs.clear(); keys.clear(); updateStickHome();
 });
+function setAuthoringInputCaptured(on: boolean): void {
+  authoringInputCaptured = on;
+  if (!on) return;
+  stick = null;
+  brakeId = null;
+  lift = null;
+  chartLensDrag = null;
+  panPtrs.clear();
+  panY = null;
+  keys.clear();
+  updateStickHome();
+}
 // The controls as the truck last received them — so a harness can drive the
 // stick with synthetic pointers and read what the driver would actually get,
 // rather than inferring it from how the truck moved.
@@ -46118,6 +46155,7 @@ function togglePov(): void {
   if (camMode !== 'top') setCam(lastPov);
 }
 addEventListener('keydown', (e) => {
+  if (authoringInputCaptured) return;
   if (e.key.toLowerCase() === 'c') toggleCam();
   if (e.key.toLowerCase() === 'v') togglePov();
   if (e.key.toLowerCase() === 'g') droneToggle();
@@ -57559,6 +57597,223 @@ let toastT = 0;
  * exists to remove. These are the same live objects the game is drawing with,
  * not copies.
  */
+if (embeddedLab(location.pathname)?.slug === 'world-edit') {
+  const coverEditor = new RasterPaintSession();
+  const demEditor = new DemPaintSession();
+  const editableCoverTiles = (): EditableRasterTile[] =>
+    [...coverTiles].map(([key, tile]) => ({
+      key,
+      xs: tile.xs,
+      zs: tile.zs,
+      w: tile.w,
+      h: tile.h,
+      columns: 256,
+      rows: 256,
+      data: tile.data,
+    }));
+  const editableDemTiles = (): EditableDemTile[] =>
+    [...heightTiles].map(([key, tile]) => ({
+      key,
+      xs: tile.xs,
+      zs: tile.zs,
+      w: tile.w,
+      h: tile.h,
+      columns: 256,
+      rows: 256,
+      data: tile.data,
+    }));
+  const fitDemView = (): void => {
+    let lo = Infinity, hi = -Infinity;
+    for (const tile of heightTiles.values()) {
+      for (let i = 0; i < tile.data.length; i++) {
+        const value = tile.data[i] - baseElev;
+        if (value < lo) lo = value;
+        if (value > hi) hi = value;
+      }
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+    const mid = (lo + hi) * .5;
+    const span = Math.max(30, hi - lo);
+    gvU.uGHeightRange.value.set(mid - span * .52, mid + span * .52);
+  };
+  /**
+   * A painted byte enters through the same arrival boundary as a downloaded
+   * cover tile. The typed array is already canonical; this fans its changed
+   * authority back out to every derived system.
+   */
+  const invalidateCoverEdits = (result: { tileKeys: string[] }): void => {
+    if (!result.tileKeys.length) return;
+    themeSrcRev++;
+    climField.noteCover();
+    for (const field of farClimFields.values()) field.noteCover();
+    for (const key of result.tileKeys) {
+      const tile = coverTiles.get(key);
+      if (!tile) continue;
+      tworker?.remirrorCover(key, tile);
+      // Water derived from the class raster must be traced again. The next
+      // terrain job asks oceanMaskFor, which rebuilds the mask and replaces
+      // inland cover features before publishing the new hydro field/floor.
+      oceanMasks.delete(key);
+      const [tx, ty] = key.split('/').map(Number);
+      for (const neighbour of [
+        `${tx - 1}/${ty}`, `${tx + 1}/${ty}`, `${tx}/${ty - 1}`, `${tx}/${ty + 1}`,
+      ]) oceanMasks.delete(neighbour);
+      coverDirtiedTerrain(tile.xs, tile.zs, tile.w, tile.h);
+      coverDirtiedFar(remeasureCoverMode(), tile.xs, tile.zs, tile.w, tile.h);
+    }
+    // Geometry rebuilds carry the durable revision. These move the periodic
+    // ecology consumers to the front of their queues so the edit is visible
+    // while that rebuild is landing rather than a cadence later.
+    vegAt = 0;
+    swardAt = 0;
+    swardGroundSeen = Number.MIN_SAFE_INTEGER;
+    swardFieldAt = 0;
+  };
+  const applyCover = (
+    operation: () => { changed: number; tileKeys: string[] },
+  ): { changed: number; tileKeys: string[] } => {
+    const result = operation();
+    invalidateCoverEdits(result);
+    return result;
+  };
+  /**
+   * A height edit changes considerably more than the mesh. The worker owns a
+   * mirrored copy, the normal cache keys by array identity, hydro has already
+   * sampled this floor, and vegetation has already been draped over it.
+   */
+  const invalidateDemEdits = (result: { tileKeys: string[] }): void => {
+    if (!result.tileKeys.length) return;
+    const dirty = new Set<string>();
+    const expireNormal = (key: string): void => {
+      const normal = terrainNormals.get(key);
+      // Keep the live material's texture valid until its replacement lands;
+      // deleting the cache input makes terrainNormalFor dispose and rebuild it
+      // atomically in terrainMatFor.
+      if (normal) terrainNormalInputs.delete(normal);
+    };
+    const expireOceanAt = (tile: HeightTile): void => {
+      for (const [coverKey, cover] of coverTiles) {
+        if (cover.xs > tile.xs + tile.w || cover.zs > tile.zs + tile.h
+          || cover.xs + cover.w < tile.xs || cover.zs + cover.h < tile.zs) continue;
+        oceanMasks.delete(coverKey);
+        const [cx, cy] = coverKey.split('/').map(Number);
+        for (const neighbour of [
+          `${cx - 1}/${cy}`, `${cx + 1}/${cy}`, `${cx}/${cy - 1}`, `${cx}/${cy + 1}`,
+        ]) oceanMasks.delete(neighbour);
+      }
+    };
+    for (const key of result.tileKeys) {
+      const tile = heightTiles.get(key);
+      if (!tile) continue;
+      tworker?.remirrorHeight(key, tile);
+      expireOceanAt(tile);
+      if (hydroRev.has(key)) hydroDirty.add(key);
+      const [tx, ty] = key.split('/').map(Number);
+      for (const candidate of [
+        key,
+        `${tx - 1}/${ty}`, `${tx + 1}/${ty}`,
+        `${tx}/${ty - 1}`, `${tx}/${ty + 1}`,
+      ]) {
+        dirty.add(candidate);
+        expireNormal(candidate);
+      }
+    }
+    for (const key of dirty) markTerrainDirty(key, 'author-dem');
+    vegAt = 0;
+    swardAt = 0;
+    swardGroundSeen = Number.MIN_SAFE_INTEGER;
+    swardFieldAt = 0;
+  };
+  const applyDem = (
+    operation: () => { changed: number; tileKeys: string[] },
+  ): { changed: number; tileKeys: string[] } => {
+    const result = operation();
+    invalidateDemEdits(result);
+    return result;
+  };
+  const coverLayer: AuthoringLayer = {
+    id: 'cover',
+    label: 'LAND COVER',
+    kind: 'raster',
+    editable: true,
+    choices: [
+      { value: String(COVER.tree), label: `${COVER.tree} · FOREST` },
+      { value: String(COVER.shrub), label: `${COVER.shrub} · SCRUB` },
+      { value: String(COVER.grass), label: `${COVER.grass} · GRASS` },
+      { value: String(COVER.crop), label: `${COVER.crop} · FARMLAND` },
+      { value: String(COVER.built), label: `${COVER.built} · URBAN` },
+      { value: String(COVER.bare), label: `${COVER.bare} · BARREN` },
+      { value: String(COVER.snow), label: `${COVER.snow} · ICE` },
+      { value: String(COVER.water), label: `${COVER.water} · WATER` },
+      { value: String(COVER.wetland), label: `${COVER.wetland} · WETLAND` },
+      { value: String(COVER.mangrove), label: `${COVER.mangrove} · MANGROVE` },
+      { value: String(COVER.moss), label: `${COVER.moss} · TUNDRA` },
+    ],
+    beginStroke: () => coverEditor.beginStroke(),
+    paint: (x, z, radius, value) => applyCover(() => coverEditor.paint(
+      editableCoverTiles(),
+      x,
+      z,
+      radius,
+      COVER_CLASSES.includes(Number(value)) && Number(value) !== 0 ? Number(value) : COVER.grass,
+    )),
+    endStroke: () => coverEditor.endStroke(),
+    undo: () => applyCover(() => coverEditor.undo()),
+    reset: () => applyCover(() => coverEditor.reset()),
+    setDataView: (on) => setGroundView(on ? 'cover' : baseGroundView),
+    report: () => ({
+      tiles: coverTiles.size,
+      ...coverEditor.report(),
+      terrainQueued: terrainDirty.size,
+      hydroQueued: hydroDirty.size,
+      workerMirrors: tworker?.stats.mirrored ?? -1,
+      inputCaptured: authoringInputCaptured,
+      adapters: 2,
+    }),
+  };
+  const demLayer: AuthoringLayer = {
+    id: 'dem',
+    label: 'ELEVATION',
+    kind: 'raster',
+    editable: true,
+    choices: [
+      { value: 'raise', label: 'RAISE' },
+      { value: 'lower', label: 'LOWER' },
+      { value: 'flatten', label: 'FLATTEN' },
+      { value: 'smooth', label: 'SMOOTH' },
+    ],
+    strength: { label: 'AMOUNT', min: .05, max: 10, step: .05, value: 1, unit: 'm' },
+    beginStroke: (value) => demEditor.beginStroke(
+      (['raise', 'lower', 'flatten', 'smooth'].includes(value) ? value : 'raise') as DemBrush),
+    paint: (x, z, radius, _value, strength) => applyDem(() =>
+      demEditor.paint(editableDemTiles(), x, z, radius, strength)),
+    endStroke: () => demEditor.endStroke(),
+    undo: () => applyDem(() => demEditor.undo()),
+    reset: () => applyDem(() => demEditor.reset()),
+    setDataView: (on) => {
+      if (on) fitDemView();
+      setGroundView(on ? 'elevation' : baseGroundView);
+    },
+    report: () => ({
+      tiles: heightTiles.size,
+      ...demEditor.report(),
+      focusElevationM: +(sampleHeightRaw(viewX(), viewZ()) + baseElev).toFixed(3),
+      rangeM: gvU.uGHeightRange.value.toArray().map((value) => +value.toFixed(1)),
+      terrainQueued: terrainDirty.size,
+      hydroQueued: hydroDirty.size,
+      workerMirrors: tworker?.stats.mirrored ?? -1,
+      inputCaptured: authoringInputCaptured,
+      adapters: 2,
+    }),
+  };
+  startWorldAuthoringLab({
+    canvas,
+    worldAt: (clientX, clientY) => chartToWorld(clientX, clientY),
+    focus: () => [viewX(), viewZ()],
+    setInputCaptured: setAuthoringInputCaptured,
+    layers: [coverLayer, demLayer],
+  });
+}
 (window as unknown as { __ctx?: object }).__ctx = {
   THREE, renderer, scene, camera, worldGroup, state,
   get frames() { return Array.from(frameRing.slice(0, Math.min(frameAt, frameRing.length))); },
