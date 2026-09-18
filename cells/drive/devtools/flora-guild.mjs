@@ -13,6 +13,7 @@
  * all: the lab needs no tiles.
  *
  *   node devtools/flora-guild.mjs [--places=CAPE,SERENGETI] [--patch=90] [--count=220]
+ *     [--representation="AUTO LOD|FULL 3D|MID LOD|IMPOSTOR"] [--fullpx=58] [--cardpx=26]
  */
 import { openDrive, report, WORK } from './harness.mjs';
 
@@ -54,6 +55,9 @@ const BASE = {
   orbit: false, patch: PATCH, count: COUNT, seed: arg('seed', '7'),
   dist: arg('dist', '78'), eye: arg('eye', '16'), turn: arg('turn', '0.6'),
   species: arg('species', 'mix'),
+  representation: arg('representation', 'AUTO LOD'),
+  fullPx: arg('fullpx', '58'), cardPx: arg('cardpx', '26'),
+  impInk: arg('impink', '0'),
 };
 
 await d.page.waitForTimeout(2500);

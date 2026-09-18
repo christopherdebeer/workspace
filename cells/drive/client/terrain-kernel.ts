@@ -21,6 +21,10 @@ export interface BreakLine { ax: number; az: number; bx: number; bz: number }
 export interface StripLike {
   ax: number; az: number; bx: number; bz: number; hw: number;
   ya?: number; yb?: number; tk?: boolean; tn?: boolean; ca?: number; cb?: number; pc?: number; pp?: number;
+  /** Signed channel curvature dθ/ds. Positive/negative uses the segment's
+   *  ax→bx direction and the same cross-product convention as hydro river
+   *  space, so `cv * cross(tangent, offset) > 0` is the inside bank. */
+  cv?: number;
   bl?: BreakLine[]; reach?: number;
 }
 /** The triangles of each lattice cell: `offs[c]..offs[c+1]` index `tris` in threes. */
@@ -1308,10 +1312,27 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       const dx = c.bx - c.ax, dz = c.bz - c.az;
       const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
       const px = c.ax + dx * t, pz = c.az + dz * t;
-      const out = Math.hypot(x - px, z - pz) - c.hw;
+      const length = Math.hypot(dx, dz) || 1;
+      const signedAcross = (dx * (z - pz) - dz * (x - px)) / length;
+      const across = Math.abs(signedAcross);
+      const out = across - c.hw;
       if (out > 3) continue;
       // Banks, not a trench: the bed at the middle, rising away at 1:1.
-      const y = (c.ya as number) + ((c.yb as number) - (c.ya as number)) * t + Math.max(0, out);
+      //
+      // A bend also deposits a real inner-bank shelf. Hydro carries the same
+      // signed curvature in river space; retaining it on the channel segment
+      // lets terrain own the large point bar instead of asking the water
+      // shader to pretend its supporting ground is shallower.
+      const cv = c.cv ?? 0;
+      const curveT = clamp((Math.abs(cv) - .0015) / (.009 - .0015), 0, 1);
+      const curve = curveT * curveT * (3 - 2 * curveT);
+      const n = signedAcross / Math.max(.5, c.hw);
+      const acrossT = clamp((Math.abs(n) - .30) / (.94 - .30), 0, 1);
+      const shelf = acrossT * acrossT * (3 - 2 * acrossT);
+      const inside = cv * n > 0 ? 1 : 0;
+      const barRise = curve * inside * shelf * Math.min(.48, .12 + c.hw * .035);
+      const y = (c.ya as number) + ((c.yb as number) - (c.ya as number)) * t
+        + barRise + Math.max(0, out);
       if (best === null || y < best) best = y;
     }
     // ORDER MATTERS FOR COST, not just for correctness. `onCarriageway` is a road
@@ -2102,7 +2123,7 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
   }
   return {
     buildTile, borderShared, roadFloorHard, corridorH, stripBreakLines, stripFloor, cellTable, normalMapBytes, plainLattice, vertexNormals,
-    refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear, makeSampler, makePalette, areaTintOf, onRoadOf, hydroElevation,
+    refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear, channelFloorAt, makeSampler, makePalette, areaTintOf, onRoadOf, hydroElevation,
     crossingKindAt,
     BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX, RELIEF_MIN,
   };

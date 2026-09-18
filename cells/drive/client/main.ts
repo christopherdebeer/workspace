@@ -73,6 +73,8 @@ import { inlandComponents, inlandMask, maskSignature } from './inland-water';
 import { pointInPolygon } from './hydro/geometry';
 import { HYDRO_BUILD_PROF, setHydroBoundProbe } from './hydro/build-tile';
 import type { SceneShade } from './hydro/material';
+import { HYDRO_SCENE_SKY_GLSL } from './hydro/scene-sky';
+import { CLOUD_DECK_Y, CLOUD_GLSL, CLOUD_SCALE } from './cloud-field';
 import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainCrossingMask, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
 import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-worker';
 // THE TERRAIN KERNEL, instantiated once for the synchronous path and the
@@ -4062,25 +4064,15 @@ function hydroInputSig(
  *  speed and the deck's drift is a vec2; one program cannot hold both. */
 function hydroSceneShade(): SceneShade {
   return {
-    head: `${CLOUD_GLSL}
-      uniform sampler2D uCsTex; uniform vec2 uCsMin; uniform float uCsInv; uniform float uCsOn;
-      uniform vec2 uCsDrift; uniform vec2 uCsSkew; uniform float uCsDeckY; uniform float uCsScale;
-      uniform float uCsMpp;
-      float sceneShade(vec3 p) {
-        if (uCsOn < 0.005) return 1.0;
-        vec2 hit = p.xz + uCsSkew * max(uCsDeckY - p.y, 0.0);
-        // The same edge and the same alias rule as the ground (terrainFx),
-        // or a river on the wide chart would keep the cross its banks lost.
-        vec2 wuv = (hit - uCsMin) * uCsInv;
-        float covL = mix(uCsOn, texture2D(uCsTex, wuv).r, clInLattice(wuv));
-        float wide = 1.0 - smoothstep(15.0, 60.0, uCsMpp);
-        float cs = clCov(clfbm(hit * uCsScale + uCsDrift), covL);
-        return 1.0 - min(covL * 1.4, 1.0) * cs * 0.5 * wide;
-      }`,
+    head: HYDRO_SCENE_SKY_GLSL,
+    reflectsSky: true,
     uniforms: {
       uCsTex: wxU.uWxTex, uCsMin: wxU.uWxMin, uCsInv: wxU.uWxInv, uCsOn: envU.uCloudS,
       uCsDrift: envU.uWind, uCsSkew: envU.uSunSkew, uCsDeckY: envU.uDeckY, uCsScale: envU.uCloudScale,
       uCsMpp: envU.uMpp,
+      uCsSunDisc: skyMat.uniforms.uSunDisc,
+      uCsLow: skyMat.uniforms.uLow,
+      uCsNight: skyMat.uniforms.uNight,
     },
   };
 }
@@ -4547,49 +4539,6 @@ function solarAngles(lat: number, lon: number, when: Date): { alt: number; az: n
   const az = Math.atan2(-Math.sin(ha), Math.tan(dec) * Math.cos(la) - Math.sin(la) * Math.cos(ha));
   return { alt, az };
 }
-/**
- * ONE CLOUD FIELD, for the sky and for the ground it shades.
- *
- * There were two. The sky drew an fBm deck in five octaves on a camera-relative
- * plane; the terrain multiplied a DIFFERENT fBm in four octaves, at a different
- * scale, through a different coverage curve, into its own fragment colour. They
- * shared the cover value and the wind vector, so they thickened and drifted
- * together and looked related — but the shadow crossing the road was never the
- * cloud you could see overhead, because neither field knew where the other one
- * was. It is the sort of mismatch nobody can point at and everybody feels.
- *
- * The deck is now anchored in the WORLD at a fixed altitude, so it has a
- * position both shaders can ask about: the sky intersects it along the view ray,
- * the ground walks up to it along the SUN ray, and both read the same function
- * at the same phase. What that buys, beyond the shadows being honest: the deck
- * parallaxes as you drive, and a shadow's edge arrives at the road at the moment
- * the cloud's edge crosses the sun.
- */
-const CLOUD_DECK_Y = 900;      // metres — high enough to be weather, low enough to move
-const CLOUD_SCALE = 0.0016;    // noise units per metre: patches about 600m across
-const CLOUD_GLSL = `
-  float clh21(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
-  float clvn(vec2 p){
-    vec2 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(clh21(i), clh21(i + vec2(1.0, 0.0)), f.x),
-               mix(clh21(i + vec2(0.0, 1.0)), clh21(i + vec2(1.0, 1.0)), f.x), f.y);
-  }
-  float clfbm(vec2 p){
-    float a = 0.5, s = 0.0;
-    for (int i = 0; i < 4; i++) { s += a * clvn(p); p *= 2.07; a *= 0.5; }
-    return s;
-  }
-  // How much of the sky this bit of deck fills. One curve, so a patch that
-  // reads as solid overhead is solid on the ground too.
-  float clCov(float n, float cover){
-    return smoothstep(0.60 - cover * 0.40, 0.90 - cover * 0.28, n);
-  }
-  // THE LATTICE HAS AN EDGE. The weather field is 48 cells of 256m centred on
-  // the truck — 12.3km — and its texture clamps to its edge texel, so a read
-  // past the edge is the edge's value for ever. 1 inside, 0 outside, blended
-  // over the last few percent so the hand-over is a fade and not a line.
-  float clInLattice(vec2 uv){ vec2 e = abs(uv - 0.5) * 2.0; return 1.0 - smoothstep(0.92, 1.0, max(e.x, e.y)); }`;
 const skyMat = new THREE.ShaderMaterial({
   side: THREE.BackSide,
   depthWrite: false,
@@ -8711,12 +8660,13 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
         cells.push([`${cx},${cz}`, arr.map((s) => { let i = ids.get(s); if (i === undefined) { i = ids.size; ids.set(s, i); } return i; })]);
       }
     }
-    const flat = new Float64Array(ids.size * 13);
+    const flat = new Float64Array(ids.size * 14);
     for (const [s, i] of ids) {
-      const o = i * 13;
+      const o = i * 14;
       flat[o] = s.ax; flat[o + 1] = s.az; flat[o + 2] = s.bx; flat[o + 3] = s.bz; flat[o + 4] = s.hw;
       flat[o + 5] = s.ya ?? NaN; flat[o + 6] = s.yb ?? NaN; flat[o + 7] = s.tk ? 1 : 0; flat[o + 8] = s.tn ? 1 : 0;
       flat[o + 9] = s.ca ?? NaN; flat[o + 10] = s.cb ?? NaN; flat[o + 11] = s.pc ?? NaN; flat[o + 12] = NaN;
+      flat[o + 13] = s.cv ?? NaN;
     }
     return { flat, cells };
   };
@@ -16991,6 +16941,9 @@ const Q_ROAD = 1, Q_TRACK = 0.55, Q_GROUND = 0.2;
 const GRID = 24;
 const gkey = (x: number, z: number): string => `${Math.floor(x / GRID)},${Math.floor(z / GRID)}`;
 interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number; tk?: boolean; tn?: boolean;
+  /** Signed channel curvature dθ/ds, using ax→bx as the tangent. Terrain and
+   *  hydro use it to agree on which bank is the depositional inside. */
+  cv?: number;
   /** The corridor's break lines for this strip, computed once — see stripBreakLines. */
   bl?: BreakLine[];
   /** How far out from the centreline this strip's corridor reaches: shoulder plus its widest toe. */
@@ -25011,6 +24964,30 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
    */
   const foamP = rapidDetail.foamPositive;
   const foamM = rapidDetail.foamNegative;
+  // The same signed heading-rate convention as hydro's profile spine. Keep
+  // it on the terrain channel so the large inside-bank point bar is shared
+  // ground, while the water shader supplies only its mineral skin.
+  const channelCurvature = new Float64Array(n);
+  for (let i = 1; i + 1 < n; i++) {
+    const ax = dense[i][0] - dense[i - 1][0];
+    const az = dense[i][1] - dense[i - 1][1];
+    const bx = dense[i + 1][0] - dense[i][0];
+    const bz = dense[i + 1][1] - dense[i][1];
+    const al = Math.hypot(ax, az), bl = Math.hypot(bx, bz);
+    if (al < 1e-6 || bl < 1e-6) continue;
+    channelCurvature[i] = ((ax / al) * (bz / bl) - (az / al) * (bx / bl))
+      / Math.max(1e-6, (al + bl) * .5);
+  }
+  if (n > 2) {
+    channelCurvature[0] = channelCurvature[1];
+    channelCurvature[n - 1] = channelCurvature[n - 2];
+    const unsmoothed = channelCurvature.slice();
+    for (let i = 1; i + 1 < n; i++) {
+      channelCurvature[i] = (
+        unsmoothed[i - 1] + unsmoothed[i] * 2 + unsmoothed[i + 1]
+      ) * .25;
+    }
+  }
   const verts: number[] = [], uvs: number[] = [], flow: number[] = [], foamA: number[] = [], wide: number[] = [];
   for (let i = 0; i < n - 1; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
@@ -25034,6 +25011,7 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
     wide.push(width, width, width, width, width, width);
     addSeg(channelGrid, { ax: x0, az: z0, bx: x1, bz: z1,
       hw: width / 2, ya: inv[i] - 0.15, yb: inv[i + 1] - 0.15,
+      cv: (channelCurvature[i] + channelCurvature[i + 1]) * .5,
       wid: key, nm: name, fs: (speed[i] + speed[i + 1]) * 0.5 });
     mapSeg(x0, z0, x1, z1, Math.max(width, 8), 'rgba(96,132,158,0.75)');
   }

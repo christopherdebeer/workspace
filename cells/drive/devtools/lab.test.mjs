@@ -117,6 +117,57 @@ for (const lab of LABS) {
           .test(hydro.status),
         hydro.status);
     }
+    if (lab.slug === 'flora') {
+      const flora = await d.page.evaluate(() => ({
+        sections: [...document.querySelectorAll('.lab-dials .sec .sh span:first-child')]
+          .map((s) => s.textContent),
+        modes: [...document.querySelectorAll('#representation option')].map((o) => o.value),
+        report: window.__floralab?.(),
+      }));
+      ok('flora: the full representation ladder is exposed',
+        flora.sections.includes('REPRESENTATION LADDER')
+          && ['AUTO LOD', 'FULL 3D', 'MID LOD', 'IMPOSTOR']
+            .every((mode) => flora.modes.includes(mode)),
+        flora);
+      ok('flora: its production impostor atlas is baked and bounded',
+        !!flora.report?.atlas && flora.report.atlasSlots > 0
+          && flora.report.atlasSlots <= flora.report.atlasCapacity,
+        flora.report);
+      ok('flora: the shipped pixel gates and close-detail band are reported',
+        flora.report?.fullPx === 58 && flora.report.cardPx === 26
+          && flora.report.closePx?.[0] === 64 && flora.report.closePx?.[1] === 128,
+        flora.report);
+
+      // Force one species so each rung is exercised by the SAME population,
+      // not by whatever share of the Cape guild happened to be tree-shaped.
+      await d.page.evaluate(() => {
+        const set = (id, value) => {
+          const el = document.getElementById(id);
+          el.value = value;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        set('species', 'broadleaf');
+        set('representation', 'MID LOD');
+      });
+      await d.page.waitForTimeout(500);
+      const mid = await d.page.evaluate(() => window.__floralab?.());
+      ok('flora: forced mid LOD draws the derived geometry and nothing else',
+        mid?.mode === 'MID LOD' && mid.mid > 0 && mid.full === 0 && mid.impostor === 0
+          && mid.tris > mid.mid * 4,
+        mid);
+
+      await d.page.evaluate(() => {
+        const el = document.getElementById('representation');
+        el.value = 'IMPOSTOR';
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await d.page.waitForTimeout(500);
+      const card = await d.page.evaluate(() => window.__floralab?.());
+      ok('flora: forced impostors use the four-triangle production card',
+        card?.mode === 'IMPOSTOR' && card.impostor > 0 && card.full === 0 && card.mid === 0
+          && card.tris === card.impostor * 4,
+        card);
+    }
   }
   errors.push(...d.errors);
   await d.close();
