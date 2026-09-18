@@ -17,4 +17,9 @@
 # is visible while it exists, rather than committed by a tidy-up.
 client/__rev-main.ts
 client/__*-rev.ts
+# The same thing for a PROBE shim: a copy of main.ts with extra window.__*
+# appended, so a measurement can reach a module-scope binding no probe
+# exposes. Same two rules — it lives in client/ so the relative imports
+# resolve, and it is deleted the moment the run ends.
+client/.xsec.ts
 .DS_Store
