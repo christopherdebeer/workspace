@@ -15,12 +15,18 @@ import { guildAt, type Guild } from './guild';
 import { guildKind } from './guild';
 import { ecoBiomeName, type EcoHit } from './eco';
 import {
-  EZ_FAMILIES, EZ_M_PER_SCALE, ezCrownReach, ezHabitatsForSite, ezLookU, ezMaterial, ezPalette,
-  ezPhenotypeForSite, ezPickVariant, ezVariantFor, ezVariants, type EzFamily,
+  EZ_FAMILIES, EZ_MERGE_PX, EZ_M_PER_SCALE, ezCrownReach, ezHabitatsForSite, ezLookU, ezMaterial,
+  ezPalette, ezPhenotypeForSite, ezPickVariant, ezVariantFor, ezVariants, type EzFamily,
 } from './flora-ez';
 import { seedAt, type CultureEnv } from './culture';
 import { coastKm } from './coast';
 import { grainFx, grainU } from './grain';
+import {
+  IMP_ATLAS_SLOTS, bakeImpAtlasSlot, clearImpAtlas, makeImpAtlasTarget, type ImpAtlasSlot,
+} from './tree-atlas';
+import {
+  IMPOSTOR_FORMS, IMPOSTOR_WIDTH, impostorFormIndex, impostorGeometry, impostorMaterial,
+} from './tree-impostor';
 
 /**
  * ── THE FLORA LAB: WHAT WOULD GROW HERE, AND WHAT IT LOOKS LIKE ──
@@ -180,6 +186,24 @@ const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > 
  *  written to take. */
 const coverOf = (sel: string): number | null => (sel === 'none' ? null : parseInt(sel, 10));
 const isEzFamily = (k: VegKind): k is EzFamily => (EZ_FAMILIES as string[]).includes(k);
+type TreeRepresentation = 'AUTO LOD' | 'FULL 3D' | 'MID LOD' | 'IMPOSTOR';
+
+interface FloraLabLodReport {
+  mode: TreeRepresentation;
+  full: number;
+  mid: number;
+  impostor: number;
+  other: number;
+  tris: number;
+  pxMin: number;
+  pxMax: number;
+  fullPx: number;
+  cardPx: number;
+  closePx: readonly [number, number];
+  atlas: boolean;
+  atlasSlots: number;
+  atlasCapacity: number;
+}
 
 /**
  * ── THE STAND: THE PLANTS THEMSELVES, NOT A MODEL OF THEM ──
@@ -197,15 +221,18 @@ const isEzFamily = (k: VegKind): k is EzFamily => (EZ_FAMILIES as string[]).incl
  * is on screen is what the truck drives past.
  */
 function makeStand(mount: HTMLElement): {
-  render(o: StandOpts): void; resize(): void; dispose(): void;
+  render(o: StandOpts): void; resize(): void; report(): FloraLabLodReport; dispose(): void;
 } {
   const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
   renderer.setPixelRatio(1);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   mount.appendChild(renderer.domElement);
+  const lodReadout = document.createElement('div');
+  lodReadout.className = 'lod-readout';
+  mount.appendChild(lodReadout);
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(42, 1, 0.4, 900);
+  const camera = new THREE.PerspectiveCamera(42, 1, 0.4, 2400);
 
   // ── LIT LIKE THE WORLD, OR THE TONE MEANS NOTHING ──
   // The baked facet tone and the grain are both multiplied into diffuse before
@@ -287,10 +314,10 @@ function makeStand(mount: HTMLElement): {
    * nobody plays — which it did, silently, for as long as the atlas has
    * existed.
    *
-   * One InstancedMesh per variant, at the stand's own cap. The world keeps two
-   * (a shadow-casting tier and its twin) because an instanced mesh is not
-   * culled per instance and a distant tree's shadow lands outside the map;
-   * there is no distance here worth the split.
+   * Two InstancedMeshes per variant: the full skeleton and its derived mid
+   * rung. Both use the SAME material and attributes as the world; only their
+   * geometry bill differs. The world doubles each again for its shadow-range
+   * split, which this compact stand does not need.
    */
   const ezBendU = { value: 0 };
   const ezWindU = { uTime: { value: 0 }, uGust: { value: new THREE.Vector2() }, uWindK: { value: 0.085 } };
@@ -299,21 +326,88 @@ function makeStand(mount: HTMLElement): {
   // The world chains terrainFx in here as well — cloud shadow and weather
   // tint — which the lab has no sky for. The grain is the same call it makes.
   grainFx(ezMat, 'lab-ez', 0.95, 2.2);
-  const ezTiers = {} as Record<EzFamily, THREE.InstancedMesh[]>;
+  interface LabEzTier {
+    full: THREE.InstancedMesh;
+    mid: THREE.InstancedMesh;
+    fullTris: number;
+    midTris: number;
+  }
+  const ezTiers = {} as Record<EzFamily, LabEzTier[]>;
   for (const fam of EZ_FAMILIES) {
     ezTiers[fam] = ezVariants(fam).map((v) => {
-      const m = new THREE.InstancedMesh(v.geometry, ezMat, CAP);
-      m.count = 0;
-      m.frustumCulled = false;
-      m.castShadow = true;
-      m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(CAP * 3), 3);
-      scene.add(m);
-      return m;
+      const mesh = (geometry: THREE.BufferGeometry): THREE.InstancedMesh => {
+        const m = new THREE.InstancedMesh(geometry, ezMat, CAP);
+        m.count = 0;
+        m.frustumCulled = false;
+        m.castShadow = true;
+        m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(CAP * 3), 3);
+        scene.add(m);
+        return m;
+      };
+      return { full: mesh(v.geometry), mid: mesh(v.mid), fullTris: v.tris, midTris: v.midTris };
     });
   }
 
+  /**
+   * ── THE FAR RUNG IS THE PRODUCTION IMPOSTOR, INCLUDING ITS ATLAS ──
+   *
+   * The lab used to stop at the skeleton. The world now photographs each
+   * selected variant into a compact directional atlas and gives the card the
+   * same wind, bark, crown exposure and rounded-lighting shader as the far
+   * tier. Bake the whole current vocabulary once here: it is small enough for
+   * the production target (the capacity assertion lives in imp-atlas.test)
+   * and means FULL/MID/CARD are three renderings of the same tree.
+   */
+  let impAtlas: THREE.WebGLRenderTarget | null = null;
+  const impSlots = new Map<string, ImpAtlasSlot>();
+  const impFamilySlot = new Map<EzFamily, ImpAtlasSlot>();
+  try {
+    impAtlas = makeImpAtlasTarget();
+    clearImpAtlas(renderer, impAtlas);
+    let slot = 0;
+    for (const fam of EZ_FAMILIES) {
+      const variants = ezVariants(fam);
+      for (let vi = 0; vi < variants.length && slot < IMP_ATLAS_SLOTS; vi++) {
+        const rec = bakeImpAtlasSlot(renderer, impAtlas, variants[vi].geometry, slot++);
+        impSlots.set(`${fam}:${vi}`, rec);
+        if (!impFamilySlot.has(fam)) impFamilySlot.set(fam, rec);
+      }
+    }
+  } catch {
+    impAtlas?.dispose();
+    impAtlas = null;
+    impSlots.clear();
+    impFamilySlot.clear();
+  }
+  const impTopU = { value: 0 };
+  const impFadeU = { value: new THREE.Vector2(1e6, 2e6) };
+  const impGroundU = { value: new THREE.Color(0x5d6a44) };
+  const impInkU = { value: 0 };
+  const impMat = impostorMaterial({
+    wind: ezWindU, top: impTopU, fade: impFadeU, ground: impGroundU,
+    atlas: { value: impAtlas?.texture ?? null },
+    bark: { value: new THREE.Color(0x4a3826) }, ink: impInkU,
+  });
+  const impostors = new THREE.InstancedMesh(impostorGeometry(!!impAtlas), impMat, CAP);
+  impostors.count = 0;
+  impostors.frustumCulled = false;
+  impostors.castShadow = false;
+  impostors.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(CAP * 3), 3);
+  for (const name of ['aForm', 'aYaw']) {
+    impostors.geometry.setAttribute(name,
+      new THREE.InstancedBufferAttribute(new Float32Array(CAP), 1));
+  }
+  scene.add(impostors);
+
   const dummy = new THREE.Object3D();
+  const impAim = new THREE.Vector3();
   let spin = 0, last = performance.now();
+  let lastReport: FloraLabLodReport = {
+    mode: 'AUTO LOD', full: 0, mid: 0, impostor: 0, other: 0, tris: 0,
+    pxMin: 0, pxMax: 0, fullPx: EZ_MERGE_PX[1], cardPx: EZ_MERGE_PX[0],
+    closePx: [64, 128], atlas: !!impAtlas, atlasSlots: impSlots.size,
+    atlasCapacity: IMP_ATLAS_SLOTS,
+  };
 
   const resize = (): void => {
     const w = Math.max(120, mount.clientWidth), h = Math.max(120, mount.clientHeight);
@@ -327,8 +421,16 @@ function makeStand(mount: HTMLElement): {
     if (o.orbit) spin += (now - last) * 0.00016;
     last = now;
 
+    const a = spin + o.turn;
+    camera.position.set(Math.sin(a) * o.dist, o.eye, Math.cos(a) * o.dist);
+    camera.lookAt(0, o.eye * 0.32, 0);
+    camera.updateMatrixWorld();
+    camera.getWorldDirection(impAim);
+    impTopU.value = clamp((Math.abs(impAim.y) - 0.35) / 0.45, 0, 1);
+
     scene.background = new THREE.Color(o.sky);
     (ground.material as THREE.MeshLambertMaterial).color.set(o.groundCol);
+    impGroundU.value.set(o.groundCol);
     ground.scale.setScalar(o.patch * 1.9);
     ground.visible = o.ground;
 
@@ -344,6 +446,8 @@ function makeStand(mount: HTMLElement): {
     ezLookU.uEzEdge.value = o.cardEdge;
     ezLookU.uEzCut.value = o.leafCut;
     ezLookU.uEzGrain.value = o.leafGrain;
+    ezLookU.uEzPxH.value = o.artRows;
+    impInkU.value = o.impInk;
     ezWindU.uTime.value = now / 1000;
     // EXACTLY THE WORLD'S ARITHMETIC (see the wind step in main.ts): the gust
     // is metres of tip travel per metre of blade, clamped, and the trees take
@@ -357,7 +461,19 @@ function makeStand(mount: HTMLElement): {
     }
 
     for (const k of Object.keys(meshes) as VegKind[]) meshes[k].count = 0;
-    for (const fam of EZ_FAMILIES) for (const m of ezTiers[fam]) m.count = 0;
+    for (const fam of EZ_FAMILIES) {
+      for (const tier of ezTiers[fam]) {
+        tier.full.count = 0;
+        tier.mid.count = 0;
+      }
+    }
+    impostors.count = 0;
+    const formAttr = impostors.geometry.getAttribute('aForm') as THREE.InstancedBufferAttribute;
+    const yawAttr = impostors.geometry.getAttribute('aYaw') as THREE.InstancedBufferAttribute;
+    const fullPx = Math.max(o.cardPx, o.fullPx);
+    const cardPx = Math.min(o.cardPx, fullPx);
+    let nFull = 0, nMid = 0, nImp = 0, nOther = 0, treeTris = 0;
+    let pxMin = Infinity, pxMax = 0;
     let nTrunk = 0;
     for (const v of o.sites) {
       if (o.ez && isEzFamily(v.k)) {
@@ -367,22 +483,70 @@ function makeStand(mount: HTMLElement): {
         // the bake stands every tree on y=0 with its wood topping out at y=1,
         // and the crown sticks out above it.
         const fam = v.k;
-        const tier = ezTiers[fam][o.ezPick.get(v) ?? 0];
-        if (!tier || tier.count >= CAP) continue;
+        const vi = o.ezPick.get(v) ?? 0;
+        const tier = ezTiers[fam][vi];
+        const variant = ezVariants(fam)[vi];
+        if (!tier || !variant) continue;
         const formSy = clamp(1 + ((v.sy ?? 1) - 1) * o.formScale, 0.18, 4.5);
         const formSw = clamp(1 + ((v.sw ?? 1) - 1) * o.formScale, 0.18, 4.5);
-        const H = (EZ_M_PER_SCALE[fam] * v.s * formSy * o.sizeScale) / (1 + ezCrownReach(fam));
-        const i = tier.count++;
-        dummy.position.set(v.x, 0, v.z);
-        dummy.rotation.set((v.tl ?? 0) * o.formScale, v.rot, 0);
-        dummy.scale.set(H * formSw, H, H * formSw);
-        dummy.updateMatrix();
-        tier.setMatrixAt(i, dummy.matrix);
-        tier.instanceColor!.setXYZ(i, v.c.r, v.c.g, v.c.b);
+        const tall = EZ_M_PER_SCALE[fam] * v.s * formSy * o.sizeScale;
+        const H = tall / (1 + ezCrownReach(fam));
+        // Mirrors `ezRungOf`: art pixels are a property of the tree and the
+        // horizontal distance from the render focus, not of its family or the
+        // order in which the stand happened to be traversed.
+        const distance = Math.max(1, Math.hypot(v.x - camera.position.x, v.z - camera.position.z));
+        const px = tall * o.artRows * camera.projectionMatrix.elements[5] * 0.5 / distance;
+        pxMin = Math.min(pxMin, px);
+        pxMax = Math.max(pxMax, px);
+        const rep: Exclude<TreeRepresentation, 'AUTO LOD'> = o.representation === 'AUTO LOD'
+          ? (px >= fullPx ? 'FULL 3D' : px >= cardPx ? 'MID LOD' : 'IMPOSTOR')
+          : o.representation;
+
+        if (rep === 'IMPOSTOR') {
+          if (impostors.count >= CAP) continue;
+          const i = impostors.count++;
+          const slot = impAtlas
+            ? (impSlots.get(`${fam}:${vi}`) ?? impFamilySlot.get(fam))
+            : undefined;
+          const form = slot ? slot.slot : impostorFormIndex(variant.form);
+          const wide = slot
+            ? 2 * slot.hx * tall * formSw
+            : tall * IMPOSTOR_WIDTH[IMPOSTOR_FORMS[form]] * formSw;
+          const high = slot ? 2 * slot.hy * tall : tall;
+          const baseY = slot ? slot.cy * tall : 0;
+          dummy.position.set(v.x, baseY, v.z);
+          dummy.rotation.set(0, 0, 0);
+          dummy.scale.set(wide, high, wide);
+          dummy.updateMatrix();
+          impostors.setMatrixAt(i, dummy.matrix);
+          impostors.instanceColor!.setXYZ(i, v.c.r, v.c.g, v.c.b);
+          formAttr.setX(i, form);
+          yawAttr.setX(i, v.rot);
+          nImp++;
+          treeTris += 4;
+        } else {
+          const m = rep === 'MID LOD' ? tier.mid : tier.full;
+          if (m.count >= CAP) continue;
+          const i = m.count++;
+          dummy.position.set(v.x, 0, v.z);
+          dummy.rotation.set((v.tl ?? 0) * o.formScale, v.rot, 0);
+          dummy.scale.set(H * formSw, H, H * formSw);
+          dummy.updateMatrix();
+          m.setMatrixAt(i, dummy.matrix);
+          m.instanceColor!.setXYZ(i, v.c.r, v.c.g, v.c.b);
+          if (rep === 'MID LOD') {
+            nMid++;
+            treeTris += tier.midTris;
+          } else {
+            nFull++;
+            treeTris += tier.fullTris;
+          }
+        }
         continue;
       }
       const m = meshes[v.k];
       if (!m || m.count >= CAP) continue;
+      nOther++;
       const i = m.count++;
       // EXACTLY the composition the game uses — see the veg refill in main.
       dummy.position.set(v.x, v.h, v.z);
@@ -407,19 +571,38 @@ function makeStand(mount: HTMLElement): {
     trunks.count = nTrunk;
     trunks.instanceMatrix.needsUpdate = true;
     for (const fam of EZ_FAMILIES) {
-      for (const m of ezTiers[fam]) {
-        m.instanceMatrix.needsUpdate = true;
-        m.instanceColor!.needsUpdate = true;
+      for (const tier of ezTiers[fam]) {
+        for (const m of [tier.full, tier.mid]) {
+          m.instanceMatrix.needsUpdate = true;
+          m.instanceColor!.needsUpdate = true;
+        }
       }
     }
+    impostors.instanceMatrix.needsUpdate = true;
+    impostors.instanceColor!.needsUpdate = true;
+    formAttr.needsUpdate = true;
+    yawAttr.needsUpdate = true;
 
-    const a = spin + o.turn;
-    camera.position.set(Math.sin(a) * o.dist, o.eye, Math.cos(a) * o.dist);
-    camera.lookAt(0, o.eye * 0.32, 0);
+    lastReport = {
+      mode: o.representation, full: nFull, mid: nMid, impostor: nImp, other: nOther,
+      tris: treeTris, pxMin: Number.isFinite(pxMin) ? pxMin : 0, pxMax,
+      fullPx, cardPx, closePx: [64, 128], atlas: !!impAtlas,
+      atlasSlots: impSlots.size, atlasCapacity: IMP_ATLAS_SLOTS,
+    };
+    lodReadout.textContent =
+      `${o.representation} · FULL ${nFull} · MID ${nMid} · CARD ${nImp}`
+      + ` · ${treeTris.toLocaleString()} tris\n`
+      + `TREE ${lastReport.pxMin.toFixed(1)}–${pxMax.toFixed(1)} px · FULL ≥${fullPx.toFixed(0)}`
+      + ` · MID ${cardPx.toFixed(0)}–${fullPx.toFixed(0)} · CARD <${cardPx.toFixed(0)}\n`
+      + `CUT / LEAF DETAIL 64→128 px · ATLAS ${impSlots.size}/${IMP_ATLAS_SLOTS}`
+      + ` · AUTO = PIXEL PREVIEW; WORLD CARD IS ALSO BUDGETED`;
     renderer.render(scene, camera);
   };
 
-  return { render, resize, dispose: () => renderer.dispose() };
+  return {
+    render, resize, report: () => ({ ...lastReport }),
+    dispose: () => { impAtlas?.dispose(); renderer.dispose(); },
+  };
 }
 
 interface StandOpts {
@@ -431,6 +614,8 @@ interface StandOpts {
    *  because that is where the guild's form preference and the district and
    *  stand seeds are known. */
   ez: boolean; ezPick: Map<VegSite, number>;
+  representation: TreeRepresentation;
+  fullPx: number; cardPx: number; artRows: number; impInk: number;
   sizeScale: number; formScale: number; bend: number;
   bark: number; leaf: number; bump: number; cardEdge: number;
   leafCut: number; leafGrain: number;
@@ -451,6 +636,9 @@ export async function startFloraLab(): Promise<void> {
     @media (max-width: 720px) { #panes { inset: 0 0 132px 0; } }
     #stand { flex: 1 1 62%; min-height: 200px; border-bottom: 1px solid #24343a; position: relative; }
     #stand canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+    .lod-readout { position: absolute; left: 10px; top: 10px; padding: 6px 8px;
+      white-space: pre; pointer-events: none; color: #b9c9cb; background: rgba(8,14,16,.82);
+      border: 1px solid #24343a; letter-spacing: .6px; }
     #ladderWrap { flex: 0 0 38%; display: grid; place-items: center; overflow: hidden; }
     #ladder { max-width: 98%; max-height: 100%; }
     /* Clear of the dials, and it moves when they fold — see paintFold. */
@@ -516,9 +704,25 @@ export async function startFloraLab(): Promise<void> {
         options: ['none', '10', '20', '30', '40', '50', '60', '70', '90', '95', '100'] },
       { id: 'habitat', label: 'HABITAT DENSITY', kind: 'range', min: 0.05, max: 1, step: 0.05, value: 0.65 },
       { id: 'top', label: 'COLUMN TOP m', kind: 'range', min: 800, max: 6000, step: 100, value: 4000 },
-      // ── THE SKELETONS, AND THE TREE RACK'S OWN LEVERS ──
-      { id: 'sEz', label: 'THE SKELETONS', kind: 'section' },
+      // ── THE WHOLE REPRESENTATION LADDER ──
+      //
+      // AUTO is an inspection path: it uses the same projected-art-pixel
+      // quantity and full/mid threshold as the world, then puts the card below
+      // the crown-merge floor so all three representations can be crossed by
+      // one CAMERA move. Production additionally gives cards to trees rejected
+      // by triangle-budget admission, which the readout says explicitly.
+      { id: 'sEz', label: 'REPRESENTATION LADDER', kind: 'section' },
       { id: 'ez', label: 'EZ SKELETONS', kind: 'toggle', value: true },
+      { id: 'representation', label: 'REPRESENTATION', kind: 'select', value: 'AUTO LOD',
+        options: ['AUTO LOD', 'FULL 3D', 'MID LOD', 'IMPOSTOR'] },
+      { id: 'fullPx', label: 'FULL ABOVE px', kind: 'range', min: 1, max: 160, step: 1,
+        value: EZ_MERGE_PX[1] },
+      { id: 'cardPx', label: 'CARD BELOW px', kind: 'range', min: 1, max: 80, step: 1,
+        value: EZ_MERGE_PX[0] },
+      { id: 'artRows', label: 'ART FRAME rows', kind: 'range', min: 160, max: 640, step: 16,
+        value: 320 },
+      { id: 'impInk', label: 'CARD INK DEBUG', kind: 'range', min: 0, max: 1, step: 0.05,
+        value: 0 },
       // The two-scale variant choice against the old per-position hash — the
       // one that made two trees standing together an oak and a leggy aspen.
       { id: 'ezstand', label: 'PER STAND', kind: 'toggle', value: true },
@@ -548,7 +752,7 @@ export async function startFloraLab(): Promise<void> {
       { id: 'patch', label: 'PATCH m', kind: 'range', min: 6, max: 140, step: 2, value: 46 },
       { id: 'seed', label: 'SEED', kind: 'range', min: 1, max: 999, step: 1, value: 7 },
       { id: 'stone', label: 'BEDROCK', kind: 'select', value: 'auto', options: ['auto', ...STONE_NAMES] },
-      { id: 'dist', label: 'CAMERA m', kind: 'range', min: 6, max: 220, step: 2, value: 86 },
+      { id: 'dist', label: 'CAMERA m', kind: 'range', min: 6, max: 1200, step: 5, value: 86 },
       { id: 'eye', label: 'EYE m', kind: 'range', min: 0.6, max: 60, step: 0.4, value: 21 },
       { id: 'turn', label: 'BEARING', kind: 'range', min: 0, max: 6.28, step: 0.02, value: 0.6 },
       { id: 'orbit', label: 'ORBIT', kind: 'toggle', value: true },
@@ -596,6 +800,8 @@ export async function startFloraLab(): Promise<void> {
   });
 
   const stand = makeStand(standEl);
+  (window as unknown as { __floralab?: () => FloraLabLodReport }).__floralab =
+    () => stand.report();
   const ctx = cv.getContext('2d')!;
   let sites: VegSite[] = [];
   let census: Array<[VegKind, number]> = [];
@@ -941,6 +1147,11 @@ export async function startFloraLab(): Promise<void> {
     sites,
     ez: dials.bool('ez'),
     ezPick,
+    representation: dials.str('representation') as TreeRepresentation,
+    fullPx: dials.num('fullPx'),
+    cardPx: dials.num('cardPx'),
+    artRows: dials.num('artRows'),
+    impInk: dials.num('impInk'),
     sizeScale: dials.num('treeSize'),
     formScale: dials.num('treeForm'),
     bend: dials.num('treeBend'),

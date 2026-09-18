@@ -74,7 +74,7 @@ export const LABS: readonly LabEntry[] = [
   {
     slug: 'flora',
     label: 'FLORA',
-    note: 'What grows at a real place and what it looks like: the site sampler, the ecoregion, the guild and the baked skeletons the world actually draws — with the climate ladder beside them as the A/B.',
+    note: 'What grows at a real place and how its tree representation changes: runtime impostor atlas, mid LOD and full 3D skeleton with projected-pixel handoffs, leaf cut-outs and bespoke bark/crown shading.',
     start: () => import('./flora-lab').then((m) => m.startFloraLab()),
   },
   {
