@@ -253,6 +253,12 @@ export const SWITCHES = [
     note: 'the share of a leaf card, a pad or a bush cut into leaf clusters up close (trees over ~64 art px, bushes inside ~36 m); ezcut=0 leaves them the plates they were' },
   { id: 'ezgrain', kind: 'number', marks: ['look'], fallback: '0.9',
     note: 'leaf-scale light and dark on foliage up close, and the per-leaf facet it bends the normal by; ezgrain=0 turns it off' },
+  // Declared here for a read that arrived from the cell without its row (the
+  // rain curtains in the composite, another author's): the typed reader is
+  // the whole reason a switch cannot be read undeclared, and the tree did not
+  // type-check until this line.
+  { id: 'raincurtain', kind: 'toggle', marks: ['look'], fallback: 'on',
+    note: 'the composite draws rain as bounded curtains rooted in the weather field\'s rain channel, drifting with the wind; raincurtain=0 leaves the rain to the wet road and the drops' },
   { id: 'imu', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'imu=0 drives real GPS without the gyro' },
   { id: 'railgrade', kind: 'toggle', marks: ['legacy'], fallback: 'on',

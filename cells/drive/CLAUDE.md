@@ -15659,7 +15659,10 @@ zoom 0.7, `__chartlens({tilt})` at 89.5 / 70 / 45 / 25 / 10 / 0): camera
 distance 122–132 m throughout, no page errors, and `d.page.screenshot` with
 a 240 s timeout — `d.shot()`'s default times out on a DRAWN chart. The
 frames are the judgement and were sent to the seat; the lens blend was made
-after them and the 25 / 10 / 0 frames re-taken with it.
+after them and the 25 / 10 / 0 frames re-taken with it: at 25° the frame is
+sharp with soft edges, at 10° the rig and the road are in focus over a mildly
+soft foreground, and at 0° the near grass came back where the first set had a
+wash from the treeline down.
 
 **NOT VERIFIED ON A DEVICE, AND NOT DEPLOYED:** the seat asked for local
 iteration on screenshots with no deploy and no pull until it says so, and
@@ -15699,7 +15702,10 @@ at 4× **39.4**, and both pass — *coverage follows the law at every radius,
 0 of 116 short* — with the tuft fullness flat at ×1.00, so the compensation
 valve never opens. Slots 224,096 → **264,096, +18%**, all of it in the new
 band. Past 14 m nothing moves: the law, the bands and the fade out to 232 m
-are exactly what shipped.
+are exactly what shipped. From the cab at Camps Bay (`?swardnear=1/2/3/4`,
+one boot each, HUD off, noon): the foreground goes from scattered tufts at
+1× to a thick meadow at 3× and thicker again at 4×, and the field past the
+radius reads the same in all four frames by eye.
 
 **WHY NOT A STEEPER LAW:** raising `SWARD_SITES` and pulling `SWARD_NEAR` in
 thins the whole field past 14 m by the same factor, because the law is one
@@ -15745,10 +15751,36 @@ errors — which is the GLSL link check, since the lab DRAWS both materials):
 the Yosemite crowns go from flat green cards on sticks to porous spotted
 masses, the columnar aspens most of all; the Cape's fynbos, which at 14 m had
 filled the frame with hard dark facets, reads as blotchy leaf-mass shading
-with holes through to the bush behind. Then from the seat at `at-campsbay`
-and `at-yosemite`, chase and cab, with `?ezcut=0&ezgrain=0` as the control.
+with holes through to the bush behind. Then from the seat, one boot a leg
+with `?ezcut=0&ezgrain=0` as the control: at `at-campsbay` the sclerophyll
+crown beside the cab goes from solid green cards to leaf masses with holes
+through them, and the fynbos on the chase frame's flanks loses its facets.
+**At `at-yosemite`'s spawn the pair is IDENTICAL, and that is the gate**: no
+tree stands inside 128 art pixels there (a 10.5 m conifer has to be within
+25 m), so nothing was cut — the null the gate predicts, not the term
+failing. Photograph a stand from inside it or the frames say nothing.
 
 **NOT MEASURED: the fragment cost on a device.** A `discard` inside 128 px
 costs early-z for the near crowns' fragments only, and the grain is one
 noise and two derivatives on those same fragments; the harness cannot price
 it. The next telemetry paste from a stand of near trees is the verification.
+
+### …and the pull after it was half landed, for the second time
+
+Pulled the cell after the three units above (the seat approved the push and
+asked for a pull; no deploy). The cell held another agent's sky and rain
+work on top of `b982807` — rain curtains in the composite, weather terms in
+`terrainFx`, `fetchLiveWeather`/`stepWeather` reading an advected travel,
+`advectX/advectZ` on `WxTargets` — and none of the three units, so four of
+the five files here were the cell simply BEHIND (empty diff against the
+commit before mine, restored) and `main.ts` was both: their 160 insertions
+re-applied over `275bba7` as a three-way patch, clean, committed verbatim as
+NOT MINE (`f041b59`).
+
+**AND IT DID NOT TYPE-CHECK, exactly as the polish-pass pull did not.**
+`main.ts` reads `qs('raincurtain')` and the cell's `switches.ts` has no
+such row, so the typed reader refused it — which is the reader doing its
+one job. The row is declared in the commit after theirs, so their diff is
+theirs exactly and the tree is green. **Read `tsc` before reading a pulled
+diff**: a snapshot of another editor is not a release, and the second pull
+is what completes the first.
