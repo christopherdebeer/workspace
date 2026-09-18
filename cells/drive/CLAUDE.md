@@ -16161,6 +16161,15 @@ this one: **the herd has not been drawn since it landed.** Renamed to
 `wildPatch` (`customProgramCacheKey` bumped to `wildlife-3`); items 1 and 2
 remain true underneath it and are what the seat will see next.
 
+**Verified after the rename** (`fdefb0b`): the same noon frame on the Senqu
+highland comes back `errors []` with four animals in the frustum
+(`herdshot4-new.png`, specks at 96 m); teleported to 28 m facing the nearest
+(`herdclose-new-with.png`) a deer stands on the plain in front of the truck
+with two more on the ridge, and hiding the `critters` layer changes 6% of
+the frame's pixels. `critter-hold.test.mjs` is green on the fixed build (260
+in-frame animal-ticks, 0 jumps, 0 page errors) and `wildlife-wire.test.ts`
+passes.
+
 **Never read `errors []` from a `nodraw` run as "the shaders compile."** It
 means nothing was asked to. The GLSL sniffer only speaks on a drawn frame,
 and a shader that fails to link fails silently everywhere else — no
