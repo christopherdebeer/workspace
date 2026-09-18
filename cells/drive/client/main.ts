@@ -60,6 +60,7 @@ import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipme
 import { createRigModel, OVERLAND, RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
 import { createWireMaterialPolicy } from './wire-material';
 import { createWildlifeWire } from './wildlife-wire';
+import { createWildlife } from './wildlife';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -16727,69 +16728,66 @@ function stepVegRefresh(): boolean {
 }
 
 // ── wildlife ───────────────────────────────────────────────────────
-// Two populations, both boids-lite and both aware of the truck. They live in
-// a box that follows the car and wraps, like the rain — so the world always
-// has something alive in it without simulating a planet.
-// A BOX BIGGER THAN SIGHT. At 260m the wrap edge stood 130m from the camera —
-// inside the range where a bird is several pixels and plainly there. Doubling
-// it moves every arrival and departure out to where a skein is a mark on the
-// sky, and the in-view rule in stepPop keeps the ones that matter.
-const BIRD_N = 52, BIRD_BOX = 820;
-/**
- * THREE BIRDS, not one. The sky had a single dark chevron repeated
- * forty-six times, at one size, in one flock, all turning together.
- *
- * A bird two hundred metres up is a SILHOUETTE and nothing else, so the
- * species are told apart by proportion rather than by detail — the same
- * three-sided cone with its span and length moved, which costs one extra
- * draw call each and reads instantly against a bright sky:
- *
- *   GULL    broad and long-winged, the one that soars
- *   CROW    compact and stubby, the one that flaps
- *   RAPTOR  narrow and long, the one that hangs
- *
- * They also fly at different heights, which does as much work as the shapes:
- * a raptor at sixty metres and crows at twenty-two are two different skies.
- */
-const birdShape = (span: number, len: number): THREE.BufferGeometry => {
-  const g = new THREE.ConeGeometry(span, len, 3);
-  g.rotateX(-Math.PI / 2);
-  return g;
-};
-const BIRD_GEO = [birdShape(0.62, 1.5), birdShape(0.42, 1.1), birdShape(0.5, 2.2)];
-/** Cruising height per species — the shapes alone would still read as one
- *  flock at one altitude, which is most of what "all the same" looked like. */
-const BIRD_ALT = [34, 22, 58];
-/** Who flies where, weighted per biome like the herds: gulls and crows over
- *  temperate country, raptors over the desert, almost no gulls inland. */
-const BIRD_MIX: Record<string, number[]> = {
-  arid: [1, 3, 6], tropical: [3, 6, 2], temperate: [5, 5, 2], boreal: [2, 7, 2], alpine: [1, 4, 6],
-};
-/** How many separate skeins share the sky. Four, because a bird flock is
- *  smaller and more numerous than a herd. */
-const BIRD_GROUPS = 4;
-let birdSpecies: number[] = [];
-// White base, so the per-instance tint IS the colour: a crow is not a pale gull
-// with a filter over it, and one flat 0x2a2f36 for every bird in the world was
-// the reason the sky read as wallpaper.
-const birdMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
-const birdMeshes = BIRD_GEO.map((g) => {
-  const m = new THREE.InstancedMesh(g, birdMat, BIRD_N);
-  m.name = 'birds';
-  m.frustumCulled = false;
-  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(BIRD_N * 3).fill(1), 3);
-  m.instanceColor.setUsage(THREE.DynamicDrawUsage);
-  scene.add(m);
-  return m;
+// Wildlife queries select a reachable support, not the highest deck. These
+// callbacks are lazy: state and streamed substrate initialise later below.
+const wildlife = createWildlife({
+  scene, camera, truck: () => state, worldKey: () => `${origin.lat.toFixed(5)},${origin.lon.toFixed(5)}`,
+  pixelHeight: () => PIX_H, shadow: m => shadowy(m, true, false),
+  ground: (x,z) => hasHeight(x,z) ? groundAt(x,z) : null,
+  rain: (x,z) => wxAt(wxField,x,z).rain,
+  clear: (ax,az,bx,bz,y) => {
+    const steps=Math.max(1,Math.ceil(Math.hypot(bx-ax,bz-az)/(GRID/2)));
+    const visited=new Set<Seg[]>();
+    for(let i=0;i<=steps;i++){
+      const segs=wallGrid.get(gkey(ax+(bx-ax)*i/steps,az+(bz-az)*i/steps));
+      if(!segs||visited.has(segs))continue;visited.add(segs);
+      for(const w of segs){
+        if(w.ya!==undefined&&(y>w.ya+.1||(w.sl&&y<w.ya-1.8)))continue;
+        const dx=bx-ax,dz=bz-az,wx=w.bx-w.ax,wz=w.bz-w.az,den=dx*wz-dz*wx;
+        if(Math.abs(den)<1e-9)continue;
+        const t=((w.ax-ax)*wz-(w.az-az)*wx)/den,u=((w.ax-ax)*dz-(w.az-az)*dx)/den;
+        if(t>=0&&t<=1&&u>=0&&u<=1)return false;
+      }
+    }
+    return true;
+  },
+  species: (air,x,z,r) => climPickRow(air ? {
+    arid:[1,3,6],tropical:[3,6,2],temperate:[5,5,2],boreal:[2,7,2],alpine:[1,4,6],
+  } : {
+    arid:[3,1,5],tropical:[7,0,2],temperate:[5,3,3],boreal:[6,4,1],alpine:[5,3,3],
+  },climateAt(x,z).w,r),
+  sample: (x,z,previousY,radius=.4) => {
+    if(!hasHeight(x,z))return {known:false,y:0,depth:0,current:null,blocked:false};
+    const ground=groundAt(x,z),deck=roadHeightAt(x,z,-radius-.1);
+    const reference=previousY ?? ground;
+    const onDeck=deck!==null && deck>=ground-.1 && Math.abs(deck-reference)<.22 &&
+      (previousY!==undefined || deck-ground<.22);
+    const y=onDeck?deck!:ground;
+    const contact=SUBSTRATE_CONTACT_ON?productionContactAt(x,z,'surface'):undefined;
+    let depth=0,current:number|null=0,ocean=false;
+    if(contact?.water?.exposed){
+      const w=contact.water;depth=Math.max(0,w.yM-baseElev-y);current=w.speedMps;
+      ocean=w.kind==='ocean' && depth>.025;
+    }else{
+      const wet=drawnHydroAt(x,z);
+      if(wet){depth=Math.max(0,wet.restingLevelM-baseElev-y);current=Math.hypot(...wet.flow)>.01?null:0;ocean=wet.kind==='ocean'&&depth>.025;}
+      else {const water=waterInfoAt(x,z);depth=water.wet?Math.max(0,water.depth-(y-ground)):0;current=water.speed;}
+    }
+    // Broad footprint exclusion plus a radius around walls and rails. A rail
+    // above an underpass is not an obstacle on the ground below it.
+    let blocked=insidePlot(x,z);
+    for(const w of wallGrid.get(gkey(x,z))??[]){
+      if(w.ya!==undefined && (y>w.ya+.1 || (w.sl && y<w.ya-1.8)))continue;
+      const [px,pz]=closestOnSeg(x,z,w);
+      if(Math.hypot(px-x,pz-z)<radius+.08){blocked=true;break;}
+    }
+    return {known:true,y,depth,current,blocked,ocean,layer:onDeck?'drive':'ground'};
+  },
 });
-/** The whole flock as one object, for the visibility switch that rain drives. */
-const birds = { get visible(): boolean { return birdMeshes[0].visible; },
-  set visible(v: boolean) { for (const m of birdMeshes) m.visible = v; } };
-// ── the herd: three real animals, not one box ──────────────────────
-// Each species is a pile of coloured boxes welded into ONE BufferGeometry, so
-// a whole herd of them is still a single instanced draw. Local +z is forward
-// (that is what `yaw = atan2(vx, vz)` below implies), y=0 is the ground.
+const {birds,birdMeshes,herds,flock,graze}=wildlife;
+function stepWildlife(dt:number):void { wildlife.step(dt); }
+(window as unknown as {__wildlife?:object}).__wildlife=()=>wildlife.diagnostics();
+
 function boxPart(w: number, h: number, d: number, x: number, y: number, z: number, col: number, rx = 0, ry = 0, noBottom = false): THREE.BufferGeometry {
   let g: THREE.BufferGeometry = new THREE.BoxGeometry(w, h, d).toNonIndexed();
   if (noBottom) {
@@ -16838,348 +16836,6 @@ function mergeParts(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
   out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
   out.setAttribute('color', new THREE.BufferAttribute(col, 3));
   return out;
-}
-// Legs at the four corners, one call.
-const legs = (w: number, h: number, d: number, sx: number, fz: number, bz: number, col: number): THREE.BufferGeometry[] =>
-  [[-sx, fz], [sx, fz], [-sx, bz], [sx, bz]].map(([x, z]) => boxPart(w, h, d, x, h / 2, z, col));
-// DEER — light, long-legged, head carried high, antlers.
-const deerGeo = mergeParts([
-  boxPart(0.52, 0.6, 1.3, 0, 0.98, 0, 0x8a6136),          // barrel
-  boxPart(0.44, 0.3, 0.9, 0, 0.78, -0.15, 0xb09371),      // pale belly
-  boxPart(0.3, 0.24, 0.34, 0, 0.98, -0.7, 0xd8cdb4),      // rump patch
-  boxPart(0.26, 0.56, 0.28, 0, 1.4, 0.6, 0x8a6136, 0.35), // neck, raked forward
-  boxPart(0.23, 0.24, 0.48, 0, 1.66, 0.88, 0x7d5730),     // head
-  boxPart(0.32, 0.1, 0.1, 0, 1.76, 0.72, 0x6b4a2a),       // ears
-  ...[-0.09, 0.09].flatMap((sx) => [                       // antlers: beam + tines
-    boxPart(0.05, 0.42, 0.05, sx, 1.96, 0.74, 0xbdae90),
-    boxPart(0.05, 0.05, 0.3, sx, 2.1, 0.86, 0xbdae90),
-    boxPart(0.18, 0.05, 0.05, sx * 2.4, 2.14, 0.7, 0xbdae90),
-  ]),
-  boxPart(0.14, 0.2, 0.12, 0, 1.02, -0.72, 0xd8cdb4),     // flag tail
-  ...legs(0.11, 0.92, 0.13, 0.2, 0.48, -0.48, 0x5f4126),
-]);
-// BISON — mass forward: a shoulder hump twice the height of the hindquarters,
-// head slung low, stubby legs. The silhouette is the whole character.
-const bisonGeo = mergeParts([
-  boxPart(0.88, 0.8, 1.05, 0, 1.18, -0.5, 0x4a3a2c),      // hindquarters
-  boxPart(1.02, 1.12, 1.0, 0, 1.36, 0.42, 0x5d4a35),      // hump/shoulder shag
-  boxPart(0.9, 0.5, 0.5, 0, 1.02, 0.92, 0x382c22),        // chest
-  boxPart(0.58, 0.56, 0.62, 0, 0.96, 1.26, 0x2f2620),     // head, carried low
-  boxPart(0.5, 0.34, 0.2, 0, 0.66, 1.3, 0x241c17),        // beard
-  ...[-1, 1].map((s) => boxPart(0.3, 0.11, 0.11, s * 0.4, 1.22, 1.24, 0xa89a7d)),  // horns out
-  ...[-1, 1].map((s) => boxPart(0.11, 0.16, 0.11, s * 0.52, 1.32, 1.22, 0xa89a7d)),// and up
-  boxPart(0.12, 0.34, 0.12, 0, 1.1, -1.02, 0x2f2620),     // tail
-  ...legs(0.22, 0.82, 0.24, 0.32, 0.6, -0.6, 0x2b221b),
-]);
-// HORSE — the long one: deep barrel, arched neck, mane and a full tail.
-const horseGeo = mergeParts([
-  boxPart(0.6, 0.76, 1.7, 0, 1.3, -0.1, 0x6b4a34),        // barrel
-  boxPart(0.52, 0.3, 1.2, 0, 1.02, -0.1, 0x7d5b40),       // belly
-  boxPart(0.3, 0.72, 0.44, 0, 1.72, 0.78, 0x6b4a34, 0.42),// neck
-  boxPart(0.25, 0.28, 0.6, 0, 2.02, 1.06, 0x5c3e2b),      // head
-  boxPart(0.27, 0.16, 0.2, 0, 1.94, 1.32, 0x3a2618),      // muzzle
-  boxPart(0.12, 0.42, 0.66, 0, 1.98, 0.72, 0x2a2018),     // mane
-  boxPart(0.18, 0.6, 0.18, 0, 1.34, -1.0, 0x2a2018),      // tail
-  ...legs(0.15, 1.12, 0.17, 0.24, 0.62, -0.66, 0x4a3324),
-]);
-const HERD_GEO = [deerGeo, bisonGeo, horseGeo];
-// Who lives where. Weights per biome — no bison in the rainforest, and the
-// desert is horse country.
-const HERD_MIX: Record<string, number[]> = {
-  arid: [3, 1, 5], tropical: [7, 0, 2], temperate: [5, 3, 3], boreal: [6, 4, 1], alpine: [5, 3, 3],
-};
-// Same reasoning as BIRD_BOX: the old 240 wrapped animals at 120m, which is
-// the middle distance a herd is most legible at. Density falls, and that is
-// honest — three clumps on half a kilometre of plain is what a plain looks
-// like, where three clumps in a 240m square is a paddock.
-const HERD_N = 30, HERD_BOX = 560;
-// White base: the product of the vertex colour and the per-instance tint IS
-// the final colour, so the material must not scale either of them.
-const herdMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, flatShading: true });
-const herds = HERD_GEO.map((g) => {
-  const m = new THREE.InstancedMesh(g, herdMat, HERD_N);
-  m.name = 'herds';
-  m.frustumCulled = false;
-  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(HERD_N * 3).fill(1), 3);
-  m.instanceColor.setUsage(THREE.DynamicDrawUsage);
-  shadowy(m, true, false);
-  scene.add(m);
-  return m;
-});
-// No animal is ever allowed within this of the truck. Wider than CAR_R (2.4)
-// by enough that even the bison's bulk clears the bodywork.
-const HERD_CLEAR = 4.8;
-// The closest any of them has come this session — a test drives at the herd
-// and asserts this never drops to the truck.
-let herdClosest = Infinity;
-interface Critter {
-  x: number; y: number; z: number; vx: number; vy: number; vz: number; ph: number;
-  sp: number; tint: THREE.Color;
-  /** Which herd this animal belongs to. Cohesion and alignment are read from
-   *  its OWN herd's middle; separation still counts everybody, so two herds
-   *  share a plain without standing in each other. */
-  grp: number;
-  /** Body scale. A herd is adults and yearlings, not twenty copies. */
-  sz: number;
-}
-/** How many separate herds share the box. Three reads as a plain with animals
- *  on it; one reads as a single confused mob, which is what it was. */
-const HERD_GROUPS = 3;
-/** One species per herd, rolled when the biome changes. A herd was a lucky dip
- *  before — deer, bison and horses walking in one clump, alarmed by the same
- *  truck at the same moment, which is not a thing that happens. */
-let herdSpecies: number[] = [];
-/** Fauna by CLIMATE, weighted across every archetype present. A herd and a
- *  flock are spawned around the truck, so the truck's own climate is the
- *  right place to ask — and on a boreal/temperate margin the plain now
- *  genuinely carries some of both rather than all of whichever label won. */
-function pickFrom(table: Record<string, number[]>, atX?: number, atZ?: number): number {
-  // POSITION IS PASSED IN, NEVER READ FROM `state` HERE. The bird and herd
-  // populations are constructed at module load — ten thousand lines before
-  // `state` exists — so reaching for the truck inside this function threw
-  // during init and the world never signalled ready. The spawn origin is the
-  // right default anyway: at construction time the truck IS at 0,0, which is
-  // exactly the climate these first animals should be drawn from. The re-roll
-  // that follows a real move passes the truck's actual position.
-  return climPickRow(table, climateAt(atX ?? 0, atZ ?? 0).w, Math.random());
-}
-const pickBird = (atX?: number, atZ?: number): number => pickFrom(BIRD_MIX, atX, atZ);
-const pickSpecies = (atX?: number, atZ?: number): number => pickFrom(HERD_MIX, atX, atZ);
-const mkPop = (n: number, box: number, air: boolean): Critter[] => {
-  if (!air && !herdSpecies.length) herdSpecies = Array.from({ length: HERD_GROUPS }, pickSpecies);
-  if (air && !birdSpecies.length) birdSpecies = Array.from({ length: BIRD_GROUPS }, pickBird);
-  const groups = air ? BIRD_GROUPS : HERD_GROUPS;
-  return Array.from({ length: n }, (_, i) => ({
-    grp: i % groups,
-    // Yearlings to old bulls. Squared toward the small end, because a herd is
-    // mostly ordinary animals with a few big ones rather than an even spread.
-    // Birds vary less than mammals — a flock is adults — but not by nothing.
-    sz: air ? 0.78 + Math.random() * 0.5 : 0.72 + Math.random() ** 2 * 0.62,
-    // Each herd starts as a CLUMP rather than scattered across the box —
-    // cohesion would eventually gather them, but the first thing you see on
-    // arriving somewhere should already look like a herd.
-    x: (Math.random() - 0.5) * box * 0.85 + Math.sin((i % groups) * 2.4) * box * 0.3,
-    y: air ? 30 + Math.random() * 40 : 0,
-    z: (Math.random() - 0.5) * box * 0.85 + Math.cos((i % groups) * 2.4) * box * 0.3,
-    vx: (Math.random() - 0.5) * 6, vy: 0, vz: (Math.random() - 0.5) * 6, ph: Math.random() * 6.283,
-    sp: air ? birdSpecies[i % groups] : herdSpecies[i % groups],
-    // A coat is never twice the same: ±15% brightness, a touch warm or cool.
-    // PLUMAGE IS NOT A COAT. The mammal palette is warm mid-browns, and dressing
-    // birds in it gave the sky forty-six identical beige darts. Each species
-    // gets its own: a gull is near-white with a cool cast, a crow is almost
-    // black with a blue sheen, a raptor is warm brown — and each bird still
-    // varies within that, so a skein is not a stamp.
-    tint: air
-      ? [
-        new THREE.Color().setHSL(0.58, 0.05 + Math.random() * 0.06, 0.72 + Math.random() * 0.16),
-        new THREE.Color().setHSL(0.62, 0.10 + Math.random() * 0.12, 0.10 + Math.random() * 0.07),
-        new THREE.Color().setHSL(0.07, 0.30 + Math.random() * 0.18, 0.22 + Math.random() * 0.14),
-      ][air ? birdSpecies[i % groups] : 0]
-      : new THREE.Color().setHSL(0.07 + Math.random() * 0.05, 0.18 + Math.random() * 0.2, 0.44 + Math.random() * 0.16)
-        .multiplyScalar(2.1),
-  }));
-};
-const flock = mkPop(BIRD_N, BIRD_BOX, true);
-const graze = mkPop(HERD_N, HERD_BOX, false);
-const critterFwd = new THREE.Vector3();
-const critterDummy = new THREE.Object3D();
-// Yaw FIRST, then pitch about the animal's own axis — with the default XYZ
-// order a galloping bob would pitch about the world x and shear the herd.
-critterDummy.rotation.order = 'YXZ';
-// One boids step: cohere to the local centre, separate from close neighbours,
-// align with their heading — then flee the truck, which overrides everything.
-function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
-  box: number; air: boolean; speed: number; fear: number; sep: number; turn: number;
-}): void {
-  const cx = camera.position.x, cz = camera.position.z;
-  // Where the camera is looking, flattened — the wrap rule below needs it once
-  // per pass, not once per animal.
-  camera.getWorldDirection(critterFwd);
-  const cfl = Math.hypot(critterFwd.x, critterFwd.z) || 1;
-  const camFX = critterFwd.x / cfl, camFZ = critterFwd.z / cfl;
-  // A MIDDLE PER HERD, not one for the whole box. Averaging every animal on the
-  // plain gave three species one centre of gravity and pulled them into a single
-  // mob — the flock forces were doing exactly what they were told.
-  const gN: number[] = [], gx: number[] = [], gz: number[] = [], gvx: number[] = [], gvz: number[] = [];
-  for (const c of pop) {
-    const g = c.grp;
-    gN[g] = (gN[g] ?? 0) + 1;
-    gx[g] = (gx[g] ?? 0) + c.x; gz[g] = (gz[g] ?? 0) + c.z;
-    gvx[g] = (gvx[g] ?? 0) + c.vx; gvz[g] = (gvz[g] ?? 0) + c.vz;
-  }
-  for (let g = 0; g < gN.length; g++) {
-    const n = gN[g] || 1;
-    gx[g] /= n; gz[g] /= n; gvx[g] /= n; gvz[g] /= n;
-  }
-  const counts = meshes.map(() => 0);
-  for (const c of pop) {
-    let ax = (gx[c.grp] - c.x) * 0.06 + (gvx[c.grp] - c.vx) * 0.35;   // cohesion + alignment
-    let az = (gz[c.grp] - c.z) * 0.06 + (gvz[c.grp] - c.vz) * 0.35;
-    for (const d of pop) {                               // separation
-      if (d === c) continue;
-      const dx = c.x - d.x, dz = c.z - d.z;
-      const q = dx * dx + dz * dz;
-      if (q < o.sep * o.sep && q > 1e-4) { const f = (o.sep - Math.sqrt(q)) * 0.5; ax += (dx / Math.sqrt(q)) * f; az += (dz / Math.sqrt(q)) * f; }
-    }
-    // FLEE. Close to the truck they break formation entirely — that reaction
-    // is what makes them read as alive rather than as scenery that moves.
-    //
-    // Panic scales with how close the truck is AND how fast it is coming, and
-    // the bolt is biased SIDEWAYS: an animal sprinting straight down the line
-    // of a vehicle that is faster than it is an animal about to be hit, which
-    // is exactly how the old "run directly away" rule played out.
-    const fx = c.x - state.x, fz = c.z - state.z;
-    const fd = Math.hypot(fx, fz) || 1e-3;
-    const carV = Math.abs(state.speed);
-    // Reaction DISTANCE, not a fixed radius: what matters is how long they have
-    // before it arrives. A parked truck barely bothers them — you can idle up
-    // and watch — while one doing 90 sends the herd moving from 80m out.
-    const fear = o.fear + carV * (o.air ? 0.5 : 2.2);
-    const panic = fd < fear ? 1 - fd / fear : 0;
-    if (panic > 0) {
-      const hx = Math.sin(state.heading), hz = -Math.cos(state.heading); // truck forward
-      const side = Math.sign(fx * -hz + fz * hx) || 1;   // which flank it is already on
-      const mix = 0.4 + 0.6 * panic;                     // closer ⇒ more sideways
-      const ex = (fx / fd) * (1 - mix) + -hz * side * mix;
-      const ez = (fz / fd) * (1 - mix) + hx * side * mix;
-      const el = Math.hypot(ex, ez) || 1;
-      const p = panic * panic * o.speed * 30;
-      ax += (ex / el) * p;
-      az += (ez / el) * p;
-      if (o.air) c.vy += 9 * dt;                          // birds climb away
-    }
-    c.vx += ax * dt * o.turn * (1 + panic * 3); c.vz += az * dt * o.turn * (1 + panic * 3);
-    c.ph += dt * (o.air ? 9 : 3 + panic * 9);
-    // Hold a cruising speed rather than accelerating forever — except in a
-    // panic, where the whole point is to out-run whatever is chasing them.
-    const sp = Math.hypot(c.vx, c.vz) || 1e-3;
-    const flatOut = Math.min(Math.max(o.speed * 4.5, carV * 1.2), o.air ? 30 : 22);
-    const want = o.speed + (flatOut - o.speed) * panic;
-    const k = Math.min(1, dt * (2 + 16 * panic));         // and accelerate hard
-    c.vx = (c.vx / sp) * (sp + (want - sp) * k);
-    c.vz = (c.vz / sp) * (sp + (want - sp) * k);
-    c.x += c.vx * dt; c.z += c.vz * dt;
-    // THE GUARANTEE. Everything above is a force model, and a force model can
-    // only ever make a collision unlikely: the truck tops out around 25m/s and
-    // nothing on four legs here does. So a hard minimum separation backstops
-    // it — placed mostly sideways, because pushing an animal straight down the
-    // truck's line would drag it along the bumper instead of clearing it.
-    if (!o.air) {
-      const gx = c.x - state.x, gz = c.z - state.z;
-      const gd = Math.hypot(gx, gz);
-      if (gd < HERD_CLEAR) {
-        const hx = Math.sin(state.heading), hz = -Math.cos(state.heading);
-        const side = Math.sign(gx * -hz + gz * hx) || 1;
-        const ex = (gd > 1e-3 ? gx / gd : 0) * 0.3 + -hz * side * 0.7;
-        const ez = (gd > 1e-3 ? gz / gd : 0) * 0.3 + hx * side * 0.7;
-        const el = Math.hypot(ex, ez) || 1;
-        c.x = state.x + (ex / el) * HERD_CLEAR;
-        c.z = state.z + (ez / el) * HERD_CLEAR;
-      }
-      herdClosest = Math.min(herdClosest, Math.hypot(c.x - state.x, c.z - state.z));
-    }
-    if (o.air) {
-      // Hold the height this species flies at, not one height for the sky.
-      c.vy += ((BIRD_ALT[c.sp] ?? 34) + Math.sin(c.ph * 0.2) * 12 - c.y) * 0.25 * dt;
-      c.vy *= 0.96;
-      c.y += c.vy * dt;
-    } else {
-      // ON TOP OF THE ROAD, not through it. groundAt is the terrain, and a road
-      // on an embankment stands above its own terrain — so a deer crossing one
-      // walked at field level with the tarmac through its chest. It steps UP
-      // onto a deck within a stride's reach of its feet and ignores anything
-      // higher, which is the difference between crossing a road and levitating
-      // onto a viaduct.
-      const g = groundAt(c.x, c.z);
-      // A body's width inboard of the kerb, so an animal only takes the deck
-      // when it is genuinely standing on the tarmac. Photographed at Chapman's
-      // Peak: a horse on the parapet above the sea, because 0.8m of slack
-      // outside the kerb is exactly where the barrier stands.
-      const deck = roadHeightAt(c.x, c.z, -0.7);
-      c.y = deck !== null && deck > g - 0.4 && deck < g + 3 ? deck : g;
-    }
-    // ── the torus, and the rule it was missing ──
-    //
-    // The population lives in a box that follows the camera, wrapping anything
-    // that falls out the back round to the front. That is what keeps animals
-    // wherever you are, and it had exactly one thing wrong with it: it wrapped
-    // WHATEVER WAS THERE, including the deer you were watching. Drive past the
-    // midpoint of a 240m box and a herd 120m ahead is teleported 120m behind
-    // you — reported from the seat as animals disappearing arbitrarily, and as
-    // the same herd popping into view a moment later, which is the same event
-    // seen from the other end.
-    //
-    // NOTHING IS MOVED WHILE IT IS ON THE GLASS, and nothing is moved INTO
-    // frame either. Both ends of the teleport have to be somewhere you are not
-    // looking, or it is a pop however far away it happens.
-    const h = o.box / 2;
-    const inView = (px: number, pz: number): boolean => {
-      const dx = px - cx, dz = pz - cz;
-      const dd = Math.hypot(dx, dz);
-      if (dd < 45) return true;                       // beside you counts as seen
-      if (dd > o.box * 1.6) return false;             // past sight: move it freely
-      // A GENEROUS cone — about 57 degrees against a portrait phone's 28 — so
-      // an animal near the edge of frame is safe too, and so is one that would
-      // enter frame on the next flick of the wheel.
-      return (dx * camFX + dz * camFZ) / dd > 0.55;
-    };
-    if (!inView(c.x, c.z)) {
-      let nx = c.x, nz = c.z;
-      if (c.x - cx > h) nx -= o.box; else if (cx - c.x > h) nx += o.box;
-      if (c.z - cz > h) nz -= o.box; else if (cz - c.z > h) nz += o.box;
-      // …and if the far side of the box is in front of you, leave it where it
-      // is. It simply falls further behind, which costs nothing but a little
-      // density astern and is invisible; arriving in the middle of the frame
-      // is not invisible at all.
-      if ((nx !== c.x || nz !== c.z) && !inView(nx, nz)) { c.x = nx; c.z = nz; }
-      else if (Math.hypot(c.x - cx, c.z - cz) > o.box * 1.6) { c.x = nx; c.z = nz; }
-    }
-    // NOTHING GRAZES ON THE SEA. The herd wraps around the camera, so on a
-    // coast half of it lands on open water. It keeps simulating out there —
-    // the flock forces will walk it back ashore within seconds — but it is not
-    // drawn, because a deer standing on the Pacific is worse than no deer.
-    if (!o.air && surfaceAt(c.x, c.z) === 'water') {
-      // …and it should be WALKING BACK, not waiting for the flock force to
-      // notice. A bigger box puts far more of a coastal herd over water than
-      // the old 240m one did, so the undrawn animals need a reason to leave:
-      // a steady pull toward the camera, which is on a road and therefore on
-      // land. Gentle enough that it never overrides the flee.
-      const bx = cx - c.x, bz = cz - c.z, bd = Math.hypot(bx, bz) || 1;
-      c.vx += (bx / bd) * 3.5 * dt; c.vz += (bz / bd) * 3.5 * dt;
-      continue;
-    }
-    const yaw = Math.atan2(c.vx, c.vz);
-    // GAIT. Four legs welded to the body can't stride, so the animal rides its
-    // own stride instead: a bob and a pitch on the same phase, scaled by how
-    // hard it is actually running. At a walk it is barely there; fleeing the
-    // truck the whole herd starts porpoising.
-    const gait = o.air ? 0 : Math.min(1, Math.hypot(c.vx, c.vz) / (o.speed * 2));
-    critterDummy.position.set(c.x, c.y + (o.air ? 0 : Math.abs(Math.sin(c.ph * 1.7)) * 0.14 * gait), c.z);
-    critterDummy.rotation.set(
-      o.air ? 0 : Math.sin(c.ph * 1.7 + 0.9) * 0.11 * gait,
-      yaw,
-      o.air ? Math.sin(c.ph) * 0.5 : Math.sin(c.ph * 0.85) * 0.04 * gait, // birds bank; beasts sway
-    );
-    critterDummy.scale.setScalar(c.sz * (o.air ? 1 : 0.94 + (c.sp === 1 ? 0.06 : 0.12) * Math.sin(c.ph * 0.5) + 0.06));
-    critterDummy.updateMatrix();
-    const mesh = meshes[c.sp] ?? meshes[0];
-    const idx = counts[c.sp] ?? counts[0];
-    mesh.setMatrixAt(idx, critterDummy.matrix);
-    mesh.instanceColor?.setXYZ(idx, c.tint.r, c.tint.g, c.tint.b);
-    counts[c.sp] = idx + 1;
-  }
-  for (let i = 0; i < meshes.length; i++) {
-    meshes[i].count = counts[i];
-    meshes[i].instanceMatrix.needsUpdate = true;
-    if (meshes[i].instanceColor) meshes[i].instanceColor!.needsUpdate = true;
-  }
-}
-function stepWildlife(dt: number): void {
-  // Rain grounds the birds; a storm keeps them down entirely.
-  birds.visible = wxL.rain < 0.5;   // the rain where the birds are
-  if (birds.visible) stepPop(flock, birdMeshes, dt, { box: BIRD_BOX, air: true, speed: 11, fear: 55, sep: 7, turn: 1 });
-  stepPop(graze, herds, dt, { box: HERD_BOX, air: false, speed: 2.4, fear: 24, sep: 6, turn: 1.6 });
 }
 
 // ── the map layer (minimap base, FOG_SPAN frame, north-up) ─────────
@@ -35281,6 +34937,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
   if (hopping) throw new Error('already hopping');
   hopping = true;
   worldEpoch++;
+  wildlife.reset();
   try {
     // The reel and the recorder stand down; the ring is a drive over ground
     // that is about to stop existing.
@@ -37359,19 +37016,17 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
 // Closest approach since the last call (and reset) — the "can you hit one?"
 // measurement. Anything at or above HERD_CLEAR means nothing was ever touched.
 (window as unknown as { __closest?: object }).__closest = (): object => {
-  const d = herdClosest;
-  herdClosest = Infinity;
-  return { closest: +d.toFixed(2), clearance: HERD_CLEAR };
+  return wildlife.consumeClosest();
 };
 // Where the herd actually is, so a test can go and look at it.
 (window as unknown as { __flock?: object }).__flock = (): object =>
-  flock.map((c) => ({
+  flock.filter(c => c.active).map((c) => ({
     sp: ['gull', 'crow', 'raptor'][c.sp], grp: c.grp,
     sz: +c.sz.toFixed(2), y: Math.round(c.y),
     tint: `#${c.tint.getHexString()}`,
   }));
 (window as unknown as { __herd?: object }).__herd = (): object =>
-  graze.map((c) => ({
+  graze.filter(c => c.active).map((c) => ({
     x: +c.x.toFixed(1), z: +c.z.toFixed(1), sp: ['deer', 'bison', 'horse'][c.sp],
     grp: c.grp, sz: +c.sz.toFixed(2),
     // Is this animal standing on a road deck rather than on the field it
@@ -51312,10 +50967,7 @@ function applyBiome(b: Biome): void {
   biome = b;
   // The herd is built at module load, before the spawn's biome is known — so
   // re-roll which species are out there whenever the biome actually lands.
-  herdSpecies = Array.from({ length: HERD_GROUPS }, () => pickSpecies(state.x, state.z));
-  for (const c of graze) c.sp = herdSpecies[c.grp];
-  birdSpecies = Array.from({ length: BIRD_GROUPS }, () => pickBird(state.x, state.z));
-  for (const c of flock) c.sp = birdSpecies[c.grp];
+  wildlife.refreshClimate();
   // The six sky colours are the DAYLIGHT versions of themselves; how much of
   // each survives depends on where the sun is, so the clock paints them.
   applySkyTint();
