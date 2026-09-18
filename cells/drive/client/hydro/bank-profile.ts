@@ -130,11 +130,22 @@ export interface HydroBankOptions {
   coverageCut?: number;
   /** March step for the outward search, metres. */
   stepM?: number;
-  /** Hard ceiling on stations, so one pathological tile cannot unbound a
-   *  build. Stations beyond it are dropped, never silently thinned. */
+  /**
+   * THE STATION BUDGET, AND IT THINS RATHER THAN TRUNCATES.
+   *
+   * The first cut took segments in order and stopped at the ceiling, and the
+   * census read exactly 512 on one tile and exactly 1024 on two — a count that
+   * equals its own budget is not a count, and what it was measuring was a
+   * shoreline cut off part way along with the carve still owning the rest.
+   * The spacing is solved from the shoreline's OWN length against this budget
+   * instead, so a long shore is described coarsely end to end rather than
+   * finely for its first few hundred metres. The ceiling stays as a backstop
+   * and `dropped` says when it fired, which should now be never.
+   */
   maxStations?: number;
   /** Minimum along-shore spacing. Marching squares emits a segment per texel
-   *  edge; a bank does not vary faster than the field can see. */
+   *  edge; a bank does not vary faster than the field can see. The solved
+   *  spacing above is a floor on this, never a cap. */
   minSpacingM?: number;
 }
 
@@ -146,6 +157,11 @@ export interface HydroBankResult {
     segments: number;
     stations: number;
     dropped: number;
+    /** The shoreline's own length in this tile, and the along-shore spacing
+     *  the budget bought — read the pair, because a spacing far over the
+     *  field's texel is a bank described coarser than the water it follows. */
+    shoreM: number;
+    spacingM: number;
     resolved: number;
     nothingToCut: number;
     unresolved: Record<HydroBankUnresolved, number>;
@@ -205,15 +221,48 @@ export function resolveHydroBankStations(
   const maxStations = options.maxStations ?? 512;
   const minSpacing = Math.max(0, options.minSpacingM ?? 0);
   const stations: HydroBankStation[] = [];
+  // THE SPACING IS SOLVED FROM THE SHORELINE'S OWN LENGTH. Taking segments in
+  // order until a ceiling describes the first part of a shore finely and the
+  // rest not at all — measured at the Senqu ford as `dropped 512 of 1024
+  // segments`, exactly half the shore left to the carve. One pass to measure
+  // the shore, then a spacing that just fits the budget.
+  let shoreM = 0;
+  for (const seg of segments) shoreM += Math.hypot(seg.b.x - seg.a.x, seg.b.z - seg.a.z);
+  const spacing = Math.max(minSpacing, maxStations > 0 ? shoreM / maxStations : 0);
   const stats: HydroBankResult['stats'] = {
     segments: segments.length, stations: 0, dropped: 0, resolved: 0, nothingToCut: 0,
+    shoreM: +shoreM.toFixed(1), spacingM: +spacing.toFixed(2),
     unresolved: { 'no-water': 0, 'no-ground': 0, 'no-join': 0, 'too-deep': 0 },
     byProfile: { soft: 0, gravel: 0, confined: 0, rock: 0, uncertain: 0 },
   };
-  let lastX = NaN, lastZ = NaN;
+  // AND THE THINNING IS SPATIAL, NOT SEQUENTIAL. Marching squares emits its
+  // segments in no particular order, so "further than the spacing from the
+  // LAST one I kept" thins by whatever order they happen to arrive in and can
+  // leave a stretch bare while crowding another. A hash at the spacing asks
+  // the question the spacing means — is any station already standing here —
+  // and answers it the same whatever order the segments come in.
+  const cellM = Math.max(0.5, spacing);
+  const kept = new Map<string, number[]>();
+  const tooClose = (x: number, z: number): boolean => {
+    if (!(spacing > 0)) return false;
+    const cx = Math.floor(x / cellM), cz = Math.floor(z / cellM);
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+      const list = kept.get(`${cx + dx}/${cz + dz}`);
+      if (!list) continue;
+      for (let i = 0; i < list.length; i += 2) {
+        if (Math.hypot(x - list[i], z - list[i + 1]) < spacing) return true;
+      }
+    }
+    return false;
+  };
+  const markKept = (x: number, z: number): void => {
+    const key = `${Math.floor(x / cellM)}/${Math.floor(z / cellM)}`;
+    const list = kept.get(key);
+    if (list) list.push(x, z); else kept.set(key, [x, z]);
+  };
   for (const seg of segments) {
     const mx = (seg.a.x + seg.b.x) / 2, mz = (seg.a.z + seg.b.z) / 2;
-    if (minSpacing > 0 && Number.isFinite(lastX) && Math.hypot(mx - lastX, mz - lastZ) < minSpacing) continue;
+    if (tooClose(mx, mz)) continue;
     if (stations.length >= maxStations) { stats.dropped++; continue; }
     const dx = seg.b.x - seg.a.x, dz = seg.b.z - seg.a.z;
     const L = Math.hypot(dx, dz);
@@ -226,7 +275,7 @@ export function resolveHydroBankStations(
     if (coverageAt(field, mx + nx * probe, mz + nz * probe) > coverageAt(field, mx - nx * probe, mz - nz * probe)) {
       nx = -nx; nz = -nz;
     }
-    lastX = mx; lastZ = mz;
+    markKept(mx, mz);
     // The water is read just INSIDE the line: exactly on it the coverage is
     // the cut, and a sampler that refuses below its cut would answer nothing
     // for half the stations depending on which side rounding landed.
@@ -243,11 +292,42 @@ export function resolveHydroBankStations(
     // depth; the floor rule publishes the same quantity on its own lattice,
     // and both come from here, so they cannot disagree about the bed.
     const innerBed = level - Math.max(w.depthM, 0.08);
-    const innerReach = Math.max(1, Math.min(P.reach, Math.max(w.depthM, 0.08) / Math.max(0.05, P.k)));
+    // ── HOW FAR IN THE FACE RUNS, AND WHY IT IS A SEARCH ──
+    //
+    // The first cut derived it from the slope alone: depth over k, which for
+    // half a metre of gravel-bank river is about a metre. The census then read
+    // fringe-buried points lying a median 4 m and a p90 8 m INSIDE the mask, so
+    // the face stopped three-quarters of the way short of the burial it exists
+    // to remove — and the published floor could not take over either, because
+    // its lattice is ~18 m over a tile and a line river never has four wet
+    // corners (measured, and recorded above).
+    //
+    // So it marches inward the way it marches outward, and stops where the
+    // ground is already at or under the bed the field states. That is not a
+    // flat-bottomed trench: `bankProfileY` smoothsteps from the waterline to
+    // the bed over this reach, so a wide river gets a wide concave face and a
+    // narrow one a short toe. The profile's own reach still caps it, so a rock
+    // margin asserts four metres where an alluvial one asserts eighteen.
+    const bedTarget = innerBed;
+    let innerReach = Math.max(1, Math.min(P.reach, Math.max(w.depthM, 0.08) / Math.max(0.05, P.k)));
+    for (let sIn = step; sIn <= P.reach + 1e-9; sIn += step) {
+      const g = fieldGroundAt(field, mx - nx * sIn, mz - nz * sIn);
+      if (g === null) break;
+      innerReach = Math.max(innerReach, Math.min(P.reach, sIn));
+      if (g <= bedTarget) break;
+    }
     const base = {
       x: mx, z: mz, outwardX: nx, outwardZ: nz,
       waterLevelM: level, innerBedM: innerBed, innerReachM: innerReach,
-      alongM: L / 2 + 0.5,
+      // THE ALONG-SHORE REACH IS THE SPACING, NOT THE SEGMENT. A station stands
+      // in for the stretch of shore between it and its neighbours, and after
+      // thinning that stretch is the SPACING — bounding it by the contour
+      // segment's own half-length instead leaves the bank a comb of narrow
+      // slats with bare shore between every pair of teeth. Measured at the
+      // Senqu ford before this: 512 stations on the tile and not one of them
+      // reaching a single point of a transect straight through the shoreline.
+      // The same hole as the first cut's cross-bank bound, in a new place.
+      alongM: Math.max(L / 2, spacing / 2) + 0.5,
       profile, confidence: P.confidence,
     };
     // NOTHING TO CUT: the ground outside the line is already at or under the
@@ -355,4 +435,50 @@ export function bankTargetAt(
 export function bankProfileOf(profile: HydroBankProfile): { k: number; reach: number; cut: number } {
   const P = PROFILE[profile];
   return { k: P.k, reach: P.reach, cut: P.cut };
+}
+
+/**
+ * ── THE WIRE FORM ──
+ *
+ * Twelve floats a station, and the packet carries EVERYTHING the evaluation
+ * needs — the waterline already submerged, the profile's own slope, the
+ * reaches — so the consumer needs no constant of this module and no table.
+ *
+ * That is not a style choice. The terrain kernel is stringified into a worker
+ * (`createTerrainKernel.toString()`), so anything it calls must be either
+ * inside that closure or interpolated beside it; a helper here that closed
+ * over PROFILE or BANK_SUBMERGE_M would compile, pass every test on the main
+ * thread, and throw on the worker's first job. A packet that answers for
+ * itself cannot fail that way.
+ *
+ * Absolute metres, as the floor lattice is: the kernel subtracts its own
+ * baseElev, and one datum for both keeps them comparable.
+ */
+export const BANK_STRIDE = 12;
+export const BANK_FLAG_UNRESOLVED = 1;
+
+export function packBankStations(stations: readonly HydroBankStation[]): Float32Array {
+  const out = new Float32Array(stations.length * BANK_STRIDE);
+  for (let i = 0; i < stations.length; i++) {
+    const st = stations[i], o = i * BANK_STRIDE;
+    const P = PROFILE[st.profile];
+    out[o] = st.x;
+    out[o + 1] = st.z;
+    out[o + 2] = st.outwardX;
+    out[o + 3] = st.outwardZ;
+    out[o + 4] = st.waterLevelM - BANK_SUBMERGE_M;   // the anchor itself
+    out[o + 5] = st.innerBedM;
+    out[o + 6] = st.innerReachM;
+    out[o + 7] = st.outerReachM;
+    out[o + 8] = st.alongM;
+    out[o + 9] = P.k;
+    // AN UNRESOLVED STATION STILL OWNS ITS REGION. Its refusal means "nothing
+    // may change here", and that has to bind the channel carve too — otherwise
+    // the bank declines to cut a rock face and the carve planes it anyway,
+    // which is the refusal costing nothing. Outward only: the bank failed on
+    // the LAND side, and the bed inside is the carve's and the field's.
+    out[o + 10] = st.unresolved === null ? 0 : P.reach;
+    out[o + 11] = st.unresolved === null ? 0 : BANK_FLAG_UNRESOLVED;
+  }
+  return out;
 }

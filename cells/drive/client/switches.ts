@@ -189,6 +189,8 @@ export const SWITCHES = [
     note: 'coast=0 builds no coastal travel-time field: the nearshore crests phase on plain shore distance and no water is sheltered — the A/B for the refraction and exposure pass (hydro/coast-field.ts); __hydroview(\'coast\') paints the field' },
   { id: 'shore', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'shore=0 leaves the water its frame colour and the banks their hillside grass — the A/B for the shoreline pass' },
+  { id: 'bank', kind: 'toggle', marks: ['legacy', 'world'], fallback: 'on',
+    note: 'bank=0 publishes no bank stations, so the channel carve owns every shoreline again and the fringe between its 1:1 bank and the drawn waterline comes back — the one A/B for the bank resolver, and the control every bank-census reading is taken against' },
   { id: 'bldruns', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'bldruns=0 masses every attached building on its own 32 m stand norm again, as if it stood alone — the A/B for the terrace rule (morphology.ts runs seat one height and one roof form per run); __runs() reads the spread' },
   { id: 'ez', kind: 'toggle', marks: ['legacy'], fallback: 'skeletons',

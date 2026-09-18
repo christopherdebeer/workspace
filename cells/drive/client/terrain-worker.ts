@@ -35,6 +35,8 @@ export interface TerrainJob {
   hydroBreakLines: Float64Array;
   /** The field's bed lattice (see TerrainStore.hydroFloor); empty with n 0 when the tile has no field. */
   hydroFloor: Float32Array; hydroFloorN: number;
+  /** The tile's packed bank stations (see TerrainStore.hydroBank); empty when the tile has none. */
+  hydroBank: Float32Array;
   crossings: TerrainCrossingMask[];
   areas: AreaPatchLike[];
   pads: Float64Array;
@@ -132,6 +134,7 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
         strips, cutL: job.cutL, channels, grid: job.grid,
         hydroBreakLines: () => hydroBreakLines,
         hydroFloor: () => job.hydroFloorN > 0 ? { n: job.hydroFloorN, data: job.hydroFloor } : null,
+        hydroBank: () => job.hydroBank && job.hydroBank.length ? job.hydroBank : null,
         onRoad: (x, z) => K.onRoadOf(strips, job.cutL, x, z),
         palette, areaTint: (x, z) => K.areaTintOf(job.areas, x, z),
         borders, nrmCoarsePx: job.nrmCoarsePx, nrmRes: job.nrmRes, cutWash: job.cutWash, cprobe: job.cprobe, carveLog, cutRelief: job.cutRelief,

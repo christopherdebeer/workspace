@@ -16,18 +16,26 @@
  *
  * Read the counts against wet-census's own U / I / P for the same fixture —
  * they are the same classifier, so they must agree.
+ *
+ * `ARGS='bank=0'` IS THE CONTROL, and every reading here wants one beside it:
+ * with the resolver publishing no stations the channel carve owns every
+ * shoreline again and the fringe comes back, so the pair is the same world with
+ * one rule flipped. A column of metres with no control column is a number with
+ * no scale — which this file records for pixels and is just as true here.
  */
 import { openDrive } from './harness.mjs';
 import { writeFileSync, mkdirSync } from 'node:fs';
 const fixtures = process.argv.slice(2).length ? process.argv.slice(2)
   : ['at-senqu-ford', 'at-senqu-top', 'at-umgeni', 'at-bixby', 'at-glencairn', 'at-campsbay'];
+const ARGS = process.env.ARGS ? `&${process.env.ARGS}` : '';
+if (ARGS) console.log(`switches: ${process.env.ARGS}`);
 mkdirSync('/tmp/drive-tools/bank-census', { recursive: true });
 const rows = [];
-console.log('fixture           drawn  fringe interior  prot   over med/p90/max        reach med/p90   ms');
+console.log('fixture           drawn  fringe interior  prot   over med/p90/max        reach med/p90  tiles/stn   ms');
 for (const fixture of fixtures) {
   let d;
   try {
-    d = await openDrive({ spot: `fixture=${fixture}&cam=chase&nodraw=1&tdbg=0&wxlive=0&time=NOON`, tag: `bank-census-${fixture}`, settle: 0, bootTimeout: 240000 });
+    d = await openDrive({ spot: `fixture=${fixture}&cam=chase&nodraw=1&tdbg=0&wxlive=0&time=NOON${ARGS}`, tag: `bank-census-${fixture}`, settle: 0, bootTimeout: 240000 });
   } catch (e) { console.log(`${fixture.padEnd(16)}  boot failed: ${String(e.message).slice(0, 80)}`); continue; }
   const q = (f, ...a) => d.page.evaluate(f, ...a);
   await d.page.waitForTimeout(75000);
@@ -42,8 +50,11 @@ for (const fixture of fixtures) {
     String(r.buried.interior).padStart(8), String(r.buried.protected).padStart(5),
     `   ${String(o.med).padStart(5)}/${String(o.p90).padStart(5)}/${String(o.max).padStart(5)}`,
     `      ${String(re.med).padStart(5)}/${String(re.p90).padStart(5)}`,
+    `  ${String(r.bankTiles ?? 0).padStart(3)}/${String(r.bankStations ?? 0).padStart(5)}`,
     String(ms).padStart(5));
   if (d.errors.length) console.log(`  page errors: ${JSON.stringify(d.errors).slice(0, 160)}`);
   await d.close();
 }
-writeFileSync('/tmp/drive-tools/bank-census/rows.json', JSON.stringify(rows, null, 1));
+const tag = process.env.TAG || (process.env.ARGS ? 'control' : 'fix');
+writeFileSync(`/tmp/drive-tools/bank-census/rows-${tag}.json`, JSON.stringify(rows, null, 1));
+console.log(`\nbank version ${rows[0]?.bankVer ?? '?'} · resolver ${rows[0]?.bankOn ? 'ON' : 'OFF'} · rows-${tag}.json`);

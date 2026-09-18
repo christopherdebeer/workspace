@@ -15,7 +15,9 @@
  * backend.
  */
 import { sampleFieldSurface } from './hydro/field-sample';
+import { resolveHydroBankStations, packBankStations, BANK_PROFILE_VERSION, type HydroBankResult } from './hydro/bank-profile';
 import type { HydroTileField } from './hydro/types';
+import type { HydroShoreSegment } from './hydro/shore-contour';
 import * as THREE from 'three';
 import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, CLIM_G, ClimateField, GROUND_RAMPS, altBandAt, aspectLift, climPick,
   climPickRow, krummholz, siteAt, swardLift, treelineAt, type ClimateSample, type SiteClimate } from './climate';
@@ -2231,6 +2233,11 @@ function readDialRecord(): Record<string, number> {
  *  terrain colour and the sward's mineral and reed banks. `shore=0` is the
  *  frame colour and hillside grass to the waterline, as it was. */
 const SHORE_ON = qsOn('shore', true);
+/** The bank resolver. Off, no stations are published at all, so the channel
+ *  carve owns every shoreline again and the fringe between its 1:1 bank and
+ *  the drawn waterline comes back — the control every bank-census reading is
+ *  taken against. */
+const BANK_ON = qsOn('bank', true);
 /** The sward reads the substrate's classification — the brief's own "sward and
  *  terrain from the same field". Off restores the sward that thins for cover,
  *  altitude and the bank and knows nothing about outcrop, which is the exact
@@ -3531,6 +3538,13 @@ const hydroShoreBreakLines = new Map<string, BreakLine[]>();
  *  (HYDRO_EN square, absolute metres, NaN where nothing is drawn) — the
  *  ceiling the terrain kernel holds the ground to. See publishHydroFloor. */
 const hydroFloors = new Map<string, Float32Array>();
+/** The tile's solved bank stations, packed (client/hydro/bank-profile.ts).
+ *  Published with the floor and the breaklines so a tile's water boundary,
+ *  its bed and its bank are one revision's work or none of it. */
+const hydroBanks = new Map<string, Float32Array>();
+/** Per tile, the resolver's own outcome counts — what the diagnostic reads to
+ *  say `bank-no-join` rather than merely "still buried". */
+const hydroBankStats = new Map<string, HydroBankResult['stats']>();
 /**
  * THE GROUND UNDER DRAWN WATER IS AT MOST THE FIELD'S BED.
  *
@@ -3575,6 +3589,44 @@ function publishHydroFloor(t: HeightTile, key: string, field: HydroTileField): b
   hydroFloors.set(key, out);
   return true;
 }
+/**
+ * Solve the tile's banks and publish the packet, returning whether it moved.
+ *
+ * Same cadence, same revision and the same `field` as the floor and the
+ * breaklines beside it: a tile's water boundary, its bed and its bank are one
+ * revision's work or none of it, which is what stops a new shoreline being
+ * paired with a bank solved against the last one.
+ */
+function publishHydroBank(key: string, field: HydroTileField, segments: readonly HydroShoreSegment[]): boolean {
+  const previous = hydroBanks.get(key);
+  if (!BANK_ON || !segments.length) {
+    hydroBankStats.delete(key);
+    if (!previous) return false;
+    hydroBanks.delete(key);
+    return true;
+  }
+  const r = resolveHydroBankStations(field, segments, {
+    coverageCut: .5,
+    // One station per contour segment is a station every texel, which is
+    // finer than the field can distinguish; half a texel of spacing keeps
+    // the bend detail and drops the duplicates a marching square emits.
+    minSpacingM: (field.bounds.maxX - field.bounds.minX) / Math.max(1, field.resolution) * .5,
+  });
+  hydroBankStats.set(key, r.stats);
+  const packed = packBankStations(r.stations);
+  if (!packed.length) {
+    if (!previous) return false;
+    hydroBanks.delete(key);
+    return true;
+  }
+  if (previous && previous.length === packed.length) {
+    let same = true;
+    for (let i = 0; i < packed.length && same; i++) if (Math.abs(previous[i] - packed[i]) > .01) same = false;
+    if (same) return false;
+  }
+  hydroBanks.set(key, packed);
+  return true;
+}
 function sameHydroBreakLines(
   a: readonly BreakLine[] | undefined,
   b: readonly BreakLine[],
@@ -3592,8 +3644,9 @@ function sameHydroBreakLines(
 function publishHydroShoreBreakLines(t: HeightTile, key: string): void {
   const field = hydroSys?.fieldAt(t.xs + t.w / 2, t.zs + t.h / 2);
   if (!field || field.key !== key || field.revision !== hydroRev.get(key)) return;
+  const segments = extractFlowingHydroShoreSegments(field, .5, true);
   const lines: BreakLine[] = [];
-  for (const segment of extractFlowingHydroShoreSegments(field, .5, true)) {
+  for (const segment of segments) {
     lines.push({
       ax: segment.a.x,
       az: segment.a.z,
@@ -3604,7 +3657,8 @@ function publishHydroShoreBreakLines(t: HeightTile, key: string): void {
   const previous = hydroShoreBreakLines.get(key);
   const linesChanged = !sameHydroBreakLines(previous, lines);
   const floorChanged = publishHydroFloor(t, key, field);
-  if (!linesChanged && !floorChanged) return;
+  const bankChanged = publishHydroBank(key, field, segments);
+  if (!linesChanged && !floorChanged && !bankChanged) return;
   if (linesChanged) {
     if (lines.length) hydroShoreBreakLines.set(key, lines);
     else hydroShoreBreakLines.delete(key);
@@ -8513,6 +8567,7 @@ const kStore: TerrainStore = {
   get grid() { return GRID; },
   hydroBreakLines: (t) => hydroShoreBreakLines.get(`${t.tx}/${t.ty}`) ?? [],
   hydroFloor: (t) => { const d = hydroFloors.get(`${t.tx}/${t.ty}`); return d ? { n: HYDRO_EN, data: d } : null; },
+  hydroBank: (t) => hydroBanks.get(`${t.tx}/${t.ty}`) ?? null,
   onRoad: (x, z) => onCarriageway(x, z, 0.6).road,
   palette: (elevAbs, slope, cover, x, z) => terrainPalette(elevAbs, slope, cover, x, z),
   areaTint: (x, z) => areaTintAt(x, z),
@@ -8751,6 +8806,7 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
     // here for the next build.
     hydroFloor: (hydroFloors.get(`${t.tx}/${t.ty}`) ?? new Float32Array(0)).slice(),
     hydroFloorN: hydroFloors.has(`${t.tx}/${t.ty}`) ? HYDRO_EN : 0,
+    hydroBank: (hydroBanks.get(`${t.tx}/${t.ty}`) ?? new Float32Array(0)).slice(),
     crossings, areas, pads,
     clim, climN: N, climK: KW,
     ramp: biome.ramp, ramps: BIOME_LIST.map((b) => b.ramp), coverTint: COVER_TINT, coverMix: COVER_MIX,
@@ -8761,6 +8817,7 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
     ch.flat.buffer,
     job.hydroBreakLines.buffer,
     job.hydroFloor.buffer,
+    job.hydroBank.buffer,
     pads.buffer,
     clim.buffer,
   ] as unknown as Transferable[] };
@@ -35170,7 +35227,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // compiled program to change some bounds.
     for (const key of hydroRev.keys()) hydroSys?.removeTile(key);
     hydroRev.clear(); hydroDirty.clear(); hydroFedInputs.clear(); hydroFeats.clear(); hydroFeatsFull = 0; coverHydro.clear();
-    hydroShoreBreakLines.clear(); hydroFloors.clear();
+    hydroShoreBreakLines.clear(); hydroFloors.clear(); hydroBanks.clear(); hydroBankStats.clear();
     coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear(); sideCaches.clear();
     // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
     // spatially keyed, so the last postcard's road left an elevation under
@@ -37402,6 +37459,11 @@ function nearestChannelSeg(x: number, z: number, reachM = 120): { seg: Seg; t: n
   const key = t ? `${t.tx}/${t.ty}` : null;
   const fl = key ? hydroFloors.get(key) : undefined;
   const floor = fl ? { n: HYDRO_EN, data: fl } : null;
+  // THE KERNEL'S OWN ANSWER, NOT A SECOND COPY OF ITS RULE. `bankTargetAtPacked`
+  // is the same profile the pass lowers ground to (one `bankProfileY` between
+  // them), read here as a point query; a transect that re-derived the station
+  // arithmetic could only ever confirm itself — the San Miguel lesson.
+  const bankPacket = key ? hydroBanks.get(key) : undefined;
   const f2 = (v: number | null): number | null => v === null || !Number.isFinite(v) ? null : +v.toFixed(2);
   const stations: object[] = [];
   for (let s = -halfM; s <= halfM; s += step) {
@@ -37432,9 +37494,14 @@ function nearestChannelSeg(x: number, z: number, reachM = 120): { seg: Seg; t: n
     let owner: string | null = null, target: number | null = null;
     for (const [name, v] of cands) if (target === null || v < target) { target = v; owner = name; }
     const crossing = productionCrossings.earthworkAt(sx, sz);
+    const bk = bankPacket ? K.bankTargetAtPacked(bankPacket, sx, sz) : null;
     stations.push({
       s: +s.toFixed(1), x: Math.round(sx), z: Math.round(sz),
-      nat: f2(nat), bed: f2(bed), carve: f2(carve), bank: null,
+      nat: f2(nat), bed: f2(bed), carve: f2(carve), bank: f2(bk ? bk.y : null),
+      // `owned` is what makes the composition legible: where it is true the
+      // carve stood down, whether the station shaped the ground or refused it.
+      bankOwned: bk ? bk.owned : false, bankRefused: bk ? bk.refused : false,
+      bankS: bk ? +bk.s.toFixed(1) : null,
       tri: f2(tri), triMax: f2(triMax),
       level: f2(w ? w.restingLevelM : null), cov: w ? +w.coverage.toFixed(2) : null,
       kind: w?.kind ?? null, shore: w ? +w.shoreDistanceM.toFixed(1) : null,
@@ -37453,6 +37520,16 @@ function nearestChannelSeg(x: number, z: number, reachM = 120): { seg: Seg; t: n
     // reading of two generations, and the only way to know is to be told.
     terrainRev: key ? terrainRevision.get(key) ?? null : null,
     hydroRev: key ? hydroRev.get(key) ?? null : null,
+    // AND THE ALGORITHM'S OWN VERSION, because within one build there is
+    // exactly one of it and it therefore cannot participate in a runtime
+    // identity — what it CAN do is sit beside every number this probe prints,
+    // so a reading taken today is comparable with one taken after the resolver
+    // changes. A measurement with no version beside it is not comparable, which
+    // is the telemetry dump's `look` row arrived at from the other side.
+    bankVer: BANK_PROFILE_VERSION,
+    bankOn: BANK_ON,
+    bankStations: bankPacket ? (bankPacket.length / 12) | 0 : 0,
+    bankStats: key ? hydroBankStats.get(key) ?? null : null,
     fringeM: +bankFringeM(x, z).toFixed(1),
     stations,
   };
@@ -37500,9 +37577,16 @@ function nearestChannelSeg(x: number, z: number, reachM = 120): { seg: Seg; t: n
     return { n: s.length, med: +s[s.length >> 1].toFixed(2), p90: +s[Math.floor(s.length * .9)].toFixed(2), max: +s[s.length - 1].toFixed(2) };
   };
   worst.sort((a, b) => (b as { over: number }).over - (a as { over: number }).over);
+  // The version rides here too: a fringe distribution is exactly the kind of
+  // number that gets quoted against a later one, and the resolver is the thing
+  // that will have moved between them.
+  let stationsHere = 0;
+  for (const packed of hydroBanks.values()) stationsHere += (packed.length / 12) | 0;
   return {
     window: [halfM, n], drawn, buried: { fringe, interior, protected: protectedN },
     over: stat(over), reach: stat(reach), worst: worst.slice(0, 8),
+    bankVer: BANK_PROFILE_VERSION, bankOn: BANK_ON,
+    bankTiles: hydroBanks.size, bankStations: stationsHere,
   };
 };
 /**

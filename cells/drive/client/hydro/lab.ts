@@ -527,7 +527,7 @@ function makeTerrain(
     cutL: heightTile.w / terrainSegments,
     channels: new Map(),
     grid: heightTile.w / terrainSegments,
-    hydroBreakLines: () => breakLines, hydroFloor: () => null,
+    hydroBreakLines: () => breakLines, hydroFloor: () => null, hydroBank: () => null,
     onRoad: () => false,
     palette: (_elevAbs, _slope, _cover, x, z) => colourAt(x, z),
     areaTint: () => null,
