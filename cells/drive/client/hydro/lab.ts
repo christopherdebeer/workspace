@@ -469,7 +469,7 @@ function makeTerrain(
     cutL: heightTile.w / terrainSegments,
     channels: new Map(),
     grid: heightTile.w / terrainSegments,
-    hydroBreakLines: () => breakLines,
+    hydroBreakLines: () => breakLines, hydroFloor: () => null,
     onRoad: () => false,
     palette: (_elevAbs, _slope, _cover, x, z) => colourAt(x, z),
     areaTint: () => null,

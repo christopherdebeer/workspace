@@ -14,6 +14,8 @@
  * our own — the public endpoints named in the cell's CSP are the whole
  * backend.
  */
+import { sampleFieldSurface } from './hydro/field-sample';
+import type { HydroTileField } from './hydro/types';
 import * as THREE from 'three';
 import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, CLIM_G, ClimateField, GROUND_RAMPS, altBandAt, aspectLift, climPick,
   climPickRow, krummholz, siteAt, swardLift, treelineAt, type ClimateSample, type SiteClimate } from './climate';
@@ -3518,6 +3520,54 @@ const hydroRev = new Map<string, number>();
 /** Exact flowing-water coverage contours admitted into terrain triangulation.
  * The field owns x/z placement; channel carving continues to own elevation. */
 const hydroShoreBreakLines = new Map<string, BreakLine[]>();
+/** The field's bed under drawn water per tile, on the hydro raster's lattice
+ *  (HYDRO_EN square, absolute metres, NaN where nothing is drawn) — the
+ *  ceiling the terrain kernel holds the ground to. See publishHydroFloor. */
+const hydroFloors = new Map<string, Float32Array>();
+/**
+ * THE GROUND UNDER DRAWN WATER IS AT MOST THE FIELD'S BED.
+ *
+ * The water census read the Umgeni's riverbank polygon as one buried blob:
+ * the body's level is a low quantile of the DEM inside its outline, so most
+ * of that interior stood above its own water and the drawn surface ran
+ * underground. Nothing had ever moved the terrain to meet a resting level
+ * inland — the channel carve follows a LINE, the coastal drop is the sea's.
+ * This publishes, per tile and per field revision, the bed the field itself
+ * states (resting level minus its depth, which is the DEM where the ground
+ * is already under water and level minus the minimum depth where it is not)
+ * at every lattice point the field draws at the waterline cut; the kernel
+ * lowers vertices to it, roads excepted. The sea is left out: its floor is
+ * SEA_BED's, and an ocean mask bleeding onto a cliff foot must not cut it.
+ * Returns whether the tile's floor changed, so the caller can dirty the
+ * terrain once for lines and floor together.
+ */
+function publishHydroFloor(t: HeightTile, key: string, field: HydroTileField): boolean {
+  const n = HYDRO_EN;
+  const out = new Float32Array(n * n);
+  let any = false;
+  for (let iz = 0; iz < n; iz++) {
+    const z = t.zs + (iz / (n - 1)) * t.h;
+    for (let ix = 0; ix < n; ix++) {
+      const x = t.xs + (ix / (n - 1)) * t.w;
+      const w = sampleFieldSurface(field, x, z, 0);
+      if (!w || w.kind === 'ocean' || w.coverage < WATERLINE_CUT(x, z, w.kind)) { out[iz * n + ix] = NaN; continue; }
+      out[iz * n + ix] = w.restingLevelM - Math.max(w.depthM, .08);
+      any = true;
+    }
+  }
+  const previous = hydroFloors.get(key);
+  if (!any) { if (!previous) return false; hydroFloors.delete(key); return true; }
+  if (previous && previous.length === out.length) {
+    let same = true;
+    for (let i = 0; i < out.length && same; i++) {
+      const a = previous[i], b = out[i];
+      if (Number.isNaN(a) !== Number.isNaN(b) || (!Number.isNaN(a) && Math.abs(a - b) > .01)) same = false;
+    }
+    if (same) return false;
+  }
+  hydroFloors.set(key, out);
+  return true;
+}
 function sameHydroBreakLines(
   a: readonly BreakLine[] | undefined,
   b: readonly BreakLine[],
@@ -3545,9 +3595,13 @@ function publishHydroShoreBreakLines(t: HeightTile, key: string): void {
     });
   }
   const previous = hydroShoreBreakLines.get(key);
-  if (sameHydroBreakLines(previous, lines)) return;
-  if (lines.length) hydroShoreBreakLines.set(key, lines);
-  else hydroShoreBreakLines.delete(key);
+  const linesChanged = !sameHydroBreakLines(previous, lines);
+  const floorChanged = publishHydroFloor(t, key, field);
+  if (!linesChanged && !floorChanged) return;
+  if (linesChanged) {
+    if (lines.length) hydroShoreBreakLines.set(key, lines);
+    else hydroShoreBreakLines.delete(key);
+  }
   // The first field is allowed to render while this queued topology pass
   // catches up. Render cutover invalidates the whole substrate tile here, so
   // it cannot atomically publish water against the old terrain packet.
@@ -8491,6 +8545,7 @@ const kStore: TerrainStore = {
   get channels() { return channelGrid as Map<string, StripLike[]>; },
   get grid() { return GRID; },
   hydroBreakLines: (t) => hydroShoreBreakLines.get(`${t.tx}/${t.ty}`) ?? [],
+  hydroFloor: (t) => { const d = hydroFloors.get(`${t.tx}/${t.ty}`); return d ? { n: HYDRO_EN, data: d } : null; },
   onRoad: (x, z) => onCarriageway(x, z, 0.6).road,
   palette: (elevAbs, slope, cover, x, z) => terrainPalette(elevAbs, slope, cover, x, z),
   areaTint: (x, z) => areaTintAt(x, z),
@@ -8724,6 +8779,10 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
       }
       return flat;
     })(),
+    // A copy per job: the buffer is transferred, and the tile's floor stays
+    // here for the next build.
+    hydroFloor: (hydroFloors.get(`${t.tx}/${t.ty}`) ?? new Float32Array(0)).slice(),
+    hydroFloorN: hydroFloors.has(`${t.tx}/${t.ty}`) ? HYDRO_EN : 0,
     crossings, areas, pads,
     clim, climN: N, climK: KW,
     ramp: biome.ramp, ramps: BIOME_LIST.map((b) => b.ramp), coverTint: COVER_TINT, coverMix: COVER_MIX,
@@ -8733,6 +8792,7 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
     st.flat.buffer,
     ch.flat.buffer,
     job.hydroBreakLines.buffer,
+    job.hydroFloor.buffer,
     pads.buffer,
     clim.buffer,
   ] as unknown as Transferable[] };
@@ -24738,6 +24798,7 @@ function substrateRenderSnapshot(): Record<string, number> {
     activeHydroDetailColliders,
     uncommittedHydroDetailColliders,
     hydroShoreBreakLineTiles: hydroShoreBreakLines.size,
+    hydroFloorTiles: hydroFloors.size,
     hydroShoreBreakLineSegments,
     atomicCommits: substrateAtomicRenderCommits,
     atomicRefusals: substrateAtomicRenderRefusals,
@@ -35070,7 +35131,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // compiled program to change some bounds.
     for (const key of hydroRev.keys()) hydroSys?.removeTile(key);
     hydroRev.clear(); hydroDirty.clear(); hydroFedInputs.clear(); hydroFeats.clear(); hydroFeatsFull = 0; coverHydro.clear();
-    hydroShoreBreakLines.clear();
+    hydroShoreBreakLines.clear(); hydroFloors.clear();
     coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear(); sideCaches.clear();
     // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
     // spatially keyed, so the last postcard's road left an elevation under

@@ -89,6 +89,12 @@ export interface TerrainStore {
   /** Canonical hydro coverage contours crossing this tile. These are geometry
    * constraints only: channel carving still owns their elevation. */
   hydroBreakLines(t: HeightTile): readonly BreakLine[];
+  /** THE FIELD'S BED UNDER DRAWN WATER — an n×n lattice over the tile (point 0
+   * at xs, n-1 at xs+w, the hydro raster's own lattice), absolute metres where
+   * the field draws water at its coverage cut and NaN elsewhere; null when the
+   * tile has no field yet. The height passes take it as a ceiling: the ground
+   * under drawn water is at most the field's bed. */
+  hydroFloor(t: HeightTile): { n: number; data: Float32Array } | null;
   onRoad(x: number, z: number): boolean;
   palette(elevAbs: number, slope: number, cover: number | null, x: number, z: number): Rgb;
   areaTint(x: number, z: number): Rgb | null;
@@ -599,6 +605,19 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
    *  that land on a cell boundary are recomputed from the line and the boundary
    *  coordinate, so the neighbouring cell — split by the same line, from its own
    *  pieces — arrives at the same point bit for bit. */
+  /** The field's bed at (x, z) from the tile's floor lattice — bilinear, and
+   *  only where all four corners carry a bed. A corner without one is the
+   *  shore at lattice resolution, and lowering a vertex there would dig a dry
+   *  hollow beside the water; the shore band is bank shaping's, not this. */
+  function hydroFloorAt(fl: { n: number; data: Float32Array }, t: HeightTile, x: number, z: number): number | null {
+    const n = fl.n;
+    const fx = clamp(((x - t.xs) / t.w) * (n - 1), 0, n - 1), fz = clamp(((z - t.zs) / t.h) * (n - 1), 0, n - 1);
+    const ix = Math.min(n - 2, Math.floor(fx)), iz = Math.min(n - 2, Math.floor(fz));
+    const tx = fx - ix, tz = fz - iz;
+    const a = fl.data[iz * n + ix], b = fl.data[iz * n + ix + 1], c = fl.data[(iz + 1) * n + ix], d = fl.data[(iz + 1) * n + ix + 1];
+    if (!(Number.isFinite(a) && Number.isFinite(b) && Number.isFinite(c) && Number.isFinite(d))) return null;
+    return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
+  }
   function cellTable(pos: Float32Array, idx: Uint32Array | Uint16Array, SEG: number): CellTris {
     let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
     for (let i = 0; i < (pos.length / 3); i++) {
@@ -996,10 +1015,15 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     // fall back inside this tile, and the owner's row then pins the follower.
     const fieldAt = (x: number, z: number): number => S.hasHeight(x, z) ? S.sampleHeight(x, z)
       : S.sampleHeight(clamp(x, t.xs + 1e-4, t.xs + t.w - 1e-4), clamp(z, t.zs + 1e-4, t.zs + t.h - 1e-4));
+    const floor = S.hydroFloor(t);
     for (let i = 0; i < n; i++) {
       const x = px[i], z = pz[i];
       let N = fieldAt(x, z);
       if (S.sampleCover(x, z) === S.cover.water && N <= seaLocal + 2) N = Math.min(N, seaLocal - SEA_BED);
+      // THE GROUND UNDER DRAWN WATER IS AT MOST THE FIELD'S BED — the water
+      // census read a riverbank polygon's whole interior as buried, the DEM
+      // standing above the body's own level. Roads keep their deck.
+      if (floor) { const f = hydroFloorAt(floor, t, x, z); if (f !== null && f - S.baseElev < N && !S.onRoad(x, z)) N = f - S.baseElev; }
       let h = N, k = 0;
       const pin = pinned.get(i) ?? ownerY(x, z);
       if (pin !== undefined) h = pin;
@@ -1622,6 +1646,7 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       height: (x: number, z: number): number | null =>
         S.hasHeight(x, z) ? S.sampleHeightRaw(x, z) + S.baseElev : null,
     });
+    const floor = refined ? null : S.hydroFloor(t);
     for (let i = 0; i < (refined ? 0 : (pos.length / 3)); i++) {
       const ex = pos[(i) * 3] + cxm, ez = pos[(i) * 3 + 2] + czm;
       const cv = S.sampleCover(ex, ez);
@@ -1648,6 +1673,8 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
         const seaLocal = S.seaAbs() - S.baseElev;
         if (elev <= seaLocal + 2) elev = Math.min(elev, seaLocal - SEA_BED);
       }
+      // The field's bed as a ceiling — see refineTileGeometry's site.
+      if (floor) { const f = hydroFloorAt(floor, t, ex, ez); if (f !== null && f - S.baseElev < elev && !S.onRoad(ex, ez)) elev = f - S.baseElev; }
       pos[(i) * 3 + 1] = elev;
     }
     // A stitched plain tile still carves — its own roads are the old grid's —
