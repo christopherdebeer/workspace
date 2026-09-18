@@ -16260,6 +16260,23 @@ within 110 m at the last tick while every birth happened at 60–340 m — it
 read 108 m and failed. It now reads the births themselves: dot or flank
 births happened, none in frame.
 
+**AND THE TEST HAD NEVER DRIVEN.** Its drive was `__drive.speed = 26` once
+a tick — which the physics ignores: a stopped truck is held and speed is
+derived from the throttle (the "hold a stopped truck" unit). A probe at the
+test's own spot read x 0, z 0, v 0 for twelve ticks with the herd standing
+where it arrived. So every run of this test, the original included, proved
+"an animal in frame does not move further in a tick than it could walk"
+over a drive that never happened — 260, then 593, then 2,656 in-frame
+animal-ticks with 0 jumps, all of a stationary herd watched by a parked
+truck, and the births check saw only the arrival because nothing was ever
+left behind. The truck is HOPPED now, 18.2 m along its heading a tick
+(26 m/s), the way the harness's `walkTo` moves it: the chase camera follows,
+the animals see a truck at rest (no flee), which is the stricter case for
+the law since nothing outruns the frustum on its own, and the arrival herd
+is passed, left 364 m behind, reborn ahead and passed again inside the
+hundred ticks. A test whose drive is a variable the physics overwrites is a
+test of the settle time.
+
 ### Measured, the same rigs as the review
 
 | | pulled (`9459a6c`) | owned |
@@ -16271,7 +16288,7 @@ births happened, none in frame.
 | Camps Bay, 100 s: born dot / flank | — | 16 / 35 |
 | step cost, harness | 1.4–9.5 ms | 2–5 ms (unseen cadence; the sweep gone for standing animals) |
 | 4 km walk, Victoria Road: samples with a herd in the frustum / within 60 m / within 120 m / median nearest | 6% / 6% / 48% / 120 m | 61% / 56% / 72% / 52 m |
-| `critter-hold.test.mjs` (the law) | green (old proxy): 260 in-frame animal-ticks, 0 jumps | green (the module's sight test): 593 in-frame animal-ticks, 0 jumps |
+| `critter-hold.test.mjs` (the law) | green (old proxy): 260 in-frame animal-ticks, 0 jumps — on a truck that never moved, see below | green (the module's sight test, the truck hopped): see below |
 
 The DOT births are fewer than the flank ones on the coast road (46 against
 202 over the walk) because 300 m ahead along Victoria Road is sea or

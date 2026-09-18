@@ -48,7 +48,16 @@ const DOT_M = 300; // HERD_DOT_M in client/wildlife.ts
 
 // Drive. The wrap edge is only crossed by moving, and the fault needs enough
 // ground covered to push a whole box past the camera.
-await d.page.evaluate(() => { window.__drive.speed = 26; });
+// THE TRUCK IS HOPPED, NOT THROTTLED. `__drive.speed = 26` never moved it:
+// the physics holds a stopped truck and derives speed from the throttle, so
+// every earlier run of this test — the original included — sampled a
+// STATIONARY truck and proved the law over a drive that never happened
+// (the probe: x 0, z 0, v 0 for twelve ticks, the herd standing where it
+// arrived). The harness's own walkTo does what a drive needs here: advance
+// the truck along its heading by a tick's worth of 26 m/s and let the chase
+// camera follow. The animals see a truck at rest (no flee), which is the
+// stricter case for the law — nothing outruns the frustum on its own.
+const hop = () => d.page.evaluate(() => { const s = window.__drive; s.x += Math.sin(s.heading) * 18.2; s.z += -Math.cos(s.heading) * 18.2; });
 let jumps = [];
 let watched = 0;
 let prev = await snap();
@@ -59,7 +68,7 @@ let prev = await snap();
 // of salt flat) sees the herd overtaken, left behind, reborn ahead and passed
 // again, which is where a pop would be.
 for (let i = 0; i < 100; i++) {
-  await d.page.evaluate(() => { window.__drive.speed = 26; });
+  await hop();
   await d.page.waitForTimeout(700);
   const now = await snap();
   // BOTH ENDS OF THE TELEPORT. Checking only where an animal STARTED misses
