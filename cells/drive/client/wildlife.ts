@@ -33,7 +33,11 @@ export function createWildlife(env:Environment) {
   let time=0,initialized=false,closest=Infinity,climatePending=false;
   const frustum=new THREE.Frustum(),vp=new THREE.Matrix4(),sphere=new THREE.Sphere(),dummy=new THREE.Object3D();
   dummy.rotation.order='YXZ';
-  const stats={steps:0,samples:0,blocked:0,recycles:0,spawnAttempts:0,footSamples:0,constrainedClearance:0,ms:0};
+  const stats={steps:0,samples:0,blocked:0,recycles:0,spawnAttempts:0,footSamples:0,constrainedClearance:0,ms:0,
+    // Why a spawn attempt was refused, so the seat can tell an empty plain from a herd that is there and unseen.
+    refused:{noGround:0,unhabitable:0,trace:0,rain:0,seen:0,truck:0},spawned:0,
+    // Which check of the per-frame sweep stopped an animal (a frozen herd is one of these, every frame).
+    stoppedBy:{} as Record<string,number>};
   const sample:SampleSupport=(...args)=>{stats.samples++;return env.sample(...args);};
   const trace=(c:Critter,x:number,z:number)=>tracePath(sample,c,x,z,env.clear);
   const seen=(x:number,y:number,z:number,r=3)=>{
@@ -72,20 +76,21 @@ export function createWildlife(env:Environment) {
       const radius=BOX[k]*(.18+rng()*.24);
       const angle=groupAngle+(rng()-.5)*1.25;
       const x=centre.x+Math.sin(angle)*radius,z=centre.z+Math.cos(angle)*radius;
-      const ground=env.ground(x,z);if(ground===null)continue;
+      const ground=env.ground(x,z);if(ground===null){stats.refused.noGround++;continue;}
       let y=ground+ALT[c.sp];
       if(!air){
         const s=sample(x,z,undefined,[.31,.56,.38][c.sp]*c.sz);
-        if(!habitable(s,c.sz,LEG[c.sp]))continue;
+        if(!habitable(s,c.sz,LEG[c.sp])){stats.refused.unhabitable++;continue;}
         const probe={...c,x,y:s.y,z};const check=trace(probe,x+.01,z);
-        if(!check.complete)continue;y=check.y;
-      }else if(env.rain(x,z)>.72)continue;
+        if(!check.complete){stats.refused.trace++;continue;}y=check.y;
+      }else if(env.rain(x,z)>.72){stats.refused.rain++;continue;}
       // Initial arrival follows the same no-pop rule as recycling. If the
       // drone sees all available terrain, wait for an unseen valid site.
-      if(seen(x,y+(air?0:1),z,air?3:3*c.sz)||Math.hypot(x-truck.x,z-truck.z)<HERD_CLEAR+8)continue;
+      if(seen(x,y+(air?0:1),z,air?3:3*c.sz)){stats.refused.seen++;continue;}
+      if(Math.hypot(x-truck.x,z-truck.z)<HERD_CLEAR+8){stats.refused.truck++;continue;}
       c.x=x;c.y=y;c.z=z;c.active=true;c.feet=[];c.lastNear=false;c.vy=0;c.wet=0;
       c.nextPlan=0;c.safeSpeed=22;c.turn=0;c.seen=time-3;
-      if(recycle)stats.recycles++;
+      if(recycle)stats.recycles++;stats.spawned++;
       return true;
     }
     return false;
@@ -161,7 +166,7 @@ export function createWildlife(env:Environment) {
         c.vx=Math.sin(yaw)*allowed;c.vz=Math.cos(yaw)*allowed;
         const t=trace(c,c.x+c.vx*dt,c.z+c.vz*dt);
         c.x=t.x;c.y=t.y;c.z=t.z;
-        if(!t.complete){c.vx=0;c.vz=0;stats.blocked++;}
+        if(!t.complete){c.vx=0;c.vz=0;stats.blocked++;const w=t.why??'?';stats.stoppedBy[w]=(stats.stoppedBy[w]??0)+1;}
         let d=Math.hypot(c.x-truck.x,c.z-truck.z);
         if(d<HERD_CLEAR){
           let rescued=false;
@@ -227,6 +232,6 @@ export function createWildlife(env:Environment) {
     consumeClosest(){const d=closest;closest=Infinity;return{closest:Number.isFinite(d)?+d.toFixed(2):null,clearance:HERD_CLEAR,constrained:stats.constrainedClearance};},
     diagnostics(){return{...stats,activeBirds:flock.filter(c=>c.active).length,activeHerd:graze.filter(c=>c.active).length,
       trianglesPerSpecies:[...herds,...birdMeshes].map(m=>m.geometry.attributes.position.count/3),climatePending,
-      actors:[...graze,...flock].map(c=>({id:c.id,seed:c.seed,sp:c.sp,active:c.active,x:c.x,y:c.y,z:c.z,phase:c.ph,feet:c.feet}))};},
+      actors:[...graze,...flock].map(c=>({id:c.id,seed:c.seed,sp:c.sp,active:c.active,x:c.x,y:c.y,z:c.z,phase:c.ph,feet:c.feet,seenAgo:+(time-c.seen).toFixed(2),speed:+Math.hypot(c.vx,c.vz).toFixed(2)}))};},
   };
 }

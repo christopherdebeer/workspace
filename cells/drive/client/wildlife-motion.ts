@@ -11,8 +11,10 @@ export function habitable(s: Support, size: number, leg: number): boolean {
 }
 /** Sweep the centre and both flanks, following the support layer from the
  * last accepted station. A destination alone cannot detect a crossed ditch. */
+export type TraceWhy = 'middle'|'step'|'flank'|'flankSlope'|'flankWall'|'end'|'endSlope'|'wall';
+export interface Trace { x:number; y:number; z:number; travelled:number; complete:boolean; why?:TraceWhy }
 export function tracePath(sample: SampleSupport, c: AnimalPoint, x: number, z: number,
-  clear: (ax: number, az: number, bx: number, bz: number, y: number) => boolean = () => true) {
+  clear: (ax: number, az: number, bx: number, bz: number, y: number) => boolean = () => true): Trace {
   const dx = x - c.x, dz = z - c.z, distance = Math.hypot(dx, dz);
   const n = Math.max(1, Math.ceil(distance / .4));
   const radius = [ .31, .56, .38 ][c.sp] * c.sz, leg = [.92,.82,1.12][c.sp];
@@ -21,14 +23,14 @@ export function tracePath(sample: SampleSupport, c: AnimalPoint, x: number, z: n
   for (let i = 1; i <= n; i++) {
     const nx = c.x + dx * i / n, nz = c.z + dz * i / n, ds = distance / n;
     const middle = sample(nx, nz, y, radius);
-    if (!habitable(middle, c.sz, leg) || Math.abs(middle.y-y) > Math.max(.16*c.sz, ds*.65))
-      return {x:px,y,z:pz,travelled,complete:false};
+    if (!habitable(middle, c.sz, leg)) return {x:px,y,z:pz,travelled,complete:false,why:'middle'};
+    if (Math.abs(middle.y-y) > Math.max(.16*c.sz, ds*.65)) return {x:px,y,z:pz,travelled,complete:false,why:'step'};
     for (const side of [-1, 1]) {
       const ox=sideX*radius*side, oz=sideZ*radius*side;
       const flank = sample(nx+ox,nz+oz,y,radius);
-      if (!habitable(flank,c.sz,leg) || Math.abs(flank.y-middle.y)>radius*.75 ||
-          !clear(px+ox,pz+oz,nx+ox,nz+oz,Math.min(y,middle.y)+leg*c.sz*.6))
-        return {x:px,y,z:pz,travelled,complete:false};
+      if (!habitable(flank,c.sz,leg)) return {x:px,y,z:pz,travelled,complete:false,why:'flank'};
+      if (Math.abs(flank.y-middle.y)>radius*.75) return {x:px,y,z:pz,travelled,complete:false,why:'flankSlope'};
+      if (!clear(px+ox,pz+oz,nx+ox,nz+oz,Math.min(y,middle.y)+leg*c.sz*.6)) return {x:px,y,z:pz,travelled,complete:false,why:'flankWall'};
     }
     // Front and rear feet need support too: a centre-only cylinder lets a
     // long animal overhang a bank while its middle remains on dry ground.
@@ -36,11 +38,11 @@ export function tracePath(sample: SampleSupport, c: AnimalPoint, x: number, z: n
     const forwardX=distance>.0001?dx/distance:0,forwardZ=distance>.0001?dz/distance:1;
     for(const end of [-1,1]){
       const support=sample(nx+forwardX*halfLength*end,nz+forwardZ*halfLength*end,y,radius);
-      if(!habitable(support,c.sz,leg)||Math.abs(support.y-middle.y)>halfLength*.65+.08)
-        return {x:px,y,z:pz,travelled,complete:false};
+      if(!habitable(support,c.sz,leg)) return {x:px,y,z:pz,travelled,complete:false,why:'end'};
+      if(Math.abs(support.y-middle.y)>halfLength*.65+.08) return {x:px,y,z:pz,travelled,complete:false,why:'endSlope'};
     }
     if (!clear(px,pz,nx,nz,Math.min(y,middle.y)+leg*c.sz*.6))
-      return {x:px,y,z:pz,travelled,complete:false};
+      return {x:px,y,z:pz,travelled,complete:false,why:'wall'};
     px=nx;pz=nz;y=middle.y;travelled=distance*i/n;
   }
   return {x:px,y,z:pz,travelled,complete:true};
