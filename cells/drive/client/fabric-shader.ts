@@ -69,7 +69,7 @@ vec3 fbDx = dFdx(-vViewPosition), fbDy = dFdy(-vViewPosition);
 vec3 fbRx = cross(fbDy, normal), fbRy = cross(normal, fbDx);
 float fbDet = dot(fbDx, fbRx);
 vec3 fbGradient = (fbRx*dFdx(facRelief)+fbRy*dFdy(facRelief))
-  * sign(fbDet)/max(abs(fbDet),1e-8);
+  * (sign(fbDet)*faceDirection)/max(abs(fbDet),1e-8);
 // Bound extreme screen-space derivatives at silhouette/degenerate fragments.
 fbGradient *= min(1.0,.65/max(length(fbGradient),.0001));
 normal = normalize(normal - fbGradient);
