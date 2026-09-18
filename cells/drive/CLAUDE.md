@@ -16626,3 +16626,60 @@ reserved words, `patch` among them, and it is green on the renamed
 wildlife shader. It would have caught the pulled one. The lesson is not a
 new test; it is that pulled code gets the existing suite run over it
 before it is judged.
+
+## Step 2b, re-aimed by the witness: the ground under drawn water is at most the field's bed
+
+**The first 2b was wrong, and the after-census said so in one row.** The
+plan's step 2b read "hydro samples the DEM, contact the carved mesh; sample
+the hydro elevation after the carve". Done as written — `hydroElevation`
+taking `channelFloorAt` — the Umgeni's buried count ROSE from 2,402 to 3,037
+and its drawn count fell from 4,284 to 3,662. Two consumers of the raster
+are level evidence, not ground: an area body's level is a quantile of its
+interior samples (`build-tile.ts:244-273`), and a flowing level is capped at
+the raster bed plus a nominal depth (`:1169`, `:1235`). Carve the raster and
+both levels sink — the water goes underground by the amount it was carved.
+Reverted before it landed. (And the sweep's premise was half wrong anyway:
+hydro already takes the carved invert for river profiles through
+`channelInvertM`; what it never had was a reason to move the TERRAIN.)
+
+**Then the rasters said what buried water is.** `wet-census` saves the
+129×129 class map; downsampled:
+
+- **Umgeni** — one blob. The riverbank polygon's whole interior on the left
+  bank reads `U`, water only at its edges and on the right. The body's
+  level is a low quantile of the DEM inside its outline, so most of that
+  interior stands above its own water, and the drawn surface runs under
+  ground. Nothing had ever moved terrain to meet a resting level inland: the
+  channel carve follows a LINE and the coastal drop is the sea's.
+- **Senqu ford, Bixby** — thin bands. The line rivers draw `W` down their
+  length with `U`/`E` along the edges: the field's coverage reaches a little
+  past the class half-width the carve digs, onto the 1:1 bank. Bank shaping
+  (#169), and small.
+
+**The floor (`2b93b73`).** Main publishes, per tile and per field revision
+and beside the breaklines, the bed the field itself states — resting level
+minus its depth, which is the DEM where the ground is already under water
+and level minus the 8 cm minimum where it is not — at every hydro-lattice
+point (`HYDRO_EN` = 132) the field draws at the waterline cut. The sea is
+left out (its floor is `SEA_BED`'s, and an ocean mask bleeding onto a cliff
+foot must not cut it). The job carries the lattice to the worker like the
+breaklines; both height passes (`refineTileGeometry`, `buildTile`'s plain
+loop) hold the ground to it: bilinear, applied only where all four lattice
+corners carry a bed — a corner without one is the shore at lattice
+resolution, and lowering there would dig a dry hollow beside the water —
+and never on a road. It runs before corridors and channels, which only
+lower, so the other agent's point-bar shelf (their `channelFloorAt` change,
+merged the same hour) is never cut by it in the common case: a bar tops out
+at invert + 0.33 m, the floor under a nominal-depth river sits near invert
++ 0.52. `terrain-crossing`, `substrate`, `hydro`, `inland-water` green.
+
+**Measured, the witness before and after (the after-census still running
+when this was committed; the remaining rows are added as they land):**
+
+| fixture | before: W / U / E | after: W / U / E |
+|---|---|---|
+| at-senqu-ford | 555 / 107 / 182 | 593 / 5 / 331 |
+
+The Senqu ford's buried count goes from 107 to 5 at the first row; the
+waterline band grows because ground lowered to the bed now reads as shore
+instead of burial.
