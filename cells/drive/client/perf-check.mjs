@@ -10,7 +10,7 @@ const main = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
 const helperCode = esbuild.transformSync(fs.readFileSync(new URL('./render-work.ts', import.meta.url), 'utf8'), {loader:'ts',format:'cjs'}).code;
 const helperContext = {module:{exports:{}},exports:{}};
 vm.runInNewContext(helperCode,helperContext);
-const {squareRings,nearestStable,uploadPrefix} = helperContext.module.exports;
+const {squareRings,nearestStable,nearestPrefix,uploadPrefix} = helperContext.module.exports;
 let seed = 45;
 const random = () => { seed = (Math.imul(seed,1664525)+1013904223)>>>0; return seed/4294967296; };
 function oldRing(cx,cz,reach) {
@@ -27,6 +27,45 @@ for(const n of [0,1,5,90,1000,40000]) {
     const expected=list.slice().sort((a,b)=>a.d-b.d).slice(0,k).map(v=>v.id);
     assert.equal(JSON.stringify(nearestStable(list.slice(),k,v=>v.d).map(v=>v.id)),JSON.stringify(expected));
   }
+}
+// THE HISTOGRAM PREFIX IS EXACT: prefix-then-select must equal select, on
+// lists with heavy ties (few distinct distances, so the k-th nearest sits
+// inside a tie group that must be kept whole) and on dense ones. The prefix
+// must also actually CUT where there is room to — a helper that returns its
+// input passes the identity and buys nothing.
+for(const n of [0,1,5,90,1000,40000]) for(const ties of [4,100,1e9]) {
+  const list=Array.from({length:n},(_,i)=>({d:Math.floor(random()*ties)+(ties>1e6?random():0),id:i}));
+  for(const k of [0,1,3,8,100,n>>3,n>>2,n]) {
+    const expected=nearestStable(list.slice(),k,v=>v.d).map(v=>v.id);
+    const pre=nearestPrefix(list,k,v=>v.d);
+    assert.ok(pre.length>=Math.min(k,n),`the prefix holds at least k (n ${n} k ${k} ties ${ties})`);
+    assert.equal(JSON.stringify(nearestStable(pre.slice(),k,v=>v.d).map(v=>v.id)),JSON.stringify(expected),`prefix then select equals select (n ${n} k ${k} ties ${ties})`);
+    if(n>=1000&&k>0&&k<=(n>>3)&&ties>=100) assert.ok(pre.length<n/2,`the prefix cut the list (n ${n} k ${k}: kept ${pre.length})`);
+  }
+}
+// NEGATIVE CONTROL: the same construction keeping bins STRICTLY nearer than
+// the cut bucket — the off-by-one the keep test could have — loses part of
+// the tie group at the edge and fails the identity. A check that cannot fail
+// on the fault it names is decoration.
+{
+  const prefixShort=(list,k,distance,bins=512)=>{
+    const n=list.length; let lo=Infinity,hi=-Infinity;
+    for(const v of list){const d=distance(v); if(d<lo)lo=d; if(d>hi)hi=d;}
+    const scale=bins/(hi-lo), counts=new Int32Array(bins);
+    for(const v of list){let b=((distance(v)-lo)*scale)|0; if(b>=bins)b=bins-1; counts[b]++;}
+    let cut=0; for(let seen=0;cut<bins;cut++){seen+=counts[cut]; if(seen>=k)break;}
+    return list.filter(v=>{let b=((distance(v)-lo)*scale)|0; if(b>=bins)b=bins-1; return b<cut;});
+  };
+  let broke=0;
+  for(const n of [1000,40000]) {
+    const list=Array.from({length:n},(_,i)=>({d:Math.floor(random()*4),id:i}));
+    for(const k of [3,8,100,n>>3]) {
+      const expected=JSON.stringify(nearestStable(list.slice(),k,v=>v.d).map(v=>v.id));
+      const got=JSON.stringify(nearestStable(prefixShort(list,k,v=>v.d).slice(),k,v=>v.d).map(v=>v.id));
+      if(got!==expected)broke++;
+    }
+  }
+  assert.ok(broke>0,'the negative control (a prefix one bucket short) must fail the identity somewhere');
 }
 // Real pinned three r160 attributes: multiple refills before rendering, then
 // empty, then a newly occupied prefix. Empty ranges must never mean a full upload.
@@ -94,7 +133,8 @@ const rungSrc=functionSource('ezRungOf')+'\n'+functionSource('ezTierTris');
 // reason that is not a regression.
 function context(code,range,ez,triCap,fullPx=0) {
   const c={THREE,performance,console,Math,Map,Set,WeakMap,Float32Array,
-    nearestStable,squareRings,uploadPrefix,renderer:{},
+    nearestStable,nearestPrefix,squareRings,uploadPrefix,renderer:{},
+    EZ_ADMIT_STEP:512,
     vegPhase:{},vegPhaseAt:0,vegSeedNow:0,vegSeedMsNow:0,vegSeedDeferred:0,
     vegSeedLeft:0,VEG_SEED_BUDGET:true,VEG_SEED_MS:8,frameHeavyMs:()=>0,
     state:{x:15,z:-31},VEG_CELL:220,VEG_RANGE:700,treeRange:range,
@@ -539,4 +579,13 @@ for(const [range,ez,k] of [[700,true,120],[2800,true,120],[2800,true,1200],[700,
 const data=Array.from({length:100000},(_,i)=>({d:random()*1e6,id:i}));
 function time(fn,n=15){const a=[];for(let i=0;i<n+5;i++){const t=performance.now();fn();if(i>=5)a.push(performance.now()-t);}return a.sort((a,b)=>a-b)[Math.floor(n/2)];}
 const bench={n:data.length,k:8,oldMs:time(()=>data.slice().sort((a,b)=>a.d-b.d).slice(0,8)),newMs:time(()=>nearestStable(data.slice(),8,v=>v.d))};
+// The admission's own shape after the mid rung: a cap a third of the ring,
+// where nearestStable alone is a sort of the whole list.
+{
+  const ring=Array.from({length:16000},(_,i)=>[random()*1.96e6,i]);
+  const k=5000;
+  const sortMs=time(()=>nearestStable(ring.slice(),k,p=>p[0]));
+  const prefixMs=time(()=>nearestStable(nearestPrefix(ring,k,p=>p[0]),k,p=>p[0]));
+  bench.admit={n:ring.length,k,sortMs:+sortMs.toFixed(2),prefixMs:+prefixMs.toFixed(2),kept:nearestPrefix(ring,k,p=>p[0]).length};
+}
 console.log(JSON.stringify({checks:'PASS: ring order, stable selection incl ties, three r160 ranges, 20 production refill comparisons, card budget spent on apparent size, largest refused <= smallest drawn, handover band unbroken, cell cull changes nothing drawn and fires under the cap, no card on a carriageway',reports,selectionBenchmark:bench},null,2));

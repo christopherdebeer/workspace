@@ -25,7 +25,7 @@ import { cracks, makeCanvasTex, moss, speckle, wallTextures } from './wall-tex';
 import { chimneyGeo, flatRoofGeo, flipWinding, roofGeo } from './roof';
 import { drawRailTexture, railRepeatY, railSpec, type RailSpec } from './railway';
 import { morphology, plan as footprintPlan } from './morphology';
-import { nearestStable, squareRings, uploadPrefix } from './render-work';
+import { nearestPrefix, nearestStable, squareRings, uploadPrefix } from './render-work';
 import {
   WATERLINE_CUT,
   bankHabitat,
@@ -12933,6 +12933,10 @@ function impSlotFor(fam: EzFamily, vi: number): ImpAtlasSlot | null {
  *  so the test is a mask rather than a modulo, and 4,096 because at the seat's
  *  measured ~80 ns a step that is a third of a millisecond — under the slice
  *  budget's own floor, so the yield can never be the thing that overruns it. */
+/** The admitted-tree loop of the admission yields every this many trees —
+ *  see the note at the loop. 2,048 is about two to four milliseconds of the
+ *  per-tree work on a phone, one slice's worth. */
+const EZ_ADMIT_STEP = 2048;
 const IMPOSTOR_STEP = 4096;
 
 /** What the last refresh stood up, for the harness. */
@@ -15938,14 +15942,32 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       for (const f of EZ_FAMILIES) { nom += ezCapNominal(f); got += cap[f]; }
       ezScaleNow = nom > 0 ? got / nom : 1;
     }
+    // ── THE ADMISSION IS NOT ONE BLOCK ANY MORE ──
+    // The device put this phase at 65 ms a call once the mid rung's caps were
+    // five times the full rung's (Nagato, 60b1b4c1a1ab), and it was one
+    // unyielding span from the far gather's mark to this phase's: the
+    // allocator, then per family a selection over every candidate in the
+    // ring, then a loop over every ADMITTED tree — a variant pick, a rung, two
+    // Map writes and the census — and then the pool growth. Two cuts. The
+    // selection reads a histogram prefix first (`nearestPrefix`: exact, and
+    // the reason it is exact is written beside it), so the heap never sorts
+    // the whole ring; and the admitted loop yields every `EZ_ADMIT_STEP`
+    // trees, which is safe for the reason every other yield here is — staging
+    // is separate from the instances and the commit is one slice at the end,
+    // so a frame drawn between two slices shows the previous sweep whole.
+    // `ezEdge[fam]` is written per family before its loop, as it was; a
+    // family whose loop has not run yet carries last sweep's edge for a
+    // slice, which is what the far gather already lives on.
+    let admitted = 0;
     for (const fam of EZ_FAMILIES) {
       let list = cand[fam];
       const cap = ezCapFor(fam);
       if (list.length > cap) {
-        list = nearestStable(list, cap, p => p[0]);
+        list = nearestStable(nearestPrefix(list, cap, p => p[0]), cap, p => p[0]);
         ezEdge[fam] = cap > 0 ? Math.sqrt(list[cap - 1][0]) : 0;
       }
       for (const [d2, v] of list) {
+        if ((++admitted % EZ_ADMIT_STEP) === 0) yield;
         ezAdmit.add(v);
         // Off the card tier's books: a tree the skeletons are drawing is not a
         // tree the card budget has to find room for, and counting it as demand

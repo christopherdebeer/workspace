@@ -64,6 +64,63 @@ export function nearestStable<T>(list: T[], count: number, distance: (v: T) => n
   return heap.map(i => list[i]);
 }
 
+/**
+ * ── A CANDIDATE LIST IS CUT TO A PREFIX BEFORE IT IS SELECTED FROM ──
+ *
+ * `nearestStable` is O(n log k) while k is small against n, and falls back to
+ * a FULL SORT of the list once k·4 >= n. The mid rung made that the common
+ * case for the tree admission: its caps are about five times the full rung's,
+ * so a family whose selection used to be a small heap over a big list is now
+ * a sort of most of it — 65 ms a call on a device where 8 was the reading
+ * the day before, in one unyielding block. This is the histogram prefix the
+ * doctrine sketched for it. Two O(n) passes: bin the distances linearly into
+ * `bins` buckets, prefix-sum to the bucket where the cumulative count first
+ * reaches k, and keep every element in that bucket or a nearer one, IN INPUT
+ * ORDER. The selection then runs over the residue — about k plus one bucket.
+ *
+ * EXACT, NOT APPROXIMATE, and the argument is short: bins are monotone in the
+ * distance, so every element in a nearer bucket than the k-th nearest's is
+ * strictly nearer than it, and there are fewer than k of those (or the prefix
+ * sum would have stopped earlier) — hence the cut bucket is at or past the
+ * k-th nearest's, the first k of the stable order are all kept, and their
+ * relative order is untouched. Ties share a bucket by construction, so the
+ * tie rule `nearestStable` promises (input order, and `perf-check` holds it)
+ * cannot be broken at the edge. The keep test uses the SAME bin arithmetic as
+ * the count, never the bucket's edge in floats, so what was counted into the
+ * cut bucket is what is kept.
+ *
+ * Returns the list itself when there is nothing to cut — k covers the list,
+ * every distance is equal, or the k-th nearest sits in the last bucket. The
+ * caller passes the result to `nearestStable`; this function never sorts and
+ * never mutates.
+ */
+export function nearestPrefix<T>(list: T[], count: number, distance: (v: T) => number, bins = 512): T[] {
+  const k = Math.max(0, Math.floor(count));
+  const n = list.length;
+  if (!k) return [];
+  if (k >= n) return list;
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < n; i++) { const d = distance(list[i]); if (d < lo) lo = d; if (d > hi) hi = d; }
+  if (!(hi > lo)) return list;
+  const scale = bins / (hi - lo);
+  const counts = new Int32Array(bins);
+  for (let i = 0; i < n; i++) {
+    let b = ((distance(list[i]) - lo) * scale) | 0;
+    if (b >= bins) b = bins - 1;
+    counts[b]++;
+  }
+  let cut = 0;
+  for (let seen = 0; cut < bins; cut++) { seen += counts[cut]; if (seen >= k) break; }
+  if (cut >= bins - 1) return list;
+  const out: T[] = [];
+  for (let i = 0; i < n; i++) {
+    let b = ((distance(list[i]) - lo) * scale) | 0;
+    if (b >= bins) b = bins - 1;
+    if (b <= cut) out.push(list[i]);
+  }
+  return out;
+}
+
 interface UploadAttribute {
   itemSize: number;
   needsUpdate: boolean;

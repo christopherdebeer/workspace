@@ -15862,3 +15862,37 @@ What else the same dump says, read against the rows above it:
   wrapped inside it — a mark claims whatever runs between marks, so that is
   unattributed main-thread work landing in the camera step, and a wrapper
   is owed before it is named.
+
+### The admission reads a histogram prefix, and yields
+
+The cut the Nagato dump asked for, and one more thing it needed. `ezAdmit`
+is the span from the far gather's mark to its own — the water-fill, then per
+family a selection over every candidate in the ring, then a loop over every
+ADMITTED tree (a variant pick, a rung, two Map writes, the census), then the
+pool growth — and at 65 ms it was one unyielding block.
+
+- **`nearestPrefix` (render-work.ts) runs before `nearestStable`.** Bins the
+  distances linearly into 512 buckets, prefix-sums to the bucket where the
+  count reaches k, keeps everything in that bucket or nearer in input order.
+  Exact: the k-th nearest's bucket is at or past the cut (fewer than k lie in
+  nearer buckets, or the sum would have stopped), ties share a bucket, and
+  the keep test is the same bin arithmetic as the count rather than the
+  bucket's float edge. `perf-check` asserts prefix-then-select equals select
+  on dense lists and on lists of four distinct distances, that the prefix
+  actually cuts, and — the negative control — that the same construction
+  keeping one bucket short fails the identity. Measured in the sandbox at the
+  admission's own shape, 16,000 candidates and a cap of 5,000: **8.39 ms as
+  a sort, 3.03 ms through the prefix, 5,001 kept of 16,000.**
+- **AND THE ADMITTED LOOP YIELDS EVERY `EZ_ADMIT_STEP` (2,048) TREES.** The
+  selection is a few milliseconds of the 65; the rest is the per-tree loop,
+  which grew five times with the rung's caps and had no yield in it. Safe for
+  the reason every other yield in the refresh is — staging is separate from
+  the instances and the commit is one slice at the end. The sandbox runs the
+  step at 512 so the yield fires on its fixture; `perf-check` is still 20 of
+  20 production refills byte-identical, `tree-stand` all ok, `boot` clean.
+
+**The device is the verification, and the row is `ezAdmit` under `tree
+phases`.** What the sandbox can say is that the selection is 2.8× cheaper at
+this shape and the output is the same to the byte; what it cannot say is the
+per-tree loop's cost on a phone, which is why the yield went in beside the
+cut rather than after the next dump.
