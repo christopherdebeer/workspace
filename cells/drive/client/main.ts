@@ -35027,11 +35027,34 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     farMeshes.clear(); farTiles.clear(); farStale.clear(); farCoverHit.clear(); farTint.clear(); farRasters.clear(); farBakeZ.clear();
     for (const m of ovMeshes.values()) { ovGroup.remove(m); m.geometry.dispose(); }
     ovMeshes.clear(); ovTiles.clear(); ovPlaces.clear(); ovWays.clear(); ovWayV++;
+    // ── THE SURVIVORS ARE NAMED BY WHAT THEY ARE, NOT BY WHERE THEY SAT ──
+    //
+    // This guard used to name `farGroup` and `ovGroup`, which were direct
+    // children of `worldGroup` when it was written. The sphere work re-parented
+    // both under `planetGroup` and never came back here, so from that day the
+    // guard matched NOTHING: every hop removed the planet (globe, both shells,
+    // the theme group) and the hydro system's object from the scene and
+    // disposed their geometry, and neither is ever re-added — `planetGroup` is
+    // added at module scope and the hydro object inside `if (!hydroSys)`, which
+    // cannot run twice. Measured at the Senqu ford, hopping to the SAME
+    // coordinates: toggling the water's visibility moved 1 draw call and 13,212
+    // triangles before the hop and 0 and 0 after, while the field still held 20
+    // tiles and 34 wet cells — built, and nowhere to draw. A reload was the only
+    // cure, which is exactly what the seat reported.
+    //
+    // So the survivors are named directly, and re-attached below rather than
+    // merely skipped: a skip trusts that nobody re-parents them again, and that
+    // trust is the whole fault. Their CONTENTS are still swept — the two shells
+    // by the loops just above, the hydro tiles by key further down — so nothing
+    // of the old place survives inside them.
+    const hopKeep: THREE.Object3D[] = [planetGroup];
+    if (hydroSys) hopKeep.push(hydroSys.object3d);
     for (const child of [...worldGroup.children]) {
-      if (child === farGroup || child === ovGroup) continue;
+      if (hopKeep.includes(child)) continue;
       worldGroup.remove(child);
       child.traverse((o) => { const g = (o as THREE.Mesh).geometry; if (g) g.dispose(); });
     }
+    for (const keep of hopKeep) if (keep.parent !== worldGroup) worldGroup.add(keep);
     // …and everything that pointed INTO it. The parts the ceremony poses are
     // held in their own arrays, and a hop that dropped the group while keeping
     // the hinges would pose four orphans on the next launch.
@@ -35113,7 +35136,21 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     osmCorridor.clear(); osmDone.clear(); seenWays.clear(); wayTagLog.clear();
     tileStats.clear(); surveyedCache.clear();
     unbuilt = 0; osmFails = 0; osmDown = false;
-    mapFeats.length = 0; mapStroked.clear();
+    // ── THE MINIMAP IS PAINTED PIXELS, AND PIXELS ARE NOT A LIST ──
+    //
+    // Clearing the replay list stops the OLD features being re-stroked, and
+    // does nothing about the ink already on the canvas: the previous place's
+    // roads, water and footprints stayed under the new world's strokes, which
+    // is the "added to, never cleared" the seat saw. `mapRecentre` is the only
+    // thing that blanks it and it early-returns inside 3 km of its anchor — a
+    // hop puts the truck back at the origin, so it almost never fires, and the
+    // fault looked intermittent because a long drive before the hop happened to
+    // blank it on the way. The anchor goes back to the origin with the truck,
+    // and the ways-known counter stops accumulating across continents.
+    mapFeats.length = 0; mapStroked.clear(); mapKnown = 0;
+    mapAnchorX = 0; mapAnchorZ = 0;
+    mapCtx.fillStyle = '#141b14';
+    mapCtx.fillRect(0, 0, MAP_PX, MAP_PX);
     roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear(); bldRoofs.clear(); railWays.clear();
     channelGrid.clear(); rapidRocks.clear(); activeRapidRocks.clear(); chanSet.clear(); wiSet.clear();
     pendingWater.length = 0; productionCrossings.reset(); crossingAppliedRevision.clear();

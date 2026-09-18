@@ -16752,3 +16752,91 @@ they are TypeScript types, which esbuild erases. The class beside them
 verification grep is a false alarm waiting to happen — and the inverse of
 the `nodraw` lesson above: a check that cannot fail proves nothing, and a
 check that cannot succeed cries wolf.
+
+## A hop swept the planet and the water out of the scene, and left the minimap's ink on the glass
+
+**From the seat, after a break:** "navigating menu to DRIVES and then hopping
+to a new location, the HUD map has stale data which is just added to, not
+cleared, and hydro seems not to trigger unless a full reload." Two faults,
+both in `worldHop`, and neither where the report points: the hydro build was
+never the problem and the minimap's feature list was already cleared.
+
+### 1. THE SWEEP'S GUARD NAMED CHILDREN THAT HAD MOVED
+
+`worldHop`'s scene sweep drops everything built for the old place:
+
+```ts
+for (const child of [...worldGroup.children]) {
+  if (child === farGroup || child === ovGroup) continue;   // ← dead since 10 Sep
+  worldGroup.remove(child);
+  child.traverse((o) => { const g = (o as THREE.Mesh).geometry; if (g) g.dispose(); });
+}
+```
+
+That guard was written on 2026-08-30 (`4f7b3de`, hydro stage 2) when
+`farGroup` and `ovGroup` really were direct children of `worldGroup`. On
+2026-09-10 the sphere work (`8c9f736`, "the far shell and the overview are
+children of the planet") re-parented both under `planetGroup` — and did not
+come back here. From that day **the guard matched nothing**: every hop
+removed `planetGroup` (the globe, both shells, the theme group) AND
+`hydroSys.object3d` from the scene, disposing their geometry on the way out.
+
+**Neither is ever re-added.** `worldGroup.add(planetGroup)` is at module
+scope, and `worldGroup.add(hydroSys.object3d)` is inside `if (!hydroSys)`,
+which cannot run a second time. So after one hop there is no water and no
+far shell for the rest of the session, and a reload — which rebuilds both —
+is the only cure. That is exactly the seat's "unless a full reload".
+
+**Proved rather than argued.** The toggle test (`scratchpad/hoptoggle.mjs`)
+hops to the SAME coordinates so the ground rebuilds identically, and asks
+whether `hydroSys.object3d.visible` still moves the world pass:
+
+| at the Senqu ford | before the hop | after the hop |
+|---|---|---|
+| draw calls moved by toggling the water | 1 | **0** |
+| triangles moved by the same toggle | 13,212 | **0** |
+| hydro tiles the field holds | 20 | 20 |
+| wet cells the classifier reports | 34 | 34 |
+| terrain tiles streamed | 427 | 671 |
+
+The field is built, the physics and the diagnostic still find water, and
+there is nothing in the scene to draw it. A first probe comparing raw
+triangle counts across a hop (3.65 M → 1.50 M) was NOT evidence on its own —
+the world was still streaming — and the toggle is what settles it. The
+planet's half is the same mechanism with weaker evidence: the frame after a
+hop shows a flat washed horizon with no distant relief, and the renderer's
+program count falls 105 → 97.
+
+**The fix names the survivors by what they are, and re-attaches them rather
+than merely skipping them** — a skip trusts that nobody re-parents them
+again, and that trust is the whole fault. Their CONTENTS are still swept:
+the two shells by the loops just above, the hydro tiles by key further down.
+
+### 2. THE MINIMAP IS PAINTED PIXELS, AND PIXELS ARE NOT A LIST
+
+The HUD map composites one canvas (`mapLayer`, 1024²) plus the fog mask and
+the car wedge. The hop cleared `mapFeats` (the replay list) and repainted
+the fog — and never touched the canvas. The old place's roads, water and
+footprints stayed as ink, and the new world stroked on top: "added to, not
+cleared", precisely.
+
+The only thing that blanks that canvas is `mapRecentre`, which early-returns
+unless the truck is more than `FOG_SPAN * 0.25` = 3 km from its anchor. A
+hop puts the truck back at local (0,0) while `mapAnchorX/Z` keep the old
+place's numbers, so the blank usually never fires — and the fault looked
+intermittent because a long drive before the hop happened to blank it on the
+way. `mapKnown` was never zeroed either, so the ways-known readout
+accumulated across continents.
+
+**The fix** blanks the canvas, returns the anchor to the origin the truck
+was returned to, and zeroes the counter, beside the existing `mapFeats`
+clear. `__minimap()` reports `{anchor, feats, known, ink}` and its `ink`
+pixel count is the witness.
+
+VERIFY_TABLE
+
+**The lesson, and it is the third of its kind here:** a guard that names
+OBJECTS by identity is a guard that a later refactor can silently retire.
+The reserved-word shader and the `nodraw` census were checks that could not
+fail; this was a check that could not match. All three read green while
+doing nothing.
