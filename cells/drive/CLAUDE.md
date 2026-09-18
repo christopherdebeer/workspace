@@ -15797,3 +15797,68 @@ structural cast in the commit after it is the whole fix. Two pulls, two
 A second copy of `main.ts` from the previous pull is what makes the second
 pull cheap — `diff -u` between the two cell copies is exactly the new work,
 and `patch` lays it over the branch's head with offsets and no conflicts.
+
+### …and the device answered: the mid rung buys five times the trees, and admission became a sort
+
+The dump this section was waiting for arrived the morning after the deploy —
+**Nagato again, chase, POPULATION 8X, DRAW RANGE 1400 m, grass LUSH, 205 s,
+build `60b1b4c1a1ab`, which is the sha1 of the bundle deployed as
+v1789692092436** — so it is the same place, camera and rack as the
+`d3bdf4dd81e9` dump two sections up, with the mid rung, the sward boost, the
+foliage cut and the other agent's rain and fabric all in between. A different
+drive, so not an A/B; the closest two dumps here have ever come to one.
+
+| Nagato, chase, pop 8X, range 1400 m | `d3bdf4dd81e9` | `60b1b4c1a1ab` |
+|---|---|---|
+| trees placed | (conifer alone 1.14M at 1,134 a tree) | **14,293** at 2.23M |
+| **of them on the mid rung** | — | **14,250 — 99.7%** |
+| edge b / c / a / p / s | 163 / 333 / 524 / 166 / 512 m | **791 / 1400 / 1400 / 777 / 971** |
+| price b / c | 1,068 / 1,134 | **111 / 244** |
+| triangles, world pass mean | 8.5M | 8.33M |
+| draw calls | 352–501 | 337 mean, 516 max |
+| fps · frames over 50 ms | 15.1 · **83.6%** | 19.8 · **34.6%** |
+
+**The rung did what the ladder was built for.** At this rack the full rung
+draws about forty trees — the handful inside 58 art pixels — and everything
+else stands on the mid one, so the same 2.2M triangles buy conifer and
+acacia to the END of the ring (1400 m is the range, so those two are no
+longer capped at all) and broadleaf to 791 m where it stopped at 163. That is
+the pop the seat has reported since the first impostor, moved from a sixth of
+the ring to past half of it, at a triangle bill that did not rise.
+
+**AND IT COST THE ADMISSION ITS SHAPE.** `ezAdmit` reads **65.5 ms a call,
+max 173**, where the Yosemite dump the day before read 8.2. It is one
+unyielding block — `nearestStable` per family — and `nearestStable` falls
+back to a FULL SORT once `k·4 >= n`: the mid rung's caps are five times what
+the full rung's were, so the selection that was a small heap over a big list
+is now a sort of most of it. It is in the slow-frame log by name
+(`treeRefresh:67`). The histogram prefix this file already sketched under the
+New Forest bench — bins linear in d², prefix-sum to the cap, keep to that
+bin's edge, then the heap over the residue — is the cut, and it keeps
+`nearestStable`'s tie rule that `perf-check` holds. Not made here.
+
+What else the same dump says, read against the rows above it:
+
+- **`impGather` 171 ms a sweep** with **670 of 2,584 annulus cells retired
+  unread** — the cell cull fires on a device for the first time (it read
+  0/2,584 before the frame fix), and the phase is a fifth of the 898 the
+  first honest reading gave. Still the largest tree phase, still sliced.
+- **`trees representation`: 0 unaffordable aside**, every perceptible NONE
+  under the 2.19 px floor with the pool spent — the invariant, on a device,
+  at a rack that fills the pool. `vetoed 1108 on tarmac, 57 in water`: the
+  card tier's surface veto firing on a real road network.
+- **The sward and the foliage cut have no row of their own**, and their cost
+  is in `gap` (57%) where a fragment term always lands. `swardFrame` is 1.2 ms
+  a frame and the sweep 3.2 ms a step, unchanged by a boost whose field has
+  the same texel count. The world pass is 8.33M triangles against 8.5M with
+  40k more sward slots in it, so the boost's geometry is inside the
+  run-to-run spread.
+- **`errors 1 · reject: Failed to start the audio device`** is the browser's
+  own rejection surfacing through the dump's promise-rejection row, not a
+  string in this client; iOS refusing an audio context outside a gesture.
+- **`terrainApply` 23.3 ms a build, max 214**, batter 6.9 of the 14.2 ms
+  post; **`updatePois` 1.7 ms a frame, 3.4%**, which is task #72's number;
+  **`camera` spikes to 85 and 133 ms** in two slow frames with nothing
+  wrapped inside it — a mark claims whatever runs between marks, so that is
+  unattributed main-thread work landing in the camera step, and a wrapper
+  is owed before it is named.
