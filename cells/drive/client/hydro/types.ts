@@ -347,6 +347,12 @@ export interface HydroTuning {
   turbulenceStrength: number;
   /** Bend-driven circulating surface structure on the inside of turns. */
   eddyStrength: number;
+  /** Optical loss through the water column, independent of suspended colour. */
+  absorptionStrength: number;
+  /** Milky/mineral suspended return, independent of surface reflection breakup. */
+  scatteringStrength: number;
+  /** Broadening and dimming of reflected sky structure. */
+  surfaceRoughness: number;
 }
 
 export const DEFAULT_HYDRO_TUNING: HydroTuning = {
@@ -360,6 +366,9 @@ export const DEFAULT_HYDRO_TUNING: HydroTuning = {
   riverEdgeStrength: 1,
   turbulenceStrength: 1,
   eddyStrength: 1,
+  absorptionStrength: 1,
+  scatteringStrength: 1,
+  surfaceRoughness: 1,
 };
 
 export interface HydroBuildOptions {

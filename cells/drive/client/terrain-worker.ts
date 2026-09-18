@@ -67,12 +67,13 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
   const borders = new Map<string, Float64Array>();
   const carveLog = new Map<string, CarveLog>();
   const unflat = (a: Float64Array, cells: Array<[string, number[]]>): Map<string, StripLike[]> => {
-    const n = a.length / 13, objs: StripLike[] = [];
+    const n = a.length / 14, objs: StripLike[] = [];
     for (let i = 0; i < n; i++) {
-      const o = i * 13;
+      const o = i * 14;
       const u = (v: number): number | undefined => Number.isNaN(v) ? undefined : v;
       objs.push({ ax: a[o], az: a[o + 1], bx: a[o + 2], bz: a[o + 3], hw: a[o + 4], ya: u(a[o + 5]), yb: u(a[o + 6]),
-        tk: a[o + 7] > 0.5, tn: a[o + 8] > 0.5, ca: u(a[o + 9]), cb: u(a[o + 10]), pc: u(a[o + 11]), pp: u(a[o + 12]) });
+        tk: a[o + 7] > 0.5, tn: a[o + 8] > 0.5, ca: u(a[o + 9]), cb: u(a[o + 10]), pc: u(a[o + 11]), pp: u(a[o + 12]),
+        cv: u(a[o + 13]) });
     }
     const map = new Map<string, StripLike[]>();
     for (const [key, ids] of cells) map.set(key, ids.map((i) => objs[i]));
