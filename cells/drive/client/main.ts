@@ -4563,6 +4563,9 @@ const skyMat = new THREE.ShaderMaterial({
     uNight: { value: 0 },
     moonDir: { value: new THREE.Vector3(0, -1, 0) },
     uCamXZ: { value: new THREE.Vector2() },
+    uCamY: { value: 0 },
+    uWxFlash: { value: 0 },
+    uStrikeXZ: { value: new THREE.Vector2() },
     uDeckY: { value: CLOUD_DECK_Y }, uCloudScale: { value: CLOUD_SCALE },
     // The deck drifts on the REAL wind: direction and speed from the live
     // observation, so the sky moves the way the sky over that place is moving.
@@ -4577,7 +4580,7 @@ const skyMat = new THREE.ShaderMaterial({
     uniform float uMoonCos1; uniform float uMoonCos0; uniform float uMoonSin;
     uniform float uLow; uniform vec3 uDusk; uniform float uNight; uniform vec3 moonDir;
     uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
-    uniform vec2 uWind; uniform vec2 uCamXZ; uniform float uDeckY; uniform float uCloudScale;
+    uniform vec2 uWind; uniform vec2 uCamXZ; uniform float uCamY; uniform float uWxFlash; uniform vec2 uStrikeXZ; uniform float uDeckY; uniform float uCloudScale;
     varying vec3 vDir;
     // Value-noise fBm. Clouds are GENERATED, not photographed: a skybox set
     // would be fixed images that could never answer to the weather system,
@@ -4625,36 +4628,6 @@ const skyMat = new THREE.ShaderMaterial({
       // term stays as the broad warm sky around the sun, at a weight the
       // quantiser reads as sky and not as sun.
       col += uSunDisc * (pow(sd, 2600.0) * 0.8 + pow(sd, 8.0) * 0.16);
-      // ── cloud deck ──
-      if (d.y > 0.015) {
-        // WHERE THE VIEW RAY MEETS THE DECK, in world metres. The dome still
-        // rides the camera, but the deck no longer does: it is a plane at a
-        // real altitude over real ground, which is what lets the terrain ask
-        // about the same patch of it. Stretches toward the horizon exactly as
-        // a deck does, and now parallaxes as you drive under it.
-        vec2 wpd = uCamXZ + d.xz * (uDeckY / max(d.y, 0.05));
-        // COVERAGE IS LOCAL NOW: the weather field, read at that same patch —
-        // so a front is a WALL of cloud out one window and open sky out the
-        // other, and its edge crosses the deck as it crosses the ground. The
-        // gate moved off uCloud for the same reason: a clear region under an
-        // arriving front is exactly where the local cover disagrees with the
-        // regional mean.
-        float covL = texture2D(uWxTex, (wpd - uWxMin) * uWxInv).r;
-        if (covL > 0.01) {
-        vec2 p = wpd * uCloudScale + uWind;
-        float n = clfbm(p);
-        float cov = clCov(n, covL);
-        // Fake lighting: sample again a step toward the sun — where the deck
-        // thins in that direction the edge is lit, where it thickens it is base.
-        float lit = clamp((n - clfbm(p + normalize(sunDir.xz + vec2(0.001)) * 0.35)) * 3.2 + 0.5, 0.0, 1.0);
-        vec3 base = mix(uZenith * 1.6, uSunDisc * 0.5, 0.35) * (1.0 - uCloud * 0.55);
-        vec3 top = mix(vec3(0.86, 0.88, 0.92), uSunDisc, 0.35 + az * 0.4);
-        vec3 cloud = mix(base, top, lit) * (1.0 - uCloud * 0.35);
-        // Fade the deck out at the horizon so it never cuts a hard line.
-        cov *= smoothstep(0.015, 0.16, d.y);
-        col = mix(col, cloud, clamp(cov, 0.0, 1.0) * 0.95);
-        }
-      }
       // ── the night sky ──
       if (uNight > 0.02 && d.y > 0.0) {
         // STARS from a hash lattice on the DIRECTION, so they hold still while
@@ -4671,7 +4644,7 @@ const skyMat = new THREE.ShaderMaterial({
           float tw = 0.78 + 0.22 * sin(uTime * (1.3 + mag * 3.4) + hs * 71.0);
           float lit = smoothstep(0.45, 0.02, dd) * (0.35 + 0.65 * mag) * tw;
           col += vec3(0.82, 0.86, 1.0) * lit * uNight
-            * smoothstep(0.02, 0.22, d.y) * (1.0 - clamp(uCloud, 0.0, 1.0) * 0.9);
+            * smoothstep(0.02, 0.22, d.y);
         }
         // THE MOON, with a real terminator. Its direction is the sun's own
         // solar-angle solver run at a time offset by the phase, so it stands
@@ -4692,10 +4665,74 @@ const skyMat = new THREE.ShaderMaterial({
             float lim = k * sqrt(max(0.0, 1.0 - v2 * v2));
             float lit = smoothstep(lim - 0.09, lim + 0.09, u2);
             vec3 face = mix(vec3(0.10, 0.11, 0.15), vec3(0.92, 0.92, 0.86), lit);
-            col = mix(col, face, disc * uNight * (1.0 - clamp(uCloud, 0.0, 1.0) * 0.85));
+            col = mix(col, face, disc * uNight);
           }
           // A soft halo, so the moon sits IN the air rather than on it.
           col += vec3(0.30, 0.34, 0.45) * pow(max(md, 0.0), 200.0) * 0.35 * uNight;
+        }
+      }
+      // WEATHER OPTICS v1: draw celestial light first, then transmit it through
+      // local clouds. The palette and twilight remain the existing art direction.
+      // Layers have independent height/shear; no extra render targets or passes.
+      if (d.y > 0.015 && uCloud > 0.005) {
+        float daylight = 1.0 - uNight;
+        float moonLight = max(moonDir.y, 0.0) * (0.5 - 0.5 * dot(sunDir, moonDir));
+        vec3 nightCloud = uZenith * 0.65 + vec3(0.055, 0.065, 0.085) * moonLight;
+        // Thin high veil: elongated fibres, a different spatial scale and shear.
+        float highH = 4200.0 - uCamY;
+        if (highH > 0.0) {
+          vec2 hp = (uCamXZ + d.xz * (highH / max(d.y, 0.04))) * 0.00032;
+          hp += uWind * 0.27;
+          float hn = clfbm(vec2(hp.x * 0.65 + hp.y * 0.35, hp.y * 3.4));
+          float veil = smoothstep(0.48, 0.75, hn) * uCloud * 0.28
+            * smoothstep(0.015, 0.12, d.y);
+          vec3 highCol = mix(nightCloud, mix(vec3(0.73, 0.79, 0.87), warm,
+            uLow * (0.30 + 0.50 * az)), daylight);
+          col = mix(col, highCol, veil);
+        }
+        float deckH = uDeckY - uCamY;
+        if (deckH > 0.0) {
+          vec2 wpd = uCamXZ + d.xz * (deckH / max(d.y, 0.035));
+          vec2 wuv = (wpd - uWxMin) * uWxInv;
+          float covL = mix(uCloud, texture2D(uWxTex, wuv).r, clInLattice(wuv));
+          if (covL > 0.01) {
+            vec2 p = wpd * uCloudScale + uWind;
+            float n = clfbm(p);
+            float cov = clCov(n, covL);
+            vec2 lightXZ = normalize(mix(sunDir.xz, moonDir.xz, uNight) + vec2(0.001));
+            float ahead = clfbm(p + lightXZ * 0.35);
+            float relief = clamp((n - ahead) * 3.2 + 0.5, 0.0, 1.0);
+            float thick = clamp(cov * (0.75 + covL * 1.4), 0.0, 2.0);
+            float trans = exp(-thick * 3.8);
+            float towardLight = max(dot(d, mix(sunDir, moonDir, uNight)), 0.0);
+            float rim = (1.0 - cov) * cov * 4.0 * pow(towardLight, 12.0);
+            vec3 base = mix(uZenith * 1.35, uHorizon * 0.42, covL * 0.65);
+            vec3 top = mix(vec3(0.82, 0.86, 0.91), uSunDisc, 0.30 + az * uLow * 0.55);
+            vec3 cloud = mix(base, top, relief * (1.0 - thick * 0.28));
+            cloud += uSunDisc * rim * 0.32;
+            cloud = mix(nightCloud * (0.70 + relief * 0.55), cloud, daylight);
+            float strikeGlow = exp(-dot(wpd - uStrikeXZ, wpd - uStrikeXZ) / 1800000.0);
+            cloud += vec3(0.62, 0.70, 0.90) * uWxFlash * strikeGlow * cov;
+            float horizon = smoothstep(0.015, 0.10, d.y);
+            col = mix(col, cloud, (1.0 - trans) * horizon);
+          }
+        }
+        // Torn low fragments belong to rainy parts of the field. Two noise
+        // octaves give larger moving scraps, without another full fBm pair.
+        float lowH = uDeckY - 240.0 - uCamY;
+        if (lowH > 0.0) {
+          vec2 lp = uCamXZ + d.xz * (lowH / max(d.y, 0.035));
+          vec2 luv = (lp - uWxMin) * uWxInv;
+          vec4 localWx = texture2D(uWxTex, luv);
+          float rainL = localWx.g * clInLattice(luv);
+          if (rainL > 0.02) {
+            vec2 q = lp * uCloudScale * 1.7 + uWind * 1.23;
+            float scraps = clvn(q) * 0.65 + clvn(q * 2.07 + 17.0) * 0.35;
+            float scud = smoothstep(0.57, 0.79, scraps) * rainL
+              * smoothstep(0.02, 0.14, d.y) * 0.65;
+            vec3 scudCol = mix(nightCloud * 0.72, uZenith * 0.70 + uHorizon * 0.12, daylight);
+            col = mix(col, scudCol, scud);
+          }
         }
       }
       // BELOW THE HORIZON THE DOME IS AIR. Whatever ray reaches it down
@@ -4774,6 +4811,7 @@ function aimSky(cam: THREE.PerspectiveCamera): void {
   skyDome.position.copy(cam.position);
   skyDome.scale.setScalar(Math.max(1, (cam.near * 8) / 20000));
   (skyMat.uniforms.uCamXZ as { value: THREE.Vector2 }).value.set(cam.position.x, cam.position.z);
+  skyMat.uniforms.uCamY.value = cam.position.y;
 }
 
 const hemi = new THREE.HemisphereLight(0xbcd2ee, 0x6a5a3c, 0.72); // sky fill + ground bounce
@@ -6166,6 +6204,9 @@ const compMat = new THREE.ShaderMaterial({
   uniforms: {
     sceneTex: { value: null },
     softTex: { value: null },
+    uRainFlow: { value: new THREE.Vector4() },
+    uRainCurtain: { value: qs('raincurtain') === '0' ? 0 : 1 },
+    uRainRegional: { value: 0 },
     dofPrepTex: { value: null },
     dofFarTex: { value: null },
     dofNearTex: { value: null },
@@ -6384,14 +6425,32 @@ ${DITHER_GLSL}
     //          could — the same channel the particle box pours from.
     uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
     uniform float uFogTop; uniform float uFogAmt; uniform vec3 uFogC; uniform float uFogDeck;
+    uniform vec4 uRainFlow; uniform float uRainCurtain; uniform float uRainRegional;
     float wxFogD(vec3 pw){
       vec4 wxs = texture2D(uWxTex, (pw.xz - uWxMin) * uWxInv);
       // Broad terrain-space pockets keep a fog bank from reading as a slab.
       // The weather field owns its travel; this detail adds no ray samples.
       float pockets = 1.0 + sin(pw.x * 0.007 + sin(pw.z * 0.004)) * 0.23;
       float slab = wxs.b * (1.0 - smoothstep(uFogTop - 55.0, uFogTop, pw.y)) * pockets;
-      float cbase = smoothstep(0.55, 0.85, wxs.r) * smoothstep(uFogDeck - 180.0, uFogDeck, pw.y);
-      return slab + cbase * 0.85 + wxs.g * 0.20;
+      float cbase = smoothstep(0.55, 0.85, wxs.r)
+        * smoothstep(uFogDeck - 180.0, uFogDeck, pw.y)
+        * (1.0 - smoothstep(uFogDeck + 360.0, uFogDeck + 720.0, pw.y));
+      return slab + cbase * 0.85;
+    }
+    // RAIN CURTAINS v2: bounded columns rooted in the same rain channel that
+    // drives drops at the camera. Wind leans its fine fibres; the coarse
+    // footprint stays aligned with the particles, wetness and surface physics.
+    float rainCurtainD(vec3 pw){
+      float top = uFogDeck + 120.0;
+      float heightFade = 1.0 - smoothstep(top - 120.0, top + 60.0, pw.y);
+      vec2 landing = pw.xz;
+      vec2 uv = (landing - uWxMin) * uWxInv;
+      vec2 edge = abs(uv - 0.5) * 2.0;
+      float inside = 1.0 - smoothstep(0.90, 1.0, max(edge.x, edge.y));
+      float shower = texture2D(uWxTex, uv).g * inside;
+      vec2 fibres = (landing - uRainFlow.zw - uRainFlow.xy * pw.y / 22.0) * vec2(0.023, 0.017);
+      float streak = 0.80 + 0.20 * sin(fibres.x + sin(fibres.y * 1.7));
+      return shower * heightFade * streak;
     }
     void main(){
       // THE ALPHA IS CARRIED, not dropped: noBlur writes 0 there for anything
@@ -6496,6 +6555,20 @@ ${DITHER_GLSL}
         // Mist receives the same broad solar tint as the distant air.
         vec3 mistColour = mix(uFogC, hazeAt(dir, uHazeWarm), 0.24);
         col = mix(col, mistColour, min(fogF, 0.965));
+      }
+      if (uFogAmt > 0.001 && uRainCurtain > 0.001 && uRainRegional > 0.01) {
+        // Twelve fixed midpoint samples, no temporal jitter or history buffer.
+        // Scene depth bounds integration even for a close tree in front of rain.
+        float reach = min(t, 6000.0);
+        float stepM = reach / 12.0;
+        float optical = 0.0;
+        for (int ri = 0; ri < 12; ri++) {
+          float along = (float(ri) + 0.5) * stepM;
+          optical += rainCurtainD(camPos + dir * along) * smoothstep(40.0, 180.0, along);
+        }
+        float rainAlpha = 1.0 - exp(-optical * stepM * 0.00065);
+        vec3 rainColour = mix(uFogC * 0.78, hazeAt(dir, uHazeWarm), 0.35);
+        col = mix(col, rainColour, min(rainAlpha * uFogAmt * uRainCurtain, 0.86));
       }
       // Never hand a negative (or NaN) to pow(): one bad fragment upstream
       // must not be able to punch a black hole through the finished frame.
@@ -7311,14 +7384,13 @@ function terrainFx(mat: THREE.Material, opts: {
       // the brightness down on — shaded ground is still lit by the sky, and if
       // this multiplied the finished colour it would take the sky away too.
       .replace('#include <lights_fragment_begin>', `#include <lights_fragment_begin>
-        reflectedLight.directDiffuse *= sunMarch(vWorldP);`)
-      .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+        reflectedLight.directDiffuse *= sunMarch(vWorldP);
       // CLOUD SHADOWS: not "the same kind of noise" any more — THE SAME FIELD,
       // read at the point where a ray from here to the sun leaves the deck the
       // sky is drawing. Same function, same phase, same coverage curve, so the
       // dark patch crossing the road is the cloud overhead and its edge arrives
       // exactly when that cloud's edge crosses the sun.
-      if (uCloudS > 0.005) {
+      if (uCloudS > 0.005 && vWorldP.y < uDeckY) {
         vec2 hit = vWorldP.xz + uSunSkew * max(uDeckY - vWorldP.y, 0.0);
         // LOCAL cover at the hit, from the same field the dome reads — the
         // dark ground under the arriving front is the front, not the mean.
@@ -7341,8 +7413,14 @@ function terrainFx(mat: THREE.Material, opts: {
         // lattice's, so the term is gone before any pixel outspans a patch.
         float wide = 1.0 - smoothstep(15.0, 60.0, uMpp);
         float cs = clCov(clfbm(hit * uCloudScale + uWind), covL);
-        gl_FragColor.rgb *= 1.0 - min(covL * 1.4, 1.0) * cs * 0.5 * wide;
+        // SUN BREAKS v2: retain skylight and bounce under a cloud.
+        // The same optical thickness shapes the main sky layer.
+        float transmission = exp(-clamp(cs * (0.75 + covL * 1.4), 0.0, 2.0) * 3.8);
+        reflectedLight.directDiffuse *= mix(1.0, max(0.08, transmission), wide);
+        reflectedLight.directSpecular *= mix(1.0, max(0.08, transmission), wide);
       }
+      `)
+      .replace('#include <dithering_fragment>', `#include <dithering_fragment>
       if (uDbgOn > 0.5) {
         vec2 duv = (vWorldP.xz - uDbgOrg) / uDbgW;
         if (duv.x > 0.0 && duv.x < 1.0 && duv.y > 0.0 && duv.y < 1.0) {
@@ -33331,7 +33409,9 @@ async function fetchLiveWeather(): Promise<void> {
       : cover > 0.25 ? 'haze' : 'clear';
     // Cloud cover is a MEASUREMENT, so it overrides the sky state's nominal
     // value: an overcast dry day is not the same picture as a rainy one.
-    WX_LIVE.cloud = cover;
+    WX_LIVE.cloud = clamp(cover, 0, 1);
+    const mm = Math.max(0, c.precipitation ?? 0);
+    WX_LIVE.rain = clamp(1 - Math.exp(-mm / 2.5), 0, 1);
     live.on = true;
     wx.at = performance.now() + 900000;   // stand the synthetic chain down
   } catch {
@@ -33339,7 +33419,11 @@ async function fetchLiveWeather(): Promise<void> {
     live.at = performance.now() + 120000; // try again in a couple of minutes
   }
 }
-const WX_LIVE = { cloud: 0 };
+const WX_LIVE = { cloud: 0, rain: 0 };
+// Integrated displacement: a wind observation steers existing clouds, never
+// relocates them by multiplying a new velocity by the whole session age.
+const wxTravel = { x: 0, z: 0 };
+const cloudTravel = new THREE.Vector2();
 // ?wx=clear|haze|rain|storm pins the weather the way ?sunalt= pins the sun:
 // a geometry screenshot taken on the day Cape Town actually had rain is a
 // screenshot of the rain. Beats both the live feed and the synthetic chain.
@@ -33391,9 +33475,10 @@ function stepWeather(now: number, dt: number): void {
     // Live cover is a measurement and beats the sky state's nominal figure: an
     // overcast dry day and a rainy one are the same word and a different picture.
     wx.cloud += ((live.on ? WX_LIVE.cloud : t.cloud) - wx.cloud) * k;
-    wx.rain += (t.rain - wx.rain) * k;
+    wx.rain += ((live.on ? WX_LIVE.rain : t.rain) - wx.rain) * k;
   }
-  wx.sky = wx.cloud > 0.85 ? 'storm' : wx.rain > 0.15 ? 'rain' : wx.cloud > 0.25 ? 'haze' : 'clear';
+  wx.sky = wx.next === 'storm' && wx.cloud > 0.60 ? 'storm'
+    : wx.rain > 0.03 ? 'rain' : wx.cloud > 0.25 ? 'haze' : 'clear';
   // THE WARNING WORKS ON REAL WEATHER NOW. It used to be set inside the
   // synthetic roll, which stands down whenever the live feed is up — so the
   // one storm that was actually coming was the one that arrived unannounced.
@@ -33410,6 +33495,10 @@ function stepWeather(now: number, dt: number): void {
     // Compass bearing to world axes: +x east, −z north.
     wxWind.x = Math.sin(tw) * ms;
     wxWind.z = -Math.cos(tw) * ms;
+    wxTravel.x += wxWind.x * dt;
+    wxTravel.z += wxWind.z * dt;
+    compMat.uniforms.uRainFlow.value.set(wxWind.x, wxWind.z, wxTravel.x, wxTravel.z);
+    compMat.uniforms.uRainRegional.value = wx.rain;
     // The regional MIST term — the one weather number the upstream feed does
     // not carry, modelled from what it does: mist wants a quiet, damp, cooling
     // sky. Night and dawn under thin cover, calm air, ground still wet from
@@ -33426,6 +33515,7 @@ function stepWeather(now: number, dt: number): void {
     if (moved || stale > 1800) {
       buildField(wxField, {
         t: now / 1000, windX: wxWind.x, windZ: wxWind.z,
+        advectX: wxTravel.x, advectZ: wxTravel.z,
         cover: wx.cloud, rain: wx.rain, fog: wxFogT,
         dt: clamp(stale / 1000, 0, 30), dayF,
       }, sampleHeight);
@@ -33475,7 +33565,9 @@ function stepWeather(now: number, dt: number): void {
   // enormously generous, because a game you cannot see is not a night, it is a
   // blank screen — but they now sit far enough under the sky that the headlights
   // are the thing you drive by.
-  sun.intensity = biome.sunI * (1 - wx.cloud * 0.72) * (0.05 + 0.95 * dayF);
+  // Regional extinction leaves room for local sun breaks; cloud optical
+  // depth attenuates the direct term per surface rather than dimming skylight.
+  sun.intensity = biome.sunI * (1 - wx.cloud * 0.35) * (0.05 + 0.95 * dayF);
   hemi.intensity = biome.hemiI * (1 + wx.cloud * 0.35) * (0.17 + 0.83 * dayF);
   // …AND THE MOON, off the sky's own direction and phase. Illuminated fraction
   // is (1 − cos 2πp)/2 — nothing at new, everything at full — with a sliver
@@ -33573,7 +33665,7 @@ function stepWeather(now: number, dt: number): void {
   {
     const sy = Math.max(SUN_DIR.y, 0.12);
     const k = clamp(1 / sy, 0, 4);
-    envU.uSunSkew.value.set(-SUN_DIR.x * k, -SUN_DIR.z * k);
+    envU.uSunSkew.value.set(SUN_DIR.x * k, SUN_DIR.z * k);
   }
   // The chart's ground scale: the frame's height in metres at the stand-off
   // over its height in art pixels. `chartDist` is the one stand-off now.
@@ -33592,7 +33684,9 @@ function stepWeather(now: number, dt: number): void {
     // to multiply a velocity by uTime while the ground was handed a
     // pre-multiplied displacement — the same drift by two routes, which is one
     // route too many for two things that must never disagree.
-    const off = new THREE.Vector2(wxv * (now / 1000), wzv * (now / 1000));
+    cloudTravel.x += wxv * dt;
+    cloudTravel.y += wzv * dt;
+    const off = cloudTravel;
     (skyMat.uniforms.uWind as { value: THREE.Vector2 }).value.copy(off);
     envU.uWind.value.copy(off);
     // The same wind leans the grass. Amplitude in METRES of tip travel per
@@ -33622,10 +33716,25 @@ function stepWeather(now: number, dt: number): void {
   if (wx.sky === 'storm' && wx.flash <= 0 && wx.bolt === 0 && Math.random() < dt * 0.22) {
     wx.flash = 0.9;
     wx.bolt = now + 60 + Math.random() * 90;             // the return stroke
-    const far = 0.25 + Math.random() * 0.75;             // 0 = overhead, 1 = far off
-    setTimeout(() => audio.thunder(far), far * 5200);
+    // A strike has a place: illuminate that cloud and delay its own thunder.
+    // Pick the rainiest of a few positions so flashes belong to the shower.
+    let strikeX = state.x, strikeZ = state.z, best = -1;
+    for (let i = 0; i < 6; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const distance = 450 + Math.random() * 2600;
+      const x = state.x + Math.cos(angle) * distance;
+      const z = state.z + Math.sin(angle) * distance;
+      const sample = wxAt(wxField, x, z);
+      const score = sample.rain * 0.7 + sample.cover * 0.3;
+      if (score > best) { best = score; strikeX = x; strikeZ = z; }
+    }
+    (skyMat.uniforms.uStrikeXZ.value as THREE.Vector2).set(strikeX, strikeZ);
+    const distance = Math.hypot(strikeX - state.x, strikeZ - state.z, CLOUD_DECK_Y - bodyY);
+    const far = clamp(distance / 3500, 0, 1);
+    setTimeout(() => audio.thunder(far), distance / 343 * 1000);
   }
-  compMat.uniforms.uFlash.value = wx.flash * 0.5;
+  skyMat.uniforms.uWxFlash.value = wx.flash;
+  compMat.uniforms.uFlash.value = wx.flash * 0.20;
   if (wx.flash > 0) { sun.intensity += wx.flash * 1.6; hemi.intensity += wx.flash * 1.2; }
   // Overcast desaturates the haze toward slate and thickens it.
   const g = (c: Rgb): THREE.Vector3 => {
@@ -50076,7 +50185,7 @@ function tick(now: number): void {
     }
     ambGrassL = gr / 5;
   }
-  const windAmb = clamp((live.on ? live.windKmh : 12) / 55, 0, 1);
+  const windAmb = clamp(windKmhNow() / 55, 0, 1);
   const bed = clamp(1 - Math.abs(state.speed) / 7, 0, 1) * (engineSt === 'on' ? 0.4 : 1);
   dbgAmb = {
     rustle: +(windAmb * (0.25 + 0.75 * ambVegL) * Math.max(bed, 0.2)).toFixed(3),

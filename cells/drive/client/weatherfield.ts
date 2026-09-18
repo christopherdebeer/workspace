@@ -55,6 +55,8 @@ export interface WxTargets {
   t: number;
   /** Wind in m/s, world axes (+x east, +z south — the game's frame). */
   windX: number; windZ: number;
+  /** Integrated wind displacement; optional for time-addressed lab fixtures. */
+  advectX?: number; advectZ?: number;
   /** Regional means, 0..1 — what the driver (live/pin/synthetic) asked for. */
   cover: number; rain: number; fog: number;
   /** Seconds since the last build — the wet channel's integration step. */
@@ -145,7 +147,7 @@ export function recenter(f: WxField, cx: number, cz: number): boolean {
 export function buildField(f: WxField, p: WxTargets, heightAt: (x: number, z: number) => number): void {
   // Features travel WITH the wind: sampling upwind of a point brings what is
   // upwind toward it as t grows.
-  const adx = p.windX * p.t, adz = p.windZ * p.t;
+  const adx = p.advectX ?? p.windX * p.t, adz = p.advectZ ?? p.windZ * p.t;
   // The mid-range spread: zero at pinned extremes, widest where fronts live.
   // The 3.2 is contrast: three octaves of value noise huddle within ±0.2 of
   // their mean, and un-stretched that gave a sky with no real open patches —
