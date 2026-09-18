@@ -16721,3 +16721,17 @@ new node tests green alongside `substrate`, `terrain-crossing`, `hydro` and
 carries `remirrorCover`, `worldAuthoring`, `publishHydroFloor`,
 `hydroFloorAt`, `stale-terrain`, `wildPatch` and `barRise`, and `/lab/world`
 answers 200.
+
+**The pull after it found the cell BEHIND, with nothing stranded.** Asked
+for a cell pull in case partial work needed completing: five files came
+back changed — `CLAUDE.md`, `client/main.ts`, `client/world-authoring-lab.ts`
+and the two `devtools/` resurrections. The direction test
+(`git diff <the deployed commit> -- <file>`) read ZERO lines on all three
+source files: the cell holds exactly what was deployed at `acaff4e` and no
+edits of its own. Everything since — this doctrine, and the other agent's
+live VECTOR ROAD authoring (`world-authoring-vector.ts` and its two tests,
+the lab surface widened, `main.ts`) — reached git without a deploy, so the
+cell was a version behind rather than ahead. All five restored, nothing
+committed verbatim, nothing lost. Worth recording because the ritual's
+usual outcome is the opposite one, and the same three-line test decides
+both.
