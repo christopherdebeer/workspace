@@ -237,7 +237,13 @@ export function setFacadeGrammar(patch: Partial<FacadeGrammar>): FacadeGrammar {
 }
 
 export function facade(mat: THREE.Material): void {
-  (mat as THREE.MeshLambertMaterial).extensions = { ...(mat as THREE.MeshLambertMaterial).extensions, derivatives: true };
+  // `extensions` is read by three's program builder on ANY material (r160's
+  // getParameters tests `material.extensions.derivatives`), and declared by
+  // @types/three only on ShaderMaterial — so the write is typed structurally
+  // rather than through MeshLambertMaterial, which is what the pull's form
+  // did and what tsc refused. Same runtime, one declared shape.
+  const ext = mat as THREE.Material & { extensions?: { derivatives?: boolean } };
+  ext.extensions = { ...ext.extensions, derivatives: true };
   mat.customProgramCacheKey = () => 'facade-fabric-v1';
   mat.onBeforeCompile = (sh) => {
     // Shared by reference: one atlas and one palette for the whole world, so

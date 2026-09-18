@@ -15784,3 +15784,16 @@ one job. The row is declared in the commit after theirs, so their diff is
 theirs exactly and the tree is green. **Read `tsc` before reading a pulled
 diff**: a snapshot of another editor is not a release, and the second pull
 is what completes the first.
+
+**And the second pull, ten minutes later, was half landed too** (`a31ebdb`,
+the other agent's building fabric: `building-fabric.ts`, `fabric-shader.ts`,
+`facade.ts`, the lab, seven `main.ts` hunks). `facade.ts` wrote
+`extensions` on a `MeshLambertMaterial`, which three's program builder reads
+on any material and `@types/three` declares only on `ShaderMaterial`; the
+structural cast in the commit after it is the whole fix. Two pulls, two
+`tsc` failures, both theirs to the letter and neither a runtime fault:
+**the other author does not run the type check, so the pull's first act is
+`tsc`, and the fix is always a commit of its own after the verbatim one.**
+A second copy of `main.ts` from the previous pull is what makes the second
+pull cheap — `diff -u` between the two cell copies is exactly the new work,
+and `patch` lays it over the branch's head with offsets and no conflicts.
