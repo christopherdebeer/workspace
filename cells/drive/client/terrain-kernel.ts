@@ -1313,8 +1313,23 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
       const px = c.ax + dx * t, pz = c.az + dz * t;
       const length = Math.hypot(dx, dz) || 1;
+      // THE DISTANCE TO THE SEGMENT, NOT TO ITS INFINITE LINE. `t` is clamped,
+      // so anywhere past either end (px,pz) is an ENDPOINT and the cross
+      // product below is the offset from the segment's LINE with the along-line
+      // overshoot discarded — which is how a five-metre stretch of river came
+      // to carve ground sixty metres past its own end at its own invert.
+      // Measured at San Miguel: 98% of carved posts were won by a segment
+      // reaching past an end, 153 of 295 had no segment within true reach at
+      // all, median overshoot 46.7m — the channel index's own 3x3 — so a
+      // fifteen-metre river sat in a 112m flat-bottomed trench and the drawn
+      // sheet hung over open ground at its rim, which is what the seat
+      // photographed. Every other proximity test in this client (channelAt,
+      // channelInvertAt, the strip tests, corridorH's reach, onRoadOf) has
+      // always measured to the SEGMENT; this was the only one that did not,
+      // and the only one that moves terrain. Nothing is lost at a bend: the
+      // union of segment capsules already tiles a corner.
       const signedAcross = (dx * (z - pz) - dz * (x - px)) / length;
-      const across = Math.abs(signedAcross);
+      const across = Math.hypot(x - px, z - pz);
       const out = across - c.hw;
       if (out > 3) continue;
       // Banks, not a trench: the bed at the middle, rising away at 1:1.
@@ -1326,7 +1341,10 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       const cv = c.cv ?? 0;
       const curveT = clamp((Math.abs(cv) - .0015) / (.009 - .0015), 0, 1);
       const curve = curveT * curveT * (3 - 2 * curveT);
-      const n = signedAcross / Math.max(.5, c.hw);
+      // The bank, at the distance the point really is. For an interior `t` the
+      // two magnitudes are equal and this is exactly what it always was; near
+      // an end it is the honest offset rather than the line's.
+      const n = Math.sign(signedAcross) * across / Math.max(.5, c.hw);
       const acrossT = clamp((Math.abs(n) - .30) / (.94 - .30), 0, 1);
       const shelf = acrossT * acrossT * (3 - 2 * acrossT);
       const inside = cv * n > 0 ? 1 : 0;

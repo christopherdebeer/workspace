@@ -17039,3 +17039,81 @@ tops read from the field, so a correctly-placed carve is still the wrong SHAPE;
 and the hydro floor (`publishHydroFloor`) lowers ground to the field's own bed
 independently, which is what currently keeps the water sitting on something at
 all where the carve misses.
+
+### …and the fix: the carve measures to the segment, and the trench is gone
+
+Made on the seat's word ("fix it and run the census before/after and deploy").
+Two lines inside `channelFloorAt`, with the reasoning in the comment beside
+them: `across` is `Math.hypot(x - px, z - pz)` — the distance to the SEGMENT,
+which is what `channelAt`, `channelInvertAt`, the strip tests, `corridorH`'s
+reach and `onRoadOf` have always measured — and `barRise`'s bank test keeps a
+SIGNED offset (`signedAcross`) for the side it is on, scaled by the honest
+distance. For an interior `t` the two magnitudes are equal and nothing moves;
+past an end the point is no longer admitted at all.
+
+**THE TEST DRIVES THE SHIPPED KERNEL AND CARRIES THE OLD RULE AS ITS CONTROL.**
+`devtools/channel-carve.test.mjs` is pure node (esbuild the kernel, a
+`TerrainStore` stub of two or three segments, seconds) and asserts five things,
+of which the first two are the pair that matters: **where `t` is interior the
+fix moved nothing** — over a dense grid beside a straight reach, carved-or-not
+and the floor to under 1e-9 (measured 0.00e+0) against a reimplementation of the
+old rule; and **past a segment's end the old rule carves and the new one returns
+null**, at (112,2), (160,2), (300,2) and (−60,1) on a 100 m segment, which are
+the `lineclamp` table's own rows. Then the plain geometry (bed at the invert,
+bank at 1:1, the ramp stopping at the segment's end, a low ceiling refusing,
+both banks alike), a bend keeping its corner and not 40 m past it, and the point
+bar still differing under curvature at the shipped values. **Six of its checks
+fail on the unfixed kernel**, which is what makes it a check rather than
+decoration — and the equality claim needed the float rule this file already
+records: `|signedAcross|` and `hypot` are mathematically equal for an interior
+`t` and are different computations, so the bar is 1e-9 and the sample grid is
+offset to miss both the exact `out > 3` boundary and both endpoints.
+
+**Measured, `wet-census` on all eight fixtures, the carve rule the only
+difference** (W drawn · U buried · E waterline band · `.` dry, at 75 s):
+
+| fixture | before: W / U / E / . | after: W / U / E / . |
+|---|---|---|
+| at-senqu-ford | 596 / 5 / 329 / 15,707 | **551 / 114 / 179 / 15,793** |
+| at-senqu-top | 1,024 / 44 / 433 / 15,133 | **989 / 140 / 271 / 15,235** |
+| at-bixby | 363 / 30 / 252 / 15,995 | **298 / 142 / 171 / 16,029** |
+| at-campsbay | 302 / 2 / 279 / 16,043 | 296 / 21 / 250 / 16,060 |
+| at-glencairn | 4,546 / 474 / 137 / 11,100 | 4,532 / 508 / 116 / 11,100 |
+| at-umgeni | 5,669 / 987 / 75 / 9,653 | 5,655 / 1,002 / 72 / 9,655 |
+| at-yosemite | 116 / 0 / 94 / 16,430 | **unchanged** |
+| at-simonstown | 363 / 27 / 29 / 16,221 | **unchanged** |
+
+**READ THE BURIED COLUMN AS THE PRICE AND THE `.` COLUMN AS THE FIND.** Drawn
+water falls 1.4% over the eight (12,979 → 12,800) and burial rises by 385
+texels, all of it at the LINE rivers — and 241 texels that were the waterline
+band become plain dry ground, which is the flat shelf the line rule was cutting
+beside the channel reverting to hillside. Yosemite and Simon's Town do not move
+at all (no line watercourse in reach); the Umgeni and Glencairn move by a
+quarter of a per cent, because their burial is the riverbank polygon's own blob
+and the lagoon's cover edge, which this rule never touched.
+
+**AND THE NEW BURIAL IS A SHORE FRINGE, WHICH THE CLASS RASTERS SAY DIRECTLY.**
+Of the buried texels after the fix, the share lying within one texel (5.95 m) of
+drawn water or the waterline band: **Senqu ford 82%, Senqu top 90%, Bixby 86%,
+Camps Bay 100%, Simon's Town 89%** — and within two texels, 94–100% at every one
+of them. That is the field's coverage reaching a little past the class
+half-width onto the 1:1 bank, which is exactly what this file already records as
+`#169`'s bank shaping, now measured rather than inferred. The Umgeni's 49% is
+the pre-existing blob and is not this change's.
+
+**THE HONEST STATEMENT ABOUT THE HYDRO FLOOR, because the numbers invite the
+wrong one.** `publishHydroFloor` took the Senqu ford's burial from 107 to 5, and
+that measurement was taken on a tree carrying the over-carve; with the over-carve
+gone it reads 114 — about where it was before the floor rule existed. The two
+were lowering the same ground in the same places, and the carve was doing most
+of it by digging a fifty-metre trench either side of a fifteen-metre river.
+What the floor rule still does is hold the ground to the field's own bed where
+all four lattice corners carry one; what it does NOT reach is the shore band at
+lattice resolution, and that band is now visible because nothing false is
+covering it. **A burial number measured against a fabricated trench is not a
+measurement of the rule that was supposed to have cut it.**
+
+**Verified**: `npx tsc --noEmit` clean; `channel-carve` all ok on the fix and six
+failures on the parent rule; `terrain-crossing`, `hydro`, `inland-water`,
+`substrate`, `substrate-field` and `glsl-reserved` green.
+
