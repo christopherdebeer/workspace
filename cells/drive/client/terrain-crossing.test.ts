@@ -187,7 +187,7 @@ function assertPointBarBelongsToTerrain(): void {
     cutL: 24,
     channels: gridded(channel),
     grid: 24,
-    hydroBreakLines: () => [],
+    hydroBreakLines: () => [], hydroFloor: () => null,
     onRoad: () => false,
     palette: () => [.4, .4, .4],
     areaTint: () => null,
