@@ -16023,3 +16023,24 @@ country, a third in the tropics, one time in twenty in the desert.
 **NOT VERIFIED BY EYE.** The harness cannot draw a front at device rate;
 the frames the seat sees under CYCLE are the verification, and `__wx()` is
 the number to paste beside them.
+
+**Traced from the seat, CPU only** (`wxdrift2.mjs` in the session's
+scratch: `at-campsbay`, `?time=CYCLE&nodraw=1&wxlive=0`, `__wx()` every half
+second): the weather clock advances 0.0066 sim hours a real second — 24 an
+hour, the cycle's own rate — and the drift's cover moves **0.314 → 0.425 over
+47 s with no two samples further apart than 0.009**, the regional cover
+easing behind it and the field at the truck within 0.02 of the regional at
+every sample, `builtAgo` 8–66 ms, which is one harness frame. **With the
+feed asked the same trace read `held true`, `next haze`, cover 0.53 and the
+drift standing at 0.072 for the whole minute**: the harness's relay reaches
+Open-Meteo, so the live sky was in charge and the drift correctly stood
+down — which is why `?wxlive=0` exists, and why a device that is online
+will show the LIVE sky developing at the feed's quarter-hour pace, eased in
+over eight seconds, rather than the drift. The stair fix applies to both.
+`weather-world.test.mjs` is green across its three boots: the wet pin, the
+pinned storm raining at the truck, the fog pin's ceiling, the wind reaching
+the field, and five weather shaders compiling with no errors.
+
+**The cost on a device is the `stepWeather` row of the next dump**, which
+read 0.1 ms a frame before this; the emulation says a threshold write is
+0.06 ms and a skipped frame 0.004, so the row should not move.
