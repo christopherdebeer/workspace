@@ -16673,13 +16673,27 @@ merged the same hour) is never cut by it in the common case: a bar tops out
 at invert + 0.33 m, the floor under a nominal-depth river sits near invert
 + 0.52. `terrain-crossing`, `substrate`, `hydro`, `inland-water` green.
 
-**Measured, the witness before and after (the after-census still running
-when this was committed; the remaining rows are added as they land):**
+**Measured, the witness before and after, on the merged tree (the other
+agent's point-bar and hydro-detail commits in):**
 
-| fixture | before: W / U / E | after: W / U / E |
-|---|---|---|
-| at-senqu-ford | 555 / 107 / 182 | 593 / 5 / 331 |
+| fixture | before: W / U / E | after: W / U / E | buried |
+|---|---|---|---|
+| at-senqu-ford | 555 / 107 / 182 | 593 / 5 / 331 | −95% |
+| at-senqu-top | 994 / 129 / 277 | 1,024 / 44 / 433 | −66% |
+| at-umgeni | 4,284 / 2,402 / 58 | 5,669 / 987 / 75 | −59% |
+| at-yosemite | 116 / 0 / 94 | 116 / 0 / 94 | — |
+| at-campsbay | 294 / 22 / 250 | 301 / 2 / 279 | −91% |
+| at-simonstown | 363 / 27 / 29 | 363 / 27 / 29 | 0 |
+| at-glencairn | 4,393 / 642 / 112 | 4,534 / 460 / 154 | −28% |
+| at-bixby | 301 / 139 / 171 | 363 / 30 / 252 | −78% |
 
-The Senqu ford's buried count goes from 107 to 5 at the first row; the
-waterline band grows because ground lowered to the bed now reads as shore
-instead of burial.
+Drawn water up everywhere a river or a body runs, buried down by 59–95%
+on the line rivers and the Umgeni, the waterline band up as ground lowered
+to the bed reads as shore instead of burial, `X` at two cells, Yosemite
+and Simon's Town untouched. What remains buried is the rule's own
+conservatism: the shore band at lattice resolution (all four corners must
+carry a bed), road-vetoed vertices, and Glencairn's lagoon edge under the
+cover raster (`c` 384 → 412). Those are #169's bank shaping and #170's
+per-kind shore, which now start from a third of the burial instead of all
+of it. `mesh-seams` worst step 0.04 m (limit 0.15), `hydro-coast` and
+`lab` green, `glsl-reserved` green.
