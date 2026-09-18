@@ -257,6 +257,8 @@ export const SWITCHES = [
   // rain curtains in the composite, another author's): the typed reader is
   // the whole reason a switch cannot be read undeclared, and the tree did not
   // type-check until this line.
+  { id: 'wxlive', kind: 'toggle', marks: ['bench'], fallback: 'on',
+    note: 'wxlive=0 leaves the live weather feed unasked, so the synthetic sky — the drift over the weather clock — is what develops; the only way to watch it on a machine that can reach Open-Meteo' },
   { id: 'raincurtain', kind: 'toggle', marks: ['look'], fallback: 'on',
     note: 'the composite draws rain as bounded curtains rooted in the weather field\'s rain channel, drifting with the wind; raincurtain=0 leaves the rain to the wet road and the drops' },
   { id: 'imu', kind: 'toggle', marks: ['legacy'], fallback: 'on',

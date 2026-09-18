@@ -33414,8 +33414,11 @@ const live = {
   on: false, at: 0, tempC: null as number | null,
   windKmh: 0, windDeg: 0, code: 0,
 };
+/** ?wxlive=0 leaves the feed unasked: the drift is otherwise unobservable
+ *  anywhere the feed answers, which is every harness run through the relay. */
+const WX_LIVE_ON = qsOn('wxlive', true);
 async function fetchLiveWeather(): Promise<void> {
-  if (WX_PIN) return;                     // a pinned sky asks nobody
+  if (WX_PIN || !WX_LIVE_ON) return;      // a pinned sky asks nobody
   if (performance.now() < live.at) return;
   live.at = performance.now() + 900000;   // the upstream updates every 15 minutes
   try {
@@ -33475,24 +33478,89 @@ const WX_WET = ((): number | null => {
   const v = qs('wet');
   return v === null ? null : clamp(Number(v) || 0, 0, 1);
 })();
-function rollWeather(now: number): void {
+/**
+ * ── THE SYNTHETIC SKY DEVELOPS; IT DOES NOT ROLL ──
+ *
+ * The offline chain was a six-entry table per biome, rolled every one and a
+ * half to four minutes and eased in over eight seconds: the sky held a state
+ * for minutes and then changed in seconds, which under CYCLE — a day in an
+ * hour — read from the seat as weather that JUMPS between states rather than
+ * developing with the day it is watching. It is a drift now: the regional
+ * cover is smooth value noise over a WEATHER CLOCK in sim hours, three
+ * octaves at four and a half hours, an hour and a third and twenty-seven
+ * minutes, stretched for contrast the way the field's own fronts are, on a
+ * biome's base and amplitude, plus an afternoon convection bump centred on
+ * 15:00 solar; rain follows cover past the biome's own threshold. The clock
+ * runs at the cycle's rate under CYCLE (24 sim hours a real hour, so a
+ * watched afternoon builds cloud and the night clears) and at six times real
+ * otherwise — a fixed-hour mode keeps its sun and still gets a sky that moves,
+ * and LIVE offline gets a front every ten or twenty minutes rather than
+ * every two.
+ *
+ * The numbers are judgements against the old table's frequencies, not
+ * anchors: with the contrast, cover about the base is roughly normal with a
+ * spread of two thirds of the amplitude, so `wet` is placed where rain comes
+ * about a sixth of the time in temperate country, a third in the tropics and
+ * one time in twenty in the desert, and `storm` where it is rare everywhere
+ * but the tropical afternoon.
+ *
+ * A held sky beats the drift: `__wxnext` and a mission's head set `wx.at`
+ * and the table entry stands until it passes; a pin and the live feed beat
+ * both, as they always did. `wx.sky` and the storm warning key off `wx.next`,
+ * which the drift now derives from its own targets.
+ */
+const WX_SYN_BIOME: Record<string, { base: number; amp: number; wet: number; storm: number; diurnal: number }> = {
+  arid: { base: 0.15, amp: 0.30, wet: 0.48, storm: 0.75, diurnal: 0.04 },
+  tropical: { base: 0.45, amp: 0.35, wet: 0.55, storm: 0.86, diurnal: 0.18 },
+  boreal: { base: 0.50, amp: 0.30, wet: 0.63, storm: 0.93, diurnal: 0.06 },
+  alpine: { base: 0.35, amp: 0.40, wet: 0.58, storm: 0.85, diurnal: 0.14 },
+  temperate: { base: 0.40, amp: 0.35, wet: 0.62, storm: 0.91, diurnal: 0.10 },
+};
+/** Sim hours of weather per real hour: the cycle's own rate under CYCLE,
+ *  and a gentle six otherwise. */
+const WX_SYN_RATE_CYCLE = 24, WX_SYN_RATE = 6;
+const wxSyn = { seed: Math.floor(Math.random() * 1e6), h: 0, cover: 0, rain: 0 };
+/** 1-D value noise in [0, 1], integer-hashed like the field's own. */
+function noise1(x: number, seed: number): number {
+  const i = Math.floor(x), f = x - i, sm = f * f * (3 - 2 * f);
+  const h = (k: number): number => {
+    let v = (k * 374761393 + seed * 668265263) | 0;
+    v = Math.imul(v ^ (v >>> 13), 1274126177);
+    return ((v ^ (v >>> 16)) >>> 0) / 4294967296;
+  };
+  return h(i) * (1 - sm) + h(i + 1) * sm;
+}
+function synWeather(h: number, solarHour: number): { cover: number; rain: number } {
+  const b = WX_SYN_BIOME[biome.name] ?? WX_SYN_BIOME.temperate;
+  const n = noise1(h / 4.5, wxSyn.seed) * 0.6 + noise1(h / 1.3, wxSyn.seed + 7) * 0.3
+    + noise1(h / 0.45, wxSyn.seed + 13) * 0.1;
+  const nc = clamp(0.5 + (n - 0.5) * 2.4, 0, 1);
+  const dh = ((solarHour - 15 + 36) % 24) - 12;
+  const diurnal = Math.exp(-(dh * dh) / (2 * 2.4 * 2.4)) * b.diurnal;
+  const cover = clamp(b.base + (nc - 0.5) * 2 * b.amp + diurnal, 0, 1);
+  const ss = (a: number, c: number, x: number): number => { const t = clamp((x - a) / (c - a), 0, 1); return t * t * (3 - 2 * t); };
+  const rain = ss(b.wet, b.wet + 0.22, cover) * (0.35 + 0.65 * ss(b.wet + 0.1, 1, cover));
+  return { cover, rain };
+}
+function rollWeather(now: number, dt: number): void {
   if (WX_PIN) { wx.next = WX_PIN; return; }
+  wxSyn.h += (dt * (TIME_MODES[timeMode] === 'CYCLE' ? WX_SYN_RATE_CYCLE : WX_SYN_RATE)) / 3600;
   if (live.on) return;                    // the real sky is in charge
-  if (now < wx.at) return;
-  wx.at = now + (90 + Math.random() * 150) * 1000; // a front lasts 1.5–4 minutes
-  // Biome bias: arid stays dry, tropical turns often, boreal broods.
-  const b = biome.name;
-  const table: Sky[] = b === 'arid' ? ['clear', 'clear', 'clear', 'haze', 'haze', 'rain']
-    : b === 'tropical' ? ['clear', 'haze', 'rain', 'rain', 'storm', 'haze']
-    : b === 'boreal' ? ['haze', 'haze', 'clear', 'rain', 'storm', 'haze']
-    : b === 'alpine' ? ['clear', 'haze', 'clear', 'storm', 'haze', 'rain']
-    : ['clear', 'haze', 'clear', 'rain', 'haze', 'storm'];
-  wx.next = table[Math.floor(Math.random() * table.length)];
+  if (now < wx.at) return;                // a held sky keeps its table entry
+  const s = synWeather(wxSyn.h, clockHour());
+  wxSyn.cover = s.cover; wxSyn.rain = s.rain;
+  const b = WX_SYN_BIOME[biome.name] ?? WX_SYN_BIOME.temperate;
+  wx.next = s.rain > 0.75 && s.cover > b.storm ? 'storm'
+    : s.rain > 0.03 ? 'rain' : s.cover > 0.25 ? 'haze' : 'clear';
 }
 function stepWeather(now: number, dt: number): void {
-  rollWeather(now);
+  rollWeather(now, dt);
   void fetchLiveWeather();
   const t = WX[wx.next];
+  // The target: the live feed, else a held table entry, else the drift.
+  const held = now < wx.at;
+  const tCover = live.on ? WX_LIVE.cloud : held ? t.cloud : wxSyn.cover;
+  const tRain = live.on ? WX_LIVE.rain : held ? t.rain : wxSyn.rain;
   const k = Math.min(1, dt * 0.12);                 // fronts arrive slowly
   // A PIN IS A FIXTURE, NOT A FORECAST. ?wx=storm eased in from clear on the
   // same eight-second clock a real front takes, so a harness that booted,
@@ -33505,8 +33573,8 @@ function stepWeather(now: number, dt: number): void {
   } else {
     // Live cover is a measurement and beats the sky state's nominal figure: an
     // overcast dry day and a rainy one are the same word and a different picture.
-    wx.cloud += ((live.on ? WX_LIVE.cloud : t.cloud) - wx.cloud) * k;
-    wx.rain += ((live.on ? WX_LIVE.rain : t.rain) - wx.rain) * k;
+    wx.cloud += (tCover - wx.cloud) * k;
+    wx.rain += (tRain - wx.rain) * k;
   }
   wx.sky = wx.next === 'storm' && wx.cloud > 0.60 ? 'storm'
     : wx.rain > 0.03 ? 'rain' : wx.cloud > 0.25 ? 'haze' : 'clear';
@@ -33541,21 +33609,32 @@ function stepWeather(now: number, dt: number): void {
       : clamp(((1 - dayF) * 0.5 * (1 - wx.cloud * 0.4) * calm
         + wxField.wetMean * 0.6 * (1 - wx.rain)
         + wx.rain * wx.cloud * 0.3) * mistB, 0, 1);
+    // ── EVERY FRAME, NOT EVERY 1.8 SECONDS ──
+    // The field used to be rebuilt on a cadence while the regional scalars it
+    // bakes in eased every frame, so everything that reads the texture — the
+    // deck's coverage, the scud, the mist, the rain, the cloud shadows, the
+    // wet road — arrived in stairs: eight changes in sixteen seconds, the
+    // largest 0.15 of the sky's cover in one frame, measured with the
+    // shipping build at 60 fps (doctrine, "The weather steps…"). The build
+    // keeps its noise now and only re-thresholds it, so this costs tens of
+    // microseconds a frame and a 9 KB upload — and nothing at all in a frame
+    // where nothing moved, which is what the return value says. `dt` is
+    // integrated from the last WRITE, so a skipped frame is not lost time.
     const stale = now - wxBuiltAt;
     const moved = wxRecenter(wxField, state.x, state.z);
-    if (moved || stale > 1800) {
-      buildField(wxField, {
-        t: now / 1000, windX: wxWind.x, windZ: wxWind.z,
-        advectX: wxTravel.x, advectZ: wxTravel.z,
-        cover: wx.cloud, rain: wx.rain, fog: wxFogT,
-        dt: clamp(stale / 1000, 0, 30), dayF,
-      }, sampleHeight);
+    if (moved) wxU.uWxMin.value.set(wxField.ox, wxField.oz);
+    const wrote = buildField(wxField, {
+      t: now / 1000, windX: wxWind.x, windZ: wxWind.z,
+      advectX: wxTravel.x, advectZ: wxTravel.z,
+      cover: wx.cloud, rain: wx.rain, fog: wxFogT,
+      dt: clamp(stale / 1000, 0, 30), dayF,
+    }, sampleHeight);
+    if (wrote) {
       if (WX_WET !== null) seedWet(wxField, WX_WET);
       wxTex.needsUpdate = true;
-      wxU.uWxMin.value.set(wxField.ox, wxField.oz);
-      wxU.uFogTop.value = wxFogT > 0.01 ? wxField.fogTop : -1e9;
       wxBuiltAt = now;
     }
+    wxU.uFogTop.value = wxFogT > 0.01 ? wxField.fogTop : -1e9;
     const l = wxAt(wxField, state.x, state.z);
     wxL.cover = l.cover; wxL.rain = l.rain; wxL.fog = l.fog; wxL.wet = l.wet;
     const c = wxAt(wxField, camera.position.x, camera.position.z);
@@ -35025,6 +35104,7 @@ function tapeApplyHead(head: TapeHead): Record<string, number> {
   }
   if (head.wx === 'clear' || head.wx === 'haze' || head.wx === 'rain' || head.wx === 'storm') {
     wx.next = head.wx as Sky;
+    wx.at = performance.now() + 600000;   // held against the drift for the replay
   }
   // THE SURFACE THE RUN WAS DRIVEN ON. Where the head carries numbers, snap
   // the regional state to them and flood the wet memory — grip, drag and the
@@ -41591,6 +41671,8 @@ function meshHeightAt(x: number, z: number): number | null {
   // Milliseconds since the field was last rebuilt: the number that says
   // whether a value read from `local` is this frame's or a stair's.
   builtAgo: Math.round(performance.now() - wxBuiltAt), next: wx.next,
+  held: performance.now() < wx.at, live: live.on,
+  syn: { h: +wxSyn.h.toFixed(3), cover: +wxSyn.cover.toFixed(3), rain: +wxSyn.rain.toFixed(3) },
 });
 /** Ask for a front, the way `__windset` asks for a gale: a test that wants to
  *  watch a sky arrive cannot wait on the synthetic roll's minutes or on the

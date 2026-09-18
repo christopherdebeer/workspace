@@ -15975,3 +15975,51 @@ noise in sim hours, biased by the biome, so a watched afternoon builds
 cloud and a night clears — is the change that would make the field DEVELOP,
 and it is a separate unit from the stair. The live feed (Open-Meteo every
 fifteen minutes) is a step by nature and is eased the same way.
+
+### …and both are fixed: the field re-thresholds every frame, and the sky drifts
+
+**THE STAIR.** `buildField` keeps its three fbm reads per cell
+(`WxField.noise`, at `noiseAt`) and recomputes them only on a recentre or
+once the advect has moved `WX_NOISE_STEP` (an eighth of a cell, 32 m: a
+hundredth of cover at the threshold field's steepest, and no more spikes
+than the old cadence below 64 km/h of wind); every call re-thresholds them
+by the regional scalars and integrates the wet with the frame's own `dt`. It
+returns whether it wrote, and a frame where nothing moved — no scalar
+changed, the noise did not move, nothing wet or raining — writes nothing and
+uploads nothing. `stepWeather` calls it every frame and sets `uFogTop` every
+frame; `wxBuiltAt` is the last WRITE, which is what `__wx().builtAgo`
+reports and what `dt` is integrated from.
+
+Measured with the same emulation as the reading, the front at 60 fps:
+
+| | changes of local cover in 16 s | largest | noise recomputes | a threshold write | a skipped call |
+|---|---|---|---|---|---|
+| before, 1.8 s cadence | 8 | 0.149 | 9 (one a rebuild) | — | — |
+| after, every frame | **479–510** | **0.004** | 2 at 3–5 ms (node) | **0.061 ms** | 0.004 ms |
+
+A settled sky over 600 frames writes once. Wet ground writes every frame
+while it dries, as it must. `weatherfield.test.mjs` is green unchanged —
+determinism, the pins, the downwind move and the wet memory all hold,
+because the arithmetic per cell is the same and only WHEN it runs moved.
+
+**THE DEVELOPMENT.** `rollWeather` no longer rolls. The regional cover is
+smooth 1-D value noise over a weather clock in sim hours — three octaves at
+4.5 h, 1.3 h and 27 min, contrast-stretched like the field's fronts — on a
+biome's base and amplitude (`WX_SYN_BIOME`), with an afternoon convection
+bump centred on 15:00 solar; rain follows cover past the biome's `wet`, a
+storm past its `storm` with the rain high. The clock runs at 24 sim hours a
+real hour under CYCLE and six otherwise, so a watched afternoon builds
+cloud and clears at night, a fixed-hour mode still gets a moving sky, and
+LIVE offline gets a front every ten or twenty minutes. Held skies —
+`__wxnext`, a mission head — keep their table entry until `wx.at` passes;
+the pin and the live feed beat both. `wx.next` is derived from the drift so
+`wx.sky` and the storm warning are unchanged. `__wx().syn` reports the
+clock and the targets, `held` and `live` say which driver is in charge.
+
+The biome numbers are judgements against the old table's frequencies and
+are written to be argued with: rain about a sixth of the time in temperate
+country, a third in the tropics, one time in twenty in the desert.
+
+**NOT VERIFIED BY EYE.** The harness cannot draw a front at device rate;
+the frames the seat sees under CYCLE are the verification, and `__wx()` is
+the number to paste beside them.
