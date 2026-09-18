@@ -16697,3 +16697,15 @@ cover raster (`c` 384 → 412). Those are #169's bank shaping and #170's
 per-kind shore, which now start from a third of the burial instead of all
 of it. `mesh-seams` worst step 0.04 m (limit 0.15), `hydro-coast` and
 `lab` green, `glsl-reserved` green.
+
+**Live as v1789739369438**, deployed from the merged tree on the seat's word
+and without a pull (cell-sync's "deploying" line named v1789739337081, its
+"deployed" line this one; the live bundle read `x-cache: Miss`, 3.96 MB,
+parses, and carries `publishHydroFloor`, `hydroFloorAt`, `hydroFieldCovers`,
+`stale-terrain`, the other agent's `barRise`, `wildPatch` and
+`HERD_DOT_M`). So this deploy took out together: the water floor, the
+revisions consumed at lookup, the corrected diagnostic, the herd's arrival
+as a placement, and the other agent's point-bar shelf and hydro-detail
+material. The phone under a river is the herd's and the floor's
+verification alike: a riverbank polygon should read as water to its
+edges, and the wheels should find the bed the water shows.
