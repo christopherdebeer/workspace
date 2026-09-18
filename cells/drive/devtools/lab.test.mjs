@@ -130,8 +130,8 @@ for (const lab of LABS) {
         ['game', 'data'].every((view) => initial.views.includes(view)), initial.views);
       ok('world-edit: input ownership is explicit',
         ['interact', 'paint'].every((mode) => initial.modes.includes(mode)), initial.modes);
-      ok('world-edit: cover and elevation authorities are both exposed',
-        ['cover', 'dem'].every((layer) => initial.layers.includes(layer)), initial.layers);
+      ok('world-edit: raster and vector authorities are exposed',
+        ['cover', 'dem', 'road'].every((layer) => initial.layers.includes(layer)), initial.layers);
 
       const inputOwnership = await d.page.evaluate(() => {
         const canvas = document.getElementById('scene');
@@ -195,6 +195,33 @@ for (const lab of LABS) {
           && (sculpted.before.workerMirrors < 0
             || sculpted.after.workerMirrors > sculpted.before.workerMirrors),
         sculpted);
+
+      const road = await d.page.evaluate(() => {
+        const before = window.__worldedit?.();
+        const immediate = window.__worldeditLine?.(undefined, 'service', 6);
+        return {
+          before,
+          immediate,
+          radiusLabel: document.querySelector('#world-authoring-radius')
+            ?.parentElement?.querySelector('span')?.textContent,
+        };
+      });
+      ok('world-edit: a road gesture becomes persistent source and pending production work',
+        road.immediate?.layer === 'road'
+          && road.immediate?.features === 1
+          && road.immediate?.pending === 1
+          && road.radiusLabel === 'WIDTH',
+        road);
+      await d.page.waitForFunction(() => {
+        const report = window.__worldedit?.();
+        return report?.layer === 'road' && report.pending === 0
+          && (report.settled === 1 || report.failed === 1);
+      }, null, { timeout: 45000 });
+      const rebuiltRoad = await d.page.evaluate(() => window.__worldedit?.());
+      ok('world-edit: authored roads leave the pending overlay after the production rebuild',
+        rebuiltRoad?.features === 1 && rebuiltRoad.pending === 0 && rebuiltRoad.settled === 1
+          && rebuiltRoad.productionWays === 1,
+        rebuiltRoad);
     }
     if (lab.slug === 'hydro') {
       const hydro = await d.page.evaluate(() => ({

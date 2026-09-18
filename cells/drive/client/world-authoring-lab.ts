@@ -1,5 +1,21 @@
 import type { EditableRasterTile, RasterEditResult } from './world-authoring-raster';
 
+export interface AuthoringPoint {
+  x: number;
+  z: number;
+}
+
+export interface AuthoringPreview {
+  kind: 'cursor' | 'polyline';
+  points: readonly AuthoringPoint[];
+  radiusM: number;
+  state: 'cursor' | 'draft' | 'pending' | 'settled' | 'failed';
+}
+
+export interface AuthoringEditResult extends RasterEditResult {
+  pending?: number;
+}
+
 export interface AuthoringChoice {
   value: string;
   label: string;
@@ -19,13 +35,17 @@ export interface AuthoringLayer {
   label: string;
   kind: 'raster' | 'vector';
   editable: boolean;
+  gesture: 'brush' | 'polyline';
   choices: readonly AuthoringChoice[];
+  radius?: AuthoringStrength;
   strength?: AuthoringStrength;
-  beginStroke(value: string): void;
-  paint(x: number, z: number, radiusM: number, value: string, strength: number): RasterEditResult;
-  endStroke(): RasterEditResult;
-  undo(): RasterEditResult;
-  reset(): RasterEditResult;
+  beginGesture(at: AuthoringPoint, radiusM: number, value: string, strength: number): AuthoringEditResult;
+  updateGesture(at: AuthoringPoint, radiusM: number, value: string, strength: number): AuthoringEditResult;
+  endGesture(): AuthoringEditResult;
+  cancelGesture(): void;
+  previews(cursor: AuthoringPoint | null, radiusM: number): readonly AuthoringPreview[];
+  undo(): AuthoringEditResult;
+  reset(): AuthoringEditResult;
   setDataView(on: boolean): void;
   report(): Record<string, unknown>;
 }
@@ -35,6 +55,7 @@ export interface WorldAuthoringRuntime {
   worldAt(clientX: number, clientY: number): [number, number] | null;
   focus(): [number, number];
   setInputCaptured(captured: boolean): void;
+  setPreviews(previews: readonly AuthoringPreview[]): void;
   layers: readonly AuthoringLayer[];
 }
 
@@ -46,6 +67,11 @@ interface WorldAuthoringWindow extends Window {
     value?: string | number,
     radiusM?: number,
     strength?: number,
+  ) => Record<string, unknown>;
+  __worldeditLine?: (
+    points?: Array<[number, number]>,
+    value?: string,
+    widthM?: number,
   ) => Record<string, unknown>;
 }
 
@@ -69,6 +95,7 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
   let pointer = -1;
   let changed = 0;
   let rebuilds = 0;
+  let cursor: AuthoringPoint | null = null;
 
   const style = document.createElement('style');
   style.textContent = `
@@ -157,9 +184,25 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
   radiusRow.innerHTML = '<span>RADIUS</span>';
   const radius = document.createElement('input');
   radius.id = 'world-authoring-radius';
-  radius.type = 'range'; radius.min = '0'; radius.max = '240'; radius.step = '5'; radius.value = '45';
+  radius.type = 'range';
   const radiusOut = document.createElement('output');
   radiusRow.append(radius, radiusOut);
+  const fillRadius = (): void => {
+    const spec = layer.radius ?? {
+      label: layer.gesture === 'polyline' ? 'WIDTH' : 'RADIUS',
+      min: layer.gesture === 'polyline' ? 2 : 0,
+      max: layer.gesture === 'polyline' ? 20 : 240,
+      step: layer.gesture === 'polyline' ? .5 : 5,
+      value: layer.gesture === 'polyline' ? 7.5 : 45,
+      unit: 'm',
+    };
+    radiusRow.querySelector('span')!.textContent = spec.label;
+    radius.min = String(spec.min);
+    radius.max = String(spec.max);
+    radius.step = String(spec.step);
+    radius.value = String(spec.value);
+  };
+  fillRadius();
 
   const strengthRow = document.createElement('label');
   strengthRow.innerHTML = '<span>STRENGTH</span>';
@@ -200,15 +243,19 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
     active: true, layer: layer.id, kind: layer.kind, view: dataView ? 'data' : 'game',
     armed, changed, rebuilds, ...layer.report(),
   });
+  const publishPreviews = (): void => {
+    runtime.setPreviews(armed ? layer.previews(cursor, Number(radius.value)) : []);
+  };
   const repaint = (): void => {
-    radiusOut.value = `${radius.value}m`;
+    radiusOut.value = `${radius.value}${layer.radius?.unit ?? 'm'}`;
     strengthOut.value = layer.strength
       ? `${strength.value}${layer.strength.unit ?? ''}`
       : '';
     mode.value = armed ? 'paint' : 'interact';
     status.textContent = `${armed ? 'PAINT OWNS INPUT' : 'GAME OWNS INPUT'} · ${layer.label} · ${layer.kind.toUpperCase()}\n`
-      + `${changed} CELLS THIS SESSION · ${rebuilds} INVALIDATIONS\n`
+      + `${changed} SOURCE CHANGES · ${rebuilds} INVALIDATIONS\n`
       + `${JSON.stringify(layer.report())}`;
+    publishPreviews();
   };
   const setMode = (next: 'interact' | 'paint'): void => {
     armed = next === 'paint' && layer.editable;
@@ -217,23 +264,28 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
     document.body.classList.toggle('world-authoring-paint', armed);
     repaint();
   };
-  const commit = (result: RasterEditResult): void => {
+  const commit = (result: AuthoringEditResult): void => {
     if (result.changed) {
       changed += result.changed;
       rebuilds++;
     }
     repaint();
   };
-  const sample = (clientX: number, clientY: number): void => {
+  const pointAt = (clientX: number, clientY: number): AuthoringPoint | null => {
     const at = runtime.worldAt(clientX, clientY);
-    if (!at) return;
-    commit(layer.paint(at[0], at[1], Number(radius.value), cls.value, Number(strength.value)));
+    return at ? { x: at[0], z: at[1] } : null;
   };
   const stop = (): void => {
     if (!painting) return;
     painting = false;
     pointer = -1;
-    layer.endStroke();
+    commit(layer.endGesture());
+  };
+  const cancel = (): void => {
+    if (!painting) return;
+    painting = false;
+    pointer = -1;
+    layer.cancelGesture();
     repaint();
   };
 
@@ -243,11 +295,13 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
     repaint();
   });
   layerSelect.addEventListener('change', () => {
+    if (painting) stop();
     layer.setDataView(false);
     layer = runtime.layers.find((candidate) => candidate.id === layerSelect.value)
       ?? runtime.layers[0];
     if (!layer.editable) setMode('interact');
     fillChoices();
+    fillRadius();
     fillStrength();
     layer.setDataView(dataView);
     repaint();
@@ -269,20 +323,27 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
     event.preventDefault(); event.stopImmediatePropagation();
     painting = true; pointer = event.pointerId;
     try { runtime.canvas.setPointerCapture(event.pointerId); } catch { /* synthetic pointer in a test */ }
-    layer.beginStroke(cls.value);
-    sample(event.clientX, event.clientY);
+    cursor = pointAt(event.clientX, event.clientY);
+    if (!cursor) { painting = false; pointer = -1; return; }
+    commit(layer.beginGesture(cursor, Number(radius.value), cls.value, Number(strength.value)));
   }, true);
   runtime.canvas.addEventListener('pointermove', (event) => {
-    if (!painting || event.pointerId !== pointer) return;
-    event.preventDefault(); event.stopImmediatePropagation();
-    sample(event.clientX, event.clientY);
+    if (!armed) return;
+    cursor = pointAt(event.clientX, event.clientY);
+    if (painting && event.pointerId === pointer && cursor) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      commit(layer.updateGesture(cursor, Number(radius.value), cls.value, Number(strength.value)));
+    } else publishPreviews();
   }, true);
   runtime.canvas.addEventListener('pointerup', (event) => {
     if (!painting || event.pointerId !== pointer) return;
     event.preventDefault(); event.stopImmediatePropagation();
     stop();
   }, true);
-  runtime.canvas.addEventListener('pointercancel', stop, true);
+  runtime.canvas.addEventListener('pointercancel', cancel, true);
+  runtime.canvas.addEventListener('pointerleave', () => {
+    if (!painting) { cursor = null; publishPreviews(); }
+  }, true);
 
   const win = window as WorldAuthoringWindow;
   win.__worldedit = report;
@@ -295,20 +356,44 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
   ) => {
     const at = x === undefined || z === undefined ? runtime.focus() : [x, z] as [number, number];
     const selected = value === undefined ? cls.value : String(value);
-    layer.beginStroke(selected);
-    commit(layer.paint(
-      at[0],
-      at[1],
-      radiusM ?? Number(radius.value),
-      selected,
-      amount ?? Number(strength.value),
-    ));
-    layer.endStroke();
+    const point = { x: at[0], z: at[1] };
+    commit(layer.beginGesture(point, radiusM ?? Number(radius.value), selected,
+      amount ?? Number(strength.value)));
+    commit(layer.endGesture());
+    repaint();
+    return report();
+  };
+  win.__worldeditLine = (
+    points?: Array<[number, number]>,
+    value?: string,
+    widthM?: number,
+  ) => {
+    const road = runtime.layers.find((candidate) => candidate.gesture === 'polyline');
+    if (!road) return report();
+    if (layer !== road) {
+      layer.setDataView(false);
+      layer = road;
+      layerSelect.value = road.id;
+      fillChoices(); fillRadius(); fillStrength();
+    }
+    const [fx, fz] = runtime.focus();
+    const samples = points?.length ? points : [[fx - 35, fz], [fx + 35, fz + 8]];
+    const selected = value ?? road.choices[0]?.value ?? 'residential';
+    const width = widthM ?? road.radius?.value ?? 7.5;
+    commit(road.beginGesture({ x: samples[0][0], z: samples[0][1] }, width, selected, 1));
+    for (let i = 1; i < samples.length; i++) {
+      commit(road.updateGesture({ x: samples[i][0], z: samples[i][1] }, width, selected, 1));
+    }
+    commit(road.endGesture());
     repaint();
     return report();
   };
   runtime.setInputCaptured(false);
+  runtime.setPreviews([]);
   repaint();
+  window.setInterval(() => {
+    if (armed || layer.kind === 'vector') repaint();
+  }, 250);
 }
 
 // Kept in this module's public surface so future raster adapters share the

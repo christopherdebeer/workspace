@@ -98,7 +98,8 @@ import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture,
 import { embeddedLab, startLab } from './labs';
 import { RasterPaintSession, type EditableRasterTile } from './world-authoring-raster';
 import { DemPaintSession, type DemBrush, type EditableDemTile } from './world-authoring-dem';
-import { startWorldAuthoringLab, type AuthoringLayer } from './world-authoring-lab';
+import { PolylinePaintSession, type AuthoredPolyline } from './world-authoring-vector';
+import { startWorldAuthoringLab, type AuthoringLayer, type AuthoringPreview } from './world-authoring-lab';
 import { IMPOSTOR_FORMS, IMPOSTOR_WIDTH, impostorFormIndex, impostorGeometry, impostorMaterial } from './tree-impostor';
 import { IMP_ATLAS, IMP_ATLAS_SLOTS, bakeImpAtlasSlot, clearImpAtlas, makeImpAtlasTarget, viewOrigin, type ImpAtlasSlot } from './tree-atlas';
 import { EZ_FAMILIES, EZ_MERGE_PX, EZ_M_PER_SCALE, EZ_NOISE_GLSL, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezDecodeProf, ezHabitatsForSite, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPhenotypeForSite, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
@@ -10128,6 +10129,12 @@ const ROAD_W: Record<string, number> = { motorway: 13, trunk: 12, primary: 10.5,
   // road it joins, so a slip still defers to its parent and cannot drag a
   // motorway onto its camber.
   motorway_link: 8, trunk_link: 7.5, primary_link: 7, secondary_link: 6.5, tertiary_link: 6 };
+const roadWidth = (tags: Record<string, string> | undefined): number => {
+  const authored = Number(tags?.['drive:width']);
+  return Number.isFinite(authored) && authored >= 1 && authored <= 40
+    ? authored
+    : ROAD_W[tags?.highway ?? ''] ?? 5;
+};
 // The RULING GRADE a class is engineered to — what the profile clamp treats
 // as "steeper than this is probably not real". Motorways hold ~4% by design
 // and 7% only in extremis; alpine passes run 9-12%; town streets can defy
@@ -28078,8 +28085,8 @@ async function renderWays(
     // layer, and the host-first rank below still overrides both.
     const la = layerOf(a.tags), lb = layerOf(b.tags);
     if (la !== lb) return lb - la;
-    const wa = (a.tags?.highway ? ROAD_W[a.tags.highway] ?? 5 : -1);
-    const wb = (b.tags?.highway ? ROAD_W[b.tags.highway] ?? 5 : -1);
+    const wa = (a.tags?.highway ? roadWidth(a.tags) : -1);
+    const wb = (b.tags?.highway ? roadWidth(b.tags) : -1);
     return wb - wa;
   });
   // The whole batch into the PRE-GRID before any way builds, so the junction
@@ -28089,7 +28096,7 @@ async function renderWays(
     if (!el.geometry || el.geometry.length < 2 || !tags.highway) continue;
     if (tags.highway === 'services' || tags.highway === 'steps') continue;
     const dk = el.ck ?? String(el.id);
-    const w = ROAD_W[tags.highway] ?? 5;
+    const w = roadWidth(tags);
     const track = ['track', 'path', 'bridleway', 'cycleway', 'footway'].includes(tags.highway);
     const pts = el.geometry.map((g) => toLocal(g.lat, g.lon));
     // The junction registry takes EVERY drivable way in the batch, built or
@@ -28147,7 +28154,7 @@ async function renderWays(
       if (tags.highway === 'services' || tags.highway === 'steps') continue;
       const dk = el.ck ?? String(el.id);
       if (seenWays.has(dk)) continue;
-      const w = ROAD_W[tags.highway] ?? 5;
+      const w = roadWidth(tags);
       for (const end of [0, el.geometry.length - 1]) {
         const [ex, ez] = toLocal(el.geometry[end].lat, el.geometry[end].lon);
         const h = preEdge(ex, ez, dk);
@@ -28250,7 +28257,7 @@ async function renderWays(
     // real, drivable, and belong to the car park.
     if (tags.highway === 'services') continue;
     if (tags.highway) {
-      const w = ROAD_W[tags.highway] ?? 5;
+      const w = roadWidth(tags);
       // THREE tiers, not two. A mountain path used to render as decoration you
       // could not feel underfoot — you crossed Chapman's Peak reading ROUGH the
       // whole way. Tracks now carry their own grip, and are drawn as ruts.
@@ -51301,6 +51308,69 @@ Object.assign(hud.style, {
 hud.classList.add('ui');
 document.body.appendChild(hud);
 const hctx = hud.getContext('2d')!;
+let authoringPreviews: readonly AuthoringPreview[] = [];
+const authoringProject = new THREE.Vector3();
+function projectAuthoringPoint(x: number, z: number): [number, number] | null {
+  const y = groundAt(x, z) + .2;
+  authoringProject.set(x, y, z).project(camera);
+  if (!Number.isFinite(authoringProject.x) || !Number.isFinite(authoringProject.y)
+    || authoringProject.z < -1 || authoringProject.z > 1) return null;
+  return [
+    (authoringProject.x * .5 + .5) * HW,
+    (.5 - authoringProject.y * .5) * HH,
+  ];
+}
+function drawAuthoringPreviews(): void {
+  if (!authoringPreviews.length) return;
+  hctx.save();
+  hctx.lineJoin = 'round';
+  hctx.lineCap = 'round';
+  for (const preview of authoringPreviews) {
+    const colour = preview.state === 'failed' ? UI.bad
+      : preview.state === 'settled' ? UI.good
+        : preview.state === 'pending' ? UI.gold : UI.edge;
+    hctx.strokeStyle = colour;
+    hctx.fillStyle = colour;
+    hctx.globalAlpha = preview.state === 'settled' ? .42 : .9;
+    hctx.setLineDash(preview.state === 'pending' ? [3, 3] : []);
+    if (preview.kind === 'cursor') {
+      const centre = preview.points[0];
+      if (!centre) continue;
+      hctx.beginPath();
+      let visible = 0;
+      for (let i = 0; i <= 32; i++) {
+        const a = (i / 32) * Math.PI * 2;
+        const p = projectAuthoringPoint(
+          centre.x + Math.cos(a) * preview.radiusM,
+          centre.z + Math.sin(a) * preview.radiusM,
+        );
+        if (!p) continue;
+        if (visible++ === 0) hctx.moveTo(p[0], p[1]); else hctx.lineTo(p[0], p[1]);
+      }
+      hctx.lineWidth = 1;
+      hctx.stroke();
+      continue;
+    }
+    const projected = preview.points
+      .map((point) => projectAuthoringPoint(point.x, point.z))
+      .filter((point): point is [number, number] => !!point);
+    if (projected.length < 2) continue;
+    const first = preview.points[0];
+    const edge = projectAuthoringPoint(first.x + preview.radiusM * .5, first.z);
+    const centre = projectAuthoringPoint(first.x, first.z);
+    const width = edge && centre ? Math.max(1.5, Math.hypot(edge[0] - centre[0], edge[1] - centre[1]) * 2) : 2;
+    hctx.beginPath();
+    hctx.moveTo(projected[0][0], projected[0][1]);
+    for (let i = 1; i < projected.length; i++) hctx.lineTo(projected[i][0], projected[i][1]);
+    hctx.globalAlpha *= .22;
+    hctx.lineWidth = width;
+    hctx.stroke();
+    hctx.globalAlpha = preview.state === 'settled' ? .55 : 1;
+    hctx.lineWidth = 1;
+    hctx.stroke();
+  }
+  hctx.restore();
+}
 // The X-RAY DEPTH view: the luma map, decoded and painted edge to edge under
 // the instruments. Sky is blue (it decodes as the far plane — the dome writes
 // no depth), terrain is grey by log distance. Same rendering as the
@@ -54242,6 +54312,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   const hudEntry = performance.now();
   hudT0 = hudEntry; hudProfCalls++;
   if (xrayMode === 1 && lumaPrimed) drawLumaMap();
+  drawAuthoringPreviews();
   const pad = 4;
   /** Bottom of the compass strip in HUD pixels: `pad` + the heading digits
    *  under the needle. Nothing else may be drawn through it. */
@@ -57736,6 +57807,7 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     label: 'LAND COVER',
     kind: 'raster',
     editable: true,
+    gesture: 'brush',
     choices: [
       { value: String(COVER.tree), label: `${COVER.tree} · FOREST` },
       { value: String(COVER.shrub), label: `${COVER.shrub} · SCRUB` },
@@ -57749,15 +57821,31 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       { value: String(COVER.mangrove), label: `${COVER.mangrove} · MANGROVE` },
       { value: String(COVER.moss), label: `${COVER.moss} · TUNDRA` },
     ],
-    beginStroke: () => coverEditor.beginStroke(),
-    paint: (x, z, radius, value) => applyCover(() => coverEditor.paint(
+    beginGesture: (at, radius, value) => {
+      coverEditor.beginStroke();
+      return applyCover(() => coverEditor.paint(
+        editableCoverTiles(),
+        at.x,
+        at.z,
+        radius,
+        COVER_CLASSES.includes(Number(value)) && Number(value) !== 0 ? Number(value) : COVER.grass,
+      ));
+    },
+    updateGesture: (at, radius, value) => applyCover(() => coverEditor.paint(
       editableCoverTiles(),
-      x,
-      z,
+      at.x,
+      at.z,
       radius,
       COVER_CLASSES.includes(Number(value)) && Number(value) !== 0 ? Number(value) : COVER.grass,
     )),
-    endStroke: () => coverEditor.endStroke(),
+    endGesture: () => {
+      coverEditor.endStroke();
+      return { changed: 0, tileKeys: [] };
+    },
+    cancelGesture: () => { coverEditor.endStroke(); },
+    previews: (cursor, radiusM) => cursor ? [{
+      kind: 'cursor', points: [cursor], radiusM, state: 'cursor',
+    }] : [],
     undo: () => applyCover(() => coverEditor.undo()),
     reset: () => applyCover(() => coverEditor.reset()),
     setDataView: (on) => setGroundView(on ? 'cover' : baseGroundView),
@@ -57768,7 +57856,7 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       hydroQueued: hydroDirty.size,
       workerMirrors: tworker?.stats.mirrored ?? -1,
       inputCaptured: authoringInputCaptured,
-      adapters: 2,
+      adapters: 3,
     }),
   };
   const demLayer: AuthoringLayer = {
@@ -57776,6 +57864,7 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     label: 'ELEVATION',
     kind: 'raster',
     editable: true,
+    gesture: 'brush',
     choices: [
       { value: 'raise', label: 'RAISE' },
       { value: 'lower', label: 'LOWER' },
@@ -57783,11 +57872,21 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       { value: 'smooth', label: 'SMOOTH' },
     ],
     strength: { label: 'AMOUNT', min: .05, max: 10, step: .05, value: 1, unit: 'm' },
-    beginStroke: (value) => demEditor.beginStroke(
-      (['raise', 'lower', 'flatten', 'smooth'].includes(value) ? value : 'raise') as DemBrush),
-    paint: (x, z, radius, _value, strength) => applyDem(() =>
-      demEditor.paint(editableDemTiles(), x, z, radius, strength)),
-    endStroke: () => demEditor.endStroke(),
+    beginGesture: (at, radius, value, strength) => {
+      demEditor.beginStroke(
+        (['raise', 'lower', 'flatten', 'smooth'].includes(value) ? value : 'raise') as DemBrush);
+      return applyDem(() => demEditor.paint(editableDemTiles(), at.x, at.z, radius, strength));
+    },
+    updateGesture: (at, radius, _value, strength) => applyDem(() =>
+      demEditor.paint(editableDemTiles(), at.x, at.z, radius, strength)),
+    endGesture: () => {
+      demEditor.endStroke();
+      return { changed: 0, tileKeys: [] };
+    },
+    cancelGesture: () => { demEditor.endStroke(); },
+    previews: (cursor, radiusM) => cursor ? [{
+      kind: 'cursor', points: [cursor], radiusM, state: 'cursor',
+    }] : [],
     undo: () => applyDem(() => demEditor.undo()),
     reset: () => applyDem(() => demEditor.reset()),
     setDataView: (on) => {
@@ -57803,15 +57902,206 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       hydroQueued: hydroDirty.size,
       workerMirrors: tworker?.stats.mirrored ?? -1,
       inputCaptured: authoringInputCaptured,
-      adapters: 2,
+      adapters: 3,
     }),
   };
+  type AuthoredRoadState = {
+    state: 'pending' | 'settled' | 'failed';
+    dirty: Set<string>;
+    built: boolean;
+    settledAt: number;
+  };
+  const roadEditor = new PolylinePaintSession();
+  const roadStates = new Map<string, AuthoredRoadState>();
+  const roadStorageKey = `drive.world-authoring.roads.v1:${origin.lat.toFixed(5)},${origin.lon.toFixed(5)}`;
+  const saveRoads = (): void => {
+    try { localStorage.setItem(roadStorageKey, JSON.stringify(roadEditor.snapshot())); } catch { /* quota/private mode */ }
+  };
+  const roadId = (id: string): number => {
+    let hash = 2166136261;
+    for (let i = 0; i < id.length; i++) hash = Math.imul(hash ^ id.charCodeAt(i), 16777619);
+    return -(Math.abs(hash | 0) + 1);
+  };
+  const roadWay = (feature: AuthoredPolyline): OsmWay => ({
+    id: roadId(feature.id),
+    ck: `author:${feature.id}`,
+    tags: {
+      highway: ROAD_W[feature.value] ? feature.value : 'residential',
+      'drive:width': String(feature.widthM),
+      name: 'AUTHORED ROAD',
+      surface: ['track', 'path', 'footway'].includes(feature.value) ? 'gravel' : 'asphalt',
+    },
+    geometry: feature.points.map(([x, z]) => {
+      const [lat, lon] = localToLatLon(x, z);
+      return { lat, lon };
+    }),
+  });
+  const authoredTerrain = (feature: AuthoredPolyline): {
+    coords: Array<[number, number]>;
+    keys: Set<string>;
+  } => {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [x, z] of feature.points) {
+      const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
+      minX = Math.min(minX, tx); maxX = Math.max(maxX, tx);
+      minY = Math.min(minY, ty); maxY = Math.max(maxY, ty);
+    }
+    const coords: Array<[number, number]> = [];
+    const keys = new Set<string>();
+    for (let tx = minX - 1; tx <= maxX + 1; tx++) {
+      for (let ty = minY - 1; ty <= maxY + 1; ty++) {
+        coords.push([tx, ty]);
+        keys.add(`${tx}/${ty}`);
+      }
+    }
+    return { coords, keys };
+  };
+  const refreshRoadStates = (): void => {
+    const now = performance.now();
+    for (const state of roadStates.values()) {
+      if (state.state !== 'pending' || !state.built || state.dirty.size === 0) continue;
+      if ([...state.dirty].every((key) => !terrainDirty.has(key))) {
+        state.state = 'settled';
+        state.settledAt = now;
+      }
+    }
+  };
+  const buildAuthoredRoad = async (feature: AuthoredPolyline): Promise<void> => {
+    const terrain = authoredTerrain(feature);
+    const state: AuthoredRoadState = {
+      state: 'pending', dirty: terrain.keys, built: false, settledAt: 0,
+    };
+    roadStates.set(feature.id, state);
+    // A pathological screen-spanning gesture should remain source data, but
+    // must not turn one click into an unbounded elevation fetch.
+    if (terrain.coords.length > 100) {
+      state.state = 'failed';
+      return;
+    }
+    try {
+      await Promise.all(terrain.coords.map(([tx, ty]) => loadTerrainTile(tx, ty)));
+      const ep = worldEpoch;
+      const [mx, mz] = feature.points[Math.floor(feature.points.length / 2)];
+      const [ownerX, ownerY] = tileAt(
+        origin.lat - mz / M_LAT,
+        origin.lon + mx / origin.mLon,
+        TERRAIN_Z,
+      );
+      const owner = `${ownerX}/${ownerY}`;
+      const job = buildChain.then(async () => {
+        if (ep !== worldEpoch) throw new Error('world changed');
+        const refusedAt = unbuilt;
+        await renderWays([roadWay(feature)], [], owner);
+        if (unbuilt !== refusedAt) throw new Error('authored road refused');
+        flushBuildings();
+      });
+      buildChain = job.catch(() => { /* preserve the production queue */ });
+      await job;
+      state.built = true;
+      refreshRoadStates();
+    } catch {
+      state.state = 'failed';
+    }
+  };
+  const reloadWithoutRemovedRoad = (): void => {
+    window.setTimeout(() => location.reload(), 80);
+  };
+  const roadLayer: AuthoringLayer = {
+    id: 'road',
+    label: 'ROADS',
+    kind: 'vector',
+    editable: true,
+    gesture: 'polyline',
+    choices: [
+      { value: 'residential', label: 'RESIDENTIAL · PAVED' },
+      { value: 'service', label: 'SERVICE · PAVED' },
+      { value: 'track', label: 'TRACK · GRAVEL' },
+      { value: 'path', label: 'PATH · EARTH' },
+    ],
+    radius: { label: 'WIDTH', min: 2, max: 16, step: .5, value: 7.5, unit: 'm' },
+    beginGesture: (at, radius, value) => roadEditor.begin(value, radius, at.x, at.z),
+    updateGesture: (at) => roadEditor.sample(at.x, at.z),
+    endGesture: () => {
+      const result = roadEditor.end();
+      if (result.feature) {
+        saveRoads();
+        void buildAuthoredRoad(result.feature);
+      }
+      return result;
+    },
+    cancelGesture: () => roadEditor.cancel(),
+    previews: (cursor, radiusM) => {
+      refreshRoadStates();
+      const previews: AuthoringPreview[] = [];
+      if (cursor) previews.push({
+        kind: 'cursor', points: [cursor], radiusM: radiusM * .5, state: 'cursor',
+      });
+      const draft = roadEditor.active();
+      if (draft && draft.points.length > 1) previews.push({
+        kind: 'polyline',
+        points: draft.points.map(([x, z]) => ({ x, z })),
+        radiusM: draft.widthM,
+        state: 'draft',
+      });
+      const now = performance.now();
+      for (const feature of roadEditor.snapshot()) {
+        const status = roadStates.get(feature.id);
+        if (!status || (status.state === 'settled' && now - status.settledAt > 1800)) continue;
+        previews.push({
+          kind: 'polyline',
+          points: feature.points.map(([x, z]) => ({ x, z })),
+          radiusM: feature.widthM,
+          state: status.state,
+        });
+      }
+      return previews;
+    },
+    undo: () => {
+      const result = roadEditor.undo();
+      if (result.feature) {
+        roadStates.delete(result.feature.id);
+        saveRoads();
+        reloadWithoutRemovedRoad();
+      }
+      return result;
+    },
+    reset: () => {
+      const result = roadEditor.reset();
+      if (result.changed) {
+        roadStates.clear();
+        saveRoads();
+        reloadWithoutRemovedRoad();
+      }
+      return result;
+    },
+    setDataView: () => { /* vectors are their own canonical overlay */ },
+    report: () => {
+      refreshRoadStates();
+      const states = [...roadStates.values()];
+      return {
+        ...roadEditor.report(),
+        pending: states.filter((state) => state.state === 'pending').length,
+        settled: states.filter((state) => state.state === 'settled').length,
+        failed: states.filter((state) => state.state === 'failed').length,
+        productionWays: roadEditor.snapshot()
+          .filter((feature) => seenWays.has(`author:${feature.id}`)).length,
+        terrainQueued: terrainDirty.size,
+        inputCaptured: authoringInputCaptured,
+        adapters: 3,
+      };
+    },
+  };
+  try {
+    const restored = roadEditor.load(JSON.parse(localStorage.getItem(roadStorageKey) ?? '[]'));
+    for (const feature of restored) void buildAuthoredRoad(feature);
+  } catch { /* malformed or unavailable local storage starts empty */ }
   startWorldAuthoringLab({
     canvas,
     worldAt: (clientX, clientY) => chartToWorld(clientX, clientY),
     focus: () => [viewX(), viewZ()],
     setInputCaptured: setAuthoringInputCaptured,
-    layers: [coverLayer, demLayer],
+    setPreviews: (previews) => { authoringPreviews = previews; },
+    layers: [coverLayer, demLayer, roadLayer],
   });
 }
 (window as unknown as { __ctx?: object }).__ctx = {
