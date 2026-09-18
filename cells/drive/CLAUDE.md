@@ -16137,9 +16137,35 @@ Three things, and only two of them are new:
    one is not a regression; it is how it always was, measured for the first
    time.
 
-So the seat's "since it landed" is 1 + 2. The shader, the wire, the depth
-and distance materials all compile (`errors []` on every run) and the meshes
-draw all 30 — it is not a rendering fault.
+So the seat's "since it landed" was read as 1 + 2 — **and then the first
+DRAWN run said otherwise.** Every census above ran under `nodraw=1`, which
+never compiles a shader, and every one of them reported `errors []`. The
+facing-the-herd frame (drawn, `herdshot2.mjs`) came back with:
+
+```
+GLSL: ERROR: 0:786: 'patch' : Illegal use of reserved word
+GLSL: WebGL: INVALID_OPERATION: useProgram: program not valid
+```
+
+`wildlifeMaterial`'s fragment shader declared `float patch = wildNoise(…)`.
+**`patch` is a reserved word in GLSL ES 3.00**, and three compiles every
+material as GLSL3 on a WebGL2 context — which is every phone and the
+harness's Chromium — so the herd and bird programs never link and NOTHING
+with that material draws: 30 animals placed, 4 in the frustum, none on the
+glass (`herdshot3-new.png`, Senqu highland at noon, an empty plain; the
+control `herdshot3-old.png` from the same spot has a deer at 54 m). The
+extraction was evidently judged on a context where the word is not reserved
+(WebGL1 speaks GLSL ES 1.00, where it is plain), or never on a drawn frame.
+So the seat's report has THREE causes, and the one that made it absolute is
+this one: **the herd has not been drawn since it landed.** Renamed to
+`wildPatch` (`customProgramCacheKey` bumped to `wildlife-3`); items 1 and 2
+remain true underneath it and are what the seat will see next.
+
+**Never read `errors []` from a `nodraw` run as "the shaders compile."** It
+means nothing was asked to. The GLSL sniffer only speaks on a drawn frame,
+and a shader that fails to link fails silently everywhere else — no
+exception, no missing mesh count, thirty instances reported drawn by
+`mesh.count` and zero fragments produced.
 
 ### What to do about it — NOT DONE, it is the other agent's module
 

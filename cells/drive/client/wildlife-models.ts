@@ -150,15 +150,18 @@ float wildNoise(vec3 p){vec3 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mi
 ` + shader.fragmentShader;
       shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
 vec3 wp=vWildRest; float seed=vWildSeed*97.;
-float patch=wildNoise(wp*${air ? '3.' : '2.2'}+seed);
+// 'patch' is a reserved word in GLSL ES 3.00 (WebGL2 compiles every three
+// material as GLSL3): as an identifier it fails the compile and the program
+// never links, so nothing with this material draws on a WebGL2 device.
+float wildPatch=wildNoise(wp*${air ? '3.' : '2.2'}+seed);
 float furFreq=${air ? '30.' : '90.'};
 float band=wp.${air ? 'x' : 'y'}*furFreq+wildNoise(wp*8.+seed)*3.;
 float fine=sin(band)* (1.-smoothstep(.45,1.8,fwidth(band)));
-diffuseColor.rgb *= .87+.24*patch+.035*fine;
+diffuseColor.rgb *= .87+.24*wildPatch+.035*fine;
 ${air ? `float belly=1.-smoothstep(-.06,.09,wp.y);diffuseColor.rgb*=1.+belly*.13;
 float tip=smoothstep(${[.93,.67,1.15][sp].toFixed(3)},${[1.35,.96,1.63][sp].toFixed(3)},abs(wp.x));diffuseColor.rgb*=1.-tip*${sp===0?'.62':'.20'};` : `float belly=(1.-smoothstep(.72,1.1,wp.y))*smoothstep(.24,.46,wp.y);diffuseColor.rgb=mix(diffuseColor.rgb,diffuseColor.rgb*vec3(1.16,1.12,1.04),belly*.7);
 float sock=(1.-smoothstep(.16,.48,wp.y))*smoothstep(.43,.64,wildNoise(vec3(floor(wp.x*4.),seed,floor(wp.z*3.)))) ;diffuseColor.rgb=mix(diffuseColor.rgb,diffuseColor.rgb*1.45,sock*.4);`}
-float wildRelief=fine*.00045+patch*.002;
+float wildRelief=fine*.00045+wildPatch*.002;
 `);
       shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
 vec3 wdx=dFdx(-vViewPosition),wdy=dFdy(-vViewPosition);
@@ -167,7 +170,7 @@ normal=normalize(abs(wd)*normal-sign(wd)*(dFdx(wildRelief)*wr1+dFdy(wildRelief)*
 `);
     }
   };
-  mat.customProgramCacheKey = () => `wildlife-2-${air}-${sp}-${surface}-${mat.type}`;
+  mat.customProgramCacheKey = () => `wildlife-3-${air}-${sp}-${surface}-${mat.type}`;
   if (surface) {
     // `extensions` is read by three's program builder on any material but
     // declared by @types/three only on ShaderMaterial, so the write is typed
