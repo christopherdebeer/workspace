@@ -42222,10 +42222,18 @@ function meshHeightAt(x: number, z: number): number | null {
 /** Ask for a front, the way `__windset` asks for a gale: a test that wants to
  *  watch a sky arrive cannot wait on the synthetic roll's minutes or on the
  *  live feed's quarter hour. Holds the roll off for ten minutes; a pin still
- *  wins, because a pin is a fixture. */
-(window as unknown as { __wxnext?: object }).__wxnext = (sky: Sky): string => {
+ *  wins, because a pin is a fixture.
+ *
+ *  `snap` (default false, so the ordinary "watch a front arrive" use is
+ *  unchanged) sets `wx.cloud`/`wx.rain` to the table entry immediately,
+ *  the way a `?wx=` PIN already does in `stepWeather` — without it, a
+ *  contact-sheet devtool in a headless harness (2-4 fps, so the ease's
+ *  per-frame `dt*0.12` step barely moves in real wall-clock time) can wait
+ *  the better part of a minute for 'storm' and still read cover 0.18. */
+(window as unknown as { __wxnext?: object }).__wxnext = (sky: Sky, snap = false): string => {
   if (WX_PIN) return `pinned ${WX_PIN}`;
   wx.next = sky; wx.at = performance.now() + 600000;
+  if (snap) { const t = WX[sky]; wx.cloud = t.cloud; wx.rain = t.rain; }
   return sky;
 };
 /** Which palette the world settled on, and whether real cover chose it or the
