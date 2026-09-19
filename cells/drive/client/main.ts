@@ -41079,6 +41079,22 @@ function ezStandReport(r: number): object {
 (window as unknown as { __clock?: object }).__clock = (): object =>
   ({ wallS: +(performance.now() / 1000).toFixed(2), simS: +simT.toFixed(2), frames: simN,
     frameMs: +frameMs.toFixed(1), fps: Math.round(1000 / Math.max(frameMs, 1)) });
+/** Sets the TIME dial LIVE — literally the same assignment the SETTINGS
+ *  dial's own `onChange` makes (`dial('time', …, (i) => { timeMode = i; })`),
+ *  so a devtool gets the identical eased transition a tap gets, with no
+ *  reboot: `?time=` is boot-only, and a grid of shots across times of day
+ *  was launching one browser per row for no reason but that. Case
+ *  insensitive; called with no argument it just reports the current mode.
+ *  Left as a bare index assignment on purpose — the dial does nothing
+ *  else either, and `clockShift`/a held clock stay exactly as orthogonal
+ *  to this as they are to the dial. */
+(window as unknown as { __timeset?: object }).__timeset = (mode?: string): object => {
+  if (mode === undefined) return { mode: TIME_MODES[timeMode], modes: [...TIME_MODES] };
+  const i = TIME_MODES.indexOf(mode.toUpperCase() as typeof TIME_MODES[number]);
+  if (i < 0) return { error: `unknown mode ${mode}`, modes: [...TIME_MODES] };
+  timeMode = i;
+  return { mode: TIME_MODES[timeMode], modes: [...TIME_MODES] };
+};
 (window as unknown as { __frame?: object }).__frame = (): object => {
   // The HULL's own extents, in car-local space. `setFromObject` would swallow
   // the halo ring and the 26m beam cones and report 200%-of-screen nonsense.
