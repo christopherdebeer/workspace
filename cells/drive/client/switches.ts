@@ -241,6 +241,8 @@ export const SWITCHES = [
     note: 'shsnap=0 stops the shadow map snapping to its own texels' },
   { id: 'shrub', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'shrub=0 removes the sward’s knee-high layer' },
+  { id: 'swardhop', kind: 'toggle', marks: ['legacy'], fallback: 'on',
+    note: 'swardhop=0 lets a hop carry the last place’s grass field, as it did' },
   { id: 'bldface', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'bldface=0 leaves every building extrusion inside-out, as it was' },
   { id: 'bldpara', kind: 'toggle', marks: ['legacy'], fallback: 'on',

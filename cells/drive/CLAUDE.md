@@ -326,6 +326,8 @@ Nothing here is fast. Budget for it.
 | `node devtools/imp-sheet.mjs` | every variant's SKELETON beside its own baked IMPOSTOR card, one camera, one quantiser, one metric block, at the art-pixel size the game draws that tree at — with the silhouette IoU between the halves, which is the only column that compares them. `DIST=`, `ELEV=`, `AZ=` (0 is exactly on a baked tile, 22.5 the worst case between two), `INK=1`; **`MID=1` puts the MID RUNG in the right cell instead of the card**, same camera and metric block, so the full↔mid handover is certified by the same IoU column | ~2min |
 | `node devtools/imp-demand.mjs` | what the impostor atlas was ASKED for beside what it holds: the ceiling computed offline from the bake (pure, instant, no browser), then the live census by key — refused keys with their tree counts, baked slots with theirs, and how many of the eighteen are serving nobody. `KM=0 FIX=` measures one arrived world; `SPOT=` with a leg drives across districts and needs a device or a warm relay to mean anything | ~2min |
 | `node devtools/imp-census.mjs` | **why a manifested tree has no representation at all** — the gather's EXITS by name, with the ones large enough to be seen counted apart (`h · 307 / d > 1` art pixel). Sweeps the DENSITY dial and FAILS on any perceptible NONE, and on a density exit with an empty far ring: an invariant is only demonstrated by trying to break it. `FIX=`, `DENS=0,2,5`, `DIALS='imprch=2'` | ~2min |
+| `node devtools/sward-hop.mjs` | whether a world hop stands the sward down, or carries the last place's committed field onto the new ground — the CHECKSUM of the committed data either side of a hop, with the height residual against the ground now under it beside it (`ARGS='swardhop=0'` is the one-build control, `FROM=`/`TO=`, `DRIVE=` to let the distance trigger fire) | ~3min |
+| `node devtools/hit-gap.mjs` | how far from a barrier the truck's own HULL stops, by the angle it is turned — the collision circle measured against the box it stands in for (`FIX=`, `SPOT=`, `KIND=rail\|wall`) | ~2min |
 | `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
@@ -16873,6 +16875,80 @@ this box's proxy CA is trusted by node and curl but not by Chromium's NSS
 store, and there is no `certutil` here to add it. Disabling verification to
 get a green line is not a verification. So the live check is the artifact's:
 the deployed bundle is the bundle that was measured.
+
+## A hop carried the last place's grass, and the distance trigger could not see it
+
+Reported from the seat: *navigating menu to DRIVES and then hopping to a new
+location… hydro seems not to trigger unless a full reload* — and, in the same
+breath, that the sward lingers. The hydro half was the sweep's identity guard
+(above). The sward half is its own mechanism and is not a guard at all.
+
+**`worldHop`'s sweep touched exactly one piece of sward state, and it is the
+cheap half.** `swardCache` is a `groundAt` memo; the EVIDENCE FIELD — the
+heights, densities, colours and habitat classes the four bands stand their
+grass on, `swardFX`/`swardFZ`, `swardFieldReady`, a sweep in flight, the two
+seen-revisions, and the shrub lattice that reads the same texels — survived a
+hop whole. It is built world state exactly like `vegGrid` or `drapedWays`,
+both of which the sweep two lines above it clears.
+
+**AND THE DISTANCE TRIGGER CANNOT CATCH IT, WHICH IS WHY IT LASTS.** The field
+is rebuilt when the focus is `SWARD_REBUILD` (48 m) from its centre — and a hop
+returns the truck to local (0,0) while the last field was centred on wherever
+the truck stood, so `moved` compares the new focus against the OLD place's
+centre. In the case the seat reported — open DRIVES, hop, having driven
+nowhere — those are the same point and the test reads **zero metres**. What was
+left to notice was `swardGroundSeen !== swardGroundRev()`, two seconds later,
+once the new world had started building terrain.
+
+**Measured** (`devtools/sward-hop.mjs`, the Senqu at ~1790 m to Chapman's Peak
+at ~30 m, hopped without driving so the distance trigger cannot fire, nodraw,
+one build with `?swardhop=0` as the control — a hop at a live spot streams
+differently on every boot, so two builds would differ by the network before
+they differed by the rule):
+
+| | `?swardhop=0` | the hop stands it down |
+|---|---|---|
+| samples drawing the byte-identical pre-hop field | **22 of 72** | **0 of 72** |
+| the last of them | **t+13.4 s** | — |
+| most shrubs standing on that carried field | **275** | 0 |
+| worst median residual while any band drew | **33.0 m** (p90 **209.2**) | **0.0 m** |
+| first sample with the field within 2 m of its ground | t+14.0 s | **t+2.0 s** |
+
+**THE CLAIM IS THE CHECKSUM AND THE RESIDUAL IS WHAT IT COST.** A field
+committed for another place is not approximately wrong, it is the wrong data —
+and a residual cannot say so on its own, because every height here is relative
+to its own origin's `baseElev` and two places can differ in LOCAL height by a
+few metres while being continents apart. The first cut of this tool used a
+ten-metre residual bar and reported the fault as 0.6 s long; the checksum reads
+13.4. `__swardfield()` carries both, plus `offCentreM` — the `moved` test's own
+quantity — so a reading can say whether the distance trigger could have fired
+at all rather than leaving it to be reconstructed from an origin and a width.
+
+**THIS DOES NOT CONTRADICT THE POP-OUT RULE the same sweep follows twenty lines
+up.** *Keep what is drawn until its replacement is admitted* is about the SAME
+ground seen at two revisions, where the old picture is still approximately
+right — which is why a dirtied terrain tile holds its mesh. A hop is the one
+case where it is not: the old field is another continent's heights, and
+standing grass on them is worse than standing none.
+
+The fix is five assignments and a gate. `swardFX` to NaN is what the bands and
+the shrub lattice already read as "no field" (`!Number.isNaN(swardFX)` gates
+both), so they stand down on the next frame with no second rule; `swardRow`
+abandons a sweep in flight, which is for the old place and would otherwise
+commit over the new one; the two seen-revisions go back to their initial −1 so
+the first frame of the new world asks for a field rather than waiting out a
+gate. And **`swardFrame`'s slow half stands down while `hopping`**, for the
+reason `streamWorld` does: between the hop's sweep and its anchor fetch the
+origin has moved while `baseElev` has not, so a field started in that window is
+built against the last place's datum. `?swardhop=0` is the rollback and the
+one-build A/B.
+
+**AND `SWARD_F` IS 80, NOT THE 112 THIS FILE RECORDS.** The margin unit set it
+to 112 (896 m across) and *"finer grass, denser near, a fade that ends nearer"*
+(`4a8b399`) took the reach from 359 m to 232 and the field with it: 80 texels
+at 8 m is **640 m**, 320 m to an edge against a 232 m reach — **88 m of margin
+against a 48 m trigger**, which is the property that unit was defending, kept.
+`SWARD_MASKN` is 432. Read the constants, not this file, before quoting either.
 
 ## San Miguel: the carve measures to a segment's INFINITE LINE, so a watercourse digs straight on past its own end
 

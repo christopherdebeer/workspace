@@ -14108,6 +14108,9 @@ let swardRoadSeen = -1, swardGroundSeen = -1, swardFieldAt = 0, swardMaskMs = 0;
 /** True once a sweep has landed: before that the colour field is zeros and
  *  the water must not sample it. */
 let swardFieldReady = false;
+/** ?swardhop=0 carries the last place's committed field across a hop, exactly
+ *  as it did — the rollback, and the one-build A/B for the measurement. */
+const SWARD_HOP_CLEAR = qsOn('swardhop', true);
 /** THE BANK, ON THE GROUND SIDE. The water shader draws its last wet metre
  *  as damp sediment and gravel; the ground beside it grew the same grass
  *  as the hillside, so the two met on a line. The sward mixes toward the
@@ -15306,6 +15309,13 @@ function swardFrame(): void {
   }
   // ── AND NOW THE SLOW HALF: THE EVIDENCE FIELD ──
   //
+  // MID-HOP IT STANDS DOWN, for the reason `streamWorld` does: a sweep reads
+  // `groundAt`, and between the hop's sweep and its anchor fetch the origin has
+  // moved while `baseElev` has not — so a field started in that window is built
+  // against the last place's datum and is wrong by the difference between two
+  // elevations. The hop leaves `swardFX` NaN, so the very next frame after it
+  // finishes asks for a fresh field through `moved`; nothing is owed a gate.
+  if (hopping) return;
   // A sweep already under way is allowed to finish, because the field on screen
   // is the last complete one and swapping half a field in would be worse than
   // waiting. What it is NOT allowed to do is finish a field for ground the
@@ -35394,6 +35404,49 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // verdicts. Neither is expensive to rebuild and both would answer for the
     // wrong continent until something happened to evict them.
     swardCache.clear(); sightCache.clear();
+    // ── AND THE COMMITTED SWARD FIELD IS THE LAST PLACE'S, NOT THE LAST GOOD
+    //    PICTURE ──
+    //
+    // The memo above was the only sward state this sweep touched, and it is the
+    // cheap half. The EVIDENCE FIELD — the heights, densities, colours and
+    // habitat classes the bands stand their grass on, and the shrubs' lattice
+    // with them — is built world state exactly like `vegGrid` or `drapedWays`,
+    // and it survived a hop whole.
+    //
+    // THE DISTANCE TRIGGER CANNOT CATCH IT, and that is the whole fault. A hop
+    // returns the truck to local (0,0) while the last field was centred on
+    // wherever the truck stood, so `moved` compares the new focus against the
+    // OLD place's centre — and in the case the seat reported (open DRIVES, hop,
+    // having driven nowhere) those are the same point and the test reads zero
+    // metres. What was left to notice was the ground revision, two seconds
+    // later, once the new world had started building.
+    //
+    // This does NOT contradict the rule the same sweep follows twenty lines up
+    // — keep what is drawn until its replacement is admitted, which is why a
+    // dirtied terrain tile holds its mesh. That rule is about the SAME ground
+    // seen at two revisions, where the old picture is still approximately
+    // right. A hop is the one case where it is not: the old field is another
+    // continent's heights, and standing grass on them is worse than standing
+    // none. Measured at the Senqu → Chapman's pair, the carried field was a
+    // median 18 m and a p90 129 m off the ground under it, with 253 shrubs on
+    // it, for as long as it took the new terrain to bump the revision.
+    //
+    // swardFX to NaN is what the bands and the shrub lattice already read as
+    // "no field" (`!Number.isNaN(swardFX)` gates both), so they stand down on
+    // the next frame without a second rule; `swardRow` abandons a sweep in
+    // flight, which is for the old place and would otherwise commit over the
+    // new one; and the two seen-revisions go back to their initial -1 so the
+    // first frame of the new world asks for a field rather than waiting out a
+    // gate. `swardFieldReady` is what the hydro material reads to decide
+    // whether the terrain-colour field is available at all.
+    if (SWARD_HOP_CLEAR) {
+      swardFX = NaN; swardFZ = NaN;
+      swardFieldReady = false;
+      swardRow = -1;
+      swardRoadSeen = -1; swardGroundSeen = -1; swardFieldAt = 0;
+      for (const b of swardBands) b.mesh.visible = false;
+      shrubs.count = 0;
+    }
     roadSegs = []; roadLineWorld = []; roadLineKey = ''; roadLineAt = -1e9;
     ribBatch = null;
     ribBatchTerrainOwner = null;
@@ -38112,6 +38165,60 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
   accel: +rig.accel.toFixed(2), svc: rig.svc,
 });
 (window as unknown as { __rigset?: object }).__rigset = (o: Partial<typeof rig>): void => { Object.assign(rig, o); };
+/**
+ * THE HULL THE COLLISION CIRCLE IS SUPPOSED TO STAND IN FOR.
+ *
+ * `CAR_R` is one number and its own comment calls it "a real car's half-diagonal
+ * plus a whisker" — which is the right radius at a CORNER and too large in every
+ * other direction, most of all at the flank, where a long vehicle is narrow.
+ * Nothing reported what the hull actually measures, so the gap between the two
+ * could only be guessed at. Measured off the drawn model in its own frame, with
+ * the wheels' pivots reset so a steered or spinning wheel cannot widen the box.
+ *
+ * Returned in the CAR's axes: x across (half-width), z along (half-length), and
+ * the half-diagonal beside `CAR_R` so the two can be read against each other.
+ */
+(window as unknown as { __rigbox?: object }).__rigbox = (): object => {
+  const saved = rigModel.wheelPivots.map((g) => g.rotation.clone());
+  for (const g of rigModel.wheelPivots) g.rotation.set(0, 0, 0);
+  const savedRot = car.rotation.clone();
+  const savedPos = car.position.clone();
+  car.rotation.set(0, 0, 0);
+  car.position.set(0, 0, 0);
+  car.updateMatrixWorld(true);
+  // SHEET METAL ONLY, and the rule is the one the x-ray already uses rather
+  // than a second one: the headlight cones are ADDITIVE, and they are 30 m
+  // long. `Box3.setFromObject(car)` takes them, so the first run of this probe
+  // reported a half-length of 28.5 m — a reading of the beam, wearing the word
+  // hull. Anything that is not a mesh with geometry contributes nothing.
+  const box = new THREE.Box3();
+  const tmp = new THREE.Box3();
+  car.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !m.geometry) return;
+    if ((m.material as THREE.Material).blending === THREE.AdditiveBlending) return;
+    m.geometry.computeBoundingBox();
+    tmp.copy(m.geometry.boundingBox as THREE.Box3).applyMatrix4(m.matrixWorld);
+    box.union(tmp);
+  });
+  car.rotation.copy(savedRot); car.position.copy(savedPos);
+  rigModel.wheelPivots.forEach((g, i) => g.rotation.copy(saved[i]));
+  car.updateMatrixWorld(true);
+  const hw = Math.max(Math.abs(box.min.x), Math.abs(box.max.x));
+  const hl = Math.max(Math.abs(box.min.z), Math.abs(box.max.z));
+  return {
+    halfWidthM: +hw.toFixed(3), halfLengthM: +hl.toFixed(3),
+    halfDiagM: +Math.hypot(hw, hl).toFixed(3),
+    heightM: +(box.max.y - box.min.y).toFixed(3),
+    carR: CAR_R,
+    // What the circle costs in each direction: how far the hull stops SHORT of
+    // a barrier it has been pushed off. At a corner this is nearly nothing; at
+    // the flank it is the seat's report.
+    standoffAheadM: +(CAR_R - hl).toFixed(3),
+    standoffFlankM: +(CAR_R - hw).toFixed(3),
+    wheels: { trackHalf: OVERLAND.trackHalf, axleHalf: OVERLAND.axleHalf, r: OVERLAND.wheelRadius },
+  };
+};
 // What a set of OSM tags is worth as a driving surface, and the physics it
 // buys — so the tag ladder can be measured directly rather than inferred from
 // how the truck felt.
@@ -39022,6 +39129,77 @@ const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
     // sample returns zero — which reads as "the field is empty" and would send
     // anyone hunting the field builder instead of the texture format.
     floatLinear: !!renderer.extensions.get('OES_texture_float_linear'),
+  };
+};
+/**
+ * IS THE COMMITTED FIELD A FIELD OF THE GROUND UNDER IT?
+ *
+ * Every other sward probe reports what the field SAYS. None of them can answer
+ * whether it says it about THIS place — and after a world hop that is the only
+ * question worth asking, because the origin moves while the committed texture
+ * does not. Comparing `swardFX` against the truck cannot settle it either: a
+ * hop returns the truck to local (0,0) and the last field was centred on
+ * wherever the truck stood, so the two coincide exactly in the case that
+ * matters most (a hop taken without driving first).
+ *
+ * So the witness is the RESIDUAL: each texel's committed height against the
+ * ground that is there now. A field built for this place tracks it to a metre
+ * or two (the DEM refines under it); a field built for another continent is
+ * out by whatever the two elevations differ by, which is tens to thousands of
+ * metres. `sampleHeight` answers 0 where no tile is loaded, so texels with no
+ * ground under them are counted apart rather than scored as a perfect match —
+ * a field over unstreamed ground would otherwise read as agreeing with it.
+ */
+(window as unknown as { __swardfield?: object }).__swardfield = (step = 4): object => {
+  const res: number[] = [];
+  let noGround = 0;
+  for (let j = 0; j < SWARD_F; j += step) {
+    for (let i = 0; i < SWARD_F; i += step) {
+      const wx = swardFX + (i + 0.5) * SWARD_FM, wz = swardFZ + (j + 0.5) * SWARD_FM;
+      if (!Number.isFinite(wx) || !Number.isFinite(wz) || !heightTileAt(wx, wz)) { noGround++; continue; }
+      const g = groundAt(wx, wz);
+      if (!Number.isFinite(g)) { noGround++; continue; }
+      res.push(Math.abs(swardFieldData[(j * SWARD_F + i) * 4] - g));
+    }
+  }
+  res.sort((a, b) => a - b);
+  const pick = (q: number): number | null =>
+    res.length ? +res[Math.min(res.length - 1, Math.floor(q * res.length))].toFixed(2) : null;
+  // THE FIELD'S OWN IDENTITY, because the residual is a matter of degree and
+  // "is this literally the field the last place committed" is not. Two places
+  // can differ in LOCAL height by only a few metres — every height here is
+  // relative to its own origin's `baseElev` — so a residual can be small and
+  // the data still be another continent's. A checksum cannot be small by
+  // accident. It is over the committed heights and densities, which is what
+  // the bands draw.
+  let sum = 0;
+  for (let i = 0; i < SWARD_F * SWARD_F; i++) {
+    sum = (sum * 31 + Math.round(swardFieldData[i * 4] * 64)) | 0;
+    sum = (sum * 31 + Math.round(swardFieldData[i * 4 + 1] * 4096)) | 0;
+  }
+  return {
+    ready: swardFieldReady, originX: swardFX, originZ: swardFZ, sum,
+    // A sweep in flight is the field's replacement being built; until its last
+    // row lands the OLD one is what is drawn, which is exactly the window this
+    // probe exists to size.
+    sweeping: swardRow >= 0, row: swardRow, of: SWARD_F,
+    pendX: swardPendX, pendZ: swardPendZ, fieldW: SWARD_FW,
+    // The `moved` test's own quantity, so a reading can say whether the
+    // distance trigger could have fired at all rather than leaving it to be
+    // reconstructed from an origin and a width.
+    offCentreM: +Math.hypot(renderFocusXZ()[0] - (swardFX + SWARD_FW / 2),
+      renderFocusXZ()[1] - (swardFZ + SWARD_FW / 2)).toFixed(1),
+    rebuildAt: SWARD_REBUILD,
+    groundSeen: swardGroundSeen, groundRev: swardGroundRev(),
+    roadSeen: swardRoadSeen, roadRev: swardRoadRev(),
+    bandsVisible: swardBands.filter((b) => b.mesh.visible).length, bands: swardBands.length,
+    shrubs: shrubN,
+    // The reading. Sampled, not exhaustive: a quarter of the texels in each
+    // axis is 400 points, which is plenty for a median over a field that is
+    // either right or out by an elevation.
+    sampled: res.length, noGround,
+    residualMed: pick(0.5), residualP90: pick(0.9), residualMax: res.length ? +res[res.length - 1].toFixed(2) : null,
+    ledger: { ...swardLedger },
   };
 };
 /** The mask, as the CPU drew it and as a point query — so "the mask is wrong"
@@ -42428,6 +42606,33 @@ function heightsOf(): number[] {
     out.push([+s.ax.toFixed(2), +s.az.toFixed(2), +s.bx.toFixed(2), +s.bz.toFixed(2)]);
   }
   return out;
+};
+/** The nearest wall segment to a point, long enough to be worth standing a
+ *  truck against — the SUBJECT of a collision measurement, picked by the world
+ *  rather than by the tool. `kind` filters to a guard rail (`sl`) or to
+ *  masonry, because the two are charged differently and read differently from
+ *  the seat. A segment shorter than the truck is no use: the push-out solves
+ *  against the nearest point ON the segment, so at its end the wall behaves as
+ *  a point and the reading would be about the cap rather than the face. */
+(window as unknown as { __wallnear?: object }).__wallnear = (
+  kind?: 'rail' | 'wall', x?: number, z?: number, minLen = 6): object | null => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  let best: Seg | null = null, bd = Infinity;
+  const seen = new Set<Seg>();
+  for (const arr of wallGrid.values()) for (const s of arr) {
+    if (seen.has(s)) continue;
+    seen.add(s);
+    if (kind === 'rail' && !s.sl) continue;
+    if (kind === 'wall' && s.sl) continue;
+    if (Math.hypot(s.bx - s.ax, s.bz - s.az) < minLen) continue;
+    const [cx, cz] = closestOnSeg(px, pz, s);
+    const d = Math.hypot(px - cx, pz - cz);
+    if (d < bd) { bd = d; best = s; }
+  }
+  if (!best) return null;
+  return { ax: best.ax, az: best.az, bx: best.bx, bz: best.bz,
+    sl: !!best.sl, ru: !!best.ru, ya: best.ya, distM: +bd.toFixed(2),
+    lenM: +Math.hypot(best.bx - best.ax, best.bz - best.az).toFixed(2) };
 };
 (window as unknown as { __roadsegs?: object }).__roadsegs = (): number[][] => {
   const out: number[][] = [], seen = new Set<Seg>();
