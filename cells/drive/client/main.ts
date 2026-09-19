@@ -42460,6 +42460,36 @@ function heightsOf(): number[] {
   roadCells: roadGrid.size, seenWays: seenWays.size, unbuilt,
   osmDone: osmDone.size, inFlight: osmInFlight, queued: osmQueue.length,
 });
+/** IS THIS PARTICULAR VIEW ACTUALLY READY, rather than the whole session's
+ *  books. `__tstats().unbuilt` looked like a pending count and is not one:
+ *  it is incremented whenever ANY build anywhere skipped for missing height
+ *  and is reset only on a hop, so a devtool waiting for it to reach zero can
+ *  poll for ever on a world that finished streaming minutes ago. This asks
+ *  about the tile(s) a shot at (x,z) actually depends on — is the height
+ *  tile loaded, is the terrain mesh built, is it not still marked dirty —
+ *  over the point and, if `r` is given, a ring at that radius (so a wide
+ *  orbit shot can ask about every tile its camera will cross). The far
+ *  shell's readiness is already scoped to its current ring by `__far()`'s
+ *  own `tiles`/`asked` pair; reused here rather than re-derived. */
+(window as unknown as { __viewready?: object }).__viewready = (x = state.x, z = state.z, r = 0): object => {
+  const pts: Array<[number, number]> = [[x, z]];
+  if (r > 0) {
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [0.7071, 0.7071], [-0.7071, 0.7071], [0.7071, -0.7071], [-0.7071, -0.7071]] as const) {
+      pts.push([x + dx * r, z + dz * r]);
+    }
+  }
+  const keys = new Set<string>();
+  for (const [px, pz] of pts) {
+    const [tx, ty] = tileAt(origin.lat - pz / M_LAT, origin.lon + px / origin.mLon, TERRAIN_Z);
+    keys.add(`${tx}/${ty}`);
+  }
+  const tiles = [...keys].map((key) => ({
+    key, height: heightTiles.has(key), mesh: terrainMeshes.has(key), dirty: terrainDirty.has(key),
+  }));
+  const fineReady = tiles.every((t) => t.height && t.mesh && !t.dirty);
+  const farReady = farMeshes.size === farTiles.size && farInFlight === 0 && farQueue.length === 0;
+  return { at: [x, z], r, tiles, fineReady, farReady, ready: fineReady && farReady };
+};
 /** IS THE ROAD AHEAD THERE YET? Walks the car's heading in `step` metres and
  *  reports, per sample, whether the vector tile covering that point has
  *  finished loading. The whole streaming question in one array: a run of
