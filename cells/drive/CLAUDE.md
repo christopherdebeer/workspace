@@ -17662,4 +17662,107 @@ holds inside a chain and can still be lost at the end of the list — which the
 unit test cannot see, because its fixture is one chain under the cap. The fix
 is to allocate the budget ACROSS the chains (one each, the rest in proportion
 to length, the remainder by largest fraction) so the total is the budget by
-construction. Not done here; it is the next thing.
+construction. **Done in the section below**, with the numbers in this table
+re-taken beside a control on the same build.
+
+#### …and the budget is allocated, which the window census cannot reward
+
+`allocateChainStations` is largest remainder: one station each so no chain is
+unserved while another is sampled finely, the rest in proportion to length, the
+fraction left over to whoever stands nearest a whole station. `minSpacing` caps
+a chain's COUNT rather than its spacing — marching squares emits a segment per
+texel edge and a bank does not vary faster than the field can see — and a chain
+that cannot spend its share hands it back to the chains that can, which is the
+water-filling the tree budget already runs and is here for the same reason: a
+proportional cut punishes whoever is short of candidates, which is exactly the
+chain that needed the stations least.
+
+**AND THE SPACING IS THEREFORE PER CHAIN, so `stats.spacingM` is the COARSEST
+of them**: the worst-described stretch of this shoreline, which is the figure to
+read against the field's own texel. One number derived from the total would hide
+exactly the chain the budget could not afford.
+
+**THE UNIT TEST RUNS THE RULE IT REPLACES RATHER THAN ASSERTING ABOUT IT.**
+Fifteen chains of twenty metres under a budget of forty (`bank-coverage`): the
+old rule solves 300/40 = 7.5 m, each chain rounds `20 / 7.5` to three, **asks
+for 45 against a ceiling of 40 and serves 13 of 15 chains whole** — the tail cut
+off part way down the list. The allocation spends **40 of 40 with every chain
+served**, at a coarsest spacing inside the bound the allocation's own shape
+gives it (`shoreM / (budget − chains)`, derived from the fixture rather than
+typed, or it is a bar moved to pass). At `minSpacing` 8 m it spends 30 of 40
+and no chain is sampled finer than 8 m.
+
+**AND THE CENSUS PROBE COUNTS ITS OWN WINDOW NOW.** `__bankfringe` summed every
+tile the ring holds beside a 384 m census of everything else — two populations
+in one row, which is how its stride fault went unread for as long as it did. It
+reports the tiles and stations REACHING the window, the ring's totals beside
+them, and the coarsest spacing and uncovered shore of those tiles.
+
+**Measured**, both legs on the SAME build, `?bank=0` the only difference, six
+fixtures, 75 s settle, nodraw:
+
+| fixture | control: drawn / fringe / interior | bank on | fringe | coarsest | uncovered |
+|---|---|---|---|---|---|
+| at-senqu-ford | 554 / 111 / 3 | **574 / 54 / 1** | **−51%** | 13.03 m | 0 |
+| at-senqu-top | 994 / 95 / 45 | **1008 / 54 / 37** | **−43%** | 8.25 m | 66.8 m |
+| at-umgeni | 5682 / 373 / 627 | 5640 / **396** / **650** | +6% | 7.53 m | 0 |
+| at-bixby | 298 / 142 / 0 | **348 / 54 / 0** | **−62%** | 12.75 m | 0 |
+| at-glencairn | 4535 / 167 / 348 | **4549 / 129 / 341** | **−23%** | 4.42 m | 0 |
+| at-campsbay | 306 / 20 / 1 | **312 / 2 / 1** | **−90%** | 8.92 m | 0 |
+
+**Fringe 908 → 689 over the six, −24%; −45% over the five that are not the
+uMngeni.** Drawn water is up at five of six and the total is +0.5%.
+
+**AND THE CONTROL FINALLY GIVES THESE TABLES A SPREAD, WHICH NONE OF THEM HAD.**
+Five of its six rows reproduce the control recorded one section up TO THE
+TEXEL — 554/111/3, 994/95/45, 5682/373/627, 298/142/0, 306/20/1 — and
+at-glencairn moves by 4 drawn, 3 fringe, 2 interior. So a difference of three
+texels at that coastal fixture is the instrument and a difference of six
+elsewhere is not, and every earlier reading in this unit that was called "close"
+can now be read against a number.
+
+**WHICH SAYS THE ALLOCATION COSTS SIXTEEN TEXELS OF FRINGE**, against the
+review build's own fix leg (673 → 689): at-senqu-ford 48 → 54, at-senqu-top
+51 → 54, at-umgeni 393 → 396, at-glencairn 125 → 129 (inside its spread),
+at-campsbay 2 → 2, and **at-bixby byte-identical at 348 / 54 / 0**. The
+mechanism is the allocation working: a long chain used to round its share UP
+and the chains at the end of the list got nothing, so the main channel — which
+is what a 384 m window around the truck is looking at — was described a little
+finer at the expense of shore the census never sees. **A count taken in a window
+cannot reward a coverage bought outside it**, and the evidence for the other
+half is `uncoveredM` and the test's own control, not this table.
+
+**AND THE UNCOVERED SHORE IS NOT THE BUDGET — IT IS THE FIELD**
+(`devtools/bank-alloc.mjs`, at-senqu-top, per tile):
+
+```
+shore 3641.3 m · 4 chains · 507 stations · spacing 7.15 m
+  covered 3605.97 · uncovered 35.32 · dropped 0
+  resolved 194 · nothingToCut 142 · no-water 5 · no-join 1 · too-deep 170
+shore 4198.9 m · 4 chains · 508 stations · spacing 8.25 m
+  covered 4167.43 · uncovered 31.43 · dropped 0
+  resolved 220 · nothingToCut 250 · no-water 4 · no-join 1 · too-deep 37
+```
+
+**507 + 5 AND 508 + 4 ARE 512 EXACTLY**: the allocation spends the budget to
+the station on both tiles, `stats.stations` counts the ones that got a seat, and
+the 66.8 m is the five and four seats where `sampleFieldSurface` answered
+nothing — 5 × 7.15 and 4 × 8.25 — because `coveredM` only accumulates where a
+station got past the no-water and no-ground tests. `dropped 0`, four chains a
+tile, none cut off. The census could not have told that from a chain beyond the
+budget's reach, and the two want different fixes, which is why there is a tool
+rather than a guess.
+
+**AND `too-deep 170 OF 507` ON ONE OF THOSE TILES IS THE OTHER HALF OF #169.**
+A third of a Drakensberg tile's stations refuse outright rather than cut two
+metres into a mountainside — the San Miguel reading from the other side — and
+the composition then costs those places the floor's contribution as well. That
+is the trade item 3 asks for, stated again with a number: a refusal should mean
+"this wants a constrained section", not "leave it buried".
+
+**AND at-glencairn's 4.42 m IS THE CAP, NOT THE BUDGET.** It is half a field
+texel exactly, so the budget goes deliberately unspent there: a bank does not
+vary faster than the field can see, and a spacing sitting on `minSpacing` is the
+cap doing its job rather than a shoreline the budget could not afford. Read the
+spacing against the texel before reading it as thin.
+
