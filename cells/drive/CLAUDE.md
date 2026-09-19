@@ -18057,6 +18057,21 @@ assertion, and removing the span synthesis fails the single-station case.
 and at a live spot with `NODRAW=1` for the population, never the other way
 round.
 
+**Live as v1789820375451**, with the default flip below — cell-sync's
+`deploying` line named v1789820344452 and its `deployed` line this one, so read
+the live bundle rather than the wait. `app.js` came back 4,060,340 bytes at
+`x-cache: Miss`, parses under esbuild, and carries `buildProductionFord`,
+`FORD_PROUD_M`, `FORD_SILL_DROP_M`, `fordStats`, `driftPost`, `FORDS_ON`,
+`__fords` and the mesh name. **AND THE MESH NAME READ 0 ON THE FIRST GREP**,
+which is the needle-that-can-only-be-absent trap again: it is written
+`` `ford-${tag}` `` and the transpile keeps the template, so a grep for
+`ford-apron` can never match however well the deploy went. The honest needle is
+`ford-${tag}`.
+
+**PUSHED WITHOUT A PULL, ON THE SEAT'S WORD.** Anything another agent had on
+the cell and had not pushed to git is overwritten by this deploy; the next pull
+will say.
+
 ## The substrate owns the picture on an ordinary URL
 
 `resolveProductionSubstrateMode`'s `default:` case is `render`. It has been the
@@ -18135,3 +18150,11 @@ legacy owners hold nothing. They do not assert what the world LOOKS like, and
 the frames they take are of fixtures. The seat's report against
 `?substrate=contact` is the visual review, and that switch is in SETTINGS →
 ADVANCED with the rollback stated in its note.
+
+**Live as v1789820375451.** The deployed resolver's own text is the witness a
+symbol grep cannot be here — `contact`, `render` and the default all name the
+same words — so it was read out of the bundle directly: `case "render":
+default: return { name: "render", render: true, contact: true, shadow: true,
+rollback: false };`. The handler answers too (`/`, `/lab/world` and a `~/dem/`
+tile all 200), because grepping `app.js` proves the client shipped and says
+nothing about a route.
