@@ -291,6 +291,22 @@ file, byte-identical to the commit before the one being deployed. Two were the
 is simply behind and yours is safe to restore; a non-empty one is work that
 exists nowhere else and must be committed verbatim before anything is pushed.
 
+**AND THE FOURTH PULL TYPE-CHECKED CLEAN, WHICH IS WHY THE HABIT IS THE RULE
+AND THE GENERALISATION IS NOT.** Two places in this file record three
+consecutive pulls whose code failed `tsc` — a `qs` row that was never declared,
+`extensions` written on a Lambert material — and one of them generalises to
+"the other author does not run the type check". The 2026-09-19 pull of the
+river shore-contact unit (`client/hydro/shore-contact.ts` and the four files it
+touches) is clean on the first run, and the whole pure hydro suite passes over
+it unchanged: `glsl-reserved`, `hydro`, `inland-water`, `hydro-coast`,
+`hydro-resolution`. So **read `tsc` before reading a pulled diff** stands, for
+the reason it always had — a pull is a snapshot of somebody's editor, not a
+release — and the sentence about the author is a tally of what three pulls
+cost rather than a property of the person. Run the suite over pulled code too:
+`glsl-reserved` is instant and is precisely the check that would catch a
+reserved word in new GLSL, which is a fault this file has recorded twice from
+the other side.
+
 ---
 
 ## Verification ladder
