@@ -51433,7 +51433,11 @@ function tick(now: number): void {
     // THE NEAR/FAR PLANES SCALE WITH THE ORBIT, not with a fixed driving-scale
     // constant: a reviewer may stand a metre from a kerb or a kilometre back
     // from a mountain pass, and either one needs its own precision budget.
-    setNear(Math.max(0.1, godDist * 0.02), Math.max(2000, godDist * 4));
+    // THE FAR PLANE MUST CLEAR THE SKY DOME (a 20km-radius sphere centred on
+    // the camera), or the dome is clipped and the visible "sky" is just the
+    // canvas clear colour — solid black at every hour, discovered by
+    // reviewing god-camera screenshots across DAWN..NIGHT.
+    setNear(Math.max(0.1, godDist * 0.02), Math.max(20500, godDist * 4));
     if (Math.abs(camera.fov - godFov) > 0.01) { camera.fov = godFov; camera.updateProjectionMatrix(); }
     const gcE = Math.cos(godEl), gsE = Math.sin(godEl);
     camPos.set(
