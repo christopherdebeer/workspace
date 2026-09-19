@@ -17603,3 +17603,63 @@ different question — each samples its own chains at its own spacing, so the
 stations near a shared edge are not the same stations — and it is not asserted
 anywhere. The border-pin machinery fixes the exact edge row; the row inside it
 is unpinned, and nobody has measured what the two sides do there.
+
+#### The census: the composition is worth a quarter of the fringe, and it costs the uMngeni
+
+Both legs on the SAME build, `?bank=0` the only difference, six fixtures, 75 s
+settle, nodraw. `drawn` is texels of drawn water in the window, `fringe` and
+`interior` the burial taxonomy, `over` the metres of triangle standing above
+the water where it is buried:
+
+| fixture | control: drawn / fringe / interior | bank on | fringe |
+|---|---|---|---|
+| at-senqu-ford | 554 / 111 / 3 | **580 / 48 / 0** | **−57%** |
+| at-senqu-top | 994 / 95 / 45 | **1011 / 51 / 37** | **−46%** |
+| at-umgeni | 5682 / 373 / 627 | 5641 / **393** / **652** | **+5%** |
+| at-bixby | 298 / 142 / 0 | **348 / 54 / 0** | **−62%** |
+| at-glencairn | 4539 / 170 / 346 | **4560 / 125 / 334** | **−26%** |
+| at-campsbay | 306 / 20 / 1 | **315 / 2 / 1** | **−90%** |
+
+**Fringe 911 → 673 over the six, −26%; −48% over the five that are not the
+uMngeni.** Drawn water is up at five of six and the total is +0.7%, so nothing
+was bought by drawing less water; interior burial is flat overall (1022 →
+1024). Against the stage C/D build measured two sections up the fringe moves
+696 → 673, so most of what the chains and the composition bought over that
+build is at the two places the stage-C numbers were already best at.
+
+**AND THE uMNGENI GOT WORSE, WHICH IS THE COMPOSITION DOING EXACTLY WHAT IT
+WAS ASKED TO DO.** Its burial is a blob deep inside a riverbank polygon — the
+one shape the ~18 m floor lattice CAN reach, because a body that wide has four
+wet corners — and the floor now stands down wherever a station spoke. Where
+the resolver refuses (`too-deep`) nothing is cut at all, including by the floor
+that used to plane the margin. So the trade item 3 asks for is: the profile
+governs its region, and a refusal costs the floor's contribution there.
+**That is the argument for #169 rather than against item 3** — a refusal should
+mean "this wants a constrained section", not "leave it buried" — and it is
+written here as a cost rather than buried in an average.
+
+**EVERY `over` MEDIAN ROSE AGAIN** (0.42 → 0.64, 0.19 → 0.34, 3.44 → 4.37,
+0.84 → 1.10, 1.59 → 2.35, 0.13 → 0.49), which is the shallow burials going
+first and the deep refusals surviving — the same reading as stage C, and the
+reason a count that falls while its median rises is the easy cases going.
+Glencairn's worst fell 20.08 → 16.18 m.
+
+**AND THE STATION COUNTS IN THAT TABLE ARE A QUARTER TOO HIGH, WHICH IS HOW
+THE NEXT FAULT WAS FOUND.** The census printed 640 stations at four of the six
+fixtures — the same number at a 1.4 km river fixture and at a suburban bay,
+which is the "a count equal to its own budget" signature this file records
+three times. 640 is 1.25 × 512, 1.25 is 15/12, and `__bankfringe` still counts
+`packed.length / 12` against a stride-15 packet: **the third site reading the
+old stride**, after the creases and the diagnostic. The true count is
+**512 exactly — `maxStations`** — at at-senqu-ford, at-umgeni, at-bixby and
+at-campsbay.
+
+So the spacing rule has the shape of the budget faults it replaced: it solves
+`shoreM / maxStations` and then each chain rounds `L / spacing`
+INDEPENDENTLY, so the total lands at the budget plus about half a station a
+chain and the tail is dropped. The coverage the chains were built to guarantee
+holds inside a chain and can still be lost at the end of the list — which the
+unit test cannot see, because its fixture is one chain under the cap. The fix
+is to allocate the budget ACROSS the chains (one each, the rest in proportion
+to length, the remainder by largest fraction) so the total is the budget by
+construction. Not done here; it is the next thing.
