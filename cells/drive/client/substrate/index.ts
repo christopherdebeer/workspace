@@ -134,6 +134,16 @@ export {
 export { buildProductionHydroFixture } from './hydro-fixture';
 export { makeCrossingFixture, type CrossingFixtureOptions } from './fixtures';
 export {
+  buildProductionFord,
+  FORD_LIP_M,
+  FORD_MAX_HALF_M,
+  FORD_POST_H_M,
+  FORD_PROUD_M,
+  FORD_SILL_DROP_M,
+  type ProductionFordGeometry,
+  type ProductionFordInput,
+} from './ford-detail';
+export {
   buildCulvertBoreGeometry,
   buildCulvertHeadwallGeometry,
   buildProductionCulvert,

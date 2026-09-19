@@ -11,6 +11,7 @@ import {
   buildCulvertBoreGeometry,
   buildCulvertHeadwallGeometry,
   buildProductionCulvert,
+  buildProductionFord,
   buildProductionGalleryGeometry,
   buildProductionHydroFixture,
   buildProductionRoadSurfaceGeometry,
@@ -21,6 +22,11 @@ import {
   buildSubstrateTile,
   blendProductionTerrainHydroBank,
   findProductionDriveWaterOverlaps,
+  FORD_LIP_M,
+  FORD_MAX_HALF_M,
+  FORD_POST_H_M,
+  FORD_PROUD_M,
+  FORD_SILL_DROP_M,
   makeCrossingFixture,
   pointInProductionCrossingFootprint,
   productionDriveAuthoringRevision,
@@ -506,7 +512,131 @@ export function runSubstrateSelfTest(): void {
   assert(productionFordFallback.outcome === 'ford-fallback'
     && productionFordFallback.tooTight
     && !productionFordFallback.bore,
-  'a wet overlap without buried room must remain a geometry-free ford');
+  'a wet overlap without buried room must build no CONDUIT — the drift itself '
+  + 'is ford-detail.ts, and the culvert builder must not author it');
+  // ── THE DRIFT ──
+  //
+  // A watercourse running along +x under a carriageway running along +z: the
+  // stations are the WATER'S, so stations 1..5 walk ACROSS the tarmac and the
+  // perpendicular offsets at each of them run ALONG the road. Getting that the
+  // wrong way round is the one mistake that produces a plausible-looking slab
+  // lying up the river instead of across it, so the extents are asserted on
+  // both axes by name rather than by area.
+  const fordStations: Array<[number, number]> = [
+    [-6, 0], [-4, 0], [-2, 0], [0, 0], [2, 0], [4, 0], [6, 0],
+  ];
+  const fordDeck = [null, 10, 10, 10, 10, 10, null];
+  const drift = buildProductionFord({
+    stations: fordStations,
+    deckY: fordDeck,
+    invertY: [6, 6, 6, 6, 6, 6, 6],
+    groundY: [7, 7, 7, 7, 7, 7, 7],
+    coreStart: 1,
+    coreEnd: 5,
+    waterHalfWidthM: 3,
+    waterSurfaceY: 10.5,
+  });
+  assert(drift.outcome === 'built', 'a ford over a carriageway must build a drift');
+  const driftXYZ = (a: Float32Array): { x: number[]; y: number[]; z: number[] } => {
+    const x: number[] = []; const y: number[] = []; const z: number[] = [];
+    for (let i = 0; i < a.length; i += 3) { x.push(a[i]); y.push(a[i + 1]); z.push(a[i + 2]); }
+    return { x, y, z };
+  };
+  const apron = driftXYZ(drift.apron);
+  assert(drift.apron.length > 0 && drift.apron.every(Number.isFinite),
+    'the apron must be a finite, non-empty surface');
+  close(Math.min(...apron.y), 10 + FORD_PROUD_M, 1e-6,
+    'every apron vertex sits at the deck the road already solved, plus the proud');
+  close(Math.max(...apron.y), 10 + FORD_PROUD_M, 1e-6,
+    'an apron laid on one deck height must be flat');
+  assert(FORD_PROUD_M > 0.04,
+    'the apron has to clear the road ribbon own 4 cm lift or the two fight for depth');
+  close(Math.max(...apron.x) - Math.min(...apron.x), 8, 1e-6,
+    'ACROSS the road the apron spans the carriageway, station 1 to station 5');
+  close(drift.widthM, 8, 1e-6, 'widthM is the carriageway width forded');
+  close(Math.max(...apron.z) - Math.min(...apron.z), 2 * (3 + FORD_LIP_M), 1e-6,
+    'ALONG the road the apron spans the drawn water plus a lip each side');
+  close(drift.lengthM, 2 * (3 + FORD_LIP_M), 1e-6, 'lengthM is that same span');
+  close(drift.depthOverApronM ?? NaN, 0.5 - FORD_PROUD_M, 1e-6,
+    'the standing water over a drift is measured against the apron, not the deck');
+  const sills = driftXYZ(drift.sills);
+  close(Math.max(...sills.y), 10 + FORD_PROUD_M, 1e-6, 'a cutoff sill hangs FROM the apron');
+  close(Math.min(...sills.y), 10 + FORD_PROUD_M - FORD_SILL_DROP_M, 1e-6,
+    'and drops its stated depth where the bed is deeper than that');
+  const posts = driftXYZ(drift.posts);
+  assert(drift.postCount === 4, 'a drift is marked at all four of its corners');
+  close(Math.min(...posts.y), 10, 1e-6, 'a marker post stands on the deck');
+  close(Math.max(...posts.y), 10 + FORD_POST_H_M, 1e-6, 'at its stated height');
+  assert(Math.max(...posts.z) > Math.max(...apron.z),
+    'the posts stand OUTBOARD of the apron, where an approaching driver meets them');
+  // A shallow bed is the sill's own floor: a lip that reached the invert of a
+  // deep pool would be a wall standing in the river rather than an edge.
+  const shallow = buildProductionFord({
+    stations: fordStations,
+    deckY: fordDeck,
+    invertY: [9.8, 9.8, 9.8, 9.8, 9.8, 9.8, 9.8],
+    groundY: [9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9],
+    coreStart: 1,
+    coreEnd: 5,
+    waterHalfWidthM: 3,
+    waterSurfaceY: null,
+  });
+  assert(shallow.outcome === 'built', 'a shallow channel still takes a drift');
+  close(Math.min(...driftXYZ(shallow.sills).y), 9.8, 1e-6,
+    'a sill stops at the bed rather than driving on past it');
+  assert(shallow.depthOverApronM === null,
+    'with no resting level the depth over the apron is unknown, not zero');
+  // The three refusals, each named. `asked - built` is a number; `noDeck` is a
+  // fault with an address.
+  assert(buildProductionFord({
+    stations: fordStations,
+    deckY: [null, 10, null, 10, 10, 10, null],
+    invertY: [6, 6, 6, 6, 6, 6, 6],
+    groundY: [7, 7, 7, 7, 7, 7, 7],
+    coreStart: 1, coreEnd: 5, waterHalfWidthM: 3,
+  }).outcome === 'no-deck',
+  'a core station with no carriageway over it is not a ford to lay an apron on');
+  assert(buildProductionFord({
+    stations: fordStations,
+    deckY: fordDeck,
+    invertY: [6, 6, 6, 6, 6, 6, 6],
+    groundY: [7, 7, 7, 7, 7, 7, 7],
+    coreStart: 1, coreEnd: 5, waterHalfWidthM: FORD_MAX_HALF_M,
+  }).outcome === 'too-wide',
+  'past the drift bound the crossing is a causeway nobody tagged, not an apron');
+  assert(buildProductionFord({
+    stations: fordStations,
+    deckY: fordDeck,
+    invertY: [6, 6, 6, 6, 6, 6, 6],
+    groundY: [7, 7, 7, 7, 7, 7, 7],
+    coreStart: 3, coreEnd: 3, waterHalfWidthM: 3,
+  }).outcome === 'no-span',
+  'one station with no road width to go on is a touch, not a crossing');
+  // ── AND ONE STATION WITH A ROAD WIDTH IS THE COMMON CASE ──
+  //
+  // A watercourse is densified for its own geometry, so at a track a few
+  // metres wide the core is routinely a single station — seven of nine
+  // crossings at Chapman's Peak, every one of them refused by the first cut
+  // as `no-span`. The second point is not missing evidence, it is the
+  // carriageway's own half width along the channel.
+  const narrow = buildProductionFord({
+    stations: fordStations,
+    deckY: fordDeck,
+    invertY: [6, 6, 6, 6, 6, 6, 6],
+    groundY: [7, 7, 7, 7, 7, 7, 7],
+    coreStart: 3, coreEnd: 3, waterHalfWidthM: 3, roadHalfWidthM: 2.5,
+  });
+  assert(narrow.outcome === 'built',
+    'a single-station core with a carriageway width over it still builds a drift');
+  close(narrow.widthM, 5, 1e-6,
+    'and the drift it builds is exactly that carriageway wide');
+  const narrowApron = driftXYZ(narrow.apron);
+  close(Math.min(...narrowApron.x), -2.5, 1e-6,
+    'the synthesised span is centred on the crossing station');
+  close(Math.max(...narrowApron.x), 2.5, 1e-6,
+    'and reaches the carriageway half width each way along the channel');
+  close(Math.max(...narrowApron.z) - Math.min(...narrowApron.z), 2 * (3 + FORD_LIP_M), 1e-6,
+    'while ALONG the road it spans the water and its lips, exactly as a wide core does');
   const galleryGeometry = buildProductionGalleryGeometry({
     stations: [[0, 0], [10, 0], [20, 5]],
     profileY: [1, 1.2, 1.4],

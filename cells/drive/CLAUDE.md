@@ -338,6 +338,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/chart-bands.mjs` | which layer owns each band of the chart — a hide-diff of the fine world, the coarse shell and the globe over one settled frame, with the same-frame-twice floor beside it, the far/fine seam in luma, and the planet-sun ramp (`SPOT=`, `Z=`, `CLIP=0`) | ~8min |
 | `node devtools/bridge-landmarks.mjs` | who CLAIMED each bridge assembly — an entry's id, OSM's own `bridge:structure`, or the recipe — beside what the painter actually built; fails on a spec that names a form and paints nothing, and on a long span nobody claimed (`FIX=`, `LONG_M=`) | ~2min |
 | `node devtools/ford-why.mjs` | why a track crossing a river has no ford treatment: the crossing registry's word, the layer the contact chose as SUPPORT, and the LEGACY deck rule beside the contact's verdict — the two answer different questions and the disagreement count is the reading (`SPOT=`, `R=`) | ~4min |
+| `node devtools/ford-drift.mjs` | whether anything is BUILT at a ford, on two witnesses that are not the same witness — the builder's own ledger (asked, built, each refusal named) and an independent walk of the scene for `userData.ford` — with the apron measured against the drawn ground under it (`FIX=`, `SPOT=` with `NODRAW=1`, `FORDS=0` is the control) | ~4min |
 | `node devtools/hydro-phases.mjs` | where a hydro build's milliseconds go, by phase and by ns/texel, with the wet/waterless build split, the wet share of the grid, and what a bound on the full-grid passes would leave to run — READ `BOUND=0` FOR THE MILLISECONDS, since the sizing probe is the same order of work as the passes it sizes and lands in `other` (`DRY=0` is the short-circuit's control, `FIX=`/`SPOT=` the place) | ~1min |
 | `node devtools/hydro-dry.test.mjs` | a waterless tile's short-circuit is the path it replaced, byte for byte, against the revision's own build-tile (`REV=`) | ~10s |
 | `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
@@ -17909,3 +17910,149 @@ never move, so a quarter of the three-signal gate was decoration and the line
 printed `hydroTiles 0` beside a river. It reads `buildProf.builds` now. The
 third time this file has recorded a field that prints a plausible number while
 measuring nothing.
+
+## …and now a ford draws a drift: an apron, two cutoff sills and four posts
+
+Built on the measurement above, and deliberately NOT the deck dip. Every
+branch of `resolveProductionDeck` raises, the dipped deck lives only in
+`substrate/kernel.ts`'s lab path, and changing a road profile is the highest
+risk area in this codebase — so this unit builds what a drift IS and leaves
+where the carriageway SITS to #63. The drift is an apron laid at the deck the
+road already solved, a cutoff lip at each edge so it does not end in mid-air,
+and four marker posts at the corners so a driver can see the crossing from the
+approach.
+
+`client/substrate/ford-detail.ts` is pure and renderer-free, by the same rule
+as `culvert-detail.ts`: it owns the exact apron, sills and posts; main.ts owns
+the materials, the meshes and the packet that commits them. `?fords=0` is the
+exact A/B and is the world as it was.
+
+- **THE DRIFT IS BUILT AT THE OUTCOME, NOT AT THE BRANCHES.** `ford-fallback`
+  is reached three ways inside the crossing loop — an explicit `ford=*` tag,
+  an untagged track over open water, and a `culvert()` that found no room to
+  bore — and they are one crossing in the world however they came to be
+  recognised. One call after the if/else chain, so a fourth branch added later
+  cannot quietly draw nothing.
+- **THE DECK IS HANDED IN, NOT LOOKED UP.** The loop has already resolved the
+  overlaps PER SOURCE WAY, precisely because a tagged bridge, its approach and
+  a lower road routinely meet at one crossing; a fresh `roadOver` inside the
+  builder would answer with whichever carriageway is nearest, which is as often
+  the approach as the thing being forded.
+- **NOTHING GOES IN THE WALL GRID**, for the culvert's own reason: the only
+  vehicle near a drift's lip is the one crossing the drift, and a 12 cm sill in
+  the collision grid is a kerb across the ford.
+
+### Three faults the measurement found, and the second is the interesting one
+
+**THE WATER ARRIVES IN A DIFFERENT FRAME FROM EVERYTHING ELSE IN THAT LOOP.**
+`HydroSample.restingLevelM` is metres above SEA LEVEL — the crossing registry
+two functions up converts on the way in, with `deckY: road.y + baseElev` —
+while the deck, the invert, the ground and every vertex the builder emits are
+LOCAL metres about the origin. Handed over raw, the first run reported a drift
+under **1,789.76 m of standing water** at the Senqu: the Drakensberg's own
+elevation wearing the word `depth`. The tool now FAILS on a depth over eight
+metres, because nothing anyone fords is under eight metres of river and a
+depth that looks like an elevation is a frame error by construction.
+
+**SEVEN OF NINE CROSSINGS AT CHAPMAN'S PEAK HAD A CORE OF ONE STATION.** A
+watercourse is densified for its own geometry and knows nothing about the roads
+that cross it, so at a track a few metres wide the core is routinely a single
+station and the first cut refused all of them as `no-span` — throwing away most
+of the fords in the world for want of a second point. **The second point is not
+missing evidence, it is arithmetic**: the carriageway reaches its own half width
+either side of the crossing along the channel, and `road.segment.hw` is in hand.
+Synthesised rather than refused, Chapman's went from **2 of 9 built to 9 of 9**
+and the carriageway forded from 127.9 m to 163.4 m. Only a single station with
+no road width to go on is still a refusal.
+
+**AND THE FIRST WRITE-UP CLAIMED "EVERY ROUTE TO A FORD ENDS HERE", WHICH IS
+FALSE.** `reconcileProductionWetCrossings` registers `ford-fallback` too — from
+the drive and water SEGMENTS rather than from a watercourse polyline, to catch
+what the one-shot flush misses, and it is live on the default mode because
+`shadow` is on there. It has no core span to lay an apron over, so **a crossing
+recorded only by that pass is a ford with no drift.** Not fixed here and not
+hidden: the honest route is to build from the crossing RECORD (which carries
+the centre, both tangents, both half widths and the deck) so both producers
+reach one builder, and that is its own unit.
+
+### Measured
+
+`devtools/ford-drift.mjs`, both witnesses in one call. `__fords()` carries the
+builder's own ledger — asked, built, and each refusal NAMED, because
+`asked - built` is a number and `noDeck 14` is a fault with an address — and
+beside it a walk of the SCENE for `userData.ford`, which is independent of the
+rule under test (the San Miguel lesson: a probe that replays a rule can only
+confirm it). The tool fails on a disagreement in either direction.
+
+| | at-senqu-ford | Chapman's Peak, live |
+|---|---|---|
+| asked / built | 1 / 1 | **9 / 9** |
+| refused noSpan / noDeck / tooWide | 0 / 0 / 0 | 0 / 0 / 0 |
+| carriageway forded | 2.4 m | **163.4 m** |
+| deepest standing water over an apron | 0 m | **0.62 m** |
+| scene meshes / triangles | 3 / 46 | 27 / 528 |
+| apron proud of its own drawn ground | 0.45 m | 0.03–0.90 m, median 0.16 |
+| `?fords=0` | **0 on both witnesses** | — |
+
+**THE 0.62 m IS THE AGREEMENT THAT MATTERS.** `ford-why.mjs` measured that same
+place independently and read the river standing **0.22–0.65 m** over the deck at
+27 of 27 drawn-wet points; three of the nine aprons stand at
+`[-100.4,-121.3]`, `[-80.4,-102.9]` and `[-40.7,-73.7]`, which are that table's
+own wet-on-road rows. Two tools, two mechanisms, one answer.
+
+**THE SENQU'S `0 m` IS ALSO CORRECT AND IS WORTH READING TWICE.** This file
+already records that the Joggemspruit's water sits **1.4 m UNDER** the
+carriageway there, so a drift built at the deck has no water over it — which is
+a fact about that crossing, not a failure of the depth term. It is also why
+that apron stands 0.45 m proud of its drawn ground: exactly `FORD_SILL_DROP_M`,
+so the lip closes the gap and nothing shows under the slab. **A drift over an
+un-dipped deck is a lid over a carved channel wherever the water is far below
+it**, and the tool reports the gap per apron and flags it past 1.2 m rather than
+leaving it to a frame. That gap is the argument for #63 stated as a number.
+
+### A LIVE SPOT WITH DRAWING ON READS `asked 0`, AND IT IS THE RELAY
+
+The first Chapman's run reported **nothing asked at all** on a world still
+streaming at seven minutes, and it was nearly written up as "the crossing loop
+never sees this place". It is neither: a drift is only built once
+`osmStreamQuiet()` holds, and over the harness's curl relay at three frames a
+second a busy place never gets there. `NODRAW=1` settles it and reads 9 of 9 —
+**and says nothing whatever about the picture**, which the tool prints on its
+own line so no reading of it can pretend otherwise. So the verification is
+split on purpose: the POPULATION comes from Chapman's under `nodraw`, and the
+PICTURE from the at-senqu-ford fixture with drawing on, where the chase frame
+shows a pale apron laid across the river with two white marker posts standing
+on it — the drift, plainly, from the approach.
+
+**AND THE TOP-DOWN HIDE-DIFF CANNOT RESOLVE IT, WHICH IS THE WATER AND NOT THE
+DRIFT.** The obvious witness is the same frame with the drift's own materials
+switched off, so the pixels that differ ARE the drift. Over a river it is
+nearly useless: the swell, the flow and the dither re-weave every frame, so the
+first pair reported **38.5% of the pane moved** for a slab 2.4 m across on a
+40 m frame. With a same-setting floor taken at the same separation — which is
+the only thing that gives the pair a scale — it reads **signal 3.404/255 over
+30.4% of the pane against a floor of 2.305 over 19.8%**, about one and a half
+times, with the worst pixel 73 against the floor's 36. Real, and far too close
+to the floor to be quoted as evidence on its own. The tool takes all three
+frames so the pair can never be read without the floor; the chase frame and the
+scene walk are what this rests on.
+
+### Held by
+
+`substrate.test.ts` drives the shipped builder: the apron flat at the deck plus
+`FORD_PROUD_M` (asserted to clear the road ribbon's own 4 cm lift, or the two
+fight for depth), its extent ACROSS the road equal to the carriageway and ALONG
+the road equal to the water plus a lip each side — **on both axes by name**,
+because getting the offsets the wrong way round produces a plausible slab lying
+UP the river instead of across it; the sills hanging from the apron and
+stopping at the bed rather than driving past it; four posts standing on the deck
+at their stated height, outboard of the apron; the depth measured against the
+apron and `null` rather than zero where no resting level is known; the three
+refusals; and the synthesised single-station span. Negative controls run: the
+offsets taken along the tangent instead of the normal fails the axis assertion
+(`saw 16.8` for an expected 8), `FORD_PROUD_M` at zero fails the ribbon-lift
+assertion, and removing the span synthesis fails the single-station case.
+
+`devtools/ford-drift.mjs` is in the ladder. Run it on a fixture for the picture
+and at a live spot with `NODRAW=1` for the population, never the other way
+round.

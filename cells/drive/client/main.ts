@@ -212,9 +212,8 @@ import {
 } from './substrate/rapid-detail';
 import { resolveProductionHydroReach } from './substrate/hydro-reach';
 import { blendProductionTerrainHydroBank } from './substrate/terrain-hydro';
-import {
-  buildProductionCulvert,
-} from './substrate/culvert-detail';
+import { buildProductionCulvert } from './substrate/culvert-detail';
+import { buildProductionFord } from './substrate/ford-detail';
 import {
   buildProductionGalleryGeometry,
   buildProductionTunnelGeometry,
@@ -2241,6 +2240,12 @@ const BANK_ON = qsOn('bank', true);
 /** The rig's occluded-silhouette overlay, retired to a flag — see the block
  *  above `rebuildRigSilhouette` for what it drew and why it stopped. */
 const RIG_XRAY = qsOn('rigxray', false);
+/** The drift built at a ford crossing. Off, a ford draws nothing at all —
+ *  which is what this world did until now, because `resolveProductionCrossing`
+ *  gives a ford `implementation: 'not-required'` and that was read as "no
+ *  geometry" rather than "no conduit". The A/B for the apron, its cutoff
+ *  sills and the marker posts; `__fords()` is the count beside it. */
+const FORDS_ON = qsOn('fords', true);
 /** The sward reads the substrate's classification — the brief's own "sward and
  *  terrain from the same field". Off restores the sward that thins for cover,
  *  altitude and the bank and knows nothing about outcrop, which is the exact
@@ -11106,6 +11111,16 @@ const MAT = {
   // lamp does at that distance: goes dim.
   lamp: new THREE.MeshBasicMaterial({ color: 0xd8a45e, side: DS }),
   portal: new THREE.MeshLambertMaterial({ color: 0x4d4a42, side: DS }),
+  // A DRIFT IS CONCRETE AND ITS POSTS ARE PAINTED, and both are chosen
+  // against the ground rather than in the abstract: the apron has to read as
+  // a laid slab over a gravel track and under running water, so it is a pale
+  // warm grey — several palette steps off any bed or bank this game paints —
+  // and the posts are the one thing at a ford a driver needs to find from the
+  // approach, so they are near-white with a little emissive, which is what
+  // keeps them legible in the shade of a gorge without tripping the bloom cut
+  // at 0.62.
+  drift: new THREE.MeshLambertMaterial({ color: 0x8e8b82, side: DS }),
+  driftPost: new THREE.MeshLambertMaterial({ color: 0xd9d6cb, emissive: 0x16150f, side: DS }),
 } as const;
 /**
  * THE MARCH, FOR EVERYTHING THAT IS NOT TERRAIN. terrainFx already carries it
@@ -25306,6 +25321,41 @@ function flushCulverts(t: HeightTile): void {
           availableClearanceM = built.availableClearanceM;
         }
 
+        // THE DRIFT IS BUILT AT THE OUTCOME, NOT AT THE THREE BRANCHES THAT
+        // PRODUCE IT. `ford-fallback` is reached three ways in this loop — an
+        // explicit ford tag, an untagged track over open water, and a
+        // `culvert()` that found no room to bore — and they are one crossing
+        // in the world however they came to be recognised. Building at each
+        // branch is three copies of one rule and a fourth branch that quietly
+        // draws nothing.
+        //
+        // IT IS NOT THE ONLY PRODUCER OF A FORD RECORD, AND THE FIRST WRITE-UP
+        // OF THIS CLAIMED IT WAS. `reconcileProductionWetCrossings` registers
+        // `ford-fallback` too, from the drive and water SEGMENTS rather than
+        // from a watercourse polyline, to catch what this one-shot flush
+        // misses — and it has no core span to lay an apron over, so a crossing
+        // recorded only by that pass is a ford with no drift. See the ford
+        // section in CLAUDE.md for what that costs and where it was measured.
+        if (FORDS_ON && structureOutcome === 'ford-fallback') {
+          // The deck handed over is THIS crossing's own, station by station,
+          // not whatever `roadOver` answers at the point: the loop has already
+          // resolved the overlaps per source way precisely because a tagged
+          // bridge, its approach and a lower road routinely meet at one
+          // crossing, and asking again would lay the apron on the lowest of
+          // them. The same rule `deckBelow` follows one module over.
+          // AND THE WATER ARRIVES IN A DIFFERENT FRAME FROM EVERYTHING ELSE
+          // IN THIS LOOP. `restingLevelM` is metres above SEA LEVEL — the
+          // registry two functions up converts to it on the way in, with
+          // `deckY: road.y + baseElev` — while the deck, the invert, the
+          // ground and every vertex this builder emits are LOCAL metres about
+          // the origin. Handed over raw it read as a drift under 1,789 m of
+          // standing water at the Senqu, which is the Drakensberg's own
+          // elevation wearing the word `depth`.
+          ford(dense, inv, raw, core0, core1, width / 2,
+            wet ? wet.restingLevelM - baseElev : null,
+            overlaps.map((o) => o?.y ?? null), road.segment.hw);
+        }
+
         const roadDx = road.segment.bx - road.segment.ax;
         const roadDz = road.segment.bz - road.segment.az;
         const roadLength = Math.hypot(roadDx, roadDz) || 1;
@@ -25518,6 +25568,80 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     availableClearanceM: built.availableClearanceM,
     family: built.family,
   };
+}
+/** What the drifts in this world are, so a seat report has a number behind
+ *  it: how many were asked for, how many were built, and why the rest were
+ *  not. A refusal is a fact about the crossing, not a silence. */
+const fordStats = { asked: 0, built: 0, noSpan: 0, noDeck: 0, tooWide: 0, deckM: 0, deepest: 0 };
+/**
+ * A FORD IS BUILT, AND UNTIL NOW IT WAS THE ONE CROSSING THAT DREW NOTHING.
+ *
+ * `resolveProductionCrossing` gives a ford `implementation: 'not-required'`,
+ * which is the right word about a CONDUIT and was read as "no geometry". So
+ * the crossing a driver meets most often — a track through a stream — was the
+ * one the world said nothing about: measured at Chapman's Peak, 27 of 27
+ * drawn-wet points inside a carriageway carried a ford record with the river
+ * resting 0.22-0.65 m over the deck, and the frame from the seat is a river
+ * painted across a track with nothing built at it.
+ *
+ * The apron is laid at the deck the road already solved. This does NOT move
+ * the carriageway: lowering a road into its river is the profile's business
+ * and every branch of `resolveProductionDeck` raises, which is its own unit.
+ * What this builds is the thing a drift actually is — a hard slab to cross
+ * on, a cutoff lip at each edge, and posts at the entries.
+ *
+ * NOTHING GOES IN THE WALL GRID, for the culvert's own reason one function
+ * up: the only vehicle near a drift's lip is the one crossing the drift, and
+ * a 12 cm sill in the collision grid is a kerb across the ford.
+ *
+ * AND THE DECK IS HANDED IN RATHER THAN LOOKED UP. The caller has already
+ * resolved which source way this crossing belongs to and what its deck is at
+ * every station; a fresh `roadOver` here would answer with whichever
+ * carriageway is nearest, which at a real crossing is as often the approach
+ * or the road beneath as the one being forded.
+ */
+function ford(dense: Array<[number, number]>, inv: number[], g: number[],
+  core0: number, core1: number, halfWidthM: number,
+  waterSurfaceY: number | null,
+  deckY: ReadonlyArray<number | null>,
+  roadHalfWidthM: number): void {
+  fordStats.asked++;
+  const built = buildProductionFord({
+    roadHalfWidthM,
+    stations: dense,
+    deckY,
+    invertY: inv,
+    groundY: g,
+    coreStart: core0,
+    coreEnd: core1,
+    waterHalfWidthM: halfWidthM,
+    waterSurfaceY,
+  });
+  if (built.outcome !== 'built') {
+    if (built.outcome === 'no-span') fordStats.noSpan++;
+    else if (built.outcome === 'no-deck') fordStats.noDeck++;
+    else fordStats.tooWide++;
+    return;
+  }
+  fordStats.built++;
+  fordStats.deckM += built.widthM;
+  if (built.depthOverApronM !== null) {
+    fordStats.deepest = Math.max(fordStats.deepest, built.depthOverApronM);
+  }
+  const mesh = (positions: Float32Array, material: THREE.Material, tag: string): void => {
+    if (!positions.length) return;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.computeVertexNormals();
+    // NAMED, so `__sceneList` and `__census` can be asserted against it: an
+    // unnamed mesh arrives as `Mesh` beside a thousand others and no audit
+    // can be written on it.
+    addStructureRenderGeometry(geometry, material,
+      { name: `ford-${tag}`, userData: { ford: true, fordPart: tag } });
+  };
+  mesh(built.apron, MAT.drift, 'apron');
+  mesh(built.sills, MAT.drift, 'sill');
+  mesh(built.posts, MAT.driftPost, 'post');
 }
 function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number[], a: number, b: number, width: number, lift: number, recipe?: StructureRecipe): void {
   const built = buildProductionTunnelGeometry({
@@ -43392,6 +43516,72 @@ function farHeightAt(wx: number, wz: number): number | null {
     minUnder: isFinite(culvertStats.minUnder) ? +culvertStats.minUnder.toFixed(2) : null,
     deepest: +culvertStats.deepest.toFixed(1),
     worstRise: +culvertStats.worstRise.toFixed(4), channels: channelGrid.size });
+/**
+ * THE DRIFTS, AND WHY A REFUSAL WAS REFUSED.
+ *
+ * `__ford(x, z)` answers whether a POINT is a ford — the registry's word, the
+ * layer the contact chose as support, and the two rules' verdicts. It cannot
+ * say whether anything was BUILT there, which is the question the seat's frame
+ * at Chapman's Peak was actually asking: a crossing can be a ford on every
+ * term and draw nothing, and for the whole life of this world it did. So this
+ * is the other half — asked against built, with each refusal named rather than
+ * summed into one silence, because `asked - built` is a number and `noDeck 14`
+ * is a fault with an address.
+ *
+ * `deckM` is the carriageway width forded (the drift's extent ACROSS the
+ * road), `deepest` the worst standing water over an apron: a ford the field
+ * puts a metre of river over is one a driver should be warned about, and the
+ * number has to exist before anything can warn them.
+ */
+(window as unknown as { __fords?: object }).__fords = (): object => {
+  // AND THE SECOND WITNESS IS NOT THE LEDGER'S. `fordStats` is written by the
+  // rule under test, so it can only ever confirm it — the San Miguel lesson,
+  // where a probe that replayed a rule verbatim agreed with it to the
+  // centimetre and explained nothing. This walks the SCENE for the drift's own
+  // userData and sums what the renderer was actually handed, so a drift that
+  // was solved and never committed reads as `built 12` beside `tris 0`.
+  const parts: Record<string, number> = { apron: 0, sill: 0, post: 0 };
+  let meshes = 0, tris = 0;
+  const box = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity, z0: Infinity, z1: -Infinity };
+  const aprons: Array<[number, number, number, number]> = [];
+  worldGroup.traverse((o) => {
+    if (!o.userData?.ford) return;
+    const mesh = o as THREE.Mesh;
+    const position = mesh.geometry?.attributes?.position;
+    if (!position) return;
+    meshes++;
+    const n = (mesh.geometry.index ? mesh.geometry.index.count : position.count) / 3;
+    tris += n;
+    const tag = String(o.userData.fordPart ?? '');
+    if (parts[tag] !== undefined) parts[tag] += n;
+    mesh.geometry.computeBoundingBox();
+    const bb = mesh.geometry.boundingBox;
+    if (!bb) return;
+    box.x0 = Math.min(box.x0, bb.min.x); box.x1 = Math.max(box.x1, bb.max.x);
+    box.y0 = Math.min(box.y0, bb.min.y); box.y1 = Math.max(box.y1, bb.max.y);
+    box.z0 = Math.min(box.z0, bb.min.z); box.z1 = Math.max(box.z1, bb.max.z);
+    if (tag === 'apron') {
+      const cx = (bb.min.x + bb.max.x) / 2;
+      const cz = (bb.min.z + bb.max.z) / 2;
+      // AND THE GROUND UNDER IT, sampled from the world rather than from the
+      // deck the builder was handed. An apron is laid at the carriageway's own
+      // deck and the channel is CARVED THROUGH a ford's footprint, so where
+      // the profile has not been dipped to the water the slab can stand over
+      // a trench — which is a hole you can see under, and is not a number the
+      // ledger can ever report because the ledger never asks the terrain.
+      aprons.push([+cx.toFixed(1),
+        +((bb.min.y + bb.max.y) / 2).toFixed(2),
+        +cz.toFixed(1),
+        +groundAt(cx, cz).toFixed(2)]);
+    }
+  });
+  return { on: FORDS_ON, ...fordStats,
+    deckM: +fordStats.deckM.toFixed(1),
+    deepest: +fordStats.deepest.toFixed(2),
+    scene: { meshes, tris, parts,
+      box: meshes ? box : null,
+      aprons: aprons.slice(0, 12) } };
+};
 /**
  * DO DRAPED WAYS ACTUALLY SIT ON THE GROUND THAT IS DRAWN?
  *
