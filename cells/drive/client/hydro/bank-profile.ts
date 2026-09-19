@@ -202,6 +202,9 @@ export interface HydroBankResult {
     chains: number;
     resolved: number;
     nothingToCut: number;
+    /** Sampled low edges still needing contact; not successful closure. */
+    hangingEdge: number;
+    maxHangingGapM: number;
     unresolved: Record<HydroBankUnresolved, number>;
     byProfile: Record<HydroBankProfile, number>;
   };
@@ -479,6 +482,7 @@ export function resolveHydroBankStations(
   const stations: HydroBankStation[] = [];
   const stats: HydroBankResult['stats'] = {
     segments: segments.length, stations: 0, dropped: 0, resolved: 0, nothingToCut: 0,
+    hangingEdge: 0, maxHangingGapM: 0,
     shoreM: +shoreM.toFixed(1), spacingM: +spacing.toFixed(2),
     coveredM: 0, uncoveredM: 0, chains: chains.length,
     unresolved: { 'no-water': 0, 'no-ground': 0, 'no-join': 0, 'too-deep': 0 },
@@ -581,6 +585,10 @@ export function resolveHydroBankStations(
       // water. A resolved station with zero outward influence, not a failure —
       // and emitting it keeps the shoreline's topology continuous.
       if (st.natural <= waterline + WATERLINE_TOL_M) {
+        if (level - st.natural > 0.08) {
+          stats.hangingEdge++;
+          stats.maxHangingGapM = Math.max(stats.maxHangingGapM, level - st.natural);
+        }
         stations.push({ ...seat, outerReachM: 0, outerJoinM: st.natural, cutM: 0, unresolved: null });
         stats.nothingToCut++;
         continue;

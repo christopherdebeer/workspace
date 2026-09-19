@@ -1,3 +1,4 @@
+import { extendRiverContact, type ShoreContactStats } from './shore-contact';
 import { riverDrops, sampleRiverDrop, type RiverDrop } from './waterfalls';
 import { solveCoastField, swellWavelengthM } from './coast-field';
 import { HydroBodyRegistry } from './body-registry';
@@ -875,6 +876,10 @@ export function buildHydroTile(
   const flags = new Uint8Array(count);
   const rank = new Uint8Array(count);
   const bodyIds = new Set<string>();
+  const contactOwner = new Int32Array(count).fill(-1);
+  const contactBodies = new Map<string, number>();
+  let shoreContact: ShoreContactStats | undefined;
+  let hasContactRiver = false;
   // ── IS THERE ANY WATER IN THIS TILE AT ALL? ──
   //
   // Set by the two — and only two — things that can put coverage on a texel:
@@ -948,6 +953,9 @@ export function buildHydroTile(
     const p = c.p;
     if (rank[i] > p || (rank[i] === p && coverage[i] > amount)) return;
     rank[i] = p;
+    if (!contactBodies.has(body.id)) contactBodies.set(body.id, contactBodies.size);
+    contactOwner[i] = contactBodies.get(body.id)!;
+    if (body.kind === 'river' || body.kind === 'stream') hasContactRiver = true;
     if (fall && (fall[0] > 0 || fall[2] > 0)) waterfalls ??= new Float32Array(count * 4);
     if (waterfalls) waterfalls.set(fall ?? [0, 0, 0, 0], i * 4);
     if (c.flowing) {
@@ -1439,6 +1447,51 @@ export function buildHydroTile(
     // Re-arm: the probe's own milliseconds belong to no phase.
     tMark += performance.now() - tProbe;
   }
+  // Solve contact after continuity repair, before the final structure mask,
+  // bounds and distance transforms. Physics and terrain consume this same
+  // corrected field. A snapshot prevents repeated dilation within a build.
+  if (hasContactRiver) {
+    const contactSeeds = new Uint8Array(count);
+    for (let i=0;i<count;i++) contactSeeds[i] = coverage[i]>=.5 ? 1 : 0;
+    const contactNearest = nearestSourceMap(contactSeeds,width,height);
+    const worldX = (x: number) => input.bounds.minX+(x-gutter+.5)*pixelX;
+    const worldZ = (z: number) => input.bounds.minZ+(z-gutter+.5)*pixelZ;
+    shoreContact = extendRiverContact({
+      width,height,pixelX,pixelZ,coverage,nearest:contactNearest,owner:contactOwner,
+      level,kind,flowX,flowZ,
+      halfWidth: i => structure?.[i*4+3] ?? 0,
+      falling: i => !!waterfalls && (waterfalls[i*4]>.001 || waterfalls[i*4+2]>.001),
+      ground: (x,z) => {
+        const wx=worldX(x), wz=worldZ(z);
+        // DEM outside this tile is not authority for a new bank.
+        if(wx<input.bounds.minX||wx>input.bounds.maxX||wz<input.bounds.minZ||wz>input.bounds.maxZ) return NaN;
+        return sampleElevation(input.elevation,input.bounds,wx,wz);
+      },
+      blocked: (x,z) => (input.surfaceOccluders ?? []).some(o => {
+        const len=Math.hypot(...o.roadTangent)||1;
+        const tx=o.roadTangent[0]/len,tz=o.roadTangent[1]/len;
+        const dx=worldX(x)-o.x,dz=worldZ(z)-o.z;
+        return Math.abs(dx*tx+dz*tz)<=o.halfLengthM+pixelM
+          && Math.abs(-dx*tz+dz*tx)<=o.roadHalfWidthM+pixelM;
+      }),
+      copy: (i,n,g) => {
+        level[i]=level[n]; depth[i]=Math.max(0,level[n]-g);
+        flowX[i]=flowX[n]; flowZ[i]=flowZ[n]; fetch[i]=fetch[n]; scale[i]=scale[n];
+        kind[i]=kind[n]; seed[i]=seed[n]; turbidity[i]=turbidity[n]; flags[i]=flags[n];
+        contactOwner[i]=contactOwner[n];
+        if(structure) {
+          structure.set(structure.subarray(n*4,n*4+4),i*4);
+          const dx=((i%width)-(n%width))*pixelX;
+          const dz=(Math.floor(i/width)-Math.floor(n/width))*pixelZ;
+          const len=Math.hypot(flowX[n],flowZ[n])||1;
+          const fx=flowX[n]/len,fz=flowZ[n]/len;
+          structure[i*4]+=dx*fx+dz*fz;
+          structure[i*4+1]+=(fx*dz-fz*dx)/Math.max(1,structure[n*4+3]);
+        }
+        if(waterfalls) waterfalls.set(waterfalls.subarray(n*4,n*4+4),i*4);
+      },
+    });
+  }
   // ── STRUCTURES OWN SURFACE VISIBILITY ──
   //
   // A culvert carries water below the road and a causeway blocks it with fill;
@@ -1618,5 +1671,6 @@ export function buildHydroTile(
     waterBounds,
     coast,
     bodyIds: [...bodyIds],
+    shoreContact,
   };
 }

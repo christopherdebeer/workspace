@@ -200,6 +200,9 @@ export interface ResolvedHydroFeature {
  *                  signed curvature (1/m), channel half-width (m)
  */
 export interface HydroTileField {
+  /** Raster candidate outcomes; not a measurement of final triangle contact. */
+  shoreContact?: { candidates: number; extended: number; noJoin: number;
+    tooHigh: number; protected: number; missingGround: number; maxExtensionM: number };
   key: TileKey;
   revision: number;
   bounds: WorldBounds;

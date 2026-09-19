@@ -460,7 +460,9 @@ void main() {
 #endif
   vSurfaceWave = clamp(wave, -1.0, 1.0);
   vSurfaceEnergy = clamp(amplitude / mix(0.55, 0.15, vFlowing), 0.0, 1.0);
-  float displaced = wave * amplitude * geometryField.r;
+  // Rivers meet a fixed bank: zero heave at the canonical coverage contour.
+  float riverContact = smoothstep(0.5, 0.78, geometryField.r);
+  float displaced = wave * amplitude * geometryField.r * mix(1.0, riverContact, vFlowing);
   // A vertical sine is a breathing sheet. Trochoidal horizontal displacement
   // makes the same continuous phases form narrower crests and broader troughs,
   // which gives the wave parallax and silhouette instead of merely changing
@@ -833,7 +835,9 @@ void main() {
   // Terrain topology is constrained to the canonical 0.5 contour. Preserve a
   // little natural irregularity, but keep the rendered edge within roughly a
   // metre of that shared line at the production field tier.
-  float bodyCut = coastalKind ? 0.5 : 0.5 + (bankPatch(vAbsoluteXZ) - 0.5) * 0.08;
+  // River contact and CPU sampling share the exact canonical contour.
+  float bodyCut = (coastalKind || vFlowing > 0.5) ? 0.5
+    : 0.5 + (bankPatch(vAbsoluteXZ) - 0.5) * 0.08;
   if (geometryField.r < bodyCut) discard;
   // Coverage owns the literal fragment boundary. Signed distance and river N
   // are smooth physical coordinates, but their zeroes can sit between
