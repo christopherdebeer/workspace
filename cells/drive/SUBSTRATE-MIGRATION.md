@@ -422,9 +422,13 @@ water flush and the Senqu bank probe where rollback previously measured ford
 depth against the wrong deck.
 
 `substrate-default-cutover.test.mjs` proves the ordinary URL selects canonical
-contact with zero loaded-tile consumer fallback, while `?substrate=legacy`
-restores the old contact consumer and retains revisioned tiles plus independent
-shadow evidence.
+contact AND the substrate as render authority with zero loaded-tile consumer
+fallback, while `?substrate=contact` hands the picture back to the legacy
+owners without giving up canonical contact and `?substrate=legacy` restores the
+old contact consumer; both retain revisioned tiles plus independent shadow
+evidence. It settles on a loaded wet point rather than on a clock: this fixture's
+tiles race in every mode, and one boot answered 96 water points where the next
+answered none.
 
 `SubstrateShadowMonitor.readyForCutover` is deliberately conservative. It
 stays false for wet disagreement rate at or above 0.1%, depth p95 above 0.10m,
@@ -496,10 +500,18 @@ repository run cannot manufacture.
   no longer reconstructs readiness from renderer-owned candidate maps, and
   the renderer no longer holds delayed road, structure or hydro-detail mesh
   capture batches.
-- Contact/evidence is now the production default with `?substrate=legacy` as
-  the observable rollback. Representative water drives, persistent evidence
-  and the multi-world parity thresholds pass; a production observation window
-  is still outstanding before the legacy consumer can be removed.
+- Contact/evidence AND rendering are now the production default
+  (`mode.ts`'s `default:` case is `render`), with `?substrate=contact` as the
+  nearer rollback — the substrate still answers the wheels while the legacy
+  owners draw, which is the control every render-path measurement is taken
+  against — and `?substrate=legacy` as the observable full rollback.
+  Representative water drives, persistent evidence and the multi-world parity
+  thresholds pass; the four render suites and the default-cutover gate are
+  green ON AN ORDINARY URL, bar one culvert-earthwork failure that
+  `MODE=contact` reproduces to the digit and is therefore not the render
+  path's. A production observation window is still outstanding before the
+  legacy consumer can be removed, and no harness suite reviews what the world
+  LOOKS like — they assert ownership, commitment and identity.
 - Observed production overlaps still need a full classification audit beyond
   the now-covered Senqu, Bixby, Camps Bay, Chapman's Peak and explicit-structure
   cases, especially untagged fords versus procedural bridges, before unresolved

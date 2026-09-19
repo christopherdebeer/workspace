@@ -8,7 +8,8 @@ import {
 } from './shore-contour';
 import { sampleBankField, WATERLINE_CUT } from '../shoreline';
 import { HYDRO_KIND_ID, type HydroFeature, type HydroTileInput } from './types';
-import { HYDRO_FRAGMENT_SHADER } from './shaders';
+import { HYDRO_FRAGMENT_SHADER, HYDRO_VERTEX_SHADER } from './shaders';
+import { HYDRO_SCENE_SKY_GLSL } from './scene-sky';
 
 const assert = (condition: unknown, message: string): void => {
   if (!condition) throw new Error(`hydro self-test: ${message}`);
@@ -33,6 +34,27 @@ export function runHydroSelfTest(): void {
   assert(HYDRO_FRAGMENT_SHADER.includes('reflectedSky')
     && HYDRO_FRAGMENT_SHADER.includes('terrainCoupling'),
   'surface colour continuously includes sky reflection and shallow terrain tint');
+  assert(HYDRO_FRAGMENT_SHADER.includes('float waterF0 = 0.02')
+    && HYDRO_FRAGMENT_SHADER.includes('(0.46 - waterF0)'),
+  'water reflection uses a dielectric head-on baseline with the retained artistic grazing ceiling');
+  assert(HYDRO_FRAGMENT_SHADER.includes('float absorption = mix(0.85, 1.55, turbidity)')
+    && HYDRO_FRAGMENT_SHADER.includes('uAbsorptionStrength')
+    && !HYDRO_FRAGMENT_SHADER.includes('mix(0.85, 0.30, turbidity)'),
+  'suspended sediment shortens rather than lengthens the palette attenuation path');
+  assert(HYDRO_FRAGMENT_SHADER.includes('float suspended = clamp(turbidity * uScatteringStrength')
+    && HYDRO_FRAGMENT_SHADER.includes('float suspendedScattering'),
+  'suspended scattering has an optical gain independent of absorption');
+  assert(HYDRO_FRAGMENT_SHADER.includes('#ifdef HYDRO_SCENE_REFLECTION')
+    && HYDRO_FRAGMENT_SHADER.includes('sceneReflectedSky(')
+    && HYDRO_FRAGMENT_SHADER.includes('surfaceRoughness'),
+  'the host sky is evaluated in the reflected direction with roughness-aware breakup');
+  assert(HYDRO_SCENE_SKY_GLSL.includes('vec3 sceneReflectedSky(')
+    && HYDRO_SCENE_SKY_GLSL.includes('clInLattice')
+    && HYDRO_SCENE_SKY_GLSL.includes('uCsSunDisc'),
+  'production and Hydrograph share one world-anchored cloud reflection evaluator');
+  assert(HYDRO_FRAGMENT_SHADER.includes('vec3 colour = palette(kind, visualDepth, turbidity, terrainC)')
+    && !HYDRO_FRAGMENT_SHADER.includes('visualDepth * (1.0 + 0.9 * overhead)'),
+  'camera angle does not change the material water depth');
   assert(HYDRO_FRAGMENT_SHADER.includes('cobbleColour')
     && HYDRO_FRAGMENT_SHADER.includes('bedVisibility')
     && HYDRO_FRAGMENT_SHADER.includes('pebbleSpeck')
@@ -70,12 +92,64 @@ export function runHydroSelfTest(): void {
     && HYDRO_FRAGMENT_SHADER.includes('tongueEnergy = max(energyGate, shallowRapid')
     && HYDRO_FRAGMENT_SHADER.includes('tongueReach = mix(0.38, 1.0, rapidReach)'),
   'shallow high-energy reaches receive coherent flow-aligned rapid tongues');
+  assert(HYDRO_FRAGMENT_SHADER.includes('riverTransportSpeed')
+    && HYDRO_FRAGMENT_SHADER.includes('float riverTransport = riverS')
+    && HYDRO_FRAGMENT_SHADER.includes('riverTransport * 0.12')
+    && HYDRO_FRAGMENT_SHADER.includes('along = riverTransport')
+    && HYDRO_FRAGMENT_SHADER.includes('transportedDownstream = riverTransport'),
+  'grain, current lanes and foam share one non-shearing river transport clock');
+  assert(HYDRO_FRAGMENT_SHADER.includes('float foamSource = 0.0')
+    && HYDRO_FRAGMENT_SHADER.includes('float energyRise')
+    && HYDRO_FRAGMENT_SHADER.includes('float crestRise')
+    && HYDRO_FRAGMENT_SHADER.includes('float constriction')
+    && HYDRO_FRAGMENT_SHADER.includes('float foamAge'),
+  'river foam begins from energy, shallow-crest, constriction and fall evidence before ageing downstream');
+  assert(HYDRO_FRAGMENT_SHADER.includes('float slowFacet = cos(riverS * 0.22 + seed * 4.1)')
+    && !HYDRO_FRAGMENT_SHADER.includes('riverS * 0.22 - uTime'),
+  'standing rapid facets remain anchored while transported material crosses them');
+  assert(HYDRO_FRAGMENT_SHADER.includes('mix(1.0, 0.3, smoothstep(0.9, 3.5, geometryField.a))')
+    && HYDRO_FRAGMENT_SHADER.includes('vFlowing);'),
+  'depth-based energy damping is restricted to the flowing regime');
+  assert(HYDRO_FRAGMENT_SHADER.includes('float metresPerPixel')
+    && HYDRO_FRAGMENT_SHADER.includes('float structurePixelLod')
+    && HYDRO_FRAGMENT_SHADER.includes('float skinPixelLod')
+    && HYDRO_FRAGMENT_SHADER.includes('float bedPixelLod'),
+  'body, structure, skin and broad bed detail resolve against projected footprint');
+  assert(HYDRO_VERTEX_SHADER.includes('float swellTransmission')
+    && HYDRO_VERTEX_SHADER.includes('float localWindTransmission')
+    && HYDRO_VERTEX_SHADER.includes('swellTransmission')
+    && HYDRO_VERTEX_SHADER.includes('localWindTransmission'),
+  'incoming swell and locally generated wind waves respond separately to coastal shelter');
+  assert(HYDRO_VERTEX_SHADER.includes('vCoastProfile = 4.0')
+    && HYDRO_VERTEX_SHADER.includes('float platformShelf')
+    && HYDRO_VERTEX_SHADER.includes('float shoreReach')
+    && HYDRO_VERTEX_SHADER.includes('cliffProfile * 0.28')
+    && HYDRO_FRAGMENT_SHADER.includes('shingleProfile * 0.52'),
+  'beach, shingle, platform, cliff and sheltered-inlet profiles have distinct depth, break and wash responses');
+  assert(!HYDRO_FRAGMENT_SHADER.includes('trough *= mix(1.0, 0.48, pointBar)')
+    && HYDRO_FRAGMENT_SHADER.includes('The large shelf is now cut into terrain'),
+  'large point bars are terrain-owned while the water shader retains their mineral skin');
+  assert(HYDRO_FRAGMENT_SHADER.includes('if (bedLod > 0.015)')
+    && !HYDRO_FRAGMENT_SHADER.includes('if (nearWater) {\n    float clearDepthM'),
+  'broad shallow-bed structure is no longer cut off by the shorter near-water branch');
   assert(HYDRO_FRAGMENT_SHADER.includes('riverEddyField')
     && HYDRO_FRAGMENT_SHADER.includes('riverEddyTone'),
   'bend-driven eddies affect both normals and restrained water tone');
   assert(HYDRO_FRAGMENT_SHADER.includes('rigTrailField')
     && HYDRO_FRAGMENT_SHADER.includes('uRigTrail[8]'),
   'recent wetted vehicle positions leave an ageing surface trail');
+  assert(HYDRO_FRAGMENT_SHADER.includes('float sediment = 0.0')
+    && HYDRO_FRAGMENT_SHADER.includes('float sedimentPlume')
+    && HYDRO_FRAGMENT_SHADER.includes('float softBed'),
+  'vehicle history raises a delayed sediment plume over soft beds');
+  assert(HYDRO_FRAGMENT_SHADER.includes('dropJitter')
+    && HYDRO_FRAGMENT_SHADER.includes('float cadence')
+    && HYDRO_FRAGMENT_SHADER.includes('uRain * (1.0 - skinPixelLod)'),
+  'rain impacts jitter in position and cadence and retire into aggregate roughness');
+  assert(HYDRO_VERTEX_SHADER.includes('vShoreCycle = shorePhase')
+    && HYDRO_FRAGMENT_SHADER.includes('float recentlyWashed')
+    && HYDRO_FRAGMENT_SHADER.includes('vec3 wetTerrain'),
+  'retreating surf retains a phase-history wet strip over exposed terrain');
   assert(!HYDRO_FRAGMENT_SHADER.includes('edgeDither'),
     'river coverage does not duplicate the global dither pipeline');
   assert(HYDRO_FRAGMENT_SHADER.includes('#ifdef HYDRO_EDGE_BLEND')

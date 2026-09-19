@@ -1,3 +1,4 @@
+import type { SupportContact } from './types';
 import {
   appendProductionRoadArch,
   appendProductionRoadBatter,
@@ -10,6 +11,7 @@ import {
   buildCulvertBoreGeometry,
   buildCulvertHeadwallGeometry,
   buildProductionCulvert,
+  buildProductionFord,
   buildProductionGalleryGeometry,
   buildProductionHydroFixture,
   buildProductionRoadSurfaceGeometry,
@@ -20,6 +22,11 @@ import {
   buildSubstrateTile,
   blendProductionTerrainHydroBank,
   findProductionDriveWaterOverlaps,
+  FORD_LIP_M,
+  FORD_MAX_HALF_M,
+  FORD_POST_H_M,
+  FORD_PROUD_M,
+  FORD_SILL_DROP_M,
   makeCrossingFixture,
   pointInProductionCrossingFootprint,
   productionDriveAuthoringRevision,
@@ -196,9 +203,13 @@ export function runSubstrateSelfTest(): void {
   'render-layer witnesses must bind atomically with an empty visual packet layer');
 
   const defaultMode = resolveProductionSubstrateMode(null);
-  assert(defaultMode.name === 'contact' && defaultMode.contact && defaultMode.shadow
-    && !defaultMode.render && !defaultMode.rollback,
-  'ordinary production URLs must default to canonical contact with shadow');
+  assert(defaultMode.name === 'render' && defaultMode.render && defaultMode.contact
+    && defaultMode.shadow && !defaultMode.rollback,
+  'ordinary production URLs must default to the substrate owning the picture');
+  const contactMode = resolveProductionSubstrateMode('contact');
+  assert(contactMode.name === 'contact' && contactMode.contact && contactMode.shadow
+    && !contactMode.render && !contactMode.rollback,
+  'contact is the rollback that keeps the substrate answering the wheels');
   const rollbackMode = resolveProductionSubstrateMode('legacy');
   assert(rollbackMode.name === 'legacy' && !rollbackMode.contact && rollbackMode.shadow
     && rollbackMode.rollback,
@@ -505,7 +516,131 @@ export function runSubstrateSelfTest(): void {
   assert(productionFordFallback.outcome === 'ford-fallback'
     && productionFordFallback.tooTight
     && !productionFordFallback.bore,
-  'a wet overlap without buried room must remain a geometry-free ford');
+  'a wet overlap without buried room must build no CONDUIT — the drift itself '
+  + 'is ford-detail.ts, and the culvert builder must not author it');
+  // ── THE DRIFT ──
+  //
+  // A watercourse running along +x under a carriageway running along +z: the
+  // stations are the WATER'S, so stations 1..5 walk ACROSS the tarmac and the
+  // perpendicular offsets at each of them run ALONG the road. Getting that the
+  // wrong way round is the one mistake that produces a plausible-looking slab
+  // lying up the river instead of across it, so the extents are asserted on
+  // both axes by name rather than by area.
+  const fordStations: Array<[number, number]> = [
+    [-6, 0], [-4, 0], [-2, 0], [0, 0], [2, 0], [4, 0], [6, 0],
+  ];
+  const fordDeck = [null, 10, 10, 10, 10, 10, null];
+  const drift = buildProductionFord({
+    stations: fordStations,
+    deckY: fordDeck,
+    invertY: [6, 6, 6, 6, 6, 6, 6],
+    groundY: [7, 7, 7, 7, 7, 7, 7],
+    coreStart: 1,
+    coreEnd: 5,
+    waterHalfWidthM: 3,
+    waterSurfaceY: 10.5,
+  });
+  assert(drift.outcome === 'built', 'a ford over a carriageway must build a drift');
+  const driftXYZ = (a: Float32Array): { x: number[]; y: number[]; z: number[] } => {
+    const x: number[] = []; const y: number[] = []; const z: number[] = [];
+    for (let i = 0; i < a.length; i += 3) { x.push(a[i]); y.push(a[i + 1]); z.push(a[i + 2]); }
+    return { x, y, z };
+  };
+  const apron = driftXYZ(drift.apron);
+  assert(drift.apron.length > 0 && drift.apron.every(Number.isFinite),
+    'the apron must be a finite, non-empty surface');
+  close(Math.min(...apron.y), 10 + FORD_PROUD_M, 1e-6,
+    'every apron vertex sits at the deck the road already solved, plus the proud');
+  close(Math.max(...apron.y), 10 + FORD_PROUD_M, 1e-6,
+    'an apron laid on one deck height must be flat');
+  assert(FORD_PROUD_M > 0.04,
+    'the apron has to clear the road ribbon own 4 cm lift or the two fight for depth');
+  close(Math.max(...apron.x) - Math.min(...apron.x), 8, 1e-6,
+    'ACROSS the road the apron spans the carriageway, station 1 to station 5');
+  close(drift.widthM, 8, 1e-6, 'widthM is the carriageway width forded');
+  close(Math.max(...apron.z) - Math.min(...apron.z), 2 * (3 + FORD_LIP_M), 1e-6,
+    'ALONG the road the apron spans the drawn water plus a lip each side');
+  close(drift.lengthM, 2 * (3 + FORD_LIP_M), 1e-6, 'lengthM is that same span');
+  close(drift.depthOverApronM ?? NaN, 0.5 - FORD_PROUD_M, 1e-6,
+    'the standing water over a drift is measured against the apron, not the deck');
+  const sills = driftXYZ(drift.sills);
+  close(Math.max(...sills.y), 10 + FORD_PROUD_M, 1e-6, 'a cutoff sill hangs FROM the apron');
+  close(Math.min(...sills.y), 10 + FORD_PROUD_M - FORD_SILL_DROP_M, 1e-6,
+    'and drops its stated depth where the bed is deeper than that');
+  const posts = driftXYZ(drift.posts);
+  assert(drift.postCount === 4, 'a drift is marked at all four of its corners');
+  close(Math.min(...posts.y), 10, 1e-6, 'a marker post stands on the deck');
+  close(Math.max(...posts.y), 10 + FORD_POST_H_M, 1e-6, 'at its stated height');
+  assert(Math.max(...posts.z) > Math.max(...apron.z),
+    'the posts stand OUTBOARD of the apron, where an approaching driver meets them');
+  // A shallow bed is the sill's own floor: a lip that reached the invert of a
+  // deep pool would be a wall standing in the river rather than an edge.
+  const shallow = buildProductionFord({
+    stations: fordStations,
+    deckY: fordDeck,
+    invertY: [9.8, 9.8, 9.8, 9.8, 9.8, 9.8, 9.8],
+    groundY: [9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9],
+    coreStart: 1,
+    coreEnd: 5,
+    waterHalfWidthM: 3,
+    waterSurfaceY: null,
+  });
+  assert(shallow.outcome === 'built', 'a shallow channel still takes a drift');
+  close(Math.min(...driftXYZ(shallow.sills).y), 9.8, 1e-6,
+    'a sill stops at the bed rather than driving on past it');
+  assert(shallow.depthOverApronM === null,
+    'with no resting level the depth over the apron is unknown, not zero');
+  // The three refusals, each named. `asked - built` is a number; `noDeck` is a
+  // fault with an address.
+  assert(buildProductionFord({
+    stations: fordStations,
+    deckY: [null, 10, null, 10, 10, 10, null],
+    invertY: [6, 6, 6, 6, 6, 6, 6],
+    groundY: [7, 7, 7, 7, 7, 7, 7],
+    coreStart: 1, coreEnd: 5, waterHalfWidthM: 3,
+  }).outcome === 'no-deck',
+  'a core station with no carriageway over it is not a ford to lay an apron on');
+  assert(buildProductionFord({
+    stations: fordStations,
+    deckY: fordDeck,
+    invertY: [6, 6, 6, 6, 6, 6, 6],
+    groundY: [7, 7, 7, 7, 7, 7, 7],
+    coreStart: 1, coreEnd: 5, waterHalfWidthM: FORD_MAX_HALF_M,
+  }).outcome === 'too-wide',
+  'past the drift bound the crossing is a causeway nobody tagged, not an apron');
+  assert(buildProductionFord({
+    stations: fordStations,
+    deckY: fordDeck,
+    invertY: [6, 6, 6, 6, 6, 6, 6],
+    groundY: [7, 7, 7, 7, 7, 7, 7],
+    coreStart: 3, coreEnd: 3, waterHalfWidthM: 3,
+  }).outcome === 'no-span',
+  'one station with no road width to go on is a touch, not a crossing');
+  // ── AND ONE STATION WITH A ROAD WIDTH IS THE COMMON CASE ──
+  //
+  // A watercourse is densified for its own geometry, so at a track a few
+  // metres wide the core is routinely a single station — seven of nine
+  // crossings at Chapman's Peak, every one of them refused by the first cut
+  // as `no-span`. The second point is not missing evidence, it is the
+  // carriageway's own half width along the channel.
+  const narrow = buildProductionFord({
+    stations: fordStations,
+    deckY: fordDeck,
+    invertY: [6, 6, 6, 6, 6, 6, 6],
+    groundY: [7, 7, 7, 7, 7, 7, 7],
+    coreStart: 3, coreEnd: 3, waterHalfWidthM: 3, roadHalfWidthM: 2.5,
+  });
+  assert(narrow.outcome === 'built',
+    'a single-station core with a carriageway width over it still builds a drift');
+  close(narrow.widthM, 5, 1e-6,
+    'and the drift it builds is exactly that carriageway wide');
+  const narrowApron = driftXYZ(narrow.apron);
+  close(Math.min(...narrowApron.x), -2.5, 1e-6,
+    'the synthesised span is centred on the crossing station');
+  close(Math.max(...narrowApron.x), 2.5, 1e-6,
+    'and reaches the carriageway half width each way along the channel');
+  close(Math.max(...narrowApron.z) - Math.min(...narrowApron.z), 2 * (3 + FORD_LIP_M), 1e-6,
+    'while ALONG the road it spans the water and its lips, exactly as a wide core does');
   const galleryGeometry = buildProductionGalleryGeometry({
     stations: [[0, 0], [10, 0], [20, 5]],
     profileY: [1, 1.2, 1.4],
@@ -1982,6 +2117,56 @@ export function runSubstrateSelfTest(): void {
     'exact channel speed authority must remain explicit');
   assert(exactHydroContact.water.waterId === 'water:exact',
     'exact channel identity must survive in production contact');
+  // THE PRECISE FIELD'S "DRY" IS FINAL. The sampler asked the exact hydro
+  // field first and, finding no water at the point, fell through to the
+  // 33x33 witness raster — which treated "the precise field says dry" as
+  // "precise information is unavailable". A wet raster cell 60-70 m wide
+  // then resurrected water contact 24 m from an 8 m channel: wet, two metres
+  // deep, where the field said dry. Reported from the seat as block-shaped
+  // wet patches beside rivers, with the surface classifier, the wheels and
+  // the splash all consuming the invented fluid.
+  const rasterWetEverywhere = (x: number, z: number, support: SupportContact) =>
+    sampleHydroContactLayers(matchedField, 0, 0, support);
+  const coarseWetTile = buildProductionSubstrateTile({
+    key: 'production-coarse-wet',
+    revision: 11,
+    sourceRevisions: { terrain: 1, hydroDetails: 0, hydro: matchedField.revision, crossings: 0 },
+    driveRenderGeneration: 'test:none:0',
+    structureRenderGeneration: 'test:none:structure:0',
+    bounds: matchedField.bounds,
+    resolution: 3,
+    hydroField: matchedField,
+    waterCoverageCutAt: () => .5,
+    sampleGround: () => ({ yM: matchedCentre.ground.yM }),
+    sampleDrive: () => undefined,
+    sampleWater: rasterWetEverywhere,
+    sampleCrossing: () => undefined,
+  });
+  assert(sampleHydroContactLayers(matchedField, 24, 0, at(matchedTile, 24, 0).support) === undefined,
+    'the precise field must be dry 24 m from the channel centre');
+  const insideChannel = sampleProductionSubstrateTile(coarseWetTile, 0, 0);
+  assert(insideChannel?.water && insideChannel.water.coverage > .5,
+    'inside the channel the precise field answers wet');
+  const besideChannel = sampleProductionSubstrateTile(coarseWetTile, 24, 0);
+  assert(besideChannel && !besideChannel.water && !besideChannel.fluid,
+    `24 m from the channel the precise field's dry is final — the coarse raster must not resurrect water (saw ${
+      besideChannel?.water ? `${besideChannel.water.kind} ${besideChannel.water.depthM.toFixed(2)} m deep` : 'none'})`);
+  const noFieldTile = buildProductionSubstrateTile({
+    key: 'production-no-field',
+    revision: 12,
+    sourceRevisions: { terrain: 1, hydroDetails: 0, hydro: 0, crossings: 0 },
+    driveRenderGeneration: 'test:none:0',
+    structureRenderGeneration: 'test:none:structure:0',
+    bounds: matchedField.bounds,
+    resolution: 3,
+    sampleGround: () => ({ yM: matchedCentre.ground.yM }),
+    sampleDrive: () => undefined,
+    sampleWater: rasterWetEverywhere,
+    sampleCrossing: () => undefined,
+  });
+  assert(sampleProductionSubstrateTile(noFieldTile, 24, 0)?.water,
+    'without a precise field the raster is still the fallback');
+
   const exactHydroStore = new ProductionSubstrateStore();
   const emptyLookup = exactHydroStore.lookup(0, 0);
   assert(emptyLookup.status === 'unavailable' && emptyLookup.reason === 'no-tile',
@@ -1992,6 +2177,35 @@ export function runSubstrateSelfTest(): void {
     && exactLookup.tileKey === exactHydroTile.key
     && exactLookup.tileRevision === exactHydroTile.revision,
   'an admitted production tile must expose revisioned availability');
+  // REVISIONS CONSUMED AT LOOKUP. A tile built on terrain 1 / hydro 5 must
+  // not answer for a world at terrain 2 or hydro 6: stale is an explicit
+  // unavailable with its reason, never a stale ground or another field's
+  // water, and the monitor counts each reason.
+  const staleStore = new ProductionSubstrateStore();
+  staleStore.upsert(exactHydroTile);
+  let world = { terrain: 1, hydro: exactHydroTile.sourceRevisions.hydro };
+  staleStore.setRevisionSource(() => world);
+  assert(staleStore.lookup(0, 34).status === 'available', 'a tile at the world\'s revisions is served');
+  world = { terrain: 2, hydro: exactHydroTile.sourceRevisions.hydro };
+  const staleTerrain = staleStore.lookup(0, 34);
+  assert(staleTerrain.status === 'unavailable' && staleTerrain.reason === 'stale-terrain'
+    && staleTerrain.tileKey === exactHydroTile.key,
+    'a tile built on another terrain revision is stale-terrain, not served');
+  world = { terrain: 1, hydro: exactHydroTile.sourceRevisions.hydro + 1 };
+  const staleHydro = staleStore.lookup(0, 34);
+  assert(staleHydro.status === 'unavailable' && staleHydro.reason === 'stale-hydro',
+    'a tile built on another hydro field revision is stale-hydro, not served');
+  const staleMonitor = new SubstrateFallbackMonitor();
+  assert(!staleMonitor.consume('wheel-support', 0, 34, staleHydro), 'a stale lookup reaches the legacy consumer');
+  assert(!staleMonitor.consume('surface', 0, 34, staleTerrain), 'a stale lookup reaches the legacy consumer');
+  const staleSnapshot = staleMonitor.snapshot();
+  assert(staleSnapshot.reasons.staleHydro === 1 && staleSnapshot.reasons.staleTerrain === 1
+    && staleSnapshot.lastFallback?.reason === 'stale-terrain',
+    'the monitor counts stale-terrain and stale-hydro apart from no-tile');
+  world = { terrain: 1, hydro: exactHydroTile.sourceRevisions.hydro };
+  assert(staleStore.lookup(0, 34).status === 'available', 'the same tile is served again once the world agrees');
+  staleStore.setRevisionSource(null);
+
   const fallbackMonitor = new SubstrateFallbackMonitor();
   assert(fallbackMonitor.consume('fluid', 0, 34, exactLookup)?.water,
     'available contact consumers must receive the tile contact');

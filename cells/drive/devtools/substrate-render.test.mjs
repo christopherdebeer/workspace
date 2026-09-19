@@ -16,8 +16,16 @@ const ok = (name, condition, saw) => {
   console.log(`${condition ? 'ok  ' : 'FAIL'}  ${name}${condition ? '' : `\n        saw ${JSON.stringify(saw)}`}`);
 };
 
+// THE GATE OPENS ON AN ORDINARY URL, WHICH IS THE POINT OF IT NOW. The
+// substrate owns the picture by default (`mode.ts`'s `default:` case), so
+// asking for `?substrate=render` here would certify a flag rather than the
+// thing every player loads. `MODE=` forces one — `contact` is the rollback and
+// the control that separates a fault in the render path from one in the world
+// both modes share.
+const MODE = process.env.MODE || '';
+const MODE_Q = MODE ? `&substrate=${MODE}` : '';
 const d = await openDrive({
-  spot: 'fixture=at-senqu-ford&cam=chase&substrate=render&time=DAY',
+  spot: `fixture=at-senqu-ford&cam=chase${MODE_Q}&time=DAY`,
   tag: 'substrate-render-cutover',
   settle: 12000,
   bootTimeout: 90000,

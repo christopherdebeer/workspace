@@ -554,6 +554,9 @@ class DefaultHydroSystem implements HydroSystem {
       riverEdgeStrength: finite(patch.riverEdgeStrength, this.tuning.riverEdgeStrength),
       turbulenceStrength: finite(patch.turbulenceStrength, this.tuning.turbulenceStrength),
       eddyStrength: finite(patch.eddyStrength, this.tuning.eddyStrength),
+      absorptionStrength: finite(patch.absorptionStrength, this.tuning.absorptionStrength),
+      scatteringStrength: finite(patch.scatteringStrength, this.tuning.scatteringStrength),
+      surfaceRoughness: finite(patch.surfaceRoughness, this.tuning.surfaceRoughness),
     };
     this.frameUniforms.uWaveAmplitude.value = this.tuning.waveAmplitude;
     this.frameUniforms.uWaveLength.value = this.tuning.waveLength;
@@ -565,6 +568,9 @@ class DefaultHydroSystem implements HydroSystem {
     this.frameUniforms.uRiverEdgeStrength.value = this.tuning.riverEdgeStrength;
     this.frameUniforms.uTurbulenceStrength.value = this.tuning.turbulenceStrength;
     this.frameUniforms.uEddyStrength.value = this.tuning.eddyStrength;
+    this.frameUniforms.uAbsorptionStrength.value = this.tuning.absorptionStrength;
+    this.frameUniforms.uScatteringStrength.value = this.tuning.scatteringStrength;
+    this.frameUniforms.uSurfaceRoughness.value = this.tuning.surfaceRoughness;
   }
 
   getTuning(): Readonly<HydroTuning> { return { ...this.tuning }; }

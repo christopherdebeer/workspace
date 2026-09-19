@@ -16,6 +16,9 @@ import {
 import { nearestSegment } from './geometry';
 import { extractFlowingHydroShoreSegments } from './shore-contour';
 import { createHydroSystem, type HydroSystem } from './system';
+import type { SceneShade } from './material';
+import { HYDRO_SCENE_SKY_GLSL } from './scene-sky';
+import { CLOUD_DECK_Y, CLOUD_SCALE } from '../cloud-field';
 import {
   bankHabitat,
   bankPatch,
@@ -90,6 +93,19 @@ const FIXTURES: readonly Fixture[] = [
       area('lab:lagoon', 'lagoon', .35,
         [55,-130, 150,-150, 205,-85, 175,-20, 85,-35, 45,-82], [],
         { roughness: .22, turbidity: .48 }),
+    ],
+  },
+  {
+    id: 'cliff', label: 'COAST / ROCK CLIFF', originY: 0, oceanLevelM: 0,
+    note: 'A steep rock coast exercises the narrow impact band and restrained reflected wave response. Compare it with the broad shelving beach and sheltered lagoon in COAST / OCEAN MASK.',
+    height: (x, z) => x < -22
+      ? -11 + Math.sin(z * .028) * .55
+      : (x + 22) * .31 + Math.sin(z * .034) * 2.8 + Math.sin(x * .08) * 1.1,
+    ocean: (x, z) => x < -15 + Math.sin(z * .024) * 10 ? 1 : 0,
+    features: [
+      area('lab:cliff-sea', 'ocean', 0,
+        [-300,-300, -8,-300, -8,300, -300,300], [],
+        { roughness: .58, turbidity: .14, bedMaterial: 'rock', bankMaterial: 'rock' }),
     ],
   },
   {
@@ -281,6 +297,10 @@ function page(): string {
     + range('amplitude','WAVE AMP',0,3,.01,1) + range('length','WAVE LENGTH',.2,3,.01,1)
     + range('chop','CREST CHOP',0,3,.01,1)
     + range('ripple','RIPPLE',0,3,.01,1) + range('foam','FOAM',0,3,.01,1) + range('shore','SHORE FADE',.2,3,.01,1)
+    + '</details><details class="section" data-section="optics" open><summary class="st">WATER OPTICS</summary>'
+    + range('absorption','ABSORPTION',0,3,.01,1)
+    + range('scattering','SUSPENSION',0,3,.01,1)
+    + range('roughness','ROUGHNESS',0,3,.01,1)
     + '</details><details class="section" data-section="river" open><summary class="st">RIVER DETAIL</summary>'
     + '<div class="row wide"><label>ISOLATE</label><select id="detailPreset">'
     + '<option>ALL</option><option>BED / SHALLOWS</option><option>BANK EDGES</option>'
@@ -319,6 +339,7 @@ function makeTerrain(
 ): THREE.Mesh {
   const channels: Array<{
     profile: Float32Array;
+    curvature: Float32Array;
     halfW: number;
     kind: 'river' | 'stream' | 'canal';
   }> = [];
@@ -327,11 +348,37 @@ function makeTerrain(
     if (feature.geometry.type !== 'line') continue;
     const profile = analysis.profiles.get(`${feature.id}#${i}`)
       ?? analysis.profiles.get(feature.id);
-    if (profile) channels.push({
-      profile,
-      halfW: feature.geometry.widthM * 0.5,
-      kind: feature.kind as 'river' | 'stream' | 'canal',
-    });
+    if (profile) {
+      const count = profile.length / 3;
+      const curvature = new Float32Array(count);
+      for (let p = 1; p + 1 < count; p++) {
+        const a = p * 3;
+        const ax = profile[a] - profile[a - 3];
+        const az = profile[a + 1] - profile[a - 2];
+        const bx = profile[a + 3] - profile[a];
+        const bz = profile[a + 4] - profile[a + 1];
+        const al = Math.hypot(ax, az), bl = Math.hypot(bx, bz);
+        if (al < 1e-6 || bl < 1e-6) continue;
+        curvature[p] = ((ax / al) * (bz / bl) - (az / al) * (bx / bl))
+          / Math.max(1e-6, (al + bl) * .5);
+      }
+      if (count > 2) {
+        curvature[0] = curvature[1];
+        curvature[count - 1] = curvature[count - 2];
+        const unsmoothed = curvature.slice();
+        for (let p = 1; p + 1 < count; p++) {
+          curvature[p] = (
+            unsmoothed[p - 1] + unsmoothed[p] * 2 + unsmoothed[p + 1]
+          ) * .25;
+        }
+      }
+      channels.push({
+        profile,
+        curvature,
+        halfW: feature.geometry.widthM * 0.5,
+        kind: feature.kind as 'river' | 'stream' | 'canal',
+      });
+    }
   }
   const carvedHeight = (x: number, z: number): number => {
     let ground = f.height(x, z);
@@ -344,10 +391,21 @@ function makeTerrain(
       const surface = channel.profile[a + 2] * (1 - hit.t)
         + channel.profile[b + 2] * hit.t;
       const bed = surface - FLOWING_NOMINAL_DEPTH_M;
+      const signedAcross = hit.tangentX * (z - hit.z)
+        - hit.tangentZ * (x - hit.x);
+      const n = signedAcross / Math.max(.5, channel.halfW);
+      const curvature = channel.curvature[hit.segment] * (1 - hit.t)
+        + (channel.curvature[hit.segment + 1] ?? channel.curvature[hit.segment]) * hit.t;
+      const curve = THREE.MathUtils.smoothstep(Math.abs(curvature), .0015, .009);
+      const shelf = THREE.MathUtils.smoothstep(Math.abs(n), .30, .94);
+      const barRise = curvature * n > 0
+        ? curve * shelf * Math.min(.48, .12 + channel.halfW * .035)
+        : 0;
+      const shapedBed = bed + barRise;
       const bank = THREE.MathUtils.smoothstep(
         hit.distanceM, channel.halfW, channel.halfW + shoulder,
       );
-      ground = Math.min(ground, bed + (ground - bed) * bank);
+      ground = Math.min(ground, shapedBed + (ground - shapedBed) * bank);
     }
     return ground;
   };
@@ -469,7 +527,7 @@ function makeTerrain(
     cutL: heightTile.w / terrainSegments,
     channels: new Map(),
     grid: heightTile.w / terrainSegments,
-    hydroBreakLines: () => breakLines,
+    hydroBreakLines: () => breakLines, hydroFloor: () => null, hydroBank: () => null,
     onRoad: () => false,
     palette: (_elevAbs, _slope, _cover, x, z) => colourAt(x, z),
     areaTint: () => null,
@@ -755,6 +813,33 @@ export async function startHydroLab(): Promise<void> {
     b: (sun.color.b * sun.intensity * sunUp + hemi.color.b * hemi.intensity) / Math.PI,
   };
   const labSkyColour = { r: hemi.color.r, g: hemi.color.g, b: hemi.color.b };
+  const labCloudTexture = new THREE.DataTexture(
+    new Uint8Array([158, 54, 0, 255]),
+    1, 1, THREE.RGBAFormat, THREE.UnsignedByteType,
+  );
+  labCloudTexture.needsUpdate = true;
+  const labCloudDrift = new THREE.Vector2();
+  const labSceneShade: SceneShade = {
+    head: HYDRO_SCENE_SKY_GLSL,
+    reflectsSky: true,
+    uniforms: {
+      uCsTex: { value: labCloudTexture },
+      uCsMin: { value: new THREE.Vector2(BOUNDS.minX, BOUNDS.minZ) },
+      uCsInv: { value: 1 / (BOUNDS.maxX - BOUNDS.minX) },
+      uCsOn: { value: .62 },
+      uCsDrift: { value: labCloudDrift },
+      uCsSkew: { value: new THREE.Vector2(
+        sun.position.x / sun.position.y,
+        sun.position.z / sun.position.y,
+      ) },
+      uCsDeckY: { value: CLOUD_DECK_Y },
+      uCsScale: { value: CLOUD_SCALE },
+      uCsMpp: { value: 0 },
+      uCsSunDisc: { value: new THREE.Vector3(.98, .72, .38) },
+      uCsLow: { value: 0 },
+      uCsNight: { value: 0 },
+    },
+  };
 
   const camera = new THREE.PerspectiveCamera(46, innerWidth / innerHeight, .5, 2200);
   const target = new THREE.Vector3();
@@ -861,6 +946,8 @@ export async function startHydroLab(): Promise<void> {
     rippleStrength: number('ripple'), foamStrength: number('foam'), shoreFade: number('shore'),
     shallowBedStrength: number('bed'), riverEdgeStrength: number('edge'),
     turbulenceStrength: number('turbulence'), eddyStrength: number('eddies'),
+    absorptionStrength: number('absorption'), scatteringStrength: number('scattering'),
+    surfaceRoughness: number('roughness'),
   });
   const apply = (): void => {
     if (!hydro) return;
@@ -903,6 +990,7 @@ export async function startHydroLab(): Promise<void> {
       fieldResolution: Number(get<HTMLSelectElement>('field').value),
       meshResolution: Number(get<HTMLSelectElement>('mesh').value),
       oceanLevelM: fixture.oceanLevelM,
+      sceneShade: labSceneShade,
     });
     scene.add(hydro.object3d);
     await hydro.upsertTile(input);
@@ -1117,6 +1205,10 @@ export async function startHydroLab(): Promise<void> {
   const frame = (now: number): void => {
     const angle = number('direction') * Math.PI / 180;
     const elapsed = (now - started) / 1000;
+    labCloudDrift.set(
+      Math.cos(angle) * elapsed * number('wind') * .00009,
+      Math.sin(angle) * elapsed * number('wind') * .00009,
+    );
     const wakeDemo = get<HTMLInputElement>('wakeDemo').checked;
     const demoRig = wakeDemo && analysis
       // Start near the fixture's central inspection bend, not 300m upstream
@@ -1184,6 +1276,7 @@ export async function startHydroLab(): Promise<void> {
     (riverDetails?.userData.dispose as (() => void) | undefined)?.();
     rigMarker.geometry.dispose();
     (rigMarker.material as THREE.Material).dispose();
+    labCloudTexture.dispose();
     renderer.dispose();
   }, { once: true });
 }

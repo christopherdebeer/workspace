@@ -14,6 +14,10 @@
  * our own — the public endpoints named in the cell's CSP are the whole
  * backend.
  */
+import { sampleFieldSurface } from './hydro/field-sample';
+import { resolveHydroBankStations, packBankStations, BANK_PROFILE_VERSION, BANK_STRIDE, type HydroBankResult } from './hydro/bank-profile';
+import type { HydroTileField } from './hydro/types';
+import type { HydroShoreSegment } from './hydro/shore-contour';
 import * as THREE from 'three';
 import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, CLIM_G, ClimateField, GROUND_RAMPS, altBandAt, aspectLift, climPick,
   climPickRow, krummholz, siteAt, swardLift, treelineAt, type ClimateSample, type SiteClimate } from './climate';
@@ -25,7 +29,7 @@ import { cracks, makeCanvasTex, moss, speckle, wallTextures } from './wall-tex';
 import { chimneyGeo, flatRoofGeo, flipWinding, roofGeo } from './roof';
 import { drawRailTexture, railRepeatY, railSpec, type RailSpec } from './railway';
 import { morphology, plan as footprintPlan } from './morphology';
-import { nearestStable, squareRings, uploadPrefix } from './render-work';
+import { nearestPrefix, nearestStable, squareRings, uploadPrefix } from './render-work';
 import {
   WATERLINE_CUT,
   bankHabitat,
@@ -58,8 +62,10 @@ import { GLOBE_R, PLANET_SUN_GLSL, globeGeometry, globeHit, globeMaterial, globe
 import { createHydroSystem, extractFlowingHydroShoreSegments, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSurfaceOccluder, type HydroSystem, type OceanCoverage } from './hydro';
 import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipment';
 import { createRigModel, OVERLAND, RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
+import { hullPushFromSegment, hullPointDistanceM, hullRadiusM, type HullBox } from './hull-collide';
 import { createWireMaterialPolicy } from './wire-material';
 import { createWildlifeWire } from './wildlife-wire';
+import { createWildlife } from './wildlife';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -70,6 +76,8 @@ import { inlandComponents, inlandMask, maskSignature } from './inland-water';
 import { pointInPolygon } from './hydro/geometry';
 import { HYDRO_BUILD_PROF, setHydroBoundProbe } from './hydro/build-tile';
 import type { SceneShade } from './hydro/material';
+import { HYDRO_SCENE_SKY_GLSL } from './hydro/scene-sky';
+import { CLOUD_DECK_Y, CLOUD_GLSL, CLOUD_SCALE } from './cloud-field';
 import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainCrossingMask, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
 import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-worker';
 // THE TERRAIN KERNEL, instantiated once for the synchronous path and the
@@ -90,7 +98,11 @@ import { gramDecode } from './facade-grammar';
 import { GRASS_M2, GRASS_UNKNOWN, GRASS_DEFAULT, swardCoverEvidence, SWARD_EV }
   from './sward-cover';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
-import { startLab } from './labs';
+import { embeddedLab, startLab } from './labs';
+import { RasterPaintSession, type EditableRasterTile } from './world-authoring-raster';
+import { DemPaintSession, type DemBrush, type EditableDemTile } from './world-authoring-dem';
+import { PolylinePaintSession, type AuthoredPolyline } from './world-authoring-vector';
+import { startWorldAuthoringLab, type AuthoringLayer, type AuthoringPreview } from './world-authoring-lab';
 import { IMPOSTOR_FORMS, IMPOSTOR_WIDTH, impostorFormIndex, impostorGeometry, impostorMaterial } from './tree-impostor';
 import { IMP_ATLAS, IMP_ATLAS_SLOTS, bakeImpAtlasSlot, clearImpAtlas, makeImpAtlasTarget, viewOrigin, type ImpAtlasSlot } from './tree-atlas';
 import { EZ_FAMILIES, EZ_MERGE_PX, EZ_M_PER_SCALE, EZ_NOISE_GLSL, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezDecodeProf, ezHabitatsForSite, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPhenotypeForSite, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
@@ -201,9 +213,8 @@ import {
 } from './substrate/rapid-detail';
 import { resolveProductionHydroReach } from './substrate/hydro-reach';
 import { blendProductionTerrainHydroBank } from './substrate/terrain-hydro';
-import {
-  buildProductionCulvert,
-} from './substrate/culvert-detail';
+import { buildProductionCulvert } from './substrate/culvert-detail';
+import { buildProductionFord } from './substrate/ford-detail';
 import {
   buildProductionGalleryGeometry,
   buildProductionTunnelGeometry,
@@ -220,9 +231,9 @@ import { createVehicleWaterEvidenceRenderer } from './substrate/vehicle-water-re
 // no route here that would want a different one.
 registerAppShell();
 
-// A DISTINCT EXECUTION SURFACE. The labs share the production modules, and
-// the route branch guarantees the game bootstrap and a lab never run
-// together. One branch for all of them now — see labs.ts.
+// A DISTINCT EXECUTION SURFACE. Isolated labs own the page and stop here.
+// Embedded authoring labs deliberately fall through: their subject is this
+// complete game, and their overlay attaches after its authorities exist.
 if (startLab(location.pathname)) {
   // a lab owns the page
 } else {
@@ -438,7 +449,45 @@ const ZOOM_PLANE_MAX = SIGHT_MAX / (CAM.base
  */
 const GLOBE_ALT_MAX = 20000000;
 const ZOOM_MAX = Math.max(ZOOM_PLANE_MAX, GLOBE_ALT_MAX / CAM.base);
-const CAR_R = 2.4;            // collision circle — a real car's half-diagonal plus a whisker
+/**
+ * THE CIRCLE, AND WHAT IS LEFT OF IT.
+ *
+ * This was the truck's whole extent in every contact test, and the comment
+ * here said "a real car's half-diagonal plus a whisker". Measured off the
+ * drawn model, the hull is 1.08 m half-width and 2.546 m half-length, so its
+ * half-diagonal is 2.766 — this is the half-diagonal MINUS 0.37, and a circle
+ * is the right size at a corner and wrong everywhere else anyway. The contact
+ * tests read `rigHull` now (client/hull-collide.ts); what is left for a circle
+ * is the two jobs that genuinely want one conservative number:
+ *
+ *   RAIL_MIN_W   — whether there is room to put a barrier beside a road at
+ *                  all, which wants the truck's width and a lane and is a
+ *                  question about the WORLD's geometry rather than a contact;
+ *   escapeBuildings — the reach of the eviction walk, where being generous is
+ *                  the point.
+ *
+ * Neither is changed here: both would move what the world looks like, and this
+ * unit is about where the truck stops.
+ */
+const CAR_R = 2.4;
+/**
+ * ── THE TRUCK'S OWN SHAPE, MEASURED FROM THE DRAWN MODEL ──
+ *
+ * Not typed in. `CAR_R` was a number someone wrote down about a car this truck
+ * is not, and it stayed wrong for as long as nothing compared it with the
+ * hull. This is the model's own bounding box in plan, taken once at boot and
+ * again whenever the rig or its loadout changes, so the thing the physics
+ * collides with cannot drift from the thing on screen.
+ *
+ * The starting values are the measured ones, so a frame drawn before the model
+ * has been walked is still collided with the right shape rather than nothing.
+ */
+/** ?hull=0 collides as the circle again — the rollback and the one-build A/B. */
+const HULL_ON = qsOn('hull', true);
+let rigHull: HullBox = { halfWidthM: 1.08, halfLengthM: 2.546 };
+let rigHullR = hullRadiusM(rigHull);
+/** What a stray part did to the box, if anything — see `measureRigHull`. */
+const rigHullRaw = { halfWidthM: 1.08, halfLengthM: 2.546, clamped: false };
 
 // ── geo helpers (local metres around the spawn; x=east, z=south) ───
 
@@ -2222,6 +2271,20 @@ function readDialRecord(): Record<string, number> {
  *  terrain colour and the sward's mineral and reed banks. `shore=0` is the
  *  frame colour and hillside grass to the waterline, as it was. */
 const SHORE_ON = qsOn('shore', true);
+/** The bank resolver. Off, no stations are published at all, so the channel
+ *  carve owns every shoreline again and the fringe between its 1:1 bank and
+ *  the drawn waterline comes back — the control every bank-census reading is
+ *  taken against. */
+const BANK_ON = qsOn('bank', true);
+/** The rig's occluded-silhouette overlay, retired to a flag — see the block
+ *  above `rebuildRigSilhouette` for what it drew and why it stopped. */
+const RIG_XRAY = qsOn('rigxray', false);
+/** The drift built at a ford crossing. Off, a ford draws nothing at all —
+ *  which is what this world did until now, because `resolveProductionCrossing`
+ *  gives a ford `implementation: 'not-required'` and that was read as "no
+ *  geometry" rather than "no conduit". The A/B for the apron, its cutoff
+ *  sills and the marker posts; `__fords()` is the count beside it. */
+const FORDS_ON = qsOn('fords', true);
 /** The sward reads the substrate's classification — the brief's own "sward and
  *  terrain from the same field". Off restores the sward that thins for cover,
  *  altitude and the bank and knows nothing about outcrop, which is the exact
@@ -2446,6 +2509,7 @@ function gvLutFor(layer: 'cover' | 'eco'): THREE.DataTexture {
 const gvU = {
   uGView: { value: TDETAIL === 'dom' ? GROUND_VIEW.substrate : GROUND_VIEW.off },
   uGLut: { value: gvLutFor('cover') },
+  uGHeightRange: { value: new THREE.Vector2(-50, 50) },
 };
 let groundView: GroundViewId = TDETAIL === 'dom' ? 'substrate' : 'off';
 /** What the channel returns to when no chip is asking for a view. `tdetail=dom`
@@ -2841,6 +2905,15 @@ const productionCrossings = new ProductionCrossingRegistry();
 /** Last crossing revision consumed by terrain/hydro invalidation. */
 const crossingAppliedRevision = new Map<string, number>();
 const productionSubstrate = new ProductionSubstrateStore();
+// The store asks these at every lookup: the same two maps the tile is built
+// from (`terrainRevision.get(key) ?? 0`, `hydroRev.get(key) ?? 0`), so a
+// tile whose sourceRevisions disagree is stale and answers `unavailable`
+// until the rebuild that terrain apply or the hydro build already queued
+// lands. Installed lazily: the maps are declared thousands of lines below.
+queueMicrotask(() => productionSubstrate.setRevisionSource((key) => ({
+  terrain: terrainRevision.get(key) ?? 0,
+  hydro: hydroRev.get(key) ?? 0,
+})));
 const substrateFallbacks = new SubstrateFallbackMonitor();
 function productionContactAt(
   x: number,
@@ -3508,6 +3581,99 @@ const hydroRev = new Map<string, number>();
 /** Exact flowing-water coverage contours admitted into terrain triangulation.
  * The field owns x/z placement; channel carving continues to own elevation. */
 const hydroShoreBreakLines = new Map<string, BreakLine[]>();
+/** The field's bed under drawn water per tile, on the hydro raster's lattice
+ *  (HYDRO_EN square, absolute metres, NaN where nothing is drawn) — the
+ *  ceiling the terrain kernel holds the ground to. See publishHydroFloor. */
+const hydroFloors = new Map<string, Float32Array>();
+/** The tile's solved bank stations, packed (client/hydro/bank-profile.ts).
+ *  Published with the floor and the breaklines so a tile's water boundary,
+ *  its bed and its bank are one revision's work or none of it. */
+const hydroBanks = new Map<string, Float32Array>();
+/** Per tile, the resolver's own outcome counts — what the diagnostic reads to
+ *  say `bank-no-join` rather than merely "still buried". */
+const hydroBankStats = new Map<string, HydroBankResult['stats']>();
+/**
+ * THE GROUND UNDER DRAWN WATER IS AT MOST THE FIELD'S BED.
+ *
+ * The water census read the Umgeni's riverbank polygon as one buried blob:
+ * the body's level is a low quantile of the DEM inside its outline, so most
+ * of that interior stood above its own water and the drawn surface ran
+ * underground. Nothing had ever moved the terrain to meet a resting level
+ * inland — the channel carve follows a LINE, the coastal drop is the sea's.
+ * This publishes, per tile and per field revision, the bed the field itself
+ * states (resting level minus its depth, which is the DEM where the ground
+ * is already under water and level minus the minimum depth where it is not)
+ * at every lattice point the field draws at the waterline cut; the kernel
+ * lowers vertices to it, roads excepted. The sea is left out: its floor is
+ * SEA_BED's, and an ocean mask bleeding onto a cliff foot must not cut it.
+ * Returns whether the tile's floor changed, so the caller can dirty the
+ * terrain once for lines and floor together.
+ */
+function publishHydroFloor(t: HeightTile, key: string, field: HydroTileField): boolean {
+  const n = HYDRO_EN;
+  const out = new Float32Array(n * n);
+  let any = false;
+  for (let iz = 0; iz < n; iz++) {
+    const z = t.zs + (iz / (n - 1)) * t.h;
+    for (let ix = 0; ix < n; ix++) {
+      const x = t.xs + (ix / (n - 1)) * t.w;
+      const w = sampleFieldSurface(field, x, z, 0);
+      if (!w || w.kind === 'ocean' || w.coverage < WATERLINE_CUT(x, z, w.kind)) { out[iz * n + ix] = NaN; continue; }
+      out[iz * n + ix] = w.restingLevelM - Math.max(w.depthM, .08);
+      any = true;
+    }
+  }
+  const previous = hydroFloors.get(key);
+  if (!any) { if (!previous) return false; hydroFloors.delete(key); return true; }
+  if (previous && previous.length === out.length) {
+    let same = true;
+    for (let i = 0; i < out.length && same; i++) {
+      const a = previous[i], b = out[i];
+      if (Number.isNaN(a) !== Number.isNaN(b) || (!Number.isNaN(a) && Math.abs(a - b) > .01)) same = false;
+    }
+    if (same) return false;
+  }
+  hydroFloors.set(key, out);
+  return true;
+}
+/**
+ * Solve the tile's banks and publish the packet, returning whether it moved.
+ *
+ * Same cadence, same revision and the same `field` as the floor and the
+ * breaklines beside it: a tile's water boundary, its bed and its bank are one
+ * revision's work or none of it, which is what stops a new shoreline being
+ * paired with a bank solved against the last one.
+ */
+function publishHydroBank(key: string, field: HydroTileField, segments: readonly HydroShoreSegment[]): boolean {
+  const previous = hydroBanks.get(key);
+  if (!BANK_ON || !segments.length) {
+    hydroBankStats.delete(key);
+    if (!previous) return false;
+    hydroBanks.delete(key);
+    return true;
+  }
+  const r = resolveHydroBankStations(field, segments, {
+    coverageCut: .5,
+    // One station per contour segment is a station every texel, which is
+    // finer than the field can distinguish; half a texel of spacing keeps
+    // the bend detail and drops the duplicates a marching square emits.
+    minSpacingM: (field.bounds.maxX - field.bounds.minX) / Math.max(1, field.resolution) * .5,
+  });
+  hydroBankStats.set(key, r.stats);
+  const packed = packBankStations(r.stations);
+  if (!packed.length) {
+    if (!previous) return false;
+    hydroBanks.delete(key);
+    return true;
+  }
+  if (previous && previous.length === packed.length) {
+    let same = true;
+    for (let i = 0; i < packed.length && same; i++) if (Math.abs(previous[i] - packed[i]) > .01) same = false;
+    if (same) return false;
+  }
+  hydroBanks.set(key, packed);
+  return true;
+}
 function sameHydroBreakLines(
   a: readonly BreakLine[] | undefined,
   b: readonly BreakLine[],
@@ -3525,8 +3691,9 @@ function sameHydroBreakLines(
 function publishHydroShoreBreakLines(t: HeightTile, key: string): void {
   const field = hydroSys?.fieldAt(t.xs + t.w / 2, t.zs + t.h / 2);
   if (!field || field.key !== key || field.revision !== hydroRev.get(key)) return;
+  const segments = extractFlowingHydroShoreSegments(field, .5, true);
   const lines: BreakLine[] = [];
-  for (const segment of extractFlowingHydroShoreSegments(field, .5, true)) {
+  for (const segment of segments) {
     lines.push({
       ax: segment.a.x,
       az: segment.a.z,
@@ -3535,9 +3702,14 @@ function publishHydroShoreBreakLines(t: HeightTile, key: string): void {
     });
   }
   const previous = hydroShoreBreakLines.get(key);
-  if (sameHydroBreakLines(previous, lines)) return;
-  if (lines.length) hydroShoreBreakLines.set(key, lines);
-  else hydroShoreBreakLines.delete(key);
+  const linesChanged = !sameHydroBreakLines(previous, lines);
+  const floorChanged = publishHydroFloor(t, key, field);
+  const bankChanged = publishHydroBank(key, field, segments);
+  if (!linesChanged && !floorChanged && !bankChanged) return;
+  if (linesChanged) {
+    if (lines.length) hydroShoreBreakLines.set(key, lines);
+    else hydroShoreBreakLines.delete(key);
+  }
   // The first field is allowed to render while this queued topology pass
   // catches up. Render cutover invalidates the whole substrate tile here, so
   // it cannot atomically publish water against the old terrain packet.
@@ -3998,25 +4170,15 @@ function hydroInputSig(
  *  speed and the deck's drift is a vec2; one program cannot hold both. */
 function hydroSceneShade(): SceneShade {
   return {
-    head: `${CLOUD_GLSL}
-      uniform sampler2D uCsTex; uniform vec2 uCsMin; uniform float uCsInv; uniform float uCsOn;
-      uniform vec2 uCsDrift; uniform vec2 uCsSkew; uniform float uCsDeckY; uniform float uCsScale;
-      uniform float uCsMpp;
-      float sceneShade(vec3 p) {
-        if (uCsOn < 0.005) return 1.0;
-        vec2 hit = p.xz + uCsSkew * max(uCsDeckY - p.y, 0.0);
-        // The same edge and the same alias rule as the ground (terrainFx),
-        // or a river on the wide chart would keep the cross its banks lost.
-        vec2 wuv = (hit - uCsMin) * uCsInv;
-        float covL = mix(uCsOn, texture2D(uCsTex, wuv).r, clInLattice(wuv));
-        float wide = 1.0 - smoothstep(15.0, 60.0, uCsMpp);
-        float cs = clCov(clfbm(hit * uCsScale + uCsDrift), covL);
-        return 1.0 - min(covL * 1.4, 1.0) * cs * 0.5 * wide;
-      }`,
+    head: HYDRO_SCENE_SKY_GLSL,
+    reflectsSky: true,
     uniforms: {
       uCsTex: wxU.uWxTex, uCsMin: wxU.uWxMin, uCsInv: wxU.uWxInv, uCsOn: envU.uCloudS,
       uCsDrift: envU.uWind, uCsSkew: envU.uSunSkew, uCsDeckY: envU.uDeckY, uCsScale: envU.uCloudScale,
       uCsMpp: envU.uMpp,
+      uCsSunDisc: skyMat.uniforms.uSunDisc,
+      uCsLow: skyMat.uniforms.uLow,
+      uCsNight: skyMat.uniforms.uNight,
     },
   };
 }
@@ -4483,49 +4645,6 @@ function solarAngles(lat: number, lon: number, when: Date): { alt: number; az: n
   const az = Math.atan2(-Math.sin(ha), Math.tan(dec) * Math.cos(la) - Math.sin(la) * Math.cos(ha));
   return { alt, az };
 }
-/**
- * ONE CLOUD FIELD, for the sky and for the ground it shades.
- *
- * There were two. The sky drew an fBm deck in five octaves on a camera-relative
- * plane; the terrain multiplied a DIFFERENT fBm in four octaves, at a different
- * scale, through a different coverage curve, into its own fragment colour. They
- * shared the cover value and the wind vector, so they thickened and drifted
- * together and looked related — but the shadow crossing the road was never the
- * cloud you could see overhead, because neither field knew where the other one
- * was. It is the sort of mismatch nobody can point at and everybody feels.
- *
- * The deck is now anchored in the WORLD at a fixed altitude, so it has a
- * position both shaders can ask about: the sky intersects it along the view ray,
- * the ground walks up to it along the SUN ray, and both read the same function
- * at the same phase. What that buys, beyond the shadows being honest: the deck
- * parallaxes as you drive, and a shadow's edge arrives at the road at the moment
- * the cloud's edge crosses the sun.
- */
-const CLOUD_DECK_Y = 900;      // metres — high enough to be weather, low enough to move
-const CLOUD_SCALE = 0.0016;    // noise units per metre: patches about 600m across
-const CLOUD_GLSL = `
-  float clh21(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
-  float clvn(vec2 p){
-    vec2 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(clh21(i), clh21(i + vec2(1.0, 0.0)), f.x),
-               mix(clh21(i + vec2(0.0, 1.0)), clh21(i + vec2(1.0, 1.0)), f.x), f.y);
-  }
-  float clfbm(vec2 p){
-    float a = 0.5, s = 0.0;
-    for (int i = 0; i < 4; i++) { s += a * clvn(p); p *= 2.07; a *= 0.5; }
-    return s;
-  }
-  // How much of the sky this bit of deck fills. One curve, so a patch that
-  // reads as solid overhead is solid on the ground too.
-  float clCov(float n, float cover){
-    return smoothstep(0.60 - cover * 0.40, 0.90 - cover * 0.28, n);
-  }
-  // THE LATTICE HAS AN EDGE. The weather field is 48 cells of 256m centred on
-  // the truck — 12.3km — and its texture clamps to its edge texel, so a read
-  // past the edge is the edge's value for ever. 1 inside, 0 outside, blended
-  // over the last few percent so the hand-over is a fade and not a line.
-  float clInLattice(vec2 uv){ vec2 e = abs(uv - 0.5) * 2.0; return 1.0 - smoothstep(0.92, 1.0, max(e.x, e.y)); }`;
 const skyMat = new THREE.ShaderMaterial({
   side: THREE.BackSide,
   depthWrite: false,
@@ -7465,6 +7584,8 @@ function terrainFx(mat: THREE.Material, opts: {
       sh.uniforms.uSubMic = tdU.uSubMic;
       sh.uniforms.uNrmK = tdU.uNrmK;
       sh.uniforms.uGView = gvU.uGView;
+      sh.uniforms.uGHeightRange = gvU.uGHeightRange;
+      sh.uniforms.uGDem = { value: opts.dem ? 1 : 0 };
       // A tile with no field yet (the shared material, the batter, the shell)
       // gets a 1x1 blank and a zero box, and every read of it is gated on the
       // box having width — an unloaded field must read as "no answer" rather
@@ -7775,7 +7896,7 @@ function terrainFx(mat: THREE.Material, opts: {
           // mantle over the bedrock. It is the layered model's own three and
           // not a classification, because there is no longer a classification
           // to paint.
-          if (uGView > 0.5) diffuseColor.rgb = vec3(e.y, e.z, e.x);
+          if (uGView > 0.5 && uGView < 1.5) diffuseColor.rgb = vec3(e.y, e.z, e.x);
           else diffuseColor.rgb = mix(pc, subC, uSubAmt);
         }
         // ── A CLASS VIEW: THE RASTER'S OWN VERDICT, WHERE IT HAS ONE ──
@@ -7797,7 +7918,7 @@ function terrainFx(mat: THREE.Material, opts: {
         // in B, and the component is the remainder. Where the tile has no
         // field the box has no width and the ground keeps its own colour —
         // the same coverage claim every other view here makes.
-        if (uGView > 3.5 && uSubBox.z > 1.0) {
+        if (uGView > 3.5 && uGView < 9.5 && uSubBox.z > 1.0) {
           vec2 sUV = (vWorldP.xz - uSubBox.xy) / uSubBox.zw;
           vec4 sA = texture2D(uSubA, sUV), sB = texture2D(uSubB, sUV);
           float ch = uGView - 4.0;
@@ -7805,6 +7926,16 @@ function terrainFx(mat: THREE.Material, opts: {
           float cc = mod(ch, 4.0);
           float v = cc < 0.5 ? src.r : cc < 1.5 ? src.g : cc < 2.5 ? src.b : src.a;
           diffuseColor.rgb = uGView > 8.5 ? gvFamily(v) : gvRamp(v);
+        }
+        // ── THE LIVE DEM, IN THE SAME FRAME THE GEOMETRY USES ──
+        //
+        // Only a material carrying its tile's DEM residual map may answer:
+        // leaves, roads and generic terrainFx users have world positions too,
+        // but they are not the elevation authority this view is inspecting.
+        if (uGView > 9.5 && uGDem > 0.5) {
+          float h = (vWorldP.y - uGHeightRange.x)
+            / max(1.0, uGHeightRange.y - uGHeightRange.x);
+          diffuseColor.rgb = gvRamp(h);
         }
         ${TDETAIL === 'px' ? 'diffuseColor.rgb = tdHeat(px);' : ''}
       }`)
@@ -7871,6 +8002,7 @@ function terrainFx(mat: THREE.Material, opts: {
         + 'uniform float uSubAmt;\nuniform float uSubDom;\nuniform float uSubNrm;\n'
         + 'uniform float uSubMic;\nuniform float uNrmK;\n'
         + 'uniform float uGView;\nuniform sampler2D uGLut;\n'
+        + 'uniform vec2 uGHeightRange;\nuniform float uGDem;\n'
         + 'uniform sampler2D uSubA;\nuniform sampler2D uSubB;\nuniform vec4 uSubBox;\n'
         + sh.fragmentShader;
     }
@@ -8481,6 +8613,8 @@ const kStore: TerrainStore = {
   get channels() { return channelGrid as Map<string, StripLike[]>; },
   get grid() { return GRID; },
   hydroBreakLines: (t) => hydroShoreBreakLines.get(`${t.tx}/${t.ty}`) ?? [],
+  hydroFloor: (t) => { const d = hydroFloors.get(`${t.tx}/${t.ty}`); return d ? { n: HYDRO_EN, data: d } : null; },
+  hydroBank: (t) => hydroBanks.get(`${t.tx}/${t.ty}`) ?? null,
   onRoad: (x, z) => onCarriageway(x, z, 0.6).road,
   palette: (elevAbs, slope, cover, x, z) => terrainPalette(elevAbs, slope, cover, x, z),
   areaTint: (x, z) => areaTintAt(x, z),
@@ -8646,12 +8780,13 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
         cells.push([`${cx},${cz}`, arr.map((s) => { let i = ids.get(s); if (i === undefined) { i = ids.size; ids.set(s, i); } return i; })]);
       }
     }
-    const flat = new Float64Array(ids.size * 13);
+    const flat = new Float64Array(ids.size * 14);
     for (const [s, i] of ids) {
-      const o = i * 13;
+      const o = i * 14;
       flat[o] = s.ax; flat[o + 1] = s.az; flat[o + 2] = s.bx; flat[o + 3] = s.bz; flat[o + 4] = s.hw;
       flat[o + 5] = s.ya ?? NaN; flat[o + 6] = s.yb ?? NaN; flat[o + 7] = s.tk ? 1 : 0; flat[o + 8] = s.tn ? 1 : 0;
       flat[o + 9] = s.ca ?? NaN; flat[o + 10] = s.cb ?? NaN; flat[o + 11] = s.pc ?? NaN; flat[o + 12] = NaN;
+      flat[o + 13] = s.cv ?? NaN;
     }
     return { flat, cells };
   };
@@ -8714,6 +8849,11 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
       }
       return flat;
     })(),
+    // A copy per job: the buffer is transferred, and the tile's floor stays
+    // here for the next build.
+    hydroFloor: (hydroFloors.get(`${t.tx}/${t.ty}`) ?? new Float32Array(0)).slice(),
+    hydroFloorN: hydroFloors.has(`${t.tx}/${t.ty}`) ? HYDRO_EN : 0,
+    hydroBank: (hydroBanks.get(`${t.tx}/${t.ty}`) ?? new Float32Array(0)).slice(),
     crossings, areas, pads,
     clim, climN: N, climK: KW,
     ramp: biome.ramp, ramps: BIOME_LIST.map((b) => b.ramp), coverTint: COVER_TINT, coverMix: COVER_MIX,
@@ -8723,6 +8863,8 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
     st.flat.buffer,
     ch.flat.buffer,
     job.hydroBreakLines.buffer,
+    job.hydroFloor.buffer,
+    job.hydroBank.buffer,
     pads.buffer,
     clim.buffer,
   ] as unknown as Transferable[] };
@@ -10091,6 +10233,12 @@ const ROAD_W: Record<string, number> = { motorway: 13, trunk: 12, primary: 10.5,
   // road it joins, so a slip still defers to its parent and cannot drag a
   // motorway onto its camber.
   motorway_link: 8, trunk_link: 7.5, primary_link: 7, secondary_link: 6.5, tertiary_link: 6 };
+const roadWidth = (tags: Record<string, string> | undefined): number => {
+  const authored = Number(tags?.['drive:width']);
+  return Number.isFinite(authored) && authored >= 1 && authored <= 40
+    ? authored
+    : ROAD_W[tags?.highway ?? ''] ?? 5;
+};
 // The RULING GRADE a class is engineered to — what the profile clamp treats
 // as "steeper than this is probably not real". Motorways hold ~4% by design
 // and 7% only in extremis; alpine passes run 9-12%; town streets can defy
@@ -11002,6 +11150,16 @@ const MAT = {
   // lamp does at that distance: goes dim.
   lamp: new THREE.MeshBasicMaterial({ color: 0xd8a45e, side: DS }),
   portal: new THREE.MeshLambertMaterial({ color: 0x4d4a42, side: DS }),
+  // A DRIFT IS CONCRETE AND ITS POSTS ARE PAINTED, and both are chosen
+  // against the ground rather than in the abstract: the apron has to read as
+  // a laid slab over a gravel track and under running water, so it is a pale
+  // warm grey — several palette steps off any bed or bank this game paints —
+  // and the posts are the one thing at a ford a driver needs to find from the
+  // approach, so they are near-white with a little emissive, which is what
+  // keeps them legible in the shade of a gorge without tripping the bloom cut
+  // at 0.62.
+  drift: new THREE.MeshLambertMaterial({ color: 0x8e8b82, side: DS }),
+  driftPost: new THREE.MeshLambertMaterial({ color: 0xd9d6cb, emissive: 0x16150f, side: DS }),
 } as const;
 /**
  * THE MARCH, FOR EVERYTHING THAT IS NOT TERRAIN. terrainFx already carries it
@@ -12933,6 +13091,10 @@ function impSlotFor(fam: EzFamily, vi: number): ImpAtlasSlot | null {
  *  so the test is a mask rather than a modulo, and 4,096 because at the seat's
  *  measured ~80 ns a step that is a third of a millisecond — under the slice
  *  budget's own floor, so the yield can never be the thing that overruns it. */
+/** The admitted-tree loop of the admission yields every this many trees —
+ *  see the note at the loop. 2,048 is about two to four milliseconds of the
+ *  per-tree work on a phone, one slice's worth. */
+const EZ_ADMIT_STEP = 2048;
 const IMPOSTOR_STEP = 4096;
 
 /** What the last refresh stood up, for the harness. */
@@ -13985,6 +14147,9 @@ let swardRoadSeen = -1, swardGroundSeen = -1, swardFieldAt = 0, swardMaskMs = 0;
 /** True once a sweep has landed: before that the colour field is zeros and
  *  the water must not sample it. */
 let swardFieldReady = false;
+/** ?swardhop=0 carries the last place's committed field across a hop, exactly
+ *  as it did — the rollback, and the one-build A/B for the measurement. */
+const SWARD_HOP_CLEAR = qsOn('swardhop', true);
 /** THE BANK, ON THE GROUND SIDE. The water shader draws its last wet metre
  *  as damp sediment and gravel; the ground beside it grew the same grass
  *  as the hillside, so the two met on a line. The sward mixes toward the
@@ -15183,6 +15348,13 @@ function swardFrame(): void {
   }
   // ── AND NOW THE SLOW HALF: THE EVIDENCE FIELD ──
   //
+  // MID-HOP IT STANDS DOWN, for the reason `streamWorld` does: a sweep reads
+  // `groundAt`, and between the hop's sweep and its anchor fetch the origin has
+  // moved while `baseElev` has not — so a field started in that window is built
+  // against the last place's datum and is wrong by the difference between two
+  // elevations. The hop leaves `swardFX` NaN, so the very next frame after it
+  // finishes asks for a fresh field through `moved`; nothing is owed a gate.
+  if (hopping) return;
   // A sweep already under way is allowed to finish, because the field on screen
   // is the last complete one and swapping half a field in would be worse than
   // waiting. What it is NOT allowed to do is finish a field for ground the
@@ -15938,14 +16110,32 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       for (const f of EZ_FAMILIES) { nom += ezCapNominal(f); got += cap[f]; }
       ezScaleNow = nom > 0 ? got / nom : 1;
     }
+    // ── THE ADMISSION IS NOT ONE BLOCK ANY MORE ──
+    // The device put this phase at 65 ms a call once the mid rung's caps were
+    // five times the full rung's (Nagato, 60b1b4c1a1ab), and it was one
+    // unyielding span from the far gather's mark to this phase's: the
+    // allocator, then per family a selection over every candidate in the
+    // ring, then a loop over every ADMITTED tree — a variant pick, a rung, two
+    // Map writes and the census — and then the pool growth. Two cuts. The
+    // selection reads a histogram prefix first (`nearestPrefix`: exact, and
+    // the reason it is exact is written beside it), so the heap never sorts
+    // the whole ring; and the admitted loop yields every `EZ_ADMIT_STEP`
+    // trees, which is safe for the reason every other yield here is — staging
+    // is separate from the instances and the commit is one slice at the end,
+    // so a frame drawn between two slices shows the previous sweep whole.
+    // `ezEdge[fam]` is written per family before its loop, as it was; a
+    // family whose loop has not run yet carries last sweep's edge for a
+    // slice, which is what the far gather already lives on.
+    let admitted = 0;
     for (const fam of EZ_FAMILIES) {
       let list = cand[fam];
       const cap = ezCapFor(fam);
       if (list.length > cap) {
-        list = nearestStable(list, cap, p => p[0]);
+        list = nearestStable(nearestPrefix(list, cap, p => p[0]), cap, p => p[0]);
         ezEdge[fam] = cap > 0 ? Math.sqrt(list[cap - 1][0]) : 0;
       }
       for (const [d2, v] of list) {
+        if ((++admitted % EZ_ADMIT_STEP) === 0) yield;
         ezAdmit.add(v);
         // Off the card tier's books: a tree the skeletons are drawing is not a
         // tree the card budget has to find room for, and counting it as demand
@@ -16705,69 +16895,66 @@ function stepVegRefresh(): boolean {
 }
 
 // ── wildlife ───────────────────────────────────────────────────────
-// Two populations, both boids-lite and both aware of the truck. They live in
-// a box that follows the car and wraps, like the rain — so the world always
-// has something alive in it without simulating a planet.
-// A BOX BIGGER THAN SIGHT. At 260m the wrap edge stood 130m from the camera —
-// inside the range where a bird is several pixels and plainly there. Doubling
-// it moves every arrival and departure out to where a skein is a mark on the
-// sky, and the in-view rule in stepPop keeps the ones that matter.
-const BIRD_N = 52, BIRD_BOX = 820;
-/**
- * THREE BIRDS, not one. The sky had a single dark chevron repeated
- * forty-six times, at one size, in one flock, all turning together.
- *
- * A bird two hundred metres up is a SILHOUETTE and nothing else, so the
- * species are told apart by proportion rather than by detail — the same
- * three-sided cone with its span and length moved, which costs one extra
- * draw call each and reads instantly against a bright sky:
- *
- *   GULL    broad and long-winged, the one that soars
- *   CROW    compact and stubby, the one that flaps
- *   RAPTOR  narrow and long, the one that hangs
- *
- * They also fly at different heights, which does as much work as the shapes:
- * a raptor at sixty metres and crows at twenty-two are two different skies.
- */
-const birdShape = (span: number, len: number): THREE.BufferGeometry => {
-  const g = new THREE.ConeGeometry(span, len, 3);
-  g.rotateX(-Math.PI / 2);
-  return g;
-};
-const BIRD_GEO = [birdShape(0.62, 1.5), birdShape(0.42, 1.1), birdShape(0.5, 2.2)];
-/** Cruising height per species — the shapes alone would still read as one
- *  flock at one altitude, which is most of what "all the same" looked like. */
-const BIRD_ALT = [34, 22, 58];
-/** Who flies where, weighted per biome like the herds: gulls and crows over
- *  temperate country, raptors over the desert, almost no gulls inland. */
-const BIRD_MIX: Record<string, number[]> = {
-  arid: [1, 3, 6], tropical: [3, 6, 2], temperate: [5, 5, 2], boreal: [2, 7, 2], alpine: [1, 4, 6],
-};
-/** How many separate skeins share the sky. Four, because a bird flock is
- *  smaller and more numerous than a herd. */
-const BIRD_GROUPS = 4;
-let birdSpecies: number[] = [];
-// White base, so the per-instance tint IS the colour: a crow is not a pale gull
-// with a filter over it, and one flat 0x2a2f36 for every bird in the world was
-// the reason the sky read as wallpaper.
-const birdMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
-const birdMeshes = BIRD_GEO.map((g) => {
-  const m = new THREE.InstancedMesh(g, birdMat, BIRD_N);
-  m.name = 'birds';
-  m.frustumCulled = false;
-  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(BIRD_N * 3).fill(1), 3);
-  m.instanceColor.setUsage(THREE.DynamicDrawUsage);
-  scene.add(m);
-  return m;
+// Wildlife queries select a reachable support, not the highest deck. These
+// callbacks are lazy: state and streamed substrate initialise later below.
+const wildlife = createWildlife({
+  scene, camera, truck: () => state, worldKey: () => `${origin.lat.toFixed(5)},${origin.lon.toFixed(5)}`,
+  pixelHeight: () => PIX_H, shadow: m => shadowy(m, true, false),
+  ground: (x,z) => hasHeight(x,z) ? groundAt(x,z) : null,
+  rain: (x,z) => wxAt(wxField,x,z).rain,
+  clear: (ax,az,bx,bz,y) => {
+    const steps=Math.max(1,Math.ceil(Math.hypot(bx-ax,bz-az)/(GRID/2)));
+    const visited=new Set<Seg[]>();
+    for(let i=0;i<=steps;i++){
+      const segs=wallGrid.get(gkey(ax+(bx-ax)*i/steps,az+(bz-az)*i/steps));
+      if(!segs||visited.has(segs))continue;visited.add(segs);
+      for(const w of segs){
+        if(w.ya!==undefined&&(y>w.ya+.1||(w.sl&&y<w.ya-1.8)))continue;
+        const dx=bx-ax,dz=bz-az,wx=w.bx-w.ax,wz=w.bz-w.az,den=dx*wz-dz*wx;
+        if(Math.abs(den)<1e-9)continue;
+        const t=((w.ax-ax)*wz-(w.az-az)*wx)/den,u=((w.ax-ax)*dz-(w.az-az)*dx)/den;
+        if(t>=0&&t<=1&&u>=0&&u<=1)return false;
+      }
+    }
+    return true;
+  },
+  species: (air,x,z,r) => climPickRow(air ? {
+    arid:[1,3,6],tropical:[3,6,2],temperate:[5,5,2],boreal:[2,7,2],alpine:[1,4,6],
+  } : {
+    arid:[3,1,5],tropical:[7,0,2],temperate:[5,3,3],boreal:[6,4,1],alpine:[5,3,3],
+  },climateAt(x,z).w,r),
+  sample: (x,z,previousY,radius=.4) => {
+    if(!hasHeight(x,z))return {known:false,y:0,depth:0,current:null,blocked:false};
+    const ground=groundAt(x,z),deck=roadHeightAt(x,z,-radius-.1);
+    const reference=previousY ?? ground;
+    const onDeck=deck!==null && deck>=ground-.1 && Math.abs(deck-reference)<.22 &&
+      (previousY!==undefined || deck-ground<.22);
+    const y=onDeck?deck!:ground;
+    const contact=SUBSTRATE_CONTACT_ON?productionContactAt(x,z,'surface'):undefined;
+    let depth=0,current:number|null=0,ocean=false;
+    if(contact?.water?.exposed){
+      const w=contact.water;depth=Math.max(0,w.yM-baseElev-y);current=w.speedMps;
+      ocean=w.kind==='ocean' && depth>.025;
+    }else{
+      const wet=drawnHydroAt(x,z);
+      if(wet){depth=Math.max(0,wet.restingLevelM-baseElev-y);current=Math.hypot(...wet.flow)>.01?null:0;ocean=wet.kind==='ocean'&&depth>.025;}
+      else {const water=waterInfoAt(x,z);depth=water.wet?Math.max(0,water.depth-(y-ground)):0;current=water.speed;}
+    }
+    // Broad footprint exclusion plus a radius around walls and rails. A rail
+    // above an underpass is not an obstacle on the ground below it.
+    let blocked=insidePlot(x,z);
+    for(const w of wallGrid.get(gkey(x,z))??[]){
+      if(w.ya!==undefined && (y>w.ya+.1 || (w.sl && y<w.ya-1.8)))continue;
+      const [px,pz]=closestOnSeg(x,z,w);
+      if(Math.hypot(px-x,pz-z)<radius+.08){blocked=true;break;}
+    }
+    return {known:true,y,depth,current,blocked,ocean,layer:onDeck?'drive':'ground'};
+  },
 });
-/** The whole flock as one object, for the visibility switch that rain drives. */
-const birds = { get visible(): boolean { return birdMeshes[0].visible; },
-  set visible(v: boolean) { for (const m of birdMeshes) m.visible = v; } };
-// ── the herd: three real animals, not one box ──────────────────────
-// Each species is a pile of coloured boxes welded into ONE BufferGeometry, so
-// a whole herd of them is still a single instanced draw. Local +z is forward
-// (that is what `yaw = atan2(vx, vz)` below implies), y=0 is the ground.
+const {birds,birdMeshes,herds,flock,graze}=wildlife;
+function stepWildlife(dt:number):void { wildlife.step(dt); }
+(window as unknown as {__wildlife?:object}).__wildlife=()=>wildlife.diagnostics();
+
 function boxPart(w: number, h: number, d: number, x: number, y: number, z: number, col: number, rx = 0, ry = 0, noBottom = false): THREE.BufferGeometry {
   let g: THREE.BufferGeometry = new THREE.BoxGeometry(w, h, d).toNonIndexed();
   if (noBottom) {
@@ -16816,348 +17003,6 @@ function mergeParts(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
   out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
   out.setAttribute('color', new THREE.BufferAttribute(col, 3));
   return out;
-}
-// Legs at the four corners, one call.
-const legs = (w: number, h: number, d: number, sx: number, fz: number, bz: number, col: number): THREE.BufferGeometry[] =>
-  [[-sx, fz], [sx, fz], [-sx, bz], [sx, bz]].map(([x, z]) => boxPart(w, h, d, x, h / 2, z, col));
-// DEER — light, long-legged, head carried high, antlers.
-const deerGeo = mergeParts([
-  boxPart(0.52, 0.6, 1.3, 0, 0.98, 0, 0x8a6136),          // barrel
-  boxPart(0.44, 0.3, 0.9, 0, 0.78, -0.15, 0xb09371),      // pale belly
-  boxPart(0.3, 0.24, 0.34, 0, 0.98, -0.7, 0xd8cdb4),      // rump patch
-  boxPart(0.26, 0.56, 0.28, 0, 1.4, 0.6, 0x8a6136, 0.35), // neck, raked forward
-  boxPart(0.23, 0.24, 0.48, 0, 1.66, 0.88, 0x7d5730),     // head
-  boxPart(0.32, 0.1, 0.1, 0, 1.76, 0.72, 0x6b4a2a),       // ears
-  ...[-0.09, 0.09].flatMap((sx) => [                       // antlers: beam + tines
-    boxPart(0.05, 0.42, 0.05, sx, 1.96, 0.74, 0xbdae90),
-    boxPart(0.05, 0.05, 0.3, sx, 2.1, 0.86, 0xbdae90),
-    boxPart(0.18, 0.05, 0.05, sx * 2.4, 2.14, 0.7, 0xbdae90),
-  ]),
-  boxPart(0.14, 0.2, 0.12, 0, 1.02, -0.72, 0xd8cdb4),     // flag tail
-  ...legs(0.11, 0.92, 0.13, 0.2, 0.48, -0.48, 0x5f4126),
-]);
-// BISON — mass forward: a shoulder hump twice the height of the hindquarters,
-// head slung low, stubby legs. The silhouette is the whole character.
-const bisonGeo = mergeParts([
-  boxPart(0.88, 0.8, 1.05, 0, 1.18, -0.5, 0x4a3a2c),      // hindquarters
-  boxPart(1.02, 1.12, 1.0, 0, 1.36, 0.42, 0x5d4a35),      // hump/shoulder shag
-  boxPart(0.9, 0.5, 0.5, 0, 1.02, 0.92, 0x382c22),        // chest
-  boxPart(0.58, 0.56, 0.62, 0, 0.96, 1.26, 0x2f2620),     // head, carried low
-  boxPart(0.5, 0.34, 0.2, 0, 0.66, 1.3, 0x241c17),        // beard
-  ...[-1, 1].map((s) => boxPart(0.3, 0.11, 0.11, s * 0.4, 1.22, 1.24, 0xa89a7d)),  // horns out
-  ...[-1, 1].map((s) => boxPart(0.11, 0.16, 0.11, s * 0.52, 1.32, 1.22, 0xa89a7d)),// and up
-  boxPart(0.12, 0.34, 0.12, 0, 1.1, -1.02, 0x2f2620),     // tail
-  ...legs(0.22, 0.82, 0.24, 0.32, 0.6, -0.6, 0x2b221b),
-]);
-// HORSE — the long one: deep barrel, arched neck, mane and a full tail.
-const horseGeo = mergeParts([
-  boxPart(0.6, 0.76, 1.7, 0, 1.3, -0.1, 0x6b4a34),        // barrel
-  boxPart(0.52, 0.3, 1.2, 0, 1.02, -0.1, 0x7d5b40),       // belly
-  boxPart(0.3, 0.72, 0.44, 0, 1.72, 0.78, 0x6b4a34, 0.42),// neck
-  boxPart(0.25, 0.28, 0.6, 0, 2.02, 1.06, 0x5c3e2b),      // head
-  boxPart(0.27, 0.16, 0.2, 0, 1.94, 1.32, 0x3a2618),      // muzzle
-  boxPart(0.12, 0.42, 0.66, 0, 1.98, 0.72, 0x2a2018),     // mane
-  boxPart(0.18, 0.6, 0.18, 0, 1.34, -1.0, 0x2a2018),      // tail
-  ...legs(0.15, 1.12, 0.17, 0.24, 0.62, -0.66, 0x4a3324),
-]);
-const HERD_GEO = [deerGeo, bisonGeo, horseGeo];
-// Who lives where. Weights per biome — no bison in the rainforest, and the
-// desert is horse country.
-const HERD_MIX: Record<string, number[]> = {
-  arid: [3, 1, 5], tropical: [7, 0, 2], temperate: [5, 3, 3], boreal: [6, 4, 1], alpine: [5, 3, 3],
-};
-// Same reasoning as BIRD_BOX: the old 240 wrapped animals at 120m, which is
-// the middle distance a herd is most legible at. Density falls, and that is
-// honest — three clumps on half a kilometre of plain is what a plain looks
-// like, where three clumps in a 240m square is a paddock.
-const HERD_N = 30, HERD_BOX = 560;
-// White base: the product of the vertex colour and the per-instance tint IS
-// the final colour, so the material must not scale either of them.
-const herdMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, flatShading: true });
-const herds = HERD_GEO.map((g) => {
-  const m = new THREE.InstancedMesh(g, herdMat, HERD_N);
-  m.name = 'herds';
-  m.frustumCulled = false;
-  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(HERD_N * 3).fill(1), 3);
-  m.instanceColor.setUsage(THREE.DynamicDrawUsage);
-  shadowy(m, true, false);
-  scene.add(m);
-  return m;
-});
-// No animal is ever allowed within this of the truck. Wider than CAR_R (2.4)
-// by enough that even the bison's bulk clears the bodywork.
-const HERD_CLEAR = 4.8;
-// The closest any of them has come this session — a test drives at the herd
-// and asserts this never drops to the truck.
-let herdClosest = Infinity;
-interface Critter {
-  x: number; y: number; z: number; vx: number; vy: number; vz: number; ph: number;
-  sp: number; tint: THREE.Color;
-  /** Which herd this animal belongs to. Cohesion and alignment are read from
-   *  its OWN herd's middle; separation still counts everybody, so two herds
-   *  share a plain without standing in each other. */
-  grp: number;
-  /** Body scale. A herd is adults and yearlings, not twenty copies. */
-  sz: number;
-}
-/** How many separate herds share the box. Three reads as a plain with animals
- *  on it; one reads as a single confused mob, which is what it was. */
-const HERD_GROUPS = 3;
-/** One species per herd, rolled when the biome changes. A herd was a lucky dip
- *  before — deer, bison and horses walking in one clump, alarmed by the same
- *  truck at the same moment, which is not a thing that happens. */
-let herdSpecies: number[] = [];
-/** Fauna by CLIMATE, weighted across every archetype present. A herd and a
- *  flock are spawned around the truck, so the truck's own climate is the
- *  right place to ask — and on a boreal/temperate margin the plain now
- *  genuinely carries some of both rather than all of whichever label won. */
-function pickFrom(table: Record<string, number[]>, atX?: number, atZ?: number): number {
-  // POSITION IS PASSED IN, NEVER READ FROM `state` HERE. The bird and herd
-  // populations are constructed at module load — ten thousand lines before
-  // `state` exists — so reaching for the truck inside this function threw
-  // during init and the world never signalled ready. The spawn origin is the
-  // right default anyway: at construction time the truck IS at 0,0, which is
-  // exactly the climate these first animals should be drawn from. The re-roll
-  // that follows a real move passes the truck's actual position.
-  return climPickRow(table, climateAt(atX ?? 0, atZ ?? 0).w, Math.random());
-}
-const pickBird = (atX?: number, atZ?: number): number => pickFrom(BIRD_MIX, atX, atZ);
-const pickSpecies = (atX?: number, atZ?: number): number => pickFrom(HERD_MIX, atX, atZ);
-const mkPop = (n: number, box: number, air: boolean): Critter[] => {
-  if (!air && !herdSpecies.length) herdSpecies = Array.from({ length: HERD_GROUPS }, pickSpecies);
-  if (air && !birdSpecies.length) birdSpecies = Array.from({ length: BIRD_GROUPS }, pickBird);
-  const groups = air ? BIRD_GROUPS : HERD_GROUPS;
-  return Array.from({ length: n }, (_, i) => ({
-    grp: i % groups,
-    // Yearlings to old bulls. Squared toward the small end, because a herd is
-    // mostly ordinary animals with a few big ones rather than an even spread.
-    // Birds vary less than mammals — a flock is adults — but not by nothing.
-    sz: air ? 0.78 + Math.random() * 0.5 : 0.72 + Math.random() ** 2 * 0.62,
-    // Each herd starts as a CLUMP rather than scattered across the box —
-    // cohesion would eventually gather them, but the first thing you see on
-    // arriving somewhere should already look like a herd.
-    x: (Math.random() - 0.5) * box * 0.85 + Math.sin((i % groups) * 2.4) * box * 0.3,
-    y: air ? 30 + Math.random() * 40 : 0,
-    z: (Math.random() - 0.5) * box * 0.85 + Math.cos((i % groups) * 2.4) * box * 0.3,
-    vx: (Math.random() - 0.5) * 6, vy: 0, vz: (Math.random() - 0.5) * 6, ph: Math.random() * 6.283,
-    sp: air ? birdSpecies[i % groups] : herdSpecies[i % groups],
-    // A coat is never twice the same: ±15% brightness, a touch warm or cool.
-    // PLUMAGE IS NOT A COAT. The mammal palette is warm mid-browns, and dressing
-    // birds in it gave the sky forty-six identical beige darts. Each species
-    // gets its own: a gull is near-white with a cool cast, a crow is almost
-    // black with a blue sheen, a raptor is warm brown — and each bird still
-    // varies within that, so a skein is not a stamp.
-    tint: air
-      ? [
-        new THREE.Color().setHSL(0.58, 0.05 + Math.random() * 0.06, 0.72 + Math.random() * 0.16),
-        new THREE.Color().setHSL(0.62, 0.10 + Math.random() * 0.12, 0.10 + Math.random() * 0.07),
-        new THREE.Color().setHSL(0.07, 0.30 + Math.random() * 0.18, 0.22 + Math.random() * 0.14),
-      ][air ? birdSpecies[i % groups] : 0]
-      : new THREE.Color().setHSL(0.07 + Math.random() * 0.05, 0.18 + Math.random() * 0.2, 0.44 + Math.random() * 0.16)
-        .multiplyScalar(2.1),
-  }));
-};
-const flock = mkPop(BIRD_N, BIRD_BOX, true);
-const graze = mkPop(HERD_N, HERD_BOX, false);
-const critterFwd = new THREE.Vector3();
-const critterDummy = new THREE.Object3D();
-// Yaw FIRST, then pitch about the animal's own axis — with the default XYZ
-// order a galloping bob would pitch about the world x and shear the herd.
-critterDummy.rotation.order = 'YXZ';
-// One boids step: cohere to the local centre, separate from close neighbours,
-// align with their heading — then flee the truck, which overrides everything.
-function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
-  box: number; air: boolean; speed: number; fear: number; sep: number; turn: number;
-}): void {
-  const cx = camera.position.x, cz = camera.position.z;
-  // Where the camera is looking, flattened — the wrap rule below needs it once
-  // per pass, not once per animal.
-  camera.getWorldDirection(critterFwd);
-  const cfl = Math.hypot(critterFwd.x, critterFwd.z) || 1;
-  const camFX = critterFwd.x / cfl, camFZ = critterFwd.z / cfl;
-  // A MIDDLE PER HERD, not one for the whole box. Averaging every animal on the
-  // plain gave three species one centre of gravity and pulled them into a single
-  // mob — the flock forces were doing exactly what they were told.
-  const gN: number[] = [], gx: number[] = [], gz: number[] = [], gvx: number[] = [], gvz: number[] = [];
-  for (const c of pop) {
-    const g = c.grp;
-    gN[g] = (gN[g] ?? 0) + 1;
-    gx[g] = (gx[g] ?? 0) + c.x; gz[g] = (gz[g] ?? 0) + c.z;
-    gvx[g] = (gvx[g] ?? 0) + c.vx; gvz[g] = (gvz[g] ?? 0) + c.vz;
-  }
-  for (let g = 0; g < gN.length; g++) {
-    const n = gN[g] || 1;
-    gx[g] /= n; gz[g] /= n; gvx[g] /= n; gvz[g] /= n;
-  }
-  const counts = meshes.map(() => 0);
-  for (const c of pop) {
-    let ax = (gx[c.grp] - c.x) * 0.06 + (gvx[c.grp] - c.vx) * 0.35;   // cohesion + alignment
-    let az = (gz[c.grp] - c.z) * 0.06 + (gvz[c.grp] - c.vz) * 0.35;
-    for (const d of pop) {                               // separation
-      if (d === c) continue;
-      const dx = c.x - d.x, dz = c.z - d.z;
-      const q = dx * dx + dz * dz;
-      if (q < o.sep * o.sep && q > 1e-4) { const f = (o.sep - Math.sqrt(q)) * 0.5; ax += (dx / Math.sqrt(q)) * f; az += (dz / Math.sqrt(q)) * f; }
-    }
-    // FLEE. Close to the truck they break formation entirely — that reaction
-    // is what makes them read as alive rather than as scenery that moves.
-    //
-    // Panic scales with how close the truck is AND how fast it is coming, and
-    // the bolt is biased SIDEWAYS: an animal sprinting straight down the line
-    // of a vehicle that is faster than it is an animal about to be hit, which
-    // is exactly how the old "run directly away" rule played out.
-    const fx = c.x - state.x, fz = c.z - state.z;
-    const fd = Math.hypot(fx, fz) || 1e-3;
-    const carV = Math.abs(state.speed);
-    // Reaction DISTANCE, not a fixed radius: what matters is how long they have
-    // before it arrives. A parked truck barely bothers them — you can idle up
-    // and watch — while one doing 90 sends the herd moving from 80m out.
-    const fear = o.fear + carV * (o.air ? 0.5 : 2.2);
-    const panic = fd < fear ? 1 - fd / fear : 0;
-    if (panic > 0) {
-      const hx = Math.sin(state.heading), hz = -Math.cos(state.heading); // truck forward
-      const side = Math.sign(fx * -hz + fz * hx) || 1;   // which flank it is already on
-      const mix = 0.4 + 0.6 * panic;                     // closer ⇒ more sideways
-      const ex = (fx / fd) * (1 - mix) + -hz * side * mix;
-      const ez = (fz / fd) * (1 - mix) + hx * side * mix;
-      const el = Math.hypot(ex, ez) || 1;
-      const p = panic * panic * o.speed * 30;
-      ax += (ex / el) * p;
-      az += (ez / el) * p;
-      if (o.air) c.vy += 9 * dt;                          // birds climb away
-    }
-    c.vx += ax * dt * o.turn * (1 + panic * 3); c.vz += az * dt * o.turn * (1 + panic * 3);
-    c.ph += dt * (o.air ? 9 : 3 + panic * 9);
-    // Hold a cruising speed rather than accelerating forever — except in a
-    // panic, where the whole point is to out-run whatever is chasing them.
-    const sp = Math.hypot(c.vx, c.vz) || 1e-3;
-    const flatOut = Math.min(Math.max(o.speed * 4.5, carV * 1.2), o.air ? 30 : 22);
-    const want = o.speed + (flatOut - o.speed) * panic;
-    const k = Math.min(1, dt * (2 + 16 * panic));         // and accelerate hard
-    c.vx = (c.vx / sp) * (sp + (want - sp) * k);
-    c.vz = (c.vz / sp) * (sp + (want - sp) * k);
-    c.x += c.vx * dt; c.z += c.vz * dt;
-    // THE GUARANTEE. Everything above is a force model, and a force model can
-    // only ever make a collision unlikely: the truck tops out around 25m/s and
-    // nothing on four legs here does. So a hard minimum separation backstops
-    // it — placed mostly sideways, because pushing an animal straight down the
-    // truck's line would drag it along the bumper instead of clearing it.
-    if (!o.air) {
-      const gx = c.x - state.x, gz = c.z - state.z;
-      const gd = Math.hypot(gx, gz);
-      if (gd < HERD_CLEAR) {
-        const hx = Math.sin(state.heading), hz = -Math.cos(state.heading);
-        const side = Math.sign(gx * -hz + gz * hx) || 1;
-        const ex = (gd > 1e-3 ? gx / gd : 0) * 0.3 + -hz * side * 0.7;
-        const ez = (gd > 1e-3 ? gz / gd : 0) * 0.3 + hx * side * 0.7;
-        const el = Math.hypot(ex, ez) || 1;
-        c.x = state.x + (ex / el) * HERD_CLEAR;
-        c.z = state.z + (ez / el) * HERD_CLEAR;
-      }
-      herdClosest = Math.min(herdClosest, Math.hypot(c.x - state.x, c.z - state.z));
-    }
-    if (o.air) {
-      // Hold the height this species flies at, not one height for the sky.
-      c.vy += ((BIRD_ALT[c.sp] ?? 34) + Math.sin(c.ph * 0.2) * 12 - c.y) * 0.25 * dt;
-      c.vy *= 0.96;
-      c.y += c.vy * dt;
-    } else {
-      // ON TOP OF THE ROAD, not through it. groundAt is the terrain, and a road
-      // on an embankment stands above its own terrain — so a deer crossing one
-      // walked at field level with the tarmac through its chest. It steps UP
-      // onto a deck within a stride's reach of its feet and ignores anything
-      // higher, which is the difference between crossing a road and levitating
-      // onto a viaduct.
-      const g = groundAt(c.x, c.z);
-      // A body's width inboard of the kerb, so an animal only takes the deck
-      // when it is genuinely standing on the tarmac. Photographed at Chapman's
-      // Peak: a horse on the parapet above the sea, because 0.8m of slack
-      // outside the kerb is exactly where the barrier stands.
-      const deck = roadHeightAt(c.x, c.z, -0.7);
-      c.y = deck !== null && deck > g - 0.4 && deck < g + 3 ? deck : g;
-    }
-    // ── the torus, and the rule it was missing ──
-    //
-    // The population lives in a box that follows the camera, wrapping anything
-    // that falls out the back round to the front. That is what keeps animals
-    // wherever you are, and it had exactly one thing wrong with it: it wrapped
-    // WHATEVER WAS THERE, including the deer you were watching. Drive past the
-    // midpoint of a 240m box and a herd 120m ahead is teleported 120m behind
-    // you — reported from the seat as animals disappearing arbitrarily, and as
-    // the same herd popping into view a moment later, which is the same event
-    // seen from the other end.
-    //
-    // NOTHING IS MOVED WHILE IT IS ON THE GLASS, and nothing is moved INTO
-    // frame either. Both ends of the teleport have to be somewhere you are not
-    // looking, or it is a pop however far away it happens.
-    const h = o.box / 2;
-    const inView = (px: number, pz: number): boolean => {
-      const dx = px - cx, dz = pz - cz;
-      const dd = Math.hypot(dx, dz);
-      if (dd < 45) return true;                       // beside you counts as seen
-      if (dd > o.box * 1.6) return false;             // past sight: move it freely
-      // A GENEROUS cone — about 57 degrees against a portrait phone's 28 — so
-      // an animal near the edge of frame is safe too, and so is one that would
-      // enter frame on the next flick of the wheel.
-      return (dx * camFX + dz * camFZ) / dd > 0.55;
-    };
-    if (!inView(c.x, c.z)) {
-      let nx = c.x, nz = c.z;
-      if (c.x - cx > h) nx -= o.box; else if (cx - c.x > h) nx += o.box;
-      if (c.z - cz > h) nz -= o.box; else if (cz - c.z > h) nz += o.box;
-      // …and if the far side of the box is in front of you, leave it where it
-      // is. It simply falls further behind, which costs nothing but a little
-      // density astern and is invisible; arriving in the middle of the frame
-      // is not invisible at all.
-      if ((nx !== c.x || nz !== c.z) && !inView(nx, nz)) { c.x = nx; c.z = nz; }
-      else if (Math.hypot(c.x - cx, c.z - cz) > o.box * 1.6) { c.x = nx; c.z = nz; }
-    }
-    // NOTHING GRAZES ON THE SEA. The herd wraps around the camera, so on a
-    // coast half of it lands on open water. It keeps simulating out there —
-    // the flock forces will walk it back ashore within seconds — but it is not
-    // drawn, because a deer standing on the Pacific is worse than no deer.
-    if (!o.air && surfaceAt(c.x, c.z) === 'water') {
-      // …and it should be WALKING BACK, not waiting for the flock force to
-      // notice. A bigger box puts far more of a coastal herd over water than
-      // the old 240m one did, so the undrawn animals need a reason to leave:
-      // a steady pull toward the camera, which is on a road and therefore on
-      // land. Gentle enough that it never overrides the flee.
-      const bx = cx - c.x, bz = cz - c.z, bd = Math.hypot(bx, bz) || 1;
-      c.vx += (bx / bd) * 3.5 * dt; c.vz += (bz / bd) * 3.5 * dt;
-      continue;
-    }
-    const yaw = Math.atan2(c.vx, c.vz);
-    // GAIT. Four legs welded to the body can't stride, so the animal rides its
-    // own stride instead: a bob and a pitch on the same phase, scaled by how
-    // hard it is actually running. At a walk it is barely there; fleeing the
-    // truck the whole herd starts porpoising.
-    const gait = o.air ? 0 : Math.min(1, Math.hypot(c.vx, c.vz) / (o.speed * 2));
-    critterDummy.position.set(c.x, c.y + (o.air ? 0 : Math.abs(Math.sin(c.ph * 1.7)) * 0.14 * gait), c.z);
-    critterDummy.rotation.set(
-      o.air ? 0 : Math.sin(c.ph * 1.7 + 0.9) * 0.11 * gait,
-      yaw,
-      o.air ? Math.sin(c.ph) * 0.5 : Math.sin(c.ph * 0.85) * 0.04 * gait, // birds bank; beasts sway
-    );
-    critterDummy.scale.setScalar(c.sz * (o.air ? 1 : 0.94 + (c.sp === 1 ? 0.06 : 0.12) * Math.sin(c.ph * 0.5) + 0.06));
-    critterDummy.updateMatrix();
-    const mesh = meshes[c.sp] ?? meshes[0];
-    const idx = counts[c.sp] ?? counts[0];
-    mesh.setMatrixAt(idx, critterDummy.matrix);
-    mesh.instanceColor?.setXYZ(idx, c.tint.r, c.tint.g, c.tint.b);
-    counts[c.sp] = idx + 1;
-  }
-  for (let i = 0; i < meshes.length; i++) {
-    meshes[i].count = counts[i];
-    meshes[i].instanceMatrix.needsUpdate = true;
-    if (meshes[i].instanceColor) meshes[i].instanceColor!.needsUpdate = true;
-  }
-}
-function stepWildlife(dt: number): void {
-  // Rain grounds the birds; a storm keeps them down entirely.
-  birds.visible = wxL.rain < 0.5;   // the rain where the birds are
-  if (birds.visible) stepPop(flock, birdMeshes, dt, { box: BIRD_BOX, air: true, speed: 11, fear: 55, sep: 7, turn: 1 });
-  stepPop(graze, herds, dt, { box: HERD_BOX, air: false, speed: 2.4, fear: 24, sep: 6, turn: 1.6 });
 }
 
 // ── the map layer (minimap base, FOG_SPAN frame, north-up) ─────────
@@ -17244,6 +17089,9 @@ const Q_ROAD = 1, Q_TRACK = 0.55, Q_GROUND = 0.2;
 const GRID = 24;
 const gkey = (x: number, z: number): string => `${Math.floor(x / GRID)},${Math.floor(z / GRID)}`;
 interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number; tk?: boolean; tn?: boolean;
+  /** Signed channel curvature dθ/ds, using ax→bx as the tangent. Terrain and
+   *  hydro use it to agree on which bank is the depositional inside. */
+  cv?: number;
   /** The corridor's break lines for this strip, computed once — see stripBreakLines. */
   bl?: BreakLine[];
   /** How far out from the centreline this strip's corridor reaches: shoulder plus its widest toe. */
@@ -25051,6 +24899,7 @@ function substrateRenderSnapshot(): Record<string, number> {
     activeHydroDetailColliders,
     uncommittedHydroDetailColliders,
     hydroShoreBreakLineTiles: hydroShoreBreakLines.size,
+    hydroFloorTiles: hydroFloors.size,
     hydroShoreBreakLineSegments,
     atomicCommits: substrateAtomicRenderCommits,
     atomicRefusals: substrateAtomicRenderRefusals,
@@ -25263,6 +25112,30 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
    */
   const foamP = rapidDetail.foamPositive;
   const foamM = rapidDetail.foamNegative;
+  // The same signed heading-rate convention as hydro's profile spine. Keep
+  // it on the terrain channel so the large inside-bank point bar is shared
+  // ground, while the water shader supplies only its mineral skin.
+  const channelCurvature = new Float64Array(n);
+  for (let i = 1; i + 1 < n; i++) {
+    const ax = dense[i][0] - dense[i - 1][0];
+    const az = dense[i][1] - dense[i - 1][1];
+    const bx = dense[i + 1][0] - dense[i][0];
+    const bz = dense[i + 1][1] - dense[i][1];
+    const al = Math.hypot(ax, az), bl = Math.hypot(bx, bz);
+    if (al < 1e-6 || bl < 1e-6) continue;
+    channelCurvature[i] = ((ax / al) * (bz / bl) - (az / al) * (bx / bl))
+      / Math.max(1e-6, (al + bl) * .5);
+  }
+  if (n > 2) {
+    channelCurvature[0] = channelCurvature[1];
+    channelCurvature[n - 1] = channelCurvature[n - 2];
+    const unsmoothed = channelCurvature.slice();
+    for (let i = 1; i + 1 < n; i++) {
+      channelCurvature[i] = (
+        unsmoothed[i - 1] + unsmoothed[i] * 2 + unsmoothed[i + 1]
+      ) * .25;
+    }
+  }
   const verts: number[] = [], uvs: number[] = [], flow: number[] = [], foamA: number[] = [], wide: number[] = [];
   for (let i = 0; i < n - 1; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
@@ -25286,6 +25159,7 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string, 
     wide.push(width, width, width, width, width, width);
     addSeg(channelGrid, { ax: x0, az: z0, bx: x1, bz: z1,
       hw: width / 2, ya: inv[i] - 0.15, yb: inv[i + 1] - 0.15,
+      cv: (channelCurvature[i] + channelCurvature[i + 1]) * .5,
       wid: key, nm: name, fs: (speed[i] + speed[i + 1]) * 0.5 });
     mapSeg(x0, z0, x1, z1, Math.max(width, 8), 'rgba(96,132,158,0.75)');
   }
@@ -25494,6 +25368,41 @@ function flushCulverts(t: HeightTile): void {
           );
           structureOutcome = built.outcome;
           availableClearanceM = built.availableClearanceM;
+        }
+
+        // THE DRIFT IS BUILT AT THE OUTCOME, NOT AT THE THREE BRANCHES THAT
+        // PRODUCE IT. `ford-fallback` is reached three ways in this loop — an
+        // explicit ford tag, an untagged track over open water, and a
+        // `culvert()` that found no room to bore — and they are one crossing
+        // in the world however they came to be recognised. Building at each
+        // branch is three copies of one rule and a fourth branch that quietly
+        // draws nothing.
+        //
+        // IT IS NOT THE ONLY PRODUCER OF A FORD RECORD, AND THE FIRST WRITE-UP
+        // OF THIS CLAIMED IT WAS. `reconcileProductionWetCrossings` registers
+        // `ford-fallback` too, from the drive and water SEGMENTS rather than
+        // from a watercourse polyline, to catch what this one-shot flush
+        // misses — and it has no core span to lay an apron over, so a crossing
+        // recorded only by that pass is a ford with no drift. See the ford
+        // section in CLAUDE.md for what that costs and where it was measured.
+        if (FORDS_ON && structureOutcome === 'ford-fallback') {
+          // The deck handed over is THIS crossing's own, station by station,
+          // not whatever `roadOver` answers at the point: the loop has already
+          // resolved the overlaps per source way precisely because a tagged
+          // bridge, its approach and a lower road routinely meet at one
+          // crossing, and asking again would lay the apron on the lowest of
+          // them. The same rule `deckBelow` follows one module over.
+          // AND THE WATER ARRIVES IN A DIFFERENT FRAME FROM EVERYTHING ELSE
+          // IN THIS LOOP. `restingLevelM` is metres above SEA LEVEL — the
+          // registry two functions up converts to it on the way in, with
+          // `deckY: road.y + baseElev` — while the deck, the invert, the
+          // ground and every vertex this builder emits are LOCAL metres about
+          // the origin. Handed over raw it read as a drift under 1,789 m of
+          // standing water at the Senqu, which is the Drakensberg's own
+          // elevation wearing the word `depth`.
+          ford(dense, inv, raw, core0, core1, width / 2,
+            wet ? wet.restingLevelM - baseElev : null,
+            overlaps.map((o) => o?.y ?? null), road.segment.hw);
         }
 
         const roadDx = road.segment.bx - road.segment.ax;
@@ -25708,6 +25617,80 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     availableClearanceM: built.availableClearanceM,
     family: built.family,
   };
+}
+/** What the drifts in this world are, so a seat report has a number behind
+ *  it: how many were asked for, how many were built, and why the rest were
+ *  not. A refusal is a fact about the crossing, not a silence. */
+const fordStats = { asked: 0, built: 0, noSpan: 0, noDeck: 0, tooWide: 0, deckM: 0, deepest: 0 };
+/**
+ * A FORD IS BUILT, AND UNTIL NOW IT WAS THE ONE CROSSING THAT DREW NOTHING.
+ *
+ * `resolveProductionCrossing` gives a ford `implementation: 'not-required'`,
+ * which is the right word about a CONDUIT and was read as "no geometry". So
+ * the crossing a driver meets most often — a track through a stream — was the
+ * one the world said nothing about: measured at Chapman's Peak, 27 of 27
+ * drawn-wet points inside a carriageway carried a ford record with the river
+ * resting 0.22-0.65 m over the deck, and the frame from the seat is a river
+ * painted across a track with nothing built at it.
+ *
+ * The apron is laid at the deck the road already solved. This does NOT move
+ * the carriageway: lowering a road into its river is the profile's business
+ * and every branch of `resolveProductionDeck` raises, which is its own unit.
+ * What this builds is the thing a drift actually is — a hard slab to cross
+ * on, a cutoff lip at each edge, and posts at the entries.
+ *
+ * NOTHING GOES IN THE WALL GRID, for the culvert's own reason one function
+ * up: the only vehicle near a drift's lip is the one crossing the drift, and
+ * a 12 cm sill in the collision grid is a kerb across the ford.
+ *
+ * AND THE DECK IS HANDED IN RATHER THAN LOOKED UP. The caller has already
+ * resolved which source way this crossing belongs to and what its deck is at
+ * every station; a fresh `roadOver` here would answer with whichever
+ * carriageway is nearest, which at a real crossing is as often the approach
+ * or the road beneath as the one being forded.
+ */
+function ford(dense: Array<[number, number]>, inv: number[], g: number[],
+  core0: number, core1: number, halfWidthM: number,
+  waterSurfaceY: number | null,
+  deckY: ReadonlyArray<number | null>,
+  roadHalfWidthM: number): void {
+  fordStats.asked++;
+  const built = buildProductionFord({
+    roadHalfWidthM,
+    stations: dense,
+    deckY,
+    invertY: inv,
+    groundY: g,
+    coreStart: core0,
+    coreEnd: core1,
+    waterHalfWidthM: halfWidthM,
+    waterSurfaceY,
+  });
+  if (built.outcome !== 'built') {
+    if (built.outcome === 'no-span') fordStats.noSpan++;
+    else if (built.outcome === 'no-deck') fordStats.noDeck++;
+    else fordStats.tooWide++;
+    return;
+  }
+  fordStats.built++;
+  fordStats.deckM += built.widthM;
+  if (built.depthOverApronM !== null) {
+    fordStats.deepest = Math.max(fordStats.deepest, built.depthOverApronM);
+  }
+  const mesh = (positions: Float32Array, material: THREE.Material, tag: string): void => {
+    if (!positions.length) return;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.computeVertexNormals();
+    // NAMED, so `__sceneList` and `__census` can be asserted against it: an
+    // unnamed mesh arrives as `Mesh` beside a thousand others and no audit
+    // can be written on it.
+    addStructureRenderGeometry(geometry, material,
+      { name: `ford-${tag}`, userData: { ford: true, fordPart: tag } });
+  };
+  mesh(built.apron, MAT.drift, 'apron');
+  mesh(built.sills, MAT.drift, 'sill');
+  mesh(built.posts, MAT.driftPost, 'post');
 }
 function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number[], a: number, b: number, width: number, lift: number, recipe?: StructureRecipe): void {
   const built = buildProductionTunnelGeometry({
@@ -28335,8 +28318,8 @@ async function renderWays(
     // layer, and the host-first rank below still overrides both.
     const la = layerOf(a.tags), lb = layerOf(b.tags);
     if (la !== lb) return lb - la;
-    const wa = (a.tags?.highway ? ROAD_W[a.tags.highway] ?? 5 : -1);
-    const wb = (b.tags?.highway ? ROAD_W[b.tags.highway] ?? 5 : -1);
+    const wa = (a.tags?.highway ? roadWidth(a.tags) : -1);
+    const wb = (b.tags?.highway ? roadWidth(b.tags) : -1);
     return wb - wa;
   });
   // The whole batch into the PRE-GRID before any way builds, so the junction
@@ -28346,7 +28329,7 @@ async function renderWays(
     if (!el.geometry || el.geometry.length < 2 || !tags.highway) continue;
     if (tags.highway === 'services' || tags.highway === 'steps') continue;
     const dk = el.ck ?? String(el.id);
-    const w = ROAD_W[tags.highway] ?? 5;
+    const w = roadWidth(tags);
     const track = ['track', 'path', 'bridleway', 'cycleway', 'footway'].includes(tags.highway);
     const pts = el.geometry.map((g) => toLocal(g.lat, g.lon));
     // The junction registry takes EVERY drivable way in the batch, built or
@@ -28404,7 +28387,7 @@ async function renderWays(
       if (tags.highway === 'services' || tags.highway === 'steps') continue;
       const dk = el.ck ?? String(el.id);
       if (seenWays.has(dk)) continue;
-      const w = ROAD_W[tags.highway] ?? 5;
+      const w = roadWidth(tags);
       for (const end of [0, el.geometry.length - 1]) {
         const [ex, ez] = toLocal(el.geometry[end].lat, el.geometry[end].lon);
         const h = preEdge(ex, ez, dk);
@@ -28507,7 +28490,7 @@ async function renderWays(
     // real, drivable, and belong to the car park.
     if (tags.highway === 'services') continue;
     if (tags.highway) {
-      const w = ROAD_W[tags.highway] ?? 5;
+      const w = roadWidth(tags);
       // THREE tiers, not two. A mountain path used to render as decoration you
       // could not feel underfoot — you crossed Chapman's Peak reading ROUGH the
       // whole way. Tracks now carry their own grip, and are drawn as ruts.
@@ -33141,6 +33124,22 @@ car.add(headSpot, headSpot.target);
 car.traverse((o) => { if ((o as THREE.Mesh).isMesh) castIfSolid(o); });
 scene.add(car);
 // ── the x-ray silhouette: the rig, wherever something hides it ─────
+//
+// RETIRED, AND BEHIND `?rigxray=1` (2026-09-19, from the seat). It did what
+// it was built to do and what it was built to do turned out not to be worth
+// having: the pixels it lit were overwhelmingly the tyre contact patch — a
+// few pixels of hull behind the road surface the wheels are standing on —
+// and the sliver behind a crown clipping the cab. Both are places where
+// nothing is hidden that anyone needed to see, so a teal dither there read
+// as a rendering fault rather than as an aid. Off, `rebuildRigSilhouette`
+// builds no meshes at all, so the group is empty and costs no draw.
+//
+// The mechanism is kept rather than deleted because it is the right one and
+// was expensive to get right: the depth buffer already knows, per pixel,
+// whether the truck is occluded, and the two traps below (self-overdraw, and
+// additive parts glowing through hillsides) are solved. Anything that later
+// wants to answer "where IS the rig" starts here rather than from scratch.
+//
 // The depth buffer already knows, per pixel, whether the truck is occluded —
 // so occlusion handling is one extra draw of the hull with the depth test
 // REVERSED (GreaterDepth): its fragments pass exactly where the stored depth
@@ -33169,9 +33168,18 @@ xrayMat.onBeforeCompile = (sh) => {
     if (mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y), 2.0) < 1.0) discard;`);
 };
 const xray = new THREE.Group();
+// NAMED, so `__sceneList` can be asserted against: an unnamed group arrives as
+// 'Group' beside a dozen others and no audit can be written on it — the rule
+// this file already states for meshes and the census.
+xray.name = 'rig-xray';
 xray.visible = false;
 function rebuildRigSilhouette(): void {
   xray.clear();
+  // Off by default: no meshes, so no draw, no material and nothing for the
+  // shutter's own mark-out pass below to walk. The group itself stays in the
+  // scene — empty — so every site that names it (the hop sweep's keep set,
+  // the shutter's mark-out, the per-frame pose) needs no second condition.
+  if (!RIG_XRAY) return;
   car.updateMatrixWorld(true);
   const carInv = new THREE.Matrix4().copy(car.matrixWorld).invert();
   car.traverse((o) => {
@@ -33193,6 +33201,55 @@ function rebuildRigSilhouette(): void {
 }
 rebuildRigSilhouette();
 scene.add(xray);
+/**
+ * WALK THE DRAWN TRUCK AND TAKE ITS BOX IN PLAN.
+ *
+ * SHEET METAL ONLY, and the rule is the x-ray's rather than a second one: the
+ * headlight cones are ADDITIVE and they are thirty metres long, so a plain
+ * `Box3.setFromObject(car)` reports a half-length of 28.5 m — a reading of the
+ * beam, wearing the word hull. The first run of `__rigbox` did exactly that.
+ *
+ * The wheels' pivots are zeroed for the walk so a steered or spinning wheel
+ * cannot widen the box, and the car's own pose with them: the box wanted is
+ * the MODEL's, in its own frame, and `hull-collide.ts` turns it by the
+ * heading.
+ *
+ * AND IT IS CLAMPED, with the clamp reported. A loadout can hang a winch line
+ * or an aerial off the hull, and a part with a long bounding box would make
+ * the truck collide as a barge. The bounds are wide enough that the shipped
+ * loadouts sit well inside them and narrow enough that a stray part cannot
+ * make the rig uncollidable or unable to fit down a lane; `__rigbox` prints
+ * the raw measurement beside the used one so a clamp that binds is a number
+ * rather than a mystery.
+ */
+function measureRigHull(): void {
+  const savedWheels = rigModel.wheelPivots.map((g) => g.rotation.clone());
+  for (const g of rigModel.wheelPivots) g.rotation.set(0, 0, 0);
+  const savedRot = car.rotation.clone(), savedPos = car.position.clone();
+  car.rotation.set(0, 0, 0); car.position.set(0, 0, 0);
+  car.updateMatrixWorld(true);
+  const box = new THREE.Box3(), tmp = new THREE.Box3();
+  car.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !m.geometry) return;
+    if ((m.material as THREE.Material).blending === THREE.AdditiveBlending) return;
+    m.geometry.computeBoundingBox();
+    tmp.copy(m.geometry.boundingBox as THREE.Box3).applyMatrix4(m.matrixWorld);
+    box.union(tmp);
+  });
+  car.rotation.copy(savedRot); car.position.copy(savedPos);
+  rigModel.wheelPivots.forEach((g, i) => g.rotation.copy(savedWheels[i]));
+  car.updateMatrixWorld(true);
+  const hw = Math.max(Math.abs(box.min.x), Math.abs(box.max.x));
+  const hl = Math.max(Math.abs(box.min.z), Math.abs(box.max.z));
+  if (!Number.isFinite(hw) || !Number.isFinite(hl)) return;   // an empty walk keeps the last good box
+  rigHullRaw.halfWidthM = hw; rigHullRaw.halfLengthM = hl;
+  const cw = clamp(hw, 0.6, 2.0), cl = clamp(hl, 1.5, 4.0);
+  rigHullRaw.clamped = cw !== hw || cl !== hl;
+  rigHull = { halfWidthM: cw, halfLengthM: cl };
+  rigHullR = hullRadiusM(rigHull);
+}
+measureRigHull();
 // ── the rig marks itself out of the shutter ────────────────────────
 // THE MASK RIDES IN rtScene's ALPHA, which nothing downstream reads: the blur,
 // the bright pass and the composite all take .rgb, and the sky and every world
@@ -33392,8 +33449,11 @@ const live = {
   on: false, at: 0, tempC: null as number | null,
   windKmh: 0, windDeg: 0, code: 0,
 };
+/** ?wxlive=0 leaves the feed unasked: the drift is otherwise unobservable
+ *  anywhere the feed answers, which is every harness run through the relay. */
+const WX_LIVE_ON = qsOn('wxlive', true);
 async function fetchLiveWeather(): Promise<void> {
-  if (WX_PIN) return;                     // a pinned sky asks nobody
+  if (WX_PIN || !WX_LIVE_ON) return;      // a pinned sky asks nobody
   if (performance.now() < live.at) return;
   live.at = performance.now() + 900000;   // the upstream updates every 15 minutes
   try {
@@ -33453,24 +33513,89 @@ const WX_WET = ((): number | null => {
   const v = qs('wet');
   return v === null ? null : clamp(Number(v) || 0, 0, 1);
 })();
-function rollWeather(now: number): void {
+/**
+ * ── THE SYNTHETIC SKY DEVELOPS; IT DOES NOT ROLL ──
+ *
+ * The offline chain was a six-entry table per biome, rolled every one and a
+ * half to four minutes and eased in over eight seconds: the sky held a state
+ * for minutes and then changed in seconds, which under CYCLE — a day in an
+ * hour — read from the seat as weather that JUMPS between states rather than
+ * developing with the day it is watching. It is a drift now: the regional
+ * cover is smooth value noise over a WEATHER CLOCK in sim hours, three
+ * octaves at four and a half hours, an hour and a third and twenty-seven
+ * minutes, stretched for contrast the way the field's own fronts are, on a
+ * biome's base and amplitude, plus an afternoon convection bump centred on
+ * 15:00 solar; rain follows cover past the biome's own threshold. The clock
+ * runs at the cycle's rate under CYCLE (24 sim hours a real hour, so a
+ * watched afternoon builds cloud and the night clears) and at six times real
+ * otherwise — a fixed-hour mode keeps its sun and still gets a sky that moves,
+ * and LIVE offline gets a front every ten or twenty minutes rather than
+ * every two.
+ *
+ * The numbers are judgements against the old table's frequencies, not
+ * anchors: with the contrast, cover about the base is roughly normal with a
+ * spread of two thirds of the amplitude, so `wet` is placed where rain comes
+ * about a sixth of the time in temperate country, a third in the tropics and
+ * one time in twenty in the desert, and `storm` where it is rare everywhere
+ * but the tropical afternoon.
+ *
+ * A held sky beats the drift: `__wxnext` and a mission's head set `wx.at`
+ * and the table entry stands until it passes; a pin and the live feed beat
+ * both, as they always did. `wx.sky` and the storm warning key off `wx.next`,
+ * which the drift now derives from its own targets.
+ */
+const WX_SYN_BIOME: Record<string, { base: number; amp: number; wet: number; storm: number; diurnal: number }> = {
+  arid: { base: 0.15, amp: 0.30, wet: 0.48, storm: 0.75, diurnal: 0.04 },
+  tropical: { base: 0.45, amp: 0.35, wet: 0.55, storm: 0.86, diurnal: 0.18 },
+  boreal: { base: 0.50, amp: 0.30, wet: 0.63, storm: 0.93, diurnal: 0.06 },
+  alpine: { base: 0.35, amp: 0.40, wet: 0.58, storm: 0.85, diurnal: 0.14 },
+  temperate: { base: 0.40, amp: 0.35, wet: 0.62, storm: 0.91, diurnal: 0.10 },
+};
+/** Sim hours of weather per real hour: the cycle's own rate under CYCLE,
+ *  and a gentle six otherwise. */
+const WX_SYN_RATE_CYCLE = 24, WX_SYN_RATE = 6;
+const wxSyn = { seed: Math.floor(Math.random() * 1e6), h: 0, cover: 0, rain: 0 };
+/** 1-D value noise in [0, 1], integer-hashed like the field's own. */
+function noise1(x: number, seed: number): number {
+  const i = Math.floor(x), f = x - i, sm = f * f * (3 - 2 * f);
+  const h = (k: number): number => {
+    let v = (k * 374761393 + seed * 668265263) | 0;
+    v = Math.imul(v ^ (v >>> 13), 1274126177);
+    return ((v ^ (v >>> 16)) >>> 0) / 4294967296;
+  };
+  return h(i) * (1 - sm) + h(i + 1) * sm;
+}
+function synWeather(h: number, solarHour: number): { cover: number; rain: number } {
+  const b = WX_SYN_BIOME[biome.name] ?? WX_SYN_BIOME.temperate;
+  const n = noise1(h / 4.5, wxSyn.seed) * 0.6 + noise1(h / 1.3, wxSyn.seed + 7) * 0.3
+    + noise1(h / 0.45, wxSyn.seed + 13) * 0.1;
+  const nc = clamp(0.5 + (n - 0.5) * 2.4, 0, 1);
+  const dh = ((solarHour - 15 + 36) % 24) - 12;
+  const diurnal = Math.exp(-(dh * dh) / (2 * 2.4 * 2.4)) * b.diurnal;
+  const cover = clamp(b.base + (nc - 0.5) * 2 * b.amp + diurnal, 0, 1);
+  const ss = (a: number, c: number, x: number): number => { const t = clamp((x - a) / (c - a), 0, 1); return t * t * (3 - 2 * t); };
+  const rain = ss(b.wet, b.wet + 0.22, cover) * (0.35 + 0.65 * ss(b.wet + 0.1, 1, cover));
+  return { cover, rain };
+}
+function rollWeather(now: number, dt: number): void {
   if (WX_PIN) { wx.next = WX_PIN; return; }
+  wxSyn.h += (dt * (TIME_MODES[timeMode] === 'CYCLE' ? WX_SYN_RATE_CYCLE : WX_SYN_RATE)) / 3600;
   if (live.on) return;                    // the real sky is in charge
-  if (now < wx.at) return;
-  wx.at = now + (90 + Math.random() * 150) * 1000; // a front lasts 1.5–4 minutes
-  // Biome bias: arid stays dry, tropical turns often, boreal broods.
-  const b = biome.name;
-  const table: Sky[] = b === 'arid' ? ['clear', 'clear', 'clear', 'haze', 'haze', 'rain']
-    : b === 'tropical' ? ['clear', 'haze', 'rain', 'rain', 'storm', 'haze']
-    : b === 'boreal' ? ['haze', 'haze', 'clear', 'rain', 'storm', 'haze']
-    : b === 'alpine' ? ['clear', 'haze', 'clear', 'storm', 'haze', 'rain']
-    : ['clear', 'haze', 'clear', 'rain', 'haze', 'storm'];
-  wx.next = table[Math.floor(Math.random() * table.length)];
+  if (now < wx.at) return;                // a held sky keeps its table entry
+  const s = synWeather(wxSyn.h, clockHour());
+  wxSyn.cover = s.cover; wxSyn.rain = s.rain;
+  const b = WX_SYN_BIOME[biome.name] ?? WX_SYN_BIOME.temperate;
+  wx.next = s.rain > 0.75 && s.cover > b.storm ? 'storm'
+    : s.rain > 0.03 ? 'rain' : s.cover > 0.25 ? 'haze' : 'clear';
 }
 function stepWeather(now: number, dt: number): void {
-  rollWeather(now);
+  rollWeather(now, dt);
   void fetchLiveWeather();
   const t = WX[wx.next];
+  // The target: the live feed, else a held table entry, else the drift.
+  const held = now < wx.at;
+  const tCover = live.on ? WX_LIVE.cloud : held ? t.cloud : wxSyn.cover;
+  const tRain = live.on ? WX_LIVE.rain : held ? t.rain : wxSyn.rain;
   const k = Math.min(1, dt * 0.12);                 // fronts arrive slowly
   // A PIN IS A FIXTURE, NOT A FORECAST. ?wx=storm eased in from clear on the
   // same eight-second clock a real front takes, so a harness that booted,
@@ -33483,8 +33608,8 @@ function stepWeather(now: number, dt: number): void {
   } else {
     // Live cover is a measurement and beats the sky state's nominal figure: an
     // overcast dry day and a rainy one are the same word and a different picture.
-    wx.cloud += ((live.on ? WX_LIVE.cloud : t.cloud) - wx.cloud) * k;
-    wx.rain += ((live.on ? WX_LIVE.rain : t.rain) - wx.rain) * k;
+    wx.cloud += (tCover - wx.cloud) * k;
+    wx.rain += (tRain - wx.rain) * k;
   }
   wx.sky = wx.next === 'storm' && wx.cloud > 0.60 ? 'storm'
     : wx.rain > 0.03 ? 'rain' : wx.cloud > 0.25 ? 'haze' : 'clear';
@@ -33519,21 +33644,32 @@ function stepWeather(now: number, dt: number): void {
       : clamp(((1 - dayF) * 0.5 * (1 - wx.cloud * 0.4) * calm
         + wxField.wetMean * 0.6 * (1 - wx.rain)
         + wx.rain * wx.cloud * 0.3) * mistB, 0, 1);
+    // ── EVERY FRAME, NOT EVERY 1.8 SECONDS ──
+    // The field used to be rebuilt on a cadence while the regional scalars it
+    // bakes in eased every frame, so everything that reads the texture — the
+    // deck's coverage, the scud, the mist, the rain, the cloud shadows, the
+    // wet road — arrived in stairs: eight changes in sixteen seconds, the
+    // largest 0.15 of the sky's cover in one frame, measured with the
+    // shipping build at 60 fps (doctrine, "The weather steps…"). The build
+    // keeps its noise now and only re-thresholds it, so this costs tens of
+    // microseconds a frame and a 9 KB upload — and nothing at all in a frame
+    // where nothing moved, which is what the return value says. `dt` is
+    // integrated from the last WRITE, so a skipped frame is not lost time.
     const stale = now - wxBuiltAt;
     const moved = wxRecenter(wxField, state.x, state.z);
-    if (moved || stale > 1800) {
-      buildField(wxField, {
-        t: now / 1000, windX: wxWind.x, windZ: wxWind.z,
-        advectX: wxTravel.x, advectZ: wxTravel.z,
-        cover: wx.cloud, rain: wx.rain, fog: wxFogT,
-        dt: clamp(stale / 1000, 0, 30), dayF,
-      }, sampleHeight);
+    if (moved) wxU.uWxMin.value.set(wxField.ox, wxField.oz);
+    const wrote = buildField(wxField, {
+      t: now / 1000, windX: wxWind.x, windZ: wxWind.z,
+      advectX: wxTravel.x, advectZ: wxTravel.z,
+      cover: wx.cloud, rain: wx.rain, fog: wxFogT,
+      dt: clamp(stale / 1000, 0, 30), dayF,
+    }, sampleHeight);
+    if (wrote) {
       if (WX_WET !== null) seedWet(wxField, WX_WET);
       wxTex.needsUpdate = true;
-      wxU.uWxMin.value.set(wxField.ox, wxField.oz);
-      wxU.uFogTop.value = wxFogT > 0.01 ? wxField.fogTop : -1e9;
       wxBuiltAt = now;
     }
+    wxU.uFogTop.value = wxFogT > 0.01 ? wxField.fogTop : -1e9;
     const l = wxAt(wxField, state.x, state.z);
     wxL.cover = l.cover; wxL.rain = l.rain; wxL.fog = l.fog; wxL.wet = l.wet;
     const c = wxAt(wxField, camera.position.x, camera.position.z);
@@ -35003,6 +35139,7 @@ function tapeApplyHead(head: TapeHead): Record<string, number> {
   }
   if (head.wx === 'clear' || head.wx === 'haze' || head.wx === 'rain' || head.wx === 'storm') {
     wx.next = head.wx as Sky;
+    wx.at = performance.now() + 600000;   // held against the drift for the replay
   }
   // THE SURFACE THE RUN WAS DRIVEN ON. Where the head carries numbers, snap
   // the regional state to them and flood the wet memory — grip, drag and the
@@ -35179,6 +35316,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
   if (hopping) throw new Error('already hopping');
   hopping = true;
   worldEpoch++;
+  wildlife.reset();
   try {
     // The reel and the recorder stand down; the ring is a drive over ground
     // that is about to stop existing.
@@ -35196,11 +35334,34 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     farMeshes.clear(); farTiles.clear(); farStale.clear(); farCoverHit.clear(); farTint.clear(); farRasters.clear(); farBakeZ.clear();
     for (const m of ovMeshes.values()) { ovGroup.remove(m); m.geometry.dispose(); }
     ovMeshes.clear(); ovTiles.clear(); ovPlaces.clear(); ovWays.clear(); ovWayV++;
+    // ── THE SURVIVORS ARE NAMED BY WHAT THEY ARE, NOT BY WHERE THEY SAT ──
+    //
+    // This guard used to name `farGroup` and `ovGroup`, which were direct
+    // children of `worldGroup` when it was written. The sphere work re-parented
+    // both under `planetGroup` and never came back here, so from that day the
+    // guard matched NOTHING: every hop removed the planet (globe, both shells,
+    // the theme group) and the hydro system's object from the scene and
+    // disposed their geometry, and neither is ever re-added — `planetGroup` is
+    // added at module scope and the hydro object inside `if (!hydroSys)`, which
+    // cannot run twice. Measured at the Senqu ford, hopping to the SAME
+    // coordinates: toggling the water's visibility moved 1 draw call and 13,212
+    // triangles before the hop and 0 and 0 after, while the field still held 20
+    // tiles and 34 wet cells — built, and nowhere to draw. A reload was the only
+    // cure, which is exactly what the seat reported.
+    //
+    // So the survivors are named directly, and re-attached below rather than
+    // merely skipped: a skip trusts that nobody re-parents them again, and that
+    // trust is the whole fault. Their CONTENTS are still swept — the two shells
+    // by the loops just above, the hydro tiles by key further down — so nothing
+    // of the old place survives inside them.
+    const hopKeep: THREE.Object3D[] = [planetGroup];
+    if (hydroSys) hopKeep.push(hydroSys.object3d);
     for (const child of [...worldGroup.children]) {
-      if (child === farGroup || child === ovGroup) continue;
+      if (hopKeep.includes(child)) continue;
       worldGroup.remove(child);
       child.traverse((o) => { const g = (o as THREE.Mesh).geometry; if (g) g.dispose(); });
     }
+    for (const keep of hopKeep) if (keep.parent !== worldGroup) worldGroup.add(keep);
     // …and everything that pointed INTO it. The parts the ceremony poses are
     // held in their own arrays, and a hop that dropped the group while keeping
     // the hinges would pose four orphans on the next launch.
@@ -35282,7 +35443,21 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     osmCorridor.clear(); osmDone.clear(); seenWays.clear(); wayTagLog.clear();
     tileStats.clear(); surveyedCache.clear();
     unbuilt = 0; osmFails = 0; osmDown = false;
-    mapFeats.length = 0; mapStroked.clear();
+    // ── THE MINIMAP IS PAINTED PIXELS, AND PIXELS ARE NOT A LIST ──
+    //
+    // Clearing the replay list stops the OLD features being re-stroked, and
+    // does nothing about the ink already on the canvas: the previous place's
+    // roads, water and footprints stayed under the new world's strokes, which
+    // is the "added to, never cleared" the seat saw. `mapRecentre` is the only
+    // thing that blanks it and it early-returns inside 3 km of its anchor — a
+    // hop puts the truck back at the origin, so it almost never fires, and the
+    // fault looked intermittent because a long drive before the hop happened to
+    // blank it on the way. The anchor goes back to the origin with the truck,
+    // and the ways-known counter stops accumulating across continents.
+    mapFeats.length = 0; mapStroked.clear(); mapKnown = 0;
+    mapAnchorX = 0; mapAnchorZ = 0;
+    mapCtx.fillStyle = '#141b14';
+    mapCtx.fillRect(0, 0, MAP_PX, MAP_PX);
     roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear(); bldRoofs.clear(); railWays.clear();
     channelGrid.clear(); rapidRocks.clear(); activeRapidRocks.clear(); chanSet.clear(); wiSet.clear();
     pendingWater.length = 0; productionCrossings.reset(); crossingAppliedRevision.clear();
@@ -35302,7 +35477,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // compiled program to change some bounds.
     for (const key of hydroRev.keys()) hydroSys?.removeTile(key);
     hydroRev.clear(); hydroDirty.clear(); hydroFedInputs.clear(); hydroFeats.clear(); hydroFeatsFull = 0; coverHydro.clear();
-    hydroShoreBreakLines.clear();
+    hydroShoreBreakLines.clear(); hydroFloors.clear(); hydroBanks.clear(); hydroBankStats.clear();
     coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear(); sideCaches.clear();
     // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
     // spatially keyed, so the last postcard's road left an elevation under
@@ -35317,6 +35492,49 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // verdicts. Neither is expensive to rebuild and both would answer for the
     // wrong continent until something happened to evict them.
     swardCache.clear(); sightCache.clear();
+    // ── AND THE COMMITTED SWARD FIELD IS THE LAST PLACE'S, NOT THE LAST GOOD
+    //    PICTURE ──
+    //
+    // The memo above was the only sward state this sweep touched, and it is the
+    // cheap half. The EVIDENCE FIELD — the heights, densities, colours and
+    // habitat classes the bands stand their grass on, and the shrubs' lattice
+    // with them — is built world state exactly like `vegGrid` or `drapedWays`,
+    // and it survived a hop whole.
+    //
+    // THE DISTANCE TRIGGER CANNOT CATCH IT, and that is the whole fault. A hop
+    // returns the truck to local (0,0) while the last field was centred on
+    // wherever the truck stood, so `moved` compares the new focus against the
+    // OLD place's centre — and in the case the seat reported (open DRIVES, hop,
+    // having driven nowhere) those are the same point and the test reads zero
+    // metres. What was left to notice was the ground revision, two seconds
+    // later, once the new world had started building.
+    //
+    // This does NOT contradict the rule the same sweep follows twenty lines up
+    // — keep what is drawn until its replacement is admitted, which is why a
+    // dirtied terrain tile holds its mesh. That rule is about the SAME ground
+    // seen at two revisions, where the old picture is still approximately
+    // right. A hop is the one case where it is not: the old field is another
+    // continent's heights, and standing grass on them is worse than standing
+    // none. Measured at the Senqu → Chapman's pair, the carried field was a
+    // median 18 m and a p90 129 m off the ground under it, with 253 shrubs on
+    // it, for as long as it took the new terrain to bump the revision.
+    //
+    // swardFX to NaN is what the bands and the shrub lattice already read as
+    // "no field" (`!Number.isNaN(swardFX)` gates both), so they stand down on
+    // the next frame without a second rule; `swardRow` abandons a sweep in
+    // flight, which is for the old place and would otherwise commit over the
+    // new one; and the two seen-revisions go back to their initial -1 so the
+    // first frame of the new world asks for a field rather than waiting out a
+    // gate. `swardFieldReady` is what the hydro material reads to decide
+    // whether the terrain-colour field is available at all.
+    if (SWARD_HOP_CLEAR) {
+      swardFX = NaN; swardFZ = NaN;
+      swardFieldReady = false;
+      swardRow = -1;
+      swardRoadSeen = -1; swardGroundSeen = -1; swardFieldAt = 0;
+      for (const b of swardBands) b.mesh.visible = false;
+      shrubs.count = 0;
+    }
     roadSegs = []; roadLineWorld = []; roadLineKey = ''; roadLineAt = -1e9;
     ribBatch = null;
     ribBatchTerrainOwner = null;
@@ -37257,19 +37475,17 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
 // Closest approach since the last call (and reset) — the "can you hit one?"
 // measurement. Anything at or above HERD_CLEAR means nothing was ever touched.
 (window as unknown as { __closest?: object }).__closest = (): object => {
-  const d = herdClosest;
-  herdClosest = Infinity;
-  return { closest: +d.toFixed(2), clearance: HERD_CLEAR };
+  return wildlife.consumeClosest();
 };
 // Where the herd actually is, so a test can go and look at it.
 (window as unknown as { __flock?: object }).__flock = (): object =>
-  flock.map((c) => ({
+  flock.filter(c => c.active).map((c) => ({
     sp: ['gull', 'crow', 'raptor'][c.sp], grp: c.grp,
     sz: +c.sz.toFixed(2), y: Math.round(c.y),
     tint: `#${c.tint.getHexString()}`,
   }));
 (window as unknown as { __herd?: object }).__herd = (): object =>
-  graze.map((c) => ({
+  graze.filter(c => c.active).map((c) => ({
     x: +c.x.toFixed(1), z: +c.z.toFixed(1), sp: ['deer', 'bison', 'horse'][c.sp],
     grp: c.grp, sz: +c.sz.toFixed(2),
     // Is this animal standing on a road deck rather than on the field it
@@ -37466,6 +37682,243 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
     mesh: mesh === null ? null : +(mesh + baseElev).toFixed(2),
     ground: +(groundAt(px, pz) + baseElev).toFixed(2),
     water: wet ? { kind: wet.kind, resting: +wet.restingLevelM.toFixed(2), depth: +wet.depthM.toFixed(2), coverage: +wet.coverage.toFixed(2), shore: +wet.shoreDistanceM.toFixed(1) } : null,
+  };
+};
+/** The nearest channel SEGMENT to a point, whatever its half width — which is
+ *  not `channelAt`, whose job is "am I in the water" and which answers null a
+ *  metre outside the ribbon. A bank station is outside the ribbon by
+ *  definition, so a probe about banks needs the other question. */
+function nearestChannelSeg(x: number, z: number, reachM = 120): { seg: Seg; t: number; d: number } | null {
+  let best: { seg: Seg; t: number; d: number } | null = null;
+  const r = Math.ceil(reachM / GRID);
+  const cx = Math.floor(x / GRID), cz = Math.floor(z / GRID);
+  for (let ax = cx - r; ax <= cx + r; ax++) {
+    for (let az = cz - r; az <= cz + r; az++) {
+      for (const c of channelGrid.get(`${ax},${az}`) ?? []) {
+        const dx = c.bx - c.ax, dz = c.bz - c.az;
+        const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+        const d = Math.hypot(x - (c.ax + dx * t), z - (c.az + dz * t));
+        if (!best || d < best.d) best = { seg: c, t, d };
+      }
+    }
+  }
+  return best && best.d <= reachM ? best : null;
+}
+/**
+ * ── ONE CROSS-SECTION OF A BANK, WITH EVERY AUTHORITY AT EVERY STATION ──
+ *
+ * `__banktransect(x, z, bearingDeg?, halfM?, step?)`. The census counts how
+ * many points disagree; this says WHY one does, and it is the instrument the
+ * bank work is measured with.
+ *
+ * Per station, from ONE revision pair (the tile's terrain generation and its
+ * hydro field's, both reported, so a reading taken across a rebuild is visible
+ * as such rather than averaged into the answer):
+ *
+ *   nat     the DEM, before anything hydro has an opinion — the reference a
+ *           profile must be solved against, never the previous build's mesh
+ *   bed     the published hydro floor's target here, or null outside it
+ *   carve   what the channel carve would offer, or null where it stands down
+ *   bank    the resolved bank target — null until a resolver exists
+ *   tri     the FINAL TRIANGLE under the point, which is what the wheels and
+ *           the eye get
+ *   triMax  the highest of that triangle's three corners. A triangle can
+ *           bridge above the water while every corner sample beside it looks
+ *           acceptable, and no vertex-wise reading can see that.
+ *   level, cov, kind, shore   what the field says
+ *   owner   the LOWEST of the candidate targets, since every rule here only
+ *           lowers — so this is the rule actually in force, not a guess
+ *   triOff  tri minus that target. Large and positive is a triangle nobody
+ *           lowered (a bridge across the channel, or a pin); large and
+ *           negative is something below every stated target.
+ *
+ * The default bearing is square to the nearest channel, because a transect
+ * along a bank measures nothing. `halfM` either side, `step` metres apart.
+ */
+(window as unknown as { __banktransect?: object }).__banktransect = (
+  x = state.x, z = state.z, bearingDeg?: number, halfM = 60, step = 2,
+): object => {
+  const near = nearestChannelSeg(x, z);
+  let ux = 1, uz = 0;
+  if (bearingDeg !== undefined) {
+    const a = bearingDeg * Math.PI / 180;
+    ux = Math.sin(a); uz = -Math.cos(a);
+  } else if (near) {
+    const dx = near.seg.bx - near.seg.ax, dz = near.seg.bz - near.seg.az;
+    const L = Math.hypot(dx, dz) || 1;
+    ux = -dz / L; uz = dx / L;                       // square to the channel
+  }
+  const t = heightTileAt(x, z);
+  const key = t ? `${t.tx}/${t.ty}` : null;
+  const fl = key ? hydroFloors.get(key) : undefined;
+  const floor = fl ? { n: HYDRO_EN, data: fl } : null;
+  // THE KERNEL'S OWN ANSWER, NOT A SECOND COPY OF ITS RULE. `bankTargetAtPacked`
+  // is the same profile the pass lowers ground to (one `bankProfileY` between
+  // them), read here as a point query; a transect that re-derived the station
+  // arithmetic could only ever confirm itself — the San Miguel lesson.
+  const bankPacket = key ? hydroBanks.get(key) : undefined;
+  const f2 = (v: number | null): number | null => v === null || !Number.isFinite(v) ? null : +v.toFixed(2);
+  const stations: object[] = [];
+  for (let s = -halfM; s <= halfM; s += step) {
+    const sx = x + ux * s, sz = z + uz * s;
+    const nat = hasHeight(sx, sz) ? sampleHeight(sx, sz) + baseElev : null;
+    const bed = floor && t ? K.hydroFloorAt(floor, t, sx, sz) : null;
+    // Infinity as the ceiling asks what the carve WOULD offer rather than
+    // whether it would win here, which is the question a transect wants; the
+    // road and crossing vetoes inside it still apply, so a causeway reads null.
+    //
+    // AND IT ANSWERS IN THE KERNEL'S OWN FRAME. `channelFloorAt` is compared
+    // against `pos[]`, which is local metres, while the floor, the field and
+    // `meshSurfaceAt` here are absolute — so the first run of this probe put
+    // the carve at −0.03 beside a river at 1790 and called the difference a
+    // triOff of 1789.79. Two authorities in one table must be in one datum or
+    // the table is a fiction.
+    const carveLocal = channelGrid.size ? K.channelFloorAt(kStore, sx, sz, Infinity) : null;
+    const carve = carveLocal === null ? null : carveLocal + baseElev;
+    const meshY = meshSurfaceAt(sx, sz);
+    const tri = meshY !== null && Number.isFinite(meshY) ? meshY + baseElev : null;
+    const corners = meshTriAt(sx, sz);
+    const triMax = corners ? Math.max(...corners.map((c) => c.y)) + baseElev : null;
+    const w = HYDRO_ON ? hydroSys?.sampleRestingSurface(sx, sz, 0.005) : undefined;
+    const cands: Array<[string, number]> = [];
+    if (nat !== null) cands.push(['natural', nat]);
+    if (bed !== null) cands.push(['bed', bed]);
+    if (carve !== null) cands.push(['carve', carve]);
+    let owner: string | null = null, target: number | null = null;
+    for (const [name, v] of cands) if (target === null || v < target) { target = v; owner = name; }
+    const crossing = productionCrossings.earthworkAt(sx, sz);
+    const bk = bankPacket ? K.bankTargetAtPacked(bankPacket, sx, sz) : null;
+    stations.push({
+      s: +s.toFixed(1), x: Math.round(sx), z: Math.round(sz),
+      nat: f2(nat), bed: f2(bed), carve: f2(carve), bank: f2(bk ? bk.y : null),
+      // `owned` is what makes the composition legible: where it is true the
+      // carve stood down, whether the station shaped the ground or refused it.
+      bankOwned: bk ? bk.owned : false, bankRefused: bk ? bk.refused : false,
+      bankS: bk ? +bk.s.toFixed(1) : null,
+      tri: f2(tri), triMax: f2(triMax),
+      level: f2(w ? w.restingLevelM : null), cov: w ? +w.coverage.toFixed(2) : null,
+      kind: w?.kind ?? null, shore: w ? +w.shoreDistanceM.toFixed(1) : null,
+      owner, triOff: tri !== null && target !== null ? +(tri - target).toFixed(2) : null,
+      road: onCarriageway(sx, sz, 0.6).road,
+      crossing: crossing ? crossing.kind : null,
+      cls: wetClassAt(sx, sz),
+    });
+  }
+  return {
+    at: [Math.round(x), Math.round(z)],
+    bearing: +(((Math.atan2(ux, -uz) * 180 / Math.PI) + 360) % 360).toFixed(1),
+    channel: near ? { d: +near.d.toFixed(1), hw: near.seg.hw, invert: f2(near.seg.ya === undefined ? null : near.seg.ya + baseElev) } : null,
+    tile: key,
+    // THE REVISION PAIR. A transect read while the tile is rebuilding is a
+    // reading of two generations, and the only way to know is to be told.
+    terrainRev: key ? terrainRevision.get(key) ?? null : null,
+    hydroRev: key ? hydroRev.get(key) ?? null : null,
+    // AND THE ALGORITHM'S OWN VERSION, because within one build there is
+    // exactly one of it and it therefore cannot participate in a runtime
+    // identity — what it CAN do is sit beside every number this probe prints,
+    // so a reading taken today is comparable with one taken after the resolver
+    // changes. A measurement with no version beside it is not comparable, which
+    // is the telemetry dump's `look` row arrived at from the other side.
+    bankVer: BANK_PROFILE_VERSION,
+    bankOn: BANK_ON,
+    bankStations: bankPacket ? (bankPacket.length / BANK_STRIDE) | 0 : 0,
+    bankStats: key ? hydroBankStats.get(key) ?? null : null,
+    fringeM: +bankFringeM(x, z).toFixed(1),
+    stations,
+  };
+};
+/**
+ * ── THE BANK FAULT AS A DISTRIBUTION, NOT A COUNT ──
+ *
+ * The census says how MANY points are buried at the fringe; this says how far
+ * the ground stands over its own water where they are, which is the quantity a
+ * bank profile has to remove and the only one that can show a half-fix.
+ *
+ * `over` is the drawn water's resting level subtracted from the TRIANGLE under
+ * it, at every fringe-buried point in the window — so a metre of it is a metre
+ * of bank standing proud of the water it is supposed to hold, whatever the
+ * count of such points happens to be. `reach` is how far those points lie
+ * inside the wet mask: a fringe that reaches further than a texel is no longer
+ * a fringe and the reading should say so rather than being read as one.
+ */
+(window as unknown as { __bankfringe?: object }).__bankfringe = (halfM = 384, n = 129): object => {
+  const cx = state.x, cz = state.z;
+  const over: number[] = [], reach: number[] = [];
+  const worst: object[] = [];
+  let drawn = 0, fringe = 0, interior = 0, protectedN = 0;
+  for (let iz = 0; iz < n; iz++) {
+    const z = cz - halfM + (iz / (n - 1)) * halfM * 2;
+    for (let ix = 0; ix < n; ix++) {
+      const x = cx - halfM + (ix / (n - 1)) * halfM * 2;
+      const c = wetClassAt(x, z);
+      if (c === 'W' || c === 'D') { drawn++; continue; }
+      if (c === 'I') { interior++; continue; }
+      if (c === 'P') { protectedN++; continue; }
+      if (c !== 'U') continue;
+      fringe++;
+      const w = hydroSys?.sampleRestingSurface(x, z, 0.005);
+      const m = meshSurfaceAt(x, z);
+      if (!w || m === null || !Number.isFinite(m)) continue;
+      const d = (m + baseElev) - w.restingLevelM;
+      over.push(d); reach.push(w.shoreDistanceM);
+      worst.push({ x: Math.round(x), z: Math.round(z), over: +d.toFixed(2), shore: +w.shoreDistanceM.toFixed(1), cov: +w.coverage.toFixed(2) });
+    }
+  }
+  const stat = (a: number[]): object => {
+    if (!a.length) return { n: 0, med: null, p90: null, max: null };
+    const s = a.slice().sort((p, q) => p - q);
+    return { n: s.length, med: +s[s.length >> 1].toFixed(2), p90: +s[Math.floor(s.length * .9)].toFixed(2), max: +s[s.length - 1].toFixed(2) };
+  };
+  worst.sort((a, b) => (b as { over: number }).over - (a as { over: number }).over);
+  // The version rides here too: a fringe distribution is exactly the kind of
+  // number that gets quoted against a later one, and the resolver is the thing
+  // that will have moved between them.
+  //
+  // THE PACKET'S OWN STRIDE, NOT A TYPED NUMBER. Both probes divided by 12
+  // and the packet has been 15 floats a station since the chains landed, so
+  // every station count printed since then was 25% high — and the census read
+  // 640 at four unrelated fixtures, which is 1.25 x 512 and 512 is the
+  // resolver's own cap. A count equal to its own budget wearing a disguise,
+  // which is the third site in this unit to have been left on stride 12.
+  //
+  // AND IT IS SCOPED TO THE WINDOW, like every other number in this table. It
+  // summed every tile the ring holds, so a count taken beside a 384 m census
+  // was a count over a few square kilometres — two populations in one row,
+  // which is how the stride fault went unread for as long as it did. A
+  // station carries its own x and z in the same local metres the window is
+  // stated in, so no tile geometry is needed to ask the question.
+  let stationsNear = 0, stationsRing = 0;
+  const statTiles: Array<[string, Float32Array]> = [];
+  for (const [key, packed] of hydroBanks) {
+    const here = (packed.length / BANK_STRIDE) | 0;
+    stationsRing += here;
+    let near = 0;
+    for (let i = 0; i < here; i++) {
+      const o = i * BANK_STRIDE;
+      if (Math.abs(packed[o] - cx) <= halfM && Math.abs(packed[o + 1] - cz) <= halfM) near++;
+    }
+    if (near > 0) { stationsNear += near; statTiles.push([key, packed]); }
+  }
+  // The coarsest spacing among the tiles that actually reach this window, and
+  // the shore they could not describe — the pair the resolver reports per
+  // tile, aggregated the way a reader of this table would aggregate it. A
+  // spacing far over the field's texel is a bank described coarser than the
+  // water it follows, whatever the station count beside it says.
+  let spacingWorst = 0, dropped = 0, uncoveredM = 0, shoreM = 0;
+  for (const [key] of statTiles) {
+    const st = hydroBankStats.get(key);
+    if (!st) continue;
+    spacingWorst = Math.max(spacingWorst, st.spacingM);
+    dropped += st.dropped; uncoveredM += st.uncoveredM; shoreM += st.shoreM;
+  }
+  return {
+    window: [halfM, n], drawn, buried: { fringe, interior, protected: protectedN },
+    over: stat(over), reach: stat(reach), worst: worst.slice(0, 8),
+    bankVer: BANK_PROFILE_VERSION, bankOn: BANK_ON,
+    bankTiles: statTiles.length, bankTilesRing: hydroBanks.size,
+    bankStations: stationsNear, bankStationsRing: stationsRing,
+    bankSpacingWorstM: +spacingWorst.toFixed(2),
+    bankDropped: dropped, bankShoreM: +shoreM.toFixed(1), bankUncoveredM: +uncoveredM.toFixed(1),
   };
 };
 /**
@@ -37800,6 +38253,39 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
   accel: +rig.accel.toFixed(2), svc: rig.svc,
 });
 (window as unknown as { __rigset?: object }).__rigset = (o: Partial<typeof rig>): void => { Object.assign(rig, o); };
+/**
+ * THE HULL THE COLLISION CIRCLE IS SUPPOSED TO STAND IN FOR.
+ *
+ * `CAR_R` is one number and its own comment calls it "a real car's half-diagonal
+ * plus a whisker" — which is the right radius at a CORNER and too large in every
+ * other direction, most of all at the flank, where a long vehicle is narrow.
+ * Nothing reported what the hull actually measures, so the gap between the two
+ * could only be guessed at. Measured off the drawn model in its own frame, with
+ * the wheels' pivots reset so a steered or spinning wheel cannot widen the box.
+ *
+ * Returned in the CAR's axes: x across (half-width), z along (half-length), and
+ * the half-diagonal beside `CAR_R` so the two can be read against each other.
+ */
+(window as unknown as { __rigbox?: object }).__rigbox = (remeasure = false): object => {
+  if (remeasure) measureRigHull();
+  const hw = rigHull.halfWidthM, hl = rigHull.halfLengthM;
+  return {
+    halfWidthM: +hw.toFixed(3), halfLengthM: +hl.toFixed(3),
+    halfDiagM: +rigHullR.toFixed(3),
+    // The walk's own answer before the clamp, so a loadout that hangs a long
+    // part off the hull shows as a number rather than as a truck that handles
+    // oddly. `clamped` is the bit to read first.
+    raw: { halfWidthM: +rigHullRaw.halfWidthM.toFixed(3),
+      halfLengthM: +rigHullRaw.halfLengthM.toFixed(3), clamped: rigHullRaw.clamped },
+    hullOn: HULL_ON, carR: CAR_R,
+    // What the circle costs in each direction: how far the hull stops SHORT of
+    // a barrier it has been pushed off. At a corner this is nearly nothing; at
+    // the flank it is the seat's report.
+    standoffAheadM: +(CAR_R - hl).toFixed(3),
+    standoffFlankM: +(CAR_R - hw).toFixed(3),
+    wheels: { trackHalf: OVERLAND.trackHalf, axleHalf: OVERLAND.axleHalf, r: OVERLAND.wheelRadius },
+  };
+};
 // What a set of OSM tags is worth as a driving surface, and the physics it
 // buys — so the tag ladder can be measured directly rather than inferred from
 // how the truck felt.
@@ -38212,16 +38698,49 @@ function applyHidden(): void {
   return { surface: surfaceAt(px, pz), wet: wi.wet, depth: +wi.depth.toFixed(2), speed: +wi.speed.toFixed(2),
     fx: +wi.fx.toFixed(2), fz: +wi.fz.toFixed(2), fordM: +fordDepthAt(px, pz).toFixed(2) };
 };
-/** Every term of the ford test at a point — the hydro sample, the road deck,
- *  the datum — because "is this a ford" took more than one round to answer. */
+/**
+ * EVERY TERM OF THE FORD TEST AT A POINT, AND THE TWO AUTHORITIES THAT CAN
+ * DISAGREE ABOUT IT.
+ *
+ * `fordM` is the LEGACY rule — the drawn water's resting level against the
+ * road deck, which is what `legacySurfaceAt` reads — and on an ordinary URL
+ * `surfaceAt` does not reach that rule at all: it asks the substrate contact
+ * first, and the contact's `fluid` is water standing above the chosen
+ * SUPPORT. The two can therefore part company wherever the support is NOT the
+ * deck — beside a carriageway, where the water stands over the ground while
+ * the ribbon is clear of it. ON the deck they agree by construction, because
+ * there the support IS the deck: measured at Chapman's Peak over the 27
+ * drawn-wet points inside a carriageway, 27 of 27 read `water` by both rules
+ * with `fordM` 0.22-0.65 m positive and not one disagreement either way.
+ *
+ * So the row carries the contact's own terms beside the legacy ones:
+ * `support` (which layer the contact chose, and at what height), `drive` (the
+ * deck it had available), `fluid` (the column above the support) and
+ * `crossing` (the registry's word, which is what makes the legacy rule stand
+ * down). `lookup` is the tile's own status, because "the substrate said
+ * ground" and "the substrate had nothing to say" are different facts and used
+ * to arrive as one.
+ *
+ * It reads `productionSubstrate.lookup` directly rather than through
+ * `productionContactAt`, so a console call does not add itself to the
+ * fallback monitor's census.
+ */
 (window as unknown as { __ford?: object }).__ford = (x?: number, z?: number): object => {
   const px = x ?? state.x, pz = z ?? state.z;
   const wet = hydroSys?.sampleRestingSurface(px, pz);
   const e = roadEdge(px, pz);
+  const look = productionSubstrate.lookup(px, pz);
+  const c = look.status === 'available' ? look.contact : undefined;
+  const drive = productionDriveAt(px, pz);
   return { hydroOn: HYDRO_ON, surface: surfaceAt(px, pz),
     wet: wet ? { kind: wet.kind, resting: +wet.restingLevelM.toFixed(2), depthM: +wet.depthM.toFixed(2), shore: +wet.shoreDistanceM.toFixed(1), coverage: +wet.coverage.toFixed(2) } : null,
     edge: e ? { y: +e.y.toFixed(2), out: +e.out.toFixed(2), track: e.track } : null,
-    base: +baseElev.toFixed(2), ground: +sampleHeight(px, pz).toFixed(2), fordM: +fordDepthAt(px, pz).toFixed(2) };
+    base: +baseElev.toFixed(2), ground: +sampleHeight(px, pz).toFixed(2), fordM: +fordDepthAt(px, pz).toFixed(2),
+    crossing: c?.crossing ?? productionCrossings.earthworkAt(px, pz)?.kind ?? null,
+    lookup: look.status === 'available' ? 'available' : (look.reason ?? 'unavailable'),
+    support: c ? { kind: c.support.kind, y: +c.support.yM.toFixed(2), material: c.support.material } : null,
+    drive: drive ? { y: +drive.yM.toFixed(2), material: drive.material } : null,
+    fluid: c?.fluid ? { over: +c.fluid.depthAboveSupportM.toFixed(2), kind: c.fluid.kind } : null };
 };
 (window as unknown as { __contact?: object }).__contact = (x: number, z: number): object => {
   const sk = surfaceAt(x, z);
@@ -38679,6 +39198,77 @@ const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
     floatLinear: !!renderer.extensions.get('OES_texture_float_linear'),
   };
 };
+/**
+ * IS THE COMMITTED FIELD A FIELD OF THE GROUND UNDER IT?
+ *
+ * Every other sward probe reports what the field SAYS. None of them can answer
+ * whether it says it about THIS place — and after a world hop that is the only
+ * question worth asking, because the origin moves while the committed texture
+ * does not. Comparing `swardFX` against the truck cannot settle it either: a
+ * hop returns the truck to local (0,0) and the last field was centred on
+ * wherever the truck stood, so the two coincide exactly in the case that
+ * matters most (a hop taken without driving first).
+ *
+ * So the witness is the RESIDUAL: each texel's committed height against the
+ * ground that is there now. A field built for this place tracks it to a metre
+ * or two (the DEM refines under it); a field built for another continent is
+ * out by whatever the two elevations differ by, which is tens to thousands of
+ * metres. `sampleHeight` answers 0 where no tile is loaded, so texels with no
+ * ground under them are counted apart rather than scored as a perfect match —
+ * a field over unstreamed ground would otherwise read as agreeing with it.
+ */
+(window as unknown as { __swardfield?: object }).__swardfield = (step = 4): object => {
+  const res: number[] = [];
+  let noGround = 0;
+  for (let j = 0; j < SWARD_F; j += step) {
+    for (let i = 0; i < SWARD_F; i += step) {
+      const wx = swardFX + (i + 0.5) * SWARD_FM, wz = swardFZ + (j + 0.5) * SWARD_FM;
+      if (!Number.isFinite(wx) || !Number.isFinite(wz) || !heightTileAt(wx, wz)) { noGround++; continue; }
+      const g = groundAt(wx, wz);
+      if (!Number.isFinite(g)) { noGround++; continue; }
+      res.push(Math.abs(swardFieldData[(j * SWARD_F + i) * 4] - g));
+    }
+  }
+  res.sort((a, b) => a - b);
+  const pick = (q: number): number | null =>
+    res.length ? +res[Math.min(res.length - 1, Math.floor(q * res.length))].toFixed(2) : null;
+  // THE FIELD'S OWN IDENTITY, because the residual is a matter of degree and
+  // "is this literally the field the last place committed" is not. Two places
+  // can differ in LOCAL height by only a few metres — every height here is
+  // relative to its own origin's `baseElev` — so a residual can be small and
+  // the data still be another continent's. A checksum cannot be small by
+  // accident. It is over the committed heights and densities, which is what
+  // the bands draw.
+  let sum = 0;
+  for (let i = 0; i < SWARD_F * SWARD_F; i++) {
+    sum = (sum * 31 + Math.round(swardFieldData[i * 4] * 64)) | 0;
+    sum = (sum * 31 + Math.round(swardFieldData[i * 4 + 1] * 4096)) | 0;
+  }
+  return {
+    ready: swardFieldReady, originX: swardFX, originZ: swardFZ, sum,
+    // A sweep in flight is the field's replacement being built; until its last
+    // row lands the OLD one is what is drawn, which is exactly the window this
+    // probe exists to size.
+    sweeping: swardRow >= 0, row: swardRow, of: SWARD_F,
+    pendX: swardPendX, pendZ: swardPendZ, fieldW: SWARD_FW,
+    // The `moved` test's own quantity, so a reading can say whether the
+    // distance trigger could have fired at all rather than leaving it to be
+    // reconstructed from an origin and a width.
+    offCentreM: +Math.hypot(renderFocusXZ()[0] - (swardFX + SWARD_FW / 2),
+      renderFocusXZ()[1] - (swardFZ + SWARD_FW / 2)).toFixed(1),
+    rebuildAt: SWARD_REBUILD,
+    groundSeen: swardGroundSeen, groundRev: swardGroundRev(),
+    roadSeen: swardRoadSeen, roadRev: swardRoadRev(),
+    bandsVisible: swardBands.filter((b) => b.mesh.visible).length, bands: swardBands.length,
+    shrubs: shrubN,
+    // The reading. Sampled, not exhaustive: a quarter of the texels in each
+    // axis is 400 points, which is plenty for a median over a field that is
+    // either right or out by an elevation.
+    sampled: res.length, noGround,
+    residualMed: pick(0.5), residualP90: pick(0.9), residualMax: res.length ? +res[res.length - 1].toFixed(2) : null,
+    ledger: { ...swardLedger },
+  };
+};
 /** The mask, as the CPU drew it and as a point query — so "the mask is wrong"
  *  and "the mask is sampled wrong" stop being the same sentence. */
 /**
@@ -38853,7 +39443,20 @@ const SWARD_SHRINK_EFF = 1 - 0.45 / 2;
  *  question a screenshot of the surface cannot answer. */
 /** One letter per point: what says water here, and whether the eye would
  *  see it. The overlay and `__wetmap` share this so they cannot disagree. */
-type WetClass = 'W' | 'D' | 'U' | 'E' | 'F' | 'C' | 'O' | 'c' | 'X' | '.';
+type WetClass = 'W' | 'D' | 'U' | 'I' | 'P' | 'E' | 'F' | 'C' | 'O' | 'c' | 'X' | '.';
+/**
+ * ONE FIELD TEXEL, which is the honest width of "the shoreline transition"
+ * for a diagnostic: the field cannot resolve a bank finer than its own sample
+ * spacing, so a burial nearer the waterline than that is inside the band no
+ * lattice-resolution rule can reach. A flowing tile's texel is about 9 m and a
+ * waterless one's about 19; the fallback is the flowing figure, for the case
+ * where no field is loaded and the answer is a guess either way.
+ */
+function bankFringeM(x: number, z: number): number {
+  const f = hydroSys?.fieldAt(x, z);
+  if (!f) return 10;
+  return (f.bounds.maxX - f.bounds.minX) / Math.max(1, f.resolution);
+}
 /** What the wheels read, and whether the deck under the point is a STRUCTURE
  *  standing clear of the terrain — which is the other half of every "why is
  *  the truck on a road here" and "is that a bridge or an embankment" the seat
@@ -38879,15 +39482,52 @@ function wetClassAt(x: number, z: number): WetClass {
   // whole transition band, including fragments the ragged cut admits below
   // the canonical 0.5 field classification.
   const wet = HYDRO_ON ? hydroSys?.sampleRestingSurface(x, z, 0.005) : undefined;
-  const ground = hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
+  // THE CARVED TERRAIN, NOT THE HEIGHTFIELD. `sampleHeight` is the raster
+  // the channel carve starts from, so a river the carve had exposed still
+  // read BURIED against the higher pre-carve ground — pink was not evidence
+  // that more excavation was needed. The mesh is what the wheels and the eye
+  // get; the raster is the fallback where no tile has been built yet.
+  const carved = meshSurfaceAt(x, z);
+  const ground = carved !== null && Number.isFinite(carved) ? carved + baseElev
+    : hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
   const above = !!wet && (!Number.isFinite(ground) || wet.restingLevelM > ground + 0.02);
   const cut = WATERLINE_CUT(x, z, wet?.kind);
   const drawn = !!wet && above && wet.coverage >= cut;
   const onDeck = surf === 'road' || surf === 'track';
   if (wet && Math.abs(wet.coverage - cut) < 0.12 && above) return 'E';
   if (drawn) return onDeck ? 'D' : surf === 'water' ? 'W' : 'X';
-  if (wet && !above) return 'U';
-  if (surf === 'water' && fordDepthAt(x, z) > FORD_MIN_M && onDeck) return 'F';
+  // BURIED means water the field DRAWS (coverage at or over the cut) with
+  // its level under the carved mesh. Below the cut nothing is drawn, so a
+  // low-coverage fringe texel whose ground stands above the level is simply
+  // dry land near water — counting it as buried put the whole shore band in
+  // pink and made the first census read half of every river as buried.
+  //
+  // AND A BURIAL IS THREE DIFFERENT FAULTS WEARING ONE LETTER, which is why
+  // the census could say a river was buried and never which rule had failed.
+  // `U + I + P` reproduces the old `U` exactly, so the tables already in this
+  // file stay comparable.
+  if (wet && !above) {
+    if (wet.coverage < cut) return '.';
+    // STRUCTURE-PROTECTED. A causeway keeps its earth plug and an unresolved
+    // overlap keeps the legacy plug — the same two cases channelFloorAt
+    // refuses to carve for. Water under that ground is the crossing authority
+    // working, and counting it with the failures makes a correct causeway
+    // read as a defect.
+    if (onCarriageway(x, z, 0.6).road) {
+      const crossing = productionCrossings.earthworkAt(x, z);
+      const kind = crossing && crossing.kind !== 'unresolved' ? crossing.kind : null;
+      if (kind === null || kind === 'causeway') return 'P';
+    }
+    // INTERIOR against FRINGE, and no rule reaches both. A body's own
+    // interior standing above its own level is the published floor's business
+    // — the Umgeni's riverbank polygon, one blob. Water buried within a texel
+    // of its own shoreline is the BANK's, and lowering the interior harder
+    // cannot touch it: there is no interior there to lower.
+    return wet.shoreDistanceM >= bankFringeM(x, z) ? 'I' : 'U';
+  }
+  // A ford is a DECK with water over it. The old test also required the
+  // surface to be water, which a deck never is, so 'F' was unreachable.
+  if (onDeck && fordDepthAt(x, z) > FORD_MIN_M) return 'F';
   if (surf === 'water' && channelAt(x, z)) return 'C';
   if (surf === 'water' && oceanAt(x, z)) return 'O';
   if (surf === 'water') return 'X';
@@ -38895,7 +39535,11 @@ function wetClassAt(x: number, z: number): WetClass {
   return '.';
 }
 const WET_RGBA: Record<WetClass, string> = {
-  W: 'rgba(40,110,255,0.75)', D: 'rgba(255,150,30,0.8)', U: 'rgba(230,40,220,0.8)', E: 'rgba(250,230,40,0.7)',
+  W: 'rgba(40,110,255,0.75)', D: 'rgba(255,150,30,0.8)', U: 'rgba(230,40,220,0.8)',
+  // The bank's own failure keeps the pink everyone knows; the interior's is a
+  // deeper violet beside it, and a burial the crossing authority MEANT is a
+  // muted earth that must not compete with either — it is not a fault.
+  I: 'rgba(140,20,200,0.8)', P: 'rgba(150,110,60,0.45)', E: 'rgba(250,230,40,0.7)',
   F: 'rgba(30,220,255,0.85)', C: 'rgba(60,220,220,0.7)', O: 'rgba(20,30,140,0.7)', c: 'rgba(160,170,190,0.55)',
   X: 'rgba(255,40,40,0.9)', '.': 'rgba(0,0,0,0)',
 };
@@ -41566,7 +42210,21 @@ function meshHeightAt(x: number, z: number): number | null {
   fogTop: Math.round(wxField.fogTop), wetMean: +wxField.wetMean.toFixed(3),
   grid: { ox: wxField.ox, oz: wxField.oz },
   wind: { x: +wxWind.x.toFixed(2), z: +wxWind.z.toFixed(2), kmh: Math.round(wxWind.kmh) },
+  // Milliseconds since the field was last rebuilt: the number that says
+  // whether a value read from `local` is this frame's or a stair's.
+  builtAgo: Math.round(performance.now() - wxBuiltAt), next: wx.next,
+  held: performance.now() < wx.at, live: live.on,
+  syn: { h: +wxSyn.h.toFixed(3), cover: +wxSyn.cover.toFixed(3), rain: +wxSyn.rain.toFixed(3) },
 });
+/** Ask for a front, the way `__windset` asks for a gale: a test that wants to
+ *  watch a sky arrive cannot wait on the synthetic roll's minutes or on the
+ *  live feed's quarter hour. Holds the roll off for ten minutes; a pin still
+ *  wins, because a pin is a fixture. */
+(window as unknown as { __wxnext?: object }).__wxnext = (sky: Sky): string => {
+  if (WX_PIN) return `pinned ${WX_PIN}`;
+  wx.next = sky; wx.at = performance.now() + 600000;
+  return sky;
+};
 /** Which palette the world settled on, and whether real cover chose it or the
  *  latitude guess is still standing in. */
 /**
@@ -42015,6 +42673,33 @@ function heightsOf(): number[] {
     out.push([+s.ax.toFixed(2), +s.az.toFixed(2), +s.bx.toFixed(2), +s.bz.toFixed(2)]);
   }
   return out;
+};
+/** The nearest wall segment to a point, long enough to be worth standing a
+ *  truck against — the SUBJECT of a collision measurement, picked by the world
+ *  rather than by the tool. `kind` filters to a guard rail (`sl`) or to
+ *  masonry, because the two are charged differently and read differently from
+ *  the seat. A segment shorter than the truck is no use: the push-out solves
+ *  against the nearest point ON the segment, so at its end the wall behaves as
+ *  a point and the reading would be about the cap rather than the face. */
+(window as unknown as { __wallnear?: object }).__wallnear = (
+  kind?: 'rail' | 'wall', x?: number, z?: number, minLen = 6): object | null => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  let best: Seg | null = null, bd = Infinity;
+  const seen = new Set<Seg>();
+  for (const arr of wallGrid.values()) for (const s of arr) {
+    if (seen.has(s)) continue;
+    seen.add(s);
+    if (kind === 'rail' && !s.sl) continue;
+    if (kind === 'wall' && s.sl) continue;
+    if (Math.hypot(s.bx - s.ax, s.bz - s.az) < minLen) continue;
+    const [cx, cz] = closestOnSeg(px, pz, s);
+    const d = Math.hypot(px - cx, pz - cz);
+    if (d < bd) { bd = d; best = s; }
+  }
+  if (!best) return null;
+  return { ax: best.ax, az: best.az, bx: best.bx, bz: best.bz,
+    sl: !!best.sl, ru: !!best.ru, ya: best.ya, distM: +bd.toFixed(2),
+    lenM: +Math.hypot(best.bx - best.ax, best.bz - best.az).toFixed(2) };
 };
 (window as unknown as { __roadsegs?: object }).__roadsegs = (): number[][] => {
   const out: number[][] = [], seen = new Set<Seg>();
@@ -43104,6 +43789,72 @@ function farHeightAt(wx: number, wz: number): number | null {
     deepest: +culvertStats.deepest.toFixed(1),
     worstRise: +culvertStats.worstRise.toFixed(4), channels: channelGrid.size });
 /**
+ * THE DRIFTS, AND WHY A REFUSAL WAS REFUSED.
+ *
+ * `__ford(x, z)` answers whether a POINT is a ford — the registry's word, the
+ * layer the contact chose as support, and the two rules' verdicts. It cannot
+ * say whether anything was BUILT there, which is the question the seat's frame
+ * at Chapman's Peak was actually asking: a crossing can be a ford on every
+ * term and draw nothing, and for the whole life of this world it did. So this
+ * is the other half — asked against built, with each refusal named rather than
+ * summed into one silence, because `asked - built` is a number and `noDeck 14`
+ * is a fault with an address.
+ *
+ * `deckM` is the carriageway width forded (the drift's extent ACROSS the
+ * road), `deepest` the worst standing water over an apron: a ford the field
+ * puts a metre of river over is one a driver should be warned about, and the
+ * number has to exist before anything can warn them.
+ */
+(window as unknown as { __fords?: object }).__fords = (): object => {
+  // AND THE SECOND WITNESS IS NOT THE LEDGER'S. `fordStats` is written by the
+  // rule under test, so it can only ever confirm it — the San Miguel lesson,
+  // where a probe that replayed a rule verbatim agreed with it to the
+  // centimetre and explained nothing. This walks the SCENE for the drift's own
+  // userData and sums what the renderer was actually handed, so a drift that
+  // was solved and never committed reads as `built 12` beside `tris 0`.
+  const parts: Record<string, number> = { apron: 0, sill: 0, post: 0 };
+  let meshes = 0, tris = 0;
+  const box = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity, z0: Infinity, z1: -Infinity };
+  const aprons: Array<[number, number, number, number]> = [];
+  worldGroup.traverse((o) => {
+    if (!o.userData?.ford) return;
+    const mesh = o as THREE.Mesh;
+    const position = mesh.geometry?.attributes?.position;
+    if (!position) return;
+    meshes++;
+    const n = (mesh.geometry.index ? mesh.geometry.index.count : position.count) / 3;
+    tris += n;
+    const tag = String(o.userData.fordPart ?? '');
+    if (parts[tag] !== undefined) parts[tag] += n;
+    mesh.geometry.computeBoundingBox();
+    const bb = mesh.geometry.boundingBox;
+    if (!bb) return;
+    box.x0 = Math.min(box.x0, bb.min.x); box.x1 = Math.max(box.x1, bb.max.x);
+    box.y0 = Math.min(box.y0, bb.min.y); box.y1 = Math.max(box.y1, bb.max.y);
+    box.z0 = Math.min(box.z0, bb.min.z); box.z1 = Math.max(box.z1, bb.max.z);
+    if (tag === 'apron') {
+      const cx = (bb.min.x + bb.max.x) / 2;
+      const cz = (bb.min.z + bb.max.z) / 2;
+      // AND THE GROUND UNDER IT, sampled from the world rather than from the
+      // deck the builder was handed. An apron is laid at the carriageway's own
+      // deck and the channel is CARVED THROUGH a ford's footprint, so where
+      // the profile has not been dipped to the water the slab can stand over
+      // a trench — which is a hole you can see under, and is not a number the
+      // ledger can ever report because the ledger never asks the terrain.
+      aprons.push([+cx.toFixed(1),
+        +((bb.min.y + bb.max.y) / 2).toFixed(2),
+        +cz.toFixed(1),
+        +groundAt(cx, cz).toFixed(2)]);
+    }
+  });
+  return { on: FORDS_ON, ...fordStats,
+    deckM: +fordStats.deckM.toFixed(1),
+    deepest: +fordStats.deepest.toFixed(2),
+    scene: { meshes, tris, parts,
+      box: meshes ? box : null,
+      aprons: aprons.slice(0, 12) } };
+};
+/**
  * DO DRAPED WAYS ACTUALLY SIT ON THE GROUND THAT IS DRAWN?
  *
  * Reads the VERTICES of every registered drape and compares each against
@@ -43890,8 +44641,12 @@ const DITHER_PATS = ['bayer4', 'bayer8', 'check', 'grain', 'lines', 'bayer16', '
 };
 
 // ── input: keyboard + a VISIBLE one-thumb stick, second finger = brake ──
+/** The embedded authoring lab has two explicit input owners. In PAINT mode the
+ * editor owns the canvas and the game must not create persistent stick, pan,
+ * brake or keyboard state underneath the stroke. */
+let authoringInputCaptured = false;
 const keys = new Set<string>();
-addEventListener('keydown', (e) => { keys.add(e.key.toLowerCase()); });
+addEventListener('keydown', (e) => { if (!authoringInputCaptured) keys.add(e.key.toLowerCase()); });
 addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); });
 
 // The stick appears WHERE the thumb lands (no fixed gutter to find blind),
@@ -44114,6 +44869,7 @@ function chartLensUp(e: PointerEvent): boolean {
   };
 };
 canvas.addEventListener('pointerdown', (e) => {
+  if (authoringInputCaptured) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   // Each instrument swallows the DOWN; hudPtrs makes it swallow the UP too.
   if (chartLensDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
@@ -44174,6 +44930,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (authoringInputCaptured) return;
   if (chartLensMove(e)) return;
   if (rewindMove(e)) return;
   if (clockMove(e)) return;
@@ -44275,6 +45032,7 @@ canvas.addEventListener('pointermove', (e) => {
   panPtrs.set(e.pointerId, cur);
 });
 addEventListener('wheel', (e) => {
+  if (authoringInputCaptured) { e.preventDefault(); return; }
   if (camMode !== 'top') return;
   zoomT = clamp(zoomT * Math.exp(e.deltaY * 0.0012), ZOOM_MIN, ZOOM_MAX);
   e.preventDefault();
@@ -44755,6 +45513,7 @@ const tapCanMark = (e: PointerEvent): boolean => {
   return e.clientY < innerHeight * 0.5;
 };
 const endStick = (e: PointerEvent): void => {
+  if (authoringInputCaptured) return;
   // Taken by an instrument on the down — see hudPtrs. Deleted whatever the
   // event type, so a cancel clears it too; `lastUp` is set so the window's
   // copy of the same up (this handler is on both) does not ask the chart.
@@ -44861,6 +45620,18 @@ addEventListener('blur', () => {
   stick = null; brakeId = null; lift = null; chartLensDrag = null;
   panPtrs.clear(); keys.clear(); updateStickHome();
 });
+function setAuthoringInputCaptured(on: boolean): void {
+  authoringInputCaptured = on;
+  if (!on) return;
+  stick = null;
+  brakeId = null;
+  lift = null;
+  chartLensDrag = null;
+  panPtrs.clear();
+  panY = null;
+  keys.clear();
+  updateStickHome();
+}
 // The controls as the truck last received them — so a harness can drive the
 // stick with synthetic pointers and read what the driver would actually get,
 // rather than inferring it from how the truck moved.
@@ -46285,6 +47056,7 @@ function togglePov(): void {
   if (camMode !== 'top') setCam(lastPov);
 }
 addEventListener('keydown', (e) => {
+  if (authoringInputCaptured) return;
   if (e.key.toLowerCase() === 'c') toggleCam();
   if (e.key.toLowerCase() === 'v') togglePov();
   if (e.key.toLowerCase() === 'g') droneToggle();
@@ -49394,9 +50166,29 @@ function tick(now: number): void {
       // are treated this way: a building's ya is its ROOF, and skipping walls
       // whose roof is high would drive you through the building.
       if (seg.sl && seg.ya !== undefined && Math.abs(seg.ya - car.position.y) > 4) continue;
+      // ── THE TRUCK IS A BOX, NOT A CIRCLE ──
+      //
+      // `CAR_R` was the whole test and it is one radius: right at a corner and
+      // wrong in every other direction. Measured against the drawn hull, it
+      // stood 1.32 m proud at the FLANK — so running along a guard rail, which
+      // is what a mountain road is, the truck stopped a clear metre and a
+      // third short of it, which is the seat's report to the centimetre — and
+      // 0.15 to 0.35 m INSIDE the wall head-on and obliquely, so a bumper sank
+      // into a façade. One number cannot be both.
+      //
+      // `hullPushFromSegment` is exact (separating axis; in two dimensions
+      // the box's two axes and the segment's one normal are the complete
+      // set), so what comes back is the LEAST translation that separates them
+      // rather than a radial shove. The circle survives as the BROAD PHASE
+      // only — `rigHullR` is the true half-diagonal, 2.766, which the old 2.4
+      // was smaller than.
       const [cx2, cz2] = closestOnSeg(state.x, state.z, seg);
       const d = Math.hypot(state.x - cx2, state.z - cz2);
-      if (d < CAR_R) {
+      const boxPush = HULL_ON && d < rigHullR
+        ? hullPushFromSegment(state.x, state.z, state.heading, rigHull,
+          seg.ax, seg.az, seg.bx, seg.bz)
+        : null;
+      if (HULL_ON ? boxPush !== null : d < CAR_R) {
         // RUBBLE IS NOT A WALL. A ruin's standing masonry costs you — a bite of
         // speed, a knock to the hull, the noise — and then you are through it,
         // exactly as a boulder does. It must not push, because a shell with two
@@ -49413,9 +50205,14 @@ function tick(now: number): void {
           audio.crash(clamp(v / 14, 0.25, 0.9), 'stone');
           continue;
         }
-        const push = (CAR_R - d) / (d || 1e-4);
-        state.x += (state.x - cx2) * push;
-        state.z += (state.z - cz2) * push;
+        if (boxPush) {
+          state.x += boxPush.x;
+          state.z += boxPush.z;
+        } else {
+          const push = (CAR_R - d) / (d || 1e-4);
+          state.x += (state.x - cx2) * push;
+          state.z += (state.z - cz2) * push;
+        }
         hit = true;
         // A GUARD RAIL IS NOT A WALL — and a WALL is not a dead stop either.
         // Both charge by how SQUARE the travel went into them: along a rail
@@ -49459,16 +50256,33 @@ function tick(now: number): void {
       if (!c) continue;
       const dx = state.x - g.position.x, dz = state.z - g.position.z;
       const d = Math.hypot(dx, dz) || 1e-4;
-      const want = c.r + CAR_R;
-      if (d >= want) continue;
       const nx = dx / d, nz = dz / d;          // outward from the centre
-      state.x = g.position.x + nx * want;
-      state.z = g.position.z + nz * want;
+      // THE HULL, NOT A CIRCLE ABOUT IT, for the reason the wall test gives:
+      // a radius stands proud of the truck at the flank and short of it at the
+      // nose. `hullPointDistanceM` is the distance from the BOX to the shell's
+      // centre, so the condition is simply that the box does not reach inside
+      // the rim, and the push is the shortfall along the radial. At kilometre
+      // scale the radial does not turn across the hull, so this is exact.
+      const reach = HULL_ON
+        ? hullPointDistanceM(state.x, state.z, state.heading, rigHull, g.position.x, g.position.z)
+        : d - CAR_R;
+      if (reach >= c.r) continue;
+      const out = c.r - reach;
+      state.x += nx * out;
+      state.z += nz * out;
       // How square the hit was: the component of travel that went INTO the
       // shell, exactly as a guard rail is charged. Driving along the rim is
       // free, driving at it is not.
+      //
+      // AND THE Z SIGN WAS INVERTED HERE, alone in this file. Every other site
+      // integrates `state.z -= cos(h) * speed` and slides along `(cos h,
+      // sin h)`; this read `+cos(h) * speed - sin(h) * slideV`, which is the
+      // truck's velocity reflected about the x axis — so a glancing pass at
+      // the rim was charged as a head-on one and the other way round. Found by
+      // deriving the frame for hull-collide.ts, which is why that frame is
+      // stated once now instead of five times.
       const vx = Math.sin(state.heading) * state.speed + Math.cos(state.heading) * slideV;
-      const vz = Math.cos(state.heading) * state.speed - Math.sin(state.heading) * slideV;
+      const vz = -Math.cos(state.heading) * state.speed + Math.sin(state.heading) * slideV;
       const into = -(vx * nx + vz * nz);       // >0 when moving inward
       if (into > 0) {
         const sq = clamp(into / Math.max(1, Math.abs(state.speed)), 0, 1);
@@ -49507,6 +50321,13 @@ function tick(now: number): void {
   // the hull — and then the truck is past it. One charge per rock per second,
   // so a boulder field rattles rather than bricks.
   if (!real.on && groundedF > 0.25 && Math.abs(state.speed) > 1.2) {
+    // How far a point is from the HULL — zero once it is inside. Every round
+    // obstacle in this block used `hypot(centre) > CAR_R + its own radius`,
+    // which is the circle's fault repeated four times; this is the same test
+    // with the truck's own shape in it, and `?hull=0` keeps the circle.
+    const hullReach = (px: number, pz: number): number => HULL_ON
+      ? hullPointDistanceM(state.x, state.z, state.heading, rigHull, px, pz)
+      : Math.hypot(px - state.x, pz - state.z) - CAR_R;
     const [cx0, cz0] = vegCellOf(state.x, state.z);
     // The offset within the cell is measured in the cell's OWN frame.
     const [tax, taz] = vegAbsOf(state.x, state.z);
@@ -49526,9 +50347,12 @@ function tick(now: number): void {
           // back; logs stay ground clutter the suspension already reads.
           if (site.k !== 'log') {
             const wideV = site.s * Math.max(1, site.sw ?? 1);
-            const dV = Math.hypot(site.x - state.x, site.z - state.z);
+            // THE DISTANCE FROM THE HULL, not from its centre less a radius:
+            // a trunk beside the flank was charged 1.3 m before the panel
+            // reached it, and one dead ahead 0.15 m after the bumper had.
+            const dV = hullReach(site.x, site.z);
             const trunked = (site.h ?? 0) > 0 || site.k === 'snag';
-            if (trunked && dV < CAR_R + 0.45 * site.s) {
+            if (trunked && dV < 0.45 * site.s) {
               if (site.hit === undefined || nowMs - site.hit > 900) {
                 site.hit = nowMs;
                 const v = Math.abs(state.speed);
@@ -49536,7 +50360,7 @@ function tick(now: number): void {
                 rig.hull = clamp(rig.hull - 0.002 * Math.min(1, v / 12), 0, 1);
                 audio.whip(clamp(v / 12, 0.2, 1), true);
               }
-            } else if (dV < CAR_R + wideV * 0.8) {
+            } else if (dV < wideV * 0.8) {
               brushAmt += site.k === 'bush' || site.k === 'fern' ? 0.5 : 0.3;
               if ((site.hit === undefined || nowMs - site.hit > 700) && Math.random() < 0.35) {
                 site.hit = nowMs;
@@ -49553,7 +50377,7 @@ function tick(now: number): void {
         // off the uniform scale alone would have a pancake hitting like a tor.
         const wide = site.s * Math.max(1, site.sw ?? 1);
         const tall = site.s * (site.sy ?? 1);
-        if (Math.hypot(site.x - state.x, site.z - state.z) > CAR_R + wide * 0.85) continue;
+        if (hullReach(site.x, site.z) > wide * 0.85) continue;
         if (site.hit !== undefined && nowMs - site.hit < 1000) continue;
         site.hit = nowMs;
         const v = Math.abs(state.speed);
@@ -49567,7 +50391,7 @@ function tick(now: number): void {
       // reach needs no scale factor and the bite runs a shade harder — wet
       // stone at bumper height is not a pebble in the grass.
       for (const rock of rapidRocks.get(`${gx},${gz}`) ?? []) {
-        if (Math.hypot(rock.x - state.x, rock.z - state.z) > CAR_R + rock.s) continue;
+        if (hullReach(rock.x, rock.z) > rock.s) continue;
         if (rock.hit !== undefined && nowMs - rock.hit < 1000) continue;
         rock.hit = nowMs;
         const v = Math.abs(state.speed);
@@ -49870,7 +50694,7 @@ function tick(now: number): void {
   car.rotation.set(pitchC, -state.heading, rollC);
   // The silhouette rides the same pose. Chase only: in cab you ARE the truck,
   // and the chart looks too steeply down for terrain to stand in the way.
-  xray.visible = camMode === 'chase';
+  xray.visible = RIG_XRAY && camMode === 'chase';
   if (xray.visible) {
     xray.position.copy(car.position);
     xray.rotation.copy(car.rotation);
@@ -51196,10 +52020,7 @@ function applyBiome(b: Biome): void {
   biome = b;
   // The herd is built at module load, before the spawn's biome is known — so
   // re-roll which species are out there whenever the biome actually lands.
-  herdSpecies = Array.from({ length: HERD_GROUPS }, () => pickSpecies(state.x, state.z));
-  for (const c of graze) c.sp = herdSpecies[c.grp];
-  birdSpecies = Array.from({ length: BIRD_GROUPS }, () => pickBird(state.x, state.z));
-  for (const c of flock) c.sp = birdSpecies[c.grp];
+  wildlife.refreshClimate();
   // The six sky colours are the DAYLIGHT versions of themselves; how much of
   // each survives depends on where the sun is, so the clock paints them.
   applySkyTint();
@@ -51433,6 +52254,69 @@ Object.assign(hud.style, {
 hud.classList.add('ui');
 document.body.appendChild(hud);
 const hctx = hud.getContext('2d')!;
+let authoringPreviews: readonly AuthoringPreview[] = [];
+const authoringProject = new THREE.Vector3();
+function projectAuthoringPoint(x: number, z: number): [number, number] | null {
+  const y = groundAt(x, z) + .2;
+  authoringProject.set(x, y, z).project(camera);
+  if (!Number.isFinite(authoringProject.x) || !Number.isFinite(authoringProject.y)
+    || authoringProject.z < -1 || authoringProject.z > 1) return null;
+  return [
+    (authoringProject.x * .5 + .5) * HW,
+    (.5 - authoringProject.y * .5) * HH,
+  ];
+}
+function drawAuthoringPreviews(): void {
+  if (!authoringPreviews.length) return;
+  hctx.save();
+  hctx.lineJoin = 'round';
+  hctx.lineCap = 'round';
+  for (const preview of authoringPreviews) {
+    const colour = preview.state === 'failed' ? UI.bad
+      : preview.state === 'settled' ? UI.good
+        : preview.state === 'pending' ? UI.gold : UI.edge;
+    hctx.strokeStyle = colour;
+    hctx.fillStyle = colour;
+    hctx.globalAlpha = preview.state === 'settled' ? .42 : .9;
+    hctx.setLineDash(preview.state === 'pending' ? [3, 3] : []);
+    if (preview.kind === 'cursor') {
+      const centre = preview.points[0];
+      if (!centre) continue;
+      hctx.beginPath();
+      let visible = 0;
+      for (let i = 0; i <= 32; i++) {
+        const a = (i / 32) * Math.PI * 2;
+        const p = projectAuthoringPoint(
+          centre.x + Math.cos(a) * preview.radiusM,
+          centre.z + Math.sin(a) * preview.radiusM,
+        );
+        if (!p) continue;
+        if (visible++ === 0) hctx.moveTo(p[0], p[1]); else hctx.lineTo(p[0], p[1]);
+      }
+      hctx.lineWidth = 1;
+      hctx.stroke();
+      continue;
+    }
+    const projected = preview.points
+      .map((point) => projectAuthoringPoint(point.x, point.z))
+      .filter((point): point is [number, number] => !!point);
+    if (projected.length < 2) continue;
+    const first = preview.points[0];
+    const edge = projectAuthoringPoint(first.x + preview.radiusM * .5, first.z);
+    const centre = projectAuthoringPoint(first.x, first.z);
+    const width = edge && centre ? Math.max(1.5, Math.hypot(edge[0] - centre[0], edge[1] - centre[1]) * 2) : 2;
+    hctx.beginPath();
+    hctx.moveTo(projected[0][0], projected[0][1]);
+    for (let i = 1; i < projected.length; i++) hctx.lineTo(projected[i][0], projected[i][1]);
+    hctx.globalAlpha *= .22;
+    hctx.lineWidth = width;
+    hctx.stroke();
+    hctx.globalAlpha = preview.state === 'settled' ? .55 : 1;
+    hctx.lineWidth = 1;
+    hctx.stroke();
+  }
+  hctx.restore();
+}
 // The X-RAY DEPTH view: the luma map, decoded and painted edge to edge under
 // the instruments. Sky is blue (it decodes as the far plane — the dome writes
 // no depth), terrain is grey by log distance. Same rendering as the
@@ -54374,6 +55258,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   const hudEntry = performance.now();
   hudT0 = hudEntry; hudProfCalls++;
   if (xrayMode === 1 && lumaPrimed) drawLumaMap();
+  drawAuthoringPreviews();
   const pad = 4;
   /** Bottom of the compass strip in HUD pixels: `pad` + the heading digits
    *  under the needle. Nothing else may be drawn through it. */
@@ -56775,6 +57660,10 @@ function selectRig(model: RigModelId, loadout: RigLoadoutId, equipment: RigEquip
   Object.assign(EYE, next.anchors.eye);
   ghostCab(ghost);
   rebuildRigSilhouette();
+  // A DIFFERENT TRUCK IS A DIFFERENT BOX. The hull the physics collides with
+  // is the drawn model's own, so it is re-walked here rather than left at the
+  // last rig's — which is the whole reason it is measured instead of typed.
+  measureRigHull();
   specCache = null;
   old.dispose();
   try { localStorage.setItem('drive.rig-model', JSON.stringify({ model, loadout, equipment: selected })); } catch { /* session still works */ }
@@ -57729,6 +58618,442 @@ let toastT = 0;
  * exists to remove. These are the same live objects the game is drawing with,
  * not copies.
  */
+if (embeddedLab(location.pathname)?.slug === 'world-edit') {
+  const coverEditor = new RasterPaintSession();
+  const demEditor = new DemPaintSession();
+  const editableCoverTiles = (): EditableRasterTile[] =>
+    [...coverTiles].map(([key, tile]) => ({
+      key,
+      xs: tile.xs,
+      zs: tile.zs,
+      w: tile.w,
+      h: tile.h,
+      columns: 256,
+      rows: 256,
+      data: tile.data,
+    }));
+  const editableDemTiles = (): EditableDemTile[] =>
+    [...heightTiles].map(([key, tile]) => ({
+      key,
+      xs: tile.xs,
+      zs: tile.zs,
+      w: tile.w,
+      h: tile.h,
+      columns: 256,
+      rows: 256,
+      data: tile.data,
+    }));
+  const fitDemView = (): void => {
+    let lo = Infinity, hi = -Infinity;
+    for (const tile of heightTiles.values()) {
+      for (let i = 0; i < tile.data.length; i++) {
+        const value = tile.data[i] - baseElev;
+        if (value < lo) lo = value;
+        if (value > hi) hi = value;
+      }
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+    const mid = (lo + hi) * .5;
+    const span = Math.max(30, hi - lo);
+    gvU.uGHeightRange.value.set(mid - span * .52, mid + span * .52);
+  };
+  /**
+   * A painted byte enters through the same arrival boundary as a downloaded
+   * cover tile. The typed array is already canonical; this fans its changed
+   * authority back out to every derived system.
+   */
+  const invalidateCoverEdits = (result: { tileKeys: string[] }): void => {
+    if (!result.tileKeys.length) return;
+    themeSrcRev++;
+    climField.noteCover();
+    for (const field of farClimFields.values()) field.noteCover();
+    for (const key of result.tileKeys) {
+      const tile = coverTiles.get(key);
+      if (!tile) continue;
+      tworker?.remirrorCover(key, tile);
+      // Water derived from the class raster must be traced again. The next
+      // terrain job asks oceanMaskFor, which rebuilds the mask and replaces
+      // inland cover features before publishing the new hydro field/floor.
+      oceanMasks.delete(key);
+      const [tx, ty] = key.split('/').map(Number);
+      for (const neighbour of [
+        `${tx - 1}/${ty}`, `${tx + 1}/${ty}`, `${tx}/${ty - 1}`, `${tx}/${ty + 1}`,
+      ]) oceanMasks.delete(neighbour);
+      coverDirtiedTerrain(tile.xs, tile.zs, tile.w, tile.h);
+      coverDirtiedFar(remeasureCoverMode(), tile.xs, tile.zs, tile.w, tile.h);
+    }
+    // Geometry rebuilds carry the durable revision. These move the periodic
+    // ecology consumers to the front of their queues so the edit is visible
+    // while that rebuild is landing rather than a cadence later.
+    vegAt = 0;
+    swardAt = 0;
+    swardGroundSeen = Number.MIN_SAFE_INTEGER;
+    swardFieldAt = 0;
+  };
+  const applyCover = (
+    operation: () => { changed: number; tileKeys: string[] },
+  ): { changed: number; tileKeys: string[] } => {
+    const result = operation();
+    invalidateCoverEdits(result);
+    return result;
+  };
+  /**
+   * A height edit changes considerably more than the mesh. The worker owns a
+   * mirrored copy, the normal cache keys by array identity, hydro has already
+   * sampled this floor, and vegetation has already been draped over it.
+   */
+  const invalidateDemEdits = (result: { tileKeys: string[] }): void => {
+    if (!result.tileKeys.length) return;
+    const dirty = new Set<string>();
+    const expireNormal = (key: string): void => {
+      const normal = terrainNormals.get(key);
+      // Keep the live material's texture valid until its replacement lands;
+      // deleting the cache input makes terrainNormalFor dispose and rebuild it
+      // atomically in terrainMatFor.
+      if (normal) terrainNormalInputs.delete(normal);
+    };
+    const expireOceanAt = (tile: HeightTile): void => {
+      for (const [coverKey, cover] of coverTiles) {
+        if (cover.xs > tile.xs + tile.w || cover.zs > tile.zs + tile.h
+          || cover.xs + cover.w < tile.xs || cover.zs + cover.h < tile.zs) continue;
+        oceanMasks.delete(coverKey);
+        const [cx, cy] = coverKey.split('/').map(Number);
+        for (const neighbour of [
+          `${cx - 1}/${cy}`, `${cx + 1}/${cy}`, `${cx}/${cy - 1}`, `${cx}/${cy + 1}`,
+        ]) oceanMasks.delete(neighbour);
+      }
+    };
+    for (const key of result.tileKeys) {
+      const tile = heightTiles.get(key);
+      if (!tile) continue;
+      tworker?.remirrorHeight(key, tile);
+      expireOceanAt(tile);
+      if (hydroRev.has(key)) hydroDirty.add(key);
+      const [tx, ty] = key.split('/').map(Number);
+      for (const candidate of [
+        key,
+        `${tx - 1}/${ty}`, `${tx + 1}/${ty}`,
+        `${tx}/${ty - 1}`, `${tx}/${ty + 1}`,
+      ]) {
+        dirty.add(candidate);
+        expireNormal(candidate);
+      }
+    }
+    for (const key of dirty) markTerrainDirty(key, 'author-dem');
+    vegAt = 0;
+    swardAt = 0;
+    swardGroundSeen = Number.MIN_SAFE_INTEGER;
+    swardFieldAt = 0;
+  };
+  const applyDem = (
+    operation: () => { changed: number; tileKeys: string[] },
+  ): { changed: number; tileKeys: string[] } => {
+    const result = operation();
+    invalidateDemEdits(result);
+    return result;
+  };
+  const coverLayer: AuthoringLayer = {
+    id: 'cover',
+    label: 'LAND COVER',
+    kind: 'raster',
+    editable: true,
+    gesture: 'brush',
+    choices: [
+      { value: String(COVER.tree), label: `${COVER.tree} · FOREST` },
+      { value: String(COVER.shrub), label: `${COVER.shrub} · SCRUB` },
+      { value: String(COVER.grass), label: `${COVER.grass} · GRASS` },
+      { value: String(COVER.crop), label: `${COVER.crop} · FARMLAND` },
+      { value: String(COVER.built), label: `${COVER.built} · URBAN` },
+      { value: String(COVER.bare), label: `${COVER.bare} · BARREN` },
+      { value: String(COVER.snow), label: `${COVER.snow} · ICE` },
+      { value: String(COVER.water), label: `${COVER.water} · WATER` },
+      { value: String(COVER.wetland), label: `${COVER.wetland} · WETLAND` },
+      { value: String(COVER.mangrove), label: `${COVER.mangrove} · MANGROVE` },
+      { value: String(COVER.moss), label: `${COVER.moss} · TUNDRA` },
+    ],
+    beginGesture: (at, radius, value) => {
+      coverEditor.beginStroke();
+      return applyCover(() => coverEditor.paint(
+        editableCoverTiles(),
+        at.x,
+        at.z,
+        radius,
+        COVER_CLASSES.includes(Number(value)) && Number(value) !== 0 ? Number(value) : COVER.grass,
+      ));
+    },
+    updateGesture: (at, radius, value) => applyCover(() => coverEditor.paint(
+      editableCoverTiles(),
+      at.x,
+      at.z,
+      radius,
+      COVER_CLASSES.includes(Number(value)) && Number(value) !== 0 ? Number(value) : COVER.grass,
+    )),
+    endGesture: () => {
+      coverEditor.endStroke();
+      return { changed: 0, tileKeys: [] };
+    },
+    cancelGesture: () => { coverEditor.endStroke(); },
+    previews: (cursor, radiusM) => cursor ? [{
+      kind: 'cursor', points: [cursor], radiusM, state: 'cursor',
+    }] : [],
+    undo: () => applyCover(() => coverEditor.undo()),
+    reset: () => applyCover(() => coverEditor.reset()),
+    setDataView: (on) => setGroundView(on ? 'cover' : baseGroundView),
+    report: () => ({
+      tiles: coverTiles.size,
+      ...coverEditor.report(),
+      terrainQueued: terrainDirty.size,
+      hydroQueued: hydroDirty.size,
+      workerMirrors: tworker?.stats.mirrored ?? -1,
+      inputCaptured: authoringInputCaptured,
+      adapters: 3,
+    }),
+  };
+  const demLayer: AuthoringLayer = {
+    id: 'dem',
+    label: 'ELEVATION',
+    kind: 'raster',
+    editable: true,
+    gesture: 'brush',
+    choices: [
+      { value: 'raise', label: 'RAISE' },
+      { value: 'lower', label: 'LOWER' },
+      { value: 'flatten', label: 'FLATTEN' },
+      { value: 'smooth', label: 'SMOOTH' },
+    ],
+    strength: { label: 'AMOUNT', min: .05, max: 10, step: .05, value: 1, unit: 'm' },
+    beginGesture: (at, radius, value, strength) => {
+      demEditor.beginStroke(
+        (['raise', 'lower', 'flatten', 'smooth'].includes(value) ? value : 'raise') as DemBrush);
+      return applyDem(() => demEditor.paint(editableDemTiles(), at.x, at.z, radius, strength));
+    },
+    updateGesture: (at, radius, _value, strength) => applyDem(() =>
+      demEditor.paint(editableDemTiles(), at.x, at.z, radius, strength)),
+    endGesture: () => {
+      demEditor.endStroke();
+      return { changed: 0, tileKeys: [] };
+    },
+    cancelGesture: () => { demEditor.endStroke(); },
+    previews: (cursor, radiusM) => cursor ? [{
+      kind: 'cursor', points: [cursor], radiusM, state: 'cursor',
+    }] : [],
+    undo: () => applyDem(() => demEditor.undo()),
+    reset: () => applyDem(() => demEditor.reset()),
+    setDataView: (on) => {
+      if (on) fitDemView();
+      setGroundView(on ? 'elevation' : baseGroundView);
+    },
+    report: () => ({
+      tiles: heightTiles.size,
+      ...demEditor.report(),
+      focusElevationM: +(sampleHeightRaw(viewX(), viewZ()) + baseElev).toFixed(3),
+      rangeM: gvU.uGHeightRange.value.toArray().map((value) => +value.toFixed(1)),
+      terrainQueued: terrainDirty.size,
+      hydroQueued: hydroDirty.size,
+      workerMirrors: tworker?.stats.mirrored ?? -1,
+      inputCaptured: authoringInputCaptured,
+      adapters: 3,
+    }),
+  };
+  type AuthoredRoadState = {
+    state: 'pending' | 'settled' | 'failed';
+    dirty: Set<string>;
+    built: boolean;
+    settledAt: number;
+  };
+  const roadEditor = new PolylinePaintSession();
+  const roadStates = new Map<string, AuthoredRoadState>();
+  const roadStorageKey = `drive.world-authoring.roads.v1:${origin.lat.toFixed(5)},${origin.lon.toFixed(5)}`;
+  const saveRoads = (): void => {
+    try { localStorage.setItem(roadStorageKey, JSON.stringify(roadEditor.snapshot())); } catch { /* quota/private mode */ }
+  };
+  const roadId = (id: string): number => {
+    let hash = 2166136261;
+    for (let i = 0; i < id.length; i++) hash = Math.imul(hash ^ id.charCodeAt(i), 16777619);
+    return -(Math.abs(hash | 0) + 1);
+  };
+  const roadWay = (feature: AuthoredPolyline): OsmWay => ({
+    id: roadId(feature.id),
+    ck: `author:${feature.id}`,
+    tags: {
+      highway: ROAD_W[feature.value] ? feature.value : 'residential',
+      'drive:width': String(feature.widthM),
+      name: 'AUTHORED ROAD',
+      surface: ['track', 'path', 'footway'].includes(feature.value) ? 'gravel' : 'asphalt',
+    },
+    geometry: feature.points.map(([x, z]) => {
+      const [lat, lon] = localToLatLon(x, z);
+      return { lat, lon };
+    }),
+  });
+  const authoredTerrain = (feature: AuthoredPolyline): {
+    coords: Array<[number, number]>;
+    keys: Set<string>;
+  } => {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [x, z] of feature.points) {
+      const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
+      minX = Math.min(minX, tx); maxX = Math.max(maxX, tx);
+      minY = Math.min(minY, ty); maxY = Math.max(maxY, ty);
+    }
+    const coords: Array<[number, number]> = [];
+    const keys = new Set<string>();
+    for (let tx = minX - 1; tx <= maxX + 1; tx++) {
+      for (let ty = minY - 1; ty <= maxY + 1; ty++) {
+        coords.push([tx, ty]);
+        keys.add(`${tx}/${ty}`);
+      }
+    }
+    return { coords, keys };
+  };
+  const refreshRoadStates = (): void => {
+    const now = performance.now();
+    for (const state of roadStates.values()) {
+      if (state.state !== 'pending' || !state.built || state.dirty.size === 0) continue;
+      if ([...state.dirty].every((key) => !terrainDirty.has(key))) {
+        state.state = 'settled';
+        state.settledAt = now;
+      }
+    }
+  };
+  const buildAuthoredRoad = async (feature: AuthoredPolyline): Promise<void> => {
+    const terrain = authoredTerrain(feature);
+    const state: AuthoredRoadState = {
+      state: 'pending', dirty: terrain.keys, built: false, settledAt: 0,
+    };
+    roadStates.set(feature.id, state);
+    // A pathological screen-spanning gesture should remain source data, but
+    // must not turn one click into an unbounded elevation fetch.
+    if (terrain.coords.length > 100) {
+      state.state = 'failed';
+      return;
+    }
+    try {
+      await Promise.all(terrain.coords.map(([tx, ty]) => loadTerrainTile(tx, ty)));
+      const ep = worldEpoch;
+      const [mx, mz] = feature.points[Math.floor(feature.points.length / 2)];
+      const [ownerX, ownerY] = tileAt(
+        origin.lat - mz / M_LAT,
+        origin.lon + mx / origin.mLon,
+        TERRAIN_Z,
+      );
+      const owner = `${ownerX}/${ownerY}`;
+      const job = buildChain.then(async () => {
+        if (ep !== worldEpoch) throw new Error('world changed');
+        const refusedAt = unbuilt;
+        await renderWays([roadWay(feature)], [], owner);
+        if (unbuilt !== refusedAt) throw new Error('authored road refused');
+        flushBuildings();
+      });
+      buildChain = job.catch(() => { /* preserve the production queue */ });
+      await job;
+      state.built = true;
+      refreshRoadStates();
+    } catch {
+      state.state = 'failed';
+    }
+  };
+  const reloadWithoutRemovedRoad = (): void => {
+    window.setTimeout(() => location.reload(), 80);
+  };
+  const roadLayer: AuthoringLayer = {
+    id: 'road',
+    label: 'ROADS',
+    kind: 'vector',
+    editable: true,
+    gesture: 'polyline',
+    choices: [
+      { value: 'residential', label: 'RESIDENTIAL · PAVED' },
+      { value: 'service', label: 'SERVICE · PAVED' },
+      { value: 'track', label: 'TRACK · GRAVEL' },
+      { value: 'path', label: 'PATH · EARTH' },
+    ],
+    radius: { label: 'WIDTH', min: 2, max: 16, step: .5, value: 7.5, unit: 'm' },
+    beginGesture: (at, radius, value) => roadEditor.begin(value, radius, at.x, at.z),
+    updateGesture: (at) => roadEditor.sample(at.x, at.z),
+    endGesture: () => {
+      const result = roadEditor.end();
+      if (result.feature) {
+        saveRoads();
+        void buildAuthoredRoad(result.feature);
+      }
+      return result;
+    },
+    cancelGesture: () => roadEditor.cancel(),
+    previews: (cursor, radiusM) => {
+      refreshRoadStates();
+      const previews: AuthoringPreview[] = [];
+      if (cursor) previews.push({
+        kind: 'cursor', points: [cursor], radiusM: radiusM * .5, state: 'cursor',
+      });
+      const draft = roadEditor.active();
+      if (draft && draft.points.length > 1) previews.push({
+        kind: 'polyline',
+        points: draft.points.map(([x, z]) => ({ x, z })),
+        radiusM: draft.widthM,
+        state: 'draft',
+      });
+      const now = performance.now();
+      for (const feature of roadEditor.snapshot()) {
+        const status = roadStates.get(feature.id);
+        if (!status || (status.state === 'settled' && now - status.settledAt > 1800)) continue;
+        previews.push({
+          kind: 'polyline',
+          points: feature.points.map(([x, z]) => ({ x, z })),
+          radiusM: feature.widthM,
+          state: status.state,
+        });
+      }
+      return previews;
+    },
+    undo: () => {
+      const result = roadEditor.undo();
+      if (result.feature) {
+        roadStates.delete(result.feature.id);
+        saveRoads();
+        reloadWithoutRemovedRoad();
+      }
+      return result;
+    },
+    reset: () => {
+      const result = roadEditor.reset();
+      if (result.changed) {
+        roadStates.clear();
+        saveRoads();
+        reloadWithoutRemovedRoad();
+      }
+      return result;
+    },
+    setDataView: () => { /* vectors are their own canonical overlay */ },
+    report: () => {
+      refreshRoadStates();
+      const states = [...roadStates.values()];
+      return {
+        ...roadEditor.report(),
+        pending: states.filter((state) => state.state === 'pending').length,
+        settled: states.filter((state) => state.state === 'settled').length,
+        failed: states.filter((state) => state.state === 'failed').length,
+        productionWays: roadEditor.snapshot()
+          .filter((feature) => seenWays.has(`author:${feature.id}`)).length,
+        terrainQueued: terrainDirty.size,
+        inputCaptured: authoringInputCaptured,
+        adapters: 3,
+      };
+    },
+  };
+  try {
+    const restored = roadEditor.load(JSON.parse(localStorage.getItem(roadStorageKey) ?? '[]'));
+    for (const feature of restored) void buildAuthoredRoad(feature);
+  } catch { /* malformed or unavailable local storage starts empty */ }
+  startWorldAuthoringLab({
+    canvas,
+    worldAt: (clientX, clientY) => chartToWorld(clientX, clientY),
+    focus: () => [viewX(), viewZ()],
+    setInputCaptured: setAuthoringInputCaptured,
+    setPreviews: (previews) => { authoringPreviews = previews; },
+    layers: [coverLayer, demLayer, roadLayer],
+  });
+}
 (window as unknown as { __ctx?: object }).__ctx = {
   THREE, renderer, scene, camera, worldGroup, state,
   get frames() { return Array.from(frameRing.slice(0, Math.min(frameAt, frameRing.length))); },

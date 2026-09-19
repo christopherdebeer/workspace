@@ -21,11 +21,22 @@ export interface BreakLine { ax: number; az: number; bx: number; bz: number }
 export interface StripLike {
   ax: number; az: number; bx: number; bz: number; hw: number;
   ya?: number; yb?: number; tk?: boolean; tn?: boolean; ca?: number; cb?: number; pc?: number; pp?: number;
+  /** Signed channel curvature dθ/ds. Positive/negative uses the segment's
+   *  ax→bx direction and the same cross-product convention as hydro river
+   *  space, so `cv * cross(tangent, offset) > 0` is the inside bank. */
+  cv?: number;
   bl?: BreakLine[]; reach?: number;
 }
 /** The triangles of each lattice cell: `offs[c]..offs[c+1]` index `tris` in threes. */
 export interface CellTris { seg: number; offs: Int32Array; tris: Int32Array }
-export interface RefinedMesh { pos: Float32Array; uv: Float32Array; idx: Uint32Array; kinds: Uint8Array; cells: number; tris: number; cellTris: CellTris }
+export interface RefinedMesh {
+  pos: Float32Array; uv: Float32Array; idx: Uint32Array; kinds: Uint8Array; cells: number; tris: number; cellTris: CellTris;
+  /** Which vertices a bank station spoke for, and the height it wants them
+   *  at (NaN where there is nothing to cut). Solved inside the refinement
+   *  because its heights pass has to know before it applies the interior
+   *  floor; carried out so the build applies it once, after the corridor. */
+  bankOwned: Uint8Array; bankTarget: Float32Array;
+}
 export interface TileBuild {
   pos: Float32Array; uv: Float32Array; idx: Uint32Array; colors: Float32Array; normals: Float32Array;
   /** Per vertex, FOUR numbers the substrate renderer and the ground views need
@@ -89,6 +100,18 @@ export interface TerrainStore {
   /** Canonical hydro coverage contours crossing this tile. These are geometry
    * constraints only: channel carving still owns their elevation. */
   hydroBreakLines(t: HeightTile): readonly BreakLine[];
+  /** The tile's packed bank stations (client/hydro/bank-profile.ts, twelve
+   *  floats each, absolute metres), or null where the tile has no shoreline
+   *  or the resolver is switched off. The packet answers for itself: the
+   *  kernel reads no constant and no table of that module, because this
+   *  closure is stringified into the worker. */
+  hydroBank(t: HeightTile): Float32Array | null;
+  /** THE FIELD'S BED UNDER DRAWN WATER — an n×n lattice over the tile (point 0
+   * at xs, n-1 at xs+w, the hydro raster's own lattice), absolute metres where
+   * the field draws water at its coverage cut and NaN elsewhere; null when the
+   * tile has no field yet. The height passes take it as a ceiling: the ground
+   * under drawn water is at most the field's bed. */
+  hydroFloor(t: HeightTile): { n: number; data: Float32Array } | null;
   onRoad(x: number, z: number): boolean;
   palette(elevAbs: number, slope: number, cover: number | null, x: number, z: number): Rgb;
   areaTint(x: number, z: number): Rgb | null;
@@ -159,6 +182,18 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
   const CUT_REACH_M = 8;      // past this an unmet cut face steps up to the hill: a wall
   const TOE_REACH = 16;       // how far out a bank or a face is looked for at all
   const DECK_GAP_T = 3;       // a crest this far above the ground is a structure: no bank
+  // A BUDGET ON THE BANK'S CREASES, because a refinement is paid for in split
+  // cells and a pathological shoreline should cost a simplified bank rather
+  // than an unbounded tile. Two lines a station; the resolver's own cap is
+  // 512 stations, so this is the whole of a busy tile's shoreline and the
+  // ceiling only binds where something has gone wrong.
+  const BANK_LINE_CAP = 1024;
+  // How far a simplified crease may wander from the polyline the stations
+  // describe. A quarter of a metre is well under a terrain cell at any
+  // refinement, so the simplification removes points the refinement could
+  // not have resolved; when the cap binds it is raised rather than the
+  // coverage being cut, and `bankLineTol` says what it took.
+  const BANK_LINE_TOL_M = 0.25;
   const EARTH_T: Rgb = [0.42, 0.34, 0.26];
   /**
    * ── WHAT EACH LAND COVER IS MADE OF, as [rough, grain] ──
@@ -256,7 +291,12 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
   /** Every built terrain tile overlapping a world rectangle, marked for rebuild. */
   const AREA_MIX = 0.5;               // how far the ramp is pulled, after the raster's own tint
   /** Cost of the refinement, for `__refine`. */
-  const refineCost = { tiles: 0, cells: 0, tris: 0, ms: 0, plainTris: 0, verts: 0, msLines: 0, msSplit: 0, msHeights: 0, msGeo: 0 };
+  const refineCost = {
+    tiles: 0, cells: 0, tris: 0, ms: 0, plainTris: 0, verts: 0, msLines: 0, msSplit: 0, msHeights: 0, msGeo: 0,
+    // The bank's creases: how many were emitted, the worst tolerance the
+    // budget forced, and how many tile builds it truncated anyway.
+    bankLines: 0, bankLineTolMax: 0, bankLineCapped: 0,
+  };
   /** The plain build by phase, every build: where a 115ms tile goes. */
   /** The plain build by phase, every build: where a 115ms tile goes. */
   const plainCost = { builds: 0, refine: 0, heights: 0, carve: 0, channels: 0, pins: 0, colour: 0, normals: 0, mesh: 0, nan: '' as string };
@@ -599,6 +639,19 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
    *  that land on a cell boundary are recomputed from the line and the boundary
    *  coordinate, so the neighbouring cell — split by the same line, from its own
    *  pieces — arrives at the same point bit for bit. */
+  /** The field's bed at (x, z) from the tile's floor lattice — bilinear, and
+   *  only where all four corners carry a bed. A corner without one is the
+   *  shore at lattice resolution, and lowering a vertex there would dig a dry
+   *  hollow beside the water; the shore band is bank shaping's, not this. */
+  function hydroFloorAt(fl: { n: number; data: Float32Array }, t: HeightTile, x: number, z: number): number | null {
+    const n = fl.n;
+    const fx = clamp(((x - t.xs) / t.w) * (n - 1), 0, n - 1), fz = clamp(((z - t.zs) / t.h) * (n - 1), 0, n - 1);
+    const ix = Math.min(n - 2, Math.floor(fx)), iz = Math.min(n - 2, Math.floor(fz));
+    const tx = fx - ix, tz = fz - iz;
+    const a = fl.data[iz * n + ix], b = fl.data[iz * n + ix + 1], c = fl.data[(iz + 1) * n + ix], d = fl.data[(iz + 1) * n + ix + 1];
+    if (!(Number.isFinite(a) && Number.isFinite(b) && Number.isFinite(c) && Number.isFinite(d))) return null;
+    return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
+  }
   function cellTable(pos: Float32Array, idx: Uint32Array | Uint16Array, SEG: number): CellTris {
     let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
     for (let i = 0; i < (pos.length / 3); i++) {
@@ -676,7 +729,7 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
         if (Math.abs(x - (t.xs + ix * cw)) > 1e-3 || Math.abs(z - (t.zs + iz * ch)) > 1e-3) extraSeed = true;
       }
     }
-    const hydroLines = S.hydroBreakLines(t);
+    const hydroLines = [...S.hydroBreakLines(t), ...bankBreakLines(S, t)];
     // Lattice-only seeds are pins the plain path applies itself; only a
     // neighbour's extra edge points need the ring machinery.
     if (!near.size && !extraSeed && !hydroLines.length) return null;
@@ -996,10 +1049,36 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     // fall back inside this tile, and the owner's row then pins the follower.
     const fieldAt = (x: number, z: number): number => S.hasHeight(x, z) ? S.sampleHeight(x, z)
       : S.sampleHeight(clamp(x, t.xs + 1e-4, t.xs + t.w - 1e-4), clamp(z, t.zs + 1e-4, t.zs + t.h - 1e-4));
+    const floor = S.hydroFloor(t);
+    // ── OWNERSHIP BEFORE THE FLOOR, WHICH IS THE COMPOSITION RULE ──
+    //
+    // The published floor is an ~18 m lattice that lowers ground to the field's
+    // own bed, and it used to run FIRST: inside the bank's transition region
+    // the vertex was already cut to the bed before anything asked what shape
+    // the bank should be, and the bank — which only ever lowers — could not
+    // put back the shelf, the toe or the refusal the resolver had decided on.
+    // A floor that pre-empts the profile is a floor that wins every argument
+    // in the one region the resolver exists to own.
+    //
+    // So the stations are solved HERE, against the lattice's own x and z. The
+    // solve reads no height at all — a target is a function of the packet and
+    // of the point — so answering it now is exactly equivalent to answering it
+    // after the corridor, which is where it is still APPLIED. Outside what a
+    // station spoke for the floor is unchanged; inside, the bank's own profile
+    // carries the interior connection (its face marches in to the stated bed),
+    // or at a refusal nothing moves at all, which is what a refusal means.
+    const bankOwned = new Uint8Array(n), bankTarget = new Float32Array(n);
+    for (let i = 0; i < n; i++) { pos[i * 3] = px[i] - cxm; pos[i * 3 + 2] = pz[i] - czm; }
+    bankSolve(S, t, pos, bankOwned, bankTarget);
     for (let i = 0; i < n; i++) {
       const x = px[i], z = pz[i];
       let N = fieldAt(x, z);
       if (S.sampleCover(x, z) === S.cover.water && N <= seaLocal + 2) N = Math.min(N, seaLocal - SEA_BED);
+      // THE GROUND UNDER DRAWN WATER IS AT MOST THE FIELD'S BED — the water
+      // census read a riverbank polygon's whole interior as buried, the DEM
+      // standing above the body's own level. Roads keep their deck, and so
+      // does every vertex the bank owns (above).
+      if (floor && !bankOwned[i]) { const f = hydroFloorAt(floor, t, x, z); if (f !== null && f - S.baseElev < N && !S.onRoad(x, z)) N = f - S.baseElev; }
       let h = N, k = 0;
       const pin = pinned.get(i) ?? ownerY(x, z);
       if (pin !== undefined) h = pin;
@@ -1007,7 +1086,7 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
         const cands = candsAt(x, z);
         if (cands) { const c = corridorH(S, x, z, N, cands); h = c.h; k = c.k; }
       }
-      pos[i * 3] = x - cxm; pos[i * 3 + 1] = h; pos[i * 3 + 2] = z - czm;
+      pos[i * 3 + 1] = h;   // x and z were written above, for the bank solve
       uv[i * 2] = 0.5 + (x - cxm) / t.w; uv[i * 2 + 1] = 0.5 - (z - czm) / t.h;
       kinds[i] = k;
     }
@@ -1028,7 +1107,7 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     refineCost.tiles++; refineCost.cells += refinedCells; refineCost.tris += TA.length; refineCost.verts += n;
     refineCost.plainTris += SEG * SEG * 2; refineCost.ms += t4 - t0;
     refineCost.msLines += t1 - t0; refineCost.msSplit += t2 - t1; refineCost.msHeights += t3 - t2; refineCost.msGeo += t4 - t3;
-    return { pos, uv, idx, kinds, cells: refinedCells, tris: TA.length, cellTris: { seg: SEG, offs, tris } };
+    return { pos, uv, idx, kinds, cells: refinedCells, tris: TA.length, cellTris: { seg: SEG, offs, tris }, bankOwned, bankTarget };
   }
   /** A tile's normal map along its four edges against the row just inside:
    *  the mean angle between them, degrees. A seam in the lighting is a number
@@ -1284,10 +1363,45 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       const dx = c.bx - c.ax, dz = c.bz - c.az;
       const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
       const px = c.ax + dx * t, pz = c.az + dz * t;
-      const out = Math.hypot(x - px, z - pz) - c.hw;
+      const length = Math.hypot(dx, dz) || 1;
+      // THE DISTANCE TO THE SEGMENT, NOT TO ITS INFINITE LINE. `t` is clamped,
+      // so anywhere past either end (px,pz) is an ENDPOINT and the cross
+      // product below is the offset from the segment's LINE with the along-line
+      // overshoot discarded — which is how a five-metre stretch of river came
+      // to carve ground sixty metres past its own end at its own invert.
+      // Measured at San Miguel: 98% of carved posts were won by a segment
+      // reaching past an end, 153 of 295 had no segment within true reach at
+      // all, median overshoot 46.7m — the channel index's own 3x3 — so a
+      // fifteen-metre river sat in a 112m flat-bottomed trench and the drawn
+      // sheet hung over open ground at its rim, which is what the seat
+      // photographed. Every other proximity test in this client (channelAt,
+      // channelInvertAt, the strip tests, corridorH's reach, onRoadOf) has
+      // always measured to the SEGMENT; this was the only one that did not,
+      // and the only one that moves terrain. Nothing is lost at a bend: the
+      // union of segment capsules already tiles a corner.
+      const signedAcross = (dx * (z - pz) - dz * (x - px)) / length;
+      const across = Math.hypot(x - px, z - pz);
+      const out = across - c.hw;
       if (out > 3) continue;
       // Banks, not a trench: the bed at the middle, rising away at 1:1.
-      const y = (c.ya as number) + ((c.yb as number) - (c.ya as number)) * t + Math.max(0, out);
+      //
+      // A bend also deposits a real inner-bank shelf. Hydro carries the same
+      // signed curvature in river space; retaining it on the channel segment
+      // lets terrain own the large point bar instead of asking the water
+      // shader to pretend its supporting ground is shallower.
+      const cv = c.cv ?? 0;
+      const curveT = clamp((Math.abs(cv) - .0015) / (.009 - .0015), 0, 1);
+      const curve = curveT * curveT * (3 - 2 * curveT);
+      // The bank, at the distance the point really is. For an interior `t` the
+      // two magnitudes are equal and this is exactly what it always was; near
+      // an end it is the honest offset rather than the line's.
+      const n = Math.sign(signedAcross) * across / Math.max(.5, c.hw);
+      const acrossT = clamp((Math.abs(n) - .30) / (.94 - .30), 0, 1);
+      const shelf = acrossT * acrossT * (3 - 2 * acrossT);
+      const inside = cv * n > 0 ? 1 : 0;
+      const barRise = curve * inside * shelf * Math.min(.48, .12 + c.hw * .035);
+      const y = (c.ya as number) + ((c.yb as number) - (c.ya as number)) * t
+        + barRise + Math.max(0, out);
       if (best === null || y < best) best = y;
     }
     // ORDER MATTERS FOR COST, not just for correctness. `onCarriageway` is a road
@@ -1336,7 +1450,7 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
    *  each, on a path that already costs a tile rebuild; walking the handful of
    *  channels instead and touching only the lattice under each one's bounding box
    *  does the same work for the length of river actually present. */
-  function carveChannels(S: TerrainStore, t: HeightTile, pos: Float32Array, SEG: number): void {
+  function carveChannels(S: TerrainStore, t: HeightTile, pos: Float32Array, SEG: number, owned: Uint8Array | null): void {
     if (!S.channels.size) return;
     const cell = t.w / SEG;
     const seen = new Set<StripLike>();
@@ -1360,10 +1474,430 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       for (const b of boxes) if (x >= b[0] && x <= b[1] && z >= b[2] && z <= b[3]) { touched.add(v); break; }
     }
     for (const v of touched) {
+      // THE BANK OWNS ITS OWN REGION, so the carve does not also have an
+      // opinion there. Two rules that both only LOWER are not composed by
+      // taking the lower of them: the bank's whole job at a fringe is to stop
+      // short — of a rock face it refused to cut, of ground it has already
+      // met — and a min() with the carve would dig through every refusal the
+      // resolver was careful to make. Outside a station's stated reach the
+      // carve is still the only thing that knows where the bed is, and it
+      // runs exactly as it did.
+      if (owned && owned[v]) continue;
       const x = pos[(v) * 3] + t.xs + t.w / 2, z = pos[(v) * 3 + 2] + t.zs + t.h / 2;
       const f = channelFloorAt(S, x, z, pos[(v) * 3 + 1]);
       if (f !== null) pos[(v) * 3 + 1] = f;
     }
+  }
+  /**
+   * ── THE BANK'S OWN CREASES ──
+   *
+   * A correct height function is not enough if a coarse triangle spans it. The
+   * waterline is already split along (the field's own coverage isoline, from
+   * `hydroBreakLines`); what the bank adds are its two other creases — the
+   * INNER TOE where the underwater face reaches the bed, and the OUTER JOIN
+   * where the profile meets natural ground again. Without them a cell whose
+   * corners straddle the bank is one flat triangle from the bed to the
+   * hillside, which is a ramp through the water however right the vertices
+   * either side of it are.
+   *
+   * ── AND A CREASE IS A CURVE, NOT A SLAT ──
+   *
+   * The first cut emitted a short segment on each station's own tangent and
+   * thinned by an ARRAY STRIDE when the budget bound, which is two faults that
+   * happen to cancel. Stations are samples of a contour, so consecutive ones
+   * belong to the same curve and joining them is free; a stride throws away
+   * geometry the polyline was already describing and leaves whichever
+   * survivors it kept to span the gaps with a chord nobody chose. So: the
+   * stations are grouped by the CHAIN they were cut from, split into runs of
+   * genuinely adjacent ones (a refusal or a skipped station ends a run), and
+   * each run's offset points are joined into a polyline whose segments abut
+   * exactly.
+   *
+   * WHAT THE BUDGET REMOVES IS GEOMETRY THE TOLERANCE SAYS IS REDUNDANT, not
+   * a stretch of shore: each polyline is simplified by Douglas-Peucker at a
+   * stated metre tolerance, and if the cap still binds the TOLERANCE rises
+   * rather than the coverage falling. A straight reach then costs two points
+   * however many stations describe it, which is where the budget comes from.
+   */
+  function bankBreakLines(S: TerrainStore, t: HeightTile): BreakLine[] {
+    const packed = S.hydroBank(t);
+    if (!packed || !packed.length) return [];
+    const S15 = 15, n = (packed.length / S15) | 0;
+    // ── WHICH STATIONS ARE ONE CURVE ──
+    // The resolver emits chain-major in increasing arc length, so the packet's
+    // own order is already the contour's; `chainId` separates two boundaries
+    // whose influences happen to cross, which is exactly what it was added to
+    // the packet for. A refused station contributes nothing — it is shaping
+    // nothing, and a crease across ground nobody is cutting is a crease for
+    // its own sake — and it ENDS the run, because the stations either side of
+    // it are two intervals apart and a chord between them is a guess.
+    const chains = new Map<number, number[]>();
+    for (let i = 0; i < n; i++) {
+      const o = i * S15;
+      if (packed[o + 11]) continue;
+      const id = packed[o + 13];
+      const l = chains.get(id);
+      if (l) l.push(i); else chains.set(id, [i]);
+    }
+    // Adjacent along the chain: the centres are one interval apart, and one
+    // interval is exactly the forward reach of the first plus the backward
+    // reach of the second. A skipped station doubles that.
+    const adjacent = (a: number, b: number): boolean => {
+      const oa = a * S15, ob = b * S15;
+      const d = Math.hypot(packed[ob] - packed[oa], packed[ob + 1] - packed[oa + 1]);
+      return d <= (packed[oa + 8] + packed[ob + 12]) * 1.6;
+    };
+    type Pt = { x: number; z: number };
+    const curves: Pt[][] = [];
+    const stubs: BreakLine[] = [];
+    for (const list of chains.values()) {
+      for (const side of [1, -1]) {
+        let run: number[] = [];
+        const flush = (): void => {
+          if (run.length >= 2) {
+            const pts: Pt[] = [];
+            for (const i of run) {
+              const o = i * S15;
+              const d = side > 0 ? packed[o + 7] : -packed[o + 6];
+              pts.push({ x: packed[o] + packed[o + 2] * d, z: packed[o + 1] + packed[o + 3] * d });
+            }
+            // A RING CLOSES. A lake's or a bend's chain comes back on itself,
+            // and a polyline that stops one interval short of its own start
+            // leaves exactly one uncreased cell — the thing these lines exist
+            // to prevent, in the one place the geometry made it hardest to
+            // see. The test is the same adjacency the run was built from.
+            if (run.length > 2 && adjacent(run[run.length - 1], run[0])) pts.push(pts[0]);
+            curves.push(pts);
+          } else if (run.length === 1) {
+            // A lone station between two refusals still has a toe and a join,
+            // and nothing to join them to: a stub on its own tangent, its
+            // own interval long.
+            const o = run[0] * S15;
+            const d = side > 0 ? packed[o + 7] : -packed[o + 6];
+            if (Math.abs(d) >= 0.5) {
+              const cx = packed[o] + packed[o + 2] * d, cz = packed[o + 1] + packed[o + 3] * d;
+              const tx = -packed[o + 3], tz = packed[o + 2];
+              stubs.push({
+                ax: cx - tx * packed[o + 12], az: cz - tz * packed[o + 12],
+                bx: cx + tx * packed[o + 8], bz: cz + tz * packed[o + 8],
+              });
+            }
+          }
+          run = [];
+        };
+        for (const i of list) {
+          const o = i * S15;
+          const d = side > 0 ? packed[o + 7] : -packed[o + 6];
+          // Nothing to separate: the crease would sit on the waterline the
+          // field has already split along.
+          if (Math.abs(d) < 0.5) { flush(); continue; }
+          if (run.length && !adjacent(run[run.length - 1], i)) flush();
+          run.push(i);
+        }
+        flush();
+      }
+    }
+    // ── THE BUDGET RAISES THE TOLERANCE, IT DOES NOT DROP A STRETCH ──
+    let out: BreakLine[] = [];
+    let tol = BANK_LINE_TOL_M;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      out = stubs.slice();
+      for (const c of curves) {
+        const sim = simplifyPolyline(c, tol);
+        for (let k = 1; k < sim.length; k++) {
+          out.push({ ax: sim[k - 1].x, az: sim[k - 1].z, bx: sim[k].x, bz: sim[k].z });
+        }
+      }
+      if (out.length <= BANK_LINE_CAP) break;
+      tol *= 2;
+    }
+    // And a hard stop under it, because a tolerance large enough to fit any
+    // shoreline into any budget is a tolerance that has stopped describing a
+    // shoreline. A truncation here is the one case the budget still costs
+    // coverage, so it is COUNTED rather than left to be inferred from a number
+    // that happens to equal its own cap — the shape this file keeps recording.
+    if (out.length > BANK_LINE_CAP) { out.length = BANK_LINE_CAP; refineCost.bankLineCapped++; }
+    refineCost.bankLines += out.length;
+    refineCost.bankLineTolMax = Math.max(refineCost.bankLineTolMax, tol);
+    return out;
+  }
+  /**
+   * Douglas-Peucker, iterative so a long contour cannot blow the stack: keep
+   * the endpoints, keep whatever point stands furthest from the chord between
+   * two kept neighbours while that distance exceeds the tolerance. The
+   * distance is to the SEGMENT rather than to its infinite line — the same
+   * correction `channelFloorAt` needed, and for the same reason: a chord's
+   * line runs on past both ends and a point beyond one of them is not near it.
+   */
+  function simplifyPolyline(pts: Array<{ x: number; z: number }>, tol: number): Array<{ x: number; z: number }> {
+    const n = pts.length;
+    if (n < 3) return pts;
+    const keep = new Uint8Array(n);
+    keep[0] = 1; keep[n - 1] = 1;
+    const stack: number[] = [0, n - 1];
+    const tol2 = tol * tol;
+    while (stack.length) {
+      const b = stack.pop() as number, a = stack.pop() as number;
+      if (b - a < 2) continue;
+      const ax = pts[a].x, az = pts[a].z;
+      const dx = pts[b].x - ax, dz = pts[b].z - az;
+      const len2 = dx * dx + dz * dz;
+      let worst = -1, wd2 = 0;
+      for (let i = a + 1; i < b; i++) {
+        const px = pts[i].x - ax, pz = pts[i].z - az;
+        let d2: number;
+        if (len2 <= 1e-12) d2 = px * px + pz * pz;
+        else {
+          const tt = clamp((px * dx + pz * dz) / len2, 0, 1);
+          const ex = px - dx * tt, ez = pz - dz * tt;
+          d2 = ex * ex + ez * ez;
+        }
+        if (d2 > wd2) { wd2 = d2; worst = i; }
+      }
+      if (worst > 0 && wd2 > tol2) { keep[worst] = 1; stack.push(a, worst, worst, b); }
+    }
+    const out: Array<{ x: number; z: number }> = [];
+    for (let i = 0; i < n; i++) if (keep[i]) out.push(pts[i]);
+    return out;
+  }
+  /**
+   * THE BANK'S HEIGHT AT A SIGNED CROSS-BANK OFFSET, in whatever datum the
+   * caller's `wl` and `bed` are in. ONE copy of the profile: the pass lowers
+   * ground to it and the diagnostic reports it, so a transect can never
+   * describe a rule the build does not run — the fault this file records for
+   * the cell table, for BridgeAssembly.claim and for __tdetail().mat.
+   *
+   * Outward (s >= 0) it is the land side at the station's own slope. Inward it
+   * runs from the waterline down to the stated bed over the inner reach and is
+   * flat at the bed beyond, smoothstepped so the toe is a toe and not a
+   * crease — which is what a shelf reads as at this scale.
+   */
+  function bankProfileY(wl: number, bed: number, inR: number, k: number, s: number): number {
+    if (s >= 0) return wl + k * s;
+    const tt = clamp(-s / Math.max(0.1, inR), 0, 1);
+    return wl + (bed - wl) * (tt * tt * (3 - 2 * tt));
+  }
+  /**
+   * THE PACKET READ AS A POINT QUERY, in the packet's own ABSOLUTE metres —
+   * what the diagnostic asks and the build never needs, because the build is
+   * station-driven for cost (see the pass below). Both answer through
+   * `bankProfileY`, so the two traversals cannot disagree about the profile
+   * however they differ about how they reach it.
+   *
+   * `owned` is true wherever a station spoke for the point at all, refusal
+   * included: that is the flag the channel carve stands down on, and a
+   * diagnostic that reported only the resolved ones could not tell "the bank
+   * shaped this" from "the bank refused it and the carve stood down anyway".
+   */
+  function bankTargetAtPacked(
+    packed: Float32Array,
+    x: number,
+    z: number,
+  ): { y: number | null; s: number; station: number; owned: boolean; refused: boolean } | null {
+    const S15 = 15, n = (packed.length / S15) | 0;
+    // ── REFUSALS FIRST, AND THEY BIND ──
+    //
+    // The packet has always described a refusal as "nothing may change here"
+    // and the first cut only made it bind the channel carve: a refused station
+    // marked the vertex and carried on, and any OTHER station could still
+    // supply a lower target. Measured on the shipped kernel, a point protected
+    // by a refusal and reached by an overlapping resolved station went from
+    // 3 m to 0.25 m — the refusal costing exactly nothing, which is the thing
+    // it exists not to do. So the protections are read in a pass of their own
+    // and a protected point is answered before any cut is considered.
+    let protectedBy = -1;
+    for (let i = 0; i < n; i++) {
+      const o = i * S15;
+      if (!packed[o + 11]) continue;
+      const dx = x - packed[o], dz = z - packed[o + 1];
+      const nx = packed[o + 2], nz = packed[o + 3];
+      const along = dx * -nz + dz * nx;
+      if (along < -packed[o + 12] || along > packed[o + 8]) continue;
+      const sOff = dx * nx + dz * nz;
+      if (sOff >= 0 && sOff <= packed[o + 10]) { protectedBy = i; break; }
+    }
+    if (protectedBy >= 0) {
+      const o = protectedBy * S15;
+      const dx = x - packed[o], dz = z - packed[o + 1];
+      return {
+        y: null, s: dx * packed[o + 2] + (z - packed[o + 1]) * packed[o + 3],
+        station: protectedBy, owned: true, refused: true,
+      };
+    }
+    let best: { y: number | null; s: number; station: number; owned: boolean; refused: boolean } | null = null;
+    for (let i = 0; i < n; i++) {
+      const o = i * S15;
+      if (packed[o + 11]) continue;
+      const dx = x - packed[o], dz = z - packed[o + 1];
+      const nx = packed[o + 2], nz = packed[o + 3];
+      const along = dx * -nz + dz * nx;
+      if (along < -packed[o + 12] || along > packed[o + 8]) continue;
+      const sOff = dx * nx + dz * nz;
+      const inR = packed[o + 6];
+      if (sOff > packed[o + 7] || -sOff > inR) continue;
+      // The waterline slopes along the reach; a row of stations each holding
+      // one constant level steps at every boundary between them.
+      const wl = packed[o + 4] + packed[o + 14] * along;
+      const y = bankProfileY(wl, packed[o + 5], inR, packed[o + 9], sOff);
+      if (!best || y < (best.y as number)) best = { y, s: sOff, station: i, owned: true, refused: false };
+    }
+    return best;
+  }
+  /**
+   * ── THE BANK SOLVE ──
+   *
+   * Driven from the STATIONS, for `carveChannels`' own reason: asking every
+   * vertex of a tile whether a shoreline passes near it is a walk per vertex,
+   * where walking the few hundred stations and touching the lattice under each
+   * one's own box does the same work for the length of shoreline present.
+   *
+   * SOLVING AND APPLYING ARE SEPARATE CALLS, and that is the composition rule
+   * rather than a tidiness: the interior floor must stand down wherever a
+   * station spoke, so ownership has to be known BEFORE the heights pass runs,
+   * while the cut itself belongs after the road earthworks — the bank lowers
+   * against whatever the corridor left. The solve reads no height at all (a
+   * target is a function of the packet and of x, z), so answering it early is
+   * exactly equivalent to answering it late, and it means the stations are
+   * walked ONCE rather than once per phase.
+   *
+   * `owned` records which vertices a station spoke for — resolved or refused —
+   * so the channel carve and the floor can stand down there; `target` carries
+   * the height to cut to, NaN where there is nothing to cut.
+   *
+   * It only ever LOWERS, and it never touches a road: raising ground to meet
+   * water manufactures a levee around every polygon whose level was estimated
+   * high, and cutting a carriageway is the crossing authority's call, not a
+   * bank's.
+   */
+  function bankSolve(
+    S: TerrainStore,
+    t: HeightTile,
+    pos: Float32Array,
+    owned: Uint8Array,
+    target: Float32Array,
+  ): void {
+    // NaN IS "NOTHING TO CUT", and it has to be written before the early
+    // return: a Float32Array is zero-filled, and zero is a perfectly ordinary
+    // height in this datum — a tile with no packet would otherwise ask the
+    // apply to plane every vertex to the base elevation.
+    target.fill(NaN);
+    const packed = S.hydroBank(t);
+    if (!packed || !packed.length) return;
+    const S15 = 15, n = (packed.length / S15) | 0;
+    const ox = t.xs + t.w / 2, oz = t.zs + t.h / 2;
+    const nv = (pos.length / 3) | 0;
+    // THE STATIONS GO IN A GRID FIRST. A shoreline at half a field texel is
+    // hundreds of stations on a river tile and a refined tile carries tens of
+    // thousands of vertices, so the station-driven loop with a box test per
+    // vertex is their product. `carveChannels` gets away with that shape
+    // because it can BREAK on the first box a vertex falls in; a bank cannot,
+    // since the lowest of several overlapping stations wins.
+    const cellM = Math.max(8, S.grid);
+    // Padded by two cells: a refined tile's vertices are not confined to the
+    // half-open box, and one whose cell index fell off the end would silently
+    // lose its bank.
+    const gx0 = t.xs - cellM * 2, gz0 = t.zs - cellM * 2;
+    const gw = Math.max(1, Math.ceil(t.w / cellM) + 4), gh = Math.max(1, Math.ceil(t.h / cellM) + 4);
+    const buckets = new Map<number, number[]>();
+    const push = (cx: number, cz: number, i: number): void => {
+      if (cx < 0 || cz < 0 || cx >= gw || cz >= gh) return;
+      const key = cz * gw + cx;
+      const list = buckets.get(key);
+      if (list) list.push(i); else buckets.set(key, [i]);
+    };
+    for (let i = 0; i < n; i++) {
+      const o = i * S15;
+      const reach = Math.max(packed[o + 6], Math.max(packed[o + 7], packed[o + 10]));
+      const m = reach + Math.max(packed[o + 8], packed[o + 12]);
+      const x0 = Math.floor((packed[o] - m - gx0) / cellM), x1 = Math.floor((packed[o] + m - gx0) / cellM);
+      const z0 = Math.floor((packed[o + 1] - m - gz0) / cellM), z1 = Math.floor((packed[o + 1] + m - gz0) / cellM);
+      for (let cz = z0; cz <= z1; cz++) for (let cx = x0; cx <= x1; cx++) push(cx, cz, i);
+    }
+    for (let v = 0; v < nv; v++) {
+      const x = pos[v * 3] + ox, z = pos[v * 3 + 2] + oz;
+      const cx = Math.floor((x - gx0) / cellM), cz = Math.floor((z - gz0) / cellM);
+      if (cx < 0 || cz < 0 || cx >= gw || cz >= gh) continue;
+      const list = buckets.get(cz * gw + cx);
+      if (!list) continue;
+      // ── PHASE ONE: PROTECTIONS, AND THEY BIND ──
+      // A refused station means "nothing may change here". The first cut let
+      // it mark the vertex and carry on, so an overlapping RESOLVED station
+      // still cut through it — measured on the shipped kernel as 3 m becoming
+      // 0.25 m, the refusal costing exactly nothing. A protected vertex is
+      // owned and then left alone, whatever else reaches it.
+      let guarded = false;
+      for (let j = 0; j < list.length && !guarded; j++) {
+        const o = list[j] * S15;
+        if (!packed[o + 11]) continue;
+        const dx = x - packed[o], dz = z - packed[o + 1];
+        const nx = packed[o + 2], nz = packed[o + 3];
+        const along = dx * -nz + dz * nx;
+        if (along < -packed[o + 12] || along > packed[o + 8]) continue;
+        const sOff = dx * nx + dz * nz;
+        if (sOff >= 0 && sOff <= packed[o + 10]) guarded = true;
+      }
+      if (guarded) { owned[v] = 1; continue; }
+      // ── PHASE TWO: THE CUT ──
+      let best: number | null = null;
+      let reached = false;
+      for (let j = 0; j < list.length; j++) {
+        const o = list[j] * S15;
+        if (packed[o + 11]) continue;
+        const dx = x - packed[o], dz = z - packed[o + 1];
+        const nx = packed[o + 2], nz = packed[o + 3];
+        const along = dx * -nz + dz * nx;
+        if (along < -packed[o + 12] || along > packed[o + 8]) continue;
+        const sOff = dx * nx + dz * nz;
+        const inR = packed[o + 6];
+        if (sOff > packed[o + 7] || -sOff > inR) continue;
+        reached = true;
+        const wl = packed[o + 4] - S.baseElev + packed[o + 14] * along;
+        const y = bankProfileY(wl, packed[o + 5] - S.baseElev, inR, packed[o + 9], sOff);
+        if (best === null || y < best) best = y;
+      }
+      if (!reached) continue;
+      // ── AND A CROSSING IS THE CROSSING AUTHORITY'S, NOT THE BANK'S ──
+      //
+      // The first cut owned every road vertex a station reached and then
+      // declined to cut it, which took the CARVE out too — and the carve's own
+      // rule is not "never on a road", it is `channelFloorAt`'s: on a road it
+      // refuses for a causeway or for no crossing at all, and carves the
+      // channel THROUGH a bridge, a culvert or a ford, because a deck is
+      // separate geometry standing over water that still has to be shaped.
+      // Owning all four the same way deleted that distinction: tested on the
+      // shipped kernel, every crossing kind gave an unchanged height and
+      // `owned = 1`, and the pass never asked `crossingAt` at all.
+      if (S.onRoad(x, z)) {
+        const crossing = S.crossingAt(x, z);
+        if (crossing === null || crossing === 'causeway') {
+          // A carriageway at grade, or a causeway: protected from both rules,
+          // which is what owning it says.
+          owned[v] = 1;
+          continue;
+        }
+        // Bridge, culvert or ford. The bank does not shape a channel under a
+        // structure — that is the crossing profile's business and the carve
+        // already knows how to do it — so this vertex is left UNOWNED and the
+        // crossing-aware channel path runs on it exactly as it did.
+        continue;
+      }
+      owned[v] = 1;
+      if (best !== null) target[v] = best;
+    }
+  }
+  /**
+   * The solved bank, laid on the mesh. It only ever lowers — the comparison is
+   * against the height the corridor left, so a deck or an embankment standing
+   * over the water is never pulled down to the bank's profile.
+   */
+  function bankApply(pos: Float32Array, target: Float32Array): number {
+    let moved = 0;
+    for (let v = 0; v < target.length; v++) {
+      const y = target[v];
+      if (!(y < pos[v * 3 + 1])) continue;   // NaN fails this, which is the point
+      pos[v * 3 + 1] = y; moved++;
+    }
+    return moved;
   }
   /**
    * A WATERCOURSE: solved profile, carved bed, and a bore wherever it runs under
@@ -1622,6 +2156,15 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       height: (x: number, z: number): number | null =>
         S.hasHeight(x, z) ? S.sampleHeightRaw(x, z) + S.baseElev : null,
     });
+    const floor = refined ? null : S.hydroFloor(t);
+    // The bank's verdict, before the floor — see refineTileGeometry's site for
+    // why it has to be this way round. A refined tile has already solved it
+    // against its own lattice and hands it over; a plain one solves it here,
+    // where `plainLattice` has written x and z and nothing has written a
+    // height yet (which the solve does not read).
+    const bankOwned = refined ? refined.bankOwned : new Uint8Array(pos.length / 3);
+    const bankTarget = refined ? refined.bankTarget : new Float32Array(pos.length / 3);
+    if (!refined) bankSolve(S, t, pos, bankOwned, bankTarget);
     for (let i = 0; i < (refined ? 0 : (pos.length / 3)); i++) {
       const ex = pos[(i) * 3] + cxm, ez = pos[(i) * 3 + 2] + czm;
       const cv = S.sampleCover(ex, ez);
@@ -1648,6 +2191,9 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
         const seaLocal = S.seaAbs() - S.baseElev;
         if (elev <= seaLocal + 2) elev = Math.min(elev, seaLocal - SEA_BED);
       }
+      // The field's bed as a ceiling, outside what the bank owns — see
+      // refineTileGeometry's site for why ownership is decided first.
+      if (floor && !bankOwned[i]) { const f = hydroFloorAt(floor, t, ex, ez); if (f !== null && f - S.baseElev < elev && !S.onRoad(ex, ez)) elev = f - S.baseElev; }
       pos[(i) * 3 + 1] = elev;
     }
     // A stitched plain tile still carves — its own roads are the old grid's —
@@ -1660,7 +2206,15 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     if (!refined || !corridor) carveCorridors(S, t, pos, cellTris, SEG);
     nanScan(pos, 'carve', tk);
     const p3 = performance.now();
-    carveChannels(S, t, pos, SEG);
+    // THE BANK BEFORE THE CHANNEL, and the channel told where not to go. The
+    // order is the composition: the bank's region was decided before the
+    // heights pass so the published floor could stand down inside it, the cut
+    // itself lands HERE — after the road earthworks, so it lowers against what
+    // the corridor left — and the carve then fills in the bed everywhere no
+    // station reached.
+    bankApply(pos, bankTarget);
+    nanScan(pos, 'bank', tk);
+    carveChannels(S, t, pos, SEG, bankOwned);
     nanScan(pos, 'channels', tk);
     const p4 = performance.now();
     if (!refined || !corridor) {
@@ -2075,7 +2629,7 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
   }
   return {
     buildTile, borderShared, roadFloorHard, corridorH, stripBreakLines, stripFloor, cellTable, normalMapBytes, plainLattice, vertexNormals,
-    refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear, makeSampler, makePalette, areaTintOf, onRoadOf, hydroElevation,
+    refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear, channelFloorAt, hydroFloorAt, bankTargetAtPacked, bankSolve, bankApply, bankBreakLines, simplifyPolyline, makeSampler, makePalette, areaTintOf, onRoadOf, hydroElevation,
     crossingKindAt,
     BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX, RELIEF_MIN,
   };

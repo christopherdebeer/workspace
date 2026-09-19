@@ -73,7 +73,7 @@ function centreHeight(kind: TerrainCrossingKind | null): number {
     cutL: 24,
     channels: gridded(channel),
     grid: 24,
-    hydroBreakLines: () => [],
+    hydroBreakLines: () => [], hydroFloor: () => null, hydroBank: () => null,
     onRoad: (_x, z) => Math.abs(z) <= 3,
     palette: () => [.4, .4, .4],
     areaTint: () => null,
@@ -124,7 +124,7 @@ function assertHydroContourIsTopology(): void {
     cutL: 24,
     channels: new Map(),
     grid: 24,
-    hydroBreakLines: () => [shore],
+    hydroBreakLines: () => [shore], hydroFloor: () => null, hydroBank: () => null,
     onRoad: () => false,
     palette: () => [.4, .4, .4],
     areaTint: () => null,
@@ -156,8 +156,58 @@ function assertHydroContourIsTopology(): void {
   }
 }
 
+function assertPointBarBelongsToTerrain(): void {
+  const channel: StripLike = {
+    ax: 0,
+    az: -16,
+    bx: 0,
+    bz: 16,
+    hw: 4,
+    ya: 1,
+    yb: 1,
+    cv: .012,
+  };
+  const tile: HeightTile = {
+    tx: 0, ty: 0, xs: -16, zs: -16, w: 32, h: 32,
+    data: new Float32Array(256 * 256).fill(4),
+  };
+  const store: TerrainStore = {
+    heights: new Map([['0/0', tile]]),
+    hasHeight: () => true,
+    sampleHeight: () => 4,
+    sampleHeightRaw: () => 4,
+    sampleCover: () => 80,
+    coverPaint: () => 80,
+    coverWater: () => true,
+    crossingAt: () => null,
+    cover: { water: 80, built: 50 },
+    seaAbs: () => 0,
+    baseElev: 0,
+    strips: new Map(),
+    cutL: 24,
+    channels: gridded(channel),
+    grid: 24,
+    hydroBreakLines: () => [], hydroFloor: () => null, hydroBank: () => null,
+    onRoad: () => false,
+    palette: () => [.4, .4, .4],
+    areaTint: () => null,
+    borders: new Map(),
+    nrmCoarsePx: 4, nrmRes: 2,
+    cutWash: 0,
+    cprobe: false,
+    carveLog: new Map(),
+    cutRelief: false,
+  };
+  // Tangent points +z, so cross(tangent, offset) is positive on x<0.
+  const inside = K.channelFloorAt(store, -3.4, 0, 4);
+  const outside = K.channelFloorAt(store, 3.4, 0, 4);
+  assert(inside !== null && outside !== null && inside > outside + .15,
+    `curved channel did not raise a terrain-owned inside shelf (${inside}, ${outside})`);
+}
+
 export function runTerrainCrossingSelfTest(): void {
   assertHydroContourIsTopology();
+  assertPointBarBelongsToTerrain();
   const mask = {
     kind: 'causeway' as const,
     x: 0,

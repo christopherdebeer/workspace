@@ -407,8 +407,20 @@ export type ProductionSubstrateLookup =
   }
   | {
     status: 'unavailable';
-    reason: 'no-tile' | 'invalid-tile';
+    reason: 'no-tile' | 'invalid-tile' | 'stale-terrain' | 'stale-hydro';
+    tileKey?: string;
+    tileRevision?: number;
   };
+
+/** What the world currently holds for a tile key, asked of the store's
+ *  revision source at lookup time: the terrain revision the mesh was built
+ *  at and the hydro field revision. A tile whose `sourceRevisions` disagree
+ *  is STALE — its ground raster is another mesh's, its water rasters another
+ *  field's — and stale is an explicit `unavailable`, never an answer. */
+export interface ProductionCurrentRevisions {
+  terrain: number;
+  hydro: number;
+}
 
 export interface ProductionWaterProbe {
   tileKey: string;
@@ -768,6 +780,17 @@ function sampleGroundMesh(
   return undefined;
 }
 
+/** Whether the precise field has an answer at (x, z) at all — inside its
+ *  bounds with a usable resolution. Its answer may then be wet or dry; only
+ *  outside this is the witness raster consulted. Mirrors the bounds test at
+ *  the top of `sampleFieldSurface`, which folds "outside" into the same
+ *  undefined as "dry". */
+function hydroFieldCovers(field: HydroTileField, x: number, z: number): boolean {
+  const b = field.bounds;
+  if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) return false;
+  const sx = (b.maxX - b.minX) / field.resolution, sz = (b.maxZ - b.minZ) / field.resolution;
+  return sx > 0 && sz > 0;
+}
 function sampleWaterMotion(
   segments: readonly ProductionWaterMotionSegment[],
   x: number,
@@ -1019,7 +1042,15 @@ export function sampleProductionSubstrateTile(
     };
   }
 
-  let exactHydro = tile.hydroField
+  // THREE ANSWERS FROM THE PRECISE FIELD, NOT TWO. Known wet, known dry, and
+  // unavailable (no field, or the point outside its bounds). The dry answer is
+  // FINAL: the 33x33 witness raster below is a fallback for the unavailable
+  // case only. Before this, "dry" and "unavailable" were the same undefined,
+  // and a wet raster cell 60-70 m wide resurrected water contact 24 m from an
+  // 8 m channel — wet, 0.63 m deep, where the field said dry — which the
+  // surface classifier, the wheels and the splash all consumed.
+  const hydroKnown = !!tile.hydroField && hydroFieldCovers(tile.hydroField, x, z);
+  let exactHydro = hydroKnown && tile.hydroField
     ? sampleFieldSurface(tile.hydroField, x, z, 0)
     : undefined;
   if (exactHydro) {
@@ -1063,7 +1094,7 @@ export function sampleProductionSubstrateTile(
     contact.fluid = crossing === 'bridge' && contact.support.kind === 'drive'
       ? undefined
       : resolveFluidContact(contact.water, contact.support);
-  } else if (!exactHydro && crossing !== 'causeway'
+  } else if (!hydroKnown && crossing !== 'causeway'
     && (tile.waterState[i] === WATER_STATE.exposed || tile.waterState[i] === WATER_STATE.hidden)) {
     const kind = HYDRO_KINDS[tile.waterKind[i] - 1];
     const waterId = tile.waterIds[tile.waterIndex[i] - 1] ?? 'production-water:unknown';
@@ -1117,6 +1148,22 @@ export function sampleProductionSubstrateTile(
 export class ProductionSubstrateStore {
   private readonly tiles = new Map<string, ProductionSubstrateTile>();
   private revision = 0;
+  private currentRevisions: ((key: string) => ProductionCurrentRevisions | undefined) | null = null;
+
+  /** Install the world's view of current revisions per key. Without one the
+   *  store answers from whatever it holds (the tests' pure tiles). */
+  setRevisionSource(source: ((key: string) => ProductionCurrentRevisions | undefined) | null): void {
+    this.currentRevisions = source;
+  }
+
+  /** Why a held tile would not be served: stale against the world, or fresh. */
+  staleness(tile: ProductionSubstrateTile): 'stale-terrain' | 'stale-hydro' | null {
+    const current = this.currentRevisions?.(tile.key);
+    if (!current) return null;
+    if (tile.sourceRevisions.terrain !== current.terrain) return 'stale-terrain';
+    if (tile.sourceRevisions.hydro !== current.hydro) return 'stale-hydro';
+    return null;
+  }
 
   upsert(tile: ProductionSubstrateTile): void {
     const previous = this.tiles.get(tile.key);
@@ -1141,6 +1188,13 @@ export class ProductionSubstrateStore {
   lookup(x: number, z: number): ProductionSubstrateLookup {
     const tile = this.tileAt(x, z);
     if (!tile) return { status: 'unavailable', reason: 'no-tile' };
+    // REVISIONS ARE CONSUMED HERE, not only carried. A tile built on terrain
+    // revision 3 answering for a mesh at revision 4 gives the wheels another
+    // mesh's ground and the splash another field's water for the frames
+    // between the rebuild being queued and landing. Those frames go to the
+    // legacy sampler explicitly, counted, rather than to a stale answer.
+    const stale = this.staleness(tile);
+    if (stale) return { status: 'unavailable', reason: stale, tileKey: tile.key, tileRevision: tile.revision };
     const contact = sampleProductionSubstrateTile(tile, x, z);
     // `tileAt` and the sampler deliberately share the same bounds. Keep this
     // defensive state explicit: a malformed/revised tile may use rollback,

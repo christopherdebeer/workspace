@@ -42,6 +42,8 @@ const ok = (name, cond, saw) => {
 // ── THE ROUTES ────────────────────────────────────────────────────
 ok('/lab is the index', labRoute('/lab')?.slug === null, labRoute('/lab'));
 ok('/lab/marks is the marks lab', labRoute('/lab/marks')?.slug === 'marks', labRoute('/lab/marks'));
+ok('/lab/world-edit is the embedded authoring lab',
+  labRoute('/lab/world-edit')?.slug === 'world-edit', labRoute('/lab/world-edit'));
 ok('a trailing slash is the same route', labRoute('/lab/marks/')?.slug === 'marks', labRoute('/lab/marks/'));
 // The old hydro URL is written down in notes and commit messages; breaking a
 // documented URL to tidy a route is not a trade worth making.
@@ -80,18 +82,26 @@ const errors = [];
 
 // ── AND EACH ONE ACTUALLY OPENS ───────────────────────────────────
 for (const lab of LABS) {
-  const d = await openDrive({ pagePath: `/lab/${lab.slug}`, tag: `lab-${lab.slug}`,
+  const pagePath = lab.embedded
+    ? `/lab/${lab.slug}?fixture=tee&time=MORNING&cam=chase`
+    : `/lab/${lab.slug}`;
+  const d = await openDrive({ pagePath, tag: `lab-${lab.slug}`,
     settle: 6000, bootTimeout: 45000 });
   await d.page.waitForTimeout(2500);
   const seen = await d.page.evaluate(() => ({
     boot: !!document.getElementById('boot'),
+    bootReady: document.getElementById('boot')?.classList.contains('ready') ?? false,
     canvases: document.querySelectorAll('canvas').length,
     painted: (() => {
       const c = document.querySelector('canvas');
       return c ? c.width > 0 && c.height > 0 : false;
     })(),
   }));
-  ok(`${lab.slug}: the game's boot splash is gone`, !seen.boot, seen);
+  if (lab.embedded) {
+    ok(`${lab.slug}: the complete game reached ready`, seen.bootReady, seen);
+  } else {
+    ok(`${lab.slug}: the game's boot splash is gone`, !seen.boot, seen);
+  }
   // A CHOOSER PUTS UP CHOICES, not a canvas — see LabEntry.chooser. Held to
   // the same bar in its own terms: every option it offers has to be a link
   // that goes somewhere, or the lab is a page of dead text.
@@ -102,6 +112,117 @@ for (const lab of LABS) {
       links.length >= 3 && links.every((h) => h.includes('fixture=')), links);
   } else {
     ok(`${lab.slug}: it put a canvas up`, seen.canvases > 0 && seen.painted, seen);
+    if (lab.embedded) {
+      await d.page.waitForFunction(() => typeof window.__worldedit === 'function'
+        && window.__worldedit().tiles > 0, null, { timeout: 45000 });
+      const initial = await d.page.evaluate(() => ({
+        report: window.__worldedit?.(),
+        panel: !!document.getElementById('world-authoring'),
+        views: [...document.querySelectorAll('#world-authoring-view option')].map((o) => o.value),
+        modes: [...document.querySelectorAll('#world-authoring-mode option')].map((o) => o.value),
+        layers: [...document.querySelectorAll('#world-authoring-layer option')]
+          .map((o) => o.value),
+      }));
+      ok('world-edit: the authoring overlay is attached to the shipping game',
+        initial.panel && initial.report?.active && initial.report?.layer === 'cover',
+        initial);
+      ok('world-edit: game and canonical data views are both exposed',
+        ['game', 'data'].every((view) => initial.views.includes(view)), initial.views);
+      ok('world-edit: input ownership is explicit',
+        ['interact', 'paint'].every((mode) => initial.modes.includes(mode)), initial.modes);
+      ok('world-edit: raster and vector authorities are exposed',
+        ['cover', 'dem', 'road'].every((layer) => initial.layers.includes(layer)), initial.layers);
+
+      const inputOwnership = await d.page.evaluate(() => {
+        const canvas = document.getElementById('scene');
+        const fire = (type, id) => canvas.dispatchEvent(new PointerEvent(type, {
+          bubbles: true, cancelable: true, pointerId: id, pointerType: 'touch',
+          button: 0, clientX: innerWidth * .5, clientY: innerHeight * .58,
+        }));
+        const before = window.__worldedit?.();
+        {
+          const mode = document.getElementById('world-authoring-mode');
+          mode.value = 'paint';
+          mode.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        fire('pointerdown', 802);
+        const paintStick = window.__input?.().stick ?? null;
+        const during = window.__worldedit?.();
+        fire('pointerup', 802);
+        {
+          const mode = document.getElementById('world-authoring-mode');
+          mode.value = 'interact';
+          mode.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        const after = window.__worldedit?.();
+        return { before, during, after, paintStick };
+      });
+      ok('world-edit: PAINT owns the pointer and INTERACT returns it to the game',
+        inputOwnership?.before?.inputCaptured === false
+          && inputOwnership.during?.inputCaptured === true
+          && inputOwnership.paintStick === null
+          && inputOwnership.after?.inputCaptured === false,
+        inputOwnership);
+
+      const painted = await d.page.evaluate(() => {
+        const mode = document.getElementById('world-authoring-mode');
+        mode.value = 'paint';
+        mode.dispatchEvent(new Event('change', { bubbles: true }));
+        const view = document.getElementById('world-authoring-view');
+        view.value = 'data';
+        view.dispatchEvent(new Event('change', { bubbles: true }));
+        return window.__worldeditPaint?.(undefined, undefined, 80, 0);
+      });
+      ok('world-edit: painting changes canonical cells and queues production work',
+        painted?.view === 'data' && painted.changed > 0 && painted.editedCells > 0
+          && painted.rebuilds > 0
+          && (initial.report?.workerMirrors < 0
+            || painted.workerMirrors > initial.report.workerMirrors),
+        { initial: initial.report, painted });
+
+      const sculpted = await d.page.evaluate(() => {
+        const layer = document.getElementById('world-authoring-layer');
+        layer.value = 'dem';
+        layer.dispatchEvent(new Event('change', { bubbles: true }));
+        const before = window.__worldedit?.();
+        const after = window.__worldeditPaint?.(undefined, undefined, 'raise', 45, 2);
+        return { before, after };
+      });
+      ok('world-edit: DEM sculpting changes the canonical height and remirrors production',
+        sculpted.before?.layer === 'dem'
+          && sculpted.after?.focusElevationM > sculpted.before.focusElevationM
+          && sculpted.after?.editedCells > 0
+          && (sculpted.before.workerMirrors < 0
+            || sculpted.after.workerMirrors > sculpted.before.workerMirrors),
+        sculpted);
+
+      const road = await d.page.evaluate(() => {
+        const before = window.__worldedit?.();
+        const immediate = window.__worldeditLine?.(undefined, 'service', 6);
+        return {
+          before,
+          immediate,
+          radiusLabel: document.querySelector('#world-authoring-radius')
+            ?.parentElement?.querySelector('span')?.textContent,
+        };
+      });
+      ok('world-edit: a road gesture becomes persistent source and pending production work',
+        road.immediate?.layer === 'road'
+          && road.immediate?.features === 1
+          && road.immediate?.pending === 1
+          && road.radiusLabel === 'WIDTH',
+        road);
+      await d.page.waitForFunction(() => {
+        const report = window.__worldedit?.();
+        return report?.layer === 'road' && report.pending === 0
+          && (report.settled === 1 || report.failed === 1);
+      }, null, { timeout: 45000 });
+      const rebuiltRoad = await d.page.evaluate(() => window.__worldedit?.());
+      ok('world-edit: authored roads leave the pending overlay after the production rebuild',
+        rebuiltRoad?.features === 1 && rebuiltRoad.pending === 0 && rebuiltRoad.settled === 1
+          && rebuiltRoad.productionWays === 1,
+        rebuiltRoad);
+    }
     if (lab.slug === 'hydro') {
       const hydro = await d.page.evaluate(() => ({
         sections: [...document.querySelectorAll('details.section > summary')]
@@ -116,6 +237,57 @@ for (const lab of LABS) {
         /SHORE TOPOLOGY [1-9][0-9,]* SEGMENTS · TERRAIN CONSTRAINED/
           .test(hydro.status),
         hydro.status);
+    }
+    if (lab.slug === 'flora') {
+      const flora = await d.page.evaluate(() => ({
+        sections: [...document.querySelectorAll('.lab-dials .sec .sh span:first-child')]
+          .map((s) => s.textContent),
+        modes: [...document.querySelectorAll('#representation option')].map((o) => o.value),
+        report: window.__floralab?.(),
+      }));
+      ok('flora: the full representation ladder is exposed',
+        flora.sections.includes('REPRESENTATION LADDER')
+          && ['AUTO LOD', 'FULL 3D', 'MID LOD', 'IMPOSTOR']
+            .every((mode) => flora.modes.includes(mode)),
+        flora);
+      ok('flora: its production impostor atlas is baked and bounded',
+        !!flora.report?.atlas && flora.report.atlasSlots > 0
+          && flora.report.atlasSlots <= flora.report.atlasCapacity,
+        flora.report);
+      ok('flora: the shipped pixel gates and close-detail band are reported',
+        flora.report?.fullPx === 58 && flora.report.cardPx === 26
+          && flora.report.closePx?.[0] === 64 && flora.report.closePx?.[1] === 128,
+        flora.report);
+
+      // Force one species so each rung is exercised by the SAME population,
+      // not by whatever share of the Cape guild happened to be tree-shaped.
+      await d.page.evaluate(() => {
+        const set = (id, value) => {
+          const el = document.getElementById(id);
+          el.value = value;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        set('species', 'broadleaf');
+        set('representation', 'MID LOD');
+      });
+      await d.page.waitForTimeout(500);
+      const mid = await d.page.evaluate(() => window.__floralab?.());
+      ok('flora: forced mid LOD draws the derived geometry and nothing else',
+        mid?.mode === 'MID LOD' && mid.mid > 0 && mid.full === 0 && mid.impostor === 0
+          && mid.tris > mid.mid * 4,
+        mid);
+
+      await d.page.evaluate(() => {
+        const el = document.getElementById('representation');
+        el.value = 'IMPOSTOR';
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await d.page.waitForTimeout(500);
+      const card = await d.page.evaluate(() => window.__floralab?.());
+      ok('flora: forced impostors use the four-triangle production card',
+        card?.mode === 'IMPOSTOR' && card.impostor > 0 && card.full === 0 && card.mid === 0
+          && card.tris === card.impostor * 4,
+        card);
     }
   }
   errors.push(...d.errors);

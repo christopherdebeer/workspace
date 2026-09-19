@@ -33,6 +33,10 @@ export interface TerrainJob {
   strips: Float64Array; stripCells: Array<[string, number[]]>;
   channels: Float64Array; chanCells: Array<[string, number[]]>;
   hydroBreakLines: Float64Array;
+  /** The field's bed lattice (see TerrainStore.hydroFloor); empty with n 0 when the tile has no field. */
+  hydroFloor: Float32Array; hydroFloorN: number;
+  /** The tile's packed bank stations (see TerrainStore.hydroBank); empty when the tile has none. */
+  hydroBank: Float32Array;
   crossings: TerrainCrossingMask[];
   areas: AreaPatchLike[];
   pads: Float64Array;
@@ -67,12 +71,13 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
   const borders = new Map<string, Float64Array>();
   const carveLog = new Map<string, CarveLog>();
   const unflat = (a: Float64Array, cells: Array<[string, number[]]>): Map<string, StripLike[]> => {
-    const n = a.length / 13, objs: StripLike[] = [];
+    const n = a.length / 14, objs: StripLike[] = [];
     for (let i = 0; i < n; i++) {
-      const o = i * 13;
+      const o = i * 14;
       const u = (v: number): number | undefined => Number.isNaN(v) ? undefined : v;
       objs.push({ ax: a[o], az: a[o + 1], bx: a[o + 2], bz: a[o + 3], hw: a[o + 4], ya: u(a[o + 5]), yb: u(a[o + 6]),
-        tk: a[o + 7] > 0.5, tn: a[o + 8] > 0.5, ca: u(a[o + 9]), cb: u(a[o + 10]), pc: u(a[o + 11]), pp: u(a[o + 12]) });
+        tk: a[o + 7] > 0.5, tn: a[o + 8] > 0.5, ca: u(a[o + 9]), cb: u(a[o + 10]), pc: u(a[o + 11]), pp: u(a[o + 12]),
+        cv: u(a[o + 13]) });
     }
     const map = new Map<string, StripLike[]>();
     for (const [key, ids] of cells) map.set(key, ids.map((i) => objs[i]));
@@ -128,6 +133,8 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
         seaAbs: () => job.seaAbs, baseElev: job.baseElev,
         strips, cutL: job.cutL, channels, grid: job.grid,
         hydroBreakLines: () => hydroBreakLines,
+        hydroFloor: () => job.hydroFloorN > 0 ? { n: job.hydroFloorN, data: job.hydroFloor } : null,
+        hydroBank: () => job.hydroBank && job.hydroBank.length ? job.hydroBank : null,
         onRoad: (x, z) => K.onRoadOf(strips, job.cutL, x, z),
         palette, areaTint: (x, z) => K.areaTintOf(job.areas, x, z),
         borders, nrmCoarsePx: job.nrmCoarsePx, nrmRes: job.nrmRes, cutWash: job.cutWash, cprobe: job.cprobe, carveLog, cutRelief: job.cutRelief,
@@ -212,6 +219,13 @@ export class TerrainWorker {
       this.ensureWorker().postMessage({ type: 'cover', key, tile: { xs: t.xs, zs: t.zs, w: t.w, h: t.h, data } }, [data.buffer as unknown as Transferable]);
       this.mirrored.add('c' + key); this.stats.mirrored++;
     } catch { this.disabled = true; }
+  }
+  /** The authoring surface changes canonical cover bytes in place. As with a
+   * repaired height tile, the worker's first mirrored copy must be retired
+   * before the new authority is sent. */
+  remirrorCover(key: string, t: CoverTile): void {
+    this.mirrored.delete('c' + key);
+    this.mirrorCover(key, t);
   }
   reset(): void {
     this.mirrored.clear();

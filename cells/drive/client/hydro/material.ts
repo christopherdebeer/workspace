@@ -35,6 +35,9 @@ export interface HydroFrameUniforms {
   uRiverEdgeStrength: { value: number };
   uTurbulenceStrength: { value: number };
   uEddyStrength: { value: number };
+  uAbsorptionStrength: { value: number };
+  uScatteringStrength: { value: number };
+  uSurfaceRoughness: { value: number };
 }
 
 export interface HydroTileTextures {
@@ -86,6 +89,9 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uRiverEdgeStrength: { value: 1 },
     uTurbulenceStrength: { value: 1 },
     uEddyStrength: { value: 1 },
+    uAbsorptionStrength: { value: 1 },
+    uScatteringStrength: { value: 1 },
+    uSurfaceRoughness: { value: 1 },
   };
 }
 
@@ -167,12 +173,17 @@ export function createHydroTextures(field: HydroTileField): HydroTileTextures {
   };
 }
 
-/** A SHADE THE SCENE OWNS. The terrain darkens under the cloud deck by a
- *  function its host writes; the water has to darken by the SAME function or
- *  a cloud's shadow stops at the bank. The host hands in GLSL declaring
- *  `float sceneShade(vec3 renderPos)` and the uniforms it reads, shared by
- *  reference; hydro itself stays ignorant of clouds. */
-export interface SceneShade { head: string; uniforms: Record<string, THREE.IUniform> }
+/** ENVIRONMENT FUNCTIONS THE SCENE OWNS. The terrain darkens under the cloud
+ *  deck by a function its host writes; water has to darken by the SAME
+ *  function or a cloud's shadow stops at the bank. A richer host may also
+ *  provide `sceneReflectedSky(...)`, evaluated in the reflected view
+ *  direction, so water sees the actual world-anchored cloud field rather than
+ *  a separate hydro approximation. Uniforms remain shared by reference. */
+export interface SceneShade {
+  head: string;
+  uniforms: Record<string, THREE.IUniform>;
+  reflectsSky?: boolean;
+}
 
 export function createHydroMaterial(
   field: HydroTileField,
@@ -205,6 +216,7 @@ export function createHydroMaterial(
       ...(!flowing && textures.coast ? { HYDRO_COAST: 1 } : {}),
       ...(edgeBlend ? { HYDRO_EDGE_BLEND: 1 } : {}),
       ...(shade ? { HYDRO_SCENE_SHADE: 1 } : {}),
+      ...(shade?.reflectsSky ? { HYDRO_SCENE_REFLECTION: 1 } : {}),
     },
     vertexShader: HYDRO_VERTEX_SHADER,
     // The host's shade is spliced in ahead of main, after every declaration
@@ -280,6 +292,9 @@ export function createHydroMaterial(
       uRiverEdgeStrength: frame.uRiverEdgeStrength,
       uTurbulenceStrength: frame.uTurbulenceStrength,
       uEddyStrength: frame.uEddyStrength,
+      uAbsorptionStrength: frame.uAbsorptionStrength,
+      uScatteringStrength: frame.uScatteringStrength,
+      uSurfaceRoughness: frame.uSurfaceRoughness,
       uEdgeBlendEnabled: { value: edgeBlend ? 1 : 0 },
     },
     // ── A SURFACE YOU CAN BE UNDERNEATH ──

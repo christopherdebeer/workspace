@@ -22,6 +22,7 @@ export function createWildlifeWire() {
         depthWrite: source.depthWrite,
         toneMapped: source.toneMapped,
       });
+      source.userData.wildlifeDeform?.(wire);
       wires.set(source, wire);
     }
     wire.visible = source.visible;

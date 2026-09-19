@@ -104,6 +104,16 @@ a confusing module error):
 > log for `deploying` to know the request went in, then read once the `✓
 > deployed` line lands: the REPORT is the last thing before cell-sync's own
 > polling.
+>
+> **A FOURTH POINT, 2026-09-19: 734 MB.** `1789826118027`, **238 files**,
+> static 22, `Duration: 33702.96 ms · Max Memory Used: 734 MB` — the highest of
+> the four and still inside the spread the first three showed (687 / 714 / 705,
+> a range of 27). So it is not a slope, it is a fourth reading, and it is
+> **72% of the ceiling on a deploy carrying 238 files where the first reading
+> carried 191**. Take the REPORT every time and compare against the RANGE; the
+> deploy that will need acting on is the one that clears about 850, and what
+> buys the headroom back is named below — `main.ts`, `ne-wide.b64` and the
+> fixtures under `static/`.
 
 **A DEPLOY THAT NEVER LEAVES `DEPLOYING` IS THE DEPLOYER OUT OF MEMORY, AND
 NOTHING TELLS YOU.** Root-caused on 2026-09-10 with `platform.logs
@@ -291,6 +301,22 @@ file, byte-identical to the commit before the one being deployed. Two were the
 is simply behind and yours is safe to restore; a non-empty one is work that
 exists nowhere else and must be committed verbatim before anything is pushed.
 
+**AND THE FOURTH PULL TYPE-CHECKED CLEAN, WHICH IS WHY THE HABIT IS THE RULE
+AND THE GENERALISATION IS NOT.** Two places in this file record three
+consecutive pulls whose code failed `tsc` — a `qs` row that was never declared,
+`extensions` written on a Lambert material — and one of them generalises to
+"the other author does not run the type check". The 2026-09-19 pull of the
+river shore-contact unit (`client/hydro/shore-contact.ts` and the four files it
+touches) is clean on the first run, and the whole pure hydro suite passes over
+it unchanged: `glsl-reserved`, `hydro`, `inland-water`, `hydro-coast`,
+`hydro-resolution`. So **read `tsc` before reading a pulled diff** stands, for
+the reason it always had — a pull is a snapshot of somebody's editor, not a
+release — and the sentence about the author is a tally of what three pulls
+cost rather than a property of the person. Run the suite over pulled code too:
+`glsl-reserved` is instant and is precisely the check that would catch a
+reserved word in new GLSL, which is a fault this file has recorded twice from
+the other side.
+
 ---
 
 ## Verification ladder
@@ -326,6 +352,9 @@ Nothing here is fast. Budget for it.
 | `node devtools/imp-sheet.mjs` | every variant's SKELETON beside its own baked IMPOSTOR card, one camera, one quantiser, one metric block, at the art-pixel size the game draws that tree at — with the silhouette IoU between the halves, which is the only column that compares them. `DIST=`, `ELEV=`, `AZ=` (0 is exactly on a baked tile, 22.5 the worst case between two), `INK=1`; **`MID=1` puts the MID RUNG in the right cell instead of the card**, same camera and metric block, so the full↔mid handover is certified by the same IoU column | ~2min |
 | `node devtools/imp-demand.mjs` | what the impostor atlas was ASKED for beside what it holds: the ceiling computed offline from the bake (pure, instant, no browser), then the live census by key — refused keys with their tree counts, baked slots with theirs, and how many of the eighteen are serving nobody. `KM=0 FIX=` measures one arrived world; `SPOT=` with a leg drives across districts and needs a device or a warm relay to mean anything | ~2min |
 | `node devtools/imp-census.mjs` | **why a manifested tree has no representation at all** — the gather's EXITS by name, with the ones large enough to be seen counted apart (`h · 307 / d > 1` art pixel). Sweeps the DENSITY dial and FAILS on any perceptible NONE, and on a density exit with an empty far ring: an invariant is only demonstrated by trying to break it. `FIX=`, `DENS=0,2,5`, `DIALS='imprch=2'` | ~2min |
+| `node devtools/sward-hop.mjs` | whether a world hop stands the sward down, or carries the last place's committed field onto the new ground — the CHECKSUM of the committed data either side of a hop, with the height residual against the ground now under it beside it (`ARGS='swardhop=0'` is the one-build control, `FROM=`/`TO=`, `DRIVE=` to let the distance trigger fire) | ~3min |
+| `node devtools/hit-gap.mjs` | how far from a barrier the truck's own HULL stops, by the angle it is turned — the push-out let settle, then the gap to the drawn box (`ARGS='hull=0'` is the one-build control, `FIX=`, `SPOT=`, `KIND=rail\|wall`) | ~2min |
+| `node devtools/hull-collide.test.mjs` | the truck's own shape in pure node: the frame against main.ts's own integration TEXT, the support function, the point distance past a corner, the segment push-out, rotation invariance of the whole scene, and the circle it replaces as the control | instant |
 | `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
@@ -337,6 +366,8 @@ Nothing here is fast. Budget for it.
 | `node devtools/substrate-views.mjs` | each channel of that field photographed over real ground, with the same-frame-twice floor and the share of the pane each view moves — a channel that paints a flat wash is the failure worth catching (`FIX=`, `CAM=`, `Z=`, `CH=`) | ~6min |
 | `node devtools/chart-bands.mjs` | which layer owns each band of the chart — a hide-diff of the fine world, the coarse shell and the globe over one settled frame, with the same-frame-twice floor beside it, the far/fine seam in luma, and the planet-sun ramp (`SPOT=`, `Z=`, `CLIP=0`) | ~8min |
 | `node devtools/bridge-landmarks.mjs` | who CLAIMED each bridge assembly — an entry's id, OSM's own `bridge:structure`, or the recipe — beside what the painter actually built; fails on a spec that names a form and paints nothing, and on a long span nobody claimed (`FIX=`, `LONG_M=`) | ~2min |
+| `node devtools/ford-why.mjs` | why a track crossing a river has no ford treatment: the crossing registry's word, the layer the contact chose as SUPPORT, and the LEGACY deck rule beside the contact's verdict — the two answer different questions and the disagreement count is the reading (`SPOT=`, `R=`) | ~4min |
+| `node devtools/ford-drift.mjs` | whether anything is BUILT at a ford, on two witnesses that are not the same witness — the builder's own ledger (asked, built, each refusal named) and an independent walk of the scene for `userData.ford` — with the apron measured against the drawn ground under it (`FIX=`, `SPOT=` with `NODRAW=1`, `FORDS=0` is the control) | ~4min |
 | `node devtools/hydro-phases.mjs` | where a hydro build's milliseconds go, by phase and by ns/texel, with the wet/waterless build split, the wet share of the grid, and what a bound on the full-grid passes would leave to run — READ `BOUND=0` FOR THE MILLISECONDS, since the sizing probe is the same order of work as the passes it sizes and lands in `other` (`DRY=0` is the short-circuit's control, `FIX=`/`SPOT=` the place) | ~1min |
 | `node devtools/hydro-dry.test.mjs` | a waterless tile's short-circuit is the path it replaced, byte for byte, against the revision's own build-tile (`REV=`) | ~10s |
 | `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
@@ -15797,3 +15828,2582 @@ structural cast in the commit after it is the whole fix. Two pulls, two
 A second copy of `main.ts` from the previous pull is what makes the second
 pull cheap — `diff -u` between the two cell copies is exactly the new work,
 and `patch` lays it over the branch's head with offsets and no conflicts.
+
+### …and the device answered: the mid rung buys five times the trees, and admission became a sort
+
+The dump this section was waiting for arrived the morning after the deploy —
+**Nagato again, chase, POPULATION 8X, DRAW RANGE 1400 m, grass LUSH, 205 s,
+build `60b1b4c1a1ab`, which is the sha1 of the bundle deployed as
+v1789692092436** — so it is the same place, camera and rack as the
+`d3bdf4dd81e9` dump two sections up, with the mid rung, the sward boost, the
+foliage cut and the other agent's rain and fabric all in between. A different
+drive, so not an A/B; the closest two dumps here have ever come to one.
+
+| Nagato, chase, pop 8X, range 1400 m | `d3bdf4dd81e9` | `60b1b4c1a1ab` |
+|---|---|---|
+| trees placed | (conifer alone 1.14M at 1,134 a tree) | **14,293** at 2.23M |
+| **of them on the mid rung** | — | **14,250 — 99.7%** |
+| edge b / c / a / p / s | 163 / 333 / 524 / 166 / 512 m | **791 / 1400 / 1400 / 777 / 971** |
+| price b / c | 1,068 / 1,134 | **111 / 244** |
+| triangles, world pass mean | 8.5M | 8.33M |
+| draw calls | 352–501 | 337 mean, 516 max |
+| fps · frames over 50 ms | 15.1 · **83.6%** | 19.8 · **34.6%** |
+
+**The rung did what the ladder was built for.** At this rack the full rung
+draws about forty trees — the handful inside 58 art pixels — and everything
+else stands on the mid one, so the same 2.2M triangles buy conifer and
+acacia to the END of the ring (1400 m is the range, so those two are no
+longer capped at all) and broadleaf to 791 m where it stopped at 163. That is
+the pop the seat has reported since the first impostor, moved from a sixth of
+the ring to past half of it, at a triangle bill that did not rise.
+
+**AND IT COST THE ADMISSION ITS SHAPE.** `ezAdmit` reads **65.5 ms a call,
+max 173**, where the Yosemite dump the day before read 8.2. It is one
+unyielding block — `nearestStable` per family — and `nearestStable` falls
+back to a FULL SORT once `k·4 >= n`: the mid rung's caps are five times what
+the full rung's were, so the selection that was a small heap over a big list
+is now a sort of most of it. It is in the slow-frame log by name
+(`treeRefresh:67`). The histogram prefix this file already sketched under the
+New Forest bench — bins linear in d², prefix-sum to the cap, keep to that
+bin's edge, then the heap over the residue — is the cut, and it keeps
+`nearestStable`'s tie rule that `perf-check` holds. Not made here.
+
+What else the same dump says, read against the rows above it:
+
+- **`impGather` 171 ms a sweep** with **670 of 2,584 annulus cells retired
+  unread** — the cell cull fires on a device for the first time (it read
+  0/2,584 before the frame fix), and the phase is a fifth of the 898 the
+  first honest reading gave. Still the largest tree phase, still sliced.
+- **`trees representation`: 0 unaffordable aside**, every perceptible NONE
+  under the 2.19 px floor with the pool spent — the invariant, on a device,
+  at a rack that fills the pool. `vetoed 1108 on tarmac, 57 in water`: the
+  card tier's surface veto firing on a real road network.
+- **The sward and the foliage cut have no row of their own**, and their cost
+  is in `gap` (57%) where a fragment term always lands. `swardFrame` is 1.2 ms
+  a frame and the sweep 3.2 ms a step, unchanged by a boost whose field has
+  the same texel count. The world pass is 8.33M triangles against 8.5M with
+  40k more sward slots in it, so the boost's geometry is inside the
+  run-to-run spread.
+- **`errors 1 · reject: Failed to start the audio device`** is the browser's
+  own rejection surfacing through the dump's promise-rejection row, not a
+  string in this client; iOS refusing an audio context outside a gesture.
+- **`terrainApply` 23.3 ms a build, max 214**, batter 6.9 of the 14.2 ms
+  post; **`updatePois` 1.7 ms a frame, 3.4%**, which is task #72's number;
+  **`camera` spikes to 85 and 133 ms** in two slow frames with nothing
+  wrapped inside it — a mark claims whatever runs between marks, so that is
+  unattributed main-thread work landing in the camera step, and a wrapper
+  is owed before it is named.
+
+### The admission reads a histogram prefix, and yields
+
+The cut the Nagato dump asked for, and one more thing it needed. `ezAdmit`
+is the span from the far gather's mark to its own — the water-fill, then per
+family a selection over every candidate in the ring, then a loop over every
+ADMITTED tree (a variant pick, a rung, two Map writes, the census), then the
+pool growth — and at 65 ms it was one unyielding block.
+
+- **`nearestPrefix` (render-work.ts) runs before `nearestStable`.** Bins the
+  distances linearly into 512 buckets, prefix-sums to the bucket where the
+  count reaches k, keeps everything in that bucket or nearer in input order.
+  Exact: the k-th nearest's bucket is at or past the cut (fewer than k lie in
+  nearer buckets, or the sum would have stopped), ties share a bucket, and
+  the keep test is the same bin arithmetic as the count rather than the
+  bucket's float edge. `perf-check` asserts prefix-then-select equals select
+  on dense lists and on lists of four distinct distances, that the prefix
+  actually cuts, and — the negative control — that the same construction
+  keeping one bucket short fails the identity. Measured in the sandbox at the
+  admission's own shape, 16,000 candidates and a cap of 5,000: **8.39 ms as
+  a sort, 3.03 ms through the prefix, 5,001 kept of 16,000.**
+- **AND THE ADMITTED LOOP YIELDS EVERY `EZ_ADMIT_STEP` (2,048) TREES.** The
+  selection is a few milliseconds of the 65; the rest is the per-tree loop,
+  which grew five times with the rung's caps and had no yield in it. Safe for
+  the reason every other yield in the refresh is — staging is separate from
+  the instances and the commit is one slice at the end. The sandbox runs the
+  step at 512 so the yield fires on its fixture; `perf-check` is still 20 of
+  20 production refills byte-identical, `tree-stand` all ok, `boot` clean.
+
+**The device is the verification, and the row is `ezAdmit` under `tree
+phases`.** What the sandbox can say is that the selection is 2.8× cheaper at
+this shape and the output is the same to the byte; what it cannot say is the
+per-tree loop's cost on a phone, which is why the yield went in beside the
+cut rather than after the next dump.
+
+## The weather steps because the field is rebuilt on a clock and its targets ease per frame
+
+Reported from the seat: *stopped, watching the sky with time cycling — lovely
+visuals — but the weather "steps" instead of developing continuously.*
+Investigated, measured, and NOT yet fixed; this is the reading.
+
+**EVERYTHING LOCAL READS THE FIELD, AND THE FIELD IS A SNAPSHOT.** The sky
+deck's coverage threshold (`covL = mix(uCloud, texture(uWxTex).r, clInLattice)`
+— the texture wins everywhere inside the 12 km lattice), the torn scud under
+it (the rain channel), the composite's mist and rain, the ground's cloud
+shadow and the road's wet all sample `wxTex`. `stepWeather` rebuilds that
+texture when the truck has moved a cell or `now − wxBuiltAt > 1800` — every
+1.8 s, standing still — and the regional scalars it bakes in ease EVERY
+FRAME: `wx.cloud += (target − wx.cloud) · min(1, dt · 0.12)`, an 8.3-second
+constant, and `wxFogT` follows `dayF`, which under CYCLE moves 24× faster
+than the sun does. The cloud NOISE (`clfbm(p + uWind)`) drifts per frame, so
+the pattern glides while its coverage jumps: a front arrives as a staircase.
+`uFogTop` is written at the same rebuild, so the mist slab's gate snaps.
+
+**Measured in pure node with the real `buildField`** (`wxstair-node.mjs`,
+the session's scratch: the game's own ease at 60 fps, clear-to-storm, the
+field sampled at one point every frame):
+
+| rebuild | changes of the local cover in 16 s | largest change in one frame |
+|---|---|---|
+| every 1.8 s (the game) | **8** | **0.149** |
+| every frame | 485 | 0.004 |
+
+Read down the cadence column of the trace and it is the picture: local cover
+0.182 for 1.8 s, then 0.331 for 1.8 s, then 0.453 — each stair a seventh of
+the sky's cover in one frame — and the rain at the truck arrives as 0 → 0.019
+→ 0.072 → 0.146 in three jumps while its regional value climbs smoothly
+through them. A change of 0.15 in `covL` is a visible fraction of the deck
+appearing at once, four or five times over an eight-second front.
+
+**THE HARNESS CANNOT SHOW THIS, AND THE FIRST ATTEMPT SAID WHY.** With
+drawing on its frames are ~25 s apart, so the rebuild fires every frame there
+and the field tracks the target exactly; and the ease is per FRAME with `dt`
+clamped, so a front that takes 8 s on a phone takes ten minutes in the
+harness (0.22 → 0.51 over 850 s in the run). The forced-front trace
+(`__wxnext('storm')`, `__wx().builtAgo`) confirmed the coupling and nothing
+else. The stair is a device-rate phenomenon and the pure-node emulation with
+the shipping module is the honest witness of it.
+
+**Two smaller things the same reading found.** Inside the lattice the sky
+reads the stale texture and outside it the per-frame `uCloud`, so during a
+front the far sky past ~6 km leads the deck overhead by up to a rebuild —
+a faint moving ring at `clInLattice`'s fade. And the wet channel dries in
+1.8 s increments, which nobody has ever seen because it is slow.
+
+**THE FIX, PROPOSED AND NOT MADE.** The rebuild is expensive because of the
+NOISE (2,304 cells × three fbm calls, one to three milliseconds on a phone),
+and the noise changes only with the advect — a few metres a rebuild against
+a 2.8 km front pattern. The thresholds are what move per frame and they are
+cheap. So: keep the three raw noise values per cell in a side array,
+recompute them only on a recentre or once the advect has carried them a
+fraction of a cell (`WXF_M / 16`, 16 m — invisible against 2.8 km, a
+recompute every few seconds at most), and RE-THRESHOLD every frame — cover,
+rain, fog from `wx.cloud`, `wx.rain`, `wxFogT`, wet integrated with the
+frame's own `dt` — writing the 9 KB texture each frame. About forty
+microseconds a frame, no shader touched, all five read sites and `wxAt`
+unchanged, and `uFogTop` set per frame with it. The alternative is a GPU lerp
+between two builds (`uWxMix` over the cadence), which also smooths the advect
+hop but costs a second sample at every read site and a shader edit at each;
+the CPU route is the one to take. `weatherfield.test.mjs` asserts
+determinism, the pins, the downwind move and the wet memory, and must stay
+green; the node emulation above is the regression check for the stair.
+
+**And the other "step", which is a design and not a fault.** The synthetic
+chain is a six-entry table rolled every 1.5–4 minutes and eased in over
+eight seconds, so the sky holds for minutes and then changes in a few
+seconds — and under CYCLE, where a day passes in an hour, that reads as
+weather that jumps between states rather than developing with the day. A
+continuous drift of the regional cover and rain over the sim clock — a slow
+noise in sim hours, biased by the biome, so a watched afternoon builds
+cloud and a night clears — is the change that would make the field DEVELOP,
+and it is a separate unit from the stair. The live feed (Open-Meteo every
+fifteen minutes) is a step by nature and is eased the same way.
+
+### …and both are fixed: the field re-thresholds every frame, and the sky drifts
+
+**THE STAIR.** `buildField` keeps its three fbm reads per cell
+(`WxField.noise`, at `noiseAt`) and recomputes them only on a recentre or
+once the advect has moved `WX_NOISE_STEP` (an eighth of a cell, 32 m: a
+hundredth of cover at the threshold field's steepest, and no more spikes
+than the old cadence below 64 km/h of wind); every call re-thresholds them
+by the regional scalars and integrates the wet with the frame's own `dt`. It
+returns whether it wrote, and a frame where nothing moved — no scalar
+changed, the noise did not move, nothing wet or raining — writes nothing and
+uploads nothing. `stepWeather` calls it every frame and sets `uFogTop` every
+frame; `wxBuiltAt` is the last WRITE, which is what `__wx().builtAgo`
+reports and what `dt` is integrated from.
+
+Measured with the same emulation as the reading, the front at 60 fps:
+
+| | changes of local cover in 16 s | largest | noise recomputes | a threshold write | a skipped call |
+|---|---|---|---|---|---|
+| before, 1.8 s cadence | 8 | 0.149 | 9 (one a rebuild) | — | — |
+| after, every frame | **479–510** | **0.004** | 2 at 3–5 ms (node) | **0.061 ms** | 0.004 ms |
+
+A settled sky over 600 frames writes once. Wet ground writes every frame
+while it dries, as it must. `weatherfield.test.mjs` is green unchanged —
+determinism, the pins, the downwind move and the wet memory all hold,
+because the arithmetic per cell is the same and only WHEN it runs moved.
+
+**THE DEVELOPMENT.** `rollWeather` no longer rolls. The regional cover is
+smooth 1-D value noise over a weather clock in sim hours — three octaves at
+4.5 h, 1.3 h and 27 min, contrast-stretched like the field's fronts — on a
+biome's base and amplitude (`WX_SYN_BIOME`), with an afternoon convection
+bump centred on 15:00 solar; rain follows cover past the biome's `wet`, a
+storm past its `storm` with the rain high. The clock runs at 24 sim hours a
+real hour under CYCLE and six otherwise, so a watched afternoon builds
+cloud and clears at night, a fixed-hour mode still gets a moving sky, and
+LIVE offline gets a front every ten or twenty minutes. Held skies —
+`__wxnext`, a mission head — keep their table entry until `wx.at` passes;
+the pin and the live feed beat both. `wx.next` is derived from the drift so
+`wx.sky` and the storm warning are unchanged. `__wx().syn` reports the
+clock and the targets, `held` and `live` say which driver is in charge.
+
+The biome numbers are judgements against the old table's frequencies and
+are written to be argued with: rain about a sixth of the time in temperate
+country, a third in the tropics, one time in twenty in the desert.
+
+**NOT VERIFIED BY EYE.** The harness cannot draw a front at device rate;
+the frames the seat sees under CYCLE are the verification, and `__wx()` is
+the number to paste beside them.
+
+**Traced from the seat, CPU only** (`wxdrift2.mjs` in the session's
+scratch: `at-campsbay`, `?time=CYCLE&nodraw=1&wxlive=0`, `__wx()` every half
+second): the weather clock advances 0.0066 sim hours a real second — 24 an
+hour, the cycle's own rate — and the drift's cover moves **0.314 → 0.425 over
+47 s with no two samples further apart than 0.009**, the regional cover
+easing behind it and the field at the truck within 0.02 of the regional at
+every sample, `builtAgo` 8–66 ms, which is one harness frame. **With the
+feed asked the same trace read `held true`, `next haze`, cover 0.53 and the
+drift standing at 0.072 for the whole minute**: the harness's relay reaches
+Open-Meteo, so the live sky was in charge and the drift correctly stood
+down — which is why `?wxlive=0` exists, and why a device that is online
+will show the LIVE sky developing at the feed's quarter-hour pace, eased in
+over eight seconds, rather than the drift. The stair fix applies to both.
+`weather-world.test.mjs` is green across its three boots: the wet pin, the
+pinned storm raining at the truck, the fog pin's ceiling, the wind reaching
+the field, and five weather shaders compiling with no errors.
+
+**The cost on a device is the `stepWeather` row of the next dump**, which
+read 0.1 ms a frame before this; the emulation says a threshold write is
+0.06 ms and a skipped frame 0.004, so the row should not move.
+
+## The herd is there and unseen: the pulled wildlife extraction, read against the seat's report
+
+**Pulled 2026-09-18, after the weather units, on the seat's word: "I haven't
+seen herds since it landed."** The cell carried another agent's extraction of
+the birds and herds out of `main.ts` into `client/wildlife.ts`,
+`wildlife-models.ts` and `wildlife-motion.ts` (+1 line in `wildlife-wire.ts`),
+413 lines out of `main.ts` and 65 in — a support sampler over `groundAt`,
+`roadHeightAt`, the substrate contact, the drawn hydro, `insidePlot` and the
+wall grid; a path trace that sweeps centre, flanks and both body ends; a
+no-pop spawn rule; a legged gait with sampled feet; and a `__wildlife()`
+diagnostics probe. Committed verbatim as NOT MINE (`9459a6c`), the `main.ts`
+hunks lifted against the deploy commit and applied over the weather and
+admission work the cell does not carry. **It was half-landed the same way the
+façade was:** `extensions` written through `MeshLambertMaterial`, which tsc
+refuses; typed structurally in `7308ca2`. Three pulls, three type errors in
+pulled code: read `tsc` before reading a pulled diff, every time.
+
+### What the new module does that the old one did not
+
+- **Nothing is born in view.** An animal spawns only where the camera's
+  frustum does not reach and nothing is within 45 m of the camera, at
+  100–235 m from the camera (`BOX*0.18..0.42`) in one of three WORLD-FIXED
+  sectors (`grp*2π/3 + 0.45 ± 0.6 rad`), after a habitability sample and a
+  1 cm trace. The old populations were placed in a clump around the spawn
+  point with no sight test at all, and wrapped round a 560 m box thereafter.
+- **Every frame is a sweep.** The animal's own step is traced (`tracePath`:
+  middle, both flanks at its body radius, both body ends at half its length,
+  a wall check between stations) and a refused sweep zeroes its velocity —
+  `stats.blocked`. The old step was a force model plus a ground read.
+- **Out of sight and far is recycled**, not wrapped: unseen for 1.5 s and
+  more than 364 m from the camera → respawn under the rule above.
+- Birds: the same, with a rain gate and a wet counter instead of the old
+  `birds.visible = rain < 0.5`.
+
+### Measured, Camps Bay, harness, CPU only, against the deploy commit as control
+
+The control is `7978267` built by the harness's `rev` (its whole `client/`,
+per the rev doctrine); its herd read through its own `__herd()` and
+`__life()`, the new one through `__wildlife()` — the census is
+`scratchpad/herdprobe.mjs` (stationary), `herddrive.mjs` (autopilot) and
+`herdwalk.mjs` (a 4 km hop-walk at 20 m/s, `walkTo`-style, down Victoria
+Road). "Windscreen" below is within 25° of the heading; "in frustum" is the
+new module's own `seen` test, which at `CAM.fov` 55° on a portrait frame is a
+wedge of about ±15° — an animal 95 m out at 22° off-axis reads unseen.
+
+| | new (`9459a6c`) | old (`7978267`) |
+|---|---|---|
+| stationary at arrival: nearest herd animal | 91–114 m | 22–35 m |
+| stationary at arrival: in the windscreen | 0–1 | 7 |
+| stationary 100 s: sweep refusals | 54,794 ≈ every animal, every frame | — |
+| autopilot's first 75 m: nearest / in frustum | 8–36 m / 5–7 | 22–60 m, then wandered to 150 m |
+| 4 km walk: samples with a herd in the windscreen | 6% | 3% |
+| 4 km walk: samples with one within 120 m | 48% | 22% |
+| 4 km walk: median nearest | 120 m | 161 m |
+| 4 km walk: drawn | 30 always | 0–9 of 30 for stretches (over the sea) |
+| 4 km walk: recycles / unhabitable refusals | 714 / 26,345 | — |
+| step cost, harness | 1.4–9.5 ms; 9–13k support samples/s | (not attributed) |
+
+**What refused the sweep**, from the counter added for this reading
+(`stoppedBy`, 100 s stationary): step 15,229 · end 14,489 · middle 12,583 ·
+flank 9,304 · endSlope 2,217 · flankSlope 972. `step` is "the ground under
+me is more than 0.16×size from where I stand"; `middle`/`end`/`flank` are
+"my own station, or a body end, is no longer habitable". All of these passed
+at spawn — the spawn's 1 cm trace runs the same checks — so the ground
+CHANGED under the animal after it was placed: terrain tiles refine, walls
+and plots arrive, the substrate contact comes live. **And a refused sweep
+never re-seats the animal**: `c.y` is only written on a complete trace, so a
+`step` refusal is permanent, and a herd that spawned into a still-streaming
+tile stands where it spawned for the rest of the session. About half the
+Camps Bay herd was frozen this way; the other half walked, at 2.4 m/s, with
+cohesion.
+
+### The reading
+
+Three things, and only two of them are new:
+
+1. **On arrival there is no herd.** The old build put a clump beside you
+   (seven in the windscreen at t=0); the new one cannot, by rule — nothing
+   within 45 m, nothing in the wedge — and its nearest animal is a hundred
+   metres out behind the trees. The frame `herdshot2-new.png` is the truck
+   turned to face its nearest animal at 94 m: woods. The old frame at 29 m
+   is the same woods.
+2. **What it has does not move.** Half the herd is frozen by the permanent
+   refusal above, so it never wanders into the road or the wedge the way the
+   old force model's animals did, and a still animal at 100 m is scenery.
+3. **At speed, neither build shows a herd on a straight road** — 6% of
+   samples against 3% — because the new rule respawns them 100–235 m out
+   in sectors outside the wedge, and the old wrap left anything inside its
+   57° cone behind. On a bend they enter the wedge at 100 m as a dot. This
+   one is not a regression; it is how it always was, measured for the first
+   time.
+
+So the seat's "since it landed" was read as 1 + 2 — **and then the first
+DRAWN run said otherwise.** Every census above ran under `nodraw=1`, which
+never compiles a shader, and every one of them reported `errors []`. The
+facing-the-herd frame (drawn, `herdshot2.mjs`) came back with:
+
+```
+GLSL: ERROR: 0:786: 'patch' : Illegal use of reserved word
+GLSL: WebGL: INVALID_OPERATION: useProgram: program not valid
+```
+
+`wildlifeMaterial`'s fragment shader declared `float patch = wildNoise(…)`.
+**`patch` is a reserved word in GLSL ES 3.00**, and three compiles every
+material as GLSL3 on a WebGL2 context — which is every phone and the
+harness's Chromium — so the herd and bird programs never link and NOTHING
+with that material draws: 30 animals placed, 4 in the frustum, none on the
+glass (`herdshot3-new.png`, Senqu highland at noon, an empty plain; the
+control `herdshot3-old.png` from the same spot has a deer at 54 m). The
+extraction was evidently judged on a context where the word is not reserved
+(WebGL1 speaks GLSL ES 1.00, where it is plain), or never on a drawn frame.
+So the seat's report has THREE causes, and the one that made it absolute is
+this one: **the herd has not been drawn since it landed.** Renamed to
+`wildPatch` (`customProgramCacheKey` bumped to `wildlife-3`); items 1 and 2
+remain true underneath it and are what the seat will see next.
+
+**Verified after the rename** (`fdefb0b`): the same noon frame on the Senqu
+highland comes back `errors []` with four animals in the frustum
+(`herdshot4-new.png`, specks at 96 m); teleported to 28 m facing the nearest
+(`herdclose-new-with.png`) a deer stands on the plain in front of the truck
+with two more on the ridge, and hiding the `critters` layer changes 6% of
+the frame's pixels. `critter-hold.test.mjs` is green on the fixed build (260
+in-frame animal-ticks, 0 jumps, 0 page errors) and `wildlife-wire.test.ts`
+passes.
+
+**Never read `errors []` from a `nodraw` run as "the shaders compile."** It
+means nothing was asked to. The GLSL sniffer only speaks on a drawn frame,
+and a shader that fails to link fails silently everywhere else — no
+exception, no missing mesh count, thirty instances reported drawn by
+`mesh.count` and zero fragments produced.
+
+### What to do about it — NOT DONE, it is the other agent's module
+
+- **Re-seat instead of freezing.** On a refused zero-displacement sweep,
+  write `c.y = middle.y` when the middle is habitable; when the animal's own
+  station is no longer habitable and it is unseen, recycle it (it is out of
+  view — that is what the rule is for). The `step` and `middle` rows above go
+  to zero on stable ground.
+- **Spawn relative to the heading, not the world.** Put the sectors in the
+  truck's frame: the front half-plane just outside the wedge (heading ±
+  20–60°) at 60–160 m, so the road's own motion and any bend carry them in;
+  and allow a spawn INSIDE the wedge beyond ~250 m, where an animal is under
+  an art pixel — a dot appearing on the horizon is not a pop.
+- **An arrival clump.** On `initialize`/`reset`, place the first herd
+  without the seen gate, 25–60 m off the road: the first frame of a place
+  is not a pop either, and it is the frame the seat remembers.
+- **The cost row.** 9–13k support samples a second through
+  `productionContactAt('surface')`, `drawnHydroAt`, `insidePlot` and the
+  wall grid, every frame; on the phone that is a `stepWildlife` row the next
+  dump will show, and every one of those samples is counted by the substrate
+  fallback monitor as a `surface` query. The plan trace already breaks on
+  the first complete candidate; the per-frame sweep could run every third
+  frame for an unseen animal.
+
+**The counters stay** (`a7c8dac`): `__wildlife()` carries
+`refused{noGround,unhabitable,trace,rain,seen,truck}`, `spawned`,
+`stoppedBy{…}` and each actor's `seenAgo` and `speed`, so the seat can read
+"they are there, 120 m out, frozen" from the console instead of driving for
+an hour to conclude "no herds".
+
+## The herd is born in the truck's frame, re-seats itself, and is recycled only when stuck and unseen
+
+**Taken over on the seat's word after the review above** ("fix the issues
+with your proposals, take ownership, then deploy, no pull"). The module is
+now mine to keep; the other agent's sampler, trace, gait and feet stand as
+they were. What changed, in `client/wildlife.ts`:
+
+- **Re-seat, do not freeze.** An animal's own station is read on its own
+  clock (every 0.25 s seen, 0.6 s unseen): habitable → `c.y` follows the
+  ground (`stats.reseated`); no longer habitable and nobody looking →
+  respawned (`stats.stuckRecycled`). A STANDING animal is not swept at all —
+  the station read covers it — which is also where most of the old 9–13k
+  samples a second went. A moving one refused for `STUCK_S` = 3 s while
+  unseen, or planned to a standstill for that long, is respawned; a watched
+  one stays, because a vanish is a pop too.
+- **Spawn sectors in the truck's frame, not the world's.** The geometry that
+  made the old rule blind on a straight road: a point outside the wedge
+  never enters it under forward motion, its bearing only grows. So three
+  sectors, one per GROUP (cohesion must not drag a group across the road),
+  the roles rotating among the groups every 90 s so the species ahead is not
+  always the same one:
+  - **ARRIVAL** — for `ARRIVAL_S` = 12 s after `initialize`/`reset` (a hop),
+    40–110 m ahead, 14–30 m either side of the axis and one group astride
+    it, WITHOUT the seen gate: the wedge was empty, nothing was on the
+    glass, and the first frame of a place is the one the seat remembers.
+  - **DOT** — ahead inside the wedge, `HERD_DOT_M` = 300 to 340 m along the
+    heading, 6–50 m off the axis, exempt from the seen gate beyond 300 m: at
+    PIX_H 320 a 1 m animal there is two art pixels, a bison three. It grows
+    as you drive up, which is a herd standing in the field ahead. Below the
+    364 m recycle radius so it is not reclaimed on arrival.
+  - **FLANK** — 70–130 m out at 8°–30° beyond the wedge's half-angle (read
+    from the camera: `atan(tan(fov/2)·aspect)`, 13.5° portrait, ~47°
+    landscape), left for one group and right for the other. Out of frame by
+    the frustum's own test, found by a turn of the wheel or of the head.
+  - Birds keep their world sectors; they cross the sky on their own.
+- **Cadence.** Unseen animals plan every 0.4 s instead of 0.13, re-seat
+  every 0.6 s instead of 0.25.
+- `__wildlife()` adds `born{arrival,dot,flank,bird}`, `reseated`,
+  `stuckRecycled`, `arrival` and `wedgeDeg`.
+
+**The clearance test reads the module's own sight test now.**
+`critter-hold.test.mjs` judged "in frame" by a 57° cone to 900 m, a proxy
+for a frustum that is ±13.5° on a portrait phone; a flank spawn at 20°
+off-axis is out of frame by the frustum and a pop by the proxy, so the proxy
+would have flagged the law's own remedy. It now pairs animals by id, takes
+`seenAgo < 0.8` or within 45 m as "in frame", and past `HERD_DOT_M` nothing
+counts as seen — the dot rule, where the old test allowed an appearance past
+900 m. The guard that something was watched keeps the module's word honest. Its
+third check used to read the farthest animal at the end (> 200 m, a proxy
+for the old box size); with births in the truck's frame a herd the truck
+bears down on flees ahead of it at 22 m/s and the whole population can sit
+within 110 m at the last tick while every birth happened at 60–340 m — it
+read 108 m and failed. It now reads the births themselves: dot or flank
+births happened, none in frame.
+
+**AND THE TEST HAD NEVER DRIVEN.** Its drive was `__drive.speed = 26` once
+a tick — which the physics ignores: a stopped truck is held and speed is
+derived from the throttle (the "hold a stopped truck" unit). A probe at the
+test's own spot read x 0, z 0, v 0 for twelve ticks with the herd standing
+where it arrived. So every run of this test, the original included, proved
+"an animal in frame does not move further in a tick than it could walk"
+over a drive that never happened — 260, then 593, then 2,656 in-frame
+animal-ticks with 0 jumps, all of a stationary herd watched by a parked
+truck, and the births check saw only the arrival because nothing was ever
+left behind. The truck is HOPPED now, 18.2 m along its heading a tick
+(26 m/s), the way the harness's `walkTo` moves it: the chase camera follows,
+the animals see a truck at rest (no flee), which is the stricter case for
+the law since nothing outruns the frustum on its own, and the arrival herd
+is passed, left 364 m behind, reborn ahead and passed again inside the
+hundred ticks. A test whose drive is a variable the physics overwrites is a
+test of the settle time.
+
+### Measured, the same rigs as the review
+
+| | pulled (`9459a6c`) | owned |
+|---|---|---|
+| arrival, Senqu highland at 30 s: born in view / in frustum / nearest | 0 / 0–1 / 91–114 m | 30 / 22 of 30 / 46 m ahead (`herdarrive-senqu.png`: two on the riverbank at 50 m) |
+| Camps Bay, 100 s: sweep refusals | 54,794 | 5,136 (`step` 779 from 15,229; the rest `flank`/`end`, the mountainside) |
+| Camps Bay, 100 s: re-seated / stuck-recycled | — | 39 / 43 |
+| Camps Bay, 100 s: nearest at the end | 104–134 m | 38–66 m |
+| Camps Bay, 100 s: born dot / flank | — | 16 / 35 |
+| step cost, harness | 1.4–9.5 ms | 2–5 ms (unseen cadence; the sweep gone for standing animals) |
+| 4 km walk, Victoria Road: samples with a herd in the frustum / within 60 m / within 120 m / median nearest | 6% / 6% / 48% / 120 m | 61% / 56% / 72% / 52 m |
+| `critter-hold.test.mjs` (the law) | green (old proxy): 260 in-frame animal-ticks, 0 jumps — on a truck that never moved, see below | green (the module's sight test, the truck hopped): see below |
+
+The DOT births are fewer than the flank ones on the coast road (46 against
+202 over the walk) because 300 m ahead along Victoria Road is sea or
+mountainside more often than field — the rule asks for habitable ground and
+takes the flank when there is none.
+
+**The sectors widen with the attempts, and the first version did not.** The
+first walk with tight sectors (dot ±6–50 m, flank 70–130 m at 8°–30° beyond
+the wedge) left the whole herd 600–1,230 m behind for a minute along the
+cliffs south of Bakoven: 32,546 unhabitable refusals, no sector with a
+field in it, and a stuck counter that climbed on every failed attempt
+(2,956). Attempts 4–7 now open the dot to ±70 m and the flank to 60–200 m at
+8°–65°, attempts 8–11 fall back to the old ring (100–235 m, any bearing the
+seen gate allows), and the counter counts recycles that happened. The same
+walk then reads 15,628 refusals, the herd back within 120 m by the end of
+the cliffs instead of a kilometre back, and the frustum share 61% against
+54%. The residue — 127–151 s of the walk at 205–650 m — is the stretch where
+there is no habitable ground in any sector, and no rule places a herd on a
+cliff face.
+
+**Deployed without a pull, on the seat's instruction** — the pull was an
+hour old and the seat said "no pull this time". The other agent's edits in
+that hour, if any, are overwritten on the cell and exist in git only if
+they were pushed there; the next pull will say. **Live as v1789730253250**
+(cell-sync's "deploying" line named v1789730221968 and its "deployed" line
+this one — read the live bundle, not the wait): `app.js?cb=` came back
+`x-cache: Miss`, 3.93 MB, parses under esbuild, and carries `wildPatch`,
+`HERD_DOT_M`, `stuckRecycled`, `wedgeDeg`, `nearestPrefix`, `synWeather`
+and `WX_NOISE_STEP`, with no `float patch` — so this one deploy took the
+shader fix, the owned herd, the admission histogram cut and yield, and the
+weather stair fix and drift out together. The phone's next dump is the cost
+check for all four (`stepWildlife`, `ezAdmit`, `stepWeather`), and a stop at
+any spawn is the herd's verification.
+
+## The precise field's "dry" is final: the contact sampler no longer resurrects water from the witness raster
+
+**From an analysis the seat handed over while testing v1789730253250**, of
+block-shaped wet patches beside rivers that the surface classifier, the
+wheels and the splash all honoured. Read against the code and reproduced
+in the substrate self-test before anything was changed; the analysis was
+right on every point it confirmed and honest about the one it had not (a
+runtime sample at each red patch in the seat's frames).
+
+**The defect.** `sampleProductionSubstrateTile` asks the exact hydro field
+first (`sampleFieldSurface`, then the tile's own coverage cut) and, finding
+no water, fell through to the 33×33 witness raster — `else if (!exactHydro
+&& …waterState exposed|hidden)`. `sampleFieldSurface` returns the same
+`undefined` for three different facts: the point is OUTSIDE the field's
+bounds (unavailable), the point is inside and the coverage is under the cut
+(dry), the point is inside and the material is no water (dry). So "the
+precise field says dry" read as "precise information is unavailable", and a
+raster cell 60–70 m wide (33 samples across a terrain tile) that was wet at
+its sample point painted water contact over everything the cell covered.
+**Reproduced in `substrate.test.ts`** with the ford fixture's 8 m
+half-width river and a raster that is wet everywhere: at the channel centre
+the precise field answers wet; 24 m from the centre the precise field is
+dry and the sampler returned `river 0.63 m deep`. That contact is what
+`surfaceAt` (through the `surface` consumer) turns into `'water'`, what
+`waterInfoAt` turns into wheel immersion, and what the splash reads.
+
+**The fix** (`production-tile.ts`): three answers, not two. `hydroFieldCovers`
+(inside the field's bounds, usable resolution) decides whether the precise
+field has an answer at all; when it has, wet or dry is final and the raster
+is never consulted; the raster remains the fallback only when there is no
+field or the point is outside it. The reproduction now reads no water and
+no fluid at 24 m, water at the centre, and water from the raster on a tile
+with no field — so rollback still works where it should.
+
+**The diagnostic was wrong twice** (`wetClassAt`, the `__wetdebug` overlay):
+`U` (BURIED, pink) compared the resting level against `sampleHeight`, the
+heightfield the channel carve starts from, so a river the carve had exposed
+still read buried against the higher pre-carve ground — pink was not
+evidence that more excavation was needed. It reads the carved mesh now
+(`meshSurfaceAt`, the raster only where no tile is built). And `F` (ford)
+required the surface to be water AND a deck, which no point is, so it was
+unreachable; it is a deck with legacy ford depth over it now. The red `X`
+— surface says water, the precise field says not drawn — was exactly the
+defect's signature; after the fix it can only come from a raster where the
+field is genuinely unavailable, which is what it should mean.
+
+**Not done, and named as the larger work** (the analysis's items 3–5):
+terrain, hydro and contact should agree on ONE resolved boundary at
+compatible revisions (hydro's elevation raster samples the heightfield
+while contact can read the final mesh; comments claim more agreement than
+the code guarantees); the remaining genuine buried-water cases want a
+constrained channel section (bottom, bank toes, bank tops, steep rock
+banks kept); and the shoreline breaklines that keep coarse triangles from
+bridging a channel are restricted to rivers, streams and canals — lakes,
+reservoirs, dams and coasts get none, and each wants its own constraint
+(a coherent body level with islands kept; a protected crest with upstream
+and downstream levels and a separate spillway; broad shelving beaches; and
+narrow rocky transitions where "smoother" must never mean "softer"). None
+of that is a red patch to carve: carving every red patch turns a contact
+bug into invented flooded terrain.
+
+**NOT DEPLOYED.** Committed on the branch; the seat was testing the herd
+deploy when this was read, and it goes out on the seat's word with the
+next deploy.
+
+## The open ledger, catalogued, and the forward plan from the contact fix outward
+
+**Asked for by the seat on 2026-09-18** before proceeding with the water
+analysis's larger direction: every open task, summarised and grouped, and a
+detailed plan. Deployed at the time: v1789730253250 (the owned herd, the
+shader fix, the admission cut, the weather units), with the contact-sampler
+fix going out as the next version. The ledger below is the task list as it
+stood; the numbers are task ids.
+
+### A. Water, terrain and contact — the direction the seat chose
+
+| id | task | state | what it is |
+|---|---|---|---|
+| #167 | the precise field's dry is final; the wet diagnostic corrected | done, deploying | the analysis's item 1 and 2 |
+| #171 | sample the seat's red patches at runtime with the corrected diagnostic | new | the analysis's own unconfirmed step: gone / pink / blue / unavailable per patch |
+| #168 | one resolved boundary: terrain, hydro and contact at compatible revisions | new | item 3: hydro samples the heightfield, contact the carved mesh; revisions ride the tile unchecked |
+| #169 | genuine buried water: constrained channel sections, steep rock banks kept | new | item 4, rivers: bottom, toes, tops as stations; section varies with slope, width, substrate |
+| #170 | shoreline topology for lakes, reservoirs, dams and coasts | new | item 5: breaklines beyond rivers, per-kind constraints (body level with islands; crest, two levels, spillway; shelving beach; narrow rocky shore) |
+| #63 | an untagged road × river crossing dips the deck to the water, no culvert | pending, wants the seat's go-ahead | changes how roads meet rivers everywhere; the Joggemspruit is a culvert by construction |
+| #133 | hydro: cut the flowing field's RESOLUTION, the shore-band bound is worth 26% | pending | 88 → 64 ms best case by bounding; quartering the 4× flowing grid moves no sampler contract |
+| #90 | ocean gleanings: eikonal travel-time field, swash history, Jacobian whitecaps, slope-variance roughness | in progress (paused) | the coastal water's motion, not its boundary |
+
+### B. Performance on the device — measured, not started
+
+| id | task | state | the number |
+|---|---|---|---|
+| #70 | treeRefresh as resumable work under a per-frame budget | pending | 25 ms mean, 131 max at Hout Bay; the histogram cut (#163) took the sort out of ezAdmit, the loop remains |
+| #71 | a tile-aware groundAt inside redrape, with the drape index's audit first | pending | bounded at 38% of a 45.6 ms walk; the audit (0 mismatches at tile edges) is the gate |
+| #72 | POI occlusion throttled: project per frame, sight-test a few times a second | pending | updatePois 1.7–2.4 ms a frame |
+| #155 | a scrolling (toroidal) sward field: sweep the new strip | pending | swardFrame 3.2% of a session, ~18× available |
+| #153 | one nested carrier population (0.45 / 1.35 / 4.05) | pending | a handover thins one population instead of swapping two |
+| #156 | 5108 impostors waiting on a bake with the atlas reported 18/18 | pending | one probe before it is read either way |
+| — | the device's `stepWildlife`, `ezAdmit`, `stepWeather` rows | not a task | the next dump is the cost check for the three units deployed today |
+| — | `camera` phase spikes on the Nagato dump | not a task | unattributed |
+
+### C. Picture — band limits, shells, shadows
+
+| id | task | state | what it is |
+|---|---|---|---|
+| #129 | cloud shadow reads the dead uMpp fade, seven palette steps loud | pending | measure under cover, then the same tdPx band limit; the ruler is fwidth(hit) |
+| #130 | façade sub-cell trim is not footprint-band-limited (roof done) | pending | mix toward a mean façade tone on sdBand; measure at 100/200/400 m |
+| #145 | the far shell swaps its material at nscale=0 | pending | a separate strength uniform on the shell's object-space path |
+| #141 | phase D remainder: tuft scale and flower rate read the field | in progress | sward vertex shader, channels already uploaded |
+| #142 | band D: material-aware micro-detail at 0.1–0.5 m with relief | in progress | per-layer micro-structure, the cascade's finest octave stands down |
+
+### D. Structures and rail
+
+| id | task | state | what it is |
+|---|---|---|---|
+| #127 | a rail bore: a tunnel-tagged railway is hidden, not built | pending | a rail-sized bore and portal in tunnelTube |
+| #128 | a bridge assembly wears one form over its approaches too | pending | fragments outside the outermost stations take the generic viaduct |
+| #134 | the uMngeni's two bridges want landmark entries; no piers reach Durban | pending | a TILE_V bump decision |
+
+### E. HUD
+
+| id | task | state | what it is |
+|---|---|---|---|
+| #157 | landscape safe-area insets for the canvas HUD and overlays | pending | a layout decision, wants a frame from the seat |
+
+### F. Housekeeping on the ledger
+
+| id | state | note |
+|---|---|---|
+| #166 | in progress → done | the owned herd: deployed and measured; the clearance test rewritten to drive (it never had) and to read births; the arrival rule made a placement, not a time window, after the first real drive showed recycles born in frame |
+| #90, #141, #142 | in progress by name only | no session is on them; they read as pending |
+
+### The forward plan: from the contact fix outward to one boundary
+
+**Read against the code before it was written** (a sweep of `client/hydro`,
+`terrain-kernel.ts`, `client/substrate` and `main.ts`, file:line in the
+task descriptions). The picture it found is five independent boundaries
+where one is needed:
+
+1. **Hydro reads the DEM, never the carved mesh.** `hydroElevation`
+   (`terrain-kernel.ts:2041`) fills the hydro tile's elevation raster from
+   `sampleHeight`; every level, bed and ground inside `hydro/build-tile.ts`
+   reads that grid; nothing under `client/hydro/` calls `meshSurfaceAt`,
+   `groundAt` or `wheelGround`.
+2. **The carve knows nothing of the field.** `channelFloorAt`
+   (`terrain-kernel.ts:1281`) lowers the mesh to the line invert −0.15 m
+   over a CLASS half-width (`WATER_W` river 14, canal 9, stream 4.5) with a
+   1:1 rise and a reach of `hw + 3`; no material rides it; the drawn water's
+   width is the field's coverage, a different number.
+3. **Breaklines are flowing-only.** `extractFlowingHydroShoreSegments`
+   (`hydro/shore-contour.ts:103`) keeps river, stream and canal; lakes,
+   reservoirs, lagoons and the coast get coarse triangles that bridge their
+   own waterline.
+4. **The bank pass paints.** `blendProductionTerrainHydroBank`
+   (`substrate/terrain-hydro.ts:65`) moves colours, never positions.
+5. **The only vertical reconciliation is coastal.** `SEA_BED` = 6 m under
+   water-classified vertices within 2 m of the sea (`terrain-kernel.ts:1002`,
+   `:1647`); inland the terrain never moves to meet a resting level.
+6. **Revisions ride unchecked.** `sourceRevisions {terrain, hydroDetails,
+   hydro, crossings}` are set at `main.ts:24759`; the store's `lookup`
+   returns any tile it holds; consumers check terrain, drive, structures and
+   hydro-details generations one by one (`main.ts:24093-24296`), and the
+   hydro check (`:24365`) is field identity, never against `hydroRev` and
+   never cross-checked with the terrain generation the field was built on.
+7. **A lake is one flat quantile.** `body-registry.ts:362` gives standing
+   bodies a `flat` level from a DEM quantile (`build-tile.ts:244-273`), no
+   island handling, no dam or spillway model anywhere.
+
+The plan, in the order the analysis gave and the code confirms. Each step
+names its mechanism, its files, and the gate it must pass before the next.
+
+**Step 1 — the witness (#171, first, and kept for every later step).** A
+devtool `wet-census.mjs`: boot a fixture, sweep `wetClassAt` over the
+overlay's 768 m window around the truck (the painter already does 16k
+classifications in 40 ms), print the tally per class (W drawn · D deck ·
+U buried · E waterline band · F ford · C channel · O ocean · X contact-wet
+field-dry · c cover-only) and save the raster. Run it on the river fixtures
+(at-senqu-ford, at-senqu-top, at-umgeni, at-yosemite), the coast
+(at-campsbay, at-simonstown, at-glencairn) and the plain (at-bixby). That
+table is the control every step below is measured against, the way the
+building census's six control frames were. And at the seat's own red-patch
+places, once named, classify each former patch: gone (it was the raster),
+pink (genuinely buried → step 3), blue (contact agrees now), or unavailable
+(→ step 2). Gate: the table exists and the seat's patches are tallied.
+
+**Step 2 — one boundary (#168), three moves, each with the witness rerun.**
+- *2a. Revisions consumed, not just carried.* `ProductionSubstrateStore.lookup`
+  answers `unavailable` with a reason (`stale-terrain`, `stale-hydro`) when
+  the tile's `sourceRevisions.terrain` is not the current terrain revision
+  for that key or its `sourceRevisions.hydro` is not `hydroRev.get(key)`;
+  the fallback monitor counts the reason; `__substrate` shows it. A stale
+  tile then goes to the legacy path explicitly, never to an implicit wet.
+  Gate: substrate self-test cases for both reasons; the census unchanged on
+  a settled world.
+- *2b. Hydro reads the carved ground.* The kernel carves after
+  `carveCorridors` (`:1663`) and builds `hydroElevation` from the DEM; move
+  the hydro elevation sample AFTER the carve and read the tile's carved
+  heights, so hydro's bed, ground and levels are the mesh's. The circularity
+  to guard: the carve reads the line invert, hydro's river profile reads the
+  invert too — consistent by construction; the standing-body quantile then
+  sees the carved bed only where a river enters a lake, which is right.
+  Gate: `U` at the river fixtures drops (the buried count is the number this
+  move exists for); `X` does not rise; a Senqu profile frame.
+- *2c. One resolved water surface.* A `resolvedWaterAt(x, z)` in the
+  substrate: {level, bed from the mesh, coverage, kind, revisionOk} read by
+  `surfaceAt`, `waterInfoAt`, the wheels, the splash and `wetClassAt` alike;
+  the legacy channel-grid path stands down wherever a field covers the
+  point. "Water exists" means this committed surface, never the mesh's
+  visibility or LOD. Gate: the census's `X` is zero except where the field
+  is unavailable; the ford fixture's wading depth unchanged; `weather-world`
+  and `substrate` tests green.
+
+**Step 3 — genuine buried water (#169).** Replace `channelFloorAt`'s class
+half-width and 1:1 rise with a SECTION read from the field: the bottom at
+the field's bed (resting level − depth), the toes at the field's shore
+(coverage cut, shore distance 0), the bank tops at toe + bankWidth where
+bankWidth is a function of slope, width and substrate — a soil bank at
+1:2, a steep rock bank (substrate cliff or outcrop, or DEM slope over 35°)
+kept within a metre of the toe. Reach = field half-width + bankWidth, not
+`hw + 3`. The field has to reach the kernel the way breaklines do
+(`S.hydroBreakLines`); publish a section sampler beside them. Only where
+the witness is pink; never for red. Gate: `U` at the river fixtures near
+zero; the Senqu and Umgeni profiles photographed; no cliff softened
+(compare the DEM slope histogram within 20 m of a bank before and after).
+
+**Step 4 — shoreline topology beyond rivers (#170).** Drop the flowing-kind
+filter and give each kind its constraint at the kernel's breakline split:
+- *lakes, reservoirs, lagoons:* one body level (the registry's, coherent
+  across tiles), vertices inside the footprint at or below the level to the
+  body's floor (a shelving profile within the shore band, the deeper floor
+  beyond); vertices outside untouched; islands are where the field's
+  coverage says land inside the footprint — untouched by construction, and
+  the census must show no `W` on them.
+- *dams:* the crest is the `waterway=dam` / `man_made=dam` way (check the
+  fetch carries it; if not, that is the first sub-step); no vertex on the
+  crest lowered; upstream is the reservoir body, downstream the river
+  profile, the boundary between them the crest; the spillway a later,
+  separate model. No smoothing may cross the crest.
+- *beaches vs cliffs:* the substrate field already classes cliff and
+  outcrop; a beach shore gets the shelving profile (slope ≤ 1:12 for the
+  first 30 m, a swash band), a rocky shore keeps the DEM face and gets the
+  breakline only. "Smoother" is fewer raster artefacts; a cliff never
+  softens.
+Gate: the coast and lake fixtures' census before and after; frames at
+Camps Bay, Simon's Town and Glencairn; the wave-shots devtool unchanged in
+its numbers (the water's motion is not touched).
+
+**Step 5 — after the boundary is one.** #63 (an untagged crossing dips to
+the water; the seat's go-ahead) and #133 (the flowing field's resolution,
+now load-bearing for the carve, so its cost is measured again). #90's ocean
+motion sits on top of step 4's coast, not before it.
+
+**What must not happen at any step.** No carving of a red patch (a
+contact bug is not terrain). No flattening of a cliff to meet a waterline.
+No implicit wet from any fallback. No step deployed without its census
+before and after, and no pull-less deploy except on the seat's word.
+
+**Deployed meanwhile as v1789731647241** (the contact-sampler fix and the
+corrected diagnostic; `hydroFieldCovers` in the live bundle, `x-cache:
+Miss`), and the herd's arrival rule corrected: an arrival is an animal's
+FIRST placement after a hop, not a 12 s window of module time — the first
+real drive of the clearance test (the truck hopped; it had never moved)
+showed a 12 s window covering a whole 1.8 km drive when frames are slow,
+every recycle born in frame (52 jumps). Under nodraw with placement
+arrivals: 675 in-frame animal-ticks, 0 jumps, renewals out of frame, green.
+
+## Step 1 and 2a: the witness reads, and a stale substrate tile is an explicit unavailable
+
+**The witness's first table was wrong, and said so by its own numbers.**
+`wet-census` on the corrected diagnostic read the Senqu ford as 555 drawn
+against 735 BURIED, Senqu top 994 against 1,026, the Umgeni 4,284 against
+2,951 — half of every river underground. That was the classifier, not the
+river: `U` fired for any texel the field returned at coverage ≥ 0.005 whose
+level sat below the mesh, which is the whole low-coverage fringe of dry
+land beside water. Nothing is drawn below the coverage cut, so nothing
+there can be buried. `U` now means water the field DRAWS (coverage at or
+over the cut) with its level under the carved mesh; the Senqu ford reads
+107 buried against 555 drawn, one sixth, which is the number step 2b and
+#169 exist for. The half-finished table on the old definition is kept in
+the scratchpad as `wet-census-0-oldU.log`; the control table is the one on
+the corrected class.
+
+**Step 2a, revisions consumed at lookup (`356c848`).** The production
+substrate store takes a revision source — the world's `terrainRevision`
+and `hydroRev` maps, the same two a tile's `sourceRevisions` are written
+from — and answers `unavailable` with `stale-terrain` or `stale-hydro` (and
+the tile key) for a tile that disagrees, so the frames between a rebuild
+being queued (terrain apply and the hydro build already queue one) and
+landing go to the legacy sampler explicitly, counted by the fallback
+monitor, never to another mesh's ground or another field's water. Measured
+at the Senqu ford, hopping the truck 12 m/s for a minute through streaming:
+**stale-terrain 0, stale-hydro 0** of 2.5 M lookups; no-tile 270 k at boot
+(21%) falling to 11% as tiles arrive. So the rule is a fence with no
+observed cost; it is there for the case the sweep found possible — a tile
+committed with a terrain packet and a field from another terrain
+generation — which the running world does not currently produce. The
+substrate self-test covers both reasons, the count and the recovery.
+
+**A reserved-word test existed all along.** `glsl-reserved.test.mjs` scans
+every GLSL-looking template literal under `client/` for the ES 3.00
+reserved words, `patch` among them, and it is green on the renamed
+wildlife shader. It would have caught the pulled one. The lesson is not a
+new test; it is that pulled code gets the existing suite run over it
+before it is judged.
+
+## Step 2b, re-aimed by the witness: the ground under drawn water is at most the field's bed
+
+**The first 2b was wrong, and the after-census said so in one row.** The
+plan's step 2b read "hydro samples the DEM, contact the carved mesh; sample
+the hydro elevation after the carve". Done as written — `hydroElevation`
+taking `channelFloorAt` — the Umgeni's buried count ROSE from 2,402 to 3,037
+and its drawn count fell from 4,284 to 3,662. Two consumers of the raster
+are level evidence, not ground: an area body's level is a quantile of its
+interior samples (`build-tile.ts:244-273`), and a flowing level is capped at
+the raster bed plus a nominal depth (`:1169`, `:1235`). Carve the raster and
+both levels sink — the water goes underground by the amount it was carved.
+Reverted before it landed. (And the sweep's premise was half wrong anyway:
+hydro already takes the carved invert for river profiles through
+`channelInvertM`; what it never had was a reason to move the TERRAIN.)
+
+**Then the rasters said what buried water is.** `wet-census` saves the
+129×129 class map; downsampled:
+
+- **Umgeni** — one blob. The riverbank polygon's whole interior on the left
+  bank reads `U`, water only at its edges and on the right. The body's
+  level is a low quantile of the DEM inside its outline, so most of that
+  interior stands above its own water, and the drawn surface runs under
+  ground. Nothing had ever moved terrain to meet a resting level inland: the
+  channel carve follows a LINE and the coastal drop is the sea's.
+- **Senqu ford, Bixby** — thin bands. The line rivers draw `W` down their
+  length with `U`/`E` along the edges: the field's coverage reaches a little
+  past the class half-width the carve digs, onto the 1:1 bank. Bank shaping
+  (#169), and small.
+
+**The floor (`2b93b73`).** Main publishes, per tile and per field revision
+and beside the breaklines, the bed the field itself states — resting level
+minus its depth, which is the DEM where the ground is already under water
+and level minus the 8 cm minimum where it is not — at every hydro-lattice
+point (`HYDRO_EN` = 132) the field draws at the waterline cut. The sea is
+left out (its floor is `SEA_BED`'s, and an ocean mask bleeding onto a cliff
+foot must not cut it). The job carries the lattice to the worker like the
+breaklines; both height passes (`refineTileGeometry`, `buildTile`'s plain
+loop) hold the ground to it: bilinear, applied only where all four lattice
+corners carry a bed — a corner without one is the shore at lattice
+resolution, and lowering there would dig a dry hollow beside the water —
+and never on a road. It runs before corridors and channels, which only
+lower, so the other agent's point-bar shelf (their `channelFloorAt` change,
+merged the same hour) is never cut by it in the common case: a bar tops out
+at invert + 0.33 m, the floor under a nominal-depth river sits near invert
++ 0.52. `terrain-crossing`, `substrate`, `hydro`, `inland-water` green.
+
+**Measured, the witness before and after, on the merged tree (the other
+agent's point-bar and hydro-detail commits in):**
+
+| fixture | before: W / U / E | after: W / U / E | buried |
+|---|---|---|---|
+| at-senqu-ford | 555 / 107 / 182 | 593 / 5 / 331 | −95% |
+| at-senqu-top | 994 / 129 / 277 | 1,024 / 44 / 433 | −66% |
+| at-umgeni | 4,284 / 2,402 / 58 | 5,669 / 987 / 75 | −59% |
+| at-yosemite | 116 / 0 / 94 | 116 / 0 / 94 | — |
+| at-campsbay | 294 / 22 / 250 | 301 / 2 / 279 | −91% |
+| at-simonstown | 363 / 27 / 29 | 363 / 27 / 29 | 0 |
+| at-glencairn | 4,393 / 642 / 112 | 4,534 / 460 / 154 | −28% |
+| at-bixby | 301 / 139 / 171 | 363 / 30 / 252 | −78% |
+
+Drawn water up everywhere a river or a body runs, buried down by 59–95%
+on the line rivers and the Umgeni, the waterline band up as ground lowered
+to the bed reads as shore instead of burial, `X` at two cells, Yosemite
+and Simon's Town untouched. What remains buried is the rule's own
+conservatism: the shore band at lattice resolution (all four corners must
+carry a bed), road-vetoed vertices, and Glencairn's lagoon edge under the
+cover raster (`c` 384 → 412). Those are #169's bank shaping and #170's
+per-kind shore, which now start from a third of the burial instead of all
+of it. `mesh-seams` worst step 0.04 m (limit 0.15), `hydro-coast` and
+`lab` green, `glsl-reserved` green.
+
+**Live as v1789739369438**, deployed from the merged tree on the seat's word
+and without a pull (cell-sync's "deploying" line named v1789739337081, its
+"deployed" line this one; the live bundle read `x-cache: Miss`, 3.96 MB,
+parses, and carries `publishHydroFloor`, `hydroFloorAt`, `hydroFieldCovers`,
+`stale-terrain`, the other agent's `barRise`, `wildPatch` and
+`HERD_DOT_M`). So this deploy took out together: the water floor, the
+revisions consumed at lookup, the corrected diagnostic, the herd's arrival
+as a placement, and the other agent's point-bar shelf and hydro-detail
+material. The phone under a river is the herd's and the floor's
+verification alike: a riverbank polygon should read as water to its
+edges, and the wheels should find the bed the water shows.
+
+**And again as v1789743648227**, after pulling the branch on the seat's
+word: the other agent's live world-input authoring (a `/lab/world` surface,
+a DEM and raster authoring pair with their own tests, and a `remirrorCover`
+on the terrain worker so an edited cover tile retires its mirrored copy)
+fast-forwarded with no conflict — their worker change adds a method beside
+the floor's job field and touches nothing it owns. `tsc` clean, their two
+new node tests green alongside `substrate`, `terrain-crossing`, `hydro` and
+`glsl-reserved`; the live bundle reads `x-cache: Miss`, 3.99 MB, parses,
+carries `remirrorCover`, `worldAuthoring`, `publishHydroFloor`,
+`hydroFloorAt`, `stale-terrain`, `wildPatch` and `barRise`, and `/lab/world`
+answers 200.
+
+**The pull after it found the cell BEHIND, with nothing stranded.** Asked
+for a cell pull in case partial work needed completing: five files came
+back changed — `CLAUDE.md`, `client/main.ts`, `client/world-authoring-lab.ts`
+and the two `devtools/` resurrections. The direction test
+(`git diff <the deployed commit> -- <file>`) read ZERO lines on all three
+source files: the cell holds exactly what was deployed at `acaff4e` and no
+edits of its own. Everything since — this doctrine, and the other agent's
+live VECTOR ROAD authoring (`world-authoring-vector.ts` and its two tests,
+the lab surface widened, `main.ts`) — reached git without a deploy, so the
+cell was a version behind rather than ahead. All five restored, nothing
+committed verbatim, nothing lost. Worth recording because the ritual's
+usual outcome is the opposite one, and the same three-line test decides
+both.
+
+**Then deployed as v1789748140155**, the two streams merged: the other
+agent's live VECTOR ROAD authoring (fast-forwarded, `tsc` clean, its new
+node test green beside `world-authoring-dem`, `world-authoring-raster`,
+`substrate`, `terrain-crossing`, `hydro` and `glsl-reserved`) on top of the
+water floor, the stale-revision rule and everything before. The live bundle
+reads `x-cache: Miss`, 4.01 MB, parses, carries `PolylinePaintSession`,
+`remirrorCover`, `publishHydroFloor`, `stale-terrain`, `wildPatch` and
+`barRise`, shows the lab's VECTORS surface, and `/lab/world` answers 200.
+
+**A LIVE-BUNDLE GREP MUST NAME A RUNTIME SYMBOL.** `AuthoredPolyline` and
+`PolylineResult` read zero in the deployed bundle and neither is missing:
+they are TypeScript types, which esbuild erases. The class beside them
+(`PolylinePaintSession`) is the honest witness. A type name in a
+verification grep is a false alarm waiting to happen — and the inverse of
+the `nodraw` lesson above: a check that cannot fail proves nothing, and a
+check that cannot succeed cries wolf.
+
+## A hop swept the planet and the water out of the scene, and left the minimap's ink on the glass
+
+**From the seat, after a break:** "navigating menu to DRIVES and then hopping
+to a new location, the HUD map has stale data which is just added to, not
+cleared, and hydro seems not to trigger unless a full reload." Two faults,
+both in `worldHop`, and neither where the report points: the hydro build was
+never the problem and the minimap's feature list was already cleared.
+
+### 1. THE SWEEP'S GUARD NAMED CHILDREN THAT HAD MOVED
+
+`worldHop`'s scene sweep drops everything built for the old place:
+
+```ts
+for (const child of [...worldGroup.children]) {
+  if (child === farGroup || child === ovGroup) continue;   // ← dead since 10 Sep
+  worldGroup.remove(child);
+  child.traverse((o) => { const g = (o as THREE.Mesh).geometry; if (g) g.dispose(); });
+}
+```
+
+That guard was written on 2026-08-30 (`4f7b3de`, hydro stage 2) when
+`farGroup` and `ovGroup` really were direct children of `worldGroup`. On
+2026-09-10 the sphere work (`8c9f736`, "the far shell and the overview are
+children of the planet") re-parented both under `planetGroup` — and did not
+come back here. From that day **the guard matched nothing**: every hop
+removed `planetGroup` (the globe, both shells, the theme group) AND
+`hydroSys.object3d` from the scene, disposing their geometry on the way out.
+
+**Neither is ever re-added.** `worldGroup.add(planetGroup)` is at module
+scope, and `worldGroup.add(hydroSys.object3d)` is inside `if (!hydroSys)`,
+which cannot run a second time. So after one hop there is no water and no
+far shell for the rest of the session, and a reload — which rebuilds both —
+is the only cure. That is exactly the seat's "unless a full reload".
+
+**Proved rather than argued.** The toggle test (`scratchpad/hoptoggle.mjs`)
+hops to the SAME coordinates so the ground rebuilds identically, and asks
+whether `hydroSys.object3d.visible` still moves the world pass:
+
+| at the Senqu ford | before the hop | after the hop |
+|---|---|---|
+| draw calls moved by toggling the water | 1 | **0** |
+| triangles moved by the same toggle | 13,212 | **0** |
+| hydro tiles the field holds | 20 | 20 |
+| wet cells the classifier reports | 34 | 34 |
+| terrain tiles streamed | 427 | 671 |
+
+The field is built, the physics and the diagnostic still find water, and
+there is nothing in the scene to draw it. A first probe comparing raw
+triangle counts across a hop (3.65 M → 1.50 M) was NOT evidence on its own —
+the world was still streaming — and the toggle is what settles it. The
+planet's half is the same mechanism with weaker evidence: the frame after a
+hop shows a flat washed horizon with no distant relief, and the renderer's
+program count falls 105 → 97.
+
+**The fix names the survivors by what they are, and re-attaches them rather
+than merely skipping them** — a skip trusts that nobody re-parents them
+again, and that trust is the whole fault. Their CONTENTS are still swept:
+the two shells by the loops just above, the hydro tiles by key further down.
+
+### 2. THE MINIMAP IS PAINTED PIXELS, AND PIXELS ARE NOT A LIST
+
+The HUD map composites one canvas (`mapLayer`, 1024²) plus the fog mask and
+the car wedge. The hop cleared `mapFeats` (the replay list) and repainted
+the fog — and never touched the canvas. The old place's roads, water and
+footprints stayed as ink, and the new world stroked on top: "added to, not
+cleared", precisely.
+
+The only thing that blanks that canvas is `mapRecentre`, which early-returns
+unless the truck is more than `FOG_SPAN * 0.25` = 3 km from its anchor. A
+hop puts the truck back at local (0,0) while `mapAnchorX/Z` keep the old
+place's numbers, so the blank usually never fires — and the fault looked
+intermittent because a long drive before the hop happened to blank it on the
+way. `mapKnown` was never zeroed either, so the ways-known readout
+accumulated across continents.
+
+**The fix** blanks the canvas, returns the anchor to the origin the truck
+was returned to, and zeroes the counter, beside the existing `mapFeats`
+clear. `__minimap()` reports `{anchor, feats, known, ink}` and its `ink`
+pixel count is the witness.
+
+### Verified, same rig, hop to the same coordinates (`scratchpad/hopfix.mjs`)
+
+| at the Senqu ford | before the hop | just after | settled |
+|---|---|---|---|
+| draw calls moved by toggling the water | 1 | **1** (was 0) | 1 |
+| triangles moved by the same toggle | 13,212 | **13,212** (was 0) | 13,212 |
+| hydro tiles the field holds | 20 | 0 (swept) | 20 |
+| minimap ink pixels | 28 | **14** (blanked, new strokes only) | 28 |
+| minimap ways known | 14 | **4** (reset, recounting) | 14 |
+| minimap features in the replay list | 1,007 | 741 | 1,007 |
+| terrain tiles | 235 | 0 (swept) | 243 |
+
+The water is in the scene again after a hop and the canvas starts from the
+background. `tsc` clean; no page errors on either side of the hop.
+
+
+**The lesson, and it is the third of its kind here:** a guard that names
+OBJECTS by identity is a guard that a later refactor can silently retire.
+The reserved-word shader and the `nodraw` census were checks that could not
+fail; this was a check that could not match. All three read green while
+doing nothing.
+
+### Deployed `v1789752274579`
+
+Both hop fixes are live, with no cell pull. The live `/app.js` (4,012,639
+bytes, `x-cache: Miss`) parses under esbuild and carries them verbatim:
+`const hopKeep = [planetGroup]` in the sweep, and the canvas blank —
+`mapKnown = 0; mapAnchorX = 0; mapAnchorZ = 0;` then the `#141b14` fill —
+beside the `mapFeats` clear.
+
+The behavioural run in the table above is the harness on this exact commit,
+not on the deployed bytes, and it cannot be otherwise from here: the harness
+serves the cell's own handler over `localhost` by design, and a browser
+pointed at the deployed origin is stopped at `ERR_CERT_AUTHORITY_INVALID` —
+this box's proxy CA is trusted by node and curl but not by Chromium's NSS
+store, and there is no `certutil` here to add it. Disabling verification to
+get a green line is not a verification. So the live check is the artifact's:
+the deployed bundle is the bundle that was measured.
+
+## The truck is a box, and every collision in this game asked a circle
+
+Reported from the seat: *we need to deep dive road barrier and building
+collisions — seems to trigger too far away, like a metre from barrier.* It
+does, and the number is exact.
+
+**EVERY CONTACT TEST REACHED `CAR_R`** — one radius about the truck's centre —
+and its own comment called it *"a real car's half-diagonal plus a whisker"*.
+The wall push-out, the cover shell, trunks, foliage, boulders and the rapid
+rocks all read it. A circle that circumscribes a rectangle is the right size at
+ONE point, the corner; everywhere else it stands proud of the hull, and at the
+FLANK, where a long vehicle is narrow, by the most.
+
+**AND NOTHING HAD EVER MEASURED THE HULL.** `__rigbox()` walks the drawn model
+and takes its box in plan: **1.08 m half-width, 2.546 m half-length**, so the
+half-diagonal is **2.766 m** and `CAR_R` is **2.4** — the comment is wrong
+twice, since 2.4 is the half-diagonal MINUS 0.37. What that buys is a fault in
+both directions at once, and `devtools/hit-gap.mjs` reads it off the rule
+rather than inferring it: the truck is placed inside a rail and the push-out is
+let settle, then the distance from the barrier to the nearest part of the
+truck's own hull is taken as a function of the angle it is turned. Same rail
+(7.64 m, at Chapman's Peak), same build, `?hull=0` the only difference:
+
+| angle onto the rail | `?hull=0` | the hull |
+|---|---|---|
+| 0° head-on | **−0.146 m** | **0.000** |
+| 15° | **−0.339** | 0.000 |
+| 30° | **−0.345** | 0.000 |
+| 45° | −0.164 | 0.000 |
+| 60° | +0.192 | 0.000 |
+| 75° | +0.698 | 0.000 |
+| **90° alongside** | **+1.320** | **0.000** |
+
+**THE 1.32 m IS THE SEAT'S REPORT TO THE CENTIMETRE**, and it is the case a
+mountain road is made of: running along a guard rail, the truck stopped a clear
+metre and a third short of it. The negative rows are the same fault from the
+other side — driving INTO a wall, the bumper sank up to 0.35 m into the
+masonry. One number cannot be both.
+
+### `client/hull-collide.ts`, and why it is a module
+
+The shape is useless without the FRAME, and the frame was written out by hand
+at five sites in main.ts. **One of them had it wrong.** Taken from the
+integration itself —
+
+```ts
+state.x += Math.sin(state.heading) * state.speed * dt;
+state.z -= Math.cos(state.heading) * state.speed * dt;
+state.x += cH * slideV * dt;   // (cos, sin) is the car's own right
+state.z += sH * slideV * dt;
+```
+
+— **forward is (sin h, −cos h)** and **right is (cos h, sin h)**, which agrees
+with the drawn model (`car.rotation.set(pitch, −heading, roll)` maps local +x
+to (cos h, sin h) and local −z, where the headlight target sits, to
+(sin h, −cos h)) and with `toLocal`'s own declaration that north is −z. The
+cover shell's *"how square was the hit"* computed `vz = cos(h)·speed −
+sin(h)·slideV` where every other site writes `−cos(h)·speed`: **the truck's
+velocity reflected about the x axis**, so a glancing pass at the rim was
+charged as head-on and the other way round. Fixed here, and found only by
+deriving the frame for the module.
+
+- **THE PUSH-OUT IS SEPARATING-AXIS AND EXACT.** In two dimensions the axis set
+  is complete — the box's own two axes and the segment's one normal — so what
+  comes back is the LEAST translation that separates them rather than a radial
+  shove. **A CAPSULE WAS THE OBVIOUS CHEAPER ANSWER AND IS WRONG AT THE
+  CORNER**: a spine of `hl − hw` with radius `hw` under-reaches the true box
+  along the corner direction by **0.32 m**, so a bumper would sink into a
+  façade at exactly the angle the old circle was least wrong about.
+- **A DEGENERATE SEGMENT IS A POINT**, and a point has no edge normal, so the
+  two box axes alone are complete for it. Skipping the third axis there is not
+  a shortcut: `n̂` is a division by nothing.
+- **A ROUND OBSTACLE ASKS A DIFFERENT QUESTION.** A trunk, a boulder and the
+  rim of a cover want the distance from the BOX, which is the point clamped
+  into the box's frame — not the support function, which over-reaches near a
+  corner. `hullPointDistanceM` is that, and it is zero once the point is
+  inside.
+- **THE CIRCLE SURVIVES AS THE BROAD PHASE**, at `hullRadiusM` (2.766) rather
+  than `CAR_R` (2.4) — which the old value was *smaller* than, so a corner
+  contact could be gathered and then missed.
+
+### The hull is measured, not typed
+
+`CAR_R` was a number someone wrote down about a car this truck is not, and it
+stayed wrong for as long as nothing compared it with the model.
+`measureRigHull()` walks the drawn truck at boot and again on every rig or
+loadout change, so the thing the physics collides with cannot drift from the
+thing on screen.
+
+- **SHEET METAL ONLY, and the rule is the x-ray's rather than a second one.**
+  The headlight cones are ADDITIVE and thirty metres long, so a plain
+  `Box3.setFromObject(car)` reports a half-length of **28.5 m** — a reading of
+  the beam, wearing the word hull, which is what the first run of `__rigbox`
+  printed. The wheels' pivots are zeroed for the walk so a steered wheel cannot
+  widen the box.
+- **AND IT IS CLAMPED, with the clamp reported.** A loadout can hang a winch
+  line or an aerial off the hull; `__rigbox().raw.clamped` is the bit to read
+  before believing a truck that handles like a barge.
+
+### What is NOT changed, and why
+
+`CAR_R` is still read by two things and both genuinely want one conservative
+number: **`RAIL_MIN_W`** (`2·CAR_R + 2.0`, whether there is room to put a
+barrier beside a road at all — a question about the WORLD's geometry, and
+changing it moves where rails appear), and **`escapeBuildings`**'s eviction
+reach, where being generous is the point. Neither is a contact.
+
+**AND THE COST IS UNMEASURED ON A DEVICE.** The wall test went from one
+`hypot` to a transform and three axis overlaps per candidate segment, bounded
+by the same one-cell `wallGrid` lookup as before; the round obstacles went from
+one `hypot` to one transform and a clamp each, at the same call counts. The
+harness cannot price a per-frame CPU cost. The row to read on the next dump is
+`sim:collide`.
+
+Held by `devtools/hull-collide.test.mjs` (pure node, 34 checks: the frame
+against main.ts's own integration TEXT, the support function at the nose, the
+flank and 45°, the point distance past a corner, the push-out both ways, a
+degenerate segment, **rotation invariance of the whole scene** — the claim a
+hand-derived frame breaks, and the one that caught the tool's own inverted
+heading — and the control that the circle it replaces would have pushed a truck
+a metre clear of the flank). `devtools/hit-gap.mjs` is the in-world reading.
+
+**AND THE TOOL HAD THE SAME FRAME ERROR ITS SUBJECT DID.** Its first table
+inverted the heading with `atan2(fx, fz)` — the inverse of (sin h, cos h) —
+where the real forward is (sin h, −cos h), so every angle it printed was
+mislabelled. The two extreme rows were right regardless (they are `hl` and
+`hw`), which is exactly why it was not obvious. **A frame written out twice is
+a frame that will be written out wrong once**, which is the argument for the
+module, met inside the instrument built to measure it.
+
+**Live as v1789826118027**, on the seat's word. The live bundle carries
+`hullPushFromSegment`, `hullPointDistanceM`, `hullRadiusM`, `rigHull` and the
+`hull` switch, and it parses under esbuild; the handler answers `/`,
+`/lab/world` and a baked `~/osm/ov1/` tile, because a grep of `app.js` proves
+the client shipped and says nothing about a route. **Unverified from the
+seat**: every number in this section is a harness measurement over a fixture
+and a one-build A/B, so whether a barrier now stops the truck where the eye
+expects it to is the seat's report against `?hull=0`.
+
+## A hop carried the last place's grass, and the distance trigger could not see it
+
+Reported from the seat: *navigating menu to DRIVES and then hopping to a new
+location… hydro seems not to trigger unless a full reload* — and, in the same
+breath, that the sward lingers. The hydro half was the sweep's identity guard
+(above). The sward half is its own mechanism and is not a guard at all.
+
+**`worldHop`'s sweep touched exactly one piece of sward state, and it is the
+cheap half.** `swardCache` is a `groundAt` memo; the EVIDENCE FIELD — the
+heights, densities, colours and habitat classes the four bands stand their
+grass on, `swardFX`/`swardFZ`, `swardFieldReady`, a sweep in flight, the two
+seen-revisions, and the shrub lattice that reads the same texels — survived a
+hop whole. It is built world state exactly like `vegGrid` or `drapedWays`,
+both of which the sweep two lines above it clears.
+
+**AND THE DISTANCE TRIGGER CANNOT CATCH IT, WHICH IS WHY IT LASTS.** The field
+is rebuilt when the focus is `SWARD_REBUILD` (48 m) from its centre — and a hop
+returns the truck to local (0,0) while the last field was centred on wherever
+the truck stood, so `moved` compares the new focus against the OLD place's
+centre. In the case the seat reported — open DRIVES, hop, having driven
+nowhere — those are the same point and the test reads **zero metres**. What was
+left to notice was `swardGroundSeen !== swardGroundRev()`, two seconds later,
+once the new world had started building terrain.
+
+**Measured** (`devtools/sward-hop.mjs`, the Senqu at ~1790 m to Chapman's Peak
+at ~30 m, hopped without driving so the distance trigger cannot fire, nodraw,
+one build with `?swardhop=0` as the control — a hop at a live spot streams
+differently on every boot, so two builds would differ by the network before
+they differed by the rule):
+
+| | `?swardhop=0` | the hop stands it down |
+|---|---|---|
+| samples drawing the byte-identical pre-hop field | **22 of 72** | **0 of 72** |
+| the last of them | **t+13.4 s** | — |
+| most shrubs standing on that carried field | **275** | 0 |
+| worst median residual while any band drew | **33.0 m** (p90 **209.2**) | **0.0 m** |
+| first sample with the field within 2 m of its ground | t+14.0 s | **t+2.0 s** |
+
+**THE CLAIM IS THE CHECKSUM AND THE RESIDUAL IS WHAT IT COST.** A field
+committed for another place is not approximately wrong, it is the wrong data —
+and a residual cannot say so on its own, because every height here is relative
+to its own origin's `baseElev` and two places can differ in LOCAL height by a
+few metres while being continents apart. The first cut of this tool used a
+ten-metre residual bar and reported the fault as 0.6 s long; the checksum reads
+13.4. `__swardfield()` carries both, plus `offCentreM` — the `moved` test's own
+quantity — so a reading can say whether the distance trigger could have fired
+at all rather than leaving it to be reconstructed from an origin and a width.
+
+**THIS DOES NOT CONTRADICT THE POP-OUT RULE the same sweep follows twenty lines
+up.** *Keep what is drawn until its replacement is admitted* is about the SAME
+ground seen at two revisions, where the old picture is still approximately
+right — which is why a dirtied terrain tile holds its mesh. A hop is the one
+case where it is not: the old field is another continent's heights, and
+standing grass on them is worse than standing none.
+
+The fix is five assignments and a gate. `swardFX` to NaN is what the bands and
+the shrub lattice already read as "no field" (`!Number.isNaN(swardFX)` gates
+both), so they stand down on the next frame with no second rule; `swardRow`
+abandons a sweep in flight, which is for the old place and would otherwise
+commit over the new one; the two seen-revisions go back to their initial −1 so
+the first frame of the new world asks for a field rather than waiting out a
+gate. And **`swardFrame`'s slow half stands down while `hopping`**, for the
+reason `streamWorld` does: between the hop's sweep and its anchor fetch the
+origin has moved while `baseElev` has not, so a field started in that window is
+built against the last place's datum. `?swardhop=0` is the rollback and the
+one-build A/B.
+
+**AND `SWARD_F` IS 80, NOT THE 112 THIS FILE RECORDS.** The margin unit set it
+to 112 (896 m across) and *"finer grass, denser near, a fade that ends nearer"*
+(`4a8b399`) took the reach from 359 m to 232 and the field with it: 80 texels
+at 8 m is **640 m**, 320 m to an edge against a 232 m reach — **88 m of margin
+against a 48 m trigger**, which is the property that unit was defending, kept.
+`SWARD_MASKN` is 432. Read the constants, not this file, before quoting either.
+
+**Live as v1789826118027.** `SWARD_HOP_CLEAR`, the `swardhop` switch and
+`__swardfield` are all in the live bundle, which parses. The A/B from the seat
+is `?swardhop=0`, which carries the last place's grass onto the new one exactly
+as it did — and the check that says the fix took is the one this unit was
+measured by: hop without driving and read `__swardfield().offCentreM` beside
+`sum`, because the residual is what it COST and the checksum is the claim.
+
+## San Miguel: the carve measures to a segment's INFINITE LINE, so a watercourse digs straight on past its own end
+
+Reported from the seat at `?lat=37.86119&lon=-107.87094&h=321&cam=chase`
+(pixel full, dither off, full palette, dof off), with a frame: a sheet of water
+standing above the terrain with gaps down both sides, holes you can drive
+through, and the river's underside visible from below. Four probes, and the
+third overturned the second.
+
+**THE WATER IS NOT RAISED. THE MESH WAS DUG OUT FROM UNDER IT.** Over 282
+drawn-wet posts on an 8 m grid: level − field bed med **0.00**, level − natural
+ground med **+0.15** (+0.4 to +1.3 m through the channel) — so the hydro field
+is standing where it should. What is wrong is the ground: natural − mesh med
+**+4.52 m**, max **+23.01**, and only under the water (the whole grid reads
++0.06). And the mesh IS the carve: mesh − `channelFloorAt` med **+0.05 m** over
+122 posts. So `channelFloorAt` is the digger, and the hydro side is innocent.
+
+**THEN THE CARVE RETURNED A FLOOR BELOW EVERY SEGMENT THAT COULD OFFER ONE**,
+which its own arithmetic makes impossible: `y = invert + barRise + max(0, out)`
+and both added terms are non-negative, so the minimum cannot fall below the
+lowest invert in the set. Measured at six points, `channelFloorAt` stood 0.57 to
+**11.28 m** below the lowest offer of every segment within reach, with the
+invert spread among them only 0.44–2.73 m — far too small to be a noisy invert
+field. That contradiction is the whole finding, and it took a fourth probe to
+resolve because the right answer was that **the two enumerations were not the
+same set**.
+
+### One line, and it is a different distance from every sibling's
+
+```ts
+const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+const px = c.ax + dx * t, pz = c.az + dz * t;
+const signedAcross = (dx * (z - pz) - dz * (x - px)) / length;   // ← the fault
+const across = Math.abs(signedAcross);
+if (across - c.hw > 3) continue;
+```
+
+With `t` INTERIOR, `(px,pz)` is the foot of the perpendicular and that
+expression is the distance to the segment. With `t` CLAMPED — which is every
+point beyond either end — `(px,pz)` is an ENDPOINT, and the cross product of the
+unit direction with the vector to the point is the offset from the segment's
+**infinite line**: the along-line overshoot is discarded entirely. So a point
+sixty metres past the end of a five-metre stretch of river, but near its line,
+reads as two metres from the channel centre, is admitted by the `out > 3` gate,
+and is offered that endpoint's invert.
+
+Replayed in pure node on a segment (0,0)–(100,0) with `hw` 7
+(`scratchpad/lineclamp.mjs`):
+
+| point | t | kernel `across` | distance to the SEGMENT | kernel takes it | segment rule |
+|---|---|---|---|---|---|
+| (50, 2) | 0.5 | 2 | 2 | yes | yes |
+| (120, 2) | 1 | **2** | **20.1** | **yes** | no |
+| (160, 2) | 1 | **2** | **60.0** | **yes** | no |
+| (300, 2) | 1 | **2** | **200.0** | **yes** | no |
+| (160, 30) | 1 | 30 | 67.1 | no | no |
+
+**AND `channelFloorAt` IS THE ONLY PLACE IN THE CLIENT THAT MEASURES THIS WAY.**
+`channelAt` (main.ts:23198), `channelInvertAt`, the two strip tests at 23661 and
+23698, `junctionNear`, `corridorH`'s reach (terrain-kernel.ts:411) and
+`onRoadOf` (2119) all use `Math.hypot(x - px, z - pz)` against the same clamped
+`t` — the distance to the SEGMENT. Every test of *is there water here* uses one
+rule and the single test of *how deep do I dig* uses another, and it is the
+digging one that is odd. `channelInvertAt`'s own comment says the two agree
+("the terrain's own carve takes the lowest bed for exactly this reason
+(channelFloorAt); so does this") — they agree on the MINIMUM and disagree about
+which segments are in scope.
+
+### Measured in the world, the kernel's loop replayed beside a segment rule
+
+`scratchpad/sanmig4.mjs` (`__chanwhy` rewritten to replay `channelFloorAt`
+verbatim — `barRise` included — while computing both distances per segment),
+61×61 posts on a 10 m grid at the spot:
+
+| | |
+|---|---|
+| replay agrees with `K.channelFloorAt` | **295 of 295** |
+| posts whose WINNING segment reaches past its own end | **290 of 295 (98%)** |
+| posts carved ONLY by the line rule (no segment within true reach at all) | **153 of 295** |
+| trench depth (natural − floor), THE SHIPPED RULE | med **6.59 m**, p90 14.53, max 23.5 |
+| trench depth, distance to the SEGMENT | med **0.58 m**, p90 4.2 |
+| metres past a segment's end, worst per post | med **46.7**, p90 58.3, max **74.5** |
+
+The replay agreeing 295 of 295 is what closes it: the arithmetic is the
+kernel's, so the whole of the earlier impossibility is the distance measure and
+nothing else.
+
+**THE SEGMENTS ARE SHORT, WHICH IS WHY THE REACH IS SO LONG RELATIVE TO THEM.**
+The winners in the six worst dumps are densified stretches of 5, 9, 10, 11 and
+12 m, each carving ground 52–58 m beyond its own end — ten times its own length
+— at `t: 0`, so the offer is its own endpoint invert transplanted across the
+valley. At [70,−50]: a 5 m Howard Fork segment, `across 0.2`, **true distance
+57.9 m**, offering 2788.29 into ground standing at 2808.42. A twenty-metre cut
+by a segment that is nowhere near.
+
+**AND THE REACH IS BOUNDED BY THE INDEX, NOT BY ANY INTENT.** `channelsNear`
+walks the 3×3 of `GRID` (24 m) cells, so a point can reach a segment ~48 m away
+in plan, and `addSeg` inserts each segment into every cell of its box padded by
+`hw + 8`, which widens that further. The measured median overshoot of 46.7 m is
+therefore the neighbourhood's own size: **the line rule carves as far as the
+channel index can see**, which is why the trench measures about fifty metres
+either side of a river fifteen metres wide.
+
+### The cross-section, which is the seat's screenshot as numbers
+
+Through the drawn river at [30,−50], on the channel's own bearing, absolute
+metres (`mesh` read null throughout this boot — the tiles under the section had
+not built; the mesh↔carve identity is the 122-post distribution above, from the
+previous run):
+
+| t | natural | SHIPPED floor | segment-rule floor | taken / seg-taken / reaching |
+|---|---|---|---|---|
+| −52 | 2801.62 | **2792.55** | — | 3 / 0 / 3 |
+| −40 | 2798.73 | **2792.55** | — | 3 / 0 / 3 |
+| −24 | 2794.97 | **2792.55** | — | 6 / 0 / 6 |
+| −12 | 2790.25 | 2783.51 | 2790.49 | 15 / 5 / 10 |
+| 0 | 2793.19 | 2787.90 | 2792.48 | 13 / 4 / 9 |
+| +16 | 2797.55 | 2790.72 | 2796.41 | 10 / 2 / 8 |
+| +36 | 2800.00 | **2792.55** | 2800.65 | 10 / 2 / 8 |
+| +56 | 2801.95 | **2792.70** | 2805.04 | 9 / 1 / 8 |
+
+A **112 m wide flat-bottomed trench** (t −52 to +60) with a shelf at exactly
+2792.55 at both ends — one endpoint's invert, projected along its line for
+twenty-eight metres in each direction — under a river about fifteen metres
+across. The segment rule tracks the natural ground within a metre or two the
+whole way and answers null where there is no channel. At every station 7 to 14
+of the segments admitted are reaching past an end.
+
+That is the seat's report, exactly: the sheet is at the right height on a bed
+the hydro field solved correctly, the ground either side has been cut to a flat
+shelf several metres below it, so the sheet's rim hangs over open dry trench —
+gaps at the sides, holes to drive through, and the water's underside visible
+from beneath.
+
+### The instrument lesson, which runs the opposite way to this file's usual one
+
+This file repeatedly records that a probe reporting a rule's OUTPUT cannot
+witness the rule. The corollary, met here for the first time: **a probe that
+replays a rule verbatim can only ever confirm it.** `__chanwhy` was written to
+report the INPUTS to `channelFloorAt`'s minimum — "not a copy of its rule", in
+its own comment — and measured each segment's distance the way every other
+consumer in the client measures it. That refusal to copy is what produced the
+impossible table, and the impossible table was the bug. Had it copied the
+kernel's arithmetic it would have agreed to the centimetre at all six points and
+explained nothing. The verbatim replay was written LAST, to prove the
+disagreement was the distance and not my own arithmetic (295 of 295), which is
+the order those two probes want to be written in.
+
+### The fix, described and NOT made
+
+One line: measure to the SEGMENT, as every sibling does. `across` becomes
+`Math.hypot(x - px, z - pz)`; `signedAcross` is still needed for `barRise`'s
+side test (`n`), which is a question about which bank you are on and is
+meaningful only where the point is beside the segment at all. It loses nothing —
+at a bend the union of segment capsules already tiles the corridor, and the
+only ground it stops carving is ground no watercourse passes through. What it
+would change is large and visible (med 6.59 m of trench becoming 0.58), so it
+wants its own before/after census at the river fixtures (`wet-census`, the
+at-senqu pair, at-umgeni, at-glencairn, at-bixby) and a look from the seat
+before it goes anywhere near a deploy. **No change has been made and none is
+proposed beyond this paragraph without the seat's word.**
+
+Two things it would NOT fix, which belong to #169 and #170: the channel section
+is still a class half-width with a 1:1 rise rather than a bed, toes and bank
+tops read from the field, so a correctly-placed carve is still the wrong SHAPE;
+and the hydro floor (`publishHydroFloor`) lowers ground to the field's own bed
+independently, which is what currently keeps the water sitting on something at
+all where the carve misses.
+
+### …and the fix: the carve measures to the segment, and the trench is gone
+
+Made on the seat's word ("fix it and run the census before/after and deploy").
+Two lines inside `channelFloorAt`, with the reasoning in the comment beside
+them: `across` is `Math.hypot(x - px, z - pz)` — the distance to the SEGMENT,
+which is what `channelAt`, `channelInvertAt`, the strip tests, `corridorH`'s
+reach and `onRoadOf` have always measured — and `barRise`'s bank test keeps a
+SIGNED offset (`signedAcross`) for the side it is on, scaled by the honest
+distance. For an interior `t` the two magnitudes are equal and nothing moves;
+past an end the point is no longer admitted at all.
+
+**THE TEST DRIVES THE SHIPPED KERNEL AND CARRIES THE OLD RULE AS ITS CONTROL.**
+`devtools/channel-carve.test.mjs` is pure node (esbuild the kernel, a
+`TerrainStore` stub of two or three segments, seconds) and asserts five things,
+of which the first two are the pair that matters: **where `t` is interior the
+fix moved nothing** — over a dense grid beside a straight reach, carved-or-not
+and the floor to under 1e-9 (measured 0.00e+0) against a reimplementation of the
+old rule; and **past a segment's end the old rule carves and the new one returns
+null**, at (112,2), (160,2), (300,2) and (−60,1) on a 100 m segment, which are
+the `lineclamp` table's own rows. Then the plain geometry (bed at the invert,
+bank at 1:1, the ramp stopping at the segment's end, a low ceiling refusing,
+both banks alike), a bend keeping its corner and not 40 m past it, and the point
+bar still differing under curvature at the shipped values. **Six of its checks
+fail on the unfixed kernel**, which is what makes it a check rather than
+decoration — and the equality claim needed the float rule this file already
+records: `|signedAcross|` and `hypot` are mathematically equal for an interior
+`t` and are different computations, so the bar is 1e-9 and the sample grid is
+offset to miss both the exact `out > 3` boundary and both endpoints.
+
+**Measured, `wet-census` on all eight fixtures, the carve rule the only
+difference** (W drawn · U buried · E waterline band · `.` dry, at 75 s):
+
+| fixture | before: W / U / E / . | after: W / U / E / . |
+|---|---|---|
+| at-senqu-ford | 596 / 5 / 329 / 15,707 | **551 / 114 / 179 / 15,793** |
+| at-senqu-top | 1,024 / 44 / 433 / 15,133 | **989 / 140 / 271 / 15,235** |
+| at-bixby | 363 / 30 / 252 / 15,995 | **298 / 142 / 171 / 16,029** |
+| at-campsbay | 302 / 2 / 279 / 16,043 | 296 / 21 / 250 / 16,060 |
+| at-glencairn | 4,546 / 474 / 137 / 11,100 | 4,532 / 508 / 116 / 11,100 |
+| at-umgeni | 5,669 / 987 / 75 / 9,653 | 5,655 / 1,002 / 72 / 9,655 |
+| at-yosemite | 116 / 0 / 94 / 16,430 | **unchanged** |
+| at-simonstown | 363 / 27 / 29 / 16,221 | **unchanged** |
+
+**READ THE BURIED COLUMN AS THE PRICE AND THE `.` COLUMN AS THE FIND.** Drawn
+water falls 1.4% over the eight (12,979 → 12,800) and burial rises by 385
+texels, all of it at the LINE rivers — and 241 texels that were the waterline
+band become plain dry ground, which is the flat shelf the line rule was cutting
+beside the channel reverting to hillside. Yosemite and Simon's Town do not move
+at all (no line watercourse in reach); the Umgeni and Glencairn move by a
+quarter of a per cent, because their burial is the riverbank polygon's own blob
+and the lagoon's cover edge, which this rule never touched.
+
+**AND THE NEW BURIAL IS A SHORE FRINGE, WHICH THE CLASS RASTERS SAY DIRECTLY.**
+Of the buried texels after the fix, the share lying within one texel (5.95 m) of
+drawn water or the waterline band: **Senqu ford 82%, Senqu top 90%, Bixby 86%,
+Camps Bay 100%, Simon's Town 89%** — and within two texels, 94–100% at every one
+of them. That is the field's coverage reaching a little past the class
+half-width onto the 1:1 bank, which is exactly what this file already records as
+`#169`'s bank shaping, now measured rather than inferred. The Umgeni's 49% is
+the pre-existing blob and is not this change's.
+
+**THE HONEST STATEMENT ABOUT THE HYDRO FLOOR, because the numbers invite the
+wrong one.** `publishHydroFloor` took the Senqu ford's burial from 107 to 5, and
+that measurement was taken on a tree carrying the over-carve; with the over-carve
+gone it reads 114 — about where it was before the floor rule existed. The two
+were lowering the same ground in the same places, and the carve was doing most
+of it by digging a fifty-metre trench either side of a fifteen-metre river.
+What the floor rule still does is hold the ground to the field's own bed where
+all four lattice corners carry one; what it does NOT reach is the shore band at
+lattice resolution, and that band is now visible because nothing false is
+covering it. **A burial number measured against a fabricated trench is not a
+measurement of the rule that was supposed to have cut it.**
+
+**Verified**: `npx tsc --noEmit` clean; `channel-carve` all ok on the fix and six
+failures on the parent rule; `terrain-crossing`, `hydro`, `inland-water`,
+`substrate`, `substrate-field` and `glsl-reserved` green.
+
+
+**AND THE TRENCH IS GONE AT THE PLACE THE SEAT PHOTOGRAPHED.** `sanmig5` boots
+the seat's own url on the fixed build and reads the same transect through the
+drawn river at [30,−50], with the mesh and the natural ground from one probe
+(`__ground`), absolute metres:
+
+| t | natural | SHIPPED mesh, before | mesh, after | level | cov |
+|---|---|---|---|---|---|
+| −52 | 2801.62 | **2792.55** | **2801.46** | — | — |
+| −40 | 2798.73 | **2792.55** | 2798.71 | — | — |
+| −24 | 2794.97 | **2792.55** | 2794.54 | — | — |
+| −12 | 2790.25 | 2783.51 | 2790.57 | — | — |
+| 0 | 2793.19 | 2787.90 | 2792.41 | 2792.98 | 0.66 |
+| +16 | 2797.55 | 2790.72 | 2796.50 | 2796.29 | 0.64 |
+| +36 | 2800.00 | **2792.55** | 2800.00 | 2799.98 | 0.51 |
+| +56 | 2801.95 | **2792.70** | 2801.90 | — | — |
+
+The 112 m flat-bottomed cut with a shelf at one endpoint's invert at either end
+is a hillside again, and the water sits IN it: 0.57 m of water on the mesh at
+the centreline. Over 3,721 posts on a 10 m grid, natural − mesh reads **med
+0.02 m, p90 0.63, max 7.89**, and over the 142 DRAWN-WET posts **med 0.40, p90
+3.29** — against the investigation's same reading on the shipped rule, **med
+4.52 m and max 23.01 under the water**. What is left at t=+4 (level 2793.60
+under a mesh at 2793.88) is the fringe burial the census counts: a texel of
+drawn water 28 cm under its own bank, which is `#169`.
+
+**What this does NOT fix, unchanged from the investigation:** the channel
+section is still a class half-width with a 1:1 rise rather than a bed, toes and
+bank tops read from the field, so a correctly-placed carve is still the wrong
+SHAPE (`#169`); and `publishHydroFloor` still lowers ground to the field's bed
+on its own lattice, with the shore band at that lattice's resolution unreached
+(`#170`).
+
+**Live as v1789759959945** (cell-sync's "deploying" line named v1789759921724 and
+its "deployed" line this one — read the live bundle, not the wait). The pull
+before it found the cell BEHIND with nothing stranded: `client/terrain-kernel.ts`
+diffed EMPTY against the commit before this work, and `CLAUDE.md` read **0
+insertions against 185 deletions** — the cell lacking the investigation section
+and adding nothing of its own — so both were restored, with the usual
+`devtools/` resurrection (`globe-navigation.test.cjs`, `refine-flora.mjs`)
+checked out. `tsc` clean, the live `app.js` 4,012,663 bytes at `x-cache: Miss`,
+parses under esbuild, and carries the fix verbatim: `const across =
+Math.hypot(x - px, z - pz)` and `Math.sign(signedAcross) * across /
+Math.max(0.5, c.hw)` present, **`const across = Math.abs(signedAcross)` absent**,
+with `publishHydroFloor`, `hydroFloorAt`, `wildPatch`, `barRise` and
+`PolylinePaintSession` all still there.
+
+**THE WITNESS FOR A ONE-LINE CHANGE IS THE EXPRESSION, NOT AN IDENTIFIER.** This
+change adds no new symbol, so the usual grep for a name has nothing to find; the
+honest check is that the new expression is in the bundle AND the old one is not.
+A grep that can only succeed is as useless as one that can only fail — the
+absent-old half is what makes the pair a verification.
+
+## Stages C and D: the bank owns its region, and three counts that equalled their own budget
+
+Stage C is the composition rule and Stage D is the wiring; what they cost was
+three faults that no amount of reading would have found, because each of them
+produces a plausible number.
+
+**THE RULE: THE BANK OWNS ITS REGION AND THE CARVE STANDS DOWN THERE.** Every
+vertex a station spoke for — resolved or refused — is flagged, and
+`carveChannels` skips it. **The two are NOT composed by `min()`**, which is the
+obvious thing and is wrong for a reason worth keeping: both rules only ever
+LOWER, so a min() looks like a safe union — and a bank's whole job at a fringe
+is to STOP. Short of a rock face it refused to cut, short of ground it has
+already met. A min() with the carve digs through every refusal the resolver was
+careful to make, which is the resolver's careful refusals costing nothing.
+Outside a station's stated reach the carve is still the only thing that knows
+where the bed is, and it runs exactly as it did.
+
+**AND A REFUSAL OWNS ITS LAND SIDE.** An unresolved station carries a protect
+reach and no target: it means *nothing may change here*, and that has to bind
+the carve too. Outward only — the bank failed on the land side, and the bed
+inside is the carve's and the field's.
+
+**STAGE D** is two breaklines a resolved station (the outer join and the inner
+toe, on the station's own tangent, two along-reaches long so consecutive
+stations abut into a polyline without needing to know their neighbours), the
+packet through the terrain job, the worker's store and the transfer list, and
+the packet cleared on a hop beside the floor and the lines. Refused stations
+contribute no crease: they are shaping nothing, and a crease across ground
+nobody is cutting is a crease for its own sake.
+
+### The pass is indexed, because a shoreline is hundreds of stations
+
+A contour at half a field texel is hundreds of stations on a river tile and a
+refined tile carries tens of thousands of vertices, so the obvious
+station-driven loop with a box test per vertex is their PRODUCT — tens of
+millions of iterations for a build the whole of which used to cost a hundred
+milliseconds. `carveChannels` gets away with that shape because it can BREAK on
+the first box a vertex falls in; a bank cannot, because the lowest of several
+overlapping stations wins. So: one insertion pass over the stations into a grid
+of the store's own cell size, then one pass over the vertices asking only its
+own cell. **The grid is padded by two cells**, because a refined tile's vertex
+set is not confined to the half-open box — a border seed is on the edge exactly
+and a neighbour's pinned point can sit a hair outside — and a vertex whose cell
+index fell off the end would silently lose its bank.
+
+### Three counts that equalled their own budget
+
+**THE STATION CAP TRUNCATED THE SHORELINE INSTEAD OF THINNING IT.** The census
+read **exactly 512 stations on one tile and exactly 1024 on two**, and this file
+already records what that shape means. The resolver's own stats said it
+outright: `segments 1024, stations 512, dropped 512` — half the shore taken
+finely and the other half left to the carve. The spacing is solved from the
+shoreline's OWN length against the budget now, so a long shore is described
+coarsely end to end rather than finely for its first few hundred metres, and the
+ceiling stays as a backstop that `dropped` reports.
+
+**AND A TRUNCATED SHORELINE IS WORSE THAN NO BANK AT ALL, which the census
+said outright before anything was reasoned about it.** At the Senqu top the
+truncated build read **drawn 805, fringe 180, interior 162** against the
+control's **994 / 95 / 45** — a fifth of the drawn water gone and three and a
+half times the interior burial. That is what a bank shaped along half a shore
+does: it owns its region, so the carve stands down inside it, and where the
+stations ran out neither rule is holding the ground. **A partial authority is
+not a partial fix, it is a hole with an owner.**
+
+**AND THE THINNING HAD TO BECOME SPATIAL.** "Further than the spacing from the
+last one I kept" thins by whatever order the segments arrive in, and marching
+squares emits them in no order at all — so it can leave one stretch bare while
+crowding another. A hash at the spacing asks the question the spacing means —
+is any station already standing here — and answers it the same whatever the
+order.
+
+> **THAT LAST SENTENCE IS FALSE AND THE REVIEW CAUGHT IT.** A hash makes the
+> QUESTION order-independent and the ANSWER is still first-come: whichever
+> station reaches a cell first takes it, so the surviving SET moves with the
+> arrival order even though the rule does not. Measured — reversing the segment
+> array moved the stations, shuffling it changed the count 25 → 20 — and it is
+> why contour chains replaced the thinning entirely. See "the review's five
+> items" below.
+
+**AND THE ALONG-SHORE REACH WAS THE SEGMENT'S, NOT THE SPACING'S.** A station
+stands in for the stretch of shore between it and its neighbours; bounding its
+influence by the contour segment's own half-length leaves the bank a comb of
+narrow slats with bare shore between every pair of teeth. Measured at the Senqu
+ford before the fix: **512 stations on the tile and not one of them reaching a
+single point of a transect driven straight through the shoreline** — the `bank`
+column null and `own` unset at all sixty-one stations of it. That is the same
+hole as the first cut's cross-bank bound, met again in a new place, and it is
+the one a count alone could never have shown: the tile had its stations.
+
+**THE PROBE IS WHAT CAUGHT IT, AND ONLY BECAUSE IT REPORTS OWNERSHIP.** A
+transect that printed heights would have shown a bank column of nulls and read
+as "no water here". `bankOwned` and `bankRefused` per station are what say the
+difference between *the bank shaped this*, *the bank refused it and the carve
+stood down anyway*, and *no station reached this at all*.
+
+### The underwater face stopped a metre in, where the burial is four to eight
+
+`innerReachM` was the slope's own run — the depth over the profile's gradient,
+about **one metre** for half a metre of water on a gravel bank. The census reads
+fringe-buried points lying a median **4 m** and a p90 **8 m** inside the mask.
+So the face stopped three-quarters short of the burial it exists to remove.
+
+**AND THE PUBLISHED FLOOR CANNOT TAKE OVER THERE**, which is the half that makes
+it structural rather than a tuning error. `publishHydroFloor` writes an
+`HYDRO_EN` (132) lattice per tile — about **18 m** over a z14 tile — and applies
+only where all four corners carry a bed, so **a line river never has four wet
+corners**: this file already records it as measured, and the ford's transect
+reads `bed` null at every one of its sixty-one stations. Between the bank's
+metre and the floor's eighteen, the interior fringe was owned by nobody.
+
+The face marches inward now, the way it already marched outward, and stops where
+the ground is at or under the bed the field states, capped by the profile's own
+reach. **That is not the flat-bottomed trench the plan forbids**: `bankProfileY`
+smoothsteps from the waterline to the bed over that reach, so a wide river gets
+a wide concave face and a narrow one a short toe, and a rock margin asserts four
+metres where an alluvial one asserts eighteen.
+
+### One profile, two traversals — and the probe reads the kernel
+
+`bankProfileY` is the only copy of the shape. The pass lowers ground to it,
+station-driven through the grid; `bankTargetAtPacked` answers a point query by
+walking every station, which is what the diagnostic asks and the build never
+needs. The two cannot disagree about the PROFILE however they differ about how
+they reach it, and `bank-pass.test.mjs` is what says they do not disagree about
+which stations they reach either: every vertex must end at the lower of its own
+height and the query's, `owned` must match the query's own flag, a road vertex
+must be owned and not lowered, and a refused station must own its land side
+while moving nothing. **The control is the bundle re-imported with the insertion
+box narrowed to a single cell**, on which every one of those fails.
+
+### And the algorithm version cannot be a runtime identity
+
+The plan asks for the bank-profile version in the terrain job's dependency
+identity. Within one build there is exactly one of it — the kernel is
+stringified out of the same bundle — so it cannot distinguish anything at run
+time, and a check on it would be decoration. What it CAN do is ride every
+number the diagnostics print, so a reading taken today is comparable with one
+taken after the resolver changes. That is the telemetry dump's `look` row
+arrived at from the other side, and it is why `__banktransect` and
+`__bankfringe` both carry `bankVer` and the switch's state.
+
+What DOES carry the dependency at run time is the publication cadence: the
+lines, the floor and the bank are solved from one `field` at one revision and
+published together, and any of the three moving dirties the terrain once.
+
+### The breaklines have the same budget and had to learn the same lesson TWICE
+
+`bankBreakLines` caps at `BANK_LINE_CAP` (1024) and a tile with 700 stations
+wants 1400, so the cap binds at the Senqu top exactly as the station budget
+did. Striding the stations to spread the creases along the whole shore is the
+obvious repair and **measured much worse than the truncation it replaced** —
+`drawn 810, fringe 177, interior 158` against `1004 / 63 / 40`.
+
+The reason is the slat again, one layer over: a crease is a segment two
+along-reaches long centred on its station, so skipping stations without
+LENGTHENING the survivors leaves a gap between every pair of them, and a cell
+spanning an uncreased bank is the ramp through the water these lines exist to
+prevent. A skipped station's share of the shore goes to the one standing in for
+it (`alongM * stride`), and the same fixture then reads **1004 / 63 / 40 —
+identical on every column to the truncating cap** while covering the whole
+contour instead of half of it.
+
+**Two budgets, three attempts, one lesson: when a budget forces a thinning, the
+survivors must inherit the span of what they replaced.** Neither the station's
+along-reach nor the crease's length is a property of the feature it was cut
+from; both are properties of the SPACING.
+
+> **AND THE LESSON IS RIGHT ABOUT THE STATIONS AND WRONG ABOUT THE CREASES.**
+> A station really does speak for an interval and really must be handed its
+> neighbours' — that half survived, as the arc-length sampling below. A crease
+> is not an interval at all, it is a CURVE, and the stride's whole premise was
+> that it has to be cut into slats: consecutive stations belong to one polyline
+> and joining them is free, so what a budget should remove is geometry a stated
+> tolerance says is redundant, not a stretch of shore. See "the review's five
+> items" below.
+
+### Measured: the census, with `?bank=0` as the control
+
+Same build both columns, the switch the only difference
+(`devtools/bank-census.mjs`, `ARGS='bank=0'`, `__bankfringe(384, 129)` on each
+fixture, 75 s settle, nodraw). `drawn` is texels of drawn water in the window,
+`fringe` and `interior` the burial taxonomy, `over` the metres of triangle
+standing above the water where it is buried:
+
+| fixture | control: drawn / fringe / interior | bank on | fringe |
+|---|---|---|---|
+| at-senqu-ford | 548 / 109 / 3 | **565 / 73 / 4** · 367 stn | **−33%** |
+| at-senqu-top | 994 / 95 / 45 | **1004 / 63 / 40** · 700 stn | **−34%** |
+| at-umgeni | 5765 / 359 / 668 | 5684 / 370 / 625 · 350 stn | +3% |
+| at-bixby | 298 / 142 / 0 | **337 / 60 / 0** · 317 stn | **−58%** |
+| at-glencairn | 4522 / 167 / 339 | **4555 / 126 / 338** · 328 stn | **−25%** |
+| at-campsbay | 308 / 20 / 1 | **311 / 4 / 1** · 317 stn | **−80%** |
+
+**Fringe burial 891 → 696 over the six, −22%; −39% over the five that are not
+the uMngeni.** Drawn water is up at five of six and the total is +0.2%, so
+nothing was bought by drawing less water.
+
+**AND EVERY `over` MEDIAN ROSE, which is the fix working rather than against
+it.** The bank removes the shallow burials — the ones its profile can cut
+within its stated reach — and refuses the deep ones as `too-deep`, so what
+survives the census is deeper on average than what it started with. A count
+that falls while its median rises is the easy cases going first, and saying so
+is the difference between a measurement and a headline.
+
+**THE uMNGENI IS THE ONE THAT DOES NOT MOVE, and its shape says why.** Its
+burial is a blob deep inside the riverbank polygon — 625 interior against 370
+fringe — and a station's inner reach is capped by its profile at twelve to
+eighteen metres, so nothing at the shoreline can speak for ground a hundred
+metres in. That interior is the published floor's, whose ~18 m lattice CAN
+apply on a body that wide, and it moved 668 → 625 on its own.
+
+### What stages A–D do NOT do, stated
+
+- **THE RESOLVER ONLY SEES FLOWING SHORE.** `extractFlowingHydroShoreSegments`
+  keeps `river`, `stream` and `canal` and nothing else, so a lake, a reservoir,
+  a lagoon, a dam and the coast get no stations, no creases and no bank at all.
+  That is stage A–D's own scope — inland flowing water first — and it is #170.
+- **THE INTERIOR PAST A PROFILE'S REACH IS STILL THE FLOOR'S**, and the floor's
+  lattice is ~18 m over a tile. Between them a wide body's middle is covered
+  and a narrow one's is not; the ford's transect reads `bed` null at every one
+  of its sixty-one stations.
+- **A REFUSAL IS STILL A REFUSAL.** `too-deep` and `no-join` stations change
+  nothing and stop the carve changing anything either, so a cliff at the water
+  and a level estimated far too low both keep their burial by design. The
+  census counts them and `__banktransect`'s `bankRefused` names them per
+  station; making them cut is not a tuning, it is #169's constrained section.
+- **AND NOTHING HERE HAS BEEN SEEN FROM THE SEAT.** Every number above is a CPU
+  census over deterministic fixtures. No frame has been taken of a bank, and
+  the seat's report against `?bank=0` is the verification.
+
+### The Senqu and San Miguel checks
+
+**THE SENQU FORD'S TRANSECT NOW HAS A BANK COLUMN**, which is the whole
+difference from the run that diagnosed the slats. `stations 367, dropped 0,
+shoreM 6657, spacingM 13` — six and a half kilometres of shoreline in one tile
+at thirteen metres — with `resolved 177, nothingToCut 130, too-deep 57,
+no-join 3`, and the transect reads `own Y` across the wet band with the bank
+running 1788.48 → 1789.65 up from the bed toward the waterline.
+
+**AND IT IS OWNED WITHOUT BEING LOWERED THERE, which is the road veto rather
+than a failure.** That transect crosses the Joggemspruit at the culvert this
+file already records, so `S.onRoad` refuses the cut and the carve stands down
+beside it: exactly the composition rule at a crossing, and the reason the
+CENSUS rather than this transect is the instrument for the bank. A spot check
+that lands on a crossing measures the crossing.
+
+**SAN MIGUEL, LIVE at the seat's own url** (`37.86119, -107.87094`), 10 tiles,
+**2,323 stations, dropped 0**, 8.1 km of shoreline a tile at 15.8 m: the mesh
+tracks the natural ground within about half a metre across the whole 120 m
+transect, so the trench the carve fix removed has not been replaced by one of
+the bank's. Its station outcomes are the finding — **`resolved 74,
+nothingToCut 123, too-deep 119, no-join 35`** — a steep Colorado valley where
+the resolver refuses a third of its stations outright rather than cutting two
+and a half metres into a mountainside. That is the instruction's *bounded cuts,
+and fill requires explicit authority* doing its job, and it is why `too-deep`
+is counted and named rather than clamped away.
+
+**NO CONTROL WAS TAKEN AT SAN MIGUEL**, and a live spot cannot honestly have
+one: a second boot streams a different world. Its numbers are a statement about
+this build at that place, not a comparison; the six-fixture census above is the
+comparison.
+
+
+### The review's five items: chains, precedence, composition, creases, tests
+
+The review of the incoming branch through `292c56e` retained the
+implementation and named four corrections before it should reach lakes or
+coasts, plus the tests that would hold them. Its own order is the order they
+were done in, and three of them overturned something written above.
+
+#### 1. A CONTOUR IS A CHAIN, AND A STATION OWNS AN INTERVAL OF IT
+
+The greedy thinning — keep a station unless one already stands within the
+spacing — was replaced by a spatial hash and the hash was written up here as
+making it order-independent. **It does not.** A hash makes the QUESTION
+order-independent and leaves the ANSWER first-come: whichever station reaches
+a cell first takes it. Measured on the shipped resolver, reversing the segment
+array moved the stations and shuffling it changed the count **25 → 20**, with
+`dropped: 0` reporting a clean run either way.
+
+And the deeper fault is that a rejection rule cannot state its own coverage.
+`assembleShoreChains` welds the marching-squares segments into chains
+(millimetre node hashing with a DISTANCE decision, the lesson `mmNear` and the
+morphology's party walls both already carry), and each chain is sampled by
+**arc length** at `n = round(L / spacing)` stations at `(i + ½)·L/n`. Their
+intervals then TILE the chain by construction, and each station carries the
+half-interval to its ACTUAL neighbours (`alongBackM`, `alongFwdM`) rather than
+half a nominal spacing — the first cut gave every survivor half the MINIMUM
+spacing either side, and greedy rejection leaves neighbours anywhere from that
+spacing to twice it apart: measured on a straight shore at 10 m spacing as
+stations 12 m apart carrying 11 m of influence, **a one-metre hole every
+time**.
+
+**AND THE COVERAGE IS REPORTED RATHER THAN INFERRED.** `dropped: 0` says the
+budget was not hit; it says nothing about whether what was kept speaks for the
+whole shore, which is the thing that matters and the thing the first cut got
+wrong. `coveredM` and `uncoveredM` are stats now.
+`devtools/bank-coverage.test.mjs` is the witness and reproduced the fault
+before the fix — `uncovered 72 of 1169 · worst gap 1.00 m · widest spacing
+12.0 m` — and reads **uncovered 0 of 1169, 30 stations, covered 300 of 300**
+after, with reversal and shuffle giving byte-identical station sets.
+
+**ITS FIRST FIXTURE PRODUCED ZERO STATIONS AND EVERY CLAIM PASSED.** A
+hand-rolled field with no channels in it is a test of nothing; the field
+builder is `bank-profile.test.mjs`'s now, and the file carries a comment
+saying so. That is the fabricated-witness trap this file records for captures,
+met in a unit test.
+
+#### 2. IDENTITY, AND A REFUSAL THAT COSTS SOMETHING
+
+`chainId` rides the packet, so a legitimate connected overlap — two stations of
+one chain meeting round a bend — can be told from two unrelated boundaries
+whose influences happen to cross. Without it every nearby station is assumed to
+belong to the same bank and a refusal on one shore cannot be told from a
+refusal on the other.
+
+**AND THE REFUSAL DID NOT BIND.** The packet has always described one as
+"nothing may change here" and the first cut only made it bind the channel
+carve: a refused station marked the vertex and carried on, and any OTHER
+station could still supply a lower target. Measured on the shipped kernel, a
+point protected by a refusal and reached by an overlapping resolved station
+went from 3 m to **0.25 m** — the refusal costing exactly nothing, which is the
+thing it exists not to do. Protections are read in a pass of their own now, in
+both the point query and the build, and a protected point is answered before
+any cut is considered.
+
+`levelSlopeAlong` went in beside them: a row of stations each asserting one
+constant level across its own interval steps at every boundary between them,
+which on a falling reach is a staircase down the bank. It is the central
+difference of the neighbours' levels, zero for a standing body.
+
+#### 3. THE FLOOR STANDS DOWN INSIDE THE BANK'S REGION
+
+The build order was: hydro floor lowers terrain → road earthworks → bank pass
+lowers terrain → legacy channel carve where unowned. Bank ownership prevented
+a later channel cut and could do nothing about the EARLIER floor, which is an
+~18 m lattice that lowers ground to the field's own bed. So inside the bank's
+transition region the vertex was already cut to the bed before anything asked
+what shape the bank should be, and the bank — which only ever lowers — could
+not put back the shelf, the toe or the refusal the resolver had decided on. **A
+floor that pre-empts the profile wins every argument in the one region the
+resolver exists to own.**
+
+`bankPass` is two calls now, and the split is the rule rather than tidiness:
+
+- **`bankSolve`** fills `owned[]` and `target[]` and **reads no height at
+  all** — a target is a function of the packet and of x, z — so it can run
+  inside the heights pass, before anything has written a height. Both passes
+  (the refinement's and `buildTile`'s plain loop) then apply `hydroFloorAt`
+  only where `!bankOwned[i]`.
+- **`bankApply`** lowers, where the old pass did: after `carveCorridors`, so
+  the bank cuts against what the corridor left.
+
+The stations are therefore walked ONCE for both phases rather than once each,
+and `bank-pass.test.mjs` asserts the equivalence directly: the same owned set
+and the same targets over a lattice with no heights written.
+
+**THE CROSSING RULE IS UNCHANGED AND IS NOW MEASURED.** `channelFloorAt` does
+not refuse a road, it refuses a CAUSEWAY or no crossing at all and carves the
+channel THROUGH a bridge, a culvert or a ford, because a deck is separate
+geometry standing over water that still has to be shaped. Owning all four the
+same way deleted that distinction. Held as four different answers with a
+`crossingAt` call counter beside them, because the fault it replaced was that
+the pass never asked `crossingAt` at all.
+
+#### 4. A CREASE IS A CURVE, NOT A SLAT
+
+`bankBreakLines` was still reading **stride 12 against a stride-15 packet** —
+so every field past `alongM` was garbage — and thinned by an array stride when
+the cap bound. The write-up above drew the lesson that "when a budget forces a
+thinning, the survivors must inherit the span of what they replaced". That is
+right about the STATIONS and wrong about the creases: a crease is not an
+interval, it is a curve, and consecutive stations of one chain belong to one
+polyline that costs nothing to join.
+
+So: group by `chainId`, split into runs of genuinely adjacent stations (a
+refusal ends a run — the stations either side of it are two intervals apart and
+a chord between them is a guess), join each run's offset points into a polyline
+whose segments abut exactly, close a ring, and simplify by Douglas–Peucker at
+`BANK_LINE_TOL_M` (0.25 m, well under a terrain cell at any refinement). **When
+the cap binds the TOLERANCE rises, not the coverage.** `refineCost` carries
+`bankLines`, `bankLineTolMax` and `bankLineCapped`, so a truncation is counted
+rather than inferred from a number that equals its own cap.
+
+Measured in the test: a straight bank costs **4 creases** where the stride cost
+two a station; a 400-station arc costs **8**, as two unbroken polylines; and
+300 short chains that ask for 1,200 creases are served by **600** at a 0.5 m
+tolerance with **every chain still creased on both its offsets**. The control is
+the simplification switched off — the budget then truncates and **44 of 300
+chains go bare**, which is the stride's own failure arrived at from the other
+side.
+
+**AND `chainIndex` WAS DECLARED, WRITTEN AND READ BY NOTHING.** The adjacency
+the builder needs is geometric — are these two centres one interval apart, or
+two with a skipped station between them — which the reaches already answer and
+which a ring's wrap answers too. The field is gone; the packet's chain-major
+order is stated in `packBankStations` and asserted in `bank-coverage`.
+
+#### 5. THE FULL BUILD, WITH A BANK IN IT
+
+`devtools/bank-build.test.mjs` drives the shipped `buildTile` over a flat
+plateau, so the only things that can move a vertex are the three rules under
+test and whatever a vertex ends at names which of them spoke. On the plain
+lattice and the refined path alike:
+
+| at | the rule | reads |
+|---|---|---|
+| 10 m out from the shore | the bank owns it and does not cut it | **20.00 m** — its own ground, not the floor's 14 |
+| mid channel | the profile's interior connection | **16.50 m** — the stated bed |
+| 1 m past what any station spoke for | the floor, unchanged | 14.00 m |
+| inside a refusal, in the floor's band | nothing may change here | **20.00 m** |
+| the owned channel | the carve stands down | 16.50 m, against an invert of 10 |
+
+**ITS CONTROL IS THE RULE THIS UNIT CHANGED**, patched into the bundle: with
+the floor applied before ownership was decided it plants the bed at **14.00 m**
+in all three of the bank's own cases — six metres under the profile mid
+channel, on land the bank owns and does not cut, and on ground a refusal is
+protecting. That is the measurement of item 3, and no census could have made
+it: a fixture's burial counts what is left, and this is about which rule left
+it.
+
+Two tiles sharing an edge agree along it to the bit and build identically in
+either order, at both the solve level and through `buildTile` — so a seam
+cannot come from the kernel's own state, and arrival order cannot either.
+
+**WHAT THE TESTS DO NOT COVER, said rather than implied.** The seam claim is
+made with BOTH tiles handed the same packet, which is what a gutter'd field
+gives them. Whether the RESOLVER's two fields agree across a border is a
+different question — each samples its own chains at its own spacing, so the
+stations near a shared edge are not the same stations — and it is not asserted
+anywhere. The border-pin machinery fixes the exact edge row; the row inside it
+is unpinned, and nobody has measured what the two sides do there.
+
+#### The census: the composition is worth a quarter of the fringe, and it costs the uMngeni
+
+Both legs on the SAME build, `?bank=0` the only difference, six fixtures, 75 s
+settle, nodraw. `drawn` is texels of drawn water in the window, `fringe` and
+`interior` the burial taxonomy, `over` the metres of triangle standing above
+the water where it is buried:
+
+| fixture | control: drawn / fringe / interior | bank on | fringe |
+|---|---|---|---|
+| at-senqu-ford | 554 / 111 / 3 | **580 / 48 / 0** | **−57%** |
+| at-senqu-top | 994 / 95 / 45 | **1011 / 51 / 37** | **−46%** |
+| at-umgeni | 5682 / 373 / 627 | 5641 / **393** / **652** | **+5%** |
+| at-bixby | 298 / 142 / 0 | **348 / 54 / 0** | **−62%** |
+| at-glencairn | 4539 / 170 / 346 | **4560 / 125 / 334** | **−26%** |
+| at-campsbay | 306 / 20 / 1 | **315 / 2 / 1** | **−90%** |
+
+**Fringe 911 → 673 over the six, −26%; −48% over the five that are not the
+uMngeni.** Drawn water is up at five of six and the total is +0.7%, so nothing
+was bought by drawing less water; interior burial is flat overall (1022 →
+1024). Against the stage C/D build measured two sections up the fringe moves
+696 → 673, so most of what the chains and the composition bought over that
+build is at the two places the stage-C numbers were already best at.
+
+**AND THE uMNGENI GOT WORSE, WHICH IS THE COMPOSITION DOING EXACTLY WHAT IT
+WAS ASKED TO DO.** Its burial is a blob deep inside a riverbank polygon — the
+one shape the ~18 m floor lattice CAN reach, because a body that wide has four
+wet corners — and the floor now stands down wherever a station spoke. Where
+the resolver refuses (`too-deep`) nothing is cut at all, including by the floor
+that used to plane the margin. So the trade item 3 asks for is: the profile
+governs its region, and a refusal costs the floor's contribution there.
+**That is the argument for #169 rather than against item 3** — a refusal should
+mean "this wants a constrained section", not "leave it buried" — and it is
+written here as a cost rather than buried in an average.
+
+**EVERY `over` MEDIAN ROSE AGAIN** (0.42 → 0.64, 0.19 → 0.34, 3.44 → 4.37,
+0.84 → 1.10, 1.59 → 2.35, 0.13 → 0.49), which is the shallow burials going
+first and the deep refusals surviving — the same reading as stage C, and the
+reason a count that falls while its median rises is the easy cases going.
+Glencairn's worst fell 20.08 → 16.18 m.
+
+**AND THE STATION COUNTS IN THAT TABLE ARE A QUARTER TOO HIGH, WHICH IS HOW
+THE NEXT FAULT WAS FOUND.** The census printed 640 stations at four of the six
+fixtures — the same number at a 1.4 km river fixture and at a suburban bay,
+which is the "a count equal to its own budget" signature this file records
+three times. 640 is 1.25 × 512, 1.25 is 15/12, and `__bankfringe` still counts
+`packed.length / 12` against a stride-15 packet: **the third site reading the
+old stride**, after the creases and the diagnostic. The true count is
+**512 exactly — `maxStations`** — at at-senqu-ford, at-umgeni, at-bixby and
+at-campsbay.
+
+So the spacing rule has the shape of the budget faults it replaced: it solves
+`shoreM / maxStations` and then each chain rounds `L / spacing`
+INDEPENDENTLY, so the total lands at the budget plus about half a station a
+chain and the tail is dropped. The coverage the chains were built to guarantee
+holds inside a chain and can still be lost at the end of the list — which the
+unit test cannot see, because its fixture is one chain under the cap. The fix
+is to allocate the budget ACROSS the chains (one each, the rest in proportion
+to length, the remainder by largest fraction) so the total is the budget by
+construction. **Done in the section below**, with the numbers in this table
+re-taken beside a control on the same build.
+
+#### …and the budget is allocated, which the window census cannot reward
+
+`allocateChainStations` is largest remainder: one station each so no chain is
+unserved while another is sampled finely, the rest in proportion to length, the
+fraction left over to whoever stands nearest a whole station. `minSpacing` caps
+a chain's COUNT rather than its spacing — marching squares emits a segment per
+texel edge and a bank does not vary faster than the field can see — and a chain
+that cannot spend its share hands it back to the chains that can, which is the
+water-filling the tree budget already runs and is here for the same reason: a
+proportional cut punishes whoever is short of candidates, which is exactly the
+chain that needed the stations least.
+
+**AND THE SPACING IS THEREFORE PER CHAIN, so `stats.spacingM` is the COARSEST
+of them**: the worst-described stretch of this shoreline, which is the figure to
+read against the field's own texel. One number derived from the total would hide
+exactly the chain the budget could not afford.
+
+**THE UNIT TEST RUNS THE RULE IT REPLACES RATHER THAN ASSERTING ABOUT IT.**
+Fifteen chains of twenty metres under a budget of forty (`bank-coverage`): the
+old rule solves 300/40 = 7.5 m, each chain rounds `20 / 7.5` to three, **asks
+for 45 against a ceiling of 40 and serves 13 of 15 chains whole** — the tail cut
+off part way down the list. The allocation spends **40 of 40 with every chain
+served**, at a coarsest spacing inside the bound the allocation's own shape
+gives it (`shoreM / (budget − chains)`, derived from the fixture rather than
+typed, or it is a bar moved to pass). At `minSpacing` 8 m it spends 30 of 40
+and no chain is sampled finer than 8 m.
+
+**AND THE CENSUS PROBE COUNTS ITS OWN WINDOW NOW.** `__bankfringe` summed every
+tile the ring holds beside a 384 m census of everything else — two populations
+in one row, which is how its stride fault went unread for as long as it did. It
+reports the tiles and stations REACHING the window, the ring's totals beside
+them, and the coarsest spacing and uncovered shore of those tiles.
+
+**Measured**, both legs on the SAME build, `?bank=0` the only difference, six
+fixtures, 75 s settle, nodraw:
+
+| fixture | control: drawn / fringe / interior | bank on | fringe | coarsest | uncovered |
+|---|---|---|---|---|---|
+| at-senqu-ford | 554 / 111 / 3 | **574 / 54 / 1** | **−51%** | 13.03 m | 0 |
+| at-senqu-top | 994 / 95 / 45 | **1008 / 54 / 37** | **−43%** | 8.25 m | 66.8 m |
+| at-umgeni | 5682 / 373 / 627 | 5640 / **396** / **650** | +6% | 7.53 m | 0 |
+| at-bixby | 298 / 142 / 0 | **348 / 54 / 0** | **−62%** | 12.75 m | 0 |
+| at-glencairn | 4535 / 167 / 348 | **4549 / 129 / 341** | **−23%** | 4.42 m | 0 |
+| at-campsbay | 306 / 20 / 1 | **312 / 2 / 1** | **−90%** | 8.92 m | 0 |
+
+**Fringe 908 → 689 over the six, −24%; −45% over the five that are not the
+uMngeni.** Drawn water is up at five of six and the total is +0.5%.
+
+**AND THE CONTROL FINALLY GIVES THESE TABLES A SPREAD, WHICH NONE OF THEM HAD.**
+Five of its six rows reproduce the control recorded one section up TO THE
+TEXEL — 554/111/3, 994/95/45, 5682/373/627, 298/142/0, 306/20/1 — and
+at-glencairn moves by 4 drawn, 3 fringe, 2 interior. So a difference of three
+texels at that coastal fixture is the instrument and a difference of six
+elsewhere is not, and every earlier reading in this unit that was called "close"
+can now be read against a number.
+
+**WHICH SAYS THE ALLOCATION COSTS SIXTEEN TEXELS OF FRINGE**, against the
+review build's own fix leg (673 → 689): at-senqu-ford 48 → 54, at-senqu-top
+51 → 54, at-umgeni 393 → 396, at-glencairn 125 → 129 (inside its spread),
+at-campsbay 2 → 2, and **at-bixby byte-identical at 348 / 54 / 0**. The
+mechanism is the allocation working: a long chain used to round its share UP
+and the chains at the end of the list got nothing, so the main channel — which
+is what a 384 m window around the truck is looking at — was described a little
+finer at the expense of shore the census never sees. **A count taken in a window
+cannot reward a coverage bought outside it**, and the evidence for the other
+half is `uncoveredM` and the test's own control, not this table.
+
+**AND THE UNCOVERED SHORE IS NOT THE BUDGET — IT IS THE FIELD**
+(`devtools/bank-alloc.mjs`, at-senqu-top, per tile):
+
+```
+shore 3641.3 m · 4 chains · 507 stations · spacing 7.15 m
+  covered 3605.97 · uncovered 35.32 · dropped 0
+  resolved 194 · nothingToCut 142 · no-water 5 · no-join 1 · too-deep 170
+shore 4198.9 m · 4 chains · 508 stations · spacing 8.25 m
+  covered 4167.43 · uncovered 31.43 · dropped 0
+  resolved 220 · nothingToCut 250 · no-water 4 · no-join 1 · too-deep 37
+```
+
+**507 + 5 AND 508 + 4 ARE 512 EXACTLY**: the allocation spends the budget to
+the station on both tiles, `stats.stations` counts the ones that got a seat, and
+the 66.8 m is the five and four seats where `sampleFieldSurface` answered
+nothing — 5 × 7.15 and 4 × 8.25 — because `coveredM` only accumulates where a
+station got past the no-water and no-ground tests. `dropped 0`, four chains a
+tile, none cut off. The census could not have told that from a chain beyond the
+budget's reach, and the two want different fixes, which is why there is a tool
+rather than a guess.
+
+**AND `too-deep 170 OF 507` ON ONE OF THOSE TILES IS THE OTHER HALF OF #169.**
+A third of a Drakensberg tile's stations refuse outright rather than cut two
+metres into a mountainside — the San Miguel reading from the other side — and
+the composition then costs those places the floor's contribution as well. That
+is the trade item 3 asks for, stated again with a number: a refusal should mean
+"this wants a constrained section", not "leave it buried".
+
+**AND at-glencairn's 4.42 m IS THE CAP, NOT THE BUDGET.** It is half a field
+texel exactly, so the budget goes deliberately unspent there: a bank does not
+vary faster than the field can see, and a spacing sitting on `minSpacing` is the
+cap doing its job rather than a shoreline the budget could not afford. Read the
+spacing against the texel before reading it as thin.
+
+
+## The rig's x-ray silhouette is retired, and the check that judged it lied
+
+Asked from the seat: *ages ago we added a dithered overlay on the vehicle when
+occluded by terrain; it is most visible where the tyres "touch" the road, or
+trees block the vehicle. I think it has outlived its use — delete or relegate
+to a legacy flag.* Relegated, because the LOOK was wrong and the MECHANISM is
+right, and those are separable.
+
+**WHAT IT DREW WAS ALMOST ENTIRELY THE CONTACT PATCH.** The pass is one extra
+draw of the hull with the depth test reversed (`GreaterDepth`) and a screen-door
+discard, so it lights every pixel of the truck that something else is in front
+of — and on a rig standing on a road the largest such region, by far, is the few
+pixels of tyre and hull behind the road surface the wheels are resting on. The
+second is the sliver behind a crown clipping the cab. Both are places where
+nothing is hidden that anyone needed to see, so a teal dither there reads as a
+rendering fault rather than as an aid. The case it was built for — the truck
+behind a ridge — is the rare one.
+
+- **`?rigxray=1` KEEPS THE BRANCH, AND THE GROUP STAYS IN THE SCENE EMPTY.**
+  `rebuildRigSilhouette` returns before it builds anything, so off there is no
+  mesh, no draw and no material; the group itself is still added, so the hop
+  sweep's keep set, the shutter's mark-out pass and the per-frame pose need no
+  second condition. The mechanism is kept rather than deleted because the depth
+  buffer already knows, per pixel, whether the truck is occluded, and the two
+  traps in it — self-overdraw, and additive parts glowing through a hillside —
+  were expensive to solve. Anything that later wants to answer "where IS the
+  rig" starts from here.
+- **AND THE GROUP IS NAMED.** An unnamed group arrives in `__sceneList` as
+  `Group` beside a dozen others and no audit can be written on it — the rule
+  this file already states for meshes and for `__census`, met one object type
+  over.
+
+**Measured**, one build, the flag the only difference, `at-campsbay` in chase:
+`default {found:true, kids:0, vis:false, errs:0}` against
+`?rigxray=1 {found:true, kids:60, vis:true, errs:0}`.
+
+**AND THE CHECK PRINTED `FAIL` OVER THAT CLEAN PASS.** Its verdict line read
+`off.xray`/`on.xray` after the evaluate had been changed to return
+`{found, kids, vis}`, so it compared `undefined === 0` and printed
+`FAIL default undefined, asked undefined` beside two rows of correct data. **An
+instrument that lies when the feature WORKS is the same fault as one that
+cannot fail**, arrived at from the other side, and this file records the second
+half three times over (the reserved-word shader, the `nodraw` census, the
+identity-guard sweep). The rule they share: **a verdict must read the fields the
+measurement actually returns, and the surest way to keep it honest is to print
+the data beside it** — which is what made this one obvious the moment anyone
+looked at the log rather than the last line.
+
+## It IS a ford at Chapman's Peak — and a ford draws nothing
+
+Asked from the seat with a frame (`-34.0877 18.4185`, chart, 70° tilt, 20 m
+scale, tile debug on): *I see tracks crossing the river but no ford treatment.
+Is the substrate renderer active? The new default? Why do I see the river
+passing normally over a track?* Three questions; the first two are one line
+each and the third is the unit.
+
+**THE RENDERER IS NOT ON, AND IT IS NOT WHAT A FORD WOULD COME FROM.**
+`resolveProductionSubstrateMode`'s `default:` case is `contact` — contact true,
+render FALSE — so an ordinary URL makes the substrate the authority for
+`surfaceAt`, `waterInfoAt`, `splashWet` and `tyreHeight` and leaves every mesh
+where it was. `?substrate=render` changes who OWNS and COMMITS the meshes
+(terrain, carriageways, structures, hydro detail, and the hydro field's own
+meshes through `deferRendering`) so a tile's picture can be admitted in one
+atomic revision; **it draws no water differently and would not have produced a
+ford.** The same is already recorded from the Pont de Normandie in one
+sentence — *`substrate=render` was not the variable*.
+
+**AND AT THE SEAT'S OWN SPOT IT IS A FORD, ON EVERY TERM.**
+`devtools/ford-why.mjs` sweeps a 440 m box at 4 m and asks `__ford` for the
+registry's word, the layer the contact chose as SUPPORT, the legacy deck rule
+and the contact's verdict at each point. Of the points with drawn water inside
+a carriageway:
+
+| at Chapman's Peak, 27 drawn-wet points ON the deck | |
+|---|---|
+| the crossing registry's word | **ford, 27 of 27** |
+| the layer the contact chose as support | **drive, 27 of 27** |
+| the CONTACT says water | **27** |
+| the LEGACY deck rule says ford (`fordM > 0.01`) | **27** |
+| water where the legacy rule says the deck is clear | **0** |
+| not water where the legacy rule says ford | **0** |
+| the water over the deck (`fordM`) | **0.22 – 0.65 m** |
+
+Two crossings, the river resting a fifth to two thirds of a metre over the
+track, both authorities agreeing to the centimetre, and `substrate mode`
+reading `probes 833 · wetAgreement 833 · wetDisagreement 0`. **So the ford
+fires. What it does not do is LOOK like anything**, and that is the answer to
+the seat's third question: a ford is the one crossing kind whose
+`implementation` is `not-required`, and nothing is drawn for it.
+
+**THE DIPPED DECK EXISTS AND IS LAB-ONLY.** `resolveCrossing` in
+`substrate/kernel.ts` sets `roadDeckM = water.yM + 0.12` for a ford — the deck
+lowered into the water, which is what a drift actually is — and
+`buildSubstrateTile`, its only caller, is imported by
+`client/substrate/lab.ts` and by nothing else. The shipping ribbon's profile
+goes through `resolveProductionDeck`, and **every branch of it RAISES**: the
+chord, a landmark hint, or `waterY + navigableClearance`, with the caller
+writing `profile[station] = Math.max(profile[station], decided.deckY)`. There
+is no lowering branch anywhere in the world path. **No road in this game is
+ever dipped into a river**, so there is no drawn ford to see, at Chapman's Peak
+or anywhere else. That is task #63, and it has never existed outside the lab.
+
+What a ford record DOES change is the terrain and the physics, not the ribbon:
+`channelFloorAt` carves the channel THROUGH the road's own footprint (a `null`
+or `causeway` crossing refuses, which is why an unregistered crossing leaves
+the ground under the track intact), the road earthwork applies where a
+bridge's would not, and `surfaceAt` asks `fordDepthAt` instead of answering
+`road`. Drive into it and you wade, splash and drag; look at it and it is a
+river crossing a track.
+
+### The first two runs of this tool were a measurement of `roadEdge`'s reach
+
+**`roadEdge` RETURNS THE NEAREST SEGMENT IN THE POINT'S 24 m GRID CELL,
+WHATEVER ITS DISTANCE.** `out` is `d − halfWidth` and may be metres positive;
+the function has no reach test at all, because its callers ask "whose
+carriageway is nearest, and how far outside it am I". The first cut of
+`ford-why.mjs` treated a non-null answer as "on a road", and on that test the
+same place reported **344 wet-on-road points, 341 of them fords, 296 with no
+crossing record at all, 305 with the GROUND as support and 126 points where
+the two rules disagreed** — a whole false picture of a contact that fords what
+the geometry leaves clear. Filtered to the carriageway and its 0.8 m shoulder
+— the same reach `findProductionDriveWaterOverlaps` uses — it is 27 points,
+one registry answer, one support layer and zero disagreement.
+
+**The 317 points in between are the river beside the track**, which is most of
+what the seat's frame shows and is drawn exactly right: water over ground,
+ribbon over the water's edge, no crossing because there is no road under it.
+
+The lesson is the file's own, one layer over: **a probe's classification must
+be as tight as the claim it is used to make.** Every number in the first two
+runs was arithmetic about a 24 m grid cell wearing the words "on a road", and
+it was wrong in the direction that makes a working rule look broken. The rows
+carry `out` now and the tool prints the near-road bucket beside the on-deck
+one, so a future reading cannot quietly mix them.
+
+**AND `__hydro().tiles` DOES NOT EXIST**, which the same first cut read into
+its settle gate: `?? 0` turned an absent field into a constant that could
+never move, so a quarter of the three-signal gate was decoration and the line
+printed `hydroTiles 0` beside a river. It reads `buildProf.builds` now. The
+third time this file has recorded a field that prints a plausible number while
+measuring nothing.
+
+## …and now a ford draws a drift: an apron, two cutoff sills and four posts
+
+Built on the measurement above, and deliberately NOT the deck dip. Every
+branch of `resolveProductionDeck` raises, the dipped deck lives only in
+`substrate/kernel.ts`'s lab path, and changing a road profile is the highest
+risk area in this codebase — so this unit builds what a drift IS and leaves
+where the carriageway SITS to #63. The drift is an apron laid at the deck the
+road already solved, a cutoff lip at each edge so it does not end in mid-air,
+and four marker posts at the corners so a driver can see the crossing from the
+approach.
+
+`client/substrate/ford-detail.ts` is pure and renderer-free, by the same rule
+as `culvert-detail.ts`: it owns the exact apron, sills and posts; main.ts owns
+the materials, the meshes and the packet that commits them. `?fords=0` is the
+exact A/B and is the world as it was.
+
+- **THE DRIFT IS BUILT AT THE OUTCOME, NOT AT THE BRANCHES.** `ford-fallback`
+  is reached three ways inside the crossing loop — an explicit `ford=*` tag,
+  an untagged track over open water, and a `culvert()` that found no room to
+  bore — and they are one crossing in the world however they came to be
+  recognised. One call after the if/else chain, so a fourth branch added later
+  cannot quietly draw nothing.
+- **THE DECK IS HANDED IN, NOT LOOKED UP.** The loop has already resolved the
+  overlaps PER SOURCE WAY, precisely because a tagged bridge, its approach and
+  a lower road routinely meet at one crossing; a fresh `roadOver` inside the
+  builder would answer with whichever carriageway is nearest, which is as often
+  the approach as the thing being forded.
+- **NOTHING GOES IN THE WALL GRID**, for the culvert's own reason: the only
+  vehicle near a drift's lip is the one crossing the drift, and a 12 cm sill in
+  the collision grid is a kerb across the ford.
+
+### Three faults the measurement found, and the second is the interesting one
+
+**THE WATER ARRIVES IN A DIFFERENT FRAME FROM EVERYTHING ELSE IN THAT LOOP.**
+`HydroSample.restingLevelM` is metres above SEA LEVEL — the crossing registry
+two functions up converts on the way in, with `deckY: road.y + baseElev` —
+while the deck, the invert, the ground and every vertex the builder emits are
+LOCAL metres about the origin. Handed over raw, the first run reported a drift
+under **1,789.76 m of standing water** at the Senqu: the Drakensberg's own
+elevation wearing the word `depth`. The tool now FAILS on a depth over eight
+metres, because nothing anyone fords is under eight metres of river and a
+depth that looks like an elevation is a frame error by construction.
+
+**SEVEN OF NINE CROSSINGS AT CHAPMAN'S PEAK HAD A CORE OF ONE STATION.** A
+watercourse is densified for its own geometry and knows nothing about the roads
+that cross it, so at a track a few metres wide the core is routinely a single
+station and the first cut refused all of them as `no-span` — throwing away most
+of the fords in the world for want of a second point. **The second point is not
+missing evidence, it is arithmetic**: the carriageway reaches its own half width
+either side of the crossing along the channel, and `road.segment.hw` is in hand.
+Synthesised rather than refused, Chapman's went from **2 of 9 built to 9 of 9**
+and the carriageway forded from 127.9 m to 163.4 m. Only a single station with
+no road width to go on is still a refusal.
+
+**AND THE FIRST WRITE-UP CLAIMED "EVERY ROUTE TO A FORD ENDS HERE", WHICH IS
+FALSE.** `reconcileProductionWetCrossings` registers `ford-fallback` too — from
+the drive and water SEGMENTS rather than from a watercourse polyline, to catch
+what the one-shot flush misses, and it is live on the default mode because
+`shadow` is on there. It has no core span to lay an apron over, so **a crossing
+recorded only by that pass is a ford with no drift.** Not fixed here and not
+hidden: the honest route is to build from the crossing RECORD (which carries
+the centre, both tangents, both half widths and the deck) so both producers
+reach one builder, and that is its own unit.
+
+### Measured
+
+`devtools/ford-drift.mjs`, both witnesses in one call. `__fords()` carries the
+builder's own ledger — asked, built, and each refusal NAMED, because
+`asked - built` is a number and `noDeck 14` is a fault with an address — and
+beside it a walk of the SCENE for `userData.ford`, which is independent of the
+rule under test (the San Miguel lesson: a probe that replays a rule can only
+confirm it). The tool fails on a disagreement in either direction.
+
+| | at-senqu-ford | Chapman's Peak, live |
+|---|---|---|
+| asked / built | 1 / 1 | **9 / 9** |
+| refused noSpan / noDeck / tooWide | 0 / 0 / 0 | 0 / 0 / 0 |
+| carriageway forded | 2.4 m | **163.4 m** |
+| deepest standing water over an apron | 0 m | **0.62 m** |
+| scene meshes / triangles | 3 / 46 | 27 / 528 |
+| apron proud of its own drawn ground | 0.45 m | 0.03–0.90 m, median 0.16 |
+| `?fords=0` | **0 on both witnesses** | — |
+
+**THE 0.62 m IS THE AGREEMENT THAT MATTERS.** `ford-why.mjs` measured that same
+place independently and read the river standing **0.22–0.65 m** over the deck at
+27 of 27 drawn-wet points; three of the nine aprons stand at
+`[-100.4,-121.3]`, `[-80.4,-102.9]` and `[-40.7,-73.7]`, which are that table's
+own wet-on-road rows. Two tools, two mechanisms, one answer.
+
+**THE SENQU'S `0 m` IS ALSO CORRECT AND IS WORTH READING TWICE.** This file
+already records that the Joggemspruit's water sits **1.4 m UNDER** the
+carriageway there, so a drift built at the deck has no water over it — which is
+a fact about that crossing, not a failure of the depth term. It is also why
+that apron stands 0.45 m proud of its drawn ground: exactly `FORD_SILL_DROP_M`,
+so the lip closes the gap and nothing shows under the slab. **A drift over an
+un-dipped deck is a lid over a carved channel wherever the water is far below
+it**, and the tool reports the gap per apron and flags it past 1.2 m rather than
+leaving it to a frame. That gap is the argument for #63 stated as a number.
+
+### A LIVE SPOT WITH DRAWING ON READS `asked 0`, AND IT IS THE RELAY
+
+The first Chapman's run reported **nothing asked at all** on a world still
+streaming at seven minutes, and it was nearly written up as "the crossing loop
+never sees this place". It is neither: a drift is only built once
+`osmStreamQuiet()` holds, and over the harness's curl relay at three frames a
+second a busy place never gets there. `NODRAW=1` settles it and reads 9 of 9 —
+**and says nothing whatever about the picture**, which the tool prints on its
+own line so no reading of it can pretend otherwise. So the verification is
+split on purpose: the POPULATION comes from Chapman's under `nodraw`, and the
+PICTURE from the at-senqu-ford fixture with drawing on, where the chase frame
+shows a pale apron laid across the river with two white marker posts standing
+on it — the drift, plainly, from the approach.
+
+**AND THE TOP-DOWN HIDE-DIFF CANNOT RESOLVE IT, WHICH IS THE WATER AND NOT THE
+DRIFT.** The obvious witness is the same frame with the drift's own materials
+switched off, so the pixels that differ ARE the drift. Over a river it is
+nearly useless: the swell, the flow and the dither re-weave every frame, so the
+first pair reported **38.5% of the pane moved** for a slab 2.4 m across on a
+40 m frame. With a same-setting floor taken at the same separation — which is
+the only thing that gives the pair a scale — it reads **signal 3.404/255 over
+30.4% of the pane against a floor of 2.305 over 19.8%**, about one and a half
+times, with the worst pixel 73 against the floor's 36. Real, and far too close
+to the floor to be quoted as evidence on its own. The tool takes all three
+frames so the pair can never be read without the floor; the chase frame and the
+scene walk are what this rests on.
+
+### Held by
+
+`substrate.test.ts` drives the shipped builder: the apron flat at the deck plus
+`FORD_PROUD_M` (asserted to clear the road ribbon's own 4 cm lift, or the two
+fight for depth), its extent ACROSS the road equal to the carriageway and ALONG
+the road equal to the water plus a lip each side — **on both axes by name**,
+because getting the offsets the wrong way round produces a plausible slab lying
+UP the river instead of across it; the sills hanging from the apron and
+stopping at the bed rather than driving past it; four posts standing on the deck
+at their stated height, outboard of the apron; the depth measured against the
+apron and `null` rather than zero where no resting level is known; the three
+refusals; and the synthesised single-station span. Negative controls run: the
+offsets taken along the tangent instead of the normal fails the axis assertion
+(`saw 16.8` for an expected 8), `FORD_PROUD_M` at zero fails the ribbon-lift
+assertion, and removing the span synthesis fails the single-station case.
+
+`devtools/ford-drift.mjs` is in the ladder. Run it on a fixture for the picture
+and at a live spot with `NODRAW=1` for the population, never the other way
+round.
+
+**Live as v1789820375451**, with the default flip below — cell-sync's
+`deploying` line named v1789820344452 and its `deployed` line this one, so read
+the live bundle rather than the wait. `app.js` came back 4,060,340 bytes at
+`x-cache: Miss`, parses under esbuild, and carries `buildProductionFord`,
+`FORD_PROUD_M`, `FORD_SILL_DROP_M`, `fordStats`, `driftPost`, `FORDS_ON`,
+`__fords` and the mesh name. **AND THE MESH NAME READ 0 ON THE FIRST GREP**,
+which is the needle-that-can-only-be-absent trap again: it is written
+`` `ford-${tag}` `` and the transpile keeps the template, so a grep for
+`ford-apron` can never match however well the deploy went. The honest needle is
+`ford-${tag}`.
+
+**PUSHED WITHOUT A PULL, ON THE SEAT'S WORD.** Anything another agent had on
+the cell and had not pushed to git is overwritten by this deploy; the next pull
+will say.
+
+## The substrate owns the picture on an ordinary URL
+
+`resolveProductionSubstrateMode`'s `default:` case is `render`. It has been the
+CONTACT authority for some time — `surfaceAt`, `waterInfoAt`, `splashWet` and
+`tyreHeight` all read it — and the render half stayed behind `?substrate=render`
+pending a review. What the flag buys is not a different-looking world: it is
+WHO OWNS AND COMMITS the meshes. Every terrain, carriageway, structure, batter
+and hydro packet is committed by the tile that owns it before any of it is
+drawn, so a tile's picture changes in one atomic revision rather than piece by
+piece — which is what the pop-out unit above was written for, and is why a
+dirtied tile keeps its admitted picture until the next revision is admitted.
+
+**`?substrate=contact` IS THE NEARER ROLLBACK AND IS THE CONTROL EVERY
+RENDER-PATH MEASUREMENT IS TAKEN AGAINST**: the substrate still answers the
+wheels and the legacy owners draw again, so a seat report about the PICTURE has
+a one-switch A/B that does not also change the physics. `legacy` goes further
+back, to the pre-substrate contact with shadow diagnostics alive; `off` takes
+every consumer down.
+
+### The gate that had to be corrected was not one of the four render suites
+
+`substrate-default-cutover.test.mjs` asserted that *the ordinary production URL
+selects canonical CONTACT* — in those words, and correctly, for as long as that
+was the default. It sits beside the four render suites, every one of which asks
+for `?substrate=render` EXPLICITLY and therefore could not have noticed which
+way the default pointed. **A suite that names the flag it is testing cannot
+certify a default**, and this one nearly shipped unread.
+
+So the three world suites open on an ordinary URL now (`MODE=` forces one,
+`contact` being the control), which is what makes them a certification of what
+a player loads rather than of a flag. The pure assertion in `substrate.test.ts`
+is the cheap one and carries its own control: `null` must resolve to `render`
+AND `'contact'` must resolve to contact, which the old resolver cannot both
+satisfy — reverting the `default:` case fails it in one second.
+
+### Measured, on the default with no query
+
+| suite | |
+|---|---|
+| `substrate-render` (at-senqu-ford) | **15 of 15 ok**, 0 page errors |
+| `hydro-render-cutover` (pure) | ok |
+| `substrate-batter-render` (sidehill) | **5 of 5 ok**, 0 page errors |
+| `substrate-structure-render` (structures) | 8 of 9 ok — one pre-existing failure, below |
+| `substrate-default-cutover` | **5 of 5 ok**: default = render + substrate-tile on both authorities; `contact` hands the picture back to `hydro-system` without giving up canonical contact; `legacy` restores the old consumer and keeps the tiles and the independent shadow |
+
+**THE ONE FAILURE IS THE WORLD'S TERRAIN, NOT THIS PATH'S, AND THE CONTROL SAYS
+SO TO THE DIGIT.** `the culvert terrain keeps the channel bed open below the
+road` reports `groundToDeckM -0.04002471319927281` on the default, and
+`MODE=contact` reproduces that same figure to the last decimal place — so it is
+reachable with the substrate drawing nothing, and it is not the cutover's.
+Recorded rather than dismissed: it is open work on the culvert earthwork.
+
+### A gate settled on a clock, and this fixture's tiles are a coin toss
+
+The first run of the corrected cutover gate FAILED, and it was nearly written
+up as "the render default finds no water". It is not. That gate waited a fixed
+eight seconds and then asked `__substrateWaterPoints` for a wet point; measured
+at `at-senqu-ford` on the same settle, one boot answered **96 points, 91 of
+them fluid** and another answered **NONE, on tiles reporting `roads: 0,
+waters: 0, crossings: 0` after 149 revisions** — and the empty one was
+`?substrate=contact`. **Both modes race, so it is this fixture's tile
+construction and not the render path.**
+
+Every assertion in that gate rests on a loaded wet point, so the wet point is
+what it waits for now (90 s, polled), and a run that never gets one says so
+instead of reporting arrival order as a cutover failure. The doctrine's own
+rule, met again: **settle on the quantity the assertion reads, never on a
+clock** — and `queries: 0` beside it was not a second fault, it is the gate's
+own `__substrate('reset')` doing its job before the probe that never ran.
+
+### What a harness cannot review, said rather than implied
+
+These suites assert OWNERSHIP, COMMITMENT and IDENTITY: that no uncommitted
+mesh enters the scene, that a tile's packets share one revision, that the
+legacy owners hold nothing. They do not assert what the world LOOKS like, and
+the frames they take are of fixtures. The seat's report against
+`?substrate=contact` is the visual review, and that switch is in SETTINGS →
+ADVANCED with the rollback stated in its note.
+
+**Live as v1789820375451.** The deployed resolver's own text is the witness a
+symbol grep cannot be here — `contact`, `render` and the default all name the
+same words — so it was read out of the bundle directly: `case "render":
+default: return { name: "render", render: true, contact: true, shadow: true,
+rollback: false };`. The handler answers too (`/`, `/lab/world` and a `~/dem/`
+tile all 200), because grepping `app.js` proves the client shipped and says
+nothing about a route.
