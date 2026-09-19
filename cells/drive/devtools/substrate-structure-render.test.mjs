@@ -17,12 +17,30 @@ const ok = (name, condition, saw) => {
   if (!condition) bad++;
   console.log(`${condition ? 'ok  ' : 'FAIL'}  ${name}${condition ? '' : `\n        saw ${JSON.stringify(saw)}`}`);
 };
+/** An assertion that only has a subject when the substrate owns the picture.
+ *  Under `MODE=contact` the legacy owners draw, so there are no committed
+ *  packets to count and the claim is SKIPPED by name rather than passing
+ *  vacuously — a check that cannot fail is the fault this file keeps
+ *  recording, and a silently-true one is the same thing wearing a tick. */
+const okRender = (name, condition, saw) => {
+  if (MODE !== 'render') { console.log(`skip  ${name}  (MODE=${MODE} — the substrate does not own the picture)`); return; }
+  ok(name, condition, saw);
+};
 
+// A GATE THAT CANNOT BE RUN AGAINST A CONTROL CANNOT ATTRIBUTE ITS OWN
+// FAILURE. `MODE=contact` runs the same assertions with the substrate as the
+// contact authority and the legacy owners drawing, which separates a fault in
+// the RENDER path from one in the world both modes share; `REV=<sha>` rebuilds
+// the whole client at a revision, the rule `openDrive({rev})` already states.
+// The render-only assertions below are skipped where the mode cannot produce
+// them, and say so rather than passing vacuously.
+const MODE = process.env.MODE || 'render';
 const d = await openDrive({
-  spot: 'fixture=structures&cam=chase&substrate=render&time=DAY',
-  tag: 'substrate-structure-render-cutover',
+  spot: `fixture=structures&cam=chase&substrate=${MODE}&time=DAY`,
+  tag: `substrate-structure-${MODE}-cutover`,
   settle: 14000,
   bootTimeout: 90000,
+  ...(process.env.REV ? { rev: process.env.REV } : {}),
 });
 
 // `meshSurfaceAt` can answer null while a terrain mesh is being swapped even
@@ -30,6 +48,7 @@ const d = await openDrive({
 // unchanged build signature, before sampling crossing earthwork.
 let quiet = 0;
 let previousSignature = '';
+let lastSettle = null;
 const settleDeadline = Date.now() + 60000;
 while (Date.now() < settleDeadline && quiet < 4) {
   await d.page.waitForTimeout(500);
@@ -37,10 +56,16 @@ while (Date.now() < settleDeadline && quiet < 4) {
     const terrain = window.__tstats?.();
     const render = window.__substrate?.().render;
     return {
+      // `pendingReconciliations` is the RENDER path's own queue. Under
+      // `MODE=contact` nothing reconciles, and requiring it to reach zero
+      // makes the gate a render-mode test wearing the word `settled` — the
+      // first control run failed `crossing earthwork invalidation converges`
+      // for exactly that reason, with all three of its real terms satisfied.
       ready: terrain?.dirty === 0
         && terrain?.inFlight === 0
         && terrain?.queued === 0
-        && render?.pendingReconciliations === 0,
+        && (render?.pendingReconciliations === 0
+          || render?.pendingReconciliations === undefined),
       signature: JSON.stringify([
         terrain?.builds,
         terrain?.seenWays,
@@ -53,6 +78,14 @@ while (Date.now() < settleDeadline && quiet < 4) {
   });
   quiet = settled.ready && settled.signature === previousSignature ? quiet + 1 : 0;
   previousSignature = settled.signature;
+  lastSettle = settled;
+}
+// WHY it did not settle, not just that it did not: the first control run
+// reported `crossing earthwork invalidation converges` as a failure with all
+// three of its own terms satisfied, and nothing in the output said which
+// half of this loop had refused.
+if (quiet < 4) {
+  console.log(`      did not settle: ${JSON.stringify(lastSettle)}`);
 }
 
 const state = await d.page.evaluate((settled) => ({
@@ -106,7 +139,7 @@ ok('crossing earthwork invalidation converges',
     && crossingRebuilds.length <= implementedCrossings * 4
     && state.now - latestCrossingRebuild.at > 3000,
   { now: state.now, crossingRebuilds, implementedCrossings, terrain: state.terrain });
-ok('the substrate captures a versioned structure candidate',
+okRender('the substrate captures a versioned structure candidate',
   state.substrate?.at?.structureAuthoring
     && state.substrate?.at?.sourceRevisions?.structures > 0
     && state.substrate?.render?.structureCandidateTiles > 0
@@ -114,7 +147,7 @@ ok('the substrate captures a versioned structure candidate',
     && state.substrate?.render?.bridgeStructureCandidates === 1
     && state.substrate?.render?.bridgeStructurePacketMeshes === 1,
   state.substrate?.render);
-ok('tile-owned drive packets retain direct indexed tunnel geometry',
+okRender('tile-owned drive packets retain direct indexed tunnel geometry',
   state.substrate?.render?.roadPacketVertices > 0
     && state.substrate?.render?.roadPacketBytes > 0
     && state.substrate?.render?.roadIndexedPackets > 0
@@ -124,7 +157,7 @@ ok('tile-owned drive packets retain direct indexed tunnel geometry',
     && state.substrate?.render?.legacyRoadCandidateMeshes === 0
     && state.substrate?.render?.drivePacketFailures === 0,
   state.substrate?.render);
-ok('the matching substrate tile admits the complete structure packet',
+okRender('the matching substrate tile admits the complete structure packet',
   state.substrate?.render?.structureCommittedTiles > 0
     && state.substrate?.render?.structurePacketMeshes > 0
     && state.substrate?.render?.structureDirectAuthoredPacketMeshes
