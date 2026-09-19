@@ -3,9 +3,17 @@
  *
  *   node cells/drive/devtools/substrate-default-cutover.test.mjs
  *
- * The ordinary production URL must consume canonical support/fluid contact.
- * `?substrate=legacy` must restore the old consumer without disabling the
- * revisioned tile or its independent parity shadow.
+ * The ordinary production URL must consume canonical support/fluid contact AND
+ * own the picture: `mode.ts`'s `default:` case is `render` now, so a default
+ * that answered `contact` would be the cutover silently reverting. Both
+ * rollbacks are exercised — `?substrate=contact` keeps the substrate on the
+ * wheels with the legacy owners drawing, and `?substrate=legacy` goes further
+ * back to the old consumer — and neither may disable the revisioned tile or
+ * its independent parity shadow.
+ *
+ * THIS IS THE GATE THE DEFAULT FLIP HAD TO CORRECT, and it was nearly missed:
+ * it lives beside the four render suites, all of which asked for the flag
+ * explicitly and so could not have noticed which way the default pointed.
  */
 import { openDrive, report } from './harness.mjs';
 
@@ -23,10 +31,25 @@ const exercise = async (mode) => {
     settle: 12000,
     bootTimeout: 90000,
   });
-  await d.page.waitForTimeout(8000);
-  const wet = await d.page.evaluate(() =>
-    (window.__substrateWaterPoints?.(96, 3000) ?? [])
-      .find((point) => point.fluid) ?? null);
+  // SETTLE ON THE QUANTITY, NOT ON A CLOCK. A fixed wait here is a coin toss
+  // about tile arrival order and nothing else: measured at this fixture, one
+  // boot answered 96 water points with 91 fluid and the next answered NONE
+  // with `roads: 0, waters: 0, crossings: 0` on tiles that had been rebuilt
+  // 149 times — in BOTH modes, so it is this fixture's construction and not
+  // the render path's. Every assertion below rests on a loaded wet point, so
+  // the wet point is what the gate waits for, and a run that never gets one
+  // says so rather than reporting the world's arrival order as a cutover
+  // failure.
+  let wet = null;
+  const deadline = Date.now() + 90000;
+  while (Date.now() < deadline) {
+    await d.page.waitForTimeout(2500);
+    wet = await d.page.evaluate(() =>
+      (window.__substrateWaterPoints?.(96, 3000) ?? [])
+        .find((point) => point.fluid) ?? null);
+    if (wet) break;
+  }
+  if (!wet) console.log(`      ${mode || 'default'}: no loaded wet point in 90 s`);
   if (wet) {
     await d.page.evaluate((point) => {
       window.__substrate?.('reset');
@@ -60,18 +83,31 @@ const exercise = async (mode) => {
 };
 
 const canonical = await exercise('');
-ok('ordinary URLs default to canonical contact',
-  canonical.state.substrate?.mode === 'contact'
+ok('ordinary URLs default to the substrate owning contact AND the picture',
+  canonical.state.substrate?.mode === 'render'
     && canonical.state.substrate?.contactAuthority === 'substrate-tile'
-    && canonical.state.substrate?.renderAuthority === 'hydro-system'
+    && canonical.state.substrate?.renderAuthority === 'substrate-tile'
     && canonical.state.evidence?.authority === 'substrate',
   canonical);
-ok('default contact has a loaded tile and no consumer fallback',
+ok('the default has a loaded tile and no consumer fallback',
   canonical.wet
     && canonical.state.substrate?.tiles?.tiles > 0
     && canonical.state.substrate?.contactAvailability?.queries > 0
     && canonical.state.substrate?.contactAvailability?.fallbackQueries === 0,
   canonical.state.substrate?.contactAvailability);
+
+// The NEARER rollback: the substrate still answers the wheels and the legacy
+// owners draw again. This is the one a seat report about the picture should
+// reach for, and it is the control every render-path measurement is taken
+// against, so it has to be shown to actually change who draws.
+const contactRollback = await exercise('contact');
+ok('contact hands the picture back without giving up canonical contact',
+  contactRollback.state.substrate?.mode === 'contact'
+    && contactRollback.state.substrate?.contactAuthority === 'substrate-tile'
+    && contactRollback.state.substrate?.renderAuthority === 'hydro-system'
+    && contactRollback.state.evidence?.authority === 'substrate'
+    && !contactRollback.state.substrate?.rollback,
+  contactRollback);
 
 const rollback = await exercise('legacy');
 ok('legacy query restores the old contact consumer',
@@ -87,9 +123,9 @@ ok('rollback retains canonical tiles and independent shadow evidence',
     && rollback.state.substrate?.last?.legacy?.wet,
   rollback.state.substrate);
 
-if (canonical.errors.length || rollback.errors.length) bad++;
+if (canonical.errors.length || contactRollback.errors.length || rollback.errors.length) bad++;
 if (bad) {
   console.error(`\n${bad} FAILED`);
   process.exit(1);
 }
-console.log('\nall good — canonical contact is default and legacy rollback remains observable');
+console.log('\nall good — the substrate is the default authority, and both rollbacks remain observable');

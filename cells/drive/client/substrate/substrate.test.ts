@@ -203,9 +203,13 @@ export function runSubstrateSelfTest(): void {
   'render-layer witnesses must bind atomically with an empty visual packet layer');
 
   const defaultMode = resolveProductionSubstrateMode(null);
-  assert(defaultMode.name === 'contact' && defaultMode.contact && defaultMode.shadow
-    && !defaultMode.render && !defaultMode.rollback,
-  'ordinary production URLs must default to canonical contact with shadow');
+  assert(defaultMode.name === 'render' && defaultMode.render && defaultMode.contact
+    && defaultMode.shadow && !defaultMode.rollback,
+  'ordinary production URLs must default to the substrate owning the picture');
+  const contactMode = resolveProductionSubstrateMode('contact');
+  assert(contactMode.name === 'contact' && contactMode.contact && contactMode.shadow
+    && !contactMode.render && !contactMode.rollback,
+  'contact is the rollback that keeps the substrate answering the wheels');
   const rollbackMode = resolveProductionSubstrateMode('legacy');
   assert(rollbackMode.name === 'legacy' && !rollbackMode.contact && rollbackMode.shadow
     && rollbackMode.rollback,

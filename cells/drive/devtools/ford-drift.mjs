@@ -45,8 +45,9 @@ const NODRAW = process.env.NODRAW === '1';
 const place = FIX ? `fixture=${FIX}` : `lat=${SPOT.split(',')[0]}&lon=${SPOT.split(',')[1]}`;
 const d = await openDrive({
   spot: `${place}&cam=chase&tdbg=0&wxlive=0&time=NOON&wx=clear&fords=${FORDS}`
+    + (process.env.MODE ? `&substrate=${process.env.MODE}` : '')
     + (NODRAW ? '&nodraw=1' : ''),
-  tag: `ford-drift-${FORDS}`, settle: 0, bootTimeout: 300000,
+  tag: `ford-drift-${FORDS}-${process.env.MODE || 'default'}`, settle: 0, bootTimeout: 300000,
 });
 
 // The doctrine's own settle rule for roads and water: dirty is not enough, the

@@ -18056,3 +18056,82 @@ assertion, and removing the span synthesis fails the single-station case.
 `devtools/ford-drift.mjs` is in the ladder. Run it on a fixture for the picture
 and at a live spot with `NODRAW=1` for the population, never the other way
 round.
+
+## The substrate owns the picture on an ordinary URL
+
+`resolveProductionSubstrateMode`'s `default:` case is `render`. It has been the
+CONTACT authority for some time — `surfaceAt`, `waterInfoAt`, `splashWet` and
+`tyreHeight` all read it — and the render half stayed behind `?substrate=render`
+pending a review. What the flag buys is not a different-looking world: it is
+WHO OWNS AND COMMITS the meshes. Every terrain, carriageway, structure, batter
+and hydro packet is committed by the tile that owns it before any of it is
+drawn, so a tile's picture changes in one atomic revision rather than piece by
+piece — which is what the pop-out unit above was written for, and is why a
+dirtied tile keeps its admitted picture until the next revision is admitted.
+
+**`?substrate=contact` IS THE NEARER ROLLBACK AND IS THE CONTROL EVERY
+RENDER-PATH MEASUREMENT IS TAKEN AGAINST**: the substrate still answers the
+wheels and the legacy owners draw again, so a seat report about the PICTURE has
+a one-switch A/B that does not also change the physics. `legacy` goes further
+back, to the pre-substrate contact with shadow diagnostics alive; `off` takes
+every consumer down.
+
+### The gate that had to be corrected was not one of the four render suites
+
+`substrate-default-cutover.test.mjs` asserted that *the ordinary production URL
+selects canonical CONTACT* — in those words, and correctly, for as long as that
+was the default. It sits beside the four render suites, every one of which asks
+for `?substrate=render` EXPLICITLY and therefore could not have noticed which
+way the default pointed. **A suite that names the flag it is testing cannot
+certify a default**, and this one nearly shipped unread.
+
+So the three world suites open on an ordinary URL now (`MODE=` forces one,
+`contact` being the control), which is what makes them a certification of what
+a player loads rather than of a flag. The pure assertion in `substrate.test.ts`
+is the cheap one and carries its own control: `null` must resolve to `render`
+AND `'contact'` must resolve to contact, which the old resolver cannot both
+satisfy — reverting the `default:` case fails it in one second.
+
+### Measured, on the default with no query
+
+| suite | |
+|---|---|
+| `substrate-render` (at-senqu-ford) | **15 of 15 ok**, 0 page errors |
+| `hydro-render-cutover` (pure) | ok |
+| `substrate-batter-render` (sidehill) | **5 of 5 ok**, 0 page errors |
+| `substrate-structure-render` (structures) | 8 of 9 ok — one pre-existing failure, below |
+| `substrate-default-cutover` | **5 of 5 ok**: default = render + substrate-tile on both authorities; `contact` hands the picture back to `hydro-system` without giving up canonical contact; `legacy` restores the old consumer and keeps the tiles and the independent shadow |
+
+**THE ONE FAILURE IS THE WORLD'S TERRAIN, NOT THIS PATH'S, AND THE CONTROL SAYS
+SO TO THE DIGIT.** `the culvert terrain keeps the channel bed open below the
+road` reports `groundToDeckM -0.04002471319927281` on the default, and
+`MODE=contact` reproduces that same figure to the last decimal place — so it is
+reachable with the substrate drawing nothing, and it is not the cutover's.
+Recorded rather than dismissed: it is open work on the culvert earthwork.
+
+### A gate settled on a clock, and this fixture's tiles are a coin toss
+
+The first run of the corrected cutover gate FAILED, and it was nearly written
+up as "the render default finds no water". It is not. That gate waited a fixed
+eight seconds and then asked `__substrateWaterPoints` for a wet point; measured
+at `at-senqu-ford` on the same settle, one boot answered **96 points, 91 of
+them fluid** and another answered **NONE, on tiles reporting `roads: 0,
+waters: 0, crossings: 0` after 149 revisions** — and the empty one was
+`?substrate=contact`. **Both modes race, so it is this fixture's tile
+construction and not the render path.**
+
+Every assertion in that gate rests on a loaded wet point, so the wet point is
+what it waits for now (90 s, polled), and a run that never gets one says so
+instead of reporting arrival order as a cutover failure. The doctrine's own
+rule, met again: **settle on the quantity the assertion reads, never on a
+clock** — and `queries: 0` beside it was not a second fault, it is the gate's
+own `__substrate('reset')` doing its job before the probe that never ran.
+
+### What a harness cannot review, said rather than implied
+
+These suites assert OWNERSHIP, COMMITMENT and IDENTITY: that no uncommitted
+mesh enters the scene, that a tile's packets share one revision, that the
+legacy owners hold nothing. They do not assert what the world LOOKS like, and
+the frames they take are of fixtures. The seat's report against
+`?substrate=contact` is the visual review, and that switch is in SETTINGS →
+ADVANCED with the rollback stated in its note.

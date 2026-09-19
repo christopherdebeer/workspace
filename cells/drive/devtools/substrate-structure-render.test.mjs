@@ -23,7 +23,7 @@ const ok = (name, condition, saw) => {
  *  vacuously — a check that cannot fail is the fault this file keeps
  *  recording, and a silently-true one is the same thing wearing a tick. */
 const okRender = (name, condition, saw) => {
-  if (MODE !== 'render') { console.log(`skip  ${name}  (MODE=${MODE} — the substrate does not own the picture)`); return; }
+  if (MODE && MODE !== 'render') { console.log(`skip  ${name}  (MODE=${MODE} — the substrate does not own the picture)`); return; }
   ok(name, condition, saw);
 };
 
@@ -34,10 +34,13 @@ const okRender = (name, condition, saw) => {
 // the whole client at a revision, the rule `openDrive({rev})` already states.
 // The render-only assertions below are skipped where the mode cannot produce
 // them, and say so rather than passing vacuously.
-const MODE = process.env.MODE || 'render';
+// AND IT OPENS ON AN ORDINARY URL BY DEFAULT, which is what every player
+// loads now that the substrate owns the picture: asking for the flag would
+// certify the flag.
+const MODE = process.env.MODE || '';
 const d = await openDrive({
-  spot: `fixture=structures&cam=chase&substrate=${MODE}&time=DAY`,
-  tag: `substrate-structure-${MODE}-cutover`,
+  spot: `fixture=structures&cam=chase${MODE ? `&substrate=${MODE}` : ''}&time=DAY`,
+  tag: `substrate-structure-${MODE || 'default'}-cutover`,
   settle: 14000,
   bootTimeout: 90000,
   ...(process.env.REV ? { rev: process.env.REV } : {}),
