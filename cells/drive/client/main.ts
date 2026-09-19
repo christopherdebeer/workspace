@@ -42511,8 +42511,13 @@ function heightsOf(): number[] {
     key, height: heightTiles.has(key), mesh: terrainMeshes.has(key), dirty: terrainDirty.has(key),
   }));
   const fineReady = tiles.every((t) => t.height && t.mesh && !t.dirty);
-  const farReady = farMeshes.size === farTiles.size && farInFlight === 0 && farQueue.length === 0;
-  return { at: [x, z], r, tiles, fineReady, farReady, ready: fineReady && farReady };
+  // The raw counts a caller would otherwise need a second __far() call to
+  // see — printed here so a poll log can show WHY farReady is what it is
+  // (m of n home, how many still in flight or queued) rather than just the
+  // one boolean it reduces to.
+  const far = { home: farMeshes.size, asked: farTiles.size, inFlight: farInFlight, queued: farQueue.length };
+  const farReady = far.home === far.asked && far.inFlight === 0 && far.queued === 0;
+  return { at: [x, z], r, tiles, fineReady, far, farReady, ready: fineReady && farReady };
 };
 /** IS THE ROAD AHEAD THERE YET? Walks the car's heading in `step` metres and
  *  reports, per sample, whether the vector tile covering that point has
