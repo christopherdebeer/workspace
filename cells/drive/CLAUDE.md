@@ -104,6 +104,16 @@ a confusing module error):
 > log for `deploying` to know the request went in, then read once the `✓
 > deployed` line lands: the REPORT is the last thing before cell-sync's own
 > polling.
+>
+> **A FOURTH POINT, 2026-09-19: 734 MB.** `1789826118027`, **238 files**,
+> static 22, `Duration: 33702.96 ms · Max Memory Used: 734 MB` — the highest of
+> the four and still inside the spread the first three showed (687 / 714 / 705,
+> a range of 27). So it is not a slope, it is a fourth reading, and it is
+> **72% of the ceiling on a deploy carrying 238 files where the first reading
+> carried 191**. Take the REPORT every time and compare against the RANGE; the
+> deploy that will need acting on is the one that clears about 850, and what
+> buys the headroom back is named below — `main.ts`, `ne-wide.b64` and the
+> fixtures under `static/`.
 
 **A DEPLOY THAT NEVER LEAVES `DEPLOYING` IS THE DEPLOYER OUT OF MEMORY, AND
 NOTHING TELLS YOU.** Root-caused on 2026-09-10 with `platform.logs
@@ -17023,6 +17033,15 @@ mislabelled. The two extreme rows were right regardless (they are `hl` and
 a frame that will be written out wrong once**, which is the argument for the
 module, met inside the instrument built to measure it.
 
+**Live as v1789826118027**, on the seat's word. The live bundle carries
+`hullPushFromSegment`, `hullPointDistanceM`, `hullRadiusM`, `rigHull` and the
+`hull` switch, and it parses under esbuild; the handler answers `/`,
+`/lab/world` and a baked `~/osm/ov1/` tile, because a grep of `app.js` proves
+the client shipped and says nothing about a route. **Unverified from the
+seat**: every number in this section is a harness measurement over a fixture
+and a one-build A/B, so whether a barrier now stops the truck where the eye
+expects it to is the seat's report against `?hull=0`.
+
 ## A hop carried the last place's grass, and the distance trigger could not see it
 
 Reported from the seat: *navigating menu to DRIVES and then hopping to a new
@@ -17096,6 +17115,13 @@ to 112 (896 m across) and *"finer grass, denser near, a fade that ends nearer"*
 at 8 m is **640 m**, 320 m to an edge against a 232 m reach — **88 m of margin
 against a 48 m trigger**, which is the property that unit was defending, kept.
 `SWARD_MASKN` is 432. Read the constants, not this file, before quoting either.
+
+**Live as v1789826118027.** `SWARD_HOP_CLEAR`, the `swardhop` switch and
+`__swardfield` are all in the live bundle, which parses. The A/B from the seat
+is `?swardhop=0`, which carries the last place's grass onto the new one exactly
+as it did — and the check that says the fix took is the one this unit was
+measured by: hop without driving and read `__swardfield().offCentreM` beside
+`sum`, because the residual is what it COST and the checksum is the claim.
 
 ## San Miguel: the carve measures to a segment's INFINITE LINE, so a watercourse digs straight on past its own end
 
