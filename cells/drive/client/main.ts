@@ -6105,7 +6105,15 @@ function depthVisible(px3: number, py3: number, pz3: number): boolean {
 // painted under the live instruments so a wrong pin can be argued with on
 // the spot. 2 = WIRE: the world stripped to its meshes — the geometry the
 // truck is actually colliding with, not the paint over it.
+const XRAY_MODES = ['OFF', 'DEPTH', 'WIRE'] as const;
 let xrayMode = 0;
+(window as unknown as { __xray?: object }).__xray = (mode?: string): object => {
+  if (mode === undefined) return { mode: XRAY_MODES[xrayMode], modes: [...XRAY_MODES] };
+  const i = XRAY_MODES.indexOf(mode.toUpperCase() as typeof XRAY_MODES[number]);
+  if (i < 0) return { error: `unknown mode ${mode}`, modes: [...XRAY_MODES] };
+  xrayMode = i;
+  return { mode: XRAY_MODES[xrayMode], modes: [...XRAY_MODES] };
+};
 let xrayWireOn = false, xrayWireAt = 0;
 const wildlifeWire = createWildlifeWire();
 const wireMaterials = createWireMaterialPolicy();
@@ -54795,7 +54803,7 @@ const DIAL_GROUPS: DialGroup[] = [
       // verdict can be argued with on the spot. WIRE strips the streamed
       // world to its triangles: the geometry the truck actually collides
       // with, not the paint over it.
-      dial('xray', 'X-RAY', ['OFF', 'DEPTH', 'WIRE'], 0, (i) => { xrayMode = i; }),
+      dial('xray', 'X-RAY', [...XRAY_MODES], 0, (i) => { xrayMode = i; }),
       /**
        * ── WHICH WATER SYSTEM IS DRAWING ──
        *
