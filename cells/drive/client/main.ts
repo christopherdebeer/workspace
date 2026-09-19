@@ -38400,16 +38400,49 @@ function applyHidden(): void {
   return { surface: surfaceAt(px, pz), wet: wi.wet, depth: +wi.depth.toFixed(2), speed: +wi.speed.toFixed(2),
     fx: +wi.fx.toFixed(2), fz: +wi.fz.toFixed(2), fordM: +fordDepthAt(px, pz).toFixed(2) };
 };
-/** Every term of the ford test at a point — the hydro sample, the road deck,
- *  the datum — because "is this a ford" took more than one round to answer. */
+/**
+ * EVERY TERM OF THE FORD TEST AT A POINT, AND THE TWO AUTHORITIES THAT CAN
+ * DISAGREE ABOUT IT.
+ *
+ * `fordM` is the LEGACY rule — the drawn water's resting level against the
+ * road deck, which is what `legacySurfaceAt` reads — and on an ordinary URL
+ * `surfaceAt` does not reach that rule at all: it asks the substrate contact
+ * first, and the contact's `fluid` is water standing above the chosen
+ * SUPPORT. The two can therefore part company wherever the support is NOT the
+ * deck — beside a carriageway, where the water stands over the ground while
+ * the ribbon is clear of it. ON the deck they agree by construction, because
+ * there the support IS the deck: measured at Chapman's Peak over the 27
+ * drawn-wet points inside a carriageway, 27 of 27 read `water` by both rules
+ * with `fordM` 0.22-0.65 m positive and not one disagreement either way.
+ *
+ * So the row carries the contact's own terms beside the legacy ones:
+ * `support` (which layer the contact chose, and at what height), `drive` (the
+ * deck it had available), `fluid` (the column above the support) and
+ * `crossing` (the registry's word, which is what makes the legacy rule stand
+ * down). `lookup` is the tile's own status, because "the substrate said
+ * ground" and "the substrate had nothing to say" are different facts and used
+ * to arrive as one.
+ *
+ * It reads `productionSubstrate.lookup` directly rather than through
+ * `productionContactAt`, so a console call does not add itself to the
+ * fallback monitor's census.
+ */
 (window as unknown as { __ford?: object }).__ford = (x?: number, z?: number): object => {
   const px = x ?? state.x, pz = z ?? state.z;
   const wet = hydroSys?.sampleRestingSurface(px, pz);
   const e = roadEdge(px, pz);
+  const look = productionSubstrate.lookup(px, pz);
+  const c = look.status === 'available' ? look.contact : undefined;
+  const drive = productionDriveAt(px, pz);
   return { hydroOn: HYDRO_ON, surface: surfaceAt(px, pz),
     wet: wet ? { kind: wet.kind, resting: +wet.restingLevelM.toFixed(2), depthM: +wet.depthM.toFixed(2), shore: +wet.shoreDistanceM.toFixed(1), coverage: +wet.coverage.toFixed(2) } : null,
     edge: e ? { y: +e.y.toFixed(2), out: +e.out.toFixed(2), track: e.track } : null,
-    base: +baseElev.toFixed(2), ground: +sampleHeight(px, pz).toFixed(2), fordM: +fordDepthAt(px, pz).toFixed(2) };
+    base: +baseElev.toFixed(2), ground: +sampleHeight(px, pz).toFixed(2), fordM: +fordDepthAt(px, pz).toFixed(2),
+    crossing: c?.crossing ?? productionCrossings.earthworkAt(px, pz)?.kind ?? null,
+    lookup: look.status === 'available' ? 'available' : (look.reason ?? 'unavailable'),
+    support: c ? { kind: c.support.kind, y: +c.support.yM.toFixed(2), material: c.support.material } : null,
+    drive: drive ? { y: +drive.yM.toFixed(2), material: drive.material } : null,
+    fluid: c?.fluid ? { over: +c.fluid.depthAboveSupportM.toFixed(2), kind: c.fluid.kind } : null };
 };
 (window as unknown as { __contact?: object }).__contact = (x: number, z: number): object => {
   const sk = surfaceAt(x, z);

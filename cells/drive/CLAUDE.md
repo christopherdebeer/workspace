@@ -337,6 +337,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/substrate-views.mjs` | each channel of that field photographed over real ground, with the same-frame-twice floor and the share of the pane each view moves — a channel that paints a flat wash is the failure worth catching (`FIX=`, `CAM=`, `Z=`, `CH=`) | ~6min |
 | `node devtools/chart-bands.mjs` | which layer owns each band of the chart — a hide-diff of the fine world, the coarse shell and the globe over one settled frame, with the same-frame-twice floor beside it, the far/fine seam in luma, and the planet-sun ramp (`SPOT=`, `Z=`, `CLIP=0`) | ~8min |
 | `node devtools/bridge-landmarks.mjs` | who CLAIMED each bridge assembly — an entry's id, OSM's own `bridge:structure`, or the recipe — beside what the painter actually built; fails on a spec that names a form and paints nothing, and on a long span nobody claimed (`FIX=`, `LONG_M=`) | ~2min |
+| `node devtools/ford-why.mjs` | why a track crossing a river has no ford treatment: the crossing registry's word, the layer the contact chose as SUPPORT, and the LEGACY deck rule beside the contact's verdict — the two answer different questions and the disagreement count is the reading (`SPOT=`, `R=`) | ~4min |
 | `node devtools/hydro-phases.mjs` | where a hydro build's milliseconds go, by phase and by ns/texel, with the wet/waterless build split, the wet share of the grid, and what a bound on the full-grid passes would leave to run — READ `BOUND=0` FOR THE MILLISECONDS, since the sizing probe is the same order of work as the passes it sizes and lands in `other` (`DRY=0` is the short-circuit's control, `FIX=`/`SPOT=` the place) | ~1min |
 | `node devtools/hydro-dry.test.mjs` | a waterless tile's short-circuit is the path it replaced, byte for byte, against the revision's own build-tile (`REV=`) | ~10s |
 | `node devtools/substrate-field.test.mjs` | the substrate's shader half and CPU half agree: every constant reaches the GLSL, the kernel's inlined material table matches the source of record, and the domain has the statistics the weights read | instant |
@@ -17814,3 +17815,97 @@ identity-guard sweep). The rule they share: **a verdict must read the fields the
 measurement actually returns, and the surest way to keep it honest is to print
 the data beside it** — which is what made this one obvious the moment anyone
 looked at the log rather than the last line.
+
+## It IS a ford at Chapman's Peak — and a ford draws nothing
+
+Asked from the seat with a frame (`-34.0877 18.4185`, chart, 70° tilt, 20 m
+scale, tile debug on): *I see tracks crossing the river but no ford treatment.
+Is the substrate renderer active? The new default? Why do I see the river
+passing normally over a track?* Three questions; the first two are one line
+each and the third is the unit.
+
+**THE RENDERER IS NOT ON, AND IT IS NOT WHAT A FORD WOULD COME FROM.**
+`resolveProductionSubstrateMode`'s `default:` case is `contact` — contact true,
+render FALSE — so an ordinary URL makes the substrate the authority for
+`surfaceAt`, `waterInfoAt`, `splashWet` and `tyreHeight` and leaves every mesh
+where it was. `?substrate=render` changes who OWNS and COMMITS the meshes
+(terrain, carriageways, structures, hydro detail, and the hydro field's own
+meshes through `deferRendering`) so a tile's picture can be admitted in one
+atomic revision; **it draws no water differently and would not have produced a
+ford.** The same is already recorded from the Pont de Normandie in one
+sentence — *`substrate=render` was not the variable*.
+
+**AND AT THE SEAT'S OWN SPOT IT IS A FORD, ON EVERY TERM.**
+`devtools/ford-why.mjs` sweeps a 440 m box at 4 m and asks `__ford` for the
+registry's word, the layer the contact chose as SUPPORT, the legacy deck rule
+and the contact's verdict at each point. Of the points with drawn water inside
+a carriageway:
+
+| at Chapman's Peak, 27 drawn-wet points ON the deck | |
+|---|---|
+| the crossing registry's word | **ford, 27 of 27** |
+| the layer the contact chose as support | **drive, 27 of 27** |
+| the CONTACT says water | **27** |
+| the LEGACY deck rule says ford (`fordM > 0.01`) | **27** |
+| water where the legacy rule says the deck is clear | **0** |
+| not water where the legacy rule says ford | **0** |
+| the water over the deck (`fordM`) | **0.22 – 0.65 m** |
+
+Two crossings, the river resting a fifth to two thirds of a metre over the
+track, both authorities agreeing to the centimetre, and `substrate mode`
+reading `probes 833 · wetAgreement 833 · wetDisagreement 0`. **So the ford
+fires. What it does not do is LOOK like anything**, and that is the answer to
+the seat's third question: a ford is the one crossing kind whose
+`implementation` is `not-required`, and nothing is drawn for it.
+
+**THE DIPPED DECK EXISTS AND IS LAB-ONLY.** `resolveCrossing` in
+`substrate/kernel.ts` sets `roadDeckM = water.yM + 0.12` for a ford — the deck
+lowered into the water, which is what a drift actually is — and
+`buildSubstrateTile`, its only caller, is imported by
+`client/substrate/lab.ts` and by nothing else. The shipping ribbon's profile
+goes through `resolveProductionDeck`, and **every branch of it RAISES**: the
+chord, a landmark hint, or `waterY + navigableClearance`, with the caller
+writing `profile[station] = Math.max(profile[station], decided.deckY)`. There
+is no lowering branch anywhere in the world path. **No road in this game is
+ever dipped into a river**, so there is no drawn ford to see, at Chapman's Peak
+or anywhere else. That is task #63, and it has never existed outside the lab.
+
+What a ford record DOES change is the terrain and the physics, not the ribbon:
+`channelFloorAt` carves the channel THROUGH the road's own footprint (a `null`
+or `causeway` crossing refuses, which is why an unregistered crossing leaves
+the ground under the track intact), the road earthwork applies where a
+bridge's would not, and `surfaceAt` asks `fordDepthAt` instead of answering
+`road`. Drive into it and you wade, splash and drag; look at it and it is a
+river crossing a track.
+
+### The first two runs of this tool were a measurement of `roadEdge`'s reach
+
+**`roadEdge` RETURNS THE NEAREST SEGMENT IN THE POINT'S 24 m GRID CELL,
+WHATEVER ITS DISTANCE.** `out` is `d − halfWidth` and may be metres positive;
+the function has no reach test at all, because its callers ask "whose
+carriageway is nearest, and how far outside it am I". The first cut of
+`ford-why.mjs` treated a non-null answer as "on a road", and on that test the
+same place reported **344 wet-on-road points, 341 of them fords, 296 with no
+crossing record at all, 305 with the GROUND as support and 126 points where
+the two rules disagreed** — a whole false picture of a contact that fords what
+the geometry leaves clear. Filtered to the carriageway and its 0.8 m shoulder
+— the same reach `findProductionDriveWaterOverlaps` uses — it is 27 points,
+one registry answer, one support layer and zero disagreement.
+
+**The 317 points in between are the river beside the track**, which is most of
+what the seat's frame shows and is drawn exactly right: water over ground,
+ribbon over the water's edge, no crossing because there is no road under it.
+
+The lesson is the file's own, one layer over: **a probe's classification must
+be as tight as the claim it is used to make.** Every number in the first two
+runs was arithmetic about a 24 m grid cell wearing the words "on a road", and
+it was wrong in the direction that makes a working rule look broken. The rows
+carry `out` now and the tool prints the near-road bucket beside the on-deck
+one, so a future reading cannot quietly mix them.
+
+**AND `__hydro().tiles` DOES NOT EXIST**, which the same first cut read into
+its settle gate: `?? 0` turned an absent field into a constant that could
+never move, so a quarter of the three-signal gate was decoration and the line
+printed `hydroTiles 0` beside a river. It reads `buildProf.builds` now. The
+third time this file has recorded a field that prints a plausible number while
+measuring nothing.
