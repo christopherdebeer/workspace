@@ -94,7 +94,12 @@ const run = async () => {
         // forward = the normal rotated by `a`, pointing INTO the wall.
         const fx = -(nx * Math.cos(a) - nz * Math.sin(a));
         const fz = -(nx * Math.sin(a) + nz * Math.cos(a));
-        const heading = Math.atan2(fx, fz);
+        // THE HEADING THAT POINTS A GIVEN WAY, and the first cut of this tool
+        // had it wrong: forward is (sin h, -cos h) — `state.z -= cos(h)·v·dt`
+        // in the integration — not (sin h, cos h). Inverting the wrong pair
+        // mislabelled every angle in the table it printed. `atan2(fx, -fz)`
+        // is the inverse of the real one.
+        const heading = Math.atan2(fx, -fz);
         // Start well inside the wall and let the push-out settle. Starting
         // outside and driving in measures the integrator; starting inside
         // measures the push-out, which is the rule that decides where it rests.
@@ -112,9 +117,10 @@ const run = async () => {
         // gap a driver sees.
         const side = Math.sign(along) || 1;
         const qx = -nx * side, qz = -nz * side;  // unit vector from truck toward wall
-        // the wall direction in the CAR's axes (x across, z along)
-        const cx = qx * Math.cos(heading) - qz * Math.sin(heading);
-        const cz = qx * Math.sin(heading) + qz * Math.cos(heading);
+        // The direction toward the wall in the CAR's axes — across and along.
+        // right = (cos h, sin h), forward = (sin h, -cos h); see hull-collide.ts.
+        const cx = qx * Math.cos(heading) + qz * Math.sin(heading);
+        const cz = qx * Math.sin(heading) - qz * Math.cos(heading);
         const reach = Math.abs(cx) * w.__rigbox().halfWidthM
           + Math.abs(cz) * w.__rigbox().halfLengthM;
         out.push({ deg, centre: +centre.toFixed(3), reach: +reach.toFixed(3),

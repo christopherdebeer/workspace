@@ -62,6 +62,7 @@ import { GLOBE_R, PLANET_SUN_GLSL, globeGeometry, globeHit, globeMaterial, globe
 import { createHydroSystem, extractFlowingHydroShoreSegments, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSurfaceOccluder, type HydroSystem, type OceanCoverage } from './hydro';
 import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipment';
 import { createRigModel, OVERLAND, RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
+import { hullPushFromSegment, hullPointDistanceM, hullRadiusM, type HullBox } from './hull-collide';
 import { createWireMaterialPolicy } from './wire-material';
 import { createWildlifeWire } from './wildlife-wire';
 import { createWildlife } from './wildlife';
@@ -448,7 +449,45 @@ const ZOOM_PLANE_MAX = SIGHT_MAX / (CAM.base
  */
 const GLOBE_ALT_MAX = 20000000;
 const ZOOM_MAX = Math.max(ZOOM_PLANE_MAX, GLOBE_ALT_MAX / CAM.base);
-const CAR_R = 2.4;            // collision circle — a real car's half-diagonal plus a whisker
+/**
+ * THE CIRCLE, AND WHAT IS LEFT OF IT.
+ *
+ * This was the truck's whole extent in every contact test, and the comment
+ * here said "a real car's half-diagonal plus a whisker". Measured off the
+ * drawn model, the hull is 1.08 m half-width and 2.546 m half-length, so its
+ * half-diagonal is 2.766 — this is the half-diagonal MINUS 0.37, and a circle
+ * is the right size at a corner and wrong everywhere else anyway. The contact
+ * tests read `rigHull` now (client/hull-collide.ts); what is left for a circle
+ * is the two jobs that genuinely want one conservative number:
+ *
+ *   RAIL_MIN_W   — whether there is room to put a barrier beside a road at
+ *                  all, which wants the truck's width and a lane and is a
+ *                  question about the WORLD's geometry rather than a contact;
+ *   escapeBuildings — the reach of the eviction walk, where being generous is
+ *                  the point.
+ *
+ * Neither is changed here: both would move what the world looks like, and this
+ * unit is about where the truck stops.
+ */
+const CAR_R = 2.4;
+/**
+ * ── THE TRUCK'S OWN SHAPE, MEASURED FROM THE DRAWN MODEL ──
+ *
+ * Not typed in. `CAR_R` was a number someone wrote down about a car this truck
+ * is not, and it stayed wrong for as long as nothing compared it with the
+ * hull. This is the model's own bounding box in plan, taken once at boot and
+ * again whenever the rig or its loadout changes, so the thing the physics
+ * collides with cannot drift from the thing on screen.
+ *
+ * The starting values are the measured ones, so a frame drawn before the model
+ * has been walked is still collided with the right shape rather than nothing.
+ */
+/** ?hull=0 collides as the circle again — the rollback and the one-build A/B. */
+const HULL_ON = qsOn('hull', true);
+let rigHull: HullBox = { halfWidthM: 1.08, halfLengthM: 2.546 };
+let rigHullR = hullRadiusM(rigHull);
+/** What a stray part did to the box, if anything — see `measureRigHull`. */
+const rigHullRaw = { halfWidthM: 1.08, halfLengthM: 2.546, clamped: false };
 
 // ── geo helpers (local metres around the spawn; x=east, z=south) ───
 
@@ -33162,6 +33201,55 @@ function rebuildRigSilhouette(): void {
 }
 rebuildRigSilhouette();
 scene.add(xray);
+/**
+ * WALK THE DRAWN TRUCK AND TAKE ITS BOX IN PLAN.
+ *
+ * SHEET METAL ONLY, and the rule is the x-ray's rather than a second one: the
+ * headlight cones are ADDITIVE and they are thirty metres long, so a plain
+ * `Box3.setFromObject(car)` reports a half-length of 28.5 m — a reading of the
+ * beam, wearing the word hull. The first run of `__rigbox` did exactly that.
+ *
+ * The wheels' pivots are zeroed for the walk so a steered or spinning wheel
+ * cannot widen the box, and the car's own pose with them: the box wanted is
+ * the MODEL's, in its own frame, and `hull-collide.ts` turns it by the
+ * heading.
+ *
+ * AND IT IS CLAMPED, with the clamp reported. A loadout can hang a winch line
+ * or an aerial off the hull, and a part with a long bounding box would make
+ * the truck collide as a barge. The bounds are wide enough that the shipped
+ * loadouts sit well inside them and narrow enough that a stray part cannot
+ * make the rig uncollidable or unable to fit down a lane; `__rigbox` prints
+ * the raw measurement beside the used one so a clamp that binds is a number
+ * rather than a mystery.
+ */
+function measureRigHull(): void {
+  const savedWheels = rigModel.wheelPivots.map((g) => g.rotation.clone());
+  for (const g of rigModel.wheelPivots) g.rotation.set(0, 0, 0);
+  const savedRot = car.rotation.clone(), savedPos = car.position.clone();
+  car.rotation.set(0, 0, 0); car.position.set(0, 0, 0);
+  car.updateMatrixWorld(true);
+  const box = new THREE.Box3(), tmp = new THREE.Box3();
+  car.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !m.geometry) return;
+    if ((m.material as THREE.Material).blending === THREE.AdditiveBlending) return;
+    m.geometry.computeBoundingBox();
+    tmp.copy(m.geometry.boundingBox as THREE.Box3).applyMatrix4(m.matrixWorld);
+    box.union(tmp);
+  });
+  car.rotation.copy(savedRot); car.position.copy(savedPos);
+  rigModel.wheelPivots.forEach((g, i) => g.rotation.copy(savedWheels[i]));
+  car.updateMatrixWorld(true);
+  const hw = Math.max(Math.abs(box.min.x), Math.abs(box.max.x));
+  const hl = Math.max(Math.abs(box.min.z), Math.abs(box.max.z));
+  if (!Number.isFinite(hw) || !Number.isFinite(hl)) return;   // an empty walk keeps the last good box
+  rigHullRaw.halfWidthM = hw; rigHullRaw.halfLengthM = hl;
+  const cw = clamp(hw, 0.6, 2.0), cl = clamp(hl, 1.5, 4.0);
+  rigHullRaw.clamped = cw !== hw || cl !== hl;
+  rigHull = { halfWidthM: cw, halfLengthM: cl };
+  rigHullR = hullRadiusM(rigHull);
+}
+measureRigHull();
 // ── the rig marks itself out of the shutter ────────────────────────
 // THE MASK RIDES IN rtScene's ALPHA, which nothing downstream reads: the blur,
 // the bright pass and the composite all take .rgb, and the sky and every world
@@ -38178,39 +38266,18 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
  * Returned in the CAR's axes: x across (half-width), z along (half-length), and
  * the half-diagonal beside `CAR_R` so the two can be read against each other.
  */
-(window as unknown as { __rigbox?: object }).__rigbox = (): object => {
-  const saved = rigModel.wheelPivots.map((g) => g.rotation.clone());
-  for (const g of rigModel.wheelPivots) g.rotation.set(0, 0, 0);
-  const savedRot = car.rotation.clone();
-  const savedPos = car.position.clone();
-  car.rotation.set(0, 0, 0);
-  car.position.set(0, 0, 0);
-  car.updateMatrixWorld(true);
-  // SHEET METAL ONLY, and the rule is the one the x-ray already uses rather
-  // than a second one: the headlight cones are ADDITIVE, and they are 30 m
-  // long. `Box3.setFromObject(car)` takes them, so the first run of this probe
-  // reported a half-length of 28.5 m — a reading of the beam, wearing the word
-  // hull. Anything that is not a mesh with geometry contributes nothing.
-  const box = new THREE.Box3();
-  const tmp = new THREE.Box3();
-  car.traverse((o) => {
-    const m = o as THREE.Mesh;
-    if (!m.isMesh || !m.geometry) return;
-    if ((m.material as THREE.Material).blending === THREE.AdditiveBlending) return;
-    m.geometry.computeBoundingBox();
-    tmp.copy(m.geometry.boundingBox as THREE.Box3).applyMatrix4(m.matrixWorld);
-    box.union(tmp);
-  });
-  car.rotation.copy(savedRot); car.position.copy(savedPos);
-  rigModel.wheelPivots.forEach((g, i) => g.rotation.copy(saved[i]));
-  car.updateMatrixWorld(true);
-  const hw = Math.max(Math.abs(box.min.x), Math.abs(box.max.x));
-  const hl = Math.max(Math.abs(box.min.z), Math.abs(box.max.z));
+(window as unknown as { __rigbox?: object }).__rigbox = (remeasure = false): object => {
+  if (remeasure) measureRigHull();
+  const hw = rigHull.halfWidthM, hl = rigHull.halfLengthM;
   return {
     halfWidthM: +hw.toFixed(3), halfLengthM: +hl.toFixed(3),
-    halfDiagM: +Math.hypot(hw, hl).toFixed(3),
-    heightM: +(box.max.y - box.min.y).toFixed(3),
-    carR: CAR_R,
+    halfDiagM: +rigHullR.toFixed(3),
+    // The walk's own answer before the clamp, so a loadout that hangs a long
+    // part off the hull shows as a number rather than as a truck that handles
+    // oddly. `clamped` is the bit to read first.
+    raw: { halfWidthM: +rigHullRaw.halfWidthM.toFixed(3),
+      halfLengthM: +rigHullRaw.halfLengthM.toFixed(3), clamped: rigHullRaw.clamped },
+    hullOn: HULL_ON, carR: CAR_R,
     // What the circle costs in each direction: how far the hull stops SHORT of
     // a barrier it has been pushed off. At a corner this is nearly nothing; at
     // the flank it is the seat's report.
@@ -50099,9 +50166,29 @@ function tick(now: number): void {
       // are treated this way: a building's ya is its ROOF, and skipping walls
       // whose roof is high would drive you through the building.
       if (seg.sl && seg.ya !== undefined && Math.abs(seg.ya - car.position.y) > 4) continue;
+      // ── THE TRUCK IS A BOX, NOT A CIRCLE ──
+      //
+      // `CAR_R` was the whole test and it is one radius: right at a corner and
+      // wrong in every other direction. Measured against the drawn hull, it
+      // stood 1.32 m proud at the FLANK — so running along a guard rail, which
+      // is what a mountain road is, the truck stopped a clear metre and a
+      // third short of it, which is the seat's report to the centimetre — and
+      // 0.15 to 0.35 m INSIDE the wall head-on and obliquely, so a bumper sank
+      // into a façade. One number cannot be both.
+      //
+      // `hullPushFromSegment` is exact (separating axis; in two dimensions
+      // the box's two axes and the segment's one normal are the complete
+      // set), so what comes back is the LEAST translation that separates them
+      // rather than a radial shove. The circle survives as the BROAD PHASE
+      // only — `rigHullR` is the true half-diagonal, 2.766, which the old 2.4
+      // was smaller than.
       const [cx2, cz2] = closestOnSeg(state.x, state.z, seg);
       const d = Math.hypot(state.x - cx2, state.z - cz2);
-      if (d < CAR_R) {
+      const boxPush = HULL_ON && d < rigHullR
+        ? hullPushFromSegment(state.x, state.z, state.heading, rigHull,
+          seg.ax, seg.az, seg.bx, seg.bz)
+        : null;
+      if (HULL_ON ? boxPush !== null : d < CAR_R) {
         // RUBBLE IS NOT A WALL. A ruin's standing masonry costs you — a bite of
         // speed, a knock to the hull, the noise — and then you are through it,
         // exactly as a boulder does. It must not push, because a shell with two
@@ -50118,9 +50205,14 @@ function tick(now: number): void {
           audio.crash(clamp(v / 14, 0.25, 0.9), 'stone');
           continue;
         }
-        const push = (CAR_R - d) / (d || 1e-4);
-        state.x += (state.x - cx2) * push;
-        state.z += (state.z - cz2) * push;
+        if (boxPush) {
+          state.x += boxPush.x;
+          state.z += boxPush.z;
+        } else {
+          const push = (CAR_R - d) / (d || 1e-4);
+          state.x += (state.x - cx2) * push;
+          state.z += (state.z - cz2) * push;
+        }
         hit = true;
         // A GUARD RAIL IS NOT A WALL — and a WALL is not a dead stop either.
         // Both charge by how SQUARE the travel went into them: along a rail
@@ -50164,16 +50256,33 @@ function tick(now: number): void {
       if (!c) continue;
       const dx = state.x - g.position.x, dz = state.z - g.position.z;
       const d = Math.hypot(dx, dz) || 1e-4;
-      const want = c.r + CAR_R;
-      if (d >= want) continue;
       const nx = dx / d, nz = dz / d;          // outward from the centre
-      state.x = g.position.x + nx * want;
-      state.z = g.position.z + nz * want;
+      // THE HULL, NOT A CIRCLE ABOUT IT, for the reason the wall test gives:
+      // a radius stands proud of the truck at the flank and short of it at the
+      // nose. `hullPointDistanceM` is the distance from the BOX to the shell's
+      // centre, so the condition is simply that the box does not reach inside
+      // the rim, and the push is the shortfall along the radial. At kilometre
+      // scale the radial does not turn across the hull, so this is exact.
+      const reach = HULL_ON
+        ? hullPointDistanceM(state.x, state.z, state.heading, rigHull, g.position.x, g.position.z)
+        : d - CAR_R;
+      if (reach >= c.r) continue;
+      const out = c.r - reach;
+      state.x += nx * out;
+      state.z += nz * out;
       // How square the hit was: the component of travel that went INTO the
       // shell, exactly as a guard rail is charged. Driving along the rim is
       // free, driving at it is not.
+      //
+      // AND THE Z SIGN WAS INVERTED HERE, alone in this file. Every other site
+      // integrates `state.z -= cos(h) * speed` and slides along `(cos h,
+      // sin h)`; this read `+cos(h) * speed - sin(h) * slideV`, which is the
+      // truck's velocity reflected about the x axis — so a glancing pass at
+      // the rim was charged as a head-on one and the other way round. Found by
+      // deriving the frame for hull-collide.ts, which is why that frame is
+      // stated once now instead of five times.
       const vx = Math.sin(state.heading) * state.speed + Math.cos(state.heading) * slideV;
-      const vz = Math.cos(state.heading) * state.speed - Math.sin(state.heading) * slideV;
+      const vz = -Math.cos(state.heading) * state.speed + Math.sin(state.heading) * slideV;
       const into = -(vx * nx + vz * nz);       // >0 when moving inward
       if (into > 0) {
         const sq = clamp(into / Math.max(1, Math.abs(state.speed)), 0, 1);
@@ -50212,6 +50321,13 @@ function tick(now: number): void {
   // the hull — and then the truck is past it. One charge per rock per second,
   // so a boulder field rattles rather than bricks.
   if (!real.on && groundedF > 0.25 && Math.abs(state.speed) > 1.2) {
+    // How far a point is from the HULL — zero once it is inside. Every round
+    // obstacle in this block used `hypot(centre) > CAR_R + its own radius`,
+    // which is the circle's fault repeated four times; this is the same test
+    // with the truck's own shape in it, and `?hull=0` keeps the circle.
+    const hullReach = (px: number, pz: number): number => HULL_ON
+      ? hullPointDistanceM(state.x, state.z, state.heading, rigHull, px, pz)
+      : Math.hypot(px - state.x, pz - state.z) - CAR_R;
     const [cx0, cz0] = vegCellOf(state.x, state.z);
     // The offset within the cell is measured in the cell's OWN frame.
     const [tax, taz] = vegAbsOf(state.x, state.z);
@@ -50231,9 +50347,12 @@ function tick(now: number): void {
           // back; logs stay ground clutter the suspension already reads.
           if (site.k !== 'log') {
             const wideV = site.s * Math.max(1, site.sw ?? 1);
-            const dV = Math.hypot(site.x - state.x, site.z - state.z);
+            // THE DISTANCE FROM THE HULL, not from its centre less a radius:
+            // a trunk beside the flank was charged 1.3 m before the panel
+            // reached it, and one dead ahead 0.15 m after the bumper had.
+            const dV = hullReach(site.x, site.z);
             const trunked = (site.h ?? 0) > 0 || site.k === 'snag';
-            if (trunked && dV < CAR_R + 0.45 * site.s) {
+            if (trunked && dV < 0.45 * site.s) {
               if (site.hit === undefined || nowMs - site.hit > 900) {
                 site.hit = nowMs;
                 const v = Math.abs(state.speed);
@@ -50241,7 +50360,7 @@ function tick(now: number): void {
                 rig.hull = clamp(rig.hull - 0.002 * Math.min(1, v / 12), 0, 1);
                 audio.whip(clamp(v / 12, 0.2, 1), true);
               }
-            } else if (dV < CAR_R + wideV * 0.8) {
+            } else if (dV < wideV * 0.8) {
               brushAmt += site.k === 'bush' || site.k === 'fern' ? 0.5 : 0.3;
               if ((site.hit === undefined || nowMs - site.hit > 700) && Math.random() < 0.35) {
                 site.hit = nowMs;
@@ -50258,7 +50377,7 @@ function tick(now: number): void {
         // off the uniform scale alone would have a pancake hitting like a tor.
         const wide = site.s * Math.max(1, site.sw ?? 1);
         const tall = site.s * (site.sy ?? 1);
-        if (Math.hypot(site.x - state.x, site.z - state.z) > CAR_R + wide * 0.85) continue;
+        if (hullReach(site.x, site.z) > wide * 0.85) continue;
         if (site.hit !== undefined && nowMs - site.hit < 1000) continue;
         site.hit = nowMs;
         const v = Math.abs(state.speed);
@@ -50272,7 +50391,7 @@ function tick(now: number): void {
       // reach needs no scale factor and the bite runs a shade harder — wet
       // stone at bumper height is not a pebble in the grass.
       for (const rock of rapidRocks.get(`${gx},${gz}`) ?? []) {
-        if (Math.hypot(rock.x - state.x, rock.z - state.z) > CAR_R + rock.s) continue;
+        if (hullReach(rock.x, rock.z) > rock.s) continue;
         if (rock.hit !== undefined && nowMs - rock.hit < 1000) continue;
         rock.hit = nowMs;
         const v = Math.abs(state.speed);
@@ -57541,6 +57660,10 @@ function selectRig(model: RigModelId, loadout: RigLoadoutId, equipment: RigEquip
   Object.assign(EYE, next.anchors.eye);
   ghostCab(ghost);
   rebuildRigSilhouette();
+  // A DIFFERENT TRUCK IS A DIFFERENT BOX. The hull the physics collides with
+  // is the drawn model's own, so it is re-walked here rather than left at the
+  // last rig's — which is the whole reason it is measured instead of typed.
+  measureRigHull();
   specCache = null;
   old.dispose();
   try { localStorage.setItem('drive.rig-model', JSON.stringify({ model, loadout, equipment: selected })); } catch { /* session still works */ }

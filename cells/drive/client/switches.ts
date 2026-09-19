@@ -243,6 +243,8 @@ export const SWITCHES = [
     note: 'shrub=0 removes the sward’s knee-high layer' },
   { id: 'swardhop', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'swardhop=0 lets a hop carry the last place’s grass field, as it did' },
+  { id: 'hull', kind: 'toggle', marks: ['legacy'], fallback: 'on',
+    note: 'hull=0 collides the truck as the 2.4 m circle again instead of its own measured box — the A/B for a barrier that stops you 1.3 m short or lets your bumper into a wall' },
   { id: 'bldface', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'bldface=0 leaves every building extrusion inside-out, as it was' },
   { id: 'bldpara', kind: 'toggle', marks: ['legacy'], fallback: 'on',

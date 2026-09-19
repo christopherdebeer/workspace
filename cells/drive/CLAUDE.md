@@ -327,7 +327,8 @@ Nothing here is fast. Budget for it.
 | `node devtools/imp-demand.mjs` | what the impostor atlas was ASKED for beside what it holds: the ceiling computed offline from the bake (pure, instant, no browser), then the live census by key — refused keys with their tree counts, baked slots with theirs, and how many of the eighteen are serving nobody. `KM=0 FIX=` measures one arrived world; `SPOT=` with a leg drives across districts and needs a device or a warm relay to mean anything | ~2min |
 | `node devtools/imp-census.mjs` | **why a manifested tree has no representation at all** — the gather's EXITS by name, with the ones large enough to be seen counted apart (`h · 307 / d > 1` art pixel). Sweeps the DENSITY dial and FAILS on any perceptible NONE, and on a density exit with an empty far ring: an invariant is only demonstrated by trying to break it. `FIX=`, `DENS=0,2,5`, `DIALS='imprch=2'` | ~2min |
 | `node devtools/sward-hop.mjs` | whether a world hop stands the sward down, or carries the last place's committed field onto the new ground — the CHECKSUM of the committed data either side of a hop, with the height residual against the ground now under it beside it (`ARGS='swardhop=0'` is the one-build control, `FROM=`/`TO=`, `DRIVE=` to let the distance trigger fire) | ~3min |
-| `node devtools/hit-gap.mjs` | how far from a barrier the truck's own HULL stops, by the angle it is turned — the collision circle measured against the box it stands in for (`FIX=`, `SPOT=`, `KIND=rail\|wall`) | ~2min |
+| `node devtools/hit-gap.mjs` | how far from a barrier the truck's own HULL stops, by the angle it is turned — the push-out let settle, then the gap to the drawn box (`ARGS='hull=0'` is the one-build control, `FIX=`, `SPOT=`, `KIND=rail\|wall`) | ~2min |
+| `node devtools/hull-collide.test.mjs` | the truck's own shape in pure node: the frame against main.ts's own integration TEXT, the support function, the point distance past a corner, the segment push-out, rotation invariance of the whole scene, and the circle it replaces as the control | instant |
 | `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
@@ -16875,6 +16876,136 @@ this box's proxy CA is trusted by node and curl but not by Chromium's NSS
 store, and there is no `certutil` here to add it. Disabling verification to
 get a green line is not a verification. So the live check is the artifact's:
 the deployed bundle is the bundle that was measured.
+
+## The truck is a box, and every collision in this game asked a circle
+
+Reported from the seat: *we need to deep dive road barrier and building
+collisions — seems to trigger too far away, like a metre from barrier.* It
+does, and the number is exact.
+
+**EVERY CONTACT TEST REACHED `CAR_R`** — one radius about the truck's centre —
+and its own comment called it *"a real car's half-diagonal plus a whisker"*.
+The wall push-out, the cover shell, trunks, foliage, boulders and the rapid
+rocks all read it. A circle that circumscribes a rectangle is the right size at
+ONE point, the corner; everywhere else it stands proud of the hull, and at the
+FLANK, where a long vehicle is narrow, by the most.
+
+**AND NOTHING HAD EVER MEASURED THE HULL.** `__rigbox()` walks the drawn model
+and takes its box in plan: **1.08 m half-width, 2.546 m half-length**, so the
+half-diagonal is **2.766 m** and `CAR_R` is **2.4** — the comment is wrong
+twice, since 2.4 is the half-diagonal MINUS 0.37. What that buys is a fault in
+both directions at once, and `devtools/hit-gap.mjs` reads it off the rule
+rather than inferring it: the truck is placed inside a rail and the push-out is
+let settle, then the distance from the barrier to the nearest part of the
+truck's own hull is taken as a function of the angle it is turned. Same rail
+(7.64 m, at Chapman's Peak), same build, `?hull=0` the only difference:
+
+| angle onto the rail | `?hull=0` | the hull |
+|---|---|---|
+| 0° head-on | **−0.146 m** | **0.000** |
+| 15° | **−0.339** | 0.000 |
+| 30° | **−0.345** | 0.000 |
+| 45° | −0.164 | 0.000 |
+| 60° | +0.192 | 0.000 |
+| 75° | +0.698 | 0.000 |
+| **90° alongside** | **+1.320** | **0.000** |
+
+**THE 1.32 m IS THE SEAT'S REPORT TO THE CENTIMETRE**, and it is the case a
+mountain road is made of: running along a guard rail, the truck stopped a clear
+metre and a third short of it. The negative rows are the same fault from the
+other side — driving INTO a wall, the bumper sank up to 0.35 m into the
+masonry. One number cannot be both.
+
+### `client/hull-collide.ts`, and why it is a module
+
+The shape is useless without the FRAME, and the frame was written out by hand
+at five sites in main.ts. **One of them had it wrong.** Taken from the
+integration itself —
+
+```ts
+state.x += Math.sin(state.heading) * state.speed * dt;
+state.z -= Math.cos(state.heading) * state.speed * dt;
+state.x += cH * slideV * dt;   // (cos, sin) is the car's own right
+state.z += sH * slideV * dt;
+```
+
+— **forward is (sin h, −cos h)** and **right is (cos h, sin h)**, which agrees
+with the drawn model (`car.rotation.set(pitch, −heading, roll)` maps local +x
+to (cos h, sin h) and local −z, where the headlight target sits, to
+(sin h, −cos h)) and with `toLocal`'s own declaration that north is −z. The
+cover shell's *"how square was the hit"* computed `vz = cos(h)·speed −
+sin(h)·slideV` where every other site writes `−cos(h)·speed`: **the truck's
+velocity reflected about the x axis**, so a glancing pass at the rim was
+charged as head-on and the other way round. Fixed here, and found only by
+deriving the frame for the module.
+
+- **THE PUSH-OUT IS SEPARATING-AXIS AND EXACT.** In two dimensions the axis set
+  is complete — the box's own two axes and the segment's one normal — so what
+  comes back is the LEAST translation that separates them rather than a radial
+  shove. **A CAPSULE WAS THE OBVIOUS CHEAPER ANSWER AND IS WRONG AT THE
+  CORNER**: a spine of `hl − hw` with radius `hw` under-reaches the true box
+  along the corner direction by **0.32 m**, so a bumper would sink into a
+  façade at exactly the angle the old circle was least wrong about.
+- **A DEGENERATE SEGMENT IS A POINT**, and a point has no edge normal, so the
+  two box axes alone are complete for it. Skipping the third axis there is not
+  a shortcut: `n̂` is a division by nothing.
+- **A ROUND OBSTACLE ASKS A DIFFERENT QUESTION.** A trunk, a boulder and the
+  rim of a cover want the distance from the BOX, which is the point clamped
+  into the box's frame — not the support function, which over-reaches near a
+  corner. `hullPointDistanceM` is that, and it is zero once the point is
+  inside.
+- **THE CIRCLE SURVIVES AS THE BROAD PHASE**, at `hullRadiusM` (2.766) rather
+  than `CAR_R` (2.4) — which the old value was *smaller* than, so a corner
+  contact could be gathered and then missed.
+
+### The hull is measured, not typed
+
+`CAR_R` was a number someone wrote down about a car this truck is not, and it
+stayed wrong for as long as nothing compared it with the model.
+`measureRigHull()` walks the drawn truck at boot and again on every rig or
+loadout change, so the thing the physics collides with cannot drift from the
+thing on screen.
+
+- **SHEET METAL ONLY, and the rule is the x-ray's rather than a second one.**
+  The headlight cones are ADDITIVE and thirty metres long, so a plain
+  `Box3.setFromObject(car)` reports a half-length of **28.5 m** — a reading of
+  the beam, wearing the word hull, which is what the first run of `__rigbox`
+  printed. The wheels' pivots are zeroed for the walk so a steered wheel cannot
+  widen the box.
+- **AND IT IS CLAMPED, with the clamp reported.** A loadout can hang a winch
+  line or an aerial off the hull; `__rigbox().raw.clamped` is the bit to read
+  before believing a truck that handles like a barge.
+
+### What is NOT changed, and why
+
+`CAR_R` is still read by two things and both genuinely want one conservative
+number: **`RAIL_MIN_W`** (`2·CAR_R + 2.0`, whether there is room to put a
+barrier beside a road at all — a question about the WORLD's geometry, and
+changing it moves where rails appear), and **`escapeBuildings`**'s eviction
+reach, where being generous is the point. Neither is a contact.
+
+**AND THE COST IS UNMEASURED ON A DEVICE.** The wall test went from one
+`hypot` to a transform and three axis overlaps per candidate segment, bounded
+by the same one-cell `wallGrid` lookup as before; the round obstacles went from
+one `hypot` to one transform and a clamp each, at the same call counts. The
+harness cannot price a per-frame CPU cost. The row to read on the next dump is
+`sim:collide`.
+
+Held by `devtools/hull-collide.test.mjs` (pure node, 34 checks: the frame
+against main.ts's own integration TEXT, the support function at the nose, the
+flank and 45°, the point distance past a corner, the push-out both ways, a
+degenerate segment, **rotation invariance of the whole scene** — the claim a
+hand-derived frame breaks, and the one that caught the tool's own inverted
+heading — and the control that the circle it replaces would have pushed a truck
+a metre clear of the flank). `devtools/hit-gap.mjs` is the in-world reading.
+
+**AND THE TOOL HAD THE SAME FRAME ERROR ITS SUBJECT DID.** Its first table
+inverted the heading with `atan2(fx, fz)` — the inverse of (sin h, cos h) —
+where the real forward is (sin h, −cos h), so every angle it printed was
+mislabelled. The two extreme rows were right regardless (they are `hl` and
+`hw`), which is exactly why it was not obvious. **A frame written out twice is
+a frame that will be written out wrong once**, which is the argument for the
+module, met inside the instrument built to measure it.
 
 ## A hop carried the last place's grass, and the distance trigger could not see it
 
