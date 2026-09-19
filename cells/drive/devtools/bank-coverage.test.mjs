@@ -154,6 +154,85 @@ console.log('the answer does not depend on the order the segments arrive in:');
   check(sa === sc, 'and so does shuffling it', `${a.length} vs ${c.length}`);
 }
 
+console.log('the budget is spent ACROSS the chains, not down the list:');
+{
+  // FIFTEEN CHAINS OF TWENTY METRES under a budget of forty. The rule this
+  // replaces solved one spacing from the shoreline's own length (300/40 =
+  // 7.5 m) and had each chain round `20 / 7.5` INDEPENDENTLY to three — 45
+  // stations asked for against a ceiling of 40, so the last chains were cut
+  // off part way down the list and the shore they stand on was left to the
+  // carve. The census read that as exactly 512 at four unrelated fixtures,
+  // and a unit test of ONE chain under the cap can never see it.
+  const many = [];
+  for (let c = 0; c < 15; c++) {
+    const z0 = 20 + c * 24;
+    for (let z = z0; z < z0 + 20 - 1e-9; z += 4) {
+      many.push({ a: { x: 200, z, groundM: 0 }, b: { x: 200, z: z + 4, groundM: 0 } });
+    }
+  }
+  const BUDGET = 40;
+  const r = resolveHydroBankStations(field, many, {
+    coverageCut: 0.5, minSpacingM: 0.5, maxStations: BUDGET,
+  });
+  const byChain = new Map();
+  for (const st of r.stations) byChain.set(st.chainId, (byChain.get(st.chainId) ?? 0) + 1);
+  check(r.stations.length === BUDGET, 'the total IS the budget, by construction',
+    `${r.stations.length} of ${BUDGET} · ${r.stats.chains} chains · dropped ${r.stats.dropped}`);
+  check(r.stats.dropped === 0, 'so the ceiling never fires', `dropped ${r.stats.dropped}`);
+  check(byChain.size === r.stats.chains && [...byChain.values()].every((n) => n >= 1),
+    'and every chain is served — none is cut off part way down the list',
+    `${byChain.size} of ${r.stats.chains} chains, counts ${[...byChain.values()].join(',')}`);
+  // THE COARSEST CHAIN'S SPACING, against the bound the allocation's own shape
+  // gives it: a chain takes at least `floor(R·L/total)` past its free station,
+  // where R is what is left after one each, so no chain can be described
+  // coarser than the budget's mean spacing times budget/R. Derived from the
+  // fixture rather than typed, or it is a bar moved to pass.
+  const spacings = [];
+  for (const [id, n] of byChain) {
+    const sts = r.stations.filter((s) => s.chainId === id).sort((a, b) => a.z - b.z);
+    const span = (sts[0].alongBackM ?? 0) + (sts[sts.length - 1].alongFwdM ?? 0)
+      + (sts.length > 1 ? sts[sts.length - 1].z - sts[0].z : 0);
+    spacings.push(span / n);
+  }
+  const coarsest = Math.max(...spacings);
+  const bound = r.stats.shoreM / (BUDGET - r.stats.chains);
+  check(coarsest <= bound + 1e-6, "no chain is described coarser than the allocation's own bound",
+    `coarsest ${coarsest.toFixed(2)} m · bound ${bound.toFixed(2)} m · reported ${r.stats.spacingM}`);
+  check(Math.abs(r.stats.spacingM - coarsest) < 0.02,
+    'and the reported spacing is that coarsest chain, not an average over the total',
+    `${r.stats.spacingM} vs ${coarsest.toFixed(2)}`);
+
+  // THE CONTROL: the rule it replaces, on this fixture, run here rather than
+  // asserted about. A check that has not been shown to fail on the fault it
+  // names is decoration.
+  const spacing = Math.max(0.5, Math.max(0.5, r.stats.shoreM / BUDGET));
+  let asked = 0, served = 0, budgetLeft = BUDGET;
+  for (let c = 0; c < r.stats.chains; c++) {
+    const n = Math.max(1, Math.round(20 / spacing));
+    asked += n;
+    const got = Math.max(0, Math.min(n, budgetLeft));
+    budgetLeft -= got;
+    if (got >= n) served++;
+  }
+  check(asked !== BUDGET && served < r.stats.chains,
+    'CONTROL: the per-chain rounding asks past the budget and truncates the tail',
+    `asked ${asked} for ${BUDGET} · ${served} of ${r.stats.chains} chains served whole`);
+
+  // AND `minSpacing` CAPS A CHAIN'S COUNT, NOT ITS SPACING. Marching squares
+  // emits a segment per texel edge; a bank does not vary faster than the field
+  // can see, so a chain that cannot spend its share hands it back rather than
+  // being sampled finer than the evidence.
+  const fine = resolveHydroBankStations(field, many, {
+    coverageCut: 0.5, minSpacingM: 8, maxStations: BUDGET,
+  });
+  const perChain = new Map();
+  for (const st of fine.stations) perChain.set(st.chainId, (perChain.get(st.chainId) ?? 0) + 1);
+  const overFine = [...perChain.values()].filter((n) => n > 1 && 20 / n < 8 - 1e-9).length;
+  check(overFine === 0 && fine.stations.length < BUDGET,
+    'a chain capped by minSpacing hands its share back rather than oversampling',
+    `${fine.stations.length} of ${BUDGET} spent · ${overFine} chains finer than 8 m`);
+}
+
 console.log('the coverage is reported, not assumed:');
 {
   const r = solve(SEGS);

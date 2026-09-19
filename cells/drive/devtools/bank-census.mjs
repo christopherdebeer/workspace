@@ -31,7 +31,10 @@ const ARGS = process.env.ARGS ? `&${process.env.ARGS}` : '';
 if (ARGS) console.log(`switches: ${process.env.ARGS}`);
 mkdirSync('/tmp/drive-tools/bank-census', { recursive: true });
 const rows = [];
-console.log('fixture           drawn  fringe interior  prot   over med/p90/max        reach med/p90  tiles/stn   ms');
+// tiles/stn are the tiles and stations REACHING THIS WINDOW, not the ring's
+// (the probe reports both); spc is the coarsest chain spacing among them and
+// unc the shore those tiles could not describe.
+console.log('fixture           drawn  fringe interior  prot   over med/p90/max        reach med/p90  tiles/stn    spc     unc   ms');
 for (const fixture of fixtures) {
   let d;
   try {
@@ -51,6 +54,7 @@ for (const fixture of fixtures) {
     `   ${String(o.med).padStart(5)}/${String(o.p90).padStart(5)}/${String(o.max).padStart(5)}`,
     `      ${String(re.med).padStart(5)}/${String(re.p90).padStart(5)}`,
     `  ${String(r.bankTiles ?? 0).padStart(3)}/${String(r.bankStations ?? 0).padStart(5)}`,
+    String(r.bankSpacingWorstM ?? 0).padStart(6), String(r.bankUncoveredM ?? 0).padStart(7),
     String(ms).padStart(5));
   if (d.errors.length) console.log(`  page errors: ${JSON.stringify(d.errors).slice(0, 160)}`);
   await d.close();

@@ -15,7 +15,7 @@
  * backend.
  */
 import { sampleFieldSurface } from './hydro/field-sample';
-import { resolveHydroBankStations, packBankStations, BANK_PROFILE_VERSION, type HydroBankResult } from './hydro/bank-profile';
+import { resolveHydroBankStations, packBankStations, BANK_PROFILE_VERSION, BANK_STRIDE, type HydroBankResult } from './hydro/bank-profile';
 import type { HydroTileField } from './hydro/types';
 import type { HydroShoreSegment } from './hydro/shore-contour';
 import * as THREE from 'three';
@@ -37528,7 +37528,7 @@ function nearestChannelSeg(x: number, z: number, reachM = 120): { seg: Seg; t: n
     // is the telemetry dump's `look` row arrived at from the other side.
     bankVer: BANK_PROFILE_VERSION,
     bankOn: BANK_ON,
-    bankStations: bankPacket ? (bankPacket.length / 12) | 0 : 0,
+    bankStations: bankPacket ? (bankPacket.length / BANK_STRIDE) | 0 : 0,
     bankStats: key ? hydroBankStats.get(key) ?? null : null,
     fringeM: +bankFringeM(x, z).toFixed(1),
     stations,
@@ -37580,13 +37580,52 @@ function nearestChannelSeg(x: number, z: number, reachM = 120): { seg: Seg; t: n
   // The version rides here too: a fringe distribution is exactly the kind of
   // number that gets quoted against a later one, and the resolver is the thing
   // that will have moved between them.
-  let stationsHere = 0;
-  for (const packed of hydroBanks.values()) stationsHere += (packed.length / 12) | 0;
+  //
+  // THE PACKET'S OWN STRIDE, NOT A TYPED NUMBER. Both probes divided by 12
+  // and the packet has been 15 floats a station since the chains landed, so
+  // every station count printed since then was 25% high — and the census read
+  // 640 at four unrelated fixtures, which is 1.25 x 512 and 512 is the
+  // resolver's own cap. A count equal to its own budget wearing a disguise,
+  // which is the third site in this unit to have been left on stride 12.
+  //
+  // AND IT IS SCOPED TO THE WINDOW, like every other number in this table. It
+  // summed every tile the ring holds, so a count taken beside a 384 m census
+  // was a count over a few square kilometres — two populations in one row,
+  // which is how the stride fault went unread for as long as it did. A
+  // station carries its own x and z in the same local metres the window is
+  // stated in, so no tile geometry is needed to ask the question.
+  let stationsNear = 0, stationsRing = 0;
+  const statTiles: Array<[string, Float32Array]> = [];
+  for (const [key, packed] of hydroBanks) {
+    const here = (packed.length / BANK_STRIDE) | 0;
+    stationsRing += here;
+    let near = 0;
+    for (let i = 0; i < here; i++) {
+      const o = i * BANK_STRIDE;
+      if (Math.abs(packed[o] - cx) <= halfM && Math.abs(packed[o + 1] - cz) <= halfM) near++;
+    }
+    if (near > 0) { stationsNear += near; statTiles.push([key, packed]); }
+  }
+  // The coarsest spacing among the tiles that actually reach this window, and
+  // the shore they could not describe — the pair the resolver reports per
+  // tile, aggregated the way a reader of this table would aggregate it. A
+  // spacing far over the field's texel is a bank described coarser than the
+  // water it follows, whatever the station count beside it says.
+  let spacingWorst = 0, dropped = 0, uncoveredM = 0, shoreM = 0;
+  for (const [key] of statTiles) {
+    const st = hydroBankStats.get(key);
+    if (!st) continue;
+    spacingWorst = Math.max(spacingWorst, st.spacingM);
+    dropped += st.dropped; uncoveredM += st.uncoveredM; shoreM += st.shoreM;
+  }
   return {
     window: [halfM, n], drawn, buried: { fringe, interior, protected: protectedN },
     over: stat(over), reach: stat(reach), worst: worst.slice(0, 8),
     bankVer: BANK_PROFILE_VERSION, bankOn: BANK_ON,
-    bankTiles: hydroBanks.size, bankStations: stationsHere,
+    bankTiles: statTiles.length, bankTilesRing: hydroBanks.size,
+    bankStations: stationsNear, bankStationsRing: stationsRing,
+    bankSpacingWorstM: +spacingWorst.toFixed(2),
+    bankDropped: dropped, bankShoreM: +shoreM.toFixed(1), bankUncoveredM: +uncoveredM.toFixed(1),
   };
 };
 /**

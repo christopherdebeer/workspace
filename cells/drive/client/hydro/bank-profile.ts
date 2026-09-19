@@ -160,10 +160,14 @@ export interface HydroBankOptions {
    * census read exactly 512 on one tile and exactly 1024 on two — a count that
    * equals its own budget is not a count, and what it was measuring was a
    * shoreline cut off part way along with the carve still owning the rest.
-   * The spacing is solved from the shoreline's OWN length against this budget
-   * instead, so a long shore is described coarsely end to end rather than
-   * finely for its first few hundred metres. The ceiling stays as a backstop
-   * and `dropped` says when it fired, which should now be never.
+   * The second solved ONE spacing from the shoreline's own length and had each
+   * chain round `L / spacing` independently, so the total landed at the budget
+   * plus about half a station a chain and the tail was dropped — the census
+   * then read exactly 512 at four unrelated fixtures, the same signature one
+   * rule further on. It is allocated ACROSS the chains now
+   * (`allocateChainStations`), so the total IS the budget by construction and
+   * no chain is cut off part way along. The ceiling stays as a backstop and
+   * `dropped` says when it fired, which should now be never.
    */
   maxStations?: number;
   /** Minimum along-shore spacing. Marching squares emits a segment per texel
@@ -182,7 +186,11 @@ export interface HydroBankResult {
     dropped: number;
     /** The shoreline's own length in this tile, and the along-shore spacing
      *  the budget bought — read the pair, because a spacing far over the
-     *  field's texel is a bank described coarser than the water it follows. */
+     *  field's texel is a bank described coarser than the water it follows.
+     *  The spacing is per CHAIN now and this is the COARSEST of them: it is
+     *  the worst-described stretch of this shoreline, which is the figure a
+     *  reader wants against the field's own texel. One number derived from
+     *  the total would hide exactly the chain the budget could not afford. */
     shoreM: number;
     spacingM: number;
     /** THE COVERAGE, REPORTED RATHER THAN ASSUMED. `dropped: 0` says the
@@ -373,6 +381,70 @@ function chainAt(c: ShoreChain, s: number): { x: number; z: number; tx: number; 
 }
 
 /**
+ * Spend the station budget ACROSS the chains, by largest remainder.
+ *
+ * The rule this replaces solved one spacing from the shoreline's own length
+ * and then had each chain round `L / spacing` INDEPENDENTLY, so the total
+ * landed at the budget plus about half a station a chain and whatever the
+ * ceiling then refused was the tail of the list — the coverage the chains
+ * were built to guarantee held inside a chain and was lost at the end of it.
+ * A unit test could not see it either, because a fixture of one chain under
+ * the cap never reaches the ceiling at all.
+ *
+ * So: one station each, so no chain is unserved while another is sampled
+ * finely; the rest in proportion to length; and the fraction left over to
+ * whoever stands nearest a whole station. The total is then the budget by
+ * construction rather than by a rounding that happened to go the right way.
+ *
+ * `minSpacing` caps a chain's COUNT rather than its spacing, for the same
+ * reason the budget does: marching squares emits a segment per texel edge and
+ * a bank does not vary faster than the field can see. A chain that cannot
+ * spend its share hands it back and the loop re-divides it among the chains
+ * that can — the water-filling the tree budget already runs, and here for the
+ * same reason it is there: a proportional cut punishes whoever is short of
+ * candidates, which is exactly the chain that needed the stations least.
+ */
+function allocateChainStations(
+  lens: readonly number[],
+  budget: number,
+  minSpacing: number,
+): number[] {
+  const n = lens.length;
+  const out = new Array<number>(n).fill(0);
+  if (n === 0 || budget <= 0) return out;
+  const fine = Math.max(0.5, minSpacing);
+  const cap = lens.map((L) => Math.max(1, Math.floor(L / fine)));
+  // LONGEST FIRST for the one-each pass, so a budget short of the chain count
+  // spends itself on the shore it can actually describe rather than on
+  // whichever chains the weld happened to emit first. A chain that gets none
+  // is not dropped silently: its whole length lands in `uncoveredM`.
+  const order = lens.map((_, i) => i).sort((a, b) => lens[b] - lens[a] || a - b);
+  let left = budget;
+  for (const i of order) { if (left <= 0) break; out[i] = 1; left--; }
+  while (left > 0) {
+    let pool = 0;
+    for (let i = 0; i < n; i++) if (out[i] > 0 && out[i] < cap[i]) pool += lens[i];
+    if (pool <= 0) break;
+    const frac: Array<{ i: number; f: number }> = [];
+    let handed = 0;
+    for (let i = 0; i < n; i++) {
+      if (out[i] <= 0 || out[i] >= cap[i]) continue;
+      const want = left * lens[i] / pool;
+      const take = Math.min(Math.floor(want), cap[i] - out[i]);
+      out[i] += take; handed += take;
+      if (out[i] < cap[i]) frac.push({ i, f: want - Math.floor(want) });
+    }
+    left -= handed;
+    if (left <= 0) break;
+    frac.sort((a, b) => b.f - a.f || a.i - b.i);
+    let gave = 0;
+    for (const e of frac) { if (left <= 0) break; out[e.i]++; left--; gave++; }
+    if (handed === 0 && gave === 0) break;
+  }
+  return out;
+}
+
+/**
  * Solve a bank at every accepted shoreline segment.
  *
  * The segments are the caller's: flowing water now, a lake's or a coast's
@@ -390,12 +462,20 @@ export function resolveHydroBankStations(
   const maxStations = options.maxStations ?? 512;
   const minSpacing = Math.max(0, options.minSpacingM ?? 0);
   const chains = assembleShoreChains(segments);
+  const lens = chains.map((c) => c.cum[c.cum.length - 1]);
   let shoreM = 0;
-  for (const c of chains) shoreM += c.cum[c.cum.length - 1];
-  // THE SPACING IS SOLVED FROM THE SHORELINE'S OWN LENGTH against the budget,
-  // so a long shore is described coarsely end to end rather than finely for
-  // its first few hundred metres.
-  const spacing = Math.max(0.5, Math.max(minSpacing, maxStations > 0 ? shoreM / maxStations : 0));
+  for (const L of lens) shoreM += L;
+  // THE BUDGET IS SPENT ACROSS THE CHAINS, so the total is the budget by
+  // construction and every chain is described end to end rather than the list
+  // being cut off part way down it.
+  const alloc = allocateChainStations(lens, maxStations, minSpacing);
+  // …and the spacing is therefore per chain. What is reported is the COARSEST
+  // of them: the worst-described stretch of this shoreline, which is the
+  // figure to read against the field's own texel.
+  let spacing = 0;
+  for (let i = 0; i < lens.length; i++) {
+    if (alloc[i] > 0) spacing = Math.max(spacing, lens[i] / alloc[i]);
+  }
   const stations: HydroBankStation[] = [];
   const stats: HydroBankResult['stats'] = {
     segments: segments.length, stations: 0, dropped: 0, resolved: 0, nothingToCut: 0,
@@ -408,12 +488,15 @@ export function resolveHydroBankStations(
 
   for (let ci = 0; ci < chains.length; ci++) {
     const c = chains[ci];
-    const L = c.cum[c.cum.length - 1];
-    // SAMPLED BY ARC LENGTH, and the count rounded so the intervals TILE the
-    // chain exactly: n stations at (i + 1/2)·L/n own [i·L/n, (i+1)·L/n], which
-    // abut by construction and cover the whole of it. That is the property the
-    // greedy rejection could not offer at any spacing.
-    const n = Math.max(1, Math.round(L / spacing));
+    const L = lens[ci];
+    // SAMPLED BY ARC LENGTH, at the count the allocation bought, so the
+    // intervals TILE the chain exactly: n stations at (i + 1/2)·L/n own
+    // [i·L/n, (i+1)·L/n], which abut by construction and cover the whole of
+    // it. That is the property the greedy rejection could not offer at any
+    // spacing. A chain the budget could not reach at all gets none, and its
+    // length is counted uncovered rather than half-described.
+    const n = alloc[ci];
+    if (n <= 0) continue;
     const h = L / n;
     // Pass one: where each station stands, which way is dry, and what the
     // water is doing there — the level has to be known at the NEIGHBOURS
