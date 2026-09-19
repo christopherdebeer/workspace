@@ -2238,6 +2238,9 @@ const SHORE_ON = qsOn('shore', true);
  *  the drawn waterline comes back — the control every bank-census reading is
  *  taken against. */
 const BANK_ON = qsOn('bank', true);
+/** The rig's occluded-silhouette overlay, retired to a flag — see the block
+ *  above `rebuildRigSilhouette` for what it drew and why it stopped. */
+const RIG_XRAY = qsOn('rigxray', false);
 /** The sward reads the substrate's classification — the brief's own "sward and
  *  terrain from the same field". Off restores the sward that thins for cover,
  *  altitude and the bank and knows nothing about outcrop, which is the exact
@@ -32948,6 +32951,22 @@ car.add(headSpot, headSpot.target);
 car.traverse((o) => { if ((o as THREE.Mesh).isMesh) castIfSolid(o); });
 scene.add(car);
 // ── the x-ray silhouette: the rig, wherever something hides it ─────
+//
+// RETIRED, AND BEHIND `?rigxray=1` (2026-09-19, from the seat). It did what
+// it was built to do and what it was built to do turned out not to be worth
+// having: the pixels it lit were overwhelmingly the tyre contact patch — a
+// few pixels of hull behind the road surface the wheels are standing on —
+// and the sliver behind a crown clipping the cab. Both are places where
+// nothing is hidden that anyone needed to see, so a teal dither there read
+// as a rendering fault rather than as an aid. Off, `rebuildRigSilhouette`
+// builds no meshes at all, so the group is empty and costs no draw.
+//
+// The mechanism is kept rather than deleted because it is the right one and
+// was expensive to get right: the depth buffer already knows, per pixel,
+// whether the truck is occluded, and the two traps below (self-overdraw, and
+// additive parts glowing through hillsides) are solved. Anything that later
+// wants to answer "where IS the rig" starts here rather than from scratch.
+//
 // The depth buffer already knows, per pixel, whether the truck is occluded —
 // so occlusion handling is one extra draw of the hull with the depth test
 // REVERSED (GreaterDepth): its fragments pass exactly where the stored depth
@@ -32976,9 +32995,18 @@ xrayMat.onBeforeCompile = (sh) => {
     if (mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y), 2.0) < 1.0) discard;`);
 };
 const xray = new THREE.Group();
+// NAMED, so `__sceneList` can be asserted against: an unnamed group arrives as
+// 'Group' beside a dozen others and no audit can be written on it — the rule
+// this file already states for meshes and the census.
+xray.name = 'rig-xray';
 xray.visible = false;
 function rebuildRigSilhouette(): void {
   xray.clear();
+  // Off by default: no meshes, so no draw, no material and nothing for the
+  // shutter's own mark-out pass below to walk. The group itself stays in the
+  // scene — empty — so every site that names it (the hop sweep's keep set,
+  // the shutter's mark-out, the per-frame pose) needs no second condition.
+  if (!RIG_XRAY) return;
   car.updateMatrixWorld(true);
   const carInv = new THREE.Matrix4().copy(car.matrixWorld).invert();
   car.traverse((o) => {
@@ -50119,7 +50147,7 @@ function tick(now: number): void {
   car.rotation.set(pitchC, -state.heading, rollC);
   // The silhouette rides the same pose. Chase only: in cab you ARE the truck,
   // and the chart looks too steeply down for terrain to stand in the way.
-  xray.visible = camMode === 'chase';
+  xray.visible = RIG_XRAY && camMode === 'chase';
   if (xray.visible) {
     xray.position.copy(car.position);
     xray.rotation.copy(car.rotation);

@@ -191,6 +191,8 @@ export const SWITCHES = [
     note: 'shore=0 leaves the water its frame colour and the banks their hillside grass — the A/B for the shoreline pass' },
   { id: 'bank', kind: 'toggle', marks: ['legacy', 'world'], fallback: 'on',
     note: 'bank=0 publishes no bank stations, so the channel carve owns every shoreline again and the fringe between its 1:1 bank and the drawn waterline comes back — the one A/B for the bank resolver, and the control every bank-census reading is taken against' },
+  { id: 'rigxray', kind: 'toggle', marks: ['legacy', 'look'], fallback: 'off',
+    note: "rigxray=1 draws the dithered teal silhouette of the rig wherever the world occludes it (a reversed-depth pass over the hull). RETIRED from the default on the seat's word: it fired hardest where the tyres meet the road and where a crown clips the cab, which is exactly where nothing is hidden worth showing, so it read as a rendering fault rather than as an aid. The branch is kept because the mechanism — the depth buffer already knows, per pixel, whether the truck is occluded — is the right one for any future 'where IS the rig' affordance" },
   { id: 'bldruns', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'bldruns=0 masses every attached building on its own 32 m stand norm again, as if it stood alone — the A/B for the terrace rule (morphology.ts runs seat one height and one roof form per run); __runs() reads the spread' },
   { id: 'ez', kind: 'toggle', marks: ['legacy'], fallback: 'skeletons',

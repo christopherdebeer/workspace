@@ -17766,3 +17766,51 @@ vary faster than the field can see, and a spacing sitting on `minSpacing` is the
 cap doing its job rather than a shoreline the budget could not afford. Read the
 spacing against the texel before reading it as thin.
 
+
+## The rig's x-ray silhouette is retired, and the check that judged it lied
+
+Asked from the seat: *ages ago we added a dithered overlay on the vehicle when
+occluded by terrain; it is most visible where the tyres "touch" the road, or
+trees block the vehicle. I think it has outlived its use — delete or relegate
+to a legacy flag.* Relegated, because the LOOK was wrong and the MECHANISM is
+right, and those are separable.
+
+**WHAT IT DREW WAS ALMOST ENTIRELY THE CONTACT PATCH.** The pass is one extra
+draw of the hull with the depth test reversed (`GreaterDepth`) and a screen-door
+discard, so it lights every pixel of the truck that something else is in front
+of — and on a rig standing on a road the largest such region, by far, is the few
+pixels of tyre and hull behind the road surface the wheels are resting on. The
+second is the sliver behind a crown clipping the cab. Both are places where
+nothing is hidden that anyone needed to see, so a teal dither there reads as a
+rendering fault rather than as an aid. The case it was built for — the truck
+behind a ridge — is the rare one.
+
+- **`?rigxray=1` KEEPS THE BRANCH, AND THE GROUP STAYS IN THE SCENE EMPTY.**
+  `rebuildRigSilhouette` returns before it builds anything, so off there is no
+  mesh, no draw and no material; the group itself is still added, so the hop
+  sweep's keep set, the shutter's mark-out pass and the per-frame pose need no
+  second condition. The mechanism is kept rather than deleted because the depth
+  buffer already knows, per pixel, whether the truck is occluded, and the two
+  traps in it — self-overdraw, and additive parts glowing through a hillside —
+  were expensive to solve. Anything that later wants to answer "where IS the
+  rig" starts from here.
+- **AND THE GROUP IS NAMED.** An unnamed group arrives in `__sceneList` as
+  `Group` beside a dozen others and no audit can be written on it — the rule
+  this file already states for meshes and for `__census`, met one object type
+  over.
+
+**Measured**, one build, the flag the only difference, `at-campsbay` in chase:
+`default {found:true, kids:0, vis:false, errs:0}` against
+`?rigxray=1 {found:true, kids:60, vis:true, errs:0}`.
+
+**AND THE CHECK PRINTED `FAIL` OVER THAT CLEAN PASS.** Its verdict line read
+`off.xray`/`on.xray` after the evaluate had been changed to return
+`{found, kids, vis}`, so it compared `undefined === 0` and printed
+`FAIL default undefined, asked undefined` beside two rows of correct data. **An
+instrument that lies when the feature WORKS is the same fault as one that
+cannot fail**, arrived at from the other side, and this file records the second
+half three times over (the reserved-word shader, the `nodraw` census, the
+identity-guard sweep). The rule they share: **a verdict must read the fields the
+measurement actually returns, and the surest way to keep it honest is to print
+the data beside it** — which is what made this one obvious the moment anyone
+looked at the log rather than the last line.
