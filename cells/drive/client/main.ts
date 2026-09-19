@@ -37333,7 +37333,7 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
  *  question about two, and two page loads of one spot do not put the same
  *  world, the same clock or the same weather under them. */
 (window as unknown as { __cam?: object }).__cam = (m?: string): object => {
-  if (m === 'cab' || m === 'chase' || m === 'drone' || m === 'top') setCam(m);
+  if (m === 'cab' || m === 'chase' || m === 'drone' || m === 'top' || m === 'god') setCam(m);
   return { mode: camMode, stick: !!stick, zoom: +zoomCur.toFixed(1),
     // THE STAND-OFF, because the chart's speed retreat was invisible to every
     // probe for as long as it existed: `__cam` reported the zoom, and the zoom
@@ -38037,7 +38037,10 @@ function aimFocus(): void {
     sharp: preset.chase.sharp + (preset.top.sharp - preset.chase.sharp) * lensK,
     blur: preset.chase.blur + (preset.top.blur - preset.chase.blur) * lensK,
   };
-  const amt = tiltOver.amt ?? (camMode === 'cab' ? 0 : band.amt);
+  // GOD IS EXEMPT FOR THE SAME REASON CAB IS: a narrow depth of field while
+  // you are the one deciding what to look at is a tax on exactly the thing
+  // you are reviewing.
+  const amt = tiltOver.amt ?? (camMode === 'cab' || camMode === 'god' ? 0 : band.amt);
   u.uTiltAmt.value = amt;
   // THE PLANE IS PLACED EVEN WHEN THE EFFECT IS OFF, so `__tilt` always reports
   // a live one. An early return here saved a handful of vector operations and
@@ -44396,6 +44399,54 @@ function noteTags(t: Record<string, string>): void {
   teleportTo(x, z);
   if (h !== undefined) state.heading = h;
 };
+/**
+ * THE GOD CAMERA'S OWN CONTROL SURFACE — an orbit around an authored target in
+ * the live world, for inspecting one feature from any angle or distance
+ * without picking one of the three canned rig geometries or leaving the real
+ * scene for `ezSheetOf`'s isolated stage.
+ *
+ * DEGREES AT THIS BOUNDARY, matching `?h=`/`?sunalt=`, and RADIANS internally
+ * (`godAz`/`godEl`) like every other camera angle in the file — the exact
+ * distinction `__place`'s own doctrine warns about, so it is stated here
+ * rather than left to be rediscovered.
+ *
+ * `az` is the bearing you are standing AT relative to the target (0 stands
+ * north of it looking south, matching the chart's own convention); `el` is
+ * degrees above the horizontal, clamped short of straight down/up where
+ * `camera.lookAt` degenerates against the world's up vector (the same trap
+ * the chart's 90° tilt hit). Pass only the fields you want to move; anything
+ * else keeps its last value, so a script can walk one axis at a time.
+ *
+ * `__hide('rig')` already exists for hiding the truck out of a shot — this
+ * probe does not duplicate it.
+ */
+(window as unknown as { __godcam?: object }).__godcam = (opt?: {
+  x?: number; z?: number; y?: number; az?: number; el?: number; dist?: number; fov?: number;
+}): object => {
+  if (opt) {
+    if (opt.x !== undefined) { godTarget.x = opt.x; godInit = true; }
+    if (opt.z !== undefined) { godTarget.z = opt.z; godInit = true; }
+    // A target moved in plan and given no explicit height stands on the
+    // ground under it — the common case, "look at this junction" — rather
+    // than carrying over whatever height the previous target happened to be.
+    if (opt.y !== undefined) godTarget.y = opt.y;
+    else if (opt.x !== undefined || opt.z !== undefined) godTarget.y = groundAt(godTarget.x, godTarget.z);
+    if (opt.az !== undefined) godAz = (opt.az * Math.PI) / 180;
+    if (opt.el !== undefined) godEl = clamp((opt.el * Math.PI) / 180, -1.5, 1.5);
+    if (opt.dist !== undefined) godDist = Math.max(0.5, opt.dist);
+    if (opt.fov !== undefined) { godFov = clamp(opt.fov, 4, 120); if (camMode === 'god') camera.fov = godFov; }
+    if (camMode !== 'god') setCam('god');
+  }
+  return {
+    mode: camMode,
+    target: { x: +godTarget.x.toFixed(2), y: +godTarget.y.toFixed(2), z: +godTarget.z.toFixed(2) },
+    az: +((godAz * 180) / Math.PI).toFixed(1),
+    el: +((godEl * 180) / Math.PI).toFixed(1),
+    dist: +godDist.toFixed(1),
+    fov: +godFov.toFixed(1),
+    pos: { x: +camPos.x.toFixed(2), y: +camPos.y.toFixed(2), z: +camPos.z.toFixed(2) },
+  };
+};
 (window as unknown as { __solid?: object }).__solid = (r = 220): object => {
   let solid = 0, rail = 0, rubble = 0;
   const seen = new Set<Seg>();
@@ -46240,13 +46291,37 @@ function drawMinimap(): void {
 // and changes everything: the world at 1.6m with the A-pillars in the way is
 // a different game from the world at 18m behind, and it is the seat the
 // headlights, the wipers and the retroreflective signs were all built for.
-type CamMode = 'top' | 'chase' | 'cab' | 'drone';
+type CamMode = 'top' | 'chase' | 'cab' | 'drone' | 'god';
 let camMode: CamMode = 'chase';   // the road view is the game; the chart is a mode you visit
 let chaseH = 1;    // chase rig height multiplier — the CAMERA dials in SETTINGS
 let cabFov = 68;   // driver's-seat field of view
 const camPos = new THREE.Vector3();
 const camAim = new THREE.Vector3();
 let camInit = false;
+/**
+ * ── GOD: A FREE CAMERA FOR REVIEWING ONE FEATURE, FROM ANY ANGLE ──
+ *
+ * Every other mode is tied to something that MOVES — the truck, the drone —
+ * because the game is about driving it. A reviewer asking "what does this
+ * junction actually look like" has never had a way to stand still and look:
+ * the two existing survey mechanisms are `ezSheetOf` (an isolated object on
+ * an empty stage, not the real world) and teleport-the-truck-and-pick-a-canned-
+ * rig (three fixed geometries, no free azimuth or elevation). This is neither
+ * — it is an orbit around an AUTHORED TARGET in the live, streamed scene, so
+ * the world around the target — terrain, buildings, weather, streaming — is
+ * exactly what a driver would see there.
+ *
+ * `godAz`/`godEl` are RADIANS, like every other camera angle in this file
+ * (`state.heading`, `mapRot()`); the probe (`__godcam`) takes DEGREES at its
+ * boundary, matching the `?h=`/`?sunalt=` convention, precisely to avoid the
+ * radians-vs-degrees mismatch `__place`'s own doctrine already warns about.
+ */
+const godTarget = new THREE.Vector3();
+let godAz = 0;        // radians, 0 is looking from due north toward -z (south)
+let godEl = 0.35;     // radians above the horizontal, clamped short of the poles
+let godDist = 60;      // metres, the orbit radius
+let godFov = 55;       // degrees
+let godInit = false;   // has a target ever been set? — first entry defaults near the truck
 /**
  * A CAMERA FLIGHT BETWEEN TWO RIGS, and the drone's launch and landing are the
  * only things that get one.
@@ -46964,6 +47039,9 @@ function viewH(): number { return droneEye() ? drone.heading : state.heading; }
 function renderFocusXZ(): [number, number] {
   if (camMode === 'top') return [viewX() + panX, viewZ() + panZ];
   if (camMode === 'drone') return droneGroundFocus();
+  // GOD follows its own authored target, wherever the truck is — the whole
+  // point of the mode is standing somewhere the truck is not.
+  if (camMode === 'god') return [godTarget.x, godTarget.z];
   // CHASE AND CAB STAY ON THE RIG, deliberately. The camera's offsets there are
   // metres against a tree range of hundreds, so chasing the suspension's own
   // movement would rebuild fields for nothing.
@@ -46998,18 +47076,30 @@ function droneGroundFocus(): [number, number] {
 let lastPov: CamMode = 'chase';
 function setCam(m: CamMode): void {
   camMode = m;
+  // FIRST ENTRY DEFAULTS NEAR THE TRUCK rather than at the world origin — a
+  // god camera nobody has aimed yet is still somewhere worth looking, and
+  // "wherever you were driving" is a better guess than (0,0,0).
+  if (m === 'god' && !godInit) {
+    godInit = true;
+    const gx = state.x + Math.sin(state.heading) * 20, gz = state.z - Math.cos(state.heading) * 20;
+    godTarget.set(gx, groundAt(gx, gz), gz);
+  }
   // 'drone' is not a SEAT. `lastPov` is what the chart returns you to and what
   // the dock previews, and a drone that gets remembered there strands you in
   // the air the next time you close the map.
-  if (m !== 'top' && m !== 'drone') lastPov = m;
+  // 'god' IS NOT A SEAT EITHER, for the same reason: it stands wherever it was
+  // last pointed, not wherever the truck happens to be, and remembering it as
+  // the chart's return seat would strand the player looking at a kerb.
+  if (m !== 'top' && m !== 'drone' && m !== 'god') lastPov = m;
   camInit = false;                  // snap to the new rig, then resume smoothing
   chasePull = 1;                    // and forget any terrain pull-in from last time
   fovKick = 0;                      // the lens starts at base in a fresh seat
   tunnelBlend = 0;
   panX = panZ = 0;                  // pan is a glance, not a state to carry over
   // From the driver's seat you are INSIDE the shell, so the near plane has to
-  // clear the dashboard rather than the bonnet.
-  camera.fov = camMode === 'cab' ? cabFov : 55;
+  // clear the dashboard rather than the bonnet. God keeps whatever lens the
+  // probe last set (godFov), because a review camera's zoom is the point.
+  camera.fov = camMode === 'cab' ? cabFov : camMode === 'god' ? godFov : 55;
   camera.updateProjectionMatrix();
   ghostCab(camMode === 'cab');
   updateStickHome();
@@ -47964,7 +48054,9 @@ const writeUrl = (la: number, lo: number): void => {
     // and the chart carries its zoom as well; a drone in the air is the
     // exception, because restoring into a drone that no longer exists would
     // strand the camera — it resumes as the seat you would land back into.
-    const cm = camMode === 'drone' ? lastPov : camMode;
+    // 'god' is a review tool, not a resumable player state — same exception
+    // as the drone, so a reload never strands anyone staring at a kerb.
+    const cm = camMode === 'drone' || camMode === 'god' ? lastPov : camMode;
     const zm = camMode === 'top' && Math.abs(zoomT - 1) > 0.05
       ? `&z=${zoomT >= 30 ? zoomT.toFixed(0) : zoomT.toFixed(1)}` : '';
     const ln = lineOn ? '&line=1' : '';
@@ -51331,6 +51423,25 @@ function tick(now: number): void {
       camPos.y + 40 * sn - 2.4 * cs,
       camPos.z + fwdZ * (40 * cs + 2.4 * sn),
     );
+  } else if (camMode === 'god') {
+    // AN ORBIT ABOUT AN AUTHORED TARGET, standing in the real streamed scene —
+    // not a fixed rig geometry and not the isolated stage `ezSheetOf` builds.
+    // Nothing here reads the truck; that is the whole point of the mode.
+    farGroup.visible = true;
+    ovGroup.visible = false;
+    themeGroup.visible = false;   // a thematic sheet is chart furniture
+    // THE NEAR/FAR PLANES SCALE WITH THE ORBIT, not with a fixed driving-scale
+    // constant: a reviewer may stand a metre from a kerb or a kilometre back
+    // from a mountain pass, and either one needs its own precision budget.
+    setNear(Math.max(0.1, godDist * 0.02), Math.max(2000, godDist * 4));
+    if (Math.abs(camera.fov - godFov) > 0.01) { camera.fov = godFov; camera.updateProjectionMatrix(); }
+    const gcE = Math.cos(godEl), gsE = Math.sin(godEl);
+    camPos.set(
+      godTarget.x + Math.sin(godAz) * gcE * godDist,
+      godTarget.y + gsE * godDist,
+      godTarget.z - Math.cos(godAz) * gcE * godDist,
+    );
+    camAim.copy(godTarget);
   } else {
     farGroup.visible = true;
     ovGroup.visible = false;
@@ -51480,7 +51591,7 @@ function tick(now: number): void {
       camInit = true;
       ghostCab(camMode === 'cab');
     }
-  } else if (!camInit || camMode === 'cab' || camMode === 'top' || rewind.at !== null) {
+  } else if (!camInit || camMode === 'cab' || camMode === 'top' || camMode === 'god' || rewind.at !== null) {
     camera.position.copy(camPos); camInit = true;
     // THE CHART SNAPS, AND THAT IS WHY THE LERP BELOW LOST ITS `top` ARM. The
     // top camera used to ease toward `camPos` at 10/s while `camera.lookAt`
@@ -51498,7 +51609,7 @@ function tick(now: number): void {
     // while standing on the smoothed one tilts the chart by the difference.
     camFlyAim.set(viewX() + panX,
       chartY ?? sampleHeight(viewX() + panX, viewZ() + panZ), viewZ() + panZ);
-  } else if (camMode === 'cab' || camMode === 'drone') camFlyAim.copy(camAim);
+  } else if (camMode === 'cab' || camMode === 'drone' || camMode === 'god') camFlyAim.copy(camAim);
   else camFlyAim.set(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
   if (camFly.t > 0) {
     camFlyTmp.copy(camFlyAim);
