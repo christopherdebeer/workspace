@@ -17242,6 +17242,14 @@ crowding another. A hash at the spacing asks the question the spacing means —
 is any station already standing here — and answers it the same whatever the
 order.
 
+> **THAT LAST SENTENCE IS FALSE AND THE REVIEW CAUGHT IT.** A hash makes the
+> QUESTION order-independent and the ANSWER is still first-come: whichever
+> station reaches a cell first takes it, so the surviving SET moves with the
+> arrival order even though the rule does not. Measured — reversing the segment
+> array moved the stations, shuffling it changed the count 25 → 20 — and it is
+> why contour chains replaced the thinning entirely. See "the review's five
+> items" below.
+
 **AND THE ALONG-SHORE REACH WAS THE SEGMENT'S, NOT THE SPACING'S.** A station
 stands in for the stretch of shore between it and its neighbours; bounding its
 influence by the contour segment's own half-length leaves the bank a comb of
@@ -17330,6 +17338,15 @@ survivors must inherit the span of what they replaced.** Neither the station's
 along-reach nor the crease's length is a property of the feature it was cut
 from; both are properties of the SPACING.
 
+> **AND THE LESSON IS RIGHT ABOUT THE STATIONS AND WRONG ABOUT THE CREASES.**
+> A station really does speak for an interval and really must be handed its
+> neighbours' — that half survived, as the arc-length sampling below. A crease
+> is not an interval at all, it is a CURVE, and the stride's whole premise was
+> that it has to be cut into slats: consecutive stations belong to one polyline
+> and joining them is free, so what a budget should remove is geometry a stated
+> tolerance says is redundant, not a stretch of shore. See "the review's five
+> items" below.
+
 ### Measured: the census, with `?bank=0` as the control
 
 Same build both columns, the switch the only difference
@@ -17416,3 +17433,173 @@ one: a second boot streams a different world. Its numbers are a statement about
 this build at that place, not a comparison; the six-fixture census above is the
 comparison.
 
+
+### The review's five items: chains, precedence, composition, creases, tests
+
+The review of the incoming branch through `292c56e` retained the
+implementation and named four corrections before it should reach lakes or
+coasts, plus the tests that would hold them. Its own order is the order they
+were done in, and three of them overturned something written above.
+
+#### 1. A CONTOUR IS A CHAIN, AND A STATION OWNS AN INTERVAL OF IT
+
+The greedy thinning — keep a station unless one already stands within the
+spacing — was replaced by a spatial hash and the hash was written up here as
+making it order-independent. **It does not.** A hash makes the QUESTION
+order-independent and leaves the ANSWER first-come: whichever station reaches
+a cell first takes it. Measured on the shipped resolver, reversing the segment
+array moved the stations and shuffling it changed the count **25 → 20**, with
+`dropped: 0` reporting a clean run either way.
+
+And the deeper fault is that a rejection rule cannot state its own coverage.
+`assembleShoreChains` welds the marching-squares segments into chains
+(millimetre node hashing with a DISTANCE decision, the lesson `mmNear` and the
+morphology's party walls both already carry), and each chain is sampled by
+**arc length** at `n = round(L / spacing)` stations at `(i + ½)·L/n`. Their
+intervals then TILE the chain by construction, and each station carries the
+half-interval to its ACTUAL neighbours (`alongBackM`, `alongFwdM`) rather than
+half a nominal spacing — the first cut gave every survivor half the MINIMUM
+spacing either side, and greedy rejection leaves neighbours anywhere from that
+spacing to twice it apart: measured on a straight shore at 10 m spacing as
+stations 12 m apart carrying 11 m of influence, **a one-metre hole every
+time**.
+
+**AND THE COVERAGE IS REPORTED RATHER THAN INFERRED.** `dropped: 0` says the
+budget was not hit; it says nothing about whether what was kept speaks for the
+whole shore, which is the thing that matters and the thing the first cut got
+wrong. `coveredM` and `uncoveredM` are stats now.
+`devtools/bank-coverage.test.mjs` is the witness and reproduced the fault
+before the fix — `uncovered 72 of 1169 · worst gap 1.00 m · widest spacing
+12.0 m` — and reads **uncovered 0 of 1169, 30 stations, covered 300 of 300**
+after, with reversal and shuffle giving byte-identical station sets.
+
+**ITS FIRST FIXTURE PRODUCED ZERO STATIONS AND EVERY CLAIM PASSED.** A
+hand-rolled field with no channels in it is a test of nothing; the field
+builder is `bank-profile.test.mjs`'s now, and the file carries a comment
+saying so. That is the fabricated-witness trap this file records for captures,
+met in a unit test.
+
+#### 2. IDENTITY, AND A REFUSAL THAT COSTS SOMETHING
+
+`chainId` rides the packet, so a legitimate connected overlap — two stations of
+one chain meeting round a bend — can be told from two unrelated boundaries
+whose influences happen to cross. Without it every nearby station is assumed to
+belong to the same bank and a refusal on one shore cannot be told from a
+refusal on the other.
+
+**AND THE REFUSAL DID NOT BIND.** The packet has always described one as
+"nothing may change here" and the first cut only made it bind the channel
+carve: a refused station marked the vertex and carried on, and any OTHER
+station could still supply a lower target. Measured on the shipped kernel, a
+point protected by a refusal and reached by an overlapping resolved station
+went from 3 m to **0.25 m** — the refusal costing exactly nothing, which is the
+thing it exists not to do. Protections are read in a pass of their own now, in
+both the point query and the build, and a protected point is answered before
+any cut is considered.
+
+`levelSlopeAlong` went in beside them: a row of stations each asserting one
+constant level across its own interval steps at every boundary between them,
+which on a falling reach is a staircase down the bank. It is the central
+difference of the neighbours' levels, zero for a standing body.
+
+#### 3. THE FLOOR STANDS DOWN INSIDE THE BANK'S REGION
+
+The build order was: hydro floor lowers terrain → road earthworks → bank pass
+lowers terrain → legacy channel carve where unowned. Bank ownership prevented
+a later channel cut and could do nothing about the EARLIER floor, which is an
+~18 m lattice that lowers ground to the field's own bed. So inside the bank's
+transition region the vertex was already cut to the bed before anything asked
+what shape the bank should be, and the bank — which only ever lowers — could
+not put back the shelf, the toe or the refusal the resolver had decided on. **A
+floor that pre-empts the profile wins every argument in the one region the
+resolver exists to own.**
+
+`bankPass` is two calls now, and the split is the rule rather than tidiness:
+
+- **`bankSolve`** fills `owned[]` and `target[]` and **reads no height at
+  all** — a target is a function of the packet and of x, z — so it can run
+  inside the heights pass, before anything has written a height. Both passes
+  (the refinement's and `buildTile`'s plain loop) then apply `hydroFloorAt`
+  only where `!bankOwned[i]`.
+- **`bankApply`** lowers, where the old pass did: after `carveCorridors`, so
+  the bank cuts against what the corridor left.
+
+The stations are therefore walked ONCE for both phases rather than once each,
+and `bank-pass.test.mjs` asserts the equivalence directly: the same owned set
+and the same targets over a lattice with no heights written.
+
+**THE CROSSING RULE IS UNCHANGED AND IS NOW MEASURED.** `channelFloorAt` does
+not refuse a road, it refuses a CAUSEWAY or no crossing at all and carves the
+channel THROUGH a bridge, a culvert or a ford, because a deck is separate
+geometry standing over water that still has to be shaped. Owning all four the
+same way deleted that distinction. Held as four different answers with a
+`crossingAt` call counter beside them, because the fault it replaced was that
+the pass never asked `crossingAt` at all.
+
+#### 4. A CREASE IS A CURVE, NOT A SLAT
+
+`bankBreakLines` was still reading **stride 12 against a stride-15 packet** —
+so every field past `alongM` was garbage — and thinned by an array stride when
+the cap bound. The write-up above drew the lesson that "when a budget forces a
+thinning, the survivors must inherit the span of what they replaced". That is
+right about the STATIONS and wrong about the creases: a crease is not an
+interval, it is a curve, and consecutive stations of one chain belong to one
+polyline that costs nothing to join.
+
+So: group by `chainId`, split into runs of genuinely adjacent stations (a
+refusal ends a run — the stations either side of it are two intervals apart and
+a chord between them is a guess), join each run's offset points into a polyline
+whose segments abut exactly, close a ring, and simplify by Douglas–Peucker at
+`BANK_LINE_TOL_M` (0.25 m, well under a terrain cell at any refinement). **When
+the cap binds the TOLERANCE rises, not the coverage.** `refineCost` carries
+`bankLines`, `bankLineTolMax` and `bankLineCapped`, so a truncation is counted
+rather than inferred from a number that equals its own cap.
+
+Measured in the test: a straight bank costs **4 creases** where the stride cost
+two a station; a 400-station arc costs **8**, as two unbroken polylines; and
+300 short chains that ask for 1,200 creases are served by **600** at a 0.5 m
+tolerance with **every chain still creased on both its offsets**. The control is
+the simplification switched off — the budget then truncates and **44 of 300
+chains go bare**, which is the stride's own failure arrived at from the other
+side.
+
+**AND `chainIndex` WAS DECLARED, WRITTEN AND READ BY NOTHING.** The adjacency
+the builder needs is geometric — are these two centres one interval apart, or
+two with a skipped station between them — which the reaches already answer and
+which a ring's wrap answers too. The field is gone; the packet's chain-major
+order is stated in `packBankStations` and asserted in `bank-coverage`.
+
+#### 5. THE FULL BUILD, WITH A BANK IN IT
+
+`devtools/bank-build.test.mjs` drives the shipped `buildTile` over a flat
+plateau, so the only things that can move a vertex are the three rules under
+test and whatever a vertex ends at names which of them spoke. On the plain
+lattice and the refined path alike:
+
+| at | the rule | reads |
+|---|---|---|
+| 10 m out from the shore | the bank owns it and does not cut it | **20.00 m** — its own ground, not the floor's 14 |
+| mid channel | the profile's interior connection | **16.50 m** — the stated bed |
+| 1 m past what any station spoke for | the floor, unchanged | 14.00 m |
+| inside a refusal, in the floor's band | nothing may change here | **20.00 m** |
+| the owned channel | the carve stands down | 16.50 m, against an invert of 10 |
+
+**ITS CONTROL IS THE RULE THIS UNIT CHANGED**, patched into the bundle: with
+the floor applied before ownership was decided it plants the bed at **14.00 m**
+in all three of the bank's own cases — six metres under the profile mid
+channel, on land the bank owns and does not cut, and on ground a refusal is
+protecting. That is the measurement of item 3, and no census could have made
+it: a fixture's burial counts what is left, and this is about which rule left
+it.
+
+Two tiles sharing an edge agree along it to the bit and build identically in
+either order, at both the solve level and through `buildTile` — so a seam
+cannot come from the kernel's own state, and arrival order cannot either.
+
+**WHAT THE TESTS DO NOT COVER, said rather than implied.** The seam claim is
+made with BOTH tiles handed the same packet, which is what a gutter'd field
+gives them. Whether the RESOLVER's two fields agree across a border is a
+different question — each samples its own chains at its own spacing, so the
+stations near a shared edge are not the same stations — and it is not asserted
+anywhere. The border-pin machinery fixes the exact edge row; the row inside it
+is unpinned, and nobody has measured what the two sides do there.
