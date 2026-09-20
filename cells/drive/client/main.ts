@@ -26512,10 +26512,6 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   bldHeights.set(id, height);
   const r = mulberry32((id * 2654435761) >>> 0);
   r(); // first draw off a hashed seed is poorly distributed
-  // WHAT OSM SAYS FELL DOWN STAYS DOWN. Giza's home town maps 94% of its
-  // stock as building=ruins, and an intact limewash box over a mapped ruin is
-  // the data being overruled by a default.
-  const forceRuin = kind === 'ruins' || kind === 'collapsed' || kind === 'construction';
   // Intact buildings hand their extrusion to the tile batch instead of
   // standing up a mesh each — see flushBuildings for why.
   const intactSink = (paint: number, roof?: string, ridge?: number, chim = 0) =>
@@ -26669,7 +26665,16 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   const tradC = look.tradition ? TRADITIONS[look.tradition] : undefined;
   const chimN = tradC && (roofShape === 'gabled' || roofShape === 'hipped') && unitN(id, 11) < tradC.chimneys
     ? (footprintSize(pts).area > 160 ? 2 : 1) : 0;
-  if (!lineOn && !forceRuin && (height > 24 || r() > 0.42 || TYPO_COL[kind] !== undefined || mapped !== null)) {
+  // FREEDRIVE NEVER RUINS. The line's doctrine ("everything the domes did
+  // not take has stood empty since the Leaving") is what makes a ruin roll
+  // meaningful there; off the line there is no such story, so every
+  // footprint stands intact — including one OSM tags building=ruins,
+  // collapsed or construction, which used to force a ruin even off the
+  // line ("what OSM says fell down stays down"). "The line" keeps its own
+  // behaviour untouched: `lineOn` is true there, so this branch is never
+  // taken and every building on the line still falls through to the ruin
+  // construction beneath, exactly as before.
+  if (!lineOn) {
     buildStats.intact++;
     noteMass(height, roofShape);
     bldRoofs.set(id, roofShape ?? 'canopy');
