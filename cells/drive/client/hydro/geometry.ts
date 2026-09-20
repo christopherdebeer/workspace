@@ -40,39 +40,6 @@ export function boundsIntersect(a: WorldBounds, b: WorldBounds, pad = 0): boolea
     && a.maxZ + pad >= b.minZ && a.minZ - pad <= b.maxZ;
 }
 
-/**
- * Liang–Barsky clip of a segment against an axis-aligned box. Returns the
- * clipped endpoints, or null where the segment does not cross the box at
- * all — used to size a segment's length WITHIN a tile, since a feature
- * handed to a tile is bbox-overlap-tested against it and not cut to it (see
- * `hydroFeed`'s own comment on why: a river mostly off the edge should cost
- * only the pixels it actually covers here).
- */
-export function clipSegmentToBounds(
-  x0: number, z0: number, x1: number, z1: number, bounds: WorldBounds,
-): [number, number, number, number] | null {
-  const dx = x1 - x0, dz = z1 - z0;
-  let tMin = 0, tMax = 1;
-  const p = [-dx, dx, -dz, dz];
-  const q = [x0 - bounds.minX, bounds.maxX - x0, z0 - bounds.minZ, bounds.maxZ - z0];
-  for (let i = 0; i < 4; i++) {
-    if (p[i] === 0) {
-      if (q[i] < 0) return null; // parallel to this edge and outside it
-      continue;
-    }
-    const r = q[i] / p[i];
-    if (p[i] < 0) {
-      if (r > tMax) return null;
-      if (r > tMin) tMin = r;
-    } else {
-      if (r < tMin) return null;
-      if (r < tMax) tMax = r;
-    }
-  }
-  if (tMin > tMax) return null;
-  return [x0 + tMin * dx, z0 + tMin * dz, x0 + tMax * dx, z0 + tMax * dz];
-}
-
 export function pointInRing(x: number, z: number, ring: PackedXZ): boolean {
   let inside = false;
   const n = ring.length >> 1;

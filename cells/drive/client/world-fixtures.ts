@@ -865,11 +865,6 @@ export const CAPTURE_INDEX: readonly CaptureCard[] = [
     label: 'THE FORTH — THREE BRIDGES, THREE CLAIMS',
     note: 'Asked for from the seat at 56.00636,-3.39091 as the landmark test case, and it is the best one there is: three famous bridges in a row over the Firth of Forth, each reaching the painter by a DIFFERENT path. The 1890 Forth Bridge is four `rail` ways named for the East Coast (Northern) Line with no bridge:name at all, so its entry can only claim it BY POSITION; the Queensferry Crossing carries its own `bridge:structure=cable-stayed` and needs no entry; the Forth Road Bridge is named exactly that, carries no structure tag and matches no entry, so it is claimed by nobody. They also stand ~250 m apart at their nearest, which is inside BRIDGE_ON_R — so this is the fixture where a positional claim can cross from one bridge to the next.',
   },
-  {
-    id: 'at-romsdalen', file: 'world-romsdalen.json', heading: 0,
-    label: 'ROMSDALEN — THE RAUMA UNDER TROLLVEGGEN',
-    note: 'Captured from the reel drive at 62.5511,7.7112 (r=1200 m) after the god-camera composites showed the water/shore region from a grazing camera as horizontal terracing, quantised in world space. A braided glacial river on a flat valley floor between 900 m walls, with the E136 and the Rauma line along it: the fixture for the bank-tangent grazing camera and the water-minus-terrain regression. No terrestrial ecoregion at z5 here (the fjord tile), so `eco` is deliberately absent.',
-  },
 ];
 
 /**
