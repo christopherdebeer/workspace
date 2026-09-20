@@ -611,7 +611,14 @@ export async function openDrive(opts = {}) {
 
   return {
     page, errors, simWait,
-    shot: (name) => page.screenshot({ path: join(WORK, `${name}.png`) }),
+    // Playwright's own default screenshot timeout is 30000ms, and this
+    // file's own doctrine already measures d.shot() at ~19-22s FIXED cost
+    // on this box — thin margin on a page under any extra load. Measured
+    // failing at exactly that default: a god-camera contact-sheet run over
+    // Romsdalen's mountain terrain threw `page.screenshot: Timeout 30000ms
+    // exceeded` on its very first shot and killed a 49-shot capture with it.
+    // 60s is headroom, not a new cost — a normal shot still takes ~20s.
+    shot: (name) => page.screenshot({ path: join(WORK, `${name}.png`), timeout: 60000 }),
     async close() { await browser.close(); server.close(); },
   };
 }
