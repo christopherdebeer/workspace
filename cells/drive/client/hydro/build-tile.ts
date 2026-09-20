@@ -6,6 +6,7 @@ import {
   areaOfRing,
   boundsIntersect,
   clamp,
+  clipSegmentToBounds,
   featureBounds,
   nearestSegment,
   pointInArea,
@@ -50,6 +51,49 @@ export interface HydroTileAnalysis {
 const FLOWING = new Set<HydroKind>(['river', 'stream', 'canal']);
 const ID_TO_KIND = new Map<number, HydroKind>(
   (Object.entries(HYDRO_KIND_ID) as Array<[HydroKind, number]>).map(([k, v]) => [v, k]));
+
+function clippedLineLengthM(points: PackedXZ, bounds: WorldBounds): number {
+  let total = 0;
+  const count = points.length >> 1;
+  for (let i = 0; i + 1 < count; i++) {
+    const clipped = clipSegmentToBounds(
+      points[i * 2], points[i * 2 + 1], points[(i + 1) * 2], points[(i + 1) * 2 + 1], bounds);
+    if (clipped) total += Math.hypot(clipped[2] - clipped[0], clipped[3] - clipped[1]);
+  }
+  return total;
+}
+
+/**
+ * ── THE RESOLUTION TIER IS SIZED FROM THE SHARE, NOT FROM "ANY OBSERVATION" ──
+ *
+ * `flowingFieldResolution` used to fire on any river/stream/canal record in
+ * the tile at all, which is right where the water IS the tile (a wide river
+ * crossing corner to corner) and wrong where it is a thread through one — a
+ * river clipping a tile's corner paid the full fourfold grid to place a bank
+ * the player is a kilometre from. This is the pre-build stand-in for the
+ * field's own post-build wet share (`covered_n / texels_n`, see
+ * `hydro-phases.mjs`): length of each flowing LINE feature clipped to the
+ * tile's bounds, times its width, over the tile's area. It is only an
+ * estimate — it ignores standing-water areas (never the flat-rate tier's
+ * concern) and the extra band an area gains at a bend — but it costs a
+ * handful of segment clips, not a grid, and it is close enough to size one.
+ */
+export function estimateFlowingCoverageShare(input: HydroTileInput): number {
+  const { bounds, features } = input;
+  const width = bounds.maxX - bounds.minX;
+  const height = bounds.maxZ - bounds.minZ;
+  const tileArea = width * height;
+  if (!(tileArea > 0)) return 0;
+  let wetArea = 0;
+  for (const feature of features) {
+    if (!FLOWING.has(feature.kind)) continue;
+    if (feature.geometry.type !== 'line') continue;
+    const { points, widthM } = feature.geometry;
+    if (!(widthM > 0)) continue;
+    wetArea += clippedLineLengthM(points, bounds) * widthM;
+  }
+  return clamp(wetArea / tileArea, 0, 1);
+}
 
 function fillMissing(values: number[]): void {
   let first = values.findIndex(Number.isFinite);
