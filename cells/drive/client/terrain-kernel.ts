@@ -299,14 +299,14 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
    * vertices at −4.6 and −3.8 mid-fjord where a pixel read dry, standing 0.5 m
    * PROUD of a 0.1 m sea) and photographed from a grazing camera as flat
    * ledges in rows with bilinear ramps between them: the "horizontal
-   * terracing, quantised in world space" the seat reported. Two continuous
-   * terms replace the switch: the water EVIDENCE over a footprint about the
+   * terracing, quantised in world space" the seat reported. A continuous
+   * term replaces the switch: the water EVIDENCE over a footprint about the
    * raster's own pixel (nine taps, the shape `swardCoverEvidence` already uses
-   * for the same raster and the same reason), and a depth gate that eases in
-   * over the last metre and a half under the 2 m ceiling rather than cutting
-   * at it. A lone dry pixel inside the sea now reads 0.8 wet and the bed under
-   * it sits at −4.7 rather than +0.6; the shore is a ramp the width of a cover
-   * pixel rather than a cliff on its boundary. Only ever lowers, as before.
+   * for the same raster and the same reason), saturating at a third of a
+   * pixel wet, under the same hard 2 m ceiling as before. A lone dry pixel
+   * inside the sea now reads 0.8 wet and the bed under it sits at −5.9 rather
+   * than +0.6; the shore is a ramp the width of a cover pixel rather than a
+   * cliff on its boundary. Only ever lowers, as before.
    */
   const SEA_EV_R = 20;
   const seaFloor = (S: TerrainStore, x: number, z: number, elev: number, seaLocal: number): number => {
@@ -332,7 +332,6 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     // inside the sea reads 0.8 here and takes the full drop; the outermost
     // third of a pixel of shore ramps; and a vertex within two metres of the
     // sea takes the depth outright, as it always did.
-    if (elev > seaLocal + 2) return elev;
     return Math.min(elev, seaLocal - SEA_BED * Math.min(1, ev * 3));
   };
   /** Every built terrain tile overlapping a world rectangle, marked for rebuild. */
