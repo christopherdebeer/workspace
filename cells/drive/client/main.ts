@@ -55412,6 +55412,303 @@ function hudLap(k: string): void {
   }
   return out;
 };
+/**
+ * ── TILE DEBUG, PULLED OUT SO IT CAN DRAW WITHOUT THE HUD ──
+ *
+ * This used to be an inline block of drawHud(), gated on `camMode === 'top'`
+ * and — because it sat after drawHud's `if (!hudOn) return;` — on the HUD
+ * being on as well. `__godcam()` never sets `camMode = 'top'`, so every
+ * god-camera shot was structurally unable to show it, whatever HUD state a
+ * caller asked for. Extracted verbatim (its own dNow, its own dProj/dSeg/
+ * dBox closures over camera/poiVec/poiView) so it can be called both from
+ * drawHud's normal flow and from its early `!hudOn` return, with no shared
+ * state beyond `pad` (always 4 here) and `layerKeyBottom` (a module `let`
+ * that stays at its last-drawn value, or 0, when the HUD has not run this
+ * session — the same fallback the KEY section's own comment already named).
+ *
+ * THE ORIGIN IS renderFocusXZ(), NOT `state.x + panX`. The old expression
+ * assumed the chart, whose pan is added to the truck's own position; a god
+ * camera looks at `godTarget`, which can be nowhere near the truck — the
+ * whole point of the mode. `renderFocusXZ()` already answers this per camera
+ * (viewX()+panX on the chart, godTarget in god mode), so the debug grid is
+ * centred on wherever the shot is actually looking.
+ */
+function drawTileDebugOverlay(): void {
+  if (!tileDbg || (camMode !== 'top' && camMode !== 'god')) return;
+  const pad = 4;
+  const dNow = performance.now();
+  const dProj = (wx: number, wz: number): [number, number] | null => {
+    poiVec.set(wx, groundAt(wx, wz), wz);
+    if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) return null;
+    poiVec.project(camera);
+    return [((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS, ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS];
+  };
+  const dSeg = (a: [number, number] | null, b: [number, number] | null): void => {
+    if (!a || !b) return;
+    const n = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]) / 2));
+    for (let i = 0; i <= n; i++) {
+      hctx.fillRect(Math.round(a[0] + ((b[0] - a[0]) * i) / n), Math.round(a[1] + ((b[1] - a[1]) * i) / n), 1, 1);
+    }
+  };
+  /** Outline the quad four projected corners make, clockwise from top-left. */
+  const dBox = (a: [number, number] | null, b: [number, number] | null,
+    c: [number, number] | null, d2: [number, number] | null): void => {
+    dSeg(a, b); dSeg(b, c); dSeg(c, d2); dSeg(d2, a);
+  };
+  /** How wide one cell of a grid lands on the HUD, in its own pixels — the
+   *  measure that decides whether a layer is worth drawing cell by cell. */
+  const dCell = (a: [number, number] | null, b: [number, number] | null): number =>
+    (a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0);
+  /**
+   * A CELL TOO SMALL TO HOLD A MARKER IS NOISE, NOT INFORMATION.
+   *
+   * The z16 grid is 19x19 cells and the z14 ring 9x9, and both are sized in
+   * GROUND metres — so as the chart pulls out they do not spread, they
+   * collapse. At the wide end a z16 tile is half a kilometre inside a view
+   * six hundred across: three hundred and sixty cells of grid line and pip
+   * stacked into a few pixels of dirty haze in the middle of the frame,
+   * every one of them drawn, none of them readable. The post chain makes it
+   * worse rather than better — narrow bright features are exactly what the
+   * quantiser turns into a white contour diagram.
+   *
+   * So each layer draws cells only while a cell can carry one, and outlines
+   * its RING when it cannot. At that zoom the useful fact is not which tile
+   * is queued, it is where the fine world sits inside the wide one — which
+   * is a rectangle, and reads as one.
+   */
+  const DBG_CELL_PX = 8;
+  const [rfx, rfz] = renderFocusXZ();
+  const [dLat, dLon] = localToLatLon(rfx, rfz);
+  const dR = viewRadius();
+  const [ox0, oy0] = tileAt(dLat, dLon, OSM_Z);
+  const oN = clamp(Math.ceil(dR / tileMetres(OSM_Z)), 1, 9);
+  // Every corner in the range projected once; lines and centres reuse them.
+  const dCor: Array<Array<[number, number] | null>> = [];
+  for (let j = 0; j <= oN * 2 + 1; j++) {
+    const row: Array<[number, number] | null> = [];
+    for (let i = 0; i <= oN * 2 + 1; i++) {
+      const b = tileBounds(ox0 - oN + i, oy0 - oN + j, OSM_Z);
+      const [wx, wz] = toLocal(b.latN, b.lonW);
+      row.push(dProj(wx, wz));
+    }
+    dCor.push(row);
+  }
+  const oPx = dCell(dCor[oN][oN], dCor[oN][oN + 1]);
+  const oFine = oPx >= DBG_CELL_PX;
+  hctx.fillStyle = UI.soft;
+  hctx.globalAlpha = 0.28;
+  if (oFine) {
+    for (let j = 0; j <= oN * 2 + 1; j++) for (let i = 0; i <= oN * 2 + 1; i++) {
+      if (i <= oN * 2) dSeg(dCor[j][i], dCor[j][i + 1]);
+      if (j <= oN * 2) dSeg(dCor[j][i], dCor[j + 1][i]);
+    }
+  } else {
+    // The whole vector ring as ONE rectangle: where the roads are, against a
+    // view mostly made of ground that has none.
+    const e = oN * 2 + 1;
+    dBox(dCor[0][0], dCor[0][e], dCor[e][e], dCor[e][0]);
+  }
+  // SERVING RANK UNDER THE METRIC THE GATE ACTUALLY USES — which for a long
+  // time this did not do. It ranked by plain distance to the focus point
+  // while osmRelease serves by wedgeCost from the CAR, so the numbers on the
+  // chart were not the order tiles would be fetched in. Reading them as
+  // priority is what "it is only mildly biasing forward" was measured
+  // against, and the display was the part that was wrong about it.
+  const dRank = new Map<string, number>();
+  osmQueue
+    .map((w) => {
+      const [wx, wz] = tileCentreLocal(w.x, w.y);
+      return { k: `${w.x}/${w.y}`, d: wedgeCost(wx, wz) };
+    })
+    .sort((a, b) => a.d - b.d)
+    .forEach((q, i) => dRank.set(q.k, i + 1));
+  for (let j = 0; oFine && j <= oN * 2; j++) for (let i = 0; i <= oN * 2; i++) {
+    const key = `${ox0 - oN + i}/${oy0 - oN + j}`;
+    const a = dCor[j][i], b = dCor[j + 1][i + 1];
+    if (!a || !b) continue;
+    const cx = Math.round((a[0] + b[0]) / 2), cy = Math.round((a[1] + b[1]) / 2);
+    if (cx < -4 || cx > HW + 4 || cy < -4 || cy > HH + 4) continue;
+    if (osmFailedAt.has(key) && dNow - (osmFailedAt.get(key) ?? 0) > 30000) osmFailedAt.delete(key);
+    // Every marker sits on an ink seat: a bare green pip is indistinguishable
+    // from a bush at chart scale, and this canvas has no other way to say
+    // "UI, not world" than the dark plate every other instrument stands on.
+    const seat = (r2: number): void => {
+      hctx.globalAlpha = 0.65;
+      hctx.fillStyle = UI.ink;
+      hctx.fillRect(cx - r2, cy - r2, r2 * 2 + 1, r2 * 2 + 1);
+    };
+    if (osmActive.has(key)) {
+      seat(2);
+      hctx.globalAlpha = 0.55 + 0.4 * Math.sin(dNow / 120);
+      hctx.fillStyle = UI.gold;
+      hctx.fillRect(cx - 1, cy - 1, 3, 3);
+    } else if (dRank.has(key)) {
+      seat(2);
+      hctx.globalAlpha = 0.75;
+      hctx.fillStyle = UI.soft;
+      hctx.fillRect(cx - 1, cy - 1, 2, 2);
+      textEdgeP(String(dRank.get(key)), cx + 3, cy - 3, UI.text);
+    } else if (osmFailedAt.has(key)) {
+      seat(4);
+      hctx.globalAlpha = 0.9;
+      hctx.fillStyle = UI.bad;
+      dSeg([cx - 3, cy - 3], [cx + 3, cy + 3]);
+      dSeg([cx - 3, cy + 3], [cx + 3, cy - 3]);
+    } else if (osmDone.has(key)) {
+      seat(2);
+      hctx.globalAlpha = 0.85;
+      hctx.fillStyle = UI.good;
+      hctx.fillRect(cx, cy, 2, 2);
+    } else if (osmLoaded.has(key)) {
+      // Requested but unsettled: cached-rendering, or refused for want of
+      // terrain and waiting to be forgotten and asked again.
+      hctx.globalAlpha = 0.6;
+      hctx.fillStyle = UI.dim;
+      hctx.fillRect(cx, cy, 1, 1);
+    }
+  }
+  // The fine-terrain ring, as outlines over its own (coarser) grid.
+  const [tx0, ty0] = tileAt(dLat, dLon, TERRAIN_Z);
+  const tN = clamp(Math.ceil(dR / tileMetres(TERRAIN_Z)), 1, 4);
+  const tCor: Array<Array<[number, number] | null>> = [];
+  for (let j = 0; j <= tN * 2 + 1; j++) {
+    const row: Array<[number, number] | null> = [];
+    for (let i = 0; i <= tN * 2 + 1; i++) {
+      const b = tileBounds(tx0 - tN + i, ty0 - tN + j, TERRAIN_Z);
+      const [wx, wz] = toLocal(b.latN, b.lonW);
+      row.push(dProj(wx, wz));
+    }
+    tCor.push(row);
+  }
+  const tPx = dCell(tCor[tN][tN], tCor[tN][tN + 1]);
+  if (tPx >= DBG_CELL_PX) {
+    for (let j = 0; j <= tN * 2; j++) for (let i = 0; i <= tN * 2; i++) {
+      const key = `${tx0 - tN + i}/${ty0 - tN + j}`;
+      if (!terrainReady.has(key)) continue;
+      hctx.fillStyle = terrainDirty.has(key) ? UI.hot : terrainMeshes.has(key) ? UI.edge : UI.gold;
+      hctx.globalAlpha = terrainDirty.has(key) ? 0.8 : 0.5;
+      dSeg(tCor[j][i], tCor[j][i + 1]);
+      dSeg(tCor[j][i], tCor[j + 1][i]);
+      dSeg(tCor[j + 1][i], tCor[j + 1][i + 1]);
+      dSeg(tCor[j][i + 1], tCor[j + 1][i + 1]);
+    }
+  } else {
+    hctx.fillStyle = UI.edge;
+    hctx.globalAlpha = 0.5;
+    const e = tN * 2 + 1;
+    dBox(tCor[0][0], tCor[0][e], tCor[e][e], tCor[e][0]);
+  }
+  /**
+   * …AND THE LAYER THAT IS ACTUALLY STREAMING OUT HERE.
+   *
+   * The two rings above are the FINE world, and at the wide end they are a
+   * pair of small boxes near the middle — correct, and not what is doing the
+   * work. Everything filling the rest of the frame is the coarse shell, and
+   * until now the overlay said nothing about it beyond a count in the
+   * header. So the shell draws its own grid at exactly the zooms where the
+   * fine grids have folded: teal where a mesh stands, gold where a tile has
+   * been asked for and has not landed. It is the same reading the z14 ring
+   * gives close up, one ladder rung out.
+   */
+  if (!oFine) {
+    const [sx0, sy0] = tileAt(dLat, dLon, farZ);
+    const sN = clamp(Math.ceil(dR / tileMetres(farZ)), 1, FAR_RING_MAX);
+    for (let j = -sN; j <= sN; j++) for (let i = -sN; i <= sN; i++) {
+      const key = `${farZ}/${sx0 + i}/${sy0 + j}`;
+      if (!farTiles.has(key)) continue;
+      const b0 = tileBounds(sx0 + i, sy0 + j, farZ);
+      const b1 = tileBounds(sx0 + i + 1, sy0 + j + 1, farZ);
+      const [ax, az] = toLocal(b0.latN, b0.lonW);
+      const [bx, bz] = toLocal(b1.latN, b1.lonW);
+      hctx.fillStyle = farMeshes.has(key) ? UI.edge : UI.gold;
+      hctx.globalAlpha = farMeshes.has(key) ? 0.4 : 0.7;
+      dBox(dProj(ax, az), dProj(bx, az), dProj(bx, bz), dProj(ax, bz));
+    }
+  }
+  hctx.globalAlpha = 1;
+  let fails = 0;
+  for (const [, at] of osmFailedAt) if (dNow - at < 30000) fails++;
+  textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
+    6, 40, UI.text);
+  // CLIP is the block of fine tiles the shell is discarded inside. It is the
+  // number to read when the chart's outer ground looks paler and flatter
+  // than the middle: anything outside that block is the coarse shell's to
+  // paint wherever its 150 m chords stand over the fine world, and a block
+  // that has collapsed to 1x1 hands it nearly everything.
+  textEdgeP(`Z${TERRAIN_Z} MESH ${terrainMeshes.size} WAIT ${terrainReady.size - terrainMeshes.size}`
+    + ` REBUILD ${terrainDirty.size} CLIP ${fineBlock[0] + fineBlock[1] + 1}x${fineBlock[2] + fineBlock[3] + 1}`
+    + ` · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
+    + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
+    6, 48, UI.soft);
+  // ── THE KEY ── one row per LAYER that draws boxes, in the order they
+  // stream: what zoom it is, how wide one of its boxes is here (a tile's
+  // metres shrink with the cosine of the latitude, so this is computed,
+  // not quoted), the layer's name, then its marks in their own inks. The
+  // vector row shows while its cells draw and the shell row while its
+  // boxes do, and a folded ring says so. Drawn UNDER the scale bar — the
+  // first cut sat on the bar's label, which is exactly the rows this is
+  // meant to read beside. The header's words are the key's words.
+  {
+    const gw = (t: string): number => {
+      let w = 0;
+      for (const ch of t) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
+      return w;
+    };
+    const size = (z: number): string => {
+      const m = tileMetres(z);
+      return m >= 1000 ? `${(m / 1000).toFixed(m < 10000 ? 1 : 0)}KM` : `${Math.round(m)}M`;
+    };
+    // Below the LAYER key, which is drawn first and is a variable number of
+    // rows (the legend grows with what is on screen). The fallback is the old
+    // fixed offset, for the frame before the chart block has run.
+    let ly = Math.max(pad + 56 + 20, layerKeyBottom + 3);
+    type Mark = ((cx: number, cy: number) => void) | null;
+    const row = (name: string, items: Array<[string, string, Mark]>): void => {
+      const x0 = 6 + gw(name) + 4;
+      let lx = x0;
+      hctx.globalAlpha = 1;
+      textEdgeP(name, 6, ly, UI.text);
+      for (const [label, col, mark] of items) {
+        const w = (mark ? 7 : 0) + gw(label);
+        if (lx > x0 && lx + w > HW - 4) { lx = x0; ly += 8; }
+        hctx.globalAlpha = 1;
+        if (mark) mark(lx + 2, ly + 2);              // the glyph spans y-1..y+5; its middle is y+2
+        hctx.globalAlpha = 1;
+        textEdgeP(label, lx + (mark ? 7 : 0), ly, col);
+        lx += w + 5;
+      }
+      ly += 8;
+    };
+    const box = (col: string): Mark => (cx, cy) => {
+      hctx.fillStyle = col; hctx.globalAlpha = 0.9;
+      dBox([cx - 3, cy - 3], [cx + 3, cy - 3], [cx + 3, cy + 3], [cx - 3, cy + 3]);
+    };
+    if (oFine) {
+      row(`Z${OSM_Z} ${size(OSM_Z)}`, [
+        ['VECTORS', UI.soft, null],
+        ['WIRE', UI.gold, (cx, cy) => { hctx.fillStyle = UI.gold; hctx.fillRect(cx - 1, cy - 1, 3, 3); }],
+        ['QUEUE', UI.soft, (cx, cy) => { hctx.fillStyle = UI.soft; hctx.fillRect(cx - 1, cy - 1, 2, 2); }],
+        ['FAIL', UI.bad, (cx, cy) => {
+          hctx.fillStyle = UI.bad;
+          dSeg([cx - 2, cy - 2], [cx + 2, cy + 2]); dSeg([cx - 2, cy + 2], [cx + 2, cy - 2]);
+        }],
+        ['DONE', UI.good, (cx, cy) => { hctx.fillStyle = UI.good; hctx.fillRect(cx, cy, 2, 2); }],
+        ['ASKED', UI.dim, (cx, cy) => { hctx.fillStyle = UI.dim; hctx.fillRect(cx, cy, 1, 1); }],
+      ]);
+    }
+    row(`Z${TERRAIN_Z} ${size(TERRAIN_Z)}`, [
+      ['TERRAIN', UI.soft, null],
+      ['MESH', UI.edge, box(UI.edge)], ['WAIT', UI.gold, box(UI.gold)], ['REBUILD', UI.hot, box(UI.hot)],
+    ]);
+    if (!oFine) {
+      row(`Z${farZ} ${size(farZ)}`, [
+        ['SHELL', UI.soft, null], ['MESH', UI.edge, box(UI.edge)], ['ASKED', UI.gold, box(UI.gold)],
+      ]);
+    }
+    if (!oFine || tPx < DBG_CELL_PX) row('ONE BOX', [['THE WHOLE RING, FOLDED', UI.dim, null]]);
+    hctx.globalAlpha = 1;
+  }
+}
 function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   hctx.clearRect(0, 0, HW, HH);
   // ── THE HUD OFF, FOR A MEASUREMENT ──
@@ -55428,7 +55725,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // return leaves them holding wherever the dock last was and the blit — which
   // is a scissored render straight onto the canvas and answers to no overlay —
   // would go on painting the live scene into a stale rectangle.
-  if (!hudOn) { dockRect = povRect = droneRect = mapUpRect = { x: 0, y: 0, w: 0, h: 0 }; return; }
+  if (!hudOn) {
+    dockRect = povRect = droneRect = mapUpRect = { x: 0, y: 0, w: 0, h: 0 };
+    // Tile debug is its own instrument, not a HUD element — see
+    // drawTileDebugOverlay's own header for why it must not depend on hudOn.
+    drawTileDebugOverlay();
+    return;
+  }
   // While the DOM menu is up the HUD stands down entirely. Its scrim used to
   // be painted over these pixels in this same buffer; now the menu sits above
   // this canvas, and the RIG tab's bay is a HOLE through it to the renderer —
@@ -55678,287 +55981,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.globalAlpha = 1;
   }
   hudLap('way');
-  // ── tile debug: the streaming machinery, made visible (chart only) ──
-  // The z16 vector grid over the chart, each tile wearing its state: DONE a
-  // green pip, ON THE WIRE a pulsing gold square, QUEUED its serving rank
-  // (the gate is nearest-first, not FIFO — the number is the order it will
-  // actually run), FAILED a red X waiting out its backoff, and a dim dot for
-  // requested-but-unsettled. Fine terrain outlines its own z14 tiles — teal
-  // built, gold still fetching, orange marked for rebuild — and the header
-  // carries the counts plus the far shell's level and fill.
-  if (camMode === 'top' && tileDbg) {
-    const dNow = performance.now();
-    const dProj = (wx: number, wz: number): [number, number] | null => {
-      poiVec.set(wx, groundAt(wx, wz), wz);
-      if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) return null;
-      poiVec.project(camera);
-      return [((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS, ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS];
-    };
-    const dSeg = (a: [number, number] | null, b: [number, number] | null): void => {
-      if (!a || !b) return;
-      const n = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]) / 2));
-      for (let i = 0; i <= n; i++) {
-        hctx.fillRect(Math.round(a[0] + ((b[0] - a[0]) * i) / n), Math.round(a[1] + ((b[1] - a[1]) * i) / n), 1, 1);
-      }
-    };
-    /** Outline the quad four projected corners make, clockwise from top-left. */
-    const dBox = (a: [number, number] | null, b: [number, number] | null,
-      c: [number, number] | null, d2: [number, number] | null): void => {
-      dSeg(a, b); dSeg(b, c); dSeg(c, d2); dSeg(d2, a);
-    };
-    /** How wide one cell of a grid lands on the HUD, in its own pixels — the
-     *  measure that decides whether a layer is worth drawing cell by cell. */
-    const dCell = (a: [number, number] | null, b: [number, number] | null): number =>
-      (a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0);
-    /**
-     * A CELL TOO SMALL TO HOLD A MARKER IS NOISE, NOT INFORMATION.
-     *
-     * The z16 grid is 19x19 cells and the z14 ring 9x9, and both are sized in
-     * GROUND metres — so as the chart pulls out they do not spread, they
-     * collapse. At the wide end a z16 tile is half a kilometre inside a view
-     * six hundred across: three hundred and sixty cells of grid line and pip
-     * stacked into a few pixels of dirty haze in the middle of the frame,
-     * every one of them drawn, none of them readable. The post chain makes it
-     * worse rather than better — narrow bright features are exactly what the
-     * quantiser turns into a white contour diagram.
-     *
-     * So each layer draws cells only while a cell can carry one, and outlines
-     * its RING when it cannot. At that zoom the useful fact is not which tile
-     * is queued, it is where the fine world sits inside the wide one — which
-     * is a rectangle, and reads as one.
-     */
-    const DBG_CELL_PX = 8;
-    const [dLat, dLon] = localToLatLon(state.x + panX, state.z + panZ);
-    const dR = viewRadius();
-    const [ox0, oy0] = tileAt(dLat, dLon, OSM_Z);
-    const oN = clamp(Math.ceil(dR / tileMetres(OSM_Z)), 1, 9);
-    // Every corner in the range projected once; lines and centres reuse them.
-    const dCor: Array<Array<[number, number] | null>> = [];
-    for (let j = 0; j <= oN * 2 + 1; j++) {
-      const row: Array<[number, number] | null> = [];
-      for (let i = 0; i <= oN * 2 + 1; i++) {
-        const b = tileBounds(ox0 - oN + i, oy0 - oN + j, OSM_Z);
-        const [wx, wz] = toLocal(b.latN, b.lonW);
-        row.push(dProj(wx, wz));
-      }
-      dCor.push(row);
-    }
-    const oPx = dCell(dCor[oN][oN], dCor[oN][oN + 1]);
-    const oFine = oPx >= DBG_CELL_PX;
-    hctx.fillStyle = UI.soft;
-    hctx.globalAlpha = 0.28;
-    if (oFine) {
-      for (let j = 0; j <= oN * 2 + 1; j++) for (let i = 0; i <= oN * 2 + 1; i++) {
-        if (i <= oN * 2) dSeg(dCor[j][i], dCor[j][i + 1]);
-        if (j <= oN * 2) dSeg(dCor[j][i], dCor[j + 1][i]);
-      }
-    } else {
-      // The whole vector ring as ONE rectangle: where the roads are, against a
-      // view mostly made of ground that has none.
-      const e = oN * 2 + 1;
-      dBox(dCor[0][0], dCor[0][e], dCor[e][e], dCor[e][0]);
-    }
-    // SERVING RANK UNDER THE METRIC THE GATE ACTUALLY USES — which for a long
-    // time this did not do. It ranked by plain distance to the focus point
-    // while osmRelease serves by wedgeCost from the CAR, so the numbers on the
-    // chart were not the order tiles would be fetched in. Reading them as
-    // priority is what "it is only mildly biasing forward" was measured
-    // against, and the display was the part that was wrong about it.
-    const dRank = new Map<string, number>();
-    osmQueue
-      .map((w) => {
-        const [wx, wz] = tileCentreLocal(w.x, w.y);
-        return { k: `${w.x}/${w.y}`, d: wedgeCost(wx, wz) };
-      })
-      .sort((a, b) => a.d - b.d)
-      .forEach((q, i) => dRank.set(q.k, i + 1));
-    for (let j = 0; oFine && j <= oN * 2; j++) for (let i = 0; i <= oN * 2; i++) {
-      const key = `${ox0 - oN + i}/${oy0 - oN + j}`;
-      const a = dCor[j][i], b = dCor[j + 1][i + 1];
-      if (!a || !b) continue;
-      const cx = Math.round((a[0] + b[0]) / 2), cy = Math.round((a[1] + b[1]) / 2);
-      if (cx < -4 || cx > HW + 4 || cy < -4 || cy > HH + 4) continue;
-      if (osmFailedAt.has(key) && dNow - (osmFailedAt.get(key) ?? 0) > 30000) osmFailedAt.delete(key);
-      // Every marker sits on an ink seat: a bare green pip is indistinguishable
-      // from a bush at chart scale, and this canvas has no other way to say
-      // "UI, not world" than the dark plate every other instrument stands on.
-      const seat = (r2: number): void => {
-        hctx.globalAlpha = 0.65;
-        hctx.fillStyle = UI.ink;
-        hctx.fillRect(cx - r2, cy - r2, r2 * 2 + 1, r2 * 2 + 1);
-      };
-      if (osmActive.has(key)) {
-        seat(2);
-        hctx.globalAlpha = 0.55 + 0.4 * Math.sin(dNow / 120);
-        hctx.fillStyle = UI.gold;
-        hctx.fillRect(cx - 1, cy - 1, 3, 3);
-      } else if (dRank.has(key)) {
-        seat(2);
-        hctx.globalAlpha = 0.75;
-        hctx.fillStyle = UI.soft;
-        hctx.fillRect(cx - 1, cy - 1, 2, 2);
-        textEdgeP(String(dRank.get(key)), cx + 3, cy - 3, UI.text);
-      } else if (osmFailedAt.has(key)) {
-        seat(4);
-        hctx.globalAlpha = 0.9;
-        hctx.fillStyle = UI.bad;
-        dSeg([cx - 3, cy - 3], [cx + 3, cy + 3]);
-        dSeg([cx - 3, cy + 3], [cx + 3, cy - 3]);
-      } else if (osmDone.has(key)) {
-        seat(2);
-        hctx.globalAlpha = 0.85;
-        hctx.fillStyle = UI.good;
-        hctx.fillRect(cx, cy, 2, 2);
-      } else if (osmLoaded.has(key)) {
-        // Requested but unsettled: cached-rendering, or refused for want of
-        // terrain and waiting to be forgotten and asked again.
-        hctx.globalAlpha = 0.6;
-        hctx.fillStyle = UI.dim;
-        hctx.fillRect(cx, cy, 1, 1);
-      }
-    }
-    // The fine-terrain ring, as outlines over its own (coarser) grid.
-    const [tx0, ty0] = tileAt(dLat, dLon, TERRAIN_Z);
-    const tN = clamp(Math.ceil(dR / tileMetres(TERRAIN_Z)), 1, 4);
-    const tCor: Array<Array<[number, number] | null>> = [];
-    for (let j = 0; j <= tN * 2 + 1; j++) {
-      const row: Array<[number, number] | null> = [];
-      for (let i = 0; i <= tN * 2 + 1; i++) {
-        const b = tileBounds(tx0 - tN + i, ty0 - tN + j, TERRAIN_Z);
-        const [wx, wz] = toLocal(b.latN, b.lonW);
-        row.push(dProj(wx, wz));
-      }
-      tCor.push(row);
-    }
-    const tPx = dCell(tCor[tN][tN], tCor[tN][tN + 1]);
-    if (tPx >= DBG_CELL_PX) {
-      for (let j = 0; j <= tN * 2; j++) for (let i = 0; i <= tN * 2; i++) {
-        const key = `${tx0 - tN + i}/${ty0 - tN + j}`;
-        if (!terrainReady.has(key)) continue;
-        hctx.fillStyle = terrainDirty.has(key) ? UI.hot : terrainMeshes.has(key) ? UI.edge : UI.gold;
-        hctx.globalAlpha = terrainDirty.has(key) ? 0.8 : 0.5;
-        dSeg(tCor[j][i], tCor[j][i + 1]);
-        dSeg(tCor[j][i], tCor[j + 1][i]);
-        dSeg(tCor[j + 1][i], tCor[j + 1][i + 1]);
-        dSeg(tCor[j][i + 1], tCor[j + 1][i + 1]);
-      }
-    } else {
-      hctx.fillStyle = UI.edge;
-      hctx.globalAlpha = 0.5;
-      const e = tN * 2 + 1;
-      dBox(tCor[0][0], tCor[0][e], tCor[e][e], tCor[e][0]);
-    }
-    /**
-     * …AND THE LAYER THAT IS ACTUALLY STREAMING OUT HERE.
-     *
-     * The two rings above are the FINE world, and at the wide end they are a
-     * pair of small boxes near the middle — correct, and not what is doing the
-     * work. Everything filling the rest of the frame is the coarse shell, and
-     * until now the overlay said nothing about it beyond a count in the
-     * header. So the shell draws its own grid at exactly the zooms where the
-     * fine grids have folded: teal where a mesh stands, gold where a tile has
-     * been asked for and has not landed. It is the same reading the z14 ring
-     * gives close up, one ladder rung out.
-     */
-    if (!oFine) {
-      const [sx0, sy0] = tileAt(dLat, dLon, farZ);
-      const sN = clamp(Math.ceil(dR / tileMetres(farZ)), 1, FAR_RING_MAX);
-      for (let j = -sN; j <= sN; j++) for (let i = -sN; i <= sN; i++) {
-        const key = `${farZ}/${sx0 + i}/${sy0 + j}`;
-        if (!farTiles.has(key)) continue;
-        const b0 = tileBounds(sx0 + i, sy0 + j, farZ);
-        const b1 = tileBounds(sx0 + i + 1, sy0 + j + 1, farZ);
-        const [ax, az] = toLocal(b0.latN, b0.lonW);
-        const [bx, bz] = toLocal(b1.latN, b1.lonW);
-        hctx.fillStyle = farMeshes.has(key) ? UI.edge : UI.gold;
-        hctx.globalAlpha = farMeshes.has(key) ? 0.4 : 0.7;
-        dBox(dProj(ax, az), dProj(bx, az), dProj(bx, bz), dProj(ax, bz));
-      }
-    }
-    hctx.globalAlpha = 1;
-    let fails = 0;
-    for (const [, at] of osmFailedAt) if (dNow - at < 30000) fails++;
-    textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
-      6, 40, UI.text);
-    // CLIP is the block of fine tiles the shell is discarded inside. It is the
-    // number to read when the chart's outer ground looks paler and flatter
-    // than the middle: anything outside that block is the coarse shell's to
-    // paint wherever its 150 m chords stand over the fine world, and a block
-    // that has collapsed to 1x1 hands it nearly everything.
-    textEdgeP(`Z${TERRAIN_Z} MESH ${terrainMeshes.size} WAIT ${terrainReady.size - terrainMeshes.size}`
-      + ` REBUILD ${terrainDirty.size} CLIP ${fineBlock[0] + fineBlock[1] + 1}x${fineBlock[2] + fineBlock[3] + 1}`
-      + ` · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
-      + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
-      6, 48, UI.soft);
-    // ── THE KEY ── one row per LAYER that draws boxes, in the order they
-    // stream: what zoom it is, how wide one of its boxes is here (a tile's
-    // metres shrink with the cosine of the latitude, so this is computed,
-    // not quoted), the layer's name, then its marks in their own inks. The
-    // vector row shows while its cells draw and the shell row while its
-    // boxes do, and a folded ring says so. Drawn UNDER the scale bar — the
-    // first cut sat on the bar's label, which is exactly the rows this is
-    // meant to read beside. The header's words are the key's words.
-    {
-      const gw = (t: string): number => {
-        let w = 0;
-        for (const ch of t) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
-        return w;
-      };
-      const size = (z: number): string => {
-        const m = tileMetres(z);
-        return m >= 1000 ? `${(m / 1000).toFixed(m < 10000 ? 1 : 0)}KM` : `${Math.round(m)}M`;
-      };
-      // Below the LAYER key, which is drawn first and is a variable number of
-      // rows (the legend grows with what is on screen). The fallback is the old
-      // fixed offset, for the frame before the chart block has run.
-      let ly = Math.max(pad + 56 + 20, layerKeyBottom + 3);
-      type Mark = ((cx: number, cy: number) => void) | null;
-      const row = (name: string, items: Array<[string, string, Mark]>): void => {
-        const x0 = 6 + gw(name) + 4;
-        let lx = x0;
-        hctx.globalAlpha = 1;
-        textEdgeP(name, 6, ly, UI.text);
-        for (const [label, col, mark] of items) {
-          const w = (mark ? 7 : 0) + gw(label);
-          if (lx > x0 && lx + w > HW - 4) { lx = x0; ly += 8; }
-          hctx.globalAlpha = 1;
-          if (mark) mark(lx + 2, ly + 2);              // the glyph spans y-1..y+5; its middle is y+2
-          hctx.globalAlpha = 1;
-          textEdgeP(label, lx + (mark ? 7 : 0), ly, col);
-          lx += w + 5;
-        }
-        ly += 8;
-      };
-      const box = (col: string): Mark => (cx, cy) => {
-        hctx.fillStyle = col; hctx.globalAlpha = 0.9;
-        dBox([cx - 3, cy - 3], [cx + 3, cy - 3], [cx + 3, cy + 3], [cx - 3, cy + 3]);
-      };
-      if (oFine) {
-        row(`Z${OSM_Z} ${size(OSM_Z)}`, [
-          ['VECTORS', UI.soft, null],
-          ['WIRE', UI.gold, (cx, cy) => { hctx.fillStyle = UI.gold; hctx.fillRect(cx - 1, cy - 1, 3, 3); }],
-          ['QUEUE', UI.soft, (cx, cy) => { hctx.fillStyle = UI.soft; hctx.fillRect(cx - 1, cy - 1, 2, 2); }],
-          ['FAIL', UI.bad, (cx, cy) => {
-            hctx.fillStyle = UI.bad;
-            dSeg([cx - 2, cy - 2], [cx + 2, cy + 2]); dSeg([cx - 2, cy + 2], [cx + 2, cy - 2]);
-          }],
-          ['DONE', UI.good, (cx, cy) => { hctx.fillStyle = UI.good; hctx.fillRect(cx, cy, 2, 2); }],
-          ['ASKED', UI.dim, (cx, cy) => { hctx.fillStyle = UI.dim; hctx.fillRect(cx, cy, 1, 1); }],
-        ]);
-      }
-      row(`Z${TERRAIN_Z} ${size(TERRAIN_Z)}`, [
-        ['TERRAIN', UI.soft, null],
-        ['MESH', UI.edge, box(UI.edge)], ['WAIT', UI.gold, box(UI.gold)], ['REBUILD', UI.hot, box(UI.hot)],
-      ]);
-      if (!oFine) {
-        row(`Z${farZ} ${size(farZ)}`, [
-          ['SHELL', UI.soft, null], ['MESH', UI.edge, box(UI.edge)], ['ASKED', UI.gold, box(UI.gold)],
-        ]);
-      }
-      if (!oFine || tPx < DBG_CELL_PX) row('ONE BOX', [['THE WHOLE RING, FOLDED', UI.dim, null]]);
-      hctx.globalAlpha = 1;
-    }
-  }
+  // ── tile debug: the streaming machinery, made visible ──
+  // Drawing itself lives in drawTileDebugOverlay() now (its condition is
+  // camMode === 'top' || 'god', not just the chart), so it can also fire
+  // from this function's own !hudOn early return, above.
+  drawTileDebugOverlay();
   hudLap('tiledbg');
   // ── checkpoint markers, under everything ──
   // Never a label and never a distance: the moment a checkpoint tells you how
