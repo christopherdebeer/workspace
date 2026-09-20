@@ -288,6 +288,53 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
    *  Deep enough to read as open sea through the water shader, shallow enough
    *  that the shelf at the shoreline stays a shelf rather than a trench. */
   const SEA_BED = 6;
+  /**
+   * THE SEA'S FLOOR IS CONTINUOUS, NOT A PER-VERTEX SWITCH.
+   *
+   * The drop used to be binary: a vertex whose nearest cover pixel said water
+   * fell the whole SEA_BED, and its neighbour on a dry pixel did not. The cover
+   * raster is ~38 m a pixel and a vertex ~9-20 m, so along a fjord the bed
+   * was a 6 m plateau with pixel-shaped holes in it — measured at Romsdalen
+   * (`roms-transect.mjs`: DEM 0.6 across the fjord, the mesh −5.9, with lone
+   * vertices at −4.6 and −3.8 mid-fjord where a pixel read dry, standing 0.5 m
+   * PROUD of a 0.1 m sea) and photographed from a grazing camera as flat
+   * ledges in rows with bilinear ramps between them: the "horizontal
+   * terracing, quantised in world space" the seat reported. Two continuous
+   * terms replace the switch: the water EVIDENCE over a footprint about the
+   * raster's own pixel (nine taps, the shape `swardCoverEvidence` already uses
+   * for the same raster and the same reason), and a depth gate that eases in
+   * over the last metre and a half under the 2 m ceiling rather than cutting
+   * at it. A lone dry pixel inside the sea now reads 0.8 wet and the bed under
+   * it sits at −4.7 rather than +0.6; the shore is a ramp the width of a cover
+   * pixel rather than a cliff on its boundary. Only ever lowers, as before.
+   */
+  const SEA_EV_R = 20;
+  const seaFloor = (S: TerrainStore, x: number, z: number, elev: number, seaLocal: number): number => {
+    if (elev > seaLocal + 2) return elev;   // the cheap test first: most vertices are land
+    const wet = (cx: number, cz: number): number => (S.sampleCover(cx, cz) === S.cover.water ? 1 : 0);
+    let w = wet(x, z) * 2, n = 2;
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + 0.6, b = a + Math.PI / 4;
+      w += wet(x + Math.cos(a) * SEA_EV_R * 0.5, z + Math.sin(a) * SEA_EV_R * 0.5);
+      w += wet(x + Math.cos(b) * SEA_EV_R, z + Math.sin(b) * SEA_EV_R);
+      n += 2;
+    }
+    const ev = w / n;
+    if (ev <= 0) return elev;
+    // THE EVIDENCE SATURATES AT A THIRD OF A PIXEL, AND THE CEILING STAYS
+    // HARD. Two cuts before this one were continuous in the wrong axis. A
+    // drop of SEA_BED × evidence left the raster's edge pixels at a third of
+    // the depth, and the lattice then interpolated from that shallow vertex up
+    // to its dry neighbour OVER the water — the census read +45 interior
+    // buried texels at both the Umgeni and Glencairn against the control. An
+    // eased depth gate did the same from the other side (+85, +80). The holes
+    // in PLAN were the fault and only they wanted smoothing: a lone dry pixel
+    // inside the sea reads 0.8 here and takes the full drop; the outermost
+    // third of a pixel of shore ramps; and a vertex within two metres of the
+    // sea takes the depth outright, as it always did.
+    if (elev > seaLocal + 2) return elev;
+    return Math.min(elev, seaLocal - SEA_BED * Math.min(1, ev * 3));
+  };
   /** Every built terrain tile overlapping a world rectangle, marked for rebuild. */
   const AREA_MIX = 0.5;               // how far the ramp is pulled, after the raster's own tint
   /** Cost of the refinement, for `__refine`. */
@@ -1073,7 +1120,7 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     for (let i = 0; i < n; i++) {
       const x = px[i], z = pz[i];
       let N = fieldAt(x, z);
-      if (S.sampleCover(x, z) === S.cover.water && N <= seaLocal + 2) N = Math.min(N, seaLocal - SEA_BED);
+      N = seaFloor(S, x, z, N, seaLocal);
       // THE GROUND UNDER DRAWN WATER IS AT MOST THE FIELD'S BED — the water
       // census read a riverbank polygon's whole interior as buried, the DEM
       // standing above the body's own level. Roads keep their deck, and so
@@ -2167,7 +2214,6 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     if (!refined) bankSolve(S, t, pos, bankOwned, bankTarget);
     for (let i = 0; i < (refined ? 0 : (pos.length / 3)); i++) {
       const ex = pos[(i) * 3] + cxm, ez = pos[(i) * 3 + 2] + czm;
-      const cv = S.sampleCover(ex, ez);
       // The exact edge where the field has a tile, inside this one where it
       // does not — see refineTileGeometry's fieldAt.
       let elev = S.hasHeight(ex, ez) ? S.sampleHeight(ex, ez)
@@ -2187,10 +2233,7 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       // sea surface, which is precisely the flat ocean plate the DEM draws and
       // nothing else. That also makes it safe against a bad sea datum, which is
       // the failure that found this.
-      if (cv === S.cover.water) {
-        const seaLocal = S.seaAbs() - S.baseElev;
-        if (elev <= seaLocal + 2) elev = Math.min(elev, seaLocal - SEA_BED);
-      }
+      elev = seaFloor(S, ex, ez, elev, S.seaAbs() - S.baseElev);
       // The field's bed as a ceiling, outside what the bank owns — see
       // refineTileGeometry's site for why ownership is decided first.
       if (floor && !bankOwned[i]) { const f = hydroFloorAt(floor, t, ex, ez); if (f !== null && f - S.baseElev < elev && !S.onRoad(ex, ez)) elev = f - S.baseElev; }

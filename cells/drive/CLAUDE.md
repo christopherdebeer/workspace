@@ -483,6 +483,14 @@ missing its mesh — it is the cell-triangle lookup answering null mid-swap. The
 honest fix is a settle gate on that assertion rather than a fixed wait; until
 then, read it against three runs of a control, not one.
 
+**`mesh-seams.test.mjs`'s `population sane` rows are a streaming gate, not a
+seam.** They require a minimum count of built joins at each spot, and on the
+relay the count is whatever streamed: measured 2026-09-20 as `bixby joins=4 >=
+5` on the working tree and `chapmans joins=1 >= 10` on a parent-kernel
+worktree the same hour, with every seam row (`p95 kerb step 0.04 <= 0.15`,
+`worst meet 0.04 <= 0.5`) green in both. Read the seam rows; a population
+failure alone is the network.
+
 `sward.test.mjs` and anything else that needs a road under the car depend on
 **Overpass**, a busy public service that fails for whole sessions at a time.
 Its road/water masking checks fail in a family and the count moves run to run.
@@ -18519,3 +18527,109 @@ producer is now pinned.
 went in beside it — the field's own meshes and the coastal surf strip alone —
 because `sea` is the legacy plane and hiding it leaves every hydro tile
 drawing, which the Romsdalen unit below needed to know.
+
+## Romsdalen's terraces were the sea bed, switched per vertex on a 38 m raster
+
+The critique called the ground-view Romsdalen frames *the one thing here I
+would regard as an outright rendering defect: the water/shore region contains
+conspicuous horizontal terracing / sawtooth bands. It looks quantised in world
+space.* It is, and the quantum is the cover raster's pixel.
+
+**THE PLACE IS A FIXTURE NOW.** `at-romsdalen` (`static/fixtures/world-romsdalen.json`,
+62.5511 7.7112, r=1200 m — the reel drive's own spawn; 1,150 ways, 256² heights
+at 9.4 m, no terrestrial ecoregion at z5) boots in seven seconds and settles in
+under a minute, so every number below is the same on every run. The water there
+is the fjord, kind `ocean`, resting at 0.1 m over a DEM that reads **0.6 m
+across the whole of it** — the elevation source's flat plate, exactly as the
+sea-floor rule's own comment records.
+
+**THE WATER WAS INNOCENT, AND THE HIDE-DIFF SAID SO FIRST.** From the seat's own
+framing (the sheet's `close` god camera at the spawn) the terraces are pale
+flat-topped ledges in rows across the fjord. Foam off, waves off, the surf
+strip hidden — the ledges stay; the hydro meshes hidden (`__hide('hydro')`,
+new) and the ledges are STILL THERE, drawn in the terrain's own water-class
+paint: horizontal stepped bands in the bed under the fjord. Then the transect
+(`roms-transect.mjs`, now `devtools/shore-graze.mjs`), from the truck through
+the shoreline and 240 m out, every 3 m:
+
+| m from the truck | DEM | mesh, as shipped | mesh, now |
+|---|---|---|---|
+| 36 (the last dry sample) | 2.73 | 2.74 | 2.74 |
+| 42 | 1.73 | **−0.13** | −3.65 |
+| 48 | 1.15 | −5.90 | −5.90 |
+| 84 | 0.60 | **−4.58** | −5.90 |
+| 90–144 | 0.60 | −5.90 | −5.90 |
+| 150 | 0.60 | **−3.79** | −5.90 |
+| 156–228 | 0.60 | −5.90 | −5.90 |
+| 234 (the far shore's first dry pixel) | 0.61 | **−2.94** | −4.93 |
+
+`SEA_BED` dropped a vertex the full six metres when the NEAREST cover pixel said
+water and the DEM stood within two metres of the sea, and not otherwise. A cover
+pixel is ~38 m and a vertex 9–20 m, so along a fjord the bed was a 6 m plateau
+with pixel-shaped holes in it: the lone samples at −4.58 and −3.79 are vertices
+a dry pixel left standing at +0.6 — **half a metre PROUD of a 0.1 m sea** —
+and the bilinear ramps between them and their dropped neighbours are the
+sawtooth. From a grazing camera each hole is a flat pale ledge (the bed's own
+colour through a few centimetres of water, or above it) with a sloped side, in
+rows, because the raster's rows are rows.
+
+**THE SWITCH READS EVIDENCE NOW** (`seaFloor` in the kernel, both the
+refined and the plain lattice): the water evidence over a footprint about one
+cover pixel — nine taps, centre weighted two, the shape `swardCoverEvidence`
+already uses on the same raster for the same fault — saturating at a third of
+a pixel wet, under the same hard two-metre ceiling as before. A lone dry pixel
+inside the sea reads 0.8 and takes the full drop, so the bed under it is −5.9
+instead of +0.6; only the outermost third of a pixel of shore ramps. Only ever
+lowers, as before; the road veto and the bank's ownership sit downstream of it
+and are unchanged.
+
+**TWO CUTS BEFORE THIS ONE WERE CONTINUOUS IN THE WRONG AXIS, AND THE CENSUS
+CAUGHT BOTH.** A drop of `SEA_BED × evidence` left the raster's edge pixels at
+a third of the depth, and the lattice then interpolated from that shallow
+vertex up to its dry neighbour OVER the water: **+43 and +46 interior buried
+texels at Glencairn and the Umgeni** against a control taken on the parent
+kernel in a worktree. An eased depth gate over the last 1.5 m did the same
+from the other side (+80, +85). The holes in PLAN were the fault and only they
+wanted smoothing; a vertex within two metres of the sea takes the depth
+outright, as it always did.
+
+**Measured**, `wet-census.mjs`, the parent kernel (`REV=`, a worktree at
+`55aca99`) against this one, W drawn / U fringe-buried / I interior-buried:
+
+| fixture | control | now |
+|---|---|---|
+| at-romsdalen | 4300 / 114 / 54 | **4354 / 61 / 46** |
+| at-umgeni | 5526 / 534 / 455 | **5547 / 507 / 444** |
+| at-glencairn | 4690 / 149 / 340 | 4690 / 155 / 337 |
+| at-campsbay | 614 / 22 / 1 | 619 / 22 / 1 |
+| at-simonstown | 363 / 11 / 10 | 361 / 9 / 12 |
+
+Romsdalen's fringe burial halves and its drawn water rises by the holes it
+had; the Umgeni's estuary gains 21 drawn and loses 27 fringe; the other three
+are inside the census's own spread. **A CONTROL TAKEN BY STASHING THE WORKING
+TREE IS A CONTROL YOU CANNOT SEE**: the first attempt ran `git stash push --
+<file>` under a chain that printed a non-empty diff right after it, and the
+reading was believed and then doubted for an hour; `wet-census.mjs` takes
+`REV=` now and a `git worktree` at the parent is the way to hold one still.
+
+**AND `__hide('hydro')` / `__hide('surf')` ARE THE INSTRUMENT THAT SEPARATED
+THE LAYERS.** `sea` hides the legacy plane and leaves every hydro tile drawing,
+so before this unit a frame could not be taken with the water off — and a ledge
+in a frame cannot say which layer it belongs to.
+
+`devtools/shore-graze.mjs` is the regression: the transect FAILS on any
+interior water sample (coverage 0.9 or over, past the first 20 m of shore)
+whose mesh stands over the resting level, or on a step over `STEP_M` (2.5 m)
+between neighbours, and then takes the grazing frames. On the fixed kernel at
+Romsdalen: **81 samples, 59 inside the water, 0 ledges, 0 steps**; the ford
+and the lagoon fixtures pass too. The fringe is deliberately not a ledge here:
+a line river's whole width can be fringe, and that is #169's bank shaping,
+which the census counts as U.
+
+**What this does NOT do.** The bed is still a constant `SEA_BED` under the
+evidence, not a shelving profile by distance from the waterline (#170's beach
+against cliff); the far shore in the table above still climbs from −4.9 to +0.6
+across one pixel; and the pale streaks that remain on the fjord from a grazing
+camera are the FOAM — crest whitening on the 140 m wind sea, hard-edged under
+the quantiser — which the same hide-diff separated (`foamStrength: 0` takes
+them out) and which is a look, not a geometry.
