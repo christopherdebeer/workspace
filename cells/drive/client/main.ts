@@ -6105,8 +6105,17 @@ function depthVisible(px3: number, py3: number, pz3: number): boolean {
 // painted under the live instruments so a wrong pin can be argued with on
 // the spot. 2 = WIRE: the world stripped to its meshes — the geometry the
 // truck is actually colliding with, not the paint over it.
+const XRAY_MODES = ['OFF', 'DEPTH', 'WIRE'] as const;
 let xrayMode = 0;
+(window as unknown as { __xray?: object }).__xray = (mode?: string): object => {
+  if (mode === undefined) return { mode: XRAY_MODES[xrayMode], modes: [...XRAY_MODES] };
+  const i = XRAY_MODES.indexOf(mode.toUpperCase() as typeof XRAY_MODES[number]);
+  if (i < 0) return { error: `unknown mode ${mode}`, modes: [...XRAY_MODES] };
+  xrayMode = i;
+  return { mode: XRAY_MODES[xrayMode], modes: [...XRAY_MODES] };
+};
 let xrayWireOn = false, xrayWireAt = 0;
+let xrayTdSaved: [number, number] | null = null;
 const wildlifeWire = createWildlifeWire();
 const wireMaterials = createWireMaterialPolicy();
 function xrayWire(now: number): void {
@@ -6115,6 +6124,26 @@ function xrayWire(now: number): void {
   // While on, sweep again every couple of seconds — streamed-in tiles arrive
   // with their materials solid and need catching.
   if (want && xrayWireOn && now - xrayWireAt < 2000) return;
+  // THE TERRAIN'S DERIVATIVE TERMS ARE PINNED OFF WHILE THE WIRE IS UP. A
+  // wireframe fragment sits on a line, and `fwidth` across a line's 2x2
+  // helper quad is not a footprint — the detail cascade and the substrate
+  // divide by it, and what comes out is NaN. One NaN pixel in the scene
+  // target is then spread by the composite's separable blurs into an
+  // axis-aligned RECTANGLE, and the quantiser paints NaN as the palette's
+  // black floor: measured on the Camps Bay god-camera frame as 39% of the
+  // pane in opaque black blocks, and 0.1% with the same terms pinned at boot
+  // (`tdetail=flat`). Not the near plane (0.3 to 30 m, no change), not the
+  // DOF or the tilt shift, not any material the sweep protects — the terrain
+  // alone, and only its fragment terms. A wire view shows lines, so nothing
+  // the surface detail says is lost; the values are put back when WIRE stands
+  // down, so a dial moved while it was up keeps its setting.
+  if (want && !xrayWireOn) {
+    xrayTdSaved = [tdU.uTdOct.value as number, tdU.uSubAmt.value as number];
+    tdU.uTdOct.value = 0; tdU.uSubAmt.value = 0;
+  } else if (!want && xrayWireOn && xrayTdSaved) {
+    tdU.uTdOct.value = xrayTdSaved[0]; tdU.uSubAmt.value = xrayTdSaved[1];
+    xrayTdSaved = null;
+  }
   xrayWireAt = now; xrayWireOn = want;
   // The WHOLE scene, not just worldGroup — vegetation, critters, the sward
   // and the sea are scene-level and the first sweep missed them (asked from
@@ -6149,6 +6178,55 @@ function xrayWire(now: number): void {
     }
   });
 }
+// WHY IS THAT STILL SOLID UNDER WIRE? The sweep above decides per material
+// and reports nothing, so a frame with an opaque shape in it could not say
+// whether the shape was a material the policy PROTECTS (shader, transparent,
+// alpha-tested, the vegetation family) or one it never reached. This walks
+// the scene with the sweep's own rules and tallies, per mesh name, the
+// triangles under each verdict — a reading of the authority rather than of
+// the picture, which is the only kind that can witness a rule.
+(window as unknown as { __xraywhy?: object }).__xraywhy = (top = 40): object => {
+  type Row = { meshes: number; tris: number; by: Record<string, number> };
+  const rows = new Map<string, Row>();
+  const keep = new Set<THREE.Object3D>([skyDome, car, xray, moon]);
+  const triCount = (g: THREE.BufferGeometry, mesh: THREE.Mesh): number => {
+    const n = g.index ? g.index.count : (g.attributes.position?.count ?? 0);
+    const inst = (mesh as THREE.InstancedMesh).isInstancedMesh ? (mesh as THREE.InstancedMesh).count : 1;
+    return Math.floor(n / 3) * inst;
+  };
+  scene.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.visible) return;
+    let kept = false;
+    for (let p: THREE.Object3D | null = o; p; p = p.parent) if (keep.has(p)) { kept = true; break; }
+    const name = o.name || `(${o.type})`;
+    let row = rows.get(name);
+    if (!row) { row = { meshes: 0, tris: 0, by: {} }; rows.set(name, row); }
+    row.meshes++;
+    const tris = mesh.geometry ? triCount(mesh.geometry, mesh) : 0;
+    row.tris += tris;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const m of mats) {
+      const sm = m as THREE.MeshStandardMaterial;
+      const why = kept ? 'kept'
+        : o.name === 'birds' || o.name === 'herds' ? 'wildlife'
+        : o.name.startsWith('veg') || o.name === 'sward' ? 'veg'
+        : !m ? 'nomat'
+        : m.userData.wireKeepSolid ? 'userData'
+        : (m as THREE.ShaderMaterial).isShaderMaterial ? 'shader'
+        : m.transparent ? 'transparent'
+        : m.alphaTest > 0 ? 'alphaTest'
+        : !('wireframe' in m) ? 'nowire'
+        : sm.wireframe ? 'wire' : 'solid';
+      row.by[why] = (row.by[why] ?? 0) + tris;
+    }
+  });
+  const list = [...rows.entries()].map(([name, r]) => ({ name, ...r }))
+    .sort((a, b) => b.tris - a.tris).slice(0, top);
+  const totals: Record<string, number> = {};
+  for (const r of rows.values()) for (const [k, v] of Object.entries(r.by)) totals[k] = (totals[k] ?? 0) + v;
+  return { mode: XRAY_MODES[xrayMode], totals, rows: list };
+};
 // The X-RAY's WITNESS LIST: what is in the scene, and a way to stand one
 // system down while looking at a fault — through material.visible, which
 // nothing reasserts per frame (rain.visible is rewritten every tick).
@@ -37333,7 +37411,7 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
  *  question about two, and two page loads of one spot do not put the same
  *  world, the same clock or the same weather under them. */
 (window as unknown as { __cam?: object }).__cam = (m?: string): object => {
-  if (m === 'cab' || m === 'chase' || m === 'drone' || m === 'top') setCam(m);
+  if (m === 'cab' || m === 'chase' || m === 'drone' || m === 'top' || m === 'god') setCam(m);
   return { mode: camMode, stick: !!stick, zoom: +zoomCur.toFixed(1),
     // THE STAND-OFF, because the chart's speed retreat was invisible to every
     // probe for as long as it existed: `__cam` reported the zoom, and the zoom
@@ -38037,7 +38115,10 @@ function aimFocus(): void {
     sharp: preset.chase.sharp + (preset.top.sharp - preset.chase.sharp) * lensK,
     blur: preset.chase.blur + (preset.top.blur - preset.chase.blur) * lensK,
   };
-  const amt = tiltOver.amt ?? (camMode === 'cab' ? 0 : band.amt);
+  // GOD IS EXEMPT FOR THE SAME REASON CAB IS: a narrow depth of field while
+  // you are the one deciding what to look at is a tax on exactly the thing
+  // you are reviewing.
+  const amt = tiltOver.amt ?? (camMode === 'cab' || camMode === 'god' ? 0 : band.amt);
   u.uTiltAmt.value = amt;
   // THE PLANE IS PLACED EVEN WHEN THE EFFECT IS OFF, so `__tilt` always reports
   // a live one. An early return here saved a handful of vector operations and
@@ -38542,6 +38623,11 @@ function applyHidden(): void {
   if (hideSet.has('ov')) ovGroup.visible = false;
   if (hideSet.has('theme')) themeGroup.visible = false;
   if (hideSet.has('sea')) sea.visible = false;
+  // THE WATER FIELD'S OWN MESHES, and the coastal surf strip alone, so a
+  // frame can be taken with the drawn water off — `sea` is the legacy plane,
+  // and hiding it leaves every hydro tile drawing.
+  if (hideSet.has('hydro') && hydroSys) hydroSys.object3d.visible = false;
+  if (hideSet.has('surf') && hydroSys) hydroSys.object3d.traverse((o) => { if (o.name.endsWith(':surf')) o.visible = false; });
   if (hideSet.has('veg')) {
     for (const k of Object.keys(vegMeshes) as VegKind[]) vegMeshes[k].visible = false;
     trunks.visible = false;
@@ -38579,6 +38665,8 @@ function applyHidden(): void {
       if (layer === 'drape') for (const d of drapes) d.visible = drapeVisible(d, camMode === 'top' ? zoomCur : 1);
       if (layer === 'synth') for (const b of synthBodies) for (const m of b.meshes) m.visible = true;
       if (layer === 'sea') sea.visible = true;
+      if (layer === 'hydro' && hydroSys) hydroSys.object3d.visible = true;
+      if (layer === 'surf' && hydroSys) hydroSys.object3d.traverse((o) => { if (o.name.endsWith(':surf')) o.visible = true; });
       if (layer === 'veg') {
         for (const k of Object.keys(vegMeshes) as VegKind[]) vegMeshes[k].visible = true;
         trunks.visible = true;
@@ -38601,7 +38689,7 @@ function applyHidden(): void {
     if (layer === 'rig') car.visible = !off;
   }
   return { hidden: [...hideSet], rig: car.visible,
-    layers: ['drape', 'synth', 'far', 'ov', 'theme', 'globe', 'sea', 'veg', 'terrain', 'critters', 'sward', 'rig'],
+    layers: ['drape', 'synth', 'far', 'ov', 'theme', 'globe', 'sea', 'hydro', 'surf', 'veg', 'terrain', 'critters', 'sward', 'rig'],
     counts: { drapes: drapes.length, synth: synthBodies.length, terrain: terrainMeshes.size } };
 };
 /**
@@ -41076,6 +41164,22 @@ function ezStandReport(r: number): object {
 (window as unknown as { __clock?: object }).__clock = (): object =>
   ({ wallS: +(performance.now() / 1000).toFixed(2), simS: +simT.toFixed(2), frames: simN,
     frameMs: +frameMs.toFixed(1), fps: Math.round(1000 / Math.max(frameMs, 1)) });
+/** Sets the TIME dial LIVE — literally the same assignment the SETTINGS
+ *  dial's own `onChange` makes (`dial('time', …, (i) => { timeMode = i; })`),
+ *  so a devtool gets the identical eased transition a tap gets, with no
+ *  reboot: `?time=` is boot-only, and a grid of shots across times of day
+ *  was launching one browser per row for no reason but that. Case
+ *  insensitive; called with no argument it just reports the current mode.
+ *  Left as a bare index assignment on purpose — the dial does nothing
+ *  else either, and `clockShift`/a held clock stay exactly as orthogonal
+ *  to this as they are to the dial. */
+(window as unknown as { __timeset?: object }).__timeset = (mode?: string): object => {
+  if (mode === undefined) return { mode: TIME_MODES[timeMode], modes: [...TIME_MODES] };
+  const i = TIME_MODES.indexOf(mode.toUpperCase() as typeof TIME_MODES[number]);
+  if (i < 0) return { error: `unknown mode ${mode}`, modes: [...TIME_MODES] };
+  timeMode = i;
+  return { mode: TIME_MODES[timeMode], modes: [...TIME_MODES] };
+};
 (window as unknown as { __frame?: object }).__frame = (): object => {
   // The HULL's own extents, in car-local space. `setFromObject` would swallow
   // the halo ring and the 26m beam cones and report 200%-of-screen nonsense.
@@ -42219,10 +42323,18 @@ function meshHeightAt(x: number, z: number): number | null {
 /** Ask for a front, the way `__windset` asks for a gale: a test that wants to
  *  watch a sky arrive cannot wait on the synthetic roll's minutes or on the
  *  live feed's quarter hour. Holds the roll off for ten minutes; a pin still
- *  wins, because a pin is a fixture. */
-(window as unknown as { __wxnext?: object }).__wxnext = (sky: Sky): string => {
+ *  wins, because a pin is a fixture.
+ *
+ *  `snap` (default false, so the ordinary "watch a front arrive" use is
+ *  unchanged) sets `wx.cloud`/`wx.rain` to the table entry immediately,
+ *  the way a `?wx=` PIN already does in `stepWeather` — without it, a
+ *  contact-sheet devtool in a headless harness (2-4 fps, so the ease's
+ *  per-frame `dt*0.12` step barely moves in real wall-clock time) can wait
+ *  the better part of a minute for 'storm' and still read cover 0.18. */
+(window as unknown as { __wxnext?: object }).__wxnext = (sky: Sky, snap = false): string => {
   if (WX_PIN) return `pinned ${WX_PIN}`;
   wx.next = sky; wx.at = performance.now() + 600000;
+  if (snap) { const t = WX[sky]; wx.cloud = t.cloud; wx.rain = t.rain; }
   return sky;
 };
 /** Which palette the world settled on, and whether real cover chose it or the
@@ -42457,6 +42569,41 @@ function heightsOf(): number[] {
   roadCells: roadGrid.size, seenWays: seenWays.size, unbuilt,
   osmDone: osmDone.size, inFlight: osmInFlight, queued: osmQueue.length,
 });
+/** IS THIS PARTICULAR VIEW ACTUALLY READY, rather than the whole session's
+ *  books. `__tstats().unbuilt` looked like a pending count and is not one:
+ *  it is incremented whenever ANY build anywhere skipped for missing height
+ *  and is reset only on a hop, so a devtool waiting for it to reach zero can
+ *  poll for ever on a world that finished streaming minutes ago. This asks
+ *  about the tile(s) a shot at (x,z) actually depends on — is the height
+ *  tile loaded, is the terrain mesh built, is it not still marked dirty —
+ *  over the point and, if `r` is given, a ring at that radius (so a wide
+ *  orbit shot can ask about every tile its camera will cross). The far
+ *  shell's readiness is already scoped to its current ring by `__far()`'s
+ *  own `tiles`/`asked` pair; reused here rather than re-derived. */
+(window as unknown as { __viewready?: object }).__viewready = (x = state.x, z = state.z, r = 0): object => {
+  const pts: Array<[number, number]> = [[x, z]];
+  if (r > 0) {
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [0.7071, 0.7071], [-0.7071, 0.7071], [0.7071, -0.7071], [-0.7071, -0.7071]] as const) {
+      pts.push([x + dx * r, z + dz * r]);
+    }
+  }
+  const keys = new Set<string>();
+  for (const [px, pz] of pts) {
+    const [tx, ty] = tileAt(origin.lat - pz / M_LAT, origin.lon + px / origin.mLon, TERRAIN_Z);
+    keys.add(`${tx}/${ty}`);
+  }
+  const tiles = [...keys].map((key) => ({
+    key, height: heightTiles.has(key), mesh: terrainMeshes.has(key), dirty: terrainDirty.has(key),
+  }));
+  const fineReady = tiles.every((t) => t.height && t.mesh && !t.dirty);
+  // The raw counts a caller would otherwise need a second __far() call to
+  // see — printed here so a poll log can show WHY farReady is what it is
+  // (m of n home, how many still in flight or queued) rather than just the
+  // one boolean it reduces to.
+  const far = { home: farMeshes.size, asked: farTiles.size, inFlight: farInFlight, queued: farQueue.length };
+  const farReady = far.home === far.asked && far.inFlight === 0 && far.queued === 0;
+  return { at: [x, z], r, tiles, fineReady, far, farReady, ready: fineReady && farReady };
+};
 /** IS THE ROAD AHEAD THERE YET? Walks the car's heading in `step` metres and
  *  reports, per sample, whether the vector tile covering that point has
  *  finished loading. The whole streaming question in one array: a run of
@@ -44396,6 +44543,54 @@ function noteTags(t: Record<string, string>): void {
   teleportTo(x, z);
   if (h !== undefined) state.heading = h;
 };
+/**
+ * THE GOD CAMERA'S OWN CONTROL SURFACE — an orbit around an authored target in
+ * the live world, for inspecting one feature from any angle or distance
+ * without picking one of the three canned rig geometries or leaving the real
+ * scene for `ezSheetOf`'s isolated stage.
+ *
+ * DEGREES AT THIS BOUNDARY, matching `?h=`/`?sunalt=`, and RADIANS internally
+ * (`godAz`/`godEl`) like every other camera angle in the file — the exact
+ * distinction `__place`'s own doctrine warns about, so it is stated here
+ * rather than left to be rediscovered.
+ *
+ * `az` is the bearing you are standing AT relative to the target (0 stands
+ * north of it looking south, matching the chart's own convention); `el` is
+ * degrees above the horizontal, clamped short of straight down/up where
+ * `camera.lookAt` degenerates against the world's up vector (the same trap
+ * the chart's 90° tilt hit). Pass only the fields you want to move; anything
+ * else keeps its last value, so a script can walk one axis at a time.
+ *
+ * `__hide('rig')` already exists for hiding the truck out of a shot — this
+ * probe does not duplicate it.
+ */
+(window as unknown as { __godcam?: object }).__godcam = (opt?: {
+  x?: number; z?: number; y?: number; az?: number; el?: number; dist?: number; fov?: number;
+}): object => {
+  if (opt) {
+    if (opt.x !== undefined) { godTarget.x = opt.x; godInit = true; }
+    if (opt.z !== undefined) { godTarget.z = opt.z; godInit = true; }
+    // A target moved in plan and given no explicit height stands on the
+    // ground under it — the common case, "look at this junction" — rather
+    // than carrying over whatever height the previous target happened to be.
+    if (opt.y !== undefined) godTarget.y = opt.y;
+    else if (opt.x !== undefined || opt.z !== undefined) godTarget.y = groundAt(godTarget.x, godTarget.z);
+    if (opt.az !== undefined) godAz = (opt.az * Math.PI) / 180;
+    if (opt.el !== undefined) godEl = clamp((opt.el * Math.PI) / 180, -1.5, 1.5);
+    if (opt.dist !== undefined) godDist = Math.max(0.5, opt.dist);
+    if (opt.fov !== undefined) { godFov = clamp(opt.fov, 4, 120); if (camMode === 'god') camera.fov = godFov; }
+    if (camMode !== 'god') setCam('god');
+  }
+  return {
+    mode: camMode,
+    target: { x: +godTarget.x.toFixed(2), y: +godTarget.y.toFixed(2), z: +godTarget.z.toFixed(2) },
+    az: +((godAz * 180) / Math.PI).toFixed(1),
+    el: +((godEl * 180) / Math.PI).toFixed(1),
+    dist: +godDist.toFixed(1),
+    fov: +godFov.toFixed(1),
+    pos: { x: +camPos.x.toFixed(2), y: +camPos.y.toFixed(2), z: +camPos.z.toFixed(2) },
+  };
+};
 (window as unknown as { __solid?: object }).__solid = (r = 220): object => {
   let solid = 0, rail = 0, rubble = 0;
   const seen = new Set<Seg>();
@@ -46240,13 +46435,37 @@ function drawMinimap(): void {
 // and changes everything: the world at 1.6m with the A-pillars in the way is
 // a different game from the world at 18m behind, and it is the seat the
 // headlights, the wipers and the retroreflective signs were all built for.
-type CamMode = 'top' | 'chase' | 'cab' | 'drone';
+type CamMode = 'top' | 'chase' | 'cab' | 'drone' | 'god';
 let camMode: CamMode = 'chase';   // the road view is the game; the chart is a mode you visit
 let chaseH = 1;    // chase rig height multiplier — the CAMERA dials in SETTINGS
 let cabFov = 68;   // driver's-seat field of view
 const camPos = new THREE.Vector3();
 const camAim = new THREE.Vector3();
 let camInit = false;
+/**
+ * ── GOD: A FREE CAMERA FOR REVIEWING ONE FEATURE, FROM ANY ANGLE ──
+ *
+ * Every other mode is tied to something that MOVES — the truck, the drone —
+ * because the game is about driving it. A reviewer asking "what does this
+ * junction actually look like" has never had a way to stand still and look:
+ * the two existing survey mechanisms are `ezSheetOf` (an isolated object on
+ * an empty stage, not the real world) and teleport-the-truck-and-pick-a-canned-
+ * rig (three fixed geometries, no free azimuth or elevation). This is neither
+ * — it is an orbit around an AUTHORED TARGET in the live, streamed scene, so
+ * the world around the target — terrain, buildings, weather, streaming — is
+ * exactly what a driver would see there.
+ *
+ * `godAz`/`godEl` are RADIANS, like every other camera angle in this file
+ * (`state.heading`, `mapRot()`); the probe (`__godcam`) takes DEGREES at its
+ * boundary, matching the `?h=`/`?sunalt=` convention, precisely to avoid the
+ * radians-vs-degrees mismatch `__place`'s own doctrine already warns about.
+ */
+const godTarget = new THREE.Vector3();
+let godAz = 0;        // radians, 0 is looking from due north toward -z (south)
+let godEl = 0.35;     // radians above the horizontal, clamped short of the poles
+let godDist = 60;      // metres, the orbit radius
+let godFov = 55;       // degrees
+let godInit = false;   // has a target ever been set? — first entry defaults near the truck
 /**
  * A CAMERA FLIGHT BETWEEN TWO RIGS, and the drone's launch and landing are the
  * only things that get one.
@@ -46964,6 +47183,9 @@ function viewH(): number { return droneEye() ? drone.heading : state.heading; }
 function renderFocusXZ(): [number, number] {
   if (camMode === 'top') return [viewX() + panX, viewZ() + panZ];
   if (camMode === 'drone') return droneGroundFocus();
+  // GOD follows its own authored target, wherever the truck is — the whole
+  // point of the mode is standing somewhere the truck is not.
+  if (camMode === 'god') return [godTarget.x, godTarget.z];
   // CHASE AND CAB STAY ON THE RIG, deliberately. The camera's offsets there are
   // metres against a tree range of hundreds, so chasing the suspension's own
   // movement would rebuild fields for nothing.
@@ -46998,18 +47220,30 @@ function droneGroundFocus(): [number, number] {
 let lastPov: CamMode = 'chase';
 function setCam(m: CamMode): void {
   camMode = m;
+  // FIRST ENTRY DEFAULTS NEAR THE TRUCK rather than at the world origin — a
+  // god camera nobody has aimed yet is still somewhere worth looking, and
+  // "wherever you were driving" is a better guess than (0,0,0).
+  if (m === 'god' && !godInit) {
+    godInit = true;
+    const gx = state.x + Math.sin(state.heading) * 20, gz = state.z - Math.cos(state.heading) * 20;
+    godTarget.set(gx, groundAt(gx, gz), gz);
+  }
   // 'drone' is not a SEAT. `lastPov` is what the chart returns you to and what
   // the dock previews, and a drone that gets remembered there strands you in
   // the air the next time you close the map.
-  if (m !== 'top' && m !== 'drone') lastPov = m;
+  // 'god' IS NOT A SEAT EITHER, for the same reason: it stands wherever it was
+  // last pointed, not wherever the truck happens to be, and remembering it as
+  // the chart's return seat would strand the player looking at a kerb.
+  if (m !== 'top' && m !== 'drone' && m !== 'god') lastPov = m;
   camInit = false;                  // snap to the new rig, then resume smoothing
   chasePull = 1;                    // and forget any terrain pull-in from last time
   fovKick = 0;                      // the lens starts at base in a fresh seat
   tunnelBlend = 0;
   panX = panZ = 0;                  // pan is a glance, not a state to carry over
   // From the driver's seat you are INSIDE the shell, so the near plane has to
-  // clear the dashboard rather than the bonnet.
-  camera.fov = camMode === 'cab' ? cabFov : 55;
+  // clear the dashboard rather than the bonnet. God keeps whatever lens the
+  // probe last set (godFov), because a review camera's zoom is the point.
+  camera.fov = camMode === 'cab' ? cabFov : camMode === 'god' ? godFov : 55;
   camera.updateProjectionMatrix();
   ghostCab(camMode === 'cab');
   updateStickHome();
@@ -47964,7 +48198,9 @@ const writeUrl = (la: number, lo: number): void => {
     // and the chart carries its zoom as well; a drone in the air is the
     // exception, because restoring into a drone that no longer exists would
     // strand the camera — it resumes as the seat you would land back into.
-    const cm = camMode === 'drone' ? lastPov : camMode;
+    // 'god' is a review tool, not a resumable player state — same exception
+    // as the drone, so a reload never strands anyone staring at a kerb.
+    const cm = camMode === 'drone' || camMode === 'god' ? lastPov : camMode;
     const zm = camMode === 'top' && Math.abs(zoomT - 1) > 0.05
       ? `&z=${zoomT >= 30 ? zoomT.toFixed(0) : zoomT.toFixed(1)}` : '';
     const ln = lineOn ? '&line=1' : '';
@@ -51331,6 +51567,29 @@ function tick(now: number): void {
       camPos.y + 40 * sn - 2.4 * cs,
       camPos.z + fwdZ * (40 * cs + 2.4 * sn),
     );
+  } else if (camMode === 'god') {
+    // AN ORBIT ABOUT AN AUTHORED TARGET, standing in the real streamed scene —
+    // not a fixed rig geometry and not the isolated stage `ezSheetOf` builds.
+    // Nothing here reads the truck; that is the whole point of the mode.
+    farGroup.visible = true;
+    ovGroup.visible = false;
+    themeGroup.visible = false;   // a thematic sheet is chart furniture
+    // THE NEAR/FAR PLANES SCALE WITH THE ORBIT, not with a fixed driving-scale
+    // constant: a reviewer may stand a metre from a kerb or a kilometre back
+    // from a mountain pass, and either one needs its own precision budget.
+    // THE FAR PLANE MUST CLEAR THE SKY DOME (a 20km-radius sphere centred on
+    // the camera), or the dome is clipped and the visible "sky" is just the
+    // canvas clear colour — solid black at every hour, discovered by
+    // reviewing god-camera screenshots across DAWN..NIGHT.
+    setNear(Math.max(0.1, godDist * 0.02), Math.max(20500, godDist * 4));
+    if (Math.abs(camera.fov - godFov) > 0.01) { camera.fov = godFov; camera.updateProjectionMatrix(); }
+    const gcE = Math.cos(godEl), gsE = Math.sin(godEl);
+    camPos.set(
+      godTarget.x + Math.sin(godAz) * gcE * godDist,
+      godTarget.y + gsE * godDist,
+      godTarget.z - Math.cos(godAz) * gcE * godDist,
+    );
+    camAim.copy(godTarget);
   } else {
     farGroup.visible = true;
     ovGroup.visible = false;
@@ -51480,7 +51739,7 @@ function tick(now: number): void {
       camInit = true;
       ghostCab(camMode === 'cab');
     }
-  } else if (!camInit || camMode === 'cab' || camMode === 'top' || rewind.at !== null) {
+  } else if (!camInit || camMode === 'cab' || camMode === 'top' || camMode === 'god' || rewind.at !== null) {
     camera.position.copy(camPos); camInit = true;
     // THE CHART SNAPS, AND THAT IS WHY THE LERP BELOW LOST ITS `top` ARM. The
     // top camera used to ease toward `camPos` at 10/s while `camera.lookAt`
@@ -51498,7 +51757,7 @@ function tick(now: number): void {
     // while standing on the smoothed one tilts the chart by the difference.
     camFlyAim.set(viewX() + panX,
       chartY ?? sampleHeight(viewX() + panX, viewZ() + panZ), viewZ() + panZ);
-  } else if (camMode === 'cab' || camMode === 'drone') camFlyAim.copy(camAim);
+  } else if (camMode === 'cab' || camMode === 'drone' || camMode === 'god') camFlyAim.copy(camAim);
   else camFlyAim.set(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
   if (camFly.t > 0) {
     camFlyTmp.copy(camFlyAim);
@@ -54621,7 +54880,7 @@ const DIAL_GROUPS: DialGroup[] = [
       // verdict can be argued with on the spot. WIRE strips the streamed
       // world to its triangles: the geometry the truck actually collides
       // with, not the paint over it.
-      dial('xray', 'X-RAY', ['OFF', 'DEPTH', 'WIRE'], 0, (i) => { xrayMode = i; }),
+      dial('xray', 'X-RAY', [...XRAY_MODES], 0, (i) => { xrayMode = i; }),
       /**
        * ── WHICH WATER SYSTEM IS DRAWING ──
        *
@@ -55230,6 +55489,303 @@ function hudLap(k: string): void {
   }
   return out;
 };
+/**
+ * ── TILE DEBUG, PULLED OUT SO IT CAN DRAW WITHOUT THE HUD ──
+ *
+ * This used to be an inline block of drawHud(), gated on `camMode === 'top'`
+ * and — because it sat after drawHud's `if (!hudOn) return;` — on the HUD
+ * being on as well. `__godcam()` never sets `camMode = 'top'`, so every
+ * god-camera shot was structurally unable to show it, whatever HUD state a
+ * caller asked for. Extracted verbatim (its own dNow, its own dProj/dSeg/
+ * dBox closures over camera/poiVec/poiView) so it can be called both from
+ * drawHud's normal flow and from its early `!hudOn` return, with no shared
+ * state beyond `pad` (always 4 here) and `layerKeyBottom` (a module `let`
+ * that stays at its last-drawn value, or 0, when the HUD has not run this
+ * session — the same fallback the KEY section's own comment already named).
+ *
+ * THE ORIGIN IS renderFocusXZ(), NOT `state.x + panX`. The old expression
+ * assumed the chart, whose pan is added to the truck's own position; a god
+ * camera looks at `godTarget`, which can be nowhere near the truck — the
+ * whole point of the mode. `renderFocusXZ()` already answers this per camera
+ * (viewX()+panX on the chart, godTarget in god mode), so the debug grid is
+ * centred on wherever the shot is actually looking.
+ */
+function drawTileDebugOverlay(): void {
+  if (!tileDbg || (camMode !== 'top' && camMode !== 'god')) return;
+  const pad = 4;
+  const dNow = performance.now();
+  const dProj = (wx: number, wz: number): [number, number] | null => {
+    poiVec.set(wx, groundAt(wx, wz), wz);
+    if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) return null;
+    poiVec.project(camera);
+    return [((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS, ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS];
+  };
+  const dSeg = (a: [number, number] | null, b: [number, number] | null): void => {
+    if (!a || !b) return;
+    const n = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]) / 2));
+    for (let i = 0; i <= n; i++) {
+      hctx.fillRect(Math.round(a[0] + ((b[0] - a[0]) * i) / n), Math.round(a[1] + ((b[1] - a[1]) * i) / n), 1, 1);
+    }
+  };
+  /** Outline the quad four projected corners make, clockwise from top-left. */
+  const dBox = (a: [number, number] | null, b: [number, number] | null,
+    c: [number, number] | null, d2: [number, number] | null): void => {
+    dSeg(a, b); dSeg(b, c); dSeg(c, d2); dSeg(d2, a);
+  };
+  /** How wide one cell of a grid lands on the HUD, in its own pixels — the
+   *  measure that decides whether a layer is worth drawing cell by cell. */
+  const dCell = (a: [number, number] | null, b: [number, number] | null): number =>
+    (a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0);
+  /**
+   * A CELL TOO SMALL TO HOLD A MARKER IS NOISE, NOT INFORMATION.
+   *
+   * The z16 grid is 19x19 cells and the z14 ring 9x9, and both are sized in
+   * GROUND metres — so as the chart pulls out they do not spread, they
+   * collapse. At the wide end a z16 tile is half a kilometre inside a view
+   * six hundred across: three hundred and sixty cells of grid line and pip
+   * stacked into a few pixels of dirty haze in the middle of the frame,
+   * every one of them drawn, none of them readable. The post chain makes it
+   * worse rather than better — narrow bright features are exactly what the
+   * quantiser turns into a white contour diagram.
+   *
+   * So each layer draws cells only while a cell can carry one, and outlines
+   * its RING when it cannot. At that zoom the useful fact is not which tile
+   * is queued, it is where the fine world sits inside the wide one — which
+   * is a rectangle, and reads as one.
+   */
+  const DBG_CELL_PX = 8;
+  const [rfx, rfz] = renderFocusXZ();
+  const [dLat, dLon] = localToLatLon(rfx, rfz);
+  const dR = viewRadius();
+  const [ox0, oy0] = tileAt(dLat, dLon, OSM_Z);
+  const oN = clamp(Math.ceil(dR / tileMetres(OSM_Z)), 1, 9);
+  // Every corner in the range projected once; lines and centres reuse them.
+  const dCor: Array<Array<[number, number] | null>> = [];
+  for (let j = 0; j <= oN * 2 + 1; j++) {
+    const row: Array<[number, number] | null> = [];
+    for (let i = 0; i <= oN * 2 + 1; i++) {
+      const b = tileBounds(ox0 - oN + i, oy0 - oN + j, OSM_Z);
+      const [wx, wz] = toLocal(b.latN, b.lonW);
+      row.push(dProj(wx, wz));
+    }
+    dCor.push(row);
+  }
+  const oPx = dCell(dCor[oN][oN], dCor[oN][oN + 1]);
+  const oFine = oPx >= DBG_CELL_PX;
+  hctx.fillStyle = UI.soft;
+  hctx.globalAlpha = 0.28;
+  if (oFine) {
+    for (let j = 0; j <= oN * 2 + 1; j++) for (let i = 0; i <= oN * 2 + 1; i++) {
+      if (i <= oN * 2) dSeg(dCor[j][i], dCor[j][i + 1]);
+      if (j <= oN * 2) dSeg(dCor[j][i], dCor[j + 1][i]);
+    }
+  } else {
+    // The whole vector ring as ONE rectangle: where the roads are, against a
+    // view mostly made of ground that has none.
+    const e = oN * 2 + 1;
+    dBox(dCor[0][0], dCor[0][e], dCor[e][e], dCor[e][0]);
+  }
+  // SERVING RANK UNDER THE METRIC THE GATE ACTUALLY USES — which for a long
+  // time this did not do. It ranked by plain distance to the focus point
+  // while osmRelease serves by wedgeCost from the CAR, so the numbers on the
+  // chart were not the order tiles would be fetched in. Reading them as
+  // priority is what "it is only mildly biasing forward" was measured
+  // against, and the display was the part that was wrong about it.
+  const dRank = new Map<string, number>();
+  osmQueue
+    .map((w) => {
+      const [wx, wz] = tileCentreLocal(w.x, w.y);
+      return { k: `${w.x}/${w.y}`, d: wedgeCost(wx, wz) };
+    })
+    .sort((a, b) => a.d - b.d)
+    .forEach((q, i) => dRank.set(q.k, i + 1));
+  for (let j = 0; oFine && j <= oN * 2; j++) for (let i = 0; i <= oN * 2; i++) {
+    const key = `${ox0 - oN + i}/${oy0 - oN + j}`;
+    const a = dCor[j][i], b = dCor[j + 1][i + 1];
+    if (!a || !b) continue;
+    const cx = Math.round((a[0] + b[0]) / 2), cy = Math.round((a[1] + b[1]) / 2);
+    if (cx < -4 || cx > HW + 4 || cy < -4 || cy > HH + 4) continue;
+    if (osmFailedAt.has(key) && dNow - (osmFailedAt.get(key) ?? 0) > 30000) osmFailedAt.delete(key);
+    // Every marker sits on an ink seat: a bare green pip is indistinguishable
+    // from a bush at chart scale, and this canvas has no other way to say
+    // "UI, not world" than the dark plate every other instrument stands on.
+    const seat = (r2: number): void => {
+      hctx.globalAlpha = 0.65;
+      hctx.fillStyle = UI.ink;
+      hctx.fillRect(cx - r2, cy - r2, r2 * 2 + 1, r2 * 2 + 1);
+    };
+    if (osmActive.has(key)) {
+      seat(2);
+      hctx.globalAlpha = 0.55 + 0.4 * Math.sin(dNow / 120);
+      hctx.fillStyle = UI.gold;
+      hctx.fillRect(cx - 1, cy - 1, 3, 3);
+    } else if (dRank.has(key)) {
+      seat(2);
+      hctx.globalAlpha = 0.75;
+      hctx.fillStyle = UI.soft;
+      hctx.fillRect(cx - 1, cy - 1, 2, 2);
+      textEdgeP(String(dRank.get(key)), cx + 3, cy - 3, UI.text);
+    } else if (osmFailedAt.has(key)) {
+      seat(4);
+      hctx.globalAlpha = 0.9;
+      hctx.fillStyle = UI.bad;
+      dSeg([cx - 3, cy - 3], [cx + 3, cy + 3]);
+      dSeg([cx - 3, cy + 3], [cx + 3, cy - 3]);
+    } else if (osmDone.has(key)) {
+      seat(2);
+      hctx.globalAlpha = 0.85;
+      hctx.fillStyle = UI.good;
+      hctx.fillRect(cx, cy, 2, 2);
+    } else if (osmLoaded.has(key)) {
+      // Requested but unsettled: cached-rendering, or refused for want of
+      // terrain and waiting to be forgotten and asked again.
+      hctx.globalAlpha = 0.6;
+      hctx.fillStyle = UI.dim;
+      hctx.fillRect(cx, cy, 1, 1);
+    }
+  }
+  // The fine-terrain ring, as outlines over its own (coarser) grid.
+  const [tx0, ty0] = tileAt(dLat, dLon, TERRAIN_Z);
+  const tN = clamp(Math.ceil(dR / tileMetres(TERRAIN_Z)), 1, 4);
+  const tCor: Array<Array<[number, number] | null>> = [];
+  for (let j = 0; j <= tN * 2 + 1; j++) {
+    const row: Array<[number, number] | null> = [];
+    for (let i = 0; i <= tN * 2 + 1; i++) {
+      const b = tileBounds(tx0 - tN + i, ty0 - tN + j, TERRAIN_Z);
+      const [wx, wz] = toLocal(b.latN, b.lonW);
+      row.push(dProj(wx, wz));
+    }
+    tCor.push(row);
+  }
+  const tPx = dCell(tCor[tN][tN], tCor[tN][tN + 1]);
+  if (tPx >= DBG_CELL_PX) {
+    for (let j = 0; j <= tN * 2; j++) for (let i = 0; i <= tN * 2; i++) {
+      const key = `${tx0 - tN + i}/${ty0 - tN + j}`;
+      if (!terrainReady.has(key)) continue;
+      hctx.fillStyle = terrainDirty.has(key) ? UI.hot : terrainMeshes.has(key) ? UI.edge : UI.gold;
+      hctx.globalAlpha = terrainDirty.has(key) ? 0.8 : 0.5;
+      dSeg(tCor[j][i], tCor[j][i + 1]);
+      dSeg(tCor[j][i], tCor[j + 1][i]);
+      dSeg(tCor[j + 1][i], tCor[j + 1][i + 1]);
+      dSeg(tCor[j][i + 1], tCor[j + 1][i + 1]);
+    }
+  } else {
+    hctx.fillStyle = UI.edge;
+    hctx.globalAlpha = 0.5;
+    const e = tN * 2 + 1;
+    dBox(tCor[0][0], tCor[0][e], tCor[e][e], tCor[e][0]);
+  }
+  /**
+   * …AND THE LAYER THAT IS ACTUALLY STREAMING OUT HERE.
+   *
+   * The two rings above are the FINE world, and at the wide end they are a
+   * pair of small boxes near the middle — correct, and not what is doing the
+   * work. Everything filling the rest of the frame is the coarse shell, and
+   * until now the overlay said nothing about it beyond a count in the
+   * header. So the shell draws its own grid at exactly the zooms where the
+   * fine grids have folded: teal where a mesh stands, gold where a tile has
+   * been asked for and has not landed. It is the same reading the z14 ring
+   * gives close up, one ladder rung out.
+   */
+  if (!oFine) {
+    const [sx0, sy0] = tileAt(dLat, dLon, farZ);
+    const sN = clamp(Math.ceil(dR / tileMetres(farZ)), 1, FAR_RING_MAX);
+    for (let j = -sN; j <= sN; j++) for (let i = -sN; i <= sN; i++) {
+      const key = `${farZ}/${sx0 + i}/${sy0 + j}`;
+      if (!farTiles.has(key)) continue;
+      const b0 = tileBounds(sx0 + i, sy0 + j, farZ);
+      const b1 = tileBounds(sx0 + i + 1, sy0 + j + 1, farZ);
+      const [ax, az] = toLocal(b0.latN, b0.lonW);
+      const [bx, bz] = toLocal(b1.latN, b1.lonW);
+      hctx.fillStyle = farMeshes.has(key) ? UI.edge : UI.gold;
+      hctx.globalAlpha = farMeshes.has(key) ? 0.4 : 0.7;
+      dBox(dProj(ax, az), dProj(bx, az), dProj(bx, bz), dProj(ax, bz));
+    }
+  }
+  hctx.globalAlpha = 1;
+  let fails = 0;
+  for (const [, at] of osmFailedAt) if (dNow - at < 30000) fails++;
+  textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
+    6, 40, UI.text);
+  // CLIP is the block of fine tiles the shell is discarded inside. It is the
+  // number to read when the chart's outer ground looks paler and flatter
+  // than the middle: anything outside that block is the coarse shell's to
+  // paint wherever its 150 m chords stand over the fine world, and a block
+  // that has collapsed to 1x1 hands it nearly everything.
+  textEdgeP(`Z${TERRAIN_Z} MESH ${terrainMeshes.size} WAIT ${terrainReady.size - terrainMeshes.size}`
+    + ` REBUILD ${terrainDirty.size} CLIP ${fineBlock[0] + fineBlock[1] + 1}x${fineBlock[2] + fineBlock[3] + 1}`
+    + ` · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
+    + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
+    6, 48, UI.soft);
+  // ── THE KEY ── one row per LAYER that draws boxes, in the order they
+  // stream: what zoom it is, how wide one of its boxes is here (a tile's
+  // metres shrink with the cosine of the latitude, so this is computed,
+  // not quoted), the layer's name, then its marks in their own inks. The
+  // vector row shows while its cells draw and the shell row while its
+  // boxes do, and a folded ring says so. Drawn UNDER the scale bar — the
+  // first cut sat on the bar's label, which is exactly the rows this is
+  // meant to read beside. The header's words are the key's words.
+  {
+    const gw = (t: string): number => {
+      let w = 0;
+      for (const ch of t) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
+      return w;
+    };
+    const size = (z: number): string => {
+      const m = tileMetres(z);
+      return m >= 1000 ? `${(m / 1000).toFixed(m < 10000 ? 1 : 0)}KM` : `${Math.round(m)}M`;
+    };
+    // Below the LAYER key, which is drawn first and is a variable number of
+    // rows (the legend grows with what is on screen). The fallback is the old
+    // fixed offset, for the frame before the chart block has run.
+    let ly = Math.max(pad + 56 + 20, layerKeyBottom + 3);
+    type Mark = ((cx: number, cy: number) => void) | null;
+    const row = (name: string, items: Array<[string, string, Mark]>): void => {
+      const x0 = 6 + gw(name) + 4;
+      let lx = x0;
+      hctx.globalAlpha = 1;
+      textEdgeP(name, 6, ly, UI.text);
+      for (const [label, col, mark] of items) {
+        const w = (mark ? 7 : 0) + gw(label);
+        if (lx > x0 && lx + w > HW - 4) { lx = x0; ly += 8; }
+        hctx.globalAlpha = 1;
+        if (mark) mark(lx + 2, ly + 2);              // the glyph spans y-1..y+5; its middle is y+2
+        hctx.globalAlpha = 1;
+        textEdgeP(label, lx + (mark ? 7 : 0), ly, col);
+        lx += w + 5;
+      }
+      ly += 8;
+    };
+    const box = (col: string): Mark => (cx, cy) => {
+      hctx.fillStyle = col; hctx.globalAlpha = 0.9;
+      dBox([cx - 3, cy - 3], [cx + 3, cy - 3], [cx + 3, cy + 3], [cx - 3, cy + 3]);
+    };
+    if (oFine) {
+      row(`Z${OSM_Z} ${size(OSM_Z)}`, [
+        ['VECTORS', UI.soft, null],
+        ['WIRE', UI.gold, (cx, cy) => { hctx.fillStyle = UI.gold; hctx.fillRect(cx - 1, cy - 1, 3, 3); }],
+        ['QUEUE', UI.soft, (cx, cy) => { hctx.fillStyle = UI.soft; hctx.fillRect(cx - 1, cy - 1, 2, 2); }],
+        ['FAIL', UI.bad, (cx, cy) => {
+          hctx.fillStyle = UI.bad;
+          dSeg([cx - 2, cy - 2], [cx + 2, cy + 2]); dSeg([cx - 2, cy + 2], [cx + 2, cy - 2]);
+        }],
+        ['DONE', UI.good, (cx, cy) => { hctx.fillStyle = UI.good; hctx.fillRect(cx, cy, 2, 2); }],
+        ['ASKED', UI.dim, (cx, cy) => { hctx.fillStyle = UI.dim; hctx.fillRect(cx, cy, 1, 1); }],
+      ]);
+    }
+    row(`Z${TERRAIN_Z} ${size(TERRAIN_Z)}`, [
+      ['TERRAIN', UI.soft, null],
+      ['MESH', UI.edge, box(UI.edge)], ['WAIT', UI.gold, box(UI.gold)], ['REBUILD', UI.hot, box(UI.hot)],
+    ]);
+    if (!oFine) {
+      row(`Z${farZ} ${size(farZ)}`, [
+        ['SHELL', UI.soft, null], ['MESH', UI.edge, box(UI.edge)], ['ASKED', UI.gold, box(UI.gold)],
+      ]);
+    }
+    if (!oFine || tPx < DBG_CELL_PX) row('ONE BOX', [['THE WHOLE RING, FOLDED', UI.dim, null]]);
+    hctx.globalAlpha = 1;
+  }
+}
 function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   hctx.clearRect(0, 0, HW, HH);
   // ── THE HUD OFF, FOR A MEASUREMENT ──
@@ -55246,7 +55802,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // return leaves them holding wherever the dock last was and the blit — which
   // is a scissored render straight onto the canvas and answers to no overlay —
   // would go on painting the live scene into a stale rectangle.
-  if (!hudOn) { dockRect = povRect = droneRect = mapUpRect = { x: 0, y: 0, w: 0, h: 0 }; return; }
+  if (!hudOn) {
+    dockRect = povRect = droneRect = mapUpRect = { x: 0, y: 0, w: 0, h: 0 };
+    // Tile debug is its own instrument, not a HUD element — see
+    // drawTileDebugOverlay's own header for why it must not depend on hudOn.
+    drawTileDebugOverlay();
+    return;
+  }
   // While the DOM menu is up the HUD stands down entirely. Its scrim used to
   // be painted over these pixels in this same buffer; now the menu sits above
   // this canvas, and the RIG tab's bay is a HOLE through it to the renderer —
@@ -55496,287 +56058,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.globalAlpha = 1;
   }
   hudLap('way');
-  // ── tile debug: the streaming machinery, made visible (chart only) ──
-  // The z16 vector grid over the chart, each tile wearing its state: DONE a
-  // green pip, ON THE WIRE a pulsing gold square, QUEUED its serving rank
-  // (the gate is nearest-first, not FIFO — the number is the order it will
-  // actually run), FAILED a red X waiting out its backoff, and a dim dot for
-  // requested-but-unsettled. Fine terrain outlines its own z14 tiles — teal
-  // built, gold still fetching, orange marked for rebuild — and the header
-  // carries the counts plus the far shell's level and fill.
-  if (camMode === 'top' && tileDbg) {
-    const dNow = performance.now();
-    const dProj = (wx: number, wz: number): [number, number] | null => {
-      poiVec.set(wx, groundAt(wx, wz), wz);
-      if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) return null;
-      poiVec.project(camera);
-      return [((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS, ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS];
-    };
-    const dSeg = (a: [number, number] | null, b: [number, number] | null): void => {
-      if (!a || !b) return;
-      const n = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]) / 2));
-      for (let i = 0; i <= n; i++) {
-        hctx.fillRect(Math.round(a[0] + ((b[0] - a[0]) * i) / n), Math.round(a[1] + ((b[1] - a[1]) * i) / n), 1, 1);
-      }
-    };
-    /** Outline the quad four projected corners make, clockwise from top-left. */
-    const dBox = (a: [number, number] | null, b: [number, number] | null,
-      c: [number, number] | null, d2: [number, number] | null): void => {
-      dSeg(a, b); dSeg(b, c); dSeg(c, d2); dSeg(d2, a);
-    };
-    /** How wide one cell of a grid lands on the HUD, in its own pixels — the
-     *  measure that decides whether a layer is worth drawing cell by cell. */
-    const dCell = (a: [number, number] | null, b: [number, number] | null): number =>
-      (a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0);
-    /**
-     * A CELL TOO SMALL TO HOLD A MARKER IS NOISE, NOT INFORMATION.
-     *
-     * The z16 grid is 19x19 cells and the z14 ring 9x9, and both are sized in
-     * GROUND metres — so as the chart pulls out they do not spread, they
-     * collapse. At the wide end a z16 tile is half a kilometre inside a view
-     * six hundred across: three hundred and sixty cells of grid line and pip
-     * stacked into a few pixels of dirty haze in the middle of the frame,
-     * every one of them drawn, none of them readable. The post chain makes it
-     * worse rather than better — narrow bright features are exactly what the
-     * quantiser turns into a white contour diagram.
-     *
-     * So each layer draws cells only while a cell can carry one, and outlines
-     * its RING when it cannot. At that zoom the useful fact is not which tile
-     * is queued, it is where the fine world sits inside the wide one — which
-     * is a rectangle, and reads as one.
-     */
-    const DBG_CELL_PX = 8;
-    const [dLat, dLon] = localToLatLon(state.x + panX, state.z + panZ);
-    const dR = viewRadius();
-    const [ox0, oy0] = tileAt(dLat, dLon, OSM_Z);
-    const oN = clamp(Math.ceil(dR / tileMetres(OSM_Z)), 1, 9);
-    // Every corner in the range projected once; lines and centres reuse them.
-    const dCor: Array<Array<[number, number] | null>> = [];
-    for (let j = 0; j <= oN * 2 + 1; j++) {
-      const row: Array<[number, number] | null> = [];
-      for (let i = 0; i <= oN * 2 + 1; i++) {
-        const b = tileBounds(ox0 - oN + i, oy0 - oN + j, OSM_Z);
-        const [wx, wz] = toLocal(b.latN, b.lonW);
-        row.push(dProj(wx, wz));
-      }
-      dCor.push(row);
-    }
-    const oPx = dCell(dCor[oN][oN], dCor[oN][oN + 1]);
-    const oFine = oPx >= DBG_CELL_PX;
-    hctx.fillStyle = UI.soft;
-    hctx.globalAlpha = 0.28;
-    if (oFine) {
-      for (let j = 0; j <= oN * 2 + 1; j++) for (let i = 0; i <= oN * 2 + 1; i++) {
-        if (i <= oN * 2) dSeg(dCor[j][i], dCor[j][i + 1]);
-        if (j <= oN * 2) dSeg(dCor[j][i], dCor[j + 1][i]);
-      }
-    } else {
-      // The whole vector ring as ONE rectangle: where the roads are, against a
-      // view mostly made of ground that has none.
-      const e = oN * 2 + 1;
-      dBox(dCor[0][0], dCor[0][e], dCor[e][e], dCor[e][0]);
-    }
-    // SERVING RANK UNDER THE METRIC THE GATE ACTUALLY USES — which for a long
-    // time this did not do. It ranked by plain distance to the focus point
-    // while osmRelease serves by wedgeCost from the CAR, so the numbers on the
-    // chart were not the order tiles would be fetched in. Reading them as
-    // priority is what "it is only mildly biasing forward" was measured
-    // against, and the display was the part that was wrong about it.
-    const dRank = new Map<string, number>();
-    osmQueue
-      .map((w) => {
-        const [wx, wz] = tileCentreLocal(w.x, w.y);
-        return { k: `${w.x}/${w.y}`, d: wedgeCost(wx, wz) };
-      })
-      .sort((a, b) => a.d - b.d)
-      .forEach((q, i) => dRank.set(q.k, i + 1));
-    for (let j = 0; oFine && j <= oN * 2; j++) for (let i = 0; i <= oN * 2; i++) {
-      const key = `${ox0 - oN + i}/${oy0 - oN + j}`;
-      const a = dCor[j][i], b = dCor[j + 1][i + 1];
-      if (!a || !b) continue;
-      const cx = Math.round((a[0] + b[0]) / 2), cy = Math.round((a[1] + b[1]) / 2);
-      if (cx < -4 || cx > HW + 4 || cy < -4 || cy > HH + 4) continue;
-      if (osmFailedAt.has(key) && dNow - (osmFailedAt.get(key) ?? 0) > 30000) osmFailedAt.delete(key);
-      // Every marker sits on an ink seat: a bare green pip is indistinguishable
-      // from a bush at chart scale, and this canvas has no other way to say
-      // "UI, not world" than the dark plate every other instrument stands on.
-      const seat = (r2: number): void => {
-        hctx.globalAlpha = 0.65;
-        hctx.fillStyle = UI.ink;
-        hctx.fillRect(cx - r2, cy - r2, r2 * 2 + 1, r2 * 2 + 1);
-      };
-      if (osmActive.has(key)) {
-        seat(2);
-        hctx.globalAlpha = 0.55 + 0.4 * Math.sin(dNow / 120);
-        hctx.fillStyle = UI.gold;
-        hctx.fillRect(cx - 1, cy - 1, 3, 3);
-      } else if (dRank.has(key)) {
-        seat(2);
-        hctx.globalAlpha = 0.75;
-        hctx.fillStyle = UI.soft;
-        hctx.fillRect(cx - 1, cy - 1, 2, 2);
-        textEdgeP(String(dRank.get(key)), cx + 3, cy - 3, UI.text);
-      } else if (osmFailedAt.has(key)) {
-        seat(4);
-        hctx.globalAlpha = 0.9;
-        hctx.fillStyle = UI.bad;
-        dSeg([cx - 3, cy - 3], [cx + 3, cy + 3]);
-        dSeg([cx - 3, cy + 3], [cx + 3, cy - 3]);
-      } else if (osmDone.has(key)) {
-        seat(2);
-        hctx.globalAlpha = 0.85;
-        hctx.fillStyle = UI.good;
-        hctx.fillRect(cx, cy, 2, 2);
-      } else if (osmLoaded.has(key)) {
-        // Requested but unsettled: cached-rendering, or refused for want of
-        // terrain and waiting to be forgotten and asked again.
-        hctx.globalAlpha = 0.6;
-        hctx.fillStyle = UI.dim;
-        hctx.fillRect(cx, cy, 1, 1);
-      }
-    }
-    // The fine-terrain ring, as outlines over its own (coarser) grid.
-    const [tx0, ty0] = tileAt(dLat, dLon, TERRAIN_Z);
-    const tN = clamp(Math.ceil(dR / tileMetres(TERRAIN_Z)), 1, 4);
-    const tCor: Array<Array<[number, number] | null>> = [];
-    for (let j = 0; j <= tN * 2 + 1; j++) {
-      const row: Array<[number, number] | null> = [];
-      for (let i = 0; i <= tN * 2 + 1; i++) {
-        const b = tileBounds(tx0 - tN + i, ty0 - tN + j, TERRAIN_Z);
-        const [wx, wz] = toLocal(b.latN, b.lonW);
-        row.push(dProj(wx, wz));
-      }
-      tCor.push(row);
-    }
-    const tPx = dCell(tCor[tN][tN], tCor[tN][tN + 1]);
-    if (tPx >= DBG_CELL_PX) {
-      for (let j = 0; j <= tN * 2; j++) for (let i = 0; i <= tN * 2; i++) {
-        const key = `${tx0 - tN + i}/${ty0 - tN + j}`;
-        if (!terrainReady.has(key)) continue;
-        hctx.fillStyle = terrainDirty.has(key) ? UI.hot : terrainMeshes.has(key) ? UI.edge : UI.gold;
-        hctx.globalAlpha = terrainDirty.has(key) ? 0.8 : 0.5;
-        dSeg(tCor[j][i], tCor[j][i + 1]);
-        dSeg(tCor[j][i], tCor[j + 1][i]);
-        dSeg(tCor[j + 1][i], tCor[j + 1][i + 1]);
-        dSeg(tCor[j][i + 1], tCor[j + 1][i + 1]);
-      }
-    } else {
-      hctx.fillStyle = UI.edge;
-      hctx.globalAlpha = 0.5;
-      const e = tN * 2 + 1;
-      dBox(tCor[0][0], tCor[0][e], tCor[e][e], tCor[e][0]);
-    }
-    /**
-     * …AND THE LAYER THAT IS ACTUALLY STREAMING OUT HERE.
-     *
-     * The two rings above are the FINE world, and at the wide end they are a
-     * pair of small boxes near the middle — correct, and not what is doing the
-     * work. Everything filling the rest of the frame is the coarse shell, and
-     * until now the overlay said nothing about it beyond a count in the
-     * header. So the shell draws its own grid at exactly the zooms where the
-     * fine grids have folded: teal where a mesh stands, gold where a tile has
-     * been asked for and has not landed. It is the same reading the z14 ring
-     * gives close up, one ladder rung out.
-     */
-    if (!oFine) {
-      const [sx0, sy0] = tileAt(dLat, dLon, farZ);
-      const sN = clamp(Math.ceil(dR / tileMetres(farZ)), 1, FAR_RING_MAX);
-      for (let j = -sN; j <= sN; j++) for (let i = -sN; i <= sN; i++) {
-        const key = `${farZ}/${sx0 + i}/${sy0 + j}`;
-        if (!farTiles.has(key)) continue;
-        const b0 = tileBounds(sx0 + i, sy0 + j, farZ);
-        const b1 = tileBounds(sx0 + i + 1, sy0 + j + 1, farZ);
-        const [ax, az] = toLocal(b0.latN, b0.lonW);
-        const [bx, bz] = toLocal(b1.latN, b1.lonW);
-        hctx.fillStyle = farMeshes.has(key) ? UI.edge : UI.gold;
-        hctx.globalAlpha = farMeshes.has(key) ? 0.4 : 0.7;
-        dBox(dProj(ax, az), dProj(bx, az), dProj(bx, bz), dProj(ax, bz));
-      }
-    }
-    hctx.globalAlpha = 1;
-    let fails = 0;
-    for (const [, at] of osmFailedAt) if (dNow - at < 30000) fails++;
-    textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
-      6, 40, UI.text);
-    // CLIP is the block of fine tiles the shell is discarded inside. It is the
-    // number to read when the chart's outer ground looks paler and flatter
-    // than the middle: anything outside that block is the coarse shell's to
-    // paint wherever its 150 m chords stand over the fine world, and a block
-    // that has collapsed to 1x1 hands it nearly everything.
-    textEdgeP(`Z${TERRAIN_Z} MESH ${terrainMeshes.size} WAIT ${terrainReady.size - terrainMeshes.size}`
-      + ` REBUILD ${terrainDirty.size} CLIP ${fineBlock[0] + fineBlock[1] + 1}x${fineBlock[2] + fineBlock[3] + 1}`
-      + ` · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
-      + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
-      6, 48, UI.soft);
-    // ── THE KEY ── one row per LAYER that draws boxes, in the order they
-    // stream: what zoom it is, how wide one of its boxes is here (a tile's
-    // metres shrink with the cosine of the latitude, so this is computed,
-    // not quoted), the layer's name, then its marks in their own inks. The
-    // vector row shows while its cells draw and the shell row while its
-    // boxes do, and a folded ring says so. Drawn UNDER the scale bar — the
-    // first cut sat on the bar's label, which is exactly the rows this is
-    // meant to read beside. The header's words are the key's words.
-    {
-      const gw = (t: string): number => {
-        let w = 0;
-        for (const ch of t) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
-        return w;
-      };
-      const size = (z: number): string => {
-        const m = tileMetres(z);
-        return m >= 1000 ? `${(m / 1000).toFixed(m < 10000 ? 1 : 0)}KM` : `${Math.round(m)}M`;
-      };
-      // Below the LAYER key, which is drawn first and is a variable number of
-      // rows (the legend grows with what is on screen). The fallback is the old
-      // fixed offset, for the frame before the chart block has run.
-      let ly = Math.max(pad + 56 + 20, layerKeyBottom + 3);
-      type Mark = ((cx: number, cy: number) => void) | null;
-      const row = (name: string, items: Array<[string, string, Mark]>): void => {
-        const x0 = 6 + gw(name) + 4;
-        let lx = x0;
-        hctx.globalAlpha = 1;
-        textEdgeP(name, 6, ly, UI.text);
-        for (const [label, col, mark] of items) {
-          const w = (mark ? 7 : 0) + gw(label);
-          if (lx > x0 && lx + w > HW - 4) { lx = x0; ly += 8; }
-          hctx.globalAlpha = 1;
-          if (mark) mark(lx + 2, ly + 2);              // the glyph spans y-1..y+5; its middle is y+2
-          hctx.globalAlpha = 1;
-          textEdgeP(label, lx + (mark ? 7 : 0), ly, col);
-          lx += w + 5;
-        }
-        ly += 8;
-      };
-      const box = (col: string): Mark => (cx, cy) => {
-        hctx.fillStyle = col; hctx.globalAlpha = 0.9;
-        dBox([cx - 3, cy - 3], [cx + 3, cy - 3], [cx + 3, cy + 3], [cx - 3, cy + 3]);
-      };
-      if (oFine) {
-        row(`Z${OSM_Z} ${size(OSM_Z)}`, [
-          ['VECTORS', UI.soft, null],
-          ['WIRE', UI.gold, (cx, cy) => { hctx.fillStyle = UI.gold; hctx.fillRect(cx - 1, cy - 1, 3, 3); }],
-          ['QUEUE', UI.soft, (cx, cy) => { hctx.fillStyle = UI.soft; hctx.fillRect(cx - 1, cy - 1, 2, 2); }],
-          ['FAIL', UI.bad, (cx, cy) => {
-            hctx.fillStyle = UI.bad;
-            dSeg([cx - 2, cy - 2], [cx + 2, cy + 2]); dSeg([cx - 2, cy + 2], [cx + 2, cy - 2]);
-          }],
-          ['DONE', UI.good, (cx, cy) => { hctx.fillStyle = UI.good; hctx.fillRect(cx, cy, 2, 2); }],
-          ['ASKED', UI.dim, (cx, cy) => { hctx.fillStyle = UI.dim; hctx.fillRect(cx, cy, 1, 1); }],
-        ]);
-      }
-      row(`Z${TERRAIN_Z} ${size(TERRAIN_Z)}`, [
-        ['TERRAIN', UI.soft, null],
-        ['MESH', UI.edge, box(UI.edge)], ['WAIT', UI.gold, box(UI.gold)], ['REBUILD', UI.hot, box(UI.hot)],
-      ]);
-      if (!oFine) {
-        row(`Z${farZ} ${size(farZ)}`, [
-          ['SHELL', UI.soft, null], ['MESH', UI.edge, box(UI.edge)], ['ASKED', UI.gold, box(UI.gold)],
-        ]);
-      }
-      if (!oFine || tPx < DBG_CELL_PX) row('ONE BOX', [['THE WHOLE RING, FOLDED', UI.dim, null]]);
-      hctx.globalAlpha = 1;
-    }
-  }
+  // ── tile debug: the streaming machinery, made visible ──
+  // Drawing itself lives in drawTileDebugOverlay() now (its condition is
+  // camMode === 'top' || 'god', not just the chart), so it can also fire
+  // from this function's own !hudOn early return, above.
+  drawTileDebugOverlay();
   hudLap('tiledbg');
   // ── checkpoint markers, under everything ──
   // Never a label and never a distance: the moment a checkpoint tells you how
