@@ -89,6 +89,8 @@ import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight, uFacSun } from './facade';
 import { roofFx } from './roof-fx';
+import { attachRoofSurface } from './roof-surface';
+import { madeKind, madeShares, MADE_GLSL, type MadeKind } from './constructed-ground';
 import { registerBuildingFabric, inheritBuildingFabric, attachBuildingFabric, setBuildingCondition, type BuildingCondition } from './building-fabric';
 import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, SUBSTRATE_VIEWS, groundInkPixels, type GroundViewId } from './ground-view';
 import { SUB_GLSL, SUB_DOM_M, subDomainAt, subEvidence, subExpressOf, subGrainOf, subLayerTint,
@@ -303,7 +305,7 @@ addEventListener('unhandledrejection', (e) => {
 const OSM_Z = 16;             // overpass tile zoom (~600m — keeps per-query weight low)
 /** The cell's tile keyspace — see TILE_V in index.ts. A banked tile is
  *  permanent, so this number is how a wrong one is escaped: bump both. */
-const OSM_TILE_V = 4;
+const OSM_TILE_V = 5; // mapped constructed areas and retained area semantics
 const OSM_RING = 1;           // load a (2R+1)² neighbourhood of vector tiles
 const TERRAIN_RING = 2;       // wider ring at the finer zoom keeps the horizon populated
 const REVEAL_M = 150;         // fog hole radius around the car, metres
@@ -7477,6 +7479,7 @@ function blankTex(): THREE.DataTexture {
 }
 function terrainFx(mat: THREE.Material, opts: {
   detail?: boolean;
+  made?: THREE.Texture;
   /** This tile's own geomorphic substrate field and the world box it covers,
    *  as (xs, zs, w, h). Per tile, so it cannot live in the shared uniform
    *  block the dials and the view selector use. */
@@ -7668,6 +7671,7 @@ function terrainFx(mat: THREE.Material, opts: {
       // gets a 1x1 blank and a zero box, and every read of it is gated on the
       // box having width — an unloaded field must read as "no answer" rather
       // than as bare rock with no soil and no grass.
+      sh.uniforms.uMade = { value: opts.made ?? blankTex() };
       sh.uniforms.uSubA = { value: opts.sub ? opts.sub.a : blankTex() };
       sh.uniforms.uSubB = { value: opts.sub ? opts.sub.b : blankTex() };
       sh.uniforms.uSubBox = { value: new THREE.Vector4(...(opts.sub ? opts.sub.box : [0, 0, 0, 0])) };
@@ -7720,7 +7724,17 @@ function terrainFx(mat: THREE.Material, opts: {
         // side of the dither a pixel falls on. A term only close enough to see
         // can afford to be loud, because close enough to see is also far from
         // Nyquist.
-        float rough = uTdForce.x >= 0.0 ? uTdForce.x : vTd.x;
+        vec3 made = vec3(0.0);
+        if (uSubBox.z > 1.0 && uGView < 0.5 && uSubAmt > 0.001) {
+          made = texture2D(uMade, (vWorldP.xz-uSubBox.xy)/uSubBox.zw).rgb;
+          // A steep hillside or engineering cut is not a paved plaza even if
+          // the coarse cover raster calls the surrounding neighbourhood built.
+          made *= (1.0-smoothstep(0.12,0.42,abs(vTd.z))) * step(0.0,vTd.z);
+          made *= clamp(uSubAmt,0.0,1.0);
+        }
+        float madeMass = clamp(dot(made,vec3(1.0)),0.0,1.0);
+        vec3 madeBase = diffuseColor.rgb;
+        float rough = (uTdForce.x >= 0.0 ? uTdForce.x : vTd.x) * (1.0-madeMass*0.88);
         float grain = uTdForce.y >= 0.0 ? uTdForce.y : vTd.y;
         // ── THE FIELD IS READ HERE, ABOVE THE CASCADE THAT IT SILENCES ──
         //
@@ -7806,6 +7820,7 @@ function terrainFx(mat: THREE.Material, opts: {
           e.x = clamp(e.x + cutFace * ${SUB_CUT_MANTLE} * (1.0 - e.x), 0.0, 1.0);
           e.z *= 1.0 - cutFace * ${SUB_CUT_GRASS};
         }
+        e *= 1.0-madeMass;
         // ── AND HOW MUCH OF THE HALF-METRE THE SUBSTRATE HAS TAKEN OVER ──
         //
         // The mineral share, scaled by the dial, because that is exactly how
@@ -7977,6 +7992,11 @@ function terrainFx(mat: THREE.Material, opts: {
           if (uGView > 0.5 && uGView < 1.5) diffuseColor.rgb = vec3(e.y, e.z, e.x);
           else diffuseColor.rgb = mix(pc, subC, uSubAmt);
         }
+        if (madeMass > 0.001) {
+          vec3 madeC = madeColour(madeBase, gp, made/max(madeMass,0.001), px);
+          diffuseColor.rgb = mix(diffuseColor.rgb, madeC, madeMass);
+          subRelief *= 1.0-madeMass;
+        }
         // ── A CLASS VIEW: THE RASTER'S OWN VERDICT, WHERE IT HAS ONE ──
         //
         // Outside the substrate's gate entirely, and that is not tidiness:
@@ -8081,6 +8101,7 @@ function terrainFx(mat: THREE.Material, opts: {
         + 'uniform float uSubMic;\nuniform float uNrmK;\n'
         + 'uniform float uGView;\nuniform sampler2D uGLut;\n'
         + 'uniform vec2 uGHeightRange;\nuniform float uGDem;\n'
+        + MADE_GLSL + '\nuniform sampler2D uMade;\n'
         + 'uniform sampler2D uSubA;\nuniform sampler2D uSubB;\nuniform vec4 uSubBox;\n'
         + sh.fragmentShader;
     }
@@ -8587,7 +8608,7 @@ function terrainNormalFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE
 }
 function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.MeshLambertMaterial {
   const old = terrainMats.get(key);
-  if (old) old.dispose();
+  if (old) { (old.userData.madeTexture as THREE.Texture | undefined)?.dispose(); old.dispose(); }
   // A quarter-megabyte of texture per tile, and nothing prunes the tile maps —
   // drive far enough and that is real memory. Oldest first, never the one being
   // built; the tile keeps the shared material until its own rebuild comes round.
@@ -8599,6 +8620,7 @@ function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.Me
       if (mesh && mesh.material === m) mesh.material = terrainMat;
       // The normal map is NOT disposed here — terrainNormals owns it, and it is
       // what makes this tile's next rebuild free. It has its own cap.
+      (m.userData.madeTexture as THREE.Texture | undefined)?.dispose();
       m.dispose();
       terrainMats.delete(k);
     }
@@ -8628,7 +8650,9 @@ function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.Me
   // field is per tile, so it cannot be a shared uniform block the way uGView
   // and the dials are.
   const sub = substrateTexes.get(key);
-  terrainFx(m, { detail: true, dem: true, sub: sub ? { a: sub.a, b: sub.b, box: [t.xs, t.zs, t.w, t.h] } : undefined });
+  const made = madeTextureFor(t);
+  m.userData.madeTexture = made;
+  terrainFx(m, { detail: true, dem: true, made, sub: sub ? { a: sub.a, b: sub.b, box: [t.xs, t.zs, t.w, t.h] } : undefined });
   terrainMats.set(key, m);
   return m;
 }
@@ -26062,7 +26086,7 @@ function flushBuildings(): void {
   const finish = (geo: THREE.BufferGeometry, mat: THREE.Material | THREE.Material[],
     seats: Seats, opts: { noCast?: boolean; ruinLod?: boolean } = {}): void => {
     // The seats already delimit each building's vertices, including split material groups.
-    if (!opts.noCast) attachBuildingFabric(geo, seats);
+    if (!opts.noCast) { attachBuildingFabric(geo, seats); attachRoofSurface(geo, seats); }
     const mesh = new THREE.Mesh(geo, mat);
     if (opts.noCast) mesh.userData.noCast = true;
     mesh.name = opts.ruinLod ? 'ruin' : 'building';
@@ -26533,6 +26557,10 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
       } else if (roof) {
         const rg = roofGeo(pts, roof, top, ridge);
         if (rg) arr.push({ geo: rg, base, mark, gram, top, pts });
+        else if (BLD_PARA) {
+          const fg = flatRoofGeo(pts, top, top - base, id);
+          if (fg) arr.push({ geo: fg, base, mark: 0, gram: -1, top: fg.userData.top as number, pts });
+        }
         // The stack is its own piece: gram -1 is the façade shader's BLANK
         // wall (no openings, no ivy, no marks), and its aTop is the cap.
         if (rg && chim > 0) {
@@ -27433,7 +27461,7 @@ interface OsmWay {
 // Only the tags renderWays actually reads — the rest is dead weight per way.
 // amenity/shop feed repair POIs; surface/smoothness/tracktype feed wayQuality.
 // The S3 tiles keep EVERY tag — this list is only the client cache's diet.
-const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'ford', 'culvert', 'layer', 'name', 'amenity', 'shop', 'surface', 'smoothness', 'tracktype',
+const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'ford', 'culvert', 'layer', 'name', 'amenity', 'shop', 'surface', 'smoothness', 'tracktype', 'area',
   // The building vocabulary (R55). Measured in this game's own tiles before
   // believing the wiki: roof:shape on 45% of Freiburg's stock, typed
   // building= values on 40%, honest colours on 2-5%. All of it was being
@@ -27526,7 +27554,7 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
 });
 // Free the shared origin quota from the failed localStorage era.
 try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
-const osmCacheKey = (x: number, y: number): string => `6/${OSM_Z}/${x}/${y}`; // v6: water relations (v4 tiles)
+const osmCacheKey = (x: number, y: number): string => `7/${OSM_Z}/${x}/${y}`; // v7: constructed areas and area semantics (v5 tiles)
 async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
   // THE FIXTURE IS THE CACHE. Answering here as well as at the proxy is what
   // gives renderGated its halo — so an authored road solves its profile
@@ -28040,7 +28068,7 @@ const WATER_W: Record<string, number> = { river: 14, canal: 9, stream: 4.5 };
  *  `natural=scrub|wetland|sand|bare_rock` are areas; `coastline` and `cliff`
  *  share the key and are lines, which is exactly the trap. */
 const AREA_TAG = (t: Record<string, string>): boolean =>
-  !!t.landuse || !!t.leisure
+  !!t.landuse || !!t.leisure || t.amenity === 'parking' || (t.area === 'yes' && madeKind(t) !== null)
   || ['scrub', 'wetland', 'sand', 'bare_rock', 'wood', 'grassland', 'heath'].includes(t.natural ?? '');
 // ── the ground's own coat: OSM areas PAINTED, not draped ───────────
 /**
@@ -28075,6 +28103,7 @@ const AREA_CELL = 192;              // metres per registration cell — a forest
 const AREA_CAP = 3000;              // patches held; past this the paint stops asking
 interface AreaPatch {
   pts: Array<[number, number]>; tint: Rgb;
+  made: MadeKind | null; natural: boolean; area: number;
   x0: number; z0: number; x1: number; z1: number;
 }
 const areaGrid = new Map<string, AreaPatch[]>();
@@ -28112,14 +28141,17 @@ function areaTintFor(t: Record<string, string>): Rgb | null {
  *  repaints, and one built after reads the patch on its way past. */
 function noteArea(pts: Array<[number, number]>, tags: Record<string, string>): void {
   mapPoly(pts, 'rgba(34,54,32,0.9)');          // the chart still says where it is
-  const tint = areaTintFor(tags);
+  const made = madeKind(tags);
+  const tint = areaTintFor(tags) ?? (made ? [0.36,0.35,0.33] as Rgb : null);
   if (!tint || pts.length < 3 || areaPatches >= AREA_CAP) return;
   let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
   for (const [x, z] of pts) {
     if (x < x0) x0 = x; if (x > x1) x1 = x;
     if (z < z0) z0 = z; if (z > z1) z1 = z;
   }
-  const patch: AreaPatch = { pts, tint, x0, z0, x1, z1 };
+  const natural = ['forest','meadow','grass','farmland','orchard','allotments'].includes(tags.landuse ?? '')
+    || ['park','garden','pitch'].includes(tags.leisure ?? '') || !!tags.natural;
+  const patch: AreaPatch = { pts, tint, made, natural, area: (x1-x0)*(z1-z0), x0, z0, x1, z1 };
   areaPatches++;
   for (let cx = Math.floor(x0 / AREA_CELL); cx <= Math.floor(x1 / AREA_CELL); cx++) {
     for (let cz = Math.floor(z0 / AREA_CELL); cz <= Math.floor(z1 / AREA_CELL); cz++) {
@@ -28146,6 +28178,30 @@ function areaTintAt(x: number, z: number): Rgb | null {
   }
   return hit;
 }
+/** RGB surface shares sampled independently of terrain tessellation. One 128²
+ * byte texture per fine tile (64 KiB); no geometry or additional draw call.
+ * Query only overlapping patches and let the smallest mapped area win, so
+ * a garden inside a residential polygon is independent of arrival order. */
+function madeTextureFor(t: HeightTile): THREE.DataTexture {
+  const n = 128, bytes = new Uint8Array(n*n*4);
+  const patches = new Set<AreaPatch>();
+  for (let x=Math.floor(t.xs/AREA_CELL); x<=Math.floor((t.xs+t.w)/AREA_CELL); x++)
+    for (let z=Math.floor(t.zs/AREA_CELL); z<=Math.floor((t.zs+t.h)/AREA_CELL); z++)
+      for (const p of areaGrid.get(`${x},${z}`) ?? []) patches.add(p);
+  const ordered = [...patches].sort((a,b)=>a.area-b.area);
+  for (let j=0;j<n;j++) for (let i=0;i<n;i++) {
+    const x=t.xs+(i+0.5)*t.w/n, z=t.zs+(j+0.5)*t.h/n;
+    const p=ordered.find(p=>x>=p.x0&&x<=p.x1&&z>=p.z0&&z<=p.z1&&pointInPoly(x,z,p.pts));
+    const shares=madeShares(sampleCover(x,z),p?.made??null,p?.natural??false);
+    const k=(j*n+i)*4;
+    bytes[k]=Math.round(shares[0]*255); bytes[k+1]=Math.round(shares[1]*255); bytes[k+2]=Math.round(shares[2]*255);
+    bytes[k+3]=255;
+  }
+  const tex=new THREE.DataTexture(bytes,n,n,THREE.RGBAFormat);
+  tex.minFilter=tex.magFilter=THREE.LinearFilter; tex.needsUpdate=true;
+  return tex;
+}
+
 /** Every call to renderWays, in order, while capture is armed — the tests
  *  replay this sequence, so what they exercise is the real arrival order and
  *  not a tidy reconstruction of it. Off unless a probe turns it on. */
@@ -28410,7 +28466,7 @@ async function renderWays(
   for (const el of ordered) {
     const tags = el.tags ?? {};
     if (!el.geometry || el.geometry.length < 2 || !tags.highway) continue;
-    if (tags.highway === 'services' || tags.highway === 'steps') continue;
+    if (tags.highway === 'services' || tags.highway === 'steps' || tags.area === 'yes') continue;
     const dk = el.ck ?? String(el.id);
     const w = roadWidth(tags);
     const track = ['track', 'path', 'bridleway', 'cycleway', 'footway'].includes(tags.highway);
@@ -28467,7 +28523,7 @@ async function renderWays(
     for (const el of ordered) {
       const tags = el.tags ?? {};
       if (!el.geometry || el.geometry.length < 2 || !tags.highway) continue;
-      if (tags.highway === 'services' || tags.highway === 'steps') continue;
+      if (tags.highway === 'services' || tags.highway === 'steps' || tags.area === 'yes') continue;
       const dk = el.ck ?? String(el.id);
       if (seenWays.has(dk)) continue;
       const w = roadWidth(tags);
@@ -28572,6 +28628,7 @@ async function renderWays(
     // The parking aisles inside it are tagged `service` and stay: those are
     // real, drivable, and belong to the car park.
     if (tags.highway === 'services') continue;
+    if (tags.area === 'yes' && tags.highway) { noteArea(pts, tags); continue; }
     if (tags.highway) {
       const w = roadWidth(tags);
       // THREE tiers, not two. A mountain path used to render as decoration you
@@ -29168,6 +29225,8 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
       const q = `[out:json][timeout:15];(
         way["highway"](${bbox});
         way["building"](${bbox});
+        way["amenity"="parking"](${bbox});
+        way["area"="yes"]["surface"](${bbox});
         way["natural"="water"](${bbox});
         // MATCH THE PROXY. This asked for riverbank polygons only, while the
         // cell's own query has fetched river, stream and canal LINES for some
