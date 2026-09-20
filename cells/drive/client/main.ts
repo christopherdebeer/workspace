@@ -6115,6 +6115,7 @@ let xrayMode = 0;
   return { mode: XRAY_MODES[xrayMode], modes: [...XRAY_MODES] };
 };
 let xrayWireOn = false, xrayWireAt = 0;
+let xrayTdSaved: [number, number] | null = null;
 const wildlifeWire = createWildlifeWire();
 const wireMaterials = createWireMaterialPolicy();
 function xrayWire(now: number): void {
@@ -6123,6 +6124,26 @@ function xrayWire(now: number): void {
   // While on, sweep again every couple of seconds — streamed-in tiles arrive
   // with their materials solid and need catching.
   if (want && xrayWireOn && now - xrayWireAt < 2000) return;
+  // THE TERRAIN'S DERIVATIVE TERMS ARE PINNED OFF WHILE THE WIRE IS UP. A
+  // wireframe fragment sits on a line, and `fwidth` across a line's 2x2
+  // helper quad is not a footprint — the detail cascade and the substrate
+  // divide by it, and what comes out is NaN. One NaN pixel in the scene
+  // target is then spread by the composite's separable blurs into an
+  // axis-aligned RECTANGLE, and the quantiser paints NaN as the palette's
+  // black floor: measured on the Camps Bay god-camera frame as 39% of the
+  // pane in opaque black blocks, and 0.1% with the same terms pinned at boot
+  // (`tdetail=flat`). Not the near plane (0.3 to 30 m, no change), not the
+  // DOF or the tilt shift, not any material the sweep protects — the terrain
+  // alone, and only its fragment terms. A wire view shows lines, so nothing
+  // the surface detail says is lost; the values are put back when WIRE stands
+  // down, so a dial moved while it was up keeps its setting.
+  if (want && !xrayWireOn) {
+    xrayTdSaved = [tdU.uTdOct.value as number, tdU.uSubAmt.value as number];
+    tdU.uTdOct.value = 0; tdU.uSubAmt.value = 0;
+  } else if (!want && xrayWireOn && xrayTdSaved) {
+    tdU.uTdOct.value = xrayTdSaved[0]; tdU.uSubAmt.value = xrayTdSaved[1];
+    xrayTdSaved = null;
+  }
   xrayWireAt = now; xrayWireOn = want;
   // The WHOLE scene, not just worldGroup — vegetation, critters, the sward
   // and the sea are scene-level and the first sweep missed them (asked from
@@ -6157,6 +6178,55 @@ function xrayWire(now: number): void {
     }
   });
 }
+// WHY IS THAT STILL SOLID UNDER WIRE? The sweep above decides per material
+// and reports nothing, so a frame with an opaque shape in it could not say
+// whether the shape was a material the policy PROTECTS (shader, transparent,
+// alpha-tested, the vegetation family) or one it never reached. This walks
+// the scene with the sweep's own rules and tallies, per mesh name, the
+// triangles under each verdict — a reading of the authority rather than of
+// the picture, which is the only kind that can witness a rule.
+(window as unknown as { __xraywhy?: object }).__xraywhy = (top = 40): object => {
+  type Row = { meshes: number; tris: number; by: Record<string, number> };
+  const rows = new Map<string, Row>();
+  const keep = new Set<THREE.Object3D>([skyDome, car, xray, moon]);
+  const triCount = (g: THREE.BufferGeometry, mesh: THREE.Mesh): number => {
+    const n = g.index ? g.index.count : (g.attributes.position?.count ?? 0);
+    const inst = (mesh as THREE.InstancedMesh).isInstancedMesh ? (mesh as THREE.InstancedMesh).count : 1;
+    return Math.floor(n / 3) * inst;
+  };
+  scene.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.visible) return;
+    let kept = false;
+    for (let p: THREE.Object3D | null = o; p; p = p.parent) if (keep.has(p)) { kept = true; break; }
+    const name = o.name || `(${o.type})`;
+    let row = rows.get(name);
+    if (!row) { row = { meshes: 0, tris: 0, by: {} }; rows.set(name, row); }
+    row.meshes++;
+    const tris = mesh.geometry ? triCount(mesh.geometry, mesh) : 0;
+    row.tris += tris;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const m of mats) {
+      const sm = m as THREE.MeshStandardMaterial;
+      const why = kept ? 'kept'
+        : o.name === 'birds' || o.name === 'herds' ? 'wildlife'
+        : o.name.startsWith('veg') || o.name === 'sward' ? 'veg'
+        : !m ? 'nomat'
+        : m.userData.wireKeepSolid ? 'userData'
+        : (m as THREE.ShaderMaterial).isShaderMaterial ? 'shader'
+        : m.transparent ? 'transparent'
+        : m.alphaTest > 0 ? 'alphaTest'
+        : !('wireframe' in m) ? 'nowire'
+        : sm.wireframe ? 'wire' : 'solid';
+      row.by[why] = (row.by[why] ?? 0) + tris;
+    }
+  });
+  const list = [...rows.entries()].map(([name, r]) => ({ name, ...r }))
+    .sort((a, b) => b.tris - a.tris).slice(0, top);
+  const totals: Record<string, number> = {};
+  for (const r of rows.values()) for (const [k, v] of Object.entries(r.by)) totals[k] = (totals[k] ?? 0) + v;
+  return { mode: XRAY_MODES[xrayMode], totals, rows: list };
+};
 // The X-RAY's WITNESS LIST: what is in the scene, and a way to stand one
 // system down while looking at a fault — through material.visible, which
 // nothing reasserts per frame (rain.visible is rewritten every tick).
@@ -38553,6 +38623,11 @@ function applyHidden(): void {
   if (hideSet.has('ov')) ovGroup.visible = false;
   if (hideSet.has('theme')) themeGroup.visible = false;
   if (hideSet.has('sea')) sea.visible = false;
+  // THE WATER FIELD'S OWN MESHES, and the coastal surf strip alone, so a
+  // frame can be taken with the drawn water off — `sea` is the legacy plane,
+  // and hiding it leaves every hydro tile drawing.
+  if (hideSet.has('hydro') && hydroSys) hydroSys.object3d.visible = false;
+  if (hideSet.has('surf') && hydroSys) hydroSys.object3d.traverse((o) => { if (o.name.endsWith(':surf')) o.visible = false; });
   if (hideSet.has('veg')) {
     for (const k of Object.keys(vegMeshes) as VegKind[]) vegMeshes[k].visible = false;
     trunks.visible = false;
@@ -38590,6 +38665,8 @@ function applyHidden(): void {
       if (layer === 'drape') for (const d of drapes) d.visible = drapeVisible(d, camMode === 'top' ? zoomCur : 1);
       if (layer === 'synth') for (const b of synthBodies) for (const m of b.meshes) m.visible = true;
       if (layer === 'sea') sea.visible = true;
+      if (layer === 'hydro' && hydroSys) hydroSys.object3d.visible = true;
+      if (layer === 'surf' && hydroSys) hydroSys.object3d.traverse((o) => { if (o.name.endsWith(':surf')) o.visible = true; });
       if (layer === 'veg') {
         for (const k of Object.keys(vegMeshes) as VegKind[]) vegMeshes[k].visible = true;
         trunks.visible = true;
@@ -38612,7 +38689,7 @@ function applyHidden(): void {
     if (layer === 'rig') car.visible = !off;
   }
   return { hidden: [...hideSet], rig: car.visible,
-    layers: ['drape', 'synth', 'far', 'ov', 'theme', 'globe', 'sea', 'veg', 'terrain', 'critters', 'sward', 'rig'],
+    layers: ['drape', 'synth', 'far', 'ov', 'theme', 'globe', 'sea', 'hydro', 'surf', 'veg', 'terrain', 'critters', 'sward', 'rig'],
     counts: { drapes: drapes.length, synth: synthBodies.length, terrain: terrainMeshes.size } };
 };
 /**

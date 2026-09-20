@@ -14,8 +14,8 @@
  *   1. A TRANSECT from the truck through the nearest drawn water and on,
  *      every 3 m: the DEM, the drawn mesh, the cover class and the water's
  *      resting level. It FAILS when a sample with drawn water (coverage at the
- *      cut or over, past the first texel of shore) has its mesh above the
- *      resting level — a ledge through the water — or when two adjacent
+ *      cut or over, past the first 20 m of shore, interior at coverage 0.9 or
+ *      over) has its mesh above the resting level — a ledge through the water — or when two adjacent
  *      samples inside the water step by more than STEP_M, which is the
  *      sawtooth stated in metres.
  *   2. THE GRAZING CAMERA: the god camera at water level (`EL` degrees up,
@@ -73,7 +73,11 @@ for (let i = 0; i < rows.length; i++) {
   const flag = [];
   if (inside) {
     wetSamples++;
-    if (r.mesh !== null && r.lvl !== null && r.mesh > r.lvl + 0.05) { ledges++; flag.push('LEDGE'); }
+    // A ledge is INTERIOR water standing over its own bed. The fringe — a
+    // texel within one field texel of its own shoreline, coverage under 0.9
+    // — is #169's bank shaping and is counted by wet-census as U; a line
+    // river's whole width can be fringe, and this tool is about the bed.
+    if (r.coverage >= 0.9 && r.mesh !== null && r.lvl !== null && r.mesh > r.lvl + 0.05) { ledges++; flag.push('LEDGE'); }
     const q = rows[i - 1];
     if (q && q.mesh !== null && r.mesh !== null && Math.abs(r.mesh - q.mesh) > STEP_M) { steps++; flag.push(`STEP ${(r.mesh - q.mesh).toFixed(2)}`); }
   }

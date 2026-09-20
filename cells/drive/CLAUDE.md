@@ -357,6 +357,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/hull-collide.test.mjs` | the truck's own shape in pure node: the frame against main.ts's own integration TEXT, the support function, the point distance past a corner, the segment push-out, rotation invariance of the whole scene, and the circle it replaces as the control | instant |
 | `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
+| `node devtools/shore-graze.mjs` | the bed under drawn water as numbers and from a grazing camera: a transect through the nearest water (DEM, drawn mesh, cover, resting level, every 3 m) that FAILS on a ledge standing over the water or a step over `STEP_M` between neighbours, then the god camera at water level along the shore (`FIX=`, `AZ=`, `EL=`, `DIST=`, `SHOTS=0` for the numbers alone). at-romsdalen is the case that found the sea-bed switch | ~3min |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
 | `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
@@ -18407,3 +18408,62 @@ default: return { name: "render", render: true, contact: true, shadow: true,
 rollback: false };`. The handler answers too (`/`, `/lab/world` and a `~/dem/`
 tile all 200), because grepping `app.js` proves the client shipped and says
 nothing about a route.
+
+## The X-RAY's black blocks were NaN, spread into rectangles by the blur
+
+The critique of the eighteen composites named it as a defect to fix before
+trusting the instrument: *the xray-wire views still contain enormous opaque
+black shapes in several fixtures — Paris South, Paris West, Camps Bay, Carmel
+and Stelvio.* Screen-aligned rectangles, edges exactly on the art-pixel grid,
+every pixel inside them (18,18,18) — the palette's black floor — over trees,
+over hillsides and, at the Stelvio, over the sky.
+
+**THE SWEEP WAS NOT MISSING ANY MATERIAL, and the first reading of the frame
+said it was.** Buildings were the obvious suspect at Paris South (the blocks
+stood where the buildings stood), and the Stelvio has none. `__xraywhy()` —
+the new probe that walks the scene with the sweep's own rules and tallies
+triangles per mesh by the verdict each fell under — read every terrain tile
+as `wire`, the hydro tiles as `shader` (protected by design), the vegetation
+as `veg`, and nothing as `solid`. A reading of the authority, which a frame
+cannot give.
+
+Attributed by hide-diff on one settled Camps Bay world at the sheet's own god
+camera (`scratchpad/xray-bisect.mjs`): the black was **39.2%** of the pane,
+**0.2% with the terrain hidden**, unchanged with the far shell, the globe, the
+sea, the sward, the vegetation, the wildlife or the theme hidden. Then the
+things it was NOT, each measured on the same world: not the near plane
+(`__near` 0.3 to 30 m, 39.2% throughout); not the DOF or the tilt shift (off,
+on, camera, miniature — 39.0–39.2%); not the sequence of tiledbg and ground
+views the sheet runs first (the plain framing reproduces it). And then the
+thing it was: booted with `?tdetail=flat` — the cascade's fine octaves and
+the substrate pinned at zero — **0.1%**.
+
+**A WIREFRAME FRAGMENT IS ON A LINE, AND `fwidth` ACROSS A LINE IS NOT A
+FOOTPRINT.** The terrain's fragment shader divides by it — the detail cascade's
+band limit, the substrate's `subLine` phase filter, the relief's screen
+gradient — and on a line's 2x2 helper quad the derivative is undefined, so what
+comes out is NaN. One NaN pixel in the scene target would be one black pixel;
+the composite's separable blurs (the four-pass soft copy, the bloom's own)
+then spread it into an axis-aligned RECTANGLE — a horizontal pass, then a
+vertical one, at growing radii — and the quantiser paints NaN as the floor.
+That is why the blocks are rectangles with stepped edges, why they cover the
+sky, and why they only appear where the terrain's own detail terms are loud.
+
+`xrayWire` now saves `uTdOct` and `uSubAmt` when WIRE comes up, pins both at
+zero, and puts them back when it stands down (`xrayTdSaved`). A wire view shows
+lines, so nothing the surface detail says is lost. Measured, the same framing,
+the same world: **39.2% → 0.2%**, and after WIRE is turned off `__tdetail()`
+reads `oct 3, sub 1` again.
+
+**THE HARNESS IS WHERE THIS SHOWS AND A PHONE IS WHERE IT MIGHT NOT.** The
+frames are SwiftShader's, and how a GPU's line rasteriser fills helper lanes
+is the driver's business — the composites the critique was written against
+are harness frames, so the fix is judged there. A NaN guard in the blur
+source would make any future NaN a pixel rather than a rectangle and is not
+made here: the blur runs at full resolution four times a frame, and the one
+producer is now pinned.
+
+`__xraywhy(top?)` is the instrument, and `__hide('hydro')` / `__hide('surf')`
+went in beside it — the field's own meshes and the coastal surf strip alone —
+because `sea` is the legacy plane and hiding it leaves every hydro tile
+drawing, which the Romsdalen unit below needed to know.
