@@ -145,16 +145,6 @@ a confusing module error):
 > log for `deploying` to know the request went in, then read once the `✓
 > deployed` line lands: the REPORT is the last thing before cell-sync's own
 > polling.
->
-> **A FOURTH POINT, 2026-09-19: 734 MB.** `1789826118027`, **238 files**,
-> static 22, `Duration: 33702.96 ms · Max Memory Used: 734 MB` — the highest of
-> the four and still inside the spread the first three showed (687 / 714 / 705,
-> a range of 27). So it is not a slope, it is a fourth reading, and it is
-> **72% of the ceiling on a deploy carrying 238 files where the first reading
-> carried 191**. Take the REPORT every time and compare against the RANGE; the
-> deploy that will need acting on is the one that clears about 850, and what
-> buys the headroom back is named below — `main.ts`, `ne-wide.b64` and the
-> fixtures under `static/`.
 
 **A DEPLOY THAT NEVER LEAVES `DEPLOYING` IS THE DEPLOYER OUT OF MEMORY, AND
 NOTHING TELLS YOU.** Root-caused on 2026-09-10 with `platform.logs
@@ -409,7 +399,6 @@ Nothing here is fast. Budget for it.
 | `node devtools/hull-collide.test.mjs` | the truck's own shape in pure node: the frame against main.ts's own integration TEXT, the support function, the point distance past a corner, the segment push-out, rotation invariance of the whole scene, and the circle it replaces as the control | instant |
 | `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
-| `node devtools/shore-graze.mjs` | the bed under drawn water as numbers and from a grazing camera: a transect through the nearest water (DEM, drawn mesh, cover, resting level, every 3 m) that FAILS on a ledge standing over the water or a step over `STEP_M` between neighbours, then the god camera at water level along the shore (`FIX=`, `AZ=`, `EL=`, `DIST=`, `SHOTS=0` for the numbers alone). at-romsdalen is the case that found the sea-bed switch | ~3min |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
 | `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
@@ -482,14 +471,6 @@ reaches 0** in either. `__tileholes()` reads 0 throughout, so no tile is
 missing its mesh — it is the cell-triangle lookup answering null mid-swap. The
 honest fix is a settle gate on that assertion rather than a fixed wait; until
 then, read it against three runs of a control, not one.
-
-**`mesh-seams.test.mjs`'s `population sane` rows are a streaming gate, not a
-seam.** They require a minimum count of built joins at each spot, and on the
-relay the count is whatever streamed: measured 2026-09-20 as `bixby joins=4 >=
-5` on the working tree and `chapmans joins=1 >= 10` on a parent-kernel
-worktree the same hour, with every seam row (`p95 kerb step 0.04 <= 0.15`,
-`worst meet 0.04 <= 0.5`) green in both. Read the seam rows; a population
-failure alone is the network.
 
 `sward.test.mjs` and anything else that needs a road under the car depend on
 **Overpass**, a busy public service that fails for whole sessions at a time.
@@ -17094,15 +17075,6 @@ mislabelled. The two extreme rows were right regardless (they are `hl` and
 a frame that will be written out wrong once**, which is the argument for the
 module, met inside the instrument built to measure it.
 
-**Live as v1789826118027**, on the seat's word. The live bundle carries
-`hullPushFromSegment`, `hullPointDistanceM`, `hullRadiusM`, `rigHull` and the
-`hull` switch, and it parses under esbuild; the handler answers `/`,
-`/lab/world` and a baked `~/osm/ov1/` tile, because a grep of `app.js` proves
-the client shipped and says nothing about a route. **Unverified from the
-seat**: every number in this section is a harness measurement over a fixture
-and a one-build A/B, so whether a barrier now stops the truck where the eye
-expects it to is the seat's report against `?hull=0`.
-
 ## A hop carried the last place's grass, and the distance trigger could not see it
 
 Reported from the seat: *navigating menu to DRIVES and then hopping to a new
@@ -17176,13 +17148,6 @@ to 112 (896 m across) and *"finer grass, denser near, a fade that ends nearer"*
 at 8 m is **640 m**, 320 m to an edge against a 232 m reach — **88 m of margin
 against a 48 m trigger**, which is the property that unit was defending, kept.
 `SWARD_MASKN` is 432. Read the constants, not this file, before quoting either.
-
-**Live as v1789826118027.** `SWARD_HOP_CLEAR`, the `swardhop` switch and
-`__swardfield` are all in the live bundle, which parses. The A/B from the seat
-is `?swardhop=0`, which carries the last place's grass onto the new one exactly
-as it did — and the check that says the fix took is the one this unit was
-measured by: hop without driving and read `__swardfield().offCentreM` beside
-`sum`, because the residual is what it COST and the checksum is the claim.
 
 ## San Miguel: the carve measures to a segment's INFINITE LINE, so a watercourse digs straight on past its own end
 
@@ -18468,168 +18433,3 @@ default: return { name: "render", render: true, contact: true, shadow: true,
 rollback: false };`. The handler answers too (`/`, `/lab/world` and a `~/dem/`
 tile all 200), because grepping `app.js` proves the client shipped and says
 nothing about a route.
-
-## The X-RAY's black blocks were NaN, spread into rectangles by the blur
-
-The critique of the eighteen composites named it as a defect to fix before
-trusting the instrument: *the xray-wire views still contain enormous opaque
-black shapes in several fixtures — Paris South, Paris West, Camps Bay, Carmel
-and Stelvio.* Screen-aligned rectangles, edges exactly on the art-pixel grid,
-every pixel inside them (18,18,18) — the palette's black floor — over trees,
-over hillsides and, at the Stelvio, over the sky.
-
-**THE SWEEP WAS NOT MISSING ANY MATERIAL, and the first reading of the frame
-said it was.** Buildings were the obvious suspect at Paris South (the blocks
-stood where the buildings stood), and the Stelvio has none. `__xraywhy()` —
-the new probe that walks the scene with the sweep's own rules and tallies
-triangles per mesh by the verdict each fell under — read every terrain tile
-as `wire`, the hydro tiles as `shader` (protected by design), the vegetation
-as `veg`, and nothing as `solid`. A reading of the authority, which a frame
-cannot give.
-
-Attributed by hide-diff on one settled Camps Bay world at the sheet's own god
-camera (`scratchpad/xray-bisect.mjs`): the black was **39.2%** of the pane,
-**0.2% with the terrain hidden**, unchanged with the far shell, the globe, the
-sea, the sward, the vegetation, the wildlife or the theme hidden. Then the
-things it was NOT, each measured on the same world: not the near plane
-(`__near` 0.3 to 30 m, 39.2% throughout); not the DOF or the tilt shift (off,
-on, camera, miniature — 39.0–39.2%); not the sequence of tiledbg and ground
-views the sheet runs first (the plain framing reproduces it). And then the
-thing it was: booted with `?tdetail=flat` — the cascade's fine octaves and
-the substrate pinned at zero — **0.1%**.
-
-**A WIREFRAME FRAGMENT IS ON A LINE, AND `fwidth` ACROSS A LINE IS NOT A
-FOOTPRINT.** The terrain's fragment shader divides by it — the detail cascade's
-band limit, the substrate's `subLine` phase filter, the relief's screen
-gradient — and on a line's 2x2 helper quad the derivative is undefined, so what
-comes out is NaN. One NaN pixel in the scene target would be one black pixel;
-the composite's separable blurs (the four-pass soft copy, the bloom's own)
-then spread it into an axis-aligned RECTANGLE — a horizontal pass, then a
-vertical one, at growing radii — and the quantiser paints NaN as the floor.
-That is why the blocks are rectangles with stepped edges, why they cover the
-sky, and why they only appear where the terrain's own detail terms are loud.
-
-`xrayWire` now saves `uTdOct` and `uSubAmt` when WIRE comes up, pins both at
-zero, and puts them back when it stands down (`xrayTdSaved`). A wire view shows
-lines, so nothing the surface detail says is lost. Measured, the same framing,
-the same world: **39.2% → 0.2%**, and after WIRE is turned off `__tdetail()`
-reads `oct 3, sub 1` again.
-
-**THE HARNESS IS WHERE THIS SHOWS AND A PHONE IS WHERE IT MIGHT NOT.** The
-frames are SwiftShader's, and how a GPU's line rasteriser fills helper lanes
-is the driver's business — the composites the critique was written against
-are harness frames, so the fix is judged there. A NaN guard in the blur
-source would make any future NaN a pixel rather than a rectangle and is not
-made here: the blur runs at full resolution four times a frame, and the one
-producer is now pinned.
-
-`__xraywhy(top?)` is the instrument, and `__hide('hydro')` / `__hide('surf')`
-went in beside it — the field's own meshes and the coastal surf strip alone —
-because `sea` is the legacy plane and hiding it leaves every hydro tile
-drawing, which the Romsdalen unit below needed to know.
-
-## Romsdalen's terraces were the sea bed, switched per vertex on a 38 m raster
-
-The critique called the ground-view Romsdalen frames *the one thing here I
-would regard as an outright rendering defect: the water/shore region contains
-conspicuous horizontal terracing / sawtooth bands. It looks quantised in world
-space.* It is, and the quantum is the cover raster's pixel.
-
-**THE PLACE IS A FIXTURE NOW.** `at-romsdalen` (`static/fixtures/world-romsdalen.json`,
-62.5511 7.7112, r=1200 m — the reel drive's own spawn; 1,150 ways, 256² heights
-at 9.4 m, no terrestrial ecoregion at z5) boots in seven seconds and settles in
-under a minute, so every number below is the same on every run. The water there
-is the fjord, kind `ocean`, resting at 0.1 m over a DEM that reads **0.6 m
-across the whole of it** — the elevation source's flat plate, exactly as the
-sea-floor rule's own comment records.
-
-**THE WATER WAS INNOCENT, AND THE HIDE-DIFF SAID SO FIRST.** From the seat's own
-framing (the sheet's `close` god camera at the spawn) the terraces are pale
-flat-topped ledges in rows across the fjord. Foam off, waves off, the surf
-strip hidden — the ledges stay; the hydro meshes hidden (`__hide('hydro')`,
-new) and the ledges are STILL THERE, drawn in the terrain's own water-class
-paint: horizontal stepped bands in the bed under the fjord. Then the transect
-(`roms-transect.mjs`, now `devtools/shore-graze.mjs`), from the truck through
-the shoreline and 240 m out, every 3 m:
-
-| m from the truck | DEM | mesh, as shipped | mesh, now |
-|---|---|---|---|
-| 36 (the last dry sample) | 2.73 | 2.74 | 2.74 |
-| 42 | 1.73 | **−0.13** | −3.65 |
-| 48 | 1.15 | −5.90 | −5.90 |
-| 84 | 0.60 | **−4.58** | −5.90 |
-| 90–144 | 0.60 | −5.90 | −5.90 |
-| 150 | 0.60 | **−3.79** | −5.90 |
-| 156–228 | 0.60 | −5.90 | −5.90 |
-| 234 (the far shore's first dry pixel) | 0.61 | **−2.94** | −4.93 |
-
-`SEA_BED` dropped a vertex the full six metres when the NEAREST cover pixel said
-water and the DEM stood within two metres of the sea, and not otherwise. A cover
-pixel is ~38 m and a vertex 9–20 m, so along a fjord the bed was a 6 m plateau
-with pixel-shaped holes in it: the lone samples at −4.58 and −3.79 are vertices
-a dry pixel left standing at +0.6 — **half a metre PROUD of a 0.1 m sea** —
-and the bilinear ramps between them and their dropped neighbours are the
-sawtooth. From a grazing camera each hole is a flat pale ledge (the bed's own
-colour through a few centimetres of water, or above it) with a sloped side, in
-rows, because the raster's rows are rows.
-
-**THE SWITCH READS EVIDENCE NOW** (`seaFloor` in the kernel, both the
-refined and the plain lattice): the water evidence over a footprint about one
-cover pixel — nine taps, centre weighted two, the shape `swardCoverEvidence`
-already uses on the same raster for the same fault — saturating at a third of
-a pixel wet, under the same hard two-metre ceiling as before. A lone dry pixel
-inside the sea reads 0.8 and takes the full drop, so the bed under it is −5.9
-instead of +0.6; only the outermost third of a pixel of shore ramps. Only ever
-lowers, as before; the road veto and the bank's ownership sit downstream of it
-and are unchanged.
-
-**TWO CUTS BEFORE THIS ONE WERE CONTINUOUS IN THE WRONG AXIS, AND THE CENSUS
-CAUGHT BOTH.** A drop of `SEA_BED × evidence` left the raster's edge pixels at
-a third of the depth, and the lattice then interpolated from that shallow
-vertex up to its dry neighbour OVER the water: **+43 and +46 interior buried
-texels at Glencairn and the Umgeni** against a control taken on the parent
-kernel in a worktree. An eased depth gate over the last 1.5 m did the same
-from the other side (+80, +85). The holes in PLAN were the fault and only they
-wanted smoothing; a vertex within two metres of the sea takes the depth
-outright, as it always did.
-
-**Measured**, `wet-census.mjs`, the parent kernel (`REV=`, a worktree at
-`55aca99`) against this one, W drawn / U fringe-buried / I interior-buried:
-
-| fixture | control | now |
-|---|---|---|
-| at-romsdalen | 4300 / 114 / 54 | **4354 / 61 / 46** |
-| at-umgeni | 5526 / 534 / 455 | **5547 / 507 / 444** |
-| at-glencairn | 4690 / 149 / 340 | 4690 / 155 / 337 |
-| at-campsbay | 614 / 22 / 1 | 619 / 22 / 1 |
-| at-simonstown | 363 / 11 / 10 | 361 / 9 / 12 |
-
-Romsdalen's fringe burial halves and its drawn water rises by the holes it
-had; the Umgeni's estuary gains 21 drawn and loses 27 fringe; the other three
-are inside the census's own spread. **A CONTROL TAKEN BY STASHING THE WORKING
-TREE IS A CONTROL YOU CANNOT SEE**: the first attempt ran `git stash push --
-<file>` under a chain that printed a non-empty diff right after it, and the
-reading was believed and then doubted for an hour; `wet-census.mjs` takes
-`REV=` now and a `git worktree` at the parent is the way to hold one still.
-
-**AND `__hide('hydro')` / `__hide('surf')` ARE THE INSTRUMENT THAT SEPARATED
-THE LAYERS.** `sea` hides the legacy plane and leaves every hydro tile drawing,
-so before this unit a frame could not be taken with the water off — and a ledge
-in a frame cannot say which layer it belongs to.
-
-`devtools/shore-graze.mjs` is the regression: the transect FAILS on any
-interior water sample (coverage 0.9 or over, past the first 20 m of shore)
-whose mesh stands over the resting level, or on a step over `STEP_M` (2.5 m)
-between neighbours, and then takes the grazing frames. On the fixed kernel at
-Romsdalen: **81 samples, 59 inside the water, 0 ledges, 0 steps**; the ford
-and the lagoon fixtures pass too. The fringe is deliberately not a ledge here:
-a line river's whole width can be fringe, and that is #169's bank shaping,
-which the census counts as U.
-
-**What this does NOT do.** The bed is still a constant `SEA_BED` under the
-evidence, not a shelving profile by distance from the waterline (#170's beach
-against cliff); the far shore in the table above still climbs from −4.9 to +0.6
-across one pixel; and the pale streaks that remain on the fjord from a grazing
-camera are the FOAM — crest whitening on the 140 m wind sea, hard-edged under
-the quantiser — which the same hide-diff separated (`foamStrength: 0` takes
-them out) and which is a look, not a geometry.
