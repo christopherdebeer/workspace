@@ -45,4 +45,43 @@ export function runWorldAuthoringRasterSelfTest(): void {
   const reset = edit.reset();
   assert(reset.changed === 1 && a.data[0] === 10, 'reset did not restore the session source');
   assert(edit.report().undoDepth === 0, 'reset did not clear history');
+
+  // ── REDO ──
+  // The raster AND the session record, or a redone cell stands in the world
+  // and is missing from the authored entry the bank files off `edits()`.
+  const r = new RasterPaintSession();
+  const c = tile('c', 0);
+  r.beginStroke();
+  r.paint([c], 5, 5, 0, 70);
+  r.endStroke();
+  assert(r.report().redoDepth === 0, 'a fresh stroke offered a redo');
+  const un = r.undo();
+  assert(c.data[0] === 10 && r.report().redoDepth === 1, 'undo did not stack a redo');
+  assert(un.cells?.length === 1, 'undo did not report the cell it moved');
+  const re = r.redo();
+  assert(c.data[0] === 70, 'redo did not put the byte back');
+  assert(re.cells?.length === 1 && re.changed === 1, 'redo did not report its cells');
+  assert(r.report().editedCells === 1 && r.report().undoDepth === 1 && r.report().redoDepth === 0,
+    'redo did not restore the session record');
+  assert(r.edits().length === 1 && r.edits()[0].after === 70,
+    'a redone cell is missing from what the bank would file');
+  // A NEW STROKE FORKS THE HISTORY: a redo recorded before it would restore
+  // a value nothing on the screen ever showed.
+  r.undo();
+  r.beginStroke();
+  r.paint([c], 5, 5, 0, 90);
+  r.endStroke();
+  assert(r.report().redoDepth === 0, 'a new stroke kept a stale redo');
+  assert(r.redo().changed === 0 && c.data[0] === 90, 'a stale redo was applied');
+
+  // The stroke in flight, as footprints the lab can draw before any rebuild.
+  const live = new RasterPaintSession();
+  const d = tile('d', 0);
+  live.beginStroke();
+  live.paint([d], 5, 5, 0, 50);
+  const cells = live.strokeCells();
+  assert(cells.length === 1, 'the live stroke reported no cells');
+  assert(cells[0].w === 10 && cells[0].h === 10, 'a cell footprint is not the texel size');
+  assert(Math.abs(cells[0].x - 5) < 1e-9 && Math.abs(cells[0].z - 5) < 1e-9,
+    'a cell footprint is not centred on its texel');
 }

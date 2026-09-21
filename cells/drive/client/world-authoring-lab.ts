@@ -6,10 +6,18 @@ export interface AuthoringPoint {
 }
 
 export interface AuthoringPreview {
-  kind: 'cursor' | 'polyline';
+  /** `cursor` is the brush under the finger, `polyline` a line at its own
+   *  width, `cells` the raster footprints an edit has already written into
+   *  the array and whose rebuild has not landed yet. */
+  kind: 'cursor' | 'polyline' | 'cells';
+  /** A cursor's centre, a line's path, or one point per CELL CENTRE. */
   points: readonly AuthoringPoint[];
   radiusM: number;
   state: 'cursor' | 'draft' | 'pending' | 'settled' | 'failed';
+  /** `cells` only: one cell's footprint in world metres. Every cell of a
+   *  preview shares it — they come off one raster. */
+  cellW?: number;
+  cellH?: number;
 }
 
 export interface AuthoringEditResult extends RasterEditResult {
@@ -45,6 +53,7 @@ export interface AuthoringLayer {
   cancelGesture(): void;
   previews(cursor: AuthoringPoint | null, radiusM: number): readonly AuthoringPreview[];
   undo(): AuthoringEditResult;
+  redo(): AuthoringEditResult;
   reset(): AuthoringEditResult;
   setDataView(on: boolean): void;
   report(): Record<string, unknown>;
@@ -126,30 +135,42 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
     #world-authoring { position: fixed; z-index: 120; left: 0; right: 0; bottom: 0;
       color: #dce8e6; font: 11px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace; pointer-events: none; }
     #world-authoring * { box-sizing: border-box; }
-    #world-authoring .bar { pointer-events: auto; display: grid; grid-template-columns: 1fr auto auto 1fr auto; gap: 6px;
-      padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); background: rgba(7,12,13,.92);
+    #world-authoring .bar { pointer-events: auto; display: flex; flex-wrap: wrap; gap: 5px;
+      padding: 5px 8px calc(5px + env(safe-area-inset-bottom, 0px)); background: rgba(7,12,13,.92);
       border-top: 1px solid #496267; }
-    #world-authoring .chip { min-height: 44px; min-width: 44px; padding: 0 10px; color: inherit; background: #111b1d;
-      border: 1px solid #344a4f; font: inherit; letter-spacing: 1px; white-space: nowrap; overflow: hidden;
-      text-overflow: ellipsis; touch-action: manipulation; }
+    #world-authoring .chip { flex: 1 1 auto; min-height: 44px; min-width: 44px; max-width: 120px; padding: 0 8px;
+      color: inherit; background: #111b1d; border: 1px solid #344a4f; font: inherit; letter-spacing: 1px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; touch-action: manipulation; }
+    #world-authoring .chip:disabled { opacity: .35; }
     #world-authoring .chip.on { border-color: #d6aa4d; color: #ffe09a; background: #302714; }
     #world-authoring .chip.arm.on { border-color: #6fe0c0; color: #bffbe8; background: #123028; }
+    /* THE DIAL STRIP. One row, the slider taking every pixel the label and the
+       readout do not: a range input is the usable control on a phone and the
+       only thing wrong with it was living behind the sheet. */
+    #world-authoring .dial { pointer-events: auto; display: none; align-items: center; gap: 6px;
+      padding: 5px 8px 0; background: rgba(7,12,13,.92); }
+    #world-authoring.armed .dial { display: flex; }
+    #world-authoring .dial .chip { flex: 0 0 auto; }
+    #world-authoring .dial .chip.flat { background: transparent; border-color: transparent; color: #9db2b5; }
+    #world-authoring .dial input[type=range] { flex: 1 1 auto; min-width: 60px; height: 44px; padding: 0;
+      background: transparent; touch-action: manipulation; accent-color: #d6aa4d; }
+    #world-authoring .dial output { flex: 0 0 52px; text-align: right; color: #ffe09a; }
     #world-authoring .hint { pointer-events: none; padding: 4px 10px; color: #9db2b5; background: rgba(7,12,13,.7);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    #world-authoring .sheet { pointer-events: auto; display: none; max-height: 48vh; overflow: auto;
+    #world-authoring .sheet { pointer-events: auto; display: none; max-height: 44vh; overflow: auto;
       padding: 10px 12px; background: rgba(7,12,13,.95); border-top: 1px solid #496267; }
     #world-authoring.open .sheet { display: block; }
     #world-authoring h1 { margin: 0 0 6px; font-size: 12px; letter-spacing: 2px; }
     #world-authoring label { display: grid; grid-template-columns: 78px 1fr 46px; align-items: center; gap: 7px; margin: 6px 0; }
-    #world-authoring select, #world-authoring input, #world-authoring .sheet button {
+    #world-authoring select, #world-authoring .sheet button {
       min-width: 0; min-height: 36px; color: inherit; background: #111b1d; border: 1px solid #344a4f; font: inherit; padding: 5px 6px; }
-    #world-authoring input[type=range] { padding: 0; min-height: 36px; }
-    #world-authoring .buttons { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; margin-top: 8px; }
+    #world-authoring .buttons { display: flex; gap: 6px; margin-top: 8px; }
+    #world-authoring .buttons button { flex: 1 1 auto; }
     #world-authoring .sheet button.on { border-color: #d6aa4d; color: #ffe09a; background: #302714; }
     #world-authoring output { color: #9db2b5; text-align: right; }
     #world-authoring .status { margin-top: 8px; color: #91a5a8; white-space: pre-wrap; word-break: break-all; font-size: 10px; }
-    #world-authoring.fold .bar { display: none; }
-    #world-authoring.fold .sheet { display: none; }
+    #world-authoring.fold .bar, #world-authoring.fold .dial, #world-authoring.fold .sheet,
+    #world-authoring.fold .hint { display: none; }
     #world-authoring .unfold { pointer-events: auto; display: none; position: fixed; right: 8px;
       bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
     #world-authoring.fold .unfold { display: block; }
@@ -159,25 +180,52 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
   const panel = document.createElement('section');
   panel.id = 'world-authoring';
 
-  // ── THE BAR ──
+  // ── THE BAR: EVERY EDIT AFFORDANCE, ON THE GLASS ──
+  //
+  // Undo, redo, reset and bank were behind the ⋯ sheet, which is two taps and
+  // a covered viewport away from the thing you have just painted wrongly. The
+  // bar WRAPS instead of rationing: a flex row of 44 px chips takes a second
+  // line on a phone and one line on a desktop, and nothing has to be dropped
+  // to make a fixed column count fit.
   const bar = document.createElement('div');
   bar.className = 'bar';
-  const layerChip = button('LAYER');
-  layerChip.id = 'world-authoring-layer-chip';
-  layerChip.className = 'chip';
-  const camChip = button('2D');
-  camChip.id = 'world-authoring-cam';
-  camChip.className = 'chip';
-  const armChip = button('PAINT');
-  armChip.id = 'world-authoring-arm';
-  armChip.className = 'chip arm';
-  const brushChip = button('BRUSH');
-  brushChip.id = 'world-authoring-brush';
-  brushChip.className = 'chip';
-  const moreChip = button('⋯');
-  moreChip.id = 'world-authoring-more';
-  moreChip.className = 'chip';
-  bar.append(layerChip, camChip, armChip, brushChip, moreChip);
+  const chip = (label: string, id: string, extra = ''): HTMLButtonElement => {
+    const el = button(label);
+    el.id = id;
+    el.className = `chip${extra ? ` ${extra}` : ''}`;
+    return el;
+  };
+  const layerChip = chip('LAYER', 'world-authoring-layer-chip');
+  const camChip = chip('2D', 'world-authoring-cam');
+  const armChip = chip('PAINT', 'world-authoring-arm', 'arm');
+  const brushChip = chip('BRUSH', 'world-authoring-brush');
+  const undoChip = chip('UNDO', 'world-authoring-undo');
+  const redoChip = chip('REDO', 'world-authoring-redo');
+  const resetChip = chip('RESET', 'world-authoring-reset');
+  const bankChip = chip('BANK', 'world-authoring-bank');
+  const moreChip = chip('⋯', 'world-authoring-more');
+  bar.append(layerChip, camChip, armChip, brushChip, undoChip, redoChip, resetChip, bankChip, moreChip);
+
+  // ── THE DIAL STRIP: the size of the thing you are painting with ──
+  //
+  // WIDTH and AMOUNT were sliders in the sheet on a 78/1fr/46 grid, so the
+  // one control a brush cannot work without was the one behind two taps. The
+  // strip is one row while PAINTING is armed: the dial's name (a tap cycles
+  // it where a layer has two), the slider, the reading.
+  const dial = document.createElement('div');
+  dial.className = 'dial';
+  const dialChip = chip('RADIUS', 'world-authoring-dial');
+  const radius = document.createElement('input');
+  radius.id = 'world-authoring-radius';
+  radius.type = 'range';
+  const strength = document.createElement('input');
+  strength.id = 'world-authoring-strength';
+  strength.type = 'range';
+  const dialOut = document.createElement('output');
+  dial.append(dialChip, radius, strength, dialOut);
+  /** Which of the layer's dials the strip is driving. */
+  let dialId: 'radius' | 'strength' = 'radius';
+
   const hint = document.createElement('div');
   hint.className = 'hint';
   hint.id = 'world-authoring-hint';
@@ -242,81 +290,90 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
   fillChoices();
   classRow.append(cls, document.createElement('output'));
 
-  const radiusRow = document.createElement('label');
-  radiusRow.innerHTML = '<span>RADIUS</span>';
-  const radius = document.createElement('input');
-  radius.id = 'world-authoring-radius';
-  radius.type = 'range';
-  const radiusOut = document.createElement('output');
-  radiusRow.append(radius, radiusOut);
-  const fillRadius = (): void => {
-    const spec = layer.radius ?? {
+  /** The dial's own spec, so the strip and every reader agree about the
+   *  range, the step and the unit rather than each carrying a fallback. */
+  const dialSpec = (which: 'radius' | 'strength'): AuthoringStrength | null => {
+    if (which === 'strength') return layer.strength ?? null;
+    return layer.radius ?? {
       label: layer.gesture === 'polyline' ? 'WIDTH' : 'RADIUS',
       min: layer.gesture === 'polyline' ? 2 : 0,
-      max: layer.gesture === 'polyline' ? 20 : 240,
+      max: layer.gesture === 'polyline' ? 20 : 200,
       step: layer.gesture === 'polyline' ? .5 : 5,
-      value: layer.gesture === 'polyline' ? 7.5 : 45,
+      value: layer.gesture === 'polyline' ? 7.5 : 40,
       unit: 'm',
     };
-    radiusRow.querySelector('span')!.textContent = spec.label;
-    radius.min = String(spec.min);
-    radius.max = String(spec.max);
-    radius.step = String(spec.step);
-    radius.value = String(spec.value);
   };
+  const fillDial = (input: HTMLInputElement, spec: AuthoringStrength | null): void => {
+    if (!spec) { input.min = '0'; input.max = '1'; input.step = '1'; input.value = '1'; return; }
+    input.min = String(spec.min);
+    input.max = String(spec.max);
+    input.step = String(spec.step);
+    input.value = String(spec.value);
+  };
+  const fillRadius = (): void => fillDial(radius, dialSpec('radius'));
+  const fillStrength = (): void => fillDial(strength, dialSpec('strength'));
   fillRadius();
-
-  const strengthRow = document.createElement('label');
-  strengthRow.innerHTML = '<span>STRENGTH</span>';
-  const strength = document.createElement('input');
-  strength.id = 'world-authoring-strength';
-  strength.type = 'range';
-  const strengthOut = document.createElement('output');
-  strengthRow.append(strength, strengthOut);
-  const fillStrength = (): void => {
-    const spec = layer.strength;
-    strengthRow.hidden = !spec;
-    if (!spec) {
-      strength.min = '0'; strength.max = '1'; strength.step = '1'; strength.value = '1';
-      return;
-    }
-    strengthRow.querySelector('span')!.textContent = spec.label;
-    strength.min = String(spec.min);
-    strength.max = String(spec.max);
-    strength.step = String(spec.step);
-    strength.value = String(spec.value);
-  };
   fillStrength();
 
   const buttons = document.createElement('div');
   buttons.className = 'buttons';
-  const undo = button('UNDO');
-  const reset = button('RESET');
-  const bank = button('BANK');
-  bank.id = 'world-authoring-bank';
   const fold = button('FOLD');
   fold.id = 'world-authoring-fold';
-  buttons.append(undo, reset, bank, fold);
+  buttons.append(fold);
   const status = document.createElement('div');
   status.className = 'status';
   status.id = 'world-authoring-status';
-  sheet.append(layerRow, modeRow, viewRow, classRow, radiusRow, strengthRow, buttons, status);
-  panel.append(hint, sheet, bar, unfold);
+  // The sheet keeps what a bar cannot hold: the full selects (which are also
+  // how a test drives the lab, by the same ids it always had), the report,
+  // and FOLD. Every EDIT affordance is on the bar above it.
+  sheet.append(layerRow, modeRow, viewRow, classRow, buttons, status);
+  panel.append(hint, sheet, dial, bar, unfold);
   document.body.appendChild(panel);
 
+  /** What the overlay was last handed, by kind and by point count — the
+   *  AUTHORITY behind the ink. A frame diff can say that something was
+   *  drawn; only this can say the lab asked for it. */
+  let published: Record<string, number> = {};
   const report = (): Record<string, unknown> => ({
     active: true, layer: layer.id, kind: layer.kind, view: dataView ? 'data' : 'game',
-    armed, chart: runtime.isChart ? runtime.isChart() : chart, panning, changed, rebuilds, ...layer.report(),
+    armed, chart: runtime.isChart ? runtime.isChart() : chart, panning, changed, rebuilds,
+    previews: published, dial: dialId, ...layer.report(),
   });
   const publishPreviews = (): void => {
-    runtime.setPreviews(armed ? layer.previews(cursor, Number(radius.value)) : []);
+    const out = armed ? layer.previews(cursor, Number(radius.value)) : [];
+    published = {};
+    for (const preview of out) {
+      published[`${preview.kind}:${preview.state}`] =
+        (published[`${preview.kind}:${preview.state}`] ?? 0) + preview.points.length;
+    }
+    runtime.setPreviews(out);
   };
-  const brushLabel = (): string => layer.choices.find((c) => c.value === cls.value)?.label.split(' · ').pop() ?? '';
+  /**
+   * THE PART OF A CHOICE'S LABEL THAT TELLS IT FROM ITS SIBLINGS. A cover
+   * class reads `40 · FARMLAND`, so the tail is the word; a road reads
+   * `RESIDENTIAL · PAVED`, so the tail is the SURFACE — and three of the four
+   * road kinds share theirs, which put PAVED on the chip whichever of them
+   * was selected. A leading number is a code, and then the tail is the name.
+   */
+  const brushLabel = (): string => {
+    const parts = layer.choices.find((c) => c.value === cls.value)?.label.split(' · ') ?? [];
+    if (!parts.length) return '';
+    return /^\d/.test(parts[0]) ? parts[parts.length - 1] : parts[0];
+  };
   const repaint = (): void => {
-    radiusOut.value = `${radius.value}${layer.radius?.unit ?? 'm'}`;
-    strengthOut.value = layer.strength
-      ? `${strength.value}${layer.strength.unit ?? ''}`
-      : '';
+    // THE STRIP DRIVES ONE DIAL AND BOTH INPUTS EXIST, so the ids a test
+    // reaches for are where they always were and only one is on the glass.
+    if (dialId === 'strength' && !layer.strength) dialId = 'radius';
+    const spec = dialSpec(dialId);
+    const input = dialId === 'strength' ? strength : radius;
+    radius.hidden = dialId !== 'radius';
+    strength.hidden = dialId !== 'strength';
+    dialChip.textContent = spec?.label ?? 'RADIUS';
+    // A layer with one dial has nothing to cycle to, and a DISABLED chip
+    // reads as broken rather than as a name. It is a label there.
+    dialChip.classList.toggle('flat', !layer.strength);
+    dialOut.value = `${input.value}${spec?.unit ?? ''}`;
+    panel.classList.toggle('armed', armed);
     mode.value = armed ? 'paint' : 'interact';
     chart = runtime.isChart ? runtime.isChart() : chart;
     // A chip is a word, not a label: LAND COVER does not fit beside PAINTING.
@@ -329,6 +386,13 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
     brushChip.textContent = layer.choices.length ? brushLabel() : '—';
     brushChip.disabled = !layer.choices.length;
     const r = layer.report() as Record<string, unknown>;
+    // A DISABLED CHIP IS THE HONEST READING OF AN EMPTY STACK. The depths
+    // come off the layer's own report, so the bar cannot claim a redo the
+    // session does not hold — which on roads is the state a page reload
+    // leaves, and the reason the stack is saved with the features.
+    undoChip.disabled = !layer.editable || !(Number(r.undoDepth ?? r.features ?? 0) > 0);
+    redoChip.disabled = !layer.editable || !(Number(r.redoDepth ?? 0) > 0);
+    resetChip.disabled = !layer.editable || !(Number(r.editedCells ?? r.features ?? 0) > 0);
     hint.textContent = armed
       ? `${layer.kind === 'vector' ? 'TAP A LINE' : 'ONE FINGER PAINTS'} · TWO PAN · ${brushLabel()} ${radius.value}${layer.radius?.unit ?? 'm'}`
         + `${layer.strength ? ` · ${strength.value}${layer.strength.unit ?? ''}` : ''} · ${changed} CHANGES`
@@ -409,8 +473,16 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
   mode.addEventListener('change', () => setMode(mode.value === 'paint' ? 'paint' : 'interact'));
   radius.addEventListener('input', repaint);
   strength.addEventListener('input', repaint);
-  undo.addEventListener('click', () => commit(layer.undo()));
-  reset.addEventListener('click', () => commit(layer.reset()));
+  undoChip.addEventListener('click', () => commit(layer.undo()));
+  redoChip.addEventListener('click', () => commit(layer.redo()));
+  resetChip.addEventListener('click', () => commit(layer.reset()));
+  // The strip drives one dial; a layer with two (ELEVATION has a radius AND
+  // an amount) cycles on a tap of its name.
+  dialChip.addEventListener('click', () => {
+    if (!layer.strength) return;
+    dialId = dialId === 'radius' ? 'strength' : 'radius';
+    repaint();
+  });
   const setFolded = (folded: boolean): void => {
     panel.classList.toggle('fold', folded);
     fold.textContent = folded ? 'OPEN' : 'FOLD';
@@ -432,13 +504,13 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
   });
   cls.addEventListener('change', repaint);
   moreChip.addEventListener('click', () => setSheet(!panel.classList.contains('open')));
-  bank.addEventListener('click', () => {
+  bankChip.addEventListener('click', () => {
     if (!runtime.bank) { hint.textContent = 'NO STORE ON THIS PAGE'; return; }
-    bank.disabled = true;
+    bankChip.disabled = true;
     hint.textContent = 'BANKING…';
     runtime.bank(layer.id, false).then((line) => { hint.textContent = line; })
       .catch((err: Error) => { hint.textContent = `BANK FAILED: ${err.message}`; })
-      .finally(() => { bank.disabled = false; });
+      .finally(() => { bankChip.disabled = false; });
   });
 
   // ── GESTURES. One finger paints; a second finger turns the gesture into
