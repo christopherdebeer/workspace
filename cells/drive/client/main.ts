@@ -28398,11 +28398,38 @@ async function buildBreath(): Promise<void> {
  * warp have the same shape. So the yields go inside, and the calls queue.
  */
 let buildChain: Promise<void> = Promise.resolve();
+/** BUILT WORLD. Off, the map's constructed things are dropped before any
+ *  of them is planned or built — roads and everything that hangs off a road
+ *  (rails, signs, lamps, culverts, fords, bridges), buildings and their
+ *  ruins, railways, aeroways, man_made verticals, amenities, shops, historic
+ *  sites, power, the parking and paved areas the constructed-ground painter
+ *  reads, quarries, dams and weirs — and the authored landmarks with them.
+ *  What stays is the ground: terrain, cover, natural areas, water lines and
+ *  water relations, the landuse and leisure areas that tint the sward. The
+ *  URL switch outranks the WORLD dial, for a reproducible A/B; the dial
+ *  rebuilds the world in place when it is tapped (see the dial). Filtered
+ *  HERE, at the one entry every tile, halo, fixture and authored road takes,
+ *  so a cached tile and a streamed one cannot disagree about it. */
+let builtOn = qsOn('built', true);
+let builtInit = false;
+const BUILT_TAGS = ['highway', 'building', 'railway', 'aeroway', 'man_made', 'amenity', 'shop', 'tourism', 'historic', 'power', 'bridge:support'];
+function isBuiltWay(tags: Record<string, string> | undefined): boolean {
+  if (!tags) return false;
+  for (const t of BUILT_TAGS) if (tags[t] !== undefined) return true;
+  if (tags.area === 'yes') return true;
+  if (tags.landuse === 'quarry') return true;
+  if (tags.waterway === 'dam' || tags.waterway === 'weir') return true;
+  return false;
+}
 async function renderWays(
   els: OsmWay[],
   halo: OsmWay[] = [],
   terrainOwner: string | null = null,
 ): Promise<void> {
+  if (!builtOn) {
+    els = els.filter((e) => !isBuiltWay(e.tags));
+    halo = halo.filter((e) => !isBuiltWay(e.tags));
+  }
   wayTape?.push({ els, halo });
   // The map's own pylons and piers, before any ribbon asks where a tower
   // stands. A `bridge:support` node is a one-point geometry by the time it
@@ -28889,7 +28916,7 @@ const osmDone = new Set<string>();
 // the world can be asked about (the field query below) instead of stared
 // at: how many ways arrived, how many the build refused, how many times
 // the tile has retried, and where the data came from.
-interface TileStat { at: number; src: 'cache' | 'cell' | 'mirror';
+interface TileStat { at: number; src: 'cache' | 'cell' | 'mirror' | 'stale';
   ways: number; refused: number; retries: number; state: 'done' | 'retry' | 'error' }
 const tileStats = new Map<string, TileStat>();
 function noteTileRender(key: string, src: TileStat['src'], ways: number, refused: number): void {
@@ -29152,6 +29179,14 @@ let tileProxyOk = true;   // one clean failure retires it for the session
 // tile is re-queued by a later pass, and by then it is often warm because the
 // cell filled it in the background anyway.
 const TILE_WAIT_MS = 9000;
+/** A tile the cell served from a PREVIOUS keyspace because the current one
+ *  was cold and the mirrors would not fill it (see the fallback in the
+ *  handler's serveTile). Keyed by the array itself, because up to OSM_GATE
+ *  tiles are in flight at once and a module flag would name the wrong one.
+ *  A stale tile is drawn — roads and buildings beat an empty tile — and is
+ *  NOT written to IndexedDB, so nothing this session saw survives it: the
+ *  next ask for this tile is a real ask of the current keyspace again. */
+const proxyStale = new WeakMap<OsmWay[], string>();
 async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
   if (FIXTURE) return fixtureWays(x, y);
   if (!tileProxyOk) return null;
@@ -29174,6 +29209,8 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
       ...(w.rings ? { rings: w.rings } : {}),
     })) as OsmWay[];
     profAdd('osmParse', t0);
+    const stale = res.headers.get('x-drive-tile-stale');
+    if (stale) proxyStale.set(ways, stale);
     return ways;
   } finally { clearTimeout(bail); }
   // NOTE: no catch. A timeout or a network blip is THIS TILE failing, and the
@@ -29252,7 +29289,15 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     osmFails = 0;
     osmDown = false;
     osmFailedAt.delete(key);
-    writeTileCache(x, y, ways);
+    // A stale-keyspace tile is drawn and never persisted: see proxyStale.
+    // It is still `done` for this pass — re-asking it every few seconds
+    // would put a Lambda call and a full Overpass wait behind every tile in
+    // the ring for as long as the mirrors are down, which is exactly the
+    // load the fallback exists to take off them. The tile is asked afresh
+    // when the ring lets it go and the truck comes back, or next session.
+    const stale = proxyStale.get(ways);
+    if (stale) src = 'stale';
+    else writeTileCache(x, y, ways);
     const before = unbuilt;
     await renderGated(x, y, ways);
     noteTileRender(key, src, ways.length, unbuilt - before);
@@ -36053,7 +36098,7 @@ async function attractPrime(e: ReelTape | undefined): Promise<void> {
       jobs.push(async () => {
         if (await readTileCache(ox + dx, oy + dy)) return;
         const ways = await proxyTile(ox + dx, oy + dy);
-        if (ways) writeTileCache(ox + dx, oy + dy, ways);
+        if (ways && !proxyStale.get(ways)) writeTileCache(ox + dx, oy + dy, ways);
       });
     }
     const [cx2, cy2] = tileAt(lat, lon, COVER_Z);
@@ -54288,7 +54333,9 @@ interface LandmarkLive { def: Landmark; x: number; z: number; padEle: number | n
 let landmarksLive: LandmarkLive[] = [];
 let landmarksOrigin = '';
 function liveLandmarks(): LandmarkLive[] {
-  const key = `${origin.lat},${origin.lon}`;
+  // The BUILT WORLD switch is in the key: a toggle rebuilds the world at the
+  // same origin, and a cache keyed on the origin alone would keep the stock.
+  const key = `${origin.lat},${origin.lon},${builtOn ? 1 : 0}`;
   if (key !== landmarksOrigin) {
     landmarksOrigin = key;
     for (const g of landmarkBuilt.values()) worldGroup.remove(g);
@@ -54296,7 +54343,7 @@ function liveLandmarks(): LandmarkLive[] {
     // A bridge entry is not a pad: it flattens nothing and stands no group
     // up here — its geometry is the bridge assembly's, built from the deck
     // ways as they arrive (see bridgeLandmarkFor).
-    landmarksLive = LANDMARKS.filter((def) => def.kind !== 'bridge').map((def) => {
+    landmarksLive = (builtOn ? LANDMARKS : []).filter((def) => def.kind !== 'bridge').map((def) => {
       const [x, z] = toLocal(def.lat, def.lon);
       return { def, x, z, padEle: null };
     });
@@ -55067,6 +55114,23 @@ const DIAL_GROUPS: DialGroup[] = [
       // inside a building footprint to reveal it.
       dial('fow', 'FOG OF WAR', ['OFF', 'ON'], 0, (i) => { cu.uFow.value = i; }),
       dial('veg', 'VEGETATION', ['NONE', 'SPARSE', 'FULL'], 2, (i) => { vegScale = [0, 0.35, 1][i]; }),
+      // OFF is the planet with nothing built on it — see isBuiltWay for the
+      // list. The first apply is the boot's and only sets the flag; a tap
+      // afterwards hops the truck to where it stands, which is the one path
+      // that sweeps every built thing out of the scene and streams the tiles
+      // again through the filter. `?built=` outranks the dial, as `?time=`
+      // does, so an A/B does not depend on which browser profile took it.
+      dial('built', 'BUILT WORLD', ['OFF', 'ON'], 1, (i) => {
+        const want = qsHas('built') ? qsOn('built', true) : i === 1;
+        const changed = builtInit && want !== builtOn;
+        builtOn = want;
+        builtInit = true;
+        if (changed && !hopping && !FIXTURE) {
+          const [la, lo] = localToLatLon(state.x, state.z);
+          const hdg = ((state.heading * 180) / Math.PI + 360) % 360;
+          void worldHop(la, lo, hdg).catch(() => { /* a hop already in flight keeps the world it has */ });
+        }
+      }),
       // Grass is the one layer whose cost is worth handing over: it is the
       // difference between a field and a golf course, and it is also the
       // difference between a phone holding 60fps and not.

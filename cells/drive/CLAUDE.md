@@ -18633,3 +18633,56 @@ across one pixel; and the pale streaks that remain on the fjord from a grazing
 camera are the FOAM — crest whitening on the 140 m wind sea, hard-edged under
 the quantiser — which the same hide-diff separated (`foamStrength: 0` takes
 them out) and which is a look, not a geometry.
+
+## A keyspace bump is a fresh bank, and the previous keyspace now stands in for it
+
+The constructed-ground unit bumped the client's `OSM_TILE_V` to 5 and left the
+handler's `TILE_V` at 4, so `TILE_RE` (`v[2-4]`) answered 404 to every near
+tile for an hour of deploys and the fine layer ran on the client's own
+Overpass fallback. Measured live before the fix: v4 503 (route present,
+mirrors busy), v5 404 (route rejected). Both are 5 now, the handler's tile
+query carries the `amenity=parking` and `area=yes`+`surface` clauses the
+painter reads, and the doctrine block over `TILE_V` says BUMP BOTH.
+
+**AND A BUMP IS A FRESH BANK ON A DAY THE MIRRORS MAY NOT FILL IT.** The day
+v5 shipped all three mirrors timed out a one-block query at 40 s, so every
+cold v5 tile was a 12 s 503 and the world had no roads wherever nobody had
+driven since the bump. `getTile` is the bank's first READ path (`putTile` has
+written it since the namespace went live and only CloudFront ever read it),
+and `serveTile`'s failure branch walks the OLDER keyspaces, v4 down to v2,
+and serves the first banked copy — `cache-control: no-store` so the edge does
+not bank it under the v5 path, no `putTile` for the same reason, and an
+`x-drive-tile-stale: v4` header the client honours by NOT writing the tile to
+IndexedDB (`proxyStale`, a WeakMap keyed on the array because six tiles are in
+flight at once). The tile is drawn and counts as done for the pass; it is
+asked afresh when the ring releases it, or next session. **Not re-asked on a
+timer**, deliberately: that would put a Lambda call and a full Overpass wait
+behind every tile in the ring for as long as the mirrors are down, which is
+the load the fallback exists to take off them. `__osm`'s tile stats carry
+`src: 'stale'`.
+
+**THE SERVER HALF IS VERIFIED ONLY DEPLOYED.** Nothing here can read S3, so
+the witness is a tile banked at v4 and cold at v5 on a day a mirror refuses:
+v5 must answer 200 with the header, `x-cache: Miss`, and 200 again with the
+same header on re-ask (never `Hit`, which would be the edge banking a stale
+tile under the current path).
+
+## BUILT WORLD: the planet with nothing built on it
+
+SETTINGS → WORLD → BUILT WORLD (`?built=0`, which outranks the dial as
+`?time=` does). Off, `isBuiltWay` drops every constructed thing at
+`renderWays`'s entry — the one door every tile, halo, fixture and authored
+road goes through, so a cached tile and a streamed one cannot disagree —
+before anything is planned: highways and all that hangs off one, buildings
+and their ruins, railways, aeroways, man_made, amenities, shops, tourism,
+historic, power, bridge supports, `area=yes` surfaces, quarries, dams and
+weirs; `liveLandmarks` answers none, with the switch in its origin key so a
+rebuild at the same origin does not keep the stock. The ground stays:
+terrain, cover, natural areas, water lines and relations, the landuse and
+leisure areas that tint the sward. A tap on the dial after boot hops the
+truck to where it stands, which is the one path that sweeps the scene and
+streams every tile again through the filter; on a fixture it takes effect
+on the next load.
+
+Measured on `at-campsbay`, nodraw, settled, no page errors: on — 898 ways,
+2,012 road cells, 559 intact buildings, 11 landmarks; off — 27 ways, 0, 0, 0.

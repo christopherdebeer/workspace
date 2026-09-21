@@ -1662,6 +1662,24 @@ async function putTile(
   }));
 }
 
+/** THE BANK'S FIRST READ PATH. `putTile` has written the S3 bank since the
+ *  namespace went live and nothing in this handler has ever read it back —
+ *  CloudFront reads it, on the way to us. `getTile` exists for one thing: a
+ *  fine tile whose CURRENT keyspace is cold while a previous keyspace holds
+ *  the same tile, on a day the mirrors cannot fill it. Absent, refused or
+ *  broken all answer null; the caller decides what a null costs. */
+async function getTile(path: string): Promise<Buffer | null> {
+  const bucket = process.env.CELL_PUBLIC_BUCKET;
+  if (!bucket) return null;
+  try {
+    // @ts-expect-error resolved at runtime by the Lambda image, not at build
+    const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const r = await new S3Client({}).send(new GetObjectCommand({ Bucket: bucket, Key: tileKey(path) }));
+    const bytes = await r.Body?.transformToByteArray?.();
+    return bytes && bytes.length ? Buffer.from(bytes) : null;
+  } catch { return null; }
+}
+
 async function serveTile(path: string, m: RegExpMatchArray) {
   const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
   // z14 is the floor now, not z1: the client has only ever asked at z16, and
@@ -1675,6 +1693,35 @@ async function serveTile(path: string, m: RegExpMatchArray) {
   try {
     ways = trimWays(await askOverpass(overpassQuery(z, x, y)));
   } catch (err) {
+    // THE PREVIOUS KEYSPACE STANDS IN, UNBANKED. A bump of TILE_V is a fresh
+    // bank, so on the day of one every near tile in the world is cold and its
+    // fill depends on Overpass answering inside the edge's window — which,
+    // measured the day v5 shipped, it did not, at all three mirrors, for
+    // hours. The tile the LAST keyspace banked is one S3 read away and is
+    // the same roads and buildings short of whatever the new keyspace was
+    // bumped to carry. So it is served — and served so that nothing keeps
+    // it: `no-store` so the edge does not bank it under the v5 path, no
+    // putTile for the same reason, and a header the client reads to keep it
+    // out of IndexedDB, so the next ask (next session, or the next pass
+    // through this tile) is a real v5 ask again. Descending, so v4 is tried
+    // before v3: each older keyspace is poorer than the one after it.
+    for (let v = TILE_V - 1; v >= 2; v--) {
+      const older = await getTile(`/~/osm/v${v}/${z}/${x}/${y}`);
+      if (!older) continue;
+      return {
+        statusCode: 200,
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'content-encoding': 'gzip',
+          'cache-control': 'no-store',
+          'x-drive-tile-stale': `v${v}`,
+          'access-control-allow-origin': '*',
+          'access-control-expose-headers': 'x-drive-tile-stale',
+        },
+        body: older.toString('base64'),
+        isBase64Encoded: true,
+      };
+    }
     // WRITE NOTHING. A 503 is retried; a stored failure is not.
     return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
       'retry-after': '5',
