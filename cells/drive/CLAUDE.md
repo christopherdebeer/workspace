@@ -18776,4 +18776,7 @@ of the ring with a 45 m wall between them, and a ring on a hill rises from
 the hill. `devtools/authored/twelve-apostles.json` is the first entry:
 four stacks off the lookout, positions read off the photograph and the
 transect rather than surveyed, filed with `authored-push.mjs` once the
-route is deployed.
+route is deployed. Stood in with page routes at the live spot (`cam=god`
+from the lookout, no page errors): Apostle IV reads DEM 0 → mesh 30 with
+the ocean under it, Apostle III DEM 2.5 → mesh 52.5 on the shore platform,
+and the frame shows four grey pillars standing in the surf off the beach.
