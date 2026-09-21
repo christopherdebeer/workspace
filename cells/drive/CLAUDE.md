@@ -18693,3 +18693,55 @@ minus the normal's dot with up, scaled by daylight and thinned 35 % under
 full cloud. Measured on the wall from the god camera at noon, clear: face
 luma 56 → 71 at 0 → 0.18, hue 47° → 62° (the fill is sky-blue, the tint is
 warm), the sky itself unchanged at 120, the sward above 111 → 116.
+
+## The authored store: hand-authored ways on the raw map, banked in S3
+
+The Twelve Apostles' sea stacks are not in OSM, and the world lab's answer —
+a fixture — replaces the planet. The authored store AUGMENTS it: an entry is
+OSM-shaped ways (`{ tags, geometry: [{lat, lon}] }`) under a z16 tile key,
+and the client concatenates them onto the tile's own list before
+`renderWays`, so an authored ruin is a ruin and an authored cliff is a cliff
+by the machinery that draws the mapped ones. No renderer of its own, and no
+git: the entries live where the tiles live.
+
+**Three parts, each where it has to be.** The BLOB is
+`~/authored/v1/<z>/<x>/<y>/<rev>` in the public bank, written by `putTile`
+like a tile and immutable like one — everything under `~/` is edge-cached a
+week as immutable, so a rewrite is a new revision at a new path and the
+old object is an orphan the way a pruned tape's is. The INDEX (which tiles
+carry an entry, at which revision) is the one mutable thing and lives in the
+cell's table under a single `AUTHORED` partition, served by `GET /authored`
+OUTSIDE `~/` with `max-age=60`: one small read a session tells the client
+which blobs exist, so it never asks the edge for one that does not and no
+per-tile 404 wakes the Lambda. The GATE is `x-cell-caller`, the platform's
+own sharing model: a `POST /authored` reaches the handler only for the owner
+or a principal the drive cell is shared with (`cells.call` →
+`authorizeAccess`), anyone else is refused a tier above, and there is no key
+of this game's own to leak. The drive cell IS the grant. Ids are assigned
+server-side above any the map will reach, stable per tile and slot, so a way
+filed under two tiles (it crosses the edge) carries one id and the render
+dedupe draws it once. An empty list retracts the tile.
+
+**The client.** `loadAuthoredIndex` once a session and again on every hop
+(`cache: 'reload'`, so a fresh entry shows within a hop, not a minute);
+`authoredWays` memoised per `z/x/y@rev`; `withAuthored` wraps both of
+`loadOsmTile`'s `renderGated` calls, cached tile and fetched alike, and
+returns the SAME list when there is no entry so `proxyStale` and every other
+WeakMap keyed on it keep working. `?authored=0` and the WORLD → AUTHORED
+dial are the A/B; the dial rebuilds in place like BUILT WORLD (both now
+share `rebuildInPlace`). Fixtures never consult the store. `__authored()`
+is the probe; `__authoredBank(ways, {tile?, dry?})` files from the console
+(lat/lon, or `pts` in local metres, each way under every tile it touches)
+through `sync.author`, the signed-in player's own bearer; `[]` with a tile
+retracts. `devtools/authored-push.mjs` does the same from a shell with a
+`PARC_TOKEN`.
+
+**Verified.** `authored-bank.test.mjs` runs the handler against fakes: the
+index read, every gate, the revision path, id stability across a rewrite,
+the retraction, the no-store 404 for a blob the edge lacks.
+`authored-overlay.test.mjs` stands the store in with page routes at the
+Apostles and boots twice: with it, the index and the blob are asked exactly
+once each, the probe reports the tile merged with both ways and a building
+stands that the raw map does not have (13 against 12); with `?authored=0`,
+nothing is asked and it is gone. The server half against the real table and bank is
+verified only deployed, like the tape bank's.

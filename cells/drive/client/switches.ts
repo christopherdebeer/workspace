@@ -64,6 +64,8 @@ export const SWITCHES = [
     note: 'spawn somewhere on Earth that has roads' },
   { id: 'built', kind: 'toggle', marks: ['world'], fallback: 'the BUILT WORLD dial (on)',
     note: 'built=0 streams the planet with nothing built on it — no roads or anything hung off one, no buildings or ruins, no rail, aeroways, man_made, amenities, historic sites, power, paved areas or authored landmarks — leaving terrain, cover, water and vegetation. Outranks the WORLD dial so an A/B is reproducible; the dial itself rebuilds the world in place when tapped' },
+  { id: 'authored', kind: 'toggle', marks: ['world'], fallback: 'the AUTHORED dial (on)',
+    note: 'authored=0 streams the raw map alone, with no hand-authored entries merged into its tiles (the store at /authored and ~/authored/v1). Outranks the WORLD dial so an A/B is reproducible; the dial rebuilds the world in place when tapped' },
   { id: 'fixture', kind: 'choice', marks: ['world', 'bench'], fallback: 'the real planet',
     note: 'boot an authored or captured world instead of streaming one' },
   { id: 'ft', kind: 'text', marks: ['world', 'bench'], fallback: 'the fixture’s own tune',

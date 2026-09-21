@@ -1856,7 +1856,17 @@ export interface StateTable {
   delRows(pk: string, sks: string[]): Promise<void>;
   setProfile(pk: string, p: { odo: number }): Promise<void>;
   putTape(pk: string, meta: TapeMeta): Promise<void>;
+  /** The authored store's index — every tile that carries an authored entry,
+   *  with the revision whose blob is current. One partition, read whole. */
+  authored(): Promise<AuthoredRow[]>;
+  putAuthored(row: AuthoredRow): Promise<void>;
 }
+/** One authored tile's INDEX row: which revision is current, how many ways
+ *  it holds and who banked it. The blob lives at
+ *  ~/authored/v1/<z>/<x>/<y>/<rev>, immutable like every object there. */
+export interface AuthoredRow { key: string; rev: number; n: number; by: string }
+const AUTHORED_PK = 'AUTHORED';
+const AUTHORED_SK = 'TILE#';
 const num = (v: unknown, cap = Number.MAX_SAFE_INTEGER): number => {
   const n = Math.round(Number(v));
   return Number.isFinite(n) && n > 0 ? Math.min(n, cap) : 0;
@@ -1954,6 +1964,33 @@ function liveTable(): StateTable {
       await batchPut([{ pk: S(pk), sk: S(TAPE_SK + meta.id),
         g: N(meta.secs), t: N(meta.steps), c: N(meta.at),
         la: { N: String(meta.lat) }, lo: { N: String(meta.lon) } }]);
+    },
+    async authored() {
+      const { m, db } = await client();
+      const out: AuthoredRow[] = [];
+      let startKey: Record<string, never> | undefined;
+      do {
+        const res = await db.send(new m.QueryCommand({
+          TableName: TABLE,
+          KeyConditionExpression: 'pk = :p',
+          ExpressionAttributeValues: { ':p': S(AUTHORED_PK) },
+          ...(startKey ? { ExclusiveStartKey: startKey } : {}),
+        })) as { Items?: Array<Record<string, { S?: string; N?: string }>>;
+          LastEvaluatedKey?: Record<string, never> };
+        for (const it of res.Items ?? []) {
+          const sk = it.sk?.S ?? '';
+          if (!sk.startsWith(AUTHORED_SK)) continue;
+          out.push({ key: sk.slice(AUTHORED_SK.length), rev: num(it.c?.N), n: num(it.g?.N), by: it.by?.S ?? '' });
+        }
+        startKey = res.LastEvaluatedKey;
+      } while (startKey);
+      return out;
+    },
+    async putAuthored(row) {
+      // The same three numeric columns as a tape row: c is the revision, g the
+      // way count; the banker's name rides as a string extra.
+      await batchPut([{ pk: S(AUTHORED_PK), sk: S(AUTHORED_SK + row.key),
+        c: N(row.rev), g: N(row.n), t: N(0), by: S(row.by) }]);
     },
     async setProfile(pk, p) {
       const { m, db } = await client();
@@ -2291,6 +2328,131 @@ export async function serveTape(
     { 'cache-control': 'no-store' });
 }
 
+/**
+ * ── THE AUTHORED STORE ──
+ *
+ * Hand-authored world on top of the raw map: a sea stack OSM does not carry,
+ * a cliff line the mapper stopped short of, a ruin that stood in the
+ * photograph. NOT a git fixture — the world lab already has those, and they
+ * replace the planet. This AUGMENTS it, per vector tile, from the same S3
+ * bank the tiles themselves come from, and the client merges an entry into
+ * the tile's own way list before `renderWays`, so an authored way is drawn by
+ * the machinery that draws a mapped one and needs no renderer of its own.
+ *
+ * THREE PARTS, AND WHY EACH IS WHERE IT IS.
+ *   The BLOB — `~/authored/v1/<z>/<x>/<y>/<rev>` — is immutable, because
+ *   everything under `~/` is edge-cached for a week as immutable and a path
+ *   that changed under the cache would serve last month's entry. So a
+ *   rewrite is a new revision at a new path, and the old object is an orphan
+ *   the way a pruned tape's is.
+ *   The INDEX — which tiles carry an entry and at which revision — is the
+ *   one mutable thing, so it lives in the cell's own table under a single
+ *   partition and is served by THIS route (`GET /authored`, outside `~/`),
+ *   cached a minute at most. One small read per session tells the client
+ *   which blobs exist, and it never asks the edge for one that does not, so
+ *   no per-tile 404 ever wakes this Lambda.
+ *   The GATE is `x-cell-caller`: the platform's own sharing model. A POST
+ *   arrives here only for the owner or a principal the cell is shared with
+ *   (`cells.call` → `authorizeAccess`); anyone else is refused a tier above.
+ *   There is no key of this game's own to leak — the drive cell IS the
+ *   grant, exactly as `/state` and `/tape` have it.
+ *
+ * WHAT AN ENTRY IS: OSM-shaped ways — `{ tags, geometry: [{lat, lon}] }` —
+ * under a z16 tile key, which is the client's own vector-tile zoom. Ids are
+ * assigned here, above any id the map will reach, stable per tile and slot,
+ * so a way filed under two tiles (it crosses the edge) carries one id and
+ * `renderWays`'s dedupe draws it once. An EMPTY list retracts the tile.
+ */
+const AUTHORED_Z = 16;
+const AUTHORED_BODY_CAP = 400_000;
+const AUTHORED_WAYS_CAP = 500;
+const AUTHORED_PTS_CAP = 2000;
+const AUTHORED_ID_BASE = 2_000_000_000_000;
+const AUTHORED_BLOB_RE = /^\/~\/authored\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\/(\d{10,16})$/;
+export interface AuthoredWay { id: number; tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }
+/** The tile's bbox widened by one tile each side: a way filed here may run
+ *  into a neighbour, but not across the county. */
+function authoredWayOk(w: unknown, x: number, y: number): string | null {
+  if (!w || typeof w !== 'object') return 'a way is not an object';
+  const { tags, geometry } = w as { tags?: unknown; geometry?: unknown };
+  if (!tags || typeof tags !== 'object' || Array.isArray(tags)) return 'a way has no tags';
+  const ents = Object.entries(tags as Record<string, unknown>);
+  if (!ents.length || ents.length > 40) return 'a way has no tags or too many';
+  for (const [k, v] of ents) {
+    if (typeof v !== 'string' || k.length > 120 || v.length > 200) return `tag ${k.slice(0, 40)} is not a short string`;
+  }
+  if (!Array.isArray(geometry) || !geometry.length || geometry.length > AUTHORED_PTS_CAP) return 'a way has no geometry or too much';
+  const n = 2 ** AUTHORED_Z;
+  const lonW = ((x - 1) / n) * 360 - 180, lonE = ((x + 2) / n) * 360 - 180;
+  const latN = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y - 1)) / n))) * 180) / Math.PI;
+  const latS = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 2)) / n))) * 180) / Math.PI;
+  for (const g of geometry as Array<{ lat?: unknown; lon?: unknown }>) {
+    const la = Number(g?.lat), lo = Number(g?.lon);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) return 'a point is not a number';
+    if (la > latN || la < latS || lo < lonW || lo > lonE) return 'a point lies more than a tile away';
+  }
+  return null;
+}
+export async function serveAuthored(
+  method: string,
+  caller: string,
+  body: string | undefined,
+  table: StateTable = liveTable(),
+  put: typeof putTile = putTile,
+  now: () => number = Date.now,
+) {
+  const no = (code: number, error: string) =>
+    respond(code, 'application/json', JSON.stringify({ error }), { 'cache-control': 'no-store' });
+  if (method === 'GET') {
+    // Readable by anyone: the blobs it points at are public objects anyway.
+    // A cell with no table has no store, and says so as an empty one — the
+    // client treats that exactly as "nothing authored here".
+    const rows = TABLE ? await table.authored() : [];
+    const tiles: Record<string, { rev: number; n: number; by: string }> = {};
+    let rev = 0;
+    for (const r of rows) { tiles[r.key] = { rev: r.rev, n: r.n, by: r.by }; if (r.rev > rev) rev = r.rev; }
+    return respond(200, 'application/json', JSON.stringify({ v: 1, z: AUTHORED_Z, rev, tiles }), {
+      'cache-control': 'public, max-age=60',
+      'access-control-allow-origin': '*',
+    });
+  }
+  if (method !== 'POST') return no(405, 'GET or POST');
+  if (!TABLE) return no(503, 'no table configured');
+  if (!caller || caller === 'anonymous') return no(401, 'sign in to author the world');
+  if (!body || body.length > AUTHORED_BODY_CAP) return no(400, body ? 'entry too large' : 'no entry');
+  let entry: { tile?: unknown; ways?: unknown } = {};
+  try { entry = JSON.parse(body) as typeof entry; } catch { return no(400, 'unreadable'); }
+  const tm = typeof entry.tile === 'string' ? entry.tile.match(/^(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/) : null;
+  if (!tm) return no(400, 'tile must be z/x/y');
+  const [z, x, y] = [Number(tm[1]), Number(tm[2]), Number(tm[3])];
+  if (z !== AUTHORED_Z || x >= 2 ** z || y >= 2 ** z) return no(400, `tile must be at z${AUTHORED_Z}`);
+  if (!Array.isArray(entry.ways) || entry.ways.length > AUTHORED_WAYS_CAP) return no(400, 'ways must be a short list');
+  const key = `${z}/${x}/${y}`;
+  const by = caller.toLowerCase().replace(/[^a-z0-9_.-]/g, '').slice(0, 40) || 'someone';
+  if (!entry.ways.length) {
+    await table.delRows(AUTHORED_PK, [AUTHORED_SK + key]);
+    return respond(200, 'application/json', JSON.stringify({ ok: true, tile: key, retracted: true }),
+      { 'cache-control': 'no-store' });
+  }
+  const ways: AuthoredWay[] = [];
+  for (let i = 0; i < entry.ways.length; i++) {
+    const why = authoredWayOk(entry.ways[i], x, y);
+    if (why) return no(400, `way ${i}: ${why}`);
+    const w = entry.ways[i] as { tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> };
+    ways.push({
+      id: AUTHORED_ID_BASE + (x * 65536 + y) * AUTHORED_WAYS_CAP + i,
+      tags: w.tags,
+      geometry: w.geometry.map((g) => ({ lat: +Number(g.lat).toFixed(7), lon: +Number(g.lon).toFixed(7) })),
+    });
+  }
+  const rev = Math.round(now());
+  const path = `/~/authored/v1/${key}/${rev}`;
+  await put(path, gzipSync(Buffer.from(JSON.stringify({ v: 1, tile: key, rev, by, ways }), 'utf8'), { level: 9 }));
+  await table.putAuthored({ key, rev, n: ways.length, by });
+  return respond(200, 'application/json', JSON.stringify({ ok: true, tile: key, rev, n: ways.length, url: path }),
+    { 'cache-control': 'no-store' });
+}
+
 export const handler = async (event: {
   rawPath?: string; rawQueryString?: string; body?: string;
   headers?: Record<string, string | undefined>;
@@ -2316,6 +2478,11 @@ export const handler = async (event: {
     if (method !== 'POST') return respond(405, 'application/json', JSON.stringify({ error: 'POST' }));
     return serveTape(event.headers?.['x-cell-caller'] ?? 'anonymous', event.body);
   }
+  // The authored store's index and its write door, outside `~/` for the same
+  // reason /gmaps is: the index changes, and that surface promises it won't.
+  if (path === '/authored') {
+    return serveAuthored(method, event.headers?.['x-cell-caller'] ?? 'anonymous', event.body);
+  }
   // Deliberately OUTSIDE the `~/` namespace: that surface is cached by path,
   // and a resolver keyed on a query string has no business in a cache whose
   // key would ignore it.
@@ -2334,6 +2501,14 @@ export const handler = async (event: {
   if (path.startsWith('/~/')) {
     if (TAPE_BLOB_RE.test(path)) {
       return respond(404, 'application/json', JSON.stringify({ error: 'no such tape' }), {
+        'cache-control': 'no-store',
+      });
+    }
+    // An authored blob the edge did not have does not exist: the index
+    // never names one that was not written, so this is a stale index or a
+    // guess, and never a reason to build anything.
+    if (AUTHORED_BLOB_RE.test(path)) {
+      return respond(404, 'application/json', JSON.stringify({ error: 'no such authored entry' }), {
         'cache-control': 'no-store',
       });
     }
