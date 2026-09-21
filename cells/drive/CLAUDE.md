@@ -18780,3 +18780,13 @@ route is deployed. Stood in with page routes at the live spot (`cam=god`
 from the lookout, no page errors): Apostle IV reads DEM 0 → mesh 30 with
 the ocean under it, Apostle III DEM 2.5 → mesh 52.5 on the shore platform,
 and the frame shows four grey pillars standing in the surf off the beach.
+
+**Filed live** (`16/58818/40410`, rev 1789991018026, by c15r): the index
+names the tile, the blob serves from the edge gzipped and immutable, and a
+harness boot at the lookout against the deployed store — no stand-in —
+merges four ways and reads Apostle I DEM 0.8 → mesh 45.8, II 0.1 → 38.1
+(ocean), III 2.5 → 52.5, IV 0 → 30 (ocean), no page errors. The bearer that
+filed it was a `write:workspace` token: the cell's dispatch accepts the
+owner's workspace scope, and a `cell:c15r/drive:*` scope is NOT within a
+token minted from this session's ceiling, so a narrower one cannot be cut
+from here.
