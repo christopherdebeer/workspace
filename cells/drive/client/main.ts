@@ -101,7 +101,7 @@ import { GRASS_M2, GRASS_UNKNOWN, GRASS_DEFAULT, swardCoverEvidence, SWARD_EV }
   from './sward-cover';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { embeddedLab, startLab } from './labs';
-import { RasterPaintSession, type EditableRasterTile } from './world-authoring-raster';
+import { RasterPaintSession, type CellRect, type EditableRasterTile } from './world-authoring-raster';
 import { DemPaintSession, type DemBrush, type EditableDemTile } from './world-authoring-dem';
 import { PolylinePaintSession, type AuthoredPolyline } from './world-authoring-vector';
 import { startWorldAuthoringLab, type AuthoringLayer, type AuthoringPreview } from './world-authoring-lab';
@@ -53171,8 +53171,14 @@ function projectAuthoringPoint(x: number, z: number): [number, number] | null {
     (.5 - authoringProject.y * .5) * HH,
   ];
 }
+/** What the overlay costs, because it runs EVERY FRAME while a raster stroke
+ *  is up and its dearest call is `groundAt` — one per cell, measured at about
+ *  650 ns elsewhere in this file. `PREVIEW_CELL_CAP` is what bounds it, and
+ *  this is what says whether the bound is right. `__authorprev(true)` resets. */
+let authorPrevMs = 0, authorPrevFrames = 0, authorPrevMax = 0, authorPrevPoints = 0;
 function drawAuthoringPreviews(): void {
   if (!authoringPreviews.length) return;
+  const t0 = performance.now();
   hctx.save();
   hctx.lineJoin = 'round';
   hctx.lineCap = 'round';
@@ -53184,6 +53190,55 @@ function drawAuthoringPreviews(): void {
     hctx.fillStyle = colour;
     hctx.globalAlpha = preview.state === 'settled' ? .42 : .9;
     hctx.setLineDash(preview.state === 'pending' ? [3, 3] : []);
+    // ── THE CELLS AN EDIT HAS ALREADY WRITTEN ──
+    //
+    // A brush is round and a raster is not, so a sweep at the brush's own
+    // width cannot say WHICH texels flipped — at the cover raster's 38 m a
+    // small stroke may flip none, or one a long way from the finger. These
+    // are the footprints themselves, drawn from the moment the array changes
+    // and dropped once the rebuild that makes them real has landed.
+    //
+    // ONE `groundAt` A CELL, and the screen size is solved ONCE per preview
+    // off the first cell's own edge: the read is the dearest call in the
+    // walk (measured at ~650 ns), and on a chart at 89.9° of tilt a cell's
+    // projected size is the same across the frame to well under a pixel.
+    if (preview.kind === 'cells') {
+      const cw = preview.cellW ?? 0, ch = preview.cellH ?? 0;
+      const first = preview.points[0];
+      if (!first || cw <= 0 || ch <= 0) continue;
+      const c0 = projectAuthoringPoint(first.x, first.z);
+      const cx = projectAuthoringPoint(first.x + cw * .5, first.z);
+      const cz = projectAuthoringPoint(first.x, first.z + ch * .5);
+      if (!c0) continue;
+      const hx = Math.max(1, cx ? Math.hypot(cx[0] - c0[0], cx[1] - c0[1]) : 2);
+      const hz = Math.max(1, cz ? Math.hypot(cz[0] - c0[0], cz[1] - c0[1]) : 2);
+      // ONE PATH FOR THE WHOLE SET, and a rect skipped where it cannot be
+      // seen. Measured at the cap on a wide DEM sweep: 583 cells at a
+      // fillRect AND a strokeRect each cost **2.2 ms a frame** — a third of
+      // a phone's whole budget, every frame the trail is up — against 0.35
+      // batched. Canvas state changes are the cost, not the arithmetic.
+      // Non-zero winding also means overlapping cells fill ONCE, so a
+      // doubled-back stroke does not paint itself darker.
+      hctx.lineWidth = 1;
+      hctx.beginPath();
+      let drawn = 0;
+      for (const cell of preview.points) {
+        const p = projectAuthoringPoint(cell.x, cell.z);
+        if (!p || p[0] < -hx || p[0] > HW + hx || p[1] < -hz || p[1] > HH + hz) continue;
+        hctx.rect(p[0] - hx, p[1] - hz, hx * 2, hz * 2);
+        drawn++;
+      }
+      if (!drawn) continue;
+      // THE OUTLINE CARRIES THE CLAIM AND THE FILL ONLY HINTS AT IT: a cover
+      // texel is 38 m, so at the chart's near zoom one cell is most of the
+      // frame, and a heavy wash hides the ground you are painting.
+      const alpha = hctx.globalAlpha;
+      hctx.globalAlpha = alpha * .15;
+      hctx.fill();
+      hctx.globalAlpha = alpha;
+      hctx.stroke();
+      continue;
+    }
     if (preview.kind === 'cursor') {
       const centre = preview.points[0];
       if (!centre) continue;
@@ -53221,7 +53276,21 @@ function drawAuthoringPreviews(): void {
     hctx.stroke();
   }
   hctx.restore();
+  const ms = performance.now() - t0;
+  authorPrevMs += ms; authorPrevFrames++;
+  if (ms > authorPrevMax) authorPrevMax = ms;
+  for (const preview of authoringPreviews) authorPrevPoints += preview.points.length;
 }
+(window as unknown as { __authorprev?: object }).__authorprev = (reset = false): Record<string, number> => {
+  const out = {
+    frames: authorPrevFrames,
+    msPerFrame: +(authorPrevMs / Math.max(1, authorPrevFrames)).toFixed(3),
+    maxMs: +authorPrevMax.toFixed(3),
+    pointsPerFrame: +(authorPrevPoints / Math.max(1, authorPrevFrames)).toFixed(1),
+  };
+  if (reset) { authorPrevMs = authorPrevFrames = authorPrevMax = authorPrevPoints = 0; }
+  return out;
+};
 // The X-RAY DEPTH view: the luma map, decoded and painted edge to edge under
 // the instruments. Sky is blue (it decodes as the far plane — the dome writes
 // no depth), terrain is grey by log distance. Same rendering as the
@@ -56476,7 +56545,18 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     dockRect = povRect = droneRect = mapUpRect = { x: 0, y: 0, w: 0, h: 0 };
     // Tile debug is its own instrument, not a HUD element — see
     // drawTileDebugOverlay's own header for why it must not depend on hudOn.
-    drawTileDebugOverlay();
+    // It stands down for the WORLD LAB, which is the one caller that turns
+    // the chrome off to get a clean viewport: before this canvas was exempted
+    // from `body.clean` the grid was hidden there by accident, and restoring
+    // it by accident would put four lines of debug over the map the lab
+    // exists to edit. FOLD gives it back with the rest of the chrome.
+    if (!labChrome) drawTileDebugOverlay();
+    // AND SO IS THE AUTHORING OVERLAY, for the same reason and a sharper
+    // one: the world lab turns the game's chrome OFF as it opens, which is
+    // `hudOn = false`, so the one instrument the lab cannot work without was
+    // the one its own opening switched off. Measured: a road draft nine
+    // points long, `hudOn false`, and not a pixel of it drawn.
+    drawAuthoringPreviews();
     return;
   }
   // While the DOM menu is up the HUD stands down entirely. Its scrim used to
@@ -57889,6 +57969,9 @@ function stepOverlays(): void {
  *  SETTINGS' own HIDE HUD is `setClean`, which hides the DOM controls and
  *  leaves this canvas exactly where it was. */
 let hudOn = true;
+/** The WORLD LAB has the chrome off — not the player's HIDE HUD. The two
+ *  wear one `.clean` class and want opposite things of the HUD canvas. */
+let labChrome = false;
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
 let povRect = { x: 0, y: 0, w: 0, h: 0 };
 let droneRect = { x: 0, y: 0, w: 0, h: 0 };
@@ -58547,7 +58630,14 @@ function hudTap(cx: number, cy: number): boolean {
 // itself). Declared last: every element it references must already exist.
 {
   const st = document.createElement('style');
-  st.textContent = 'body.clean .ui { display: none !important; }';
+  // …except the HUD CANVAS while the world lab owns the screen. `.clean` is
+  // the player's HIDE HUD and the lab's chrome-off state wearing one class,
+  // and they want opposite things of this surface: the player asked for the
+  // instruments to go, the lab asked for the game's DOM to go and still has
+  // to draw its brush on something. `setChrome` marks the canvas; nothing
+  // else does, so HIDE HUD is untouched.
+  st.textContent = 'body.clean .ui { display: none !important; }'
+    + 'body.clean canvas.lab { display: block !important; }';
   document.head.appendChild(st);
   for (const el of [mini, stickBase, stickNub]) el.classList.add('ui');
   const clean = (): boolean => document.body.classList.contains('clean');
@@ -59702,11 +59792,85 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     swardGroundSeen = Number.MIN_SAFE_INTEGER;
     swardFieldAt = 0;
   };
+  /**
+   * ── WHAT A BRUSH HAS CHANGED AND THE WORLD HAS NOT YET DRAWN ──
+   *
+   * A painted byte is in the array the instant a finger moves; the PICTURE is
+   * a terrain rebuild away, and on a phone that is a second or two in which
+   * the lab appears to have done nothing. So the cells themselves are drawn,
+   * from the moment they change until every terrain tile they stand on is out
+   * of `terrainDirty`, and then faded — the road layer's own pending/settled
+   * rule, applied to a raster.
+   *
+   * ONE STROKE'S TRAIL, CAPPED, AND THINNED BY A STRIDE RATHER THAN CUT. The
+   * next stroke's rebuild queues behind this one anyway, and an unbounded
+   * trail is an unbounded per-frame projection; a budget that truncates would
+   * leave the far half of a long stroke unmarked, which is the fault the
+   * bank's own break lines already record from the other side.
+   */
+  const PREVIEW_CELL_CAP = 600;
+  type CellTrail = { cells: CellRect[]; dirty: Set<string>; settledAt: number };
+  const cellTrails = new Map<string, CellTrail>();
+  const thinCells = (cells: readonly CellRect[]): CellRect[] => {
+    const stride = Math.max(1, Math.ceil(cells.length / PREVIEW_CELL_CAP));
+    const out: CellRect[] = [];
+    for (let i = 0; i < cells.length; i += stride) out.push(cells[i]);
+    return out;
+  };
+  /** The z14 terrain keys a set of cells stands on. A COVER cell is a z12
+   *  texel and the rebuild that makes it visible is a z14 tile's, so the
+   *  tile keys the edit reports are not the keys to watch. */
+  const terrainKeysOf = (cells: readonly CellRect[]): Set<string> => {
+    const keys = new Set<string>();
+    for (const cell of cells) {
+      for (const [dx, dz] of [[-.5, -.5], [.5, -.5], [-.5, .5], [.5, .5]] as const) {
+        const [tx, ty] = tileAt(
+          origin.lat - (cell.z + dz * cell.h) / M_LAT,
+          origin.lon + (cell.x + dx * cell.w) / origin.mLon,
+          TERRAIN_Z,
+        );
+        keys.add(`${tx}/${ty}`);
+      }
+    }
+    return keys;
+  };
+  const noteCells = (id: string, cells: readonly CellRect[] | undefined): void => {
+    if (!cells?.length) return;
+    cellTrails.set(id, { cells: thinCells(cells), dirty: terrainKeysOf(cells), settledAt: 0 });
+  };
+  const cellPreviews = (id: string, live: readonly CellRect[]): AuthoringPreview[] => {
+    const out: AuthoringPreview[] = [];
+    const push = (cells: readonly CellRect[], state: AuthoringPreview['state']): void => {
+      if (!cells.length) return;
+      out.push({
+        kind: 'cells',
+        points: cells.map((cell) => ({ x: cell.x, z: cell.z })),
+        radiusM: 0,
+        state,
+        cellW: cells[0].w,
+        cellH: cells[0].h,
+      });
+    };
+    const trail = cellTrails.get(id);
+    if (trail) {
+      const now = performance.now();
+      if (!trail.settledAt && [...trail.dirty].every((key) => !terrainDirty.has(key))) {
+        trail.settledAt = now;
+      }
+      if (trail.settledAt && now - trail.settledAt > 900) cellTrails.delete(id);
+      else push(trail.cells, trail.settledAt ? 'settled' : 'pending');
+    }
+    // The stroke in flight draws OVER its own trail: the same ground at a
+    // different state is the truth, and the draft is the one the eye follows.
+    if (live.length) push(thinCells(live), 'draft');
+    return out;
+  };
   const applyCover = (
-    operation: () => { changed: number; tileKeys: string[] },
+    operation: () => { changed: number; tileKeys: string[]; cells?: CellRect[] },
   ): { changed: number; tileKeys: string[] } => {
     const result = operation();
     invalidateCoverEdits(result);
+    noteCells('cover', result.cells);
     return result;
   };
   /**
@@ -59716,10 +59880,11 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
    */
   const invalidateDemEdits = (result: { tileKeys: string[] }): void => demTilesChanged(result.tileKeys);
   const applyDem = (
-    operation: () => { changed: number; tileKeys: string[] },
+    operation: () => { changed: number; tileKeys: string[]; cells?: CellRect[] },
   ): { changed: number; tileKeys: string[] } => {
     const result = operation();
     invalidateDemEdits(result);
+    noteCells('dem', result.cells);
     return result;
   };
   const coverLayer: AuthoringLayer = {
@@ -59741,6 +59906,11 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       { value: String(COVER.mangrove), label: `${COVER.mangrove} · MANGROVE` },
       { value: String(COVER.moss), label: `${COVER.moss} · TUNDRA` },
     ],
+    // A THUMB HAS TO BE ABLE TO HIT A STOP. The fallback this replaces was
+    // 0–240 at 5 (49 stops) on a slider buried in the sheet; 0–200 at 5 is
+    // 41, about five pixels a stop on the bar's own strip, and 0 is still
+    // the single texel under the cursor.
+    radius: { label: 'RADIUS', min: 0, max: 200, step: 5, value: 40, unit: 'm' },
     beginGesture: (at, radius, value) => {
       coverEditor.beginStroke();
       return applyCover(() => coverEditor.paint(
@@ -59759,14 +59929,18 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       COVER_CLASSES.includes(Number(value)) && Number(value) !== 0 ? Number(value) : COVER.grass,
     )),
     endGesture: () => {
-      coverEditor.endStroke();
+      // The stroke's own cells become the trail. `changed` stays 0: every
+      // one of them was already counted as it was painted.
+      noteCells('cover', coverEditor.endStroke().cells);
       return { changed: 0, tileKeys: [] };
     },
     cancelGesture: () => { coverEditor.endStroke(); },
-    previews: (cursor, radiusM) => cursor ? [{
-      kind: 'cursor', points: [cursor], radiusM, state: 'cursor',
-    }] : [],
+    previews: (cursor, radiusM) => [
+      ...(cursor ? [{ kind: 'cursor' as const, points: [cursor], radiusM, state: 'cursor' as const }] : []),
+      ...cellPreviews('cover', coverEditor.strokeCells()),
+    ],
     undo: () => applyCover(() => coverEditor.undo()),
+    redo: () => applyCover(() => coverEditor.redo()),
     reset: () => applyCover(() => coverEditor.reset()),
     setDataView: (on) => setGroundView(on ? 'cover' : baseGroundView),
     report: () => ({
@@ -59791,7 +59965,13 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       { value: 'flatten', label: 'FLATTEN' },
       { value: 'smooth', label: 'SMOOTH' },
     ],
-    strength: { label: 'AMOUNT', min: .05, max: 10, step: .05, value: 1, unit: 'm' },
+    // A z14 texel is about 9.5 m, so a brush finer than that sculpts one
+    // cell; 120 m at 4 is 31 stops a thumb can land on.
+    radius: { label: 'RADIUS', min: 0, max: 120, step: 4, value: 32, unit: 'm' },
+    // 0.05 m to 10 at 0.05 is 199 stops — unreachable on any slider, and a
+    // five-centimetre height nudge is under what the mesh can show. 0.25 to
+    // 8 at 0.25 is 32, and the finest step is a quarter of a metre.
+    strength: { label: 'AMOUNT', min: .25, max: 8, step: .25, value: 1, unit: 'm' },
     beginGesture: (at, radius, value, strength) => {
       demEditor.beginStroke(
         (['raise', 'lower', 'flatten', 'smooth'].includes(value) ? value : 'raise') as DemBrush);
@@ -59800,14 +59980,16 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     updateGesture: (at, radius, _value, strength) => applyDem(() =>
       demEditor.paint(editableDemTiles(), at.x, at.z, radius, strength)),
     endGesture: () => {
-      demEditor.endStroke();
+      noteCells('dem', demEditor.endStroke().cells);
       return { changed: 0, tileKeys: [] };
     },
     cancelGesture: () => { demEditor.endStroke(); },
-    previews: (cursor, radiusM) => cursor ? [{
-      kind: 'cursor', points: [cursor], radiusM, state: 'cursor',
-    }] : [],
+    previews: (cursor, radiusM) => [
+      ...(cursor ? [{ kind: 'cursor' as const, points: [cursor], radiusM, state: 'cursor' as const }] : []),
+      ...cellPreviews('dem', demEditor.strokeCells()),
+    ],
     undo: () => applyDem(() => demEditor.undo()),
+    redo: () => applyDem(() => demEditor.redo()),
     reset: () => applyDem(() => demEditor.reset()),
     setDataView: (on) => {
       if (on) fitDemView();
@@ -59835,7 +60017,7 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
   const roadStates = new Map<string, AuthoredRoadState>();
   const roadStorageKey = `drive.world-authoring.roads.v1:${origin.lat.toFixed(5)},${origin.lon.toFixed(5)}`;
   const saveRoads = (): void => {
-    try { localStorage.setItem(roadStorageKey, JSON.stringify(roadEditor.snapshot())); } catch { /* quota/private mode */ }
+    try { localStorage.setItem(roadStorageKey, JSON.stringify(roadEditor.save())); } catch { /* quota/private mode */ }
   };
   const roadId = (id: string): number => {
     let hash = 2166136261;
@@ -59985,6 +60167,17 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       }
       return result;
     },
+    // REDO NEEDS NO RELOAD, and the asymmetry is the whole reason the undo
+    // has one: taking a built road out of the world is the edit this lab
+    // cannot do in place, and putting one in is the thing it does best.
+    redo: () => {
+      const result = roadEditor.redo();
+      if (result.feature) {
+        saveRoads();
+        void buildAuthoredRoad(result.feature);
+      }
+      return result;
+    },
     reset: () => {
       const result = roadEditor.reset();
       if (result.changed) {
@@ -60069,6 +60262,11 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     setChrome: (on) => {
       if (!on) menu.close();
       document.body.classList.toggle('clean', !on);
+      // The lab's own paint overlay lives on this canvas — see the `.lab`
+      // rule beside the `.clean` one for why it is marked rather than
+      // exempted wholesale.
+      hud.classList.toggle('lab', !on);
+      labChrome = !on;
       hudOn = on;
       if (on) updateStickHome();
     },

@@ -1,4 +1,4 @@
-import type { RasterEditResult } from './world-authoring-raster';
+import type { CellRect, RasterEditResult } from './world-authoring-raster';
 
 export type DemBrush = 'raise' | 'lower' | 'flatten' | 'smooth';
 
@@ -24,6 +24,14 @@ interface DemCellEdit {
 const cellKey = (tile: EditableDemTile, index: number): string =>
   `${tile.key}:${index}`;
 
+const cellRect = (tile: EditableDemTile, index: number): CellRect => {
+  const w = tile.w / tile.columns;
+  const h = tile.h / tile.rows;
+  const ix = index % tile.columns;
+  const iz = (index - ix) / tile.columns;
+  return { x: tile.xs + (ix + .5) * w, z: tile.zs + (iz + .5) * h, w, h };
+};
+
 const smoothstep = (value: number): number => {
   const t = Math.max(0, Math.min(1, value));
   return t * t * (3 - 2 * t);
@@ -39,12 +47,17 @@ const smoothstep = (value: number): number => {
 export class DemPaintSession {
   private originals = new Map<string, DemCellEdit>();
   private undoStack: DemCellEdit[][] = [];
+  private redoStack: DemCellEdit[][] = [];
   private stroke: Map<string, DemCellEdit> | null = null;
   private brush: DemBrush = 'raise';
   private flattenTarget: number | null = null;
 
   beginStroke(brush: DemBrush): void {
     if (this.stroke) this.endStroke();
+    // A new stroke forks the history — the raster session's rule, and the
+    // same reason: a redo recorded before it would restore heights this
+    // stroke has since sculpted past.
+    this.redoStack.length = 0;
     this.stroke = new Map();
     this.brush = brush;
     this.flattenTarget = null;
@@ -161,6 +174,7 @@ export class DemPaintSession {
     return {
       changed: edits.length,
       tileKeys: [...new Set(edits.map((edit) => edit.tile.key))],
+      cells: edits.map((edit) => cellRect(edit.tile, edit.index)),
     };
   }
 
@@ -175,9 +189,31 @@ export class DemPaintSession {
         this.originals.delete(cellKey(edit.tile, edit.index));
       }
     }
+    this.redoStack.push(edits);
     return {
       changed: edits.length,
       tileKeys: [...new Set(edits.map((edit) => edit.tile.key))],
+      cells: edits.map((edit) => cellRect(edit.tile, edit.index)),
+    };
+  }
+
+  /** The inverse of undo, restoring the SESSION record with the height: the
+   *  authored export reads `originals`, so a redone cell absent from it would
+   *  stand in the world and not in the entry. */
+  redo(): RasterEditResult {
+    this.endStroke();
+    const edits = this.redoStack.pop();
+    if (!edits) return { changed: 0, tileKeys: [] };
+    for (const edit of edits) {
+      edit.tile.data[edit.index] = edit.after;
+      const key = cellKey(edit.tile, edit.index);
+      if (!this.originals.has(key)) this.originals.set(key, edit);
+    }
+    this.undoStack.push(edits);
+    return {
+      changed: edits.length,
+      tileKeys: [...new Set(edits.map((edit) => edit.tile.key))],
+      cells: edits.map((edit) => cellRect(edit.tile, edit.index)),
     };
   }
 
@@ -193,6 +229,7 @@ export class DemPaintSession {
     }
     this.originals.clear();
     this.undoStack.length = 0;
+    this.redoStack.length = 0;
     return { changed, tileKeys: [...changedTiles] };
   }
 
@@ -207,10 +244,23 @@ export class DemPaintSession {
     }
     return out;
   }
-  report(): { editedCells: number; undoDepth: number; strokeCells: number } {
+  /** The stroke in flight, as world footprints — the lab draws these from
+   *  the moment the array changes, which is a rebuild ahead of the picture. */
+  strokeCells(): CellRect[] {
+    if (!this.stroke) return [];
+    const out: CellRect[] = [];
+    for (const edit of this.stroke.values()) {
+      if (Math.abs(edit.before - edit.after) <= 1e-6) continue;
+      out.push(cellRect(edit.tile, edit.index));
+    }
+    return out;
+  }
+
+  report(): { editedCells: number; undoDepth: number; redoDepth: number; strokeCells: number } {
     return {
       editedCells: this.originals.size,
       undoDepth: this.undoStack.length,
+      redoDepth: this.redoStack.length,
       strokeCells: this.stroke?.size ?? 0,
     };
   }

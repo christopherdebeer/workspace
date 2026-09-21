@@ -18969,3 +18969,170 @@ runtime, and only then boots with the stand-in entry: measured, raw 10
 `?authored=0` leg asking for nothing and reading the raster's own. **A check
 whose fixture is drawn from the same source as its subject cannot fail**, and
 the fix is to read the subject first and choose against it.
+
+## The lab's paint overlay was drawn on a canvas its own opening had hidden
+
+Reported from the seat: *vector/roads had an intermediate render/overlay for
+fast paint feedback and it seems to have "gone".* It had, and the lab's own
+redesign is what took it: the overlay is drawn on the HUD canvas, and the
+phone bar's opening turns the game's chrome off, which is **two** separate
+switches on that one surface.
+
+- **`drawAuthoringPreviews()` SAT AFTER `drawHud`'s `!hudOn` EARLY RETURN.**
+  `setChrome(false)` is `hudOn = false`, so the function never ran. It is
+  called from the `!hudOn` branch now, beside `drawTileDebugOverlay`, whose
+  own header already states the rule for exactly this class of instrument.
+- **AND THE CANVAS CARRIES CLASS `ui`, WHICH `body.clean` HIDES.** So even
+  with the draw restored, a perfect overlay would have been painted onto
+  `display: none`. `.clean` is the player's HIDE HUD and the lab's chrome-off
+  state wearing one class, and they want opposite things of this surface: the
+  player asked for the instruments to go, the lab asked for the game's DOM to
+  go and still has to draw its brush on something. `setChrome` marks the
+  canvas `.lab` and one rule exempts it; HIDE HUD adds no such class and is
+  untouched.
+
+**Measured before anything was changed**, the lab open on its own terms with a
+nine-point road draft in flight: `hudOn false`, `display: none`, and the draft
+reported by `__worldedit()` while not one pixel of it reached the glass.
+
+**AND THE FIRST CUT OF THAT MEASUREMENT READ THE MINIMAP.** `mini` carries
+class `ui` too, so `querySelectorAll('canvas')` filtered by `.ui` returned a
+276×276 surface the overlay never draws on — which reported 0 ink with the
+chrome ON as well and would have said the overlay was broken everywhere.
+Every reading of a canvas in this client has to name WHICH canvas: the HUD's
+is the largest, 520×1126 at DPR 2 on a 390-point phone.
+
+### The raster brushes draw the texels they have already written
+
+The vector layer always had a draft; the brushes had a cursor circle and
+nothing else, and a painted byte is in the array the instant a finger moves
+while the PICTURE is a terrain rebuild away — a second or two of the lab
+apparently doing nothing, which is the latency the seat asked about.
+
+A `cells` preview carries the footprints themselves: `draft` while the stroke
+is in flight, `pending` until every terrain tile they stand on is out of
+`terrainDirty`, then `settled` and faded — the road layer's own state rule,
+applied to a raster.
+
+- **A SWEPT PATH AT THE BRUSH'S WIDTH WOULD NOT DO, which is why it is cells
+  and not a line.** A brush is round and a raster is not: at the cover
+  raster's 38 m a small stroke may flip no texel at all, or one a long way
+  from the finger, and no round sweep can say which.
+- **THE TERRAIN KEYS ARE NOT THE EDIT'S OWN KEYS.** A cover cell is a z12
+  texel and the rebuild that makes it visible is a z14 tile's, so the pending
+  set is derived from the cells' own corners through `tileAt(…, TERRAIN_Z)`.
+- **ONE STROKE'S TRAIL, CAPPED AT 600 AND THINNED BY A STRIDE.** The next
+  stroke's rebuild queues behind this one anyway; a budget that truncated
+  would leave the far half of a long stroke unmarked, which is the fault the
+  bank's break lines already record from the other side.
+
+**AND THE PER-CELL CANVAS CALLS WERE THE COST, NOT THE ARITHMETIC.**
+`__authorprev()` is the instrument, because this runs every frame while a
+trail is up. At the cap on a wide DEM sweep (583 cells, 9.5 m texels):
+
+| | ms a frame | max |
+|---|---|---|
+| a `fillRect` and a `strokeRect` per cell | **2.1** | 2.2 |
+| one path, one fill, one stroke, off-screen cells rejected | **0.5** | 0.6 |
+
+Non-zero winding also means overlapping cells fill ONCE, so a doubled-back
+stroke does not paint itself darker. **Read the frame count beside those
+numbers**: the harness draws at about a fifth of a frame a second with a
+world this size, so each leg is two frames, and the honest claim is the
+factor rather than the millisecond. The legs hold the pointer DOWN and reset
+the counter only after the world has gone quiet — a window taken during the
+rebuild the stroke triggered holds ONE frame, and one frame is not a
+measurement of a per-frame cost.
+
+**THE OUTLINE CARRIES THE CLAIM AND THE FILL ONLY HINTS AT IT** (0.15 of the
+state's own alpha). At the chart's near zoom one cover texel is most of the
+frame, and the first cut's 0.3 was a wash over the ground being painted.
+
+**AND THE TILE GRID STANDS DOWN FOR THE LAB.** Exempting the canvas from
+`.clean` also un-hid the tile-debug overlay, which had been invisible there
+by accident and is four lines of debug over the map the lab exists to edit —
+against the decluttering the bar was built for. `labChrome` is the flag;
+FOLD gives the grid back with the rest of the chrome. The pending cells carry
+the same *is this still building* signal the REBUILD boxes did.
+
+### Every edit affordance is on the bar, and the budget moved with it
+
+*Most if not all "more" affordances should be in the main bar (esp
+undo/redo/reset).* UNDO, REDO, RESET and BANK were behind the ⋯ sheet — two
+taps and a covered viewport away from the thing you have just painted wrongly.
+
+**THE BAR WRAPS RATHER THAN RATIONING.** A fixed column count forces a choice
+about which affordance to drop; a flex row of 44 px chips takes a second line
+on a phone and one line on a desktop. Nine chips: LAYER · 2D/3D · PAINT ·
+BRUSH · UNDO · REDO · RESET · BANK · ⋯.
+
+**SO THE HEIGHT BAR MOVED, AND IT IS STATED RATHER THAN QUIETLY LOOSENED.**
+At rest the panel is 126 px of an 844 px phone (15%, under the sixth the
+first design promised); ARMED, with the dial strip, 179 px (21%). The test
+asserts a sixth at rest and a quarter armed, because the ask that made it
+taller is the ask that put the affordances there.
+
+**A DISABLED CHIP IS THE HONEST READING OF AN EMPTY STACK**, and the depths
+come off the layer's own report, so the bar cannot claim a redo the session
+does not hold.
+
+**AND THE BRUSH CHIP READ `PAVED` FOR THREE OF THE FOUR ROAD KINDS.**
+`brushLabel` took the LAST segment of a choice's label, which is the word for
+a cover class (`40 · FARMLAND`) and the SURFACE for a road
+(`RESIDENTIAL · PAVED`) — and residential, service and track share theirs. A
+leading number is a code, and then the tail is the name; otherwise the head
+is.
+
+### Redo, and the one stack that has to survive a page reload
+
+Neither paint session had a redo: both popped their undo and discarded it.
+Both have one now, and both fork the history on a new stroke — a redo
+recorded before an edit that has since happened would restore a value nothing
+on the screen ever showed.
+
+- **THE SESSION RECORD IS RESTORED WITH THE RASTER.** `originals` is what the
+  authored bank files off `edits()`, so a redone cell that is not back in it
+  would stand in the world and be missing from the entry. Held by the
+  sessions' own self-tests, with the negative control run: drop the
+  `redoStack.push` and `undo did not stack a redo` fires.
+- **AND THE ROADS' STACK IS PART OF THE SAVED RECORD.** Removing a built road
+  is the one edit this lab cannot do in place, so the adapter reloads the page
+  after an undo — an in-memory redo would be gone before a thumb could reach
+  it, and the button would be correct and permanently dead. The stored record
+  is `{v: 2, features, redo}` and a v1 bare array still loads. Negative
+  control: save an empty redo and `the redo stack did not survive the record
+  the adapter saves` fires.
+- **REDO NEEDS NO RELOAD, and the asymmetry is the whole reason the undo has
+  one:** putting a road in is what this lab does best.
+
+### WIDTH and AMOUNT, where a thumb can reach them
+
+*Ensure width and amount is compact/usable.* They were range inputs in the
+sheet on a 78/1fr/46 grid — the one control a brush cannot work without,
+behind two taps — and the ELEVATION amount spanned 0.05 m to 10 at 0.05: **199
+stops**, unreachable on any slider, for a nudge finer than the mesh can show.
+
+The DIAL STRIP is one row while PAINTING is armed: the dial's name, the
+slider, the reading. Measured on a 390-point phone, the slider is **242 px
+wide and 44 tall** — 62% of the screen. A layer with two dials cycles on a tap
+of the name; a layer with one shows it as a LABEL, because a disabled chip
+reads as broken rather than as a name.
+
+| dial | was | now | stops |
+|---|---|---|---|
+| cover RADIUS | 0–240 at 5 (a fallback) | 0–200 at 5 | 41 |
+| dem RADIUS | the same fallback | 0–120 at 4 | 31 |
+| **dem AMOUNT** | **0.05–10 at 0.05** | **0.25–8 at 0.25** | **32** |
+| road WIDTH | 2–16 at 0.5 | unchanged | 29 |
+
+A z14 texel is about 9.5 m, so a DEM brush finer than that sculpts one cell;
+0 is still the single texel under the cursor. **The finest height step is a
+quarter of a metre now** — five-centimetre nudges are gone, and they were
+never reachable.
+
+`devtools/lab-preview.test.mjs` holds the overlay (the AUTHORITY, which is
+what the lab handed the renderer by kind and state, AND the PICTURE, which is
+ink on the canvas measured as armed-against-disarmed so the difference is the
+preview and nothing else — with the tile grid gone the disarmed floor is
+exactly **0**). `devtools/lab-phone.test.mjs` holds the bar, the dial and an
+undo/redo round trip through the chips.
