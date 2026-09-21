@@ -78,7 +78,7 @@ import { HYDRO_BUILD_PROF, setHydroBoundProbe } from './hydro/build-tile';
 import type { SceneShade } from './hydro/material';
 import { HYDRO_SCENE_SKY_GLSL } from './hydro/scene-sky';
 import { CLOUD_DECK_Y, CLOUD_GLSL, CLOUD_SCALE } from './cloud-field';
-import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainCrossingMask, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
+import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type Plinth, type TerrainCrossingMask, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
 import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-worker';
 // THE TERRAIN KERNEL, instantiated once for the synchronous path and the
 // probes; the worker builds its own from the same source (terrain-worker.ts).
@@ -3392,6 +3392,49 @@ function noteCliff(pts: Array<[number, number]>): void {
     }
   }
   for (const key of dirty) markTerrainDirty(key, 'cliff');
+}
+/** Mapped stacks and outcrops with a stated height, per terrain tile — a
+ *  `natural=rock|bare_rock|stone` ring carrying `height=` (OSM's own keys,
+ *  from the map or the authored store). The kernel raises the ground inside
+ *  the ring by the height over the DEM under its centre and creases the
+ *  ring as a cliff: a sea stack the raster never saw. See plinthAdjust. */
+const plinthsByTile = new Map<string, Plinth[]>();
+const plinthSeen = new Set<string>();
+/** The stated height of a rock ring, or null for anything that is not one:
+ *  an open way, a ring under four points, a height that does not parse. */
+function plinthOf(tags: Record<string, string>, pts: Array<[number, number]>): number | null {
+  const nat = tags.natural;
+  if (nat !== 'rock' && nat !== 'bare_rock' && nat !== 'stone') return null;
+  const h = parseFloat(tags.height ?? '');
+  if (!(h > 1) || h > 500) return null;
+  if (pts.length < 4) return null;
+  const [ax, az] = pts[0], [bx, bz] = pts[pts.length - 1];
+  if (Math.hypot(ax - bx, az - bz) > 1) return null;
+  return h;
+}
+function notePlinth(pts: Array<[number, number]>, height: number): void {
+  const ring = pts.slice(0, -1).filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z));
+  if (ring.length < 3) return;
+  const id = `${height}:${ring.map(([x, z]) => `${x.toFixed(1)},${z.toFixed(1)}`).join(';')}`;
+  if (plinthSeen.has(id)) return;
+  plinthSeen.add(id);
+  const P: Plinth = { pts: ring, height };
+  // Filed under every terrain tile the ring's bbox touches: a stack on a
+  // tile edge must rise on both sides of it.
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const [x, z] of ring) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+  const keys = new Set<string>();
+  for (const [x, z] of [[x0, z0], [x1, z0], [x0, z1], [x1, z1]] as Array<[number, number]>) {
+    const [la, lo] = localToLatLon(x, z);
+    const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
+    keys.add(`${tx}/${ty}`);
+  }
+  for (const key of keys) {
+    let arr = plinthsByTile.get(key);
+    if (!arr) plinthsByTile.set(key, (arr = []));
+    arr.push(P);
+    markTerrainDirty(key, 'plinth');
+  }
 }
 function noteCoastline(pts: Array<[number, number]>): void {
   for (let i = 0; i + 1 < pts.length; i++) {
@@ -8825,6 +8868,7 @@ const kStore: TerrainStore = {
   get grid() { return GRID; },
   hydroBreakLines: (t) => hydroShoreBreakLines.get(`${t.tx}/${t.ty}`) ?? [],
   cliffLines: (t) => cliffLinesByTile.get(`${t.tx}/${t.ty}`) ?? [],
+  plinths: (t) => plinthsByTile.get(`${t.tx}/${t.ty}`) ?? [],
   hydroFloor: (t) => { const d = hydroFloors.get(`${t.tx}/${t.ty}`); return d ? { n: HYDRO_EN, data: d } : null; },
   hydroBank: (t) => hydroBanks.get(`${t.tx}/${t.ty}`) ?? null,
   onRoad: (x, z) => onCarriageway(x, z, 0.6).road,
@@ -9070,6 +9114,18 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
       }
       return flat;
     })(),
+    plinths: (() => {
+      const list = plinthsByTile.get(`${t.tx}/${t.ty}`) ?? [];
+      let n = 0;
+      for (const P of list) n += 2 + P.pts.length * 2;
+      const flat = new Float64Array(n);
+      let i = 0;
+      for (const P of list) {
+        flat[i++] = P.height; flat[i++] = P.pts.length;
+        for (const [x, z] of P.pts) { flat[i++] = x; flat[i++] = z; }
+      }
+      return flat;
+    })(),
     // A copy per job: the buffer is transferred, and the tile's floor stays
     // here for the next build.
     hydroFloor: (hydroFloors.get(`${t.tx}/${t.ty}`) ?? new Float32Array(0)).slice(),
@@ -9085,6 +9141,7 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
     ch.flat.buffer,
     job.hydroBreakLines.buffer,
     job.cliffLines.buffer,
+    job.plinths.buffer,
     job.hydroFloor.buffer,
     job.hydroBank.buffer,
     pads.buffer,
@@ -28897,6 +28954,11 @@ async function renderWays(
       polygon(pts, MAT.mouth, 0.03);
     } else if (tags.building) {
       building(pts, el.id, tags);
+    } else if (plinthOf(tags, pts) !== null) {
+      // A ROCK WITH A HEIGHT IS TERRAIN, NOT A DRAPE: the kernel raises it.
+      // Painted too where the tag is one the ground already wears.
+      notePlinth(pts, plinthOf(tags, pts) as number);
+      if (AREA_TAG(tags)) noteArea(pts, tags);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
       // A LAKE, AND ONLY ONE OF THE TWO PATHS DRAWS IT. The drape and the
       // hydro field would otherwise sit within 25mm of each other over the
@@ -35905,6 +35967,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     hydroRev.clear(); hydroDirty.clear(); hydroFedInputs.clear(); hydroFeats.clear(); hydroFeatsFull = 0; coverHydro.clear();
     hydroShoreBreakLines.clear(); hydroFloors.clear(); hydroBanks.clear(); hydroBankStats.clear();
     cliffLinesByTile.clear(); cliffSeen.clear();   // local metres under the old origin
+    plinthsByTile.clear(); plinthSeen.clear();
     coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear(); sideCaches.clear();
     // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
     // spatially keyed, so the last postcard's road left an elevation under
