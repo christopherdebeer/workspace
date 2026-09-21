@@ -18745,3 +18745,35 @@ once each, the probe reports the tile merged with both ways and a building
 stands that the raw map does not have (13 against 12); with `?authored=0`,
 nothing is asked and it is gone. The server half against the real table and bank is
 verified only deployed, like the tape bank's.
+
+## A ring with a height stands up out of a DEM that never saw it
+
+The Twelve Apostles are 45 m of limestone in the surf and the raster is the
+sea. No cliff line can raise them: `cliffAdjust` takes its top from the DEM
+and the DEM says nothing. A mapped ring that STATES its height is the one
+line of evidence that can, and OSM has the keys already — `natural=rock`
+(or `bare_rock`, `stone`) with `height=` — so the rule is general and the
+authored store only supplies what the map lacks. In the kernel
+(`plinthAdjust`, both height loops, after the cliff) the ground inside the
+ring is never lower than the DEM under the ring's centre plus the height: a
+stack in the sea rises from the sea, an outcrop on a hill from the hill.
+The ring's edges are cliff creases (`plinthBreakLines`, ±0.6 m), so the
+refinement splits along them and the face is a wall, not a tent; and the
+colour pass reads the inside as bare ground (`cp = 60`), because the cover
+pixel under a stack says water. `plinthIndexFor` is keyed on the tile AND
+the list, the cliff index's lesson. Main files a closed rock ring with a
+parsable height (over 1 m, under 500) under every terrain tile its bbox
+touches (`notePlinth`, before the water branch of `renderWays`; painted too
+where the tag is one the ground already wears), and the packet is
+`height, n, x0, z0 …` per ring beside the cliff lines. A tile query bump to
+fetch `natural=rock` from the map itself is deliberately NOT made here — a
+bump is a fresh bank — so today the rings come from the authored store.
+
+`sea-stack.test.mjs` on both paths: the control is the flat bed, the inside
+stands at the height to the ring, the sea beyond is untouched, the palette
+is handed bare inside and water outside, the creases sit a hair either side
+of the ring with a 45 m wall between them, and a ring on a hill rises from
+the hill. `devtools/authored/twelve-apostles.json` is the first entry:
+four stacks off the lookout, positions read off the photograph and the
+transect rather than surveyed, filed with `authored-push.mjs` once the
+route is deployed.
