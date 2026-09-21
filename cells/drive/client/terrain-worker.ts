@@ -35,7 +35,7 @@ export interface TerrainJob {
   hydroBreakLines: Float64Array;
   /** Mapped cliff lines crossing the tile, four floats a segment (see TerrainStore.cliffLines). */
   cliffLines: Float64Array;
-  /** Mapped stacks with a stated height: `height, n, x0, z0 … x(n-1), z(n-1)` per ring (see TerrainStore.plinths). */
+  /** Mapped stacks: `height, top (NaN for none), n, x0, z0 … x(n-1), z(n-1)` per ring (see TerrainStore.plinths). */
   plinths: Float64Array;
   /** The field's bed lattice (see TerrainStore.hydroFloor); empty with n 0 when the tile has no field. */
   hydroFloor: Float32Array; hydroFloorN: number;
@@ -116,12 +116,12 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
         cliffLines.push({ ax: job.cliffLines[i], az: job.cliffLines[i + 1], bx: job.cliffLines[i + 2], bz: job.cliffLines[i + 3] });
       }
       const plinths: Plinth[] = [];
-      for (let i = 0; i + 1 < job.plinths.length;) {
-        const height = job.plinths[i], n = job.plinths[i + 1] | 0;
+      for (let i = 0; i + 2 < job.plinths.length;) {
+        const height = job.plinths[i], top = job.plinths[i + 1], n = job.plinths[i + 2] | 0;
         const pts: Array<[number, number]> = [];
-        for (let k = 0; k < n && i + 2 + k * 2 + 1 < job.plinths.length; k++) pts.push([job.plinths[i + 2 + k * 2], job.plinths[i + 3 + k * 2]]);
-        plinths.push({ pts, height });
-        i += 2 + n * 2;
+        for (let k = 0; k < n && i + 3 + k * 2 + 1 < job.plinths.length; k++) pts.push([job.plinths[i + 3 + k * 2], job.plinths[i + 4 + k * 2]]);
+        plinths.push(Number.isFinite(top) ? { pts, height, top } : { pts, height });
+        i += 3 + n * 2;
       }
       const N = job.climN, KW = job.climK, t = job.tile;
       const climate = (x: number, z: number): ArrayLike<number> | null => {

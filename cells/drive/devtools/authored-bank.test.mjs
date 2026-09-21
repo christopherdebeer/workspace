@@ -55,6 +55,17 @@ const r3 = await serveAuthored('POST', 'c15r', JSON.stringify({ tile, ways: [] }
 const g3 = JSON.parse((await serveAuthored('GET', 'anonymous', undefined, table, put, now)).body);
 check('an empty list retracts the tile', r3.statusCode === 200 && JSON.parse(r3.body).retracted === true && !g3.tiles[tile] && puts.length === 2, g3);
 
+// ── the other two kinds: a patch on the map's own way, and DEM cells ──
+clock += 5000;
+const r4 = await serveAuthored('POST', 'c15r', JSON.stringify({ tile, patch: { '658651384': { height: '45' } }, dems: [[lat, lon, 12.5], [lat + 0.0001, lon, 13]] }), table, put, now);
+const j4 = JSON.parse(r4.body);
+check('a patch and dem cells land with no ways at all', r4.statusCode === 200 && j4.ok && j4.ways === 0 && j4.patched === 1 && j4.dems === 2 && j4.n === 3, j4);
+const b4 = JSON.parse(gunzipSync(puts[2].body).toString());
+check('…the blob carries the patch by id and the cells rounded', b4.patch['658651384'].height === '45' && b4.dems.length === 2 && b4.dems[0][2] === 12.5 && b4.ways.length === 0, b4);
+check('a patch key that is not an osm id is refused', (await serveAuthored('POST', 'c15r', JSON.stringify({ tile, patch: { 'w1': { height: '4' } } }), table, put, now)).statusCode === 400, null);
+check('a dem cell a county away is refused', (await serveAuthored('POST', 'c15r', JSON.stringify({ tile, dems: [[lat + 1, lon, 5]] }), table, put, now)).statusCode === 400, null);
+check('a dem cell off the planet is refused', (await serveAuthored('POST', 'c15r', JSON.stringify({ tile, dems: [[lat, lon, 20000]] }), table, put, now)).statusCode === 400, null);
+check('an entry with nothing in it retracts', JSON.parse((await serveAuthored('POST', 'c15r', JSON.stringify({ tile, patch: {}, dems: [] }), table, put, now)).body).retracted === true, null);
 check('anonymous is refused', (await serveAuthored('POST', 'anonymous', JSON.stringify({ tile, ways: [way()] }), table, put, now)).statusCode === 401, null);
 check('a tile at the wrong zoom is refused', (await serveAuthored('POST', 'c15r', JSON.stringify({ tile: '14/1/1', ways: [way()] }), table, put, now)).statusCode === 400, null);
 check('a way a county away is refused', (await serveAuthored('POST', 'c15r', JSON.stringify({ tile, ways: [way(1.0)] }), table, put, now)).statusCode === 400, null);

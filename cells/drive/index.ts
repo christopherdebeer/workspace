@@ -2370,26 +2370,70 @@ const AUTHORED_PTS_CAP = 2000;
 const AUTHORED_ID_BASE = 2_000_000_000_000;
 const AUTHORED_BLOB_RE = /^\/~\/authored\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\/(\d{10,16})$/;
 export interface AuthoredWay { id: number; tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }
+/** THREE KINDS OF ENTRY, one blob. `ways` add features the map lacks.
+ *  `patch` amends the map's OWN ways by id — a `height` on a stack the
+ *  survey drew but could not measure — so the authored layer carries one
+ *  line where it would otherwise duplicate a surveyed ring. `dems` are
+ *  hand-shaped DEM cells, `[lat, lon, metres]`, written into the height
+ *  raster on load, because a ring with a height is a drum and a real stack
+ *  is not. */
+const AUTHORED_PATCH_CAP = 200;
+const AUTHORED_DEM_CAP = 4000;
 /** The tile's bbox widened by one tile each side: a way filed here may run
  *  into a neighbour, but not across the county. */
-function authoredWayOk(w: unknown, x: number, y: number): string | null {
-  if (!w || typeof w !== 'object') return 'a way is not an object';
-  const { tags, geometry } = w as { tags?: unknown; geometry?: unknown };
-  if (!tags || typeof tags !== 'object' || Array.isArray(tags)) return 'a way has no tags';
+function tagsOk(tags: unknown): string | null {
+  if (!tags || typeof tags !== 'object' || Array.isArray(tags)) return 'no tags';
   const ents = Object.entries(tags as Record<string, unknown>);
-  if (!ents.length || ents.length > 40) return 'a way has no tags or too many';
+  if (!ents.length || ents.length > 40) return 'no tags or too many';
   for (const [k, v] of ents) {
     if (typeof v !== 'string' || k.length > 120 || v.length > 200) return `tag ${k.slice(0, 40)} is not a short string`;
   }
-  if (!Array.isArray(geometry) || !geometry.length || geometry.length > AUTHORED_PTS_CAP) return 'a way has no geometry or too much';
+  return null;
+}
+/** The tile's bbox widened by one tile each side. */
+function tileReach(x: number, y: number): { latN: number; latS: number; lonW: number; lonE: number } {
   const n = 2 ** AUTHORED_Z;
-  const lonW = ((x - 1) / n) * 360 - 180, lonE = ((x + 2) / n) * 360 - 180;
-  const latN = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y - 1)) / n))) * 180) / Math.PI;
-  const latS = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 2)) / n))) * 180) / Math.PI;
+  return {
+    lonW: ((x - 1) / n) * 360 - 180, lonE: ((x + 2) / n) * 360 - 180,
+    latN: (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y - 1)) / n))) * 180) / Math.PI,
+    latS: (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 2)) / n))) * 180) / Math.PI,
+  };
+}
+function authoredWayOk(w: unknown, x: number, y: number): string | null {
+  if (!w || typeof w !== 'object') return 'a way is not an object';
+  const { tags, geometry } = w as { tags?: unknown; geometry?: unknown };
+  const tw = tagsOk(tags);
+  if (tw) return `a way has ${tw}`;
+  if (!Array.isArray(geometry) || !geometry.length || geometry.length > AUTHORED_PTS_CAP) return 'a way has no geometry or too much';
+  const R = tileReach(x, y);
   for (const g of geometry as Array<{ lat?: unknown; lon?: unknown }>) {
     const la = Number(g?.lat), lo = Number(g?.lon);
     if (!Number.isFinite(la) || !Number.isFinite(lo)) return 'a point is not a number';
-    if (la > latN || la < latS || lo < lonW || lo > lonE) return 'a point lies more than a tile away';
+    if (la > R.latN || la < R.latS || lo < R.lonW || lo > R.lonE) return 'a point lies more than a tile away';
+  }
+  return null;
+}
+function authoredPatchOk(p: unknown): string | null {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return 'patch is not an object';
+  const ents = Object.entries(p as Record<string, unknown>);
+  if (ents.length > AUTHORED_PATCH_CAP) return 'too many patched ways';
+  for (const [id, tags] of ents) {
+    if (!/^\d{1,16}$/.test(id)) return `patch key ${id.slice(0, 20)} is not an osm id`;
+    const tw = tagsOk(tags);
+    if (tw) return `patch ${id} has ${tw}`;
+  }
+  return null;
+}
+function authoredDemsOk(d: unknown, x: number, y: number): string | null {
+  if (!Array.isArray(d)) return 'dems is not a list';
+  if (d.length > AUTHORED_DEM_CAP) return 'too many dem cells';
+  const R = tileReach(x, y);
+  for (const c of d as unknown[]) {
+    if (!Array.isArray(c) || c.length !== 3) return 'a dem cell is not [lat, lon, metres]';
+    const [la, lo, h] = c.map(Number);
+    if (!Number.isFinite(la) || !Number.isFinite(lo) || !Number.isFinite(h)) return 'a dem cell is not a number';
+    if (h < -500 || h > 9000) return 'a dem cell is off the planet';
+    if (la > R.latN || la < R.latS || lo < R.lonW || lo > R.lonE) return 'a dem cell lies more than a tile away';
   }
   return null;
 }
@@ -2420,25 +2464,35 @@ export async function serveAuthored(
   if (!TABLE) return no(503, 'no table configured');
   if (!caller || caller === 'anonymous') return no(401, 'sign in to author the world');
   if (!body || body.length > AUTHORED_BODY_CAP) return no(400, body ? 'entry too large' : 'no entry');
-  let entry: { tile?: unknown; ways?: unknown } = {};
+  let entry: { tile?: unknown; ways?: unknown; patch?: unknown; dems?: unknown } = {};
   try { entry = JSON.parse(body) as typeof entry; } catch { return no(400, 'unreadable'); }
   const tm = typeof entry.tile === 'string' ? entry.tile.match(/^(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/) : null;
   if (!tm) return no(400, 'tile must be z/x/y');
   const [z, x, y] = [Number(tm[1]), Number(tm[2]), Number(tm[3])];
   if (z !== AUTHORED_Z || x >= 2 ** z || y >= 2 ** z) return no(400, `tile must be at z${AUTHORED_Z}`);
-  if (!Array.isArray(entry.ways) || entry.ways.length > AUTHORED_WAYS_CAP) return no(400, 'ways must be a short list');
+  const waysIn = entry.ways === undefined ? [] : entry.ways;
+  if (!Array.isArray(waysIn) || waysIn.length > AUTHORED_WAYS_CAP) return no(400, 'ways must be a short list');
+  const patchIn = entry.patch === undefined ? {} : entry.patch;
+  const pw = authoredPatchOk(patchIn);
+  if (pw) return no(400, pw);
+  const demsIn = entry.dems === undefined ? [] : entry.dems;
+  const dw = authoredDemsOk(demsIn, x, y);
+  if (dw) return no(400, dw);
+  const patch = patchIn as Record<string, Record<string, string>>;
+  const dems = (demsIn as Array<[number, number, number]>).map(([la, lo, h]) => [+Number(la).toFixed(7), +Number(lo).toFixed(7), +Number(h).toFixed(2)] as [number, number, number]);
   const key = `${z}/${x}/${y}`;
   const by = caller.toLowerCase().replace(/[^a-z0-9_.-]/g, '').slice(0, 40) || 'someone';
-  if (!entry.ways.length) {
+  const count = waysIn.length + Object.keys(patch).length + dems.length;
+  if (!count) {
     await table.delRows(AUTHORED_PK, [AUTHORED_SK + key]);
     return respond(200, 'application/json', JSON.stringify({ ok: true, tile: key, retracted: true }),
       { 'cache-control': 'no-store' });
   }
   const ways: AuthoredWay[] = [];
-  for (let i = 0; i < entry.ways.length; i++) {
-    const why = authoredWayOk(entry.ways[i], x, y);
+  for (let i = 0; i < waysIn.length; i++) {
+    const why = authoredWayOk(waysIn[i], x, y);
     if (why) return no(400, `way ${i}: ${why}`);
-    const w = entry.ways[i] as { tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> };
+    const w = waysIn[i] as { tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> };
     ways.push({
       id: AUTHORED_ID_BASE + (x * 65536 + y) * AUTHORED_WAYS_CAP + i,
       tags: w.tags,
@@ -2447,9 +2501,9 @@ export async function serveAuthored(
   }
   const rev = Math.round(now());
   const path = `/~/authored/v1/${key}/${rev}`;
-  await put(path, gzipSync(Buffer.from(JSON.stringify({ v: 1, tile: key, rev, by, ways }), 'utf8'), { level: 9 }));
-  await table.putAuthored({ key, rev, n: ways.length, by });
-  return respond(200, 'application/json', JSON.stringify({ ok: true, tile: key, rev, n: ways.length, url: path }),
+  await put(path, gzipSync(Buffer.from(JSON.stringify({ v: 1, tile: key, rev, by, ways, patch, dems }), 'utf8'), { level: 9 }));
+  await table.putAuthored({ key, rev, n: count, by });
+  return respond(200, 'application/json', JSON.stringify({ ok: true, tile: key, rev, n: count, ways: ways.length, patched: Object.keys(patch).length, dems: dems.length, url: path }),
     { 'cache-control': 'no-store' });
 }
 

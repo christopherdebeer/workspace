@@ -19,7 +19,14 @@ export interface CarveLog { s: number[][]; v: number[][] }
 /** A raised rock with a stated height: the ring in local metres (closed —
  *  the last point equals the first — or treated as if it were), and the
  *  height above the ground under its centre. */
-export interface Plinth { pts: ReadonlyArray<readonly [number, number]>; height: number }
+export interface Plinth {
+  pts: ReadonlyArray<readonly [number, number]>;
+  /** Height above the ground under the ring's centre; ignored when `top` is given. */
+  height: number;
+  /** The crown's LOCAL height outright — a sea stack whose top was read off
+   *  the mainland cliff beside it (main's probe), not stated on the way. */
+  top?: number;
+}
 export interface BreakLine { ax: number; az: number; bx: number; bz: number }
 /** The part of a road or channel strip the build reads. main.ts's Seg has more. */
 export interface StripLike {
@@ -440,11 +447,14 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     const cells = new Map<string, Plinth[]>();
     const base = new Map<Plinth, number>();
     for (const P of list) {
-      if (P.pts.length < 3 || !(P.height > 0)) continue;
+      const hasTop = P.top !== undefined && Number.isFinite(P.top);
+      if (P.pts.length < 3 || (!hasTop && !(P.height > 0))) continue;
       let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, sx = 0, sz = 0;
       for (const [x, z] of P.pts) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; sx += x; sz += z; }
       const cx = sx / P.pts.length, cz = sz / P.pts.length;
-      base.set(P, S.hasHeight(cx, cz) ? S.sampleHeight(cx, cz) : 0);
+      // What `base` holds is the CROWN: a stated top outright, or the ground
+      // under the centre plus the stated height.
+      base.set(P, hasTop ? (P.top as number) : (S.hasHeight(cx, cz) ? S.sampleHeight(cx, cz) : 0) + P.height);
       for (let ix = Math.floor(x0 / PLINTH_CELL); ix <= Math.floor(x1 / PLINTH_CELL); ix++) {
         for (let iz = Math.floor(z0 / PLINTH_CELL); iz <= Math.floor(z1 / PLINTH_CELL); iz++) {
           const k = `${ix},${iz}`;
@@ -465,22 +475,49 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     }
     return inside;
   }
-  /** The plinth standing at (x, z), or null. */
-  function plinthAt(S: TerrainStore, t: HeightTile, x: number, z: number): Plinth | null {
+  /** The plinth standing at (x, z) with its crown, or null. ONE index read
+   *  for both: a store that hands a fresh list per call (a test's closure)
+   *  would otherwise rebuild the index between finding the ring and reading
+   *  its crown, and the crown map is keyed on the ring object. */
+  function plinthHit(S: TerrainStore, t: HeightTile, x: number, z: number): { P: Plinth; crown: number } | null {
     const idx = plinthIndexFor(S, t);
     if (!idx.any) return null;
     const list = idx.cells.get(`${Math.floor(x / PLINTH_CELL)},${Math.floor(z / PLINTH_CELL)}`);
     if (!list) return null;
-    for (const P of list) if (insidePlinth(P, x, z)) return P;
+    for (const P of list) if (insidePlinth(P, x, z)) return { P, crown: idx.base.get(P) ?? 0 };
     return null;
   }
+  function plinthAt(S: TerrainStore, t: HeightTile, x: number, z: number): Plinth | null {
+    return plinthHit(S, t, x, z)?.P ?? null;
+  }
+  /** How far (x, z) is from the ring's edge, for the crown's rounding. */
+  function plinthEdgeDist(P: Plinth, x: number, z: number): number {
+    const n = P.pts.length;
+    let best = Infinity;
+    for (let i = 0; i < n; i++) {
+      const [ax, az] = P.pts[i], [bx, bz] = P.pts[(i + 1) % n];
+      const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz || 1;
+      const tt = clamp(((x - ax) * dx + (z - az) * dz) / l2, 0, 1);
+      const d = Math.hypot(x - (ax + dx * tt), z - (az + dz * tt));
+      if (d < best) best = d;
+    }
+    return best;
+  }
+  // NOT A CYLINDER. A flat crown meeting a vertical wall reads as a drum;
+  // a real stack's top rounds off toward its edge, weathered. The crown
+  // drops PLINTH_ROUND_M over the last PLINTH_ROUND_R metres to the ring —
+  // a small thing, and the hand-authored DEM (main's authored `dems`) is
+  // where a real shape comes from.
+  const PLINTH_ROUND_M = 4;
+  const PLINTH_ROUND_R = 6;
   /** The vertex's LOCAL height with the plinth it stands on: never lower than
-   *  the ground under the ring's centre plus the stated height. */
+   *  the crown, rounded toward the ring. */
   function plinthAdjust(S: TerrainStore, t: HeightTile, x: number, z: number, h: number): number {
-    const P = plinthAt(S, t, x, z);
-    if (!P) return h;
-    const base = plinthIndexFor(S, t).base.get(P) ?? 0;
-    return Math.max(h, base + P.height);
+    const hit = plinthHit(S, t, x, z);
+    if (!hit) return h;
+    const { P, crown } = hit;
+    const u = clamp(plinthEdgeDist(P, x, z) / PLINTH_ROUND_R, 0, 1);
+    return Math.max(h, crown - PLINTH_ROUND_M * (1 - u) * (1 - u));
   }
   /** The ring's edges as cliff creases, a hair either side, like a mapped
    *  cliff line's — closed here whether or not the way was. */
