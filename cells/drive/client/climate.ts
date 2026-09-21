@@ -607,6 +607,9 @@ export interface SiteClimate {
   salt: number;
   /** LOCAL. Wind exposure from relief — a ridge takes what a valley does not. */
   exposure: number;
+  /** LOCAL. Metres to the nearest salt water, or null where the coast is too
+   *  far for the local ring to be asked (the same read `salt` is built from). */
+  seaM: number | null;
   elevAbs: number;
   /** False where the coast was unknown, so a caller can tell a maritime
    *  verdict from an unevidenced one. */
@@ -829,7 +832,7 @@ export function siteAt(env: SiteEnv, x: number, z: number): SiteClimate {
     heatC, summerC, winterC, rangeC, frostDays, waterMm,
     summerDry, winterDry, contin, rainShadow,
     treelineDelta: elevAbs - treeline,
-    insolation, wetness, salt, exposure, elevAbs, hadCoast,
+    insolation, wetness, salt, exposure, elevAbs, hadCoast, seaM,
   };
 }
 

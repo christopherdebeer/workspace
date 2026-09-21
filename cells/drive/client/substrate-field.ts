@@ -60,11 +60,24 @@
  * So the numbers live here once and the shader source interpolates them. There
  * is nothing to keep in step.
  */
+/** The cast every rock wore before the district's stone reached the shader
+ *  (see `uSubRockTint` and main.ts's stoneTint): what a material with no tile
+ *  behind it — the far shell, a lab — still gets, and what the CPU-side
+ *  layer tint stands on. Outside SUB_K because it is a DEFAULT, not a rule
+ *  the GLSL carries. */
+export const SUB_ROCK_CAST: readonly [number, number, number] = [0.97, 0.99, 1.07];
 export const SUB_K = Object.freeze({
   // ── THE LAYERS' COLOURS, AS TRANSFORMS OF THE GROUND'S OWN ──
   // Bedrock: the place's colour with its chroma pulled out and a cool cast on
   // it, because weathered stone is grey whatever the soil around it is.
-  rockChroma: 0.34, rockR: 0.97, rockG: 0.99, rockB: 1.07,
+  // …the cast is the DEFAULT now, not the rule: the terrain material hands the
+  // shader `uSubRockTint`, the district's own stone family (granite grey,
+  // limestone pale, sandstone red, basalt cold, ochre iron-stained), and these
+  // three are what a material with no family — the far shell, the lab — gets.
+  // Measured at the Twelve Apostles: the cliff read hue 198° (cool blue-grey)
+  // against the photograph's 30° (warm ochre limestone), because every rock on
+  // earth wore this one cast.
+  rockChroma: 0.34,
   // The fines: that colour oxidised warm.
   soilR: 1.13, soilG: 0.99, soilB: 0.82,
   // …and the COARSE debris lying on the fines is a third colour, which the
@@ -118,6 +131,9 @@ export const SUB_K = Object.freeze({
 });
 const K = SUB_K;
 export const SUB_GLSL = `
+// The district's stone cast (main.ts stoneTint), declared here so every
+// consumer of this block has it before subRockC references it.
+uniform vec3 uSubRockTint;
 // ── THE REGION'S GEOLOGY: A DIP AND A JOINT DIRECTION THAT HOLD FOR A MILE ──
 //
 // Real strata do not change direction between one outcrop and the next; a
@@ -441,7 +457,7 @@ float subGrassTone(vec2 gp, float px) {
   return t;
 }
 // ── THE LAYERS' COLOURS ──
-vec3 subRockC(vec3 c, float lum) { return mix(vec3(lum), c, ${K.rockChroma}) * vec3(${K.rockR}, ${K.rockG}, ${K.rockB}); }
+vec3 subRockC(vec3 c, float lum) { return mix(vec3(lum), c, ${K.rockChroma}) * uSubRockTint; }
 vec3 subSoilC(vec3 c) { return c * vec3(${K.soilR}, ${K.soilG}, ${K.soilB}); }
 vec3 subScreeC(vec3 c, float lum) {
   return (mix(vec3(lum), c, ${K.rockChroma}) + ${K.screeLift}) * vec3(${K.screeR}, ${K.screeG}, ${K.screeB});
@@ -1146,9 +1162,9 @@ export function subGrainOf(cover: number | null): number {
 export function subLayerTint(r: number, g: number, b: number, e: SubExpress): [number, number, number] {
   const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
   const rk: [number, number, number] = [
-    (lum + (r - lum) * K.rockChroma) * K.rockR,
-    (lum + (g - lum) * K.rockChroma) * K.rockG,
-    (lum + (b - lum) * K.rockChroma) * K.rockB];
+    (lum + (r - lum) * K.rockChroma) * SUB_ROCK_CAST[0],
+    (lum + (g - lum) * K.rockChroma) * SUB_ROCK_CAST[1],
+    (lum + (b - lum) * K.rockChroma) * SUB_ROCK_CAST[2]];
   const so: [number, number, number] = [r * K.soilR, g * K.soilG, b * K.soilB];
   const gr: [number, number, number] = [r * K.grassR, g * K.grassG, b * K.grassB];
   const mix3 = (a: number, c: number, t: number): number => a + (c - a) * t;

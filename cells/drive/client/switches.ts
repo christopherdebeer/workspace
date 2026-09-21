@@ -305,6 +305,8 @@ export const SWITCHES = [
   { id: 'ezsky', kind: 'number', marks: ['look', 'legacy'],
     note: "ezsky=0 shades a crown by the radial approximation it shipped with — `length(xz)` against height, which assumes a crown centred on the trunk — instead of the sky exposure measured per foliage cluster at decode. The A/B for whether a crown has its own light and dark",
     fallback: 'the measured occlusion' },
+  { id: 'steepfill', kind: 'number', marks: ['look'], fallback: '0.18',
+    note: 'steepfill= is the sky-coloured fill a steep terrain face takes on its indirect light, scaled by how far the face has turned from up (nothing on flat ground), by daylight and by cloud — the cure for a shaded cliff face rendering as black blocks. 0 is the exact A/B' },
   { id: 'ezfill', kind: 'number', marks: ['look', 'legacy'], fallback: '1',
     note: 'ezfill= scales the extra foliage pads clustered at each whorl anchor — 1 is shipped, 0 restores the crown the bake produced (the A/B for the closure pass), and 2 doubles the extras' },
   { id: 'ezpalm', kind: 'toggle', marks: ['look', 'legacy'], fallback: 'on',

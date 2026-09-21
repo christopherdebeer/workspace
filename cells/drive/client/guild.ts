@@ -291,6 +291,33 @@ export function guildAt(site: SiteClimate, eco: EcoHit | null): Guild | null {
     why.push('salt: the tide reaches this ground');
   }
 
+  // ── EXPOSURE: the wind and the salt keep a headland short ──
+  //
+  // Measured at the Twelve Apostles clifftop — exposure 0.69, a hundred
+  // metres from the sea, RESOLVE "Southeast Australia temperate forests" —
+  // the guild planted 8 m broadleaf and conifer at density 0.95 on ground that
+  // carries heath at knee height. `salt` reached the mangrove rule and nothing
+  // read `exposure` at all. A headland's growth is pruned by the wind and
+  // burnt by the spray, so an exposed site within a few hundred metres of the
+  // sea grows scrub: the same species list at a fraction of the height, the
+  // trees mostly handed to bush, and DENSER, because heath is a closed low
+  // canopy rather than an open wood. Both halves fade — with exposure, so a
+  // cove keeps its trees, and with distance from the water — and an inland
+  // ridge over the same exposure only loses stature, since the salt is not
+  // there. The site's own `seaM` is the distance the salt term is built from.
+  const seaM = site.seaM ?? Infinity;
+  const coastK = clamp01((site.exposure - 0.45) / 0.35) * clamp01(1 - seaM / 800);
+  if (coastK > 0.05) {
+    mix = scaleWeight(mix, isTree, 1 - 0.9 * coastK);
+    mix = bump(mix, 'bush', 6 * coastK);
+    scale *= 1 - 0.7 * coastK;
+    density *= 1 + 0.3 * coastK;
+    why.push('an exposed coast keeps its growth low');
+  } else if (site.exposure > 0.8) {
+    scale *= 0.85;
+    why.push('a wind-swept ridge');
+  }
+
   // ── ARIDITY, where the biome row has not already said it ──
   // A FOREST at 400mm is an open woodland and should stand further apart. A
   // Mediterranean scrub at 400mm is a Mediterranean scrub, a savanna is a
