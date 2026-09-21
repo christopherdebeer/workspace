@@ -62,6 +62,8 @@ export const SWITCHES = [
     note: 'open in chase, cab or top' },
   { id: 'random', kind: 'toggle', marks: ['world'], fallback: 'off',
     note: 'spawn somewhere on Earth that has roads' },
+  { id: 'built', kind: 'toggle', marks: ['world'], fallback: 'the BUILT WORLD dial (on)',
+    note: 'built=0 streams the planet with nothing built on it — no roads or anything hung off one, no buildings or ruins, no rail, aeroways, man_made, amenities, historic sites, power, paved areas or authored landmarks — leaving terrain, cover, water and vegetation. Outranks the WORLD dial so an A/B is reproducible; the dial itself rebuilds the world in place when tapped' },
   { id: 'fixture', kind: 'choice', marks: ['world', 'bench'], fallback: 'the real planet',
     note: 'boot an authored or captured world instead of streaming one' },
   { id: 'ft', kind: 'text', marks: ['world', 'bench'], fallback: 'the fixture’s own tune',
