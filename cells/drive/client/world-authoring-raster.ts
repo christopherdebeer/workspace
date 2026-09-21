@@ -142,6 +142,17 @@ export class RasterPaintSession {
     return { changed, tileKeys: [...changedTiles] };
   }
 
+  /** Every cell the session has left different from what the raster
+   *  delivered, with its current value — the authored bank reads this. */
+  edits(): Array<{ tile: EditableRasterTile; index: number; before: number; after: number }> {
+    this.endStroke();
+    const out: Array<{ tile: EditableRasterTile; index: number; before: number; after: number }> = [];
+    for (const e of this.originals.values()) {
+      const after = e.tile.data[e.index];
+      if (after !== e.before) out.push({ tile: e.tile, index: e.index, before: e.before, after });
+    }
+    return out;
+  }
   report(): { editedCells: number; undoDepth: number; strokeCells: number } {
     return {
       editedCells: this.originals.size,

@@ -18704,6 +18704,13 @@ and the client concatenates them onto the tile's own list before
 by the machinery that draws the mapped ones. No renderer of its own, and no
 git: the entries live where the tiles live.
 
+**Superseded in one respect by the per-layer section below**: the store is
+keyed `<layer>/<z>/<x>/<y>` now, the blob lives under
+`~/authored/<layer>/v1/…`, and a raster layer's entry carries `cells`
+rather than the `dems` this section describes. Everything else here — the
+immutable revision, the index outside the cached namespace, the
+`x-cell-caller` gate, the client's memo and hop refresh — stands.
+
 **Three parts, each where it has to be.** The BLOB is
 `~/authored/v1/<z>/<x>/<y>/<rev>` in the public bank, written by `putTile`
 like a tile and immutable like one — everything under `~/` is edge-cached a
@@ -18888,3 +18895,77 @@ PAINT arms, one finger paints (18 cells of farmland), a second finger sets
 panning and the stroke stops, FOLD returns the chrome. `lab.test.mjs`
 could not run here (the ez-tree package is not installed in this
 container; its bundle step fails before any assertion).
+
+
+## One store, three layers, each on its base layer's own grid
+
+"Can the lab edit as many base layers as possible?" — it can now, and the
+keying is what makes it general. An entry names its LAYER and a tile of
+THAT layer's keyspace, mirroring the base bank it amends:
+
+| layer | zoom | base bank | what an entry carries |
+| --- | --- | --- | --- |
+| `osm` | 16 | `~/osm/v5` | `ways` the map lacks, `patch` of tags by osm id |
+| `cover` | 12 | `~/cover/v1` | `cells`: `[index, class]` over the 256×256 class raster |
+| `dem` | 14 | `~/dem/v1` | `cells`: `[index, metres]` over the 256×256 height raster |
+
+The blob is `~/authored/<layer>/v1/<z>/<x>/<y>/<rev>` — the base path with
+the keyspace version in it and a revision suffix, so the store's shape is
+the bank's shape and a new layer needs a row in one table, not a new
+mechanism. The index keys tiles `<layer>/<z>/<x>/<y>` and names the layers'
+zooms, so a client reads the grid rather than hard-coding it. A layer's
+entry REPLACES that tile's overlay and an empty one retracts it; the
+retraction is per layer, so dropping a cover entry leaves the osm entry on
+the same ground alone.
+
+**Cells, not coordinates.** The first cut filed DEM edits as
+`[lat, lon, metres]`, which made the client re-derive a raster index from a
+projection on the way back in — a conversion that can drift a cell, for a
+value that was read out of a cell in the first place. The index IS the
+identity: `applyAuthoredCells` writes `data[i] = v` into the same array the
+lab's brush wrote, and the cap is one raster's worth (65,536) with a
+duplicate index refused, so an entry cannot quietly disagree with itself.
+
+**The overlay goes in before the tile is registered.** `authoredRasterIn`
+is awaited inside `loadCoverTile` and `loadTerrainTile` between the decode
+and the registration, so no consumer ever sees the raw byte: not the
+worker's mirror, not the ocean mask, not the climate field. In the cover
+loader it sits BEFORE the projection to local metres, because `toLocal` is
+relative to the CURRENT origin and projecting last is what absorbs a hop
+that lands mid-load; an await between the projection and the registration
+would undo that. The index fetch is bounded at five seconds for the same
+reason those tiles await it: an unreachable cell costs one timeout, not a
+world that never finishes streaming, and a tile that raced a slow index
+keeps the raw raster until the next hop asks again.
+
+**BANK merges, so sessions accumulate.** The lab's BANK reads the tile's
+loaded overlay, lays the session's own edits over it, and files the union
+(`authoredBankCells`) — a second session adds to the first rather than
+replacing it, which is what "an entry replaces the tile" would otherwise
+cost. ELEV and COVER both bank this way, grouped by the tile each cell
+belongs to (`rasterEntries`: the tile's own `x/y` IS the store key on that
+layer's grid), and ROADS still bank as osm `ways`. `__worldeditBank(dry,
+layer)` is the button from a harness.
+
+Verified: `authored-bank.test.mjs` runs the handler against fakes over all
+three layers — 31 of 31 ok: the per-layer paths and index keys, a tile at
+the wrong zoom, a cover entry carrying ways, an osm entry carrying cells, a
+class over a byte, a cell off the raster, a duplicate index, and a
+retraction that takes one layer's tile and leaves the other's.
+`authored-islets.test.mjs` boots the lookout against a stood-in store: the
+three cliff-ringed islets stand with no entry at all (60.2 / 41.4 / 41.3 m),
+the patched ring reads 42.4, and a 49-cell `dem` block takes the beach from
+4.1 m to 30. `authored-dem-export.test.mjs` shows a 177-cell brush stroke
+exporting as `{"14/8469/5815":{"ok":true,"cells":177}}` — the z14 tile the
+cells belong to, not the one the truck is on.
+
+**AND THE COVER CHECK'S FIRST CUT WAS A TAUTOLOGY.** It painted FOREST over
+ground the raster already called FOREST, so every assertion passed but the
+one that mattered — "the two boots disagree" — and it failed for no reason
+anyone could read. `authored-cover.test.mjs` boots `?authored=0` FIRST, reads
+the class the raster itself answers at the truck, picks a DIFFERENT one at
+runtime, and only then boots with the stand-in entry: measured, raw 10
+(FOREST) painted 80 (WATER), `cover/12/2257/2461` carrying 81 cells, with the
+`?authored=0` leg asking for nothing and reading the raster's own. **A check
+whose fixture is drawn from the same source as its subject cannot fail**, and
+the fix is to read the subject first and choose against it.

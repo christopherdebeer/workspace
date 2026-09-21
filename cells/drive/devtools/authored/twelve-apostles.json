@@ -1,8 +1,15 @@
 {
- "note": "The Apostles as OSM draws them: closed natural=cliff rings on closed coastline islets. The cliff-ringed ones (658651384, 658651379, 658651380) stand with NO entry — the islet rule reads the mainland's cliff top. This entry is for the two coastline-only islets, which state no cliff and so need a height said for them. The heights are ESTIMATES read off the photograph; edit and re-file with: PARC_TOKEN=… node devtools/authored-push.mjs devtools/authored/twelve-apostles.json",
+ "note": "The Apostles as OSM draws them: closed natural=cliff rings on closed coastline islets. The cliff-ringed ones (658651384, 658651379, 658651380) stand with NO entry \u2014 the islet rule reads the mainland's cliff top. This entry is for the two coastline-only islets, which state no cliff and so need a height said for them. The heights are ESTIMATES read off the photograph; edit and re-file with: PARC_TOKEN=\u2026 node devtools/authored-push.mjs devtools/authored/twelve-apostles.json",
+ "layer": "osm",
  "tile": "16/58818/40410",
  "patch": {
-  "658651383": { "height": "40", "drive:note": "coastline-only islet 284 m at 291 deg from the lookout; height estimated" },
-  "284770173": { "height": "35", "drive:note": "coastline-only islet 610 m at 294 deg from the lookout; height estimated" }
+  "658651383": {
+   "height": "40",
+   "drive:note": "coastline-only islet 284 m at 291 deg from the lookout; height estimated"
+  },
+  "284770173": {
+   "height": "35",
+   "drive:note": "coastline-only islet 610 m at 294 deg from the lookout; height estimated"
+  }
  }
 }

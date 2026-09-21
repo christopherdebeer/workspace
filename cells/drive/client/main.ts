@@ -1284,6 +1284,12 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
   coverAsked.add(key);
   try {
     const data = await coverRaster(COVER_Z, x, y);
+    // The hand-painted classes, into the raster before anything reads it —
+    // and BEFORE the projection below, which must stay the last thing this
+    // does: `toLocal` is relative to the CURRENT origin, so a hop while a
+    // tile is on the wire is absorbed by projecting late, and an await
+    // between the projection and the registration would undo that.
+    await authoredRasterIn('cover', x, y, data);
     const b = tileBounds(x, y, COVER_Z);
     const [wx0, wz0] = toLocal(b.latN, b.lonW);
     const [wx1, wz1] = toLocal(b.latS, b.lonE);
@@ -10443,9 +10449,9 @@ async function loadTerrainTileInner(x: number, y: number): Promise<void> {
   // the wire. No dirty and no re-mirror here — the tile has not been published
   // or mirrored yet, so the repair is simply part of what arrives.
   clearTileSpans(tile);
-  // Hand-shaped cells that arrived before their tile: into the raster now,
-  // before anything mirrors or reads it.
-  { const cells = authoredDemByTile.get(key); if (cells?.length) applyAuthoredDem(tile, cells); }
+  // The hand-shaped cells, into the raster before anything mirrors or reads it.
+  await authoredRasterIn('dem', x, y, data);
+  if (ep !== worldEpoch) return;
   heightTiles.set(key, tile);
   tworker?.mirrorHeight(key, tile);
   if (tworker && !tworker.disabled) { terrainDirty.add(key); dirtyWhy.set(key, 'load'); }
@@ -29520,62 +29526,29 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
 // doctrine in index.ts. `?authored=0` is the raw map alone.
 let authoredOn = qsOn('authored', true);
 let authoredInit = false;
+/** The store's index: which tiles of which LAYER carry an entry, keyed
+ *  `<layer>/<z>/<x>/<y>` on that layer's own grid, and at which revision. */
 interface AuthoredIndex { rev: number; tiles: Record<string, { rev: number; n: number; by: string }> }
 let authoredIndex: AuthoredIndex | null = null;
 let authoredIndexP: Promise<void> | null = null;
-/** What a blob holds: ways the map lacks, tag patches on the map's own ways
- *  by id, and hand-shaped DEM cells `[lat, lon, metres]`. */
-interface AuthoredBlob { ways: OsmWay[]; patch: Record<string, Record<string, string>>; dems: Array<[number, number, number]> }
-/** Blob fetches by `z/x/y@rev` — a revision is immutable, so one fetch per
- *  revision per session is exactly right. */
-const authoredMemo = new Map<string, Promise<AuthoredBlob>>();
-/** Ways merged and ways patched per tile this session, for the probe. */
-const authoredMerged = new Map<string, number>();
-const authoredPatched = new Map<string, number>();
-/** Hand-shaped DEM cells per TERRAIN tile, local metres and absolute height,
- *  written into the raster as the tile arrives (or now, if it already has).
- *  Cleared on a hop with everything else in local metres. */
-const authoredDemByTile = new Map<string, Array<[number, number, number]>>();
-let authoredDemCells = 0;
-/** Write the cells into the height raster: the same cell the lab's brush
- *  writes, the sample centred at xs + (i + 0.5)·w/256. */
-function applyAuthoredDem(tile: HeightTile, cells: Array<[number, number, number]>): number {
-  let n = 0;
-  for (const [x, z, h] of cells) {
-    const ix = Math.floor(((x - tile.xs) / tile.w) * 256), iz = Math.floor(((z - tile.zs) / tile.h) * 256);
-    if (ix < 0 || ix > 255 || iz < 0 || iz > 255) continue;
-    tile.data[iz * 256 + ix] = h;
-    n++;
-  }
-  return n;
-}
-function fileAuthoredDems(dems: Array<[number, number, number]>): void {
-  const landed = new Set<string>();
-  for (const [lat, lon, h] of dems) {
-    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(h)) continue;
-    const [x, z] = toLocal(lat, lon);
-    const [tx, ty] = tileAt(lat, lon, TERRAIN_Z);
-    const key = `${tx}/${ty}`;
-    let arr = authoredDemByTile.get(key);
-    if (!arr) authoredDemByTile.set(key, (arr = []));
-    arr.push([x, z, h]);
-    authoredDemCells++;
-    landed.add(key);
-  }
-  // Tiles already in: written now, re-mirrored and rebuilt like a brush stroke.
-  const changed: string[] = [];
-  for (const key of landed) {
-    const tile = heightTiles.get(key);
-    if (tile && applyAuthoredDem(tile, authoredDemByTile.get(key) ?? [])) changed.push(key);
-  }
-  if (changed.length) demTilesChanged(changed);
-}
+/** One small read a session, and again on a hop (`force`, `cache: 'reload'`)
+ *  so an entry filed from another tab — or this one — shows within a hop
+ *  rather than within the index's minute of edge cache. A tile with no row
+ *  is never asked for at the edge, so no per-tile 404 wakes the Lambda. */
 function loadAuthoredIndex(force = false): Promise<void> {
   if (!authoredOn || FIXTURE) return Promise.resolve();
   if (authoredIndexP && !force) return authoredIndexP;
   authoredIndexP = (async () => {
     try {
-      const r = await fetch(`${CELL_BASE}/authored`, force ? { cache: 'reload' } : {});
+      // BOUNDED, because raster tiles await this before they register: an
+      // unreachable cell must cost one timeout, not a world that never
+      // finishes streaming. A tile that raced a slow index keeps the raw
+      // raster and is asked again on the next hop, which is the same rule
+      // the stale-keyspace fallback already lives by.
+      const r = await fetch(`${CELL_BASE}/authored`, {
+        ...(force ? { cache: 'reload' as RequestCache } : {}),
+        ...(typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? { signal: AbortSignal.timeout(5000) } : {}),
+      });
       if (!r.ok) return;
       const j = (await r.json()) as Partial<AuthoredIndex> | null;
       if (j && j.tiles && typeof j.tiles === 'object') authoredIndex = { rev: Number(j.rev) || 0, tiles: j.tiles };
@@ -29583,10 +29556,42 @@ function loadAuthoredIndex(force = false): Promise<void> {
   })();
   return authoredIndexP;
 }
-const NO_BLOB: AuthoredBlob = { ways: [], patch: {}, dems: [] };
-async function authoredBlob(x: number, y: number): Promise<AuthoredBlob> {
+/** What a blob holds, by layer: `osm` — ways the map lacks and tag patches
+ *  on the map's own ways by id; `cover` and `dem` — sparse cell overrides
+ *  `[index, value]` over the 256×256 raster of THAT layer's tile. */
+type AuthoredLayer = 'osm' | 'cover' | 'dem';
+const AUTHORED_Z: Record<AuthoredLayer, number> = { osm: OSM_Z, cover: COVER_Z, dem: TERRAIN_Z };
+interface AuthoredBlob { ways: OsmWay[]; patch: Record<string, Record<string, string>>; cells: Array<[number, number]> }
+/** Blob fetches by `layer/z/x/y@rev` — a revision is immutable, so one fetch
+ *  per revision per session is exactly right. */
+const authoredMemo = new Map<string, Promise<AuthoredBlob>>();
+/** Ways merged and ways patched per osm tile, and cells written per raster
+ *  tile, this session — for the probe. */
+const authoredMerged = new Map<string, number>();
+const authoredPatched = new Map<string, number>();
+const authoredCells = new Map<string, number>();
+/** Write the overrides into a 256×256 raster: the same cell the lab's brush
+ *  writes, by the same index. */
+function applyAuthoredCells(data: Uint8Array | Float32Array, cells: Array<[number, number]>): number {
+  let n = 0;
+  for (const [i, v] of cells) {
+    if (!(i >= 0 && i < data.length)) continue;
+    data[i] = v;
+    n++;
+  }
+  return n;
+}
+const NO_BLOB: AuthoredBlob = { ways: [], patch: {}, cells: [] };
+/** The index's key for a tile: the layer and its own grid's z/x/y. */
+const authoredKey = (layer: AuthoredLayer, x: number, y: number): string => `${layer}/${AUTHORED_Z[layer]}/${x}/${y}`;
+/** …and the blob's path, which is the same with the keyspace version in it,
+ *  mirroring the base bank the layer came from (`~/osm/v5`, `~/cover/v1`). */
+const authoredPath = (layer: AuthoredLayer, x: number, y: number, rev: number): string =>
+  `/~/authored/${layer}/v1/${AUTHORED_Z[layer]}/${x}/${y}/${rev}`;
+async function authoredBlob(layer: AuthoredLayer, x: number, y: number): Promise<AuthoredBlob> {
+  if (!authoredOn || FIXTURE) return NO_BLOB;
   await loadAuthoredIndex();
-  const key = `${OSM_Z}/${x}/${y}`;
+  const key = authoredKey(layer, x, y);
   const row = authoredIndex?.tiles[key];
   if (!row) return NO_BLOB;
   const mk = `${key}@${row.rev}`;
@@ -29594,20 +29599,36 @@ async function authoredBlob(x: number, y: number): Promise<AuthoredBlob> {
   if (!p) {
     p = (async () => {
       try {
-        const r = await fetch(`${CELL_BASE}/~/authored/v1/${key}/${row.rev}`);
+        const r = await fetch(`${CELL_BASE}${authoredPath(layer, x, y, row.rev)}`);
         if (!r.ok) return NO_BLOB;
         const j = (await r.json()) as Partial<AuthoredBlob> | null;
         const ways = (j?.ways ?? []).filter((w) => w && typeof w.id === 'number' && Array.isArray(w.geometry) && w.geometry.length > 0);
         const patch = j?.patch && typeof j.patch === 'object' ? j.patch : {};
-        const dems = Array.isArray(j?.dems) ? j.dems : [];
-        authoredMerged.set(key, ways.length);
-        if (dems.length) fileAuthoredDems(dems);
-        return { ways, patch, dems };
+        const cells = (Array.isArray(j?.cells) ? j.cells : []).filter((c) => Array.isArray(c) && c.length === 2 && Number.isFinite(c[0]) && Number.isFinite(c[1])) as Array<[number, number]>;
+        if (layer === 'osm') authoredMerged.set(key, ways.length);
+        return { ways, patch, cells };
       } catch { authoredMemo.delete(mk); return NO_BLOB; }
     })();
     authoredMemo.set(mk, p);
   }
   return p;
+}
+/** The loaded overlay's cells for a raster tile, as a map — what BANK merges
+ *  the session's own edits over, so sessions accumulate. Empty when there is
+ *  none or it has not been asked for. */
+async function authoredCellsOf(layer: 'cover' | 'dem', x: number, y: number): Promise<Map<number, number>> {
+  const b = await authoredBlob(layer, x, y);
+  return new Map(b.cells);
+}
+/** A raster tile's overlay written in as the tile arrives: awaited BEFORE
+ *  the tile is registered or mirrored, so nothing ever reads the raw raster.
+ *  Costs one index read a session and nothing at all for a tile with no
+ *  entry. */
+async function authoredRasterIn(layer: 'cover' | 'dem', x: number, y: number, data: Uint8Array | Float32Array): Promise<void> {
+  const b = await authoredBlob(layer, x, y);
+  if (!b.cells.length) return;
+  const n = applyAuthoredCells(data, b.cells);
+  if (n) authoredCells.set(authoredKey(layer, x, y), n);
 }
 /** The tile's own ways, patched where the entry amends one by id, plus
  *  whatever was authored for it. The list identity changes only when there
@@ -29615,7 +29636,7 @@ async function authoredBlob(x: number, y: number): Promise<AuthoredBlob> {
  *  list keep working for the tiles that have none. */
 async function withAuthored(x: number, y: number, ways: OsmWay[]): Promise<OsmWay[]> {
   if (!authoredOn || FIXTURE) return ways;
-  const b = await authoredBlob(x, y);
+  const b = await authoredBlob('osm', x, y);
   let out = ways;
   const ids = Object.keys(b.patch);
   if (ids.length) {
@@ -29626,7 +29647,7 @@ async function withAuthored(x: number, y: number, ways: OsmWay[]): Promise<OsmWa
       patched++;
       return { ...w, tags: { ...(w.tags ?? {}), ...p } };
     });
-    if (patched) { out = next; authoredPatched.set(`${OSM_Z}/${x}/${y}`, patched); }
+    if (patched) { out = next; authoredPatched.set(authoredKey('osm', x, y), patched); }
   }
   return b.ways.length ? out.concat(b.ways) : out;
 }
@@ -29648,16 +29669,27 @@ function rebuildInPlace(): void {
  * refreshes the index and rebuilds the world in place so the entry shows.
  */
 type AuthoredInput = { tags: Record<string, string>; geometry?: Array<{ lat: number; lon: number }>; pts?: Array<[number, number]> };
-/** An entry to file: ways (lat/lon or local `pts`), tag patches by osm id
- *  (these need `opts.tile`, an id carries no position), and DEM cells as
- *  `[lat, lon, metres]` or `[x, z, metres]` local with `local: true`. */
-type AuthoredPayload = { ways?: AuthoredInput[]; patch?: Record<string, Record<string, string>>; dems?: Array<[number, number, number]>; local?: boolean };
-type AuthoredBody = { tile: string; ways: Array<{ tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }>; patch: Record<string, Record<string, string>>; dems: Array<[number, number, number]> };
+/** An osm entry to file: ways (lat/lon or local `pts`) and tag patches by
+ *  osm id (these need `opts.tile`, an id carries no position). Raster cells
+ *  go through authoredBankCells, keyed on their own layer's tile. */
+type AuthoredPayload = { ways?: AuthoredInput[]; patch?: Record<string, Record<string, string>> };
+type AuthoredBody = { layer: 'osm'; tile: string; ways: Array<{ tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }>; patch: Record<string, Record<string, string>> };
+/** File a raster tile's overlay: the loaded overlay merged with `edits`
+ *  (edits win), so a second session adds to the first rather than replacing
+ *  it. An empty result retracts the tile. */
+async function authoredBankCells(layer: 'cover' | 'dem', x: number, y: number, edits: Map<number, number>, dry: boolean): Promise<{ ok: boolean; cells: number; why?: string; rev?: number }> {
+  const merged = await authoredCellsOf(layer, x, y);
+  for (const [i, v] of edits) merged.set(i, v);
+  const cells = [...merged].sort((a, b) => a[0] - b[0]);
+  if (dry) return { ok: true, cells: cells.length };
+  const r = await sync.author({ layer, tile: `${AUTHORED_Z[layer]}/${x}/${y}`, cells });
+  return { ok: r.ok, cells: cells.length, why: r.why, rev: r.rev };
+}
 async function authoredBank(input: AuthoredInput[] | AuthoredPayload, opts: { tile?: string; dry?: boolean } = {}): Promise<object> {
   const payload: AuthoredPayload = Array.isArray(input) ? { ways: input } : input;
   const tileOf = (lat: number, lon: number): string => { const [tx, ty] = tileAt(lat, lon, OSM_Z); return `${OSM_Z}/${tx}/${ty}`; };
   const byTile = new Map<string, AuthoredBody>();
-  const bodyFor = (t: string): AuthoredBody => { let b = byTile.get(t); if (!b) byTile.set(t, (b = { tile: t, ways: [], patch: {}, dems: [] })); return b; };
+  const bodyFor = (t: string): AuthoredBody => { let b = byTile.get(t); if (!b) byTile.set(t, (b = { layer: 'osm', tile: t, ways: [], patch: {} })); return b; };
   for (const w of payload.ways ?? []) {
     const geometry = w.geometry ?? (w.pts ?? []).map(([x, z]) => { const [lat, lon] = localToLatLon(x, z); return { lat, lon }; });
     if (!geometry.length) continue;
@@ -29668,13 +29700,9 @@ async function authoredBank(input: AuthoredInput[] | AuthoredPayload, opts: { ti
     if (!opts.tile) return { error: 'a patch needs opts.tile — an osm id carries no position' };
     Object.assign(bodyFor(opts.tile).patch, payload.patch);
   }
-  for (const c of payload.dems ?? []) {
-    const [lat, lon] = payload.local ? localToLatLon(c[0], c[1]) : [c[0], c[1]];
-    bodyFor(opts.tile ?? tileOf(lat, lon)).dems.push([lat, lon, c[2]]);
-  }
   const out: Record<string, unknown> = {};
   for (const [tile, body] of byTile) {
-    out[tile] = opts.dry ? { ways: body.ways.length, patched: Object.keys(body.patch).length, dems: body.dems.length } : await sync.author(body);
+    out[tile] = opts.dry ? { ways: body.ways.length, patched: Object.keys(body.patch).length } : await sync.author(body);
   }
   if (!opts.dry && byTile.size) {
     authoredMemo.clear();
@@ -36101,7 +36129,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     tileStats.clear(); surveyedCache.clear();
     // The store's index may have moved since boot (an entry filed from
     // another tab, or this one); a hop is the one moment to ask again.
-    authoredMemo.clear(); authoredMerged.clear(); authoredPatched.clear(); authoredDemByTile.clear(); authoredDemCells = 0; void loadAuthoredIndex(true);
+    authoredMemo.clear(); authoredMerged.clear(); authoredPatched.clear(); authoredCells.clear(); void loadAuthoredIndex(true);
     unbuilt = 0; osmFails = 0; osmDown = false;
     // ── THE MINIMAP IS PAINTED PIXELS, AND PIXELS ARE NOT A LIST ──
     //
@@ -38100,7 +38128,7 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
   tiles: authoredIndex ? Object.keys(authoredIndex.tiles).length : null,
   merged: Object.fromEntries(authoredMerged),
   patched: Object.fromEntries(authoredPatched),
-  demCells: authoredDemCells,
+  cells: Object.fromEntries(authoredCells),
   stacks: [...plinthsByTile.values()].flat().filter((P, i, a) => a.indexOf(P) === i).map((P) => ({ pts: P.pts.length, height: P.height, top: P.top ?? null })),
 });
 /** File (or, with `[]` and a `tile`, retract) an authored entry — see authoredBank. */
@@ -59597,15 +59625,13 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
    * is how a stack stops being a drum: shaped here, banked there, and written
    * back into the raster for everyone as their tile arrives.
    */
-  (window as unknown as { __authoredDem?: object }).__authoredDem = (opts: { dry?: boolean } = {}): Promise<object> => {
-    const dems: Array<[number, number, number]> = [];
-    for (const e of demEditor.edits()) {
-      const ix = e.index % 256, iz = Math.floor(e.index / 256);
-      const x = e.tile.xs + ((ix + 0.5) / 256) * e.tile.w, z = e.tile.zs + ((iz + 0.5) / 256) * e.tile.h;
-      const [lat, lon] = localToLatLon(x, z);
-      dems.push([lat, lon, e.after]);
+  (window as unknown as { __authoredDem?: object }).__authoredDem = async (opts: { dry?: boolean } = {}): Promise<object> => {
+    const out: Record<string, unknown> = {};
+    for (const [key, edits] of rasterEntries(demEditor.edits())) {
+      const [x, y] = key.split('/').map(Number);
+      out[`${TERRAIN_Z}/${key}`] = await authoredBankCells('dem', x, y, edits, opts.dry !== false);
     }
-    return authoredBank({ dems }, { dry: opts.dry });
+    return out;
   };
   const editableCoverTiles = (): EditableRasterTile[] =>
     [...coverTiles].map(([key, tile]) => ({
@@ -59990,21 +60016,32 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     for (const feature of restored) void buildAuthoredRoad(feature);
   } catch { /* malformed or unavailable local storage starts empty */ }
   /** The brush's cells as a `dems` entry, or the lab's roads as `ways`. */
-  const bankLayer = async (layerId: string, dry: boolean): Promise<string> => {
-    if (layerId === 'dem') {
-      const dems: Array<[number, number, number]> = [];
-      for (const e of demEditor.edits()) {
-        const ix = e.index % 256, iz = Math.floor(e.index / 256);
-        const x = e.tile.xs + ((ix + 0.5) / 256) * e.tile.w, z = e.tile.zs + ((iz + 0.5) / 256) * e.tile.h;
-        const [lat, lon] = localToLatLon(x, z);
-        dems.push([lat, lon, e.after]);
-      }
-      if (!dems.length) return 'NOTHING SHAPED YET';
-      const r = await authoredBank({ dems }, { dry }) as Record<string, { ok?: boolean; why?: string; dems?: number }>;
-      const tiles = Object.entries(r);
-      const bad = tiles.find(([, v]) => v.ok === false);
-      return bad ? (bad[1].why ?? 'REFUSED') : `${dry ? 'WOULD BANK' : 'BANKED'} ${dems.length} CELLS IN ${tiles.length} TILE${tiles.length === 1 ? '' : 'S'}`;
+  /** A raster session's edits grouped by the tile they are cells of — the
+   *  tile's own `x/y` key IS the store key on that layer's grid. */
+  const rasterEntries = (edits: Array<{ tile: { key: string }; index: number; after: number }>): Map<string, Map<number, number>> => {
+    const byTile = new Map<string, Map<number, number>>();
+    for (const e of edits) {
+      let m = byTile.get(e.tile.key);
+      if (!m) byTile.set(e.tile.key, (m = new Map()));
+      m.set(e.index, e.after);
     }
+    return byTile;
+  };
+  const bankRaster = async (layer: 'cover' | 'dem', byTile: Map<string, Map<number, number>>, dry: boolean): Promise<string> => {
+    if (!byTile.size) return layer === 'dem' ? 'NOTHING SHAPED YET' : 'NOTHING PAINTED YET';
+    let cells = 0;
+    for (const [key, edits] of byTile) {
+      const [x, y] = key.split('/').map(Number);
+      const r = await authoredBankCells(layer, x, y, edits, dry);
+      if (!r.ok) return r.why ?? 'REFUSED';
+      cells += r.cells;
+    }
+    if (!dry) { authoredMemo.clear(); void loadAuthoredIndex(true); }
+    return `${dry ? 'WOULD BANK' : 'BANKED'} ${cells} CELLS IN ${byTile.size} ${layer.toUpperCase()} TILE${byTile.size === 1 ? '' : 'S'}`;
+  };
+  const bankLayer = async (layerId: string, dry: boolean): Promise<string> => {
+    if (layerId === 'dem') return bankRaster('dem', rasterEntries(demEditor.edits()), dry);
+    if (layerId === 'cover') return bankRaster('cover', rasterEntries(coverEditor.edits()), dry);
     if (layerId === 'road') {
       const ways = roadEditor.snapshot().filter((f) => f.points.length >= 2).map((f) => ({
         tags: { highway: f.value, width: String(f.widthM), 'drive:authored': 'lab' },
@@ -60016,7 +60053,7 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       const bad = tiles.find(([, v]) => v.ok === false);
       return bad ? (bad[1].why ?? 'REFUSED') : `${dry ? 'WOULD BANK' : 'BANKED'} ${ways.length} ROAD${ways.length === 1 ? '' : 'S'} IN ${tiles.length} TILE${tiles.length === 1 ? '' : 'S'}`;
     }
-    return 'LAND COVER HAS NO STORE KIND YET';
+    return `NO STORE KIND FOR ${layerId.toUpperCase()}`;
   };
   startWorldAuthoringLab({
     canvas,

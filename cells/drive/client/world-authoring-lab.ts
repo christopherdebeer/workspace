@@ -557,6 +557,9 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
     mo.observe(boot, { attributes: true, attributeFilter: ['class'] });
   }
   repaint();
+  /** The BANK button from a harness: what the layer would file (dry) or did. */
+  (win as unknown as { __worldeditBank?: object }).__worldeditBank = (dry = true, layerId?: string): Promise<string> =>
+    runtime.bank ? runtime.bank(layerId ?? layer.id, dry) : Promise.resolve('NO STORE ON THIS PAGE');
   (win as unknown as { __worldeditChart?: object }).__worldeditChart = (on?: boolean): Record<string, unknown> => {
     if (on !== undefined) setChart(on);
     return report();

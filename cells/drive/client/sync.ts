@@ -155,7 +155,7 @@ export interface Sync {
   tapes(): TapeShelfRow[];
   /** File an authored entry for one z16 tile (an empty list retracts it).
    *  The cell's own grant decides who may: owner or shared principal. */
-  author(entry: { tile: string; ways?: unknown[]; patch?: Record<string, Record<string, string>>; dems?: Array<[number, number, number]> }): Promise<{ ok: boolean; rev?: number; n?: number; url?: string; why?: string }>;
+  author(entry: { layer?: 'osm' | 'cover' | 'dem'; tile: string; ways?: unknown[]; patch?: Record<string, Record<string, string>>; cells?: Array<[number, number]> }): Promise<{ ok: boolean; rev?: number; n?: number; url?: string; why?: string }>;
 }
 
 export interface TapeShelfRow {
