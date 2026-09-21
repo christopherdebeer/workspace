@@ -18834,3 +18834,16 @@ files every cell the brush moved as a `dems` entry (`DemPaintSession.edits`).
 The plinth index reads ONCE per vertex (`plinthHit`): a store handing a
 fresh list per call rebuilt it between finding the ring and reading its
 crown, and the crown map is keyed on the ring object.
+
+**Measured at the lookout** (`authored-islets.test.mjs`, the store stood in
+with page routes, no page errors). Raw map, `?authored=0`, no entry: the
+three cliff-ringed islets stand — 658651384 at 60.2 m over a 0.6 m DEM,
+658651379 and 658651380 at 41.4 and 41.3 (their own stretch of coast is
+lower) — and the two coastline-only islets stay at the sea (−5.6 with the
+bed cut, 3.4). A `patch` of `height=45` on 658651384 reads 42.4: the
+stated height wins over the probe, less the crown's rounding at an 11 m
+ring's centre. A single `dems` cell set to 30 m on the beach reads back
+from the raster as 25.2 where it had been 4.1 (bilinear across 9.5 m
+cells) and the mesh as 10.9 — one spiked cell is smoothed by the bank and
+the lattice, as a one-cell spike should be; a brush stroke is 177 cells
+(`authored-dem-export.test.mjs`).
