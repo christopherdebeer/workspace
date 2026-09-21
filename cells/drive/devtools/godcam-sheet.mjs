@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { openDrive } from './harness.mjs';
-import { writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { chromium } from 'playwright';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../..');
 
 // ============================================================================
 // ONE COMMAND: capture a grid of god-camera angles/times/weather/dev-overlay
@@ -160,6 +163,7 @@ const SPOT = argv.spot ? `${String(argv.spot)}&nodraw=1&wxlive=0` : `fixture=${F
 const [tx, tz] = String(argv.target ?? (argv.spot ? '0,0' : '-320,-160')).split(',').map(Number);
 const TARGET = { x: tx, z: tz };
 const WORK = String(argv.work ?? process.env.DRIVE_WORK ?? '/tmp/drive-tools');
+mkdirSync(WORK, { recursive: true });
 const CELL_W = Number(argv['cell-width'] ?? process.env.CELL_W ?? 200);
 // --rows= (empty) skips the time-of-day loop entirely — just the DEV row —
 // for a quick preview before committing to the full grid.
@@ -192,7 +196,7 @@ async function timed(label, fn) {
 // checkout is what actually says what code was captured, so it is read
 // here, once, at process start — no browser needed for it.
 function gitInfo() {
-  const opts = { cwd: '/home/user/workspace', encoding: 'utf8' };
+  const opts = { cwd: ROOT, encoding: 'utf8' };
   const safe = (cmd) => { try { return execSync(cmd, opts).trim(); } catch { return null; } };
   const hash = safe('git rev-parse HEAD');
   const dirty = safe('git status --porcelain');
@@ -305,6 +309,7 @@ const d = await timed('openDrive (boot + goto)', () => openDrive({
   settle: 0,
   bootTimeout: 90000,
   tag: 'grid-shared',
+  work: WORK,
 }));
 
 async function takeShot(row, col) {
@@ -326,6 +331,11 @@ const wxLog = [];
 
 try {
   await step('hud off', () => d.page.evaluate(() => window.__hud(false)));
+  await step('clean debug state', () => d.page.evaluate(() => {
+    window.__tiledbg(false);
+    window.__groundview('off');
+    window.__xray('off');
+  }));
 
   // Terrain/hydro settle happens exactly ONCE — time and weather do not
   // affect what tiles exist, only how they are lit.
@@ -607,7 +617,10 @@ ${tableFor(['DEV'], DEV_COLS, manifest.angleCols.length)}
   writeFileSync(htmlPath, html);
   if (missing.length) log(`  MISSING cells: ${missing.join(', ')}`);
 
-  const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
+  const bundledChromium = '/opt/pw-browsers/chromium';
+  const browser = await chromium.launch({
+    executablePath: existsSync(bundledChromium) ? bundledChromium : undefined,
+  });
   const page = await browser.newPage();
   await page.goto(`file://${htmlPath}`, { waitUntil: 'load' });
   await page.screenshot({ path: OUT, fullPage: true });
