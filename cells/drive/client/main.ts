@@ -93,7 +93,7 @@ import { attachRoofSurface } from './roof-surface';
 import { madeKind, madeShares, MADE_GLSL, type MadeKind } from './constructed-ground';
 import { registerBuildingFabric, inheritBuildingFabric, attachBuildingFabric, setBuildingCondition, type BuildingCondition } from './building-fabric';
 import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, SUBSTRATE_VIEWS, groundInkPixels, type GroundViewId } from './ground-view';
-import { SUB_GLSL, SUB_DOM_M, subDomainAt, subEvidence, subExpressOf, subGrainOf, subLayerTint,
+import { SUB_GLSL, SUB_ROCK_CAST, SUB_DOM_M, subDomainAt, subEvidence, subExpressOf, subGrainOf, subLayerTint,
   subGrassAllow, SUB_SWARD_K, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
   type SubstrateField } from './substrate-field';
 import { gramDecode } from './facade-grammar';
@@ -3354,6 +3354,45 @@ function oceanAt(ex: number, ez: number): boolean {
 const coastSegs = new Map<string, Array<[number, number, number, number]>>();
 /** Coastline ways seen at DECODE, before any rendering decision. */
 let osmCoastSeen = 0;
+/** Mapped cliff lines per terrain tile, local metres, in the way's own
+ *  direction — the kernel reads them as vertical faces (cliffAdjust). Keyed
+ *  on the z14 tile so a build hands the worker only its own. */
+const cliffLinesByTile = new Map<string, BreakLine[]>();
+const cliffSeen = new Set<string>();
+const CLIFF_STEP_M = 12;
+function noteCliff(pts: Array<[number, number]>): void {
+  const dirty = new Set<string>();
+  const tileKeyOf = (x: number, z: number): string => {
+    const [la, lo] = localToLatLon(x, z);
+    const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
+    return `${tx}/${ty}`;
+  };
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+    if (!Number.isFinite(ax) || !Number.isFinite(bx)) continue;
+    // Densified to a dozen metres, so a segment straddles at most two tiles
+    // and the kernel's reach bounds hold per piece.
+    const len = Math.hypot(bx - ax, bz - az);
+    const n = Math.max(1, Math.ceil(len / CLIFF_STEP_M));
+    for (let k = 0; k < n; k++) {
+      const sx = ax + ((bx - ax) * k) / n, sz = az + ((bz - az) * k) / n;
+      const ex = ax + ((bx - ax) * (k + 1)) / n, ez = az + ((bz - az) * (k + 1)) / n;
+      // A cliff way arrives once per OSM tile that carries it; the same piece
+      // must not be filed twice.
+      const id = `${sx.toFixed(1)},${sz.toFixed(1)}>${ex.toFixed(1)},${ez.toFixed(1)}`;
+      if (cliffSeen.has(id)) continue;
+      cliffSeen.add(id);
+      const line: BreakLine = { ax: sx, az: sz, bx: ex, bz: ez };
+      for (const key of new Set([tileKeyOf(sx, sz), tileKeyOf(ex, ez)])) {
+        let arr = cliffLinesByTile.get(key);
+        if (!arr) cliffLinesByTile.set(key, (arr = []));
+        arr.push(line);
+        dirty.add(key);
+      }
+    }
+  }
+  for (const key of dirty) markTerrainDirty(key, 'cliff');
+}
 function noteCoastline(pts: Array<[number, number]>): void {
   for (let i = 0; i + 1 < pts.length; i++) {
     const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
@@ -7218,7 +7257,23 @@ const envU = {
   uSunMW: { value: 1 },
   uSunMOn: { value: 0 },
   uSunL: { value: new THREE.Vector3(0, 1, 0) },
+  // ── SKYLIGHT ON A STEEP FACE ──
+  //
+  // The buildings learned this first ("SKYLIGHT ON THE WALLS"): a
+  // HemisphereLight hands a VERTICAL face the flat 50/50 sky-ground blend,
+  // about 0.22 of incident, and the ground colour it blends toward is a dark
+  // bounce, so a wall turned from the sun rendered darker than the dirt beside
+  // it. A cliff is the terrain's wall and it has the same fault: measured on
+  // the seat's frame at the Twelve Apostles, the shaded face read luma 46
+  // against a sky of 127 (0.36) and came out as black blocks, where the
+  // photograph's shaded cliff reads 113 against 160 (0.71). A vertical face
+  // sees half the sky, and half the sky is not nothing. This is a sky-coloured
+  // fill on the INDIRECT term, scaled by how steep the face is (nothing on
+  // flat ground, which the hemisphere already lights right), by daylight, and
+  // by cloud. `?steepfill=` is the strength, 0 the exact A/B.
+  uSteepFill: { value: new THREE.Vector3() },
 };
+const STEEP_FILL = qsNum('steepfill', 0.18);
 /**
  * ── A SHADOW MAP CANNOT SHADE A VALLEY, AND THIS IS WHY ──
  *
@@ -7558,6 +7613,9 @@ function terrainFx(mat: THREE.Material, opts: {
         vTd = aTd;`);
     sh.uniforms.uSunSkew = envU.uSunSkew;
     sh.uniforms.uDeckY = envU.uDeckY;
+    sh.uniforms.uSteepFill = envU.uSteepFill;
+    // The district's stone, per tile (terrainMatFor); the shared cast otherwise.
+    sh.uniforms.uSubRockTint = { value: (mat.userData.rockTint as THREE.Vector3 | undefined) ?? ROCK_TINT_DEFAULT };
     sh.uniforms.uCloudScale = envU.uCloudScale;
     sh.uniforms.uSunM = envU.uSunM;
     sh.uniforms.uSunMOrg = envU.uSunMOrg;
@@ -7573,6 +7631,7 @@ function terrainFx(mat: THREE.Material, opts: {
         uniform sampler2D uDbgWet; uniform vec2 uDbgOrg; uniform float uDbgW; uniform float uDbgOn;
         uniform float uCloudS; uniform vec2 uWind; uniform float uMpp;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
+        uniform vec3 uSteepFill;
         uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
         ${CLOUD_GLSL}
         ${SUNM_GLSL}`)
@@ -7586,6 +7645,16 @@ function terrainFx(mat: THREE.Material, opts: {
       // this multiplied the finished colour it would take the sky away too.
       .replace('#include <lights_fragment_begin>', `#include <lights_fragment_begin>
         reflectedLight.directDiffuse *= sunMarch(vWorldP);
+        // SKYLIGHT ON A STEEP FACE (see uSteepFill): the indirect term gains
+        // the sky in proportion to how far the surface has turned from up.
+        // Squared, so a hillside takes little and a cliff face the whole of
+        // it; on the composed normal, so a joint or a bedding shadow in the
+        // relief still reads against it.
+        {
+          vec3 upV = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+          float steep = clamp(1.0 - dot(normal, upV), 0.0, 1.0);
+          reflectedLight.indirectDiffuse += diffuseColor.rgb * uSteepFill * steep * steep;
+        }
       // CLOUD SHADOWS: not "the same kind of noise" any more — THE SAME FIELD,
       // read at the point where a ray from here to the sun leaves the deck the
       // sky is drawing. Same function, same phase, same coverage curve, so the
@@ -8606,6 +8675,41 @@ function terrainNormalFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE
   }
   return tex;
 }
+/** The shared cast every rock wore before the district's stone reached the
+ *  shader: what a material with no tile behind it still gets. */
+const ROCK_TINT_DEFAULT = new THREE.Vector3(SUB_ROCK_CAST[0], SUB_ROCK_CAST[1], SUB_ROCK_CAST[2]);
+/**
+ * ── THE ROCK IS THE DISTRICT'S STONE, NOT A GREY ──
+ *
+ * `subRockC` pulled the chroma out of the ground colour and laid one cool
+ * cast over it, everywhere: right for granite and wrong for Port Campbell
+ * limestone, which the seat photographed as warm ochre and the game drew at
+ * hue 198°. The world already knows what a district stands on — `bedrockAt`
+ * picks a STONE family per 6 km district by the climate's own mix, and the
+ * boulders, the spires and the stone villages all take their colour from it.
+ * The cliff face now does too: the family's hue and saturation at the tile's
+ * centre, normalised to unit luminance so it changes the COLOUR of exposed
+ * rock and not its brightness (the substrate's luminance rule stands), and
+ * blended three quarters of the way so a red-country tile is unmistakably
+ * red without the palette losing its own key. Per tile, because a material
+ * is per tile and a district is bigger than one; a district boundary falls
+ * between tiles as a step, which is what geology does.
+ */
+function stoneTint(fam: readonly number[]): THREE.Vector3 {
+  const [h, , sat, , lit] = fam;
+  const q = lit < 0.5 ? lit * (1 + sat) : lit + sat - lit * sat, p = 2 * lit - q;
+  const ch = (tt: number): number => {
+    tt = ((tt % 1) + 1) % 1;
+    if (tt < 1 / 6) return p + (q - p) * 6 * tt;
+    if (tt < 1 / 2) return q;
+    if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
+    return p;
+  };
+  const r = ch(h + 1 / 3), g = ch(h), b = ch(h - 1 / 3);
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b || 1;
+  const k = 0.75;
+  return new THREE.Vector3(1 + (r / lum - 1) * k, 1 + (g / lum - 1) * k, 1 + (b / lum - 1) * k);
+}
 function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.MeshLambertMaterial {
   const old = terrainMats.get(key);
   if (old) { (old.userData.madeTexture as THREE.Texture | undefined)?.dispose(); old.dispose(); }
@@ -8652,6 +8756,11 @@ function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.Me
   const sub = substrateTexes.get(key);
   const made = madeTextureFor(t);
   m.userData.madeTexture = made;
+  {
+    const cx = t.xs + t.w / 2, cz = t.zs + t.h / 2;
+    const c = climateAt(cx, cz);
+    m.userData.rockTint = stoneTint(STONE[bedrockAt(cultEnv, cx, cz, STONE_MIX_ROWS, c.w)]);
+  }
   terrainFx(m, { detail: true, dem: true, made, sub: sub ? { a: sub.a, b: sub.b, box: [t.xs, t.zs, t.w, t.h] } : undefined });
   terrainMats.set(key, m);
   return m;
@@ -8715,6 +8824,7 @@ const kStore: TerrainStore = {
   get channels() { return channelGrid as Map<string, StripLike[]>; },
   get grid() { return GRID; },
   hydroBreakLines: (t) => hydroShoreBreakLines.get(`${t.tx}/${t.ty}`) ?? [],
+  cliffLines: (t) => cliffLinesByTile.get(`${t.tx}/${t.ty}`) ?? [],
   hydroFloor: (t) => { const d = hydroFloors.get(`${t.tx}/${t.ty}`); return d ? { n: HYDRO_EN, data: d } : null; },
   hydroBank: (t) => hydroBanks.get(`${t.tx}/${t.ty}`) ?? null,
   onRoad: (x, z) => onCarriageway(x, z, 0.6).road,
@@ -8951,6 +9061,15 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
       }
       return flat;
     })(),
+    cliffLines: (() => {
+      const lines = cliffLinesByTile.get(`${t.tx}/${t.ty}`) ?? [];
+      const flat = new Float64Array(lines.length * 4);
+      for (let i = 0; i < lines.length; i++) {
+        flat[i * 4] = lines[i].ax; flat[i * 4 + 1] = lines[i].az;
+        flat[i * 4 + 2] = lines[i].bx; flat[i * 4 + 3] = lines[i].bz;
+      }
+      return flat;
+    })(),
     // A copy per job: the buffer is transferred, and the tile's floor stays
     // here for the next build.
     hydroFloor: (hydroFloors.get(`${t.tx}/${t.ty}`) ?? new Float32Array(0)).slice(),
@@ -8965,6 +9084,7 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
     st.flat.buffer,
     ch.flat.buffer,
     job.hydroBreakLines.buffer,
+    job.cliffLines.buffer,
     job.hydroFloor.buffer,
     job.hydroBank.buffer,
     pads.buffer,
@@ -28792,7 +28912,10 @@ async function renderWays(
       scatterVeg(pts, el.id, tags);
     }
     else if (tags.natural === 'coastline') noteCoastline(pts);
-    // Anything else — a cliff edge, an unrecognised line — is
+    // A CLIFF IS THE ONE LINE THE TERRAIN NEEDS: the DEM smears a face into
+    // a ramp and the map says where the face is. See cliffAdjust in the kernel.
+    else if (tags.natural === 'cliff') noteCliff(pts);
+    // Anything else — an unrecognised line — is
     // deliberately dropped rather than fed to the polygon path. The old `else`
     // caught everything, which was harmless while the query only returned
     // areas; with lines in the answer it would paint a river green.
@@ -33989,6 +34112,13 @@ function stepWeather(now: number, dt: number): void {
   waterU.uWRain.value = wx.rain;
   // Cloud shadows read the same cover and drift as the deck overhead.
   envU.uCloudS.value = cloudShadowOn ? wx.cloud : 0;
+  // The sky's own colour at the hemisphere's tint, scaled to nothing at night
+  // and a third down under full cloud — a fill for a face the sun has left,
+  // not a second sun.
+  {
+    const k = STEEP_FILL * dayF * (1 - wx.cloud * 0.35);
+    envU.uSteepFill.value.set(0.74 * k, 0.82 * k, 0.93 * k);
+  }
   // WHERE THE SUN PUTS THE SHADOW. Horizontal travel per metre of altitude on
   // the way up to the deck. Clamped hard: as the sun nears the horizon this
   // tends to infinity, and a patch of deck twenty kilometres downwind has
@@ -35665,6 +35795,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     for (const key of hydroRev.keys()) hydroSys?.removeTile(key);
     hydroRev.clear(); hydroDirty.clear(); hydroFedInputs.clear(); hydroFeats.clear(); hydroFeatsFull = 0; coverHydro.clear();
     hydroShoreBreakLines.clear(); hydroFloors.clear(); hydroBanks.clear(); hydroBankStats.clear();
+    cliffLinesByTile.clear(); cliffSeen.clear();   // local metres under the old origin
     coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear(); sideCaches.clear();
     // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
     // spatially keyed, so the last postcard's road left an elevation under

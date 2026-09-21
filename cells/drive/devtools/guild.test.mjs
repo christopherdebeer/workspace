@@ -206,5 +206,19 @@ ok('a mangrove pixel is a mangrove anywhere',
     .every((k) => k === 'palm' || k === 'broadleaf'));
 ok('pickMix on an empty mix is null, not a crash', pickMix([], r([0.5])) === null);
 
+// ── THE HEADLAND: the Twelve Apostles clifftop, and a sheltered wood inland ──
+// The same temperate-forest row, once on an exposed clifftop a hundred metres
+// from the sea and once in a sheltered valley thirty kilometres inland.
+const valley = guildAt(site({ exposure: 0.3, seaM: 30000 }), eco(4, 'Australasia', 'SE Australia temperate forests'));
+const headland = guildAt(site({ exposure: 0.69, seaM: 100 }), eco(4, 'Australasia', 'SE Australia temperate forests'));
+console.log(`
+headland: x${headland.scale.toFixed(2)} bush ${share(headland, 'bush').toFixed(2)} · valley: x${valley.scale.toFixed(2)} bush ${share(valley, 'bush').toFixed(2)}`);
+ok('an exposed headland grows at under two thirds of the inland height', headland.scale < valley.scale * 0.66, [headland.scale, valley.scale]);
+ok('…and is scrub where the valley is wood', share(headland, 'bush') > share(valley, 'bush') * 2 && top(headland) === 'bush', [share(headland, 'bush'), share(valley, 'bush')]);
+ok('…and denser, not thinner', headland.density > valley.density, [headland.density, valley.density]);
+ok('the inland valley is untouched by the rule', !valley.why.some((w) => /coast|ridge/.test(w)), valley.why);
+const cove = guildAt(site({ exposure: 0.3, seaM: 100 }), eco(4, 'Australasia', 'SE Australia temperate forests'));
+ok('a sheltered cove by the same sea keeps its trees', cove.scale === valley.scale, [cove.scale, valley.scale]);
+
 console.log(bad ? `\n${bad} FAILED` : '\nall ok');
 process.exit(bad ? 1 : 0);

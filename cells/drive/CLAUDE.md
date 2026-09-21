@@ -18634,3 +18634,62 @@ on the next load.
 
 Measured on `at-campsbay`, nodraw, settled, no page errors: on — 898 ways,
 2,012 road cells, 559 intact buildings, 11 landmarks; off — 27 ways, 0, 0, 0.
+
+## The Twelve Apostles against a photograph: five rules the ground truth taught
+
+A cab frame at `?lat=-38.66428&lon=143.10395&h=306` set beside a Street View
+of the same cliff. Six findings, five of them general enough to fix (the sea
+stacks are not in OSM and wait on the authored store): a 46 m wall drawn as a
+slope, trees on a headland that carries heath, a beach that was not sand, a
+cliff face the colour of blue slate on a limestone coast, and a shaded face
+darker than the photograph's because a sky lights what the sun does not.
+
+**A `natural=cliff` line is a vertical breakline** (`cliffAdjust` in the
+kernel, both height loops). The line is densified to 12 m, filed by both
+endpoints' z14 keys (`noteCliff`), and travels to the worker as a flat
+Float64Array beside the hydro packets. Within `CLIFF_REACH_M` (26 m) of a
+segment the kernel samples the DEM a reach out each side, calls the lower one
+the foot, and clamps the low side down to the foot and the high side up to
+the top with a smoothstep that lets go at the reach — the DEM decides which
+side is which, so a reversed way draws the same wall. Two crease lines at
+±0.6 m keep the lattice from cutting the corner. A drop under 4 m is not a
+cliff (`CLIFF_MIN_DROP`: coastal "cliff" tags on 2 m banks are common) and a
+road cell is never moved (`S.onRoad`). Measured on the transect: mesh
+50.09/49.99/49.85 at 0/10/20 m and 5.03 at 30 m, where before it was
+46.0/35.4/18.3/9.0. **`cliffIndexFor` is keyed on the tile AND the lines'
+identity** — keyed on the tile alone it served the first (empty) index to
+the same HeightTile rebuilt after the cliff way landed, which is a real
+production order: terrain first, OSM later. `cliff-face.test.mjs` bundles
+the kernel and asserts foot, top, reach, creases, reversal, the road
+exemption and the 2 m bank on both paths.
+
+**An exposed coast keeps its growth low** (guild.ts): `coastK` is exposure
+past 0.45 times nearness to the sea inside 800 m (`siteAt` now returns
+`seaM`); trees lose 90 % of their weight, bush gains, stature drops 70 %,
+density rises 30 %. Measured: headland ×0.58 bush 0.46, the valley 500 m
+inland ×1.00 bush 0.20. The plain wind-swept ridge rule (exposure > 0.8,
+×0.85) stays for inland ridges.
+
+**Bare ground within 7 m of the sea datum and 120 m of water is sand**
+(`beachAt`, colour pass, `cp === 60` only): a height fade from 4 to 7 m
+above `seaAbs`, twelve water taps at 60 and 120 m, capped at 0.85 toward
+`SAND_T`. Not applied to sward or forest cover, so a cliff-top meadow at
+sea level keeps its grass.
+
+**Rock takes the district's stone** (`stoneTint`, per tile in
+`terrainMatFor`): `bedrockAt` picks the STONE family the culture already
+uses for walls, its HSL row becomes a luma-normalised tint blended 0.75
+toward white, and the shader multiplies `subRockC` by `uSubRockTint`. The
+old fixed blue cast is `SUB_ROCK_CAST`, the default for a material with no
+tile. **The uniform is declared inside `SUB_GLSL`**, not in the
+`terrainFx` string that follows it: declared after, the terrain program
+failed to link (`'uSubRockTint' : undeclared identifier`, then
+`useProgram: program not valid`) and a nodraw boot reported zero errors
+because shaders compile only on a drawn frame. `glsl-errs.mjs` draws.
+
+**A steep face gets sky fill** (`uSteepFill`, `?steepfill=` default 0.18,
+LOOK row): `indirectDiffuse += albedo × fill × steep²` where steep is one
+minus the normal's dot with up, scaled by daylight and thinned 35 % under
+full cloud. Measured on the wall from the god camera at noon, clear: face
+luma 56 → 71 at 0 → 0.18, hue 47° → 62° (the fill is sky-blue, the tint is
+warm), the sky itself unchanged at 120, the sward above 111 → 116.

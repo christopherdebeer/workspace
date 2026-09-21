@@ -33,6 +33,8 @@ export interface TerrainJob {
   strips: Float64Array; stripCells: Array<[string, number[]]>;
   channels: Float64Array; chanCells: Array<[string, number[]]>;
   hydroBreakLines: Float64Array;
+  /** Mapped cliff lines crossing the tile, four floats a segment (see TerrainStore.cliffLines). */
+  cliffLines: Float64Array;
   /** The field's bed lattice (see TerrainStore.hydroFloor); empty with n 0 when the tile has no field. */
   hydroFloor: Float32Array; hydroFloorN: number;
   /** The tile's packed bank stations (see TerrainStore.hydroBank); empty when the tile has none. */
@@ -107,6 +109,10 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
           bz: job.hydroBreakLines[i + 3],
         });
       }
+      const cliffLines: BreakLine[] = [];
+      for (let i = 0; i + 3 < job.cliffLines.length; i += 4) {
+        cliffLines.push({ ax: job.cliffLines[i], az: job.cliffLines[i + 1], bx: job.cliffLines[i + 2], bz: job.cliffLines[i + 3] });
+      }
       const N = job.climN, KW = job.climK, t = job.tile;
       const climate = (x: number, z: number): ArrayLike<number> | null => {
         if (!N) return null;
@@ -133,6 +139,7 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
         seaAbs: () => job.seaAbs, baseElev: job.baseElev,
         strips, cutL: job.cutL, channels, grid: job.grid,
         hydroBreakLines: () => hydroBreakLines,
+        cliffLines: () => cliffLines,
         hydroFloor: () => job.hydroFloorN > 0 ? { n: job.hydroFloorN, data: job.hydroFloor } : null,
         hydroBank: () => job.hydroBank && job.hydroBank.length ? job.hydroBank : null,
         onRoad: (x, z) => K.onRoadOf(strips, job.cutL, x, z),
