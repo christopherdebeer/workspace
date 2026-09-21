@@ -29343,6 +29343,112 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
   // the fallback still covers a bad deploy and nothing else.
 }
 
+// ── THE AUTHORED STORE: HAND-AUTHORED WAYS MERGED INTO THE RAW TILE ──
+//
+// A sea stack the map does not carry, a cliff line the mapper stopped short
+// of, a ruin that stood in the photograph. The entries live in the cell's own
+// S3 bank (`~/authored/v1/<z>/<x>/<y>/<rev>`, immutable, edge-served like a
+// tile) and the INDEX of which tiles carry one lives behind `/authored`, read
+// once a session and again on a hop. An entry is OSM-shaped ways; they are
+// concatenated onto the tile's own list before `renderWays`, so an authored
+// building is a building and an authored cliff is a cliff, by the machinery
+// that draws the mapped ones. Filing one goes through `sync.author`, which
+// is the signed-in player's bearer and the cell's own grant — see the store's
+// doctrine in index.ts. `?authored=0` is the raw map alone.
+let authoredOn = qsOn('authored', true);
+let authoredInit = false;
+interface AuthoredIndex { rev: number; tiles: Record<string, { rev: number; n: number; by: string }> }
+let authoredIndex: AuthoredIndex | null = null;
+let authoredIndexP: Promise<void> | null = null;
+/** Blob fetches by `z/x/y@rev` — a revision is immutable, so one fetch per
+ *  revision per session is exactly right. */
+const authoredMemo = new Map<string, Promise<OsmWay[]>>();
+/** Ways merged per tile this session, for the probe. */
+const authoredMerged = new Map<string, number>();
+function loadAuthoredIndex(force = false): Promise<void> {
+  if (!authoredOn || FIXTURE) return Promise.resolve();
+  if (authoredIndexP && !force) return authoredIndexP;
+  authoredIndexP = (async () => {
+    try {
+      const r = await fetch(`${CELL_BASE}/authored`, force ? { cache: 'reload' } : {});
+      if (!r.ok) return;
+      const j = (await r.json()) as Partial<AuthoredIndex> | null;
+      if (j && j.tiles && typeof j.tiles === 'object') authoredIndex = { rev: Number(j.rev) || 0, tiles: j.tiles };
+    } catch { /* the raw map alone; the index is asked again next hop */ }
+  })();
+  return authoredIndexP;
+}
+async function authoredWays(x: number, y: number): Promise<OsmWay[]> {
+  await loadAuthoredIndex();
+  const key = `${OSM_Z}/${x}/${y}`;
+  const row = authoredIndex?.tiles[key];
+  if (!row) return [];
+  const mk = `${key}@${row.rev}`;
+  let p = authoredMemo.get(mk);
+  if (!p) {
+    p = (async () => {
+      try {
+        const r = await fetch(`${CELL_BASE}/~/authored/v1/${key}/${row.rev}`);
+        if (!r.ok) return [];
+        const j = (await r.json()) as { ways?: OsmWay[] } | null;
+        const ways = (j?.ways ?? []).filter((w) => w && typeof w.id === 'number' && Array.isArray(w.geometry) && w.geometry.length > 0);
+        authoredMerged.set(key, ways.length);
+        return ways;
+      } catch { authoredMemo.delete(mk); return []; }
+    })();
+    authoredMemo.set(mk, p);
+  }
+  return p;
+}
+/** The tile's own ways plus whatever was authored for it. The list identity
+ *  changes only when there IS an entry, so `proxyStale` and every other
+ *  WeakMap keyed on the raw list keep working for the tiles that have none. */
+async function withAuthored(x: number, y: number, ways: OsmWay[]): Promise<OsmWay[]> {
+  if (!authoredOn || FIXTURE) return ways;
+  const extra = await authoredWays(x, y);
+  return extra.length ? ways.concat(extra) : ways;
+}
+/** The world in place again, through the tile filter — what the BUILT WORLD
+ *  and AUTHORED dials do when tapped, and what a fresh entry needs. */
+function rebuildInPlace(): void {
+  if (hopping || FIXTURE) return;
+  const [la, lo] = localToLatLon(state.x, state.z);
+  const hdg = ((state.heading * 180) / Math.PI + 360) % 360;
+  void worldHop(la, lo, hdg).catch(() => { /* a hop already in flight keeps the world it has */ });
+}
+/**
+ * FILE AN ENTRY FROM THE CONSOLE OR A DEVTOOL. `ways` are `{ tags, geometry:
+ * [{lat, lon}] }`, or `{ tags, pts: [[x, z], …] }` in local metres (the lab's
+ * own units), converted here. Each way is filed under EVERY z16 tile one of
+ * its points falls in, under one id, so the edge dedupe draws it once. The
+ * whole entry for a tile is replaced: this is authoring, not appending, and
+ * the last word on a tile is the tile. Returns one row per tile, then
+ * refreshes the index and rebuilds the world in place so the entry shows.
+ */
+type AuthoredInput = { tags: Record<string, string>; geometry?: Array<{ lat: number; lon: number }>; pts?: Array<[number, number]> };
+async function authoredBank(input: AuthoredInput[], opts: { tile?: string; dry?: boolean } = {}): Promise<object> {
+  const byTile = new Map<string, Array<{ tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }>>();
+  for (const w of input) {
+    const geometry = w.geometry ?? (w.pts ?? []).map(([x, z]) => { const [lat, lon] = localToLatLon(x, z); return { lat, lon }; });
+    if (!geometry.length) continue;
+    const tiles = opts.tile ? [opts.tile] : [...new Set(geometry.map((g) => { const [tx, ty] = tileAt(g.lat, g.lon, OSM_Z); return `${OSM_Z}/${tx}/${ty}`; }))];
+    for (const t of tiles) {
+      let arr = byTile.get(t);
+      if (!arr) byTile.set(t, (arr = []));
+      arr.push({ tags: w.tags, geometry });
+    }
+  }
+  const out: Record<string, unknown> = {};
+  for (const [tile, ways] of byTile) {
+    out[tile] = opts.dry ? { ways: ways.length } : await sync.author({ tile, ways });
+  }
+  if (!opts.dry && byTile.size) {
+    authoredMemo.clear();
+    await loadAuthoredIndex(true);
+    rebuildInPlace();
+  }
+  return out;
+}
 async function loadOsmTile(x: number, y: number): Promise<void> {
   // NOTHING IS BUILT UNDER A COVER. The sealed cities are the one part of the
   // world the map does not answer for — and, not coincidentally, the part
@@ -29358,7 +29464,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
   const cached = await readTileCache(x, y);
   if (cached) {
     const before = unbuilt;
-    await renderGated(x, y, cached);
+    await renderGated(x, y, await withAuthored(x, y, cached));
     noteTileRender(key, 'cache', cached.length, unbuilt - before);
     if (unbuilt !== before) setTimeout(() => osmLoaded.delete(key), 3000);
     else { osmDone.add(key); noteOsmDone(x, y); }
@@ -29422,7 +29528,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     if (stale) src = 'stale';
     else writeTileCache(x, y, ways);
     const before = unbuilt;
-    await renderGated(x, y, ways);
+    await renderGated(x, y, await withAuthored(x, y, ways));
     noteTileRender(key, src, ways.length, unbuilt - before);
     // A tile that refused any ribbon for want of terrain is NOT done. Let it
     // be requested again once the elevation it needed has landed, or the road
@@ -35759,6 +35865,9 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     osmLoaded.clear(); osmActive.clear(); osmFailedAt.clear(); osmPinned.clear();
     osmCorridor.clear(); osmDone.clear(); seenWays.clear(); wayTagLog.clear();
     tileStats.clear(); surveyedCache.clear();
+    // The store's index may have moved since boot (an entry filed from
+    // another tab, or this one); a hop is the one moment to ask again.
+    authoredMemo.clear(); authoredMerged.clear(); void loadAuthoredIndex(true);
     unbuilt = 0; osmFails = 0; osmDown = false;
     // ── THE MINIMAP IS PAINTED PIXELS, AND PIXELS ARE NOT A LIST ──
     //
@@ -37748,6 +37857,18 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
 (window as unknown as { __inside?: object }).__inside = (x?: number, z?: number): boolean =>
   (plotGrid.get(gkey(x ?? state.x, z ?? state.z)) ?? []).some((pts) => pointInPoly(x ?? state.x, z ?? state.z, pts));
 (window as unknown as { __built?: object }).__built = (): object => ({ ...buildStats, mm: mmCount });
+/** The authored store as this session sees it: the switch, the index's
+ *  revision and tile count, and how many authored ways each tile merged. */
+(window as unknown as { __authored?: object }).__authored = (): object => ({
+  on: authoredOn && !FIXTURE,
+  rev: authoredIndex?.rev ?? null,
+  tiles: authoredIndex ? Object.keys(authoredIndex.tiles).length : null,
+  merged: Object.fromEntries(authoredMerged),
+});
+/** File (or, with `[]` and a `tile`, retract) an authored entry — see authoredBank. */
+(window as unknown as { __authoredBank?: object }).__authoredBank = (ways: AuthoredInput[], opts?: { tile?: string; dry?: boolean }): Promise<object> =>
+  opts?.tile && !ways.length ? sync.author({ tile: opts.tile, ways: [] }).then(async (r) => { authoredMemo.clear(); await loadAuthoredIndex(true); rebuildInPlace(); return r; })
+    : authoredBank(ways, opts);
 (window as unknown as { __plots?: object }).__plots = (): object =>
   [...new Set([...plotGrid.values()].flat())].map((pts) => {
     let cx = 0, cz = 0;
@@ -55256,11 +55377,16 @@ const DIAL_GROUPS: DialGroup[] = [
         const changed = builtInit && want !== builtOn;
         builtOn = want;
         builtInit = true;
-        if (changed && !hopping && !FIXTURE) {
-          const [la, lo] = localToLatLon(state.x, state.z);
-          const hdg = ((state.heading * 180) / Math.PI + 360) % 360;
-          void worldHop(la, lo, hdg).catch(() => { /* a hop already in flight keeps the world it has */ });
-        }
+        if (changed) rebuildInPlace();
+      }),
+      // The hand-authored entries merged into the raw tiles (the store in
+      // index.ts). Off is the raw map alone, the A/B for any entry.
+      dial('authored', 'AUTHORED', ['OFF', 'ON'], 1, (i) => {
+        const want = qsHas('authored') ? qsOn('authored', true) : i === 1;
+        const changed = authoredInit && want !== authoredOn;
+        authoredOn = want;
+        authoredInit = true;
+        if (changed) rebuildInPlace();
       }),
       // Grass is the one layer whose cost is worth handing over: it is the
       // difference between a field and a golf course, and it is also the
