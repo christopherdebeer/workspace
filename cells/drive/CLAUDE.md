@@ -18842,3 +18842,47 @@ filed it was a `write:workspace` token: the cell's dispatch accepts the
 owner's workspace scope, and a `cell:c15r/drive:*` scope is NOT within a
 token minted from this session's ceiling, so a narrower one cannot be cut
 from here.
+
+## What was actually hand-authored, and three kinds of entry
+
+Asked what the Apostles entry had authored, the answer was: OSM polygons,
+placed by eye, and the map already had better ones. The live v5 tiles
+carry the stacks as small closed `natural=coastline` islets, three of them
+with a closed `natural=cliff` ring on the same footprint, all surveyed. The
+guessed rings were retracted. What the map lacks is a HEIGHT, and a stack
+is not a matter of vertices; so the store now carries three kinds in one
+blob, and the first entry is one line per islet.
+
+**`patch`** amends the map's own ways by osm id: `{ "658651383": { height:
+"40" } }` merged onto the tile's way before `renderWays`, so the survey's
+ring stays the survey's and the authored layer says only what it knows. A
+patch needs its tile named (an id carries no position). **`dems`** are
+hand-shaped cells, `[lat, lon, metres]`, written into the height raster —
+the same cell the lab's brush writes, `xs + (i + 0.5)·w/256` — as the tile
+arrives (`applyAuthoredDem` before the worker mirror) or at once if it is
+already in (`demTilesChanged`, the lab's own fan-out hoisted out of the lab:
+re-mirror, expire the ocean masks and normals, rebuild the tile and its
+neighbours, re-seat the scatter). **`ways`** remain for what the map has
+nothing of. An entry with none of the three retracts.
+
+**The islet rule needs no entry at all.** A closed `natural=cliff` ring
+under 120 m across is a sea stack; as cliff LINES it would do nothing (the
+DEM is level both sides), so it files as a plinth with NaN height, and at
+pack time `plinthTopProbe` reads the crown off the mainland: the nearest
+mapped cliff LINE within 600 m, sampled on its high side a reach out from
+its midpoint — the edge the stack was cut from — with the highest ground
+on rings out to 400 m as the fallback (a worse answer where the coast
+rises inland: it found a 66 m hill for a 50 m cliff). Judged against the
+SEA, not the origin: local metres run from `baseElev`, and the coast
+plateau is a few metres local under a 50 m sea cliff, so a "top > 5"
+gate on local metres nearly refused the Apostles. Asked again on EVERY
+build and keeping the highest seen, because the first pack ran when only
+the islet's own tile was in and a probe cached then said 6 m for the rest
+of the session. A way that states `height` (the survey's, or a patch)
+wins over the probe; a coastline islet stating one is a stack too. **Not a drum:** the kernel
+rounds the crown 4 m over the last 6 m to the ring, and the hand-shaped DEM
+is where a real profile comes from — `__authoredDem()` in the world lab
+files every cell the brush moved as a `dems` entry (`DemPaintSession.edits`).
+The plinth index reads ONCE per vertex (`plinthHit`): a store handing a
+fresh list per call rebuilt it between finding the ring and reading its
+crown, and the crown map is keyed on the ring object.

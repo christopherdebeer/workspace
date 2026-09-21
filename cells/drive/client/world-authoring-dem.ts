@@ -196,6 +196,17 @@ export class DemPaintSession {
     return { changed, tileKeys: [...changedTiles] };
   }
 
+  /** Every cell the session has left different from what the raster
+   *  delivered, with its current value — the authored export reads this. */
+  edits(): Array<{ tile: EditableDemTile; index: number; before: number; after: number }> {
+    this.endStroke();
+    const out: Array<{ tile: EditableDemTile; index: number; before: number; after: number }> = [];
+    for (const e of this.originals.values()) {
+      const after = e.tile.data[e.index];
+      if (Math.abs(after - e.before) > 1e-6) out.push({ tile: e.tile, index: e.index, before: e.before, after });
+    }
+    return out;
+  }
   report(): { editedCells: number; undoDepth: number; strokeCells: number } {
     return {
       editedCells: this.originals.size,

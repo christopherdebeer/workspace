@@ -6,11 +6,13 @@
  *   PARC_TOKEN=… node devtools/authored-push.mjs --retract 16/x/y  # retract
  *   node devtools/authored-push.mjs --index                          # read
  *
- * entry.json is `{ "tile": "16/x/y", "ways": [...] }`, or `{ "ways": [...] }`
- * with the tiles inferred: each way is filed under every z16 tile one of
- * its points falls in, so a way across an edge is drawn once (one id per
- * slot, and renderWays dedupes on it). A way is `{ tags, geometry: [{lat,
- * lon}] }` — OSM's own shape, so an authored building is a building.
+ * entry.json is `{ "tile": "16/x/y", "ways": [...], "patch": {...}, "dems":
+ * [...] }` — any of the three. Without a `tile`, ways are filed under every
+ * z16 tile one of their points falls in (one id per slot, and renderWays
+ * dedupes on it) and dem cells under their own; a patch needs the tile. A
+ * way is `{ tags, geometry: [{lat, lon}] }`, OSM's own shape; a patch is
+ * `{ "<osm id>": { tags } }` merged onto the map's own way; a dem cell is
+ * `[lat, lon, metres]` written into the height raster.
  *
  * The bearer is the caller: the cell's dispatch turns it into x-cell-caller,
  * and the drive cell's own grant (owner, or a principal it is shared with)
@@ -45,12 +47,24 @@ if (flag('--index')) {
   const file = args.find((a) => !a.startsWith('--'));
   if (!file) { console.error('usage: authored-push.mjs entry.json | --retract 16/x/y | --index'); process.exit(2); }
   const entry = JSON.parse(readFileSync(file, 'utf8'));
+  // Three kinds in one file: ways (filed under every tile they touch), a
+  // patch by osm id (needs the file's `tile`), and dem cells (by their own
+  // position, or the file's tile). With a `tile`, everything goes there.
   const byTile = new Map();
+  const bodyFor = (t) => { if (!byTile.has(t)) byTile.set(t, { tile: t, ways: [], patch: {}, dems: [] }); return byTile.get(t); };
   for (const w of entry.ways ?? []) {
     const tiles = entry.tile ? [entry.tile] : [...new Set(w.geometry.map((g) => tileOf(g.lat, g.lon)))];
-    for (const t of tiles) { if (!byTile.has(t)) byTile.set(t, []); byTile.get(t).push(w); }
+    for (const t of tiles) bodyFor(t).ways.push(w);
   }
+  if (entry.patch && Object.keys(entry.patch).length) {
+    if (!entry.tile) { console.error('a patch needs the file to name its tile — an osm id carries no position'); process.exit(2); }
+    Object.assign(bodyFor(entry.tile).patch, entry.patch);
+  }
+  for (const c of entry.dems ?? []) bodyFor(entry.tile ?? tileOf(c[0], c[1])).dems.push(c);
   let ok = true;
-  for (const [tile, ways] of byTile) { console.log(`→ ${tile}: ${ways.length} way(s)`); ok = (await post({ tile, ways })) && ok; }
+  for (const [tile, body] of byTile) {
+    console.log(`→ ${tile}: ${body.ways.length} way(s), ${Object.keys(body.patch).length} patched, ${body.dems.length} dem cell(s)`);
+    ok = (await post(body)) && ok;
+  }
   process.exit(ok ? 0 : 1);
 }

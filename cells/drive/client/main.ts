@@ -3360,7 +3360,24 @@ let osmCoastSeen = 0;
 const cliffLinesByTile = new Map<string, BreakLine[]>();
 const cliffSeen = new Set<string>();
 const CLIFF_STEP_M = 12;
-function noteCliff(pts: Array<[number, number]>): void {
+function noteCliff(pts: Array<[number, number]>, tags: Record<string, string> = {}): void {
+  // A CLOSED CLIFF RING IS A SEA STACK. The survey drew the Apostles as
+  // small closed `natural=cliff` rings on closed coastline islets; the DEM
+  // under them is the sea. As cliff LINES they would do nothing (the DEM is
+  // level both sides), so they file as plinths instead, with the way's own
+  // height where it states one and the mainland's cliff top otherwise.
+  if (pts.length >= 4) {
+    const [ax, az] = pts[0], [bx, bz] = pts[pts.length - 1];
+    if (Math.hypot(ax - bx, az - bz) <= 1) {
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (const [x, z] of pts) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+      if (x1 - x0 <= ISLET_MAX_M && z1 - z0 <= ISLET_MAX_M) {
+        const h = parseFloat(tags.height ?? '');
+        notePlinth(pts, h > 1 && h <= 500 ? h : NaN);
+        return;
+      }
+    }
+  }
   const dirty = new Set<string>();
   const tileKeyOf = (x: number, z: number): string => {
     const [la, lo] = localToLatLon(x, z);
@@ -3412,13 +3429,21 @@ function plinthOf(tags: Record<string, string>, pts: Array<[number, number]>): n
   if (Math.hypot(ax - bx, az - bz) > 1) return null;
   return h;
 }
-function notePlinth(pts: Array<[number, number]>, height: number): void {
+/**
+ * `height` is the way's own statement (relative to the ground under the
+ * centre). NaN means the way stated nothing and the crown is to be READ OFF
+ * THE MAINLAND at pack time (`plinthTopProbe`): a sea stack is the cliff's
+ * own platform left standing, so the cliff top a few hundred metres away is
+ * the best evidence of its height the world has. A finite `top` given here
+ * is a crown already known, in local metres.
+ */
+function notePlinth(pts: Array<[number, number]>, height: number, top?: number): void {
   const ring = pts.slice(0, -1).filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z));
   if (ring.length < 3) return;
-  const id = `${height}:${ring.map(([x, z]) => `${x.toFixed(1)},${z.toFixed(1)}`).join(';')}`;
+  const id = `${height}:${top ?? ''}:${ring.map(([x, z]) => `${x.toFixed(1)},${z.toFixed(1)}`).join(';')}`;
   if (plinthSeen.has(id)) return;
   plinthSeen.add(id);
-  const P: Plinth = { pts: ring, height };
+  const P: Plinth = top !== undefined && Number.isFinite(top) ? { pts: ring, height, top } : { pts: ring, height };
   // Filed under every terrain tile the ring's bbox touches: a stack on a
   // tile edge must rise on both sides of it.
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
@@ -3436,6 +3461,58 @@ function notePlinth(pts: Array<[number, number]>, height: number): void {
     markTerrainDirty(key, 'plinth');
   }
 }
+/** A closed ring under this across is an islet, not a coast. */
+const ISLET_MAX_M = 120;
+/**
+ * The mainland's cliff top near a stack, local metres, or NaN with none in
+ * reach (or none loaded yet — asked again on the next build). FIRST the
+ * nearest mapped cliff LINE within 600 m of the centroid, read on its high
+ * side a reach out from its midpoint: that is the edge the stack was cut
+ * from, and it is what the photograph shows level with the stacks' crowns.
+ * The highest ground on rings out to 400 m is the fallback, and it is a
+ * worse answer where the coast rises inland — measured at the Apostles it
+ * found a 66 m hill for a 50 m cliff. Everything is judged against the
+ * SEA, not the origin: local metres here run from `baseElev`, and the
+ * coast plateau is a few metres local under a 50 m sea cliff.
+ */
+const PLINTH_PROBE_M = 600;
+function plinthTopProbe(P: Plinth): number {
+  let sx = 0, sz = 0;
+  for (const [x, z] of P.pts) { sx += x; sz += z; }
+  const cx = sx / P.pts.length, cz = sz / P.pts.length;
+  const sea = seaSurfaceAbs() - baseElev;
+  let bd = PLINTH_PROBE_M * PLINTH_PROBE_M, best: BreakLine | null = null;
+  for (const lines of cliffLinesByTile.values()) {
+    for (const L of lines) {
+      const mx = (L.ax + L.bx) / 2, mz = (L.az + L.bz) / 2;
+      const d = (mx - cx) * (mx - cx) + (mz - cz) * (mz - cz);
+      if (d < bd) { bd = d; best = L; }
+    }
+  }
+  if (best) {
+    const dx = best.bx - best.ax, dz = best.bz - best.az, len = Math.hypot(dx, dz) || 1;
+    const nx = -dz / len, nz = dx / len, mx = (best.ax + best.bx) / 2, mz = (best.az + best.bz) / 2;
+    let top = -Infinity;
+    for (const side of [1, -1]) {
+      const x = mx + nx * CLIFF_REACH_PROBE_M * side, z = mz + nz * CLIFF_REACH_PROBE_M * side;
+      if (heightTileAt(x, z)) top = Math.max(top, sampleHeightRaw(x, z));
+    }
+    if (top > sea + 5) return top;
+  }
+  let top = -Infinity;
+  for (const r of [120, 200, 300, 400]) {
+    for (let k = 0; k < 24; k++) {
+      const a = (k / 24) * Math.PI * 2, x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+      if (!heightTileAt(x, z)) continue;
+      const h = sampleHeightRaw(x, z);
+      if (h > top) top = h;
+    }
+  }
+  // Under five metres over the sea is a reef's neighbour, not a cliff's.
+  return top > sea + 5 ? top : NaN;
+}
+/** The kernel's own CLIFF_REACH_M (26): the DEM's smear of a face is that wide. */
+const CLIFF_REACH_PROBE_M = 26;
 function noteCoastline(pts: Array<[number, number]>): void {
   for (let i = 0; i + 1 < pts.length; i++) {
     const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
@@ -9117,11 +9194,21 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
     plinths: (() => {
       const list = plinthsByTile.get(`${t.tx}/${t.ty}`) ?? [];
       let n = 0;
-      for (const P of list) n += 2 + P.pts.length * 2;
+      for (const P of list) n += 3 + P.pts.length * 2;
       const flat = new Float64Array(n);
       let i = 0;
       for (const P of list) {
-        flat[i++] = P.height; flat[i++] = P.pts.length;
+        // A stack that stated no height reads the mainland's cliff top now,
+        // and again on every build, keeping the HIGHEST it has seen: the
+        // first pack ran when only the islet's own tile was in, the mainland
+        // a tile over still on the wire, and a probe cached then said 6 m
+        // for a 50 m cliff for the rest of the session. Measured at the
+        // Apostles, tops 6.2 and 6.0 for stacks under a 50 m coast.
+        if (!Number.isFinite(P.height)) {
+          const top = plinthTopProbe(P);
+          if (Number.isFinite(top) && !(top <= (P.top ?? -Infinity))) (P as { top?: number }).top = top;
+        }
+        flat[i++] = P.height; flat[i++] = P.top ?? NaN; flat[i++] = P.pts.length;
         for (const [x, z] of P.pts) { flat[i++] = x; flat[i++] = z; }
       }
       return flat;
@@ -10356,6 +10443,9 @@ async function loadTerrainTileInner(x: number, y: number): Promise<void> {
   // the wire. No dirty and no re-mirror here — the tile has not been published
   // or mirrored yet, so the repair is simply part of what arrives.
   clearTileSpans(tile);
+  // Hand-shaped cells that arrived before their tile: into the raster now,
+  // before anything mirrors or reads it.
+  { const cells = authoredDemByTile.get(key); if (cells?.length) applyAuthoredDem(tile, cells); }
   heightTiles.set(key, tile);
   tworker?.mirrorHeight(key, tile);
   if (tworker && !tworker.disabled) { terrainDirty.add(key); dirtyWhy.set(key, 'load'); }
@@ -28973,10 +29063,21 @@ async function renderWays(
       noteArea(pts, tags);
       scatterVeg(pts, el.id, tags);
     }
-    else if (tags.natural === 'coastline') noteCoastline(pts);
+    else if (tags.natural === 'coastline') {
+      noteCoastline(pts);
+      // A coastline islet that STATES a height (a patch, usually) is a stack
+      // too: the survey drew its shore but no cliff ring to file it under.
+      const h = parseFloat(tags.height ?? '');
+      if (h > 1 && h <= 500 && pts.length >= 4) {
+        let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        for (const [x, z] of pts) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+        const [ax, az] = pts[0], [bx, bz] = pts[pts.length - 1];
+        if (Math.hypot(ax - bx, az - bz) <= 1 && x1 - x0 <= ISLET_MAX_M && z1 - z0 <= ISLET_MAX_M) notePlinth(pts, h);
+      }
+    }
     // A CLIFF IS THE ONE LINE THE TERRAIN NEEDS: the DEM smears a face into
     // a ramp and the map says where the face is. See cliffAdjust in the kernel.
-    else if (tags.natural === 'cliff') noteCliff(pts);
+    else if (tags.natural === 'cliff') noteCliff(pts, tags);
     // Anything else — an unrecognised line — is
     // deliberately dropped rather than fed to the polygon path. The old `else`
     // caught everything, which was harmless while the query only returned
@@ -29422,11 +29523,53 @@ let authoredInit = false;
 interface AuthoredIndex { rev: number; tiles: Record<string, { rev: number; n: number; by: string }> }
 let authoredIndex: AuthoredIndex | null = null;
 let authoredIndexP: Promise<void> | null = null;
+/** What a blob holds: ways the map lacks, tag patches on the map's own ways
+ *  by id, and hand-shaped DEM cells `[lat, lon, metres]`. */
+interface AuthoredBlob { ways: OsmWay[]; patch: Record<string, Record<string, string>>; dems: Array<[number, number, number]> }
 /** Blob fetches by `z/x/y@rev` — a revision is immutable, so one fetch per
  *  revision per session is exactly right. */
-const authoredMemo = new Map<string, Promise<OsmWay[]>>();
-/** Ways merged per tile this session, for the probe. */
+const authoredMemo = new Map<string, Promise<AuthoredBlob>>();
+/** Ways merged and ways patched per tile this session, for the probe. */
 const authoredMerged = new Map<string, number>();
+const authoredPatched = new Map<string, number>();
+/** Hand-shaped DEM cells per TERRAIN tile, local metres and absolute height,
+ *  written into the raster as the tile arrives (or now, if it already has).
+ *  Cleared on a hop with everything else in local metres. */
+const authoredDemByTile = new Map<string, Array<[number, number, number]>>();
+let authoredDemCells = 0;
+/** Write the cells into the height raster: the same cell the lab's brush
+ *  writes, the sample centred at xs + (i + 0.5)·w/256. */
+function applyAuthoredDem(tile: HeightTile, cells: Array<[number, number, number]>): number {
+  let n = 0;
+  for (const [x, z, h] of cells) {
+    const ix = Math.floor(((x - tile.xs) / tile.w) * 256), iz = Math.floor(((z - tile.zs) / tile.h) * 256);
+    if (ix < 0 || ix > 255 || iz < 0 || iz > 255) continue;
+    tile.data[iz * 256 + ix] = h;
+    n++;
+  }
+  return n;
+}
+function fileAuthoredDems(dems: Array<[number, number, number]>): void {
+  const landed = new Set<string>();
+  for (const [lat, lon, h] of dems) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(h)) continue;
+    const [x, z] = toLocal(lat, lon);
+    const [tx, ty] = tileAt(lat, lon, TERRAIN_Z);
+    const key = `${tx}/${ty}`;
+    let arr = authoredDemByTile.get(key);
+    if (!arr) authoredDemByTile.set(key, (arr = []));
+    arr.push([x, z, h]);
+    authoredDemCells++;
+    landed.add(key);
+  }
+  // Tiles already in: written now, re-mirrored and rebuilt like a brush stroke.
+  const changed: string[] = [];
+  for (const key of landed) {
+    const tile = heightTiles.get(key);
+    if (tile && applyAuthoredDem(tile, authoredDemByTile.get(key) ?? [])) changed.push(key);
+  }
+  if (changed.length) demTilesChanged(changed);
+}
 function loadAuthoredIndex(force = false): Promise<void> {
   if (!authoredOn || FIXTURE) return Promise.resolve();
   if (authoredIndexP && !force) return authoredIndexP;
@@ -29440,35 +29583,52 @@ function loadAuthoredIndex(force = false): Promise<void> {
   })();
   return authoredIndexP;
 }
-async function authoredWays(x: number, y: number): Promise<OsmWay[]> {
+const NO_BLOB: AuthoredBlob = { ways: [], patch: {}, dems: [] };
+async function authoredBlob(x: number, y: number): Promise<AuthoredBlob> {
   await loadAuthoredIndex();
   const key = `${OSM_Z}/${x}/${y}`;
   const row = authoredIndex?.tiles[key];
-  if (!row) return [];
+  if (!row) return NO_BLOB;
   const mk = `${key}@${row.rev}`;
   let p = authoredMemo.get(mk);
   if (!p) {
     p = (async () => {
       try {
         const r = await fetch(`${CELL_BASE}/~/authored/v1/${key}/${row.rev}`);
-        if (!r.ok) return [];
-        const j = (await r.json()) as { ways?: OsmWay[] } | null;
+        if (!r.ok) return NO_BLOB;
+        const j = (await r.json()) as Partial<AuthoredBlob> | null;
         const ways = (j?.ways ?? []).filter((w) => w && typeof w.id === 'number' && Array.isArray(w.geometry) && w.geometry.length > 0);
+        const patch = j?.patch && typeof j.patch === 'object' ? j.patch : {};
+        const dems = Array.isArray(j?.dems) ? j.dems : [];
         authoredMerged.set(key, ways.length);
-        return ways;
-      } catch { authoredMemo.delete(mk); return []; }
+        if (dems.length) fileAuthoredDems(dems);
+        return { ways, patch, dems };
+      } catch { authoredMemo.delete(mk); return NO_BLOB; }
     })();
     authoredMemo.set(mk, p);
   }
   return p;
 }
-/** The tile's own ways plus whatever was authored for it. The list identity
- *  changes only when there IS an entry, so `proxyStale` and every other
- *  WeakMap keyed on the raw list keep working for the tiles that have none. */
+/** The tile's own ways, patched where the entry amends one by id, plus
+ *  whatever was authored for it. The list identity changes only when there
+ *  IS an entry, so `proxyStale` and every other WeakMap keyed on the raw
+ *  list keep working for the tiles that have none. */
 async function withAuthored(x: number, y: number, ways: OsmWay[]): Promise<OsmWay[]> {
   if (!authoredOn || FIXTURE) return ways;
-  const extra = await authoredWays(x, y);
-  return extra.length ? ways.concat(extra) : ways;
+  const b = await authoredBlob(x, y);
+  let out = ways;
+  const ids = Object.keys(b.patch);
+  if (ids.length) {
+    let patched = 0;
+    const next = ways.map((w) => {
+      const p = b.patch[String(w.id)];
+      if (!p) return w;
+      patched++;
+      return { ...w, tags: { ...(w.tags ?? {}), ...p } };
+    });
+    if (patched) { out = next; authoredPatched.set(`${OSM_Z}/${x}/${y}`, patched); }
+  }
+  return b.ways.length ? out.concat(b.ways) : out;
 }
 /** The world in place again, through the tile filter — what the BUILT WORLD
  *  and AUTHORED dials do when tapped, and what a fresh entry needs. */
@@ -29488,21 +29648,33 @@ function rebuildInPlace(): void {
  * refreshes the index and rebuilds the world in place so the entry shows.
  */
 type AuthoredInput = { tags: Record<string, string>; geometry?: Array<{ lat: number; lon: number }>; pts?: Array<[number, number]> };
-async function authoredBank(input: AuthoredInput[], opts: { tile?: string; dry?: boolean } = {}): Promise<object> {
-  const byTile = new Map<string, Array<{ tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }>>();
-  for (const w of input) {
+/** An entry to file: ways (lat/lon or local `pts`), tag patches by osm id
+ *  (these need `opts.tile`, an id carries no position), and DEM cells as
+ *  `[lat, lon, metres]` or `[x, z, metres]` local with `local: true`. */
+type AuthoredPayload = { ways?: AuthoredInput[]; patch?: Record<string, Record<string, string>>; dems?: Array<[number, number, number]>; local?: boolean };
+type AuthoredBody = { tile: string; ways: Array<{ tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }>; patch: Record<string, Record<string, string>>; dems: Array<[number, number, number]> };
+async function authoredBank(input: AuthoredInput[] | AuthoredPayload, opts: { tile?: string; dry?: boolean } = {}): Promise<object> {
+  const payload: AuthoredPayload = Array.isArray(input) ? { ways: input } : input;
+  const tileOf = (lat: number, lon: number): string => { const [tx, ty] = tileAt(lat, lon, OSM_Z); return `${OSM_Z}/${tx}/${ty}`; };
+  const byTile = new Map<string, AuthoredBody>();
+  const bodyFor = (t: string): AuthoredBody => { let b = byTile.get(t); if (!b) byTile.set(t, (b = { tile: t, ways: [], patch: {}, dems: [] })); return b; };
+  for (const w of payload.ways ?? []) {
     const geometry = w.geometry ?? (w.pts ?? []).map(([x, z]) => { const [lat, lon] = localToLatLon(x, z); return { lat, lon }; });
     if (!geometry.length) continue;
-    const tiles = opts.tile ? [opts.tile] : [...new Set(geometry.map((g) => { const [tx, ty] = tileAt(g.lat, g.lon, OSM_Z); return `${OSM_Z}/${tx}/${ty}`; }))];
-    for (const t of tiles) {
-      let arr = byTile.get(t);
-      if (!arr) byTile.set(t, (arr = []));
-      arr.push({ tags: w.tags, geometry });
-    }
+    const tiles = opts.tile ? [opts.tile] : [...new Set(geometry.map((g) => tileOf(g.lat, g.lon)))];
+    for (const t of tiles) bodyFor(t).ways.push({ tags: w.tags, geometry });
+  }
+  if (payload.patch && Object.keys(payload.patch).length) {
+    if (!opts.tile) return { error: 'a patch needs opts.tile — an osm id carries no position' };
+    Object.assign(bodyFor(opts.tile).patch, payload.patch);
+  }
+  for (const c of payload.dems ?? []) {
+    const [lat, lon] = payload.local ? localToLatLon(c[0], c[1]) : [c[0], c[1]];
+    bodyFor(opts.tile ?? tileOf(lat, lon)).dems.push([lat, lon, c[2]]);
   }
   const out: Record<string, unknown> = {};
-  for (const [tile, ways] of byTile) {
-    out[tile] = opts.dry ? { ways: ways.length } : await sync.author({ tile, ways });
+  for (const [tile, body] of byTile) {
+    out[tile] = opts.dry ? { ways: body.ways.length, patched: Object.keys(body.patch).length, dems: body.dems.length } : await sync.author(body);
   }
   if (!opts.dry && byTile.size) {
     authoredMemo.clear();
@@ -35929,7 +36101,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     tileStats.clear(); surveyedCache.clear();
     // The store's index may have moved since boot (an entry filed from
     // another tab, or this one); a hop is the one moment to ask again.
-    authoredMemo.clear(); authoredMerged.clear(); void loadAuthoredIndex(true);
+    authoredMemo.clear(); authoredMerged.clear(); authoredPatched.clear(); authoredDemByTile.clear(); authoredDemCells = 0; void loadAuthoredIndex(true);
     unbuilt = 0; osmFails = 0; osmDown = false;
     // ── THE MINIMAP IS PAINTED PIXELS, AND PIXELS ARE NOT A LIST ──
     //
@@ -37927,11 +38099,14 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
   rev: authoredIndex?.rev ?? null,
   tiles: authoredIndex ? Object.keys(authoredIndex.tiles).length : null,
   merged: Object.fromEntries(authoredMerged),
+  patched: Object.fromEntries(authoredPatched),
+  demCells: authoredDemCells,
+  stacks: [...plinthsByTile.values()].flat().filter((P, i, a) => a.indexOf(P) === i).map((P) => ({ pts: P.pts.length, height: P.height, top: P.top ?? null })),
 });
 /** File (or, with `[]` and a `tile`, retract) an authored entry — see authoredBank. */
-(window as unknown as { __authoredBank?: object }).__authoredBank = (ways: AuthoredInput[], opts?: { tile?: string; dry?: boolean }): Promise<object> =>
-  opts?.tile && !ways.length ? sync.author({ tile: opts.tile, ways: [] }).then(async (r) => { authoredMemo.clear(); await loadAuthoredIndex(true); rebuildInPlace(); return r; })
-    : authoredBank(ways, opts);
+(window as unknown as { __authoredBank?: object }).__authoredBank = (input: AuthoredInput[] | AuthoredPayload, opts?: { tile?: string; dry?: boolean }): Promise<object> =>
+  opts?.tile && Array.isArray(input) && !input.length ? sync.author({ tile: opts.tile, ways: [] }).then(async (r) => { authoredMemo.clear(); await loadAuthoredIndex(true); rebuildInPlace(); return r; })
+    : authoredBank(input, opts);
 (window as unknown as { __plots?: object }).__plots = (): object =>
   [...new Set([...plotGrid.values()].flat())].map((pts) => {
     let cx = 0, cz = 0;
@@ -59352,9 +59527,67 @@ let toastT = 0;
  * exists to remove. These are the same live objects the game is drawing with,
  * not copies.
  */
+/**
+ * THE HEIGHT RASTER CHANGED UNDER A BUILT TILE — by the lab's brush or by an
+ * authored entry landing after the tile did. The same fan-out either way:
+ * re-mirror the raster to the worker, expire the ocean masks and normal
+ * caches that read it, rebuild the tile and its four neighbours, and let the
+ * ground scatter re-seat.
+ */
+function demTilesChanged(tileKeys: string[]): void {
+  if (!tileKeys.length) return;
+  const dirty = new Set<string>();
+  const expireNormal = (key: string): void => {
+    const normal = terrainNormals.get(key);
+    if (normal) terrainNormalInputs.delete(normal);
+  };
+  const expireOceanAt = (tile: HeightTile): void => {
+    for (const [coverKey, cover] of coverTiles) {
+      if (cover.xs > tile.xs + tile.w || cover.zs > tile.zs + tile.h
+        || cover.xs + cover.w < tile.xs || cover.zs + cover.h < tile.zs) continue;
+      oceanMasks.delete(coverKey);
+      const [cx, cy] = coverKey.split('/').map(Number);
+      for (const neighbour of [`${cx - 1}/${cy}`, `${cx + 1}/${cy}`, `${cx}/${cy - 1}`, `${cx}/${cy + 1}`]) oceanMasks.delete(neighbour);
+    }
+  };
+  for (const key of tileKeys) {
+    const tile = heightTiles.get(key);
+    if (!tile) continue;
+    tworker?.remirrorHeight(key, tile);
+    expireOceanAt(tile);
+    if (hydroRev.has(key)) hydroDirty.add(key);
+    const [tx, ty] = key.split('/').map(Number);
+    for (const candidate of [key, `${tx - 1}/${ty}`, `${tx + 1}/${ty}`, `${tx}/${ty - 1}`, `${tx}/${ty + 1}`]) {
+      dirty.add(candidate);
+      expireNormal(candidate);
+    }
+  }
+  for (const key of dirty) markTerrainDirty(key, 'author-dem');
+  vegAt = 0;
+  swardAt = 0;
+  swardGroundSeen = Number.MIN_SAFE_INTEGER;
+  swardFieldAt = 0;
+}
 if (embeddedLab(location.pathname)?.slug === 'world-edit') {
   const coverEditor = new RasterPaintSession();
   const demEditor = new DemPaintSession();
+  /**
+   * THE BRUSH'S WORK AS AN AUTHORED ENTRY. Every cell the session has moved
+   * from what the raster delivered, as `[lat, lon, metres]`, filed through
+   * the store under the z16 tile each cell falls in (`dry` only lists). This
+   * is how a stack stops being a drum: shaped here, banked there, and written
+   * back into the raster for everyone as their tile arrives.
+   */
+  (window as unknown as { __authoredDem?: object }).__authoredDem = (opts: { dry?: boolean } = {}): Promise<object> => {
+    const dems: Array<[number, number, number]> = [];
+    for (const e of demEditor.edits()) {
+      const ix = e.index % 256, iz = Math.floor(e.index / 256);
+      const x = e.tile.xs + ((ix + 0.5) / 256) * e.tile.w, z = e.tile.zs + ((iz + 0.5) / 256) * e.tile.h;
+      const [lat, lon] = localToLatLon(x, z);
+      dems.push([lat, lon, e.after]);
+    }
+    return authoredBank({ dems }, { dry: opts.dry });
+  };
   const editableCoverTiles = (): EditableRasterTile[] =>
     [...coverTiles].map(([key, tile]) => ({
       key,
@@ -59436,49 +59669,7 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
    * mirrored copy, the normal cache keys by array identity, hydro has already
    * sampled this floor, and vegetation has already been draped over it.
    */
-  const invalidateDemEdits = (result: { tileKeys: string[] }): void => {
-    if (!result.tileKeys.length) return;
-    const dirty = new Set<string>();
-    const expireNormal = (key: string): void => {
-      const normal = terrainNormals.get(key);
-      // Keep the live material's texture valid until its replacement lands;
-      // deleting the cache input makes terrainNormalFor dispose and rebuild it
-      // atomically in terrainMatFor.
-      if (normal) terrainNormalInputs.delete(normal);
-    };
-    const expireOceanAt = (tile: HeightTile): void => {
-      for (const [coverKey, cover] of coverTiles) {
-        if (cover.xs > tile.xs + tile.w || cover.zs > tile.zs + tile.h
-          || cover.xs + cover.w < tile.xs || cover.zs + cover.h < tile.zs) continue;
-        oceanMasks.delete(coverKey);
-        const [cx, cy] = coverKey.split('/').map(Number);
-        for (const neighbour of [
-          `${cx - 1}/${cy}`, `${cx + 1}/${cy}`, `${cx}/${cy - 1}`, `${cx}/${cy + 1}`,
-        ]) oceanMasks.delete(neighbour);
-      }
-    };
-    for (const key of result.tileKeys) {
-      const tile = heightTiles.get(key);
-      if (!tile) continue;
-      tworker?.remirrorHeight(key, tile);
-      expireOceanAt(tile);
-      if (hydroRev.has(key)) hydroDirty.add(key);
-      const [tx, ty] = key.split('/').map(Number);
-      for (const candidate of [
-        key,
-        `${tx - 1}/${ty}`, `${tx + 1}/${ty}`,
-        `${tx}/${ty - 1}`, `${tx}/${ty + 1}`,
-      ]) {
-        dirty.add(candidate);
-        expireNormal(candidate);
-      }
-    }
-    for (const key of dirty) markTerrainDirty(key, 'author-dem');
-    vegAt = 0;
-    swardAt = 0;
-    swardGroundSeen = Number.MIN_SAFE_INTEGER;
-    swardFieldAt = 0;
-  };
+  const invalidateDemEdits = (result: { tileKeys: string[] }): void => demTilesChanged(result.tileKeys);
   const applyDem = (
     operation: () => { changed: number; tileKeys: string[] },
   ): { changed: number; tileKeys: string[] } => {

@@ -69,7 +69,7 @@ for (const refine of [false, true]) {
   const stack = build({}, refine);
   check(Math.abs(ctl.at(120, 120).y) < 1e-6, `the control is the flat sea bed (centre: ${ctl.at(120, 120).y.toFixed(1)} m)`);
   check(Math.abs(stack.at(120, 120).y - H) < 0.5, `inside the ring the ground stands at the height (centre: ${stack.at(120, 120).y.toFixed(1)} m)`);
-  check(Math.abs(stack.at(110, 130).y - H) < 0.5, `…all the way to the ring (x 110 z 130: ${stack.at(110, 130).y.toFixed(1)} m)`);
+  check(Math.abs(stack.at(110, 130).y - H) < 0.5, `…out to the rounding (x 110 z 130: ${stack.at(110, 130).y.toFixed(1)} m)`);
   check(Math.abs(stack.at(180, 120).y) < 1e-6 && Math.abs(stack.at(120, 60).y) < 1e-6,
     `the sea beyond the ring is untouched (x 180: ${stack.at(180, 120).y.toFixed(1)}, z 60: ${stack.at(120, 60).y.toFixed(1)})`);
   const inside = stack.at(120, 120), outside = stack.at(180, 120);
@@ -79,6 +79,12 @@ for (const refine of [false, true]) {
     check(hi.d < 0.05 && lo.d < 0.05, `the creases put vertices a hair either side of the ring (${hi.d.toFixed(2)} / ${lo.d.toFixed(2)} m off)`);
     check(hi.y - lo.y > H * 0.9, `…and the face between them is a wall: ${hi.y.toFixed(1)} → ${lo.y.toFixed(1)} over 1.2 m`);
   }
+  // The crown given outright — a stack whose top was read off the mainland.
+  const told = build({ plinths: () => [{ pts: RING.pts, height: NaN, top: 52 }] }, refine);
+  check(Math.abs(told.at(120, 120).y - 52) < 0.5, `a ring with a stated crown stands at it, height or no height (centre: ${told.at(120, 120).y.toFixed(1)} m)`);
+  // Not a drum: the crown rounds off toward the ring.
+  const edge = stack.at(101.5, 120).y, mid = stack.at(120, 120).y;
+  check(mid - edge > 2 && mid - edge < 4.5, `the crown rounds toward the edge (centre ${mid.toFixed(1)}, 1.5 m in ${edge.toFixed(1)})`);
   const onHill = build({ sampleHeight: hill, sampleHeightRaw: hill,
     heights: new Map([['0/0', { ...TILE, data: Float32Array.from({ length: 256 * 256 }, (_, i) => hill(((i % 256) / 255) * W)) }]]) }, refine);
   check(Math.abs(onHill.at(120, 120).y - (hill(120) + H)) < 1.5, `a ring on a hill rises from the hill (centre: ${onHill.at(120, 120).y.toFixed(1)} m, hill ${hill(120).toFixed(1)} + ${H})`);
