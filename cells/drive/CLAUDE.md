@@ -18847,3 +18847,44 @@ from the raster as 25.2 where it had been 4.1 (bilinear across 9.5 m
 cells) and the mesh as 10.9 — one spiked cell is smoothed by the bank and
 the lattice, as a one-cell spike should be; a brush stroke is 177 cells
 (`authored-dem-export.test.mjs`).
+
+## The world lab on a phone: a bar, a sheet, the chart, and a second finger
+
+Measured on a 390 × 844 viewport before: the lab's panel was 330 px wide
+and seven rows tall over the top half of the world, the game's hub menu
+open beneath it, the raster painted through a perspective pick from the
+seat. Now the lab is a BAR along the bottom — COVER · 2D/3D · PAINT ·
+brush · ⋯ — 56 px of thumb-sized chips, and a SHEET that slides up over it
+for the sliders, the selects (same ids, so the probes and the suite still
+drive them), UNDO, RESET, BANK and the report. One hint line above the bar
+says what a finger does now.
+
+**The chart is the painting surface.** A raster opens on the game's own
+top camera with the layer's DATA view showing (`setChart`: `setCam('top')`,
+`setGroundView('cover' | 'elevation')`); 3D is one tap and comes back with
+the game view, because the result is judged as the player sees it. **The
+game's chrome is off while the lab is up** — `menu.close()`, the `clean`
+class on the body, `hudOn` false — through the runtime, NOT `setClean`,
+which would remember the choice in localStorage for the game. FOLD gives
+it all back; AUTHOR (bottom right) takes it again. **The lab's opening
+waits for `#boot.ready`**: the boot applies the URL's `cam=` and opens the
+hub after the overlay is up, and asked before it the lab reported
+`chart: false` and `menu-open` on its first frame.
+
+**One finger paints; a second pans.** The chart's pan and pinch are gated
+off while the lab owns input, so on a phone every finger was a brush. A
+second pointer now cancels the stroke in flight, hands both pointers to
+the chart (`chartGrab`: into `panPtrs` with the grabbed ground's plane
+height, exactly as pointerdown would) and sets `authoringPan`, which the
+move and up gates honour; nothing paints until every finger is up. A
+wheel over an armed chart zooms it. **BANK** files the layer's work
+through the store — ELEV as `dems`, ROADS as `ways` with `highway=` and
+`width=` — and says what it did in the hint line; LAND COVER has no store
+kind yet and says so.
+
+`lab-phone.test.mjs`: opens on the chart in the data view, hub closed and
+chrome hidden, the bar under a sixth of the screen, 3D one tap and back,
+PAINT arms, one finger paints (18 cells of farmland), a second finger sets
+panning and the stroke stops, FOLD returns the chrome. `lab.test.mjs`
+could not run here (the ez-tree package is not installed in this
+container; its bundle step fails before any assertion).

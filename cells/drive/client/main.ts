@@ -45439,6 +45439,9 @@ const DITHER_PATS = ['bayer4', 'bayer8', 'check', 'grain', 'lines', 'bayer16', '
  * editor owns the canvas and the game must not create persistent stick, pan,
  * brake or keyboard state underneath the stroke. */
 let authoringInputCaptured = false;
+/** The lab is armed but a second finger is on the chart: the chart's own
+ *  pan and pinch take the pointers the lab hands over (chartGrab). */
+let authoringPan = false;
 const keys = new Set<string>();
 addEventListener('keydown', (e) => { if (!authoringInputCaptured) keys.add(e.key.toLowerCase()); });
 addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); });
@@ -45724,7 +45727,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 canvas.addEventListener('pointermove', (e) => {
-  if (authoringInputCaptured) return;
+  if (authoringInputCaptured && !authoringPan) return;
   if (chartLensMove(e)) return;
   if (rewindMove(e)) return;
   if (clockMove(e)) return;
@@ -45826,7 +45829,8 @@ canvas.addEventListener('pointermove', (e) => {
   panPtrs.set(e.pointerId, cur);
 });
 addEventListener('wheel', (e) => {
-  if (authoringInputCaptured) { e.preventDefault(); return; }
+  // A wheel over an armed chart still zooms it: the brush needs a scale.
+  if (authoringInputCaptured && camMode !== 'top') { e.preventDefault(); return; }
   if (camMode !== 'top') return;
   zoomT = clamp(zoomT * Math.exp(e.deltaY * 0.0012), ZOOM_MIN, ZOOM_MAX);
   e.preventDefault();
@@ -46307,7 +46311,7 @@ const tapCanMark = (e: PointerEvent): boolean => {
   return e.clientY < innerHeight * 0.5;
 };
 const endStick = (e: PointerEvent): void => {
-  if (authoringInputCaptured) return;
+  if (authoringInputCaptured && !authoringPan) return;
   // Taken by an instrument on the down — see hudPtrs. Deleted whatever the
   // event type, so a cancel clears it too; `lastUp` is set so the window's
   // copy of the same up (this handler is on both) does not ask the chart.
@@ -46414,9 +46418,24 @@ addEventListener('blur', () => {
   stick = null; brakeId = null; lift = null; chartLensDrag = null;
   panPtrs.clear(); keys.clear(); updateStickHome();
 });
+/** A pointer the lab hands to the chart mid-gesture: registered as a pan
+ *  finger exactly as pointerdown would have, plane height and all. */
+function authoringChartGrab(pointerId: number, clientX: number, clientY: number): void {
+  if (camMode !== 'top') return;
+  if (panPtrs.size) { globeVelLat = globeVelLon = 0; globeVelAt = 0; }
+  panPtrs.set(pointerId, { x: clientX, y: clientY });
+  if (panPtrs.size === 1) {
+    const [gx, gz] = globeFree() ? [viewX() + panX, viewZ() + panZ] : chartToWorld(clientX, clientY);
+    panY = chartGround(gx, gz);
+  }
+}
+function setAuthoringPanning(on: boolean): void {
+  authoringPan = on;
+  if (!on) { panPtrs.clear(); panY = null; }
+}
 function setAuthoringInputCaptured(on: boolean): void {
   authoringInputCaptured = on;
-  if (!on) return;
+  if (!on) { authoringPan = false; return; }
   stick = null;
   brakeId = null;
   lift = null;
@@ -59970,6 +59989,35 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     const restored = roadEditor.load(JSON.parse(localStorage.getItem(roadStorageKey) ?? '[]'));
     for (const feature of restored) void buildAuthoredRoad(feature);
   } catch { /* malformed or unavailable local storage starts empty */ }
+  /** The brush's cells as a `dems` entry, or the lab's roads as `ways`. */
+  const bankLayer = async (layerId: string, dry: boolean): Promise<string> => {
+    if (layerId === 'dem') {
+      const dems: Array<[number, number, number]> = [];
+      for (const e of demEditor.edits()) {
+        const ix = e.index % 256, iz = Math.floor(e.index / 256);
+        const x = e.tile.xs + ((ix + 0.5) / 256) * e.tile.w, z = e.tile.zs + ((iz + 0.5) / 256) * e.tile.h;
+        const [lat, lon] = localToLatLon(x, z);
+        dems.push([lat, lon, e.after]);
+      }
+      if (!dems.length) return 'NOTHING SHAPED YET';
+      const r = await authoredBank({ dems }, { dry }) as Record<string, { ok?: boolean; why?: string; dems?: number }>;
+      const tiles = Object.entries(r);
+      const bad = tiles.find(([, v]) => v.ok === false);
+      return bad ? (bad[1].why ?? 'REFUSED') : `${dry ? 'WOULD BANK' : 'BANKED'} ${dems.length} CELLS IN ${tiles.length} TILE${tiles.length === 1 ? '' : 'S'}`;
+    }
+    if (layerId === 'road') {
+      const ways = roadEditor.snapshot().filter((f) => f.points.length >= 2).map((f) => ({
+        tags: { highway: f.value, width: String(f.widthM), 'drive:authored': 'lab' },
+        pts: f.points.map(([x, z]) => [x, z] as [number, number]),
+      }));
+      if (!ways.length) return 'NO ROADS DRAWN YET';
+      const r = await authoredBank({ ways }, { dry }) as Record<string, { ok?: boolean; why?: string }>;
+      const tiles = Object.entries(r);
+      const bad = tiles.find(([, v]) => v.ok === false);
+      return bad ? (bad[1].why ?? 'REFUSED') : `${dry ? 'WOULD BANK' : 'BANKED'} ${ways.length} ROAD${ways.length === 1 ? '' : 'S'} IN ${tiles.length} TILE${tiles.length === 1 ? '' : 'S'}`;
+    }
+    return 'LAND COVER HAS NO STORE KIND YET';
+  };
   startWorldAuthoringLab({
     canvas,
     worldAt: (clientX, clientY) => chartToWorld(clientX, clientY),
@@ -59977,6 +60025,19 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     setInputCaptured: setAuthoringInputCaptured,
     setPreviews: (previews) => { authoringPreviews = previews; },
     layers: [coverLayer, demLayer, roadLayer],
+    setChart: (on) => { if (on) { if (camMode !== 'top') setCam('top'); } else if (camMode === 'top') setCam(lastPov); },
+    isChart: () => camMode === 'top',
+    // The menu, the dock and the HUD's DOM off while the lab is up — NOT
+    // through setClean, which would remember the choice for the game.
+    setChrome: (on) => {
+      if (!on) menu.close();
+      document.body.classList.toggle('clean', !on);
+      hudOn = on;
+      if (on) updateStickHome();
+    },
+    chartGrab: authoringChartGrab,
+    setPanning: setAuthoringPanning,
+    bank: bankLayer,
   });
 }
 (window as unknown as { __ctx?: object }).__ctx = {
