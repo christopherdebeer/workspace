@@ -377,8 +377,14 @@ function serveWebAsset(path: string) {
  * an unclean answer is never banked in the first place.
  *
  *   v4: water relations
+ *   v5: mapped constructed areas — `amenity=parking` and `area=yes`
+ *       surfaces, which the client's constructed-ground painter reads. The
+ *       client's OSM_TILE_V was bumped to 5 with that painter and this side
+ *       was not: every `/~/osm/v5/` ask then 404'd at TILE_RE and every near
+ *       tile fell through to the client's own Overpass fallback — slow, and a
+ *       third party the whole fine layer then depends on. Bump BOTH, always.
  */
-const TILE_V = 4;
+const TILE_V = 5;
 const TILE_RE = new RegExp(`^/~/osm/v[2-${TILE_V}]/(\\d{1,2})/(\\d{1,7})/(\\d{1,7})$`);
 const COVER_RE = /^\/~\/cover\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // THREE upstreams, not one. Measured on a 12km corridor through Death Valley:
@@ -1482,6 +1488,8 @@ function overpassQuery(z: number, x: number, y: number): string {
   return `[out:json][timeout:15];(
       way["highway"](${bbox});
       way["building"](${bbox});
+      way["amenity"="parking"](${bbox});
+      way["area"="yes"]["surface"](${bbox});
       way["natural"~"water|coastline|cliff|scrub|wetland|bare_rock|sand"](${bbox});
       way["waterway"~"riverbank|river|stream|canal"](${bbox});
       relation["natural"="water"](${bbox});
