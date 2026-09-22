@@ -37,12 +37,15 @@ await snap('glass-wpt-on');
 await d.page.evaluate(() => window.__dial('poi', 0));
 
 await d.page.evaluate(() => window.__dial('auto', 1));
-// AUTO and HOLD live in the deck's DRIVE sheet now (client/hud-deck.ts): a
-// second tap on DRIVE opens it, and the buttons are clicked where a thumb
+// AUTO and HOLD live on the deck's baseline strip (client/hud-deck.ts), up
+// while no layout is, and the chips are clicked where a thumb
 // would land on them, so a control covered by something else fails here.
 const tapDeck = async (id) => {
-  if ((await d.page.evaluate(() => window.__deck().open)) !== 'drive') {
-    await d.page.evaluate(() => window.__deck('drive'));
+  // AUTO and HOLD are the BASELINE's controls: the strip over the row shows
+  // only with no layout up, so lower whatever is up first.
+  const act = await d.page.evaluate(() => window.__deck().active);
+  if (act) {
+    await d.page.evaluate((a) => window.__deck(a), act);
     await d.page.waitForTimeout(1500);
   }
   await d.page.evaluate((i) => {

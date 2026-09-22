@@ -58,12 +58,15 @@ check('there is a road under the truck to drive', !!road?.way?.on, road);
 // is the one nobody would notice was broken.
 const dials = await d.page.evaluate(() => window.__dial('auto', 1));
 check('the AUTOPILOT dial offers the tab', dials.auto === 'HUD TAB', dials.auto);
-// Tapped where a thumb lands on the deck's AUTO button (the DRIVE sheet,
+// Tapped where a thumb lands on the deck's AUTO chip (the baseline strip,
 // client/hud-deck.ts) — found by elementFromPoint, so a button covered by
 // something else fails here rather than being clicked through its handler.
 const tapAuto = async () => {
-  if ((await d.page.evaluate(() => window.__deck().open)) !== 'drive') {
-    await d.page.evaluate(() => window.__deck('drive'));
+  // AUTO and HOLD are the BASELINE's controls: the strip over the row shows
+  // only with no layout up, so lower whatever is up first.
+  const act = await d.page.evaluate(() => window.__deck().active);
+  if (act) {
+    await d.page.evaluate((a) => window.__deck(a), act);
     await d.page.waitForTimeout(1500);
   }
   return d.page.evaluate(() => {

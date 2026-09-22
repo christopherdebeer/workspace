@@ -38833,7 +38833,11 @@ function aimFocus(): void {
   // against the wrong one of them is how the first cut went wrong. See
   // TILT_PRESETS.
   const half = Math.max(1, pixSize.y) / 2;
-  const chartScale = camMode === 'top' ? 1 + (chartBandScale - 1) * lensK : 1;
+  // THE BAND RAIL (CAM's right rail) scales the band in every camera the band
+  // draws in — the chart, the chase seat and the drone alike, so the lens you
+  // set is the lens you keep when you take off. The cab and god are exempt
+  // above, so the scale has nothing to act on there.
+  const chartScale = camMode === 'top' ? 1 + (chartBandScale - 1) * lensK : chartBandScale;
   const sharpPx = tiltOver.sharp ?? band.sharp * half * chartScale;
   u.uTiltSharp.value = sharpPx;
   u.uTiltBlur.value = Math.max(tiltOver.blur ?? band.blur * half * chartScale, sharpPx + 1);
@@ -45702,52 +45706,96 @@ const setStickFrom = (e: PointerEvent): void => {
   stick.dx = len ? (rx / len) * mag : 0;
   stick.dy = len ? (ry / len) * mag : 0;
 };
-type ChartLensControl = 'tilt' | 'band';
+/**
+ * THE RAILS: the two edge sliders a layout puts on the glass. CAM owns the
+ * chart's TILT (left, chart only) and the miniature BAND (right); DRONE owns
+ * the commanded ALTITUDE (left) and the camera's PITCH (right). The edges are
+ * free for them because the ENV and RIG gauges stand only in the RIG layout.
+ * Canvas, not DOM, because a rail is an instrument as much as a control: its
+ * position IS the reading.
+ */
+type RailKind = 'tilt' | 'band' | 'alt' | 'gimbal';
+type ChartLensControl = RailKind;
 type HudRect = { x: number; y: number; w: number; h: number };
+const railRects: Record<'left' | 'right', { kind: RailKind | null; r: HudRect }> = {
+  left: { kind: null, r: { x: 0, y: 0, w: 0, h: 0 } },
+  right: { kind: null, r: { x: 0, y: 0, w: 0, h: 0 } },
+};
+/** Kept for `__chartlens`, which reports the lens rails where they are. */
 let chartTiltRect: HudRect = { x: 0, y: 0, w: 0, h: 0 };
 let chartBandRect: HudRect = { x: 0, y: 0, w: 0, h: 0 };
-let chartLensDrag: { id: number; kind: ChartLensControl } | null = null;
+let railDrag: { id: number; kind: RailKind } | null = null;
 const CHART_SLIDER_HEAD = 20, CHART_SLIDER_FOOT = 4;
+/** The drone camera's depression below the horizon, in degrees; null is each
+ *  view's own default (the nose looks 23°, the trailing camera 19°). */
+let droneGimbalDeg: number | null = null;
+const GIMBAL_MIN = 4, GIMBAL_MAX = 80;
+const droneDepressionDeg = (): number => droneGimbalDeg ?? (droneNose() ? 23.4 : 19.1);
 function chartSliderTrack(r: HudRect): { top: number; bottom: number } {
   return { top: r.y + CHART_SLIDER_HEAD, bottom: r.y + r.h - CHART_SLIDER_FOOT };
 }
-function chartLensSet(kind: ChartLensControl, clientY: number): void {
-  const r = kind === 'tilt' ? chartTiltRect : chartBandRect;
-  const tr = chartSliderTrack(r);
-  const f = clamp(1 - (clientY / hudS - tr.top) / Math.max(1, tr.bottom - tr.top), 0, 1);
-  if (kind === 'tilt') chartTiltDeg = CHART_TILT_MIN + f * (CHART_TILT_MAX - CHART_TILT_MIN);
-  else {
-    chartBandScale = CHART_BAND_MIN + f * (CHART_BAND_MAX - CHART_BAND_MIN);
-    // The band uniforms are otherwise refreshed once per frame. Write them now
-    // so a held thumb and the glass move together even on a slow debug frame.
-    aimFocus();
+/** A rail's value as a fraction of its travel, top = 1. */
+function railFrac(kind: RailKind): number {
+  switch (kind) {
+    case 'tilt': return (chartTiltDeg - CHART_TILT_MIN) / (CHART_TILT_MAX - CHART_TILT_MIN);
+    case 'band': return (chartBandScale - CHART_BAND_MIN) / (CHART_BAND_MAX - CHART_BAND_MIN);
+    case 'alt': return (drone.alt - DRONE.LO) / (DRONE.HI - DRONE.LO);
+    // Up the rail is up the view: the top is the shallowest look.
+    case 'gimbal': return (GIMBAL_MAX - droneDepressionDeg()) / (GIMBAL_MAX - GIMBAL_MIN);
   }
 }
+function railSetFrac(kind: RailKind, f: number): void {
+  switch (kind) {
+    case 'tilt': chartTiltDeg = CHART_TILT_MIN + f * (CHART_TILT_MAX - CHART_TILT_MIN); return;
+    case 'band':
+      chartBandScale = CHART_BAND_MIN + f * (CHART_BAND_MAX - CHART_BAND_MIN);
+      // The band uniforms are otherwise refreshed once per frame. Write them now
+      // so a held thumb and the glass move together even on a slow debug frame.
+      aimFocus();
+      return;
+    case 'alt': drone.alt = DRONE.LO + f * (DRONE.HI - DRONE.LO); return;
+    case 'gimbal': droneGimbalDeg = GIMBAL_MAX - f * (GIMBAL_MAX - GIMBAL_MIN); return;
+  }
+}
+function railText(kind: RailKind): string {
+  switch (kind) {
+    case 'tilt': return `${Math.round(chartTiltDeg)} DEG`;
+    case 'band': return `${Math.round(chartBandScale * 100)}%`;
+    case 'alt': return `${Math.round(drone.alt)} M`;
+    case 'gimbal': return `-${Math.round(droneDepressionDeg())} DEG`;
+  }
+}
+const RAIL_LABEL: Record<RailKind, string> = { tilt: 'TILT', band: 'BAND', alt: 'ALT', gimbal: 'PITCH' };
+function railAt(clientY: number, kind: RailKind, r: HudRect): void {
+  const tr = chartSliderTrack(r);
+  railSetFrac(kind, clamp(1 - (clientY / hudS - tr.top) / Math.max(1, tr.bottom - tr.top), 0, 1));
+}
 function chartLensDown(e: PointerEvent): boolean {
-  if (camMode !== 'top' || menu.tab() !== null || document.body.classList.contains('clean')) return false;
+  if (menu.tab() !== null || document.body.classList.contains('clean')) return false;
   const x = e.clientX / hudS, y = e.clientY / hudS;
-  const hit = (r: HudRect): boolean =>
-    r.w > 0 && x >= r.x - 4 && x <= r.x + r.w + 4 && y >= r.y - 4 && y <= r.y + r.h + 4;
-  const kind: ChartLensControl | null = hit(chartTiltRect) ? 'tilt' : hit(chartBandRect) ? 'band' : null;
-  if (!kind) return false;
-  chartLensDrag = { id: e.pointerId, kind };
-  chartLensSet(kind, e.clientY);
-  return true;
+  for (const side of ['left', 'right'] as const) {
+    const { kind, r } = railRects[side];
+    if (!kind || r.w <= 0) continue;
+    if (x < r.x - 4 || x > r.x + r.w + 4 || y < r.y - 4 || y > r.y + r.h + 4) continue;
+    railDrag = { id: e.pointerId, kind };
+    railAt(e.clientY, kind, r);
+    return true;
+  }
+  return false;
 }
 function chartLensMove(e: PointerEvent): boolean {
-  if (chartLensDrag?.id !== e.pointerId) return false;
-  chartLensSet(chartLensDrag.kind, e.clientY);
+  if (railDrag?.id !== e.pointerId) return false;
+  const side = railRects.left.kind === railDrag.kind ? 'left' : 'right';
+  railAt(e.clientY, railDrag.kind, railRects[side].r);
   return true;
 }
 function chartLensUp(e: PointerEvent): boolean {
-  if (chartLensDrag?.id !== e.pointerId) return false;
-  const kind = chartLensDrag.kind;
-  chartLensDrag = null;
+  if (railDrag?.id !== e.pointerId) return false;
+  const kind = railDrag.kind;
+  railDrag = null;
   if (e.type === 'pointerup') {
     audio.stone();
-    hudFlash(kind === 'tilt'
-      ? `CHART TILT ${Math.round(chartTiltDeg)} DEG`
-      : `MINIATURE BAND ${Math.round(chartBandScale * 100)}%`);
+    hudFlash(`${RAIL_LABEL[kind]} ${railText(kind)}`);
   }
   return true;
 }
@@ -46513,7 +46561,7 @@ canvas.addEventListener('pointercancel', endStick);
 addEventListener('pointerup', endStick);
 addEventListener('pointercancel', endStick);
 addEventListener('blur', () => {
-  stick = null; brakeId = null; lift = null; chartLensDrag = null;
+  stick = null; brakeId = null; lift = null; railDrag = null;
   panPtrs.clear(); keys.clear(); updateStickHome();
 });
 /** A pointer the lab hands to the chart mid-gesture: registered as a pan
@@ -46537,7 +46585,7 @@ function setAuthoringInputCaptured(on: boolean): void {
   stick = null;
   brakeId = null;
   lift = null;
-  chartLensDrag = null;
+  railDrag = null;
   panPtrs.clear();
   panY = null;
   keys.clear();
@@ -47927,8 +47975,8 @@ function droneGroundFocus(): [number, number] {
   const g = groundAt(drone.x, drone.z);
   const nose = droneNose();
   const eyeY = nose ? drone.y - 0.35 : drone.y + 6.5;
-  const k = nose ? 30 / 13 : 39 / 13.5;
-  const lead = Math.min(Math.max(0, eyeY - g) * k, treeRange * 0.45);
+  const k = 1 / Math.tan((Math.max(GIMBAL_MIN, droneDepressionDeg()) * Math.PI) / 180);
+  const lead = Math.min(Math.max(0, (eyeY - g) * k - (nose ? 0 : 13)), treeRange * 0.45);
   return [drone.x + Math.sin(drone.heading) * lead, drone.z - Math.cos(drone.heading) * lead];
 }
 /** The POV you drive in (chase or cab) — what the chart returns you to, and
@@ -52235,14 +52283,19 @@ function tick(now: number): void {
     ovGroup.visible = false;
     themeGroup.visible = false;   // a thematic sheet is chart furniture
     const dfx = Math.sin(drone.heading), dfz = -Math.cos(drone.heading);
+    // THE PITCH IS THE DRONE LAYOUT'S RIGHT RAIL (droneGimbalDeg); unset,
+    // each view keeps the depression it always had — the nose 23.4°, the
+    // trailing camera 19.1° from its lens.
+    const dep = (droneDepressionDeg() * Math.PI) / 180;
+    const ch = Math.cos(dep), sh = Math.sin(dep);
     if (droneNose()) {
       setNear(0.3, 30000);
       camPos.set(drone.x, drone.y - 0.35, drone.z);
-      camAim.set(drone.x + dfx * 30, drone.y - 13, drone.z + dfz * 30);
+      camAim.set(camPos.x + dfx * ch * 32, camPos.y - sh * 32, camPos.z + dfz * ch * 32);
     } else {
       setNear(0.6, 30000);
       camPos.set(drone.x - dfx * 13, drone.y + 6.5, drone.z - dfz * 13);
-      camAim.set(drone.x + dfx * 26, drone.y - 7, drone.z + dfz * 26);
+      camAim.set(camPos.x + dfx * ch * 41, camPos.y - sh * 41, camPos.z + dfz * ch * 41);
     }
   } else if (camMode === 'cab') {
     // THE BACKDROP STANDS IN EVERY VIEW NOW. It was chart-and-drone only, on
@@ -56230,15 +56283,21 @@ function hudSafeRects(): Array<[number, number, number, number]> {
     [0, 32, 74, 18],                                 // the task chip, under the top row
     [HW - 56, 18, 56, 18],                           // MENU (or the layout's name), on the heading row
     [0, my - 2, mw + 6, HH - my + 2],                // the dock and the info lines under it
-    [db.x - 2, db.y - 10, db.w + 4, db.h + 12],      // the deck's tabs and the status line over them
+    [db.x - 2, db.y - 30, db.w + 4, db.h + 32],      // the deck's tabs, the base strip and the status line
+    [2, my - 11, mw + 4, 11],                         // the dock's tap hint
     [HW - 80, HH - 72, 80, 72],                      // dial, its radial lamps, trip
     [0, HH - 30, Math.round(HW * 0.72), 30],         // the place line and coordinates
   ];
-  // The ENV and RIG stacks are the driving layouts' edges; the chart's are
-  // clear (its tilt and band rails moved into the deck's sheets).
-  if (camMode !== 'top') rects.push([0, my - 200, 17, 200], [HW - 17, HH - 236, 17, 164]);
-  // VIEW's tagline hangs under the chip on the right.
-  if (deckLayout === 'view') rects.push([HW - 72, 36, 72, 50]);
+  // The edges belong to whichever layout is up: RIG's gauges, or the rails
+  // of CAM and DRONE.
+  if (deckActive === 'rig') rects.push([0, my - 208, 17, 208], [HW - 17, HH - 236, 17, 164]);
+  for (const side of ['left', 'right'] as const) {
+    const r = railRects[side].r;
+    if (railRects[side].kind && r.w > 0) rects.push([r.x, r.y, r.w, r.h]);
+  }
+  // A layout's tagline (and SYS's readout) hangs under the chip on the right.
+  if (deckActive === 'view' || deckActive === 'drone' || deckActive === 'cam') rects.push([HW - 72, 36, 72, 50]);
+  if (deckActive === 'sys') rects.push([HW - 110, 36, 110, 90]);
   return rects;
 }
 /** ── THE DIAL'S TICK RING IS STATIC, AND IT WAS DRAWN A PIXEL AT A TIME ──
@@ -56671,6 +56730,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // would go on painting the live scene into a stale rectangle.
   if (!hudOn) {
     dockRect = { x: 0, y: 0, w: 0, h: 0 };
+    seatRect = { x: 0, y: 0, w: 0, h: 0 };
     // Tile debug is its own instrument, not a HUD element — see
     // drawTileDebugOverlay's own header for why it must not depend on hudOn.
     // It stands down for the WORLD LAB, which is the one caller that turns
@@ -56766,12 +56826,16 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         hctx.fillRect(cx - 2, cy - 1, 1, 3); hctx.fillRect(cx + 2, cy - 1, 1, 3);
       };
       let ly = y0 + 19, lx = pad + 1;
-      for (const l of CHART_LAYERS) {
+      // THE CHIPS ARE THE MAP LAYOUT'S CONTROLS, drawn only while MAP is up —
+      // one home for the switch. The legend under them is the layer's EFFECT
+      // and stays whenever a layer is drawing. The debug views are VIEW's.
+      const chips = deckActive === 'map';
+      if (chips) for (const l of CHART_LAYERS) {
         // A DEBUG CHIP ONLY WHILE THE TILE OVERLAY IS UP. The substrate view
         // says what the RENDERER believes, not what the planet is, and it
         // belongs with the ring counts rather than beside COVER. Asked for
         // from the seat in those terms.
-        if (l.debug && !tileDbgOn()) continue;
+        if (l.debug) continue;
         const on = chartOn[l.id];
         const w = 7 + gw(l.name);
         if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
@@ -56783,7 +56847,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         layerRects.push({ id: l.id, x: lx - 2, y: ly - 3, w: w + 4, h: 12 });
         lx += w + 5;
       }
-      ly += 9; lx = pad + 1;
+      if (chips) ly += 9;
+      lx = pad + 1;
       // ── AND THE LEGEND, WHICH IS THE SHEET SAYING WHAT IT DREW ──
       // On its own row, always: the first cut let it continue from the last
       // chip, so the commonest class sat in the switch row and read as a fifth
@@ -56848,8 +56913,29 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // its own row under the clock, and a tap on it clears the view. It is
     // pushed into `layerRects`, so the tap is the same code path the key's
     // chips use and the two cannot answer differently.
+    // OFF THE CHART, MAP's chips stand where the view chip does, because the
+    // ground views apply in every camera; with MAP down the active view keeps
+    // its one chip as an indicator — no longer a switch, since the switch has
+    // one home.
+    if (deckActive === 'map' && !lineOn) {
+      let lx = pad + 1;
+      const ly = pad + 34;
+      for (const l of CHART_LAYERS) {
+        if (l.debug) continue;
+        const on = chartOn[l.id];
+        let w = 7;
+        for (const ch of l.name) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
+        hctx.globalAlpha = 1;
+        hctx.fillStyle = on ? UI.text : UI.dim;
+        if (on) hctx.fillRect(lx, ly, 5, 5);
+        else { hctx.fillRect(lx, ly, 5, 1); hctx.fillRect(lx, ly + 4, 5, 1); hctx.fillRect(lx, ly, 1, 5); hctx.fillRect(lx + 4, ly, 1, 5); }
+        textEdgeP(l.name, lx + 7, ly - 2, on ? UI.text : UI.dim);
+        layerRects.push({ id: l.id, x: lx - 2, y: ly - 5, w: w + 4, h: 12 });
+        lx += w + 5;
+      }
+    }
     const vl = viewLayer() ?? (CHART_LAYERS.find((l) => chartOn[l.id] && DBG_RASTER[l.id])?.id ?? null);
-    if (vl && !lineOn) {
+    if (vl && !lineOn && deckActive !== 'map') {
       const row = chartLayer(vl);
       const name = row?.name ?? vl;
       let w = 7;
@@ -56859,7 +56945,6 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       hctx.fillStyle = UI.text;
       hctx.fillRect(lx + 0, ly, 5, 5);
       textEdgeP(name, lx + 7, ly - 2, UI.text);
-      layerRects.push({ id: vl, x: lx - 2, y: ly - 5, w: w + 4, h: 12 });
     }
   }
   // The transport actions (rewind · AUTO · WPT) live in the CONTROL MATRIX
@@ -57504,6 +57589,36 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.restore();
   }
   dockRect = { x: mx, y: my, w: mw, h: mw };
+  // ── THE DOCK IS THE CAMERA SWITCH, AND IT SAYS SO ──
+  // Nothing on the deck moves the camera: a tap on the dock goes to the chart,
+  // or back to the seat it previews. Corner brackets make it read as a control
+  // rather than a picture, the hint over it names where a tap will take you,
+  // and the chip on its corner picks the seat — CHASE or CAB, which in the
+  // drone are its trailing and nose cameras.
+  {
+    const bk = UI.gold, L = 5;
+    hctx.fillStyle = bk;
+    const corner = (x: number, y: number, sx: number, sy: number): void => {
+      hctx.fillRect(sx > 0 ? x : x - L + 1, y, L, 1);
+      hctx.fillRect(x, sy > 0 ? y : y - L + 1, 1, L);
+    };
+    corner(mx - 1, my - 1, 1, 1); corner(mx + mw, my - 1, -1, 1);
+    corner(mx - 1, my + mw, 1, -1); corner(mx + mw, my + mw, -1, -1);
+    const to = camMode === 'top' ? (drone.up ? 'DRONE' : lastPov === 'cab' ? 'CAB' : 'CHASE') : 'CHART';
+    const hint = `TAP > ${to}`;
+    textEdgeS(fitS(hint, mw + 2), mx, my - 9, UI.soft);
+    const flying = camMode === 'drone' || (camMode === 'top' && drone.up);
+    const seat = flying ? (lastPov === 'cab' ? 'NOSE' : 'TRAIL') : lastPov === 'cab' ? 'CAB' : 'CHASE';
+    const sw2 = textSW(seat) + 4;
+    const sx = mx + mw - sw2 - 1, sy = my + 2;
+    hctx.fillStyle = 'rgba(4,10,11,0.8)';
+    hctx.fillRect(sx, sy, sw2, 9);
+    hctx.fillStyle = UI.edge;
+    hctx.fillRect(sx, sy, sw2, 1); hctx.fillRect(sx, sy + 8, sw2, 1);
+    hctx.fillRect(sx, sy, 1, 9); hctx.fillRect(sx + sw2 - 1, sy, 1, 9);
+    textEdgeS(seat, sx + 2, sy + 2, UI.text);
+    seatRect = { x: sx - 3, y: sy - 3, w: sw2 + 6, h: 15 };
+  }
   {
     // ── THE STRAIT IS THE DECK'S NOW (client/hud-deck.ts) ──
     // The control matrix that stood here — drone · map-up · seat over AUTO ·
@@ -57786,12 +57901,75 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       hctx.fillRect(wx2 - 2, yT0, 1, yB0 - yT0 + 1); hctx.fillRect(wx2 + 2, yT0, 1, yB0 - yT0 + 1);
       hctx.fillRect(wx2 - 2, clamp(yOf(cMid), yT0 + 1, yB0 - 1), 5, 1);
     };
-    // THE CHART'S EDGES ARE CLEAR. They used to carry two slider rails in
-    // place of the gauges — TILT and the miniature BAND — which were camera
-    // controls wearing an instrument's clothes; they are sliders in the deck's
-    // CAM and MAP sheets now, and on the chart nothing stands down its edges.
-    chartTiltRect.w = chartBandRect.w = 0;
-    if (camMode !== 'top') {
+    // ── THE RAILS, WHICH A LAYOUT PUTS ON THE EDGES ──
+    // CAM: the chart's TILT on the left (chart only — a seat has no tilt) and
+    // the miniature BAND on the right (every camera but the cab and god, which
+    // the band exempts). DRONE: its commanded ALTITUDE left, its camera's
+    // PITCH right, while its eye is up. The gauges below stand only in RIG, so
+    // the edges are free for whichever of these is up.
+    {
+      const H = 136;
+      const stackB = cy - DR - 9;
+      let lk: RailKind | null = null, rk: RailKind | null = null;
+      if (deckActive === 'cam') {
+        if (camMode === 'top') lk = 'tilt';
+        if (camMode !== 'cab' && camMode !== 'god') rk = 'band';
+      } else if (deckActive === 'drone' && droneEye()) { lk = 'alt'; rk = 'gimbal'; }
+      railRects.left = { kind: lk, r: lk ? { x: 0, y: my - 14 - H, w: 23, h: H } : { x: 0, y: 0, w: 0, h: 0 } };
+      railRects.right = { kind: rk, r: rk ? { x: HW - 23, y: stackB - H, w: 23, h: H } : { x: 0, y: 0, w: 0, h: 0 } };
+      chartTiltRect = lk === 'tilt' ? { ...railRects.left.r } : { x: 0, y: 0, w: 0, h: 0 };
+      chartBandRect = rk === 'band' ? { ...railRects.right.r } : { x: 0, y: 0, w: 0, h: 0 };
+      const slider = (r: HudRect, kind: RailKind, side: 1 | -1, col: string, band?: TiltBand): void => {
+        const tr = chartSliderTrack(r);
+        const x = side === 1 ? 5 : HW - 6;
+        const label = RAIL_LABEL[kind], value = railText(kind);
+        textEdgeS(label, side === 1 ? 1 : HW - 1 - textSW(label), r.y, col);
+        textEdgeS(value, side === 1 ? 1 : HW - 1 - textSW(value), r.y + 8, UI.dim);
+        // Sparse ruled rail: the gauges' edge language, one continuous handle
+        // because this is a control rather than a reading.
+        hctx.fillStyle = 'rgba(114,189,178,0.25)';
+        hctx.fillRect(x, tr.top, 1, tr.bottom - tr.top + 1);
+        for (let i = 0; i <= 10; i++) {
+          const y = Math.round(tr.top + (i / 10) * (tr.bottom - tr.top));
+          const n = i % 5 === 0 ? 5 : i % 2 === 0 ? 3 : 2;
+          hctx.fillRect(side === 1 ? x : x - n + 1, y, n, 1);
+        }
+        const hy = Math.round(tr.bottom - clamp(railFrac(kind), 0, 1) * (tr.bottom - tr.top));
+        hctx.fillStyle = col;
+        hctx.fillRect(side === 1 ? x : x - 6, hy - 1, 7, 3);
+        const tx = side === 1 ? 1 : HW - 2;
+        for (let c = 0; c < 3; c++) hctx.fillRect(tx + side * c, hy - (2 - c), 1, 5 - 2 * c);
+        if (!band) return;
+        // A literal miniature-band ruler: inner caps are the fully sharp core,
+        // outer caps the point of full blur, both around the focus line.
+        const presetHalf = (tr.bottom - tr.top) * 0.5;
+        const mid = Math.round((tr.top + tr.bottom) * 0.5);
+        const bracket = (f: number, bx: number, c: string): void => {
+          const d = Math.round(Math.min(presetHalf, f * presetHalf));
+          hctx.fillStyle = c;
+          hctx.fillRect(bx, mid - d, 1, d * 2 + 1);
+          hctx.fillRect(bx - 2, mid - d, 3, 1);
+          hctx.fillRect(bx - 2, mid + d, 3, 1);
+        };
+        bracket(band.blur * chartBandScale, HW - 15, 'rgba(114,189,178,0.35)');
+        bracket(band.sharp * chartBandScale, HW - 18, col);
+        hctx.fillRect(HW - 19, mid, 5, 1);
+      };
+      const held = (k: RailKind): boolean => railDrag?.kind === k;
+      if (lk) slider(railRects.left.r, lk, 1, held(lk) ? UI.text : UI.edge);
+      if (rk) {
+        if (rk === 'band') {
+          const activeBand = dofMode === 'miniature' && tiltMode !== 'off';
+          const preset = TILT_PRESETS[tiltMode] ?? TILT_PRESETS.off;
+          slider(railRects.right.r, rk, -1, held(rk) ? UI.text : activeBand ? UI.gold : UI.dim,
+            camMode === 'top' ? preset.top : preset.chase);
+        } else slider(railRects.right.r, rk, -1, held(rk) ? UI.text : UI.gold);
+      }
+    }
+    // THE GAUGES STAND IN THE RIG LAYOUT ONLY. They used to be the chase and
+    // cab baseline, down both edges all the time; the baseline is driving now,
+    // and the vehicle's and the weather's readouts are a layout you raise.
+    if (deckActive === 'rig') {
       // ── RIG, outer-right (Glass spec §5.7): the same gauge mirrored, one
       // rigid group anchored above the dial, candles carrying the session.
       {
@@ -57834,7 +58012,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
           rows.push(['wet', 'WET', wx.wet, wx.wet > 0.5 ? UI.bad : UI.edge, wx.wet <= 0.5, wa.wet]);
         }
         if (wxL.fog > 0.12 || wa.fog > 0.2) rows.push(['fog', 'FOG', wxL.fog, UI.soft, false, wa.fog]);
-        const stackB = my - 6;
+        const stackB = my - 14;   // clear of the dock's tap hint
         rows.forEach((r, i) => {
           gauge(stackB - (rows.length - i) * GSLOT + 6, r[2], r[3], r[4], 1, r[0], r[1], r[5]);
         });
@@ -57851,38 +58029,32 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   if (hudMs > hudProfMaxMs) hudProfMaxMs = hudMs;
 }
 /** The task and the claim, as DOM state — pushed every frame, diffed there. */
-// ── THE DECK: layouts, and the sheets they open (client/hud-deck.ts) ──
+// ── THE DECK: HUD layouts, one at a time (client/hud-deck.ts) ──
 //
-// The six tabs in the strait between the dock and the dial replaced the canvas
-// control matrix and the chart's edge rails. Three of them are LAYOUTS — what
-// the glass is for right now — and the other three are sheets over whichever
-// layout is up, or a door into the menu:
+// The first deck was a launcher and the seat's review set the rules this one
+// keeps (hud-deck.ts carries them in full):
 //
-//   DRIVE  the driving HUD; a second tap opens AUTO, HOLD/REWIND, WAYPOINTS
-//   MAP    the chart; a second tap opens its orientation, layers and tilt
-//   VIEW   render inspection; opens the INSPECT sheet. It is the ONLY layout
-//          the debug overlays draw in: the tile grid, the X-RAY pass, the
-//          water view and the debug ground views stand down the moment you
-//          leave it, which is what took the tile debug overlay (default ON
-//          from the seat's rack) off the chart everyone reads maps on.
-//   RIG    the menu's own RIG screen
-//   CAM    seat, drone, and the chart lens (tilt, miniature band)
-//   SYS    HUD size, HIDE HUD, and the menu's settings doors
+//   - the DOCK decides where the camera is and nothing on the deck does;
+//   - a TAB is a HUD layout — instruments plus the few controls that operate
+//     them — and one is up at a time, or none, which is the baseline: driving;
+//   - controls are exclusive, EFFECTS persist: a layer, the lens, a drone in
+//     the air outlive their tab. VIEW's inspection is the exception by design:
+//     it stands down the moment you leave, so the chart never wears debug.
 //
-// The camera and the layout are kept in step one way only: DRIVE and MAP
-// follow the camera (the dock tap, `c`, a CAM choice all move it), while VIEW
-// holds whatever camera it was given, because inspecting the chart from above
-// and inspecting the road from the seat are both inspection.
-type DeckLayout = 'drive' | 'map' | 'view';
-let deckLayout: DeckLayout = 'drive';
-let deckOpen: DeckTab | null = null;
+//   VIEW   render inspection: pass, tile grid, debug ground views, hydro view
+//   MAP    the layer key's chips, orientation, waypoints
+//   RIG    the ENV and RIG gauges — which no longer stand in the baseline
+//   DRONE  launches it and puts you in its view; ALT and PITCH rails; RECALL
+//   CAM    the lens rails: chart TILT, and the miniature BAND
+//   SYS    live telemetry under the chip; read-only
+let deckActive: DeckTab | null = null;
 let deck: HudDeck | null = null;
 /** An instrument's override: `__tiledbg(true)` draws the grid whatever the
  *  layout, because a devtool asking for it is asking for a measurement. */
 let tileDbgForced = false;
-/** The tile debug overlay is a VIEW-layout surface — the dial says whether
- *  inspection wants it, the layout says whether we are inspecting. */
-const tileDbgOn = (): boolean => tileDbg && (deckLayout === 'view' || tileDbgForced);
+/** The tile debug overlay is a VIEW surface — the dial says whether inspection
+ *  wants it, the layout says whether we are inspecting. */
+const tileDbgOn = (): boolean => tileDbg && (deckActive === 'view' || tileDbgForced);
 /** The dials whose non-zero stop is a debug view. Their stored value is what
  *  VIEW applies on entry; leaving VIEW applies stop 0 WITHOUT saving, so the
  *  rack keeps the inspection the player chose for the next time they look. */
@@ -57898,11 +58070,12 @@ function deckInspect(on: boolean): void {
   // world and re-entering asks for them again.
   if (!on) for (const l of CHART_LAYERS) if (l.debug && chartOn[l.id]) setChartLayer(l.id, false);
 }
-function deckSetLayout(next: DeckLayout): void {
-  if (next === deckLayout) return;
-  const wasView = deckLayout === 'view';
-  deckLayout = next;
+function deckSetActive(next: DeckTab | null): void {
+  if (next === deckActive) return;
+  const wasView = deckActive === 'view';
+  deckActive = next;
   if (wasView !== (next === 'view')) deckInspect(next === 'view');
+  railDrag = null;
 }
 const deckDial = (key: string): Dial | undefined => DIALS.find((q) => q.key === key);
 function deckDialSet(key: string, i: number): void {
@@ -57913,31 +58086,31 @@ function deckDialSet(key: string, i: number): void {
   saveDials();
 }
 /** The strait between the dock and the dial, in HUD px — the same numbers
- *  drawHud lays the dock out with, and the ground the old matrix stood on. */
+ *  drawHud lays the dock out with. */
 function deckBox(): HudRect {
   const pad = 4, mw = Math.min(58, Math.floor(HW * 0.34)), infoH = 23;
   const bottom = HH - pad - infoH - 3;          // the dock's own bottom
   const x = pad + mw + 4;
   return { x, y: bottom - 37, w: Math.max(0, HW - 58 - x - 2), h: 37 };
 }
+const DECK_NAME: Record<DeckTab, string> = {
+  view: 'VIEW', map: 'MAP', rig: 'RIG', drone: 'DRONE', cam: 'CAM', sys: 'SYS',
+};
 function deckTab(t: DeckTab): void {
   audio.stone();
-  if (t === 'rig') { deckOpen = null; menu.open(T_RIG); return; }
-  if (t === 'drive' || t === 'map' || t === 'view') {
-    if (deckLayout === t) { deckOpen = deckOpen === t ? null : t; return; }
-    if (t === 'map' && camMode !== 'top') setCam('top');
-    if (t === 'drive' && camMode === 'top') setCam(drone.up ? 'drone' : lastPov);
-    deckSetLayout(t);
-    deckOpen = t === 'view' ? 'view' : null;
-    hudFlash(t === 'view' ? 'RENDER INSPECTION' : t === 'map' ? 'CHART' : 'DRIVE');
-    return;
+  // THE LIT TAB LOWERS ITSELF: back to the baseline. Its effects stay — a
+  // drone keeps flying and its view keeps its seat until the dock or RECALL
+  // says otherwise.
+  if (deckActive === t) { deckSetActive(null); return; }
+  deckSetActive(t);
+  if (t === 'drone') {
+    // THE TAB IS THE LAUNCH. droneToggle refuses (and says why) when the pack
+    // is flat or the drone is lying in a field; the layout comes up either way,
+    // because its tray is where that state is read.
+    if (!drone.up && !drone.downed) { droneToggle(); return; }
+    if (drone.up && camMode !== 'drone') camFlyTo('drone');
   }
-  deckOpen = deckOpen === t ? null : t;
-}
-function deckCam(m: CamMode): void {
-  if (m === 'drone') { if (!drone.up) droneToggle(); else if (camMode !== 'drone') setCam('drone'); return; }
-  if (m === 'cab' || m === 'chase') lastPov = m;
-  if (camMode !== m) setCam(m);
+  hudFlash(t === 'view' ? 'RENDER INSPECTION' : DECK_NAME[t]);
 }
 function deckItem(id: string, v?: number): void {
   audio.stone();
@@ -57947,8 +58120,8 @@ function deckItem(id: string, v?: number): void {
       if (!autoTab) return;
       auto.on = !auto.on;
       auto.out = null;
-      // Arming starts from where the truck IS — see the note in the old tab's
-      // handler: the yaw estimate is differentiated from the heading.
+      // Arming starts from where the truck IS: the yaw estimate is
+      // differentiated from the heading.
       if (auto.on) { auto.mem = autoMem(); auto.mem.lastHeading = state.heading; }
       hudFlash(auto.on ? 'AUTOPILOT' : 'YOU HAVE IT');
       return;
@@ -57968,170 +58141,140 @@ function deckItem(id: string, v?: number): void {
     case 'poi': deckDialSet('poi', Number(arg)); hudFlash(`WAYPOINTS ${POI_MODES[poiVis]}`); return;
     case 'mapup': if ((arg === 'heading') !== mapHeadingUp) toggleMapUp(); return;
     case 'layer': setChartLayer(arg as ChartLayerId, !chartOn[arg as ChartLayerId]); saveChartLayers(); return;
-    case 'tilt':
-      if (v === undefined) return;
-      chartTiltDeg = CHART_TILT_MIN + v * (CHART_TILT_MAX - CHART_TILT_MIN);
-      return;
-    case 'band':
-      if (v === undefined) return;
-      chartBandScale = CHART_BAND_MIN + v * (CHART_BAND_MAX - CHART_BAND_MIN);
-      aimFocus();
-      return;
     case 'pass': deckDialSet('xray', Number(arg)); return;
     case 'tdbg': deckDialSet('tdbg', tileDbg ? 0 : 1); return;
-    case 'dial': { const d = deckDial(arg); if (d) deckDialSet(arg, d.at + 1); return; }
-    case 'cam': deckCam(arg as CamMode); return;
-    case 'drone': droneToggle(); return;
-    case 'huds': deckDialSet('huds', Number(arg)); hudResize(); return;
-    case 'clean': deckOpen = null; setClean(true); return;
-    case 'menu': deckOpen = null; menu.open(arg === 'drives' ? T_WORLD : arg === 'advanced' ? T_ADVANCED : T_SYSTEM); return;
+    case 'hview': { const d = deckDial('hview'); if (d) deckDialSet('hview', d.at + 1); return; }
+    case 'drone':
+      if (arg === 'view') { if (droneEye() && camMode !== 'drone') camFlyTo('drone'); return; }
+      droneToggle();
+      return;
   }
 }
 function deckRelease(id: string): void {
-  if (id === 'tilt' || id === 'band') {
-    hudFlash(id === 'tilt' ? `CHART TILT ${Math.round(chartTiltDeg)} DEG`
-      : `MINIATURE BAND ${Math.round(chartBandScale * 100)}%`);
-    return;
-  }
   if (id !== 'rewind' || rewind.at === null) return;
   // Back at the top is a cancel, not a zero-second rewind; a scrub that landed
   // somewhere leaves the world HELD there so you can look before you drive out.
   if (rewind.at < 1) rewindCancel(); else rewindCommit();
   if (!rewindPaused) { rewindPaused = true; hudFlash('HOLD'); }
 }
-const DECK_CAMS: Array<[CamMode, string]> = [['cab', 'CAB'], ['chase', 'CHASE'], ['top', 'TOP'], ['drone', 'DRONE']];
-const deckCamItems = (): DeckItem[] => DECK_CAMS.map(([m, label]) => ({
-  kind: 'choice' as const, id: `cam:${m}`, label,
-  on: camMode === m || (m === 'drone' && camMode === 'drone'),
-  disabled: m === 'drone' && drone.downed,
-}));
-const deckDialItem = (key: string, label: string): DeckItem => {
-  const d = deckDial(key);
-  return { kind: 'action', id: `dial:${key}`, label: `${label} ${d ? d.opts[d.at] : '—'}`,
-    tone: d && d.at > 0 ? 'gold' : undefined };
-};
-const deckTiltItem = (): DeckItem => ({
-  kind: 'slider', id: 'tilt', label: 'TILT', text: `${Math.round(chartTiltDeg)} DEG`,
-  value: (chartTiltDeg - CHART_TILT_MIN) / (CHART_TILT_MAX - CHART_TILT_MIN),
-});
-function deckSheet(open: DeckTab | null): DeckSheet | null {
-  if (open === 'drive') {
+/** The baseline's controls: the three things you do to a drive rather than
+ *  to the glass. REWIND only while HELD — scrubbing time is something you do
+ *  to a world you have stopped. */
+function deckBase(): DeckSheet | null {
+  if (deckActive !== null || lineOn) return null;
+  const items: DeckItem[] = [
+    { kind: 'choice', id: 'auto', label: 'AUTO', on: auto.on, disabled: !autoTab },
+    { kind: 'choice', id: 'hold', label: rewindPaused ? 'HELD' : 'HOLD', on: rewindPaused },
+  ];
+  if (rewindPaused || rewind.at !== null) {
     const have = rewindHave();
-    const a = auto.out;
-    return {
-      title: '// DRIVE : TRANSPORT',
-      sections: [
-        { title: 'PILOT', items: [
-          { kind: 'choice', id: 'auto', label: 'AUTOPILOT', on: auto.on, disabled: !autoTab },
-          { kind: 'choice', id: 'hold', label: 'HOLD', on: rewindPaused },
-        ] },
-        { title: 'REWIND', items: [
-          { kind: 'slider', id: 'rewind', label: 'BACK', disabled: !rewindReady(),
-            value: have > 0 && rewind.at !== null ? rewind.at / have : 0,
-            text: rewind.at !== null ? `-${rewind.secs.toFixed(0)}S` : `${rewindSecs(have).toFixed(0)}S KEPT` },
-        ] },
-        { title: 'WAYPOINTS', items: POI_MODES.map((m, i) => ({
-          kind: 'choice' as const, id: `poi:${i}`, label: m, on: poiVis === i })) },
-      ],
-      foot: !autoTab ? 'AUTOPILOT TAB OFF IN SETTINGS'
-        : auto.on ? (!a ? 'NO TICK' : a.mode === 'wait' ? 'WAIT FOR ROAD'
-          : `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`)
-          : undefined,
-    };
+    items.push({ kind: 'slider', id: 'rewind', label: 'BACK', disabled: !rewindReady(),
+      value: have > 0 && rewind.at !== null ? rewind.at / have : 0,
+      text: rewind.at !== null ? `-${rewind.secs.toFixed(0)}S` : `${rewindSecs(have).toFixed(0)}S` });
   }
-  if (open === 'map') {
+  return { sections: [{ title: 'DRIVE', items }] };
+}
+/** The active layout's controls. RIG, CAM and SYS have none in the tray: RIG
+ *  and SYS are readouts, and CAM's controls are its rails on the glass. */
+function deckTray(active: DeckTab | null): DeckSheet | null {
+  if (active === 'map') {
     return {
-      title: '// CHART : LAYERS',
       sections: [
         { title: 'ORIENT', items: [
           { kind: 'choice', id: 'mapup:north', label: 'NORTH UP', on: !mapHeadingUp },
           { kind: 'choice', id: 'mapup:heading', label: 'HEADING UP', on: mapHeadingUp },
         ] },
-        { title: 'LAYERS', items: CHART_LAYERS.filter((l) => !l.debug).map((l) => ({
-          kind: 'check' as const, id: `layer:${l.id}`, label: l.name, on: chartOn[l.id] })) },
-        { title: 'LENS', items: [deckTiltItem()] },
+        { title: 'WAYPOINTS', items: POI_MODES.map((m, i) => ({
+          kind: 'choice' as const, id: `poi:${i}`, label: m, on: poiVis === i })) },
       ],
+      foot: 'LAYERS: THE KEY ON THE GLASS',
     };
   }
-  if (open === 'view') {
-    const onChart = camMode === 'top' || camMode === 'god';
+  if (active === 'view') {
+    const hv = deckDial('hview');
     return {
       title: '// RENDER VIEW : INSPECT',
       sections: [
         { title: 'PASS', items: XRAY_MODES.map((m, i) => ({
           kind: 'choice' as const, id: `pass:${i}`, label: i === 0 ? 'SHADE' : m, on: xrayMode === i })) },
         { title: 'OVERLAY', items: [
-          { kind: 'check', id: 'tdbg', label: 'TILE', on: tileDbg, note: onChart ? undefined : 'TOP' },
+          { kind: 'check', id: 'tdbg', label: 'TILE GRID', on: tileDbg },
           ...CHART_LAYERS.filter((l) => l.debug).map((l) => ({
             kind: 'check' as const, id: `layer:${l.id}`, label: l.name, on: chartOn[l.id] })),
-          deckDialItem('hview', 'HYDR'),
-        ] },
-        { title: 'CAMERA', items: deckCamItems() },
-        { title: 'POST', items: [
-          deckDialItem('dith', 'DITH'), deckDialItem('haze', 'FOG'),
-          deckDialItem('dof', 'DOF'), deckDialItem('con', 'TONE'),
-        ] },
-      ],
-      foot: 'RENDERING DIAGNOSTICS · REALTIME',
-    };
-  }
-  if (open === 'cam') {
-    const miniature = dofMode === 'miniature' && tiltMode !== 'off';
-    return {
-      title: '// CAMERA : SEAT',
-      sections: [
-        { title: 'SEAT', items: deckCamItems() },
-        { title: 'DRONE', items: [
-          { kind: 'action', id: 'drone', tone: drone.downed ? 'bad' : drone.up ? 'gold' : undefined,
-            label: drone.downed ? 'DOWN' : drone.up ? (drone.recall ? 'RECALLING' : 'RECALL') : 'LAUNCH',
-            note: `${Math.round(drone.batt * 100)}%` },
-        ] },
-        { title: 'CHART LENS', items: [
-          deckTiltItem(),
-          { kind: 'slider', id: 'band', label: 'BAND', disabled: !miniature,
-            text: miniature ? `${Math.round(chartBandScale * 100)}%` : 'DOF OFF',
-            value: (chartBandScale - CHART_BAND_MIN) / (CHART_BAND_MAX - CHART_BAND_MIN) },
+          { kind: 'action', id: 'hview', label: `HYDRO ${hv ? hv.opts[hv.at] : '—'}`,
+            tone: hv && hv.at > 0 ? 'gold' : undefined },
         ] },
       ],
     };
   }
-  if (open === 'sys') {
-    const huds = deckDial('huds');
-    return {
-      title: '// SYSTEM',
-      sections: [
-        { title: 'HUD SIZE', items: (huds?.opts ?? []).map((o, i) => ({
-          kind: 'choice' as const, id: `huds:${i}`, label: o, on: huds?.at === i })) },
-        { title: 'GLASS', items: [{ kind: 'action', id: 'clean', label: 'HIDE HUD', note: 'DOUBLE TAP TO RETURN' }] },
-        { title: 'MENU', items: [
-          { kind: 'action', id: 'menu:settings', label: 'SETTINGS' },
-          { kind: 'action', id: 'menu:drives', label: 'DRIVES' },
-          { kind: 'action', id: 'menu:advanced', label: 'ADVANCED' },
-        ] },
-      ],
-    };
+  if (active === 'drone') {
+    const items: DeckItem[] = [
+      { kind: 'action', id: 'drone', tone: drone.downed ? 'bad' : drone.up ? 'gold' : undefined,
+        disabled: drone.downed,
+        label: drone.downed ? 'DOWN' : drone.up ? (drone.recall ? 'RECALLING' : 'RECALL') : 'LAUNCH',
+        note: `${Math.round(drone.batt * 100)}%` },
+    ];
+    if (droneEye() && camMode !== 'drone') items.push({ kind: 'action', id: 'drone:view', label: 'ITS VIEW' });
+    return { sections: [{ title: 'DRONE', items }],
+      foot: drone.downed ? 'DRIVE TO IT TO COLLECT' : drone.up ? 'ALT LEFT · PITCH RIGHT' : undefined };
   }
   return null;
 }
-const DECK_LAYOUT_LABEL: Record<DeckLayout, string> = { drive: 'MENU', map: 'MAP', view: 'VIEW' };
+/** Tabs whose effect outlives their controls. */
+function deckLive(): DeckTab[] {
+  const live: DeckTab[] = [];
+  if (drone.up || drone.downed) live.push('drone');
+  if (CHART_LAYERS.some((l) => !l.debug && l.kind === 'thematic' && chartOn[l.id])) live.push('map');
+  if (Math.abs(chartBandScale - 1) > 0.01 || Math.abs(chartTiltDeg - CAM.tilt) > 0.5) live.push('cam');
+  return live;
+}
+/** SYS's readout: what the frame and the stream cost now. */
+function sysLines(): string[] {
+  const fps = Math.round(1000 / Math.max(frameMs, 1));
+  const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+  const lines = ['SYSTEM',
+    `${fps} FPS · ${frameMs.toFixed(1)} MS`,
+    `${(drawStat.tris / 1e6).toFixed(2)}M TRIS · ${drawStat.calls} CALLS`,
+    `TERRAIN ${terrainMeshes.size} · REBUILD ${terrainDirty.size}`,
+    `OSM ${osmInFlight} ON THE WIRE`,
+    `FAR ${farMeshes.size} Z${farZ}`];
+  if (mem) lines.push(`HEAP ${Math.round(mem.usedJSHeapSize / 1048576)} MB`);
+  lines.push(navigator.onLine ? 'NET ONLINE' : 'NET OFFLINE');
+  return lines;
+}
+function deckTagline(): string[] {
+  switch (deckActive) {
+    case 'view': return ['RENDER', 'INSPECTION', 'MODE', 'ACTIVE'];
+    case 'sys': return sysLines();
+    case 'drone': {
+      if (!drone.up) return drone.downed ? ['DRONE', 'DOWN'] : ['DRONE', `PACK ${Math.round(drone.batt * 100)}%`];
+      const agl = Math.round(drone.y - groundAt(drone.x, drone.z));
+      return ['DRONE', `AGL ${agl} M`, `PACK ${Math.round(drone.batt * 100)}%`,
+        droneNose() ? 'NOSE CAMERA' : 'TRAILING CAMERA'];
+    }
+    case 'cam': return ['LENS', camMode === 'top' ? `TILT ${Math.round(chartTiltDeg)}°` : '',
+      `BAND ${Math.round(chartBandScale * 100)}%`, dofMode === 'miniature' && tiltMode !== 'off' ? '' : 'MINIATURE OFF']
+      .filter(Boolean);
+    default: return [];
+  }
+}
 function stepDeck(): void {
   if (!deck) return;
-  // DRIVE and MAP follow the camera; VIEW holds whatever camera it was given.
-  if (deckLayout === 'drive' && camMode === 'top') deckSetLayout('map');
-  else if (deckLayout === 'map' && camMode !== 'top') deckSetLayout('drive');
-  if (deckOpen === 'drive' && deckLayout !== 'drive') deckOpen = null;
-  if (deckOpen === 'map' && deckLayout !== 'map') deckOpen = null;
   const b = deckBox();
   const l = Math.round(b.x * hudS), w = Math.round(b.w * hudS), h = Math.round(b.h * hudS);
   const bottom = Math.round(innerHeight - (b.y + b.h) * hudS);
-  deck.place({ l, w, b: bottom, h, cols: (w - 5 * 3) / 6 >= DECK_MIN_CELL ? 6 : 3 });
+  const mw = Math.min(58, Math.floor(HW * 0.34));
+  const dockTop = HH - 4 - 23 - mw - 3 - 12;       // the dock, and its tap hint over it
+  deck.place({ l, w, b: bottom, h, cols: (w - 5 * 3) / 6 >= DECK_MIN_CELL ? 6 : 3,
+    trayB: Math.round(innerHeight - dockTop * hudS), edge: Math.round(26 * hudS) });
   deck.render({
-    layout: deckLayout,
-    open: deckOpen,
-    sheet: deckSheet(deckOpen),
-    tagline: deckLayout === 'view' ? ['RENDER', 'INSPECTION', 'MODE', 'ACTIVE'] : [],
+    active: deckActive,
+    live: deckLive(),
+    tray: deckTray(deckActive),
+    base: deckBase(),
+    tagline: deckTagline(),
   });
-  overlays.menuLabel(DECK_LAYOUT_LABEL[deckLayout]);
+  overlays.menuLabel(deckActive ? DECK_NAME[deckActive] : 'MENU');
 }
 function stepOverlays(): void {
   let mc: import('./overlays').MissionCard | null = null;
@@ -58240,6 +58383,8 @@ let hudOn = true;
  *  wear one `.clean` class and want opposite things of the HUD canvas. */
 let labChrome = false;
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
+/** The seat chip on the dock's corner (CHASE/CAB, or the drone's two cameras). */
+let seatRect = { x: 0, y: 0, w: 0, h: 0 };
 function setClean(on: boolean): void {
   document.body.classList.toggle('clean', on);
   if (!on) updateStickHome(); // the pinned stick has to come back with it
@@ -58274,8 +58419,8 @@ function setClean(on: boolean): void {
  * sheet's button the way a thumb does rather than calling the handler.
  * Calling the handler proves the handler; it cannot prove the hit box, and a
  * control drawn where nothing can reach it is the failure worth catching.
- * `__autorect()` is the AUTO button in the DRIVE sheet (null while the sheet
- * is shut: open it by tapping DRIVE twice, or `__deck('drive')`).
+ * `__autorect()` is the AUTO chip on the baseline strip (null while a layout
+ * is up: the strip is the baseline's).
  */
 (window as unknown as { __deckrect?: object }).__deckrect = (id: string): object | null => {
   const r = deck?.rectOf(id);
@@ -58289,7 +58434,13 @@ function setClean(on: boolean): void {
  *  takes, so a test of the layouts is a test of the handler the tab calls. */
 (window as unknown as { __deck?: object }).__deck = (tab?: DeckTab): object => {
   if (tab) deckTab(tab);
-  return { layout: deckLayout, open: deckOpen, cam: camMode, tileDbg, tileDbgOn: tileDbgOn(), xray: XRAY_MODES[xrayMode] };
+  return {
+    active: deckActive, live: deckLive(), cam: camMode, lastPov, tileDbg, tileDbgOn: tileDbgOn(),
+    xray: XRAY_MODES[xrayMode], drone: { up: drone.up, downed: drone.downed, alt: +drone.alt.toFixed(1),
+      pitch: +droneDepressionDeg().toFixed(1) },
+    rails: { left: railRects.left.kind, right: railRects.right.kind },
+    band: +chartBandScale.toFixed(2), tilt: +chartTiltDeg.toFixed(1),
+  };
 };
 (window as unknown as { __hudcanvas?: object }).__hudcanvas = (): HTMLCanvasElement => canvas;
 /**
@@ -58385,7 +58536,8 @@ function setClean(on: boolean): void {
   headlightCasts: headSpot.castShadow, headShadowOn, maskPatched: shadowMaskPatched,
 });
 (window as unknown as { __hudrects?: object }).__hudrects = (): object =>
-  ({ dock: dockRect, deck: deckBox() });
+  ({ dock: dockRect, deck: deckBox(), seat: seatRect,
+    rails: { left: railRects.left.r, right: railRects.right.r } });
 (window as unknown as { __hudscale?: object }).__hudscale = (): number => hudS;
 /** THE SKY THE DOCK WAS ACTUALLY DRAWN UNDER. `gap` is the whole question: the
  *  dome is a shell hung around ONE eye, so at the dock's render it must be on
@@ -58746,6 +58898,14 @@ function hudTap(cx: number, cy: number): boolean {
   // The modal is MODAL — but it is DOM now, sitting over this canvas, so a
   // tap that reaches here while it is up can only be a stray; swallow it.
   if (menu.tab() !== null) return true;
+  // THE SEAT CHIP first — it sits on the dock's corner and is the smaller
+  // target, so it has to be asked before the dock around it.
+  if (seatRect.w > 0 && inside(seatRect, 2)) {
+    togglePov();
+    hudFlash(camMode === 'drone' || (camMode === 'top' && drone.up)
+      ? (lastPov === 'cab' ? 'NOSE CAMERA' : 'TRAILING CAMERA') : lastPov === 'cab' ? 'CAB' : 'CHASE');
+    return true;
+  }
   if (inside(dockRect, 0)) { toggleCam(); return true; }
   // WHAT MAY EAT A TAP.
   //

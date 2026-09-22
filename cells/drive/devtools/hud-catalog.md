@@ -59,42 +59,37 @@ catalogue as it now stands:
   every small pixel webfont has a 5-unit cap — see the note above `GLYPHS`);
   micro text is Micro 5 rasterised to 1-bit (`microGlyph`), not the old 3×5
   table.
-- **The control matrix and the chart's edge rails are retired.** The strait
-  between the dock and the dial is the DECK (`client/hud-deck.ts`): six DOM
-  tabs — VIEW · MAP · RIG · DRIVE · CAM · SYS — on the ground the matrix
-  stood on (`deckBox()` in main.ts is the one source of that box). DRIVE, MAP
-  and VIEW are LAYOUTS; a second tap on the layout you are in opens its
-  sheet. RIG opens the menu's RIG screen; CAM and SYS are sheets over any
-  layout. Six across when each cell is at least `DECK_MIN_CELL` CSS px, the
-  old matrix's 3×2 otherwise (a 390 px phone at DPR 2 is 3×2; turned it is
-  one row).
+- **The strait is the DECK (`client/hud-deck.ts`): six HUD LAYOUTS, one up at
+  a time or none** — VIEW · MAP · RIG · DRONE · CAM · SYS, on the ground the
+  control matrix stood on (`deckBox()` is the one source of that box). A tap
+  raises a layout, a tap on the lit tab lowers it; with none up you are on the
+  baseline, whose AUTO / HOLD / REWIND strip sits over the row. Controls are
+  exclusive and effects persist (a tab whose effect is in force wears a dot);
+  VIEW's inspection stands down on leave. Six across when each cell is at
+  least `DECK_MIN_CELL` CSS px, 3×2 otherwise.
+- **The dock is the camera switch**, with corner brackets, a `TAP > …` hint,
+  and a seat chip on its corner (CHASE/CAB; in the drone TRAIL/NOSE).
 
-| sheet | holds | was |
+| layout | draws | controls |
 |---|---|---|
-| DRIVE | AUTOPILOT · HOLD · REWIND (a slider: move to scrub, release to commit) · WAYPOINTS | the matrix's AUTO, PAUSE (tap / drag up) and WPT cells |
-| MAP | NORTH/HEADING UP · ROADS/PLACES/COVER/ECO · TILT | the matrix's map-up cell, the chart's TILT rail |
-| VIEW | PASS (SHADE/DEPTH/WIRE = the X-RAY dial) · OVERLAY (TILE, the four debug ground views, HYDR) · CAMERA · POST (DITH, FOG, DOF, TONE) | the tile-debug dial, the key's debug chips, and settings dials |
-| CAM | CAB/CHASE/TOP/DRONE · LAUNCH/RECALL with the battery · TILT and BAND | the matrix's seat and drone cells, the chart's BAND rail |
-| SYS | HUD SIZE · HIDE HUD · SETTINGS/DRIVES/ADVANCED | — |
+| VIEW | render inspection + tagline | tray: PASS, TILE GRID, debug ground views, HYDRO |
+| MAP | the layer key | the key's chips; tray: ORIENT, WAYPOINTS |
+| RIG | ENV and RIG gauges on both edges | — |
+| DRONE | its view and state | the tab launches; ALT and PITCH rails; tray: RECALL |
+| CAM | the lens | TILT rail (chart), BAND rail (not cab or god) |
+| SYS | telemetry under the chip | — |
 
-- **Debug draws in VIEW and nowhere else.** `tileDbgOn()` is the dial AND the
-  layout (or `__tiledbg(true)`, an instrument's override); leaving VIEW
-  applies stop 0 of `xray` and `hview` without saving and turns off the
-  debug ground views, and re-entering applies the rack's stored stops. So
-  the tile-debug dial's default ON no longer puts the grid on the chart.
-- **Still canvas:** compass, clock, scale bar and layer key (the chart's
-  switch-legend), POI pins, bend call, message rail, dock/minimap, the
-  place/coordinate lines, the dial and LEDs, and the ENV/RIG gauges (the
-  driving layouts only; the chart's edges are now clear). The one line of
-  the old matrix that survived is its status line — drone height and the
-  autopilot's verdict — drawn over the deck.
-- **The top-right chip** reads MENU in DRIVE and the layout's name in the
-  others; VIEW adds the "RENDER INSPECTION MODE ACTIVE" tagline under it.
+- **Still canvas:** compass, clock, scale bar, layer key, POI pins, bend call,
+  message rail, dock/minimap and its chip, the rails, the gauges (RIG only),
+  the place/coordinate lines, the dial and LEDs, and the status line over the
+  deck (drone height, the autopilot's verdict).
+- **The top-right chip** reads MENU on the baseline and the layout's name
+  otherwise, with the layout's tagline (or SYS's readout) under it.
 
 Probes: `__deck(tab?)` (state, and a tab tapped through the real handler),
-`__deckrect(id)` (client rect of a tab or sheet item — tests tap where a thumb
+`__deckrect(id)` (client rect of a tab or panel item — tests tap where a thumb
 lands and assert `elementFromPoint` finds it), `__autorect()` (the AUTO
-button). `devtools/hud-deck.test.mjs` holds the behaviour and
+chip on the baseline strip), `__hudrects()` (dock, seat chip, rails). `devtools/hud-deck.test.mjs` holds the behaviour and
 `devtools/deck-shot.mjs` takes the frames.
 
 ## The safe area (R29)
