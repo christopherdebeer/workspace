@@ -27,6 +27,12 @@ export function runWorldAuthoringRasterSelfTest(): void {
   assert(undone.tileKeys.length === 2, 'undo did not report both affected tiles');
   assert([...a.data, ...b.data].every((v) => v === 10), 'undo did not restore source bytes');
   assert(edit.report().editedCells === 0, 'undo left restored cells marked edited');
+  const redone = edit.redo();
+  assert(redone.tileKeys.length === 2 && [...a.data, ...b.data].some((v) => v === 80),
+    'redo did not restore the painted bytes');
+  assert(edit.report().redoDepth === 0 && edit.report().undoDepth === 1,
+    'redo did not move the stroke back to undo history');
+  edit.undo();
 
   edit.beginStroke();
   edit.paint([a], 5, 5, 0, 30);
@@ -44,7 +50,8 @@ export function runWorldAuthoringRasterSelfTest(): void {
   assert(outside.changed === 0, 'brush outside loaded rasters changed data');
   const reset = edit.reset();
   assert(reset.changed === 1 && a.data[0] === 10, 'reset did not restore the session source');
-  assert(edit.report().undoDepth === 0, 'reset did not clear history');
+  assert(edit.report().undoDepth === 0 && edit.report().redoDepth === 0,
+    'reset did not clear history');
 
   // ── REDO ──
   // The raster AND the session record, or a redone cell stands in the world
@@ -84,4 +91,20 @@ export function runWorldAuthoringRasterSelfTest(): void {
   assert(cells[0].w === 10 && cells[0].h === 10, 'a cell footprint is not the texel size');
   assert(Math.abs(cells[0].x - 5) < 1e-9 && Math.abs(cells[0].z - 5) < 1e-9,
     'a cell footprint is not centred on its texel');
+
+  const sparse = tile('sparse', 0);
+  edit.beginStroke();
+  const none = edit.paint([sparse], 20, 20, 100, 80, 0);
+  edit.endStroke();
+  assert(none.changed === 0 && sparse.data.every((v) => v === 10),
+    'zero fill changed categorical cells');
+  edit.beginStroke();
+  const partial = edit.paint([sparse], 20, 20, 100, 80, .5);
+  edit.endStroke();
+  assert(partial.changed > 0 && partial.changed < sparse.data.length,
+    'partial fill did not mix painted and source cover cells');
+  edit.beginStroke();
+  edit.paint([sparse], 20, 20, 100, 80, 1);
+  edit.endStroke();
+  assert(sparse.data.every((v) => v === 80), 'full fill did not paint every covered cell');
 }

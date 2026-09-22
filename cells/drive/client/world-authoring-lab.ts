@@ -9,7 +9,7 @@ export interface AuthoringPreview {
   /** `cursor` is the brush under the finger, `polyline` a line at its own
    *  width, `cells` the raster footprints an edit has already written into
    *  the array and whose rebuild has not landed yet. */
-  kind: 'cursor' | 'polyline' | 'cells';
+  kind: 'cursor' | 'brush' | 'polyline' | 'cells';
   /** A cursor's centre, a line's path, or one point per CELL CENTRE. */
   points: readonly AuthoringPoint[];
   radiusM: number;
@@ -18,6 +18,8 @@ export interface AuthoringPreview {
    *  preview shares it — they come off one raster. */
   cellW?: number;
   cellH?: number;
+  colour?: string;
+  opacity?: number;
 }
 
 export interface AuthoringEditResult extends RasterEditResult {
@@ -52,6 +54,8 @@ export interface AuthoringLayer {
   endGesture(): AuthoringEditResult;
   cancelGesture(): void;
   previews(cursor: AuthoringPoint | null, radiusM: number): readonly AuthoringPreview[];
+  previewColour?(value: string): string;
+  previewOpacity?(value: string, strength: number): number;
   undo(): AuthoringEditResult;
   redo(): AuthoringEditResult;
   reset(): AuthoringEditResult;
@@ -128,9 +132,7 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
   // MOBILE FIRST. The old panel was 330 px wide and seven rows tall — on a
   // 390 px phone it covered the top half of the world it was there to edit,
   // over the game's own menu. The lab is now a BAR along the bottom, one row
-  // of thumb-sized chips, and a SHEET that slides up over it for the rest:
-  // the sliders, the selects, undo, reset, bank, and the report. The world
-  // is the viewport; the bar is 56 px of it.
+  // of thumb-sized chips, and a SHEET that slides up over it for the rest.
   style.textContent = `
     #world-authoring { position: fixed; z-index: 120; left: 0; right: 0; bottom: 0;
       color: #dce8e6; font: 11px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace; pointer-events: none; }
@@ -179,7 +181,6 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
 
   const panel = document.createElement('section');
   panel.id = 'world-authoring';
-
   // ── THE BAR: EVERY EDIT AFFORDANCE, ON THE GLASS ──
   //
   // Undo, redo, reset and bank were behind the ⋯ sheet, which is two taps and
@@ -340,7 +341,15 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
     previews: published, dial: dialId, ...layer.report(),
   });
   const publishPreviews = (): void => {
-    const out = armed ? layer.previews(cursor, Number(radius.value)) : [];
+    const colour = layer.previewColour?.(cls.value);
+    const opacity = layer.previewOpacity?.(cls.value, Number(strength.value));
+    const out = armed
+      ? layer.previews(cursor, Number(radius.value)).map((preview) => ({
+        ...preview,
+        colour: preview.colour ?? colour,
+        opacity: preview.opacity ?? opacity,
+      }))
+      : [];
     published = {};
     for (const preview of out) {
       published[`${preview.kind}:${preview.state}`] =
@@ -427,7 +436,10 @@ export function startWorldAuthoringLab(runtime: WorldAuthoringRuntime): void {
     }
     repaint();
   };
-  const setSheet = (open: boolean): void => { panel.classList.toggle('open', open); moreChip.classList.toggle('on', open); };
+  const setSheet = (open: boolean): void => {
+    panel.classList.toggle('open', open);
+    moreChip.classList.toggle('on', open);
+  };
   const commit = (result: AuthoringEditResult): void => {
     if (result.changed) {
       changed += result.changed;

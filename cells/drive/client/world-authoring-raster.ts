@@ -47,11 +47,23 @@ const cellRect = (tile: EditableRasterTile, index: number): CellRect => {
   return { x: tile.xs + (ix + .5) * w, z: tile.zs + (iz + .5) * h, w, h };
 };
 
+const cellSample = (tile: EditableRasterTile, index: number, salt: number): number => {
+  let hash = (2166136261 ^ salt) >>> 0;
+  for (let i = 0; i < tile.key.length; i++) {
+    hash = Math.imul(hash ^ tile.key.charCodeAt(i), 16777619) >>> 0;
+  }
+  hash = Math.imul(hash ^ index, 2246822519) >>> 0;
+  hash ^= hash >>> 13;
+  hash = Math.imul(hash, 3266489917) >>> 0;
+  return (hash >>> 0) / 0x100000000;
+};
+
 export class RasterPaintSession {
   private originals = new Map<string, CellEdit>();
   private undoStack: CellEdit[][] = [];
   private redoStack: CellEdit[][] = [];
   private stroke: Map<string, CellEdit> | null = null;
+  private strokeSalt = 0;
 
   beginStroke(): void {
     if (this.stroke) this.endStroke();
@@ -60,6 +72,7 @@ export class RasterPaintSession {
     // already overwritten, at values nothing on the screen ever showed.
     this.redoStack.length = 0;
     this.stroke = new Map();
+    this.strokeSalt++;
   }
 
   paint(
@@ -68,11 +81,14 @@ export class RasterPaintSession {
     z: number,
     radiusM: number,
     value: number,
+    fill = 1,
   ): RasterEditResult {
     if (!this.stroke) this.beginStroke();
     const changedTiles = new Set<string>();
     let changed = 0;
     const radius = Math.max(0, radiusM);
+    const coverage = Math.max(0, Math.min(1, fill));
+    if (coverage <= 0) return { changed, tileKeys: [] };
 
     for (const tile of tiles) {
       if (x + radius < tile.xs || x - radius > tile.xs + tile.w
@@ -93,6 +109,11 @@ export class RasterPaintSession {
           const cx = tile.xs + (ix + .5) * pxW;
           if (Math.hypot(cx - x, cz - z) > reach) continue;
           const index = iz * tile.columns + ix;
+          // Cover classes cannot be fractionally blended in one texel. A
+          // stable per-stroke sample turns the amount dial into spatial fill:
+          // lower values mix the new class through the source, while another
+          // stroke gets a new sample and can build coverage progressively.
+          if (coverage < 1 && cellSample(tile, index, this.strokeSalt) >= coverage) continue;
           const before = tile.data[index];
           if (before === value) continue;
           const key = cellKey(tile, index);
@@ -125,7 +146,10 @@ export class RasterPaintSession {
       }
     }
     this.stroke = null;
-    if (edits.length) this.undoStack.push(edits);
+    if (edits.length) {
+      this.undoStack.push(edits);
+      this.redoStack.length = 0;
+    }
     return {
       changed: edits.length,
       tileKeys: [...new Set(edits.map((e) => e.tile.key))],
@@ -162,7 +186,9 @@ export class RasterPaintSession {
     for (const edit of edits) {
       edit.tile.data[edit.index] = edit.after;
       const key = cellKey(edit.tile, edit.index);
-      if (!this.originals.has(key)) this.originals.set(key, edit);
+      const original = this.originals.get(key);
+      if (original) original.after = edit.after;
+      else this.originals.set(key, { ...edit });
     }
     this.undoStack.push(edits);
     return {

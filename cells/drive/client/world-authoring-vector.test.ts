@@ -28,6 +28,15 @@ export function runWorldAuthoringVectorSelfTest(): void {
     'serialized features did not restore');
   assert(restored.undo().feature?.id === 'test-1' && restored.report().features === 0,
     'undo did not remove the last source feature');
+  assert(restored.redo().feature?.id === 'test-1' && restored.report().features === 1,
+    'redo did not restore the last source feature');
+  restored.undo();
+  const history = restored.save();
+  const reloadedHistory = new PolylinePaintSession();
+  reloadedHistory.load(JSON.parse(JSON.stringify(history)));
+  assert(reloadedHistory.report().redoDepth === 1
+    && reloadedHistory.redo().feature?.id === 'test-1',
+  'serialized history did not preserve redo across a rebuild');
 
   restored.load([{ nope: true }, ...saved]);
   assert(restored.report().features === 1, 'invalid persisted entries were not ignored');
@@ -65,4 +74,3 @@ export function runWorldAuthoringVectorSelfTest(): void {
   r.begin('track', 5, 0, 0); r.sample(30, 0); r.end();
   assert(r.report().redoDepth === 0, 'a new line kept a stale redo');
 }
-

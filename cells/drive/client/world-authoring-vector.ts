@@ -180,6 +180,7 @@ export class PolylinePaintSession {
   report(): Record<string, number> {
     return {
       features: this.features.length,
+      undoDepth: this.features.length,
       redoDepth: this.redoStack.length,
       draftPoints: this.draft?.points.length ?? 0,
       vertices: this.features.reduce((sum, feature) => sum + feature.points.length, 0),
