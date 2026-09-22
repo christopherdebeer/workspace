@@ -58,18 +58,21 @@ check('there is a road under the truck to drive', !!road?.way?.on, road);
 // is the one nobody would notice was broken.
 const dials = await d.page.evaluate(() => window.__dial('auto', 1));
 check('the AUTOPILOT dial offers the tab', dials.auto === 'HUD TAB', dials.auto);
-// Tapped through the canvas at the tab's own HUD rect, scaled the way every
-// other pointer in this game is — not by calling the handler, which would
-// prove the handler and not the hit box.
-const tapAuto = () => d.page.evaluate(() => {
-  const r = window.__autorect();
-  const send = (type) => window.__hudcanvas().dispatchEvent(new PointerEvent(type, {
-    pointerId: 91, pointerType: 'touch', button: 0, bubbles: true,
-    clientX: (r.x + r.w / 2) * r.s, clientY: (r.y + r.h / 2) * r.s,
-  }));
-  send('pointerdown'); send('pointerup');
-  return window.__auto();
-});
+// Tapped where a thumb lands on the deck's AUTO button (the DRIVE sheet,
+// client/hud-deck.ts) — found by elementFromPoint, so a button covered by
+// something else fails here rather than being clicked through its handler.
+const tapAuto = async () => {
+  if ((await d.page.evaluate(() => window.__deck().open)) !== 'drive') {
+    await d.page.evaluate(() => window.__deck('drive'));
+    await d.page.waitForTimeout(1500);
+  }
+  return d.page.evaluate(() => {
+    const r = window.__autorect();
+    if (!r) return { on: null, why: 'no AUTO button on the glass' };
+    document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2)?.closest('[data-deck-item]')?.click();
+    return window.__auto();
+  });
+};
 const tapped = await tapAuto();
 check('a tap on the tab engages it', tapped.on === true, tapped);
 const off = await tapAuto();

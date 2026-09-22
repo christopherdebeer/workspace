@@ -48,50 +48,54 @@ web font offers, and it is the majority of the HUD) or accept 8px everywhere
 and re-fit the dense corners. Recommendation: migrate the 5×7 face only,
 keep 3×5 bitmap. The two already coexist.
 
-## 2. Surface inventory (`drawHud`, top to bottom of the draw order)
+## 2. Where things stand (2026-09-22)
 
-| surface | faces used | notes for migration / DOM review |
+The inventory below this line in earlier versions of this file is stale; the
+catalogue as it now stands:
+
+- **Done:** MENU chip, mission card, task and route chips are DOM
+  (`client/overlays.ts`); the shell's `#reroll`/`#place`/`#speed`/`#hint` are
+  gone. The 5×7 face stayed a bitmap (a Silkscreen `fillText` antialiases and
+  every small pixel webfont has a 5-unit cap — see the note above `GLYPHS`);
+  micro text is Micro 5 rasterised to 1-bit (`microGlyph`), not the old 3×5
+  table.
+- **The control matrix and the chart's edge rails are retired.** The strait
+  between the dock and the dial is the DECK (`client/hud-deck.ts`): six DOM
+  tabs — VIEW · MAP · RIG · DRIVE · CAM · SYS — on the ground the matrix
+  stood on (`deckBox()` in main.ts is the one source of that box). DRIVE, MAP
+  and VIEW are LAYOUTS; a second tap on the layout you are in opens its
+  sheet. RIG opens the menu's RIG screen; CAM and SYS are sheets over any
+  layout. Six across when each cell is at least `DECK_MIN_CELL` CSS px, the
+  old matrix's 3×2 otherwise (a 390 px phone at DPR 2 is 3×2; turned it is
+  one row).
+
+| sheet | holds | was |
 |---|---|---|
-| checkpoint markers (`cpDraw` loop) | none (diamonds, beams) | pure geometry; untouched by font work |
-| POI pins (`poiDraw` loop) | micro + `textEdgeS` | world-anchored, occlusion-ghosted; **stays canvas** (needs the world's pixel grid + per-frame projection) |
-| compass strip | primary (`textEdge` cardinals) | 5×7 → 8px; centring via `textW/2` → `measureText` |
-| MENU chip (`menuRect`) | primary + `panel` | **DOM candidate** — it opens a DOM menu; a DOM button removes the last canvas hit-target that isn't driving-adjacent (see §3) |
-| STORM APPROACHING banner | primary (`textEdge`) | ephemeral toast; could be DOM, low value |
-| co-driver bend call | primary (`textEdge`) | mid-screen, per-frame, tied to nav state; stays canvas |
-| dock (POV/minimap square, `dockRect`) | primary label + `panel`/`frame` | frame is a renderer hole (like the menu bay); stays canvas |
-| place / way / survey tally / coordinate lines | micro + `textEdgeS`, primary place | left column; dense micro text — argument for keeping 3×5 |
-| GPS accuracy / fix-age readout | micro | rides the coordinate line under real drive |
-| tachometer cluster (ring, sweep, card) | primary ×2 scale (speed), micro (units, RPM) | the showpiece instrument; stays canvas |
-| LEDs (SLIP/SOL/SVC) | micro | stays canvas |
-| RIG table (SUSP/HULL/TYRE/BATT) + `meter` | micro | stays canvas |
-| ENV table (WET/surface/weather/heading) | micro | stays canvas |
-| mission offer / active / arrived panel | primary + micro + `panel` + `glowText` | **the strongest DOM candidate** — it is literally called "the job, as a modal", has a tap target (`missionRect`), wraps badly in bitmap (`fit` truncation), and pauses nothing. A DOM sheet like the menu would give it real text layout and a real button |
-| "SURVEYED" claim toast | primary + micro + `panel` | passive toast; fine on canvas, or trivially DOM alongside the mission panel |
+| DRIVE | AUTOPILOT · HOLD · REWIND (a slider: move to scrub, release to commit) · WAYPOINTS | the matrix's AUTO, PAUSE (tap / drag up) and WPT cells |
+| MAP | NORTH/HEADING UP · ROADS/PLACES/COVER/ECO · TILT | the matrix's map-up cell, the chart's TILT rail |
+| VIEW | PASS (SHADE/DEPTH/WIRE = the X-RAY dial) · OVERLAY (TILE, the four debug ground views, HYDR) · CAMERA · POST (DITH, FOG, DOF, TONE) | the tile-debug dial, the key's debug chips, and settings dials |
+| CAM | CAB/CHASE/TOP/DRONE · LAUNCH/RECALL with the battery · TILT and BAND | the matrix's seat and drone cells, the chart's BAND rail |
+| SYS | HUD SIZE · HIDE HUD · SETTINGS/DRIVES/ADVANCED | — |
 
-## 3. Non-`drawHud` surfaces
+- **Debug draws in VIEW and nowhere else.** `tileDbgOn()` is the dial AND the
+  layout (or `__tiledbg(true)`, an instrument's override); leaving VIEW
+  applies stop 0 of `xray` and `hview` without saving and turns off the
+  debug ground views, and re-entering applies the rack's stored stops. So
+  the tile-debug dial's default ON no longer puts the grid on the chart.
+- **Still canvas:** compass, clock, scale bar and layer key (the chart's
+  switch-legend), POI pins, bend call, message rail, dock/minimap, the
+  place/coordinate lines, the dial and LEDs, and the ENV/RIG gauges (the
+  driving layouts only; the chart's edges are now clear). The one line of
+  the old matrix that survived is its status line — drone height and the
+  autopilot's verdict — drawn over the deck.
+- **The top-right chip** reads MENU in DRIVE and the layout's name in the
+  others; VIEW adds the "RENDER INSPECTION MODE ACTIVE" tagline under it.
 
-| surface | what it is | verdict |
-|---|---|---|
-| boot overlay (`#boot`) | DOM already (shell HTML) | give it the Silkscreen face for consistency (it's the first text seen) |
-| DOM menu (`client/menu.ts`) | DOM, Silkscreen | done |
-| touch stick (`stickBase`/`stickNub`) | DOM divs | done, no text |
-| `#reroll` "elsewhere ↻" button | DOM, shell | **retire** — duplicated by DRIVES → ELSEWHERE; it predates the menu |
-| `#place`, `#speed`, `#hint` shell divs | DOM, shell | dead ("the shell's own text chrome is retired") — remove from `SHELL` |
-| minimap (`mini` canvas + `mapLayer`) | canvas, north-up chart | stays canvas; no text |
-| POV dock inset / vehicle bay | renderer scissor blits | stays; the DOM menu already coordinates with the bay |
-
-## 4. Recommended order
-
-1. **Mission panel → DOM** (biggest UX win: real wrapping, real tap target,
-   Silkscreen for free; also removes `missionRect` from `hudTap`).
-2. **MENU chip → DOM** (removes a canvas hit-target; trivial).
-3. **Font migration of the 5×7 face** behind a flag: swap `text`/`textW`/`fit`
-   internals to `fillText`/`measureText` with `8px/16px Silkscreen`
-   (`document.fonts` is already seeded by `client/font.ts`), keeping the
-   per-char fallback for Yi/Arabic. Judge on the compass, speedo and mission
-   text; keep the 3×5 micro face bitmap.
-4. **Shell cleanup**: drop `#reroll`/`#place`/`#speed`/`#hint`, Silkscreen the
-   boot overlay.
+Probes: `__deck(tab?)` (state, and a tab tapped through the real handler),
+`__deckrect(id)` (client rect of a tab or sheet item — tests tap where a thumb
+lands and assert `elementFromPoint` finds it), `__autorect()` (the AUTO
+button). `devtools/hud-deck.test.mjs` holds the behaviour and
+`devtools/deck-shot.mjs` takes the frames.
 
 ## The safe area (R29)
 
@@ -99,7 +103,9 @@ keep 3×5 bitmap. The two already coexist.
 reserved ground, in HUD px: the compass strip (plus the tile-debug header when
 that dial is on), the top-left waypoint distance chip, MENU, the conditions
 column, the dock square with its chips and info lines, the dial/LED/RIG block,
-and the bottom place-and-coordinates line. Anything that PLACES itself — the
+the deck's strait (its tabs and the status line over them), VIEW's tagline
+while it is up, and the bottom place-and-coordinates line. The ENV and RIG
+stacks are reserved in the driving layouts only; the chart's edges are clear. Anything that PLACES itself — the
 chart's rim chips today — walks inward along its own screen bearing until it
 stands on open glass, and does so in `updatePois`, so `__pins().drawn[].sx/sy`
 (with `safe` and `hudS` in the same probe) is the position actually painted.

@@ -102,6 +102,10 @@ export interface Overlays {
   prompt(label: string | null): void;
   terminal(t: TerminalCard | null): void;
   site(s: SiteCard | null): void;
+  /** The top-right chip's word: MENU while driving, the layout's name in the
+   *  others (the HUD deck's layouts), so the glass says which HUD it is. The
+   *  chip still opens the menu whatever it reads. */
+  menuLabel(label: string): void;
 }
 
 export function createOverlays(
@@ -514,6 +518,9 @@ export function createOverlays(
       sNote.textContent = sc.note ?? '';
       sNote.style.display = sc.note ? 'block' : 'none';
       site.style.display = 'block';
+    },
+    menuLabel(label) {
+      if (menuBtn.textContent !== label) menuBtn.textContent = label;
     },
   };
 }

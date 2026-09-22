@@ -19188,3 +19188,84 @@ ink on the canvas measured as armed-against-disarmed so the difference is the
 preview and nothing else — with the tile grid gone the disarmed floor is
 exactly **0**). `devtools/lab-phone.test.mjs` holds the bar, the dial and an
 undo/redo round trip through the chips.
+
+## The control matrix became the deck, and debug draws in VIEW only
+
+Asked from the seat with two mocks: the tile and debug overlays clutter the
+chart; the control matrix (six HUD toggles), the chart's edge rails (TILT,
+BAND) and the gauges should give way to shortcuts for HUD LAYOUTS and
+overlays. The mocks drew a tab row between the minimap and the dial —
+VIEW · MAP · RIG · DRIVE · CAM · SYS — and a "RENDER VIEW : INSPECT" sheet
+(PASS · OVERLAY · CAMERA · POST) over it.
+
+**`client/hud-deck.ts` is the row and the sheets, and it owns no game
+state.** main.ts hands it a description every frame (`stepDeck`, called from
+`stepOverlays`) and it diffs: an unchanged description touches nothing, a
+change of values patches in place (so a slider under a thumb is never
+rebuilt out from under it), and only a change of shape rebuilds the sheet.
+DOM, for the reasons the mission card and the MENU chip already moved: real
+tap targets, real text, and safe-area insets the browser knows. The row sits
+on the strait the matrix stood on — `deckBox()` is the one source of that box
+for the DOM, the canvas status line and `hudSafeRects`.
+
+**THREE TABS ARE LAYOUTS AND THREE ARE NOT.** DRIVE, MAP and VIEW say what
+the glass is for; a second tap on the one you are in opens its sheet. DRIVE
+and MAP FOLLOW the camera (the dock tap, `c`, a CAM choice all move it and
+the layout keeps up); VIEW HOLDS whatever camera it was given, because
+inspecting the chart and inspecting the road from the seat are both
+inspection. RIG is a door into the menu's RIG screen; CAM and SYS are sheets
+over any layout. The top-right chip reads MENU in DRIVE and the layout's name
+otherwise, and still opens the menu.
+
+**THE DEBUG OVERLAYS DRAW IN VIEW AND NOWHERE ELSE, which is the whole ask.**
+`tileDbgOn()` is the dial AND the layout — so the seat's rack default of TILE
+DEBUG ON no longer puts the grid (3.7 ms a call on a device, more than half
+the HUD) on the chart everyone reads maps on. Leaving VIEW applies stop 0 of
+`xray` and `hview` WITHOUT saving, and turns the debug ground views off (they
+are renderer channels that paint in every camera); re-entering applies the
+rack's stored stops. So the rack remembers the inspection you chose and the
+glass forgets it the moment you stop inspecting. `__tiledbg(true)` forces the
+grid in any layout, because a devtool asking for it is asking for a
+measurement.
+
+**The old actions moved, none were dropped.** AUTO, HOLD, WAYPOINTS → the
+DRIVE sheet. The PAUSE cell's drag-up scrub is the REWIND slider: nothing
+happens until it moves, `input` seats the truck on a checkpoint, `change`
+(release, pointer or keyboard) commits — or cancels back at the top — and
+holds the world, exactly as the drag did. Drone, seat and map-up → CAM and
+MAP. The chart's TILT and BAND rails → sliders in CAM (both) and MAP (tilt);
+the chart's edges are now clear. What stays on the canvas is the matrix's
+status line (drone height, the autopilot's verdict), drawn over the deck.
+
+**PIXEL ICONS, NOT THE ICON FONT.** The Font Awesome subset has no eye and no
+camera, and adding two glyphs means re-running the subsetter; a 9×9 bitmap is
+also closer to the mock and renders hard-edged at any scale. Tab labels are
+Micro 5 at 11 px, which fits DRIVE into a cell the Silkscreen word would not.
+
+**SIX ACROSS OR THE OLD 3×2, decided by the cell's width.** On a 390 px phone
+at DPR 2 the strait is 138 CSS px and six cells would be 20 px each, so the
+row takes the matrix's own two rows; turned, it is one row of six, as the
+mock draws it. `DECK_MIN_CELL` (26) is the threshold. The sheet is a fixed
+width (min(440 px, the screen)) — a grid inside a shrink-to-fit box collapses
+to its narrowest layout and gave two columns in landscape where four fit.
+
+**Measured** (`devtools/hud-deck.test.mjs`, at-campsbay, nodraw, the
+tile-debug dial left ON throughout on purpose — the claim is that "on" no
+longer means the chart wears it, and a test that switched it off first would
+pass on the old build): 35 of 35 — the row on the strait, every tab under a
+thumb placed on it (`elementFromPoint`), AUTO engaging and handing back, HOLD
+holding, a WAYPOINTS choice setting the dial, MAP = top camera with no grid
+and no rails, VIEW drawing the grid and taking WIRE, leaving VIEW turning both
+off while the rack still reads WIRE, re-entering bringing it back, CAM moving
+the seat, RIG opening the menu, no page errors. `orientation`, `poi-project`
+(pins clear of the new safe rects), `glsl-reserved` and `switches` green.
+`autopilot-drive`'s three tab checks pass through the new button; its five
+failures are the known "no road under the truck" at its live spot (Overpass).
+`matrix-shot.mjs` and `hud-row-shot.mjs` are deleted with their subject;
+`glass-verify.mjs` taps the sheet. `deck-shot.mjs` takes the frames.
+
+**NOT SEEN ON A DEVICE.** Every frame is the harness at 390×844 and 844×390.
+The landscape sheet scrolls (max 52 vh) and overlaps the compass; the canvas
+HUD itself still has no safe-area insets (#157), so a turned notched phone
+still puts the clock and gauges under the notch — the deck and its sheet take
+the insets, the canvas does not yet.

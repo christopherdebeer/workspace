@@ -7,7 +7,7 @@
  *   night     headlights, the HUD over near-black
  *   wpt-on    WPT active (amber) vs the dim default
  *   auto-on   AUTO engaged with its status line
- *   paused    the transport held via the pause cell
+ *   paused    the transport held via the deck's DRIVE sheet
  *
  * Rig-warning and rough-surface states need a damaged rig / a track under
  * the wheels and are captured in play rather than staged here.
@@ -37,25 +37,22 @@ await snap('glass-wpt-on');
 await d.page.evaluate(() => window.__dial('poi', 0));
 
 await d.page.evaluate(() => window.__dial('auto', 1));
-await d.page.evaluate(() => {
-  const r = window.__autorect();
-  const c = document.querySelector('canvas');
-  const x = (r.x + r.w / 2) * r.s, y = (r.y + r.h / 2) * r.s;
-  for (const t of ['pointerdown', 'pointerup']) {
-    c.dispatchEvent(new PointerEvent(t, { clientX: x, clientY: y, pointerId: 7, bubbles: true }));
+// AUTO and HOLD live in the deck's DRIVE sheet now (client/hud-deck.ts): a
+// second tap on DRIVE opens it, and the buttons are clicked where a thumb
+// would land on them, so a control covered by something else fails here.
+const tapDeck = async (id) => {
+  if ((await d.page.evaluate(() => window.__deck().open)) !== 'drive') {
+    await d.page.evaluate(() => window.__deck('drive'));
+    await d.page.waitForTimeout(1500);
   }
-});
+  await d.page.evaluate((i) => {
+    const r = window.__deckrect(i);
+    document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2)?.closest('[data-deck-item]')?.click();
+  }, id);
+};
+await tapDeck('auto');
 await snap('glass-auto-on');
-
-// The pause cell sits one grid column right of AUTO (CW 18 + CG 2 = 20).
-await d.page.evaluate(() => {
-  const r = window.__autorect();
-  const c = window.__hudcanvas();
-  const x = (r.x + 20 + r.w / 2) * r.s, y = (r.y + r.h / 2) * r.s;
-  for (const t of ['pointerdown', 'pointerup']) {
-    c.dispatchEvent(new PointerEvent(t, { pointerId: 8, pointerType: 'touch', button: 0, bubbles: true, clientX: x, clientY: y }));
-  }
-});
+await tapDeck('hold');
 await snap('glass-paused');
 
 report(d.errors);
