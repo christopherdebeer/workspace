@@ -357,6 +357,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/hull-collide.test.mjs` | the truck's own shape in pure node: the frame against main.ts's own integration TEXT, the support function, the point distance past a corner, the segment push-out, rotation invariance of the whole scene, and the circle it replaces as the control | instant |
 | `node devtools/sward-profile.mjs` | the sward's radial density LAW against its carriers' CAPACITY at the same range: target, envelope, per-band keep, delivered, and COVERAGE — the number that decides whether a handover steps. One boot, nodraw, seconds. `GRASS=` asks what the build would do at another stop of the GRASS dial (it is a FRACTION now: 0.4 / 0.8 / 1 / 1.06), which is the only way to reach a setting that lives in localStorage; `ARGS='swardcap=0'` is the law unclamped. NODRAW, so it never compiles the shader — pair it with a drawn frame | ~40s |
 | `node devtools/roof-wind.test.mjs` | no roof piece is lit from inside | instant |
+| `node devtools/shore-graze.mjs` | the bed under drawn water as numbers and from a grazing camera: a transect through the nearest water (DEM, drawn mesh, cover, resting level, every 3 m) that FAILS on a ledge standing over the water or a step over `STEP_M` between neighbours, then the god camera at water level along the shore (`FIX=`, `AZ=`, `EL=`, `DIST=`, `SHOTS=0` for the numbers alone). at-romsdalen is the case that found the sea-bed switch | ~3min |
 | `node devtools/railway.test.mjs` | the gauge, the formation, the draw filter and the ruling grade | instant |
 | `node devtools/rail-grade.mjs` | a railway is cut and embanked, not draped (`GRADE=0` is the control) | ~4min |
 | `node devtools/terrain-detail.mjs` | what an art pixel covers on the ground along the view, and whether the mottle's band limit fires (`TD=px` paints it, `AB=1` flips the ruler live with an interleaved noise floor) | ~6min |
@@ -429,6 +430,14 @@ reaches 0** in either. `__tileholes()` reads 0 throughout, so no tile is
 missing its mesh — it is the cell-triangle lookup answering null mid-swap. The
 honest fix is a settle gate on that assertion rather than a fixed wait; until
 then, read it against three runs of a control, not one.
+
+**`mesh-seams.test.mjs`'s `population sane` rows are a streaming gate, not a
+seam.** They require a minimum count of built joins at each spot, and on the
+relay the count is whatever streamed: measured 2026-09-20 as `bixby joins=4 >=
+5` on the working tree and `chapmans joins=1 >= 10` on a parent-kernel
+worktree the same hour, with every seam row (`p95 kerb step 0.04 <= 0.15`,
+`worst meet 0.04 <= 0.5`) green in both. Read the seam rows; a population
+failure alone is the network.
 
 `sward.test.mjs` and anything else that needs a road under the car depend on
 **Overpass**, a busy public service that fails for whole sessions at a time.
@@ -18407,3 +18416,723 @@ default: return { name: "render", render: true, contact: true, shadow: true,
 rollback: false };`. The handler answers too (`/`, `/lab/world` and a `~/dem/`
 tile all 200), because grepping `app.js` proves the client shipped and says
 nothing about a route.
+
+## The X-RAY's black blocks were NaN, spread into rectangles by the blur
+
+The critique of the eighteen composites named it as a defect to fix before
+trusting the instrument: *the xray-wire views still contain enormous opaque
+black shapes in several fixtures — Paris South, Paris West, Camps Bay, Carmel
+and Stelvio.* Screen-aligned rectangles, edges exactly on the art-pixel grid,
+every pixel inside them (18,18,18) — the palette's black floor — over trees,
+over hillsides and, at the Stelvio, over the sky.
+
+**THE SWEEP WAS NOT MISSING ANY MATERIAL, and the first reading of the frame
+said it was.** Buildings were the obvious suspect at Paris South (the blocks
+stood where the buildings stood), and the Stelvio has none. `__xraywhy()` —
+the new probe that walks the scene with the sweep's own rules and tallies
+triangles per mesh by the verdict each fell under — read every terrain tile
+as `wire`, the hydro tiles as `shader` (protected by design), the vegetation
+as `veg`, and nothing as `solid`. A reading of the authority, which a frame
+cannot give.
+
+Attributed by hide-diff on one settled Camps Bay world at the sheet's own god
+camera (`scratchpad/xray-bisect.mjs`): the black was **39.2%** of the pane,
+**0.2% with the terrain hidden**, unchanged with the far shell, the globe, the
+sea, the sward, the vegetation, the wildlife or the theme hidden. Then the
+things it was NOT, each measured on the same world: not the near plane
+(`__near` 0.3 to 30 m, 39.2% throughout); not the DOF or the tilt shift (off,
+on, camera, miniature — 39.0–39.2%); not the sequence of tiledbg and ground
+views the sheet runs first (the plain framing reproduces it). And then the
+thing it was: booted with `?tdetail=flat` — the cascade's fine octaves and
+the substrate pinned at zero — **0.1%**.
+
+**A WIREFRAME FRAGMENT IS ON A LINE, AND `fwidth` ACROSS A LINE IS NOT A
+FOOTPRINT.** The terrain's fragment shader divides by it — the detail cascade's
+band limit, the substrate's `subLine` phase filter, the relief's screen
+gradient — and on a line's 2x2 helper quad the derivative is undefined, so what
+comes out is NaN. One NaN pixel in the scene target would be one black pixel;
+the composite's separable blurs (the four-pass soft copy, the bloom's own)
+then spread it into an axis-aligned RECTANGLE — a horizontal pass, then a
+vertical one, at growing radii — and the quantiser paints NaN as the floor.
+That is why the blocks are rectangles with stepped edges, why they cover the
+sky, and why they only appear where the terrain's own detail terms are loud.
+
+`xrayWire` now saves `uTdOct` and `uSubAmt` when WIRE comes up, pins both at
+zero, and puts them back when it stands down (`xrayTdSaved`). A wire view shows
+lines, so nothing the surface detail says is lost. Measured, the same framing,
+the same world: **39.2% → 0.2%**, and after WIRE is turned off `__tdetail()`
+reads `oct 3, sub 1` again.
+
+**THE HARNESS IS WHERE THIS SHOWS AND A PHONE IS WHERE IT MIGHT NOT.** The
+frames are SwiftShader's, and how a GPU's line rasteriser fills helper lanes
+is the driver's business — the composites the critique was written against
+are harness frames, so the fix is judged there. A NaN guard in the blur
+source would make any future NaN a pixel rather than a rectangle and is not
+made here: the blur runs at full resolution four times a frame, and the one
+producer is now pinned.
+
+`__xraywhy(top?)` is the instrument, and `__hide('hydro')` / `__hide('surf')`
+went in beside it — the field's own meshes and the coastal surf strip alone —
+because `sea` is the legacy plane and hiding it leaves every hydro tile
+drawing, which the Romsdalen unit below needed to know.
+
+## Romsdalen's terraces were the sea bed, switched per vertex on a 38 m raster
+
+The critique called the ground-view Romsdalen frames *the one thing here I
+would regard as an outright rendering defect: the water/shore region contains
+conspicuous horizontal terracing / sawtooth bands. It looks quantised in world
+space.* It is, and the quantum is the cover raster's pixel.
+
+**THE PLACE IS A FIXTURE NOW.** `at-romsdalen` (`static/fixtures/world-romsdalen.json`,
+62.5511 7.7112, r=1200 m — the reel drive's own spawn; 1,150 ways, 256² heights
+at 9.4 m, no terrestrial ecoregion at z5) boots in seven seconds and settles in
+under a minute, so every number below is the same on every run. The water there
+is the fjord, kind `ocean`, resting at 0.1 m over a DEM that reads **0.6 m
+across the whole of it** — the elevation source's flat plate, exactly as the
+sea-floor rule's own comment records.
+
+**THE WATER WAS INNOCENT, AND THE HIDE-DIFF SAID SO FIRST.** From the seat's own
+framing (the sheet's `close` god camera at the spawn) the terraces are pale
+flat-topped ledges in rows across the fjord. Foam off, waves off, the surf
+strip hidden — the ledges stay; the hydro meshes hidden (`__hide('hydro')`,
+new) and the ledges are STILL THERE, drawn in the terrain's own water-class
+paint: horizontal stepped bands in the bed under the fjord. Then the transect
+(`roms-transect.mjs`, now `devtools/shore-graze.mjs`), from the truck through
+the shoreline and 240 m out, every 3 m:
+
+| m from the truck | DEM | mesh, as shipped | mesh, now |
+|---|---|---|---|
+| 36 (the last dry sample) | 2.73 | 2.74 | 2.74 |
+| 42 | 1.73 | **−0.13** | −3.65 |
+| 48 | 1.15 | −5.90 | −5.90 |
+| 84 | 0.60 | **−4.58** | −5.90 |
+| 90–144 | 0.60 | −5.90 | −5.90 |
+| 150 | 0.60 | **−3.79** | −5.90 |
+| 156–228 | 0.60 | −5.90 | −5.90 |
+| 234 (the far shore's first dry pixel) | 0.61 | **−2.94** | −4.93 |
+
+`SEA_BED` dropped a vertex the full six metres when the NEAREST cover pixel said
+water and the DEM stood within two metres of the sea, and not otherwise. A cover
+pixel is ~38 m and a vertex 9–20 m, so along a fjord the bed was a 6 m plateau
+with pixel-shaped holes in it: the lone samples at −4.58 and −3.79 are vertices
+a dry pixel left standing at +0.6 — **half a metre PROUD of a 0.1 m sea** —
+and the bilinear ramps between them and their dropped neighbours are the
+sawtooth. From a grazing camera each hole is a flat pale ledge (the bed's own
+colour through a few centimetres of water, or above it) with a sloped side, in
+rows, because the raster's rows are rows.
+
+**THE SWITCH READS EVIDENCE NOW** (`seaFloor` in the kernel, both the
+refined and the plain lattice): the water evidence over a footprint about one
+cover pixel — nine taps, centre weighted two, the shape `swardCoverEvidence`
+already uses on the same raster for the same fault — saturating at a third of
+a pixel wet, under the same hard two-metre ceiling as before. A lone dry pixel
+inside the sea reads 0.8 and takes the full drop, so the bed under it is −5.9
+instead of +0.6; only the outermost third of a pixel of shore ramps. Only ever
+lowers, as before; the road veto and the bank's ownership sit downstream of it
+and are unchanged.
+
+**TWO CUTS BEFORE THIS ONE WERE CONTINUOUS IN THE WRONG AXIS, AND THE CENSUS
+CAUGHT BOTH.** A drop of `SEA_BED × evidence` left the raster's edge pixels at
+a third of the depth, and the lattice then interpolated from that shallow
+vertex up to its dry neighbour OVER the water: **+43 and +46 interior buried
+texels at Glencairn and the Umgeni** against a control taken on the parent
+kernel in a worktree. An eased depth gate over the last 1.5 m did the same
+from the other side (+80, +85). The holes in PLAN were the fault and only they
+wanted smoothing; a vertex within two metres of the sea takes the depth
+outright, as it always did.
+
+**Measured**, `wet-census.mjs`, the parent kernel (`REV=`, a worktree at
+`55aca99`) against this one, W drawn / U fringe-buried / I interior-buried:
+
+| fixture | control | now |
+|---|---|---|
+| at-romsdalen | 4300 / 114 / 54 | **4354 / 61 / 46** |
+| at-umgeni | 5526 / 534 / 455 | **5547 / 507 / 444** |
+| at-glencairn | 4690 / 149 / 340 | 4690 / 155 / 337 |
+| at-campsbay | 614 / 22 / 1 | 619 / 22 / 1 |
+| at-simonstown | 363 / 11 / 10 | 361 / 9 / 12 |
+
+Romsdalen's fringe burial halves and its drawn water rises by the holes it
+had; the Umgeni's estuary gains 21 drawn and loses 27 fringe; the other three
+are inside the census's own spread. **A CONTROL TAKEN BY STASHING THE WORKING
+TREE IS A CONTROL YOU CANNOT SEE**: the first attempt ran `git stash push --
+<file>` under a chain that printed a non-empty diff right after it, and the
+reading was believed and then doubted for an hour; `wet-census.mjs` takes
+`REV=` now and a `git worktree` at the parent is the way to hold one still.
+
+**AND `__hide('hydro')` / `__hide('surf')` ARE THE INSTRUMENT THAT SEPARATED
+THE LAYERS.** `sea` hides the legacy plane and leaves every hydro tile drawing,
+so before this unit a frame could not be taken with the water off — and a ledge
+in a frame cannot say which layer it belongs to.
+
+`devtools/shore-graze.mjs` is the regression: the transect FAILS on any
+interior water sample (coverage 0.9 or over, past the first 20 m of shore)
+whose mesh stands over the resting level, or on a step over `STEP_M` (2.5 m)
+between neighbours, and then takes the grazing frames. On the fixed kernel at
+Romsdalen: **81 samples, 59 inside the water, 0 ledges, 0 steps**; the ford
+and the lagoon fixtures pass too. The fringe is deliberately not a ledge here:
+a line river's whole width can be fringe, and that is #169's bank shaping,
+which the census counts as U.
+
+**What this does NOT do.** The bed is still a constant `SEA_BED` under the
+evidence, not a shelving profile by distance from the waterline (#170's beach
+against cliff); the far shore in the table above still climbs from −4.9 to +0.6
+across one pixel; and the pale streaks that remain on the fjord from a grazing
+camera are the FOAM — crest whitening on the 140 m wind sea, hard-edged under
+the quantiser — which the same hide-diff separated (`foamStrength: 0` takes
+them out) and which is a look, not a geometry.
+
+## A keyspace bump is a fresh bank, and the previous keyspace now stands in for it
+
+The constructed-ground unit bumped the client's `OSM_TILE_V` to 5 and left the
+handler's `TILE_V` at 4, so `TILE_RE` (`v[2-4]`) answered 404 to every near
+tile for an hour of deploys and the fine layer ran on the client's own
+Overpass fallback. Measured live before the fix: v4 503 (route present,
+mirrors busy), v5 404 (route rejected). Both are 5 now, the handler's tile
+query carries the `amenity=parking` and `area=yes`+`surface` clauses the
+painter reads, and the doctrine block over `TILE_V` says BUMP BOTH.
+
+**AND A BUMP IS A FRESH BANK ON A DAY THE MIRRORS MAY NOT FILL IT.** The day
+v5 shipped all three mirrors timed out a one-block query at 40 s, so every
+cold v5 tile was a 12 s 503 and the world had no roads wherever nobody had
+driven since the bump. `getTile` is the bank's first READ path (`putTile` has
+written it since the namespace went live and only CloudFront ever read it),
+and `serveTile`'s failure branch walks the OLDER keyspaces, v4 down to v2,
+and serves the first banked copy — `cache-control: no-store` so the edge does
+not bank it under the v5 path, no `putTile` for the same reason, and an
+`x-drive-tile-stale: v4` header the client honours by NOT writing the tile to
+IndexedDB (`proxyStale`, a WeakMap keyed on the array because six tiles are in
+flight at once). The tile is drawn and counts as done for the pass; it is
+asked afresh when the ring releases it, or next session. **Not re-asked on a
+timer**, deliberately: that would put a Lambda call and a full Overpass wait
+behind every tile in the ring for as long as the mirrors are down, which is
+the load the fallback exists to take off them. `__osm`'s tile stats carry
+`src: 'stale'`.
+
+**THE SERVER HALF IS VERIFIED ONLY DEPLOYED.** Nothing here can read S3, so
+the witness is a tile banked at v4 and cold at v5 on a day a mirror refuses:
+v5 must answer 200 with the header, `x-cache: Miss`, and 200 again with the
+same header on re-ask (never `Hit`, which would be the edge banking a stale
+tile under the current path).
+
+## BUILT WORLD: the planet with nothing built on it
+
+SETTINGS → WORLD → BUILT WORLD (`?built=0`, which outranks the dial as
+`?time=` does). Off, `isBuiltWay` drops every constructed thing at
+`renderWays`'s entry — the one door every tile, halo, fixture and authored
+road goes through, so a cached tile and a streamed one cannot disagree —
+before anything is planned: highways and all that hangs off one, buildings
+and their ruins, railways, aeroways, man_made, amenities, shops, tourism,
+historic, power, bridge supports, `area=yes` surfaces, quarries, dams and
+weirs; `liveLandmarks` answers none, with the switch in its origin key so a
+rebuild at the same origin does not keep the stock. The ground stays:
+terrain, cover, natural areas, water lines and relations, the landuse and
+leisure areas that tint the sward. A tap on the dial after boot hops the
+truck to where it stands, which is the one path that sweeps the scene and
+streams every tile again through the filter; on a fixture it takes effect
+on the next load.
+
+Measured on `at-campsbay`, nodraw, settled, no page errors: on — 898 ways,
+2,012 road cells, 559 intact buildings, 11 landmarks; off — 27 ways, 0, 0, 0.
+
+## The Twelve Apostles against a photograph: five rules the ground truth taught
+
+A cab frame at `?lat=-38.66428&lon=143.10395&h=306` set beside a Street View
+of the same cliff. Six findings, five of them general enough to fix (the sea
+stacks are not in OSM and wait on the authored store): a 46 m wall drawn as a
+slope, trees on a headland that carries heath, a beach that was not sand, a
+cliff face the colour of blue slate on a limestone coast, and a shaded face
+darker than the photograph's because a sky lights what the sun does not.
+
+**A `natural=cliff` line is a vertical breakline** (`cliffAdjust` in the
+kernel, both height loops). The line is densified to 12 m, filed by both
+endpoints' z14 keys (`noteCliff`), and travels to the worker as a flat
+Float64Array beside the hydro packets. Within `CLIFF_REACH_M` (26 m) of a
+segment the kernel samples the DEM a reach out each side, calls the lower one
+the foot, and clamps the low side down to the foot and the high side up to
+the top with a smoothstep that lets go at the reach — the DEM decides which
+side is which, so a reversed way draws the same wall. Two crease lines at
+±0.6 m keep the lattice from cutting the corner. A drop under 4 m is not a
+cliff (`CLIFF_MIN_DROP`: coastal "cliff" tags on 2 m banks are common) and a
+road cell is never moved (`S.onRoad`). Measured on the transect: mesh
+50.09/49.99/49.85 at 0/10/20 m and 5.03 at 30 m, where before it was
+46.0/35.4/18.3/9.0. **`cliffIndexFor` is keyed on the tile AND the lines'
+identity** — keyed on the tile alone it served the first (empty) index to
+the same HeightTile rebuilt after the cliff way landed, which is a real
+production order: terrain first, OSM later. `cliff-face.test.mjs` bundles
+the kernel and asserts foot, top, reach, creases, reversal, the road
+exemption and the 2 m bank on both paths.
+
+**An exposed coast keeps its growth low** (guild.ts): `coastK` is exposure
+past 0.45 times nearness to the sea inside 800 m (`siteAt` now returns
+`seaM`); trees lose 90 % of their weight, bush gains, stature drops 70 %,
+density rises 30 %. Measured: headland ×0.58 bush 0.46, the valley 500 m
+inland ×1.00 bush 0.20. The plain wind-swept ridge rule (exposure > 0.8,
+×0.85) stays for inland ridges.
+
+**Bare ground within 7 m of the sea datum and 120 m of water is sand**
+(`beachAt`, colour pass, `cp === 60` only): a height fade from 4 to 7 m
+above `seaAbs`, twelve water taps at 60 and 120 m, capped at 0.85 toward
+`SAND_T`. Not applied to sward or forest cover, so a cliff-top meadow at
+sea level keeps its grass.
+
+**Rock takes the district's stone** (`stoneTint`, per tile in
+`terrainMatFor`): `bedrockAt` picks the STONE family the culture already
+uses for walls, its HSL row becomes a luma-normalised tint blended 0.75
+toward white, and the shader multiplies `subRockC` by `uSubRockTint`. The
+old fixed blue cast is `SUB_ROCK_CAST`, the default for a material with no
+tile. **The uniform is declared inside `SUB_GLSL`**, not in the
+`terrainFx` string that follows it: declared after, the terrain program
+failed to link (`'uSubRockTint' : undeclared identifier`, then
+`useProgram: program not valid`) and a nodraw boot reported zero errors
+because shaders compile only on a drawn frame. `glsl-errs.mjs` draws.
+
+**A steep face gets sky fill** (`uSteepFill`, `?steepfill=` default 0.18,
+LOOK row): `indirectDiffuse += albedo × fill × steep²` where steep is one
+minus the normal's dot with up, scaled by daylight and thinned 35 % under
+full cloud. Measured on the wall from the god camera at noon, clear: face
+luma 56 → 71 at 0 → 0.18, hue 47° → 62° (the fill is sky-blue, the tint is
+warm), the sky itself unchanged at 120, the sward above 111 → 116.
+
+## The authored store: hand-authored ways on the raw map, banked in S3
+
+The Twelve Apostles' sea stacks are not in OSM, and the world lab's answer —
+a fixture — replaces the planet. The authored store AUGMENTS it: an entry is
+OSM-shaped ways (`{ tags, geometry: [{lat, lon}] }`) under a z16 tile key,
+and the client concatenates them onto the tile's own list before
+`renderWays`, so an authored ruin is a ruin and an authored cliff is a cliff
+by the machinery that draws the mapped ones. No renderer of its own, and no
+git: the entries live where the tiles live.
+
+**Superseded in one respect by the per-layer section below**: the store is
+keyed `<layer>/<z>/<x>/<y>` now, the blob lives under
+`~/authored/<layer>/v1/…`, and a raster layer's entry carries `cells`
+rather than the `dems` this section describes. Everything else here — the
+immutable revision, the index outside the cached namespace, the
+`x-cell-caller` gate, the client's memo and hop refresh — stands.
+
+**Three parts, each where it has to be.** The BLOB is
+`~/authored/v1/<z>/<x>/<y>/<rev>` in the public bank, written by `putTile`
+like a tile and immutable like one — everything under `~/` is edge-cached a
+week as immutable, so a rewrite is a new revision at a new path and the
+old object is an orphan the way a pruned tape's is. The INDEX (which tiles
+carry an entry, at which revision) is the one mutable thing and lives in the
+cell's table under a single `AUTHORED` partition, served by `GET /authored`
+OUTSIDE `~/` with `max-age=60`: one small read a session tells the client
+which blobs exist, so it never asks the edge for one that does not and no
+per-tile 404 wakes the Lambda. The GATE is `x-cell-caller`, the platform's
+own sharing model: a `POST /authored` reaches the handler only for the owner
+or a principal the drive cell is shared with (`cells.call` →
+`authorizeAccess`), anyone else is refused a tier above, and there is no key
+of this game's own to leak. The drive cell IS the grant. Ids are assigned
+server-side above any the map will reach, stable per tile and slot, so a way
+filed under two tiles (it crosses the edge) carries one id and the render
+dedupe draws it once. An empty list retracts the tile.
+
+**The client.** `loadAuthoredIndex` once a session and again on every hop
+(`cache: 'reload'`, so a fresh entry shows within a hop, not a minute);
+`authoredWays` memoised per `z/x/y@rev`; `withAuthored` wraps both of
+`loadOsmTile`'s `renderGated` calls, cached tile and fetched alike, and
+returns the SAME list when there is no entry so `proxyStale` and every other
+WeakMap keyed on it keep working. `?authored=0` and the WORLD → AUTHORED
+dial are the A/B; the dial rebuilds in place like BUILT WORLD (both now
+share `rebuildInPlace`). Fixtures never consult the store. `__authored()`
+is the probe; `__authoredBank(ways, {tile?, dry?})` files from the console
+(lat/lon, or `pts` in local metres, each way under every tile it touches)
+through `sync.author`, the signed-in player's own bearer; `[]` with a tile
+retracts. `devtools/authored-push.mjs` does the same from a shell with a
+`PARC_TOKEN`.
+
+**Verified.** `authored-bank.test.mjs` runs the handler against fakes: the
+index read, every gate, the revision path, id stability across a rewrite,
+the retraction, the no-store 404 for a blob the edge lacks.
+`authored-overlay.test.mjs` stands the store in with page routes at the
+Apostles and boots twice: with it, the index and the blob are asked exactly
+once each, the probe reports the tile merged with both ways and a building
+stands that the raw map does not have (13 against 12); with `?authored=0`,
+nothing is asked and it is gone. The server half against the real table and bank is
+verified only deployed, like the tape bank's.
+
+## A ring with a height stands up out of a DEM that never saw it
+
+The Twelve Apostles are 45 m of limestone in the surf and the raster is the
+sea. No cliff line can raise them: `cliffAdjust` takes its top from the DEM
+and the DEM says nothing. A mapped ring that STATES its height is the one
+line of evidence that can, and OSM has the keys already — `natural=rock`
+(or `bare_rock`, `stone`) with `height=` — so the rule is general and the
+authored store only supplies what the map lacks. In the kernel
+(`plinthAdjust`, both height loops, after the cliff) the ground inside the
+ring is never lower than the DEM under the ring's centre plus the height: a
+stack in the sea rises from the sea, an outcrop on a hill from the hill.
+The ring's edges are cliff creases (`plinthBreakLines`, ±0.6 m), so the
+refinement splits along them and the face is a wall, not a tent; and the
+colour pass reads the inside as bare ground (`cp = 60`), because the cover
+pixel under a stack says water. `plinthIndexFor` is keyed on the tile AND
+the list, the cliff index's lesson. Main files a closed rock ring with a
+parsable height (over 1 m, under 500) under every terrain tile its bbox
+touches (`notePlinth`, before the water branch of `renderWays`; painted too
+where the tag is one the ground already wears), and the packet is
+`height, n, x0, z0 …` per ring beside the cliff lines. A tile query bump to
+fetch `natural=rock` from the map itself is deliberately NOT made here — a
+bump is a fresh bank — so today the rings come from the authored store.
+
+`sea-stack.test.mjs` on both paths: the control is the flat bed, the inside
+stands at the height to the ring, the sea beyond is untouched, the palette
+is handed bare inside and water outside, the creases sit a hair either side
+of the ring with a 45 m wall between them, and a ring on a hill rises from
+the hill. `devtools/authored/twelve-apostles.json` is the first entry:
+four stacks off the lookout, positions read off the photograph and the
+transect rather than surveyed, filed with `authored-push.mjs` once the
+route is deployed. Stood in with page routes at the live spot (`cam=god`
+from the lookout, no page errors): Apostle IV reads DEM 0 → mesh 30 with
+the ocean under it, Apostle III DEM 2.5 → mesh 52.5 on the shore platform,
+and the frame shows four grey pillars standing in the surf off the beach.
+
+**Filed live** (`16/58818/40410`, rev 1789991018026, by c15r): the index
+names the tile, the blob serves from the edge gzipped and immutable, and a
+harness boot at the lookout against the deployed store — no stand-in —
+merges four ways and reads Apostle I DEM 0.8 → mesh 45.8, II 0.1 → 38.1
+(ocean), III 2.5 → 52.5, IV 0 → 30 (ocean), no page errors. The bearer that
+filed it was a `write:workspace` token: the cell's dispatch accepts the
+owner's workspace scope, and a `cell:c15r/drive:*` scope is NOT within a
+token minted from this session's ceiling, so a narrower one cannot be cut
+from here.
+
+## What was actually hand-authored, and three kinds of entry
+
+Asked what the Apostles entry had authored, the answer was: OSM polygons,
+placed by eye, and the map already had better ones. The live v5 tiles
+carry the stacks as small closed `natural=coastline` islets, three of them
+with a closed `natural=cliff` ring on the same footprint, all surveyed. The
+guessed rings were retracted. What the map lacks is a HEIGHT, and a stack
+is not a matter of vertices; so the store now carries three kinds in one
+blob, and the first entry is one line per islet.
+
+**`patch`** amends the map's own ways by osm id: `{ "658651383": { height:
+"40" } }` merged onto the tile's way before `renderWays`, so the survey's
+ring stays the survey's and the authored layer says only what it knows. A
+patch needs its tile named (an id carries no position). **`dems`** are
+hand-shaped cells, `[lat, lon, metres]`, written into the height raster —
+the same cell the lab's brush writes, `xs + (i + 0.5)·w/256` — as the tile
+arrives (`applyAuthoredDem` before the worker mirror) or at once if it is
+already in (`demTilesChanged`, the lab's own fan-out hoisted out of the lab:
+re-mirror, expire the ocean masks and normals, rebuild the tile and its
+neighbours, re-seat the scatter). **`ways`** remain for what the map has
+nothing of. An entry with none of the three retracts.
+
+**The islet rule needs no entry at all.** A closed `natural=cliff` ring
+under 120 m across is a sea stack; as cliff LINES it would do nothing (the
+DEM is level both sides), so it files as a plinth with NaN height, and at
+pack time `plinthTopProbe` reads the crown off the mainland: the nearest
+mapped cliff LINE within 600 m, sampled on its high side a reach out from
+its midpoint — the edge the stack was cut from — with the highest ground
+on rings out to 400 m as the fallback (a worse answer where the coast
+rises inland: it found a 66 m hill for a 50 m cliff). Judged against the
+SEA, not the origin: local metres run from `baseElev`, and the coast
+plateau is a few metres local under a 50 m sea cliff, so a "top > 5"
+gate on local metres nearly refused the Apostles. Asked again on EVERY
+build and keeping the highest seen, because the first pack ran when only
+the islet's own tile was in and a probe cached then said 6 m for the rest
+of the session. A way that states `height` (the survey's, or a patch)
+wins over the probe; a coastline islet stating one is a stack too. **Not a drum:** the kernel
+rounds the crown 4 m over the last 6 m to the ring, and the hand-shaped DEM
+is where a real profile comes from — `__authoredDem()` in the world lab
+files every cell the brush moved as a `dems` entry (`DemPaintSession.edits`).
+The plinth index reads ONCE per vertex (`plinthHit`): a store handing a
+fresh list per call rebuilt it between finding the ring and reading its
+crown, and the crown map is keyed on the ring object.
+
+**Measured at the lookout** (`authored-islets.test.mjs`, the store stood in
+with page routes, no page errors). Raw map, `?authored=0`, no entry: the
+three cliff-ringed islets stand — 658651384 at 60.2 m over a 0.6 m DEM,
+658651379 and 658651380 at 41.4 and 41.3 (their own stretch of coast is
+lower) — and the two coastline-only islets stay at the sea (−5.6 with the
+bed cut, 3.4). A `patch` of `height=45` on 658651384 reads 42.4: the
+stated height wins over the probe, less the crown's rounding at an 11 m
+ring's centre. A single `dems` cell set to 30 m on the beach reads back
+from the raster as 25.2 where it had been 4.1 (bilinear across 9.5 m
+cells) and the mesh as 10.9 — one spiked cell is smoothed by the bank and
+the lattice, as a one-cell spike should be; a brush stroke is 177 cells
+(`authored-dem-export.test.mjs`).
+
+## The world lab on a phone: a bar, a sheet, the chart, and a second finger
+
+Measured on a 390 × 844 viewport before: the lab's panel was 330 px wide
+and seven rows tall over the top half of the world, the game's hub menu
+open beneath it, the raster painted through a perspective pick from the
+seat. Now the lab is a BAR along the bottom — COVER · 2D/3D · PAINT ·
+brush · ⋯ — 56 px of thumb-sized chips, and a SHEET that slides up over it
+for the sliders, the selects (same ids, so the probes and the suite still
+drive them), UNDO, RESET, BANK and the report. One hint line above the bar
+says what a finger does now.
+
+**The chart is the painting surface.** A raster opens on the game's own
+top camera with the layer's DATA view showing (`setChart`: `setCam('top')`,
+`setGroundView('cover' | 'elevation')`); 3D is one tap and comes back with
+the game view, because the result is judged as the player sees it. **The
+game's chrome is off while the lab is up** — `menu.close()`, the `clean`
+class on the body, `hudOn` false — through the runtime, NOT `setClean`,
+which would remember the choice in localStorage for the game. FOLD gives
+it all back; AUTHOR (bottom right) takes it again. **The lab's opening
+waits for `#boot.ready`**: the boot applies the URL's `cam=` and opens the
+hub after the overlay is up, and asked before it the lab reported
+`chart: false` and `menu-open` on its first frame.
+
+**One finger paints; a second pans.** The chart's pan and pinch are gated
+off while the lab owns input, so on a phone every finger was a brush. A
+second pointer now cancels the stroke in flight, hands both pointers to
+the chart (`chartGrab`: into `panPtrs` with the grabbed ground's plane
+height, exactly as pointerdown would) and sets `authoringPan`, which the
+move and up gates honour; nothing paints until every finger is up. A
+wheel over an armed chart zooms it. **BANK** files the layer's work
+through the store — ELEV as `dems`, ROADS as `ways` with `highway=` and
+`width=` — and says what it did in the hint line; LAND COVER has no store
+kind yet and says so.
+
+`lab-phone.test.mjs`: opens on the chart in the data view, hub closed and
+chrome hidden, the bar under a sixth of the screen, 3D one tap and back,
+PAINT arms, one finger paints (18 cells of farmland), a second finger sets
+panning and the stroke stops, FOLD returns the chrome. `lab.test.mjs`
+could not run here (the ez-tree package is not installed in this
+container; its bundle step fails before any assertion).
+
+
+## One store, three layers, each on its base layer's own grid
+
+"Can the lab edit as many base layers as possible?" — it can now, and the
+keying is what makes it general. An entry names its LAYER and a tile of
+THAT layer's keyspace, mirroring the base bank it amends:
+
+| layer | zoom | base bank | what an entry carries |
+| --- | --- | --- | --- |
+| `osm` | 16 | `~/osm/v5` | `ways` the map lacks, `patch` of tags by osm id |
+| `cover` | 12 | `~/cover/v1` | `cells`: `[index, class]` over the 256×256 class raster |
+| `dem` | 14 | `~/dem/v1` | `cells`: `[index, metres]` over the 256×256 height raster |
+
+The blob is `~/authored/<layer>/v1/<z>/<x>/<y>/<rev>` — the base path with
+the keyspace version in it and a revision suffix, so the store's shape is
+the bank's shape and a new layer needs a row in one table, not a new
+mechanism. The index keys tiles `<layer>/<z>/<x>/<y>` and names the layers'
+zooms, so a client reads the grid rather than hard-coding it. A layer's
+entry REPLACES that tile's overlay and an empty one retracts it; the
+retraction is per layer, so dropping a cover entry leaves the osm entry on
+the same ground alone.
+
+**Cells, not coordinates.** The first cut filed DEM edits as
+`[lat, lon, metres]`, which made the client re-derive a raster index from a
+projection on the way back in — a conversion that can drift a cell, for a
+value that was read out of a cell in the first place. The index IS the
+identity: `applyAuthoredCells` writes `data[i] = v` into the same array the
+lab's brush wrote, and the cap is one raster's worth (65,536) with a
+duplicate index refused, so an entry cannot quietly disagree with itself.
+
+**The overlay goes in before the tile is registered.** `authoredRasterIn`
+is awaited inside `loadCoverTile` and `loadTerrainTile` between the decode
+and the registration, so no consumer ever sees the raw byte: not the
+worker's mirror, not the ocean mask, not the climate field. In the cover
+loader it sits BEFORE the projection to local metres, because `toLocal` is
+relative to the CURRENT origin and projecting last is what absorbs a hop
+that lands mid-load; an await between the projection and the registration
+would undo that. The index fetch is bounded at five seconds for the same
+reason those tiles await it: an unreachable cell costs one timeout, not a
+world that never finishes streaming, and a tile that raced a slow index
+keeps the raw raster until the next hop asks again.
+
+**BANK merges, so sessions accumulate.** The lab's BANK reads the tile's
+loaded overlay, lays the session's own edits over it, and files the union
+(`authoredBankCells`) — a second session adds to the first rather than
+replacing it, which is what "an entry replaces the tile" would otherwise
+cost. ELEV and COVER both bank this way, grouped by the tile each cell
+belongs to (`rasterEntries`: the tile's own `x/y` IS the store key on that
+layer's grid), and ROADS still bank as osm `ways`. `__worldeditBank(dry,
+layer)` is the button from a harness.
+
+Verified: `authored-bank.test.mjs` runs the handler against fakes over all
+three layers — 31 of 31 ok: the per-layer paths and index keys, a tile at
+the wrong zoom, a cover entry carrying ways, an osm entry carrying cells, a
+class over a byte, a cell off the raster, a duplicate index, and a
+retraction that takes one layer's tile and leaves the other's.
+`authored-islets.test.mjs` boots the lookout against a stood-in store: the
+three cliff-ringed islets stand with no entry at all (60.2 / 41.4 / 41.3 m),
+the patched ring reads 42.4, and a 49-cell `dem` block takes the beach from
+4.1 m to 30. `authored-dem-export.test.mjs` shows a 177-cell brush stroke
+exporting as `{"14/8469/5815":{"ok":true,"cells":177}}` — the z14 tile the
+cells belong to, not the one the truck is on.
+
+**AND THE COVER CHECK'S FIRST CUT WAS A TAUTOLOGY.** It painted FOREST over
+ground the raster already called FOREST, so every assertion passed but the
+one that mattered — "the two boots disagree" — and it failed for no reason
+anyone could read. `authored-cover.test.mjs` boots `?authored=0` FIRST, reads
+the class the raster itself answers at the truck, picks a DIFFERENT one at
+runtime, and only then boots with the stand-in entry: measured, raw 10
+(FOREST) painted 80 (WATER), `cover/12/2257/2461` carrying 81 cells, with the
+`?authored=0` leg asking for nothing and reading the raster's own. **A check
+whose fixture is drawn from the same source as its subject cannot fail**, and
+the fix is to read the subject first and choose against it.
+
+## The lab's paint overlay was drawn on a canvas its own opening had hidden
+
+Reported from the seat: *vector/roads had an intermediate render/overlay for
+fast paint feedback and it seems to have "gone".* It had, and the lab's own
+redesign is what took it: the overlay is drawn on the HUD canvas, and the
+phone bar's opening turns the game's chrome off, which is **two** separate
+switches on that one surface.
+
+- **`drawAuthoringPreviews()` SAT AFTER `drawHud`'s `!hudOn` EARLY RETURN.**
+  `setChrome(false)` is `hudOn = false`, so the function never ran. It is
+  called from the `!hudOn` branch now, beside `drawTileDebugOverlay`, whose
+  own header already states the rule for exactly this class of instrument.
+- **AND THE CANVAS CARRIES CLASS `ui`, WHICH `body.clean` HIDES.** So even
+  with the draw restored, a perfect overlay would have been painted onto
+  `display: none`. `.clean` is the player's HIDE HUD and the lab's chrome-off
+  state wearing one class, and they want opposite things of this surface: the
+  player asked for the instruments to go, the lab asked for the game's DOM to
+  go and still has to draw its brush on something. `setChrome` marks the
+  canvas `.lab` and one rule exempts it; HIDE HUD adds no such class and is
+  untouched.
+
+**Measured before anything was changed**, the lab open on its own terms with a
+nine-point road draft in flight: `hudOn false`, `display: none`, and the draft
+reported by `__worldedit()` while not one pixel of it reached the glass.
+
+**AND THE FIRST CUT OF THAT MEASUREMENT READ THE MINIMAP.** `mini` carries
+class `ui` too, so `querySelectorAll('canvas')` filtered by `.ui` returned a
+276×276 surface the overlay never draws on — which reported 0 ink with the
+chrome ON as well and would have said the overlay was broken everywhere.
+Every reading of a canvas in this client has to name WHICH canvas: the HUD's
+is the largest, 520×1126 at DPR 2 on a 390-point phone.
+
+### The raster brushes draw the texels they have already written
+
+The vector layer always had a draft; the brushes had a cursor circle and
+nothing else, and a painted byte is in the array the instant a finger moves
+while the PICTURE is a terrain rebuild away — a second or two of the lab
+apparently doing nothing, which is the latency the seat asked about.
+
+A `cells` preview carries the footprints themselves: `draft` while the stroke
+is in flight, `pending` until every terrain tile they stand on is out of
+`terrainDirty`, then `settled` and faded — the road layer's own state rule,
+applied to a raster.
+
+- **A SWEPT PATH AT THE BRUSH'S WIDTH WOULD NOT DO, which is why it is cells
+  and not a line.** A brush is round and a raster is not: at the cover
+  raster's 38 m a small stroke may flip no texel at all, or one a long way
+  from the finger, and no round sweep can say which.
+- **THE TERRAIN KEYS ARE NOT THE EDIT'S OWN KEYS.** A cover cell is a z12
+  texel and the rebuild that makes it visible is a z14 tile's, so the pending
+  set is derived from the cells' own corners through `tileAt(…, TERRAIN_Z)`.
+- **ONE STROKE'S TRAIL, CAPPED AT 600 AND THINNED BY A STRIDE.** The next
+  stroke's rebuild queues behind this one anyway; a budget that truncated
+  would leave the far half of a long stroke unmarked, which is the fault the
+  bank's break lines already record from the other side.
+
+**AND THE PER-CELL CANVAS CALLS WERE THE COST, NOT THE ARITHMETIC.**
+`__authorprev()` is the instrument, because this runs every frame while a
+trail is up. At the cap on a wide DEM sweep (583 cells, 9.5 m texels):
+
+| | ms a frame | max |
+|---|---|---|
+| a `fillRect` and a `strokeRect` per cell | **2.1** | 2.2 |
+| one path, one fill, one stroke, off-screen cells rejected | **0.5** | 0.6 |
+
+Non-zero winding also means overlapping cells fill ONCE, so a doubled-back
+stroke does not paint itself darker. **Read the frame count beside those
+numbers**: the harness draws at about a fifth of a frame a second with a
+world this size, so each leg is two frames, and the honest claim is the
+factor rather than the millisecond. The legs hold the pointer DOWN and reset
+the counter only after the world has gone quiet — a window taken during the
+rebuild the stroke triggered holds ONE frame, and one frame is not a
+measurement of a per-frame cost.
+
+**THE OUTLINE CARRIES THE CLAIM AND THE FILL ONLY HINTS AT IT** (0.15 of the
+state's own alpha). At the chart's near zoom one cover texel is most of the
+frame, and the first cut's 0.3 was a wash over the ground being painted.
+
+**AND THE TILE GRID STANDS DOWN FOR THE LAB.** Exempting the canvas from
+`.clean` also un-hid the tile-debug overlay, which had been invisible there
+by accident and is four lines of debug over the map the lab exists to edit —
+against the decluttering the bar was built for. `labChrome` is the flag;
+FOLD gives the grid back with the rest of the chrome. The pending cells carry
+the same *is this still building* signal the REBUILD boxes did.
+
+### Every edit affordance is on the bar, and the budget moved with it
+
+*Most if not all "more" affordances should be in the main bar (esp
+undo/redo/reset).* UNDO, REDO, RESET and BANK were behind the ⋯ sheet — two
+taps and a covered viewport away from the thing you have just painted wrongly.
+
+**THE BAR WRAPS RATHER THAN RATIONING.** A fixed column count forces a choice
+about which affordance to drop; a flex row of 44 px chips takes a second line
+on a phone and one line on a desktop. Nine chips: LAYER · 2D/3D · PAINT ·
+BRUSH · UNDO · REDO · RESET · BANK · ⋯.
+
+**SO THE HEIGHT BAR MOVED, AND IT IS STATED RATHER THAN QUIETLY LOOSENED.**
+At rest the panel is 126 px of an 844 px phone (15%, under the sixth the
+first design promised); ARMED, with the dial strip, 179 px (21%). The test
+asserts a sixth at rest and a quarter armed, because the ask that made it
+taller is the ask that put the affordances there.
+
+**A DISABLED CHIP IS THE HONEST READING OF AN EMPTY STACK**, and the depths
+come off the layer's own report, so the bar cannot claim a redo the session
+does not hold.
+
+**AND THE BRUSH CHIP READ `PAVED` FOR THREE OF THE FOUR ROAD KINDS.**
+`brushLabel` took the LAST segment of a choice's label, which is the word for
+a cover class (`40 · FARMLAND`) and the SURFACE for a road
+(`RESIDENTIAL · PAVED`) — and residential, service and track share theirs. A
+leading number is a code, and then the tail is the name; otherwise the head
+is.
+
+### Redo, and the one stack that has to survive a page reload
+
+Neither paint session had a redo: both popped their undo and discarded it.
+Both have one now, and both fork the history on a new stroke — a redo
+recorded before an edit that has since happened would restore a value nothing
+on the screen ever showed.
+
+- **THE SESSION RECORD IS RESTORED WITH THE RASTER.** `originals` is what the
+  authored bank files off `edits()`, so a redone cell that is not back in it
+  would stand in the world and be missing from the entry. Held by the
+  sessions' own self-tests, with the negative control run: drop the
+  `redoStack.push` and `undo did not stack a redo` fires.
+- **AND THE ROADS' STACK IS PART OF THE SAVED RECORD.** Removing a built road
+  is the one edit this lab cannot do in place, so the adapter reloads the page
+  after an undo — an in-memory redo would be gone before a thumb could reach
+  it, and the button would be correct and permanently dead. The stored record
+  is `{v: 2, features, redo}` and a v1 bare array still loads. Negative
+  control: save an empty redo and `the redo stack did not survive the record
+  the adapter saves` fires.
+- **REDO NEEDS NO RELOAD, and the asymmetry is the whole reason the undo has
+  one:** putting a road in is what this lab does best.
+
+### WIDTH and AMOUNT, where a thumb can reach them
+
+*Ensure width and amount is compact/usable.* They were range inputs in the
+sheet on a 78/1fr/46 grid — the one control a brush cannot work without,
+behind two taps — and the ELEVATION amount spanned 0.05 m to 10 at 0.05: **199
+stops**, unreachable on any slider, for a nudge finer than the mesh can show.
+
+The DIAL STRIP is one row while PAINTING is armed: the dial's name, the
+slider, the reading. Measured on a 390-point phone, the slider is **242 px
+wide and 44 tall** — 62% of the screen. A layer with two dials cycles on a tap
+of the name; a layer with one shows it as a LABEL, because a disabled chip
+reads as broken rather than as a name.
+
+| dial | was | now | stops |
+|---|---|---|---|
+| cover RADIUS | 0–240 at 5 (a fallback) | 0–200 at 5 | 41 |
+| dem RADIUS | the same fallback | 0–120 at 4 | 31 |
+| **dem AMOUNT** | **0.05–10 at 0.05** | **0.25–8 at 0.25** | **32** |
+| road WIDTH | 2–16 at 0.5 | unchanged | 29 |
+
+A z14 texel is about 9.5 m, so a DEM brush finer than that sculpts one cell;
+0 is still the single texel under the cursor. **The finest height step is a
+quarter of a metre now** — five-centimetre nudges are gone, and they were
+never reachable.
+
+`devtools/lab-preview.test.mjs` holds the overlay (the AUTHORITY, which is
+what the lab handed the renderer by kind and state, AND the PICTURE, which is
+ink on the canvas measured as armed-against-disarmed so the difference is the
+preview and nothing else — with the tile grid gone the disarmed floor is
+exactly **0**). `devtools/lab-phone.test.mjs` holds the bar, the dial and an
+undo/redo round trip through the chips.

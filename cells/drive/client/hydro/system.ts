@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { HydroBodyRegistry } from './body-registry';
-import { analyseHydroTile, buildHydroTile, seaTouching, seaTouchingStats, type HydroTileAnalysis } from './build-tile';
+import { analyseHydroTile, buildHydroTile, estimateFlowingCoverageShare, seaTouching, seaTouchingStats, type HydroTileAnalysis } from './build-tile';
 import { clamp, sampleElevation } from './geometry';
 import { sampleFieldSurface } from './field-sample';
 import { extractHydroShoreSegments } from './shore-contour';
@@ -493,6 +493,24 @@ class DefaultHydroSystem implements HydroSystem {
     this.object3d.name = 'hydro-system';
   }
 
+  /**
+   * The share of the tile a river/stream/canal covers at which it counts as
+   * "the water IS the tile" and earns the full `flowingFieldResolution`
+   * tier — a wide river crossing corner to corner, not a thread clipping one.
+   * Below it the tier ramps linearly from the base resolution, so a tile
+   * whose flowing water is a sliver (Yosemite: ~0.4% of the grid) pays close
+   * to nothing extra, while one nearer this share pays close to the full
+   * fourfold grid it would have paid unconditionally before.
+   */
+  private static readonly FLOWING_FULL_SHARE = 0.15;
+
+  private resolveFieldResolution(wetShareEstimate: number): number {
+    const base = this.buildOptions.fieldResolution;
+    if (!(wetShareEstimate > 0)) return base;
+    const t = clamp(wetShareEstimate / DefaultHydroSystem.FLOWING_FULL_SHARE, 0, 1);
+    return Math.round(base + (this.flowingFieldResolution - base) * t);
+  }
+
   async upsertTile(input: HydroTileInput): Promise<void> {
     if (this.disposed) throw new Error('HydroSystem is disposed');
     this.validateInput(input);
@@ -915,13 +933,11 @@ class DefaultHydroSystem implements HydroSystem {
       // may add knowledge, never destroy it (see buildHydroTile).
       const previous = live.field;
       try {
-        const flowing = live.analysis.observations.some((observation) =>
-          observation.kind === 'river'
-          || observation.kind === 'stream'
-          || observation.kind === 'canal');
-        const fieldResolution = flowing
-          ? this.flowingFieldResolution : this.buildOptions.fieldResolution;
-        // Preserve the gutter's metre reach when flowing texels halve.
+        // Sized from the covered SHARE, not from "any flowing observation" —
+        // see resolveFieldResolution's own comment for why.
+        const wetShare = estimateFlowingCoverageShare(live.input);
+        const fieldResolution = this.resolveFieldResolution(wetShare);
+        // Preserve the gutter's metre reach when flowing texels shrink.
         const gutter = Math.max(
           this.buildOptions.gutter,
           Math.ceil(this.buildOptions.gutter

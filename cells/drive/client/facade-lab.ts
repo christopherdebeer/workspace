@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { BUILD_CULTURES, type BuildCulture } from './culture';
 import { FACADE_DEFAULTS, FACADE_GRAMMAR, facade, setFacadeGrammar, uFacNight, uFacSun, type FacadeGrammar } from './facade';
 import { roofFx } from './roof-fx';
+import { attachRoofSurface } from './roof-surface';
 import { registerBuildingFabric, attachBuildingFabric, setBuildingCondition } from './building-fabric';
 import { TRADITIONS, roofFormFor, traditionCulture, traditionIndex, type Tradition } from './traditions';
 import { createDials, type DialValues } from './lab-dials';
@@ -283,6 +284,7 @@ export async function startFacadeLab(): Promise<void> {
     for (let i = 0; i < terrace; i++) {
       const x0 = -total / 2 + i * w;
       const pts: Array<[number, number]> = [[x0, -d / 2], [x0 + w, -d / 2], [x0 + w, d / 2], [x0, d / 2]];
+      const first = group.children.length;
       group.add(new THREE.Mesh(withBase(extrude(pts, -plinth, height), aBase, gram, height), [roofMat, wallMat]));
       if (roofShape === 'flat') {
         // A FLAT ROOF IS A PARAPET AND SOME PLANT. The lab judges it at the
@@ -299,6 +301,10 @@ export async function startFacadeLab(): Promise<void> {
           const cg = chimneyGeo(pts, roofShape, height, ridge, w * d > 160 ? 2 : 1);
           if (cg) group.add(new THREE.Mesh(withBase(cg, aBase, -1, cg.userData.top as number), [roofMat, wallMat]));
         }
+      }
+      for (const obj of group.children.slice(first)) {
+        const geo = (obj as THREE.Mesh).geometry;
+        attachRoofSurface(geo, [{ pts, ranges: [{ start: 0, count: geo.attributes.position.count }] }]);
       }
     }
   };

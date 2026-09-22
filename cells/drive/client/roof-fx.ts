@@ -54,15 +54,16 @@ export function roofFx(mat: THREE.MeshLambertMaterial, kind?: RoofTex): void {
     // the metres-per-tile its recipe stated.
     sh.uniforms.uRfRep = { value: mat.map?.repeat ?? new THREE.Vector2(1 / 7, 1 / 7) };
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aTop;\nvarying vec3 vRfW; varying vec3 vRfN; varying float vRfEave;')
+      .replace('#include <common>', '#include <common>\nattribute float aTop; attribute vec4 aRoofPlan; attribute vec4 aFabric;\nvarying vec4 vRoofPlan; varying float vRoofSeed;\nvarying vec3 vRfW; varying vec3 vRfN; varying float vRfEave;')
       .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
         vec4 rfW = modelMatrix * vec4(transformed, 1.0);
         vRfW = rfW.xyz;
         vRfN = mat3(modelMatrix) * objectNormal;
-        vRfEave = aTop;`);
+        vRfEave = aTop; vRoofPlan = aRoofPlan; vRoofSeed = aFabric.w;`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vRfW; varying vec3 vRfN; varying float vRfEave;
+        varying vec4 vRoofPlan; varying float vRoofSeed;
         uniform float uRfKind; uniform vec2 uRfRep;
         float rfh(vec2 p){ p = fract(p * vec2(233.71, 119.3)); p += dot(p, p + 37.17); return fract(p.x * p.y); }
         ${SD_GLSL}`)
@@ -129,7 +130,36 @@ export function roofFx(mat: THREE.MeshLambertMaterial, kind?: RoofTex): void {
           // The eave: the last course in the gutter's shadow.
           rfTone *= 1.0 - 0.3 * step(vRfW.y - vRfEave, 0.16);
         }
+        // Flat decks have construction at metre scale, in the BUILDING frame.
+        // Derivatives are evaluated unconditionally before the per-face gate.
+        vec2 plan = vRoofPlan.xy;
+        float deckPx = sdPx(plan);
+        vec3 deckTint = vec3(1.0);
+        if (ny > 0.9986 && abs(vRoofPlan.z) > 0.1) {
+          float seed = rfh(vec2(vRoofSeed, 23.0));
+          float tiled = step(0.62, seed);
+          float membrane = 1.0 - step(0.28, seed);
+          vec2 unit = mix(vec2(2.4, 3.6), vec2(0.45), tiled);
+          unit = mix(unit, vec2(1.05, 5.0), membrane);
+          vec2 f = fract(plan / unit);
+          vec2 edge = min(f, 1.0-f) * unit;
+          float seam = 1.0-smoothstep(0.018, 0.018+max(deckPx, 0.012), min(edge.x,edge.y));
+          float band = sdBand(deckPx, min(unit.x,unit.y));
+          float panel = rfh(floor(plan/unit)+vRoofSeed);
+          rfTone *= 1.0 + (panel-0.5)*0.12*band - seam*0.20*band;
+          // Pale concrete, restrained warm paving, and darker membrane.
+          deckTint = mix(vec3(1.04,1.03,1.0), vec3(1.16,0.94,0.80), tiled);
+          deckTint = mix(deckTint, vec3(0.78,0.80,0.82), membrane);
+          // Contact at the enclosing parapet, only on near-rectangular plans.
+          // No box-edge shadow is fabricated across an L-plan's open notch.
+          if (vRoofPlan.z > 0.0 && vRoofPlan.w > 0.0) {
+            float rim = min(min(plan.x,plan.y), min(vRoofPlan.z-plan.x,vRoofPlan.w-plan.y));
+            rfTone *= 0.78 + 0.22*smoothstep(0.12,0.95,rim);
+          }
+          muv = plan * uRfRep + vec2(seed, seed*0.73);
+        }
         vec4 sampledDiffuseColor = texture2D(map, muv);
+        sampledDiffuseColor.rgb *= deckTint;
         diffuseColor *= sampledDiffuseColor;
         diffuseColor.rgb *= rfTone;
       }

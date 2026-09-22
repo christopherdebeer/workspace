@@ -442,7 +442,7 @@ function flatRand(seed: number): () => number {
  *  is room for anything at all. `roofBox` cannot stand in for it — that one
  *  REFUSES a plan no pitched roof can carry (rectangularity, span, 1400 m²),
  *  which is exactly the set of plans that wear a flat roof. */
-function flatBox(ring: Array<[number, number]>): { ux: number; uz: number; vx: number; vz: number;
+export function flatBox(ring: Array<[number, number]>): { ux: number; uz: number; vx: number; vz: number;
   u0: number; u1: number; v0: number; v1: number; short: number } {
   const n = ring.length;
   let bi = 0, bl = -1;
@@ -574,7 +574,11 @@ export function flatRoofGeo(pts: Array<[number, number]>, top: number, height: n
       const uh = big ? 1.3 + rnd() * 1.2 : 0.45 + rnd() * 0.7;
       const su = Math.max(0, u1 - u0 - 2 * (clear + hw)), sv = Math.max(0, v1 - v0 - 2 * (clear + hd));
       if (su <= 0 || sv <= 0) continue;
-      const cu = u0 + clear + hw + rnd() * su, cv = v0 + clear + hd + rnd() * sv;
+      // Access core and services share one side; keep a genuinely open deck.
+      // Retries explore the whole plan when an irregular footprint refuses it.
+      const edge = rnd() < 0.5 ? 0 : 1;
+      const cu = u0 + clear + hw + rnd() * su;
+      const cv = v0 + clear + hd + (tries < 16 ? (edge ? 0.88 : 0.12) : rnd()) * sv;
       // Wholly inside the ring with the parapet's clearance round it — a
       // corner test, because a rooftop unit hanging over the eave is the one
       // way this can look worse than the lid it replaced.
@@ -582,6 +586,21 @@ export function flatRoofGeo(pts: Array<[number, number]>, top: number, height: n
       for (const [du, dv] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as Array<[number, number]>) {
         const w = W(cu + du * (hw + clear), cv + dv * (hd + clear), 0);
         if (!inRing(w[0], w[2], ring)) { fits = false; break; }
+      }
+      if (fits) {
+        const corners = [[cu-hw-clear, cv-hd-clear], [cu+hw+clear, cv-hd-clear],
+          [cu+hw+clear, cv+hd+clear], [cu-hw-clear, cv+hd+clear]];
+        for (let k = 0; k < 4 && fits; k++) {
+          const a = corners[k], b = corners[(k + 1) % 4];
+          const steps = Math.ceil(Math.hypot(b[0]-a[0], b[1]-a[1]) / 0.4);
+          for (let j = 1; j < steps; j++) {
+            const q = W(a[0] + (b[0]-a[0])*j/steps, a[1] + (b[1]-a[1])*j/steps, 0);
+            if (!inRing(q[0], q[2], ring)) { fits = false; break; }
+          }
+        }
+        for (const [x,z] of ring) {
+          if (Math.abs(x*ux+z*uz-cu) < hw+clear && Math.abs(x*vx+z*vz-cv) < hd+clear) fits = false;
+        }
       }
       if (!fits) continue;
       for (const q of placed) {
