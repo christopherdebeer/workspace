@@ -21,7 +21,7 @@
  * - CONTROLS ARE EXCLUSIVE; EFFECTS PERSIST — a layer, the lens, a readout.
  *   VIEW's render inspection is the exception and stands down on leave.
  * - EVERY CONTROL HAS ONE HOME AND NONE IS A SETTING; the camera's place is the
- *   dock's. A tray is dense: big bracketed buttons, radios and toggles alike.
+ *   dock's. A tray is compact: small checkboxes and radios, a word each.
  *
  * The module owns no game state. The game hands it a description every frame
  * and it diffs: an unchanged description touches nothing, a change of VALUES
@@ -247,26 +247,30 @@ export function createHudDeck(
     border: 1px solid rgba(114,189,178,0.35); }
   .deck-panel .d-title { font-size: 10px; letter-spacing: 1px; color: ${C.gold};
     border-bottom: 1px solid rgba(114,189,178,0.35); padding-bottom: 5px; margin-bottom: 6px; }
-  /* DENSE: every section is a grid of big bracketed buttons — radios and
-     toggles look alike and differ in what lights, not in shape. */
-  #deck-sheet .d-cols { display: flex; flex-direction: column; gap: 6px; }
-  #deck-sheet .d-sec { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 4px; }
-  #deck-sheet .d-sec .d-h { grid-column: 1 / -1; margin: 0; }
+  /* COMPACT: sections flow into as many columns as the width holds, each a
+     column of small checkboxes and radios — the overlays' own form, which is
+     what every tray wears. */
+  #deck-sheet .d-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px 10px; }
+  #deck-sheet .d-sec { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  #deck-sheet .d-sec + .d-sec { border-left: 1px solid rgba(114,189,178,0.18); padding-left: 8px; }
   .deck-panel .d-h { font-size: 8px; letter-spacing: 1px; color: ${C.dim}; margin-bottom: 1px; }
   .deck-panel button { font: inherit; font-family: inherit; font-size: 8px; letter-spacing: 1px;
     cursor: pointer; background-color: transparent; color: ${C.edge}; text-align: left; }
   .deck-panel button:disabled { cursor: default; opacity: 0.4; }
-  .deck-panel .d-choice, .deck-panel .d-action { padding: 5px 8px 4px; text-align: center; min-height: 26px;
-    border: 1px solid rgba(114,189,178,0.35); --bk: ${C.edge}; background-color: rgba(8,20,23,0.7); }
-  .deck-panel .d-choice.on { color: ${C.gold}; --bk: ${C.gold}; border-color: ${C.gold}; }
-  /* A toggle is a big button too; its box says it is a toggle, and lights. */
-  .deck-panel .d-check { display: flex; align-items: center; justify-content: center; gap: 6px;
-    padding: 5px 8px 4px; min-height: 26px; border: 1px solid rgba(114,189,178,0.35); --bk: ${C.edge};
-    background-color: rgba(8,20,23,0.7); }
-  .deck-panel .d-check .box { width: 7px; height: 7px; flex: none; border: 1px solid ${C.edge};
-    box-sizing: border-box; }
-  .deck-panel .d-check.on { color: ${C.gold}; --bk: ${C.gold}; border-color: ${C.gold}; }
-  .deck-panel .d-check.on .box { background: ${C.gold}; border-color: ${C.gold}; }
+  /* A radio and a checkbox are one row each: a small mark and a word. The
+     radio's mark is a hollow diamond, lit solid; the checkbox's a square. */
+  .deck-panel .d-choice, .deck-panel .d-check { display: flex; align-items: center; gap: 6px;
+    padding: 3px 0; min-height: 18px; border: 0; background: transparent; text-align: left; }
+  .deck-panel .d-choice .box, .deck-panel .d-check .box { width: 7px; height: 7px; flex: none;
+    border: 1px solid ${C.edge}; box-sizing: border-box; }
+  .deck-panel .d-choice .box { transform: rotate(45deg) scale(0.85); }
+  .deck-panel .d-choice.on, .deck-panel .d-check.on { color: ${C.text}; }
+  .deck-panel .d-choice.on .box, .deck-panel .d-check.on .box { background: ${C.gold}; border-color: ${C.gold}; }
+  .deck-panel .d-action { padding: 3px 0; min-height: 18px; border: 0; background: transparent; }
+  /* On the base strip the rows sit in a line and wear a plate, since there is
+     no tray behind them. */
+  #deck-base .d-choice, #deck-base .d-check { padding: 3px 6px; background-color: rgba(6,14,16,0.8);
+    border: 1px solid rgba(114,189,178,0.35); }
   .deck-panel .note { color: ${C.dim}; margin-left: 4px; }
   .deck-panel .d-slider { display: flex; flex-direction: column; gap: 2px; font-size: 8px; letter-spacing: 1px; }
   .deck-panel .d-slider .row { display: flex; justify-content: space-between; color: ${C.edge}; }
@@ -372,8 +376,8 @@ export function createHudDeck(
             ie.appendChild(inp);
           } else {
             ie = document.createElement('button');
-            ie.className = it.kind === 'check' ? 'd-check' : it.kind === 'choice' ? 'd-choice bkt' : 'd-action bkt';
-            ie.innerHTML = it.kind === 'check'
+            ie.className = it.kind === 'check' ? 'd-check' : it.kind === 'choice' ? 'd-choice' : 'd-action';
+            ie.innerHTML = it.kind !== 'action'
               ? '<span class="box"></span><span class="k"></span><span class="note"></span>'
               : '<span class="k"></span><span class="note"></span>';
             ie.addEventListener('click', () => onItem(it.id));

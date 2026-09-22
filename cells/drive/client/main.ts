@@ -58157,7 +58157,7 @@ function deckItem(id: string, v?: number): void {
     case 'wpall': for (const k of Object.keys(wpOn) as WpLayer[]) setWp(k, arg === 'all'); return;
     case 'pass': deckDialSet('xray', Number(arg)); return;
     case 'tdbg': deckDialSet('tdbg', tileDbg ? 0 : 1); return;
-    case 'hview': { const d = deckDial('hview'); if (d) deckDialSet('hview', d.at + 1); return; }
+    case 'hview': deckDialSet('hview', Number(arg)); return;
     case 'ro': setReadout(arg as Readout, !readoutOn[arg as Readout]); return;
     case 'seat':
       // THE SEAT IS A CAMERA FACT, SO IT IS CAM'S. `lastPov` already means both
@@ -58179,7 +58179,7 @@ function deckRelease(id: string): void {
 function deckBase(): DeckSheet | null {
   if (deckActive !== null || lineOn) return null;
   const items: DeckItem[] = [
-    { kind: 'choice', id: 'hold', label: rewindPaused ? 'HELD' : 'HOLD', on: rewindPaused },
+    { kind: 'check', id: 'hold', label: 'HOLD', on: rewindPaused },
   ];
   if (rewindPaused || rewind.at !== null) {
     const have = rewindHave();
@@ -58191,8 +58191,8 @@ function deckBase(): DeckSheet | null {
 }
 const deckCheck = (id: string, label: string, on: boolean): DeckItem => ({ kind: 'check', id, label, on });
 const deckRadio = (id: string, label: string, on: boolean): DeckItem => ({ kind: 'choice', id, label, on });
-/** The layout's controls, dense: big buttons, radios and toggles alike. RIG has
- *  none — it is a readout. */
+/** The layout's controls, compact: checkboxes and radios, a word each. RIG has
+ *  none — it is a readout — and neither do the modes. */
 function deckTray(active: DeckTab | null): DeckSheet | null {
   if (active === 'map') {
     const all = wpOn.pinned && wpOn.peaks && wpOn.scenery;
@@ -58214,9 +58214,10 @@ function deckTray(active: DeckTab | null): DeckSheet | null {
       { title: 'INSPECT', items: [
         deckCheck('tdbg', 'TILE GRID', tileDbg),
         ...CHART_LAYERS.filter((l) => l.debug).map((l) => deckCheck(`layer:${l.id}`, l.name, chartOn[l.id])),
-        { kind: 'action', id: 'hview', label: `HYDRO ${hv ? hv.opts[hv.at] : '—'}`,
-          tone: hv && hv.at > 0 ? 'gold' : undefined },
       ] },
+      // THE WATER VIEW, as radios: the rack's own stops, which VIEW applies on
+      // entry and stands down on leave like the rest of the inspection.
+      { title: 'HYDRO', items: (hv?.opts ?? []).map((o, i) => deckRadio(`hview:${i}`, o, hv?.at === i)) },
       { title: 'READOUTS', items: READOUTS.map(([k, name]) => deckCheck(`ro:${k}`, name, readoutOn[k])) },
     ] };
   }
