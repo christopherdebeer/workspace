@@ -117,6 +117,13 @@ import { REEL_DRIVES, type ReelDrive } from './reel-drives';
 import { autoDrive, autoMem, AUTO, type AutoOut, type Ground as AutoGround } from './autopilot';
 import { mkField, buildField, recenter as wxRecenter, wxAt, puddleAt, seedWet, WXF_N, WXF_SPAN } from './weatherfield';
 import { grainFx, grainU } from './grain';
+import {
+  FILMIC_DAWN,
+  FILMIC_DEPTH,
+  FILMIC_GLSL,
+  FILMIC_MIDDAY,
+  filmicDawnWeight,
+} from './filmic-grade';
 import { SWARD_STRUCTURE_GLSL } from './sward-structure';
 import {
   DEADWOOD, FOLIAGE_BANDS, STONE, STONE_MIX_ROWS, STONY, TRUNKED, VEG_CAP, VEG_MIX,
@@ -5668,6 +5675,18 @@ let dayF = 1;
 let moonPhase = 0;
 let sunAlt = 0.35, sunAz = 0.5;
 const sunSetV = new THREE.Vector3();
+const mixGradeVector = (
+  out: THREE.Vector3,
+  noon: readonly number[],
+  low: readonly number[],
+  lowShare: number,
+): void => {
+  out.set(
+    noon[0] + (low[0] - noon[0]) * lowShare,
+    noon[1] + (low[1] - noon[1]) * lowShare,
+    noon[2] + (low[2] - noon[2]) * lowShare,
+  );
+};
 function stepSun(): void {
   const { alt, az } = solarAngles(origin.lat, origin.lon, worldNow());
   sunAlt = alt; sunAz = az;
@@ -5755,6 +5774,20 @@ function applySkyTint(): void {
   c.uHazeBase.value.copy(mix(NIGHT_SKY.zenith, b.hazeBase));
   c.uHazeSun.value.copy(mix(NIGHT_SKY.horizon, b.hazeSun));
   u.uHazeB.value.copy(c.uHazeBase.value);
+  // THE GRADE FOLLOWS THE SAME SUN AS THE WORLD. At the horizon `dayF` is
+  // already two-thirds daylight, so twilight has to be allowed to win or a
+  // six-o'clock shot receives mostly the noon decision. Midnight keeps the
+  // dawn toe and channel separation; it does not fall back to a day grade.
+  const dawn = filmicDawnWeight(dayF, skyTwi);
+  mixGradeVector(compMat.uniforms.uGradeLift.value as THREE.Vector3, FILMIC_MIDDAY.lift, FILMIC_DAWN.lift, dawn);
+  mixGradeVector(compMat.uniforms.uGradeGamma.value as THREE.Vector3, FILMIC_MIDDAY.gamma, FILMIC_DAWN.gamma, dawn);
+  mixGradeVector(compMat.uniforms.uGradeGain.value as THREE.Vector3, FILMIC_MIDDAY.gain, FILMIC_DAWN.gain, dawn);
+  compMat.uniforms.uGradeSat.value =
+    FILMIC_MIDDAY.saturation + (FILMIC_DAWN.saturation - FILMIC_MIDDAY.saturation) * dawn;
+  compMat.uniforms.uGradeToe.value =
+    FILMIC_MIDDAY.toe + (FILMIC_DAWN.toe - FILMIC_MIDDAY.toe) * dawn;
+  compMat.uniforms.uGradeExposure.value =
+    FILMIC_MIDDAY.exposure + (FILMIC_DAWN.exposure - FILMIC_MIDDAY.exposure) * dawn;
 }
 
 const worldGroup = new THREE.Group();
@@ -6694,6 +6727,19 @@ const compMat = new THREE.ShaderMaterial({
     uSunUv: { value: new THREE.Vector2(0.5, 1.4) },
     uSunVis: { value: 0 },
     uBloom: { value: 0.75 },
+    // Scene-linear Rec.709 -> ACES AP1 fitted RRT/ODT -> display. The target
+    // vectors are written by applySkyTint from the same sun that lights the
+    // world; the depth decision stays fixed and its share follows `deep`.
+    uGradeLift: { value: new THREE.Vector3(...FILMIC_MIDDAY.lift) },
+    uGradeGamma: { value: new THREE.Vector3(...FILMIC_MIDDAY.gamma) },
+    uGradeGain: { value: new THREE.Vector3(...FILMIC_MIDDAY.gain) },
+    uGradeSat: { value: FILMIC_MIDDAY.saturation },
+    uGradeToe: { value: FILMIC_MIDDAY.toe },
+    uGradeExposure: { value: FILMIC_MIDDAY.exposure },
+    uDepthTint: { value: new THREE.Vector3(...FILMIC_DEPTH.tint) },
+    uDepthSat: { value: FILMIC_DEPTH.saturation },
+    uDepthAmt: { value: FILMIC_DEPTH.amount },
+    uVignette: { value: 0.12 },
     uScan: { value: 0.06 },
     uLevels: { value: 14 },
     /** Ordered-dither amplitude. 1 is the shipped truth (see the FULL STEP
@@ -6736,6 +6782,10 @@ const compMat = new THREE.ShaderMaterial({
     uniform sampler2D dofPrepTex; uniform sampler2D dofFarTex; uniform sampler2D dofNearTex;
     uniform float uDofOn;
     uniform sampler2D bloomTex; uniform float uBloom; uniform float uScan;
+    uniform vec3 uGradeLift; uniform vec3 uGradeGamma; uniform vec3 uGradeGain;
+    uniform float uGradeSat; uniform float uGradeToe; uniform float uGradeExposure;
+    uniform vec3 uDepthTint; uniform float uDepthSat; uniform float uDepthAmt;
+    uniform float uVignette;
     uniform float uLevels; uniform float uFow; uniform float uFlare;
     uniform float uDither; uniform float uMono;
     uniform float uDPat; uniform float uBias; uniform float uCon; uniform vec3 uTint;
@@ -6752,7 +6802,7 @@ const compMat = new THREE.ShaderMaterial({
     uniform float uAirBlur; uniform float uTiltAmt; uniform vec3 uFocusP; uniform vec3 uFocusN;
     uniform float uTiltSharp; uniform float uTiltBlur; uniform float uTiltNearScale;
     uniform float uTanHalfFov; uniform float uTiltSky;
-    vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+${FILMIC_GLSL}
 ${DITHER_GLSL}
     // The warm argument is HOW MUCH OF THE SUNWARD LOBE THIS CALLER WANTS. The sky wants
     // all of it — that warm side is the sunset, and it was built on purpose.
@@ -6836,6 +6886,7 @@ ${DITHER_GLSL}
       vec4 wp4 = invPV * vec4(vUv * 2.0 - 1.0, z * 2.0 - 1.0, 1.0);
       vec3 wp = wp4.xyz / wp4.w;
       float t = distance(wp, camPos);
+      float gradeDepth = 0.0;
       /**
        * ── PHOTOGRAPHIC DOF, ALREADY FILTERED AND STILL BEFORE THE GRADE ──
        *
@@ -6892,6 +6943,7 @@ ${DITHER_GLSL}
         // horizon keeps its haze.
         float deep = (1.0 - exp(-t / uHazeE)) * vFac * step(uHazeDbg, 1.5)
           * (1.0 - smoothstep(15.0, 60.0, uMpp));
+        gradeDepth = deep;
         // Fog-of-war and optional air blur still use the broad atmospheric
         // copy. Lens DOF has already produced focused above and remains a
         // separate operation, so focus cannot be confused with thick air.
@@ -6966,14 +7018,18 @@ ${DITHER_GLSL}
         col += mix(vec3(1.0, 0.82, 0.52), vec3(0.55, 0.85, 1.0), 0.35) * f * sunVis * 0.085 * uFlare;
       }
       col += vec3(0.85, 0.90, 1.0) * uFlash;   // lightning fills the whole frame
-      vec3 enc = srgb(col);
-      // GRADE. Physically-correct lighting through a haze lands flat and
-      // milky; the reference art is saturated with deep shadows. Saturation
-      // lift plus a contrast S-curve, applied before quantisation so the
-      // palette steps land on the graded image rather than the raw one.
-      float l = dot(enc, vec3(0.299, 0.587, 0.114));
-      enc = clamp(mix(vec3(l), enc, 1.35), 0.0, 1.0);
-      enc = clamp((enc - 0.5) * 1.18 + 0.47, 0.0, 1.0);
+      // DEPTH COLOUR BEFORE TONEMAPPING: distant terrain loses saturation and
+      // bends toward slate/cyan while the ACES shoulder still owns its
+      // luminance. The rig mask is already in alpha (noBlur writes zero), so
+      // yellow paint gets its own qualifier without catching dry grass.
+      col = filmicDepthGrade(col, gradeDepth, uDepthTint, uDepthSat, uDepthAmt);
+      float rigMask = 1.0 - step(0.25, sharp4.a);
+      vec3 enc = filmicGrade(col, rigMask, uGradeLift, uGradeGamma, uGradeGain,
+        uGradeSat, uGradeToe, uGradeExposure);
+      // Optical focus control belongs to the photographed world, not the HUD:
+      // the latter is a separate fixed canvas above this WebGL result.
+      float radial = length((vUv - 0.5) * 2.0) / 1.41421356;
+      enc *= 1.0 - uVignette * smoothstep(0.45, 1.0, radial);
       // PALETTE QUANTISATION with an ordered dither, in perceptual space and
       // keyed to the LOW-RES grid (not the screen), so the dither pattern is
       // one texel per step. This is the difference between authored pixel art
@@ -33741,8 +33797,13 @@ const beamMat = new THREE.ShaderMaterial({
       float d = clamp(vD, 0.0, 1.0), r = clamp(vR, 0.0, 1.0);
       // Daylight: the beam is a hint, not a searchlight. (The old night value
       // painted a white wedge across a sunlit desert.)
-      float a = max(pow(max(1.0 - d, 0.0), 1.7) * (1.0 - r * r) * 0.07 * uAmp, 0.0);
-      gl_FragColor = vec4(vec3(1.0, 0.94, 0.78) * a, a);
+      float shaft = 1.0 - r * r;
+      // A thin fringe catches the displaced road texture without turning the
+      // cone into a hard-edged decal; the cone itself is the radial haze.
+      float fringe = smoothstep(0.52, 0.84, r) * (1.0 - smoothstep(0.88, 1.0, r));
+      float a = max(pow(max(1.0 - d, 0.0), 1.7) * (shaft + fringe * 0.13) * 0.07 * uAmp, 0.0);
+      // Linear-light equivalent of a roughly 3200 K tungsten practical.
+      gl_FragColor = vec4(vec3(1.0, 0.48, 0.20) * a, a);
     }`,
 });
 const beams: THREE.Mesh[] = [];
@@ -33769,7 +33830,7 @@ for (const sx of [-0.62, 0.62]) {
 // tarmac (the "slab" at the Suresnes cul-de-sac was this, not a junction
 // box). Sixteen candela over seventy metres is a lamp you can tell is on.
 const HEAD_DAY = { i: 16, d: 70 }, HEAD_NIGHT = { i: 260, d: 230 };
-const headSpot = new THREE.SpotLight(0xfff0d0, HEAD_DAY.i, HEAD_DAY.d, 0.52, 0.65, 1.0);
+const headSpot = new THREE.SpotLight(0xffb87b, HEAD_DAY.i, HEAD_DAY.d, 0.52, 0.65, 1.0);
 /**
  * The beam occludes. A barrier stripes it, a trunk throws a shadow down the
  * road, a sign's shadow races past — none of which existed, because the light
@@ -34028,6 +34089,12 @@ const vehCopyMat = new THREE.ShaderMaterial({
     uBias: { value: 0.5 },
     uCon: { value: 1 },
     uTint: { value: new THREE.Vector3(1, 1, 1) },
+    uGradeLift: { value: new THREE.Vector3(...FILMIC_MIDDAY.lift) },
+    uGradeGamma: { value: new THREE.Vector3(...FILMIC_MIDDAY.gamma) },
+    uGradeGain: { value: new THREE.Vector3(...FILMIC_MIDDAY.gain) },
+    uGradeSat: { value: FILMIC_MIDDAY.saturation },
+    uGradeToe: { value: FILMIC_MIDDAY.toe },
+    uGradeExposure: { value: FILMIC_MIDDAY.exposure },
   },
   vertexShader: QUAD_VS,
   // The target is LINEAR, like the scene pass — so this has to do the encode,
@@ -34038,13 +34105,15 @@ const vehCopyMat = new THREE.ShaderMaterial({
     uniform float uDither; uniform float uMono;
     uniform float uDPat; uniform float uBias; uniform float uCon; uniform vec3 uTint;
     uniform float uDChan;
-    vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+    uniform vec3 uGradeLift; uniform vec3 uGradeGamma; uniform vec3 uGradeGain;
+    uniform float uGradeSat; uniform float uGradeToe; uniform float uGradeExposure;
+${FILMIC_GLSL}
 ${DITHER_GLSL}
     void main(){
-      vec3 enc = srgb(max(texture2D(src, vUv).rgb, 0.0));
-      float l = dot(enc, vec3(0.299, 0.587, 0.114));
-      enc = clamp(mix(vec3(l), enc, 1.35), 0.0, 1.0);
-      enc = clamp((enc - 0.5) * 1.18 + 0.47, 0.0, 1.0);
+      vec4 raw = texture2D(src, vUv);
+      float rigMask = 1.0 - step(0.25, raw.a);
+      vec3 enc = filmicGrade(raw.rgb, rigMask, uGradeLift, uGradeGamma, uGradeGain,
+        uGradeSat, uGradeToe, uGradeExposure);
       // FULL STEP, for the reason the composite gives at length: an ordered
       // dither below full amplitude is biased, not gentle. This pass exists to
       // end on the same grade and palette as the world, so it has to end on
@@ -52827,6 +52896,12 @@ function blitPixelated(
   vehCopyMat.uniforms.uBias.value = (compMat.uniforms.uBias as { value: number }).value;
   vehCopyMat.uniforms.uCon.value = (compMat.uniforms.uCon as { value: number }).value;
   (vehCopyMat.uniforms.uTint.value as THREE.Vector3).copy(compMat.uniforms.uTint.value as THREE.Vector3);
+  (vehCopyMat.uniforms.uGradeLift.value as THREE.Vector3).copy(compMat.uniforms.uGradeLift.value as THREE.Vector3);
+  (vehCopyMat.uniforms.uGradeGamma.value as THREE.Vector3).copy(compMat.uniforms.uGradeGamma.value as THREE.Vector3);
+  (vehCopyMat.uniforms.uGradeGain.value as THREE.Vector3).copy(compMat.uniforms.uGradeGain.value as THREE.Vector3);
+  vehCopyMat.uniforms.uGradeSat.value = compMat.uniforms.uGradeSat.value;
+  vehCopyMat.uniforms.uGradeToe.value = compMat.uniforms.uGradeToe.value;
+  vehCopyMat.uniforms.uGradeExposure.value = compMat.uniforms.uGradeExposure.value;
   renderer.setRenderTarget(rtVeh);
   renderer.setClearColor(clear, 1);
   renderer.clear(true, true, false);
@@ -53159,6 +53234,25 @@ Object.assign(hud.style, {
 hud.classList.add('ui');
 document.body.appendChild(hud);
 const hctx = hud.getContext('2d')!;
+/** The colour pipeline as live numbers, including the layer boundary the UI
+ * relies on: the grade ends in the WebGL canvas; the fixed HUD canvas is then
+ * composited by the browser at z=10 and cannot inherit the scene tint. */
+(window as unknown as { __filmic?: object }).__filmic = (): object => {
+  const u = compMat.uniforms;
+  const vec = (key: string): number[] => {
+    const v = u[key].value as THREE.Vector3;
+    return [+v.x.toFixed(3), +v.y.toFixed(3), +v.z.toFixed(3)];
+  };
+  return {
+    lift: vec('uGradeLift'), gamma: vec('uGradeGamma'), gain: vec('uGradeGain'),
+    saturation: +Number(u.uGradeSat.value).toFixed(3),
+    toe: +Number(u.uGradeToe.value).toFixed(3),
+    exposure: +Number(u.uGradeExposure.value).toFixed(3),
+    depthTint: vec('uDepthTint'), depthSaturation: u.uDepthSat.value,
+    vignette: u.uVignette.value,
+    hudPostGrade: hud.parentElement === document.body && Number(hud.style.zIndex) > 0,
+  };
+};
 let authoringPreviews: readonly AuthoringPreview[] = [];
 const authoringProject = new THREE.Vector3();
 function projectAuthoringPoint(x: number, z: number): [number, number] | null {
@@ -53183,12 +53277,15 @@ function drawAuthoringPreviews(): void {
   hctx.lineJoin = 'round';
   hctx.lineCap = 'round';
   for (const preview of authoringPreviews) {
-    const colour = preview.state === 'failed' ? UI.bad
+    const previewOpacity = Math.max(0, Math.min(1, preview.opacity ?? 1));
+    const stateColour = preview.state === 'failed' ? UI.bad
       : preview.state === 'settled' ? UI.good
         : preview.state === 'pending' ? UI.gold : UI.edge;
-    hctx.strokeStyle = colour;
-    hctx.fillStyle = colour;
-    hctx.globalAlpha = preview.state === 'settled' ? .42 : .9;
+    const paintColour = preview.colour ?? stateColour;
+    hctx.strokeStyle = preview.state === 'cursor' || preview.state === 'draft'
+      ? paintColour : stateColour;
+    hctx.fillStyle = paintColour;
+    hctx.globalAlpha = (preview.state === 'settled' ? .42 : .9) * previewOpacity;
     hctx.setLineDash(preview.state === 'pending' ? [3, 3] : []);
     // ── THE CELLS AN EDIT HAS ALREADY WRITTEN ──
     //
@@ -53260,18 +53357,43 @@ function drawAuthoringPreviews(): void {
     const projected = preview.points
       .map((point) => projectAuthoringPoint(point.x, point.z))
       .filter((point): point is [number, number] => !!point);
-    if (projected.length < 2) continue;
+    if (!projected.length) continue;
     const first = preview.points[0];
-    const edge = projectAuthoringPoint(first.x + preview.radiusM * .5, first.z);
+    const edge = projectAuthoringPoint(
+      first.x + (preview.kind === 'brush' ? preview.radiusM : preview.radiusM * .5),
+      first.z,
+    );
     const centre = projectAuthoringPoint(first.x, first.z);
-    const width = edge && centre ? Math.max(1.5, Math.hypot(edge[0] - centre[0], edge[1] - centre[1]) * 2) : 2;
+    const width = edge && centre
+      ? Math.max(1.5, Math.hypot(edge[0] - centre[0], edge[1] - centre[1]) * 2)
+      : 2;
+    if (preview.kind === 'brush' && projected.length === 1) {
+      hctx.globalAlpha = (preview.state === 'settled' ? .16 : .24) * previewOpacity;
+      hctx.setLineDash([]);
+      hctx.beginPath();
+      hctx.arc(projected[0][0], projected[0][1], width * .5, 0, Math.PI * 2);
+      hctx.fill();
+      hctx.globalAlpha = (preview.state === 'settled' ? .5 : .95) * previewOpacity;
+      hctx.strokeStyle = preview.state === 'draft' ? paintColour : stateColour;
+      hctx.lineWidth = 1;
+      hctx.setLineDash(preview.state === 'pending' ? [3, 3] : []);
+      hctx.stroke();
+      continue;
+    }
+    if (projected.length < 2) continue;
     hctx.beginPath();
     hctx.moveTo(projected[0][0], projected[0][1]);
     for (let i = 1; i < projected.length; i++) hctx.lineTo(projected[i][0], projected[i][1]);
-    hctx.globalAlpha *= .22;
+    hctx.strokeStyle = paintColour;
+    hctx.setLineDash([]);
+    hctx.globalAlpha = preview.kind === 'brush'
+      ? (preview.state === 'settled' ? .13 : .22) * previewOpacity
+      : hctx.globalAlpha * .22;
     hctx.lineWidth = width;
     hctx.stroke();
-    hctx.globalAlpha = preview.state === 'settled' ? .55 : 1;
+    hctx.strokeStyle = preview.state === 'draft' ? paintColour : stateColour;
+    hctx.setLineDash(preview.state === 'pending' ? [3, 3] : []);
+    hctx.globalAlpha = (preview.state === 'settled' ? .55 : .95) * previewOpacity;
     hctx.lineWidth = 1;
     hctx.stroke();
   }
@@ -59887,6 +60009,25 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     noteCells('dem', result.cells);
     return result;
   };
+  const coverPreviewColour: Record<number, string> = {
+    [COVER.tree]: '#4f9f54',
+    [COVER.shrub]: '#7f9d47',
+    [COVER.grass]: '#a6bd59',
+    [COVER.crop]: '#d4bd68',
+    [COVER.built]: '#aaa29a',
+    [COVER.bare]: '#c58c68',
+    [COVER.snow]: '#dce9e8',
+    [COVER.water]: '#438eb6',
+    [COVER.wetland]: '#4f8f78',
+    [COVER.mangrove]: '#34705a',
+    [COVER.moss]: '#8c9b72',
+  };
+  const demPreviewColour: Record<string, string> = {
+    raise: '#ed9a55',
+    lower: '#4c9bc1',
+    flatten: '#e0bb5d',
+    smooth: '#72c9bd',
+  };
   const coverLayer: AuthoringLayer = {
     id: 'cover',
     label: 'LAND COVER',
@@ -59911,7 +60052,8 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     // 41, about five pixels a stop on the bar's own strip, and 0 is still
     // the single texel under the cursor.
     radius: { label: 'RADIUS', min: 0, max: 200, step: 5, value: 40, unit: 'm' },
-    beginGesture: (at, radius, value) => {
+    strength: { label: 'FILL', min: 10, max: 100, step: 10, value: 100, unit: '%' },
+    beginGesture: (at, radius, value, strength) => {
       coverEditor.beginStroke();
       return applyCover(() => coverEditor.paint(
         editableCoverTiles(),
@@ -59919,14 +60061,16 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
         at.z,
         radius,
         COVER_CLASSES.includes(Number(value)) && Number(value) !== 0 ? Number(value) : COVER.grass,
+        strength / 100,
       ));
     },
-    updateGesture: (at, radius, value) => applyCover(() => coverEditor.paint(
+    updateGesture: (at, radius, value, strength) => applyCover(() => coverEditor.paint(
       editableCoverTiles(),
       at.x,
       at.z,
       radius,
       COVER_CLASSES.includes(Number(value)) && Number(value) !== 0 ? Number(value) : COVER.grass,
+      strength / 100,
     )),
     endGesture: () => {
       // The stroke's own cells become the trail. `changed` stays 0: every
@@ -59939,6 +60083,8 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       ...(cursor ? [{ kind: 'cursor' as const, points: [cursor], radiusM, state: 'cursor' as const }] : []),
       ...cellPreviews('cover', coverEditor.strokeCells()),
     ],
+    previewColour: (value) => coverPreviewColour[Number(value)] ?? '#75d9d0',
+    previewOpacity: (_value, strength) => .25 + .75 * Math.max(0, Math.min(1, strength / 100)),
     undo: () => applyCover(() => coverEditor.undo()),
     redo: () => applyCover(() => coverEditor.redo()),
     reset: () => applyCover(() => coverEditor.reset()),
@@ -59988,6 +60134,7 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       ...(cursor ? [{ kind: 'cursor' as const, points: [cursor], radiusM, state: 'cursor' as const }] : []),
       ...cellPreviews('dem', demEditor.strokeCells()),
     ],
+    previewColour: (value) => demPreviewColour[value] ?? '#75d9d0',
     undo: () => applyDem(() => demEditor.undo()),
     redo: () => applyDem(() => demEditor.redo()),
     reset: () => applyDem(() => demEditor.reset()),

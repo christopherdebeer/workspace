@@ -170,7 +170,10 @@ export class DemPaintSession {
     }
     this.stroke = null;
     this.flattenTarget = null;
-    if (edits.length) this.undoStack.push(edits);
+    if (edits.length) {
+      this.undoStack.push(edits);
+      this.redoStack.length = 0;
+    }
     return {
       changed: edits.length,
       tileKeys: [...new Set(edits.map((edit) => edit.tile.key))],
@@ -207,7 +210,9 @@ export class DemPaintSession {
     for (const edit of edits) {
       edit.tile.data[edit.index] = edit.after;
       const key = cellKey(edit.tile, edit.index);
-      if (!this.originals.has(key)) this.originals.set(key, edit);
+      const original = this.originals.get(key);
+      if (original) original.after = edit.after;
+      else this.originals.set(key, { ...edit });
     }
     this.undoStack.push(edits);
     return {
