@@ -19269,3 +19269,11 @@ The landscape sheet scrolls (max 52 vh) and overlaps the compass; the canvas
 HUD itself still has no safe-area insets (#157), so a turned notched phone
 still puts the clock and gauges under the notch — the deck and its sheet take
 the insets, the canvas does not yet.
+
+**Live as v1790104934985**, pushed without a pull on the seat's word (anything
+another agent had on the cell and not in git is overwritten; the next pull will
+say). The live `app.js` read `x-cache: Miss`, 4.18 MB, parses under esbuild,
+carries `createHudDeck`, `tileDbgForced`, `deckInspect`, `__deckrect` and the
+INSPECT title, and has no trace of the old matrix block; `/` and `/lab/world`
+answer 200. The seat's review decides roll back or roll forward; rolling back
+is a push of the parent commit.
