@@ -6,19 +6,22 @@
  * the camera, some opened sheets of settings, one opened the menu — and the
  * seat's review of it set the rules this version is built on:
  *
- * - A TAB IS A HUD LAYOUT: a set of instruments drawn on the glass, plus the
- *   few controls that operate them. VIEW (render inspection), MAP (layers,
- *   orientation, waypoints), RIG (the vehicle's gauges), DRONE (launch, fly,
- *   altitude and gimbal rails), CAM (the lens rails), SYS (live telemetry).
- * - ONE LAYOUT AT A TIME, AND NONE IS THE BASELINE. Tapping a tab raises it;
- *   tapping the lit tab lowers it. With none up you are driving, and the
- *   baseline's own controls (autopilot, HOLD, rewind) sit on a strip above the
- *   row. Controls are exclusive; EFFECTS persist where that makes sense — a
- *   layer, the lens, a drone in the air. A tab whose effect is still in force
- *   wears a dot.
- * - EVERY CONTROL HAS ONE HOME. Nothing here is a menu shortcut and nothing is
- *   a raw setting: settings live in the menu, and where the camera is lives on
- *   the dock.
+ * - TWO KINDS OF TAB. Four are LAYOUTS — VIEW (render inspection and the
+ *   readout layers), MAP (layers, orientation, waypoints), RIG (the vehicle's
+ *   gauges), CAM (seat and lens). One is up at a time: a tap raises it, a tap
+ *   on the lit tab lowers it, and with none up you are driving. Two are MODES
+ *   — DRONE and AUTO — which run beside whatever layout is up: a tap starts
+ *   the mode, a tap again ends it (RECALL, YOU HAVE IT), and neither stops you
+ *   raising a layout to tweak the camera, the layers or the view meanwhile.
+ * - A TAB IS AN ICON, ITS STATE AND ONE SUPPLEMENTARY SIGNAL — no words. A
+ *   gold bracket is the layout that is up; a green face is a mode that is
+ *   running; a bar along the foot is a level (the drone's pack); a dot in the
+ *   corner is either an effect still in force (gold) or a warning (red, the
+ *   rig's condition, an autopilot that cannot find its road).
+ * - CONTROLS ARE EXCLUSIVE; EFFECTS PERSIST — a layer, the lens, a readout.
+ *   VIEW's render inspection is the exception and stands down on leave.
+ * - EVERY CONTROL HAS ONE HOME AND NONE IS A SETTING; the camera's place is the
+ *   dock's. A tray is dense: big bracketed buttons, radios and toggles alike.
  *
  * The module owns no game state. The game hands it a description every frame
  * and it diffs: an unchanged description touches nothing, a change of VALUES
@@ -34,9 +37,14 @@
  */
 import { PIXEL_FONT, MICRO_FONT } from './font';
 
-export type DeckTab = 'view' | 'map' | 'rig' | 'drone' | 'cam' | 'sys';
-export const DECK_TABS: readonly DeckTab[] = ['view', 'map', 'rig', 'drone', 'cam', 'sys'];
-type Tone = 'ink' | 'edge' | 'dim' | 'text' | 'soft' | 'gold' | 'hot' | 'good' | 'bad';
+export type DeckTab = 'view' | 'map' | 'rig' | 'cam' | 'drone' | 'auto';
+export const DECK_TABS: readonly DeckTab[] = ['view', 'map', 'rig', 'cam', 'drone', 'auto'];
+/** The tabs that start a MODE rather than raise a layout. */
+export const DECK_MODES: readonly DeckTab[] = ['drone', 'auto'];
+/** One tab's supplementary signal: a level along its foot, a dot in its
+ *  corner. */
+export interface DeckSup { bar?: number; barTone?: Tone; dot?: Tone }
+export type Tone = 'ink' | 'edge' | 'dim' | 'text' | 'soft' | 'gold' | 'hot' | 'good' | 'bad';
 
 /**
  * One control in a sheet. Four shapes, because a sheet asks four kinds of
@@ -56,9 +64,10 @@ export interface DeckState {
   /** The layout that is up — its tab wears the gold bracket. Null is the
    *  baseline: driving, with nothing raised. */
   active: DeckTab | null;
-  /** Tabs whose EFFECT is still in force though their controls are down (a
-   *  drone in the air, a layer on, the lens moved). They wear a dot. */
-  live: DeckTab[];
+  /** Modes that are running (a drone in the air, the autopilot driving). */
+  modes: DeckTab[];
+  /** Each tab's supplementary signal. */
+  sup: Partial<Record<DeckTab, DeckSup>>;
   /** The active layout's own controls, in the tray over the row. */
   tray: DeckSheet | null;
   /** The baseline's controls, on the strip over the row — only with no
@@ -87,7 +96,7 @@ export interface HudDeck {
 
 /** Tab faces, left to right as the mock sets them. */
 const LABEL: Record<DeckTab, string> = {
-  view: 'VIEW', map: 'MAP', rig: 'RIG', drone: 'DRONE', cam: 'CAM', sys: 'SYS',
+  view: 'VIEW', map: 'MAP', rig: 'RIG', cam: 'CAM', drone: 'DRONE', auto: 'AUTOPILOT',
 };
 /**
  * PIXEL ICONS, NOT THE ICON FONT. The Font Awesome subset (icons.ts) has a
@@ -152,16 +161,16 @@ const ICONS: Record<DeckTab, string[]> = {
     '#########',
     '.........',
   ],
-  sys: [                        // a cog
-    '....#....',
-    '.#.###.#.',
+  auto: [                       // a steering wheel
     '..#####..',
-    '.##...##.',
-    '###...###',
-    '.##...##.',
+    '.#.....#.',
+    '#.......#',
+    '#...#...#',
+    '#########',
+    '#..#.#..#',
+    '#.#...#.#',
+    '.#.....#.',
     '..#####..',
-    '.#.###.#.',
-    '....#....',
   ],
 };
 function iconSvg(rows: string[]): string {
@@ -200,12 +209,19 @@ export function createHudDeck(
   .deck-tab svg { filter: drop-shadow(1px 0 ${C.ink}) drop-shadow(-1px 0 ${C.ink}) drop-shadow(0 1px ${C.ink}); }
   /* Two rows: the icon rides beside its word, since the cell is short. */
   #deck-row.two .deck-tab { flex-direction: row; gap: 4px; }
-  #deck-row.two .deck-tab svg { width: 12px; height: 12px; }
+  #deck-row.two .deck-tab svg { width: 16px; height: 16px; }
   .deck-tab.active { color: ${C.gold}; --bk: ${C.gold}; border-color: rgba(245,196,83,0.6);
     background-color: rgba(8,20,23,0.85); }
-  /* An effect still in force with its controls down: a dot, not a bracket. */
-  .deck-tab.live::after { content: ''; position: absolute; top: 3px; right: 3px; width: 3px; height: 3px;
-    background: ${C.gold}; box-shadow: 0 0 0 1px ${C.ink}; }
+  /* A MODE THAT IS RUNNING: a green face, so it reads as "on" beside a layout's
+     gold "up" and never as a second layout. */
+  .deck-tab.mode { color: ${C.good}; --bk: ${C.good}; border-color: rgba(122,220,140,0.6);
+    background-color: rgba(10,34,20,0.85); }
+  .deck-tab svg { width: 20px; height: 20px; }
+  .deck-tab .sup-dot { position: absolute; top: 3px; right: 3px; width: 4px; height: 4px; display: none;
+    box-shadow: 0 0 0 1px ${C.ink}; }
+  .deck-tab .sup-bar { position: absolute; left: 5px; right: 5px; bottom: 4px; height: 3px; display: none;
+    background: rgba(114,189,178,0.25); }
+  .deck-tab .sup-bar i { display: block; height: 100%; }
   /* THE TRAY: the active layout's controls, centred over the lower road,
      bottom edge just above the row. Its sections flow into as many columns as
      the width holds. A FIXED width, not max-content: the sections are an
@@ -231,9 +247,11 @@ export function createHudDeck(
     border: 1px solid rgba(114,189,178,0.35); }
   .deck-panel .d-title { font-size: 10px; letter-spacing: 1px; color: ${C.gold};
     border-bottom: 1px solid rgba(114,189,178,0.35); padding-bottom: 5px; margin-bottom: 6px; }
-  #deck-sheet .d-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px 10px; }
-  #deck-sheet .d-sec { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-  #deck-sheet .d-sec + .d-sec { border-left: 1px solid rgba(114,189,178,0.18); padding-left: 8px; }
+  /* DENSE: every section is a grid of big bracketed buttons — radios and
+     toggles look alike and differ in what lights, not in shape. */
+  #deck-sheet .d-cols { display: flex; flex-direction: column; gap: 6px; }
+  #deck-sheet .d-sec { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 4px; }
+  #deck-sheet .d-sec .d-h { grid-column: 1 / -1; margin: 0; }
   .deck-panel .d-h { font-size: 8px; letter-spacing: 1px; color: ${C.dim}; margin-bottom: 1px; }
   .deck-panel button { font: inherit; font-family: inherit; font-size: 8px; letter-spacing: 1px;
     cursor: pointer; background-color: transparent; color: ${C.edge}; text-align: left; }
@@ -241,10 +259,13 @@ export function createHudDeck(
   .deck-panel .d-choice, .deck-panel .d-action { padding: 5px 8px 4px; text-align: center; min-height: 26px;
     border: 1px solid rgba(114,189,178,0.35); --bk: ${C.edge}; background-color: rgba(8,20,23,0.7); }
   .deck-panel .d-choice.on { color: ${C.gold}; --bk: ${C.gold}; border-color: ${C.gold}; }
-  .deck-panel .d-check { display: flex; align-items: center; gap: 6px; padding: 3px 0; border: 0; }
-  .deck-panel .d-check .box { width: 8px; height: 8px; flex: none; border: 1px solid ${C.edge};
+  /* A toggle is a big button too; its box says it is a toggle, and lights. */
+  .deck-panel .d-check { display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 5px 8px 4px; min-height: 26px; border: 1px solid rgba(114,189,178,0.35); --bk: ${C.edge};
+    background-color: rgba(8,20,23,0.7); }
+  .deck-panel .d-check .box { width: 7px; height: 7px; flex: none; border: 1px solid ${C.edge};
     box-sizing: border-box; }
-  .deck-panel .d-check.on { color: ${C.text}; }
+  .deck-panel .d-check.on { color: ${C.gold}; --bk: ${C.gold}; border-color: ${C.gold}; }
   .deck-panel .d-check.on .box { background: ${C.gold}; border-color: ${C.gold}; }
   .deck-panel .note { color: ${C.dim}; margin-left: 4px; }
   .deck-panel .d-slider { display: flex; flex-direction: column; gap: 2px; font-size: 8px; letter-spacing: 1px; }
@@ -277,7 +298,11 @@ export function createHudDeck(
     const b = document.createElement('button');
     b.className = 'deck-tab bkt';
     b.dataset.deckTab = t;
-    b.innerHTML = `${iconSvg(ICONS[t])}<span>${LABEL[t]}</span>`;
+    // NO WORDS ON THE FACE: the icon, its state, and one supplementary signal.
+    // The name rides as the accessible label and the tooltip.
+    b.innerHTML = `${iconSvg(ICONS[t])}<span class="sup-dot"></span><span class="sup-bar"><i></i></span>`;
+    b.setAttribute('aria-label', LABEL[t]);
+    b.title = LABEL[t];
     b.addEventListener('click', () => onTab(t));
     tabEls.set(t, b);
     row.appendChild(b);
@@ -425,9 +450,21 @@ export function createHudDeck(
       if (key === lastKey) return;
       lastKey = key;
       for (const [t, el] of tabEls) {
+        const on = t === s.active || s.modes.includes(t);
         el.classList.toggle('active', t === s.active);
-        el.classList.toggle('live', t !== s.active && s.live.includes(t));
-        el.setAttribute('aria-pressed', String(t === s.active));
+        el.classList.toggle('mode', s.modes.includes(t));
+        el.setAttribute('aria-pressed', String(on));
+        const sup = s.sup[t] ?? {};
+        const dot = el.querySelector('.sup-dot') as HTMLElement;
+        dot.style.display = sup.dot ? 'block' : 'none';
+        if (sup.dot) dot.style.background = C[sup.dot];
+        const bar = el.querySelector('.sup-bar') as HTMLElement;
+        bar.style.display = sup.bar !== undefined ? 'block' : 'none';
+        if (sup.bar !== undefined) {
+          const fill = bar.firstElementChild as HTMLElement;
+          fill.style.width = `${Math.round(Math.max(0, Math.min(1, sup.bar)) * 100)}%`;
+          fill.style.background = C[sup.barTone ?? 'edge'];
+        }
       }
       const tk = s.tagline.join('\n');
       if (tk !== tagKey) {

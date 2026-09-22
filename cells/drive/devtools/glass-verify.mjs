@@ -50,7 +50,7 @@ const tapDeck = async (id) => {
   }
   await d.page.evaluate((i) => {
     const r = window.__deckrect(i);
-    document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2)?.closest('[data-deck-item]')?.click();
+    document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2)?.closest('[data-deck-item],[data-deck-tab]')?.click();
   }, id);
 };
 await tapDeck('auto');

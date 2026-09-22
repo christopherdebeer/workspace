@@ -59,32 +59,12 @@ catalogue as it now stands:
   every small pixel webfont has a 5-unit cap — see the note above `GLYPHS`);
   micro text is Micro 5 rasterised to 1-bit (`microGlyph`), not the old 3×5
   table.
-- **The strait is the DECK (`client/hud-deck.ts`): six HUD LAYOUTS, one up at
-  a time or none** — VIEW · MAP · RIG · DRONE · CAM · SYS, on the ground the
-  control matrix stood on (`deckBox()` is the one source of that box). A tap
-  raises a layout, a tap on the lit tab lowers it; with none up you are on the
-  baseline, whose AUTO / HOLD / REWIND strip sits over the row. Controls are
-  exclusive and effects persist (a tab whose effect is in force wears a dot);
-  VIEW's inspection stands down on leave. Six across when each cell is at
-  least `DECK_MIN_CELL` CSS px, 3×2 otherwise.
-- **The dock is the camera switch**, with corner brackets, a `TAP > …` hint,
-  and a seat chip on its corner (CHASE/CAB; in the drone TRAIL/NOSE).
-
-| layout | draws | controls |
-|---|---|---|
-| VIEW | render inspection + tagline | tray: PASS, TILE GRID, debug ground views, HYDRO |
-| MAP | the layer key | the key's chips; tray: ORIENT, WAYPOINTS |
-| RIG | ENV and RIG gauges on both edges | — |
-| DRONE | its view and state | the tab launches; ALT and PITCH rails; tray: RECALL |
-| CAM | the lens | TILT rail (chart), BAND rail (not cab or god) |
-| SYS | telemetry under the chip | — |
-
-- **Still canvas:** compass, clock, scale bar, layer key, POI pins, bend call,
-  message rail, dock/minimap and its chip, the rails, the gauges (RIG only),
-  the place/coordinate lines, the dial and LEDs, and the status line over the
-  deck (drone height, the autopilot's verdict).
-- **The top-right chip** reads MENU on the baseline and the layout's name
-  otherwise, with the layout's tagline (or SYS's readout) under it.
+- **The strait is the DECK (`client/hud-deck.ts`)**: VIEW · MAP · RIG · CAM
+  are layouts (one up or none), DRONE · AUTO are modes that run beside them.
+  Icons only; state and one signal (a bar, a dot) instead of words. The dock
+  is the bare camera switch; the seat is CAM's; the chip always says MENU.
+  See the drive CLAUDE.md section "The deck: four layouts, two modes" for the
+  table. Six across when each cell is at least `DECK_MIN_CELL` CSS px.
 
 Probes: `__deck(tab?)` (state, and a tab tapped through the real handler),
 `__deckrect(id)` (client rect of a tab or panel item — tests tap where a thumb

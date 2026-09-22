@@ -19189,72 +19189,65 @@ preview and nothing else — with the tile grid gone the disarmed floor is
 exactly **0**). `devtools/lab-phone.test.mjs` holds the bar, the dial and an
 undo/redo round trip through the chips.
 
-## The deck is six HUD layouts, one at a time, and the dock is the camera
+## The deck: four layouts, two modes, icons only, and a bare dock
 
-The first deck (the control matrix's replacement, deployed as v1790104934985)
-was a launcher: DRIVE and MAP moved the camera, RIG opened the menu, CAM and SYS
-were sheets of menu items and raw settings, and the same controls appeared in
-two or three places. The seat's review of it set the rules the deck keeps now,
-and `client/hud-deck.ts` carries them at the top:
+The deck (`client/hud-deck.ts`, deck block in main.ts) went through two reviews
+from the seat. The first replaced a launcher with layouts; the second set the
+shape it has now, and the rules are at the top of `hud-deck.ts`:
 
-- **THE DOCK DECIDES WHERE THE CAMERA IS, AND NOTHING ON THE DECK DOES.** A tap
-  on the minimap goes to the chart or back to the seat it previews; it wears
-  gold corner brackets and a `TAP > CHART` / `TAP > CHASE` hint over it, and the
-  chip on its corner picks the seat (CHASE/CAB, which in the drone are its
-  TRAIL and NOSE cameras — `lastPov` already meant both). `seatRect` is asked
-  before `dockRect` in `hudTap`, because it is the smaller target.
-- **A TAB IS A HUD LAYOUT, ONE IS UP AT A TIME, AND NONE IS THE BASELINE.**
-  VIEW · MAP · RIG · DRONE · CAM · SYS. Tapping a tab raises it, tapping the lit
-  tab lowers it. With none up you are driving, and the baseline's own controls
-  — AUTO, HOLD, and REWIND while held — sit on a small strip over the row
-  (`#deck-base`), which steps aside while a layout is up.
-- **CONTROLS ARE EXCLUSIVE; EFFECTS PERSIST.** A layer, the lens band and a
-  drone in the air outlive their tab, and a tab whose effect is in force wears
-  a dot (`deckLive`). VIEW is the exception by design: leaving it stands the
-  inspection down without saving (`deckInspect`), so the chart never wears the
-  tile grid with the rack's TILE DEBUG ON.
-- **EVERY CONTROL HAS ONE HOME, AND NONE IS A SETTING.** POST, HUD size, HIDE
-  HUD and the menu doors are the menu's; the camera is the dock's.
+- **FOUR LAYOUTS, TWO MODES.** VIEW · MAP · RIG · CAM are LAYOUTS: one up at a
+  time, a tap on the lit tab lowers it, none up is the baseline (driving, with
+  HOLD — and REWIND while held — on a small strip over the row). DRONE and AUTO
+  are MODES: a tap starts one, a tap again ends it (RECALL; YOU HAVE IT), and a
+  mode never touches `deckActive`, so you launch the drone and then raise CAM
+  or MAP or VIEW without cancelling the flight. That is the ambiguous half of
+  the seat's ask made concrete; change `deckTab` if it meant something else.
+- **A TAB IS AN ICON, ITS STATE AND ONE SIGNAL — NO WORDS.** Gold bracket: the
+  layout up. Green face: a mode running. A bar along the foot: the drone's
+  pack. A corner dot: gold for an effect in force (a thematic layer, a waypoint
+  layer off, the lens moved, a readout on), red/gold for a warning (the rig's
+  condition, `rigAlarm`; an autopilot that cannot find or chain its road).
+  The name rides as `aria-label` and `title`.
+- **THE DOCK IS THE CAMERA SWITCH AND IS BARE**: gold corner brackets, no hint
+  text, no chip. The seat (CHASE/CAB, the drone's TRAILING/NOSE) is CAM's.
+- **THE MENU CHIP ALWAYS SAYS MENU.**
+- **TRAYS ARE DENSE**: every section is a grid of big bracketed buttons;
+  radios and toggles share the shape and differ in what lights.
 
-| layout | what it draws | its controls |
-|---|---|---|
-| VIEW | render inspection, the tagline | PASS, TILE GRID, the debug ground views, HYDRO — in the tray |
-| MAP | the layer key (on the chart under the scale bar; in a seat under the clock) | the key's chips (roads, places, cover, eco); ORIENT and WAYPOINTS in the tray |
-| RIG | the ENV and RIG gauges down both edges — they no longer stand in the baseline | none |
-| DRONE | the drone's view and state | the tab is the LAUNCH; ALT (left rail) and PITCH (right rail); RECALL in the tray |
-| CAM | the lens | TILT (left rail, chart only) and BAND (right rail, any camera but cab and god) |
-| SYS | frame, triangles, calls, tiles, OSM, far shell, heap, network — under the chip | none |
+| tab | kind | draws | tray |
+|---|---|---|---|
+| VIEW | layout | render inspection + tagline | PASS radios · INSPECT toggles (tile grid, the debug ground views, hydro) · READOUTS toggles (FPS, GPU, STREAM, MEMORY) |
+| MAP | layout | — | ORIENT radios · LAYERS toggles · WAYPOINTS: ALL/NONE radios over PINNED, PEAKS, NEARBY toggles |
+| RIG | layout | ENV and RIG gauges on the edges | none |
+| CAM | layout | TILT (chart) and BAND rails | SEAT radios |
+| DRONE | mode | ALT and PITCH rails while flying from its view, unless CAM or RIG holds the edges | none |
+| AUTO | mode | the verdict line over the row | none |
 
-**THE RAILS ARE CANVAS**, the old chart lens rails generalised (`railRects`,
-`railFrac`/`railSetFrac`, dragged through `chartLensDown`): an edge slider is an
-instrument as much as a control, since its position is the reading. The edges
-are free for them because the gauges stand in RIG only. **PITCH is new state**:
-`droneGimbalDeg`, null for each view's own default (nose 23.4°, trailing 19.1°),
-read by the drone camera AND by `droneGroundFocus`, so the render focus follows
-where the camera actually looks. **The BAND now scales the band in the chase
-seat and the drone too** (`aimFocus`), because the lens you set is the lens you
-keep when you take off.
+**SYS BECAME VIEW'S READOUT LAYERS**, which persist whatever is up
+(`readoutOn`, `drive.readouts`): GPU, STREAM and MEMORY read out under the MENU
+chip; FPS is the canvas readout at the foot and defaults on, because its
+double-tap is how telemetry is copied — off, the gesture goes with it. The
+render inspection (pass, grid, debug ground views, hydro) still stands down on
+leaving VIEW. **The waypoint layers** (`wpOn`, `drive.wpLayers`) filter
+`poiDraw` after `updatePois`, so a hidden kind is neither drawn nor tappable;
+the WAYPOINTS dial still sets how much scenery rides along. The chart's layer
+key no longer carries chips — its switches are the MAP tray's — and keeps its
+legend.
 
-**THE TRAY SITS OVER THE DOCK, NOT OVER THE ROW.** The first cut centred it
-over the row and it lay across the dock's corner: the MAP tray took the seat
-chip's taps, which `hud-deck.test.mjs` caught as "the seat chip puts you in the
-cab" failing while a direct tap at the same point worked with no layout up.
-`DeckGeom.trayB` puts its foot above the dock and its hint, `edge` keeps it off
-the rails, and its height is capped under the compass.
+**Measured** (`devtools/hud-deck.test.mjs`, at-campsbay, drawn, the tile-debug
+dial on throughout): all ok — no words on the tabs, no seat chip on the dock,
+HOLD and REWIND from the strip, AUTO starting with no layout and MAP raised
+beside it with the chip still MENU, the waypoint toggles and ALL/NONE, a layer
+toggle, the dock to the chart and back, the CAB/CHASE radios, CAM's rails in
+the seat and on the chart with the band persisting under a dot, VIEW's grid and
+WIRE standing down on leave while the GPU readout stays, FPS off leaving the
+glass, DRONE launching with no layout and no tray, its ALT rail, CAM raised in
+flight taking the edges and NOSE picking its nose camera, the rails returning
+when CAM lowers, the dock chart↔drone, and a second DRONE tap recalling it.
+`poi-project` and `glsl-reserved` green. **`fps-tap.test.mjs` fails two checks
+(the double tap copies nothing; the chart double tap drops no fix) and fails
+them identically on the commit before this work**, so it is not this change's
+and is not fixed here.
 
-**Measured** (`devtools/hud-deck.test.mjs`, at-campsbay, DRAWN — the dock, the
-seat chip and the rails are canvas and `nodraw` skips the HUD, so this cannot
-run under it): all ok, with the tile-debug dial ON throughout —
-AUTO and HOLD from the strip, REWIND offered while held, RIG not opening the
-menu, MAP in the seat with its chips and no debug chips, the dock to the chart
-and back with MAP still up, the seat chip to the cab and back, VIEW drawing the
-grid and standing WIRE down on leave, CAM's rails on the chart and in the seat,
-a band set on a rail persisting with the dot, SYS's readout, DRONE launching,
-its ALT rail, the drone still flying and in view with its tab down, and the
-dock taking a flying view to the chart and back to the drone. `orientation`,
-`poi-project`, `glsl-reserved` and `switches` green. `deck-shot.mjs` takes
-every layout's frame.
-
-**NOT SEEN ON A DEVICE, AND NOT DEPLOYED.** Landscape on a notched phone still
-has no canvas safe-area insets (#157), and the landscape tray is tight against
-the compass. The frames are the harness's at 390×844.
+**NOT SEEN ON A DEVICE, NOT DEPLOYED.** In landscape the tray scrolls and the
+canvas HUD still has no safe-area insets (#157).

@@ -72,7 +72,7 @@ const tapAuto = async () => {
   return d.page.evaluate(() => {
     const r = window.__autorect();
     if (!r) return { on: null, why: 'no AUTO button on the glass' };
-    document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2)?.closest('[data-deck-item]')?.click();
+    document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2)?.closest('[data-deck-item],[data-deck-tab]')?.click();
     return window.__auto();
   });
 };
