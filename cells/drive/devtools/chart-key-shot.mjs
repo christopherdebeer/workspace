@@ -25,6 +25,9 @@ const ALL = {
   // …and once more, to the grid key.
   rotated2: `(() => { const at = window.__chartlayers().legendAt; const c = document.querySelector('canvas');
     for (const t of ['pointerdown', 'pointerup']) c.dispatchEvent(new PointerEvent(t, { clientX: at.x, clientY: at.y, pointerId: 8, bubbles: true })); })()`,
+  // ECO on the ground, pulled out to a regional chart, then from the seat.
+  ecowide: `(() => { window.__chartlayers('eco', true); window.__zoom(300); })()`,
+  ecoseat: `window.__setcam('chase')`,
   // The seat with TILES and STREAM: the grid over the world, the readout.
   seat: `(() => { window.__setcam('chase'); window.__chartlayers('tiles', true); window.__chartlayers('stream', true); })()`,
   // The seat, with the key on it.
@@ -42,7 +45,7 @@ await d.page.waitForTimeout(Number(process.env.BOOT_WAIT || 15000));
 await d.page.evaluate(() => document.querySelector('.m-x, .m-close')?.click());
 for (const name of want) {
   await d.page.evaluate(ALL[name]);
-  await d.page.waitForTimeout(6000);
+  await d.page.waitForTimeout(Number(process.env.STATE_WAIT || 6000));
   const st = await d.page.evaluate(() => { const r = window.__chartlayers(); return { on: r.layers.filter((l) => l.on).map((l) => l.id + (l.view ? ':' + l.view : '')), legend: r.legendOrder }; });
   console.log(name, JSON.stringify(st));
   const p = join(WORK, `key-${TAG}-${name}.png`);

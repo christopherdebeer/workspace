@@ -80,7 +80,8 @@ export const GROUND_VIEW: Record<GroundViewId, number> = Object.freeze({
  * uniform; `roads` and `places` stay booleans on passes that were already
  * running, and anything thematic that is NOT here keeps its baked sheet.
  *
- * ECO IS NOT HERE YET, and the reason is the data path rather than the shader.
+ * ECO IS HERE NOW, by a different data path from cover's, and the reason is
+ * the one this note used to give for leaving it out:
  * Cover rides the geometry — the kernel already samples the class per vertex
  * and the shell's bake already reads it, so `aTd.w` costs one extra
  * `sampleCover` and nothing else, and the view is then exact at the raster's
@@ -88,11 +89,11 @@ export const GROUND_VIEW: Record<GroundViewId, number> = Object.freeze({
  * point-in-polygon over a z5 tile, which the terrain kernel cannot do at all
  * (it runs in a worker that has never heard of the eco store) and which costs
  * about 7 ms a tile to fill in on the main thread at apply time. That is
- * affordable ON DEMAND — only when the view is asked for — and it is its own
- * unit. Until then the eco chip keeps the sheet it has.
+ * affordable ON DEMAND — only when the view is asked for — which is what
+ * main.ts's `ecoPaintStep` does, into an `aEco` attribute the fragment reads.
  */
 export const VIEW_FOR_LAYER: Partial<Record<ChartLayerId, GroundViewId>> =
-  Object.freeze({ cover: 'cover', substrate: 'substrate' });
+  Object.freeze({ cover: 'cover', eco: 'eco', substrate: 'substrate' });
 
 /** The palette as 256 RGBA texels, indexed by the class byte. Alpha 255 where
  *  the dataset defines a class and 0 everywhere else. */

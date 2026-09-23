@@ -2555,10 +2555,11 @@ function gvTally(now: number): void {
   gvClassCounts.clear();
   let seen = 0;
   const eat = (m: THREE.Mesh): void => {
-    const at = m.geometry.getAttribute('aTd');
-    if (!at || at.itemSize < 4) return;
+    const eco = groundView === 'eco';
+    const at = m.geometry.getAttribute(eco ? 'aEco' : 'aTd');
+    if (!at || (!eco && at.itemSize < 4)) return;
     for (let i = 0; i < at.count; i += 16) {
-      const c = Math.round(at.getW(i));
+      const c = Math.round(eco ? at.getX(i) : at.getW(i));
       if (c <= 0) continue;
       gvClassCounts.set(c, (gvClassCounts.get(c) ?? 0) + 1);
       seen++;
@@ -2567,6 +2568,81 @@ function gvTally(now: number): void {
   for (const m of terrainMeshes.values()) eat(m);
   for (const m of farMeshes.values()) if (m.parent) eat(m);
   gvCountVerts = seen;
+}
+/**
+ * ── ECO ON THE GROUND, ONE TILE A FRAME ──
+ *
+ * The ecoregion is a point-in-polygon over a z5 tile, which the terrain kernel
+ * (a worker that has never heard of the eco store) cannot answer, so the class
+ * is written into an `aEco` attribute here, on the main thread, only while the
+ * ECO view is asked for: the nearest unfilled tile first, one a frame. Fine
+ * tiles read their own vertex positions; shell tiles their lattice UVs over
+ * the raster's flat box, the mapping the old sheet baked with. Lookups are
+ * memoised on a 0.02° grid, finer than the 0.05° the regions are simplified to.
+ * A tile filled while a region tile was still in flight is filled again when
+ * one lands (`themeSrcRev`), until nothing is missing.
+ */
+const ecoMemo = new Map<number, number>();
+let ecoMemoRev = -1, ecoPainted = 0;
+function ecoClassAtLL(la: number, lo: number): number {
+  if (FIXTURE) return FIXTURE.eco?.biome ?? 0;
+  const k = Math.round(la * 50) * 100000 + Math.round(lo * 50);
+  const hit = ecoMemo.get(k);
+  if (hit !== undefined) return hit;
+  const [tx, ty] = ecoTileOf(la, lo);
+  const regs = ecoTiles.get(`${tx}/${ty}`);
+  if (!regs) { void loadEcoTile(tx, ty); return -1; }
+  const c = ecoLookup(regs, lo, la)?.biome ?? 0;
+  ecoMemo.set(k, c);
+  return c;
+}
+function ecoPaintStep(): void {
+  if (groundView !== 'eco') return;
+  if (ecoMemoRev !== themeSrcRev) { ecoMemo.clear(); ecoMemoRev = themeSrcRev; }
+  const [fx, fz] = renderFocusXZ();
+  let best: THREE.Mesh | null = null, bestD = Infinity, bestKey = '';
+  const want = (m: THREE.Mesh): boolean => {
+    const u = m.geometry.userData as { ecoRev?: number; ecoMiss?: number };
+    return u.ecoRev === undefined || (u.ecoMiss! > 0 && u.ecoRev !== themeSrcRev);
+  };
+  for (const m of terrainMeshes.values()) {
+    if (!m.parent || !want(m)) continue;
+    const d = Math.hypot(m.position.x - fx, m.position.z - fz);
+    if (d < bestD) { bestD = d; best = m; bestKey = ''; }
+  }
+  if (!best) for (const [key, m] of farMeshes) {
+    if (!m.parent || !want(m)) continue;
+    const r = farRasters.get(key);
+    if (!r) continue;
+    const d = Math.hypot(r.xs + r.w / 2 - fx, r.zs + r.h / 2 - fz);
+    if (d < bestD) { bestD = d; best = m; bestKey = key; }
+  }
+  if (!best) return;
+  const g = best.geometry;
+  const n = g.getAttribute('position').count;
+  const out = new Float32Array(n);
+  let miss = 0;
+  if (bestKey) {
+    const r = farRasters.get(bestKey)!;
+    const uv = g.getAttribute('uv');
+    for (let i = 0; i < n; i++) {
+      const [la, lo] = localToLatLon(r.xs + uv.getX(i) * r.w, r.zs + (1 - uv.getY(i)) * r.h);
+      const c = ecoClassAtLL(la, lo);
+      if (c < 0) miss++; else out[i] = c;
+    }
+  } else {
+    const pos = g.getAttribute('position');
+    const ox = best.position.x, oz = best.position.z;
+    for (let i = 0; i < n; i++) {
+      const [la, lo] = localToLatLon(pos.getX(i) + ox, pos.getZ(i) + oz);
+      const c = ecoClassAtLL(la, lo);
+      if (c < 0) miss++; else out[i] = c;
+    }
+  }
+  g.setAttribute('aEco', new THREE.BufferAttribute(out, 1));
+  (g.userData as { ecoRev?: number; ecoMiss?: number }).ecoRev = themeSrcRev;
+  (g.userData as { ecoMiss?: number }).ecoMiss = miss;
+  ecoPainted++;
 }
 /** Switch the channel. A class view swaps the lookup with it, so the palette
  *  and the uniform can never be a layer apart. */
@@ -7770,7 +7846,12 @@ function terrainFx(mat: THREE.Material, opts: {
         // ground, the far shell's fallback) gets the zero vector, which reads
         // as rough 0 — no fine detail, which is the right thing to do when
         // nobody said what the surface is.
-        + 'attribute vec4 aTd;\nvarying vec4 vTd;')
+        + 'attribute vec4 aTd;\nvarying vec4 vTd;\n'
+        // The ecoregion per vertex, filled on the main thread only while the
+        // ECO view is asked for (ecoPaintStep). Absent reads 0: no class.
+        // Terrain materials only (`detail`): an attribute on every material
+        // that wears this hook pushed the tree skeleton past WebGL's sixteen.
+        + (opts.detail ? 'attribute float aEco;\nvarying float vEco;' : 'varying float vEco;'))
       // ── AND IT HAS TO KNOW WHERE THE INSTANCE IS ──
       //
       // This read `modelMatrix * transformed` and skipped `instanceMatrix`,
@@ -7792,7 +7873,8 @@ function terrainFx(mat: THREE.Material, opts: {
           fxWp = instanceMatrix * fxWp;
         #endif
         vWorldP = (modelMatrix * fxWp).xyz;
-        vTd = aTd;`);
+        vTd = aTd;
+        vEco = ${opts.detail ? 'aEco' : '0.0'};`);
     sh.uniforms.uSunSkew = envU.uSunSkew;
     sh.uniforms.uDeckY = envU.uDeckY;
     sh.uniforms.uSteepFill = envU.uSteepFill;
@@ -7810,6 +7892,7 @@ function terrainFx(mat: THREE.Material, opts: {
       .replace('#include <common>', `#include <common>
         varying vec3 vWorldP;
         varying vec4 vTd;
+        varying float vEco;
         uniform sampler2D uDbgWet; uniform vec2 uDbgOrg; uniform float uDbgW; uniform float uDbgOn;
         uniform float uCloudS; uniform vec2 uWind; uniform float uMpp;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
@@ -8257,7 +8340,7 @@ function terrainFx(mat: THREE.Material, opts: {
         // ground no tile has answered for keeps its own colour and the view
         // says where the data IS rather than filling its gaps.
         if (uGView > 1.5 && uGView < 3.5) {
-          vec4 gInk = gvInk(uGLut, vTd.w);
+          vec4 gInk = gvInk(uGLut, uGView > 2.5 ? vEco : vTd.w);
           diffuseColor.rgb = mix(diffuseColor.rgb, gInk.rgb, gInk.a);
         }
         // ── A CHANNEL OF THE GEOMORPHIC FIELD, AS A RAMP OVER THE LIT GROUND ──
@@ -52800,7 +52883,8 @@ function tick(now: number): void {
   profMark('camera');
   { const _p = performance.now(); updatePois(); profAdd('updatePois', _p); } // every frame — throttled pins juddered against the camera
   { const _p = performance.now(); stepLuma(now); profAdd('stepLuma', _p); } // refresh what the glass is being written over
-  { const _p = performance.now(); xrayWire(now); profAdd('xrayWire', _p); } // keep the wireframe sweep over streamed-in tiles
+  { const _p = performance.now(); xrayWire(now); profAdd('xrayWire', _p); }
+  { const _p = performance.now(); ecoPaintStep(); profAdd('ecoPaint', _p); } // one tile of the ECO ground view a frame, only while it is asked for // keep the wireframe sweep over streamed-in tiles
   // HALF RATE NEAR 60. The HUD is text, needles and a compass on its own
   // canvas, and at 1.9 ms a frame (device, measured) it was the largest
   // steady line in the tick after render — a tenth of the 60 fps budget for
