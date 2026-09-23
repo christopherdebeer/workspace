@@ -6,13 +6,15 @@
  * the camera, some opened sheets of settings, one opened the menu — and the
  * seat's review of it set the rules this version is built on:
  *
- * - TWO KINDS OF TAB. Four are LAYOUTS — VIEW (render inspection and the
- *   readout layers), MAP (layers, orientation, waypoints), RIG (the vehicle's
- *   gauges), CAM (seat and lens). One is up at a time: a tap raises it, a tap
- *   on the lit tab lowers it, and with none up you are driving. Two are MODES
- *   — DRONE and AUTO — which run beside whatever layout is up: a tap starts
- *   the mode, a tap again ends it (RECALL, YOU HAVE IT), and neither stops you
- *   raising a layout to tweak the camera, the layers or the view meanwhile.
+ * - THE ROW, LEFT TO RIGHT: DRONE · AUTO · CAM · NAV · (free) · VIEW.
+ *   DRONE and AUTO are MODES that run beside whatever else is up: a tap starts
+ *   one, a tap again ends it (RECALL; YOU HAVE IT). CAM is a TOGGLE: chase ↔
+ *   cab, which in the drone are its trailing and nose cameras. NAV and VIEW
+ *   are LAYOUTS with a tray: one up at a time, a tap on the lit one lowers it,
+ *   and none up is the baseline. The fifth slot is deliberately empty — RIG
+ *   left the row when its gauges became the chase and cab default.
+ * - THE EDGES BELONG TO THE CAMERA, NOT TO A TAB: the rig gauges in chase and
+ *   cab, the TILT and BAND rails on the chart, ALT and PITCH in the drone.
  * - A TAB IS AN ICON, ITS STATE AND ONE SUPPLEMENTARY SIGNAL — no words. A
  *   gold bracket is the layout that is up; a green face is a mode that is
  *   running; a bar along the foot is a level (the drone's pack); a dot in the
@@ -37,10 +39,12 @@
  */
 import { PIXEL_FONT, MICRO_FONT } from './font';
 
-export type DeckTab = 'view' | 'map' | 'rig' | 'cam' | 'drone' | 'auto';
-export const DECK_TABS: readonly DeckTab[] = ['view', 'map', 'rig', 'cam', 'drone', 'auto'];
+export type DeckTab = 'drone' | 'auto' | 'cam' | 'nav' | 'view';
+export const DECK_TABS: readonly DeckTab[] = ['drone', 'auto', 'cam', 'nav', 'view'];
+/** The row as laid out: a null is a free slot, drawn as an empty cell so the
+ *  grid keeps its six places and nothing slides when the slot is filled. */
+export const DECK_SLOTS: ReadonlyArray<DeckTab | null> = ['drone', 'auto', 'cam', 'nav', null, 'view'];
 /** The tabs that start a MODE rather than raise a layout. */
-export const DECK_MODES: readonly DeckTab[] = ['drone', 'auto'];
 /** One tab's supplementary signal: a level along its foot, a dot in its
  *  corner. */
 export interface DeckSup { bar?: number; barTone?: Tone; dot?: Tone }
@@ -96,7 +100,7 @@ export interface HudDeck {
 
 /** Tab faces, left to right as the mock sets them. */
 const LABEL: Record<DeckTab, string> = {
-  view: 'VIEW', map: 'MAP', rig: 'RIG', cam: 'CAM', drone: 'DRONE', auto: 'AUTOPILOT',
+  drone: 'DRONE', auto: 'AUTOPILOT', cam: 'CAMERA', nav: 'NAV', view: 'VIEW',
 };
 /**
  * PIXEL ICONS, NOT THE ICON FONT. The Font Awesome subset (icons.ts) has a
@@ -117,27 +121,16 @@ const ICONS: Record<DeckTab, string[]> = {
     '##.....##',
     '#########',
   ],
-  map: [                        // a folded sheet
-    '.........',
-    '##..##...',
-    '#.##.###.',
-    '#.#..#.##',
-    '#.#..#..#',
-    '#.#..#..#',
-    '##.#.#..#',
-    '...##.###',
-    '......##.',
-  ],
-  rig: [                        // crossed spanners
-    '##.....##',
+  nav: [                        // a compass needle in its ring
+    '..#####..',
+    '.#..#..#.',
+    '#..###..#',
+    '#..###..#',
+    '#...#...#',
+    '#..#.#..#',
     '#.#...#.#',
-    '.#.#.#.#.',
-    '..#.#.#..',
-    '...#.#...',
-    '..#.#.#..',
-    '.#.#.#.#.',
-    '#.#...#.#',
-    '##.....##',
+    '.#.....#.',
+    '..#####..',
   ],
   drone: [                      // a quad from above: four rotors on an X
     '###...###',
@@ -217,6 +210,8 @@ export function createHudDeck(
   .deck-tab.mode { color: ${C.good}; --bk: ${C.good}; border-color: rgba(122,220,140,0.6);
     background-color: rgba(10,34,20,0.85); }
   .deck-tab svg { width: 20px; height: 20px; }
+  .deck-tab.empty { cursor: default; background-color: rgba(8,20,23,0.25); border-style: dashed;
+    border-color: rgba(114,189,178,0.15); }
   .deck-tab .sup-dot { position: absolute; top: 3px; right: 3px; width: 4px; height: 4px; display: none;
     box-shadow: 0 0 0 1px ${C.ink}; }
   .deck-tab .sup-bar { position: absolute; left: 5px; right: 5px; bottom: 4px; height: 3px; display: none;
@@ -247,12 +242,12 @@ export function createHudDeck(
     border: 1px solid rgba(114,189,178,0.35); }
   .deck-panel .d-title { font-size: 10px; letter-spacing: 1px; color: ${C.gold};
     border-bottom: 1px solid rgba(114,189,178,0.35); padding-bottom: 5px; margin-bottom: 6px; }
-  /* COMPACT: sections flow into as many columns as the width holds, each a
-     column of small checkboxes and radios — the overlays' own form, which is
-     what every tray wears. */
-  #deck-sheet .d-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px 10px; }
-  #deck-sheet .d-sec { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-  #deck-sheet .d-sec + .d-sec { border-left: 1px solid rgba(114,189,178,0.18); padding-left: 8px; }
+  /* COMPACT AND STACKED: sections run down the tray, one under another, and
+     inside a section the checkboxes and radios run across and wrap. */
+  #deck-sheet .d-cols { display: flex; flex-direction: column; gap: 6px; }
+  #deck-sheet .d-sec { display: flex; flex-wrap: wrap; align-items: center; gap: 0 14px; }
+  #deck-sheet .d-sec .d-h { flex-basis: 100%; margin: 0; }
+  #deck-sheet .d-sec + .d-sec { border-top: 1px solid rgba(114,189,178,0.18); padding-top: 5px; }
   .deck-panel .d-h { font-size: 8px; letter-spacing: 1px; color: ${C.dim}; margin-bottom: 1px; }
   .deck-panel button { font: inherit; font-family: inherit; font-size: 8px; letter-spacing: 1px;
     cursor: pointer; background-color: transparent; color: ${C.edge}; text-align: left; }
@@ -298,7 +293,15 @@ export function createHudDeck(
   row.id = 'deck-row';
   row.className = 'ui';
   const tabEls = new Map<DeckTab, HTMLButtonElement>();
-  for (const t of DECK_TABS) {
+  for (const t of DECK_SLOTS) {
+    if (!t) {
+      // THE FREE SLOT: an empty cell that holds the grid's place.
+      const e = document.createElement('div');
+      e.className = 'deck-tab empty';
+      e.setAttribute('aria-hidden', 'true');
+      row.appendChild(e);
+      continue;
+    }
     const b = document.createElement('button');
     b.className = 'deck-tab bkt';
     b.dataset.deckTab = t;

@@ -19189,74 +19189,53 @@ preview and nothing else — with the tile grid gone the disarmed floor is
 exactly **0**). `devtools/lab-phone.test.mjs` holds the bar, the dial and an
 undo/redo round trip through the chips.
 
-## The deck: four layouts, two modes, icons only, and a bare dock
+## The deck: two modes, a camera switch, two trays, a free slot
 
-The deck (`client/hud-deck.ts`, deck block in main.ts) went through two reviews
-from the seat. The first replaced a launcher with layouts; the second set the
-shape it has now, and the rules are at the top of `hud-deck.ts`:
+The deck (`client/hud-deck.ts`, deck block in main.ts) has been through three
+reviews from the seat. The rules are at the top of `hud-deck.ts`; the row reads
+left to right:
 
-- **FOUR LAYOUTS, TWO MODES.** VIEW · MAP · RIG · CAM are LAYOUTS: one up at a
-  time, a tap on the lit tab lowers it, none up is the baseline (driving, with
-  HOLD — and REWIND while held — on a small strip over the row). DRONE and AUTO
-  are MODES: a tap starts one, a tap again ends it (RECALL; YOU HAVE IT), and a
-  mode never touches `deckActive`, so you launch the drone and then raise CAM
-  or MAP or VIEW without cancelling the flight. That is the ambiguous half of
-  the seat's ask made concrete; change `deckTab` if it meant something else.
-- **A TAB IS AN ICON, ITS STATE AND ONE SIGNAL — NO WORDS.** Gold bracket: the
-  layout up. Green face: a mode running. A bar along the foot: the drone's
-  pack. A corner dot: gold for an effect in force (a thematic layer, a waypoint
-  layer off, the lens moved, a readout on), red/gold for a warning (the rig's
-  condition, `rigAlarm`; an autopilot that cannot find or chain its road).
-  The name rides as `aria-label` and `title`.
-- **THE DOCK IS THE CAMERA SWITCH AND IS BARE**: gold corner brackets, no hint
-  text, no chip. The seat (CHASE/CAB, the drone's TRAILING/NOSE) is CAM's.
-- **THE MENU CHIP ALWAYS SAYS MENU.**
-- **TRAYS ARE DENSE**: every section is a grid of big bracketed buttons;
-  radios and toggles share the shape and differ in what lights.
-
-| tab | kind | draws | tray |
+| slot | kind | tap | tray |
 |---|---|---|---|
-| VIEW | layout | render inspection + tagline | PASS radios · INSPECT toggles (tile grid, the debug ground views, hydro) · READOUTS toggles (FPS, GPU, STREAM, MEMORY) |
-| MAP | layout | — | ORIENT radios · LAYERS toggles · WAYPOINTS: ALL/NONE radios over PINNED, PEAKS, NEARBY toggles |
-| RIG | layout | ENV and RIG gauges on the edges | none |
-| CAM | layout | TILT (chart) and BAND rails | SEAT radios |
-| DRONE | mode | ALT and PITCH rails while flying from its view, unless CAM or RIG holds the edges | none |
-| AUTO | mode | the verdict line over the row | none |
+| DRONE | mode | launch; again RECALL | none |
+| AUTO | mode | engage; again YOU HAVE IT | none |
+| CAM | switch | chase ↔ cab, trailing ↔ nose in the drone | none |
+| NAV | layout | raise / lower | ORIENT radios · SHOW: ALL/NONE over ROADS, PLACES, PINNED, PEAKS, NEARBY |
+| — | free | — | — |
+| VIEW | layout | raise / lower | PASS · GROUND radios (NONE, COVER, ECO, GROUND, MATERIAL, WATER, SURFACE) · TILE GRID · HYDRO · READOUTS |
 
-**SYS BECAME VIEW'S READOUT LAYERS**, which persist whatever is up
-(`readoutOn`, `drive.readouts`): GPU, STREAM and MEMORY read out under the MENU
-chip; FPS is the canvas readout at the foot and defaults on, because its
-double-tap is how telemetry is copied — off, the gesture goes with it. The
-render inspection (pass, grid, debug ground views, hydro) still stands down on
-leaving VIEW. **The waypoint layers** (`wpOn`, `drive.wpLayers`) filter
-`poiDraw` after `updatePois`, so a hidden kind is neither drawn nor tappable;
-the WAYPOINTS dial still sets how much scenery rides along. The chart's layer
-key no longer carries chips — its switches are the MAP tray's — and keeps its
-legend.
+- **A mode never touches the layout**: fly the drone, raise NAV, switch its
+  camera with CAM, and nothing is cancelled.
+- **THE EDGES ARE THE CAMERA'S, NOT A TAB'S.** The chart always wears TILT and
+  BAND; chase and cab always wear the ENV and RIG gauges (which retired the
+  RIG tab and freed a slot); the drone wears ALT and PITCH while you fly from
+  its view. The rig's condition dot rides CAM's tab, since the gauges are the
+  seats' edges.
+- **NAV is what the HUD annotates the world with** — the chart's vector ink
+  and the waypoints, filtered at `poiDraw`. **COVER and ECO are render views**
+  and live in VIEW's GROUND radios beside the debug ground views; one at a time
+  (the thematic layers are a radio group). Leaving VIEW stands the pass, the
+  grid, the hydro view and the DEBUG ground views down; COVER and ECO persist,
+  as do the readouts (`drive.readouts`, FPS on by default because its
+  double-tap copies telemetry).
+- **Trays stack their sections vertically and flow their items across,
+  wrapping**, as compact checkboxes (square) and radios (diamond); lit is gold.
+- **A tab is an icon, its state and one signal — no words.** Gold bracket: the
+  layout up. Green face: a mode running. A foot bar: the drone's pack. A corner
+  dot: gold for an effect in force, red/gold for a warning.
+- **The dock is the bare camera switch** (corner brackets, no hint, no chip);
+  the MENU chip always says MENU.
 
-**Measured** (`devtools/hud-deck.test.mjs`, at-campsbay, drawn, the tile-debug
-dial on throughout): all ok — no words on the tabs, no seat chip on the dock,
-HOLD and REWIND from the strip, AUTO starting with no layout and MAP raised
-beside it with the chip still MENU, the waypoint toggles and ALL/NONE, a layer
-toggle, the dock to the chart and back, the CAB/CHASE radios, CAM's rails in
-the seat and on the chart with the band persisting under a dot, VIEW's grid and
-WIRE standing down on leave while the GPU readout stays, FPS off leaving the
-glass, DRONE launching with no layout and no tray, its ALT rail, CAM raised in
-flight taking the edges and NOSE picking its nose camera, the rails returning
-when CAM lowers, the dock chart↔drone, and a second DRONE tap recalling it.
-`poi-project` and `glsl-reserved` green. **`fps-tap.test.mjs` fails two checks
-(the double tap copies nothing; the chart double tap drops no fix) and fails
-them identically on the commit before this work**, so it is not this change's
-and is not fixed here.
+**Measured** (`devtools/hud-deck.test.mjs`, at-campsbay, drawn, the
+tile-debug dial on throughout): all ok — the slot order with the empty cell,
+no words on the tabs, the seat keeping its edges for the gauges, HOLD, CAM to
+the cab and back with no tray, AUTO beside NAV, the NAV toggles and ALL/NONE
+over roads, places and the waypoints, COVER absent from NAV, the chart wearing
+TILT and BAND with no tab up and the BAND rail taking a tap, VIEW's grid and
+WIRE standing down on leave while COVER and the GPU readout stay, the render
+views as radios, DRONE with no tray and its ALT rail, CAM in flight picking
+the nose and back, the dock chart↔drone, and recall. `devtools/deck-shot.mjs`
+takes the frames.
 
 **NOT SEEN ON A DEVICE.** In landscape the tray scrolls and the canvas HUD
-still has no safe-area insets (#157). The trays went back to compact
-checkboxes and radios on the seat's word (the water view is HYDRO radios over
-the rack's stops); the drone mode has no tray.
-
-**Live as v1790122344258**, pushed without a pull on the seat's word. The live
-`app.js` read `x-cache: Miss`, 4.19 MB, parses under esbuild, and carries
-`readoutOn`, `wpShows`, `autoToggle`, `rigAlarm`, `drive.wpLayers` and
-`seat:cab`, with no `TAP > ` hint left; `/` answers 200. `DECK_MODES` reads 0
-and is not missing: it is exported by hud-deck.ts and read by nothing in
-main.ts, so the bundler drops it.
+still has no safe-area insets (#157).

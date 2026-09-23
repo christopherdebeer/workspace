@@ -59,12 +59,14 @@ catalogue as it now stands:
   every small pixel webfont has a 5-unit cap — see the note above `GLYPHS`);
   micro text is Micro 5 rasterised to 1-bit (`microGlyph`), not the old 3×5
   table.
-- **The strait is the DECK (`client/hud-deck.ts`)**: VIEW · MAP · RIG · CAM
-  are layouts (one up or none), DRONE · AUTO are modes that run beside them.
+- **The strait is the DECK (`client/hud-deck.ts`)**: DRONE · AUTO · CAM ·
+  NAV · (a free slot) · VIEW. DRONE and AUTO are modes, CAM a chase/cab
+  (trailing/nose) switch with no tray, NAV and VIEW layouts with a tray.
   Icons only; state and one signal (a bar, a dot) instead of words. The dock
-  is the bare camera switch; the seat is CAM's; the chip always says MENU.
-  See the drive CLAUDE.md section "The deck: four layouts, two modes" for the
-  table. Six across when each cell is at least `DECK_MIN_CELL` CSS px.
+  is the bare camera switch; the edges are the camera's (chart TILT/BAND,
+  seat gauges, drone ALT/PITCH); the chip always says MENU. See the drive
+  CLAUDE.md section "The deck" for the table. Six across when each cell is
+  at least `DECK_MIN_CELL` CSS px.
 
 Probes: `__deck(tab?)` (state, and a tab tapped through the real handler),
 `__deckrect(id)` (client rect of a tab or panel item — tests tap where a thumb

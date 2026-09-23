@@ -56289,7 +56289,7 @@ function hudSafeRects(): Array<[number, number, number, number]> {
   ];
   // The edges belong to whichever layout is up: RIG's gauges, or the rails
   // of CAM and DRONE.
-  if (deckActive === 'rig') rects.push([0, my - 208, 17, 208], [HW - 17, HH - 236, 17, 164]);
+  if (camMode === 'chase' || camMode === 'cab') rects.push([0, my - 208, 17, 208], [HW - 17, HH - 236, 17, 164]);
   for (const side of ['left', 'right'] as const) {
     const r = railRects[side].r;
     if (railRects[side].kind && r.w > 0) rects.push([r.x, r.y, r.w, r.h]);
@@ -57885,10 +57885,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // DRONE is a MODE now, so its rails stand whenever you are flying from
       // its view — unless a layout that owns the edges (CAM's lens, RIG's
       // gauges) is up, in which case that layout has them.
-      if (deckActive === 'cam') {
-        if (camMode === 'top') lk = 'tilt';
-        if (camMode !== 'cab' && camMode !== 'god') rk = 'band';
-      } else if (deckActive !== 'rig' && camMode === 'drone' && drone.up) { lk = 'alt'; rk = 'gimbal'; }
+      // THE EDGES BELONG TO THE CAMERA: the chart's lens (TILT and BAND), the
+      // drone's ALT and PITCH while you fly from its view, and in the seats
+      // the gauges below.
+      if (camMode === 'top') { lk = 'tilt'; rk = 'band'; }
+      else if (camMode === 'drone' && drone.up) { lk = 'alt'; rk = 'gimbal'; }
       railRects.left = { kind: lk, r: lk ? { x: 0, y: my - 14 - H, w: 23, h: H } : { x: 0, y: 0, w: 0, h: 0 } };
       railRects.right = { kind: rk, r: rk ? { x: HW - 23, y: stackB - H, w: 23, h: H } : { x: 0, y: 0, w: 0, h: 0 } };
       chartTiltRect = lk === 'tilt' ? { ...railRects.left.r } : { x: 0, y: 0, w: 0, h: 0 };
@@ -57940,10 +57941,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         } else slider(railRects.right.r, rk, -1, held(rk) ? UI.text : UI.gold);
       }
     }
-    // THE GAUGES STAND IN THE RIG LAYOUT ONLY. They used to be the chase and
-    // cab baseline, down both edges all the time; the baseline is driving now,
-    // and the vehicle's and the weather's readouts are a layout you raise.
-    if (deckActive === 'rig') {
+    // THE GAUGES ARE THE SEATS' EDGES: chase and cab wear them always, which
+    // is what retired the RIG tab. The chart and the drone have rails there.
+    if (camMode === 'chase' || camMode === 'cab') {
       // ── RIG, outer-right (Glass spec §5.7): the same gauge mirrored, one
       // rigid group anchored above the dial, candles carrying the session.
       {
@@ -58015,12 +58015,15 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
 //     the air outlive their tab. VIEW's inspection is the exception by design:
 //     it stands down the moment you leave, so the chart never wears debug.
 //
-//   VIEW   render inspection: pass, tile grid, debug ground views, hydro view
-//   MAP    the layer key's chips, orientation, waypoints
-//   RIG    the ENV and RIG gauges — which no longer stand in the baseline
-//   DRONE  launches it and puts you in its view; ALT and PITCH rails; RECALL
-//   CAM    the lens rails: chart TILT, and the miniature BAND
-//   SYS    live telemetry under the chip; read-only
+//   DRONE  a mode: launch, fly (ALT and PITCH rails in its view), RECALL
+//   AUTO   a mode: the autopilot drives beside whatever is up
+//   CAM    a switch, not a tray: chase ↔ cab, trailing ↔ nose in the drone
+//   NAV    what the HUD annotates the world with: orient, roads, places, waypoints
+//   (a free slot)
+//   VIEW   render: pass, the ground views (COVER, ECO and the debug ones),
+//          tile grid, hydro, readouts
+// The edges are the camera's, not a tab's: the chart wears TILT and BAND, the
+// seats wear the ENV and RIG gauges, the drone its ALT and PITCH.
 let deckActive: DeckTab | null = null;
 let deck: HudDeck | null = null;
 /** An instrument's override: `__tiledbg(true)` draws the grid whatever the
@@ -58068,7 +58071,7 @@ function deckBox(): HudRect {
   return { x, y: bottom - 37, w: Math.max(0, HW - 58 - x - 2), h: 37 };
 }
 const DECK_NAME: Record<DeckTab, string> = {
-  view: 'VIEW', map: 'MAP', rig: 'RIG', cam: 'CAM', drone: 'DRONE', auto: 'AUTOPILOT',
+  drone: 'DRONE', auto: 'AUTOPILOT', cam: 'CAMERA', nav: 'NAV', view: 'VIEW',
 };
 /**
  * THE READOUT LAYERS, which is what SYS became: live numbers you switch on in
@@ -58129,6 +58132,14 @@ function deckTab(t: DeckTab): void {
     return;
   }
   if (t === 'auto') { autoToggle(); return; }
+  // CAM IS A SWITCH, NOT A TRAY: chase ↔ cab from the truck, trailing ↔ nose
+  // from the drone. The chart keeps whichever seat it will drop you back into.
+  if (t === 'cam') {
+    togglePov();
+    const flying = camMode === 'drone' || (camMode === 'top' && drone.up);
+    hudFlash(flying ? (lastPov === 'cab' ? 'NOSE' : 'TRAILING') : (lastPov === 'cab' ? 'CAB' : 'CHASE'));
+    return;
+  }
   // THE LIT LAYOUT LOWERS ITSELF, back to the baseline. Its effects stay.
   if (deckActive === t) { deckSetActive(null); return; }
   deckSetActive(t);
@@ -58154,17 +58165,25 @@ function deckItem(id: string, v?: number): void {
     case 'mapup': if ((arg === 'heading') !== mapHeadingUp) toggleMapUp(); return;
     case 'layer': setChartLayer(arg as ChartLayerId, !chartOn[arg as ChartLayerId]); saveChartLayers(); return;
     case 'wp': setWp(arg as WpLayer, !wpOn[arg as WpLayer]); return;
-    case 'wpall': for (const k of Object.keys(wpOn) as WpLayer[]) setWp(k, arg === 'all'); return;
+    case 'navall': {
+      const on = arg === 'all';
+      for (const k of Object.keys(wpOn) as WpLayer[]) setWp(k, on);
+      for (const id of NAV_LAYERS) if (chartOn[id] !== on) setChartLayer(id, on);
+      saveChartLayers();
+      return;
+    }
+    case 'gview': {
+      // One render view at a time (the thematic layers are a radio group);
+      // NONE takes whichever is on away.
+      if (arg === 'none') { for (const l of CHART_LAYERS) if (l.kind === 'thematic' && chartOn[l.id]) setChartLayer(l.id, false); }
+      else setChartLayer(arg as ChartLayerId, true);
+      saveChartLayers();
+      return;
+    }
     case 'pass': deckDialSet('xray', Number(arg)); return;
     case 'tdbg': deckDialSet('tdbg', tileDbg ? 0 : 1); return;
     case 'hview': deckDialSet('hview', Number(arg)); return;
     case 'ro': setReadout(arg as Readout, !readoutOn[arg as Readout]); return;
-    case 'seat':
-      // THE SEAT IS A CAMERA FACT, SO IT IS CAM'S. `lastPov` already means both
-      // halves: chase/cab from the truck, the trailing and nose cameras from
-      // the drone. The dock stays the chart↔seat switch.
-      if (arg !== lastPov) togglePov();
-      return;
   }
 }
 function deckRelease(id: string): void {
@@ -58191,42 +58210,39 @@ function deckBase(): DeckSheet | null {
 }
 const deckCheck = (id: string, label: string, on: boolean): DeckItem => ({ kind: 'check', id, label, on });
 const deckRadio = (id: string, label: string, on: boolean): DeckItem => ({ kind: 'choice', id, label, on });
-/** The layout's controls, compact: checkboxes and radios, a word each. RIG has
- *  none — it is a readout — and neither do the modes. */
+/** What NAV governs: the vector layers the chart draws. The waypoints are
+ *  the other half, filtered through `wpOn`. */
+const NAV_LAYERS: readonly ChartLayerId[] = CHART_LAYERS
+  .filter((l) => !l.debug && l.kind === 'vector').map((l) => l.id);
+/** The layout's controls, compact: sections stacked, items flowing and
+ *  wrapping inside each. Only NAV and VIEW have one. */
 function deckTray(active: DeckTab | null): DeckSheet | null {
-  if (active === 'map') {
-    const all = wpOn.pinned && wpOn.peaks && wpOn.scenery;
-    const none = !wpOn.pinned && !wpOn.peaks && !wpOn.scenery;
+  if (active === 'nav') {
+    // NAV IS WHAT THE HUD ANNOTATES THE WORLD WITH, on the chart and from the
+    // seat alike: the roads and names the chart inks, and the waypoints.
+    const shown = [...NAV_LAYERS.map((id) => chartOn[id]), wpOn.pinned, wpOn.peaks, wpOn.scenery];
     return { sections: [
       { title: 'ORIENT', items: [deckRadio('mapup:north', 'NORTH UP', !mapHeadingUp),
         deckRadio('mapup:heading', 'HEADING UP', mapHeadingUp)] },
-      { title: 'LAYERS', items: CHART_LAYERS.filter((l) => !l.debug)
-        .map((l) => deckCheck(`layer:${l.id}`, l.name, chartOn[l.id])) },
-      { title: 'WAYPOINTS', items: [deckRadio('wpall:all', 'ALL', all), deckRadio('wpall:none', 'NONE', none),
+      { title: 'SHOW', items: [
+        deckRadio('navall:all', 'ALL', shown.every(Boolean)), deckRadio('navall:none', 'NONE', !shown.some(Boolean)),
+        ...NAV_LAYERS.map((id) => deckCheck(`layer:${id}`, CHART_LAYERS.find((l) => l.id === id)?.name ?? id, chartOn[id])),
         deckCheck('wp:pinned', 'PINNED', wpOn.pinned), deckCheck('wp:peaks', 'PEAKS', wpOn.peaks),
         deckCheck('wp:scenery', 'NEARBY', wpOn.scenery)] },
     ] };
   }
   if (active === 'view') {
     const hv = deckDial('hview');
+    const views = CHART_LAYERS.filter((l) => l.kind === 'thematic');
     return { sections: [
       { title: 'PASS', items: XRAY_MODES.map((m, i) => deckRadio(`pass:${i}`, i === 0 ? 'SHADE' : m, xrayMode === i)) },
-      { title: 'INSPECT', items: [
-        deckCheck('tdbg', 'TILE GRID', tileDbg),
-        ...CHART_LAYERS.filter((l) => l.debug).map((l) => deckCheck(`layer:${l.id}`, l.name, chartOn[l.id])),
-      ] },
-      // THE WATER VIEW, as radios: the rack's own stops, which VIEW applies on
-      // entry and stands down on leave like the rest of the inspection.
+      // THE RENDER VIEWS, one at a time: COVER and ECO stay when you leave;
+      // the debug ground views stand down with the rest of the inspection.
+      { title: 'GROUND', items: [deckRadio('gview:none', 'NONE', !views.some((l) => chartOn[l.id])),
+        ...views.map((l) => deckRadio(`gview:${l.id}`, l.name, chartOn[l.id]))] },
+      { title: 'INSPECT', items: [deckCheck('tdbg', 'TILE GRID', tileDbg)] },
       { title: 'HYDRO', items: (hv?.opts ?? []).map((o, i) => deckRadio(`hview:${i}`, o, hv?.at === i)) },
       { title: 'READOUTS', items: READOUTS.map(([k, name]) => deckCheck(`ro:${k}`, name, readoutOn[k])) },
-    ] };
-  }
-  if (active === 'cam') {
-    const flying = camMode === 'drone' || (camMode === 'top' && drone.up);
-    return { sections: [
-      { title: flying ? 'DRONE CAMERA' : 'SEAT', items: [
-        deckRadio('seat:chase', flying ? 'TRAILING' : 'CHASE', lastPov !== 'cab'),
-        deckRadio('seat:cab', flying ? 'NOSE' : 'CAB', lastPov === 'cab')] },
     ] };
   }
   return null;
@@ -58245,13 +58261,13 @@ function deckSup(): Partial<Record<DeckTab, DeckSup>> {
     dot: drone.downed ? 'bad' : drone.recall ? 'gold' : undefined };
   const a = auto.out;
   if (auto.on) sup.auto = { dot: !a || auto.src === 'unchained' || auto.src === 'nowhere' ? 'bad' : a.mode === 'wait' ? 'gold' : undefined };
+  // The rig's condition rides CAM's tab: the gauges are the seats' own edges.
   const rd = rigAlarm();
-  if (rd) sup.rig = { dot: rd };
-  if (CHART_LAYERS.some((l) => !l.debug && l.kind === 'thematic' && chartOn[l.id]) || !wpOn.pinned || !wpOn.peaks || !wpOn.scenery) {
-    sup.map = { dot: 'gold' };
+  if (rd) sup.cam = { dot: rd };
+  if (NAV_LAYERS.some((id) => !chartOn[id]) || !wpOn.pinned || !wpOn.peaks || !wpOn.scenery) sup.nav = { dot: 'gold' };
+  if (CHART_LAYERS.some((l) => l.kind === 'thematic' && chartOn[l.id]) || readoutOn.gpu || readoutOn.stream || readoutOn.mem) {
+    sup.view = { dot: 'gold' };
   }
-  if (Math.abs(chartBandScale - 1) > 0.01 || Math.abs(chartTiltDeg - CAM.tilt) > 0.5) sup.cam = { dot: 'gold' };
-  if (readoutOn.gpu || readoutOn.stream || readoutOn.mem) sup.view = { dot: 'gold' };
   return sup;
 }
 function deckModes(): DeckTab[] {
@@ -58459,6 +58475,7 @@ function setClean(on: boolean): void {
   if (tab) deckTab(tab);
   return {
     active: deckActive, modes: deckModes(), sup: deckSup(), readouts: { ...readoutOn }, wp: { ...wpOn },
+    layers: { ...chartOn },
     auto: auto.on, cam: camMode, lastPov, tileDbg, tileDbgOn: tileDbgOn(),
     xray: XRAY_MODES[xrayMode], drone: { up: drone.up, downed: drone.downed, alt: +drone.alt.toFixed(1),
       pitch: +droneDepressionDeg().toFixed(1) },

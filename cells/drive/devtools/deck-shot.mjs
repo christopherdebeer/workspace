@@ -1,6 +1,6 @@
 /**
- * EYE CHECK for the deck (client/hud-deck.ts): the six layout tabs in the strait,
- * each layout up in turn and the baseline, upright and turned, on the Camps Bay fixture at noon.
+ * EYE CHECK for the deck (client/hud-deck.ts): DRONE AUTO CAM NAV (free) VIEW,
+ * the two trays up in turn, the baseline, the chart and the drone, upright and turned, on the Camps Bay fixture at noon.
  * No assertions — hud-deck.test.mjs holds the behaviour; this is the frames
  * for judging the look against the mock.
  *
@@ -19,17 +19,17 @@ const snap = async (name) => {
 };
 const tap = (t) => d.page.evaluate((x) => document.querySelector(`[data-deck-tab="${x}"]`).click(), t);
 await snap('deck-base');
-await tap('auto'); await tap('map'); await snap('deck-map-auto');
+await tap('auto'); await tap('nav'); await snap('deck-nav-auto');
 await tap('auto');
-await d.page.evaluate(() => window.__setcam('top')); await snap('deck-map-chart');
-await tap('cam'); await snap('deck-cam-chart');
+await d.page.evaluate(() => window.__setcam('top')); await snap('deck-nav-chart');
+await tap('nav'); await snap('deck-chart');
 await d.page.evaluate(() => window.__setcam('chase'));
-await tap('view'); await snap('deck-view');
-await tap('rig'); await snap('deck-rig');
-await tap('rig');
-await tap('drone'); await d.page.waitForTimeout(8000); await snap('deck-drone');
-await tap('cam'); await snap('deck-drone-cam');
+await tap('cam'); await snap('deck-cab');
 await tap('cam');
+await tap('view'); await snap('deck-view');
+await tap('view');
+await tap('drone'); await d.page.waitForTimeout(8000); await snap('deck-drone');
+await tap('drone'); await d.page.waitForTimeout(8000);
 await d.page.setViewportSize({ width: 844, height: 390 });
 await tap('view'); await snap('deck-view-turned');
 report(d.errors);
