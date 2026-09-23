@@ -13,7 +13,7 @@ tried and was wrong.
 
 ## The deploy ritual
 
-> **PARSE THE BUNDLE BEFORE YOU BELIEVE THE DEPLOY.** Step 5 below greps
+> **PARSE THE BUNDLE BEFORE YOU BELIEVE THE DEPLOY.** Step 7 below greps
 > `app.js` for a symbol, and a grep cannot tell a working bundle from a broken
 > one — measured: a deploy whose `app.js` contained every symbol the check
 > looked for and would not parse, so the game did not load at all. And
@@ -53,11 +53,52 @@ a confusing module error):
 
 1. `mcp__Substate__act` → `auth.mintToken`
    `{scope: "write:workspace cells:create", label, expiresInSec}`
-2. `PARC_TOKEN=<tok> node scripts/cell-sync.mjs pull drive` — **always**, see below
-3. `PARC_TOKEN=<tok> node scripts/cell-sync.mjs push drive --deploy`
-4. `auth.revokeToken {tokenId}` — do not leave a token open
-5. Verify by fetching the live bundle and grepping for a symbol you just added:
+2. `PARC_TOKEN=<tok> node scripts/cell-sync.mjs status drive` — per file:
+   what the cell has that you don't (↓), what you have that it doesn't (↑),
+   and what BOTH changed (✗). Read-only.
+3. `PARC_TOKEN=<tok> node scripts/cell-sync.mjs pull drive` if anything is ↓ —
+   then commit what came in (it is often only on the cell) and run `tsc` over it
+4. `PARC_TOKEN=<tok> node scripts/cell-sync.mjs push drive --deploy`
+   (`--dry-run` first shows the combined diff)
+5. `auth.revokeToken {tokenId}` — do not leave a token open
+6. Commit `cells/drive/.cell-sync.json` with your change — it is the last
+   sync, and the next agent's `status` is only as good as it
+7. Verify by fetching the live bundle and grepping for a symbol you just added:
    `curl -s https://c15r-drive.on.parc.land/app.js | grep -c mySymbol`
+
+> **CELL-SYNC IS THREE-WAY NOW (2026-09-23), AND MOST OF THE RITUAL BELOW IS
+> WHAT IT USED TO COST.** It used to push every file and pull every file, so
+> this section grew PULL BEFORE PUSH, COMMIT BEFORE YOU PULL, the `devtools/`
+> resurrection and a `git diff` per file to tell which side had moved. The
+> script now compares every file against the last sync (`.cell-sync.json`)
+> and moves it only the way it changed:
+>
+> - **push sends only your changes**, as one all-or-nothing
+>   `cells.applyPatchSet`, each file guarded by the version it replaces and
+>   the whole set by the cell tree it was planned against. It **refuses** while
+>   the cell has changes you have not pulled, and **refuses** a file both sides
+>   changed (a ✗) — nothing of anyone's is overwritten silently any more.
+> - **pull brings in only the cell's changes.** It never overwrites a file you
+>   changed (that is a ✗, reported, left alone), deletes locally what was
+>   deleted on the cell, and never touches `devtools/`, `native/` or `vendor/`.
+> - **a ✗ is settled by a person**: `cell-sync diff drive --view patch --prefix
+>   <path>` shows what the cell did since the last sync; then `pull --take
+>   remote` or `push --take local` (take-remote refuses to eat uncommitted work).
+> - **`--deploy` deploys exactly the pushed tree** (pinned), and the version it
+>   reports landing is the version it requested — the "it lands as a different
+>   version" note further down is historical.
+> - **`main.ts` goes up staged**: uploaded to a scratch path, then swapped in
+>   atomically, so a push that dies half way can no longer leave a truncated
+>   `main.ts` on the cell.
+>
+> **The first sync has no `.cell-sync.json`**, so it cannot know direction from
+> a last sync. It asks git instead: a file whose cell copy matches ANY earlier
+> commit of it is "cell behind git" and is pushed (this is the `git diff <the
+> commit before yours>` test below, done for every file). Anything else that
+> differs is a ✗ saying the cell holds content no commit has — measured on
+> 2026-09-23 that was 26 files plus 13 cell-only ones, all written to the cell
+> that morning and never committed to main. That first ✗ list is the last time
+> the by-hand routine below is needed; after it, `status` knows.
 
 > **THE DEPLOYER IS 1024 MB NOW, AND IT NEEDS 714 — WHICH WAS 687 THIS
 > MORNING.** Measured 2026-09-15, twice, by tailing `platform.logs {service:
@@ -237,7 +278,10 @@ corrupted the five icons in the working tree, and the only thing that ever
 caught it was `git status` showing five modified PNGs after a pull that should
 have been a no-op.
 
-**AND A PULL RESURRECTS `devtools/` THAT A PUSH WILL NEVER CORRECT.** `cell-sync`'s
+**AND A PULL RESURRECTS `devtools/` THAT A PUSH WILL NEVER CORRECT.** *(Fixed
+2026-09-23: the skip set now applies to pull too, and `status` lists the
+cell's stale `devtools/` and `native/` copies as "ignored — cells.deleteFile to
+remove".)* `cell-sync`'s
 `SKIP` set is `node_modules`, `devtools`, `native` — and it is applied to the
 PUSH's directory walk only. The cell still holds whatever was in `devtools/`
 before that rule existed, so every pull writes those stale copies over the
@@ -251,7 +295,9 @@ deployer already running at seven tenths of its memory ceiling. **Not done here
 — deleting files from a shared cell is not a thing to do unasked** — but it is
 the fix, and until someone does it this reversion happens on every deploy cycle.
 
-**COMMIT BEFORE YOU PULL.** `cell-sync pull` overwrites the working tree with
+**COMMIT BEFORE YOU PULL.** *(Historical — a three-way pull no longer
+overwrites a file you changed, and it deletes, rather than ignores, a file
+deleted on the cell.)* `cell-sync pull` overwrites the working tree with
 the cell's copy of every file it has, and it does not care that you were
 mid-edit. It ate an uncommitted rewrite of `index.ts` and of this file during
 the very change that removed the workaround — `git status` then showed them as
@@ -264,6 +310,12 @@ symbol proves the client shipped; it says nothing about a route. Curl the
 routes.
 
 ### PULL BEFORE YOU PUSH. ALWAYS.
+
+> *Historical: `cell-sync` enforces this itself since 2026-09-23 — a push
+> refuses while the cell has unpulled changes, and a pull or push never
+> overwrites a file both sides changed. Kept for what it records about how the
+> cell and git drift apart, which still happens; the script now tells you
+> which way, per file.*
 
 `cell-sync push` sends **every file in the cell**. Other agents edit the
 deployed cell's source directly — during one session the hydro author was
