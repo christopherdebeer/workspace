@@ -43860,6 +43860,8 @@ let texMeanCache: Record<string, number> | null = null;
     // old run flag, kept in the probe only so a regression here is legible.
     ring: tapeRec.keys.length >= TAPE_KEY_N * 3, explicit: tapeRec.on, line: lineOn,
     held: rewindPaused,
+    // The M5 cell and the scrub rail, in HUD units, and whether the rail is up.
+    open: scrubOpen(), cell: { ...rewindRect }, rail: { ...scrubRect }, s: hudS,
     // THE STREAK, so a test can ask whether a rewind actually looks like one
     // rather than trusting a screenshot to say so.
     blur: +mblurAmt.toFixed(2), blurCapPx: (mblurMat.uniforms.uMaxPx as { value: number }).value,
@@ -45884,6 +45886,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (authoringInputCaptured) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   // Each instrument swallows the DOWN; hudPtrs makes it swallow the UP too.
+  if (scrubDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (chartLensDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (fpsDown(e) || layerDown(e) || autoDown(e) || poiDown(e)) { hudPtrs.add(e.pointerId); return; }
   if (rewindDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
@@ -45943,6 +45946,7 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 canvas.addEventListener('pointermove', (e) => {
   if (authoringInputCaptured && !authoringPan) return;
+  if (scrubMove(e)) return;
   if (chartLensMove(e)) return;
   if (rewindMove(e)) return;
   if (clockMove(e)) return;
@@ -46531,6 +46535,7 @@ const endStick = (e: PointerEvent): void => {
   // event type, so a cancel clears it too; `lastUp` is set so the window's
   // copy of the same up (this handler is on both) does not ask the chart.
   const hud = hudPtrs.delete(e.pointerId);
+  if (scrubUp(e)) { lastUp = e; return; }
   if (chartLensUp(e)) { lastUp = e; return; }
   if (e.type === 'pointerup' && rewindUp(e)) return;
   if (e.type === 'pointerup' && clockUp(e)) return;
@@ -57738,10 +57743,65 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       : drone.up ? (drone.recall ? UI.good : UI.gold) : UI.edge;
     droneRect = { x: col(0), y: rowT, w: CW, h: CH };
     lampCell(col(0), rowT, ICON.gps, dCol, drone.up || drone.downed);
+    // ── STATE DOTS ── a cell that toggles or cycles says how many states it
+    // has and which one it is in: tiny dots along the bottom band, where the
+    // drone keeps its charge. The one in force wears the cell's colour.
+    const dots = (x: number, y: number, n: number, at: number, c: string): void => {
+      const x0 = x + ((CW - (n * 3 - 2)) >> 1), yy = y + CH - 3;
+      for (let k = 0; k < n; k++) {
+        hctx.fillStyle = k === at ? c : UI.dim;
+        hctx.fillRect(x0 + k * 3, yy, 1, 1);
+      }
+    };
+    // Two pixel glyphs the icon font has no room for, each with an ink edge.
+    const inked = (draw: (c: string, o: number) => void, c: string): void => {
+      for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+        hctx.save(); hctx.translate(dx, dy); draw(UI.ink, 0); hctx.restore();
+      }
+      draw(c, 0);
+    };
+    // M2 — an ARROW for heading-up (the map turns so ahead is up), a NEEDLE
+    // with its north half lit for north-up.
     mapUpRect = { x: col(1), y: rowT, w: CW, h: CH };
-    lampCell(col(1), rowT, ICON.map, UI.edge, mapHeadingUp);
+    {
+      const c2 = mapHeadingUp ? UI.edge : UI.dim;
+      corners(col(1), rowT, CW, CH, c2);
+      const cx = col(1) + (CW >> 1), cy = rowT + 2;
+      if (mapHeadingUp) inked((c) => {
+        hctx.fillStyle = c;
+        hctx.fillRect(cx, cy, 1, 9);
+        for (let k = 1; k <= 3; k++) hctx.fillRect(cx - k, cy + k, 2 * k + 1, 1);
+      }, UI.edge);
+      else inked((c) => {
+        for (let k = 0; k < 9; k++) {
+          const w = k < 4 ? k : 8 - k;
+          hctx.fillStyle = c === UI.ink ? c : k < 4 ? UI.text : UI.dim;
+          hctx.fillRect(cx - (w >> 1), cy + k, (w >> 1) * 2 + 1, 1);
+        }
+      }, UI.text);
+      dots(col(1), rowT, 2, mapHeadingUp ? 1 : 0, UI.edge);
+    }
+    // M3 — the seat you drive from: a WINDSCREEN for the cab, the truck from
+    // behind for chase.
     povRect = { x: col(2), y: rowT, w: CW, h: CH };
-    lampCell(col(2), rowT, ICON.car, UI.edge, lastPov === 'cab');
+    {
+      const cab = lastPov === 'cab';
+      corners(col(2), rowT, CW, CH, cab ? UI.edge : UI.dim);
+      if (cab) {
+        const cx = col(2) + (CW >> 1), cy = rowT + 3;
+        inked((c) => {
+          hctx.fillStyle = c;
+          hctx.fillRect(cx - 4, cy, 9, 1);              // roof line
+          hctx.fillRect(cx - 5, cy + 6, 11, 1);         // dash
+          for (let k = 0; k <= 6; k++) {                // pillars, splayed
+            hctx.fillRect(cx - 4 - (k >> 2), cy + k, 1, 1);
+            hctx.fillRect(cx + 4 + (k >> 2), cy + k, 1, 1);
+          }
+          hctx.fillRect(cx - 1, cy + 7, 3, 1);          // the wheel's hub
+        }, UI.edge);
+      } else hudIconEdge(ICON.truck, col(2) + ((CW - 8) >> 1), rowT + 3, UI.dim, 8);
+      dots(col(2), rowT, 2, cab ? 1 : 0, UI.edge);
+    }
     // M7 — THE KEY. Lit while T8/T9 are on the glass; gold when they are hidden
     // but a view or overlay is still in force, so a hidden key cannot hide
     // the fact that the world is false-coloured.
@@ -57759,6 +57819,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         hctx.fillRect(cx - 2, y, 5, 1);
         hctx.fillRect(cx - 4, y + 1, 9, 1);
       }
+      dots(col(3), rowT, 2, keyShown ? 1 : 0, kc === UI.dim ? UI.edge : kc);
     }
     // The drone's satellites live INSIDE its own cell: charge as a sliver
     // under the glyph (the audit's finding 10), height above the grid while
@@ -57779,6 +57840,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       autoRect = { x: col(0), y: rowB, w: CW, h: CH };
       corners(col(0), rowB, CW, CH, auto.on ? UI.gold : UI.dim);
       textEdgeS('AUTO', col(0) + cCol('AUTO'), rowB + 6, auto.on ? UI.gold : UI.dim);
+      dots(col(0), rowB, 2, auto.on ? 1 : 0, UI.gold);
     } else {
       autoRect.w = 0;
       corners(col(0), rowB, CW, CH, UI.faint);
@@ -57792,6 +57854,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       rewindRect = { x: col(1), y: rowB, w: CW, h: CH };
       const rcol = held || rewindPaused ? UI.gold : UI.dim;
       corners(col(1), rowB, CW, CH, rcol);
+      dots(col(1), rowB, 2, rewindPaused ? 1 : 0, UI.gold);
       const edged = (x: number, y: number, w2: number, h2: number): void => {
         hctx.fillStyle = UI.ink; hctx.fillRect(x - 1, y - 1, w2 + 2, h2 + 2);
       };
@@ -57805,18 +57868,6 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         hctx.fillStyle = rcol;
         hctx.fillRect(px2, py2, 2, 7); hctx.fillRect(px2 + 4, py2, 2, 7);
       }
-      if (held) {
-        const have = Math.max(1, rewindHave());
-        const track = 46;
-        const fill = Math.round(((rewind.at ?? 0) / have) * track);
-        const tx = col(1) + ((CW - 3) >> 1);
-        edged(tx, rowT - 5 - track, 3, track);
-        hctx.fillStyle = UI.dim;
-        hctx.fillRect(tx + 1, rowT - 5 - track, 1, track);
-        hctx.fillStyle = UI.gold;
-        hctx.fillRect(tx, rowT - 5 - fill, 3, Math.max(1, fill));
-        textEdgeS(`-${rewind.secs.toFixed(0)}S`, tx + 6, rowT - 5 - fill, UI.gold);
-      }
     }
     // WPT: amber when the pins are on, in any mode — the mode itself is
     // announced by the flash when it cycles (spec drops the persistent mode
@@ -57824,6 +57875,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     poiRect = { x: col(2), y: rowB, w: CW, h: CH };
     corners(col(2), rowB, CW, CH, poiVis === 0 ? UI.dim : UI.gold);
     textEdgeS('WPT', col(2) + cCol('WPT'), rowB + 6, poiVis === 0 ? UI.dim : UI.gold);
+    dots(col(2), rowB, POI_MODES.length, poiVis, UI.gold);
     // M8 — held for a future control. Faint corners, no glyph, no action.
     spareRect = { x: col(3), y: rowB, w: CW, h: CH };
     corners(col(3), rowB, CW, CH, UI.faint);
@@ -58156,7 +58208,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         bracket(band.sharp * chartBandScale, HW - 18, col);
         hctx.fillRect(HW - 19, mid, 5, 1);
       };
-      slider(chartTiltRect, 'TILT', `${Math.round(chartTiltDeg)} DEG`,
+      // The scrub rail owns the left edge while M5 holds the world.
+      if (scrubOpen()) chartTiltRect.w = 0;
+      else slider(chartTiltRect, 'TILT', `${Math.round(chartTiltDeg)} DEG`,
         (chartTiltDeg - CHART_TILT_MIN) / (CHART_TILT_MAX - CHART_TILT_MIN),
         1, chartLensDrag?.kind === 'tilt' ? UI.text : UI.edge);
       const activeBand = dofMode === 'miniature' && tiltMode !== 'off';
@@ -58182,7 +58236,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // so an absent WET/FOG never leaves a hole between the group and its
       // anchor (photographed: an 80px gap where two empty slots used to be).
       // Candles here are FORECASTS — see the gauge's own note.
-      {
+      // (Stood down while the scrub rail owns the left edge.)
+      if (!scrubOpen()) {
         const ahx = state.x + Math.sin(state.heading) * 500;
         const ahz = state.z - Math.cos(state.heading) * 500;
         const wa = wxAt(wxField, ahx, ahz);
@@ -58215,6 +58270,29 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       }
     }
   }
+  // ── THE SCRUB RAIL, on the left edge while M5 holds the world ──
+  // Bottom is now, top is as far back as the ring reaches; the gold run is how
+  // far back the truck is seated, a tick every ten seconds.
+  if (scrubOpen()) {
+    const have = Math.max(1, rewindHave());
+    const top = Math.round(HH * 0.3), bot = Math.round(HH * 0.72);
+    const x = 5;
+    scrubRect = { x: 0, y: top, w: 16, h: bot - top };
+    textEdgeS('REWIND', 1, top - 16, UI.gold);
+    textEdgeS(`-${rewind.secs.toFixed(0)}S`, 1, top - 8, UI.dim);
+    hctx.fillStyle = UI.ink; hctx.fillRect(x - 1, top - 1, 3, bot - top + 3);
+    hctx.fillStyle = 'rgba(114,189,178,0.35)'; hctx.fillRect(x, top, 1, bot - top + 1);
+    const span = rewindSecs(have);
+    for (let t = 0; t <= span; t += 10) {
+      const y = Math.round(bot - (t / span) * (bot - top));
+      hctx.fillRect(x, y, t % 60 === 0 ? 5 : 3, 1);
+    }
+    const hy = Math.round(bot - ((rewind.at ?? 0) / have) * (bot - top));
+    hctx.fillStyle = UI.gold;
+    hctx.fillRect(x, hy, 1, bot - hy + 1);
+    hctx.fillRect(x - 1, hy - 1, 8, 3);
+    for (let c = 0; c < 3; c++) hctx.fillRect(1 + c, hy - (2 - c), 1, 5 - 2 * c);
+  } else scrubRect = { x: 0, y: 0, w: 0, h: 0 };
   // The mission card and the survey-claim toast are DOM now (client/
   // overlays.ts, fed from stepOverlays below) — they behave like UI, not like
   // instruments, and they were the last text on this canvas that wanted real
@@ -58863,35 +58941,63 @@ function rewindDown(e: PointerEvent): boolean {
   return true;
 }
 function rewindMove(e: PointerEvent): boolean {
-  if (rewindDrag?.id !== e.pointerId) return false;
-  // Upward drag scrubs — y0 minus clientY, since the tab sits at the bottom.
-  const dy = (rewindDrag.y0 - e.clientY) / hudS;
-  if (!rewindDrag.moved) {
-    if (Math.abs(dy) < REWIND_SLOP) return true;
-    rewindDrag.moved = true;
-    rewindBegin();
-  }
-  rewindShow(Math.max(0, (dy - REWIND_SLOP) / REWIND_PX));
+  // The cell no longer scrubs by dragging in place — the rail does (see
+  // scrubDown). A finger that wanders off the cell is still just a tap.
+  return rewindDrag?.id === e.pointerId;
+}
+/**
+ * ── THE SCRUB RAIL ── while M5 holds the world, a rail on the left edge is
+ * the last two minutes of driving: the bottom is now, the top is as far back
+ * as the ring reaches. A finger on it seats the truck on that checkpoint; the
+ * world stays held, so what you rewound to can be looked at. M5 again (now
+ * PLAY) takes it — or, if nothing was scrubbed, simply runs on.
+ */
+let scrubRect = { x: 0, y: 0, w: 0, h: 0 };
+let scrubDrag: number | null = null;
+const scrubOpen = (): boolean => rewindPaused && rewind.home !== null;
+function scrubAt(clientY: number): void {
+  const y = clientY / hudS;
+  const f = clamp((scrubRect.y + scrubRect.h - y) / Math.max(1, scrubRect.h), 0, 1);
+  rewindShow(f * rewindHave());
+}
+function scrubDown(e: PointerEvent): boolean {
+  if (!scrubOpen() || scrubRect.w === 0) return false;
+  const x = e.clientX / hudS, y = e.clientY / hudS;
+  if (x > scrubRect.x + scrubRect.w + 10 || y < scrubRect.y - 12 || y > scrubRect.y + scrubRect.h + 12) return false;
+  scrubDrag = e.pointerId;
+  scrubAt(e.clientY);
+  return true;
+}
+function scrubMove(e: PointerEvent): boolean {
+  if (scrubDrag !== e.pointerId) return false;
+  scrubAt(e.clientY);
+  return true;
+}
+function scrubUp(e: PointerEvent): boolean {
+  if (scrubDrag !== e.pointerId) return false;
+  scrubDrag = null;
   return true;
 }
 function rewindUp(e: PointerEvent): boolean {
   if (rewindDrag?.id !== e.pointerId) return false;
   const drag = rewindDrag;
   rewindDrag = null;
-  // A TAP IS THE TRANSPORT. Stop the world where it stands, or let it go
-  // again — the same button, because a tape deck's is.
-  if (!drag.moved) {
-    rewindPaused = !rewindPaused;
+  void drag;
+  // A TAP IS THE TRANSPORT. PAUSE holds the world and opens the scrub rail;
+  // PLAY lets it go, taking whatever the rail was moved to. Back at "now" is
+  // a cancel, not a zero-second rewind — nothing to truncate.
+  if (!rewindPaused) {
+    rewindPaused = true;
+    if (rewindReady()) rewindBegin();
     audio.stone();
-    hudFlash(rewindPaused ? 'HOLD' : 'RUNNING');
-    return true;
+    hudFlash(rewind.home ? 'HOLD · SCRUB THE LEFT RAIL' : 'HOLD');
+  } else {
+    if (rewind.home) { if ((rewind.at ?? 0) < 1) rewindCancel(); else rewindCommit(); }
+    rewindPaused = false;
+    scrubDrag = null;
+    audio.stone();
+    hudFlash('RUNNING');
   }
-  // Back at the top is a cancel, not a zero-second rewind — there is nothing
-  // to truncate and the truck goes back exactly where it was.
-  if ((rewind.at ?? 0) < 1) rewindCancel(); else rewindCommit();
-  // A scrub that landed somewhere leaves the world HELD there, so you can look
-  // at what you rewound to before committing to driving out of it. Tap to go.
-  if (!rewindPaused) { rewindPaused = true; hudFlash('HOLD'); }
   return true;
 }
 let clockDrag: { id: number; x0: number; s0: number; moved: boolean } | null = null;

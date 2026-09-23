@@ -30,6 +30,10 @@ const ALL = {
   ecoseat: `window.__setcam('chase')`,
   // The seat with TILES and STREAM: the grid over the world, the readout.
   seat: `(() => { window.__setcam('chase'); window.__chartlayers('tiles', true); window.__chartlayers('stream', true); })()`,
+  // M2 and M3 flipped by their own taps: heading-up and the cab.
+  flipped: `(() => { const h = window.__hudrects(), s = h.s; const c = document.querySelector('canvas');
+    let id = 30; for (const r of [h.mapUp, h.pov]) { const x = (r.x + r.w / 2) * s, y = (r.y + r.h / 2) * s;
+      for (const t of ['pointerdown', 'pointerup']) c.dispatchEvent(new PointerEvent(t, { clientX: x, clientY: y, pointerId: id++, bubbles: true })); } })()`,
   // The seat, with the key on it.
   chase: `window.__setcam('chase')`,
   // M7 tapped: the key goes, the views stay.
