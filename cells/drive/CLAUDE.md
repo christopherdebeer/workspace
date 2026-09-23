@@ -19249,5 +19249,14 @@ when CAM lowers, the dock chart↔drone, and a second DRONE tap recalling it.
 them identically on the commit before this work**, so it is not this change's
 and is not fixed here.
 
-**NOT SEEN ON A DEVICE, NOT DEPLOYED.** In landscape the tray scrolls and the
-canvas HUD still has no safe-area insets (#157).
+**NOT SEEN ON A DEVICE.** In landscape the tray scrolls and the canvas HUD
+still has no safe-area insets (#157). The trays went back to compact
+checkboxes and radios on the seat's word (the water view is HYDRO radios over
+the rack's stops); the drone mode has no tray.
+
+**Live as v1790122344258**, pushed without a pull on the seat's word. The live
+`app.js` read `x-cache: Miss`, 4.19 MB, parses under esbuild, and carries
+`readoutOn`, `wpShows`, `autoToggle`, `rigAlarm`, `drive.wpLayers` and
+`seat:cab`, with no `TAP > ` hint left; `/` answers 200. `DECK_MODES` reads 0
+and is not missing: it is exported by hud-deck.ts and read by nothing in
+main.ts, so the bundler drops it.
