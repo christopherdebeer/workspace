@@ -32109,12 +32109,8 @@ function loadChartLayers(): void {
     // switched off for everyone who has ever opened the key — the trap the
     // dial rack needs a version stamp and a migration for.
     for (const l of CHART_LAYERS) {
-      // A DEBUG CHIP IS NEVER RESTORED. Its chip is only drawn while the tile
-      // overlay is up, so a stored `substrate: true` would come back as a
-      // false-coloured world with no control on the glass to turn it off —
-      // the settings panel's own lesson about a staged change nothing
-      // announces, one surface over.
-      if (l.debug) continue;
+      // Every chip is on the glass now, so a restored view always has its
+      // control beside it (the reason debug chips used to be skipped here).
       if (typeof saved[l.id] === 'boolean') chartOn[l.id] = saved[l.id] as boolean;
     }
   } catch { /* private mode, or a stored shape from another life */ }
@@ -56761,11 +56757,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       };
       let ly = y0 + 19, lx = pad + 1;
       for (const l of CHART_LAYERS) {
-        // A DEBUG CHIP ONLY WHILE THE TILE OVERLAY IS UP. The substrate view
-        // says what the RENDERER believes, not what the planet is, and it
-        // belongs with the ring counts rather than beside COVER. Asked for
-        // from the seat in those terms.
-        if (l.debug && !tileDbg) continue;
+        // EVERY CHIP IS OFFERED. The ground views used to appear only while
+        // the tile overlay was up; they were promoted to first-class chips
+        // when the key became the single switchboard for what the chart shows.
         const on = chartOn[l.id];
         const w = 7 + gw(l.name);
         if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }

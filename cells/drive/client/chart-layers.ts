@@ -42,11 +42,10 @@ export interface ChartLayer {
   on: boolean;
   /** One line, for the record card and for anyone reading the table. */
   note: string;
-  /** A chip only offered while the tile-debug overlay is up. The substrate's
-   *  classification is an INSTRUMENT, not a map of the world: it says what the
-   *  renderer believes the ground is made of, which is a question about this
-   *  program rather than about the planet, and it belongs beside the tile
-   *  counts and the ring state rather than beside COVER and ECO. */
+  /** An INSTRUMENT rather than a map of the world: it says what the renderer
+   *  believes, not what the planet is. Informational — every chip is offered
+   *  on the key (they were gated behind tile-debug until the key became the
+   *  one switchboard). */
   debug?: boolean;
 }
 
@@ -81,9 +80,7 @@ export const CHART_LAYERS: readonly ChartLayer[] = Object.freeze([
   // ── ONE CHIP, SIX CHANNELS ── the geomorphic field has more channels than
   // the key has room for, and they are a set to be read in turn rather than a
   // menu to choose from: a tap advances exposure → debris → soil → moisture →
-  // grass → family → off, and the legend names the one in force. A debug view
-  // like MATERIAL, so it is offered only while the tile overlay is up and is
-  // never restored from storage.
+  // grass → family → off, and the legend names the one in force.
   Object.freeze({ id: 'ground' as const, name: 'GROUND', kind: 'thematic' as const,
     on: false, debug: true,
     note: 'the shared geomorphic substrate field, one channel at a time — what the ground is made of, before anything grows on it' }),
@@ -110,8 +107,7 @@ export const CHART_LAYERS: readonly ChartLayer[] = Object.freeze([
  * — the mechanism `?wetdebug` has shipped for months, generalised.
  *
  * What they share with the channel is everything the reader touches: the same
- * key, the same chips, the same radio group, the same legend, the same rule
- * that a debug chip is only offered while the tile overlay is up. The
+ * key, the same chips, the same radio group, the same legend. The
  * mechanism differs because the DATA differs, and that is the honest reason
  * rather than an inconsistency.
  *
