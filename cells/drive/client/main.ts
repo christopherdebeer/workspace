@@ -30699,7 +30699,9 @@ function streamWorld(ex: number, ez: number): void {
     // fixtures is the country above Geneva, drawn as coarse ribbons over a
     // synthetic crossroads. A fixture is supposed to run with the network out
     // of the loop; this was the hole in that claim.
-    if (camMode === 'top' && !FIXTURE) {
+    // …and from the seat while PLACES is on, so the seat's place names have
+    // something to name (the ring is sized by the seat's own sight line).
+    if ((camMode === 'top' || chartOn.places) && !FIXTURE) {
       // THE CHART'S REACH IS THE SHELL'S, NOT THE PLANE'S. `r` is capped at
       // SIGHT_MAX because past it the tangent plane stops being honest, which
       // is right for every layer that lives in the plane — and the chart's
@@ -56447,7 +56449,7 @@ function hudLap(k: string): void {
  * ride the tile-debug dial with the grid.
  */
 function drawStreamHeader(): void {
-  if (!chartOn.stream || (camMode !== 'top' && camMode !== 'god')) return;
+  if (!chartOn.stream) return;
   hctx.globalAlpha = 1;
   let fails = 0;
   for (const [, at] of osmFailedAt) if (performance.now() - at < 30000) fails++;
@@ -56465,7 +56467,7 @@ function drawStreamHeader(): void {
     6, 48, UI.soft);
 }
 function drawTileDebugOverlay(): void {
-  if (!chartOn.tiles || (camMode !== 'top' && camMode !== 'god')) return;
+  if (!chartOn.tiles) return;
   const pad = 4;
   const dNow = performance.now();
   const dProj = (wx: number, wz: number): [number, number] | null => {
@@ -56815,7 +56817,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   }
   // ── T8 and T9, WHEREVER M7 ASKS FOR THEM ── under the scale on the chart,
   // under the clock's row everywhere else.
-  const keyY = camMode === 'top' ? (chartOn.stream ? pad + 56 : pad + 34) + 19 : pad + 34;
+  const keyY = (chartOn.stream ? pad + 56 : pad + 34) + (camMode === 'top' ? 19 : 0);
   if (keyShown && (camMode === 'top' || !lineOn)) {
     // ── THE LAYER KEY ──
     //
@@ -57375,31 +57377,47 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // layer is separate from the HUD's nearest-three pins, which are a cockpit
   // instrument, not a map.
   ovLabelsDrawn.length = 0;
-  if (camMode === 'top' && ovBandOn && chartOn.places && ovPlaces.size) {
+  const seatPlaces = camMode !== 'top';
+  if ((seatPlaces || ovBandOn) && chartOn.places && ovPlaces.size) {
     // CITIES ONLY AT WIDE VIEWS, which is what the seat asked for and what the
     // rank ladder was one rung short of saying. Past a two-hundred-kilometre
     // frame a town's name is a claim about a place the frame cannot show the
     // shape of, and sixteen of them is the whole label budget spent before a
     // single capital is drawn. The three bands under it are unchanged.
     const r = backdropRadius();
-    const maxRank = r > 200000 ? 0 : r > 26000 ? 1 : r > 12000 ? 2 : 4;
+    // FROM THE SEAT: towns and villages within a drive, fewer of them — the
+    // basic first cut; labels and POIs from the seat want their own pass.
+    const maxRank = seatPlaces ? 4 : r > 200000 ? 0 : r > 26000 ? 1 : r > 12000 ? 2 : 4;
     capEyeUpdate();
     const cells = new Set<string>();
-    let budget = 16;
+    let budget = seatPlaces ? 6 : 16;
+    const peakNames = seatPlaces ? new Set([...peaks.values()].map((q) => q.name)) : null;
     const ranked = [...ovPlaces.values()].sort((a, b) => a.rank - b.rank);
     for (const p of ranked) {
       if (p.rank > maxRank || budget <= 0) break;
       // A place on the far side of the planet is still in front of the camera
       // and projects INSIDE the disc, mirrored — see onNearCap.
-      if (!onNearCap(p.sp)) continue;
-      // The place's point on the sphere, through the planet's own placement —
-      // composed here rather than read off matrixWorld, which is a render old.
-      poiVec.copy(p.sp).applyQuaternion(planetGroup.quaternion).add(planetGroup.position);
+      // FROM THE SEAT the place is a point in the local world, a few km off —
+      // the planet's placement is the chart's business.
+      // A summit already wears its own mark and name (P3); the seat does not
+      // name it twice.
+      if (peakNames?.has(p.name)) continue;
+      if (seatPlaces) poiVec.set(p.x, groundAt(p.x, p.z) + 20, p.z);
+      else {
+        if (!onNearCap(p.sp)) continue;
+        // The place's point on the sphere, through the planet's own placement —
+        // composed here rather than read off matrixWorld, which is a render old.
+        poiVec.copy(p.sp).applyQuaternion(planetGroup.quaternion).add(planetGroup.position);
+      }
       if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) continue;
+      if (seatPlaces && poiView.length() > 15000) continue;
       poiVec.project(camera);
       if (Math.abs(poiVec.x) > 0.96 || Math.abs(poiVec.y) > 0.92) continue;
       const sx = ((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS;
       const sy = ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS;
+      // From the seat a name above the key would be pinned onto it by the
+      // clamp below; it is dropped instead.
+      if (seatPlaces && sy < Math.max(24, layerKeyBottom + 6)) continue;
       const ck = `${Math.round(sx / 46)},${Math.round(sy / 12)}`;
       if (cells.has(ck)) continue;
       cells.add(ck);
@@ -58531,6 +58549,10 @@ function setClean(on: boolean): void {
   sinceAskMs: ovAskedAt ? Math.round(performance.now() - ovAskedAt) : null,
   waitMs: OV_WAIT_MS, top: camMode === 'top', word: worldStatus().map,
   labels: [...ovLabelsDrawn],
+  // The ten nearest place records, with their rank: what the seat's PLACES
+  // pass has to choose from.
+  nearPlaces: [...ovPlaces.values()].map((p) => ({ name: p.name, rank: p.rank, x: Math.round(p.x), z: Math.round(p.z), km: +(Math.hypot(p.x - state.x, p.z - state.z) / 1000).toFixed(1) }))
+    .sort((a, b) => a.km - b.km).slice(0, 10),
   // Which asked tiles have no mesh, and the two reasons a tile can be one:
   // it failed (and waits out OV_RETRY_MS) or it landed without heights.
   missing: [...ovTiles].filter((k) => !ovMeshes.has(k) && !ovEmpty.has(k)),

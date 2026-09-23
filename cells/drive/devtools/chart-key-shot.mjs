@@ -25,6 +25,8 @@ const ALL = {
   // …and once more, to the grid key.
   rotated2: `(() => { const at = window.__chartlayers().legendAt; const c = document.querySelector('canvas');
     for (const t of ['pointerdown', 'pointerup']) c.dispatchEvent(new PointerEvent(t, { clientX: at.x, clientY: at.y, pointerId: 8, bubbles: true })); })()`,
+  // The seat with TILES and STREAM: the grid over the world, the readout.
+  seat: `(() => { window.__setcam('chase'); window.__chartlayers('tiles', true); window.__chartlayers('stream', true); })()`,
   // The seat, with the key on it.
   chase: `window.__setcam('chase')`,
   // M7 tapped: the key goes, the views stay.
@@ -35,8 +37,8 @@ const ALL = {
   off: `window.__chartlayers('off', true)`,
 };
 const want = process.env.STATES ? process.env.STATES.split(',') : Object.keys(ALL);
-const d = await openDrive({ spot: 'fixture=at-campsbay&cam=top&time=NOON&wx=clear', tag: 'chartkey', settle: 0, bootTimeout: 180000 });
-await d.page.waitForTimeout(15000);
+const d = await openDrive({ spot: process.env.SPOT || 'fixture=at-campsbay&cam=top&time=NOON&wx=clear', tag: 'chartkey', settle: 0, bootTimeout: 180000 });
+await d.page.waitForTimeout(Number(process.env.BOOT_WAIT || 15000));
 await d.page.evaluate(() => document.querySelector('.m-x, .m-close')?.click());
 for (const name of want) {
   await d.page.evaluate(ALL[name]);
