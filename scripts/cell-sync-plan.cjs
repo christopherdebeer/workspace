@@ -50,7 +50,10 @@ const SKIP = new Set(['node_modules', 'devtools', 'native']);
  */
 function isIgnored(path) {
   const segs = path.split('/');
-  return SKIP.has(segs[0]) || segs.some((s) => s.startsWith('.') || s === 'node_modules') || segs[0] === 'sync-staging';
+  return SKIP.has(segs[0])
+    || segs.some((s) => s.startsWith('.') || s === 'node_modules')
+    || segs[0] === 'sync-staging'
+    || path.endsWith('.log');
 }
 
 /** Generated at push time from cells/kernel/static (ADR-0076) — push-only, never pulled. */

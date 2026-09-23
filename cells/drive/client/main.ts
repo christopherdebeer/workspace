@@ -2844,19 +2844,13 @@ const TILT_PRESETS: Record<string, { top: TiltBand; chase: TiltBand }> = {
   // the one row in this table nobody has judged from a frame yet.
   stock: { top: { amt: 1, sharp: 0.34, blur: 0.72 }, chase: { amt: 0.6, sharp: 0.2, blur: 0.5 } },
 };
-const TILT_MODES = ['off', 'subtle', 'mini', 'stock', 'hard'] as const;
 /**
- * ── IT IS A DIAL NOW, AND THE URL STILL OUTRANKS IT ──
+ * ── MINIATURE PRESET IS AUTHORING POLICY; THE CHART RAILS STAY LIVE ──
  *
- * `let`, not `const`, because `aimFocus` reads it every frame: the dial's
- * apply writes it and the next frame has the new look, with no reload. That is
- * the whole reason a look belongs on a dial rather than in the query string —
- * the composite runs at three frames a second in the harness and a reload a
- * guess is how the first cut of this effect was tuned wrong twice.
- *
- * `?tilt=` still wins, the same rule `?time=` has and for the same reason: a
- * switch is there to make a comparison reproducible, and a saved dial silently
- * overruling it makes the shot depend on which browser profile took it.
+ * The ordinary rack no longer chooses a miniature preset: DOF has one strength
+ * control and the active camera chooses its focus geometry. The named preset is
+ * still mutable for __tilt and ?tilt regression work, while the chart's TILT
+ * and BAND rails remain direct, live edits of the miniature plane.
  */
 let tiltMode = ((v) => (v && v in TILT_PRESETS ? v : 'stock'))(qs('tilt')?.toLowerCase());
 /** Chart-only scale over the named miniature band. The HUD exposes this as a
@@ -2883,16 +2877,32 @@ const DOF_MODES = ['off', 'camera', 'miniature'] as const;
 type DofMode = typeof DOF_MODES[number];
 const DOF_QUALITIES = ['low', 'med', 'high'] as const;
 const DOF_TAPS = [6, 10, 16] as const;
-const DOF_RADII = [4, 7, 11, 15] as const; // maximum circle radius, in art pixels
-const DOF_FOCUS_M = [0, 15, 30, 60, 150, 600] as const; // 0 means rendered centre subject
-let dofMode: DofMode = ((v): DofMode =>
-  v && (DOF_MODES as readonly string[]).includes(v) ? v as DofMode : 'miniature'
-)(qs('dof')?.toLowerCase());
+const DOF_RADII = [4, 7, 11, 15] as const; // expert aperture steps, in art pixels
+const DOF_FOCUS_M = [0, 15, 30, 60, 150, 600] as const; // expert focus steps; 0 = rendered centre subject
+const DOF_STRENGTHS = ['off', 'subtle', 'stock', 'strong'] as const;
+const DOF_STRENGTH_GAIN = [0, 0.55, 1, 1.25] as const;
+/** The ordinary control says only HOW MUCH focus treatment the picture may use.
+ * Geometry is a camera policy: chart/chase miniature, drone photographic,
+ * cab/god deep-focus. ?dof remains an expert override for reproducible A/Bs. */
+const dofModeQuery = qs('dof')?.toLowerCase();
+let dofModeOverride: DofMode | null =
+  dofModeQuery && (DOF_MODES as readonly string[]).includes(dofModeQuery)
+    ? dofModeQuery as DofMode : null;
+let dofMode: DofMode = dofModeOverride ?? 'miniature';
+const dofStrengthQuery = qs('dofs')?.toLowerCase();
+let dofStrengthAt = (() => {
+  if (!dofStrengthQuery) return 2;
+  const named = DOF_STRENGTHS.indexOf(dofStrengthQuery as typeof DOF_STRENGTHS[number]);
+  if (named >= 0) return named;
+  const n = Number(dofStrengthQuery);
+  return Number.isFinite(n) ? clamp(Math.round(n), 0, DOF_STRENGTHS.length - 1) : 2;
+})();
 let dofQuality = ((v): number => {
   const i = DOF_QUALITIES.indexOf(v as typeof DOF_QUALITIES[number]);
   return i >= 0 ? i : 1;
 })(qs('dofq')?.toLowerCase() ?? 'med');
 let dofRadiusAt = clamp(Math.round(qsNum('aperture', 1)), 0, DOF_RADII.length - 1);
+let dofApertureOverride = qsHas('aperture');
 let dofFocusAt = clamp(Math.round(qsNum('focus', 0)), 0, DOF_FOCUS_M.length - 1);
 /**
  * ── A DEVTOOLS PANEL FOR A PHONE ──
@@ -7373,11 +7383,12 @@ composite = (amt: number): void => {
   // exists because fog-of-war, optional air blur and the sky horizon consume
   // it independently. OFF genuinely skips all three extra passes.
   const cu = compMat.uniforms;
-  const dofOn = dofMode === 'camera'
-    || (dofMode === 'miniature' && (cu.uTiltAmt.value as number) > 0.001);
+  const dofModeNow = cu.uDofMode.value as number;
+  const dofOn = (cu.uDofMaxPx.value as number) > 0.01
+    && (dofModeNow > 0.5 && (dofModeNow < 1.5 || (cu.uTiltAmt.value as number) > 0.001));
   cu.uDofOn.value = dofOn ? 1 : 0;
-  cu.uDofMode.value = dofMode === 'camera' ? 1 : dofMode === 'miniature' ? 2 : 0;
-  cu.uDofMaxPx.value = DOF_RADII[dofRadiusAt];
+  // aimFocus owns geometry and radius; quality remains an expert performance
+  // control and is cheap to mirror here for probe-driven live changes.
   cu.uDofTaps.value = DOF_TAPS[dofQuality];
   if (dofOn) {
     const pu = dofPrepMat.uniforms;
@@ -38900,10 +38911,34 @@ function centreSubjectDistance(): number | null {
   values.sort((a, b) => a - b);
   return values[Math.floor(values.length / 2)];
 }
+function currentDofPolicy(): {
+  name: string; mode: DofMode; gain: number; maxRadiusPx: number; focusResponse: number;
+} {
+  // A forced geometry is a diagnostic instruction and deliberately bypasses
+  // the player strength scalar. That preserves old ?dof=/__dof A/B semantics.
+  const forced = dofModeOverride !== null;
+  const gain = forced ? 1 : DOF_STRENGTH_GAIN[dofStrengthAt];
+  const mode: DofMode = dofModeOverride
+    ?? (gain <= 0 ? 'off'
+      : camMode === 'cab' || camMode === 'god' ? 'off'
+      : camMode === 'drone' ? 'camera'
+      : 'miniature');
+  // The drone wants depth, not miniature wash: even at STOCK its maximum
+  // circle is smaller than the road/chart lens, and the nose view is deeper
+  // again because the whole frame is navigational ground.
+  const baseRadiusPx = camMode === 'drone' ? (droneNose() ? 3.5 : 4.5) : DOF_RADII[1];
+  const maxRadiusPx = dofApertureOverride ? DOF_RADII[dofRadiusAt] : baseRadiusPx * gain;
+  const name = forced ? `override:${mode}`
+    : camMode === 'drone' ? (droneNose() ? 'drone-nose' : 'drone-trail')
+    : camMode;
+  return { name, mode, gain, maxRadiusPx, focusResponse: camMode === 'drone' ? 2.2 : 4.2 };
+}
 function aimFocus(): void {
   const u = compMat.uniforms;
-  u.uDofMode.value = dofMode === 'camera' ? 1 : dofMode === 'miniature' ? 2 : 0;
-  u.uDofMaxPx.value = DOF_RADII[dofRadiusAt];
+  const policy = currentDofPolicy();
+  dofMode = policy.mode; // reported state is the policy actually on the glass
+  u.uDofMode.value = policy.mode === 'camera' ? 1 : policy.mode === 'miniature' ? 2 : 0;
+  u.uDofMaxPx.value = policy.maxRadiusPx;
   u.uDofTaps.value = DOF_TAPS[dofQuality];
   const preset = TILT_PRESETS[tiltMode] ?? TILT_PRESETS.off;
   // The cab is deliberately exempt; the chart is where the look belongs, and
@@ -38926,10 +38961,12 @@ function aimFocus(): void {
     sharp: preset.chase.sharp + (preset.top.sharp - preset.chase.sharp) * lensK,
     blur: preset.chase.blur + (preset.top.blur - preset.chase.blur) * lensK,
   };
-  // GOD IS EXEMPT FOR THE SAME REASON CAB IS: a narrow depth of field while
-  // you are the one deciding what to look at is a tax on exactly the thing
-  // you are reviewing.
-  const amt = tiltOver.amt ?? (camMode === 'cab' || camMode === 'god' ? 0 : band.amt);
+  // Cab/god are deep-focus in ordinary play. An explicit expert MINIATURE
+  // override is allowed to bypass that rule so a regression shot can still
+  // exercise every geometry from every camera.
+  const cameraAmt = (camMode === 'cab' || camMode === 'god') && dofModeOverride === null ? 0 : band.amt;
+  const amt = tiltOver.amt ?? (policy.mode === 'miniature'
+    ? clamp(cameraAmt * policy.gain, 0, 1) : 0);
   u.uTiltAmt.value = amt;
   // THE PLANE IS PLACED EVEN WHEN THE EFFECT IS OFF, so `__tilt` always reports
   // a live one. An early return here saved a handful of vector operations and
@@ -38958,7 +38995,7 @@ function aimFocus(): void {
   tiltHalf = half;
   tiltK = half / Math.max(tanHalf, 1e-3);
   camera.getWorldDirection(FOCUS_FWD);
-  if (dofMode === 'camera') {
+  if (policy.mode === 'camera') {
     // AUTO is a subject target, not a ground-plane guess: the centre 3×3 cells
     // of the rendered depth readback choose the surface the lens is pointed at.
     // An explicit distance bypasses that sensor. camFlyAim is the fallback for
@@ -38979,7 +39016,7 @@ function aimFocus(): void {
     } else {
       // A damped pull: quick enough to acquire a subject, slow enough that a
       // depth cell changing at an edge does not make the lens chatter.
-      dofFocusCurrent += (dofFocusTarget - dofFocusCurrent) * (1 - Math.exp(-4.2 * focusDt));
+      dofFocusCurrent += (dofFocusTarget - dofFocusCurrent) * (1 - Math.exp(-policy.focusResponse * focusDt));
     }
     u.uDofFocusDist.value = dofFocusCurrent;
     u.uFocusP.value.copy(FOCUS_FWD).multiplyScalar(dofFocusCurrent).add(camera.position);
@@ -38987,7 +39024,11 @@ function aimFocus(): void {
   } else {
     // MINIATURE keeps the existing world-space tilted plane. It is placed on
     // the ground under the viewing ray and then stood up across that ray.
-    const gY = groundAt(state.x, state.z);
+    // Use the same viewed-ground authority as vegetation, shadows and
+    // streaming. This is the crucial drone/chart fix: a camera over another
+    // valley must not place its focal plane at the truck's ground elevation.
+    const [focusX, focusZ] = renderFocusXZ();
+    const gY = groundAt(focusX, focusZ);
     const drop = -FOCUS_FWD.y;
     const dist = clamp(drop > 0.02 ? (camera.position.y - gY) / drop : 1e9,
       18, Math.max(6000, camera.far));
@@ -39003,7 +39044,7 @@ function aimFocus(): void {
     u.uFocusN.value.normalize();
     dofFocusCurrent = dist;
     dofFocusTarget = dist;
-    dofFocusSource = 'tilted-plane';
+    dofFocusSource = `${camMode}-tilted-plane`;
     dofFocusReady = false;
   }
 }
@@ -40995,15 +41036,25 @@ function tdMatAt(x: number, z: number): object | null {
   return { prep: stats(rtDofPrep), far: stats(rtDofFar), near: stats(rtDofNear) };
 };
 (window as unknown as { __dof?: object }).__dof = (
-  opts?: { mode?: string; quality?: string | number; aperture?: number;
-    focus?: number | 'auto' | null; snap?: boolean },
+  opts?: { mode?: string | null; strength?: string | number; quality?: string | number;
+    aperture?: number | null; focus?: number | 'auto' | null; snap?: boolean },
 ): object => {
   if (opts?.mode !== undefined) {
-    const mode = opts.mode.toLowerCase();
-    const j = DOF_MODES.indexOf(mode as DofMode);
+    if (opts.mode === null) dofModeOverride = null;
+    else {
+      const mode = opts.mode.toLowerCase();
+      const j = DOF_MODES.indexOf(mode as DofMode);
+      if (j >= 0) dofModeOverride = DOF_MODES[j];
+    }
+    dofFocusReady = false;
+  }
+  if (opts?.strength !== undefined) {
+    const j = typeof opts.strength === 'number'
+      ? clamp(Math.round(opts.strength), 0, DOF_STRENGTHS.length - 1)
+      : DOF_STRENGTHS.indexOf(opts.strength.toLowerCase() as typeof DOF_STRENGTHS[number]);
     if (j >= 0) {
-      dofMode = DOF_MODES[j];
-      const d = DIALS.find((x) => x.key === 'dof');
+      dofStrengthAt = j;
+      const d = DIALS.find((x) => x.key === 'dofs');
       if (d) d.at = j;
       dofFocusReady = false;
     }
@@ -41012,23 +41063,19 @@ function tdMatAt(x: number, z: number): object | null {
     const j = typeof opts.quality === 'number'
       ? clamp(Math.round(opts.quality), 0, DOF_QUALITIES.length - 1)
       : DOF_QUALITIES.indexOf(opts.quality.toLowerCase() as typeof DOF_QUALITIES[number]);
-    if (j >= 0) {
-      dofQuality = j;
-      const d = DIALS.find((x) => x.key === 'dofq');
-      if (d) d.at = j;
-    }
+    if (j >= 0) dofQuality = j;
   }
   if (opts?.aperture !== undefined) {
-    dofRadiusAt = clamp(Math.round(opts.aperture), 0, DOF_RADII.length - 1);
-    const d = DIALS.find((x) => x.key === 'aperture');
-    if (d) d.at = dofRadiusAt;
+    if (opts.aperture === null) dofApertureOverride = false;
+    else {
+      dofRadiusAt = clamp(Math.round(opts.aperture), 0, DOF_RADII.length - 1);
+      dofApertureOverride = true;
+    }
   }
   if (opts?.focus !== undefined) {
     if (opts.focus === null || opts.focus === 'auto') {
       dofFocusOverrideM = null;
       dofFocusAt = 0;
-      const d = DIALS.find((x) => x.key === 'focus');
-      if (d) d.at = 0;
     } else {
       dofFocusOverrideM = clamp(opts.focus, 1, camera.far * 0.88);
       if (opts.snap) {
@@ -41040,18 +41087,23 @@ function tdMatAt(x: number, z: number): object | null {
   }
   aimFocus();
   const u = compMat.uniforms;
+  const maxRadiusPx = u.uDofMaxPx.value as number;
   const radiusAt = (d: number): number => {
     if (dofMode !== 'camera') return 0;
-    return +Math.min(DOF_RADII[dofRadiusAt],
-      Math.abs((d - dofFocusCurrent) / Math.max(d, 0.25)) * DOF_RADII[dofRadiusAt]).toFixed(2);
+    return +Math.min(maxRadiusPx,
+      Math.abs((d - dofFocusCurrent) / Math.max(d, 0.25)) * maxRadiusPx).toFixed(2);
   };
-  const active = dofMode === 'camera'
-    || (dofMode === 'miniature' && (u.uTiltAmt.value as number) > 0.001);
+  const modeNow = u.uDofMode.value as number;
+  const active = maxRadiusPx > 0.01
+    && modeNow > 0.5 && (modeNow < 1.5 || (u.uTiltAmt.value as number) > 0.001);
+  const policy = currentDofPolicy();
   return {
-    mode: dofMode,
+    mode: dofMode, modeOverride: dofModeOverride, policy: policy.name,
+    strength: DOF_STRENGTHS[dofStrengthAt], strengthStep: dofStrengthAt,
     active,
     quality: DOF_QUALITIES[dofQuality], taps: DOF_TAPS[dofQuality],
-    aperture: dofRadiusAt, maxRadiusPx: DOF_RADII[dofRadiusAt],
+    aperture: dofApertureOverride ? dofRadiusAt : 'policy',
+    maxRadiusPx: +maxRadiusPx.toFixed(2),
     focus: dofFocusOverrideM ?? (DOF_FOCUS_M[dofFocusAt] || 'auto'),
     focusM: +dofFocusCurrent.toFixed(2), targetM: +dofFocusTarget.toFixed(2),
     source: dofFocusSource, centreDepthM: centreSubjectDistance(),
@@ -41059,7 +41111,7 @@ function tdMatAt(x: number, z: number): object | null {
     focusN: (u.uFocusN.value as THREE.Vector3).toArray().map((v) => +v.toFixed(3)),
     dedicatedPasses: active ? 3 : 0, lastFramePasses: passCount.last,
     cameraRadiusPx: [5, 10, 15, 30, 60, 150, 600].map((m) => [m, radiusAt(m)]),
-    protectedBy: 'scene alpha < 0.25',
+    protectedBy: 'scene alpha < 0.25 (player vehicle solids)',
   };
 };
 (window as unknown as { __tilt?: object }).__tilt = (
@@ -41074,9 +41126,6 @@ function tdMatAt(x: number, z: number): object | null {
   // It moves the DIAL too, so the panel and the look cannot disagree.
   if (opts?.mode !== undefined && opts.mode.toLowerCase() in TILT_PRESETS) {
     tiltMode = opts.mode.toLowerCase();
-    const d = DIALS.find((x) => x.key === 'tilt');
-    const j = TILT_MODES.indexOf(tiltMode as typeof TILT_MODES[number]);
-    if (d && j >= 0) d.at = j;
   }
   // A dial write goes to the OVERRIDE, not the uniform: aimFocus rewrites the
   // uniform every frame and would have eaten it. `null` puts the preset back.
@@ -45876,7 +45925,7 @@ function chartLensUp(e: PointerEvent): boolean {
   return {
     tiltDeg: +chartTiltDeg.toFixed(1),
     bandScale: +chartBandScale.toFixed(2),
-    bandMode: dofMode === 'miniature' ? tiltMode : 'inactive',
+    bandMode: currentDofPolicy().mode === 'miniature' ? tiltMode : 'inactive',
     range: { tilt: [CHART_TILT_MIN, CHART_TILT_MAX], band: [CHART_BAND_MIN, CHART_BAND_MAX] },
     hudScale: hudS,
     rects: { tilt: { ...chartTiltRect }, band: { ...chartBandRect } },
@@ -47598,6 +47647,20 @@ function droneModel(): THREE.Object3D {
     new THREE.MeshBasicMaterial({ color: 0xd8412f }));
   lamp.position.y = -0.24;
   g.add(lamp);
+  // The external drone camera is another player-vehicle shot: its aircraft is
+  // the subject, not scenery to defocus. Mark opaque airframe materials with
+  // the same alpha protection as the rig. The transparent rotor discs already
+  // depict motion optically and stay out of the mask.
+  const protectedMats = new Set<THREE.Material>();
+  g.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      if (!mat || mat.transparent || protectedMats.has(mat)) continue;
+      protectedMats.add(mat);
+      noBlur(mat);
+    }
+  });
   return g;
 }
 /** Pose the airframe from the ceremony's own state: how far the arms are open,
@@ -50424,8 +50487,8 @@ function telemetryReport(): string {
     // could not say whether the dedicated chain had run — and a dump that
     // cannot state its own conditions cannot be compared with the next one,
     // which is the whole reason this row exists.
-    + ` · dof ${dofMode}${dofMode === 'off' ? ''
-      : `/${DOF_QUALITIES[dofQuality]} f${DOF_RADII[dofRadiusAt]}px`
+    + ` · dof ${DOF_STRENGTHS[dofStrengthAt]}/${dofMode}${dofModeOverride ? ':override' : ''}${dofMode === 'off' ? ''
+      : `/${DOF_QUALITIES[dofQuality]} f${Number(compMat.uniforms.uDofMaxPx.value).toFixed(1)}px`
         + ` @${dofFocusOverrideM ?? (DOF_FOCUS_M[dofFocusAt] || 'auto')}`}`);
   const _treePlacedByFamily = EZ_FAMILIES.map(f => ezTiers[f].reduce((n, t) => n + t.n, 0));
   const _treePlaced = _treePlacedByFamily.reduce((n, v) => n + v, 0);
@@ -55849,37 +55912,18 @@ const DIAL_GROUPS: DialGroup[] = [
         cu.uBloom.value = bloomDial;
       }),
       dial('flare', 'LENS FLARE', ['OFF', 'ON'], 1, (i) => { cu.uFlare.value = i; }),
-      /** The lens and the miniature plane are independent choices. CAMERA uses
-       * the rendered centre subject (or a named metric distance); MINIATURE
-       * uses the TILT SHIFT band below. */
-      dial('dof', 'DEPTH OF FIELD', ['OFF', 'CAMERA', 'MINIATURE'], DOF_MODES.indexOf(dofMode),
-        (i) => { dofMode = DOF_MODES[clamp(i, 0, DOF_MODES.length - 1)]; dofFocusReady = false; }),
-      dial('dofq', 'DOF QUALITY', ['LOW', 'MED', 'HIGH'], dofQuality,
-        (i) => { dofQuality = clamp(i, 0, DOF_QUALITIES.length - 1); }),
-      dial('aperture', 'APERTURE', ['NARROW', 'STOCK', 'WIDE', 'MAX'], dofRadiusAt,
-        (i) => { dofRadiusAt = clamp(i, 0, DOF_RADII.length - 1); }),
-      dial('focus', 'FOCUS TARGET', ['AUTO', '15M', '30M', '60M', '150M', 'FAR'], dofFocusAt,
-        (i) => { dofFocusAt = clamp(i, 0, DOF_FOCUS_M.length - 1); dofFocusOverrideM = null; }),
       /**
-       * ── TILT SHIFT: A LOOK, SO IT IS A DIAL AND NOT A QUERY STRING ──
+       * ── ONE ORDINARY LENS CONTROL ──
        *
-       * It was `?tilt=` and nothing else, which made it a thing only a devtool
-       * could reach — and a look cannot be judged that way: the composite runs
-       * at three frames a second in the harness, so every comparison was a
-       * boot apart, and the seat could not turn it at all. `tiltMode` is read
-       * by `aimFocus` every frame, so this takes effect on the next one.
-       *
-       * The plane is VERTICAL, leaned back by `__tilt({angle})` — a plane
-       * perpendicular to a near-nadir chart camera is a horizontal slab that
-       * flat ground lies inside, and it measured an exact zero at every
-       * station out to three kilometres. Tilting the lens is what the
-       * photographs this is named after actually do.
-       *
-       * STOCK is the shipped look and the row to refine; the bands, and why
-       * the chart and the seat carry their own, are in TILT_PRESETS.
+       * Strength is the player's art-direction choice. Focus geometry, focus
+       * target, aperture and quality are renderer policy now; their old URL
+       * switches and __dof hooks remain available for reproducible diagnosis.
+       * The chart's direct TILT/BAND rails remain on the glass and continue to
+       * edit the miniature plane without turning renderer internals into rack
+       * settings.
        */
-      dial('tilt', 'TILT SHIFT', ['OFF', 'SUBTLE', 'MINI', 'STOCK', 'HARD'], 3,
-        (i) => { tiltMode = TILT_MODES[clamp(i, 0, TILT_MODES.length - 1)]; }),
+      dial('dofs', 'DOF STRENGTH', ['OFF', 'SUBTLE', 'STOCK', 'STRONG'], dofStrengthAt,
+        (i) => { dofStrengthAt = clamp(i, 0, DOF_STRENGTHS.length - 1); dofFocusReady = false; }),
       // ── X-RAY: the debug eyes, from the seat ──
       // DEPTH paints the 40x88 map the HUD's occlusion verdicts read — sky
       // blue, terrain grey by log distance — under the live pins, so a wrong
@@ -56232,7 +56276,7 @@ function saveDials(): void {
   try {
     // `v` rides along with the dial values so a future reordering can tell a
     // migrated record from a stale one, the way this one had to.
-    const rec: Record<string, number> = { v: 5 };
+    const rec: Record<string, number> = { v: 6 };
     for (const d of DIALS) rec[d.key] = d.at;
     localStorage.setItem('drive.dials', JSON.stringify(rec));
   } catch { /* fine */ }
@@ -56257,6 +56301,15 @@ function loadDials(): void {
     // from unset (see waterFromDials), so the rack is pointed at whatever
     // actually booted rather than at a zero nobody chose.
     if (ver < 4) raw['water'] = HYDRO_ON ? 1 : 0;
+    // v6: four implementation-facing DOF dials became one perceptual
+    // strength control. Preserve the only old choice with unambiguous meaning:
+    // explicit OFF stays OFF; every active old geometry lands on STOCK. The
+    // old aperture/focus/quality values remain available only through their
+    // explicit URL/probe overrides and are intentionally not guessed into the
+    // product control.
+    if (ver < 6 && !Number.isInteger(raw['dofs']) && Number.isInteger(raw['dof'])) {
+      raw['dofs'] = raw['dof'] === 0 ? 0 : 2;
+    }
     // ── v5: THE DEFAULTS MOVED, AND A STORED RACK IS NOT MIGRATED ──
     //
     // Twenty-eight dials took the seat's own tuned values as their defaults.
@@ -56283,32 +56336,11 @@ function loadDials(): void {
       const d = DIALS.find((x) => x.key === 'time');
       if (d) d.at = timeMode;
     }
-    // …and the same for `?tilt=`, for the same reason: it is there to make a
-    // look comparison reproducible, and a saved dial overruling it would make
-    // the shot depend on which browser profile took it.
-    if (qsHas('tilt')) {
-      const d = DIALS.find((x) => x.key === 'tilt');
-      const j = TILT_MODES.indexOf(tiltMode as typeof TILT_MODES[number]);
-      if (d && j >= 0) d.at = j;
-    }
-    // A focus harness needs the whole lens stated by its URL, not inherited
-    // from whichever rack the browser profile last saved.
-    if (qsHas('dof')) {
-      const d = DIALS.find((x) => x.key === 'dof');
-      const j = DOF_MODES.indexOf(dofMode);
-      if (d && j >= 0) d.at = j;
-    }
-    if (qsHas('dofq')) {
-      const d = DIALS.find((x) => x.key === 'dofq');
-      if (d) d.at = dofQuality;
-    }
-    if (qsHas('aperture')) {
-      const d = DIALS.find((x) => x.key === 'aperture');
-      if (d) d.at = dofRadiusAt;
-    }
-    if (qsHas('focus')) {
-      const d = DIALS.find((x) => x.key === 'focus');
-      if (d) d.at = dofFocusAt;
+    // The product lens has one URL-ownable value. Geometry/aperture/focus
+    // overrides are parsed directly above and have no rack state to fight.
+    if (qsHas('dofs')) {
+      const d = DIALS.find((x) => x.key === 'dofs');
+      if (d) d.at = dofStrengthAt;
     }
   } catch { /* fine */ }
 }
@@ -58213,7 +58245,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       else slider(chartTiltRect, 'TILT', `${Math.round(chartTiltDeg)} DEG`,
         (chartTiltDeg - CHART_TILT_MIN) / (CHART_TILT_MAX - CHART_TILT_MIN),
         1, chartLensDrag?.kind === 'tilt' ? UI.text : UI.edge);
-      const activeBand = dofMode === 'miniature' && tiltMode !== 'off';
+      const activeBand = currentDofPolicy().mode === 'miniature' && tiltMode !== 'off';
       const band = (TILT_PRESETS[tiltMode] ?? TILT_PRESETS.off).top;
       slider(chartBandRect, 'BAND', `${Math.round(chartBandScale * 100)}%`,
         (chartBandScale - CHART_BAND_MIN) / (CHART_BAND_MAX - CHART_BAND_MIN),
