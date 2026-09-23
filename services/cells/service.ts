@@ -43,10 +43,27 @@ import {
   deleteObject,
   presignPut,
   updateFunctionCode,
+  listObjectsMeta,
+  putObjectIf,
+  PreconditionFailedError,
 } from './provisioner';
 import type { InvokeCellResult } from './provisioner';
 import { srcKey, srcPrefix, buildKey, dataKey, dataPrefix, cleanPath } from './cell-files';
 import { extractTarGz } from './tar';
+import {
+  contentVersion,
+  countLines,
+  sliceLines,
+  pathMatcher,
+  compileQuery,
+  searchText,
+  occurrenceOffsets,
+  lineAt,
+  encodeCursor,
+  decodeCursor,
+  RANGE_MAX_BYTES,
+} from './source-text';
+import type { SearchMatch } from './source-text';
 
 /** Parse a relative window like "15m", "2h", "1d" into milliseconds. */
 function sinceToMs(since: string | undefined): number {
@@ -796,6 +813,10 @@ interface WriteFileInput extends CellRef {
    * write, which the ~1MB request-signing cliff already bounds it to.
    */
   encoding?: 'utf8' | 'base64';
+  /** Proof of read: write only if the file is still at this `version`. */
+  ifVersion?: string;
+  /** Create only: refuse if the file already exists (a typo'd path can't clobber). */
+  ifAbsent?: boolean;
   deploy?: boolean;
 }
 
@@ -838,6 +859,102 @@ async function emitFilesChanged(ctx: ServiceContext, record: CellRecord, op: str
   });
 }
 
+// ─── Versioned source access ─────────────────────────────────────────
+//
+// Every read reports the file's content `version` (sha256 of the stored
+// bytes); every mutation accepts it back as `ifVersion` and refuses — with
+// VERSION_CONFLICT and nothing written — if the file moved in between. The
+// read-modify-write ops (replace, append, and any write with a precondition)
+// also commit with a conditional PUT pinned to the S3 ETag they read, so even
+// a caller that passes no `ifVersion` can no longer lose a concurrent edit:
+// the loser gets a conflict instead of silently overwriting the winner.
+
+const TEXT_CONTENT_TYPE = 'text/plain; charset=utf-8';
+
+interface SourceObject {
+  body: Buffer;
+  contentType: string;
+  etag?: string;
+  lastModified?: string;
+  version: string;
+  binary: boolean;
+}
+
+async function readSource(bucket: string, cellId: string, path: string): Promise<SourceObject | null> {
+  const raw = await getObjectRaw(bucket, srcKey(cellId, path));
+  if (raw === null) return null;
+  return { ...raw, version: contentVersion(raw.body), binary: !isTextType(raw.contentType) };
+}
+
+/** The metadata half of a file — what `readFile` and `listFiles(view:"meta")` report. */
+function fileMeta(path: string, obj: SourceObject, text?: string): Record<string, unknown> {
+  return {
+    path,
+    contentType: obj.contentType,
+    binary: obj.binary,
+    bytes: obj.body.length,
+    ...(obj.binary ? {} : { lines: countLines(text ?? obj.body.toString('utf-8')) }),
+    version: obj.version,
+    ...(obj.etag ? { etag: obj.etag } : {}),
+    ...(obj.lastModified ? { modifiedAt: obj.lastModified } : {}),
+  };
+}
+
+function versionConflict(path: string, expected: string, actual: string): Error {
+  return new Error(
+    `VERSION_CONFLICT on ${path}: expected ${expected}, found ${actual} — nothing was written. ` +
+      're-read the file (readFile returns `version`) and retry against what is there now',
+  );
+}
+
+interface Preconditions {
+  ifVersion?: string;
+  ifAbsent?: boolean;
+  ifExists?: boolean;
+}
+
+/** Validate preconditions against the file as read. Throws; writes nothing. */
+function checkPreconditions(path: string, current: SourceObject | null, p: Preconditions): void {
+  if (p.ifVersion !== undefined && typeof p.ifVersion !== 'string') throw new Error('ifVersion must be a string');
+  if (p.ifAbsent && (p.ifVersion !== undefined || p.ifExists)) throw new Error('ifAbsent cannot be combined with ifVersion or ifExists');
+  if (p.ifAbsent && current) throw versionConflict(path, 'absent', current.version);
+  if (p.ifExists && !current) throw new Error(`File not found: ${path} (ifExists)`);
+  if (p.ifVersion !== undefined && current?.version !== p.ifVersion) {
+    throw versionConflict(path, p.ifVersion, current?.version ?? 'absent');
+  }
+}
+
+/**
+ * Commit a read-modify-write: a PUT that only lands if the object is still the
+ * generation `current` was read at (or still absent, if it was absent).
+ */
+async function commitSource(
+  bucket: string,
+  cellId: string,
+  path: string,
+  body: string | Buffer,
+  contentType: string,
+  current: SourceObject | null,
+): Promise<void> {
+  const key = srcKey(cellId, path);
+  try {
+    if (!current) await putObjectIf(bucket, key, body, contentType, { ifNoneMatch: '*' });
+    else if (current.etag) await putObjectIf(bucket, key, body, contentType, { ifMatch: current.etag });
+    else await putObject(bucket, key, body, contentType);
+  } catch (err) {
+    if (err instanceof PreconditionFailedError) {
+      throw versionConflict(path, current?.version ?? 'absent', 'a concurrent write');
+    }
+    throw err;
+  }
+}
+
+/** The text of a source object, refusing bytes (a text edit would mangle them). */
+function sourceText(path: string, obj: SourceObject, op: string): string {
+  if (obj.binary) throw new Error(`${op} refuses ${path}: it is stored as bytes (${obj.contentType}); use writeFile with encoding:'base64'`);
+  return obj.body.toString('utf-8');
+}
+
 async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.path) throw new Error('path is required');
@@ -846,6 +963,9 @@ async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<un
     throw new Error("encoding must be 'utf8' or 'base64'");
   }
   const { record, bucket, env } = await resolveAuthorized(input, user);
+  const path = cleanPath(input.path);
+  let body: string | Buffer;
+  let contentType: string;
   if (input.encoding === 'base64') {
     // ROUND-TRIP THE DECODE BEFORE STORING. `Buffer.from(s,'base64')` never
     // throws — it stops at the first character it cannot use and returns what
@@ -854,16 +974,39 @@ async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<un
     // and comparing is the cheap way to refuse it here instead.
     const bytes = Buffer.from(input.content, 'base64');
     if (bytes.toString('base64').replace(/=+$/, '') !== input.content.replace(/[\s=]+$/g, '').replace(/\s/g, '')) {
-      throw new Error(`content is not valid base64 for ${cleanPath(input.path)}`);
+      throw new Error(`content is not valid base64 for ${path}`);
     }
-    await putObject(bucket, srcKey(record.cellId, input.path), bytes, binaryTypeFor(input.path));
+    body = bytes;
+    contentType = binaryTypeFor(path);
   } else {
-    await putObject(bucket, srcKey(record.cellId, input.path), input.content, 'text/plain; charset=utf-8');
+    body = input.content;
+    contentType = TEXT_CONTENT_TYPE;
   }
-  ctx.logger.info('cell file written', { cellId: record.cellId, path: cleanPath(input.path) });
-  if (input.deploy) return requestDeploy(record, env, ctx);
-  await emitFilesChanged(ctx, record, 'write', [cleanPath(input.path)]);
-  return { ok: true, cellId: record.cellId, path: cleanPath(input.path) };
+  let previousVersion: string | undefined;
+  if (input.ifVersion !== undefined || input.ifAbsent) {
+    // A precondition means read, check, then commit pinned to what was read.
+    const current = await readSource(bucket, record.cellId, path);
+    checkPreconditions(path, current, { ifVersion: input.ifVersion, ifAbsent: input.ifAbsent });
+    previousVersion = current?.version;
+    await commitSource(bucket, record.cellId, path, body, contentType, current);
+  } else {
+    await putObject(bucket, srcKey(record.cellId, path), body, contentType);
+  }
+  ctx.logger.info('cell file written', { cellId: record.cellId, path });
+  const result = {
+    ok: true as const,
+    cellId: record.cellId,
+    path,
+    version: contentVersion(body),
+    ...(previousVersion ? { previousVersion } : {}),
+    bytes: Buffer.byteLength(body),
+  };
+  if (input.deploy) {
+    const started = await requestDeploy(record, env, ctx);
+    return { ...result, deploying: true, deploy: started.deploy, message: started.message };
+  }
+  await emitFilesChanged(ctx, record, 'write', [path]);
+  return result;
 }
 
 interface ImportSrcInput extends CellRef {
@@ -918,112 +1061,403 @@ interface ReplaceInFileInput extends CellRef {
   old_str: string;
   /** The replacement (empty string deletes). */
   new_str: string;
-  /** Replace every occurrence (default: first only). */
+  /** Replace every occurrence (default: exactly one — see expectedOccurrences). */
   replace_all?: boolean;
+  /**
+   * How many times old_str must occur for the edit to proceed. Checked BEFORE
+   * anything is written. Defaults to 1 unless replace_all or matchIndex is set,
+   * so an ambiguous old_str is refused instead of silently editing the first hit.
+   */
+  expectedOccurrences?: number;
+  /** Replace only the Nth occurrence (0-based) — for deliberately ambiguous edits. */
+  matchIndex?: number;
+  /** Proof of read: edit only if the file is still at this `version`. */
+  ifVersion?: string;
+  /** Validate and return the prospective hunk(s) without writing. */
+  dryRun?: boolean;
   /** Fused: kick off an async deploy in the same call (poll get for the phase). */
   deploy?: boolean;
 }
 
+/** A few lines either side of an edit, before and after — what a dry run shows. */
+function hunkAt(before: string, after: string, offset: number, oldLen: number, newLen: number, context = 2): Record<string, unknown> {
+  const line = lineAt(before, offset);
+  const oldEndLine = lineAt(before, offset + oldLen);
+  const newEndLine = lineAt(after, offset + newLen);
+  const b = before.split('\n');
+  const a = after.split('\n');
+  const from = Math.max(1, line - context);
+  return {
+    line,
+    before: b.slice(from - 1, Math.min(b.length, oldEndLine + context)).join('\n'),
+    after: a.slice(from - 1, Math.min(a.length, newEndLine + context)).join('\n'),
+  };
+}
+
 /**
  * Targeted edit on a cell source file — exact string replacement without
- * resending the whole file (the Val Town `replace_in_file` contract). The
- * response reports `occurrences` so a caller can detect ambiguity; `deploy`
- * fuses edit + rebuild into one round trip.
+ * resending the whole file (the Val Town `replace_in_file` contract).
+ *
+ * Ambiguity is refused, not reported after the fact: `occurrences` used to come
+ * back AFTER the first hit had already been rewritten, which is too late to
+ * matter. Now the occurrence count is a precondition (`expectedOccurrences`,
+ * default 1), checked with `ifVersion` before any write, and the commit is
+ * pinned to the object generation that was read.
  */
 async function replaceInFile(input: ReplaceInFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.path) throw new Error('path is required');
   if (typeof input?.old_str !== 'string' || input.old_str.length === 0) throw new Error('old_str (non-empty string) is required');
   if (typeof input?.new_str !== 'string') throw new Error('new_str (string, may be empty) is required');
+  if (input.replace_all && input.matchIndex !== undefined) throw new Error('matchIndex cannot be combined with replace_all');
   const { record, bucket, env } = await resolveAuthorized(input, user);
-  const key = srcKey(record.cellId, input.path);
-  const content = await getObject(bucket, key);
-  if (content === null) throw new Error(`File not found: ${cleanPath(input.path)}`);
-  const occurrences = content.split(input.old_str).length - 1;
+  const path = cleanPath(input.path);
+  const current = await readSource(bucket, record.cellId, path);
+  if (current === null) throw new Error(`File not found: ${path}`);
+  checkPreconditions(path, current, { ifVersion: input.ifVersion });
+  const content = sourceText(path, current, 'replaceInFile');
+
+  const offsets = occurrenceOffsets(content, input.old_str);
+  const occurrences = offsets.length;
   if (occurrences === 0) {
-    throw new Error(`old_str not found in ${cleanPath(input.path)} — it must match exactly (case-sensitive, including whitespace)`);
+    throw new Error(`old_str not found in ${path} — it must match exactly (case-sensitive, including whitespace)`);
   }
-  const next = input.replace_all
-    ? content.split(input.old_str).join(input.new_str)
-    : content.replace(input.old_str, input.new_str);
-  await putObject(bucket, key, next, 'text/plain; charset=utf-8');
-  const replacements = input.replace_all ? occurrences : 1;
-  ctx.logger.info('cell file edited', { cellId: record.cellId, path: cleanPath(input.path), replacements });
-  const result = { ok: true as const, cellId: record.cellId, path: cleanPath(input.path), replacements, occurrences };
+  const expected = input.expectedOccurrences ?? (input.replace_all || input.matchIndex !== undefined ? undefined : 1);
+  if (expected !== undefined && occurrences !== expected) {
+    const lines = offsets.slice(0, 20).map((o) => lineAt(content, o));
+    throw new Error(
+      `old_str occurs ${occurrences} times in ${path} (expected ${expected}; at lines ${lines.join(', ')}${occurrences > 20 ? ', …' : ''}) — nothing was written. ` +
+        'Widen old_str to be unique, or pass matchIndex, replace_all, or expectedOccurrences',
+    );
+  }
+  if (input.matchIndex !== undefined && (!Number.isInteger(input.matchIndex) || input.matchIndex < 0 || input.matchIndex >= occurrences)) {
+    throw new Error(`matchIndex ${input.matchIndex} is out of range (${occurrences} occurrences, 0-based)`);
+  }
+
+  const targets = input.replace_all ? offsets : [offsets[input.matchIndex ?? 0]];
+  let next = '';
+  let cursor = 0;
+  for (const at of targets) {
+    next += content.slice(cursor, at) + input.new_str;
+    cursor = at + input.old_str.length;
+  }
+  next += content.slice(cursor);
+  const replacements = targets.length;
+
+  if (input.dryRun) {
+    // Hunks are located in the post-edit text by shifting each offset by the
+    // length change of the replacements before it.
+    const delta = input.new_str.length - input.old_str.length;
+    const hunks = targets.slice(0, 20).map((at, i) => hunkAt(content, next, at + i * delta, input.old_str.length, input.new_str.length));
+    return {
+      ok: true as const, dryRun: true, cellId: record.cellId, path,
+      replacements, occurrences, version: current.version, nextVersion: contentVersion(next), hunks,
+    };
+  }
+
+  await commitSource(bucket, record.cellId, path, next, TEXT_CONTENT_TYPE, current);
+  ctx.logger.info('cell file edited', { cellId: record.cellId, path, replacements });
+  const result = {
+    ok: true as const, cellId: record.cellId, path, replacements, occurrences,
+    line: lineAt(content, targets[0]),
+    previousVersion: current.version, version: contentVersion(next),
+  };
   if (input.deploy) {
     const started = await requestDeploy(record, env, ctx);
     return { ...result, deploy: started.deploy };
   }
-  await emitFilesChanged(ctx, record, 'replace', [cleanPath(input.path)]);
+  await emitFilesChanged(ctx, record, 'replace', [path]);
   return result;
 }
 
 interface AppendToFileInput extends CellRef {
   path: string;
   content: string;
+  /** Proof of read: append only if the file is still at this `version`. */
+  ifVersion?: string;
+  /** Refuse to create the file — a typo'd path fails instead of making a new file. */
+  ifExists?: boolean;
+  /** Create only: refuse if the file already exists. */
+  ifAbsent?: boolean;
   deploy?: boolean;
 }
 
-/** Append to a cell source file (creates it when missing). */
+/** Append to a cell source file (creates it when missing, unless ifExists). */
 async function appendToFile(input: AppendToFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.path) throw new Error('path is required');
   if (typeof input?.content !== 'string' || input.content.length === 0) throw new Error('content (non-empty string) is required');
   const { record, bucket, env } = await resolveAuthorized(input, user);
-  const key = srcKey(record.cellId, input.path);
-  const existing = (await getObject(bucket, key)) ?? '';
-  await putObject(bucket, key, existing + input.content, 'text/plain; charset=utf-8');
-  ctx.logger.info('cell file appended', { cellId: record.cellId, path: cleanPath(input.path), created: existing === '' });
-  const result = { ok: true as const, cellId: record.cellId, path: cleanPath(input.path), created: existing === '' };
+  const path = cleanPath(input.path);
+  const current = await readSource(bucket, record.cellId, path);
+  checkPreconditions(path, current, { ifVersion: input.ifVersion, ifExists: input.ifExists, ifAbsent: input.ifAbsent });
+  const existing = current ? sourceText(path, current, 'appendToFile') : '';
+  const next = existing + input.content;
+  await commitSource(bucket, record.cellId, path, next, TEXT_CONTENT_TYPE, current);
+  const created = current === null;
+  ctx.logger.info('cell file appended', { cellId: record.cellId, path, created });
+  const result = {
+    ok: true as const, cellId: record.cellId, path, created,
+    ...(current ? { previousVersion: current.version } : {}),
+    version: contentVersion(next),
+    bytes: Buffer.byteLength(next),
+  };
   if (input.deploy) {
     const started = await requestDeploy(record, env, ctx);
     return { ...result, deploy: started.deploy };
   }
-  await emitFilesChanged(ctx, record, 'append', [cleanPath(input.path)]);
+  await emitFilesChanged(ctx, record, 'append', [path]);
   return result;
 }
 
 interface ReadFileInput extends CellRef {
   path: string;
+  /** 1-based first line (text files). */
+  startLine?: number;
+  /** 1-based last line, inclusive (defaults to the end, within the byte budget). */
+  endLine?: number;
+  /** Byte offset (any file). */
+  offset?: number;
+  /** Byte count from `offset` (defaults to the budget). */
+  length?: number;
+  /** Force the content encoding; bytes are always base64. */
+  encoding?: 'utf8' | 'base64';
 }
+
+/**
+ * Read a source file — whole (the original contract), a line range, or a byte
+ * range — with its metadata and content `version`.
+ *
+ * A ranged read is the point: a 2.5 MB main.ts used to be all-or-nothing, and
+ * "all" meant the `whole:true` transport escape hatch followed by a downstream
+ * truncation. A line range stays inside RANGE_MAX_BYTES and says where to
+ * continue (`nextStartLine`), so an agent can page through any file.
+ */
 async function readFile(input: ReadFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.path) throw new Error('path is required');
+  const lineMode = input.startLine !== undefined || input.endLine !== undefined;
+  const byteMode = input.offset !== undefined || input.length !== undefined;
+  if (lineMode && byteMode) throw new Error('pass either startLine/endLine or offset/length, not both');
+  if (input.encoding !== undefined && input.encoding !== 'utf8' && input.encoding !== 'base64') {
+    throw new Error("encoding must be 'utf8' or 'base64'");
+  }
   const { record, bucket } = await resolveAuthorized(input, user);
+  const path = cleanPath(input.path);
   // RAW, THEN DECIDE. Reading as UTF-8 first and checking afterwards is not
   // possible — the damage is done by the decode, and a caller cannot tell a
   // mangled PNG from a text file that happens to contain U+FFFD. The stored
   // content type is the record of what was written, so it makes the choice.
-  const raw = await getObjectRaw(bucket, srcKey(record.cellId, input.path));
-  if (raw === null) throw new Error(`file not found: ${cleanPath(input.path)}`);
-  if (!isTextType(raw.contentType)) {
+  const obj = await readSource(bucket, record.cellId, path);
+  if (obj === null) throw new Error(`file not found: ${path}`);
+  const text = obj.binary ? undefined : obj.body.toString('utf-8');
+  const meta = { cellId: record.cellId, ...fileMeta(path, obj, text) };
+  const asBase64 = obj.binary || input.encoding === 'base64';
+
+  if (lineMode) {
+    if (text === undefined) throw new Error(`${path} is stored as bytes (${obj.contentType}); use offset/length for a range`);
+    const slice = sliceLines(text, input.startLine ?? 1, input.endLine);
     return {
-      cellId: record.cellId, path: cleanPath(input.path),
-      content: raw.body.toString('base64'), encoding: 'base64' as const,
-      contentType: raw.contentType, bytes: raw.body.length,
+      ...meta,
+      content: asBase64 ? Buffer.from(slice.content, 'utf-8').toString('base64') : slice.content,
+      encoding: asBase64 ? 'base64' : 'utf8',
+      range: { startLine: slice.startLine, endLine: slice.endLine, totalLines: slice.totalLines },
+      truncated: slice.truncated,
+      ...(slice.nextStartLine ? { nextStartLine: slice.nextStartLine } : {}),
     };
   }
-  return { cellId: record.cellId, path: cleanPath(input.path), content: raw.body.toString('utf-8') };
+  if (byteMode) {
+    const offset = input.offset ?? 0;
+    if (!Number.isInteger(offset) || offset < 0) throw new Error('offset must be an integer >= 0');
+    if (input.length !== undefined && (!Number.isInteger(input.length) || input.length < 1)) throw new Error('length must be an integer >= 1');
+    const want = Math.min(input.length ?? RANGE_MAX_BYTES, asBase64 ? Math.floor((RANGE_MAX_BYTES * 3) / 4) : RANGE_MAX_BYTES);
+    const end = Math.min(obj.body.length, offset + want);
+    const chunk = obj.body.subarray(Math.min(offset, obj.body.length), end);
+    return {
+      ...meta,
+      // A byte range of text can split a multi-byte character; ask for
+      // encoding:'base64' when exact bytes matter (or use line ranges).
+      content: asBase64 ? chunk.toString('base64') : chunk.toString('utf-8'),
+      encoding: asBase64 ? 'base64' : 'utf8',
+      range: { offset, length: chunk.length, totalBytes: obj.body.length },
+      truncated: input.length !== undefined && chunk.length < input.length && end < obj.body.length,
+      ...(end < obj.body.length ? { nextOffset: end } : {}),
+    };
+  }
+  return {
+    ...meta,
+    content: asBase64 ? obj.body.toString('base64') : (text as string),
+    encoding: asBase64 ? 'base64' : 'utf8',
+  };
 }
 
-async function listFiles(input: CellRef, ctx: ServiceContext): Promise<unknown> {
+interface ListFilesInput extends CellRef {
+  /** Only paths under this prefix, e.g. `client/hydro/`. */
+  prefix?: string;
+  /** Only paths matching this glob, e.g. `client/**\/*.ts` or `*.md`. */
+  glob?: string;
+  /** Page size (paths: unbounded by default; meta: 100 by default). */
+  limit?: number;
+  /** Resume after this `nextCursor`. */
+  cursor?: string;
+  /** `paths` (default): string[]; `meta`: one object per file with size, lines, version. */
+  view?: 'paths' | 'meta';
+}
+
+const LIST_META_DEFAULT = 100;
+const LIST_MAX = 1000;
+
+/** Run `fn` over `items` with at most `n` in flight (S3 GETs per page). */
+async function mapLimit<T, R>(items: T[], n: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+  return out;
+}
+
+async function listFiles(input: ListFilesInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
+  const view = input?.view ?? 'paths';
+  if (view !== 'paths' && view !== 'meta') throw new Error("view must be 'paths' or 'meta'");
+  if (input?.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) throw new Error('limit must be an integer >= 1');
   const { record, bucket } = await resolveAuthorized(input, user);
   const prefix = srcPrefix(record.cellId);
-  const keys = await listObjects(bucket, prefix);
-  return { cellId: record.cellId, files: keys.map((k) => k.slice(prefix.length)).filter(Boolean) };
+  const matches = pathMatcher(input.prefix?.replace(/^\/+/, ''), input.glob);
+  const all = (await listObjectsMeta(bucket, prefix))
+    .map((o) => ({ ...o, path: o.key.slice(prefix.length) }))
+    .filter((o) => o.path && matches(o.path))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const totalBytes = all.reduce((n, o) => n + o.size, 0);
+
+  // The cursor is the last path returned (start-after), so a file created
+  // mid-pagination neither shifts nor duplicates the pages around it.
+  const after = decodeCursor<{ after: string }>(input.cursor)?.after;
+  const rest = after === undefined ? all : all.filter((o) => o.path > after);
+  const limit = Math.min(input.limit ?? (view === 'meta' ? LIST_META_DEFAULT : Infinity), LIST_MAX);
+  const page = rest.slice(0, limit);
+  const nextCursor = rest.length > page.length && page.length ? encodeCursor({ after: page[page.length - 1].path }) : undefined;
+  const common = {
+    cellId: record.cellId,
+    count: page.length,
+    total: all.length,
+    totalBytes,
+    ...(nextCursor ? { nextCursor } : {}),
+  };
+  if (view === 'paths') return { ...common, files: page.map((o) => o.path) };
+
+  // Metadata needs the bytes (version, line count, stored content type), so a
+  // meta page costs one GET per file — which is why it is paged by default.
+  const files = await mapLimit(page, 16, async (o) => {
+    const obj = await readSource(bucket, record.cellId, o.path);
+    if (!obj) return { path: o.path, bytes: o.size, deleted: true };
+    return fileMeta(o.path, obj);
+  });
+  return { ...common, files };
+}
+
+interface SearchFilesInput extends CellRef {
+  query: string;
+  regex?: boolean;
+  caseSensitive?: boolean;
+  prefix?: string;
+  glob?: string;
+  contextLines?: number;
+  maxMatches?: number;
+  cursor?: string;
+}
+
+const SEARCH_DEFAULT_MATCHES = 50;
+const SEARCH_MAX_MATCHES = 500;
+
+/**
+ * Server-side text search over the cell's src tree: returns match locations
+ * (path, line, column, the line, optional context) instead of moving source
+ * through the MCP boundary. Pair it with a ranged `readFile` on a hit.
+ * Bytes (images, fonts) are skipped by stored content type.
+ */
+async function searchFiles(input: SearchFilesInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const re = compileQuery({ query: input?.query, regex: input?.regex, caseSensitive: input?.caseSensitive });
+  const contextLines = Math.max(0, Math.min(10, Math.floor(input.contextLines ?? 0)));
+  const maxMatches = Math.max(1, Math.min(SEARCH_MAX_MATCHES, Math.floor(input.maxMatches ?? SEARCH_DEFAULT_MATCHES)));
+  const { record, bucket } = await resolveAuthorized(input, user);
+  const prefix = srcPrefix(record.cellId);
+  const matches = pathMatcher(input.prefix?.replace(/^\/+/, ''), input.glob);
+  const paths = (await listObjectsMeta(bucket, prefix))
+    .map((o) => o.key.slice(prefix.length))
+    .filter((p) => p && matches(p))
+    .sort();
+
+  const resume = decodeCursor<{ path: string; line: number }>(input.cursor);
+  const out: Array<SearchMatch & { path: string; version: string }> = [];
+  let searchedFiles = 0;
+  let skippedBinary = 0;
+  let bytes = 0;
+  let nextCursor: string | undefined;
+  for (const path of paths) {
+    if (resume && path < resume.path) continue;
+    const obj = await readSource(bucket, record.cellId, path);
+    if (!obj) continue;
+    if (obj.binary) { skippedBinary++; continue; }
+    searchedFiles++;
+    const afterLine = resume && path === resume.path ? resume.line : 0;
+    const found = searchText(obj.body.toString('utf-8'), re, contextLines, maxMatches - out.length + 1, afterLine);
+    for (const m of found) {
+      const cost = Buffer.byteLength(JSON.stringify(m)) + path.length + 80;
+      if (out.length >= maxMatches || (out.length > 0 && bytes + cost > RANGE_MAX_BYTES)) {
+        nextCursor = encodeCursor({ path, line: m.line - 1 });
+        break;
+      }
+      out.push({ path, ...m, version: obj.version });
+      bytes += cost;
+    }
+    if (nextCursor) break;
+  }
+  return {
+    cellId: record.cellId,
+    matches: out,
+    count: out.length,
+    searchedFiles,
+    skippedBinary,
+    truncated: nextCursor !== undefined,
+    ...(nextCursor ? { nextCursor } : {}),
+  };
 }
 
 interface DeleteFileInput extends CellRef {
   path: string;
+  /** Proof of read: delete only if the file is still at this `version`. */
+  ifVersion?: string;
+  /** Fused: kick off an async deploy in the same call (poll get for the phase). */
+  deploy?: boolean;
 }
 async function deleteFile(input: DeleteFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.path) throw new Error('path is required');
-  const { record, bucket } = await resolveAuthorized(input, user);
-  await deleteObject(bucket, srcKey(record.cellId, input.path));
-  await emitFilesChanged(ctx, record, 'delete', [cleanPath(input.path)]);
-  return { ok: true, cellId: record.cellId, path: cleanPath(input.path) };
+  const { record, bucket, env } = await resolveAuthorized(input, user);
+  const path = cleanPath(input.path);
+  let previousVersion: string | undefined;
+  if (input.ifVersion !== undefined) {
+    // Check-then-delete: S3 has no conditional DELETE on general-purpose
+    // buckets, so this narrows the window rather than closing it.
+    const current = await readSource(bucket, record.cellId, path);
+    checkPreconditions(path, current, { ifVersion: input.ifVersion });
+    previousVersion = current?.version;
+  }
+  await deleteObject(bucket, srcKey(record.cellId, path));
+  const result = { ok: true as const, cellId: record.cellId, path, ...(previousVersion ? { previousVersion } : {}) };
+  if (input.deploy) {
+    const started = await requestDeploy(record, env, ctx);
+    return { ...result, deploy: started.deploy };
+  }
+  await emitFilesChanged(ctx, record, 'delete', [path]);
+  return result;
 }
 
 /** Bundle the cell's src/ tree and point its Lambda at the new code (deploy-on-update). */
@@ -1770,8 +2204,43 @@ interface ToolSpec {
   scope: string | null;
   /** `read` = side-effect-free; `act` = may mutate. Routes the gateway's read/act dispatch. */
   kind: 'read' | 'act';
+  /** The declared result envelope (surfaced by the gateway as the tool's output schema). */
+  resultSchema?: Record<string, unknown>;
   handler: RegisteredCommand;
 }
+
+// ─── Shared schema fragments for the source-file tools ───────────────
+const CELL_REF_PROPS = {
+  cellId: { type: 'string' },
+  owner: { type: 'string' },
+  name: { type: 'string' },
+};
+const IF_VERSION = {
+  type: 'string',
+  description: 'Proof of read: the `version` a prior readFile/listFiles/searchFiles returned. The call fails with VERSION_CONFLICT (nothing written) if the file has changed since.',
+};
+const VERSION_PROP = { type: 'string', description: 'Content version, `sha256:<hex>` of the stored bytes. Pass back as ifVersion.' };
+const FILE_META_PROPS = {
+  path: { type: 'string' },
+  contentType: { type: 'string' },
+  binary: { type: 'boolean', description: 'Stored as bytes (content comes back base64)' },
+  bytes: { type: 'number' },
+  lines: { type: 'number', description: 'Line count (text files only)' },
+  version: VERSION_PROP,
+  etag: { type: 'string' },
+  modifiedAt: { type: 'string' },
+};
+const MUTATION_RESULT = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    cellId: { type: 'string' },
+    path: { type: 'string' },
+    version: VERSION_PROP,
+    previousVersion: { type: 'string', description: 'The version this mutation replaced (when it was read)' },
+    deploy: { type: 'object', description: 'Present when deploy:true — the DEPLOYING marker; poll get for the phase' },
+  },
+};
 
 const TOOLS: Record<string, ToolSpec> = {
   create: {
@@ -1904,62 +2373,83 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   writeFile: {
     description:
-      "Write a source file to a cell's editable tree (cells/<id>/src/<path>). Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase), else call deploy.",
+      "Write a source file to a cell's editable tree (cells/<id>/src/<path>). Text by default; encoding:'base64' writes bytes (images, fonts) with a content type from the extension. Safe forms: ifVersion (replace only the version you read) or ifAbsent (create only). Returns the new `version`. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase), else call deploy.",
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
-        cellId: { type: 'string' },
-        owner: { type: 'string' },
-        name: { type: 'string' },
+        ...CELL_REF_PROPS,
         path: { type: 'string', description: 'Relative path under src/, e.g. index.ts or lib/util.ts' },
-        content: { type: 'string' },
+        content: { type: 'string', description: 'File body — text, or base64 when encoding is base64' },
+        encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'base64 stores BYTES (binary assets); default utf8 text' },
+        ifVersion: IF_VERSION,
+        ifAbsent: { type: 'boolean', description: 'Create only: fail with VERSION_CONFLICT if the file already exists' },
         deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after writing (poll get for deploy.phase)' },
       },
       required: ['path', 'content'],
       additionalProperties: false,
     },
+    resultSchema: MUTATION_RESULT,
     handler: writeFile as RegisteredCommand,
   },
   replaceInFile: {
     description:
-      "Preferred for editing an existing cell source file: exact string replacement without resending the whole file. old_str must match exactly (case-sensitive); new_str may be empty to delete; replace_all replaces every occurrence (default: first). Returns `occurrences` so ambiguity is detectable. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase). Use writeFile only when rewriting most of a file.",
+      "Preferred for editing an existing cell source file: exact string replacement without resending the whole file. old_str must match exactly (case-sensitive); new_str may be empty to delete. SAFE BY DEFAULT: old_str must occur exactly once (expectedOccurrences, default 1) or nothing is written — widen old_str, or pass matchIndex (0-based) / replace_all. Pass ifVersion from your readFile to refuse edits to a file that changed since. dryRun:true returns the prospective hunks without writing. Returns the new `version`. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase). Use writeFile only when rewriting most of a file.",
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
-        cellId: { type: 'string' },
-        owner: { type: 'string' },
-        name: { type: 'string' },
+        ...CELL_REF_PROPS,
         path: { type: 'string', description: 'Relative path under src/, e.g. client/main.ts' },
         old_str: { type: 'string', description: 'Exact string to find (case-sensitive, including whitespace)' },
         new_str: { type: 'string', description: 'Replacement (empty string deletes)' },
-        replace_all: { type: 'boolean', description: 'Replace every occurrence (default: first only)' },
+        replace_all: { type: 'boolean', description: 'Replace every occurrence' },
+        expectedOccurrences: { type: 'number', description: 'Required occurrence count, checked before writing (default 1 unless replace_all/matchIndex)' },
+        matchIndex: { type: 'number', description: 'Replace only the Nth occurrence (0-based)' },
+        ifVersion: IF_VERSION,
+        dryRun: { type: 'boolean', description: 'Validate and return the prospective hunks; write nothing' },
         deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after the edit (poll get for deploy.phase)' },
       },
       required: ['path', 'old_str', 'new_str'],
       additionalProperties: false,
     },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        ...MUTATION_RESULT.properties,
+        replacements: { type: 'number' },
+        occurrences: { type: 'number' },
+        line: { type: 'number', description: 'Line of the first replacement' },
+        dryRun: { type: 'boolean' },
+        nextVersion: { type: 'string', description: 'dryRun: the version the edit would produce' },
+        hunks: { type: 'array', items: { type: 'object', properties: { line: { type: 'number' }, before: { type: 'string' }, after: { type: 'string' } } } },
+      },
+    },
     handler: replaceInFile as RegisteredCommand,
   },
   appendToFile: {
-    description: "Append content to the end of a cell source file (creates it when missing) — add a function or section without resending the file. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase).",
+    description: "Append content to the end of a text cell source file (creates it when missing) — add a function or section without resending the file. Agent-safe form: ifExists:true (a typo'd path fails instead of creating a file) plus ifVersion. Returns the new `version`. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase).",
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
-        cellId: { type: 'string' },
-        owner: { type: 'string' },
-        name: { type: 'string' },
+        ...CELL_REF_PROPS,
         path: { type: 'string' },
         content: { type: 'string', description: 'Content to append (lead with \\n for a separator)' },
+        ifVersion: IF_VERSION,
+        ifExists: { type: 'boolean', description: 'Fail instead of creating the file when it is missing' },
+        ifAbsent: { type: 'boolean', description: 'Create only: fail with VERSION_CONFLICT if the file exists' },
         deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after appending (poll get for deploy.phase)' },
       },
       required: ['path', 'content'],
       additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: { ...MUTATION_RESULT.properties, created: { type: 'boolean' }, bytes: { type: 'number' } },
     },
     handler: appendToFile as RegisteredCommand,
   },
@@ -1984,43 +2474,140 @@ const TOOLS: Record<string, ToolSpec> = {
     handler: importSrc as RegisteredCommand,
   },
   readFile: {
-    description: "Read one source file from a cell's src/ tree.",
+    description: `Read one source file from a cell's src/ tree, with its metadata (bytes, lines, contentType) and content \`version\` (pass back as ifVersion on edits). Whole file by default; for large files read a LINE RANGE (startLine/endLine, 1-based inclusive) or a BYTE RANGE (offset/length). Ranged reads are capped at ~${RANGE_MAX_BYTES / 1024}KB and report truncated + nextStartLine/nextOffset to continue. Bytes (images, fonts) come back base64. Find where to read with searchFiles.`,
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
-        cellId: { type: 'string' },
-        owner: { type: 'string' },
-        name: { type: 'string' },
+        ...CELL_REF_PROPS,
         path: { type: 'string' },
+        startLine: { type: 'number', description: 'First line, 1-based (text files)' },
+        endLine: { type: 'number', description: 'Last line, inclusive (default: as far as the budget allows)' },
+        offset: { type: 'number', description: 'Byte offset (any file)' },
+        length: { type: 'number', description: 'Byte count from offset' },
+        encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Force base64 output for text; bytes are always base64' },
       },
       required: ['path'],
       additionalProperties: false,
     },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        ...FILE_META_PROPS,
+        content: { type: 'string' },
+        encoding: { type: 'string', enum: ['utf8', 'base64'] },
+        range: {
+          type: 'object',
+          properties: {
+            startLine: { type: 'number' }, endLine: { type: 'number' }, totalLines: { type: 'number' },
+            offset: { type: 'number' }, length: { type: 'number' }, totalBytes: { type: 'number' },
+          },
+        },
+        truncated: { type: 'boolean', description: 'The budget cut the range short of what was asked' },
+        nextStartLine: { type: 'number' },
+        nextOffset: { type: 'number' },
+      },
+      required: ['path', 'content', 'encoding', 'version'],
+    },
     handler: readFile as RegisteredCommand,
   },
   listFiles: {
-    description: "List a cell's source files (its src/ tree).",
+    description: "List a cell's source files (its src/ tree). Narrow with prefix (e.g. client/hydro/) and/or glob (e.g. **/*.ts). view:'meta' returns per-file bytes, lines, contentType and version (paged, 100 by default); the default view returns paths. Page with limit + nextCursor. Always reports total and totalBytes for the filtered set.",
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
-      properties: { cellId: { type: 'string' }, owner: { type: 'string' }, name: { type: 'string' } },
+      properties: {
+        ...CELL_REF_PROPS,
+        prefix: { type: 'string', description: 'Only paths under this prefix, e.g. client/hydro/' },
+        glob: { type: 'string', description: 'Only paths matching, e.g. client/**/*.ts (no slash = basename anywhere, e.g. *.md)' },
+        limit: { type: 'number', description: `Page size (max ${LIST_MAX})` },
+        cursor: { type: 'string', description: 'nextCursor from the previous page' },
+        view: { type: 'string', enum: ['paths', 'meta'] },
+      },
       additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        files: {
+          type: 'array',
+          description: "Paths (view:'paths') or file metadata objects (view:'meta')",
+          items: { anyOf: [{ type: 'string' }, { type: 'object', properties: FILE_META_PROPS }] },
+        },
+        count: { type: 'number' },
+        total: { type: 'number' },
+        totalBytes: { type: 'number' },
+        nextCursor: { type: 'string' },
+      },
+      required: ['files'],
     },
     handler: listFiles as RegisteredCommand,
   },
+  searchFiles: {
+    description: "Search a cell's source tree server-side and return match locations (path, line, column, the matching line, optional context) — find a symbol in a large file without reading it, then readFile the lines around the hit. Literal by default; regex:true for a JS regex (matched per line). Narrow with prefix/glob. Binary files are skipped. Page with nextCursor.",
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...CELL_REF_PROPS,
+        query: { type: 'string', description: 'Text (or regex) to find' },
+        regex: { type: 'boolean', description: 'Treat query as a JavaScript regular expression' },
+        caseSensitive: { type: 'boolean', description: 'Default true' },
+        prefix: { type: 'string', description: 'Only paths under this prefix' },
+        glob: { type: 'string', description: 'Only paths matching, e.g. client/**/*.ts' },
+        contextLines: { type: 'number', description: 'Lines of context before/after each match (0–10, default 0)' },
+        maxMatches: { type: 'number', description: `Default ${SEARCH_DEFAULT_MATCHES}, max ${SEARCH_MAX_MATCHES}` },
+        cursor: { type: 'string', description: 'nextCursor from the previous page' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        matches: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' }, line: { type: 'number' }, column: { type: 'number' }, text: { type: 'string' },
+              before: { type: 'array', items: { type: 'string' } }, after: { type: 'array', items: { type: 'string' } },
+              version: VERSION_PROP,
+            },
+          },
+        },
+        count: { type: 'number' },
+        searchedFiles: { type: 'number' },
+        skippedBinary: { type: 'number' },
+        truncated: { type: 'boolean' },
+        nextCursor: { type: 'string' },
+      },
+      required: ['matches'],
+    },
+    handler: searchFiles as RegisteredCommand,
+  },
   deleteFile: {
-    description: "Delete one source file from a cell's src/ tree (redeploy to take effect).",
+    description: "Delete one source file from a cell's src/ tree. Pass ifVersion to delete only the version you read. Redeploy to take effect, or pass deploy:true to kick one off in the same call.",
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
-      properties: { cellId: { type: 'string' }, owner: { type: 'string' }, name: { type: 'string' }, path: { type: 'string' } },
+      properties: {
+        ...CELL_REF_PROPS,
+        path: { type: 'string' },
+        ifVersion: IF_VERSION,
+        deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after deleting (poll get for deploy.phase)' },
+      },
       required: ['path'],
       additionalProperties: false,
     },
+    resultSchema: MUTATION_RESULT,
     handler: deleteFile as RegisteredCommand,
   },
   deploy: {
@@ -2130,12 +2717,15 @@ const TOOLS: Record<string, ToolSpec> = {
 };
 
 /** Tool manifest for the gateway: name, schema, and the scope it should enforce. */
-function describeTools(): { tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown>; scope: string | null; kind: 'read' | 'act' }> } {
+function describeTools(): {
+  tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown>; resultSchema?: Record<string, unknown>; scope: string | null; kind: 'read' | 'act' }>;
+} {
   return {
     tools: Object.entries(TOOLS).map(([name, t]) => ({
       name,
       description: t.description,
       inputSchema: t.inputSchema,
+      ...(t.resultSchema ? { resultSchema: t.resultSchema } : {}),
       scope: t.scope,
       kind: t.kind,
     })),

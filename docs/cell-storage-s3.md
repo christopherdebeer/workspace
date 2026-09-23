@@ -62,10 +62,13 @@ touches S3) and needs **no permission-boundary / cell-template change**.
 ## The file vocabulary (on `read`/`act`)
 
 ```
-read("forge.listFiles", { cellId })                 → src/ tree (paths)
-read("forge.readFile",  { cellId, path })           → file content
-act ("forge.writeFile", { cellId, path, content, deploy? })   // writes src/, optional deploy
-act ("forge.deleteFile",{ cellId, path })
+read("forge.listFiles",   { cellId, prefix?, glob?, limit?, cursor?, view?: "paths"|"meta" })
+read("forge.readFile",    { cellId, path, startLine?, endLine?, offset?, length?, encoding? })
+read("forge.searchFiles", { cellId, query, regex?, caseSensitive?, prefix?, glob?, contextLines?, maxMatches?, cursor? })
+act ("forge.writeFile",   { cellId, path, content, encoding?, ifVersion?, ifAbsent?, deploy? })
+act ("forge.replaceInFile",{ cellId, path, old_str, new_str, replace_all?, expectedOccurrences?, matchIndex?, ifVersion?, dryRun?, deploy? })
+act ("forge.appendToFile",{ cellId, path, content, ifVersion?, ifExists?, ifAbsent?, deploy? })
+act ("forge.deleteFile",  { cellId, path, ifVersion?, deploy? })
 act ("forge.deploy",    { cellId })                 // bundle src/ → UpdateFunctionCode
 act ("forge.putData",   { cellId, key, content, user? })   // data/<caller>/…
 read("forge.getData",   { cellId, key, user? })
@@ -74,6 +77,36 @@ read("forge.listData",  { cellId, user? })
 A cell can also be targeted by `owner` + `name` instead of `cellId`. So a cell is
 authored, built, deployed, and given a blob store entirely through the gateway —
 no `cdk deploy`, no reconnect.
+
+## Versioned, ranged source access
+
+Source files are observable and mutable as versioned state, not opaque blobs:
+
+- **Every read reports a `version`** — `sha256:<hex>` of the stored bytes —
+  plus `bytes`, `lines`, `contentType`, `etag`, `modifiedAt`. `listFiles`
+  (`view:"meta"`) and `searchFiles` report it too.
+- **Every mutation accepts it back as `ifVersion`** and fails with
+  `VERSION_CONFLICT` (nothing written) if the file moved since it was read — the
+  same proof-of-read idea ADR-0066 gave workspace facts. `ifAbsent` (create
+  only) and `ifExists` (append never creates) guard typo'd paths.
+- **Read-modify-write commits are conditional PUTs** pinned to the S3 ETag that
+  was read (`If-Match`, or `If-None-Match: *` when the file was absent), so a
+  concurrent writer yields a conflict rather than a lost update even when the
+  caller passed no `ifVersion`. Deletes with `ifVersion` are check-then-delete
+  (S3 has no conditional DELETE on general-purpose buckets).
+- **`replaceInFile` refuses ambiguity before writing**: `old_str` must occur
+  exactly `expectedOccurrences` times (default 1 unless `replace_all` or
+  `matchIndex`); `dryRun` returns the prospective hunks.
+- **Ranged reads** (`startLine`/`endLine`, or `offset`/`length`) are capped at
+  ~48KB — under the substrate's 60KB read guard — and return `truncated` plus
+  `nextStartLine`/`nextOffset`. A read with no range is still the whole file.
+- **`searchFiles`** scans the tree server-side (binaries skipped by stored
+  content type) and returns `path:line:column` hits with optional context, so
+  finding a symbol in a 2.5 MB `main.ts` no longer means moving it through MCP.
+
+Not yet: a tree-level `sourceVersion`, batched `applyEdits`, `diff`,
+`validate`, and deploys pinned to a source revision (deploy still bundles
+whatever `src/` holds when the worker runs).
 
 ## Multi-file build = the "bundled imports" gap, closed
 

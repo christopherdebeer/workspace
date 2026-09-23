@@ -46,36 +46,63 @@ function memoryDocClient(): Record<string, unknown> {
   };
 }
 
-/** In-memory S3: keyed by `${Bucket}/${Key}`. */
-function memoryS3(): { store: Map<string, string | Buffer> } & Record<string, unknown> {
+/**
+ * In-memory S3: keyed by `${Bucket}/${Key}`. Models what the versioned file
+ * tools lean on: a per-write ETag, conditional PUT (`IfNoneMatch` param and
+ * the raw `If-Match` header set in a `build` listener, both answered with a
+ * 412 like S3), and the size/mtime a list returns.
+ */
+function memoryS3(): { store: Map<string, string | Buffer>; etags: Map<string, string> } & Record<string, unknown> {
   const store = new Map<string, string | Buffer>();
   const types = new Map<string, string>();
+  const etags = new Map<string, string>();
+  let generation = 0;
+  const preconditionFailed = (): Error => {
+    const e = new Error('At least one of the pre-conditions you specified did not hold') as Error & { code: string; statusCode: number };
+    e.code = 'PreconditionFailed';
+    e.statusCode = 412;
+    return e;
+  };
   return {
     store,
-    putObject: ({ Bucket, Key, Body, ContentType }: { Bucket: string; Key: string; Body: string | Buffer; ContentType?: string }) => ({
-      promise: async () => {
-        store.set(`${Bucket}/${Key}`, Body);
-        if (ContentType) types.set(`${Bucket}/${Key}`, ContentType);
-        return {};
-      },
-    }),
+    etags,
+    putObject: ({ Bucket, Key, Body, ContentType, IfNoneMatch }: { Bucket: string; Key: string; Body: string | Buffer; ContentType?: string; IfNoneMatch?: string }) => {
+      const httpRequest = { headers: {} as Record<string, string> };
+      const listeners: Array<() => void> = [];
+      return {
+        httpRequest,
+        on: (event: string, fn: () => void) => { if (event === 'build') listeners.push(fn); },
+        promise: async () => {
+          for (const fn of listeners) fn();
+          const k = `${Bucket}/${Key}`;
+          if (IfNoneMatch === '*' && store.has(k)) throw preconditionFailed();
+          const ifMatch = httpRequest.headers['If-Match'];
+          if (ifMatch !== undefined && etags.get(k) !== ifMatch) throw preconditionFailed();
+          store.set(k, Body);
+          if (ContentType) types.set(k, ContentType);
+          const etag = `"g${++generation}"`;
+          etags.set(k, etag);
+          return { ETag: etag };
+        },
+      };
+    },
     getObject: ({ Bucket, Key }: { Bucket: string; Key: string }) => ({
       promise: async () => {
         const k = `${Bucket}/${Key}`;
         if (!store.has(k)) { const e = new Error('NoSuchKey') as Error & { code: string }; e.code = 'NoSuchKey'; throw e; }
-        return { Body: store.get(k), ContentType: types.get(k) };
+        return { Body: store.get(k), ContentType: types.get(k), ETag: etags.get(k), LastModified: new Date(0) };
       },
     }),
     listObjectsV2: ({ Bucket, Prefix }: { Bucket: string; Prefix?: string }) => ({
       promise: async () => ({
         Contents: [...store.keys()]
           .filter((k) => k.startsWith(`${Bucket}/${Prefix ?? ''}`))
-          .map((k) => ({ Key: k.slice(Bucket.length + 1) })),
+          .map((k) => ({ Key: k.slice(Bucket.length + 1), Size: Buffer.byteLength(store.get(k) as string | Buffer), ETag: etags.get(k) })),
         IsTruncated: false,
       }),
     }),
     deleteObject: ({ Bucket, Key }: { Bucket: string; Key: string }) => ({
-      promise: async () => { store.delete(`${Bucket}/${Key}`); return {}; },
+      promise: async () => { store.delete(`${Bucket}/${Key}`); etags.delete(`${Bucket}/${Key}`); return {}; },
     }),
   };
 }
@@ -240,7 +267,9 @@ describe('forge: cell common layer (S3 files + data)', () => {
     const read = await call<{ content: string; encoding?: string }>(
       'alice', 'readFile', { cellId, path: 'lib/util.ts' },
     );
-    expect(read.result!.encoding).toBeUndefined();
+    // Text reports itself as text now (every read carries its encoding), and
+    // is never base64 — the one thing cell-sync's pull branches on.
+    expect(read.result!.encoding).toBe('utf8');
     expect(read.result!.content).toBe(src);
   });
 
@@ -298,9 +327,16 @@ describe('forge: cell common layer (S3 files + data)', () => {
     const cellId = await makeCell('alice');
     await call('alice', 'writeFile', { cellId, path: 'lib/u.ts', content: 'const a = 1;\nconst b = 1;\nexport { a, b };' });
 
-    // First-occurrence by default, with ambiguity visible via `occurrences`.
+    // Ambiguity is refused BEFORE writing (expectedOccurrences defaults to 1)…
+    const ambiguous = await call('alice', 'replaceInFile', { cellId, path: 'lib/u.ts', old_str: '= 1;', new_str: '= 2;' });
+    expect(ambiguous.ok).toBe(false);
+    expect(ambiguous.error).toMatch(/occurs 2 times.*expected 1.*lines 1, 2.*nothing was written/);
+    expect((await call<{ content: string }>('alice', 'readFile', { cellId, path: 'lib/u.ts' })).result!.content)
+      .toBe('const a = 1;\nconst b = 1;\nexport { a, b };');
+
+    // …and matchIndex picks one deliberately.
     const first = await call<{ replacements: number; occurrences: number }>('alice', 'replaceInFile', {
-      cellId, path: 'lib/u.ts', old_str: '= 1;', new_str: '= 2;',
+      cellId, path: 'lib/u.ts', old_str: '= 1;', new_str: '= 2;', matchIndex: 0,
     });
     expect(first.ok).toBe(true);
     expect(first.result!).toMatchObject({ replacements: 1, occurrences: 2 });
@@ -326,6 +362,195 @@ describe('forge: cell common layer (S3 files + data)', () => {
     });
     expect(fused.ok).toBe(true);
     expect(fused.result!.deploy.phase).toBe('DEPLOYING');
+  });
+
+  describe('versioned, ranged source access', () => {
+    type ReadResult = {
+      content: string; encoding: string; version: string; bytes: number; lines: number;
+      range?: { startLine: number; endLine: number; totalLines: number; offset?: number; length?: number };
+      truncated?: boolean; nextStartLine?: number; nextOffset?: number;
+    };
+    const big = Array.from({ length: 5000 }, (_, i) => `line ${i + 1}: ${'x'.repeat(40)}`).join('\n') + '\n';
+
+    it('readFile reports metadata and a sha256 version, and reads line ranges', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'client/main.ts', content: big });
+
+      const whole = (await call<ReadResult>('alice', 'readFile', { cellId, path: 'client/main.ts' })).result!;
+      expect(whole.content).toBe(big);
+      expect(whole.version).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(whole.lines).toBe(5000);
+      expect(whole.bytes).toBe(Buffer.byteLength(big));
+
+      const r = (await call<ReadResult>('alice', 'readFile', { cellId, path: 'client/main.ts', startLine: 1200, endLine: 1202 })).result!;
+      expect(r.content).toBe(`line 1200: ${'x'.repeat(40)}\nline 1201: ${'x'.repeat(40)}\nline 1202: ${'x'.repeat(40)}\n`);
+      expect(r.range).toEqual({ startLine: 1200, endLine: 1202, totalLines: 5000 });
+      expect(r.truncated).toBe(false);
+      expect(r.nextStartLine).toBe(1203);
+      expect(r.version).toBe(whole.version);
+
+      // An open-ended range stops at the byte budget, on a line boundary, and
+      // says where to continue — the thing whole:true could never do.
+      const open = (await call<ReadResult>('alice', 'readFile', { cellId, path: 'client/main.ts', startLine: 1 })).result!;
+      expect(Buffer.byteLength(open.content)).toBeLessThanOrEqual(48 * 1024);
+      expect(open.content.endsWith('\n')).toBe(true);
+      expect(open.nextStartLine).toBe(open.range!.endLine + 1);
+
+      const tail = (await call<ReadResult>('alice', 'readFile', { cellId, path: 'client/main.ts', startLine: 4999 })).result!;
+      expect(tail.range!.endLine).toBe(5000);
+      expect(tail.nextStartLine).toBeUndefined();
+
+      const bytes = (await call<ReadResult>('alice', 'readFile', { cellId, path: 'client/main.ts', offset: 0, length: 6 })).result!;
+      expect(bytes.content).toBe('line 1');
+      expect(bytes.nextOffset).toBe(6);
+
+      const past = await call('alice', 'readFile', { cellId, path: 'client/main.ts', startLine: 9999 });
+      expect(past.ok).toBe(false);
+    });
+
+    it('listFiles filters by prefix/glob, pages with a cursor, and reports metadata', async () => {
+      const cellId = await makeCell('alice');
+      for (const p of ['client/hydro/a.ts', 'client/hydro/b.ts', 'client/hydro/c.md', 'client/main.ts', 'README.md']) {
+        await call('alice', 'writeFile', { cellId, path: p, content: `// ${p}\n` });
+      }
+      type Page = { files: string[]; total: number; count: number; totalBytes: number; nextCursor?: string };
+      const hydro = (await call<Page>('alice', 'listFiles', { cellId, prefix: 'client/hydro/' })).result!;
+      expect(hydro.files).toEqual(['client/hydro/a.ts', 'client/hydro/b.ts', 'client/hydro/c.md']);
+      expect((await call<Page>('alice', 'listFiles', { cellId, glob: 'client/**/*.ts' })).result!.files)
+        .toEqual(['client/hydro/a.ts', 'client/hydro/b.ts', 'client/main.ts']);
+      expect((await call<Page>('alice', 'listFiles', { cellId, glob: '*.md' })).result!.files)
+        .toEqual(['README.md', 'client/hydro/c.md']);
+
+      const p1 = (await call<Page>('alice', 'listFiles', { cellId, limit: 4 })).result!;
+      expect(p1).toMatchObject({ count: 4, total: 6 });
+      const p2 = (await call<Page>('alice', 'listFiles', { cellId, limit: 4, cursor: p1.nextCursor })).result!;
+      expect(p2.nextCursor).toBeUndefined();
+      expect([...p1.files, ...p2.files]).toEqual(['README.md', 'client/hydro/a.ts', 'client/hydro/b.ts', 'client/hydro/c.md', 'client/main.ts', 'index.ts']);
+
+      type Meta = { files: Array<{ path: string; bytes: number; lines: number; version: string; binary: boolean }> };
+      const meta = (await call<Meta>('alice', 'listFiles', { cellId, prefix: 'client/main', view: 'meta' })).result!;
+      const read = (await call<ReadResult>('alice', 'readFile', { cellId, path: 'client/main.ts' })).result!;
+      expect(meta.files).toEqual([expect.objectContaining({ path: 'client/main.ts', lines: 1, binary: false, version: read.version, bytes: read.bytes })]);
+    });
+
+    it('searchFiles finds matches server-side, with context, skipping binaries, and pages', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'client/main.ts', content: big.replace('line 3001:', 'function setDepthOfField() {} // line 3001:') });
+      await call('alice', 'writeFile', { cellId, path: 'client/dof.ts', content: 'import { setDepthOfField } from "./main";\n' });
+      await call('alice', 'writeFile', { cellId, path: 'static/x.png', content: Buffer.from('setDepthOfField').toString('base64'), encoding: 'base64' });
+
+      type Search = { matches: Array<{ path: string; line: number; column: number; text: string; before?: string[]; after?: string[] }>; searchedFiles: number; skippedBinary: number; truncated: boolean; nextCursor?: string };
+      const res = (await call<Search>('alice', 'searchFiles', { cellId, query: 'setDepthOfField', contextLines: 1 })).result!;
+      expect(res.matches.map((m) => [m.path, m.line])).toEqual([['client/dof.ts', 1], ['client/main.ts', 3001]]);
+      expect(res.matches[1].column).toBe(10);
+      expect(res.matches[1].before).toEqual([`line 3000: ${'x'.repeat(40)}`]);
+      expect(res.skippedBinary).toBe(1);
+      expect(res.truncated).toBe(false);
+
+      const ci = (await call<Search>('alice', 'searchFiles', { cellId, query: 'SETDEPTH', caseSensitive: false, glob: 'client/main.ts' })).result!;
+      expect(ci.matches).toHaveLength(1);
+      const re = (await call<Search>('alice', 'searchFiles', { cellId, query: '^line 49\\d\\d:', regex: true, maxMatches: 60 })).result!;
+      expect(re.matches).toHaveLength(60);
+      expect(re.truncated).toBe(true);
+      const more = (await call<Search>('alice', 'searchFiles', { cellId, query: '^line 49\\d\\d:', regex: true, maxMatches: 60, cursor: re.nextCursor })).result!;
+      expect(more.matches[0].line).toBe(4960);
+      expect(more.matches).toHaveLength(40);
+      expect(more.truncated).toBe(false);
+
+      expect((await call('alice', 'searchFiles', { cellId, query: '(', regex: true })).error).toMatch(/invalid regex/);
+      expect((await call('mallory', 'searchFiles', { cellId, query: 'x' })).ok).toBe(false);
+    });
+
+    it('mutations honour ifVersion: a stale version conflicts and writes nothing', async () => {
+      const cellId = await makeCell('alice');
+      const wrote = (await call<{ version: string }>('alice', 'writeFile', { cellId, path: 'lib/u.ts', content: 'const a = 1;\n' })).result!;
+      const v1 = wrote.version;
+      expect((await call<ReadResult>('alice', 'readFile', { cellId, path: 'lib/u.ts' })).result!.version).toBe(v1);
+
+      // Another agent edits the file…
+      const other = (await call<{ version: string; previousVersion: string }>('alice', 'replaceInFile', {
+        cellId, path: 'lib/u.ts', old_str: 'a = 1', new_str: 'a = 2', ifVersion: v1,
+      })).result!;
+      expect(other.previousVersion).toBe(v1);
+      const v2 = other.version;
+
+      // …so every mutation still holding v1 is refused, and the file is intact.
+      for (const [cmd, extra] of [
+        ['replaceInFile', { old_str: 'a = 2', new_str: 'a = 3' }],
+        ['appendToFile', { content: '// more\n' }],
+        ['writeFile', { content: 'clobbered' }],
+        ['deleteFile', {}],
+      ] as const) {
+        const res = await call('alice', cmd, { cellId, path: 'lib/u.ts', ifVersion: v1, ...extra });
+        expect(res.ok).toBe(false);
+        expect(res.error).toMatch(/VERSION_CONFLICT.*expected sha256:.*found sha256:/);
+      }
+      const now = (await call<ReadResult>('alice', 'readFile', { cellId, path: 'lib/u.ts' })).result!;
+      expect(now.content).toBe('const a = 2;\n');
+      expect(now.version).toBe(v2);
+
+      expect((await call('alice', 'deleteFile', { cellId, path: 'lib/u.ts', ifVersion: v2 })).ok).toBe(true);
+    });
+
+    it('a concurrent write between read and commit is a conflict, not a lost update', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'lib/u.ts', content: 'const a = 1;\n' });
+      // Simulate a racing writer: bump the object's generation after the
+      // edit's GET and before its PUT, by intercepting the next getObject.
+      const s3 = s3mem as unknown as { getObject: (p: { Bucket: string; Key: string }) => { promise: () => Promise<unknown> } };
+      const realGet = s3.getObject;
+      s3.getObject = (p) => ({
+        promise: async () => {
+          const res = await realGet(p).promise();
+          s3mem.etags.set(`${p.Bucket}/${p.Key}`, '"racer"');
+          s3.getObject = realGet;
+          return res;
+        },
+      });
+      const res = await call('alice', 'replaceInFile', { cellId, path: 'lib/u.ts', old_str: 'a = 1', new_str: 'a = 2' });
+      expect(res.ok).toBe(false);
+      expect(res.error).toMatch(/VERSION_CONFLICT.*concurrent write/);
+    });
+
+    it('ifAbsent / ifExists guard creation, and text edits refuse binary files', async () => {
+      const cellId = await makeCell('alice');
+      expect((await call('alice', 'writeFile', { cellId, path: 'new.ts', content: 'x', ifAbsent: true })).ok).toBe(true);
+      const again = await call('alice', 'writeFile', { cellId, path: 'new.ts', content: 'y', ifAbsent: true });
+      expect(again.error).toMatch(/VERSION_CONFLICT.*expected absent/);
+
+      const typo = await call('alice', 'appendToFile', { cellId, path: 'nwe.ts', content: 'z', ifExists: true });
+      expect(typo.error).toMatch(/not found/);
+      expect((await call<{ files: string[] }>('alice', 'listFiles', { cellId })).result!.files).not.toContain('nwe.ts');
+
+      await call('alice', 'writeFile', { cellId, path: 'static/x.png', content: Buffer.from([0x89, 0x50]).toString('base64'), encoding: 'base64' });
+      expect((await call('alice', 'appendToFile', { cellId, path: 'static/x.png', content: 'oops' })).error).toMatch(/stored as bytes/);
+      expect((await call('alice', 'replaceInFile', { cellId, path: 'static/x.png', old_str: 'P', new_str: 'Q' })).error).toMatch(/stored as bytes/);
+    });
+
+    it('replaceInFile dryRun shows the hunk and writes nothing; expectedOccurrences guards replace_all', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'lib/u.ts', content: 'a\nb\nupdateWater();\nc\nd\n' });
+      type Dry = { dryRun: boolean; version: string; nextVersion: string; hunks: Array<{ line: number; before: string; after: string }> };
+      const dry = (await call<Dry>('alice', 'replaceInFile', { cellId, path: 'lib/u.ts', old_str: 'updateWater();', new_str: 'updateWater(dt);\nsettle();', dryRun: true })).result!;
+      expect(dry.hunks).toEqual([{ line: 3, before: 'a\nb\nupdateWater();\nc\nd', after: 'a\nb\nupdateWater(dt);\nsettle();\nc\nd' }]);
+      expect((await call<ReadResult>('alice', 'readFile', { cellId, path: 'lib/u.ts' })).result!.version).toBe(dry.version);
+
+      const wrong = await call('alice', 'replaceInFile', { cellId, path: 'lib/u.ts', old_str: '\n', new_str: '\r\n', replace_all: true, expectedOccurrences: 3 });
+      expect(wrong.error).toMatch(/occurs 5 times in lib\/u.ts \(expected 3;/);
+    });
+
+    it('advertises the new parameters and result schemas (writeFile binary included)', async () => {
+      type Tools = { tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> }; resultSchema?: unknown }> };
+      const { tools } = (await call<Tools>('alice', 'describeTools', {})).result!;
+      const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+      expect(Object.keys(byName.writeFile.inputSchema.properties)).toEqual(expect.arrayContaining(['encoding', 'ifVersion', 'ifAbsent']));
+      expect(Object.keys(byName.readFile.inputSchema.properties)).toEqual(expect.arrayContaining(['startLine', 'endLine', 'offset', 'length']));
+      expect(Object.keys(byName.replaceInFile.inputSchema.properties)).toEqual(expect.arrayContaining(['expectedOccurrences', 'matchIndex', 'ifVersion', 'dryRun']));
+      expect(byName.searchFiles).toBeDefined();
+      for (const n of ['readFile', 'listFiles', 'searchFiles', 'writeFile', 'replaceInFile', 'appendToFile', 'deleteFile']) {
+        expect(byName[n].resultSchema).toBeDefined();
+      }
+    });
   });
 
   it('appendToFile extends (or creates) a source file', async () => {
