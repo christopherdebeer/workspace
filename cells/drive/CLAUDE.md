@@ -19188,3 +19188,20 @@ ink on the canvas measured as armed-against-disarmed so the difference is the
 preview and nothing else — with the tile grid gone the disarmed floor is
 exactly **0**). `devtools/lab-phone.test.mjs` holds the bar, the dial and an
 undo/redo round trip through the chips.
+
+## The deck was tried and reverted — polish the matrix instead
+
+Between 409c699 and 12bd9ed the canvas control matrix was replaced by a DOM
+"deck" of layout tabs and sheets, regrouped three times from the seat, and
+deployed five times. Reviewed against the pre-deck build at the same spot, the
+net change was small (a clean chart; VIEW grouping the inspection views) for
+~1,400 lines, and it cost one-tap controls (map heading-up, WPT, PAUSE). It was
+reverted whole in e8f3ade and deployed as v1790149733680; `client/hud-deck.ts`
+was deleted from the cell with `cells.deleteFile` so a pull cannot resurrect it.
+
+The lesson for the next HUD pass: **refine what exists, in small steps, one
+visible change a commit** — don't restructure the grouping to get a polish.
+The asks that were valid on their own and are still open against the matrix:
+the chart should not wear the tile-debug header/grid and the layer chip key by
+default; the MENU chip always says MENU; the dock loses its text label and chip
+hint; cells are icon + state + one signal, no words.
