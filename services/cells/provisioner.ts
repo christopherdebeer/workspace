@@ -286,13 +286,19 @@ export async function getObject(bucket: string, key: string): Promise<string | n
 }
 
 /** Read an object's raw bytes + content type (binary blobs), or `null`. */
-export async function getObjectRaw(bucket: string, key: string): Promise<{ body: Buffer; contentType: string } | null> {
+export async function getObjectRaw(
+  bucket: string,
+  key: string,
+): Promise<{ body: Buffer; contentType: string; etag?: string; lastModified?: string } | null> {
   try {
     const res = await s3().getObject({ Bucket: bucket, Key: key }).promise();
     const body = res.Body;
     return {
       body: body == null ? Buffer.alloc(0) : typeof body === 'string' ? Buffer.from(body) : Buffer.from(body as Uint8Array),
       contentType: res.ContentType ?? 'application/octet-stream',
+      // The S3 generation token: what a conditional put (`putObjectIf`) pins.
+      etag: res.ETag,
+      lastModified: res.LastModified ? new Date(res.LastModified).toISOString() : undefined,
     };
   } catch (err) {
     const e = err as { code?: string; statusCode?: number };
@@ -313,6 +319,111 @@ export async function listObjects(bucket: string, prefix: string): Promise<strin
     token = res.IsTruncated ? res.NextContinuationToken : undefined;
   } while (token);
   return keys;
+}
+
+/** One listed object: key plus the size/mtime/etag S3 returns for free with a list. */
+export interface ListedObject {
+  key: string;
+  size: number;
+  lastModified?: string;
+  etag?: string;
+}
+
+/** List objects under a prefix WITH their metadata (paginated to completion). */
+export async function listObjectsMeta(bucket: string, prefix: string): Promise<ListedObject[]> {
+  const out: ListedObject[] = [];
+  let token: string | undefined;
+  do {
+    const res = await s3()
+      .listObjectsV2({ Bucket: bucket, Prefix: prefix, ContinuationToken: token })
+      .promise();
+    for (const o of res.Contents ?? []) {
+      if (!o.Key) continue;
+      out.push({
+        key: o.Key,
+        size: o.Size ?? 0,
+        lastModified: o.LastModified ? new Date(o.LastModified).toISOString() : undefined,
+        etag: o.ETag,
+      });
+    }
+    token = res.IsTruncated ? res.NextContinuationToken : undefined;
+  } while (token);
+  return out;
+}
+
+/** A conditional write lost the race: the object is not the one that was read. */
+export class PreconditionFailedError extends Error {
+  constructor(key: string) {
+    super(`object changed concurrently: ${key}`);
+    this.name = 'PreconditionFailedError';
+  }
+}
+
+/**
+ * Conditional PUT — the write half of read-modify-write without a lost update.
+ *
+ * `ifMatch` (an ETag from a read) succeeds only if the object is still that
+ * generation; `ifNoneMatch: '*'` succeeds only if the object does not exist.
+ * S3 enforces both server-side, so two agents editing the same file can no
+ * longer silently clobber each other — the second write gets a 412.
+ *
+ * aws-sdk v2's S3 model knows `IfNoneMatch` but predates `If-Match` on
+ * PutObject, so that header is set on the raw request before signing.
+ */
+export async function putObjectIf(
+  bucket: string,
+  key: string,
+  body: string | Buffer,
+  contentType: string,
+  cond: { ifMatch?: string; ifNoneMatch?: '*' },
+): Promise<{ etag?: string }> {
+  const req = s3().putObject({
+    Bucket: bucket,
+    Key: key,
+    Body: body,
+    ContentType: contentType,
+    ...(cond.ifNoneMatch ? { IfNoneMatch: cond.ifNoneMatch } : {}),
+  });
+  if (cond.ifMatch) {
+    const etag = cond.ifMatch;
+    req.on('build', () => {
+      req.httpRequest.headers['If-Match'] = etag;
+    });
+  }
+  try {
+    const res = await req.promise();
+    return { etag: res.ETag };
+  } catch (err) {
+    const e = err as { code?: string; statusCode?: number };
+    // 412 PreconditionFailed: generation mismatch / already exists.
+    // 409 ConditionalRequestConflict: a concurrent conditional write won.
+    if (e.statusCode === 412 || e.statusCode === 409 || e.code === 'PreconditionFailed' || e.code === 'ConditionalRequestConflict') {
+      throw new PreconditionFailedError(key);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Server-side copy pinned to the source generation: succeeds only if the
+ * source object still has ETag `ifMatch`, so a copy can never capture content
+ * other than the version that was hashed. No bytes pass through the Lambda.
+ */
+export async function copyObjectIf(bucket: string, fromKey: string, toKey: string, ifMatch: string): Promise<void> {
+  try {
+    await s3()
+      .copyObject({
+        Bucket: bucket,
+        Key: toKey,
+        CopySource: encodeURI(`${bucket}/${fromKey}`),
+        CopySourceIfMatch: ifMatch,
+      })
+      .promise();
+  } catch (err) {
+    const e = err as { code?: string; statusCode?: number };
+    if (e.statusCode === 412 || e.code === 'PreconditionFailed') throw new PreconditionFailedError(fromKey);
+    throw err;
+  }
 }
 
 /** Presigned PUT URL — the browser uploads bytes straight to S3. */

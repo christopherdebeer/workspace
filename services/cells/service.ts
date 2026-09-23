@@ -43,10 +43,33 @@ import {
   deleteObject,
   presignPut,
   updateFunctionCode,
+  listObjectsMeta,
+  putObjectIf,
+  PreconditionFailedError,
 } from './provisioner';
 import type { InvokeCellResult } from './provisioner';
 import { srcKey, srcPrefix, buildKey, dataKey, dataPrefix, cleanPath } from './cell-files';
 import { extractTarGz } from './tar';
+import {
+  contentVersion,
+  countLines,
+  sliceLines,
+  pathMatcher,
+  compileQuery,
+  searchText,
+  lineAt,
+  encodeCursor,
+  decodeCursor,
+  RANGE_MAX_BYTES,
+  isTextType,
+  mapLimit,
+} from './source-text';
+import type { SearchMatch } from './source-text';
+import { TreeStore, TreeConflictError, isTreeVersion, treeVersionOf, LOCK_TTL_MS } from './source-tree';
+import type { Tree, Journal } from './source-tree';
+import { planPatch, planReplace, touchedPaths } from './source-patch';
+import type { PatchChange, BaseFile } from './source-patch';
+import { diffText } from './source-diff';
 
 /** Parse a relative window like "15m", "2h", "1d" into milliseconds. */
 function sinceToMs(since: string | undefined): number {
@@ -399,6 +422,7 @@ async function getCell(input: CellRefInput, ctx: ServiceContext): Promise<unknow
     grants: record.grants,
     ...(record.toolGrants ? { toolGrants: record.toolGrants } : {}),
     ...(record.deploy ? { deploy: record.deploy } : {}),
+    ...(record.lastDeployed ? { lastDeployed: record.lastDeployed } : {}),
     description: record.description,
     address: cellAddress(record.owner, record.name),
     createdAt: record.createdAt,
@@ -796,6 +820,10 @@ interface WriteFileInput extends CellRef {
    * write, which the ~1MB request-signing cliff already bounds it to.
    */
   encoding?: 'utf8' | 'base64';
+  /** Proof of read: write only if the file is still at this `version`. */
+  ifVersion?: string;
+  /** Create only: refuse if the file already exists (a typo'd path can't clobber). */
+  ifAbsent?: boolean;
   deploy?: boolean;
 }
 
@@ -816,9 +844,6 @@ const BINARY_TYPES: Record<string, string> = {
 };
 const binaryTypeFor = (path: string): string =>
   BINARY_TYPES[path.slice(path.lastIndexOf('.') + 1).toLowerCase()] ?? 'application/octet-stream';
-/** Text is anything we did not store as bytes — the content type is the record. */
-const isTextType = (contentType: string): boolean =>
-  contentType.startsWith('text/') || contentType.startsWith('application/json');
 
 /**
  * Announce a source mutation so the cell's substrate pointer fact tracks the
@@ -838,6 +863,102 @@ async function emitFilesChanged(ctx: ServiceContext, record: CellRecord, op: str
   });
 }
 
+// ─── Versioned source access ─────────────────────────────────────────
+//
+// Every read reports the file's content `version` (sha256 of the stored
+// bytes); every mutation accepts it back as `ifVersion` and refuses — with
+// VERSION_CONFLICT and nothing written — if the file moved in between. The
+// read-modify-write ops (replace, append, and any write with a precondition)
+// also commit with a conditional PUT pinned to the S3 ETag they read, so even
+// a caller that passes no `ifVersion` can no longer lose a concurrent edit:
+// the loser gets a conflict instead of silently overwriting the winner.
+
+const TEXT_CONTENT_TYPE = 'text/plain; charset=utf-8';
+
+interface SourceObject {
+  body: Buffer;
+  contentType: string;
+  etag?: string;
+  lastModified?: string;
+  version: string;
+  binary: boolean;
+}
+
+async function readSource(bucket: string, cellId: string, path: string): Promise<SourceObject | null> {
+  const raw = await getObjectRaw(bucket, srcKey(cellId, path));
+  if (raw === null) return null;
+  return { ...raw, version: contentVersion(raw.body), binary: !isTextType(raw.contentType) };
+}
+
+/** The metadata half of a file — what `readFile` and `listFiles(view:"meta")` report. */
+function fileMeta(path: string, obj: SourceObject, text?: string): Record<string, unknown> {
+  return {
+    path,
+    contentType: obj.contentType,
+    binary: obj.binary,
+    bytes: obj.body.length,
+    ...(obj.binary ? {} : { lines: countLines(text ?? obj.body.toString('utf-8')) }),
+    version: obj.version,
+    ...(obj.etag ? { etag: obj.etag } : {}),
+    ...(obj.lastModified ? { modifiedAt: obj.lastModified } : {}),
+  };
+}
+
+function versionConflict(path: string, expected: string, actual: string): Error {
+  return new Error(
+    `VERSION_CONFLICT on ${path}: expected ${expected}, found ${actual} — nothing was written. ` +
+      're-read the file (readFile returns `version`) and retry against what is there now',
+  );
+}
+
+interface Preconditions {
+  ifVersion?: string;
+  ifAbsent?: boolean;
+  ifExists?: boolean;
+}
+
+/** Validate preconditions against the file as read. Throws; writes nothing. */
+function checkPreconditions(path: string, current: SourceObject | null, p: Preconditions): void {
+  if (p.ifVersion !== undefined && typeof p.ifVersion !== 'string') throw new Error('ifVersion must be a string');
+  if (p.ifAbsent && (p.ifVersion !== undefined || p.ifExists)) throw new Error('ifAbsent cannot be combined with ifVersion or ifExists');
+  if (p.ifAbsent && current) throw versionConflict(path, 'absent', current.version);
+  if (p.ifExists && !current) throw new Error(`File not found: ${path} (ifExists)`);
+  if (p.ifVersion !== undefined && current?.version !== p.ifVersion) {
+    throw versionConflict(path, p.ifVersion, current?.version ?? 'absent');
+  }
+}
+
+/**
+ * Commit a read-modify-write: a PUT that only lands if the object is still the
+ * generation `current` was read at (or still absent, if it was absent).
+ */
+async function commitSource(
+  bucket: string,
+  cellId: string,
+  path: string,
+  body: string | Buffer,
+  contentType: string,
+  current: SourceObject | null,
+): Promise<void> {
+  const key = srcKey(cellId, path);
+  try {
+    if (!current) await putObjectIf(bucket, key, body, contentType, { ifNoneMatch: '*' });
+    else if (current.etag) await putObjectIf(bucket, key, body, contentType, { ifMatch: current.etag });
+    else await putObject(bucket, key, body, contentType);
+  } catch (err) {
+    if (err instanceof PreconditionFailedError) {
+      throw versionConflict(path, current?.version ?? 'absent', 'a concurrent write');
+    }
+    throw err;
+  }
+}
+
+/** The text of a source object, refusing bytes (a text edit would mangle them). */
+function sourceText(path: string, obj: SourceObject, op: string): string {
+  if (obj.binary) throw new Error(`${op} refuses ${path}: it is stored as bytes (${obj.contentType}); use writeFile with encoding:'base64'`);
+  return obj.body.toString('utf-8');
+}
+
 async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.path) throw new Error('path is required');
@@ -846,6 +967,9 @@ async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<un
     throw new Error("encoding must be 'utf8' or 'base64'");
   }
   const { record, bucket, env } = await resolveAuthorized(input, user);
+  const path = cleanPath(input.path);
+  let body: string | Buffer;
+  let contentType: string;
   if (input.encoding === 'base64') {
     // ROUND-TRIP THE DECODE BEFORE STORING. `Buffer.from(s,'base64')` never
     // throws — it stops at the first character it cannot use and returns what
@@ -854,16 +978,39 @@ async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<un
     // and comparing is the cheap way to refuse it here instead.
     const bytes = Buffer.from(input.content, 'base64');
     if (bytes.toString('base64').replace(/=+$/, '') !== input.content.replace(/[\s=]+$/g, '').replace(/\s/g, '')) {
-      throw new Error(`content is not valid base64 for ${cleanPath(input.path)}`);
+      throw new Error(`content is not valid base64 for ${path}`);
     }
-    await putObject(bucket, srcKey(record.cellId, input.path), bytes, binaryTypeFor(input.path));
+    body = bytes;
+    contentType = binaryTypeFor(path);
   } else {
-    await putObject(bucket, srcKey(record.cellId, input.path), input.content, 'text/plain; charset=utf-8');
+    body = input.content;
+    contentType = TEXT_CONTENT_TYPE;
   }
-  ctx.logger.info('cell file written', { cellId: record.cellId, path: cleanPath(input.path) });
-  if (input.deploy) return requestDeploy(record, env, ctx);
-  await emitFilesChanged(ctx, record, 'write', [cleanPath(input.path)]);
-  return { ok: true, cellId: record.cellId, path: cleanPath(input.path) };
+  let previousVersion: string | undefined;
+  if (input.ifVersion !== undefined || input.ifAbsent) {
+    // A precondition means read, check, then commit pinned to what was read.
+    const current = await readSource(bucket, record.cellId, path);
+    checkPreconditions(path, current, { ifVersion: input.ifVersion, ifAbsent: input.ifAbsent });
+    previousVersion = current?.version;
+    await commitSource(bucket, record.cellId, path, body, contentType, current);
+  } else {
+    await putObject(bucket, srcKey(record.cellId, path), body, contentType);
+  }
+  ctx.logger.info('cell file written', { cellId: record.cellId, path });
+  const result = {
+    ok: true as const,
+    cellId: record.cellId,
+    path,
+    version: contentVersion(body),
+    ...(previousVersion ? { previousVersion } : {}),
+    bytes: Buffer.byteLength(body),
+  };
+  if (input.deploy) {
+    const started = await requestDeploy(record, env, ctx);
+    return { ...result, deploying: true, deploy: started.deploy, message: started.message };
+  }
+  await emitFilesChanged(ctx, record, 'write', [path]);
+  return result;
 }
 
 interface ImportSrcInput extends CellRef {
@@ -918,17 +1065,48 @@ interface ReplaceInFileInput extends CellRef {
   old_str: string;
   /** The replacement (empty string deletes). */
   new_str: string;
-  /** Replace every occurrence (default: first only). */
+  /** Replace every occurrence (default: exactly one — see expectedOccurrences). */
   replace_all?: boolean;
+  /**
+   * How many times old_str must occur for the edit to proceed. Checked BEFORE
+   * anything is written. Defaults to 1 unless replace_all or matchIndex is set,
+   * so an ambiguous old_str is refused instead of silently editing the first hit.
+   */
+  expectedOccurrences?: number;
+  /** Replace only the Nth occurrence (0-based) — for deliberately ambiguous edits. */
+  matchIndex?: number;
+  /** Proof of read: edit only if the file is still at this `version`. */
+  ifVersion?: string;
+  /** Validate and return the prospective hunk(s) without writing. */
+  dryRun?: boolean;
   /** Fused: kick off an async deploy in the same call (poll get for the phase). */
   deploy?: boolean;
 }
 
+/** A few lines either side of an edit, before and after — what a dry run shows. */
+function hunkAt(before: string, after: string, offset: number, oldLen: number, newLen: number, context = 2): Record<string, unknown> {
+  const line = lineAt(before, offset);
+  const oldEndLine = lineAt(before, offset + oldLen);
+  const newEndLine = lineAt(after, offset + newLen);
+  const b = before.split('\n');
+  const a = after.split('\n');
+  const from = Math.max(1, line - context);
+  return {
+    line,
+    before: b.slice(from - 1, Math.min(b.length, oldEndLine + context)).join('\n'),
+    after: a.slice(from - 1, Math.min(a.length, newEndLine + context)).join('\n'),
+  };
+}
+
 /**
  * Targeted edit on a cell source file — exact string replacement without
- * resending the whole file (the Val Town `replace_in_file` contract). The
- * response reports `occurrences` so a caller can detect ambiguity; `deploy`
- * fuses edit + rebuild into one round trip.
+ * resending the whole file (the Val Town `replace_in_file` contract).
+ *
+ * Ambiguity is refused, not reported after the fact: `occurrences` used to come
+ * back AFTER the first hit had already been rewritten, which is too late to
+ * matter. Now the occurrence count is a precondition (`expectedOccurrences`,
+ * default 1), checked with `ifVersion` before any write, and the commit is
+ * pinned to the object generation that was read.
  */
 async function replaceInFile(input: ReplaceInFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
@@ -936,120 +1114,904 @@ async function replaceInFile(input: ReplaceInFileInput, ctx: ServiceContext): Pr
   if (typeof input?.old_str !== 'string' || input.old_str.length === 0) throw new Error('old_str (non-empty string) is required');
   if (typeof input?.new_str !== 'string') throw new Error('new_str (string, may be empty) is required');
   const { record, bucket, env } = await resolveAuthorized(input, user);
-  const key = srcKey(record.cellId, input.path);
-  const content = await getObject(bucket, key);
-  if (content === null) throw new Error(`File not found: ${cleanPath(input.path)}`);
-  const occurrences = content.split(input.old_str).length - 1;
-  if (occurrences === 0) {
-    throw new Error(`old_str not found in ${cleanPath(input.path)} — it must match exactly (case-sensitive, including whitespace)`);
+  const path = cleanPath(input.path);
+  const current = await readSource(bucket, record.cellId, path);
+  if (current === null) throw new Error(`File not found: ${path}`);
+  checkPreconditions(path, current, { ifVersion: input.ifVersion });
+  const content = sourceText(path, current, 'replaceInFile');
+  const { next, replacements, occurrences, targets } = planReplace(path, content, input);
+
+  if (input.dryRun) {
+    // Hunks are located in the post-edit text by shifting each offset by the
+    // length change of the replacements before it.
+    const delta = input.new_str.length - input.old_str.length;
+    const hunks = targets.slice(0, 20).map((at, i) => hunkAt(content, next, at + i * delta, input.old_str.length, input.new_str.length));
+    return {
+      ok: true as const, dryRun: true, cellId: record.cellId, path,
+      replacements, occurrences, version: current.version, nextVersion: contentVersion(next), hunks,
+    };
   }
-  const next = input.replace_all
-    ? content.split(input.old_str).join(input.new_str)
-    : content.replace(input.old_str, input.new_str);
-  await putObject(bucket, key, next, 'text/plain; charset=utf-8');
-  const replacements = input.replace_all ? occurrences : 1;
-  ctx.logger.info('cell file edited', { cellId: record.cellId, path: cleanPath(input.path), replacements });
-  const result = { ok: true as const, cellId: record.cellId, path: cleanPath(input.path), replacements, occurrences };
+
+  await commitSource(bucket, record.cellId, path, next, TEXT_CONTENT_TYPE, current);
+  ctx.logger.info('cell file edited', { cellId: record.cellId, path, replacements });
+  const result = {
+    ok: true as const, cellId: record.cellId, path, replacements, occurrences,
+    line: lineAt(content, targets[0]),
+    previousVersion: current.version, version: contentVersion(next),
+  };
   if (input.deploy) {
     const started = await requestDeploy(record, env, ctx);
     return { ...result, deploy: started.deploy };
   }
-  await emitFilesChanged(ctx, record, 'replace', [cleanPath(input.path)]);
+  await emitFilesChanged(ctx, record, 'replace', [path]);
   return result;
 }
 
 interface AppendToFileInput extends CellRef {
   path: string;
   content: string;
+  /** Proof of read: append only if the file is still at this `version`. */
+  ifVersion?: string;
+  /** Refuse to create the file — a typo'd path fails instead of making a new file. */
+  ifExists?: boolean;
+  /** Create only: refuse if the file already exists. */
+  ifAbsent?: boolean;
   deploy?: boolean;
 }
 
-/** Append to a cell source file (creates it when missing). */
+/** Append to a cell source file (creates it when missing, unless ifExists). */
 async function appendToFile(input: AppendToFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.path) throw new Error('path is required');
   if (typeof input?.content !== 'string' || input.content.length === 0) throw new Error('content (non-empty string) is required');
   const { record, bucket, env } = await resolveAuthorized(input, user);
-  const key = srcKey(record.cellId, input.path);
-  const existing = (await getObject(bucket, key)) ?? '';
-  await putObject(bucket, key, existing + input.content, 'text/plain; charset=utf-8');
-  ctx.logger.info('cell file appended', { cellId: record.cellId, path: cleanPath(input.path), created: existing === '' });
-  const result = { ok: true as const, cellId: record.cellId, path: cleanPath(input.path), created: existing === '' };
+  const path = cleanPath(input.path);
+  const current = await readSource(bucket, record.cellId, path);
+  checkPreconditions(path, current, { ifVersion: input.ifVersion, ifExists: input.ifExists, ifAbsent: input.ifAbsent });
+  const existing = current ? sourceText(path, current, 'appendToFile') : '';
+  const next = existing + input.content;
+  await commitSource(bucket, record.cellId, path, next, TEXT_CONTENT_TYPE, current);
+  const created = current === null;
+  ctx.logger.info('cell file appended', { cellId: record.cellId, path, created });
+  const result = {
+    ok: true as const, cellId: record.cellId, path, created,
+    ...(current ? { previousVersion: current.version } : {}),
+    version: contentVersion(next),
+    bytes: Buffer.byteLength(next),
+  };
   if (input.deploy) {
     const started = await requestDeploy(record, env, ctx);
     return { ...result, deploy: started.deploy };
   }
-  await emitFilesChanged(ctx, record, 'append', [cleanPath(input.path)]);
+  await emitFilesChanged(ctx, record, 'append', [path]);
   return result;
 }
 
 interface ReadFileInput extends CellRef {
   path: string;
+  /** 1-based first line (text files). */
+  startLine?: number;
+  /** 1-based last line, inclusive (defaults to the end, within the byte budget). */
+  endLine?: number;
+  /** Byte offset (any file). */
+  offset?: number;
+  /** Byte count from `offset` (defaults to the budget). */
+  length?: number;
+  /** Force the content encoding; bytes are always base64. */
+  encoding?: 'utf8' | 'base64';
 }
+
+/**
+ * Read a source file — whole (the original contract), a line range, or a byte
+ * range — with its metadata and content `version`.
+ *
+ * A ranged read is the point: a 2.5 MB main.ts used to be all-or-nothing, and
+ * "all" meant the `whole:true` transport escape hatch followed by a downstream
+ * truncation. A line range stays inside RANGE_MAX_BYTES and says where to
+ * continue (`nextStartLine`), so an agent can page through any file.
+ */
 async function readFile(input: ReadFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.path) throw new Error('path is required');
+  const lineMode = input.startLine !== undefined || input.endLine !== undefined;
+  const byteMode = input.offset !== undefined || input.length !== undefined;
+  if (lineMode && byteMode) throw new Error('pass either startLine/endLine or offset/length, not both');
+  if (input.encoding !== undefined && input.encoding !== 'utf8' && input.encoding !== 'base64') {
+    throw new Error("encoding must be 'utf8' or 'base64'");
+  }
   const { record, bucket } = await resolveAuthorized(input, user);
+  const path = cleanPath(input.path);
   // RAW, THEN DECIDE. Reading as UTF-8 first and checking afterwards is not
   // possible — the damage is done by the decode, and a caller cannot tell a
   // mangled PNG from a text file that happens to contain U+FFFD. The stored
   // content type is the record of what was written, so it makes the choice.
-  const raw = await getObjectRaw(bucket, srcKey(record.cellId, input.path));
-  if (raw === null) throw new Error(`file not found: ${cleanPath(input.path)}`);
-  if (!isTextType(raw.contentType)) {
+  const obj = await readSource(bucket, record.cellId, path);
+  if (obj === null) throw new Error(`file not found: ${path}`);
+  const text = obj.binary ? undefined : obj.body.toString('utf-8');
+  const meta = { cellId: record.cellId, ...fileMeta(path, obj, text) };
+  const asBase64 = obj.binary || input.encoding === 'base64';
+
+  if (lineMode) {
+    if (text === undefined) throw new Error(`${path} is stored as bytes (${obj.contentType}); use offset/length for a range`);
+    const slice = sliceLines(text, input.startLine ?? 1, input.endLine);
     return {
-      cellId: record.cellId, path: cleanPath(input.path),
-      content: raw.body.toString('base64'), encoding: 'base64' as const,
-      contentType: raw.contentType, bytes: raw.body.length,
+      ...meta,
+      content: asBase64 ? Buffer.from(slice.content, 'utf-8').toString('base64') : slice.content,
+      encoding: asBase64 ? 'base64' : 'utf8',
+      range: { startLine: slice.startLine, endLine: slice.endLine, totalLines: slice.totalLines },
+      truncated: slice.truncated,
+      ...(slice.nextStartLine ? { nextStartLine: slice.nextStartLine } : {}),
     };
   }
-  return { cellId: record.cellId, path: cleanPath(input.path), content: raw.body.toString('utf-8') };
+  if (byteMode) {
+    const offset = input.offset ?? 0;
+    if (!Number.isInteger(offset) || offset < 0) throw new Error('offset must be an integer >= 0');
+    if (input.length !== undefined && (!Number.isInteger(input.length) || input.length < 1)) throw new Error('length must be an integer >= 1');
+    const want = Math.min(input.length ?? RANGE_MAX_BYTES, asBase64 ? Math.floor((RANGE_MAX_BYTES * 3) / 4) : RANGE_MAX_BYTES);
+    const end = Math.min(obj.body.length, offset + want);
+    const chunk = obj.body.subarray(Math.min(offset, obj.body.length), end);
+    return {
+      ...meta,
+      // A byte range of text can split a multi-byte character; ask for
+      // encoding:'base64' when exact bytes matter (or use line ranges).
+      content: asBase64 ? chunk.toString('base64') : chunk.toString('utf-8'),
+      encoding: asBase64 ? 'base64' : 'utf8',
+      range: { offset, length: chunk.length, totalBytes: obj.body.length },
+      truncated: input.length !== undefined && chunk.length < input.length && end < obj.body.length,
+      ...(end < obj.body.length ? { nextOffset: end } : {}),
+    };
+  }
+  return {
+    ...meta,
+    content: asBase64 ? obj.body.toString('base64') : (text as string),
+    encoding: asBase64 ? 'base64' : 'utf8',
+  };
 }
 
-async function listFiles(input: CellRef, ctx: ServiceContext): Promise<unknown> {
+interface ListFilesInput extends CellRef {
+  /** Only paths under this prefix, e.g. `client/hydro/`. */
+  prefix?: string;
+  /** Only paths matching this glob, e.g. `client/**\/*.ts` or `*.md`. */
+  glob?: string;
+  /** Page size (paths: unbounded by default; meta: 100 by default). */
+  limit?: number;
+  /** Resume after this `nextCursor`. */
+  cursor?: string;
+  /** `paths` (default): string[]; `meta`: one object per file with size, lines, version. */
+  view?: 'paths' | 'meta';
+}
+
+const LIST_META_DEFAULT = 100;
+const LIST_MAX = 1000;
+
+async function listFiles(input: ListFilesInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
+  const view = input?.view ?? 'paths';
+  if (view !== 'paths' && view !== 'meta') throw new Error("view must be 'paths' or 'meta'");
+  if (input?.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) throw new Error('limit must be an integer >= 1');
   const { record, bucket } = await resolveAuthorized(input, user);
   const prefix = srcPrefix(record.cellId);
-  const keys = await listObjects(bucket, prefix);
-  return { cellId: record.cellId, files: keys.map((k) => k.slice(prefix.length)).filter(Boolean) };
+  const matches = pathMatcher(input.prefix?.replace(/^\/+/, ''), input.glob);
+  const all = (await listObjectsMeta(bucket, prefix))
+    .map((o) => ({ ...o, path: o.key.slice(prefix.length) }))
+    .filter((o) => o.path && matches(o.path))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const totalBytes = all.reduce((n, o) => n + o.size, 0);
+
+  // The cursor is the last path returned (start-after), so a file created
+  // mid-pagination neither shifts nor duplicates the pages around it.
+  const after = decodeCursor<{ after: string }>(input.cursor)?.after;
+  const rest = after === undefined ? all : all.filter((o) => o.path > after);
+  const limit = Math.min(input.limit ?? (view === 'meta' ? LIST_META_DEFAULT : Infinity), LIST_MAX);
+  const page = rest.slice(0, limit);
+  const nextCursor = rest.length > page.length && page.length ? encodeCursor({ after: page[page.length - 1].path }) : undefined;
+  const common = {
+    cellId: record.cellId,
+    count: page.length,
+    total: all.length,
+    totalBytes,
+    ...(nextCursor ? { nextCursor } : {}),
+  };
+  if (view === 'paths') return { ...common, files: page.map((o) => o.path) };
+
+  // Metadata needs the bytes (version, line count, stored content type), so a
+  // meta page costs one GET per file — which is why it is paged by default.
+  const files = await mapLimit(page, 16, async (o) => {
+    const obj = await readSource(bucket, record.cellId, o.path);
+    if (!obj) return { path: o.path, bytes: o.size, deleted: true };
+    return fileMeta(o.path, obj);
+  });
+  return { ...common, files };
+}
+
+interface SearchFilesInput extends CellRef {
+  query: string;
+  regex?: boolean;
+  caseSensitive?: boolean;
+  prefix?: string;
+  glob?: string;
+  contextLines?: number;
+  maxMatches?: number;
+  cursor?: string;
+}
+
+const SEARCH_DEFAULT_MATCHES = 50;
+const SEARCH_MAX_MATCHES = 500;
+
+/**
+ * Server-side text search over the cell's src tree: returns match locations
+ * (path, line, column, the line, optional context) instead of moving source
+ * through the MCP boundary. Pair it with a ranged `readFile` on a hit.
+ * Bytes (images, fonts) are skipped by stored content type.
+ */
+async function searchFiles(input: SearchFilesInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const re = compileQuery({ query: input?.query, regex: input?.regex, caseSensitive: input?.caseSensitive });
+  const contextLines = Math.max(0, Math.min(10, Math.floor(input.contextLines ?? 0)));
+  const maxMatches = Math.max(1, Math.min(SEARCH_MAX_MATCHES, Math.floor(input.maxMatches ?? SEARCH_DEFAULT_MATCHES)));
+  const { record, bucket } = await resolveAuthorized(input, user);
+  const prefix = srcPrefix(record.cellId);
+  const matches = pathMatcher(input.prefix?.replace(/^\/+/, ''), input.glob);
+  const paths = (await listObjectsMeta(bucket, prefix))
+    .map((o) => o.key.slice(prefix.length))
+    .filter((p) => p && matches(p))
+    .sort();
+
+  const resume = decodeCursor<{ path: string; line: number }>(input.cursor);
+  const out: Array<SearchMatch & { path: string; version: string }> = [];
+  let searchedFiles = 0;
+  let skippedBinary = 0;
+  let bytes = 0;
+  let nextCursor: string | undefined;
+  for (const path of paths) {
+    if (resume && path < resume.path) continue;
+    const obj = await readSource(bucket, record.cellId, path);
+    if (!obj) continue;
+    if (obj.binary) { skippedBinary++; continue; }
+    searchedFiles++;
+    const afterLine = resume && path === resume.path ? resume.line : 0;
+    const found = searchText(obj.body.toString('utf-8'), re, contextLines, maxMatches - out.length + 1, afterLine);
+    for (const m of found) {
+      const cost = Buffer.byteLength(JSON.stringify(m)) + path.length + 80;
+      if (out.length >= maxMatches || (out.length > 0 && bytes + cost > RANGE_MAX_BYTES)) {
+        nextCursor = encodeCursor({ path, line: m.line - 1 });
+        break;
+      }
+      out.push({ path, ...m, version: obj.version });
+      bytes += cost;
+    }
+    if (nextCursor) break;
+  }
+  return {
+    cellId: record.cellId,
+    matches: out,
+    count: out.length,
+    searchedFiles,
+    skippedBinary,
+    truncated: nextCursor !== undefined,
+    ...(nextCursor ? { nextCursor } : {}),
+  };
 }
 
 interface DeleteFileInput extends CellRef {
   path: string;
+  /** Proof of read: delete only if the file is still at this `version`. */
+  ifVersion?: string;
+  /** Fused: kick off an async deploy in the same call (poll get for the phase). */
+  deploy?: boolean;
 }
 async function deleteFile(input: DeleteFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.path) throw new Error('path is required');
+  const { record, bucket, env } = await resolveAuthorized(input, user);
+  const path = cleanPath(input.path);
+  let previousVersion: string | undefined;
+  if (input.ifVersion !== undefined) {
+    // Check-then-delete: S3 has no conditional DELETE on general-purpose
+    // buckets, so this narrows the window rather than closing it.
+    const current = await readSource(bucket, record.cellId, path);
+    checkPreconditions(path, current, { ifVersion: input.ifVersion });
+    previousVersion = current?.version;
+  }
+  await deleteObject(bucket, srcKey(record.cellId, path));
+  const result = { ok: true as const, cellId: record.cellId, path, ...(previousVersion ? { previousVersion } : {}) };
+  if (input.deploy) {
+    const started = await requestDeploy(record, env, ctx);
+    return { ...result, deploy: started.deploy };
+  }
+  await emitFilesChanged(ctx, record, 'delete', [path]);
+  return result;
+}
+
+// ─── Source tree: identity, snapshots, patch sets, diff, batch reads ──
+//
+// The per-file tools above make ONE edit safe. These make the TREE a unit:
+// a treeVersion names an exact source tree, applyPatchSet lands many edits as
+// all-or-nothing against it, snapshots freeze it, and deploys build a
+// snapshot rather than whatever src/ holds when the worker runs. See
+// source-tree.ts for the storage and docs/cell-storage-s3.md for the model.
+
+type ManifestFile = { path: string; version: string; contentType: string };
+
+/** Added / modified / deleted paths between two manifests. */
+function compareManifests(from: ManifestFile[], to: ManifestFile[]): {
+  added: ManifestFile[];
+  modified: Array<{ from: ManifestFile; to: ManifestFile }>;
+  deleted: ManifestFile[];
+  unchanged: number;
+} {
+  const a = new Map(from.map((f) => [f.path, f]));
+  const b = new Map(to.map((f) => [f.path, f]));
+  const added: ManifestFile[] = [];
+  const modified: Array<{ from: ManifestFile; to: ManifestFile }> = [];
+  const deleted: ManifestFile[] = [];
+  let unchanged = 0;
+  for (const [p, f] of b) {
+    const was = a.get(p);
+    if (!was) added.push(f);
+    else if (was.version !== f.version) modified.push({ from: was, to: f });
+    else unchanged++;
+  }
+  for (const [p, f] of a) if (!b.has(p)) deleted.push(f);
+  const byPath = (x: { path: string }, y: { path: string }): number => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0);
+  added.sort(byPath);
+  deleted.sort(byPath);
+  modified.sort((x, y) => byPath(x.to, y.to));
+  return { added, modified, deleted, unchanged };
+}
+
+async function sourceStatus(input: CellRef, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
   const { record, bucket } = await resolveAuthorized(input, user);
-  await deleteObject(bucket, srcKey(record.cellId, input.path));
-  await emitFilesChanged(ctx, record, 'delete', [cleanPath(input.path)]);
-  return { ok: true, cellId: record.cellId, path: cleanPath(input.path) };
+  const store = new TreeStore(bucket, record.cellId);
+  const tree = await store.tree();
+  await store.flush();
+  const deployedTree = record.lastDeployed?.treeVersion;
+  let changedSinceDeploy: Record<string, number> | undefined;
+  if (deployedTree && deployedTree !== tree.treeVersion) {
+    const snap = await store.loadSnapshot(deployedTree);
+    if (snap) {
+      const d = compareManifests(snap.files, tree.files);
+      changedSinceDeploy = { added: d.added.length, modified: d.modified.length, deleted: d.deleted.length };
+    }
+  }
+  return {
+    cellId: record.cellId,
+    treeVersion: tree.treeVersion,
+    files: tree.files.length,
+    bytes: tree.bytes,
+    deployed: record.lastDeployed ?? null,
+    // null = never deployed from a pinned snapshot, so "dirty" is unknowable.
+    dirty: deployedTree ? deployedTree !== tree.treeVersion : null,
+    ...(changedSinceDeploy ? { changedSinceDeploy } : {}),
+    ...(record.deploy ? { deploy: record.deploy } : {}),
+  };
+}
+
+interface SnapshotInput extends CellRef {
+  /** Freeze only if the live tree is still exactly this one. */
+  ifTreeVersion?: string;
+}
+
+async function snapshotSource(input: SnapshotInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const { record, bucket } = await resolveAuthorized(input, user);
+  const store = new TreeStore(bucket, record.cellId);
+  const snap = await store.snapshot({ createdBy: user });
+  if (input.ifTreeVersion !== undefined && snap.treeVersion !== input.ifTreeVersion) {
+    // The snapshot is still valid and kept (it is immutable and harmless) —
+    // but it is not the tree the caller asked to freeze.
+    throw new TreeConflictError(input.ifTreeVersion, snap.treeVersion);
+  }
+  return { cellId: record.cellId, treeVersion: snap.treeVersion, count: snap.count, bytes: snap.bytes, createdAt: snap.createdAt };
+}
+
+interface ApplyPatchSetInput extends CellRef {
+  changes: PatchChange[];
+  /** Apply only if the whole source tree is still exactly this one. */
+  ifTreeVersion?: string;
+  /** Validate and return the combined diff + projected versions; write nothing. */
+  dryRun?: boolean;
+  /** Freeze the resulting tree as a snapshot (implied by deploy). */
+  snapshot?: boolean;
+  /** Deploy exactly the resulting tree. */
+  deploy?: boolean;
+  /** Context lines in the dry-run diff (default 3). */
+  contextLines?: number;
+}
+
+const PATCH_MAX_CHANGES = 200;
+
+async function readBase(bucket: string, cellId: string, paths: string[]): Promise<Map<string, BaseFile | null>> {
+  const objs = await mapLimit(paths, 16, (p) => readSource(bucket, cellId, p));
+  return new Map(paths.map((p, i) => [p, objs[i]]));
+}
+
+function projectTree(tree: Tree, files: Array<{ path: string; status: 'A' | 'M' | 'D'; version?: string }>): string {
+  const m = new Map(tree.files.map((f) => [f.path, f.version]));
+  for (const f of files) {
+    if (f.status === 'D') m.delete(f.path);
+    else m.set(f.path, f.version as string);
+  }
+  return treeVersionOfMap(m);
+}
+const treeVersionOfMap = (m: Map<string, string>): string => treeVersionOf([...m].map(([path, version]) => ({ path, version })));
+
+/** Per-file stats and one combined unified diff, inside the response budget. */
+function describePlan(
+  base: Map<string, BaseFile | null>,
+  planned: ReturnType<typeof planPatch>['files'],
+  contextLines: number,
+): { files: Array<Record<string, unknown>>; diff: string; truncated: boolean; omitted: string[] } {
+  const files: Array<Record<string, unknown>> = [];
+  const parts: string[] = [];
+  const omitted: string[] = [];
+  let used = 0;
+  const movedTo = new Map(planned.filter((f) => f.movedFrom).map((f) => [f.movedFrom as string, f.path]));
+  for (const f of planned) {
+    // A move is shown as a rename: its content is diffed against the file it came from.
+    const origin = f.movedFrom ?? f.path;
+    const was = (f.movedFrom ? base.get(f.movedFrom) : base.get(f.path)) ?? null;
+    const beforeBinary = was?.binary ?? false;
+    const afterBinary = f.next?.binary ?? false;
+    const entry: Record<string, unknown> = {
+      path: f.path,
+      status: f.status,
+      ...(f.oldVersion ? { oldVersion: f.oldVersion } : {}),
+      ...(f.version ? { version: f.version } : {}),
+      ...(f.movedFrom ? { movedFrom: f.movedFrom } : {}),
+      ...(movedTo.has(f.path) && f.status === 'D' ? { movedTo: movedTo.get(f.path) } : {}),
+    };
+    let body: string;
+    if (entry.movedTo) {
+      body = `renamed to ${String(entry.movedTo)}`;
+    } else if (beforeBinary || afterBinary) {
+      entry.binary = true;
+      body = `Binary file ${f.status === 'D' ? 'deleted' : f.status === 'A' && !f.movedFrom ? 'added' : 'changed'}`;
+    } else {
+      const d = diffText(was ? was.body.toString('utf-8') : '', f.next ? f.next.body.toString('utf-8') : '', contextLines);
+      entry.added = d.stats.added;
+      entry.removed = d.stats.removed;
+      body = d.hunks || (f.movedFrom ? '(content unchanged)' : '');
+      if (d.hunks === null) body = '(too many changes to show hunks — read the file)';
+    }
+    files.push(entry);
+    const fromLabel = f.status === 'A' && !f.movedFrom ? '/dev/null' : `a/${origin}`;
+    const toLabel = f.status === 'D' ? '/dev/null' : `b/${f.path}`;
+    const chunk = `--- ${fromLabel}\n+++ ${toLabel}\n${body}\n`;
+    const cost = Buffer.byteLength(chunk);
+    if (used + cost > RANGE_MAX_BYTES && parts.length > 0) {
+      omitted.push(f.path);
+      continue;
+    }
+    parts.push(chunk);
+    used += cost;
+  }
+  return { files, diff: parts.join(''), truncated: omitted.length > 0, omitted };
+}
+
+function formatConflicts(conflicts: Array<{ index: number; op: string; path: string; error: string }>): string {
+  return (
+    `PATCH_REJECTED: ${conflicts.length} conflict(s) — nothing was written.\n` +
+    conflicts.map((c) => `  [${c.index}] ${c.op} ${c.path}: ${c.error}`).join('\n')
+  );
+}
+
+/**
+ * Apply many edits to a cell's source as ONE change: every precondition is
+ * checked before anything is written, then every file is committed — or, if
+ * any write loses a race, every write already made is rolled back. Commits
+ * serialize on a per-cell lock whose journal lets the next holder undo a
+ * commit whose Lambda died half way.
+ *
+ * Readers can observe the few hundred milliseconds of a commit in progress
+ * (S3 has no multi-object transaction); the guarantee is to the AUTHOR: the
+ * patch set lands whole or not at all, and never onto a tree it did not name.
+ */
+async function applyPatchSet(input: ApplyPatchSetInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  if (!Array.isArray(input?.changes) || input.changes.length === 0) throw new Error('changes (non-empty array) is required');
+  if (input.changes.length > PATCH_MAX_CHANGES) throw new Error(`at most ${PATCH_MAX_CHANGES} changes per patch set`);
+  if (input.ifTreeVersion !== undefined && !isTreeVersion(input.ifTreeVersion)) throw new Error('ifTreeVersion must be tree:<64 hex>');
+  const contextLines = Math.max(0, Math.min(10, Math.floor(input.contextLines ?? 3)));
+  const { record, bucket, env } = await resolveAuthorized(input, user);
+  const store = new TreeStore(bucket, record.cellId);
+  const paths = touchedPaths(input.changes);
+
+  /** The tree check: the whole tree, AND every touched file as read, must be the named tree. */
+  const treeCheck = (tree: Tree, base: Map<string, BaseFile | null>): string | null => {
+    if (input.ifTreeVersion === undefined) return null;
+    if (tree.treeVersion !== input.ifTreeVersion) return new TreeConflictError(input.ifTreeVersion, tree.treeVersion).message;
+    const listed = new Map(tree.files.map((f) => [f.path, f.version]));
+    for (const [p, b] of base) {
+      if ((b?.version ?? undefined) !== listed.get(p)) return new TreeConflictError(input.ifTreeVersion, `a tree where ${p} moved mid-read`).message;
+    }
+    return null;
+  };
+
+  if (input.dryRun) {
+    const tree = await store.tree();
+    const base = await readBase(bucket, record.cellId, paths);
+    const plan = planPatch(base, input.changes, binaryTypeFor);
+    const conflicts = [...plan.conflicts];
+    const treeError = treeCheck(tree, base);
+    if (treeError) conflicts.unshift({ index: -1, op: 'ifTreeVersion', path: '*', error: treeError });
+    const described = describePlan(base, plan.files, contextLines);
+    await store.flush();
+    return {
+      ok: conflicts.length === 0,
+      dryRun: true,
+      cellId: record.cellId,
+      previousTreeVersion: tree.treeVersion,
+      treeVersion: projectTree(tree, plan.files),
+      conflicts,
+      files: described.files,
+      diff: described.diff,
+      truncated: described.truncated,
+      ...(described.omitted.length ? { omitted: described.omitted } : {}),
+    };
+  }
+
+  const { lock, recovered } = await store.acquireLock(`${user} applyPatchSet`);
+  if (recovered.length) ctx.logger.warn('rolled back an interrupted patch set before this one', { cellId: record.cellId, recovered });
+  let result: Record<string, unknown>;
+  let changedPaths: string[] = [];
+  let snapTreeVersion: string | undefined;
+  /** Set when an undo could not finish: the journal must outlive this call. */
+  let keepLock = false;
+  try {
+    const tree = await store.tree();
+    const base = await readBase(bucket, record.cellId, paths);
+    const treeError = treeCheck(tree, base);
+    if (treeError) throw new Error(treeError);
+    const plan = planPatch(base, input.changes, binaryTypeFor);
+    if (plan.conflicts.length) throw new Error(formatConflicts(plan.conflicts));
+    const projected = projectTree(tree, plan.files);
+
+    if (plan.files.length === 0) {
+      result = { ok: true, cellId: record.cellId, previousTreeVersion: tree.treeVersion, treeVersion: tree.treeVersion, files: [], unchanged: true };
+    } else {
+      // Base content goes to blobs/ BEFORE anything is overwritten: the
+      // journal's undo — in this process or the next lock holder's — needs it.
+      for (const f of plan.files) {
+        const b = base.get(f.path);
+        if (b) await store.putBlob(b.version, b.body, b.contentType);
+      }
+      const journal: Journal = { base: {}, next: {}, baseTypes: {} };
+      for (const f of plan.files) {
+        const b = base.get(f.path);
+        journal.base[f.path] = b?.version ?? null;
+        journal.next[f.path] = f.version ?? null;
+        if (b) journal.baseTypes[f.path] = b.contentType;
+      }
+      await store.writeJournal(lock, journal);
+
+      const written: Array<{ path: string; etag: string; version: string; contentType: string; bytes: number }> = [];
+      try {
+        for (const f of plan.files) {
+          if (f.status === 'D' || !f.next) continue;
+          const b = base.get(f.path);
+          const r = await putObjectIf(bucket, srcKey(record.cellId, f.path), f.next.body, f.next.contentType, b ? (b.etag ? { ifMatch: b.etag } : {}) : { ifNoneMatch: '*' });
+          if (r.etag) written.push({ path: f.path, etag: r.etag, version: f.version as string, contentType: f.next.contentType, bytes: f.next.body.length });
+        }
+        for (const f of plan.files) {
+          if (f.status !== 'D') continue;
+          const b = base.get(f.path) as BaseFile;
+          const key = srcKey(record.cellId, f.path);
+          // S3 has no conditional DELETE on general-purpose buckets: check,
+          // then delete. The journal still covers the window.
+          const cur = await getObjectRaw(bucket, key);
+          if (!cur || (b.etag && cur.etag !== b.etag)) throw new PreconditionFailedError(key);
+          await deleteObject(bucket, key);
+        }
+      } catch (err) {
+        let restored: string[];
+        try {
+          restored = await store.rollback(journal);
+        } catch (undoErr) {
+          // Leave the lock and its journal in place: once it expires, the next
+          // patch set replays the undo before doing anything else.
+          keepLock = true;
+          throw new Error(
+            `PATCH_INTERRUPTED: commit failed (${(err as Error).message}) and the rollback did too (${(undoErr as Error).message}); ` +
+              `the cell stays locked for up to ${Math.round(LOCK_TTL_MS / 1000)}s, then the next applyPatchSet completes the undo`,
+          );
+        }
+        const detail = err instanceof PreconditionFailedError ? `${err.message.replace(/^object changed concurrently: /, '')} changed under the commit (VERSION_CONFLICT)` : (err as Error).message;
+        throw new Error(`PATCH_ROLLED_BACK: ${detail}; restored ${restored.length} file(s) — the patch set was not applied. Re-read and retry`);
+      }
+      await store.seed(written);
+      const after = await store.tree();
+      changedPaths = plan.files.map((f) => f.path);
+      if (input.snapshot || input.deploy) {
+        const inline = new Map<string, { body: Buffer; contentType: string }>();
+        for (const f of plan.files) if (f.next && f.version) inline.set(f.version, { body: f.next.body, contentType: f.next.contentType });
+        snapTreeVersion = (await store.snapshot({ tree: after, createdBy: user, inline })).treeVersion;
+      }
+      const described = describePlan(base, plan.files, 0);
+      result = {
+        ok: true,
+        cellId: record.cellId,
+        previousTreeVersion: tree.treeVersion,
+        treeVersion: after.treeVersion,
+        // Another writer touched files outside this patch set while it committed.
+        ...(after.treeVersion !== projected ? { concurrentChanges: true, projectedTreeVersion: projected } : {}),
+        files: described.files,
+        ...(snapTreeVersion ? { snapshot: snapTreeVersion } : {}),
+      };
+    }
+    await store.flush();
+  } finally {
+    if (!keepLock) await store.releaseLock(lock);
+  }
+  ctx.logger.info('cell patch set applied', { cellId: record.cellId, files: changedPaths.length, treeVersion: result.treeVersion });
+  if (input.deploy && snapTreeVersion) {
+    const started = await requestDeploy(record, env, ctx, snapTreeVersion);
+    return { ...result, deploy: started.deploy };
+  }
+  if (changedPaths.length) await emitFilesChanged(ctx, record, 'patch', changedPaths);
+  return result;
+}
+
+interface MoveFileInput extends CellRef {
+  from: string;
+  to: string;
+  ifVersion?: string;
+  overwrite?: boolean;
+  ifTreeVersion?: string;
+  dryRun?: boolean;
+  deploy?: boolean;
+}
+
+/** Rename/move one file atomically — a one-change patch set. */
+async function moveFile(input: MoveFileInput, ctx: ServiceContext): Promise<unknown> {
+  if (!input?.from || !input?.to) throw new Error('from and to are required');
+  const { from, to, ifVersion, overwrite, ...rest } = input;
+  return applyPatchSet({ ...rest, changes: [{ op: 'move', from, to, ifVersion, overwrite }] }, ctx);
+}
+
+interface DiffInput extends CellRef {
+  /** `deployed` (default), `current`, or a `tree:<hash>` snapshot. */
+  from?: string;
+  /** `current` (default), `deployed`, or a `tree:<hash>` snapshot. */
+  to?: string;
+  view?: 'summary' | 'files' | 'patch';
+  prefix?: string;
+  glob?: string;
+  contextLines?: number;
+}
+
+/** A diff side: a manifest plus how to read a file's bytes at a version. */
+async function diffSide(spec: string, store: TreeStore, record: CellRecord, live: () => Promise<Tree>): Promise<{ treeVersion: string; files: ManifestFile[] }> {
+  if (spec === 'current') {
+    const t = await live();
+    return { treeVersion: t.treeVersion, files: t.files };
+  }
+  let tv = spec;
+  if (spec === 'deployed') {
+    if (!record.lastDeployed?.treeVersion) throw new Error('no pinned deploy yet — "deployed" is known once a deploy has landed from a snapshot');
+    tv = record.lastDeployed.treeVersion;
+  }
+  if (!isTreeVersion(tv)) throw new Error(`diff side "${spec}" must be current, deployed, or tree:<64 hex>`);
+  const snap = await store.loadSnapshot(tv);
+  if (snap) return { treeVersion: tv, files: snap.files };
+  const t = await live();
+  if (t.treeVersion === tv) return { treeVersion: tv, files: t.files };
+  throw new Error(`no snapshot of ${tv} (and it is not the current tree) — snapshot trees you will want to diff against`);
+}
+
+async function diffSource(input: DiffInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const view = input?.view ?? 'files';
+  if (!['summary', 'files', 'patch'].includes(view)) throw new Error("view must be 'summary', 'files' or 'patch'");
+  const contextLines = Math.max(0, Math.min(10, Math.floor(input.contextLines ?? 3)));
+  const { record, bucket } = await resolveAuthorized(input, user);
+  const store = new TreeStore(bucket, record.cellId);
+  let cached: Promise<Tree> | undefined;
+  const live = (): Promise<Tree> => (cached ??= store.tree());
+  const fromSpec = input.from ?? 'deployed';
+  const toSpec = input.to ?? 'current';
+  const [a, b] = [await diffSide(fromSpec, store, record, live), await diffSide(toSpec, store, record, live)];
+  await store.flush();
+  const matches = pathMatcher(input.prefix?.replace(/^\/+/, ''), input.glob);
+  const d = compareManifests(a.files.filter((f) => matches(f.path)), b.files.filter((f) => matches(f.path)));
+  const head = {
+    cellId: record.cellId,
+    from: { spec: fromSpec, treeVersion: a.treeVersion },
+    to: { spec: toSpec, treeVersion: b.treeVersion },
+    identical: a.treeVersion === b.treeVersion,
+    counts: { added: d.added.length, modified: d.modified.length, deleted: d.deleted.length, unchanged: d.unchanged },
+  };
+  const changes: Array<{ path: string; status: 'A' | 'M' | 'D'; from?: ManifestFile; to?: ManifestFile }> = [
+    ...d.added.map((f) => ({ path: f.path, status: 'A' as const, to: f })),
+    ...d.modified.map((m) => ({ path: m.to.path, status: 'M' as const, from: m.from, to: m.to })),
+    ...d.deleted.map((f) => ({ path: f.path, status: 'D' as const, from: f })),
+  ].sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
+
+  // Line stats need the bytes of both sides; bounded so a sweeping diff stays cheap.
+  const LINE_STATS_MAX = 100;
+  const withLines = changes.length <= LINE_STATS_MAX;
+  const texts = new Map<string, { before: string; after: string }>();
+  if (withLines || view === 'patch') {
+    await mapLimit(changes, 8, async (c) => {
+      const binary = (c.from && !isTextType(c.from.contentType)) || (c.to && !isTextType(c.to.contentType));
+      if (binary) return;
+      const before = c.from ? (await store.readVersion(c.path, c.from.version)).toString('utf-8') : '';
+      const after = c.to ? (await store.readVersion(c.path, c.to.version)).toString('utf-8') : '';
+      texts.set(c.path, { before, after });
+    });
+  }
+  let added = 0;
+  let removed = 0;
+  const files: Array<Record<string, unknown>> = [];
+  const parts: string[] = [];
+  const omitted: string[] = [];
+  let used = 0;
+  for (const c of changes) {
+    const t = texts.get(c.path);
+    const entry: Record<string, unknown> = {
+      path: c.path,
+      status: c.status,
+      ...(c.from ? { oldVersion: c.from.version } : {}),
+      ...(c.to ? { version: c.to.version } : {}),
+    };
+    let hunks: string | null = null;
+    if (t) {
+      const dt = diffText(t.before, t.after, contextLines);
+      entry.added = dt.stats.added;
+      entry.removed = dt.stats.removed;
+      added += dt.stats.added;
+      removed += dt.stats.removed;
+      hunks = dt.hunks;
+    } else if ((c.from && !isTextType(c.from.contentType)) || (c.to && !isTextType(c.to.contentType))) {
+      entry.binary = true;
+    }
+    files.push(entry);
+    if (view === 'patch') {
+      const body = entry.binary ? 'Binary file differs' : hunks ?? '(too many changes to show hunks — read the file)';
+      const chunk = `--- ${c.status === 'A' ? '/dev/null' : `a/${c.path}`}\n+++ ${c.status === 'D' ? '/dev/null' : `b/${c.path}`}\n${body}\n`;
+      const cost = Buffer.byteLength(chunk);
+      if (used + cost > RANGE_MAX_BYTES && parts.length > 0) omitted.push(c.path);
+      else { parts.push(chunk); used += cost; }
+    }
+  }
+  const lines = withLines || view === 'patch' ? { added, removed } : undefined;
+  if (view === 'summary') return { ...head, ...(lines ? { lines } : { linesSkipped: true }) };
+  if (view === 'files') return { ...head, ...(lines ? { lines } : { linesSkipped: true }), files };
+  return {
+    ...head,
+    lines,
+    files,
+    patch: parts.join(''),
+    truncated: omitted.length > 0,
+    ...(omitted.length ? { omitted, hint: 'narrow with prefix/glob to see the omitted files' } : {}),
+  };
+}
+
+interface ReadFilesInput extends CellRef {
+  files: Array<{ path: string; startLine?: number; endLine?: number }>;
+  /** Total response budget in bytes (max and default ~48KB). */
+  maxBytes?: number;
+}
+
+const READ_FILES_MAX = 50;
+
+/**
+ * Batch read: assemble context from several files (or line ranges) in one
+ * call, under ONE shared byte budget. Files are filled in the order given;
+ * a file cut by the budget reports `nextStartLine`, and files past it come
+ * back as `omitted` with their metadata, so the caller knows exactly what to
+ * ask for next.
+ */
+async function readFiles(input: ReadFilesInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  if (!Array.isArray(input?.files) || input.files.length === 0) throw new Error('files (non-empty array) is required');
+  if (input.files.length > READ_FILES_MAX) throw new Error(`at most ${READ_FILES_MAX} files per call`);
+  const budget = Math.max(1024, Math.min(RANGE_MAX_BYTES, Math.floor(input.maxBytes ?? RANGE_MAX_BYTES)));
+  const { record, bucket } = await resolveAuthorized(input, user);
+  const reqs = input.files.map((f) => {
+    if (!f || typeof f.path !== 'string') throw new Error('each entry needs a path');
+    return { ...f, path: cleanPath(f.path) };
+  });
+  const objs = await mapLimit(reqs, 16, (f) => readSource(bucket, record.cellId, f.path));
+  let remaining = budget;
+  const out: Array<Record<string, unknown>> = [];
+  reqs.forEach((f, i) => {
+    const obj = objs[i];
+    if (!obj) { out.push({ path: f.path, error: 'not found' }); return; }
+    const text = obj.binary ? undefined : obj.body.toString('utf-8');
+    const meta = fileMeta(f.path, obj, text);
+    if (text === undefined) {
+      const b64 = obj.body.toString('base64');
+      if (b64.length > remaining) { out.push({ ...meta, omitted: true }); return; }
+      out.push({ ...meta, content: b64, encoding: 'base64' });
+      remaining -= b64.length;
+      return;
+    }
+    const startLine = f.startLine ?? 1;
+    // Not even room for a first line: leave it for the next call.
+    const firstLineCost = Buffer.byteLength(text.split('\n', startLine)[startLine - 1] ?? '') + 1;
+    if (remaining < Math.min(firstLineCost, 256)) { out.push({ ...meta, omitted: true, nextStartLine: startLine }); return; }
+    try {
+      const slice = sliceLines(text, startLine, f.endLine, remaining);
+      remaining -= Buffer.byteLength(slice.content);
+      out.push({
+        ...meta,
+        content: slice.content,
+        encoding: 'utf8',
+        range: { startLine: slice.startLine, endLine: slice.endLine, totalLines: slice.totalLines },
+        truncated: slice.truncated,
+        ...(slice.nextStartLine ? { nextStartLine: slice.nextStartLine } : {}),
+      });
+    } catch (err) {
+      out.push({ path: f.path, error: (err as Error).message });
+    }
+  });
+  return { cellId: record.cellId, files: out, budget, used: budget - Math.max(0, remaining) };
 }
 
 /** Bundle the cell's src/ tree and point its Lambda at the new code (deploy-on-update). */
 /** Client entry conventions, in priority order (the tier-2 `clientEntry`). */
 const CLIENT_ENTRIES = ['client/main.tsx', 'client/main.ts', 'client/index.tsx', 'client/index.ts'];
 
-async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext): Promise<unknown> {
-  const prefix = srcPrefix(record.cellId);
-  const keys = await listObjects(env.codeBucket, prefix);
+/** Which source a deploy builds and what it is called: a pinned snapshot, or (legacy events) live src/. */
+interface DeployPin {
+  treeVersion?: string;
+  version?: string;
+}
+
+/**
+ * The deploy's source, as text files + byte blobs. A pinned deploy reads its
+ * immutable snapshot (manifest + blobs/), so the bundle is exactly the tree
+ * the deploy was requested for; only an unpinned (pre-snapshot) event falls
+ * back to reading live src/.
+ */
+async function loadDeploySource(
+  record: CellRecord,
+  env: ForgeEnv,
+  treeVersion: string | undefined,
+): Promise<{ files: Record<string, string>; blobs: Record<string, Buffer> }> {
   const files: Record<string, string> = {};
   /** Bytes, kept out of `files` so nothing can hand them to a bundler. */
   const blobs: Record<string, Buffer> = {};
+  // THE CONTENT TYPE DECIDES, not the extension and not the caller. Anything
+  // written as bytes (writeFile with encoding:'base64') comes back as bytes
+  // and never touches a UTF-8 decode; everything else is source and is text.
+  // `files` stays `Record<string, string>` deliberately — the bundler, the
+  // types.json parse and the ssr.json parse all take strings, and widening
+  // that type is how a Buffer would end up concatenated into a bundle.
+  const place = (path: string, body: Buffer, contentType: string): void => {
+    if (isTextType(contentType)) files[path] = body.toString('utf-8');
+    else blobs[path] = body;
+  };
+  if (treeVersion) {
+    const store = new TreeStore(env.codeBucket, record.cellId);
+    const snap = await store.loadSnapshot(treeVersion);
+    if (!snap) throw new Error(`snapshot ${treeVersion} not found — cells.snapshot first`);
+    await mapLimit(snap.files, 16, async (f) => {
+      const body = await store.readBlob(f.version);
+      if (!body) throw new Error(`snapshot ${treeVersion} is missing the blob for ${f.path} (${f.version})`);
+      place(f.path, body, f.contentType);
+    });
+    return { files, blobs };
+  }
+  const prefix = srcPrefix(record.cellId);
+  const keys = await listObjects(env.codeBucket, prefix);
   for (const k of keys) {
     const rel = k.slice(prefix.length);
     if (!rel) continue;
-    // THE CONTENT TYPE DECIDES, not the extension and not the caller. Anything
-    // written as bytes (writeFile with encoding:'base64') comes back as bytes
-    // and never touches a UTF-8 decode; everything else is source and is text.
-    // `files` stays `Record<string, string>` deliberately — the bundler, the
-    // types.json parse and the ssr.json parse all take strings, and widening
-    // that type is how a Buffer would end up concatenated into a bundle.
     const raw = await getObjectRaw(env.codeBucket, k);
     if (raw === null) continue;
-    if (isTextType(raw.contentType)) files[rel] = raw.body.toString('utf-8');
-    else blobs[rel] = raw.body;
+    place(rel, raw.body, raw.contentType);
   }
+  return { files, blobs };
+}
+
+/** Thrown when a newer deploy was requested while this one was bundling — it must not land. */
+class DeploySupersededError extends Error {}
+
+async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext, pin: DeployPin = {}): Promise<unknown> {
+  const { files, blobs } = await loadDeploySource(record, env, pin.treeVersion);
   if (Object.keys(files).length === 0) throw new Error('no source files to deploy (write to src/ first)');
   const entry = files['index.ts'] !== undefined ? 'index.ts' : files['index.js'] !== undefined ? 'index.js' : Object.keys(files)[0];
 
@@ -1140,9 +2102,20 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     }
   }
 
-  const version = `${Date.now()}`;
+  // The build is named by the request that asked for it, so a request, its
+  // package and its registry state share one version.
+  const version = pin.version ?? `${Date.now()}`;
   const codeKey = buildKey(record.cellId, version);
   await uploadPackage({ bucket: env.codeBucket, key: codeKey, files: pkg });
+  // LAST CHECK BEFORE GOING LIVE: deploys are not serialized, so an older
+  // bundle that finishes after a newer one was requested must not repoint the
+  // Lambda backwards. The window left is between this read and the update.
+  if (pin.version) {
+    const latest = (await createRegistry(env.registryTable).get(record.cellId))?.deploy;
+    if (latest && latest.version !== pin.version && Number(latest.version) > Number(pin.version)) {
+      throw new DeploySupersededError(`deploy ${pin.version} superseded by ${latest.version}`);
+    }
+  }
   await updateFunctionCode(record.functionName, env.codeBucket, codeKey);
   await createRegistry(env.registryTable).put({
     ...record,
@@ -1168,6 +2141,7 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     address: cellAddress(record.owner, record.name),
     public: record.public,
     version,
+    ...(pin.treeVersion ? { treeVersion: pin.treeVersion } : {}),
     files: Object.keys(files),
     clientEntry: clientEntry ?? null,
     staticFiles,
@@ -1176,6 +2150,7 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     deployed: true,
     cellId: record.cellId,
     version,
+    ...(pin.treeVersion ? { treeVersion: pin.treeVersion } : {}),
     entry,
     clientEntry: clientEntry ?? null,
     staticFiles,
@@ -1198,6 +2173,7 @@ interface DeployStarted {
   deploying: true;
   cellId: string;
   version: string;
+  treeVersion: string;
   deploy: DeployState;
   message: string;
 }
@@ -1206,30 +2182,55 @@ interface DeployStarted {
  *  (routed back to `onDeployRequested`), and return the marker. Shared by the
  *  `deploy` command and the write/edit `deploy:true` flags so every deploy path
  *  is off the synchronous request/edge timeout. */
-async function requestDeploy(record: CellRecord, env: ForgeEnv, ctx: ServiceContext): Promise<DeployStarted> {
+async function requestDeploy(record: CellRecord, env: ForgeEnv, ctx: ServiceContext, treeVersion?: string): Promise<DeployStarted> {
+  // PIN THE SOURCE NOW. The worker runs later, off the request path; if it read
+  // src/ then, it would build whatever had been written in between — not the
+  // tree this request was for. A snapshot freezes it (cheap after the first:
+  // only files that changed since the last snapshot are copied).
+  const store = new TreeStore(env.codeBucket, record.cellId);
+  let pinned: string;
+  if (treeVersion !== undefined) {
+    if (!isTreeVersion(treeVersion)) throw new Error('treeVersion must be tree:<64 hex> (from cells.status, cells.snapshot or applyPatchSet)');
+    if (!(await store.loadSnapshot(treeVersion))) {
+      const snap = await store.snapshot();
+      if (snap.treeVersion !== treeVersion) {
+        throw new TreeConflictError(treeVersion, snap.treeVersion);
+      }
+    }
+    pinned = treeVersion;
+  } else {
+    pinned = (await store.snapshot({ createdBy: 'deploy' })).treeVersion;
+  }
   const version = `${Date.now()}`;
-  const deployState: DeployState = { phase: 'DEPLOYING', version, requestedAt: new Date().toISOString() };
+  const deployState: DeployState = { phase: 'DEPLOYING', version, requestedAt: new Date().toISOString(), treeVersion: pinned };
   await createRegistry(env.registryTable).setDeploy(record.cellId, deployState);
   await ctx.events.emit('cell.deploy.requested', {
     cellId: record.cellId,
     owner: record.owner,
     name: record.name,
     version,
+    treeVersion: pinned,
   });
-  ctx.logger.info('cell deploy requested', { cellId: record.cellId, version });
+  ctx.logger.info('cell deploy requested', { cellId: record.cellId, version, treeVersion: pinned });
   return {
     deploying: true,
     cellId: record.cellId,
     version,
+    treeVersion: pinned,
     deploy: deployState,
     message: 'Bundling in the background. Poll `get` until `deploy.phase` is DEPLOYED (or FAILED).',
   };
 }
 
-async function deploy(input: CellRef, ctx: ServiceContext): Promise<unknown> {
+interface DeployInput extends CellRef {
+  /** Deploy exactly this snapshot (default: snapshot the current tree now). */
+  treeVersion?: string;
+}
+
+async function deploy(input: DeployInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   const { record, env } = await resolveAuthorized(input, user);
-  return requestDeploy(record, env, ctx);
+  return requestDeploy(record, env, ctx, input?.treeVersion);
 }
 
 /**
@@ -1252,14 +2253,39 @@ async function onDeployRequested(detail: Record<string, unknown>, ctx: ServiceCo
     ctx.logger.warn('cell.deploy.requested for unknown cell', { cellId });
     return;
   }
-  const requestedAt = record.deploy?.requestedAt ?? new Date().toISOString();
-  const version = record.deploy?.version ?? `${Date.now()}`;
+  const eventVersion = typeof detail.version === 'string' ? detail.version : undefined;
+  const current = record.deploy;
+  if (eventVersion && current && current.version === eventVersion && current.phase !== 'DEPLOYING') {
+    // EventBridge is at-least-once: this request already finished.
+    ctx.logger.info('cell.deploy.requested redelivered after it finished — skipped', { cellId, version: eventVersion });
+    return;
+  }
+  if (eventVersion && current && current.version !== eventVersion && Number(current.version) > Number(eventVersion)) {
+    ctx.logger.info('cell.deploy.requested superseded by a newer request — skipped', { cellId, version: eventVersion, latest: current.version });
+    return;
+  }
+  const requestedAt = current?.requestedAt ?? new Date().toISOString();
+  const version = eventVersion ?? current?.version ?? `${Date.now()}`;
+  // The event carries the pin; the registry marker is the fallback for events
+  // emitted before treeVersion rode on them.
+  const treeVersion =
+    typeof detail.treeVersion === 'string'
+      ? detail.treeVersion
+      : !eventVersion || current?.version === eventVersion
+        ? current?.treeVersion
+        : undefined;
   try {
-    const result = (await deployCell(record, env, ctx)) as { version: string };
-    await registry.setDeploy(cellId, { phase: 'DEPLOYED', version: result.version, requestedAt });
+    const result = (await deployCell(record, env, ctx, { treeVersion, version: eventVersion ?? current?.version })) as { version: string };
+    const deployedAt = new Date().toISOString();
+    await registry.setDeploy(cellId, { phase: 'DEPLOYED', version: result.version, requestedAt, ...(treeVersion ? { treeVersion } : {}) });
+    await registry.setLastDeployed(cellId, { version: result.version, ...(treeVersion ? { treeVersion } : {}), deployedAt });
   } catch (err) {
+    if (err instanceof DeploySupersededError) {
+      ctx.logger.info('cell deploy superseded before going live — not applied', { cellId, version, error: err.message });
+      return;
+    }
     ctx.logger.error('cell deploy failed', { cellId, error: (err as Error).message });
-    await registry.setDeploy(cellId, { phase: 'FAILED', version, requestedAt, error: (err as Error).message });
+    await registry.setDeploy(cellId, { phase: 'FAILED', version, requestedAt, error: (err as Error).message, ...(treeVersion ? { treeVersion } : {}) });
   }
 }
 
@@ -1770,8 +2796,44 @@ interface ToolSpec {
   scope: string | null;
   /** `read` = side-effect-free; `act` = may mutate. Routes the gateway's read/act dispatch. */
   kind: 'read' | 'act';
+  /** The declared result envelope (surfaced by the gateway as the tool's output schema). */
+  resultSchema?: Record<string, unknown>;
   handler: RegisteredCommand;
 }
+
+// ─── Shared schema fragments for the source-file tools ───────────────
+const CELL_REF_PROPS = {
+  cellId: { type: 'string' },
+  owner: { type: 'string' },
+  name: { type: 'string' },
+};
+const IF_VERSION = {
+  type: 'string',
+  description: 'Proof of read: the `version` a prior readFile/listFiles/searchFiles returned. The call fails with VERSION_CONFLICT (nothing written) if the file has changed since.',
+};
+const VERSION_PROP = { type: 'string', description: 'Content version, `sha256:<hex>` of the stored bytes. Pass back as ifVersion.' };
+const TREE_VERSION_PROP = { type: 'string', description: 'Tree version, `tree:<hex>` — names an exact source tree (sorted path + content versions).' };
+const FILE_META_PROPS = {
+  path: { type: 'string' },
+  contentType: { type: 'string' },
+  binary: { type: 'boolean', description: 'Stored as bytes (content comes back base64)' },
+  bytes: { type: 'number' },
+  lines: { type: 'number', description: 'Line count (text files only)' },
+  version: VERSION_PROP,
+  etag: { type: 'string' },
+  modifiedAt: { type: 'string' },
+};
+const MUTATION_RESULT = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    cellId: { type: 'string' },
+    path: { type: 'string' },
+    version: VERSION_PROP,
+    previousVersion: { type: 'string', description: 'The version this mutation replaced (when it was read)' },
+    deploy: { type: 'object', description: 'Present when deploy:true — the DEPLOYING marker; poll get for the phase' },
+  },
+};
 
 const TOOLS: Record<string, ToolSpec> = {
   create: {
@@ -1904,62 +2966,83 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   writeFile: {
     description:
-      "Write a source file to a cell's editable tree (cells/<id>/src/<path>). Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase), else call deploy.",
+      "Write a source file to a cell's editable tree (cells/<id>/src/<path>). Text by default; encoding:'base64' writes bytes (images, fonts) with a content type from the extension. Safe forms: ifVersion (replace only the version you read) or ifAbsent (create only). Returns the new `version`. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase), else call deploy.",
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
-        cellId: { type: 'string' },
-        owner: { type: 'string' },
-        name: { type: 'string' },
+        ...CELL_REF_PROPS,
         path: { type: 'string', description: 'Relative path under src/, e.g. index.ts or lib/util.ts' },
-        content: { type: 'string' },
+        content: { type: 'string', description: 'File body — text, or base64 when encoding is base64' },
+        encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'base64 stores BYTES (binary assets); default utf8 text' },
+        ifVersion: IF_VERSION,
+        ifAbsent: { type: 'boolean', description: 'Create only: fail with VERSION_CONFLICT if the file already exists' },
         deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after writing (poll get for deploy.phase)' },
       },
       required: ['path', 'content'],
       additionalProperties: false,
     },
+    resultSchema: MUTATION_RESULT,
     handler: writeFile as RegisteredCommand,
   },
   replaceInFile: {
     description:
-      "Preferred for editing an existing cell source file: exact string replacement without resending the whole file. old_str must match exactly (case-sensitive); new_str may be empty to delete; replace_all replaces every occurrence (default: first). Returns `occurrences` so ambiguity is detectable. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase). Use writeFile only when rewriting most of a file.",
+      "Preferred for editing an existing cell source file: exact string replacement without resending the whole file. old_str must match exactly (case-sensitive); new_str may be empty to delete. SAFE BY DEFAULT: old_str must occur exactly once (expectedOccurrences, default 1) or nothing is written — widen old_str, or pass matchIndex (0-based) / replace_all. Pass ifVersion from your readFile to refuse edits to a file that changed since. dryRun:true returns the prospective hunks without writing. Returns the new `version`. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase). Use writeFile only when rewriting most of a file.",
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
-        cellId: { type: 'string' },
-        owner: { type: 'string' },
-        name: { type: 'string' },
+        ...CELL_REF_PROPS,
         path: { type: 'string', description: 'Relative path under src/, e.g. client/main.ts' },
         old_str: { type: 'string', description: 'Exact string to find (case-sensitive, including whitespace)' },
         new_str: { type: 'string', description: 'Replacement (empty string deletes)' },
-        replace_all: { type: 'boolean', description: 'Replace every occurrence (default: first only)' },
+        replace_all: { type: 'boolean', description: 'Replace every occurrence' },
+        expectedOccurrences: { type: 'number', description: 'Required occurrence count, checked before writing (default 1 unless replace_all/matchIndex)' },
+        matchIndex: { type: 'number', description: 'Replace only the Nth occurrence (0-based)' },
+        ifVersion: IF_VERSION,
+        dryRun: { type: 'boolean', description: 'Validate and return the prospective hunks; write nothing' },
         deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after the edit (poll get for deploy.phase)' },
       },
       required: ['path', 'old_str', 'new_str'],
       additionalProperties: false,
     },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        ...MUTATION_RESULT.properties,
+        replacements: { type: 'number' },
+        occurrences: { type: 'number' },
+        line: { type: 'number', description: 'Line of the first replacement' },
+        dryRun: { type: 'boolean' },
+        nextVersion: { type: 'string', description: 'dryRun: the version the edit would produce' },
+        hunks: { type: 'array', items: { type: 'object', properties: { line: { type: 'number' }, before: { type: 'string' }, after: { type: 'string' } } } },
+      },
+    },
     handler: replaceInFile as RegisteredCommand,
   },
   appendToFile: {
-    description: "Append content to the end of a cell source file (creates it when missing) — add a function or section without resending the file. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase).",
+    description: "Append content to the end of a text cell source file (creates it when missing) — add a function or section without resending the file. Agent-safe form: ifExists:true (a typo'd path fails instead of creating a file) plus ifVersion. Returns the new `version`. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase).",
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
-        cellId: { type: 'string' },
-        owner: { type: 'string' },
-        name: { type: 'string' },
+        ...CELL_REF_PROPS,
         path: { type: 'string' },
         content: { type: 'string', description: 'Content to append (lead with \\n for a separator)' },
+        ifVersion: IF_VERSION,
+        ifExists: { type: 'boolean', description: 'Fail instead of creating the file when it is missing' },
+        ifAbsent: { type: 'boolean', description: 'Create only: fail with VERSION_CONFLICT if the file exists' },
         deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after appending (poll get for deploy.phase)' },
       },
       required: ['path', 'content'],
       additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: { ...MUTATION_RESULT.properties, created: { type: 'boolean' }, bytes: { type: 'number' } },
     },
     handler: appendToFile as RegisteredCommand,
   },
@@ -1984,53 +3067,367 @@ const TOOLS: Record<string, ToolSpec> = {
     handler: importSrc as RegisteredCommand,
   },
   readFile: {
-    description: "Read one source file from a cell's src/ tree.",
+    description: `Read one source file from a cell's src/ tree, with its metadata (bytes, lines, contentType) and content \`version\` (pass back as ifVersion on edits). Whole file by default; for large files read a LINE RANGE (startLine/endLine, 1-based inclusive) or a BYTE RANGE (offset/length). Ranged reads are capped at ~${RANGE_MAX_BYTES / 1024}KB and report truncated + nextStartLine/nextOffset to continue. Bytes (images, fonts) come back base64. Find where to read with searchFiles.`,
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
-        cellId: { type: 'string' },
-        owner: { type: 'string' },
-        name: { type: 'string' },
+        ...CELL_REF_PROPS,
         path: { type: 'string' },
+        startLine: { type: 'number', description: 'First line, 1-based (text files)' },
+        endLine: { type: 'number', description: 'Last line, inclusive (default: as far as the budget allows)' },
+        offset: { type: 'number', description: 'Byte offset (any file)' },
+        length: { type: 'number', description: 'Byte count from offset' },
+        encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Force base64 output for text; bytes are always base64' },
       },
       required: ['path'],
       additionalProperties: false,
     },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        ...FILE_META_PROPS,
+        content: { type: 'string' },
+        encoding: { type: 'string', enum: ['utf8', 'base64'] },
+        range: {
+          type: 'object',
+          properties: {
+            startLine: { type: 'number' }, endLine: { type: 'number' }, totalLines: { type: 'number' },
+            offset: { type: 'number' }, length: { type: 'number' }, totalBytes: { type: 'number' },
+          },
+        },
+        truncated: { type: 'boolean', description: 'The budget cut the range short of what was asked' },
+        nextStartLine: { type: 'number' },
+        nextOffset: { type: 'number' },
+      },
+      required: ['path', 'content', 'encoding', 'version'],
+    },
     handler: readFile as RegisteredCommand,
   },
   listFiles: {
-    description: "List a cell's source files (its src/ tree).",
+    description: "List a cell's source files (its src/ tree). Narrow with prefix (e.g. client/hydro/) and/or glob (e.g. **/*.ts). view:'meta' returns per-file bytes, lines, contentType and version (paged, 100 by default); the default view returns paths. Page with limit + nextCursor. Always reports total and totalBytes for the filtered set.",
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
-      properties: { cellId: { type: 'string' }, owner: { type: 'string' }, name: { type: 'string' } },
+      properties: {
+        ...CELL_REF_PROPS,
+        prefix: { type: 'string', description: 'Only paths under this prefix, e.g. client/hydro/' },
+        glob: { type: 'string', description: 'Only paths matching, e.g. client/**/*.ts (no slash = basename anywhere, e.g. *.md)' },
+        limit: { type: 'number', description: `Page size (max ${LIST_MAX})` },
+        cursor: { type: 'string', description: 'nextCursor from the previous page' },
+        view: { type: 'string', enum: ['paths', 'meta'] },
+      },
       additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        files: {
+          type: 'array',
+          description: "Paths (view:'paths') or file metadata objects (view:'meta')",
+          items: { anyOf: [{ type: 'string' }, { type: 'object', properties: FILE_META_PROPS }] },
+        },
+        count: { type: 'number' },
+        total: { type: 'number' },
+        totalBytes: { type: 'number' },
+        nextCursor: { type: 'string' },
+      },
+      required: ['files'],
     },
     handler: listFiles as RegisteredCommand,
   },
+  searchFiles: {
+    description: "Search a cell's source tree server-side and return match locations (path, line, column, the matching line, optional context) — find a symbol in a large file without reading it, then readFile the lines around the hit. Literal by default; regex:true for a JS regex (matched per line). Narrow with prefix/glob. Binary files are skipped. Page with nextCursor.",
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...CELL_REF_PROPS,
+        query: { type: 'string', description: 'Text (or regex) to find' },
+        regex: { type: 'boolean', description: 'Treat query as a JavaScript regular expression' },
+        caseSensitive: { type: 'boolean', description: 'Default true' },
+        prefix: { type: 'string', description: 'Only paths under this prefix' },
+        glob: { type: 'string', description: 'Only paths matching, e.g. client/**/*.ts' },
+        contextLines: { type: 'number', description: 'Lines of context before/after each match (0–10, default 0)' },
+        maxMatches: { type: 'number', description: `Default ${SEARCH_DEFAULT_MATCHES}, max ${SEARCH_MAX_MATCHES}` },
+        cursor: { type: 'string', description: 'nextCursor from the previous page' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        matches: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' }, line: { type: 'number' }, column: { type: 'number' }, text: { type: 'string' },
+              before: { type: 'array', items: { type: 'string' } }, after: { type: 'array', items: { type: 'string' } },
+              version: VERSION_PROP,
+            },
+          },
+        },
+        count: { type: 'number' },
+        searchedFiles: { type: 'number' },
+        skippedBinary: { type: 'number' },
+        truncated: { type: 'boolean' },
+        nextCursor: { type: 'string' },
+      },
+      required: ['matches'],
+    },
+    handler: searchFiles as RegisteredCommand,
+  },
   deleteFile: {
-    description: "Delete one source file from a cell's src/ tree (redeploy to take effect).",
+    description: "Delete one source file from a cell's src/ tree. Pass ifVersion to delete only the version you read. Redeploy to take effect, or pass deploy:true to kick one off in the same call.",
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
-      properties: { cellId: { type: 'string' }, owner: { type: 'string' }, name: { type: 'string' }, path: { type: 'string' } },
+      properties: {
+        ...CELL_REF_PROPS,
+        path: { type: 'string' },
+        ifVersion: IF_VERSION,
+        deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after deleting (poll get for deploy.phase)' },
+      },
       required: ['path'],
       additionalProperties: false,
     },
+    resultSchema: MUTATION_RESULT,
     handler: deleteFile as RegisteredCommand,
   },
-  deploy: {
-    description: "Bundle a cell's src/ tree (resolving relative imports) and point its Lambda at the new build — no cdk deploy. Runs ASYNCHRONOUSLY: returns immediately with `deploy.phase: DEPLOYING`; poll `get` until `deploy.phase` is DEPLOYED (or FAILED, with `deploy.error`).",
+  status: {
+    description: "The cell's source tree at a glance: `treeVersion` (tree:<hash> naming this exact source — pass it as ifTreeVersion to applyPatchSet or as treeVersion to deploy), file count and bytes, the last deployed tree, whether source is `dirty` (differs from what is deployed) and how many files changed since.",
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: { ...CELL_REF_PROPS }, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        treeVersion: TREE_VERSION_PROP,
+        files: { type: 'number' },
+        bytes: { type: 'number' },
+        deployed: { type: ['object', 'null'], description: '{version, treeVersion, deployedAt} of the last deploy that landed' },
+        dirty: { type: ['boolean', 'null'], description: 'Source differs from the deployed tree (null: never deployed from a snapshot)' },
+        changedSinceDeploy: { type: 'object', properties: { added: { type: 'number' }, modified: { type: 'number' }, deleted: { type: 'number' } } },
+        deploy: { type: 'object' },
+      },
+      required: ['treeVersion'],
+    },
+    handler: sourceStatus as RegisteredCommand,
+  },
+  snapshot: {
+    description: "Freeze the cell's current source tree as an immutable snapshot and return its `treeVersion`. Snapshots are what deploys build and what diff compares; content is stored once per version, so re-snapshotting an unchanged tree is free. ifTreeVersion refuses if the tree has moved.",
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
-      properties: { cellId: { type: 'string' }, owner: { type: 'string' }, name: { type: 'string' } },
+      properties: { ...CELL_REF_PROPS, ifTreeVersion: { type: 'string', description: 'Fail with TREE_CONFLICT unless the live tree is exactly this one' } },
       additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: { cellId: { type: 'string' }, treeVersion: TREE_VERSION_PROP, count: { type: 'number' }, bytes: { type: 'number' }, createdAt: { type: 'string' } },
+      required: ['treeVersion'],
+    },
+    handler: snapshotSource as RegisteredCommand,
+  },
+  applyPatchSet: {
+    description:
+      "Apply several edits across files as ONE all-or-nothing change — the tool for coupled multi-file work. Each change is {op:'write'|'replace'|'append'|'delete'|'move', ...} with the same fields and preconditions as the single-file tools (ifVersion, ifAbsent, ifExists, expectedOccurrences, matchIndex; move takes from/to/overwrite). Preconditions refer to the tree BEFORE the patch set; edits apply in order. ifTreeVersion (from cells.status) refuses unless the WHOLE tree is still the one you inspected. dryRun:true returns every conflict at once, per-file +/- lines, one combined unified diff and the projected treeVersion, writing nothing. A real run validates everything first, then commits every file or rolls every write back; snapshot:true freezes the result, deploy:true deploys exactly the result.",
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...CELL_REF_PROPS,
+        changes: {
+          type: 'array',
+          description: `1–${PATCH_MAX_CHANGES} changes, applied in order`,
+          items: {
+            type: 'object',
+            properties: {
+              op: { type: 'string', enum: ['write', 'replace', 'append', 'delete', 'move'] },
+              path: { type: 'string', description: 'write/replace/append/delete: the file' },
+              content: { type: 'string', description: 'write/append' },
+              encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'write: base64 stores bytes' },
+              old_str: { type: 'string', description: 'replace' },
+              new_str: { type: 'string', description: 'replace' },
+              replace_all: { type: 'boolean' },
+              expectedOccurrences: { type: 'number' },
+              matchIndex: { type: 'number' },
+              from: { type: 'string', description: 'move: source path' },
+              to: { type: 'string', description: 'move: destination path' },
+              overwrite: { type: 'boolean', description: 'move: replace an existing destination' },
+              ifVersion: IF_VERSION,
+              ifAbsent: { type: 'boolean', description: 'write: create only' },
+              ifExists: { type: 'boolean', description: 'append: never create' },
+            },
+            required: ['op'],
+          },
+        },
+        ifTreeVersion: { type: 'string', description: 'Refuse (TREE_CONFLICT) unless the whole source tree is still exactly this tree:<hash>' },
+        dryRun: { type: 'boolean', description: 'Validate; return conflicts, combined diff and projected treeVersion; write nothing' },
+        snapshot: { type: 'boolean', description: 'Freeze the resulting tree' },
+        deploy: { type: 'boolean', description: 'Deploy exactly the resulting tree (implies snapshot)' },
+        contextLines: { type: 'number', description: 'Dry-run diff context (0–10, default 3)' },
+      },
+      required: ['changes'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        ok: { type: 'boolean' },
+        dryRun: { type: 'boolean' },
+        cellId: { type: 'string' },
+        previousTreeVersion: TREE_VERSION_PROP,
+        treeVersion: { ...TREE_VERSION_PROP, description: 'The tree after the patch set (projected, on a dry run)' },
+        conflicts: {
+          type: 'array',
+          items: { type: 'object', properties: { index: { type: 'number' }, op: { type: 'string' }, path: { type: 'string' }, error: { type: 'string' } } },
+        },
+        files: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' }, status: { type: 'string', enum: ['A', 'M', 'D'] },
+              oldVersion: { type: 'string' }, version: { type: 'string' },
+              added: { type: 'number' }, removed: { type: 'number' },
+              movedFrom: { type: 'string' }, movedTo: { type: 'string' }, binary: { type: 'boolean' },
+            },
+          },
+        },
+        diff: { type: 'string', description: 'Dry run: one combined unified diff (budgeted; see omitted)' },
+        truncated: { type: 'boolean' },
+        omitted: { type: 'array', items: { type: 'string' } },
+        snapshot: TREE_VERSION_PROP,
+        concurrentChanges: { type: 'boolean', description: 'Files outside the patch set changed while it committed' },
+        deploy: { type: 'object' },
+      },
+    },
+    handler: applyPatchSet as RegisteredCommand,
+  },
+  moveFile: {
+    description: 'Rename/move one source file atomically (a one-change applyPatchSet): the destination appears and the source disappears together. ifVersion guards the source; overwrite:true replaces an existing destination; ifTreeVersion, dryRun and deploy as in applyPatchSet.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...CELL_REF_PROPS,
+        from: { type: 'string' },
+        to: { type: 'string' },
+        ifVersion: IF_VERSION,
+        overwrite: { type: 'boolean' },
+        ifTreeVersion: { type: 'string' },
+        dryRun: { type: 'boolean' },
+        deploy: { type: 'boolean' },
+      },
+      required: ['from', 'to'],
+      additionalProperties: false,
+    },
+    handler: moveFile as RegisteredCommand,
+  },
+  diff: {
+    description: "Diff two source trees without downloading them — \"what changed since my last look / since deploy?\". from/to are 'current', 'deployed' (the last landed deploy) or a tree:<hash> (a snapshot, or the current tree); default deployed → current. view 'summary' (counts + total +/- lines), 'files' (default: per-file A/M/D with +/- lines), or 'patch' (unified hunks, budgeted — narrow with prefix/glob). ",
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...CELL_REF_PROPS,
+        from: { type: 'string', description: "current | deployed | tree:<hash> (default deployed)" },
+        to: { type: 'string', description: "current | deployed | tree:<hash> (default current)" },
+        view: { type: 'string', enum: ['summary', 'files', 'patch'] },
+        prefix: { type: 'string' },
+        glob: { type: 'string' },
+        contextLines: { type: 'number', description: 'Patch context (0–10, default 3)' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        from: { type: 'object', properties: { spec: { type: 'string' }, treeVersion: TREE_VERSION_PROP } },
+        to: { type: 'object', properties: { spec: { type: 'string' }, treeVersion: TREE_VERSION_PROP } },
+        identical: { type: 'boolean' },
+        counts: { type: 'object', properties: { added: { type: 'number' }, modified: { type: 'number' }, deleted: { type: 'number' }, unchanged: { type: 'number' } } },
+        lines: { type: 'object', properties: { added: { type: 'number' }, removed: { type: 'number' } } },
+        files: { type: 'array', items: { type: 'object' } },
+        patch: { type: 'string' },
+        truncated: { type: 'boolean' },
+        omitted: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['from', 'to', 'counts'],
+    },
+    handler: diffSource as RegisteredCommand,
+  },
+  readFiles: {
+    description: `Read several source files (or line ranges of them) in one call under ONE shared byte budget (maxBytes, default and max ~${RANGE_MAX_BYTES / 1024}KB) — assemble context for a subsystem without a round trip per file. Filled in order; a file cut short reports nextStartLine, files past the budget come back \`omitted\` with their metadata. Each file carries its \`version\`.`,
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...CELL_REF_PROPS,
+        files: {
+          type: 'array',
+          description: `1–${READ_FILES_MAX} files`,
+          items: {
+            type: 'object',
+            properties: { path: { type: 'string' }, startLine: { type: 'number' }, endLine: { type: 'number' } },
+            required: ['path'],
+          },
+        },
+        maxBytes: { type: 'number' },
+      },
+      required: ['files'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        files: { type: 'array', items: { type: 'object', properties: { ...FILE_META_PROPS, content: { type: 'string' }, encoding: { type: 'string' }, truncated: { type: 'boolean' }, nextStartLine: { type: 'number' }, omitted: { type: 'boolean' }, error: { type: 'string' } } } },
+        budget: { type: 'number' },
+        used: { type: 'number' },
+      },
+      required: ['files'],
+    },
+    handler: readFiles as RegisteredCommand,
+  },
+  deploy: {
+    description: "Bundle a cell's source (resolving relative imports) and point its Lambda at the new build — no cdk deploy. SOURCE-PINNED: the deploy builds an immutable snapshot — `treeVersion` if given (from cells.status / cells.snapshot / applyPatchSet), else a snapshot of the tree taken now — never whatever src/ holds when the worker runs. Runs ASYNCHRONOUSLY: returns immediately with `deploy.phase: DEPLOYING` and the pinned `treeVersion`; poll `get` until `deploy.phase` is DEPLOYED (or FAILED, with `deploy.error`). A newer deploy supersedes an older one still bundling.",
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...CELL_REF_PROPS,
+        treeVersion: { type: 'string', description: 'Deploy exactly this tree (tree:<hash>). Omit to snapshot and deploy the current tree.' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        deploying: { type: 'boolean' },
+        cellId: { type: 'string' },
+        version: { type: 'string' },
+        treeVersion: TREE_VERSION_PROP,
+        deploy: { type: 'object' },
+      },
     },
     handler: deploy as RegisteredCommand,
   },
@@ -2130,12 +3527,15 @@ const TOOLS: Record<string, ToolSpec> = {
 };
 
 /** Tool manifest for the gateway: name, schema, and the scope it should enforce. */
-function describeTools(): { tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown>; scope: string | null; kind: 'read' | 'act' }> } {
+function describeTools(): {
+  tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown>; resultSchema?: Record<string, unknown>; scope: string | null; kind: 'read' | 'act' }>;
+} {
   return {
     tools: Object.entries(TOOLS).map(([name, t]) => ({
       name,
       description: t.description,
       inputSchema: t.inputSchema,
+      ...(t.resultSchema ? { resultSchema: t.resultSchema } : {}),
       scope: t.scope,
       kind: t.kind,
     })),
