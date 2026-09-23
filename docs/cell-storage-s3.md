@@ -156,6 +156,17 @@ cells/<id>/tree/lock.json             patch-set commit lock + rollback journal
   source through MCP. **`readFiles`** assembles several files or line ranges
   under one shared byte budget.
 
+**`scripts/cell-sync.mjs` is built on this.** It keeps the last-synced
+tree per cell in a committed `cells/<name>/.cell-sync.json` (path → version)
+and plans every file three ways — last sync, working tree, cell — so `push`
+sends only local changes as one `applyPatchSet` (per-file `ifVersion`,
+whole-set `ifTreeVersion`, `deploy` pinned to the result) and `pull` fetches
+only the cell's changes; a file both sides changed is reported, never
+overwritten. Files too large for one request are staged and `move`d into
+place inside the patch set. `status` and `diff` are read-only views of the
+same plan. The pure planning rule is `scripts/cell-sync-plan.cjs`
+(tests/cell-sync-plan.test.ts).
+
 Not yet: deploy jobs with stages and logs (`getDeploy`), a
 `cell.deploy.failed` event, a validate-without-deploy step, a symbol index,
 a change feed, and garbage collection of unreferenced blobs/snapshots.
