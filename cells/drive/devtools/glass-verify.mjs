@@ -7,7 +7,7 @@
  *   night     headlights, the HUD over near-black
  *   wpt-on    WPT active (amber) vs the dim default
  *   auto-on   AUTO engaged with its status line
- *   paused    the transport held via the deck's DRIVE sheet
+ *   paused    the transport held via the pause cell
  *
  * Rig-warning and rough-surface states need a damaged rig / a track under
  * the wheels and are captured in play rather than staged here.
@@ -37,25 +37,25 @@ await snap('glass-wpt-on');
 await d.page.evaluate(() => window.__dial('poi', 0));
 
 await d.page.evaluate(() => window.__dial('auto', 1));
-// AUTO and HOLD live on the deck's baseline strip (client/hud-deck.ts), up
-// while no layout is, and the chips are clicked where a thumb
-// would land on them, so a control covered by something else fails here.
-const tapDeck = async (id) => {
-  // AUTO and HOLD are the BASELINE's controls: the strip over the row shows
-  // only with no layout up, so lower whatever is up first.
-  const act = await d.page.evaluate(() => window.__deck().active);
-  if (act) {
-    await d.page.evaluate((a) => window.__deck(a), act);
-    await d.page.waitForTimeout(1500);
+await d.page.evaluate(() => {
+  const r = window.__autorect();
+  const c = document.querySelector('canvas');
+  const x = (r.x + r.w / 2) * r.s, y = (r.y + r.h / 2) * r.s;
+  for (const t of ['pointerdown', 'pointerup']) {
+    c.dispatchEvent(new PointerEvent(t, { clientX: x, clientY: y, pointerId: 7, bubbles: true }));
   }
-  await d.page.evaluate((i) => {
-    const r = window.__deckrect(i);
-    document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2)?.closest('[data-deck-item],[data-deck-tab]')?.click();
-  }, id);
-};
-await tapDeck('auto');
+});
 await snap('glass-auto-on');
-await tapDeck('hold');
+
+// The pause cell sits one grid column right of AUTO (CW 18 + CG 2 = 20).
+await d.page.evaluate(() => {
+  const r = window.__autorect();
+  const c = window.__hudcanvas();
+  const x = (r.x + 20 + r.w / 2) * r.s, y = (r.y + r.h / 2) * r.s;
+  for (const t of ['pointerdown', 'pointerup']) {
+    c.dispatchEvent(new PointerEvent(t, { pointerId: 8, pointerType: 'touch', button: 0, bubbles: true, clientX: x, clientY: y }));
+  }
+});
 await snap('glass-paused');
 
 report(d.errors);
