@@ -27,6 +27,10 @@ export function runWorldAuthoringDemSelfTest(): void {
   edit.undo();
   assert([...a.data, ...b.data].every((value) => value === 100),
     'undo did not restore DEM source values');
+  edit.redo();
+  assert(Math.max(...a.data, ...b.data) > 100,
+    'redo did not restore the sculpted DEM values');
+  edit.undo();
 
   const slope = tile('slope', 0, [
     90, 90, 90, 90,
@@ -55,4 +59,6 @@ export function runWorldAuthoringDemSelfTest(): void {
   const reset = edit.reset();
   assert(reset.changed > 0 && spike.data[6] === 140,
     'reset did not restore the authored DEM session');
+  assert(edit.report().undoDepth === 0 && edit.report().redoDepth === 0,
+    'DEM reset did not clear both history stacks');
 }

@@ -153,6 +153,9 @@ export interface Sync {
   bank(tape: unknown): Promise<{ ok: boolean; url?: string; kept?: number; why?: string }>;
   /** The shelf of banked runs, as of the last sync. Empty until one lands. */
   tapes(): TapeShelfRow[];
+  /** File an authored entry for one z16 tile (an empty list retracts it).
+   *  The cell's own grant decides who may: owner or shared principal. */
+  author(entry: { layer?: 'osm' | 'cover' | 'dem'; tile: string; ways?: unknown[]; patch?: Record<string, Record<string, string>>; cells?: Array<[number, number]> }): Promise<{ ok: boolean; rev?: number; n?: number; url?: string; why?: string }>;
 }
 
 export interface TapeShelfRow {
@@ -480,6 +483,31 @@ export function openSync(ports: SyncPorts, opts: {
     },
     sync: (reason = 'syncing…'): Promise<void> => run(reason),
     tapes: (): TapeShelfRow[] => shelf,
+    async author(entry): Promise<{ ok: boolean; rev?: number; n?: number; url?: string; why?: string }> {
+      if (!token) return { ok: false, why: 'SIGN IN TO AUTHOR THE WORLD' };
+      const hit = (): Promise<Response> => fetch(`${base}/authored`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify(entry),
+      });
+      try {
+        let res = await hit();
+        if (res.status === 401) {
+          const r = await refreshTok();
+          if (r === 'ok') res = await hit();
+          else return { ok: false, why: r === 'dead' ? 'SIGNED OUT — SIGN IN AGAIN' : 'SYNC UNREACHABLE — TRY AGAIN' };
+        }
+        // A 403 is the tier above: signed in, but this account holds no grant
+        // on the drive cell. Said plainly, because it is the one answer here
+        // that no retry will change.
+        if (res.status === 403) return { ok: false, why: 'THIS ACCOUNT MAY NOT AUTHOR HERE' };
+        const j = (await res.json().catch(() => ({}))) as { ok?: boolean; rev?: number; n?: number; url?: string; error?: string };
+        if (!res.ok || !j.ok) return { ok: false, why: (j.error ?? `author failed (${res.status})`).toUpperCase() };
+        return { ok: true, rev: j.rev, n: j.n, url: j.url };
+      } catch {
+        return { ok: false, why: 'OFFLINE — NOTHING WAS FILED' };
+      }
+    },
     async bank(tape: unknown): Promise<{ ok: boolean; url?: string; kept?: number; why?: string }> {
       if (!token) return { ok: false, why: 'SIGN IN TO BANK A TAPE' };
       const hit = (): Promise<Response> => fetch(`${base}/tape`, {

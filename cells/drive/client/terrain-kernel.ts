@@ -16,6 +16,17 @@ export interface HeightTile { tx: number; ty: number; xs: number; zs: number; w:
 export type Rgb = [number, number, number];
 export type MmPt = [number, number, number];
 export interface CarveLog { s: number[][]; v: number[][] }
+/** A raised rock with a stated height: the ring in local metres (closed —
+ *  the last point equals the first — or treated as if it were), and the
+ *  height above the ground under its centre. */
+export interface Plinth {
+  pts: ReadonlyArray<readonly [number, number]>;
+  /** Height above the ground under the ring's centre; ignored when `top` is given. */
+  height: number;
+  /** The crown's LOCAL height outright — a sea stack whose top was read off
+   *  the mainland cliff beside it (main's probe), not stated on the way. */
+  top?: number;
+}
 export interface BreakLine { ax: number; az: number; bx: number; bz: number }
 /** The part of a road or channel strip the build reads. main.ts's Seg has more. */
 export interface StripLike {
@@ -100,6 +111,16 @@ export interface TerrainStore {
   /** Canonical hydro coverage contours crossing this tile. These are geometry
    * constraints only: channel carving still owns their elevation. */
   hydroBreakLines(t: HeightTile): readonly BreakLine[];
+  /** Mapped cliff lines (OSM `natural=cliff`) crossing this tile, local
+   *  metres, in the way's own direction. Optional so a store built for a
+   *  test of something else owes nothing here; the kernel reads none as
+   *  "no cliffs". See cliffAdjust. */
+  cliffLines?(t: HeightTile): readonly BreakLine[];
+  /** Mapped stacks and outcrops with a stated height (OSM `natural=rock`,
+   *  `bare_rock` or `stone` rings carrying `height=`), local metres: the
+   *  ground inside a ring stands at the DEM under its centre plus the height,
+   *  with the ring itself as a cliff crease. Optional like cliffLines. */
+  plinths?(t: HeightTile): readonly Plinth[];
   /** The tile's packed bank stations (client/hydro/bank-profile.ts, twelve
    *  floats each, absolute metres), or null where the tile has no shoreline
    *  or the resolver is switched off. The packet answers for itself: the
@@ -288,6 +309,282 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
    *  Deep enough to read as open sea through the water shader, shallow enough
    *  that the shelf at the shoreline stays a shelf rather than a trench. */
   const SEA_BED = 6;
+  /**
+   * THE SEA'S FLOOR IS CONTINUOUS, NOT A PER-VERTEX SWITCH.
+   *
+   * The drop used to be binary: a vertex whose nearest cover pixel said water
+   * fell the whole SEA_BED, and its neighbour on a dry pixel did not. The cover
+   * raster is ~38 m a pixel and a vertex ~9-20 m, so along a fjord the bed
+   * was a 6 m plateau with pixel-shaped holes in it — measured at Romsdalen
+   * (`roms-transect.mjs`: DEM 0.6 across the fjord, the mesh −5.9, with lone
+   * vertices at −4.6 and −3.8 mid-fjord where a pixel read dry, standing 0.5 m
+   * PROUD of a 0.1 m sea) and photographed from a grazing camera as flat
+   * ledges in rows with bilinear ramps between them: the "horizontal
+   * terracing, quantised in world space" the seat reported. A continuous
+   * term replaces the switch: the water EVIDENCE over a footprint about the
+   * raster's own pixel (nine taps, the shape `swardCoverEvidence` already uses
+   * for the same raster and the same reason), saturating at a third of a
+   * pixel wet, under the same hard 2 m ceiling as before. A lone dry pixel
+   * inside the sea now reads 0.8 wet and the bed under it sits at −5.9 rather
+   * than +0.6; the shore is a ramp the width of a cover pixel rather than a
+   * cliff on its boundary. Only ever lowers, as before.
+   */
+  // ── A MAPPED CLIFF IS A VERTICAL FACE, WHATEVER THE DEM SAYS ──
+  //
+  // Measured at the Twelve Apostles: the DEM carries the cliff — 46 m of fall
+  // — spread over 30 m of ground, so the mesh drew a 50° ramp where the
+  // photograph shows a wall, and the tile held three `natural=cliff` ways
+  // the handler fetched and the renderer dropped on the floor. A cliff way is
+  // the one fact the elevation data cannot resolve and the map states
+  // outright: WHERE the face is. What the DEM still knows is how high the
+  // ground stands either side of it, a reach away from the smear. So a vertex
+  // within the smear's width of a cliff line is held at the TOP height on the
+  // high side and pulled to the FOOT height on the low side, easing back to
+  // the DEM over the outer part of the reach, and the refinement splits the
+  // cells along two creases a hair either side of the line so the face is a
+  // wall between two vertices rather than a ramp across a cell. The same
+  // shape as the bank: the map is the authority, the field is the evidence.
+  //
+  // THE DEM DECIDES WHICH SIDE IS DOWN; THE LINE ONLY WHERE. OSM's rule puts
+  // the lower side on the right of the way's direction, and ways are drawn
+  // both ways often enough that trusting it would raise a beach into a wall
+  // somewhere. Both sides are sampled a reach out and the lower one is the
+  // foot. A "cliff" the DEM cannot tell from a bank (under CLIFF_MIN_DROP
+  // between the two) is left alone: a line the map calls a cliff on ground
+  // that does not fall is not evidence enough to cut. A road keeps its deck.
+  const CLIFF_EDGE_M = 0.6;
+  const CLIFF_REACH_M = 26;
+  const CLIFF_MIN_DROP = 4;
+  const CLIFF_CELL = 32;
+  interface CliffIdx { t: HeightTile; lines: readonly BreakLine[]; cells: Map<string, BreakLine[]>; any: boolean }
+  let cliffIdxCache: CliffIdx | null = null;
+  function cliffIndexFor(S: TerrainStore, t: HeightTile): CliffIdx {
+    const lines = S.cliffLines?.(t) ?? [];
+    // KEYED ON THE LINES AS WELL AS THE TILE. A tile object outlives its
+    // cliffs' arrival — the OSM tile lands after the height tile, and the
+    // rebuild it dirties is over the same HeightTile — so a cache on the tile
+    // alone would answer "no cliffs" for ever. Caught by the test's control
+    // build, which shares the tile with the build under test.
+    if (cliffIdxCache && cliffIdxCache.t === t && cliffIdxCache.lines === lines) return cliffIdxCache;
+    const cells = new Map<string, BreakLine[]>();
+    for (const L of lines) {
+      const x0 = Math.min(L.ax, L.bx) - CLIFF_REACH_M, x1 = Math.max(L.ax, L.bx) + CLIFF_REACH_M;
+      const z0 = Math.min(L.az, L.bz) - CLIFF_REACH_M, z1 = Math.max(L.az, L.bz) + CLIFF_REACH_M;
+      for (let cx = Math.floor(x0 / CLIFF_CELL); cx <= Math.floor(x1 / CLIFF_CELL); cx++) {
+        for (let cz = Math.floor(z0 / CLIFF_CELL); cz <= Math.floor(z1 / CLIFF_CELL); cz++) {
+          const k = `${cx},${cz}`;
+          let a = cells.get(k);
+          if (!a) cells.set(k, (a = []));
+          a.push(L);
+        }
+      }
+    }
+    return (cliffIdxCache = { t, lines, cells, any: lines.length > 0 });
+  }
+  /** Two creases a hair either side of every cliff line, for the refinement
+   *  to split its cells along — the top edge and the foot. */
+  function cliffBreakLines(S: TerrainStore, t: HeightTile): BreakLine[] {
+    const out: BreakLine[] = [];
+    for (const L of S.cliffLines?.(t) ?? []) {
+      const dx = L.bx - L.ax, dz = L.bz - L.az, len = Math.hypot(dx, dz) || 1;
+      const nx = (-dz / len) * CLIFF_EDGE_M, nz = (dx / len) * CLIFF_EDGE_M;
+      out.push({ ax: L.ax + nx, az: L.az + nz, bx: L.bx + nx, bz: L.bz + nz });
+      out.push({ ax: L.ax - nx, az: L.az - nz, bx: L.bx - nx, bz: L.bz - nz });
+    }
+    return out;
+  }
+  /** The vertex's LOCAL height after the nearest cliff line has had its say. */
+  function cliffAdjust(S: TerrainStore, t: HeightTile, x: number, z: number, h: number): number {
+    const idx = cliffIndexFor(S, t);
+    if (!idx.any) return h;
+    const segs = idx.cells.get(`${Math.floor(x / CLIFF_CELL)},${Math.floor(z / CLIFF_CELL)}`);
+    if (!segs) return h;
+    let bd = CLIFF_REACH_M, bside = 0, bnx = 0, bnz = 0, bpx = 0, bpz = 0, found = false;
+    for (const L of segs) {
+      const dx = L.bx - L.ax, dz = L.bz - L.az, l2 = dx * dx + dz * dz || 1;
+      const tt = clamp(((x - L.ax) * dx + (z - L.az) * dz) / l2, 0, 1);
+      const px = L.ax + dx * tt, pz = L.az + dz * tt;
+      const d = Math.hypot(x - px, z - pz);
+      if (d >= bd) continue;
+      const len = Math.sqrt(l2);
+      // The way's RIGHT, seen from above in this frame (x east, z south).
+      const nx = -dz / len, nz = dx / len;
+      bd = d; bside = (x - px) * nx + (z - pz) * nz; bnx = nx; bnz = nz; bpx = px; bpz = pz; found = true;
+    }
+    if (!found || S.onRoad(x, z)) return h;
+    const R = CLIFF_REACH_M;
+    const rx = bpx + bnx * R, rz = bpz + bnz * R, lx = bpx - bnx * R, lz = bpz - bnz * R;
+    if (!S.hasHeight(rx, rz) || !S.hasHeight(lx, lz)) return h;
+    const hr = S.sampleHeight(rx, rz), hl = S.sampleHeight(lx, lz);
+    const top = Math.max(hr, hl), foot = Math.min(hr, hl);
+    if (top - foot < CLIFF_MIN_DROP) return h;
+    const onLow = (hr < hl ? bside : -bside) > 0;
+    const u = clamp((bd - R * 0.55) / (R * 0.45), 0, 1);
+    const k = 1 - u * u * (3 - 2 * u);
+    if (onLow) return Math.min(h, foot + (h - foot) * (1 - k));
+    return Math.max(h, top + (h - top) * (1 - k));
+  }
+  // ── A SEA STACK IS A RING WITH A HEIGHT, AND THE DEM HAS NEVER SEEN IT ──
+  //
+  // The Twelve Apostles are 45 m of limestone standing in the surf and the
+  // raster is the sea: no cliff line can raise them, because cliffAdjust
+  // takes its top from the DEM and the DEM says nothing. A mapped ring that
+  // STATES its height is the one line of evidence that can — `natural=rock`
+  // with `height=`, OSM's own keys, whether the map or the authored store
+  // supplies it. Inside the ring the ground stands at the DEM under the
+  // ring's centre plus the height (a stack in the sea rises from the sea,
+  // an outcrop on a hill from the hill); the ring's edges are cliff creases
+  // for the refinement to split along, so the face is a wall and not a
+  // tent; and the colour pass reads the inside as bare ground, whatever the
+  // cover raster says is growing on the water there.
+  const PLINTH_CELL = 32;
+  interface PlinthIdx { t: HeightTile; list: readonly Plinth[]; cells: Map<string, Plinth[]>; base: Map<Plinth, number>; any: boolean }
+  let plinthIdxCache: PlinthIdx | null = null;
+  function plinthIndexFor(S: TerrainStore, t: HeightTile): PlinthIdx {
+    const list = S.plinths?.(t) ?? [];
+    // Keyed on the list as well as the tile — the cliff index's lesson.
+    if (plinthIdxCache && plinthIdxCache.t === t && plinthIdxCache.list === list) return plinthIdxCache;
+    const cells = new Map<string, Plinth[]>();
+    const base = new Map<Plinth, number>();
+    for (const P of list) {
+      const hasTop = P.top !== undefined && Number.isFinite(P.top);
+      if (P.pts.length < 3 || (!hasTop && !(P.height > 0))) continue;
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, sx = 0, sz = 0;
+      for (const [x, z] of P.pts) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; sx += x; sz += z; }
+      const cx = sx / P.pts.length, cz = sz / P.pts.length;
+      // What `base` holds is the CROWN: a stated top outright, or the ground
+      // under the centre plus the stated height.
+      base.set(P, hasTop ? (P.top as number) : (S.hasHeight(cx, cz) ? S.sampleHeight(cx, cz) : 0) + P.height);
+      for (let ix = Math.floor(x0 / PLINTH_CELL); ix <= Math.floor(x1 / PLINTH_CELL); ix++) {
+        for (let iz = Math.floor(z0 / PLINTH_CELL); iz <= Math.floor(z1 / PLINTH_CELL); iz++) {
+          const k = `${ix},${iz}`;
+          let a = cells.get(k);
+          if (!a) cells.set(k, (a = []));
+          a.push(P);
+        }
+      }
+    }
+    return (plinthIdxCache = { t, list, cells, base, any: cells.size > 0 });
+  }
+  function insidePlinth(P: Plinth, x: number, z: number): boolean {
+    const pts = P.pts; const n = pts.length;
+    let inside = false;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const [xi, zi] = pts[i], [xj, zj] = pts[j];
+      if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  /** The plinth standing at (x, z) with its crown, or null. ONE index read
+   *  for both: a store that hands a fresh list per call (a test's closure)
+   *  would otherwise rebuild the index between finding the ring and reading
+   *  its crown, and the crown map is keyed on the ring object. */
+  function plinthHit(S: TerrainStore, t: HeightTile, x: number, z: number): { P: Plinth; crown: number } | null {
+    const idx = plinthIndexFor(S, t);
+    if (!idx.any) return null;
+    const list = idx.cells.get(`${Math.floor(x / PLINTH_CELL)},${Math.floor(z / PLINTH_CELL)}`);
+    if (!list) return null;
+    for (const P of list) if (insidePlinth(P, x, z)) return { P, crown: idx.base.get(P) ?? 0 };
+    return null;
+  }
+  function plinthAt(S: TerrainStore, t: HeightTile, x: number, z: number): Plinth | null {
+    return plinthHit(S, t, x, z)?.P ?? null;
+  }
+  /** How far (x, z) is from the ring's edge, for the crown's rounding. */
+  function plinthEdgeDist(P: Plinth, x: number, z: number): number {
+    const n = P.pts.length;
+    let best = Infinity;
+    for (let i = 0; i < n; i++) {
+      const [ax, az] = P.pts[i], [bx, bz] = P.pts[(i + 1) % n];
+      const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz || 1;
+      const tt = clamp(((x - ax) * dx + (z - az) * dz) / l2, 0, 1);
+      const d = Math.hypot(x - (ax + dx * tt), z - (az + dz * tt));
+      if (d < best) best = d;
+    }
+    return best;
+  }
+  // NOT A CYLINDER. A flat crown meeting a vertical wall reads as a drum;
+  // a real stack's top rounds off toward its edge, weathered. The crown
+  // drops PLINTH_ROUND_M over the last PLINTH_ROUND_R metres to the ring —
+  // a small thing, and the hand-authored DEM (main's authored `dems`) is
+  // where a real shape comes from.
+  const PLINTH_ROUND_M = 4;
+  const PLINTH_ROUND_R = 6;
+  /** The vertex's LOCAL height with the plinth it stands on: never lower than
+   *  the crown, rounded toward the ring. */
+  function plinthAdjust(S: TerrainStore, t: HeightTile, x: number, z: number, h: number): number {
+    const hit = plinthHit(S, t, x, z);
+    if (!hit) return h;
+    const { P, crown } = hit;
+    const u = clamp(plinthEdgeDist(P, x, z) / PLINTH_ROUND_R, 0, 1);
+    return Math.max(h, crown - PLINTH_ROUND_M * (1 - u) * (1 - u));
+  }
+  /** The ring's edges as cliff creases, a hair either side, like a mapped
+   *  cliff line's — closed here whether or not the way was. */
+  function plinthBreakLines(S: TerrainStore, t: HeightTile): BreakLine[] {
+    const out: BreakLine[] = [];
+    for (const P of S.plinths?.(t) ?? []) {
+      const n = P.pts.length;
+      if (n < 3) continue;
+      for (let i = 0; i < n; i++) {
+        const [ax, az] = P.pts[i], [bx, bz] = P.pts[(i + 1) % n];
+        const dx = bx - ax, dz = bz - az, len = Math.hypot(dx, dz);
+        if (len < 0.05) continue;
+        const nx = (-dz / len) * CLIFF_EDGE_M, nz = (dx / len) * CLIFF_EDGE_M;
+        out.push({ ax: ax + nx, az: az + nz, bx: bx + nx, bz: bz + nz });
+        out.push({ ax: ax - nx, az: az - nz, bx: bx - nx, bz: bz - nz });
+      }
+    }
+    return out;
+  }
+  const SEA_EV_R = 20;
+  /** Sand, linear: warm and pale, a step above the temperate lowland ramp and
+   *  well under the foam line's 0.78, so a beach reads as ground and the
+   *  waterline still writes itself on it. */
+  const SAND_T: Rgb = [0.56, 0.49, 0.35];
+  /** How much of a beach this bare vertex is: 1 at the sea's own level with
+   *  the sea in reach, 0 above 7 m over the datum or with no water within two
+   *  cover pixels. The evidence is a wider ring than the sea floor's, because
+   *  a beach is ground the sea is NEAR rather than ground the sea is ON. */
+  const beachAt = (S: TerrainStore, x: number, z: number, elevAbs: number): number => {
+    const dz = elevAbs - S.seaAbs();
+    if (dz < -1.5 || dz > 7) return 0;
+    const hK = dz <= 4 ? 1 : 1 - (dz - 4) / 3;
+    const wet = (cx: number, cz: number): number => (S.sampleCover(cx, cz) === S.cover.water ? 1 : 0);
+    let w = 0;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + 0.3;
+      w += wet(x + Math.cos(a) * 60, z + Math.sin(a) * 60);
+      w += wet(x + Math.cos(a + 0.5) * 120, z + Math.sin(a + 0.5) * 120);
+    }
+    if (w === 0) return 0;
+    return Math.min(1, (w / 12) * 3) * hK * 0.85;
+  };
+  const seaFloor = (S: TerrainStore, x: number, z: number, elev: number, seaLocal: number): number => {
+    if (elev > seaLocal + 2) return elev;   // the cheap test first: most vertices are land
+    const wet = (cx: number, cz: number): number => (S.sampleCover(cx, cz) === S.cover.water ? 1 : 0);
+    let w = wet(x, z) * 2, n = 2;
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + 0.6, b = a + Math.PI / 4;
+      w += wet(x + Math.cos(a) * SEA_EV_R * 0.5, z + Math.sin(a) * SEA_EV_R * 0.5);
+      w += wet(x + Math.cos(b) * SEA_EV_R, z + Math.sin(b) * SEA_EV_R);
+      n += 2;
+    }
+    const ev = w / n;
+    if (ev <= 0) return elev;
+    // THE EVIDENCE SATURATES AT A THIRD OF A PIXEL, AND THE CEILING STAYS
+    // HARD. Two cuts before this one were continuous in the wrong axis. A
+    // drop of SEA_BED × evidence left the raster's edge pixels at a third of
+    // the depth, and the lattice then interpolated from that shallow vertex up
+    // to its dry neighbour OVER the water — the census read +45 interior
+    // buried texels at both the Umgeni and Glencairn against the control. An
+    // eased depth gate did the same from the other side (+85, +80). The holes
+    // in PLAN were the fault and only they wanted smoothing: a lone dry pixel
+    // inside the sea reads 0.8 here and takes the full drop; the outermost
+    // third of a pixel of shore ramps; and a vertex within two metres of the
+    // sea takes the depth outright, as it always did.
+    return Math.min(elev, seaLocal - SEA_BED * Math.min(1, ev * 3));
+  };
   /** Every built terrain tile overlapping a world rectangle, marked for rebuild. */
   const AREA_MIX = 0.5;               // how far the ramp is pulled, after the raster's own tint
   /** Cost of the refinement, for `__refine`. */
@@ -729,7 +1026,7 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
         if (Math.abs(x - (t.xs + ix * cw)) > 1e-3 || Math.abs(z - (t.zs + iz * ch)) > 1e-3) extraSeed = true;
       }
     }
-    const hydroLines = [...S.hydroBreakLines(t), ...bankBreakLines(S, t)];
+    const hydroLines = [...S.hydroBreakLines(t), ...bankBreakLines(S, t), ...cliffBreakLines(S, t), ...plinthBreakLines(S, t)];
     // Lattice-only seeds are pins the plain path applies itself; only a
     // neighbour's extra edge points need the ring machinery.
     if (!near.size && !extraSeed && !hydroLines.length) return null;
@@ -1073,12 +1370,14 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     for (let i = 0; i < n; i++) {
       const x = px[i], z = pz[i];
       let N = fieldAt(x, z);
-      if (S.sampleCover(x, z) === S.cover.water && N <= seaLocal + 2) N = Math.min(N, seaLocal - SEA_BED);
+      N = seaFloor(S, x, z, N, seaLocal);
       // THE GROUND UNDER DRAWN WATER IS AT MOST THE FIELD'S BED — the water
       // census read a riverbank polygon's whole interior as buried, the DEM
       // standing above the body's own level. Roads keep their deck, and so
       // does every vertex the bank owns (above).
       if (floor && !bankOwned[i]) { const f = hydroFloorAt(floor, t, x, z); if (f !== null && f - S.baseElev < N && !S.onRoad(x, z)) N = f - S.baseElev; }
+      N = cliffAdjust(S, t, x, z, N);
+      N = plinthAdjust(S, t, x, z, N);
       let h = N, k = 0;
       const pin = pinned.get(i) ?? ownerY(x, z);
       if (pin !== undefined) h = pin;
@@ -2167,7 +2466,6 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     if (!refined) bankSolve(S, t, pos, bankOwned, bankTarget);
     for (let i = 0; i < (refined ? 0 : (pos.length / 3)); i++) {
       const ex = pos[(i) * 3] + cxm, ez = pos[(i) * 3 + 2] + czm;
-      const cv = S.sampleCover(ex, ez);
       // The exact edge where the field has a tile, inside this one where it
       // does not — see refineTileGeometry's fieldAt.
       let elev = S.hasHeight(ex, ez) ? S.sampleHeight(ex, ez)
@@ -2187,13 +2485,12 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       // sea surface, which is precisely the flat ocean plate the DEM draws and
       // nothing else. That also makes it safe against a bad sea datum, which is
       // the failure that found this.
-      if (cv === S.cover.water) {
-        const seaLocal = S.seaAbs() - S.baseElev;
-        if (elev <= seaLocal + 2) elev = Math.min(elev, seaLocal - SEA_BED);
-      }
+      elev = seaFloor(S, ex, ez, elev, S.seaAbs() - S.baseElev);
       // The field's bed as a ceiling, outside what the bank owns — see
       // refineTileGeometry's site for why ownership is decided first.
       if (floor && !bankOwned[i]) { const f = hydroFloorAt(floor, t, ex, ez); if (f !== null && f - S.baseElev < elev && !S.onRoad(ex, ez)) elev = f - S.baseElev; }
+      elev = cliffAdjust(S, t, ex, ez, elev);
+      elev = plinthAdjust(S, t, ex, ez, elev);
       pos[(i) * 3 + 1] = elev;
     }
     // A stitched plain tile still carves — its own roads are the old grid's —
@@ -2264,8 +2561,28 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       // ONE READ, TWO CONSUMERS. coverPaint is two sampleCover calls and two
       // hashes; the colour and the detail material both want the same answer
       // at the same point, and it was being asked twice.
-      const cp = S.coverPaint(ex, ez);
+      // A stack stands in the sea and the cover raster says water: inside a
+      // plinth the ground is bare rock, whatever grows on the pixel under it.
+      const cp = plinthAt(S, t, ex, ez) ? 60 : S.coverPaint(ex, ez);
       let [r, g, bb] = S.palette(elevAbs, slope, cp, ex, ez);
+      // ── A BEACH IS BARE GROUND AT THE SEA'S OWN LEVEL, AND IT IS SAND ──
+      //
+      // Measured at the Twelve Apostles: 190 m of cover-class BARE lying at
+      // 2-4 m between the cliff foot and the water — the beach and its shore
+      // platform, plainly in the data — painted as olive earth, because the
+      // ramp paints by ELEVATION BAND and the band that holds 2-4 m in a
+      // temperate biome is the lowland's own colour. Nothing in the palette
+      // said sand. It does here: bare ground within a few metres of the sea
+      // datum, with the sea itself in evidence nearby (the same nine-tap
+      // footprint the sea floor reads), is pulled toward a warm pale sand.
+      // Height-gated so a bare inland plateau at 300 m is untouched, and
+      // evidence-gated so a lake shore above the sea, or a desert flat that
+      // happens to lie near the datum with no water in reach, stays what the
+      // ramp says. Fades out above 4 m: a raised beach is a terrace.
+      if (cp === 60) {
+        const sandK = beachAt(S, ex, ez, elevAbs);
+        if (sandK > 0) { r += (SAND_T[0] - r) * sandK; g += (SAND_T[1] - g) * sandK; bb += (SAND_T[2] - bb) * sandK; }
+      }
       if (kind === 2) { r += (EARTH_T[0] - r) * 0.6; g += (EARTH_T[1] - g) * 0.6; bb += (EARTH_T[2] - bb) * 0.6; }
       // …and then whoever actually drew this ground. The 38m raster says what is
       // growing across a landscape; an OSM area says where a particular wood
@@ -2629,7 +2946,7 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
   }
   return {
     buildTile, borderShared, roadFloorHard, corridorH, stripBreakLines, stripFloor, cellTable, normalMapBytes, plainLattice, vertexNormals,
-    refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear, channelFloorAt, hydroFloorAt, bankTargetAtPacked, bankSolve, bankApply, bankBreakLines, simplifyPolyline, makeSampler, makePalette, areaTintOf, onRoadOf, hydroElevation,
+    refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear, channelFloorAt, hydroFloorAt, bankTargetAtPacked, bankSolve, bankApply, bankBreakLines, cliffBreakLines, cliffAdjust, plinthBreakLines, plinthAdjust, plinthAt, simplifyPolyline, makeSampler, makePalette, areaTintOf, onRoadOf, hydroElevation,
     crossingKindAt,
     BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX, RELIEF_MIN,
   };

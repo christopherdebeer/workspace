@@ -41,7 +41,7 @@ import {
 } from './shoreline';
 import { URL_OWNED, qs, qsHas, qsNum, qsOn, switchRows, urlWithSwitches } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
-import { CHART_LAYERS, COVER_INK, SUBSTRATE_LEGEND, SURFACE_LEGEND, WATER_LEGEND,
+import { CHART_LAYERS, COVER_INK, HYDRO_VIEWS, SUBSTRATE_LEGEND, SURFACE_LEGEND, WATER_LEGEND, XRAY_VIEWS,
   chartLayer, inkFor, inkHex, legendFor, type ChartLayerId } from './chart-layers';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
@@ -78,7 +78,7 @@ import { HYDRO_BUILD_PROF, setHydroBoundProbe } from './hydro/build-tile';
 import type { SceneShade } from './hydro/material';
 import { HYDRO_SCENE_SKY_GLSL } from './hydro/scene-sky';
 import { CLOUD_DECK_Y, CLOUD_GLSL, CLOUD_SCALE } from './cloud-field';
-import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainCrossingMask, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
+import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type Plinth, type TerrainCrossingMask, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
 import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-worker';
 // THE TERRAIN KERNEL, instantiated once for the synchronous path and the
 // probes; the worker builds its own from the same source (terrain-worker.ts).
@@ -89,9 +89,11 @@ import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { FACADE_GRAMMAR as FACADE_GRAMMAR_LIVE, facade, uFacNight, uFacSun } from './facade';
 import { roofFx } from './roof-fx';
+import { attachRoofSurface } from './roof-surface';
+import { madeKind, madeShares, MADE_GLSL, type MadeKind } from './constructed-ground';
 import { registerBuildingFabric, inheritBuildingFabric, attachBuildingFabric, setBuildingCondition, type BuildingCondition } from './building-fabric';
 import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, SUBSTRATE_VIEWS, groundInkPixels, type GroundViewId } from './ground-view';
-import { SUB_GLSL, SUB_DOM_M, subDomainAt, subEvidence, subExpressOf, subGrainOf, subLayerTint,
+import { SUB_GLSL, SUB_ROCK_CAST, SUB_DOM_M, subDomainAt, subEvidence, subExpressOf, subGrainOf, subLayerTint,
   subGrassAllow, SUB_SWARD_K, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
   type SubstrateField } from './substrate-field';
 import { gramDecode } from './facade-grammar';
@@ -99,7 +101,7 @@ import { GRASS_M2, GRASS_UNKNOWN, GRASS_DEFAULT, swardCoverEvidence, SWARD_EV }
   from './sward-cover';
 import { RUIN_BY_MATERIAL, TRADITIONS, gramTable, roofFormFor, traditionCulture, traditionFor, traditionIndex } from './traditions';
 import { embeddedLab, startLab } from './labs';
-import { RasterPaintSession, type EditableRasterTile } from './world-authoring-raster';
+import { RasterPaintSession, type CellRect, type EditableRasterTile } from './world-authoring-raster';
 import { DemPaintSession, type DemBrush, type EditableDemTile } from './world-authoring-dem';
 import { PolylinePaintSession, type AuthoredPolyline } from './world-authoring-vector';
 import { startWorldAuthoringLab, type AuthoringLayer, type AuthoringPreview } from './world-authoring-lab';
@@ -115,6 +117,13 @@ import { REEL_DRIVES, type ReelDrive } from './reel-drives';
 import { autoDrive, autoMem, AUTO, type AutoOut, type Ground as AutoGround } from './autopilot';
 import { mkField, buildField, recenter as wxRecenter, wxAt, puddleAt, seedWet, WXF_N, WXF_SPAN } from './weatherfield';
 import { grainFx, grainU } from './grain';
+import {
+  FILMIC_DAWN,
+  FILMIC_DEPTH,
+  FILMIC_GLSL,
+  FILMIC_MIDDAY,
+  filmicDawnWeight,
+} from './filmic-grade';
 import { SWARD_STRUCTURE_GLSL } from './sward-structure';
 import {
   DEADWOOD, FOLIAGE_BANDS, STONE, STONE_MIX_ROWS, STONY, TRUNKED, VEG_CAP, VEG_MIX,
@@ -303,7 +312,7 @@ addEventListener('unhandledrejection', (e) => {
 const OSM_Z = 16;             // overpass tile zoom (~600m — keeps per-query weight low)
 /** The cell's tile keyspace — see TILE_V in index.ts. A banked tile is
  *  permanent, so this number is how a wrong one is escaped: bump both. */
-const OSM_TILE_V = 4;
+const OSM_TILE_V = 5; // mapped constructed areas and retained area semantics
 const OSM_RING = 1;           // load a (2R+1)² neighbourhood of vector tiles
 const TERRAIN_RING = 2;       // wider ring at the finer zoom keeps the horizon populated
 const REVEAL_M = 150;         // fog hole radius around the car, metres
@@ -1282,6 +1291,12 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
   coverAsked.add(key);
   try {
     const data = await coverRaster(COVER_Z, x, y);
+    // The hand-painted classes, into the raster before anything reads it —
+    // and BEFORE the projection below, which must stay the last thing this
+    // does: `toLocal` is relative to the CURRENT origin, so a hop while a
+    // tile is on the wire is absorbed by projecting late, and an await
+    // between the projection and the registration would undo that.
+    await authoredRasterIn('cover', x, y, data);
     const b = tileBounds(x, y, COVER_Z);
     const [wx0, wz0] = toLocal(b.latN, b.lonW);
     const [wx1, wz1] = toLocal(b.latS, b.lonE);
@@ -2540,10 +2555,11 @@ function gvTally(now: number): void {
   gvClassCounts.clear();
   let seen = 0;
   const eat = (m: THREE.Mesh): void => {
-    const at = m.geometry.getAttribute('aTd');
-    if (!at || at.itemSize < 4) return;
+    const eco = groundView === 'eco';
+    const at = m.geometry.getAttribute(eco ? 'aEco' : 'aTd');
+    if (!at || (!eco && at.itemSize < 4)) return;
     for (let i = 0; i < at.count; i += 16) {
-      const c = Math.round(at.getW(i));
+      const c = Math.round(eco ? at.getX(i) : at.getW(i));
       if (c <= 0) continue;
       gvClassCounts.set(c, (gvClassCounts.get(c) ?? 0) + 1);
       seen++;
@@ -2552,6 +2568,81 @@ function gvTally(now: number): void {
   for (const m of terrainMeshes.values()) eat(m);
   for (const m of farMeshes.values()) if (m.parent) eat(m);
   gvCountVerts = seen;
+}
+/**
+ * ── ECO ON THE GROUND, ONE TILE A FRAME ──
+ *
+ * The ecoregion is a point-in-polygon over a z5 tile, which the terrain kernel
+ * (a worker that has never heard of the eco store) cannot answer, so the class
+ * is written into an `aEco` attribute here, on the main thread, only while the
+ * ECO view is asked for: the nearest unfilled tile first, one a frame. Fine
+ * tiles read their own vertex positions; shell tiles their lattice UVs over
+ * the raster's flat box, the mapping the old sheet baked with. Lookups are
+ * memoised on a 0.02° grid, finer than the 0.05° the regions are simplified to.
+ * A tile filled while a region tile was still in flight is filled again when
+ * one lands (`themeSrcRev`), until nothing is missing.
+ */
+const ecoMemo = new Map<number, number>();
+let ecoMemoRev = -1, ecoPainted = 0;
+function ecoClassAtLL(la: number, lo: number): number {
+  if (FIXTURE) return FIXTURE.eco?.biome ?? 0;
+  const k = Math.round(la * 50) * 100000 + Math.round(lo * 50);
+  const hit = ecoMemo.get(k);
+  if (hit !== undefined) return hit;
+  const [tx, ty] = ecoTileOf(la, lo);
+  const regs = ecoTiles.get(`${tx}/${ty}`);
+  if (!regs) { void loadEcoTile(tx, ty); return -1; }
+  const c = ecoLookup(regs, lo, la)?.biome ?? 0;
+  ecoMemo.set(k, c);
+  return c;
+}
+function ecoPaintStep(): void {
+  if (groundView !== 'eco') return;
+  if (ecoMemoRev !== themeSrcRev) { ecoMemo.clear(); ecoMemoRev = themeSrcRev; }
+  const [fx, fz] = renderFocusXZ();
+  let best: THREE.Mesh | null = null, bestD = Infinity, bestKey = '';
+  const want = (m: THREE.Mesh): boolean => {
+    const u = m.geometry.userData as { ecoRev?: number; ecoMiss?: number };
+    return u.ecoRev === undefined || (u.ecoMiss! > 0 && u.ecoRev !== themeSrcRev);
+  };
+  for (const m of terrainMeshes.values()) {
+    if (!m.parent || !want(m)) continue;
+    const d = Math.hypot(m.position.x - fx, m.position.z - fz);
+    if (d < bestD) { bestD = d; best = m; bestKey = ''; }
+  }
+  if (!best) for (const [key, m] of farMeshes) {
+    if (!m.parent || !want(m)) continue;
+    const r = farRasters.get(key);
+    if (!r) continue;
+    const d = Math.hypot(r.xs + r.w / 2 - fx, r.zs + r.h / 2 - fz);
+    if (d < bestD) { bestD = d; best = m; bestKey = key; }
+  }
+  if (!best) return;
+  const g = best.geometry;
+  const n = g.getAttribute('position').count;
+  const out = new Float32Array(n);
+  let miss = 0;
+  if (bestKey) {
+    const r = farRasters.get(bestKey)!;
+    const uv = g.getAttribute('uv');
+    for (let i = 0; i < n; i++) {
+      const [la, lo] = localToLatLon(r.xs + uv.getX(i) * r.w, r.zs + (1 - uv.getY(i)) * r.h);
+      const c = ecoClassAtLL(la, lo);
+      if (c < 0) miss++; else out[i] = c;
+    }
+  } else {
+    const pos = g.getAttribute('position');
+    const ox = best.position.x, oz = best.position.z;
+    for (let i = 0; i < n; i++) {
+      const [la, lo] = localToLatLon(pos.getX(i) + ox, pos.getZ(i) + oz);
+      const c = ecoClassAtLL(la, lo);
+      if (c < 0) miss++; else out[i] = c;
+    }
+  }
+  g.setAttribute('aEco', new THREE.BufferAttribute(out, 1));
+  (g.userData as { ecoRev?: number; ecoMiss?: number }).ecoRev = themeSrcRev;
+  (g.userData as { ecoMiss?: number }).ecoMiss = miss;
+  ecoPainted++;
 }
 /** Switch the channel. A class view swaps the lookup with it, so the palette
  *  and the uniform can never be a layer apart. */
@@ -3352,6 +3443,165 @@ function oceanAt(ex: number, ez: number): boolean {
 const coastSegs = new Map<string, Array<[number, number, number, number]>>();
 /** Coastline ways seen at DECODE, before any rendering decision. */
 let osmCoastSeen = 0;
+/** Mapped cliff lines per terrain tile, local metres, in the way's own
+ *  direction — the kernel reads them as vertical faces (cliffAdjust). Keyed
+ *  on the z14 tile so a build hands the worker only its own. */
+const cliffLinesByTile = new Map<string, BreakLine[]>();
+const cliffSeen = new Set<string>();
+const CLIFF_STEP_M = 12;
+function noteCliff(pts: Array<[number, number]>, tags: Record<string, string> = {}): void {
+  // A CLOSED CLIFF RING IS A SEA STACK. The survey drew the Apostles as
+  // small closed `natural=cliff` rings on closed coastline islets; the DEM
+  // under them is the sea. As cliff LINES they would do nothing (the DEM is
+  // level both sides), so they file as plinths instead, with the way's own
+  // height where it states one and the mainland's cliff top otherwise.
+  if (pts.length >= 4) {
+    const [ax, az] = pts[0], [bx, bz] = pts[pts.length - 1];
+    if (Math.hypot(ax - bx, az - bz) <= 1) {
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (const [x, z] of pts) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+      if (x1 - x0 <= ISLET_MAX_M && z1 - z0 <= ISLET_MAX_M) {
+        const h = parseFloat(tags.height ?? '');
+        notePlinth(pts, h > 1 && h <= 500 ? h : NaN);
+        return;
+      }
+    }
+  }
+  const dirty = new Set<string>();
+  const tileKeyOf = (x: number, z: number): string => {
+    const [la, lo] = localToLatLon(x, z);
+    const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
+    return `${tx}/${ty}`;
+  };
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+    if (!Number.isFinite(ax) || !Number.isFinite(bx)) continue;
+    // Densified to a dozen metres, so a segment straddles at most two tiles
+    // and the kernel's reach bounds hold per piece.
+    const len = Math.hypot(bx - ax, bz - az);
+    const n = Math.max(1, Math.ceil(len / CLIFF_STEP_M));
+    for (let k = 0; k < n; k++) {
+      const sx = ax + ((bx - ax) * k) / n, sz = az + ((bz - az) * k) / n;
+      const ex = ax + ((bx - ax) * (k + 1)) / n, ez = az + ((bz - az) * (k + 1)) / n;
+      // A cliff way arrives once per OSM tile that carries it; the same piece
+      // must not be filed twice.
+      const id = `${sx.toFixed(1)},${sz.toFixed(1)}>${ex.toFixed(1)},${ez.toFixed(1)}`;
+      if (cliffSeen.has(id)) continue;
+      cliffSeen.add(id);
+      const line: BreakLine = { ax: sx, az: sz, bx: ex, bz: ez };
+      for (const key of new Set([tileKeyOf(sx, sz), tileKeyOf(ex, ez)])) {
+        let arr = cliffLinesByTile.get(key);
+        if (!arr) cliffLinesByTile.set(key, (arr = []));
+        arr.push(line);
+        dirty.add(key);
+      }
+    }
+  }
+  for (const key of dirty) markTerrainDirty(key, 'cliff');
+}
+/** Mapped stacks and outcrops with a stated height, per terrain tile — a
+ *  `natural=rock|bare_rock|stone` ring carrying `height=` (OSM's own keys,
+ *  from the map or the authored store). The kernel raises the ground inside
+ *  the ring by the height over the DEM under its centre and creases the
+ *  ring as a cliff: a sea stack the raster never saw. See plinthAdjust. */
+const plinthsByTile = new Map<string, Plinth[]>();
+const plinthSeen = new Set<string>();
+/** The stated height of a rock ring, or null for anything that is not one:
+ *  an open way, a ring under four points, a height that does not parse. */
+function plinthOf(tags: Record<string, string>, pts: Array<[number, number]>): number | null {
+  const nat = tags.natural;
+  if (nat !== 'rock' && nat !== 'bare_rock' && nat !== 'stone') return null;
+  const h = parseFloat(tags.height ?? '');
+  if (!(h > 1) || h > 500) return null;
+  if (pts.length < 4) return null;
+  const [ax, az] = pts[0], [bx, bz] = pts[pts.length - 1];
+  if (Math.hypot(ax - bx, az - bz) > 1) return null;
+  return h;
+}
+/**
+ * `height` is the way's own statement (relative to the ground under the
+ * centre). NaN means the way stated nothing and the crown is to be READ OFF
+ * THE MAINLAND at pack time (`plinthTopProbe`): a sea stack is the cliff's
+ * own platform left standing, so the cliff top a few hundred metres away is
+ * the best evidence of its height the world has. A finite `top` given here
+ * is a crown already known, in local metres.
+ */
+function notePlinth(pts: Array<[number, number]>, height: number, top?: number): void {
+  const ring = pts.slice(0, -1).filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z));
+  if (ring.length < 3) return;
+  const id = `${height}:${top ?? ''}:${ring.map(([x, z]) => `${x.toFixed(1)},${z.toFixed(1)}`).join(';')}`;
+  if (plinthSeen.has(id)) return;
+  plinthSeen.add(id);
+  const P: Plinth = top !== undefined && Number.isFinite(top) ? { pts: ring, height, top } : { pts: ring, height };
+  // Filed under every terrain tile the ring's bbox touches: a stack on a
+  // tile edge must rise on both sides of it.
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const [x, z] of ring) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+  const keys = new Set<string>();
+  for (const [x, z] of [[x0, z0], [x1, z0], [x0, z1], [x1, z1]] as Array<[number, number]>) {
+    const [la, lo] = localToLatLon(x, z);
+    const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
+    keys.add(`${tx}/${ty}`);
+  }
+  for (const key of keys) {
+    let arr = plinthsByTile.get(key);
+    if (!arr) plinthsByTile.set(key, (arr = []));
+    arr.push(P);
+    markTerrainDirty(key, 'plinth');
+  }
+}
+/** A closed ring under this across is an islet, not a coast. */
+const ISLET_MAX_M = 120;
+/**
+ * The mainland's cliff top near a stack, local metres, or NaN with none in
+ * reach (or none loaded yet — asked again on the next build). FIRST the
+ * nearest mapped cliff LINE within 600 m of the centroid, read on its high
+ * side a reach out from its midpoint: that is the edge the stack was cut
+ * from, and it is what the photograph shows level with the stacks' crowns.
+ * The highest ground on rings out to 400 m is the fallback, and it is a
+ * worse answer where the coast rises inland — measured at the Apostles it
+ * found a 66 m hill for a 50 m cliff. Everything is judged against the
+ * SEA, not the origin: local metres here run from `baseElev`, and the
+ * coast plateau is a few metres local under a 50 m sea cliff.
+ */
+const PLINTH_PROBE_M = 600;
+function plinthTopProbe(P: Plinth): number {
+  let sx = 0, sz = 0;
+  for (const [x, z] of P.pts) { sx += x; sz += z; }
+  const cx = sx / P.pts.length, cz = sz / P.pts.length;
+  const sea = seaSurfaceAbs() - baseElev;
+  let bd = PLINTH_PROBE_M * PLINTH_PROBE_M, best: BreakLine | null = null;
+  for (const lines of cliffLinesByTile.values()) {
+    for (const L of lines) {
+      const mx = (L.ax + L.bx) / 2, mz = (L.az + L.bz) / 2;
+      const d = (mx - cx) * (mx - cx) + (mz - cz) * (mz - cz);
+      if (d < bd) { bd = d; best = L; }
+    }
+  }
+  if (best) {
+    const dx = best.bx - best.ax, dz = best.bz - best.az, len = Math.hypot(dx, dz) || 1;
+    const nx = -dz / len, nz = dx / len, mx = (best.ax + best.bx) / 2, mz = (best.az + best.bz) / 2;
+    let top = -Infinity;
+    for (const side of [1, -1]) {
+      const x = mx + nx * CLIFF_REACH_PROBE_M * side, z = mz + nz * CLIFF_REACH_PROBE_M * side;
+      if (heightTileAt(x, z)) top = Math.max(top, sampleHeightRaw(x, z));
+    }
+    if (top > sea + 5) return top;
+  }
+  let top = -Infinity;
+  for (const r of [120, 200, 300, 400]) {
+    for (let k = 0; k < 24; k++) {
+      const a = (k / 24) * Math.PI * 2, x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+      if (!heightTileAt(x, z)) continue;
+      const h = sampleHeightRaw(x, z);
+      if (h > top) top = h;
+    }
+  }
+  // Under five metres over the sea is a reef's neighbour, not a cliff's.
+  return top > sea + 5 ? top : NaN;
+}
+/** The kernel's own CLIFF_REACH_M (26): the DEM's smear of a face is that wide. */
+const CLIFF_REACH_PROBE_M = 26;
 function noteCoastline(pts: Array<[number, number]>): void {
   for (let i = 0; i + 1 < pts.length; i++) {
     const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
@@ -5501,6 +5751,18 @@ let dayF = 1;
 let moonPhase = 0;
 let sunAlt = 0.35, sunAz = 0.5;
 const sunSetV = new THREE.Vector3();
+const mixGradeVector = (
+  out: THREE.Vector3,
+  noon: readonly number[],
+  low: readonly number[],
+  lowShare: number,
+): void => {
+  out.set(
+    noon[0] + (low[0] - noon[0]) * lowShare,
+    noon[1] + (low[1] - noon[1]) * lowShare,
+    noon[2] + (low[2] - noon[2]) * lowShare,
+  );
+};
 function stepSun(): void {
   const { alt, az } = solarAngles(origin.lat, origin.lon, worldNow());
   sunAlt = alt; sunAz = az;
@@ -5588,6 +5850,20 @@ function applySkyTint(): void {
   c.uHazeBase.value.copy(mix(NIGHT_SKY.zenith, b.hazeBase));
   c.uHazeSun.value.copy(mix(NIGHT_SKY.horizon, b.hazeSun));
   u.uHazeB.value.copy(c.uHazeBase.value);
+  // THE GRADE FOLLOWS THE SAME SUN AS THE WORLD. At the horizon `dayF` is
+  // already two-thirds daylight, so twilight has to be allowed to win or a
+  // six-o'clock shot receives mostly the noon decision. Midnight keeps the
+  // dawn toe and channel separation; it does not fall back to a day grade.
+  const dawn = filmicDawnWeight(dayF, skyTwi);
+  mixGradeVector(compMat.uniforms.uGradeLift.value as THREE.Vector3, FILMIC_MIDDAY.lift, FILMIC_DAWN.lift, dawn);
+  mixGradeVector(compMat.uniforms.uGradeGamma.value as THREE.Vector3, FILMIC_MIDDAY.gamma, FILMIC_DAWN.gamma, dawn);
+  mixGradeVector(compMat.uniforms.uGradeGain.value as THREE.Vector3, FILMIC_MIDDAY.gain, FILMIC_DAWN.gain, dawn);
+  compMat.uniforms.uGradeSat.value =
+    FILMIC_MIDDAY.saturation + (FILMIC_DAWN.saturation - FILMIC_MIDDAY.saturation) * dawn;
+  compMat.uniforms.uGradeToe.value =
+    FILMIC_MIDDAY.toe + (FILMIC_DAWN.toe - FILMIC_MIDDAY.toe) * dawn;
+  compMat.uniforms.uGradeExposure.value =
+    FILMIC_MIDDAY.exposure + (FILMIC_DAWN.exposure - FILMIC_MIDDAY.exposure) * dawn;
 }
 
 const worldGroup = new THREE.Group();
@@ -6105,8 +6381,17 @@ function depthVisible(px3: number, py3: number, pz3: number): boolean {
 // painted under the live instruments so a wrong pin can be argued with on
 // the spot. 2 = WIRE: the world stripped to its meshes — the geometry the
 // truck is actually colliding with, not the paint over it.
+const XRAY_MODES = ['OFF', 'DEPTH', 'WIRE'] as const;
 let xrayMode = 0;
+(window as unknown as { __xray?: object }).__xray = (mode?: string): object => {
+  if (mode === undefined) return { mode: XRAY_MODES[xrayMode], modes: [...XRAY_MODES] };
+  const i = XRAY_MODES.indexOf(mode.toUpperCase() as typeof XRAY_MODES[number]);
+  if (i < 0) return { error: `unknown mode ${mode}`, modes: [...XRAY_MODES] };
+  xrayMode = i;
+  return { mode: XRAY_MODES[xrayMode], modes: [...XRAY_MODES] };
+};
 let xrayWireOn = false, xrayWireAt = 0;
+let xrayTdSaved: [number, number] | null = null;
 const wildlifeWire = createWildlifeWire();
 const wireMaterials = createWireMaterialPolicy();
 function xrayWire(now: number): void {
@@ -6115,6 +6400,26 @@ function xrayWire(now: number): void {
   // While on, sweep again every couple of seconds — streamed-in tiles arrive
   // with their materials solid and need catching.
   if (want && xrayWireOn && now - xrayWireAt < 2000) return;
+  // THE TERRAIN'S DERIVATIVE TERMS ARE PINNED OFF WHILE THE WIRE IS UP. A
+  // wireframe fragment sits on a line, and `fwidth` across a line's 2x2
+  // helper quad is not a footprint — the detail cascade and the substrate
+  // divide by it, and what comes out is NaN. One NaN pixel in the scene
+  // target is then spread by the composite's separable blurs into an
+  // axis-aligned RECTANGLE, and the quantiser paints NaN as the palette's
+  // black floor: measured on the Camps Bay god-camera frame as 39% of the
+  // pane in opaque black blocks, and 0.1% with the same terms pinned at boot
+  // (`tdetail=flat`). Not the near plane (0.3 to 30 m, no change), not the
+  // DOF or the tilt shift, not any material the sweep protects — the terrain
+  // alone, and only its fragment terms. A wire view shows lines, so nothing
+  // the surface detail says is lost; the values are put back when WIRE stands
+  // down, so a dial moved while it was up keeps its setting.
+  if (want && !xrayWireOn) {
+    xrayTdSaved = [tdU.uTdOct.value as number, tdU.uSubAmt.value as number];
+    tdU.uTdOct.value = 0; tdU.uSubAmt.value = 0;
+  } else if (!want && xrayWireOn && xrayTdSaved) {
+    tdU.uTdOct.value = xrayTdSaved[0]; tdU.uSubAmt.value = xrayTdSaved[1];
+    xrayTdSaved = null;
+  }
   xrayWireAt = now; xrayWireOn = want;
   // The WHOLE scene, not just worldGroup — vegetation, critters, the sward
   // and the sea are scene-level and the first sweep missed them (asked from
@@ -6149,6 +6454,55 @@ function xrayWire(now: number): void {
     }
   });
 }
+// WHY IS THAT STILL SOLID UNDER WIRE? The sweep above decides per material
+// and reports nothing, so a frame with an opaque shape in it could not say
+// whether the shape was a material the policy PROTECTS (shader, transparent,
+// alpha-tested, the vegetation family) or one it never reached. This walks
+// the scene with the sweep's own rules and tallies, per mesh name, the
+// triangles under each verdict — a reading of the authority rather than of
+// the picture, which is the only kind that can witness a rule.
+(window as unknown as { __xraywhy?: object }).__xraywhy = (top = 40): object => {
+  type Row = { meshes: number; tris: number; by: Record<string, number> };
+  const rows = new Map<string, Row>();
+  const keep = new Set<THREE.Object3D>([skyDome, car, xray, moon]);
+  const triCount = (g: THREE.BufferGeometry, mesh: THREE.Mesh): number => {
+    const n = g.index ? g.index.count : (g.attributes.position?.count ?? 0);
+    const inst = (mesh as THREE.InstancedMesh).isInstancedMesh ? (mesh as THREE.InstancedMesh).count : 1;
+    return Math.floor(n / 3) * inst;
+  };
+  scene.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.visible) return;
+    let kept = false;
+    for (let p: THREE.Object3D | null = o; p; p = p.parent) if (keep.has(p)) { kept = true; break; }
+    const name = o.name || `(${o.type})`;
+    let row = rows.get(name);
+    if (!row) { row = { meshes: 0, tris: 0, by: {} }; rows.set(name, row); }
+    row.meshes++;
+    const tris = mesh.geometry ? triCount(mesh.geometry, mesh) : 0;
+    row.tris += tris;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const m of mats) {
+      const sm = m as THREE.MeshStandardMaterial;
+      const why = kept ? 'kept'
+        : o.name === 'birds' || o.name === 'herds' ? 'wildlife'
+        : o.name.startsWith('veg') || o.name === 'sward' ? 'veg'
+        : !m ? 'nomat'
+        : m.userData.wireKeepSolid ? 'userData'
+        : (m as THREE.ShaderMaterial).isShaderMaterial ? 'shader'
+        : m.transparent ? 'transparent'
+        : m.alphaTest > 0 ? 'alphaTest'
+        : !('wireframe' in m) ? 'nowire'
+        : sm.wireframe ? 'wire' : 'solid';
+      row.by[why] = (row.by[why] ?? 0) + tris;
+    }
+  });
+  const list = [...rows.entries()].map(([name, r]) => ({ name, ...r }))
+    .sort((a, b) => b.tris - a.tris).slice(0, top);
+  const totals: Record<string, number> = {};
+  for (const r of rows.values()) for (const [k, v] of Object.entries(r.by)) totals[k] = (totals[k] ?? 0) + v;
+  return { mode: XRAY_MODES[xrayMode], totals, rows: list };
+};
 // The X-RAY's WITNESS LIST: what is in the scene, and a way to stand one
 // system down while looking at a fault — through material.visible, which
 // nothing reasserts per frame (rain.visible is rewritten every tick).
@@ -6449,6 +6803,19 @@ const compMat = new THREE.ShaderMaterial({
     uSunUv: { value: new THREE.Vector2(0.5, 1.4) },
     uSunVis: { value: 0 },
     uBloom: { value: 0.75 },
+    // Scene-linear Rec.709 -> ACES AP1 fitted RRT/ODT -> display. The target
+    // vectors are written by applySkyTint from the same sun that lights the
+    // world; the depth decision stays fixed and its share follows `deep`.
+    uGradeLift: { value: new THREE.Vector3(...FILMIC_MIDDAY.lift) },
+    uGradeGamma: { value: new THREE.Vector3(...FILMIC_MIDDAY.gamma) },
+    uGradeGain: { value: new THREE.Vector3(...FILMIC_MIDDAY.gain) },
+    uGradeSat: { value: FILMIC_MIDDAY.saturation },
+    uGradeToe: { value: FILMIC_MIDDAY.toe },
+    uGradeExposure: { value: FILMIC_MIDDAY.exposure },
+    uDepthTint: { value: new THREE.Vector3(...FILMIC_DEPTH.tint) },
+    uDepthSat: { value: FILMIC_DEPTH.saturation },
+    uDepthAmt: { value: FILMIC_DEPTH.amount },
+    uVignette: { value: 0.12 },
     uScan: { value: 0.06 },
     uLevels: { value: 14 },
     /** Ordered-dither amplitude. 1 is the shipped truth (see the FULL STEP
@@ -6491,6 +6858,10 @@ const compMat = new THREE.ShaderMaterial({
     uniform sampler2D dofPrepTex; uniform sampler2D dofFarTex; uniform sampler2D dofNearTex;
     uniform float uDofOn;
     uniform sampler2D bloomTex; uniform float uBloom; uniform float uScan;
+    uniform vec3 uGradeLift; uniform vec3 uGradeGamma; uniform vec3 uGradeGain;
+    uniform float uGradeSat; uniform float uGradeToe; uniform float uGradeExposure;
+    uniform vec3 uDepthTint; uniform float uDepthSat; uniform float uDepthAmt;
+    uniform float uVignette;
     uniform float uLevels; uniform float uFow; uniform float uFlare;
     uniform float uDither; uniform float uMono;
     uniform float uDPat; uniform float uBias; uniform float uCon; uniform vec3 uTint;
@@ -6507,7 +6878,7 @@ const compMat = new THREE.ShaderMaterial({
     uniform float uAirBlur; uniform float uTiltAmt; uniform vec3 uFocusP; uniform vec3 uFocusN;
     uniform float uTiltSharp; uniform float uTiltBlur; uniform float uTiltNearScale;
     uniform float uTanHalfFov; uniform float uTiltSky;
-    vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+${FILMIC_GLSL}
 ${DITHER_GLSL}
     // The warm argument is HOW MUCH OF THE SUNWARD LOBE THIS CALLER WANTS. The sky wants
     // all of it — that warm side is the sunset, and it was built on purpose.
@@ -6591,6 +6962,7 @@ ${DITHER_GLSL}
       vec4 wp4 = invPV * vec4(vUv * 2.0 - 1.0, z * 2.0 - 1.0, 1.0);
       vec3 wp = wp4.xyz / wp4.w;
       float t = distance(wp, camPos);
+      float gradeDepth = 0.0;
       /**
        * ── PHOTOGRAPHIC DOF, ALREADY FILTERED AND STILL BEFORE THE GRADE ──
        *
@@ -6647,6 +7019,7 @@ ${DITHER_GLSL}
         // horizon keeps its haze.
         float deep = (1.0 - exp(-t / uHazeE)) * vFac * step(uHazeDbg, 1.5)
           * (1.0 - smoothstep(15.0, 60.0, uMpp));
+        gradeDepth = deep;
         // Fog-of-war and optional air blur still use the broad atmospheric
         // copy. Lens DOF has already produced focused above and remains a
         // separate operation, so focus cannot be confused with thick air.
@@ -6721,14 +7094,18 @@ ${DITHER_GLSL}
         col += mix(vec3(1.0, 0.82, 0.52), vec3(0.55, 0.85, 1.0), 0.35) * f * sunVis * 0.085 * uFlare;
       }
       col += vec3(0.85, 0.90, 1.0) * uFlash;   // lightning fills the whole frame
-      vec3 enc = srgb(col);
-      // GRADE. Physically-correct lighting through a haze lands flat and
-      // milky; the reference art is saturated with deep shadows. Saturation
-      // lift plus a contrast S-curve, applied before quantisation so the
-      // palette steps land on the graded image rather than the raw one.
-      float l = dot(enc, vec3(0.299, 0.587, 0.114));
-      enc = clamp(mix(vec3(l), enc, 1.35), 0.0, 1.0);
-      enc = clamp((enc - 0.5) * 1.18 + 0.47, 0.0, 1.0);
+      // DEPTH COLOUR BEFORE TONEMAPPING: distant terrain loses saturation and
+      // bends toward slate/cyan while the ACES shoulder still owns its
+      // luminance. The rig mask is already in alpha (noBlur writes zero), so
+      // yellow paint gets its own qualifier without catching dry grass.
+      col = filmicDepthGrade(col, gradeDepth, uDepthTint, uDepthSat, uDepthAmt);
+      float rigMask = 1.0 - step(0.25, sharp4.a);
+      vec3 enc = filmicGrade(col, rigMask, uGradeLift, uGradeGamma, uGradeGain,
+        uGradeSat, uGradeToe, uGradeExposure);
+      // Optical focus control belongs to the photographed world, not the HUD:
+      // the latter is a separate fixed canvas above this WebGL result.
+      float radial = length((vUv - 0.5) * 2.0) / 1.41421356;
+      enc *= 1.0 - uVignette * smoothstep(0.45, 1.0, radial);
       // PALETTE QUANTISATION with an ordered dither, in perceptual space and
       // keyed to the LOW-RES grid (not the screen), so the dither pattern is
       // one texel per step. This is the difference between authored pixel art
@@ -7138,7 +7515,23 @@ const envU = {
   uSunMW: { value: 1 },
   uSunMOn: { value: 0 },
   uSunL: { value: new THREE.Vector3(0, 1, 0) },
+  // ── SKYLIGHT ON A STEEP FACE ──
+  //
+  // The buildings learned this first ("SKYLIGHT ON THE WALLS"): a
+  // HemisphereLight hands a VERTICAL face the flat 50/50 sky-ground blend,
+  // about 0.22 of incident, and the ground colour it blends toward is a dark
+  // bounce, so a wall turned from the sun rendered darker than the dirt beside
+  // it. A cliff is the terrain's wall and it has the same fault: measured on
+  // the seat's frame at the Twelve Apostles, the shaded face read luma 46
+  // against a sky of 127 (0.36) and came out as black blocks, where the
+  // photograph's shaded cliff reads 113 against 160 (0.71). A vertical face
+  // sees half the sky, and half the sky is not nothing. This is a sky-coloured
+  // fill on the INDIRECT term, scaled by how steep the face is (nothing on
+  // flat ground, which the hemisphere already lights right), by daylight, and
+  // by cloud. `?steepfill=` is the strength, 0 the exact A/B.
+  uSteepFill: { value: new THREE.Vector3() },
 };
+const STEEP_FILL = qsNum('steepfill', 0.18);
 /**
  * ── A SHADOW MAP CANNOT SHADE A VALLEY, AND THIS IS WHY ──
  *
@@ -7399,6 +7792,7 @@ function blankTex(): THREE.DataTexture {
 }
 function terrainFx(mat: THREE.Material, opts: {
   detail?: boolean;
+  made?: THREE.Texture;
   /** This tile's own geomorphic substrate field and the world box it covers,
    *  as (xs, zs, w, h). Per tile, so it cannot live in the shared uniform
    *  block the dials and the view selector use. */
@@ -7452,7 +7846,12 @@ function terrainFx(mat: THREE.Material, opts: {
         // ground, the far shell's fallback) gets the zero vector, which reads
         // as rough 0 — no fine detail, which is the right thing to do when
         // nobody said what the surface is.
-        + 'attribute vec4 aTd;\nvarying vec4 vTd;')
+        + 'attribute vec4 aTd;\nvarying vec4 vTd;\n'
+        // The ecoregion per vertex, filled on the main thread only while the
+        // ECO view is asked for (ecoPaintStep). Absent reads 0: no class.
+        // Terrain materials only (`detail`): an attribute on every material
+        // that wears this hook pushed the tree skeleton past WebGL's sixteen.
+        + (opts.detail ? 'attribute float aEco;\nvarying float vEco;' : 'varying float vEco;'))
       // ── AND IT HAS TO KNOW WHERE THE INSTANCE IS ──
       //
       // This read `modelMatrix * transformed` and skipped `instanceMatrix`,
@@ -7474,9 +7873,13 @@ function terrainFx(mat: THREE.Material, opts: {
           fxWp = instanceMatrix * fxWp;
         #endif
         vWorldP = (modelMatrix * fxWp).xyz;
-        vTd = aTd;`);
+        vTd = aTd;
+        vEco = ${opts.detail ? 'aEco' : '0.0'};`);
     sh.uniforms.uSunSkew = envU.uSunSkew;
     sh.uniforms.uDeckY = envU.uDeckY;
+    sh.uniforms.uSteepFill = envU.uSteepFill;
+    // The district's stone, per tile (terrainMatFor); the shared cast otherwise.
+    sh.uniforms.uSubRockTint = { value: (mat.userData.rockTint as THREE.Vector3 | undefined) ?? ROCK_TINT_DEFAULT };
     sh.uniforms.uCloudScale = envU.uCloudScale;
     sh.uniforms.uSunM = envU.uSunM;
     sh.uniforms.uSunMOrg = envU.uSunMOrg;
@@ -7489,9 +7892,11 @@ function terrainFx(mat: THREE.Material, opts: {
       .replace('#include <common>', `#include <common>
         varying vec3 vWorldP;
         varying vec4 vTd;
+        varying float vEco;
         uniform sampler2D uDbgWet; uniform vec2 uDbgOrg; uniform float uDbgW; uniform float uDbgOn;
         uniform float uCloudS; uniform vec2 uWind; uniform float uMpp;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
+        uniform vec3 uSteepFill;
         uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
         ${CLOUD_GLSL}
         ${SUNM_GLSL}`)
@@ -7505,6 +7910,16 @@ function terrainFx(mat: THREE.Material, opts: {
       // this multiplied the finished colour it would take the sky away too.
       .replace('#include <lights_fragment_begin>', `#include <lights_fragment_begin>
         reflectedLight.directDiffuse *= sunMarch(vWorldP);
+        // SKYLIGHT ON A STEEP FACE (see uSteepFill): the indirect term gains
+        // the sky in proportion to how far the surface has turned from up.
+        // Squared, so a hillside takes little and a cliff face the whole of
+        // it; on the composed normal, so a joint or a bedding shadow in the
+        // relief still reads against it.
+        {
+          vec3 upV = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+          float steep = clamp(1.0 - dot(normal, upV), 0.0, 1.0);
+          reflectedLight.indirectDiffuse += diffuseColor.rgb * uSteepFill * steep * steep;
+        }
       // CLOUD SHADOWS: not "the same kind of noise" any more — THE SAME FIELD,
       // read at the point where a ray from here to the sun leaves the deck the
       // sky is drawing. Same function, same phase, same coverage curve, so the
@@ -7590,6 +8005,7 @@ function terrainFx(mat: THREE.Material, opts: {
       // gets a 1x1 blank and a zero box, and every read of it is gated on the
       // box having width — an unloaded field must read as "no answer" rather
       // than as bare rock with no soil and no grass.
+      sh.uniforms.uMade = { value: opts.made ?? blankTex() };
       sh.uniforms.uSubA = { value: opts.sub ? opts.sub.a : blankTex() };
       sh.uniforms.uSubB = { value: opts.sub ? opts.sub.b : blankTex() };
       sh.uniforms.uSubBox = { value: new THREE.Vector4(...(opts.sub ? opts.sub.box : [0, 0, 0, 0])) };
@@ -7642,7 +8058,17 @@ function terrainFx(mat: THREE.Material, opts: {
         // side of the dither a pixel falls on. A term only close enough to see
         // can afford to be loud, because close enough to see is also far from
         // Nyquist.
-        float rough = uTdForce.x >= 0.0 ? uTdForce.x : vTd.x;
+        vec3 made = vec3(0.0);
+        if (uSubBox.z > 1.0 && uGView < 0.5 && uSubAmt > 0.001) {
+          made = texture2D(uMade, (vWorldP.xz-uSubBox.xy)/uSubBox.zw).rgb;
+          // A steep hillside or engineering cut is not a paved plaza even if
+          // the coarse cover raster calls the surrounding neighbourhood built.
+          made *= (1.0-smoothstep(0.12,0.42,abs(vTd.z))) * step(0.0,vTd.z);
+          made *= clamp(uSubAmt,0.0,1.0);
+        }
+        float madeMass = clamp(dot(made,vec3(1.0)),0.0,1.0);
+        vec3 madeBase = diffuseColor.rgb;
+        float rough = (uTdForce.x >= 0.0 ? uTdForce.x : vTd.x) * (1.0-madeMass*0.88);
         float grain = uTdForce.y >= 0.0 ? uTdForce.y : vTd.y;
         // ── THE FIELD IS READ HERE, ABOVE THE CASCADE THAT IT SILENCES ──
         //
@@ -7728,6 +8154,7 @@ function terrainFx(mat: THREE.Material, opts: {
           e.x = clamp(e.x + cutFace * ${SUB_CUT_MANTLE} * (1.0 - e.x), 0.0, 1.0);
           e.z *= 1.0 - cutFace * ${SUB_CUT_GRASS};
         }
+        e *= 1.0-madeMass;
         // ── AND HOW MUCH OF THE HALF-METRE THE SUBSTRATE HAS TAKEN OVER ──
         //
         // The mineral share, scaled by the dial, because that is exactly how
@@ -7899,6 +8326,11 @@ function terrainFx(mat: THREE.Material, opts: {
           if (uGView > 0.5 && uGView < 1.5) diffuseColor.rgb = vec3(e.y, e.z, e.x);
           else diffuseColor.rgb = mix(pc, subC, uSubAmt);
         }
+        if (madeMass > 0.001) {
+          vec3 madeC = madeColour(madeBase, gp, made/max(madeMass,0.001), px);
+          diffuseColor.rgb = mix(diffuseColor.rgb, madeC, madeMass);
+          subRelief *= 1.0-madeMass;
+        }
         // ── A CLASS VIEW: THE RASTER'S OWN VERDICT, WHERE IT HAS ONE ──
         //
         // Outside the substrate's gate entirely, and that is not tidiness:
@@ -7908,7 +8340,7 @@ function terrainFx(mat: THREE.Material, opts: {
         // ground no tile has answered for keeps its own colour and the view
         // says where the data IS rather than filling its gaps.
         if (uGView > 1.5 && uGView < 3.5) {
-          vec4 gInk = gvInk(uGLut, vTd.w);
+          vec4 gInk = gvInk(uGLut, uGView > 2.5 ? vEco : vTd.w);
           diffuseColor.rgb = mix(diffuseColor.rgb, gInk.rgb, gInk.a);
         }
         // ── A CHANNEL OF THE GEOMORPHIC FIELD, AS A RAMP OVER THE LIT GROUND ──
@@ -8003,6 +8435,7 @@ function terrainFx(mat: THREE.Material, opts: {
         + 'uniform float uSubMic;\nuniform float uNrmK;\n'
         + 'uniform float uGView;\nuniform sampler2D uGLut;\n'
         + 'uniform vec2 uGHeightRange;\nuniform float uGDem;\n'
+        + MADE_GLSL + '\nuniform sampler2D uMade;\n'
         + 'uniform sampler2D uSubA;\nuniform sampler2D uSubB;\nuniform vec4 uSubBox;\n'
         + sh.fragmentShader;
     }
@@ -8507,9 +8940,44 @@ function terrainNormalFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE
   }
   return tex;
 }
+/** The shared cast every rock wore before the district's stone reached the
+ *  shader: what a material with no tile behind it still gets. */
+const ROCK_TINT_DEFAULT = new THREE.Vector3(SUB_ROCK_CAST[0], SUB_ROCK_CAST[1], SUB_ROCK_CAST[2]);
+/**
+ * ── THE ROCK IS THE DISTRICT'S STONE, NOT A GREY ──
+ *
+ * `subRockC` pulled the chroma out of the ground colour and laid one cool
+ * cast over it, everywhere: right for granite and wrong for Port Campbell
+ * limestone, which the seat photographed as warm ochre and the game drew at
+ * hue 198°. The world already knows what a district stands on — `bedrockAt`
+ * picks a STONE family per 6 km district by the climate's own mix, and the
+ * boulders, the spires and the stone villages all take their colour from it.
+ * The cliff face now does too: the family's hue and saturation at the tile's
+ * centre, normalised to unit luminance so it changes the COLOUR of exposed
+ * rock and not its brightness (the substrate's luminance rule stands), and
+ * blended three quarters of the way so a red-country tile is unmistakably
+ * red without the palette losing its own key. Per tile, because a material
+ * is per tile and a district is bigger than one; a district boundary falls
+ * between tiles as a step, which is what geology does.
+ */
+function stoneTint(fam: readonly number[]): THREE.Vector3 {
+  const [h, , sat, , lit] = fam;
+  const q = lit < 0.5 ? lit * (1 + sat) : lit + sat - lit * sat, p = 2 * lit - q;
+  const ch = (tt: number): number => {
+    tt = ((tt % 1) + 1) % 1;
+    if (tt < 1 / 6) return p + (q - p) * 6 * tt;
+    if (tt < 1 / 2) return q;
+    if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
+    return p;
+  };
+  const r = ch(h + 1 / 3), g = ch(h), b = ch(h - 1 / 3);
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b || 1;
+  const k = 0.75;
+  return new THREE.Vector3(1 + (r / lum - 1) * k, 1 + (g / lum - 1) * k, 1 + (b / lum - 1) * k);
+}
 function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.MeshLambertMaterial {
   const old = terrainMats.get(key);
-  if (old) old.dispose();
+  if (old) { (old.userData.madeTexture as THREE.Texture | undefined)?.dispose(); old.dispose(); }
   // A quarter-megabyte of texture per tile, and nothing prunes the tile maps —
   // drive far enough and that is real memory. Oldest first, never the one being
   // built; the tile keeps the shared material until its own rebuild comes round.
@@ -8521,6 +8989,7 @@ function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.Me
       if (mesh && mesh.material === m) mesh.material = terrainMat;
       // The normal map is NOT disposed here — terrainNormals owns it, and it is
       // what makes this tile's next rebuild free. It has its own cap.
+      (m.userData.madeTexture as THREE.Texture | undefined)?.dispose();
       m.dispose();
       terrainMats.delete(k);
     }
@@ -8550,7 +9019,14 @@ function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.Me
   // field is per tile, so it cannot be a shared uniform block the way uGView
   // and the dials are.
   const sub = substrateTexes.get(key);
-  terrainFx(m, { detail: true, dem: true, sub: sub ? { a: sub.a, b: sub.b, box: [t.xs, t.zs, t.w, t.h] } : undefined });
+  const made = madeTextureFor(t);
+  m.userData.madeTexture = made;
+  {
+    const cx = t.xs + t.w / 2, cz = t.zs + t.h / 2;
+    const c = climateAt(cx, cz);
+    m.userData.rockTint = stoneTint(STONE[bedrockAt(cultEnv, cx, cz, STONE_MIX_ROWS, c.w)]);
+  }
+  terrainFx(m, { detail: true, dem: true, made, sub: sub ? { a: sub.a, b: sub.b, box: [t.xs, t.zs, t.w, t.h] } : undefined });
   terrainMats.set(key, m);
   return m;
 }
@@ -8613,6 +9089,8 @@ const kStore: TerrainStore = {
   get channels() { return channelGrid as Map<string, StripLike[]>; },
   get grid() { return GRID; },
   hydroBreakLines: (t) => hydroShoreBreakLines.get(`${t.tx}/${t.ty}`) ?? [],
+  cliffLines: (t) => cliffLinesByTile.get(`${t.tx}/${t.ty}`) ?? [],
+  plinths: (t) => plinthsByTile.get(`${t.tx}/${t.ty}`) ?? [],
   hydroFloor: (t) => { const d = hydroFloors.get(`${t.tx}/${t.ty}`); return d ? { n: HYDRO_EN, data: d } : null; },
   hydroBank: (t) => hydroBanks.get(`${t.tx}/${t.ty}`) ?? null,
   onRoad: (x, z) => onCarriageway(x, z, 0.6).road,
@@ -8849,6 +9327,37 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
       }
       return flat;
     })(),
+    cliffLines: (() => {
+      const lines = cliffLinesByTile.get(`${t.tx}/${t.ty}`) ?? [];
+      const flat = new Float64Array(lines.length * 4);
+      for (let i = 0; i < lines.length; i++) {
+        flat[i * 4] = lines[i].ax; flat[i * 4 + 1] = lines[i].az;
+        flat[i * 4 + 2] = lines[i].bx; flat[i * 4 + 3] = lines[i].bz;
+      }
+      return flat;
+    })(),
+    plinths: (() => {
+      const list = plinthsByTile.get(`${t.tx}/${t.ty}`) ?? [];
+      let n = 0;
+      for (const P of list) n += 3 + P.pts.length * 2;
+      const flat = new Float64Array(n);
+      let i = 0;
+      for (const P of list) {
+        // A stack that stated no height reads the mainland's cliff top now,
+        // and again on every build, keeping the HIGHEST it has seen: the
+        // first pack ran when only the islet's own tile was in, the mainland
+        // a tile over still on the wire, and a probe cached then said 6 m
+        // for a 50 m cliff for the rest of the session. Measured at the
+        // Apostles, tops 6.2 and 6.0 for stacks under a 50 m coast.
+        if (!Number.isFinite(P.height)) {
+          const top = plinthTopProbe(P);
+          if (Number.isFinite(top) && !(top <= (P.top ?? -Infinity))) (P as { top?: number }).top = top;
+        }
+        flat[i++] = P.height; flat[i++] = P.top ?? NaN; flat[i++] = P.pts.length;
+        for (const [x, z] of P.pts) { flat[i++] = x; flat[i++] = z; }
+      }
+      return flat;
+    })(),
     // A copy per job: the buffer is transferred, and the tile's floor stays
     // here for the next build.
     hydroFloor: (hydroFloors.get(`${t.tx}/${t.ty}`) ?? new Float32Array(0)).slice(),
@@ -8863,6 +9372,8 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
     st.flat.buffer,
     ch.flat.buffer,
     job.hydroBreakLines.buffer,
+    job.cliffLines.buffer,
+    job.plinths.buffer,
     job.hydroFloor.buffer,
     job.hydroBank.buffer,
     pads.buffer,
@@ -10077,6 +10588,9 @@ async function loadTerrainTileInner(x: number, y: number): Promise<void> {
   // the wire. No dirty and no re-mirror here — the tile has not been published
   // or mirrored yet, so the repair is simply part of what arrives.
   clearTileSpans(tile);
+  // The hand-shaped cells, into the raster before anything mirrors or reads it.
+  await authoredRasterIn('dem', x, y, data);
+  if (ep !== worldEpoch) return;
   heightTiles.set(key, tile);
   tworker?.mirrorHeight(key, tile);
   if (tworker && !tworker.disabled) { terrainDirty.add(key); dirtyWhy.set(key, 'load'); }
@@ -25984,7 +26498,7 @@ function flushBuildings(): void {
   const finish = (geo: THREE.BufferGeometry, mat: THREE.Material | THREE.Material[],
     seats: Seats, opts: { noCast?: boolean; ruinLod?: boolean } = {}): void => {
     // The seats already delimit each building's vertices, including split material groups.
-    if (!opts.noCast) attachBuildingFabric(geo, seats);
+    if (!opts.noCast) { attachBuildingFabric(geo, seats); attachRoofSurface(geo, seats); }
     const mesh = new THREE.Mesh(geo, mat);
     if (opts.noCast) mesh.userData.noCast = true;
     mesh.name = opts.ruinLod ? 'ruin' : 'building';
@@ -26434,10 +26948,6 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   bldHeights.set(id, height);
   const r = mulberry32((id * 2654435761) >>> 0);
   r(); // first draw off a hashed seed is poorly distributed
-  // WHAT OSM SAYS FELL DOWN STAYS DOWN. Giza's home town maps 94% of its
-  // stock as building=ruins, and an intact limewash box over a mapped ruin is
-  // the data being overruled by a default.
-  const forceRuin = kind === 'ruins' || kind === 'collapsed' || kind === 'construction';
   // Intact buildings hand their extrusion to the tile batch instead of
   // standing up a mesh each — see flushBuildings for why.
   const intactSink = (paint: number, roof?: string, ridge?: number, chim = 0) =>
@@ -26459,6 +26969,10 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
       } else if (roof) {
         const rg = roofGeo(pts, roof, top, ridge);
         if (rg) arr.push({ geo: rg, base, mark, gram, top, pts });
+        else if (BLD_PARA) {
+          const fg = flatRoofGeo(pts, top, top - base, id);
+          if (fg) arr.push({ geo: fg, base, mark: 0, gram: -1, top: fg.userData.top as number, pts });
+        }
         // The stack is its own piece: gram -1 is the façade shader's BLANK
         // wall (no openings, no ivy, no marks), and its aTop is the cap.
         if (rg && chim > 0) {
@@ -26591,7 +27105,16 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   const tradC = look.tradition ? TRADITIONS[look.tradition] : undefined;
   const chimN = tradC && (roofShape === 'gabled' || roofShape === 'hipped') && unitN(id, 11) < tradC.chimneys
     ? (footprintSize(pts).area > 160 ? 2 : 1) : 0;
-  if (!lineOn && !forceRuin && (height > 24 || r() > 0.42 || TYPO_COL[kind] !== undefined || mapped !== null)) {
+  // FREEDRIVE NEVER RUINS. The line's doctrine ("everything the domes did
+  // not take has stood empty since the Leaving") is what makes a ruin roll
+  // meaningful there; off the line there is no such story, so every
+  // footprint stands intact — including one OSM tags building=ruins,
+  // collapsed or construction, which used to force a ruin even off the
+  // line ("what OSM says fell down stays down"). "The line" keeps its own
+  // behaviour untouched: `lineOn` is true there, so this branch is never
+  // taken and every building on the line still falls through to the ruin
+  // construction beneath, exactly as before.
+  if (!lineOn) {
     buildStats.intact++;
     noteMass(height, roofShape);
     bldRoofs.set(id, roofShape ?? 'canopy');
@@ -27350,7 +27873,7 @@ interface OsmWay {
 // Only the tags renderWays actually reads — the rest is dead weight per way.
 // amenity/shop feed repair POIs; surface/smoothness/tracktype feed wayQuality.
 // The S3 tiles keep EVERY tag — this list is only the client cache's diet.
-const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'ford', 'culvert', 'layer', 'name', 'amenity', 'shop', 'surface', 'smoothness', 'tracktype',
+const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'ford', 'culvert', 'layer', 'name', 'amenity', 'shop', 'surface', 'smoothness', 'tracktype', 'area',
   // The building vocabulary (R55). Measured in this game's own tiles before
   // believing the wiki: roof:shape on 45% of Freiburg's stock, typed
   // building= values on 40%, honest colours on 2-5%. All of it was being
@@ -27443,7 +27966,7 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
 });
 // Free the shared origin quota from the failed localStorage era.
 try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
-const osmCacheKey = (x: number, y: number): string => `6/${OSM_Z}/${x}/${y}`; // v6: water relations (v4 tiles)
+const osmCacheKey = (x: number, y: number): string => `7/${OSM_Z}/${x}/${y}`; // v7: constructed areas and area semantics (v5 tiles)
 async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
   // THE FIXTURE IS THE CACHE. Answering here as well as at the proxy is what
   // gives renderGated its halo — so an authored road solves its profile
@@ -27957,7 +28480,7 @@ const WATER_W: Record<string, number> = { river: 14, canal: 9, stream: 4.5 };
  *  `natural=scrub|wetland|sand|bare_rock` are areas; `coastline` and `cliff`
  *  share the key and are lines, which is exactly the trap. */
 const AREA_TAG = (t: Record<string, string>): boolean =>
-  !!t.landuse || !!t.leisure
+  !!t.landuse || !!t.leisure || t.amenity === 'parking' || (t.area === 'yes' && madeKind(t) !== null)
   || ['scrub', 'wetland', 'sand', 'bare_rock', 'wood', 'grassland', 'heath'].includes(t.natural ?? '');
 // ── the ground's own coat: OSM areas PAINTED, not draped ───────────
 /**
@@ -27992,6 +28515,7 @@ const AREA_CELL = 192;              // metres per registration cell — a forest
 const AREA_CAP = 3000;              // patches held; past this the paint stops asking
 interface AreaPatch {
   pts: Array<[number, number]>; tint: Rgb;
+  made: MadeKind | null; natural: boolean; area: number;
   x0: number; z0: number; x1: number; z1: number;
 }
 const areaGrid = new Map<string, AreaPatch[]>();
@@ -28029,14 +28553,17 @@ function areaTintFor(t: Record<string, string>): Rgb | null {
  *  repaints, and one built after reads the patch on its way past. */
 function noteArea(pts: Array<[number, number]>, tags: Record<string, string>): void {
   mapPoly(pts, 'rgba(34,54,32,0.9)');          // the chart still says where it is
-  const tint = areaTintFor(tags);
+  const made = madeKind(tags);
+  const tint = areaTintFor(tags) ?? (made ? [0.36,0.35,0.33] as Rgb : null);
   if (!tint || pts.length < 3 || areaPatches >= AREA_CAP) return;
   let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
   for (const [x, z] of pts) {
     if (x < x0) x0 = x; if (x > x1) x1 = x;
     if (z < z0) z0 = z; if (z > z1) z1 = z;
   }
-  const patch: AreaPatch = { pts, tint, x0, z0, x1, z1 };
+  const natural = ['forest','meadow','grass','farmland','orchard','allotments'].includes(tags.landuse ?? '')
+    || ['park','garden','pitch'].includes(tags.leisure ?? '') || !!tags.natural;
+  const patch: AreaPatch = { pts, tint, made, natural, area: (x1-x0)*(z1-z0), x0, z0, x1, z1 };
   areaPatches++;
   for (let cx = Math.floor(x0 / AREA_CELL); cx <= Math.floor(x1 / AREA_CELL); cx++) {
     for (let cz = Math.floor(z0 / AREA_CELL); cz <= Math.floor(z1 / AREA_CELL); cz++) {
@@ -28063,6 +28590,30 @@ function areaTintAt(x: number, z: number): Rgb | null {
   }
   return hit;
 }
+/** RGB surface shares sampled independently of terrain tessellation. One 128²
+ * byte texture per fine tile (64 KiB); no geometry or additional draw call.
+ * Query only overlapping patches and let the smallest mapped area win, so
+ * a garden inside a residential polygon is independent of arrival order. */
+function madeTextureFor(t: HeightTile): THREE.DataTexture {
+  const n = 128, bytes = new Uint8Array(n*n*4);
+  const patches = new Set<AreaPatch>();
+  for (let x=Math.floor(t.xs/AREA_CELL); x<=Math.floor((t.xs+t.w)/AREA_CELL); x++)
+    for (let z=Math.floor(t.zs/AREA_CELL); z<=Math.floor((t.zs+t.h)/AREA_CELL); z++)
+      for (const p of areaGrid.get(`${x},${z}`) ?? []) patches.add(p);
+  const ordered = [...patches].sort((a,b)=>a.area-b.area);
+  for (let j=0;j<n;j++) for (let i=0;i<n;i++) {
+    const x=t.xs+(i+0.5)*t.w/n, z=t.zs+(j+0.5)*t.h/n;
+    const p=ordered.find(p=>x>=p.x0&&x<=p.x1&&z>=p.z0&&z<=p.z1&&pointInPoly(x,z,p.pts));
+    const shares=madeShares(sampleCover(x,z),p?.made??null,p?.natural??false);
+    const k=(j*n+i)*4;
+    bytes[k]=Math.round(shares[0]*255); bytes[k+1]=Math.round(shares[1]*255); bytes[k+2]=Math.round(shares[2]*255);
+    bytes[k+3]=255;
+  }
+  const tex=new THREE.DataTexture(bytes,n,n,THREE.RGBAFormat);
+  tex.minFilter=tex.magFilter=THREE.LinearFilter; tex.needsUpdate=true;
+  return tex;
+}
+
 /** Every call to renderWays, in order, while capture is armed — the tests
  *  replay this sequence, so what they exercise is the real arrival order and
  *  not a tidy reconstruction of it. Off unless a probe turns it on. */
@@ -28259,11 +28810,38 @@ async function buildBreath(): Promise<void> {
  * warp have the same shape. So the yields go inside, and the calls queue.
  */
 let buildChain: Promise<void> = Promise.resolve();
+/** BUILT WORLD. Off, the map's constructed things are dropped before any
+ *  of them is planned or built — roads and everything that hangs off a road
+ *  (rails, signs, lamps, culverts, fords, bridges), buildings and their
+ *  ruins, railways, aeroways, man_made verticals, amenities, shops, historic
+ *  sites, power, the parking and paved areas the constructed-ground painter
+ *  reads, quarries, dams and weirs — and the authored landmarks with them.
+ *  What stays is the ground: terrain, cover, natural areas, water lines and
+ *  water relations, the landuse and leisure areas that tint the sward. The
+ *  URL switch outranks the WORLD dial, for a reproducible A/B; the dial
+ *  rebuilds the world in place when it is tapped (see the dial). Filtered
+ *  HERE, at the one entry every tile, halo, fixture and authored road takes,
+ *  so a cached tile and a streamed one cannot disagree about it. */
+let builtOn = qsOn('built', true);
+let builtInit = false;
+const BUILT_TAGS = ['highway', 'building', 'railway', 'aeroway', 'man_made', 'amenity', 'shop', 'tourism', 'historic', 'power', 'bridge:support'];
+function isBuiltWay(tags: Record<string, string> | undefined): boolean {
+  if (!tags) return false;
+  for (const t of BUILT_TAGS) if (tags[t] !== undefined) return true;
+  if (tags.area === 'yes') return true;
+  if (tags.landuse === 'quarry') return true;
+  if (tags.waterway === 'dam' || tags.waterway === 'weir') return true;
+  return false;
+}
 async function renderWays(
   els: OsmWay[],
   halo: OsmWay[] = [],
   terrainOwner: string | null = null,
 ): Promise<void> {
+  if (!builtOn) {
+    els = els.filter((e) => !isBuiltWay(e.tags));
+    halo = halo.filter((e) => !isBuiltWay(e.tags));
+  }
   wayTape?.push({ els, halo });
   // The map's own pylons and piers, before any ribbon asks where a tower
   // stands. A `bridge:support` node is a one-point geometry by the time it
@@ -28327,7 +28905,7 @@ async function renderWays(
   for (const el of ordered) {
     const tags = el.tags ?? {};
     if (!el.geometry || el.geometry.length < 2 || !tags.highway) continue;
-    if (tags.highway === 'services' || tags.highway === 'steps') continue;
+    if (tags.highway === 'services' || tags.highway === 'steps' || tags.area === 'yes') continue;
     const dk = el.ck ?? String(el.id);
     const w = roadWidth(tags);
     const track = ['track', 'path', 'bridleway', 'cycleway', 'footway'].includes(tags.highway);
@@ -28384,7 +28962,7 @@ async function renderWays(
     for (const el of ordered) {
       const tags = el.tags ?? {};
       if (!el.geometry || el.geometry.length < 2 || !tags.highway) continue;
-      if (tags.highway === 'services' || tags.highway === 'steps') continue;
+      if (tags.highway === 'services' || tags.highway === 'steps' || tags.area === 'yes') continue;
       const dk = el.ck ?? String(el.id);
       if (seenWays.has(dk)) continue;
       const w = roadWidth(tags);
@@ -28489,6 +29067,7 @@ async function renderWays(
     // The parking aisles inside it are tagged `service` and stay: those are
     // real, drivable, and belong to the car park.
     if (tags.highway === 'services') continue;
+    if (tags.area === 'yes' && tags.highway) { noteArea(pts, tags); continue; }
     if (tags.highway) {
       const w = roadWidth(tags);
       // THREE tiers, not two. A mountain path used to render as decoration you
@@ -28610,6 +29189,11 @@ async function renderWays(
       polygon(pts, MAT.mouth, 0.03);
     } else if (tags.building) {
       building(pts, el.id, tags);
+    } else if (plinthOf(tags, pts) !== null) {
+      // A ROCK WITH A HEIGHT IS TERRAIN, NOT A DRAPE: the kernel raises it.
+      // Painted too where the tag is one the ground already wears.
+      notePlinth(pts, plinthOf(tags, pts) as number);
+      if (AREA_TAG(tags)) noteArea(pts, tags);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
       // A LAKE, AND ONLY ONE OF THE TWO PATHS DRAWS IT. The drape and the
       // hydro field would otherwise sit within 25mm of each other over the
@@ -28624,8 +29208,22 @@ async function renderWays(
       noteArea(pts, tags);
       scatterVeg(pts, el.id, tags);
     }
-    else if (tags.natural === 'coastline') noteCoastline(pts);
-    // Anything else — a cliff edge, an unrecognised line — is
+    else if (tags.natural === 'coastline') {
+      noteCoastline(pts);
+      // A coastline islet that STATES a height (a patch, usually) is a stack
+      // too: the survey drew its shore but no cliff ring to file it under.
+      const h = parseFloat(tags.height ?? '');
+      if (h > 1 && h <= 500 && pts.length >= 4) {
+        let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        for (const [x, z] of pts) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+        const [ax, az] = pts[0], [bx, bz] = pts[pts.length - 1];
+        if (Math.hypot(ax - bx, az - bz) <= 1 && x1 - x0 <= ISLET_MAX_M && z1 - z0 <= ISLET_MAX_M) notePlinth(pts, h);
+      }
+    }
+    // A CLIFF IS THE ONE LINE THE TERRAIN NEEDS: the DEM smears a face into
+    // a ramp and the map says where the face is. See cliffAdjust in the kernel.
+    else if (tags.natural === 'cliff') noteCliff(pts, tags);
+    // Anything else — an unrecognised line — is
     // deliberately dropped rather than fed to the polygon path. The old `else`
     // caught everything, which was harmless while the query only returned
     // areas; with lines in the answer it would paint a river green.
@@ -28749,7 +29347,7 @@ const osmDone = new Set<string>();
 // the world can be asked about (the field query below) instead of stared
 // at: how many ways arrived, how many the build refused, how many times
 // the tile has retried, and where the data came from.
-interface TileStat { at: number; src: 'cache' | 'cell' | 'mirror';
+interface TileStat { at: number; src: 'cache' | 'cell' | 'mirror' | 'stale';
   ways: number; refused: number; retries: number; state: 'done' | 'retry' | 'error' }
 const tileStats = new Map<string, TileStat>();
 function noteTileRender(key: string, src: TileStat['src'], ways: number, refused: number): void {
@@ -29012,6 +29610,14 @@ let tileProxyOk = true;   // one clean failure retires it for the session
 // tile is re-queued by a later pass, and by then it is often warm because the
 // cell filled it in the background anyway.
 const TILE_WAIT_MS = 9000;
+/** A tile the cell served from a PREVIOUS keyspace because the current one
+ *  was cold and the mirrors would not fill it (see the fallback in the
+ *  handler's serveTile). Keyed by the array itself, because up to OSM_GATE
+ *  tiles are in flight at once and a module flag would name the wrong one.
+ *  A stale tile is drawn — roads and buildings beat an empty tile — and is
+ *  NOT written to IndexedDB, so nothing this session saw survives it: the
+ *  next ask for this tile is a real ask of the current keyspace again. */
+const proxyStale = new WeakMap<OsmWay[], string>();
 async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
   if (FIXTURE) return fixtureWays(x, y);
   if (!tileProxyOk) return null;
@@ -29034,6 +29640,8 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
       ...(w.rings ? { rings: w.rings } : {}),
     })) as OsmWay[];
     profAdd('osmParse', t0);
+    const stale = res.headers.get('x-drive-tile-stale');
+    if (stale) proxyStale.set(ways, stale);
     return ways;
   } finally { clearTimeout(bail); }
   // NOTE: no catch. A timeout or a network blip is THIS TILE failing, and the
@@ -29043,6 +29651,205 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
   // the fallback still covers a bad deploy and nothing else.
 }
 
+// ── THE AUTHORED STORE: HAND-AUTHORED WAYS MERGED INTO THE RAW TILE ──
+//
+// A sea stack the map does not carry, a cliff line the mapper stopped short
+// of, a ruin that stood in the photograph. The entries live in the cell's own
+// S3 bank (`~/authored/v1/<z>/<x>/<y>/<rev>`, immutable, edge-served like a
+// tile) and the INDEX of which tiles carry one lives behind `/authored`, read
+// once a session and again on a hop. An entry is OSM-shaped ways; they are
+// concatenated onto the tile's own list before `renderWays`, so an authored
+// building is a building and an authored cliff is a cliff, by the machinery
+// that draws the mapped ones. Filing one goes through `sync.author`, which
+// is the signed-in player's bearer and the cell's own grant — see the store's
+// doctrine in index.ts. `?authored=0` is the raw map alone.
+let authoredOn = qsOn('authored', true);
+let authoredInit = false;
+/** The store's index: which tiles of which LAYER carry an entry, keyed
+ *  `<layer>/<z>/<x>/<y>` on that layer's own grid, and at which revision. */
+interface AuthoredIndex { rev: number; tiles: Record<string, { rev: number; n: number; by: string }> }
+let authoredIndex: AuthoredIndex | null = null;
+let authoredIndexP: Promise<void> | null = null;
+/** One small read a session, and again on a hop (`force`, `cache: 'reload'`)
+ *  so an entry filed from another tab — or this one — shows within a hop
+ *  rather than within the index's minute of edge cache. A tile with no row
+ *  is never asked for at the edge, so no per-tile 404 wakes the Lambda. */
+function loadAuthoredIndex(force = false): Promise<void> {
+  if (!authoredOn || FIXTURE) return Promise.resolve();
+  if (authoredIndexP && !force) return authoredIndexP;
+  authoredIndexP = (async () => {
+    try {
+      // BOUNDED, because raster tiles await this before they register: an
+      // unreachable cell must cost one timeout, not a world that never
+      // finishes streaming. A tile that raced a slow index keeps the raw
+      // raster and is asked again on the next hop, which is the same rule
+      // the stale-keyspace fallback already lives by.
+      const r = await fetch(`${CELL_BASE}/authored`, {
+        ...(force ? { cache: 'reload' as RequestCache } : {}),
+        ...(typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? { signal: AbortSignal.timeout(5000) } : {}),
+      });
+      if (!r.ok) return;
+      const j = (await r.json()) as Partial<AuthoredIndex> | null;
+      if (j && j.tiles && typeof j.tiles === 'object') authoredIndex = { rev: Number(j.rev) || 0, tiles: j.tiles };
+    } catch { /* the raw map alone; the index is asked again next hop */ }
+  })();
+  return authoredIndexP;
+}
+/** What a blob holds, by layer: `osm` — ways the map lacks and tag patches
+ *  on the map's own ways by id; `cover` and `dem` — sparse cell overrides
+ *  `[index, value]` over the 256×256 raster of THAT layer's tile. */
+type AuthoredLayer = 'osm' | 'cover' | 'dem';
+const AUTHORED_Z: Record<AuthoredLayer, number> = { osm: OSM_Z, cover: COVER_Z, dem: TERRAIN_Z };
+interface AuthoredBlob { ways: OsmWay[]; patch: Record<string, Record<string, string>>; cells: Array<[number, number]> }
+/** Blob fetches by `layer/z/x/y@rev` — a revision is immutable, so one fetch
+ *  per revision per session is exactly right. */
+const authoredMemo = new Map<string, Promise<AuthoredBlob>>();
+/** Ways merged and ways patched per osm tile, and cells written per raster
+ *  tile, this session — for the probe. */
+const authoredMerged = new Map<string, number>();
+const authoredPatched = new Map<string, number>();
+const authoredCells = new Map<string, number>();
+/** Write the overrides into a 256×256 raster: the same cell the lab's brush
+ *  writes, by the same index. */
+function applyAuthoredCells(data: Uint8Array | Float32Array, cells: Array<[number, number]>): number {
+  let n = 0;
+  for (const [i, v] of cells) {
+    if (!(i >= 0 && i < data.length)) continue;
+    data[i] = v;
+    n++;
+  }
+  return n;
+}
+const NO_BLOB: AuthoredBlob = { ways: [], patch: {}, cells: [] };
+/** The index's key for a tile: the layer and its own grid's z/x/y. */
+const authoredKey = (layer: AuthoredLayer, x: number, y: number): string => `${layer}/${AUTHORED_Z[layer]}/${x}/${y}`;
+/** …and the blob's path, which is the same with the keyspace version in it,
+ *  mirroring the base bank the layer came from (`~/osm/v5`, `~/cover/v1`). */
+const authoredPath = (layer: AuthoredLayer, x: number, y: number, rev: number): string =>
+  `/~/authored/${layer}/v1/${AUTHORED_Z[layer]}/${x}/${y}/${rev}`;
+async function authoredBlob(layer: AuthoredLayer, x: number, y: number): Promise<AuthoredBlob> {
+  if (!authoredOn || FIXTURE) return NO_BLOB;
+  await loadAuthoredIndex();
+  const key = authoredKey(layer, x, y);
+  const row = authoredIndex?.tiles[key];
+  if (!row) return NO_BLOB;
+  const mk = `${key}@${row.rev}`;
+  let p = authoredMemo.get(mk);
+  if (!p) {
+    p = (async () => {
+      try {
+        const r = await fetch(`${CELL_BASE}${authoredPath(layer, x, y, row.rev)}`);
+        if (!r.ok) return NO_BLOB;
+        const j = (await r.json()) as Partial<AuthoredBlob> | null;
+        const ways = (j?.ways ?? []).filter((w) => w && typeof w.id === 'number' && Array.isArray(w.geometry) && w.geometry.length > 0);
+        const patch = j?.patch && typeof j.patch === 'object' ? j.patch : {};
+        const cells = (Array.isArray(j?.cells) ? j.cells : []).filter((c) => Array.isArray(c) && c.length === 2 && Number.isFinite(c[0]) && Number.isFinite(c[1])) as Array<[number, number]>;
+        if (layer === 'osm') authoredMerged.set(key, ways.length);
+        return { ways, patch, cells };
+      } catch { authoredMemo.delete(mk); return NO_BLOB; }
+    })();
+    authoredMemo.set(mk, p);
+  }
+  return p;
+}
+/** The loaded overlay's cells for a raster tile, as a map — what BANK merges
+ *  the session's own edits over, so sessions accumulate. Empty when there is
+ *  none or it has not been asked for. */
+async function authoredCellsOf(layer: 'cover' | 'dem', x: number, y: number): Promise<Map<number, number>> {
+  const b = await authoredBlob(layer, x, y);
+  return new Map(b.cells);
+}
+/** A raster tile's overlay written in as the tile arrives: awaited BEFORE
+ *  the tile is registered or mirrored, so nothing ever reads the raw raster.
+ *  Costs one index read a session and nothing at all for a tile with no
+ *  entry. */
+async function authoredRasterIn(layer: 'cover' | 'dem', x: number, y: number, data: Uint8Array | Float32Array): Promise<void> {
+  const b = await authoredBlob(layer, x, y);
+  if (!b.cells.length) return;
+  const n = applyAuthoredCells(data, b.cells);
+  if (n) authoredCells.set(authoredKey(layer, x, y), n);
+}
+/** The tile's own ways, patched where the entry amends one by id, plus
+ *  whatever was authored for it. The list identity changes only when there
+ *  IS an entry, so `proxyStale` and every other WeakMap keyed on the raw
+ *  list keep working for the tiles that have none. */
+async function withAuthored(x: number, y: number, ways: OsmWay[]): Promise<OsmWay[]> {
+  if (!authoredOn || FIXTURE) return ways;
+  const b = await authoredBlob('osm', x, y);
+  let out = ways;
+  const ids = Object.keys(b.patch);
+  if (ids.length) {
+    let patched = 0;
+    const next = ways.map((w) => {
+      const p = b.patch[String(w.id)];
+      if (!p) return w;
+      patched++;
+      return { ...w, tags: { ...(w.tags ?? {}), ...p } };
+    });
+    if (patched) { out = next; authoredPatched.set(authoredKey('osm', x, y), patched); }
+  }
+  return b.ways.length ? out.concat(b.ways) : out;
+}
+/** The world in place again, through the tile filter — what the BUILT WORLD
+ *  and AUTHORED dials do when tapped, and what a fresh entry needs. */
+function rebuildInPlace(): void {
+  if (hopping || FIXTURE) return;
+  const [la, lo] = localToLatLon(state.x, state.z);
+  const hdg = ((state.heading * 180) / Math.PI + 360) % 360;
+  void worldHop(la, lo, hdg).catch(() => { /* a hop already in flight keeps the world it has */ });
+}
+/**
+ * FILE AN ENTRY FROM THE CONSOLE OR A DEVTOOL. `ways` are `{ tags, geometry:
+ * [{lat, lon}] }`, or `{ tags, pts: [[x, z], …] }` in local metres (the lab's
+ * own units), converted here. Each way is filed under EVERY z16 tile one of
+ * its points falls in, under one id, so the edge dedupe draws it once. The
+ * whole entry for a tile is replaced: this is authoring, not appending, and
+ * the last word on a tile is the tile. Returns one row per tile, then
+ * refreshes the index and rebuilds the world in place so the entry shows.
+ */
+type AuthoredInput = { tags: Record<string, string>; geometry?: Array<{ lat: number; lon: number }>; pts?: Array<[number, number]> };
+/** An osm entry to file: ways (lat/lon or local `pts`) and tag patches by
+ *  osm id (these need `opts.tile`, an id carries no position). Raster cells
+ *  go through authoredBankCells, keyed on their own layer's tile. */
+type AuthoredPayload = { ways?: AuthoredInput[]; patch?: Record<string, Record<string, string>> };
+type AuthoredBody = { layer: 'osm'; tile: string; ways: Array<{ tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }>; patch: Record<string, Record<string, string>> };
+/** File a raster tile's overlay: the loaded overlay merged with `edits`
+ *  (edits win), so a second session adds to the first rather than replacing
+ *  it. An empty result retracts the tile. */
+async function authoredBankCells(layer: 'cover' | 'dem', x: number, y: number, edits: Map<number, number>, dry: boolean): Promise<{ ok: boolean; cells: number; why?: string; rev?: number }> {
+  const merged = await authoredCellsOf(layer, x, y);
+  for (const [i, v] of edits) merged.set(i, v);
+  const cells = [...merged].sort((a, b) => a[0] - b[0]);
+  if (dry) return { ok: true, cells: cells.length };
+  const r = await sync.author({ layer, tile: `${AUTHORED_Z[layer]}/${x}/${y}`, cells });
+  return { ok: r.ok, cells: cells.length, why: r.why, rev: r.rev };
+}
+async function authoredBank(input: AuthoredInput[] | AuthoredPayload, opts: { tile?: string; dry?: boolean } = {}): Promise<object> {
+  const payload: AuthoredPayload = Array.isArray(input) ? { ways: input } : input;
+  const tileOf = (lat: number, lon: number): string => { const [tx, ty] = tileAt(lat, lon, OSM_Z); return `${OSM_Z}/${tx}/${ty}`; };
+  const byTile = new Map<string, AuthoredBody>();
+  const bodyFor = (t: string): AuthoredBody => { let b = byTile.get(t); if (!b) byTile.set(t, (b = { layer: 'osm', tile: t, ways: [], patch: {} })); return b; };
+  for (const w of payload.ways ?? []) {
+    const geometry = w.geometry ?? (w.pts ?? []).map(([x, z]) => { const [lat, lon] = localToLatLon(x, z); return { lat, lon }; });
+    if (!geometry.length) continue;
+    const tiles = opts.tile ? [opts.tile] : [...new Set(geometry.map((g) => tileOf(g.lat, g.lon)))];
+    for (const t of tiles) bodyFor(t).ways.push({ tags: w.tags, geometry });
+  }
+  if (payload.patch && Object.keys(payload.patch).length) {
+    if (!opts.tile) return { error: 'a patch needs opts.tile — an osm id carries no position' };
+    Object.assign(bodyFor(opts.tile).patch, payload.patch);
+  }
+  const out: Record<string, unknown> = {};
+  for (const [tile, body] of byTile) {
+    out[tile] = opts.dry ? { ways: body.ways.length, patched: Object.keys(body.patch).length } : await sync.author(body);
+  }
+  if (!opts.dry && byTile.size) {
+    authoredMemo.clear();
+    await loadAuthoredIndex(true);
+    rebuildInPlace();
+  }
+  return out;
+}
 async function loadOsmTile(x: number, y: number): Promise<void> {
   // NOTHING IS BUILT UNDER A COVER. The sealed cities are the one part of the
   // world the map does not answer for — and, not coincidentally, the part
@@ -29058,7 +29865,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
   const cached = await readTileCache(x, y);
   if (cached) {
     const before = unbuilt;
-    await renderGated(x, y, cached);
+    await renderGated(x, y, await withAuthored(x, y, cached));
     noteTileRender(key, 'cache', cached.length, unbuilt - before);
     if (unbuilt !== before) setTimeout(() => osmLoaded.delete(key), 3000);
     else { osmDone.add(key); noteOsmDone(x, y); }
@@ -29085,6 +29892,8 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
       const q = `[out:json][timeout:15];(
         way["highway"](${bbox});
         way["building"](${bbox});
+        way["amenity"="parking"](${bbox});
+        way["area"="yes"]["surface"](${bbox});
         way["natural"="water"](${bbox});
         // MATCH THE PROXY. This asked for riverbank polygons only, while the
         // cell's own query has fetched river, stream and canal LINES for some
@@ -29110,9 +29919,17 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     osmFails = 0;
     osmDown = false;
     osmFailedAt.delete(key);
-    writeTileCache(x, y, ways);
+    // A stale-keyspace tile is drawn and never persisted: see proxyStale.
+    // It is still `done` for this pass — re-asking it every few seconds
+    // would put a Lambda call and a full Overpass wait behind every tile in
+    // the ring for as long as the mirrors are down, which is exactly the
+    // load the fallback exists to take off them. The tile is asked afresh
+    // when the ring lets it go and the truck comes back, or next session.
+    const stale = proxyStale.get(ways);
+    if (stale) src = 'stale';
+    else writeTileCache(x, y, ways);
     const before = unbuilt;
-    await renderGated(x, y, ways);
+    await renderGated(x, y, await withAuthored(x, y, ways));
     noteTileRender(key, src, ways.length, unbuilt - before);
     // A tile that refused any ribbon for want of terrain is NOT done. Let it
     // be requested again once the elevation it needed has landed, or the road
@@ -29965,7 +30782,9 @@ function streamWorld(ex: number, ez: number): void {
     // fixtures is the country above Geneva, drawn as coarse ribbons over a
     // synthetic crossroads. A fixture is supposed to run with the network out
     // of the loop; this was the hole in that claim.
-    if (camMode === 'top' && !FIXTURE) {
+    // …and from the seat while PLACES is on, so the seat's place names have
+    // something to name (the ring is sized by the seat's own sight line).
+    if ((camMode === 'top' || chartOn.places) && !FIXTURE) {
       // THE CHART'S REACH IS THE SHELL'S, NOT THE PLANE'S. `r` is capped at
       // SIGHT_MAX because past it the tangent plane stops being honest, which
       // is right for every layer that lives in the plane — and the chart's
@@ -31375,12 +32194,11 @@ function loadChartLayers(): void {
     // switched off for everyone who has ever opened the key — the trap the
     // dial rack needs a version stamp and a migration for.
     for (const l of CHART_LAYERS) {
-      // A DEBUG CHIP IS NEVER RESTORED. Its chip is only drawn while the tile
-      // overlay is up, so a stored `substrate: true` would come back as a
-      // false-coloured world with no control on the glass to turn it off —
-      // the settings panel's own lesson about a staged change nothing
-      // announces, one surface over.
-      if (l.debug) continue;
+      // Every chip is on the glass now, so a restored view always has its
+      // control beside it (the reason debug chips used to be skipped here).
+      // OFF is an action, and HYDRO and X-RAY read their state from the
+      // renderer (hydroView, xrayMode) rather than from this record.
+      if (l.kind === 'action' || l.id === 'hydro' || l.id === 'xray') continue;
       if (typeof saved[l.id] === 'boolean') chartOn[l.id] = saved[l.id] as boolean;
     }
   } catch { /* private mode, or a stored shape from another life */ }
@@ -31426,9 +32244,40 @@ const DBG_RASTER: Partial<Record<ChartLayerId, 'water' | 'surface'>> =
  *  the legend names the one in force, because a false-colour ramp with no name
  *  on it is a picture of nothing. */
 let groundChannel: GroundViewId = SUBSTRATE_VIEWS[0];
+/** Whether a chip is showing. HYDRO and X-RAY are read from the renderer's
+ *  own state, so a probe or a dial that moves it cannot leave the chip lying. */
+function layerIsOn(id: ChartLayerId): boolean {
+  if (id === 'hydro') return hydroView !== 'surface';
+  if (id === 'xray') return xrayMode > 0;
+  if (id === 'off') return false;
+  return chartOn[id];
+}
+/** The chip naming the view in force, for a cycling chip: HYDRO · DEPTH. */
+function layerViewName(id: ChartLayerId): string | null {
+  if (id === 'hydro') return HYDRO_VIEWS.find((v) => v.view === hydroView)?.name ?? null;
+  if (id === 'xray') return XRAY_VIEWS.find((v) => v.mode === xrayMode)?.name ?? null;
+  if (id === 'ground') return chartOn.ground ? groundChannel.toUpperCase() : null;
+  return null;
+}
 function setChartLayer(id: ChartLayerId, on: boolean): void {
   const row = chartLayer(id);
   if (!row) return;
+  // ── OFF IS THE PLAYER'S HIDE HUD ── everything goes, and a double tap
+  // anywhere brings it back (see setClean's own double-tap listener).
+  if (id === 'off') { if (on) setClean(true); return; }
+  // ── HYDRO and X-RAY CYCLE ── a tap on the chip already showing advances
+  // it, and falls off the end back to the ordinary picture.
+  if (id === 'hydro') {
+    const i = on ? HYDRO_VIEWS.findIndex((v) => v.view === hydroView) + 1 : HYDRO_VIEWS.length;
+    hydroView = i < HYDRO_VIEWS.length ? HYDRO_VIEWS[i].view : 'surface';
+    hydroSys?.setDebugView(hydroView);
+    return;
+  }
+  if (id === 'xray') {
+    const i = on ? XRAY_VIEWS.findIndex((v) => v.mode === xrayMode) + 1 : XRAY_VIEWS.length;
+    xrayMode = i < XRAY_VIEWS.length ? XRAY_VIEWS[i].mode : 0;
+    return;
+  }
   // ── A TAP ON THE CHIP ALREADY SHOWING ADVANCES IT, AND FALLS OFF THE END ──
   // Six channels behind one chip only works if the second tap means "the next
   // one"; turning the layer off on tap two would make five of the six
@@ -33063,8 +33912,13 @@ const beamMat = new THREE.ShaderMaterial({
       float d = clamp(vD, 0.0, 1.0), r = clamp(vR, 0.0, 1.0);
       // Daylight: the beam is a hint, not a searchlight. (The old night value
       // painted a white wedge across a sunlit desert.)
-      float a = max(pow(max(1.0 - d, 0.0), 1.7) * (1.0 - r * r) * 0.07 * uAmp, 0.0);
-      gl_FragColor = vec4(vec3(1.0, 0.94, 0.78) * a, a);
+      float shaft = 1.0 - r * r;
+      // A thin fringe catches the displaced road texture without turning the
+      // cone into a hard-edged decal; the cone itself is the radial haze.
+      float fringe = smoothstep(0.52, 0.84, r) * (1.0 - smoothstep(0.88, 1.0, r));
+      float a = max(pow(max(1.0 - d, 0.0), 1.7) * (shaft + fringe * 0.13) * 0.07 * uAmp, 0.0);
+      // Linear-light equivalent of a roughly 3200 K tungsten practical.
+      gl_FragColor = vec4(vec3(1.0, 0.48, 0.20) * a, a);
     }`,
 });
 const beams: THREE.Mesh[] = [];
@@ -33091,7 +33945,7 @@ for (const sx of [-0.62, 0.62]) {
 // tarmac (the "slab" at the Suresnes cul-de-sac was this, not a junction
 // box). Sixteen candela over seventy metres is a lamp you can tell is on.
 const HEAD_DAY = { i: 16, d: 70 }, HEAD_NIGHT = { i: 260, d: 230 };
-const headSpot = new THREE.SpotLight(0xfff0d0, HEAD_DAY.i, HEAD_DAY.d, 0.52, 0.65, 1.0);
+const headSpot = new THREE.SpotLight(0xffb87b, HEAD_DAY.i, HEAD_DAY.d, 0.52, 0.65, 1.0);
 /**
  * The beam occludes. A barrier stripes it, a trunk throws a shadow down the
  * road, a sign's shadow races past — none of which existed, because the light
@@ -33350,6 +34204,12 @@ const vehCopyMat = new THREE.ShaderMaterial({
     uBias: { value: 0.5 },
     uCon: { value: 1 },
     uTint: { value: new THREE.Vector3(1, 1, 1) },
+    uGradeLift: { value: new THREE.Vector3(...FILMIC_MIDDAY.lift) },
+    uGradeGamma: { value: new THREE.Vector3(...FILMIC_MIDDAY.gamma) },
+    uGradeGain: { value: new THREE.Vector3(...FILMIC_MIDDAY.gain) },
+    uGradeSat: { value: FILMIC_MIDDAY.saturation },
+    uGradeToe: { value: FILMIC_MIDDAY.toe },
+    uGradeExposure: { value: FILMIC_MIDDAY.exposure },
   },
   vertexShader: QUAD_VS,
   // The target is LINEAR, like the scene pass — so this has to do the encode,
@@ -33360,13 +34220,15 @@ const vehCopyMat = new THREE.ShaderMaterial({
     uniform float uDither; uniform float uMono;
     uniform float uDPat; uniform float uBias; uniform float uCon; uniform vec3 uTint;
     uniform float uDChan;
-    vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+    uniform vec3 uGradeLift; uniform vec3 uGradeGamma; uniform vec3 uGradeGain;
+    uniform float uGradeSat; uniform float uGradeToe; uniform float uGradeExposure;
+${FILMIC_GLSL}
 ${DITHER_GLSL}
     void main(){
-      vec3 enc = srgb(max(texture2D(src, vUv).rgb, 0.0));
-      float l = dot(enc, vec3(0.299, 0.587, 0.114));
-      enc = clamp(mix(vec3(l), enc, 1.35), 0.0, 1.0);
-      enc = clamp((enc - 0.5) * 1.18 + 0.47, 0.0, 1.0);
+      vec4 raw = texture2D(src, vUv);
+      float rigMask = 1.0 - step(0.25, raw.a);
+      vec3 enc = filmicGrade(raw.rgb, rigMask, uGradeLift, uGradeGamma, uGradeGain,
+        uGradeSat, uGradeToe, uGradeExposure);
       // FULL STEP, for the reason the composite gives at length: an ordered
       // dither below full amplitude is biased, not gentle. This pass exists to
       // end on the same grade and palette as the world, so it has to end on
@@ -33802,6 +34664,13 @@ function stepWeather(now: number, dt: number): void {
   waterU.uWRain.value = wx.rain;
   // Cloud shadows read the same cover and drift as the deck overhead.
   envU.uCloudS.value = cloudShadowOn ? wx.cloud : 0;
+  // The sky's own colour at the hemisphere's tint, scaled to nothing at night
+  // and a third down under full cloud — a fill for a face the sun has left,
+  // not a second sun.
+  {
+    const k = STEEP_FILL * dayF * (1 - wx.cloud * 0.35);
+    envU.uSteepFill.value.set(0.74 * k, 0.82 * k, 0.93 * k);
+  }
   // WHERE THE SUN PUTS THE SHADOW. Horizontal travel per metre of altitude on
   // the way up to the deck. Clamped hard: as the sun nears the horizon this
   // tends to infinity, and a patch of deck twenty kilometres downwind has
@@ -35442,6 +36311,9 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     osmLoaded.clear(); osmActive.clear(); osmFailedAt.clear(); osmPinned.clear();
     osmCorridor.clear(); osmDone.clear(); seenWays.clear(); wayTagLog.clear();
     tileStats.clear(); surveyedCache.clear();
+    // The store's index may have moved since boot (an entry filed from
+    // another tab, or this one); a hop is the one moment to ask again.
+    authoredMemo.clear(); authoredMerged.clear(); authoredPatched.clear(); authoredCells.clear(); void loadAuthoredIndex(true);
     unbuilt = 0; osmFails = 0; osmDown = false;
     // ── THE MINIMAP IS PAINTED PIXELS, AND PIXELS ARE NOT A LIST ──
     //
@@ -35478,6 +36350,8 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     for (const key of hydroRev.keys()) hydroSys?.removeTile(key);
     hydroRev.clear(); hydroDirty.clear(); hydroFedInputs.clear(); hydroFeats.clear(); hydroFeatsFull = 0; coverHydro.clear();
     hydroShoreBreakLines.clear(); hydroFloors.clear(); hydroBanks.clear(); hydroBankStats.clear();
+    cliffLinesByTile.clear(); cliffSeen.clear();   // local metres under the old origin
+    plinthsByTile.clear(); plinthSeen.clear();
     coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear(); sideCaches.clear();
     // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
     // spatially keyed, so the last postcard's road left an elevation under
@@ -35911,7 +36785,7 @@ async function attractPrime(e: ReelTape | undefined): Promise<void> {
       jobs.push(async () => {
         if (await readTileCache(ox + dx, oy + dy)) return;
         const ways = await proxyTile(ox + dx, oy + dy);
-        if (ways) writeTileCache(ox + dx, oy + dy, ways);
+        if (ways && !proxyStale.get(ways)) writeTileCache(ox + dx, oy + dy, ways);
       });
     }
     const [cx2, cy2] = tileAt(lat, lon, COVER_Z);
@@ -37333,7 +38207,7 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
  *  question about two, and two page loads of one spot do not put the same
  *  world, the same clock or the same weather under them. */
 (window as unknown as { __cam?: object }).__cam = (m?: string): object => {
-  if (m === 'cab' || m === 'chase' || m === 'drone' || m === 'top') setCam(m);
+  if (m === 'cab' || m === 'chase' || m === 'drone' || m === 'top' || m === 'god') setCam(m);
   return { mode: camMode, stick: !!stick, zoom: +zoomCur.toFixed(1),
     // THE STAND-OFF, because the chart's speed retreat was invisible to every
     // probe for as long as it existed: `__cam` reported the zoom, and the zoom
@@ -37430,6 +38304,21 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
 (window as unknown as { __inside?: object }).__inside = (x?: number, z?: number): boolean =>
   (plotGrid.get(gkey(x ?? state.x, z ?? state.z)) ?? []).some((pts) => pointInPoly(x ?? state.x, z ?? state.z, pts));
 (window as unknown as { __built?: object }).__built = (): object => ({ ...buildStats, mm: mmCount });
+/** The authored store as this session sees it: the switch, the index's
+ *  revision and tile count, and how many authored ways each tile merged. */
+(window as unknown as { __authored?: object }).__authored = (): object => ({
+  on: authoredOn && !FIXTURE,
+  rev: authoredIndex?.rev ?? null,
+  tiles: authoredIndex ? Object.keys(authoredIndex.tiles).length : null,
+  merged: Object.fromEntries(authoredMerged),
+  patched: Object.fromEntries(authoredPatched),
+  cells: Object.fromEntries(authoredCells),
+  stacks: [...plinthsByTile.values()].flat().filter((P, i, a) => a.indexOf(P) === i).map((P) => ({ pts: P.pts.length, height: P.height, top: P.top ?? null })),
+});
+/** File (or, with `[]` and a `tile`, retract) an authored entry — see authoredBank. */
+(window as unknown as { __authoredBank?: object }).__authoredBank = (input: AuthoredInput[] | AuthoredPayload, opts?: { tile?: string; dry?: boolean }): Promise<object> =>
+  opts?.tile && Array.isArray(input) && !input.length ? sync.author({ tile: opts.tile, ways: [] }).then(async (r) => { authoredMemo.clear(); await loadAuthoredIndex(true); rebuildInPlace(); return r; })
+    : authoredBank(input, opts);
 (window as unknown as { __plots?: object }).__plots = (): object =>
   [...new Set([...plotGrid.values()].flat())].map((pts) => {
     let cx = 0, cz = 0;
@@ -38037,7 +38926,10 @@ function aimFocus(): void {
     sharp: preset.chase.sharp + (preset.top.sharp - preset.chase.sharp) * lensK,
     blur: preset.chase.blur + (preset.top.blur - preset.chase.blur) * lensK,
   };
-  const amt = tiltOver.amt ?? (camMode === 'cab' ? 0 : band.amt);
+  // GOD IS EXEMPT FOR THE SAME REASON CAB IS: a narrow depth of field while
+  // you are the one deciding what to look at is a tax on exactly the thing
+  // you are reviewing.
+  const amt = tiltOver.amt ?? (camMode === 'cab' || camMode === 'god' ? 0 : band.amt);
   u.uTiltAmt.value = amt;
   // THE PLANE IS PLACED EVEN WHEN THE EFFECT IS OFF, so `__tilt` always reports
   // a live one. An early return here saved a handful of vector operations and
@@ -38542,6 +39434,11 @@ function applyHidden(): void {
   if (hideSet.has('ov')) ovGroup.visible = false;
   if (hideSet.has('theme')) themeGroup.visible = false;
   if (hideSet.has('sea')) sea.visible = false;
+  // THE WATER FIELD'S OWN MESHES, and the coastal surf strip alone, so a
+  // frame can be taken with the drawn water off — `sea` is the legacy plane,
+  // and hiding it leaves every hydro tile drawing.
+  if (hideSet.has('hydro') && hydroSys) hydroSys.object3d.visible = false;
+  if (hideSet.has('surf') && hydroSys) hydroSys.object3d.traverse((o) => { if (o.name.endsWith(':surf')) o.visible = false; });
   if (hideSet.has('veg')) {
     for (const k of Object.keys(vegMeshes) as VegKind[]) vegMeshes[k].visible = false;
     trunks.visible = false;
@@ -38579,6 +39476,8 @@ function applyHidden(): void {
       if (layer === 'drape') for (const d of drapes) d.visible = drapeVisible(d, camMode === 'top' ? zoomCur : 1);
       if (layer === 'synth') for (const b of synthBodies) for (const m of b.meshes) m.visible = true;
       if (layer === 'sea') sea.visible = true;
+      if (layer === 'hydro' && hydroSys) hydroSys.object3d.visible = true;
+      if (layer === 'surf' && hydroSys) hydroSys.object3d.traverse((o) => { if (o.name.endsWith(':surf')) o.visible = true; });
       if (layer === 'veg') {
         for (const k of Object.keys(vegMeshes) as VegKind[]) vegMeshes[k].visible = true;
         trunks.visible = true;
@@ -38601,7 +39500,7 @@ function applyHidden(): void {
     if (layer === 'rig') car.visible = !off;
   }
   return { hidden: [...hideSet], rig: car.visible,
-    layers: ['drape', 'synth', 'far', 'ov', 'theme', 'globe', 'sea', 'veg', 'terrain', 'critters', 'sward', 'rig'],
+    layers: ['drape', 'synth', 'far', 'ov', 'theme', 'globe', 'sea', 'hydro', 'surf', 'veg', 'terrain', 'critters', 'sward', 'rig'],
     counts: { drapes: drapes.length, synth: synthBodies.length, terrain: terrainMeshes.size } };
 };
 /**
@@ -41076,6 +41975,22 @@ function ezStandReport(r: number): object {
 (window as unknown as { __clock?: object }).__clock = (): object =>
   ({ wallS: +(performance.now() / 1000).toFixed(2), simS: +simT.toFixed(2), frames: simN,
     frameMs: +frameMs.toFixed(1), fps: Math.round(1000 / Math.max(frameMs, 1)) });
+/** Sets the TIME dial LIVE — literally the same assignment the SETTINGS
+ *  dial's own `onChange` makes (`dial('time', …, (i) => { timeMode = i; })`),
+ *  so a devtool gets the identical eased transition a tap gets, with no
+ *  reboot: `?time=` is boot-only, and a grid of shots across times of day
+ *  was launching one browser per row for no reason but that. Case
+ *  insensitive; called with no argument it just reports the current mode.
+ *  Left as a bare index assignment on purpose — the dial does nothing
+ *  else either, and `clockShift`/a held clock stay exactly as orthogonal
+ *  to this as they are to the dial. */
+(window as unknown as { __timeset?: object }).__timeset = (mode?: string): object => {
+  if (mode === undefined) return { mode: TIME_MODES[timeMode], modes: [...TIME_MODES] };
+  const i = TIME_MODES.indexOf(mode.toUpperCase() as typeof TIME_MODES[number]);
+  if (i < 0) return { error: `unknown mode ${mode}`, modes: [...TIME_MODES] };
+  timeMode = i;
+  return { mode: TIME_MODES[timeMode], modes: [...TIME_MODES] };
+};
 (window as unknown as { __frame?: object }).__frame = (): object => {
   // The HULL's own extents, in car-local space. `setFromObject` would swallow
   // the halo ring and the 26m beam cones and report 200%-of-screen nonsense.
@@ -42219,10 +43134,18 @@ function meshHeightAt(x: number, z: number): number | null {
 /** Ask for a front, the way `__windset` asks for a gale: a test that wants to
  *  watch a sky arrive cannot wait on the synthetic roll's minutes or on the
  *  live feed's quarter hour. Holds the roll off for ten minutes; a pin still
- *  wins, because a pin is a fixture. */
-(window as unknown as { __wxnext?: object }).__wxnext = (sky: Sky): string => {
+ *  wins, because a pin is a fixture.
+ *
+ *  `snap` (default false, so the ordinary "watch a front arrive" use is
+ *  unchanged) sets `wx.cloud`/`wx.rain` to the table entry immediately,
+ *  the way a `?wx=` PIN already does in `stepWeather` — without it, a
+ *  contact-sheet devtool in a headless harness (2-4 fps, so the ease's
+ *  per-frame `dt*0.12` step barely moves in real wall-clock time) can wait
+ *  the better part of a minute for 'storm' and still read cover 0.18. */
+(window as unknown as { __wxnext?: object }).__wxnext = (sky: Sky, snap = false): string => {
   if (WX_PIN) return `pinned ${WX_PIN}`;
   wx.next = sky; wx.at = performance.now() + 600000;
+  if (snap) { const t = WX[sky]; wx.cloud = t.cloud; wx.rain = t.rain; }
   return sky;
 };
 /** Which palette the world settled on, and whether real cover chose it or the
@@ -42457,6 +43380,41 @@ function heightsOf(): number[] {
   roadCells: roadGrid.size, seenWays: seenWays.size, unbuilt,
   osmDone: osmDone.size, inFlight: osmInFlight, queued: osmQueue.length,
 });
+/** IS THIS PARTICULAR VIEW ACTUALLY READY, rather than the whole session's
+ *  books. `__tstats().unbuilt` looked like a pending count and is not one:
+ *  it is incremented whenever ANY build anywhere skipped for missing height
+ *  and is reset only on a hop, so a devtool waiting for it to reach zero can
+ *  poll for ever on a world that finished streaming minutes ago. This asks
+ *  about the tile(s) a shot at (x,z) actually depends on — is the height
+ *  tile loaded, is the terrain mesh built, is it not still marked dirty —
+ *  over the point and, if `r` is given, a ring at that radius (so a wide
+ *  orbit shot can ask about every tile its camera will cross). The far
+ *  shell's readiness is already scoped to its current ring by `__far()`'s
+ *  own `tiles`/`asked` pair; reused here rather than re-derived. */
+(window as unknown as { __viewready?: object }).__viewready = (x = state.x, z = state.z, r = 0): object => {
+  const pts: Array<[number, number]> = [[x, z]];
+  if (r > 0) {
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [0.7071, 0.7071], [-0.7071, 0.7071], [0.7071, -0.7071], [-0.7071, -0.7071]] as const) {
+      pts.push([x + dx * r, z + dz * r]);
+    }
+  }
+  const keys = new Set<string>();
+  for (const [px, pz] of pts) {
+    const [tx, ty] = tileAt(origin.lat - pz / M_LAT, origin.lon + px / origin.mLon, TERRAIN_Z);
+    keys.add(`${tx}/${ty}`);
+  }
+  const tiles = [...keys].map((key) => ({
+    key, height: heightTiles.has(key), mesh: terrainMeshes.has(key), dirty: terrainDirty.has(key),
+  }));
+  const fineReady = tiles.every((t) => t.height && t.mesh && !t.dirty);
+  // The raw counts a caller would otherwise need a second __far() call to
+  // see — printed here so a poll log can show WHY farReady is what it is
+  // (m of n home, how many still in flight or queued) rather than just the
+  // one boolean it reduces to.
+  const far = { home: farMeshes.size, asked: farTiles.size, inFlight: farInFlight, queued: farQueue.length };
+  const farReady = far.home === far.asked && far.inFlight === 0 && far.queued === 0;
+  return { at: [x, z], r, tiles, fineReady, far, farReady, ready: fineReady && farReady };
+};
 /** IS THE ROAD AHEAD THERE YET? Walks the car's heading in `step` metres and
  *  reports, per sample, whether the vector tile covering that point has
  *  finished loading. The whole streaming question in one array: a run of
@@ -42902,6 +43860,8 @@ let texMeanCache: Record<string, number> | null = null;
     // old run flag, kept in the probe only so a regression here is legible.
     ring: tapeRec.keys.length >= TAPE_KEY_N * 3, explicit: tapeRec.on, line: lineOn,
     held: rewindPaused,
+    // The M5 cell and the scrub rail, in HUD units, and whether the rail is up.
+    open: scrubOpen(), cell: { ...rewindRect }, rail: { ...scrubRect }, s: hudS,
     // THE STREAK, so a test can ask whether a rewind actually looks like one
     // rather than trusting a screenshot to say so.
     blur: +mblurAmt.toFixed(2), blurCapPx: (mblurMat.uniforms.uMaxPx as { value: number }).value,
@@ -43525,8 +44485,11 @@ function farHeightAt(wx: number, wz: number): number | null {
   };
 };
 (window as unknown as { __tiledbg?: object }).__tiledbg = (v?: boolean): boolean => {
-  tileDbg = v ?? !tileDbg;
-  return tileDbg;
+  // The tile grid and the stream readout were one dial; they are two chips
+  // (TILES, STREAM) now, and this probe keeps driving both together.
+  const on = v ?? !(chartOn.tiles || chartOn.stream);
+  setChartLayer('tiles', on); setChartLayer('stream', on);
+  return on;
 };
 (window as unknown as { __roadline?: object }).__roadline = (): object =>
   ({ n: roadSegs.length, task: roadSegs.filter((s) => s.task).length,
@@ -44396,6 +45359,54 @@ function noteTags(t: Record<string, string>): void {
   teleportTo(x, z);
   if (h !== undefined) state.heading = h;
 };
+/**
+ * THE GOD CAMERA'S OWN CONTROL SURFACE — an orbit around an authored target in
+ * the live world, for inspecting one feature from any angle or distance
+ * without picking one of the three canned rig geometries or leaving the real
+ * scene for `ezSheetOf`'s isolated stage.
+ *
+ * DEGREES AT THIS BOUNDARY, matching `?h=`/`?sunalt=`, and RADIANS internally
+ * (`godAz`/`godEl`) like every other camera angle in the file — the exact
+ * distinction `__place`'s own doctrine warns about, so it is stated here
+ * rather than left to be rediscovered.
+ *
+ * `az` is the bearing you are standing AT relative to the target (0 stands
+ * north of it looking south, matching the chart's own convention); `el` is
+ * degrees above the horizontal, clamped short of straight down/up where
+ * `camera.lookAt` degenerates against the world's up vector (the same trap
+ * the chart's 90° tilt hit). Pass only the fields you want to move; anything
+ * else keeps its last value, so a script can walk one axis at a time.
+ *
+ * `__hide('rig')` already exists for hiding the truck out of a shot — this
+ * probe does not duplicate it.
+ */
+(window as unknown as { __godcam?: object }).__godcam = (opt?: {
+  x?: number; z?: number; y?: number; az?: number; el?: number; dist?: number; fov?: number;
+}): object => {
+  if (opt) {
+    if (opt.x !== undefined) { godTarget.x = opt.x; godInit = true; }
+    if (opt.z !== undefined) { godTarget.z = opt.z; godInit = true; }
+    // A target moved in plan and given no explicit height stands on the
+    // ground under it — the common case, "look at this junction" — rather
+    // than carrying over whatever height the previous target happened to be.
+    if (opt.y !== undefined) godTarget.y = opt.y;
+    else if (opt.x !== undefined || opt.z !== undefined) godTarget.y = groundAt(godTarget.x, godTarget.z);
+    if (opt.az !== undefined) godAz = (opt.az * Math.PI) / 180;
+    if (opt.el !== undefined) godEl = clamp((opt.el * Math.PI) / 180, -1.5, 1.5);
+    if (opt.dist !== undefined) godDist = Math.max(0.5, opt.dist);
+    if (opt.fov !== undefined) { godFov = clamp(opt.fov, 4, 120); if (camMode === 'god') camera.fov = godFov; }
+    if (camMode !== 'god') setCam('god');
+  }
+  return {
+    mode: camMode,
+    target: { x: +godTarget.x.toFixed(2), y: +godTarget.y.toFixed(2), z: +godTarget.z.toFixed(2) },
+    az: +((godAz * 180) / Math.PI).toFixed(1),
+    el: +((godEl * 180) / Math.PI).toFixed(1),
+    dist: +godDist.toFixed(1),
+    fov: +godFov.toFixed(1),
+    pos: { x: +camPos.x.toFixed(2), y: +camPos.y.toFixed(2), z: +camPos.z.toFixed(2) },
+  };
+};
 (window as unknown as { __solid?: object }).__solid = (r = 220): object => {
   let solid = 0, rail = 0, rubble = 0;
   const seen = new Set<Seg>();
@@ -44645,6 +45656,9 @@ const DITHER_PATS = ['bayer4', 'bayer8', 'check', 'grain', 'lines', 'bayer16', '
  * editor owns the canvas and the game must not create persistent stick, pan,
  * brake or keyboard state underneath the stroke. */
 let authoringInputCaptured = false;
+/** The lab is armed but a second finger is on the chart: the chart's own
+ *  pan and pinch take the pointers the lab hands over (chartGrab). */
+let authoringPan = false;
 const keys = new Set<string>();
 addEventListener('keydown', (e) => { if (!authoringInputCaptured) keys.add(e.key.toLowerCase()); });
 addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); });
@@ -44872,6 +45886,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (authoringInputCaptured) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   // Each instrument swallows the DOWN; hudPtrs makes it swallow the UP too.
+  if (scrubDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (chartLensDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (fpsDown(e) || layerDown(e) || autoDown(e) || poiDown(e)) { hudPtrs.add(e.pointerId); return; }
   if (rewindDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
@@ -44930,7 +45945,8 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 canvas.addEventListener('pointermove', (e) => {
-  if (authoringInputCaptured) return;
+  if (authoringInputCaptured && !authoringPan) return;
+  if (scrubMove(e)) return;
   if (chartLensMove(e)) return;
   if (rewindMove(e)) return;
   if (clockMove(e)) return;
@@ -45032,7 +46048,8 @@ canvas.addEventListener('pointermove', (e) => {
   panPtrs.set(e.pointerId, cur);
 });
 addEventListener('wheel', (e) => {
-  if (authoringInputCaptured) { e.preventDefault(); return; }
+  // A wheel over an armed chart still zooms it: the brush needs a scale.
+  if (authoringInputCaptured && camMode !== 'top') { e.preventDefault(); return; }
   if (camMode !== 'top') return;
   zoomT = clamp(zoomT * Math.exp(e.deltaY * 0.0012), ZOOM_MIN, ZOOM_MAX);
   e.preventDefault();
@@ -45513,11 +46530,12 @@ const tapCanMark = (e: PointerEvent): boolean => {
   return e.clientY < innerHeight * 0.5;
 };
 const endStick = (e: PointerEvent): void => {
-  if (authoringInputCaptured) return;
+  if (authoringInputCaptured && !authoringPan) return;
   // Taken by an instrument on the down — see hudPtrs. Deleted whatever the
   // event type, so a cancel clears it too; `lastUp` is set so the window's
   // copy of the same up (this handler is on both) does not ask the chart.
   const hud = hudPtrs.delete(e.pointerId);
+  if (scrubUp(e)) { lastUp = e; return; }
   if (chartLensUp(e)) { lastUp = e; return; }
   if (e.type === 'pointerup' && rewindUp(e)) return;
   if (e.type === 'pointerup' && clockUp(e)) return;
@@ -45620,9 +46638,24 @@ addEventListener('blur', () => {
   stick = null; brakeId = null; lift = null; chartLensDrag = null;
   panPtrs.clear(); keys.clear(); updateStickHome();
 });
+/** A pointer the lab hands to the chart mid-gesture: registered as a pan
+ *  finger exactly as pointerdown would have, plane height and all. */
+function authoringChartGrab(pointerId: number, clientX: number, clientY: number): void {
+  if (camMode !== 'top') return;
+  if (panPtrs.size) { globeVelLat = globeVelLon = 0; globeVelAt = 0; }
+  panPtrs.set(pointerId, { x: clientX, y: clientY });
+  if (panPtrs.size === 1) {
+    const [gx, gz] = globeFree() ? [viewX() + panX, viewZ() + panZ] : chartToWorld(clientX, clientY);
+    panY = chartGround(gx, gz);
+  }
+}
+function setAuthoringPanning(on: boolean): void {
+  authoringPan = on;
+  if (!on) { panPtrs.clear(); panY = null; }
+}
 function setAuthoringInputCaptured(on: boolean): void {
   authoringInputCaptured = on;
-  if (!on) return;
+  if (!on) { authoringPan = false; return; }
   stick = null;
   brakeId = null;
   lift = null;
@@ -46240,13 +47273,37 @@ function drawMinimap(): void {
 // and changes everything: the world at 1.6m with the A-pillars in the way is
 // a different game from the world at 18m behind, and it is the seat the
 // headlights, the wipers and the retroreflective signs were all built for.
-type CamMode = 'top' | 'chase' | 'cab' | 'drone';
+type CamMode = 'top' | 'chase' | 'cab' | 'drone' | 'god';
 let camMode: CamMode = 'chase';   // the road view is the game; the chart is a mode you visit
 let chaseH = 1;    // chase rig height multiplier — the CAMERA dials in SETTINGS
 let cabFov = 68;   // driver's-seat field of view
 const camPos = new THREE.Vector3();
 const camAim = new THREE.Vector3();
 let camInit = false;
+/**
+ * ── GOD: A FREE CAMERA FOR REVIEWING ONE FEATURE, FROM ANY ANGLE ──
+ *
+ * Every other mode is tied to something that MOVES — the truck, the drone —
+ * because the game is about driving it. A reviewer asking "what does this
+ * junction actually look like" has never had a way to stand still and look:
+ * the two existing survey mechanisms are `ezSheetOf` (an isolated object on
+ * an empty stage, not the real world) and teleport-the-truck-and-pick-a-canned-
+ * rig (three fixed geometries, no free azimuth or elevation). This is neither
+ * — it is an orbit around an AUTHORED TARGET in the live, streamed scene, so
+ * the world around the target — terrain, buildings, weather, streaming — is
+ * exactly what a driver would see there.
+ *
+ * `godAz`/`godEl` are RADIANS, like every other camera angle in this file
+ * (`state.heading`, `mapRot()`); the probe (`__godcam`) takes DEGREES at its
+ * boundary, matching the `?h=`/`?sunalt=` convention, precisely to avoid the
+ * radians-vs-degrees mismatch `__place`'s own doctrine already warns about.
+ */
+const godTarget = new THREE.Vector3();
+let godAz = 0;        // radians, 0 is looking from due north toward -z (south)
+let godEl = 0.35;     // radians above the horizontal, clamped short of the poles
+let godDist = 60;      // metres, the orbit radius
+let godFov = 55;       // degrees
+let godInit = false;   // has a target ever been set? — first entry defaults near the truck
 /**
  * A CAMERA FLIGHT BETWEEN TWO RIGS, and the drone's launch and landing are the
  * only things that get one.
@@ -46964,6 +48021,9 @@ function viewH(): number { return droneEye() ? drone.heading : state.heading; }
 function renderFocusXZ(): [number, number] {
   if (camMode === 'top') return [viewX() + panX, viewZ() + panZ];
   if (camMode === 'drone') return droneGroundFocus();
+  // GOD follows its own authored target, wherever the truck is — the whole
+  // point of the mode is standing somewhere the truck is not.
+  if (camMode === 'god') return [godTarget.x, godTarget.z];
   // CHASE AND CAB STAY ON THE RIG, deliberately. The camera's offsets there are
   // metres against a tree range of hundreds, so chasing the suspension's own
   // movement would rebuild fields for nothing.
@@ -46998,18 +48058,30 @@ function droneGroundFocus(): [number, number] {
 let lastPov: CamMode = 'chase';
 function setCam(m: CamMode): void {
   camMode = m;
+  // FIRST ENTRY DEFAULTS NEAR THE TRUCK rather than at the world origin — a
+  // god camera nobody has aimed yet is still somewhere worth looking, and
+  // "wherever you were driving" is a better guess than (0,0,0).
+  if (m === 'god' && !godInit) {
+    godInit = true;
+    const gx = state.x + Math.sin(state.heading) * 20, gz = state.z - Math.cos(state.heading) * 20;
+    godTarget.set(gx, groundAt(gx, gz), gz);
+  }
   // 'drone' is not a SEAT. `lastPov` is what the chart returns you to and what
   // the dock previews, and a drone that gets remembered there strands you in
   // the air the next time you close the map.
-  if (m !== 'top' && m !== 'drone') lastPov = m;
+  // 'god' IS NOT A SEAT EITHER, for the same reason: it stands wherever it was
+  // last pointed, not wherever the truck happens to be, and remembering it as
+  // the chart's return seat would strand the player looking at a kerb.
+  if (m !== 'top' && m !== 'drone' && m !== 'god') lastPov = m;
   camInit = false;                  // snap to the new rig, then resume smoothing
   chasePull = 1;                    // and forget any terrain pull-in from last time
   fovKick = 0;                      // the lens starts at base in a fresh seat
   tunnelBlend = 0;
   panX = panZ = 0;                  // pan is a glance, not a state to carry over
   // From the driver's seat you are INSIDE the shell, so the near plane has to
-  // clear the dashboard rather than the bonnet.
-  camera.fov = camMode === 'cab' ? cabFov : 55;
+  // clear the dashboard rather than the bonnet. God keeps whatever lens the
+  // probe last set (godFov), because a review camera's zoom is the point.
+  camera.fov = camMode === 'cab' ? cabFov : camMode === 'god' ? godFov : 55;
   camera.updateProjectionMatrix();
   ghostCab(camMode === 'cab');
   updateStickHome();
@@ -47964,7 +49036,9 @@ const writeUrl = (la: number, lo: number): void => {
     // and the chart carries its zoom as well; a drone in the air is the
     // exception, because restoring into a drone that no longer exists would
     // strand the camera — it resumes as the seat you would land back into.
-    const cm = camMode === 'drone' ? lastPov : camMode;
+    // 'god' is a review tool, not a resumable player state — same exception
+    // as the drone, so a reload never strands anyone staring at a kerb.
+    const cm = camMode === 'drone' || camMode === 'god' ? lastPov : camMode;
     const zm = camMode === 'top' && Math.abs(zoomT - 1) > 0.05
       ? `&z=${zoomT >= 30 ? zoomT.toFixed(0) : zoomT.toFixed(1)}` : '';
     const ln = lineOn ? '&line=1' : '';
@@ -49621,6 +50695,36 @@ const layerRects: Array<{ id: ChartLayerId; x: number; y: number; w: number; h: 
  *  than through it. The legend grows and shrinks with what is on screen, so
  *  this cannot be a constant. */
 let layerKeyBottom = 0;
+/** T9's sources, most recent first. Whatever the legend is showing is
+ *  `legendOrder[0]`; a newly switched-on source goes to the front, and a tap
+ *  on the legend rotates the list. Synced from the chips' state every frame
+ *  the key draws, so a probe or a dial that turns a view on is caught too. */
+const legendOrder: ChartLayerId[] = [];
+/** The legend's hit box in HUD units, or zero width when there is none. */
+let legendRect = { x: 0, y: 0, w: 0, h: 0 };
+/** M7: whether the key (T8) and its legend (T9) are on the glass, in every
+ *  camera. Hiding them leaves every layer's EFFECT exactly where it is. */
+let keyShown = ((): boolean => { try { return localStorage.getItem('drive.chart.key') !== '0'; } catch { return true; } })();
+function setKeyShown(on: boolean): void {
+  keyShown = on;
+  try { localStorage.setItem('drive.chart.key', on ? '1' : '0'); } catch { /* private mode */ }
+}
+let keyRect = { x: 0, y: 0, w: 0, h: 0 };
+let spareRect = { x: 0, y: 0, w: 0, h: 0 };
+/** Every chip that has something to say in T9 right now. */
+function legendSources(): ChartLayerId[] {
+  const out: ChartLayerId[] = [];
+  for (const l of CHART_LAYERS) {
+    if (!layerIsOn(l.id)) continue;
+    if (l.kind === 'thematic' || l.id === 'hydro' || l.id === 'xray' || l.id === 'tiles') out.push(l.id);
+  }
+  return out;
+}
+function syncLegendOrder(): void {
+  const now = legendSources();
+  for (let i = legendOrder.length - 1; i >= 0; i--) if (!now.includes(legendOrder[i])) legendOrder.splice(i, 1);
+  for (const id of now) if (!legendOrder.includes(id)) legendOrder.unshift(id);
+}
 /** A tap on a chip toggles that layer. Swallows the DOWN like every other HUD
  *  instrument (see hudPtrs), or the same press would also drop a chart fix. */
 function layerDown(e: PointerEvent): boolean {
@@ -49628,8 +50732,20 @@ function layerDown(e: PointerEvent): boolean {
   const x = e.clientX / hudS, y = e.clientY / hudS;
   for (const r of layerRects) {
     if (x < r.x || x > r.x + r.w || y < r.y || y > r.y + r.h) continue;
-    setChartLayer(r.id, !chartOn[r.id]);
-    hudFlash(`${chartLayer(r.id)?.name ?? r.id} ${chartOn[r.id] ? 'ON' : 'OFF'}`);
+    // A cycling chip that is on is asked for its NEXT view, not turned off.
+    const cycles = r.id === 'hydro' || r.id === 'xray' || r.id === 'ground';
+    setChartLayer(r.id, cycles ? true : !layerIsOn(r.id));
+    if (r.id !== 'off') {
+      const v = layerViewName(r.id);
+      hudFlash(`${chartLayer(r.id)?.name ?? r.id} ${layerIsOn(r.id) ? (v ?? 'ON') : 'OFF'}`);
+    }
+    return true;
+  }
+  // ── A TAP ON THE LEGEND SHOWS THE NEXT ONE ── T9 names one source at a
+  // time; with several on, it cycles through them and wraps.
+  if (legendRect.w && x >= legendRect.x && x <= legendRect.x + legendRect.w
+    && y >= legendRect.y && y <= legendRect.y + legendRect.h && legendOrder.length > 1) {
+    legendOrder.push(legendOrder.shift()!);
     return true;
   }
   return false;
@@ -49639,9 +50755,11 @@ function layerDown(e: PointerEvent): boolean {
  *  a finger does, so a test can drive the switch without a pointer. */
 (window as unknown as { __chartlayers?: object }).__chartlayers =
   (tap?: ChartLayerId, on?: boolean): object => {
-    if (tap) setChartLayer(tap, on ?? !chartOn[tap]);
+    if (tap) setChartLayer(tap, on ?? !layerIsOn(tap));
     return {
-      layers: CHART_LAYERS.map((l) => ({ id: l.id, name: l.name, kind: l.kind, on: chartOn[l.id] })),
+      layers: CHART_LAYERS.map((l) => ({ id: l.id, name: l.name, kind: l.kind, on: layerIsOn(l.id), view: layerViewName(l.id) })),
+      legend0: legendOrder[0] ?? null, legendOrder: [...legendOrder],
+      legendAt: legendRect.w ? { x: (legendRect.x + 12) * hudS, y: (legendRect.y + 6) * hudS } : null,
       theme: themeLayer(), themeDrawing: themeGroup.visible, mpp: +envU.uMpp.value.toFixed(1),
       mppMin: THEME_MPP_MIN,
       // ── THE CHANNEL, WHICH IS THE OTHER HALF OF THIS KEY NOW ──
@@ -51331,6 +52449,29 @@ function tick(now: number): void {
       camPos.y + 40 * sn - 2.4 * cs,
       camPos.z + fwdZ * (40 * cs + 2.4 * sn),
     );
+  } else if (camMode === 'god') {
+    // AN ORBIT ABOUT AN AUTHORED TARGET, standing in the real streamed scene —
+    // not a fixed rig geometry and not the isolated stage `ezSheetOf` builds.
+    // Nothing here reads the truck; that is the whole point of the mode.
+    farGroup.visible = true;
+    ovGroup.visible = false;
+    themeGroup.visible = false;   // a thematic sheet is chart furniture
+    // THE NEAR/FAR PLANES SCALE WITH THE ORBIT, not with a fixed driving-scale
+    // constant: a reviewer may stand a metre from a kerb or a kilometre back
+    // from a mountain pass, and either one needs its own precision budget.
+    // THE FAR PLANE MUST CLEAR THE SKY DOME (a 20km-radius sphere centred on
+    // the camera), or the dome is clipped and the visible "sky" is just the
+    // canvas clear colour — solid black at every hour, discovered by
+    // reviewing god-camera screenshots across DAWN..NIGHT.
+    setNear(Math.max(0.1, godDist * 0.02), Math.max(20500, godDist * 4));
+    if (Math.abs(camera.fov - godFov) > 0.01) { camera.fov = godFov; camera.updateProjectionMatrix(); }
+    const gcE = Math.cos(godEl), gsE = Math.sin(godEl);
+    camPos.set(
+      godTarget.x + Math.sin(godAz) * gcE * godDist,
+      godTarget.y + gsE * godDist,
+      godTarget.z - Math.cos(godAz) * gcE * godDist,
+    );
+    camAim.copy(godTarget);
   } else {
     farGroup.visible = true;
     ovGroup.visible = false;
@@ -51480,7 +52621,7 @@ function tick(now: number): void {
       camInit = true;
       ghostCab(camMode === 'cab');
     }
-  } else if (!camInit || camMode === 'cab' || camMode === 'top' || rewind.at !== null) {
+  } else if (!camInit || camMode === 'cab' || camMode === 'top' || camMode === 'god' || rewind.at !== null) {
     camera.position.copy(camPos); camInit = true;
     // THE CHART SNAPS, AND THAT IS WHY THE LERP BELOW LOST ITS `top` ARM. The
     // top camera used to ease toward `camPos` at 10/s while `camera.lookAt`
@@ -51498,7 +52639,7 @@ function tick(now: number): void {
     // while standing on the smoothed one tilts the chart by the difference.
     camFlyAim.set(viewX() + panX,
       chartY ?? sampleHeight(viewX() + panX, viewZ() + panZ), viewZ() + panZ);
-  } else if (camMode === 'cab' || camMode === 'drone') camFlyAim.copy(camAim);
+  } else if (camMode === 'cab' || camMode === 'drone' || camMode === 'god') camFlyAim.copy(camAim);
   else camFlyAim.set(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
   if (camFly.t > 0) {
     camFlyTmp.copy(camFlyAim);
@@ -51747,7 +52888,8 @@ function tick(now: number): void {
   profMark('camera');
   { const _p = performance.now(); updatePois(); profAdd('updatePois', _p); } // every frame — throttled pins juddered against the camera
   { const _p = performance.now(); stepLuma(now); profAdd('stepLuma', _p); } // refresh what the glass is being written over
-  { const _p = performance.now(); xrayWire(now); profAdd('xrayWire', _p); } // keep the wireframe sweep over streamed-in tiles
+  { const _p = performance.now(); xrayWire(now); profAdd('xrayWire', _p); }
+  { const _p = performance.now(); ecoPaintStep(); profAdd('ecoPaint', _p); } // one tile of the ECO ground view a frame, only while it is asked for // keep the wireframe sweep over streamed-in tiles
   // HALF RATE NEAR 60. The HUD is text, needles and a compass on its own
   // canvas, and at 1.9 ms a frame (device, measured) it was the largest
   // steady line in the tick after render — a tenth of the 60 fps budget for
@@ -51922,6 +53064,12 @@ function blitPixelated(
   vehCopyMat.uniforms.uBias.value = (compMat.uniforms.uBias as { value: number }).value;
   vehCopyMat.uniforms.uCon.value = (compMat.uniforms.uCon as { value: number }).value;
   (vehCopyMat.uniforms.uTint.value as THREE.Vector3).copy(compMat.uniforms.uTint.value as THREE.Vector3);
+  (vehCopyMat.uniforms.uGradeLift.value as THREE.Vector3).copy(compMat.uniforms.uGradeLift.value as THREE.Vector3);
+  (vehCopyMat.uniforms.uGradeGamma.value as THREE.Vector3).copy(compMat.uniforms.uGradeGamma.value as THREE.Vector3);
+  (vehCopyMat.uniforms.uGradeGain.value as THREE.Vector3).copy(compMat.uniforms.uGradeGain.value as THREE.Vector3);
+  vehCopyMat.uniforms.uGradeSat.value = compMat.uniforms.uGradeSat.value;
+  vehCopyMat.uniforms.uGradeToe.value = compMat.uniforms.uGradeToe.value;
+  vehCopyMat.uniforms.uGradeExposure.value = compMat.uniforms.uGradeExposure.value;
   renderer.setRenderTarget(rtVeh);
   renderer.setClearColor(clear, 1);
   renderer.clear(true, true, false);
@@ -52254,6 +53402,25 @@ Object.assign(hud.style, {
 hud.classList.add('ui');
 document.body.appendChild(hud);
 const hctx = hud.getContext('2d')!;
+/** The colour pipeline as live numbers, including the layer boundary the UI
+ * relies on: the grade ends in the WebGL canvas; the fixed HUD canvas is then
+ * composited by the browser at z=10 and cannot inherit the scene tint. */
+(window as unknown as { __filmic?: object }).__filmic = (): object => {
+  const u = compMat.uniforms;
+  const vec = (key: string): number[] => {
+    const v = u[key].value as THREE.Vector3;
+    return [+v.x.toFixed(3), +v.y.toFixed(3), +v.z.toFixed(3)];
+  };
+  return {
+    lift: vec('uGradeLift'), gamma: vec('uGradeGamma'), gain: vec('uGradeGain'),
+    saturation: +Number(u.uGradeSat.value).toFixed(3),
+    toe: +Number(u.uGradeToe.value).toFixed(3),
+    exposure: +Number(u.uGradeExposure.value).toFixed(3),
+    depthTint: vec('uDepthTint'), depthSaturation: u.uDepthSat.value,
+    vignette: u.uVignette.value,
+    hudPostGrade: hud.parentElement === document.body && Number(hud.style.zIndex) > 0,
+  };
+};
 let authoringPreviews: readonly AuthoringPreview[] = [];
 const authoringProject = new THREE.Vector3();
 function projectAuthoringPoint(x: number, z: number): [number, number] | null {
@@ -52266,19 +53433,77 @@ function projectAuthoringPoint(x: number, z: number): [number, number] | null {
     (.5 - authoringProject.y * .5) * HH,
   ];
 }
+/** What the overlay costs, because it runs EVERY FRAME while a raster stroke
+ *  is up and its dearest call is `groundAt` — one per cell, measured at about
+ *  650 ns elsewhere in this file. `PREVIEW_CELL_CAP` is what bounds it, and
+ *  this is what says whether the bound is right. `__authorprev(true)` resets. */
+let authorPrevMs = 0, authorPrevFrames = 0, authorPrevMax = 0, authorPrevPoints = 0;
 function drawAuthoringPreviews(): void {
   if (!authoringPreviews.length) return;
+  const t0 = performance.now();
   hctx.save();
   hctx.lineJoin = 'round';
   hctx.lineCap = 'round';
   for (const preview of authoringPreviews) {
-    const colour = preview.state === 'failed' ? UI.bad
+    const previewOpacity = Math.max(0, Math.min(1, preview.opacity ?? 1));
+    const stateColour = preview.state === 'failed' ? UI.bad
       : preview.state === 'settled' ? UI.good
         : preview.state === 'pending' ? UI.gold : UI.edge;
-    hctx.strokeStyle = colour;
-    hctx.fillStyle = colour;
-    hctx.globalAlpha = preview.state === 'settled' ? .42 : .9;
+    const paintColour = preview.colour ?? stateColour;
+    hctx.strokeStyle = preview.state === 'cursor' || preview.state === 'draft'
+      ? paintColour : stateColour;
+    hctx.fillStyle = paintColour;
+    hctx.globalAlpha = (preview.state === 'settled' ? .42 : .9) * previewOpacity;
     hctx.setLineDash(preview.state === 'pending' ? [3, 3] : []);
+    // ── THE CELLS AN EDIT HAS ALREADY WRITTEN ──
+    //
+    // A brush is round and a raster is not, so a sweep at the brush's own
+    // width cannot say WHICH texels flipped — at the cover raster's 38 m a
+    // small stroke may flip none, or one a long way from the finger. These
+    // are the footprints themselves, drawn from the moment the array changes
+    // and dropped once the rebuild that makes them real has landed.
+    //
+    // ONE `groundAt` A CELL, and the screen size is solved ONCE per preview
+    // off the first cell's own edge: the read is the dearest call in the
+    // walk (measured at ~650 ns), and on a chart at 89.9° of tilt a cell's
+    // projected size is the same across the frame to well under a pixel.
+    if (preview.kind === 'cells') {
+      const cw = preview.cellW ?? 0, ch = preview.cellH ?? 0;
+      const first = preview.points[0];
+      if (!first || cw <= 0 || ch <= 0) continue;
+      const c0 = projectAuthoringPoint(first.x, first.z);
+      const cx = projectAuthoringPoint(first.x + cw * .5, first.z);
+      const cz = projectAuthoringPoint(first.x, first.z + ch * .5);
+      if (!c0) continue;
+      const hx = Math.max(1, cx ? Math.hypot(cx[0] - c0[0], cx[1] - c0[1]) : 2);
+      const hz = Math.max(1, cz ? Math.hypot(cz[0] - c0[0], cz[1] - c0[1]) : 2);
+      // ONE PATH FOR THE WHOLE SET, and a rect skipped where it cannot be
+      // seen. Measured at the cap on a wide DEM sweep: 583 cells at a
+      // fillRect AND a strokeRect each cost **2.2 ms a frame** — a third of
+      // a phone's whole budget, every frame the trail is up — against 0.35
+      // batched. Canvas state changes are the cost, not the arithmetic.
+      // Non-zero winding also means overlapping cells fill ONCE, so a
+      // doubled-back stroke does not paint itself darker.
+      hctx.lineWidth = 1;
+      hctx.beginPath();
+      let drawn = 0;
+      for (const cell of preview.points) {
+        const p = projectAuthoringPoint(cell.x, cell.z);
+        if (!p || p[0] < -hx || p[0] > HW + hx || p[1] < -hz || p[1] > HH + hz) continue;
+        hctx.rect(p[0] - hx, p[1] - hz, hx * 2, hz * 2);
+        drawn++;
+      }
+      if (!drawn) continue;
+      // THE OUTLINE CARRIES THE CLAIM AND THE FILL ONLY HINTS AT IT: a cover
+      // texel is 38 m, so at the chart's near zoom one cell is most of the
+      // frame, and a heavy wash hides the ground you are painting.
+      const alpha = hctx.globalAlpha;
+      hctx.globalAlpha = alpha * .15;
+      hctx.fill();
+      hctx.globalAlpha = alpha;
+      hctx.stroke();
+      continue;
+    }
     if (preview.kind === 'cursor') {
       const centre = preview.points[0];
       if (!centre) continue;
@@ -52300,23 +53525,62 @@ function drawAuthoringPreviews(): void {
     const projected = preview.points
       .map((point) => projectAuthoringPoint(point.x, point.z))
       .filter((point): point is [number, number] => !!point);
-    if (projected.length < 2) continue;
+    if (!projected.length) continue;
     const first = preview.points[0];
-    const edge = projectAuthoringPoint(first.x + preview.radiusM * .5, first.z);
+    const edge = projectAuthoringPoint(
+      first.x + (preview.kind === 'brush' ? preview.radiusM : preview.radiusM * .5),
+      first.z,
+    );
     const centre = projectAuthoringPoint(first.x, first.z);
-    const width = edge && centre ? Math.max(1.5, Math.hypot(edge[0] - centre[0], edge[1] - centre[1]) * 2) : 2;
+    const width = edge && centre
+      ? Math.max(1.5, Math.hypot(edge[0] - centre[0], edge[1] - centre[1]) * 2)
+      : 2;
+    if (preview.kind === 'brush' && projected.length === 1) {
+      hctx.globalAlpha = (preview.state === 'settled' ? .16 : .24) * previewOpacity;
+      hctx.setLineDash([]);
+      hctx.beginPath();
+      hctx.arc(projected[0][0], projected[0][1], width * .5, 0, Math.PI * 2);
+      hctx.fill();
+      hctx.globalAlpha = (preview.state === 'settled' ? .5 : .95) * previewOpacity;
+      hctx.strokeStyle = preview.state === 'draft' ? paintColour : stateColour;
+      hctx.lineWidth = 1;
+      hctx.setLineDash(preview.state === 'pending' ? [3, 3] : []);
+      hctx.stroke();
+      continue;
+    }
+    if (projected.length < 2) continue;
     hctx.beginPath();
     hctx.moveTo(projected[0][0], projected[0][1]);
     for (let i = 1; i < projected.length; i++) hctx.lineTo(projected[i][0], projected[i][1]);
-    hctx.globalAlpha *= .22;
+    hctx.strokeStyle = paintColour;
+    hctx.setLineDash([]);
+    hctx.globalAlpha = preview.kind === 'brush'
+      ? (preview.state === 'settled' ? .13 : .22) * previewOpacity
+      : hctx.globalAlpha * .22;
     hctx.lineWidth = width;
     hctx.stroke();
-    hctx.globalAlpha = preview.state === 'settled' ? .55 : 1;
+    hctx.strokeStyle = preview.state === 'draft' ? paintColour : stateColour;
+    hctx.setLineDash(preview.state === 'pending' ? [3, 3] : []);
+    hctx.globalAlpha = (preview.state === 'settled' ? .55 : .95) * previewOpacity;
     hctx.lineWidth = 1;
     hctx.stroke();
   }
   hctx.restore();
+  const ms = performance.now() - t0;
+  authorPrevMs += ms; authorPrevFrames++;
+  if (ms > authorPrevMax) authorPrevMax = ms;
+  for (const preview of authoringPreviews) authorPrevPoints += preview.points.length;
 }
+(window as unknown as { __authorprev?: object }).__authorprev = (reset = false): Record<string, number> => {
+  const out = {
+    frames: authorPrevFrames,
+    msPerFrame: +(authorPrevMs / Math.max(1, authorPrevFrames)).toFixed(3),
+    maxMs: +authorPrevMax.toFixed(3),
+    pointsPerFrame: +(authorPrevPoints / Math.max(1, authorPrevFrames)).toFixed(1),
+  };
+  if (reset) { authorPrevMs = authorPrevFrames = authorPrevMax = authorPrevPoints = 0; }
+  return out;
+};
 // The X-RAY DEPTH view: the luma map, decoded and painted edge to edge under
 // the instruments. Sky is blue (it decodes as the far plane — the dome writes
 // no depth), terrain is grey by log distance. Same rendering as the
@@ -53965,7 +55229,9 @@ interface LandmarkLive { def: Landmark; x: number; z: number; padEle: number | n
 let landmarksLive: LandmarkLive[] = [];
 let landmarksOrigin = '';
 function liveLandmarks(): LandmarkLive[] {
-  const key = `${origin.lat},${origin.lon}`;
+  // The BUILT WORLD switch is in the key: a toggle rebuilds the world at the
+  // same origin, and a cache keyed on the origin alone would keep the stock.
+  const key = `${origin.lat},${origin.lon},${builtOn ? 1 : 0}`;
   if (key !== landmarksOrigin) {
     landmarksOrigin = key;
     for (const g of landmarkBuilt.values()) worldGroup.remove(g);
@@ -53973,7 +55239,7 @@ function liveLandmarks(): LandmarkLive[] {
     // A bridge entry is not a pad: it flattens nothing and stands no group
     // up here — its geometry is the bridge assembly's, built from the deck
     // ways as they arrive (see bridgeLandmarkFor).
-    landmarksLive = LANDMARKS.filter((def) => def.kind !== 'bridge').map((def) => {
+    landmarksLive = (builtOn ? LANDMARKS : []).filter((def) => def.kind !== 'bridge').map((def) => {
       const [x, z] = toLocal(def.lat, def.lon);
       return { def, x, z, padEle: null };
     });
@@ -54481,7 +55747,6 @@ let cpVis = 0;
  *  probe (`__auto`) works either way; this is only about the on-device reach. */
 let autoTab = false;
 // The streaming machinery drawn over the chart — see the TILE DEBUG dial.
-let tileDbg = false;
 const wearU = { value: 1 };  // shared by every bodywork material
 const BODY_COLORS: Array<[string, number]> = [
   ['RUST', 0xc4402c], ['EMBER', 0xd0642a], ['SAND', 0xc0a068],
@@ -54621,7 +55886,6 @@ const DIAL_GROUPS: DialGroup[] = [
       // verdict can be argued with on the spot. WIRE strips the streamed
       // world to its triangles: the geometry the truck actually collides
       // with, not the paint over it.
-      dial('xray', 'X-RAY', ['OFF', 'DEPTH', 'WIRE'], 0, (i) => { xrayMode = i; }),
       /**
        * ── WHICH WATER SYSTEM IS DRAWING ──
        *
@@ -54668,10 +55932,6 @@ const DIAL_GROUPS: DialGroup[] = [
        * Does nothing on LEGACY, and says so by being the only dial in the rack
        * with nothing behind it — there is no field to ask.
        */
-      dial('hview', 'WATER VIEW', ['SURFACE', 'COVERAGE', 'SHORE', 'DEPTH', 'FLOW', 'CLASS'], 0, (i) => {
-        hydroView = (['surface', 'coverage', 'shore', 'depth', 'flow', 'class'] as const)[i];
-        hydroSys?.setDebugView(hydroView);
-      }),
       // ── HAZE: HOW MUCH AIR IS BETWEEN YOU AND THE HILL ──
       //
       // Asked for from the seat, and it has been wanted for several rounds:
@@ -54744,6 +56004,28 @@ const DIAL_GROUPS: DialGroup[] = [
       // inside a building footprint to reveal it.
       dial('fow', 'FOG OF WAR', ['OFF', 'ON'], 0, (i) => { cu.uFow.value = i; }),
       dial('veg', 'VEGETATION', ['NONE', 'SPARSE', 'FULL'], 2, (i) => { vegScale = [0, 0.35, 1][i]; }),
+      // OFF is the planet with nothing built on it — see isBuiltWay for the
+      // list. The first apply is the boot's and only sets the flag; a tap
+      // afterwards hops the truck to where it stands, which is the one path
+      // that sweeps every built thing out of the scene and streams the tiles
+      // again through the filter. `?built=` outranks the dial, as `?time=`
+      // does, so an A/B does not depend on which browser profile took it.
+      dial('built', 'BUILT WORLD', ['OFF', 'ON'], 1, (i) => {
+        const want = qsHas('built') ? qsOn('built', true) : i === 1;
+        const changed = builtInit && want !== builtOn;
+        builtOn = want;
+        builtInit = true;
+        if (changed) rebuildInPlace();
+      }),
+      // The hand-authored entries merged into the raw tiles (the store in
+      // index.ts). Off is the raw map alone, the A/B for any entry.
+      dial('authored', 'AUTHORED', ['OFF', 'ON'], 1, (i) => {
+        const want = qsHas('authored') ? qsOn('authored', true) : i === 1;
+        const changed = authoredInit && want !== authoredOn;
+        authoredOn = want;
+        authoredInit = true;
+        if (changed) rebuildInPlace();
+      }),
       // Grass is the one layer whose cost is worth handing over: it is the
       // difference between a field and a golf course, and it is also the
       // difference between a phone holding 60fps and not.
@@ -54837,7 +56119,6 @@ const DIAL_GROUPS: DialGroup[] = [
         hudSize = HUD_SIZES[i];
         hudResize();
       }),
-      dial('tdbg', 'TILE DEBUG', ['OFF', 'ON'], 1, (i) => { tileDbg = i === 1; }),
     ],
   },
   {
@@ -55104,7 +56385,7 @@ function hudSafeRects(): Array<[number, number, number, number]> {
   const mw = Math.min(58, Math.floor(HW * 0.34));   // the dock square (see drawHud)
   const my = HH - 4 - 23 - mw - 3;
   return [
-    [0, 0, HW, 34 + (camMode === 'top' && tileDbg ? 22 : 0)],  // compass strip + the justified top row
+    [0, 0, HW, 34 + (camMode === 'top' && chartOn.stream ? 30 : 0)],  // compass strip + the justified top row
     [0, 32, 74, 18],                                 // the task chip, under the top row
     [HW - 56, 18, 56, 18],                           // MENU, on the heading row
     [0, my - 200, camMode === 'top' ? 24 : 17, 200], // ENV stack, or the chart tilt rail
@@ -55230,6 +56511,321 @@ function hudLap(k: string): void {
   }
   return out;
 };
+/**
+ * ── TILE DEBUG, PULLED OUT SO IT CAN DRAW WITHOUT THE HUD ──
+ *
+ * This used to be an inline block of drawHud(), gated on `camMode === 'top'`
+ * and — because it sat after drawHud's `if (!hudOn) return;` — on the HUD
+ * being on as well. `__godcam()` never sets `camMode = 'top'`, so every
+ * god-camera shot was structurally unable to show it, whatever HUD state a
+ * caller asked for. Extracted verbatim (its own dNow, its own dProj/dSeg/
+ * dBox closures over camera/poiVec/poiView) so it can be called both from
+ * drawHud's normal flow and from its early `!hudOn` return, with no shared
+ * state beyond `pad` (always 4 here) and `layerKeyBottom` (a module `let`
+ * that stays at its last-drawn value, or 0, when the HUD has not run this
+ * session — the same fallback the KEY section's own comment already named).
+ *
+ * THE ORIGIN IS renderFocusXZ(), NOT `state.x + panX`. The old expression
+ * assumed the chart, whose pan is added to the truck's own position; a god
+ * camera looks at `godTarget`, which can be nowhere near the truck — the
+ * whole point of the mode. `renderFocusXZ()` already answers this per camera
+ * (viewX()+panX on the chart, godTarget in god mode), so the debug grid is
+ * centred on wherever the shot is actually looking.
+ */
+/**
+ * T5, THE STREAM READOUT: what the vector and terrain streams are doing.
+ * Its own chip (STREAM) since the key became the one switchboard; it used to
+ * ride the tile-debug dial with the grid.
+ */
+function drawStreamHeader(): void {
+  if (!chartOn.stream) return;
+  hctx.globalAlpha = 1;
+  let fails = 0;
+  for (const [, at] of osmFailedAt) if (performance.now() - at < 30000) fails++;
+  // What B6 used to say while the world streamed: the status word and, on
+  // the chart, the overview map's own count.
+  {
+    const ws = worldStatus();
+    const t = [ws.rank < 3 ? ws.hud : '', camMode === 'top' ? ws.map : ''].filter(Boolean).join(' · ');
+    if (t) textEdgeP(t, 6, 56, UI.gold);
+  }
+  textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
+    6, 40, UI.text);
+  // CLIP is the block of fine tiles the shell is discarded inside. It is the
+  // number to read when the chart's outer ground looks paler and flatter
+  // than the middle: anything outside that block is the coarse shell's to
+  // paint wherever its 150 m chords stand over the fine world, and a block
+  // that has collapsed to 1x1 hands it nearly everything.
+  textEdgeP(`Z${TERRAIN_Z} MESH ${terrainMeshes.size} WAIT ${terrainReady.size - terrainMeshes.size}`
+    + ` REBUILD ${terrainDirty.size} CLIP ${fineBlock[0] + fineBlock[1] + 1}x${fineBlock[2] + fineBlock[3] + 1}`
+    + ` · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
+    + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
+    6, 48, UI.soft);
+}
+function drawTileDebugOverlay(): void {
+  if (!chartOn.tiles) return;
+  const pad = 4;
+  const dNow = performance.now();
+  const dProj = (wx: number, wz: number): [number, number] | null => {
+    poiVec.set(wx, groundAt(wx, wz), wz);
+    if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) return null;
+    poiVec.project(camera);
+    return [((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS, ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS];
+  };
+  const dSeg = (a: [number, number] | null, b: [number, number] | null): void => {
+    if (!a || !b) return;
+    const n = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]) / 2));
+    for (let i = 0; i <= n; i++) {
+      hctx.fillRect(Math.round(a[0] + ((b[0] - a[0]) * i) / n), Math.round(a[1] + ((b[1] - a[1]) * i) / n), 1, 1);
+    }
+  };
+  /** Outline the quad four projected corners make, clockwise from top-left. */
+  const dBox = (a: [number, number] | null, b: [number, number] | null,
+    c: [number, number] | null, d2: [number, number] | null): void => {
+    dSeg(a, b); dSeg(b, c); dSeg(c, d2); dSeg(d2, a);
+  };
+  /** How wide one cell of a grid lands on the HUD, in its own pixels — the
+   *  measure that decides whether a layer is worth drawing cell by cell. */
+  const dCell = (a: [number, number] | null, b: [number, number] | null): number =>
+    (a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0);
+  /**
+   * A CELL TOO SMALL TO HOLD A MARKER IS NOISE, NOT INFORMATION.
+   *
+   * The z16 grid is 19x19 cells and the z14 ring 9x9, and both are sized in
+   * GROUND metres — so as the chart pulls out they do not spread, they
+   * collapse. At the wide end a z16 tile is half a kilometre inside a view
+   * six hundred across: three hundred and sixty cells of grid line and pip
+   * stacked into a few pixels of dirty haze in the middle of the frame,
+   * every one of them drawn, none of them readable. The post chain makes it
+   * worse rather than better — narrow bright features are exactly what the
+   * quantiser turns into a white contour diagram.
+   *
+   * So each layer draws cells only while a cell can carry one, and outlines
+   * its RING when it cannot. At that zoom the useful fact is not which tile
+   * is queued, it is where the fine world sits inside the wide one — which
+   * is a rectangle, and reads as one.
+   */
+  const DBG_CELL_PX = 8;
+  const [rfx, rfz] = renderFocusXZ();
+  const [dLat, dLon] = localToLatLon(rfx, rfz);
+  const dR = viewRadius();
+  const [ox0, oy0] = tileAt(dLat, dLon, OSM_Z);
+  const oN = clamp(Math.ceil(dR / tileMetres(OSM_Z)), 1, 9);
+  // Every corner in the range projected once; lines and centres reuse them.
+  const dCor: Array<Array<[number, number] | null>> = [];
+  for (let j = 0; j <= oN * 2 + 1; j++) {
+    const row: Array<[number, number] | null> = [];
+    for (let i = 0; i <= oN * 2 + 1; i++) {
+      const b = tileBounds(ox0 - oN + i, oy0 - oN + j, OSM_Z);
+      const [wx, wz] = toLocal(b.latN, b.lonW);
+      row.push(dProj(wx, wz));
+    }
+    dCor.push(row);
+  }
+  const oPx = dCell(dCor[oN][oN], dCor[oN][oN + 1]);
+  const oFine = oPx >= DBG_CELL_PX;
+  hctx.fillStyle = UI.soft;
+  hctx.globalAlpha = 0.28;
+  if (oFine) {
+    for (let j = 0; j <= oN * 2 + 1; j++) for (let i = 0; i <= oN * 2 + 1; i++) {
+      if (i <= oN * 2) dSeg(dCor[j][i], dCor[j][i + 1]);
+      if (j <= oN * 2) dSeg(dCor[j][i], dCor[j + 1][i]);
+    }
+  } else {
+    // The whole vector ring as ONE rectangle: where the roads are, against a
+    // view mostly made of ground that has none.
+    const e = oN * 2 + 1;
+    dBox(dCor[0][0], dCor[0][e], dCor[e][e], dCor[e][0]);
+  }
+  // SERVING RANK UNDER THE METRIC THE GATE ACTUALLY USES — which for a long
+  // time this did not do. It ranked by plain distance to the focus point
+  // while osmRelease serves by wedgeCost from the CAR, so the numbers on the
+  // chart were not the order tiles would be fetched in. Reading them as
+  // priority is what "it is only mildly biasing forward" was measured
+  // against, and the display was the part that was wrong about it.
+  const dRank = new Map<string, number>();
+  osmQueue
+    .map((w) => {
+      const [wx, wz] = tileCentreLocal(w.x, w.y);
+      return { k: `${w.x}/${w.y}`, d: wedgeCost(wx, wz) };
+    })
+    .sort((a, b) => a.d - b.d)
+    .forEach((q, i) => dRank.set(q.k, i + 1));
+  for (let j = 0; oFine && j <= oN * 2; j++) for (let i = 0; i <= oN * 2; i++) {
+    const key = `${ox0 - oN + i}/${oy0 - oN + j}`;
+    const a = dCor[j][i], b = dCor[j + 1][i + 1];
+    if (!a || !b) continue;
+    const cx = Math.round((a[0] + b[0]) / 2), cy = Math.round((a[1] + b[1]) / 2);
+    if (cx < -4 || cx > HW + 4 || cy < -4 || cy > HH + 4) continue;
+    if (osmFailedAt.has(key) && dNow - (osmFailedAt.get(key) ?? 0) > 30000) osmFailedAt.delete(key);
+    // Every marker sits on an ink seat: a bare green pip is indistinguishable
+    // from a bush at chart scale, and this canvas has no other way to say
+    // "UI, not world" than the dark plate every other instrument stands on.
+    const seat = (r2: number): void => {
+      hctx.globalAlpha = 0.65;
+      hctx.fillStyle = UI.ink;
+      hctx.fillRect(cx - r2, cy - r2, r2 * 2 + 1, r2 * 2 + 1);
+    };
+    if (osmActive.has(key)) {
+      seat(2);
+      hctx.globalAlpha = 0.55 + 0.4 * Math.sin(dNow / 120);
+      hctx.fillStyle = UI.gold;
+      hctx.fillRect(cx - 1, cy - 1, 3, 3);
+    } else if (dRank.has(key)) {
+      seat(2);
+      hctx.globalAlpha = 0.75;
+      hctx.fillStyle = UI.soft;
+      hctx.fillRect(cx - 1, cy - 1, 2, 2);
+      textEdgeP(String(dRank.get(key)), cx + 3, cy - 3, UI.text);
+    } else if (osmFailedAt.has(key)) {
+      seat(4);
+      hctx.globalAlpha = 0.9;
+      hctx.fillStyle = UI.bad;
+      dSeg([cx - 3, cy - 3], [cx + 3, cy + 3]);
+      dSeg([cx - 3, cy + 3], [cx + 3, cy - 3]);
+    } else if (osmDone.has(key)) {
+      seat(2);
+      hctx.globalAlpha = 0.85;
+      hctx.fillStyle = UI.good;
+      hctx.fillRect(cx, cy, 2, 2);
+    } else if (osmLoaded.has(key)) {
+      // Requested but unsettled: cached-rendering, or refused for want of
+      // terrain and waiting to be forgotten and asked again.
+      hctx.globalAlpha = 0.6;
+      hctx.fillStyle = UI.dim;
+      hctx.fillRect(cx, cy, 1, 1);
+    }
+  }
+  // The fine-terrain ring, as outlines over its own (coarser) grid.
+  const [tx0, ty0] = tileAt(dLat, dLon, TERRAIN_Z);
+  const tN = clamp(Math.ceil(dR / tileMetres(TERRAIN_Z)), 1, 4);
+  const tCor: Array<Array<[number, number] | null>> = [];
+  for (let j = 0; j <= tN * 2 + 1; j++) {
+    const row: Array<[number, number] | null> = [];
+    for (let i = 0; i <= tN * 2 + 1; i++) {
+      const b = tileBounds(tx0 - tN + i, ty0 - tN + j, TERRAIN_Z);
+      const [wx, wz] = toLocal(b.latN, b.lonW);
+      row.push(dProj(wx, wz));
+    }
+    tCor.push(row);
+  }
+  const tPx = dCell(tCor[tN][tN], tCor[tN][tN + 1]);
+  if (tPx >= DBG_CELL_PX) {
+    for (let j = 0; j <= tN * 2; j++) for (let i = 0; i <= tN * 2; i++) {
+      const key = `${tx0 - tN + i}/${ty0 - tN + j}`;
+      if (!terrainReady.has(key)) continue;
+      hctx.fillStyle = terrainDirty.has(key) ? UI.hot : terrainMeshes.has(key) ? UI.edge : UI.gold;
+      hctx.globalAlpha = terrainDirty.has(key) ? 0.8 : 0.5;
+      dSeg(tCor[j][i], tCor[j][i + 1]);
+      dSeg(tCor[j][i], tCor[j + 1][i]);
+      dSeg(tCor[j + 1][i], tCor[j + 1][i + 1]);
+      dSeg(tCor[j][i + 1], tCor[j + 1][i + 1]);
+    }
+  } else {
+    hctx.fillStyle = UI.edge;
+    hctx.globalAlpha = 0.5;
+    const e = tN * 2 + 1;
+    dBox(tCor[0][0], tCor[0][e], tCor[e][e], tCor[e][0]);
+  }
+  /**
+   * …AND THE LAYER THAT IS ACTUALLY STREAMING OUT HERE.
+   *
+   * The two rings above are the FINE world, and at the wide end they are a
+   * pair of small boxes near the middle — correct, and not what is doing the
+   * work. Everything filling the rest of the frame is the coarse shell, and
+   * until now the overlay said nothing about it beyond a count in the
+   * header. So the shell draws its own grid at exactly the zooms where the
+   * fine grids have folded: teal where a mesh stands, gold where a tile has
+   * been asked for and has not landed. It is the same reading the z14 ring
+   * gives close up, one ladder rung out.
+   */
+  if (!oFine) {
+    const [sx0, sy0] = tileAt(dLat, dLon, farZ);
+    const sN = clamp(Math.ceil(dR / tileMetres(farZ)), 1, FAR_RING_MAX);
+    for (let j = -sN; j <= sN; j++) for (let i = -sN; i <= sN; i++) {
+      const key = `${farZ}/${sx0 + i}/${sy0 + j}`;
+      if (!farTiles.has(key)) continue;
+      const b0 = tileBounds(sx0 + i, sy0 + j, farZ);
+      const b1 = tileBounds(sx0 + i + 1, sy0 + j + 1, farZ);
+      const [ax, az] = toLocal(b0.latN, b0.lonW);
+      const [bx, bz] = toLocal(b1.latN, b1.lonW);
+      hctx.fillStyle = farMeshes.has(key) ? UI.edge : UI.gold;
+      hctx.globalAlpha = farMeshes.has(key) ? 0.4 : 0.7;
+      dBox(dProj(ax, az), dProj(bx, az), dProj(bx, bz), dProj(ax, bz));
+    }
+  }
+  hctx.globalAlpha = 1;
+  // T9 shows one source at a time; the grid key is its TILES variant.
+  if (legendOrder[0] !== 'tiles') { hctx.globalAlpha = 1; return; }
+  // ── THE KEY ── one row per LAYER that draws boxes, in the order they
+  // stream: what zoom it is, how wide one of its boxes is here (a tile's
+  // metres shrink with the cosine of the latitude, so this is computed,
+  // not quoted), the layer's name, then its marks in their own inks. The
+  // vector row shows while its cells draw and the shell row while its
+  // boxes do, and a folded ring says so. Drawn UNDER the scale bar — the
+  // first cut sat on the bar's label, which is exactly the rows this is
+  // meant to read beside. The header's words are the key's words.
+  {
+    const gw = (t: string): number => {
+      let w = 0;
+      for (const ch of t) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
+      return w;
+    };
+    const size = (z: number): string => {
+      const m = tileMetres(z);
+      return m >= 1000 ? `${(m / 1000).toFixed(m < 10000 ? 1 : 0)}KM` : `${Math.round(m)}M`;
+    };
+    // Below the LAYER key, which is drawn first and is a variable number of
+    // rows (the legend grows with what is on screen). The fallback is the old
+    // fixed offset, for the frame before the chart block has run.
+    let ly = Math.max(pad + 34 + 20, layerKeyBottom + 3);
+    type Mark = ((cx: number, cy: number) => void) | null;
+    const row = (name: string, items: Array<[string, string, Mark]>): void => {
+      const x0 = 6 + gw(name) + 4;
+      let lx = x0;
+      hctx.globalAlpha = 1;
+      textEdgeP(name, 6, ly, UI.text);
+      for (const [label, col, mark] of items) {
+        const w = (mark ? 7 : 0) + gw(label);
+        if (lx > x0 && lx + w > HW - 4) { lx = x0; ly += 8; }
+        hctx.globalAlpha = 1;
+        if (mark) mark(lx + 2, ly + 2);              // the glyph spans y-1..y+5; its middle is y+2
+        hctx.globalAlpha = 1;
+        textEdgeP(label, lx + (mark ? 7 : 0), ly, col);
+        lx += w + 5;
+      }
+      ly += 8;
+    };
+    const box = (col: string): Mark => (cx, cy) => {
+      hctx.fillStyle = col; hctx.globalAlpha = 0.9;
+      dBox([cx - 3, cy - 3], [cx + 3, cy - 3], [cx + 3, cy + 3], [cx - 3, cy + 3]);
+    };
+    if (oFine) {
+      row(`Z${OSM_Z} ${size(OSM_Z)}`, [
+        ['VECTORS', UI.soft, null],
+        ['WIRE', UI.gold, (cx, cy) => { hctx.fillStyle = UI.gold; hctx.fillRect(cx - 1, cy - 1, 3, 3); }],
+        ['QUEUE', UI.soft, (cx, cy) => { hctx.fillStyle = UI.soft; hctx.fillRect(cx - 1, cy - 1, 2, 2); }],
+        ['FAIL', UI.bad, (cx, cy) => {
+          hctx.fillStyle = UI.bad;
+          dSeg([cx - 2, cy - 2], [cx + 2, cy + 2]); dSeg([cx - 2, cy + 2], [cx + 2, cy - 2]);
+        }],
+        ['DONE', UI.good, (cx, cy) => { hctx.fillStyle = UI.good; hctx.fillRect(cx, cy, 2, 2); }],
+        ['ASKED', UI.dim, (cx, cy) => { hctx.fillStyle = UI.dim; hctx.fillRect(cx, cy, 1, 1); }],
+      ]);
+    }
+    row(`Z${TERRAIN_Z} ${size(TERRAIN_Z)}`, [
+      ['TERRAIN', UI.soft, null],
+      ['MESH', UI.edge, box(UI.edge)], ['WAIT', UI.gold, box(UI.gold)], ['REBUILD', UI.hot, box(UI.hot)],
+    ]);
+    if (!oFine) {
+      row(`Z${farZ} ${size(farZ)}`, [
+        ['SHELL', UI.soft, null], ['MESH', UI.edge, box(UI.edge)], ['ASKED', UI.gold, box(UI.gold)],
+      ]);
+    }
+    if (!oFine || tPx < DBG_CELL_PX) row('ONE BOX', [['THE WHOLE RING, FOLDED', UI.dim, null]]);
+    hctx.globalAlpha = 1;
+  }
+}
 function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   hctx.clearRect(0, 0, HW, HH);
   // ── THE HUD OFF, FOR A MEASUREMENT ──
@@ -55246,7 +56842,24 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // return leaves them holding wherever the dock last was and the blit — which
   // is a scissored render straight onto the canvas and answers to no overlay —
   // would go on painting the live scene into a stale rectangle.
-  if (!hudOn) { dockRect = povRect = droneRect = mapUpRect = { x: 0, y: 0, w: 0, h: 0 }; return; }
+  if (!hudOn) {
+    dockRect = povRect = droneRect = mapUpRect = { x: 0, y: 0, w: 0, h: 0 };
+    // Tile debug is its own instrument, not a HUD element — see
+    // drawTileDebugOverlay's own header for why it must not depend on hudOn.
+    // It stands down for the WORLD LAB, which is the one caller that turns
+    // the chrome off to get a clean viewport: before this canvas was exempted
+    // from `body.clean` the grid was hidden there by accident, and restoring
+    // it by accident would put four lines of debug over the map the lab
+    // exists to edit. FOLD gives it back with the rest of the chrome.
+    if (!labChrome) { drawTileDebugOverlay(); drawStreamHeader(); }
+    // AND SO IS THE AUTHORING OVERLAY, for the same reason and a sharper
+    // one: the world lab turns the game's chrome OFF as it opens, which is
+    // `hudOn = false`, so the one instrument the lab cannot work without was
+    // the one its own opening switched off. Measured: a road draft nine
+    // points long, `hudOn false`, and not a pixel of it drawn.
+    drawAuthoringPreviews();
+    return;
+  }
   // While the DOM menu is up the HUD stands down entirely. Its scrim used to
   // be painted over these pixels in this same buffer; now the menu sits above
   // this canvas, and the RIG tab's bay is a HOLE through it to the renderer —
@@ -55289,7 +56902,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // tick at each end. See chartScale for what the three numbers are.
   if (camMode === 'top') {
     const sc = chartScale();
-    const x0 = pad + 1, y0 = tileDbg ? pad + 56 : pad + 34;
+    const x0 = pad + 1, y0 = chartOn.stream ? pad + 64 : pad + 34;
     textEdgeS(sc.label, x0, y0, UI.soft);
     hctx.fillStyle = 'rgba(4,10,11,0.85)';
     hctx.fillRect(x0 - 1, y0 + 10, sc.barPx + 3, 5);
@@ -55297,6 +56910,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.fillRect(x0, y0 + 12, sc.barPx + 1, 1);
     hctx.fillRect(x0, y0 + 11, 1, 3);
     hctx.fillRect(x0 + sc.barPx, y0 + 11, 1, 3);
+  }
+  // ── T8 and T9, WHEREVER M7 ASKS FOR THEM ── under the scale on the chart,
+  // under the clock's row everywhere else.
+  const keyY = (chartOn.stream ? pad + 64 : pad + 34) + (camMode === 'top' ? 19 : 0);
+  if (keyShown && (camMode === 'top' || !lineOn)) {
     // ── THE LAYER KEY ──
     //
     // A map's key names what is on it; this one is also the SWITCH, which is
@@ -55325,14 +56943,12 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         hctx.fillRect(cx - 2, cy - 2, 5, 1); hctx.fillRect(cx - 2, cy + 2, 5, 1);
         hctx.fillRect(cx - 2, cy - 1, 1, 3); hctx.fillRect(cx + 2, cy - 1, 1, 3);
       };
-      let ly = y0 + 19, lx = pad + 1;
+      let ly = keyY, lx = pad + 1;
       for (const l of CHART_LAYERS) {
-        // A DEBUG CHIP ONLY WHILE THE TILE OVERLAY IS UP. The substrate view
-        // says what the RENDERER believes, not what the planet is, and it
-        // belongs with the ring counts rather than beside COVER. Asked for
-        // from the seat in those terms.
-        if (l.debug && !tileDbg) continue;
-        const on = chartOn[l.id];
+        // EVERY CHIP IS OFFERED. The ground views used to appear only while
+        // the tile overlay was up; they were promoted to first-class chips
+        // when the key became the single switchboard for what the chart shows.
+        const on = layerIsOn(l.id);
         const w = 7 + gw(l.name);
         if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
         sw(lx + 2, ly + 2, on ? UI.text : UI.dim, on);
@@ -55357,70 +56973,81 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // fell through every branch and printed nothing at all. Four states, and
       // they are four different things to do: pull the chart out, wait for the
       // shell, wait for the bake, or read the legend.
-      const leg = themeLegend();
-      // A CHANNEL VIEW HAS NO WAITING STATES. It is a uniform on a material
-      // that is already drawing: there is no zoom gate, no shell to wait for
-      // and no bake, which is most of the argument for it. The only thing it
-      // can be short of is ground that has streamed, and an empty legend under
-      // a view that is on says exactly that.
-      if ((groundView !== 'off' || dbgView) && !leg.length) {
-        textEdgeP('NO GROUND CLASSED YET', pad + 1, ly, UI.dim);
-        ly += 9;
-      } else if (themeLayer() && !themeGroup.visible) {
-        textEdgeP(envU.uMpp.value <= THEME_MPP_MIN ? 'ZOOM OUT FOR THE SHEET' : 'SHEET NEEDS THE SHELL',
-          pad + 1, ly, UI.dim);
-        ly += 9;
-      } else if (themeLayer() && !leg.length) {
-        textEdgeP('SHEET LOADING', pad + 1, ly, UI.dim);
-        ly += 9;
-      } else if (leg.length) {
-        for (const row of leg) {
-          const w = 7 + gw(row.name);
-          if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
-          sw(lx + 2, ly + 2, row.hex, true);
-          textEdgeP(row.name, lx + 7, ly, UI.soft);
-          lx += w + 5;
-        }
-        // …AND WHETHER THE LEGEND IS FINISHED. A sheet still waiting on a cover
-        // raster or an ecoregion tile will grow; one that is not, will not.
-        // "Is that everything, or is it still coming" is the question the seat
-        // asked in three different ways and nothing on the glass answered.
-        if (groundView === 'off' && themeWork() > 0) {
-          const w = gw('+');
-          if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
-          textEdgeP('+', lx, ly, UI.dim);
-        }
-        ly += 9;
+      // ── T9, THE ONE LEGEND SLOT ── whichever source was switched on most
+      // recently, or the one a tap on the legend rotated to. With more than
+      // one on, the first row carries the source's name and its place in the
+      // set, so a reader knows there is more behind a tap.
+      syncLegendOrder();
+      const src = legendOrder[0] ?? null;
+      const legTop = ly;
+      if (src && legendOrder.length > 1) {
+        const all = legendSources();
+        const tag = `${chartLayer(src)?.name ?? src} ${all.indexOf(src) + 1}/${all.length}`;
+        textEdgeP(tag, pad + 1, ly, UI.dim);
+        lx = pad + 1 + gw(tag) + 6;
       }
+      if (src === 'tiles') {
+        // The grid key is drawn by drawTileDebugOverlay, starting where this
+        // leaves layerKeyBottom — it is T9's tiles variant, not a key of its own.
+        if (legendOrder.length > 1) { ly += 9; lx = pad + 1; }
+      } else if (src === 'hydro' || src === 'xray') {
+        const v = src === 'hydro' ? HYDRO_VIEWS.find((h) => h.view === hydroView) : XRAY_VIEWS.find((x) => x.mode === xrayMode);
+        if (v) {
+          if (legendOrder.length === 1) { textEdgeP(`${chartLayer(src)?.name} ${v.name}`, pad + 1, ly, UI.soft); lx = pad + 1 + gw(`${chartLayer(src)?.name} ${v.name}`) + 6; }
+          else { textEdgeP(v.name, lx, ly, UI.soft); lx += gw(v.name) + 6; }
+          for (const row of v.legend) {
+            const w = 7 + gw(row.name);
+            if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
+            sw(lx + 2, ly + 2, row.hex, true);
+            textEdgeP(row.name, lx + 7, ly, UI.soft);
+            lx += w + 5;
+          }
+          ly += 9;
+        }
+      } else if (src) {
+        const leg = themeLegend();
+        // A CHANNEL VIEW HAS NO WAITING STATES. It is a uniform on a material
+        // that is already drawing: there is no zoom gate, no shell to wait for
+        // and no bake, which is most of the argument for it. The only thing it
+        // can be short of is ground that has streamed, and an empty legend under
+        // a view that is on says exactly that.
+        if ((groundView !== 'off' || dbgView) && !leg.length) {
+          textEdgeP('NO GROUND CLASSED YET', lx, ly, UI.dim);
+          ly += 9;
+        } else if (themeLayer() && !themeGroup.visible) {
+          textEdgeP(envU.uMpp.value <= THEME_MPP_MIN ? 'ZOOM OUT FOR THE SHEET' : 'SHEET NEEDS THE SHELL',
+            lx, ly, UI.dim);
+          ly += 9;
+        } else if (themeLayer() && !leg.length) {
+          textEdgeP('SHEET LOADING', lx, ly, UI.dim);
+          ly += 9;
+        } else if (leg.length) {
+          for (const row of leg) {
+            const w = 7 + gw(row.name);
+            if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
+            sw(lx + 2, ly + 2, row.hex, true);
+            textEdgeP(row.name, lx + 7, ly, UI.soft);
+            lx += w + 5;
+          }
+          // …AND WHETHER THE LEGEND IS FINISHED. A sheet still waiting on a cover
+          // raster or an ecoregion tile will grow; one that is not, will not.
+          // "Is that everything, or is it still coming" is the question the seat
+          // asked in three different ways and nothing on the glass answered.
+          if (groundView === 'off' && themeWork() > 0) {
+            const w = gw('+');
+            if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
+            textEdgeP('+', lx, ly, UI.dim);
+          }
+          ly += 9;
+        }
+      }
+      legendRect = src ? { x: pad, y: legTop - 3, w: HW - 2 * pad, h: src === 'tiles' ? 36 : Math.max(12, ly - legTop + 3) } : { x: 0, y: 0, w: 0, h: 0 };
       hctx.globalAlpha = 1;
       layerKeyBottom = ly;
     }
   } else {
-    layerRects.length = 0; layerKeyBottom = 0;
-    // ── A VIEW THAT IS ON SAYS SO WHEREVER YOU ARE ──
-    //
-    // The channel's whole point is that it applies in every camera; its SWITCH
-    // is a chip on the chart's key, which is in exactly one of them. Leave it
-    // at that and a player who turns COVER on and drives away has a
-    // false-coloured world and no control on the glass — the route banner's
-    // own lesson ("a pending commitment nothing announces"), and the settings
-    // panel's before it. So off the chart the active view keeps one chip, in
-    // its own row under the clock, and a tap on it clears the view. It is
-    // pushed into `layerRects`, so the tap is the same code path the key's
-    // chips use and the two cannot answer differently.
-    const vl = viewLayer() ?? (CHART_LAYERS.find((l) => chartOn[l.id] && DBG_RASTER[l.id])?.id ?? null);
-    if (vl && !lineOn) {
-      const row = chartLayer(vl);
-      const name = row?.name ?? vl;
-      let w = 7;
-      for (const ch of name) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
-      const lx = pad + 1, ly = pad + 34;
-      hctx.globalAlpha = 1;
-      hctx.fillStyle = UI.text;
-      hctx.fillRect(lx + 0, ly, 5, 5);
-      textEdgeP(name, lx + 7, ly - 2, UI.text);
-      layerRects.push({ id: vl, x: lx - 2, y: ly - 5, w: w + 4, h: 12 });
-    }
+    // M7 off: no key and no legend. The M7 lamp says a view is still in force.
+    layerRects.length = 0; layerKeyBottom = 0; legendRect = { x: 0, y: 0, w: 0, h: 0 };
   }
   // The transport actions (rewind · AUTO · WPT) live in the CONTROL MATRIX
   // beside the dock now (Glass spec §5.5) — drawn with the dock so the grid
@@ -55496,287 +57123,12 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.globalAlpha = 1;
   }
   hudLap('way');
-  // ── tile debug: the streaming machinery, made visible (chart only) ──
-  // The z16 vector grid over the chart, each tile wearing its state: DONE a
-  // green pip, ON THE WIRE a pulsing gold square, QUEUED its serving rank
-  // (the gate is nearest-first, not FIFO — the number is the order it will
-  // actually run), FAILED a red X waiting out its backoff, and a dim dot for
-  // requested-but-unsettled. Fine terrain outlines its own z14 tiles — teal
-  // built, gold still fetching, orange marked for rebuild — and the header
-  // carries the counts plus the far shell's level and fill.
-  if (camMode === 'top' && tileDbg) {
-    const dNow = performance.now();
-    const dProj = (wx: number, wz: number): [number, number] | null => {
-      poiVec.set(wx, groundAt(wx, wz), wz);
-      if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) return null;
-      poiVec.project(camera);
-      return [((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS, ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS];
-    };
-    const dSeg = (a: [number, number] | null, b: [number, number] | null): void => {
-      if (!a || !b) return;
-      const n = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]) / 2));
-      for (let i = 0; i <= n; i++) {
-        hctx.fillRect(Math.round(a[0] + ((b[0] - a[0]) * i) / n), Math.round(a[1] + ((b[1] - a[1]) * i) / n), 1, 1);
-      }
-    };
-    /** Outline the quad four projected corners make, clockwise from top-left. */
-    const dBox = (a: [number, number] | null, b: [number, number] | null,
-      c: [number, number] | null, d2: [number, number] | null): void => {
-      dSeg(a, b); dSeg(b, c); dSeg(c, d2); dSeg(d2, a);
-    };
-    /** How wide one cell of a grid lands on the HUD, in its own pixels — the
-     *  measure that decides whether a layer is worth drawing cell by cell. */
-    const dCell = (a: [number, number] | null, b: [number, number] | null): number =>
-      (a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0);
-    /**
-     * A CELL TOO SMALL TO HOLD A MARKER IS NOISE, NOT INFORMATION.
-     *
-     * The z16 grid is 19x19 cells and the z14 ring 9x9, and both are sized in
-     * GROUND metres — so as the chart pulls out they do not spread, they
-     * collapse. At the wide end a z16 tile is half a kilometre inside a view
-     * six hundred across: three hundred and sixty cells of grid line and pip
-     * stacked into a few pixels of dirty haze in the middle of the frame,
-     * every one of them drawn, none of them readable. The post chain makes it
-     * worse rather than better — narrow bright features are exactly what the
-     * quantiser turns into a white contour diagram.
-     *
-     * So each layer draws cells only while a cell can carry one, and outlines
-     * its RING when it cannot. At that zoom the useful fact is not which tile
-     * is queued, it is where the fine world sits inside the wide one — which
-     * is a rectangle, and reads as one.
-     */
-    const DBG_CELL_PX = 8;
-    const [dLat, dLon] = localToLatLon(state.x + panX, state.z + panZ);
-    const dR = viewRadius();
-    const [ox0, oy0] = tileAt(dLat, dLon, OSM_Z);
-    const oN = clamp(Math.ceil(dR / tileMetres(OSM_Z)), 1, 9);
-    // Every corner in the range projected once; lines and centres reuse them.
-    const dCor: Array<Array<[number, number] | null>> = [];
-    for (let j = 0; j <= oN * 2 + 1; j++) {
-      const row: Array<[number, number] | null> = [];
-      for (let i = 0; i <= oN * 2 + 1; i++) {
-        const b = tileBounds(ox0 - oN + i, oy0 - oN + j, OSM_Z);
-        const [wx, wz] = toLocal(b.latN, b.lonW);
-        row.push(dProj(wx, wz));
-      }
-      dCor.push(row);
-    }
-    const oPx = dCell(dCor[oN][oN], dCor[oN][oN + 1]);
-    const oFine = oPx >= DBG_CELL_PX;
-    hctx.fillStyle = UI.soft;
-    hctx.globalAlpha = 0.28;
-    if (oFine) {
-      for (let j = 0; j <= oN * 2 + 1; j++) for (let i = 0; i <= oN * 2 + 1; i++) {
-        if (i <= oN * 2) dSeg(dCor[j][i], dCor[j][i + 1]);
-        if (j <= oN * 2) dSeg(dCor[j][i], dCor[j + 1][i]);
-      }
-    } else {
-      // The whole vector ring as ONE rectangle: where the roads are, against a
-      // view mostly made of ground that has none.
-      const e = oN * 2 + 1;
-      dBox(dCor[0][0], dCor[0][e], dCor[e][e], dCor[e][0]);
-    }
-    // SERVING RANK UNDER THE METRIC THE GATE ACTUALLY USES — which for a long
-    // time this did not do. It ranked by plain distance to the focus point
-    // while osmRelease serves by wedgeCost from the CAR, so the numbers on the
-    // chart were not the order tiles would be fetched in. Reading them as
-    // priority is what "it is only mildly biasing forward" was measured
-    // against, and the display was the part that was wrong about it.
-    const dRank = new Map<string, number>();
-    osmQueue
-      .map((w) => {
-        const [wx, wz] = tileCentreLocal(w.x, w.y);
-        return { k: `${w.x}/${w.y}`, d: wedgeCost(wx, wz) };
-      })
-      .sort((a, b) => a.d - b.d)
-      .forEach((q, i) => dRank.set(q.k, i + 1));
-    for (let j = 0; oFine && j <= oN * 2; j++) for (let i = 0; i <= oN * 2; i++) {
-      const key = `${ox0 - oN + i}/${oy0 - oN + j}`;
-      const a = dCor[j][i], b = dCor[j + 1][i + 1];
-      if (!a || !b) continue;
-      const cx = Math.round((a[0] + b[0]) / 2), cy = Math.round((a[1] + b[1]) / 2);
-      if (cx < -4 || cx > HW + 4 || cy < -4 || cy > HH + 4) continue;
-      if (osmFailedAt.has(key) && dNow - (osmFailedAt.get(key) ?? 0) > 30000) osmFailedAt.delete(key);
-      // Every marker sits on an ink seat: a bare green pip is indistinguishable
-      // from a bush at chart scale, and this canvas has no other way to say
-      // "UI, not world" than the dark plate every other instrument stands on.
-      const seat = (r2: number): void => {
-        hctx.globalAlpha = 0.65;
-        hctx.fillStyle = UI.ink;
-        hctx.fillRect(cx - r2, cy - r2, r2 * 2 + 1, r2 * 2 + 1);
-      };
-      if (osmActive.has(key)) {
-        seat(2);
-        hctx.globalAlpha = 0.55 + 0.4 * Math.sin(dNow / 120);
-        hctx.fillStyle = UI.gold;
-        hctx.fillRect(cx - 1, cy - 1, 3, 3);
-      } else if (dRank.has(key)) {
-        seat(2);
-        hctx.globalAlpha = 0.75;
-        hctx.fillStyle = UI.soft;
-        hctx.fillRect(cx - 1, cy - 1, 2, 2);
-        textEdgeP(String(dRank.get(key)), cx + 3, cy - 3, UI.text);
-      } else if (osmFailedAt.has(key)) {
-        seat(4);
-        hctx.globalAlpha = 0.9;
-        hctx.fillStyle = UI.bad;
-        dSeg([cx - 3, cy - 3], [cx + 3, cy + 3]);
-        dSeg([cx - 3, cy + 3], [cx + 3, cy - 3]);
-      } else if (osmDone.has(key)) {
-        seat(2);
-        hctx.globalAlpha = 0.85;
-        hctx.fillStyle = UI.good;
-        hctx.fillRect(cx, cy, 2, 2);
-      } else if (osmLoaded.has(key)) {
-        // Requested but unsettled: cached-rendering, or refused for want of
-        // terrain and waiting to be forgotten and asked again.
-        hctx.globalAlpha = 0.6;
-        hctx.fillStyle = UI.dim;
-        hctx.fillRect(cx, cy, 1, 1);
-      }
-    }
-    // The fine-terrain ring, as outlines over its own (coarser) grid.
-    const [tx0, ty0] = tileAt(dLat, dLon, TERRAIN_Z);
-    const tN = clamp(Math.ceil(dR / tileMetres(TERRAIN_Z)), 1, 4);
-    const tCor: Array<Array<[number, number] | null>> = [];
-    for (let j = 0; j <= tN * 2 + 1; j++) {
-      const row: Array<[number, number] | null> = [];
-      for (let i = 0; i <= tN * 2 + 1; i++) {
-        const b = tileBounds(tx0 - tN + i, ty0 - tN + j, TERRAIN_Z);
-        const [wx, wz] = toLocal(b.latN, b.lonW);
-        row.push(dProj(wx, wz));
-      }
-      tCor.push(row);
-    }
-    const tPx = dCell(tCor[tN][tN], tCor[tN][tN + 1]);
-    if (tPx >= DBG_CELL_PX) {
-      for (let j = 0; j <= tN * 2; j++) for (let i = 0; i <= tN * 2; i++) {
-        const key = `${tx0 - tN + i}/${ty0 - tN + j}`;
-        if (!terrainReady.has(key)) continue;
-        hctx.fillStyle = terrainDirty.has(key) ? UI.hot : terrainMeshes.has(key) ? UI.edge : UI.gold;
-        hctx.globalAlpha = terrainDirty.has(key) ? 0.8 : 0.5;
-        dSeg(tCor[j][i], tCor[j][i + 1]);
-        dSeg(tCor[j][i], tCor[j + 1][i]);
-        dSeg(tCor[j + 1][i], tCor[j + 1][i + 1]);
-        dSeg(tCor[j][i + 1], tCor[j + 1][i + 1]);
-      }
-    } else {
-      hctx.fillStyle = UI.edge;
-      hctx.globalAlpha = 0.5;
-      const e = tN * 2 + 1;
-      dBox(tCor[0][0], tCor[0][e], tCor[e][e], tCor[e][0]);
-    }
-    /**
-     * …AND THE LAYER THAT IS ACTUALLY STREAMING OUT HERE.
-     *
-     * The two rings above are the FINE world, and at the wide end they are a
-     * pair of small boxes near the middle — correct, and not what is doing the
-     * work. Everything filling the rest of the frame is the coarse shell, and
-     * until now the overlay said nothing about it beyond a count in the
-     * header. So the shell draws its own grid at exactly the zooms where the
-     * fine grids have folded: teal where a mesh stands, gold where a tile has
-     * been asked for and has not landed. It is the same reading the z14 ring
-     * gives close up, one ladder rung out.
-     */
-    if (!oFine) {
-      const [sx0, sy0] = tileAt(dLat, dLon, farZ);
-      const sN = clamp(Math.ceil(dR / tileMetres(farZ)), 1, FAR_RING_MAX);
-      for (let j = -sN; j <= sN; j++) for (let i = -sN; i <= sN; i++) {
-        const key = `${farZ}/${sx0 + i}/${sy0 + j}`;
-        if (!farTiles.has(key)) continue;
-        const b0 = tileBounds(sx0 + i, sy0 + j, farZ);
-        const b1 = tileBounds(sx0 + i + 1, sy0 + j + 1, farZ);
-        const [ax, az] = toLocal(b0.latN, b0.lonW);
-        const [bx, bz] = toLocal(b1.latN, b1.lonW);
-        hctx.fillStyle = farMeshes.has(key) ? UI.edge : UI.gold;
-        hctx.globalAlpha = farMeshes.has(key) ? 0.4 : 0.7;
-        dBox(dProj(ax, az), dProj(bx, az), dProj(bx, bz), dProj(ax, bz));
-      }
-    }
-    hctx.globalAlpha = 1;
-    let fails = 0;
-    for (const [, at] of osmFailedAt) if (dNow - at < 30000) fails++;
-    textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
-      6, 40, UI.text);
-    // CLIP is the block of fine tiles the shell is discarded inside. It is the
-    // number to read when the chart's outer ground looks paler and flatter
-    // than the middle: anything outside that block is the coarse shell's to
-    // paint wherever its 150 m chords stand over the fine world, and a block
-    // that has collapsed to 1x1 hands it nearly everything.
-    textEdgeP(`Z${TERRAIN_Z} MESH ${terrainMeshes.size} WAIT ${terrainReady.size - terrainMeshes.size}`
-      + ` REBUILD ${terrainDirty.size} CLIP ${fineBlock[0] + fineBlock[1] + 1}x${fineBlock[2] + fineBlock[3] + 1}`
-      + ` · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
-      + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
-      6, 48, UI.soft);
-    // ── THE KEY ── one row per LAYER that draws boxes, in the order they
-    // stream: what zoom it is, how wide one of its boxes is here (a tile's
-    // metres shrink with the cosine of the latitude, so this is computed,
-    // not quoted), the layer's name, then its marks in their own inks. The
-    // vector row shows while its cells draw and the shell row while its
-    // boxes do, and a folded ring says so. Drawn UNDER the scale bar — the
-    // first cut sat on the bar's label, which is exactly the rows this is
-    // meant to read beside. The header's words are the key's words.
-    {
-      const gw = (t: string): number => {
-        let w = 0;
-        for (const ch of t) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
-        return w;
-      };
-      const size = (z: number): string => {
-        const m = tileMetres(z);
-        return m >= 1000 ? `${(m / 1000).toFixed(m < 10000 ? 1 : 0)}KM` : `${Math.round(m)}M`;
-      };
-      // Below the LAYER key, which is drawn first and is a variable number of
-      // rows (the legend grows with what is on screen). The fallback is the old
-      // fixed offset, for the frame before the chart block has run.
-      let ly = Math.max(pad + 56 + 20, layerKeyBottom + 3);
-      type Mark = ((cx: number, cy: number) => void) | null;
-      const row = (name: string, items: Array<[string, string, Mark]>): void => {
-        const x0 = 6 + gw(name) + 4;
-        let lx = x0;
-        hctx.globalAlpha = 1;
-        textEdgeP(name, 6, ly, UI.text);
-        for (const [label, col, mark] of items) {
-          const w = (mark ? 7 : 0) + gw(label);
-          if (lx > x0 && lx + w > HW - 4) { lx = x0; ly += 8; }
-          hctx.globalAlpha = 1;
-          if (mark) mark(lx + 2, ly + 2);              // the glyph spans y-1..y+5; its middle is y+2
-          hctx.globalAlpha = 1;
-          textEdgeP(label, lx + (mark ? 7 : 0), ly, col);
-          lx += w + 5;
-        }
-        ly += 8;
-      };
-      const box = (col: string): Mark => (cx, cy) => {
-        hctx.fillStyle = col; hctx.globalAlpha = 0.9;
-        dBox([cx - 3, cy - 3], [cx + 3, cy - 3], [cx + 3, cy + 3], [cx - 3, cy + 3]);
-      };
-      if (oFine) {
-        row(`Z${OSM_Z} ${size(OSM_Z)}`, [
-          ['VECTORS', UI.soft, null],
-          ['WIRE', UI.gold, (cx, cy) => { hctx.fillStyle = UI.gold; hctx.fillRect(cx - 1, cy - 1, 3, 3); }],
-          ['QUEUE', UI.soft, (cx, cy) => { hctx.fillStyle = UI.soft; hctx.fillRect(cx - 1, cy - 1, 2, 2); }],
-          ['FAIL', UI.bad, (cx, cy) => {
-            hctx.fillStyle = UI.bad;
-            dSeg([cx - 2, cy - 2], [cx + 2, cy + 2]); dSeg([cx - 2, cy + 2], [cx + 2, cy - 2]);
-          }],
-          ['DONE', UI.good, (cx, cy) => { hctx.fillStyle = UI.good; hctx.fillRect(cx, cy, 2, 2); }],
-          ['ASKED', UI.dim, (cx, cy) => { hctx.fillStyle = UI.dim; hctx.fillRect(cx, cy, 1, 1); }],
-        ]);
-      }
-      row(`Z${TERRAIN_Z} ${size(TERRAIN_Z)}`, [
-        ['TERRAIN', UI.soft, null],
-        ['MESH', UI.edge, box(UI.edge)], ['WAIT', UI.gold, box(UI.gold)], ['REBUILD', UI.hot, box(UI.hot)],
-      ]);
-      if (!oFine) {
-        row(`Z${farZ} ${size(farZ)}`, [
-          ['SHELL', UI.soft, null], ['MESH', UI.edge, box(UI.edge)], ['ASKED', UI.gold, box(UI.gold)],
-        ]);
-      }
-      if (!oFine || tPx < DBG_CELL_PX) row('ONE BOX', [['THE WHOLE RING, FOLDED', UI.dim, null]]);
-      hctx.globalAlpha = 1;
-    }
-  }
+  // ── tile debug: the streaming machinery, made visible ──
+  // Drawing itself lives in drawTileDebugOverlay() now (its condition is
+  // camMode === 'top' || 'god', not just the chart), so it can also fire
+  // from this function's own !hudOn early return, above.
+  drawTileDebugOverlay();
+  drawStreamHeader();
   hudLap('tiledbg');
   // ── checkpoint markers, under everything ──
   // Never a label and never a distance: the moment a checkpoint tells you how
@@ -56121,31 +57473,47 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // layer is separate from the HUD's nearest-three pins, which are a cockpit
   // instrument, not a map.
   ovLabelsDrawn.length = 0;
-  if (camMode === 'top' && ovBandOn && chartOn.places && ovPlaces.size) {
+  const seatPlaces = camMode !== 'top';
+  if ((seatPlaces || ovBandOn) && chartOn.places && ovPlaces.size) {
     // CITIES ONLY AT WIDE VIEWS, which is what the seat asked for and what the
     // rank ladder was one rung short of saying. Past a two-hundred-kilometre
     // frame a town's name is a claim about a place the frame cannot show the
     // shape of, and sixteen of them is the whole label budget spent before a
     // single capital is drawn. The three bands under it are unchanged.
     const r = backdropRadius();
-    const maxRank = r > 200000 ? 0 : r > 26000 ? 1 : r > 12000 ? 2 : 4;
+    // FROM THE SEAT: towns and villages within a drive, fewer of them — the
+    // basic first cut; labels and POIs from the seat want their own pass.
+    const maxRank = seatPlaces ? 4 : r > 200000 ? 0 : r > 26000 ? 1 : r > 12000 ? 2 : 4;
     capEyeUpdate();
     const cells = new Set<string>();
-    let budget = 16;
+    let budget = seatPlaces ? 6 : 16;
+    const peakNames = seatPlaces ? new Set([...peaks.values()].map((q) => q.name)) : null;
     const ranked = [...ovPlaces.values()].sort((a, b) => a.rank - b.rank);
     for (const p of ranked) {
       if (p.rank > maxRank || budget <= 0) break;
       // A place on the far side of the planet is still in front of the camera
       // and projects INSIDE the disc, mirrored — see onNearCap.
-      if (!onNearCap(p.sp)) continue;
-      // The place's point on the sphere, through the planet's own placement —
-      // composed here rather than read off matrixWorld, which is a render old.
-      poiVec.copy(p.sp).applyQuaternion(planetGroup.quaternion).add(planetGroup.position);
+      // FROM THE SEAT the place is a point in the local world, a few km off —
+      // the planet's placement is the chart's business.
+      // A summit already wears its own mark and name (P3); the seat does not
+      // name it twice.
+      if (peakNames?.has(p.name)) continue;
+      if (seatPlaces) poiVec.set(p.x, groundAt(p.x, p.z) + 20, p.z);
+      else {
+        if (!onNearCap(p.sp)) continue;
+        // The place's point on the sphere, through the planet's own placement —
+        // composed here rather than read off matrixWorld, which is a render old.
+        poiVec.copy(p.sp).applyQuaternion(planetGroup.quaternion).add(planetGroup.position);
+      }
       if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) continue;
+      if (seatPlaces && poiView.length() > 15000) continue;
       poiVec.project(camera);
       if (Math.abs(poiVec.x) > 0.96 || Math.abs(poiVec.y) > 0.92) continue;
       const sx = ((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS;
       const sy = ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS;
+      // From the seat a name above the key would be pinned onto it by the
+      // clamp below; it is dropped instead.
+      if (seatPlaces && sy < Math.max(24, layerKeyBottom + 6)) continue;
       const ck = `${Math.round(sx / 46)},${Math.round(sy / 12)}`;
       if (cells.has(ck)) continue;
       cells.add(ck);
@@ -56358,7 +57726,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // their own cells, so no two neighbours were the same distance apart.
     const gx = mx + mw + 4;
     const CG = 3, CH = 17;
-    const CW = Math.max(18, Math.min(23, Math.floor((HW - 58 - gx - 2 * CG) / 3)));
+    const CW = Math.max(16, Math.min(23, Math.floor((HW - 58 - gx - 3 * CG) / 4)));
     const rowB = my + mw - CH;               // bottom row bottom == map.bottom
     const rowT = rowB - CH - CG;
     const col = (i: number): number => gx + i * (CW + CG);
@@ -56375,10 +57743,84 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       : drone.up ? (drone.recall ? UI.good : UI.gold) : UI.edge;
     droneRect = { x: col(0), y: rowT, w: CW, h: CH };
     lampCell(col(0), rowT, ICON.gps, dCol, drone.up || drone.downed);
+    // ── STATE DOTS ── a cell that toggles or cycles says how many states it
+    // has and which one it is in: tiny dots along the bottom band, where the
+    // drone keeps its charge. The one in force wears the cell's colour.
+    const dots = (x: number, y: number, n: number, at: number, c: string): void => {
+      const x0 = x + ((CW - (n * 3 - 2)) >> 1), yy = y + CH - 3;
+      for (let k = 0; k < n; k++) {
+        hctx.fillStyle = k === at ? c : UI.dim;
+        hctx.fillRect(x0 + k * 3, yy, 1, 1);
+      }
+    };
+    // Two pixel glyphs the icon font has no room for, each with an ink edge.
+    const inked = (draw: (c: string, o: number) => void, c: string): void => {
+      for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+        hctx.save(); hctx.translate(dx, dy); draw(UI.ink, 0); hctx.restore();
+      }
+      draw(c, 0);
+    };
+    // M2 — an ARROW for heading-up (the map turns so ahead is up), a NEEDLE
+    // with its north half lit for north-up.
     mapUpRect = { x: col(1), y: rowT, w: CW, h: CH };
-    lampCell(col(1), rowT, ICON.map, UI.edge, mapHeadingUp);
+    {
+      const c2 = mapHeadingUp ? UI.edge : UI.dim;
+      corners(col(1), rowT, CW, CH, c2);
+      const cx = col(1) + (CW >> 1), cy = rowT + 2;
+      if (mapHeadingUp) inked((c) => {
+        hctx.fillStyle = c;
+        hctx.fillRect(cx, cy, 1, 9);
+        for (let k = 1; k <= 3; k++) hctx.fillRect(cx - k, cy + k, 2 * k + 1, 1);
+      }, UI.edge);
+      else inked((c) => {
+        for (let k = 0; k < 9; k++) {
+          const w = k < 4 ? k : 8 - k;
+          hctx.fillStyle = c === UI.ink ? c : k < 4 ? UI.text : UI.dim;
+          hctx.fillRect(cx - (w >> 1), cy + k, (w >> 1) * 2 + 1, 1);
+        }
+      }, UI.text);
+      dots(col(1), rowT, 2, mapHeadingUp ? 1 : 0, UI.edge);
+    }
+    // M3 — the seat you drive from: a WINDSCREEN for the cab, the truck from
+    // behind for chase.
     povRect = { x: col(2), y: rowT, w: CW, h: CH };
-    lampCell(col(2), rowT, ICON.car, UI.edge, lastPov === 'cab');
+    {
+      const cab = lastPov === 'cab';
+      corners(col(2), rowT, CW, CH, cab ? UI.edge : UI.dim);
+      if (cab) {
+        const cx = col(2) + (CW >> 1), cy = rowT + 3;
+        inked((c) => {
+          hctx.fillStyle = c;
+          hctx.fillRect(cx - 4, cy, 9, 1);              // roof line
+          hctx.fillRect(cx - 5, cy + 6, 11, 1);         // dash
+          for (let k = 0; k <= 6; k++) {                // pillars, splayed
+            hctx.fillRect(cx - 4 - (k >> 2), cy + k, 1, 1);
+            hctx.fillRect(cx + 4 + (k >> 2), cy + k, 1, 1);
+          }
+          hctx.fillRect(cx - 1, cy + 7, 3, 1);          // the wheel's hub
+        }, UI.edge);
+      } else hudIconEdge(ICON.truck, col(2) + ((CW - 8) >> 1), rowT + 3, UI.dim, 8);
+      dots(col(2), rowT, 2, cab ? 1 : 0, UI.edge);
+    }
+    // M7 — THE KEY. Lit while T8/T9 are on the glass; gold when they are hidden
+    // but a view or overlay is still in force, so a hidden key cannot hide
+    // the fact that the world is false-coloured.
+    {
+      keyRect = { x: col(3), y: rowT, w: CW, h: CH };
+      const busy = CHART_LAYERS.some((l) => l.kind !== 'vector' && layerIsOn(l.id));
+      const kc = keyShown ? UI.edge : busy ? UI.gold : UI.dim;
+      corners(col(3), rowT, CW, CH, kc);
+      const cx = col(3) + (CW >> 1), cy = rowT + 4;
+      for (let k = 0; k < 3; k++) {
+        const y = cy + k * 3;
+        hctx.fillStyle = UI.ink;
+        hctx.fillRect(cx - 5, y - 1, 11, 4);
+        hctx.fillStyle = kc;
+        hctx.fillRect(cx - 2, y, 5, 1);
+        hctx.fillRect(cx - 4, y + 1, 9, 1);
+      }
+      dots(col(3), rowT, 2, keyShown ? 1 : 0, kc === UI.dim ? UI.edge : kc);
+    }
     // The drone's satellites live INSIDE its own cell: charge as a sliver
     // under the glyph (the audit's finding 10), height above the grid while
     // there is something to fly.
@@ -56398,6 +57840,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       autoRect = { x: col(0), y: rowB, w: CW, h: CH };
       corners(col(0), rowB, CW, CH, auto.on ? UI.gold : UI.dim);
       textEdgeS('AUTO', col(0) + cCol('AUTO'), rowB + 6, auto.on ? UI.gold : UI.dim);
+      dots(col(0), rowB, 2, auto.on ? 1 : 0, UI.gold);
     } else {
       autoRect.w = 0;
       corners(col(0), rowB, CW, CH, UI.faint);
@@ -56411,6 +57854,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       rewindRect = { x: col(1), y: rowB, w: CW, h: CH };
       const rcol = held || rewindPaused ? UI.gold : UI.dim;
       corners(col(1), rowB, CW, CH, rcol);
+      dots(col(1), rowB, 2, rewindPaused ? 1 : 0, UI.gold);
       const edged = (x: number, y: number, w2: number, h2: number): void => {
         hctx.fillStyle = UI.ink; hctx.fillRect(x - 1, y - 1, w2 + 2, h2 + 2);
       };
@@ -56424,18 +57868,6 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         hctx.fillStyle = rcol;
         hctx.fillRect(px2, py2, 2, 7); hctx.fillRect(px2 + 4, py2, 2, 7);
       }
-      if (held) {
-        const have = Math.max(1, rewindHave());
-        const track = 46;
-        const fill = Math.round(((rewind.at ?? 0) / have) * track);
-        const tx = col(1) + ((CW - 3) >> 1);
-        edged(tx, rowT - 5 - track, 3, track);
-        hctx.fillStyle = UI.dim;
-        hctx.fillRect(tx + 1, rowT - 5 - track, 1, track);
-        hctx.fillStyle = UI.gold;
-        hctx.fillRect(tx, rowT - 5 - fill, 3, Math.max(1, fill));
-        textEdgeS(`-${rewind.secs.toFixed(0)}S`, tx + 6, rowT - 5 - fill, UI.gold);
-      }
     }
     // WPT: amber when the pins are on, in any mode — the mode itself is
     // announced by the flash when it cycles (spec drops the persistent mode
@@ -56443,6 +57875,10 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     poiRect = { x: col(2), y: rowB, w: CW, h: CH };
     corners(col(2), rowB, CW, CH, poiVis === 0 ? UI.dim : UI.gold);
     textEdgeS('WPT', col(2) + cCol('WPT'), rowB + 6, poiVis === 0 ? UI.dim : UI.gold);
+    dots(col(2), rowB, POI_MODES.length, poiVis, UI.gold);
+    // M8 — held for a future control. Faint corners, no glyph, no action.
+    spareRect = { x: col(3), y: rowB, w: CW, h: CH };
+    corners(col(3), rowB, CW, CH, UI.faint);
     // ── the status line, above the grid ──
     // The one question you have while the truck drives itself is whether it
     // has seen the corner; the answer rides one micro row above the matrix.
@@ -56484,9 +57920,19 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // the road under the wheels is not what the frame is about, and the one
       // layer the chart draws had nothing to say for itself while it streamed.
       // It yields the line back the moment the ring is home.
-      const line = camMode === 'top' && ws.map ? ws.map
-        : w ? (w.on ? w.name.toUpperCase() : `NEAR ${w.name.toUpperCase()}`)
-          : ws.hud;
+      // THE ROAD, THE NEAR ROAD, OR THE NEAREST PLACE. What the world is still
+      // streaming is the STREAM layer's to say now (see drawStreamHeader); this
+      // line only answers "where am I". The severe states above still take it.
+      let line = w ? (w.on ? w.name.toUpperCase() : `NEAR ${w.name.toUpperCase()}`) : '';
+      if (!line) {
+        let best: Poi | null = null, bd = Infinity;
+        for (const p of pois.values()) {
+          if (p.kind === 'rig' || p.kind === 'drone') continue;
+          const d = Math.hypot(p.x - state.x, p.z - state.z);
+          if (d < bd) { bd = d; best = p; }
+        }
+        if (best) line = `${best.name.toUpperCase()} ${bd < 950 ? `${Math.round(bd / 10) * 10}M` : `${(bd / 1000).toFixed(1)}KM`}`;
+      }
       // The survey tally rides on the way line and takes its room first, so the
       // road name is what gets clipped. A count you cannot read is worse than a
       // name you can only half read.
@@ -56762,7 +58208,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         bracket(band.sharp * chartBandScale, HW - 18, col);
         hctx.fillRect(HW - 19, mid, 5, 1);
       };
-      slider(chartTiltRect, 'TILT', `${Math.round(chartTiltDeg)} DEG`,
+      // The scrub rail owns the left edge while M5 holds the world.
+      if (scrubOpen()) chartTiltRect.w = 0;
+      else slider(chartTiltRect, 'TILT', `${Math.round(chartTiltDeg)} DEG`,
         (chartTiltDeg - CHART_TILT_MIN) / (CHART_TILT_MAX - CHART_TILT_MIN),
         1, chartLensDrag?.kind === 'tilt' ? UI.text : UI.edge);
       const activeBand = dofMode === 'miniature' && tiltMode !== 'off';
@@ -56788,7 +58236,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // so an absent WET/FOG never leaves a hole between the group and its
       // anchor (photographed: an 80px gap where two empty slots used to be).
       // Candles here are FORECASTS — see the gauge's own note.
-      {
+      // (Stood down while the scrub rail owns the left edge.)
+      if (!scrubOpen()) {
         const ahx = state.x + Math.sin(state.heading) * 500;
         const ahz = state.z - Math.cos(state.heading) * 500;
         const wa = wxAt(wxField, ahx, ahz);
@@ -56821,6 +58270,29 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       }
     }
   }
+  // ── THE SCRUB RAIL, on the left edge while M5 holds the world ──
+  // Bottom is now, top is as far back as the ring reaches; the gold run is how
+  // far back the truck is seated, a tick every ten seconds.
+  if (scrubOpen()) {
+    const have = Math.max(1, rewindHave());
+    const top = Math.round(HH * 0.3), bot = Math.round(HH * 0.72);
+    const x = 5;
+    scrubRect = { x: 0, y: top, w: 16, h: bot - top };
+    textEdgeS('REWIND', 1, top - 16, UI.gold);
+    textEdgeS(`-${rewind.secs.toFixed(0)}S`, 1, top - 8, UI.dim);
+    hctx.fillStyle = UI.ink; hctx.fillRect(x - 1, top - 1, 3, bot - top + 3);
+    hctx.fillStyle = 'rgba(114,189,178,0.35)'; hctx.fillRect(x, top, 1, bot - top + 1);
+    const span = rewindSecs(have);
+    for (let t = 0; t <= span; t += 10) {
+      const y = Math.round(bot - (t / span) * (bot - top));
+      hctx.fillRect(x, y, t % 60 === 0 ? 5 : 3, 1);
+    }
+    const hy = Math.round(bot - ((rewind.at ?? 0) / have) * (bot - top));
+    hctx.fillStyle = UI.gold;
+    hctx.fillRect(x, hy, 1, bot - hy + 1);
+    hctx.fillRect(x - 1, hy - 1, 8, 3);
+    for (let c = 0; c < 3; c++) hctx.fillRect(1 + c, hy - (2 - c), 1, 5 - 2 * c);
+  } else scrubRect = { x: 0, y: 0, w: 0, h: 0 };
   // The mission card and the survey-claim toast are DOM now (client/
   // overlays.ts, fed from stepOverlays below) — they behave like UI, not like
   // instruments, and they were the last text on this canvas that wanted real
@@ -56933,6 +58405,9 @@ function stepOverlays(): void {
  *  SETTINGS' own HIDE HUD is `setClean`, which hides the DOM controls and
  *  leaves this canvas exactly where it was. */
 let hudOn = true;
+/** The WORLD LAB has the chrome off — not the player's HIDE HUD. The two
+ *  wear one `.clean` class and want opposite things of the HUD canvas. */
+let labChrome = false;
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
 let povRect = { x: 0, y: 0, w: 0, h: 0 };
 let droneRect = { x: 0, y: 0, w: 0, h: 0 };
@@ -57069,7 +58544,7 @@ function setClean(on: boolean): void {
   headlightCasts: headSpot.castShadow, headShadowOn, maskPatched: shadowMaskPatched,
 });
 (window as unknown as { __hudrects?: object }).__hudrects = (): object =>
-  ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect });
+  ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect, key: keyRect, spare: spareRect, s: hudS });
 (window as unknown as { __hudscale?: object }).__hudscale = (): number => hudS;
 /** THE SKY THE DOCK WAS ACTUALLY DRAWN UNDER. `gap` is the whole question: the
  *  dome is a shell hung around ONE eye, so at the dock's render it must be on
@@ -57253,6 +58728,10 @@ function setClean(on: boolean): void {
   sinceAskMs: ovAskedAt ? Math.round(performance.now() - ovAskedAt) : null,
   waitMs: OV_WAIT_MS, top: camMode === 'top', word: worldStatus().map,
   labels: [...ovLabelsDrawn],
+  // The ten nearest place records, with their rank: what the seat's PLACES
+  // pass has to choose from.
+  nearPlaces: [...ovPlaces.values()].map((p) => ({ name: p.name, rank: p.rank, x: Math.round(p.x), z: Math.round(p.z), km: +(Math.hypot(p.x - state.x, p.z - state.z) / 1000).toFixed(1) }))
+    .sort((a, b) => a.km - b.km).slice(0, 10),
   // Which asked tiles have no mesh, and the two reasons a tile can be one:
   // it failed (and waits out OV_RETRY_MS) or it landed without heights.
   missing: [...ovTiles].filter((k) => !ovMeshes.has(k) && !ovEmpty.has(k)),
@@ -57462,35 +58941,63 @@ function rewindDown(e: PointerEvent): boolean {
   return true;
 }
 function rewindMove(e: PointerEvent): boolean {
-  if (rewindDrag?.id !== e.pointerId) return false;
-  // Upward drag scrubs — y0 minus clientY, since the tab sits at the bottom.
-  const dy = (rewindDrag.y0 - e.clientY) / hudS;
-  if (!rewindDrag.moved) {
-    if (Math.abs(dy) < REWIND_SLOP) return true;
-    rewindDrag.moved = true;
-    rewindBegin();
-  }
-  rewindShow(Math.max(0, (dy - REWIND_SLOP) / REWIND_PX));
+  // The cell no longer scrubs by dragging in place — the rail does (see
+  // scrubDown). A finger that wanders off the cell is still just a tap.
+  return rewindDrag?.id === e.pointerId;
+}
+/**
+ * ── THE SCRUB RAIL ── while M5 holds the world, a rail on the left edge is
+ * the last two minutes of driving: the bottom is now, the top is as far back
+ * as the ring reaches. A finger on it seats the truck on that checkpoint; the
+ * world stays held, so what you rewound to can be looked at. M5 again (now
+ * PLAY) takes it — or, if nothing was scrubbed, simply runs on.
+ */
+let scrubRect = { x: 0, y: 0, w: 0, h: 0 };
+let scrubDrag: number | null = null;
+const scrubOpen = (): boolean => rewindPaused && rewind.home !== null;
+function scrubAt(clientY: number): void {
+  const y = clientY / hudS;
+  const f = clamp((scrubRect.y + scrubRect.h - y) / Math.max(1, scrubRect.h), 0, 1);
+  rewindShow(f * rewindHave());
+}
+function scrubDown(e: PointerEvent): boolean {
+  if (!scrubOpen() || scrubRect.w === 0) return false;
+  const x = e.clientX / hudS, y = e.clientY / hudS;
+  if (x > scrubRect.x + scrubRect.w + 10 || y < scrubRect.y - 12 || y > scrubRect.y + scrubRect.h + 12) return false;
+  scrubDrag = e.pointerId;
+  scrubAt(e.clientY);
+  return true;
+}
+function scrubMove(e: PointerEvent): boolean {
+  if (scrubDrag !== e.pointerId) return false;
+  scrubAt(e.clientY);
+  return true;
+}
+function scrubUp(e: PointerEvent): boolean {
+  if (scrubDrag !== e.pointerId) return false;
+  scrubDrag = null;
   return true;
 }
 function rewindUp(e: PointerEvent): boolean {
   if (rewindDrag?.id !== e.pointerId) return false;
   const drag = rewindDrag;
   rewindDrag = null;
-  // A TAP IS THE TRANSPORT. Stop the world where it stands, or let it go
-  // again — the same button, because a tape deck's is.
-  if (!drag.moved) {
-    rewindPaused = !rewindPaused;
+  void drag;
+  // A TAP IS THE TRANSPORT. PAUSE holds the world and opens the scrub rail;
+  // PLAY lets it go, taking whatever the rail was moved to. Back at "now" is
+  // a cancel, not a zero-second rewind — nothing to truncate.
+  if (!rewindPaused) {
+    rewindPaused = true;
+    if (rewindReady()) rewindBegin();
     audio.stone();
-    hudFlash(rewindPaused ? 'HOLD' : 'RUNNING');
-    return true;
+    hudFlash(rewind.home ? 'HOLD · SCRUB THE LEFT RAIL' : 'HOLD');
+  } else {
+    if (rewind.home) { if ((rewind.at ?? 0) < 1) rewindCancel(); else rewindCommit(); }
+    rewindPaused = false;
+    scrubDrag = null;
+    audio.stone();
+    hudFlash('RUNNING');
   }
-  // Back at the top is a cancel, not a zero-second rewind — there is nothing
-  // to truncate and the truck goes back exactly where it was.
-  if ((rewind.at ?? 0) < 1) rewindCancel(); else rewindCommit();
-  // A scrub that landed somewhere leaves the world HELD there, so you can look
-  // at what you rewound to before committing to driving out of it. Tap to go.
-  if (!rewindPaused) { rewindPaused = true; hudFlash('HOLD'); }
   return true;
 }
 let clockDrag: { id: number; x0: number; s0: number; moved: boolean } | null = null;
@@ -57547,6 +59054,8 @@ function hudTap(cx: number, cy: number): boolean {
   if (inside(droneRect, 2)) { droneToggle(); return true; }
   if (inside(mapUpRect, 2)) { toggleMapUp(); return true; }
   if (inside(povRect, 2)) { togglePov(); return true; }
+  if (inside(keyRect, 2)) { setKeyShown(!keyShown); hudFlash(keyShown ? 'KEY ON' : 'KEY OFF'); return true; }
+  if (inside(spareRect, 2)) return true;
   if (inside(dockRect, 0)) { toggleCam(); return true; }
   // WHAT MAY EAT A TAP.
   //
@@ -57591,7 +59100,14 @@ function hudTap(cx: number, cy: number): boolean {
 // itself). Declared last: every element it references must already exist.
 {
   const st = document.createElement('style');
-  st.textContent = 'body.clean .ui { display: none !important; }';
+  // …except the HUD CANVAS while the world lab owns the screen. `.clean` is
+  // the player's HIDE HUD and the lab's chrome-off state wearing one class,
+  // and they want opposite things of this surface: the player asked for the
+  // instruments to go, the lab asked for the game's DOM to go and still has
+  // to draw its brush on something. `setChrome` marks the canvas; nothing
+  // else does, so HIDE HUD is untouched.
+  st.textContent = 'body.clean .ui { display: none !important; }'
+    + 'body.clean canvas.lab { display: block !important; }';
   document.head.appendChild(st);
   for (const el of [mini, stickBase, stickNub]) el.classList.add('ui');
   const clean = (): boolean => document.body.classList.contains('clean');
@@ -58618,9 +60134,65 @@ let toastT = 0;
  * exists to remove. These are the same live objects the game is drawing with,
  * not copies.
  */
+/**
+ * THE HEIGHT RASTER CHANGED UNDER A BUILT TILE — by the lab's brush or by an
+ * authored entry landing after the tile did. The same fan-out either way:
+ * re-mirror the raster to the worker, expire the ocean masks and normal
+ * caches that read it, rebuild the tile and its four neighbours, and let the
+ * ground scatter re-seat.
+ */
+function demTilesChanged(tileKeys: string[]): void {
+  if (!tileKeys.length) return;
+  const dirty = new Set<string>();
+  const expireNormal = (key: string): void => {
+    const normal = terrainNormals.get(key);
+    if (normal) terrainNormalInputs.delete(normal);
+  };
+  const expireOceanAt = (tile: HeightTile): void => {
+    for (const [coverKey, cover] of coverTiles) {
+      if (cover.xs > tile.xs + tile.w || cover.zs > tile.zs + tile.h
+        || cover.xs + cover.w < tile.xs || cover.zs + cover.h < tile.zs) continue;
+      oceanMasks.delete(coverKey);
+      const [cx, cy] = coverKey.split('/').map(Number);
+      for (const neighbour of [`${cx - 1}/${cy}`, `${cx + 1}/${cy}`, `${cx}/${cy - 1}`, `${cx}/${cy + 1}`]) oceanMasks.delete(neighbour);
+    }
+  };
+  for (const key of tileKeys) {
+    const tile = heightTiles.get(key);
+    if (!tile) continue;
+    tworker?.remirrorHeight(key, tile);
+    expireOceanAt(tile);
+    if (hydroRev.has(key)) hydroDirty.add(key);
+    const [tx, ty] = key.split('/').map(Number);
+    for (const candidate of [key, `${tx - 1}/${ty}`, `${tx + 1}/${ty}`, `${tx}/${ty - 1}`, `${tx}/${ty + 1}`]) {
+      dirty.add(candidate);
+      expireNormal(candidate);
+    }
+  }
+  for (const key of dirty) markTerrainDirty(key, 'author-dem');
+  vegAt = 0;
+  swardAt = 0;
+  swardGroundSeen = Number.MIN_SAFE_INTEGER;
+  swardFieldAt = 0;
+}
 if (embeddedLab(location.pathname)?.slug === 'world-edit') {
   const coverEditor = new RasterPaintSession();
   const demEditor = new DemPaintSession();
+  /**
+   * THE BRUSH'S WORK AS AN AUTHORED ENTRY. Every cell the session has moved
+   * from what the raster delivered, as `[lat, lon, metres]`, filed through
+   * the store under the z16 tile each cell falls in (`dry` only lists). This
+   * is how a stack stops being a drum: shaped here, banked there, and written
+   * back into the raster for everyone as their tile arrives.
+   */
+  (window as unknown as { __authoredDem?: object }).__authoredDem = async (opts: { dry?: boolean } = {}): Promise<object> => {
+    const out: Record<string, unknown> = {};
+    for (const [key, edits] of rasterEntries(demEditor.edits())) {
+      const [x, y] = key.split('/').map(Number);
+      out[`${TERRAIN_Z}/${key}`] = await authoredBankCells('dem', x, y, edits, opts.dry !== false);
+    }
+    return out;
+  };
   const editableCoverTiles = (): EditableRasterTile[] =>
     [...coverTiles].map(([key, tile]) => ({
       key,
@@ -58690,11 +60262,85 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     swardGroundSeen = Number.MIN_SAFE_INTEGER;
     swardFieldAt = 0;
   };
+  /**
+   * ── WHAT A BRUSH HAS CHANGED AND THE WORLD HAS NOT YET DRAWN ──
+   *
+   * A painted byte is in the array the instant a finger moves; the PICTURE is
+   * a terrain rebuild away, and on a phone that is a second or two in which
+   * the lab appears to have done nothing. So the cells themselves are drawn,
+   * from the moment they change until every terrain tile they stand on is out
+   * of `terrainDirty`, and then faded — the road layer's own pending/settled
+   * rule, applied to a raster.
+   *
+   * ONE STROKE'S TRAIL, CAPPED, AND THINNED BY A STRIDE RATHER THAN CUT. The
+   * next stroke's rebuild queues behind this one anyway, and an unbounded
+   * trail is an unbounded per-frame projection; a budget that truncates would
+   * leave the far half of a long stroke unmarked, which is the fault the
+   * bank's own break lines already record from the other side.
+   */
+  const PREVIEW_CELL_CAP = 600;
+  type CellTrail = { cells: CellRect[]; dirty: Set<string>; settledAt: number };
+  const cellTrails = new Map<string, CellTrail>();
+  const thinCells = (cells: readonly CellRect[]): CellRect[] => {
+    const stride = Math.max(1, Math.ceil(cells.length / PREVIEW_CELL_CAP));
+    const out: CellRect[] = [];
+    for (let i = 0; i < cells.length; i += stride) out.push(cells[i]);
+    return out;
+  };
+  /** The z14 terrain keys a set of cells stands on. A COVER cell is a z12
+   *  texel and the rebuild that makes it visible is a z14 tile's, so the
+   *  tile keys the edit reports are not the keys to watch. */
+  const terrainKeysOf = (cells: readonly CellRect[]): Set<string> => {
+    const keys = new Set<string>();
+    for (const cell of cells) {
+      for (const [dx, dz] of [[-.5, -.5], [.5, -.5], [-.5, .5], [.5, .5]] as const) {
+        const [tx, ty] = tileAt(
+          origin.lat - (cell.z + dz * cell.h) / M_LAT,
+          origin.lon + (cell.x + dx * cell.w) / origin.mLon,
+          TERRAIN_Z,
+        );
+        keys.add(`${tx}/${ty}`);
+      }
+    }
+    return keys;
+  };
+  const noteCells = (id: string, cells: readonly CellRect[] | undefined): void => {
+    if (!cells?.length) return;
+    cellTrails.set(id, { cells: thinCells(cells), dirty: terrainKeysOf(cells), settledAt: 0 });
+  };
+  const cellPreviews = (id: string, live: readonly CellRect[]): AuthoringPreview[] => {
+    const out: AuthoringPreview[] = [];
+    const push = (cells: readonly CellRect[], state: AuthoringPreview['state']): void => {
+      if (!cells.length) return;
+      out.push({
+        kind: 'cells',
+        points: cells.map((cell) => ({ x: cell.x, z: cell.z })),
+        radiusM: 0,
+        state,
+        cellW: cells[0].w,
+        cellH: cells[0].h,
+      });
+    };
+    const trail = cellTrails.get(id);
+    if (trail) {
+      const now = performance.now();
+      if (!trail.settledAt && [...trail.dirty].every((key) => !terrainDirty.has(key))) {
+        trail.settledAt = now;
+      }
+      if (trail.settledAt && now - trail.settledAt > 900) cellTrails.delete(id);
+      else push(trail.cells, trail.settledAt ? 'settled' : 'pending');
+    }
+    // The stroke in flight draws OVER its own trail: the same ground at a
+    // different state is the truth, and the draft is the one the eye follows.
+    if (live.length) push(thinCells(live), 'draft');
+    return out;
+  };
   const applyCover = (
-    operation: () => { changed: number; tileKeys: string[] },
+    operation: () => { changed: number; tileKeys: string[]; cells?: CellRect[] },
   ): { changed: number; tileKeys: string[] } => {
     const result = operation();
     invalidateCoverEdits(result);
+    noteCells('cover', result.cells);
     return result;
   };
   /**
@@ -58702,55 +60348,33 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
    * mirrored copy, the normal cache keys by array identity, hydro has already
    * sampled this floor, and vegetation has already been draped over it.
    */
-  const invalidateDemEdits = (result: { tileKeys: string[] }): void => {
-    if (!result.tileKeys.length) return;
-    const dirty = new Set<string>();
-    const expireNormal = (key: string): void => {
-      const normal = terrainNormals.get(key);
-      // Keep the live material's texture valid until its replacement lands;
-      // deleting the cache input makes terrainNormalFor dispose and rebuild it
-      // atomically in terrainMatFor.
-      if (normal) terrainNormalInputs.delete(normal);
-    };
-    const expireOceanAt = (tile: HeightTile): void => {
-      for (const [coverKey, cover] of coverTiles) {
-        if (cover.xs > tile.xs + tile.w || cover.zs > tile.zs + tile.h
-          || cover.xs + cover.w < tile.xs || cover.zs + cover.h < tile.zs) continue;
-        oceanMasks.delete(coverKey);
-        const [cx, cy] = coverKey.split('/').map(Number);
-        for (const neighbour of [
-          `${cx - 1}/${cy}`, `${cx + 1}/${cy}`, `${cx}/${cy - 1}`, `${cx}/${cy + 1}`,
-        ]) oceanMasks.delete(neighbour);
-      }
-    };
-    for (const key of result.tileKeys) {
-      const tile = heightTiles.get(key);
-      if (!tile) continue;
-      tworker?.remirrorHeight(key, tile);
-      expireOceanAt(tile);
-      if (hydroRev.has(key)) hydroDirty.add(key);
-      const [tx, ty] = key.split('/').map(Number);
-      for (const candidate of [
-        key,
-        `${tx - 1}/${ty}`, `${tx + 1}/${ty}`,
-        `${tx}/${ty - 1}`, `${tx}/${ty + 1}`,
-      ]) {
-        dirty.add(candidate);
-        expireNormal(candidate);
-      }
-    }
-    for (const key of dirty) markTerrainDirty(key, 'author-dem');
-    vegAt = 0;
-    swardAt = 0;
-    swardGroundSeen = Number.MIN_SAFE_INTEGER;
-    swardFieldAt = 0;
-  };
+  const invalidateDemEdits = (result: { tileKeys: string[] }): void => demTilesChanged(result.tileKeys);
   const applyDem = (
-    operation: () => { changed: number; tileKeys: string[] },
+    operation: () => { changed: number; tileKeys: string[]; cells?: CellRect[] },
   ): { changed: number; tileKeys: string[] } => {
     const result = operation();
     invalidateDemEdits(result);
+    noteCells('dem', result.cells);
     return result;
+  };
+  const coverPreviewColour: Record<number, string> = {
+    [COVER.tree]: '#4f9f54',
+    [COVER.shrub]: '#7f9d47',
+    [COVER.grass]: '#a6bd59',
+    [COVER.crop]: '#d4bd68',
+    [COVER.built]: '#aaa29a',
+    [COVER.bare]: '#c58c68',
+    [COVER.snow]: '#dce9e8',
+    [COVER.water]: '#438eb6',
+    [COVER.wetland]: '#4f8f78',
+    [COVER.mangrove]: '#34705a',
+    [COVER.moss]: '#8c9b72',
+  };
+  const demPreviewColour: Record<string, string> = {
+    raise: '#ed9a55',
+    lower: '#4c9bc1',
+    flatten: '#e0bb5d',
+    smooth: '#72c9bd',
   };
   const coverLayer: AuthoringLayer = {
     id: 'cover',
@@ -58771,7 +60395,13 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       { value: String(COVER.mangrove), label: `${COVER.mangrove} · MANGROVE` },
       { value: String(COVER.moss), label: `${COVER.moss} · TUNDRA` },
     ],
-    beginGesture: (at, radius, value) => {
+    // A THUMB HAS TO BE ABLE TO HIT A STOP. The fallback this replaces was
+    // 0–240 at 5 (49 stops) on a slider buried in the sheet; 0–200 at 5 is
+    // 41, about five pixels a stop on the bar's own strip, and 0 is still
+    // the single texel under the cursor.
+    radius: { label: 'RADIUS', min: 0, max: 200, step: 5, value: 40, unit: 'm' },
+    strength: { label: 'FILL', min: 10, max: 100, step: 10, value: 100, unit: '%' },
+    beginGesture: (at, radius, value, strength) => {
       coverEditor.beginStroke();
       return applyCover(() => coverEditor.paint(
         editableCoverTiles(),
@@ -58779,24 +60409,32 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
         at.z,
         radius,
         COVER_CLASSES.includes(Number(value)) && Number(value) !== 0 ? Number(value) : COVER.grass,
+        strength / 100,
       ));
     },
-    updateGesture: (at, radius, value) => applyCover(() => coverEditor.paint(
+    updateGesture: (at, radius, value, strength) => applyCover(() => coverEditor.paint(
       editableCoverTiles(),
       at.x,
       at.z,
       radius,
       COVER_CLASSES.includes(Number(value)) && Number(value) !== 0 ? Number(value) : COVER.grass,
+      strength / 100,
     )),
     endGesture: () => {
-      coverEditor.endStroke();
+      // The stroke's own cells become the trail. `changed` stays 0: every
+      // one of them was already counted as it was painted.
+      noteCells('cover', coverEditor.endStroke().cells);
       return { changed: 0, tileKeys: [] };
     },
     cancelGesture: () => { coverEditor.endStroke(); },
-    previews: (cursor, radiusM) => cursor ? [{
-      kind: 'cursor', points: [cursor], radiusM, state: 'cursor',
-    }] : [],
+    previews: (cursor, radiusM) => [
+      ...(cursor ? [{ kind: 'cursor' as const, points: [cursor], radiusM, state: 'cursor' as const }] : []),
+      ...cellPreviews('cover', coverEditor.strokeCells()),
+    ],
+    previewColour: (value) => coverPreviewColour[Number(value)] ?? '#75d9d0',
+    previewOpacity: (_value, strength) => .25 + .75 * Math.max(0, Math.min(1, strength / 100)),
     undo: () => applyCover(() => coverEditor.undo()),
+    redo: () => applyCover(() => coverEditor.redo()),
     reset: () => applyCover(() => coverEditor.reset()),
     setDataView: (on) => setGroundView(on ? 'cover' : baseGroundView),
     report: () => ({
@@ -58821,7 +60459,13 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       { value: 'flatten', label: 'FLATTEN' },
       { value: 'smooth', label: 'SMOOTH' },
     ],
-    strength: { label: 'AMOUNT', min: .05, max: 10, step: .05, value: 1, unit: 'm' },
+    // A z14 texel is about 9.5 m, so a brush finer than that sculpts one
+    // cell; 120 m at 4 is 31 stops a thumb can land on.
+    radius: { label: 'RADIUS', min: 0, max: 120, step: 4, value: 32, unit: 'm' },
+    // 0.05 m to 10 at 0.05 is 199 stops — unreachable on any slider, and a
+    // five-centimetre height nudge is under what the mesh can show. 0.25 to
+    // 8 at 0.25 is 32, and the finest step is a quarter of a metre.
+    strength: { label: 'AMOUNT', min: .25, max: 8, step: .25, value: 1, unit: 'm' },
     beginGesture: (at, radius, value, strength) => {
       demEditor.beginStroke(
         (['raise', 'lower', 'flatten', 'smooth'].includes(value) ? value : 'raise') as DemBrush);
@@ -58830,14 +60474,17 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     updateGesture: (at, radius, _value, strength) => applyDem(() =>
       demEditor.paint(editableDemTiles(), at.x, at.z, radius, strength)),
     endGesture: () => {
-      demEditor.endStroke();
+      noteCells('dem', demEditor.endStroke().cells);
       return { changed: 0, tileKeys: [] };
     },
     cancelGesture: () => { demEditor.endStroke(); },
-    previews: (cursor, radiusM) => cursor ? [{
-      kind: 'cursor', points: [cursor], radiusM, state: 'cursor',
-    }] : [],
+    previews: (cursor, radiusM) => [
+      ...(cursor ? [{ kind: 'cursor' as const, points: [cursor], radiusM, state: 'cursor' as const }] : []),
+      ...cellPreviews('dem', demEditor.strokeCells()),
+    ],
+    previewColour: (value) => demPreviewColour[value] ?? '#75d9d0',
     undo: () => applyDem(() => demEditor.undo()),
+    redo: () => applyDem(() => demEditor.redo()),
     reset: () => applyDem(() => demEditor.reset()),
     setDataView: (on) => {
       if (on) fitDemView();
@@ -58865,7 +60512,7 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
   const roadStates = new Map<string, AuthoredRoadState>();
   const roadStorageKey = `drive.world-authoring.roads.v1:${origin.lat.toFixed(5)},${origin.lon.toFixed(5)}`;
   const saveRoads = (): void => {
-    try { localStorage.setItem(roadStorageKey, JSON.stringify(roadEditor.snapshot())); } catch { /* quota/private mode */ }
+    try { localStorage.setItem(roadStorageKey, JSON.stringify(roadEditor.save())); } catch { /* quota/private mode */ }
   };
   const roadId = (id: string): number => {
     let hash = 2166136261;
@@ -59015,6 +60662,17 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
       }
       return result;
     },
+    // REDO NEEDS NO RELOAD, and the asymmetry is the whole reason the undo
+    // has one: taking a built road out of the world is the edit this lab
+    // cannot do in place, and putting one in is the thing it does best.
+    redo: () => {
+      const result = roadEditor.redo();
+      if (result.feature) {
+        saveRoads();
+        void buildAuthoredRoad(result.feature);
+      }
+      return result;
+    },
     reset: () => {
       const result = roadEditor.reset();
       if (result.changed) {
@@ -59045,6 +60703,46 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     const restored = roadEditor.load(JSON.parse(localStorage.getItem(roadStorageKey) ?? '[]'));
     for (const feature of restored) void buildAuthoredRoad(feature);
   } catch { /* malformed or unavailable local storage starts empty */ }
+  /** The brush's cells as a `dems` entry, or the lab's roads as `ways`. */
+  /** A raster session's edits grouped by the tile they are cells of — the
+   *  tile's own `x/y` key IS the store key on that layer's grid. */
+  const rasterEntries = (edits: Array<{ tile: { key: string }; index: number; after: number }>): Map<string, Map<number, number>> => {
+    const byTile = new Map<string, Map<number, number>>();
+    for (const e of edits) {
+      let m = byTile.get(e.tile.key);
+      if (!m) byTile.set(e.tile.key, (m = new Map()));
+      m.set(e.index, e.after);
+    }
+    return byTile;
+  };
+  const bankRaster = async (layer: 'cover' | 'dem', byTile: Map<string, Map<number, number>>, dry: boolean): Promise<string> => {
+    if (!byTile.size) return layer === 'dem' ? 'NOTHING SHAPED YET' : 'NOTHING PAINTED YET';
+    let cells = 0;
+    for (const [key, edits] of byTile) {
+      const [x, y] = key.split('/').map(Number);
+      const r = await authoredBankCells(layer, x, y, edits, dry);
+      if (!r.ok) return r.why ?? 'REFUSED';
+      cells += r.cells;
+    }
+    if (!dry) { authoredMemo.clear(); void loadAuthoredIndex(true); }
+    return `${dry ? 'WOULD BANK' : 'BANKED'} ${cells} CELLS IN ${byTile.size} ${layer.toUpperCase()} TILE${byTile.size === 1 ? '' : 'S'}`;
+  };
+  const bankLayer = async (layerId: string, dry: boolean): Promise<string> => {
+    if (layerId === 'dem') return bankRaster('dem', rasterEntries(demEditor.edits()), dry);
+    if (layerId === 'cover') return bankRaster('cover', rasterEntries(coverEditor.edits()), dry);
+    if (layerId === 'road') {
+      const ways = roadEditor.snapshot().filter((f) => f.points.length >= 2).map((f) => ({
+        tags: { highway: f.value, width: String(f.widthM), 'drive:authored': 'lab' },
+        pts: f.points.map(([x, z]) => [x, z] as [number, number]),
+      }));
+      if (!ways.length) return 'NO ROADS DRAWN YET';
+      const r = await authoredBank({ ways }, { dry }) as Record<string, { ok?: boolean; why?: string }>;
+      const tiles = Object.entries(r);
+      const bad = tiles.find(([, v]) => v.ok === false);
+      return bad ? (bad[1].why ?? 'REFUSED') : `${dry ? 'WOULD BANK' : 'BANKED'} ${ways.length} ROAD${ways.length === 1 ? '' : 'S'} IN ${tiles.length} TILE${tiles.length === 1 ? '' : 'S'}`;
+    }
+    return `NO STORE KIND FOR ${layerId.toUpperCase()}`;
+  };
   startWorldAuthoringLab({
     canvas,
     worldAt: (clientX, clientY) => chartToWorld(clientX, clientY),
@@ -59052,6 +60750,24 @@ if (embeddedLab(location.pathname)?.slug === 'world-edit') {
     setInputCaptured: setAuthoringInputCaptured,
     setPreviews: (previews) => { authoringPreviews = previews; },
     layers: [coverLayer, demLayer, roadLayer],
+    setChart: (on) => { if (on) { if (camMode !== 'top') setCam('top'); } else if (camMode === 'top') setCam(lastPov); },
+    isChart: () => camMode === 'top',
+    // The menu, the dock and the HUD's DOM off while the lab is up — NOT
+    // through setClean, which would remember the choice for the game.
+    setChrome: (on) => {
+      if (!on) menu.close();
+      document.body.classList.toggle('clean', !on);
+      // The lab's own paint overlay lives on this canvas — see the `.lab`
+      // rule beside the `.clean` one for why it is marked rather than
+      // exempted wholesale.
+      hud.classList.toggle('lab', !on);
+      labChrome = !on;
+      hudOn = on;
+      if (on) updateStickHome();
+    },
+    chartGrab: authoringChartGrab,
+    setPanning: setAuthoringPanning,
+    bank: bankLayer,
   });
 }
 (window as unknown as { __ctx?: object }).__ctx = {

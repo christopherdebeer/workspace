@@ -377,8 +377,14 @@ function serveWebAsset(path: string) {
  * an unclean answer is never banked in the first place.
  *
  *   v4: water relations
+ *   v5: mapped constructed areas — `amenity=parking` and `area=yes`
+ *       surfaces, which the client's constructed-ground painter reads. The
+ *       client's OSM_TILE_V was bumped to 5 with that painter and this side
+ *       was not: every `/~/osm/v5/` ask then 404'd at TILE_RE and every near
+ *       tile fell through to the client's own Overpass fallback — slow, and a
+ *       third party the whole fine layer then depends on. Bump BOTH, always.
  */
-const TILE_V = 4;
+const TILE_V = 5;
 const TILE_RE = new RegExp(`^/~/osm/v[2-${TILE_V}]/(\\d{1,2})/(\\d{1,7})/(\\d{1,7})$`);
 const COVER_RE = /^\/~\/cover\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // THREE upstreams, not one. Measured on a 12km corridor through Death Valley:
@@ -1482,6 +1488,8 @@ function overpassQuery(z: number, x: number, y: number): string {
   return `[out:json][timeout:15];(
       way["highway"](${bbox});
       way["building"](${bbox});
+      way["amenity"="parking"](${bbox});
+      way["area"="yes"]["surface"](${bbox});
       way["natural"~"water|coastline|cliff|scrub|wetland|bare_rock|sand"](${bbox});
       way["waterway"~"riverbank|river|stream|canal"](${bbox});
       relation["natural"="water"](${bbox});
@@ -1654,6 +1662,24 @@ async function putTile(
   }));
 }
 
+/** THE BANK'S FIRST READ PATH. `putTile` has written the S3 bank since the
+ *  namespace went live and nothing in this handler has ever read it back —
+ *  CloudFront reads it, on the way to us. `getTile` exists for one thing: a
+ *  fine tile whose CURRENT keyspace is cold while a previous keyspace holds
+ *  the same tile, on a day the mirrors cannot fill it. Absent, refused or
+ *  broken all answer null; the caller decides what a null costs. */
+async function getTile(path: string): Promise<Buffer | null> {
+  const bucket = process.env.CELL_PUBLIC_BUCKET;
+  if (!bucket) return null;
+  try {
+    // @ts-expect-error resolved at runtime by the Lambda image, not at build
+    const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const r = await new S3Client({}).send(new GetObjectCommand({ Bucket: bucket, Key: tileKey(path) }));
+    const bytes = await r.Body?.transformToByteArray?.();
+    return bytes && bytes.length ? Buffer.from(bytes) : null;
+  } catch { return null; }
+}
+
 async function serveTile(path: string, m: RegExpMatchArray) {
   const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
   // z14 is the floor now, not z1: the client has only ever asked at z16, and
@@ -1667,6 +1693,35 @@ async function serveTile(path: string, m: RegExpMatchArray) {
   try {
     ways = trimWays(await askOverpass(overpassQuery(z, x, y)));
   } catch (err) {
+    // THE PREVIOUS KEYSPACE STANDS IN, UNBANKED. A bump of TILE_V is a fresh
+    // bank, so on the day of one every near tile in the world is cold and its
+    // fill depends on Overpass answering inside the edge's window — which,
+    // measured the day v5 shipped, it did not, at all three mirrors, for
+    // hours. The tile the LAST keyspace banked is one S3 read away and is
+    // the same roads and buildings short of whatever the new keyspace was
+    // bumped to carry. So it is served — and served so that nothing keeps
+    // it: `no-store` so the edge does not bank it under the v5 path, no
+    // putTile for the same reason, and a header the client reads to keep it
+    // out of IndexedDB, so the next ask (next session, or the next pass
+    // through this tile) is a real v5 ask again. Descending, so v4 is tried
+    // before v3: each older keyspace is poorer than the one after it.
+    for (let v = TILE_V - 1; v >= 2; v--) {
+      const older = await getTile(`/~/osm/v${v}/${z}/${x}/${y}`);
+      if (!older) continue;
+      return {
+        statusCode: 200,
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'content-encoding': 'gzip',
+          'cache-control': 'no-store',
+          'x-drive-tile-stale': `v${v}`,
+          'access-control-allow-origin': '*',
+          'access-control-expose-headers': 'x-drive-tile-stale',
+        },
+        body: older.toString('base64'),
+        isBase64Encoded: true,
+      };
+    }
     // WRITE NOTHING. A 503 is retried; a stored failure is not.
     return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
       'retry-after': '5',
@@ -1801,7 +1856,17 @@ export interface StateTable {
   delRows(pk: string, sks: string[]): Promise<void>;
   setProfile(pk: string, p: { odo: number }): Promise<void>;
   putTape(pk: string, meta: TapeMeta): Promise<void>;
+  /** The authored store's index — every tile that carries an authored entry,
+   *  with the revision whose blob is current. One partition, read whole. */
+  authored(): Promise<AuthoredRow[]>;
+  putAuthored(row: AuthoredRow): Promise<void>;
 }
+/** One authored tile's INDEX row: which revision is current, how many ways
+ *  it holds and who banked it. The blob lives at
+ *  ~/authored/v1/<z>/<x>/<y>/<rev>, immutable like every object there. */
+export interface AuthoredRow { key: string; rev: number; n: number; by: string }
+const AUTHORED_PK = 'AUTHORED';
+const AUTHORED_SK = 'TILE#';
 const num = (v: unknown, cap = Number.MAX_SAFE_INTEGER): number => {
   const n = Math.round(Number(v));
   return Number.isFinite(n) && n > 0 ? Math.min(n, cap) : 0;
@@ -1899,6 +1964,33 @@ function liveTable(): StateTable {
       await batchPut([{ pk: S(pk), sk: S(TAPE_SK + meta.id),
         g: N(meta.secs), t: N(meta.steps), c: N(meta.at),
         la: { N: String(meta.lat) }, lo: { N: String(meta.lon) } }]);
+    },
+    async authored() {
+      const { m, db } = await client();
+      const out: AuthoredRow[] = [];
+      let startKey: Record<string, never> | undefined;
+      do {
+        const res = await db.send(new m.QueryCommand({
+          TableName: TABLE,
+          KeyConditionExpression: 'pk = :p',
+          ExpressionAttributeValues: { ':p': S(AUTHORED_PK) },
+          ...(startKey ? { ExclusiveStartKey: startKey } : {}),
+        })) as { Items?: Array<Record<string, { S?: string; N?: string }>>;
+          LastEvaluatedKey?: Record<string, never> };
+        for (const it of res.Items ?? []) {
+          const sk = it.sk?.S ?? '';
+          if (!sk.startsWith(AUTHORED_SK)) continue;
+          out.push({ key: sk.slice(AUTHORED_SK.length), rev: num(it.c?.N), n: num(it.g?.N), by: it.by?.S ?? '' });
+        }
+        startKey = res.LastEvaluatedKey;
+      } while (startKey);
+      return out;
+    },
+    async putAuthored(row) {
+      // The same three numeric columns as a tape row: c is the revision, g the
+      // way count; the banker's name rides as a string extra.
+      await batchPut([{ pk: S(AUTHORED_PK), sk: S(AUTHORED_SK + row.key),
+        c: N(row.rev), g: N(row.n), t: N(0), by: S(row.by) }]);
     },
     async setProfile(pk, p) {
       const { m, db } = await client();
@@ -2236,6 +2328,219 @@ export async function serveTape(
     { 'cache-control': 'no-store' });
 }
 
+/**
+ * ── THE AUTHORED STORE ──
+ *
+ * Hand-authored world on top of the raw map: a sea stack OSM does not carry,
+ * a cliff line the mapper stopped short of, a ruin that stood in the
+ * photograph. NOT a git fixture — the world lab already has those, and they
+ * replace the planet. This AUGMENTS it, per vector tile, from the same S3
+ * bank the tiles themselves come from, and the client merges an entry into
+ * the tile's own way list before `renderWays`, so an authored way is drawn by
+ * the machinery that draws a mapped one and needs no renderer of its own.
+ *
+ * THREE PARTS, AND WHY EACH IS WHERE IT IS.
+ *   The BLOB — `~/authored/v1/<z>/<x>/<y>/<rev>` — is immutable, because
+ *   everything under `~/` is edge-cached for a week as immutable and a path
+ *   that changed under the cache would serve last month's entry. So a
+ *   rewrite is a new revision at a new path, and the old object is an orphan
+ *   the way a pruned tape's is.
+ *   The INDEX — which tiles carry an entry and at which revision — is the
+ *   one mutable thing, so it lives in the cell's own table under a single
+ *   partition and is served by THIS route (`GET /authored`, outside `~/`),
+ *   cached a minute at most. One small read per session tells the client
+ *   which blobs exist, and it never asks the edge for one that does not, so
+ *   no per-tile 404 ever wakes this Lambda.
+ *   The GATE is `x-cell-caller`: the platform's own sharing model. A POST
+ *   arrives here only for the owner or a principal the cell is shared with
+ *   (`cells.call` → `authorizeAccess`); anyone else is refused a tier above.
+ *   There is no key of this game's own to leak — the drive cell IS the
+ *   grant, exactly as `/state` and `/tape` have it.
+ *
+ * WHAT AN ENTRY IS: OSM-shaped ways — `{ tags, geometry: [{lat, lon}] }` —
+ * under a z16 tile key, which is the client's own vector-tile zoom. Ids are
+ * assigned here, above any id the map will reach, stable per tile and slot,
+ * so a way filed under two tiles (it crosses the edge) carries one id and
+ * `renderWays`'s dedupe draws it once. An EMPTY list retracts the tile.
+ */
+const AUTHORED_OSM_Z = 16;   // tileReach is a WAYS check, so it is the osm layer's grid
+const AUTHORED_BODY_CAP = 2_000_000;
+const AUTHORED_WAYS_CAP = 500;
+const AUTHORED_PTS_CAP = 2000;
+const AUTHORED_ID_BASE = 2_000_000_000_000;
+export interface AuthoredWay { id: number; tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }
+/**
+ * ONE STORE, THREE LAYERS, EACH ON ITS BASE LAYER'S OWN GRID. An entry names
+ * the layer it amends and the tile of THAT layer's keyspace — `osm` at z16
+ * like `~/osm/v5`, `cover` at z12 like `~/cover/v1`, `dem` at z14 like
+ * `~/dem/v1` — and is banked at `~/authored/<layer>/v1/<z>/<x>/<y>/<rev>`,
+ * a revision suffix on the same path shape the base bank uses. So the lab
+ * edits whatever base layer it can see by the same key it loaded it under,
+ * and the client applies the overlay as that tile arrives, whichever layer
+ * it is.
+ *   `osm`: `ways` the map lacks, and a `patch` of tags onto the map's own
+ *     ways by id (a `height` on a stack the survey drew but could not
+ *     measure), so the authored layer carries one line where it would
+ *     otherwise duplicate a surveyed ring.
+ *   `cover`: `cells`, `[index, class]` over the 256×256 class raster.
+ *   `dem`: `cells`, `[index, metres]` over the 256×256 height raster —
+ *     because a ring with a height is a drum and a real stack is not.
+ * An entry REPLACES the tile's overlay: the lab banks the loaded overlay
+ * merged with its own edits, so sessions accumulate.
+ */
+const AUTHORED_LAYERS = { osm: 16, cover: 12, dem: 14 } as const;
+type AuthoredLayer = keyof typeof AUTHORED_LAYERS;
+// DERIVED FROM THE TABLE, so adding a layer is one row there and nothing
+// else: a second hand-written list of the layer names is exactly the kind
+// of pair that drifts (TILE_V and OSM_TILE_V cost an hour of deploys).
+const AUTHORED_BLOB_RE = new RegExp(
+  `^/~/authored/(${Object.keys(AUTHORED_LAYERS).join('|')})/v1/(\\d{1,2})/(\\d{1,7})/(\\d{1,7})/(\\d{10,16})$`);
+const AUTHORED_PATCH_CAP = 200;
+const AUTHORED_CELLS_CAP = 65536;
+/** The tile's bbox widened by one tile each side: a way filed here may run
+ *  into a neighbour, but not across the county. */
+function tagsOk(tags: unknown): string | null {
+  if (!tags || typeof tags !== 'object' || Array.isArray(tags)) return 'no tags';
+  const ents = Object.entries(tags as Record<string, unknown>);
+  if (!ents.length || ents.length > 40) return 'no tags or too many';
+  for (const [k, v] of ents) {
+    if (typeof v !== 'string' || k.length > 120 || v.length > 200) return `tag ${k.slice(0, 40)} is not a short string`;
+  }
+  return null;
+}
+/** The tile's bbox widened by one tile each side. */
+function tileReach(x: number, y: number): { latN: number; latS: number; lonW: number; lonE: number } {
+  const n = 2 ** AUTHORED_OSM_Z;
+  return {
+    lonW: ((x - 1) / n) * 360 - 180, lonE: ((x + 2) / n) * 360 - 180,
+    latN: (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y - 1)) / n))) * 180) / Math.PI,
+    latS: (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 2)) / n))) * 180) / Math.PI,
+  };
+}
+function authoredWayOk(w: unknown, x: number, y: number): string | null {
+  if (!w || typeof w !== 'object') return 'a way is not an object';
+  const { tags, geometry } = w as { tags?: unknown; geometry?: unknown };
+  const tw = tagsOk(tags);
+  if (tw) return `a way has ${tw}`;
+  if (!Array.isArray(geometry) || !geometry.length || geometry.length > AUTHORED_PTS_CAP) return 'a way has no geometry or too much';
+  const R = tileReach(x, y);
+  for (const g of geometry as Array<{ lat?: unknown; lon?: unknown }>) {
+    const la = Number(g?.lat), lo = Number(g?.lon);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) return 'a point is not a number';
+    if (la > R.latN || la < R.latS || lo < R.lonW || lo > R.lonE) return 'a point lies more than a tile away';
+  }
+  return null;
+}
+function authoredPatchOk(p: unknown): string | null {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return 'patch is not an object';
+  const ents = Object.entries(p as Record<string, unknown>);
+  if (ents.length > AUTHORED_PATCH_CAP) return 'too many patched ways';
+  for (const [id, tags] of ents) {
+    if (!/^\d{1,16}$/.test(id)) return `patch key ${id.slice(0, 20)} is not an osm id`;
+    const tw = tagsOk(tags);
+    if (tw) return `patch ${id} has ${tw}`;
+  }
+  return null;
+}
+function authoredCellsOk(d: unknown, layer: AuthoredLayer): string | null {
+  if (!Array.isArray(d)) return 'cells is not a list';
+  if (d.length > AUTHORED_CELLS_CAP) return 'too many cells';
+  const seen = new Set<number>();
+  for (const c of d as unknown[]) {
+    if (!Array.isArray(c) || c.length !== 2) return 'a cell is not [index, value]';
+    const [i, v] = c.map(Number);
+    if (!Number.isInteger(i) || i < 0 || i >= AUTHORED_CELLS_CAP) return 'a cell index is off the raster';
+    if (seen.has(i)) return `cell ${i} is given twice`;
+    seen.add(i);
+    if (!Number.isFinite(v)) return 'a cell value is not a number';
+    if (layer === 'cover' && (!Number.isInteger(v) || v < 0 || v > 255)) return 'a cover cell is not a class byte';
+    if (layer === 'dem' && (v < -500 || v > 9000)) return 'a dem cell is off the planet';
+  }
+  return null;
+}
+export async function serveAuthored(
+  method: string,
+  caller: string,
+  body: string | undefined,
+  table: StateTable = liveTable(),
+  put: typeof putTile = putTile,
+  now: () => number = Date.now,
+) {
+  const no = (code: number, error: string) =>
+    respond(code, 'application/json', JSON.stringify({ error }), { 'cache-control': 'no-store' });
+  if (method === 'GET') {
+    // Readable by anyone: the blobs it points at are public objects anyway.
+    // A cell with no table has no store, and says so as an empty one — the
+    // client treats that exactly as "nothing authored here".
+    const rows = TABLE ? await table.authored() : [];
+    const tiles: Record<string, { rev: number; n: number; by: string }> = {};
+    let rev = 0;
+    for (const r of rows) { tiles[r.key] = { rev: r.rev, n: r.n, by: r.by }; if (r.rev > rev) rev = r.rev; }
+    return respond(200, 'application/json', JSON.stringify({ v: 2, layers: AUTHORED_LAYERS, rev, tiles }), {
+      'cache-control': 'public, max-age=60',
+      'access-control-allow-origin': '*',
+    });
+  }
+  if (method !== 'POST') return no(405, 'GET or POST');
+  if (!TABLE) return no(503, 'no table configured');
+  if (!caller || caller === 'anonymous') return no(401, 'sign in to author the world');
+  if (!body || body.length > AUTHORED_BODY_CAP) return no(400, body ? 'entry too large' : 'no entry');
+  let entry: { layer?: unknown; tile?: unknown; ways?: unknown; patch?: unknown; cells?: unknown } = {};
+  try { entry = JSON.parse(body) as typeof entry; } catch { return no(400, 'unreadable'); }
+  const layer = (entry.layer === undefined ? 'osm' : entry.layer) as AuthoredLayer;
+  if (!(layer in AUTHORED_LAYERS)) return no(400, 'layer must be osm, cover or dem');
+  const Z = AUTHORED_LAYERS[layer];
+  const tm = typeof entry.tile === 'string' ? entry.tile.match(/^(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/) : null;
+  if (!tm) return no(400, 'tile must be z/x/y');
+  const [z, x, y] = [Number(tm[1]), Number(tm[2]), Number(tm[3])];
+  if (z !== Z || x >= 2 ** z || y >= 2 ** z) return no(400, `a ${layer} tile is at z${Z}`);
+  const key = `${layer}/${z}/${x}/${y}`;
+  const by = caller.toLowerCase().replace(/[^a-z0-9_.-]/g, '').slice(0, 40) || 'someone';
+  const rev = Math.round(now());
+  const path = `/~/authored/${layer}/v1/${z}/${x}/${y}/${rev}`;
+  const retract = async () => {
+    await table.delRows(AUTHORED_PK, [AUTHORED_SK + key]);
+    return respond(200, 'application/json', JSON.stringify({ ok: true, layer, tile: `${z}/${x}/${y}`, retracted: true }),
+      { 'cache-control': 'no-store' });
+  };
+  const bank = async (blob: Record<string, unknown>, n: number, extra: Record<string, number>) => {
+    await put(path, gzipSync(Buffer.from(JSON.stringify({ v: 2, layer, tile: `${z}/${x}/${y}`, rev, by, ...blob }), 'utf8'), { level: 9 }));
+    await table.putAuthored({ key, rev, n, by });
+    return respond(200, 'application/json', JSON.stringify({ ok: true, layer, tile: `${z}/${x}/${y}`, rev, n, ...extra, url: path }),
+      { 'cache-control': 'no-store' });
+  };
+  if (layer === 'cover' || layer === 'dem') {
+    if (entry.ways !== undefined || entry.patch !== undefined) return no(400, `a ${layer} entry carries cells, not ways`);
+    const cellsIn = entry.cells === undefined ? [] : entry.cells;
+    const cw = authoredCellsOk(cellsIn, layer);
+    if (cw) return no(400, cw);
+    const cells = (cellsIn as Array<[number, number]>).map(([i, v]) => [i, layer === 'dem' ? +Number(v).toFixed(2) : Number(v)] as [number, number]);
+    if (!cells.length) return retract();
+    return bank({ cells }, cells.length, { cells: cells.length });
+  }
+  if (entry.cells !== undefined) return no(400, 'an osm entry carries ways and a patch, not cells');
+  const waysIn = entry.ways === undefined ? [] : entry.ways;
+  if (!Array.isArray(waysIn) || waysIn.length > AUTHORED_WAYS_CAP) return no(400, 'ways must be a short list');
+  const patchIn = entry.patch === undefined ? {} : entry.patch;
+  const pw = authoredPatchOk(patchIn);
+  if (pw) return no(400, pw);
+  const patch = patchIn as Record<string, Record<string, string>>;
+  const count = waysIn.length + Object.keys(patch).length;
+  if (!count) return retract();
+  const ways: AuthoredWay[] = [];
+  for (let i = 0; i < waysIn.length; i++) {
+    const why = authoredWayOk(waysIn[i], x, y);
+    if (why) return no(400, `way ${i}: ${why}`);
+    const w = waysIn[i] as { tags: Record<string, string>; geometry: Array<{ lat: number; lon: number }> };
+    ways.push({
+      id: AUTHORED_ID_BASE + (x * 65536 + y) * AUTHORED_WAYS_CAP + i,
+      tags: w.tags,
+      geometry: w.geometry.map((g) => ({ lat: +Number(g.lat).toFixed(7), lon: +Number(g.lon).toFixed(7) })),
+    });
+  }
+  return bank({ ways, patch }, count, { ways: ways.length, patched: Object.keys(patch).length });
+}
+
 export const handler = async (event: {
   rawPath?: string; rawQueryString?: string; body?: string;
   headers?: Record<string, string | undefined>;
@@ -2261,6 +2566,11 @@ export const handler = async (event: {
     if (method !== 'POST') return respond(405, 'application/json', JSON.stringify({ error: 'POST' }));
     return serveTape(event.headers?.['x-cell-caller'] ?? 'anonymous', event.body);
   }
+  // The authored store's index and its write door, outside `~/` for the same
+  // reason /gmaps is: the index changes, and that surface promises it won't.
+  if (path === '/authored') {
+    return serveAuthored(method, event.headers?.['x-cell-caller'] ?? 'anonymous', event.body);
+  }
   // Deliberately OUTSIDE the `~/` namespace: that surface is cached by path,
   // and a resolver keyed on a query string has no business in a cache whose
   // key would ignore it.
@@ -2279,6 +2589,14 @@ export const handler = async (event: {
   if (path.startsWith('/~/')) {
     if (TAPE_BLOB_RE.test(path)) {
       return respond(404, 'application/json', JSON.stringify({ error: 'no such tape' }), {
+        'cache-control': 'no-store',
+      });
+    }
+    // An authored blob the edge did not have does not exist: the index
+    // never names one that was not written, so this is a stale index or a
+    // guess, and never a reason to build anything.
+    if (AUTHORED_BLOB_RE.test(path)) {
+      return respond(404, 'application/json', JSON.stringify({ error: 'no such authored entry' }), {
         'cache-control': 'no-store',
       });
     }

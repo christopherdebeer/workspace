@@ -15,7 +15,7 @@
  * kilobytes and cannot go stale.
  */
 import { buildSubstrateCells, SUB_FIELD_N } from './substrate-field';
-import { createTerrainKernel, type HeightTile, type CoverTile, type StripLike, type Rgb, type AreaPatchLike, type TerrainCrossingMask, type TerrainStore, type CarveLog, type BreakLine } from './terrain-kernel';
+import { createTerrainKernel, type HeightTile, type CoverTile, type StripLike, type Rgb, type AreaPatchLike, type TerrainCrossingMask, type TerrainStore, type CarveLog, type BreakLine, type Plinth } from './terrain-kernel';
 
 export interface TerrainJob {
   id: number; epoch: number; key: string;
@@ -33,6 +33,10 @@ export interface TerrainJob {
   strips: Float64Array; stripCells: Array<[string, number[]]>;
   channels: Float64Array; chanCells: Array<[string, number[]]>;
   hydroBreakLines: Float64Array;
+  /** Mapped cliff lines crossing the tile, four floats a segment (see TerrainStore.cliffLines). */
+  cliffLines: Float64Array;
+  /** Mapped stacks: `height, top (NaN for none), n, x0, z0 … x(n-1), z(n-1)` per ring (see TerrainStore.plinths). */
+  plinths: Float64Array;
   /** The field's bed lattice (see TerrainStore.hydroFloor); empty with n 0 when the tile has no field. */
   hydroFloor: Float32Array; hydroFloorN: number;
   /** The tile's packed bank stations (see TerrainStore.hydroBank); empty when the tile has none. */
@@ -107,6 +111,18 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
           bz: job.hydroBreakLines[i + 3],
         });
       }
+      const cliffLines: BreakLine[] = [];
+      for (let i = 0; i + 3 < job.cliffLines.length; i += 4) {
+        cliffLines.push({ ax: job.cliffLines[i], az: job.cliffLines[i + 1], bx: job.cliffLines[i + 2], bz: job.cliffLines[i + 3] });
+      }
+      const plinths: Plinth[] = [];
+      for (let i = 0; i + 2 < job.plinths.length;) {
+        const height = job.plinths[i], top = job.plinths[i + 1], n = job.plinths[i + 2] | 0;
+        const pts: Array<[number, number]> = [];
+        for (let k = 0; k < n && i + 3 + k * 2 + 1 < job.plinths.length; k++) pts.push([job.plinths[i + 3 + k * 2], job.plinths[i + 4 + k * 2]]);
+        plinths.push(Number.isFinite(top) ? { pts, height, top } : { pts, height });
+        i += 3 + n * 2;
+      }
       const N = job.climN, KW = job.climK, t = job.tile;
       const climate = (x: number, z: number): ArrayLike<number> | null => {
         if (!N) return null;
@@ -133,6 +149,8 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
         seaAbs: () => job.seaAbs, baseElev: job.baseElev,
         strips, cutL: job.cutL, channels, grid: job.grid,
         hydroBreakLines: () => hydroBreakLines,
+        cliffLines: () => cliffLines,
+        plinths: () => plinths,
         hydroFloor: () => job.hydroFloorN > 0 ? { n: job.hydroFloorN, data: job.hydroFloor } : null,
         hydroBank: () => job.hydroBank && job.hydroBank.length ? job.hydroBank : null,
         onRoad: (x, z) => K.onRoadOf(strips, job.cutL, x, z),

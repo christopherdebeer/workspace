@@ -40,7 +40,7 @@ console.log(`fixture           t     ${CLASSES.map((c) => c.padStart(6)).join(''
 for (const fixture of fixtures) {
   let d;
   try {
-    d = await openDrive({ spot: `fixture=${fixture}&cam=chase&nodraw=1&tdbg=0&wxlive=0&time=NOON`, tag: `wet-census-${fixture}`, settle: 0, bootTimeout: 240000 });
+    d = await openDrive({ spot: `fixture=${fixture}&cam=chase&nodraw=1&tdbg=0&wxlive=0&time=NOON`, tag: `wet-census-${fixture}`, settle: 0, bootTimeout: 240000, rev: process.env.REV || '' });
   } catch (e) { console.log(`${fixture.padEnd(16)}  boot failed: ${String(e.message).slice(0, 80)}`); continue; }
   const q = (f, ...a) => d.page.evaluate(f, ...a);
   for (const t of [45, 75]) {

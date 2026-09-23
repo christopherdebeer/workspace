@@ -19,7 +19,15 @@ export interface EditableRasterTile {
 export interface RasterEditResult {
   changed: number;
   tileKeys: string[];
+  /** The cells this operation touched, as world footprints. The lab draws
+   *  them while the rebuild they triggered is still queued — a painted texel
+   *  is in the array immediately and on the screen a second or two later,
+   *  and the gap is the whole reason the overlay exists. */
+  cells?: CellRect[];
 }
+
+/** One raster cell on the ground: centre and footprint, in world metres. */
+export interface CellRect { x: number; z: number; w: number; h: number }
 
 interface CellEdit {
   tile: EditableRasterTile;
@@ -31,14 +39,40 @@ interface CellEdit {
 const cellKey = (tile: EditableRasterTile, index: number): string =>
   `${tile.key}:${index}`;
 
+const cellRect = (tile: EditableRasterTile, index: number): CellRect => {
+  const w = tile.w / tile.columns;
+  const h = tile.h / tile.rows;
+  const ix = index % tile.columns;
+  const iz = (index - ix) / tile.columns;
+  return { x: tile.xs + (ix + .5) * w, z: tile.zs + (iz + .5) * h, w, h };
+};
+
+const cellSample = (tile: EditableRasterTile, index: number, salt: number): number => {
+  let hash = (2166136261 ^ salt) >>> 0;
+  for (let i = 0; i < tile.key.length; i++) {
+    hash = Math.imul(hash ^ tile.key.charCodeAt(i), 16777619) >>> 0;
+  }
+  hash = Math.imul(hash ^ index, 2246822519) >>> 0;
+  hash ^= hash >>> 13;
+  hash = Math.imul(hash, 3266489917) >>> 0;
+  return (hash >>> 0) / 0x100000000;
+};
+
 export class RasterPaintSession {
   private originals = new Map<string, CellEdit>();
   private undoStack: CellEdit[][] = [];
+  private redoStack: CellEdit[][] = [];
   private stroke: Map<string, CellEdit> | null = null;
+  private strokeSalt = 0;
 
   beginStroke(): void {
     if (this.stroke) this.endStroke();
+    // A NEW STROKE FORKS THE HISTORY. Keeping a redo that was recorded before
+    // an edit that has since happened would re-apply cells the new stroke has
+    // already overwritten, at values nothing on the screen ever showed.
+    this.redoStack.length = 0;
     this.stroke = new Map();
+    this.strokeSalt++;
   }
 
   paint(
@@ -47,11 +81,14 @@ export class RasterPaintSession {
     z: number,
     radiusM: number,
     value: number,
+    fill = 1,
   ): RasterEditResult {
     if (!this.stroke) this.beginStroke();
     const changedTiles = new Set<string>();
     let changed = 0;
     const radius = Math.max(0, radiusM);
+    const coverage = Math.max(0, Math.min(1, fill));
+    if (coverage <= 0) return { changed, tileKeys: [] };
 
     for (const tile of tiles) {
       if (x + radius < tile.xs || x - radius > tile.xs + tile.w
@@ -72,6 +109,11 @@ export class RasterPaintSession {
           const cx = tile.xs + (ix + .5) * pxW;
           if (Math.hypot(cx - x, cz - z) > reach) continue;
           const index = iz * tile.columns + ix;
+          // Cover classes cannot be fractionally blended in one texel. A
+          // stable per-stroke sample turns the amount dial into spatial fill:
+          // lower values mix the new class through the source, while another
+          // stroke gets a new sample and can build coverage progressively.
+          if (coverage < 1 && cellSample(tile, index, this.strokeSalt) >= coverage) continue;
           const before = tile.data[index];
           if (before === value) continue;
           const key = cellKey(tile, index);
@@ -104,10 +146,14 @@ export class RasterPaintSession {
       }
     }
     this.stroke = null;
-    if (edits.length) this.undoStack.push(edits);
+    if (edits.length) {
+      this.undoStack.push(edits);
+      this.redoStack.length = 0;
+    }
     return {
       changed: edits.length,
       tileKeys: [...new Set(edits.map((e) => e.tile.key))],
+      cells: edits.map((e) => cellRect(e.tile, e.index)),
     };
   }
 
@@ -121,9 +167,34 @@ export class RasterPaintSession {
       const original = this.originals.get(key);
       if (original && edit.before === original.before) this.originals.delete(key);
     }
+    this.redoStack.push(edits);
     return {
       changed: edits.length,
       tileKeys: [...new Set(edits.map((e) => e.tile.key))],
+      cells: edits.map((e) => cellRect(e.tile, e.index)),
+    };
+  }
+
+  /** The inverse of undo, and it has to restore the SESSION record as well as
+   *  the raster: `originals` is what the authored bank files, so a redone cell
+   *  that is not back in it would be painted on the screen and absent from the
+   *  entry. */
+  redo(): RasterEditResult {
+    this.endStroke();
+    const edits = this.redoStack.pop();
+    if (!edits) return { changed: 0, tileKeys: [] };
+    for (const edit of edits) {
+      edit.tile.data[edit.index] = edit.after;
+      const key = cellKey(edit.tile, edit.index);
+      const original = this.originals.get(key);
+      if (original) original.after = edit.after;
+      else this.originals.set(key, { ...edit });
+    }
+    this.undoStack.push(edits);
+    return {
+      changed: edits.length,
+      tileKeys: [...new Set(edits.map((e) => e.tile.key))],
+      cells: edits.map((e) => cellRect(e.tile, e.index)),
     };
   }
 
@@ -139,13 +210,38 @@ export class RasterPaintSession {
     }
     this.originals.clear();
     this.undoStack.length = 0;
+    this.redoStack.length = 0;
     return { changed, tileKeys: [...changedTiles] };
   }
 
-  report(): { editedCells: number; undoDepth: number; strokeCells: number } {
+  /** Every cell the session has left different from what the raster
+   *  delivered, with its current value — the authored bank reads this. */
+  edits(): Array<{ tile: EditableRasterTile; index: number; before: number; after: number }> {
+    this.endStroke();
+    const out: Array<{ tile: EditableRasterTile; index: number; before: number; after: number }> = [];
+    for (const e of this.originals.values()) {
+      const after = e.tile.data[e.index];
+      if (after !== e.before) out.push({ tile: e.tile, index: e.index, before: e.before, after });
+    }
+    return out;
+  }
+  /** The stroke in flight, as world footprints — the lab's live feedback
+   *  while a finger is still down and no rebuild has been asked for yet. */
+  strokeCells(): CellRect[] {
+    if (!this.stroke) return [];
+    const out: CellRect[] = [];
+    for (const edit of this.stroke.values()) {
+      if (edit.before === edit.after) continue;
+      out.push(cellRect(edit.tile, edit.index));
+    }
+    return out;
+  }
+
+  report(): { editedCells: number; undoDepth: number; redoDepth: number; strokeCells: number } {
     return {
       editedCells: this.originals.size,
       undoDepth: this.undoStack.length,
+      redoDepth: this.redoStack.length,
       strokeCells: this.stroke?.size ?? 0,
     };
   }

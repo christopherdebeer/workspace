@@ -69,8 +69,14 @@ export async function runHydroRenderCutoverTest(): Promise<void> {
     await hydro.upsertTile(input(1, .4));
     const first = hydro.fieldAt(300, 300);
     assert(first, 'first field was not retained');
-    assert(first?.resolution === 256 && first.gutter === 12,
-      'flowing field did not use the adaptive tier');
+    // The tier is sized from the covered SHARE now, not from "any flowing
+    // observation": this river (18m wide, ~562m of it inside a 600x600
+    // tile) covers ~2.8% of the tile, well under FLOWING_FULL_SHARE (15%),
+    // so it earns a fraction of the 128->256 tier rather than all of it —
+    // 128 + (256-128)*(0.0281/0.15) rounds to 152, with the gutter scaled
+    // to match (ceil(6*152/128) = 8).
+    assert(first?.resolution === 152 && first.gutter === 8,
+      'flowing field did not use the share-scaled adaptive tier');
     assert(hydro.object3d.children.length === 0,
       'deferred build created GPU meshes before substrate commit');
     assert(hydro.canRenderField(first as HydroTileField),

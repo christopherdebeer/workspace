@@ -67,6 +67,7 @@ const cleanFeature = (value: unknown): AuthoredPolyline | null => {
 export class PolylinePaintSession {
   private draft: AuthoredPolyline | null = null;
   private features: AuthoredPolyline[] = [];
+  private redoStack: AuthoredPolyline[] = [];
   private sequence = 0;
 
   constructor(private readonly idFactory: () => string =
@@ -104,6 +105,10 @@ export class PolylinePaintSession {
       return { changed: 0, tileKeys: [] };
     }
     const feature = { ...draft, points };
+    // A NEW LINE FORKS THE HISTORY, the raster session's rule for the same
+    // reason: a redo recorded before this line would put a feature back into
+    // an order it never stood in.
+    this.redoStack.length = 0;
     this.features.push(feature);
     return { changed: points.length, tileKeys: [], feature };
   }
@@ -114,20 +119,50 @@ export class PolylinePaintSession {
 
   undo(): PolylineResult {
     const feature = this.features.pop();
+    if (feature) this.redoStack.push(feature);
     return { changed: feature ? feature.points.length : 0, tileKeys: [], feature };
+  }
+
+  redo(): PolylineResult {
+    const feature = this.redoStack.pop();
+    if (!feature) return { changed: 0, tileKeys: [] };
+    this.features.push(feature);
+    return { changed: feature.points.length, tileKeys: [], feature };
   }
 
   reset(): PolylineResult {
     const changed = this.features.reduce((sum, feature) => sum + feature.points.length, 0);
     this.features = [];
+    this.redoStack = [];
     this.draft = null;
     return { changed, tileKeys: [] };
   }
 
+  /**
+   * THE REDO STACK IS PART OF THE SAVED STATE, and it has to be: removing a
+   * built road is the one edit this lab cannot do in place, so the adapter
+   * reloads the page after an undo. An in-memory redo would be gone before a
+   * thumb could reach it — the button would be correct and permanently dead.
+   * A v1 record is a bare array of features and still loads.
+   */
   load(values: unknown): AuthoredPolyline[] {
-    if (!Array.isArray(values)) return [];
-    this.features = values.map(cleanFeature).filter((v): v is AuthoredPolyline => !!v);
+    const bag = Array.isArray(values)
+      ? { features: values, redo: [] as unknown[] }
+      : (values && typeof values === 'object' ? values as { features?: unknown; redo?: unknown } : null);
+    if (!bag || !Array.isArray(bag.features)) return [];
+    this.features = bag.features.map(cleanFeature).filter((v): v is AuthoredPolyline => !!v);
+    this.redoStack = (Array.isArray(bag.redo) ? bag.redo : [])
+      .map(cleanFeature).filter((v): v is AuthoredPolyline => !!v);
     return this.snapshot();
+  }
+
+  /** What `load` takes back, redo stack and all. */
+  save(): { v: 2; features: AuthoredPolyline[]; redo: AuthoredPolyline[] } {
+    return {
+      v: 2,
+      features: this.snapshot(),
+      redo: this.redoStack.map((f) => ({ ...f, points: f.points.map(([x, z]) => [x, z] as AuthoringPoint) })),
+    };
   }
 
   snapshot(): AuthoredPolyline[] {
@@ -145,6 +180,8 @@ export class PolylinePaintSession {
   report(): Record<string, number> {
     return {
       features: this.features.length,
+      undoDepth: this.features.length,
+      redoDepth: this.redoStack.length,
       draftPoints: this.draft?.points.length ?? 0,
       vertices: this.features.reduce((sum, feature) => sum + feature.points.length, 0),
     };
