@@ -56380,7 +56380,7 @@ function hudSafeRects(): Array<[number, number, number, number]> {
   const mw = Math.min(58, Math.floor(HW * 0.34));   // the dock square (see drawHud)
   const my = HH - 4 - 23 - mw - 3;
   return [
-    [0, 0, HW, 34 + (camMode === 'top' && chartOn.stream ? 22 : 0)],  // compass strip + the justified top row
+    [0, 0, HW, 34 + (camMode === 'top' && chartOn.stream ? 30 : 0)],  // compass strip + the justified top row
     [0, 32, 74, 18],                                 // the task chip, under the top row
     [HW - 56, 18, 56, 18],                           // MENU, on the heading row
     [0, my - 200, camMode === 'top' ? 24 : 17, 200], // ENV stack, or the chart tilt rail
@@ -56537,6 +56537,13 @@ function drawStreamHeader(): void {
   hctx.globalAlpha = 1;
   let fails = 0;
   for (const [, at] of osmFailedAt) if (performance.now() - at < 30000) fails++;
+  // What B6 used to say while the world streamed: the status word and, on
+  // the chart, the overview map's own count.
+  {
+    const ws = worldStatus();
+    const t = [ws.rank < 3 ? ws.hud : '', camMode === 'top' ? ws.map : ''].filter(Boolean).join(' · ');
+    if (t) textEdgeP(t, 6, 56, UI.gold);
+  }
   textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
     6, 40, UI.text);
   // CLIP is the block of fine tiles the shell is discarded inside. It is the
@@ -56890,7 +56897,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // tick at each end. See chartScale for what the three numbers are.
   if (camMode === 'top') {
     const sc = chartScale();
-    const x0 = pad + 1, y0 = chartOn.stream ? pad + 56 : pad + 34;
+    const x0 = pad + 1, y0 = chartOn.stream ? pad + 64 : pad + 34;
     textEdgeS(sc.label, x0, y0, UI.soft);
     hctx.fillStyle = 'rgba(4,10,11,0.85)';
     hctx.fillRect(x0 - 1, y0 + 10, sc.barPx + 3, 5);
@@ -56901,7 +56908,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   }
   // ── T8 and T9, WHEREVER M7 ASKS FOR THEM ── under the scale on the chart,
   // under the clock's row everywhere else.
-  const keyY = (chartOn.stream ? pad + 56 : pad + 34) + (camMode === 'top' ? 19 : 0);
+  const keyY = (chartOn.stream ? pad + 64 : pad + 34) + (camMode === 'top' ? 19 : 0);
   if (keyShown && (camMode === 'top' || !lineOn)) {
     // ── THE LAYER KEY ──
     //
@@ -57861,9 +57868,19 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // the road under the wheels is not what the frame is about, and the one
       // layer the chart draws had nothing to say for itself while it streamed.
       // It yields the line back the moment the ring is home.
-      const line = camMode === 'top' && ws.map ? ws.map
-        : w ? (w.on ? w.name.toUpperCase() : `NEAR ${w.name.toUpperCase()}`)
-          : ws.hud;
+      // THE ROAD, THE NEAR ROAD, OR THE NEAREST PLACE. What the world is still
+      // streaming is the STREAM layer's to say now (see drawStreamHeader); this
+      // line only answers "where am I". The severe states above still take it.
+      let line = w ? (w.on ? w.name.toUpperCase() : `NEAR ${w.name.toUpperCase()}`) : '';
+      if (!line) {
+        let best: Poi | null = null, bd = Infinity;
+        for (const p of pois.values()) {
+          if (p.kind === 'rig' || p.kind === 'drone') continue;
+          const d = Math.hypot(p.x - state.x, p.z - state.z);
+          if (d < bd) { bd = d; best = p; }
+        }
+        if (best) line = `${best.name.toUpperCase()} ${bd < 950 ? `${Math.round(bd / 10) * 10}M` : `${(bd / 1000).toFixed(1)}KM`}`;
+      }
       // The survey tally rides on the way line and takes its room first, so the
       // road name is what gets clipped. A count you cannot read is worse than a
       // name you can only half read.
