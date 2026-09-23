@@ -41,7 +41,7 @@ import {
 } from './shoreline';
 import { URL_OWNED, qs, qsHas, qsNum, qsOn, switchRows, urlWithSwitches } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
-import { CHART_LAYERS, COVER_INK, SUBSTRATE_LEGEND, SURFACE_LEGEND, WATER_LEGEND,
+import { CHART_LAYERS, COVER_INK, HYDRO_VIEWS, SUBSTRATE_LEGEND, SURFACE_LEGEND, WATER_LEGEND, XRAY_VIEWS,
   chartLayer, inkFor, inkHex, legendFor, type ChartLayerId } from './chart-layers';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
@@ -32111,6 +32111,9 @@ function loadChartLayers(): void {
     for (const l of CHART_LAYERS) {
       // Every chip is on the glass now, so a restored view always has its
       // control beside it (the reason debug chips used to be skipped here).
+      // OFF is an action, and HYDRO and X-RAY read their state from the
+      // renderer (hydroView, xrayMode) rather than from this record.
+      if (l.kind === 'action' || l.id === 'hydro' || l.id === 'xray') continue;
       if (typeof saved[l.id] === 'boolean') chartOn[l.id] = saved[l.id] as boolean;
     }
   } catch { /* private mode, or a stored shape from another life */ }
@@ -32156,9 +32159,40 @@ const DBG_RASTER: Partial<Record<ChartLayerId, 'water' | 'surface'>> =
  *  the legend names the one in force, because a false-colour ramp with no name
  *  on it is a picture of nothing. */
 let groundChannel: GroundViewId = SUBSTRATE_VIEWS[0];
+/** Whether a chip is showing. HYDRO and X-RAY are read from the renderer's
+ *  own state, so a probe or a dial that moves it cannot leave the chip lying. */
+function layerIsOn(id: ChartLayerId): boolean {
+  if (id === 'hydro') return hydroView !== 'surface';
+  if (id === 'xray') return xrayMode > 0;
+  if (id === 'off') return false;
+  return chartOn[id];
+}
+/** The chip naming the view in force, for a cycling chip: HYDRO · DEPTH. */
+function layerViewName(id: ChartLayerId): string | null {
+  if (id === 'hydro') return HYDRO_VIEWS.find((v) => v.view === hydroView)?.name ?? null;
+  if (id === 'xray') return XRAY_VIEWS.find((v) => v.mode === xrayMode)?.name ?? null;
+  if (id === 'ground') return chartOn.ground ? groundChannel.toUpperCase() : null;
+  return null;
+}
 function setChartLayer(id: ChartLayerId, on: boolean): void {
   const row = chartLayer(id);
   if (!row) return;
+  // ── OFF IS THE PLAYER'S HIDE HUD ── everything goes, and a double tap
+  // anywhere brings it back (see setClean's own double-tap listener).
+  if (id === 'off') { if (on) setClean(true); return; }
+  // ── HYDRO and X-RAY CYCLE ── a tap on the chip already showing advances
+  // it, and falls off the end back to the ordinary picture.
+  if (id === 'hydro') {
+    const i = on ? HYDRO_VIEWS.findIndex((v) => v.view === hydroView) + 1 : HYDRO_VIEWS.length;
+    hydroView = i < HYDRO_VIEWS.length ? HYDRO_VIEWS[i].view : 'surface';
+    hydroSys?.setDebugView(hydroView);
+    return;
+  }
+  if (id === 'xray') {
+    const i = on ? XRAY_VIEWS.findIndex((v) => v.mode === xrayMode) + 1 : XRAY_VIEWS.length;
+    xrayMode = i < XRAY_VIEWS.length ? XRAY_VIEWS[i].mode : 0;
+    return;
+  }
   // ── A TAP ON THE CHIP ALREADY SHOWING ADVANCES IT, AND FALLS OFF THE END ──
   // Six channels behind one chip only works if the second tap means "the next
   // one"; turning the layer off on tap two would make five of the six
@@ -50571,6 +50605,27 @@ const layerRects: Array<{ id: ChartLayerId; x: number; y: number; w: number; h: 
  *  than through it. The legend grows and shrinks with what is on screen, so
  *  this cannot be a constant. */
 let layerKeyBottom = 0;
+/** T9's sources, most recent first. Whatever the legend is showing is
+ *  `legendOrder[0]`; a newly switched-on source goes to the front, and a tap
+ *  on the legend rotates the list. Synced from the chips' state every frame
+ *  the key draws, so a probe or a dial that turns a view on is caught too. */
+const legendOrder: ChartLayerId[] = [];
+/** The legend's hit box in HUD units, or zero width when there is none. */
+let legendRect = { x: 0, y: 0, w: 0, h: 0 };
+/** Every chip that has something to say in T9 right now. */
+function legendSources(): ChartLayerId[] {
+  const out: ChartLayerId[] = [];
+  for (const l of CHART_LAYERS) {
+    if (!layerIsOn(l.id)) continue;
+    if (l.kind === 'thematic' || l.id === 'hydro' || l.id === 'xray' || l.id === 'tiles') out.push(l.id);
+  }
+  return out;
+}
+function syncLegendOrder(): void {
+  const now = legendSources();
+  for (let i = legendOrder.length - 1; i >= 0; i--) if (!now.includes(legendOrder[i])) legendOrder.splice(i, 1);
+  for (const id of now) if (!legendOrder.includes(id)) legendOrder.unshift(id);
+}
 /** A tap on a chip toggles that layer. Swallows the DOWN like every other HUD
  *  instrument (see hudPtrs), or the same press would also drop a chart fix. */
 function layerDown(e: PointerEvent): boolean {
@@ -50578,8 +50633,20 @@ function layerDown(e: PointerEvent): boolean {
   const x = e.clientX / hudS, y = e.clientY / hudS;
   for (const r of layerRects) {
     if (x < r.x || x > r.x + r.w || y < r.y || y > r.y + r.h) continue;
-    setChartLayer(r.id, !chartOn[r.id]);
-    hudFlash(`${chartLayer(r.id)?.name ?? r.id} ${chartOn[r.id] ? 'ON' : 'OFF'}`);
+    // A cycling chip that is on is asked for its NEXT view, not turned off.
+    const cycles = r.id === 'hydro' || r.id === 'xray' || r.id === 'ground';
+    setChartLayer(r.id, cycles ? true : !layerIsOn(r.id));
+    if (r.id !== 'off') {
+      const v = layerViewName(r.id);
+      hudFlash(`${chartLayer(r.id)?.name ?? r.id} ${layerIsOn(r.id) ? (v ?? 'ON') : 'OFF'}`);
+    }
+    return true;
+  }
+  // ── A TAP ON THE LEGEND SHOWS THE NEXT ONE ── T9 names one source at a
+  // time; with several on, it cycles through them and wraps.
+  if (legendRect.w && x >= legendRect.x && x <= legendRect.x + legendRect.w
+    && y >= legendRect.y && y <= legendRect.y + legendRect.h && legendOrder.length > 1) {
+    legendOrder.push(legendOrder.shift()!);
     return true;
   }
   return false;
@@ -50589,9 +50656,11 @@ function layerDown(e: PointerEvent): boolean {
  *  a finger does, so a test can drive the switch without a pointer. */
 (window as unknown as { __chartlayers?: object }).__chartlayers =
   (tap?: ChartLayerId, on?: boolean): object => {
-    if (tap) setChartLayer(tap, on ?? !chartOn[tap]);
+    if (tap) setChartLayer(tap, on ?? !layerIsOn(tap));
     return {
-      layers: CHART_LAYERS.map((l) => ({ id: l.id, name: l.name, kind: l.kind, on: chartOn[l.id] })),
+      layers: CHART_LAYERS.map((l) => ({ id: l.id, name: l.name, kind: l.kind, on: layerIsOn(l.id), view: layerViewName(l.id) })),
+      legend0: legendOrder[0] ?? null, legendOrder: [...legendOrder],
+      legendAt: legendRect.w ? { x: (legendRect.x + 12) * hudS, y: (legendRect.y + 6) * hudS } : null,
       theme: themeLayer(), themeDrawing: themeGroup.visible, mpp: +envU.uMpp.value.toFixed(1),
       mppMin: THEME_MPP_MIN,
       // ── THE CHANNEL, WHICH IS THE OTHER HALF OF THIS KEY NOW ──
@@ -55717,7 +55786,6 @@ const DIAL_GROUPS: DialGroup[] = [
       // verdict can be argued with on the spot. WIRE strips the streamed
       // world to its triangles: the geometry the truck actually collides
       // with, not the paint over it.
-      dial('xray', 'X-RAY', [...XRAY_MODES], 0, (i) => { xrayMode = i; }),
       /**
        * ── WHICH WATER SYSTEM IS DRAWING ──
        *
@@ -55764,10 +55832,6 @@ const DIAL_GROUPS: DialGroup[] = [
        * Does nothing on LEGACY, and says so by being the only dial in the rack
        * with nothing behind it — there is no field to ask.
        */
-      dial('hview', 'WATER VIEW', ['SURFACE', 'COVERAGE', 'SHORE', 'DEPTH', 'FLOW', 'CLASS'], 0, (i) => {
-        hydroView = (['surface', 'coverage', 'shore', 'depth', 'flow', 'class'] as const)[i];
-        hydroSys?.setDebugView(hydroView);
-      }),
       // ── HAZE: HOW MUCH AIR IS BETWEEN YOU AND THE HILL ──
       //
       // Asked for from the seat, and it has been wanted for several rounds:
@@ -56584,6 +56648,8 @@ function drawTileDebugOverlay(): void {
     }
   }
   hctx.globalAlpha = 1;
+  // T9 shows one source at a time; the grid key is its TILES variant.
+  if (legendOrder[0] !== 'tiles') { hctx.globalAlpha = 1; return; }
   // ── THE KEY ── one row per LAYER that draws boxes, in the order they
   // stream: what zoom it is, how wide one of its boxes is here (a tile's
   // metres shrink with the cosine of the latitude, so this is computed,
@@ -56770,7 +56836,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         // EVERY CHIP IS OFFERED. The ground views used to appear only while
         // the tile overlay was up; they were promoted to first-class chips
         // when the key became the single switchboard for what the chart shows.
-        const on = chartOn[l.id];
+        const on = layerIsOn(l.id);
         const w = 7 + gw(l.name);
         if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
         sw(lx + 2, ly + 2, on ? UI.text : UI.dim, on);
@@ -56795,46 +56861,80 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // fell through every branch and printed nothing at all. Four states, and
       // they are four different things to do: pull the chart out, wait for the
       // shell, wait for the bake, or read the legend.
-      const leg = themeLegend();
-      // A CHANNEL VIEW HAS NO WAITING STATES. It is a uniform on a material
-      // that is already drawing: there is no zoom gate, no shell to wait for
-      // and no bake, which is most of the argument for it. The only thing it
-      // can be short of is ground that has streamed, and an empty legend under
-      // a view that is on says exactly that.
-      if ((groundView !== 'off' || dbgView) && !leg.length) {
-        textEdgeP('NO GROUND CLASSED YET', pad + 1, ly, UI.dim);
-        ly += 9;
-      } else if (themeLayer() && !themeGroup.visible) {
-        textEdgeP(envU.uMpp.value <= THEME_MPP_MIN ? 'ZOOM OUT FOR THE SHEET' : 'SHEET NEEDS THE SHELL',
-          pad + 1, ly, UI.dim);
-        ly += 9;
-      } else if (themeLayer() && !leg.length) {
-        textEdgeP('SHEET LOADING', pad + 1, ly, UI.dim);
-        ly += 9;
-      } else if (leg.length) {
-        for (const row of leg) {
-          const w = 7 + gw(row.name);
-          if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
-          sw(lx + 2, ly + 2, row.hex, true);
-          textEdgeP(row.name, lx + 7, ly, UI.soft);
-          lx += w + 5;
-        }
-        // …AND WHETHER THE LEGEND IS FINISHED. A sheet still waiting on a cover
-        // raster or an ecoregion tile will grow; one that is not, will not.
-        // "Is that everything, or is it still coming" is the question the seat
-        // asked in three different ways and nothing on the glass answered.
-        if (groundView === 'off' && themeWork() > 0) {
-          const w = gw('+');
-          if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
-          textEdgeP('+', lx, ly, UI.dim);
-        }
-        ly += 9;
+      // ── T9, THE ONE LEGEND SLOT ── whichever source was switched on most
+      // recently, or the one a tap on the legend rotated to. With more than
+      // one on, the first row carries the source's name and its place in the
+      // set, so a reader knows there is more behind a tap.
+      syncLegendOrder();
+      const src = legendOrder[0] ?? null;
+      const legTop = ly;
+      if (src && legendOrder.length > 1) {
+        const all = legendSources();
+        const tag = `${chartLayer(src)?.name ?? src} ${all.indexOf(src) + 1}/${all.length}`;
+        textEdgeP(tag, pad + 1, ly, UI.dim);
+        lx = pad + 1 + gw(tag) + 6;
       }
+      if (src === 'tiles') {
+        // The grid key is drawn by drawTileDebugOverlay, starting where this
+        // leaves layerKeyBottom — it is T9's tiles variant, not a key of its own.
+        if (legendOrder.length > 1) { ly += 9; lx = pad + 1; }
+      } else if (src === 'hydro' || src === 'xray') {
+        const v = src === 'hydro' ? HYDRO_VIEWS.find((h) => h.view === hydroView) : XRAY_VIEWS.find((x) => x.mode === xrayMode);
+        if (v) {
+          if (legendOrder.length === 1) { textEdgeP(`${chartLayer(src)?.name} ${v.name}`, pad + 1, ly, UI.soft); lx = pad + 1 + gw(`${chartLayer(src)?.name} ${v.name}`) + 6; }
+          else { textEdgeP(v.name, lx, ly, UI.soft); lx += gw(v.name) + 6; }
+          for (const row of v.legend) {
+            const w = 7 + gw(row.name);
+            if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
+            sw(lx + 2, ly + 2, row.hex, true);
+            textEdgeP(row.name, lx + 7, ly, UI.soft);
+            lx += w + 5;
+          }
+          ly += 9;
+        }
+      } else if (src) {
+        const leg = themeLegend();
+        // A CHANNEL VIEW HAS NO WAITING STATES. It is a uniform on a material
+        // that is already drawing: there is no zoom gate, no shell to wait for
+        // and no bake, which is most of the argument for it. The only thing it
+        // can be short of is ground that has streamed, and an empty legend under
+        // a view that is on says exactly that.
+        if ((groundView !== 'off' || dbgView) && !leg.length) {
+          textEdgeP('NO GROUND CLASSED YET', lx, ly, UI.dim);
+          ly += 9;
+        } else if (themeLayer() && !themeGroup.visible) {
+          textEdgeP(envU.uMpp.value <= THEME_MPP_MIN ? 'ZOOM OUT FOR THE SHEET' : 'SHEET NEEDS THE SHELL',
+            lx, ly, UI.dim);
+          ly += 9;
+        } else if (themeLayer() && !leg.length) {
+          textEdgeP('SHEET LOADING', lx, ly, UI.dim);
+          ly += 9;
+        } else if (leg.length) {
+          for (const row of leg) {
+            const w = 7 + gw(row.name);
+            if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
+            sw(lx + 2, ly + 2, row.hex, true);
+            textEdgeP(row.name, lx + 7, ly, UI.soft);
+            lx += w + 5;
+          }
+          // …AND WHETHER THE LEGEND IS FINISHED. A sheet still waiting on a cover
+          // raster or an ecoregion tile will grow; one that is not, will not.
+          // "Is that everything, or is it still coming" is the question the seat
+          // asked in three different ways and nothing on the glass answered.
+          if (groundView === 'off' && themeWork() > 0) {
+            const w = gw('+');
+            if (lx > pad + 1 && lx + w > HW - 4) { lx = pad + 1; ly += 9; }
+            textEdgeP('+', lx, ly, UI.dim);
+          }
+          ly += 9;
+        }
+      }
+      legendRect = src ? { x: pad, y: legTop - 3, w: HW - 2 * pad, h: src === 'tiles' ? 36 : Math.max(12, ly - legTop + 3) } : { x: 0, y: 0, w: 0, h: 0 };
       hctx.globalAlpha = 1;
       layerKeyBottom = ly;
     }
   } else {
-    layerRects.length = 0; layerKeyBottom = 0;
+    layerRects.length = 0; layerKeyBottom = 0; legendRect = { x: 0, y: 0, w: 0, h: 0 };
     // ── A VIEW THAT IS ON SAYS SO WHEREVER YOU ARE ──
     //
     // The channel's whole point is that it applies in every camera; its SWITCH

@@ -18,12 +18,12 @@ DOM over both. Positions are for a portrait phone.
 | T2 | heading readout | three digits under the needle (`000`, `122`) | — |
 | T3 | clock | `HH:MM` top-left; dim `< >` while the sun is held | tap cycles TIME, drag scrubs the sun |
 | T4 | MENU chip | top-right, DOM | tap opens the menu |
-| T5 | debug header | two lines under the clock: vector counts (`DONE WIRE QUEUE FAIL`), terrain counts (`MESH WAIT REBUILD CLIP`, then far/cover). Tile-debug only | — |
+| T5 | stream readout | two lines under the clock: vector counts (`DONE WIRE QUEUE FAIL`), terrain counts (`MESH WAIT REBUILD CLIP`, then far/cover). Shown by the STREAM chip | — |
 | T6 | scale line | `20 M · 1:816 · z19.2` — bar length, representative fraction, zoom | — |
 | T7 | scale bar | the ruled bar under T6 | — |
-| T8 | layer key | chips ROADS · PLACES · COVER · ECO (+ GROUND/MATERIAL/WATER/SURFACE with tile-debug). Filled = on | tap a chip toggles its layer |
-| T9 | layer legend | the line under T8 naming the classes of the thematic layer that's on, or its waiting state | — |
-| T10 | grid key | rows under T8 explaining the grid boxes: `z16 VECTORS`, `z14 TERRAIN`, `SHELL`, `ONE BOX…FOLDED`. Tile-debug only | — |
+| T8 | layer key | the one switchboard: OFF · ROADS · PLACES · COVER · ECO · GROUND · MATERIAL · SURFACE · WATER · HYDRO · X-RAY · TILES · STREAM. Filled = on. ROADS, PLACES, TILES, STREAM are checkboxes; COVER…WATER are one radio group; HYDRO and X-RAY cycle their views; OFF hides the whole HUD (double tap anywhere restores) | tap a chip toggles it; a cycling chip advances |
+| T9 | legend | one source at a time: the ground view's classes, the HYDRO or X-RAY view's ramp, or the tile-grid key (TILES). The most recently switched-on source shows; with several, the first row reads `NAME k/n` | tap cycles to the next source, wrapping |
+| T10 | *(retired)* | the grid key is T9's TILES variant now | — |
 
 ## Edges
 
@@ -73,7 +73,7 @@ DOM over both. Positions are for a portrait phone.
 | W3 | overview ink | the chart's road ribbons (weight and ink fall with the rung) | ROADS chip |
 | W4 | globe | the planet with its graticule, past the hand-over | zoom |
 | W5 | globe pin | the truck's point on the globe | past the hand-over |
-| W6 | grid boxes | tile-debug outlines: z16 cells, z14 boxes, shell boxes, or one folded ring | tile-debug dial |
+| W6 | grid boxes | z16 cells, z14 boxes, shell boxes, or one folded ring | TILES chip |
 | W7 | ground view | a false-colour channel (COVER, MATERIAL, WATER, SURFACE) or the ECO sheet | layer key |
 
 ## Cards and chips (DOM)
@@ -106,4 +106,4 @@ DOM over both. Positions are for a portrait phone.
 - **rung** — the tile level a layer is drawing (`MAP z12`, `FAR Z5`).
 - **hand-over** — the zoom where the shell (W2) stops covering the frame and the globe (W4) takes the gestures.
 - **fold** — a grid whose cells are too small to see drawn as one box round the ring.
-- **tile-debug** — the SETTINGS dial that turns on T5, T10 and W6 (and the debug chips in T8). ON by default today.
+- **tile-debug** — retired as a dial: it is the TILES chip (W6 and its key in T9) and the STREAM chip (T5), both off by default.

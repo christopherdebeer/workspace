@@ -29,7 +29,10 @@
  */
 
 /** What a layer draws, which decides how it is switched and how it is keyed. */
-export type ChartLayerKind = 'vector' | 'thematic' | 'overlay';
+/** `action` does something rather than showing something (OFF); `overlay` is
+ *  an independent checkbox that is not a map layer (the tile grid, the stream
+ *  readout, the water and x-ray views). */
+export type ChartLayerKind = 'vector' | 'thematic' | 'overlay' | 'action';
 
 export interface ChartLayer {
   id: ChartLayerId;
@@ -49,8 +52,8 @@ export interface ChartLayer {
   debug?: boolean;
 }
 
-export type ChartLayerId = 'roads' | 'places' | 'cover' | 'eco' | 'substrate' | 'water' | 'surface' | 'ground'
-  | 'tiles' | 'stream';
+export type ChartLayerId = 'off' | 'roads' | 'places' | 'cover' | 'eco' | 'substrate' | 'water' | 'surface' | 'ground'
+  | 'hydro' | 'xray' | 'tiles' | 'stream';
 
 /**
  * THE TABLE. Order is the order on the key, and the key reads top-down as the
@@ -63,6 +66,11 @@ export type ChartLayerId = 'roads' | 'places' | 'cover' | 'eco' | 'substrate' | 
  * been a way to have one without the other.
  */
 export const CHART_LAYERS: readonly ChartLayer[] = Object.freeze([
+  // ── OFF ── the whole HUD, not just the layers: the player's HIDE HUD, which
+  // a double tap anywhere undoes. First, because it is the one chip that
+  // clears everything the others add.
+  Object.freeze({ id: 'off' as const, name: 'OFF', kind: 'action' as const, on: false,
+    note: 'hide the whole HUD; a double tap anywhere brings it back' }),
   Object.freeze({ id: 'roads' as const, name: 'ROADS', kind: 'vector' as const, on: true,
     note: 'the coarse road network, water and coast — the overview ribbons' }),
   Object.freeze({ id: 'places' as const, name: 'PLACES', kind: 'vector' as const, on: true,
@@ -88,12 +96,21 @@ export const CHART_LAYERS: readonly ChartLayer[] = Object.freeze([
   Object.freeze({ id: 'substrate' as const, name: 'MATERIAL', kind: 'thematic' as const,
     on: false, debug: true,
     note: 'what the renderer believes the ground is made of: outcrop, turf, regolith' }),
-  Object.freeze({ id: 'water' as const, name: 'WATER', kind: 'thematic' as const,
-    on: false, debug: true,
-    note: 'every input to the physics’ water decision, painted: drawn water, a deck over it, a field wet UNDER the ground, the waterline band, a ford, a carved channel, the ocean mask, cover-80 alone, and the unexplained' }),
   Object.freeze({ id: 'surface' as const, name: 'SURFACE', kind: 'thematic' as const,
     on: false, debug: true,
     note: 'what the wheels read: carriageway, formation, ground and water, and whether the deck under the point is a structure standing clear of the terrain' }),
+  Object.freeze({ id: 'water' as const, name: 'WATER', kind: 'thematic' as const,
+    on: false, debug: true,
+    note: 'every input to the physics’ water decision, painted: drawn water, a deck over it, a field wet UNDER the ground, the waterline band, a ford, a carved channel, the ocean mask, cover-80 alone, and the unexplained' }),
+  // ── HYDRO and X-RAY ── the water field and the renderer, seen through its
+  // own debug views. Each is one chip that CYCLES its views (a tap on a chip
+  // that is showing advances it, and falls off the end), like GROUND. They
+  // paint the water and the whole frame respectively, so they sit outside the
+  // ground-view radio group and can be on beside any of it.
+  Object.freeze({ id: 'hydro' as const, name: 'HYDRO', kind: 'overlay' as const, on: false, debug: true,
+    note: 'the hydro field painted on the water: coverage, shore distance, depth, flow, body class, coast exposure' }),
+  Object.freeze({ id: 'xray' as const, name: 'X-RAY', kind: 'overlay' as const, on: false, debug: true,
+    note: 'the renderer seen through: the depth buffer, or every mesh as wireframe' }),
   // ── INSTRUMENTS ── independent checkboxes, like the vector layers, but about
   // this program rather than the planet: the tile grid (with its key in the
   // legend slot) and the stream readout (T5). They were one TILE DEBUG dial,
@@ -160,6 +177,26 @@ export const SUBSTRATE_LEGEND: ReadonlyArray<{ name: string; hex: string }> = Ob
   Object.freeze({ name: 'OUTCROP', hex: '#e03838' }),
   Object.freeze({ name: 'GRASS', hex: '#38e038' }),
   Object.freeze({ name: 'MANTLE', hex: '#3838e0' }),
+]);
+
+/**
+ * THE HYDRO VIEWS, in cycle order, with the legend each one draws. The inks are
+ * the water shader's own debug colours (hydro/shaders.ts, `uDebugView`), and
+ * the view ids are HydroDebugView's; 'surface' is the ordinary water and is
+ * what the chip returns to when it falls off the end.
+ */
+export const HYDRO_VIEWS: ReadonlyArray<{ view: 'coverage' | 'shore' | 'depth' | 'flow' | 'class' | 'coast'; name: string; legend: ReadonlyArray<{ name: string; hex: string }> }> = Object.freeze([
+  { view: 'coverage' as const, name: 'COVERAGE', legend: [{ name: 'DRY', hex: '#000000' }, { name: 'WET', hex: '#ffffff' }] },
+  { view: 'shore' as const, name: 'SHORE', legend: [{ name: 'LAND SIDE', hex: '#b83026' }, { name: 'WATER SIDE', hex: '#269c9b' }] },
+  { view: 'depth' as const, name: 'DEPTH', legend: [{ name: 'SHALLOW', hex: '#e3b840' }, { name: '18M+', hex: '#0a1f57' }] },
+  { view: 'flow' as const, name: 'FLOW', legend: [{ name: 'DIRECTION', hex: '#80c047' }, { name: 'TURBULENT', hex: '#ff3d12' }] },
+  { view: 'class' as const, name: 'CLASS', legend: [{ name: 'ONE HUE A BODY KIND', hex: '#8cb4e0' }] },
+  { view: 'coast' as const, name: 'COAST', legend: [{ name: 'SHELTERED', hex: '#bf3326' }, { name: 'EXPOSED', hex: '#26b359' }, { name: 'DRY', hex: '#404040' }] },
+]);
+/** The X-RAY views, in cycle order. Mode numbers are main.ts's XRAY_MODES. */
+export const XRAY_VIEWS: ReadonlyArray<{ mode: 1 | 2; name: string; legend: ReadonlyArray<{ name: string; hex: string }> }> = Object.freeze([
+  { mode: 1 as const, name: 'DEPTH', legend: [{ name: 'NEAR', hex: '#1e1e1e' }, { name: 'FAR', hex: '#ffffff' }, { name: 'SKY', hex: '#142242' }] },
+  { mode: 2 as const, name: 'WIRE', legend: [{ name: 'EVERY MESH AS WIREFRAME', hex: '#b4b4b4' }] },
 ]);
 
 export const CHART_LAYER_IDS: readonly ChartLayerId[] =

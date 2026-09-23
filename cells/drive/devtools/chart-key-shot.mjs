@@ -16,7 +16,17 @@ const ALL = {
   // What a player who has never touched the key sees.
   default: 'window.__chartlayers?.()',
   // Every checkbox chip on and a ground view up.
-  busy: `(() => { const L = window.__chartlayers; for (const id of ['tiles','stream','cover']) { try { L(id, true); } catch {} } })()`,
+  busy: `(() => { const L = window.__chartlayers; for (const id of ['tiles','stream','cover']) L(id, true); })()`,
+  // HYDRO switched on last, so T9 shows it and tags itself 1 of 3.
+  hydro: `window.__chartlayers('hydro', true)`,
+  // A tap on the legend: the same press a finger makes, at the legend's own box.
+  rotated: `(() => { const at = window.__chartlayers().legendAt; const c = document.querySelector('canvas');
+    for (const t of ['pointerdown', 'pointerup']) c.dispatchEvent(new PointerEvent(t, { clientX: at.x, clientY: at.y, pointerId: 7, bubbles: true })); })()`,
+  // …and once more, to the grid key.
+  rotated2: `(() => { const at = window.__chartlayers().legendAt; const c = document.querySelector('canvas');
+    for (const t of ['pointerdown', 'pointerup']) c.dispatchEvent(new PointerEvent(t, { clientX: at.x, clientY: at.y, pointerId: 8, bubbles: true })); })()`,
+  // OFF: the whole HUD goes.
+  off: `window.__chartlayers('off', true)`,
 };
 const want = process.env.STATES ? process.env.STATES.split(',') : Object.keys(ALL);
 const d = await openDrive({ spot: 'fixture=at-campsbay&cam=top&time=NOON&wx=clear', tag: 'chartkey', settle: 0, bootTimeout: 180000 });
@@ -25,6 +35,8 @@ await d.page.evaluate(() => document.querySelector('.m-x, .m-close')?.click());
 for (const name of want) {
   await d.page.evaluate(ALL[name]);
   await d.page.waitForTimeout(6000);
+  const st = await d.page.evaluate(() => { const r = window.__chartlayers(); return { on: r.layers.filter((l) => l.on).map((l) => l.id + (l.view ? ':' + l.view : '')), legend: r.legendOrder }; });
+  console.log(name, JSON.stringify(st));
   const p = join(WORK, `key-${TAG}-${name}.png`);
   await d.page.screenshot({ path: p, timeout: 240000, clip: { x: 0, y: 0, width: 390, height: 300 } });
   console.log('->', p);
