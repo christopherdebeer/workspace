@@ -97,6 +97,14 @@ function installAwsStubs(): void {
       s3Calls.push({ Bucket: p.Bucket, Key: p.Key });
       return { promise: async () => ({}) };
     },
+    // A deploy snapshots the source tree first (list + read the tree cache);
+    // these tests are about the control plane, so the tree reads as empty.
+    listObjectsV2: () => ({ promise: async () => ({ Contents: [] }) }),
+    getObject: () => ({
+      promise: async () => {
+        throw Object.assign(new Error('NoSuchKey'), { code: 'NoSuchKey' });
+      },
+    }),
   } as unknown as Parameters<typeof __setS3>[0]);
   __setCloudFormation({
     createStack: (p: { StackName: string; TemplateBody: string }) => {

@@ -12,6 +12,24 @@
  */
 import { createHash } from 'node:crypto';
 
+/** Text is anything not stored as bytes — the stored content type is the record. */
+export const isTextType = (contentType: string): boolean =>
+  contentType.startsWith('text/') || contentType.startsWith('application/json');
+
+/** Run `fn` over `items` with at most `n` in flight (S3 round trips). */
+export async function mapLimit<T, R>(items: T[], n: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+  return out;
+}
+
 /** Content version: `sha256:<hex>` over the stored bytes. Stable across reads. */
 export function contentVersion(body: Buffer | string): string {
   return `sha256:${createHash('sha256').update(body).digest('hex')}`;

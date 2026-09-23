@@ -404,6 +404,28 @@ export async function putObjectIf(
   }
 }
 
+/**
+ * Server-side copy pinned to the source generation: succeeds only if the
+ * source object still has ETag `ifMatch`, so a copy can never capture content
+ * other than the version that was hashed. No bytes pass through the Lambda.
+ */
+export async function copyObjectIf(bucket: string, fromKey: string, toKey: string, ifMatch: string): Promise<void> {
+  try {
+    await s3()
+      .copyObject({
+        Bucket: bucket,
+        Key: toKey,
+        CopySource: encodeURI(`${bucket}/${fromKey}`),
+        CopySourceIfMatch: ifMatch,
+      })
+      .promise();
+  } catch (err) {
+    const e = err as { code?: string; statusCode?: number };
+    if (e.statusCode === 412 || e.code === 'PreconditionFailed') throw new PreconditionFailedError(fromKey);
+    throw err;
+  }
+}
+
 /** Presigned PUT URL — the browser uploads bytes straight to S3. */
 export function presignPut(bucket: string, key: string, contentType: string, expiresSec = 300): string {
   return s3().getSignedUrl('putObject', {

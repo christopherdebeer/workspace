@@ -69,7 +69,13 @@ act ("forge.writeFile",   { cellId, path, content, encoding?, ifVersion?, ifAbse
 act ("forge.replaceInFile",{ cellId, path, old_str, new_str, replace_all?, expectedOccurrences?, matchIndex?, ifVersion?, dryRun?, deploy? })
 act ("forge.appendToFile",{ cellId, path, content, ifVersion?, ifExists?, ifAbsent?, deploy? })
 act ("forge.deleteFile",  { cellId, path, ifVersion?, deploy? })
-act ("forge.deploy",    { cellId })                 // bundle src/ → UpdateFunctionCode
+read("forge.readFiles",   { cellId, files: [{ path, startLine?, endLine? }], maxBytes? })
+read("forge.status",      { cellId })                 → treeVersion, dirty vs deployed
+act ("forge.snapshot",    { cellId, ifTreeVersion? }) → immutable tree:<hash>
+act ("forge.applyPatchSet",{ cellId, changes: [...], ifTreeVersion?, dryRun?, snapshot?, deploy? })
+act ("forge.moveFile",    { cellId, from, to, ifVersion?, overwrite?, ifTreeVersion? })
+read("forge.diff",        { cellId, from?, to?, view?: "summary"|"files"|"patch", prefix?, glob? })
+act ("forge.deploy",      { cellId, treeVersion? })   // pinned: builds exactly that snapshot
 act ("forge.putData",   { cellId, key, content, user? })   // data/<caller>/…
 read("forge.getData",   { cellId, key, user? })
 read("forge.listData",  { cellId, user? })
@@ -104,9 +110,55 @@ Source files are observable and mutable as versioned state, not opaque blobs:
   content type) and returns `path:line:column` hits with optional context, so
   finding a symbol in a 2.5 MB `main.ts` no longer means moving it through MCP.
 
-Not yet: a tree-level `sourceVersion`, batched `applyEdits`, `diff`,
-`validate`, and deploys pinned to a source revision (deploy still bundles
-whatever `src/` holds when the worker runs).
+## The source tree as a unit
+
+Per-file versions make one edit safe. The tree layer makes the whole source a
+unit (`services/cells/source-tree.ts`, `source-patch.ts`, `source-diff.ts`):
+
+```
+cells/<id>/src/<path>                 mutable authoring surface (unchanged)
+cells/<id>/blobs/<sha256>             immutable content, stored once per version
+cells/<id>/snapshots/<treehash>.json  immutable manifest: path → version + contentType
+cells/<id>/tree/index.json            cache: path → {etag, version} (revalidated by ETag)
+cells/<id>/tree/lock.json             patch-set commit lock + rollback journal
+```
+
+- **`treeVersion`** = `tree:sha256(sorted "<path>\t<contentVersion>\n")` — paths
+  and content only, never timestamps or ETags, so the same source always has
+  the same identity. `cells.status` computes it with one LIST plus a GET for
+  each file whose ETag moved since the cache saw it; it stays correct for
+  writes from any path (importSrc, cell-sync, other agents).
+- **Snapshots** freeze a tree: server-side copies into `blobs/` pinned to the
+  ETag each version was hashed from (`CopySourceIfMatch`), then a manifest. An
+  unchanged file is never copied twice.
+- **`applyPatchSet`** is the multi-file edit: `write | replace | append |
+  delete | move` changes with the single-file preconditions (which read the
+  tree *before* the patch set) plus `ifTreeVersion` for the whole tree. Every
+  change is validated first — a dry run returns *all* conflicts, per-file
+  +/- lines, one combined unified diff and the projected treeVersion. A real
+  run takes the per-cell lock, re-validates, stores the base content in
+  `blobs/`, writes a journal into the lock, then commits each file with a
+  conditional PUT. If any write loses a race, every write already made is
+  rolled back; if the Lambda dies mid-commit, the next lock holder replays the
+  journal backwards (restoring each path still at the dead commit's version).
+  The guarantee is to the author — all or nothing, never onto a tree it did
+  not name; readers can see the sub-second commit window (S3 has no
+  multi-object transaction). `moveFile` is a one-change patch set.
+- **Deploys are source-pinned.** `cells.deploy` (and every fused `deploy:true`)
+  snapshots at request time — or takes an explicit `treeVersion` — and the
+  worker bundles that snapshot, not live `src/`. The request's version names
+  the build; a redelivered event for a finished deploy is skipped, an event
+  superseded by a newer request is skipped, and a bundle that finishes after a
+  newer request re-checks the registry and does not repoint the Lambda.
+  `lastDeployed {version, treeVersion, deployedAt}` records what is live.
+- **`cells.diff`** compares `current`, `deployed` or any `tree:<hash>`
+  (summary / files / patch views, filtered by prefix/glob) without shipping
+  source through MCP. **`readFiles`** assembles several files or line ranges
+  under one shared byte budget.
+
+Not yet: deploy jobs with stages and logs (`getDeploy`), a
+`cell.deploy.failed` event, a validate-without-deploy step, a symbol index,
+a change feed, and garbage collection of unreferenced blobs/snapshots.
 
 ## Multi-file build = the "bundled imports" gap, closed
 

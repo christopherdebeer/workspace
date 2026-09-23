@@ -27,6 +27,19 @@ export interface DeployState {
   requestedAt: string;
   /** Present only when `phase === 'FAILED'`. */
   error?: string;
+  /**
+   * The immutable source snapshot this deploy bundles (`tree:<hash>`). Pinned
+   * at request time, so the worker builds exactly the tree that was asked for
+   * — not whatever src/ holds by the time the event is delivered.
+   */
+  treeVersion?: string;
+}
+
+/** The last deploy that actually landed, kept apart from `deploy` (which the next request overwrites). */
+export interface DeployedState {
+  version: string;
+  treeVersion?: string;
+  deployedAt: string;
 }
 
 export interface CellRecord {
@@ -81,6 +94,8 @@ export interface CellRecord {
   /** The last/in-flight async deploy's phase (set by `cells.deploy`; polled via
    *  `getCell`). Absent until the cell has been deployed at least once. */
   deploy?: DeployState;
+  /** The last successful deploy — what `cells.status`/`cells.diff` call "deployed". */
+  lastDeployed?: DeployedState;
   /** Lambda timeout override (seconds, 10–300). */
   timeoutSeconds?: number;
   /** Lambda memory override (MB, 128–3008; template default 512). CPU scales
@@ -137,6 +152,7 @@ function toRecord(item: DynamoDB.DocumentClient.AttributeMap): CellRecord {
     ...(typeof item.memoryMb === 'number' ? { memoryMb: item.memoryMb } : {}),
     status: item.status as CellStatus,
     ...(item.deploy && typeof item.deploy === 'object' ? { deploy: item.deploy as DeployState } : {}),
+    ...(item.lastDeployed && typeof item.lastDeployed === 'object' ? { lastDeployed: item.lastDeployed as DeployedState } : {}),
     createdAt: String(item.createdAt),
     updatedAt: String(item.updatedAt),
   };
@@ -157,6 +173,8 @@ export interface CellRegistry {
   setStatus(cellId: string, status: CellStatus): Promise<void>;
   /** Record the async deploy phase (DEPLOYING → DEPLOYED/FAILED). */
   setDeploy(cellId: string, deploy: DeployState): Promise<void>;
+  /** Record the deploy that landed (survives the next DEPLOYING marker). */
+  setLastDeployed(cellId: string, deployed: DeployedState): Promise<void>;
   /** Grant a principal: every tool (no `tools`), or just the named tool patterns. Re-granting replaces. */
   addGrant(cellId: string, principal: string, tools?: string[]): Promise<CellRecord | null>;
   /** Remove a principal's access entirely (full and per-tool). */
@@ -263,6 +281,17 @@ export function createRegistry(tableName: string): CellRegistry {
           Key: profileKey(cellId),
           UpdateExpression: 'SET deploy = :d, updatedAt = :u',
           ExpressionAttributeValues: { ':d': deploy, ':u': new Date().toISOString() },
+        })
+        .promise();
+    },
+
+    async setLastDeployed(cellId: string, deployed: DeployedState): Promise<void> {
+      await db
+        .update({
+          TableName: tableName,
+          Key: profileKey(cellId),
+          UpdateExpression: 'SET lastDeployed = :ld, updatedAt = :u',
+          ExpressionAttributeValues: { ':ld': deployed, ':u': new Date().toISOString() },
         })
         .promise();
     },

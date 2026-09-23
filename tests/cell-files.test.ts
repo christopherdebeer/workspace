@@ -35,6 +35,7 @@ function memoryDocClient(): Record<string, unknown> {
           if (':s' in ExpressionAttributeValues) item.status = ExpressionAttributeValues[':s'];
           if (':d' in ExpressionAttributeValues) item.deploy = ExpressionAttributeValues[':d'];
           if (':u' in ExpressionAttributeValues) item.updatedAt = ExpressionAttributeValues[':u'];
+          if (':ld' in ExpressionAttributeValues) item.lastDeployed = ExpressionAttributeValues[':ld'];
         }
         return {};
       },
@@ -103,6 +104,20 @@ function memoryS3(): { store: Map<string, string | Buffer>; etags: Map<string, s
     }),
     deleteObject: ({ Bucket, Key }: { Bucket: string; Key: string }) => ({
       promise: async () => { store.delete(`${Bucket}/${Key}`); etags.delete(`${Bucket}/${Key}`); return {}; },
+    }),
+    // Server-side copy with S3's CopySourceIfMatch: a 412 if the source moved.
+    copyObject: ({ Bucket, Key, CopySource, CopySourceIfMatch }: { Bucket: string; Key: string; CopySource: string; CopySourceIfMatch?: string }) => ({
+      promise: async () => {
+        const from = decodeURI(CopySource);
+        if (!store.has(from)) { const e = new Error('NoSuchKey') as Error & { code: string }; e.code = 'NoSuchKey'; throw e; }
+        if (CopySourceIfMatch !== undefined && etags.get(from) !== CopySourceIfMatch) throw preconditionFailed();
+        const k = `${Bucket}/${Key}`;
+        store.set(k, store.get(from) as string | Buffer);
+        const t = types.get(from);
+        if (t) types.set(k, t);
+        etags.set(k, `"g${++generation}"`);
+        return {};
+      },
     }),
   };
 }
@@ -550,6 +565,322 @@ describe('forge: cell common layer (S3 files + data)', () => {
       for (const n of ['readFile', 'listFiles', 'searchFiles', 'writeFile', 'replaceInFile', 'appendToFile', 'deleteFile']) {
         expect(byName[n].resultSchema).toBeDefined();
       }
+    });
+  });
+
+  describe('source tree: identity, patch sets, pinned deploys', () => {
+    type Status = { treeVersion: string; files: number; dirty: boolean | null; deployed: { treeVersion?: string } | null; changedSinceDeploy?: Record<string, number> };
+    type Patch = {
+      ok: boolean; treeVersion: string; previousTreeVersion: string; snapshot?: string;
+      conflicts?: Array<{ index: number; error: string }>; diff?: string;
+      files: Array<{ path: string; status: string; added?: number; removed?: number; movedFrom?: string; movedTo?: string }>;
+      deploy?: { phase: string; treeVersion: string; version: string };
+    };
+    const status = async (cellId: string): Promise<Status> => (await call<Status>('alice', 'status', { cellId })).result!;
+    const read = async (cellId: string, path: string): Promise<string | undefined> =>
+      (await call<{ content: string }>('alice', 'readFile', { cellId, path })).result?.content;
+    /** Run the worker for a specific request, as EventBridge would deliver it. */
+    const deliver = async (detail: Record<string, unknown>): Promise<void> => {
+      await forge({ 'detail-type': 'cell.deploy.requested', source: 'cells', detail } as unknown as Parameters<typeof forge>[0]);
+    };
+    const zipOf = (cellId: string, version: string): string =>
+      (s3mem.store.get(`code-bucket/cells/${cellId}/build/${version}.zip`) as Buffer).toString('latin1');
+
+    it('treeVersion names the content: stable across rewrites of the same bytes, moves on any change', async () => {
+      const cellId = await makeCell('alice');
+      const t0 = await status(cellId);
+      expect(t0.treeVersion).toMatch(/^tree:[0-9a-f]{64}$/);
+      expect(t0.files).toBe(1);
+      expect(t0.dirty).toBeNull();
+      await call('alice', 'writeFile', { cellId, path: 'a.ts', content: 'x' });
+      const t1 = await status(cellId);
+      expect(t1.treeVersion).not.toBe(t0.treeVersion);
+      await call('alice', 'writeFile', { cellId, path: 'a.ts', content: 'x' }); // new ETag, same bytes
+      expect((await status(cellId)).treeVersion).toBe(t1.treeVersion);
+      await call('alice', 'deleteFile', { cellId, path: 'a.ts' });
+      expect((await status(cellId)).treeVersion).toBe(t0.treeVersion);
+    });
+
+    it('deploy builds the tree pinned at request time, not what src/ holds when the worker runs', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'client/main.ts', content: 'console.log("v1");' });
+      const started = (await call<{ version: string; treeVersion: string }>('alice', 'deploy', { cellId })).result!;
+      expect(started.treeVersion).toBe((await status(cellId)).treeVersion);
+
+      // Another agent writes BEFORE the worker picks the event up…
+      await call('alice', 'writeFile', { cellId, path: 'client/main.ts', content: 'console.log("v2");' });
+      const builtFrom: string[] = [];
+      __setEsbuild({
+        initialize: async () => undefined,
+        transform: async (code: string) => ({ code, warnings: [], map: '' }),
+        build: async (opts: { stdin?: { contents?: string }; plugins?: Array<unknown> }) => {
+          builtFrom.push(JSON.stringify(opts).includes('v2') ? 'v2' : 'v1');
+          return { outputFiles: [{ text: '/*bundle*/' }], errors: [], warnings: [] };
+        },
+      } as unknown as Parameters<typeof __setEsbuild>[0]);
+      await deliver({ cellId, version: started.version, treeVersion: started.treeVersion });
+
+      // …and the build still reads the pinned snapshot: v1, never v2.
+      const got = (await call<{ deploy: { phase: string; treeVersion: string }; lastDeployed: { treeVersion: string } }>('alice', 'get', { cellId })).result!;
+      expect(got.deploy.phase).toBe('DEPLOYED');
+      expect(got.lastDeployed.treeVersion).toBe(started.treeVersion);
+      const snapKeys = [...s3mem.store.keys()].filter((k) => k.includes(`cells/${cellId}/snapshots/`));
+      expect(snapKeys).toHaveLength(1);
+      const manifest = JSON.parse(String(s3mem.store.get(snapKeys[0]))) as { files: Array<{ path: string; version: string }> };
+      const mainBlob = manifest.files.find((f) => f.path === 'client/main.ts')!.version.slice(7);
+      expect(String(s3mem.store.get(`code-bucket/cells/${cellId}/blobs/${mainBlob}`))).toBe('console.log("v1");');
+
+      const st = await status(cellId);
+      expect(st.dirty).toBe(true);
+      expect(st.changedSinceDeploy).toEqual({ added: 0, modified: 1, deleted: 0 });
+    });
+
+    it('a redelivered or superseded deploy event never lands', async () => {
+      const cellId = await makeCell('alice');
+      const first = (await call<{ version: string; treeVersion: string }>('alice', 'deploy', { cellId })).result!;
+      await new Promise((r) => setTimeout(r, 5));
+      await call('alice', 'writeFile', { cellId, path: 'x.ts', content: 'export {};' });
+      const second = (await call<{ version: string; treeVersion: string }>('alice', 'deploy', { cellId })).result!;
+      expect(second.treeVersion).not.toBe(first.treeVersion);
+
+      await deliver({ cellId, version: first.version, treeVersion: first.treeVersion }); // stale: superseded
+      expect(updateCodeCalls).toHaveLength(0);
+      await deliver({ cellId, version: second.version, treeVersion: second.treeVersion });
+      expect(updateCodeCalls).toHaveLength(1);
+      await deliver({ cellId, version: second.version, treeVersion: second.treeVersion }); // at-least-once redelivery
+      expect(updateCodeCalls).toHaveLength(1);
+      expect((await status(cellId)).deployed!.treeVersion).toBe(second.treeVersion);
+    });
+
+    it('deploy({treeVersion}) redeploys an older snapshot; an unknown tree is refused', async () => {
+      const cellId = await makeCell('alice');
+      const old = (await call<{ treeVersion: string }>('alice', 'snapshot', { cellId })).result!.treeVersion;
+      await call('alice', 'writeFile', { cellId, path: 'static/late.txt', content: 'added after the snapshot' });
+      const back = (await call<{ version: string; treeVersion: string }>('alice', 'deploy', { cellId, treeVersion: old })).result!;
+      expect(back.treeVersion).toBe(old);
+      await deliver({ cellId, version: back.version, treeVersion: back.treeVersion });
+      expect(zipOf(cellId, back.version)).not.toContain('static/late.txt');
+      const now = (await call<{ version: string; treeVersion: string }>('alice', 'deploy', { cellId })).result!;
+      await deliver({ cellId, version: now.version, treeVersion: now.treeVersion });
+      expect(zipOf(cellId, now.version)).toContain('static/late.txt');
+
+      const bogus = await call('alice', 'deploy', { cellId, treeVersion: `tree:${'0'.repeat(64)}` });
+      expect(bogus.error).toMatch(/TREE_CONFLICT/);
+    });
+
+    it('applyPatchSet dry run: every conflict at once, combined diff, projected treeVersion — nothing written', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'a.ts', content: 'const a = 1;\n' });
+      await call('alice', 'writeFile', { cellId, path: 'b.ts', content: 'const b = 1;\n' });
+      const before = await status(cellId);
+
+      const bad = (await call<Patch>('alice', 'applyPatchSet', {
+        cellId, dryRun: true,
+        changes: [
+          { op: 'replace', path: 'a.ts', old_str: 'a = 1', new_str: 'a = 2' },
+          { op: 'replace', path: 'b.ts', old_str: 'nope', new_str: 'x' },
+          { op: 'delete', path: 'missing.ts' },
+        ],
+      })).result!;
+      expect(bad.ok).toBe(false);
+      expect(bad.conflicts!.map((c) => c.index)).toEqual([1, 2]);
+
+      const good = (await call<Patch>('alice', 'applyPatchSet', {
+        cellId, dryRun: true, ifTreeVersion: before.treeVersion,
+        changes: [
+          { op: 'replace', path: 'a.ts', old_str: 'a = 1', new_str: 'a = 2' },
+          { op: 'write', path: 'c.ts', content: 'export const c = 3;\n', ifAbsent: true },
+          { op: 'move', from: 'b.ts', to: 'lib/b.ts' },
+        ],
+      })).result!;
+      expect(good.ok).toBe(true);
+      expect(good.previousTreeVersion).toBe(before.treeVersion);
+      expect(good.diff).toContain('--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,1 @@\n-const a = 1;\n+const a = 2;');
+      expect(good.diff).toContain('--- /dev/null\n+++ b/c.ts\n@@ -0,0 +1,1 @@\n+export const c = 3;');
+      expect(good.diff).toContain('--- a/b.ts\n+++ b/lib/b.ts\n(content unchanged)');
+      expect(good.files.find((f) => f.path === 'b.ts')).toMatchObject({ status: 'D', movedTo: 'lib/b.ts' });
+      expect((await status(cellId)).treeVersion).toBe(before.treeVersion);
+
+      // The real run lands exactly the projected tree.
+      const applied = (await call<Patch>('alice', 'applyPatchSet', {
+        cellId, ifTreeVersion: before.treeVersion,
+        changes: [
+          { op: 'replace', path: 'a.ts', old_str: 'a = 1', new_str: 'a = 2' },
+          { op: 'write', path: 'c.ts', content: 'export const c = 3;\n', ifAbsent: true },
+          { op: 'move', from: 'b.ts', to: 'lib/b.ts' },
+        ],
+      })).result!;
+      expect(applied.treeVersion).toBe(good.treeVersion);
+      expect((await status(cellId)).treeVersion).toBe(good.treeVersion);
+      expect(await read(cellId, 'lib/b.ts')).toBe('const b = 1;\n');
+      expect(await read(cellId, 'b.ts')).toBeUndefined();
+      expect(s3mem.store.has(`code-bucket/cells/${cellId}/tree/lock.json`)).toBe(false);
+    });
+
+    it('applyPatchSet is all-or-nothing: one bad change means zero files written', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'a.ts', content: 'const a = 1;\n' });
+      const before = await status(cellId);
+      const res = await call('alice', 'applyPatchSet', {
+        cellId,
+        changes: [
+          { op: 'replace', path: 'a.ts', old_str: 'a = 1', new_str: 'a = 2' },
+          { op: 'write', path: 'new.ts', content: 'x' },
+          { op: 'replace', path: 'a.ts', old_str: 'not there', new_str: 'y' },
+        ],
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error).toMatch(/PATCH_REJECTED: 1 conflict\(s\) — nothing was written[\s\S]*\[2\] replace a\.ts: old_str not found/);
+      expect((await status(cellId)).treeVersion).toBe(before.treeVersion);
+      expect(await read(cellId, 'new.ts')).toBeUndefined();
+    });
+
+    it('ifTreeVersion refuses a patch set when an UNTOUCHED file moved since inspection', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'main.ts', content: 'main v1' });
+      await call('alice', 'writeFile', { cellId, path: 'runtime.ts', content: 'runtime v1' });
+      const inspected = (await status(cellId)).treeVersion;
+      await call('alice', 'writeFile', { cellId, path: 'main.ts', content: 'main v2 (someone else)' });
+      const res = await call('alice', 'applyPatchSet', {
+        cellId, ifTreeVersion: inspected,
+        changes: [{ op: 'replace', path: 'runtime.ts', old_str: 'v1', new_str: 'v2' }],
+      });
+      expect(res.error).toMatch(/^TREE_CONFLICT: expected tree:/);
+      expect(await read(cellId, 'runtime.ts')).toBe('runtime v1');
+    });
+
+    it('a write that loses a race mid-commit rolls back the writes already made', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'a.ts', content: 'A1' });
+      await call('alice', 'writeFile', { cellId, path: 'b.ts', content: 'B1' });
+      // A racing writer bumps b.ts's generation just before the commit writes it.
+      const s3 = s3mem as unknown as { putObject: (p: { Bucket: string; Key: string }) => unknown };
+      const realPut = s3.putObject;
+      s3.putObject = (p) => {
+        if (p.Key.endsWith('/src/b.ts')) {
+          s3mem.etags.set(`${p.Bucket}/${p.Key}`, '"racer"');
+          s3.putObject = realPut;
+        }
+        return (realPut as (x: unknown) => unknown)(p);
+      };
+      const res = await call('alice', 'applyPatchSet', {
+        cellId,
+        changes: [
+          { op: 'write', path: 'a.ts', content: 'A2' },
+          { op: 'write', path: 'b.ts', content: 'B2' },
+        ],
+      });
+      expect(res.error).toMatch(/^PATCH_ROLLED_BACK: .*b\.ts changed under the commit \(VERSION_CONFLICT\); restored 1 file/);
+      expect(await read(cellId, 'a.ts')).toBe('A1');
+      expect(s3mem.store.has(`code-bucket/cells/${cellId}/tree/lock.json`)).toBe(false);
+    });
+
+    it('a commit whose Lambda died is undone by the next lock holder (journal replay)', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'a.ts', content: 'BASE' });
+      await call('alice', 'writeFile', { cellId, path: 'b.ts', content: 'untouched' });
+      const v = (x: string): string => `sha256:${require('node:crypto').createHash('sha256').update(x).digest('hex')}`;
+      // The dead commit had stored its base blob, written a.ts and created z.ts, then vanished.
+      s3mem.store.set(`code-bucket/cells/${cellId}/blobs/${v('BASE').slice(7)}`, Buffer.from('BASE'));
+      await call('alice', 'writeFile', { cellId, path: 'a.ts', content: 'HALF-COMMITTED' });
+      await call('alice', 'writeFile', { cellId, path: 'z.ts', content: 'CREATED' });
+      s3mem.store.set(`code-bucket/cells/${cellId}/tree/lock.json`, JSON.stringify({
+        id: 'dead', holder: 'ghost', acquiredAt: new Date(0).toISOString(), expiresAt: new Date(1).toISOString(),
+        journal: {
+          base: { 'a.ts': v('BASE'), 'z.ts': null },
+          next: { 'a.ts': v('HALF-COMMITTED'), 'z.ts': v('CREATED') },
+          baseTypes: { 'a.ts': 'text/plain; charset=utf-8' },
+        },
+      }));
+      s3mem.etags.set(`code-bucket/cells/${cellId}/tree/lock.json`, '"dead-lock"');
+
+      const res = await call<Patch>('alice', 'applyPatchSet', { cellId, changes: [{ op: 'write', path: 'b.ts', content: 'next' }] });
+      expect(res.ok).toBe(true);
+      expect(await read(cellId, 'a.ts')).toBe('BASE');
+      expect(await read(cellId, 'z.ts')).toBeUndefined();
+      expect(await read(cellId, 'b.ts')).toBe('next');
+    });
+
+    it('a live lock makes a second patch set wait (LOCKED), not interleave', async () => {
+      const cellId = await makeCell('alice');
+      s3mem.store.set(`code-bucket/cells/${cellId}/tree/lock.json`, JSON.stringify({
+        id: 'busy', holder: 'bob applyPatchSet', acquiredAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }));
+      s3mem.etags.set(`code-bucket/cells/${cellId}/tree/lock.json`, '"busy"');
+      const res = await call('alice', 'applyPatchSet', { cellId, changes: [{ op: 'write', path: 'a.ts', content: 'x' }] });
+      expect(res.error).toMatch(/^LOCKED: another patch set \(bob applyPatchSet\)/);
+      // Dry runs take no lock.
+      expect((await call<Patch>('alice', 'applyPatchSet', { cellId, dryRun: true, changes: [{ op: 'write', path: 'a.ts', content: 'x' }] })).result!.ok).toBe(true);
+    });
+
+    it('applyPatchSet deploy:true deploys exactly the patched tree', async () => {
+      const cellId = await makeCell('alice');
+      const res = (await call<Patch>('alice', 'applyPatchSet', {
+        cellId, deploy: true, changes: [{ op: 'write', path: 'static/hello.txt', content: 'hi' }],
+      })).result!;
+      expect(res.snapshot).toBe(res.treeVersion);
+      expect(res.deploy!.treeVersion).toBe(res.treeVersion);
+      await deliver({ cellId, version: res.deploy!.version, treeVersion: res.deploy!.treeVersion });
+      expect(zipOf(cellId, res.deploy!.version)).toContain('static/hello.txt');
+      expect((await status(cellId)).dirty).toBe(false);
+    });
+
+    it('moveFile renames atomically; refuses to clobber without overwrite', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'old/hud.ts', content: 'hud' });
+      await call('alice', 'writeFile', { cellId, path: 'hud-deck.ts', content: 'deck' });
+      expect((await call('alice', 'moveFile', { cellId, from: 'old/hud.ts', to: 'hud-deck.ts' })).error).toMatch(/move target exists/);
+      const moved = (await call<Patch>('alice', 'moveFile', { cellId, from: 'old/hud.ts', to: 'client/hud.ts' })).result!;
+      expect(moved.files.map((f) => [f.path, f.status])).toEqual([['client/hud.ts', 'A'], ['old/hud.ts', 'D']]);
+      expect(await read(cellId, 'client/hud.ts')).toBe('hud');
+      expect(await read(cellId, 'old/hud.ts')).toBeUndefined();
+    });
+
+    it('diff answers "what changed since deploy / since my snapshot" in summary, files and patch views', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'client/hydro/system.ts', content: 'a\nb\nc\n' });
+      await call('alice', 'writeFile', { cellId, path: 'client/hydro/legacy.ts', content: 'old\n' });
+      const snap = (await call<{ treeVersion: string }>('alice', 'snapshot', { cellId })).result!.treeVersion;
+      expect((await call('alice', 'diff', { cellId })).error).toMatch(/no pinned deploy yet/);
+
+      await call('alice', 'applyPatchSet', {
+        cellId,
+        changes: [
+          { op: 'replace', path: 'client/hydro/system.ts', old_str: 'b\n', new_str: 'B\nB2\n' },
+          { op: 'write', path: 'client/hydro/foam.ts', content: 'foam\n' },
+          { op: 'delete', path: 'client/hydro/legacy.ts' },
+          { op: 'write', path: 'README.md', content: 'r\n' },
+        ],
+      });
+      type Diff = { identical: boolean; counts: Record<string, number>; lines: { added: number; removed: number }; files: Array<{ path: string; status: string; added: number; removed: number }>; patch?: string };
+      const sum = (await call<Diff>('alice', 'diff', { cellId, from: snap, view: 'summary', prefix: 'client/hydro/' })).result!;
+      expect(sum.counts).toEqual({ added: 1, modified: 1, deleted: 1, unchanged: 0 });
+      expect(sum.lines).toEqual({ added: 3, removed: 2 });
+      const files = (await call<Diff>('alice', 'diff', { cellId, from: snap })).result!;
+      expect(files.files.map((f) => [f.status, f.path])).toEqual([
+        ['A', 'README.md'], ['A', 'client/hydro/foam.ts'], ['D', 'client/hydro/legacy.ts'], ['M', 'client/hydro/system.ts'],
+      ]);
+      const patch = (await call<Diff>('alice', 'diff', { cellId, from: snap, view: 'patch', glob: 'client/hydro/system.ts', contextLines: 1 })).result!;
+      expect(patch.patch).toBe('--- a/client/hydro/system.ts\n+++ b/client/hydro/system.ts\n@@ -1,3 +1,4 @@\n a\n-b\n+B\n+B2\n c\n');
+      expect((await call<Diff>('alice', 'diff', { cellId, from: 'current', to: 'current' })).result!.identical).toBe(true);
+    });
+
+    it('readFiles assembles several files under one budget and says what it left out', async () => {
+      const cellId = await makeCell('alice');
+      await call('alice', 'writeFile', { cellId, path: 'types.ts', content: 'export type T = 1;\n' });
+      await call('alice', 'writeFile', { cellId, path: 'system.ts', content: Array.from({ length: 400 }, (_, i) => `// line ${i + 1} ${'y'.repeat(20)}`).join('\n') + '\n' });
+      await call('alice', 'writeFile', { cellId, path: 'shaders.ts', content: 'export const s = "";\n' });
+      type Files = { files: Array<{ path: string; content?: string; version?: string; truncated?: boolean; nextStartLine?: number; omitted?: boolean; error?: string; range?: { startLine: number; endLine: number } }>; used: number; budget: number };
+      const res = (await call<Files>('alice', 'readFiles', {
+        cellId, maxBytes: 4096,
+        files: [{ path: 'types.ts' }, { path: 'system.ts', startLine: 10 }, { path: 'shaders.ts' }, { path: 'nope.ts' }],
+      })).result!;
+      expect(res.files[0]).toMatchObject({ path: 'types.ts', content: 'export type T = 1;\n', version: expect.stringMatching(/^sha256:/) });
+      expect(res.files[1]).toMatchObject({ path: 'system.ts', truncated: true, range: { startLine: 10 } });
+      expect(res.files[1].nextStartLine).toBe(res.files[1].range!.endLine + 1);
+      expect(res.files[2]).toMatchObject({ path: 'shaders.ts', omitted: true });
+      expect(res.files[3]).toEqual({ path: 'nope.ts', error: 'not found' });
+      expect(res.used).toBeLessThanOrEqual(res.budget);
     });
   });
 
