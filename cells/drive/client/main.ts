@@ -44364,8 +44364,11 @@ function farHeightAt(wx: number, wz: number): number | null {
   };
 };
 (window as unknown as { __tiledbg?: object }).__tiledbg = (v?: boolean): boolean => {
-  tileDbg = v ?? !tileDbg;
-  return tileDbg;
+  // The tile grid and the stream readout were one dial; they are two chips
+  // (TILES, STREAM) now, and this probe keeps driving both together.
+  const on = v ?? !(chartOn.tiles || chartOn.stream);
+  setChartLayer('tiles', on); setChartLayer('stream', on);
+  return on;
 };
 (window as unknown as { __roadline?: object }).__roadline = (): object =>
   ({ n: roadSegs.length, task: roadSegs.filter((s) => s.task).length,
@@ -55575,7 +55578,6 @@ let cpVis = 0;
  *  probe (`__auto`) works either way; this is only about the on-device reach. */
 let autoTab = false;
 // The streaming machinery drawn over the chart — see the TILE DEBUG dial.
-let tileDbg = false;
 const wearU = { value: 1 };  // shared by every bodywork material
 const BODY_COLORS: Array<[string, number]> = [
   ['RUST', 0xc4402c], ['EMBER', 0xd0642a], ['SAND', 0xc0a068],
@@ -55953,7 +55955,6 @@ const DIAL_GROUPS: DialGroup[] = [
         hudSize = HUD_SIZES[i];
         hudResize();
       }),
-      dial('tdbg', 'TILE DEBUG', ['OFF', 'ON'], 1, (i) => { tileDbg = i === 1; }),
     ],
   },
   {
@@ -56220,7 +56221,7 @@ function hudSafeRects(): Array<[number, number, number, number]> {
   const mw = Math.min(58, Math.floor(HW * 0.34));   // the dock square (see drawHud)
   const my = HH - 4 - 23 - mw - 3;
   return [
-    [0, 0, HW, 34 + (camMode === 'top' && tileDbg ? 22 : 0)],  // compass strip + the justified top row
+    [0, 0, HW, 34 + (camMode === 'top' && chartOn.stream ? 22 : 0)],  // compass strip + the justified top row
     [0, 32, 74, 18],                                 // the task chip, under the top row
     [HW - 56, 18, 56, 18],                           // MENU, on the heading row
     [0, my - 200, camMode === 'top' ? 24 : 17, 200], // ENV stack, or the chart tilt rail
@@ -56367,8 +56368,31 @@ function hudLap(k: string): void {
  * (viewX()+panX on the chart, godTarget in god mode), so the debug grid is
  * centred on wherever the shot is actually looking.
  */
+/**
+ * T5, THE STREAM READOUT: what the vector and terrain streams are doing.
+ * Its own chip (STREAM) since the key became the one switchboard; it used to
+ * ride the tile-debug dial with the grid.
+ */
+function drawStreamHeader(): void {
+  if (!chartOn.stream || (camMode !== 'top' && camMode !== 'god')) return;
+  hctx.globalAlpha = 1;
+  let fails = 0;
+  for (const [, at] of osmFailedAt) if (performance.now() - at < 30000) fails++;
+  textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
+    6, 40, UI.text);
+  // CLIP is the block of fine tiles the shell is discarded inside. It is the
+  // number to read when the chart's outer ground looks paler and flatter
+  // than the middle: anything outside that block is the coarse shell's to
+  // paint wherever its 150 m chords stand over the fine world, and a block
+  // that has collapsed to 1x1 hands it nearly everything.
+  textEdgeP(`Z${TERRAIN_Z} MESH ${terrainMeshes.size} WAIT ${terrainReady.size - terrainMeshes.size}`
+    + ` REBUILD ${terrainDirty.size} CLIP ${fineBlock[0] + fineBlock[1] + 1}x${fineBlock[2] + fineBlock[3] + 1}`
+    + ` · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
+    + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
+    6, 48, UI.soft);
+}
 function drawTileDebugOverlay(): void {
-  if (!tileDbg || (camMode !== 'top' && camMode !== 'god')) return;
+  if (!chartOn.tiles || (camMode !== 'top' && camMode !== 'god')) return;
   const pad = 4;
   const dNow = performance.now();
   const dProj = (wx: number, wz: number): [number, number] | null => {
@@ -56560,20 +56584,6 @@ function drawTileDebugOverlay(): void {
     }
   }
   hctx.globalAlpha = 1;
-  let fails = 0;
-  for (const [, at] of osmFailedAt) if (dNow - at < 30000) fails++;
-  textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
-    6, 40, UI.text);
-  // CLIP is the block of fine tiles the shell is discarded inside. It is the
-  // number to read when the chart's outer ground looks paler and flatter
-  // than the middle: anything outside that block is the coarse shell's to
-  // paint wherever its 150 m chords stand over the fine world, and a block
-  // that has collapsed to 1x1 hands it nearly everything.
-  textEdgeP(`Z${TERRAIN_Z} MESH ${terrainMeshes.size} WAIT ${terrainReady.size - terrainMeshes.size}`
-    + ` REBUILD ${terrainDirty.size} CLIP ${fineBlock[0] + fineBlock[1] + 1}x${fineBlock[2] + fineBlock[3] + 1}`
-    + ` · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
-    + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
-    6, 48, UI.soft);
   // ── THE KEY ── one row per LAYER that draws boxes, in the order they
   // stream: what zoom it is, how wide one of its boxes is here (a tile's
   // metres shrink with the cosine of the latitude, so this is computed,
@@ -56595,7 +56605,7 @@ function drawTileDebugOverlay(): void {
     // Below the LAYER key, which is drawn first and is a variable number of
     // rows (the legend grows with what is on screen). The fallback is the old
     // fixed offset, for the frame before the chart block has run.
-    let ly = Math.max(pad + 56 + 20, layerKeyBottom + 3);
+    let ly = Math.max(pad + 34 + 20, layerKeyBottom + 3);
     type Mark = ((cx: number, cy: number) => void) | null;
     const row = (name: string, items: Array<[string, string, Mark]>): void => {
       const x0 = 6 + gw(name) + 4;
@@ -56668,7 +56678,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // from `body.clean` the grid was hidden there by accident, and restoring
     // it by accident would put four lines of debug over the map the lab
     // exists to edit. FOLD gives it back with the rest of the chrome.
-    if (!labChrome) drawTileDebugOverlay();
+    if (!labChrome) { drawTileDebugOverlay(); drawStreamHeader(); }
     // AND SO IS THE AUTHORING OVERLAY, for the same reason and a sharper
     // one: the world lab turns the game's chrome OFF as it opens, which is
     // `hudOn = false`, so the one instrument the lab cannot work without was
@@ -56719,7 +56729,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // tick at each end. See chartScale for what the three numbers are.
   if (camMode === 'top') {
     const sc = chartScale();
-    const x0 = pad + 1, y0 = tileDbg ? pad + 56 : pad + 34;
+    const x0 = pad + 1, y0 = chartOn.stream ? pad + 56 : pad + 34;
     textEdgeS(sc.label, x0, y0, UI.soft);
     hctx.fillStyle = 'rgba(4,10,11,0.85)';
     hctx.fillRect(x0 - 1, y0 + 10, sc.barPx + 3, 5);
@@ -56929,6 +56939,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // camMode === 'top' || 'god', not just the chart), so it can also fire
   // from this function's own !hudOn early return, above.
   drawTileDebugOverlay();
+  drawStreamHeader();
   hudLap('tiledbg');
   // ── checkpoint markers, under everything ──
   // Never a label and never a distance: the moment a checkpoint tells you how

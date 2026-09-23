@@ -29,7 +29,7 @@
  */
 
 /** What a layer draws, which decides how it is switched and how it is keyed. */
-export type ChartLayerKind = 'vector' | 'thematic';
+export type ChartLayerKind = 'vector' | 'thematic' | 'overlay';
 
 export interface ChartLayer {
   id: ChartLayerId;
@@ -49,7 +49,8 @@ export interface ChartLayer {
   debug?: boolean;
 }
 
-export type ChartLayerId = 'roads' | 'places' | 'cover' | 'eco' | 'substrate' | 'water' | 'surface' | 'ground';
+export type ChartLayerId = 'roads' | 'places' | 'cover' | 'eco' | 'substrate' | 'water' | 'surface' | 'ground'
+  | 'tiles' | 'stream';
 
 /**
  * THE TABLE. Order is the order on the key, and the key reads top-down as the
@@ -93,6 +94,14 @@ export const CHART_LAYERS: readonly ChartLayer[] = Object.freeze([
   Object.freeze({ id: 'surface' as const, name: 'SURFACE', kind: 'thematic' as const,
     on: false, debug: true,
     note: 'what the wheels read: carriageway, formation, ground and water, and whether the deck under the point is a structure standing clear of the terrain' }),
+  // ── INSTRUMENTS ── independent checkboxes, like the vector layers, but about
+  // this program rather than the planet: the tile grid (with its key in the
+  // legend slot) and the stream readout (T5). They were one TILE DEBUG dial,
+  // on by default; as chips they start off.
+  Object.freeze({ id: 'tiles' as const, name: 'TILES', kind: 'overlay' as const, on: false, debug: true,
+    note: 'the tile grid over the chart: vector cells, terrain boxes and the far shell, each marked with its streaming state' }),
+  Object.freeze({ id: 'stream' as const, name: 'STREAM', kind: 'overlay' as const, on: false, debug: true,
+    note: 'the stream readout: tiles done, on the wire, queued and failed; terrain meshes, waits, rebuilds and the far shell' }),
 ]);
 
 /**
