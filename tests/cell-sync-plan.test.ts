@@ -49,10 +49,21 @@ describe('cell-sync plan', () => {
   });
 
   it('never pulls ignored or generated paths (devtools/ no longer comes back)', () => {
-    const p = sync.plan({}, { 'devtools/old.mjs': '1', 'native/x.json': '2', 'vendor/cell-jobs.js': '3', 'sync-staging/r1/main.ts': '4' }, { 'devtools/old.mjs': '0' });
+    const p = sync.plan({}, {
+      'devtools/old.mjs': '1',
+      'native/x.json': '2',
+      'scratchpad/probe.log': '3',
+      'vendor/cell-jobs.js': '4',
+      'sync-staging/r1/main.ts': '5',
+    }, { 'devtools/old.mjs': '0', 'scratchpad/probe.log': '0' });
     expect(p.pull).toEqual([]);
     expect(p.push).toEqual([]);
-    expect(p.ignoredRemote).toEqual(['devtools/old.mjs', 'native/x.json', 'sync-staging/r1/main.ts']);
+    expect(p.ignoredRemote).toEqual([
+      'devtools/old.mjs',
+      'native/x.json',
+      'scratchpad/probe.log',
+      'sync-staging/r1/main.ts',
+    ]);
   });
 
   it('a base inferred from git history survives into the next base (a git-deleted file stays deleted)', () => {
