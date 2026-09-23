@@ -19239,3 +19239,10 @@ takes the frames.
 
 **NOT SEEN ON A DEVICE.** In landscape the tray scrolls and the canvas HUD
 still has no safe-area insets (#157).
+
+**Live as v1790125287972**, deployed after a pull that found the cell BEHIND
+(main.ts and hud-deck.ts diffed empty against the last deploy's commit; the
+cell's CLAUDE.md simply lacked that deploy's record), so nothing was stranded.
+The live `app.js` read `x-cache: Miss`, 4.19 MB, parses under esbuild, carries
+`navall`, `gview`, `NAV_LAYERS`, `wpShows` and `readoutOn`, and no `sup.rig`;
+`/` answers 200.
