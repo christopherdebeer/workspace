@@ -50612,6 +50612,15 @@ let layerKeyBottom = 0;
 const legendOrder: ChartLayerId[] = [];
 /** The legend's hit box in HUD units, or zero width when there is none. */
 let legendRect = { x: 0, y: 0, w: 0, h: 0 };
+/** M7: whether the key (T8) and its legend (T9) are on the glass, in every
+ *  camera. Hiding them leaves every layer's EFFECT exactly where it is. */
+let keyShown = ((): boolean => { try { return localStorage.getItem('drive.chart.key') !== '0'; } catch { return true; } })();
+function setKeyShown(on: boolean): void {
+  keyShown = on;
+  try { localStorage.setItem('drive.chart.key', on ? '1' : '0'); } catch { /* private mode */ }
+}
+let keyRect = { x: 0, y: 0, w: 0, h: 0 };
+let spareRect = { x: 0, y: 0, w: 0, h: 0 };
 /** Every chip that has something to say in T9 right now. */
 function legendSources(): ChartLayerId[] {
   const out: ChartLayerId[] = [];
@@ -56803,6 +56812,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.fillRect(x0, y0 + 12, sc.barPx + 1, 1);
     hctx.fillRect(x0, y0 + 11, 1, 3);
     hctx.fillRect(x0 + sc.barPx, y0 + 11, 1, 3);
+  }
+  // ── T8 and T9, WHEREVER M7 ASKS FOR THEM ── under the scale on the chart,
+  // under the clock's row everywhere else.
+  const keyY = camMode === 'top' ? (chartOn.stream ? pad + 56 : pad + 34) + 19 : pad + 34;
+  if (keyShown && (camMode === 'top' || !lineOn)) {
     // ── THE LAYER KEY ──
     //
     // A map's key names what is on it; this one is also the SWITCH, which is
@@ -56831,7 +56845,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         hctx.fillRect(cx - 2, cy - 2, 5, 1); hctx.fillRect(cx - 2, cy + 2, 5, 1);
         hctx.fillRect(cx - 2, cy - 1, 1, 3); hctx.fillRect(cx + 2, cy - 1, 1, 3);
       };
-      let ly = y0 + 19, lx = pad + 1;
+      let ly = keyY, lx = pad + 1;
       for (const l of CHART_LAYERS) {
         // EVERY CHIP IS OFFERED. The ground views used to appear only while
         // the tile overlay was up; they were promoted to first-class chips
@@ -56934,31 +56948,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       layerKeyBottom = ly;
     }
   } else {
+    // M7 off: no key and no legend. The M7 lamp says a view is still in force.
     layerRects.length = 0; layerKeyBottom = 0; legendRect = { x: 0, y: 0, w: 0, h: 0 };
-    // ── A VIEW THAT IS ON SAYS SO WHEREVER YOU ARE ──
-    //
-    // The channel's whole point is that it applies in every camera; its SWITCH
-    // is a chip on the chart's key, which is in exactly one of them. Leave it
-    // at that and a player who turns COVER on and drives away has a
-    // false-coloured world and no control on the glass — the route banner's
-    // own lesson ("a pending commitment nothing announces"), and the settings
-    // panel's before it. So off the chart the active view keeps one chip, in
-    // its own row under the clock, and a tap on it clears the view. It is
-    // pushed into `layerRects`, so the tap is the same code path the key's
-    // chips use and the two cannot answer differently.
-    const vl = viewLayer() ?? (CHART_LAYERS.find((l) => chartOn[l.id] && DBG_RASTER[l.id])?.id ?? null);
-    if (vl && !lineOn) {
-      const row = chartLayer(vl);
-      const name = row?.name ?? vl;
-      let w = 7;
-      for (const ch of name) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
-      const lx = pad + 1, ly = pad + 34;
-      hctx.globalAlpha = 1;
-      hctx.fillStyle = UI.text;
-      hctx.fillRect(lx + 0, ly, 5, 5);
-      textEdgeP(name, lx + 7, ly - 2, UI.text);
-      layerRects.push({ id: vl, x: lx - 2, y: ly - 5, w: w + 4, h: 12 });
-    }
   }
   // The transport actions (rewind · AUTO · WPT) live in the CONTROL MATRIX
   // beside the dock now (Glass spec §5.5) — drawn with the dock so the grid
@@ -57621,7 +57612,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // their own cells, so no two neighbours were the same distance apart.
     const gx = mx + mw + 4;
     const CG = 3, CH = 17;
-    const CW = Math.max(18, Math.min(23, Math.floor((HW - 58 - gx - 2 * CG) / 3)));
+    const CW = Math.max(16, Math.min(23, Math.floor((HW - 58 - gx - 3 * CG) / 4)));
     const rowB = my + mw - CH;               // bottom row bottom == map.bottom
     const rowT = rowB - CH - CG;
     const col = (i: number): number => gx + i * (CW + CG);
@@ -57642,6 +57633,24 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     lampCell(col(1), rowT, ICON.map, UI.edge, mapHeadingUp);
     povRect = { x: col(2), y: rowT, w: CW, h: CH };
     lampCell(col(2), rowT, ICON.car, UI.edge, lastPov === 'cab');
+    // M7 — THE KEY. Lit while T8/T9 are on the glass; gold when they are hidden
+    // but a view or overlay is still in force, so a hidden key cannot hide
+    // the fact that the world is false-coloured.
+    {
+      keyRect = { x: col(3), y: rowT, w: CW, h: CH };
+      const busy = CHART_LAYERS.some((l) => l.kind !== 'vector' && layerIsOn(l.id));
+      const kc = keyShown ? UI.edge : busy ? UI.gold : UI.dim;
+      corners(col(3), rowT, CW, CH, kc);
+      const cx = col(3) + (CW >> 1), cy = rowT + 4;
+      for (let k = 0; k < 3; k++) {
+        const y = cy + k * 3;
+        hctx.fillStyle = UI.ink;
+        hctx.fillRect(cx - 5, y - 1, 11, 4);
+        hctx.fillStyle = kc;
+        hctx.fillRect(cx - 2, y, 5, 1);
+        hctx.fillRect(cx - 4, y + 1, 9, 1);
+      }
+    }
     // The drone's satellites live INSIDE its own cell: charge as a sliver
     // under the glyph (the audit's finding 10), height above the grid while
     // there is something to fly.
@@ -57706,6 +57715,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     poiRect = { x: col(2), y: rowB, w: CW, h: CH };
     corners(col(2), rowB, CW, CH, poiVis === 0 ? UI.dim : UI.gold);
     textEdgeS('WPT', col(2) + cCol('WPT'), rowB + 6, poiVis === 0 ? UI.dim : UI.gold);
+    // M8 — held for a future control. Faint corners, no glyph, no action.
+    spareRect = { x: col(3), y: rowB, w: CW, h: CH };
+    corners(col(3), rowB, CW, CH, UI.faint);
     // ── the status line, above the grid ──
     // The one question you have while the truck drives itself is whether it
     // has seen the corner; the answer rides one micro row above the matrix.
@@ -58335,7 +58347,7 @@ function setClean(on: boolean): void {
   headlightCasts: headSpot.castShadow, headShadowOn, maskPatched: shadowMaskPatched,
 });
 (window as unknown as { __hudrects?: object }).__hudrects = (): object =>
-  ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect });
+  ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect, key: keyRect, spare: spareRect, s: hudS });
 (window as unknown as { __hudscale?: object }).__hudscale = (): number => hudS;
 /** THE SKY THE DOCK WAS ACTUALLY DRAWN UNDER. `gap` is the whole question: the
  *  dome is a shell hung around ONE eye, so at the dock's render it must be on
@@ -58813,6 +58825,8 @@ function hudTap(cx: number, cy: number): boolean {
   if (inside(droneRect, 2)) { droneToggle(); return true; }
   if (inside(mapUpRect, 2)) { toggleMapUp(); return true; }
   if (inside(povRect, 2)) { togglePov(); return true; }
+  if (inside(keyRect, 2)) { setKeyShown(!keyShown); hudFlash(keyShown ? 'KEY ON' : 'KEY OFF'); return true; }
+  if (inside(spareRect, 2)) return true;
   if (inside(dockRect, 0)) { toggleCam(); return true; }
   // WHAT MAY EAT A TAP.
   //

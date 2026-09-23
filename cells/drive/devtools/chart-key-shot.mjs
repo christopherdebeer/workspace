@@ -25,6 +25,12 @@ const ALL = {
   // …and once more, to the grid key.
   rotated2: `(() => { const at = window.__chartlayers().legendAt; const c = document.querySelector('canvas');
     for (const t of ['pointerdown', 'pointerup']) c.dispatchEvent(new PointerEvent(t, { clientX: at.x, clientY: at.y, pointerId: 8, bubbles: true })); })()`,
+  // The seat, with the key on it.
+  chase: `window.__setcam('chase')`,
+  // M7 tapped: the key goes, the views stay.
+  keyoff: `(() => { const r = window.__hudrects().key, s = window.__hudrects().s; const c = document.querySelector('canvas');
+    const x = (r.x + r.w / 2) * s, y = (r.y + r.h / 2) * s;
+    for (const t of ['pointerdown', 'pointerup']) c.dispatchEvent(new PointerEvent(t, { clientX: x, clientY: y, pointerId: 9, bubbles: true })); })()`,
   // OFF: the whole HUD goes.
   off: `window.__chartlayers('off', true)`,
 };
@@ -38,7 +44,7 @@ for (const name of want) {
   const st = await d.page.evaluate(() => { const r = window.__chartlayers(); return { on: r.layers.filter((l) => l.on).map((l) => l.id + (l.view ? ':' + l.view : '')), legend: r.legendOrder }; });
   console.log(name, JSON.stringify(st));
   const p = join(WORK, `key-${TAG}-${name}.png`);
-  await d.page.screenshot({ path: p, timeout: 240000, clip: { x: 0, y: 0, width: 390, height: 300 } });
+  await d.page.screenshot({ path: p, timeout: 240000, ...(process.env.FULL ? {} : { clip: { x: 0, y: 0, width: 390, height: 300 } }) });
   console.log('->', p);
 }
 console.log('errors', JSON.stringify(d.errors ?? []));
