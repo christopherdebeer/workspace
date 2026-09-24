@@ -9464,9 +9464,23 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
         // a tile over still on the wire, and a probe cached then said 6 m
         // for a 50 m cliff for the rest of the session. Measured at the
         // Apostles, tops 6.2 and 6.0 for stacks under a 50 m coast.
-        if (!Number.isFinite(P.height)) {
-          const top = plinthTopProbe(P);
-          if (Number.isFinite(top) && !(top <= (P.top ?? -Infinity))) (P as { top?: number }).top = top;
+        if (!Number.isFinite(P.height) && !(P as { land?: boolean }).land) {
+          // A STACK STANDS IN THE SEA. The islet rule files every closed
+          // cliff ring under 120 m, and on the Apostles' clifftop the survey
+          // also rings small OUTCROPS on the plateau — which then took the
+          // mainland's crown and stood as 40 m spikes over the grass beside
+          // the road (the seat's frame at -38.66438 143.10411). The DEM
+          // under a stack is the sea; under an outcrop it is the hill, which
+          // the raster already carries. Decided once the ground is in.
+          let sx = 0, sz = 0;
+          for (const [x, z] of P.pts) { sx += x; sz += z; }
+          const cx = sx / P.pts.length, cz = sz / P.pts.length;
+          if (heightTileAt(cx, cz) && sampleHeightRaw(cx, cz) > seaSurfaceAbs() - baseElev + 8) {
+            (P as { land?: boolean }).land = true;
+          } else {
+            const top = plinthTopProbe(P);
+            if (Number.isFinite(top) && !(top <= (P.top ?? -Infinity))) (P as { top?: number }).top = top;
+          }
         }
         flat[i++] = P.height; flat[i++] = P.top ?? NaN; flat[i++] = P.pts.length;
         for (const [x, z] of P.pts) { flat[i++] = x; flat[i++] = z; }
