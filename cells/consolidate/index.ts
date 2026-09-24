@@ -456,32 +456,43 @@ async function adjudicate(token: string, candidates: ContestedCandidateObs[]): P
   let firstFailure: string | undefined;
   // ADR-0098: one batched Jev pass over every pair first; the per-pair models
   // call below only runs for pairs Jev could not answer.
-  const jevVerdicts = await judgeWithJev(token, pairs).catch((e) => {
+  const judged = await judgeWithJev(token, pairs).catch((e) => {
     firstFailure = `jev unavailable, falling back to models: ${(e as Error).message.slice(0, 120)}`;
-    return new Map<string, StageBVerdict>();
+    return { verdicts: new Map<string, StageBVerdict>(), facts: new Map<string, PeekedFact>() };
   });
-  for (const c of pairs) {
+  let scopeDenied: string | null = null;
+  // Pairs are independent (distinct checked/<hash> keys), so they run in a
+  // small pool — the serial per-pair loop outran the Lambda at 40 pairs.
+  const one = async (c: ContestedCandidateObs): Promise<void> => {
+    if (scopeDenied) {
+      escalated++;
+      return;
+    }
     try {
-      const [ea, eb] = await gwCallMany(
-        token,
-        [
-          { target: 'workspace.peek', input: { key: c.a }, kind: 'read' as const },
-          { target: 'workspace.peek', input: { key: c.b }, kind: 'read' as const },
-        ],
-        { url: GATEWAY_MCP },
-      );
-      const fa = ea as { value?: unknown; _meta?: { type?: string | null; createdAt?: string } } | null;
-      const fb = eb as { value?: unknown; _meta?: { type?: string | null; createdAt?: string } } | null;
+      let fa = judged.facts.get(c.a) ?? null;
+      let fb = judged.facts.get(c.b) ?? null;
+      if (!fa || !fb) {
+        const [ea, eb] = await gwCallMany(
+          token,
+          [
+            { target: 'workspace.peek', input: { key: c.a }, kind: 'read' as const },
+            { target: 'workspace.peek', input: { key: c.b }, kind: 'read' as const },
+          ],
+          { url: GATEWAY_MCP },
+        );
+        fa = toPeeked(ea);
+        fb = toPeeked(eb);
+      }
       if (!fa?.value || !fb?.value) {
         escalated++;
-        continue;
+        return;
       }
-      let verdict = jevVerdicts.get(c.hash) ?? null;
+      let verdict = judged.verdicts.get(c.hash) ?? null;
       let res: { text?: string } | undefined;
       if (!verdict) {
         const prompt = buildAdjudicationPrompt(
-          { key: c.a, type: fa._meta?.type ?? null, value: fa.value },
-          { key: c.b, type: fb._meta?.type ?? null, value: fb.value },
+          { key: c.a, type: fa.type, value: fa.value },
+          { key: c.b, type: fb.type, value: fb.value },
         );
         res = (await gw(token, '@c15r/models.run', { prompt, maxTokens: 300 })) as { text?: string };
         verdict = parseVerdict(res?.text);
@@ -489,7 +500,7 @@ async function adjudicate(token: string, candidates: ContestedCandidateObs[]): P
       if (!verdict || verdict.confidence < CAPS.stageBFloor) {
         if (!verdict && !firstFailure) firstFailure = `unparseable verdict for ${c.a}↔${c.b}: ${String(res?.text).slice(0, 120)}`;
         escalated++;
-        continue;
+        return;
       }
       const marker = { a: c.a, b: c.b, verdict: verdict.verdict, confidence: verdict.confidence, versions: c.versions, via: 'consolidate.stageB' };
       if (verdict.verdict === 'independent') {
@@ -507,9 +518,7 @@ async function adjudicate(token: string, candidates: ContestedCandidateObs[]): P
         acted.push(`contradict ${c.a} --contradicts--> ${c.b} (${verdict.confidence})`);
       } else if (verdict.verdict === 'duplicate') {
         // The older fact is canonical; the newer duplicate retires into it.
-        const aAt = fa._meta?.createdAt ?? '';
-        const bAt = fb._meta?.createdAt ?? '';
-        const [keep, retire] = aAt <= bAt ? [c.a, c.b] : [c.b, c.a];
+        const [keep, retire] = (fa.createdAt ?? '') <= (fb.createdAt ?? '') ? [c.a, c.b] : [c.b, c.a];
         await gw(token, 'workspace.supersede', { key: retire, by: keep, migrateLinks: true });
         await gw(token, 'workspace.remember', { key: `checked/${c.hash}`, value: marker, type: 'checked', via: 'consolidate.stageB' });
         acted.push(`duplicate ${retire} superseded by ${keep} (${verdict.confidence})`);
@@ -518,28 +527,44 @@ async function adjudicate(token: string, candidates: ContestedCandidateObs[]): P
       }
     } catch (e) {
       if (e instanceof GatewayError && /scope/i.test(e.message)) {
-        return { acted, escalated: escalated + (pairs.length - pairs.indexOf(c)), note: `stage B unavailable: ${e.message}` };
+        scopeDenied = `stage B unavailable: ${e.message}`;
+        escalated++;
+        return;
       }
       if (!firstFailure) firstFailure = `${c.a}↔${c.b}: ${(e as Error).message.slice(0, 160)}`;
       escalated++;
     }
-  }
+  };
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(8, pairs.length) }, async () => {
+      while (next < pairs.length) await one(pairs[next++]);
+    }),
+  );
+  if (scopeDenied) return { acted, escalated, note: scopeDenied };
   return { acted, escalated, ...(firstFailure ? { note: firstFailure } : {}) };
 }
 
 /** Batch Stage B on @c15r/jev: peek both sides of every pair, one decide_many. */
-async function judgeWithJev(token: string, pairs: ContestedCandidateObs[]): Promise<Map<string, StageBVerdict>> {
+interface PeekedFact { type: string | null; value: unknown; createdAt?: string }
+function toPeeked(g: unknown): PeekedFact | null {
+  const f = g as { value?: unknown; _meta?: { type?: string | null; createdAt?: string } } | null;
+  if (!f || f.value === undefined || ('error' in (f as object) && Object.keys(f as object).length === 1)) return null;
+  return { type: f._meta?.type ?? null, value: f.value, createdAt: f._meta?.createdAt };
+}
+
+async function judgeWithJev(token: string, pairs: ContestedCandidateObs[]): Promise<{ verdicts: Map<string, StageBVerdict>; facts: Map<string, PeekedFact> }> {
   const out = new Map<string, StageBVerdict>();
-  if (!pairs.length) return out;
+  const facts = new Map<string, PeekedFact>();
+  if (!pairs.length) return { verdicts: out, facts };
   const keys = [...new Set(pairs.flatMap((c) => [c.a, c.b]))];
-  const got = await gwCallMany(token, keys.map((key) => ({ target: 'workspace.peek', input: { key }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 8 });
-  const facts = new Map<string, { type: string | null; value: unknown }>();
+  const got = await gwCallMany(token, keys.map((key) => ({ target: 'workspace.peek', input: { key }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 16 });
   got.forEach((g, i) => {
-    const f = g as { value?: unknown; _meta?: { type?: string | null } } | null;
-    if (f && f.value !== undefined && !('error' in (f as object) && Object.keys(f as object).length === 1)) facts.set(keys[i], { type: f._meta?.type ?? null, value: f.value });
+    const f = toPeeked(g);
+    if (f) facts.set(keys[i], f);
   });
   const live = pairs.filter((c) => facts.has(c.a) && facts.has(c.b));
-  if (!live.length) return out;
+  if (!live.length) return { verdicts: out, facts };
   const show = (k: string) => ({ key: k, type: facts.get(k)!.type ?? '(untyped)', value: JSON.stringify(facts.get(k)!.value).slice(0, 1500) });
   const res = (await gw(token, '@c15r/jev.decide_many', {
     model: 'jev-1.13.0',
@@ -556,7 +581,7 @@ async function judgeWithJev(token: string, pairs: ContestedCandidateObs[]): Prom
     const v = verdictFromJev(r.answers?.verdict);
     if (v) out.set(r.id, v);
   }
-  return out;
+  return { verdicts: out, facts };
 }
 
 async function apply(token: string, plan: CyclePlan): Promise<{ applied: string[]; skipped: string[] }> {
