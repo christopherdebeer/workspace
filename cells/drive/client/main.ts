@@ -2159,7 +2159,7 @@ function ecoAt(ex: number, ez: number): EcoHit | null {
  * completely, which matters because this changes the vegetation of every
  * landscape in the game and "it looks different" is not a measurement.
  */
-const GUILD_ON = qs('guild') !== '0';
+let GUILD_ON = qs('guild') !== '0';
 const guildMemo = new Map<string, { g: Guild | null; stamp: number; eco: number }>();
 // ONE ENTRY IN FRONT OF THE MAP. `guildNow` is asked once per vegetation
 // CANDIDATE and once per planted site — tens of thousands of times in a seed
@@ -2291,7 +2291,7 @@ let SHORE_ON = qsOn('shore', true);
  *  carve owns every shoreline again and the fringe between its 1:1 bank and
  *  the drawn waterline comes back — the control every bank-census reading is
  *  taken against. */
-const BANK_ON = qsOn('bank', true);
+let BANK_ON = qsOn('bank', true);
 /** The rig's occluded-silhouette overlay, retired to a flag — see the block
  *  above `rebuildRigSilhouette` for what it drew and why it stopped. */
 const RIG_XRAY = qsOn('rigxray', false);
@@ -2300,12 +2300,12 @@ const RIG_XRAY = qsOn('rigxray', false);
  *  gives a ford `implementation: 'not-required'` and that was read as "no
  *  geometry" rather than "no conduit". The A/B for the apron, its cutoff
  *  sills and the marker posts; `__fords()` is the count beside it. */
-const FORDS_ON = qsOn('fords', true);
+let FORDS_ON = qsOn('fords', true);
 /** The sward reads the substrate's classification — the brief's own "sward and
  *  terrain from the same field". Off restores the sward that thins for cover,
  *  altitude and the bank and knows nothing about outcrop, which is the exact
  *  A/B for what one shared field is worth. */
-const SUB_SWARD = qsOn('swardsub', true);
+let SUB_SWARD = qsOn('swardsub', true);
 /** How far a blade's colour goes toward the material it stands in. Not all the
  *  way: the sward's own colour rules — the bank mineral, the reeds, the
  *  altitude lift — are about the PLANT, and this is about the ground under it.
@@ -7626,7 +7626,7 @@ const envU = {
   // by cloud. `?steepfill=` is the strength, 0 the exact A/B.
   uSteepFill: { value: new THREE.Vector3() },
 };
-const STEEP_FILL = qsNum('steepfill', 0.18);
+let STEEP_FILL = qsNum('steepfill', 0.18);
 /**
  * ── A SHADOW MAP CANNOT SHADE A VALLEY, AND THIS IS WHY ──
  *
@@ -9975,7 +9975,7 @@ const bridgeSpans: BridgeSpan[] = [];
  *  apart, and the DSM smears the structure wider than the carriageway — 37 m
  *  of "ground" for a 23 m deck at the Normandie, so seven metres a side. */
 const BRIDGE_SPAN_MARGIN = 10;
-const BRIDGE_DEM_ON = qsOn('bridgedem', true);
+let BRIDGE_DEM_ON = qsOn('bridgedem', true);
 const demSpanLedger = { tiles: 0, moved: 0, worstM: 0, refused: 0, onWater: 0, flank: 0 };
 /** The spans that reach one tile, in its own texel space. */
 function bridgeSpansFor(t: HeightTile, only?: readonly BridgeSpan[]): DemSpan[] {
@@ -10112,7 +10112,7 @@ interface BridgeAssembly {
   builds: number;
 }
 const bridgeAssemblies = new Map<string, BridgeAssembly>();
-const BRIDGE_FORMS_ON = qsOn('bridgeforms', true);
+let BRIDGE_FORMS_ON = qsOn('bridgeforms', true);
 /** Pylon and pier positions the map carries (`bridge:support` nodes and
  *  areas), by the tile that brought them, in local metres. A bridge whose
  *  supports are mapped stands its towers where the map says. */
@@ -11042,7 +11042,7 @@ function roadTexture(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.
 /** `railgrade=0` puts a railway back where it was: draped on the heightfield,
  *  not drivable, no solved profile, no corridor, no batter and no structure —
  *  the exact A/B for the whole formation change. */
-const RAIL_GRADE = qsOn('railgrade', true);
+let RAIL_GRADE = qsOn('railgrade', true);
 const railTexCache = new Map<string, THREE.Texture>();
 const railMatCache = new Map<string, THREE.Material>();
 function railMat(spec: RailSpec): THREE.Material {
@@ -13888,7 +13888,7 @@ const COVER_CANOPY: Record<number, number> = {
   20: 1.3,   // shrub    — scrub is meant to have ground between it
   90: 1.15,  // wetland  — reed and carr, patchy by nature
 };
-const VEG_STEMS = clamp(qsNum('vegstems', 1), 0, 8);
+let VEG_STEMS = clamp(qsNum('vegstems', 1), 0, 8);
 function canopyMul(cover: number | null): number {
   const k = cover === null ? 1 : (COVER_CANOPY[cover] ?? 1);
   return 1 + (k - 1) * VEG_STEMS;
@@ -14463,7 +14463,7 @@ const SWARD_NEAR = 14;
  * (the law is one curve), which is not what was asked. A bump that fades to
  * one leaves everything past its radius exactly as it was.
  */
-const SWARD_NEAR_X = clamp(qsNum('swardnear', 3), 1, 4);
+let SWARD_NEAR_X = clamp(qsNum('swardnear', 3), 1, 4);
 const SWARD_NEAR_R = 14;
 /** The boost's own shape, on the CPU for the profile probe: 1 past the radius,
  *  `SWARD_NEAR_X` inside a third of it, a smoothstep between. */
@@ -14596,7 +14596,7 @@ const SWARD_BANDS: Array<[number, number, [number, number, number, number]]> = [
  *
  * `?swardsites=` moves it for an A/B.
  */
-const SWARD_SITES = qsNum('swardsites', 12);
+let SWARD_SITES = qsNum('swardsites', 12);
 /**
  * ── THE COMPENSATION WAS THE WRONG CURRENCY, AND THE SEAT SAID SO ──
  *
@@ -14618,7 +14618,7 @@ const SWARD_SITES = qsNum('swardsites', 12);
  * different plant. If the profile ever reports a fullness at this ceiling, the
  * LADDER is wrong — that is the signal, and widening is not the repair.
  */
-const SWARD_FULL_MAX = qsNum('swardfull', 1.15);
+let SWARD_FULL_MAX = qsNum('swardfull', 1.15);
 /**
  * ── FINER GRASS IS A NARROWER BLADE, AND NOTHING ELSE ──
  *
@@ -14641,7 +14641,7 @@ const SWARD_FULL_MAX = qsNum('swardfull', 1.15);
  * is still nine times the culm — so what changes is the GRAIN of the field and
  * not the vocabulary standing in it.
  */
-const SWARD_TUFT = qsNum('swardtuft', 0.72);
+let SWARD_TUFT = qsNum('swardtuft', 0.72);
 /**
  * ── AND FAR BLADES GROW BY THE METRE, NOT BY THE FRACTION OF THE REACH ──
  *
@@ -14665,7 +14665,7 @@ const SWARD_GROW_REF = 360;
  * may ask for, and its top stop is that lattice full. It cannot break the law
  * because it cannot leave the envelope. See GRASS_STOPS.
  */
-const SWARD_CAP_ON = qsOn('swardcap', true);
+let SWARD_CAP_ON = qsOn('swardcap', true);
 /**
  * ── ONE DENSITY LAW, AND A CARRIER IS NEVER ASKED FOR MORE THAN IT HOLDS ──
  *
@@ -16234,7 +16234,7 @@ const SHRUB_RATE: Record<SwardCtx, number> = {
   [SwardCtx.Open]: 0.34, [SwardCtx.Wood]: 0.6, [SwardCtx.Water]: 0.5, [SwardCtx.Cliff]: 0.05, [SwardCtx.Ruin]: 0.15,
 };
 /** ?shrub=0 for an A/B on the device. */
-const SHRUB_ON = qs('shrub') !== '0';
+let SHRUB_ON = qs('shrub') !== '0';
 const shrubs = vegMesh(swayWeight(faceTone(shrubGeo(), 0.24, 0.3), 1.3), leafMat, SHRUB_CAP);
 shrubs.name = 'veg-shrub';
 const shrubCol = new THREE.Color();
@@ -17889,7 +17889,7 @@ const bldRoofs = new Map<number, string>();
  *  in Paris is one height and one roof rather than thirty-eight draws — the
  *  same lesson as the tree atlas ("a wood is one wood") and the 32 m stand
  *  norm, one scale down. `?bldruns=0` is the stand norm alone. */
-const RUN_NORM = qsOn('bldruns', true);
+let RUN_NORM = qsOn('bldruns', true);
 function addPlot(pts: Array<[number, number]>): void {
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
   for (const [x, z] of pts) { minx = Math.min(minx, x); minz = Math.min(minz, z); maxx = Math.max(maxx, x); maxz = Math.max(maxz, z); }
@@ -19580,10 +19580,10 @@ const cutSet = new Set<Seg>();
 // dug more than half a metre below natural within 6m of the kerb fall 61.1% to
 // 48.6%. Still a knob (`?wash=0`) — this is a judgement about looks, and looks
 // change when anything else on the verge does.
-const CUT_WASH = Number(qs('wash') ?? 0.1);
+let CUT_WASH = Number(qs('wash') ?? 0.1);
 /** The relief pass, switchable, so its cost and its benefit can both be
  *  measured against the behaviour it replaces rather than argued about. */
-const CUT_RELIEF = qs('relief') !== '0';
+let CUT_RELIEF = qs('relief') !== '0';
 /**
  * HOW BURIED IS BURIED ENOUGH TO DIG FOR.
  *
@@ -19659,8 +19659,8 @@ function roadCeiling(x: number, z: number): number | null {
 //
 // `?refine=0` builds the old grid and carves it, so the two can be measured
 // against each other.
-const REFINE = qs('refine') !== '0';
-const REFINE_R = Number(qs('refr') ?? 1100);
+let REFINE = qs('refine') !== '0';
+let REFINE_R = Number(qs('refr') ?? 1100);
 let borderAuditAt = 0;
 /** Is the road stream quiet — nothing in flight and no road landed for a
  *  breath? Not "nothing queued": a tile waiting on a retry backoff would
@@ -27543,8 +27543,8 @@ function shoreRibbon(ring: Array<[number, number]>): void {
   drapes.push(mesh);
   worldGroup.add(mesh);
 }
-const BLD_FACE = qsOn('bldface', true);
-const BLD_PARA = qsOn('bldpara', true);
+let BLD_FACE = qsOn('bldface', true);
+let BLD_PARA = qsOn('bldpara', true);
 function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Material[], lift: number, extrude = 0, collide?: 'solid' | 'water',
   /** A batch sink: when set (buildings only), the extrusion is handed over
    *  baked at world height instead of standing up its own mesh — the batch
@@ -56824,12 +56824,15 @@ function abSpecFrom(text: string): AbSpec | { error: string } {
       const k = eq < 0 ? tok : tok.slice(0, eq), v = eq < 0 ? '1' : tok.slice(eq + 1);
       if (!isSwitchId(k)) return { error: `UNKNOWN SWITCH ${k}` };
       if (switchApply(k) === 'load') return { error: `${k} NEEDS A RELOAD` };
+      // The in-place rebuild is a hop, and a fixture cannot hop.
+      if (switchApply(k) === 'world' && FIXTURE) return { error: `${k} REBUILDS THE WORLD: NOT IN A FIXTURE` };
       b.push([k, v === '' ? null : v]);
     }
     a = b.map(([k]) => [k, qs(k)]);
   } else {
     for (const [k, v] of queryPairs()) {
-      if (isSwitchId(k) && !URL_OWNED.has(k) && switchApply(k) !== 'load') b.push([k, v]);
+      if (isSwitchId(k) && !URL_OWNED.has(k) && switchApply(k) !== 'load'
+        && !(switchApply(k) === 'world' && FIXTURE)) b.push([k, v]);
     }
     a = b.map(([k]) => [k, null]);
   }
@@ -56985,7 +56988,10 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam', abText = abSpecText): 
       // A rebuilt field: every dirty water tile and the sward sweep done.
       if (shot.rebuild) {
         const t0 = performance.now();
-        while (performance.now() - t0 < 20000) {
+        // A world switch hops in place first; the fields rebuild after it lands.
+        await sheetSleep(300);
+        while (hopping && performance.now() - t0 < 30000) await sheetSleep(250);
+        while (performance.now() - t0 < 45000) {
           const hs = hydroSys?.stats();
           if (swardSettled() && !(hs && (hs.pendingBuilds > 0 || (hs as { dirtyTiles?: number }).dirtyTiles))) break;
           await sheetSleep(250);
@@ -60306,6 +60312,35 @@ if (timeFromUrl < 0 && !qs('time')
   if (value !== undefined) setSwitch(id, value);
   return { id, value: qs(id), apply: switchApply(id) };
 };
+// ── RUNTIME SWITCHES, BATCH 2b: WHAT THE BUILDERS READ ──
+//
+// Read inside the tile, vegetation and building builders, never at module
+// setup, so a change is the new value plus the in-place rebuild the BUILT
+// dial already uses (world), or a uniform and a sward sweep (live/field).
+{
+  onSwitch('vegstems', () => { VEG_STEMS = clamp(qsNum('vegstems', 1), 0, 8); rebuildInPlace(); });
+  onSwitch('guild', () => { GUILD_ON = qs('guild') !== '0'; rebuildInPlace(); });
+  onSwitch('bank', () => { BANK_ON = qsOn('bank', true); rebuildInPlace(); });
+  onSwitch('fords', () => { FORDS_ON = qsOn('fords', true); rebuildInPlace(); });
+  onSwitch('bridgedem', () => { BRIDGE_DEM_ON = qsOn('bridgedem', true); rebuildInPlace(); });
+  onSwitch('bridgeforms', () => { BRIDGE_FORMS_ON = qsOn('bridgeforms', true); rebuildInPlace(); });
+  onSwitch('railgrade', () => { RAIL_GRADE = qsOn('railgrade', true); rebuildInPlace(); });
+  onSwitch('refine', () => { REFINE = qs('refine') !== '0'; rebuildInPlace(); });
+  onSwitch('refr', () => { REFINE_R = Number(qs('refr') ?? 1100); rebuildInPlace(); });
+  onSwitch('relief', () => { CUT_RELIEF = qs('relief') !== '0'; rebuildInPlace(); });
+  onSwitch('wash', () => { CUT_WASH = Number(qs('wash') ?? 0.1); rebuildInPlace(); });
+  onSwitch('bldruns', () => { RUN_NORM = qsOn('bldruns', true); rebuildInPlace(); });
+  onSwitch('bldface', () => { BLD_FACE = qsOn('bldface', true); rebuildInPlace(); });
+  onSwitch('bldpara', () => { BLD_PARA = qsOn('bldpara', true); rebuildInPlace(); });
+  onSwitch('shrub', () => { SHRUB_ON = qs('shrub') !== '0'; });
+  onSwitch('steepfill', () => { STEEP_FILL = qsNum('steepfill', 0.18); });
+  onSwitch('swardsites', () => { SWARD_SITES = qsNum('swardsites', 12); });
+  onSwitch('swardfull', () => { SWARD_FULL_MAX = qsNum('swardfull', 1.15); swardU.uSwardFull.value = SWARD_FULL_MAX; });
+  onSwitch('swardtuft', () => { SWARD_TUFT = qsNum('swardtuft', 0.72); swardU.uSwardTuft.value = SWARD_TUFT; });
+  onSwitch('swardcap', () => { SWARD_CAP_ON = qsOn('swardcap', true); swardU.uSwardCapOn.value = SWARD_CAP_ON ? 1 : 0; });
+  onSwitch('swardnear', () => { SWARD_NEAR_X = clamp(qsNum('swardnear', 3), 1, 4); swardU.uSwardBoost.value = SWARD_NEAR_X - 1; });
+  onSwitch('swardsub', () => { SUB_SWARD = qsOn('swardsub', true); swardU.uSwardMic.value = SUB_SWARD ? 1 : 0; swardGroundSeen = -1; swardFieldAt = 0; });
+}
 // ── RUNTIME SWITCHES, BATCH 2a: THE ONES THAT WERE ALREADY LIVE UNDERNEATH ──
 //
 // Each of these was read once at load into a `let` or a uniform that the frame
