@@ -155,6 +155,18 @@ const rawRow = switchRows('?ez=0').find((r) => r.id === 'ez');
 ok('a row carries the raw value, so an edit starts from what is set',
   rawRow.raw === '0' && switchRows('').find((r) => r.id === 'ez').raw === null, rawRow);
 
+// ── A SWITCH CLAIMED CHANGEABLE HAS SOMETHING LISTENING ──
+// `apply` other than `load` is a promise that setSwitch reaches it without a
+// reload: its reader subscribes (onSwitch) and rebuilds what it feeds. A row
+// that claims it and has no subscriber would change the URL and nothing else.
+const applies = new Set(['live', 'field', 'world', 'load']);
+ok('every declared apply is one the A/B understands',
+  SWITCHES.every((s) => s.apply === undefined || applies.has(s.apply)),
+  SWITCHES.filter((s) => s.apply !== undefined && !applies.has(s.apply)).map((s) => s.id));
+const changeable = SWITCHES.filter((s) => s.apply && s.apply !== 'load');
+const unheard = changeable.filter((s) => !CLIENT_SRC.includes(`onSwitch('${s.id}'`));
+ok(`every changeable switch (${changeable.length}) has an onSwitch subscriber`, unheard.length === 0, unheard.map((s) => s.id));
+
 const legacy = SWITCHES.filter((s) => s.marks.includes('legacy'));
 console.log(`\n${SWITCHES.length} switches · ${legacy.length} marked legacy:`);
 for (const s of legacy) console.log(`   ?${s.id.padEnd(10)} ${s.note}`);

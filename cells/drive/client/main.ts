@@ -39,7 +39,8 @@ import {
   sampleBankField,
   BANK_GLSL,
 } from './shoreline';
-import { URL_OWNED, qs, qsHas, qsNum, qsOn, switchRows, urlWithSwitches } from './switches';
+import { URL_OWNED, qs, qsHas, qsNum, qsOn, switchRows, urlWithSwitches, onSwitch, setSwitch, switchApply, isSwitchId, queryPairs,
+  type SwitchId } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { CHART_LAYERS, COVER_INK, HYDRO_VIEWS, SUBSTRATE_LEGEND, SURFACE_LEGEND, WATER_LEGEND, XRAY_VIEWS,
   chartLayer, inkFor, inkHex, legendFor, type ChartLayerId } from './chart-layers';
@@ -2285,7 +2286,7 @@ function readDialRecord(): Record<string, number> {
 /** The shoreline pass as one switch, for the A/B: the water's local
  *  terrain colour and the sward's mineral and reed banks. `shore=0` is the
  *  frame colour and hillside grass to the waterline, as it was. */
-const SHORE_ON = qsOn('shore', true);
+let SHORE_ON = qsOn('shore', true);
 /** The bank resolver. Off, no stations are published at all, so the channel
  *  carve owns every shoreline again and the fringe between its 1:1 bank and
  *  the drawn waterline comes back — the control every bank-census reading is
@@ -3996,7 +3997,7 @@ function publishHydroShoreBreakLines(t: HeightTile, key: string): void {
  */
 const hydroFrameOrigin = { x: 0, y: 0, z: 0 };
 /** `?banklook=1` — the narrow damp bank (see the sward's bank paint). */
-const BANK_LOOK = qsNum('banklook', 0) > 0.5;
+let BANK_LOOK = qsNum('banklook', 0) > 0.5;
 /** `?hydrolook=` — the water's optical model (HydroTuning.lookModel). */
 const HYDRO_LOOK = clamp(qsNum('hydrolook', 0), 0, 1);
 /** The moon, for the water's glitter path: the TRUE lunar direction (the
@@ -4492,6 +4493,13 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
     // HydroTuning.lookModel); 0 is the shipped look, exactly.
     hydroSys.setTuning({ lookModel: HYDRO_LOOK });
     worldGroup.add(hydroSys.object3d);
+    // ── RUNTIME SWITCHES THAT FEED THE WATER ── (switches.ts: setSwitch)
+    onSwitch('hydrolook', (v) => {
+      const n = clamp(Number(v ?? 0) || 0, 0, 1);
+      hydroSys?.setTuning({ lookModel: n }); hydroLookLive = n;
+    });
+    onSwitch('coast', () => hydroSys?.setBuildOptions({ coastField: qsOn('coast', true) }));
+    onSwitch('hydrodry', () => hydroSys?.setBuildOptions({ dryShortCircuit: qsOn('hydrodry', true) }));
     // THE OLD PLANE STANDS DOWN, rather than being deleted. Two renderers for
     // one sea is the failure to avoid, and a flag that can turn the new one off
     // is worth more right now than the lines the delete would save: it is the
@@ -14745,6 +14753,13 @@ let swardFieldMs = 0;
  * once the streaming settles it stops rebuilding on its own.
  */
 let swardRoadSeen = -1, swardGroundSeen = -1, swardFieldAt = 0, swardMaskMs = 0;
+// ── RUNTIME SWITCHES THAT FEED THE SWARD'S BANK PAINT ── a change asks for a
+// fresh sweep the way a terrain rebuild does; the old field stays on screen
+// until the new one swaps in.
+onSwitch('banklook', (v) => { BANK_LOOK = Number(v ?? 0) > 0.5; swardGroundSeen = -1; swardFieldAt = 0; });
+onSwitch('shore', () => { SHORE_ON = qsOn('shore', true); swardGroundSeen = -1; swardFieldAt = 0; });
+/** No sweep in flight and none owed — what an A/B frame waits for. */
+const swardSettled = (): boolean => swardRow < 0 && swardGroundSeen === swardGroundRev();
 /** True once a sweep has landed: before that the colour field is zeros and
  *  the water must not sample it. */
 let swardFieldReady = false;
@@ -56725,7 +56740,7 @@ function shotState(): { lines: [string, string, string]; god: { x: number; z: nu
   // Every switch in the URL that is not the address itself: the look and
   // bench levers this session was opened with.
   const owned = new Set(['lat', 'lon', 'h', 'cam', 'z', 'run']);
-  const flags = [...new URLSearchParams(location.search)]
+  const flags = queryPairs()
     .filter(([k]) => !owned.has(k)).map(([k, v]) => `${k}=${v}`).join(' ');
   return {
     god,
@@ -56787,7 +56802,45 @@ function drawShotReadout(): void {
  * everything is put back afterwards. Saving needs a fresh tap, because share
  * sheets refuse a page that has not just been touched: hence SAVE SHEET.
  */
-interface SheetShot { row: string; col: string; hud?: boolean; settle: number; setup: () => void; note?: () => string }
+interface SheetShot { row: string; col: string; hud?: boolean; settle: number; setup: () => void; note?: () => string;
+  /** A field/world switch changed: wait for the rebuild, not just a frame. */
+  rebuild?: boolean }
+/**
+ * ── A/B, FOR ANY SWITCH THAT CAN CHANGE WITHOUT A RELOAD ──
+ *
+ * Two ways to say what B is. Typed pairs (`banklook=1 hydrolook=1`, `k=` for
+ * "absent") make B, and A is whatever the session has now. Nothing typed
+ * means THE URL IS B: every changeable switch it sets, with A the same
+ * session stripped back to the defaults. `load` switches are refused, since
+ * only a reload could show them.
+ */
+interface AbSpec { a: Array<[SwitchId, string | null]>; b: Array<[SwitchId, string | null]>; rebuild: boolean }
+function abSpecFrom(text: string): AbSpec | { error: string } {
+  const b: Array<[SwitchId, string | null]> = [];
+  let a: Array<[SwitchId, string | null]>;
+  if (text.trim()) {
+    for (const tok of text.trim().split(/[\s&,]+/)) {
+      const eq = tok.indexOf('=');
+      const k = eq < 0 ? tok : tok.slice(0, eq), v = eq < 0 ? '1' : tok.slice(eq + 1);
+      if (!isSwitchId(k)) return { error: `UNKNOWN SWITCH ${k}` };
+      if (switchApply(k) === 'load') return { error: `${k} NEEDS A RELOAD` };
+      b.push([k, v === '' ? null : v]);
+    }
+    a = b.map(([k]) => [k, qs(k)]);
+  } else {
+    for (const [k, v] of queryPairs()) {
+      if (isSwitchId(k) && !URL_OWNED.has(k) && switchApply(k) !== 'load') b.push([k, v]);
+    }
+    a = b.map(([k]) => [k, null]);
+  }
+  if (!b.length) return { error: 'A/B: NOTHING TO COMPARE' };
+  if (b.every(([k, v], i) => a[i][1] === v && k === a[i][0])) return { error: 'A/B: A AND B ARE THE SAME' };
+  return { a, b, rebuild: b.some(([k]) => switchApply(k) !== 'live') };
+}
+const abSide = (side: Array<[SwitchId, string | null]>): string =>
+  side.map(([k, v]) => (v === null ? `${k} default` : `${k}=${v}`)).join(' ');
+const abApply = (side: Array<[SwitchId, string | null]>): void => { for (const [k, v] of side) setSwitch(k, v); };
+let abSpecText = ((): string => { try { return localStorage.getItem('drive.ab.spec') ?? ''; } catch { return ''; } })();
 const SHEET_ANGLES = [
   { id: 'top', y: 30, az: 20, el: 80, dist: 700, fov: 55 },
   { id: 'N', y: 20, az: 0, el: 28, dist: 320, fov: 55 },
@@ -56835,7 +56888,8 @@ const sheetGrab = (w: number, withHud: boolean): Promise<HTMLCanvasElement> => n
 });
 type W = Record<string, ((...a: unknown[]) => unknown) | undefined>;
 const probe = (): W => window as unknown as W;
-function sheetPlan(kind: 'godcam' | 'ab', t: { x: number; z: number }, here: ReturnType<typeof shotState>['god']): SheetShot[] {
+function sheetPlan(kind: 'godcam' | 'ab', t: { x: number; z: number }, here: ReturnType<typeof shotState>['god'],
+  ab?: AbSpec): SheetShot[] {
   // A/B reuses the seat's OWN framing, which is already out of the ground (a
   // cab eye stands two metres up); only the orbit grid needs real clearance.
   const clearance = kind === 'ab' ? 0.5 : 8;
@@ -56860,14 +56914,18 @@ function sheetPlan(kind: 'godcam' | 'ab', t: { x: number; z: number }, here: Ret
   const hour = (h: string): void => { timeMode = TIME_MODES.indexOf(h as typeof TIME_MODES[number]); };
   const sky = (k: Sky): void => { probe().__wxnext?.(k, true); };
   const plan: SheetShot[] = [];
-  if (kind === 'ab') {
+  if (kind === 'ab' && ab) {
     const hereAngle = { y: 0, az: here.az, el: here.el, dist: here.dist, fov: here.fov };
-    for (const h of ['DAWN', 'MORNING', 'NOON', 'DUSK', 'NIGHT']) {
-      for (const look of hydroSys ? [0, 1] : [hydroLookLive]) {
-        plan.push({ row: h, col: look ? 'B · hydrolook=1' : 'A · shipped', settle: look ? 300 : 1500,
-          setup: () => { hour(h); sky('clear'); god(hereAngle); hydroSys?.setTuning({ lookModel: look }); } });
-      }
-    }
+    const hours = ['DAWN', 'MORNING', 'NOON', 'DUSK', 'NIGHT'];
+    const sides: Array<[string, Array<[SwitchId, string | null]>]> = [
+      [`A · ${abSide(ab.a)}`, ab.a], [`B · ${abSide(ab.b)}`, ab.b]];
+    const shot = (h: string, [col, side]: [string, Array<[SwitchId, string | null]>], first: boolean): SheetShot => ({
+      row: h, col, settle: first ? 1500 : 300, rebuild: ab.rebuild && first,
+      setup: () => { hour(h); sky('clear'); god(hereAngle); abApply(side); } });
+    // A switch that rebuilds a field is changed ONCE: every A, then every B.
+    // A live one alternates within the hour, the tightest comparison there is.
+    if (ab.rebuild) for (const sd of sides) hours.forEach((h, i) => plan.push({ ...shot(h, sd, true), rebuild: i === 0 }));
+    else for (const h of hours) sides.forEach((sd, i) => plan.push(shot(h, sd, i === 0)));
     return plan;
   }
   const close = SHEET_ANGLES[SHEET_ANGLES.length - 1];
@@ -56888,11 +56946,19 @@ function sheetPlan(kind: 'godcam' | 'ab', t: { x: number; z: number }, here: Ret
     setup: () => { probe().__xray?.('depth'); god(close); } });
   return plan;
 }
-async function runSheet(kind: 'godcam' | 'ab' = 'godcam'): Promise<void> {
+async function runSheet(kind: 'godcam' | 'ab' = 'godcam', abText = abSpecText): Promise<void> {
   if (sheet.phase === 'run') return;
+  let ab: AbSpec | undefined;
+  if (kind === 'ab') {
+    const r = abSpecFrom(abText);
+    if ('error' in r) { hudFlash(r.error); return; }
+    ab = r;
+  }
   const st = shotState();
   const target = { x: st.god.x, z: st.god.z };
-  const plan = sheetPlan(kind, target, st.god);
+  const plan = sheetPlan(kind, target, st.god, ab);
+  // Every switch the comparison touches, as the session had it.
+  const switchesWere: Array<[SwitchId, string | null]> = ab ? ab.b.map(([k]) => [k, qs(k)]) : [];
   const cellW = kind === 'ab' ? 360 : 200;
   sheet.phase = 'run'; sheet.kind = kind; sheet.done = 0; sheet.total = plan.length; sheet.blob = null;
   const saved = {
@@ -56916,6 +56982,16 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam'): Promise<void> {
       // A god camera that just moved can put fresh tiles in view, and a frame
       // taken while they build has no river in it.
       for (let i = 0; i < 24 && (hydroSys?.stats().pendingBuilds ?? 0) > 0; i++) await sheetSleep(250);
+      // A rebuilt field: every dirty water tile and the sward sweep done.
+      if (shot.rebuild) {
+        const t0 = performance.now();
+        while (performance.now() - t0 < 20000) {
+          const hs = hydroSys?.stats();
+          if (swardSettled() && !(hs && (hs.pendingBuilds > 0 || (hs as { dirtyTiles?: number }).dirtyTiles))) break;
+          await sheetSleep(250);
+        }
+        await sheetSleep(400);
+      }
       first = false;
       cells.set(`${shot.row}|${shot.col}`, await sheetGrab(cellW, !!shot.hud));
       if (sheetLift > 0) lifts.set(`${shot.row}|${shot.col}`, sheetLift);
@@ -56923,6 +56999,7 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam'): Promise<void> {
     }
   } finally {
     timeMode = saved.timeMode;
+    abApply(switchesWere);
     hydroSys?.setTuning({ lookModel: saved.look });
     probe().__xray?.(XRAY_MODES[saved.xray] ?? 'OFF');
     probe().__groundview?.(saved.gv);
@@ -56956,7 +57033,7 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam'): Promise<void> {
   g.fillStyle = '#e8e2d0';
   st.lines.forEach((l, i) => g.fillText(l, 6, 4 + i * 13));
   g.fillStyle = '#9fb3a8';
-  g.fillText(`${kind === 'ab' ? 'A/B hydro look' : 'godcam sheet'} · build ${build} · `
+  g.fillText(`${ab ? `A/B · A: ${abSide(ab.a)} · B: ${abSide(ab.b)}` : 'godcam sheet'} · build ${build} · `
     + `${new Date().toISOString().slice(0, 16)}Z · target ${Math.round(target.x - viewX())},${Math.round(target.z - viewZ())}`, 6, 43);
   rows.forEach((r, ri) => {
     const y = top + ri * (fh + gap + lab);
@@ -57006,7 +57083,13 @@ function sheetDown(e: PointerEvent): boolean {
     return true;
   }
   if (hit(abBtn)) {
-    if (sheet.phase === 'idle') void runSheet('ab');
+    if (sheet.phase !== 'idle') return true;
+    // What B is: typed switches, or nothing for "this URL against defaults".
+    const typed = window.prompt('A/B — B switches (key=value …). Leave empty to compare this URL against the defaults.', abSpecText);
+    if (typed === null) return true;
+    abSpecText = typed.trim();
+    try { localStorage.setItem('drive.ab.spec', abSpecText); } catch { /* private mode */ }
+    void runSheet('ab', abSpecText);
     return true;
   }
   return false;
@@ -57016,8 +57099,8 @@ function sheetDown(e: PointerEvent): boolean {
   if (!sheet.blob) { resolve(null); return; }
   const r = new FileReader(); r.onload = () => resolve(r.result as string); r.readAsDataURL(sheet.blob);
 });
-(window as unknown as { __sheet?: object }).__sheet = (go?: boolean | 'godcam' | 'ab'): object => {
-  if (go) void runSheet(go === 'ab' ? 'ab' : 'godcam');
+(window as unknown as { __sheet?: object }).__sheet = (go?: boolean | 'godcam' | 'ab', spec?: string): object => {
+  if (go) void runSheet(go === 'ab' ? 'ab' : 'godcam', spec ?? '');
   return { phase: sheet.phase, done: sheet.done, total: sheet.total, bytes: sheet.blob?.size ?? 0, name: sheet.name };
 };
 function drawTileDebugOverlay(): void {

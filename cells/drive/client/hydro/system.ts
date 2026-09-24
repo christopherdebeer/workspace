@@ -123,6 +123,9 @@ export interface HydroSystem {
   stats(): HydroStats;
   /** Per-tile fed-versus-held truth for the harness — see the implementation. */
   debugTiles(): Array<Record<string, unknown>>;
+  /** Change a build option at runtime: every tile is marked dirty and rebuilds
+   *  through the ordinary per-frame queue, the old surface staying up. */
+  setBuildOptions(patch: { coastField?: boolean; dryShortCircuit?: boolean }): void;
   dispose(): void;
 }
 
@@ -906,6 +909,14 @@ class DefaultHydroSystem implements HydroSystem {
       });
     }
     return out;
+  }
+
+  setBuildOptions(patch: { coastField?: boolean; dryShortCircuit?: boolean }): void {
+    let changed = false;
+    const o = this.buildOptions as { coastField: boolean; dryShortCircuit: boolean };
+    if (patch.coastField !== undefined && patch.coastField !== o.coastField) { o.coastField = patch.coastField; changed = true; }
+    if (patch.dryShortCircuit !== undefined && patch.dryShortCircuit !== o.dryShortCircuit) { o.dryShortCircuit = patch.dryShortCircuit; changed = true; }
+    if (changed) for (const record of this.records.values()) record.dirty = true;
   }
 
   dispose(): void {

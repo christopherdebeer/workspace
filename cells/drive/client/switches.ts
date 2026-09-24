@@ -37,6 +37,21 @@
 
 export type SwitchKind = 'toggle' | 'number' | 'choice' | 'text';
 export type SwitchMark = 'legacy' | 'bench' | 'look' | 'world' | 'owned';
+/**
+ * WHAT A CHANGE COSTS, now that a switch can change without a reload.
+ *
+ *   live    read where it is used; the next frame shows it
+ *   field   a derived field rebuilds in place (the sward/bank paint, the
+ *           hydro tiles); seconds, and the old picture stays up meanwhile
+ *   world   the world rebuilds at the same spot
+ *   load    genuinely fixed for the page's life (renderer options, the
+ *           service worker, bundle substitutions) — a reload is the only way
+ *
+ * Absent means `load`: a row is only claimed changeable once its reader has
+ * been converted and something rebuilds what it feeds. A/B offers only the
+ * others.
+ */
+export type SwitchApply = 'live' | 'field' | 'world' | 'load';
 
 export interface SwitchDef {
   readonly id: string;
@@ -46,6 +61,8 @@ export interface SwitchDef {
   /** What the world does with the switch ABSENT — shown beside it. */
   readonly fallback: string;
   readonly marks: readonly SwitchMark[];
+  /** See SwitchApply; absent is `load`. */
+  readonly apply?: SwitchApply;
 }
 
 export const SWITCHES = [
@@ -191,13 +208,13 @@ export const SWITCHES = [
     note: 'fling=0 stops a lifted finger throwing the planet; on, a drag on the globe carries its speed past the lift and coasts to rest (the gesture-rate tests run with it off, and __fling(true) turns it on for the throw test)' },
   { id: 'widedither', kind: 'toggle', marks: ['look'], fallback: 'on',
     note: 'widedither=0 keeps the PATTERN dial\'s threshold on the wide chart; on, the tiled weave gives way to interleaved gradient noise past the fine ring (60m a pixel), where a 4x4 tile spread over a smooth ramp reads as blobs' },
-  { id: 'banklook', kind: 'number', marks: ['look'], fallback: '0 (the shipped bank)',
+  { id: 'banklook', kind: 'number', marks: ['look'], apply: 'field', fallback: '0 (the shipped bank)',
     note: 'banklook=1 draws inland banks as a narrow damp line with grass close to the water: the wet and mineral margins read over less than half the distance and shave less sward — the A/B for the bare pale strip seen at the Senqu' },
-  { id: 'hydrolook', kind: 'number', marks: ['look'], fallback: '0 (shipped optics)',
+  { id: 'hydrolook', kind: 'number', marks: ['look'], apply: 'live', fallback: '0 (shipped optics)',
     note: 'hydrolook=1 lets the water reflect the scene\u2019s own sky on the full Fresnel curve (no second night dimming), adds a moon glitter path, and keeps tone, grain and reflection off the waterline so the edge is the ground — the A/B for HydroTuning.lookModel' },
-  { id: 'coast', kind: 'toggle', marks: ['look'], fallback: 'on',
+  { id: 'coast', kind: 'toggle', marks: ['look'], apply: 'field', fallback: 'on',
     note: 'coast=0 builds no coastal travel-time field: the nearshore crests phase on plain shore distance and no water is sheltered — the A/B for the refraction and exposure pass (hydro/coast-field.ts); __hydroview(\'coast\') paints the field' },
-  { id: 'shore', kind: 'toggle', marks: ['legacy'], fallback: 'on',
+  { id: 'shore', kind: 'toggle', marks: ['legacy'], apply: 'field', fallback: 'on',
     note: 'shore=0 leaves the water its frame colour and the banks their hillside grass — the A/B for the shoreline pass' },
   { id: 'bank', kind: 'toggle', marks: ['legacy', 'world'], fallback: 'on',
     note: 'bank=0 publishes no bank stations, so the channel carve owns every shoreline again and the fringe between its 1:1 bank and the drawn waterline comes back — the one A/B for the bank resolver, and the control every bank-census reading is taken against' },
@@ -239,7 +256,7 @@ export const SWITCHES = [
     note: 'drapefast=0 makes a redrape pay the tile lookup on every vertex again' },
   { id: 'hydroskip', kind: 'toggle', marks: ['legacy'], fallback: 'skip',
     note: 'hydroskip=0 rebuilds a water tile even when nothing it reads has moved' },
-  { id: 'hydrodry', kind: 'toggle', marks: ['legacy'], fallback: 'short',
+  { id: 'hydrodry', kind: 'toggle', marks: ['legacy'], apply: 'field', fallback: 'short',
     note: 'hydrodry=0 runs a waterless tile’s eleven full-grid passes anyway' },
   { id: 'vegseed', kind: 'toggle', marks: ['legacy'], fallback: 'budgeted',
     note: 'vegseed=0 seeds a whole ring in one call, as it did at 95 ms' },
@@ -355,6 +372,38 @@ export const qsNum = (id: SwitchId, whenAbsent: number, search?: string): number
   const v = Number(raw);
   return Number.isFinite(v) ? v : whenAbsent;
 };
+
+/** Every key=value the session's URL carries, in order — for readers that
+ *  must see the whole query (SHOT's readout, A/B's "the URL is B"). */
+export const queryPairs = (search?: string): Array<[string, string]> =>
+  [...new URLSearchParams(search ?? (typeof location === 'undefined' ? '' : location.search))];
+/** What changing this switch costs — see SwitchApply. */
+export const switchApply = (id: string): SwitchApply => BY_ID.get(id)?.apply ?? 'load';
+export const isSwitchId = (id: string): id is SwitchId => BY_ID.has(id);
+
+// ── SWITCHES THAT CHANGE WITHOUT A RELOAD ──
+//
+// The URL is the store. `qs` already reads `location.search` at the moment it
+// is called, so a switch written back with replaceState is the value every
+// later read sees, the address bar stays a link that reproduces the session,
+// and SHOT prints the truth. A converted reader subscribes here for whatever
+// it has to rebuild; an unconverted one simply keeps what it read at load.
+const switchListeners = new Map<string, Set<(v: string | null) => void>>();
+export function onSwitch(id: SwitchId, fn: (v: string | null) => void): void {
+  let set = switchListeners.get(id);
+  if (!set) switchListeners.set(id, (set = new Set()));
+  set.add(fn);
+}
+export function setSwitch(id: SwitchId, value: string | number | boolean | null): void {
+  if (typeof location === 'undefined' || typeof history === 'undefined') return;
+  const u = new URL(location.href);
+  const before = u.searchParams.get(id);
+  const after = value === null ? null : String(value === true ? 1 : value === false ? 0 : value);
+  if (before === after) return;
+  if (after === null) u.searchParams.delete(id); else u.searchParams.set(id, after);
+  history.replaceState(history.state, '', u.toString());
+  for (const fn of switchListeners.get(id) ?? []) fn(after);
+}
 
 /** The keys the drive rewrites as the truck moves. Derived, so adding an
  *  `owned` switch cannot forget to update a second list. */
