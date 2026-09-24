@@ -899,6 +899,40 @@ async function drive(input: { token?: string; machine?: string; run?: string; ma
   return { run: log.id, machine: input.machine, machineRun: input.run, steps, final: y?.yield ?? null };
 }
 
+/* audit_sample: System Two's teaching surface — a stratified random sample of
+ * recent acts (half near θ, half anywhere), each with a short excerpt of both
+ * ends, labelled back with `label {run, index, ok}`. */
+async function auditSample(input: { token?: string; n?: number; tool?: string; runs?: number }): Promise<unknown> {
+  const token = input.token;
+  if (!token) throw new Error('token is required');
+  const page = (await gw(token, 'workspace.query', { prefix: RUN_PREFIX, shape: 'full', whole: true, rankBy: 'recency', limit: Math.min(input.runs ?? 10, 30) }, 'read')) as { entries?: Array<{ value?: RunLog }> };
+  const pool = (page.entries ?? [])
+    .filter((e) => e.value?.mode === 'act' && (!input.tool || e.value.tool === input.tool))
+    .flatMap((e) => (e.value!.acts ?? []).map((a, index) => ({ run: e.value!.id, index, a, th: e.value!.thresholds })))
+    .filter((x) => x.a.q && typeof x.a.p === 'number' && !(x.a.kind === 'decline' && x.a.p === 1)); // mechanical prunes need no audit
+  const n = Math.min(input.n ?? 12, 30);
+  const near = pool.filter((x) => x.a.p! - (x.th?.[x.a.q!] ?? 0) < 0.08);
+  const pick = <T,>(xs: T[], k: number) => [...xs].sort(() => Math.random() - 0.5).slice(0, k);
+  const chosen = [...pick(near, Math.ceil(n / 2)), ...pick(pool, n)].filter((x, i, all) => all.findIndex((y) => y.run === x.run && y.index === x.index) === i).slice(0, n);
+  const keys = [...new Set(chosen.flatMap((x) => [x.a.key, x.a.from, x.a.to].filter((k): k is string => !!k)))];
+  const got = await gwCallMany(token, keys.map((key) => ({ target: 'workspace.peek', input: { key, whole: true }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 16 });
+  const excerpt = new Map<string, string>();
+  got.forEach((g, i) => excerpt.set(keys[i], isErr(g) || !g ? '(unreadable)' : subjectText((g as { value?: unknown }).value, 160).replace(/\s+/g, ' ')));
+  return {
+    poolSize: pool.length,
+    sample: chosen.map((x) => ({
+      run: x.run,
+      index: x.index,
+      act: x.a,
+      theta: x.th?.[x.a.q!],
+      ...(x.a.key ? { subject: excerpt.get(x.a.key) } : {}),
+      ...(x.a.from ? { from: excerpt.get(x.a.from) } : {}),
+      ...(x.a.to ? { to: excerpt.get(x.a.to) } : {}),
+    })),
+    hint: 'Label each with label {run, index, ok, note?}; then calibrate.',
+  };
+}
+
 /* retire_legacy: the first live runs wrote per-item facts under `judgment/`
  * and `system1/` (embedded → they minted suggestions). Supersede exactly those
  * prefixes — the organ's own output, nothing else. */
@@ -964,6 +998,7 @@ const RUNNERS: Record<string, (args: Record<string, unknown>) => Promise<unknown
   calibrate: (a) => runCalibrate(a as { token?: string; runs?: number; apply?: boolean }),
   label: (a) => label(a as { token?: string; run?: string; index?: number; ok?: boolean; note?: string }),
   retire_legacy: (a) => retireLegacy(a as { token?: string }),
+  audit_sample: (a) => auditSample(a as { token?: string; n?: number; tool?: string; runs?: number }),
   drive: (a) => drive(a as { token?: string; machine?: string; run?: string; maxSteps?: number }),
 };
 
@@ -1053,6 +1088,12 @@ const TOOLS = [
     kind: 'act',
     description: 'The judge rail (ADR-0098 §3): drive a machine run with System One — step it, answer each decision yield with one Jev choice over the node\'s declared branches, advance (the machine records the claim, templated from the distribution) when p ≥ θ.decide, and STOP at the first yield below θ (or a section/vote/work yield), returning it for System Two. Pass a run started with trigger_run {mode:"driven"}.',
     inputSchema: { type: 'object', properties: { token: tokenProp, machine: { type: 'string' }, run: { type: 'string' }, maxSteps: { type: 'number' }, async: asyncProp }, required: ['token', 'machine', 'run'] },
+  },
+  {
+    name: 'audit_sample',
+    kind: 'read',
+    description: 'System Two\'s teaching surface (ADR-0098 §4): a stratified random sample of recent act-mode acts (half within 0.08 of their gate), each with a short excerpt of its subject / both ends. Label each back with `label`, then `calibrate`.',
+    inputSchema: { type: 'object', properties: { token: tokenProp, n: { type: 'number' }, tool: { type: 'string' }, runs: { type: 'number' } }, required: ['token'] },
   },
   {
     name: 'retire_legacy',
