@@ -56487,7 +56487,7 @@ function hudSafeRects(): Array<[number, number, number, number]> {
   const mw = Math.min(58, Math.floor(HW * 0.34));   // the dock square (see drawHud)
   const my = HH - 4 - 23 - mw - 3;
   const reserved: Array<[number, number, number, number]> = [
-    [0, 0, HW, 34 + (camMode === 'top' && chartOn.stream ? 30 : 0)],  // compass strip + the justified top row
+    [0, 0, HW, 34 + topReadoutH()],  // compass strip + the justified top row + any readouts under it
     [0, 32, 74, 18],                                 // the task chip, under the top row
     [HW - 56, 18, 56, 18],                           // MENU, on the heading row
     [0, my - 200, camMode === 'top' ? 24 : 17, 200], // ENV stack, or the chart tilt rail
@@ -56672,6 +56672,52 @@ function drawStreamHeader(): void {
     + ` · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
     + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
     6, 48, UI.soft);
+}
+/** How far the readouts under the top row push everything below them. */
+const topReadoutH = (): number => (chartOn.stream ? 30 : 0) + (chartOn.shot ? 28 : 0);
+/**
+ * THE SHOT READOUT: a screenshot that says how to take it again.
+ *
+ *   37.74995 -119.59604 H91 CHASE        the vehicle you are viewing from
+ *   GOD 12 -40 AZ194 EL42 D90 F55        the camera, as __godcam numbers
+ *   18:00 SUN -4 CLEAR  hydrolook=1      the hour, the sky, the look switches
+ *
+ * The camera line is relative to that vehicle, because a reload of the
+ * first line's place puts the vehicle at local (0, 0): `__godcam({x, z, az,
+ * el, dist, fov})` then stands the camera where this one stood. The target is
+ * where the view ray meets the ground (200 m out when it meets sky).
+ */
+const shotFwd = new THREE.Vector3();
+function drawShotReadout(): void {
+  if (!chartOn.shot) return;
+  hctx.globalAlpha = 1;
+  const y0 = chartOn.stream ? 70 : 40;
+  const [lat, lon] = localToLatLon(viewX(), viewZ());
+  const hdg = Math.round(((viewH() * 180) / Math.PI + 360) % 360);
+  const cam = drone.up ? (camMode === 'cab' ? 'DRONE-NOSE' : 'DRONE') : camMode.toUpperCase();
+  textEdgeP(`${lat.toFixed(5)} ${lon.toFixed(5)} H${hdg} ${cam}`, 6, y0, UI.text);
+  camera.getWorldDirection(shotFwd);
+  const c = camera.position;
+  let t = 200;
+  for (let d = 2; d < 3000; d *= 1.08) {
+    if (c.y + shotFwd.y * d <= groundAt(c.x + shotFwd.x * d, c.z + shotFwd.z * d)) { t = d; break; }
+  }
+  const tx = c.x + shotFwd.x * t, tz = c.z + shotFwd.z * t;
+  const dx = c.x - tx, dz = c.z - tz, dy = c.y - groundAt(tx, tz);
+  const az = Math.round(((Math.atan2(dx, -dz) * 180) / Math.PI + 360) % 360);
+  const el = Math.round((Math.atan2(dy, Math.hypot(dx, dz)) * 180) / Math.PI);
+  textEdgeP(`GOD ${Math.round(tx - viewX())} ${Math.round(tz - viewZ())} AZ${az} EL${el}`
+    + ` D${Math.round(Math.hypot(dx, dy, dz))} F${Math.round(camera.fov)}`, 6, y0 + 8, UI.soft);
+  const sh = solarHour();
+  const hhmm = `${String(Math.floor(sh)).padStart(2, '0')}:${String(Math.floor((sh % 1) * 60)).padStart(2, '0')}`;
+  const sun = Math.round((Math.asin(clamp(SUN_DIR.y, -1, 1)) * 180) / Math.PI);
+  // Every switch in the URL that is not the address itself: the look and
+  // bench levers this session was opened with.
+  const owned = new Set(['lat', 'lon', 'h', 'cam', 'z', 'run']);
+  const flags = [...new URLSearchParams(location.search)]
+    .filter(([k]) => !owned.has(k)).map(([k, v]) => `${k}=${v}`).join(' ');
+  textEdgeP(fitP(`${hhmm} SUN ${sun} ${String(wx.sky).toUpperCase()}${flags ? `  ${flags}` : ''}`, HW - 12),
+    6, y0 + 16, UI.gold);
 }
 function drawTileDebugOverlay(): void {
   if (!chartOn.tiles) return;
@@ -56962,7 +57008,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // from `body.clean` the grid was hidden there by accident, and restoring
     // it by accident would put four lines of debug over the map the lab
     // exists to edit. FOLD gives it back with the rest of the chrome.
-    if (!labChrome) { drawTileDebugOverlay(); drawStreamHeader(); }
+    if (!labChrome) { drawTileDebugOverlay(); drawStreamHeader(); drawShotReadout(); }
     // AND SO IS THE AUTHORING OVERLAY, for the same reason and a sharper
     // one: the world lab turns the game's chrome OFF as it opens, which is
     // `hudOn = false`, so the one instrument the lab cannot work without was
@@ -57012,7 +57058,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // tick at each end. See chartScale for what the three numbers are.
   if (camMode === 'top') {
     const sc = chartScale();
-    const x0 = pad + 1, y0 = chartOn.stream ? pad + 64 : pad + 34;
+    const x0 = pad + 1, y0 = pad + 34 + topReadoutH();
     textEdgeS(sc.label, x0, y0, UI.soft);
     hctx.fillStyle = 'rgba(4,10,11,0.85)';
     hctx.fillRect(x0 - 1, y0 + 10, sc.barPx + 3, 5);
@@ -57023,7 +57069,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   }
   // ── T8 and T9, WHEREVER M7 ASKS FOR THEM ── under the scale on the chart,
   // under the clock's row everywhere else.
-  const keyY = (chartOn.stream ? pad + 64 : pad + 34) + (camMode === 'top' ? 19 : 0);
+  const keyY = pad + 34 + topReadoutH() + (camMode === 'top' ? 19 : 0);
   if (keyShown && (camMode === 'top' || !lineOn)) {
     // ── THE LAYER KEY ──
     //
@@ -57239,6 +57285,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // from this function's own !hudOn early return, above.
   drawTileDebugOverlay();
   drawStreamHeader();
+  drawShotReadout();
   hudLap('tiledbg');
   // ── checkpoint markers, under everything ──
   // Never a label and never a distance: the moment a checkpoint tells you how
