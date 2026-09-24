@@ -34469,17 +34469,17 @@ const cloudTravel = new THREE.Vector2();
 /** ?fixdt=<seconds> — see the note at its use in the tick. 0 is off. */
 const FIX_DT = Math.max(0, Math.min(0.05,
   Number(qs('fixdt') ?? 0) || 0));
-const WX_PIN = ((): Sky | null => {
+let WX_PIN = ((): Sky | null => {
   const v = qs('wx');
   return v === 'clear' || v === 'haze' || v === 'rain' || v === 'storm' ? v : null;
 })();
 /** ?fog=0..1 pins the regional mist the way ?wx pins the sky, and ?wet=0..1
  *  floods the ground — a puddle screenshot must not wait out a storm. */
-const WX_FOG = ((): number | null => {
+let WX_FOG = ((): number | null => {
   const v = qs('fog');
   return v === null ? null : clamp(Number(v) || 0, 0, 1);
 })();
-const WX_WET = ((): number | null => {
+let WX_WET = ((): number | null => {
   const v = qs('wet');
   return v === null ? null : clamp(Number(v) || 0, 0, 1);
 })();
@@ -60298,6 +60298,92 @@ if (timeFromUrl < 0 && !qs('time')
   const d = DIALS.find((x) => x.key === 'time');
   const i = TIME_MODES.indexOf('CYCLE');
   if (d && i >= 0) { d.at = i; d.apply(i); }
+}
+/** Flip any switch at runtime, as A/B does: `__switch('sunalt', 5)`, `null`
+ *  to remove it. Answers what the URL now says and what the change costs. */
+(window as unknown as { __switch?: object }).__switch = (id: string, value?: string | number | boolean | null): object => {
+  if (!isSwitchId(id)) return { error: `unknown switch ${id}` };
+  if (value !== undefined) setSwitch(id, value);
+  return { id, value: qs(id), apply: switchApply(id) };
+};
+// ── RUNTIME SWITCHES, BATCH 2a: THE ONES THAT WERE ALREADY LIVE UNDERNEATH ──
+//
+// Each of these was read once at load into a `let` or a uniform that the frame
+// already consults, so a change needs only to be written back where the load
+// put it. switches.ts declares them `live`; A/B can flip them between frames.
+{
+  const low = (id: SwitchId): string => (qs(id) ?? '').toLowerCase();
+  const pickIndex = <T extends string>(list: readonly T[], v: string, dflt: number): number => {
+    const i = list.indexOf(v as T); if (i >= 0) return i;
+    const n = Number(v); return v !== '' && Number.isFinite(n) ? clamp(Math.round(n), 0, list.length - 1) : dflt;
+  };
+  // the lens
+  onSwitch('tilt', () => { const v = low('tilt'); tiltMode = v && v in TILT_PRESETS ? v : 'stock'; });
+  onSwitch('dof', () => {
+    const v = low('dof');
+    dofModeOverride = (DOF_MODES as readonly string[]).includes(v) ? v as DofMode : null;
+  });
+  onSwitch('dofs', () => { dofStrengthAt = pickIndex(DOF_STRENGTHS, low('dofs'), 2); });
+  onSwitch('dofq', () => { const i = DOF_QUALITIES.indexOf(low('dofq') as typeof DOF_QUALITIES[number]); dofQuality = i >= 0 ? i : 1; });
+  onSwitch('aperture', () => {
+    dofApertureOverride = qsHas('aperture');
+    dofRadiusAt = clamp(Math.round(qsNum('aperture', 1)), 0, DOF_RADII.length - 1);
+  });
+  onSwitch('focus', () => { dofFocusAt = clamp(Math.round(qsNum('focus', 0)), 0, DOF_FOCUS_M.length - 1); });
+  onSwitch('near', () => { nearLock = Math.max(0, Number(qs('near') ?? 0) || 0); });
+  onSwitch('mblur', () => {
+    const q = qs('mblur'); const d = DIALS.find((x) => x.key === 'mblur');
+    if (d && q !== null) { d.at = clamp(Math.round(Number(q)) || 0, 0, d.opts.length - 1); d.apply(d.at); }
+  });
+  // the sky and the weather
+  onSwitch('sunalt', () => {
+    const v = qs('sunalt');
+    SUN_ALT_FORCE = v === null || v === '' || !Number.isFinite(Number(v)) ? null : clamp(Number(v), -20, 89);
+  });
+  // Absent is the load default (the CYCLE), so an A/B that strips it gets it.
+  const timeFrom = (id: SwitchId): void => {
+    const i = TIME_MODES.indexOf((qs(id) ?? '').toUpperCase() as typeof TIME_MODES[number]);
+    timeMode = i >= 0 ? i : 0;
+  };
+  onSwitch('time', () => timeFrom('time'));
+  onSwitch('t', () => timeFrom('t'));
+  onSwitch('wind', () => { const k = Number(qs('wind')); windForce = qsHas('wind') && Number.isFinite(k) ? Math.max(0, k) : null; });
+  onSwitch('winddir', () => { const d = Number(qs('winddir')); windForceDeg = qsHas('winddir') && Number.isFinite(d) ? d : null; });
+  onSwitch('wx', () => {
+    const v = qs('wx');
+    WX_PIN = v === 'clear' || v === 'haze' || v === 'rain' || v === 'storm' ? v : null;
+    if (WX_PIN) { wx.next = WX_PIN; wx.cloud = WX[WX_PIN].cloud; wx.rain = WX[WX_PIN].rain; }
+  });
+  onSwitch('fog', () => { const v = qs('fog'); WX_FOG = v === null ? null : clamp(Number(v) || 0, 0, 1); });
+  onSwitch('wet', () => { const v = qs('wet'); WX_WET = v === null ? null : clamp(Number(v) || 0, 0, 1); });
+  // the post chain and the shaders
+  onSwitch('raincurtain', () => { compMat.uniforms.uRainCurtain.value = qs('raincurtain') === '0' ? 0 : 1; });
+  onSwitch('widedither', () => { compMat.uniforms.uDWide.value = qsOn('widedither', true) ? 1 : 0; });
+  onSwitch('airblur', () => { compMat.uniforms.uAirBlur.value = qsOn('airblur', false) ? 1 : 0; });
+  onSwitch('swardforms', () => { (swardU as unknown as Record<string, { value: number }>).uSwardStructure.value = qsOn('swardforms', true) ? 1 : 0; });
+  onSwitch('impink', () => { impInkU.value = clamp(qsNum('impink', 0), 0, 1); });
+  // The six tree-look uniforms; absent returns each to what the load set.
+  const ezU = (id: SwitchId, u: { value: number }, hi: number, dflt: number) => (): void => {
+    const n = Number(qs(id));
+    u.value = qsHas(id) && Number.isFinite(n) ? clamp(n, 0, hi) : dflt;
+  };
+  onSwitch('ezbark', ezU('ezbark', ezLookU.uEzBark, 2, ezLookU.uEzBark.value));
+  onSwitch('ezedge', ezU('ezedge', ezLookU.uEzEdge, 1, ezLookU.uEzEdge.value));
+  onSwitch('ezleaf', ezU('ezleaf', ezLookU.uEzLeaf, 2, ezLookU.uEzLeaf.value));
+  onSwitch('ezbump', ezU('ezbump', ezLookU.uEzBump, 2, ezLookU.uEzBump.value));
+  onSwitch('ezcut', ezU('ezcut', ezLookU.uEzCut, 0.7, ezLookU.uEzCut.value));
+  onSwitch('ezgrain', ezU('ezgrain', ezLookU.uEzGrain, 2, ezLookU.uEzGrain.value));
+  // the frame loop and the instruments
+  onSwitch('shsnap', () => { SHADOW_SNAP = qs('shsnap') !== '0'; });
+  onSwitch('lumasync', () => { lumaAsync = qs('lumasync') !== '1'; });
+  onSwitch('nodraw', () => { NODRAW = qsOn('nodraw', false); });
+  onSwitch('fling', () => { flingOn = qsOn('fling', true); });
+  onSwitch('wetdebug', () => { setDebugRaster(qsOn('wetdebug', false) ? 'water' : null); });
+  // the sward's density evidence: a sweep, like the bank switches
+  onSwitch('swardev', () => { swardEv = qsOn('swardev', true) ? 1 : 0; swardGroundSeen = -1; swardFieldAt = 0; });
+  // the built world and the authored layer: the in-place rebuild the dials use
+  onSwitch('built', () => { const w = qsOn('built', true); if (w !== builtOn) { builtOn = w; rebuildInPlace(); } });
+  onSwitch('authored', () => { const w = qsOn('authored', true); if (w !== authoredOn) { authoredOn = w; rebuildInPlace(); } });
 }
 // `?mblur=0..3` pins the shutter for a capture, the way `?sunalt=` pins the
 // sun. Two shots of the same road are not comparable if one of them also
