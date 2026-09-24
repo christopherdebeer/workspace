@@ -134,6 +134,9 @@ describe('calibrate (the learner)', () => {
 describe('helpers', () => {
   it('slugs projects and bounds subject text', () => {
     expect(projectSlug('kb/proj_mental_models')).toBe('mental-models');
+    expect(projectSlug('kb/27ffd0926f1b4a', { content: 'proj_parcland — parc.land (c15r/parcland …)' })).toBe('parcland');
+    expect(projectSlug('kb/5beb39bb9e6d4b', { content: 'proj_blob_admin: c15r/blob_admin' })).toBe('blob-admin');
+    expect(projectSlug('kb/proj_remarkable', { summary: 'GitHub repo' })).toBe('remarkable');
     expect(subjectText({ title: 'T', content: 'x'.repeat(3000) }).length).toBeLessThanOrEqual(1801);
     expect(subjectText('plain')).toBe('plain');
   });
@@ -158,5 +161,23 @@ describe('judge rail (planDecision / yieldCriteria)', () => {
     expect(planDecision({ probabilities: { yes: 0.9, no: 0.1 } }, ['yes', 'no'])).toMatchObject({ action: 'advance', to: 'yes', p: 0.9 });
     expect(planDecision({ probabilities: { yes: 0.6, no: 0.4 } }, ['yes', 'no'])).toMatchObject({ action: 'escalate', best: 'yes' });
     expect(planDecision({ probabilities: { rogue: 0.99 } }, ['yes', 'no'])).toMatchObject({ action: 'escalate', best: null });
+  });
+});
+
+describe('continuation (self-chaining backfill)', () => {
+  const { continuation } = jest.requireActual('../cells/system1/index');
+  it('perceive continues the cursor and counts the chain down', () => {
+    expect(continuation('perceive', { chain: 2, prefix: 'inbox/' }, { next: '40', errors: [] })).toEqual({ chain: 1, prefix: 'inbox/', cursor: '40' });
+    expect(continuation('perceive', { chain: 0 }, { next: '40', errors: [] })).toBeNull();
+    expect(continuation('perceive', { chain: 3 }, { errors: [] })).toBeNull();
+  });
+  it('sweep skips past what stays at the head of the queue', () => {
+    const out = { errors: [], counts: { pairs: 60, live: 55, structural: 3, hold: 4, error: 1 } };
+    // stay = hold 4 + structural 3 + error 1 + missing-fact pairs (60 − 55 − 3 = 2)
+    expect(continuation('sweep_suggestions', { chain: 1, mode: 'act', offset: 10 }, out)).toMatchObject({ offset: 20, chain: 0 });
+    expect(continuation('sweep_suggestions', { chain: 1, mode: 'shadow' }, out)).toMatchObject({ offset: 60 });
+  });
+  it('stops a chain whose batch is failing', () => {
+    expect(continuation('perceive', { chain: 5 }, { next: '9', errors: new Array(11).fill('x') })).toBeNull();
   });
 });

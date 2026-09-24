@@ -123,8 +123,13 @@ export const KIND_OPTIONS: Record<string, string> = {
   noise: 'accidental, empty or content-free',
 };
 
-export function projectSlug(key: string): string {
-  const tail = key.split('/').pop() ?? key;
+/** A project's slug: the `proj_<name>` its content opens with (most project
+ *  facts are keyed by a legacy hash — kb/27ffd0926f1b4a — and name themselves
+ *  in the text), else the key tail. */
+export function projectSlug(key: string, value?: unknown): string {
+  const text = typeof value === 'string' ? value : subjectText(value, 400);
+  const named = /\bproj_([a-z0-9_-]+)/i.exec(text)?.[1];
+  const tail = named ?? key.split('/').pop() ?? key;
   return tail.replace(/^proj_/, '').replace(/_/g, '-').toLowerCase();
 }
 
@@ -423,8 +428,9 @@ async function loadContext(token: Tok): Promise<{ projects: Project[]; goals: Go
         .map((e) => {
           const tags = (e._meta?.tags ?? []).filter((t) => t !== 'project').slice(0, 6).join(', ');
           const text = subjectText(e.value, 140).replace(/\s+/g, ' ');
-          return { key: e.key, slug: projectSlug(e.key), label: [tags, text].filter(Boolean).join(' — ').slice(0, 200) };
-        });
+          return { key: e.key, slug: projectSlug(e.key, e.value), label: [tags, text].filter(Boolean).join(' — ').slice(0, 120) };
+        })
+        .filter((p, i, all) => all.findIndex((q) => q.slug === p.slug) === i);
   const gl: Goal[] = isErr(goals)
     ? []
     : ((goals as { goals?: Array<{ id: string; title: string; detail?: string }> }).goals ?? []).map((g) => ({
@@ -636,12 +642,26 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
   const th = await loadThresholds(token);
   const limit = Math.min(input.limit ?? 60, 150);
   const sug = (await gw(token, 'workspace.suggestions', { limit, ...(input.offset ? { offset: input.offset } : {}) }, 'read')) as {
-    suggestions?: Array<{ from: string; to: string; score?: number; pairHash?: string }>;
+    suggestions?: Array<{ from: string; to: string; score?: number; pairHash?: string; identical?: boolean; degenerate?: string; leasedBy?: string | null }>;
     total?: number;
   };
-  const pairs = sug.suggestions ?? [];
-  const log: RunLog = { id: newRunId(), tool: 'sweep_suggestions', mode, at: new Date().toISOString(), thresholds: th, counts: { pending: sug.total ?? 0, pairs: pairs.length }, acts: [], errors: [], usage: { input_tokens: 0 } };
+  // The platform already knows these are construction, not relationship:
+  // byte-identical or same-source pairs are prune material (ADR-0032 contract)
+  // — decline them without spending a judgment. Leased pairs belong to a peer.
+  const all = (sug.suggestions ?? []).filter((p) => !p.leasedBy);
+  const prune = all.filter((p) => p.identical || p.degenerate);
+  const pairs = all.filter((p) => !p.identical && !p.degenerate);
+  const log: RunLog = { id: newRunId(), tool: 'sweep_suggestions', mode, at: new Date().toISOString(), thresholds: th, counts: { pending: sug.total ?? 0, pairs: all.length, pruned: prune.length }, acts: [], errors: [], usage: { input_tokens: 0 } };
+  if (mode === 'act' && prune.length) {
+    const res = await gwCallMany(token, prune.map((p) => ({ target: 'workspace.unlink', input: { from: p.from, rel: 'similarTo', to: p.to }, kind: 'act' as const })), { url: GATEWAY_MCP, concurrency: 16 });
+    res.forEach((r, i) => {
+      const p = prune[i];
+      if (isErr(r)) log.errors.push(`prune ${p.from}↔${p.to}: ${r.error.slice(0, 120)}`);
+      else log.acts.push({ kind: 'decline', from: p.from, rel: 'similarTo', to: p.to, q: 'decline', p: 1 });
+    });
+  }
   if (!pairs.length) {
+    log.timings = tick('act');
     await writeRun(token, log);
     return log;
   }
@@ -919,10 +939,33 @@ const RUNNERS: Record<string, (args: Record<string, unknown>) => Promise<unknown
   drive: (a) => drive(a as { token?: string; machine?: string; run?: string; maxSteps?: number }),
 };
 
+/** The next batch's args, or null when the chain is spent or the source dry. */
+export function continuation(tool: string, args: Record<string, unknown>, out: unknown): Record<string, unknown> | null {
+  const chain = Number(args.chain ?? 0);
+  if (!(chain > 0)) return null;
+  const log = out as Partial<RunLog> | null;
+  if (!log || (log.errors?.length ?? 0) > 10) return null; // a failing batch stops the chain
+  if (tool === 'perceive') {
+    if (!log.next || args.keys) return null;
+    return { ...args, cursor: String(log.next), chain: chain - 1 };
+  }
+  if (tool === 'sweep_suggestions') {
+    const c = log.counts ?? {};
+    if (!c.pairs) return null;
+    // Acted pairs leave the queue; held/structural/errored ones stay at its
+    // head, so skip past them. Shadow mode acts on nothing → skip the batch.
+    const judgedPairs = c.pairs - (c.pruned ?? 0);
+    const stay = args.mode === 'act' ? (c.hold ?? 0) + (c.structural ?? 0) + (c.error ?? 0) + Math.max(judgedPairs - (c.live ?? 0) - (c.structural ?? 0), 0) : c.pairs;
+    return { ...args, offset: Number(args.offset ?? 0) + stay, chain: chain - 1 };
+  }
+  return null;
+}
+
 /* ── the cell surface ────────────────────────────────────────────────────── */
 
 const tokenProp = { type: 'string', description: 'Bearer the organ acts as (read:workspace write:workspace, plus @c15r/jev access)' };
 const modeProp = { type: 'string', enum: ['shadow', 'act'], description: 'shadow (default): write judgment facts only; act: also materialize tags/type/edges' };
+const chainProp = { type: 'number', description: 'With async: after this batch, submit up to N follow-on batches (perceive continues the cursor; sweep skips past held pairs)' };
 const asyncProp = { type: 'boolean', description: 'Submit-and-poll (returns {jobId}; poll fetch) — for runs that outrun the ~30s edge cap' };
 
 const TOOLS = [
@@ -943,6 +986,7 @@ const TOOLS = [
         mode: modeProp,
         force: { type: 'boolean', description: 'Re-perceive facts already carrying s1:perceive-v1' },
         async: asyncProp,
+        chain: chainProp,
       },
       required: ['token'],
     },
@@ -954,7 +998,7 @@ const TOOLS = [
       'Drain the similarTo suggestion queue both ways (ADR-0098 §3): judge each pair with one Jev choice over {elaborates, refines, grounds, duplicates, contradicts, relatesTo, unrelated}; above θ ratify with that rel at inferred strength 0.6 (contradicts is a mark, never a resolution); unrelated above θ DECLINES (drops the inferred edge). Judgment facts always; acts only in act mode.',
     inputSchema: {
       type: 'object',
-      properties: { token: tokenProp, limit: { type: 'number', description: 'Pairs per sweep (default 60, max 150)' }, offset: { type: 'number' }, mode: modeProp, async: asyncProp },
+      properties: { token: tokenProp, limit: { type: 'number', description: 'Pairs per sweep (default 60, max 150)' }, offset: { type: 'number' }, mode: modeProp, async: asyncProp, chain: chainProp },
       required: ['token'],
     },
   },
@@ -1014,7 +1058,15 @@ export const handler = async (
     if (!job?.input) return;
     try {
       const out = await RUNNERS[job.input.tool](job.input.args);
-      await jobs.putJob(event.__job, { status: 'done', out });
+      // Self-continuation (a backfill is thousands of items; one job is one
+      // batch): `chain` counts down; the next batch picks up where this ended.
+      const next = continuation(job.input.tool, job.input.args, out);
+      let nextJob: string | undefined;
+      if (next) {
+        nextJob = randomUUID().slice(0, 13);
+        await jobs.submit(nextJob, { input: { tool: job.input.tool, args: next } });
+      }
+      await jobs.putJob(event.__job, { status: 'done', out: nextJob ? { ...(out as object), nextJob } : out });
     } catch (e) {
       await jobs.putJob(event.__job, { status: 'error', error: (e as Error).message });
     }
