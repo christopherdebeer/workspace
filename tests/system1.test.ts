@@ -181,3 +181,15 @@ describe('continuation (self-chaining backfill)', () => {
     expect(continuation('perceive', { chain: 5 }, { next: '9', errors: new Array(11).fill('x') })).toBeNull();
   });
 });
+
+describe('embeddedMeta (lifting a malformed write)', () => {
+  const { embeddedMeta } = jest.requireActual('../cells/system1/index');
+  const s = { key: 'proposal/x', type: null, tags: ['s1:perceive-v1'], value: { type: 'proposal', tags: ['proposal', 'consolidation'], title: 't' } };
+  it('lifts a declared type and its value-embedded tags', () => {
+    expect(embeddedMeta(s, ['proposal', 'capture'])).toEqual({ type: 'proposal', tags: ['proposal', 'consolidation'] });
+  });
+  it('ignores undeclared types and already-typed facts', () => {
+    expect(embeddedMeta(s, ['capture'])).toEqual({ tags: [] });
+    expect(embeddedMeta({ ...s, type: 'capture' }, ['proposal'])).toEqual({ tags: [] });
+  });
+});

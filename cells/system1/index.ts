@@ -177,7 +177,7 @@ export function perceiveQuestions(
       instructions: `Does this fact directly advance or inform the goal "${g.title}"${g.detail ? ` (${g.detail.slice(0, 200)})` : ''}?`,
     };
   }
-  if (!subject.type && ctx.types.length) {
+  if (!subject.type && ctx.types.length && !embeddedMeta(subject, ctx.types).type) {
     const criteria: Record<string, string | null> = {};
     for (const t of ctx.types.slice(0, 250)) criteria[t] = null;
     q.type = { type: 'choice', instructions: 'Which declared fact type best describes this fact?', criteria };
@@ -196,6 +196,17 @@ export interface PerceivePlan {
   edges: Array<{ rel: string; to: string; p: number }>;
   noise?: number;
   judgment: Record<string, unknown>;
+}
+
+/** A fact written with its type/tags INSIDE the value (a malformed remember —
+ *  e.g. proposal/tsarch-slice-2026-08-11) has `_meta.type` null. When the
+ *  value names a declared type, lift it: a structural repair, no judgment. */
+export function embeddedMeta(subject: Subject, types: string[]): { type?: string; tags: string[] } {
+  const v = subject.value && typeof subject.value === 'object' ? (subject.value as Record<string, unknown>) : null;
+  if (!v || subject.type) return { tags: [] };
+  const type = typeof v.type === 'string' && types.includes(v.type) ? v.type : undefined;
+  const tags = Array.isArray(v.tags) ? v.tags.filter((t): t is string => typeof t === 'string' && !subject.tags.includes(t)).slice(0, 20) : [];
+  return { ...(type ? { type } : {}), tags: type ? tags : [] };
 }
 
 /** Answers → materialization, gated per question by θ. Pure. */
@@ -568,7 +579,14 @@ async function perceive(input: PerceiveInput): Promise<RunLog> {
       log.errors.push(`${r.id}: ${r.error ?? 'no answers'}`);
       continue;
     }
-    plans.push({ s, plan: planPerceive(s, r.answers, ctx, th) });
+    const plan = planPerceive(s, r.answers, ctx, th);
+    const lifted = embeddedMeta(s, ctx.types);
+    if (lifted.type) {
+      plan.type = lifted.type;
+      plan.judgment.type = { choice: lifted.type, p: 1, lifted: true };
+      plan.addTags = [...lifted.tags.filter((t) => !plan.addTags.includes(t)), ...plan.addTags];
+    }
+    plans.push({ s, plan });
   }
 
   // The evidence rides the run log (one write), keyed by subject + version.
