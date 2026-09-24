@@ -449,6 +449,26 @@ consolidate.
 
   The previous 14 cycles recorded 0 structural moves.
 
+**Cadence: the existing daily machine runs, no new schedule.**
+- The daily driven tending routine already reads `protocol/tending` as its
+  source of truth. **v3.3** adds Phase 1.5:
+  - mint a session token, then `agent:system1` and `agent:consolidate`
+    children;
+  - `calibrate`, then start the perceive and sweep chains;
+  - drive `machine/consolidate` **every** run, not only as a 36h rescue;
+  - late in the run, act as teacher: `audit_sample` → `label` → `revert`
+    the wrong ones → `calibrate`.
+- `machine/consolidate`'s Adjudicate brief is rewritten in place (the node
+  fact, CAS). The machine is not redefined, so its hand-patched projected
+  vocabulary is not clobbered. The brief now runs the organ and has the
+  driver judge only the pairs Jev escalated (cap 5).
+- **Validated by driving one run inline.** At Select, `system1.drive`
+  escalated (Adjudicate 0.68), because the yield's context was an elided
+  digest with no counts. That is the honest behaviour: System Two decided.
+- The validation also caught a `drive` bug before it could bite: it would
+  have "judged" the single-branch *work* yield and skipped the work. It now
+  acts only on `agent`/`task` decision yields.
+
 **Inc 3 — blocked on one tier-1 line.** Always-on perception is a
 `_subscriptions` entry delivering `fact.written` to `@c15r/system1.perceive`
 with `grants: {read, write}`. The reactor mints the per-run owner token only
