@@ -518,13 +518,14 @@ async function loadSubjects(token: Tok, input: PerceiveInput): Promise<{ subject
   let entries: Entry[] = [];
   let next: string | undefined;
   if (input.keys?.length) {
-    const got = await gwCallMany(token, input.keys.slice(0, 100).map((key) => ({ target: 'workspace.peek', input: { key }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 16 });
+    const got = await gwCallMany(token, input.keys.slice(0, 100).map((key) => ({ target: 'workspace.peek', input: { key, whole: true }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 16 });
     entries = got.map((g, i) => (isErr(g) || !g ? null : ({ key: input.keys![i], ...(g as object) } as Entry))).filter((e): e is Entry => !!e);
   } else {
     const page = (await gw(token, 'workspace.query', {
       ...(input.prefix ? { prefix: input.prefix } : {}),
       ...(input.type ? { type: input.type } : {}),
       shape: 'full',
+      whole: true, // the organ bounds each subject's text itself (subjectText)
       rankBy: 'recency',
       limit: Math.min(input.limit ?? 40, 100),
       ...(input.cursor ? { cursor: input.cursor } : {}),
@@ -666,7 +667,7 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
     return log;
   }
   const keys = [...new Set(pairs.flatMap((p) => [p.from, p.to]))];
-  const got = await gwCallMany(token, keys.map((key) => ({ target: 'workspace.peek', input: { key }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 16 });
+  const got = await gwCallMany(token, keys.map((key) => ({ target: 'workspace.peek', input: { key, whole: true }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 16 });
   const facts = new Map<string, Subject>();
   got.forEach((g, i) => {
     if (isErr(g) || !g) return;
@@ -800,7 +801,7 @@ async function label(input: { token?: string; run?: string; index?: number; ok?:
 async function runCalibrate(input: { token?: string; runs?: number; apply?: boolean }): Promise<unknown> {
   const token = input.token;
   if (!token) throw new Error('token is required');
-  const page = (await gw(token, 'workspace.query', { prefix: RUN_PREFIX, shape: 'full', rankBy: 'recency', limit: Math.min(input.runs ?? 20, 50) }, 'read')) as { entries?: Array<{ value?: RunLog }> };
+  const page = (await gw(token, 'workspace.query', { prefix: RUN_PREFIX, shape: 'full', whole: true, rankBy: 'recency', limit: Math.min(input.runs ?? 20, 50) }, 'read')) as { entries?: Array<{ value?: RunLog }> };
   const acts = (page.entries ?? []).flatMap((e) => (e.value?.mode === 'act' ? (e.value.acts ?? []).map((a, i) => ({ run: e.value!.id, i, a })) : []));
   const labels: LabelledAct[] = [];
   // Survival check: edges by source key (one edges call per distinct source), tags by peek.
@@ -817,7 +818,7 @@ async function runCalibrate(input: { token?: string; runs?: number; apply?: bool
     labels.push({ q: x.a.q!, p: x.a.p!, ok: present.has(`${x.a.from}|${x.a.rel}|${x.a.to}`) });
   }
   // Audit labels (strong, 3×).
-  const lab = (await gw(token, 'workspace.query', { prefix: LABEL_PREFIX, shape: 'full', limit: 100 }, 'read').catch(() => ({ entries: [] }))) as { entries?: Array<{ value?: { act?: RunAct; ok?: boolean } }> };
+  const lab = (await gw(token, 'workspace.query', { prefix: LABEL_PREFIX, shape: 'full', whole: true, limit: 100 }, 'read').catch(() => ({ entries: [] }))) as { entries?: Array<{ value?: { act?: RunAct; ok?: boolean } }> };
   for (const e of lab.entries ?? []) {
     const a = e.value?.act;
     if (a?.q && typeof a.p === 'number' && typeof e.value?.ok === 'boolean') labels.push({ q: a.q, p: a.p, ok: e.value.ok, weight: 3 });

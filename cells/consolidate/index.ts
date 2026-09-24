@@ -568,7 +568,7 @@ async function judgeWithJev(token: string, pairs: ContestedCandidateObs[]): Prom
   const facts = new Map<string, PeekedFact>();
   if (!pairs.length) return { verdicts: out, facts };
   const keys = [...new Set(pairs.flatMap((c) => [c.a, c.b]))];
-  const got = await gwCallMany(token, keys.map((key) => ({ target: 'workspace.peek', input: { key }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 16 });
+  const got = await gwCallMany(token, keys.map((key) => ({ target: 'workspace.peek', input: { key, whole: true }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 16 });
   got.forEach((g, i) => {
     const f = toPeeked(g);
     if (f) facts.set(keys[i], f);
