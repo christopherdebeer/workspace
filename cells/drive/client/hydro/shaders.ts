@@ -1439,8 +1439,16 @@ void main() {
       // quarters of its blue and goes the dark olive a real riverbed is.
       // Silt shortens the path further.
       float opticalBedDepth = max(0.0, bedDepth - 0.08);
-      bedColour *= exp(-vec3(0.42, 0.21, 0.14) * opticalBedDepth
-        * (1.0 + suspendedScattering * 2.0));
+      bedColour *= exp(-(uLookModel > 0.5 ? vec3(0.95, 0.36, 0.20) : vec3(0.42, 0.21, 0.14))
+        * opticalBedDepth * (1.0 + suspendedScattering * 2.0));
+      if (uLookModel > 0.5) {
+        // LOOK: the column has a colour of its own. Seen through half a metre
+        // of clear water a granite bed stayed granite grey (the Yosemite creek
+        // at noon, in both looks): red is eaten faster, and the water scatters
+        // back its own blue-green as the column deepens.
+        bedColour += vec3(0.045, 0.135, 0.14) * (1.0 - suspendedScattering * 0.5)
+          * (1.0 - exp(-1.3 * opticalBedDepth));
+      }
       // Retain a real water column over flowing shallows. Without this cap the
       // bed replaced virtually the whole surface at the bank, so removing the
       // bed term made the river disappear and enabling it drew a hard mineral
@@ -1654,6 +1662,15 @@ void main() {
   // than moonlit ground — darker than the ground.
   float skyEnergy = uLookModel > 0.5 ? 1.0 : mix(0.40, 1.0, daylight);
   float facing = clamp(dot(normal, viewDirection), 0.0, 1.0);
+  // LOOK: the MIRROR reads a calmer normal than the shading does. With the
+  // full Fresnel curve each ripple facet swung a grazing pixel between sky and
+  // water, which the 14-level quantiser turned into salt-and-pepper (seen from
+  // the seat on the Merced at golden hour). Glint and tone keep every facet.
+  vec3 mirrorNormal = normal;
+  if (uLookModel > 0.5) {
+    mirrorNormal = normalize(mix(normal, vec3(0.0, 1.0, 0.0), mix(0.55, 0.9, 1.0 - skinPixelLod)));
+    facing = clamp(dot(mirrorNormal, viewDirection), 0.0, 1.0);
+  }
   // LOOKING DOWN, THE WATER REFLECTS THE ZENITH. The horizon colour served
   // every view angle, and from the chart that put the bright horizon band
   // in a surface whose mirror points straight up at the darkest sky there is.
@@ -1667,7 +1684,7 @@ void main() {
       + uRain * (1.0 - skinPixelLod) * 0.34,
     0.0, 1.0);
 #ifdef HYDRO_SCENE_REFLECTION
-  vec3 reflectedDirection = reflect(-viewDirection, normal);
+  vec3 reflectedDirection = reflect(-viewDirection, mirrorNormal);
   reflectedSky = sceneReflectedSky(
     vRenderPosition, reflectedDirection, uZenith, horizonColour,
     lightDirection, surfaceRoughness
