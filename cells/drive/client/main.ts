@@ -56779,7 +56779,7 @@ function drawShotReadout(): void {
  * everything is put back afterwards. Saving needs a fresh tap, because share
  * sheets refuse a page that has not just been touched: hence SAVE SHEET.
  */
-interface SheetShot { row: string; col: string; hud?: boolean; settle: number; setup: () => void }
+interface SheetShot { row: string; col: string; hud?: boolean; settle: number; setup: () => void; note?: () => string }
 const SHEET_ANGLES = [
   { id: 'top', y: 30, az: 20, el: 80, dist: 700, fov: 55 },
   { id: 'N', y: 20, az: 0, el: 28, dist: 320, fov: 55 },
@@ -56796,6 +56796,8 @@ const sheet: {
   blob: Blob | null; name: string; grab: ((src: HTMLCanvasElement) => void) | null;
 } = { phase: 'idle', kind: 'godcam', done: 0, total: 0, blob: null, name: '', grab: null };
 let hydroLookLive = HYDRO_LOOK;
+/** Degrees the last god() tipped its orbit up to clear the ground. */
+let sheetLift = 0;
 const sheetSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 /** Progress on the glass WITHOUT being in the picture: a DOM label, which no
  *  canvas read can see. */
@@ -56828,7 +56830,19 @@ const probe = (): W => window as unknown as W;
 function sheetPlan(kind: 'godcam' | 'ab', t: { x: number; z: number }, here: ReturnType<typeof shotState>['god']): SheetShot[] {
   const god = (a: { y: number; az: number; el: number; dist: number; fov: number }): void => {
     godTarget.set(t.x, groundAt(t.x, t.z) + a.y, t.z);
-    godAz = (a.az * Math.PI) / 180; godEl = (a.el * Math.PI) / 180; godDist = a.dist; godFov = a.fov; godInit = true;
+    // NOT INSIDE A VALLEY WALL. A fixed orbit of 320 m at 28 degrees puts the
+    // camera in the rock wherever the target sits under a cliff (Yosemite's N
+    // and W columns, from the seat): the frame is the terrain's inside. Tip
+    // the orbit up until the camera clears the ground it stands over.
+    let el = a.el;
+    for (; el < 86; el += 4) {
+      const r = (el * Math.PI) / 180, az = (a.az * Math.PI) / 180;
+      const cx = godTarget.x + Math.sin(az) * Math.cos(r) * a.dist;
+      const cz = godTarget.z - Math.cos(az) * Math.cos(r) * a.dist;
+      if (godTarget.y + Math.sin(r) * a.dist > groundAt(cx, cz) + 8) break;
+    }
+    sheetLift = el - a.el;
+    godAz = (a.az * Math.PI) / 180; godEl = (el * Math.PI) / 180; godDist = a.dist; godFov = a.fov; godInit = true;
     if (Math.abs(camera.fov - godFov) > 0.01) { camera.fov = godFov; camera.updateProjectionMatrix(); }
     if (camMode !== 'god') setCam('god');
   };
@@ -56877,8 +56891,12 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam'): Promise<void> {
     tiles: chartOn.tiles, stream: chartOn.stream, xray: xrayMode, gv: groundView,
   };
   const cells = new Map<string, HTMLCanvasElement>();
+  const lifts = new Map<string, number>();
+  const shotWas = chartOn.shot;
   try {
     hudOn = false;
+    // The readout would ride into the frames that composite the HUD canvas.
+    chartOn.shot = false;
     let first = true;
     for (const shot of plan) {
       sheetProgress(`SHEET ${sheet.done + 1}/${sheet.total} · ${shot.row} ${shot.col}`);
@@ -56889,6 +56907,7 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam'): Promise<void> {
       for (let i = 0; i < 24 && (hydroSys?.stats().pendingBuilds ?? 0) > 0; i++) await sheetSleep(250);
       first = false;
       cells.set(`${shot.row}|${shot.col}`, await sheetGrab(cellW, !!shot.hud));
+      if (sheetLift > 0) lifts.set(`${shot.row}|${shot.col}`, sheetLift);
       sheet.done++;
     }
   } finally {
@@ -56902,6 +56921,7 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam'): Promise<void> {
     if (camMode !== saved.camMode) setCam(saved.camMode);
     if (!WX_PIN) { wx.next = saved.wx.next; wx.at = saved.wx.at; wx.cloud = saved.wx.cloud; wx.rain = saved.wx.rain; }
     hudOn = saved.hudOn;
+    chartOn.shot = shotWas;
     sheetProgress(null);
   }
   // ── STITCH ── rows in plan order, columns in plan order, the DEV row
@@ -56933,7 +56953,9 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam'): Promise<void> {
     const rc = r === 'DEV' ? devCols : cols;
     rc.forEach((c, ci) => {
       const x = left + ci * (cellW + gap);
-      g.fillStyle = '#9fb3a8'; g.fillText(c, x + 2, y + 1);
+      const lift = lifts.get(`${r}|${c}`);
+      g.fillStyle = lift ? '#f2d27a' : '#9fb3a8';
+      g.fillText(lift ? `${c} (+${lift}° el, cleared ground)` : c, x + 2, y + 1);
       const f = cells.get(`${r}|${c}`);
       if (f) g.drawImage(f, x, y + lab);
     });
