@@ -73,3 +73,16 @@ describe('ADR-0073 — planCycle (pure core)', () => {
     expect(p.backlog.total).toBe(0);
   });
 });
+
+describe('delta against a driven-tending audit (no total)', () => {
+  it('sums the prior backlog parts when total is absent', () => {
+    const plan = planCycle({
+      attention: { staleTotal: 10, unlinkedTotal: 5, danglingTotal: 1, dangling: [] },
+      contestedTotal: 4,
+      suggestions: [],
+      prev: { backlog: { stale: 12, unlinked: 6, dangling: 1, contestedTotal: 5 } },
+      survivors: [],
+    } as Observations);
+    expect(plan.delta).toBe(24 - 20);
+  });
+});

@@ -104,7 +104,9 @@ export interface Suggestion {
   score: number | null;
 }
 export interface PrevAudit {
-  backlog?: { total?: number };
+  /** `total` when the organ wrote it; a driven tending run writes only the
+   *  parts (and `contestedTotal`), so the delta falls back to their sum. */
+  backlog?: { total?: number; stale?: number; unlinked?: number; dangling?: number; contested?: number; contestedTotal?: number };
   actions?: Array<{ kind: string; from?: string; rel?: string; to?: string }>;
 }
 export interface Observations {
@@ -271,7 +273,9 @@ export function planCycle(obs: Observations, caps = CAPS): CyclePlan {
     contested: obs.contestedTotal,
     total: obs.attention.staleTotal + obs.attention.unlinkedTotal + obs.attention.danglingTotal + obs.contestedTotal,
   };
-  const prevTotal = obs.prev?.backlog?.total;
+  const pb = obs.prev?.backlog;
+  const parts = pb ? [pb.stale, pb.unlinked, pb.dangling, pb.contested ?? pb.contestedTotal] : [];
+  const prevTotal = typeof pb?.total === 'number' ? pb.total : parts.length && parts.every((n) => typeof n === 'number') ? (parts as number[]).reduce((a, b) => a + b, 0) : undefined;
   const delta = typeof prevTotal === 'number' ? prevTotal - backlog.total : null;
 
   return { ratify, unlink, rewards, retype, backlog, delta, escalations: { contested: obs.contestedTotal } };
