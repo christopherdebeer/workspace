@@ -876,6 +876,26 @@ void main() {
   vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
   float seed = materialField.g;
   float turbidity = materialField.b;
+  if (uLookModel > 0.5) {
+    // LOOK: the material field is NEAREST-sampled because kind and the bed /
+    // bank classes are categories. Seed and turbidity are not: read through
+    // that sampler, every 18.75 m texel boundary became a step in the water's
+    // colour, the staircase polygons across a shelf or a river mouth. Rebuild
+    // the two continuous channels bilinearly from the four texels around.
+    vec2 texelPos = vHydroUv / uHydroTexel - 0.5;
+    vec2 base = (floor(texelPos) + 0.5) * uHydroTexel;
+    vec2 f = fract(texelPos);
+    vec4 m00 = texture2D(uHydroMaterial, base);
+    vec4 m10 = texture2D(uHydroMaterial, base + vec2(uHydroTexel.x, 0.0));
+    vec4 m01 = texture2D(uHydroMaterial, base + vec2(0.0, uHydroTexel.y));
+    vec4 m11 = texture2D(uHydroMaterial, base + uHydroTexel);
+    // A neighbour that is not water (kind 0) carries no turbidity; weight it out.
+    vec4 w = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y)
+      * step(vec4(0.5 / 255.0), vec4(m00.r, m10.r, m01.r, m11.r));
+    float wSum = max(w.x + w.y + w.z + w.w, 1e-4);
+    turbidity = dot(w, vec4(m00.b, m10.b, m01.b, m11.b)) / wSum;
+    seed = dot(w, vec4(m00.g, m10.g, m01.g, m11.g)) / wSum;
+  }
   float suspendedScattering = clamp(turbidity * uScatteringStrength, 0.0, 1.0);
   float energy = clamp(dynamics.w, 0.0, 1.0);
   // DEEP FLOWING WATER IS CALM WATER. Reach energy is the profile's slope, and a
@@ -1422,7 +1442,11 @@ void main() {
   // ±14% tonal field — a bright or dark rim drawn exactly on the coverage
   // contour, which is the field raster made visible. Under the look model
   // those terms scale with how much water there is.
-  float presence = uLookModel > 0.5 ? waterBlend : 1.0;
+  // Keyed to the COVERAGE handoff (the literal cut), not to the wetness
+  // shading: across a wide estuary the river-space wetness can sit near zero
+  // over the whole body, and gating on it stripped the water of everything
+  // that made it read as water.
+  float presence = uLookModel > 0.5 ? coverageInterior : 1.0;
 
   // Geometry supplies the cheapest and most important structure signal.
   // Give its crest/trough enough tonal separation to cross a palette rung,
