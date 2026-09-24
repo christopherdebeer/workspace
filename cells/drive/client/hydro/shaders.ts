@@ -876,6 +876,9 @@ void main() {
   vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
   float seed = materialField.g;
   float turbidity = materialField.b;
+  // Neighbour kinds and their bilinear weights, for the palette blend below.
+  vec4 lookKinds = vec4(kind);
+  vec4 lookWeights = vec4(1.0, 0.0, 0.0, 0.0);
   if (uLookModel > 0.5) {
     // LOOK: the material field is NEAREST-sampled because kind and the bed /
     // bank classes are categories. Seed and turbidity are not: read through
@@ -895,6 +898,15 @@ void main() {
     float wSum = max(w.x + w.y + w.z + w.w, 1e-4);
     turbidity = dot(w, vec4(m00.b, m10.b, m01.b, m11.b)) / wSum;
     seed = dot(w, vec4(m00.g, m10.g, m01.g, m11.g)) / wSum;
+    lookKinds = floor(vec4(m00.r, m10.r, m01.r, m11.r) * 255.0 + 0.5);
+    lookWeights = w / wSum;
+    // Bed and bank classes are ORDERED (silt < sand < gravel < pebble < rock;
+    // soil < mud < gravel < rock) and every consumer reads them through
+    // smoothsteps and |class - n| ramps, so a numeric blend is a gradual
+    // change of material instead of a texel-shaped patch.
+    vec4 flags4 = floor(vec4(m00.a, m10.a, m01.a, m11.a) * 255.0 + 0.5);
+    bedClass = dot(lookWeights, mod(floor(flags4 / 8.0), 8.0));
+    bankClass = dot(lookWeights, floor(flags4 / 64.0));
   }
   float suspendedScattering = clamp(turbidity * uScatteringStrength, 0.0, 1.0);
   float energy = clamp(dynamics.w, 0.0, 1.0);
@@ -1221,6 +1233,11 @@ void main() {
   // the middle keeps the texel's depth and goes dark. This is the shape of
   // the bed, which is what the chart sees; the physics keeps the texel.
   float bedDepth = geometryField.a;
+  // LOOK: a mapped lake with no bathymetry carries a nominal few centimetres
+  // everywhere (0.08 m across Lake Bled), which put the whole bed on show and
+  // every class step with it. Offshore, the bed sits at the same depth the
+  // colour already assumes.
+  if (uLookModel > 0.5) bedDepth = mix(bedDepth, max(bedDepth, visualDepth), offshore);
   float pointBar = 0.0;
 #ifdef HYDRO_FLOWING
   if (vFlowing > 0.5) {
@@ -1251,6 +1268,17 @@ void main() {
   // between the cab and chart.
   float overhead = clamp(normalize(cameraPosition - vRenderPosition).y, 0.0, 1.0);
   vec3 colour = palette(kind, visualDepth, turbidity, terrainC);
+  if (uLookModel > 0.5 && any(notEqual(lookKinds, vec4(kind)))) {
+    // LOOK: where two kinds meet (sea and lagoon, lake and river mouth) the
+    // palette steps at every nearest-sampled texel of the class field. Blend
+    // the neighbours' palettes with the same weights the field would have.
+    colour = vec3(0.0);
+    for (int i = 0; i < 4; i++) {
+      float ki = i == 0 ? lookKinds.x : i == 1 ? lookKinds.y : i == 2 ? lookKinds.z : lookKinds.w;
+      float wi = i == 0 ? lookWeights.x : i == 1 ? lookWeights.y : i == 2 ? lookWeights.z : lookWeights.w;
+      if (wi > 0.0) colour += palette(ki, visualDepth, turbidity, terrainC) * wi;
+    }
+  }
 
   // ── THE SHALLOW WATER HAS A FLOOR ──
   //
