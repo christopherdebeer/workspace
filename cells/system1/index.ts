@@ -350,6 +350,11 @@ export function yieldCriteria(choices: unknown): Record<string, string | null> {
   return out;
 }
 
+/** The judge rail acts only where a machine owes a CHOICE, never where it owes work. */
+export function isDecisionYield(kind: unknown): boolean {
+  return kind === 'agent' || kind === 'task';
+}
+
 export function planDecision(answer: ChoiceAns | undefined, allowed: string[], th: Thresholds = DEFAULT_THRESHOLDS):
   | { action: 'advance'; to: string; p: number; statement: string }
   | { action: 'escalate'; best: string | null; p: number } {
@@ -886,10 +891,17 @@ async function drive(input: { token?: string; machine?: string; run?: string; ma
       steps.push({ done: true });
       break;
     }
+    // Only DECISION yields are System One's: a work yield (one branch, e.g.
+    // Adjudicate → Recorded) owes WORK before its advance — judging its lone
+    // branch at p=1 would skip the work. Section/vote/wait likewise stop here.
+    if (!isDecisionYield(yl.kind)) {
+      steps.push({ node: yl.node, kind: yl.kind, stopped: 'not a decision yield (work/section/vote/wait) — left for the driver' });
+      break;
+    }
     const criteria = yieldCriteria(yl.choices);
     const allowed = Object.keys(criteria);
-    if (!allowed.length) {
-      steps.push({ node: yl.node, kind: yl.kind, stopped: 'not a choice yield (section/vote/work) — left for the driver' });
+    if (allowed.length < 2) {
+      steps.push({ node: yl.node, kind: yl.kind, stopped: 'fewer than two branches — nothing to judge' });
       break;
     }
     const judged = (await gw(token, '@c15r/jev.decide', {

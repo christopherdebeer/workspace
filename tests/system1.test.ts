@@ -204,3 +204,14 @@ describe('relatable (plumbing is pruned, not judged)', () => {
     expect(relatable('inbox/x', 'decompose-status')).toBe(false);
   });
 });
+
+describe('isDecisionYield (the judge rail never skips work)', () => {
+  const { isDecisionYield } = jest.requireActual('../cells/system1/index');
+  it('judges agent/task yields only', () => {
+    expect(isDecisionYield('agent')).toBe(true);
+    expect(isDecisionYield('task')).toBe(true);
+    expect(isDecisionYield('work')).toBe(false);
+    expect(isDecisionYield('section')).toBe(false);
+    expect(isDecisionYield(undefined)).toBe(false);
+  });
+});
