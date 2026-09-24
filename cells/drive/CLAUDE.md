@@ -19205,3 +19205,70 @@ The asks that were valid on their own and are still open against the matrix:
 the chart should not wear the tile-debug header/grid and the layer chip key by
 default; the MENU chip always says MENU; the dock loses its text label and chip
 hint; cells are icon + state + one signal, no words.
+
+## The coast's apron was the bed, not the foam — and five things the seat's critique found
+
+The seat's critique of four hydro sheets, in its own priority order: the
+coastal surf silhouette (a broad angular white apron in B), bank width and
+inner/outer asymmetry, bright speckle (orange flecks round the headlights,
+daytime river glints), night inland water indistinct, then finer water
+detail — with the next comparison to split `hydrolook` and `banklook`, hold
+wave phase, weather, camera and exposure, and include a low shoreline view.
+
+**THE APRON SURVIVED EVERY FOAM TERM SWITCHED OFF.** `HydroTuning.foamMask`
+is the instrument this needed: a bitmask over the sea's five foam terms (1
+swash, 2 breakers, 4 spill, 8 whitecaps, 16 the retained wash strip),
+because `foamStrength` scales all of them and a frame could not attribute
+a white to one. At the Twelve Apostles (`-38.66428 143.10396`, the seat's
+own SHOT, the `coast` group in the session's `capture.mjs`) `foamMask=0`
+left the band exactly where it was: it was the BED, showing through 8 cm
+of fill "depth" for the 15–70 m over which `visualDepth` blends from the
+field's depth to the shore-derived one — a contour of the shore-distance
+field, angular at the raster's resolution, wider than any surf. Under
+`lookModel` 1 the colour's depth now floors on the same coast profile the
+waves shoal on (beach 1:17, shingle, platform bench and drop, cliff foot),
+the sea bed's legibility caps at 1.6 m (a surf zone stirs its sand), the
+profile's distance is warped ±9 m over ~50 m in vertex and fragment alike
+so the breaker band stops tracing the raster contour, and the swash foam
+is gated into patches with wet sand between them. Measured A/B on the
+reworked shader, control 0.18/255: noon 5.8/255 over 37% of the drone
+pane, golden 8.97 over 53%; by eye the sheet is gone, the foam is broken
+patches on a wandering band, and at golden hour the sea takes the sky.
+
+**THE BANK HAS A SIDE NOW.** `sampleBankField` reports `outerBank` from
+the structure field's own curvature × n (the water shader's term), so the
+sward's mineral margin widens and bleaches on the inside of a bend (the
+bar) and narrows and darkens on the outside (the cut bank), and the water's
+shelf follows the same rule. A straight reach reads 0.5 and is what it was.
+
+**THE ORANGE EMBERS WERE TWO THINGS.** Under the pool: the sward's blade
+facets taking an amber (0xffb87b) 260 cd lamp — `?swardtuft=0.05` made the
+pool a smooth wedge, the substrate and the shrubs changed nothing — so the
+lamp is warm-white now with a 1/d^1.25 tail. Across the river: the HERD,
+reddish-brown deer at the bank 100 m off, which `__hide('critters')` takes
+away and no water term does. Not a rendering fault; recorded so the next
+reading of a night frame does not chase the water for it.
+
+**THE HEADLAMP REACHES THE WATER.** The hydro material lights itself (sun,
+sky, moon) and never read three's spot, so the lamp lit both banks and left
+the river between them dark. `HydroFrame.head` carries the spot in the
+scene light's own units with three's cone, range window and decay; the
+body and foam take a diffuse lift inside the cone and the calmed mirror
+carries the lamp's own streak.
+
+**AFTER DARK THE SKY SAYS "WATER".** The Fresnel FLOOR rises to 0.11 as
+daylight goes (the body stays a rung under the ground): what lifts is the
+reflected sky, only where the sky is bright. And the sun's glint lobe reads
+the calmed mirror normal, at half the sparkle swing, which is the daytime
+speckle.
+
+**THE A/B SHEET SPLITS B.** When B sets more than one switch the sheet
+shows each alone between A and B (`A · hydrolook=1 alone · banklook=1 alone
+· B`), and `hydroTimePin` holds the hydro clock so every cell shares one
+wave phase. The harness's `capture.mjs` gained `sw:key=value`, `hide:layer`
+and `tune:foamMask=N` views for one-frame ablations in a frozen state.
+
+**Not done:** the breaker foam is still patches rather than crest lines;
+the low shoreline scene is reframed along the beach but not yet judged; the
+far-bank cut and the angular bends are the field raster's and belong to the
+bank shaping and boundary units above.
