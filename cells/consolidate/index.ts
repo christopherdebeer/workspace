@@ -140,7 +140,9 @@ export const CAPS = {
   rewardValue: 0.5,
   // Inc 2 (ADR-0077):
   retype: 10,
-  stageBPairs: 5,
+  // ADR-0098: Stage B judges on @c15r/jev (≈$0.00003/pair), so the cap is a
+  // wall-clock bound, not a budget one. The models path remains the fallback.
+  stageBPairs: 40,
   stageBFloor: 0.9,
 } as const;
 
@@ -189,6 +191,25 @@ export function buildAdjudicationPrompt(
     '- "uncertain": you cannot tell from the content alone.\n\n' +
     'Answer with ONLY a JSON object, no prose: {"verdict": "...", "confidence": 0.0-1.0, "why": "one sentence"}'
   );
+}
+
+/** ADR-0098: the Stage-B verdict set as one Jev `choice` (closed set, calibrated
+ *  probabilities, no prose). `uncertain` is not an option — low confidence IS
+ *  uncertainty, and the floor turns it into an escalation. */
+export const STAGE_B_CRITERIA: Record<string, string> = {
+  duplicate: 'the same claim or content twice — one should supersede the other',
+  contradict: 'both stand, but they assert incompatible things',
+  subsumes: 'one is a strict refinement or superset of the other',
+  independent: 'near in wording (shared template, boilerplate or format), but genuinely different claims',
+};
+
+/** A Jev choice answer → the organ's verdict shape. Null when malformed. */
+export function verdictFromJev(answer: unknown): StageBVerdict | null {
+  const a = answer as { choice?: unknown; probabilities?: Record<string, number> } | undefined;
+  if (!a || typeof a.choice !== 'string' || !(a.choice in STAGE_B_CRITERIA)) return null;
+  const p = a.probabilities?.[a.choice];
+  if (typeof p !== 'number' || p < 0 || p > 1) return null;
+  return { verdict: a.choice as StageBVerdict['verdict'], confidence: p, why: `jev choice p=${p.toFixed(2)}` };
 }
 
 export interface StageBVerdict {
@@ -327,7 +348,7 @@ async function observe(token: string): Promise<Observations & { contestedCandida
     token,
     [
       { target: 'workspace.attention', input: { limit: 25 }, kind: 'read' },
-      { target: 'workspace.contested', input: { limit: 10 }, kind: 'read' },
+      { target: 'workspace.contested', input: { limit: 40 }, kind: 'read' },
       { target: 'workspace.suggestions', input: { limit: 25 }, kind: 'read' },
       { target: 'workspace.peek', input: { key: AUDIT_KEY }, kind: 'read' },
       { target: '$types', kind: 'read' },
@@ -433,6 +454,12 @@ async function adjudicate(token: string, candidates: ContestedCandidateObs[]): P
   const pairs = candidates.slice(0, CAPS.stageBPairs);
   let escalated = candidates.length - pairs.length;
   let firstFailure: string | undefined;
+  // ADR-0098: one batched Jev pass over every pair first; the per-pair models
+  // call below only runs for pairs Jev could not answer.
+  const jevVerdicts = await judgeWithJev(token, pairs).catch((e) => {
+    firstFailure = `jev unavailable, falling back to models: ${(e as Error).message.slice(0, 120)}`;
+    return new Map<string, StageBVerdict>();
+  });
   for (const c of pairs) {
     try {
       const [ea, eb] = await gwCallMany(
@@ -449,12 +476,16 @@ async function adjudicate(token: string, candidates: ContestedCandidateObs[]): P
         escalated++;
         continue;
       }
-      const prompt = buildAdjudicationPrompt(
-        { key: c.a, type: fa._meta?.type ?? null, value: fa.value },
-        { key: c.b, type: fb._meta?.type ?? null, value: fb.value },
-      );
-      const res = (await gw(token, '@c15r/models.run', { prompt, maxTokens: 300 })) as { text?: string };
-      const verdict = parseVerdict(res?.text);
+      let verdict = jevVerdicts.get(c.hash) ?? null;
+      let res: { text?: string } | undefined;
+      if (!verdict) {
+        const prompt = buildAdjudicationPrompt(
+          { key: c.a, type: fa._meta?.type ?? null, value: fa.value },
+          { key: c.b, type: fb._meta?.type ?? null, value: fb.value },
+        );
+        res = (await gw(token, '@c15r/models.run', { prompt, maxTokens: 300 })) as { text?: string };
+        verdict = parseVerdict(res?.text);
+      }
       if (!verdict || verdict.confidence < CAPS.stageBFloor) {
         if (!verdict && !firstFailure) firstFailure = `unparseable verdict for ${c.a}↔${c.b}: ${String(res?.text).slice(0, 120)}`;
         escalated++;
@@ -494,6 +525,38 @@ async function adjudicate(token: string, candidates: ContestedCandidateObs[]): P
     }
   }
   return { acted, escalated, ...(firstFailure ? { note: firstFailure } : {}) };
+}
+
+/** Batch Stage B on @c15r/jev: peek both sides of every pair, one decide_many. */
+async function judgeWithJev(token: string, pairs: ContestedCandidateObs[]): Promise<Map<string, StageBVerdict>> {
+  const out = new Map<string, StageBVerdict>();
+  if (!pairs.length) return out;
+  const keys = [...new Set(pairs.flatMap((c) => [c.a, c.b]))];
+  const got = await gwCallMany(token, keys.map((key) => ({ target: 'workspace.peek', input: { key }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 8 });
+  const facts = new Map<string, { type: string | null; value: unknown }>();
+  got.forEach((g, i) => {
+    const f = g as { value?: unknown; _meta?: { type?: string | null } } | null;
+    if (f && f.value !== undefined && !('error' in (f as object) && Object.keys(f as object).length === 1)) facts.set(keys[i], { type: f._meta?.type ?? null, value: f.value });
+  });
+  const live = pairs.filter((c) => facts.has(c.a) && facts.has(c.b));
+  if (!live.length) return out;
+  const show = (k: string) => ({ key: k, type: facts.get(k)!.type ?? '(untyped)', value: JSON.stringify(facts.get(k)!.value).slice(0, 1500) });
+  const res = (await gw(token, '@c15r/jev.decide_many', {
+    model: 'jev-1.13.0',
+    questions: {
+      verdict: {
+        type: 'choice',
+        instructions: 'Two knowledge-base facts are semantically near but structurally unconnected. Which verdict fits the pair?',
+        criteria: STAGE_B_CRITERIA,
+      },
+    },
+    items: live.map((c) => ({ id: c.hash, state: { A: show(c.a), B: show(c.b) } })),
+  })) as { results?: Array<{ id: string; answers?: { verdict?: unknown } }> };
+  for (const r of res.results ?? []) {
+    const v = verdictFromJev(r.answers?.verdict);
+    if (v) out.set(r.id, v);
+  }
+  return out;
 }
 
 async function apply(token: string, plan: CyclePlan): Promise<{ applied: string[]; skipped: string[] }> {
