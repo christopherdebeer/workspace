@@ -985,6 +985,10 @@ const jobs = cellJobs({
   },
 });
 
+/** Tools that never act on the slice's content run while System One is paused:
+ *  undo, and the teaching loop (audit, label, calibrate). */
+const ALWAYS_ALLOWED = new Set(['revert', 'audit_sample', 'label', 'calibrate']);
+
 async function assertEnabled(token: unknown): Promise<void> {
   if (typeof token !== 'string' || !token) return; // the runner's own token check reports it
   const cfg = (await gw(token, 'workspace.peek', { key: CONFIG_KEY }, 'read').catch(() => null)) as { value?: { enabled?: boolean } } | null;
@@ -1126,7 +1130,7 @@ export const handler = async (
     const job = (await jobs.getJob(event.__job)) as { input?: { tool: string; args: Record<string, unknown> } } | undefined;
     if (!job?.input) return;
     try {
-      if (job.input.tool !== 'revert') await assertEnabled(job.input.args.token);
+      if (!ALWAYS_ALLOWED.has(job.input.tool)) await assertEnabled(job.input.args.token);
       const out = await RUNNERS[job.input.tool](job.input.args);
       // Self-continuation (a backfill is thousands of items; one job is one
       // batch): `chain` counts down; the next batch picks up where this ended.
@@ -1166,7 +1170,7 @@ export const handler = async (
     }
     const run = RUNNERS[name];
     if (!run) return json(404, { error: `unknown tool ${name}` });
-    if (name !== 'revert') await assertEnabled(args.token); // revert must work while disabled
+    if (!ALWAYS_ALLOWED.has(name)) await assertEnabled(args.token);
     if (args.async) {
       if (!SELF_FUNCTION) return json(400, { error: 'async unavailable: function name unknown' });
       if (!args.token) return json(400, { error: 'token is required' });
