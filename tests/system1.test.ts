@@ -148,3 +148,15 @@ describe('referencesEachOther', () => {
     expect(referencesEachOther(cap, { ...asset, key: 'kb/other' })).toBe(false);
   });
 });
+
+describe('judge rail (planDecision / yieldCriteria)', () => {
+  const { planDecision, yieldCriteria } = jest.requireActual('../cells/system1/index');
+  it('normalises string and object choices', () => {
+    expect(yieldCriteria(['a', { to: 'b', when: 'if x' }, { name: 'c' }, 42])).toEqual({ a: null, b: 'if x', c: null });
+  });
+  it('advances only on an allowed branch at or above θ.decide, else escalates', () => {
+    expect(planDecision({ probabilities: { yes: 0.9, no: 0.1 } }, ['yes', 'no'])).toMatchObject({ action: 'advance', to: 'yes', p: 0.9 });
+    expect(planDecision({ probabilities: { yes: 0.6, no: 0.4 } }, ['yes', 'no'])).toMatchObject({ action: 'escalate', best: 'yes' });
+    expect(planDecision({ probabilities: { rogue: 0.99 } }, ['yes', 'no'])).toMatchObject({ action: 'escalate', best: null });
+  });
+});

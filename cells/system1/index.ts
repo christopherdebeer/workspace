@@ -49,8 +49,15 @@ export const RELATE_DECL = 'relate/v1';
 export const MODEL = 'jev-1.13.0';
 export const PERCEIVED_TAG = 's1:perceive-v1';
 export const INFERRED_STRENGTH = 0.6;
-export const LATEST_KEY = 'system1/latest';
-export const CALIBRATION_KEY = 'system1/calibration';
+/** Bookkeeping lives under `_system1/`: `_` keys are skipped by the vector
+ *  indexer (no embedding, so no `similarTo` suggestions minted between the
+ *  organ's own logs — measured: per-item judgment facts grew the queue they
+ *  were draining) and by the write reactor (no self-trigger). */
+export const NS = '_system1';
+export const LATEST_KEY = `${NS}/latest`;
+export const CALIBRATION_KEY = `${NS}/calibration`;
+export const RUN_PREFIX = `${NS}/run/`;
+export const LABEL_PREFIX = `${NS}/label/`;
 
 /* ── thresholds: defaults, overridden by the learner's calibration fact ───── */
 
@@ -63,6 +70,8 @@ export interface Thresholds {
   noise: number;
   relate: number;
   decline: number;
+  /** A machine decision node advanced by System One (the `judge` rail, §3). */
+  decide: number;
 }
 export const DEFAULT_THRESHOLDS: Thresholds = {
   project: 0.7,
@@ -73,6 +82,7 @@ export const DEFAULT_THRESHOLDS: Thresholds = {
   noise: 0.85,
   relate: 0.7,
   decline: 0.8,
+  decide: 0.8,
 };
 /** The learner never lowers a gate below these (or raises it past 0.99). */
 export const THRESHOLD_FLOOR: Partial<Thresholds> = { relate: 0.6, decline: 0.7, project: 0.6 };
@@ -294,6 +304,34 @@ export function planRelate(answer: ChoiceAns | undefined, th: Thresholds = DEFAU
   return { action: 'hold', rel: best, p: bp };
 }
 
+/* machine decisions: a yield's choices as one Jev choice (the judge rail). */
+export function yieldCriteria(choices: unknown): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
+  for (const c of Array.isArray(choices) ? choices : []) {
+    if (typeof c === 'string') out[c] = null;
+    else if (c && typeof c === 'object') {
+      const o = c as Record<string, unknown>;
+      const to = typeof o.to === 'string' ? o.to : typeof o.name === 'string' ? o.name : null;
+      if (!to) continue;
+      const d = [o.when, o.description, o.label, o.brief].find((x) => typeof x === 'string' && x.trim());
+      out[to] = (d as string | undefined) ?? null;
+    }
+  }
+  return out;
+}
+
+export function planDecision(answer: ChoiceAns | undefined, allowed: string[], th: Thresholds = DEFAULT_THRESHOLDS):
+  | { action: 'advance'; to: string; p: number; statement: string }
+  | { action: 'escalate'; best: string | null; p: number } {
+  const probs = answer?.probabilities ?? {};
+  let best: string | null = null;
+  let bp = 0;
+  for (const [k, v] of Object.entries(probs)) if (allowed.includes(k) && v > bp) [best, bp] = [k, v];
+  if (!best || bp < th.decide) return { action: 'escalate', best, p: bp };
+  const dist = Object.entries(probs).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(', ');
+  return { action: 'advance', to: best, p: bp, statement: `System One (${MODEL}) judged "${best}" at p=${bp.toFixed(2)} ≥ θ=${th.decide} — distribution: ${dist}.` };
+}
+
 /* ── the learner (pure) ─────────────────────────────────────────────────────
  * Labels: an act that still holds at check time (edge present / tag present)
  * is a weak positive; one that is gone (reverted, unlinked, retagged) is a
@@ -301,7 +339,7 @@ export function planRelate(answer: ChoiceAns | undefined, th: Thresholds = DEFAU
  * find the lowest θ whose acts above it meet the class's target precision. */
 export interface LabelledAct { q: keyof Thresholds; p: number; ok: boolean; weight?: number }
 export const TARGET_PRECISION: Record<keyof Thresholds, number> = {
-  project: 0.85, actionable: 0.85, durable: 0.85, serves: 0.85, type: 0.9, noise: 0.95, relate: 0.9, decline: 0.9,
+  project: 0.85, actionable: 0.85, durable: 0.85, serves: 0.85, type: 0.9, noise: 0.95, relate: 0.9, decline: 0.9, decide: 0.9,
 };
 export const MIN_LABELS = 20;
 
@@ -424,6 +462,8 @@ interface RunLog {
   usage: { input_tokens: number };
   /** Wall-clock per phase (ms) — the sweep is bounded by the edge, so measure it. */
   timings?: Record<string, number>;
+  /** The evidence: every judgment this run made (acted on or not). */
+  judgments?: unknown[];
   next?: unknown;
 }
 
@@ -441,11 +481,11 @@ function timer(): (label: string) => Record<string, number> {
 }
 
 async function writeRun(token: Tok, log: RunLog): Promise<void> {
-  const summary = { ...log, acts: undefined, actCount: log.acts.length };
+  const summary = { ...log, acts: undefined, judgments: undefined, actCount: log.acts.length, log: `${RUN_PREFIX}${log.id}` };
   await gwCallMany(
     token,
     [
-      { target: 'workspace.remember', input: { key: `system1/run/${log.id}`, value: log, type: 'system1-run', tags: ['system1', `mode:${log.mode}`, `tool:${log.tool}`], via: `system1.${log.tool}` }, kind: 'act' },
+      { target: 'workspace.remember', input: { key: `${RUN_PREFIX}${log.id}`, value: log, type: 'system1-run', tags: ['system1', `mode:${log.mode}`, `tool:${log.tool}`], via: `system1.${log.tool}` }, kind: 'act' },
       { target: 'workspace.remember', input: { key: LATEST_KEY, value: summary, type: 'system1-run', tags: ['system1'], via: `system1.${log.tool}` }, kind: 'act' },
     ],
     { url: GATEWAY_MCP, concurrency: 2 },
@@ -472,7 +512,7 @@ async function loadSubjects(token: Tok, input: PerceiveInput): Promise<{ subject
   let entries: Entry[] = [];
   let next: string | undefined;
   if (input.keys?.length) {
-    const got = await gwCallMany(token, input.keys.slice(0, 100).map((key) => ({ target: 'workspace.peek', input: { key }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 8 });
+    const got = await gwCallMany(token, input.keys.slice(0, 100).map((key) => ({ target: 'workspace.peek', input: { key }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 16 });
     entries = got.map((g, i) => (isErr(g) || !g ? null : ({ key: input.keys![i], ...(g as object) } as Entry))).filter((e): e is Entry => !!e);
   } else {
     const page = (await gw(token, 'workspace.query', {
@@ -524,20 +564,8 @@ async function perceive(input: PerceiveInput): Promise<RunLog> {
     plans.push({ s, plan: planPerceive(s, r.answers, ctx, th) });
   }
 
-  // Judgment facts: one per subject, in one ingest (write-load: one call).
-  const facts = plans.map(({ s, plan }) => ({
-    key: `judgment/${DECL}/${hashOf(s.key)}`,
-    type: 'judgment',
-    tags: ['judgment', DECL],
-    value: { subject: s.key, subjectVersion: s.version, decl: DECL, model: MODEL, run: log.id, at: log.at, answers: plan.judgment, planned: { tags: plan.addTags, type: plan.type, edges: plan.edges } },
-  }));
-  for (let i = 0; i < facts.length; i += 100) {
-    try {
-      await gw(token, 'workspace.ingest', { via: 'system1.perceive', facts: facts.slice(i, i + 100) }, 'act');
-    } catch (e) {
-      log.errors.push(`ingest judgments: ${(e as Error).message.slice(0, 200)}`);
-    }
-  }
+  // The evidence rides the run log (one write), keyed by subject + version.
+  log.judgments = plans.map(({ s, plan }) => ({ subject: s.key, v: s.version, answers: plan.judgment, planned: { tags: plan.addTags, type: plan.type, edges: plan.edges } }));
   log.counts.judged = plans.length;
   tick('ingest');
 
@@ -618,7 +646,7 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
     return log;
   }
   const keys = [...new Set(pairs.flatMap((p) => [p.from, p.to]))];
-  const got = await gwCallMany(token, keys.map((key) => ({ target: 'workspace.peek', input: { key }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 8 });
+  const got = await gwCallMany(token, keys.map((key) => ({ target: 'workspace.peek', input: { key }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 16 });
   const facts = new Map<string, Subject>();
   got.forEach((g, i) => {
     if (isErr(g) || !g) return;
@@ -653,7 +681,7 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
     return { pair, r, d: r.answers ? planRelate(r.answers.relation, th) : null };
   });
   const tallies: Record<string, number> = { ratify: 0, decline: 0, hold: 0, error: 0 };
-  const judgmentFacts: unknown[] = [];
+  const judgments: unknown[] = [];
   for (const { pair, r, d } of decisions) {
     if (!d) {
       tallies.error++;
@@ -661,20 +689,9 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
       continue;
     }
     tallies[d.action]++;
-    judgmentFacts.push({
-      key: `judgment/${RELATE_DECL}/${hashOf(pair.from, pair.to)}`,
-      type: 'judgment',
-      tags: ['judgment', RELATE_DECL],
-      value: { a: pair.from, b: pair.to, cosine: pair.score, decl: RELATE_DECL, model: MODEL, run: log.id, at: log.at, probabilities: r.answers?.relation?.probabilities, decision: d },
-    });
+    judgments.push({ a: pair.from, b: pair.to, cosine: pair.score, probabilities: r.answers?.relation?.probabilities, decision: d });
   }
-  for (let i = 0; i < judgmentFacts.length; i += 100) {
-    try {
-      await gw(token, 'workspace.ingest', { via: 'system1.sweep', facts: judgmentFacts.slice(i, i + 100) }, 'act');
-    } catch (e) {
-      log.errors.push(`ingest judgments: ${(e as Error).message.slice(0, 200)}`);
-    }
-  }
+  log.judgments = judgments;
   Object.assign(log.counts, tallies);
   tick('ingest');
 
@@ -704,7 +721,7 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
 async function revert(input: { token?: string; run?: string; key?: string }): Promise<Record<string, unknown>> {
   const token = input.token;
   if (!token || !input.run) throw new Error('token and run are required');
-  const rec = (await gw(token, 'workspace.peek', { key: `system1/run/${input.run}` }, 'read')) as { value?: RunLog } | null;
+  const rec = (await gw(token, 'workspace.peek', { key: `${RUN_PREFIX}${input.run}` }, 'read')) as { value?: RunLog } | null;
   const log = rec?.value;
   if (!log) throw new Error(`no run log system1/run/${input.run}`);
   const acts = (log.acts ?? []).filter((a) => !input.key || a.key === input.key || a.from === input.key);
@@ -738,7 +755,7 @@ async function revert(input: { token?: string; run?: string; key?: string }): Pr
     }
   }
   await gw(token, 'workspace.remember', {
-    key: `system1/revert/${input.run}${input.key ? `/${hashOf(input.key)}` : ''}`,
+    key: `${NS}/revert/${input.run}${input.key ? `/${hashOf(input.key)}` : ''}`,
     value: { run: input.run, key: input.key ?? null, at: new Date().toISOString(), undone, failed },
     type: 'system1-run',
     tags: ['system1', 'revert'],
@@ -752,10 +769,10 @@ async function revert(input: { token?: string; run?: string; key?: string }): Pr
 async function label(input: { token?: string; run?: string; index?: number; ok?: boolean; note?: string }): Promise<unknown> {
   const token = input.token;
   if (!token || !input.run || typeof input.index !== 'number' || typeof input.ok !== 'boolean') throw new Error('token, run, index and ok are required');
-  const rec = (await gw(token, 'workspace.peek', { key: `system1/run/${input.run}` }, 'read')) as { value?: RunLog } | null;
+  const rec = (await gw(token, 'workspace.peek', { key: `${RUN_PREFIX}${input.run}` }, 'read')) as { value?: RunLog } | null;
   const act = rec?.value?.acts?.[input.index];
   if (!act) throw new Error('no such act');
-  const key = `system1/label/${input.run}/${input.index}`;
+  const key = `${LABEL_PREFIX}${input.run}/${input.index}`;
   await gw(token, 'workspace.remember', { key, value: { run: input.run, index: input.index, act, ok: input.ok, note: input.note ?? null, at: new Date().toISOString() }, type: 'system1-label', tags: ['system1', 'label', input.ok ? 'label:ok' : 'label:wrong'], via: 'system1.label' }, 'act');
   return { key, act, ok: input.ok };
 }
@@ -763,13 +780,13 @@ async function label(input: { token?: string; run?: string; index?: number; ok?:
 async function runCalibrate(input: { token?: string; runs?: number; apply?: boolean }): Promise<unknown> {
   const token = input.token;
   if (!token) throw new Error('token is required');
-  const page = (await gw(token, 'workspace.query', { prefix: 'system1/run/', shape: 'full', rankBy: 'recency', limit: Math.min(input.runs ?? 20, 50) }, 'read')) as { entries?: Array<{ value?: RunLog }> };
+  const page = (await gw(token, 'workspace.query', { prefix: RUN_PREFIX, shape: 'full', rankBy: 'recency', limit: Math.min(input.runs ?? 20, 50) }, 'read')) as { entries?: Array<{ value?: RunLog }> };
   const acts = (page.entries ?? []).flatMap((e) => (e.value?.mode === 'act' ? (e.value.acts ?? []).map((a, i) => ({ run: e.value!.id, i, a })) : []));
   const labels: LabelledAct[] = [];
   // Survival check: edges by source key (one edges call per distinct source), tags by peek.
   const linkActs = acts.filter((x) => (x.a.kind === 'link' || x.a.kind === 'ratify') && x.a.q && typeof x.a.p === 'number');
   const sources = [...new Set(linkActs.map((x) => x.a.from!))].slice(0, 200);
-  const edgeRes = await gwCallMany(token, sources.map((k) => ({ target: 'workspace.edges', input: { around: k, derived: false, limit: 200 }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 8 });
+  const edgeRes = await gwCallMany(token, sources.map((k) => ({ target: 'workspace.edges', input: { around: k, derived: false, limit: 200 }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 16 });
   const present = new Set<string>();
   edgeRes.forEach((r) => {
     if (isErr(r)) return;
@@ -780,7 +797,7 @@ async function runCalibrate(input: { token?: string; runs?: number; apply?: bool
     labels.push({ q: x.a.q!, p: x.a.p!, ok: present.has(`${x.a.from}|${x.a.rel}|${x.a.to}`) });
   }
   // Audit labels (strong, 3×).
-  const lab = (await gw(token, 'workspace.query', { prefix: 'system1/label/', shape: 'full', limit: 100 }, 'read').catch(() => ({ entries: [] }))) as { entries?: Array<{ value?: { act?: RunAct; ok?: boolean } }> };
+  const lab = (await gw(token, 'workspace.query', { prefix: LABEL_PREFIX, shape: 'full', limit: 100 }, 'read').catch(() => ({ entries: [] }))) as { entries?: Array<{ value?: { act?: RunAct; ok?: boolean } }> };
   for (const e of lab.entries ?? []) {
     const a = e.value?.act;
     if (a?.q && typeof a.p === 'number' && typeof e.value?.ok === 'boolean') labels.push({ q: a.q, p: a.p, ok: e.value.ok, weight: 3 });
@@ -792,6 +809,73 @@ async function runCalibrate(input: { token?: string; runs?: number; apply?: bool
     await gw(token, 'workspace.remember', { key: CALIBRATION_KEY, value: out, type: 'system1-run', tags: ['system1', 'calibration'], via: 'system1.calibrate' }, 'act');
   }
   return out;
+}
+
+/* drive: the judge rail over a machine run (ADR-0098 §3) ───────────────── */
+
+async function drive(input: { token?: string; machine?: string; run?: string; maxSteps?: number }): Promise<Record<string, unknown>> {
+  const token = input.token;
+  if (!token || !input.machine || !input.run) throw new Error('token, machine and run are required');
+  const th = await loadThresholds(token);
+  const steps: Array<Record<string, unknown>> = [];
+  const acts: RunAct[] = [];
+  let tokens = 0;
+  let y = (await gw(token, '@c15r/machine.step', { machine: input.machine, run: input.run }, 'act')) as { yield?: Record<string, unknown> | null } & Record<string, unknown>;
+  for (let i = 0; i < Math.min(input.maxSteps ?? 12, 30); i++) {
+    const yl = (y?.yield ?? null) as { kind?: string; node?: string; choices?: unknown; brief?: unknown; context?: unknown } | null;
+    if (!yl) {
+      steps.push({ done: true });
+      break;
+    }
+    const criteria = yieldCriteria(yl.choices);
+    const allowed = Object.keys(criteria);
+    if (!allowed.length) {
+      steps.push({ node: yl.node, kind: yl.kind, stopped: 'not a choice yield (section/vote/work) — left for the driver' });
+      break;
+    }
+    const judged = (await gw(token, '@c15r/jev.decide', {
+      model: MODEL,
+      state: { machine: input.machine, node: yl.node, brief: yl.brief ?? null, context: yl.context ?? (y as { context?: unknown }).context ?? null },
+      questions: { branch: { type: 'choice', instructions: `The run is parked at "${yl.node}". Which branch should it take?`, criteria } },
+    }, 'act')) as { answers?: { branch?: ChoiceAns }; usage?: { input_tokens?: number } };
+    tokens += judged.usage?.input_tokens ?? 0;
+    const d = planDecision(judged.answers?.branch, allowed, th);
+    if (d.action === 'escalate') {
+      steps.push({ node: yl.node, escalated: true, best: d.best, p: d.p, probabilities: judged.answers?.branch?.probabilities });
+      break;
+    }
+    steps.push({ node: yl.node, to: d.to, p: d.p });
+    acts.push({ kind: 'link', from: `machine/${input.machine}/run/${input.run}`, rel: `decided:${yl.node}`, to: d.to, q: 'decide', p: d.p });
+    y = (await gw(token, '@c15r/machine.step', { machine: input.machine, run: input.run, decide: { to: d.to, statement: d.statement, confidence: d.p } }, 'act')) as typeof y;
+  }
+  const log: RunLog = { id: newRunId(), tool: 'drive', mode: 'act', at: new Date().toISOString(), thresholds: th, counts: { steps: steps.length, advanced: acts.length }, acts: [], errors: [], usage: { input_tokens: tokens } };
+  // Decisions are recorded as the machine's own claims; the run log keeps them
+  // for calibration (a decision later overridden by the driver is a negative).
+  (log as RunLog & { decisions?: RunAct[]; trace?: unknown }).decisions = acts;
+  (log as RunLog & { trace?: unknown }).trace = steps;
+  await writeRun(token, log);
+  return { run: log.id, machine: input.machine, machineRun: input.run, steps, final: y?.yield ?? null };
+}
+
+/* retire_legacy: the first live runs wrote per-item facts under `judgment/`
+ * and `system1/` (embedded → they minted suggestions). Supersede exactly those
+ * prefixes — the organ's own output, nothing else. */
+async function retireLegacy(input: { token?: string }): Promise<Record<string, unknown>> {
+  const token = input.token;
+  if (!token) throw new Error('token is required');
+  let retired = 0;
+  const failed: string[] = [];
+  for (const prefix of ['judgment/perceive/', 'judgment/relate/', 'system1/']) {
+    for (let guard = 0; guard < 20; guard++) {
+      const page = (await gw(token, 'workspace.query', { prefix, shape: 'refs', limit: 100 }, 'read')) as { entries?: Array<{ key: string }> };
+      const keys = (page.entries ?? []).map((e) => e.key);
+      if (!keys.length) break;
+      const res = await gwCallMany(token, keys.map((key) => ({ target: 'workspace.supersede', input: { key }, kind: 'act' as const })), { url: GATEWAY_MCP, concurrency: 16 });
+      res.forEach((r, i) => (isErr(r) ? failed.push(`${keys[i]}: ${r.error.slice(0, 80)}`) : retired++));
+      if (failed.length > 20) break;
+    }
+  }
+  return { retired, failed: failed.slice(0, 20) };
 }
 
 /* ── async jobs (a sweep can outrun the ~30s edge cap) ───────────────────── */
@@ -831,6 +915,8 @@ const RUNNERS: Record<string, (args: Record<string, unknown>) => Promise<unknown
   revert: (a) => revert(a as { token?: string; run?: string; key?: string }),
   calibrate: (a) => runCalibrate(a as { token?: string; runs?: number; apply?: boolean }),
   label: (a) => label(a as { token?: string; run?: string; index?: number; ok?: boolean; note?: string }),
+  retire_legacy: (a) => retireLegacy(a as { token?: string }),
+  drive: (a) => drive(a as { token?: string; machine?: string; run?: string; maxSteps?: number }),
 };
 
 /* ── the cell surface ────────────────────────────────────────────────────── */
@@ -889,6 +975,18 @@ const TOOLS = [
     kind: 'act',
     description: 'The learner (ADR-0098 §4): label recent act-mode runs by survival (edge still present = weak positive; gone = negative) plus audit labels (3×), then move each question\'s threshold toward the lowest θ meeting its target precision (≤0.05/cycle, floored). Writes system1/calibration, which every run reads.',
     inputSchema: { type: 'object', properties: { token: tokenProp, runs: { type: 'number' }, apply: { type: 'boolean' }, async: asyncProp }, required: ['token'] },
+  },
+  {
+    name: 'drive',
+    kind: 'act',
+    description: 'The judge rail (ADR-0098 §3): drive a machine run with System One — step it, answer each decision yield with one Jev choice over the node\'s declared branches, advance (the machine records the claim, templated from the distribution) when p ≥ θ.decide, and STOP at the first yield below θ (or a section/vote/work yield), returning it for System Two. Pass a run started with trigger_run {mode:"driven"}.',
+    inputSchema: { type: 'object', properties: { token: tokenProp, machine: { type: 'string' }, run: { type: 'string' }, maxSteps: { type: 'number' }, async: asyncProp }, required: ['token', 'machine', 'run'] },
+  },
+  {
+    name: 'retire_legacy',
+    kind: 'act',
+    description: 'One-off cleanup: supersede the per-item judgment/* and system1/* facts the first live runs wrote (bookkeeping now lives under _system1/, unindexed).',
+    inputSchema: { type: 'object', properties: { token: tokenProp, async: asyncProp }, required: ['token'] },
   },
   {
     name: 'fetch',
