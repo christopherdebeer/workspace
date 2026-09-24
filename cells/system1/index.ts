@@ -832,6 +832,8 @@ async function label(input: { token?: string; run?: string; index?: number; ok?:
   return { key, act, ok: input.ok };
 }
 
+type EdgeRow = { from: string; rel: string; to: string };
+
 async function runCalibrate(input: { token?: string; runs?: number; apply?: boolean }): Promise<unknown> {
   const token = input.token;
   if (!token) throw new Error('token is required');
@@ -845,7 +847,9 @@ async function runCalibrate(input: { token?: string; runs?: number; apply?: bool
   const present = new Set<string>();
   edgeRes.forEach((r) => {
     if (isErr(r)) return;
-    for (const e of (r as { edges?: Array<{ from: string; rel: string; to: string }> }).edges ?? []) present.add(`${e.from}|${e.rel}|${e.to}`);
+    // workspace.edges({around}) answers {outbound, inbound} (ADR-0069); `edges` is the keys-form.
+    const res = r as { edges?: EdgeRow[]; outbound?: EdgeRow[]; inbound?: EdgeRow[] };
+    for (const e of [...(res.edges ?? []), ...(res.outbound ?? []), ...(res.inbound ?? [])]) present.add(`${e.from}|${e.rel}|${e.to}`);
   });
   for (const x of linkActs) {
     if (!sources.includes(x.a.from!)) continue;
