@@ -138,3 +138,13 @@ describe('helpers', () => {
     expect(subjectText('plain')).toBe('plain');
   });
 });
+
+describe('referencesEachOther', () => {
+  const { referencesEachOther } = jest.requireActual('../cells/system1/index');
+  it('holds an asset/capture pair where one names the other', () => {
+    const asset = { key: 'visual/image/04b280ed-a69f-4aa1-8f07-a0b9418f1213', type: 'image', tags: [], value: { title: 'IMG_1617.jpeg' } };
+    const cap = { key: 'inbox/2026-09-21/image-04b', type: 'capture', tags: [], value: { image: 'visual/image/04b280ed-a69f-4aa1-8f07-a0b9418f1213' } };
+    expect(referencesEachOther(asset, cap)).toBe(true);
+    expect(referencesEachOther(cap, { ...asset, key: 'kb/other' })).toBe(false);
+  });
+});

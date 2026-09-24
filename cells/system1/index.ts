@@ -261,6 +261,18 @@ export const RELATION_OPTIONS: Record<string, string> = {
   unrelated: 'no meaningful connection; the similarity is superficial (shared boilerplate, format or template)',
 };
 
+/** A pair where one fact names the other's key is already structurally related
+ *  (an asset and the capture that points at it) — two roles, not a duplicate.
+ *  Judging it would only re-derive what the reference says; hold it. */
+export function referencesEachOther(a: Subject, b: Subject): boolean {
+  const mentions = (x: Subject, key: string) => {
+    const tail = key.split('/').pop() ?? key;
+    const text = typeof x.value === 'string' ? x.value : JSON.stringify(x.value ?? '');
+    return text.includes(key) || (tail.length >= 12 && text.includes(tail));
+  };
+  return mentions(a, b.key) || mentions(b, a.key);
+}
+
 export type RelateDecision =
   | { action: 'ratify'; rel: string; p: number }
   | { action: 'decline'; p: number }
@@ -410,7 +422,22 @@ interface RunLog {
   acts: RunAct[];
   errors: string[];
   usage: { input_tokens: number };
+  /** Wall-clock per phase (ms) — the sweep is bounded by the edge, so measure it. */
+  timings?: Record<string, number>;
   next?: unknown;
+}
+
+function timer(): (label: string) => Record<string, number> {
+  const t0 = Date.now();
+  let last = t0;
+  const out: Record<string, number> = {};
+  return (label) => {
+    const now = Date.now();
+    out[label] = now - last;
+    out.total = now - t0;
+    last = now;
+    return out;
+  };
 }
 
 async function writeRun(token: Tok, log: RunLog): Promise<void> {
@@ -470,7 +497,9 @@ async function perceive(input: PerceiveInput): Promise<RunLog> {
   const token = input.token;
   if (!token) throw new Error('token is required (a bearer with read:workspace write:workspace + @c15r/jev access)');
   const mode = input.mode === 'act' ? 'act' : 'shadow';
+  const tick = timer();
   const [th, ctx, loaded] = await Promise.all([loadThresholds(token), loadContext(token), loadSubjects(token, input)]);
+  tick('load');
   const log: RunLog = { id: newRunId(), tool: 'perceive', mode, at: new Date().toISOString(), thresholds: th, counts: { scanned: loaded.scanned, subjects: loaded.subjects.length }, acts: [], errors: [], usage: { input_tokens: 0 }, next: loaded.next };
   if (!loaded.subjects.length) {
     await writeRun(token, log);
@@ -482,6 +511,7 @@ async function perceive(input: PerceiveInput): Promise<RunLog> {
     items: loaded.subjects.map((s) => ({ id: s.key, state: subjectState(s), questions: perceiveQuestions(s, ctx) })),
   }, 'act')) as { results?: Array<{ id: string; answers?: Record<string, unknown>; error?: string }>; usage?: { input_tokens?: number } };
   log.usage.input_tokens = judged.usage?.input_tokens ?? 0;
+  tick('judge');
 
   const plans: Array<{ s: Subject; plan: PerceivePlan }> = [];
   for (const r of judged.results ?? []) {
@@ -509,6 +539,7 @@ async function perceive(input: PerceiveInput): Promise<RunLog> {
     }
   }
   log.counts.judged = plans.length;
+  tick('ingest');
 
   if (mode === 'act') {
     // Tags/type: CAS re-write of the same value, preserving recency (a tag is not new content).
@@ -551,6 +582,7 @@ async function perceive(input: PerceiveInput): Promise<RunLog> {
       else log.acts.push({ kind: 'link', from: l.from, rel: l.rel, to: l.to, q: l.rel === 'serves' ? 'serves' : 'project', p: l.p });
     });
   }
+  log.timings = tick('act');
   const tally = (pred: (p: PerceivePlan) => boolean) => plans.filter(({ plan }) => pred(plan)).length;
   Object.assign(log.counts, {
     projectTagged: tally((p) => p.addTags.some((t) => t.startsWith('project:'))),
@@ -572,6 +604,7 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
   const token = input.token;
   if (!token) throw new Error('token is required');
   const mode = input.mode === 'act' ? 'act' : 'shadow';
+  const tick = timer();
   const th = await loadThresholds(token);
   const limit = Math.min(input.limit ?? 60, 150);
   const sug = (await gw(token, 'workspace.suggestions', { limit, ...(input.offset ? { offset: input.offset } : {}) }, 'read')) as {
@@ -593,8 +626,11 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
     if (f.value === undefined || f._meta?.superseded) return;
     facts.set(keys[i], { key: keys[i], type: f._meta?.type ?? null, tags: f._meta?.tags ?? [], value: f.value });
   });
-  const live = pairs.filter((p) => facts.has(p.from) && facts.has(p.to));
+  const present = pairs.filter((p) => facts.has(p.from) && facts.has(p.to));
+  const live = present.filter((p) => !referencesEachOther(facts.get(p.from)!, facts.get(p.to)!));
   log.counts.live = live.length;
+  log.counts.structural = present.length - live.length;
+  tick('load');
   const judged = (await gw(token, '@c15r/jev.decide_many', {
     model: MODEL,
     questions: {
@@ -610,6 +646,7 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
     })),
   }, 'act')) as { results?: Array<{ id: string; answers?: { relation?: ChoiceAns }; error?: string }>; usage?: { input_tokens?: number } };
   log.usage.input_tokens = judged.usage?.input_tokens ?? 0;
+  tick('judge');
 
   const decisions = (judged.results ?? []).map((r) => {
     const pair = live[Number(r.id)];
@@ -639,6 +676,7 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
     }
   }
   Object.assign(log.counts, tallies);
+  tick('ingest');
 
   if (mode === 'act') {
     const calls: Array<{ target: string; input: unknown; kind: 'act'; act: RunAct }> = [];
@@ -656,6 +694,7 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
       else log.acts.push(calls[i].act);
     });
   }
+  log.timings = tick('act');
   await writeRun(token, log);
   return log;
 }
