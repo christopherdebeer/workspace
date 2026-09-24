@@ -1,6 +1,9 @@
 # ADR-0097 — Jev as a semantic judgment layer for tagging, relations, and tending
 
 - **Status:** Proposed 2026-09-23 — research draft; no platform integration built.
+- **Amended by:** ADR-0098 (System One, always on) — posture moves from
+  observation-only to act-by-default with learned thresholds; research, cost
+  model and data boundary here stand.
 - **Depends on:** ADR-0030 (S3 Vectors as candidate retrieval, not authority),
   ADR-0031/0032 (`similarTo` as weak, ratifiable structure), ADR-0050 (the score
   stage), ADR-0073 (the consolidation organ), ADR-0088 (wake-on-change), and
