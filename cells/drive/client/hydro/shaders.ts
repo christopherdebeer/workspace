@@ -1658,6 +1658,13 @@ void main() {
 #endif
   vec3 sceneLight = uSceneLight * (0.77 + 0.26 * facet) * shade;
   colour *= sceneLight;
+  // LOOK: AT NIGHT THE WATER IS DARKER THAN THE GROUND. The ground is raked by
+  // the moon light (LIGHT_DIR is lifted to a shallow angle at night) and the
+  // column is not: a flat body under a dark zenith scatters back far less than
+  // lit grass. With the same irradiance ratio the two shared a palette rung
+  // and a river seen from above vanished; this holds the BODY a rung below,
+  // leaving the reflection (added below) to lift it at grazing angles.
+  if (uLookModel > 0.5) colour *= mix(0.42, 1.0, daylight) * presence + (1.0 - presence);
 
   // Scene fog is the horizon/sky proxy already maintained by Three. Explicit
   // frame colour can refine it without making integration mandatory.

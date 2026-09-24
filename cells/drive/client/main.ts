@@ -3995,6 +3995,8 @@ function publishHydroShoreBreakLines(t: HeightTile, key: string): void {
  * tile anyway, so there is nothing on screen to see it happen to.
  */
 const hydroFrameOrigin = { x: 0, y: 0, z: 0 };
+/** `?banklook=1` — the narrow damp bank (see the sward's bank paint). */
+const BANK_LOOK = qsNum('banklook', 0) > 0.5;
 /** `?hydrolook=` — the water's optical model (HydroTuning.lookModel). */
 const HYDRO_LOOK = clamp(qsNum('hydrolook', 0), 0, 1);
 /** The moon, for the water's glitter path: the TRUE lunar direction (the
@@ -14960,22 +14962,28 @@ function swardRows(from: number, to: number): void {
           // A north/south bank must be as steep as an east/west one.
           // Pay the second ground read only in bank/wetland texels.
           const bankSlope = Math.hypot(slope, (groundAt(wx, wz + SWARD_FM) - h) / SWARD_FM);
+          // ?banklook=1: the bank is a NARROW damp line with grass close to
+          // the water, not a bare strip. Seen from the seat at the Senqu: a
+          // 4.5-10 m wet margin plus a 12 m mineral margin, both shaving the
+          // sward to the pale base ground (?shore=0 made it grass to the
+          // edge). The same rules read over a shorter distance.
+          const bsL = BANK_LOOK && bs && !bs.wet ? { ...bs, shoreDistanceM: bs.shoreDistanceM * 2.2 } : bs;
           const hab = bankHabitat(cv, cl.moisture, cl.tempC, bankSlope, wetCover,
-            h + baseElev, bs);
+            h + baseElev, bsL);
           swardScratchF[k + 2] = hab.reeds;
           swardScratchF[k + 3] = hab.mineral;
           // Signed density distinguishes submerged slots without another field:
           // only emergents/minerals may occupy them, never ordinary grass.
           const bankRate = hab.reeds * REED_M2 * lift + hab.mineral * 0.06;
-          const wetMargin = bs && !bs.wet
-            ? bankWetMargin(bs.shoreDistanceM, bankPatch(wx, wz))
+          const wetMargin = bsL && !bsL.wet
+            ? bankWetMargin(bsL.shoreDistanceM, bankPatch(wx, wz))
             : 0;
           density = hab.submerged ? -(bankRate + 0.00001)
             : density
-              * (1 - hab.mineral * 0.25)
-              * (1 - wetMargin * (0.62 + hab.mineral * 0.25))
+              * (1 - hab.mineral * (BANK_LOOK ? 0.12 : 0.25))
+              * (1 - wetMargin * (BANK_LOOK ? 0.34 + hab.mineral * 0.18 : 0.62 + hab.mineral * 0.25))
               + bankRate;
-          const mk = Math.max(hab.mineral * 0.75, wetMargin * 0.52);
+          const mk = Math.max(hab.mineral * (BANK_LOOK ? 0.55 : 0.75), wetMargin * (BANK_LOOK ? 0.62 : 0.52));
           const rk = hab.reeds * 0.5;
           const [mr, mg, mb] = bankMineralColour(pr, pg, pb);
           pr += (mr - pr) * mk; pg += (mg - pg) * mk; pb += (mb - pb) * mk;
