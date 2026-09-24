@@ -994,6 +994,7 @@ export async function startHydroLab(): Promise<void> {
     absorptionStrength: number('absorption'), scatteringStrength: number('scattering'),
     surfaceRoughness: number('roughness'),
     lookModel: labLook,
+    foamMask: 31,
   });
   const apply = (): void => {
     if (!hydro) return;

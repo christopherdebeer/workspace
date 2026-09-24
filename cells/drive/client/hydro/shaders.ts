@@ -110,6 +110,19 @@ uniform float uElevationBase;
 uniform float uTime;
 uniform vec3 uWorldOrigin;
 uniform vec3 uWind;
+// The fragment's hash and value noise, again, for the one vertex term that
+// wants a warp: the coast profile's distance. Same construction, own names.
+float vtxHash(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+float vtxNoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(vtxHash(i), vtxHash(i + vec2(1.0, 0.0)), f.x),
+             mix(vtxHash(i + vec2(0.0, 1.0)), vtxHash(i + 1.0), f.x), f.y);
+}
 uniform float uWaveAmplitude;
 uniform float uWaveLength;
 uniform float uWaveChop;
@@ -236,7 +249,18 @@ void main() {
   // Coastal standing water only: a mountain lake's basin IS real land data
   // and a river owns its channel. Contact, colour and the bed are untouched;
   // this is only the geometry's idea of how far down the bottom is.
-  float profileDepth = shoreDist * (
+  // LOOK: the profile's distance is WARPED by a few metres over a ~50 m
+  // wavelength. The shore-distance field is exact to the raster's own
+  // contour, so a breaker band at a fixed depth traced that contour — an
+  // angular strip parallel to the beach. A real bar wanders; the band that
+  // breaks on it wanders with it. Only past the swash, so the waterline and
+  // the coast field's phase are untouched.
+  float profDist = shoreDist;
+  if (uLookModel > 0.5) {
+    vec2 warpP = (modelMatrix * vec4(position, 1.0)).xz + uWorldOrigin.xz;
+    profDist = max(0.0, shoreDist + (vtxNoise(warpP * 0.021) - 0.5) * 18.0 * smoothstep(6.0, 24.0, shoreDist));
+  }
+  float profileDepth = profDist * (
     beachProfile * 0.06
     + shingleProfile * 0.105
     + cliffProfile * 0.22
@@ -244,10 +268,10 @@ void main() {
   );
   // A rock platform stays shallow across its bench, then drops at the ledge.
   // This is deliberately a profile, not another shoreline-noise multiplier.
-  float platformShelf = shoreDist * 0.035;
-  float platformDrop = 1.35 + max(0.0, shoreDist - 38.0) * 0.16;
+  float platformShelf = profDist * 0.035;
+  float platformDrop = 1.35 + max(0.0, profDist - 38.0) * 0.16;
   profileDepth += platformProfile * mix(
-    platformShelf, platformDrop, smoothstep(32.0, 52.0, shoreDist)
+    platformShelf, platformDrop, smoothstep(32.0, 52.0, profDist)
   );
   float waveDepth = mix(depth, max(depth, profileDepth), coastalStanding);
   // LOOK: a body mapped without bathymetry carries a nominal few centimetres
@@ -562,6 +586,7 @@ uniform float uAbsorptionStrength;
 uniform float uScatteringStrength;
 uniform float uSurfaceRoughness;
 uniform float uLookModel;
+uniform float uFoamMask;
 uniform vec3 uMoonDirection;
 uniform vec3 uMoonColour;
 uniform float uEdgeBlendEnabled;
@@ -1266,6 +1291,9 @@ void main() {
     // This is a continuous material transition inside the resolved body, not
     // alpha stipple or local post-processing.
     float riverFadeM = clamp(1.65 / max(0.08, bankSlope), 2.4, 8.0);
+    // LOOK: the shelf is wider on the inside of a bend (the bar) and cut
+    // short on the outside, the same side rule the sward's bank paint reads.
+    if (uLookModel > 0.5) riverFadeM *= mix(1.4, 0.7, outerBank);
     float channelWet = smoothstep(0.0, riverFadeM, shoreMetres);
     shoreWetness = clamp(channelWet * mix(0.08, 1.0, depthWet)
       * coverageInterior, 0.0, 1.0);
@@ -1279,6 +1307,26 @@ void main() {
   float offshore = smoothstep(15.0, 70.0, shoreDist) * (1.0 - vFlowing);
   float visualDepth = mix(min(geometryField.a, 14.0),
     min(3.0 + shoreDist * 0.022, 14.0), offshore);
+  // LOOK: THE APRON. A sea mapped over a flat DEM carries 8 cm of "depth" to
+  // the edge of the offshore blend, so for 15-70 m off every beach the bed
+  // showed through as one pale band — a contour of the shore-distance field,
+  // angular at the raster's own resolution, wider than any surf. Measured on
+  // the Twelve Apostles with every foam term off: the band stayed. The
+  // colour sees the same bottom the waves already shoal on (the vertex
+  // shader's beach/shingle/platform/cliff profiles): sand at one in
+  // seventeen, a rock platform's bench and drop, a cliff foot at one in five.
+  if (uLookModel > 0.5 && coastalKind) {
+    float inletW = max(0.0, 1.0 - dot(vCoastWeights, vec4(1.0)));
+    // The same warp the vertex shader puts on the wave profile, so the bed
+    // the colour sees and the bar the waves break on are one bottom.
+    float profDist = max(0.0, shoreDist + (valueNoise(vAbsoluteXZ * 0.021) - 0.5) * 18.0
+      * smoothstep(6.0, 24.0, shoreDist));
+    float profileDepth = profDist * (vCoastWeights.x * 0.06 + vCoastWeights.y * 0.105
+      + vCoastWeights.w * 0.22 + inletW * 0.05)
+      + vCoastWeights.z * mix(profDist * 0.035, 1.35 + max(0.0, profDist - 38.0) * 0.16,
+        smoothstep(32.0, 52.0, profDist));
+    visualDepth = max(visualDepth, min(profileDepth, 14.0));
+  }
   // A CHANNEL IS A TROUGH, NOT A SLAB. The field gives a river one depth per
   // texel — and the floor build-tile lays under a narrow ribbon gives every
   // texel of it the same 1.3 m — so from above the water was one flat tone
@@ -1291,7 +1339,8 @@ void main() {
   // everywhere (0.08 m across Lake Bled), which put the whole bed on show and
   // every class step with it. Offshore, the bed sits at the same depth the
   // colour already assumes.
-  if (uLookModel > 0.5) bedDepth = mix(bedDepth, max(bedDepth, visualDepth), offshore);
+  if (uLookModel > 0.5) bedDepth = mix(bedDepth, max(bedDepth, visualDepth),
+    coastalKind ? 1.0 : offshore);
   float pointBar = 0.0;
 #ifdef HYDRO_FLOWING
   if (vFlowing > 0.5) {
@@ -1344,6 +1393,9 @@ void main() {
   // and distance all remove the detail continuously.
   if (bedLod > 0.015) {
     float clearDepthM = mix(3.8, 0.86, suspendedScattering);
+    // LOOK: the surf zone stirs its own sand; a beach's bed is legible in the
+    // swash and the first few metres, not across a fifty-metre shoal.
+    if (uLookModel > 0.5 && coastalKind) clearDepthM = min(clearDepthM, 1.6);
     float bedVisibility = (1.0 - smoothstep(0.10, clearDepthM, bedDepth))
       * (1.0 - suspendedScattering * 0.64) * bedLod
       * mix(0.62, 1.0, vFlowing) * (1.0 - shallowRapid * 0.48)
@@ -1734,7 +1786,16 @@ void main() {
     // broken surface still returns less; the ceiling stays below a mirror so
     // the palette keeps a body under every reflection.
     float grazing = 1.0 - facing;
-    fresnel = waterF0 + (1.0 - waterF0) * grazing * grazing * grazing * grazing * grazing;
+    // LOOK: AFTER DARK THE SKY IS WHAT SAYS "WATER". From the seat at night
+    // an inland reach read as one more dark field: the body is held a rung
+    // under the ground (above) and at a chase or drone angle the mirror
+    // returns two per cent of a dim sky. In life the ground is nearer black
+    // than the sky ever is, so even a flat river carries the twilight or the
+    // moonlit zenith on it. Raise the mirror's FLOOR as the day goes, not the
+    // body: what lifts is the reflected sky, only where the sky is bright,
+    // and a river under a cliff's shadow stays dark.
+    float nightF0 = mix(waterF0, 0.11, (1.0 - daylight) * presence);
+    fresnel = nightF0 + (1.0 - nightF0) * grazing * grazing * grazing * grazing * grazing;
     fresnel *= mix(1.0, 0.72, surfaceRoughness) * mix(1.0, 0.82, vFlowing);
     fresnel = min(fresnel, 0.86) * presence;
   }
@@ -1753,8 +1814,14 @@ void main() {
     // the quantiser promotes into white wave diagrams at low sun. Sparkle
     // comes from MODULATING that quiet lobe by the advected grain.
     float glintPower = mix(14.0, 4.0, surfaceRoughness);
-    float glint = pow(max(0.0, dot(reflect(-lightDirection, normal), viewDirection)), glintPower);
-    float sparkle = 0.55 + 0.9 * smoothstep(0.45, 0.85, grain);
+    // LOOK: the sun's lobe reads the same CALMED normal the mirror does. On
+    // the ripple facets a 14th-power lobe lit one facet in a dozen, and the
+    // quantiser made those the bright speckle the seat saw on a daytime
+    // reach; the grain still breaks the lobe into sparkle, at half the swing.
+    vec3 glintNormal = uLookModel > 0.5 ? mirrorNormal : normal;
+    float glint = pow(max(0.0, dot(reflect(-lightDirection, glintNormal), viewDirection)), glintPower);
+    float sparkle = uLookModel > 0.5 ? 0.72 + 0.5 * smoothstep(0.45, 0.85, grain)
+      : 0.55 + 0.9 * smoothstep(0.45, 0.85, grain);
     colour += vec3(1.0, 0.9, 0.7) * glint * sparkle
       * mix(0.11, 0.04, surfaceRoughness)
       * daylight * shade * detailLod * mix(1.0, 0.46, vFlowing) * presence;
@@ -1945,10 +2012,22 @@ void main() {
       * (1.0 - smoothstep(0.64, 0.92, shoreWetness));
     float swashTexture = mix(0.30, 1.0, smoothstep(0.50, 0.84,
       valueNoise(vAbsoluteXZ * 0.18 + vec2(0.0, uTime * 0.22))));
-    float lappingFoam = (1.0 - vFlowing) * swashBand * swashTexture
-      * lapPulse * (coastalKind ? 0.48 : 0.20);
+    // LOOK: swash foam comes in PATCHES with wet sand between them, not as a
+    // continuous white margin the length of the beach: a coarse gate (about
+    // 20 m) drifting with the shore phase decides where a wash foams at all.
+    float swashPatch = uLookModel > 0.5
+      ? smoothstep(0.30, 0.62, valueNoise(vAbsoluteXZ * 0.048 + vec2(uTime * 0.05, -uTime * 0.03)))
+      : 1.0;
+    float lappingFoam = (1.0 - vFlowing) * swashBand * swashTexture * swashPatch
+      * lapPulse * (coastalKind ? mix(0.48, 0.36, uLookModel) : 0.20);
     float whitecap = (1.0 - vFlowing) * smoothstep(9.5, 17.0, uWind.z)
       * energy * crestPick * fragmentNoise * 0.5;
+    // uFoamMask is an instrument (HydroTuning.foamMask): each sea-foam term
+    // can be switched off alone so a frame attributes a white to one of them.
+    lappingFoam *= mod(floor(uFoamMask), 2.0);
+    breakerFoam *= mod(floor(uFoamMask / 2.0), 2.0);
+    spill *= mod(floor(uFoamMask / 4.0), 2.0);
+    whitecap *= mod(floor(uFoamMask / 8.0), 2.0);
     float foam = clamp((lappingFoam + riverFoam + breakerFoam * 0.8 + spill
       + whitecap) * uFoamStrength, 0.0, 0.82) * foamLod;
     // Foam takes the scene's light too — white paint at midnight is a bug.
@@ -2045,6 +2124,7 @@ void main() {
   // The retained surf strip is exposed ground, not transparent water. It
   // keeps a restrained sky sheen while the phase-history signal dries.
 #ifdef HYDRO_SURF
+  recentlyWashed *= mod(floor(uFoamMask / 16.0), 2.0);
   if (recentlyWashed > 0.001) {
     vec3 wetTerrain = wetGround(terrainC) * sceneLight * 0.78;
     wetTerrain += reflectedSky * (0.035 + recentlyWashed * 0.025);

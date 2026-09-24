@@ -3997,6 +3997,8 @@ function publishHydroShoreBreakLines(t: HeightTile, key: string): void {
  * tile anyway, so there is nothing on screen to see it happen to.
  */
 const hydroFrameOrigin = { x: 0, y: 0, z: 0 };
+/** While a sheet runs, the hydro clock in seconds; null lets it run. */
+let hydroTimePin: number | null = null;
 /** `?banklook=1` — the narrow damp bank (see the sward's bank paint). */
 let BANK_LOOK = qsNum('banklook', 1) > 0.5;
 /** `?hydrolook=` — the water's optical model (HydroTuning.lookModel). */
@@ -4089,7 +4091,8 @@ function hydroTick(nowMs: number): void {
   hydroFrameSky.r = sky.x; hydroFrameSky.g = sky.y; hydroFrameSky.b = sky.z;
   hydroFrameTerrain.r = terrain[0]; hydroFrameTerrain.g = terrain[1]; hydroFrameTerrain.b = terrain[2];
   hydroSys.update({
-    timeSeconds: nowMs / 1000,
+    // A sheet pins the water's clock so every cell shares one wave phase.
+    timeSeconds: hydroTimePin ?? nowMs / 1000,
     worldOrigin: hydroFrameOrigin,
     wind: { x: worldWind.dirX, z: worldWind.dirZ, speedMps: worldWind.kmh / 3.6 },
     rain: w?.rain ?? 0,
@@ -14982,7 +14985,15 @@ function swardRows(from: number, to: number): void {
           // 4.5-10 m wet margin plus a 12 m mineral margin, both shaving the
           // sward to the pale base ground (?shore=0 made it grass to the
           // edge). The same rules read over a shorter distance.
-          const bsL = BANK_LOOK && bs && !bs.wet ? { ...bs, shoreDistanceM: bs.shoreDistanceM * 2.2 } : bs;
+          // A BEND HAS TWO BANKS. The inside of a turn is where a river drops
+          // its load: a wide, pale sediment shelf that the grass takes a while
+          // to reach. The outside is where it cuts: a narrow, steep, damp
+          // bank, darker than the ground above it. The field's own curvature
+          // × side (`outerBank`, the water shader's term) says which this is;
+          // a straight reach reads 0.5 and keeps the symmetric margin.
+          const outer = bs && !bs.wet && bs.outerBank !== undefined && bs.kind !== 'lake' ? bs.outerBank : 0.5;
+          const bendReach = 2.2 * (0.55 + 0.9 * outer);   // inner 1.2 (wide shelf) … outer 3.2 (narrow)
+          const bsL = BANK_LOOK && bs && !bs.wet ? { ...bs, shoreDistanceM: bs.shoreDistanceM * bendReach } : bs;
           const hab = bankHabitat(cv, cl.moisture, cl.tempC, bankSlope, wetCover,
             h + baseElev, bsL);
           swardScratchF[k + 2] = hab.reeds;
@@ -15000,7 +15011,7 @@ function swardRows(from: number, to: number): void {
               + bankRate;
           const mk = Math.max(hab.mineral * (BANK_LOOK ? 0.55 : 0.75), wetMargin * (BANK_LOOK ? 0.62 : 0.52));
           const rk = hab.reeds * 0.5;
-          const [mr, mg, mb] = bankMineralColour(pr, pg, pb);
+          const [mr, mg, mb] = bankMineralColour(pr, pg, pb, BANK_LOOK ? 1 - outer : 0.5);
           pr += (mr - pr) * mk; pg += (mg - pg) * mk; pb += (mb - pb) * mk;
           pr += (BANK_REED[0] - pr) * rk; pg += (BANK_REED[1] - pg) * rk; pb += (BANK_REED[2] - pb) * rk;
         }
@@ -56821,7 +56832,14 @@ interface SheetShot { row: string; col: string; hud?: boolean; settle: number; s
  * session stripped back to the defaults. `load` switches are refused, since
  * only a reload could show them.
  */
-interface AbSpec { a: Array<[SwitchId, string | null]>; b: Array<[SwitchId, string | null]>; rebuild: boolean }
+type AbSide = Array<[SwitchId, string | null]>;
+/**
+ * `sides` is A first and B last. When B sets more than one switch, each is
+ * also shown ALONE between them (the others held at A), so a sheet can say
+ * which switch bought a change — the seat's ask after an A/B that moved
+ * hydrolook and banklook together and could not attribute either.
+ */
+interface AbSpec { a: AbSide; b: AbSide; sides: Array<[string, AbSide]>; rebuild: boolean }
 function abSpecFrom(text: string): AbSpec | { error: string } {
   const b: Array<[SwitchId, string | null]> = [];
   let a: Array<[SwitchId, string | null]>;
@@ -56845,7 +56863,15 @@ function abSpecFrom(text: string): AbSpec | { error: string } {
   }
   if (!b.length) return { error: 'A/B: NOTHING TO COMPARE' };
   if (b.every(([k, v], i) => a[i][1] === v && k === a[i][0])) return { error: 'A/B: A AND B ARE THE SAME' };
-  return { a, b, rebuild: b.some(([k]) => switchApply(k) !== 'live') };
+  const sides: Array<[string, AbSide]> = [[`A · ${abSide(a)}`, a]];
+  if (b.length > 1) {
+    b.forEach(([k, v], i) => {
+      if (v === a[i][1]) return;
+      sides.push([`${k}${v === null ? ' default' : `=${v}`} alone`, a.map(([ak, av], j) => (j === i ? [ak, v] : [ak, av]))]);
+    });
+  }
+  sides.push([`B · ${abSide(b)}`, b]);
+  return { a, b, sides, rebuild: b.some(([k]) => switchApply(k) !== 'live') };
 }
 const abSide = (side: Array<[SwitchId, string | null]>): string =>
   side.map(([k, v]) => (v === null ? `${k} default` : `${k}=${v}`)).join(' ');
@@ -56927,9 +56953,8 @@ function sheetPlan(kind: 'godcam' | 'ab', t: { x: number; z: number }, here: Ret
   if (kind === 'ab' && ab) {
     const hereAngle = { y: 0, az: here.az, el: here.el, dist: here.dist, fov: here.fov };
     const hours = ['DAWN', 'MORNING', 'NOON', 'DUSK', 'NIGHT'];
-    const sides: Array<[string, Array<[SwitchId, string | null]>]> = [
-      [`A · ${abSide(ab.a)}`, ab.a], [`B · ${abSide(ab.b)}`, ab.b]];
-    const shot = (h: string, [col, side]: [string, Array<[SwitchId, string | null]>], first: boolean): SheetShot => ({
+    const sides = ab.sides;
+    const shot = (h: string, [col, side]: [string, AbSide], first: boolean): SheetShot => ({
       row: h, col, settle: first ? 1500 : 300, rebuild: ab.rebuild && first,
       setup: () => { hour(h); sky('clear'); god(hereAngle); abApply(side); } });
     // A switch that rebuilds a field is changed ONCE: every A, then every B.
@@ -56969,7 +56994,7 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam', abText = abSpecText): 
   const plan = sheetPlan(kind, target, st.god, ab);
   // Every switch the comparison touches, as the session had it.
   const switchesWere: Array<[SwitchId, string | null]> = ab ? ab.b.map(([k]) => [k, qs(k)]) : [];
-  const cellW = kind === 'ab' ? 360 : 200;
+  const cellW = kind === 'ab' ? (ab && ab.sides.length > 2 ? 300 : 360) : 200;
   sheet.phase = 'run'; sheet.kind = kind; sheet.done = 0; sheet.total = plan.length; sheet.blob = null;
   const saved = {
     timeMode, camMode, look: hydroLookLive, godInit, hudOn,
@@ -56984,6 +57009,8 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam', abText = abSpecText): 
     hudOn = false;
     // The readout would ride into the frames that composite the HUD canvas.
     chartOn.shot = false;
+    // One wave phase for every cell: the water's clock is held where it is.
+    hydroTimePin = performance.now() / 1000;
     let first = true;
     for (const shot of plan) {
       sheetProgress(`SHEET ${sheet.done + 1}/${sheet.total} · ${shot.row} ${shot.col}`);
@@ -57011,6 +57038,7 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam', abText = abSpecText): 
       sheet.done++;
     }
   } finally {
+    hydroTimePin = null;
     timeMode = saved.timeMode;
     abApply(switchesWere);
     hydroSys?.setTuning({ lookModel: saved.look });

@@ -39,6 +39,7 @@ export interface HydroFrameUniforms {
   uScatteringStrength: { value: number };
   uSurfaceRoughness: { value: number };
   uLookModel: { value: number };
+  uFoamMask: { value: number };
   uMoonDirection: { value: THREE.Vector3 };
   uMoonColour: { value: THREE.Vector3 };
 }
@@ -96,6 +97,7 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uScatteringStrength: { value: 1 },
     uSurfaceRoughness: { value: 1 },
     uLookModel: { value: 0 },
+    uFoamMask: { value: 31 },
     uMoonDirection: { value: new THREE.Vector3(0, 1, 0) },
     uMoonColour: { value: new THREE.Vector3(0, 0, 0) },
   };
@@ -302,6 +304,7 @@ export function createHydroMaterial(
       uScatteringStrength: frame.uScatteringStrength,
       uSurfaceRoughness: frame.uSurfaceRoughness,
       uLookModel: frame.uLookModel,
+      uFoamMask: frame.uFoamMask,
       uMoonDirection: frame.uMoonDirection,
       uMoonColour: frame.uMoonColour,
       uEdgeBlendEnabled: { value: edgeBlend ? 1 : 0 },

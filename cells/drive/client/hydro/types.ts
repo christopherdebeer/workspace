@@ -365,6 +365,13 @@ export interface HydroTuning {
    *  darkens the body at night, blends class steps and keeps water-only terms
    *  off the waterline. 0 is the look before it, kept for `?hydrolook=0` A/B. */
   lookModel: number;
+  /** INSTRUMENT, not a look. A bitmask over the sea's foam terms so a frame
+   *  can say which of them drew a given white: 1 lapping swash, 2 breakers,
+   *  4 spilling crests, 8 whitecaps, 16 the retained wash strip. 31 is every
+   *  term; `__hydrotune({ foamMask: 2 })` is the breakers alone. It exists
+   *  because `foamStrength` scales all five at once and an apron at the
+   *  coast could not be attributed to one of them. */
+  foamMask: number;
 }
 
 export const DEFAULT_HYDRO_TUNING: HydroTuning = {
@@ -382,6 +389,7 @@ export const DEFAULT_HYDRO_TUNING: HydroTuning = {
   scatteringStrength: 1,
   surfaceRoughness: 1,
   lookModel: 1,
+  foamMask: 31,
 };
 
 export interface HydroBuildOptions {

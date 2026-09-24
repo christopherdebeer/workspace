@@ -579,6 +579,9 @@ class DefaultHydroSystem implements HydroSystem {
       scatteringStrength: finite(patch.scatteringStrength, this.tuning.scatteringStrength),
       surfaceRoughness: finite(patch.surfaceRoughness, this.tuning.surfaceRoughness),
       lookModel: finite(patch.lookModel, this.tuning.lookModel),
+      // A bitmask, not a strength: the 0..8 clamp above would eat it.
+      foamMask: patch.foamMask === undefined || !Number.isFinite(patch.foamMask)
+        ? this.tuning.foamMask : clamp(Math.round(patch.foamMask), 0, 31),
     };
     this.frameUniforms.uWaveAmplitude.value = this.tuning.waveAmplitude;
     this.frameUniforms.uWaveLength.value = this.tuning.waveLength;
@@ -594,6 +597,7 @@ class DefaultHydroSystem implements HydroSystem {
     this.frameUniforms.uScatteringStrength.value = this.tuning.scatteringStrength;
     this.frameUniforms.uSurfaceRoughness.value = this.tuning.surfaceRoughness;
     this.frameUniforms.uLookModel.value = this.tuning.lookModel;
+    this.frameUniforms.uFoamMask.value = this.tuning.foamMask;
   }
 
   getTuning(): Readonly<HydroTuning> { return { ...this.tuning }; }
