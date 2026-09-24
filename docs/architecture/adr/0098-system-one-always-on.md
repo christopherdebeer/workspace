@@ -328,6 +328,16 @@ extending the vocabulary.
   coalesces into **one** fact write (tags plus type merged via `update`) and
   one batched edge write. Judgment facts for `unrelated`/`independent`
   outcomes are sparse: checked markers only, no per-pair fact.
+- **Self-invoke hops are scarce (incident, 2026-09-24).**
+  - **What happened:** AWS Lambda's recursive-loop detection dropped the
+    `cell-system1` chain twice (18:12 and 18:42 UTC). Every backfill batch
+    re-invoked the function, so a chain passed 16 hops. In total: 247
+    invocations, 2 dropped, no runaway cost; both chains simply stopped at
+    ~17 batches.
+  - **Fix:** a job loops its batches in-process for ~170 s, and only then
+    hands off to a fresh invocation, capped at 8 hops.
+  - **Rule:** any organ that self-chains through `cell-jobs` must count hops,
+    not batches.
 - **Loop guard:** perception skips `system1/*` writers. Machine `judge` rails
   keep ADR-0011's depth cap.
 - **Kill switch:** `_config/system1.enabled=false` stops perception and
