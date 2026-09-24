@@ -716,6 +716,14 @@ vec2 rippleGradient(vec2 p, vec2 flow, vec2 wind, float scale, float seed) {
     - uTime * (1.7 + speed * 0.12) + seed * 6.283;
   float pCapillary = dot(p, capillaryDirection) * kCapillary
     - uTime * (2.5 + speed * 0.08) + 2.1;
+  if (uLookModel > 0.5) {
+    // LOOK: two clean plane waves interfere into a regular fingerprint, and
+    // the palette quantiser turns their smooth crests into contour rings (the
+    // seat's 4 m drone over the Merced). A slow, static warp of each phase
+    // breaks the lattice into irregular cells; the rates are untouched.
+    pSmall += 3.2 * valueNoise(p * 0.061 + seed * 3.0);
+    pCapillary += 4.1 * valueNoise(p * 0.113 - seed * 5.0 + 7.3);
+  }
   float amplitude = mix(0.012, 0.1, scale) * uRippleStrength;
   return (direction * cos(pSmall) * kSmall * 0.68
     + capillaryDirection * cos(pCapillary) * kCapillary * 0.32) * amplitude;
@@ -747,6 +755,12 @@ vec2 rippleGradientRiver(float s, float crossM, vec2 flow, float energy, float s
   vec2 crossDirection = vec2(-direction.y, direction.x);
   float pSmall = s * 1.5 - uTime * 1.9 + seed * 6.283;
   float pCapillary = (s * 0.62 + crossM * 0.79) * 3.2 - uTime * 2.7 + 2.1;
+  if (uLookModel > 0.5) {
+    // LOOK: the same warp in river space, so it follows the bend and cannot
+    // shear; see rippleGradient.
+    pSmall += 3.2 * valueNoise(vec2(s * 0.061, crossM * 0.09) + seed * 3.0);
+    pCapillary += 4.1 * valueNoise(vec2(s * 0.113, crossM * 0.15) - seed * 5.0 + 7.3);
+  }
   float amplitude = mix(0.012, 0.1, energy) * uRippleStrength;
   return (direction * cos(pSmall) * 1.5 * 0.68
     + crossDirection * cos(pCapillary) * 3.2 * 0.32) * amplitude;
