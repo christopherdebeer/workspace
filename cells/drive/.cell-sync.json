@@ -1,8 +1,8 @@
 {
   "cell": "c15r/drive",
   "cellId": "drive-dcfd1204",
-  "treeVersion": "tree:7a1f003de193beaf22e061690f46e1b9d1d1c05182691eb07c2e4a60ba4fb151",
-  "syncedAt": "2026-09-24T13:31:42.632Z",
+  "treeVersion": "tree:659e951127a4575e13206a8f9ab311aaf55109d3445070e69fa335195b73ad56",
+  "syncedAt": "2026-09-24T15:01:36.664Z",
   "files": {
     "API-AUDIT-2026-09-11.md": "sha256:4520f25ecd5e2fbd159e3870ed438bd1b03c4ed36def3d4da2bcf70f6aab50c4",
     "CLAUDE.md": "sha256:5adeb921b5509615a4fb23e1cdc8f587e63148b1829813c795de9c103a5a8f57",
@@ -82,7 +82,7 @@
     "client/hydro/render-cutover.test.ts": "sha256:2df80f6bbc9b4a9fdf21ba3e107ba6b0aee2b83b0d52620c227f43d46f5a48a4",
     "client/hydro/resolution.test.ts": "sha256:1751a4a815c80d946a4de9f1f33ca3753a40cc9d803cdd41ed9cb15a3011f418",
     "client/hydro/scene-sky.ts": "sha256:f8a36a803e0237f1becee324e2d9d4ab270d6382c8cec0b4f0bac39b5f718181",
-    "client/hydro/shaders.ts": "sha256:bcabe30c20c944e79e69de2d307411fda8efe32bf4bd8c548069cd0be5014cb3",
+    "client/hydro/shaders.ts": "sha256:97f11e205681cfec62db9aed95070436fd5120d8a33209dedccbb320d6fe0840",
     "client/hydro/shore-contact.ts": "sha256:71c80414e7f25ee06b6c2d728763a58996f1274f84c888c75914121728d9c96f",
     "client/hydro/shore-contour.ts": "sha256:3ca1f2fab21b8fbc804b8adb70d956370411d28ecd09f343cea888472d01967c",
     "client/hydro/system.ts": "sha256:665761c458d1e6e9a90d7ab725f0884baf04c7119f759b0c11ec4b78ec69033b",
@@ -98,7 +98,7 @@
     "client/lab-dials.ts": "sha256:a4384291f86bdad09f6780370c3c940233d4c11bad9dc1966137c2a523fe6b02",
     "client/labs.ts": "sha256:656fe6912ce271ac982bd85ac74273688a48466a5f73d7888d6d251221e715cb",
     "client/landmarks.ts": "sha256:f84d2a41a45e77fed0f24da8759e4610885dbb5b2fe2ee9cc337db6f85fa2ae4",
-    "client/main.ts": "sha256:6457416abb9eea7340f9c61122306a561341a387751922443a4b13cba7d7f5a9",
+    "client/main.ts": "sha256:f79376374b0c5c507b0055d14c057b294cd5ea81a6af2fd70940e581b7b0263f",
     "client/marks-lab.ts": "sha256:ed0da10b3fd5b830a089ebc05d654889e21914f42ac27a32aaabd0faa367c2c0",
     "client/marks.ts": "sha256:5c9f621367010d3bad256dba5dc6e2bfd38e1b554754b1c6c00356e681a16dc8",
     "client/menu.ts": "sha256:b9bae07fe78f7482e780a10d94cafbbe2b60e0cafa852f150e786f8e6b38c7e7",
