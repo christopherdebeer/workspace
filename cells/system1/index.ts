@@ -43,8 +43,8 @@ const JOBS_TABLE = process.env.TABLE_NAME || '';
 let SELF_FUNCTION = '';
 /** A job keeps looping batches in-process for this long (Lambda timeout 300s). */
 const JOB_BUDGET_MS = 170_000; // + one batch (≤~90s) stays under the 300s timeout
-/** Self-invoke hops per chain — AWS drops a recursive chain past 16. */
-export const MAX_HOPS = 8;
+/** Self-invoke hops per job: none. Recursive calls are disabled. */
+export const MAX_HOPS = 0;
 
 /** The declaration version every judgment + act is stamped with. Bump when the
  *  questions or the materialization mapping change (re-perception supersedes). */
@@ -1182,13 +1182,10 @@ export const handler = async (
         args = next;
         next = null;
       }
-      let nextJob: string | undefined;
-      const hop = Number(job.input.args.hop ?? 0);
-      if (next && hop + 1 < MAX_HOPS) {
-        nextJob = randomUUID().slice(0, 13);
-        await jobs.submit(nextJob, { input: { tool: job.input.tool, args: { ...next, hop: hop + 1 } } });
-      }
-      const summary = { ...(out as object), batches, hop, ...(nextJob ? { nextJob } : next ? { stopped: `hop cap ${MAX_HOPS} reached; resume with the next run's args` } : {}) };
+      // NO self-invocation hand-off: a job never re-invokes this Lambda
+      // (recursive calls disabled 2026-09-24 after AWS loop detection). Work
+      // left when the time budget runs out is resumed by the next caller.
+      const summary = { ...(out as object), batches, ...(next ? { stopped: 'time budget reached; resume with a new call (cursor/offset in the run log)' } : {}) };
       await jobs.putJob(event.__job, { status: 'done', out: summary });
     } catch (e) {
       await jobs.putJob(event.__job, { status: 'error', error: (e as Error).message });
@@ -1220,13 +1217,10 @@ export const handler = async (
     const run = RUNNERS[name];
     if (!run) return json(404, { error: `unknown tool ${name}` });
     if (!ALWAYS_ALLOWED.has(name)) await assertEnabled(args.token);
-    if (args.async) {
-      if (!SELF_FUNCTION) return json(400, { error: 'async unavailable: function name unknown' });
-      if (!args.token) return json(400, { error: 'token is required' });
-      const jobId = randomUUID().slice(0, 13);
-      const { async: _a, ...rest } = args;
-      await jobs.submit(jobId, { input: { tool: name, args: rest } });
-      return json(200, { jobId, status: 'pending', hint: 'poll fetch {jobId}; the run also lands at system1/latest' });
+    // Recursive calls are disabled (2026-09-24): no async self-invoke. Every
+    // call runs synchronously in its own request; `async`/`chain` are ignored.
+    if (args.async || args.chain) {
+      return json(400, { error: 'async/chain disabled: System One no longer invokes itself. Call synchronously with a small limit.' });
     }
     return json(200, await run(args));
   } catch (e) {
