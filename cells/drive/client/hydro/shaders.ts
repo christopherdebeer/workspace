@@ -714,6 +714,13 @@ vec3 palette(float kind, float depth, float turbidity, vec3 terrainC) {
     // centimetre is the bank, darkened; the water's own tint arrives with
     // depth, and sooner where silt hides the bottom.
     shallow = mix(wet, shallow, mix(0.35, 0.6, suspended));
+  } else if (uLookModel > 0.5) {
+    // LOOK: AND SO IS THE COAST'S. The first centimetre of sea over a beach
+    // is the wet sand, not a teal; with the swash foam in patches (it used
+    // to paint over this) the strip between the dry sand and the surf read
+    // as a dark band under a hazy noon at the Apostles. The sea's own tint
+    // arrives with the profile's depth a few metres out.
+    shallow = mix(wet * 1.08, shallow, mix(0.42, 0.6, suspended));
   } else {
     shallow = mix(shallow, terrainC * mix(0.92, 1.12, suspended), groundAffinity);
   }
@@ -1730,8 +1737,12 @@ void main() {
     toLamp = dl / ld;
     float cone = smoothstep(uHeadCone.x, uHeadCone.y, dot(-toLamp, uHeadDir));
     float window = ld < uHeadCone.z ? pow(1.0 - pow(ld / uHeadCone.z, 4.0), 2.0) : 0.0;
-    lampE = min(cone * window / max(pow(ld, uHeadCone.w), 0.01), 2.5);
-    lampLight = uHeadColour * lampE * max(dot(normal, toLamp), 0.0);
+    // Capped at noon: the seat's first dusk frame with this in had the pool
+    // on a ford as a flat sand-coloured slab, because 2.5x noon on a body
+    // the palette keeps dark saturates straight to the top of the ramp. A
+    // lamp on water is mostly its reflection; the body takes a modest lift.
+    lampE = min(cone * window / max(pow(ld, uHeadCone.w), 0.01), 1.0);
+    lampLight = uHeadColour * lampE * max(dot(normal, toLamp), 0.0) * 0.55;
     sceneLight += lampLight;
   }
   colour *= sceneLight;
@@ -1857,7 +1868,7 @@ void main() {
       float lampPower = mix(120.0, 24.0, surfaceRoughness);
       float lampGlint = pow(max(0.0, dot(reflect(-toLamp, mirrorNormal), viewDirection)), lampPower);
       colour += uHeadColour * lampE * lampGlint * (0.6 + 0.6 * smoothstep(0.45, 0.85, grain))
-        * mix(0.5, 0.2, surfaceRoughness) * presence;
+        * mix(0.4, 0.16, surfaceRoughness) * presence;
     }
     if (uLookModel > 0.5 && uMoonColour.r + uMoonColour.g + uMoonColour.b > 0.001) {
       // THE MOON'S PATH. The one night cue water owns: a broken column of
@@ -2160,7 +2171,10 @@ void main() {
 #ifdef HYDRO_SURF
   recentlyWashed *= mod(floor(uFoamMask / 16.0), 2.0);
   if (recentlyWashed > 0.001) {
-    vec3 wetTerrain = wetGround(terrainC) * sceneLight * 0.78;
+    // Wet sand is a shade darker than dry, not half: 0.78 on top of
+    // wetGround's own darkening put the retained strip a palette step and a
+    // half under the beach in the seat's hazy noon frame.
+    vec3 wetTerrain = wetGround(terrainC) * sceneLight * mix(0.78, 0.94, uLookModel);
     wetTerrain += reflectedSky * (0.035 + recentlyWashed * 0.025);
     colour = mix(colour, wetTerrain, recentlyWashed);
   }
