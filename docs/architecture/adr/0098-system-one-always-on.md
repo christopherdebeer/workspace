@@ -427,6 +427,27 @@ consolidate.
   paused.
 - **Deploys go through `cell-sync`** (git-true, three-way, with a baseline
   committed per cell).
+- **Second audit (perception, 16 acts): 12 correct.** All 4 misses sat at a
+  gate:
+  - two `serves` links at exactly 0.80;
+  - welcome guide → the old `parcland` project (0.77);
+  - a tending source-walk → `playtest` (0.87).
+
+  The misses were reverted by key and labelled. Calibration then moved
+  **project 0.75 → 0.77** and **serves 0.80 → 0.82**: the lowest cuts that meet
+  target precision (0.914 over 70 labels and 0.833 over 36). `relate` held at
+  0.70 (0.98 over 306). One name-level error the sample missed was caught by
+  eye and unlinked by hand: ADR-0084 *"The drive surface"* (the machine's
+  driven mode) had been tagged `project:drive`. The survival check reads the
+  unlink as a negative label.
+- **The chronic backlog moved.** A consolidation cycle run after the backfill
+  scored **delta +1,435** (backlog 10,719 → 9,284):
+  - stale 4,762 → 3,953, because perceived facts now carry authored structure;
+  - unlinked 1,809 → 1,611;
+  - contested 4,115 → 3,692;
+  - Stage B acted on 23 pairs via Jev.
+
+  The previous 14 cycles recorded 0 structural moves.
 
 **Inc 3 — blocked on one tier-1 line.** Always-on perception is a
 `_subscriptions` entry delivering `fact.written` to `@c15r/system1.perceive`
