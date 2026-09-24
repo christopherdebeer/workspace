@@ -309,6 +309,10 @@ export interface HydroFrame {
    *  on one scale, so a bank seen through a shallow is the bank beside it
    *  and not three times brighter. */
   groundGain?: { r: number; g: number; b: number };
+  /** The moon as the water sees it: where it is (unit, toward the moon) and
+   *  its light (linear colour × a 0..1 strength, 0 when it is down, new or
+   *  clouded out). Only the look model's glitter path reads it. */
+  moon?: { x: number; y: number; z: number; r: number; g: number; b: number };
   /** The vehicle, when it is IN the water: absolute x/z, velocity in m/s and
    *  how deep it is wading. Omit (or wadeM 0) and the surface ignores it —
    *  the water only answers a hull that is actually displacing it. */
@@ -356,6 +360,11 @@ export interface HydroTuning {
   scatteringStrength: number;
   /** Broadening and dimming of reflected sky structure. */
   surfaceRoughness: number;
+  /** Optical model. 0 is the shipped look; 1 lets reflection carry the
+   *  scene's own sky (full Fresnel, no second night dimming, a moon glint)
+   *  and confines every water-only term to the water, so the first
+   *  fragments at the waterline are the ground. `?hydrolook=` A/B. */
+  lookModel: number;
 }
 
 export const DEFAULT_HYDRO_TUNING: HydroTuning = {
@@ -372,6 +381,7 @@ export const DEFAULT_HYDRO_TUNING: HydroTuning = {
   absorptionStrength: 1,
   scatteringStrength: 1,
   surfaceRoughness: 1,
+  lookModel: 0,
 };
 
 export interface HydroBuildOptions {

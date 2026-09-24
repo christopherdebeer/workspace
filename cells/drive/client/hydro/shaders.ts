@@ -545,6 +545,9 @@ uniform float uEddyStrength;
 uniform float uAbsorptionStrength;
 uniform float uScatteringStrength;
 uniform float uSurfaceRoughness;
+uniform float uLookModel;
+uniform vec3 uMoonDirection;
+uniform vec3 uMoonColour;
 uniform float uEdgeBlendEnabled;
 uniform vec2 uHydroTexel;
 uniform vec2 uFieldMeters;
@@ -1148,6 +1151,9 @@ void main() {
     : (wetlandKind ? 0.8 : (inlandStandingKind ? 2.0 : 0.7));
   float depthWet = smoothstep(0.08, depthTarget, geometryField.a);
   float shoreWetness = clamp(distanceWet * mix(0.62, 1.0, depthWet), 0.0, 1.0);
+  // LOOK: inland standing water starts AT the ground, like a river does. The
+  // coast keeps its swash, which owns its own wet strip on the surf mesh.
+  if (uLookModel > 0.5 && !coastalKind) shoreWetness *= coverageInterior;
 #ifdef HYDRO_FLOWING
   if (vFlowing > 0.5 && flowingKind) {
     // Bank width follows metres and depth, not 30% of every channel.
@@ -1409,6 +1415,14 @@ void main() {
   waterBlend = mix(1.0, waterBlend, step(0.5, uEdgeBlendEnabled));
 #endif
   colour = mix(dampTerrain, colour, waterBlend);
+  // ── LOOK: WATER-ONLY TERMS STAY ON THE WATER ──
+  // Everything below (tone, grain, lanes, the broad field, the sky's mirror,
+  // the glint) used to act on the whole fragment AFTER the handoff above, so
+  // the fringe that exists to BE the ground still carried up to 46% sky and a
+  // ±14% tonal field — a bright or dark rim drawn exactly on the coverage
+  // contour, which is the field raster made visible. Under the look model
+  // those terms scale with how much water there is.
+  float presence = uLookModel > 0.5 ? waterBlend : 1.0;
 
   // Geometry supplies the cheapest and most important structure signal.
   // Give its crest/trough enough tonal separation to cross a palette rung,
@@ -1417,7 +1431,7 @@ void main() {
     * mix(1.0, 1.18, vFlowing);
   float shoalCrest = (1.0 - vFlowing) * vShoal
     * smoothstep(0.34, 0.94, vSurfaceWave) * 0.075;
-  colour *= 1.0 + bodyTone + shoalCrest;
+  colour *= 1.0 + (bodyTone + shoalCrest) * presence;
 
   float grain = 0.5;
   if (skinWater) {
@@ -1436,7 +1450,7 @@ void main() {
     grain = valueNoise(vAbsoluteXZ * mix(0.28, 0.055, energy)
       + flow * uTime * mix(0.12, 0.55, clamp(length(flow), 0.0, 1.0)));
 #endif
-    colour *= 1.0 + (grain - 0.5) * 0.14 * detailLod;
+    colour *= 1.0 + (grain - 0.5) * 0.14 * detailLod * presence;
   }
   if (nearWater) {
     // ── STREAKS: LONG WITH THE CURRENT, SHORT ACROSS IT ──
@@ -1462,12 +1476,12 @@ void main() {
       acrossStreak * 0.5 + seed * 9.0));
     float streakAmp = mix(smoothstep(3.0, 10.0, uWind.z) * 0.05,
       (0.05 + energy * 0.06), vFlowing);
-    colour *= 1.0 + (streak - 0.5) * streakAmp * structureLod;
+    colour *= 1.0 + (streak - 0.5) * streakAmp * structureLod * presence;
 #ifdef HYDRO_FLOWING
     // A small tonal counterpart lets an eddy read under diffuse light, when
     // its normal alone would disappear. It remains water-coloured and never
     // crosses into white foam.
-    colour *= 1.0 + riverEddyTone * 0.16 * structureLod;
+    colour *= 1.0 + riverEddyTone * 0.16 * structureLod * presence;
 #endif
   }
   // ── A FLAT FIELD DOES NOT SURVIVE THE QUANTISER ──
@@ -1489,7 +1503,7 @@ void main() {
   // collapsed back into one flat cut-out. This remains broad and continuous,
   // but now spans enough value to survive the composite. Rivers keep the
   // quieter half because their narrow width cannot distribute the dither.
-  colour *= 1.0 + (broad - 0.5) * 0.28 * mix(1.0, 0.55, vFlowing);
+  colour *= 1.0 + (broad - 0.5) * 0.28 * mix(1.0, 0.55, vFlowing) * presence;
 
   // ── ONE CONTINUOUS ENVIRONMENT, NOT DAY/NIGHT PALETTES ──
   //
@@ -1532,7 +1546,11 @@ void main() {
   // twice and threw away its hue. Keep a restrained energy floor and a little
   // more reflection at steep camera angles so water belongs to the visible sky
   // without turning into a glossy mirror.
-  float skyEnergy = mix(0.40, 1.0, daylight);
+  // LOOK: the sky colours already carry the hour (applySkyTint mixes toward
+  // NIGHT_SKY by dayF). Dimming them again made the one thing that
+  // distinguishes water at dusk and night — a mirror of a horizon brighter
+  // than moonlit ground — darker than the ground.
+  float skyEnergy = uLookModel > 0.5 ? 1.0 : mix(0.40, 1.0, daylight);
   float facing = clamp(dot(normal, viewDirection), 0.0, 1.0);
   // LOOKING DOWN, THE WATER REFLECTS THE ZENITH. The horizon colour served
   // every view angle, and from the chart that put the bright horizon band
@@ -1567,6 +1585,19 @@ void main() {
   // analytic rapid facets made each one a pale card over the valley.
   fresnel *= mix(1.0, 0.78, surfaceRoughness)
     * mix(1.0, 0.58, vFlowing);
+  if (uLookModel > 0.5) {
+    // LOOK: Schlick's full curve. Water is a 2% mirror head-on and nearly a
+    // whole one at grazing, which is why a distant reach takes the sky's
+    // colour — orange at sunset, pale under haze, the horizon's blue at
+    // night — instead of the same teal at every hour. Roughness still
+    // spreads it (an unresolved chop averages steeper facets) and a river's
+    // broken surface still returns less; the ceiling stays below a mirror so
+    // the palette keeps a body under every reflection.
+    float grazing = 1.0 - facing;
+    fresnel = waterF0 + (1.0 - waterF0) * grazing * grazing * grazing * grazing * grazing;
+    fresnel *= mix(1.0, 0.72, surfaceRoughness) * mix(1.0, 0.82, vFlowing);
+    fresnel = min(fresnel, 0.86) * presence;
+  }
   colour = mix(colour, reflectedSky, fresnel);
 
   // In shallow/turbid water the bed and banks tint the returning light. This
@@ -1586,7 +1617,19 @@ void main() {
     float sparkle = 0.55 + 0.9 * smoothstep(0.45, 0.85, grain);
     colour += vec3(1.0, 0.9, 0.7) * glint * sparkle
       * mix(0.11, 0.04, surfaceRoughness)
-      * daylight * shade * detailLod * mix(1.0, 0.46, vFlowing);
+      * daylight * shade * detailLod * mix(1.0, 0.46, vFlowing) * presence;
+    if (uLookModel > 0.5 && uMoonColour.r + uMoonColour.g + uMoonColour.b > 0.001) {
+      // THE MOON'S PATH. The one night cue water owns: a broken column of
+      // light under the moon, made of the same advected grain as the sun's
+      // sparkle so it moves with the current and the wind.
+      vec3 moonDirection = normalize(uMoonDirection);
+      float moonPower = mix(90.0, 10.0, surfaceRoughness);
+      float moonGlint = pow(max(0.0, dot(reflect(-moonDirection, normal), viewDirection)), moonPower);
+      float moonSparkle = 0.35 + 1.3 * smoothstep(0.5, 0.9, grain);
+      colour += uMoonColour * moonGlint * moonSparkle * mix(0.55, 0.22, surfaceRoughness)
+        * step(0.0, moonDirection.y) * (1.0 - daylight) * shade
+        * mix(1.0, 0.6, vFlowing) * presence;
+    }
   }
 
   // ── FOAM IS PAID FOR ONLY WHERE FOAM CAN EXIST ──

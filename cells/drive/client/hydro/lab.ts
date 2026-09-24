@@ -802,15 +802,60 @@ export async function startHydroLab(): Promise<void> {
   scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xffd48b, 2.25);
   sun.position.set(260, 430, 180); scene.add(sun);
+  // ── THE HOUR, ASKED FOR ──
+  // The lab was lit at one fixed noon, so nothing reported from the seat at
+  // dusk or night could be reproduced here. `?sunalt=` (degrees, the same
+  // meaning as the game's) re-aims the sun on its bearing and walks the
+  // lights and sky toward the game's NIGHT_SKY by the same civil-twilight
+  // weight; `?look=` picks the water's optical model (HydroTuning.lookModel).
+  const labQuery = new URLSearchParams(location.search);
+  const labLook = Math.min(1, Math.max(0, Number(labQuery.get('look') ?? 0) || 0));
+  const labSunAlt = labQuery.has('sunalt') ? Number(labQuery.get('sunalt')) : null;
+  const labRef = { sun: sun.color.clone(), sunI: sun.intensity, sky: hemi.color.clone(), hemiI: hemi.intensity,
+    up: sun.position.y / sun.position.length() };
+  const labZenith = { r: hemi.color.r, g: hemi.color.g, b: hemi.color.b };
+  const labSceneLight = { r: 1, g: 1, b: 1 };
+  const labMoon = { x: -.45, y: .5, z: -.74, r: 0, g: 0, b: 0 };
+  let labNight = 0, labLow = 0;
+  const labSunDir = { x: sun.position.x, y: sun.position.y, z: sun.position.z };
+  if (labSunAlt !== null && Number.isFinite(labSunAlt)) {
+    const a = labSunAlt * Math.PI / 180;
+    const flat = Math.hypot(260, 180);
+    const dayF = Math.min(1, Math.max(0, (labSunAlt + 6) / 9));
+    labNight = 1 - dayF;
+    labLow = Math.min(1, Math.max(0, 1 - labSunAlt / 12));
+    // The light keeps coming from above at night (moon rake), as main does.
+    const lightAlt = labSunAlt < 1.2 ? Math.atan2(.36, .93) : a;
+    sun.position.set(260 / flat * Math.cos(lightAlt) * 500, Math.sin(lightAlt) * 500, 180 / flat * Math.cos(lightAlt) * 500);
+    const warm = new THREE.Color(0xffd48b).lerp(new THREE.Color(0xff7a2e), labLow * .75);
+    sun.color.copy(dayF > .02 ? warm : new THREE.Color(0x9fb4d8));
+    sun.intensity = dayF > .02 ? labRef.sunI * Math.max(0, Math.sin(a)) / Math.sin(Math.atan2(430, flat)) * dayF : .2 * .6;
+    const nightSky = new THREE.Color(.062, .074, .118), nightZenith = new THREE.Color(.016, .025, .056);
+    hemi.color.copy(nightSky).lerp(labRef.sky, dayF);
+    hemi.intensity = labRef.hemiI * (.18 + .82 * dayF);
+    const bg = new THREE.Color(.062, .074, .118).lerp(new THREE.Color(0x0b1715), dayF);
+    if (labLow > 0 && dayF > 0) bg.lerp(new THREE.Color(.55, .34, .22), labLow * dayF * .6);
+    (scene.background as THREE.Color).copy(bg);
+    scene.fog!.color.copy(bg);
+    const z = nightZenith.clone().lerp(new THREE.Color(.05, .12, .28), dayF);
+    labZenith.r = z.r; labZenith.g = z.g; labZenith.b = z.b;
+    const refUp = labRef.up;
+    const upNow = Math.max(0, sun.position.y / sun.position.length());
+    for (const k of ['r', 'g', 'b'] as const) {
+      const ref = labRef.sunI * refUp * labRef.sun[k] + labRef.hemiI * labRef.sky[k];
+      labSceneLight[k] = (sun.color[k] * sun.intensity * upNow + hemi.color[k] * hemi.intensity) / Math.max(ref, 1e-3);
+    }
+    labSunDir.x = 260 / flat * Math.cos(a); labSunDir.y = Math.sin(a); labSunDir.z = 180 / flat * Math.cos(a);
+    labMoon.r = .73 * labNight; labMoon.g = .79 * labNight; labMoon.b = .91 * labNight;
+  }
   // Hydro receives terrain albedo, while MeshStandardMaterial shades that
   // albedo with the lab lights. Supply the same reference-noon gain that
   // production computes in main.ts or the isolated water is reviewed at
   // roughly half the terrain luminance and every bank looks like a dark cut.
-  const sunUp = sun.position.y / sun.position.length();
   const labGroundGain = {
-    r: (sun.color.r * sun.intensity * sunUp + hemi.color.r * hemi.intensity) / Math.PI,
-    g: (sun.color.g * sun.intensity * sunUp + hemi.color.g * hemi.intensity) / Math.PI,
-    b: (sun.color.b * sun.intensity * sunUp + hemi.color.b * hemi.intensity) / Math.PI,
+    r: (labRef.sun.r * labRef.sunI * labRef.up + labRef.sky.r * labRef.hemiI) / Math.PI,
+    g: (labRef.sun.g * labRef.sunI * labRef.up + labRef.sky.g * labRef.hemiI) / Math.PI,
+    b: (labRef.sun.b * labRef.sunI * labRef.up + labRef.sky.b * labRef.hemiI) / Math.PI,
   };
   const labSkyColour = { r: hemi.color.r, g: hemi.color.g, b: hemi.color.b };
   const labCloudTexture = new THREE.DataTexture(
@@ -836,8 +881,8 @@ export async function startHydroLab(): Promise<void> {
       uCsScale: { value: CLOUD_SCALE },
       uCsMpp: { value: 0 },
       uCsSunDisc: { value: new THREE.Vector3(.98, .72, .38) },
-      uCsLow: { value: 0 },
-      uCsNight: { value: 0 },
+      uCsLow: { value: labLow },
+      uCsNight: { value: labNight },
     },
   };
 
@@ -948,6 +993,7 @@ export async function startHydroLab(): Promise<void> {
     turbulenceStrength: number('turbulence'), eddyStrength: number('eddies'),
     absorptionStrength: number('absorption'), scatteringStrength: number('scattering'),
     surfaceRoughness: number('roughness'),
+    lookModel: labLook,
   });
   const apply = (): void => {
     if (!hydro) return;
@@ -1226,10 +1272,13 @@ export async function startHydroLab(): Promise<void> {
       worldOrigin: { x: 0, y: fixture.originY, z: 0 },
       wind: { x: Math.cos(angle), z: Math.sin(angle), speedMps: number('wind') },
       rain: number('rain'),
-      sunDirection: { x: sun.position.x, y: sun.position.y, z: sun.position.z },
+      // The TRUE sun, as production passes SUN_DIR: below the horizon at
+      // night even though the light itself rakes from above.
+      sunDirection: labSunDir,
       skyColour: labSkyColour,
-      zenithColour: labSkyColour,
-      sceneLight: { r: 1, g: 1, b: 1 },
+      zenithColour: labSunAlt === null ? labSkyColour : labZenith,
+      sceneLight: labSceneLight,
+      moon: labMoon,
       groundGain: labGroundGain,
       terrainColour: { r: .12, g: .16, b: .11 },
       terrainField: terrainField ? {

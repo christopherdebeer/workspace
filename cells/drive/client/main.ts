@@ -3995,6 +3995,12 @@ function publishHydroShoreBreakLines(t: HeightTile, key: string): void {
  * tile anyway, so there is nothing on screen to see it happen to.
  */
 const hydroFrameOrigin = { x: 0, y: 0, z: 0 };
+/** `?hydrolook=` — the water's optical model (HydroTuning.lookModel). */
+const HYDRO_LOOK = clamp(qsNum('hydrolook', 0), 0, 1);
+/** The moon, for the water's glitter path: the TRUE lunar direction (the
+ *  sky's own `moonDir`, never the chart's stand-in light) and its light as a
+ *  0..1 share of a clear full moon. */
+const hydroFrameMoon = { x: 0, y: 1, z: 0, r: 0, g: 0, b: 0 };
 const hydroFrameSky = { r: 0, g: 0, b: 0 };
 const hydroFrameTerrain = { r: 0, g: 0, b: 0 };
 /** THE LIGHT THE GROUND GETS, for the water (HydroFrame.sceneLight). The
@@ -4025,6 +4031,13 @@ function hydroLightFeed(): void {
   hydroFrameLight.r = ch('r'); hydroFrameLight.g = ch('g'); hydroFrameLight.b = ch('b');
   const z = skyMat.uniforms.uZenith.value as THREE.Vector3;
   hydroFrameZenith.r = z.x; hydroFrameZenith.g = z.y; hydroFrameZenith.b = z.z;
+  const md = (skyMat.uniforms.moonDir as { value: THREE.Vector3 } | undefined)?.value;
+  const chart = camMode === 'top';
+  const lunarShare = clamp(moon.intensity / (MOON_I * (chart ? MOON_CHART : 1)), 0, 1);
+  if (md) { hydroFrameMoon.x = md.x; hydroFrameMoon.y = md.y; hydroFrameMoon.z = md.z; }
+  hydroFrameMoon.r = moon.color.r * lunarShare;
+  hydroFrameMoon.g = moon.color.g * lunarShare;
+  hydroFrameMoon.b = moon.color.b * lunarShare;
 }
 /** The world's wind, written where the sky and the grass already agree on it.
  *  12km/h is the calm-day default the deck drift uses. */
@@ -4084,6 +4097,7 @@ function hydroTick(nowMs: number): void {
     sceneLight: hydroFrameLight,
     zenithColour: hydroFrameZenith,
     groundGain: hydroFrameGain,
+    moon: hydroFrameMoon,
     terrainColour: hydroFrameTerrain,
     // The ground's colour AT THE FRAGMENT, from the grass's own field (see
     // HydroFrame.terrainField): the shallows at a crossing wore the road's
@@ -4471,6 +4485,10 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
       scheduleBuild: (job) =>
       new Promise((resolve, reject) => { hydroJobs.push({ job, resolve, reject }); }) });
     hydroSys.setDebugView(hydroView);
+    // THE WATER'S OPTICS, A/B. `?hydrolook=1` lets reflection carry the
+    // scene's own sky and keeps water-only terms off the waterline (see
+    // HydroTuning.lookModel); 0 is the shipped look, exactly.
+    hydroSys.setTuning({ lookModel: HYDRO_LOOK });
     worldGroup.add(hydroSys.object3d);
     // THE OLD PLANE STANDS DOWN, rather than being deleted. Two renderers for
     // one sea is the failure to avoid, and a flag that can turn the new one off

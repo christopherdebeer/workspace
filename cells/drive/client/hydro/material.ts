@@ -38,6 +38,9 @@ export interface HydroFrameUniforms {
   uAbsorptionStrength: { value: number };
   uScatteringStrength: { value: number };
   uSurfaceRoughness: { value: number };
+  uLookModel: { value: number };
+  uMoonDirection: { value: THREE.Vector3 };
+  uMoonColour: { value: THREE.Vector3 };
 }
 
 export interface HydroTileTextures {
@@ -92,6 +95,9 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uAbsorptionStrength: { value: 1 },
     uScatteringStrength: { value: 1 },
     uSurfaceRoughness: { value: 1 },
+    uLookModel: { value: 0 },
+    uMoonDirection: { value: new THREE.Vector3(0, 1, 0) },
+    uMoonColour: { value: new THREE.Vector3(0, 0, 0) },
   };
 }
 
@@ -295,6 +301,9 @@ export function createHydroMaterial(
       uAbsorptionStrength: frame.uAbsorptionStrength,
       uScatteringStrength: frame.uScatteringStrength,
       uSurfaceRoughness: frame.uSurfaceRoughness,
+      uLookModel: frame.uLookModel,
+      uMoonDirection: frame.uMoonDirection,
+      uMoonColour: frame.uMoonColour,
       uEdgeBlendEnabled: { value: edgeBlend ? 1 : 0 },
     },
     // ── A SURFACE YOU CAN BE UNDERNEATH ──
