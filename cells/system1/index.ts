@@ -642,7 +642,7 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
   const tick = timer();
   const th = await loadThresholds(token);
   const limit = Math.min(input.limit ?? 60, 150);
-  const sug = (await gw(token, 'workspace.suggestions', { limit, ...(input.offset ? { offset: input.offset } : {}) }, 'read')) as {
+  const sug = (await gw(token, 'workspace.suggestions', { limit, whole: true, ...(input.offset ? { offset: input.offset } : {}) }, 'read')) as {
     suggestions?: Array<{ from: string; to: string; score?: number; pairHash?: string; identical?: boolean; degenerate?: string; leasedBy?: string | null }>;
     total?: number;
   };
