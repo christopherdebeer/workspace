@@ -58,6 +58,9 @@ export const LATEST_KEY = `${NS}/latest`;
 export const CALIBRATION_KEY = `${NS}/calibration`;
 export const RUN_PREFIX = `${NS}/run/`;
 export const LABEL_PREFIX = `${NS}/label/`;
+/** The kill switch (ADR-0098 cost + failure controls): `{enabled:false}` stops
+ *  every tool and every self-chaining batch at its next step. */
+export const CONFIG_KEY = `${NS}/config`;
 
 /* ── thresholds: defaults, overridden by the learner's calibration fact ───── */
 
@@ -948,6 +951,12 @@ const jobs = cellJobs({
   },
 });
 
+async function assertEnabled(token: unknown): Promise<void> {
+  if (typeof token !== 'string' || !token) return; // the runner's own token check reports it
+  const cfg = (await gw(token, 'workspace.peek', { key: CONFIG_KEY }, 'read').catch(() => null)) as { value?: { enabled?: boolean } } | null;
+  if (cfg?.value?.enabled === false) throw new Error(`System One is disabled (${CONFIG_KEY}.enabled=false)`);
+}
+
 const RUNNERS: Record<string, (args: Record<string, unknown>) => Promise<unknown>> = {
   perceive: (a) => perceive(a as PerceiveInput),
   sweep_suggestions: (a) => sweepSuggestions(a as SweepInput),
@@ -1076,6 +1085,7 @@ export const handler = async (
     const job = (await jobs.getJob(event.__job)) as { input?: { tool: string; args: Record<string, unknown> } } | undefined;
     if (!job?.input) return;
     try {
+      if (job.input.tool !== 'revert') await assertEnabled(job.input.args.token);
       const out = await RUNNERS[job.input.tool](job.input.args);
       // Self-continuation (a backfill is thousands of items; one job is one
       // batch): `chain` counts down; the next batch picks up where this ended.
@@ -1115,6 +1125,7 @@ export const handler = async (
     }
     const run = RUNNERS[name];
     if (!run) return json(404, { error: `unknown tool ${name}` });
+    if (name !== 'revert') await assertEnabled(args.token); // revert must work while disabled
     if (args.async) {
       if (!SELF_FUNCTION) return json(400, { error: 'async unavailable: function name unknown' });
       if (!args.token) return json(400, { error: 'token is required' });
