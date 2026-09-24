@@ -215,3 +215,10 @@ describe('isDecisionYield (the judge rail never skips work)', () => {
     expect(isDecisionYield(undefined)).toBe(false);
   });
 });
+
+describe('self-invoke hop cap (AWS recursive-loop detection)', () => {
+  const { MAX_HOPS } = jest.requireActual('../cells/system1/index');
+  it('stays well under the 16-hop limit', () => {
+    expect(MAX_HOPS).toBeLessThan(16);
+  });
+});

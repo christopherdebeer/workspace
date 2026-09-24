@@ -41,6 +41,10 @@ const TABLE = process.env.SUBSTRATE_TABLE || '';
 const GATEWAY_MCP = process.env.GATEWAY_MCP_URL || 'https://parc.land/mcp';
 const JOBS_TABLE = process.env.TABLE_NAME || '';
 let SELF_FUNCTION = '';
+/** A job keeps looping batches in-process for this long (Lambda timeout 300s). */
+const JOB_BUDGET_MS = 170_000; // + one batch (≤~90s) stays under the 300s timeout
+/** Self-invoke hops per chain — AWS drops a recursive chain past 16. */
+export const MAX_HOPS = 8;
 
 /** The declaration version every judgment + act is stamped with. Bump when the
  *  questions or the materialization mapping change (re-perception supersedes). */
@@ -1061,7 +1065,7 @@ export function continuation(tool: string, args: Record<string, unknown>, out: u
 
 const tokenProp = { type: 'string', description: 'Bearer the organ acts as (read:workspace write:workspace, plus @c15r/jev access)' };
 const modeProp = { type: 'string', enum: ['shadow', 'act'], description: 'shadow (default): write judgment facts only; act: also materialize tags/type/edges' };
-const chainProp = { type: 'number', description: 'With async: after this batch, submit up to N follow-on batches (perceive continues the cursor; sweep skips past held pairs)' };
+const chainProp = { type: 'number', description: 'With async: up to N follow-on batches. They run in-process within one invocation (~170s budget); only then hand off to a fresh job, at most 8 hops (AWS recursive-loop detection drops self-invoke chains past 16).' };
 const asyncProp = { type: 'boolean', description: 'Submit-and-poll (returns {jobId}; poll fetch) — for runs that outrun the ~30s edge cap' };
 
 const TOOLS = [
@@ -1159,17 +1163,33 @@ export const handler = async (
     const job = (await jobs.getJob(event.__job)) as { input?: { tool: string; args: Record<string, unknown> } } | undefined;
     if (!job?.input) return;
     try {
-      if (!ALWAYS_ALLOWED.has(job.input.tool)) await assertEnabled(job.input.args.token);
-      const out = await RUNNERS[job.input.tool](job.input.args);
-      // Self-continuation (a backfill is thousands of items; one job is one
-      // batch): `chain` counts down; the next batch picks up where this ended.
-      const next = continuation(job.input.tool, job.input.args, out);
-      let nextJob: string | undefined;
-      if (next) {
-        nextJob = randomUUID().slice(0, 13);
-        await jobs.submit(nextJob, { input: { tool: job.input.tool, args: next } });
+      // Batches run IN-PROCESS until the time budget is spent; only then does
+      // the job hand off to a fresh invocation, at most MAX_HOPS times. AWS
+      // Lambda's recursive-loop detection drops a self-invoke chain past 16
+      // hops (it did, twice, on 2026-09-24 when every batch self-invoked), so
+      // hops are the scarce resource, not batches.
+      const started = Date.now();
+      let args = job.input.args;
+      let out: unknown;
+      let batches = 0;
+      let next: Record<string, unknown> | null = null;
+      for (;;) {
+        if (!ALWAYS_ALLOWED.has(job.input.tool)) await assertEnabled(args.token);
+        out = await RUNNERS[job.input.tool](args);
+        batches++;
+        next = continuation(job.input.tool, args, out);
+        if (!next || Date.now() - started > JOB_BUDGET_MS) break;
+        args = next;
+        next = null;
       }
-      await jobs.putJob(event.__job, { status: 'done', out: nextJob ? { ...(out as object), nextJob } : out });
+      let nextJob: string | undefined;
+      const hop = Number(job.input.args.hop ?? 0);
+      if (next && hop + 1 < MAX_HOPS) {
+        nextJob = randomUUID().slice(0, 13);
+        await jobs.submit(nextJob, { input: { tool: job.input.tool, args: { ...next, hop: hop + 1 } } });
+      }
+      const summary = { ...(out as object), batches, hop, ...(nextJob ? { nextJob } : next ? { stopped: `hop cap ${MAX_HOPS} reached; resume with the next run's args` } : {}) };
+      await jobs.putJob(event.__job, { status: 'done', out: summary });
     } catch (e) {
       await jobs.putJob(event.__job, { status: 'error', error: (e as Error).message });
     }
