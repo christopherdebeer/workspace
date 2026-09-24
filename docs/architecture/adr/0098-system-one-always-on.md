@@ -1,7 +1,9 @@
 # ADR-0098 — System One, always on: act-by-default perception, tending, and a learner that closes
 
-- **Status:** Proposed 2026-09-24 — design; no platform integration built.
-  `@c15r/jev` exercised live against real slice facts on 2026-09-24 (below).
+- **Status:** Accepted 2026-09-24 — Inc 0–2 and Inc 4's learner built and
+  running on prod as tier-2 cells (`@c15r/jev`, `@c15r/system1`,
+  `@c15r/consolidate`); Inc 3's always-on trigger awaits one tier-1 change
+  (see *Implementation status*).
 - **Amends:** ADR-0097 (Jev as a semantic judgment layer). 0097's research,
   cost model, and data-boundary rules stand. Its *posture* is overturned:
   0097 proposed observation-only judgments with humans or policy ratifying later.
@@ -351,6 +353,65 @@ extending the vocabulary.
 Increments 1–2 are about a day's work plus under $2 of Jev spend. By increment
 2 the chronic backlog should become a solved problem, or its remaining defects
 should become visible and specific. Either is better than a 60th honest zero.
+
+## Implementation status (2026-09-24)
+
+Everything below runs on prod. All of it is git-true under `cells/` and gated
+by `tests/system1.test.ts` and `tests/consolidate-*.test.ts`.
+
+**Inc 0 — `@c15r/jev`.**
+- The default model is pinned to `jev-1.13.0`.
+- Score `criteria` objects are normalised to an ordered array, with the
+  descriptions folded into the instructions (the 422 is gone).
+- `decide_many` fans out ≤200 states at concurrency 12.
+- Every call is metered into the cell's table, and a daily token budget
+  (`usage` / `set_budget`) refuses calls with 429 past the cap.
+
+**Inc 1–2 — `@c15r/system1`.** The organ acts as a scoped principal, like
+consolidate.
+
+| tool | does |
+|---|---|
+| `perceive` | project (choice over the 36 live project facts, slugged from their `proj_` prefix), kind, actionable, durability, `serves:<goal>`, type-if-untyped → tags + `belongsTo`/`serves` edges at inferred strength 0.6. Tag rewrites are CAS-guarded and keep the fact's `updatedAt` (`import.updatedAt`), so perception never fakes recency. |
+| `sweep_suggestions` | Byte-identical and same-source pairs are pruned (declined) **without** a judgment, per the suggestions contract. Every other pair gets one relation `choice`. It ratifies above θ, declines `unrelated` above θ, and holds pairs where one fact names the other's key (an asset and its capture). |
+| `revert` / `label` / `calibrate` | One-call undo of a run. Audit labels. The learner (below). |
+| `drive` | The judge rail for driven machine runs: step → Jev `choice` over the yield's branches → `decide` above θ, else stop and return the yield. |
+| async + `chain` | A job submits its own next batch: perceive continues the cursor, and sweep skips past held pairs. |
+
+**Measured, and what changed because of it:**
+- **Judging is not the cost; writing is.** The first act sweep of 37 pairs
+  took 2.6 s to judge and 45 s to ingest one judgment fact per pair. Those
+  facts were also embedded, so they minted new `similarTo` suggestions: the
+  queue grew 16,542 → 16,703 while the organ drained it, and the top contested
+  pairs became the organ's own judgments.
+- **Fix:** all bookkeeping lives under `_system1/`, which the vector indexer
+  and the write reactor both skip, and the judgments ride inside the one
+  run-log fact. The 58 legacy facts were retired. A 40-fact perceive batch now
+  takes 4.5 s end to end (load 1.2 s, judge 3.3 s, ~2.8k input tokens per fact).
+- **Salience guard:** `judgment`, `system1-run` and `system1-label` are pinned
+  low in `_config/salience.typePriors`, so the organ's evidence never
+  out-ranks what it annotates.
+- **Consolidation Stage B on Jev:** the first cycle had Jev answer 39 of 40
+  pairs. It acted on 6 above the 0.9 floor; 30 more were `independent` or
+  `subsumes` just under it. With Stage A's 5 ratifications and 5 dangling
+  unlinks, the cycle scored **delta +236**, the first positive delta after 14
+  flat or negative cycles. The per-pair loop now runs in a pool of 8, reuses
+  the batch's peeks, and tallies why each pair went where it went. The delta
+  also falls back to summing the prior backlog's parts, because driven-tending
+  audits carry no `total`.
+- **System Two as teacher, first pass:** a review of a 40-fact `kb/` shadow run
+  found project assignment ~85–90% plausible and `serves` loose near 0.75. The
+  seed calibration (`_system1/calibration`) set project to 0.75 and serves to
+  0.8. `calibrate` moves the gates from there on survival and audit labels.
+
+**Inc 3 — blocked on one tier-1 line.** Always-on perception is a
+`_subscriptions` entry delivering `fact.written` to `@c15r/system1.perceive`
+with `grants: {read, write}`. The reactor mints the per-run owner token only
+for an allow-listed set of cells (`models`, `run`, `lit`, in
+`services/workspace/event-handlers.ts`). Adding `system1` to that list widens
+a delegation, so it is left to the owner. Until then the organ runs as driven
+chains under a caller-minted token. That is the same posture consolidation
+has today.
 
 ## Consequences
 
