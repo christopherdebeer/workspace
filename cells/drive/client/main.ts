@@ -34064,7 +34064,15 @@ for (const sx of [-0.62, 0.62]) {
 // tarmac (the "slab" at the Suresnes cul-de-sac was this, not a junction
 // box). Sixteen candela over seventy metres is a lamp you can tell is on.
 const HEAD_DAY = { i: 16, d: 70 }, HEAD_NIGHT = { i: 260, d: 230 };
-const headSpot = new THREE.SpotLight(0xffb87b, HEAD_DAY.i, HEAD_DAY.d, 0.52, 0.65, 1.0);
+// THE LAMP IS WARM-WHITE, NOT AMBER. Measured on the Senqu at night from the
+// chase seat: the orange "embers" in the pool were the sward's tufts — with
+// the near sward's blades shrunk (?swardtuft=0.05) the pool was a smooth
+// wedge; the substrate and the shrubs changed nothing — each flat-shaded
+// blade facet that happened to face the lamp taking 0xffb87b at 260 cd, which
+// on green reads as a saturated orange fleck through the quantiser. A halogen
+// is warm, not amber; and the tail decays a little faster than 1/d so the
+// far bank of a river 150 m off is not scattered with lit scrub.
+const headSpot = new THREE.SpotLight(0xffd9ae, HEAD_DAY.i, HEAD_DAY.d, 0.52, 0.65, 1.25);
 /**
  * The beam occludes. A barrier stripes it, a trunk throws a shadow down the
  * road, a sign's shadow races past — none of which existed, because the light
