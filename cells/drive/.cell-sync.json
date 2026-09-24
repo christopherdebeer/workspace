@@ -1,8 +1,8 @@
 {
   "cell": "c15r/drive",
   "cellId": "drive-dcfd1204",
-  "treeVersion": "tree:b9949ae3dc273d1d499dbb390bb7ebe510c3dd0723c0a2eff152e9ccf37ddec3",
-  "syncedAt": "2026-09-24T13:25:02.960Z",
+  "treeVersion": "tree:7a1f003de193beaf22e061690f46e1b9d1d1c05182691eb07c2e4a60ba4fb151",
+  "syncedAt": "2026-09-24T13:31:42.632Z",
   "files": {
     "API-AUDIT-2026-09-11.md": "sha256:4520f25ecd5e2fbd159e3870ed438bd1b03c4ed36def3d4da2bcf70f6aab50c4",
     "CLAUDE.md": "sha256:5adeb921b5509615a4fb23e1cdc8f587e63148b1829813c795de9c103a5a8f57",
@@ -82,7 +82,7 @@
     "client/hydro/render-cutover.test.ts": "sha256:2df80f6bbc9b4a9fdf21ba3e107ba6b0aee2b83b0d52620c227f43d46f5a48a4",
     "client/hydro/resolution.test.ts": "sha256:1751a4a815c80d946a4de9f1f33ca3753a40cc9d803cdd41ed9cb15a3011f418",
     "client/hydro/scene-sky.ts": "sha256:f8a36a803e0237f1becee324e2d9d4ab270d6382c8cec0b4f0bac39b5f718181",
-    "client/hydro/shaders.ts": "sha256:adc8a3a20e273ac7fa92d9b5ae56659835a7dfaff0f1726dda64908f28226c71",
+    "client/hydro/shaders.ts": "sha256:bcabe30c20c944e79e69de2d307411fda8efe32bf4bd8c548069cd0be5014cb3",
     "client/hydro/shore-contact.ts": "sha256:71c80414e7f25ee06b6c2d728763a58996f1274f84c888c75914121728d9c96f",
     "client/hydro/shore-contour.ts": "sha256:3ca1f2fab21b8fbc804b8adb70d956370411d28ecd09f343cea888472d01967c",
     "client/hydro/system.ts": "sha256:665761c458d1e6e9a90d7ab725f0884baf04c7119f759b0c11ec4b78ec69033b",
