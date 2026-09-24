@@ -56801,6 +56801,9 @@ async function runSheet(): Promise<void> {
     if (camMode !== 'god') setCam('god');
     if (!WX_PIN) { wx.next = 'clear'; wx.at = performance.now() + 600000; wx.cloud = WX.clear.cloud; wx.rain = WX.clear.rain; }
     await sheetSleep(1600);          // the camera's flight into place
+    // …and the water under it: a god camera that just moved can put fresh
+    // tiles in view, and a frame taken while they build has no river in it.
+    for (let i = 0; i < 40 && (hydroSys?.stats().pendingBuilds ?? 0) > 0; i++) await sheetSleep(250);
     for (const hour of SHEET_HOURS) {
       timeMode = TIME_MODES.indexOf(hour);
       await sheetSleep(1400);        // sky, shadows and the grade follow the clock
@@ -56823,7 +56826,7 @@ async function runSheet(): Promise<void> {
   }
   // ── STITCH ──
   const fh = rows[0]?.frames[0]?.height ?? 0;
-  const cols = looks.length, gap = 4, left = 64, top = 58;
+  const cols = looks.length, gap = 4, left = 64, top = 76;
   const out = document.createElement('canvas');
   out.width = left + cols * (SHEET_W + gap);
   out.height = top + rows.length * (fh + gap);
@@ -56834,7 +56837,7 @@ async function runSheet(): Promise<void> {
   st.lines.forEach((l, i) => g.fillText(l, 6, 4 + i * 13));
   g.fillStyle = '#9fb3a8';
   g.fillText(`build ${build} · ${new Date().toISOString().slice(0, 16)}Z · clear sky`, 6, 43);
-  looks.forEach((lk, c) => g.fillText(lk ? 'B · hydrolook=1' : 'A · shipped', left + c * (SHEET_W + gap) + 4, top - 12));
+  looks.forEach((lk, c) => g.fillText(lk ? 'B · hydrolook=1' : 'A · shipped', left + c * (SHEET_W + gap) + 4, top - 16));
   rows.forEach((r, i) => {
     const y = top + i * (fh + gap);
     g.fillStyle = '#e8e2d0'; g.fillText(r.hour, 6, y + 4);
