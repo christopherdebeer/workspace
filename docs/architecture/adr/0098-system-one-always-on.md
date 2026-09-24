@@ -459,15 +459,17 @@ consolidate.
 
   The previous 14 cycles recorded 0 structural moves.
 
-**Cadence: the existing daily machine runs, no new schedule.**
-- The daily driven tending routine already reads `protocol/tending` as its
-  source of truth. **v3.3** adds Phase 1.5:
-  - mint a session token, then `agent:system1` and `agent:consolidate`
-    children;
-  - `calibrate`, then start the perceive and sweep chains;
-  - drive `machine/consolidate` **every** run, not only as a 36h rescue;
-  - late in the run, act as teacher: `audit_sample` → `label` → `revert`
-    the wrong ones → `calibrate`.
+**Cadence: System One is ambient; no agent triggers it.**
+- A brief detour, `protocol/tending` v3.3, had the daily driver run System
+  One: mint tokens, start chains, audit, calibrate. That was reverted the same
+  day as **v3.4**, because it defeats the design. System One is meant to
+  happen without explicit triggering.
+- Under v3.4 the tending driver never calls, schedules, calibrates or pauses
+  System One. It only sees System One's output, and corrects a wrong tag or
+  edge the ordinary way. A removed edge is already a negative label for the
+  learner.
+- The only trigger System One is meant to have is the write reactor (Inc 3,
+  below). Until that lands it does not run.
 - `machine/consolidate`'s Adjudicate brief is rewritten in place (the node
   fact, CAS). The machine is not redefined, so its hand-patched projected
   vocabulary is not clobbered. The brief now runs the organ and has the
