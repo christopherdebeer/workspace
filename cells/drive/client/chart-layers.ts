@@ -194,8 +194,9 @@ export const HYDRO_VIEWS: ReadonlyArray<{ view: 'coverage' | 'shore' | 'depth' |
   { view: 'coast' as const, name: 'COAST', legend: [{ name: 'SHELTERED', hex: '#bf3326' }, { name: 'EXPOSED', hex: '#26b359' }, { name: 'DRY', hex: '#404040' }] },
 ]);
 /** The X-RAY views, in cycle order. Mode numbers are main.ts's XRAY_MODES. */
-export const XRAY_VIEWS: ReadonlyArray<{ mode: 1 | 2; name: string; legend: ReadonlyArray<{ name: string; hex: string }> }> = Object.freeze([
+export const XRAY_VIEWS: ReadonlyArray<{ mode: 1 | 2 | 3; name: string; legend: ReadonlyArray<{ name: string; hex: string }> }> = Object.freeze([
   { mode: 1 as const, name: 'DEPTH', legend: [{ name: 'NEAR', hex: '#1e1e1e' }, { name: 'FAR', hex: '#ffffff' }, { name: 'SKY', hex: '#142242' }] },
+  { mode: 3 as const, name: 'FOCUS', legend: [{ name: 'SHARP', hex: '#2faaa0' }, { name: 'NEAR BLUR', hex: '#ec9b43' }, { name: 'FAR BLUR', hex: '#8d78e3' }, { name: 'PROTECTED', hex: '#f5e8ad' }, { name: 'SKY', hex: '#142242' }] },
   { mode: 2 as const, name: 'WIRE', legend: [{ name: 'EVERY MESH AS WIREFRAME', hex: '#b4b4b4' }] },
 ]);
 

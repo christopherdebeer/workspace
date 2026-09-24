@@ -21,7 +21,7 @@ import type { HydroShoreSegment } from './hydro/shore-contour';
 import * as THREE from 'three';
 import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, CLIM_G, ClimateField, GROUND_RAMPS, altBandAt, aspectLift, climPick,
   climPickRow, krummholz, siteAt, swardLift, treelineAt, type ClimateSample, type SiteClimate } from './climate';
-import { createAudio, type ImpactKind } from './audio';
+import { createAudio, tyreCornerSlip, ambientBed, type ImpactKind } from './audio';
 import { coastKm } from './coast';
 import { clamp } from './num';
 import { mulberry32, type Rng } from './rng';
@@ -6387,11 +6387,10 @@ function depthVisible(px3: number, py3: number, pz3: number): boolean {
   return false;
 }
 // ── X-RAY: the debug eyes, drivable ────────────────────────────────
-// 1 = DEPTH: the 40x88 map the HUD's occlusion verdicts actually read,
-// painted under the live instruments so a wrong pin can be argued with on
-// the spot. 2 = WIRE: the world stripped to its meshes — the geometry the
-// truck is actually colliding with, not the paint over it.
-const XRAY_MODES = ['OFF', 'DEPTH', 'WIRE'] as const;
+// DEPTH samples the scene's pixel depth at art resolution, scaled around
+// the live focus; FOCUS shows the actual signed blur field; WIRE shows geometry.
+// The 40x88 CPU sensor stays separate as the autofocus input.
+const XRAY_MODES = ['OFF', 'DEPTH', 'WIRE', 'FOCUS'] as const;
 let xrayMode = 0;
 (window as unknown as { __xray?: object }).__xray = (mode?: string): object => {
   if (mode === undefined) return { mode: XRAY_MODES[xrayMode], modes: [...XRAY_MODES] };
@@ -6780,6 +6779,7 @@ const compMat = new THREE.ShaderMaterial({
     uDofMode: { value: 2 },
     uDofFocusDist: { value: 40 },
     uDofMaxPx: { value: DOF_RADII[dofRadiusAt] },
+    uDofNearScale: { value: 1 },
     uDofTaps: { value: DOF_TAPS[dofQuality] },
     // Metres a pixel on the chart (shared by reference): what the aerial
     // perspective fades on past the fine world. See `deep` below.
@@ -7205,6 +7205,7 @@ const dofPrepMat = new THREE.ShaderMaterial({
     invPV: { value: new THREE.Matrix4() }, camPos: { value: new THREE.Vector3() },
     uFocusP: { value: new THREE.Vector3() }, uFocusN: { value: new THREE.Vector3(0, 0, -1) },
     uFocusDist: { value: 40 }, uMode: { value: 0 }, uMaxPx: { value: 7 },
+    uDofNearScale: { value: 1 },
     uTiltAmt: { value: 0 }, uTiltSharp: { value: 34 }, uTiltBlur: { value: 92 },
     uTiltNearScale: { value: 1 },
     uTiltSky: { value: 0.7 }, uTanHalfFov: { value: Math.tan((55 * Math.PI) / 360) },
@@ -7214,7 +7215,7 @@ const dofPrepMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform sampler2D sceneTex; uniform sampler2D depthTex;
     uniform mat4 invPV; uniform vec3 camPos; uniform vec3 uFocusP; uniform vec3 uFocusN;
-    uniform float uFocusDist; uniform float uMode; uniform float uMaxPx;
+    uniform float uFocusDist; uniform float uMode; uniform float uMaxPx; uniform float uDofNearScale;
     uniform float uTiltAmt; uniform float uTiltSharp; uniform float uTiltBlur; uniform float uTiltNearScale;
     uniform float uTiltSky; uniform float uTanHalfFov; uniform vec2 uPix; uniform float uSkyD;
     varying vec2 vUv;
@@ -7233,7 +7234,8 @@ const dofPrepMat = new THREE.ShaderMaterial({
           if (t >= uSkyD) radius = uMaxPx;
           else {
             float axial = max(dot(wp - camPos, uFocusN), 0.25);
-            radius = clamp((axial - uFocusDist) / axial, -1.0, 1.0) * uMaxPx;
+            float rel = (axial - uFocusDist) / axial;
+            radius = clamp(rel * (rel < 0.0 ? uDofNearScale : 1.0), -1.0, 1.0) * uMaxPx;
             if (abs(radius) < 0.35) radius = 0.0; // one sub-pixel sharp well
           }
         } else {
@@ -7359,6 +7361,50 @@ const dofNearMat = new THREE.ShaderMaterial({
   depthTest: false,
   depthWrite: false,
 });
+// A false-colour look at the ACTUAL CoC target, drawn after the ordinary
+// composite so grading/dither cannot disguise a focus error. It adds one
+// fullscreen pass only while X-ray FOCUS is selected; no CPU readback.
+const dofDebugMat = new THREE.ShaderMaterial({
+  uniforms: {
+    sceneTex: { value: rtScene.texture }, depthTex: { value: rtScene.depthTexture },
+    cocTex: { value: rtDofPrep.texture }, uActive: { value: 0 },
+    uNear: { value: 0.3 }, uFar: { value: 30000 }, uSkyD: { value: 45000 },
+    uView: { value: 3 }, uDepthPivot: { value: 40 },
+  },
+  vertexShader: QUAD_VS,
+  fragmentShader: `
+    uniform sampler2D sceneTex; uniform sampler2D depthTex; uniform sampler2D cocTex;
+    uniform float uActive; uniform float uNear; uniform float uFar; uniform float uSkyD;
+    uniform float uView; uniform float uDepthPivot;
+    varying vec2 vUv;
+    void main(){
+      float depth = texture2D(depthTex, vUv).r;
+      float metres = (uNear * uFar) / max(uFar - (uFar - uNear) * depth, 0.0001);
+      vec3 col = vec3(0.08, 0.13, 0.26); // sky / cleared depth
+      if (depth < 0.999999 && metres < uSkyD) {
+        if (uView < 1.5) {
+          // Equal colour travel per distance ratio, so five metres in chase
+          // and kilometres on the chart both show local geometry. Amber is
+          // nearer than the pivot, teal is at it, violet is farther away.
+          float d = clamp(log(max(metres, 0.25) / max(uDepthPivot, 1.0)) / log(8.0), -1.0, 1.0);
+          vec3 mid = vec3(0.10, 0.39, 0.37);
+          col = d < 0.0 ? mix(mid, vec3(0.91, 0.48, 0.18), -d)
+            : mix(mid, vec3(0.40, 0.28, 0.83), d);
+        } else if (uActive > 0.5) {
+          vec4 scene = texture2D(sceneTex, vUv);
+          vec4 coc = texture2D(cocTex, vUv);
+          if (scene.a < 0.25) col = vec3(0.96, 0.91, 0.68); // protected subject
+          else {
+            col = vec3(0.10, 0.39, 0.37); // sharp well
+            col = mix(col, vec3(0.91, 0.48, 0.18), clamp(coc.r, 0.0, 1.0));
+            col = mix(col, vec3(0.40, 0.28, 0.83), clamp(coc.g, 0.0, 1.0));
+          }
+        } else col = vec3(0.12, 0.19, 0.20); // DOF off: no stale CoC
+      }
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+  depthTest: false, depthWrite: false,
+});
 composite = (amt: number): void => {
 
   // The shutter runs FIRST, so everything after it — the depth-of-field blur,
@@ -7401,6 +7447,7 @@ composite = (amt: number): void => {
     pu.uFocusDist.value = cu.uDofFocusDist.value;
     pu.uMode.value = cu.uDofMode.value;
     pu.uMaxPx.value = cu.uDofMaxPx.value;
+    pu.uDofNearScale.value = cu.uDofNearScale.value;
     pu.uTiltAmt.value = cu.uTiltAmt.value;
     pu.uTiltSharp.value = cu.uTiltSharp.value;
     pu.uTiltBlur.value = cu.uTiltBlur.value;
@@ -7449,6 +7496,15 @@ composite = (amt: number): void => {
   compMat.uniforms.dofNearTex.value = rtDofNear.texture;
   compMat.uniforms.bloomTex.value = rtC.texture;
   runPass(compMat, null);
+  if (xrayMode === 1 || xrayMode === 3) {
+    dofDebugMat.uniforms.uView.value = xrayMode;
+    dofDebugMat.uniforms.uActive.value = dofOn ? 1 : 0;
+    dofDebugMat.uniforms.uNear.value = camera.near;
+    dofDebugMat.uniforms.uFar.value = camera.far;
+    dofDebugMat.uniforms.uSkyD.value = cu.uSkyD.value;
+    dofDebugMat.uniforms.uDepthPivot.value = dofFocusCurrent;
+    runPass(dofDebugMat, null);
+  }
   passCount.last = passCount.now;
   passCount.now = 0;
 };
@@ -29500,7 +29556,7 @@ function stepSurvey(now: number): void {
         surveyStore.take(id, c.key, r.cps.length);
         ovInkDirty = true;      // this road may now be on the ranger's own map
         surveyFlash = 1;
-        audio.stone();
+        audio.ui();
       }
       if (!r.claimed && surveyEligible(r) && r.got / r.cps.length > SURVEY_MAJORITY && surveyed(r)) {
         r.claimed = true; r.claimedAt = now;
@@ -38896,20 +38952,27 @@ let dofFocusClock = 0;
 let dofFocusReady = false;
 let dofFocusSource = 'aim';
 let dofFocusOverrideM: number | null = null;
+let dofSensorCells: Array<{ metres: number; valid: boolean }> = [];
+let dofSensorChosen = -1;
 /** Distance to the surface actually drawn under the centre reticle. The luma
  * readback already carries linear depth, so autofocus costs no new readback. */
 function centreSubjectDistance(): number | null {
   if (!lumaPrimed) return null;
   const values: number[] = [];
   const cx = Math.floor(LUMA_W / 2), cy = Math.floor(LUMA_H / 2);
+  dofSensorCells = []; dofSensorChosen = -1;
   for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
     const i = ((cy + oy) * LUMA_W + (cx + ox)) * 4;
     const d = ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar;
-    if (d > camera.near * 1.2 && d < Math.min(lumaFar, camera.far) * 0.88) values.push(d);
+    const valid = d > camera.near * 1.2 && d < Math.min(lumaFar, camera.far) * 0.88;
+    dofSensorCells.push({ metres: d, valid });
+    if (valid) values.push(d);
   }
   if (!values.length) return null;
   values.sort((a, b) => a - b);
-  return values[Math.floor(values.length / 2)];
+  const median = values[Math.floor(values.length / 2)];
+  dofSensorChosen = dofSensorCells.findIndex((cell) => cell.valid && Math.abs(cell.metres - median) < 0.01);
+  return median;
 }
 function currentDofPolicy(): {
   name: string; mode: DofMode; gain: number; maxRadiusPx: number; focusResponse: number;
@@ -38923,10 +38986,11 @@ function currentDofPolicy(): {
       : camMode === 'cab' || camMode === 'god' ? 'off'
       : camMode === 'drone' ? 'camera'
       : 'miniature');
-  // The drone wants depth, not miniature wash: even at STOCK its maximum
-  // circle is smaller than the road/chart lens, and the nose view is deeper
-  // again because the whole frame is navigational ground.
-  const baseRadiusPx = camMode === 'drone' ? (droneNose() ? 3.5 : 4.5) : DOF_RADII[1];
+  // From the drone, most of the frame is navigational ground at very
+  // different ranges. The old 3.5/4.5 art-pixel aperture saturated large
+  // areas on either side of a valid 600–800m autofocus target. Keep a depth
+  // cue, but make the aerial lens deep enough to read the landscape.
+  const baseRadiusPx = camMode === 'drone' ? (droneNose() ? 1.8 : 2.4) : DOF_RADII[1];
   const maxRadiusPx = dofApertureOverride ? DOF_RADII[dofRadiusAt] : baseRadiusPx * gain;
   const name = forced ? `override:${mode}`
     : camMode === 'drone' ? (droneNose() ? 'drone-nose' : 'drone-trail')
@@ -38939,6 +39003,11 @@ function aimFocus(): void {
   dofMode = policy.mode; // reported state is the policy actually on the glass
   u.uDofMode.value = policy.mode === 'camera' ? 1 : policy.mode === 'miniature' ? 2 : 0;
   u.uDofMaxPx.value = policy.maxRadiusPx;
+  // A close hillside against a distant drone focus used to saturate the
+  // foreground circle at almost every pixel (240m against 775m: full 3.5px).
+  // Compress only that side of the photographic lens. Forced expert CAMERA
+  // mode retains the uncompressed rule for a controlled A/B.
+  u.uDofNearScale.value = camMode === 'drone' && dofModeOverride === null ? 0.2 : 1;
   u.uDofTaps.value = DOF_TAPS[dofQuality];
   const preset = TILT_PRESETS[tiltMode] ?? TILT_PRESETS.off;
   // The cab is deliberately exempt; the chart is where the look belongs, and
@@ -39001,11 +39070,21 @@ function aimFocus(): void {
     // An explicit distance bypasses that sensor. camFlyAim is the fallback for
     // a sky centre or an as-yet-unprimed readback.
     const manual = dofFocusOverrideM ?? DOF_FOCUS_M[dofFocusAt];
+    if (manual > 0) { dofSensorCells = []; dofSensorChosen = -1; }
     const subject = manual > 0 ? null : centreSubjectDistance();
-    dofFocusTarget = manual > 0 ? manual
-      : subject ?? camera.position.distanceTo(camFlyAim);
+    // With sky at the centre the drone's fixed aim point is only ~40m
+    // away, even when its downward ray meets ground hundreds of metres out.
+    // Use the same altitude-aware ground focus that keeps terrain streaming
+    // ahead of the aircraft; other cameras retain their aim-point fallback.
+    let fallback = camera.position.distanceTo(camFlyAim);
+    if (manual <= 0 && subject === null && camMode === 'drone') {
+      const [gx, gz] = droneGroundFocus();
+      fallback = Math.hypot(gx - camera.position.x,
+        groundAt(gx, gz) - camera.position.y, gz - camera.position.z);
+    }
+    dofFocusTarget = manual > 0 ? manual : subject ?? fallback;
     dofFocusSource = dofFocusOverrideM !== null ? 'override'
-      : manual > 0 ? 'distance' : subject === null ? 'aim' : 'depth';
+      : manual > 0 ? 'distance' : subject === null ? camMode === 'drone' ? 'drone-ground' : 'aim' : 'depth';
     dofFocusTarget = clamp(dofFocusTarget, Math.max(camera.near * 1.5, 1), camera.far * 0.88);
     const now = performance.now() * 0.001;
     const focusDt = dofFocusClock > 0 ? Math.min(0.1, now - dofFocusClock) : 0;
@@ -39022,6 +39101,7 @@ function aimFocus(): void {
     u.uFocusP.value.copy(FOCUS_FWD).multiplyScalar(dofFocusCurrent).add(camera.position);
     u.uFocusN.value.copy(FOCUS_FWD).normalize();
   } else {
+    dofSensorCells = []; dofSensorChosen = -1;
     // MINIATURE keeps the existing world-space tilted plane. It is placed on
     // the ground under the viewing ray and then stood up across that ray.
     // Use the same viewed-ground authority as vegetation, shadows and
@@ -41090,8 +41170,9 @@ function tdMatAt(x: number, z: number): object | null {
   const maxRadiusPx = u.uDofMaxPx.value as number;
   const radiusAt = (d: number): number => {
     if (dofMode !== 'camera') return 0;
+    const rel = (d - dofFocusCurrent) / Math.max(d, 0.25);
     return +Math.min(maxRadiusPx,
-      Math.abs((d - dofFocusCurrent) / Math.max(d, 0.25)) * maxRadiusPx).toFixed(2);
+      Math.abs(rel * (rel < 0 ? u.uDofNearScale.value as number : 1)) * maxRadiusPx).toFixed(2);
   };
   const modeNow = u.uDofMode.value as number;
   const active = maxRadiusPx > 0.01
@@ -41103,10 +41184,12 @@ function tdMatAt(x: number, z: number): object | null {
     active,
     quality: DOF_QUALITIES[dofQuality], taps: DOF_TAPS[dofQuality],
     aperture: dofApertureOverride ? dofRadiusAt : 'policy',
-    maxRadiusPx: +maxRadiusPx.toFixed(2),
+    maxRadiusPx: +maxRadiusPx.toFixed(2), nearScale: u.uDofNearScale.value,
     focus: dofFocusOverrideM ?? (DOF_FOCUS_M[dofFocusAt] || 'auto'),
     focusM: +dofFocusCurrent.toFixed(2), targetM: +dofFocusTarget.toFixed(2),
     source: dofFocusSource, centreDepthM: centreSubjectDistance(),
+    sensorCellsM: dofSensorCells.map((cell) => cell.valid ? Math.round(cell.metres) : null),
+    sensorChosen: dofSensorChosen,
     focusP: (u.uFocusP.value as THREE.Vector3).toArray().map((v) => +v.toFixed(2)),
     focusN: (u.uFocusN.value as THREE.Vector3).toArray().map((v) => +v.toFixed(3)),
     dedicatedPasses: active ? 3 : 0, lastFramePasses: passCount.last,
@@ -45909,7 +45992,7 @@ function chartLensUp(e: PointerEvent): boolean {
   const kind = chartLensDrag.kind;
   chartLensDrag = null;
   if (e.type === 'pointerup') {
-    audio.stone();
+    audio.ui();
     hudFlash(kind === 'tilt'
       ? `CHART TILT ${Math.round(chartTiltDeg)} DEG`
       : `MINIATURE BAND ${Math.round(chartBandScale * 100)}%`);
@@ -46344,7 +46427,7 @@ function dropFix(x: number, z: number): Poi {
   const name = `FIX ${++fixN}`;
   const p: Poi = { name, x, z, kind: 'survey', pinned: true };
   pois.set(name, p);
-  audio.stone();
+  audio.ui();
   return p;
 }
 /**
@@ -46551,7 +46634,7 @@ function teleportTo(x: number, z: number): void {
   evictFromBuildings();
   dryAt = null;                   // dry-basin evidence belongs to where you WERE
   streamWorld(x, z);
-  audio.stone();
+  audio.ui();
 }
 /**
  * WHERE THE DOUBLE TAP IS ALLOWED TO LIVE.
@@ -48510,14 +48593,39 @@ function updatePois(): void {
       continue;
     }
     const right = camFwd.x * dz - camFwd.z * dx > 0;
+    // The bearing stays on its side but sits just inside the ENV/RIG rails.
+    // At LARGE the layer key can occupy the old fixed-height row.
+    const safety = hudSafeRects();
+    const baseY = Math.round(HH * (0.34 + i * 0.055));
+    let edgeLabel = p.pinned ? (right ? `${label} >` : `< ${label}`) : (right ? '>' : '<');
+    let chipWidth = 0, chipX = 0, chipY = baseY, open = false;
+    const inset = camMode === 'top' ? 29 : 22;
+    // A full name gets first claim. If every nearby row is occupied, a pinned
+    // bearing falls back to its arrow rather than disappearing behind the key.
+    for (let form = 0; form < (p.pinned ? 2 : 1) && !open; form++) {
+      if (form) edgeLabel = right ? '>' : '<';
+      chipWidth = textPW(fitP(edgeLabel, Math.round(HW * 0.5))) + 4 + (KIND_ICON[p.kind] ? 7 : 0);
+      chipX = right ? HW - chipWidth - inset : inset;
+      for (let row = 0; row <= 18 && !open; row++) {
+        for (const dy of row ? [-row * 9, row * 9] : [0]) {
+          const yy = clamp(baseY + dy, 20, HH - 30);
+          const blocked = safety.some((r) => chipX - 3 < r[0] + r[2] && chipX + chipWidth + 5 > r[0]
+            && yy - 10 < r[1] + r[3] && yy + 10 > r[1]);
+          const occupied = poiDraw.some((q) => q.edge !== 0 && q.edge === (right ? 1 : -1)
+            && Math.abs(q.y / hudS - yy) < 22);
+          if (!blocked && !occupied) { chipY = yy; open = true; break; }
+        }
+      }
+    }
+    if (!open) continue;
     poiDraw.push({
-      x: 0, y: innerHeight * (0.34 + i * 0.055),
+      x: chipX * hudS, y: chipY * hudS,
       // An edge chip is a BEARING, never a view — it points off-screen by
       // definition — so it is never ghosted. And only a PINNED place earns
       // its name on the rim: everything else reduces to its kind's colour
       // and symbol plus the caret, or a busy stretch of road stacks the rim
       // with a paragraph of places you did not ask about.
-      t: p.pinned ? (right ? `${label} >` : `< ${label}`) : (right ? '>' : '<'),
+      t: edgeLabel,
       c: POI_COLORS[p.kind], edge: right ? 1 : -1, rng, hid: false,
       name: p.name, kind: p.kind, pinned: !!p.pinned, d, tx: 0, ty: 0,
     });
@@ -49433,6 +49541,8 @@ const wheelMu = [0.9, 0.9, 0.9, 0.9];
 /** How much more than the tyres can hold the throttle is asking for: 0 hooked
  *  up, 1 spinning freely. Drives the sound and the spray, not the physics. */
 let wheelSlipL = 0;
+// Audio observes axle saturation without changing forces, wear or dust.
+let tyreAudioSlip = 0;
 /** The slip angle the body is actually running, in radians — what a driver
  *  feels through the seat and what the tyres are singing about. */
 let slipAng = 0;
@@ -49474,6 +49584,7 @@ function stepTraction(dt: number, surf: SurfParams, grip: number, thrust: number
     const delta = steerCur * CAR.steerMax;
     const af = Math.atan((v + AXLE_A * yawR) / uf) - delta * su;
     const ar = Math.atan((v - AXLE_A * yawR) / uf);
+    tyreAudioSlip = tyreCornerSlip(af, ar, Math.hypot(u, v), TYRE_K);
     const fyF = -capF * Math.tanh(TYRE_K * af);
     const fyR = -capR * Math.tanh(TYRE_K * ar);
     // THE CIRCLE, PER AXLE. Whatever the tyre is spending sideways it cannot
@@ -49756,6 +49867,8 @@ let dbgAmb: Record<string, unknown> = {};
 let dbgSlip: Record<string, unknown> = {};
 (window as unknown as { __slip?: object }).__slip = (): object => dbgSlip;
 let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0, ambFrothL = 0;
+let soundDrone = false, soundPrevX = 0, soundPrevY = 0, soundPrevZ = 0;
+let ambProbeX = Infinity, ambProbeZ = Infinity, ambHeightGain = 1;
 /** The room the last sample found, which `encL` is easing toward. */
 let encTarget = 0;
 /** Radius and weight of each water-probe ring — see the ambience sampler. */
@@ -51188,6 +51301,7 @@ function tick(now: number): void {
   // same first-order lag; what they disagree about is what the front wheels
   // can DO with it.
   const SRATE0 = 7 * tune.steer;
+  tyreAudioSlip = 0; // also clears on park, GPS mode and switching to arcade
   if (!real.on && !parked && tractionMode > 0) {
     steerCur += clamp(steer - steerCur, -SRATE0 * dt, SRATE0 * dt);
     // The rack still turns while parked — a stopped truck can be pointed — but
@@ -52108,145 +52222,109 @@ function tick(now: number): void {
   // Same shape and for the same reason: a sliced CPU sweep the shader reads,
   // rebuilt when the truck leaves the middle of it rather than on a tick.
   { const _p = performance.now(); sunmFrame(); profAdd('sunmFrame', _p); }
-  // ── the world's own sound, sampled around the truck ──
-  // Cheap and cached: a ring of water probes and a look at this cell's
-  // foliage, twice a second. The bed is DUCKED by motion and by the engine
-  // — it was always there; the idle was on top of it.
+  // The listener belongs to the active vehicle, including its chart view.
+  // Cab/chase stay at the truck; drone nose/trailing stay at the drone.
+  const earDrone = droneEye();
+  const earX = earDrone ? drone.x : state.x, earZ = earDrone ? drone.z : state.z;
+  const earY = earDrone ? drone.y : bodyY, earH = earDrone ? drone.heading : state.heading;
+  const listenerChanged = earDrone !== soundDrone;
+  const earSpeed = earDrone
+    ? !listenerChanged && dt > 0 ? Math.min(40, Math.hypot(earX - soundPrevX, earY - soundPrevY, earZ - soundPrevZ) / dt) : 0
+    : Math.hypot(state.speed, slideV);
+  soundDrone = earDrone; soundPrevX = earX; soundPrevY = earY; soundPrevZ = earZ;
+  const truckDist = earDrone ? Math.hypot(state.x - earX, bodyY - earY, state.z - earZ) : 0;
+  const truckAt = truckDist > 1
+    ? ((state.x - earX) * Math.cos(earH) + (state.z - earZ) * Math.sin(earH)) / truckDist : 0;
+  audio.listener(truckDist, truckAt);
   if (wetDbgOn && nowMs - wetDbgAt > 2000) { wetDbgAt = nowMs; repaintWetDebug(); }
-  if (nowMs - ambSampledAt > 500) {
-    ambSampledAt = nowMs;
-    // THE RULE (the owner's): the bed plays what is ACTUALLY THERE, never a
-    // biome guess. Each water probe brings back depth AND current, so the
-    // one ring tells three truths — still water (a lake, the sea) laps low
-    // and wide, a river runs mid, and fast water over the rapids' own
-    // boulder grid froths bright. Birds and rustle already answer to this
-    // cell's real foliage the same way.
-    // ── THE RING IS THREE RINGS, AND IT KNOWS WHICH WAY THE WATER IS ──
-    //
-    // It was one ring at 24m spent entirely on "how much", so a river you were
-    // driving alongside sat in the middle of your head — and a river a hundred
-    // metres off did not exist at all. That second half was invisible for as
-    // long as every dry probe came back half a metre deep (see waterInfoAt):
-    // the bed played everywhere, so nobody could tell it could not hear past a
-    // cricket pitch. Measured at the Yosemite valley floor with the default
-    // gone: the Merced is 67m away, the 24m, 40m and 60m rings are all dry and
-    // its nearest wet probe is on the 90m ring. A river you can SEE from the
-    // road, silent.
-    //
-    // Water is audible a long way and quieter further off, so distance is a
-    // WEIGHT and not a radius. Summing the wet probes' own directions then
-    // gives the bearing for free — a SUM, not a nearest, so water on both
-    // sides of a ford cancels to the middle, which is where it actually is.
-    // …AND THE FAR RINGS ARE DENSER. Six probes on a 220 m ring are 230 m
-    // apart, which is how the Merced — a river twenty metres wide, in
-    // plain sight — went between every one of them: the audit measured
-    // `riverRaw 0.09` from a single wet probe on the 120 m ring and nothing
-    // beyond. Twelve on the outer rings, 38 probes in all, twice a second;
-    // each is a hydro sample and the whole ring is cheaper than one tree.
-    // The weights rose with it: a river you can see from the road at
-    // sixty metres is worth about −30 dBFS, not −42.
-    // AND THE NEAREST WET PROBE SETS THE LEVEL; the sum only adds breadth.
-    // A sum alone is a sum over how many probes happen to land in a river
-    // twenty metres wide: the Merced at 67 m scored one hit on the 120 m
-    // ring and read 0.15 (−40 dBFS) for a river in plain sight. The nearest
-    // ring's weight is what that distance is worth — −30 dBFS at sixty
-    // metres — and every further hit adds a little, so a lake on the beam
-    // is still wider than a brook.
+  if (listenerChanged || nowMs - ambSampledAt > 500 || Math.hypot(earX - ambProbeX, earZ - ambProbeZ) > 50) {
+    ambSampledAt = nowMs; ambProbeX = earX; ambProbeZ = earZ;
+    const aboveGround = earDrone ? Math.max(0, earY - groundAt(earX, earZ)) : 0;
+    ambHeightGain = 1 / Math.sqrt(1 + Math.pow(aboveGround / 35, 2));
+    const listenerWet = !earDrone && surfKind === 'water';
     let wetW = 0, maxW = 0, flow = 0, bx = 0, bz = 0, near = 0;
+    // Keep the bounded 38-probe budget; distance now includes listener height.
     for (const [rad, w, n] of AMB_WATER_RINGS) {
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2;
-        const wi = waterInfoAt(state.x + Math.sin(a) * rad, state.z + Math.cos(a) * rad);
-        // `wi.wet`, NOT `depth > 0.06` — see waterInfoAt. The depth is a
-        // default on dry land and this ring is the one caller asking whether
-        // there IS any water, so the old test was true at every point on the
-        // planet.
+        const wi = waterInfoAt(earX + Math.sin(a) * rad, earZ + Math.cos(a) * rad);
         if (!wi.wet || wi.depth <= 0.06) continue;
-        wetW += w; maxW = Math.max(maxW, w);
-        bx += Math.sin(a) * w; bz += Math.cos(a) * w;
-        // FROTH IS A NEAR THING. Rapids two hundred metres off are a wash, not
-        // a rattle, so only the inner ring opens the bright channel.
-        if (rad === AMB_WATER_RINGS[0][0]) { near++; flow = Math.max(flow, wi.speed); }
+        const weight = w * rad / Math.max(rad, Math.hypot(rad, aboveGround));
+        wetW += weight; maxW = Math.max(maxW, weight);
+        bx += Math.sin(a) * weight; bz += Math.cos(a) * weight;
+        if (rad === AMB_WATER_RINGS[0][0] && aboveGround < 25) { near++; flow = Math.max(flow, wi.speed); }
       }
     }
-    ambRiverL = clamp(maxW + wetW / 8 + (surfKind === 'water' ? 0.4 : 0), 0, 1);
-    // Into the TRUCK's frame. Forward is (sin h, -cos h), so the right vector
-    // is (cos h, sin h) — the dot with it is the ear the water is in.
-    ambRiverAt = wetW === 0 || surfKind === 'water' ? 0
-      : clamp(((bx / wetW) * Math.cos(state.heading) + (bz / wetW) * Math.sin(state.heading)), -1, 1);
-    // The room, on the same half-second tick as the rest of the bed: a hint
-    // walk and a grid-cell walk are cheap, and a ceiling does not move.
-    encTarget = enclosureAt(state.x, state.z, bodyY).e;
-    const [cxA, czA] = vegCellOf(state.x, state.z);
+    ambRiverL = clamp(maxW + wetW / 8 + (listenerWet ? 0.4 : 0), 0, 1);
+    ambRiverAt = wetW === 0 || listenerWet ? 0
+      : clamp(((bx / wetW) * Math.cos(earH) + (bz / wetW) * Math.sin(earH)), -1, 1);
+    encTarget = enclosureAt(earX, earZ, earY).e;
+    const [cxA, czA] = vegCellOf(earX, earZ);
     let rap = 0;
     for (let ox = -1; ox <= 1; ox++) {
       for (let oz = -1; oz <= 1; oz++) rap += (rapidRocks.get(`${cxA + ox},${czA + oz}`) ?? []).length;
     }
-    ambFrothL = near > 0 || surfKind === 'water' ? clamp(flow / 2.2 + rap / 6, 0, 1) : 0;
+    ambFrothL = near > 0 || listenerWet ? clamp(flow / 2.2 + rap / 6, 0, 1) : 0;
     const sites = vegGrid.get(`${cxA},${czA}`) ?? [];
     let fol = 0;
     for (const s of sites) if (s.k !== 'rock' && s.k !== 'spire') fol++;
     ambVegL = clamp(fol / 12, 0, 1);
-    // THE COVER, as grass: five WorldCover texels (here and 30 m out on four
-    // sides — a texel is 38 m). Grassland and crop hiss in the wind, a
-    // wetland and scrub less, a wood's floor a little, and built, bare,
-    // snow and water not at all.
     let gr = 0;
     for (const [ox, oz] of [[0, 0], [30, 0], [-30, 0], [0, 30], [0, -30]]) {
-      const c = sampleCover(state.x + ox, state.z + oz);
+      const c = sampleCover(earX + ox, earZ + oz);
       gr += c === COVER.grass ? 1 : c === COVER.crop ? 0.9 : c === COVER.wetland ? 0.7
         : c === COVER.shrub ? 0.5 : c === COVER.moss ? 0.4 : c === COVER.tree ? 0.25 : 0;
     }
     ambGrassL = gr / 5;
   }
   const windAmb = clamp(windKmhNow() / 55, 0, 1);
-  const bed = clamp(1 - Math.abs(state.speed) / 7, 0, 1) * (engineSt === 'on' ? 0.4 : 1);
+  const bed = ambientBed(earSpeed, !earDrone && engineSt === 'on');
   dbgAmb = {
-    rustle: +(windAmb * (0.25 + 0.75 * ambVegL) * Math.max(bed, 0.2)).toFixed(3),
+    listener: earDrone ? 'drone' : 'truck', distance: +truckDist.toFixed(1),
+    rustle: +(windAmb * ambVegL * bed * ambHeightGain).toFixed(3),
     river: +(ambRiverL * (0.35 + 0.65 * bed)).toFixed(3),
-    // Dawn arrives gradually in the soundscape, as it does in the light.
-    birds: +(clamp((sunAlt + 0.04) / 0.16, 0, 1) * (1 - wxL.rain) * ambVegL * bed).toFixed(3),
+    // Activity belongs to the habitat; masking affects phrase gain, not scheduling.
+    birds: +(clamp((sunAlt + 0.04) / 0.16, 0, 1) * (1 - wxL.rain) * ambVegL).toFixed(3),
     wind: +windAmb.toFixed(2), veg: +ambVegL.toFixed(2), riverRaw: +ambRiverL.toFixed(2),
     froth: +ambFrothL.toFixed(2), engine: engineSt, brush: +brushAmt.toFixed(2),
     riverAt: +ambRiverAt.toFixed(2), enc: +encL.toFixed(3), encRaw: +encTarget.toFixed(3),
     grass: +ambGrassL.toFixed(2), shake: +chassisShake.toFixed(2), shakeRaw: +chassisShakeRaw.toFixed(2),
     brushPeak: +(brushPeak = Math.max(brushPeak, brushAmt)).toFixed(2),
   };
-  // THE GLIDE IS THE POINT. A portal is a hard edge in geometry and a soft one
-  // in air — you hear a tunnel a moment before you are inside it — and this
-  // half of the ease is what carries the approach; `space()` has its own,
-  // shorter, on the filter itself.
   if (encForceUntil > nowMs) encL = encForce;
   else encL += (encTarget - encL) * Math.min(1, dt * 2.5);
-  // Parked with the key out is the one time the driver is listening, and the
-  // cab's shell opens for it — see space().
   const parkedNow = engineSt !== 'on' && Math.abs(state.speed) < 0.5 ? 1 : 0;
-  audio.space(encL, camMode === 'cab' ? 1 : 0, parkedNow);
+  audio.space(encL, !earDrone && camMode === 'cab' ? 1 : 0, parkedNow);
   audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number,
-    windAmb, ambFrothL, ambRiverAt, ambGrassL * Math.max(bed, 0.2));
-  // THE DRONE, HEARD — from wherever the listener is. In the drone view you
-  // are riding it; from the truck it is a machine some way off, on one side,
-  // working harder in a climb or a dash than in a hover. Spool 0 on the rack
-  // releases the voice, so the call is unconditional and cheap.
+    windAmb, ambFrothL, ambRiverAt, ambGrassL * bed * ambHeightGain, bed * ambHeightGain);
+  // Truck-relative Doppler for the birdscape cohort (world-fixed habitat).
+  // Virtual chorus anchor sits ahead of the truck in heading: forward speed
+  // approaches it (positive radial → higher pitch); reverse recedes. Drone
+  // ear skips — the habitat is under the truck, not under the aircraft.
+  // No-op while birdscape is disabled (phrase whistlers ignore this).
+  if (!earDrone) {
+    const aboveGround = Math.max(0, earY - groundAt(earX, earZ));
+    audio.birdscapeListener(aboveGround, 0, state.speed);
+  } else {
+    audio.birdscapeListener(Math.max(0, earY - groundAt(earX, earZ)), 0, 0);
+  }
   {
-    const own = camMode === 'drone';
-    const dx = drone.x - state.x, dz = drone.z - state.z;
-    const dist = Math.hypot(dx, drone.y - bodyY, dz);
-    const bearing = dist > 1 ? clamp((dx / dist) * Math.cos(state.heading) + (dz / dist) * Math.sin(state.heading), -1, 1) : 0;
+    const dx = drone.x - earX, dz = drone.z - earZ;
+    const dist = Math.hypot(dx, drone.y - earY, dz);
+    const bearing = dist > 1 ? clamp((dx * Math.cos(earH) + dz * Math.sin(earH)) / dist, -1, 1) : 0;
     const climb = dt > 0 ? Math.abs(drone.y - droneYPrev) / dt : 0;
     droneYPrev = drone.y;
     const load = clamp(climb / DRONE.CLIMB + Math.abs(drone.pitch) * 2 + Math.abs(drone.roll) * 1.5, 0, 1);
-    audio.drone(drone.spool, dist, load, bearing, own);
+    audio.drone(drone.spool, dist, load, bearing, earDrone);
   }
-  // The squeal's raw inputs, photographed at the same instant the mixer
-  // reads them — chasing "SLIP lit, tyre silent" needs the SIGNAL, not
-  // another guess at the gain.
-  dbgSlip = { skid: +skid.toFixed(3), slideV: +slideV.toFixed(2), spinL: +wheelSlipL.toFixed(3),
+  const audioSlip = Math.max(skid, tyreAudioSlip);
+  dbgSlip = { skid: +skid.toFixed(3), axle: +tyreAudioSlip.toFixed(3), audio: +audioSlip.toFixed(3),
+    slideV: +slideV.toFixed(2), spinL: +wheelSlipL.toFixed(3),
     surf: surfKind, q: +surfQ.toFixed(2), kmh: +(state.speed * 3.6).toFixed(0) };
-  audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, skid,
+  audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, audioSlip,
     surfKind === 'water' ? 0 : surfQ, wheelSlipL, windAmb,
     engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0,
-    dt > 0 && surfKind !== 'water' ? chassisShake : 0, wxL.wet);
+    dt > 0 && surfKind !== 'water' ? chassisShake : 0, wxL.wet, earSpeed, Math.hypot(state.speed, slideV));
   // The rig against the world: bodywork on a wall while moving, the hull's
   // wash through water, and the slap of arriving in it with any speed on.
   // The graze's floor rose from 0.4 to 0.55 of the mix: a lean along a rail
@@ -53644,34 +53722,8 @@ function drawAuthoringPreviews(): void {
   if (reset) { authorPrevMs = authorPrevFrames = authorPrevMax = authorPrevPoints = 0; }
   return out;
 };
-// The X-RAY DEPTH view: the luma map, decoded and painted edge to edge under
-// the instruments. Sky is blue (it decodes as the far plane — the dome writes
-// no depth), terrain is grey by log distance. Same rendering as the
-// depth-map-shot fixture, so a phone screenshot and a harness capture argue
-// from the same picture.
-let xrayCv: HTMLCanvasElement | null = null;
-let xrayImg: ImageData | null = null;
-function drawLumaMap(): void {
-  if (!xrayCv) { xrayCv = document.createElement('canvas'); xrayCv.width = LUMA_W; xrayCv.height = LUMA_H; }
-  const c2 = xrayCv.getContext('2d')!;
-  if (!xrayImg) xrayImg = c2.createImageData(LUMA_W, LUMA_H);
-  const px = xrayImg.data;
-  for (let gy = 0; gy < LUMA_H; gy++) {
-    for (let gx = 0; gx < LUMA_W; gx++) {
-      const i = (gy * LUMA_W + gx) * 4;
-      const m = ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar;
-      const o = ((LUMA_H - 1 - gy) * LUMA_W + gx) * 4;   // buffer is bottom-up
-      if (m >= lumaFar * 0.95) { px[o] = 20; px[o + 1] = 34; px[o + 2] = 66; }
-      else {
-        const v = Math.round(30 + (Math.log(1 + m) / Math.log(1 + lumaFar)) * 225);
-        px[o] = v; px[o + 1] = v; px[o + 2] = v;
-      }
-      px[o + 3] = 255;
-    }
-  }
-  c2.putImageData(xrayImg, 0, 0);
-  hctx.drawImage(xrayCv, 0, 0, HW, HH);
-}
+// DEPTH now reads the full scene depth texture in the GPU pass. The small
+// luma/depth sensor remains available to autofocus and its probes.
 // The reference's limited palette.
 // Retinted to the Glass spec's targets (§4): text is BONE (warm paper, not
 // blue-white), edge is the spec's aqua, dim its aquaDim, and the amber /
@@ -56416,7 +56468,7 @@ let poiDraw: PoiDraw[] = [];
 function hudSafeRects(): Array<[number, number, number, number]> {
   const mw = Math.min(58, Math.floor(HW * 0.34));   // the dock square (see drawHud)
   const my = HH - 4 - 23 - mw - 3;
-  return [
+  const reserved: Array<[number, number, number, number]> = [
     [0, 0, HW, 34 + (camMode === 'top' && chartOn.stream ? 30 : 0)],  // compass strip + the justified top row
     [0, 32, 74, 18],                                 // the task chip, under the top row
     [HW - 56, 18, 56, 18],                           // MENU, on the heading row
@@ -56427,6 +56479,15 @@ function hudSafeRects(): Array<[number, number, number, number]> {
     [HW - 80, HH - 72, 80, 72],                      // dial, its radial lamps, trip
     [0, HH - 30, Math.round(HW * 0.72), 30],         // the place line and coordinates
   ];
+  // The layer key wraps with HUD width, and its legend grows with the active
+  // view. Read the actual layout from this HUD frame, after the key was drawn.
+  // Fixed guesses miss several rows at LARGE and reserve empty sky when off.
+  if (keyShown) {
+    for (const r of layerRects) reserved.push([r.x, r.y, r.w, r.h]);
+    if (legendRect.w) reserved.push([legendRect.x, legendRect.y, legendRect.w, legendRect.h]);
+  }
+  if (xrayMode === 1 || xrayMode === 3) reserved.push([Math.round(HW / 2) - 54, Math.round(HH * 0.58), 108, 37]);
+  return reserved;
 }
 /** ── THE DIAL'S TICK RING IS STATIC, AND IT WAS DRAWN A PIXEL AT A TIME ──
  *
@@ -56902,7 +56963,6 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // as a cheap one: `calls` must be the calls that DREW.
   const hudEntry = performance.now();
   hudT0 = hudEntry; hudProfCalls++;
-  if (xrayMode === 1 && lumaPrimed) drawLumaMap();
   drawAuthoringPreviews();
   const pad = 4;
   /** Bottom of the compass strip in HUD pixels: `pad` + the heading digits
@@ -57275,7 +57335,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   //    wider as you close on it — a fuel stop glows out of its forecourt.
   //    Occlusion keeps its meaning: a place you cannot see is a dashed rumour.
   poiRects.length = 0;
-  const inView = poiDraw.filter((p) => p.edge === 0).sort((a, b) => a.x - b.x);
+  const inView = poiDraw.filter((p) => p.edge === 0).sort((a, b) =>
+    Number(!!b.pinned) - Number(!!a.pinned) || Number(b.kind === 'peak') - Number(a.kind === 'peak') || a.x - b.x);
+  const safeLabels = hudSafeRects();
   // ONE COLLISION RULE FOR EVERY LABEL. The lanes assumed everyone stacked
   // from the same baseline; peaks stack in the sky band and destinations by
   // their beams, so two lane-0 labels could still land on each other
@@ -57294,7 +57356,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const ew = textPW(elab) + 4 + (KIND_ICON[p.kind] ? 7 : 0);
     const ey = clamp(Math.round(p.y / hudS), 20, HH - 30);
     const ecx = clamp(Math.round(p.x / hudS), 8, HW - 8);
-    const ex = p.rim ? clamp(ecx - (ew >> 1), 2, HW - ew - 2) : p.edge > 0 ? HW - ew - 3 : 3;
+    const ex = p.rim ? clamp(ecx - (ew >> 1), 2, HW - ew - 2)
+      : clamp(Math.round(p.x / hudS), 2, HW - ew - 2);
     placed.push({ x0: ex, x1: ex + ew, y: ey + 2 });
   }
   for (const p of inView) {
@@ -57342,7 +57405,6 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const my = ay;
     const beamTop = isPeak ? ay : Math.min(ay - 6, Math.max(12, typ));
     const h = ay - beamTop;
-    const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
     // A NAME HIGH IN THE FRAME HANGS BELOW ITS MARK. Summits ride at the angle
     // they really subtend, so from a valley floor they sit at the top of the
     // glass — and a label placed above one there lands in the compass strip,
@@ -57352,13 +57414,36 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // A SUMMIT'S NAME LIVES IN THE SKY, NOT ON THE RIDGE — and every label,
     // summit or destination, climbs by the same rule until it clears what is
     // already placed.
-    let ly = isPeak ? my - 26 : ay - Math.max(11, Math.round(h / 3));
-    ly = Math.max(COMPASS_B + 2, Math.max(12, ly));
-    for (let guard = 0; guard < 5; guard++) {
-      const clash = placed.some((r) => Math.abs(r.y - ly) < 9 && x < r.x1 + 6 && x + w > r.x0 - 6);
-      if (!clash) break;
-      ly -= 9;
-      if (ly < COMPASS_B + 2) { ly = COMPASS_B + 2; break; }
+    const preferredY = isPeak ? my - 26 : ay - Math.max(11, Math.round(h / 3));
+    let x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
+    let ly = preferredY;
+    let found = false;
+    // Actual ink is about y-3..y+7. Keep the whole word clear of both HUD
+    // instruments and earlier words; search locally in BOTH directions so a
+    // crowded upper sky does not push a summit onto the key or compass.
+    for (let row = 0; row <= 8 && !found; row++) {
+      for (const dy of row ? [-row * 9, row * 9] : [0]) {
+        const yy = Math.round(preferredY + dy);
+        if (yy < COMPASS_B + 2 || yy > HH - 10) continue;
+        for (const dx of [0, -Math.round(w / 3), Math.round(w / 3)]) {
+          const xx = clamp(Math.round(ax - w / 2 + dx), 2, HW - w - 2);
+          const overlaps = safeLabels.some((r) => xx - 3 < r[0] + r[2] && xx + w + 3 > r[0]
+            && yy - 5 < r[1] + r[3] && yy + 8 > r[1]);
+          const words = placed.some((r) => Math.abs(r.y - yy) < 12 && xx < r.x1 + 6 && xx + w > r.x0 - 6);
+          if (!overlaps && !words) { x = xx; ly = yy; found = true; break; }
+        }
+        if (found) break;
+      }
+    }
+    if (!found) {
+      // A requested destination must still be discoverable when the glass is
+      // full. The small point is tappable; optional scenery waits for room.
+      if (p.pinned) {
+        hctx.fillStyle = p.c;
+        hctx.fillRect(ax - 2, ay - 2, 5, 5);
+        poiRects.push({ x: ax - 8, y: ay - 8, w: 16, h: 16, name: p.name, kind: p.kind, rng: p.rng });
+      }
+      continue;
     }
     placed.push({ x0: x, x1: x + w, y: ly });
     hctx.save();
@@ -57444,7 +57529,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // The whole assembly — label AND beam — is the tap target, padded out:
     // a pin is a thing you point at with a thumb, not a 4px word.
     const rx = Math.min(x - 5, ax - 7);
-    poiRects.push({ x: rx, y: ly - 6, w: Math.max(x + w + 5, ax + 7) - rx, h: ay - ly + 12, name: p.name, kind: p.kind, rng: p.rng });
+    const ry = Math.min(ly - 6, ay - 7);
+    poiRects.push({ x: rx, y: ry, w: Math.max(x + w + 5, ax + 7) - rx,
+      h: Math.max(ly + 8, ay + 7) - ry, name: p.name, kind: p.kind, rng: p.rng });
   }
   // The lines are all down; now the words go on top of them.
   for (const q of peakLbls) {
@@ -57466,7 +57553,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // its side as ever.
     const cxp = clamp(Math.round(p.x / hudS), 8, HW - 8);
     const x = p.rim ? clamp(cxp - (w >> 1), 2, HW - w - 2)
-      : p.edge > 0 ? HW - w - 3 : 3;
+      : clamp(Math.round(p.x / hudS), 2, HW - w - 2);
     if (p.rim) {
       // A diamond says HERE, and a rim chip is never here — it is a bearing.
       // A short bold arrow along the true outward direction says THAT WAY:
@@ -57513,14 +57600,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // shape of, and sixteen of them is the whole label budget spent before a
     // single capital is drawn. The three bands under it are unchanged.
     const r = backdropRadius();
-    // FROM THE SEAT: towns and villages within a drive, fewer of them — the
-    // basic first cut; labels and POIs from the seat want their own pass.
+    // Place names share the glass with POIs and instruments. A six-name
+    // cockpit budget and a coarse grid let long village names cover each
+    // other; prefer nearby places within a rank and leave room for the world.
     const maxRank = seatPlaces ? 4 : r > 200000 ? 0 : r > 26000 ? 1 : r > 12000 ? 2 : 4;
     capEyeUpdate();
     const cells = new Set<string>();
-    let budget = seatPlaces ? 6 : 16;
+    const placeSafety = hudSafeRects();
+    let budget = seatPlaces ? 3 : 16;
     const peakNames = seatPlaces ? new Set([...peaks.values()].map((q) => q.name)) : null;
-    const ranked = [...ovPlaces.values()].sort((a, b) => a.rank - b.rank);
+    const ranked = [...ovPlaces.values()].sort((a, b) => a.rank - b.rank
+      || (seatPlaces ? Math.hypot(a.x - state.x, a.z - state.z) - Math.hypot(b.x - state.x, b.z - state.z) : 0));
     for (const p of ranked) {
       if (p.rank > maxRank || budget <= 0) break;
       // A place on the far side of the planet is still in front of the camera
@@ -57543,16 +57633,24 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       if (Math.abs(poiVec.x) > 0.96 || Math.abs(poiVec.y) > 0.92) continue;
       const sx = ((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS;
       const sy = ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS;
-      // From the seat a name above the key would be pinned onto it by the
-      // clamp below; it is dropped instead.
-      if (seatPlaces && sy < Math.max(24, layerKeyBottom + 6)) continue;
+      const label = fitP(p.name.toUpperCase(), Math.round(HW * 0.4));
+      const w = textPW(label);
+      const lx = clamp(Math.round(sx - w / 2), 2, HW - w - 2);
+      const ly = Math.round(sy);
+      // Unlike the coarse chart grid, actual ink bounds include the full
+      // name. Do not move a geographic label away from its place: if the
+      // projected point is occupied, omit this optional label this frame.
+      if (ly < 12 || ly > HH - 20) continue;
+      if (placeSafety.some((q) => lx - 3 < q[0] + q[2] && lx + w + 3 > q[0]
+        && ly - 5 < q[1] + q[3] && ly + 8 > q[1])) continue;
+      if (placed.some((q) => lx - 3 < q.x1 + 3 && lx + w + 3 > q.x0 - 3
+        && Math.abs(q.y - ly) < 13)) continue;
       const ck = `${Math.round(sx / 46)},${Math.round(sy / 12)}`;
       if (cells.has(ck)) continue;
       cells.add(ck);
-      const label = fitP(p.name.toUpperCase(), Math.round(HW * 0.4));
-      const w = textPW(label);
+      placed.push({ x0: lx, x1: lx + w, y: ly });
       const col = p.rank === 0 ? UI.gold : p.rank === 4 ? UI.dim : p.rank <= 1 ? UI.text : UI.soft;
-      textEdgeP(label, clamp(Math.round(sx - w / 2), 2, HW - w - 2), clamp(Math.round(sy), 12, HH - 20), col);
+      textEdgeP(label, lx, ly, col);
       budget--;
       ovLabelsDrawn.push(p.name);
     }
@@ -58330,6 +58428,27 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // instruments, and they were the last text on this canvas that wanted real
   // layout.
   hudLap('riggauge');
+  if (xrayMode === 1 || xrayMode === 3) {
+    const x = Math.max(3, Math.round(HW / 2) - 54), y = Math.round(HH * 0.58);
+    const w = Math.min(108, HW - x - 3);
+    panel(x, y, w, 37);
+    if (xrayMode === 1) {
+      textEdgeS(`DEPTH ${camMode.toUpperCase()}`, x + 3, y + 2, UI.text);
+      textEdgeS(`PIVOT ${Math.round(dofFocusCurrent)}M`, x + 3, y + 11, UI.gold);
+      textEdgeS('AMBER NEAR  TEAL MID', x + 3, y + 20, UI.soft);
+      textEdgeS('VIOLET FAR  NAVY SKY', x + 3, y + 29, UI.soft);
+    } else {
+    textEdgeS(`FOCUS ${currentDofPolicy().name.toUpperCase()}`, x + 3, y + 2, UI.text);
+    textEdgeS(`T ${Math.round(dofFocusTarget)}M  F ${Math.round(dofFocusCurrent)}M`, x + 3, y + 11, UI.gold);
+    textEdgeS(`SOURCE ${dofFocusSource.toUpperCase()}`, x + 3, y + 20, UI.soft);
+    if (dofFocusSource === 'depth') for (let i = 0; i < 9; i++) {
+      const cell = dofSensorCells[i];
+      hctx.fillStyle = i === dofSensorChosen ? UI.text : cell?.valid ? UI.good : UI.bad;
+      hctx.fillRect(x + 3 + (i % 3) * 6, y + 29 + Math.floor(i / 3) * 2, 4, 1);
+    }
+    if (dofMode === 'off') textEdgeS('OFF', x + 25, y + 28, UI.bad);
+    }
+  }
   const hudMs = performance.now() - hudEntry;
   hudProfMs += hudMs;
   if (hudMs > hudProfMaxMs) hudProfMaxMs = hudMs;
