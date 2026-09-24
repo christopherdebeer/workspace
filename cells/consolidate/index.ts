@@ -449,8 +449,11 @@ interface ContestedCandidateObs {
   bType?: string | null;
 }
 
-async function adjudicate(token: string, candidates: ContestedCandidateObs[]): Promise<{ acted: string[]; escalated: number; note?: string }> {
+async function adjudicate(token: string, candidates: ContestedCandidateObs[]): Promise<{ acted: string[]; escalated: number; note?: string; tally?: Record<string, number> }> {
   const acted: string[] = [];
+  // Why each pair went where it went — an all-escalated cycle must say why.
+  const tally: Record<string, number> = {};
+  const bump = (k: string) => (tally[k] = (tally[k] ?? 0) + 1);
   const pairs = candidates.slice(0, CAPS.stageBPairs);
   let escalated = candidates.length - pairs.length;
   let firstFailure: string | undefined;
@@ -484,10 +487,12 @@ async function adjudicate(token: string, candidates: ContestedCandidateObs[]): P
         fb = toPeeked(eb);
       }
       if (!fa?.value || !fb?.value) {
+        bump('missing-fact');
         escalated++;
         return;
       }
       let verdict = judged.verdicts.get(c.hash) ?? null;
+      bump(verdict ? 'jev' : 'models-fallback');
       let res: { text?: string } | undefined;
       if (!verdict) {
         const prompt = buildAdjudicationPrompt(
@@ -497,6 +502,7 @@ async function adjudicate(token: string, candidates: ContestedCandidateObs[]): P
         res = (await gw(token, '@c15r/models.run', { prompt, maxTokens: 300 })) as { text?: string };
         verdict = parseVerdict(res?.text);
       }
+      if (verdict) bump(`${verdict.verdict}${verdict.confidence >= CAPS.stageBFloor ? '' : '<floor'}`);
       if (!verdict || verdict.confidence < CAPS.stageBFloor) {
         if (!verdict && !firstFailure) firstFailure = `unparseable verdict for ${c.a}↔${c.b}: ${String(res?.text).slice(0, 120)}`;
         escalated++;
@@ -541,8 +547,8 @@ async function adjudicate(token: string, candidates: ContestedCandidateObs[]): P
       while (next < pairs.length) await one(pairs[next++]);
     }),
   );
-  if (scopeDenied) return { acted, escalated, note: scopeDenied };
-  return { acted, escalated, ...(firstFailure ? { note: firstFailure } : {}) };
+  if (scopeDenied) return { acted, escalated, tally, note: scopeDenied };
+  return { acted, escalated, tally, ...(firstFailure ? { note: firstFailure } : {}) };
 }
 
 /** Batch Stage B on @c15r/jev: peek both sides of every pair, one decide_many. */
@@ -663,7 +669,7 @@ async function runCycle(input: RunInput): Promise<unknown> {
   ];
   let applied: string[] = [];
   let skipped: string[] = [];
-  let stageB: { acted: string[]; escalated: number; note?: string } = { acted: [], escalated: obs.contestedCandidates.length };
+  let stageB: { acted: string[]; escalated: number; note?: string; tally?: Record<string, number> } = { acted: [], escalated: obs.contestedCandidates.length };
   if (!input.dryRun) {
     const res = await apply(token, plan);
     applied = res.applied;
@@ -683,7 +689,7 @@ async function runCycle(input: RunInput): Promise<unknown> {
     applied,
     skipped,
     ...(bootstrapNotes.length ? { bootstrap: bootstrapNotes } : {}),
-    stageB: { acted: stageB.acted, escalated: stageB.escalated, ...(stageB.note ? { note: stageB.note } : {}) },
+    stageB: { acted: stageB.acted, escalated: stageB.escalated, ...(stageB.tally ? { tally: stageB.tally } : {}), ...(stageB.note ? { note: stageB.note } : {}) },
     // Inc 2 observability: what the backfill actually saw (an empty retype
     // with unlinkedSampled > 0 usually means undeclared keyPatterns — the
     // ADR-0073 `el:` finding — not a broken pass).
