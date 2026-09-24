@@ -1756,9 +1756,11 @@ void main() {
       // light under the moon, made of the same advected grain as the sun's
       // sparkle so it moves with the current and the wind.
       vec3 moonDirection = normalize(uMoonDirection);
-      float moonPower = mix(90.0, 10.0, surfaceRoughness);
+      // A tight lobe broken by the grain: a lit path of glints, not a disc
+      // (the seat's first moonrise showed a soft round blob in the cab view).
+      float moonPower = mix(260.0, 40.0, surfaceRoughness);
       float moonGlint = pow(max(0.0, dot(reflect(-moonDirection, normal), viewDirection)), moonPower);
-      float moonSparkle = 0.35 + 1.3 * smoothstep(0.5, 0.9, grain);
+      float moonSparkle = smoothstep(0.55, 0.85, grain) * 2.2;
       colour += uMoonColour * moonGlint * moonSparkle * mix(0.55, 0.22, surfaceRoughness)
         * step(0.0, moonDirection.y) * (1.0 - daylight) * shade
         * mix(1.0, 0.6, vFlowing) * presence;

@@ -56828,6 +56828,9 @@ const sheetGrab = (w: number, withHud: boolean): Promise<HTMLCanvasElement> => n
 type W = Record<string, ((...a: unknown[]) => unknown) | undefined>;
 const probe = (): W => window as unknown as W;
 function sheetPlan(kind: 'godcam' | 'ab', t: { x: number; z: number }, here: ReturnType<typeof shotState>['god']): SheetShot[] {
+  // A/B reuses the seat's OWN framing, which is already out of the ground (a
+  // cab eye stands two metres up); only the orbit grid needs real clearance.
+  const clearance = kind === 'ab' ? 0.5 : 8;
   const god = (a: { y: number; az: number; el: number; dist: number; fov: number }): void => {
     godTarget.set(t.x, groundAt(t.x, t.z) + a.y, t.z);
     // NOT INSIDE A VALLEY WALL. A fixed orbit of 320 m at 28 degrees puts the
@@ -56839,7 +56842,7 @@ function sheetPlan(kind: 'godcam' | 'ab', t: { x: number; z: number }, here: Ret
       const r = (el * Math.PI) / 180, az = (a.az * Math.PI) / 180;
       const cx = godTarget.x + Math.sin(az) * Math.cos(r) * a.dist;
       const cz = godTarget.z - Math.cos(az) * Math.cos(r) * a.dist;
-      if (godTarget.y + Math.sin(r) * a.dist > groundAt(cx, cz) + 8) break;
+      if (godTarget.y + Math.sin(r) * a.dist > groundAt(cx, cz) + clearance) break;
     }
     sheetLift = el - a.el;
     godAz = (a.az * Math.PI) / 180; godEl = (el * Math.PI) / 180; godDist = a.dist; godFov = a.fov; godInit = true;
