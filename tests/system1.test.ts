@@ -193,3 +193,14 @@ describe('embeddedMeta (lifting a malformed write)', () => {
     expect(embeddedMeta({ ...s, type: 'capture' }, ['proposal'])).toEqual({ tags: [] });
   });
 });
+
+describe('relatable (plumbing is pruned, not judged)', () => {
+  const { relatable } = jest.requireActual('../cells/system1/index');
+  it('keeps content (incl. doc blocks) and drops storage/log/bookkeeping', () => {
+    expect(relatable('doc-block:docs/architecture/12', 'doc-block')).toBe(true);
+    expect(relatable('kb/x', 'knowledge')).toBe(true);
+    expect(relatable('file/cells/input-ce2b7db7/data/images/x/original-000.b64', null)).toBe(false);
+    expect(relatable('tending/triage/2026-09-01', null)).toBe(false);
+    expect(relatable('inbox/x', 'decompose-status')).toBe(false);
+  });
+});

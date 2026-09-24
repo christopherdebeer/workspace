@@ -99,6 +99,17 @@ export const SKIP_TYPES = new Set([
 ]);
 export const SKIP_PREFIXES = ['_', 'system1/', 'judgment/', 'checked/', 'contested/', 'consolidation/', 'machine/', 'lease/', 'tending/', 'cells/', 'file/', 'doc-block:', '_doc'];
 
+/** A suggestion endpoint worth relating: content, not plumbing. Doc blocks ARE
+ *  relatable (perceive skips them only for cost). Storage chunks, raw file
+ *  mirrors (their doc/doc-blocks carry the content), tending logs and the
+ *  organs' bookkeeping are not — a pair touching one is declined mechanically
+ *  (System Two audit 2026-09-24: b64 image chunks were ratified relatesTo). */
+export const UNRELATABLE_PREFIXES = ['_', 'file/', 'tending/', 'system1/', 'judgment/', 'checked/', 'contested/', 'consolidation/', 'machine/', 'lease/', 'cells/'];
+export function relatable(key: string, type?: string | null): boolean {
+  if (UNRELATABLE_PREFIXES.some((p) => key.startsWith(p))) return false;
+  return !(type && ['decompose-status', 'doc-order', 'machine-run', 'machine-trigger', 'checked', 'consolidation', 'reaction-error', 'lease', 'cell', 'capability'].includes(type));
+}
+
 export function perceivable(key: string, type: string | null | undefined): boolean {
   if (SKIP_PREFIXES.some((p) => key.startsWith(p))) return false;
   if (type && SKIP_TYPES.has(type)) return false;
@@ -671,8 +682,10 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
   // byte-identical or same-source pairs are prune material (ADR-0032 contract)
   // — decline them without spending a judgment. Leased pairs belong to a peer.
   const all = (sug.suggestions ?? []).filter((p) => !p.leasedBy);
-  const prune = all.filter((p) => p.identical || p.degenerate);
-  const pairs = all.filter((p) => !p.identical && !p.degenerate);
+  const mechanical = (p: (typeof all)[number]) =>
+    p.identical || p.degenerate || !relatable(p.from, (p as { fromType?: string | null }).fromType) || !relatable(p.to, (p as { toType?: string | null }).toType);
+  const prune = all.filter(mechanical);
+  const pairs = all.filter((p) => !mechanical(p));
   const log: RunLog = { id: newRunId(), tool: 'sweep_suggestions', mode, at: new Date().toISOString(), thresholds: th, counts: { pending: sug.total ?? 0, pairs: all.length, pruned: prune.length }, acts: [], errors: [], usage: { input_tokens: 0 } };
   if (mode === 'act' && prune.length) {
     const res = await gwCallMany(token, prune.map((p) => ({ target: 'workspace.unlink', input: { from: p.from, rel: 'similarTo', to: p.to }, kind: 'act' as const })), { url: GATEWAY_MCP, concurrency: 16 });
@@ -763,7 +776,7 @@ async function sweepSuggestions(input: SweepInput): Promise<RunLog> {
 async function revert(input: { token?: string; run?: string; key?: string }): Promise<Record<string, unknown>> {
   const token = input.token;
   if (!token || !input.run) throw new Error('token and run are required');
-  const rec = (await gw(token, 'workspace.peek', { key: `${RUN_PREFIX}${input.run}` }, 'read')) as { value?: RunLog } | null;
+  const rec = (await gw(token, 'workspace.peek', { key: `${RUN_PREFIX}${input.run}`, whole: true }, 'read')) as { value?: RunLog } | null;
   const log = rec?.value;
   if (!log) throw new Error(`no run log system1/run/${input.run}`);
   const acts = (log.acts ?? []).filter((a) => !input.key || a.key === input.key || a.from === input.key);
@@ -811,7 +824,7 @@ async function revert(input: { token?: string; run?: string; key?: string }): Pr
 async function label(input: { token?: string; run?: string; index?: number; ok?: boolean; note?: string }): Promise<unknown> {
   const token = input.token;
   if (!token || !input.run || typeof input.index !== 'number' || typeof input.ok !== 'boolean') throw new Error('token, run, index and ok are required');
-  const rec = (await gw(token, 'workspace.peek', { key: `${RUN_PREFIX}${input.run}` }, 'read')) as { value?: RunLog } | null;
+  const rec = (await gw(token, 'workspace.peek', { key: `${RUN_PREFIX}${input.run}`, whole: true }, 'read')) as { value?: RunLog } | null;
   const act = rec?.value?.acts?.[input.index];
   if (!act) throw new Error('no such act');
   const key = `${LABEL_PREFIX}${input.run}/${input.index}`;
