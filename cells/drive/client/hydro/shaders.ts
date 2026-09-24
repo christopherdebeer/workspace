@@ -130,6 +130,7 @@ varying float vShoal;
 varying float vExposure;
 /** 0 beach, 1 shingle, 2 rock platform, 3 cliff, 4 sheltered inlet. */
 varying float vCoastProfile;
+varying vec4 vCoastWeights;
 
 #include <common>
 #include <fog_pars_vertex>
@@ -204,6 +205,11 @@ void main() {
   float platformProfile = 1.0 - step(0.5, abs(vCoastProfile - 2.0));
   float cliffProfile = 1.0 - step(0.5, abs(vCoastProfile - 3.0));
   float inletProfile = 1.0 - step(0.5, abs(vCoastProfile - 4.0));
+  // The profile is a CATEGORY per vertex. Interpolated as a number, a beach
+  // vertex (0) beside an inlet vertex (4) passed through shingle, platform
+  // and cliff inside the triangle: straight-edged wedges of the wrong coast.
+  // One-hot weights interpolate into a blend instead (inlet = the remainder).
+  vCoastWeights = vec4(beachProfile, shingleProfile, platformProfile, cliffProfile);
 
   // ── THE SEA HAS NO SOUNDINGS, AND THE BREAK GATES MUST NOT BELIEVE ITS
   //    DEPTH ──
@@ -567,6 +573,7 @@ varying float vShoal;
 varying float vExposure;
 /** 0 beach, 1 shingle, 2 rock platform, 3 cliff, 4 sheltered inlet. */
 varying float vCoastProfile;
+varying vec4 vCoastWeights;
 
 #include <common>
 #include <fog_pars_fragment>
@@ -795,7 +802,25 @@ void main() {
   float coverageInterior = 1.0;
   float recentlyWashed = 0.0;
 #ifdef HYDRO_SURF
-  if (!coastalKind || abs(geometryField.g) > 96.0) discard;
+  bool surfHere = coastalKind;
+  if (uLookModel > 0.5) {
+    // LOOK: the swash strip belongs to coastal water, but deciding that per
+    // NEAREST texel cut the overlay off in 18.75 m steps wherever the sea met
+    // an estuary or lagoon (the staircase at the uMngeni mouth). Take the
+    // bilinear share of coastal kinds and cut at half of it.
+    vec2 tp = vHydroUv / uHydroTexel - 0.5;
+    vec2 b0 = (floor(tp) + 0.5) * uHydroTexel;
+    vec2 fr = fract(tp);
+    vec4 k4 = floor(vec4(
+      texture2D(uHydroMaterial, b0).r,
+      texture2D(uHydroMaterial, b0 + vec2(uHydroTexel.x, 0.0)).r,
+      texture2D(uHydroMaterial, b0 + vec2(0.0, uHydroTexel.y)).r,
+      texture2D(uHydroMaterial, b0 + uHydroTexel).r) * 255.0 + 0.5);
+    vec4 c4 = step(vec4(0.5), k4) * (1.0 - step(vec4(2.5), k4));
+    vec4 w4 = vec4((1.0 - fr.x) * (1.0 - fr.y), fr.x * (1.0 - fr.y), (1.0 - fr.x) * fr.y, fr.x * fr.y);
+    surfHere = dot(c4, w4) >= 0.5;
+  }
+  if (!surfHere || abs(geometryField.g) > 96.0) discard;
   float coverageCut = 0.5;
   bool partialCoast = geometryField.r > 0.005
     && geometryField.r < 0.9 && geometryField.g < 0.0;
@@ -1171,6 +1196,11 @@ void main() {
     float platformProfile = 1.0 - step(0.5, abs(vCoastProfile - 2.0));
     float cliffProfile = 1.0 - step(0.5, abs(vCoastProfile - 3.0));
     float inletProfile = 1.0 - step(0.5, abs(vCoastProfile - 4.0));
+    if (uLookModel > 0.5) {
+      beachProfile = vCoastWeights.x; shingleProfile = vCoastWeights.y;
+      platformProfile = vCoastWeights.z; cliffProfile = vCoastWeights.w;
+      inletProfile = max(0.0, 1.0 - dot(vCoastWeights, vec4(1.0)));
+    }
     shoalWidth *= beachProfile
       + shingleProfile * 0.66
       + platformProfile * 0.82
