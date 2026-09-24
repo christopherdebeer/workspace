@@ -114,6 +114,7 @@ uniform float uWaveAmplitude;
 uniform float uWaveLength;
 uniform float uWaveChop;
 uniform float uShoreFade;
+uniform float uLookModel;
 
 varying vec2 vHydroUv;
 varying vec2 vAbsoluteXZ;
@@ -249,6 +250,15 @@ void main() {
     platformShelf, platformDrop, smoothstep(32.0, 52.0, shoreDist)
   );
   float waveDepth = mix(depth, max(depth, profileDepth), coastalStanding);
+  // LOOK: a body mapped without bathymetry carries a nominal few centimetres
+  // everywhere (0.08 m across Lake Bled), so the whole lake sat in the
+  // breaker band and wore surf foam cut into triangles by these per-vertex
+  // terms. Offshore, waves see the same shore-derived depth the fragment's
+  // colour already uses (visualDepth).
+  if (uLookModel > 0.5) {
+    float offshoreV = smoothstep(15.0, 70.0, shoreDist) * (1.0 - vFlowing);
+    waveDepth = mix(waveDepth, max(waveDepth, min(3.0 + shoreDist * 0.022, 14.0)), offshoreV);
+  }
 
   vec4 renderPosition = modelMatrix * vec4(position, 1.0);
   vAbsoluteXZ = renderPosition.xz + uWorldOrigin.xz;
@@ -1737,7 +1747,7 @@ void main() {
     // texture that made "the river lacks detail" true.
     || (vFlowing > 0.5 && energy > 0.22)
     || shallowRapid > 0.02
-    || (vWaveCrest > 0.6 && geometryField.a < 6.0);
+    || (vWaveCrest > 0.6 && (uLookModel > 0.5 ? max(geometryField.a, visualDepth) : geometryField.a) < 6.0);
   if (nearWater && foamZone) {
     // ── FOAM: SPARSE, CAUSAL, BRIEF ──
     // Standing water keeps the fixed world axes it always fragmented on
@@ -1884,7 +1894,8 @@ void main() {
     // the breakers so the pre-surf stays broken patches, and by depth so
     // open-water crests never wear it.
     float spill = (1.0 - vFlowing) * smoothstep(0.78, 0.98, vWaveCrest)
-      * (1.0 - smoothstep(2.2, 6.0, geometryField.a)) * fragmentNoise * 0.35
+      * (1.0 - smoothstep(2.2, 6.0, uLookModel > 0.5 ? max(geometryField.a, visualDepth) : geometryField.a))
+      * fragmentNoise * 0.35
       * mix(0.2, 1.0, vExposure);
     // Swash foam is a texture inside the SAME wetness band used by the body
     // colour and moving cutoff. It may break into flecks, but it cannot form a
