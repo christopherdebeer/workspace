@@ -587,6 +587,10 @@ uniform float uScatteringStrength;
 uniform float uSurfaceRoughness;
 uniform float uLookModel;
 uniform float uFoamMask;
+uniform vec3 uHeadPos;
+uniform vec3 uHeadDir;
+uniform vec3 uHeadColour;
+uniform vec4 uHeadCone;
 uniform vec3 uMoonDirection;
 uniform vec3 uMoonColour;
 uniform float uEdgeBlendEnabled;
@@ -1709,6 +1713,27 @@ void main() {
   shade = sceneShade(vRenderPosition);
 #endif
   vec3 sceneLight = uSceneLight * (0.77 + 0.26 * facet) * shade;
+  // ── THE HEADLAMP REACHES THE WATER ──
+  // The hydro material lights itself (sun, sky, moon), so the one lamp in
+  // the world lit both banks and left the river between them dark. The
+  // host hands the spot over in the scene light's own units with three's
+  // spot law (cone, range window, decay), so a wet road, a ford and the
+  // river beside it are lit by ONE lamp under one rule. Capped: on the
+  // ground the same law overexposes the pool by design, and a mirror does
+  // not need a second sun to show a lamp.
+  vec3 lampLight = vec3(0.0);
+  vec3 toLamp = vec3(0.0, 1.0, 0.0);
+  float lampE = 0.0;
+  if (uHeadColour.r + uHeadColour.g + uHeadColour.b > 0.0005) {
+    vec3 dl = uHeadPos - vRenderPosition;
+    float ld = max(length(dl), 0.5);
+    toLamp = dl / ld;
+    float cone = smoothstep(uHeadCone.x, uHeadCone.y, dot(-toLamp, uHeadDir));
+    float window = ld < uHeadCone.z ? pow(1.0 - pow(ld / uHeadCone.z, 4.0), 2.0) : 0.0;
+    lampE = min(cone * window / max(pow(ld, uHeadCone.w), 0.01), 2.5);
+    lampLight = uHeadColour * lampE * max(dot(normal, toLamp), 0.0);
+    sceneLight += lampLight;
+  }
   colour *= sceneLight;
   // LOOK: AT NIGHT THE WATER IS DARKER THAN THE GROUND. The ground is raked by
   // the moon light (LIGHT_DIR is lifted to a shallow angle at night) and the
@@ -1825,6 +1850,15 @@ void main() {
     colour += vec3(1.0, 0.9, 0.7) * glint * sparkle
       * mix(0.11, 0.04, surfaceRoughness)
       * daylight * shade * detailLod * mix(1.0, 0.46, vFlowing) * presence;
+    if (lampE > 0.0001) {
+      // The lamp's own reflection: a tight lobe on the calmed mirror, broken
+      // by the grain like the sun's, so a river at night carries a streak of
+      // the headlights toward the truck rather than a flat lit patch.
+      float lampPower = mix(120.0, 24.0, surfaceRoughness);
+      float lampGlint = pow(max(0.0, dot(reflect(-toLamp, mirrorNormal), viewDirection)), lampPower);
+      colour += uHeadColour * lampE * lampGlint * (0.6 + 0.6 * smoothstep(0.45, 0.85, grain))
+        * mix(0.5, 0.2, surfaceRoughness) * presence;
+    }
     if (uLookModel > 0.5 && uMoonColour.r + uMoonColour.g + uMoonColour.b > 0.001) {
       // THE MOON'S PATH. The one night cue water owns: a broken column of
       // light under the moon, made of the same advected grain as the sun's

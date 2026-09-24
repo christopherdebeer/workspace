@@ -644,6 +644,15 @@ class DefaultHydroSystem implements HydroSystem {
       this.frameUniforms.uMoonDirection.value.set(frame.moon.x, frame.moon.y, frame.moon.z).normalize();
       this.frameUniforms.uMoonColour.value.set(frame.moon.r, frame.moon.g, frame.moon.b);
     }
+    if (frame.head) {
+      const h = frame.head;
+      this.frameUniforms.uHeadPos.value.set(h.x, h.y, h.z);
+      this.frameUniforms.uHeadDir.value.set(h.dx, h.dy, h.dz).normalize();
+      this.frameUniforms.uHeadColour.value.set(h.r, h.g, h.b);
+      this.frameUniforms.uHeadCone.value.set(h.cosOuter, h.cosInner, h.range, h.decay);
+    } else {
+      this.frameUniforms.uHeadColour.value.set(0, 0, 0);
+    }
     if (frame.terrainColour) {
       this.frameUniforms.uTerrainColour.value.setRGB(
         frame.terrainColour.r, frame.terrainColour.g, frame.terrainColour.b,

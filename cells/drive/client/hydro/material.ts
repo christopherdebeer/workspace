@@ -42,6 +42,10 @@ export interface HydroFrameUniforms {
   uFoamMask: { value: number };
   uMoonDirection: { value: THREE.Vector3 };
   uMoonColour: { value: THREE.Vector3 };
+  uHeadPos: { value: THREE.Vector3 };
+  uHeadDir: { value: THREE.Vector3 };
+  uHeadColour: { value: THREE.Vector3 };
+  uHeadCone: { value: THREE.Vector4 };
 }
 
 export interface HydroTileTextures {
@@ -100,6 +104,10 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uFoamMask: { value: 31 },
     uMoonDirection: { value: new THREE.Vector3(0, 1, 0) },
     uMoonColour: { value: new THREE.Vector3(0, 0, 0) },
+    uHeadPos: { value: new THREE.Vector3(0, 0, 0) },
+    uHeadDir: { value: new THREE.Vector3(0, 0, 1) },
+    uHeadColour: { value: new THREE.Vector3(0, 0, 0) },
+    uHeadCone: { value: new THREE.Vector4(0.87, 0.98, 1, 1) },
   };
 }
 
@@ -307,6 +315,10 @@ export function createHydroMaterial(
       uFoamMask: frame.uFoamMask,
       uMoonDirection: frame.uMoonDirection,
       uMoonColour: frame.uMoonColour,
+      uHeadPos: frame.uHeadPos,
+      uHeadDir: frame.uHeadDir,
+      uHeadColour: frame.uHeadColour,
+      uHeadCone: frame.uHeadCone,
       uEdgeBlendEnabled: { value: edgeBlend ? 1 : 0 },
     },
     // ── A SURFACE YOU CAN BE UNDERNEATH ──

@@ -4007,6 +4007,8 @@ const HYDRO_LOOK = clamp(qsNum('hydrolook', 1), 0, 1);
  *  sky's own `moonDir`, never the chart's stand-in light) and its light as a
  *  0..1 share of a clear full moon. */
 const hydroFrameMoon = { x: 0, y: 1, z: 0, r: 0, g: 0, b: 0 };
+const hydroFrameHead = { x: 0, y: 0, z: 0, dx: 0, dy: 0, dz: 1, r: 0, g: 0, b: 0, cosOuter: 0.87, cosInner: 0.98, range: 1, decay: 1 };
+const hydroHeadP = new THREE.Vector3(), hydroHeadT = new THREE.Vector3();
 const hydroFrameSky = { r: 0, g: 0, b: 0 };
 const hydroFrameTerrain = { r: 0, g: 0, b: 0 };
 /** THE LIGHT THE GROUND GETS, for the water (HydroFrame.sceneLight). The
@@ -4044,6 +4046,20 @@ function hydroLightFeed(): void {
   hydroFrameMoon.r = moon.color.r * lunarShare;
   hydroFrameMoon.g = moon.color.g * lunarShare;
   hydroFrameMoon.b = moon.color.b * lunarShare;
+  // The headlamp, in the same units: candela over the noon reference, with
+  // three's own cone and decay so the water and the ground agree on one lamp.
+  const refOf = (k: 'r' | 'g' | 'b'): number => Math.max(biome.sunI * 0.8 * hydroRefSun[k] + biome.hemiI * hydroRefSky[k], 1e-3);
+  const lampOn = headSpot.visible && headSpot.intensity > 0.01;
+  hydroFrameHead.r = lampOn ? headSpot.color.r * headSpot.intensity / refOf('r') : 0;
+  hydroFrameHead.g = lampOn ? headSpot.color.g * headSpot.intensity / refOf('g') : 0;
+  hydroFrameHead.b = lampOn ? headSpot.color.b * headSpot.intensity / refOf('b') : 0;
+  headSpot.getWorldPosition(hydroHeadP); headSpot.target.getWorldPosition(hydroHeadT);
+  hydroHeadT.sub(hydroHeadP).normalize();
+  hydroFrameHead.x = hydroHeadP.x; hydroFrameHead.y = hydroHeadP.y; hydroFrameHead.z = hydroHeadP.z;
+  hydroFrameHead.dx = hydroHeadT.x; hydroFrameHead.dy = hydroHeadT.y; hydroFrameHead.dz = hydroHeadT.z;
+  hydroFrameHead.cosOuter = Math.cos(headSpot.angle);
+  hydroFrameHead.cosInner = Math.cos(headSpot.angle * (1 - headSpot.penumbra));
+  hydroFrameHead.range = headSpot.distance; hydroFrameHead.decay = headSpot.decay;
 }
 /** The world's wind, written where the sky and the grass already agree on it.
  *  12km/h is the calm-day default the deck drift uses. */
@@ -4105,6 +4121,7 @@ function hydroTick(nowMs: number): void {
     zenithColour: hydroFrameZenith,
     groundGain: hydroFrameGain,
     moon: hydroFrameMoon,
+    head: hydroFrameHead,
     terrainColour: hydroFrameTerrain,
     // The ground's colour AT THE FRAGMENT, from the grass's own field (see
     // HydroFrame.terrainField): the shallows at a crossing wore the road's

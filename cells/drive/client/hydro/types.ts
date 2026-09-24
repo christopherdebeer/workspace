@@ -313,6 +313,14 @@ export interface HydroFrame {
    *  its light (linear colour × a 0..1 strength, 0 when it is down, new or
    *  clouded out). Only the look model's glitter path reads it. */
   moon?: { x: number; y: number; z: number; r: number; g: number; b: number };
+  /** The rig's headlamp as the water sees it: world position and aim, its
+   *  colour × intensity as a RATIO to the clear-noon reference the scene
+   *  light is stated against (so 1 at one metre is noon), and three's own
+   *  spot law — cos of the outer and inner cone, the range and the decay —
+   *  so the river takes the same lamp the bank beside it does. Omit and the
+   *  water is lit by the sky alone, as it was. */
+  head?: { x: number; y: number; z: number; dx: number; dy: number; dz: number;
+    r: number; g: number; b: number; cosOuter: number; cosInner: number; range: number; decay: number };
   /** The vehicle, when it is IN the water: absolute x/z, velocity in m/s and
    *  how deep it is wading. Omit (or wadeM 0) and the surface ignores it —
    *  the water only answers a hull that is actually displacing it. */
