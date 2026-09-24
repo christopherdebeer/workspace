@@ -928,6 +928,13 @@ void main() {
   // cross(tangent, offset), curvature from cross(u1, u2) — make the outer
   // bank the side where curvature × n is NEGATIVE.
   float outerBank = clamp(0.5 - riverField.b * riverField.g * 60.0, 0.0, 1.0);
+  // LOOK: n is normalised to the river LINE's half-width. A mapped water
+  // area wider than that line (an estuary, a braided reach, a riverbank
+  // polygon) sits at |n| > 1 almost everywhere, and the channel section read
+  // all of it as bank: no wetness, an 8% visual depth and bank material
+  // painted across the whole body. Beyond the ribbon the shore distance is
+  // the truth.
+  float beyondRibbon = uLookModel > 0.5 ? smoothstep(1.0, 1.25, abs(riverField.g)) : 0.0;
 #endif
 
   if (uDebugView > 0.5) {
@@ -1178,6 +1185,7 @@ void main() {
   if (vFlowing > 0.5 && flowingKind) {
     // Bank width follows metres and depth, not 30% of every channel.
     float bankMetres = max(0.0, (1.0 - abs(riverField.g)) * riverField.a);
+    bankMetres = mix(bankMetres, max(0.0, geometryField.g), beyondRibbon);
     // Coverage distance owns the rendered contour. River-space N owns the
     // channel section, but bends and rasterised area banks can place N=±1 a
     // few metres away from the actual coverage cut. Shading from N alone let
@@ -1223,6 +1231,7 @@ void main() {
     // at the bank. This continuous section exposes bars and pebbles across a
     // useful margin without changing the physics depth stored in the field.
     float trough = mix(0.08, 1.0, pow(max(0.0, 1.0 - across), 0.62));
+    trough = mix(trough, 1.0, beyondRibbon * smoothstep(2.0, 10.0, geometryField.g));
     // A bend deposits a coherent shelf on its INSIDE bank. Curvature and side
     // choose the place; broad cross-channel position shapes it. This is a
     // geomorphic signal, not extra texture noise, so bars turn with the river
@@ -1398,7 +1407,8 @@ void main() {
     // The last wet metre contains gravel bars, damp sediment and broken
     // reflected water rather than one dark contact stripe. This lies inside
     // the opaque surface and meets the physical coverage waterline at the bank.
-    float bankNear = smoothstep(0.58, 1.06, abs(riverField.g));
+    float bankNear = smoothstep(0.58, 1.06, abs(riverField.g))
+      * (1.0 - beyondRibbon * smoothstep(3.0, 12.0, geometryField.g));
     float bankGrain = valueNoise(vec2(
       riverS * 0.19 + seed * 13.0,
       riverCross * 2.7 - riverS * 0.027
