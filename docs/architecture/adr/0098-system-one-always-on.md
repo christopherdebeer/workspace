@@ -404,6 +404,30 @@ consolidate.
   seed calibration (`_system1/calibration`) set project to 0.75 and serves to
   0.8. `calibrate` moves the gates from there on survival and audit labels.
 
+**Inc 4 — the learner, closed and corrected.**
+- **The first System Two audit** (`audit_sample`, 16 acts stratified toward
+  the gate) found 14 correct. The 2 misses taught two things:
+  - **Plumbing is not a relationship.** Base64 storage chunks of one image were
+    ratified `relatesTo`. Sweep now declines any pair touching plumbing
+    mechanically (`relatable`: storage and `file/` mirrors, tending logs,
+    bookkeeping), without a judgment.
+  - **0.73 `relatesTo` can be superficial.** Such a pair was accepted just
+    above the 0.70 gate. That label goes to the learner (3× weight).
+- **The learner's first run was wrong, in a way worth recording.** It read
+  `workspace.edges({around})` as `{edges}`, but the verb answers
+  `{outbound, inbound}`. Every surviving act therefore looked reverted:
+  precision 0.097, and `relate` tightened to 0.75.
+  - The ≤0.05-per-cycle step bound contained it.
+  - Fixed, the same 370 labels read precision **0.984** and the gate
+    returned to 0.70.
+- **Writes are now stamped by the organ.** The backfill runs under an
+  `agent:system1` child token (RFC 8693 exchange, ADR-0024), so its writes
+  read as the organ, not the owner. The kill switch (`_system1/config`) paused
+  and resumed the chains live; undo and the teaching tools still run while
+  paused.
+- **Deploys go through `cell-sync`** (git-true, three-way, with a baseline
+  committed per cell).
+
 **Inc 3 — blocked on one tier-1 line.** Always-on perception is a
 `_subscriptions` entry delivering `fact.written` to `@c15r/system1.perceive`
 with `grants: {read, write}`. The reactor mints the per-run owner token only
