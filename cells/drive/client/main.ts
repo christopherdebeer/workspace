@@ -40,6 +40,7 @@ import {
   BANK_GLSL,
 } from './shoreline';
 import { URL_OWNED, qs, qsHas, qsNum, qsOn, switchRows, urlWithSwitches, onSwitch, setSwitch, switchApply, isSwitchId, queryPairs,
+  carrySwitches,
   type SwitchId } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { CHART_LAYERS, COVER_INK, HYDRO_VIEWS, SUBSTRATE_LEGEND, SURFACE_LEGEND, WATER_LEGEND, XRAY_VIEWS,
@@ -35821,8 +35822,8 @@ function startRealDrive(): void {
       // at boot and everything local — fog, chart, float precision — is baked
       // around it, so ARRIVING somewhere is cheaper and safer than moving the
       // world under a running session.
-      location.replace(`${location.pathname}?lat=${p.coords.latitude.toFixed(5)}`
-        + `&lon=${p.coords.longitude.toFixed(5)}&h=${Math.round(h)}&cam=cab&real=1`);
+      location.replace(carrySwitches(`${location.pathname}?lat=${p.coords.latitude.toFixed(5)}`
+        + `&lon=${p.coords.longitude.toFixed(5)}&h=${Math.round(h)}&cam=cab&real=1`));
     },
     (e) => geoFail(e, (s) => { real.err = s; }),
     { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
@@ -36018,8 +36019,8 @@ function stepReal(dt: number): boolean {
   // mount, so it waits for you to stop. Survey progress is keyed by position
   // in localStorage and survives it.
   if (real.drift > 5000 && Math.abs(state.speed) < 2) {
-    location.replace(`${location.pathname}?lat=${f.lat.toFixed(5)}&lon=${f.lon.toFixed(5)}`
-      + `&h=${Math.round(((state.heading * 180) / Math.PI + 360) % 360)}&cam=${camMode}&real=1`);
+    location.replace(carrySwitches(`${location.pathname}?lat=${f.lat.toFixed(5)}&lon=${f.lon.toFixed(5)}`
+      + `&h=${Math.round(((state.heading * 180) / Math.PI + 360) % 360)}&cam=${camMode}&real=1`));
   }
   return true;
 }
@@ -36623,7 +36624,7 @@ const runFetch = (): Promise<{ head: TapeHead; steps: string; keys: string } | n
 async function runOpenPlay(id: string): Promise<void> {
   const user = sync.status().user;
   if (!user) return;
-  const url = `${location.pathname}?run=${user}/${id}`;
+  const url = carrySwitches(`${location.pathname}?run=${user}/${id}`);
   if (real.on || lineOn || hopping) { location.replace(url); return; }
   attractStop();
   menu.open(T_DRIVE);
@@ -36700,6 +36701,7 @@ function runCard(w: { head: TapeHead; steps: string; keys: string }, auto = fals
  *  location.replace for the same history reason. */
 function travelTo(lat: number, lon: number, h: number, url: string,
   opts: { line?: boolean; mission?: string } = {}): void {
+  url = carrySwitches(url);   // the session's look/bench switches ride along
   attractStop();   // travel is a takeover; a rolling reel must not re-fire into it
   if (real.on || (opts.line ?? false) !== lineOn) { location.replace(url); return; }
   // The tap must be SEEN to land (owner-caught: a hop behind the DRIVES tab's
@@ -43873,6 +43875,12 @@ function heightsOf(): number[] {
  *  said — after a sign-in return, that is the whole question. */
 /** Travel in place, the player's path — for the harness to exercise without
  *  a menu tap. Resolves when the anchor is set and streaming has begun. */
+/** Travel the way a saved spot or a drive does: a bare address through
+ *  travelTo, so a harness exercises the path the menu takes (carrySwitches). */
+(window as unknown as { __travel?: object }).__travel = (lat: number, lon: number, h = 0): string => {
+  travelTo(lat, lon, h, `${location.pathname}?lat=${lat}&lon=${lon}&h=${h}&cam=chase`);
+  return 'travelling';
+};
 (window as unknown as { __hop?: object }).__hop = (lat: number, lon: number, h = 0): Promise<string> =>
   worldHop(lat, lon, h).then(() => 'ok', (e: Error) => `refused: ${e.message}`);
 /** LIVENESS, not last-frame leftovers: renderer.info repeats the final frame's
@@ -59981,12 +59989,12 @@ const menu = createMenu({
   setPaint: (hex) => setCustomPaint(hex),
   drive: () => audio.arm(),
   realToggle: () => {
-    if (real.on) { location.replace(location.pathname); return; }  // back to the menu, model driving
+    if (real.on) { location.replace(carrySwitches(location.pathname)); return; }  // back to the menu, model driving
     startRealDrive();
   },
   // A random spawn is decided at BOOT (findSpawn owns the dice), so ELSEWHERE
   // keeps the reboot — through replace(), never a history entry.
-  elsewhere: () => { location.replace(location.pathname + '?random=1'); },
+  elsewhere: () => { location.replace(carrySwitches(location.pathname + '?random=1')); },
   saveSpot: () => saveSpot(),
   // THE LINE, as the menu reads it. One CTA, honest rows, the legs in order.
   line: () => {

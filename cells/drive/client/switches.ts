@@ -377,6 +377,28 @@ export const qsNum = (id: SwitchId, whenAbsent: number, search?: string): number
  *  must see the whole query (SHOT's readout, A/B's "the URL is B"). */
 export const queryPairs = (search?: string): Array<[string, string]> =>
   [...new URLSearchParams(search ?? (typeof location === 'undefined' ? '' : location.search))];
+/**
+ * ── A NEW PLACE KEEPS THE SESSION'S SWITCHES ──
+ *
+ * Every hop to a saved spot, a drive, a run or a GPS fix builds its URL from
+ * scratch (`?lat=&lon=&h=&cam=`) and wrote it over the address bar, so
+ * `hydrolook=1&banklook=1` vanished on arrival: the URL, SHOT and A/B then
+ * said "shipped" while the running world might still be drawing the
+ * override, and the next reload really did drop it (seen from the seat,
+ * reviewing a change that was no longer on). This carries every switch the
+ * current session has that is not a `world` key (the address, a fixture, a
+ * run, a mission, the line) onto the destination, unless it sets its own.
+ */
+export function carrySwitches(url: string, from?: string): string {
+  const here = typeof location === 'undefined' ? null : location;
+  const u = new URL(url, here?.href ?? 'http://local/');
+  for (const [k, v] of new URLSearchParams(from ?? here?.search ?? '')) {
+    const def = BY_ID.get(k);
+    if (!def || (def.marks as readonly string[]).includes('world') || u.searchParams.has(k)) continue;
+    u.searchParams.set(k, v);
+  }
+  return u.pathname + u.search + u.hash;
+}
 /** What changing this switch costs — see SwitchApply. */
 export const switchApply = (id: string): SwitchApply => BY_ID.get(id)?.apply ?? 'load';
 export const isSwitchId = (id: string): id is SwitchId => BY_ID.has(id);
