@@ -360,10 +360,10 @@ export interface HydroTuning {
   scatteringStrength: number;
   /** Broadening and dimming of reflected sky structure. */
   surfaceRoughness: number;
-  /** Optical model. 0 is the shipped look; 1 lets reflection carry the
-   *  scene's own sky (full Fresnel, no second night dimming, a moon glint)
-   *  and confines every water-only term to the water, so the first
-   *  fragments at the waterline are the ground. `?hydrolook=` A/B. */
+  /** Optical model. 1 (the default since the hydro review) lets reflection
+   *  carry the scene's own sky on the full Fresnel curve, adds the moon path,
+   *  darkens the body at night, blends class steps and keeps water-only terms
+   *  off the waterline. 0 is the look before it, kept for `?hydrolook=0` A/B. */
   lookModel: number;
 }
 
@@ -381,7 +381,7 @@ export const DEFAULT_HYDRO_TUNING: HydroTuning = {
   absorptionStrength: 1,
   scatteringStrength: 1,
   surfaceRoughness: 1,
-  lookModel: 0,
+  lookModel: 1,
 };
 
 export interface HydroBuildOptions {

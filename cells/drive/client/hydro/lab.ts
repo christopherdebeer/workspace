@@ -809,7 +809,7 @@ export async function startHydroLab(): Promise<void> {
   // lights and sky toward the game's NIGHT_SKY by the same civil-twilight
   // weight; `?look=` picks the water's optical model (HydroTuning.lookModel).
   const labQuery = new URLSearchParams(location.search);
-  const labLook = Math.min(1, Math.max(0, Number(labQuery.get('look') ?? 0) || 0));
+  const labLook = Math.min(1, Math.max(0, Number(labQuery.get('look') ?? 1)));
   const labSunAlt = labQuery.has('sunalt') ? Number(labQuery.get('sunalt')) : null;
   const labRef = { sun: sun.color.clone(), sunI: sun.intensity, sky: hemi.color.clone(), hemiI: hemi.intensity,
     up: sun.position.y / sun.position.length() };

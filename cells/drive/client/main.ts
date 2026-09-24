@@ -3998,9 +3998,9 @@ function publishHydroShoreBreakLines(t: HeightTile, key: string): void {
  */
 const hydroFrameOrigin = { x: 0, y: 0, z: 0 };
 /** `?banklook=1` — the narrow damp bank (see the sward's bank paint). */
-let BANK_LOOK = qsNum('banklook', 0) > 0.5;
+let BANK_LOOK = qsNum('banklook', 1) > 0.5;
 /** `?hydrolook=` — the water's optical model (HydroTuning.lookModel). */
-const HYDRO_LOOK = clamp(qsNum('hydrolook', 0), 0, 1);
+const HYDRO_LOOK = clamp(qsNum('hydrolook', 1), 0, 1);
 /** The moon, for the water's glitter path: the TRUE lunar direction (the
  *  sky's own `moonDir`, never the chart's stand-in light) and its light as a
  *  0..1 share of a clear full moon. */
@@ -4489,14 +4489,13 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
       scheduleBuild: (job) =>
       new Promise((resolve, reject) => { hydroJobs.push({ job, resolve, reject }); }) });
     hydroSys.setDebugView(hydroView);
-    // THE WATER'S OPTICS, A/B. `?hydrolook=1` lets reflection carry the
-    // scene's own sky and keeps water-only terms off the waterline (see
-    // HydroTuning.lookModel); 0 is the shipped look, exactly.
+    // THE WATER'S OPTICS, A/B. The reviewed look (HydroTuning.lookModel 1) is
+    // the default; `?hydrolook=0` is the look before the review, exactly.
     hydroSys.setTuning({ lookModel: HYDRO_LOOK });
     worldGroup.add(hydroSys.object3d);
     // ── RUNTIME SWITCHES THAT FEED THE WATER ── (switches.ts: setSwitch)
     onSwitch('hydrolook', (v) => {
-      const n = clamp(Number(v ?? 0) || 0, 0, 1);
+      const n = clamp(qsNum('hydrolook', 1), 0, 1);
       hydroSys?.setTuning({ lookModel: n }); hydroLookLive = n;
     });
     onSwitch('coast', () => hydroSys?.setBuildOptions({ coastField: qsOn('coast', true) }));
@@ -14757,7 +14756,7 @@ let swardRoadSeen = -1, swardGroundSeen = -1, swardFieldAt = 0, swardMaskMs = 0;
 // ── RUNTIME SWITCHES THAT FEED THE SWARD'S BANK PAINT ── a change asks for a
 // fresh sweep the way a terrain rebuild does; the old field stays on screen
 // until the new one swaps in.
-onSwitch('banklook', (v) => { BANK_LOOK = Number(v ?? 0) > 0.5; swardGroundSeen = -1; swardFieldAt = 0; });
+onSwitch('banklook', () => { BANK_LOOK = qsNum('banklook', 1) > 0.5; swardGroundSeen = -1; swardFieldAt = 0; });
 onSwitch('shore', () => { SHORE_ON = qsOn('shore', true); swardGroundSeen = -1; swardFieldAt = 0; });
 /** No sweep in flight and none owed — what an A/B frame waits for. */
 const swardSettled = (): boolean => swardRow < 0 && swardGroundSeen === swardGroundRev();
