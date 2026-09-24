@@ -494,7 +494,7 @@ const CAR_R = 2.4;
  * has been walked is still collided with the right shape rather than nothing.
  */
 /** ?hull=0 collides as the circle again — the rollback and the one-build A/B. */
-const HULL_ON = qsOn('hull', true);
+let HULL_ON = qsOn('hull', true);
 let rigHull: HullBox = { halfWidthM: 1.08, halfLengthM: 2.546 };
 let rigHullR = hullRadiusM(rigHull);
 /** What a stray part did to the box, if anything — see `measureRigHull`. */
@@ -4277,7 +4277,7 @@ const hydroFeedLog: Array<{ at: number; key: string; rev: number; store: number;
 (window as unknown as { __hydrobound?: object }).__hydrobound = (on = true): void => setHydroBoundProbe(!!on);
 /** The hydro system's elevation raster side — see hydroFeed. */
 const HYDRO_EN = 132;
-const HYDRO_SKIP = qs('hydroskip') !== '0';
+let HYDRO_SKIP = qs('hydroskip') !== '0';
 /** What each tile was last fed, so an identical feed can end without a build. */
 const hydroFedInputs = new Map<string, { elev: Float32Array; sig: string }>();
 function sameRaster(a: Float32Array, b: Float32Array): boolean {
@@ -4315,7 +4315,7 @@ function sameRaster(a: Float32Array, b: Float32Array): boolean {
  * under it may yet matter; only confirmed dry is dropped. A tile whose mask
  * never arrived keeps the exact comparison.
  */
-const HYDRO_GROUND_R = Math.max(0, qsNum('hydroground', 150));
+let HYDRO_GROUND_R = Math.max(0, qsNum('hydroground', 150));
 /**
  * ── AND IT READS THE GROUND IN METRES, NOT IN FLOATS ──
  *
@@ -4334,7 +4334,7 @@ const HYDRO_GROUND_R = Math.max(0, qsNum('hydroground', 150));
  * the previous feed, so a bank creeping a centimetre per rebuild is caught on
  * the rebuild that takes it past the tolerance rather than never.
  */
-const HYDRO_GROUND_EPS = Math.max(0, qsNum('hydroeps', 0.02));
+let HYDRO_GROUND_EPS = Math.max(0, qsNum('hydroeps', 0.02));
 let hydroBandA = new Uint8Array(0), hydroBandB = new Uint8Array(0);
 interface WetBox { minX: number; maxX: number; minZ: number; maxZ: number }
 function hydroWetBand(t: HeightTile, boxes: readonly WetBox[], ocean: OceanCoverage, EN: number): Uint8Array | null {
@@ -12908,7 +12908,7 @@ const isEzKind = (k: VegKind): k is EzFamily => (EZ_FAMILIES as string[]).includ
  *  1713 and snag exactly 83 = 0.25 x 333 — both clamps binding, both families
  *  charged about twice what the GPU was handed, both under-admitted for it.
  *  A tenth is under the cheapest rung's honest share and still a bound. */
-const EZ_PRICE = qsOn('treeprice', true);
+let EZ_PRICE = qsOn('treeprice', true);
 const ezPriceNow: Record<EzFamily, number> = ezRecord(() => 0);
 /** Below this many placed, the realised mean is a sample of nothing. */
 const EZ_PRICE_MIN = 8;
@@ -12965,7 +12965,7 @@ const ezCapNominal = (fam: EzFamily): number =>
   Math.floor(VEG_CAP[fam] * vegScale * treePopulationScale);
 /** The scale and the caps the LAST refresh actually used, so the probe and the
  *  dump report the rule that ran rather than one recomputed from nothing. */
-const EZ_DEMAND = qsOn('treedemand', true);
+let EZ_DEMAND = qsOn('treedemand', true);
 let ezScaleNow = 1;
 let ezCapNow: Record<EzFamily, number> | null = null;
 function ezCapScale(): number { return ezScaleNow; }
@@ -12984,7 +12984,7 @@ const ezCapFor = (fam: EzFamily): number =>
  * `?ezstand=0` is the exact A/B: the old per-position hash, which is what
  * every wood in the game looked like until now.
  */
-const EZ_STAND_ON = qs('ezstand') !== '0';
+let EZ_STAND_ON = qs('ezstand') !== '0';
 function ezVariantAt(fam: EzFamily, x: number, z: number): number {
   if (!EZ_STAND_ON) return ezVariantFor(fam, x, z, treeVariantCap);
   // THE GUILD'S PREFERENCE, WHICH ONLY NOW MEANS ANYTHING. Until the bake had
@@ -13204,7 +13204,7 @@ const IMP_PERCEPTIBLE_K = 320 / (2 * Math.tan((55 * Math.PI) / 360));
  * agree in silhouette at that line (the contact sheet's MID column), so the
  * flip is a change of triangle count and not of look.
  */
-const EZ_FULL_PX = qsNum('ezfullpx', EZ_MERGE_PX[1]);
+let EZ_FULL_PX = qsNum('ezfullpx', EZ_MERGE_PX[1]);
 function ezRungOf(fam: EzFamily, v: { s: number; sy?: number }, d2: number): 'full' | 'mid' {
   if (EZ_FULL_PX <= 0) return 'full';
   const formSy = clamp(1 + ((v.sy ?? 1) - 1) * treeFormScale, 0.18, 4.5);
@@ -14765,7 +14765,7 @@ const swardSettled = (): boolean => swardRow < 0 && swardGroundSeen === swardGro
 let swardFieldReady = false;
 /** ?swardhop=0 carries the last place's committed field across a hop, exactly
  *  as it did — the rollback, and the one-build A/B for the measurement. */
-const SWARD_HOP_CLEAR = qsOn('swardhop', true);
+let SWARD_HOP_CLEAR = qsOn('swardhop', true);
 /** THE BANK, ON THE GROUND SIDE. The water shader draws its last wet metre
  *  as damp sediment and gravel; the ground beside it grew the same grass
  *  as the hillside, so the two met on a line. The sward mixes toward the
@@ -16164,7 +16164,7 @@ const VEG_SEED_MS = 8;
  *  a fault — the near ring is served first by construction. */
 let vegManifestDeferred = 0;
 const VEG_SEED_CATCHUP = 120;
-const VEG_SEED_BUDGET = qs('vegseed') !== '0';
+let VEG_SEED_BUDGET = qs('vegseed') !== '0';
 let vegSeedLeft = 0;
 let vegSeedDeferred = 0;
 /**
@@ -17463,7 +17463,7 @@ function refreshVeg(): void {
  *  Generator work units may overshoot; the budget is not a hard deadline.
  *  `?vegstep=N` forces N (0: the whole refresh, for parity probes). */
 const VEG_STEP_MS = 5;
-const VEG_STEP_FORCED = qsNum('vegstep', -1);
+let VEG_STEP_FORCED = qsNum('vegstep', -1);
 let vegJobMs = 0;
 /**
  * ── HOW OFTEN THE WORLD'S TREES ARE RE-DECIDED, AS A MEASUREMENT ──
@@ -19624,7 +19624,7 @@ let CUT_RELIEF = qs('relief') !== '0';
  * this is trying to answer. The grit is hashed from quantised world XZ, so it
  * is stuck to the road: drive past it and it holds still, exactly like dirt.
  */
-const SLIP_K = Math.max(0, Number(qs('slip') ?? 1) || 0);
+let SLIP_K = Math.max(0, Number(qs('slip') ?? 1) || 0);
 function roadCeiling(x: number, z: number): number | null {
   cutSet.clear();
   stripsNear(x, z, 2, cutSet);
@@ -20611,7 +20611,7 @@ let gaSink = 0;
 /** The rollback for the bound sampler, and the A/B that priced it. A change to
  *  what the PHYSICS reads deserves a switch the seat can throw, not only a
  *  console probe: `?drapefast=0` pays the lookup per vertex exactly as before. */
-const DRAPE_FAST = qsOn('drapefast', true);
+let DRAPE_FAST = qsOn('drapefast', true);
 /** Run BOTH samplers for every vertex and count where they disagree — the
  *  standard the drape index was held to. Off by default: it is the whole cost
  *  of the thing it is checking, twice over, so a walk measured with it on is
@@ -21163,10 +21163,10 @@ const TUNNEL_H = 5;    // clearance of the carved tube
 // float error move a shared node by.
 const JUNC_R = 3;
 // Off only from a probe (`?noweld=1`), to measure continuity against grade.
-const endWeld = !qsOn('noweld', false);
+let endWeld = !qsOn('noweld', false);
 // Off only from a probe (`?nopins=1`), to measure what the pins are worth
 // against the same tiles rather than against memory of a previous run.
-const juncPins = !qsOn('nopins', false);
+let juncPins = !qsOn('nopins', false);
 // Height difference past which two roads at the same spot are passing OVER one
 // another rather than meeting — the one case that still earns a parapet across
 // the other road's line. Below it there is a turning here, and a barrier across
@@ -21178,7 +21178,7 @@ interface LiftRec { x: number; z: number; nm?: string; fid: number; layer: numbe
 const liftLog: LiftRec[] = [];
 const RAIL_H = 1;      // parapet height above the kerb it stands on
 // Off only from a probe (`?nofill=1`), to see the ditch the fill closes.
-const vergeFill = !qsOn('nofill', false);
+let vergeFill = !qsOn('nofill', false);
 /** The deck height an ALREADY BUILT road holds at (x,z), if any fragment ends
  *  there — the continuity anchor for the fragment about to build. Fragments of
  *  one way arrive independently (tile clipping, tag changes chop a road into
@@ -31471,7 +31471,7 @@ const farOutside = (z: number, x: number, y: number): boolean => {
  * of every attribute it references and the next tile to go would take the
  * level's uv with it.
  */
-const FAR_PARK_BYTES = Math.max(0, qsNum('farpark', 48)) * (1 << 20);
+let FAR_PARK_BYTES = Math.max(0, qsNum('farpark', 48)) * (1 << 20);
 const farParked = new Map<string, { mesh: THREE.Mesh; mat: THREE.Material | null; bytes: number; at: number }>();
 let farParkBytes = 0;
 /** What a parked tile actually holds: the attribute arrays the bake wrote,
@@ -60319,6 +60319,40 @@ if (timeFromUrl < 0 && !qs('time')
   if (value !== undefined) setSwitch(id, value);
   return { id, value: qs(id), apply: switchApply(id) };
 };
+// ── RUNTIME SWITCHES, BATCH 2c: BUDGETS, TREE TIERS AND THE LAST BUILDERS ──
+//
+// Budgets and tiers are consulted on every refresh (live); the rest decide
+// what a build produces and take the in-place rebuild (world). A tree budget
+// that the SETTINGS rack also owns is overridden only while the URL says so,
+// and falls back to the shipped default when the switch is removed.
+{
+  onSwitch('treeprice', () => { EZ_PRICE = qsOn('treeprice', true); });
+  onSwitch('treedemand', () => { EZ_DEMAND = qsOn('treedemand', true); });
+  onSwitch('ezfullpx', () => { EZ_FULL_PX = qsNum('ezfullpx', EZ_MERGE_PX[1]); });
+  onSwitch('slip', () => { SLIP_K = Math.max(0, Number(qs('slip') ?? 1) || 0); });
+  onSwitch('hull', () => { HULL_ON = qsOn('hull', true); });
+  onSwitch('vegseed', () => { VEG_SEED_BUDGET = qs('vegseed') !== '0'; });
+  onSwitch('vegstep', () => { VEG_STEP_FORCED = qsNum('vegstep', -1); });
+  onSwitch('swardhop', () => { SWARD_HOP_CLEAR = qsOn('swardhop', true); });
+  onSwitch('farpark', () => { FAR_PARK_BYTES = Math.max(0, qsNum('farpark', 48)) * (1 << 20); });
+  onSwitch('nopins', () => { juncPins = !qsOn('nopins', false); });
+  onSwitch('nofill', () => { vergeFill = !qsOn('nofill', false); });
+  onSwitch('ezstand', () => { EZ_STAND_ON = qs('ezstand') !== '0'; rebuildInPlace(); });
+  onSwitch('noweld', () => { endWeld = !qsOn('noweld', false); rebuildInPlace(); });
+  onSwitch('drapefast', () => { DRAPE_FAST = qsOn('drapefast', true); rebuildInPlace(); });
+  onSwitch('hydroskip', () => { HYDRO_SKIP = qs('hydroskip') !== '0'; rebuildInPlace(); });
+  onSwitch('hydroground', () => { HYDRO_GROUND_R = Math.max(0, qsNum('hydroground', 150)); rebuildInPlace(); });
+  onSwitch('hydroeps', () => { HYDRO_GROUND_EPS = Math.max(0, qsNum('hydroeps', 0.02)); rebuildInPlace(); });
+  onSwitch('treetris', () => { const t = Number(qs('treetris')); treeTriBudget = Number.isFinite(t) && t > 0 ? t : 2400000; });
+  onSwitch('treerange', () => { const r = Number(qs('treerange')); treeRange = Number.isFinite(r) && r > 0 ? clamp(r, 100, 6000) : 700; });
+  onSwitch('treepop', () => { const q = Number(qs('treepop')); treePopulationScale = Number.isFinite(q) && q > 0 ? clamp(q, 0.05, 32) : 1; });
+  onSwitch('impreach', () => {
+    const r = Number(qs('impreach'));
+    if (qsHas('impreach') && Number.isFinite(r) && r >= 0) { impReachMul = -1; impReachM = clamp(r, 0, 40000); }
+    else if (impReachMul < 0) impReachMul = 1;
+  });
+  onSwitch('impdensity', () => { const d = Number(qs('impdensity')); impDensityMul = Number.isFinite(d) && d > 0 ? clamp(d, 0.01, 1e9) : 1; });
+}
 // ── RUNTIME SWITCHES, BATCH 2b: WHAT THE BUILDERS READ ──
 //
 // Read inside the tile, vegetation and building builders, never at module
