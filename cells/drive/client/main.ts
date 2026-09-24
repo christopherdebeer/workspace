@@ -56731,8 +56731,9 @@ function shotState(): { lines: [string, string, string]; god: { x: number; z: nu
 }
 /** Where the SHEET button sat on the last HUD frame, in HUD pixels. */
 const sheetBtn = { x: 0, y: 0, w: 0, h: 0 };
+const abBtn = { x: 0, y: 0, w: 0, h: 0 };
 function drawShotReadout(): void {
-  sheetBtn.w = 0;
+  sheetBtn.w = 0; abBtn.w = 0;
   if (!chartOn.shot) return;
   hctx.globalAlpha = 1;
   const y0 = chartOn.stream ? 70 : 40;
@@ -56741,110 +56742,204 @@ function drawShotReadout(): void {
   textEdgeP(st.lines[1], 6, y0 + 8, UI.soft);
   // The button rides the end of the first line: SHEET, then its progress,
   // then SAVE once a finished sheet is waiting for a tap to share it.
-  const label = sheet.phase === 'run' ? `SHEET ${sheet.done}/${sheet.total}`
+  const label = sheet.phase === 'run' ? `${sheet.kind === 'ab' ? 'A/B' : 'SHEET'} ${sheet.done}/${sheet.total}`
     : sheet.phase === 'ready' ? 'SAVE SHEET' : 'SHEET';
   const bw = textPW(label) + 6;
   const bx = HW - bw - 4, by = y0 - 2;
   panel(bx, by, bw, 11);
   textEdgeP(label, bx + 3, by + 2, sheet.phase === 'ready' ? UI.gold : UI.text);
   sheetBtn.x = bx; sheetBtn.y = by; sheetBtn.w = bw; sheetBtn.h = 11;
+  if (sheet.phase === 'idle') {
+    // A/B: the current framing at five hours, per hydro look.
+    const aw = textPW('A/B') + 6, ax = bx - aw - 3;
+    panel(ax, by, aw, 11);
+    textEdgeP('A/B', ax + 3, by + 2, UI.text);
+    abBtn.x = ax; abBtn.y = by; abBtn.w = aw; abBtn.h = 11;
+  }
   textEdgeP(fitP(st.lines[2], HW - 12), 6, y0 + 16, UI.gold);
 }
 /**
- * ── THE SHEET: A CONTACT SHEET, SHOT ON THE PHONE ──
+ * ── THE SHEET: THE GODCAM CONTACT SHEET, SHOT ON THE PHONE ──
  *
- * The godcam sheet, run inside the game on the device's own GPU instead of in a
- * headless rig at a third of a frame a second. The view is held as a god
- * camera where the current one stands; the sky is set clear; then each hour
- * is shot twice, once per water look (lookModel 0 and 1), in the tail of the
- * frame that presented it (the only task in which the canvas is readable).
- * The frames are shrunk as they are taken and stitched under a header that
- * carries the SHOT lines, the build and the date, so the file explains
- * itself. Everything is put back afterwards. Saving needs a fresh tap (share
- * sheets refuse a page that has not just been touched), hence SAVE SHEET.
+ * devtools/godcam-sheet.mjs, run inside the game on the device's own GPU
+ * instead of in a headless rig at a third of a frame a second, centred on
+ * whatever the current view is looking at. The same grid: NOON, DUSK and
+ * NIGHT rows of eight god-camera angles (top, N/E/S/W, two wides, a close)
+ * plus the four skies on the close framing, then a DEV row: the tile grid on
+ * the eight angles, three ground-view channels and X-RAY wire and depth.
+ *
+ * A/B is the narrower sheet the water work wanted: the CURRENT framing at
+ * five hours, once per hydro look (lookModel 0 and 1).
+ *
+ * Each frame is read in the tail of the task that presented it (the only
+ * task in which the canvas is readable), shrunk as it is taken, and stitched
+ * under a header carrying the SHOT lines, the build and the date, so the file
+ * explains itself. The HUD is stood down while shooting (the debug overlays
+ * that live on its canvas are composited into their own frames) and
+ * everything is put back afterwards. Saving needs a fresh tap, because share
+ * sheets refuse a page that has not just been touched: hence SAVE SHEET.
  */
-const SHEET_HOURS = ['DAWN', 'MORNING', 'NOON', 'DUSK', 'NIGHT'] as const;
-const SHEET_W = 360;
+interface SheetShot { row: string; col: string; hud?: boolean; settle: number; setup: () => void }
+const SHEET_ANGLES = [
+  { id: 'top', y: 30, az: 20, el: 80, dist: 700, fov: 55 },
+  { id: 'N', y: 20, az: 0, el: 28, dist: 320, fov: 55 },
+  { id: 'E', y: 20, az: 90, el: 28, dist: 320, fov: 55 },
+  { id: 'S', y: 20, az: 180, el: 28, dist: 320, fov: 55 },
+  { id: 'W', y: 20, az: 270, el: 28, dist: 320, fov: 55 },
+  { id: 'wide1', y: 30, az: 45, el: 45, dist: 550, fov: 55 },
+  { id: 'wide2', y: 30, az: 225, el: 45, dist: 550, fov: 55 },
+  { id: 'close', y: 6, az: 30, el: 12, dist: 70, fov: 50 },
+] as const;
+const SHEET_SKIES: readonly Sky[] = ['clear', 'haze', 'rain', 'storm'];
 const sheet: {
-  phase: 'idle' | 'run' | 'ready'; done: number; total: number;
+  phase: 'idle' | 'run' | 'ready'; kind: 'godcam' | 'ab'; done: number; total: number;
   blob: Blob | null; name: string; grab: ((src: HTMLCanvasElement) => void) | null;
-} = { phase: 'idle', done: 0, total: 0, blob: null, name: '', grab: null };
+} = { phase: 'idle', kind: 'godcam', done: 0, total: 0, blob: null, name: '', grab: null };
 let hydroLookLive = HYDRO_LOOK;
 const sheetSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-/** The next presented frame, shrunk to SHEET_W wide. */
-const sheetGrab = (): Promise<HTMLCanvasElement> => new Promise((resolve) => {
+/** Progress on the glass WITHOUT being in the picture: a DOM label, which no
+ *  canvas read can see. */
+let sheetTag: HTMLDivElement | null = null;
+function sheetProgress(text: string | null): void {
+  if (!text) { sheetTag?.remove(); sheetTag = null; return; }
+  if (!sheetTag) {
+    sheetTag = document.createElement('div');
+    sheetTag.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:50;'
+      + 'font:12px monospace;color:#f2d27a;background:rgba(4,10,11,.8);padding:4px 8px;pointer-events:none';
+    document.body.appendChild(sheetTag);
+  }
+  sheetTag.textContent = text;
+}
+/** The next presented frame, shrunk to `w` wide, with the HUD canvas laid
+ *  over it when that frame's subject lives there (the tile grid, the depth map). */
+const sheetGrab = (w: number, withHud: boolean): Promise<HTMLCanvasElement> => new Promise((resolve) => {
   sheet.grab = (src) => {
     const cv = document.createElement('canvas');
-    cv.width = SHEET_W; cv.height = Math.round((src.height * SHEET_W) / Math.max(1, src.width));
+    cv.width = w; cv.height = Math.round((src.height * w) / Math.max(1, src.width));
     const g = cv.getContext('2d')!;
     g.imageSmoothingEnabled = false;
     g.drawImage(src, 0, 0, cv.width, cv.height);
+    if (withHud) g.drawImage(hud, 0, 0, cv.width, cv.height);
     resolve(cv);
   };
 });
-async function runSheet(): Promise<void> {
+type W = Record<string, ((...a: unknown[]) => unknown) | undefined>;
+const probe = (): W => window as unknown as W;
+function sheetPlan(kind: 'godcam' | 'ab', t: { x: number; z: number }, here: ReturnType<typeof shotState>['god']): SheetShot[] {
+  const god = (a: { y: number; az: number; el: number; dist: number; fov: number }): void => {
+    godTarget.set(t.x, groundAt(t.x, t.z) + a.y, t.z);
+    godAz = (a.az * Math.PI) / 180; godEl = (a.el * Math.PI) / 180; godDist = a.dist; godFov = a.fov; godInit = true;
+    if (Math.abs(camera.fov - godFov) > 0.01) { camera.fov = godFov; camera.updateProjectionMatrix(); }
+    if (camMode !== 'god') setCam('god');
+  };
+  const hour = (h: string): void => { timeMode = TIME_MODES.indexOf(h as typeof TIME_MODES[number]); };
+  const sky = (k: Sky): void => { probe().__wxnext?.(k, true); };
+  const plan: SheetShot[] = [];
+  if (kind === 'ab') {
+    const hereAngle = { y: 0, az: here.az, el: here.el, dist: here.dist, fov: here.fov };
+    for (const h of ['DAWN', 'MORNING', 'NOON', 'DUSK', 'NIGHT']) {
+      for (const look of hydroSys ? [0, 1] : [hydroLookLive]) {
+        plan.push({ row: h, col: look ? 'B · hydrolook=1' : 'A · shipped', settle: look ? 300 : 1500,
+          setup: () => { hour(h); sky('clear'); god(hereAngle); hydroSys?.setTuning({ lookModel: look }); } });
+      }
+    }
+    return plan;
+  }
+  const close = SHEET_ANGLES[SHEET_ANGLES.length - 1];
+  for (const h of ['NOON', 'DUSK', 'NIGHT']) {
+    SHEET_ANGLES.forEach((a, i) => plan.push({ row: h, col: a.id, settle: i ? 700 : 2200,
+      setup: () => { hour(h); sky('clear'); god(a); } }));
+    for (const k of SHEET_SKIES) plan.push({ row: h, col: `wx-${k}`, settle: 1500, setup: () => { sky(k); god(close); } });
+  }
+  SHEET_ANGLES.forEach((a, i) => plan.push({ row: 'DEV', col: a.id, hud: true, settle: i ? 700 : 2000,
+    setup: () => { hour('NOON'); sky('clear'); probe().__tiledbg?.(true); god(a); } }));
+  for (const gv of ['cover', 'eco', 'substrate']) {
+    plan.push({ row: 'DEV', col: `gv-${gv}`, settle: 1200,
+      setup: () => { probe().__tiledbg?.(false); probe().__groundview?.(gv); god(close); } });
+  }
+  plan.push({ row: 'DEV', col: 'xray-wire', settle: 2200,
+    setup: () => { probe().__groundview?.('off'); probe().__xray?.('wire'); god(close); } });
+  plan.push({ row: 'DEV', col: 'xray-depth', hud: true, settle: 1200,
+    setup: () => { probe().__xray?.('depth'); god(close); } });
+  return plan;
+}
+async function runSheet(kind: 'godcam' | 'ab' = 'godcam'): Promise<void> {
   if (sheet.phase === 'run') return;
   const st = shotState();
-  const looks = hydroSys ? [0, 1] : [hydroLookLive];
-  sheet.phase = 'run'; sheet.done = 0; sheet.total = SHEET_HOURS.length * looks.length; sheet.blob = null;
-  // What to put back.
+  const target = { x: st.god.x, z: st.god.z };
+  const plan = sheetPlan(kind, target, st.god);
+  const cellW = kind === 'ab' ? 360 : 200;
+  sheet.phase = 'run'; sheet.kind = kind; sheet.done = 0; sheet.total = plan.length; sheet.blob = null;
   const saved = {
-    timeMode, camMode, look: hydroLookLive, godInit,
+    timeMode, camMode, look: hydroLookLive, godInit, hudOn,
     god: { t: godTarget.clone(), az: godAz, el: godEl, dist: godDist, fov: godFov },
     wx: { next: wx.next, at: wx.at, cloud: wx.cloud, rain: wx.rain },
+    tiles: chartOn.tiles, stream: chartOn.stream, xray: xrayMode, gv: groundView,
   };
-  const rows: Array<{ hour: string; frames: HTMLCanvasElement[] }> = [];
+  const cells = new Map<string, HTMLCanvasElement>();
   try {
-    godTarget.set(st.god.x, groundAt(st.god.x, st.god.z), st.god.z);
-    godAz = (st.god.az * Math.PI) / 180; godEl = (st.god.el * Math.PI) / 180;
-    godDist = st.god.dist; godFov = st.god.fov; godInit = true;
-    if (camMode !== 'god') setCam('god');
-    if (!WX_PIN) { wx.next = 'clear'; wx.at = performance.now() + 600000; wx.cloud = WX.clear.cloud; wx.rain = WX.clear.rain; }
-    await sheetSleep(1600);          // the camera's flight into place
-    // …and the water under it: a god camera that just moved can put fresh
-    // tiles in view, and a frame taken while they build has no river in it.
-    for (let i = 0; i < 40 && (hydroSys?.stats().pendingBuilds ?? 0) > 0; i++) await sheetSleep(250);
-    for (const hour of SHEET_HOURS) {
-      timeMode = TIME_MODES.indexOf(hour);
-      await sheetSleep(1400);        // sky, shadows and the grade follow the clock
-      const frames: HTMLCanvasElement[] = [];
-      for (const look of looks) {
-        hydroSys?.setTuning({ lookModel: look });
-        await sheetSleep(250);
-        frames.push(await sheetGrab());
-        sheet.done++;
-      }
-      rows.push({ hour, frames });
+    hudOn = false;
+    let first = true;
+    for (const shot of plan) {
+      sheetProgress(`SHEET ${sheet.done + 1}/${sheet.total} · ${shot.row} ${shot.col}`);
+      shot.setup();
+      await sheetSleep(first ? shot.settle + 1600 : shot.settle);
+      // A god camera that just moved can put fresh tiles in view, and a frame
+      // taken while they build has no river in it.
+      for (let i = 0; i < 24 && (hydroSys?.stats().pendingBuilds ?? 0) > 0; i++) await sheetSleep(250);
+      first = false;
+      cells.set(`${shot.row}|${shot.col}`, await sheetGrab(cellW, !!shot.hud));
+      sheet.done++;
     }
   } finally {
     timeMode = saved.timeMode;
     hydroSys?.setTuning({ lookModel: saved.look });
+    probe().__xray?.(XRAY_MODES[saved.xray] ?? 'OFF');
+    probe().__groundview?.(saved.gv);
+    setChartLayer('tiles', saved.tiles); setChartLayer('stream', saved.stream);
     godTarget.copy(saved.god.t); godAz = saved.god.az; godEl = saved.god.el;
     godDist = saved.god.dist; godFov = saved.god.fov; godInit = saved.godInit;
     if (camMode !== saved.camMode) setCam(saved.camMode);
     if (!WX_PIN) { wx.next = saved.wx.next; wx.at = saved.wx.at; wx.cloud = saved.wx.cloud; wx.rain = saved.wx.rain; }
+    hudOn = saved.hudOn;
+    sheetProgress(null);
   }
-  // ── STITCH ──
-  const fh = rows[0]?.frames[0]?.height ?? 0;
-  const cols = looks.length, gap = 4, left = 64, top = 76;
+  // ── STITCH ── rows in plan order, columns in plan order, the DEV row
+  // carrying its own labels in the cells it has.
+  const rows: string[] = [], cols: string[] = [];
+  for (const sh of plan) {
+    if (!rows.includes(sh.row)) rows.push(sh.row);
+    if (sh.row !== 'DEV' && !cols.includes(sh.col)) cols.push(sh.col);
+  }
+  const devCols = plan.filter((sh) => sh.row === 'DEV').map((sh) => sh.col);
+  const nCols = Math.max(cols.length, devCols.length);
+  const fh = [...cells.values()][0]?.height ?? 0;
+  const gap = 4, left = 64, top = 76, lab = 14;
   const out = document.createElement('canvas');
-  out.width = left + cols * (SHEET_W + gap);
-  out.height = top + rows.length * (fh + gap);
+  out.width = left + nCols * (cellW + gap);
+  out.height = top + rows.length * (fh + gap + lab);
   const g = out.getContext('2d')!;
   g.fillStyle = '#0b1113'; g.fillRect(0, 0, out.width, out.height);
-  g.fillStyle = '#e8e2d0'; g.font = '11px monospace'; g.textBaseline = 'top';
+  g.font = '11px monospace'; g.textBaseline = 'top';
   const build = document.querySelector<HTMLMetaElement>('meta[name="drive-build"]')?.content ?? '?';
+  g.fillStyle = '#e8e2d0';
   st.lines.forEach((l, i) => g.fillText(l, 6, 4 + i * 13));
   g.fillStyle = '#9fb3a8';
-  g.fillText(`build ${build} · ${new Date().toISOString().slice(0, 16)}Z · clear sky`, 6, 43);
-  looks.forEach((lk, c) => g.fillText(lk ? 'B · hydrolook=1' : 'A · shipped', left + c * (SHEET_W + gap) + 4, top - 16));
-  rows.forEach((r, i) => {
-    const y = top + i * (fh + gap);
-    g.fillStyle = '#e8e2d0'; g.fillText(r.hour, 6, y + 4);
-    r.frames.forEach((f, c) => g.drawImage(f, left + c * (SHEET_W + gap), y));
+  g.fillText(`${kind === 'ab' ? 'A/B hydro look' : 'godcam sheet'} · build ${build} · `
+    + `${new Date().toISOString().slice(0, 16)}Z · target ${Math.round(target.x - viewX())},${Math.round(target.z - viewZ())}`, 6, 43);
+  rows.forEach((r, ri) => {
+    const y = top + ri * (fh + gap + lab);
+    g.fillStyle = '#e8e2d0'; g.fillText(r, 6, y + lab + 4);
+    const rc = r === 'DEV' ? devCols : cols;
+    rc.forEach((c, ci) => {
+      const x = left + ci * (cellW + gap);
+      g.fillStyle = '#9fb3a8'; g.fillText(c, x + 2, y + 1);
+      const f = cells.get(`${r}|${c}`);
+      if (f) g.drawImage(f, x, y + lab);
+    });
   });
   const [lat, lon] = localToLatLon(viewX(), viewZ());
-  sheet.name = `drive-sheet_${lat.toFixed(4)}_${lon.toFixed(4)}_${Date.now()}.png`;
+  sheet.name = `drive-${kind === 'ab' ? 'ab' : 'sheet'}_${lat.toFixed(4)}_${lon.toFixed(4)}_${Date.now()}.png`;
   sheet.blob = await new Promise<Blob | null>((r) => out.toBlob(r, 'image/png'));
   sheet.phase = sheet.blob ? 'ready' : 'idle';
   hudFlash(sheet.blob ? 'SHEET READY · TAP SAVE' : 'SHEET FAILED');
@@ -56866,22 +56961,30 @@ function saveSheet(): void {
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   done();
 }
-/** The SHEET button's tap. Checked before the key, which may be hidden. */
+/** The SHEET and A/B buttons' taps. Checked before the key, which may be hidden. */
 function sheetDown(e: PointerEvent): boolean {
-  if (!chartOn.shot || !sheetBtn.w) return false;
+  if (!chartOn.shot) return false;
   const x = e.clientX / hudS, y = e.clientY / hudS;
-  if (x < sheetBtn.x - 3 || x > sheetBtn.x + sheetBtn.w + 3 || y < sheetBtn.y - 3 || y > sheetBtn.y + sheetBtn.h + 3) return false;
-  if (sheet.phase === 'ready') saveSheet();
-  else if (sheet.phase === 'idle') void runSheet();
-  return true;
+  const hit = (b: { x: number; y: number; w: number; h: number }): boolean => b.w > 0
+    && x >= b.x - 3 && x <= b.x + b.w + 3 && y >= b.y - 3 && y <= b.y + b.h + 3;
+  if (hit(sheetBtn)) {
+    if (sheet.phase === 'ready') saveSheet();
+    else if (sheet.phase === 'idle') void runSheet('godcam');
+    return true;
+  }
+  if (hit(abBtn)) {
+    if (sheet.phase === 'idle') void runSheet('ab');
+    return true;
+  }
+  return false;
 }
 /** The finished sheet as a data URL, for a harness that cannot tap SAVE. */
 (window as unknown as { __sheetBlob?: object }).__sheetBlob = (): Promise<string | null> => new Promise((resolve) => {
   if (!sheet.blob) { resolve(null); return; }
   const r = new FileReader(); r.onload = () => resolve(r.result as string); r.readAsDataURL(sheet.blob);
 });
-(window as unknown as { __sheet?: object }).__sheet = (go?: boolean): object => {
-  if (go) void runSheet();
+(window as unknown as { __sheet?: object }).__sheet = (go?: boolean | 'godcam' | 'ab'): object => {
+  if (go) void runSheet(go === 'ab' ? 'ab' : 'godcam');
   return { phase: sheet.phase, done: sheet.done, total: sheet.total, bytes: sheet.blob?.size ?? 0, name: sheet.name };
 };
 function drawTileDebugOverlay(): void {
