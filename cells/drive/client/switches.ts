@@ -300,6 +300,8 @@ export const SWITCHES = [
     note: 'the composite draws rain as bounded curtains rooted in the weather field\'s rain channel, drifting with the wind; raincurtain=0 leaves the rain to the wet road and the drops' },
   { id: 'imu', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'imu=0 drives real GPS without the gyro' },
+  { id: 'trackfam', kind: 'toggle', marks: ['legacy', 'look'], apply: 'world', fallback: 'on',
+    note: 'trackfam=0 puts back the single track treatment: every footway, path, cycleway, bridleway and track drawn as one translucent two-rut dirt strip at 4.5-6.5 m' },
   { id: 'railgrade', kind: 'toggle', marks: ['legacy'], apply: 'world', fallback: 'on',
     note: 'railgrade=0 drapes a railway over the ground: no formation, no earthworks, and not drivable' },
   { id: 'airblur', kind: 'toggle', marks: ['legacy', 'look'], apply: 'live', fallback: 'off',

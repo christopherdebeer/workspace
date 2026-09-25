@@ -11093,6 +11093,179 @@ function roadTexture(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.
  *  not drivable, no solved profile, no corridor, no batter and no structure —
  *  the exact A/B for the whole formation change. */
 let RAIL_GRADE = qsOn('railgrade', true);
+/**
+ * ── A TRACK IS NOT ONE THING ──
+ *
+ * Five highway classes — track, path, footway, cycleway, bridleway — shared
+ * ONE treatment: a translucent two-rut dirt strip 4.5-6.5 m wide. Counted in
+ * the captures, most of what took it is not a farm track at all: Paris West
+ * carries 436 ASPHALT footways (drawn as muddy double ruts beside the
+ * boulevards), Yosemite's trails are single-file paths on ground, and most
+ * farm tracks carry no `tracktype`. So the tags choose a family, and the
+ * family chooses a width and a look:
+ *
+ *   paved  a sealed strip (asphalt, concrete, pavers, sett, wood) — the
+ *          commonest thing in any town, no ruts, a crisp edge
+ *   trail  a single worn line down a path, frayed into the ground
+ *   hard   a compacted or gravel track, full width, faint ruts
+ *   rut    the farm track: two wheel ruts with a crown between them
+ *   grass  a grade-5 track — two faint ruts through the grass, nothing else
+ *
+ * Widths are the real ones (a path is a metre, a track a van's), and a mapped
+ * `width` wins. `?trackfam=0` is the single treatment it replaces.
+ */
+let TRACK_FAM = qsOn('trackfam', true);
+type TrackFam = 'paved' | 'trail' | 'hard' | 'rut' | 'grass';
+const TRACK_PAVED = new Set(['asphalt', 'concrete', 'concrete:plates', 'concrete:lanes', 'paving_stones', 'sett',
+  'paved', 'cobblestone', 'unhewn_cobblestone', 'bricks', 'metal', 'wood', 'chipseal', 'tartan', 'rubber']);
+const TRACK_HARD = new Set(['gravel', 'fine_gravel', 'compacted', 'pebblestone', 'shells']);
+/** Surface colours for a paved path, linear-ish albedo. */
+const PAVED_COL: Record<string, [number, number, number]> = {
+  asphalt: [0.36, 0.37, 0.39], concrete: [0.64, 0.63, 0.60], 'concrete:plates': [0.64, 0.63, 0.60],
+  'concrete:lanes': [0.62, 0.61, 0.58], paving_stones: [0.62, 0.56, 0.50], sett: [0.50, 0.48, 0.46],
+  cobblestone: [0.50, 0.48, 0.46], unhewn_cobblestone: [0.52, 0.49, 0.45], bricks: [0.58, 0.36, 0.28],
+  wood: [0.50, 0.38, 0.26], metal: [0.46, 0.47, 0.48], tartan: [0.58, 0.28, 0.22], rubber: [0.30, 0.30, 0.30],
+};
+function trackFamily(tags: Record<string, string>): { fam: TrackFam; w: number } {
+  const hw = tags.highway, s = tags.surface ?? '', tt = tags.tracktype ?? '';
+  let fam: TrackFam, w: number;
+  if (hw === 'track') {
+    if (tt === 'grade1' || TRACK_PAVED.has(s)) { fam = 'paved'; w = 3.2; }
+    else if (tt === 'grade2' || TRACK_HARD.has(s)) { fam = 'hard'; w = 3.2; }
+    else if (tt === 'grade5' || s === 'grass' || s === 'grass_paver') { fam = 'grass'; w = 3.0; }
+    else { fam = 'rut'; w = 3.2; }
+  } else if (TRACK_PAVED.has(s) || (!s && (hw === 'footway' || hw === 'cycleway'))) {
+    // An untagged footway or cycleway is a pavement: the capture tally is
+    // overwhelmingly urban, and a sidewalk drawn as a dirt path is the fault.
+    fam = 'paved'; w = hw === 'cycleway' ? 2.4 : hw === 'bridleway' ? 2.4 : hw === 'path' ? 1.8 : 2.0;
+  } else if (TRACK_HARD.has(s)) {
+    fam = 'hard'; w = hw === 'bridleway' || hw === 'cycleway' ? 2.2 : 1.6;
+  } else {
+    fam = 'trail'; w = hw === 'bridleway' ? 1.6 : hw === 'cycleway' ? 1.4 : hw === 'footway' ? 1.2 : 1.0;
+  }
+  const mapped = parseFloat(tags.width ?? '');
+  if (Number.isFinite(mapped) && mapped >= 0.5 && mapped <= 8) w = mapped;
+  return { fam, w };
+}
+/**
+ * ── THE WORN SURFACE IS CUT OUT AND LIT PER PIXEL ──
+ *
+ * The old track was a texture at 68% opacity: two painted ruts the light
+ * never touched and a see-through strip with no edge. Here the ground is
+ * shaped in the fragment: a height across the way (ruts pressed in, a lip
+ * where the spoil was pushed up, a crown between) bends the normal by its
+ * screen gradient — the same surface-gradient construction the terrain's
+ * relief uses — so a rut is a shadowed trough in a low sun and not a stripe.
+ * And the parts that are not worn are DISCARDED, so the crown's grass and the
+ * frayed verge are the terrain and the sward beneath, with binary alpha as
+ * the rendering doctrine asks, instead of a 68% wash over them.
+ *
+ * Band-limited on the fragment's own footprint: past a quarter-metre an art
+ * pixel the ruts merge into one worn band and the relief fades, so nothing
+ * here can alias into the dither at range. Modes: 0 paved, 1 hard, 2 rut,
+ * 3 grass, 4 trail.
+ */
+const TRACK_FAM_PARAMS: Record<TrackFam, { mode: number; depth: number; fray: number; bare: number }> = {
+  paved: { mode: 0, depth: 0.0, fray: 0.0, bare: 1.0 },
+  hard: { mode: 1, depth: 0.035, fray: 0.10, bare: 1.0 },
+  rut: { mode: 2, depth: 0.09, fray: 0.12, bare: 0.35 },
+  grass: { mode: 3, depth: 0.05, fray: 0.0, bare: 0.0 },
+  trail: { mode: 4, depth: 0.06, fray: 0.16, bare: 0.0 },
+};
+let trackGritTex: THREE.Texture | null = null;
+const trackFamMats = new Map<TrackFam, THREE.MeshLambertMaterial>();
+function trackFamMat(fam: TrackFam): THREE.MeshLambertMaterial {
+  const hit = trackFamMats.get(fam);
+  if (hit) return hit;
+  // A near-white grit so the map channel exists (slipify reads vMapUv) and
+  // the colour comes from the bay's vertex colour.
+  trackGritTex ??= canvasTex(64, 1, 1, 131, (c, sz, r) => {
+    c.fillStyle = '#f2f2f2'; c.fillRect(0, 0, sz, sz);
+    speckle(c, sz, r, ['rgba(0,0,0,0.10)', 'rgba(255,255,255,0.35)'], 180, 1);
+  });
+  const P = TRACK_FAM_PARAMS[fam];
+  const mat = slipify(new THREE.MeshLambertMaterial({
+    map: trackGritTex, side: FS, vertexColors: true,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6,
+  }));
+  (mat as THREE.Material & { extensions?: { derivatives?: boolean } }).extensions = { derivatives: true };
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (sh, r) => {
+    prev.call(mat, sh, r);
+    Object.assign(sh.uniforms, {
+      uTrkMode: { value: P.mode }, uTrkDepth: { value: P.depth }, uTrkFray: { value: P.fray }, uTrkBare: { value: P.bare },
+    });
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform float uTrkMode; uniform float uTrkDepth; uniform float uTrkFray; uniform float uTrkBare;`)
+      .replace('#include <alphamap_fragment>', `#include <alphamap_fragment>
+        float trkU = vMapUv.x, trkA = vMapUv.y * 20.0;
+        float trkFp = max(length(vec2(fwidth(vSlipXZ.x), fwidth(vSlipXZ.y))), 1e-4);
+        float trkFine = 1.0 - smoothstep(0.10, 0.32, trkFp);
+        // The wheel line wanders, slowly, along the way's own length.
+        float trkWob = (pdn(vec2(trkA * 0.09, 3.7)) - 0.5) * 0.06 + (pdn(vec2(trkA * 0.31, 9.1)) - 0.5) * 0.02;
+        float trkN = pdn(vSlipXZ * 1.8) * 0.6 + pdn(vSlipXZ * 4.6) * 0.4;
+        float trkH = 0.0, trkRut = 0.0, trkCov = 1.0;
+        if (uTrkMode < 0.5) {
+          trkCov = 1.0;
+        } else if (uTrkMode > 3.5) {
+          // a trail: one tread down the middle, as wide as feet and hooves make it
+          float d = abs(trkU - 0.5 - trkWob);
+          trkRut = 1.0 - smoothstep(0.20, 0.34, d);
+          trkH = -uTrkDepth * (1.0 - smoothstep(0.0, 0.30, d));
+          float coarse = step(d, 0.30);
+          trkCov = mix(coarse, trkRut + (trkN - 0.5) * 0.9 * trkRut, trkFine);
+        } else {
+          float rw = uTrkMode > 2.5 ? 0.075 : 0.095;
+          float d = min(abs(trkU - 0.28 - trkWob), abs(trkU - 0.72 - trkWob));
+          trkRut = 1.0 - smoothstep(rw * 0.55, rw * 1.25, d);
+          float lip = smoothstep(rw * 0.9, rw * 1.3, d) * (1.0 - smoothstep(rw * 1.5, rw * 2.3, d));
+          trkH = -uTrkDepth * (1.0 - smoothstep(0.0, rw * 1.2, d)) + uTrkDepth * 0.35 * lip;
+          float band = step(abs(trkU - 0.5), 0.22 + rw * 1.3);
+          float crown = uTrkMode < 1.5 ? 1.0 : step(1.0 - uTrkBare, trkN);
+          float fine = max(trkRut, crown * (1.0 - trkRut * 0.0));
+          trkCov = mix(uTrkMode < 1.5 ? 1.0 : band, fine, trkFine);
+        }
+        // The verge frays into the ground instead of ending on a ruler.
+        float trkEdge = min(trkU, 1.0 - trkU);
+        trkCov *= step(0.015 + uTrkFray * (0.35 + 0.65 * trkN) * trkFine, trkEdge);
+        if (trkCov < 0.5) discard;
+        // Ruts are pressed and damp: darker and a little richer than the crown.
+        diffuseColor.rgb *= mix(1.0, 0.80, trkRut * step(0.5, uTrkMode));
+        // Gravel and pavement grain, band-limited like everything else.
+        trkH += (pdn(vSlipXZ * 7.0) - 0.5) * 0.012 * trkFine * step(0.5, uTrkMode) * step(uTrkMode, 1.5);
+        trkH *= trkFine;
+        // Standing water collects in the ruts first.
+        if (wxs.a > 0.03) wxPud = max(wxPud, smoothstep(0.35, 0.8, wxs.a) * trkRut * uPudOn * step(0.5, uTrkMode));`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        {
+          vec3 tp = -vViewPosition;
+          vec3 dpx = dFdx(tp), dpy = dFdy(tp);
+          float hx = dFdx(trkH), hy = dFdy(trkH);
+          vec3 r1 = cross(dpy, normal), r2 = cross(normal, dpx);
+          float det = dot(dpx, r1);
+          vec3 sg = sign(det) * (hx * r1 + hy * r2);
+          normal = normalize(abs(det) * normal - sg);
+        }`);
+  };
+  mat.customProgramCacheKey = () => `trackfam-${fam}`;
+  mat.name = `track-${fam}`;
+  trackFamMats.set(fam, mat);
+  return mat;
+}
+/** Per-bay colour for a family: the ground's own for the worn ones (the
+ *  point of a track is that it is the ground, used), the material's for a
+ *  paved one. */
+function trackFamColour(fam: TrackFam, tags: Record<string, string>, ground: [number, number, number]): [number, number, number] {
+  if (fam === 'paved') return PAVED_COL[tags.surface ?? ''] ?? (tags.highway === 'track' ? PAVED_COL.concrete : PAVED_COL.asphalt);
+  const [r, g, b] = ground;
+  const l = (r + g + b) / 3;
+  // Worn soil: the palette's own hue pulled out of green (grass worn off
+  // leaves the soil under it), a touch warmer; gravel greyer and paler.
+  if (fam === 'hard') return [l * 1.12 + 0.05, l * 1.08 + 0.05, l * 1.0 + 0.04];
+  return [Math.max(r, l) * 1.08, l * 0.98, Math.min(b, l) * 0.86];
+}
+
 const railTexCache = new Map<string, THREE.Texture>();
 const railMatCache = new Map<string, THREE.Material>();
 function railMat(spec: RailSpec): THREE.Material {
@@ -21818,6 +21991,7 @@ function flushRibbons(): void {
   }
 }
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string, layer = 0, wayTags?: Record<string, string>, railway = false): void {
+  const trackFam: TrackFam | null = TRACK_FAM && track && wayTags && !railway ? trackFamily(wayTags).fam : null;
   /**
    * ── A RAILWAY IS `drivable`, AND `railway` IS ONLY ABOUT THE DRESSING ──
    *
@@ -23186,7 +23360,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       if (track) {
         const [tr, tg, tb] = terrainPalette(elev[i] + baseElev,
           Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0), x0, z0);
-        bayColor = [tr * 1.06, tg * 0.99, tb * 0.9];
+        bayColor = trackFam ? trackFamColour(trackFam, wayTags ?? {}, [tr, tg, tb]) : [tr * 1.06, tg * 0.99, tb * 0.9];
       } else {
         const c = tint ?? [1, 1, 1];
         bayColor = [c[0], c[1], c[2]];
@@ -29272,7 +29446,8 @@ async function renderWays(
       // where it happens to straddle a regional boundary; a road that changed
       // surface mid-span would read as a rendering fault, not as a border.
       if (dk) wayTagLog.set(dk, tags);
-      ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1], roadLook(tags)),
+      const tf = TRACK_FAM && track ? trackFamily(tags) : null;
+      ribbon(pts, tf ? tf.w : w, stairs ? MAT.minor : tf ? trackFamMat(tf.fam) : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1], roadLook(tags)),
         track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wq,
         GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk,
         // Which level OSM says this way is on — see layerOf. The planner pins and
@@ -45615,6 +45790,23 @@ function noteTags(t: Record<string, string>): void {
  *  the `?h=` switch takes. Two devtools convert at the call site and a third
  *  did not: every frame of its first run faced (degrees mod 2pi) and
  *  photographed whatever was there. */
+/** Track-family segments near a point: midpoint, heading, width, family and
+ *  the tags that chose it — so a frame can be aimed at a trail rather than
+ *  at wherever the truck happened to spawn. */
+(window as unknown as { __tracks?: object }).__tracks = (r = 600, x?: number, z?: number): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z, out: object[] = [];
+  const seen = new Set<Seg>();
+  for (const arr of roadGrid.values()) for (const sg of arr) {
+    if (!sg.tk || seen.has(sg)) continue; seen.add(sg);
+    const mx = (sg.ax + sg.bx) / 2, mz = (sg.az + sg.bz) / 2, d = Math.hypot(mx - px, mz - pz);
+    if (d > r) continue;
+    const tags = sg.wid ? wayTagLog.get(sg.wid) : undefined;
+    out.push({ x: +mx.toFixed(1), z: +mz.toFixed(1), d: +d.toFixed(0), len: +Math.hypot(sg.bx - sg.ax, sg.bz - sg.az).toFixed(1),
+      hdg: +(Math.atan2(sg.bx - sg.ax, -(sg.bz - sg.az)) * 180 / Math.PI).toFixed(0), w: +(sg.hw * 2).toFixed(1),
+      fam: tags ? trackFamily(tags).fam : null, hw: tags?.highway, surface: tags?.surface, tt: tags?.tracktype, wid: sg.wid });
+  }
+  return out.sort((a, b) => (a as { d: number }).d - (b as { d: number }).d);
+};
 (window as unknown as { __place?: object }).__place = (x: number, z: number, h?: number): void => {
   teleportTo(x, z);
   if (h !== undefined) state.heading = h;
@@ -60514,6 +60706,7 @@ if (timeFromUrl < 0 && !qs('time')
   onSwitch('bridgedem', () => { BRIDGE_DEM_ON = qsOn('bridgedem', true); rebuildInPlace(); });
   onSwitch('bridgeforms', () => { BRIDGE_FORMS_ON = qsOn('bridgeforms', true); rebuildInPlace(); });
   onSwitch('railgrade', () => { RAIL_GRADE = qsOn('railgrade', true); rebuildInPlace(); });
+  onSwitch('trackfam', () => { TRACK_FAM = qsOn('trackfam', true); rebuildInPlace(); });
   onSwitch('refine', () => { REFINE = qs('refine') !== '0'; rebuildInPlace(); });
   onSwitch('refr', () => { REFINE_R = Number(qs('refr') ?? 1100); rebuildInPlace(); });
   onSwitch('relief', () => { CUT_RELIEF = qs('relief') !== '0'; rebuildInPlace(); });
