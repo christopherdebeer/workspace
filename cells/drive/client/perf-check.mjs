@@ -147,6 +147,10 @@ function context(code,range,ez,triCap,fullPx=0) {
     // existed) reads inline, so the two stay comparable by construction rather
     // than by a stub that makes them agree.
     renderFocusXZ:()=>[c.state.x,c.state.z],
+    // The canopy layer is off in this sandbox (it is `?canopy=1` in the game),
+    // so it stands in for no tree and every refill compares as before.
+    canopyHides:()=>false,
+    canopyStat:{hid:0},
     ezRecord:record,EZ_FAMILIES:families,EZ_ON:ez,VEG_CAP:cap,vegScale:1,
     TREE_KINDS:families,treePopulationScale:1,treeFormScale:1,treeSizeScale:1,
     ezTiers:record(()=>Array.from({length:3},()=>({near:mesh(),far:mesh(),tris:500,midNear:mesh(),midFar:mesh(),midTris:100,n:0,nNear:0,nFar:0,nMid:0,nMidNear:0,nMidFar:0}))),
