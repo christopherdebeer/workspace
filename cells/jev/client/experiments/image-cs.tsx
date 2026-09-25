@@ -2,9 +2,16 @@
  * Prompt → N×N grid of palette symbols. Every free pixel is a choice;
  * host commits only high-confidence + locally consistent cells; iterate.
  * Pure discrete analogue of diffusion: local calibrated judgments → global coherence.
+ *
+ * (Contributed by client:grok, 2026-09-25 — kept as the `pixels` baseline.)
+ * `recognise` (the default) inverts it after measurement: per-pixel choices
+ * are noise (mean confidence 0.39, 1/32 cells above θ=0.55), whole-picture
+ * recognition is sharp (0.82 vs 0.01) — so code renders typed scenes and Jev
+ * scores whole pictures in parallel (lib/image.ts).
  */
 import * as React from 'react';
-import { decide, signIn, JevError } from '../lib/jev';
+import { decide, decideMany, signIn, JevError } from '../lib/jev';
+import { draw, COLOR_NAMES, type Grid as IGrid, type ImageEvent, type Scored } from '../lib/image';
 import { choiceOf, type Answers } from '../lib/types';
 import { Panel, ErrorLine, Bar } from '../ui';
 
@@ -23,6 +30,8 @@ const COLORS: Record<Color, string> = {
   O: '#e67e22',
   P: '#9b59b6',
 };
+/** Colours for the recognise palette (adds brown). */
+const RCOLORS: Record<string, string> = { ...COLORS, N: '#8b5a2b' };
 
 const EXAMPLES = [
   'a simple yellow smiley face on black',
@@ -84,9 +93,14 @@ export default function ImageCS() {
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const [lastAnswers, setLastAnswers] = useState<Answers | null>(null);
+  const [mode, setMode] = useState<'recognise' | 'pixels'>('recognise');
+  const [rec, setRec] = useState<{ best: Scored; top: Scored[]; scene: string; ms: number } | null>(null);
+  const [recLog, setRecLog] = useState<string[]>([]);
   const abort = useRef<AbortController | null>(null);
 
   const reset = () => {
+    setRec(null);
+    setRecLog([]);
     setGrid(emptyGrid());
     setRound(0);
     setLog([]);
@@ -135,7 +149,33 @@ export default function ImageCS() {
     return next;
   }
 
+  async function runRecognise() {
+    reset();
+    setBusy(true);
+    const t0 = performance.now();
+    try {
+      if (!(await signIn())) throw new JevError('sign in to run experiments', 401);
+      let scene = '';
+      const r = await draw(
+        prompt,
+        { decide: async (st, q, label) => (await decide(st, q, label)).answers, decideMany: (items, label) => decideMany(items, label) },
+        (e: ImageEvent) => {
+          if (e.type === 'scene') {
+            scene = [`${COLOR_NAMES[e.scene.bg]} background`, ...e.scene.layers.map((l) => `${COLOR_NAMES[l.color]} ${l.shape}`)].join(' + ');
+            setRecLog((l) => [...l, `scene: ${scene}`]);
+          } else setRecLog((l) => [...l, `${e.name}: ${e.tried} pictures scored · best ${Math.round((e.best[0]?.score ?? 0) * 100)}%`]);
+        },
+      );
+      setRec({ ...r, scene, ms: Math.round(performance.now() - t0) });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function run() {
+    if (mode === 'recognise') return runRecognise();
     reset();
     setBusy(true);
     const ac = new AbortController();
@@ -177,12 +217,26 @@ export default function ImageCS() {
             </button>
           ))}
         </div>
-        <div className="knobs">
-          <label>
-            θ = {theta.toFixed(2)}
-            <input type="range" min={0.3} max={0.85} step={0.05} value={theta} onChange={(e) => setTheta(Number(e.target.value))} />
-          </label>
+        <div className="seg" role="tablist" aria-label="method">
+          {(['recognise', 'pixels'] as const).map((m) => (
+            <button key={m} role="tab" aria-selected={mode === m} className={mode === m ? 'on' : ''} onClick={() => setMode(m)}>
+              {m === 'recognise' ? 'recognise (typed scenes)' : 'pixels (baseline)'}
+            </button>
+          ))}
         </div>
+        <p className="sub">
+          {mode === 'recognise'
+            ? 'Jev picks a typed scene (background + shapes + colours); code renders hundreds of placements; Jev scores whole pictures in parallel, then the best are mutated and re-scored. ~3 round trips.'
+            : 'The original loop: each free pixel is a palette choice, committed when confident and locally consistent.'}
+        </p>
+        {mode === 'pixels' ? (
+          <div className="knobs">
+            <label>
+              θ = {theta.toFixed(2)}
+              <input type="range" min={0.3} max={0.85} step={0.05} value={theta} onChange={(e) => setTheta(Number(e.target.value))} />
+            </label>
+          </div>
+        ) : null}
         <div className="row">
           <button className="primary" disabled={busy || !prompt.trim()} onClick={() => void run()}>
             {busy ? `round ${round}…` : 'fill'}
@@ -205,6 +259,31 @@ export default function ImageCS() {
         ) : null}
       </Panel>
 
+      {mode === 'recognise' && (rec || recLog.length) ? (
+        <Panel title="Picture" sub={rec ? `${rec.scene} · ${(rec.ms / 1000).toFixed(1)} s` : 'drawing…'}>
+          {rec ? (
+            <>
+              <Pixels grid={rec.best.grid} size={320} />
+              <Bar label="recognised" p={rec.best.score} hint="Jev: does this picture clearly depict the prompt?" />
+              <div className="thumbs">
+                {rec.top.slice(1).map((t, i) => (
+                  <div key={i} title={`${Math.round(t.score * 100)}%`}>
+                    <Pixels grid={t.grid} size={64} />
+                    <span className="sub">{Math.round(t.score * 100)}%</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+          <ol className="mono small">
+            {recLog.map((l, i) => (
+              <li key={i}>{l}</li>
+            ))}
+          </ol>
+        </Panel>
+      ) : null}
+
+      {mode === 'pixels' ? (
       <Panel title="Canvas" sub={`${N}×${N} · palette ${PALETTE.join(' ')}`}>
         <div
           className="img-grid"
@@ -243,6 +322,8 @@ export default function ImageCS() {
         </div>
       </Panel>
 
+      ) : null}
+
       {log.length ? (
         <Panel title="Rounds">
           <ol className="mono small">
@@ -265,5 +346,15 @@ export default function ImageCS() {
         </Panel>
       ) : null}
     </>
+  );
+}
+
+/** A palette grid drawn as coloured cells. */
+function Pixels({ grid, size }: { grid: IGrid; size: number }) {
+  const n = grid.length;
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${n}, 1fr)`, gap: size > 100 ? 2 : 1, width: size, maxWidth: '100%', aspectRatio: '1', background: '#111', padding: size > 100 ? 4 : 2, borderRadius: 6 }}>
+      {grid.flatMap((row, r) => row.map((c, x) => <div key={`${r}-${x}`} style={{ background: RCOLORS[c] ?? '#000', borderRadius: size > 100 ? 2 : 0 }} />))}
+    </div>
   );
 }

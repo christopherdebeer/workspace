@@ -23,6 +23,7 @@ import {
 import { chunkBySize, type Answers, type ChoiceQ, type Questions } from '../cells/jev/client/lib/types';
 import * as A from '../cells/jev/client/lib/answer';
 import * as P from '../cells/jev/client/lib/program';
+import * as I from '../cells/jev/client/lib/image';
 
 const choiceCount = (q: unknown) => Object.keys((q as ChoiceQ).criteria).length;
 
@@ -346,5 +347,59 @@ describe('program: edits keep it well-typed', () => {
     const st2 = P.migrate(sp2, st);
     expect(st2.scalars.counter).toBe(3);
     expect(st2.timers.timer).toMatchObject({ remaining: 1500, running: false });
+  });
+});
+
+/* ── image: typed scenes, rendered, recognised ──────────────────────────── */
+
+describe('image: scene choice → renderable layers', () => {
+  it('a face implies a head; background-coloured and duplicate layers are dropped', () => {
+    const sc = I.sceneFrom({ bg: { choice: 'black' }, shape0: { choice: 'face' }, color0: { choice: 'yellow' }, shape1: { choice: 'face' }, color1: { choice: 'black' }, shape2: { choice: 'cross' }, color2: { choice: 'black' } });
+    expect(sc).toEqual({ bg: '.', layers: [{ shape: 'disc', color: 'Y' }, { shape: 'face', color: '.' }] });
+  });
+
+  it('renders shapes onto an 8×8 grid of palette symbols', () => {
+    const g = I.render({ bg: '.', layers: [{ shape: 'disc', color: 'R', cx: 4, cy: 4, size: 3 }] });
+    expect(g).toHaveLength(8);
+    expect(g[4][4]).toBe('R');
+    expect(g[0][0]).toBe('.');
+    const cross = I.rows(I.render({ bg: '.', layers: [{ shape: 'cross', color: '#', cx: 4, cy: 4, size: 3 }] }));
+    expect(cross[4]).toMatch(/#{5,}/);
+  });
+
+  it('variants enumerate placements, deduplicated by picture; face heads stay big', () => {
+    const vs = I.variants({ bg: '.', layers: [{ shape: 'disc', color: 'Y' }, { shape: 'face', color: '.' }] });
+    expect(vs.length).toBeGreaterThan(5);
+    expect(new Set(vs.map((v) => I.key(I.render(v)))).size).toBe(vs.length);
+    expect(vs.every((v) => v.layers[0].size >= I.MIN_FACE_HEAD)).toBe(true);
+  });
+
+  it('mutations are local moves that never shrink a face head below the floor', () => {
+    const s: I.Scene = { bg: '.', layers: [{ shape: 'disc', color: 'Y', cx: 4, cy: 4, size: 3 }, { shape: 'face', color: '.', cx: 4, cy: 4, size: 1 }] };
+    const ms = I.mutations(s);
+    expect(ms.length).toBeGreaterThan(4);
+    expect(ms.every((g) => g.length === 8 && g.every((r) => r.length === 8))).toBe(true);
+  });
+
+  it('scores whole pictures, ≤32 nouls per item, and reads the scores back in order', () => {
+    const grids = Array.from({ length: 40 }, (_, i) => I.render({ bg: '.', layers: [{ shape: 'disc', color: 'R', cx: 3 + (i % 3), cy: 4, size: 2 }] }));
+    const items = I.scoreItems('a red circle', grids);
+    expect(items.map((it) => Object.keys(it.questions).length)).toEqual([32, 8]);
+    const res = items.map((it) => Object.fromEntries(Object.keys(it.questions).map((k) => [k, { noul: Number(k.slice(1)) / 100 }])));
+    expect(I.scoresFrom(res, 40)[39]).toBeCloseTo(0.39);
+  });
+
+  it('the contrastive final picks by probability; draw trusts it only when decisive', async () => {
+    expect(I.finalPick({ best: { probabilities: { A: 0.1, B: 0.7, C: 0.2 } } }, 3)).toEqual({ index: 1, p: 0.7 });
+    const d: I.ImageDeps = {
+      decide: async (_s, qs) =>
+        qs.best
+          ? { best: { choice: 'B', probabilities: { A: 0.3, B: 0.35, C: 0.35 } } }
+          : { bg: { choice: 'black' }, shape0: { choice: 'disc' }, color0: { choice: 'red' }, shape1: { choice: 'none' } },
+      decideMany: async (items) => items.map((it) => Object.fromEntries(Object.keys(it.questions).map((k, j) => [k, { noul: j === 0 ? 0.9 : 0.2 }]))),
+    };
+    const r = await I.draw('a red circle', d);
+    expect(r.scene.layers).toEqual([{ shape: 'disc', color: 'R' }]);
+    expect(r.best.score).toBe(0.9); // indecisive final (0.35 < 0.4) keeps the noul winner
   });
 });
