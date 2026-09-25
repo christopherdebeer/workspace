@@ -778,16 +778,18 @@ async function loadJudgments(token: Tok): Promise<{ byType: Record<string, Judgm
   const [typesPage, globalFact] = await gwCallMany(
     token,
     [
-      { target: 'workspace.query', input: { prefix: '_types/', shape: 'full', whole: true, limit: 100 }, kind: 'read' },
+      // $types = the RESOLVED vocabulary: cell-shipped types.json declarations
+      // layered with slice `_types/<name>` facts per facet (ADR-0010), so a
+      // `judgments` facet can come from the type's manager or a slice override.
+      { target: '$types', kind: 'read' },
       { target: 'workspace.peek', input: { key: GLOBAL_JUDGMENTS_KEY }, kind: 'read' },
     ],
     { url: GATEWAY_MCP, concurrency: 2 },
   );
   const byType: Record<string, JudgmentDecl[]> = {};
   if (!isErr(typesPage)) {
-    for (const e of (typesPage as { entries?: Array<{ key: string; value?: { judgments?: unknown } }> }).entries ?? []) {
-      const t = e.key.slice('_types/'.length);
-      const ds = parseJudgments(e.value?.judgments, t);
+    for (const [t, decl] of Object.entries((typesPage as { types?: Record<string, { judgments?: unknown }> }).types ?? {})) {
+      const ds = parseJudgments(decl?.judgments, t);
       if (ds.length) byType[t] = ds;
     }
   }
