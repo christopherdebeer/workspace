@@ -65,8 +65,8 @@ export const EXPERIMENTS: Experiment[] = [
     id: 'image-cs',
     n: '03',
     title: 'Image CS',
-    blurb: 'Prompt → an 8×8 picture. Contributed by a Grok client as per-pixel judgment (kept as the baseline); the default now inverts it — Jev picks a typed scene, code renders hundreds of placements, Jev recognises the best whole picture.',
-    exploits: ['recognition over generation', 'parallel questions', 'contrastive choice', 'type constraints'],
+    blurb: 'Prompt → 8×8 picture. Three modes: recognise (typed scenes, default), search (procedural explore–exploit population), pixels (original per-cell baseline).',
+    exploits: ['recognition over generation', 'parallel questions', 'contrastive choice', 'procedural search'],
     status: 'live',
     component: ImageCS,
     findings: [
@@ -77,6 +77,7 @@ export const EXPERIMENTS: Experiment[] = [
       'Rules found by failure: a face implies a head beneath it; a layer in the background colour erases (dropped); duplicate layers add nothing; a head carrying a face keeps radius ≥ 3 (shrunk heads became ink blots); discs/squares get corner placements (the sun).',
       'Independent nouls are lenient for pictures (a blob scored 0.82 as "a white cross"); comparison is sharper but only trusted when decisive (p ≥ 0.4) — an unsure final once swapped a 0.71 smiley for a 0.59.',
       'Unseen prompt, no tuning: "a purple heart on white" → a clean heart, 0.80. Hardest: the smiley — 8×8 leaves ~2 cells per feature.',
+      'search mode (client:grok): population of grids + procedural operators (blob, recolor component, shift, stripe, flip). Jev only scores. Radius anneals explore→exploit. Diversity via Hamming. Added for less-templated iterative comparison.',
     ],
   },
   {

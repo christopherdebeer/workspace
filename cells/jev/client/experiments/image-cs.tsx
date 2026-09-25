@@ -11,7 +11,7 @@
  */
 import * as React from 'react';
 import { decide, decideMany, signIn, JevError } from '../lib/jev';
-import { draw, COLOR_NAMES, type Grid as IGrid, type ImageEvent, type Scored } from '../lib/image';
+import { draw, search, COLOR_NAMES, type Grid as IGrid, type ImageEvent, type SearchEvent, type Scored } from '../lib/image';
 import { choiceOf, type Answers } from '../lib/types';
 import { Panel, ErrorLine, Bar } from '../ui';
 
@@ -93,14 +93,18 @@ export default function ImageCS() {
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const [lastAnswers, setLastAnswers] = useState<Answers | null>(null);
-  const [mode, setMode] = useState<'recognise' | 'pixels'>('recognise');
+  const [mode, setMode] = useState<'recognise' | 'search' | 'pixels'>('recognise');
   const [rec, setRec] = useState<{ best: Scored; top: Scored[]; scene: string; ms: number } | null>(null);
   const [recLog, setRecLog] = useState<string[]>([]);
+  const [searchState, setSearchState] = useState<{ best: Scored; top: Scored[]; gens: number; ms: number } | null>(null);
+  const [searchLog, setSearchLog] = useState<string[]>([]);
   const abort = useRef<AbortController | null>(null);
 
   const reset = () => {
     setRec(null);
     setRecLog([]);
+    setSearchState(null);
+    setSearchLog([]);
     setGrid(emptyGrid());
     setRound(0);
     setLog([]);
@@ -174,8 +178,34 @@ export default function ImageCS() {
     }
   }
 
+  async function runSearch() {
+    reset();
+    setBusy(true);
+    const t0 = performance.now();
+    try {
+      if (!(await signIn())) throw new JevError('sign in to run experiments', 401);
+      const r = await search(
+        prompt,
+        { decide: async (st, q, label) => (await decide(st, q, label)).answers, decideMany: (items, label) => decideMany(items, label) },
+        { gens: 6, pop: 10, elite: 3, children: 4 },
+        (e: SearchEvent) => {
+          if (e.type === 'gen') {
+            setSearchLog((l) => [...l, `gen ${e.gen}: best ${Math.round(e.best * 100)}% · mean ${Math.round(e.mean * 100)}% · +${e.tried}`]);
+            setRound(e.gen);
+          }
+        },
+      );
+      setSearchState({ ...r, ms: Math.round(performance.now() - t0) });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function run() {
     if (mode === 'recognise') return runRecognise();
+    if (mode === 'search') return runSearch();
     reset();
     setBusy(true);
     const ac = new AbortController();
@@ -218,16 +248,18 @@ export default function ImageCS() {
           ))}
         </div>
         <div className="seg" role="tablist" aria-label="method">
-          {(['recognise', 'pixels'] as const).map((m) => (
+          {(['recognise', 'search', 'pixels'] as const).map((m) => (
             <button key={m} role="tab" aria-selected={mode === m} className={mode === m ? 'on' : ''} onClick={() => setMode(m)}>
-              {m === 'recognise' ? 'recognise (typed scenes)' : 'pixels (baseline)'}
+              {m === 'recognise' ? 'recognise' : m === 'search' ? 'search (explore–exploit)' : 'pixels'}
             </button>
           ))}
         </div>
         <p className="sub">
           {mode === 'recognise'
-            ? 'Jev picks a typed scene (background + shapes + colours); code renders hundreds of placements; Jev scores whole pictures in parallel, then the best are mutated and re-scored. ~3 round trips.'
-            : 'The original loop: each free pixel is a palette choice, committed when confident and locally consistent.'}
+            ? 'Typed scene → code enumerates placements → Jev scores whole pictures. Fast, high quality, templated.'
+            : mode === 'search'
+              ? 'Population of grids. Host applies procedural operators (blobs, recolors, shifts, flips). Jev only scores. Explore early, exploit later.'
+              : 'Per-pixel palette choices + local consistency. The original baseline that stalled.'}
         </p>
         {mode === 'pixels' ? (
           <div className="knobs">
@@ -277,6 +309,30 @@ export default function ImageCS() {
           ) : null}
           <ol className="mono small">
             {recLog.map((l, i) => (
+              <li key={i}>{l}</li>
+            ))}
+          </ol>
+        </Panel>
+      ) : null}
+
+      {mode === 'search' && (searchState || searchLog.length) ? (
+        <Panel title="Search" sub={searchState ? `${searchState.gens} gens · ${(searchState.ms / 1000).toFixed(1)} s · best ${Math.round(searchState.best.score * 100)}%` : 'evolving…'}>
+          {searchState ? (
+            <>
+              <Pixels grid={searchState.best.grid} size={320} />
+              <Bar label="best" p={searchState.best.score} hint="Jev noul on the final elite" />
+              <div className="thumbs">
+                {searchState.top.slice(1).map((t, i) => (
+                  <div key={i} title={`${Math.round(t.score * 100)}%`}>
+                    <Pixels grid={t.grid} size={64} />
+                    <span className="sub">{Math.round(t.score * 100)}%</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+          <ol className="mono small">
+            {searchLog.map((l, i) => (
               <li key={i}>{l}</li>
             ))}
           </ol>

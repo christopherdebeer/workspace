@@ -1,9 +1,25 @@
 {
   "cell": "c15r/jev",
   "cellId": "jev-30e878c9",
-  "treeVersion": "tree:13a99c7613c613bedfec2e5eb832051382decd82260ee922ebd85fc5b486fdc6",
-  "syncedAt": "2026-09-23T16:17:42.773Z",
+  "treeVersion": "tree:7368ff6b8d55686346000e37c73d208a3be8ab297d30148328e8bd6e820c28a1",
+  "syncedAt": "2026-09-25T23:45:37.596Z",
   "files": {
-    "index.ts": "sha256:35753b8a0c77f51aee7ba5a768faf91642ba31be3f3c713b6fd1b901287fb439"
+    "client/experiments/freetext.tsx": "sha256:2181dfddc928d52c4b28b2e04c32ab82b59c21e6bfb2c714bf604c9e3f897702",
+    "client/experiments/image-cs.tsx": "sha256:76c431c3f256495578f21b2f259f583bcbc6d83fd15d906b11bb76afa3ff7b24",
+    "client/experiments/index.ts": "sha256:4301f258003db233aea27c356ba4b9ac4372a3ea06a49b19f57e49b1fc8ff73a",
+    "client/experiments/program.tsx": "sha256:eb90feab36095bf45513562eda0c709dbb334f4a15c1bb3848ceff48df6bd7da",
+    "client/imports.json": "sha256:499f09e7aa1710a36e17a5ec52db0646b52db699354a3957d07233899799f14f",
+    "client/lib/answer.ts": "sha256:c378cec4346ed8fa57415aad6701ea91691018adf18b49b8c9ae21a0860451ff",
+    "client/lib/auth.ts": "sha256:68d68df45fcdf66ac36c7bb464960f300158407e9e086dec0fda7fe62bfd9f7e",
+    "client/lib/decode.ts": "sha256:4ed8cb007ad40345b11dad0b129a77b7aa4a77d7f44c2758f6fd369d63f39528",
+    "client/lib/evalset.ts": "sha256:823d35d573dea5d1e050e6faef28813422fda2c16c7730eb9c8e7dfcfd97e050",
+    "client/lib/image.ts": "sha256:a4fc983fe12351954b78db559904b99fc547fe20b1fa48b4eb99d4f8c9bebfc6",
+    "client/lib/jev.ts": "sha256:5abd6813d487fcc13153d3f8632356197f7f152cd7b8cf30e8fcd3140880c141",
+    "client/lib/program.ts": "sha256:0759e3335b21bde499e789421d46cbcef0d55f83f76c7d18ff5520323143b827",
+    "client/lib/types.ts": "sha256:a9fac54440519bc733c06946ba9e1a090708c3dc05ad67f9e8ec62d9b63eaa8e",
+    "client/main.tsx": "sha256:0d448c1c5d8c96b6bce0c0ddcbc780e345c33bcb15a9fe7fb1ef356a21038f93",
+    "client/ui.tsx": "sha256:34de28177d34da52fd1059a53347698cf997dcb1c44d120de7d743e147159f61",
+    "index.ts": "sha256:7b0ae1bd71419b36e8f3ab8e0500ad5781e36dda6a507b81a12dca226fa7c68e",
+    "static/index.html": "sha256:8e624c63cecd5d5f65467e0a64286715119528ea3b31fcab6312a3d33cdb59d8"
   }
 }

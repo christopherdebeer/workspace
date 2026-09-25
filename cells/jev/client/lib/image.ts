@@ -384,3 +384,246 @@ export async function draw(prompt: string, d: ImageDeps, onEvent?: (e: ImageEven
   onEvent?.({ type: 'round', name: 'final', tried: finalists.length, best: top });
   return { best, top, scene: sc };
 }
+
+/* ── procedural iterative search (explore–exploit) ───────────────────────
+ * Less templated alternative to the scene/variants path.
+ * Population of grids, host applies procedural operators, Jev only scores
+ * whole pictures. Explore early (large mutations + restarts), exploit later.
+ * ------------------------------------------------------------------------- */
+
+export type SearchEvent =
+  | { type: 'gen'; gen: number; best: number; mean: number; tried: number }
+  | { type: 'done'; best: Scored; top: Scored[]; gens: number };
+
+function clone(g: Grid): Grid {
+  return g.map((r) => [...r]);
+}
+
+function randomColor(exclude?: Color): Color {
+  const opts = exclude ? PALETTE.filter((c) => c !== exclude) : [...PALETTE];
+  return opts[Math.floor(Math.random() * opts.length)];
+}
+
+function randomGrid(bg?: Color): Grid {
+  const base = bg ?? randomColor();
+  const g = blank(base);
+  // sprinkle a few random blobs so the first generation is not pure noise
+  for (let i = 0; i < 3; i++) {
+    const c = randomColor(base);
+    const cx = 1 + Math.random() * (N - 2);
+    const cy = 1 + Math.random() * (N - 2);
+    const r = 1 + Math.random() * 2;
+    for (let y = 0; y < N; y++)
+      for (let x = 0; x < N; x++)
+        if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= r) g[y][x] = c;
+  }
+  return g;
+}
+
+/** Connected-component labelling (4-connected). Returns label grid + sizes. */
+function components(g: Grid): { labels: number[][]; sizes: number[]; colors: Color[] } {
+  const labels = Array.from({ length: N }, () => Array(N).fill(-1));
+  const sizes: number[] = [];
+  const colors: Color[] = [];
+  let next = 0;
+  const dirs = [
+    [0, 1],
+    [1, 0],
+    [0, -1],
+    [-1, 0],
+  ];
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      if (labels[y][x] >= 0) continue;
+      const col = g[y][x];
+      const stack: [number, number][] = [[x, y]];
+      labels[y][x] = next;
+      let size = 0;
+      while (stack.length) {
+        const [cx, cy] = stack.pop()!;
+        size++;
+        for (const [dx, dy] of dirs) {
+          const nx = cx + dx,
+            ny = cy + dy;
+          if (inside(nx, ny) && labels[ny][nx] < 0 && g[ny][nx] === col) {
+            labels[ny][nx] = next;
+            stack.push([nx, ny]);
+          }
+        }
+      }
+      sizes.push(size);
+      colors.push(col);
+      next++;
+    }
+  return { labels, sizes, colors };
+}
+
+/** Procedural operators — pure host, no shape templates. */
+function mutate(g: Grid, radius: number): Grid {
+  const h = clone(g);
+  const op = Math.random();
+  if (op < 0.25) {
+    // random pixel flips (density scales with radius)
+    const density = 0.05 + radius * 0.15;
+    for (let y = 0; y < N; y++)
+      for (let x = 0; x < N; x++) if (Math.random() < density) h[y][x] = randomColor(h[y][x]);
+  } else if (op < 0.45) {
+    // blob add / recolor
+    const c = randomColor();
+    const cx = Math.random() * N;
+    const cy = Math.random() * N;
+    const r = 0.8 + Math.random() * (1.5 + radius * 2);
+    for (let y = 0; y < N; y++)
+      for (let x = 0; x < N; x++) if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= r) h[y][x] = c;
+  } else if (op < 0.6) {
+    // axis-aligned rect
+    const c = randomColor();
+    const x0 = Math.floor(Math.random() * N);
+    const y0 = Math.floor(Math.random() * N);
+    const w = 1 + Math.floor(Math.random() * (2 + radius * 3));
+    const hh = 1 + Math.floor(Math.random() * (2 + radius * 3));
+    for (let y = y0; y < Math.min(N, y0 + hh); y++)
+      for (let x = x0; x < Math.min(N, x0 + w); x++) h[y][x] = c;
+  } else if (op < 0.75) {
+    // recolor largest non-background component
+    const { labels, sizes, colors } = components(h);
+    if (sizes.length > 1) {
+      let best = 0;
+      for (let i = 1; i < sizes.length; i++) if (sizes[i] > sizes[best]) best = i;
+      const newC = randomColor(colors[best]);
+      for (let y = 0; y < N; y++)
+        for (let x = 0; x < N; x++) if (labels[y][x] === best) h[y][x] = newC;
+    }
+  } else if (op < 0.9) {
+    // shift a random component by 1 cell
+    const { labels, sizes } = components(h);
+    if (sizes.length) {
+      const id = Math.floor(Math.random() * sizes.length);
+      const dx = Math.random() < 0.5 ? 1 : -1;
+      const dy = Math.random() < 0.5 ? 1 : -1;
+      const cells: [number, number][] = [];
+      for (let y = 0; y < N; y++)
+        for (let x = 0; x < N; x++) if (labels[y][x] === id) cells.push([x, y]);
+      // clear then redraw
+      const col = h[cells[0][1]][cells[0][0]];
+      for (const [x, y] of cells) h[y][x] = h[0][0]; // crude bg guess
+      // better: use mode of non-component cells
+      const bgCounts: Record<string, number> = {};
+      for (let y = 0; y < N; y++)
+        for (let x = 0; x < N; x++) if (labels[y][x] !== id) bgCounts[h[y][x]] = (bgCounts[h[y][x]] ?? 0) + 1;
+      const bg = (Object.entries(bgCounts).sort((a, b) => b[1] - a[1])[0]?.[0] as Color) ?? '.';
+      for (const [x, y] of cells) h[y][x] = bg;
+      for (const [x, y] of cells) {
+        const nx = x + dx,
+          ny = y + dy;
+        if (inside(nx, ny)) h[ny][nx] = col;
+      }
+    }
+  } else {
+    // horizontal or vertical stripe / band
+    const c = randomColor();
+    if (Math.random() < 0.5) {
+      const y = Math.floor(Math.random() * N);
+      const t = 1 + Math.floor(Math.random() * 2);
+      for (let dy = 0; dy < t; dy++) if (y + dy < N) for (let x = 0; x < N; x++) h[y + dy][x] = c;
+    } else {
+      const x = Math.floor(Math.random() * N);
+      const t = 1 + Math.floor(Math.random() * 2);
+      for (let dx = 0; dx < t; dx++) if (x + dx < N) for (let y = 0; y < N; y++) h[y][x + dx] = c;
+    }
+  }
+  return h;
+}
+
+function hamming(a: Grid, b: Grid): number {
+  let d = 0;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (a[y][x] !== b[y][x]) d++;
+  return d;
+}
+
+/** Iterative population search. Jev only scores; host mutates. */
+export async function search(
+  prompt: string,
+  d: ImageDeps,
+  opts: { gens?: number; pop?: number; elite?: number; children?: number } = {},
+  onEvent?: (e: SearchEvent) => void,
+): Promise<{ best: Scored; top: Scored[]; gens: number }> {
+  const gens = opts.gens ?? 6;
+  const popSize = opts.pop ?? 10;
+  const eliteN = opts.elite ?? 3;
+  const childrenPer = opts.children ?? 4;
+
+  // seed population
+  let pop: Scored[] = [];
+  const seeds = Array.from({ length: popSize }, () => randomGrid());
+  const s0 = scoresFrom(await d.decideMany(scoreItems(prompt, seeds), `search:seed ×${seeds.length}`), seeds.length);
+  pop = seeds.map((grid, i) => ({ grid, score: s0[i] })).sort((a, b) => b.score - a.score);
+  onEvent?.({ type: 'gen', gen: 0, best: pop[0].score, mean: pop.reduce((s, p) => s + p.score, 0) / pop.length, tried: seeds.length });
+
+  for (let g = 1; g <= gens; g++) {
+    const radius = Math.max(0.15, 1 - g / gens); // explore → exploit
+    const elite = pop.slice(0, eliteN);
+    const kids: Grid[] = [];
+    const seen = new Set(pop.map((p) => key(p.grid)));
+
+    // exploit: mutate elite
+    for (const e of elite) {
+      for (let c = 0; c < childrenPer; c++) {
+        const m = mutate(e.grid, radius);
+        const k = key(m);
+        if (!seen.has(k)) {
+          seen.add(k);
+          kids.push(m);
+        }
+      }
+    }
+    // explore: a few random restarts early on
+    if (radius > 0.4) {
+      for (let i = 0; i < 3; i++) {
+        const m = randomGrid();
+        const k = key(m);
+        if (!seen.has(k)) {
+          seen.add(k);
+          kids.push(m);
+        }
+      }
+    }
+
+    if (!kids.length) break;
+    const sk = scoresFrom(await d.decideMany(scoreItems(prompt, kids), `search:gen${g} ×${kids.length}`), kids.length);
+    const scoredKids = kids.map((grid, i) => ({ grid, score: sk[i] }));
+
+    // diversity-aware selection: prefer high score, penalise near-duplicates of elite
+    const candidates = [...pop, ...scoredKids].sort((a, b) => b.score - a.score);
+    const next: Scored[] = [];
+    for (const c of candidates) {
+      if (next.length >= popSize) break;
+      const tooClose = next.some((n) => hamming(n.grid, c.grid) < 4);
+      if (!tooClose) next.push(c);
+    }
+    // fill if diversity killed too many
+    for (const c of candidates) {
+      if (next.length >= popSize) break;
+      if (!next.includes(c)) next.push(c);
+    }
+    pop = next.sort((a, b) => b.score - a.score);
+    onEvent?.({ type: 'gen', gen: g, best: pop[0].score, mean: pop.reduce((s, p) => s + p.score, 0) / pop.length, tried: kids.length });
+
+    // early stop if elite is already strong
+    if (pop[0].score >= 0.78 && g >= 3) break;
+  }
+
+  // optional contrastive final among top
+  const finalists = pop.slice(0, Math.min(8, pop.length));
+  if (finalists.length > 1) {
+    const pick = finalPick(await d.decide({ prompt, legend: LEGEND }, finalQuestion(prompt, finalists.map((f) => f.grid)), 'search:final'), finalists.length);
+    if (pick.p >= FINAL_DECISIVE) {
+      const chosen = finalists[pick.index];
+      pop = [chosen, ...pop.filter((p) => p !== chosen)];
+    }
+  }
+
+  const top = pop.slice(0, 6);
+  onEvent?.({ type: 'done', best: top[0], top, gens });
+  return { best: top[0], top, gens };
+}
