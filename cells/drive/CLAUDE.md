@@ -19455,3 +19455,21 @@ subdivision is solved now, `ceil(parentCell / SURF_CELL_M)` with
 harness: **3,235,290 → 492,744 water triangles**, the worst surf tile
 563,712 → 35,232. `hydro`, `hydro-render-cutover`, `hydro-coast` and
 `hydro-resolution` green. Not yet judged by eye on a surf frame.
+
+## Nagato: the road in a cutting was hidden by our own burial rule
+
+Seat frames at `34.41330 131.08163 h73` against Street View: the real road
+runs in a cutting between crib retaining walls; the game drew grass across it
+for ~75 m. `__roadprof(dist, step)` (new: deck, DEM, mesh and the ground either
+side of the kerb every few metres along the heading) reads the deck 6–8 m under
+the DEM from 15 m to 90 m ahead with the MESH at the DEM, and cut correctly
+either side. The way is `highway=tertiary`, no tunnel or bridge tag. `__fragwhy`
+shows the planner hint following the ground and then `2d-chord` dropping the
+station ~6 m: `resolveProductionRoadStructureProfile` treats a knoll in the
+along-way profile (more than `TUNNEL_TOL` above its smoothed self) as an
+implicit run and chords through it, the result is deeper than
+`TUNNEL_H + 0.6` (5.6 m), so `tn` is set and the carve declines to dig — the
+Fish Hoek guard against a crater, firing on a genuine cutting. Not fixed yet.
+The Japan DEM is GSI 1–10 m bare earth (mapterhorn's `jpdem*` sources), so
+canopy in a surface model is not the cause here; the projection is exact to
+0.1% (1 km east 918.4 local vs 917.3 haversine, north 1113.2 vs 1112.0).

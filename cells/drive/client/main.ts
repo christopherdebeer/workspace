@@ -44331,6 +44331,29 @@ function heightsOf(): number[] {
     sl: !!best.sl, ru: !!best.ru, ya: best.ya, distM: +bd.toFixed(2),
     lenM: +Math.hypot(best.bx - best.ax, best.bz - best.az).toFixed(2) };
 };
+// A road's PROFILE ahead of the truck: every `step` metres along the heading,
+// the carriageway under that point (half width, deck, the way it came from),
+// the natural DEM, the drawn mesh, and the mesh a few metres either side of the
+// kerb. A deck under its own mesh is a buried road; a DEM standing metres over
+// the deck on both sides with the mesh at the deck is a cutting done right.
+(window as unknown as { __roadprof?: object }).__roadprof = (dist = 200, step = 5, heading?: number): object => {
+  const h = heading ?? state.heading;
+  const fx = Math.sin(h), fz = -Math.cos(h), rx = Math.cos(h), rz = Math.sin(h);
+  const rows: object[] = [];
+  const r2 = (v: number | null | undefined): number | null => (v === null || v === undefined || !Number.isFinite(v)) ? null : +(v + baseElev).toFixed(2);
+  for (let t = 0; t <= dist; t += step) {
+    const x = state.x + fx * t, z = state.z + fz * t;
+    const e = roadEdge(x, z);
+    const onRoad = !!e && e.out <= 0.8;
+    const side = (o: number): number | null => r2(meshSurfaceAt(x + rx * o, z + rz * o));
+    const hw = e?.hw ?? 3;
+    rows.push({ t, hw: e ? +e.hw.toFixed(2) : null, out: e ? +e.out.toFixed(2) : null, on: onRoad,
+      deck: onRoad ? r2(e!.y) : null, dem: hasHeight(x, z) ? r2(sampleHeight(x, z)) : null, mesh: r2(meshSurfaceAt(x, z)),
+      demL: r2(sampleHeight(x - rx * (hw + 4), z - rz * (hw + 4))), demR: r2(sampleHeight(x + rx * (hw + 4), z + rz * (hw + 4))),
+      meshL: side(-(hw + 4)), meshR: side(hw + 4), nm: e?.nm ?? null, fd: e?.fd ?? null });
+  }
+  return { at: [+state.x.toFixed(1), +state.z.toFixed(1)], heading: +(h * 180 / Math.PI).toFixed(1), rows };
+};
 (window as unknown as { __roadsegs?: object }).__roadsegs = (): number[][] => {
   const out: number[][] = [], seen = new Set<Seg>();
   for (const arr of roadGrid.values()) for (const s of arr) {
