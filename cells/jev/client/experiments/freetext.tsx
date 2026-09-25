@@ -5,8 +5,14 @@ import {
   END,
   SPELL,
   PROBES,
+  LEXICON_URL,
   acceptLookahead,
   appendWord,
+  bestOfShards,
+  gateLetters,
+  gateQuestion,
+  parseLexicon,
+  shardQuestions,
   charQuestion,
   collapse,
   decodeState,
@@ -21,8 +27,12 @@ import { Panel, Bar, Distribution, ConfidentText, ErrorLine } from '../ui';
 
 const { useRef, useState } = React;
 
-type Mode = 'probe' | 'spell' | 'lookahead' | 'words' | 'superpose';
+type Mode = 'recognise' | 'probe' | 'spell' | 'lookahead' | 'words' | 'superpose';
 const MODES: Record<Mode, { name: string; blurb: string }> = {
+  recognise: {
+    name: 'recognise',
+    blurb: 'Jev can\'t spell, but it knows the answer on sight. Per word: one call for the first letter, then one call showing every matching word of a 20k lexicon, sharded across parallel 255-way choices.',
+  },
   probe: { name: 'probe', blurb: 'No text at all — one call, a dozen features of an answer that is never written.' },
   spell: { name: 'spell', blurb: 'One character per call, autoregressive. The honest baseline: correct-ish, slow.' },
   lookahead: { name: 'lookahead', blurb: 'k characters per call, asked in parallel; keep the prefix that clears θ. Speculative decoding with no draft model.' },
@@ -37,11 +47,27 @@ interface Round {
   got: string;
 }
 
+let lexiconCache: Promise<string[]> | null = null;
+/** The 20k lexicon, fetched once from the CDN and kept for the session. */
+function loadLexicon(): Promise<string[]> {
+  lexiconCache ??= fetch(LEXICON_URL)
+    .then((r) => {
+      if (!r.ok) throw new Error(`lexicon fetch failed: HTTP ${r.status}`);
+      return r.text();
+    })
+    .then(parseLexicon)
+    .catch((err) => {
+      lexiconCache = null;
+      throw err;
+    });
+  return lexiconCache;
+}
+
 const EXAMPLES = ['What is the capital of Australia?', 'How many legs does a spider have?', 'In what year did the Berlin Wall fall?', 'Is the sun a star?', 'Who wrote Hamlet?'];
 
 export default function FreeText() {
   const [question, setQuestion] = useState(EXAMPLES[0]);
-  const [mode, setMode] = useState<Mode>('lookahead');
+  const [mode, setMode] = useState<Mode>('recognise');
   const [k, setK] = useState(6);
   const [theta, setTheta] = useState(0.6);
   const [maxLen, setMaxLen] = useState(48);
@@ -91,6 +117,25 @@ export default function FreeText() {
           return;
         }
         // word/phrase: superposition can't hold it — fall through to lookahead.
+      }
+
+      if (mode === 'recognise') {
+        const lexicon = await loadLexicon();
+        for (let w = 0; w < 12 && prefix.length < maxLen && !ac.signal.aborted; w++) {
+          const g = await decide(decodeState(question, prefix), { g: gateQuestion() }, 'gate', ac.signal);
+          const gate = gateLetters(g.answers.g);
+          log({ n: ++n, ms: g.ms, q: 1, got: gate.end ? END : `[${gate.letters.join('')}]` });
+          if (gate.end) break;
+          const { questions, shards } = shardQuestions(lexicon, gate.letters);
+          const r = await decide(decodeState(question, prefix), questions, 'shards', ac.signal);
+          const best = bestOfShards(r.answers, shards.length);
+          log({ n: ++n, ms: r.ms, q: shards.length, got: best ? `${best.tok} (${Math.round(best.p * 100)}%)` : `(none of ${shards.reduce((a, s) => a + s.length, 0)})` });
+          if (!best) break;
+          const next = appendWord(prefix, best.tok);
+          setOut((o) => [...o, { text: next.slice(prefix.length), p: best.p }]);
+          prefix = next;
+        }
+        return;
       }
 
       if (mode === 'words') {
@@ -188,7 +233,7 @@ export default function FreeText() {
             </label>
           </div>
         ) : null}
-        {mode !== 'probe' && mode !== 'superpose' ? (
+        {mode !== 'probe' && mode !== 'superpose' && mode !== 'recognise' ? (
           <div className="knobs">
             <label>
               max length = {maxLen}

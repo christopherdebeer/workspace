@@ -80,7 +80,20 @@ function App() {
           </span>
         ) : null}
       </nav>
-      <main>{View ? <View /> : <Library />}</main>
+      <main>
+        {View ? <View /> : <Library />}
+        {x?.findings?.length ? (
+          <section className="panel notebook">
+            <h2>Notebook</h2>
+            <p className="sub">What live runs showed (jev-1.13.0). Findings change the experiment; the experiment changes the findings.</p>
+            <ol>
+              {x.findings.map((f, i) => (
+                <li key={i}>{f}</li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
+      </main>
       <TraceStrip />
     </div>
   );

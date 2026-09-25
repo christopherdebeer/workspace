@@ -16,6 +16,9 @@
  *               collapses to the kind that won
  *   probe       no decoding at all: a battery of features of an answer that is
  *               never written (the naive idea, kept as the control)
+ *   recognise   the one that works: per word, a first-letter gate, then every
+ *               matching word of a 20k lexicon shown at once across parallel
+ *               255-way choices — Jev can't spell, but it recognises (below)
  * ------------------------------------------------------------------------- */
 import { choiceOf, type Answer, type Answers, type ChoiceQ, type Questions } from './types';
 
@@ -187,3 +190,80 @@ export const PROBES: Questions = {
   domain: choiceOf('Which domain is the answer from?', ['science', 'history', 'geography', 'arts', 'sport', 'technology', 'everyday life', 'language', 'maths', 'other']),
   first: choiceOf('What letter does a short correct answer start with?', [...'abcdefghijklmnopqrstuvwxyz0123456789']),
 };
+
+/* ── recognise: Jev can't spell the answer, but it knows it on sight ──────
+ * Findings that motivated this (live, jev-1.13.0, 2026-09-25): asked for the
+ * next character it gets the first letter (0.43) and little after; lookahead
+ * positions ≥1 collapse to near-uniform (≤0.09). Shown a list containing the
+ * answer it picks it at 0.99, and a list without it gets "(none)" at 0.76.
+ * So decode by RECOGNITION: gate on the next word's first letter (one cheap
+ * call), then shard every lexicon word under those letters across parallel
+ * 255-way choices, each with a (none) escape, in ONE call. */
+
+/** 20k English words by web frequency (proper nouns included: canberra, shakespeare…). */
+export const LEXICON_URL = 'https://cdn.jsdelivr.net/gh/first20hours/google-10000-english@master/20k.txt';
+export const NONE = '(none)';
+const SHARD = 254;
+const BLOCK = new Set(
+  'fuck fucking fucked shit cunt cock cum porn porno sex sexy xxx pussy dick tits bitch nude nudes anal slut whore nigger fag dildo milf hentai boobs penis vagina orgasm blowjob'.split(' '),
+);
+
+/** Parse the lexicon: lowercase alphabetic words, frequency order kept, blocklist dropped. */
+export function parseLexicon(txt: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of txt.split(/\s+/)) {
+    const w = raw.trim().toLowerCase();
+    if (!/^[a-z]+$/.test(w) || BLOCK.has(w) || seen.has(w)) continue;
+    seen.add(w);
+    out.push(w);
+  }
+  return out;
+}
+
+export function gateQuestion(): ChoiceQ {
+  return choiceOf(`What is the FIRST LETTER of the NEXT WORD of the answer? Choose ${END} if the answer is already complete.`, [...'abcdefghijklmnopqrstuvwxyz', END]);
+}
+
+/** Letters covering `mass` of the gate's probability (at most `max`), or end. */
+export function gateLetters(a: Answer | undefined, mass = 0.8, max = 3): { letters: string[]; end: boolean; pEnd: number } {
+  const probs = Object.entries(a?.probabilities ?? (a?.choice ? { [a.choice]: 1 } : {})).sort((x, y) => y[1] - x[1]);
+  const pEnd = probs.find(([k]) => k === END)?.[1] ?? 0;
+  if (probs[0]?.[0] === END) return { letters: [], end: true, pEnd };
+  const letters: string[] = [];
+  let acc = 0;
+  for (const [k, p] of probs) {
+    if (k === END) continue;
+    letters.push(k);
+    acc += p;
+    if (acc >= mass || letters.length >= max) break;
+  }
+  return { letters, end: false, pEnd };
+}
+
+/** Lexicon words under the given first letters, sharded into parallel choices s0…sN. */
+export function shardQuestions(lexicon: string[], letters: string[], maxShards = 24): { questions: Questions; shards: string[][] } {
+  const pool = lexicon.filter((w) => letters.includes(w[0]));
+  const shards: string[][] = [];
+  for (let i = 0; i < pool.length && shards.length < maxShards; i += SHARD) shards.push(pool.slice(i, i + SHARD));
+  const questions: Questions = {};
+  shards.forEach((s, i) => {
+    questions[`s${i}`] = choiceOf(
+      `Which word in this list is the NEXT WORD of the answer to the question? Choose ${NONE} if the next word is not in this list.`,
+      [...s, NONE],
+    );
+  });
+  return { questions, shards };
+}
+
+/** The most confident real word across shards (a shard answering (none) abstains). */
+export function bestOfShards(answers: Answers, n: number): Tok | null {
+  let best: Tok | null = null;
+  for (let i = 0; i < n; i++) {
+    const a = answers[`s${i}`];
+    if (!a?.choice || a.choice === NONE) continue;
+    const p = a.confidence ?? a.probabilities?.[a.choice] ?? 0;
+    if (!best || p > best.p) best = { tok: a.choice, p };
+  }
+  return best;
+}

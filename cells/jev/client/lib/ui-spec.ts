@@ -112,12 +112,19 @@ export function candidates(request: string, cap = 250): string[] {
 /* ── stage 1 ──────────────────────────────────────────────────────────── */
 
 export const COUNT_LEVELS = ['0', '1', '2', '3'];
+/** Total-size levels and the slot cap each implies. */
+export const BUDGET_LEVELS: Record<string, number> = { '2-3': 3, '4-5': 5, '6-8': 8, '9-12': 12 };
 
 export function stage1Questions(cands: string[]): Questions {
   const qs: Questions = {
     layout: { type: 'choice', instructions: 'Which layout suits this interface best?', criteria: { ...LAYOUTS } },
     mood: { type: 'choice', instructions: 'Which visual mood suits it?', criteria: { ...MOODS } },
     title: choiceOf('Which phrase makes the best short title for this interface?', cands),
+    budget: {
+      type: 'score',
+      instructions: 'How many components IN TOTAL should a minimal, genuinely useful interface for this request have?',
+      criteria: Object.keys(BUDGET_LEVELS),
+    },
   };
   for (const k of KIND_ORDER) {
     qs[`n:${k}`] = {
@@ -135,20 +142,38 @@ export interface Slot {
   index: number;
 }
 
-/** Instances stage 1 asked for, in a stable reading order, capped overall. */
+const argmax = (probs: Record<string, number> | undefined): [string, number] | undefined =>
+  probs ? Object.entries(probs).sort((x, y) => y[1] - x[1])[0] : undefined;
+
+/**
+ * Instances stage 1 asked for. Finding (live, 2026-09-25): each per-kind count
+ * is plausible alone, but "prefer fewer" is not honoured across 13 independent
+ * questions — the argmaxes sum to a cluttered 13+. What DOES separate essential
+ * from optional is the calibration: timer 0.90 and list 0.96 vs select 0.31.
+ * So a total-size judgment sets the budget, kinds are admitted in order of
+ * their count's confidence until it is spent, and the result is laid out in
+ * a stable reading order.
+ */
 export function slotsFrom(answers: Answers, cap = 12): Slot[] {
-  const slots: Slot[] = [];
-  for (const k of KIND_ORDER) {
+  const budget = Math.min(cap, BUDGET_LEVELS[argmax(answers.budget?.probabilities)?.[0] ?? ''] ?? cap);
+  const wanted = KIND_ORDER.map((k) => {
     const a = answers[`n:${k}`];
-    // A score's argmax level; fall back to the rounded weighted position.
-    const level = a?.probabilities
-      ? Object.entries(a.probabilities).sort((x, y) => y[1] - x[1])[0]?.[0]
-      : a?.score !== undefined
-        ? COUNT_LEVELS[Math.round(a.score * (COUNT_LEVELS.length - 1))]
-        : '0';
-    const n = Number(level ?? '0') || 0;
-    for (let i = 0; i < n && slots.length < cap; i++) slots.push({ id: `${k}${i}`, kind: k, index: i });
+    const top = argmax(a?.probabilities);
+    const n = Number(top?.[0] ?? '0') || 0;
+    return { k, n, conf: a?.confidence ?? top?.[1] ?? 0 };
+  })
+    .filter((w) => w.n > 0)
+    .sort((x, y) => y.conf - x.conf);
+  const counts = new Map<Kind, number>();
+  let used = 0;
+  for (const w of wanted) {
+    if (used >= budget) break;
+    const take = Math.min(w.n, budget - used);
+    counts.set(w.k, take);
+    used += take;
   }
+  const slots: Slot[] = [];
+  for (const k of KIND_ORDER) for (let i = 0; i < (counts.get(k) ?? 0); i++) slots.push({ id: `${k}${i}`, kind: k, index: i });
   return slots;
 }
 

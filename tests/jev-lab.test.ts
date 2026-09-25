@@ -14,6 +14,11 @@ import {
   lookaheadQuestions,
   superposeQuestions,
   wordQuestion,
+  NONE,
+  bestOfShards,
+  gateLetters,
+  parseLexicon,
+  shardQuestions,
 } from '../cells/jev/client/lib/decode';
 import { assemble, candidates, slotsFrom, stage1Questions, stage2Questions, LABELS } from '../cells/jev/client/lib/ui-spec';
 import type { ChoiceQ } from '../cells/jev/client/lib/types';
@@ -112,6 +117,22 @@ describe('interface 00a: request → spec', () => {
     expect(many).toHaveLength(12);
   });
 
+  it('spends the total-size budget on the most confident kinds first (live pomodoro shape)', () => {
+    const count = (n: string, conf: number) => ({ confidence: conf, probabilities: { [n]: conf, '0': 0.01 } });
+    const slots = slotsFrom({
+      budget: { probabilities: { '2-3': 0.2, '4-5': 0.7, '6-8': 0.1 } },
+      'n:heading': count('2', 0.4),
+      'n:select': count('1', 0.31),
+      'n:timer': count('1', 0.9),
+      'n:list': count('1', 0.96),
+      'n:counter': count('1', 0.64),
+      'n:button': count('2', 0.42),
+      'n:textInput': count('1', 0.43),
+    });
+    // budget 5: list .96, timer .90, counter .64, textInput .43, then 1 of 2 buttons
+    expect(slots.map((s) => s.id)).toEqual(['textInput0', 'counter0', 'timer0', 'list0', 'button0']);
+  });
+
   it('stage 2 asks per-slot labels, ranges, options and actions', () => {
     const slots = [
       { id: 'slider0', kind: 'slider' as const, index: 0 },
@@ -148,5 +169,34 @@ describe('interface 00a: request → spec', () => {
     expect(slider.min).toBeLessThan(slider.max!);
     expect(spec.widgets.find((w) => w.id === 'select0')!.options).toEqual(['Low', 'High']);
     expect(spec.widgets.find((w) => w.id === 'button0')!.action).toBe('start');
+  });
+});
+
+describe('decode: recognise (gate + sharded lexicon)', () => {
+  it('parses the lexicon: alphabetic, deduped, frequency order kept, blocklist dropped', () => {
+    expect(parseLexicon('the\nOf\nof\nfuck\ncanberra\nx-ray\n\n')).toEqual(['the', 'of', 'canberra']);
+  });
+
+  it('gates on the letters covering most of the probability mass, or ends', () => {
+    expect(gateLetters({ probabilities: { c: 0.43, a: 0.12, s: 0.06, n: 0.05, [END]: 0.01 } }, 0.5, 3).letters).toEqual(['c', 'a']);
+    expect(gateLetters({ probabilities: { c: 0.2, a: 0.2, s: 0.2, n: 0.2 } }, 0.9, 3).letters).toHaveLength(3);
+    expect(gateLetters({ probabilities: { [END]: 0.7, a: 0.3 } }).end).toBe(true);
+  });
+
+  it('shards matching words into ≤255-option choices with a (none) escape, capped', () => {
+    const lex = Array.from({ length: 600 }, (_, i) => `c${'x'.repeat(i % 7)}${i}`.replace(/\d/g, (d) => 'abcdefghij'[Number(d)]));
+    const { questions, shards } = shardQuestions(['apple', ...lex, 'zebra'], ['c']);
+    expect(shards.map((s) => s.length)).toEqual([254, 254, 92]);
+    expect(Object.keys(questions)).toEqual(['s0', 's1', 's2']);
+    for (const q of Object.values(questions)) {
+      expect(Object.keys((q as ChoiceQ).criteria).length).toBeLessThanOrEqual(255);
+      expect((q as ChoiceQ).criteria).toHaveProperty(NONE);
+    }
+    expect(shardQuestions(lex, ['c'], 1).shards).toHaveLength(1);
+  });
+
+  it('takes the most confident real word; abstaining shards are ignored (live canberra shape)', () => {
+    expect(bestOfShards({ s0: { choice: NONE, confidence: 0.75 }, s1: { choice: 'canberra', confidence: 0.99 } }, 2)).toEqual({ tok: 'canberra', p: 0.99 });
+    expect(bestOfShards({ s0: { choice: NONE, confidence: 0.9 } }, 1)).toBeNull();
   });
 });
