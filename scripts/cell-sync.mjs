@@ -257,11 +257,13 @@ function gitDirty(localRoot) {
 
 /**
  * ADR-0099: the deploy's provenance from git — `description` (why) and
- * `source` (where from). `--message "<why>"` wins; otherwise the subject of
- * the last commit touching the cell's directory. `source` names the commit,
- * suffixed `+dirty` when the cell directory has uncommitted changes (the
- * deploy is then of a tree git has not recorded). Best-effort: outside git,
- * or on any git error, both are simply omitted.
+ * `source` (where from). `--message "<why>"` wins. Otherwise, ONLY when the
+ * cell directory is clean, the subject of the last commit touching it: with
+ * uncommitted changes (the usual push-then-commit order) that subject names
+ * the PREVIOUS change, so it is not borrowed — the deploy goes undescribed and
+ * a hint says so. `source` names the commit, suffixed `+dirty` when the tree
+ * being deployed is not what git recorded. Best-effort: outside git, or on any
+ * git error, both are simply omitted.
  */
 function deployProvenance(localRoot) {
   const out = {};
@@ -269,8 +271,9 @@ function deployProvenance(localRoot) {
   if (message) out.description = message;
   try {
     const sha = execFileSync('git', ['log', '-1', '--format=%H', '--', localRoot], { encoding: 'utf8' }).trim();
+    const dirty = gitDirty(localRoot).size > 0;
     if (!sha) return out;
-    if (!out.description) {
+    if (!out.description && !dirty) {
       const subject = execFileSync('git', ['log', '-1', '--format=%s', '--', localRoot], { encoding: 'utf8' }).trim();
       if (subject) out.description = subject;
     }
@@ -282,10 +285,11 @@ function deployProvenance(localRoot) {
     } catch {
       /* no origin */
     }
-    out.source = `git:${repo ? `${repo}@` : ''}${sha}${gitDirty(localRoot).size ? '+dirty' : ''}`;
+    out.source = `git:${repo ? `${repo}@` : ''}${sha}${dirty ? '+dirty' : ''}`;
   } catch {
     /* not a git checkout */
   }
+  if (!out.description) console.log('(no deploy description — pass --message "<why>" so the deploy fact says why; ADR-0099)');
   return out;
 }
 
@@ -553,7 +557,7 @@ async function waitForDeploy(cellId, version) {
       return;
     }
     if (d.version === version && d.phase === 'DEPLOYED') {
-      console.log(`\n✓ deployed ${cellId} v${version} — tree ${short(d.treeVersion)}`);
+      console.log(`\n✓ deployed ${cellId} v${version} — tree ${short(d.treeVersion)} · recorded as cells/${cellId}/deploy/${d.version ?? version}`);
       return;
     }
     if (d.version === version && d.phase === 'FAILED') {

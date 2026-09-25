@@ -58,8 +58,12 @@ represented?", the substrate could only answer **what a cell is now**:
    - *Fallback:* `summary` is always set — the description's first line, else a
      mechanical `name: +a ~m -r files (paths…)`, else `name: deploy <v>`.
    - *Default from git:* `cell-sync push --deploy` fills `description` from
-     `--message` or the last commit subject touching `cells/<name>`, and
-     `source` as `git:<owner/repo>@<sha>` (`+dirty` when uncommitted).
+     `--message`, else — only when `cells/<name>` is clean — the last commit
+     subject touching it; with uncommitted changes (the push-then-commit order
+     drive's runbook uses) that subject names the *previous* change, so it is
+     not borrowed and the script prints a hint instead. `source` is
+     `git:<owner/repo>@<sha>` (`+dirty` when the deployed tree is not what git
+     recorded).
    - *Later, not now:* System Two may annotate undescribed deploys from their
      `changes` during consolidation — a prose writer, so never Jev.
 
