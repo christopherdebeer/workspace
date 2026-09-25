@@ -202,6 +202,8 @@ export const PROBES: Questions = {
 
 /** 20k English words by web frequency (proper nouns included: canberra, shakespeare…). */
 export const LEXICON_URL = 'https://cdn.jsdelivr.net/gh/first20hours/google-10000-english@master/20k.txt';
+/** Tier 2: 50k words by subtitle frequency ("word count" lines) — adds ~30k rarer words (austen, michelangelo, cheetah). */
+export const LEXICON2_URL = 'https://cdn.jsdelivr.net/gh/hermitdave/FrequencyWords@master/content/2018/en/en_50k.txt';
 export const NONE = '(none)';
 const SHARD = 254;
 const BLOCK = new Set(

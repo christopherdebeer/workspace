@@ -11,7 +11,7 @@
  * page never spends the budget for strangers.
  * ------------------------------------------------------------------------- */
 import { ensureAuth, isAuthed, mcp } from './auth';
-import type { Answers, Questions } from './types';
+import { chunkBySize, type Answers, type Questions } from './types';
 
 export const CELL_TARGET = '@c15r/jev';
 /** ~$0.042 per million input tokens (TypeSafe list price). */
@@ -94,5 +94,49 @@ export async function decide(state: unknown, questions: Questions, label = 'deci
     const msg = e.name === 'AbortError' ? 'stopped' : /load failed|failed to fetch|networkerror/i.test(e.message) ? `network error reaching Jev (${e.message})` : e.message;
     record({ id, label, questions: n, ms, tokens: 0, ok: false, error: msg, at: Date.now() });
     throw new JevError(msg, 0);
+  }
+}
+
+export interface ManyItem {
+  state: unknown;
+  questions: Questions;
+}
+
+/**
+ * Many Jev passes in ONE round trip (`decide_many`, fanned out server-side at
+ * concurrency 24). Measured 2026-09-25: 5 items × 16 lexicon shards (the whole
+ * 20k vocabulary) in 3.0 s; 40 small states in 2.5 s. Per-call payloads above
+ * ~32 shards fail, so wide scans are chunked into items — width costs tokens,
+ * not latency. Results come back in item order; a failed item is `null`.
+ */
+export async function decideMany(items: ManyItem[], label = 'decide_many'): Promise<Array<Answers | null>> {
+  if (!items.length) return [];
+  const id = ++seq;
+  const n = items.reduce((s, it) => s + Object.keys(it.questions).length, 0);
+  const t0 = performance.now();
+  const out: Array<Answers | null> = new Array(items.length).fill(null);
+  let tokens = 0;
+  // Envelopes capped by size (the edge rejects large bodies) and by decide_many's
+  // 200 items; all envelopes run concurrently.
+  const chunks = chunkBySize(items);
+  try {
+    await Promise.all(
+      chunks.map(async (idx) => {
+        const r = await mcp('act', `${CELL_TARGET}.decide_many`, {
+          items: idx.map((i) => ({ id: i, state: items[i].state, questions: items[i].questions })),
+          concurrency: 24,
+        });
+        if (!r.ok || !r.value || typeof r.value !== 'object') throw new JevError(typeof r.value === 'string' ? r.value : 'decide_many failed', 0);
+        const body = r.value as { results?: Array<{ id: number; answers?: Answers }>; usage?: { input_tokens?: number } };
+        tokens += body.usage?.input_tokens ?? 0;
+        for (const res of body.results ?? []) if (res.answers) out[res.id] = res.answers;
+      }),
+    );
+    record({ id, label, questions: n, ms: Math.round(performance.now() - t0), tokens, ok: true, at: Date.now() });
+    return out;
+  } catch (err) {
+    const msg = (err as Error).message;
+    record({ id, label, questions: n, ms: Math.round(performance.now() - t0), tokens, ok: false, error: msg, at: Date.now() });
+    throw err instanceof JevError ? err : new JevError(msg, 0);
   }
 }

@@ -41,3 +41,27 @@ export const choiceOf = (instructions: string, options: string[]): ChoiceQ => ({
   instructions,
   criteria: Object.fromEntries(options.map((o) => [o, null])),
 });
+
+/**
+ * Split items into request-sized groups. The parc.land edge rejects large
+ * bodies (a 20-item × 16-shard decide_many ≈ 800 KB failed request signing;
+ * 5 items ≈ 200 KB passes), so batches are capped by serialized size and item
+ * count and sent concurrently — the width stays, only the envelopes change.
+ */
+export function chunkBySize<T>(items: T[], maxBytes = 240_000, maxItems = 200): number[][] {
+  const groups: number[][] = [];
+  let cur: number[] = [];
+  let bytes = 0;
+  items.forEach((it, i) => {
+    const b = JSON.stringify(it).length;
+    if (cur.length && (bytes + b > maxBytes || cur.length >= maxItems)) {
+      groups.push(cur);
+      cur = [];
+      bytes = 0;
+    }
+    cur.push(i);
+    bytes += b;
+  });
+  if (cur.length) groups.push(cur);
+  return groups;
+}

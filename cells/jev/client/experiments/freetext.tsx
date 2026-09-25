@@ -1,51 +1,12 @@
-/* Experiment 01 — Free text from a model that only answers typed questions. */
+/* Experiment 01 — Free text: answers from a model that only discriminates. */
 import * as React from 'react';
-import { decide, JevError, signIn } from '../lib/jev';
-import {
-  END,
-  SPELL,
-  PROBES,
-  LEXICON_URL,
-  acceptLookahead,
-  appendWord,
-  bestOfShards,
-  gateLetters,
-  gateQuestion,
-  parseLexicon,
-  shardQuestions,
-  charQuestion,
-  collapse,
-  decodeState,
-  glyph,
-  lookaheadQuestions,
-  superposeQuestions,
-  wordQuestion,
-  type Tok,
-} from '../lib/decode';
-import type { Answers } from '../lib/types';
-import { Panel, Bar, Distribution, ConfidentText, ErrorLine } from '../ui';
+import { decide, decideMany, signIn, JevError } from '../lib/jev';
+import { LEXICON_URL, LEXICON2_URL, parseLexicon } from '../lib/decode';
+import { answer, type AnswerEvent, type Candidate, type Deps, type Kind } from '../lib/answer';
+import { EVALSET } from '../lib/evalset';
+import { Panel, Bar, ErrorLine } from '../ui';
 
 const { useRef, useState } = React;
-
-type Mode = 'recognise' | 'probe' | 'spell' | 'lookahead' | 'words' | 'superpose';
-const MODES: Record<Mode, { name: string; blurb: string }> = {
-  recognise: {
-    name: 'recognise',
-    blurb: 'Jev can\'t spell, but it knows the answer on sight. Per word: one call for the first letter, then one call showing every matching word of a 20k lexicon, sharded across parallel 255-way choices.',
-  },
-  probe: { name: 'probe', blurb: 'No text at all — one call, a dozen features of an answer that is never written.' },
-  spell: { name: 'spell', blurb: 'One character per call, autoregressive. The honest baseline: correct-ish, slow.' },
-  lookahead: { name: 'lookahead', blurb: 'k characters per call, asked in parallel; keep the prefix that clears θ. Speculative decoding with no draft model.' },
-  words: { name: 'words', blurb: 'A word per call from a 253-word vocabulary; ✎ escapes to spelling for anything outside it.' },
-  superpose: { name: 'superpose', blurb: 'ONE call asks every typed decoder at once (yes/no, digits, year…) plus "what kind of answer?", then collapses.' },
-};
-
-interface Round {
-  n: number;
-  ms: number;
-  q: number;
-  got: string;
-}
 
 let lexiconCache: Promise<string[]> | null = null;
 /** The 20k lexicon, fetched once from the CDN and kept for the session. */
@@ -63,131 +24,64 @@ function loadLexicon(): Promise<string[]> {
   return lexiconCache;
 }
 
-const EXAMPLES = ['What is the capital of Australia?', 'How many legs does a spider have?', 'In what year did the Berlin Wall fall?', 'Is the sun a star?', 'Who wrote Hamlet?'];
+let lexicon2Cache: Promise<string[]> | null = null;
+/** Tier 2 (~30k rarer words), fetched only when an answer needs repair. */
+function loadLexicon2(): Promise<string[]> {
+  lexicon2Cache ??= Promise.all([loadLexicon(), fetch(LEXICON2_URL).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`tier-2 lexicon: HTTP ${r.status}`))))])
+    .then(([one, txt]) => {
+      const seen = new Set(one);
+      return parseLexicon(txt).filter((w) => !seen.has(w));
+    })
+    .catch((err) => {
+      lexicon2Cache = null;
+      throw err;
+    });
+  return lexicon2Cache;
+}
+
+const depsFor = (signal?: AbortSignal): Deps => ({
+  lexicon: loadLexicon,
+  lexicon2: loadLexicon2,
+  decide: async (state, questions, label) => (await decide(state, questions, label, signal)).answers,
+  decideMany: (items, label) => decideMany(items, label),
+  signal,
+});
+
+/** Display form: names and places title-cased; numbers and yes/no as-is. */
+const display = (text: string, kind: Kind) => (kind === 'word' ? text.replace(/\b\w/g, (c) => c.toUpperCase()) : kind === 'yesno' ? text[0]?.toUpperCase() + text.slice(1) : text);
+
+interface Phase {
+  name: string;
+  detail: string;
+  top?: Candidate[];
+  ms: number;
+}
+
+const EXAMPLES = ['Who invented the telephone?', 'What gas do plants absorb from the air?', 'In what year did the Berlin Wall fall?', 'Who painted the Mona Lisa?', 'Is a whale a fish?'];
 
 export default function FreeText() {
   const [question, setQuestion] = useState(EXAMPLES[0]);
-  const [mode, setMode] = useState<Mode>('recognise');
-  const [k, setK] = useState(6);
-  const [theta, setTheta] = useState(0.6);
-  const [maxLen, setMaxLen] = useState(48);
-  const [out, setOut] = useState<Array<{ text: string; p: number }>>([]);
-  const [rounds, setRounds] = useState<Round[]>([]);
-  const [probe, setProbe] = useState<Answers | null>(null);
-  const [superposed, setSuperposed] = useState<Answers | null>(null);
   const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ answer: Candidate; alternatives: Candidate[]; kind: Kind; ms: number } | null>(null);
+  const [phases, setPhases] = useState<Phase[]>([]);
   const [error, setError] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
 
-  const reset = () => {
-    setOut([]);
-    setRounds([]);
-    setProbe(null);
-    setSuperposed(null);
-    setError(null);
-  };
-
   async function run() {
-    reset();
     setBusy(true);
+    setError(null);
+    setResult(null);
+    setPhases([]);
     const ac = new AbortController();
     abort.current = ac;
-    const pushTokens = (toks: Tok[]) => setOut((o) => [...o, ...toks.map((t) => ({ text: glyph(t.tok), p: t.p }))]);
-    const log = (r: Round) => setRounds((rs) => [...rs, r]);
-    let prefix = '';
+    const t0 = performance.now();
     try {
       if (!(await signIn())) throw new JevError('sign in to run experiments', 401);
-
-      if (mode === 'probe') {
-        const r = await decide({ question }, PROBES, 'probe', ac.signal);
-        setProbe(r.answers);
-        log({ n: 1, ms: r.ms, q: Object.keys(PROBES).length, got: '(features)' });
-        return;
-      }
-
-      let n = 0;
-      if (mode === 'superpose') {
-        const qs = superposeQuestions();
-        const r = await decide({ question }, qs, 'superpose', ac.signal);
-        setSuperposed(r.answers);
-        const c = collapse(r.answers);
-        log({ n: ++n, ms: r.ms, q: Object.keys(qs).length, got: c.text ?? `(${c.kind} → spelling)` });
-        if (c.text !== null) {
-          setOut([{ text: c.text, p: c.kindP }]);
-          return;
-        }
-        // word/phrase: superposition can't hold it — fall through to lookahead.
-      }
-
-      if (mode === 'recognise') {
-        const lexicon = await loadLexicon();
-        for (let w = 0; w < 12 && prefix.length < maxLen && !ac.signal.aborted; w++) {
-          const g = await decide(decodeState(question, prefix), { g: gateQuestion() }, 'gate', ac.signal);
-          const gate = gateLetters(g.answers.g);
-          log({ n: ++n, ms: g.ms, q: 1, got: gate.end ? END : `[${gate.letters.join('')}]` });
-          if (gate.end) break;
-          const { questions, shards } = shardQuestions(lexicon, gate.letters);
-          const r = await decide(decodeState(question, prefix), questions, 'shards', ac.signal);
-          const best = bestOfShards(r.answers, shards.length);
-          log({ n: ++n, ms: r.ms, q: shards.length, got: best ? `${best.tok} (${Math.round(best.p * 100)}%)` : `(none of ${shards.reduce((a, s) => a + s.length, 0)})` });
-          if (!best) break;
-          const next = appendWord(prefix, best.tok);
-          setOut((o) => [...o, { text: next.slice(prefix.length), p: best.p }]);
-          prefix = next;
-        }
-        return;
-      }
-
-      if (mode === 'words') {
-        let spelling = false;
-        while (prefix.length < maxLen && !ac.signal.aborted) {
-          if (!spelling) {
-            const r = await decide(decodeState(question, prefix), { w: wordQuestion() }, 'word', ac.signal);
-            const a = r.answers.w;
-            const w = a?.choice ?? END;
-            const p = a?.confidence ?? 0;
-            log({ n: ++n, ms: r.ms, q: 1, got: w });
-            if (w === END) break;
-            if (w === SPELL) {
-              spelling = true;
-              if (prefix) {
-                prefix += ' ';
-                setOut((o) => [...o, { text: ' ', p }]);
-              }
-              continue;
-            }
-            const next = appendWord(prefix, w);
-            setOut((o) => [...o, { text: next.slice(prefix.length), p }]);
-            prefix = next;
-          } else {
-            const r = await decide(decodeState(question, prefix), { c0: charQuestion(0) }, 'spell', ac.signal);
-            const t = { tok: r.answers.c0?.choice ?? END, p: r.answers.c0?.confidence ?? 0 };
-            log({ n: ++n, ms: r.ms, q: 1, got: t.tok });
-            if (t.tok === END) break;
-            if (glyph(t.tok) === ' ') {
-              spelling = false;
-              prefix = prefix.trimEnd();
-              continue;
-            }
-            prefix += glyph(t.tok);
-            pushTokens([t]);
-          }
-        }
-        return;
-      }
-
-      // spell (k=1) and lookahead (k>1) share one loop.
-      const kk = mode === 'spell' ? 1 : k;
-      const qs = lookaheadQuestions(kk);
-      while (prefix.length < maxLen && !ac.signal.aborted) {
-        const r = await decide(decodeState(question, prefix), qs, mode, ac.signal);
-        const { tokens, done } = acceptLookahead(r.answers, kk, theta);
-        const text = tokens.map((t) => glyph(t.tok)).join('');
-        log({ n: ++n, ms: r.ms, q: kk, got: text || '∅' });
-        pushTokens(tokens.filter((t) => t.tok !== END));
-        prefix += text;
-        if (done || !tokens.length) break;
-      }
+      const onEvent = (e: AnswerEvent) => {
+        if (e.type === 'phase') setPhases((ps) => [...ps, { name: e.name, detail: e.detail, top: e.top, ms: Math.round(performance.now() - t0) }]);
+      };
+      const r = await answer(question, depsFor(ac.signal), { onEvent });
+      setResult({ ...r, ms: Math.round(performance.now() - t0) });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -196,12 +90,9 @@ export default function FreeText() {
     }
   }
 
-  const totalMs = rounds.reduce((s, r) => s + r.ms, 0);
-  const chars = out.reduce((s, t) => s + t.text.length, 0);
-
   return (
     <>
-      <Panel title="Free text" sub="Jev never writes prose. Each decoder below extracts a string anyway — trading round trips for parallel questions.">
+      <Panel title="Free text" sub="Ask anything with a short answer. Jev can't write a word — it only judges — so code builds candidate answers and Jev recognises the right one, hundreds at a time.">
         <label className="field">
           <span>question</span>
           <input value={question} onChange={(e) => setQuestion(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && !busy && void run()} />
@@ -213,37 +104,9 @@ export default function FreeText() {
             </button>
           ))}
         </div>
-        <div className="seg" role="tablist" aria-label="decoder">
-          {(Object.keys(MODES) as Mode[]).map((m) => (
-            <button key={m} role="tab" aria-selected={mode === m} className={mode === m ? 'on' : ''} onClick={() => setMode(m)}>
-              {MODES[m].name}
-            </button>
-          ))}
-        </div>
-        <p className="sub">{MODES[mode].blurb}</p>
-        {mode === 'lookahead' || mode === 'superpose' ? (
-          <div className="knobs">
-            <label>
-              k = {k}
-              <input type="range" min={2} max={12} value={k} onChange={(e) => setK(Number(e.target.value))} />
-            </label>
-            <label>
-              θ = {theta.toFixed(2)}
-              <input type="range" min={0.2} max={0.95} step={0.05} value={theta} onChange={(e) => setTheta(Number(e.target.value))} />
-            </label>
-          </div>
-        ) : null}
-        {mode !== 'probe' && mode !== 'superpose' && mode !== 'recognise' ? (
-          <div className="knobs">
-            <label>
-              max length = {maxLen}
-              <input type="range" min={8} max={120} step={4} value={maxLen} onChange={(e) => setMaxLen(Number(e.target.value))} />
-            </label>
-          </div>
-        ) : null}
         <div className="row">
           <button className="primary" disabled={busy || !question.trim()} onClick={() => void run()}>
-            {busy ? 'decoding…' : 'decode'}
+            {busy ? 'thinking…' : 'answer'}
           </button>
           {busy ? (
             <button className="ghost" onClick={() => abort.current?.abort()}>
@@ -254,66 +117,130 @@ export default function FreeText() {
         <ErrorLine error={error} />
       </Panel>
 
-      {out.length || rounds.length ? (
-        <Panel title="Output" sub={rounds.length ? `${chars} chars · ${rounds.length} round trips · ${totalMs} ms · ${chars ? Math.round(totalMs / chars) : 0} ms/char` : undefined}>
-          <p className="decoded">
-            <ConfidentText tokens={out} />
-            {busy ? <span className="caret">▍</span> : null}
-          </p>
-          <details>
-            <summary>rounds</summary>
-            <table className="rounds">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>ms</th>
-                  <th>q</th>
-                  <th>got</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rounds.map((r) => (
-                  <tr key={r.n}>
-                    <td>{r.n}</td>
-                    <td>{r.ms}</td>
-                    <td>{r.q}</td>
-                    <td className="mono">{r.got}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </details>
+      {result || busy ? (
+        <section className="panel answer-card" aria-live="polite">
+          {result ? (
+            <>
+              <p className="answer-label">answer</p>
+              <p className="answer-text">{result.answer.text ? display(result.answer.text, result.kind) : '—'}</p>
+              <Bar label="verified" p={result.answer.verified ?? 0} hint="Jev: is this EXACTLY right — every word correct?" />
+              <p className="sub">
+                {result.kind} · {(result.ms / 1000).toFixed(1)} s
+              </p>
+              {result.alternatives.length ? (
+                <div className="alts">
+                  {result.alternatives.map((a) => (
+                    <span key={a.text} className="tag" title="verified">
+                      {a.text} · {Math.round((a.verified ?? 0) * 100)}%
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <p className="answer-text pending">…</p>
+          )}
+        </section>
+      ) : null}
+
+      {phases.length ? (
+        <Panel title="How it got there" sub="Each stage is one round trip; everything inside a stage runs in parallel.">
+          <ol className="phases">
+            {phases.map((ph, i) => (
+              <li key={i}>
+                <b>{ph.name}</b> <span className="sub">{ph.detail} · {ph.ms} ms</span>
+                {ph.top?.length ? (
+                  <div className="alts">
+                    {ph.top.map((c) => (
+                      <span key={c.text} className="tag">
+                        {c.text}
+                        {c.verified !== undefined ? ` ${Math.round(c.verified * 100)}%` : ` ${Math.round(c.score * 100)}`}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ol>
         </Panel>
       ) : null}
 
-      {superposed ? (
-        <Panel title="Superposition" sub="Every decoder's answer, from the same single call — only the winning kind is read.">
-          <Distribution probs={superposed.kind?.probabilities} />
-          <div className="grid2">
-            <Bar label="yes" p={superposed.yes?.noul ?? 0} />
-            <Bar label="negative" p={superposed.negative?.noul ?? 0} />
-          </div>
-          <p className="mono small">
-            digits {superposed.ndigits?.choice}: {[0, 1, 2, 3, 4, 5, 6].map((i) => superposed[`d${i}`]?.choice ?? '·').join('')} · year{' '}
-            {[0, 1, 2, 3].map((i) => superposed[`y${i}`]?.choice ?? '·').join('')} {superposed.ce?.choice} · first {superposed.first?.choice}
-          </p>
-        </Panel>
-      ) : null}
-
-      {probe ? (
-        <Panel title="Fingerprint" sub="What Jev believes about an answer it never wrote.">
-          {Object.entries(PROBES).map(([name, q]) => {
-            const a = probe[name];
-            if (q.type === 'noul') return <Bar key={name} label={name} p={a?.noul ?? 0} />;
-            return (
-              <div key={name} className="probe-dist">
-                <span className="bar-label">{name}</span>
-                <Distribution probs={a?.probabilities} n={3} />
-              </div>
-            );
-          })}
-        </Panel>
-      ) : null}
+      <EvalPanel />
     </>
+  );
+}
+
+/* ── the eval: every question at once ─────────────────────────────────── */
+
+interface Row {
+  q: string;
+  got?: string;
+  ok?: boolean;
+  v?: number;
+  ms?: number;
+  err?: string;
+}
+
+function EvalPanel() {
+  const [rows, setRows] = useState<Row[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [wall, setWall] = useState(0);
+
+  async function runEval() {
+    setBusy(true);
+    setRows(EVALSET.map(([q]) => ({ q })));
+    const t0 = performance.now();
+    try {
+      if (!(await signIn())) throw new JevError('sign in to run experiments', 401);
+      await loadLexicon();
+      await Promise.all(
+        EVALSET.map(async ([q, expect], i) => {
+          const s0 = performance.now();
+          let row: Row;
+          try {
+            const r = await answer(q, depsFor());
+            row = { q, got: r.answer.text, ok: expect.includes(r.answer.text), v: r.answer.verified, ms: Math.round(performance.now() - s0) };
+          } catch (err) {
+            row = { q, err: (err as Error).message, ms: Math.round(performance.now() - s0) };
+          }
+          setRows((rs) => rs.map((x, j) => (j === i ? row : x)));
+        }),
+      );
+    } finally {
+      setWall(Math.round(performance.now() - t0));
+      setBusy(false);
+    }
+  }
+
+  const done = rows.filter((r) => r.got !== undefined || r.err);
+  const ok = rows.filter((r) => r.ok).length;
+  return (
+    <Panel title="Eval" sub={`${EVALSET.length} questions of mixed kinds, all concurrently. Accuracy, per-question latency and wall time.`}>
+      <div className="row">
+        <button disabled={busy} onClick={() => void runEval()}>
+          {busy ? `running… ${done.length}/${EVALSET.length}` : 'run eval'}
+        </button>
+        {rows.length && !busy ? (
+          <span className="sub">
+            {ok}/{rows.length} correct · wall {(wall / 1000).toFixed(1)} s
+          </span>
+        ) : null}
+      </div>
+      {rows.length ? (
+        <table className="rounds">
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.q}>
+                <td>{r.ok === undefined ? (r.err ? '!' : '…') : r.ok ? '✓' : '✗'}</td>
+                <td>{r.q}</td>
+                <td className="mono">{r.err ?? r.got ?? ''}</td>
+                <td className="mono">{r.v !== undefined ? `${Math.round(r.v * 100)}%` : ''}</td>
+                <td className="mono">{r.ms ? `${(r.ms / 1000).toFixed(1)}s` : ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </Panel>
   );
 }
