@@ -33,6 +33,22 @@ export interface DeployState {
    * — not whatever src/ holds by the time the event is delivered.
    */
   treeVersion?: string;
+  /** ADR-0099: who requested it and (optionally) why — provenance only. */
+  note?: DeployNote;
+}
+
+/** A deploy's provenance (ADR-0099): the authorized caller + optional why/where-from. */
+export interface DeployNote {
+  /** The principal that requested the deploy. */
+  by?: string;
+  /** The delegated leaf actor (ADR-0024), when a child token deployed. */
+  actor?: string;
+  /** The self-declared participant (ADR-0086) — provenance only. */
+  participant?: string;
+  /** Why — a commit-message-grade line, optional. */
+  description?: string;
+  /** Where the source came from, e.g. `git:owner/repo@sha`. */
+  source?: string;
 }
 
 /** The last deploy that actually landed, kept apart from `deploy` (which the next request overwrites). */

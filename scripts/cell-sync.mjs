@@ -6,7 +6,8 @@
  *   node scripts/cell-sync.mjs diff   <name> [--view summary|files|patch] [--prefix p/]
  *                                                        what changed on the cell since your last sync
  *   node scripts/cell-sync.mjs pull   <name>             bring the cell's changes into the tree
- *   node scripts/cell-sync.mjs push   <name> [--deploy]  send your changes to the cell (+ deploy exactly them)
+ *   node scripts/cell-sync.mjs push   <name> [--deploy]  send your changes to the cell (+ deploy exactly them;
+ *                                                     the deploy fact records --message or the last commit subject, ADR-0099)
  *   node scripts/cell-sync.mjs sync   <name> [--deploy]  pull, then push
  *
  *   flags: --owner c15r · --dry-run · --take local|remote (settle conflicts) · --force
@@ -252,6 +253,44 @@ function gitDirty(localRoot) {
   } catch {
     return new Set();
   }
+}
+
+/**
+ * ADR-0099: the deploy's provenance from git — `description` (why) and
+ * `source` (where from). `--message "<why>"` wins. Otherwise, ONLY when the
+ * cell directory is clean, the subject of the last commit touching it: with
+ * uncommitted changes (the usual push-then-commit order) that subject names
+ * the PREVIOUS change, so it is not borrowed — the deploy goes undescribed and
+ * a hint says so. `source` names the commit, suffixed `+dirty` when the tree
+ * being deployed is not what git recorded. Best-effort: outside git, or on any
+ * git error, both are simply omitted.
+ */
+function deployProvenance(localRoot) {
+  const out = {};
+  const message = flag('--message') ?? flag('-m');
+  if (message) out.description = message;
+  try {
+    const sha = execFileSync('git', ['log', '-1', '--format=%H', '--', localRoot], { encoding: 'utf8' }).trim();
+    const dirty = gitDirty(localRoot).size > 0;
+    if (!sha) return out;
+    if (!out.description && !dirty) {
+      const subject = execFileSync('git', ['log', '-1', '--format=%s', '--', localRoot], { encoding: 'utf8' }).trim();
+      if (subject) out.description = subject;
+    }
+    let repo = '';
+    try {
+      const url = execFileSync('git', ['remote', 'get-url', 'origin'], { encoding: 'utf8' }).trim();
+      const m = url.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/) ?? url.match(/\/git\/([^/]+\/[^/.]+?)(?:\.git)?$/);
+      repo = m ? m[1] : '';
+    } catch {
+      /* no origin */
+    }
+    out.source = `git:${repo ? `${repo}@` : ''}${sha}${dirty ? '+dirty' : ''}`;
+  } catch {
+    /* not a git checkout */
+  }
+  if (!out.description) console.log('(no deploy description — pass --message "<why>" so the deploy fact says why; ADR-0099)');
+  return out;
 }
 
 /**
@@ -518,7 +557,7 @@ async function waitForDeploy(cellId, version) {
       return;
     }
     if (d.version === version && d.phase === 'DEPLOYED') {
-      console.log(`\n✓ deployed ${cellId} v${version} — tree ${short(d.treeVersion)}`);
+      console.log(`\n✓ deployed ${cellId} v${version} — tree ${short(d.treeVersion)} · recorded as cells/${cellId}/deploy/${d.version ?? version}`);
       return;
     }
     if (d.version === version && d.phase === 'FAILED') {
@@ -561,7 +600,7 @@ async function doPush(g) {
   if (!changes.length) {
     console.log('✓ nothing to push');
     if (deploy) {
-      const started = await call('act', 'cells.deploy', { owner, name, treeVersion: remote.treeVersion });
+      const started = await call('act', 'cells.deploy', { owner, name, treeVersion: remote.treeVersion, ...deployProvenance(localRoot) });
       await waitForDeploy(started.cellId, started.version);
     }
     return;
@@ -605,6 +644,7 @@ async function doPush(g) {
         ifTreeVersion: tree,
         snapshot: last,
         deploy: last && deploy,
+        ...(last && deploy ? deployProvenance(localRoot) : {}),
       });
       tree = res.treeVersion;
       for (const f of res.files ?? []) {
@@ -639,7 +679,7 @@ function flag(f) {
 }
 const owner = flag('--owner') ?? 'c15r';
 if (!cmd || !name) {
-  console.error('usage: cell-sync.mjs <status|diff|pull|push|sync> <cellName> [--owner c15r] [--deploy] [--dry-run] [--take local|remote] [--force]');
+  console.error('usage: cell-sync.mjs <status|diff|pull|push|sync> <cellName> [--owner c15r] [--deploy [--message "<why>"]] [--dry-run] [--take local|remote] [--force]');
   process.exit(1);
 }
 const take = flag('--take');

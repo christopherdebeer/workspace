@@ -104,7 +104,9 @@ export interface Suggestion {
   score: number | null;
 }
 export interface PrevAudit {
-  backlog?: { total?: number };
+  /** `total` when the organ wrote it; a driven tending run writes only the
+   *  parts (and `contestedTotal`), so the delta falls back to their sum. */
+  backlog?: { total?: number; stale?: number; unlinked?: number; dangling?: number; contested?: number; contestedTotal?: number };
   actions?: Array<{ kind: string; from?: string; rel?: string; to?: string }>;
 }
 export interface Observations {
@@ -140,7 +142,9 @@ export const CAPS = {
   rewardValue: 0.5,
   // Inc 2 (ADR-0077):
   retype: 10,
-  stageBPairs: 5,
+  // ADR-0098: Stage B judges on @c15r/jev (≈$0.00003/pair), so the cap is a
+  // wall-clock bound, not a budget one. The models path remains the fallback.
+  stageBPairs: 40,
   stageBFloor: 0.9,
 } as const;
 
@@ -189,6 +193,25 @@ export function buildAdjudicationPrompt(
     '- "uncertain": you cannot tell from the content alone.\n\n' +
     'Answer with ONLY a JSON object, no prose: {"verdict": "...", "confidence": 0.0-1.0, "why": "one sentence"}'
   );
+}
+
+/** ADR-0098: the Stage-B verdict set as one Jev `choice` (closed set, calibrated
+ *  probabilities, no prose). `uncertain` is not an option — low confidence IS
+ *  uncertainty, and the floor turns it into an escalation. */
+export const STAGE_B_CRITERIA: Record<string, string> = {
+  duplicate: 'the same claim or content twice — one should supersede the other',
+  contradict: 'both stand, but they assert incompatible things',
+  subsumes: 'one is a strict refinement or superset of the other',
+  independent: 'near in wording (shared template, boilerplate or format), but genuinely different claims',
+};
+
+/** A Jev choice answer → the organ's verdict shape. Null when malformed. */
+export function verdictFromJev(answer: unknown): StageBVerdict | null {
+  const a = answer as { choice?: unknown; probabilities?: Record<string, number> } | undefined;
+  if (!a || typeof a.choice !== 'string' || !(a.choice in STAGE_B_CRITERIA)) return null;
+  const p = a.probabilities?.[a.choice];
+  if (typeof p !== 'number' || p < 0 || p > 1) return null;
+  return { verdict: a.choice as StageBVerdict['verdict'], confidence: p, why: `jev choice p=${p.toFixed(2)}` };
 }
 
 export interface StageBVerdict {
@@ -250,7 +273,9 @@ export function planCycle(obs: Observations, caps = CAPS): CyclePlan {
     contested: obs.contestedTotal,
     total: obs.attention.staleTotal + obs.attention.unlinkedTotal + obs.attention.danglingTotal + obs.contestedTotal,
   };
-  const prevTotal = obs.prev?.backlog?.total;
+  const pb = obs.prev?.backlog;
+  const parts = pb ? [pb.stale, pb.unlinked, pb.dangling, pb.contested ?? pb.contestedTotal] : [];
+  const prevTotal = typeof pb?.total === 'number' ? pb.total : parts.length && parts.every((n) => typeof n === 'number') ? (parts as number[]).reduce((a, b) => a + b, 0) : undefined;
   const delta = typeof prevTotal === 'number' ? prevTotal - backlog.total : null;
 
   return { ratify, unlink, rewards, retype, backlog, delta, escalations: { contested: obs.contestedTotal } };
@@ -327,7 +352,7 @@ async function observe(token: string): Promise<Observations & { contestedCandida
     token,
     [
       { target: 'workspace.attention', input: { limit: 25 }, kind: 'read' },
-      { target: 'workspace.contested', input: { limit: 10 }, kind: 'read' },
+      { target: 'workspace.contested', input: { limit: 40 }, kind: 'read' },
       { target: 'workspace.suggestions', input: { limit: 25 }, kind: 'read' },
       { target: 'workspace.peek', input: { key: AUDIT_KEY }, kind: 'read' },
       { target: '$types', kind: 'read' },
@@ -428,37 +453,64 @@ interface ContestedCandidateObs {
   bType?: string | null;
 }
 
-async function adjudicate(token: string, candidates: ContestedCandidateObs[]): Promise<{ acted: string[]; escalated: number; note?: string }> {
+async function adjudicate(token: string, candidates: ContestedCandidateObs[]): Promise<{ acted: string[]; escalated: number; note?: string; tally?: Record<string, number> }> {
   const acted: string[] = [];
+  // Why each pair went where it went — an all-escalated cycle must say why.
+  const tally: Record<string, number> = {};
+  const bump = (k: string) => (tally[k] = (tally[k] ?? 0) + 1);
   const pairs = candidates.slice(0, CAPS.stageBPairs);
   let escalated = candidates.length - pairs.length;
   let firstFailure: string | undefined;
-  for (const c of pairs) {
+  // ADR-0098: one batched Jev pass over every pair first; the per-pair models
+  // call below only runs for pairs Jev could not answer.
+  const judged = await judgeWithJev(token, pairs).catch((e) => {
+    firstFailure = `jev unavailable, falling back to models: ${(e as Error).message.slice(0, 120)}`;
+    return { verdicts: new Map<string, StageBVerdict>(), facts: new Map<string, PeekedFact>() };
+  });
+  let scopeDenied: string | null = null;
+  // Pairs are independent (distinct checked/<hash> keys), so they run in a
+  // small pool — the serial per-pair loop outran the Lambda at 40 pairs.
+  const one = async (c: ContestedCandidateObs): Promise<void> => {
+    if (scopeDenied) {
+      escalated++;
+      return;
+    }
     try {
-      const [ea, eb] = await gwCallMany(
-        token,
-        [
-          { target: 'workspace.peek', input: { key: c.a }, kind: 'read' as const },
-          { target: 'workspace.peek', input: { key: c.b }, kind: 'read' as const },
-        ],
-        { url: GATEWAY_MCP },
-      );
-      const fa = ea as { value?: unknown; _meta?: { type?: string | null; createdAt?: string } } | null;
-      const fb = eb as { value?: unknown; _meta?: { type?: string | null; createdAt?: string } } | null;
-      if (!fa?.value || !fb?.value) {
-        escalated++;
-        continue;
+      let fa = judged.facts.get(c.a) ?? null;
+      let fb = judged.facts.get(c.b) ?? null;
+      if (!fa || !fb) {
+        const [ea, eb] = await gwCallMany(
+          token,
+          [
+            { target: 'workspace.peek', input: { key: c.a }, kind: 'read' as const },
+            { target: 'workspace.peek', input: { key: c.b }, kind: 'read' as const },
+          ],
+          { url: GATEWAY_MCP },
+        );
+        fa = toPeeked(ea);
+        fb = toPeeked(eb);
       }
-      const prompt = buildAdjudicationPrompt(
-        { key: c.a, type: fa._meta?.type ?? null, value: fa.value },
-        { key: c.b, type: fb._meta?.type ?? null, value: fb.value },
-      );
-      const res = (await gw(token, '@c15r/models.run', { prompt, maxTokens: 300 })) as { text?: string };
-      const verdict = parseVerdict(res?.text);
+      if (!fa?.value || !fb?.value) {
+        bump('missing-fact');
+        escalated++;
+        return;
+      }
+      let verdict = judged.verdicts.get(c.hash) ?? null;
+      bump(verdict ? 'jev' : 'models-fallback');
+      let res: { text?: string } | undefined;
+      if (!verdict) {
+        const prompt = buildAdjudicationPrompt(
+          { key: c.a, type: fa.type, value: fa.value },
+          { key: c.b, type: fb.type, value: fb.value },
+        );
+        res = (await gw(token, '@c15r/models.run', { prompt, maxTokens: 300 })) as { text?: string };
+        verdict = parseVerdict(res?.text);
+      }
+      if (verdict) bump(`${verdict.verdict}${verdict.confidence >= CAPS.stageBFloor ? '' : '<floor'}`);
       if (!verdict || verdict.confidence < CAPS.stageBFloor) {
         if (!verdict && !firstFailure) firstFailure = `unparseable verdict for ${c.a}↔${c.b}: ${String(res?.text).slice(0, 120)}`;
         escalated++;
-        continue;
+        return;
       }
       const marker = { a: c.a, b: c.b, verdict: verdict.verdict, confidence: verdict.confidence, versions: c.versions, via: 'consolidate.stageB' };
       if (verdict.verdict === 'independent') {
@@ -476,9 +528,7 @@ async function adjudicate(token: string, candidates: ContestedCandidateObs[]): P
         acted.push(`contradict ${c.a} --contradicts--> ${c.b} (${verdict.confidence})`);
       } else if (verdict.verdict === 'duplicate') {
         // The older fact is canonical; the newer duplicate retires into it.
-        const aAt = fa._meta?.createdAt ?? '';
-        const bAt = fb._meta?.createdAt ?? '';
-        const [keep, retire] = aAt <= bAt ? [c.a, c.b] : [c.b, c.a];
+        const [keep, retire] = (fa.createdAt ?? '') <= (fb.createdAt ?? '') ? [c.a, c.b] : [c.b, c.a];
         await gw(token, 'workspace.supersede', { key: retire, by: keep, migrateLinks: true });
         await gw(token, 'workspace.remember', { key: `checked/${c.hash}`, value: marker, type: 'checked', via: 'consolidate.stageB' });
         acted.push(`duplicate ${retire} superseded by ${keep} (${verdict.confidence})`);
@@ -487,13 +537,61 @@ async function adjudicate(token: string, candidates: ContestedCandidateObs[]): P
       }
     } catch (e) {
       if (e instanceof GatewayError && /scope/i.test(e.message)) {
-        return { acted, escalated: escalated + (pairs.length - pairs.indexOf(c)), note: `stage B unavailable: ${e.message}` };
+        scopeDenied = `stage B unavailable: ${e.message}`;
+        escalated++;
+        return;
       }
       if (!firstFailure) firstFailure = `${c.a}↔${c.b}: ${(e as Error).message.slice(0, 160)}`;
       escalated++;
     }
+  };
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(8, pairs.length) }, async () => {
+      while (next < pairs.length) await one(pairs[next++]);
+    }),
+  );
+  if (scopeDenied) return { acted, escalated, tally, note: scopeDenied };
+  return { acted, escalated, tally, ...(firstFailure ? { note: firstFailure } : {}) };
+}
+
+/** Batch Stage B on @c15r/jev: peek both sides of every pair, one decide_many. */
+interface PeekedFact { type: string | null; value: unknown; createdAt?: string }
+function toPeeked(g: unknown): PeekedFact | null {
+  const f = g as { value?: unknown; _meta?: { type?: string | null; createdAt?: string } } | null;
+  if (!f || f.value === undefined || ('error' in (f as object) && Object.keys(f as object).length === 1)) return null;
+  return { type: f._meta?.type ?? null, value: f.value, createdAt: f._meta?.createdAt };
+}
+
+async function judgeWithJev(token: string, pairs: ContestedCandidateObs[]): Promise<{ verdicts: Map<string, StageBVerdict>; facts: Map<string, PeekedFact> }> {
+  const out = new Map<string, StageBVerdict>();
+  const facts = new Map<string, PeekedFact>();
+  if (!pairs.length) return { verdicts: out, facts };
+  const keys = [...new Set(pairs.flatMap((c) => [c.a, c.b]))];
+  const got = await gwCallMany(token, keys.map((key) => ({ target: 'workspace.peek', input: { key, whole: true }, kind: 'read' as const })), { url: GATEWAY_MCP, concurrency: 16 });
+  got.forEach((g, i) => {
+    const f = toPeeked(g);
+    if (f) facts.set(keys[i], f);
+  });
+  const live = pairs.filter((c) => facts.has(c.a) && facts.has(c.b));
+  if (!live.length) return { verdicts: out, facts };
+  const show = (k: string) => ({ key: k, type: facts.get(k)!.type ?? '(untyped)', value: JSON.stringify(facts.get(k)!.value).slice(0, 1500) });
+  const res = (await gw(token, '@c15r/jev.decide_many', {
+    model: 'jev-1.13.0',
+    questions: {
+      verdict: {
+        type: 'choice',
+        instructions: 'Two knowledge-base facts are semantically near but structurally unconnected. Which verdict fits the pair?',
+        criteria: STAGE_B_CRITERIA,
+      },
+    },
+    items: live.map((c) => ({ id: c.hash, state: { A: show(c.a), B: show(c.b) } })),
+  })) as { results?: Array<{ id: string; answers?: { verdict?: unknown } }> };
+  for (const r of res.results ?? []) {
+    const v = verdictFromJev(r.answers?.verdict);
+    if (v) out.set(r.id, v);
   }
-  return { acted, escalated, ...(firstFailure ? { note: firstFailure } : {}) };
+  return { verdicts: out, facts };
 }
 
 async function apply(token: string, plan: CyclePlan): Promise<{ applied: string[]; skipped: string[] }> {
@@ -575,7 +673,8 @@ async function runCycle(input: RunInput): Promise<unknown> {
   ];
   let applied: string[] = [];
   let skipped: string[] = [];
-  let stageB: { acted: string[]; escalated: number; note?: string } = { acted: [], escalated: obs.contestedCandidates.length };
+  let stageB: { acted: string[]; escalated: number; note?: string; tally?: Record<string, number> } = { acted: [], escalated: obs.contestedCandidates.length };
+  let system1: Record<string, unknown> | undefined;
   if (!input.dryRun) {
     const res = await apply(token, plan);
     applied = res.applied;
@@ -583,6 +682,18 @@ async function runCycle(input: RunInput): Promise<unknown> {
     // Stage B rides after the safe tier: model-adjudicated easy verdicts,
     // capped + floored; everything else escalates exactly as Inc 1 did.
     stageB = await adjudicate(token, obs.contestedCandidates);
+    // ADR-0098 addendum B/C: the cycle is where System One's declared judgments
+    // backfill onto existing facts (bounded slice, organ to organ, synchronous)
+    // and where the taxonomy residue is aggregated for System Two. Non-fatal.
+    system1 = {};
+    for (const [tool, input] of [['backfill', { token, limit: 20 }], ['taxonomy', { token }]] as const) {
+      try {
+        const out = (await gw(token, `@c15r/system1.${tool}`, input)) as Record<string, unknown>;
+        system1[tool] = tool === 'taxonomy' ? { items: out.items, judgments: Object.keys((out.byJudgment as object) ?? {}) } : out;
+      } catch (e) {
+        system1[tool] = { error: (e as Error).message.slice(0, 160) };
+      }
+    }
   }
   const audit = {
     at,
@@ -595,7 +706,8 @@ async function runCycle(input: RunInput): Promise<unknown> {
     applied,
     skipped,
     ...(bootstrapNotes.length ? { bootstrap: bootstrapNotes } : {}),
-    stageB: { acted: stageB.acted, escalated: stageB.escalated, ...(stageB.note ? { note: stageB.note } : {}) },
+    ...(system1 ? { system1 } : {}),
+    stageB: { acted: stageB.acted, escalated: stageB.escalated, ...(stageB.tally ? { tally: stageB.tally } : {}), ...(stageB.note ? { note: stageB.note } : {}) },
     // Inc 2 observability: what the backfill actually saw (an empty retype
     // with unlinkedSampled > 0 usually means undeclared keyPatterns — the
     // ADR-0073 `el:` finding — not a broken pass).

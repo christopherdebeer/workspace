@@ -58,8 +58,11 @@ a confusing module error):
    and what BOTH changed (✗). Read-only.
 3. `PARC_TOKEN=<tok> node scripts/cell-sync.mjs pull drive` if anything is ↓ —
    then commit what came in (it is often only on the cell) and run `tsc` over it
-4. `PARC_TOKEN=<tok> node scripts/cell-sync.mjs push drive --deploy`
-   (`--dry-run` first shows the combined diff)
+4. `PARC_TOKEN=<tok> node scripts/cell-sync.mjs push drive --deploy --message "<why, one line>"`
+   (`--dry-run` first shows the combined diff). The message becomes the
+   durable `cells/drive-dcfd1204/deploy/<version>` fact's description
+   (ADR-0099) — who, why, git sha, files changed. Always pass it: this order
+   pushes before committing, so there is no commit subject to fall back on
 5. `auth.revokeToken {tokenId}` — do not leave a token open
 6. Commit `cells/drive/.cell-sync.json` with your change — it is the last
    sync, and the next agent's `status` is only as good as it
