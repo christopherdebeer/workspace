@@ -88,8 +88,11 @@ represented?", the substrate could only answer **what a cell is now**:
   get `similarTo` to the ADRs/docs they concern.
 - **System One:** deploy facts are written by `platform/cells`, which the
   `system1-perceive` CEL excludes along with `cells/`. They are deliberately
-  admitted by a narrow clause (`key` matches `cells/*/deploy/*`) so each deploy
-  gets a project and goal edge. Pointers and manifests stay excluded.
+  admitted by a narrow clause — `key` under `cells/` containing `/deploy/`
+  **and** `meta.writer == "platform/cells"` — so each deploy gets a project and
+  goal edge. The writer pin is the loop guard: System One's own tag rewrite of
+  the deploy fact (writer `agent:system1.*`) does not re-match. Pointers and
+  manifests stay excluded.
 - **Salience:** `cell-deploy` gets a low type prior (0.25) — history should be
   findable, not flood recall. drive produces ~20/day; consolidation may later
   roll a day's deploys into one digest per cell (not built).
