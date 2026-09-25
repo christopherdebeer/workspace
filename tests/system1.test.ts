@@ -59,7 +59,7 @@ describe('planPerceive', () => {
     const plan = planPerceive(subject, answers, { projects, goals });
     expect(plan.addTags).toEqual(expect.arrayContaining(['project:drive', 'actionable', 'durable', PERCEIVED_TAG]));
     expect(plan.addTags).not.toContain('s1:noise');
-    expect(plan.edges).toEqual([{ rel: 'belongsTo', to: 'kb/proj_drive', p: 0.78 }]);
+    expect(plan.edges).toEqual([{ rel: 'belongsTo', to: 'kb/proj_drive', p: 0.78, q: 'project' }]);
     expect(plan.type).toBeUndefined();
   });
 
@@ -79,7 +79,7 @@ describe('planPerceive', () => {
       { projects, goals },
     );
     expect(plan.type).toBe('knowledge');
-    expect(plan.edges).toContainEqual({ rel: 'serves', to: 'goal/consolidation', p: 0.8 });
+    expect(plan.edges).toContainEqual({ rel: 'serves', to: 'goal/consolidation', p: 0.8, q: 'serves' });
     expect(plan.addTags).not.toContain('actionable');
     expect(plan.addTags).not.toContain(PERCEIVED_TAG);
   });
@@ -220,5 +220,66 @@ describe('self-invoke hop cap (AWS recursive-loop detection)', () => {
   const { MAX_HOPS } = jest.requireActual('../cells/system1/index');
   it('stays well under the 16-hop limit', () => {
     expect(MAX_HOPS).toBeLessThan(16);
+  });
+});
+
+describe('declared judgments (ADR-0098 addendum)', () => {
+  const m = jest.requireActual('../cells/system1/index');
+  const bug = { key: 'kb/some-bug', type: 'bug', tags: ['bug', 'priority:p1'], value: { content: 'x' } };
+  const decls = m.parseJudgments({
+    priority: { v: 1, type: 'score', criteria: ['p3', 'p2', 'p1', 'p0'], materialize: { tag: 'priority:{level}' } },
+    'looks-resolved': { v: 2, type: 'noul', materialize: { tag: 's1:looks-resolved' } },
+    'BAD NAME': { type: 'noul' },
+    nope: { type: 'essay' },
+  }, 'bug');
+
+  it('parses a facet, dropping invalid names and types', () => {
+    expect(decls.map((d: { name: string }) => d.name)).toEqual(['priority', 'looks-resolved']);
+    expect(decls[1]).toMatchObject({ v: 2, owner: 'bug' });
+  });
+
+  it('selects the type\'s own judgments plus global ones that apply to it', () => {
+    const global = m.parseJudgments({ 'applies-model': { type: 'choice', appliesToTypes: ['bug', 'decision'] }, other: { type: 'noul', appliesToTypes: ['capture'] } }, 'global');
+    expect(m.judgmentsFor(bug, { bug: decls }, global).map((d: { name: string }) => d.name)).toEqual(['priority', 'looks-resolved', 'applies-model']);
+  });
+
+  it('always gives a choice a "none" option (the taxonomy growth signal)', () => {
+    const q = m.judgmentQuestions(m.parseJudgments({ kind: { type: 'choice', options: ['a', 'b'] } }, 't'), {});
+    expect(Object.keys(q['j:kind'].criteria)).toEqual(['a', 'b', 'none']);
+  });
+
+  it('human-authored tags win; markers are always written', () => {
+    const jp = m.planJudgments(bug, {
+      'j:priority': { probabilities: { '0': 0.02, '1': 0.03, '2': 0.05, '3': 0.9 }, score: 2.8 },
+      'j:looks-resolved': { noul: 0.91 },
+    }, decls, {}, {});
+    expect(jp.addTags).not.toContain('priority:p0'); // priority:p1 was authored
+    expect(jp.addTags).toEqual(expect.arrayContaining(['s1:looks-resolved', 's1:j:priority@1', 's1:j:looks-resolved@2']));
+  });
+
+  it('materializes a live-option choice as a (reversible) edge and records residue', () => {
+    const d = m.parseJudgments({ 'applies-model': { type: 'choice', optionsFrom: { type: 'mental-model' }, materialize: { edge: { rel: 'appliesTo', reverse: true } } } }, 'global');
+    const sets = { 'applies-model': { criteria: { scarcity: 'x', none: null }, keyOf: { scarcity: 'model/scarcity' } } };
+    const hit = m.planJudgments(bug, { 'j:applies-model': { probabilities: { scarcity: 0.9, none: 0.1 } } }, d, sets, {});
+    expect(hit.edges).toEqual([{ rel: 'appliesTo', to: 'model/scarcity', p: 0.9, q: 'j:applies-model', reverse: true }]);
+    const miss = m.planJudgments(bug, { 'j:applies-model': { probabilities: { scarcity: 0.2, none: 0.8 } } }, d, sets, {});
+    expect(miss.edges).toEqual([]);
+    expect(miss.residue).toEqual([{ judgment: 'applies-model', top: 'none', p: 0.8 }]);
+  });
+
+  it('aggregates residue per judgment', () => {
+    const agg = m.aggregateResidue([
+      { judgment: 'project', top: 'none', p: 0.9, key: 'a' },
+      { judgment: 'project', top: 'none', p: 0.8, key: 'b' },
+      { judgment: 'type', top: 'note', p: 0.4, key: 'c' },
+    ]);
+    expect(Object.keys(agg)).toEqual(['project', 'type']);
+    expect(agg.project).toMatchObject({ residue: 2, closest: [['none', 2]] });
+  });
+
+  it('calibrates a declared judgment it has never seen', () => {
+    const labels = Array.from({ length: 30 }, () => ({ q: 'j:applies-model', p: 0.95, ok: true }));
+    const { thresholds } = m.calibrate(labels);
+    expect(thresholds['j:applies-model']).toBeGreaterThan(0.8);
   });
 });

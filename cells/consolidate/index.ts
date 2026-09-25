@@ -674,6 +674,7 @@ async function runCycle(input: RunInput): Promise<unknown> {
   let applied: string[] = [];
   let skipped: string[] = [];
   let stageB: { acted: string[]; escalated: number; note?: string; tally?: Record<string, number> } = { acted: [], escalated: obs.contestedCandidates.length };
+  let system1: Record<string, unknown> | undefined;
   if (!input.dryRun) {
     const res = await apply(token, plan);
     applied = res.applied;
@@ -681,6 +682,18 @@ async function runCycle(input: RunInput): Promise<unknown> {
     // Stage B rides after the safe tier: model-adjudicated easy verdicts,
     // capped + floored; everything else escalates exactly as Inc 1 did.
     stageB = await adjudicate(token, obs.contestedCandidates);
+    // ADR-0098 addendum B/C: the cycle is where System One's declared judgments
+    // backfill onto existing facts (bounded slice, organ to organ, synchronous)
+    // and where the taxonomy residue is aggregated for System Two. Non-fatal.
+    system1 = {};
+    for (const [tool, input] of [['backfill', { token, limit: 20 }], ['taxonomy', { token }]] as const) {
+      try {
+        const out = (await gw(token, `@c15r/system1.${tool}`, input)) as Record<string, unknown>;
+        system1[tool] = tool === 'taxonomy' ? { items: out.items, judgments: Object.keys((out.byJudgment as object) ?? {}) } : out;
+      } catch (e) {
+        system1[tool] = { error: (e as Error).message.slice(0, 160) };
+      }
+    }
   }
   const audit = {
     at,
@@ -693,6 +706,7 @@ async function runCycle(input: RunInput): Promise<unknown> {
     applied,
     skipped,
     ...(bootstrapNotes.length ? { bootstrap: bootstrapNotes } : {}),
+    ...(system1 ? { system1 } : {}),
     stageB: { acted: stageB.acted, escalated: stageB.escalated, ...(stageB.tally ? { tally: stageB.tally } : {}), ...(stageB.note ? { note: stageB.note } : {}) },
     // Inc 2 observability: what the backfill actually saw (an empty retype
     // with unlinkedSampled > 0 usually means undeclared keyPatterns — the

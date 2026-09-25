@@ -79,6 +79,8 @@ export interface Thresholds {
   decline: number;
   /** A machine decision node advanced by System One (the `judge` rail, §3). */
   decide: number;
+  /** Declared judgments (ADR-0098 addendum A): gates keyed `j:<name>`, learned per judgment. */
+  [judgment: string]: number;
 }
 export const DEFAULT_THRESHOLDS: Thresholds = {
   project: 0.7,
@@ -92,7 +94,7 @@ export const DEFAULT_THRESHOLDS: Thresholds = {
   decide: 0.8,
 };
 /** The learner never lowers a gate below these (or raises it past 0.99). */
-export const THRESHOLD_FLOOR: Partial<Thresholds> = { relate: 0.6, decline: 0.7, project: 0.6 };
+export const THRESHOLD_FLOOR: Partial<Record<string, number>> = { relate: 0.6, decline: 0.7, project: 0.6 };
 
 /** Facts System One never perceives: plumbing, its own output, raw files
  *  (their `doc` is perceived instead), decomposition parts. */
@@ -211,10 +213,13 @@ export interface PerceivePlan {
   key: string;
   addTags: string[];
   type?: string;
-  edges: Array<{ rel: string; to: string; p: number }>;
+  edges: Array<{ rel: string; to: string; p: number; q?: string; reverse?: boolean }>;
   noise?: number;
   judgment: Record<string, unknown>;
+  /** Taxonomy residue: where the vocabulary had no good answer (ADR-0098 addendum C). */
+  residue?: Residue[];
 }
+export interface Residue { judgment: string; top: string | null; p: number }
 
 /** A fact written with its type/tags INSIDE the value (a malformed remember —
  *  e.g. proposal/tsarch-slice-2026-08-11) has `_meta.type` null. When the
@@ -247,7 +252,7 @@ export function planPerceive(
     if (target && p >= th.project) {
       const tag = `project:${target.slug}`;
       if (!has.has(tag)) addTags.push(tag);
-      if (subject.key !== target.key) edges.push({ rel: 'belongsTo', to: target.key, p });
+      if (subject.key !== target.key) edges.push({ rel: 'belongsTo', to: target.key, p, q: 'project' });
     }
   }
 
@@ -277,7 +282,7 @@ export function planPerceive(
     const a = answers[`serves:${g.id}`] as NoulAns | undefined;
     if (typeof a?.noul !== 'number') continue;
     compact[`serves:${g.id}`] = a.noul;
-    if (a.noul >= th.serves && subject.key !== g.key) edges.push({ rel: 'serves', to: g.key, p: a.noul });
+    if (a.noul >= th.serves && subject.key !== g.key) edges.push({ rel: 'serves', to: g.key, p: a.noul, q: 'serves' });
   }
 
   let type: string | undefined;
@@ -291,7 +296,167 @@ export function planPerceive(
   if (typeof noise === 'number' && noise >= th.noise && !has.has('s1:noise')) addTags.push('s1:noise');
   if (!has.has(PERCEIVED_TAG)) addTags.push(PERCEIVED_TAG);
 
-  return { key: subject.key, addTags, type, edges, noise, judgment: compact };
+  // Residue: the fixed questions' "no good answer" cases feed taxonomy growth —
+  // a capture no project fits may mean a project nobody has declared yet.
+  const residue: Residue[] = [];
+  if (proj?.probabilities) {
+    const pp = proj.probabilities[proj.choice ?? ''] ?? 0;
+    if (proj.choice === 'none' || pp < 0.5) residue.push({ judgment: 'project', top: proj.choice ?? null, p: pp });
+  }
+  if (ty?.probabilities && !subject.type) {
+    const pt = ty.probabilities[ty.choice ?? ''] ?? 0;
+    if (pt < 0.5) residue.push({ judgment: 'type', top: ty.choice ?? null, p: pt });
+  }
+  return { key: subject.key, addTags, type, edges, noise, judgment: compact, residue };
+}
+
+/* ── declared judgments (ADR-0098 addendum A/B/C) ─────────────────────────
+ * A type's manager declares domain judgments as a `judgments` facet on
+ * `_types/<type>` (types are one object with facets, ADR-0002); cross-type
+ * judgments live in `_system1/judgments` with `appliesToTypes`. Each is data:
+ * a Jev question, where its options come from, how an answer materializes
+ * (tag and/or edge), and a version. System One asks them alongside the fixed
+ * questions in the same call; the learner gates each as `j:<name>`. */
+export interface JudgmentDecl {
+  name: string;
+  v: number;
+  type: 'noul' | 'choice' | 'score';
+  instructions?: string;
+  criteria?: string[] | Record<string, string | null>;
+  options?: string[];
+  /** Live option set: the facts of this type ARE the options (e.g. mental models). */
+  optionsFrom?: { type: string; limit?: number };
+  /** Global judgments only: which subject types it applies to ('*' = all). */
+  appliesToTypes?: string[];
+  materialize?: { tag?: string; edge?: { rel: string; reverse?: boolean } };
+  gate?: number;
+  owner?: string;
+}
+export interface OptionSet { criteria: Record<string, string | null>; keyOf: Record<string, string> }
+export const MAX_JUDGMENTS_PER_FACT = 6;
+
+export function judgmentMarker(d: Pick<JudgmentDecl, 'name' | 'v'>): string {
+  return `s1:j:${d.name}@${d.v}`;
+}
+
+/** Normalise a declared facet ({name: decl} or [decl]) into decls. Invalid entries drop. */
+export function parseJudgments(raw: unknown, owner: string): JudgmentDecl[] {
+  const entries: Array<[string, unknown]> = Array.isArray(raw)
+    ? raw.map((d) => [String((d as { name?: unknown })?.name ?? ''), d])
+    : raw && typeof raw === 'object' ? Object.entries(raw as Record<string, unknown>) : [];
+  const out: JudgmentDecl[] = [];
+  for (const [name, d] of entries) {
+    const o = (d ?? {}) as Record<string, unknown>;
+    const type = o.type;
+    if (!/^[a-z][a-z0-9-]{0,40}$/.test(name) || (type !== 'noul' && type !== 'choice' && type !== 'score')) continue;
+    out.push({ ...(o as object), name, type, v: typeof o.v === 'number' ? o.v : 1, owner } as JudgmentDecl);
+  }
+  return out;
+}
+
+export function judgmentsFor(subject: Subject, byType: Record<string, JudgmentDecl[]>, global: JudgmentDecl[]): JudgmentDecl[] {
+  const t = subject.type ?? '';
+  const own = t ? byType[t] ?? [] : [];
+  const cross = global.filter((d) => (d.appliesToTypes ?? []).some((x) => x === '*' || x === t));
+  return [...own, ...cross].slice(0, MAX_JUDGMENTS_PER_FACT);
+}
+
+export function judgmentQuestions(decls: JudgmentDecl[], optionSets: Record<string, OptionSet>): Record<string, unknown> {
+  const q: Record<string, unknown> = {};
+  for (const d of decls) {
+    const instructions = d.instructions;
+    if (d.type === 'noul') q[`j:${d.name}`] = { type: 'noul', instructions };
+    else if (d.type === 'score') q[`j:${d.name}`] = { type: 'score', instructions, criteria: d.criteria ?? ['low', 'medium', 'high'] };
+    else {
+      const set = optionSets[d.name];
+      let criteria: Record<string, string | null> = set?.criteria
+        ?? (Array.isArray(d.criteria) ? Object.fromEntries(d.criteria.map((c) => [c, null]))
+          : d.criteria && typeof d.criteria === 'object' ? { ...d.criteria } : Object.fromEntries((d.options ?? []).map((o) => [o, null])));
+      if (!Object.keys(criteria).length) continue;
+      // Always leave room for "no good answer" — it is the taxonomy's growth signal.
+      if (!('none' in criteria) && !('other' in criteria)) criteria = { ...criteria, none: 'none of these fit' };
+      q[`j:${d.name}`] = { type: 'choice', instructions, criteria: Object.fromEntries(Object.entries(criteria).slice(0, 250)) };
+    }
+  }
+  return q;
+}
+
+/** Human-authored wins: a tag `x:y` is not added when any `x:*` tag exists. */
+function tagAllowed(existing: string[], tag: string): boolean {
+  if (existing.includes(tag)) return false;
+  const i = tag.indexOf(':');
+  // `s1:` is System One's own namespace (markers, advisory flags) — never "authored".
+  if (i <= 0 || tag.startsWith('s1:')) return true;
+  return !existing.some((t) => t.startsWith(tag.slice(0, i + 1)));
+}
+
+export function planJudgments(
+  subject: Subject,
+  answers: Record<string, unknown>,
+  decls: JudgmentDecl[],
+  optionSets: Record<string, OptionSet>,
+  th: Record<string, number>,
+): { addTags: string[]; edges: PerceivePlan['edges']; residue: Residue[]; compact: Record<string, unknown> } {
+  const addTags: string[] = [];
+  const edges: PerceivePlan['edges'] = [];
+  const residue: Residue[] = [];
+  const compact: Record<string, unknown> = {};
+  const existing = [...subject.tags];
+  const add = (t: string) => {
+    if (tagAllowed(existing, t)) {
+      addTags.push(t);
+      existing.push(t);
+    }
+  };
+  for (const d of decls) {
+    const a = answers[`j:${d.name}`] as (ChoiceAns & NoulAns & ScoreAns) | undefined;
+    if (!a) continue;
+    const gate = typeof th[`j:${d.name}`] === 'number' ? th[`j:${d.name}`] : d.gate ?? DEFAULT_JUDGMENT_GATE;
+    if (d.type === 'noul' && typeof a.noul === 'number') {
+      compact[`j:${d.name}`] = a.noul;
+      if (a.noul >= gate) add(d.materialize?.tag ?? d.name);
+    } else if (d.type === 'choice' && a.probabilities) {
+      let best: string | null = null;
+      let bp = 0;
+      for (const [k, v] of Object.entries(a.probabilities)) if (v > bp) [best, bp] = [k, v];
+      compact[`j:${d.name}`] = { choice: best, p: bp };
+      if (best === 'none' || best === 'other' || bp < 0.5) residue.push({ judgment: d.name, top: best, p: bp });
+      if (best && best !== 'none' && best !== 'other' && bp >= gate) {
+        const target = optionSets[d.name]?.keyOf[best];
+        if (d.materialize?.edge && target && target !== subject.key) {
+          edges.push({ rel: d.materialize.edge.rel, to: target, p: bp, q: `j:${d.name}`, reverse: !!d.materialize.edge.reverse });
+        }
+        if (d.materialize?.tag || !d.materialize?.edge) add((d.materialize?.tag ?? `${d.name}:{choice}`).replace('{choice}', best));
+      }
+    } else if (d.type === 'score' && a.probabilities) {
+      const levels = Array.isArray(d.criteria) ? d.criteria : d.criteria ? Object.keys(d.criteria) : ['low', 'medium', 'high'];
+      let bi = -1;
+      let bp = 0;
+      for (const [k, v] of Object.entries(a.probabilities)) if (v > bp) [bi, bp] = [Number(k), v];
+      const label = levels[bi];
+      compact[`j:${d.name}`] = { level: label ?? null, p: bp, score: a.score };
+      if (label && bp >= gate) add((d.materialize?.tag ?? `${d.name}:{level}`).replace('{level}', label));
+    }
+    add(judgmentMarker(d));
+  }
+  return { addTags, edges, residue, compact };
+}
+
+/** Aggregate residue across runs: per judgment, how often nothing fit and what came closest. */
+export function aggregateResidue(items: Array<Residue & { key: string }>, sample = 6): Record<string, unknown> {
+  const by: Record<string, { n: number; tops: Record<string, number>; keys: string[] }> = {};
+  for (const r of items) {
+    const b = (by[r.judgment] ??= { n: 0, tops: {}, keys: [] });
+    b.n++;
+    const t = r.top ?? '(none)';
+    b.tops[t] = (b.tops[t] ?? 0) + 1;
+    if (b.keys.length < sample) b.keys.push(r.key);
+  }
+  return Object.fromEntries(
+    Object.entries(by)
+      .sort((a, b) => b[1].n - a[1].n)
+      .map(([j, b]) => [j, { residue: b.n, closest: Object.entries(b.tops).sort((x, y) => y[1] - x[1]).slice(0, 5), sample: b.keys }]),
+  );
 }
 
 /* relate: one pair, one choice. */
@@ -376,8 +541,11 @@ export function planDecision(answer: ChoiceAns | undefined, allowed: string[], t
  * is a weak positive; one that is gone (reverted, unlinked, retagged) is a
  * negative; System Two audit labels are strong and weigh 3×. Per question we
  * find the lowest θ whose acts above it meet the class's target precision. */
-export interface LabelledAct { q: keyof Thresholds; p: number; ok: boolean; weight?: number }
-export const TARGET_PRECISION: Record<keyof Thresholds, number> = {
+export interface LabelledAct { q: string; p: number; ok: boolean; weight?: number }
+/** Gate + precision target for a declared judgment the learner has not seen yet. */
+export const DEFAULT_JUDGMENT_GATE = 0.8;
+export const DEFAULT_JUDGMENT_TARGET = 0.85;
+export const TARGET_PRECISION: Record<string, number> = {
   project: 0.85, actionable: 0.85, durable: 0.85, serves: 0.85, type: 0.9, noise: 0.95, relate: 0.9, decline: 0.9, decide: 0.9,
 };
 export const MIN_LABELS = 20;
@@ -385,11 +553,15 @@ export const MIN_LABELS = 20;
 export function calibrate(labels: LabelledAct[], current: Thresholds = DEFAULT_THRESHOLDS): { thresholds: Thresholds; report: Record<string, unknown> } {
   const next = { ...current };
   const report: Record<string, unknown> = {};
-  for (const q of Object.keys(current) as Array<keyof Thresholds>) {
+  // Fixed questions plus every declared judgment that has labels (`j:<name>`).
+  const keys = [...new Set([...Object.keys(current), ...labels.map((l) => l.q)])];
+  const cur = (q: string) => (typeof current[q] === 'number' ? current[q] : DEFAULT_JUDGMENT_GATE);
+  for (const q of keys) {
+    if (typeof next[q] !== 'number') next[q] = DEFAULT_JUDGMENT_GATE;
     const ls = labels.filter((l) => l.q === q).sort((a, b) => a.p - b.p);
     const n = ls.reduce((s, l) => s + (l.weight ?? 1), 0);
     if (n < MIN_LABELS) {
-      report[q] = { n, kept: current[q], why: 'too few labels' };
+      report[q] = { n, kept: cur(q), why: 'too few labels' };
       continue;
     }
     // Scan candidate cut points (the observed probabilities); pick the lowest
@@ -402,23 +574,23 @@ export function calibrate(labels: LabelledAct[], current: Thresholds = DEFAULT_T
       const w = above.reduce((s, l) => s + (l.weight ?? 1), 0);
       if (w < MIN_LABELS / 2) break;
       const good = above.reduce((s, l) => s + (l.ok ? l.weight ?? 1 : 0), 0);
-      if (good / w >= TARGET_PRECISION[q]) {
+      if (good / w >= (TARGET_PRECISION[q] ?? DEFAULT_JUDGMENT_TARGET)) {
         chosen = cut;
         break;
       }
     }
-    const floor = THRESHOLD_FLOOR[q] ?? 0.5;
+    const floor = (THRESHOLD_FLOOR as Record<string, number>)[q] ?? 0.5;
     const precisionAll = ls.reduce((s, l) => s + (l.ok ? l.weight ?? 1 : 0), 0) / n;
     if (chosen === null) {
       // Cannot meet target anywhere with support → tighten (autonomy falls back).
-      next[q] = Math.min(0.99, Math.max(current[q] + 0.05, floor));
-      report[q] = { n, precisionAll: +precisionAll.toFixed(3), from: current[q], to: next[q], why: 'target unmet — tightened' };
+      next[q] = Math.min(0.99, Math.max(cur(q) + 0.05, floor));
+      report[q] = { n, precisionAll: +precisionAll.toFixed(3), from: cur(q), to: next[q], why: 'target unmet — tightened' };
     } else {
       // Move at most 0.05 per cycle toward the chosen cut (no lurching).
       const target = Math.min(0.99, Math.max(chosen, floor));
-      const step = Math.max(-0.05, Math.min(0.05, target - current[q]));
-      next[q] = +(current[q] + step).toFixed(3);
-      report[q] = { n, precisionAll: +precisionAll.toFixed(3), cut: chosen, from: current[q], to: next[q] };
+      const step = Math.max(-0.05, Math.min(0.05, target - cur(q)));
+      next[q] = +(cur(q) + step).toFixed(3);
+      report[q] = { n, precisionAll: +precisionAll.toFixed(3), cut: chosen, from: cur(q), to: next[q] };
     }
   }
   return { thresholds: next, report };
@@ -452,8 +624,8 @@ async function loadThresholds(token: Tok): Promise<Thresholds> {
 
 async function loadThresholdsFresh(token: Tok): Promise<Thresholds> {
   try {
-    const cal = (await gw(token, 'workspace.peek', { key: CALIBRATION_KEY }, 'read')) as { value?: { thresholds?: Partial<Thresholds> } } | null;
-    return { ...DEFAULT_THRESHOLDS, ...(cal?.value?.thresholds ?? {}) };
+    const cal = (await gw(token, 'workspace.peek', { key: CALIBRATION_KEY }, 'read')) as { value?: { thresholds?: Record<string, number> } } | null;
+    return { ...DEFAULT_THRESHOLDS, ...(cal?.value?.thresholds ?? {}) } as Thresholds;
   } catch {
     return { ...DEFAULT_THRESHOLDS };
   }
@@ -507,7 +679,7 @@ interface RunAct {
   from?: string;
   rel?: string;
   to?: string;
-  q?: keyof Thresholds;
+  q?: string;
   p?: number;
 }
 
@@ -525,6 +697,8 @@ interface RunLog {
   timings?: Record<string, number>;
   /** The evidence: every judgment this run made (acted on or not). */
   judgments?: unknown[];
+  /** Taxonomy residue from this run (addendum C). */
+  residue?: Array<Residue & { key: string }>;
   next?: unknown;
 }
 
@@ -595,13 +769,62 @@ async function loadSubjects(token: Tok, input: PerceiveInput): Promise<{ subject
   return { subjects, next, scanned: entries.length };
 }
 
+/* declared judgments + their live option sets, cached like the context. */
+let judgCache: { at: number; value: { byType: Record<string, JudgmentDecl[]>; global: JudgmentDecl[]; optionSets: Record<string, OptionSet> } } | null = null;
+export const GLOBAL_JUDGMENTS_KEY = `${NS}/judgments`;
+
+async function loadJudgments(token: Tok): Promise<{ byType: Record<string, JudgmentDecl[]>; global: JudgmentDecl[]; optionSets: Record<string, OptionSet> }> {
+  if (judgCache && Date.now() - judgCache.at < CTX_TTL_MS) return judgCache.value;
+  const [typesPage, globalFact] = await gwCallMany(
+    token,
+    [
+      { target: 'workspace.query', input: { prefix: '_types/', shape: 'full', whole: true, limit: 100 }, kind: 'read' },
+      { target: 'workspace.peek', input: { key: GLOBAL_JUDGMENTS_KEY }, kind: 'read' },
+    ],
+    { url: GATEWAY_MCP, concurrency: 2 },
+  );
+  const byType: Record<string, JudgmentDecl[]> = {};
+  if (!isErr(typesPage)) {
+    for (const e of (typesPage as { entries?: Array<{ key: string; value?: { judgments?: unknown } }> }).entries ?? []) {
+      const t = e.key.slice('_types/'.length);
+      const ds = parseJudgments(e.value?.judgments, t);
+      if (ds.length) byType[t] = ds;
+    }
+  }
+  const global = isErr(globalFact) || !globalFact ? [] : parseJudgments((globalFact as { value?: { judgments?: unknown } }).value?.judgments, 'global');
+  const optionSets: Record<string, OptionSet> = {};
+  const wanted = [...Object.values(byType).flat(), ...global].filter((d) => d.optionsFrom?.type);
+  const pages = await gwCallMany(
+    token,
+    wanted.map((d) => ({ target: 'workspace.query', input: { type: d.optionsFrom!.type, shape: 'card', whole: true, limit: Math.min(d.optionsFrom!.limit ?? 200, 240) }, kind: 'read' as const })),
+    { url: GATEWAY_MCP, concurrency: 4 },
+  );
+  pages.forEach((pg, i) => {
+    if (isErr(pg)) return;
+    const criteria: Record<string, string | null> = {};
+    const keyOf: Record<string, string> = {};
+    for (const e of (pg as { entries?: Array<{ key: string; value?: unknown; _meta?: { superseded?: boolean } }> }).entries ?? []) {
+      if (e._meta?.superseded) continue;
+      const slug = (e.key.split('/').pop() ?? e.key).toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 60);
+      if (!slug || slug in criteria) continue;
+      criteria[slug] = subjectText(e.value, 110).replace(/\s+/g, ' ');
+      keyOf[slug] = e.key;
+    }
+    optionSets[wanted[i].name] = { criteria, keyOf };
+  });
+  const value = { byType, global, optionSets };
+  judgCache = { at: Date.now(), value };
+  return value;
+}
+
 async function perceive(input: PerceiveInput): Promise<RunLog> {
   const token = input.token;
   if (!token) throw new Error('token is required (a bearer with read:workspace write:workspace + @c15r/jev access)');
   const mode = input.mode === 'act' ? 'act' : 'shadow';
   const tick = timer();
-  const [th, ctx, loaded] = await Promise.all([loadThresholds(token), loadContext(token), loadSubjects(token, input)]);
+  const [th, ctx, loaded, judg] = await Promise.all([loadThresholds(token), loadContext(token), loadSubjects(token, input), loadJudgments(token)]);
   tick('load');
+  const declsFor = (sub: Subject) => judgmentsFor(sub, judg.byType, judg.global);
   const log: RunLog = { id: newRunId(), tool: 'perceive', mode, at: new Date().toISOString(), thresholds: th, counts: { scanned: loaded.scanned, subjects: loaded.subjects.length }, acts: [], errors: [], usage: { input_tokens: 0 }, next: loaded.next };
   if (!loaded.subjects.length) {
     await writeRun(token, log);
@@ -610,7 +833,7 @@ async function perceive(input: PerceiveInput): Promise<RunLog> {
 
   const judged = (await gw(token, '@c15r/jev.decide_many', {
     model: MODEL,
-    items: loaded.subjects.map((s) => ({ id: s.key, state: subjectState(s), questions: perceiveQuestions(s, ctx) })),
+    items: loaded.subjects.map((s) => ({ id: s.key, state: subjectState(s), questions: { ...perceiveQuestions(s, ctx), ...judgmentQuestions(declsFor(s), judg.optionSets) } })),
   }, 'act')) as { results?: Array<{ id: string; answers?: Record<string, unknown>; error?: string }>; usage?: { input_tokens?: number } };
   log.usage.input_tokens = judged.usage?.input_tokens ?? 0;
   tick('judge');
@@ -624,6 +847,11 @@ async function perceive(input: PerceiveInput): Promise<RunLog> {
       continue;
     }
     const plan = planPerceive(s, r.answers, ctx, th);
+    const jp = planJudgments({ ...s, tags: [...s.tags, ...plan.addTags] }, r.answers, declsFor(s), judg.optionSets, th);
+    plan.addTags.push(...jp.addTags);
+    plan.edges.push(...jp.edges);
+    plan.residue = [...(plan.residue ?? []), ...jp.residue];
+    Object.assign(plan.judgment, jp.compact);
     const lifted = embeddedMeta(s, ctx.types);
     if (lifted.type) {
       plan.type = lifted.type;
@@ -635,6 +863,7 @@ async function perceive(input: PerceiveInput): Promise<RunLog> {
 
   // The evidence rides the run log (one write), keyed by subject + version.
   log.judgments = plans.map(({ s, plan }) => ({ subject: s.key, v: s.version, answers: plan.judgment, planned: { tags: plan.addTags, type: plan.type, edges: plan.edges } }));
+  log.residue = plans.flatMap(({ s, plan }) => (plan.residue ?? []).map((r) => ({ ...r, key: s.key })));
   log.counts.judged = plans.length;
   tick('ingest');
 
@@ -667,7 +896,9 @@ async function perceive(input: PerceiveInput): Promise<RunLog> {
         if (plan.type) log.acts.push({ kind: 'type', key, type: plan.type, q: 'type', p: (plan.judgment.type as { p: number }).p });
       }
     });
-    const links = plans.flatMap(({ s, plan }) => plan.edges.map((e) => ({ from: s.key, rel: e.rel, to: e.to, p: e.p })));
+    const links = plans.flatMap(({ s, plan }) =>
+      plan.edges.map((e) => ({ from: e.reverse ? e.to : s.key, rel: e.rel, to: e.reverse ? s.key : e.to, p: e.p, q: e.q ?? (e.rel === 'serves' ? 'serves' : 'project') })),
+    );
     const lr = await gwCallMany(
       token,
       links.map((l) => ({ target: 'workspace.link', input: { from: l.from, rel: l.rel, to: l.to, strength: INFERRED_STRENGTH }, kind: 'act' as const })),
@@ -676,7 +907,7 @@ async function perceive(input: PerceiveInput): Promise<RunLog> {
     lr.forEach((r, i) => {
       const l = links[i];
       if (isErr(r)) log.errors.push(`link ${l.from}→${l.to}: ${r.error.slice(0, 160)}`);
-      else log.acts.push({ kind: 'link', from: l.from, rel: l.rel, to: l.to, q: l.rel === 'serves' ? 'serves' : 'project', p: l.p });
+      else log.acts.push({ kind: 'link', from: l.from, rel: l.rel, to: l.to, q: l.q, p: l.p });
     });
   }
   log.timings = tick('act');
@@ -987,6 +1218,66 @@ async function auditSample(input: { token?: string; n?: number; tool?: string; r
   };
 }
 
+/* backfill (addendum B): a new or re-versioned judgment re-judges existing facts
+ * of its type in BOUNDED slices, called from the daily consolidation cycle
+ * (organ to organ, synchronous, no self-invocation). A per-judgment cursor
+ * fact remembers where the scan got to. */
+async function backfill(input: { token?: string; limit?: number }): Promise<Record<string, unknown>> {
+  const token = input.token;
+  if (!token) throw new Error('token is required');
+  const limit = Math.min(input.limit ?? 20, 40);
+  const judg = await loadJudgments(token);
+  const targets: Array<{ type: string; d: JudgmentDecl }> = [
+    ...Object.entries(judg.byType).flatMap(([type, ds]) => ds.map((d) => ({ type, d }))),
+    ...judg.global.flatMap((d) => (d.appliesToTypes ?? []).filter((t) => t !== '*').map((type) => ({ type, d }))),
+  ];
+  const picked = new Set<string>();
+  const progress: Record<string, unknown> = {};
+  for (const { type, d } of targets) {
+    if (picked.size >= limit) break;
+    const marker = judgmentMarker(d);
+    const curKey = `${NS}/backfill/${type}.${d.name}@${d.v}`;
+    const cur = (await gw(token, 'workspace.peek', { key: curKey }, 'read').catch(() => null)) as { value?: { cursor?: string | null; done?: boolean } } | null;
+    if (cur?.value?.done) {
+      progress[`${type}.${d.name}@${d.v}`] = 'done';
+      continue;
+    }
+    const page = (await gw(token, 'workspace.query', { type, shape: 'refs', limit: 100, ...(cur?.value?.cursor ? { cursor: cur.value.cursor } : {}) }, 'read')) as {
+      entries?: Array<{ key: string; _meta?: { tags?: string[]; superseded?: boolean } }>;
+      nextCursor?: string;
+    };
+    let lastIdx = -1;
+    for (const [i, e] of (page.entries ?? []).entries()) {
+      if (picked.size >= limit) break;
+      lastIdx = i;
+      if (e._meta?.superseded || (e._meta?.tags ?? []).includes(marker) || !perceivable(e.key, type)) continue;
+      picked.add(e.key);
+    }
+    const exhausted = lastIdx === (page.entries ?? []).length - 1;
+    const next = exhausted ? page.nextCursor ?? null : cur?.value?.cursor ?? null;
+    await gw(token, 'workspace.remember', { key: curKey, type: 'system1-run', tags: ['system1', 'backfill'], via: 'system1.backfill', value: { cursor: next, done: exhausted && !page.nextCursor, at: new Date().toISOString() } }, 'act');
+    progress[`${type}.${d.name}@${d.v}`] = exhausted && !page.nextCursor ? 'done' : 'in progress';
+  }
+  if (!picked.size) return { rejudged: 0, progress };
+  const log = await perceive({ token, keys: [...picked], mode: 'act', force: true });
+  return { rejudged: picked.size, run: log.id, acts: log.acts.length, errors: log.errors.slice(0, 5), progress };
+}
+
+/* taxonomy (addendum C): where did the vocabulary have no good answer? Residue
+ * from recent perception runs, aggregated per judgment, written where System
+ * Two (tending) can read it and propose a new option, project, type or
+ * judgment. System One never invents vocabulary itself. */
+export const TAXONOMY_KEY = `${NS}/taxonomy`;
+async function taxonomy(input: { token?: string; runs?: number }): Promise<Record<string, unknown>> {
+  const token = input.token;
+  if (!token) throw new Error('token is required');
+  const page = (await gw(token, 'workspace.query', { prefix: RUN_PREFIX, tag: 'tool:perceive', shape: 'full', whole: true, rankBy: 'recency', limit: Math.min(input.runs ?? 60, 100) }, 'read')) as { entries?: Array<{ value?: RunLog }> };
+  const items = (page.entries ?? []).flatMap((e) => e.value?.residue ?? []);
+  const report = { at: new Date().toISOString(), runs: (page.entries ?? []).length, items: items.length, byJudgment: aggregateResidue(items) };
+  await gw(token, 'workspace.remember', { key: TAXONOMY_KEY, type: 'system1-run', tags: ['system1', 'taxonomy'], via: 'system1.taxonomy', value: report }, 'act');
+  return report;
+}
+
 /* retire_legacy: the first live runs wrote per-item facts under `judgment/`
  * and `system1/` (embedded → they minted suggestions). Supersede exactly those
  * prefixes — the organ's own output, nothing else. */
@@ -1041,7 +1332,7 @@ const jobs = cellJobs({
 
 /** Tools that never act on the slice's content run while System One is paused:
  *  undo, and the teaching loop (audit, label, calibrate). */
-const ALWAYS_ALLOWED = new Set(['revert', 'audit_sample', 'label', 'calibrate']);
+const ALWAYS_ALLOWED = new Set(['revert', 'audit_sample', 'label', 'calibrate', 'taxonomy']);
 
 async function assertEnabled(token: unknown): Promise<void> {
   if (typeof token !== 'string' || !token) return; // the runner's own token check reports it
@@ -1056,6 +1347,8 @@ const RUNNERS: Record<string, (args: Record<string, unknown>) => Promise<unknown
   calibrate: (a) => runCalibrate(a as { token?: string; runs?: number; apply?: boolean }),
   label: (a) => label(a as { token?: string; run?: string; index?: number; ok?: boolean; note?: string }),
   retire_legacy: (a) => retireLegacy(a as { token?: string }),
+  backfill: (a) => backfill(a as { token?: string; limit?: number }),
+  taxonomy: (a) => taxonomy(a as { token?: string; runs?: number }),
   audit_sample: (a) => auditSample(a as { token?: string; n?: number; tool?: string; runs?: number }),
   drive: (a) => drive(a as { token?: string; machine?: string; run?: string; maxSteps?: number }),
 };
@@ -1146,6 +1439,18 @@ const TOOLS = [
     kind: 'act',
     description: 'The judge rail (ADR-0098 §3): drive a machine run with System One — step it, answer each decision yield with one Jev choice over the node\'s declared branches, advance (the machine records the claim, templated from the distribution) when p ≥ θ.decide, and STOP at the first yield below θ (or a section/vote/work yield), returning it for System Two. Pass a run started with trigger_run {mode:"driven"}.',
     inputSchema: { type: 'object', properties: { token: tokenProp, machine: { type: 'string' }, run: { type: 'string' }, maxSteps: { type: 'number' }, async: asyncProp }, required: ['token', 'machine', 'run'] },
+  },
+  {
+    name: 'backfill',
+    kind: 'act',
+    description: 'Addendum B: re-judge existing facts for declared judgments they lack (marker s1:j:<name>@<v>), in a bounded slice (default 20, max 40), advancing a per-judgment cursor. Synchronous; meant to be called by the consolidation organ each cycle, not by an agent.',
+    inputSchema: { type: 'object', properties: { token: tokenProp, limit: { type: 'number' } }, required: ['token'] },
+  },
+  {
+    name: 'taxonomy',
+    kind: 'act',
+    description: 'Addendum C: aggregate the "no good answer" residue from recent perception runs per judgment (project none, low-confidence type, declared choices that fell to none) into _system1/taxonomy — the signal System Two reads to grow the vocabulary.',
+    inputSchema: { type: 'object', properties: { token: tokenProp, runs: { type: 'number' } }, required: ['token'] },
   },
   {
     name: 'audit_sample',
