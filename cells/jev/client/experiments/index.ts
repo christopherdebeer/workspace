@@ -6,6 +6,7 @@
 import type * as React from 'react';
 import FreeText from './freetext';
 import Program from './program';
+import ImageCS from './image-cs';
 
 export interface Experiment {
   id: string;
@@ -59,6 +60,16 @@ export const EXPERIMENTS: Experiment[] = [
       'Numbers never come from Jev\'s guesses: code parses them from the text; Jev only says which field they belong to (coffee 4.50 → amount).',
       'Eval (5 apps, 20 commands, 7 program edits): all correct after the fixes; ~0.7 s per command, all five sessions in 6.6 s.',
     ],
+  },
+  {
+    id: 'image-cs',
+    n: '03',
+    title: 'Image CS',
+    blurb: 'Prompt → 8×8 discrete pixels by iterated parallel judgment. Every free cell is a choice over a fixed palette; host commits only high-confidence + locally consistent colours and re-asks the rest. Diffusion’s problem solved with pure calibrated classification.',
+    exploits: ['parallel questions', 'iterated refinement', 'calibration as gate', 'local→global coherence'],
+    status: 'live',
+    component: ImageCS,
+    findings: [],
   },
   {
     id: 'bisect',
