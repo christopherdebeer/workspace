@@ -9,7 +9,7 @@
  * that `callCell` invokes only for authorised principals, and that
  * `describeTools` advertises the create scope for the gateway to enforce.
  */
-import { handler as forge, redactLogLine } from '../services/cells/service';
+import { handler as forge, redactLogLine, deployChangesOf, deployNoteOf } from '../services/cells/service';
 import { crc32, zipStore } from '../services/cells/zip';
 import { buildCellTemplate, cellResourceName } from '../services/cells/cell-template';
 import { createRegistry, __setDocumentClient, CellRecord } from '../services/cells/registry';
@@ -414,6 +414,21 @@ describe('cells: backend commands', () => {
     expect(got.result!.deploy?.phase).toBe('DEPLOYING');
   });
 
+  it('deploy records who asked and the optional description/source on the DEPLOYING marker (ADR-0099)', async () => {
+    await call('alice', 'create', { name: 'notes', code: cellCode });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    const res = await call<{ deploy: { note?: Record<string, string> } }>('alice', 'deploy', {
+      cellId: cell.cellId,
+      description: '  fix the save race  ',
+      source: 'git:c15r/workspace@abc123',
+    });
+    expect(res.ok).toBe(true);
+    expect(res.result!.deploy.note).toEqual({ by: 'alice', description: 'fix the save race', source: 'git:c15r/workspace@abc123' });
+    const got = await reg.get(cell.cellId);
+    expect(got?.deploy?.note?.description).toBe('fix the save race');
+  });
+
   it('the cell.deploy.requested handler records FAILED (and does not throw) when the bundle fails', async () => {
     await call('alice', 'create', { name: 'notes', code: cellCode });
     const reg = createRegistry('forge-table');
@@ -796,5 +811,34 @@ describe('cells: backend commands', () => {
       callerWrites: [{ keyPrefix: 'blk:' }, { keyPrefix: 'doc:', crossSlice: true }],
     });
     expect(typeof res.result!.hint).toBe('string');
+  });
+});
+
+describe('cells: deploy provenance (ADR-0099)', () => {
+  it('deployChangesOf classifies added / modified / removed by content version', () => {
+    const c = deployChangesOf(
+      [{ path: 'a.ts', version: '1' }, { path: 'b.ts', version: '1' }, { path: 'gone.ts', version: '1' }],
+      [{ path: 'a.ts', version: '1' }, { path: 'b.ts', version: '2' }, { path: 'new.ts', version: '1' }],
+    );
+    expect(c).toEqual({ added: ['new.ts'], modified: ['b.ts'], removed: ['gone.ts'], counts: { added: 1, modified: 1, removed: 1 } });
+  });
+
+  it('deployChangesOf clips long lists but keeps true counts', () => {
+    const after = Array.from({ length: 60 }, (_, i) => ({ path: `f${String(i).padStart(2, '0')}.ts`, version: '1' }));
+    const c = deployChangesOf([], after);
+    expect(c.added).toHaveLength(50);
+    expect(c.counts.added).toBe(60);
+    expect(c.truncated).toBe(true);
+  });
+
+  it('deployNoteOf records the delegated leaf actor and participant, clips, and omits empties', () => {
+    const identity = { user: 'alice', scopes: [], act: { sub: 'agent:system1' }, participant: 'steward/weave' };
+    expect(deployNoteOf({ identity } as never, { description: 'x'.repeat(1200) })).toMatchObject({
+      by: 'alice',
+      actor: 'agent:system1',
+      participant: 'steward/weave',
+    });
+    expect(deployNoteOf({ identity } as never, { description: 'x'.repeat(1200) })!.description).toHaveLength(1000);
+    expect(deployNoteOf({ identity: { scopes: [] } } as never, { description: '   ' })).toBeUndefined();
   });
 });
