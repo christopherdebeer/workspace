@@ -19473,3 +19473,13 @@ Fish Hoek guard against a crater, firing on a genuine cutting. Not fixed yet.
 The Japan DEM is GSI 1–10 m bare earth (mapterhorn's `jpdem*` sources), so
 canopy in a surface model is not the cause here; the projection is exact to
 0.1% (1 km east 918.4 local vs 917.3 haversine, north 1113.2 vs 1112.0).
+
+**Fixed: an implicit cutting may go to `CUT_DEEP_M` (12 m, `?cutdeep=`).** The
+burial scan reads the structure pass's own `runs`: inside an implicit chord run
+of an untagged way the threshold is 12 m, everywhere else still 5.6 m (the
+Fish Hoek grade-line case). Nagato after: mesh on the deck to 0.1 m through the
+whole stretch, cut faces 2–6 m either side. The Cape fixtures are
+**byte-identical** under `cutdeep=5.6` and `12` (Glencairn, Camps Bay, Simon's
+Town, Bixby: same exposed and exempt counts to the segment), so the rule did not
+fire there at all — their exempt burials are not chord runs, which is what the
+split was meant to preserve. Measured with `__buried(900)` per fixture.
