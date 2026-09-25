@@ -11217,7 +11217,7 @@ function trackFamMat(fam: TrackFam): THREE.MeshLambertMaterial {
         float trkWob = (pdn(vec2(trkA * 0.09, 3.7)) - 0.5) * 0.06 + (pdn(vec2(trkA * 0.31, 9.1)) - 0.5) * 0.02;
         float trkN = pdn(vSlipXZ * 1.8) * 0.6 + pdn(vSlipXZ * 4.6) * 0.4;
         float trkH = 0.0, trkRut = 0.0, trkCov = 1.0;
-        float trkStep = 0.0;
+        float trkStep = 0.0, trkCrownTint = 0.0;
         if (uTrkMode > 4.5) {
           // STEPS: a tread every 0.3 m along the flight. The sawtooth's slope
           // shades each tread and its wrap throws a hard line at every nose;
@@ -11244,16 +11244,33 @@ function trackFamMat(fam: TrackFam): THREE.MeshLambertMaterial {
           float lip = smoothstep(rw * 0.9, rw * 1.3, d) * (1.0 - smoothstep(rw * 1.5, rw * 2.3, d));
           trkH = -uTrkDepth * (1.0 - smoothstep(0.0, rw * 1.2, d)) + uTrkDepth * 0.35 * lip;
           float band = step(abs(trkU - 0.5), 0.22 + rw * 1.3);
-          float crown = uTrkMode < 1.5 ? 1.0 : step(1.0 - uTrkBare, trkN);
-          float fine = max(trkRut, crown * (1.0 - trkRut * 0.0));
+          // THE CROWN IS TUFTS, NOT CONTINENTS. A single 0.5 m noise
+          // thresholded at 0.35 drew the grass between the ruts as a few big
+          // hard-edged islands (the Senqu cab frame read as camouflage). Two
+          // scales now: a slow one along the way sets how grassy this stretch
+          // is, a fine one (~20 cm, with a 9 cm octave faded by its own footprint) places the tufts, and the grass thickens
+          // toward the middle of the crown where no wheel reaches.
+          float trkSlow = pdn(vec2(trkA * 0.12, 5.3));
+          float trkTuft = pdn(vSlipXZ * 5.0) * 0.7 + (pdn(vSlipXZ * 11.0) - 0.5) * 0.3 * (1.0 - smoothstep(0.03, 0.08, trkFp)) + 0.15;
+          float midC = 1.0 - smoothstep(0.0, 0.22 - rw * 0.4, abs(trkU - 0.5));
+          float grassy = clamp(uTrkBare * (0.55 + 0.9 * trkSlow) + 0.35 * midC - 0.2 * (1.0 - midC), 0.0, 0.95);
+          float crown = uTrkMode < 1.5 ? 1.0 : step(grassy, trkTuft);
+          float fine = max(trkRut, crown);
           trkCov = mix(uTrkMode < 1.5 ? 1.0 : band, fine, trkFine);
+          // Past the band limit the tufts cannot be drawn, so the crown is
+          // drawn as what it averages to: darker, greener ground between two
+          // pale lines — a farm track from above, not a pale ribbon.
+          trkCrownTint = (1.0 - trkFine) * midC * step(1.5, uTrkMode) * (0.35 + 0.4 * uTrkBare);
         }
         // The verge frays into the ground instead of ending on a ruler.
         float trkEdge = min(trkU, 1.0 - trkU);
         trkCov *= step(0.015 + uTrkFray * (0.35 + 0.65 * trkN) * trkFine, trkEdge);
         if (trkCov < 0.5) discard;
         // Ruts are pressed and damp: darker and a little richer than the crown.
-        diffuseColor.rgb *= mix(1.0, 0.80, trkRut * step(0.5, uTrkMode) * step(uTrkMode, 4.5));
+        // Ruts are pressed and damp: darker and a little richer than the crown,
+        // enough to read as two lines (at 0.80 they did not, on the device).
+        diffuseColor.rgb *= mix(vec3(1.0), vec3(0.66, 0.64, 0.62), trkRut * step(0.5, uTrkMode) * step(uTrkMode, 4.5));
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.55, 0.66, 0.46), trkCrownTint);
         diffuseColor.rgb *= 1.0 - 0.32 * trkStep;
         // Gravel and pavement grain, band-limited like everything else.
         trkH += (pdn(vSlipXZ * 7.0) - 0.5) * 0.012 * trkFine * step(0.5, uTrkMode) * step(uTrkMode, 1.5);
