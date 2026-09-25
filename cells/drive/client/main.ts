@@ -9423,6 +9423,7 @@ function buildTerrainMesh(t: HeightTile): void {
   // road at grade) is still done, or the quiet path would dirty it for ever.
   (mesh.userData as { corridor?: boolean }).corridor = corridor;
   if (corridor) dropBatterFor(key);
+  if (!mesh.name) mesh.name = 'terrain';
   terrainMeshes.set(key, mesh);
   const revision = (terrainRevision.get(key) ?? 0) + 1;
   terrainRevision.set(key, revision);
@@ -9805,6 +9806,7 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
   mesh.position.set(t.xs + t.w / 2, 0, t.zs + t.h / 2);
   (mesh.userData as { corridor?: boolean }).corridor = r.corridor;
   if (r.corridor) dropBatterFor(key);
+  if (!mesh.name) mesh.name = 'terrain';
   terrainMeshes.set(key, mesh);
   const revision = (terrainRevision.get(key) ?? 0) + 1;
   terrainRevision.set(key, revision);
@@ -25384,6 +25386,7 @@ function commitTerrainRenderFromSubstrate(tile: ProductionSubstrateTile): boolea
   // ground contact, so it can also serve every legacy terrain query/raycast
   // while those call sites migrate. Retire the temporary build wrapper now;
   // no hidden duplicate terrain mesh survives a committed revision.
+  if (!mesh.name) mesh.name = 'terrain';
   terrainMeshes.set(tile.key, mesh);
   if (source && source !== mesh) {
     source.removeFromParent();
@@ -51434,6 +51437,27 @@ function telemetryReport(): string {
       + ` · legend ${themeLegend().map((r) => r.name).join(',') || '—'}`);
     L.push(`ground: holes ${holeStat.now} (never shown ${holeStat.unshown}) · pop-outs ${holeStat.pops} · hidden ${(holeStat.ms / 1000).toFixed(1)}s longest ${Math.round(holeStat.max)}ms · far asked ${farTiles.size - farMeshes.size} stale ${farStale.size} inflight ${farAsking.size}`);
     L.push(`world pass: draw calls mean ${Math.round(drawStat.sumCalls / Math.max(1, drawStat.n))} max ${drawStat.maxCalls} · triangles mean ${(drawStat.sumTris / Math.max(1, drawStat.n) / 1e6).toFixed(2)}M max ${(drawStat.maxTris / 1e6).toFixed(2)}M · recent ${n} passes p50 ${q(0.5)}M p95 ${q(0.95)}M · last ${(drawStat.tris / 1e6).toFixed(2)}M / ${drawStat.calls} calls`); }
+    {
+      // WHERE THE TRIANGLES ARE. The world pass's count says how many and not
+      // whose, and on a GPU-bound frame (the gap row) that is the question.
+      // Visible meshes only, by name with the per-tile suffix stripped, an
+      // instanced mesh counted at its instance count. Before frustum culling,
+      // so an upper bound on what was submitted, not a measurement of it.
+      const by: Record<string, number> = {};
+      let all = 0;
+      scene.traverseVisible((o) => {
+        const m = o as THREE.Mesh & { isInstancedMesh?: boolean; count?: number };
+        if (!m.isMesh) return;
+        const g = m.geometry as THREE.BufferGeometry | undefined;
+        const n = ((g?.index?.count ?? g?.getAttribute?.('position')?.count ?? 0) / 3) * (m.isInstancedMesh ? (m.count ?? 1) : 1);
+        const mn = (m.material as THREE.Material | undefined)?.name;
+        const k = ((o.name || (mn ? `mat:${mn}` : '') || (o.parent?.name ? `in:${o.parent.name}` : '') || 'unnamed')
+          .replace(/[\s/:]-?\d+.*$/, '')) || 'unnamed';
+        by[k] = (by[k] ?? 0) + n; all += n;
+      });
+      const top = Object.entries(by).sort((x, y) => y[1] - x[1]).slice(0, 10);
+      L.push(`scene triangles (visible, pre-cull) ${(all / 1e6).toFixed(2)}M · ${top.map(([k, v]) => `${k} ${(v / 1e6).toFixed(2)}M`).join(' · ')}`);
+    }
     L.push(`non-finite frames ${nanStat.hit} of ${nanStat.reads} luma reads · worst ${nanStat.worstCells} of ${LUMA_W * LUMA_H} cells`
       + (nanStat.last ? ` · last ${JSON.stringify(nanStat.last)}` : ''));
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
