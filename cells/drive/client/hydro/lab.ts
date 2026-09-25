@@ -883,6 +883,7 @@ export async function startHydroLab(): Promise<void> {
       uCsSunDisc: { value: new THREE.Vector3(.98, .72, .38) },
       uCsLow: { value: labLow },
       uCsNight: { value: labNight },
+      uCsDusk: { value: new THREE.Vector3(0.86, 0.32, 0.12) },
     },
   };
 

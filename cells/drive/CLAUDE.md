@@ -19272,3 +19272,25 @@ and `tune:foamMask=N` views for one-frame ablations in a frozen state.
 the low shoreline scene is reframed along the beach but not yet judged; the
 far-bank cut and the angular bends are the field raster's and belong to the
 bank shaping and boundary units above.
+
+### …and at dusk the sea mirrored a bluer sky than the one drawn above it
+
+Three frames from the seat at the Apostles at 18:00, no words: a saturated navy
+band of sea under a pink sky. `sceneReflectedSky` (hydro/scene-sky.ts) had its
+own twilight — a partial warm lobe toward the sun — and none of the dome's:
+no belt along the whole horizon, no pink band over the anti-solar horizon, no
+earth's shadow. So the Look model's grazing mirror (Schlick's full curve, plus
+the night F0 floor) returned a cooler sky than the dome shows. It now runs the
+sky shader's own terms on the sky's own uniforms (`uCsDusk` is the dome's
+`uDusk`), so the two cannot drift again.
+
+Measured, the coast drone scene, look B, before and after (mean RGB, hue):
+
+| | sky above | far sea, before | far sea, after |
+|---|---|---|---|
+| DUSK | 138,109,106 · 6° | 67,65,77 · 250° | **96,75,76 · 357°** |
+| GOLDEN | 169,156,147 · 25° | 114,115,120 · 230° | **129,117,115 · 9°** |
+
+and the near sea's saturation at dusk falls 0.19–0.20 → 0.06–0.11. The black
+dots and dashes in the same frames are the herd and the birds: a
+`hide:critters` capture takes every one of them away.

@@ -4477,6 +4477,7 @@ function hydroSceneShade(): SceneShade {
       uCsSunDisc: skyMat.uniforms.uSunDisc,
       uCsLow: skyMat.uniforms.uLow,
       uCsNight: skyMat.uniforms.uNight,
+      uCsDusk: skyMat.uniforms.uDusk,
     },
   };
 }
