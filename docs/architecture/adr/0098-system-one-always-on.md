@@ -523,3 +523,119 @@ has today.
 5. Vendor neutrality: expose `system1.*` as the platform seam with
    `@c15r/jev` as its first backend (ADR-0097 Open #8). The answer affects
    where `_judgments` lives.
+
+---
+
+## Addendum (2026-09-25): judgments are vocabulary; the taxonomy grows
+
+**Status:** Accepted and built. Always-on perception (Inc 3) is live: the
+`system1-perceive` subscription delivers each settled write to
+`@c15r/system1.perceive` with a per-run `agent:system1.perceive` token. The
+owner approved adding `system1` to the reactor's token-mint allow-list, and it
+was CDK-deployed from branch head (run 36133775348). First live write:
+`project:drive` + `actionable` + `belongsTo kb/proj_drive`, about 20 s after
+the write, with no trigger. The organ's own write is stamped
+`agent:system1.perceive`, which the subscription excludes, so it cannot
+re-fire.
+
+### A. Types declare their own judgments
+
+A type is one object with facets (ADR-0002). Judgments become one more
+facet, `judgments`, declared by the type's manager in its `types.json`, or
+layered on by a slice `_types/<name>` override. Resolution is per facet
+(ADR-0010), and `$types` returns the merged result.
+
+```json
+"judgments": {
+  "priority":       { "v": 1, "type": "score", "criteria": ["p3","p2","p1","p0"],
+                      "materialize": { "tag": "priority:{level}" } },
+  "looks-resolved": { "v": 1, "type": "noul",
+                      "materialize": { "tag": "s1:looks-resolved" } }
+}
+```
+
+- **Asked together.** System One asks a fact's type judgments (capped at 6)
+  alongside the fixed questions in the same Jev call, because they share the
+  state.
+- **Tags and edges, never values.** Answers materialize as tags or edges. The
+  fact's value belongs to the type's manager.
+- **Human-authored wins.** A tag `x:y` is never added when any `x:*` tag
+  exists. `s1:` is System One's own namespace.
+- **Versioned.** Every judgment writes the marker `s1:j:<name>@<v>`.
+- **Learned per judgment.** Gates are keyed `j:<name>`; an unseen judgment
+  starts at 0.8, or at its declared `gate`.
+- **Cross-type judgments** live in `_system1/judgments`, selected by
+  `appliesToTypes`.
+
+**First declarations:**
+- `_types/bug`: priority and looks-resolved.
+- `_system1/judgments`: `applies-model` (below).
+
+### B. Evolving: versions and backfill, owned by consolidation
+
+Declaring a judgment, or bumping its `v`, makes every existing fact of that
+type due for it: they all lack the new marker.
+
+- `system1.backfill` re-judges a bounded slice (20 facts) per call, and
+  advances a per-judgment cursor (`_system1/backfill/<type>.<name>@<v>`).
+- The consolidation organ calls it once per cycle. That is organ to organ,
+  synchronous, with no self-invocation, so a new judgment reaches the whole
+  corpus over days without anyone triggering it.
+- Changed option sets (a new project, a new mental model) need no version
+  bump. They are live data, cached for 5 minutes.
+
+### C. Mental-model applicability
+
+ADR-0094 §6 found that applicability cannot be written into a model's content
+("a lens is never about the thing it applies to"), and only 16 of 98 models
+carry a hand-authored `applies` field.
+
+- `applies-model` is a `choice` whose options *are* the live `mental-model`
+  facts (`optionsFrom`), plus `none`.
+- It runs on decisions, bugs, questions, proposals, knowledge and claims.
+- Above its gate it writes `model --appliesTo--> fact`. So a model's
+  applicability is *learned from the facts it gets applied to*, instead of
+  authored in advance. `edges({around: model})` becomes "where this lens was
+  useful".
+- The learner calibrates `j:applies-model` from survival and audit like any
+  other judgment.
+
+### D. The taxonomy grows from its residue
+
+A fixed vocabulary silently forces every fact into the nearest box. Instead,
+every choice judgment includes `none`, and every "no good answer" is kept as
+**residue**:
+- project `none` or below 0.5;
+- untyped facts whose type choice falls below 0.5;
+- declared choices that fell to `none`.
+
+The residue is recorded per run, and `system1.taxonomy` aggregates it per
+judgment (count, closest options, sample keys) into `_system1/taxonomy` each
+consolidation cycle.
+
+The residue is where the vocabulary is missing a word: a cluster of captures
+no project fits is a project nobody has declared; untyped facts that fit no
+type are a type waiting to exist. **System One never invents vocabulary.** It
+measures where vocabulary is missing. System Two (the tending driver, or the
+owner) reads the report and proposes one of:
+- a new project fact;
+- a new option;
+- a new type;
+- a new judgment on a type.
+
+Each is one declaration write. Backfill (B) then carries it across the
+existing corpus. The loop:
+1. perception exposes residue;
+2. System Two names the missing category;
+3. the declaration lands;
+4. backfill re-judges;
+5. calibration learns the new gate.
+
+### Guardrails (unchanged in spirit)
+
+- At most 6 judgments per fact. The question schema costs about 350 tokens
+  per call before any content.
+- The first declarer of a judgment name owns it (ADR-0093).
+- Contradictions are marked, never resolved. No judgment decides authority.
+- Backfill only from the consolidation cycle, bounded, never self-chaining
+  (the 2026-09-24 recursive-loop incident).
