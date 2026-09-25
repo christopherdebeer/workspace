@@ -687,7 +687,8 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
         // it can write doc/doc-block facts + edges back through the gateway
         // instead of needing direct substrate write IAM). The token rides in
         // as `token`.
-        if (grants && (target.name === 'models' || target.name === 'run' || target.name === 'lit')) {
+        // system1: the ADR-0098 always-on perception organ, owner-approved 2026-09-25.
+        if (grants && (target.name === 'models' || target.name === 'run' || target.name === 'lit' || target.name === 'system1')) {
           const scopes: string[] = [];
           if (grants.read) scopes.push('workspace:read');
           if (grants.write) scopes.push('workspace:write');
