@@ -1,15 +1,19 @@
 /* ---------------------------------------------------------------------------
  * The one seam every experiment calls: decide(state, questions) → answers,
  * plus a trace of every call (latency, questions, tokens) for the instrument
- * strip. Transport: a same-origin POST to this cell's own /_tools/decide via
- * dispatch, carrying the kernel session — one hop fewer than the /mcp gateway.
- * Dispatch refuses anonymous POSTs and cells.call admits only the owner or a
- * granted caller, so a public page never spends the budget for strangers.
+ * strip. Transport: the kernel's /mcp client → `act @c15r/jev.decide`.
+ *
+ * Not a direct POST to /@c15r/jev/_tools/decide: browsers are redirected to
+ * the cell's own origin (c15r-jev.on.parc.land, docs/cell-origin-isolation.md),
+ * where the kernel sends API calls to the apex cross-origin — and only /mcp
+ * answers CORS there. The direct POST was preflight-blocked ("Load failed" in
+ * Safari). The gateway admits only the owner or a granted caller, so a public
+ * page never spends the budget for strangers.
  * ------------------------------------------------------------------------- */
-import { authFetch, ensureAuth, isAuthed } from './auth';
+import { ensureAuth, isAuthed, mcp } from './auth';
 import type { Answers, Questions } from './types';
 
-export const CELL_BASE = '/@c15r/jev';
+export const CELL_TARGET = '@c15r/jev';
 /** ~$0.042 per million input tokens (TypeSafe list price). */
 export const USD_PER_TOKEN = 0.042e-6;
 
@@ -49,8 +53,10 @@ export class JevError extends Error {
   }
 }
 
+/** Identity-only sign-in (`cell:c15r/jev:*`, docs/auth-in-page.md): the lab calls
+ *  Jev and nothing else, so it never asks for workspace authority. */
 export async function signIn(): Promise<boolean> {
-  await ensureAuth();
+  await ensureAuth({ identity: true });
   return isAuthed();
 }
 
@@ -66,19 +72,17 @@ export async function decide(state: unknown, questions: Questions, label = 'deci
   const n = Object.keys(questions).length;
   const t0 = performance.now();
   try {
-    const res = await authFetch(`${CELL_BASE}/_tools/decide`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state, questions }),
-      signal,
-    });
-    const body = (await res.json().catch(() => ({}))) as { answers?: Answers; usage?: { input_tokens?: number }; error?: string };
+    if (signal?.aborted) throw Object.assign(new Error('stopped'), { name: 'AbortError' });
+    const r = await mcp('act', `${CELL_TARGET}.decide`, { state, questions });
     const ms = Math.round(performance.now() - t0);
-    if (!res.ok) {
+    const body = (r.ok && r.value && typeof r.value === 'object' ? r.value : {}) as { answers?: Answers; usage?: { input_tokens?: number } };
+    if (!r.ok || !body.answers) {
+      const raw = typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
+      const status = Number(raw.match(/HTTP (\d{3})/)?.[1] ?? 0);
       const msg =
-        res.status === 401 ? 'sign in to run experiments' : res.status === 403 ? 'this account is not granted @c15r/jev' : body.error ?? `HTTP ${res.status}`;
+        status === 401 ? 'sign in to run experiments' : status === 403 || /not (granted|authori[sz]ed)|forbidden/i.test(raw) ? 'this account is not granted @c15r/jev' : raw || 'no answers';
       record({ id, label, questions: n, ms, tokens: 0, ok: false, error: msg, at: Date.now() });
-      throw new JevError(msg, res.status);
+      throw new JevError(msg, status);
     }
     const tokens = body.usage?.input_tokens ?? 0;
     record({ id, label, questions: n, ms, tokens, ok: true, at: Date.now() });
@@ -86,7 +90,8 @@ export async function decide(state: unknown, questions: Questions, label = 'deci
   } catch (err) {
     if (err instanceof JevError) throw err;
     const ms = Math.round(performance.now() - t0);
-    const msg = (err as Error).name === 'AbortError' ? 'stopped' : (err as Error).message;
+    const e = err as Error;
+    const msg = e.name === 'AbortError' ? 'stopped' : /load failed|failed to fetch|networkerror/i.test(e.message) ? `network error reaching Jev (${e.message})` : e.message;
     record({ id, label, questions: n, ms, tokens: 0, ok: false, error: msg, at: Date.now() });
     throw new JevError(msg, 0);
   }
