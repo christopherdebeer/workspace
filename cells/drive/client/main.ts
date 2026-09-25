@@ -16694,7 +16694,7 @@ let shrubN = 0, shrubNear = 0;
 // a stand height over the drawn ground, with a crown lump per jittered cell so
 // the roof reads as crowns and not as a sheet. Off by default; `?canopy=1`.
 let CANOPY_ON = qsOn('canopy', false);
-const CANOPY_STEP = 4, CANOPY_N = 200, CANOPY_H = 13, CANOPY_CROWN = 6.5, CANOPY_NEAR = 70;
+const CANOPY_STEP = 6, CANOPY_N = 260, CANOPY_H = 13, CANOPY_CROWN = 6.5, CANOPY_NEAR = 70;
 const canopyMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true });
 terrainFx(canopyMat);
 // THE CROWNS ARE DRAWN PER FRAGMENT, NOT BY THE LATTICE. A 6.5 m crown on a
@@ -16739,15 +16739,15 @@ vec2 canEval(vec2 p) {
   float gz = (canEval(p + vec2(0.0, e)).x - e0.x) / e;
   canDome = mix(0.45, e0.x, band); canTone = mix(0.5, e0.y, band);
   canGrad = vec2(gx, gz) * band;
-  diffuseColor.rgb *= mix(0.42, 1.12, canDome) * (0.82 + 0.36 * canTone);
+  diffuseColor.rgb *= mix(vec3(0.22, 0.24, 0.3), vec3(1.3, 1.35, 1.05), canDome) * (0.78 + 0.44 * canTone);
 }`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
 {
   vec3 nw = normalize(vec3(-canGrad.x * 0.35, 1.0, -canGrad.y * 0.35));
-  normal = normalize(normal + (viewMatrix * vec4(nw, 0.0)).xyz * 1.4);
+  normal = normalize(normal + (viewMatrix * vec4(nw, 0.0)).xyz * 2.2);
 }`);
   };
-  canopyMat.customProgramCacheKey = () => 'canopy-1';
+  canopyMat.customProgramCacheKey = () => 'canopy-2';
 }
 const canopyMesh = new THREE.Mesh(new THREE.BufferGeometry(), canopyMat);
 canopyMesh.name = 'canopy';
@@ -16795,10 +16795,17 @@ function refreshCanopy(now: number): void {
     ev[k] = onCarriageway(x, z, 7).road ? 0 : e * nearFade;
     const g = groundAt(x, z);
     const stand = CANOPY_H * (0.8 + 0.4 * canopyHash(Math.floor(x / 90), Math.floor(z / 90), 7));
-    const rise = Math.min(1, Math.max(0, (ev[k] - 0.25) / 0.35));
+    // A STAND HAS A SIDE. The first cut ramped the roof up over the evidence's
+    // own 0.25-0.6 — fifteen to twenty metres — which from the road read as a
+    // grassy embankment. Over one lattice step it is a face.
+    const rise = Math.min(1, Math.max(0, (ev[k] - 0.3) / 0.15));
     const ramp = rise * rise * (3 - 2 * rise);
     pos[k * 3] = x; pos[k * 3 + 1] = g + ramp * stand * 0.88; pos[k * 3 + 2] = z;
-    col[k * 3] = 0.17; col[k * 3 + 1] = 0.28; col[k * 3 + 2] = 0.11;
+    // The ground's own palette under the stand, pulled toward leaf: the far
+    // terrain paints the same forest in this colour, so where the canopy ends
+    // at its square the two are one tone rather than a carpet on a floor.
+    const pc = terrainPalette(sampleHeight(x, z) + baseElev, 0, 10, x, z);
+    col[k * 3] = pc[0] * 0.85; col[k * 3 + 1] = pc[1] * 1.05; col[k * 3 + 2] = pc[2] * 0.8;
   }
   const idx: number[] = [];
   for (let j = 0; j < CANOPY_N; j++) for (let i = 0; i < CANOPY_N; i++) {
