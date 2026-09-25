@@ -283,3 +283,12 @@ describe('declared judgments (ADR-0098 addendum)', () => {
     expect(thresholds['j:applies-model']).toBeGreaterThan(0.8);
   });
 });
+
+describe('perceivable — ADR-0099 deploy facts', () => {
+  it('admits cell-deploy facts but not cell pointers or manifests', () => {
+    expect(perceivable('cells/jev-1/deploy/123', 'cell-deploy')).toBe(true);
+    expect(perceivable('cells/jev-1', 'cell')).toBe(false);
+    expect(perceivable('cells/jev-1/source-manifest', 'file')).toBe(false);
+    expect(perceivable('cells/jev-1/deploy/123', null)).toBe(false);
+  });
+});

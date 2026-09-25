@@ -753,6 +753,82 @@ interface CellPointer {
   staticFiles?: string[];
   /** Source edited since the last deploy. */
   dirty?: boolean;
+  /** ADR-0099: the source tree live now (tree:<hash>). */
+  treeVersion?: string;
+  /** ADR-0099: key of the latest `cell-deploy` fact — the head of the deploy chain. */
+  lastDeploy?: string;
+  deployedAt?: string;
+}
+
+/** The value of a `cells/<id>/deploy/<version>` fact (ADR-0099): one landed deploy, append-only. */
+export interface CellDeployFact {
+  cellId: string;
+  cell: string;
+  name: string;
+  version: string;
+  deployedAt: string;
+  treeVersion?: string;
+  previousTreeVersion?: string;
+  /** The deploy fact this one replaced as live — also a `supersedes` edge. */
+  previous?: string;
+  by?: string;
+  actor?: string;
+  participant?: string;
+  description?: string;
+  source?: string;
+  changes?: {
+    added: string[];
+    modified: string[];
+    removed: string[];
+    counts: { added: number; modified: number; removed: number };
+    truncated?: boolean;
+  };
+  /** Mechanical one-liner (always present): the description, else the change counts. */
+  summary: string;
+}
+
+/** Key of a cell's deploy fact. Version is the deploy's `Date.now()` string, so keys sort by time. */
+export const cellDeployKey = (cellId: string, version: string): string => `cells/${cellId}/deploy/${version}`;
+
+/** Pure: build a deploy fact from a `cell.deployed` detail + the prior pointer (ADR-0099). */
+export function cellDeployFactOf(detail: Record<string, unknown>, base: { cellId: string; name: string; address: string }, prior?: CellPointer): CellDeployFact | null {
+  const version = typeof detail.version === 'string' ? detail.version : '';
+  if (!version) return null;
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+  const note = (detail.note && typeof detail.note === 'object' ? detail.note : {}) as Record<string, unknown>;
+  const changes = detail.changes && typeof detail.changes === 'object' ? (detail.changes as CellDeployFact['changes']) : undefined;
+  const description = str(note.description);
+  const c = changes?.counts;
+  const counted = c ? [c.added && `+${c.added}`, c.modified && `~${c.modified}`, c.removed && `-${c.removed}`].filter(Boolean).join(' ') : '';
+  const summary = description
+    ? description.split('\n')[0].slice(0, 200)
+    : c
+      ? counted
+        ? `${base.name}: ${counted} file${c.added + c.modified + c.removed === 1 ? '' : 's'}${changes?.modified.length ? ` (${[...(changes.added ?? []), ...changes.modified].slice(0, 3).join(', ')})` : ''}`
+        : `${base.name}: redeploy, no source change`
+      : `${base.name}: deploy ${version}`;
+  const previous = prior?.lastDeploy && prior.lastDeploy !== cellDeployKey(base.cellId, version) ? prior.lastDeploy : undefined;
+  const fact: CellDeployFact = {
+    cellId: base.cellId,
+    cell: base.address,
+    name: base.name,
+    version,
+    deployedAt: str(detail.deployedAt) ?? new Date().toISOString(),
+    summary,
+  };
+  const opt: Partial<CellDeployFact> = {
+    treeVersion: str(detail.treeVersion),
+    previousTreeVersion: str(detail.previousTreeVersion) ?? prior?.treeVersion,
+    previous,
+    by: str(note.by),
+    actor: str(note.actor),
+    participant: str(note.participant),
+    description,
+    source: str(note.source),
+    changes,
+  };
+  for (const [k, v] of Object.entries(opt)) if (v !== undefined) (fact as unknown as Record<string, unknown>)[k] = v;
+  return fact;
 }
 
 /**
@@ -797,17 +873,22 @@ export function createCellLifecycleHandler(build: DepsBuilder): EventBridgeHandl
       case 'cell.create.requested':
         value = { ...base, status: 'CREATING', description: (detail.description as string | null | undefined) ?? null };
         break;
-      case 'cell.deployed':
+      case 'cell.deployed': {
+        const version = typeof detail.version === 'string' ? detail.version : undefined;
         value = {
           ...base,
           status: 'ACTIVE',
-          version: typeof detail.version === 'string' ? detail.version : undefined,
+          version,
           files: Array.isArray(detail.files) ? (detail.files as string[]) : base.files,
           clientEntry: (detail.clientEntry as string | null | undefined) ?? null,
           staticFiles: Array.isArray(detail.staticFiles) ? (detail.staticFiles as string[]) : [],
           dirty: false,
+          ...(typeof detail.treeVersion === 'string' ? { treeVersion: detail.treeVersion } : {}),
+          ...(version ? { lastDeploy: cellDeployKey(cellId, version) } : {}),
+          ...(typeof detail.deployedAt === 'string' ? { deployedAt: detail.deployedAt } : {}),
         };
         break;
+      }
       case 'cell.files.changed': {
         const paths = Array.isArray(detail.paths) ? (detail.paths as string[]) : [];
         const files = new Set(base.files ?? []);
@@ -815,7 +896,14 @@ export function createCellLifecycleHandler(build: DepsBuilder): EventBridgeHandl
           if (detail.op === 'delete') files.delete(p);
           else files.add(p);
         }
-        value = { ...base, files: Array.from(files).sort(), dirty: true };
+        const sorted = Array.from(files).sort();
+        // ADR-0099: an edit that neither changes the file set nor flips `dirty`
+        // is not news — skip the write. Iteration used to rewrite the pointer on
+        // every save (drive: ~45k revisions carrying no history); the deploy
+        // facts are where iteration is recorded now.
+        const priorFiles = [...(prior?.files ?? [])].sort();
+        if (prior?.dirty === true && sorted.length === priorFiles.length && sorted.every((f, i) => f === priorFiles[i])) return;
+        value = { ...base, files: sorted, dirty: true };
         break;
       }
       case 'cell.delete.requested':
@@ -851,6 +939,31 @@ export function createCellLifecycleHandler(build: DepsBuilder): EventBridgeHandl
         { scope: owner, key: manifestKey, value: manifest, via: 'cells:deployed', type: 'file', tags: ['file', 'cell-source'] },
         writer,
       );
+
+      // ADR-0099: the deploy itself as a durable, append-only fact — who, why,
+      // where from, what changed — linked into the cell's deploy chain. The
+      // pointer above is current state; these are its history.
+      const deployFact = cellDeployFactOf(detail, base, prior);
+      if (deployFact) {
+        const deployKey = cellDeployKey(cellId, deployFact.version);
+        try {
+          await state.put(
+            {
+              scope: owner,
+              key: deployKey,
+              value: deployFact,
+              via: 'cells:deployed',
+              type: 'cell-deploy',
+              tags: ['cell-deploy', `cell:${base.name}`],
+            },
+            writer,
+          );
+          await state.link(owner, deployKey, 'deployOf', key, null, writer);
+          if (deployFact.previous) await state.link(owner, deployKey, 'supersedes', deployFact.previous, null, writer);
+        } catch (err) {
+          ctx.logger.warn('deploy fact projection failed (pointer already written)', { cellId, error: (err as Error).message });
+        }
+      }
     }
 
     // ADR-0052: capabilities are facts. On deploy, project each tool the cell
