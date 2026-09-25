@@ -403,3 +403,22 @@ describe('image: scene choice → renderable layers', () => {
     expect(r.best.score).toBe(0.9); // indecisive final (0.35 < 0.4) keeps the noul winner
   });
 });
+
+describe('image: seeded, palette-constrained search', () => {
+  it('starts from the given seeds, never scores random restarts, and only uses palette colours', async () => {
+    const seed = I.render({ bg: '.', layers: [{ shape: 'disc', color: 'R', cx: 4, cy: 4, size: 2.5 }] });
+    const scored: I.Grid[] = [];
+    const d: I.ImageDeps = {
+      decide: async () => ({ best: { probabilities: { A: 1 } } }),
+      decideMany: async (items) => items.map((it) => Object.fromEntries(Object.entries(it.questions).map(([k, q]) => {
+        const grid = (q.instructions ?? '').match(/is: (.+?)\. Does/)![1].split(' / ').map((r) => r.split('')) as I.Grid;
+        scored.push(grid);
+        return [k, { noul: 0.5 }];
+      }))),
+    };
+    const r = await I.search('a red circle', d, { seeds: [{ grid: seed, score: 0.9 }], palette: ['.', 'R'], gens: 2, pop: 4, elite: 1, children: 8 });
+    expect(r.best.grid).toEqual(seed); // nothing beat the 0.9 seed
+    expect(scored.length).toBeGreaterThan(0);
+    expect(scored.every((g) => g.every((row) => row.every((c) => c === '.' || c === 'R')))).toBe(true);
+  });
+});

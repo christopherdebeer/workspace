@@ -65,7 +65,7 @@ export const EXPERIMENTS: Experiment[] = [
     id: 'image-cs',
     n: '03',
     title: 'Image CS',
-    blurb: 'Prompt → 8×8 picture. Three modes: recognise (typed scenes, default), search (procedural explore–exploit population), pixels (original per-cell baseline).',
+    blurb: 'Prompt → 8×8 picture. Three modes: recognise (typed scenes, default), search (recognise, then procedural refinement beyond its templates), pixels (the original per-cell baseline).',
     exploits: ['recognition over generation', 'parallel questions', 'contrastive choice', 'procedural search'],
     status: 'live',
     component: ImageCS,
@@ -78,6 +78,8 @@ export const EXPERIMENTS: Experiment[] = [
       'Independent nouls are lenient for pictures (a blob scored 0.82 as "a white cross"); comparison is sharper but only trusted when decisive (p ≥ 0.4) — an unsure final once swapped a 0.71 smiley for a 0.59.',
       'Unseen prompt, no tuning: "a purple heart on white" → a clean heart, 0.80. Hardest: the smiley — 8×8 leaves ~2 cells per feature.',
       'search mode (client:grok): population of grids + procedural operators (blob, recolor component, shift, stripe, flip). Jev only scores. Radius anneals explore→exploit. Diversity via Hamming. Added for less-templated iterative comparison.',
+      'Measured, head-to-head (Jev judging both orders, 6 prompts): unseeded search LOST every prompt — judge preferred recognise 69–99%, best scores plateaued 39–65%. ~12 random-palette children × 7 sequential generations spends depth where Jev\'s width is free, in a space that ignores the prompt.',
+      'Kept the operators, changed the economics: seeded with recognise\'s finalists, mutations restricted to the scene\'s colours, ≤96 children per generation, 3 generations. Refined beats recognise on 4/6 (cross 77%, heart 72→80%), one tie, one narrow loss (tree 44%); +~130k tokens, ~8 s wall for all six. search mode now runs this.',
     ],
   },
   {

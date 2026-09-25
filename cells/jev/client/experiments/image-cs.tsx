@@ -11,7 +11,7 @@
  */
 import * as React from 'react';
 import { decide, decideMany, signIn, JevError } from '../lib/jev';
-import { draw, search, COLOR_NAMES, type Grid as IGrid, type ImageEvent, type SearchEvent, type Scored } from '../lib/image';
+import { draw, refine, COLOR_NAMES, type Grid as IGrid, type ImageEvent, type SearchEvent, type Scored } from '../lib/image';
 import { choiceOf, type Answers } from '../lib/types';
 import { Panel, ErrorLine, Bar } from '../ui';
 
@@ -184,18 +184,19 @@ export default function ImageCS() {
     const t0 = performance.now();
     try {
       if (!(await signIn())) throw new JevError('sign in to run experiments', 401);
-      const r = await search(
+      const r = await refine(
         prompt,
         { decide: async (st, q, label) => (await decide(st, q, label)).answers, decideMany: (items, label) => decideMany(items, label) },
-        { gens: 6, pop: 10, elite: 3, children: 4 },
-        (e: SearchEvent) => {
-          if (e.type === 'gen') {
-            setSearchLog((l) => [...l, `gen ${e.gen}: best ${Math.round(e.best * 100)}% · mean ${Math.round(e.mean * 100)}% · +${e.tried}`]);
+        (e: ImageEvent | SearchEvent) => {
+          if (e.type === 'scene') setSearchLog((l) => [...l, `scene: ${[`${COLOR_NAMES[e.scene.bg]} background`, ...e.scene.layers.map((x) => `${COLOR_NAMES[x.color]} ${x.shape}`)].join(' + ')}`]);
+          else if (e.type === 'round') setSearchLog((l) => [...l, `recognise · ${e.name}: ${e.tried} scored · best ${Math.round((e.best[0]?.score ?? 0) * 100)}%`]);
+          else if (e.type === 'gen') {
+            setSearchLog((l) => [...l, `search gen ${e.gen}: best ${Math.round(e.best * 100)}% · mean ${Math.round(e.mean * 100)}% · +${e.tried}`]);
             setRound(e.gen);
           }
         },
       );
-      setSearchState({ ...r, ms: Math.round(performance.now() - t0) });
+      setSearchState({ best: r.best, top: r.top, gens: 3, ms: Math.round(performance.now() - t0) });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -258,7 +259,7 @@ export default function ImageCS() {
           {mode === 'recognise'
             ? 'Typed scene → code enumerates placements → Jev scores whole pictures. Fast, high quality, templated.'
             : mode === 'search'
-              ? 'Population of grids. Host applies procedural operators (blobs, recolors, shifts, flips). Jev only scores. Explore early, exploit later.'
+              ? 'recognise, then refine beyond its templates: the best pictures seed a population evolved by procedural operators (blobs, recolours, shifts, stripes, flips) in the scene’s colours — wide generations, Jev only scores.'
               : 'Per-pixel palette choices + local consistency. The original baseline that stalled.'}
         </p>
         {mode === 'pixels' ? (

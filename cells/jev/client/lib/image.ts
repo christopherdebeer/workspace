@@ -399,17 +399,19 @@ function clone(g: Grid): Grid {
   return g.map((r) => [...r]);
 }
 
-function randomColor(exclude?: Color): Color {
-  const opts = exclude ? PALETTE.filter((c) => c !== exclude) : [...PALETTE];
-  return opts[Math.floor(Math.random() * opts.length)];
+const randomColorIn = (exclude: Color | undefined, palette: readonly Color[]) => randomColor(exclude, palette);
+
+function randomColor(exclude?: Color, palette: readonly Color[] = PALETTE): Color {
+  const opts = exclude ? palette.filter((c) => c !== exclude) : [...palette];
+  return opts.length ? opts[Math.floor(Math.random() * opts.length)] : (exclude ?? '.');
 }
 
-function randomGrid(bg?: Color): Grid {
-  const base = bg ?? randomColor();
+function randomGrid(bg?: Color, palette: readonly Color[] = PALETTE): Grid {
+  const base = bg ?? randomColor(undefined, palette);
   const g = blank(base);
   // sprinkle a few random blobs so the first generation is not pure noise
   for (let i = 0; i < 3; i++) {
-    const c = randomColor(base);
+    const c = randomColor(base, palette);
     const cx = 1 + Math.random() * (N - 2);
     const cy = 1 + Math.random() * (N - 2);
     const r = 1 + Math.random() * 2;
@@ -459,7 +461,8 @@ function components(g: Grid): { labels: number[][]; sizes: number[]; colors: Col
 }
 
 /** Procedural operators — pure host, no shape templates. */
-function mutate(g: Grid, radius: number): Grid {
+function mutate(g: Grid, radius: number, palette: readonly Color[] = PALETTE): Grid {
+  const randomColor = (exclude?: Color) => randomColorIn(exclude, palette);
   const h = clone(g);
   const op = Math.random();
   if (op < 0.25) {
@@ -545,20 +548,37 @@ function hamming(a: Grid, b: Grid): number {
 export async function search(
   prompt: string,
   d: ImageDeps,
-  opts: { gens?: number; pop?: number; elite?: number; children?: number } = {},
+  opts: {
+    gens?: number;
+    pop?: number;
+    elite?: number;
+    children?: number;
+    /** Start from these (already scored) pictures instead of random grids. */
+    seeds?: Scored[];
+    /** Colours mutations may use (default: the whole palette). */
+    palette?: readonly Color[];
+    /** Random restarts per early generation (default 3; 0 when seeded). */
+    restarts?: number;
+  } = {},
   onEvent?: (e: SearchEvent) => void,
 ): Promise<{ best: Scored; top: Scored[]; gens: number }> {
   const gens = opts.gens ?? 6;
   const popSize = opts.pop ?? 10;
   const eliteN = opts.elite ?? 3;
   const childrenPer = opts.children ?? 4;
+  const palette = opts.palette ?? PALETTE;
+  const restarts = opts.restarts ?? (opts.seeds ? 0 : 3);
 
   // seed population
   let pop: Scored[] = [];
-  const seeds = Array.from({ length: popSize }, () => randomGrid());
-  const s0 = scoresFrom(await d.decideMany(scoreItems(prompt, seeds), `search:seed ×${seeds.length}`), seeds.length);
-  pop = seeds.map((grid, i) => ({ grid, score: s0[i] })).sort((a, b) => b.score - a.score);
-  onEvent?.({ type: 'gen', gen: 0, best: pop[0].score, mean: pop.reduce((s, p) => s + p.score, 0) / pop.length, tried: seeds.length });
+  if (opts.seeds?.length) {
+    pop = [...opts.seeds].sort((a, b) => b.score - a.score).slice(0, popSize);
+  } else {
+    const seeds = Array.from({ length: popSize }, () => randomGrid(undefined, palette));
+    const s0 = scoresFrom(await d.decideMany(scoreItems(prompt, seeds), `search:seed ×${seeds.length}`), seeds.length);
+    pop = seeds.map((grid, i) => ({ grid, score: s0[i] })).sort((a, b) => b.score - a.score);
+  }
+  onEvent?.({ type: 'gen', gen: 0, best: pop[0].score, mean: pop.reduce((s, p) => s + p.score, 0) / pop.length, tried: opts.seeds?.length ? 0 : pop.length });
 
   for (let g = 1; g <= gens; g++) {
     const radius = Math.max(0.15, 1 - g / gens); // explore → exploit
@@ -569,7 +589,7 @@ export async function search(
     // exploit: mutate elite
     for (const e of elite) {
       for (let c = 0; c < childrenPer; c++) {
-        const m = mutate(e.grid, radius);
+        const m = mutate(e.grid, radius, palette);
         const k = key(m);
         if (!seen.has(k)) {
           seen.add(k);
@@ -579,8 +599,8 @@ export async function search(
     }
     // explore: a few random restarts early on
     if (radius > 0.4) {
-      for (let i = 0; i < 3; i++) {
-        const m = randomGrid();
+      for (let i = 0; i < restarts; i++) {
+        const m = randomGrid(undefined, palette);
         const k = key(m);
         if (!seen.has(k)) {
           seen.add(k);
@@ -609,8 +629,9 @@ export async function search(
     pop = next.sort((a, b) => b.score - a.score);
     onEvent?.({ type: 'gen', gen: g, best: pop[0].score, mean: pop.reduce((s, p) => s + p.score, 0) / pop.length, tried: kids.length });
 
-    // early stop if elite is already strong
-    if (pop[0].score >= 0.78 && g >= 3) break;
+    // early stop if elite is already strong (unseeded runs only: a seeded
+    // refinement starts above the bar and exists to improve on it)
+    if (!opts.seeds && pop[0].score >= 0.78 && g >= 3) break;
   }
 
   // optional contrastive final among top
@@ -626,4 +647,20 @@ export async function search(
   const top = pop.slice(0, 6);
   onEvent?.({ type: 'done', best: top[0], top, gens });
   return { best: top[0], top, gens };
+}
+
+/**
+ * recognise → search: the typed scene gives structure, procedural search
+ * refines beyond its templates. Measured (2026-09-25, 6 prompts, head-to-head
+ * judged by Jev in both orders): unseeded search lost every prompt (judge
+ * preferred recognise 69–99%; best scores plateaued 39–65%) — ~12 random-
+ * palette children × 7 sequential generations spends DEPTH where Jev's width
+ * is free. Here: seeded with recognise's finalists, mutations restricted to
+ * the scene's colours, WIDE generations (≤96 children) and few of them.
+ */
+export async function refine(prompt: string, d: ImageDeps, onEvent?: (e: ImageEvent | SearchEvent) => void): Promise<{ best: Scored; top: Scored[]; scene: SceneChoice; base: Scored }> {
+  const r = await draw(prompt, d, onEvent);
+  const palette = [...new Set([r.scene.bg, ...r.scene.layers.map((l) => l.color)])] as Color[];
+  const s = await search(prompt, d, { seeds: r.top, palette: palette.length > 1 ? palette : PALETTE, gens: 3, pop: 12, elite: 6, children: 16 }, onEvent);
+  return { best: s.best, top: s.top, scene: r.scene, base: r.best };
 }
