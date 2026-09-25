@@ -16771,8 +16771,28 @@ const canopyMesh = new THREE.Mesh(new THREE.BufferGeometry(), canopyMat);
 canopyMesh.name = 'canopy';
 canopyMesh.frustumCulled = false;
 scene.add(canopyMesh);
+// THE OUTER RING: the same surface at twice the step, from the inner square
+// out to the tree draw range, so every tree the canopy stands in for is
+// under a roof and the budget it frees can only go to edges and verges.
+const canopyOuter = new THREE.Mesh(new THREE.BufferGeometry(), canopyMat);
+canopyOuter.name = 'canopy-outer';
+canopyOuter.frustumCulled = false;
+scene.add(canopyOuter);
 let canopyAt = { x: NaN, z: NaN, t: 0, org: '', tb: -1 };
-const canopyStat = { builds: 0, ms: 0, cells: 0, tris: 0, hid: 0 };
+const canopyStat = { builds: 0, ms: 0, cells: 0, tris: 0, hid: 0, share: 0 };
+// ── THE BUDGET THE CANOPY FREES ──
+//
+// The tree triangle budget is a target the allocator always spends: measured at
+// Nagato, hiding 7,538 interior trees moved the bill from 0.68M to 0.72M,
+// because the slots went straight to trees further out. So with the canopy up
+// the budget itself shrinks by the share of trees the canopy stands in for,
+// less CANOPY_KEEP of it, which is left for the edges and verges the canopy
+// cannot draw.
+const CANOPY_KEEP = 0.25;
+function canopyBudgetK(): number {
+  if (!CANOPY_ON || !canopyGrids.length) return 1;
+  return Math.max(0.3, 1 - (1 - CANOPY_KEEP) * canopyStat.share);
+}
 function canopyHash(i: number, j: number, k: number): number {
   let h = (i * 374761393 + j * 668265263 + k * 2147483647) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
@@ -16798,37 +16818,51 @@ function canopyEvidence(x: number, z: number): number {
 // one is whole, stepped from the frame loop rather than the tree refresh.
 const CANOPY_SLICE_MS = 3;
 interface CanopyJob { x0: number; z0: number; fx: number; fz: number; j: number; org: string; tb: number;
+  step: number; N: number; hole: [number, number, number, number] | null; mesh: THREE.Mesh;
   pos: Float32Array; col: Float32Array; ev: Float32Array; ms: number; near: boolean; }
-let canopyJob: CanopyJob | null = null;
-/** The last COMMITTED canopy's evidence lattice, which the tree gather reads to
- *  leave the interior of a closed stand to the canopy. */
-let canopyGrid: { x0: number; z0: number; V: number; ev: Float32Array; fx: number; fz: number; near: boolean } | null = null;
+type CanopyGrid = { x0: number; z0: number; V: number; step: number; ev: Float32Array; fx: number; fz: number; near: boolean };
+let canopyJobs: CanopyJob[] = [];
+/** The last COMMITTED lattices, inner then outer, which the tree gather reads
+ *  to leave the interior of a closed stand to the canopy. */
+let canopyGrids: CanopyGrid[] = [];
+function canopyStartJobs(fx: number, fz: number, org: string, now: number): void {
+  const half = (CANOPY_N * CANOPY_STEP) / 2;
+  const ix0 = Math.round((fx - half) / 32) * 32, iz0 = Math.round((fz - half) / 32) * 32;
+  const span = CANOPY_N * CANOPY_STEP, oStep = CANOPY_STEP * 2;
+  const outerHalf = Math.max(half, treeRange + 60);
+  const M = Math.max(0, Math.ceil((outerHalf - half) / oStep));
+  const near = camMode !== 'top';
+  const mk = (x0: number, z0: number, step: number, N: number, hole: CanopyJob['hole'], mesh: THREE.Mesh): CanopyJob => {
+    const V = N + 1;
+    return { x0, z0, fx, fz, j: 0, org, tb: terrainBuilds, step, N, hole, mesh,
+      pos: new Float32Array(V * V * 3), col: new Float32Array(V * V * 3), ev: new Float32Array(V * V), ms: 0, near };
+  };
+  canopyJobs = [mk(ix0, iz0, CANOPY_STEP, CANOPY_N, null, canopyMesh)];
+  if (M > 0) canopyJobs.push(mk(ix0 - M * oStep, iz0 - M * oStep, oStep, 2 * M + span / oStep,
+    [ix0, iz0, ix0 + span, iz0 + span], canopyOuter));
+  canopyAt = { x: fx, z: fz, t: now, org, tb: terrainBuilds };
+}
 function stepCanopy(now: number): void {
-  canopyMesh.visible = CANOPY_ON;
-  if (!CANOPY_ON) { canopyJob = null; canopyGrid = null; return; }
-  if (!canopyJob) {
+  canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
+  if (!CANOPY_ON) { canopyJobs = []; canopyGrids = []; return; }
+  if (!canopyJobs.length) {
     const [fx, fz] = renderFocusXZ();
     const org = `${origin.lat},${origin.lon}`;
     const moved = Math.hypot(fx - canopyAt.x, fz - canopyAt.z);
     if (!(moved > 120) && org === canopyAt.org && terrainBuilds === canopyAt.tb && canopyAt.t > 0) return;
     if (canopyAt.t > 0 && now - canopyAt.t < 1500 && !(moved > 120) && org === canopyAt.org) return;
-    const half = (CANOPY_N * CANOPY_STEP) / 2, V = CANOPY_N + 1;
-    canopyJob = { x0: Math.round((fx - half) / 32) * 32, z0: Math.round((fz - half) / 32) * 32, fx, fz, j: 0, org,
-      tb: terrainBuilds, pos: new Float32Array(V * V * 3), col: new Float32Array(V * V * 3), ev: new Float32Array(V * V),
-      ms: 0, near: camMode !== 'top' };
-    canopyAt = { x: fx, z: fz, t: now, org, tb: terrainBuilds };
+    canopyStartJobs(fx, fz, org, now);
   }
-  const J = canopyJob, V = CANOPY_N + 1, t0 = performance.now();
+  const J = canopyJobs[0], V = J.N + 1, t0 = performance.now();
   while (J.j < V && performance.now() - t0 < CANOPY_SLICE_MS) {
     const j = J.j++;
     for (let i = 0; i < V; i++) {
-      const x = J.x0 + i * CANOPY_STEP, z = J.z0 + j * CANOPY_STEP, k = j * V + i;
-      const e = canopyEvidence(x, z);
+      const x = J.x0 + i * J.step, z = J.z0 + j * J.step, k = j * V + i;
       // Clear of the carriageway AND its verge, and clear of the view's own
       // near field: the first chase frames stood the roof over the kerb and
       // put the camera under its edge. Near the eye a forest is trees.
       const nearFade = !J.near ? 1 : Math.min(1, Math.max(0, (Math.hypot(x - J.fx, z - J.fz) - CANOPY_NEAR) / 40));
-      J.ev[k] = onCarriageway(x, z, 7).road ? 0 : e * nearFade;
+      J.ev[k] = onCarriageway(x, z, 7).road ? 0 : canopyEvidence(x, z) * nearFade;
       const g = groundAt(x, z);
       const stand = CANOPY_H * (0.8 + 0.4 * canopyHash(Math.floor(x / 90), Math.floor(z / 90), 7));
       // A STAND HAS A SIDE: the roof rises over one lattice step, not over the
@@ -16837,7 +16871,7 @@ function stepCanopy(now: number): void {
       const ramp = rise * rise * (3 - 2 * rise);
       J.pos[k * 3] = x; J.pos[k * 3 + 1] = g + ramp * stand * 0.88; J.pos[k * 3 + 2] = z;
       // The ground's own palette under the stand, pulled toward leaf, so the
-      // canopy and the far terrain's forest are one tone at the square's edge.
+      // canopy and the far terrain's forest are one tone at the ring's edge.
       const pc = terrainPalette(sampleHeight(x, z) + baseElev, 0, 10, x, z);
       J.col[k * 3] = pc[0] * 0.85; J.col[k * 3 + 1] = pc[1] * 1.05; J.col[k * 3 + 2] = pc[2] * 0.8;
     }
@@ -16845,7 +16879,12 @@ function stepCanopy(now: number): void {
   J.ms += performance.now() - t0;
   if (J.j < V) return;
   const idx: number[] = [];
-  for (let j = 0; j < CANOPY_N; j++) for (let i = 0; i < CANOPY_N; i++) {
+  const H = J.hole;
+  for (let j = 0; j < J.N; j++) for (let i = 0; i < J.N; i++) {
+    if (H) {
+      const cx = J.x0 + (i + 0.5) * J.step, cz = J.z0 + (j + 0.5) * J.step;
+      if (cx > H[0] && cx < H[2] && cz > H[1] && cz < H[3]) continue;
+    }
     const a = j * V + i, b = a + 1, c = a + V, d = c + 1;
     if (Math.min(J.ev[a], J.ev[b], J.ev[c], J.ev[d]) < 0.25) continue;
     idx.push(a, c, b, b, c, d);
@@ -16855,32 +16894,42 @@ function stepCanopy(now: number): void {
   geo.setAttribute('color', new THREE.BufferAttribute(J.col, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  canopyMesh.geometry.dispose();
-  canopyMesh.geometry = geo;
-  canopyGrid = { x0: J.x0, z0: J.z0, V, ev: J.ev, fx: J.fx, fz: J.fz, near: J.near };
-  canopyStat.builds++; canopyStat.ms = +J.ms.toFixed(1);
-  canopyStat.cells = idx.length / 6; canopyStat.tris = idx.length / 3;
-  canopyJob = null;
+  J.mesh.geometry.dispose();
+  J.mesh.geometry = geo;
+  const grid: CanopyGrid = { x0: J.x0, z0: J.z0, V, step: J.step, ev: J.ev, fx: J.fx, fz: J.fz, near: J.near };
+  if (J.mesh === canopyMesh) { canopyGrids = [grid]; canopyStat.ms = 0; canopyStat.cells = 0; canopyStat.tris = 0; }
+  else canopyGrids = [...canopyGrids.slice(0, 1), grid];
+  canopyStat.ms = +(canopyStat.ms + J.ms).toFixed(1);
+  canopyStat.cells += idx.length / 6; canopyStat.tris += idx.length / 3;
+  canopyJobs.shift();
+  if (!canopyJobs.length) canopyStat.builds++;
 }
 /** A tree the canopy stands in for: its site is well inside a closed stand
  *  (every lattice node around it at full evidence) and past the near field,
  *  so its crown would be under the roof. Edge trees, verge trees and the near
  *  field stay individual — that is where the budget this frees goes. */
 function canopyHides(x: number, z: number): boolean {
-  const G = canopyGrid;
-  if (!G) return false;
-  const u = (x - G.x0) / CANOPY_STEP, v = (z - G.z0) / CANOPY_STEP;
-  const i = Math.floor(u), j = Math.floor(v);
-  if (i < 1 || j < 1 || i >= G.V - 2 || j >= G.V - 2) return false;
-  for (let b = -1; b <= 2; b++) for (let a = -1; a <= 2; a++) if (G.ev[(j + b) * G.V + i + a] < 0.8) return false;
-  if (G.near && Math.hypot(x - G.fx, z - G.fz) < CANOPY_NEAR + 60) return false;
-  return true;
+  for (const G of canopyGrids) {
+    const u = (x - G.x0) / G.step, v = (z - G.z0) / G.step;
+    const i = Math.floor(u), j = Math.floor(v);
+    if (i < 1 || j < 1 || i >= G.V - 2 || j >= G.V - 2) continue;
+    // The inner grid answers where it covers; a point on its rim falls through
+    // to the outer ring, whose own lattice covers the same ground coarser.
+    const r = G.step > CANOPY_STEP ? 1 : 2;
+    for (let b = -1; b <= r; b++) for (let a = -1; a <= r; a++) {
+      const k = (j + b) * G.V + i + a;
+      if (k < 0 || k >= G.ev.length || G.ev[k] < 0.8) return false;
+    }
+    if (G.near && Math.hypot(x - G.fx, z - G.fz) < CANOPY_NEAR + 60) return false;
+    return true;
+  }
+  return false;
 }
 (window as unknown as { __canopy?: object }).__canopy = (on?: boolean): object => {
-  if (on !== undefined) { CANOPY_ON = on; canopyAt.t = 0; canopyJob = null; if (!on) canopyGrid = null; }
+  if (on !== undefined) { CANOPY_ON = on; canopyAt.t = 0; canopyJobs = []; if (!on) canopyGrids = []; }
   const hist = [0, 0, 0, 0, 0, 0];
-  if (canopyGrid) for (const e of canopyGrid.ev) hist[Math.min(5, Math.floor(e * 6 + 1e-6))]++;
-  return { on: CANOPY_ON, ...canopyStat, job: canopyJob ? canopyJob.j : null, at: [Math.round(canopyAt.x), Math.round(canopyAt.z)], evHist: hist };
+  for (const G of canopyGrids) for (const e of G.ev) hist[Math.min(5, Math.floor(e * 6 + 1e-6))]++;
+  return { on: CANOPY_ON, ...canopyStat, budgetK: +canopyBudgetK().toFixed(3), job: canopyJobs.length ? canopyJobs[0].j : null, rings: canopyGrids.length, at: [Math.round(canopyAt.x), Math.round(canopyAt.z)], evHist: hist };
 };
 function refreshShrubs(): void {
   shrubs.visible = camMode !== 'top';
@@ -17186,6 +17235,8 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     }
     vegMark('ezGather');
     canopyStat.hid = canopyHid;
+    { let got = 0; for (const f of EZ_FAMILIES) got += cand[f].length;
+      canopyStat.share = canopyHid + got > 0 ? canopyHid / (canopyHid + got) : 0; }
     // The annulus between the draw ring and the impostor's reach. It walks the
     // manifest's own cells — which is the point of the manifest — and seeds any
     // the manifest has not reached yet, under the same slice budget, so a wide
@@ -17358,7 +17409,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       // shortcut cannot promise.
       const pool = new Set(EZ_FAMILIES.filter((f) => want[f] > 0));
       const cap = ezRecord(() => 0);
-      let left = treeTriBudget;
+      let left = treeTriBudget * canopyBudgetK();
       for (let round = 0; round < EZ_FAMILIES.length + 1 && pool.size; round++) {
         let share = 0;
         for (const f of pool) share += ezCapNominal(f) * ezTriPrice(f);
@@ -51645,6 +51696,7 @@ function telemetryReport(): string {
       + ` · cooldown ${vegSeedDeferred ? `${VEG_SEED_CATCHUP}ms (seeding behind)` : '900ms'}`
       + ` · no distance trigger, no priority: the near tier commits with the far one`);
   }
+  if (CANOPY_ON) L.push(`canopy on · rings ${canopyGrids.length} · ${(canopyStat.tris / 1e3).toFixed(0)}k tris · build ${canopyStat.ms}ms sliced · stands in for ${canopyStat.hid} trees (${(canopyStat.share * 100).toFixed(0)}% of the near gather) · tree budget x${canopyBudgetK().toFixed(2)}`);
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge} · mid ${_treeMid} at ${EZ_FULL_PX}px`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);

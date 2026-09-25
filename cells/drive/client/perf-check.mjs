@@ -149,7 +149,7 @@ function context(code,range,ez,triCap,fullPx=0) {
     renderFocusXZ:()=>[c.state.x,c.state.z],
     // The canopy layer is off in this sandbox (it is `?canopy=1` in the game),
     // so it stands in for no tree and every refill compares as before.
-    canopyHides:()=>false,
+    canopyHides:()=>false, canopyBudgetK:()=>1,
     canopyStat:{hid:0},
     ezRecord:record,EZ_FAMILIES:families,EZ_ON:ez,VEG_CAP:cap,vegScale:1,
     TREE_KINDS:families,treePopulationScale:1,treeFormScale:1,treeSizeScale:1,
