@@ -16694,9 +16694,61 @@ let shrubN = 0, shrubNear = 0;
 // a stand height over the drawn ground, with a crown lump per jittered cell so
 // the roof reads as crowns and not as a sheet. Off by default; `?canopy=1`.
 let CANOPY_ON = qsOn('canopy', false);
-const CANOPY_STEP = 4, CANOPY_N = 200, CANOPY_H = 13, CANOPY_CROWN = 6.5;
+const CANOPY_STEP = 4, CANOPY_N = 200, CANOPY_H = 13, CANOPY_CROWN = 6.5, CANOPY_NEAR = 70;
 const canopyMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true });
 terrainFx(canopyMat);
+// THE CROWNS ARE DRAWN PER FRAGMENT, NOT BY THE LATTICE. A 6.5 m crown on a
+// 4 m lattice has no shape — the first frames read as a lawn from above — and a
+// lattice fine enough to carry it costs the triangles this layer exists to
+// save. Per-fragment work is the cheap resource here, so the jittered-cell dome
+// the CPU used to bake is evaluated in the fragment: it darkens the gaps and
+// bends the normal by its own gradient, band-limited on the footprint so a
+// crown under a pixel is its mean tone rather than a shimmer.
+{
+  const prev = canopyMat.onBeforeCompile;
+  canopyMat.onBeforeCompile = (sh, r) => {
+    prev?.call(canopyMat, sh, r);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCanW;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCanW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vCanW;
+float canDome = 0.5; vec2 canGrad = vec2(0.0); float canTone = 0.5;
+float canH(vec2 c, float k) { return fract(sin(dot(c, vec2(127.1 + k * 17.0, 311.7 - k * 5.0))) * 43758.5453); }
+vec2 canEval(vec2 p) {
+  vec2 ci = floor(p); float dome = 0.0; float tone = 0.5;
+  for (int a = -1; a <= 1; a++) for (int b = -1; b <= 1; b++) {
+    vec2 c = ci + vec2(float(a), float(b));
+    vec2 ctr = c + 0.15 + 0.7 * vec2(canH(c, 1.0), canH(c, 2.0));
+    float r = 0.55 + 0.35 * canH(c, 3.0);
+    float d2 = dot(p - ctr, p - ctr) / (r * r);
+    float v = d2 < 1.0 ? sqrt(1.0 - d2) : 0.0;
+    if (v > dome) { dome = v; tone = canH(c, 4.0); }
+  }
+  return vec2(dome, tone);
+}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+{
+  vec2 p = vCanW.xz / ${CANOPY_CROWN.toFixed(2)};
+  float px = max(length(fwidth(p)), 1e-4);
+  float band = 1.0 - smoothstep(0.25, 0.6, px);
+  vec2 e0 = canEval(p);
+  float e = 0.08;
+  float gx = (canEval(p + vec2(e, 0.0)).x - e0.x) / e;
+  float gz = (canEval(p + vec2(0.0, e)).x - e0.x) / e;
+  canDome = mix(0.45, e0.x, band); canTone = mix(0.5, e0.y, band);
+  canGrad = vec2(gx, gz) * band;
+  diffuseColor.rgb *= mix(0.42, 1.12, canDome) * (0.82 + 0.36 * canTone);
+}`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+{
+  vec3 nw = normalize(vec3(-canGrad.x * 0.35, 1.0, -canGrad.y * 0.35));
+  normal = normalize(normal + (viewMatrix * vec4(nw, 0.0)).xyz * 1.4);
+}`);
+  };
+  canopyMat.customProgramCacheKey = () => 'canopy-1';
+}
 const canopyMesh = new THREE.Mesh(new THREE.BufferGeometry(), canopyMat);
 canopyMesh.name = 'canopy';
 canopyMesh.frustumCulled = false;
@@ -16720,22 +16772,6 @@ function canopyEvidence(x: number, z: number): number {
   if (sampleCover(x - 5, z + r) === 10) n++;
   return n / 6;
 }
-/** The crown roof over a point: the tallest dome of the jittered crowns in the
- *  3x3 cells around it, 0 in a gap and 1 at a crown's top. */
-function canopyDome(x: number, z: number): { dome: number; tone: number } {
-  const ci = Math.floor(x / CANOPY_CROWN), cj = Math.floor(z / CANOPY_CROWN);
-  let dome = 0, tone = 0.5;
-  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
-    const i = ci + a, j = cj + b;
-    const cx = (i + 0.15 + 0.7 * canopyHash(i, j, 1)) * CANOPY_CROWN;
-    const cz = (j + 0.15 + 0.7 * canopyHash(i, j, 2)) * CANOPY_CROWN;
-    const r = CANOPY_CROWN * (0.55 + 0.35 * canopyHash(i, j, 3));
-    const d2 = ((x - cx) ** 2 + (z - cz) ** 2) / (r * r);
-    const v = d2 < 1 ? Math.sqrt(1 - d2) : 0;
-    if (v > dome) { dome = v; tone = canopyHash(i, j, 4); }
-  }
-  return { dome, tone };
-}
 function refreshCanopy(now: number): void {
   canopyMesh.visible = CANOPY_ON;
   if (!CANOPY_ON) return;
@@ -16752,15 +16788,17 @@ function refreshCanopy(now: number): void {
   for (let j = 0; j < V; j++) for (let i = 0; i < V; i++) {
     const x = x0 + i * CANOPY_STEP, z = z0 + j * CANOPY_STEP, k = j * V + i;
     const e = canopyEvidence(x, z);
-    ev[k] = onCarriageway(x, z, 2).road ? 0 : e;
+    // Clear of the carriageway AND its verge, and clear of the view's own
+    // near field: the first chase frames stood the roof over the kerb and put
+    // the camera under its edge. Near the eye a forest is trees, not a roof.
+    const nearFade = camMode === 'top' ? 1 : Math.min(1, Math.max(0, (Math.hypot(x - fx, z - fz) - CANOPY_NEAR) / 40));
+    ev[k] = onCarriageway(x, z, 7).road ? 0 : e * nearFade;
     const g = groundAt(x, z);
-    const { dome, tone } = canopyDome(x, z);
     const stand = CANOPY_H * (0.8 + 0.4 * canopyHash(Math.floor(x / 90), Math.floor(z / 90), 7));
     const rise = Math.min(1, Math.max(0, (ev[k] - 0.25) / 0.35));
     const ramp = rise * rise * (3 - 2 * rise);
-    pos[k * 3] = x; pos[k * 3 + 1] = g + ramp * (stand * 0.78 + dome * 3.2); pos[k * 3 + 2] = z;
-    const lit = 0.72 + 0.45 * dome, t = 0.85 + 0.3 * tone;
-    col[k * 3] = 0.19 * lit * t; col[k * 3 + 1] = 0.30 * lit * t; col[k * 3 + 2] = 0.12 * lit * t;
+    pos[k * 3] = x; pos[k * 3 + 1] = g + ramp * stand * 0.88; pos[k * 3 + 2] = z;
+    col[k * 3] = 0.17; col[k * 3 + 1] = 0.28; col[k * 3 + 2] = 0.11;
   }
   const idx: number[] = [];
   for (let j = 0; j < CANOPY_N; j++) for (let i = 0; i < CANOPY_N; i++) {
