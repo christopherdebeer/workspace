@@ -98,3 +98,17 @@ describe('ADR-0077 — Stage B rubric + verdict validation', () => {
     expect([...plan.ratify, ...plan.unlink, ...plan.retype]).toHaveLength(0);
   });
 });
+
+describe('Stage B on Jev (ADR-0098)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { verdictFromJev, STAGE_B_CRITERIA } = require('../cells/consolidate/index');
+  it('maps a Jev choice onto the closed verdict set with its probability as confidence', () => {
+    expect(verdictFromJev({ choice: 'independent', probabilities: { independent: 0.93, duplicate: 0.07 } })).toMatchObject({ verdict: 'independent', confidence: 0.93 });
+    expect(Object.keys(STAGE_B_CRITERIA)).toEqual(['duplicate', 'contradict', 'subsumes', 'independent']);
+  });
+  it('rejects anything outside the set or without a probability', () => {
+    expect(verdictFromJev({ choice: 'delete-everything', probabilities: { 'delete-everything': 1 } })).toBeNull();
+    expect(verdictFromJev({ choice: 'duplicate' })).toBeNull();
+    expect(verdictFromJev(undefined)).toBeNull();
+  });
+});

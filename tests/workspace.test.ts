@@ -1651,6 +1651,49 @@ describe('cell lifecycle projection (the platform reflected in the substrate)', 
     expect(value).toMatchObject({ files: ['index.ts'], dirty: false });
   });
 
+  it('skips pointer rewrites for edits that change neither the file set nor dirty (ADR-0099)', async () => {
+    await event('cell.files.changed', { cellId: 'notes-abc', owner: 'alice', name: 'notes', op: 'write', paths: ['index.ts'] });
+    const first = await cmds.peek({ key: 'cells/notes-abc' }, ctxFor('alice').ctx);
+    expect((first?.value as { dirty: boolean }).dirty).toBe(true);
+    await event('cell.files.changed', { cellId: 'notes-abc', owner: 'alice', name: 'notes', op: 'write', paths: ['index.ts'] });
+    await event('cell.files.changed', { cellId: 'notes-abc', owner: 'alice', name: 'notes', op: 'write', paths: ['index.ts'] });
+    const again = await cmds.peek({ key: 'cells/notes-abc' }, ctxFor('alice').ctx);
+    expect(again?._meta.revision).toBe(first?._meta.revision);
+  });
+
+  it('projects each landed deploy as a cell-deploy fact chained to the cell and the deploy before (ADR-0099)', async () => {
+    await event('cell.deployed', {
+      cellId: 'notes-abc', owner: 'alice', name: 'notes', address: '@alice/notes', version: '200', treeVersion: 'tree:aa',
+      files: ['index.ts'], deployedAt: '2026-09-25T10:00:00.000Z',
+    });
+    await event('cell.deployed', {
+      cellId: 'notes-abc', owner: 'alice', name: 'notes', address: '@alice/notes', version: '201', treeVersion: 'tree:bb',
+      previousTreeVersion: 'tree:aa', files: ['index.ts', 'lib/x.ts'], deployedAt: '2026-09-25T11:00:00.000Z',
+      note: { by: 'alice', actor: 'agent:claude', description: 'add x helper\nlonger body', source: 'git:c15r/workspace@abc' },
+      changes: { added: ['lib/x.ts'], modified: ['index.ts'], removed: [], counts: { added: 1, modified: 1, removed: 0 } },
+    });
+    const pointer = (await cmds.peek({ key: 'cells/notes-abc' }, ctxFor('alice').ctx))?.value as Record<string, unknown>;
+    expect(pointer).toMatchObject({ treeVersion: 'tree:bb', lastDeploy: 'cells/notes-abc/deploy/201' });
+
+    const d = await cmds.peek({ key: 'cells/notes-abc/deploy/201' }, ctxFor('alice').ctx);
+    expect(d?._meta.type).toBe('cell-deploy');
+    expect(d?._meta.tags).toEqual(expect.arrayContaining(['cell-deploy', 'cell:notes']));
+    expect(d?.value).toMatchObject({
+      version: '201', treeVersion: 'tree:bb', previousTreeVersion: 'tree:aa', previous: 'cells/notes-abc/deploy/200',
+      by: 'alice', actor: 'agent:claude', source: 'git:c15r/workspace@abc', summary: 'add x helper',
+    });
+
+    const out = (await state.edges('alice')).filter((e) => e.from === 'cells/notes-abc/deploy/201');
+    expect(out).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rel: 'deployOf', to: 'cells/notes-abc' }),
+      expect.objectContaining({ rel: 'supersedes', to: 'cells/notes-abc/deploy/200' }),
+    ]));
+
+    // Undescribed deploys still get a mechanical summary.
+    const first = await cmds.peek({ key: 'cells/notes-abc/deploy/200' }, ctxFor('alice').ctx);
+    expect((first?.value as { summary: string }).summary).toBe('notes: deploy 200');
+  });
+
   it('marks deletion, refuses non-cells sources, and is queryable by type', async () => {
     await event('cell.delete.requested', { cellId: 'notes-abc', owner: 'alice' });
     const fact = await cmds.peek({ key: 'cells/notes-abc' }, ctxFor('alice').ctx);

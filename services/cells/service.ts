@@ -23,6 +23,8 @@ import {
   BLOB_INLINE_MAX_BYTES,
 } from '../../platform/runtime';
 import { createRegistry, CellRecord, CellRegistry, DeployState } from './registry';
+import type { DeployNote } from './registry';
+import { leafActOf } from '../../platform/runtime/auth';
 import { buildCellTemplate, cellResourceName, cellStackName } from './cell-template';
 import { transpileCell, bundleFiles, bundleClientFiles } from './transpile';
 import {
@@ -1516,6 +1518,10 @@ interface ApplyPatchSetInput extends CellRef {
   snapshot?: boolean;
   /** Deploy exactly the resulting tree. */
   deploy?: boolean;
+  /** ADR-0099: with deploy:true, why — recorded on the deploy fact (optional). */
+  description?: string;
+  /** ADR-0099: with deploy:true, where the source came from (optional). */
+  source?: string;
   /** Context lines in the dry-run diff (default 3). */
   contextLines?: number;
 }
@@ -1746,7 +1752,7 @@ async function applyPatchSet(input: ApplyPatchSetInput, ctx: ServiceContext): Pr
   }
   ctx.logger.info('cell patch set applied', { cellId: record.cellId, files: changedPaths.length, treeVersion: result.treeVersion });
   if (input.deploy && snapTreeVersion) {
-    const started = await requestDeploy(record, env, ctx, snapTreeVersion);
+    const started = await requestDeploy(record, env, ctx, snapTreeVersion, { description: input.description, source: input.source });
     return { ...result, deploy: started.deploy };
   }
   if (changedPaths.length) await emitFilesChanged(ctx, record, 'patch', changedPaths);
@@ -1958,6 +1964,47 @@ const CLIENT_ENTRIES = ['client/main.tsx', 'client/main.ts', 'client/index.tsx',
 interface DeployPin {
   treeVersion?: string;
   version?: string;
+  /** ADR-0099: who asked and why — rides onto `cell.deployed`. */
+  note?: DeployNote;
+  /** ADR-0099: the tree live before this deploy, for the file-level change summary. */
+  previousTreeVersion?: string;
+}
+
+/** A deploy's file-level change against the previously deployed tree (ADR-0099). */
+export interface DeployChanges {
+  added: string[];
+  modified: string[];
+  removed: string[];
+  counts: { added: number; modified: number; removed: number };
+  /** True when a list was clipped at DEPLOY_CHANGES_LIST_MAX. */
+  truncated?: boolean;
+}
+const DEPLOY_CHANGES_LIST_MAX = 50;
+
+/** Pure: diff two {path→content version} listings into a DeployChanges. */
+export function deployChangesOf(
+  before: Array<{ path: string; version: string }>,
+  after: Array<{ path: string; version: string }>,
+): DeployChanges {
+  const a = new Map(before.map((f) => [f.path, f.version]));
+  const b = new Map(after.map((f) => [f.path, f.version]));
+  const added: string[] = [];
+  const modified: string[] = [];
+  const removed: string[] = [];
+  for (const [p, v] of b) {
+    if (!a.has(p)) added.push(p);
+    else if (a.get(p) !== v) modified.push(p);
+  }
+  for (const p of a.keys()) if (!b.has(p)) removed.push(p);
+  const cap = (xs: string[]) => xs.sort().slice(0, DEPLOY_CHANGES_LIST_MAX);
+  const truncated = [added, modified, removed].some((xs) => xs.length > DEPLOY_CHANGES_LIST_MAX);
+  return {
+    added: cap([...added]),
+    modified: cap([...modified]),
+    removed: cap([...removed]),
+    counts: { added: added.length, modified: modified.length, removed: removed.length },
+    ...(truncated ? { truncated: true } : {}),
+  };
 }
 
 /**
@@ -2134,6 +2181,20 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     static: staticFiles.length,
     types: declaredTypes?.length ?? 0,
   });
+  // ADR-0099: the file-level change against the tree that was live before —
+  // best-effort (a legacy unpinned deploy has no prior snapshot to diff).
+  let changes: DeployChanges | undefined;
+  if (pin.treeVersion && pin.previousTreeVersion && pin.previousTreeVersion !== pin.treeVersion) {
+    try {
+      const store = new TreeStore(env.codeBucket, record.cellId);
+      const [prev, next] = await Promise.all([store.loadSnapshot(pin.previousTreeVersion), store.loadSnapshot(pin.treeVersion)]);
+      if (prev && next) changes = deployChangesOf(prev.files, next.files);
+    } catch (err) {
+      ctx.logger.warn('deploy change summary failed (deploy unaffected)', { cellId: record.cellId, error: (err as Error).message });
+    }
+  } else if (pin.treeVersion && pin.previousTreeVersion === pin.treeVersion) {
+    changes = deployChangesOf([], []);
+  }
   await ctx.events.emit('cell.deployed', {
     cellId: record.cellId,
     owner: record.owner,
@@ -2142,6 +2203,10 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     public: record.public,
     version,
     ...(pin.treeVersion ? { treeVersion: pin.treeVersion } : {}),
+    ...(pin.previousTreeVersion ? { previousTreeVersion: pin.previousTreeVersion } : {}),
+    ...(pin.note ? { note: pin.note } : {}),
+    ...(changes ? { changes } : {}),
+    deployedAt: new Date().toISOString(),
     files: Object.keys(files),
     clientEntry: clientEntry ?? null,
     staticFiles,
@@ -2182,7 +2247,13 @@ interface DeployStarted {
  *  (routed back to `onDeployRequested`), and return the marker. Shared by the
  *  `deploy` command and the write/edit `deploy:true` flags so every deploy path
  *  is off the synchronous request/edge timeout. */
-async function requestDeploy(record: CellRecord, env: ForgeEnv, ctx: ServiceContext, treeVersion?: string): Promise<DeployStarted> {
+async function requestDeploy(
+  record: CellRecord,
+  env: ForgeEnv,
+  ctx: ServiceContext,
+  treeVersion?: string,
+  note: { description?: string; source?: string } = {},
+): Promise<DeployStarted> {
   // PIN THE SOURCE NOW. The worker runs later, off the request path; if it read
   // src/ then, it would build whatever had been written in between — not the
   // tree this request was for. A snapshot freezes it (cheap after the first:
@@ -2202,7 +2273,11 @@ async function requestDeploy(record: CellRecord, env: ForgeEnv, ctx: ServiceCont
     pinned = (await store.snapshot({ createdBy: 'deploy' })).treeVersion;
   }
   const version = `${Date.now()}`;
-  const deployState: DeployState = { phase: 'DEPLOYING', version, requestedAt: new Date().toISOString(), treeVersion: pinned };
+  // ADR-0099: who asked, and (optionally) why — carried to the worker so the
+  // landed `cell.deployed` event can become a durable deploy fact. Bus events
+  // carry no caller identity, so it is captured here, on the authorized path.
+  const deployNote = deployNoteOf(ctx, note);
+  const deployState: DeployState = { phase: 'DEPLOYING', version, requestedAt: new Date().toISOString(), treeVersion: pinned, ...(deployNote ? { note: deployNote } : {}) };
   await createRegistry(env.registryTable).setDeploy(record.cellId, deployState);
   await ctx.events.emit('cell.deploy.requested', {
     cellId: record.cellId,
@@ -2210,6 +2285,7 @@ async function requestDeploy(record: CellRecord, env: ForgeEnv, ctx: ServiceCont
     name: record.name,
     version,
     treeVersion: pinned,
+    ...(deployNote ? { note: deployNote } : {}),
   });
   ctx.logger.info('cell deploy requested', { cellId: record.cellId, version, treeVersion: pinned });
   return {
@@ -2225,12 +2301,50 @@ async function requestDeploy(record: CellRecord, env: ForgeEnv, ctx: ServiceCont
 interface DeployInput extends CellRef {
   /** Deploy exactly this snapshot (default: snapshot the current tree now). */
   treeVersion?: string;
+  /** ADR-0099: why this deploy — a commit-message-grade line (optional). */
+  description?: string;
+  /** ADR-0099: where the source came from — e.g. `git:<repo>@<sha>` or a tarball URL (optional). */
+  source?: string;
+}
+
+const DEPLOY_DESCRIPTION_MAX = 1000;
+const DEPLOY_SOURCE_MAX = 500;
+
+/**
+ * The deploy's provenance (ADR-0099): the authorized caller — principal, the
+ * delegated leaf actor (ADR-0024) and the self-declared participant (ADR-0086)
+ * — plus the caller's optional description and source. Provenance only: none
+ * of it gates anything. Over-long text is clipped, not refused — a deploy never
+ * fails for its note.
+ */
+export function deployNoteOf(
+  ctx: Pick<ServiceContext, 'identity'>,
+  note: { description?: string; source?: string } = {},
+): DeployNote | undefined {
+  const clip = (v: unknown, max: number): string | undefined => {
+    if (typeof v !== 'string') return undefined;
+    const t = v.trim();
+    return t ? (t.length > max ? `${t.slice(0, max - 1)}…` : t) : undefined;
+  };
+  const by = ctx.identity?.user;
+  const actor = leafActOf(ctx.identity) ?? undefined;
+  const participant = clip(ctx.identity?.participant, 120);
+  const description = clip(note.description, DEPLOY_DESCRIPTION_MAX);
+  const source = clip(note.source, DEPLOY_SOURCE_MAX);
+  const out: DeployNote = {
+    ...(by ? { by } : {}),
+    ...(actor && actor !== by ? { actor } : {}),
+    ...(participant ? { participant } : {}),
+    ...(description ? { description } : {}),
+    ...(source ? { source } : {}),
+  };
+  return Object.keys(out).length ? out : undefined;
 }
 
 async function deploy(input: DeployInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   const { record, env } = await resolveAuthorized(input, user);
-  return requestDeploy(record, env, ctx, input?.treeVersion);
+  return requestDeploy(record, env, ctx, input?.treeVersion, { description: input?.description, source: input?.source });
 }
 
 /**
@@ -2274,8 +2388,19 @@ async function onDeployRequested(detail: Record<string, unknown>, ctx: ServiceCo
       : !eventVersion || current?.version === eventVersion
         ? current?.treeVersion
         : undefined;
+  const note =
+    detail.note && typeof detail.note === 'object'
+      ? (detail.note as DeployNote)
+      : !eventVersion || current?.version === eventVersion
+        ? current?.note
+        : undefined;
   try {
-    const result = (await deployCell(record, env, ctx, { treeVersion, version: eventVersion ?? current?.version })) as { version: string };
+    const result = (await deployCell(record, env, ctx, {
+      treeVersion,
+      version: eventVersion ?? current?.version,
+      note,
+      previousTreeVersion: record.lastDeployed?.treeVersion,
+    })) as { version: string };
     const deployedAt = new Date().toISOString();
     await registry.setDeploy(cellId, { phase: 'DEPLOYED', version: result.version, requestedAt, ...(treeVersion ? { treeVersion } : {}) });
     await registry.setLastDeployed(cellId, { version: result.version, ...(treeVersion ? { treeVersion } : {}), deployedAt });
@@ -3278,6 +3403,8 @@ const TOOLS: Record<string, ToolSpec> = {
         dryRun: { type: 'boolean', description: 'Validate; return conflicts, combined diff and projected treeVersion; write nothing' },
         snapshot: { type: 'boolean', description: 'Freeze the resulting tree' },
         deploy: { type: 'boolean', description: 'Deploy exactly the resulting tree (implies snapshot)' },
+        description: { type: 'string', description: 'With deploy:true — optional WHY for the deploy fact (ADR-0099)' },
+        source: { type: 'string', description: 'With deploy:true — optional source provenance, e.g. "git:owner/repo@<sha>" (ADR-0099)' },
         contextLines: { type: 'number', description: 'Dry-run diff context (0–10, default 3)' },
       },
       required: ['changes'],
@@ -3408,7 +3535,7 @@ const TOOLS: Record<string, ToolSpec> = {
     handler: readFiles as RegisteredCommand,
   },
   deploy: {
-    description: "Bundle a cell's source (resolving relative imports) and point its Lambda at the new build — no cdk deploy. SOURCE-PINNED: the deploy builds an immutable snapshot — `treeVersion` if given (from cells.status / cells.snapshot / applyPatchSet), else a snapshot of the tree taken now — never whatever src/ holds when the worker runs. Runs ASYNCHRONOUSLY: returns immediately with `deploy.phase: DEPLOYING` and the pinned `treeVersion`; poll `get` until `deploy.phase` is DEPLOYED (or FAILED, with `deploy.error`). A newer deploy supersedes an older one still bundling.",
+    description: "Bundle a cell's source (resolving relative imports) and point its Lambda at the new build — no cdk deploy. SOURCE-PINNED: the deploy builds an immutable snapshot — `treeVersion` if given (from cells.status / cells.snapshot / applyPatchSet), else a snapshot of the tree taken now — never whatever src/ holds when the worker runs. Runs ASYNCHRONOUSLY: returns immediately with `deploy.phase: DEPLOYING` and the pinned `treeVersion`; poll `get` until `deploy.phase` is DEPLOYED (or FAILED, with `deploy.error`). A newer deploy supersedes an older one still bundling. Each landed deploy becomes a durable `cells/<id>/deploy/<version>` fact (who, why, source, files changed) linked to the cell and the deploy before it (ADR-0099) — pass `description` to say why.",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -3416,6 +3543,8 @@ const TOOLS: Record<string, ToolSpec> = {
       properties: {
         ...CELL_REF_PROPS,
         treeVersion: { type: 'string', description: 'Deploy exactly this tree (tree:<hash>). Omit to snapshot and deploy the current tree.' },
+        description: { type: 'string', description: 'Optional, recommended: WHY this deploy — one commit-message-grade line (≤1000 chars). Recorded on the durable cells/<id>/deploy/<version> fact (ADR-0099); absent, the fact still carries the file-level change summary.' },
+        source: { type: 'string', description: 'Optional: where this source came from — e.g. "git:owner/repo@<sha>" or the importSrc tarball URL (≤500 chars).' },
       },
       additionalProperties: false,
     },
