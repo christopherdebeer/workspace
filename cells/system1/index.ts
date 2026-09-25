@@ -436,7 +436,21 @@ const gw = (token: Tok, target: string, input?: unknown, kind?: 'read' | 'act') 
 const isErr = (v: unknown): v is { error: string } =>
   !!v && typeof v === 'object' && 'error' in (v as object) && Object.keys(v as object).length === 1;
 
+/* Per-write delivery (ADR-0098 Inc 3) calls perceive once per settled fact, so
+ * the slow-changing context (projects, goals, types, calibration) is cached in
+ * the warm Lambda for a few minutes instead of re-read on every write. */
+const CTX_TTL_MS = 5 * 60_000;
+let ctxCache: { at: number; value: { projects: Project[]; goals: Goal[]; types: string[] } } | null = null;
+let thCache: { at: number; value: Thresholds } | null = null;
+
 async function loadThresholds(token: Tok): Promise<Thresholds> {
+  if (thCache && Date.now() - thCache.at < CTX_TTL_MS) return thCache.value;
+  const value = await loadThresholdsFresh(token);
+  thCache = { at: Date.now(), value };
+  return value;
+}
+
+async function loadThresholdsFresh(token: Tok): Promise<Thresholds> {
   try {
     const cal = (await gw(token, 'workspace.peek', { key: CALIBRATION_KEY }, 'read')) as { value?: { thresholds?: Partial<Thresholds> } } | null;
     return { ...DEFAULT_THRESHOLDS, ...(cal?.value?.thresholds ?? {}) };
@@ -446,6 +460,13 @@ async function loadThresholds(token: Tok): Promise<Thresholds> {
 }
 
 async function loadContext(token: Tok): Promise<{ projects: Project[]; goals: Goal[]; types: string[] }> {
+  if (ctxCache && Date.now() - ctxCache.at < CTX_TTL_MS) return ctxCache.value;
+  const value = await loadContextFresh(token);
+  if (value.projects.length || value.goals.length) ctxCache = { at: Date.now(), value };
+  return value;
+}
+
+async function loadContextFresh(token: Tok): Promise<{ projects: Project[]; goals: Goal[]; types: string[] }> {
   const [proj, goals, types] = await gwCallMany(
     token,
     [
