@@ -959,6 +959,16 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
    *  hollow beside the water; the shore band is bank shaping's, not this. */
   /** The sea's drawn coverage from the second half of the floor lattice, or
    *  null where the tile has no field to say (the cover evidence decides). */
+  /** The nearest land class to a point the cover calls water: four taps a
+   *  cover pixel out, then two, first non-water answer wins. */
+  function landNear(S: TerrainStore, x: number, z: number): number | null {
+    const px = 38;   // a z12 cover pixel at mid latitude; the store does not carry it
+    for (const k of [1, 2]) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const c = S.sampleCover(x + dx * px * k, z + dz * px * k);
+      if (c !== null && c !== undefined && c !== S.cover.water && c !== 70) return c;
+    }
+    return null;
+  }
   function hydroSeaCovAt(fl: { n: number; data: Float32Array } | null, t: HeightTile, x: number, z: number): number | null {
     if (!fl || fl.data.length < fl.n * fl.n * 2) return null;
     const n = fl.n, o = n * n;
@@ -2550,6 +2560,7 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
     storeBorder(S, t, pos);
     const p5 = performance.now();
     const kinds = refined ? refined.kinds : null;
+    let bankFloor: { n: number; data: Float32Array } | null | undefined;
     for (let i = 0; i < (pos.length / 3); i++) {
       const ex = pos[(i) * 3] + cxm, ez = pos[(i) * 3 + 2] + czm;
       const elevAbs = pos[(i) * 3 + 1] + S.baseElev;
@@ -2591,7 +2602,22 @@ export function createTerrainKernel(buildSubstrateCells: SubstrateBuilder, subFi
       // at the same point, and it was being asked twice.
       // A stack stands in the sea and the cover raster says water: inside a
       // plinth the ground is bare rock, whatever grows on the pixel under it.
-      const cp = plinthAt(S, t, ex, ez) ? 60 : S.coverPaint(ex, ez);
+      let cp = plinthAt(S, t, ex, ez) ? 60 : S.coverPaint(ex, ez);
+      // ── WATER THE WATER DOES NOT DRAW IS BANK ──
+      //
+      // The cover raster is 38 m a pixel and calls a strip of every river's
+      // bank WATER, wider than the water the hydro field actually draws. That
+      // strip took the water class's teal tint and — because water's grain is
+      // zero, the substrate's veto for open water and snow — none of the
+      // substrate's layers, so it stood as a pale band of raw palette between
+      // the river and a meadow the substrate had greened (the Senqu top view;
+      // with the substrate off the whole meadow is that pale). Where the field
+      // is published and draws no water here, the vertex takes the land class
+      // of its nearest non-water neighbour instead. No field yet: unchanged.
+      if (cp === S.cover.water) {
+        const drawn = hydroSeaCovAt(bankFloor ??= S.hydroFloor(t), t, ex, ez);
+        if (drawn !== null && drawn < 0.5) cp = landNear(S, ex, ez) ?? cp;
+      }
       let [r, g, bb] = S.palette(elevAbs, slope, cp, ex, ez);
       // ── A BEACH IS BARE GROUND AT THE SEA'S OWN LEVEL, AND IT IS SAND ──
       //

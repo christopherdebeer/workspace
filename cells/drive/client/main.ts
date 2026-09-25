@@ -6321,13 +6321,25 @@ const lumaMat = new THREE.ShaderMaterial({
     uniform sampler2D src; uniform sampler2D uDep;
     uniform float uNear; uniform float uFar; varying vec2 vUv;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+    // A NON-FINITE WITNESS in alpha: 0 where any of five samples across this
+    // cell of the scene is NaN or infinite, 1 otherwise. A byte readback
+    // cannot hold a NaN (it lands as whatever the driver makes of it), so the
+    // test has to happen here, on the float target. Five samples a cell over
+    // 40x88 cells is not every pixel — a lone NaN pixel can slip between them —
+    // but the flash the seat reports is a frame-sized event, and one the
+    // composite's blurs would have spread in any case.
+    float bad(vec3 v){ return (v.x != v.x || v.y != v.y || v.z != v.z || abs(v.x) + abs(v.y) + abs(v.z) > 1e30) ? 1.0 : 0.0; }
     void main(){
-      vec3 c = srgb(max(texture2D(src, vUv).rgb, 0.0));
+      vec3 raw = texture2D(src, vUv).rgb;
+      vec2 h = vec2(0.33 / ${LUMA_W}.0, 0.33 / ${LUMA_H}.0);
+      float nb = bad(raw) + bad(texture2D(src, vUv + h).rgb) + bad(texture2D(src, vUv - h).rgb)
+        + bad(texture2D(src, vUv + vec2(h.x, -h.y)).rgb) + bad(texture2D(src, vUv + vec2(-h.x, h.y)).rgb);
+      vec3 c = srgb(max(raw, 0.0));
       float dz = texture2D(uDep, vUv).x;
       float vz = (uNear * uFar) / ((uFar - uNear) * dz - uFar);
       float e = floor(clamp(-vz / uFar, 0.0, 1.0) * 65535.0 + 0.5);
-      gl_FragColor = vec4(dot(c, vec3(0.299, 0.587, 0.114)),
-        floor(e / 256.0) / 255.0, mod(e, 256.0) / 255.0, 1.0);
+      gl_FragColor = vec4(nb > 0.0 ? 0.0 : dot(c, vec3(0.299, 0.587, 0.114)),
+        floor(e / 256.0) / 255.0, mod(e, 256.0) / 255.0, nb > 0.0 ? 0.0 : 1.0);
     }`,
   depthTest: false,
   depthWrite: false,
@@ -6344,6 +6356,22 @@ let lumaNext = 0, lumaFar = 62000, lumaPrimed = false;
 let lumaPending: { pbo: WebGLBuffer; sync: WebGLSync; far: number } | null = null;
 let lumaAsync = qs('lumasync') !== '1';   // ?lumasync=1: the old read, for an A/B on a device
 const lumaStat = { async: 0, sync: 0, waits: 0 };
+/** Frames whose scene target held non-finite colour, as the luma pass saw it:
+ *  how many reads caught any, the worst cell count, and the context of the
+ *  last one — where the camera was and what it was doing — because the flash
+ *  the seat reports is periodic while moving and its producer is unknown. */
+const nanStat = { reads: 0, hit: 0, worstCells: 0, lastAt: 0, last: null as null | Record<string, unknown> };
+function lumaNanScan(): void {
+  nanStat.reads++;
+  let n = 0, fx = -1, fy = -1;
+  for (let i = 0; i < LUMA_W * LUMA_H; i++) if (lumaPx[i * 4 + 3] < 128) { if (n === 0) { fx = i % LUMA_W; fy = Math.floor(i / LUMA_W); } n++; }
+  if (!n) return;
+  nanStat.hit++;
+  if (n > nanStat.worstCells) nanStat.worstCells = n;
+  nanStat.lastAt = performance.now();
+  nanStat.last = { cells: n, firstCell: [fx, fy], cam: camMode, x: Math.round(state.x), z: Math.round(state.z),
+    kmh: Math.round(Math.abs(state.speed) * 3.6), t: +(performance.now() / 1000).toFixed(1) };
+}
 function lumaCollect(gl: WebGL2RenderingContext): boolean {
   const p = lumaPending;
   if (!p) return true;
@@ -6358,6 +6386,7 @@ function lumaCollect(gl: WebGL2RenderingContext): boolean {
   lumaFar = p.far;
   lumaPrimed = true;
   lumaStat.async++;
+  lumaNanScan();
   return true;
 }
 function stepLuma(now: number): void {
@@ -6398,7 +6427,9 @@ function stepLuma(now: number): void {
   lumaFar = camera.far;
   lumaPrimed = true;
   lumaStat.sync++;
+  lumaNanScan();
 }
+(window as unknown as { __nan?: object }).__nan = (): object => ({ ...nanStat });
 (window as unknown as { __lumastat?: object }).__lumastat = (): object => ({ ...lumaStat, async: lumaStat.async, on: lumaAsync, pending: !!lumaPending, primed: lumaPrimed });
 const depVec = new THREE.Vector3();
 /** Is a world point in front of everything the frame actually DREW? A ray
@@ -6823,6 +6854,7 @@ const compMat = new THREE.ShaderMaterial({
      * was hiding it.
      */
     uAirBlur: { value: AIR_BLUR },
+    uNanPaint: { value: qsOn('nanpaint', false) ? 1 : 0 },
     /** Exploratory painterly pre-pass: 4-quadrant Kuwahara on sceneTex before grade/quantise. */
     uWash: { value: WASH },
     // ── TILT-SHIFT ──
@@ -6955,7 +6987,7 @@ const compMat = new THREE.ShaderMaterial({
     // term, 2 kills the haze outright, 3 kills the sun lobe. See __haze.
     uniform float uHazeDbg; uniform float uHazeWarm; uniform float uMpp;
     uniform float uHazeE; uniform float uHazeAmt; uniform float uSkyD;
-    uniform float uAirBlur; uniform float uWash; uniform float uTiltAmt; uniform vec3 uFocusP; uniform vec3 uFocusN;
+    uniform float uAirBlur; uniform float uNanPaint; uniform float uWash; uniform float uTiltAmt; uniform vec3 uFocusP; uniform vec3 uFocusN;
     uniform float uTiltSharp; uniform float uTiltBlur; uniform float uTiltNearScale;
     uniform float uTanHalfFov; uniform float uTiltSky;
 ${FILMIC_GLSL}
@@ -7290,6 +7322,15 @@ ${DITHER_GLSL}
       // Scanlines on the PIXEL grid (every other buffer row), so they scale
       // with the art instead of shimmering against the display's real pixels.
       enc *= 1.0 - uScan * mod(floor(vUv.y * uPix.y), 2.0);
+      // ?nanpaint=1: a non-finite SCENE pixel is solid magenta, and a pixel the
+      // post chain made non-finite (a blur that spread one) is dim magenta —
+      // so a screen recording of the flash says where it came from, before
+      // the quantiser paints NaN as the palette's black floor.
+      if (uNanPaint > 0.5) {
+        vec3 sc = texture2D(sceneTex, vUv).rgb;
+        if (sc.x != sc.x || sc.y != sc.y || sc.z != sc.z) enc = vec3(1.0, 0.0, 1.0);
+        else if (enc.x != enc.x || enc.y != enc.y || enc.z != enc.z) enc = vec3(0.45, 0.0, 0.45);
+      }
       gl_FragColor = vec4(clamp(enc, 0.0, 1.0), 1.0);
     }`,
 });
@@ -15360,11 +15401,26 @@ function swardRows(from: number, to: number): void {
       // sweep over ground the worker has not answered for yet, and the sward
       // behaves there as it did before any of this existed rather than
       // guessing from a cover class.
-      if (SUB_SWARD && density > 0) {
+      // ── AND UNDER THE WATER TOO, BECAUSE THE RIVER READS THIS FIELD ──
+      //
+      // The hydro material shades its bed, its damp margin and its bank from
+      // this colour field (`terrainC`). Tinted only where grass grows, a
+      // river's texels kept the raw palette, and on the Senqu the margin drew
+      // as a pale tan band between the water and a meadow the substrate had
+      // greened. Where nothing grows because the cover says water, the field
+      // takes the substrate's composite in full, on the bank's land class —
+      // water's own grain is the substrate's veto — so the river shades its
+      // edge from the colour the ground beside it is actually drawn in.
+      const underWater = density <= 0 && cv === COVER.water;
+      if (SUB_SWARD && (density > 0 || underWater)) {
         const c = subCellAt(wx, wz);
         if (c) {
           const ev = subEvidence(pr, pg, pb);
-          const e = subExpressOf(c.ex, c.db, c.sd, c.gp, ev.veg, subGrainOf(cv));
+          const e = subExpressOf(c.ex, c.db, c.sd, c.gp, ev.veg, subGrainOf(underWater ? COVER.grass : cv));
+          if (underWater) {
+            const [tr, tg, tb] = subLayerTint(pr, pg, pb, e);
+            pr = tr; pg = tg; pb = tb;
+          } else {
           // ── DENSITY THINS ON THE MINERAL SHARE, NOT ON THE GRASSY ONE ──
           //
           // A MULTIPLIER on what the cover class already asked for. The first
@@ -15397,6 +15453,7 @@ function swardRows(from: number, to: number): void {
           // the maximum with it — and a scree apron grows stones through its
           // grass with no shader change at all.
           subMineral = e.rock;
+          }
         }
       }
       swardScratchF[k + 1] = density;
@@ -15592,8 +15649,15 @@ function refreshSwardField(full = true): void {
       // along a trail's edge is the point — so they paint GREY, and the blade
       // test below reads the grey as a thinning, not a wall.
       const fam = TRACK_FAM && sg.tk ? (sg.wid && wayTagLog.get(sg.wid) ? trackFamily(wayTagLog.get(sg.wid)!).fam : null) : null;
-      const grey = fam === 'rut' ? 0.55 : fam === 'trail' ? 0.7 : fam === 'grass' ? 0.3 : 1;
-      swardMaskCtx.strokeStyle = grey >= 1 ? '#fff' : `rgb(${Math.round(grey * 255)},${Math.round(grey * 255)},${Math.round(grey * 255)})`;
+      // …AND WHAT STANDS ON A WORN TRACK IS TRAMPLED. The mask is ~1.5 m a
+      // texel and cannot draw a 0.3 m rut, so thinning alone left tall blades
+      // standing in the ruts (the Senqu cab frame: the whole track under
+      // grass). A worn track writes TRAMPLE in green with blue off (a
+      // carriageway is white: blocked, not trampled), and the blade shader
+      // keeps a tuft there at a quarter of its height — which is what grass
+      // on a track that is driven is.
+      const grey = fam === 'rut' ? 0.35 : fam === 'trail' ? 0.5 : fam === 'grass' ? 0.15 : 1;
+      swardMaskCtx.strokeStyle = grey >= 1 ? '#fff' : `rgb(${Math.round(grey * 255)},255,0)`;
       swardMaskCtx.lineWidth = Math.max(fam === 'paved' || fam === 'hard' ? 2.2 : 1, (sg.hw + 0.35) * 2 * px);
       swardMaskCtx.beginPath();
       swardMaskCtx.moveTo((sg.ax - swardFX) * px, (sg.az - swardFZ) * px);
@@ -15785,7 +15849,10 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         vec2 sP = sCell + (vec2(sH2, sH3) - 0.5) * uStep * 1.35;
         vec2 sUv = (sP - uFieldOrg) / uFieldW;
         vec4 sF = texture2D(uField, sUv);
-        float sBlocked = texture2D(uSwardMask, sUv).r;
+        vec4 sMaskT = texture2D(uSwardMask, sUv);
+        float sBlocked = sMaskT.r;
+        // Worn track: green without blue (see the mask's stroke). Trodden short.
+        float sTrample = clamp(sMaskT.g * (1.0 - sMaskT.b), 0.0, 1.0);
         float sD = length(sP - uSwardEye.xz);
         // ── FLOWERS: RARE, CLUMPED, AND WHAT GROWS DEPENDS ON WHERE "HERE" IS ──
         //
@@ -16030,7 +16097,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // stone is not growing and a reed stands in the one place that is wet
         // by definition, so shortening either would be the mineral share
         // speaking about something it does not describe.
-        float sShort = (sIsStone || sIsReed) ? 1.0 : 1.0 - 0.42 * sMineral;
+        float sShort = (sIsStone || sIsReed) ? 1.0 : (1.0 - 0.42 * sMineral) * mix(1.0, 0.25, sTrample);
         vec3 sLp = sPosL * (0.45 + sSize * 1.30) * sShort * sRangeScale * sAlive;
         // ── AND THE LUSHNESS THE COUNT COULD NOT CARRY IS SPENT HERE ──
         //
@@ -51367,6 +51434,8 @@ function telemetryReport(): string {
       + ` · legend ${themeLegend().map((r) => r.name).join(',') || '—'}`);
     L.push(`ground: holes ${holeStat.now} (never shown ${holeStat.unshown}) · pop-outs ${holeStat.pops} · hidden ${(holeStat.ms / 1000).toFixed(1)}s longest ${Math.round(holeStat.max)}ms · far asked ${farTiles.size - farMeshes.size} stale ${farStale.size} inflight ${farAsking.size}`);
     L.push(`world pass: draw calls mean ${Math.round(drawStat.sumCalls / Math.max(1, drawStat.n))} max ${drawStat.maxCalls} · triangles mean ${(drawStat.sumTris / Math.max(1, drawStat.n) / 1e6).toFixed(2)}M max ${(drawStat.maxTris / 1e6).toFixed(2)}M · recent ${n} passes p50 ${q(0.5)}M p95 ${q(0.95)}M · last ${(drawStat.tris / 1e6).toFixed(2)}M / ${drawStat.calls} calls`); }
+    L.push(`non-finite frames ${nanStat.hit} of ${nanStat.reads} luma reads · worst ${nanStat.worstCells} of ${LUMA_W * LUMA_H} cells`
+      + (nanStat.last ? ` · last ${JSON.stringify(nanStat.last)}` : ''));
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
   { const r = goalSolveStat; if (r.runs) L.push(`route solves ${r.runs} (found ${r.found} failed ${r.failed}) · ms/solve ${(r.totalMs / r.runs).toFixed(0)} (graph ${(r.graphTotalMs / r.runs).toFixed(0)}) max ${Math.round(r.maxMs)} · slices ${r.slices} max ${r.maxSliceMs.toFixed(1)}ms · last span ${Math.round(r.spanMs)}ms · walked ${r.walked}/${r.nodes} (fine ${graphStat.fine} coarse ${graphStat.coarse} portals ${graphStat.portals}) · graph cached ${graphStat.cached ?? 0} · tiles skipped ${r.tilesSkipped} hit ${r.tilesHit} · last ${r.last}`); }
   { const w = swardLedger; L.push(`sward sweeps ${w.sweeps} · steps ${w.steps} ms ${(w.stepMs / Math.max(1, w.steps)).toFixed(1)} max ${Math.round(w.stepMax)} · deferred ${w.deferred} · mask ${w.masks} ms ${(w.maskMs / Math.max(1, w.masks)).toFixed(1)} max ${Math.round(w.maskMax)}`); }
@@ -61015,6 +61084,7 @@ if (timeFromUrl < 0 && !qs('time')
   onSwitch('raincurtain', () => { compMat.uniforms.uRainCurtain.value = qs('raincurtain') === '0' ? 0 : 1; });
   onSwitch('widedither', () => { compMat.uniforms.uDWide.value = qsOn('widedither', true) ? 1 : 0; });
   onSwitch('airblur', () => { compMat.uniforms.uAirBlur.value = qsOn('airblur', false) ? 1 : 0; });
+  onSwitch('nanpaint', () => { compMat.uniforms.uNanPaint.value = qsOn('nanpaint', false) ? 1 : 0; });
   onSwitch('paintwash', () => { compMat.uniforms.uWash.value = clamp(qsNum('paintwash', 0), 0, 1); });
   onSwitch('swardforms', () => { (swardU as unknown as Record<string, { value: number }>).uSwardStructure.value = qsOn('swardforms', true) ? 1 : 0; });
   onSwitch('impink', () => { impInkU.value = clamp(qsNum('impink', 0), 0, 1); });

@@ -19409,3 +19409,34 @@ neither column drew the way at all (the target from `AT=` was not in the
 streamed world when the sheet ran). The claim rests on the burial numbers.
 Pick targets from `__tracks` in the SAME boot as the sheet, never from a
 previous one.
+
+### Tracks, banks and grass share the ground's colour and light (2026-09-25)
+
+Four device reports, one fault family: a surface that does not go through the
+layers its neighbours do reads as a decal.
+
+- **Worn tracks take the substrate's fines colour** (`SUB_K.soil*`, the colour
+  the terrain draws exposed soil in) and chain `terrainFx`, so cloud shadow,
+  weather tint and sky fill match the ground. The first cut lifted the palette
+  8% and pulled it to tan: a step paler than the soil beside it. `slipify` and
+  `terrainFx` both declared `uWxTex`; a track wears both, and the redefinition
+  failed the link — guarded with `DRIVE_WX_DECL` now.
+- **Grass on a worn track is trampled, not thinned.** The sward mask is ~1.5 m a
+  texel and cannot draw a 0.3 m rut, so a worn track writes green-without-blue
+  (a carriageway is white) and blades there grow at a quarter height
+  (`sTrample`), the ribbon's crown gaps carrying the grass colour.
+- **The river's margin reads the substrate too.** The hydro material shades its
+  bed, damp margin and bank from the sward colour field, which took the
+  substrate tint only where grass grows — so under water it held the raw
+  palette, and the Senqu margin drew as a pale tan band beside a meadow the
+  substrate had greened. Hide-diffs: water off, the band goes; substrate off,
+  the whole meadow is that pale; MATERIAL view, the band is the unexpressed
+  ground under the water. Water texels now take the substrate composite in
+  full on the bank's land class. And in the kernel, cover-water the field
+  draws no water over takes its nearest land class (a 38 m cover pixel is
+  wider than a river's drawn water).
+- **The NaN flash has a witness.** The luma pass flags cells whose scene
+  samples are non-finite (`x != x`) in alpha; `__nan()` and the telemetry row
+  `non-finite frames` count them with the camera and speed of the last one;
+  `?nanpaint=1` paints a non-finite scene pixel magenta (dim where the post
+  chain spread one). Not yet reproduced in the harness: 188 reads, 0 hits.

@@ -308,6 +308,8 @@ export const SWITCHES = [
     note: 'railgrade=0 drapes a railway over the ground: no formation, no earthworks, and not drivable' },
   { id: 'airblur', kind: 'toggle', marks: ['legacy', 'look'], apply: 'live', fallback: 'off',
     note: 'airblur=1 puts back the aerial perspective’s distance BLUR — the term that softened a road toward its vanishing point' },
+  { id: 'nanpaint', kind: 'toggle', marks: ['bench'], apply: 'live', fallback: 'off',
+    note: 'nanpaint=1 paints any non-finite scene pixel solid magenta (dim magenta where the post chain spread one), for catching the periodic flash on a screen recording' },
   { id: 'paintwash', kind: 'number', marks: ['look'], apply: 'live', fallback: '0 (off)',
     note: 'paintwash=0..1 runs a 4-quadrant Kuwahara on the scene buffer before grade and quantise — structure-preserving painterly pre-pass (lowest luma-variance sector mean); 0 is the shipped truth' },
   { id: 'tdetail', kind: 'choice', marks: ['look', 'bench'], fallback: 'on',
