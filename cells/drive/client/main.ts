@@ -22223,6 +22223,10 @@ function flushRibbons(): void {
   }
 }
 const DRAPE_STEP_M = qsNum('drapestep', 3);
+/** How deep an UNTAGGED road may be cut through a hill where the profile
+ *  solver deliberately chorded through a knoll — see the burial scan in
+ *  ribbon(). Everywhere else the burial threshold stays TUNNEL_H + 0.6. */
+const CUT_DEEP_M = qsNum('cutdeep', 12);
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string, layer = 0, wayTags?: Record<string, string>, railway = false): void {
   const trackFam: TrackFam | null = TRACK_FAM && track && wayTags && !railway ? trackFamily(wayTags).fam : null;
   /**
@@ -24161,11 +24165,26 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // the profile. An unburied stretch (coarse heightfield, shallow cut) stays
     // an open road; the tube would otherwise stand exposed like a dark box.
     let s = -1;
+    // ── A CUTTING THE SOLVER CHOSE IS NOT A SOLVER MISTAKE ──
+    //
+    // Burial has two causes and they want opposite answers. At Fish Hoek the
+    // GRADE LINE's smoothing pulled a road on a long grade metres under the
+    // hill: an error, and leaving the hill intact is right. At Nagato
+    // (34.4133 131.0816, a tertiary with no tunnel tag) the structure pass saw
+    // a knoll in the along-way profile and deliberately CHORDED through it —
+    // `2d-chord` dropped the station 6 m — which is exactly what an engineered
+    // cutting is, and Street View shows crib-walled cut faces there. The single
+    // 5.6 m threshold hid that road under 75 m of grass. Inside an implicit
+    // chord run of an untagged way the road may be cut to CUT_DEEP_M; the
+    // refined corridor builds real cut faces (CUTF_K), so a 7 m cut is about
+    // 11 m of face a side, not the wash's ten-to-one bench.
+    const chordRun = new Uint8Array(n);
+    if (mode === 'auto') for (const [a, b] of runs) for (let k = a; k <= b && k < n; k++) chordRun[k] = 1;
     for (let i = 0; i < n; i++) {
       // FULLY buried: there must be enough ground overhead to contain the
       // whole tube. The old 1.2m threshold let a 5m shell stand almost four
       // metres proud of flat ground — the black arch hanging over the road.
-      const buried = elevMin[i] - prof[i] > TUNNEL_H + 0.6;
+      const buried = elevMin[i] - prof[i] > (chordRun[i] ? Math.max(TUNNEL_H + 0.6, CUT_DEEP_M) : TUNNEL_H + 0.6);
       if (buried && s < 0) s = i;
       if ((!buried || i === n - 1) && s >= 0) {
         const e = buried ? i : i - 1;

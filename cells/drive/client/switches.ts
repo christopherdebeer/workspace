@@ -304,6 +304,8 @@ export const SWITCHES = [
     note: 'trackfam=0 puts back the single track treatment: every footway, path, cycleway, bridleway and track drawn as one translucent two-rut dirt strip at 4.5-6.5 m' },
   { id: 'drapestep', kind: 'number', marks: ['legacy', 'look'], fallback: '3',
     note: 'metres between the stations a draped way (track, path, footway, steps) is seated at; drapestep=12 is the old spacing, whose quads the terrain lattice poked through' },
+  { id: 'cutdeep', kind: 'number', marks: ['legacy', 'world'], fallback: '12',
+    note: 'metres of hill an UNTAGGED road may be cut through where the profile solver itself chose to cut (an implicit chord run) before it is left buried instead; cutdeep=5.6 is the old single threshold, which hid real cuttings' },
   { id: 'railgrade', kind: 'toggle', marks: ['legacy'], apply: 'world', fallback: 'on',
     note: 'railgrade=0 drapes a railway over the ground: no formation, no earthworks, and not drivable' },
   { id: 'airblur', kind: 'toggle', marks: ['legacy', 'look'], apply: 'live', fallback: 'off',
