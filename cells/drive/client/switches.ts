@@ -302,6 +302,8 @@ export const SWITCHES = [
     note: 'imu=0 drives real GPS without the gyro' },
   { id: 'trackfam', kind: 'toggle', marks: ['legacy', 'look'], apply: 'world', fallback: 'on',
     note: 'trackfam=0 puts back the single track treatment: every footway, path, cycleway, bridleway and track drawn as one translucent two-rut dirt strip at 4.5-6.5 m' },
+  { id: 'drapestep', kind: 'number', marks: ['legacy', 'look'], fallback: '3',
+    note: 'metres between the stations a draped way (track, path, footway, steps) is seated at; drapestep=12 is the old spacing, whose quads the terrain lattice poked through' },
   { id: 'railgrade', kind: 'toggle', marks: ['legacy'], apply: 'world', fallback: 'on',
     note: 'railgrade=0 drapes a railway over the ground: no formation, no earthworks, and not drivable' },
   { id: 'airblur', kind: 'toggle', marks: ['legacy', 'look'], apply: 'live', fallback: 'off',

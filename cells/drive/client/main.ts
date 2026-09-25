@@ -15035,7 +15035,7 @@ const REED_M2 = 0.14;
  * is new carriageway to draw. Water polygons carry their own, because a lake
  * arrives on the same path and masks the same way.
  */
-const swardRoadRev = (): number => osmDone.size + roadGrid.size + waterPolys.size;
+const swardRoadRev = (): number => osmDone.size + roadGrid.size + waterPolys.size + stairRev;
 /** Ground shape: the heights' clock — rebuilds, not tiles. See flushTerrain. */
 const swardGroundRev = (): number => terrainBuilds + (hydroSys?.bankRevision ?? 0);
 const swardU = {
@@ -15514,6 +15514,20 @@ function refreshSwardField(full = true): void {
       swardMaskCtx.beginPath();
       swardMaskCtx.moveTo((sg.ax - swardFX) * px, (sg.az - swardFZ) * px);
       swardMaskCtx.lineTo((sg.bx - swardFX) * px, (sg.bz - swardFZ) * px);
+      swardMaskCtx.stroke();
+    }
+  }
+  // Steps clear the grass like a pavement: a flight is stone or concrete.
+  swardMaskCtx.strokeStyle = '#fff';
+  const sseen = new Set<StairSeg>();
+  for (let gx = c0; gx <= c1; gx++) for (let gz = d0; gz <= d1; gz++) {
+    for (const s of stairGrid.get(`${gx},${gz}`) ?? []) {
+      if (sseen.has(s)) continue;
+      sseen.add(s);
+      swardMaskCtx.lineWidth = Math.max(2.2, (s.hw + 0.35) * 2 * px);
+      swardMaskCtx.beginPath();
+      swardMaskCtx.moveTo((s.ax - swardFX) * px, (s.az - swardFZ) * px);
+      swardMaskCtx.lineTo((s.bx - swardFX) * px, (s.bz - swardFZ) * px);
       swardMaskCtx.stroke();
     }
   }
@@ -18039,6 +18053,25 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   rw?: boolean }
 const wallGrid = new Map<string, Seg[]>();   // building edges — solid
 const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-width
+/** Steps: never drivable, so never in roadGrid — and therefore never in the
+ *  sward's road mask, which is how a flight of steps stood under a meadow's
+ *  worth of grass (the steps A/B at Suresnes showed only grass on both
+ *  sides). Filed here so the mask clears them and `__tracks` can find them. */
+interface StairSeg { ax: number; az: number; bx: number; bz: number; hw: number; wid?: string }
+const stairGrid = new Map<string, StairSeg[]>();
+let stairRev = 0;
+function noteStairs(pts: Array<[number, number]>, w: number, wid?: string): void {
+  for (let i = 1; i < pts.length; i++) {
+    const s: StairSeg = { ax: pts[i - 1][0], az: pts[i - 1][1], bx: pts[i][0], bz: pts[i][1], hw: w / 2, wid };
+    const x0 = Math.floor(Math.min(s.ax, s.bx) / GRID), x1 = Math.floor(Math.max(s.ax, s.bx) / GRID);
+    const z0 = Math.floor(Math.min(s.az, s.bz) / GRID), z1 = Math.floor(Math.max(s.az, s.bz) / GRID);
+    for (let gx = x0; gx <= x1; gx++) for (let gz = z0; gz <= z1; gz++) {
+      const k = `${gx},${gz}`;
+      const a = stairGrid.get(k); if (a) a.push(s); else stairGrid.set(k, [s]);
+    }
+  }
+  stairRev++;
+}
 /**
  * ── AND A RAILWAY IS IN IT TOO, BECAUSE A RAILWAY IS DRIVEABLE ──
  *
@@ -22022,6 +22055,7 @@ function flushRibbons(): void {
     }
   }
 }
+const DRAPE_STEP_M = qsNum('drapestep', 3);
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string, layer = 0, wayTags?: Record<string, string>, railway = false): void {
   const trackFam: TrackFam | null = TRACK_FAM && track && wayTags && !railway ? trackFamily(wayTags).fam : null;
   /**
@@ -22060,7 +22094,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // BENDS, so a long straight segment used to bridge every terrain dip between
   // its endpoints like a causeway. Dense sampling makes the ribbon hug the
   // heightfield.
-  const dense = densifyPts(pts);
+  // A DRAPED way is seated at its vertices and nowhere else, and the terrain
+  // lattice under it is triangulated on its own creases — the corridor's crest
+  // and toe lines, the refinement's splits — so a 12 m quad of footway stood
+  // with a fifth of its triangles under the ground at Suresnes (measured with
+  // __trackburial: 641 of 3,389, worst 1.04 m, every VERTEX on the mesh). The
+  // pavement read as pale fragments in grass. A draped way is narrow and
+  // cheap; three metres a station keeps it on the ground it is draped over.
+  const dense = densifyPts(pts, mode === 'none' && (track || !drivable) ? DRAPE_STEP_M : 12);
   // …AND THE GATE IS KEPT ON THE DENSE POINTS, not the OSM nodes. Checking the
   // nodes is checking the wrong thing for exactly the reason the densify above
   // exists: a way carries vertices where it BENDS, so a straight river or trail
@@ -29487,6 +29528,7 @@ async function renderWays(
         // the per-way hints stay on it; the end weld deliberately does not.
         layerOf(tags), tags);
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
+      if (stairs) noteStairs(pts, w, dk);
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
       if (tags.name && !stairs) noteSurvey(tags.name, pts, track);
@@ -36712,7 +36754,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     mapAnchorX = 0; mapAnchorZ = 0;
     mapCtx.fillStyle = '#141b14';
     mapCtx.fillRect(0, 0, MAP_PX, MAP_PX);
-    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear(); bldRoofs.clear(); railWays.clear();
+    roadGrid.clear(); stairGrid.clear(); stairRev++; juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear(); bldRoofs.clear(); railWays.clear();
     channelGrid.clear(); rapidRocks.clear(); activeRapidRocks.clear(); chanSet.clear(); wiSet.clear();
     pendingWater.length = 0; productionCrossings.reset(); crossingAppliedRevision.clear();
     productionSubstrate.reset();
@@ -45838,7 +45880,62 @@ function noteTags(t: Record<string, string>): void {
       hdg: +(Math.atan2(sg.bx - sg.ax, -(sg.bz - sg.az)) * 180 / Math.PI).toFixed(0), w: +(sg.hw * 2).toFixed(1),
       fam: tags ? trackFamily(tags).fam : null, hw: tags?.highway, surface: tags?.surface, tt: tags?.tracktype, wid: sg.wid });
   }
+  const sseen = new Set<StairSeg>();
+  for (const arr of stairGrid.values()) for (const s of arr) {
+    if (sseen.has(s)) continue; sseen.add(s);
+    const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2, d = Math.hypot(mx - px, mz - pz);
+    if (d > r) continue;
+    const tags = s.wid ? wayTagLog.get(s.wid) : undefined;
+    out.push({ x: +mx.toFixed(1), z: +mz.toFixed(1), d: +d.toFixed(0), len: +Math.hypot(s.bx - s.ax, s.bz - s.az).toFixed(1),
+      hdg: +(Math.atan2(s.bx - s.ax, -(s.bz - s.az)) * 180 / Math.PI).toFixed(0), w: +(s.hw * 2).toFixed(1),
+      fam: 'steps', hw: 'steps', surface: tags?.surface, wid: s.wid });
+  }
   return out.sort((a, b) => (a as { d: number }).d - (b as { d: number }).d);
+};
+/** How much of each track family's DRAWN ribbon stands under the terrain it
+ *  is draped on: triangle centroids against the mesh the wheels read. A
+ *  draped way is seated at its vertices only, so a chord between two stations
+ *  12 m apart can sag into a crest; this is the number that says whether a
+ *  fragmented path is that or something else. */
+(window as unknown as { __trackburial?: object }).__trackburial = (r = 400): object => {
+  const px = state.x, pz = state.z, v = new THREE.Vector3();
+  const out: Record<string, { tris: number; buried: number; deep: number; worst: number; verts: number; vDeep: number }> = {};
+  scene.traverse((o) => {
+    const m = o as THREE.Mesh;
+    const name = (m.material as THREE.Material | undefined)?.name ?? '';
+    if (!m.isMesh || !name.startsWith('track-')) return;
+    const pos = m.geometry.getAttribute('position'), idx = m.geometry.getIndex();
+    if (!pos) return;
+    const n = idx ? idx.count : pos.count;
+    const rec = out[name] ??= { tris: 0, buried: 0, deep: 0, worst: 0, verts: 0, vDeep: 0 };
+    m.updateMatrixWorld();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+      if (Math.hypot(v.x - px, v.z - pz) > r) continue;
+      const g = meshSurfaceAt(v.x, v.z);
+      if (g === null) continue;
+      rec.verts++;
+      if (g - v.y > 0.1) rec.vDeep++;
+    }
+    for (let t = 0; t + 2 < n; t += 3) {
+      let cx = 0, cy = 0, cz = 0;
+      for (let k = 0; k < 3; k++) {
+        const i = idx ? idx.getX(t + k) : t + k;
+        v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+        cx += v.x / 3; cy += v.y / 3; cz += v.z / 3;
+      }
+      if (Math.hypot(cx - px, cz - pz) > r) continue;
+      const g = meshSurfaceAt(cx, cz);
+      if (g === null) continue;
+      rec.tris++;
+      const under = g - cy;
+      if (under > 0) rec.buried++;
+      if (under > 0.1) rec.deep++;
+      if (under > rec.worst) rec.worst = under;
+    }
+  });
+  for (const k of Object.keys(out)) out[k].worst = +out[k].worst.toFixed(2);
+  return out;
 };
 (window as unknown as { __place?: object }).__place = (x: number, z: number, h?: number): void => {
   teleportTo(x, z);
