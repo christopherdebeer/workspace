@@ -104,3 +104,21 @@ represented?", the substrate could only answer **what a cell is now**:
 - A per-deploy code diff (hunks) as a fact — `cells.diff` computes it on demand
   from `treeVersion`s; storing it would duplicate S3.
 - Retention/compaction of deploy facts beyond salience.
+
+## Validation (2026-09-25, prod)
+
+CDK run 36159761339 (tier-1 cells + workspace), then:
+
+- `jev` redeployed with `description` + `source` → `cells/jev-30e878c9/deploy/1790353193324`
+  carrying `by`, `description`, `source`, `treeVersion`; the pointer gained
+  `treeVersion` / `lastDeploy` / `deployedAt`. No `previousTreeVersion`: the
+  registry held no pinned `lastDeployed` from before this ADR.
+- `jev` redeployed bare → `…/1790353234637`: `previous` + `supersedes` edge to the
+  first, `changes` all zero, fallback `summary: "jev: redeploy, no source change"`.
+- `system1` redeployed (its own ADR-0099 change) → `changes.modified: ["index.ts"]`,
+  both tree versions, `source: git:…@21b1d35`. System One perceived it
+  (`durable`, `s1:perceive-v1`, revision 2) and did not re-trigger. No project
+  edge: the platform has no project fact — the same residue the ADR-0098
+  taxonomy reports for substrate bugs.
+- The vector index linked the jev deploys to ADR-0097 unprompted — the
+  description is what makes that possible.
