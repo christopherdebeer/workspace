@@ -11115,7 +11115,7 @@ let RAIL_GRADE = qsOn('railgrade', true);
  * `width` wins. `?trackfam=0` is the single treatment it replaces.
  */
 let TRACK_FAM = qsOn('trackfam', true);
-type TrackFam = 'paved' | 'trail' | 'hard' | 'rut' | 'grass';
+type TrackFam = 'paved' | 'trail' | 'hard' | 'rut' | 'grass' | 'steps';
 const TRACK_PAVED = new Set(['asphalt', 'concrete', 'concrete:plates', 'concrete:lanes', 'paving_stones', 'sett',
   'paved', 'cobblestone', 'unhewn_cobblestone', 'bricks', 'metal', 'wood', 'chipseal', 'tartan', 'rubber']);
 const TRACK_HARD = new Set(['gravel', 'fine_gravel', 'compacted', 'pebblestone', 'shells']);
@@ -11171,6 +11171,7 @@ const TRACK_FAM_PARAMS: Record<TrackFam, { mode: number; depth: number; fray: nu
   rut: { mode: 2, depth: 0.09, fray: 0.12, bare: 0.35 },
   grass: { mode: 3, depth: 0.05, fray: 0.0, bare: 0.0 },
   trail: { mode: 4, depth: 0.06, fray: 0.16, bare: 0.0 },
+  steps: { mode: 5, depth: 0.15, fray: 0.0, bare: 1.0 },
 };
 let trackGritTex: THREE.Texture | null = null;
 const trackFamMats = new Map<TrackFam, THREE.MeshLambertMaterial>();
@@ -11206,7 +11207,18 @@ function trackFamMat(fam: TrackFam): THREE.MeshLambertMaterial {
         float trkWob = (pdn(vec2(trkA * 0.09, 3.7)) - 0.5) * 0.06 + (pdn(vec2(trkA * 0.31, 9.1)) - 0.5) * 0.02;
         float trkN = pdn(vSlipXZ * 1.8) * 0.6 + pdn(vSlipXZ * 4.6) * 0.4;
         float trkH = 0.0, trkRut = 0.0, trkCov = 1.0;
-        if (uTrkMode < 0.5) {
+        float trkStep = 0.0;
+        if (uTrkMode > 4.5) {
+          // STEPS: a tread every 0.3 m along the flight. The sawtooth's slope
+          // shades each tread and its wrap throws a hard line at every nose;
+          // the riser band is darkened as its own shadow. Faded to the flight's
+          // mean past a tenth of a metre an art pixel, where treads alias.
+          float ph = fract(trkA / 0.30);
+          float stepFine = 1.0 - smoothstep(0.05, 0.14, trkFp);
+          trkH = -uTrkDepth * ph * stepFine;
+          trkStep = (1.0 - smoothstep(0.0, 0.16, ph)) * stepFine;
+          trkCov = 1.0;
+        } else if (uTrkMode < 0.5) {
           trkCov = 1.0;
         } else if (uTrkMode > 3.5) {
           // a trail: one tread down the middle, as wide as feet and hooves make it
@@ -11231,7 +11243,8 @@ function trackFamMat(fam: TrackFam): THREE.MeshLambertMaterial {
         trkCov *= step(0.015 + uTrkFray * (0.35 + 0.65 * trkN) * trkFine, trkEdge);
         if (trkCov < 0.5) discard;
         // Ruts are pressed and damp: darker and a little richer than the crown.
-        diffuseColor.rgb *= mix(1.0, 0.80, trkRut * step(0.5, uTrkMode));
+        diffuseColor.rgb *= mix(1.0, 0.80, trkRut * step(0.5, uTrkMode) * step(uTrkMode, 4.5));
+        diffuseColor.rgb *= 1.0 - 0.32 * trkStep;
         // Gravel and pavement grain, band-limited like everything else.
         trkH += (pdn(vSlipXZ * 7.0) - 0.5) * 0.012 * trkFine * step(0.5, uTrkMode) * step(uTrkMode, 1.5);
         trkH *= trkFine;
@@ -15485,7 +15498,19 @@ function refreshSwardField(full = true): void {
       // 1.2m, which sounds modest and is doubled (both sides) and then widened
       // again by the mask's own filtering — the verge is the one place grass
       // most needs to be, and it was the one place it could not grow.
-      swardMaskCtx.lineWidth = Math.max(1, (sg.hw + 0.35) * 2 * px);
+      // ── A TRACK THINS THE GRASS; A PAVEMENT CLEARS IT ──
+      //
+      // The mask is ~1.5 m a texel, so a 2 m footway stroked at its own width
+      // filtered to under half a texel's white and the blades stood through it
+      // (Paris West, the paved-path A/B: the path as pale fragments in grass).
+      // A sealed or gravel path takes at least two texels. The worn families
+      // do not clear the ground at all — grass on a farm track's crown and
+      // along a trail's edge is the point — so they paint GREY, and the blade
+      // test below reads the grey as a thinning, not a wall.
+      const fam = TRACK_FAM && sg.tk ? (sg.wid && wayTagLog.get(sg.wid) ? trackFamily(wayTagLog.get(sg.wid)!).fam : null) : null;
+      const grey = fam === 'rut' ? 0.55 : fam === 'trail' ? 0.7 : fam === 'grass' ? 0.3 : 1;
+      swardMaskCtx.strokeStyle = grey >= 1 ? '#fff' : `rgb(${Math.round(grey * 255)},${Math.round(grey * 255)},${Math.round(grey * 255)})`;
+      swardMaskCtx.lineWidth = Math.max(fam === 'paved' || fam === 'hard' ? 2.2 : 1, (sg.hw + 0.35) * 2 * px);
       swardMaskCtx.beginPath();
       swardMaskCtx.moveTo((sg.ax - swardFX) * px, (sg.az - swardFZ) * px);
       swardMaskCtx.lineTo((sg.bx - swardFX) * px, (sg.bz - swardFZ) * px);
@@ -15802,7 +15827,10 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         float sFadeW = max(0.015, sKeep * 0.45);
         float sAlive = 1.0 - smoothstep(sKeep - sFadeW, sKeep, sH1);
         if (uSwardDbg == 2.0 || uSwardDbg == 3.0) sAlive = 1.0;
-        bool sMaskOk = sBlocked < 0.5 || uSwardDbg == 1.0 || uSwardDbg == 3.0;
+        // A per-blade threshold, not a fixed half: a carriageway (1.0) still
+        // blocks every blade, the filtered verge thins by its own value, and a
+        // worn track's grey keeps that share of its grass.
+        bool sMaskOk = sBlocked < swHash(sKey * 3.3 + 1.9) * 0.98 + 0.01 || uSwardDbg == 1.0 || uSwardDbg == 3.0;
         bool sLive = sAlive > 0.01 && sMaskOk && sD < uGReach
           && (sF.g >= 0.0 || sIsReed || sIsStone)
           && sUv.x > 0.002 && sUv.x < 0.998 && sUv.y > 0.002 && sUv.y < 0.998;
@@ -29451,9 +29479,10 @@ async function renderWays(
       // surface mid-span would read as a rendering fault, not as a border.
       if (dk) wayTagLog.set(dk, tags);
       const tf = TRACK_FAM && track ? trackFamily(tags) : null;
-      ribbon(pts, tf ? tf.w : w, stairs ? MAT.minor : tf ? trackFamMat(tf.fam) : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1], roadLook(tags)),
+      ribbon(pts, tf ? tf.w : w, stairs ? (TRACK_FAM ? trackFamMat('steps') : MAT.minor) : tf ? trackFamMat(tf.fam) : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1], roadLook(tags)),
         track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wq,
-        GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk,
+        GRADE_MAX[tags.highway] ?? 0.15, canopy,
+        stairs && TRACK_FAM ? (PAVED_COL[tags.surface ?? ''] ?? PAVED_COL.concrete) : roadTint(tags, wq), dk,
         // Which level OSM says this way is on — see layerOf. The planner pins and
         // the per-way hints stay on it; the end weld deliberately does not.
         layerOf(tags), tags);

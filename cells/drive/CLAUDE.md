@@ -19336,3 +19336,48 @@ uMngeni −0.8%), fringe burial up a little — Romsdalen 61 → 74, Simon's Tow
 overlapping the water's edge by a few decimetres instead of falling away below
 it: the right side of the line to err on, since buried water is invisible and
 a hole is not.
+
+## A track is not one thing: five families chosen by the tags, and steps
+
+Five highway classes — track, path, footway, cycleway, bridleway — shared one
+treatment: a 68%-opaque two-rut dirt texture 4.5-6.5 m wide. Counted in the
+captures, most of what took it was not a farm track: Paris West carries 436
+ASPHALT footways, Yosemite's paths are single-file on ground, and most farm
+tracks carry no `tracktype`. `trackFamily(tags)` now picks a family and a real
+width (a mapped `width` wins), and `trackFamMat(fam)` one material per family:
+
+| family | from | width | look |
+|---|---|---|---|
+| paved | sealed `surface`, or an untagged footway/cycleway (a pavement), or track grade1 | 1.8-3.2 m | the surface's colour, crisp edge |
+| trail | path/footway/bridleway on ground, dirt, grass… | 1.3-1.8 m | one trodden tread, darker than the ground, frayed |
+| hard | gravel/compacted, track grade2 | 1.6-3.2 m | full width, faint ruts, grain |
+| rut | track grade3-4 and untagged tracks | 3.2 m | two ruts, a lip, the crown mostly grass |
+| grass | track grade5, `surface=grass` | 3.0 m | two faint ruts, nothing else |
+| steps | `highway=steps` | 2.2 m | a tread every 0.3 m, a shadowed riser line at each nose |
+
+**The worn surface is shaped per pixel, not painted.** A height across the way
+(ruts pressed in, a spoil lip, a crown; for steps a sawtooth along the flight)
+bends the normal by its screen gradient — the surface-gradient construction the
+terrain relief already uses — and what is not worn is DISCARDED, so the crown's
+grass and the frayed verge are the real terrain and sward, with binary alpha as
+the rendering doctrine asks. Band-limited on the fragment's own footprint: past
+~0.3 m an art pixel the ruts merge into one worn band and the relief fades.
+Puddles take the ruts first. `?trackfam=0` (a `world` switch, live-rebuilt)
+is the single treatment it replaced; `__tracks(r)` lists the track segments
+near a point with the family each got, which is how an A/B is aimed.
+
+**The grass mask learned grey.** The mask is ~1.5 m a texel and the blade test
+was a fixed `sBlocked < 0.5`, so a 2 m footway filtered to under half a texel
+of white and grass stood through it (the Paris frames: a pavement as pale
+fragments in a lawn). Paved and hard paths now stroke at least 2.2 texels; the
+worn families paint GREY (rut 0.55, trail 0.7, grass 0.3), and the blade test
+is a per-blade hash against the mask value, so a carriageway (1.0) still
+blocks every blade and a track keeps its share of grass.
+
+**Measured with the in-game A/B sheet** (`__sheet('ab', 'trackfam=0')`, live,
+five hours each): at Senqu the old broad pale smear becomes two narrow ruts
+with grass through the crown; at Yosemite a 4.5 m double rut becomes a 1.3 m
+trodden tread (the first cut was a pale line on pale granite and was darkened);
+Paris needed the mask fix above. A live Paris A/B also dropped a building
+between its two sides — the world rebuild is not fully deterministic, which
+makes a building-heavy A/B pair unreliable; recorded, not chased.
