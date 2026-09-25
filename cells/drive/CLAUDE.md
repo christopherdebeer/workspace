@@ -19381,3 +19381,31 @@ trodden tread (the first cut was a pale line on pale granite and was darkened);
 Paris needed the mask fix above. A live Paris A/B also dropped a building
 between its two sides — the world rebuild is not fully deterministic, which
 makes a building-heavy A/B pair unreliable; recorded, not chased.
+
+### …and a draped way is seated every 3 m, and steps clear the grass
+
+Two faults behind the paths that stayed invisible after the families shipped:
+
+- **A DRAPED RIBBON'S TRIANGLES WERE UNDER THE TERRAIN, WITH EVERY VERTEX ON
+  IT.** `__trackburial(r)` (triangle centroids and vertices of every `track-*`
+  mesh against `meshSurfaceAt`) at Suresnes: paved footways 648 of 3,389
+  triangles buried, 102 by more than 10 cm, worst 1.04 m, and `vDeep 0`. The
+  vertices were seated. The fault was the 12 m quads between them, which the
+  terrain lattice (corridor crest and toe creases, refinement splits) poked
+  through: pale fragments in grass. `densifyPts` takes a step now, and a
+  draped way (mode `none`, track or not drivable) is densified at
+  `DRAPE_STEP_M` (3 m, `?drapestep=`, 12 being the old spacing). Measured
+  after: 36 deep of 7,987, worst 0.20 m, for 2.4x the triangles of a narrow
+  way. The remaining shallow burial is across the ribbon's width, one quad
+  wide.
+- **STEPS ARE NOT DRIVABLE, SO THEY WERE IN NO GRID THE SWARD MASK READS.**
+  A flight stood under a meadow's worth of grass. `stairGrid` files them
+  (`noteStairs`), the mask strokes them white at 2.2 texels or more, the mask
+  revision counts them, and `__tracks` lists them as family `steps`.
+
+**The live Paris A/B sheets could not confirm either by eye**: three reshoots
+at the capture's origin framed the target under a canopy or on a lawn where
+neither column drew the way at all (the target from `AT=` was not in the
+streamed world when the sheet ran). The claim rests on the burial numbers.
+Pick targets from `__tracks` in the SAME boot as the sheet, never from a
+previous one.
