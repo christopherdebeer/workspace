@@ -16695,6 +16695,12 @@ let shrubN = 0, shrubNear = 0;
 // the roof reads as crowns and not as a sheet. Off by default; `?canopy=1`.
 let CANOPY_ON = qsOn('canopy', false);
 const CANOPY_STEP = 6, CANOPY_N = 260, CANOPY_H = 13, CANOPY_CROWN = 6.5, CANOPY_NEAR = 70;
+/** Metres over which the outer ring's edge fades to the terrain's forest. */
+const CANOPY_EDGE_FADE = 260;
+/** The rings' world box (x0, z0, x1, z1) and the view's focus (x, z, near?),
+ *  per frame: the near field follows the car in the vertex shader rather
+ *  than by rebuilding the lattice every 120 m. */
+const canopyU = { box: { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) }, foc: { value: new THREE.Vector3(0, 0, 0) } };
 const canopyMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true });
 terrainFx(canopyMat);
 // THE CROWNS ARE DRAWN PER FRAGMENT, NOT BY THE LATTICE. A 6.5 m crown on a
@@ -16709,11 +16715,23 @@ terrainFx(canopyMat);
   canopyMat.onBeforeCompile = (sh, r) => {
     prev?.call(canopyMat, sh, r);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vCanW;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCanW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      .replace('#include <common>', `#include <common>
+attribute float canLift;
+uniform vec4 canBox; uniform vec3 canFoc;
+varying vec3 vCanW; varying float vCanF; varying float vCanK;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+{
+  vec3 cw = (modelMatrix * vec4(transformed, 1.0)).xyz;
+  vCanF = canFoc.z > 0.5 ? clamp((length(cw.xz - canFoc.xy) - ${CANOPY_NEAR.toFixed(1)}) / 40.0, 0.0, 1.0) : 1.0;
+  float ed = min(min(cw.x - canBox.x, canBox.z - cw.x), min(cw.z - canBox.y, canBox.w - cw.z));
+  vCanK = smoothstep(0.0, ${CANOPY_EDGE_FADE.toFixed(1)}, ed);
+  transformed.y += canLift * vCanF * mix(0.35, 1.0, vCanK);
+  vCanW = (modelMatrix * vec4(transformed, 1.0)).xyz;
+}`);
+    sh.uniforms.canBox = canopyU.box; sh.uniforms.canFoc = canopyU.foc;
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-varying vec3 vCanW;
+varying vec3 vCanW; varying float vCanF; varying float vCanK;
 float canDome = 0.5; vec2 canGrad = vec2(0.0); float canTone = 0.5;
 float canH(vec2 c, float k) { return fract(sin(dot(c, vec2(127.1 + k * 17.0, 311.7 - k * 5.0))) * 43758.5453); }
 vec2 canEval(vec2 p) {
@@ -16730,6 +16748,9 @@ vec2 canEval(vec2 p) {
 }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
 {
+  // The near field is trees: the roof has sunk toward the ground there and
+  // goes before it reaches it.
+  if (vCanF < 0.15) discard;
   vec2 p = vCanW.xz / ${CANOPY_CROWN.toFixed(2)};
   float px = max(length(fwidth(p)), 1e-4);
   float band = 1.0 - smoothstep(0.25, 0.6, px);
@@ -16743,10 +16764,10 @@ vec2 canEval(vec2 p) {
   canDome = mix(0.3, e0.x, band); canTone = mix(0.5, e0.y, band);
   // A stand varies over tens of metres too — age, species, a gap — or the wide
   // view is one flat carpet.
+  float canN;
   { vec2 q = vCanW.xz / 70.0; vec2 qi = floor(q); vec2 qf = fract(q); qf = qf * qf * (3.0 - 2.0 * qf);
-    float n = mix(mix(canH(qi, 9.0), canH(qi + vec2(1.0, 0.0), 9.0), qf.x), mix(canH(qi + vec2(0.0, 1.0), 9.0), canH(qi + vec2(1.0, 1.0), 9.0), qf.x), qf.y);
-    diffuseColor.rgb *= 0.78 + 0.34 * n; }
-  canGrad = vec2(gx, gz) * band;
+    canN = mix(mix(canH(qi, 9.0), canH(qi + vec2(1.0, 0.0), 9.0), qf.x), mix(canH(qi + vec2(0.0, 1.0), 9.0), canH(qi + vec2(1.0, 1.0), 9.0), qf.x), qf.y); }
+  canGrad = vec2(gx, gz) * band * vCanK;
   // THE STAND'S SIDE. A lattice face steeper than a roof is the edge of the
   // forest, and lit with the roof's crown normal it drew as large pale shards
   // from the drone. It takes the geometric normal, the shade of a forest's
@@ -16755,9 +16776,15 @@ vec2 canEval(vec2 p) {
   vec3 nG = normalize(cross(dFdx(vCanW), dFdy(vCanW)));
   float canWall = smoothstep(0.45, 0.75, 1.0 - abs(nG.y));
   if (canWall > 0.5 && e0.x < 0.22 && band > 0.5) discard;
-  diffuseColor.rgb *= mix(1.0, 0.55, canWall);
   canGrad *= 1.0 - canWall;
-  diffuseColor.rgb *= mix(vec3(0.22, 0.24, 0.3), vec3(1.3, 1.35, 1.05), canDome) * (0.78 + 0.44 * canTone);
+  // THE RING'S EDGE IS THE TERRAIN'S FOREST. The vertex colour is the ground's
+  // own palette; everything that makes the canopy a canopy — the leaf pull,
+  // the stand variation, the crowns' dark mean — fades out over the last
+  // CANOPY_EDGE_FADE metres, so from the air the roof ends in the terrain's
+  // tone and not in a square.
+  vec3 canF = vec3(0.85, 1.05, 0.8) * (0.78 + 0.34 * canN) * mix(1.0, 0.55, canWall)
+    * mix(vec3(0.22, 0.24, 0.3), vec3(1.3, 1.35, 1.05), canDome) * (0.78 + 0.44 * canTone);
+  diffuseColor.rgb *= mix(vec3(1.0), canF, vCanK);
 }`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
 {
@@ -16765,7 +16792,7 @@ vec2 canEval(vec2 p) {
   normal = normalize(normal + (viewMatrix * vec4(nw, 0.0)).xyz * 2.2);
 }`);
   };
-  canopyMat.customProgramCacheKey = () => 'canopy-4';
+  canopyMat.customProgramCacheKey = () => 'canopy-5';
 }
 const canopyMesh = new THREE.Mesh(new THREE.BufferGeometry(), canopyMat);
 canopyMesh.name = 'canopy';
@@ -16810,18 +16837,33 @@ function canopyEvidence(x: number, z: number): number {
   if (sampleCover(x - 5, z + r) === 10) n++;
   return n / 6;
 }
-// ── THE REBUILD IS SLICED ──
+// ── THE REBUILD IS SLICED, AND COMMITS WHOLE ──
 //
 // On the phone a whole rebuild was 124-217 ms in one frame (Nagato dump,
-// inside `treeRefresh`'s shrubs phase, max 309). It is a job now: rows until
-// CANOPY_SLICE_MS of a frame is spent, the previous mesh drawn until the new
-// one is whole, stepped from the frame loop rather than the tree refresh.
-const CANOPY_SLICE_MS = 3;
-interface CanopyJob { x0: number; z0: number; fx: number; fz: number; j: number; org: string; tb: number;
+// inside `treeRefresh`'s shrubs phase, max 309). It is a job: rows until
+// CANOPY_SLICE_MS of a frame is spent, first the nodes, then (one row behind)
+// the normals and the index, so nothing whole-lattice is left for the last
+// frame — the harness's commit of a 2.8 km outer ring was a 50 ms frame on its
+// own. Both rings commit TOGETHER when the second is done: committing the
+// inner one alone dropped the outer from the gather, and with terrain
+// streaming restarting the job every 1.5 s the outer ring was never up (the
+// device dump drew 0.11M of canopy, the inner square, and the hidden share
+// swung 8%-88% sweep to sweep, and the tree budget with it).
+//
+// WHAT RESTARTS IT. Distance: CANOPY_REBUILD_M, since the near field follows
+// the car in the vertex shader and the rings reach the draw range past it.
+// Terrain: a new tile moves the ground under the roof, but the stream lands a
+// tile every second or two while driving, so a terrain-only change waits
+// CANOPY_TERRAIN_MS since the last build.
+const CANOPY_SLICE_MS = 3, CANOPY_REBUILD_M = 300, CANOPY_TERRAIN_MS = 20000;
+interface CanopyJob { x0: number; z0: number; fx: number; fz: number; j: number; k: number; org: string; tb: number;
   step: number; N: number; hole: [number, number, number, number] | null; mesh: THREE.Mesh;
-  pos: Float32Array; col: Float32Array; ev: Float32Array; ms: number; near: boolean; }
-type CanopyGrid = { x0: number; z0: number; V: number; step: number; ev: Float32Array; fx: number; fz: number; near: boolean };
+  pos: Float32Array; col: Float32Array; lift: Float32Array; nrm: Float32Array; ev: Float32Array;
+  idx: Uint32Array; ni: number; ms: number; }
+type CanopyGrid = { x0: number; z0: number; V: number; step: number; ev: Float32Array };
 let canopyJobs: CanopyJob[] = [];
+let canopyDone: CanopyJob[] = [];
+let canopyBox: [number, number, number, number] = [0, 0, 0, 0];
 /** The last COMMITTED lattices, inner then outer, which the tree gather reads
  *  to leave the interior of a closed stand to the canopy. */
 let canopyGrids: CanopyGrid[] = [];
@@ -16831,84 +16873,131 @@ function canopyStartJobs(fx: number, fz: number, org: string, now: number): void
   const span = CANOPY_N * CANOPY_STEP, oStep = CANOPY_STEP * 2;
   const outerHalf = Math.max(half, treeRange + 60);
   const M = Math.max(0, Math.ceil((outerHalf - half) / oStep));
-  const near = camMode !== 'top';
   const mk = (x0: number, z0: number, step: number, N: number, hole: CanopyJob['hole'], mesh: THREE.Mesh): CanopyJob => {
     const V = N + 1;
-    return { x0, z0, fx, fz, j: 0, org, tb: terrainBuilds, step, N, hole, mesh,
-      pos: new Float32Array(V * V * 3), col: new Float32Array(V * V * 3), ev: new Float32Array(V * V), ms: 0, near };
+    return { x0, z0, fx, fz, j: 0, k: 0, org, tb: terrainBuilds, step, N, hole, mesh,
+      pos: new Float32Array(V * V * 3), col: new Float32Array(V * V * 3), lift: new Float32Array(V * V),
+      nrm: new Float32Array(V * V * 3), ev: new Float32Array(V * V), idx: new Uint32Array(N * N * 6), ni: 0, ms: 0 };
   };
   canopyJobs = [mk(ix0, iz0, CANOPY_STEP, CANOPY_N, null, canopyMesh)];
-  if (M > 0) canopyJobs.push(mk(ix0 - M * oStep, iz0 - M * oStep, oStep, 2 * M + span / oStep,
-    [ix0, iz0, ix0 + span, iz0 + span], canopyOuter));
+  canopyBox = [ix0, iz0, ix0 + span, iz0 + span];
+  if (M > 0) {
+    canopyJobs.push(mk(ix0 - M * oStep, iz0 - M * oStep, oStep, 2 * M + span / oStep, [ix0, iz0, ix0 + span, iz0 + span], canopyOuter));
+    canopyBox = [ix0 - M * oStep, iz0 - M * oStep, ix0 + span + M * oStep, iz0 + span + M * oStep];
+  }
+  canopyDone = [];
   canopyAt = { x: fx, z: fz, t: now, org, tb: terrainBuilds };
 }
-function stepCanopy(now: number): void {
-  canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
-  if (!CANOPY_ON) { canopyJobs = []; canopyGrids = []; return; }
-  if (!canopyJobs.length) {
-    const [fx, fz] = renderFocusXZ();
-    const org = `${origin.lat},${origin.lon}`;
-    const moved = Math.hypot(fx - canopyAt.x, fz - canopyAt.z);
-    if (!(moved > 120) && org === canopyAt.org && terrainBuilds === canopyAt.tb && canopyAt.t > 0) return;
-    if (canopyAt.t > 0 && now - canopyAt.t < 1500 && !(moved > 120) && org === canopyAt.org) return;
-    canopyStartJobs(fx, fz, org, now);
-  }
-  const J = canopyJobs[0], V = J.N + 1, t0 = performance.now();
-  while (J.j < V && performance.now() - t0 < CANOPY_SLICE_MS) {
-    const j = J.j++;
-    for (let i = 0; i < V; i++) {
-      const x = J.x0 + i * J.step, z = J.z0 + j * J.step, k = j * V + i;
-      // Clear of the carriageway AND its verge, and clear of the view's own
-      // near field: the first chase frames stood the roof over the kerb and
-      // put the camera under its edge. Near the eye a forest is trees.
-      const nearFade = !J.near ? 1 : Math.min(1, Math.max(0, (Math.hypot(x - J.fx, z - J.fz) - CANOPY_NEAR) / 40));
-      J.ev[k] = onCarriageway(x, z, 7).road ? 0 : canopyEvidence(x, z) * nearFade;
-      const g = groundAt(x, z);
-      const stand = CANOPY_H * (0.8 + 0.4 * canopyHash(Math.floor(x / 90), Math.floor(z / 90), 7));
-      // A STAND HAS A SIDE: the roof rises over one lattice step, not over the
-      // evidence's own fifteen metres, which from the road read as an embankment.
-      const rise = Math.min(1, Math.max(0, (J.ev[k] - 0.3) / 0.15));
-      const ramp = rise * rise * (3 - 2 * rise);
-      J.pos[k * 3] = x; J.pos[k * 3 + 1] = g + ramp * stand * 0.88; J.pos[k * 3 + 2] = z;
-      // The ground's own palette under the stand, pulled toward leaf, so the
-      // canopy and the far terrain's forest are one tone at the ring's edge.
-      const pc = terrainPalette(sampleHeight(x, z) + baseElev, 0, 10, x, z);
-      J.col[k * 3] = pc[0] * 0.85; J.col[k * 3 + 1] = pc[1] * 1.05; J.col[k * 3 + 2] = pc[2] * 0.8;
+/** One lattice row of nodes: evidence, ground and the roof's lift over it. */
+function canopyRow(J: CanopyJob, j: number): void {
+  const V = J.N + 1;
+  for (let i = 0; i < V; i++) {
+    const x = J.x0 + i * J.step, z = J.z0 + j * J.step, k = j * V + i;
+    // CLEAR OF THE ROAD BY A VERGE'S WIDTH. The carriageway and 7 m of verge
+    // are no canopy at all; the next 9 m count half, below where the roof
+    // starts, so the forest's side beside a road is its real edge trees and
+    // not a lattice wall standing over the kerb (the cab frames).
+    let ev = canopyEvidence(x, z);
+    if (ev > 0) {
+      if (onCarriageway(x, z, 7).road) ev = 0;
+      else if (onCarriageway(x, z, 16).road) ev *= 0.5;
     }
+    J.ev[k] = ev;
+    const g = groundAt(x, z);
+    const stand = CANOPY_H * (0.8 + 0.4 * canopyHash(Math.floor(x / 90), Math.floor(z / 90), 7));
+    // INSET AND UNDER THE EDGE. The roof starts only where the evidence says
+    // a stand is well under way (0.6) and is full at 0.85 — where the gather
+    // starts leaving trees to it — and it stands at 0.8 of the stand height,
+    // so the stand's own edge trees are its side and overtop the roof's rim.
+    // The earlier roof rose at 0.3 to 0.88 and read as a slab with walls.
+    const rise = Math.min(1, Math.max(0, (ev - 0.6) / 0.25));
+    J.lift[k] = rise * rise * (3 - 2 * rise) * stand * 0.8;
+    J.pos[k * 3] = x; J.pos[k * 3 + 1] = g; J.pos[k * 3 + 2] = z;
+    // The ground's own palette under the stand; the shader pulls it toward
+    // leaf, and lets go of it at the ring's edge.
+    const pc = terrainPalette(sampleHeight(x, z) + baseElev, 0, 10, x, z);
+    J.col[k * 3] = pc[0]; J.col[k * 3 + 1] = pc[1]; J.col[k * 3 + 2] = pc[2];
   }
-  J.ms += performance.now() - t0;
-  if (J.j < V) return;
-  const idx: number[] = [];
-  const H = J.hole;
-  for (let j = 0; j < J.N; j++) for (let i = 0; i < J.N; i++) {
+}
+/** Normals and cells for row j of cells, once node row j+1 exists. */
+function canopyCells(J: CanopyJob, j: number): void {
+  const V = J.N + 1, H = J.hole, s2 = 2 * J.step;
+  const h = (i: number, jj: number): number => {
+    const ii = Math.min(V - 1, Math.max(0, i)), jc = Math.min(V - 1, Math.max(0, jj)), k = jc * V + ii;
+    return J.pos[k * 3 + 1] + J.lift[k];
+  };
+  for (let i = 0; i < V; i++) {
+    const k = j * V + i;
+    const nx = -(h(i + 1, j) - h(i - 1, j)) / s2, nz = -(h(i, j + 1) - h(i, j - 1)) / s2, l = Math.hypot(nx, 1, nz);
+    J.nrm[k * 3] = nx / l; J.nrm[k * 3 + 1] = 1 / l; J.nrm[k * 3 + 2] = nz / l;
+  }
+  if (j >= J.N) return;
+  for (let i = 0; i < J.N; i++) {
     if (H) {
       const cx = J.x0 + (i + 0.5) * J.step, cz = J.z0 + (j + 0.5) * J.step;
       if (cx > H[0] && cx < H[2] && cz > H[1] && cz < H[3]) continue;
     }
     const a = j * V + i, b = a + 1, c = a + V, d = c + 1;
-    if (Math.min(J.ev[a], J.ev[b], J.ev[c], J.ev[d]) < 0.25) continue;
-    idx.push(a, c, b, b, c, d);
+    // A cell with no roof over any corner is ground: not drawn.
+    if (Math.max(J.lift[a], J.lift[b], J.lift[c], J.lift[d]) <= 0) continue;
+    J.idx.set([a, c, b, b, c, d], J.ni); J.ni += 6;
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(J.pos, 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(J.col, 3));
-  geo.setIndex(idx);
-  geo.computeVertexNormals();
-  J.mesh.geometry.dispose();
-  J.mesh.geometry = geo;
-  const grid: CanopyGrid = { x0: J.x0, z0: J.z0, V, step: J.step, ev: J.ev, fx: J.fx, fz: J.fz, near: J.near };
-  if (J.mesh === canopyMesh) { canopyGrids = [grid]; canopyStat.ms = 0; canopyStat.cells = 0; canopyStat.tris = 0; }
-  else canopyGrids = [...canopyGrids.slice(0, 1), grid];
-  canopyStat.ms = +(canopyStat.ms + J.ms).toFixed(1);
-  canopyStat.cells += idx.length / 6; canopyStat.tris += idx.length / 3;
+}
+function canopyCommit(): void {
+  canopyStat.ms = 0; canopyStat.cells = 0; canopyStat.tris = 0;
+  const grids: CanopyGrid[] = [];
+  for (const J of canopyDone) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(J.pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(J.col, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(J.nrm, 3));
+    geo.setAttribute('canLift', new THREE.BufferAttribute(J.lift, 1));
+    geo.setIndex(new THREE.BufferAttribute(J.idx.subarray(0, J.ni), 1));
+    J.mesh.geometry.dispose();
+    J.mesh.geometry = geo;
+    grids.push({ x0: J.x0, z0: J.z0, V: J.N + 1, step: J.step, ev: J.ev });
+    canopyStat.ms = +(canopyStat.ms + J.ms).toFixed(1);
+    canopyStat.cells += J.ni / 6; canopyStat.tris += J.ni / 3;
+  }
+  if (canopyDone.length < 2) canopyOuter.geometry.setIndex([]);
+  canopyGrids = grids;
+  canopyU.box.value.set(...canopyBox);
+  canopyDone = [];
+  canopyStat.builds++;
+}
+function stepCanopy(now: number): void {
+  canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
+  if (!CANOPY_ON) { canopyJobs = []; canopyDone = []; canopyGrids = []; return; }
+  const [fx, fz] = renderFocusXZ();
+  canopyU.foc.value.set(fx, fz, camMode !== 'top' ? 1 : 0);
+  if (!canopyJobs.length) {
+    const org = `${origin.lat},${origin.lon}`;
+    const moved = Math.hypot(fx - canopyAt.x, fz - canopyAt.z);
+    const fresh = canopyAt.t <= 0 || org !== canopyAt.org || moved > CANOPY_REBUILD_M;
+    const ground = terrainBuilds !== canopyAt.tb && now - canopyAt.t > CANOPY_TERRAIN_MS;
+    if (!fresh && !ground) return;
+    canopyStartJobs(fx, fz, org, now);
+  }
+  const J = canopyJobs[0], V = J.N + 1, t0 = performance.now();
+  while (J.k < V && performance.now() - t0 < CANOPY_SLICE_MS) {
+    if (J.j < V) canopyRow(J, J.j++);
+    // Cells of row k need node rows k-1..k+1 for their normals.
+    while (J.k < V && (J.k + 1 < J.j || J.j >= V)) canopyCells(J, J.k++);
+  }
+  J.ms += performance.now() - t0;
+  if (J.k < V) return;
+  canopyDone.push(J);
   canopyJobs.shift();
-  if (!canopyJobs.length) canopyStat.builds++;
+  if (!canopyJobs.length) canopyCommit();
 }
 /** A tree the canopy stands in for: its site is well inside a closed stand
- *  (every lattice node around it at full evidence) and past the near field,
- *  so its crown would be under the roof. Edge trees, verge trees and the near
- *  field stay individual — that is where the budget this frees goes. */
+ *  (every lattice node around it at full evidence, where the roof is at its
+ *  full height) and past the near field, so its crown would be under the
+ *  roof. Edge trees, verge trees and the near field stay individual — that is
+ *  where the budget this frees goes. */
 function canopyHides(x: number, z: number): boolean {
+  const F = canopyU.foc.value;
+  if (F.z > 0.5 && Math.hypot(x - F.x, z - F.y) < CANOPY_NEAR + 60) return false;
   for (const G of canopyGrids) {
     const u = (x - G.x0) / G.step, v = (z - G.z0) / G.step;
     const i = Math.floor(u), j = Math.floor(v);
@@ -16918,15 +17007,14 @@ function canopyHides(x: number, z: number): boolean {
     const r = G.step > CANOPY_STEP ? 1 : 2;
     for (let b = -1; b <= r; b++) for (let a = -1; a <= r; a++) {
       const k = (j + b) * G.V + i + a;
-      if (k < 0 || k >= G.ev.length || G.ev[k] < 0.8) return false;
+      if (k < 0 || k >= G.ev.length || G.ev[k] < 0.85) return false;
     }
-    if (G.near && Math.hypot(x - G.fx, z - G.fz) < CANOPY_NEAR + 60) return false;
     return true;
   }
   return false;
 }
 (window as unknown as { __canopy?: object }).__canopy = (on?: boolean): object => {
-  if (on !== undefined) { CANOPY_ON = on; canopyAt.t = 0; canopyJobs = []; if (!on) canopyGrids = []; }
+  if (on !== undefined) { CANOPY_ON = on; canopyAt.t = 0; canopyJobs = []; canopyDone = []; if (!on) canopyGrids = []; }
   const hist = [0, 0, 0, 0, 0, 0];
   for (const G of canopyGrids) for (const e of G.ev) hist[Math.min(5, Math.floor(e * 6 + 1e-6))]++;
   return { on: CANOPY_ON, ...canopyStat, budgetK: +canopyBudgetK().toFixed(3), job: canopyJobs.length ? canopyJobs[0].j : null, rings: canopyGrids.length, at: [Math.round(canopyAt.x), Math.round(canopyAt.z)], evHist: hist };
@@ -61393,7 +61481,7 @@ if (timeFromUrl < 0 && !qs('time')
   onSwitch('bldface', () => { BLD_FACE = qsOn('bldface', true); rebuildInPlace(); });
   onSwitch('bldpara', () => { BLD_PARA = qsOn('bldpara', true); rebuildInPlace(); });
   onSwitch('shrub', () => { SHRUB_ON = qs('shrub') !== '0'; });
-  onSwitch('canopy', () => { CANOPY_ON = qsOn('canopy', false); canopyAt.t = 0; });
+  onSwitch('canopy', () => { CANOPY_ON = qsOn('canopy', false); canopyAt.t = 0; canopyJobs = []; canopyDone = []; });
   onSwitch('steepfill', () => { STEEP_FILL = qsNum('steepfill', 0.18); });
   onSwitch('swardsites', () => { SWARD_SITES = qsNum('swardsites', 12); });
   onSwitch('swardfull', () => { SWARD_FULL_MAX = qsNum('swardfull', 1.15); swardU.uSwardFull.value = SWARD_FULL_MAX; });
