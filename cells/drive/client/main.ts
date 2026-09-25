@@ -11141,7 +11141,7 @@ function trackFamily(tags: Record<string, string>): { fam: TrackFam; w: number }
   } else if (TRACK_HARD.has(s)) {
     fam = 'hard'; w = hw === 'bridleway' || hw === 'cycleway' ? 2.2 : 1.6;
   } else {
-    fam = 'trail'; w = hw === 'bridleway' ? 1.6 : hw === 'cycleway' ? 1.4 : hw === 'footway' ? 1.2 : 1.0;
+    fam = 'trail'; w = hw === 'bridleway' ? 1.8 : hw === 'cycleway' ? 1.6 : hw === 'footway' ? 1.4 : 1.3;
   }
   const mapped = parseFloat(tags.width ?? '');
   if (Number.isFinite(mapped) && mapped >= 0.5 && mapped <= 8) w = mapped;
@@ -11211,9 +11211,9 @@ function trackFamMat(fam: TrackFam): THREE.MeshLambertMaterial {
         } else if (uTrkMode > 3.5) {
           // a trail: one tread down the middle, as wide as feet and hooves make it
           float d = abs(trkU - 0.5 - trkWob);
-          trkRut = 1.0 - smoothstep(0.20, 0.34, d);
-          trkH = -uTrkDepth * (1.0 - smoothstep(0.0, 0.30, d));
-          float coarse = step(d, 0.30);
+          trkRut = 1.0 - smoothstep(0.26, 0.42, d);
+          trkH = -uTrkDepth * (1.0 - smoothstep(0.0, 0.36, d));
+          float coarse = step(d, 0.36);
           trkCov = mix(coarse, trkRut + (trkN - 0.5) * 0.9 * trkRut, trkFine);
         } else {
           float rw = uTrkMode > 2.5 ? 0.075 : 0.095;
@@ -11263,6 +11263,10 @@ function trackFamColour(fam: TrackFam, tags: Record<string, string>, ground: [nu
   // Worn soil: the palette's own hue pulled out of green (grass worn off
   // leaves the soil under it), a touch warmer; gravel greyer and paler.
   if (fam === 'hard') return [l * 1.12 + 0.05, l * 1.08 + 0.05, l * 1.0 + 0.04];
+  // A trail is trodden and compacted: a step darker and browner than the
+  // ground it crosses, or on pale granite it vanishes (measured at Yosemite:
+  // a thin pale line nobody could follow).
+  if (fam === 'trail') return [r * 0.86, g * 0.78, b * 0.66];
   return [Math.max(r, l) * 1.08, l * 0.98, Math.min(b, l) * 0.86];
 }
 
