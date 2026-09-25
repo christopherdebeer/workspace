@@ -2359,9 +2359,6 @@ function swardCoverRate(x: number, z: number): number {
  *  mixed the far field toward `softTex` as well as toward the haze colour. Off
  *  by default: see `uAirBlur`. The exact A/B for the far-field sharpness. */
 const AIR_BLUR = qsOn('airblur', false) ? 1 : 0;
-/** `wash=0..1` blends linear colour toward `softTex` before grade/quantise —
- *  exploratory painterly pre-pass. 0 is shipped truth. See `uWash`. */
-const WASH = clamp(qsNum('wash', 0), 0, 1);
 /**
  * ── THE TERRAIN MOTTLE'S SPECTRUM, AND THE PIXEL THAT HAS TO HOLD IT ──
  *
@@ -6822,8 +6819,6 @@ const compMat = new THREE.ShaderMaterial({
      * was hiding it.
      */
     uAirBlur: { value: AIR_BLUR },
-    /** Exploratory painterly pre-pass: mix toward softTex before grade/quantise. */
-    uWash: { value: WASH },
     // ── TILT-SHIFT ──
     // A plane of focus in the WORLD (a point and a normal), not a band on the
     // glass. See the block in the fragment shader.
@@ -6954,7 +6949,7 @@ const compMat = new THREE.ShaderMaterial({
     // term, 2 kills the haze outright, 3 kills the sun lobe. See __haze.
     uniform float uHazeDbg; uniform float uHazeWarm; uniform float uMpp;
     uniform float uHazeE; uniform float uHazeAmt; uniform float uSkyD;
-    uniform float uAirBlur; uniform float uWash; uniform float uTiltAmt; uniform vec3 uFocusP; uniform vec3 uFocusN;
+    uniform float uAirBlur; uniform float uTiltAmt; uniform vec3 uFocusP; uniform vec3 uFocusN;
     uniform float uTiltSharp; uniform float uTiltBlur; uniform float uTiltNearScale;
     uniform float uTanHalfFov; uniform float uTiltSky;
 ${FILMIC_GLSL}
@@ -7173,11 +7168,6 @@ ${DITHER_GLSL}
         col += mix(vec3(1.0, 0.82, 0.52), vec3(0.55, 0.85, 1.0), 0.35) * f * sunVis * 0.085 * uFlare;
       }
       col += vec3(0.85, 0.90, 1.0) * uFlash;   // lightning fills the whole frame
-      // WASH: exploratory painterly pre-pass before grade + quantise/dither.
-      // Borrow the existing atmospheric soft buffer so neighbouring materials
-      // share a little colour; rig/noBlur alpha stays sharp (step on sharp4.a).
-      // uWash 0 is a no-op — shipped truth. See switches.ts wash.
-      col = mix(col, soft, clamp(uWash, 0.0, 1.0) * step(0.25, sharp4.a));
       // DEPTH COLOUR BEFORE TONEMAPPING: distant terrain loses saturation and
       // bends toward slate/cyan while the ACES shoulder still owns its
       // luminance. The rig mask is already in alpha (noBlur writes zero), so
@@ -60941,7 +60931,6 @@ if (timeFromUrl < 0 && !qs('time')
   onSwitch('raincurtain', () => { compMat.uniforms.uRainCurtain.value = qs('raincurtain') === '0' ? 0 : 1; });
   onSwitch('widedither', () => { compMat.uniforms.uDWide.value = qsOn('widedither', true) ? 1 : 0; });
   onSwitch('airblur', () => { compMat.uniforms.uAirBlur.value = qsOn('airblur', false) ? 1 : 0; });
-  onSwitch('wash', () => { compMat.uniforms.uWash.value = clamp(qsNum('wash', 0), 0, 1); });
   onSwitch('swardforms', () => { (swardU as unknown as Record<string, { value: number }>).uSwardStructure.value = qsOn('swardforms', true) ? 1 : 0; });
   onSwitch('impink', () => { impInkU.value = clamp(qsNum('impink', 0), 0, 1); });
   // The six tree-look uniforms; absent returns each to what the load set.
