@@ -2359,8 +2359,9 @@ function swardCoverRate(x: number, z: number): number {
  *  mixed the far field toward `softTex` as well as toward the haze colour. Off
  *  by default: see `uAirBlur`. The exact A/B for the far-field sharpness. */
 const AIR_BLUR = qsOn('airblur', false) ? 1 : 0;
-/** `paintwash=0..1` (renamed from `wash`, which is the cut-face wash) blends linear colour toward `softTex` before grade/quantise —
- *  exploratory painterly pre-pass. 0 is shipped truth. See `uWash`. */
+/** `paintwash=0..1` (renamed from `wash`, which is the cut-face wash) runs a
+ *  4-quadrant Kuwahara on sceneTex before grade/quantise — structure-preserving
+ *  painterly pre-pass. 0 is shipped truth. See `uWash`. */
 const WASH = clamp(qsNum('paintwash', 0), 0, 1);
 /**
  * ── THE TERRAIN MOTTLE'S SPECTRUM, AND THE PIXEL THAT HAS TO HOLD IT ──
@@ -6822,7 +6823,7 @@ const compMat = new THREE.ShaderMaterial({
      * was hiding it.
      */
     uAirBlur: { value: AIR_BLUR },
-    /** Exploratory painterly pre-pass: mix toward softTex before grade/quantise. */
+    /** Exploratory painterly pre-pass: 4-quadrant Kuwahara on sceneTex before grade/quantise. */
     uWash: { value: WASH },
     // ── TILT-SHIFT ──
     // A plane of focus in the WORLD (a point and a normal), not a band on the
@@ -7173,11 +7174,38 @@ ${DITHER_GLSL}
         col += mix(vec3(1.0, 0.82, 0.52), vec3(0.55, 0.85, 1.0), 0.35) * f * sunVis * 0.085 * uFlare;
       }
       col += vec3(0.85, 0.90, 1.0) * uFlash;   // lightning fills the whole frame
-      // WASH: exploratory painterly pre-pass before grade + quantise/dither.
-      // Borrow the existing atmospheric soft buffer so neighbouring materials
-      // share a little colour; rig/noBlur alpha stays sharp (step on sharp4.a).
-      // uWash 0 is a no-op — shipped truth. See switches.ts paintwash.
-      col = mix(col, soft, clamp(uWash, 0.0, 1.0) * step(0.25, sharp4.a));
+      // PAINTWASH: 4-quadrant Kuwahara on sceneTex before grade + quantise.
+      // Structure-preserving painterly pass — picks the lowest-luma-variance
+      // sector mean so flats unify without Gaussian mush. Radius ~2 art pixels.
+      // Rig/noBlur stays sharp. uWash 0 is a no-op. See switches.ts paintwash.
+      if (uWash > 0.001 && sharp4.a >= 0.25) {
+        vec2 pStep = uPix * 2.0;
+        float bestVar = 1.0e6;
+        vec3 bestMean = sharp;
+        // Four quadrants relative to the pixel; each is a 2x2 of scene samples.
+        // Offsets are the quadrant origin in art-pixel steps ( -1/-1, 0/-1, -1/0, 0/0 ).
+        for (int qi = 0; qi < 4; qi++) {
+          float qx = (qi == 1 || qi == 3) ? 0.0 : -1.0;
+          float qy = (qi >= 2) ? 0.0 : -1.0;
+          vec3 sRGB = vec3(0.0);
+          float sL = 0.0;
+          float sL2 = 0.0;
+          for (int j = 0; j < 2; j++) {
+            for (int i = 0; i < 2; i++) {
+              vec3 s = texture2D(sceneTex, vUv + pStep * vec2(qx + float(i), qy + float(j))).rgb;
+              float L = dot(s, vec3(0.299, 0.587, 0.114));
+              sRGB += s;
+              sL += L;
+              sL2 += L * L;
+            }
+          }
+          sRGB *= 0.25;
+          sL *= 0.25;
+          float v = max(sL2 * 0.25 - sL * sL, 0.0);
+          if (v < bestVar) { bestVar = v; bestMean = sRGB; }
+        }
+        col = mix(col, bestMean, clamp(uWash, 0.0, 1.0));
+      }
       // DEPTH COLOUR BEFORE TONEMAPPING: distant terrain loses saturation and
       // bends toward slate/cyan while the ACES shoulder still owns its
       // luminance. The rig mask is already in alpha (noBlur writes zero), so
