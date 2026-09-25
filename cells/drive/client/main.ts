@@ -38727,6 +38727,39 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
   }
   return rows;
 };
+/**
+ * How much of the forest is INTERIOR: every tree site the manifest holds within
+ * `r` of the render focus, classified by whether each of its four quadrants has
+ * another tree within `nearM`. A surrounded tree's crown is hidden by its
+ * neighbours from every side but above, so the share of them is the ceiling on
+ * what a stand-level (canopy) representation could take off the tree bill.
+ * Reported in distance bands, because the question differs near and far.
+ */
+(window as unknown as { __standcensus?: object }).__standcensus = (r = 1400, nearM = 7): object => {
+  const [fx, fz] = renderFocusXZ();
+  const pts: Array<[number, number, number]> = [];
+  for (const cell of vegGrid.values()) for (const v of cell) {
+    if (!(TREE_KINDS as readonly string[]).includes(v.k)) continue;
+    const d = Math.hypot(v.x - fx, v.z - fz);
+    if (d <= r) pts.push([v.x, v.z, d]);
+  }
+  const C = nearM, grid = new Map<string, number[]>();
+  pts.forEach((p, i) => { const k = `${Math.floor(p[0] / C)},${Math.floor(p[1] / C)}`; const a = grid.get(k); if (a) a.push(i); else grid.set(k, [i]); });
+  const bands = [150, 400, 800, 1400, Infinity];
+  const out = bands.map((b) => ({ to: b, trees: 0, interior: 0 }));
+  for (const [x, z, d] of pts) {
+    let q = 0;
+    const cx = Math.floor(x / C), cz = Math.floor(z / C);
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const k of grid.get(`${cx + i},${cz + j}`) ?? []) {
+      const dx = pts[k][0] - x, dz = pts[k][1] - z;
+      if ((dx === 0 && dz === 0) || dx * dx + dz * dz > C * C) continue;
+      q |= dx >= 0 ? (dz >= 0 ? 1 : 2) : (dz >= 0 ? 4 : 8);
+    }
+    const b = out.find((o) => d <= o.to)!;
+    b.trees++; if (q === 15) b.interior++;
+  }
+  return { focus: [+fx.toFixed(0), +fz.toFixed(0)], nearM, total: pts.length, bands: out.map((o) => ({ ...o, share: o.trees ? +(o.interior / o.trees).toFixed(3) : 0 })) };
+};
 (window as unknown as { __vegsites?: object }).__vegsites = (gx: number, gz: number): object[] =>
   (vegGrid.get(`${gx},${gz}`) ?? []).map((v) => ({
     role: v.role, anchor: !!v.anchor, k: v.k,
