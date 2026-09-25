@@ -266,6 +266,8 @@ export const SWITCHES = [
     note: 'shfade=0 drops the shadow’s distance fade' },
   { id: 'shsnap', kind: 'toggle', marks: ['legacy'], apply: 'live', fallback: 'on',
     note: 'shsnap=0 stops the shadow map snapping to its own texels' },
+  { id: 'canopy', kind: 'toggle', marks: ['look'], apply: 'live', fallback: 'off',
+    note: 'canopy=1 draws closed forest as a crown surface over tree-cover ground around the view (prototype, for frames)' },
   { id: 'shrub', kind: 'toggle', marks: ['legacy'], apply: 'live', fallback: 'on',
     note: 'shrub=0 removes the sward’s knee-high layer' },
   { id: 'swardhop', kind: 'toggle', marks: ['legacy'], apply: 'live', fallback: 'on',

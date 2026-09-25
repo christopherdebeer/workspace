@@ -16683,6 +16683,106 @@ const shrubs = vegMesh(swayWeight(faceTone(shrubGeo(), 0.24, 0.3), 1.3), leafMat
 shrubs.name = 'veg-shrub';
 const shrubCol = new THREE.Color();
 let shrubN = 0, shrubNear = 0;
+// ── THE CANOPY: CLOSED FOREST AS ONE SURFACE (PROTOTYPE) ──
+//
+// Measured at Nagato (`__standcensus`): the manifest holds about forty trees a
+// hectare within 1.4 km, where the satellite shows closed canopy at five
+// hundred to fifteen hundred; and only ~5-12% of the sites that do exist are
+// surrounded, so culling "interior" trees could never have bought much. A
+// forest the eye reads as a forest is a CANOPY, and a canopy is a surface:
+// here a lattice at CANOPY_STEP over tree-cover ground (WorldCover 10), stood
+// a stand height over the drawn ground, with a crown lump per jittered cell so
+// the roof reads as crowns and not as a sheet. Off by default; `?canopy=1`.
+let CANOPY_ON = qsOn('canopy', false);
+const CANOPY_STEP = 4, CANOPY_N = 200, CANOPY_H = 13, CANOPY_CROWN = 6.5;
+const canopyMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true });
+terrainFx(canopyMat);
+const canopyMesh = new THREE.Mesh(new THREE.BufferGeometry(), canopyMat);
+canopyMesh.name = 'canopy';
+canopyMesh.frustumCulled = false;
+scene.add(canopyMesh);
+let canopyAt = { x: NaN, z: NaN, t: 0, org: '' };
+const canopyStat = { builds: 0, ms: 0, cells: 0, tris: 0 };
+function canopyHash(i: number, j: number, k: number): number {
+  let h = (i * 374761393 + j * 668265263 + k * 2147483647) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+/** Tree-cover evidence at a point: the share of five taps over a cover pixel
+ *  that read WorldCover 10, so a stand's edge is a ramp and not the raster. */
+function canopyEvidence(x: number, z: number): number {
+  let n = 0;
+  const r = 14;
+  if (sampleCover(x, z) === 10) n += 2;
+  if (sampleCover(x + r, z + 5) === 10) n++;
+  if (sampleCover(x - r, z - 5) === 10) n++;
+  if (sampleCover(x + 5, z - r) === 10) n++;
+  if (sampleCover(x - 5, z + r) === 10) n++;
+  return n / 6;
+}
+/** The crown roof over a point: the tallest dome of the jittered crowns in the
+ *  3x3 cells around it, 0 in a gap and 1 at a crown's top. */
+function canopyDome(x: number, z: number): { dome: number; tone: number } {
+  const ci = Math.floor(x / CANOPY_CROWN), cj = Math.floor(z / CANOPY_CROWN);
+  let dome = 0, tone = 0.5;
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+    const i = ci + a, j = cj + b;
+    const cx = (i + 0.15 + 0.7 * canopyHash(i, j, 1)) * CANOPY_CROWN;
+    const cz = (j + 0.15 + 0.7 * canopyHash(i, j, 2)) * CANOPY_CROWN;
+    const r = CANOPY_CROWN * (0.55 + 0.35 * canopyHash(i, j, 3));
+    const d2 = ((x - cx) ** 2 + (z - cz) ** 2) / (r * r);
+    const v = d2 < 1 ? Math.sqrt(1 - d2) : 0;
+    if (v > dome) { dome = v; tone = canopyHash(i, j, 4); }
+  }
+  return { dome, tone };
+}
+function refreshCanopy(now: number): void {
+  canopyMesh.visible = CANOPY_ON;
+  if (!CANOPY_ON) return;
+  const [fx, fz] = renderFocusXZ();
+  const org = `${origin.lat},${origin.lon}`;
+  const moved = Math.hypot(fx - canopyAt.x, fz - canopyAt.z);
+  if (!(moved > 64) && org === canopyAt.org && now - canopyAt.t < 4000) return;
+  const t0 = performance.now();
+  const half = (CANOPY_N * CANOPY_STEP) / 2;
+  const x0 = Math.round((fx - half) / 32) * 32, z0 = Math.round((fz - half) / 32) * 32;
+  const V = CANOPY_N + 1;
+  const pos = new Float32Array(V * V * 3), col = new Float32Array(V * V * 3);
+  const ev = new Float32Array(V * V);
+  for (let j = 0; j < V; j++) for (let i = 0; i < V; i++) {
+    const x = x0 + i * CANOPY_STEP, z = z0 + j * CANOPY_STEP, k = j * V + i;
+    const e = canopyEvidence(x, z);
+    ev[k] = onCarriageway(x, z, 2).road ? 0 : e;
+    const g = groundAt(x, z);
+    const { dome, tone } = canopyDome(x, z);
+    const stand = CANOPY_H * (0.8 + 0.4 * canopyHash(Math.floor(x / 90), Math.floor(z / 90), 7));
+    const rise = Math.min(1, Math.max(0, (ev[k] - 0.25) / 0.35));
+    const ramp = rise * rise * (3 - 2 * rise);
+    pos[k * 3] = x; pos[k * 3 + 1] = g + ramp * (stand * 0.78 + dome * 3.2); pos[k * 3 + 2] = z;
+    const lit = 0.72 + 0.45 * dome, t = 0.85 + 0.3 * tone;
+    col[k * 3] = 0.19 * lit * t; col[k * 3 + 1] = 0.30 * lit * t; col[k * 3 + 2] = 0.12 * lit * t;
+  }
+  const idx: number[] = [];
+  for (let j = 0; j < CANOPY_N; j++) for (let i = 0; i < CANOPY_N; i++) {
+    const a = j * V + i, b = a + 1, c = a + V, d = c + 1;
+    if (Math.min(ev[a], ev[b], ev[c], ev[d]) < 0.25) continue;
+    idx.push(a, c, b, b, c, d);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  canopyMesh.geometry.dispose();
+  canopyMesh.geometry = geo;
+  canopyAt = { x: fx, z: fz, t: now, org };
+  canopyStat.builds++; canopyStat.ms = +(performance.now() - t0).toFixed(1);
+  canopyStat.cells = idx.length / 6; canopyStat.tris = idx.length / 3;
+}
+(window as unknown as { __canopy?: object }).__canopy = (on?: boolean): object => {
+  if (on !== undefined) { CANOPY_ON = on; canopyAt.t = 0; refreshCanopy(performance.now()); }
+  return { on: CANOPY_ON, ...canopyStat, at: [Math.round(canopyAt.x), Math.round(canopyAt.z)] };
+};
 function refreshShrubs(): void {
   shrubs.visible = camMode !== 'top';
   if (!SHRUB_ON || Number.isNaN(swardFX) || vegScale <= 0 || grassScale <= 0) { shrubs.count = 0; shrubN = 0; shrubNear = 0; return; }
@@ -17849,6 +17949,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     if (n >= EZ_PRICE_MIN) ezPriceNow[fam] = tris / n;
   }
   refreshShrubs();
+  refreshCanopy(performance.now());
   vegMark('shrubs');
   // ── AND THE MANIFEST, PAST THE DRAW RING ──
   //
@@ -61135,6 +61236,7 @@ if (timeFromUrl < 0 && !qs('time')
   onSwitch('bldface', () => { BLD_FACE = qsOn('bldface', true); rebuildInPlace(); });
   onSwitch('bldpara', () => { BLD_PARA = qsOn('bldpara', true); rebuildInPlace(); });
   onSwitch('shrub', () => { SHRUB_ON = qs('shrub') !== '0'; });
+  onSwitch('canopy', () => { CANOPY_ON = qsOn('canopy', false); canopyAt.t = 0; });
   onSwitch('steepfill', () => { STEEP_FILL = qsNum('steepfill', 0.18); });
   onSwitch('swardsites', () => { SWARD_SITES = qsNum('swardsites', 12); });
   onSwitch('swardfull', () => { SWARD_FULL_MAX = qsNum('swardfull', 1.15); swardU.uSwardFull.value = SWARD_FULL_MAX; });
