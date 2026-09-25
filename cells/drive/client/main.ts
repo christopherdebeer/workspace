@@ -2359,9 +2359,9 @@ function swardCoverRate(x: number, z: number): number {
  *  mixed the far field toward `softTex` as well as toward the haze colour. Off
  *  by default: see `uAirBlur`. The exact A/B for the far-field sharpness. */
 const AIR_BLUR = qsOn('airblur', false) ? 1 : 0;
-/** `wash=0..1` blends linear colour toward `softTex` before grade/quantise —
+/** `paintwash=0..1` (renamed from `wash`, which is the cut-face wash) blends linear colour toward `softTex` before grade/quantise —
  *  exploratory painterly pre-pass. 0 is shipped truth. See `uWash`. */
-const WASH = clamp(qsNum('wash', 0), 0, 1);
+const WASH = clamp(qsNum('paintwash', 0), 0, 1);
 /**
  * ── THE TERRAIN MOTTLE'S SPECTRUM, AND THE PIXEL THAT HAS TO HOLD IT ──
  *
@@ -7176,7 +7176,7 @@ ${DITHER_GLSL}
       // WASH: exploratory painterly pre-pass before grade + quantise/dither.
       // Borrow the existing atmospheric soft buffer so neighbouring materials
       // share a little colour; rig/noBlur alpha stays sharp (step on sharp4.a).
-      // uWash 0 is a no-op — shipped truth. See switches.ts wash.
+      // uWash 0 is a no-op — shipped truth. See switches.ts paintwash.
       col = mix(col, soft, clamp(uWash, 0.0, 1.0) * step(0.25, sharp4.a));
       // DEPTH COLOUR BEFORE TONEMAPPING: distant terrain loses saturation and
       // bends toward slate/cyan while the ACES shoulder still owns its
@@ -60941,7 +60941,7 @@ if (timeFromUrl < 0 && !qs('time')
   onSwitch('raincurtain', () => { compMat.uniforms.uRainCurtain.value = qs('raincurtain') === '0' ? 0 : 1; });
   onSwitch('widedither', () => { compMat.uniforms.uDWide.value = qsOn('widedither', true) ? 1 : 0; });
   onSwitch('airblur', () => { compMat.uniforms.uAirBlur.value = qsOn('airblur', false) ? 1 : 0; });
-  onSwitch('wash', () => { compMat.uniforms.uWash.value = clamp(qsNum('wash', 0), 0, 1); });
+  onSwitch('paintwash', () => { compMat.uniforms.uWash.value = clamp(qsNum('paintwash', 0), 0, 1); });
   onSwitch('swardforms', () => { (swardU as unknown as Record<string, { value: number }>).uSwardStructure.value = qsOn('swardforms', true) ? 1 : 0; });
   onSwitch('impink', () => { impInkU.value = clamp(qsNum('impink', 0), 0, 1); });
   // The six tree-look uniforms; absent returns each to what the load set.
