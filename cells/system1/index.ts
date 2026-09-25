@@ -117,6 +117,9 @@ export function relatable(key: string, type?: string | null): boolean {
 }
 
 export function perceivable(key: string, type: string | null | undefined): boolean {
+  // ADR-0099: a landed deploy is an event worth a project/goal edge, though it
+  // lives under the otherwise-skipped cells/ prefix (pointers + manifests stay out).
+  if (type === 'cell-deploy' && key.startsWith('cells/') && key.includes('/deploy/')) return true;
   if (SKIP_PREFIXES.some((p) => key.startsWith(p))) return false;
   if (type && SKIP_TYPES.has(type)) return false;
   return true;
