@@ -16878,7 +16878,9 @@ function canopyHides(x: number, z: number): boolean {
 }
 (window as unknown as { __canopy?: object }).__canopy = (on?: boolean): object => {
   if (on !== undefined) { CANOPY_ON = on; canopyAt.t = 0; canopyJob = null; if (!on) canopyGrid = null; }
-  return { on: CANOPY_ON, ...canopyStat, job: canopyJob ? canopyJob.j : null, at: [Math.round(canopyAt.x), Math.round(canopyAt.z)] };
+  const hist = [0, 0, 0, 0, 0, 0];
+  if (canopyGrid) for (const e of canopyGrid.ev) hist[Math.min(5, Math.floor(e * 6 + 1e-6))]++;
+  return { on: CANOPY_ON, ...canopyStat, job: canopyJob ? canopyJob.j : null, at: [Math.round(canopyAt.x), Math.round(canopyAt.z)], evHist: hist };
 };
 function refreshShrubs(): void {
   shrubs.visible = camMode !== 'top';
