@@ -96,7 +96,7 @@ import { madeKind, madeShares, MADE_GLSL, type MadeKind } from './constructed-gr
 import { registerBuildingFabric, inheritBuildingFabric, attachBuildingFabric, setBuildingCondition, type BuildingCondition } from './building-fabric';
 import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, SUBSTRATE_VIEWS, groundInkPixels, type GroundViewId } from './ground-view';
 import { SUB_GLSL, SUB_ROCK_CAST, SUB_DOM_M, subDomainAt, subEvidence, subExpressOf, subGrainOf, subLayerTint,
-  subGrassAllow, SUB_SWARD_K, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
+  subGrassAllow, SUB_SWARD_K, SUB_K, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
   type SubstrateField } from './substrate-field';
 import { gramDecode } from './facade-grammar';
 import { GRASS_M2, GRASS_UNKNOWN, GRASS_DEFAULT, swardCoverEvidence, SWARD_EV }
@@ -8038,7 +8038,12 @@ function terrainFx(mat: THREE.Material, opts: {
         uniform float uCloudS; uniform vec2 uWind; uniform float uMpp;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
         uniform vec3 uSteepFill;
+        // Declared once per program: slipify declares the same weather field
+        // and a track wears both (a redefinition fails the link silently).
+        #ifndef DRIVE_WX_DECL
+        #define DRIVE_WX_DECL
         uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
+        #endif
         ${CLOUD_GLSL}
         ${SUNM_GLSL}`)
       // ── ON THE DIRECT TERM ONLY ──
@@ -11288,7 +11293,12 @@ function trackFamMat(fam: TrackFam): THREE.MeshLambertMaterial {
           normal = normalize(abs(det) * normal - sg);
         }`);
   };
-  mat.customProgramCacheKey = () => `trackfam-${fam}`;
+  // THE GROUND'S OWN LIGHT: cloud shadow, weather tint, sky fill — without
+  // it the track was lit as a plain Lambert strip over a terrain that takes
+  // all three, and read as a decal wherever the sky was not clear.
+  if (fam !== 'paved' && fam !== 'steps') terrainFx(mat);
+  const keyWas = mat.customProgramCacheKey?.bind(mat);
+  mat.customProgramCacheKey = () => `trackfam-${fam}|${keyWas ? keyWas() : ''}`;
   mat.name = `track-${fam}`;
   trackFamMats.set(fam, mat);
   return mat;
@@ -11302,12 +11312,28 @@ function trackFamColour(fam: TrackFam, tags: Record<string, string>, ground: [nu
   const l = (r + g + b) / 3;
   // Worn soil: the palette's own hue pulled out of green (grass worn off
   // leaves the soil under it), a touch warmer; gravel greyer and paler.
-  if (fam === 'hard') return [l * 1.12 + 0.05, l * 1.08 + 0.05, l * 1.0 + 0.04];
-  // A trail is trodden and compacted: a step darker and browner than the
-  // ground it crosses, or on pale granite it vanishes (measured at Yosemite:
-  // a thin pale line nobody could follow).
-  if (fam === 'trail') return [r * 0.86, g * 0.78, b * 0.66];
-  return [Math.max(r, l) * 1.08, l * 0.98, Math.min(b, l) * 0.86];
+  //
+  // ── THE WORN SOIL IS THE SUBSTRATE'S OWN FINES ──
+  //
+  // A rut is where the sward is worn off the soil, and the terrain already
+  // draws that soil wherever it is exposed: the substrate's fines transform
+  // (SUB_K.soil*, the reddish-brown bare patches on the Senqu plateau). The
+  // first cut invented its own rule — the palette lifted 8% brighter and
+  // pulled toward tan — and on the device the tracks sat a step or two paler
+  // and greyer than the bare ground beside them, worst at range where the
+  // band is all you see. The same transform on the same palette colour is
+  // the same colour, by construction; nothing here brightens.
+  const K = SUB_K;
+  const so: [number, number, number] = [r * K.soilR, g * K.soilG, b * K.soilB];
+  if (fam === 'hard') {
+    // Gravel is broken stone over that soil: greyer, and a little paler.
+    return [so[0] * 0.55 + l * 0.5, so[1] * 0.55 + l * 0.5, so[2] * 0.55 + l * 0.52];
+  }
+  // A trail is trodden and compacted: the soil, a step darker.
+  if (fam === 'trail') return [so[0] * 0.88, so[1] * 0.86, so[2] * 0.84];
+  // A grass track is mostly grass: the soil shows only where the ruts are.
+  if (fam === 'grass') return [r * 0.4 + so[0] * 0.6, g * 0.4 + so[1] * 0.6, b * 0.4 + so[2] * 0.6];
+  return so;
 }
 
 const railTexCache = new Map<string, THREE.Texture>();
@@ -11821,7 +11847,10 @@ function slipify<T extends THREE.Material>(mat: T): T {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying float vSlip; varying vec3 vDirt; varying vec2 vSlipXZ; varying float vWy;
+        #ifndef DRIVE_WX_DECL
+        #define DRIVE_WX_DECL
         uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
+        #endif
         uniform float uPudOn; uniform vec3 uPudSky; uniform vec3 uPudGnd; uniform float uPudSun;
         uniform vec3 uSunW; uniform vec3 uCamW; uniform float uWxT;
         float pdh(vec2 p){ p = fract(p * vec2(233.34, 851.73)); p += dot(p, p + 23.45); return fract(p.x * p.y); }
