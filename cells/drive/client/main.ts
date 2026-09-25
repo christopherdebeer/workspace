@@ -57364,12 +57364,18 @@ const sheetGrab = (w: number, withHud: boolean): Promise<HTMLCanvasElement> => n
 });
 type W = Record<string, ((...a: unknown[]) => unknown) | undefined>;
 const probe = (): W => window as unknown as W;
-function sheetPlan(kind: 'godcam' | 'ab', t: { x: number; z: number }, here: ReturnType<typeof shotState>['god'],
+function sheetPlan(kind: 'godcam' | 'ab', at: () => { x: number; z: number }, here: ReturnType<typeof shotState>['god'],
   ab?: AbSpec): SheetShot[] {
   // A/B reuses the seat's OWN framing, which is already out of the ground (a
   // cab eye stands two metres up); only the orbit grid needs real clearance.
   const clearance = kind === 'ab' ? 0.5 : 8;
   const god = (a: { y: number; az: number; el: number; dist: number; fov: number }): void => {
+    // Resolved at every shot, not once: a world switch rebuilds by hopping in
+    // place, the hop moves the ORIGIN to the truck, and a target held in the
+    // old local metres then points a kilometre and a half away (the first
+    // device A/B of trackfam: every B frame an empty hillside, the header's
+    // target reading 1359,913).
+    const t = at();
     godTarget.set(t.x, groundAt(t.x, t.z) + a.y, t.z);
     // NOT INSIDE A VALLEY WALL. A fixed orbit of 320 m at 28 degrees puts the
     // camera in the rock wherever the target sits under a cliff (Yosemite's N
@@ -57430,15 +57436,18 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam', abText = abSpecText): 
     ab = r;
   }
   const st = shotState();
-  const target = { x: st.god.x, z: st.god.z };
-  const plan = sheetPlan(kind, target, st.god, ab);
+  // THE TARGET IS A PLACE ON EARTH, not a local coordinate — see sheetPlan.
+  const targetLL = localToLatLon(st.god.x, st.god.z);
+  const targetAt = (): { x: number; z: number } => { const [x, z] = toLocal(targetLL[0], targetLL[1]); return { x, z }; };
+  const plan = sheetPlan(kind, targetAt, st.god, ab);
   // Every switch the comparison touches, as the session had it.
   const switchesWere: Array<[SwitchId, string | null]> = ab ? ab.b.map(([k]) => [k, qs(k)]) : [];
   const cellW = kind === 'ab' ? (ab && ab.sides.length > 2 ? 300 : 360) : 200;
   sheet.phase = 'run'; sheet.kind = kind; sheet.done = 0; sheet.total = plan.length; sheet.blob = null;
   const saved = {
     timeMode, camMode, look: hydroLookLive, godInit, hudOn,
-    god: { t: godTarget.clone(), az: godAz, el: godEl, dist: godDist, fov: godFov },
+    god: { t: godTarget.clone(), ll: localToLatLon(godTarget.x, godTarget.z), dy: godTarget.y - groundAt(godTarget.x, godTarget.z),
+      az: godAz, el: godEl, dist: godDist, fov: godFov },
     wx: { next: wx.next, at: wx.at, cloud: wx.cloud, rain: wx.rain },
     tiles: chartOn.tiles, stream: chartOn.stream, xray: xrayMode, gv: groundView,
   };
@@ -57467,10 +57476,20 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam', abText = abSpecText): 
         while (hopping && performance.now() - t0 < 30000) await sheetSleep(250);
         while (performance.now() - t0 < 45000) {
           const hs = hydroSys?.stats();
-          if (swardSettled() && !(hs && (hs.pendingBuilds > 0 || (hs as { dirtyTiles?: number }).dirtyTiles))) break;
+          // …and the GROUND: a hop sweeps every terrain mesh, and a frame
+          // taken before the one under the target is back is sky and haze
+          // (the device A/B's white DAWN cell).
+          const tt = targetAt();
+          const ground = terrainDirty.size === 0 && meshSurfaceAt(tt.x, tt.z) !== null;
+          if (ground && swardSettled() && !(hs && (hs.pendingBuilds > 0 || (hs as { dirtyTiles?: number }).dirtyTiles))) break;
           await sheetSleep(250);
         }
-        await sheetSleep(400);
+        // Frame again on the ground that is there now: the setup ran before
+        // the hop, when groundAt under the target still answered the old
+        // world's datum, and the camera stood under the new ground (the
+        // harness A/B's dark DAWN cell).
+        shot.setup();
+        await sheetSleep(1500);
       }
       first = false;
       cells.set(`${shot.row}|${shot.col}`, await sheetGrab(cellW, !!shot.hud));
@@ -57485,7 +57504,12 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam', abText = abSpecText): 
     probe().__xray?.(XRAY_MODES[saved.xray] ?? 'OFF');
     probe().__groundview?.(saved.gv);
     setChartLayer('tiles', saved.tiles); setChartLayer('stream', saved.stream);
-    godTarget.copy(saved.god.t); godAz = saved.god.az; godEl = saved.god.el;
+    {
+      // Back to the same PLACE: restoring the switches may have hopped again.
+      const [gx, gz] = toLocal(saved.god.ll[0], saved.god.ll[1]);
+      godTarget.set(gx, groundAt(gx, gz) + saved.god.dy, gz);
+    }
+    godAz = saved.god.az; godEl = saved.god.el;
     godDist = saved.god.dist; godFov = saved.god.fov; godInit = saved.godInit;
     if (camMode !== saved.camMode) setCam(saved.camMode);
     if (!WX_PIN) { wx.next = saved.wx.next; wx.at = saved.wx.at; wx.cloud = saved.wx.cloud; wx.rain = saved.wx.rain; }
@@ -57515,7 +57539,7 @@ async function runSheet(kind: 'godcam' | 'ab' = 'godcam', abText = abSpecText): 
   st.lines.forEach((l, i) => g.fillText(l, 6, 4 + i * 13));
   g.fillStyle = '#9fb3a8';
   g.fillText(`${ab ? `A/B · A: ${abSide(ab.a)} · B: ${abSide(ab.b)}` : 'godcam sheet'} · build ${build} · `
-    + `${new Date().toISOString().slice(0, 16)}Z · target ${Math.round(target.x - viewX())},${Math.round(target.z - viewZ())}`, 6, 43);
+    + `${new Date().toISOString().slice(0, 16)}Z · target ${targetLL[0].toFixed(5)},${targetLL[1].toFixed(5)}`, 6, 43);
   rows.forEach((r, ri) => {
     const y = top + ri * (fh + gap + lab);
     g.fillStyle = '#e8e2d0'; g.fillText(r, 6, y + lab + 4);
