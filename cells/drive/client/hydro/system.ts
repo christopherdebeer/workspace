@@ -157,6 +157,9 @@ interface TileRecord {
   meshTriangles: number;
 }
 
+
+/** Target vertex spacing of the coastal surf strip, metres. */
+const SURF_CELL_M = 9;
 const immediateBuild = async (job: () => HydroTileField): Promise<HydroTileField> => job();
 
 /**
@@ -355,11 +358,19 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     geo.computeBoundingSphere();
     return geo;
   };
-  // A production coastal cell is about 75m wide. Eight local subdivisions
-  // bring only the swash cells down to about 9m without tessellating the open
-  // ocean. Vertices are shared across neighbouring parent cells.
+  // The swash cells want about SURF_CELL_M between vertices, and the
+  // subdivision is SOLVED from the parent cell to get there. It was a fixed 8,
+  // written when a coastal cell was about 75m; the coastal mesh is now
+  // meshSegments x coastalMeshMultiplier (96) over a ~2km tile, about 21m a
+  // cell, so 8 put a vertex every 2.6m across the whole 96m shore band.
+  // Measured on a device at Nagato: the surf strips were 2.98M of the water's
+  // 3.24M triangles, up to 564k in one tile. Vertices are shared across
+  // neighbouring parent cells, and the strip's own edges stay on the parent
+  // lattice, so a coarser subdivision cannot open a crack against the coarse
+  // mesh beside it.
   const buildSurf = (): THREE.BufferGeometry | undefined => {
-    const subdivision = 8;
+    const parentM = Math.max(rectSpanX / segmentsX, rectSpanZ / segmentsZ);
+    const subdivision = Math.min(8, Math.max(1, Math.ceil(parentM / SURF_CELL_M)));
     const fineX = segmentsX * subdivision;
     const fineZ = segmentsZ * subdivision;
     const pos: number[] = [], uvs: number[] = [], idx: number[] = [];

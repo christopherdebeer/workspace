@@ -19440,3 +19440,18 @@ layers its neighbours do reads as a decal.
   `non-finite frames` count them with the camera and speed of the last one;
   `?nanpaint=1` paints a non-finite scene pixel magenta (dim where the post
   chain spread one). Not yet reproduced in the harness: 188 reads, 0 hits.
+
+## The water's 4M triangles were the surf strip, subdivided for a coarser mesh
+
+A device dump at Nagato (tseg 256) read 11.75M pre-cull triangles: terrain
+5.02M, **hydro-tile 3.99M**, trees 2.02M. `__hydromesh()` (every hydro mesh by
+name and triangle count) put **2.98M of the water's 3.24M in the `:surf`
+meshes**, up to 564k in one tile. `buildSurf` subdivided each coastal cell a
+fixed 8×, with a comment sizing it against a 75 m cell; the coastal mesh is
+now `meshSegments × coastalMeshMultiplier` = 96 over a ~2 km tile, ~21 m a
+cell, so the strip had a vertex every 2.6 m across its whole 96 m band. The
+subdivision is solved now, `ceil(parentCell / SURF_CELL_M)` with
+`SURF_CELL_M = 9` (the comment's own target), capped at 8. Same spot, same
+harness: **3,235,290 → 492,744 water triangles**, the worst surf tile
+563,712 → 35,232. `hydro`, `hydro-render-cutover`, `hydro-coast` and
+`hydro-resolution` green. Not yet judged by eye on a surf frame.

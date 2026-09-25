@@ -6429,6 +6429,20 @@ function stepLuma(now: number): void {
   lumaStat.sync++;
   lumaNanScan();
 }
+/** Every hydro mesh in the scene with its triangle count — the dump's
+ *  `scene triangles` row put 4M on water at Nagato, against a lattice capped
+ *  at 128 a side, and this is what says which meshes carry them. */
+(window as unknown as { __hydromesh?: object }).__hydromesh = (): object => {
+  const rows: Array<{ n: string; tris: number; vis: boolean }> = [];
+  hydroSys?.object3d.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const g = m.geometry as THREE.BufferGeometry;
+    rows.push({ n: m.name, tris: Math.round((g.index ? g.index.count : g.attributes.position.count) / 3), vis: m.visible });
+  });
+  rows.sort((a, b) => b.tris - a.tris);
+  return { meshes: rows.length, tris: rows.reduce((t, r) => t + r.tris, 0), rows: rows.slice(0, 30) };
+};
 (window as unknown as { __nan?: object }).__nan = (): object => ({ ...nanStat });
 (window as unknown as { __lumastat?: object }).__lumastat = (): object => ({ ...lumaStat, async: lumaStat.async, on: lumaAsync, pending: !!lumaPending, primed: lumaPrimed });
 const depVec = new THREE.Vector3();
