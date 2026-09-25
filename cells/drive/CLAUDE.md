@@ -19483,3 +19483,26 @@ whole stretch, cut faces 2–6 m either side. The Cape fixtures are
 Town, Bixby: same exposed and exempt counts to the segment), so the rule did not
 fire there at all — their exempt burials are not chord runs, which is what the
 split was meant to preserve. Measured with `__buried(900)` per fixture.
+
+## The canopy (`?canopy=1`): closed forest as a surface, and the budget it frees
+
+`__standcensus` at Nagato: ~40 trees a hectare in the manifest where the
+satellite shows closed canopy, and only 5–12% of sites surrounded — so culling
+"interior" trees could never have saved much. The canopy draws tree-cover
+ground (WorldCover 10, five-tap evidence) as a lattice a stand height over the
+drawn ground: an inner ring at 6 m, an outer at 12 m out to the tree draw
+range, crowns evaluated per fragment (jittered-cell domes, band-limited to
+their mean), steep lattice faces shaded as the stand's side and holed in the
+crown gaps. The rebuild is a sliced job in the frame loop (`CANOPY_SLICE_MS`);
+the device dump before slicing showed 124–217 ms spikes.
+
+Trees whose site is inside closed canopy (every surrounding node ≥ 0.8
+evidence, past the near field) are left to it (`canopyHides`, in both
+gathers). **Hiding them saves nothing on its own**: the tree triangle budget
+is a target the allocator always spends — hiding 7,538 trees moved the bill
+0.68M → 0.72M. So with the canopy up the budget is multiplied by
+`1 − 0.75 × share` (floored 0.3), share being the hidden fraction of the near
+gather. Measured at Nagato (pop 8x, range 1.4 km): 85,936 trees hidden, 90%,
+budget ×0.32, canopy 302k triangles, rebuild 523 ms total sliced. In the
+harness trees are capped by population, not budget, so the saving only shows
+on a device, where the dump reads 2.29M of a 2.4M budget.

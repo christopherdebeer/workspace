@@ -1,8 +1,8 @@
 {
   "cell": "c15r/drive",
   "cellId": "drive-dcfd1204",
-  "treeVersion": "tree:a800a8426db7f6c7bc91d882c76effb9be85551345fe0d2890f2affaf709b7c7",
-  "syncedAt": "2026-09-25T16:15:07.270Z",
+  "treeVersion": "tree:64e7fdf6343124f70b4ac45e8abb89b95f908fc46eaa044e57456d9c15959ddd",
+  "syncedAt": "2026-09-25T16:45:01.177Z",
   "files": {
     "API-AUDIT-2026-09-11.md": "sha256:4520f25ecd5e2fbd159e3870ed438bd1b03c4ed36def3d4da2bcf70f6aab50c4",
     "CLAUDE.md": "sha256:2b67c3021c7c8a2f589a2dfde91f1262c7c5b943587960b6818a405a6d1c8e31",
@@ -98,7 +98,7 @@
     "client/lab-dials.ts": "sha256:a4384291f86bdad09f6780370c3c940233d4c11bad9dc1966137c2a523fe6b02",
     "client/labs.ts": "sha256:656fe6912ce271ac982bd85ac74273688a48466a5f73d7888d6d251221e715cb",
     "client/landmarks.ts": "sha256:f84d2a41a45e77fed0f24da8759e4610885dbb5b2fe2ee9cc337db6f85fa2ae4",
-    "client/main.ts": "sha256:3eee8c37f6bcc2aa584e9a5bec1019f817379546a6c0fad29e42731dea432f84",
+    "client/main.ts": "sha256:d42ef7f9141ff3d53b0300f04cb714842f69d290c22cb6c9d0b64714c08feef6",
     "client/marks-lab.ts": "sha256:ed0da10b3fd5b830a089ebc05d654889e21914f42ac27a32aaabd0faa367c2c0",
     "client/marks.ts": "sha256:5c9f621367010d3bad256dba5dc6e2bfd38e1b554754b1c6c00356e681a16dc8",
     "client/menu.ts": "sha256:b9bae07fe78f7482e780a10d94cafbbe2b60e0cafa852f150e786f8e6b38c7e7",
@@ -106,7 +106,7 @@
     "client/num.ts": "sha256:9a4c3202330d8f846e8e889ac5ff96a40ba5c36dc9077510a9ab6fc979481f3c",
     "client/oceanmask.ts": "sha256:70b1592f612fd8a68dbca5d60cf87391efef7aafd0b5a7fab5bacaf15a36486a",
     "client/overlays.ts": "sha256:36a59bbe0fe6f61dfe2c82e0586e76d5e6709f1a06a7e58dfdc0b1911e986b7c",
-    "client/perf-check.mjs": "sha256:e0c846d5696d2784ea9ff384308e7eaf32cb4f6cc18f67f0b2a923c27e88f50d",
+    "client/perf-check.mjs": "sha256:2bbdd3df78f755eb4e107332eaecfc604a2a9efd385ae46b2dab8b03f94177bf",
     "client/polish-check.mjs": "sha256:4a1e4b388d1d8ebd0ba88f4cb3176319b28d5a5d2440362495ab75016f2181b4",
     "client/railway.ts": "sha256:5b5709274ae203f927b41884c5a5166d32b745f53ab8ff10204f387e70b542a5",
     "client/reel-drives.ts": "sha256:471e1627a3f0e1daa6b611abd5c87814342fc94e0c9ae3ed71ccfcf6534e3077",
