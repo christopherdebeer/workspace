@@ -268,6 +268,8 @@ export const SWITCHES = [
     note: 'shsnap=0 stops the shadow map snapping to its own texels' },
   { id: 'canopy', kind: 'toggle', marks: ['look'], apply: 'live', fallback: 'off',
     note: 'canopy=1 draws closed forest as a crown surface over tree-cover ground around the view (prototype, for frames)' },
+  { id: 'canopyslice', kind: 'number', marks: ['legacy'], fallback: '3',
+    note: 'milliseconds of each frame the canopy rebuild may spend (tripled until the first build is up); the harness raises it because its software frames are slow' },
   { id: 'shrub', kind: 'toggle', marks: ['legacy'], apply: 'live', fallback: 'on',
     note: 'shrub=0 removes the sward’s knee-high layer' },
   { id: 'swardhop', kind: 'toggle', marks: ['legacy'], apply: 'live', fallback: 'on',

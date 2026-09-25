@@ -16855,7 +16855,10 @@ function canopyEvidence(x: number, z: number): number {
 // Terrain: a new tile moves the ground under the roof, but the stream lands a
 // tile every second or two while driving, so a terrain-only change waits
 // CANOPY_TERRAIN_MS since the last build.
-const CANOPY_SLICE_MS = 3, CANOPY_REBUILD_M = 300, CANOPY_TERRAIN_MS = 20000;
+// The slice is a URL knob for the harness, whose software-rendered frames
+// make a 3 ms slice a build of minutes; the first build, with nothing up yet,
+// takes three slices a frame.
+const CANOPY_SLICE_MS = qsNum('canopyslice', 3), CANOPY_REBUILD_M = 300, CANOPY_TERRAIN_MS = 20000;
 interface CanopyJob { x0: number; z0: number; fx: number; fz: number; j: number; k: number; org: string; tb: number;
   step: number; N: number; hole: [number, number, number, number] | null; mesh: THREE.Mesh;
   pos: Float32Array; col: Float32Array; lift: Float32Array; nrm: Float32Array; ev: Float32Array;
@@ -16915,8 +16918,13 @@ function canopyRow(J: CanopyJob, j: number): void {
     J.pos[k * 3] = x; J.pos[k * 3 + 1] = g; J.pos[k * 3 + 2] = z;
     // The ground's own palette under the stand; the shader pulls it toward
     // leaf, and lets go of it at the ring's edge.
-    const pc = terrainPalette(sampleHeight(x, z) + baseElev, 0, 10, x, z);
-    J.col[k * 3] = pc[0]; J.col[k * 3 + 1] = pc[1]; J.col[k * 3 + 2] = pc[2];
+    // Bare ground (a third to a half of the lattice) only ever colours the
+    // foot of an edge cell, so it takes its row neighbour's tone and skips
+    // the palette, the dearest call here.
+    if (ev > 0 || i === 0) {
+      const pc = terrainPalette(sampleHeight(x, z) + baseElev, 0, 10, x, z);
+      J.col[k * 3] = pc[0]; J.col[k * 3 + 1] = pc[1]; J.col[k * 3 + 2] = pc[2];
+    } else { J.col[k * 3] = J.col[k * 3 - 3]; J.col[k * 3 + 1] = J.col[k * 3 - 2]; J.col[k * 3 + 2] = J.col[k * 3 - 1]; }
   }
 }
 /** Normals and cells for row j of cells, once node row j+1 exists. */
@@ -16979,7 +16987,8 @@ function stepCanopy(now: number): void {
     canopyStartJobs(fx, fz, org, now);
   }
   const J = canopyJobs[0], V = J.N + 1, t0 = performance.now();
-  while (J.k < V && performance.now() - t0 < CANOPY_SLICE_MS) {
+  const slice = canopyGrids.length ? CANOPY_SLICE_MS : CANOPY_SLICE_MS * 3;
+  while (J.k < V && performance.now() - t0 < slice) {
     if (J.j < V) canopyRow(J, J.j++);
     // Cells of row k need node rows k-1..k+1 for their normals.
     while (J.k < V && (J.k + 1 < J.j || J.j >= V)) canopyCells(J, J.k++);
