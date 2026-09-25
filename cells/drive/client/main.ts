@@ -3873,13 +3873,28 @@ const hydroBankStats = new Map<string, HydroBankResult['stats']>();
  */
 function publishHydroFloor(t: HeightTile, key: string, field: HydroTileField): boolean {
   const n = HYDRO_EN;
-  const out = new Float32Array(n * n);
+  // TWO LATTICES IN ONE ARRAY: the inland bed (first n², NaN where none) and
+  // the SEA's drawn coverage (second n²). The kernel dropped the sea bed on
+  // the cover raster's word over a twenty-metre footprint, which at the
+  // Twelve Apostles lowered 25 m of beach below the sea where no water was
+  // drawn — a hole the rig fell into and saw the water's edge from below.
+  // The bed may only drop where the field DRAWS the sea, and this is the
+  // field's own answer to that, at the floor's own lattice.
+  const out = new Float32Array(n * n * 2);
   let any = false;
   for (let iz = 0; iz < n; iz++) {
     const z = t.zs + (iz / (n - 1)) * t.h;
     for (let ix = 0; ix < n; ix++) {
       const x = t.xs + (ix / (n - 1)) * t.w;
       const w = sampleFieldSurface(field, x, z, 0);
+      // Any drawn water counts, not only the ocean's: a river mouth or a
+      // coastal lagoon on the sea's own flat took the cover rule's drop and
+      // must keep it (measured at Romsdalen: a stream body between two ocean
+      // stretches stood 3 m proud of them without it). The kernel's own gate
+      // — within two metres of the sea — still keeps a mountain river out.
+      const sea = w ? w.coverage : 0;
+      out[n * n + iz * n + ix] = sea;
+      if (sea > 0) any = true;
       if (!w || w.kind === 'ocean' || w.coverage < WATERLINE_CUT(x, z, w.kind)) { out[iz * n + ix] = NaN; continue; }
       out[iz * n + ix] = w.restingLevelM - Math.max(w.depthM, .08);
       any = true;
@@ -38575,6 +38590,19 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
   const px = x ?? state.x, pz = z ?? state.z;
   return deferLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r || Math.hypot(e.x1 - px, e.z1 - pz) <= r);
 };
+/** THE MAPPED COASTLINE at a point: the nearest OSM `natural=coastline`
+ *  segment within `r`, the distance to it and the side the point is on (-1
+ *  land, 1 sea, 0 undecided) — the vector the water and the ground both
+ *  ought to meet at, reported beside them. */
+(window as unknown as { __coastline?: object }).__coastline = (x?: number, z?: number, r = 300): object | null => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const sg = nearestCoast(px, pz, r);
+  if (!sg) return { segs: coastSegs.size, seen: osmCoastSeen, near: null };
+  const [ax, az, bx, bz] = sg; const vx = bx - ax, vz = bz - az;
+  const t = clamp(((px - ax) * vx + (pz - az) * vz) / (vx * vx + vz * vz || 1), 0, 1);
+  return { segs: coastSegs.size, seen: osmCoastSeen, seg: sg.map((v) => +v.toFixed(1)),
+    d: +Math.hypot(px - (ax + vx * t), pz - (az + vz * t)).toFixed(1), side: coastSideAt(px, pz) };
+};
 /** The coast field at a point — travel from the waterline in deep-water
  *  metres against the plain shore distance, the seaward direction and the
  *  exposure — so a harbour can be shown to be sheltered with a number. */
@@ -53676,6 +53704,56 @@ function projectAuthoringPoint(x: number, z: number): [number, number] | null {
     (.5 - authoringProject.y * .5) * HH,
   ];
 }
+/**
+ * THE MAPPED COASTLINE, DRAWN WHILE THE WATER VIEW IS UP.
+ *
+ * The sea's drawn edge, the bed under it and the cover raster are three
+ * answers to "where does the land stop", and the OSM `natural=coastline` way
+ * is the fourth — the only one a surveyor drew. Asked for from the seat after
+ * a hole opened between the beach and the water at the Twelve Apostles: with
+ * the vector on the glass beside the WATER raster, a gap can be read as the
+ * water stopping short of the map, or the map being wrong, at a glance.
+ *
+ * A cyan line on the segment, and a short tick every segment on its SEA side
+ * (OSM winds water on the right), so a reversed way is visible too. Within
+ * 900 m of the render focus; one path, like the authoring cells.
+ */
+function drawCoastDebug(): void {
+  if (dbgView !== 'water' || !coastSegs.size) return;
+  const [fx, fz] = renderFocusXZ();
+  hctx.save();
+  hctx.strokeStyle = '#3ff0ff';
+  hctx.globalAlpha = .95;
+  hctx.lineWidth = 1.5;
+  hctx.setLineDash([]);
+  hctx.beginPath();
+  const R2 = 900 * 900;
+  const ticks: Array<[number, number, number, number]> = [];
+  for (const arr of coastSegs.values()) {
+    for (const [ax, az, bx, bz] of arr) {
+      const mx = (ax + bx) * .5, mz = (az + bz) * .5;
+      if ((mx - fx) * (mx - fx) + (mz - fz) * (mz - fz) > R2) continue;
+      const a = projectAuthoringPoint(ax, az), b = projectAuthoringPoint(bx, bz);
+      if (!a || !b) continue;
+      hctx.moveTo(a[0], a[1]); hctx.lineTo(b[0], b[1]);
+      const L = Math.hypot(bx - ax, bz - az) || 1;
+      // water on the right in the geographic frame is (dz, -dx)·… in this
+      // +z-south frame: see coastSideAt's derivation.
+      const sx = mx + (-(bz - az) / L) * 4, sz = mz + ((bx - ax) / L) * 4;
+      ticks.push([mx, mz, sx, sz]);
+    }
+  }
+  hctx.stroke();
+  hctx.beginPath();
+  for (const [mx, mz, sx, sz] of ticks) {
+    const a = projectAuthoringPoint(mx, mz), b = projectAuthoringPoint(sx, sz);
+    if (!a || !b) continue;
+    hctx.moveTo(a[0], a[1]); hctx.lineTo(b[0], b[1]);
+  }
+  hctx.lineWidth = 1;
+  hctx.stroke();
+  hctx.restore();
+}
 /** What the overlay costs, because it runs EVERY FRAME while a raster stroke
  *  is up and its dearest call is `groundAt` — one per cell, measured at about
  *  650 ns elsewhere in this file. `PREVIEW_CELL_CAP` is what bounds it, and
@@ -57480,6 +57558,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // the one its own opening switched off. Measured: a road draft nine
     // points long, `hudOn false`, and not a pixel of it drawn.
     drawAuthoringPreviews();
+    drawCoastDebug();
     return;
   }
   // While the DOM menu is up the HUD stands down entirely. Its scrim used to
@@ -57493,6 +57572,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   const hudEntry = performance.now();
   hudT0 = hudEntry; hudProfCalls++;
   drawAuthoringPreviews();
+  drawCoastDebug();
   const pad = 4;
   /** Bottom of the compass strip in HUD pixels: `pad` + the heading digits
    *  under the needle. Nothing else may be drawn through it. */

@@ -19294,3 +19294,45 @@ Measured, the coast drone scene, look B, before and after (mean RGB, hue):
 and the near sea's saturation at dusk falls 0.19–0.20 → 0.06–0.11. The black
 dots and dashes in the same frames are the herd and the birds: a
 `hide:critters` capture takes every one of them away.
+
+## A hole between the beach and the sea: the bed dropped where the water was not drawn
+
+From the seat at the Twelve Apostles: the ground falls away between the beach
+and the water into a deep-teal hole the rig can drive into and see the water's
+edge from below. A transect square to the mapped coastline (`__coastline`, new:
+the nearest OSM `natural=coastline` segment, distance and side) read it
+exactly: from 24 to 48 m seaward of the line the mesh stood at −1.1 to −5.5 m
+under a 0.4 m sea with **no water drawn over it**; the field's coverage only
+starts at 52 m.
+
+**It was the Romsdalen fix.** `seaFloor` dropped the bed on cover EVIDENCE over
+a 20 m footprint saturating at a third of a pixel, so it cut up to a cover
+pixel landward of the water the field draws. The fix ties the drop to the
+field: `publishHydroFloor` now publishes a second lattice beside the inland
+bed — the field's drawn coverage for any water kind — and the kernel's
+`seaFloor` drops only where that coverage passes 0.55, reaching the full
+`SEA_BED` by 0.9, and leaves a vertex under the cut exactly as it was (the
+first cut returned `min(elev, seaLocal)` there and flattened 20 m of beach to
+the sea's level). Cover evidence remains the fallback for a tile the field has
+not published yet. Any kind counts, not only the ocean's: a river mouth on the
+sea's flat took the cover drop and stood 3 m proud without it (Romsdalen's
+transect caught it); the kernel's two-metre gate still keeps inland water out.
+
+Measured on the same transect: beach at DEM from 24 to 44 m (was −1.1…−4.7),
+0.17 m at 48 m where the drawn edge begins (a 0.2 m sliver under the surface,
+from the lattice interpolating between vertices), full depth by 60 m.
+`shore-graze` at Romsdalen: 0 ledges, 0 steps.
+
+**The WATER debug view draws the coastline now** (`drawCoastDebug`): the OSM
+line in cyan with a tick on each segment's sea side, within 900 m of the render
+focus. At the Apostles it sits on the upper beach, ~50 m landward of the drawn
+water — the survey's line is the vegetation edge, not the waterline — which is
+why the coastline cannot be the bed's authority on its own.
+
+Census against the previous build (`wet-census`, five coastal fixtures, W drawn
+/ U fringe-buried / I interior-buried): drawn water flat everywhere (the
+uMngeni −0.8%), fringe burial up a little — Romsdalen 61 → 74, Simon's Town
+6 → 10, Glencairn 182 → 192, uMngeni 507 → 566 — which is the beach now
+overlapping the water's edge by a few decimetres instead of falling away below
+it: the right side of the line to err on, since buried water is invisible and
+a hole is not.
