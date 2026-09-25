@@ -16737,7 +16737,15 @@ vec2 canEval(vec2 p) {
   float e = 0.08;
   float gx = (canEval(p + vec2(e, 0.0)).x - e0.x) / e;
   float gz = (canEval(p + vec2(0.0, e)).x - e0.x) / e;
-  canDome = mix(0.45, e0.x, band); canTone = mix(0.5, e0.y, band);
+  // Past the band the crowns are their MEAN, and a closed canopy from above is
+  // dark: most of what a pixel covers is shadowed crown and gap. The first
+  // wide frames drew the mean at the lit tone and the forest read as a lawn.
+  canDome = mix(0.3, e0.x, band); canTone = mix(0.5, e0.y, band);
+  // A stand varies over tens of metres too — age, species, a gap — or the wide
+  // view is one flat carpet.
+  { vec2 q = vCanW.xz / 70.0; vec2 qi = floor(q); vec2 qf = fract(q); qf = qf * qf * (3.0 - 2.0 * qf);
+    float n = mix(mix(canH(qi, 9.0), canH(qi + vec2(1.0, 0.0), 9.0), qf.x), mix(canH(qi + vec2(0.0, 1.0), 9.0), canH(qi + vec2(1.0, 1.0), 9.0), qf.x), qf.y);
+    diffuseColor.rgb *= 0.78 + 0.34 * n; }
   canGrad = vec2(gx, gz) * band;
   diffuseColor.rgb *= mix(vec3(0.22, 0.24, 0.3), vec3(1.3, 1.35, 1.05), canDome) * (0.78 + 0.44 * canTone);
 }`)
@@ -16747,13 +16755,13 @@ vec2 canEval(vec2 p) {
   normal = normalize(normal + (viewMatrix * vec4(nw, 0.0)).xyz * 2.2);
 }`);
   };
-  canopyMat.customProgramCacheKey = () => 'canopy-2';
+  canopyMat.customProgramCacheKey = () => 'canopy-3';
 }
 const canopyMesh = new THREE.Mesh(new THREE.BufferGeometry(), canopyMat);
 canopyMesh.name = 'canopy';
 canopyMesh.frustumCulled = false;
 scene.add(canopyMesh);
-let canopyAt = { x: NaN, z: NaN, t: 0, org: '' };
+let canopyAt = { x: NaN, z: NaN, t: 0, org: '', tb: -1 };
 const canopyStat = { builds: 0, ms: 0, cells: 0, tris: 0 };
 function canopyHash(i: number, j: number, k: number): number {
   let h = (i * 374761393 + j * 668265263 + k * 2147483647) | 0;
@@ -16778,7 +16786,13 @@ function refreshCanopy(now: number): void {
   const [fx, fz] = renderFocusXZ();
   const org = `${origin.lat},${origin.lon}`;
   const moved = Math.hypot(fx - canopyAt.x, fz - canopyAt.z);
-  if (!(moved > 64) && org === canopyAt.org && now - canopyAt.t < 4000) return;
+  // A rebuild is ~150 ms of main thread on a desktop (55k cells, a cover and a
+  // palette read each), so it is paid only when something it reads has moved:
+  // the view by 120 m, the origin, or a terrain build since the last one. The
+  // first cut also rebuilt every 4 s on a clock, which from the seat is a
+  // hitch every four seconds for nothing.
+  if (!(moved > 120) && org === canopyAt.org && terrainBuilds === canopyAt.tb && canopyAt.t > 0) return;
+  if (canopyAt.t > 0 && now - canopyAt.t < 1500 && !(moved > 120) && org === canopyAt.org) return;
   const t0 = performance.now();
   const half = (CANOPY_N * CANOPY_STEP) / 2;
   const x0 = Math.round((fx - half) / 32) * 32, z0 = Math.round((fz - half) / 32) * 32;
@@ -16820,7 +16834,7 @@ function refreshCanopy(now: number): void {
   geo.computeVertexNormals();
   canopyMesh.geometry.dispose();
   canopyMesh.geometry = geo;
-  canopyAt = { x: fx, z: fz, t: now, org };
+  canopyAt = { x: fx, z: fz, t: now, org, tb: terrainBuilds };
   canopyStat.builds++; canopyStat.ms = +(performance.now() - t0).toFixed(1);
   canopyStat.cells = idx.length / 6; canopyStat.tris = idx.length / 3;
 }
