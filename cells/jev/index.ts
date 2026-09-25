@@ -20,6 +20,11 @@
  *                  (ADR-0098 Inc 0 — the System One organ's batch seam)
  *   usage          today's metered tokens/calls against the daily budget
  *
+ * Web: GET / serves jev · lab (client/ + static/index.html) — an open library
+ * of unusual experiments with Jev (free-text decoding, interface rendering…).
+ * The page is public; every experiment runs through POST /_tools/decide under
+ * the caller's own session, so only the owner or a granted caller spends.
+ *
  * ADR-0098 Inc 0 hygiene: the default model is PINNED (jev-1.13.0) so a
  * caller's thresholds don't drift on an upstream alias move; Score criteria
  * given as a {level: description} object are normalised to the ordered array
@@ -30,6 +35,8 @@
  * Secrets live in this cell's own DynamoDB table (IAM-scoped). There is no
  * readback path for the key.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 
@@ -49,6 +56,12 @@ const json = (statusCode: number, body: unknown) => ({
   statusCode,
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify(body),
+});
+
+const page = (statusCode: number, contentType: string, body: string) => ({
+  statusCode,
+  headers: { 'content-type': contentType, 'cache-control': 'no-cache' },
+  body,
 });
 
 type Args = Record<string, unknown>;
@@ -613,7 +626,26 @@ export const handler = async (event: {
     }
   }
 
-  if (method === 'GET' && (path === '/' || path === '')) {
+  // jev · lab (client/): the experiment library. The page and its bundle are
+  // static — anonymous GETs may load them (the cell is public); running an
+  // experiment POSTs /_tools/decide, which dispatch + cells.call admit only
+  // for the owner or a granted caller.
+  if ((method === 'GET' || method === 'HEAD') && (path === '/' || path === '')) {
+    try {
+      return page(200, 'text/html; charset=utf-8', readFileSync(join(__dirname, 'static/index.html'), 'utf8'));
+    } catch {
+      /* no bundled page (tool-only deploy) — fall through to the descriptor */
+    }
+  }
+  if ((method === 'GET' || method === 'HEAD') && path === '/app.js') {
+    try {
+      return page(200, 'application/javascript; charset=utf-8', readFileSync(join(__dirname, 'app.js'), 'utf8'));
+    } catch {
+      return json(404, { error: 'no client bundle' });
+    }
+  }
+
+  if (method === 'GET' && (path === '/' || path === '' || path === '/_info')) {
     return json(200, {
       cell: '@c15r/jev',
       description: 'TypeSafe Jev (System One) — typed decisions as MCP tools',
