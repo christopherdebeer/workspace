@@ -16798,7 +16798,7 @@ float canFadeAt(vec2 xz) {
   return f * mix(0.35, 1.0, smoothstep(0.0, ${CANOPY_EDGE_FADE.toFixed(1)}, ed));
 }
 // A crown: A = (centre x, centre z, top y, radius), B = (depth, cone?, lift, ground).
-vec4 cA[4]; vec4 cB[4]; vec4 cH[4];
+vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4];
 void canLoad(vec2 q) {
   for (int k = 0; k < 4; k++) {
     vec2 cell = q + vec2(float(k - (k / 2) * 2), float(k / 2));
@@ -16816,6 +16816,7 @@ void canLoad(vec2 q) {
     float D = cone > 0.5 ? L * 0.78 : min(L * 0.62, R * 1.35);
     if (L < 2.5) R = -1.0;
     cA[k] = vec4(c, gl.x + L, R); cB[k] = vec4(D, cone, L, gl.x); cH[k] = h;
+    cR[k] = vec2(cos(h.y * 6.2832), sin(h.y * 6.2832));
   }
 }
 /** Inside-ness of point p in crown k: < 1 inside. */
@@ -16828,8 +16829,19 @@ float canIn(int k, vec3 p) {
     if (s < 0.0 || s > 1.0) return 9.0;
     return length(d) / (A.w * max(s, 0.02));
   }
+  // A CROWN IS LOBED, NOT A BALL: three and five lobes about a seeded turn,
+  // and a sag of the lower crown, so no two outlines are the same circle.
   float e = (p.y - (A.z - B.x * 0.5)) / (B.x * 0.5);
-  return dot(d, d) / (A.w * A.w) + e * e;
+  float dl = length(d);
+  vec2 dn = dl > 1e-4 ? d / dl : vec2(1.0, 0.0);
+  vec2 r = vec2(dn.x * cR[k].x - dn.y * cR[k].y, dn.x * cR[k].y + dn.y * cR[k].x);
+  float s3 = 3.0 * r.y - 4.0 * r.y * r.y * r.y;
+  float c5 = r.x * (16.0 * r.x * r.x * r.x * r.x - 20.0 * r.x * r.x + 5.0);
+  // Lobes only ever bite INTO the crown: out past its radius it would leave
+  // the 2x2 quadrant that is all the march looks at, and be cut off square.
+  float lobe = 1.0 - 0.2 * (0.5 - 0.5 * s3) * cH[k].z - 0.14 * (0.5 - 0.5 * c5) * (1.0 - cH[k].z) - 0.08 * max(-e, 0.0);
+  float q = dl / (A.w * lobe);
+  return q * q + e * e;
 }
 `)
       .replace('#include <color_fragment>', `#include <color_fragment>
@@ -16875,7 +16887,9 @@ vec3 canHit = vCanW;
       vec2 f = clamp(fract(p.xz / ${S} - 0.5), 0.0, 1.0);
       float gq = mix(mix(cB[0].w, cB[1].w, f.x), mix(cB[2].w, cB[3].w, f.x), f.y);
       float Lq = mix(mix(cB[0].z, cB[1].z, f.x), mix(cB[2].z, cB[3].z, f.x), f.y);
-      float floorY = gq + max(0.6, Lq * 0.46 * smoothstep(6.0, 11.0, Lq));
+      // The mid-storey's top is foliage too: lumpy by a couple of metres,
+      // not the flat shelf that read from the road as dark slabs.
+      float floorY = gq + max(0.6, Lq * 0.46 * smoothstep(6.0, 11.0, Lq)) + (canN3(p * 0.45) - 0.5) * 2.4 * smoothstep(4.0, 9.0, Lq);
       float best = 9.0;
       for (int k = 0; k < 4; k++) { float v = canIn(k, p); if (v < best) { best = v; hitK = k; } }
       if (best < 1.0) { kind = 0; }
@@ -16913,8 +16927,8 @@ vec3 canHit = vCanW;
       if (lp > 0.01) {
         vec3 lq = canHit / 1.1 + H.xyz * 31.0;
         float n0 = canN3(lq), nx = canN3(lq + vec3(0.35, 0.0, 0.0)), ny = canN3(lq + vec3(0.0, 0.35, 0.0)), nz = canN3(lq + vec3(0.0, 0.0, 0.35));
-        canN = normalize(canN - vec3(nx - n0, ny - n0, nz - n0) * 2.2 * lp * canLook.x);
-        canLeaf = (n0 - 0.5) * lp;
+        canN = normalize(canN - vec3(nx - n0, ny - n0, nz - n0) * 1.5 * lp * canLook.x);
+        canLeaf = (smoothstep(0.2, 0.8, n0) - 0.5) * lp;
       }
       // Sky exposure: high on the crown and high in the stand is open sky.
       float up = B.y > 0.5 ? 1.0 - (A.z - canHit.y) / B.x : 0.5 + 0.5 * (canHit.y - (A.z - B.x * 0.5)) / (B.x * 0.5);
@@ -16925,13 +16939,17 @@ vec3 canHit = vCanW;
       float odd = fract(H.x * 7.13 + H.w * 3.7);
       if (odd < 0.045) col = mix(vec3(0.30, 0.12, 0.035), vec3(0.42, 0.2, 0.05), H.y);
       else if (odd < 0.085) col = vec3(0.17, 0.23, 0.19) * (0.85 + 0.3 * H.y);
-      col *= 1.0 + canLeaf * 0.5;
+      col *= 1.0 + canLeaf * 0.35;
     } else if (kind == 1) {
       // The mid-storey of a closed stand, or the shrubs and floor of an open
       // edge: the colour of the stand in its own shade.
-      canN = vec3(0.0, 1.0, 0.0);
-      col = standC * mix(0.55, 0.8, canN3(canHit * 0.6));
-      canSky = mix(0.35, 0.12, closed);
+      // Met from above it faces up; met from the side (the ray still well
+      // above the ground) it faces the eye, as a stand's lower foliage does.
+      float side = smoothstep(0.35, 0.1, abs(rd.y));
+      canN = normalize(mix(vec3(0.0, 1.0, 0.0), normalize(vec3(-rd.x, 0.25, -rd.z)), side));
+      float mn = canN3(canHit * 0.7);
+      col = standC * mix(0.5, 0.95, smoothstep(0.25, 0.75, mn));
+      canSky = mix(0.4, 0.14, closed) + 0.15 * mn;
     } else {
       vec2 d = canHit.xz - A.xy;
       canN = normalize(vec3(d.x, 0.0, d.y));
