@@ -16927,7 +16927,13 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
   // footprint ACROSS the view, not along it: at a grazing angle a pixel runs
   // tens of metres down the slope while the crowns across it are still four
   // pixels wide, and the along-view measure cut the crowns off at 300 m.
-  float px = min(length(dFdx(vCanW)), length(dFdy(vCanW))) / ${S};
+  // …and not off the SHELL's surface at all. Beside a road in a cutting the
+  // shell rises in walls seen nearly edge-on, where a pixel smears across
+  // metres of it at 5 m, and the crowns there were declared sub-pixel and
+  // drawn as the flat mean (the smooth green wall in the cab frames). What
+  // decides is a pixel's width AT THE DISTANCE: the ray's own turn per pixel.
+  vec3 rdv = normalize(vCanW - cameraPosition);
+  float px = t0 * min(length(dFdx(rdv)), length(dFdy(rdv))) / ${S};
   canDet = (1.0 - smoothstep(25.0, 90.0, t0)) * canLook.x;
   bool march = px < 0.55 && vCanK > 0.02;
   vec3 standC = texture2D(canStand, (vCanW.xz - canStandBox.xy) * canStandBox.zw).rgb;
