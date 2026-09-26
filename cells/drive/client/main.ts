@@ -16805,7 +16805,7 @@ float canFadeAt(vec2 xz) {
   return f * mix(0.35, 1.0, smoothstep(0.0, ${CANOPY_EDGE_FADE.toFixed(1)}, ed));
 }
 // A crown: A = (centre x, centre z, top y, radius), B = (depth, cone?, lift, ground).
-vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4]; float cDen[4]; float cTop;
+vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4]; float cDen[4]; float cTop; float cHas;
 // UP CLOSE A CROWN IS CLUMPS AND GAPS. canDet (1 inside ~25 m, 0 past 90) adds
 // two octaves of 3D noise to the inside-ness near the surface only, so the
 // outline breaks into leaf masses and the march sees through the gaps to the
@@ -16819,7 +16819,7 @@ float canClump(int k, vec3 p, float v) {
   return v + ((n - 0.5) * 0.9 + (n2 - 0.5) * 0.4) * canDet;
 }
 void canLoad(vec2 q) {
-  cTop = -1e9;
+  cTop = -1e9; cHas = 0.0;
   for (int k = 0; k < 4; k++) {
     vec2 cell = q + vec2(float(k - (k / 2) * 2), float(k / 2));
     vec4 h = canH4(cell);
@@ -16839,6 +16839,8 @@ void canLoad(vec2 q) {
     // stand, scattered crowns with ground between in open woodland or a copse.
     if (L < 2.5 || fract(h.x * 13.7 + h.z * 3.1) > gl.z) R = -1.0;
     cDen[k] = gl.z;
+    // Anything here to meet at all: a crown, or a closed stand's mid-storey.
+    if (R > 0.0 || (L > 2.5 && gl.z > 0.6)) cHas = 1.0;
     cA[k] = vec4(c, gl.x + L, R); cB[k] = vec4(D, cone, L, gl.x); cH[k] = h;
     cR[k] = vec2(cos(h.y * 6.2832), sin(h.y * 6.2832));
     // The highest thing this quadrant can hold: a crown's top, or where there
@@ -16964,6 +16966,18 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
         }
       }
       if (t > tTrunk) { t = tTrunk; kind = 2; break; }
+      // A QUADRANT WITH NOTHING IN IT IS CROSSED IN ONE STEP, at any height.
+      // Beside a road the clearance leaves strips of shell with no crown and
+      // no mid-storey, and a ray from the cab skimming them near the ground
+      // spent its whole march at 0.7 m steps and fell to the aggregate.
+      if (cHas < 0.5) {
+        vec2 lo = (q + 0.5) * ${S}, hi = lo + ${S};
+        vec2 ex = vec2(abs(rd.x) > 1e-5 ? ((rd.x > 0.0 ? hi.x : lo.x) - p.x) / rd.x : 1e9,
+                       abs(rd.z) > 1e-5 ? ((rd.z > 0.0 ? hi.y : lo.y) - p.z) / rd.z : 1e9);
+        t += max(0.05, min(ex.x, ex.y) + 0.02);
+        tPrev = t - 0.05;
+        continue;
+      }
       // EMPTY SPACE IS SKIPPED. Above everything this quadrant holds, nothing
       // can be met until the ray leaves the quadrant's square or comes down
       // to that height, so it goes straight there. On Nagato's hillsides the
@@ -17016,8 +17030,10 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
     // spends its steps before it meets one. It goes on against the stand's
     // aggregate roof and is a hit only where it meets it (debug magenta when
     // even that misses).
+    // Only far: near the eye the aggregate roof is a smooth wall where crowns
+    // should be, and a march that spent itself there is a miss.
     if (kind < 0 && why == 0) {
-      float tA = canAggregate(ro, rd, t, max(2.0 * dt, 4.0));
+      float tA = t0 > 120.0 ? canAggregate(ro, rd, t, max(2.0 * dt, 4.0)) : -1.0;
       if (tA > 0.0) { t = tA; kind = 3; } else why = 1;
     }
     if (kind < 0 && canLook.w < 1.5) discard;
@@ -17125,7 +17141,7 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
     // Misses by cause: magenta the march ran out of steps, cyan it reached bare
     // ground, white it never marched (a crown under two pixels).
     else if (canLook.w < 2.5) diffuseColor.rgb = kind == 0 ? vec3(0.1, 0.8, 0.1) : kind == 1 ? vec3(0.1, 0.2, 0.9) : kind == 2 ? vec3(0.9, 0.8, 0.1)
-      : why == 1 ? vec3(0.9, 0.1, 0.9) : why == 2 ? vec3(0.1, 0.9, 0.9) : vec3(1.0);
+      : kind == 3 ? vec3(0.95, 0.55, 0.1) : why == 1 ? vec3(0.9, 0.1, 0.9) : why == 2 ? vec3(0.1, 0.9, 0.9) : vec3(1.0);
     else diffuseColor.rgb = vec3(clamp((length(canHit - cameraPosition) - length(vCanW - cameraPosition)) / 20.0, 0.0, 1.0));
   }
   vec4 clip = projectionMatrix * viewMatrix * vec4(canHit, 1.0);
