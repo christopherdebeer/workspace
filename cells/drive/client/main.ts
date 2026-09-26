@@ -16731,7 +16731,7 @@ const canopyU = { box: { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) }, foc: 
 // one in twelve is an autumn or silver outlier as `plantLook`'s are, and the
 // crown light is the skeletons' — three sun-aligned tones, sky exposure,
 // transmission on the shaded side and a wrap past the terminator.
-const CAN_STEPS = 28;
+const CAN_STEPS = 40;
 function canopyMaterial(): { mat: THREE.MeshLambertMaterial; u: {
   canTex: { value: THREE.Texture | null }; canTexBox: { value: THREE.Vector4 }; canBaseY: { value: number };
   canStand: { value: THREE.Texture | null }; canStandBox: { value: THREE.Vector4 } } } {
@@ -16801,8 +16801,9 @@ float canFadeAt(vec2 xz) {
   return f * mix(0.35, 1.0, smoothstep(0.0, ${CANOPY_EDGE_FADE.toFixed(1)}, ed));
 }
 // A crown: A = (centre x, centre z, top y, radius), B = (depth, cone?, lift, ground).
-vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4];
+vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4]; float cTop;
 void canLoad(vec2 q) {
+  cTop = -1e9;
   for (int k = 0; k < 4; k++) {
     vec2 cell = q + vec2(float(k - (k / 2) * 2), float(k / 2));
     vec4 h = canH4(cell);
@@ -16820,6 +16821,9 @@ void canLoad(vec2 q) {
     if (L < 2.5) R = -1.0;
     cA[k] = vec4(c, gl.x + L, R); cB[k] = vec4(D, cone, L, gl.x); cH[k] = h;
     cR[k] = vec2(cos(h.y * 6.2832), sin(h.y * 6.2832));
+    // The highest thing this quadrant can hold: a crown's top, or where there
+    // is none the mid-storey's lumpy top over its ground.
+    cTop = max(cTop, R > 0.0 ? gl.x + L : gl.x + 0.6 + max(0.0, L * 0.46) + 1.3);
   }
 }
 /** Inside-ness of point p in crown k: < 1 inside. */
@@ -16888,6 +16892,20 @@ if (vCanF < 0.01) discard;
         }
       }
       if (t > tTrunk) { t = tTrunk; kind = 2; break; }
+      // EMPTY SPACE IS SKIPPED. Above everything this quadrant holds, nothing
+      // can be met until the ray leaves the quadrant's square or comes down
+      // to that height, so it goes straight there. On Nagato's hillsides the
+      // shell stands metres over the crowns and a ray from the road runs
+      // nearly along the slope: at fixed steps it spent its whole march in
+      // the empty shell and the fragment went, leaving the hillside bare.
+      if (p.y > cTop + 0.05) {
+        vec2 lo = (q + 0.5) * ${S}, hi = lo + ${S};
+        vec2 ex = vec2(abs(rd.x) > 1e-5 ? ((rd.x > 0.0 ? hi.x : lo.x) - p.x) / rd.x : 1e9,
+                       abs(rd.z) > 1e-5 ? ((rd.z > 0.0 ? hi.y : lo.y) - p.z) / rd.z : 1e9);
+        float tDown = rd.y < -1e-5 ? (p.y - cTop) / -rd.y : 1e9;
+        t += max(0.05, min(min(ex.x, ex.y) + 0.02, tDown));
+        continue;
+      }
       // Ground and lift here, bilinear over the quadrant's four crowns.
       vec2 f = clamp(fract(p.xz / ${S} - 0.5), 0.0, 1.0);
       float gq = mix(mix(cB[0].w, cB[1].w, f.x), mix(cB[2].w, cB[3].w, f.x), f.y);
