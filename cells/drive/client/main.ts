@@ -7790,6 +7790,13 @@ function reveal(ex: number, ez: number): void {
 // is now the x-ray silhouette's job (see the car section): the depth
 // buffer answers "is this pixel of the rig hidden" exactly, per pixel,
 // and the world is never dissolved at all.
+/** UNDER THE CANOPY: the inner ring's own lattice texture (ground, lift,
+ *  density), read by every terrainFx material so the ground, the sward, the
+ *  shrubs, the rocks and the canopy's skeletons all sit in one forest light —
+ *  the sky mostly taken, broad sun patches through the gaps. Set at the inner
+ *  ring's commit; x of uCanShadeOn is 0 with the canopy off. */
+const canShadeU = { uCanShadeTex: { value: null as THREE.Texture | null }, uCanShadeBox: { value: new THREE.Vector4(0, 0, 1, 1) },
+  uCanShadeBase: { value: 0 }, uCanShadeOn: { value: new THREE.Vector3(0, qsNum('canshade', 1), 0) }, uCanShadeSun: { value: LIGHT_DIR } };
 const envU = {
   uCloudS: { value: 0 },                       // cover, for cloud shadows
   // METRES OF GROUND PER ART PIXEL, on the chart; 0 from the seat. What the
@@ -8177,6 +8184,7 @@ function terrainFx(mat: THREE.Material, opts: {
     sh.uniforms.uSunSkew = envU.uSunSkew;
     sh.uniforms.uDeckY = envU.uDeckY;
     sh.uniforms.uSteepFill = envU.uSteepFill;
+    Object.assign(sh.uniforms, canShadeU);
     // The district's stone, per tile (terrainMatFor); the shared cast otherwise.
     sh.uniforms.uSubRockTint = { value: (mat.userData.rockTint as THREE.Vector3 | undefined) ?? ROCK_TINT_DEFAULT };
     sh.uniforms.uCloudScale = envU.uCloudScale;
@@ -8196,6 +8204,13 @@ function terrainFx(mat: THREE.Material, opts: {
         uniform float uCloudS; uniform vec2 uWind; uniform float uMpp;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
         uniform vec3 uSteepFill;
+        uniform sampler2D uCanShadeTex; uniform vec4 uCanShadeBox; uniform float uCanShadeBase; uniform vec3 uCanShadeOn; uniform vec3 uCanShadeSun;
+        float canShN(vec2 p) {
+          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          vec4 h = fract(sin(vec4(dot(i, vec2(127.1, 311.7)), dot(i + vec2(1.0, 0.0), vec2(127.1, 311.7)),
+                                  dot(i + vec2(0.0, 1.0), vec2(127.1, 311.7)), dot(i + 1.0, vec2(127.1, 311.7)))) * 43758.5453);
+          return mix(mix(h.x, h.y, f.x), mix(h.z, h.w, f.x), f.y);
+        }
         // Declared once per program: slipify declares the same weather field
         // and a track wears both (a redefinition fails the link silently).
         #ifndef DRIVE_WX_DECL
@@ -8223,6 +8238,36 @@ function terrainFx(mat: THREE.Material, opts: {
           vec3 upV = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
           float steep = clamp(1.0 - dot(normal, upV), 0.0, 1.0);
           reflectedLight.indirectDiffuse += diffuseColor.rgb * uSteepFill * steep * steep;
+        }
+        // UNDER THE CANOPY (canShadeU). Closure is the stand's density where
+        // its roof is tall enough to stand under, and it applies only BELOW
+        // the crowns' base: a crown top, the shell and anything above the roof
+        // keep the open sky. What it does is what a forest does to light:
+        // most of the sky is taken (the indirect term, tinted by the leaves it
+        // comes through), and the sun arrives in BROAD, world-fixed patches
+        // through the gaps — cast along the sun from the crowns' base height,
+        // so a patch lies on the ground and climbs a trunk where it should.
+        // Large and stable on purpose: under a 14-level dither a fine fleck
+        // is noise, a patch is light.
+        if (uCanShadeOn.x > 0.5 && uCanShadeOn.y > 0.0) {
+          vec2 cuv = ((vWorldP.xz - uCanShadeBox.xy) / uCanShadeBox.z + 0.5) / uCanShadeBox.w;
+          if (cuv.x > 0.0 && cuv.y > 0.0 && cuv.x < 1.0 && cuv.y < 1.0) {
+            vec3 ct = texture2D(uCanShadeTex, cuv).rgb;
+            float cg = ct.r + uCanShadeBase, cL = ct.g;
+            float closure = smoothstep(0.45, 0.9, ct.b) * smoothstep(4.0, 9.0, cL);
+            closure *= 1.0 - smoothstep(0.35, 0.8, (vWorldP.y - cg) / max(cL, 1.0));
+            closure *= uCanShadeOn.y;
+            if (closure > 0.001) {
+              vec3 ls = normalize(uCanShadeSun);
+              vec2 q = vWorldP.xz + ls.xz / max(ls.y, 0.25) * max(cg + 0.55 * cL - vWorldP.y, 0.0);
+              float n = 0.65 * canShN(q / 9.0) + 0.35 * canShN(q / 3.6 + 17.0);
+              float gap = smoothstep(0.60, 0.70, n);
+              float sunT = mix(1.0, 0.07 + 0.93 * gap, closure);
+              reflectedLight.directDiffuse *= sunT;
+              reflectedLight.directSpecular *= sunT;
+              reflectedLight.indirectDiffuse *= mix(vec3(1.0), vec3(0.40, 0.47, 0.36), closure);
+            }
+          }
         }
       // CLOUD SHADOWS: not "the same kind of noise" any more — THE SAME FIELD,
       // read at the point where a ray from here to the sun leaves the deck the
@@ -17456,7 +17501,8 @@ let canopyAt = { x: NaN, z: NaN, t: 0, org: '', tb: -1 };
 // objects on analytic poles. The shader's own trunk stands down inside a
 // radius a metre short of the one built here, so a crown at the boundary gets
 // two trunks in the same place rather than none. WebGL2 only (the integer hash).
-const CANOPY_SKEL_M = qsNum('canopyskel', 48), CANOPY_SKEL_MOVE = 6;
+let CANOPY_SKEL_M = qsNum('canopyskel', 48);
+const CANOPY_SKEL_MOVE = 6;
 const canopySkelMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true });
 terrainFx(canopySkelMat);
 const canopySkel = new THREE.Mesh(new THREE.BufferGeometry(), canopySkelMat);
@@ -17521,7 +17567,14 @@ function canopySkelStep(fx: number, fz: number): void {
   canopySkelStat.trees = trees; canopySkelStat.tris = B.idx.length / 3; canopySkelStat.byFamily = byFamily;
   canopySkelStat.ms = +(performance.now() - t0).toFixed(2); canopySkelStat.builds++;
 }
-(window as any).__canopyskel = () => ({ ...canopySkelStat, on: canopySkel.visible, radius: CANOPY_SKEL_M, at: canopySkelAt });
+(window as any).__canopyskel = (radius?: number) => {
+  if (radius !== undefined) { CANOPY_SKEL_M = radius; canopySkelKey = ''; }
+  return { ...canopySkelStat, on: canopySkel.visible, radius: CANOPY_SKEL_M, at: canopySkelAt };
+};
+(window as any).__canshade = (k?: number) => {
+  if (k !== undefined) canShadeU.uCanShadeOn.value.y = k;
+  return { on: canShadeU.uCanShadeOn.value.x, k: canShadeU.uCanShadeOn.value.y, box: canShadeU.uCanShadeBox.value.toArray() };
+};
 const canopyStat = { builds: 0, ms: 0, cells: 0, tris: 0, hid: 0, share: 0, commitMs: 0, standMs: 0, shiftAt: 0 };
 // ── THE BUDGET THE CANOPY FREES ──
 //
@@ -17777,6 +17830,10 @@ function canopyCommitJob(J: CanopyJob): void {
   const U = R.outer ? canopyOut.u : canopyIn.u;
   R.tex?.dispose(); R.tex = tex;
   U.canTex.value = tex; U.canTexBox.value.set(J.x0, J.z0, R.step, R.V); U.canBaseY.value = R.baseY;
+  if (!R.outer) {
+    canShadeU.uCanShadeTex.value = tex; canShadeU.uCanShadeBox.value.set(J.x0, J.z0, R.step, R.V);
+    canShadeU.uCanShadeBase.value = R.baseY; canShadeU.uCanShadeOn.value.x = 1;
+  }
   R.spare = R.live; R.live = B; R.x0 = J.x0; R.z0 = J.z0;
   canopyGrids = canopyRings.map((r) => ({ x0: r.x0, z0: r.z0, V: r.V, step: r.step, ev: r.live.ev, lift: r.live.lift }));
   const o = canopyRings[canopyRings.length - 1];
@@ -17811,7 +17868,7 @@ function canopyCommitJob(J: CanopyJob): void {
 }
 function stepCanopy(now: number): void {
   canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
-  if (!CANOPY_ON) { canopyJobs = []; canopyRings = []; canopyGrids = []; canopySkel.visible = false; canopyU.skel.value.w = 0; return; }
+  if (!CANOPY_ON) { canopyJobs = []; canopyRings = []; canopyGrids = []; canopySkel.visible = false; canopyU.skel.value.w = 0; canShadeU.uCanShadeOn.value.x = 0; return; }
   const [fx, fz] = renderFocusXZ();
   // NO NEAR CLEARING. The canopy is the forest in a closed stand at every
   // distance; the split with the individual trees is WHERE (edges, open

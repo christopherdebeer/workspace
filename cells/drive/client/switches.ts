@@ -270,6 +270,8 @@ export const SWITCHES = [
     note: 'canopy=1 draws closed forest as a crown surface over tree-cover ground around the view (prototype, for frames)' },
   { id: 'canopyslice', kind: 'number', marks: ['legacy'], fallback: '3',
     note: 'milliseconds of each frame the canopy rebuild may spend (tripled until the first build is up); the harness raises it because its software frames are slow' },
+  { id: 'canshade', kind: 'number', marks: ['look'], fallback: '1',
+    note: 'strength of the light under a closed canopy on everything below the crowns (ground, sward, shrubs, trunks); 0 is the open-sky light' },
   { id: 'canopyskel', kind: 'number', marks: ['look'], fallback: '48',
     note: 'metres from the focus within which the canopy’s own trees get trunk-and-limb geometry from their crown seed; 0 is the analytic trunks alone' },
   { id: 'shrub', kind: 'toggle', marks: ['legacy'], apply: 'live', fallback: 'on',
