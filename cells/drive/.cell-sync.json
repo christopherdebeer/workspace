@@ -1,11 +1,11 @@
 {
   "cell": "c15r/drive",
   "cellId": "drive-dcfd1204",
-  "treeVersion": "tree:25f7423c9b3cb67957caac5e0dc559410aff453b57c31781033cac4642772ff6",
-  "syncedAt": "2026-09-26T01:04:08.872Z",
+  "treeVersion": "tree:87f88bc5d9b7d2868c23b03d92f44a0512e291d36e3eab061517344382dd3ee2",
+  "syncedAt": "2026-09-26T09:26:14.710Z",
   "files": {
     "API-AUDIT-2026-09-11.md": "sha256:4520f25ecd5e2fbd159e3870ed438bd1b03c4ed36def3d4da2bcf70f6aab50c4",
-    "CLAUDE.md": "sha256:c76f2b7616881d2e29b93d469c35f3bf87642ab6cbd0f992ddf7c3833398d5b1",
+    "CLAUDE.md": "sha256:2a86f9fc15f298cc33be77de0800e30bd32ee05aed7b35125c5f282feb9725bc",
     "DEPTH-OF-FIELD-2026-09-17.md": "sha256:8eb9370b70a7b2c65c372d30fbc2fad12ce8fbc02c56c7b1c5331051e55cb92c",
     "HYDRO-REBASE-2026-09-08.md": "sha256:e32e12d5345b8f84c9ec6898265f5ca4b21955a2abdb9a00ab8e3c191a422dc6",
     "HYDRO-WATERFALL-2026-09-10.md": "sha256:c807f15096ab9a8fd476071d86f03b8298a6f5d7259d8df402f682cff79352d6",
@@ -98,10 +98,10 @@
     "client/lab-dials.ts": "sha256:a4384291f86bdad09f6780370c3c940233d4c11bad9dc1966137c2a523fe6b02",
     "client/labs.ts": "sha256:656fe6912ce271ac982bd85ac74273688a48466a5f73d7888d6d251221e715cb",
     "client/landmarks.ts": "sha256:f84d2a41a45e77fed0f24da8759e4610885dbb5b2fe2ee9cc337db6f85fa2ae4",
-    "client/main.ts": "sha256:4afbba3072d3aef70985893f39813b728a9a11fd8eb505069f44f6417718ee78",
+    "client/main.ts": "sha256:9df229a2bd559ddf15e5f0f8c1a0d293a99d2038b75d2a04e8b22ef098df06c8",
     "client/marks-lab.ts": "sha256:ed0da10b3fd5b830a089ebc05d654889e21914f42ac27a32aaabd0faa367c2c0",
     "client/marks.ts": "sha256:5c9f621367010d3bad256dba5dc6e2bfd38e1b554754b1c6c00356e681a16dc8",
-    "client/menu.ts": "sha256:b9bae07fe78f7482e780a10d94cafbbe2b60e0cafa852f150e786f8e6b38c7e7",
+    "client/menu.ts": "sha256:e0b7a0a7a285d65b56e48d2c9a2ebc77cd1a8b2bbfddcc749329c3d8dc0157e9",
     "client/morphology.ts": "sha256:378e52b282151c281c5760e7acb470d83b93f1a9f3b410f4f0aa7bd6fd7934c3",
     "client/num.ts": "sha256:9a4c3202330d8f846e8e889ac5ff96a40ba5c36dc9077510a9ab6fc979481f3c",
     "client/oceanmask.ts": "sha256:70b1592f612fd8a68dbca5d60cf87391efef7aafd0b5a7fab5bacaf15a36486a",
@@ -274,7 +274,7 @@
     "static/icons/drive-maskable-512.png": "sha256:f2874a1d1f7c4e04663ef255d24145929b1067661baa5cec942a1d47c0126387",
     "static/manifest.webmanifest": "sha256:1523b6b64029f8349e7f74b0ada3c2d962e607294d469e98d5f4ea1b9907a673",
     "static/ne-wide.b64": "sha256:41e6d6b9f31d4a1c65906b2b44732c86cec8e398b368abb97c9470470159b887",
-    "static/sw.js": "sha256:70d194afed9a3136154ec638060e990aebff256af0d43ed71d1cd7c1057bd539",
+    "static/sw.js": "sha256:636fec297cbfefdfb8aba538ddf2f54208c6a2074cf982079a0e4894d5eadf03",
     "tsconfig.json": "sha256:488241c64823852b1f102bd18f9041508889ffd9e0e2f92e9ffb902cdf6c7bcb"
   }
 }
