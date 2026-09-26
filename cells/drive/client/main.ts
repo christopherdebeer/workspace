@@ -17245,7 +17245,7 @@ canopyOuter.name = 'canopy-outer';
 canopyOuter.frustumCulled = false;
 scene.add(canopyOuter);
 let canopyAt = { x: NaN, z: NaN, t: 0, org: '', tb: -1 };
-const canopyStat = { builds: 0, ms: 0, cells: 0, tris: 0, hid: 0, share: 0 };
+const canopyStat = { builds: 0, ms: 0, cells: 0, tris: 0, hid: 0, share: 0, commitMs: 0, standMs: 0, shiftAt: 0 };
 // ── THE BUDGET THE CANOPY FREES ──
 //
 // The tree triangle budget is a target the allocator always spends: measured at
@@ -17481,6 +17481,7 @@ function canopyIndexRow(R: CanopyRing, B: CanopyBuf, x0: number, z0: number, j: 
 const canopyHole = (r: CanopyRing, x0 = r.x0, z0 = r.z0): [number, number, number, number] =>
   [x0, z0, x0 + r.N * r.step, z0 + r.N * r.step];
 function canopyCommitJob(J: CanopyJob): void {
+  const tc = performance.now();
   const R = J.R, B = J.B;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(B.pos, 3));
@@ -17518,11 +17519,14 @@ function canopyCommitJob(J: CanopyJob): void {
     canopyStat.cells = canopyStat.tris / 2;
   }
   if (R.outer || canopyRings.length === 1) {
+    const ts = performance.now();
     const next = canopyStandBuild(canopyBox);
+    canopyStat.standMs = Math.max(canopyStat.standMs, +(performance.now() - ts).toFixed(1));
     canopyStand?.tex.dispose(); canopyStand?.species.dispose();
     canopyStand = next;
     for (const Uu of [canopyIn.u, canopyOut.u]) { Uu.canStand.value = canopyStand.tex; Uu.canSpecies.value = canopyStand.species; Uu.canStandBox.value.copy(canopyStand.box); }
   }
+  canopyStat.commitMs = Math.max(canopyStat.commitMs, +(performance.now() - tc).toFixed(1));
 }
 function stepCanopy(now: number): void {
   canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
@@ -17580,10 +17584,14 @@ function stepCanopy(now: number): void {
         const full = Math.abs(gNow - R.baseY) > 300;
         if (full) R.baseY = gNow;
         canopyQueue(R, w.x0, w.z0, full);
+        canopyStat.shiftAt = now;
       }
     }
     // Tiles refine under a parked view: a slow whole refresh.
-    if (!canopyJobs.length && terrainBuilds !== canopyAt.tb && now - canopyAt.t > CANOPY_TERRAIN_MS) {
+    // …and only PARKED: a whole rebuild mid-drive queued the shifts behind it
+    // and the canopy fell behind the car (the 30 m/s harness run).
+    if (!canopyJobs.length && terrainBuilds !== canopyAt.tb && now - canopyAt.t > CANOPY_TERRAIN_MS
+      && now - canopyStat.shiftAt > 20000) {
       canopyHeights.clear();
       for (const R of canopyRings) canopyQueue(R, R.x0, R.z0, true);
       canopyAt.t = now; canopyAt.tb = terrainBuilds;
