@@ -123,6 +123,9 @@ export interface HydroSystem {
   stats(): HydroStats;
   /** Per-tile fed-versus-held truth for the harness — see the implementation. */
   debugTiles(): Array<Record<string, unknown>>;
+  /** Change a build option at runtime: every tile is marked dirty and rebuilds
+   *  through the ordinary per-frame queue, the old surface staying up. */
+  setBuildOptions(patch: { coastField?: boolean; dryShortCircuit?: boolean }): void;
   dispose(): void;
 }
 
@@ -154,6 +157,9 @@ interface TileRecord {
   meshTriangles: number;
 }
 
+
+/** Target vertex spacing of the coastal surf strip, metres. */
+const SURF_CELL_M = 9;
 const immediateBuild = async (job: () => HydroTileField): Promise<HydroTileField> => job();
 
 /**
@@ -352,11 +358,19 @@ function waterGeometry(field: HydroTileField, segments: number): WaterGeometries
     geo.computeBoundingSphere();
     return geo;
   };
-  // A production coastal cell is about 75m wide. Eight local subdivisions
-  // bring only the swash cells down to about 9m without tessellating the open
-  // ocean. Vertices are shared across neighbouring parent cells.
+  // The swash cells want about SURF_CELL_M between vertices, and the
+  // subdivision is SOLVED from the parent cell to get there. It was a fixed 8,
+  // written when a coastal cell was about 75m; the coastal mesh is now
+  // meshSegments x coastalMeshMultiplier (96) over a ~2km tile, about 21m a
+  // cell, so 8 put a vertex every 2.6m across the whole 96m shore band.
+  // Measured on a device at Nagato: the surf strips were 2.98M of the water's
+  // 3.24M triangles, up to 564k in one tile. Vertices are shared across
+  // neighbouring parent cells, and the strip's own edges stay on the parent
+  // lattice, so a coarser subdivision cannot open a crack against the coarse
+  // mesh beside it.
   const buildSurf = (): THREE.BufferGeometry | undefined => {
-    const subdivision = 8;
+    const parentM = Math.max(rectSpanX / segmentsX, rectSpanZ / segmentsZ);
+    const subdivision = Math.min(8, Math.max(1, Math.ceil(parentM / SURF_CELL_M)));
     const fineX = segmentsX * subdivision;
     const fineZ = segmentsZ * subdivision;
     const pos: number[] = [], uvs: number[] = [], idx: number[] = [];
@@ -575,6 +589,10 @@ class DefaultHydroSystem implements HydroSystem {
       absorptionStrength: finite(patch.absorptionStrength, this.tuning.absorptionStrength),
       scatteringStrength: finite(patch.scatteringStrength, this.tuning.scatteringStrength),
       surfaceRoughness: finite(patch.surfaceRoughness, this.tuning.surfaceRoughness),
+      lookModel: finite(patch.lookModel, this.tuning.lookModel),
+      // A bitmask, not a strength: the 0..8 clamp above would eat it.
+      foamMask: patch.foamMask === undefined || !Number.isFinite(patch.foamMask)
+        ? this.tuning.foamMask : clamp(Math.round(patch.foamMask), 0, 31),
     };
     this.frameUniforms.uWaveAmplitude.value = this.tuning.waveAmplitude;
     this.frameUniforms.uWaveLength.value = this.tuning.waveLength;
@@ -589,6 +607,8 @@ class DefaultHydroSystem implements HydroSystem {
     this.frameUniforms.uAbsorptionStrength.value = this.tuning.absorptionStrength;
     this.frameUniforms.uScatteringStrength.value = this.tuning.scatteringStrength;
     this.frameUniforms.uSurfaceRoughness.value = this.tuning.surfaceRoughness;
+    this.frameUniforms.uLookModel.value = this.tuning.lookModel;
+    this.frameUniforms.uFoamMask.value = this.tuning.foamMask;
   }
 
   getTuning(): Readonly<HydroTuning> { return { ...this.tuning }; }
@@ -630,6 +650,19 @@ class DefaultHydroSystem implements HydroSystem {
     }
     if (frame.zenithColour) {
       this.frameUniforms.uZenith.value.setRGB(frame.zenithColour.r, frame.zenithColour.g, frame.zenithColour.b);
+    }
+    if (frame.moon) {
+      this.frameUniforms.uMoonDirection.value.set(frame.moon.x, frame.moon.y, frame.moon.z).normalize();
+      this.frameUniforms.uMoonColour.value.set(frame.moon.r, frame.moon.g, frame.moon.b);
+    }
+    if (frame.head) {
+      const h = frame.head;
+      this.frameUniforms.uHeadPos.value.set(h.x, h.y, h.z);
+      this.frameUniforms.uHeadDir.value.set(h.dx, h.dy, h.dz).normalize();
+      this.frameUniforms.uHeadColour.value.set(h.r, h.g, h.b);
+      this.frameUniforms.uHeadCone.value.set(h.cosOuter, h.cosInner, h.range, h.decay);
+    } else {
+      this.frameUniforms.uHeadColour.value.set(0, 0, 0);
     }
     if (frame.terrainColour) {
       this.frameUniforms.uTerrainColour.value.setRGB(
@@ -900,6 +933,14 @@ class DefaultHydroSystem implements HydroSystem {
       });
     }
     return out;
+  }
+
+  setBuildOptions(patch: { coastField?: boolean; dryShortCircuit?: boolean }): void {
+    let changed = false;
+    const o = this.buildOptions as { coastField: boolean; dryShortCircuit: boolean };
+    if (patch.coastField !== undefined && patch.coastField !== o.coastField) { o.coastField = patch.coastField; changed = true; }
+    if (patch.dryShortCircuit !== undefined && patch.dryShortCircuit !== o.dryShortCircuit) { o.dryShortCircuit = patch.dryShortCircuit; changed = true; }
+    if (changed) for (const record of this.records.values()) record.dirty = true;
   }
 
   dispose(): void {

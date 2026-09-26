@@ -97,6 +97,9 @@ export interface MenuCtx {
    *  everyone and cannot say WHICH build the reader is looking at is half a
    *  page, and the first question of any report is which version it was. */
   aboutRows(): Array<[string, string]>;
+  /** Drop the service worker and its shell caches only, and reload: the way
+   *  off a stale build that a reload keeps answering from the cache. */
+  loadLatest?(status: (s: string, bad?: boolean) => void): void;
   real(): { on: boolean; err: string };
   surveyHere(): { name: string; tally: string; frac: number; state: string; tone: Tone } | null;
   surveyTotals(): { roads: number; got: number; total: number };
@@ -1315,6 +1318,13 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     // the reader nowhere to push back is only half a page.
     body.append(el('div', 'm-sect', 'THIS BUILD'));
     body.appendChild(kvTable(ctx.aboutRows));
+    if (ctx.loadLatest) {
+      const note = el('div', 'm-dimline', 'DROPS THE OFFLINE COPY ONLY AND RELOADS. SETTINGS, SURVEY AND SIGN-IN STAY.');
+      const up = button('LOAD THE LATEST BUILD', C.soft, () => {
+        ctx.loadLatest?.((s, bad) => { note.textContent = s; note.style.color = bad ? C.bad : C.dim; });
+      });
+      body.append(up, note);
+    }
   }
 
   function renderSettings(): void {

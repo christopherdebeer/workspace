@@ -51,7 +51,8 @@ function fakeTable(seed = {}) {
   return {
     rows, marks, prof, writes: 0,
     async all(pk) {
-      const out = { roads: {}, marks: { m: {}, s: {} }, odo: prof.get(pk)?.odo ?? 0 };
+      const out = { roads: {}, marks: { m: {}, s: {} }, odo: prof.get(pk)?.odo ?? 0, spots: {} };
+      for (const [k, v] of this.spots) if (k.startsWith(pk + '|')) out.spots[k.slice(pk.length + 1)] = v;
       for (const [k, v] of rows) if (k.startsWith(pk + '|')) out.roads[k.slice(pk.length + 1)] = v;
       for (const [k, v] of marks) {
         if (!k.startsWith(pk + '|')) continue;
@@ -76,6 +77,11 @@ function fakeTable(seed = {}) {
       }
     },
     async setProfile(pk, p) { prof.set(pk, p); },
+    spots: new Map(),
+    async putSpots(pk, r) {
+      this.writes += Object.keys(r).length;
+      for (const [id, v] of Object.entries(r)) this.spots.set(`${pk}|${id}`, v);
+    },
   };
 }
 const call = async (method, caller, body, table) => {
@@ -250,6 +256,32 @@ const call = async (method, caller, body, table) => {
 
   const anon = await call('DELETE', 'anonymous', undefined, t);
   check('anonymous cannot reset anyone', anon.status === 401, anon.status);
+}
+
+// ── saved spots: a union keyed by place, saved-at vs deleted-at ─────────
+{
+  const t = fakeTable();
+  const senqu = { at: 1000, gone: 0, name: 'SENQU', sub: 'LESOTHO', lat: -30.70679, lon: 27.751, h: 339 };
+  const fife = { at: 1100, gone: 0, name: 'FIFE', sub: 'SCOTLAND', lat: 56.2, lon: -3.1, h: 0 };
+  await call('POST', 'c15r', { spots: { '-30.7068,27.7510': senqu, '56.2000,-3.1000': fife } }, t);
+  // A wiped device sends nothing and gets both back.
+  const back = await call('POST', 'c15r', {}, t);
+  check('spots come back to a wiped device', back.body.spots['-30.7068,27.7510']?.name === 'SENQU'
+    && back.body.spots['56.2000,-3.1000']?.at === 1100, back.body.spots);
+  // Deleted on one device…
+  await call('POST', 'c15r', { spots: { '56.2000,-3.1000': { ...fife, gone: 1200 } } }, t);
+  // …and another device that still has it (saved at 1100) cannot resurrect it.
+  const stale = await call('POST', 'c15r', { spots: { '56.2000,-3.1000': fife } }, t);
+  const f = stale.body.spots['56.2000,-3.1000'];
+  check('a delete survives a device that still holds the spot', f.gone === 1200 && f.at === 1100, f);
+  // Saving it again later brings it back.
+  const again = await call('POST', 'c15r', { spots: { '56.2000,-3.1000': { ...fife, at: 1300 } } }, t);
+  const g = again.body.spots['56.2000,-3.1000'];
+  check('…and saving it again later revives it', g.at === 1300 && g.gone === 1200, g);
+  const theirs = await call('GET', 'someone-else', undefined, t);
+  check('another player sees none of them', Object.keys(theirs.body.spots).length === 0, theirs.body.spots);
+  const junk = await call('POST', 'c15r', { spots: { 'x': { lat: 999, lon: 0, at: 5 }, ['y'.repeat(99)]: senqu } }, t);
+  check('junk spots are refused', !junk.body.spots.x && !junk.body.spots['y'.repeat(99)], Object.keys(junk.body.spots));
 }
 
 // ── through the handler, the way dispatch calls it ─────────────────────

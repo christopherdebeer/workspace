@@ -21,7 +21,7 @@ import type { HydroShoreSegment } from './hydro/shore-contour';
 import * as THREE from 'three';
 import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, CLIM_G, ClimateField, GROUND_RAMPS, altBandAt, aspectLift, climPick,
   climPickRow, krummholz, siteAt, swardLift, treelineAt, type ClimateSample, type SiteClimate } from './climate';
-import { createAudio, type ImpactKind } from './audio';
+import { createAudio, tyreCornerSlip, ambientBed, type ImpactKind } from './audio';
 import { coastKm } from './coast';
 import { clamp } from './num';
 import { mulberry32, type Rng } from './rng';
@@ -39,7 +39,9 @@ import {
   sampleBankField,
   BANK_GLSL,
 } from './shoreline';
-import { URL_OWNED, qs, qsHas, qsNum, qsOn, switchRows, urlWithSwitches } from './switches';
+import { URL_OWNED, qs, qsHas, qsNum, qsOn, switchRows, urlWithSwitches, onSwitch, setSwitch, switchApply, isSwitchId, queryPairs,
+  carrySwitches,
+  type SwitchId } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { CHART_LAYERS, COVER_INK, HYDRO_VIEWS, SUBSTRATE_LEGEND, SURFACE_LEGEND, WATER_LEGEND, XRAY_VIEWS,
   chartLayer, inkFor, inkHex, legendFor, type ChartLayerId } from './chart-layers';
@@ -94,7 +96,7 @@ import { madeKind, madeShares, MADE_GLSL, type MadeKind } from './constructed-gr
 import { registerBuildingFabric, inheritBuildingFabric, attachBuildingFabric, setBuildingCondition, type BuildingCondition } from './building-fabric';
 import { GROUND_VIEW, GV_GLSL, VIEW_FOR_LAYER, SUBSTRATE_VIEWS, groundInkPixels, type GroundViewId } from './ground-view';
 import { SUB_GLSL, SUB_ROCK_CAST, SUB_DOM_M, subDomainAt, subEvidence, subExpressOf, subGrainOf, subLayerTint,
-  subGrassAllow, SUB_SWARD_K, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
+  subGrassAllow, SUB_SWARD_K, SUB_K, buildSubstrateCells, sampleSubstrate, rockFamilyOf, SUB_CH, SUB_FIELD_N,
   type SubstrateField } from './substrate-field';
 import { gramDecode } from './facade-grammar';
 import { GRASS_M2, GRASS_UNKNOWN, GRASS_DEFAULT, swardCoverEvidence, SWARD_EV }
@@ -492,7 +494,7 @@ const CAR_R = 2.4;
  * has been walked is still collided with the right shape rather than nothing.
  */
 /** ?hull=0 collides as the circle again — the rollback and the one-build A/B. */
-const HULL_ON = qsOn('hull', true);
+let HULL_ON = qsOn('hull', true);
 let rigHull: HullBox = { halfWidthM: 1.08, halfLengthM: 2.546 };
 let rigHullR = hullRadiusM(rigHull);
 /** What a stray part did to the box, if anything — see `measureRigHull`. */
@@ -2158,7 +2160,7 @@ function ecoAt(ex: number, ez: number): EcoHit | null {
  * completely, which matters because this changes the vegetation of every
  * landscape in the game and "it looks different" is not a measurement.
  */
-const GUILD_ON = qs('guild') !== '0';
+let GUILD_ON = qs('guild') !== '0';
 const guildMemo = new Map<string, { g: Guild | null; stamp: number; eco: number }>();
 // ONE ENTRY IN FRONT OF THE MAP. `guildNow` is asked once per vegetation
 // CANDIDATE and once per planted site — tens of thousands of times in a seed
@@ -2285,12 +2287,12 @@ function readDialRecord(): Record<string, number> {
 /** The shoreline pass as one switch, for the A/B: the water's local
  *  terrain colour and the sward's mineral and reed banks. `shore=0` is the
  *  frame colour and hillside grass to the waterline, as it was. */
-const SHORE_ON = qsOn('shore', true);
+let SHORE_ON = qsOn('shore', true);
 /** The bank resolver. Off, no stations are published at all, so the channel
  *  carve owns every shoreline again and the fringe between its 1:1 bank and
  *  the drawn waterline comes back — the control every bank-census reading is
  *  taken against. */
-const BANK_ON = qsOn('bank', true);
+let BANK_ON = qsOn('bank', true);
 /** The rig's occluded-silhouette overlay, retired to a flag — see the block
  *  above `rebuildRigSilhouette` for what it drew and why it stopped. */
 const RIG_XRAY = qsOn('rigxray', false);
@@ -2299,12 +2301,12 @@ const RIG_XRAY = qsOn('rigxray', false);
  *  gives a ford `implementation: 'not-required'` and that was read as "no
  *  geometry" rather than "no conduit". The A/B for the apron, its cutoff
  *  sills and the marker posts; `__fords()` is the count beside it. */
-const FORDS_ON = qsOn('fords', true);
+let FORDS_ON = qsOn('fords', true);
 /** The sward reads the substrate's classification — the brief's own "sward and
  *  terrain from the same field". Off restores the sward that thins for cover,
  *  altitude and the bank and knows nothing about outcrop, which is the exact
  *  A/B for what one shared field is worth. */
-const SUB_SWARD = qsOn('swardsub', true);
+let SUB_SWARD = qsOn('swardsub', true);
 /** How far a blade's colour goes toward the material it stands in. Not all the
  *  way: the sward's own colour rules — the bank mineral, the reeds, the
  *  altitude lift — are about the PLANT, and this is about the ground under it.
@@ -2357,6 +2359,10 @@ function swardCoverRate(x: number, z: number): number {
  *  mixed the far field toward `softTex` as well as toward the haze colour. Off
  *  by default: see `uAirBlur`. The exact A/B for the far-field sharpness. */
 const AIR_BLUR = qsOn('airblur', false) ? 1 : 0;
+/** `paintwash=0..1` (renamed from `wash`, which is the cut-face wash) runs a
+ *  4-quadrant Kuwahara on sceneTex before grade/quantise — structure-preserving
+ *  painterly pre-pass. 0 is shipped truth. See `uWash`. */
+const WASH = clamp(qsNum('paintwash', 0), 0, 1);
 /**
  * ── THE TERRAIN MOTTLE'S SPECTRUM, AND THE PIXEL THAT HAS TO HOLD IT ──
  *
@@ -3871,13 +3877,28 @@ const hydroBankStats = new Map<string, HydroBankResult['stats']>();
  */
 function publishHydroFloor(t: HeightTile, key: string, field: HydroTileField): boolean {
   const n = HYDRO_EN;
-  const out = new Float32Array(n * n);
+  // TWO LATTICES IN ONE ARRAY: the inland bed (first n², NaN where none) and
+  // the SEA's drawn coverage (second n²). The kernel dropped the sea bed on
+  // the cover raster's word over a twenty-metre footprint, which at the
+  // Twelve Apostles lowered 25 m of beach below the sea where no water was
+  // drawn — a hole the rig fell into and saw the water's edge from below.
+  // The bed may only drop where the field DRAWS the sea, and this is the
+  // field's own answer to that, at the floor's own lattice.
+  const out = new Float32Array(n * n * 2);
   let any = false;
   for (let iz = 0; iz < n; iz++) {
     const z = t.zs + (iz / (n - 1)) * t.h;
     for (let ix = 0; ix < n; ix++) {
       const x = t.xs + (ix / (n - 1)) * t.w;
       const w = sampleFieldSurface(field, x, z, 0);
+      // Any drawn water counts, not only the ocean's: a river mouth or a
+      // coastal lagoon on the sea's own flat took the cover rule's drop and
+      // must keep it (measured at Romsdalen: a stream body between two ocean
+      // stretches stood 3 m proud of them without it). The kernel's own gate
+      // — within two metres of the sea — still keeps a mountain river out.
+      const sea = w ? w.coverage : 0;
+      out[n * n + iz * n + ix] = sea;
+      if (sea > 0) any = true;
       if (!w || w.kind === 'ocean' || w.coverage < WATERLINE_CUT(x, z, w.kind)) { out[iz * n + ix] = NaN; continue; }
       out[iz * n + ix] = w.restingLevelM - Math.max(w.depthM, .08);
       any = true;
@@ -3995,6 +4016,18 @@ function publishHydroShoreBreakLines(t: HeightTile, key: string): void {
  * tile anyway, so there is nothing on screen to see it happen to.
  */
 const hydroFrameOrigin = { x: 0, y: 0, z: 0 };
+/** While a sheet runs, the hydro clock in seconds; null lets it run. */
+let hydroTimePin: number | null = null;
+/** `?banklook=1` — the narrow damp bank (see the sward's bank paint). */
+let BANK_LOOK = qsNum('banklook', 1) > 0.5;
+/** `?hydrolook=` — the water's optical model (HydroTuning.lookModel). */
+const HYDRO_LOOK = clamp(qsNum('hydrolook', 1), 0, 1);
+/** The moon, for the water's glitter path: the TRUE lunar direction (the
+ *  sky's own `moonDir`, never the chart's stand-in light) and its light as a
+ *  0..1 share of a clear full moon. */
+const hydroFrameMoon = { x: 0, y: 1, z: 0, r: 0, g: 0, b: 0 };
+const hydroFrameHead = { x: 0, y: 0, z: 0, dx: 0, dy: 0, dz: 1, r: 0, g: 0, b: 0, cosOuter: 0.87, cosInner: 0.98, range: 1, decay: 1 };
+const hydroHeadP = new THREE.Vector3(), hydroHeadT = new THREE.Vector3();
 const hydroFrameSky = { r: 0, g: 0, b: 0 };
 const hydroFrameTerrain = { r: 0, g: 0, b: 0 };
 /** THE LIGHT THE GROUND GETS, for the water (HydroFrame.sceneLight). The
@@ -4025,6 +4058,27 @@ function hydroLightFeed(): void {
   hydroFrameLight.r = ch('r'); hydroFrameLight.g = ch('g'); hydroFrameLight.b = ch('b');
   const z = skyMat.uniforms.uZenith.value as THREE.Vector3;
   hydroFrameZenith.r = z.x; hydroFrameZenith.g = z.y; hydroFrameZenith.b = z.z;
+  const md = (skyMat.uniforms.moonDir as { value: THREE.Vector3 } | undefined)?.value;
+  const chart = camMode === 'top';
+  const lunarShare = clamp(moon.intensity / (MOON_I * (chart ? MOON_CHART : 1)), 0, 1);
+  if (md) { hydroFrameMoon.x = md.x; hydroFrameMoon.y = md.y; hydroFrameMoon.z = md.z; }
+  hydroFrameMoon.r = moon.color.r * lunarShare;
+  hydroFrameMoon.g = moon.color.g * lunarShare;
+  hydroFrameMoon.b = moon.color.b * lunarShare;
+  // The headlamp, in the same units: candela over the noon reference, with
+  // three's own cone and decay so the water and the ground agree on one lamp.
+  const refOf = (k: 'r' | 'g' | 'b'): number => Math.max(biome.sunI * 0.8 * hydroRefSun[k] + biome.hemiI * hydroRefSky[k], 1e-3);
+  const lampOn = headSpot.visible && headSpot.intensity > 0.01;
+  hydroFrameHead.r = lampOn ? headSpot.color.r * headSpot.intensity / refOf('r') : 0;
+  hydroFrameHead.g = lampOn ? headSpot.color.g * headSpot.intensity / refOf('g') : 0;
+  hydroFrameHead.b = lampOn ? headSpot.color.b * headSpot.intensity / refOf('b') : 0;
+  headSpot.getWorldPosition(hydroHeadP); headSpot.target.getWorldPosition(hydroHeadT);
+  hydroHeadT.sub(hydroHeadP).normalize();
+  hydroFrameHead.x = hydroHeadP.x; hydroFrameHead.y = hydroHeadP.y; hydroFrameHead.z = hydroHeadP.z;
+  hydroFrameHead.dx = hydroHeadT.x; hydroFrameHead.dy = hydroHeadT.y; hydroFrameHead.dz = hydroHeadT.z;
+  hydroFrameHead.cosOuter = Math.cos(headSpot.angle);
+  hydroFrameHead.cosInner = Math.cos(headSpot.angle * (1 - headSpot.penumbra));
+  hydroFrameHead.range = headSpot.distance; hydroFrameHead.decay = headSpot.decay;
 }
 /** The world's wind, written where the sky and the grass already agree on it.
  *  12km/h is the calm-day default the deck drift uses. */
@@ -4072,7 +4126,8 @@ function hydroTick(nowMs: number): void {
   hydroFrameSky.r = sky.x; hydroFrameSky.g = sky.y; hydroFrameSky.b = sky.z;
   hydroFrameTerrain.r = terrain[0]; hydroFrameTerrain.g = terrain[1]; hydroFrameTerrain.b = terrain[2];
   hydroSys.update({
-    timeSeconds: nowMs / 1000,
+    // A sheet pins the water's clock so every cell shares one wave phase.
+    timeSeconds: hydroTimePin ?? nowMs / 1000,
     worldOrigin: hydroFrameOrigin,
     wind: { x: worldWind.dirX, z: worldWind.dirZ, speedMps: worldWind.kmh / 3.6 },
     rain: w?.rain ?? 0,
@@ -4084,6 +4139,8 @@ function hydroTick(nowMs: number): void {
     sceneLight: hydroFrameLight,
     zenithColour: hydroFrameZenith,
     groundGain: hydroFrameGain,
+    moon: hydroFrameMoon,
+    head: hydroFrameHead,
     terrainColour: hydroFrameTerrain,
     // The ground's colour AT THE FRAGMENT, from the grass's own field (see
     // HydroFrame.terrainField): the shallows at a crossing wore the road's
@@ -4259,7 +4316,7 @@ const hydroFeedLog: Array<{ at: number; key: string; rev: number; store: number;
 (window as unknown as { __hydrobound?: object }).__hydrobound = (on = true): void => setHydroBoundProbe(!!on);
 /** The hydro system's elevation raster side — see hydroFeed. */
 const HYDRO_EN = 132;
-const HYDRO_SKIP = qs('hydroskip') !== '0';
+let HYDRO_SKIP = qs('hydroskip') !== '0';
 /** What each tile was last fed, so an identical feed can end without a build. */
 const hydroFedInputs = new Map<string, { elev: Float32Array; sig: string }>();
 function sameRaster(a: Float32Array, b: Float32Array): boolean {
@@ -4297,7 +4354,7 @@ function sameRaster(a: Float32Array, b: Float32Array): boolean {
  * under it may yet matter; only confirmed dry is dropped. A tile whose mask
  * never arrived keeps the exact comparison.
  */
-const HYDRO_GROUND_R = Math.max(0, qsNum('hydroground', 150));
+let HYDRO_GROUND_R = Math.max(0, qsNum('hydroground', 150));
 /**
  * ── AND IT READS THE GROUND IN METRES, NOT IN FLOATS ──
  *
@@ -4316,7 +4373,7 @@ const HYDRO_GROUND_R = Math.max(0, qsNum('hydroground', 150));
  * the previous feed, so a bank creeping a centimetre per rebuild is caught on
  * the rebuild that takes it past the tolerance rather than never.
  */
-const HYDRO_GROUND_EPS = Math.max(0, qsNum('hydroeps', 0.02));
+let HYDRO_GROUND_EPS = Math.max(0, qsNum('hydroeps', 0.02));
 let hydroBandA = new Uint8Array(0), hydroBandB = new Uint8Array(0);
 interface WetBox { minX: number; maxX: number; minZ: number; maxZ: number }
 function hydroWetBand(t: HeightTile, boxes: readonly WetBox[], ocean: OceanCoverage, EN: number): Uint8Array | null {
@@ -4439,6 +4496,7 @@ function hydroSceneShade(): SceneShade {
       uCsSunDisc: skyMat.uniforms.uSunDisc,
       uCsLow: skyMat.uniforms.uLow,
       uCsNight: skyMat.uniforms.uNight,
+      uCsDusk: skyMat.uniforms.uDusk,
     },
   };
 }
@@ -4471,7 +4529,17 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
       scheduleBuild: (job) =>
       new Promise((resolve, reject) => { hydroJobs.push({ job, resolve, reject }); }) });
     hydroSys.setDebugView(hydroView);
+    // THE WATER'S OPTICS, A/B. The reviewed look (HydroTuning.lookModel 1) is
+    // the default; `?hydrolook=0` is the look before the review, exactly.
+    hydroSys.setTuning({ lookModel: HYDRO_LOOK });
     worldGroup.add(hydroSys.object3d);
+    // ── RUNTIME SWITCHES THAT FEED THE WATER ── (switches.ts: setSwitch)
+    onSwitch('hydrolook', (v) => {
+      const n = clamp(qsNum('hydrolook', 1), 0, 1);
+      hydroSys?.setTuning({ lookModel: n }); hydroLookLive = n;
+    });
+    onSwitch('coast', () => hydroSys?.setBuildOptions({ coastField: qsOn('coast', true) }));
+    onSwitch('hydrodry', () => hydroSys?.setBuildOptions({ dryShortCircuit: qsOn('hydrodry', true) }));
     // THE OLD PLANE STANDS DOWN, rather than being deleted. Two renderers for
     // one sea is the failure to avoid, and a flag that can turn the new one off
     // is worth more right now than the lines the delete would save: it is the
@@ -6253,13 +6321,25 @@ const lumaMat = new THREE.ShaderMaterial({
     uniform sampler2D src; uniform sampler2D uDep;
     uniform float uNear; uniform float uFar; varying vec2 vUv;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+    // A NON-FINITE WITNESS in alpha: 0 where any of five samples across this
+    // cell of the scene is NaN or infinite, 1 otherwise. A byte readback
+    // cannot hold a NaN (it lands as whatever the driver makes of it), so the
+    // test has to happen here, on the float target. Five samples a cell over
+    // 40x88 cells is not every pixel — a lone NaN pixel can slip between them —
+    // but the flash the seat reports is a frame-sized event, and one the
+    // composite's blurs would have spread in any case.
+    float bad(vec3 v){ return (v.x != v.x || v.y != v.y || v.z != v.z || abs(v.x) + abs(v.y) + abs(v.z) > 1e30) ? 1.0 : 0.0; }
     void main(){
-      vec3 c = srgb(max(texture2D(src, vUv).rgb, 0.0));
+      vec3 raw = texture2D(src, vUv).rgb;
+      vec2 h = vec2(0.33 / ${LUMA_W}.0, 0.33 / ${LUMA_H}.0);
+      float nb = bad(raw) + bad(texture2D(src, vUv + h).rgb) + bad(texture2D(src, vUv - h).rgb)
+        + bad(texture2D(src, vUv + vec2(h.x, -h.y)).rgb) + bad(texture2D(src, vUv + vec2(-h.x, h.y)).rgb);
+      vec3 c = srgb(max(raw, 0.0));
       float dz = texture2D(uDep, vUv).x;
       float vz = (uNear * uFar) / ((uFar - uNear) * dz - uFar);
       float e = floor(clamp(-vz / uFar, 0.0, 1.0) * 65535.0 + 0.5);
-      gl_FragColor = vec4(dot(c, vec3(0.299, 0.587, 0.114)),
-        floor(e / 256.0) / 255.0, mod(e, 256.0) / 255.0, 1.0);
+      gl_FragColor = vec4(nb > 0.0 ? 0.0 : dot(c, vec3(0.299, 0.587, 0.114)),
+        floor(e / 256.0) / 255.0, mod(e, 256.0) / 255.0, nb > 0.0 ? 0.0 : 1.0);
     }`,
   depthTest: false,
   depthWrite: false,
@@ -6276,6 +6356,22 @@ let lumaNext = 0, lumaFar = 62000, lumaPrimed = false;
 let lumaPending: { pbo: WebGLBuffer; sync: WebGLSync; far: number } | null = null;
 let lumaAsync = qs('lumasync') !== '1';   // ?lumasync=1: the old read, for an A/B on a device
 const lumaStat = { async: 0, sync: 0, waits: 0 };
+/** Frames whose scene target held non-finite colour, as the luma pass saw it:
+ *  how many reads caught any, the worst cell count, and the context of the
+ *  last one — where the camera was and what it was doing — because the flash
+ *  the seat reports is periodic while moving and its producer is unknown. */
+const nanStat = { reads: 0, hit: 0, worstCells: 0, lastAt: 0, last: null as null | Record<string, unknown> };
+function lumaNanScan(): void {
+  nanStat.reads++;
+  let n = 0, fx = -1, fy = -1;
+  for (let i = 0; i < LUMA_W * LUMA_H; i++) if (lumaPx[i * 4 + 3] < 128) { if (n === 0) { fx = i % LUMA_W; fy = Math.floor(i / LUMA_W); } n++; }
+  if (!n) return;
+  nanStat.hit++;
+  if (n > nanStat.worstCells) nanStat.worstCells = n;
+  nanStat.lastAt = performance.now();
+  nanStat.last = { cells: n, firstCell: [fx, fy], cam: camMode, x: Math.round(state.x), z: Math.round(state.z),
+    kmh: Math.round(Math.abs(state.speed) * 3.6), t: +(performance.now() / 1000).toFixed(1) };
+}
 function lumaCollect(gl: WebGL2RenderingContext): boolean {
   const p = lumaPending;
   if (!p) return true;
@@ -6290,6 +6386,7 @@ function lumaCollect(gl: WebGL2RenderingContext): boolean {
   lumaFar = p.far;
   lumaPrimed = true;
   lumaStat.async++;
+  lumaNanScan();
   return true;
 }
 function stepLuma(now: number): void {
@@ -6330,7 +6427,23 @@ function stepLuma(now: number): void {
   lumaFar = camera.far;
   lumaPrimed = true;
   lumaStat.sync++;
+  lumaNanScan();
 }
+/** Every hydro mesh in the scene with its triangle count — the dump's
+ *  `scene triangles` row put 4M on water at Nagato, against a lattice capped
+ *  at 128 a side, and this is what says which meshes carry them. */
+(window as unknown as { __hydromesh?: object }).__hydromesh = (): object => {
+  const rows: Array<{ n: string; tris: number; vis: boolean }> = [];
+  hydroSys?.object3d.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const g = m.geometry as THREE.BufferGeometry;
+    rows.push({ n: m.name, tris: Math.round((g.index ? g.index.count : g.attributes.position.count) / 3), vis: m.visible });
+  });
+  rows.sort((a, b) => b.tris - a.tris);
+  return { meshes: rows.length, tris: rows.reduce((t, r) => t + r.tris, 0), rows: rows.slice(0, 30) };
+};
+(window as unknown as { __nan?: object }).__nan = (): object => ({ ...nanStat });
 (window as unknown as { __lumastat?: object }).__lumastat = (): object => ({ ...lumaStat, async: lumaStat.async, on: lumaAsync, pending: !!lumaPending, primed: lumaPrimed });
 const depVec = new THREE.Vector3();
 /** Is a world point in front of everything the frame actually DREW? A ray
@@ -6387,11 +6500,10 @@ function depthVisible(px3: number, py3: number, pz3: number): boolean {
   return false;
 }
 // ── X-RAY: the debug eyes, drivable ────────────────────────────────
-// 1 = DEPTH: the 40x88 map the HUD's occlusion verdicts actually read,
-// painted under the live instruments so a wrong pin can be argued with on
-// the spot. 2 = WIRE: the world stripped to its meshes — the geometry the
-// truck is actually colliding with, not the paint over it.
-const XRAY_MODES = ['OFF', 'DEPTH', 'WIRE'] as const;
+// DEPTH samples the scene's pixel depth at art resolution, scaled around
+// the live focus; FOCUS shows the actual signed blur field; WIRE shows geometry.
+// The 40x88 CPU sensor stays separate as the autofocus input.
+const XRAY_MODES = ['OFF', 'DEPTH', 'WIRE', 'FOCUS'] as const;
 let xrayMode = 0;
 (window as unknown as { __xray?: object }).__xray = (mode?: string): object => {
   if (mode === undefined) return { mode: XRAY_MODES[xrayMode], modes: [...XRAY_MODES] };
@@ -6756,6 +6868,9 @@ const compMat = new THREE.ShaderMaterial({
      * was hiding it.
      */
     uAirBlur: { value: AIR_BLUR },
+    uNanPaint: { value: qsOn('nanpaint', false) ? 1 : 0 },
+    /** Exploratory painterly pre-pass: 4-quadrant Kuwahara on sceneTex before grade/quantise. */
+    uWash: { value: WASH },
     // ── TILT-SHIFT ──
     // A plane of focus in the WORLD (a point and a normal), not a band on the
     // glass. See the block in the fragment shader.
@@ -6780,6 +6895,7 @@ const compMat = new THREE.ShaderMaterial({
     uDofMode: { value: 2 },
     uDofFocusDist: { value: 40 },
     uDofMaxPx: { value: DOF_RADII[dofRadiusAt] },
+    uDofNearScale: { value: 1 },
     uDofTaps: { value: DOF_TAPS[dofQuality] },
     // Metres a pixel on the chart (shared by reference): what the aerial
     // perspective fades on past the fine world. See `deep` below.
@@ -6885,7 +7001,7 @@ const compMat = new THREE.ShaderMaterial({
     // term, 2 kills the haze outright, 3 kills the sun lobe. See __haze.
     uniform float uHazeDbg; uniform float uHazeWarm; uniform float uMpp;
     uniform float uHazeE; uniform float uHazeAmt; uniform float uSkyD;
-    uniform float uAirBlur; uniform float uTiltAmt; uniform vec3 uFocusP; uniform vec3 uFocusN;
+    uniform float uAirBlur; uniform float uNanPaint; uniform float uWash; uniform float uTiltAmt; uniform vec3 uFocusP; uniform vec3 uFocusN;
     uniform float uTiltSharp; uniform float uTiltBlur; uniform float uTiltNearScale;
     uniform float uTanHalfFov; uniform float uTiltSky;
 ${FILMIC_GLSL}
@@ -7104,6 +7220,38 @@ ${DITHER_GLSL}
         col += mix(vec3(1.0, 0.82, 0.52), vec3(0.55, 0.85, 1.0), 0.35) * f * sunVis * 0.085 * uFlare;
       }
       col += vec3(0.85, 0.90, 1.0) * uFlash;   // lightning fills the whole frame
+      // PAINTWASH: 4-quadrant Kuwahara on sceneTex before grade + quantise.
+      // Structure-preserving painterly pass — picks the lowest-luma-variance
+      // sector mean so flats unify without Gaussian mush. Radius ~2 art pixels.
+      // Rig/noBlur stays sharp. uWash 0 is a no-op. See switches.ts paintwash.
+      if (uWash > 0.001 && sharp4.a >= 0.25) {
+        vec2 pStep = uPix * 2.0;
+        float bestVar = 1.0e6;
+        vec3 bestMean = sharp;
+        // Four quadrants relative to the pixel; each is a 2x2 of scene samples.
+        // Offsets are the quadrant origin in art-pixel steps ( -1/-1, 0/-1, -1/0, 0/0 ).
+        for (int qi = 0; qi < 4; qi++) {
+          float qx = (qi == 1 || qi == 3) ? 0.0 : -1.0;
+          float qy = (qi >= 2) ? 0.0 : -1.0;
+          vec3 sRGB = vec3(0.0);
+          float sL = 0.0;
+          float sL2 = 0.0;
+          for (int j = 0; j < 2; j++) {
+            for (int i = 0; i < 2; i++) {
+              vec3 s = texture2D(sceneTex, vUv + pStep * vec2(qx + float(i), qy + float(j))).rgb;
+              float L = dot(s, vec3(0.299, 0.587, 0.114));
+              sRGB += s;
+              sL += L;
+              sL2 += L * L;
+            }
+          }
+          sRGB *= 0.25;
+          sL *= 0.25;
+          float v = max(sL2 * 0.25 - sL * sL, 0.0);
+          if (v < bestVar) { bestVar = v; bestMean = sRGB; }
+        }
+        col = mix(col, bestMean, clamp(uWash, 0.0, 1.0));
+      }
       // DEPTH COLOUR BEFORE TONEMAPPING: distant terrain loses saturation and
       // bends toward slate/cyan while the ACES shoulder still owns its
       // luminance. The rig mask is already in alpha (noBlur writes zero), so
@@ -7188,6 +7336,15 @@ ${DITHER_GLSL}
       // Scanlines on the PIXEL grid (every other buffer row), so they scale
       // with the art instead of shimmering against the display's real pixels.
       enc *= 1.0 - uScan * mod(floor(vUv.y * uPix.y), 2.0);
+      // ?nanpaint=1: a non-finite SCENE pixel is solid magenta, and a pixel the
+      // post chain made non-finite (a blur that spread one) is dim magenta —
+      // so a screen recording of the flash says where it came from, before
+      // the quantiser paints NaN as the palette's black floor.
+      if (uNanPaint > 0.5) {
+        vec3 sc = texture2D(sceneTex, vUv).rgb;
+        if (sc.x != sc.x || sc.y != sc.y || sc.z != sc.z) enc = vec3(1.0, 0.0, 1.0);
+        else if (enc.x != enc.x || enc.y != enc.y || enc.z != enc.z) enc = vec3(0.45, 0.0, 0.45);
+      }
       gl_FragColor = vec4(clamp(enc, 0.0, 1.0), 1.0);
     }`,
 });
@@ -7205,6 +7362,7 @@ const dofPrepMat = new THREE.ShaderMaterial({
     invPV: { value: new THREE.Matrix4() }, camPos: { value: new THREE.Vector3() },
     uFocusP: { value: new THREE.Vector3() }, uFocusN: { value: new THREE.Vector3(0, 0, -1) },
     uFocusDist: { value: 40 }, uMode: { value: 0 }, uMaxPx: { value: 7 },
+    uDofNearScale: { value: 1 },
     uTiltAmt: { value: 0 }, uTiltSharp: { value: 34 }, uTiltBlur: { value: 92 },
     uTiltNearScale: { value: 1 },
     uTiltSky: { value: 0.7 }, uTanHalfFov: { value: Math.tan((55 * Math.PI) / 360) },
@@ -7214,7 +7372,7 @@ const dofPrepMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform sampler2D sceneTex; uniform sampler2D depthTex;
     uniform mat4 invPV; uniform vec3 camPos; uniform vec3 uFocusP; uniform vec3 uFocusN;
-    uniform float uFocusDist; uniform float uMode; uniform float uMaxPx;
+    uniform float uFocusDist; uniform float uMode; uniform float uMaxPx; uniform float uDofNearScale;
     uniform float uTiltAmt; uniform float uTiltSharp; uniform float uTiltBlur; uniform float uTiltNearScale;
     uniform float uTiltSky; uniform float uTanHalfFov; uniform vec2 uPix; uniform float uSkyD;
     varying vec2 vUv;
@@ -7233,7 +7391,8 @@ const dofPrepMat = new THREE.ShaderMaterial({
           if (t >= uSkyD) radius = uMaxPx;
           else {
             float axial = max(dot(wp - camPos, uFocusN), 0.25);
-            radius = clamp((axial - uFocusDist) / axial, -1.0, 1.0) * uMaxPx;
+            float rel = (axial - uFocusDist) / axial;
+            radius = clamp(rel * (rel < 0.0 ? uDofNearScale : 1.0), -1.0, 1.0) * uMaxPx;
             if (abs(radius) < 0.35) radius = 0.0; // one sub-pixel sharp well
           }
         } else {
@@ -7359,6 +7518,50 @@ const dofNearMat = new THREE.ShaderMaterial({
   depthTest: false,
   depthWrite: false,
 });
+// A false-colour look at the ACTUAL CoC target, drawn after the ordinary
+// composite so grading/dither cannot disguise a focus error. It adds one
+// fullscreen pass only while X-ray FOCUS is selected; no CPU readback.
+const dofDebugMat = new THREE.ShaderMaterial({
+  uniforms: {
+    sceneTex: { value: rtScene.texture }, depthTex: { value: rtScene.depthTexture },
+    cocTex: { value: rtDofPrep.texture }, uActive: { value: 0 },
+    uNear: { value: 0.3 }, uFar: { value: 30000 }, uSkyD: { value: 45000 },
+    uView: { value: 3 }, uDepthPivot: { value: 40 },
+  },
+  vertexShader: QUAD_VS,
+  fragmentShader: `
+    uniform sampler2D sceneTex; uniform sampler2D depthTex; uniform sampler2D cocTex;
+    uniform float uActive; uniform float uNear; uniform float uFar; uniform float uSkyD;
+    uniform float uView; uniform float uDepthPivot;
+    varying vec2 vUv;
+    void main(){
+      float depth = texture2D(depthTex, vUv).r;
+      float metres = (uNear * uFar) / max(uFar - (uFar - uNear) * depth, 0.0001);
+      vec3 col = vec3(0.08, 0.13, 0.26); // sky / cleared depth
+      if (depth < 0.999999 && metres < uSkyD) {
+        if (uView < 1.5) {
+          // Equal colour travel per distance ratio, so five metres in chase
+          // and kilometres on the chart both show local geometry. Amber is
+          // nearer than the pivot, teal is at it, violet is farther away.
+          float d = clamp(log(max(metres, 0.25) / max(uDepthPivot, 1.0)) / log(8.0), -1.0, 1.0);
+          vec3 mid = vec3(0.10, 0.39, 0.37);
+          col = d < 0.0 ? mix(mid, vec3(0.91, 0.48, 0.18), -d)
+            : mix(mid, vec3(0.40, 0.28, 0.83), d);
+        } else if (uActive > 0.5) {
+          vec4 scene = texture2D(sceneTex, vUv);
+          vec4 coc = texture2D(cocTex, vUv);
+          if (scene.a < 0.25) col = vec3(0.96, 0.91, 0.68); // protected subject
+          else {
+            col = vec3(0.10, 0.39, 0.37); // sharp well
+            col = mix(col, vec3(0.91, 0.48, 0.18), clamp(coc.r, 0.0, 1.0));
+            col = mix(col, vec3(0.40, 0.28, 0.83), clamp(coc.g, 0.0, 1.0));
+          }
+        } else col = vec3(0.12, 0.19, 0.20); // DOF off: no stale CoC
+      }
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+  depthTest: false, depthWrite: false,
+});
 composite = (amt: number): void => {
 
   // The shutter runs FIRST, so everything after it — the depth-of-field blur,
@@ -7401,6 +7604,7 @@ composite = (amt: number): void => {
     pu.uFocusDist.value = cu.uDofFocusDist.value;
     pu.uMode.value = cu.uDofMode.value;
     pu.uMaxPx.value = cu.uDofMaxPx.value;
+    pu.uDofNearScale.value = cu.uDofNearScale.value;
     pu.uTiltAmt.value = cu.uTiltAmt.value;
     pu.uTiltSharp.value = cu.uTiltSharp.value;
     pu.uTiltBlur.value = cu.uTiltBlur.value;
@@ -7449,6 +7653,15 @@ composite = (amt: number): void => {
   compMat.uniforms.dofNearTex.value = rtDofNear.texture;
   compMat.uniforms.bloomTex.value = rtC.texture;
   runPass(compMat, null);
+  if (xrayMode === 1 || xrayMode === 3) {
+    dofDebugMat.uniforms.uView.value = xrayMode;
+    dofDebugMat.uniforms.uActive.value = dofOn ? 1 : 0;
+    dofDebugMat.uniforms.uNear.value = camera.near;
+    dofDebugMat.uniforms.uFar.value = camera.far;
+    dofDebugMat.uniforms.uSkyD.value = cu.uSkyD.value;
+    dofDebugMat.uniforms.uDepthPivot.value = dofFocusCurrent;
+    runPass(dofDebugMat, null);
+  }
   passCount.last = passCount.now;
   passCount.now = 0;
 };
@@ -7542,7 +7755,7 @@ const envU = {
   // by cloud. `?steepfill=` is the strength, 0 the exact A/B.
   uSteepFill: { value: new THREE.Vector3() },
 };
-const STEEP_FILL = qsNum('steepfill', 0.18);
+let STEEP_FILL = qsNum('steepfill', 0.18);
 /**
  * ── A SHADOW MAP CANNOT SHADE A VALLEY, AND THIS IS WHY ──
  *
@@ -7908,7 +8121,12 @@ function terrainFx(mat: THREE.Material, opts: {
         uniform float uCloudS; uniform vec2 uWind; uniform float uMpp;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
         uniform vec3 uSteepFill;
+        // Declared once per program: slipify declares the same weather field
+        // and a track wears both (a redefinition fails the link silently).
+        #ifndef DRIVE_WX_DECL
+        #define DRIVE_WX_DECL
         uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
+        #endif
         ${CLOUD_GLSL}
         ${SUNM_GLSL}`)
       // ── ON THE DIRECT TERM ONLY ──
@@ -9219,6 +9437,7 @@ function buildTerrainMesh(t: HeightTile): void {
   // road at grade) is still done, or the quiet path would dirty it for ever.
   (mesh.userData as { corridor?: boolean }).corridor = corridor;
   if (corridor) dropBatterFor(key);
+  if (!mesh.name) mesh.name = 'terrain';
   terrainMeshes.set(key, mesh);
   const revision = (terrainRevision.get(key) ?? 0) + 1;
   terrainRevision.set(key, revision);
@@ -9360,9 +9579,23 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
         // a tile over still on the wire, and a probe cached then said 6 m
         // for a 50 m cliff for the rest of the session. Measured at the
         // Apostles, tops 6.2 and 6.0 for stacks under a 50 m coast.
-        if (!Number.isFinite(P.height)) {
-          const top = plinthTopProbe(P);
-          if (Number.isFinite(top) && !(top <= (P.top ?? -Infinity))) (P as { top?: number }).top = top;
+        if (!Number.isFinite(P.height) && !(P as { land?: boolean }).land) {
+          // A STACK STANDS IN THE SEA. The islet rule files every closed
+          // cliff ring under 120 m, and on the Apostles' clifftop the survey
+          // also rings small OUTCROPS on the plateau — which then took the
+          // mainland's crown and stood as 40 m spikes over the grass beside
+          // the road (the seat's frame at -38.66438 143.10411). The DEM
+          // under a stack is the sea; under an outcrop it is the hill, which
+          // the raster already carries. Decided once the ground is in.
+          let sx = 0, sz = 0;
+          for (const [x, z] of P.pts) { sx += x; sz += z; }
+          const cx = sx / P.pts.length, cz = sz / P.pts.length;
+          if (heightTileAt(cx, cz) && sampleHeightRaw(cx, cz) > seaSurfaceAbs() - baseElev + 8) {
+            (P as { land?: boolean }).land = true;
+          } else {
+            const top = plinthTopProbe(P);
+            if (Number.isFinite(top) && !(top <= (P.top ?? -Infinity))) (P as { top?: number }).top = top;
+          }
         }
         flat[i++] = P.height; flat[i++] = P.top ?? NaN; flat[i++] = P.pts.length;
         for (const [x, z] of P.pts) { flat[i++] = x; flat[i++] = z; }
@@ -9587,6 +9820,7 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
   mesh.position.set(t.xs + t.w / 2, 0, t.zs + t.h / 2);
   (mesh.userData as { corridor?: boolean }).corridor = r.corridor;
   if (r.corridor) dropBatterFor(key);
+  if (!mesh.name) mesh.name = 'terrain';
   terrainMeshes.set(key, mesh);
   const revision = (terrainRevision.get(key) ?? 0) + 1;
   terrainRevision.set(key, revision);
@@ -9891,7 +10125,7 @@ const bridgeSpans: BridgeSpan[] = [];
  *  apart, and the DSM smears the structure wider than the carriageway — 37 m
  *  of "ground" for a 23 m deck at the Normandie, so seven metres a side. */
 const BRIDGE_SPAN_MARGIN = 10;
-const BRIDGE_DEM_ON = qsOn('bridgedem', true);
+let BRIDGE_DEM_ON = qsOn('bridgedem', true);
 const demSpanLedger = { tiles: 0, moved: 0, worstM: 0, refused: 0, onWater: 0, flank: 0 };
 /** The spans that reach one tile, in its own texel space. */
 function bridgeSpansFor(t: HeightTile, only?: readonly BridgeSpan[]): DemSpan[] {
@@ -10028,7 +10262,7 @@ interface BridgeAssembly {
   builds: number;
 }
 const bridgeAssemblies = new Map<string, BridgeAssembly>();
-const BRIDGE_FORMS_ON = qsOn('bridgeforms', true);
+let BRIDGE_FORMS_ON = qsOn('bridgeforms', true);
 /** Pylon and pier positions the map carries (`bridge:support` nodes and
  *  areas), by the tile that brought them, in local metres. A bridge whose
  *  supports are mapped stands its towers where the map says. */
@@ -10958,7 +11192,235 @@ function roadTexture(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.
 /** `railgrade=0` puts a railway back where it was: draped on the heightfield,
  *  not drivable, no solved profile, no corridor, no batter and no structure —
  *  the exact A/B for the whole formation change. */
-const RAIL_GRADE = qsOn('railgrade', true);
+let RAIL_GRADE = qsOn('railgrade', true);
+/**
+ * ── A TRACK IS NOT ONE THING ──
+ *
+ * Five highway classes — track, path, footway, cycleway, bridleway — shared
+ * ONE treatment: a translucent two-rut dirt strip 4.5-6.5 m wide. Counted in
+ * the captures, most of what took it is not a farm track at all: Paris West
+ * carries 436 ASPHALT footways (drawn as muddy double ruts beside the
+ * boulevards), Yosemite's trails are single-file paths on ground, and most
+ * farm tracks carry no `tracktype`. So the tags choose a family, and the
+ * family chooses a width and a look:
+ *
+ *   paved  a sealed strip (asphalt, concrete, pavers, sett, wood) — the
+ *          commonest thing in any town, no ruts, a crisp edge
+ *   trail  a single worn line down a path, frayed into the ground
+ *   hard   a compacted or gravel track, full width, faint ruts
+ *   rut    the farm track: two wheel ruts with a crown between them
+ *   grass  a grade-5 track — two faint ruts through the grass, nothing else
+ *
+ * Widths are the real ones (a path is a metre, a track a van's), and a mapped
+ * `width` wins. `?trackfam=0` is the single treatment it replaces.
+ */
+let TRACK_FAM = qsOn('trackfam', true);
+type TrackFam = 'paved' | 'trail' | 'hard' | 'rut' | 'grass' | 'steps';
+const TRACK_PAVED = new Set(['asphalt', 'concrete', 'concrete:plates', 'concrete:lanes', 'paving_stones', 'sett',
+  'paved', 'cobblestone', 'unhewn_cobblestone', 'bricks', 'metal', 'wood', 'chipseal', 'tartan', 'rubber']);
+const TRACK_HARD = new Set(['gravel', 'fine_gravel', 'compacted', 'pebblestone', 'shells']);
+/** Surface colours for a paved path, linear-ish albedo. */
+const PAVED_COL: Record<string, [number, number, number]> = {
+  asphalt: [0.36, 0.37, 0.39], concrete: [0.64, 0.63, 0.60], 'concrete:plates': [0.64, 0.63, 0.60],
+  'concrete:lanes': [0.62, 0.61, 0.58], paving_stones: [0.62, 0.56, 0.50], sett: [0.50, 0.48, 0.46],
+  cobblestone: [0.50, 0.48, 0.46], unhewn_cobblestone: [0.52, 0.49, 0.45], bricks: [0.58, 0.36, 0.28],
+  wood: [0.50, 0.38, 0.26], metal: [0.46, 0.47, 0.48], tartan: [0.58, 0.28, 0.22], rubber: [0.30, 0.30, 0.30],
+};
+function trackFamily(tags: Record<string, string>): { fam: TrackFam; w: number } {
+  const hw = tags.highway, s = tags.surface ?? '', tt = tags.tracktype ?? '';
+  let fam: TrackFam, w: number;
+  if (hw === 'track') {
+    if (tt === 'grade1' || TRACK_PAVED.has(s)) { fam = 'paved'; w = 3.2; }
+    else if (tt === 'grade2' || TRACK_HARD.has(s)) { fam = 'hard'; w = 3.2; }
+    else if (tt === 'grade5' || s === 'grass' || s === 'grass_paver') { fam = 'grass'; w = 3.0; }
+    else { fam = 'rut'; w = 3.2; }
+  } else if (TRACK_PAVED.has(s) || (!s && (hw === 'footway' || hw === 'cycleway'))) {
+    // An untagged footway or cycleway is a pavement: the capture tally is
+    // overwhelmingly urban, and a sidewalk drawn as a dirt path is the fault.
+    fam = 'paved'; w = hw === 'cycleway' ? 2.4 : hw === 'bridleway' ? 2.4 : hw === 'path' ? 1.8 : 2.0;
+  } else if (TRACK_HARD.has(s)) {
+    fam = 'hard'; w = hw === 'bridleway' || hw === 'cycleway' ? 2.2 : 1.6;
+  } else {
+    fam = 'trail'; w = hw === 'bridleway' ? 1.8 : hw === 'cycleway' ? 1.6 : hw === 'footway' ? 1.4 : 1.3;
+  }
+  const mapped = parseFloat(tags.width ?? '');
+  if (Number.isFinite(mapped) && mapped >= 0.5 && mapped <= 8) w = mapped;
+  return { fam, w };
+}
+/**
+ * ── THE WORN SURFACE IS CUT OUT AND LIT PER PIXEL ──
+ *
+ * The old track was a texture at 68% opacity: two painted ruts the light
+ * never touched and a see-through strip with no edge. Here the ground is
+ * shaped in the fragment: a height across the way (ruts pressed in, a lip
+ * where the spoil was pushed up, a crown between) bends the normal by its
+ * screen gradient — the same surface-gradient construction the terrain's
+ * relief uses — so a rut is a shadowed trough in a low sun and not a stripe.
+ * And the parts that are not worn are DISCARDED, so the crown's grass and the
+ * frayed verge are the terrain and the sward beneath, with binary alpha as
+ * the rendering doctrine asks, instead of a 68% wash over them.
+ *
+ * Band-limited on the fragment's own footprint: past a quarter-metre an art
+ * pixel the ruts merge into one worn band and the relief fades, so nothing
+ * here can alias into the dither at range. Modes: 0 paved, 1 hard, 2 rut,
+ * 3 grass, 4 trail.
+ */
+const TRACK_FAM_PARAMS: Record<TrackFam, { mode: number; depth: number; fray: number; bare: number }> = {
+  paved: { mode: 0, depth: 0.0, fray: 0.0, bare: 1.0 },
+  hard: { mode: 1, depth: 0.035, fray: 0.10, bare: 1.0 },
+  rut: { mode: 2, depth: 0.09, fray: 0.12, bare: 0.35 },
+  grass: { mode: 3, depth: 0.05, fray: 0.0, bare: 0.0 },
+  trail: { mode: 4, depth: 0.06, fray: 0.16, bare: 0.0 },
+  steps: { mode: 5, depth: 0.15, fray: 0.0, bare: 1.0 },
+};
+let trackGritTex: THREE.Texture | null = null;
+const trackFamMats = new Map<TrackFam, THREE.MeshLambertMaterial>();
+function trackFamMat(fam: TrackFam): THREE.MeshLambertMaterial {
+  const hit = trackFamMats.get(fam);
+  if (hit) return hit;
+  // A near-white grit so the map channel exists (slipify reads vMapUv) and
+  // the colour comes from the bay's vertex colour.
+  trackGritTex ??= canvasTex(64, 1, 1, 131, (c, sz, r) => {
+    c.fillStyle = '#f2f2f2'; c.fillRect(0, 0, sz, sz);
+    speckle(c, sz, r, ['rgba(0,0,0,0.10)', 'rgba(255,255,255,0.35)'], 180, 1);
+  });
+  const P = TRACK_FAM_PARAMS[fam];
+  const mat = slipify(new THREE.MeshLambertMaterial({
+    map: trackGritTex, side: FS, vertexColors: true,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6,
+  }));
+  (mat as THREE.Material & { extensions?: { derivatives?: boolean } }).extensions = { derivatives: true };
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (sh, r) => {
+    prev.call(mat, sh, r);
+    Object.assign(sh.uniforms, {
+      uTrkMode: { value: P.mode }, uTrkDepth: { value: P.depth }, uTrkFray: { value: P.fray }, uTrkBare: { value: P.bare },
+    });
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform float uTrkMode; uniform float uTrkDepth; uniform float uTrkFray; uniform float uTrkBare;`)
+      .replace('#include <alphamap_fragment>', `#include <alphamap_fragment>
+        float trkU = vMapUv.x, trkA = vMapUv.y * 20.0;
+        float trkFp = max(length(vec2(fwidth(vSlipXZ.x), fwidth(vSlipXZ.y))), 1e-4);
+        float trkFine = 1.0 - smoothstep(0.10, 0.32, trkFp);
+        // The wheel line wanders, slowly, along the way's own length.
+        float trkWob = (pdn(vec2(trkA * 0.09, 3.7)) - 0.5) * 0.06 + (pdn(vec2(trkA * 0.31, 9.1)) - 0.5) * 0.02;
+        float trkN = pdn(vSlipXZ * 1.8) * 0.6 + pdn(vSlipXZ * 4.6) * 0.4;
+        float trkH = 0.0, trkRut = 0.0, trkCov = 1.0;
+        float trkStep = 0.0, trkCrownTint = 0.0;
+        if (uTrkMode > 4.5) {
+          // STEPS: a tread every 0.3 m along the flight. The sawtooth's slope
+          // shades each tread and its wrap throws a hard line at every nose;
+          // the riser band is darkened as its own shadow. Faded to the flight's
+          // mean past a tenth of a metre an art pixel, where treads alias.
+          float ph = fract(trkA / 0.30);
+          float stepFine = 1.0 - smoothstep(0.05, 0.14, trkFp);
+          trkH = -uTrkDepth * ph * stepFine;
+          trkStep = (1.0 - smoothstep(0.0, 0.16, ph)) * stepFine;
+          trkCov = 1.0;
+        } else if (uTrkMode < 0.5) {
+          trkCov = 1.0;
+        } else if (uTrkMode > 3.5) {
+          // a trail: one tread down the middle, as wide as feet and hooves make it
+          float d = abs(trkU - 0.5 - trkWob);
+          trkRut = 1.0 - smoothstep(0.26, 0.42, d);
+          trkH = -uTrkDepth * (1.0 - smoothstep(0.0, 0.36, d));
+          float coarse = step(d, 0.36);
+          trkCov = mix(coarse, trkRut + (trkN - 0.5) * 0.9 * trkRut, trkFine);
+        } else {
+          float rw = uTrkMode > 2.5 ? 0.075 : 0.095;
+          float d = min(abs(trkU - 0.28 - trkWob), abs(trkU - 0.72 - trkWob));
+          trkRut = 1.0 - smoothstep(rw * 0.55, rw * 1.25, d);
+          float lip = smoothstep(rw * 0.9, rw * 1.3, d) * (1.0 - smoothstep(rw * 1.5, rw * 2.3, d));
+          trkH = -uTrkDepth * (1.0 - smoothstep(0.0, rw * 1.2, d)) + uTrkDepth * 0.35 * lip;
+          float band = step(abs(trkU - 0.5), 0.22 + rw * 1.3);
+          // THE CROWN IS TUFTS, NOT CONTINENTS. A single 0.5 m noise
+          // thresholded at 0.35 drew the grass between the ruts as a few big
+          // hard-edged islands (the Senqu cab frame read as camouflage). Two
+          // scales now: a slow one along the way sets how grassy this stretch
+          // is, a fine one (~20 cm, with a 9 cm octave faded by its own footprint) places the tufts, and the grass thickens
+          // toward the middle of the crown where no wheel reaches.
+          float trkSlow = pdn(vec2(trkA * 0.12, 5.3));
+          float trkTuft = pdn(vSlipXZ * 5.0) * 0.7 + (pdn(vSlipXZ * 11.0) - 0.5) * 0.3 * (1.0 - smoothstep(0.03, 0.08, trkFp)) + 0.15;
+          float midC = 1.0 - smoothstep(0.0, 0.22 - rw * 0.4, abs(trkU - 0.5));
+          float grassy = clamp(uTrkBare * (0.55 + 0.9 * trkSlow) + 0.35 * midC - 0.2 * (1.0 - midC), 0.0, 0.95);
+          float crown = uTrkMode < 1.5 ? 1.0 : step(grassy, trkTuft);
+          float fine = max(trkRut, crown);
+          trkCov = mix(uTrkMode < 1.5 ? 1.0 : band, fine, trkFine);
+          // Past the band limit the tufts cannot be drawn, so the crown is
+          // drawn as what it averages to: darker, greener ground between two
+          // pale lines — a farm track from above, not a pale ribbon.
+          trkCrownTint = (1.0 - trkFine) * midC * step(1.5, uTrkMode) * (0.35 + 0.4 * uTrkBare);
+        }
+        // The verge frays into the ground instead of ending on a ruler.
+        float trkEdge = min(trkU, 1.0 - trkU);
+        trkCov *= step(0.015 + uTrkFray * (0.35 + 0.65 * trkN) * trkFine, trkEdge);
+        if (trkCov < 0.5) discard;
+        // Ruts are pressed and damp: darker and a little richer than the crown.
+        // Ruts are pressed and damp: darker and a little richer than the crown,
+        // enough to read as two lines (at 0.80 they did not, on the device).
+        diffuseColor.rgb *= mix(vec3(1.0), vec3(0.66, 0.64, 0.62), trkRut * step(0.5, uTrkMode) * step(uTrkMode, 4.5));
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.55, 0.66, 0.46), trkCrownTint);
+        diffuseColor.rgb *= 1.0 - 0.32 * trkStep;
+        // Gravel and pavement grain, band-limited like everything else.
+        trkH += (pdn(vSlipXZ * 7.0) - 0.5) * 0.012 * trkFine * step(0.5, uTrkMode) * step(uTrkMode, 1.5);
+        trkH *= trkFine;
+        // Standing water collects in the ruts first.
+        if (wxs.a > 0.03) wxPud = max(wxPud, smoothstep(0.35, 0.8, wxs.a) * trkRut * uPudOn * step(0.5, uTrkMode));`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        {
+          vec3 tp = -vViewPosition;
+          vec3 dpx = dFdx(tp), dpy = dFdy(tp);
+          float hx = dFdx(trkH), hy = dFdy(trkH);
+          vec3 r1 = cross(dpy, normal), r2 = cross(normal, dpx);
+          float det = dot(dpx, r1);
+          vec3 sg = sign(det) * (hx * r1 + hy * r2);
+          normal = normalize(abs(det) * normal - sg);
+        }`);
+  };
+  // THE GROUND'S OWN LIGHT: cloud shadow, weather tint, sky fill — without
+  // it the track was lit as a plain Lambert strip over a terrain that takes
+  // all three, and read as a decal wherever the sky was not clear.
+  if (fam !== 'paved' && fam !== 'steps') terrainFx(mat);
+  const keyWas = mat.customProgramCacheKey?.bind(mat);
+  mat.customProgramCacheKey = () => `trackfam-${fam}|${keyWas ? keyWas() : ''}`;
+  mat.name = `track-${fam}`;
+  trackFamMats.set(fam, mat);
+  return mat;
+}
+/** Per-bay colour for a family: the ground's own for the worn ones (the
+ *  point of a track is that it is the ground, used), the material's for a
+ *  paved one. */
+function trackFamColour(fam: TrackFam, tags: Record<string, string>, ground: [number, number, number]): [number, number, number] {
+  if (fam === 'paved') return PAVED_COL[tags.surface ?? ''] ?? (tags.highway === 'track' ? PAVED_COL.concrete : PAVED_COL.asphalt);
+  const [r, g, b] = ground;
+  const l = (r + g + b) / 3;
+  // Worn soil: the palette's own hue pulled out of green (grass worn off
+  // leaves the soil under it), a touch warmer; gravel greyer and paler.
+  //
+  // ── THE WORN SOIL IS THE SUBSTRATE'S OWN FINES ──
+  //
+  // A rut is where the sward is worn off the soil, and the terrain already
+  // draws that soil wherever it is exposed: the substrate's fines transform
+  // (SUB_K.soil*, the reddish-brown bare patches on the Senqu plateau). The
+  // first cut invented its own rule — the palette lifted 8% brighter and
+  // pulled toward tan — and on the device the tracks sat a step or two paler
+  // and greyer than the bare ground beside them, worst at range where the
+  // band is all you see. The same transform on the same palette colour is
+  // the same colour, by construction; nothing here brightens.
+  const K = SUB_K;
+  const so: [number, number, number] = [r * K.soilR, g * K.soilG, b * K.soilB];
+  if (fam === 'hard') {
+    // Gravel is broken stone over that soil: greyer, and a little paler.
+    return [so[0] * 0.55 + l * 0.5, so[1] * 0.55 + l * 0.5, so[2] * 0.55 + l * 0.52];
+  }
+  // A trail is trodden and compacted: the soil, a step darker.
+  if (fam === 'trail') return [so[0] * 0.88, so[1] * 0.86, so[2] * 0.84];
+  // A grass track is mostly grass: the soil shows only where the ruts are.
+  if (fam === 'grass') return [r * 0.4 + so[0] * 0.6, g * 0.4 + so[1] * 0.6, b * 0.4 + so[2] * 0.6];
+  return so;
+}
+
 const railTexCache = new Map<string, THREE.Texture>();
 const railMatCache = new Map<string, THREE.Material>();
 function railMat(spec: RailSpec): THREE.Material {
@@ -11470,7 +11932,10 @@ function slipify<T extends THREE.Material>(mat: T): T {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying float vSlip; varying vec3 vDirt; varying vec2 vSlipXZ; varying float vWy;
+        #ifndef DRIVE_WX_DECL
+        #define DRIVE_WX_DECL
         uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
+        #endif
         uniform float uPudOn; uniform vec3 uPudSky; uniform vec3 uPudGnd; uniform float uPudSun;
         uniform vec3 uSunW; uniform vec3 uCamW; uniform float uWxT;
         float pdh(vec2 p){ p = fract(p * vec2(233.34, 851.73)); p += dot(p, p + 23.45); return fract(p.x * p.y); }
@@ -12824,7 +13289,7 @@ const isEzKind = (k: VegKind): k is EzFamily => (EZ_FAMILIES as string[]).includ
  *  1713 and snag exactly 83 = 0.25 x 333 — both clamps binding, both families
  *  charged about twice what the GPU was handed, both under-admitted for it.
  *  A tenth is under the cheapest rung's honest share and still a bound. */
-const EZ_PRICE = qsOn('treeprice', true);
+let EZ_PRICE = qsOn('treeprice', true);
 const ezPriceNow: Record<EzFamily, number> = ezRecord(() => 0);
 /** Below this many placed, the realised mean is a sample of nothing. */
 const EZ_PRICE_MIN = 8;
@@ -12881,7 +13346,7 @@ const ezCapNominal = (fam: EzFamily): number =>
   Math.floor(VEG_CAP[fam] * vegScale * treePopulationScale);
 /** The scale and the caps the LAST refresh actually used, so the probe and the
  *  dump report the rule that ran rather than one recomputed from nothing. */
-const EZ_DEMAND = qsOn('treedemand', true);
+let EZ_DEMAND = qsOn('treedemand', true);
 let ezScaleNow = 1;
 let ezCapNow: Record<EzFamily, number> | null = null;
 function ezCapScale(): number { return ezScaleNow; }
@@ -12900,7 +13365,7 @@ const ezCapFor = (fam: EzFamily): number =>
  * `?ezstand=0` is the exact A/B: the old per-position hash, which is what
  * every wood in the game looked like until now.
  */
-const EZ_STAND_ON = qs('ezstand') !== '0';
+let EZ_STAND_ON = qs('ezstand') !== '0';
 function ezVariantAt(fam: EzFamily, x: number, z: number): number {
   if (!EZ_STAND_ON) return ezVariantFor(fam, x, z, treeVariantCap);
   // THE GUILD'S PREFERENCE, WHICH ONLY NOW MEANS ANYTHING. Until the bake had
@@ -13120,7 +13585,7 @@ const IMP_PERCEPTIBLE_K = 320 / (2 * Math.tan((55 * Math.PI) / 360));
  * agree in silhouette at that line (the contact sheet's MID column), so the
  * flip is a change of triangle count and not of look.
  */
-const EZ_FULL_PX = qsNum('ezfullpx', EZ_MERGE_PX[1]);
+let EZ_FULL_PX = qsNum('ezfullpx', EZ_MERGE_PX[1]);
 function ezRungOf(fam: EzFamily, v: { s: number; sy?: number }, d2: number): 'full' | 'mid' {
   if (EZ_FULL_PX <= 0) return 'full';
   const formSy = clamp(1 + ((v.sy ?? 1) - 1) * treeFormScale, 0.18, 4.5);
@@ -13804,7 +14269,7 @@ const COVER_CANOPY: Record<number, number> = {
   20: 1.3,   // shrub    — scrub is meant to have ground between it
   90: 1.15,  // wetland  — reed and carr, patchy by nature
 };
-const VEG_STEMS = clamp(qsNum('vegstems', 1), 0, 8);
+let VEG_STEMS = clamp(qsNum('vegstems', 1), 0, 8);
 function canopyMul(cover: number | null): number {
   const k = cover === null ? 1 : (COVER_CANOPY[cover] ?? 1);
   return 1 + (k - 1) * VEG_STEMS;
@@ -14379,7 +14844,7 @@ const SWARD_NEAR = 14;
  * (the law is one curve), which is not what was asked. A bump that fades to
  * one leaves everything past its radius exactly as it was.
  */
-const SWARD_NEAR_X = clamp(qsNum('swardnear', 3), 1, 4);
+let SWARD_NEAR_X = clamp(qsNum('swardnear', 3), 1, 4);
 const SWARD_NEAR_R = 14;
 /** The boost's own shape, on the CPU for the profile probe: 1 past the radius,
  *  `SWARD_NEAR_X` inside a third of it, a smoothstep between. */
@@ -14512,7 +14977,7 @@ const SWARD_BANDS: Array<[number, number, [number, number, number, number]]> = [
  *
  * `?swardsites=` moves it for an A/B.
  */
-const SWARD_SITES = qsNum('swardsites', 12);
+let SWARD_SITES = qsNum('swardsites', 12);
 /**
  * ── THE COMPENSATION WAS THE WRONG CURRENCY, AND THE SEAT SAID SO ──
  *
@@ -14534,7 +14999,7 @@ const SWARD_SITES = qsNum('swardsites', 12);
  * different plant. If the profile ever reports a fullness at this ceiling, the
  * LADDER is wrong — that is the signal, and widening is not the repair.
  */
-const SWARD_FULL_MAX = qsNum('swardfull', 1.15);
+let SWARD_FULL_MAX = qsNum('swardfull', 1.15);
 /**
  * ── FINER GRASS IS A NARROWER BLADE, AND NOTHING ELSE ──
  *
@@ -14557,7 +15022,7 @@ const SWARD_FULL_MAX = qsNum('swardfull', 1.15);
  * is still nine times the culm — so what changes is the GRAIN of the field and
  * not the vocabulary standing in it.
  */
-const SWARD_TUFT = qsNum('swardtuft', 0.72);
+let SWARD_TUFT = qsNum('swardtuft', 0.72);
 /**
  * ── AND FAR BLADES GROW BY THE METRE, NOT BY THE FRACTION OF THE REACH ──
  *
@@ -14581,7 +15046,7 @@ const SWARD_GROW_REF = 360;
  * may ask for, and its top stop is that lattice full. It cannot break the law
  * because it cannot leave the envelope. See GRASS_STOPS.
  */
-const SWARD_CAP_ON = qsOn('swardcap', true);
+let SWARD_CAP_ON = qsOn('swardcap', true);
 /**
  * ── ONE DENSITY LAW, AND A CARRIER IS NEVER ASKED FOR MORE THAN IT HOLDS ──
  *
@@ -14669,12 +15134,19 @@ let swardFieldMs = 0;
  * once the streaming settles it stops rebuilding on its own.
  */
 let swardRoadSeen = -1, swardGroundSeen = -1, swardFieldAt = 0, swardMaskMs = 0;
+// ── RUNTIME SWITCHES THAT FEED THE SWARD'S BANK PAINT ── a change asks for a
+// fresh sweep the way a terrain rebuild does; the old field stays on screen
+// until the new one swaps in.
+onSwitch('banklook', () => { BANK_LOOK = qsNum('banklook', 1) > 0.5; swardGroundSeen = -1; swardFieldAt = 0; });
+onSwitch('shore', () => { SHORE_ON = qsOn('shore', true); swardGroundSeen = -1; swardFieldAt = 0; });
+/** No sweep in flight and none owed — what an A/B frame waits for. */
+const swardSettled = (): boolean => swardRow < 0 && swardGroundSeen === swardGroundRev();
 /** True once a sweep has landed: before that the colour field is zeros and
  *  the water must not sample it. */
 let swardFieldReady = false;
 /** ?swardhop=0 carries the last place's committed field across a hop, exactly
  *  as it did — the rollback, and the one-build A/B for the measurement. */
-const SWARD_HOP_CLEAR = qsOn('swardhop', true);
+let SWARD_HOP_CLEAR = qsOn('swardhop', true);
 /** THE BANK, ON THE GROUND SIDE. The water shader draws its last wet metre
  *  as damp sediment and gravel; the ground beside it grew the same grass
  *  as the hillside, so the two met on a line. The sward mixes toward the
@@ -14704,7 +15176,7 @@ const REED_M2 = 0.14;
  * is new carriageway to draw. Water polygons carry their own, because a lake
  * arrives on the same path and masks the same way.
  */
-const swardRoadRev = (): number => osmDone.size + roadGrid.size + waterPolys.size;
+const swardRoadRev = (): number => osmDone.size + roadGrid.size + waterPolys.size + stairRev;
 /** Ground shape: the heights' clock — rebuilds, not tiles. See flushTerrain. */
 const swardGroundRev = (): number => terrainBuilds + (hydroSys?.bankRevision ?? 0);
 const swardU = {
@@ -14886,24 +15358,38 @@ function swardRows(from: number, to: number): void {
           // A north/south bank must be as steep as an east/west one.
           // Pay the second ground read only in bank/wetland texels.
           const bankSlope = Math.hypot(slope, (groundAt(wx, wz + SWARD_FM) - h) / SWARD_FM);
+          // ?banklook=1: the bank is a NARROW damp line with grass close to
+          // the water, not a bare strip. Seen from the seat at the Senqu: a
+          // 4.5-10 m wet margin plus a 12 m mineral margin, both shaving the
+          // sward to the pale base ground (?shore=0 made it grass to the
+          // edge). The same rules read over a shorter distance.
+          // A BEND HAS TWO BANKS. The inside of a turn is where a river drops
+          // its load: a wide, pale sediment shelf that the grass takes a while
+          // to reach. The outside is where it cuts: a narrow, steep, damp
+          // bank, darker than the ground above it. The field's own curvature
+          // × side (`outerBank`, the water shader's term) says which this is;
+          // a straight reach reads 0.5 and keeps the symmetric margin.
+          const outer = bs && !bs.wet && bs.outerBank !== undefined && bs.kind !== 'lake' ? bs.outerBank : 0.5;
+          const bendReach = 2.2 * (0.55 + 0.9 * outer);   // inner 1.2 (wide shelf) … outer 3.2 (narrow)
+          const bsL = BANK_LOOK && bs && !bs.wet ? { ...bs, shoreDistanceM: bs.shoreDistanceM * bendReach } : bs;
           const hab = bankHabitat(cv, cl.moisture, cl.tempC, bankSlope, wetCover,
-            h + baseElev, bs);
+            h + baseElev, bsL);
           swardScratchF[k + 2] = hab.reeds;
           swardScratchF[k + 3] = hab.mineral;
           // Signed density distinguishes submerged slots without another field:
           // only emergents/minerals may occupy them, never ordinary grass.
           const bankRate = hab.reeds * REED_M2 * lift + hab.mineral * 0.06;
-          const wetMargin = bs && !bs.wet
-            ? bankWetMargin(bs.shoreDistanceM, bankPatch(wx, wz))
+          const wetMargin = bsL && !bsL.wet
+            ? bankWetMargin(bsL.shoreDistanceM, bankPatch(wx, wz))
             : 0;
           density = hab.submerged ? -(bankRate + 0.00001)
             : density
-              * (1 - hab.mineral * 0.25)
-              * (1 - wetMargin * (0.62 + hab.mineral * 0.25))
+              * (1 - hab.mineral * (BANK_LOOK ? 0.12 : 0.25))
+              * (1 - wetMargin * (BANK_LOOK ? 0.34 + hab.mineral * 0.18 : 0.62 + hab.mineral * 0.25))
               + bankRate;
-          const mk = Math.max(hab.mineral * 0.75, wetMargin * 0.52);
+          const mk = Math.max(hab.mineral * (BANK_LOOK ? 0.55 : 0.75), wetMargin * (BANK_LOOK ? 0.62 : 0.52));
           const rk = hab.reeds * 0.5;
-          const [mr, mg, mb] = bankMineralColour(pr, pg, pb);
+          const [mr, mg, mb] = bankMineralColour(pr, pg, pb, BANK_LOOK ? 1 - outer : 0.5);
           pr += (mr - pr) * mk; pg += (mg - pg) * mk; pb += (mb - pb) * mk;
           pr += (BANK_REED[0] - pr) * rk; pg += (BANK_REED[1] - pg) * rk; pb += (BANK_REED[2] - pb) * rk;
         }
@@ -14931,11 +15417,26 @@ function swardRows(from: number, to: number): void {
       // sweep over ground the worker has not answered for yet, and the sward
       // behaves there as it did before any of this existed rather than
       // guessing from a cover class.
-      if (SUB_SWARD && density > 0) {
+      // ── AND UNDER THE WATER TOO, BECAUSE THE RIVER READS THIS FIELD ──
+      //
+      // The hydro material shades its bed, its damp margin and its bank from
+      // this colour field (`terrainC`). Tinted only where grass grows, a
+      // river's texels kept the raw palette, and on the Senqu the margin drew
+      // as a pale tan band between the water and a meadow the substrate had
+      // greened. Where nothing grows because the cover says water, the field
+      // takes the substrate's composite in full, on the bank's land class —
+      // water's own grain is the substrate's veto — so the river shades its
+      // edge from the colour the ground beside it is actually drawn in.
+      const underWater = density <= 0 && cv === COVER.water;
+      if (SUB_SWARD && (density > 0 || underWater)) {
         const c = subCellAt(wx, wz);
         if (c) {
           const ev = subEvidence(pr, pg, pb);
-          const e = subExpressOf(c.ex, c.db, c.sd, c.gp, ev.veg, subGrainOf(cv));
+          const e = subExpressOf(c.ex, c.db, c.sd, c.gp, ev.veg, subGrainOf(underWater ? COVER.grass : cv));
+          if (underWater) {
+            const [tr, tg, tb] = subLayerTint(pr, pg, pb, e);
+            pr = tr; pg = tg; pb = tb;
+          } else {
           // ── DENSITY THINS ON THE MINERAL SHARE, NOT ON THE GRASSY ONE ──
           //
           // A MULTIPLIER on what the cover class already asked for. The first
@@ -14968,6 +15469,7 @@ function swardRows(from: number, to: number): void {
           // the maximum with it — and a scree apron grows stones through its
           // grass with no shader change at all.
           subMineral = e.rock;
+          }
         }
       }
       swardScratchF[k + 1] = density;
@@ -15153,10 +15655,43 @@ function refreshSwardField(full = true): void {
       // 1.2m, which sounds modest and is doubled (both sides) and then widened
       // again by the mask's own filtering — the verge is the one place grass
       // most needs to be, and it was the one place it could not grow.
-      swardMaskCtx.lineWidth = Math.max(1, (sg.hw + 0.35) * 2 * px);
+      // ── A TRACK THINS THE GRASS; A PAVEMENT CLEARS IT ──
+      //
+      // The mask is ~1.5 m a texel, so a 2 m footway stroked at its own width
+      // filtered to under half a texel's white and the blades stood through it
+      // (Paris West, the paved-path A/B: the path as pale fragments in grass).
+      // A sealed or gravel path takes at least two texels. The worn families
+      // do not clear the ground at all — grass on a farm track's crown and
+      // along a trail's edge is the point — so they paint GREY, and the blade
+      // test below reads the grey as a thinning, not a wall.
+      const fam = TRACK_FAM && sg.tk ? (sg.wid && wayTagLog.get(sg.wid) ? trackFamily(wayTagLog.get(sg.wid)!).fam : null) : null;
+      // …AND WHAT STANDS ON A WORN TRACK IS TRAMPLED. The mask is ~1.5 m a
+      // texel and cannot draw a 0.3 m rut, so thinning alone left tall blades
+      // standing in the ruts (the Senqu cab frame: the whole track under
+      // grass). A worn track writes TRAMPLE in green with blue off (a
+      // carriageway is white: blocked, not trampled), and the blade shader
+      // keeps a tuft there at a quarter of its height — which is what grass
+      // on a track that is driven is.
+      const grey = fam === 'rut' ? 0.35 : fam === 'trail' ? 0.5 : fam === 'grass' ? 0.15 : 1;
+      swardMaskCtx.strokeStyle = grey >= 1 ? '#fff' : `rgb(${Math.round(grey * 255)},255,0)`;
+      swardMaskCtx.lineWidth = Math.max(fam === 'paved' || fam === 'hard' ? 2.2 : 1, (sg.hw + 0.35) * 2 * px);
       swardMaskCtx.beginPath();
       swardMaskCtx.moveTo((sg.ax - swardFX) * px, (sg.az - swardFZ) * px);
       swardMaskCtx.lineTo((sg.bx - swardFX) * px, (sg.bz - swardFZ) * px);
+      swardMaskCtx.stroke();
+    }
+  }
+  // Steps clear the grass like a pavement: a flight is stone or concrete.
+  swardMaskCtx.strokeStyle = '#fff';
+  const sseen = new Set<StairSeg>();
+  for (let gx = c0; gx <= c1; gx++) for (let gz = d0; gz <= d1; gz++) {
+    for (const s of stairGrid.get(`${gx},${gz}`) ?? []) {
+      if (sseen.has(s)) continue;
+      sseen.add(s);
+      swardMaskCtx.lineWidth = Math.max(2.2, (s.hw + 0.35) * 2 * px);
+      swardMaskCtx.beginPath();
+      swardMaskCtx.moveTo((s.ax - swardFX) * px, (s.az - swardFZ) * px);
+      swardMaskCtx.lineTo((s.bx - swardFX) * px, (s.bz - swardFZ) * px);
       swardMaskCtx.stroke();
     }
   }
@@ -15330,7 +15865,10 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         vec2 sP = sCell + (vec2(sH2, sH3) - 0.5) * uStep * 1.35;
         vec2 sUv = (sP - uFieldOrg) / uFieldW;
         vec4 sF = texture2D(uField, sUv);
-        float sBlocked = texture2D(uSwardMask, sUv).r;
+        vec4 sMaskT = texture2D(uSwardMask, sUv);
+        float sBlocked = sMaskT.r;
+        // Worn track: green without blue (see the mask's stroke). Trodden short.
+        float sTrample = clamp(sMaskT.g * (1.0 - sMaskT.b), 0.0, 1.0);
         float sD = length(sP - uSwardEye.xz);
         // ── FLOWERS: RARE, CLUMPED, AND WHAT GROWS DEPENDS ON WHERE "HERE" IS ──
         //
@@ -15470,7 +16008,10 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         float sFadeW = max(0.015, sKeep * 0.45);
         float sAlive = 1.0 - smoothstep(sKeep - sFadeW, sKeep, sH1);
         if (uSwardDbg == 2.0 || uSwardDbg == 3.0) sAlive = 1.0;
-        bool sMaskOk = sBlocked < 0.5 || uSwardDbg == 1.0 || uSwardDbg == 3.0;
+        // A per-blade threshold, not a fixed half: a carriageway (1.0) still
+        // blocks every blade, the filtered verge thins by its own value, and a
+        // worn track's grey keeps that share of its grass.
+        bool sMaskOk = sBlocked < swHash(sKey * 3.3 + 1.9) * 0.98 + 0.01 || uSwardDbg == 1.0 || uSwardDbg == 3.0;
         bool sLive = sAlive > 0.01 && sMaskOk && sD < uGReach
           && (sF.g >= 0.0 || sIsReed || sIsStone)
           && sUv.x > 0.002 && sUv.x < 0.998 && sUv.y > 0.002 && sUv.y < 0.998;
@@ -15572,7 +16113,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // stone is not growing and a reed stands in the one place that is wet
         // by definition, so shortening either would be the mineral share
         // speaking about something it does not describe.
-        float sShort = (sIsStone || sIsReed) ? 1.0 : 1.0 - 0.42 * sMineral;
+        float sShort = (sIsStone || sIsReed) ? 1.0 : (1.0 - 0.42 * sMineral) * mix(1.0, 0.25, sTrample);
         vec3 sLp = sPosL * (0.45 + sSize * 1.30) * sShort * sRangeScale * sAlive;
         // ── AND THE LUSHNESS THE COUNT COULD NOT CARRY IS SPENT HERE ──
         //
@@ -16067,7 +16608,7 @@ const VEG_SEED_MS = 8;
  *  a fault — the near ring is served first by construction. */
 let vegManifestDeferred = 0;
 const VEG_SEED_CATCHUP = 120;
-const VEG_SEED_BUDGET = qs('vegseed') !== '0';
+let VEG_SEED_BUDGET = qs('vegseed') !== '0';
 let vegSeedLeft = 0;
 let vegSeedDeferred = 0;
 /**
@@ -16137,11 +16678,858 @@ const SHRUB_RATE: Record<SwardCtx, number> = {
   [SwardCtx.Open]: 0.34, [SwardCtx.Wood]: 0.6, [SwardCtx.Water]: 0.5, [SwardCtx.Cliff]: 0.05, [SwardCtx.Ruin]: 0.15,
 };
 /** ?shrub=0 for an A/B on the device. */
-const SHRUB_ON = qs('shrub') !== '0';
+let SHRUB_ON = qs('shrub') !== '0';
 const shrubs = vegMesh(swayWeight(faceTone(shrubGeo(), 0.24, 0.3), 1.3), leafMat, SHRUB_CAP);
 shrubs.name = 'veg-shrub';
 const shrubCol = new THREE.Color();
 let shrubN = 0, shrubNear = 0;
+// ── THE CANOPY: CLOSED FOREST AS ONE SURFACE (PROTOTYPE) ──
+//
+// Measured at Nagato (`__standcensus`): the manifest holds about forty trees a
+// hectare within 1.4 km, where the satellite shows closed canopy at five
+// hundred to fifteen hundred; and only ~5-12% of the sites that do exist are
+// surrounded, so culling "interior" trees could never have bought much. A
+// forest the eye reads as a forest is a CANOPY, and a canopy is a surface:
+// here a lattice at CANOPY_STEP over tree-cover ground (WorldCover 10), stood
+// a stand height over the drawn ground, with a crown lump per jittered cell so
+// the roof reads as crowns and not as a sheet. Off by default; `?canopy=1`.
+let CANOPY_ON = qsOn('canopy', false);
+const CANOPY_STEP = 6, CANOPY_N = 260, CANOPY_H = 13, CANOPY_CROWN = 6.5, CANOPY_NEAR = 70;
+/** Metres over which the outer ring's edge fades to the terrain's forest. */
+const CANOPY_EDGE_FADE = 260;
+/** The rings' world box (x0, z0, x1, z1) and the view's focus (x, z, near?),
+ *  per frame: the near field follows the car in the vertex shader rather
+ *  than by rebuilding the lattice every 120 m. */
+const canopyU = { box: { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) }, foc: { value: new THREE.Vector3(0, 0, 0) },
+  /** The sun the skeletons light by (LIGHT_DIR, moved in place by the sky). */
+  sun: { value: LIGHT_DIR },
+  /** Dials: leaf-clump relief, crown-on-crown shadow, the three sun tones. */
+  look: { value: new THREE.Vector4(1, 1, 1, 0) } };
+
+// ── THE CANOPY IS RAY-TRACED CROWNS IN A SHELL ──
+//
+// The lattice is a PROXY: a shell over the stand, a little above every crown
+// it holds. Each fragment of it casts the view ray into the shell and finds
+// the crown that ray actually meets — a jittered crown per CANOPY_CROWN cell,
+// an ellipsoid for broadleaf and a cone for conifer, each standing at its own
+// height off the lift texture — or, between them, the mid-storey of a closed
+// stand, a trunk, or nothing, in which case the fragment goes and the sky or
+// the hill behind shows through. So the stand's skyline is crowns, its side
+// is crowns stepping down to the edge over trunks, and from the drone every
+// crown is round and lit and shades its neighbour. The depth written is the
+// hit's, so an edge tree standing into the shell sorts against the crown it
+// actually meets and not against the shell.
+//
+// WHY IT CAN AFFORD THIS. The world is drawn at 320 lines: a full canopy
+// frame is some tens of thousands of fragments, each marching at most
+// CAN_STEPS points against the four crowns of its 2x2 cell quadrant, fetched
+// from two small textures only when the march crosses into a new quadrant.
+//
+// WHAT IT BORROWS FROM THE TREES, so the two read as one forest: the stand's
+// colour and conifer share are the local tree sites' own (the stand texture,
+// built from vegGrid), each crown jitters about it as a seeded tree does and
+// one in twelve is an autumn or silver outlier as `plantLook`'s are, and the
+// crown light is the skeletons' — three sun-aligned tones, sky exposure,
+// transmission on the shaded side and a wrap past the terminator.
+const CAN_STEPS = 40;
+function canopyMaterial(): { mat: THREE.MeshLambertMaterial; u: {
+  canTex: { value: THREE.Texture | null }; canTexBox: { value: THREE.Vector4 }; canBaseY: { value: number };
+  canStand: { value: THREE.Texture | null }; canStandBox: { value: THREE.Vector4 } } } {
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true });
+  terrainFx(mat);
+  const u = {
+    canTex: { value: null as THREE.Texture | null }, canTexBox: { value: new THREE.Vector4(0, 0, 1, 1) },
+    canBaseY: { value: 0 },
+    canStand: { value: null as THREE.Texture | null }, canStandBox: { value: new THREE.Vector4(0, 0, 1, 1) },
+  };
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (sh, r) => {
+    prev?.call(mat, sh, r);
+    Object.assign(sh.uniforms, u, { canBox: canopyU.box, canFoc: canopyU.foc, canSun: canopyU.sun, canLook: canopyU.look });
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+attribute float canLift;
+uniform vec4 canBox; uniform vec3 canFoc;
+varying vec3 vCanW; varying float vCanF; varying float vCanK;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+{
+  vec3 cw = (modelMatrix * vec4(transformed, 1.0)).xyz;
+  vCanF = canFoc.z > 0.5 ? clamp((length(cw.xz - canFoc.xy) - ${CANOPY_NEAR.toFixed(1)}) / 40.0, 0.0, 1.0) : 1.0;
+  float ed = min(min(cw.x - canBox.x, canBox.z - cw.x), min(cw.z - canBox.y, canBox.w - cw.z));
+  vCanK = smoothstep(0.0, ${CANOPY_EDGE_FADE.toFixed(1)}, ed);
+  // The shell never moves: the near clearing and the ring's edge only ever
+  // SHRINK crowns (canFadeAt), so the shell stays over every one. Shrinking
+  // the shell with them cut the crowns in the clearing's ramp.
+  transformed.y += canLift;
+  vCanW = (modelMatrix * vec4(transformed, 1.0)).xyz;
+}`);
+    const S = CANOPY_CROWN.toFixed(2);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vCanW; varying float vCanF; varying float vCanK;
+// Three declares the projection only for the vertex stage; the hit's depth
+// needs it here, and one program shares the uniform across both.
+uniform mat4 projectionMatrix;
+uniform sampler2D canTex; uniform vec4 canTexBox; uniform float canBaseY;
+uniform sampler2D canStand; uniform vec4 canStandBox;
+uniform vec4 canBox; uniform vec3 canFoc; uniform vec3 canSun; uniform vec4 canLook;
+vec3 canN = vec3(0.0, 1.0, 0.0); float canShadow = 1.0; float canSky = 1.0; float canLeaf = 0.0;
+vec4 canH4(vec2 c) {
+  vec4 p4 = fract(vec4(c.xyx, c.y) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
+  p4 += dot(p4, p4.wzxy + 33.33);
+  return fract((p4.xxyz + p4.yzzw) * p4.zywx);
+}
+float canN3(vec3 p) {
+  vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  vec4 a = canH4(i.xy + i.z * 17.0), b = canH4(i.xy + (i.z + 1.0) * 17.0);
+  vec4 ax = canH4(i.xy + vec2(1.0, 0.0) + i.z * 17.0), bx = canH4(i.xy + vec2(1.0, 0.0) + (i.z + 1.0) * 17.0);
+  vec4 ay = canH4(i.xy + vec2(0.0, 1.0) + i.z * 17.0), by = canH4(i.xy + vec2(0.0, 1.0) + (i.z + 1.0) * 17.0);
+  vec4 axy = canH4(i.xy + vec2(1.0) + i.z * 17.0), bxy = canH4(i.xy + vec2(1.0) + (i.z + 1.0) * 17.0);
+  float lo = mix(mix(a.x, ax.x, f.x), mix(ay.x, axy.x, f.x), f.y);
+  float hi = mix(mix(b.x, bx.x, f.x), mix(by.x, bxy.x, f.x), f.y);
+  return mix(lo, hi, f.z);
+}
+/** Ground and lift at a world point, off the ring's own lattice. */
+vec2 canGL(vec2 xz) {
+  vec2 uv = ((xz - canTexBox.xy) / canTexBox.z + 0.5) / canTexBox.w;
+  vec2 t = texture2D(canTex, uv).rg;
+  return vec2(t.r + canBaseY, t.g);
+}
+float canFadeAt(vec2 xz) {
+  float f = canFoc.z > 0.5 ? clamp((length(xz - canFoc.xy) - ${CANOPY_NEAR.toFixed(1)}) / 40.0, 0.0, 1.0) : 1.0;
+  float ed = min(min(xz.x - canBox.x, canBox.z - xz.x), min(xz.y - canBox.y, canBox.w - xz.y));
+  return f * mix(0.35, 1.0, smoothstep(0.0, ${CANOPY_EDGE_FADE.toFixed(1)}, ed));
+}
+// A crown: A = (centre x, centre z, top y, radius), B = (depth, cone?, lift, ground).
+vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4]; float cTop;
+void canLoad(vec2 q) {
+  cTop = -1e9;
+  for (int k = 0; k < 4; k++) {
+    vec2 cell = q + vec2(float(k - (k / 2) * 2), float(k / 2));
+    vec4 h = canH4(cell);
+    vec2 c = (cell + 0.25 + 0.5 * h.xy) * ${S};
+    vec2 gl = canGL(c);
+    float L = gl.y * canFadeAt(c) * (0.84 + 0.3 * h.z);
+    float cone = step(h.w, texture2D(canStand, (c - canStandBox.xy) * canStandBox.zw).a);
+    // A closed stand's crowns touch: 0.58-0.74 of the cell, the most the 2x2
+    // quadrant can hold (a crown centred a quarter in cannot reach 0.75 out).
+    // One in seven stands a head above the rest, as an emergent does.
+    float emergent = step(0.86, fract(h.x * 5.31 + h.y * 2.17));
+    L *= 1.0 + 0.22 * emergent;
+    float R = ${S} * mix(0.58, 0.74, fract(h.z * 3.7 + h.w)) * mix(1.0, 0.66, cone) * clamp(L / 11.0, 0.55, 1.0);
+    float D = cone > 0.5 ? L * 0.78 : min(L * 0.62, R * 1.35);
+    if (L < 2.5) R = -1.0;
+    cA[k] = vec4(c, gl.x + L, R); cB[k] = vec4(D, cone, L, gl.x); cH[k] = h;
+    cR[k] = vec2(cos(h.y * 6.2832), sin(h.y * 6.2832));
+    // The highest thing this quadrant can hold: a crown's top, or where there
+    // is none the mid-storey's lumpy top over its ground.
+    cTop = max(cTop, R > 0.0 ? gl.x + L : gl.x + 0.6 + max(0.0, L * 0.46) + 1.3);
+  }
+}
+/** Inside-ness of point p in crown k: < 1 inside. */
+float canIn(int k, vec3 p) {
+  vec4 A = cA[k], B = cB[k];
+  if (A.w <= 0.0) return 9.0;
+  vec2 d = p.xz - A.xy;
+  if (B.y > 0.5) {
+    float s = (A.z - p.y) / B.x;
+    if (s < 0.0 || s > 1.0) return 9.0;
+    return length(d) / (A.w * max(s, 0.02));
+  }
+  // A CROWN IS LOBED, NOT A BALL: three and five lobes about a seeded turn,
+  // and a sag of the lower crown, so no two outlines are the same circle.
+  float e = (p.y - (A.z - B.x * 0.5)) / (B.x * 0.5);
+  float dl = length(d);
+  vec2 dn = dl > 1e-4 ? d / dl : vec2(1.0, 0.0);
+  vec2 r = vec2(dn.x * cR[k].x - dn.y * cR[k].y, dn.x * cR[k].y + dn.y * cR[k].x);
+  float s3 = 3.0 * r.y - 4.0 * r.y * r.y * r.y;
+  float c5 = r.x * (16.0 * r.x * r.x * r.x * r.x - 20.0 * r.x * r.x + 5.0);
+  // Lobes only ever bite INTO the crown: out past its radius it would leave
+  // the 2x2 quadrant that is all the march looks at, and be cut off square.
+  float lobe = 1.0 - 0.2 * (0.5 - 0.5 * s3) * cH[k].z - 0.14 * (0.5 - 0.5 * c5) * (1.0 - cH[k].z) - 0.08 * max(-e, 0.0);
+  float q = dl / (A.w * lobe);
+  return q * q + e * e;
+}
+/** The mid-storey's top at p, off the loaded quadrant: lumpy foliage by a
+ *  couple of metres over a closed stand, nothing (-1e9) where there is none.
+ *  A function so the refinement re-evaluates it at every bisection instead of
+ *  bisecting against the endpoint's height. */
+float canFloorAt(vec3 p, out float gq) {
+  vec2 f = clamp(fract(p.xz / ${S} - 0.5), 0.0, 1.0);
+  gq = mix(mix(cB[0].w, cB[1].w, f.x), mix(cB[2].w, cB[3].w, f.x), f.y);
+  float Lq = mix(mix(cB[0].z, cB[1].z, f.x), mix(cB[2].z, cB[3].z, f.x), f.y);
+  return Lq > 2.5 ? gq + max(0.6, Lq * 0.46 * smoothstep(6.0, 11.0, Lq)) + (canN3(p * 0.45) - 0.5) * 2.4 * smoothstep(4.0, 9.0, Lq) : -1e9;
+}
+/** THE AGGREGATE STAND, AS A SURFACE THAT IS ACTUALLY MET. Where the crowns
+ *  are not resolved — under two pixels, or a march that spent its steps —
+ *  the stand is its mean roof, ground + 0.8 of the (faded) lift off the
+ *  lattice texture, and the ray is intersected with THAT: a hit is refined
+ *  and its depth written, a miss is a miss. It replaces a "mean forest" that
+ *  was simply declared wherever a march stopped, depth and all. */
+float canAggregate(vec3 ro, vec3 rd, float t, float step) {
+  float ta = t;
+  for (int s = 0; s < 24; s++) {
+    vec3 p = ro + rd * t;
+    vec2 gl = canGL(p.xz);
+    float L = gl.y * canFadeAt(p.xz);
+    if (L > 2.5 && p.y < gl.x + 0.8 * L) {
+      float tb = t;
+      for (int r = 0; r < 4; r++) {
+        float tm = 0.5 * (ta + tb); vec3 pm = ro + rd * tm;
+        vec2 gm = canGL(pm.xz); float Lm = gm.y * canFadeAt(pm.xz);
+        if (Lm > 2.5 && pm.y < gm.x + 0.8 * Lm) tb = tm; else ta = tm;
+      }
+      return tb;
+    }
+    if (p.y < gl.x - 0.5) return -1.0;
+    ta = t; t += step;
+  }
+  return -1.0;
+}
+`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+vec3 canHit = vCanW;
+// Well inside the near clearing a ray has nothing to meet within its reach.
+if (vCanF < 0.01) discard;
+{
+  vec3 ro = cameraPosition, rd = normalize(vCanW - cameraPosition);
+  float t0 = length(vCanW - cameraPosition);
+  // A crown under two pixels is its mean: no march, the far path below. The
+  // footprint ACROSS the view, not along it: at a grazing angle a pixel runs
+  // tens of metres down the slope while the crowns across it are still four
+  // pixels wide, and the along-view measure cut the crowns off at 300 m.
+  float px = min(length(dFdx(vCanW)), length(dFdy(vCanW))) / ${S};
+  bool march = px < 0.55 && vCanK > 0.02;
+  vec3 standC = texture2D(canStand, (vCanW.xz - canStandBox.xy) * canStandBox.zw).rgb;
+  standC *= standC;
+  vec3 col = standC; int kind = -1; int hitK = 0; int why = march ? 0 : 3;
+  if (march) {
+    float dt = clamp(t0 * 0.011, 0.7, 3.2);
+    float t = t0, tPrev = t0; vec2 qB = vec2(-1e9);
+    float tTrunk = 1e9; vec2 trunkC = vec2(0.0);
+    for (int s = 0; s < ${CAN_STEPS}; s++) {
+      vec3 p = ro + rd * t;
+      vec2 q = floor(p.xz / ${S} - 0.5);
+      if (q != qB) {
+        qB = q; canLoad(q);
+        // Trunks, analytically: a vertical line under each crown, met by the
+        // ray's own plan, and only below the crown and above the ground.
+        for (int k = 0; k < 4; k++) {
+          if (cA[k].w <= 0.0) continue;
+          vec2 oc = ro.xz - cA[k].xy; vec2 dd = rd.xz;
+          float a = dot(dd, dd), b = dot(oc, dd), rt = 0.18 + 0.03 * cB[k].z;
+          float disc = b * b - a * (dot(oc, oc) - rt * rt);
+          if (disc > 0.0 && a > 1e-6) {
+            float th = (-b - sqrt(disc)) / a;
+            float yh = ro.y + rd.y * th;
+            float yTop = cA[k].z - cB[k].x * (cB[k].y > 0.5 ? 0.85 : 0.8);
+            if (th > t0 && yh < yTop && yh > cB[k].w - 0.5 && th < tTrunk) { tTrunk = th; trunkC = cA[k].xy; }
+          }
+        }
+      }
+      if (t > tTrunk) { t = tTrunk; kind = 2; break; }
+      // EMPTY SPACE IS SKIPPED. Above everything this quadrant holds, nothing
+      // can be met until the ray leaves the quadrant's square or comes down
+      // to that height, so it goes straight there. On Nagato's hillsides the
+      // shell stands metres over the crowns and a ray from the road runs
+      // nearly along the slope: at fixed steps it spent its whole march in
+      // the empty shell and the fragment went, leaving the hillside bare.
+      if (p.y > cTop + 0.05) {
+        vec2 lo = (q + 0.5) * ${S}, hi = lo + ${S};
+        vec2 ex = vec2(abs(rd.x) > 1e-5 ? ((rd.x > 0.0 ? hi.x : lo.x) - p.x) / rd.x : 1e9,
+                       abs(rd.z) > 1e-5 ? ((rd.z > 0.0 ? hi.y : lo.y) - p.z) / rd.z : 1e9);
+        float tDown = rd.y < -1e-5 ? (p.y - cTop) / -rd.y : 1e9;
+        t += max(0.05, min(min(ex.x, ex.y) + 0.02, tDown));
+        // All of the jump was empty: the last known miss is just short of it.
+        tPrev = t - 0.05;
+        continue;
+      }
+      // The mid-storey's top is foliage too: lumpy by a couple of metres,
+      // not the flat shelf that read from the road as dark slabs.
+      // No stand here (the clearing, a gap, the ring's faded edge): no floor,
+      // and a ray that reaches the ground is a miss — the terrain is there.
+      float gq;
+      float floorY = canFloorAt(p, gq);
+      if (p.y < gq - 0.3 && floorY < -1e8) { why = 2; break; }
+      float best = 9.0;
+      for (int k = 0; k < 4; k++) { float v = canIn(k, p); if (v < best) { best = v; hitK = k; } }
+      if (best < 1.0) { kind = 0; }
+      else if (p.y < floorY) { kind = 1; }
+      if (kind >= 0) {
+        // Refine the surface between the LAST MISS actually sampled (not
+        // t - dt: a skip may have jumped further) and this hit, re-evaluating
+        // the mid-storey's lumpy top at each bisection.
+        float ta = tPrev, tb = t;
+        for (int r = 0; r < 4; r++) {
+          float tm = 0.5 * (ta + tb); vec3 pm = ro + rd * tm;
+          float bm = 9.0; int km = hitK;
+          for (int k = 0; k < 4; k++) { float v = canIn(k, pm); if (v < bm) { bm = v; km = k; } }
+          float gm;
+          bool inside = kind == 0 ? bm < 1.0 : pm.y < canFloorAt(pm, gm);
+          if (kind == 0 && inside) hitK = km;
+          if (inside) tb = tm; else ta = tm;
+        }
+        t = max(tb, t0);
+        break;
+      }
+      tPrev = t;
+      t += dt;
+    }
+    // OUT OF STEPS OVER A STAND. A ray skimming a forested ridge a kilometre
+    // out runs hundreds of metres through the shell just over the crowns and
+    // spends its steps before it meets one. It goes on against the stand's
+    // aggregate roof and is a hit only where it meets it (debug magenta when
+    // even that misses).
+    if (kind < 0 && why == 0) {
+      float tA = canAggregate(ro, rd, t, max(2.0 * dt, 4.0));
+      if (tA > 0.0) { t = tA; kind = 3; } else why = 1;
+    }
+    if (kind < 0 && canLook.w < 1.5) discard;
+    canHit = ro + rd * t;
+    vec4 A = cA[hitK], B = cB[hitK], H = cH[hitK];
+    float closed = smoothstep(6.0, 11.0, B.z);
+    if (kind == 0) {
+      vec2 d = canHit.xz - A.xy;
+      if (B.y > 0.5) {
+        vec2 dir = length(d) > 1e-3 ? normalize(d) : vec2(0.0);
+        canN = normalize(vec3(dir.x, A.w / B.x, dir.y));
+      } else {
+        canN = normalize(vec3(d.x / (A.w * A.w), (canHit.y - (A.z - B.x * 0.5)) / (B.x * B.x * 0.25), d.y / (A.w * A.w)));
+      }
+      // Leaf clumps: a metre-scale bump on the crown, faded by its footprint.
+      float lp = 1.0 - smoothstep(0.35, 0.9, px * ${S} / 1.1);
+      if (lp > 0.01) {
+        vec3 lq = canHit / 1.1 + H.xyz * 31.0;
+        float n0 = canN3(lq), nx = canN3(lq + vec3(0.35, 0.0, 0.0)), ny = canN3(lq + vec3(0.0, 0.35, 0.0)), nz = canN3(lq + vec3(0.0, 0.0, 0.35));
+        canN = normalize(canN - vec3(nx - n0, ny - n0, nz - n0) * 1.5 * lp * canLook.x);
+        canLeaf = (smoothstep(0.2, 0.8, n0) - 0.5) * lp;
+      }
+      // Sky exposure: high on the crown and high in the stand is open sky.
+      float up = B.y > 0.5 ? 1.0 - (A.z - canHit.y) / B.x : 0.5 + 0.5 * (canHit.y - (A.z - B.x * 0.5)) / (B.x * 0.5);
+      canSky = clamp(0.25 + 0.75 * up, 0.0, 1.0) * mix(1.0, clamp((canHit.y - B.w) / max(B.z, 1.0), 0.0, 1.0), 0.5 * closed);
+      // The crown's own colour about the stand's: a seeded tree's jitter, and
+      // one in twelve an outlier as plantLook's are.
+      col = standC * (0.8 + 0.4 * H.z) * vec3(1.0 + 0.16 * (H.y - 0.5), 1.0, 1.0 - 0.22 * (H.y - 0.5));
+      float odd = fract(H.x * 7.13 + H.w * 3.7);
+      if (odd < 0.045) col = mix(vec3(0.30, 0.12, 0.035), vec3(0.42, 0.2, 0.05), H.y);
+      else if (odd < 0.085) col = vec3(0.17, 0.23, 0.19) * (0.85 + 0.3 * H.y);
+      col *= 1.0 + canLeaf * 0.35;
+    } else if (kind == 1) {
+      // The mid-storey of a closed stand, or the shrubs and floor of an open
+      // edge: the colour of the stand in its own shade.
+      // Met from above it faces up; met from the side (the ray still well
+      // above the ground) it faces the eye, as a stand's lower foliage does.
+      float side = smoothstep(0.35, 0.1, abs(rd.y));
+      canN = normalize(mix(vec3(0.0, 1.0, 0.0), normalize(vec3(-rd.x, 0.25, -rd.z)), side));
+      float mn = canN3(canHit * 0.7);
+      col = standC * mix(0.5, 0.95, smoothstep(0.25, 0.75, mn));
+      // From the side it is a stand's outer foliage, lit as a crown's shaded
+      // flank is; from above, the deep interior between crowns.
+      canSky = mix(mix(0.4, 0.14, closed), 0.5, side) + 0.15 * mn;
+    } else if (kind == 3) {
+      canN = vec3(0.0, 1.0, 0.0);
+      col = standC * 0.85; canSky = 0.55;
+    } else {
+      vec2 d = canHit.xz - trunkC;
+      canN = normalize(vec3(d.x, 0.0, d.y));
+      col = vec3(0.07, 0.045, 0.025) * (0.8 + 0.4 * canN3(vec3(canHit.xz * 2.0, canHit.y * 0.3)));
+      canSky = 0.3;
+    }
+    // THE SUN, THROUGH THE NEIGHBOURS. Three taps toward the sun against the
+    // quadrant's crowns: the shade one crown casts across the next, which is
+    // most of what makes a canopy from above read as crowns and not a quilt.
+    if (kind != 2) {
+      vec3 ls = normalize(canSun);
+      float occ = 0.0;
+      for (int s = 1; s <= 3; s++) {
+        vec3 ps = canHit + ls * (float(s) * 1.9 + 0.4);
+        for (int k = 0; k < 4; k++) if (k != hitK || kind != 0) { if (canIn(k, ps) < 1.0) occ += 0.34; }
+      }
+      canShadow = 1.0 - min(1.0, occ) * 0.85 * canLook.y;
+    } else canShadow = 0.4;
+    if (kind == 3) canShadow = 0.7;
+  } else {
+    // The mean of a crowned roof, for crowns under two pixels — met as the
+    // aggregate roof, so its depth is the stand's and not the shell's.
+    float tA = canAggregate(cameraPosition, normalize(vCanW - cameraPosition), t0, max(t0 * 0.02, 4.0));
+    if (tA < 0.0 && canLook.w < 1.5) discard;
+    if (tA > 0.0) canHit = cameraPosition + normalize(vCanW - cameraPosition) * tA;
+    canSky = 0.55; canShadow = 0.7;
+    col = standC * 0.85;
+  }
+  // THE RING'S EDGE IS THE TERRAIN'S FOREST: the vertex colour is the ground's
+  // palette, and the crowns' own colour gives way to it over the last
+  // CANOPY_EDGE_FADE metres, as their height does.
+  diffuseColor.rgb = mix(diffuseColor.rgb, col, vCanK);
+  canShadow = mix(1.0, canShadow, vCanK);
+  // THREE LARGE TONES, ALIGNED TO THE SUN, as the skeletons' crowns take.
+  float facing = clamp(dot(canN, normalize(canSun)) * 0.5 + 0.5, 0.0, 0.999);
+  float band = floor((facing * 0.72 + canSky * 0.28) * 3.0) * 0.5;
+  diffuseColor.rgb *= mix(1.0, mix(0.82, 1.16, band) * mix(0.62, 1.3, canSky), vCanK * canLook.z);
+  // look.w: 1 paints the lift texture under the fragment (red, /16 m) and
+  // the proxy's own lift ratio; 2 paints what the march met — crown green,
+  // floor blue, trunk yellow, nothing magenta; 3 the march's reach (t - t0).
+  if (canLook.w > 0.5) {
+    vec2 g0 = canGL(vCanW.xz);
+    if (canLook.w < 1.5) diffuseColor.rgb = vec3(g0.y / 16.0, clamp((vCanW.y - g0.x) / 20.0, 0.0, 1.0), px);
+    // Misses by cause: magenta the march ran out of steps, cyan it reached bare
+    // ground, white it never marched (a crown under two pixels).
+    else if (canLook.w < 2.5) diffuseColor.rgb = kind == 0 ? vec3(0.1, 0.8, 0.1) : kind == 1 ? vec3(0.1, 0.2, 0.9) : kind == 2 ? vec3(0.9, 0.8, 0.1)
+      : why == 1 ? vec3(0.9, 0.1, 0.9) : why == 2 ? vec3(0.1, 0.9, 0.9) : vec3(1.0);
+    else diffuseColor.rgb = vec3(clamp((length(canHit - cameraPosition) - length(vCanW - cameraPosition)) / 20.0, 0.0, 1.0));
+  }
+  vec4 clip = projectionMatrix * viewMatrix * vec4(canHit, 1.0);
+  gl_FragDepth = clamp(0.5 * clip.z / clip.w + 0.5, 0.0, 1.0);
+}`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+normal = normalize(mix(normal, (viewMatrix * vec4(canN, 0.0)).xyz, vCanK));`)
+      .replace('#include <lights_fragment_begin>', `#include <lights_fragment_begin>
+{
+  reflectedLight.directDiffuse *= canShadow;
+  // Leaves transmit the sun through their shaded side, and wrap a little past
+  // the terminator — the skeletons' two terms, at their broadleaf strengths.
+  vec3 cnV = normalize(normal), clV = normalize((viewMatrix * vec4(canSun, 0.0)).xyz);
+  // BY THE LIGHT THAT IS ACTUALLY THERE: the direct lights' own colour, so at
+  // dusk and night the transmission and wrap go with the sun and not before.
+  vec3 canSunC = vec3(0.0);
+  #if NUM_DIR_LIGHTS > 0
+  for (int i = 0; i < NUM_DIR_LIGHTS; i++) canSunC += directionalLights[i].color;
+  #endif
+  float back = pow(max(dot(cnV, -clV), 0.0), 1.45);
+  reflectedLight.directDiffuse += diffuseColor.rgb * canSunC * back * 0.55 * 0.34 * canShadow * vCanK;
+  float wrap = clamp((dot(cnV, clV) + 0.32) / 1.32, 0.0, 1.0);
+  reflectedLight.indirectDiffuse += diffuseColor.rgb * canSunC * wrap * (0.035 + 0.045 * canSky) * vCanK;
+}`);
+  };
+  mat.customProgramCacheKey = () => 'canopy-6';
+  return { mat, u };
+}
+const canopyIn = canopyMaterial(), canopyOut = canopyMaterial();
+const canopyMesh = new THREE.Mesh(new THREE.BufferGeometry(), canopyIn.mat);
+canopyMesh.name = 'canopy';
+canopyMesh.frustumCulled = false;
+scene.add(canopyMesh);
+// THE OUTER RING: the same surface at twice the step, from the inner square
+// out to the tree draw range, so every tree the canopy stands in for is
+// under a roof and the budget it frees can only go to edges and verges.
+const canopyOuter = new THREE.Mesh(new THREE.BufferGeometry(), canopyOut.mat);
+canopyOuter.name = 'canopy-outer';
+canopyOuter.frustumCulled = false;
+scene.add(canopyOuter);
+let canopyAt = { x: NaN, z: NaN, t: 0, org: '', tb: -1 };
+const canopyStat = { builds: 0, ms: 0, cells: 0, tris: 0, hid: 0, share: 0 };
+// ── THE BUDGET THE CANOPY FREES ──
+//
+// The tree triangle budget is a target the allocator always spends: measured at
+// Nagato, hiding 7,538 interior trees moved the bill from 0.68M to 0.72M,
+// because the slots went straight to trees further out. So with the canopy up
+// the budget itself shrinks by the share of trees the canopy stands in for,
+// less CANOPY_KEEP of it, which is left for the edges and verges the canopy
+// cannot draw.
+const CANOPY_KEEP = 0.25;
+function canopyBudgetK(): number {
+  if (!CANOPY_ON || !canopyGrids.length) return 1;
+  return Math.max(0.3, 1 - (1 - CANOPY_KEEP) * canopyStat.share);
+}
+function canopyHash(i: number, j: number, k: number): number {
+  let h = (i * 374761393 + j * 668265263 + k * 2147483647) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+/** Tree-cover evidence at a point: the share of five taps over a cover pixel
+ *  that read WorldCover 10, so a stand's edge is a ramp and not the raster. */
+function canopyEvidence(x: number, z: number): number {
+  let n = 0;
+  const r = 14;
+  if (sampleCover(x, z) === 10) n += 2;
+  if (sampleCover(x + r, z + 5) === 10) n++;
+  if (sampleCover(x - r, z - 5) === 10) n++;
+  if (sampleCover(x + 5, z - r) === 10) n++;
+  if (sampleCover(x - 5, z + r) === 10) n++;
+  return n / 6;
+}
+// ── THE CANOPY SCROLLS ──
+//
+// Rebuilding both rings from nothing every 300 m was ~0.5 s of CPU in the
+// harness and much longer on the phone at 3 ms a frame, and at 100 km/h the
+// car outran it: the seat reported the canopy gone around the car, the old
+// ring's faded edge showing where it should be. The rings now persist and
+// SCROLL: when the focus is CANOPY_SHIFT_NODES of a ring's step off its centre
+// the ring's lattice is copied over by whole rows and columns and only the
+// uncovered strip is computed, then the shell, normals and cells around it,
+// then the lot is swapped in at once. At 30 m/s that is a few thousand nodes a
+// second, not 130,000 per rebuild. A full rebuild is the same job with every
+// node dirty — first sight, a new origin, a treeRange change, and a slow
+// terrain refresh (CANOPY_TERRAIN_MS) as tiles refine under a parked view.
+// Jobs run in CANOPY_SLICE_MS of a frame (a URL knob: the harness's software
+// frames want more), three times that until the first ring is up.
+const CANOPY_SLICE_MS = qsNum('canopyslice', 3), CANOPY_SHIFT_NODES = 8, CANOPY_TERRAIN_MS = 45000;
+interface CanopyBuf { pos: Float32Array; col: Float32Array; lift: Float32Array; plift: Float32Array;
+  nrm: Float32Array; ev: Float32Array; tex: Uint16Array<ArrayBuffer>; idx: Uint32Array; ni: number }
+interface CanopyRing { mesh: THREE.Mesh; outer: boolean; step: number; N: number; V: number;
+  x0: number; z0: number; baseY: number; live: CanopyBuf; spare: CanopyBuf; tex: THREE.DataTexture | null }
+interface CanopyJob { R: CanopyRing; B: CanopyBuf; x0: number; z0: number; dirty: Uint8Array; rowDirty: Uint8Array;
+  phase: 0 | 1 | 2 | 3; j: number; ms: number; full: boolean }
+type CanopyGrid = { x0: number; z0: number; V: number; step: number; ev: Float32Array; lift: Float32Array };
+let canopyRings: CanopyRing[] = [];
+let canopyJobs: CanopyJob[] = [];
+let canopyBox: [number, number, number, number] = [0, 0, 0, 0];
+let canopyStand: { tex: THREE.DataTexture; box: THREE.Vector4 } | null = null;
+/** The live lattices, inner then outer, which the tree gather reads to leave
+ *  the interior of a closed stand to the canopy. */
+let canopyGrids: CanopyGrid[] = [];
+const canopyBuf = (V: number): CanopyBuf => ({ pos: new Float32Array(V * V * 3), col: new Float32Array(V * V * 3),
+  lift: new Float32Array(V * V), plift: new Float32Array(V * V), nrm: new Float32Array(V * V * 3),
+  ev: new Float32Array(V * V), tex: new Uint16Array(V * V * 2), idx: new Uint32Array((V - 1) * (V - 1) * 6), ni: 0 });
+/** The rings a focus wants: the inner at CANOPY_STEP across CANOPY_N, the
+ *  outer at twice the step reaching the tree draw range. */
+function canopyWant(fx: number, fz: number): Array<{ outer: boolean; step: number; N: number; x0: number; z0: number }> {
+  const half = (CANOPY_N * CANOPY_STEP) / 2, oStep = CANOPY_STEP * 2;
+  const M = Math.max(0, Math.ceil((Math.max(half, treeRange + 60) - half) / oStep));
+  const out = [{ outer: false, step: CANOPY_STEP, N: CANOPY_N, x0: Math.round((fx - half) / CANOPY_STEP) * CANOPY_STEP, z0: Math.round((fz - half) / CANOPY_STEP) * CANOPY_STEP }];
+  if (M > 0) {
+    const oN = 2 * M + Math.round((CANOPY_N * CANOPY_STEP) / oStep), oh = (oN * oStep) / 2;
+    out.push({ outer: true, step: oStep, N: oN, x0: Math.round((fx - oh) / oStep) * oStep, z0: Math.round((fz - oh) / oStep) * oStep });
+  }
+  return out;
+}
+/** Queue the job that brings ring R to origin (x0, z0): a shift where the
+ *  old lattice still covers some of it, everything dirty where it does not. */
+function canopyQueue(R: CanopyRing, x0: number, z0: number, full: boolean): void {
+  const V = R.V, B = R.spare;
+  const dirty = new Uint8Array(V * V), rowDirty = new Uint8Array(V);
+  const dx = Math.round((x0 - R.x0) / R.step), dz = Math.round((z0 - R.z0) / R.step);
+  const L = R.live;
+  if (full || Math.abs(dx) >= V || Math.abs(dz) >= V) { dirty.fill(1); rowDirty.fill(1); }
+  else {
+    // The old lattice, moved: node (i, j) of the new is (i+dx, j+dz) of the old.
+    const i0 = Math.max(0, -dx), i1 = Math.min(V, V - dx);
+    for (let j = 0; j < V; j++) {
+      const sj = j + dz;
+      if (sj < 0 || sj >= V || i1 <= i0) { dirty.fill(1, j * V, (j + 1) * V); rowDirty[j] = 1; continue; }
+      const d = j * V + i0, sOff = sj * V + i0 + dx, n = i1 - i0;
+      B.pos.set(L.pos.subarray(sOff * 3, (sOff + n) * 3), d * 3);
+      B.col.set(L.col.subarray(sOff * 3, (sOff + n) * 3), d * 3);
+      B.nrm.set(L.nrm.subarray(sOff * 3, (sOff + n) * 3), d * 3);
+      B.lift.set(L.lift.subarray(sOff, sOff + n), d);
+      B.plift.set(L.plift.subarray(sOff, sOff + n), d);
+      B.ev.set(L.ev.subarray(sOff, sOff + n), d);
+      B.tex.set(L.tex.subarray(sOff * 2, (sOff + n) * 2), d * 2);
+      if (i0 > 0 || i1 < V) { rowDirty[j] = 1; dirty.fill(1, j * V, j * V + i0); dirty.fill(1, j * V + i1, (j + 1) * V); }
+    }
+  }
+  canopyJobs.push({ R, B, x0, z0, dirty, rowDirty, phase: 0, j: 0, ms: 0, full });
+}
+/** One node: evidence, ground and the roof's lift over it. */
+function canopyNode(R: CanopyRing, B: CanopyBuf, x0: number, z0: number, i: number, j: number): void {
+  const V = R.V, x = x0 + i * R.step, z = z0 + j * R.step, k = j * V + i;
+  // CLEAR OF THE ROAD BY A VERGE'S WIDTH. The carriageway and 7 m of verge
+  // are no canopy at all; the next 9 m count half, below where the roof
+  // starts, so the forest's side beside a road is its real edge trees and
+  // not a lattice wall standing over the kerb (the cab frames).
+  let ev = canopyEvidence(x, z);
+  if (ev > 0) {
+    if (onCarriageway(x, z, 7).road) ev = 0;
+    else if (onCarriageway(x, z, 16).road) ev *= 0.5;
+  }
+  B.ev[k] = ev;
+  const g = groundAt(x, z);
+  const stand = CANOPY_H * (0.8 + 0.4 * canopyHash(Math.floor(x / 90), Math.floor(z / 90), 7));
+  // INSET AND UNDER THE EDGE. The roof starts only where the evidence says
+  // a stand is well under way (0.6) and is full at 0.85 — where the gather
+  // starts leaving trees to it — and it stands at 0.8 of the stand height,
+  // so the stand's own edge trees are its side and overtop the roof's rim.
+  const rise = Math.min(1, Math.max(0, (ev - 0.6) / 0.25));
+  B.lift[k] = rise * rise * (3 - 2 * rise) * stand * 0.8;
+  B.pos[k * 3] = x; B.pos[k * 3 + 1] = g; B.pos[k * 3 + 2] = z;
+  B.tex[k * 2] = THREE.DataUtils.toHalfFloat(g - R.baseY); B.tex[k * 2 + 1] = THREE.DataUtils.toHalfFloat(B.lift[k]);
+  // The ground's own palette under the stand; the shader pulls it toward
+  // leaf, and lets go of it at the ring's edge. Bare ground only ever colours
+  // the foot of an edge cell, so it takes its row neighbour's tone and skips
+  // the palette, the dearest call here.
+  if (ev > 0 || i === 0) {
+    const pc = terrainPalette(sampleHeight(x, z) + baseElev, 0, 10, x, z);
+    B.col[k * 3] = pc[0]; B.col[k * 3 + 1] = pc[1]; B.col[k * 3 + 2] = pc[2];
+  } else { B.col[k * 3] = B.col[k * 3 - 3]; B.col[k * 3 + 1] = B.col[k * 3 - 2]; B.col[k * 3 + 2] = B.col[k * 3 - 1]; }
+}
+/** The shell and the normal at one node, from the nodes around it. */
+function canopyShell(R: CanopyRing, B: CanopyBuf, i: number, j: number): void {
+  const V = R.V, k = j * V + i;
+  // ABSOLUTE, NOT RELATIVE: the envelope is the highest crown top over the
+  // neighbourhood — its ground AND its lift — less this node's own ground.
+  // A lift-only margin held on the coastal flat and failed on Nagato's 35°
+  // hillsides, where a crown a cell uphill stands metres above this node's
+  // shell and the shell's own triangles were drawn in its place (the teeth).
+  // A crown reaches a cell past its node and up to 1.39 of its lift.
+  let m = 0, top = -Infinity;
+  for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+    const ii = i + a, jj = j + b;
+    if (ii < 0 || jj < 0 || ii >= V || jj >= V) continue;
+    const kk = jj * V + ii;
+    m = Math.max(m, B.lift[kk]);
+    if (B.lift[kk] > 2.5) top = Math.max(top, B.pos[kk * 3 + 1] + B.lift[kk] * 1.4);
+  }
+  B.plift[k] = m > 2.5 ? Math.max(0, top + 2 - B.pos[k * 3 + 1]) : 0;
+  const h = (ii: number, jj: number): number => {
+    const kk = Math.min(V - 1, Math.max(0, jj)) * V + Math.min(V - 1, Math.max(0, ii));
+    return B.pos[kk * 3 + 1] + B.lift[kk];
+  };
+  const s2 = 2 * R.step;
+  const nx = -(h(i + 1, j) - h(i - 1, j)) / s2, nz = -(h(i, j + 1) - h(i, j - 1)) / s2, l = Math.hypot(nx, 1, nz);
+  B.nrm[k * 3] = nx / l; B.nrm[k * 3 + 1] = 1 / l; B.nrm[k * 3 + 2] = nz / l;
+}
+/** Every cell of the ring with a shell over any corner, less the inner
+ *  ring's square when this is the outer. */
+function canopyIndex(R: CanopyRing, B: CanopyBuf, x0: number, z0: number): void {
+  const V = R.V, N = R.N, inner = R.outer ? canopyRings[0] : null;
+  const H = inner ? [inner.x0, inner.z0, inner.x0 + inner.N * inner.step, inner.z0 + inner.N * inner.step] : null;
+  let ni = 0;
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    if (H) {
+      const cx = x0 + (i + 0.5) * R.step, cz = z0 + (j + 0.5) * R.step;
+      if (cx > H[0] && cx < H[2] && cz > H[1] && cz < H[3]) continue;
+    }
+    const a = j * V + i, b = a + 1, c = a + V, d = c + 1;
+    if (Math.max(B.plift[a], B.plift[b], B.plift[c], B.plift[d]) <= 0) continue;
+    B.idx[ni++] = a; B.idx[ni++] = c; B.idx[ni++] = b; B.idx[ni++] = b; B.idx[ni++] = c; B.idx[ni++] = d;
+  }
+  B.ni = ni;
+}
+function canopyCommitJob(J: CanopyJob): void {
+  const R = J.R, B = J.B;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(B.pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(B.col, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(B.nrm, 3));
+  geo.setAttribute('canLift', new THREE.BufferAttribute(B.plift, 1));
+  geo.setIndex(new THREE.BufferAttribute(B.idx.subarray(0, B.ni), 1));
+  R.mesh.geometry.dispose();
+  R.mesh.geometry = geo;
+  const tex = new THREE.DataTexture(B.tex, R.V, R.V, THREE.RGFormat, THREE.HalfFloatType);
+  tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
+  const U = R.outer ? canopyOut.u : canopyIn.u;
+  R.tex?.dispose(); R.tex = tex;
+  U.canTex.value = tex; U.canTexBox.value.set(J.x0, J.z0, R.step, R.V); U.canBaseY.value = R.baseY;
+  R.spare = R.live; R.live = B; R.x0 = J.x0; R.z0 = J.z0;
+  canopyGrids = canopyRings.map((r) => ({ x0: r.x0, z0: r.z0, V: r.V, step: r.step, ev: r.live.ev, lift: r.live.lift }));
+  const o = canopyRings[canopyRings.length - 1];
+  canopyBox = [o.x0, o.z0, o.x0 + o.N * o.step, o.z0 + o.N * o.step];
+  canopyU.box.value.set(...canopyBox);
+  let tris = 0;
+  for (const r of canopyRings) tris += r === R ? B.ni / 3 : r.live.ni / 3;
+  canopyStat.tris = tris; canopyStat.cells = tris / 2;
+  canopyStat.ms = +J.ms.toFixed(1);
+  canopyStat.builds++;
+  // The inner square moved: the outer's hole moves with it. The stand's
+  // colour follows the outer ring's box.
+  if (!R.outer && canopyRings[1] && !canopyJobs.some((q) => q.R === canopyRings[1])) canopyQueue(canopyRings[1], canopyRings[1].x0, canopyRings[1].z0, false);
+  if (R.outer || canopyRings.length === 1) {
+    const next = canopyStandBuild(canopyBox);
+    canopyStand?.tex.dispose();
+    canopyStand = next;
+    for (const Uu of [canopyIn.u, canopyOut.u]) { Uu.canStand.value = canopyStand.tex; Uu.canStandBox.value.copy(canopyStand.box); }
+  }
+}
+function stepCanopy(now: number): void {
+  canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
+  if (!CANOPY_ON) { canopyJobs = []; canopyRings = []; canopyGrids = []; return; }
+  const [fx, fz] = renderFocusXZ();
+  canopyU.foc.value.set(fx, fz, camMode !== 'top' && !canopyNearOff ? 1 : 0);
+  const org = `${origin.lat},${origin.lon}`;
+  const want = canopyWant(fx, fz);
+  // A new origin, a first sight, or a ring whose size no longer fits the draw
+  // range: the rings are made afresh and everything is dirty.
+  if (org !== canopyAt.org || canopyAt.t <= 0 || canopyRings.length !== want.length
+    || canopyRings.some((r, n) => r.N !== want[n].N)) {
+    canopyJobs = [];
+    const baseY = groundAt(fx, fz);
+    canopyRings = want.map((w) => {
+      const V = w.N + 1;
+      return { mesh: w.outer ? canopyOuter : canopyMesh, outer: w.outer, step: w.step, N: w.N, V,
+        x0: w.x0, z0: w.z0, baseY, live: canopyBuf(V), spare: canopyBuf(V), tex: null };
+    });
+    canopyGrids = [];
+    canopyOuter.geometry.setIndex([]); canopyMesh.geometry.setIndex([]);
+    for (const R of canopyRings) canopyQueue(R, R.x0, R.z0, true);
+    canopyBucket.clear();
+    canopyAt = { x: fx, z: fz, t: now, org, tb: terrainBuilds };
+  } else if (!canopyJobs.length) {
+    // THE SCROLL: a ring whose centre the focus has left by CANOPY_SHIFT_NODES
+    // steps moves under it. A ring drifting a long way from where its ground
+    // heights were based (half floats) is rebuilt on a fresh base instead.
+    for (let n = 0; n < canopyRings.length; n++) {
+      const R = canopyRings[n], w = want[n];
+      const off = Math.max(Math.abs(w.x0 - R.x0), Math.abs(w.z0 - R.z0)) / R.step;
+      if (off >= CANOPY_SHIFT_NODES) {
+        const gNow = groundAt(fx, fz);
+        const full = Math.abs(gNow - R.baseY) > 300;
+        if (full) R.baseY = gNow;
+        canopyQueue(R, w.x0, w.z0, full);
+      }
+    }
+    // Tiles refine under a parked view: a slow whole refresh.
+    if (!canopyJobs.length && terrainBuilds !== canopyAt.tb && now - canopyAt.t > CANOPY_TERRAIN_MS) {
+      for (const R of canopyRings) canopyQueue(R, R.x0, R.z0, true);
+      canopyAt.t = now; canopyAt.tb = terrainBuilds;
+    }
+  }
+  const J = canopyJobs[0];
+  if (!J) return;
+  const R = J.R, V = R.V, t0 = performance.now();
+  const slice = canopyGrids.length ? CANOPY_SLICE_MS : CANOPY_SLICE_MS * 3;
+  while (performance.now() - t0 < slice) {
+    if (J.phase === 0) {
+      // The dirty nodes, row by row.
+      if (J.j >= V) { J.phase = 1; J.j = 0; continue; }
+      const j = J.j++;
+      if (!J.rowDirty[j]) continue;
+      for (let i = 0; i < V; i++) if (J.dirty[j * V + i]) canopyNode(R, J.B, J.x0, J.z0, i, j);
+    } else if (J.phase === 1) {
+      // The shell and normals of every node a dirty node touches.
+      if (J.j >= V) { J.phase = 2; continue; }
+      const j = J.j++;
+      if (!J.rowDirty[j] && !(j > 0 && J.rowDirty[j - 1]) && !(j < V - 1 && J.rowDirty[j + 1])) continue;
+      for (let i = 0; i < V; i++) {
+        let hit = false;
+        for (let b = -1; b <= 1 && !hit; b++) {
+          const jj = j + b;
+          if (jj < 0 || jj >= V || !J.rowDirty[jj]) continue;
+          for (let a = -1; a <= 1; a++) { const ii = i + a; if (ii >= 0 && ii < V && J.dirty[jj * V + ii]) { hit = true; break; } }
+        }
+        if (hit) canopyShell(R, J.B, i, j);
+      }
+    } else if (J.phase === 2) {
+      canopyIndex(R, J.B, J.x0, J.z0);
+      J.phase = 3;
+    } else break;
+  }
+  J.ms += performance.now() - t0;
+  if (J.phase !== 3) return;
+  canopyJobs.shift();
+  canopyCommitJob(J);
+}
+
+// ── THE STAND'S OWN TREES ──
+//
+// The colour and conifer share the crowns take are the placed tree sites' own:
+// every vegGrid bucket under the rings is averaged (colour in linear light, up
+// to 240 sites a bucket) into a texel every CANOPY_STAND_M, blurred once so a
+// bucket's edge is a blend. Where a bucket holds no trees yet, the biome's
+// foliage band stands in, as `plantLook` would roll it on the mean.
+const CANOPY_STAND_M = 110;
+const CANOPY_TREE_KINDS = new Set(['broadleaf', 'conifer', 'palm', 'acacia']);
+let canopyStandNext: { tex: THREE.DataTexture; box: THREE.Vector4 } | null = null;
+const canopyBucket = new Map<string, [number, number, number, number, number]>();
+function canopyStandBuild(box: [number, number, number, number]): { tex: THREE.DataTexture; box: THREE.Vector4 } {
+  // Buckets that held no trees yet are asked again: seeding reaches them.
+  for (const [k, v] of canopyBucket) if (v[4] < 4) canopyBucket.delete(k);
+  const W = Math.ceil((box[2] - box[0]) / CANOPY_STAND_M) + 1, Hh = Math.ceil((box[3] - box[1]) / CANOPY_STAND_M) + 1;
+  const raw = new Float32Array(W * Hh * 4);
+  const tint = new THREE.Color();
+  for (let v = 0; v < Hh; v++) for (let u = 0; u < W; u++) {
+    const x = box[0] + (u + 0.5) * CANOPY_STAND_M, z = box[1] + (v + 0.5) * CANOPY_STAND_M;
+    const key = vegKey(x, z);
+    let b = canopyBucket.get(key);
+    if (!b) {
+      b = [0, 0, 0, 0, 0];
+      const sites = vegGrid.get(key) ?? [];
+      const stride = Math.max(1, Math.floor(sites.length / 240));
+      for (let n = 0; n < sites.length; n += stride) {
+        const st = sites[n];
+        if (!CANOPY_TREE_KINDS.has(st.k)) continue;
+        b[0] += st.c.r; b[1] += st.c.g; b[2] += st.c.b; b[3] += st.k === 'conifer' ? 1 : 0; b[4]++;
+      }
+      canopyBucket.set(key, b);
+    }
+    const o = (v * W + u) * 4;
+    if (b[4] >= 4) { raw[o] = b[0] / b[4]; raw[o + 1] = b[1] / b[4]; raw[o + 2] = b[2] / b[4]; raw[o + 3] = b[3] / b[4]; }
+    else {
+      const w = climateAt(x, z).w;
+      let h = 0, l = 0, ws = 0;
+      for (let q = 0; q < BIOME_LIST.length; q++) {
+        const bi = BIOME_LIST[q];
+        h += w[q] * (bi.vegHue[0] + 0.5 * bi.vegHue[1]); l += w[q] * (bi.vegLit[0] + 0.5 * bi.vegLit[1]); ws += w[q];
+      }
+      tint.setHSL(ws > 0 ? h / ws : 0.26, 0.45, ws > 0 ? l / ws : 0.22);
+      raw[o] = tint.r; raw[o + 1] = tint.g; raw[o + 2] = tint.b; raw[o + 3] = 0.3;
+    }
+  }
+  const data = new Uint8Array(W * Hh * 4);
+  for (let v = 0; v < Hh; v++) for (let u = 0; u < W; u++) for (let c = 0; c < 4; c++) {
+    let sum = 0, n = 0;
+    for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+      const uu = u + a, vv = v + b;
+      if (uu < 0 || vv < 0 || uu >= W || vv >= Hh) continue;
+      const wgt = a === 0 && b === 0 ? 2 : 1;
+      sum += raw[(vv * W + uu) * 4 + c] * wgt; n += wgt;
+    }
+    const m = sum / n;
+    // Colour as its square root: a forest's greens live under 0.1 linear,
+    // where eight bits are a staircase.
+    data[(v * W + u) * 4 + c] = Math.round(255 * Math.min(1, c < 3 ? Math.sqrt(m) : m));
+  }
+  const tex = new THREE.DataTexture(data, W, Hh, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
+  return { tex, box: new THREE.Vector4(box[0], box[1], 1 / (W * CANOPY_STAND_M), 1 / (Hh * CANOPY_STAND_M)) };
+}
+/** A tree the canopy stands in for: its site is well inside a closed stand
+ *  (every lattice node around it at full evidence, where the roof is at its
+ *  full height) and past the near field, so its crown would be under the
+ *  roof. Edge trees, verge trees and the near field stay individual — that is
+ *  where the budget this frees goes. */
+function canopyHides(x: number, z: number, tallM = 0): boolean {
+  const F = canopyU.foc.value;
+  if (F.z > 0.5 && Math.hypot(x - F.x, z - F.y) < CANOPY_NEAR + 60) return false;
+  for (const G of canopyGrids) {
+    const u = (x - G.x0) / G.step, v = (z - G.z0) / G.step;
+    const i = Math.floor(u), j = Math.floor(v);
+    if (i < 1 || j < 1 || i >= G.V - 2 || j >= G.V - 2) continue;
+    // The inner grid answers where it covers; a point on its rim falls through
+    // to the outer ring, whose own lattice covers the same ground coarser.
+    const r = G.step > CANOPY_STEP ? 1 : 2;
+    for (let b = -1; b <= r; b++) for (let a = -1; a <= r; a++) {
+      const k = (j + b) * G.V + i + a;
+      if (k < 0 || k >= G.ev.length || G.ev[k] < 0.85) return false;
+    }
+    // AN EMERGENT STAYS. A tree whose top stands clear of the roof here is a
+    // silhouette the crowns cannot carry, however closed the stand around it.
+    const lk = Math.round(v) * G.V + Math.round(u);
+    if (tallM > 0 && lk >= 0 && lk < G.lift.length && tallM > G.lift[lk] * 1.1) return false;
+    return true;
+  }
+  return false;
+}
+(window as unknown as { __canopy?: object }).__canopy = (on?: boolean): object => {
+  if (on !== undefined) { CANOPY_ON = on; canopyAt.t = 0; canopyJobs = []; canopyRings = []; if (!on) canopyGrids = []; }
+  const hist = [0, 0, 0, 0, 0, 0];
+  for (const G of canopyGrids) for (const e of G.ev) hist[Math.min(5, Math.floor(e * 6 + 1e-6))]++;
+  return { on: CANOPY_ON, ...canopyStat, budgetK: +canopyBudgetK().toFixed(3), job: canopyJobs.length ? `${canopyJobs[0].R.outer ? 'outer' : 'inner'}${canopyJobs[0].full ? ' full' : ' shift'} p${canopyJobs[0].phase} r${canopyJobs[0].j}` : null, queued: canopyJobs.length, rings: canopyGrids.length, at: [Math.round(canopyAt.x), Math.round(canopyAt.z)], evHist: hist };
+};
+/** Frames and A/Bs: the canopy's look dials (leaf relief, crown shadow, sun
+ *  tones), `near: false` to lift the near-field clearing for a shot framed
+ *  on the focus itself, and `find` for a point `find` metres from the focus
+ *  whose whole neighbourhood is closed stand. */
+let canopyNearOff = false;
+(window as unknown as { __canopylook?: object }).__canopylook = (o: { leaf?: number; shadow?: number; tone?: number; debug?: number; near?: boolean; find?: number } = {}): object => {
+  const L = canopyU.look.value;
+  if (o.leaf !== undefined) L.x = o.leaf;
+  if (o.shadow !== undefined) L.y = o.shadow;
+  if (o.tone !== undefined) L.z = o.tone;
+  if (o.debug !== undefined) L.w = o.debug;
+  if (o.near !== undefined) canopyNearOff = !o.near;
+  let found: number[] | null = null;
+  if (o.find !== undefined && canopyGrids.length) {
+    const [fx, fz] = renderFocusXZ();
+    for (let a = 0; a < 64 && !found; a++) {
+      const th = (a / 64) * Math.PI * 2, x = fx + Math.cos(th) * o.find, z = fz + Math.sin(th) * o.find;
+      const G = canopyGrids[0], i = Math.round((x - G.x0) / G.step), j = Math.round((z - G.z0) / G.step);
+      let ok = i > 8 && j > 8 && i < G.V - 9 && j < G.V - 9;
+      for (let b = -8; ok && b <= 8; b++) for (let c = -8; ok && c <= 8; c++) if (G.ev[(j + b) * G.V + i + c] < 0.9) ok = false;
+      if (ok) found = [Math.round(x), Math.round(z), +groundAt(x, z).toFixed(1)];
+    }
+  }
+  return { look: L.toArray(), near: !canopyNearOff, found };
+};
 function refreshShrubs(): void {
   shrubs.visible = camMode !== 'top';
   if (!SHRUB_ON || Number.isNaN(swardFX) || vegScale <= 0 || grassScale <= 0) { shrubs.count = 0; shrubN = 0; shrubNear = 0; return; }
@@ -16428,6 +17816,8 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // were never measured, only bounded, and a census must not claim what it did
   // not look at.
   let impFarCull = 0, impFarWalk = 0;
+  // Trees the canopy stands in for this sweep — see canopyHides.
+  let canopyHid = 0;
   if (EZ_ON) {
     for (const [gx, gz] of ring) {
       yield;
@@ -16438,10 +17828,14 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         if (!isEzKind(v.k)) continue;
         const dx = v.x - rfx, dz = v.z - rfz;
         const d2 = dx * dx + dz * dz;
+        if (d2 < treeR2 && canopyHides(v.x, v.z, EZ_M_PER_SCALE[v.k as EzFamily] * v.s * treeSizeScale)) { canopyHid++; continue; }
         if (d2 < treeR2) { cand[v.k].push([d2, v]); impSeen(v, d2, 1); }
       }
     }
     vegMark('ezGather');
+    canopyStat.hid = canopyHid;
+    { let got = 0; for (const f of EZ_FAMILIES) got += cand[f].length;
+      canopyStat.share = canopyHid + got > 0 ? canopyHid / (canopyHid + got) : 0; }
     // The annulus between the draw ring and the impostor's reach. It walks the
     // manifest's own cells — which is the point of the manifest — and seeds any
     // the manifest has not reached yet, under the same slice budget, so a wide
@@ -16549,6 +17943,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
             const dx = v.x - rfx, dz = v.z - rfz;
             const d2 = dx * dx + dz * dz;
             if (d2 < treeR2 || d2 >= impR2) continue;
+            if (canopyHides(v.x, v.z, EZ_M_PER_SCALE[v.k as EzFamily] * v.s * treeSizeScale)) { canopyHid++; continue; }
             impFarSeen++;
             // ── AND ONLY A TREE INSIDE A STAND IS THINNED ──
             // The hash used to decide every one of them, which is how a lone
@@ -16582,6 +17977,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         }
       }
       vegMark('impGather');
+      canopyStat.hid = canopyHid;
     }
     // ── THE BUDGET GOES TO WHAT IS ACTUALLY HERE ── see the note by
     // `ezTriPrice`. `cand[fam].length` is every candidate inside the draw range,
@@ -16612,7 +18008,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       // shortcut cannot promise.
       const pool = new Set(EZ_FAMILIES.filter((f) => want[f] > 0));
       const cap = ezRecord(() => 0);
-      let left = treeTriBudget;
+      let left = treeTriBudget * canopyBudgetK();
       for (let round = 0; round < EZ_FAMILIES.length + 1 && pool.size; round++) {
         let share = 0;
         for (const f of pool) share += ezCapNominal(f) * ezTriPrice(f);
@@ -17366,7 +18762,7 @@ function refreshVeg(): void {
  *  Generator work units may overshoot; the budget is not a hard deadline.
  *  `?vegstep=N` forces N (0: the whole refresh, for parity probes). */
 const VEG_STEP_MS = 5;
-const VEG_STEP_FORCED = qsNum('vegstep', -1);
+let VEG_STEP_FORCED = qsNum('vegstep', -1);
 let vegJobMs = 0;
 /**
  * ── HOW OFTEN THE WORLD'S TREES ARE RE-DECIDED, AS A MEASUREMENT ──
@@ -17679,6 +19075,25 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   rw?: boolean }
 const wallGrid = new Map<string, Seg[]>();   // building edges — solid
 const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-width
+/** Steps: never drivable, so never in roadGrid — and therefore never in the
+ *  sward's road mask, which is how a flight of steps stood under a meadow's
+ *  worth of grass (the steps A/B at Suresnes showed only grass on both
+ *  sides). Filed here so the mask clears them and `__tracks` can find them. */
+interface StairSeg { ax: number; az: number; bx: number; bz: number; hw: number; wid?: string }
+const stairGrid = new Map<string, StairSeg[]>();
+let stairRev = 0;
+function noteStairs(pts: Array<[number, number]>, w: number, wid?: string): void {
+  for (let i = 1; i < pts.length; i++) {
+    const s: StairSeg = { ax: pts[i - 1][0], az: pts[i - 1][1], bx: pts[i][0], bz: pts[i][1], hw: w / 2, wid };
+    const x0 = Math.floor(Math.min(s.ax, s.bx) / GRID), x1 = Math.floor(Math.max(s.ax, s.bx) / GRID);
+    const z0 = Math.floor(Math.min(s.az, s.bz) / GRID), z1 = Math.floor(Math.max(s.az, s.bz) / GRID);
+    for (let gx = x0; gx <= x1; gx++) for (let gz = z0; gz <= z1; gz++) {
+      const k = `${gx},${gz}`;
+      const a = stairGrid.get(k); if (a) a.push(s); else stairGrid.set(k, [s]);
+    }
+  }
+  stairRev++;
+}
 /**
  * ── AND A RAILWAY IS IN IT TOO, BECAUSE A RAILWAY IS DRIVEABLE ──
  *
@@ -17792,7 +19207,7 @@ const bldRoofs = new Map<number, string>();
  *  in Paris is one height and one roof rather than thirty-eight draws — the
  *  same lesson as the tree atlas ("a wood is one wood") and the 32 m stand
  *  norm, one scale down. `?bldruns=0` is the stand norm alone. */
-const RUN_NORM = qsOn('bldruns', true);
+let RUN_NORM = qsOn('bldruns', true);
 function addPlot(pts: Array<[number, number]>): void {
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
   for (const [x, z] of pts) { minx = Math.min(minx, x); minz = Math.min(minz, z); maxx = Math.max(maxx, x); maxz = Math.max(maxz, z); }
@@ -19483,10 +20898,10 @@ const cutSet = new Set<Seg>();
 // dug more than half a metre below natural within 6m of the kerb fall 61.1% to
 // 48.6%. Still a knob (`?wash=0`) — this is a judgement about looks, and looks
 // change when anything else on the verge does.
-const CUT_WASH = Number(qs('wash') ?? 0.1);
+let CUT_WASH = Number(qs('wash') ?? 0.1);
 /** The relief pass, switchable, so its cost and its benefit can both be
  *  measured against the behaviour it replaces rather than argued about. */
-const CUT_RELIEF = qs('relief') !== '0';
+let CUT_RELIEF = qs('relief') !== '0';
 /**
  * HOW BURIED IS BURIED ENOUGH TO DIG FOR.
  *
@@ -19527,7 +20942,7 @@ const CUT_RELIEF = qs('relief') !== '0';
  * this is trying to answer. The grit is hashed from quantised world XZ, so it
  * is stuck to the road: drive past it and it holds still, exactly like dirt.
  */
-const SLIP_K = Math.max(0, Number(qs('slip') ?? 1) || 0);
+let SLIP_K = Math.max(0, Number(qs('slip') ?? 1) || 0);
 function roadCeiling(x: number, z: number): number | null {
   cutSet.clear();
   stripsNear(x, z, 2, cutSet);
@@ -19562,8 +20977,8 @@ function roadCeiling(x: number, z: number): number | null {
 //
 // `?refine=0` builds the old grid and carves it, so the two can be measured
 // against each other.
-const REFINE = qs('refine') !== '0';
-const REFINE_R = Number(qs('refr') ?? 1100);
+let REFINE = qs('refine') !== '0';
+let REFINE_R = Number(qs('refr') ?? 1100);
 let borderAuditAt = 0;
 /** Is the road stream quiet — nothing in flight and no road landed for a
  *  breath? Not "nothing queued": a tile waiting on a retry backoff would
@@ -20514,7 +21929,7 @@ let gaSink = 0;
 /** The rollback for the bound sampler, and the A/B that priced it. A change to
  *  what the PHYSICS reads deserves a switch the seat can throw, not only a
  *  console probe: `?drapefast=0` pays the lookup per vertex exactly as before. */
-const DRAPE_FAST = qsOn('drapefast', true);
+let DRAPE_FAST = qsOn('drapefast', true);
 /** Run BOTH samplers for every vertex and count where they disagree — the
  *  standard the drape index was held to. Off by default: it is the whole cost
  *  of the thing it is checking, twice over, so a walk measured with it on is
@@ -21066,10 +22481,10 @@ const TUNNEL_H = 5;    // clearance of the carved tube
 // float error move a shared node by.
 const JUNC_R = 3;
 // Off only from a probe (`?noweld=1`), to measure continuity against grade.
-const endWeld = !qsOn('noweld', false);
+let endWeld = !qsOn('noweld', false);
 // Off only from a probe (`?nopins=1`), to measure what the pins are worth
 // against the same tiles rather than against memory of a previous run.
-const juncPins = !qsOn('nopins', false);
+let juncPins = !qsOn('nopins', false);
 // Height difference past which two roads at the same spot are passing OVER one
 // another rather than meeting — the one case that still earns a parapet across
 // the other road's line. Below it there is a turning here, and a barrier across
@@ -21081,7 +22496,7 @@ interface LiftRec { x: number; z: number; nm?: string; fid: number; layer: numbe
 const liftLog: LiftRec[] = [];
 const RAIL_H = 1;      // parapet height above the kerb it stands on
 // Off only from a probe (`?nofill=1`), to see the ditch the fill closes.
-const vergeFill = !qsOn('nofill', false);
+let vergeFill = !qsOn('nofill', false);
 /** The deck height an ALREADY BUILT road holds at (x,z), if any fragment ends
  *  there — the continuity anchor for the fragment about to build. Fragments of
  *  one way arrive independently (tile clipping, tag changes chop a road into
@@ -21662,7 +23077,13 @@ function flushRibbons(): void {
     }
   }
 }
+const DRAPE_STEP_M = qsNum('drapestep', 3);
+/** How deep an UNTAGGED road may be cut through a hill where the profile
+ *  solver deliberately chorded through a knoll — see the burial scan in
+ *  ribbon(). Everywhere else the burial threshold stays TUNNEL_H + 0.6. */
+const CUT_DEEP_M = qsNum('cutdeep', 12);
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string, layer = 0, wayTags?: Record<string, string>, railway = false): void {
+  const trackFam: TrackFam | null = TRACK_FAM && track && wayTags && !railway ? trackFamily(wayTags).fam : null;
   /**
    * ── A RAILWAY IS `drivable`, AND `railway` IS ONLY ABOUT THE DRESSING ──
    *
@@ -21699,7 +23120,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // BENDS, so a long straight segment used to bridge every terrain dip between
   // its endpoints like a causeway. Dense sampling makes the ribbon hug the
   // heightfield.
-  const dense = densifyPts(pts);
+  // A DRAPED way is seated at its vertices and nowhere else, and the terrain
+  // lattice under it is triangulated on its own creases — the corridor's crest
+  // and toe lines, the refinement's splits — so a 12 m quad of footway stood
+  // with a fifth of its triangles under the ground at Suresnes (measured with
+  // __trackburial: 641 of 3,389, worst 1.04 m, every VERTEX on the mesh). The
+  // pavement read as pale fragments in grass. A draped way is narrow and
+  // cheap; three metres a station keeps it on the ground it is draped over.
+  const dense = densifyPts(pts, mode === 'none' && (track || !drivable) ? DRAPE_STEP_M : 12);
   // …AND THE GATE IS KEPT ON THE DENSE POINTS, not the OSM nodes. Checking the
   // nodes is checking the wrong thing for exactly the reason the densify above
   // exists: a way carries vertices where it BENDS, so a straight river or trail
@@ -23031,7 +24459,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       if (track) {
         const [tr, tg, tb] = terrainPalette(elev[i] + baseElev,
           Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0), x0, z0);
-        bayColor = [tr * 1.06, tg * 0.99, tb * 0.9];
+        bayColor = trackFam ? trackFamColour(trackFam, wayTags ?? {}, [tr, tg, tb]) : [tr * 1.06, tg * 0.99, tb * 0.9];
       } else {
         const c = tint ?? [1, 1, 1];
         bayColor = [c[0], c[1], c[2]];
@@ -23592,11 +25020,26 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // the profile. An unburied stretch (coarse heightfield, shallow cut) stays
     // an open road; the tube would otherwise stand exposed like a dark box.
     let s = -1;
+    // ── A CUTTING THE SOLVER CHOSE IS NOT A SOLVER MISTAKE ──
+    //
+    // Burial has two causes and they want opposite answers. At Fish Hoek the
+    // GRADE LINE's smoothing pulled a road on a long grade metres under the
+    // hill: an error, and leaving the hill intact is right. At Nagato
+    // (34.4133 131.0816, a tertiary with no tunnel tag) the structure pass saw
+    // a knoll in the along-way profile and deliberately CHORDED through it —
+    // `2d-chord` dropped the station 6 m — which is exactly what an engineered
+    // cutting is, and Street View shows crib-walled cut faces there. The single
+    // 5.6 m threshold hid that road under 75 m of grass. Inside an implicit
+    // chord run of an untagged way the road may be cut to CUT_DEEP_M; the
+    // refined corridor builds real cut faces (CUTF_K), so a 7 m cut is about
+    // 11 m of face a side, not the wash's ten-to-one bench.
+    const chordRun = new Uint8Array(n);
+    if (mode === 'auto') for (const [a, b] of runs) for (let k = a; k <= b && k < n; k++) chordRun[k] = 1;
     for (let i = 0; i < n; i++) {
       // FULLY buried: there must be enough ground overhead to contain the
       // whole tube. The old 1.2m threshold let a 5m shell stand almost four
       // metres proud of flat ground — the black arch hanging over the road.
-      const buried = elevMin[i] - prof[i] > TUNNEL_H + 0.6;
+      const buried = elevMin[i] - prof[i] > (chordRun[i] ? Math.max(TUNNEL_H + 0.6, CUT_DEEP_M) : TUNNEL_H + 0.6);
       if (buried && s < 0) s = i;
       if ((!buried || i === n - 1) && s >= 0) {
         const e = buried ? i : i - 1;
@@ -24831,6 +26274,7 @@ function commitTerrainRenderFromSubstrate(tile: ProductionSubstrateTile): boolea
   // ground contact, so it can also serve every legacy terrain query/raycast
   // while those call sites migrate. Retire the temporary build wrapper now;
   // no hidden duplicate terrain mesh survives a committed revision.
+  if (!mesh.name) mesh.name = 'terrain';
   terrainMeshes.set(tile.key, mesh);
   if (source && source !== mesh) {
     source.removeFromParent();
@@ -27446,8 +28890,8 @@ function shoreRibbon(ring: Array<[number, number]>): void {
   drapes.push(mesh);
   worldGroup.add(mesh);
 }
-const BLD_FACE = qsOn('bldface', true);
-const BLD_PARA = qsOn('bldpara', true);
+let BLD_FACE = qsOn('bldface', true);
+let BLD_PARA = qsOn('bldpara', true);
 function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Material[], lift: number, extrude = 0, collide?: 'solid' | 'water',
   /** A batch sink: when set (buildings only), the extrusion is handed over
    *  baked at world height instead of standing up its own mesh — the batch
@@ -29117,13 +30561,16 @@ async function renderWays(
       // where it happens to straddle a regional boundary; a road that changed
       // surface mid-span would read as a rendering fault, not as a border.
       if (dk) wayTagLog.set(dk, tags);
-      ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1], roadLook(tags)),
+      const tf = TRACK_FAM && track ? trackFamily(tags) : null;
+      ribbon(pts, tf ? tf.w : w, stairs ? (TRACK_FAM ? trackFamMat('steps') : MAT.minor) : tf ? trackFamMat(tf.fam) : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1], roadLook(tags)),
         track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wq,
-        GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk,
+        GRADE_MAX[tags.highway] ?? 0.15, canopy,
+        stairs && TRACK_FAM ? (PAVED_COL[tags.surface ?? ''] ?? PAVED_COL.concrete) : roadTint(tags, wq), dk,
         // Which level OSM says this way is on — see layerOf. The planner pins and
         // the per-way hints stay on it; the end weld deliberately does not.
         layerOf(tags), tags);
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
+      if (stairs) noteStairs(pts, w, dk);
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
       if (tags.name && !stairs) noteSurvey(tags.name, pts, track);
@@ -29340,6 +30787,8 @@ const sync = openSync({
   mergeMarks: (r) => marks.merge({ m: r.missions, s: r.stations }),
   odo: () => Math.round(odo.total),
   setOdo: (m) => { if (m > odo.total) { odo.total = m; saveOdo(); } },
+  spots: () => spotsDump(),
+  mergeSpots: (rows) => spotsMerge(rows),
 }, {
   base: CELL_BASE,
   apex: AUTH_BASE,
@@ -29500,7 +30949,7 @@ function stepSurvey(now: number): void {
         surveyStore.take(id, c.key, r.cps.length);
         ovInkDirty = true;      // this road may now be on the ranger's own map
         surveyFlash = 1;
-        audio.stone();
+        audio.ui();
       }
       if (!r.claimed && surveyEligible(r) && r.got / r.cps.length > SURVEY_MAJORITY && surveyed(r)) {
         r.claimed = true; r.claimedAt = now;
@@ -31374,7 +32823,7 @@ const farOutside = (z: number, x: number, y: number): boolean => {
  * of every attribute it references and the next tile to go would take the
  * level's uv with it.
  */
-const FAR_PARK_BYTES = Math.max(0, qsNum('farpark', 48)) * (1 << 20);
+let FAR_PARK_BYTES = Math.max(0, qsNum('farpark', 48)) * (1 << 20);
 const farParked = new Map<string, { mesh: THREE.Mesh; mat: THREE.Material | null; bytes: number; at: number }>();
 let farParkBytes = 0;
 /** What a parked tile actually holds: the attribute arrays the bake wrote,
@@ -33956,7 +35405,15 @@ for (const sx of [-0.62, 0.62]) {
 // tarmac (the "slab" at the Suresnes cul-de-sac was this, not a junction
 // box). Sixteen candela over seventy metres is a lamp you can tell is on.
 const HEAD_DAY = { i: 16, d: 70 }, HEAD_NIGHT = { i: 260, d: 230 };
-const headSpot = new THREE.SpotLight(0xffb87b, HEAD_DAY.i, HEAD_DAY.d, 0.52, 0.65, 1.0);
+// THE LAMP IS WARM-WHITE, NOT AMBER. Measured on the Senqu at night from the
+// chase seat: the orange "embers" in the pool were the sward's tufts — with
+// the near sward's blades shrunk (?swardtuft=0.05) the pool was a smooth
+// wedge; the substrate and the shrubs changed nothing — each flat-shaded
+// blade facet that happened to face the lamp taking 0xffb87b at 260 cd, which
+// on green reads as a saturated orange fleck through the quantiser. A halogen
+// is warm, not amber; and the tail decays a little faster than 1/d so the
+// far bank of a river 150 m off is not scattered with lit scrub.
+const headSpot = new THREE.SpotLight(0xffd9ae, HEAD_DAY.i, HEAD_DAY.d, 0.52, 0.65, 1.25);
 /**
  * The beam occludes. A barrier stripes it, a trunk throws a shadow down the
  * road, a sign's shadow races past — none of which existed, because the light
@@ -34372,17 +35829,17 @@ const cloudTravel = new THREE.Vector2();
 /** ?fixdt=<seconds> — see the note at its use in the tick. 0 is off. */
 const FIX_DT = Math.max(0, Math.min(0.05,
   Number(qs('fixdt') ?? 0) || 0));
-const WX_PIN = ((): Sky | null => {
+let WX_PIN = ((): Sky | null => {
   const v = qs('wx');
   return v === 'clear' || v === 'haze' || v === 'rain' || v === 'storm' ? v : null;
 })();
 /** ?fog=0..1 pins the regional mist the way ?wx pins the sky, and ?wet=0..1
  *  floods the ground — a puddle screenshot must not wait out a storm. */
-const WX_FOG = ((): number | null => {
+let WX_FOG = ((): number | null => {
   const v = qs('fog');
   return v === null ? null : clamp(Number(v) || 0, 0, 1);
 })();
-const WX_WET = ((): number | null => {
+let WX_WET = ((): number | null => {
   const v = qs('wet');
   return v === null ? null : clamp(Number(v) || 0, 0, 1);
 })();
@@ -35724,8 +37181,8 @@ function startRealDrive(): void {
       // at boot and everything local — fog, chart, float precision — is baked
       // around it, so ARRIVING somewhere is cheaper and safer than moving the
       // world under a running session.
-      location.replace(`${location.pathname}?lat=${p.coords.latitude.toFixed(5)}`
-        + `&lon=${p.coords.longitude.toFixed(5)}&h=${Math.round(h)}&cam=cab&real=1`);
+      location.replace(carrySwitches(`${location.pathname}?lat=${p.coords.latitude.toFixed(5)}`
+        + `&lon=${p.coords.longitude.toFixed(5)}&h=${Math.round(h)}&cam=cab&real=1`));
     },
     (e) => geoFail(e, (s) => { real.err = s; }),
     { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
@@ -35921,8 +37378,8 @@ function stepReal(dt: number): boolean {
   // mount, so it waits for you to stop. Survey progress is keyed by position
   // in localStorage and survives it.
   if (real.drift > 5000 && Math.abs(state.speed) < 2) {
-    location.replace(`${location.pathname}?lat=${f.lat.toFixed(5)}&lon=${f.lon.toFixed(5)}`
-      + `&h=${Math.round(((state.heading * 180) / Math.PI + 360) % 360)}&cam=${camMode}&real=1`);
+    location.replace(carrySwitches(`${location.pathname}?lat=${f.lat.toFixed(5)}&lon=${f.lon.toFixed(5)}`
+      + `&h=${Math.round(((state.heading * 180) / Math.PI + 360) % 360)}&cam=${camMode}&real=1`));
   }
   return true;
 }
@@ -36341,7 +37798,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     mapAnchorX = 0; mapAnchorZ = 0;
     mapCtx.fillStyle = '#141b14';
     mapCtx.fillRect(0, 0, MAP_PX, MAP_PX);
-    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear(); bldRoofs.clear(); railWays.clear();
+    roadGrid.clear(); stairGrid.clear(); stairRev++; juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear(); bldRings.clear(); bldRunOf.clear(); bldHeights.clear(); bldRoofs.clear(); railWays.clear();
     channelGrid.clear(); rapidRocks.clear(); activeRapidRocks.clear(); chanSet.clear(); wiSet.clear();
     pendingWater.length = 0; productionCrossings.reset(); crossingAppliedRevision.clear();
     productionSubstrate.reset();
@@ -36526,7 +37983,7 @@ const runFetch = (): Promise<{ head: TapeHead; steps: string; keys: string } | n
 async function runOpenPlay(id: string): Promise<void> {
   const user = sync.status().user;
   if (!user) return;
-  const url = `${location.pathname}?run=${user}/${id}`;
+  const url = carrySwitches(`${location.pathname}?run=${user}/${id}`);
   if (real.on || lineOn || hopping) { location.replace(url); return; }
   attractStop();
   menu.open(T_DRIVE);
@@ -36603,6 +38060,7 @@ function runCard(w: { head: TapeHead; steps: string; keys: string }, auto = fals
  *  location.replace for the same history reason. */
 function travelTo(lat: number, lon: number, h: number, url: string,
   opts: { line?: boolean; mission?: string } = {}): void {
+  url = carrySwitches(url);   // the session's look/bench switches ride along
   attractStop();   // travel is a takeover; a rolling reel must not re-fire into it
   if (real.on || (opts.line ?? false) !== lineOn) { location.replace(url); return; }
   // The tap must be SEEN to land (owner-caught: a hop behind the DRIVES tab's
@@ -38145,6 +39603,39 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
   }
   return rows;
 };
+/**
+ * How much of the forest is INTERIOR: every tree site the manifest holds within
+ * `r` of the render focus, classified by whether each of its four quadrants has
+ * another tree within `nearM`. A surrounded tree's crown is hidden by its
+ * neighbours from every side but above, so the share of them is the ceiling on
+ * what a stand-level (canopy) representation could take off the tree bill.
+ * Reported in distance bands, because the question differs near and far.
+ */
+(window as unknown as { __standcensus?: object }).__standcensus = (r = 1400, nearM = 7): object => {
+  const [fx, fz] = renderFocusXZ();
+  const pts: Array<[number, number, number]> = [];
+  for (const cell of vegGrid.values()) for (const v of cell) {
+    if (!(TREE_KINDS as readonly string[]).includes(v.k)) continue;
+    const d = Math.hypot(v.x - fx, v.z - fz);
+    if (d <= r) pts.push([v.x, v.z, d]);
+  }
+  const C = nearM, grid = new Map<string, number[]>();
+  pts.forEach((p, i) => { const k = `${Math.floor(p[0] / C)},${Math.floor(p[1] / C)}`; const a = grid.get(k); if (a) a.push(i); else grid.set(k, [i]); });
+  const bands = [150, 400, 800, 1400, Infinity];
+  const out = bands.map((b) => ({ to: b, trees: 0, interior: 0 }));
+  for (const [x, z, d] of pts) {
+    let q = 0;
+    const cx = Math.floor(x / C), cz = Math.floor(z / C);
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const k of grid.get(`${cx + i},${cz + j}`) ?? []) {
+      const dx = pts[k][0] - x, dz = pts[k][1] - z;
+      if ((dx === 0 && dz === 0) || dx * dx + dz * dz > C * C) continue;
+      q |= dx >= 0 ? (dz >= 0 ? 1 : 2) : (dz >= 0 ? 4 : 8);
+    }
+    const b = out.find((o) => d <= o.to)!;
+    b.trees++; if (q === 15) b.interior++;
+  }
+  return { focus: [+fx.toFixed(0), +fz.toFixed(0)], nearM, total: pts.length, bands: out.map((o) => ({ ...o, share: o.trees ? +(o.interior / o.trees).toFixed(3) : 0 })) };
+};
 (window as unknown as { __vegsites?: object }).__vegsites = (gx: number, gz: number): object[] =>
   (vegGrid.get(`${gx},${gz}`) ?? []).map((v) => ({
     role: v.role, anchor: !!v.anchor, k: v.k,
@@ -38425,6 +39916,19 @@ const ezSheetOf = (opt: EzSheetOpt = {}): object => {
 (window as unknown as { __defers?: object }).__defers = (x?: number, z?: number, r = 6): object[] => {
   const px = x ?? state.x, pz = z ?? state.z;
   return deferLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r || Math.hypot(e.x1 - px, e.z1 - pz) <= r);
+};
+/** THE MAPPED COASTLINE at a point: the nearest OSM `natural=coastline`
+ *  segment within `r`, the distance to it and the side the point is on (-1
+ *  land, 1 sea, 0 undecided) — the vector the water and the ground both
+ *  ought to meet at, reported beside them. */
+(window as unknown as { __coastline?: object }).__coastline = (x?: number, z?: number, r = 300): object | null => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const sg = nearestCoast(px, pz, r);
+  if (!sg) return { segs: coastSegs.size, seen: osmCoastSeen, near: null };
+  const [ax, az, bx, bz] = sg; const vx = bx - ax, vz = bz - az;
+  const t = clamp(((px - ax) * vx + (pz - az) * vz) / (vx * vx + vz * vz || 1), 0, 1);
+  return { segs: coastSegs.size, seen: osmCoastSeen, seg: sg.map((v) => +v.toFixed(1)),
+    d: +Math.hypot(px - (ax + vx * t), pz - (az + vz * t)).toFixed(1), side: coastSideAt(px, pz) };
 };
 /** The coast field at a point — travel from the waterline in deep-water
  *  metres against the plain shore distance, the seaward direction and the
@@ -38896,20 +40400,27 @@ let dofFocusClock = 0;
 let dofFocusReady = false;
 let dofFocusSource = 'aim';
 let dofFocusOverrideM: number | null = null;
+let dofSensorCells: Array<{ metres: number; valid: boolean }> = [];
+let dofSensorChosen = -1;
 /** Distance to the surface actually drawn under the centre reticle. The luma
  * readback already carries linear depth, so autofocus costs no new readback. */
 function centreSubjectDistance(): number | null {
   if (!lumaPrimed) return null;
   const values: number[] = [];
   const cx = Math.floor(LUMA_W / 2), cy = Math.floor(LUMA_H / 2);
+  dofSensorCells = []; dofSensorChosen = -1;
   for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
     const i = ((cy + oy) * LUMA_W + (cx + ox)) * 4;
     const d = ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar;
-    if (d > camera.near * 1.2 && d < Math.min(lumaFar, camera.far) * 0.88) values.push(d);
+    const valid = d > camera.near * 1.2 && d < Math.min(lumaFar, camera.far) * 0.88;
+    dofSensorCells.push({ metres: d, valid });
+    if (valid) values.push(d);
   }
   if (!values.length) return null;
   values.sort((a, b) => a - b);
-  return values[Math.floor(values.length / 2)];
+  const median = values[Math.floor(values.length / 2)];
+  dofSensorChosen = dofSensorCells.findIndex((cell) => cell.valid && Math.abs(cell.metres - median) < 0.01);
+  return median;
 }
 function currentDofPolicy(): {
   name: string; mode: DofMode; gain: number; maxRadiusPx: number; focusResponse: number;
@@ -38923,10 +40434,11 @@ function currentDofPolicy(): {
       : camMode === 'cab' || camMode === 'god' ? 'off'
       : camMode === 'drone' ? 'camera'
       : 'miniature');
-  // The drone wants depth, not miniature wash: even at STOCK its maximum
-  // circle is smaller than the road/chart lens, and the nose view is deeper
-  // again because the whole frame is navigational ground.
-  const baseRadiusPx = camMode === 'drone' ? (droneNose() ? 3.5 : 4.5) : DOF_RADII[1];
+  // From the drone, most of the frame is navigational ground at very
+  // different ranges. The old 3.5/4.5 art-pixel aperture saturated large
+  // areas on either side of a valid 600–800m autofocus target. Keep a depth
+  // cue, but make the aerial lens deep enough to read the landscape.
+  const baseRadiusPx = camMode === 'drone' ? (droneNose() ? 1.8 : 2.4) : DOF_RADII[1];
   const maxRadiusPx = dofApertureOverride ? DOF_RADII[dofRadiusAt] : baseRadiusPx * gain;
   const name = forced ? `override:${mode}`
     : camMode === 'drone' ? (droneNose() ? 'drone-nose' : 'drone-trail')
@@ -38939,6 +40451,11 @@ function aimFocus(): void {
   dofMode = policy.mode; // reported state is the policy actually on the glass
   u.uDofMode.value = policy.mode === 'camera' ? 1 : policy.mode === 'miniature' ? 2 : 0;
   u.uDofMaxPx.value = policy.maxRadiusPx;
+  // A close hillside against a distant drone focus used to saturate the
+  // foreground circle at almost every pixel (240m against 775m: full 3.5px).
+  // Compress only that side of the photographic lens. Forced expert CAMERA
+  // mode retains the uncompressed rule for a controlled A/B.
+  u.uDofNearScale.value = camMode === 'drone' && dofModeOverride === null ? 0.2 : 1;
   u.uDofTaps.value = DOF_TAPS[dofQuality];
   const preset = TILT_PRESETS[tiltMode] ?? TILT_PRESETS.off;
   // The cab is deliberately exempt; the chart is where the look belongs, and
@@ -39001,11 +40518,21 @@ function aimFocus(): void {
     // An explicit distance bypasses that sensor. camFlyAim is the fallback for
     // a sky centre or an as-yet-unprimed readback.
     const manual = dofFocusOverrideM ?? DOF_FOCUS_M[dofFocusAt];
+    if (manual > 0) { dofSensorCells = []; dofSensorChosen = -1; }
     const subject = manual > 0 ? null : centreSubjectDistance();
-    dofFocusTarget = manual > 0 ? manual
-      : subject ?? camera.position.distanceTo(camFlyAim);
+    // With sky at the centre the drone's fixed aim point is only ~40m
+    // away, even when its downward ray meets ground hundreds of metres out.
+    // Use the same altitude-aware ground focus that keeps terrain streaming
+    // ahead of the aircraft; other cameras retain their aim-point fallback.
+    let fallback = camera.position.distanceTo(camFlyAim);
+    if (manual <= 0 && subject === null && camMode === 'drone') {
+      const [gx, gz] = droneGroundFocus();
+      fallback = Math.hypot(gx - camera.position.x,
+        groundAt(gx, gz) - camera.position.y, gz - camera.position.z);
+    }
+    dofFocusTarget = manual > 0 ? manual : subject ?? fallback;
     dofFocusSource = dofFocusOverrideM !== null ? 'override'
-      : manual > 0 ? 'distance' : subject === null ? 'aim' : 'depth';
+      : manual > 0 ? 'distance' : subject === null ? camMode === 'drone' ? 'drone-ground' : 'aim' : 'depth';
     dofFocusTarget = clamp(dofFocusTarget, Math.max(camera.near * 1.5, 1), camera.far * 0.88);
     const now = performance.now() * 0.001;
     const focusDt = dofFocusClock > 0 ? Math.min(0.1, now - dofFocusClock) : 0;
@@ -39022,6 +40549,7 @@ function aimFocus(): void {
     u.uFocusP.value.copy(FOCUS_FWD).multiplyScalar(dofFocusCurrent).add(camera.position);
     u.uFocusN.value.copy(FOCUS_FWD).normalize();
   } else {
+    dofSensorCells = []; dofSensorChosen = -1;
     // MINIATURE keeps the existing world-space tilted plane. It is placed on
     // the ground under the viewing ray and then stood up across that ray.
     // Use the same viewed-ground authority as vegetation, shadows and
@@ -40551,6 +42079,7 @@ function repaintWetDebug(): void {
  *  argued about for a unit before anyone could turn its candidates off. */
 (window as unknown as { __hydrotune?: object }).__hydrotune = (patch?: Parameters<NonNullable<typeof hydroSys>['setTuning']>[0]): object => {
   if (patch && hydroSys) hydroSys.setTuning(patch);
+  if (patch && patch.lookModel !== undefined) hydroLookLive = patch.lookModel;
   return { ok: !!hydroSys, light: { ...hydroFrameLight }, gain: { ...hydroFrameGain }, zenith: { ...hydroFrameZenith }, terrain: { ...hydroFrameTerrain } };
 };
 (window as unknown as { __hydroview?: object }).__hydroview = (name?: HydroDebugView): string => {
@@ -41090,8 +42619,9 @@ function tdMatAt(x: number, z: number): object | null {
   const maxRadiusPx = u.uDofMaxPx.value as number;
   const radiusAt = (d: number): number => {
     if (dofMode !== 'camera') return 0;
+    const rel = (d - dofFocusCurrent) / Math.max(d, 0.25);
     return +Math.min(maxRadiusPx,
-      Math.abs((d - dofFocusCurrent) / Math.max(d, 0.25)) * maxRadiusPx).toFixed(2);
+      Math.abs(rel * (rel < 0 ? u.uDofNearScale.value as number : 1)) * maxRadiusPx).toFixed(2);
   };
   const modeNow = u.uDofMode.value as number;
   const active = maxRadiusPx > 0.01
@@ -41103,10 +42633,12 @@ function tdMatAt(x: number, z: number): object | null {
     active,
     quality: DOF_QUALITIES[dofQuality], taps: DOF_TAPS[dofQuality],
     aperture: dofApertureOverride ? dofRadiusAt : 'policy',
-    maxRadiusPx: +maxRadiusPx.toFixed(2),
+    maxRadiusPx: +maxRadiusPx.toFixed(2), nearScale: u.uDofNearScale.value,
     focus: dofFocusOverrideM ?? (DOF_FOCUS_M[dofFocusAt] || 'auto'),
     focusM: +dofFocusCurrent.toFixed(2), targetM: +dofFocusTarget.toFixed(2),
     source: dofFocusSource, centreDepthM: centreSubjectDistance(),
+    sensorCellsM: dofSensorCells.map((cell) => cell.valid ? Math.round(cell.metres) : null),
+    sensorChosen: dofSensorChosen,
     focusP: (u.uFocusP.value as THREE.Vector3).toArray().map((v) => +v.toFixed(2)),
     focusN: (u.uFocusN.value as THREE.Vector3).toArray().map((v) => +v.toFixed(3)),
     dedicatedPasses: active ? 3 : 0, lastFramePasses: passCount.last,
@@ -43708,6 +45240,29 @@ function heightsOf(): number[] {
     sl: !!best.sl, ru: !!best.ru, ya: best.ya, distM: +bd.toFixed(2),
     lenM: +Math.hypot(best.bx - best.ax, best.bz - best.az).toFixed(2) };
 };
+// A road's PROFILE ahead of the truck: every `step` metres along the heading,
+// the carriageway under that point (half width, deck, the way it came from),
+// the natural DEM, the drawn mesh, and the mesh a few metres either side of the
+// kerb. A deck under its own mesh is a buried road; a DEM standing metres over
+// the deck on both sides with the mesh at the deck is a cutting done right.
+(window as unknown as { __roadprof?: object }).__roadprof = (dist = 200, step = 5, heading?: number): object => {
+  const h = heading ?? state.heading;
+  const fx = Math.sin(h), fz = -Math.cos(h), rx = Math.cos(h), rz = Math.sin(h);
+  const rows: object[] = [];
+  const r2 = (v: number | null | undefined): number | null => (v === null || v === undefined || !Number.isFinite(v)) ? null : +(v + baseElev).toFixed(2);
+  for (let t = 0; t <= dist; t += step) {
+    const x = state.x + fx * t, z = state.z + fz * t;
+    const e = roadEdge(x, z);
+    const onRoad = !!e && e.out <= 0.8;
+    const side = (o: number): number | null => r2(meshSurfaceAt(x + rx * o, z + rz * o));
+    const hw = e?.hw ?? 3;
+    rows.push({ t, hw: e ? +e.hw.toFixed(2) : null, out: e ? +e.out.toFixed(2) : null, on: onRoad,
+      deck: onRoad ? r2(e!.y) : null, dem: hasHeight(x, z) ? r2(sampleHeight(x, z)) : null, mesh: r2(meshSurfaceAt(x, z)),
+      demL: r2(sampleHeight(x - rx * (hw + 4), z - rz * (hw + 4))), demR: r2(sampleHeight(x + rx * (hw + 4), z + rz * (hw + 4))),
+      meshL: side(-(hw + 4)), meshR: side(hw + 4), nm: e?.nm ?? null, fd: e?.fd ?? null });
+  }
+  return { at: [+state.x.toFixed(1), +state.z.toFixed(1)], heading: +(h * 180 / Math.PI).toFixed(1), rows };
+};
 (window as unknown as { __roadsegs?: object }).__roadsegs = (): number[][] => {
   const out: number[][] = [], seen = new Set<Seg>();
   for (const arr of roadGrid.values()) for (const s of arr) {
@@ -43748,6 +45303,12 @@ function heightsOf(): number[] {
  *  said — after a sign-in return, that is the whole question. */
 /** Travel in place, the player's path — for the harness to exercise without
  *  a menu tap. Resolves when the anchor is set and streaming has begun. */
+/** Travel the way a saved spot or a drive does: a bare address through
+ *  travelTo, so a harness exercises the path the menu takes (carrySwitches). */
+(window as unknown as { __travel?: object }).__travel = (lat: number, lon: number, h = 0): string => {
+  travelTo(lat, lon, h, `${location.pathname}?lat=${lat}&lon=${lon}&h=${h}&cam=chase`);
+  return 'travelling';
+};
 (window as unknown as { __hop?: object }).__hop = (lat: number, lon: number, h = 0): Promise<string> =>
   worldHop(lat, lon, h).then(() => 'ok', (e: Error) => `refused: ${e.message}`);
 /** LIVENESS, not last-frame leftovers: renderer.info repeats the final frame's
@@ -45404,6 +46965,78 @@ function noteTags(t: Record<string, string>): void {
  *  the `?h=` switch takes. Two devtools convert at the call site and a third
  *  did not: every frame of its first run faced (degrees mod 2pi) and
  *  photographed whatever was there. */
+/** Track-family segments near a point: midpoint, heading, width, family and
+ *  the tags that chose it — so a frame can be aimed at a trail rather than
+ *  at wherever the truck happened to spawn. */
+(window as unknown as { __tracks?: object }).__tracks = (r = 600, x?: number, z?: number): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z, out: object[] = [];
+  const seen = new Set<Seg>();
+  for (const arr of roadGrid.values()) for (const sg of arr) {
+    if (!sg.tk || seen.has(sg)) continue; seen.add(sg);
+    const mx = (sg.ax + sg.bx) / 2, mz = (sg.az + sg.bz) / 2, d = Math.hypot(mx - px, mz - pz);
+    if (d > r) continue;
+    const tags = sg.wid ? wayTagLog.get(sg.wid) : undefined;
+    out.push({ x: +mx.toFixed(1), z: +mz.toFixed(1), d: +d.toFixed(0), len: +Math.hypot(sg.bx - sg.ax, sg.bz - sg.az).toFixed(1),
+      hdg: +(Math.atan2(sg.bx - sg.ax, -(sg.bz - sg.az)) * 180 / Math.PI).toFixed(0), w: +(sg.hw * 2).toFixed(1),
+      fam: tags ? trackFamily(tags).fam : null, hw: tags?.highway, surface: tags?.surface, tt: tags?.tracktype, wid: sg.wid });
+  }
+  const sseen = new Set<StairSeg>();
+  for (const arr of stairGrid.values()) for (const s of arr) {
+    if (sseen.has(s)) continue; sseen.add(s);
+    const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2, d = Math.hypot(mx - px, mz - pz);
+    if (d > r) continue;
+    const tags = s.wid ? wayTagLog.get(s.wid) : undefined;
+    out.push({ x: +mx.toFixed(1), z: +mz.toFixed(1), d: +d.toFixed(0), len: +Math.hypot(s.bx - s.ax, s.bz - s.az).toFixed(1),
+      hdg: +(Math.atan2(s.bx - s.ax, -(s.bz - s.az)) * 180 / Math.PI).toFixed(0), w: +(s.hw * 2).toFixed(1),
+      fam: 'steps', hw: 'steps', surface: tags?.surface, wid: s.wid });
+  }
+  return out.sort((a, b) => (a as { d: number }).d - (b as { d: number }).d);
+};
+/** How much of each track family's DRAWN ribbon stands under the terrain it
+ *  is draped on: triangle centroids against the mesh the wheels read. A
+ *  draped way is seated at its vertices only, so a chord between two stations
+ *  12 m apart can sag into a crest; this is the number that says whether a
+ *  fragmented path is that or something else. */
+(window as unknown as { __trackburial?: object }).__trackburial = (r = 400): object => {
+  const px = state.x, pz = state.z, v = new THREE.Vector3();
+  const out: Record<string, { tris: number; buried: number; deep: number; worst: number; verts: number; vDeep: number }> = {};
+  scene.traverse((o) => {
+    const m = o as THREE.Mesh;
+    const name = (m.material as THREE.Material | undefined)?.name ?? '';
+    if (!m.isMesh || !name.startsWith('track-')) return;
+    const pos = m.geometry.getAttribute('position'), idx = m.geometry.getIndex();
+    if (!pos) return;
+    const n = idx ? idx.count : pos.count;
+    const rec = out[name] ??= { tris: 0, buried: 0, deep: 0, worst: 0, verts: 0, vDeep: 0 };
+    m.updateMatrixWorld();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+      if (Math.hypot(v.x - px, v.z - pz) > r) continue;
+      const g = meshSurfaceAt(v.x, v.z);
+      if (g === null) continue;
+      rec.verts++;
+      if (g - v.y > 0.1) rec.vDeep++;
+    }
+    for (let t = 0; t + 2 < n; t += 3) {
+      let cx = 0, cy = 0, cz = 0;
+      for (let k = 0; k < 3; k++) {
+        const i = idx ? idx.getX(t + k) : t + k;
+        v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+        cx += v.x / 3; cy += v.y / 3; cz += v.z / 3;
+      }
+      if (Math.hypot(cx - px, cz - pz) > r) continue;
+      const g = meshSurfaceAt(cx, cz);
+      if (g === null) continue;
+      rec.tris++;
+      const under = g - cy;
+      if (under > 0) rec.buried++;
+      if (under > 0.1) rec.deep++;
+      if (under > rec.worst) rec.worst = under;
+    }
+  });
+  for (const k of Object.keys(out)) out[k].worst = +out[k].worst.toFixed(2);
+  return out;
+};
 (window as unknown as { __place?: object }).__place = (x: number, z: number, h?: number): void => {
   teleportTo(x, z);
   if (h !== undefined) state.heading = h;
@@ -45909,7 +47542,7 @@ function chartLensUp(e: PointerEvent): boolean {
   const kind = chartLensDrag.kind;
   chartLensDrag = null;
   if (e.type === 'pointerup') {
-    audio.stone();
+    audio.ui();
     hudFlash(kind === 'tilt'
       ? `CHART TILT ${Math.round(chartTiltDeg)} DEG`
       : `MINIATURE BAND ${Math.round(chartBandScale * 100)}%`);
@@ -45937,7 +47570,7 @@ canvas.addEventListener('pointerdown', (e) => {
   // Each instrument swallows the DOWN; hudPtrs makes it swallow the UP too.
   if (scrubDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (chartLensDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
-  if (fpsDown(e) || layerDown(e) || autoDown(e) || poiDown(e)) { hudPtrs.add(e.pointerId); return; }
+  if (fpsDown(e) || sheetDown(e) || layerDown(e) || autoDown(e) || poiDown(e)) { hudPtrs.add(e.pointerId); return; }
   if (rewindDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (clockDown(e)) { hudPtrs.add(e.pointerId); try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (hudTap(e.clientX, e.clientY)) { hudPtrs.add(e.pointerId); return; } // an instrument swallowed it
@@ -46344,7 +47977,7 @@ function dropFix(x: number, z: number): Poi {
   const name = `FIX ${++fixN}`;
   const p: Poi = { name, x, z, kind: 'survey', pinned: true };
   pois.set(name, p);
-  audio.stone();
+  audio.ui();
   return p;
 }
 /**
@@ -46551,7 +48184,7 @@ function teleportTo(x: number, z: number): void {
   evictFromBuildings();
   dryAt = null;                   // dry-basin evidence belongs to where you WERE
   streamWorld(x, z);
-  audio.stone();
+  audio.ui();
 }
 /**
  * WHERE THE DOUBLE TAP IS ALLOWED TO LIVE.
@@ -48510,14 +50143,39 @@ function updatePois(): void {
       continue;
     }
     const right = camFwd.x * dz - camFwd.z * dx > 0;
+    // The bearing stays on its side but sits just inside the ENV/RIG rails.
+    // At LARGE the layer key can occupy the old fixed-height row.
+    const safety = hudSafeRects();
+    const baseY = Math.round(HH * (0.34 + i * 0.055));
+    let edgeLabel = p.pinned ? (right ? `${label} >` : `< ${label}`) : (right ? '>' : '<');
+    let chipWidth = 0, chipX = 0, chipY = baseY, open = false;
+    const inset = camMode === 'top' ? 29 : 22;
+    // A full name gets first claim. If every nearby row is occupied, a pinned
+    // bearing falls back to its arrow rather than disappearing behind the key.
+    for (let form = 0; form < (p.pinned ? 2 : 1) && !open; form++) {
+      if (form) edgeLabel = right ? '>' : '<';
+      chipWidth = textPW(fitP(edgeLabel, Math.round(HW * 0.5))) + 4 + (KIND_ICON[p.kind] ? 7 : 0);
+      chipX = right ? HW - chipWidth - inset : inset;
+      for (let row = 0; row <= 18 && !open; row++) {
+        for (const dy of row ? [-row * 9, row * 9] : [0]) {
+          const yy = clamp(baseY + dy, 20, HH - 30);
+          const blocked = safety.some((r) => chipX - 3 < r[0] + r[2] && chipX + chipWidth + 5 > r[0]
+            && yy - 10 < r[1] + r[3] && yy + 10 > r[1]);
+          const occupied = poiDraw.some((q) => q.edge !== 0 && q.edge === (right ? 1 : -1)
+            && Math.abs(q.y / hudS - yy) < 22);
+          if (!blocked && !occupied) { chipY = yy; open = true; break; }
+        }
+      }
+    }
+    if (!open) continue;
     poiDraw.push({
-      x: 0, y: innerHeight * (0.34 + i * 0.055),
+      x: chipX * hudS, y: chipY * hudS,
       // An edge chip is a BEARING, never a view — it points off-screen by
       // definition — so it is never ghosted. And only a PINNED place earns
       // its name on the rim: everything else reduces to its kind's colour
       // and symbol plus the caret, or a busy stretch of road stacks the rim
       // with a paragraph of places you did not ask about.
-      t: p.pinned ? (right ? `${label} >` : `< ${label}`) : (right ? '>' : '<'),
+      t: edgeLabel,
       c: POI_COLORS[p.kind], edge: right ? 1 : -1, rng, hid: false,
       name: p.name, kind: p.kind, pinned: !!p.pinned, d, tx: 0, ty: 0,
     });
@@ -49433,6 +51091,8 @@ const wheelMu = [0.9, 0.9, 0.9, 0.9];
 /** How much more than the tyres can hold the throttle is asking for: 0 hooked
  *  up, 1 spinning freely. Drives the sound and the spray, not the physics. */
 let wheelSlipL = 0;
+// Audio observes axle saturation without changing forces, wear or dust.
+let tyreAudioSlip = 0;
 /** The slip angle the body is actually running, in radians — what a driver
  *  feels through the seat and what the tyres are singing about. */
 let slipAng = 0;
@@ -49474,6 +51134,7 @@ function stepTraction(dt: number, surf: SurfParams, grip: number, thrust: number
     const delta = steerCur * CAR.steerMax;
     const af = Math.atan((v + AXLE_A * yawR) / uf) - delta * su;
     const ar = Math.atan((v - AXLE_A * yawR) / uf);
+    tyreAudioSlip = tyreCornerSlip(af, ar, Math.hypot(u, v), TYRE_K);
     const fyF = -capF * Math.tanh(TYRE_K * af);
     const fyR = -capR * Math.tanh(TYRE_K * ar);
     // THE CIRCLE, PER AXLE. Whatever the tyre is spending sideways it cannot
@@ -49756,6 +51417,8 @@ let dbgAmb: Record<string, unknown> = {};
 let dbgSlip: Record<string, unknown> = {};
 (window as unknown as { __slip?: object }).__slip = (): object => dbgSlip;
 let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0, ambFrothL = 0;
+let soundDrone = false, soundPrevX = 0, soundPrevY = 0, soundPrevZ = 0;
+let ambProbeX = Infinity, ambProbeZ = Infinity, ambHeightGain = 1;
 /** The room the last sample found, which `encL` is easing toward. */
 let encTarget = 0;
 /** Radius and weight of each water-probe ring — see the ambience sampler. */
@@ -50439,7 +52102,43 @@ function servedBuildRow(): string {
   if (servedBuildState === 'failed') return 'OFFLINE — CANNOT ASK';
   if (servedBuild === null) return 'CHECKING…';
   if (DRIVE_BUILD === 'web') return `SERVER HAS ${servedBuild}`;
+  if (servedBuild !== DRIVE_BUILD) void probeWorker(true);
   return servedBuild === DRIVE_BUILD ? 'CURRENT' : `STALE — SERVER HAS ${servedBuild} — RELOAD`;
+}
+// ── WHY "RELOAD" SOMETIMES DOES NOTHING ──
+//
+// The shell and bundle come from the service worker's cache, first, and the
+// worker only moves to a new build once a new /sw.js has INSTALLED — which
+// takes the whole 3 MB bundle into a new cache before the old one is let go.
+// Reported from the seat: About said STALE and reload after reload stayed on
+// it. So ABOUT now says what the worker holds and what it is doing (a build
+// cached, one installing, one waiting), a stale page asks the worker to look
+// for its update rather than waiting for the browser to, and ABOUT carries a
+// button that drops the offline copy alone and reloads — the survey, the
+// settings and the sign-in stay, unlike RESET THIS DEVICE.
+let workerRow = '…';
+let workerAskedUpdate = false;
+async function probeWorker(stale = false): Promise<void> {
+  try {
+    if (!('serviceWorker' in navigator)) { workerRow = 'NONE (NO WORKER SUPPORT)'; return; }
+    const reg = await navigator.serviceWorker.getRegistration();
+    const names = typeof caches === 'undefined' ? [] : (await caches.keys()).filter((n) => n.startsWith('drive-shell-'));
+    const held = names.map((n) => n.slice('drive-shell-'.length)).join(', ') || 'NOTHING CACHED';
+    const st = !reg ? 'NO WORKER' : [reg.installing ? 'INSTALLING' : '', reg.waiting ? 'WAITING' : '', reg.active ? 'ACTIVE' : ''].filter(Boolean).join(' + ');
+    workerRow = `${held} · ${st}`;
+    if (stale && reg && !workerAskedUpdate) { workerAskedUpdate = true; await reg.update().catch(() => undefined); }
+  } catch (e) { workerRow = `CANNOT READ (${String(e).slice(0, 40)})`; }
+}
+async function loadLatestBuild(status: (s: string, bad?: boolean) => void): Promise<void> {
+  if (!navigator.onLine) { status('OFFLINE — THE LATEST BUILD HAS TO COME OFF THE NETWORK', true); return; }
+  status('DROPPING THE OFFLINE COPY…');
+  const workers = await dropWorkers();
+  let n = 0;
+  try {
+    if (typeof caches !== 'undefined') for (const k of await caches.keys()) if (k.startsWith('drive-shell-') && await caches.delete(k)) n++;
+  } catch { /* best effort */ }
+  status(`DROPPED ${n} ${n === 1 ? 'COPY' : 'COPIES'}${workers ? ' AND THE WORKER' : ''} · RELOADING…`);
+  setTimeout(() => { location.reload(); }, 900);
 }
 function telemetryReport(): string {
   const secs = (performance.now() - sessAt) / 1000;
@@ -50634,6 +52333,7 @@ function telemetryReport(): string {
       + ` · cooldown ${vegSeedDeferred ? `${VEG_SEED_CATCHUP}ms (seeding behind)` : '900ms'}`
       + ` · no distance trigger, no priority: the near tier commits with the far one`);
   }
+  if (CANOPY_ON) L.push(`canopy on · rings ${canopyGrids.length} · ${(canopyStat.tris / 1e3).toFixed(0)}k tris · build ${canopyStat.ms}ms sliced · stands in for ${canopyStat.hid} trees (${(canopyStat.share * 100).toFixed(0)}% of the near gather) · tree budget x${canopyBudgetK().toFixed(2)}`);
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge} · mid ${_treeMid} at ${EZ_FULL_PX}px`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
@@ -50720,6 +52420,29 @@ function telemetryReport(): string {
       + ` · legend ${themeLegend().map((r) => r.name).join(',') || '—'}`);
     L.push(`ground: holes ${holeStat.now} (never shown ${holeStat.unshown}) · pop-outs ${holeStat.pops} · hidden ${(holeStat.ms / 1000).toFixed(1)}s longest ${Math.round(holeStat.max)}ms · far asked ${farTiles.size - farMeshes.size} stale ${farStale.size} inflight ${farAsking.size}`);
     L.push(`world pass: draw calls mean ${Math.round(drawStat.sumCalls / Math.max(1, drawStat.n))} max ${drawStat.maxCalls} · triangles mean ${(drawStat.sumTris / Math.max(1, drawStat.n) / 1e6).toFixed(2)}M max ${(drawStat.maxTris / 1e6).toFixed(2)}M · recent ${n} passes p50 ${q(0.5)}M p95 ${q(0.95)}M · last ${(drawStat.tris / 1e6).toFixed(2)}M / ${drawStat.calls} calls`); }
+    {
+      // WHERE THE TRIANGLES ARE. The world pass's count says how many and not
+      // whose, and on a GPU-bound frame (the gap row) that is the question.
+      // Visible meshes only, by name with the per-tile suffix stripped, an
+      // instanced mesh counted at its instance count. Before frustum culling,
+      // so an upper bound on what was submitted, not a measurement of it.
+      const by: Record<string, number> = {};
+      let all = 0;
+      scene.traverseVisible((o) => {
+        const m = o as THREE.Mesh & { isInstancedMesh?: boolean; count?: number };
+        if (!m.isMesh) return;
+        const g = m.geometry as THREE.BufferGeometry | undefined;
+        const n = ((g?.index?.count ?? g?.getAttribute?.('position')?.count ?? 0) / 3) * (m.isInstancedMesh ? (m.count ?? 1) : 1);
+        const mn = (m.material as THREE.Material | undefined)?.name;
+        const k = ((o.name || (mn ? `mat:${mn}` : '') || (o.parent?.name ? `in:${o.parent.name}` : '') || 'unnamed')
+          .replace(/[\s/:]-?\d+.*$/, '')) || 'unnamed';
+        by[k] = (by[k] ?? 0) + n; all += n;
+      });
+      const top = Object.entries(by).sort((x, y) => y[1] - x[1]).slice(0, 10);
+      L.push(`scene triangles (visible, pre-cull) ${(all / 1e6).toFixed(2)}M · ${top.map(([k, v]) => `${k} ${(v / 1e6).toFixed(2)}M`).join(' · ')}`);
+    }
+    L.push(`non-finite frames ${nanStat.hit} of ${nanStat.reads} luma reads · worst ${nanStat.worstCells} of ${LUMA_W * LUMA_H} cells`
+      + (nanStat.last ? ` · last ${JSON.stringify(nanStat.last)}` : ''));
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
   { const r = goalSolveStat; if (r.runs) L.push(`route solves ${r.runs} (found ${r.found} failed ${r.failed}) · ms/solve ${(r.totalMs / r.runs).toFixed(0)} (graph ${(r.graphTotalMs / r.runs).toFixed(0)}) max ${Math.round(r.maxMs)} · slices ${r.slices} max ${r.maxSliceMs.toFixed(1)}ms · last span ${Math.round(r.spanMs)}ms · walked ${r.walked}/${r.nodes} (fine ${graphStat.fine} coarse ${graphStat.coarse} portals ${graphStat.portals}) · graph cached ${graphStat.cached ?? 0} · tiles skipped ${r.tilesSkipped} hit ${r.tilesHit} · last ${r.last}`); }
   { const w = swardLedger; L.push(`sward sweeps ${w.sweeps} · steps ${w.steps} ms ${(w.stepMs / Math.max(1, w.steps)).toFixed(1)} max ${Math.round(w.stepMax)} · deferred ${w.deferred} · mask ${w.masks} ms ${(w.maskMs / Math.max(1, w.masks)).toFixed(1)} max ${Math.round(w.maskMax)}`); }
@@ -51188,6 +52911,7 @@ function tick(now: number): void {
   // same first-order lag; what they disagree about is what the front wheels
   // can DO with it.
   const SRATE0 = 7 * tune.steer;
+  tyreAudioSlip = 0; // also clears on park, GPS mode and switching to arcade
   if (!real.on && !parked && tractionMode > 0) {
     steerCur += clamp(steer - steerCur, -SRATE0 * dt, SRATE0 * dt);
     // The rack still turns while parked — a stopped truck can be pointed — but
@@ -52105,148 +53829,113 @@ function tick(now: number): void {
   // The GPU sward is uniform writes and a field rebuild only when the truck
   // leaves the middle of it, so it runs every frame rather than on a slow tick.
   { const _p = performance.now(); swardFrame(); profAdd('swardFrame', _p); }
+  { const _p = performance.now(); stepCanopy(_p); profAdd('canopy', _p); }
   // Same shape and for the same reason: a sliced CPU sweep the shader reads,
   // rebuilt when the truck leaves the middle of it rather than on a tick.
   { const _p = performance.now(); sunmFrame(); profAdd('sunmFrame', _p); }
-  // ── the world's own sound, sampled around the truck ──
-  // Cheap and cached: a ring of water probes and a look at this cell's
-  // foliage, twice a second. The bed is DUCKED by motion and by the engine
-  // — it was always there; the idle was on top of it.
+  // The listener belongs to the active vehicle, including its chart view.
+  // Cab/chase stay at the truck; drone nose/trailing stay at the drone.
+  const earDrone = droneEye();
+  const earX = earDrone ? drone.x : state.x, earZ = earDrone ? drone.z : state.z;
+  const earY = earDrone ? drone.y : bodyY, earH = earDrone ? drone.heading : state.heading;
+  const listenerChanged = earDrone !== soundDrone;
+  const earSpeed = earDrone
+    ? !listenerChanged && dt > 0 ? Math.min(40, Math.hypot(earX - soundPrevX, earY - soundPrevY, earZ - soundPrevZ) / dt) : 0
+    : Math.hypot(state.speed, slideV);
+  soundDrone = earDrone; soundPrevX = earX; soundPrevY = earY; soundPrevZ = earZ;
+  const truckDist = earDrone ? Math.hypot(state.x - earX, bodyY - earY, state.z - earZ) : 0;
+  const truckAt = truckDist > 1
+    ? ((state.x - earX) * Math.cos(earH) + (state.z - earZ) * Math.sin(earH)) / truckDist : 0;
+  audio.listener(truckDist, truckAt);
   if (wetDbgOn && nowMs - wetDbgAt > 2000) { wetDbgAt = nowMs; repaintWetDebug(); }
-  if (nowMs - ambSampledAt > 500) {
-    ambSampledAt = nowMs;
-    // THE RULE (the owner's): the bed plays what is ACTUALLY THERE, never a
-    // biome guess. Each water probe brings back depth AND current, so the
-    // one ring tells three truths — still water (a lake, the sea) laps low
-    // and wide, a river runs mid, and fast water over the rapids' own
-    // boulder grid froths bright. Birds and rustle already answer to this
-    // cell's real foliage the same way.
-    // ── THE RING IS THREE RINGS, AND IT KNOWS WHICH WAY THE WATER IS ──
-    //
-    // It was one ring at 24m spent entirely on "how much", so a river you were
-    // driving alongside sat in the middle of your head — and a river a hundred
-    // metres off did not exist at all. That second half was invisible for as
-    // long as every dry probe came back half a metre deep (see waterInfoAt):
-    // the bed played everywhere, so nobody could tell it could not hear past a
-    // cricket pitch. Measured at the Yosemite valley floor with the default
-    // gone: the Merced is 67m away, the 24m, 40m and 60m rings are all dry and
-    // its nearest wet probe is on the 90m ring. A river you can SEE from the
-    // road, silent.
-    //
-    // Water is audible a long way and quieter further off, so distance is a
-    // WEIGHT and not a radius. Summing the wet probes' own directions then
-    // gives the bearing for free — a SUM, not a nearest, so water on both
-    // sides of a ford cancels to the middle, which is where it actually is.
-    // …AND THE FAR RINGS ARE DENSER. Six probes on a 220 m ring are 230 m
-    // apart, which is how the Merced — a river twenty metres wide, in
-    // plain sight — went between every one of them: the audit measured
-    // `riverRaw 0.09` from a single wet probe on the 120 m ring and nothing
-    // beyond. Twelve on the outer rings, 38 probes in all, twice a second;
-    // each is a hydro sample and the whole ring is cheaper than one tree.
-    // The weights rose with it: a river you can see from the road at
-    // sixty metres is worth about −30 dBFS, not −42.
-    // AND THE NEAREST WET PROBE SETS THE LEVEL; the sum only adds breadth.
-    // A sum alone is a sum over how many probes happen to land in a river
-    // twenty metres wide: the Merced at 67 m scored one hit on the 120 m
-    // ring and read 0.15 (−40 dBFS) for a river in plain sight. The nearest
-    // ring's weight is what that distance is worth — −30 dBFS at sixty
-    // metres — and every further hit adds a little, so a lake on the beam
-    // is still wider than a brook.
+  if (listenerChanged || nowMs - ambSampledAt > 500 || Math.hypot(earX - ambProbeX, earZ - ambProbeZ) > 50) {
+    ambSampledAt = nowMs; ambProbeX = earX; ambProbeZ = earZ;
+    const aboveGround = earDrone ? Math.max(0, earY - groundAt(earX, earZ)) : 0;
+    ambHeightGain = 1 / Math.sqrt(1 + Math.pow(aboveGround / 35, 2));
+    const listenerWet = !earDrone && surfKind === 'water';
     let wetW = 0, maxW = 0, flow = 0, bx = 0, bz = 0, near = 0;
+    // Keep the bounded 38-probe budget; distance now includes listener height.
     for (const [rad, w, n] of AMB_WATER_RINGS) {
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2;
-        const wi = waterInfoAt(state.x + Math.sin(a) * rad, state.z + Math.cos(a) * rad);
-        // `wi.wet`, NOT `depth > 0.06` — see waterInfoAt. The depth is a
-        // default on dry land and this ring is the one caller asking whether
-        // there IS any water, so the old test was true at every point on the
-        // planet.
+        const wi = waterInfoAt(earX + Math.sin(a) * rad, earZ + Math.cos(a) * rad);
         if (!wi.wet || wi.depth <= 0.06) continue;
-        wetW += w; maxW = Math.max(maxW, w);
-        bx += Math.sin(a) * w; bz += Math.cos(a) * w;
-        // FROTH IS A NEAR THING. Rapids two hundred metres off are a wash, not
-        // a rattle, so only the inner ring opens the bright channel.
-        if (rad === AMB_WATER_RINGS[0][0]) { near++; flow = Math.max(flow, wi.speed); }
+        const weight = w * rad / Math.max(rad, Math.hypot(rad, aboveGround));
+        wetW += weight; maxW = Math.max(maxW, weight);
+        bx += Math.sin(a) * weight; bz += Math.cos(a) * weight;
+        if (rad === AMB_WATER_RINGS[0][0] && aboveGround < 25) { near++; flow = Math.max(flow, wi.speed); }
       }
     }
-    ambRiverL = clamp(maxW + wetW / 8 + (surfKind === 'water' ? 0.4 : 0), 0, 1);
-    // Into the TRUCK's frame. Forward is (sin h, -cos h), so the right vector
-    // is (cos h, sin h) — the dot with it is the ear the water is in.
-    ambRiverAt = wetW === 0 || surfKind === 'water' ? 0
-      : clamp(((bx / wetW) * Math.cos(state.heading) + (bz / wetW) * Math.sin(state.heading)), -1, 1);
-    // The room, on the same half-second tick as the rest of the bed: a hint
-    // walk and a grid-cell walk are cheap, and a ceiling does not move.
-    encTarget = enclosureAt(state.x, state.z, bodyY).e;
-    const [cxA, czA] = vegCellOf(state.x, state.z);
+    ambRiverL = clamp(maxW + wetW / 8 + (listenerWet ? 0.4 : 0), 0, 1);
+    ambRiverAt = wetW === 0 || listenerWet ? 0
+      : clamp(((bx / wetW) * Math.cos(earH) + (bz / wetW) * Math.sin(earH)), -1, 1);
+    encTarget = enclosureAt(earX, earZ, earY).e;
+    const [cxA, czA] = vegCellOf(earX, earZ);
     let rap = 0;
     for (let ox = -1; ox <= 1; ox++) {
       for (let oz = -1; oz <= 1; oz++) rap += (rapidRocks.get(`${cxA + ox},${czA + oz}`) ?? []).length;
     }
-    ambFrothL = near > 0 || surfKind === 'water' ? clamp(flow / 2.2 + rap / 6, 0, 1) : 0;
+    ambFrothL = near > 0 || listenerWet ? clamp(flow / 2.2 + rap / 6, 0, 1) : 0;
     const sites = vegGrid.get(`${cxA},${czA}`) ?? [];
     let fol = 0;
     for (const s of sites) if (s.k !== 'rock' && s.k !== 'spire') fol++;
     ambVegL = clamp(fol / 12, 0, 1);
-    // THE COVER, as grass: five WorldCover texels (here and 30 m out on four
-    // sides — a texel is 38 m). Grassland and crop hiss in the wind, a
-    // wetland and scrub less, a wood's floor a little, and built, bare,
-    // snow and water not at all.
     let gr = 0;
     for (const [ox, oz] of [[0, 0], [30, 0], [-30, 0], [0, 30], [0, -30]]) {
-      const c = sampleCover(state.x + ox, state.z + oz);
+      const c = sampleCover(earX + ox, earZ + oz);
       gr += c === COVER.grass ? 1 : c === COVER.crop ? 0.9 : c === COVER.wetland ? 0.7
         : c === COVER.shrub ? 0.5 : c === COVER.moss ? 0.4 : c === COVER.tree ? 0.25 : 0;
     }
     ambGrassL = gr / 5;
   }
   const windAmb = clamp(windKmhNow() / 55, 0, 1);
-  const bed = clamp(1 - Math.abs(state.speed) / 7, 0, 1) * (engineSt === 'on' ? 0.4 : 1);
+  const bed = ambientBed(earSpeed, !earDrone && engineSt === 'on');
   dbgAmb = {
-    rustle: +(windAmb * (0.25 + 0.75 * ambVegL) * Math.max(bed, 0.2)).toFixed(3),
+    listener: earDrone ? 'drone' : 'truck', distance: +truckDist.toFixed(1),
+    rustle: +(windAmb * ambVegL * bed * ambHeightGain).toFixed(3),
     river: +(ambRiverL * (0.35 + 0.65 * bed)).toFixed(3),
-    // Dawn arrives gradually in the soundscape, as it does in the light.
-    birds: +(clamp((sunAlt + 0.04) / 0.16, 0, 1) * (1 - wxL.rain) * ambVegL * bed).toFixed(3),
+    // Activity belongs to the habitat; masking affects phrase gain, not scheduling.
+    birds: +(clamp((sunAlt + 0.04) / 0.16, 0, 1) * (1 - wxL.rain) * ambVegL).toFixed(3),
     wind: +windAmb.toFixed(2), veg: +ambVegL.toFixed(2), riverRaw: +ambRiverL.toFixed(2),
     froth: +ambFrothL.toFixed(2), engine: engineSt, brush: +brushAmt.toFixed(2),
     riverAt: +ambRiverAt.toFixed(2), enc: +encL.toFixed(3), encRaw: +encTarget.toFixed(3),
     grass: +ambGrassL.toFixed(2), shake: +chassisShake.toFixed(2), shakeRaw: +chassisShakeRaw.toFixed(2),
     brushPeak: +(brushPeak = Math.max(brushPeak, brushAmt)).toFixed(2),
   };
-  // THE GLIDE IS THE POINT. A portal is a hard edge in geometry and a soft one
-  // in air — you hear a tunnel a moment before you are inside it — and this
-  // half of the ease is what carries the approach; `space()` has its own,
-  // shorter, on the filter itself.
   if (encForceUntil > nowMs) encL = encForce;
   else encL += (encTarget - encL) * Math.min(1, dt * 2.5);
-  // Parked with the key out is the one time the driver is listening, and the
-  // cab's shell opens for it — see space().
   const parkedNow = engineSt !== 'on' && Math.abs(state.speed) < 0.5 ? 1 : 0;
-  audio.space(encL, camMode === 'cab' ? 1 : 0, parkedNow);
+  audio.space(encL, !earDrone && camMode === 'cab' ? 1 : 0, parkedNow);
   audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number,
-    windAmb, ambFrothL, ambRiverAt, ambGrassL * Math.max(bed, 0.2));
-  // THE DRONE, HEARD — from wherever the listener is. In the drone view you
-  // are riding it; from the truck it is a machine some way off, on one side,
-  // working harder in a climb or a dash than in a hover. Spool 0 on the rack
-  // releases the voice, so the call is unconditional and cheap.
+    windAmb, ambFrothL, ambRiverAt, ambGrassL * bed * ambHeightGain, bed * ambHeightGain);
+  // Truck-relative Doppler for the birdscape cohort (world-fixed habitat).
+  // Virtual chorus anchor sits ahead of the truck in heading: forward speed
+  // approaches it (positive radial → higher pitch); reverse recedes. Drone
+  // ear skips — the habitat is under the truck, not under the aircraft.
+  // No-op while birdscape is disabled (phrase whistlers ignore this).
+  if (!earDrone) {
+    const aboveGround = Math.max(0, earY - groundAt(earX, earZ));
+    audio.birdscapeListener(aboveGround, 0, state.speed);
+  } else {
+    audio.birdscapeListener(Math.max(0, earY - groundAt(earX, earZ)), 0, 0);
+  }
   {
-    const own = camMode === 'drone';
-    const dx = drone.x - state.x, dz = drone.z - state.z;
-    const dist = Math.hypot(dx, drone.y - bodyY, dz);
-    const bearing = dist > 1 ? clamp((dx / dist) * Math.cos(state.heading) + (dz / dist) * Math.sin(state.heading), -1, 1) : 0;
+    const dx = drone.x - earX, dz = drone.z - earZ;
+    const dist = Math.hypot(dx, drone.y - earY, dz);
+    const bearing = dist > 1 ? clamp((dx * Math.cos(earH) + dz * Math.sin(earH)) / dist, -1, 1) : 0;
     const climb = dt > 0 ? Math.abs(drone.y - droneYPrev) / dt : 0;
     droneYPrev = drone.y;
     const load = clamp(climb / DRONE.CLIMB + Math.abs(drone.pitch) * 2 + Math.abs(drone.roll) * 1.5, 0, 1);
-    audio.drone(drone.spool, dist, load, bearing, own);
+    audio.drone(drone.spool, dist, load, bearing, earDrone);
   }
-  // The squeal's raw inputs, photographed at the same instant the mixer
-  // reads them — chasing "SLIP lit, tyre silent" needs the SIGNAL, not
-  // another guess at the gain.
-  dbgSlip = { skid: +skid.toFixed(3), slideV: +slideV.toFixed(2), spinL: +wheelSlipL.toFixed(3),
+  const audioSlip = Math.max(skid, tyreAudioSlip);
+  dbgSlip = { skid: +skid.toFixed(3), axle: +tyreAudioSlip.toFixed(3), audio: +audioSlip.toFixed(3),
+    slideV: +slideV.toFixed(2), spinL: +wheelSlipL.toFixed(3),
     surf: surfKind, q: +surfQ.toFixed(2), kmh: +(state.speed * 3.6).toFixed(0) };
-  audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, skid,
+  audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, audioSlip,
     surfKind === 'water' ? 0 : surfQ, wheelSlipL, windAmb,
     engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0,
-    dt > 0 && surfKind !== 'water' ? chassisShake : 0, wxL.wet);
+    dt > 0 && surfKind !== 'water' ? chassisShake : 0, wxL.wet, earSpeed, Math.hypot(state.speed, slideV));
   // The rig against the world: bodywork on a wall while moving, the hull's
   // wash through water, and the slap of arriving in it with any speed on.
   // The graze's floor rose from 0.4 to 0.55 of the mix: a lean along a rail
@@ -53091,6 +54780,8 @@ function tick(now: number): void {
   // froze the entire game on the first idle cycle — dead renderer, dead
   // streamer, and every later tap reading as a hang (owner-caught, live).
   if (attractGoI !== null) attractGoNow();
+  // The SHEET's frame, read in the task that presented it.
+  if (sheet.grab) { const g = sheet.grab; sheet.grab = null; g(canvas); }
   profTickEnd('draw:misc');
   tickN++;
   requestAnimationFrame(tick);
@@ -53496,6 +55187,56 @@ function projectAuthoringPoint(x: number, z: number): [number, number] | null {
     (.5 - authoringProject.y * .5) * HH,
   ];
 }
+/**
+ * THE MAPPED COASTLINE, DRAWN WHILE THE WATER VIEW IS UP.
+ *
+ * The sea's drawn edge, the bed under it and the cover raster are three
+ * answers to "where does the land stop", and the OSM `natural=coastline` way
+ * is the fourth — the only one a surveyor drew. Asked for from the seat after
+ * a hole opened between the beach and the water at the Twelve Apostles: with
+ * the vector on the glass beside the WATER raster, a gap can be read as the
+ * water stopping short of the map, or the map being wrong, at a glance.
+ *
+ * A cyan line on the segment, and a short tick every segment on its SEA side
+ * (OSM winds water on the right), so a reversed way is visible too. Within
+ * 900 m of the render focus; one path, like the authoring cells.
+ */
+function drawCoastDebug(): void {
+  if (dbgView !== 'water' || !coastSegs.size) return;
+  const [fx, fz] = renderFocusXZ();
+  hctx.save();
+  hctx.strokeStyle = '#3ff0ff';
+  hctx.globalAlpha = .95;
+  hctx.lineWidth = 1.5;
+  hctx.setLineDash([]);
+  hctx.beginPath();
+  const R2 = 900 * 900;
+  const ticks: Array<[number, number, number, number]> = [];
+  for (const arr of coastSegs.values()) {
+    for (const [ax, az, bx, bz] of arr) {
+      const mx = (ax + bx) * .5, mz = (az + bz) * .5;
+      if ((mx - fx) * (mx - fx) + (mz - fz) * (mz - fz) > R2) continue;
+      const a = projectAuthoringPoint(ax, az), b = projectAuthoringPoint(bx, bz);
+      if (!a || !b) continue;
+      hctx.moveTo(a[0], a[1]); hctx.lineTo(b[0], b[1]);
+      const L = Math.hypot(bx - ax, bz - az) || 1;
+      // water on the right in the geographic frame is (dz, -dx)·… in this
+      // +z-south frame: see coastSideAt's derivation.
+      const sx = mx + (-(bz - az) / L) * 4, sz = mz + ((bx - ax) / L) * 4;
+      ticks.push([mx, mz, sx, sz]);
+    }
+  }
+  hctx.stroke();
+  hctx.beginPath();
+  for (const [mx, mz, sx, sz] of ticks) {
+    const a = projectAuthoringPoint(mx, mz), b = projectAuthoringPoint(sx, sz);
+    if (!a || !b) continue;
+    hctx.moveTo(a[0], a[1]); hctx.lineTo(b[0], b[1]);
+  }
+  hctx.lineWidth = 1;
+  hctx.stroke();
+  hctx.restore();
+}
 /** What the overlay costs, because it runs EVERY FRAME while a raster stroke
  *  is up and its dearest call is `groundAt` — one per cell, measured at about
  *  650 ns elsewhere in this file. `PREVIEW_CELL_CAP` is what bounds it, and
@@ -53644,34 +55385,8 @@ function drawAuthoringPreviews(): void {
   if (reset) { authorPrevMs = authorPrevFrames = authorPrevMax = authorPrevPoints = 0; }
   return out;
 };
-// The X-RAY DEPTH view: the luma map, decoded and painted edge to edge under
-// the instruments. Sky is blue (it decodes as the far plane — the dome writes
-// no depth), terrain is grey by log distance. Same rendering as the
-// depth-map-shot fixture, so a phone screenshot and a harness capture argue
-// from the same picture.
-let xrayCv: HTMLCanvasElement | null = null;
-let xrayImg: ImageData | null = null;
-function drawLumaMap(): void {
-  if (!xrayCv) { xrayCv = document.createElement('canvas'); xrayCv.width = LUMA_W; xrayCv.height = LUMA_H; }
-  const c2 = xrayCv.getContext('2d')!;
-  if (!xrayImg) xrayImg = c2.createImageData(LUMA_W, LUMA_H);
-  const px = xrayImg.data;
-  for (let gy = 0; gy < LUMA_H; gy++) {
-    for (let gx = 0; gx < LUMA_W; gx++) {
-      const i = (gy * LUMA_W + gx) * 4;
-      const m = ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar;
-      const o = ((LUMA_H - 1 - gy) * LUMA_W + gx) * 4;   // buffer is bottom-up
-      if (m >= lumaFar * 0.95) { px[o] = 20; px[o + 1] = 34; px[o + 2] = 66; }
-      else {
-        const v = Math.round(30 + (Math.log(1 + m) / Math.log(1 + lumaFar)) * 225);
-        px[o] = v; px[o + 1] = v; px[o + 2] = v;
-      }
-      px[o + 3] = 255;
-    }
-  }
-  c2.putImageData(xrayImg, 0, 0);
-  hctx.drawImage(xrayCv, 0, 0, HW, HH);
-}
+// DEPTH now reads the full scene depth texture in the GPU pass. The small
+// luma/depth sensor remains available to autofocus and its probes.
 // The reference's limited palette.
 // Retinted to the Glass spec's targets (§4): text is BONE (warm paper, not
 // blue-white), edge is the spec's aqua, dim its aquaDim, and the amber /
@@ -55744,6 +57459,51 @@ function loadSpots(): void {
 }
 function saveSpots(): void {
   try { localStorage.setItem(SPOTS_KEY, JSON.stringify(spots)); } catch { /* full or blocked: the list is still live this session */ }
+  try { localStorage.setItem(SPOT_TIMES_KEY, JSON.stringify(spotTimes)); } catch { /* as above */ }
+}
+// ── AND THEY RIDE THE SYNC ──
+// A spot was localStorage alone, so a device reset lost them while the roads
+// came back on sign-in. Each spot now has a key (its place at 1e-4) and two
+// moments, saved and deleted, kept beside the list; the sync sends them and
+// merges the durable copy back, max on both, live while saved > deleted — so
+// a delete here is not undone by another device that still has the spot.
+const SPOT_TIMES_KEY = 'drive.spots.times.v1';
+let spotTimes: Record<string, { at: number; gone: number }> = {};
+try { spotTimes = JSON.parse(localStorage.getItem(SPOT_TIMES_KEY) ?? '{}') as typeof spotTimes; } catch { spotTimes = {}; }
+const spotKey = (d: { lat: number; lon: number }): string => `${d.lat.toFixed(4)},${d.lon.toFixed(4)}`;
+function spotsDump(): Record<string, { at: number; gone: number; name: string; sub: string; lat: number; lon: number; h: number }> {
+  const out: ReturnType<typeof spotsDump> = {};
+  const now = Date.now();
+  for (const d of spots) {
+    const k = spotKey(d);
+    const t = spotTimes[k] ?? (spotTimes[k] = { at: now, gone: 0 });
+    // A spot saved before this existed has no moment; now is when it joins.
+    if (t.at <= t.gone) t.at = now;
+    out[k] = { at: t.at, gone: t.gone, name: d.name, sub: d.sub, lat: d.lat, lon: d.lon, h: d.h };
+  }
+  for (const [k, t] of Object.entries(spotTimes)) {
+    if (!out[k] && t.gone >= t.at) out[k] = { at: t.at, gone: t.gone, name: '', sub: '', lat: +k.split(',')[0], lon: +k.split(',')[1], h: 0 };
+  }
+  return out;
+}
+function spotsMerge(rows: Record<string, { at?: number; gone?: number; name?: string; sub?: string; lat?: number; lon?: number; h?: number }>): number {
+  let changed = 0;
+  for (const [k, r] of Object.entries(rows ?? {})) {
+    const had = spotTimes[k] ?? { at: 0, gone: 0 };
+    const at = Math.max(had.at, Number(r.at) || 0), gone = Math.max(had.gone, Number(r.gone) || 0);
+    spotTimes[k] = { at, gone };
+    const i = spots.findIndex((d) => spotKey(d) === k);
+    if (at > gone && i < 0 && Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))) {
+      spots.push({ name: String(r.name || 'WAYPOINT'), sub: String(r.sub ?? ''), lat: Number(r.lat), lon: Number(r.lon), h: Number(r.h) || 0 });
+      changed++;
+    } else if (gone >= at && i >= 0) { spots.splice(i, 1); changed++; }
+  }
+  if (changed) {
+    spots.sort((a, b) => (spotTimes[spotKey(b)]?.at ?? 0) - (spotTimes[spotKey(a)]?.at ?? 0));
+    if (spots.length > 40) spots.length = 40;
+  }
+  saveSpots();
+  return changed;
 }
 /** Everything the destinations list shows: your own first, then the authored
  *  ones. Recomputed per frame — the list is tens of entries, not thousands. */
@@ -55767,7 +57527,10 @@ function saveSpot(): void {
   const sub = road ? place || coord : coord;
   spots.unshift({ name, sub, lat: +la.toFixed(5), lon: +lo.toFixed(5), h });
   if (spots.length > 40) spots.length = 40;
+  const t = (spotTimes[spotKey(spots[0])] ??= { at: 0, gone: 0 });
+  t.at = Math.max(Date.now(), t.gone + 1);
   saveSpots();
+  sync.nudge();
   audio.stone();
 }
 
@@ -56416,8 +58179,8 @@ let poiDraw: PoiDraw[] = [];
 function hudSafeRects(): Array<[number, number, number, number]> {
   const mw = Math.min(58, Math.floor(HW * 0.34));   // the dock square (see drawHud)
   const my = HH - 4 - 23 - mw - 3;
-  return [
-    [0, 0, HW, 34 + (camMode === 'top' && chartOn.stream ? 30 : 0)],  // compass strip + the justified top row
+  const reserved: Array<[number, number, number, number]> = [
+    [0, 0, HW, 34 + topReadoutH()],  // compass strip + the justified top row + any readouts under it
     [0, 32, 74, 18],                                 // the task chip, under the top row
     [HW - 56, 18, 56, 18],                           // MENU, on the heading row
     [0, my - 200, camMode === 'top' ? 24 : 17, 200], // ENV stack, or the chart tilt rail
@@ -56427,6 +58190,15 @@ function hudSafeRects(): Array<[number, number, number, number]> {
     [HW - 80, HH - 72, 80, 72],                      // dial, its radial lamps, trip
     [0, HH - 30, Math.round(HW * 0.72), 30],         // the place line and coordinates
   ];
+  // The layer key wraps with HUD width, and its legend grows with the active
+  // view. Read the actual layout from this HUD frame, after the key was drawn.
+  // Fixed guesses miss several rows at LARGE and reserve empty sky when off.
+  if (keyShown) {
+    for (const r of layerRects) reserved.push([r.x, r.y, r.w, r.h]);
+    if (legendRect.w) reserved.push([legendRect.x, legendRect.y, legendRect.w, legendRect.h]);
+  }
+  if (xrayMode === 1 || xrayMode === 3) reserved.push([Math.round(HW / 2) - 54, Math.round(HH * 0.58), 108, 37]);
+  return reserved;
 }
 /** ── THE DIAL'S TICK RING IS STATIC, AND IT WAS DRAWN A PIXEL AT A TIME ──
  *
@@ -56594,6 +58366,457 @@ function drawStreamHeader(): void {
     + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
     6, 48, UI.soft);
 }
+/** How far the readouts under the top row push everything below them. */
+const topReadoutH = (): number => (chartOn.stream ? 30 : 0) + (chartOn.shot ? 28 : 0);
+/**
+ * THE SHOT READOUT: a screenshot that says how to take it again.
+ *
+ *   37.74995 -119.59604 H91 CHASE        the vehicle you are viewing from
+ *   GOD 12 -40 AZ194 EL42 D90 F55        the camera, as __godcam numbers
+ *   18:00 SUN -4 CLEAR  hydrolook=1      the hour, the sky, the look switches
+ *
+ * The camera line is relative to that vehicle, because a reload of the
+ * first line's place puts the vehicle at local (0, 0): `__godcam({x, z, az,
+ * el, dist, fov})` then stands the camera where this one stood. The target is
+ * where the view ray meets the ground (200 m out when it meets sky).
+ */
+const shotFwd = new THREE.Vector3();
+/** The three readout lines and the camera as __godcam numbers, from the frame
+ *  as it stands. Shared by the overlay and the SHEET header. */
+function shotState(): { lines: [string, string, string]; god: { x: number; z: number; az: number; el: number; dist: number; fov: number } } {
+  const [lat, lon] = localToLatLon(viewX(), viewZ());
+  const hdg = Math.round(((viewH() * 180) / Math.PI + 360) % 360);
+  const cam = drone.up ? (camMode === 'cab' ? 'DRONE-NOSE' : 'DRONE') : camMode.toUpperCase();
+  camera.getWorldDirection(shotFwd);
+  const c = camera.position;
+  let t = 200;
+  for (let d = 2; d < 3000; d *= 1.08) {
+    if (c.y + shotFwd.y * d <= groundAt(c.x + shotFwd.x * d, c.z + shotFwd.z * d)) { t = d; break; }
+  }
+  const tx = c.x + shotFwd.x * t, tz = c.z + shotFwd.z * t;
+  const dx = c.x - tx, dz = c.z - tz, dy = c.y - groundAt(tx, tz);
+  const god = {
+    x: tx, z: tz,
+    az: ((Math.atan2(dx, -dz) * 180) / Math.PI + 360) % 360,
+    el: (Math.atan2(dy, Math.hypot(dx, dz)) * 180) / Math.PI,
+    dist: Math.hypot(dx, dy, dz), fov: camera.fov,
+  };
+  const sh = solarHour();
+  const hhmm = `${String(Math.floor(sh)).padStart(2, '0')}:${String(Math.floor((sh % 1) * 60)).padStart(2, '0')}`;
+  const sun = Math.round((Math.asin(clamp(SUN_DIR.y, -1, 1)) * 180) / Math.PI);
+  // Every switch in the URL that is not the address itself: the look and
+  // bench levers this session was opened with.
+  const owned = new Set(['lat', 'lon', 'h', 'cam', 'z', 'run']);
+  const flags = queryPairs()
+    .filter(([k]) => !owned.has(k)).map(([k, v]) => `${k}=${v}`).join(' ');
+  return {
+    god,
+    lines: [
+      `${lat.toFixed(5)} ${lon.toFixed(5)} H${hdg} ${cam}`,
+      `GOD ${Math.round(tx - viewX())} ${Math.round(tz - viewZ())} AZ${Math.round(god.az)} EL${Math.round(god.el)}`
+        + ` D${Math.round(god.dist)} F${Math.round(god.fov)}`,
+      `${hhmm} SUN ${sun} ${String(wx.sky).toUpperCase()}${flags ? `  ${flags}` : ''}`,
+    ],
+  };
+}
+/** Where the SHEET button sat on the last HUD frame, in HUD pixels. */
+const sheetBtn = { x: 0, y: 0, w: 0, h: 0 };
+const abBtn = { x: 0, y: 0, w: 0, h: 0 };
+function drawShotReadout(): void {
+  sheetBtn.w = 0; abBtn.w = 0;
+  if (!chartOn.shot) return;
+  hctx.globalAlpha = 1;
+  const y0 = chartOn.stream ? 70 : 40;
+  const st = shotState();
+  textEdgeP(st.lines[0], 6, y0, UI.text);
+  textEdgeP(st.lines[1], 6, y0 + 8, UI.soft);
+  // The button rides the end of the first line: SHEET, then its progress,
+  // then SAVE once a finished sheet is waiting for a tap to share it.
+  const label = sheet.phase === 'run' ? `${sheet.kind === 'ab' ? 'A/B' : 'SHEET'} ${sheet.done}/${sheet.total}`
+    : sheet.phase === 'ready' ? 'SAVE SHEET' : 'SHEET';
+  const bw = textPW(label) + 6;
+  const bx = HW - bw - 4, by = y0 - 2;
+  panel(bx, by, bw, 11);
+  textEdgeP(label, bx + 3, by + 2, sheet.phase === 'ready' ? UI.gold : UI.text);
+  sheetBtn.x = bx; sheetBtn.y = by; sheetBtn.w = bw; sheetBtn.h = 11;
+  if (sheet.phase === 'idle') {
+    // A/B: the current framing at five hours, per hydro look.
+    const aw = textPW('A/B') + 6, ax = bx - aw - 3;
+    panel(ax, by, aw, 11);
+    textEdgeP('A/B', ax + 3, by + 2, UI.text);
+    abBtn.x = ax; abBtn.y = by; abBtn.w = aw; abBtn.h = 11;
+  }
+  textEdgeP(fitP(st.lines[2], HW - 12), 6, y0 + 16, UI.gold);
+}
+/**
+ * ── THE SHEET: THE GODCAM CONTACT SHEET, SHOT ON THE PHONE ──
+ *
+ * devtools/godcam-sheet.mjs, run inside the game on the device's own GPU
+ * instead of in a headless rig at a third of a frame a second, centred on
+ * whatever the current view is looking at. The same grid: NOON, DUSK and
+ * NIGHT rows of eight god-camera angles (top, N/E/S/W, two wides, a close)
+ * plus the four skies on the close framing, then a DEV row: the tile grid on
+ * the eight angles, three ground-view channels and X-RAY wire and depth.
+ *
+ * A/B is the narrower sheet the water work wanted: the CURRENT framing at
+ * five hours, once per hydro look (lookModel 0 and 1).
+ *
+ * Each frame is read in the tail of the task that presented it (the only
+ * task in which the canvas is readable), shrunk as it is taken, and stitched
+ * under a header carrying the SHOT lines, the build and the date, so the file
+ * explains itself. The HUD is stood down while shooting (the debug overlays
+ * that live on its canvas are composited into their own frames) and
+ * everything is put back afterwards. Saving needs a fresh tap, because share
+ * sheets refuse a page that has not just been touched: hence SAVE SHEET.
+ */
+interface SheetShot { row: string; col: string; hud?: boolean; settle: number; setup: () => void; note?: () => string;
+  /** A field/world switch changed: wait for the rebuild, not just a frame. */
+  rebuild?: boolean }
+/**
+ * ── A/B, FOR ANY SWITCH THAT CAN CHANGE WITHOUT A RELOAD ──
+ *
+ * Two ways to say what B is. Typed pairs (`banklook=1 hydrolook=1`, `k=` for
+ * "absent") make B, and A is whatever the session has now. Nothing typed
+ * means THE URL IS B: every changeable switch it sets, with A the same
+ * session stripped back to the defaults. `load` switches are refused, since
+ * only a reload could show them.
+ */
+type AbSide = Array<[SwitchId, string | null]>;
+/**
+ * `sides` is A first and B last. When B sets more than one switch, each is
+ * also shown ALONE between them (the others held at A), so a sheet can say
+ * which switch bought a change — the seat's ask after an A/B that moved
+ * hydrolook and banklook together and could not attribute either.
+ */
+interface AbSpec { a: AbSide; b: AbSide; sides: Array<[string, AbSide]>; rebuild: boolean }
+function abSpecFrom(text: string): AbSpec | { error: string } {
+  const b: Array<[SwitchId, string | null]> = [];
+  let a: Array<[SwitchId, string | null]>;
+  if (text.trim()) {
+    for (const tok of text.trim().split(/[\s&,]+/)) {
+      const eq = tok.indexOf('=');
+      const k = eq < 0 ? tok : tok.slice(0, eq), v = eq < 0 ? '1' : tok.slice(eq + 1);
+      if (!isSwitchId(k)) return { error: `UNKNOWN SWITCH ${k}` };
+      if (switchApply(k) === 'load') return { error: `${k} NEEDS A RELOAD` };
+      // The in-place rebuild is a hop, and a fixture cannot hop.
+      if (switchApply(k) === 'world' && FIXTURE) return { error: `${k} REBUILDS THE WORLD: NOT IN A FIXTURE` };
+      b.push([k, v === '' ? null : v]);
+    }
+    a = b.map(([k]) => [k, qs(k)]);
+  } else {
+    for (const [k, v] of queryPairs()) {
+      if (isSwitchId(k) && !URL_OWNED.has(k) && switchApply(k) !== 'load'
+        && !(switchApply(k) === 'world' && FIXTURE)) b.push([k, v]);
+    }
+    a = b.map(([k]) => [k, null]);
+  }
+  if (!b.length) return { error: 'A/B: NOTHING TO COMPARE' };
+  if (b.every(([k, v], i) => a[i][1] === v && k === a[i][0])) return { error: 'A/B: A AND B ARE THE SAME' };
+  const sides: Array<[string, AbSide]> = [[`A · ${abSide(a)}`, a]];
+  if (b.length > 1) {
+    b.forEach(([k, v], i) => {
+      if (v === a[i][1]) return;
+      sides.push([`${k}${v === null ? ' default' : `=${v}`} alone`, a.map(([ak, av], j) => (j === i ? [ak, v] : [ak, av]))]);
+    });
+  }
+  sides.push([`B · ${abSide(b)}`, b]);
+  return { a, b, sides, rebuild: b.some(([k]) => switchApply(k) !== 'live') };
+}
+const abSide = (side: Array<[SwitchId, string | null]>): string =>
+  side.map(([k, v]) => (v === null ? `${k} default` : `${k}=${v}`)).join(' ');
+const abApply = (side: Array<[SwitchId, string | null]>): void => { for (const [k, v] of side) setSwitch(k, v); };
+let abSpecText = ((): string => { try { return localStorage.getItem('drive.ab.spec') ?? ''; } catch { return ''; } })();
+const SHEET_ANGLES = [
+  { id: 'top', y: 30, az: 20, el: 80, dist: 700, fov: 55 },
+  { id: 'N', y: 20, az: 0, el: 28, dist: 320, fov: 55 },
+  { id: 'E', y: 20, az: 90, el: 28, dist: 320, fov: 55 },
+  { id: 'S', y: 20, az: 180, el: 28, dist: 320, fov: 55 },
+  { id: 'W', y: 20, az: 270, el: 28, dist: 320, fov: 55 },
+  { id: 'wide1', y: 30, az: 45, el: 45, dist: 550, fov: 55 },
+  { id: 'wide2', y: 30, az: 225, el: 45, dist: 550, fov: 55 },
+  { id: 'close', y: 6, az: 30, el: 12, dist: 70, fov: 50 },
+] as const;
+const SHEET_SKIES: readonly Sky[] = ['clear', 'haze', 'rain', 'storm'];
+const sheet: {
+  phase: 'idle' | 'run' | 'ready'; kind: 'godcam' | 'ab'; done: number; total: number;
+  blob: Blob | null; name: string; grab: ((src: HTMLCanvasElement) => void) | null;
+} = { phase: 'idle', kind: 'godcam', done: 0, total: 0, blob: null, name: '', grab: null };
+let hydroLookLive = HYDRO_LOOK;
+/** Degrees the last god() tipped its orbit up to clear the ground. */
+let sheetLift = 0;
+const sheetSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+/** Progress on the glass WITHOUT being in the picture: a DOM label, which no
+ *  canvas read can see. */
+let sheetTag: HTMLDivElement | null = null;
+function sheetProgress(text: string | null): void {
+  if (!text) { sheetTag?.remove(); sheetTag = null; return; }
+  if (!sheetTag) {
+    sheetTag = document.createElement('div');
+    sheetTag.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:50;'
+      + 'font:12px monospace;color:#f2d27a;background:rgba(4,10,11,.8);padding:4px 8px;pointer-events:none';
+    document.body.appendChild(sheetTag);
+  }
+  sheetTag.textContent = text;
+}
+/** The next presented frame, shrunk to `w` wide, with the HUD canvas laid
+ *  over it when that frame's subject lives there (the tile grid, the depth map). */
+const sheetGrab = (w: number, withHud: boolean): Promise<HTMLCanvasElement> => new Promise((resolve) => {
+  sheet.grab = (src) => {
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = Math.round((src.height * w) / Math.max(1, src.width));
+    const g = cv.getContext('2d')!;
+    g.imageSmoothingEnabled = false;
+    g.drawImage(src, 0, 0, cv.width, cv.height);
+    if (withHud) g.drawImage(hud, 0, 0, cv.width, cv.height);
+    resolve(cv);
+  };
+});
+type W = Record<string, ((...a: unknown[]) => unknown) | undefined>;
+const probe = (): W => window as unknown as W;
+function sheetPlan(kind: 'godcam' | 'ab', at: () => { x: number; z: number }, here: ReturnType<typeof shotState>['god'],
+  ab?: AbSpec): SheetShot[] {
+  // A/B reuses the seat's OWN framing, which is already out of the ground (a
+  // cab eye stands two metres up); only the orbit grid needs real clearance.
+  const clearance = kind === 'ab' ? 0.5 : 8;
+  const god = (a: { y: number; az: number; el: number; dist: number; fov: number }): void => {
+    // Resolved at every shot, not once: a world switch rebuilds by hopping in
+    // place, the hop moves the ORIGIN to the truck, and a target held in the
+    // old local metres then points a kilometre and a half away (the first
+    // device A/B of trackfam: every B frame an empty hillside, the header's
+    // target reading 1359,913).
+    const t = at();
+    godTarget.set(t.x, groundAt(t.x, t.z) + a.y, t.z);
+    // NOT INSIDE A VALLEY WALL. A fixed orbit of 320 m at 28 degrees puts the
+    // camera in the rock wherever the target sits under a cliff (Yosemite's N
+    // and W columns, from the seat): the frame is the terrain's inside. Tip
+    // the orbit up until the camera clears the ground it stands over.
+    let el = a.el;
+    for (; el < 86; el += 4) {
+      const r = (el * Math.PI) / 180, az = (a.az * Math.PI) / 180;
+      const cx = godTarget.x + Math.sin(az) * Math.cos(r) * a.dist;
+      const cz = godTarget.z - Math.cos(az) * Math.cos(r) * a.dist;
+      if (godTarget.y + Math.sin(r) * a.dist > groundAt(cx, cz) + clearance) break;
+    }
+    sheetLift = el - a.el;
+    godAz = (a.az * Math.PI) / 180; godEl = (el * Math.PI) / 180; godDist = a.dist; godFov = a.fov; godInit = true;
+    if (Math.abs(camera.fov - godFov) > 0.01) { camera.fov = godFov; camera.updateProjectionMatrix(); }
+    if (camMode !== 'god') setCam('god');
+  };
+  const hour = (h: string): void => { timeMode = TIME_MODES.indexOf(h as typeof TIME_MODES[number]); };
+  const sky = (k: Sky): void => { probe().__wxnext?.(k, true); };
+  const plan: SheetShot[] = [];
+  if (kind === 'ab' && ab) {
+    const hereAngle = { y: 0, az: here.az, el: here.el, dist: here.dist, fov: here.fov };
+    const hours = ['DAWN', 'MORNING', 'NOON', 'DUSK', 'NIGHT'];
+    const sides = ab.sides;
+    const shot = (h: string, [col, side]: [string, AbSide], first: boolean): SheetShot => ({
+      row: h, col, settle: first ? 1500 : 300, rebuild: ab.rebuild && first,
+      setup: () => { hour(h); sky('clear'); god(hereAngle); abApply(side); } });
+    // A switch that rebuilds a field is changed ONCE: every A, then every B.
+    // A live one alternates within the hour, the tightest comparison there is.
+    if (ab.rebuild) for (const sd of sides) hours.forEach((h, i) => plan.push({ ...shot(h, sd, true), rebuild: i === 0 }));
+    else for (const h of hours) sides.forEach((sd, i) => plan.push(shot(h, sd, i === 0)));
+    return plan;
+  }
+  const close = SHEET_ANGLES[SHEET_ANGLES.length - 1];
+  for (const h of ['NOON', 'DUSK', 'NIGHT']) {
+    SHEET_ANGLES.forEach((a, i) => plan.push({ row: h, col: a.id, settle: i ? 700 : 2200,
+      setup: () => { hour(h); sky('clear'); god(a); } }));
+    for (const k of SHEET_SKIES) plan.push({ row: h, col: `wx-${k}`, settle: 1500, setup: () => { sky(k); god(close); } });
+  }
+  SHEET_ANGLES.forEach((a, i) => plan.push({ row: 'DEV', col: a.id, hud: true, settle: i ? 700 : 2000,
+    setup: () => { hour('NOON'); sky('clear'); probe().__tiledbg?.(true); god(a); } }));
+  for (const gv of ['cover', 'eco', 'substrate']) {
+    plan.push({ row: 'DEV', col: `gv-${gv}`, settle: 1200,
+      setup: () => { probe().__tiledbg?.(false); probe().__groundview?.(gv); god(close); } });
+  }
+  plan.push({ row: 'DEV', col: 'xray-wire', settle: 2200,
+    setup: () => { probe().__groundview?.('off'); probe().__xray?.('wire'); god(close); } });
+  plan.push({ row: 'DEV', col: 'xray-depth', hud: true, settle: 1200,
+    setup: () => { probe().__xray?.('depth'); god(close); } });
+  return plan;
+}
+async function runSheet(kind: 'godcam' | 'ab' = 'godcam', abText = abSpecText): Promise<void> {
+  if (sheet.phase === 'run') return;
+  let ab: AbSpec | undefined;
+  if (kind === 'ab') {
+    const r = abSpecFrom(abText);
+    if ('error' in r) { hudFlash(r.error); return; }
+    ab = r;
+  }
+  const st = shotState();
+  // THE TARGET IS A PLACE ON EARTH, not a local coordinate — see sheetPlan.
+  const targetLL = localToLatLon(st.god.x, st.god.z);
+  const targetAt = (): { x: number; z: number } => { const [x, z] = toLocal(targetLL[0], targetLL[1]); return { x, z }; };
+  const plan = sheetPlan(kind, targetAt, st.god, ab);
+  // Every switch the comparison touches, as the session had it.
+  const switchesWere: Array<[SwitchId, string | null]> = ab ? ab.b.map(([k]) => [k, qs(k)]) : [];
+  const cellW = kind === 'ab' ? (ab && ab.sides.length > 2 ? 300 : 360) : 200;
+  sheet.phase = 'run'; sheet.kind = kind; sheet.done = 0; sheet.total = plan.length; sheet.blob = null;
+  const saved = {
+    timeMode, camMode, look: hydroLookLive, godInit, hudOn,
+    god: { t: godTarget.clone(), ll: localToLatLon(godTarget.x, godTarget.z), dy: godTarget.y - groundAt(godTarget.x, godTarget.z),
+      az: godAz, el: godEl, dist: godDist, fov: godFov },
+    wx: { next: wx.next, at: wx.at, cloud: wx.cloud, rain: wx.rain },
+    tiles: chartOn.tiles, stream: chartOn.stream, xray: xrayMode, gv: groundView,
+  };
+  const cells = new Map<string, HTMLCanvasElement>();
+  const lifts = new Map<string, number>();
+  const shotWas = chartOn.shot;
+  try {
+    hudOn = false;
+    // The readout would ride into the frames that composite the HUD canvas.
+    chartOn.shot = false;
+    // One wave phase for every cell: the water's clock is held where it is.
+    hydroTimePin = performance.now() / 1000;
+    let first = true;
+    for (const shot of plan) {
+      sheetProgress(`SHEET ${sheet.done + 1}/${sheet.total} · ${shot.row} ${shot.col}`);
+      shot.setup();
+      await sheetSleep(first ? shot.settle + 1600 : shot.settle);
+      // A god camera that just moved can put fresh tiles in view, and a frame
+      // taken while they build has no river in it.
+      for (let i = 0; i < 24 && (hydroSys?.stats().pendingBuilds ?? 0) > 0; i++) await sheetSleep(250);
+      // A rebuilt field: every dirty water tile and the sward sweep done.
+      if (shot.rebuild) {
+        const t0 = performance.now();
+        // A world switch hops in place first; the fields rebuild after it lands.
+        await sheetSleep(300);
+        while (hopping && performance.now() - t0 < 30000) await sheetSleep(250);
+        while (performance.now() - t0 < 45000) {
+          const hs = hydroSys?.stats();
+          // …and the GROUND: a hop sweeps every terrain mesh, and a frame
+          // taken before the one under the target is back is sky and haze
+          // (the device A/B's white DAWN cell).
+          const tt = targetAt();
+          const ground = terrainDirty.size === 0 && meshSurfaceAt(tt.x, tt.z) !== null;
+          if (ground && swardSettled() && !(hs && (hs.pendingBuilds > 0 || (hs as { dirtyTiles?: number }).dirtyTiles))) break;
+          await sheetSleep(250);
+        }
+        // Frame again on the ground that is there now: the setup ran before
+        // the hop, when groundAt under the target still answered the old
+        // world's datum, and the camera stood under the new ground (the
+        // harness A/B's dark DAWN cell).
+        shot.setup();
+        await sheetSleep(1500);
+      }
+      first = false;
+      cells.set(`${shot.row}|${shot.col}`, await sheetGrab(cellW, !!shot.hud));
+      if (sheetLift > 0) lifts.set(`${shot.row}|${shot.col}`, sheetLift);
+      sheet.done++;
+    }
+  } finally {
+    hydroTimePin = null;
+    timeMode = saved.timeMode;
+    abApply(switchesWere);
+    hydroSys?.setTuning({ lookModel: saved.look });
+    probe().__xray?.(XRAY_MODES[saved.xray] ?? 'OFF');
+    probe().__groundview?.(saved.gv);
+    setChartLayer('tiles', saved.tiles); setChartLayer('stream', saved.stream);
+    {
+      // Back to the same PLACE: restoring the switches may have hopped again.
+      const [gx, gz] = toLocal(saved.god.ll[0], saved.god.ll[1]);
+      godTarget.set(gx, groundAt(gx, gz) + saved.god.dy, gz);
+    }
+    godAz = saved.god.az; godEl = saved.god.el;
+    godDist = saved.god.dist; godFov = saved.god.fov; godInit = saved.godInit;
+    if (camMode !== saved.camMode) setCam(saved.camMode);
+    if (!WX_PIN) { wx.next = saved.wx.next; wx.at = saved.wx.at; wx.cloud = saved.wx.cloud; wx.rain = saved.wx.rain; }
+    hudOn = saved.hudOn;
+    chartOn.shot = shotWas;
+    sheetProgress(null);
+  }
+  // ── STITCH ── rows in plan order, columns in plan order, the DEV row
+  // carrying its own labels in the cells it has.
+  const rows: string[] = [], cols: string[] = [];
+  for (const sh of plan) {
+    if (!rows.includes(sh.row)) rows.push(sh.row);
+    if (sh.row !== 'DEV' && !cols.includes(sh.col)) cols.push(sh.col);
+  }
+  const devCols = plan.filter((sh) => sh.row === 'DEV').map((sh) => sh.col);
+  const nCols = Math.max(cols.length, devCols.length);
+  const fh = [...cells.values()][0]?.height ?? 0;
+  const gap = 4, left = 64, top = 76, lab = 14;
+  const out = document.createElement('canvas');
+  out.width = left + nCols * (cellW + gap);
+  out.height = top + rows.length * (fh + gap + lab);
+  const g = out.getContext('2d')!;
+  g.fillStyle = '#0b1113'; g.fillRect(0, 0, out.width, out.height);
+  g.font = '11px monospace'; g.textBaseline = 'top';
+  const build = document.querySelector<HTMLMetaElement>('meta[name="drive-build"]')?.content ?? '?';
+  g.fillStyle = '#e8e2d0';
+  st.lines.forEach((l, i) => g.fillText(l, 6, 4 + i * 13));
+  g.fillStyle = '#9fb3a8';
+  g.fillText(`${ab ? `A/B · A: ${abSide(ab.a)} · B: ${abSide(ab.b)}` : 'godcam sheet'} · build ${build} · `
+    + `${new Date().toISOString().slice(0, 16)}Z · target ${targetLL[0].toFixed(5)},${targetLL[1].toFixed(5)}`, 6, 43);
+  rows.forEach((r, ri) => {
+    const y = top + ri * (fh + gap + lab);
+    g.fillStyle = '#e8e2d0'; g.fillText(r, 6, y + lab + 4);
+    const rc = r === 'DEV' ? devCols : cols;
+    rc.forEach((c, ci) => {
+      const x = left + ci * (cellW + gap);
+      const lift = lifts.get(`${r}|${c}`);
+      g.fillStyle = lift ? '#f2d27a' : '#9fb3a8';
+      g.fillText(lift ? `${c} (+${lift}° el, cleared ground)` : c, x + 2, y + 1);
+      const f = cells.get(`${r}|${c}`);
+      if (f) g.drawImage(f, x, y + lab);
+    });
+  });
+  const [lat, lon] = localToLatLon(viewX(), viewZ());
+  sheet.name = `drive-${kind === 'ab' ? 'ab' : 'sheet'}_${lat.toFixed(4)}_${lon.toFixed(4)}_${Date.now()}.png`;
+  sheet.blob = await new Promise<Blob | null>((r) => out.toBlob(r, 'image/png'));
+  sheet.phase = sheet.blob ? 'ready' : 'idle';
+  hudFlash(sheet.blob ? 'SHEET READY · TAP SAVE' : 'SHEET FAILED');
+}
+/** SAVE: the share sheet where there is one (a phone), a download otherwise. */
+function saveSheet(): void {
+  const blob = sheet.blob;
+  if (!blob) return;
+  const file = new File([blob], sheet.name, { type: 'image/png' });
+  const nav = navigator as Navigator & { canShare?: (d: object) => boolean; share?: (d: object) => Promise<void> };
+  const done = (): void => { sheet.phase = 'idle'; sheet.blob = null; };
+  if (nav.canShare?.({ files: [file] }) && nav.share) {
+    nav.share({ files: [file], title: 'DRIVE SHEET' }).then(done).catch(() => { /* dismissed: keep it */ });
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = sheet.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  done();
+}
+/** The SHEET and A/B buttons' taps. Checked before the key, which may be hidden. */
+function sheetDown(e: PointerEvent): boolean {
+  if (!chartOn.shot) return false;
+  const x = e.clientX / hudS, y = e.clientY / hudS;
+  const hit = (b: { x: number; y: number; w: number; h: number }): boolean => b.w > 0
+    && x >= b.x - 3 && x <= b.x + b.w + 3 && y >= b.y - 3 && y <= b.y + b.h + 3;
+  if (hit(sheetBtn)) {
+    if (sheet.phase === 'ready') saveSheet();
+    else if (sheet.phase === 'idle') void runSheet('godcam');
+    return true;
+  }
+  if (hit(abBtn)) {
+    if (sheet.phase !== 'idle') return true;
+    // What B is: typed switches, or nothing for "this URL against defaults".
+    const typed = window.prompt('A/B — B switches (key=value …). Leave empty to compare this URL against the defaults.', abSpecText);
+    if (typed === null) return true;
+    abSpecText = typed.trim();
+    try { localStorage.setItem('drive.ab.spec', abSpecText); } catch { /* private mode */ }
+    void runSheet('ab', abSpecText);
+    return true;
+  }
+  return false;
+}
+/** The finished sheet as a data URL, for a harness that cannot tap SAVE. */
+(window as unknown as { __sheetBlob?: object }).__sheetBlob = (): Promise<string | null> => new Promise((resolve) => {
+  if (!sheet.blob) { resolve(null); return; }
+  const r = new FileReader(); r.onload = () => resolve(r.result as string); r.readAsDataURL(sheet.blob);
+});
+(window as unknown as { __sheet?: object }).__sheet = (go?: boolean | 'godcam' | 'ab', spec?: string): object => {
+  if (go) void runSheet(go === 'ab' ? 'ab' : 'godcam', spec ?? '');
+  return { phase: sheet.phase, done: sheet.done, total: sheet.total, bytes: sheet.blob?.size ?? 0, name: sheet.name };
+};
 function drawTileDebugOverlay(): void {
   if (!chartOn.tiles) return;
   const pad = 4;
@@ -56883,13 +59106,14 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // from `body.clean` the grid was hidden there by accident, and restoring
     // it by accident would put four lines of debug over the map the lab
     // exists to edit. FOLD gives it back with the rest of the chrome.
-    if (!labChrome) { drawTileDebugOverlay(); drawStreamHeader(); }
+    if (!labChrome) { drawTileDebugOverlay(); drawStreamHeader(); drawShotReadout(); }
     // AND SO IS THE AUTHORING OVERLAY, for the same reason and a sharper
     // one: the world lab turns the game's chrome OFF as it opens, which is
     // `hudOn = false`, so the one instrument the lab cannot work without was
     // the one its own opening switched off. Measured: a road draft nine
     // points long, `hudOn false`, and not a pixel of it drawn.
     drawAuthoringPreviews();
+    drawCoastDebug();
     return;
   }
   // While the DOM menu is up the HUD stands down entirely. Its scrim used to
@@ -56902,8 +59126,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // as a cheap one: `calls` must be the calls that DREW.
   const hudEntry = performance.now();
   hudT0 = hudEntry; hudProfCalls++;
-  if (xrayMode === 1 && lumaPrimed) drawLumaMap();
   drawAuthoringPreviews();
+  drawCoastDebug();
   const pad = 4;
   /** Bottom of the compass strip in HUD pixels: `pad` + the heading digits
    *  under the needle. Nothing else may be drawn through it. */
@@ -56934,7 +59158,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // tick at each end. See chartScale for what the three numbers are.
   if (camMode === 'top') {
     const sc = chartScale();
-    const x0 = pad + 1, y0 = chartOn.stream ? pad + 64 : pad + 34;
+    const x0 = pad + 1, y0 = pad + 34 + topReadoutH();
     textEdgeS(sc.label, x0, y0, UI.soft);
     hctx.fillStyle = 'rgba(4,10,11,0.85)';
     hctx.fillRect(x0 - 1, y0 + 10, sc.barPx + 3, 5);
@@ -56945,7 +59169,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   }
   // ── T8 and T9, WHEREVER M7 ASKS FOR THEM ── under the scale on the chart,
   // under the clock's row everywhere else.
-  const keyY = (chartOn.stream ? pad + 64 : pad + 34) + (camMode === 'top' ? 19 : 0);
+  const keyY = pad + 34 + topReadoutH() + (camMode === 'top' ? 19 : 0);
   if (keyShown && (camMode === 'top' || !lineOn)) {
     // ── THE LAYER KEY ──
     //
@@ -57161,6 +59385,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // from this function's own !hudOn early return, above.
   drawTileDebugOverlay();
   drawStreamHeader();
+  drawShotReadout();
   hudLap('tiledbg');
   // ── checkpoint markers, under everything ──
   // Never a label and never a distance: the moment a checkpoint tells you how
@@ -57275,7 +59500,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   //    wider as you close on it — a fuel stop glows out of its forecourt.
   //    Occlusion keeps its meaning: a place you cannot see is a dashed rumour.
   poiRects.length = 0;
-  const inView = poiDraw.filter((p) => p.edge === 0).sort((a, b) => a.x - b.x);
+  const inView = poiDraw.filter((p) => p.edge === 0).sort((a, b) =>
+    Number(!!b.pinned) - Number(!!a.pinned) || Number(b.kind === 'peak') - Number(a.kind === 'peak') || a.x - b.x);
+  const safeLabels = hudSafeRects();
   // ONE COLLISION RULE FOR EVERY LABEL. The lanes assumed everyone stacked
   // from the same baseline; peaks stack in the sky band and destinations by
   // their beams, so two lane-0 labels could still land on each other
@@ -57294,7 +59521,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const ew = textPW(elab) + 4 + (KIND_ICON[p.kind] ? 7 : 0);
     const ey = clamp(Math.round(p.y / hudS), 20, HH - 30);
     const ecx = clamp(Math.round(p.x / hudS), 8, HW - 8);
-    const ex = p.rim ? clamp(ecx - (ew >> 1), 2, HW - ew - 2) : p.edge > 0 ? HW - ew - 3 : 3;
+    const ex = p.rim ? clamp(ecx - (ew >> 1), 2, HW - ew - 2)
+      : clamp(Math.round(p.x / hudS), 2, HW - ew - 2);
     placed.push({ x0: ex, x1: ex + ew, y: ey + 2 });
   }
   for (const p of inView) {
@@ -57342,7 +59570,6 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const my = ay;
     const beamTop = isPeak ? ay : Math.min(ay - 6, Math.max(12, typ));
     const h = ay - beamTop;
-    const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
     // A NAME HIGH IN THE FRAME HANGS BELOW ITS MARK. Summits ride at the angle
     // they really subtend, so from a valley floor they sit at the top of the
     // glass — and a label placed above one there lands in the compass strip,
@@ -57352,13 +59579,36 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // A SUMMIT'S NAME LIVES IN THE SKY, NOT ON THE RIDGE — and every label,
     // summit or destination, climbs by the same rule until it clears what is
     // already placed.
-    let ly = isPeak ? my - 26 : ay - Math.max(11, Math.round(h / 3));
-    ly = Math.max(COMPASS_B + 2, Math.max(12, ly));
-    for (let guard = 0; guard < 5; guard++) {
-      const clash = placed.some((r) => Math.abs(r.y - ly) < 9 && x < r.x1 + 6 && x + w > r.x0 - 6);
-      if (!clash) break;
-      ly -= 9;
-      if (ly < COMPASS_B + 2) { ly = COMPASS_B + 2; break; }
+    const preferredY = isPeak ? my - 26 : ay - Math.max(11, Math.round(h / 3));
+    let x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
+    let ly = preferredY;
+    let found = false;
+    // Actual ink is about y-3..y+7. Keep the whole word clear of both HUD
+    // instruments and earlier words; search locally in BOTH directions so a
+    // crowded upper sky does not push a summit onto the key or compass.
+    for (let row = 0; row <= 8 && !found; row++) {
+      for (const dy of row ? [-row * 9, row * 9] : [0]) {
+        const yy = Math.round(preferredY + dy);
+        if (yy < COMPASS_B + 2 || yy > HH - 10) continue;
+        for (const dx of [0, -Math.round(w / 3), Math.round(w / 3)]) {
+          const xx = clamp(Math.round(ax - w / 2 + dx), 2, HW - w - 2);
+          const overlaps = safeLabels.some((r) => xx - 3 < r[0] + r[2] && xx + w + 3 > r[0]
+            && yy - 5 < r[1] + r[3] && yy + 8 > r[1]);
+          const words = placed.some((r) => Math.abs(r.y - yy) < 12 && xx < r.x1 + 6 && xx + w > r.x0 - 6);
+          if (!overlaps && !words) { x = xx; ly = yy; found = true; break; }
+        }
+        if (found) break;
+      }
+    }
+    if (!found) {
+      // A requested destination must still be discoverable when the glass is
+      // full. The small point is tappable; optional scenery waits for room.
+      if (p.pinned) {
+        hctx.fillStyle = p.c;
+        hctx.fillRect(ax - 2, ay - 2, 5, 5);
+        poiRects.push({ x: ax - 8, y: ay - 8, w: 16, h: 16, name: p.name, kind: p.kind, rng: p.rng });
+      }
+      continue;
     }
     placed.push({ x0: x, x1: x + w, y: ly });
     hctx.save();
@@ -57444,7 +59694,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // The whole assembly — label AND beam — is the tap target, padded out:
     // a pin is a thing you point at with a thumb, not a 4px word.
     const rx = Math.min(x - 5, ax - 7);
-    poiRects.push({ x: rx, y: ly - 6, w: Math.max(x + w + 5, ax + 7) - rx, h: ay - ly + 12, name: p.name, kind: p.kind, rng: p.rng });
+    const ry = Math.min(ly - 6, ay - 7);
+    poiRects.push({ x: rx, y: ry, w: Math.max(x + w + 5, ax + 7) - rx,
+      h: Math.max(ly + 8, ay + 7) - ry, name: p.name, kind: p.kind, rng: p.rng });
   }
   // The lines are all down; now the words go on top of them.
   for (const q of peakLbls) {
@@ -57466,7 +59718,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // its side as ever.
     const cxp = clamp(Math.round(p.x / hudS), 8, HW - 8);
     const x = p.rim ? clamp(cxp - (w >> 1), 2, HW - w - 2)
-      : p.edge > 0 ? HW - w - 3 : 3;
+      : clamp(Math.round(p.x / hudS), 2, HW - w - 2);
     if (p.rim) {
       // A diamond says HERE, and a rim chip is never here — it is a bearing.
       // A short bold arrow along the true outward direction says THAT WAY:
@@ -57513,14 +59765,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // shape of, and sixteen of them is the whole label budget spent before a
     // single capital is drawn. The three bands under it are unchanged.
     const r = backdropRadius();
-    // FROM THE SEAT: towns and villages within a drive, fewer of them — the
-    // basic first cut; labels and POIs from the seat want their own pass.
+    // Place names share the glass with POIs and instruments. A six-name
+    // cockpit budget and a coarse grid let long village names cover each
+    // other; prefer nearby places within a rank and leave room for the world.
     const maxRank = seatPlaces ? 4 : r > 200000 ? 0 : r > 26000 ? 1 : r > 12000 ? 2 : 4;
     capEyeUpdate();
     const cells = new Set<string>();
-    let budget = seatPlaces ? 6 : 16;
+    const placeSafety = hudSafeRects();
+    let budget = seatPlaces ? 3 : 16;
     const peakNames = seatPlaces ? new Set([...peaks.values()].map((q) => q.name)) : null;
-    const ranked = [...ovPlaces.values()].sort((a, b) => a.rank - b.rank);
+    const ranked = [...ovPlaces.values()].sort((a, b) => a.rank - b.rank
+      || (seatPlaces ? Math.hypot(a.x - state.x, a.z - state.z) - Math.hypot(b.x - state.x, b.z - state.z) : 0));
     for (const p of ranked) {
       if (p.rank > maxRank || budget <= 0) break;
       // A place on the far side of the planet is still in front of the camera
@@ -57543,16 +59798,24 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       if (Math.abs(poiVec.x) > 0.96 || Math.abs(poiVec.y) > 0.92) continue;
       const sx = ((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS;
       const sy = ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS;
-      // From the seat a name above the key would be pinned onto it by the
-      // clamp below; it is dropped instead.
-      if (seatPlaces && sy < Math.max(24, layerKeyBottom + 6)) continue;
+      const label = fitP(p.name.toUpperCase(), Math.round(HW * 0.4));
+      const w = textPW(label);
+      const lx = clamp(Math.round(sx - w / 2), 2, HW - w - 2);
+      const ly = Math.round(sy);
+      // Unlike the coarse chart grid, actual ink bounds include the full
+      // name. Do not move a geographic label away from its place: if the
+      // projected point is occupied, omit this optional label this frame.
+      if (ly < 12 || ly > HH - 20) continue;
+      if (placeSafety.some((q) => lx - 3 < q[0] + q[2] && lx + w + 3 > q[0]
+        && ly - 5 < q[1] + q[3] && ly + 8 > q[1])) continue;
+      if (placed.some((q) => lx - 3 < q.x1 + 3 && lx + w + 3 > q.x0 - 3
+        && Math.abs(q.y - ly) < 13)) continue;
       const ck = `${Math.round(sx / 46)},${Math.round(sy / 12)}`;
       if (cells.has(ck)) continue;
       cells.add(ck);
-      const label = fitP(p.name.toUpperCase(), Math.round(HW * 0.4));
-      const w = textPW(label);
+      placed.push({ x0: lx, x1: lx + w, y: ly });
       const col = p.rank === 0 ? UI.gold : p.rank === 4 ? UI.dim : p.rank <= 1 ? UI.text : UI.soft;
-      textEdgeP(label, clamp(Math.round(sx - w / 2), 2, HW - w - 2), clamp(Math.round(sy), 12, HH - 20), col);
+      textEdgeP(label, lx, ly, col);
       budget--;
       ovLabelsDrawn.push(p.name);
     }
@@ -58330,6 +60593,27 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // instruments, and they were the last text on this canvas that wanted real
   // layout.
   hudLap('riggauge');
+  if (xrayMode === 1 || xrayMode === 3) {
+    const x = Math.max(3, Math.round(HW / 2) - 54), y = Math.round(HH * 0.58);
+    const w = Math.min(108, HW - x - 3);
+    panel(x, y, w, 37);
+    if (xrayMode === 1) {
+      textEdgeS(`DEPTH ${camMode.toUpperCase()}`, x + 3, y + 2, UI.text);
+      textEdgeS(`PIVOT ${Math.round(dofFocusCurrent)}M`, x + 3, y + 11, UI.gold);
+      textEdgeS('AMBER NEAR  TEAL MID', x + 3, y + 20, UI.soft);
+      textEdgeS('VIOLET FAR  NAVY SKY', x + 3, y + 29, UI.soft);
+    } else {
+    textEdgeS(`FOCUS ${currentDofPolicy().name.toUpperCase()}`, x + 3, y + 2, UI.text);
+    textEdgeS(`T ${Math.round(dofFocusTarget)}M  F ${Math.round(dofFocusCurrent)}M`, x + 3, y + 11, UI.gold);
+    textEdgeS(`SOURCE ${dofFocusSource.toUpperCase()}`, x + 3, y + 20, UI.soft);
+    if (dofFocusSource === 'depth') for (let i = 0; i < 9; i++) {
+      const cell = dofSensorCells[i];
+      hctx.fillStyle = i === dofSensorChosen ? UI.text : cell?.valid ? UI.good : UI.bad;
+      hctx.fillRect(x + 3 + (i % 3) * 6, y + 29 + Math.floor(i / 3) * 2, 4, 1);
+    }
+    if (dofMode === 'off') textEdgeS('OFF', x + 25, y + 28, UI.bad);
+    }
+  }
   const hudMs = performance.now() - hudEntry;
   hudProfMs += hudMs;
   if (hudMs > hudProfMaxMs) hudProfMaxMs = hudMs;
@@ -59286,6 +61570,7 @@ const menu = createMenu({
       ['CELL', 'drive · @c15r'],
       ['BUILD', DRIVE_BUILD === 'web' ? 'UNSTAMPED' : DRIVE_BUILD],
       ['SERVING', servedBuildRow()],
+      ['OFFLINE COPY', (void probeWorker(), workerRow)],
       ['DEVICE', `${navigator.hardwareConcurrency ?? '?'} CORES · DPR ${Math.round(devicePixelRatio * 10) / 10}`],
     ];
   },
@@ -59407,12 +61692,12 @@ const menu = createMenu({
   setPaint: (hex) => setCustomPaint(hex),
   drive: () => audio.arm(),
   realToggle: () => {
-    if (real.on) { location.replace(location.pathname); return; }  // back to the menu, model driving
+    if (real.on) { location.replace(carrySwitches(location.pathname)); return; }  // back to the menu, model driving
     startRealDrive();
   },
   // A random spawn is decided at BOOT (findSpawn owns the dice), so ELSEWHERE
   // keeps the reboot — through replace(), never a history entry.
-  elsewhere: () => { location.replace(location.pathname + '?random=1'); },
+  elsewhere: () => { location.replace(carrySwitches(location.pathname + '?random=1')); },
   saveSpot: () => saveSpot(),
   // THE LINE, as the menu reads it. One CTA, honest rows, the legs in order.
   line: () => {
@@ -59538,6 +61823,7 @@ const menu = createMenu({
   // a career off the server. Signing back in brings everything back, which is
   // the behaviour someone clearing space wants and the one someone stuck on a
   // bad build does not have to think about.
+  loadLatest: (status) => { void loadLatestBuild(status); },
   deviceReset: (status) => {
     void (async () => {
       if (!navigator.onLine) {
@@ -59594,7 +61880,11 @@ const menu = createMenu({
   tapePlay: () => { void (window as unknown as { __play: () => Promise<object> }).__play(); },
   tapeStopPlay: () => tapeEnd(),
   startDrive: (i) => { const d = allDrives()[i]; if (d) startDrive(d); },
-  deleteSpot: (i) => { spots.splice(i, 1); saveSpots(); audio.stone(); },
+  deleteSpot: (i) => {
+    const d = spots[i];
+    if (d) { const t = (spotTimes[spotKey(d)] ??= { at: 0, gone: 0 }); t.gone = Math.max(Date.now(), t.at + 1); }
+    spots.splice(i, 1); saveSpots(); audio.stone(); sync.nudge();
+  },
   // CURRENT: a destination, not a mode. One fix from this tap's gesture, then
   // the same composed-link arrival every other destination uses — the model
   // keeps driving, nothing about the controls changes.
@@ -59730,6 +62020,159 @@ if (timeFromUrl < 0 && !qs('time')
   const d = DIALS.find((x) => x.key === 'time');
   const i = TIME_MODES.indexOf('CYCLE');
   if (d && i >= 0) { d.at = i; d.apply(i); }
+}
+/** Flip any switch at runtime, as A/B does: `__switch('sunalt', 5)`, `null`
+ *  to remove it. Answers what the URL now says and what the change costs. */
+(window as unknown as { __switch?: object }).__switch = (id: string, value?: string | number | boolean | null): object => {
+  if (!isSwitchId(id)) return { error: `unknown switch ${id}` };
+  if (value !== undefined) setSwitch(id, value);
+  return { id, value: qs(id), apply: switchApply(id) };
+};
+// ── RUNTIME SWITCHES, BATCH 2c: BUDGETS, TREE TIERS AND THE LAST BUILDERS ──
+//
+// Budgets and tiers are consulted on every refresh (live); the rest decide
+// what a build produces and take the in-place rebuild (world). A tree budget
+// that the SETTINGS rack also owns is overridden only while the URL says so,
+// and falls back to the shipped default when the switch is removed.
+{
+  onSwitch('treeprice', () => { EZ_PRICE = qsOn('treeprice', true); });
+  onSwitch('treedemand', () => { EZ_DEMAND = qsOn('treedemand', true); });
+  onSwitch('ezfullpx', () => { EZ_FULL_PX = qsNum('ezfullpx', EZ_MERGE_PX[1]); });
+  onSwitch('slip', () => { SLIP_K = Math.max(0, Number(qs('slip') ?? 1) || 0); });
+  onSwitch('hull', () => { HULL_ON = qsOn('hull', true); });
+  onSwitch('vegseed', () => { VEG_SEED_BUDGET = qs('vegseed') !== '0'; });
+  onSwitch('vegstep', () => { VEG_STEP_FORCED = qsNum('vegstep', -1); });
+  onSwitch('swardhop', () => { SWARD_HOP_CLEAR = qsOn('swardhop', true); });
+  onSwitch('farpark', () => { FAR_PARK_BYTES = Math.max(0, qsNum('farpark', 48)) * (1 << 20); });
+  onSwitch('nopins', () => { juncPins = !qsOn('nopins', false); });
+  onSwitch('nofill', () => { vergeFill = !qsOn('nofill', false); });
+  onSwitch('ezstand', () => { EZ_STAND_ON = qs('ezstand') !== '0'; rebuildInPlace(); });
+  onSwitch('noweld', () => { endWeld = !qsOn('noweld', false); rebuildInPlace(); });
+  onSwitch('drapefast', () => { DRAPE_FAST = qsOn('drapefast', true); rebuildInPlace(); });
+  onSwitch('hydroskip', () => { HYDRO_SKIP = qs('hydroskip') !== '0'; rebuildInPlace(); });
+  onSwitch('hydroground', () => { HYDRO_GROUND_R = Math.max(0, qsNum('hydroground', 150)); rebuildInPlace(); });
+  onSwitch('hydroeps', () => { HYDRO_GROUND_EPS = Math.max(0, qsNum('hydroeps', 0.02)); rebuildInPlace(); });
+  onSwitch('treetris', () => { const t = Number(qs('treetris')); treeTriBudget = Number.isFinite(t) && t > 0 ? t : 2400000; });
+  onSwitch('treerange', () => { const r = Number(qs('treerange')); treeRange = Number.isFinite(r) && r > 0 ? clamp(r, 100, 6000) : 700; });
+  onSwitch('treepop', () => { const q = Number(qs('treepop')); treePopulationScale = Number.isFinite(q) && q > 0 ? clamp(q, 0.05, 32) : 1; });
+  onSwitch('impreach', () => {
+    const r = Number(qs('impreach'));
+    if (qsHas('impreach') && Number.isFinite(r) && r >= 0) { impReachMul = -1; impReachM = clamp(r, 0, 40000); }
+    else if (impReachMul < 0) impReachMul = 1;
+  });
+  onSwitch('impdensity', () => { const d = Number(qs('impdensity')); impDensityMul = Number.isFinite(d) && d > 0 ? clamp(d, 0.01, 1e9) : 1; });
+}
+// ── RUNTIME SWITCHES, BATCH 2b: WHAT THE BUILDERS READ ──
+//
+// Read inside the tile, vegetation and building builders, never at module
+// setup, so a change is the new value plus the in-place rebuild the BUILT
+// dial already uses (world), or a uniform and a sward sweep (live/field).
+{
+  onSwitch('vegstems', () => { VEG_STEMS = clamp(qsNum('vegstems', 1), 0, 8); rebuildInPlace(); });
+  onSwitch('guild', () => { GUILD_ON = qs('guild') !== '0'; rebuildInPlace(); });
+  onSwitch('bank', () => { BANK_ON = qsOn('bank', true); rebuildInPlace(); });
+  onSwitch('fords', () => { FORDS_ON = qsOn('fords', true); rebuildInPlace(); });
+  onSwitch('bridgedem', () => { BRIDGE_DEM_ON = qsOn('bridgedem', true); rebuildInPlace(); });
+  onSwitch('bridgeforms', () => { BRIDGE_FORMS_ON = qsOn('bridgeforms', true); rebuildInPlace(); });
+  onSwitch('railgrade', () => { RAIL_GRADE = qsOn('railgrade', true); rebuildInPlace(); });
+  onSwitch('trackfam', () => { TRACK_FAM = qsOn('trackfam', true); rebuildInPlace(); });
+  onSwitch('refine', () => { REFINE = qs('refine') !== '0'; rebuildInPlace(); });
+  onSwitch('refr', () => { REFINE_R = Number(qs('refr') ?? 1100); rebuildInPlace(); });
+  onSwitch('relief', () => { CUT_RELIEF = qs('relief') !== '0'; rebuildInPlace(); });
+  onSwitch('wash', () => { CUT_WASH = Number(qs('wash') ?? 0.1); rebuildInPlace(); });
+  onSwitch('bldruns', () => { RUN_NORM = qsOn('bldruns', true); rebuildInPlace(); });
+  onSwitch('bldface', () => { BLD_FACE = qsOn('bldface', true); rebuildInPlace(); });
+  onSwitch('bldpara', () => { BLD_PARA = qsOn('bldpara', true); rebuildInPlace(); });
+  onSwitch('shrub', () => { SHRUB_ON = qs('shrub') !== '0'; });
+  onSwitch('canopy', () => { CANOPY_ON = qsOn('canopy', false); canopyAt.t = 0; canopyJobs = []; canopyRings = []; });
+  onSwitch('steepfill', () => { STEEP_FILL = qsNum('steepfill', 0.18); });
+  onSwitch('swardsites', () => { SWARD_SITES = qsNum('swardsites', 12); });
+  onSwitch('swardfull', () => { SWARD_FULL_MAX = qsNum('swardfull', 1.15); swardU.uSwardFull.value = SWARD_FULL_MAX; });
+  onSwitch('swardtuft', () => { SWARD_TUFT = qsNum('swardtuft', 0.72); swardU.uSwardTuft.value = SWARD_TUFT; });
+  onSwitch('swardcap', () => { SWARD_CAP_ON = qsOn('swardcap', true); swardU.uSwardCapOn.value = SWARD_CAP_ON ? 1 : 0; });
+  onSwitch('swardnear', () => { SWARD_NEAR_X = clamp(qsNum('swardnear', 3), 1, 4); swardU.uSwardBoost.value = SWARD_NEAR_X - 1; });
+  onSwitch('swardsub', () => { SUB_SWARD = qsOn('swardsub', true); swardU.uSwardMic.value = SUB_SWARD ? 1 : 0; swardGroundSeen = -1; swardFieldAt = 0; });
+}
+// ── RUNTIME SWITCHES, BATCH 2a: THE ONES THAT WERE ALREADY LIVE UNDERNEATH ──
+//
+// Each of these was read once at load into a `let` or a uniform that the frame
+// already consults, so a change needs only to be written back where the load
+// put it. switches.ts declares them `live`; A/B can flip them between frames.
+{
+  const low = (id: SwitchId): string => (qs(id) ?? '').toLowerCase();
+  const pickIndex = <T extends string>(list: readonly T[], v: string, dflt: number): number => {
+    const i = list.indexOf(v as T); if (i >= 0) return i;
+    const n = Number(v); return v !== '' && Number.isFinite(n) ? clamp(Math.round(n), 0, list.length - 1) : dflt;
+  };
+  // the lens
+  onSwitch('tilt', () => { const v = low('tilt'); tiltMode = v && v in TILT_PRESETS ? v : 'stock'; });
+  onSwitch('dof', () => {
+    const v = low('dof');
+    dofModeOverride = (DOF_MODES as readonly string[]).includes(v) ? v as DofMode : null;
+  });
+  onSwitch('dofs', () => { dofStrengthAt = pickIndex(DOF_STRENGTHS, low('dofs'), 2); });
+  onSwitch('dofq', () => { const i = DOF_QUALITIES.indexOf(low('dofq') as typeof DOF_QUALITIES[number]); dofQuality = i >= 0 ? i : 1; });
+  onSwitch('aperture', () => {
+    dofApertureOverride = qsHas('aperture');
+    dofRadiusAt = clamp(Math.round(qsNum('aperture', 1)), 0, DOF_RADII.length - 1);
+  });
+  onSwitch('focus', () => { dofFocusAt = clamp(Math.round(qsNum('focus', 0)), 0, DOF_FOCUS_M.length - 1); });
+  onSwitch('near', () => { nearLock = Math.max(0, Number(qs('near') ?? 0) || 0); });
+  onSwitch('mblur', () => {
+    const q = qs('mblur'); const d = DIALS.find((x) => x.key === 'mblur');
+    if (d && q !== null) { d.at = clamp(Math.round(Number(q)) || 0, 0, d.opts.length - 1); d.apply(d.at); }
+  });
+  // the sky and the weather
+  onSwitch('sunalt', () => {
+    const v = qs('sunalt');
+    SUN_ALT_FORCE = v === null || v === '' || !Number.isFinite(Number(v)) ? null : clamp(Number(v), -20, 89);
+  });
+  // Absent is the load default (the CYCLE), so an A/B that strips it gets it.
+  const timeFrom = (id: SwitchId): void => {
+    const i = TIME_MODES.indexOf((qs(id) ?? '').toUpperCase() as typeof TIME_MODES[number]);
+    timeMode = i >= 0 ? i : 0;
+  };
+  onSwitch('time', () => timeFrom('time'));
+  onSwitch('t', () => timeFrom('t'));
+  onSwitch('wind', () => { const k = Number(qs('wind')); windForce = qsHas('wind') && Number.isFinite(k) ? Math.max(0, k) : null; });
+  onSwitch('winddir', () => { const d = Number(qs('winddir')); windForceDeg = qsHas('winddir') && Number.isFinite(d) ? d : null; });
+  onSwitch('wx', () => {
+    const v = qs('wx');
+    WX_PIN = v === 'clear' || v === 'haze' || v === 'rain' || v === 'storm' ? v : null;
+    if (WX_PIN) { wx.next = WX_PIN; wx.cloud = WX[WX_PIN].cloud; wx.rain = WX[WX_PIN].rain; }
+  });
+  onSwitch('fog', () => { const v = qs('fog'); WX_FOG = v === null ? null : clamp(Number(v) || 0, 0, 1); });
+  onSwitch('wet', () => { const v = qs('wet'); WX_WET = v === null ? null : clamp(Number(v) || 0, 0, 1); });
+  // the post chain and the shaders
+  onSwitch('raincurtain', () => { compMat.uniforms.uRainCurtain.value = qs('raincurtain') === '0' ? 0 : 1; });
+  onSwitch('widedither', () => { compMat.uniforms.uDWide.value = qsOn('widedither', true) ? 1 : 0; });
+  onSwitch('airblur', () => { compMat.uniforms.uAirBlur.value = qsOn('airblur', false) ? 1 : 0; });
+  onSwitch('nanpaint', () => { compMat.uniforms.uNanPaint.value = qsOn('nanpaint', false) ? 1 : 0; });
+  onSwitch('paintwash', () => { compMat.uniforms.uWash.value = clamp(qsNum('paintwash', 0), 0, 1); });
+  onSwitch('swardforms', () => { (swardU as unknown as Record<string, { value: number }>).uSwardStructure.value = qsOn('swardforms', true) ? 1 : 0; });
+  onSwitch('impink', () => { impInkU.value = clamp(qsNum('impink', 0), 0, 1); });
+  // The six tree-look uniforms; absent returns each to what the load set.
+  const ezU = (id: SwitchId, u: { value: number }, hi: number, dflt: number) => (): void => {
+    const n = Number(qs(id));
+    u.value = qsHas(id) && Number.isFinite(n) ? clamp(n, 0, hi) : dflt;
+  };
+  onSwitch('ezbark', ezU('ezbark', ezLookU.uEzBark, 2, ezLookU.uEzBark.value));
+  onSwitch('ezedge', ezU('ezedge', ezLookU.uEzEdge, 1, ezLookU.uEzEdge.value));
+  onSwitch('ezleaf', ezU('ezleaf', ezLookU.uEzLeaf, 2, ezLookU.uEzLeaf.value));
+  onSwitch('ezbump', ezU('ezbump', ezLookU.uEzBump, 2, ezLookU.uEzBump.value));
+  onSwitch('ezcut', ezU('ezcut', ezLookU.uEzCut, 0.7, ezLookU.uEzCut.value));
+  onSwitch('ezgrain', ezU('ezgrain', ezLookU.uEzGrain, 2, ezLookU.uEzGrain.value));
+  // the frame loop and the instruments
+  onSwitch('shsnap', () => { SHADOW_SNAP = qs('shsnap') !== '0'; });
+  onSwitch('lumasync', () => { lumaAsync = qs('lumasync') !== '1'; });
+  onSwitch('nodraw', () => { NODRAW = qsOn('nodraw', false); });
+  onSwitch('fling', () => { flingOn = qsOn('fling', true); });
+  onSwitch('wetdebug', () => { setDebugRaster(qsOn('wetdebug', false) ? 'water' : null); });
+  // the sward's density evidence: a sweep, like the bank switches
+  onSwitch('swardev', () => { swardEv = qsOn('swardev', true) ? 1 : 0; swardGroundSeen = -1; swardFieldAt = 0; });
+  // the built world and the authored layer: the in-place rebuild the dials use
+  onSwitch('built', () => { const w = qsOn('built', true); if (w !== builtOn) { builtOn = w; rebuildInPlace(); } });
+  onSwitch('authored', () => { const w = qsOn('authored', true); if (w !== authoredOn) { authoredOn = w; rebuildInPlace(); } });
 }
 // `?mblur=0..3` pins the shutter for a capture, the way `?sunalt=` pins the
 // sun. Two shots of the same road are not comparable if one of them also

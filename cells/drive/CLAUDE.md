@@ -19208,3 +19208,314 @@ The asks that were valid on their own and are still open against the matrix:
 the chart should not wear the tile-debug header/grid and the layer chip key by
 default; the MENU chip always says MENU; the dock loses its text label and chip
 hint; cells are icon + state + one signal, no words.
+
+## The coast's apron was the bed, not the foam — and five things the seat's critique found
+
+The seat's critique of four hydro sheets, in its own priority order: the
+coastal surf silhouette (a broad angular white apron in B), bank width and
+inner/outer asymmetry, bright speckle (orange flecks round the headlights,
+daytime river glints), night inland water indistinct, then finer water
+detail — with the next comparison to split `hydrolook` and `banklook`, hold
+wave phase, weather, camera and exposure, and include a low shoreline view.
+
+**THE APRON SURVIVED EVERY FOAM TERM SWITCHED OFF.** `HydroTuning.foamMask`
+is the instrument this needed: a bitmask over the sea's five foam terms (1
+swash, 2 breakers, 4 spill, 8 whitecaps, 16 the retained wash strip),
+because `foamStrength` scales all of them and a frame could not attribute
+a white to one. At the Twelve Apostles (`-38.66428 143.10396`, the seat's
+own SHOT, the `coast` group in the session's `capture.mjs`) `foamMask=0`
+left the band exactly where it was: it was the BED, showing through 8 cm
+of fill "depth" for the 15–70 m over which `visualDepth` blends from the
+field's depth to the shore-derived one — a contour of the shore-distance
+field, angular at the raster's resolution, wider than any surf. Under
+`lookModel` 1 the colour's depth now floors on the same coast profile the
+waves shoal on (beach 1:17, shingle, platform bench and drop, cliff foot),
+the sea bed's legibility caps at 1.6 m (a surf zone stirs its sand), the
+profile's distance is warped ±9 m over ~50 m in vertex and fragment alike
+so the breaker band stops tracing the raster contour, and the swash foam
+is gated into patches with wet sand between them. Measured A/B on the
+reworked shader, control 0.18/255: noon 5.8/255 over 37% of the drone
+pane, golden 8.97 over 53%; by eye the sheet is gone, the foam is broken
+patches on a wandering band, and at golden hour the sea takes the sky.
+
+**THE BANK HAS A SIDE NOW.** `sampleBankField` reports `outerBank` from
+the structure field's own curvature × n (the water shader's term), so the
+sward's mineral margin widens and bleaches on the inside of a bend (the
+bar) and narrows and darkens on the outside (the cut bank), and the water's
+shelf follows the same rule. A straight reach reads 0.5 and is what it was.
+
+**THE ORANGE EMBERS WERE TWO THINGS.** Under the pool: the sward's blade
+facets taking an amber (0xffb87b) 260 cd lamp — `?swardtuft=0.05` made the
+pool a smooth wedge, the substrate and the shrubs changed nothing — so the
+lamp is warm-white now with a 1/d^1.25 tail. Across the river: the HERD,
+reddish-brown deer at the bank 100 m off, which `__hide('critters')` takes
+away and no water term does. Not a rendering fault; recorded so the next
+reading of a night frame does not chase the water for it.
+
+**THE HEADLAMP REACHES THE WATER.** The hydro material lights itself (sun,
+sky, moon) and never read three's spot, so the lamp lit both banks and left
+the river between them dark. `HydroFrame.head` carries the spot in the
+scene light's own units with three's cone, range window and decay; the
+body and foam take a diffuse lift inside the cone and the calmed mirror
+carries the lamp's own streak.
+
+**AFTER DARK THE SKY SAYS "WATER".** The Fresnel FLOOR rises to 0.11 as
+daylight goes (the body stays a rung under the ground): what lifts is the
+reflected sky, only where the sky is bright. And the sun's glint lobe reads
+the calmed mirror normal, at half the sparkle swing, which is the daytime
+speckle.
+
+**THE A/B SHEET SPLITS B.** When B sets more than one switch the sheet
+shows each alone between A and B (`A · hydrolook=1 alone · banklook=1 alone
+· B`), and `hydroTimePin` holds the hydro clock so every cell shares one
+wave phase. The harness's `capture.mjs` gained `sw:key=value`, `hide:layer`
+and `tune:foamMask=N` views for one-frame ablations in a frozen state.
+
+**Not done:** the breaker foam is still patches rather than crest lines;
+the low shoreline scene is reframed along the beach but not yet judged; the
+far-bank cut and the angular bends are the field raster's and belong to the
+bank shaping and boundary units above.
+
+### …and at dusk the sea mirrored a bluer sky than the one drawn above it
+
+Three frames from the seat at the Apostles at 18:00, no words: a saturated navy
+band of sea under a pink sky. `sceneReflectedSky` (hydro/scene-sky.ts) had its
+own twilight — a partial warm lobe toward the sun — and none of the dome's:
+no belt along the whole horizon, no pink band over the anti-solar horizon, no
+earth's shadow. So the Look model's grazing mirror (Schlick's full curve, plus
+the night F0 floor) returned a cooler sky than the dome shows. It now runs the
+sky shader's own terms on the sky's own uniforms (`uCsDusk` is the dome's
+`uDusk`), so the two cannot drift again.
+
+Measured, the coast drone scene, look B, before and after (mean RGB, hue):
+
+| | sky above | far sea, before | far sea, after |
+|---|---|---|---|
+| DUSK | 138,109,106 · 6° | 67,65,77 · 250° | **96,75,76 · 357°** |
+| GOLDEN | 169,156,147 · 25° | 114,115,120 · 230° | **129,117,115 · 9°** |
+
+and the near sea's saturation at dusk falls 0.19–0.20 → 0.06–0.11. The black
+dots and dashes in the same frames are the herd and the birds: a
+`hide:critters` capture takes every one of them away.
+
+## A hole between the beach and the sea: the bed dropped where the water was not drawn
+
+From the seat at the Twelve Apostles: the ground falls away between the beach
+and the water into a deep-teal hole the rig can drive into and see the water's
+edge from below. A transect square to the mapped coastline (`__coastline`, new:
+the nearest OSM `natural=coastline` segment, distance and side) read it
+exactly: from 24 to 48 m seaward of the line the mesh stood at −1.1 to −5.5 m
+under a 0.4 m sea with **no water drawn over it**; the field's coverage only
+starts at 52 m.
+
+**It was the Romsdalen fix.** `seaFloor` dropped the bed on cover EVIDENCE over
+a 20 m footprint saturating at a third of a pixel, so it cut up to a cover
+pixel landward of the water the field draws. The fix ties the drop to the
+field: `publishHydroFloor` now publishes a second lattice beside the inland
+bed — the field's drawn coverage for any water kind — and the kernel's
+`seaFloor` drops only where that coverage passes 0.55, reaching the full
+`SEA_BED` by 0.9, and leaves a vertex under the cut exactly as it was (the
+first cut returned `min(elev, seaLocal)` there and flattened 20 m of beach to
+the sea's level). Cover evidence remains the fallback for a tile the field has
+not published yet. Any kind counts, not only the ocean's: a river mouth on the
+sea's flat took the cover drop and stood 3 m proud without it (Romsdalen's
+transect caught it); the kernel's two-metre gate still keeps inland water out.
+
+Measured on the same transect: beach at DEM from 24 to 44 m (was −1.1…−4.7),
+0.17 m at 48 m where the drawn edge begins (a 0.2 m sliver under the surface,
+from the lattice interpolating between vertices), full depth by 60 m.
+`shore-graze` at Romsdalen: 0 ledges, 0 steps.
+
+**The WATER debug view draws the coastline now** (`drawCoastDebug`): the OSM
+line in cyan with a tick on each segment's sea side, within 900 m of the render
+focus. At the Apostles it sits on the upper beach, ~50 m landward of the drawn
+water — the survey's line is the vegetation edge, not the waterline — which is
+why the coastline cannot be the bed's authority on its own.
+
+Census against the previous build (`wet-census`, five coastal fixtures, W drawn
+/ U fringe-buried / I interior-buried): drawn water flat everywhere (the
+uMngeni −0.8%), fringe burial up a little — Romsdalen 61 → 74, Simon's Town
+6 → 10, Glencairn 182 → 192, uMngeni 507 → 566 — which is the beach now
+overlapping the water's edge by a few decimetres instead of falling away below
+it: the right side of the line to err on, since buried water is invisible and
+a hole is not.
+
+## A track is not one thing: five families chosen by the tags, and steps
+
+Five highway classes — track, path, footway, cycleway, bridleway — shared one
+treatment: a 68%-opaque two-rut dirt texture 4.5-6.5 m wide. Counted in the
+captures, most of what took it was not a farm track: Paris West carries 436
+ASPHALT footways, Yosemite's paths are single-file on ground, and most farm
+tracks carry no `tracktype`. `trackFamily(tags)` now picks a family and a real
+width (a mapped `width` wins), and `trackFamMat(fam)` one material per family:
+
+| family | from | width | look |
+|---|---|---|---|
+| paved | sealed `surface`, or an untagged footway/cycleway (a pavement), or track grade1 | 1.8-3.2 m | the surface's colour, crisp edge |
+| trail | path/footway/bridleway on ground, dirt, grass… | 1.3-1.8 m | one trodden tread, darker than the ground, frayed |
+| hard | gravel/compacted, track grade2 | 1.6-3.2 m | full width, faint ruts, grain |
+| rut | track grade3-4 and untagged tracks | 3.2 m | two ruts, a lip, the crown mostly grass |
+| grass | track grade5, `surface=grass` | 3.0 m | two faint ruts, nothing else |
+| steps | `highway=steps` | 2.2 m | a tread every 0.3 m, a shadowed riser line at each nose |
+
+**The worn surface is shaped per pixel, not painted.** A height across the way
+(ruts pressed in, a spoil lip, a crown; for steps a sawtooth along the flight)
+bends the normal by its screen gradient — the surface-gradient construction the
+terrain relief already uses — and what is not worn is DISCARDED, so the crown's
+grass and the frayed verge are the real terrain and sward, with binary alpha as
+the rendering doctrine asks. Band-limited on the fragment's own footprint: past
+~0.3 m an art pixel the ruts merge into one worn band and the relief fades.
+Puddles take the ruts first. `?trackfam=0` (a `world` switch, live-rebuilt)
+is the single treatment it replaced; `__tracks(r)` lists the track segments
+near a point with the family each got, which is how an A/B is aimed.
+
+**The grass mask learned grey.** The mask is ~1.5 m a texel and the blade test
+was a fixed `sBlocked < 0.5`, so a 2 m footway filtered to under half a texel
+of white and grass stood through it (the Paris frames: a pavement as pale
+fragments in a lawn). Paved and hard paths now stroke at least 2.2 texels; the
+worn families paint GREY (rut 0.55, trail 0.7, grass 0.3), and the blade test
+is a per-blade hash against the mask value, so a carriageway (1.0) still
+blocks every blade and a track keeps its share of grass.
+
+**Measured with the in-game A/B sheet** (`__sheet('ab', 'trackfam=0')`, live,
+five hours each): at Senqu the old broad pale smear becomes two narrow ruts
+with grass through the crown; at Yosemite a 4.5 m double rut becomes a 1.3 m
+trodden tread (the first cut was a pale line on pale granite and was darkened);
+Paris needed the mask fix above. A live Paris A/B also dropped a building
+between its two sides — the world rebuild is not fully deterministic, which
+makes a building-heavy A/B pair unreliable; recorded, not chased.
+
+### …and a draped way is seated every 3 m, and steps clear the grass
+
+Two faults behind the paths that stayed invisible after the families shipped:
+
+- **A DRAPED RIBBON'S TRIANGLES WERE UNDER THE TERRAIN, WITH EVERY VERTEX ON
+  IT.** `__trackburial(r)` (triangle centroids and vertices of every `track-*`
+  mesh against `meshSurfaceAt`) at Suresnes: paved footways 648 of 3,389
+  triangles buried, 102 by more than 10 cm, worst 1.04 m, and `vDeep 0`. The
+  vertices were seated. The fault was the 12 m quads between them, which the
+  terrain lattice (corridor crest and toe creases, refinement splits) poked
+  through: pale fragments in grass. `densifyPts` takes a step now, and a
+  draped way (mode `none`, track or not drivable) is densified at
+  `DRAPE_STEP_M` (3 m, `?drapestep=`, 12 being the old spacing). Measured
+  after: 36 deep of 7,987, worst 0.20 m, for 2.4x the triangles of a narrow
+  way. The remaining shallow burial is across the ribbon's width, one quad
+  wide.
+- **STEPS ARE NOT DRIVABLE, SO THEY WERE IN NO GRID THE SWARD MASK READS.**
+  A flight stood under a meadow's worth of grass. `stairGrid` files them
+  (`noteStairs`), the mask strokes them white at 2.2 texels or more, the mask
+  revision counts them, and `__tracks` lists them as family `steps`.
+
+**The live Paris A/B sheets could not confirm either by eye**: three reshoots
+at the capture's origin framed the target under a canopy or on a lawn where
+neither column drew the way at all (the target from `AT=` was not in the
+streamed world when the sheet ran). The claim rests on the burial numbers.
+Pick targets from `__tracks` in the SAME boot as the sheet, never from a
+previous one.
+
+### Tracks, banks and grass share the ground's colour and light (2026-09-25)
+
+Four device reports, one fault family: a surface that does not go through the
+layers its neighbours do reads as a decal.
+
+- **Worn tracks take the substrate's fines colour** (`SUB_K.soil*`, the colour
+  the terrain draws exposed soil in) and chain `terrainFx`, so cloud shadow,
+  weather tint and sky fill match the ground. The first cut lifted the palette
+  8% and pulled it to tan: a step paler than the soil beside it. `slipify` and
+  `terrainFx` both declared `uWxTex`; a track wears both, and the redefinition
+  failed the link — guarded with `DRIVE_WX_DECL` now.
+- **Grass on a worn track is trampled, not thinned.** The sward mask is ~1.5 m a
+  texel and cannot draw a 0.3 m rut, so a worn track writes green-without-blue
+  (a carriageway is white) and blades there grow at a quarter height
+  (`sTrample`), the ribbon's crown gaps carrying the grass colour.
+- **The river's margin reads the substrate too.** The hydro material shades its
+  bed, damp margin and bank from the sward colour field, which took the
+  substrate tint only where grass grows — so under water it held the raw
+  palette, and the Senqu margin drew as a pale tan band beside a meadow the
+  substrate had greened. Hide-diffs: water off, the band goes; substrate off,
+  the whole meadow is that pale; MATERIAL view, the band is the unexpressed
+  ground under the water. Water texels now take the substrate composite in
+  full on the bank's land class. And in the kernel, cover-water the field
+  draws no water over takes its nearest land class (a 38 m cover pixel is
+  wider than a river's drawn water).
+- **The NaN flash has a witness.** The luma pass flags cells whose scene
+  samples are non-finite (`x != x`) in alpha; `__nan()` and the telemetry row
+  `non-finite frames` count them with the camera and speed of the last one;
+  `?nanpaint=1` paints a non-finite scene pixel magenta (dim where the post
+  chain spread one). Not yet reproduced in the harness: 188 reads, 0 hits.
+
+## The water's 4M triangles were the surf strip, subdivided for a coarser mesh
+
+A device dump at Nagato (tseg 256) read 11.75M pre-cull triangles: terrain
+5.02M, **hydro-tile 3.99M**, trees 2.02M. `__hydromesh()` (every hydro mesh by
+name and triangle count) put **2.98M of the water's 3.24M in the `:surf`
+meshes**, up to 564k in one tile. `buildSurf` subdivided each coastal cell a
+fixed 8×, with a comment sizing it against a 75 m cell; the coastal mesh is
+now `meshSegments × coastalMeshMultiplier` = 96 over a ~2 km tile, ~21 m a
+cell, so the strip had a vertex every 2.6 m across its whole 96 m band. The
+subdivision is solved now, `ceil(parentCell / SURF_CELL_M)` with
+`SURF_CELL_M = 9` (the comment's own target), capped at 8. Same spot, same
+harness: **3,235,290 → 492,744 water triangles**, the worst surf tile
+563,712 → 35,232. `hydro`, `hydro-render-cutover`, `hydro-coast` and
+`hydro-resolution` green. Not yet judged by eye on a surf frame.
+
+## Nagato: the road in a cutting was hidden by our own burial rule
+
+Seat frames at `34.41330 131.08163 h73` against Street View: the real road
+runs in a cutting between crib retaining walls; the game drew grass across it
+for ~75 m. `__roadprof(dist, step)` (new: deck, DEM, mesh and the ground either
+side of the kerb every few metres along the heading) reads the deck 6–8 m under
+the DEM from 15 m to 90 m ahead with the MESH at the DEM, and cut correctly
+either side. The way is `highway=tertiary`, no tunnel or bridge tag. `__fragwhy`
+shows the planner hint following the ground and then `2d-chord` dropping the
+station ~6 m: `resolveProductionRoadStructureProfile` treats a knoll in the
+along-way profile (more than `TUNNEL_TOL` above its smoothed self) as an
+implicit run and chords through it, the result is deeper than
+`TUNNEL_H + 0.6` (5.6 m), so `tn` is set and the carve declines to dig — the
+Fish Hoek guard against a crater, firing on a genuine cutting. Not fixed yet.
+The Japan DEM is GSI 1–10 m bare earth (mapterhorn's `jpdem*` sources), so
+canopy in a surface model is not the cause here; the projection is exact to
+0.1% (1 km east 918.4 local vs 917.3 haversine, north 1113.2 vs 1112.0).
+
+**Fixed: an implicit cutting may go to `CUT_DEEP_M` (12 m, `?cutdeep=`).** The
+burial scan reads the structure pass's own `runs`: inside an implicit chord run
+of an untagged way the threshold is 12 m, everywhere else still 5.6 m (the
+Fish Hoek grade-line case). Nagato after: mesh on the deck to 0.1 m through the
+whole stretch, cut faces 2–6 m either side. The Cape fixtures are
+**byte-identical** under `cutdeep=5.6` and `12` (Glencairn, Camps Bay, Simon's
+Town, Bixby: same exposed and exempt counts to the segment), so the rule did not
+fire there at all — their exempt burials are not chord runs, which is what the
+split was meant to preserve. Measured with `__buried(900)` per fixture.
+
+## The canopy (`?canopy=1`): closed forest as a surface, and the budget it frees
+
+`__standcensus` at Nagato: ~40 trees a hectare in the manifest where the
+satellite shows closed canopy, and only 5–12% of sites surrounded — so culling
+"interior" trees could never have saved much. The canopy draws tree-cover
+ground (WorldCover 10, five-tap evidence) as a lattice a stand height over the
+drawn ground: an inner ring at 6 m, an outer at 12 m out to the tree draw
+range, crowns evaluated per fragment (jittered-cell domes, band-limited to
+their mean), steep lattice faces shaded as the stand's side and holed in the
+crown gaps. The rebuild is a sliced job in the frame loop (`CANOPY_SLICE_MS`);
+the device dump before slicing showed 124–217 ms spikes.
+
+Trees whose site is inside closed canopy (every surrounding node ≥ 0.8
+evidence, past the near field) are left to it (`canopyHides`, in both
+gathers). **Hiding them saves nothing on its own**: the tree triangle budget
+is a target the allocator always spends — hiding 7,538 trees moved the bill
+0.68M → 0.72M. So with the canopy up the budget is multiplied by
+`1 − 0.75 × share` (floored 0.3), share being the hidden fraction of the near
+gather. Measured at Nagato (pop 8x, range 1.4 km): 85,936 trees hidden, 90%,
+budget ×0.32, canopy 302k triangles, rebuild 523 ms total sliced. In the
+harness trees are capped by population, not budget, so the saving only shows
+on a device, where the dump reads 2.29M of a 2.4M budget.
+
+## Canopy v3 — ray-traced crowns (`?canopy=1`, 2026-09-26)
+- The canopy lattice is a PROXY SHELL (`canLift` = 3x3-dilated lift ×1.4 + 2 m). Each fragment marches the view ray (≤28 steps, dt = clamp(0.011·t, 0.7, 3.2)) against the four crowns of its 2x2 cell quadrant (one jittered crown per 6.5 m cell, ellipsoid broadleaf / cone conifer, lobes inward-only so R·lobe ≤ 0.75 cell); misses discard; writes `gl_FragDepth` of the hit (three declares `projectionMatrix` only for the vertex stage — the fragment must declare it or the material silently fails to compile and draws nothing).
+- Per ring: RG16F ground/lift texture (`canTex`); shared RGBA8 stand texture from vegGrid tree sites (sqrt colour, a = conifer share), 110 m texels, biome band fallback.
+- March only while the ACROSS-view footprint (min of |dFdx|,|dFdy|) is < 0.55 crown; the along-view measure cut crowns at 300 m on oblique views.
+- `__canopylook({leaf, shadow, tone, debug, near, find})`: debug 1 lift, 2 hit kind (crown green / floor blue / trunk yellow / miss magenta), 3 march reach; `near:false` for shots framed on the focus; `find: m` returns a closed-stand point m from focus. Harness shots: `canopyslice=60` or the first build takes minutes in software GL.
+- Nagato A/B: with the canopy off the stand is ~40 trees/ha (bare ground between); on, a closed crowned forest matching the satellite. Rebuild ~430-470 ms CPU sliced; hidden share ~0.8, tree budget x0.40.
+- **Scrolling rings (v3.8, 2026-09-26).** Full rebuilds (~425 ms CPU harness, ~130k nodes) could not keep up at 100 km/h on the phone — the seat saw no canopy around the car. Rings now persist with two buffers each and shift by whole rows/cols when the focus is 8 steps off centre (48 m inner, 96 m outer), computing only the uncovered strip, then shell/normals around it, then the index, then swap. Harness at 30 m/s for 60 s: 71 shifts, 4-5 ms CPU each (one 22 ms), canopy phase mean 0.4 ms/frame, max 39 ms (the unsliced copy/index — slice it if the phone shows it), no backlog. Full rebuild only on first sight / origin / treeRange change / >300 m ground drift from the half-float base / 45 s terrain refresh.
+- Rebuild profile (old full path): groundAt chain ~230 ms, onCarriageway 60, shell/index 90, stand 25; not one hotspot.
+- Review fixes v3.7: exhausted march and far path intersect the aggregate roof (ground + 0.8·faded lift) for a real depth or discard; refinement from the last sampled miss; floor re-evaluated per bisection; trunk keeps its centre; transmission/wrap × direct light colour; canopyHides keeps trees taller than 1.1 × local lift (Nagato: hidden share 87% → 45%, budget ×0.35 → ×0.66 — the roof is too low for the real trees; next: roof height from the stand's own trees).
