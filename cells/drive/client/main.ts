@@ -17295,9 +17295,15 @@ const CANOPY_SLICE_MS = qsNum('canopyslice', 3), CANOPY_SHIFT_NODES = 8, CANOPY_
 interface CanopyBuf { pos: Float32Array; col: Float32Array; lift: Float32Array; plift: Float32Array;
   nrm: Float32Array; ev: Float32Array; tex: Uint16Array<ArrayBuffer>; idx: Uint32Array; ni: number }
 interface CanopyRing { mesh: THREE.Mesh; outer: boolean; step: number; N: number; V: number;
-  x0: number; z0: number; baseY: number; live: CanopyBuf; spare: CanopyBuf; tex: THREE.DataTexture | null }
-interface CanopyJob { R: CanopyRing; B: CanopyBuf; x0: number; z0: number; dirty: Uint8Array; rowDirty: Uint8Array;
-  phase: 0 | 1 | 2 | 3; j: number; ms: number; full: boolean }
+  x0: number; z0: number; baseY: number; live: CanopyBuf; spare: CanopyBuf; tex: THREE.DataTexture | null;
+  /** A scratch index the INNER ring's job fills for this (outer) ring's hole. */
+  idx2: Uint32Array | null }
+/** Phases, each in rows under the slice: -1 copy the old lattice over, 0 the
+ *  dirty nodes, 1 their shell and normals, 2 the index, 3 (inner jobs) the
+ *  outer ring's index around the NEW inner square, 4 commit. */
+interface CanopyJob { R: CanopyRing; B: CanopyBuf; x0: number; z0: number; dx: number; dz: number;
+  dirty: Uint8Array; rowDirty: Uint8Array; copy: boolean;
+  phase: -1 | 0 | 1 | 2 | 3 | 4; j: number; ms: number; full: boolean; oni: number }
 type CanopyGrid = { x0: number; z0: number; V: number; step: number; ev: Float32Array; lift: Float32Array };
 let canopyRings: CanopyRing[] = [];
 let canopyJobs: CanopyJob[] = [];
@@ -17324,29 +17330,37 @@ function canopyWant(fx: number, fz: number): Array<{ outer: boolean; step: numbe
 /** Queue the job that brings ring R to origin (x0, z0): a shift where the
  *  old lattice still covers some of it, everything dirty where it does not. */
 function canopyQueue(R: CanopyRing, x0: number, z0: number, full: boolean): void {
-  const V = R.V, B = R.spare;
+  // THE COPY IS A PHASE, NOT A CALL. Moving 3 MB of lattice in the frame that
+  // queued the shift was the canopy's 87 ms spike on the phone; here only the
+  // masks are made (memsets), and the rows move under the slice like the rest.
+  const V = R.V;
   const dirty = new Uint8Array(V * V), rowDirty = new Uint8Array(V);
   const dx = Math.round((x0 - R.x0) / R.step), dz = Math.round((z0 - R.z0) / R.step);
-  const L = R.live;
-  if (full || Math.abs(dx) >= V || Math.abs(dz) >= V) { dirty.fill(1); rowDirty.fill(1); }
+  const copy = !(full || Math.abs(dx) >= V || Math.abs(dz) >= V);
+  if (!copy) { dirty.fill(1); rowDirty.fill(1); }
   else {
-    // The old lattice, moved: node (i, j) of the new is (i+dx, j+dz) of the old.
     const i0 = Math.max(0, -dx), i1 = Math.min(V, V - dx);
     for (let j = 0; j < V; j++) {
       const sj = j + dz;
       if (sj < 0 || sj >= V || i1 <= i0) { dirty.fill(1, j * V, (j + 1) * V); rowDirty[j] = 1; continue; }
-      const d = j * V + i0, sOff = sj * V + i0 + dx, n = i1 - i0;
-      B.pos.set(L.pos.subarray(sOff * 3, (sOff + n) * 3), d * 3);
-      B.col.set(L.col.subarray(sOff * 3, (sOff + n) * 3), d * 3);
-      B.nrm.set(L.nrm.subarray(sOff * 3, (sOff + n) * 3), d * 3);
-      B.lift.set(L.lift.subarray(sOff, sOff + n), d);
-      B.plift.set(L.plift.subarray(sOff, sOff + n), d);
-      B.ev.set(L.ev.subarray(sOff, sOff + n), d);
-      B.tex.set(L.tex.subarray(sOff * 4, (sOff + n) * 4), d * 4);
       if (i0 > 0 || i1 < V) { rowDirty[j] = 1; dirty.fill(1, j * V, j * V + i0); dirty.fill(1, j * V + i1, (j + 1) * V); }
     }
   }
-  canopyJobs.push({ R, B, x0, z0, dirty, rowDirty, phase: 0, j: 0, ms: 0, full });
+  canopyJobs.push({ R, B: R.spare, x0, z0, dx, dz, dirty, rowDirty, copy, phase: copy ? -1 : 0, j: 0, ms: 0, full, oni: 0 });
+}
+/** One row of the old lattice, moved: node (i, j) of the new is (i+dx, j+dz). */
+function canopyCopyRow(J: CanopyJob, j: number): void {
+  const R = J.R, V = R.V, L = R.live, B = J.B;
+  const sj = j + J.dz, i0 = Math.max(0, -J.dx), i1 = Math.min(V, V - J.dx);
+  if (sj < 0 || sj >= V || i1 <= i0) return;
+  const d = j * V + i0, sOff = sj * V + i0 + J.dx, n = i1 - i0;
+  B.pos.set(L.pos.subarray(sOff * 3, (sOff + n) * 3), d * 3);
+  B.col.set(L.col.subarray(sOff * 3, (sOff + n) * 3), d * 3);
+  B.nrm.set(L.nrm.subarray(sOff * 3, (sOff + n) * 3), d * 3);
+  B.lift.set(L.lift.subarray(sOff, sOff + n), d);
+  B.plift.set(L.plift.subarray(sOff, sOff + n), d);
+  B.ev.set(L.ev.subarray(sOff, sOff + n), d);
+  B.tex.set(L.tex.subarray(sOff * 4, (sOff + n) * 4), d * 4);
 }
 
 // Heights are sampled sparsely and cached, then smoothly interpolated.
@@ -17448,21 +17462,24 @@ function canopyShell(R: CanopyRing, B: CanopyBuf, i: number, j: number): void {
 }
 /** Every cell of the ring with a shell over any corner, less the inner
  *  ring's square when this is the outer. */
-function canopyIndex(R: CanopyRing, B: CanopyBuf, x0: number, z0: number): void {
-  const V = R.V, N = R.N, inner = R.outer ? canopyRings[0] : null;
-  const H = inner ? [inner.x0, inner.z0, inner.x0 + inner.N * inner.step, inner.z0 + inner.N * inner.step] : null;
-  let ni = 0;
-  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+/** One row of cells into idx from ni: every cell with a shell over any
+ *  corner, less the hole H (the inner ring's square) when there is one. */
+function canopyIndexRow(R: CanopyRing, B: CanopyBuf, x0: number, z0: number, j: number,
+  H: [number, number, number, number] | null, idx: Uint32Array, ni: number): number {
+  const V = R.V, N = R.N;
+  for (let i = 0; i < N; i++) {
     if (H) {
       const cx = x0 + (i + 0.5) * R.step, cz = z0 + (j + 0.5) * R.step;
       if (cx > H[0] && cx < H[2] && cz > H[1] && cz < H[3]) continue;
     }
     const a = j * V + i, b = a + 1, c = a + V, d = c + 1;
     if (Math.max(B.plift[a], B.plift[b], B.plift[c], B.plift[d]) <= 0) continue;
-    B.idx[ni++] = a; B.idx[ni++] = c; B.idx[ni++] = b; B.idx[ni++] = b; B.idx[ni++] = c; B.idx[ni++] = d;
+    idx[ni++] = a; idx[ni++] = c; idx[ni++] = b; idx[ni++] = b; idx[ni++] = c; idx[ni++] = d;
   }
-  B.ni = ni;
+  return ni;
 }
+const canopyHole = (r: CanopyRing, x0 = r.x0, z0 = r.z0): [number, number, number, number] =>
+  [x0, z0, x0 + r.N * r.step, z0 + r.N * r.step];
 function canopyCommitJob(J: CanopyJob): void {
   const R = J.R, B = J.B;
   const geo = new THREE.BufferGeometry();
@@ -17488,13 +17505,14 @@ function canopyCommitJob(J: CanopyJob): void {
   canopyStat.tris = tris; canopyStat.cells = tris / 2;
   canopyStat.ms = +J.ms.toFixed(1);
   canopyStat.builds++;
-  // The inner square moved: the outer's hole moves with it. The stand's
-  // colour follows the outer ring's box.
-  if (!R.outer && canopyRings[1]) {
-    // Move the outer exclusion in the same frame as the inner square.
-    // Waiting for its next job leaves a missing strip behind the inner ring.
-    const outer = canopyRings[1];
-    canopyIndex(outer, outer.live, outer.x0, outer.z0);
+  // The inner square moved: the outer's hole moves with it IN THE SAME
+  // COMMIT (waiting for the outer's next job left a strip missing behind the
+  // inner ring). Its index was built under the slice in phase 3, into the
+  // scratch array, around the square this job has just made live.
+  const outer = canopyRings[1];
+  if (!R.outer && outer && outer.idx2) {
+    const was = outer.live.idx;
+    outer.live.idx = outer.idx2; outer.live.ni = J.oni; outer.idx2 = was;
     outer.mesh.geometry.setIndex(new THREE.BufferAttribute(outer.live.idx.subarray(0, outer.live.ni), 1));
     canopyStat.tris = canopyRings.reduce((sum, ring) => sum + ring.live.ni / 3, 0);
     canopyStat.cells = canopyStat.tris / 2;
@@ -17542,7 +17560,8 @@ function stepCanopy(now: number): void {
     canopyRings = want.map((w) => {
       const V = w.N + 1;
       return { mesh: w.outer ? canopyOuter : canopyMesh, outer: w.outer, step: w.step, N: w.N, V,
-        x0: w.x0, z0: w.z0, baseY, live: canopyBuf(V), spare: canopyBuf(V), tex: null };
+        x0: w.x0, z0: w.z0, baseY, live: canopyBuf(V), spare: canopyBuf(V), tex: null,
+        idx2: w.outer ? new Uint32Array(w.N * w.N * 6) : null };
     });
     canopyGrids = [];
     canopyOuter.geometry.setIndex([]); canopyMesh.geometry.setIndex([]);
@@ -17574,8 +17593,12 @@ function stepCanopy(now: number): void {
   if (!J) return;
   const R = J.R, V = R.V, t0 = performance.now();
   const slice = canopyGrids.length ? CANOPY_SLICE_MS : CANOPY_SLICE_MS * 3;
+  const outerR = !R.outer ? canopyRings[1] : undefined;
   while (performance.now() - t0 < slice) {
-    if (J.phase === 0) {
+    if (J.phase === -1) {
+      if (J.j >= V) { J.phase = 0; J.j = 0; continue; }
+      canopyCopyRow(J, J.j++);
+    } else if (J.phase === 0) {
       // The dirty nodes, row by row.
       if (J.j >= V) { J.phase = 1; J.j = 0; continue; }
       const j = J.j++;
@@ -17583,7 +17606,7 @@ function stepCanopy(now: number): void {
       for (let i = 0; i < V; i++) if (J.dirty[j * V + i]) canopyNode(R, J.B, J.x0, J.z0, i, j);
     } else if (J.phase === 1) {
       // The shell and normals of every node a dirty node touches.
-      if (J.j >= V) { J.phase = 2; continue; }
+      if (J.j >= V) { J.phase = 2; J.j = 0; J.B.ni = 0; continue; }
       const j = J.j++;
       if (!J.rowDirty[j] && !(j > 0 && J.rowDirty[j - 1]) && !(j < V - 1 && J.rowDirty[j + 1])) continue;
       for (let i = 0; i < V; i++) {
@@ -17596,12 +17619,19 @@ function stepCanopy(now: number): void {
         if (hit) canopyShell(R, J.B, i, j);
       }
     } else if (J.phase === 2) {
-      canopyIndex(R, J.B, J.x0, J.z0);
-      J.phase = 3;
+      // This ring's index, a row at a time; the outer's hole is the inner
+      // ring's LIVE square (an inner job re-indexes the outer itself).
+      if (J.j >= R.N) { J.phase = outerR?.idx2 ? 3 : 4; J.j = 0; J.oni = 0; continue; }
+      J.B.ni = canopyIndexRow(R, J.B, J.x0, J.z0, J.j++, R.outer ? canopyHole(canopyRings[0]) : null, J.B.idx, J.B.ni);
+    } else if (J.phase === 3) {
+      // The outer ring around the square THIS job is about to make live.
+      const O = outerR!;
+      if (J.j >= O.N) { J.phase = 4; continue; }
+      J.oni = canopyIndexRow(O, O.live, O.x0, O.z0, J.j++, canopyHole(R, J.x0, J.z0), O.idx2!, J.oni);
     } else break;
   }
   J.ms += performance.now() - t0;
-  if (J.phase !== 3) return;
+  if (J.phase !== 4) return;
   canopyJobs.shift();
   canopyCommitJob(J);
 }
@@ -18223,7 +18253,13 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       // shortcut cannot promise.
       const pool = new Set(EZ_FAMILIES.filter((f) => want[f] > 0));
       const cap = ezRecord(() => 0);
-      let left = treeTriBudget * canopyBudgetK();
+      // NOT SCALED BY THE CANOPY. Trees the canopy stands in for are already
+      // out of the candidate list, so the budget they would have used goes to
+      // the trees that remain — nearest first, the allocator ranks by
+      // apparent size — which is the point of the canopy: the verge and edge
+      // trees beside the truck full 3D. Cutting the budget as well (x0.48 on a
+      // 0.3M cap in the Nagato dump) left ~840 skeletons and put cards close.
+      let left = treeTriBudget;
       for (let round = 0; round < EZ_FAMILIES.length + 1 && pool.size; round++) {
         let share = 0;
         for (const f of pool) share += ezCapNominal(f) * ezTriPrice(f);
@@ -52548,7 +52584,7 @@ function telemetryReport(): string {
       + ` · cooldown ${vegSeedDeferred ? `${VEG_SEED_CATCHUP}ms (seeding behind)` : '900ms'}`
       + ` · no distance trigger, no priority: the near tier commits with the far one`);
   }
-  if (CANOPY_ON) L.push(`canopy on · rings ${canopyGrids.length} · ${(canopyStat.tris / 1e3).toFixed(0)}k tris · build ${canopyStat.ms}ms sliced · stands in for ${canopyStat.hid} trees (${(canopyStat.share * 100).toFixed(0)}% of the near gather) · tree budget x${canopyBudgetK().toFixed(2)}`);
+  if (CANOPY_ON) L.push(`canopy on · rings ${canopyGrids.length} · ${(canopyStat.tris / 1e3).toFixed(0)}k tris · build ${canopyStat.ms}ms sliced · stands in for ${canopyStat.hid} trees (${(canopyStat.share * 100).toFixed(0)}% of the near gather) · tree budget unscaled (hidden trees are out of the gather)`);
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge} · mid ${_treeMid} at ${EZ_FULL_PX}px`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
@@ -62195,6 +62231,19 @@ loadSpots();
 applyDials();
 // A URL instrument outranks the remembered rack, as the other URL fixtures do.
 if (Number.isFinite(treeTriUrl) && treeTriUrl > 0) treeTriBudget = treeTriUrl;
+// THE TREES DIALS SAY WHAT IS LIVE. They act only under a hand (never at
+// boot), so their default or remembered position could read 0.3M and 2.8 km
+// while the world ran the real defaults — and a tap stepped on from the
+// position shown, not the value running: the Nagato dump had a 0.3M cap and a
+// 2.8 km range after trying to raise them.
+{
+  const nearest = (xs: readonly number[], v: number): number =>
+    xs.reduce((b, x, i) => (Math.abs(x - v) < Math.abs(xs[b] - v) ? i : b), 0);
+  const put = (key: string, i: number): void => { const d = DIALS.find((x) => x.key === key); if (d) d.at = i; };
+  put('ttri', nearest(TREE_TRI_STEPS, treeTriBudget));
+  put('trng', nearest(TREE_RANGE_STEPS, treeRange));
+  put('tpop', nearest(TREE_POP_STEPS, treePopulationScale));
+}
 applyEzLookUrl();
 // The custom paint rides OVER whatever preset the dial just applied.
 if (customPaint) bodyMat?.color.set(customPaint);
