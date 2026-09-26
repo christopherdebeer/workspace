@@ -16794,10 +16794,10 @@ float canN3(vec3 p) {
   return mix(lo, hi, f.z);
 }
 /** Ground and lift at a world point, off the ring's own lattice. */
-vec2 canGL(vec2 xz) {
+vec3 canGL(vec2 xz) {
   vec2 uv = ((xz - canTexBox.xy) / canTexBox.z + 0.5) / canTexBox.w;
-  vec2 t = texture2D(canTex, uv).rg;
-  return vec2(t.r + canBaseY, t.g);
+  vec3 t = texture2D(canTex, uv).rgb;
+  return vec3(t.r + canBaseY, t.g, t.b);
 }
 float canFadeAt(vec2 xz) {
   float f = canFoc.z > 0.5 ? clamp((length(xz - canFoc.xy) - ${CANOPY_NEAR.toFixed(1)}) / 40.0, 0.0, 1.0) : 1.0;
@@ -16805,14 +16805,14 @@ float canFadeAt(vec2 xz) {
   return f * mix(0.35, 1.0, smoothstep(0.0, ${CANOPY_EDGE_FADE.toFixed(1)}, ed));
 }
 // A crown: A = (centre x, centre z, top y, radius), B = (depth, cone?, lift, ground).
-vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4]; float cTop;
+vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4]; float cDen[4]; float cTop;
 void canLoad(vec2 q) {
   cTop = -1e9;
   for (int k = 0; k < 4; k++) {
     vec2 cell = q + vec2(float(k - (k / 2) * 2), float(k / 2));
     vec4 h = canH4(cell);
     vec2 c = (cell + 0.25 + 0.5 * h.xy) * ${S};
-    vec2 gl = canGL(c);
+    vec3 gl = canGL(c);
     float L = gl.y * canFadeAt(c) * (0.84 + 0.3 * h.z);
     float cone = step(h.w, texture2D(canStand, (c - canStandBox.xy) * canStandBox.zw).a);
     // A closed stand's crowns touch: 0.58-0.74 of the cell, the most the 2x2
@@ -16822,7 +16822,11 @@ void canLoad(vec2 q) {
     L *= 1.0 + 0.22 * emergent;
     float R = ${S} * mix(0.58, 0.74, fract(h.z * 3.7 + h.w)) * mix(1.0, 0.66, cone) * clamp(L / 11.0, 0.55, 1.0);
     float D = cone > 0.5 ? L * 0.78 : min(L * 0.62, R * 1.35);
-    if (L < 2.5) R = -1.0;
+    // A STAND IS AS DENSE AS ITS COVER. The cell holds a tree with the
+    // probability the tree cover around it gives: every cell in a closed
+    // stand, scattered crowns with ground between in open woodland or a copse.
+    if (L < 2.5 || fract(h.x * 13.7 + h.z * 3.1) > gl.z) R = -1.0;
+    cDen[k] = gl.z;
     cA[k] = vec4(c, gl.x + L, R); cB[k] = vec4(D, cone, L, gl.x); cH[k] = h;
     cR[k] = vec2(cos(h.y * 6.2832), sin(h.y * 6.2832));
     // The highest thing this quadrant can hold: a crown's top, or where there
@@ -16862,7 +16866,10 @@ float canFloorAt(vec3 p, out float gq) {
   vec2 f = clamp(fract(p.xz / ${S} - 0.5), 0.0, 1.0);
   gq = mix(mix(cB[0].w, cB[1].w, f.x), mix(cB[2].w, cB[3].w, f.x), f.y);
   float Lq = mix(mix(cB[0].z, cB[1].z, f.x), mix(cB[2].z, cB[3].z, f.x), f.y);
-  return Lq > 2.5 ? gq + max(0.6, Lq * 0.46 * smoothstep(6.0, 11.0, Lq)) + (canN3(p * 0.45) - 0.5) * 2.4 * smoothstep(4.0, 9.0, Lq) : -1e9;
+  // The mid-storey is a CLOSED stand's: open woodland shows its ground.
+  float dq = mix(mix(cDen[0], cDen[1], f.x), mix(cDen[2], cDen[3], f.x), f.y);
+  float cl = smoothstep(0.6, 0.95, dq);
+  return Lq > 2.5 && dq > 0.6 ? gq + max(0.6, Lq * 0.46 * smoothstep(6.0, 11.0, Lq) * cl) + (canN3(p * 0.45) - 0.5) * 2.4 * smoothstep(4.0, 9.0, Lq) * cl : -1e9;
 }
 /** THE AGGREGATE STAND, AS A SURFACE THAT IS ACTUALLY MET. Where the crowns
  *  are not resolved — under two pixels, or a march that spent its steps —
@@ -16874,14 +16881,16 @@ float canAggregate(vec3 ro, vec3 rd, float t, float step) {
   float ta = t;
   for (int s = 0; s < 24; s++) {
     vec3 p = ro + rd * t;
-    vec2 gl = canGL(p.xz);
+    vec3 gl = canGL(p.xz);
     float L = gl.y * canFadeAt(p.xz);
-    if (L > 2.5 && p.y < gl.x + 0.8 * L) {
+    // Only a stand dense enough to read as one mass is a surface at range;
+    // thin woodland far off is its ground and the trees the gather keeps.
+    if (L > 2.5 && gl.z > 0.45 && p.y < gl.x + 0.8 * L) {
       float tb = t;
       for (int r = 0; r < 4; r++) {
         float tm = 0.5 * (ta + tb); vec3 pm = ro + rd * tm;
-        vec2 gm = canGL(pm.xz); float Lm = gm.y * canFadeAt(pm.xz);
-        if (Lm > 2.5 && pm.y < gm.x + 0.8 * Lm) tb = tm; else ta = tm;
+        vec3 gm = canGL(pm.xz); float Lm = gm.y * canFadeAt(pm.xz);
+        if (Lm > 2.5 && gm.z > 0.45 && pm.y < gm.x + 0.8 * Lm) tb = tm; else ta = tm;
       }
       return tb;
     }
@@ -17078,7 +17087,7 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
   // the proxy's own lift ratio; 2 paints what the march met — crown green,
   // floor blue, trunk yellow, nothing magenta; 3 the march's reach (t - t0).
   if (canLook.w > 0.5) {
-    vec2 g0 = canGL(vCanW.xz);
+    vec3 g0 = canGL(vCanW.xz);
     if (canLook.w < 1.5) diffuseColor.rgb = vec3(g0.y / 16.0, clamp((vCanW.y - g0.x) / 20.0, 0.0, 1.0), px);
     // Misses by cause: magenta the march ran out of steps, cyan it reached bare
     // ground, white it never marched (a crown under two pixels).
@@ -17188,7 +17197,7 @@ let canopyStand: { tex: THREE.DataTexture; box: THREE.Vector4 } | null = null;
 let canopyGrids: CanopyGrid[] = [];
 const canopyBuf = (V: number): CanopyBuf => ({ pos: new Float32Array(V * V * 3), col: new Float32Array(V * V * 3),
   lift: new Float32Array(V * V), plift: new Float32Array(V * V), nrm: new Float32Array(V * V * 3),
-  ev: new Float32Array(V * V), tex: new Uint16Array(V * V * 2), idx: new Uint32Array((V - 1) * (V - 1) * 6), ni: 0 });
+  ev: new Float32Array(V * V), tex: new Uint16Array(V * V * 4), idx: new Uint32Array((V - 1) * (V - 1) * 6), ni: 0 });
 /** The rings a focus wants: the inner at CANOPY_STEP across CANOPY_N, the
  *  outer at twice the step reaching the tree draw range. */
 function canopyWant(fx: number, fz: number): Array<{ outer: boolean; step: number; N: number; x0: number; z0: number }> {
@@ -17222,7 +17231,7 @@ function canopyQueue(R: CanopyRing, x0: number, z0: number, full: boolean): void
       B.lift.set(L.lift.subarray(sOff, sOff + n), d);
       B.plift.set(L.plift.subarray(sOff, sOff + n), d);
       B.ev.set(L.ev.subarray(sOff, sOff + n), d);
-      B.tex.set(L.tex.subarray(sOff * 2, (sOff + n) * 2), d * 2);
+      B.tex.set(L.tex.subarray(sOff * 4, (sOff + n) * 4), d * 4);
       if (i0 > 0 || i1 < V) { rowDirty[j] = 1; dirty.fill(1, j * V, j * V + i0); dirty.fill(1, j * V + i1, (j + 1) * V); }
     }
   }
@@ -17248,14 +17257,18 @@ function canopyNode(R: CanopyRing, B: CanopyBuf, x0: number, z0: number, i: numb
   B.ev[k] = ev;
   const g = groundAt(x, z);
   const stand = CANOPY_H * (0.8 + 0.4 * canopyHash(Math.floor(x / 90), Math.floor(z / 90), 7));
-  // INSET AND UNDER THE EDGE. The roof starts only where the evidence says
-  // a stand is well under way (0.6) and is full at 0.85 — where the gather
-  // starts leaving trees to it — and it stands at 0.8 of the stand height,
-  // so the stand's own edge trees are its side and overtop the roof's rim.
-  const rise = Math.min(1, Math.max(0, (ev - 0.6) / 0.25));
-  B.lift[k] = rise * rise * (3 - 2 * rise) * stand * 0.8;
+  // THE CANOPY OWNS THE STAND TO ITS EDGE, AND THE THIN ONES TOO. The trees
+  // reach full height wherever there is tree cover at all (0.1-0.3 of the
+  // taps), and the cover's share is a DENSITY: the shader keeps a crown in
+  // that share of its cells, so a copse or open woodland is scattered crowns
+  // and a closed stand every one. The old inset (a roof starting at 0.6 under
+  // the edge trees) was for a canopy that handed its edges to the gather.
+  const rise = Math.min(1, Math.max(0, (ev - 0.1) / 0.2));
+  const dens = Math.min(1, Math.max(0, (ev - 0.1) / 0.75));
+  B.lift[k] = rise * rise * (3 - 2 * rise) * stand;
   B.pos[k * 3] = x; B.pos[k * 3 + 1] = g; B.pos[k * 3 + 2] = z;
-  B.tex[k * 2] = THREE.DataUtils.toHalfFloat(g - R.baseY); B.tex[k * 2 + 1] = THREE.DataUtils.toHalfFloat(B.lift[k]);
+  B.tex[k * 4] = THREE.DataUtils.toHalfFloat(g - R.baseY); B.tex[k * 4 + 1] = THREE.DataUtils.toHalfFloat(B.lift[k]);
+  B.tex[k * 4 + 2] = THREE.DataUtils.toHalfFloat(dens); B.tex[k * 4 + 3] = 0;
   // The ground's own palette under the stand; the shader pulls it toward
   // leaf, and lets go of it at the ring's edge. Bare ground only ever colours
   // the foot of an edge cell, so it takes its row neighbour's tone and skips
@@ -17318,7 +17331,7 @@ function canopyCommitJob(J: CanopyJob): void {
   geo.setIndex(new THREE.BufferAttribute(B.idx.subarray(0, B.ni), 1));
   R.mesh.geometry.dispose();
   R.mesh.geometry = geo;
-  const tex = new THREE.DataTexture(B.tex, R.V, R.V, THREE.RGFormat, THREE.HalfFloatType);
+  const tex = new THREE.DataTexture(B.tex, R.V, R.V, THREE.RGBAFormat, THREE.HalfFloatType);
   tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
   const U = R.outer ? canopyOut.u : canopyIn.u;
   R.tex?.dispose(); R.tex = tex;
@@ -17511,23 +17524,20 @@ function canopyStandBuild(box: [number, number, number, number]): { tex: THREE.D
  *  roof. Edge trees, verge trees and the near field stay individual — that is
  *  where the budget this frees goes. */
 function canopyHides(x: number, z: number, tallM = 0): boolean {
-  const F = canopyU.foc.value;
-  if (F.z > 0.5 && Math.hypot(x - F.x, z - F.y) < CANOPY_NEAR + 60) return false;
+  // WHERE THE CANOPY DRAWS THE STAND, IT DRAWS ITS TREES. Any site on tree
+  // cover the canopy stands over (a quarter of the taps and up — the same
+  // cover that gives its crowns their density) is the canopy's, near or far;
+  // verges, other land covers and open ground keep their mesh trees.
   for (const G of canopyGrids) {
-    const u = (x - G.x0) / G.step, v = (z - G.z0) / G.step;
-    const i = Math.floor(u), j = Math.floor(v);
-    if (i < 1 || j < 1 || i >= G.V - 2 || j >= G.V - 2) continue;
+    const i = Math.round((x - G.x0) / G.step), j = Math.round((z - G.z0) / G.step);
+    if (i < 1 || j < 1 || i >= G.V - 1 || j >= G.V - 1) continue;
     // The inner grid answers where it covers; a point on its rim falls through
     // to the outer ring, whose own lattice covers the same ground coarser.
-    const r = G.step > CANOPY_STEP ? 1 : 2;
-    for (let b = -1; b <= r; b++) for (let a = -1; a <= r; a++) {
-      const k = (j + b) * G.V + i + a;
-      if (k < 0 || k >= G.ev.length || G.ev[k] < 0.85) return false;
-    }
-    // AN EMERGENT STAYS. A tree whose top stands clear of the roof here is a
-    // silhouette the crowns cannot carry, however closed the stand around it.
-    const lk = Math.round(v) * G.V + Math.round(u);
-    if (tallM > 0 && lk >= 0 && lk < G.lift.length && tallM > G.lift[lk] * 1.1) return false;
+    const k = j * G.V + i;
+    if (G.ev[k] < 0.25) return false;
+    // AN EMERGENT STAYS: a tree whose top stands clear of the crowns here is
+    // a silhouette the canopy cannot carry.
+    if (tallM > 0 && tallM > G.lift[k] * 1.2) return false;
     return true;
   }
   return false;
