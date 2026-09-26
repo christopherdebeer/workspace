@@ -236,6 +236,7 @@ import {
   type VehicleWaterWheelSample,
 } from './substrate/vehicle-water';
 import { createVehicleWaterEvidenceRenderer } from './substrate/vehicle-water-render';
+import { CAN_HASH_GLSL, canopyCrownAt, halfToFloat, SkeletonBuilder, type CanopyCrown } from './canopy-seed';
 
 // AHEAD OF THE ROUTE BRANCH, so a lab visit arms offline boot for the game and
 // the other way round. One shell answers every path on this host, so there is
@@ -16803,7 +16804,10 @@ const canopyU = { box: { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) }, foc: 
   inside: { value: 0 },
   /** Chase only: the truck (xyz) and 1 — crowns across the eye-to-truck line
    *  are cut away so the vehicle stays readable in a stand. */
-  cut: { value: new THREE.Vector4(0, 0, 0, 0) } };
+  cut: { value: new THREE.Vector4(0, 0, 0, 0) },
+  /** The skeleton layer's centre, radius and on: inside it the trunks are
+   *  geometry (canopy-seed.ts) and the shader's analytic trunk stands down. */
+  skel: { value: new THREE.Vector4(0, 0, 0, 0) } };
 
 // ── THE CANOPY IS RAY-TRACED CROWNS IN A SHELL ──
 //
@@ -16846,7 +16850,7 @@ function canopyMaterial(): { mat: THREE.MeshLambertMaterial; u: {
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = (sh, r) => {
     prev?.call(mat, sh, r);
-    Object.assign(sh.uniforms, u, { canBox: canopyU.box, canFoc: canopyU.foc, canSun: canopyU.sun, canLook: canopyU.look, canInside: canopyU.inside, canCut: canopyU.cut });
+    Object.assign(sh.uniforms, u, { canBox: canopyU.box, canFoc: canopyU.foc, canSun: canopyU.sun, canLook: canopyU.look, canInside: canopyU.inside, canCut: canopyU.cut, canSkel: canopyU.skel });
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
 attribute float canLift;
@@ -16873,13 +16877,9 @@ varying vec3 vCanW; varying float vCanF; varying float vCanK;
 uniform mat4 projectionMatrix;
 uniform sampler2D canTex; uniform vec4 canTexBox; uniform float canBaseY;
 uniform sampler2D canStand; uniform sampler2D canSpecies; uniform vec4 canStandBox;
-uniform vec4 canBox; uniform vec3 canFoc; uniform vec3 canSun; uniform vec4 canLook; uniform float canInside; uniform vec4 canCut;
+uniform vec4 canBox; uniform vec3 canFoc; uniform vec3 canSun; uniform vec4 canLook; uniform float canInside; uniform vec4 canCut; uniform vec4 canSkel;
 vec3 canN = vec3(0.0, 1.0, 0.0); float canShadow = 1.0; float canSky = 1.0; float canLeaf = 0.0;
-vec4 canH4(vec2 c) {
-  vec4 p4 = fract(vec4(c.xyx, c.y) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
-  p4 += dot(p4, p4.wzxy + 33.33);
-  return fract((p4.xxyz + p4.yzzw) * p4.zywx);
-}
+${CAN_HASH_GLSL}
 float canN3(vec3 p) {
   vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
   vec4 a = canH4(i.xy + i.z * 17.0), b = canH4(i.xy + (i.z + 1.0) * 17.0);
@@ -17177,6 +17177,8 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
         // ray's own plan, and only below the crown and above the ground.
         for (int k = 0; k < 4; k++) {
           if (cA[k].w <= 0.0) continue;
+          // Inside the skeleton layer the trunk is geometry, forks and all.
+          if (canSkel.w > 0.5 && length(cA[k].xy - canSkel.xy) < canSkel.z) continue;
           // A trunk goes only if it stands on the eye-to-truck line itself.
           if (canCut.w > 0.5) {
             vec2 sg2 = canCut.xz - ro.xz; float sl2 = dot(sg2, sg2);
@@ -17429,7 +17431,7 @@ normal = normalize(mix(normal, (viewMatrix * vec4(canN, 0.0)).xyz, vCanK));`)
   reflectedLight.indirectDiffuse += diffuseColor.rgb * canSunC * wrap * (0.035 + 0.045 * canSky) * vCanK;
 }`);
   };
-  mat.customProgramCacheKey = () => 'canopy-diversity-9';
+  mat.customProgramCacheKey = () => 'canopy-diversity-10';
   return { mat, u };
 }
 const canopyIn = canopyMaterial(), canopyOut = canopyMaterial();
@@ -17445,6 +17447,81 @@ canopyOuter.name = 'canopy-outer';
 canopyOuter.frustumCulled = false;
 scene.add(canopyOuter);
 let canopyAt = { x: NaN, z: NaN, t: 0, org: '', tb: -1 };
+// ── THE FOREST'S STRUCTURE: TRUNKS AND LIMBS FOR THE CANOPY'S OWN TREES ──
+//
+// Within CANOPY_SKEL_M of the focus every crown the shader draws gets its bole,
+// its fork and its main limbs as geometry, generated from the same integer
+// seed (canopy-seed.ts reproduces canLoad to the bit), so under the crowns the
+// view is trunks and branch undersides with real parallax rather than green
+// objects on analytic poles. The shader's own trunk stands down inside a
+// radius a metre short of the one built here, so a crown at the boundary gets
+// two trunks in the same place rather than none. WebGL2 only (the integer hash).
+const CANOPY_SKEL_M = qsNum('canopyskel', 48), CANOPY_SKEL_MOVE = 6;
+const canopySkelMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true });
+terrainFx(canopySkelMat);
+const canopySkel = new THREE.Mesh(new THREE.BufferGeometry(), canopySkelMat);
+canopySkel.name = 'canopy-skel';
+canopySkel.frustumCulled = false;
+scene.add(canopySkel);
+let canopySkelKey = '', canopySkelAt = { x: NaN, z: NaN };
+const canopySkelStat = { trees: 0, tris: 0, ms: 0, builds: 0, byFamily: [0, 0, 0, 0, 0] };
+function canopySkelStep(fx: number, fz: number): void {
+  const on = CANOPY_SKEL_M > 0 && renderer.capabilities.isWebGL2 && canopyRings.length > 0 && !!canopyStand && canopyGrids.length > 0;
+  canopySkel.visible = on;
+  if (!on) { canopyU.skel.value.w = 0; return; }
+  const R = canopyRings[0];
+  const key = `${canopyStat.builds}|${R.x0}|${R.z0}|${R.baseY}`;
+  if (key === canopySkelKey && Math.hypot(fx - canopySkelAt.x, fz - canopySkelAt.z) < CANOPY_SKEL_MOVE) return;
+  const t0 = performance.now();
+  canopySkelKey = key; canopySkelAt = { x: fx, z: fz };
+  const L = R.live, V = R.V;
+  const gl = (x: number, z: number): [number, number, number] => {
+    const u = clamp((x - R.x0) / R.step, 0, V - 1.001), v = clamp((z - R.z0) / R.step, 0, V - 1.001);
+    const i = Math.floor(u), j = Math.floor(v), a = u - i, b = v - j;
+    const at = (ii: number, jj: number, c: number): number => halfToFloat(L.tex[(jj * V + ii) * 4 + c]);
+    const f = (c: number): number => (at(i, j, c) * (1 - a) + at(i + 1, j, c) * a) * (1 - b) + (at(i, j + 1, c) * (1 - a) + at(i + 1, j + 1, c) * a) * b;
+    return [f(0) + R.baseY, f(1), f(2)];
+  };
+  const st = canopyStand!, sd = st.species.image.data as unknown as Uint8Array, W = st.species.image.width, H = st.species.image.height;
+  const species = (x: number, z: number): [number, number, number, number] => {
+    const u = clamp((x - st.box.x) * st.box.z * W - 0.5, 0, W - 1.001), v = clamp((z - st.box.y) * st.box.w * H - 0.5, 0, H - 1.001);
+    const i = Math.floor(u), j = Math.floor(v), a = u - i, b = v - j;
+    const out: [number, number, number, number] = [0, 0, 0, 0];
+    for (let c = 0; c < 4; c++) {
+      const at = (ii: number, jj: number): number => sd[(jj * W + ii) * 4 + c] / 255;
+      out[c] = (at(i, j) * (1 - a) + at(i + 1, j) * a) * (1 - b) + (at(i, j + 1) * (1 - a) + at(i + 1, j + 1) * a) * b;
+    }
+    return out;
+  };
+  const bx = canopyU.box.value;
+  const fade = (x: number, z: number): number => {
+    const ed = Math.min(x - bx.x, bx.z - x, z - bx.y, bx.w - z);
+    const t = clamp(ed / CANOPY_EDGE_FADE, 0, 1);
+    return 0.35 + 0.65 * t * t * (3 - 2 * t);
+  };
+  const S = CANOPY_CROWN, rad = CANOPY_SKEL_M;
+  const B = new SkeletonBuilder();
+  const byFamily = [0, 0, 0, 0, 0];
+  let trees = 0;
+  for (let cy = Math.floor((fz - rad) / S) - 1; cy <= Math.floor((fz + rad) / S) + 1; cy++) {
+    for (let cx = Math.floor((fx - rad) / S) - 1; cx <= Math.floor((fx + rad) / S) + 1; cx++) {
+      const c: CanopyCrown | null = canopyCrownAt(cx, cy, S, gl, species, fade);
+      if (!c || Math.hypot(c.x - fx, c.z - fz) > rad) continue;
+      B.tree(c); trees++; byFamily[c.family]++;
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(B.pos, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(B.nrm, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(B.col, 3));
+  geo.setIndex(B.idx);
+  canopySkel.geometry.dispose();
+  canopySkel.geometry = geo;
+  canopyU.skel.value.set(fx, fz, rad - 1, 1);
+  canopySkelStat.trees = trees; canopySkelStat.tris = B.idx.length / 3; canopySkelStat.byFamily = byFamily;
+  canopySkelStat.ms = +(performance.now() - t0).toFixed(2); canopySkelStat.builds++;
+}
+(window as any).__canopyskel = () => ({ ...canopySkelStat, on: canopySkel.visible, radius: CANOPY_SKEL_M, at: canopySkelAt });
 const canopyStat = { builds: 0, ms: 0, cells: 0, tris: 0, hid: 0, share: 0, commitMs: 0, standMs: 0, shiftAt: 0 };
 // ── THE BUDGET THE CANOPY FREES ──
 //
@@ -17734,7 +17811,7 @@ function canopyCommitJob(J: CanopyJob): void {
 }
 function stepCanopy(now: number): void {
   canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
-  if (!CANOPY_ON) { canopyJobs = []; canopyRings = []; canopyGrids = []; return; }
+  if (!CANOPY_ON) { canopyJobs = []; canopyRings = []; canopyGrids = []; canopySkel.visible = false; canopyU.skel.value.w = 0; return; }
   const [fx, fz] = renderFocusXZ();
   // NO NEAR CLEARING. The canopy is the forest in a closed stand at every
   // distance; the split with the individual trees is WHERE (edges, open
@@ -17802,6 +17879,7 @@ function stepCanopy(now: number): void {
       canopyAt.t = now; canopyAt.tb = terrainBuilds;
     }
   }
+  canopySkelStep(fx, fz);
   const J = canopyJobs[0];
   if (!J) return;
   const R = J.R, V = R.V, t0 = performance.now();
