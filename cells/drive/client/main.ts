@@ -16949,7 +16949,9 @@ vec3 canHit = vCanW;
       canN = normalize(mix(vec3(0.0, 1.0, 0.0), normalize(vec3(-rd.x, 0.25, -rd.z)), side));
       float mn = canN3(canHit * 0.7);
       col = standC * mix(0.5, 0.95, smoothstep(0.25, 0.75, mn));
-      canSky = mix(0.4, 0.14, closed) + 0.15 * mn;
+      // From the side it is a stand's outer foliage, lit as a crown's shaded
+      // flank is; from above, the deep interior between crowns.
+      canSky = mix(mix(0.4, 0.14, closed), 0.5, side) + 0.15 * mn;
     } else {
       vec2 d = canHit.xz - A.xy;
       canN = normalize(vec3(d.x, 0.0, d.y));
