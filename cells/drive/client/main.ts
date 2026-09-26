@@ -2535,7 +2535,7 @@ function gvLutFor(layer: 'cover' | 'eco'): THREE.DataTexture {
  * every zoom and from the seat as well as the chart.
  *
  * THE INTERVAL IS THE MAP'S SCALE, not the slope's: chosen from the ground a
- * pixel covers (about one interval per seven pixels of ground on a moderate
+ * pixel covers (about one interval per four pixels of ground on a moderate
  * slope) and stepped 1-2-5 through the decades, the way printed series are —
  * 1, 2, 5, 10, 20, 50 m… The finer of the two steps around the ideal fades
  * out as the scale grows, so an interval change is a fade and not a pop.
@@ -2554,19 +2554,20 @@ float contourCov(float h, float I, float dh, float wpx) {
 vec3 contourInk(vec3 base, vec3 wp) {
   float h = wp.y + uContour.y;
   float fp = max(length(fwidth(wp.xz)), 1e-3);
-  float want = max(fp * 7.0, 0.25);
+  float want = max(fp * 4.0, 0.25);
   float lg = log(want) / log(10.0);
   float dec = floor(lg), fr = lg - dec, b10 = pow(10.0, dec);
   float I0 = fr < 0.30103 ? b10 : fr < 0.69897 ? 2.0 * b10 : 5.0 * b10;
   float I1 = fr < 0.30103 ? 2.0 * b10 : fr < 0.69897 ? 5.0 * b10 : 10.0 * b10;
   float w = clamp(log(want / I0) / log(I1 / I0), 0.0, 1.0);
   float dh = max(fwidth(h), 1e-4);
-  float minor = contourCov(h, I0, dh, 0.55) * (1.0 - w) * smoothstep(3.0, 6.0, I0 / dh);
-  float major = contourCov(h, I1, dh, 0.6) * smoothstep(2.5, 5.0, I1 / dh);
-  float index = contourCov(h, I1 * 5.0, dh, 1.15) * smoothstep(1.8, 3.5, I1 * 5.0 / dh);
-  float a = max(max(minor * 0.55, major * 0.8), index);
-  vec3 ink = mix(vec3(0.46, 0.27, 0.11), vec3(0.30, 0.15, 0.05), index);
-  return mix(base, ink, a * 0.9);
+  float minor = contourCov(h, I0, dh, 0.6) * (1.0 - w) * smoothstep(2.5, 5.0, I0 / dh);
+  float major = contourCov(h, I1, dh, 0.7) * smoothstep(2.0, 4.0, I1 / dh);
+  float index = contourCov(h, I1 * 5.0, dh, 1.4) * smoothstep(1.5, 3.0, I1 * 5.0 / dh);
+  float a = max(max(minor * 0.7, major * 0.9), index);
+  // Dark enough to survive the palette as a line and not an orange tint.
+  vec3 ink = mix(vec3(0.30, 0.17, 0.07), vec3(0.16, 0.08, 0.03), index);
+  return mix(base, ink, a);
 }
 `;
 const gvU = {
