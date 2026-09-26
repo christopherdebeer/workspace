@@ -16757,7 +16757,10 @@ varying vec3 vCanW; varying float vCanF; varying float vCanK;`)
   vCanF = canFoc.z > 0.5 ? clamp((length(cw.xz - canFoc.xy) - ${CANOPY_NEAR.toFixed(1)}) / 40.0, 0.0, 1.0) : 1.0;
   float ed = min(min(cw.x - canBox.x, canBox.z - cw.x), min(cw.z - canBox.y, canBox.w - cw.z));
   vCanK = smoothstep(0.0, ${CANOPY_EDGE_FADE.toFixed(1)}, ed);
-  transformed.y += canLift * vCanF * mix(0.35, 1.0, vCanK);
+  // The shell never moves: the near clearing and the ring's edge only ever
+  // SHRINK crowns (canFadeAt), so the shell stays over every one. Shrinking
+  // the shell with them cut the crowns in the clearing's ramp.
+  transformed.y += canLift;
   vCanW = (modelMatrix * vec4(transformed, 1.0)).xyz;
 }`);
     const S = CANOPY_CROWN.toFixed(2);
@@ -16846,6 +16849,8 @@ float canIn(int k, vec3 p) {
 `)
       .replace('#include <color_fragment>', `#include <color_fragment>
 vec3 canHit = vCanW;
+// Well inside the near clearing a ray has nothing to meet within its reach.
+if (vCanF < 0.01) discard;
 {
   vec3 ro = cameraPosition, rd = normalize(vCanW - cameraPosition);
   float t0 = length(vCanW - cameraPosition);
@@ -16889,7 +16894,10 @@ vec3 canHit = vCanW;
       float Lq = mix(mix(cB[0].z, cB[1].z, f.x), mix(cB[2].z, cB[3].z, f.x), f.y);
       // The mid-storey's top is foliage too: lumpy by a couple of metres,
       // not the flat shelf that read from the road as dark slabs.
-      float floorY = gq + max(0.6, Lq * 0.46 * smoothstep(6.0, 11.0, Lq)) + (canN3(p * 0.45) - 0.5) * 2.4 * smoothstep(4.0, 9.0, Lq);
+      // No stand here (the clearing, a gap, the ring's faded edge): no floor,
+      // and a ray that reaches the ground is a miss — the terrain is there.
+      float floorY = Lq > 2.5 ? gq + max(0.6, Lq * 0.46 * smoothstep(6.0, 11.0, Lq)) + (canN3(p * 0.45) - 0.5) * 2.4 * smoothstep(4.0, 9.0, Lq) : -1e9;
+      if (p.y < gq - 0.3 && floorY < -1e8) break;
       float best = 9.0;
       for (int k = 0; k < 4; k++) { float v = canIn(k, p); if (v < best) { best = v; hitK = k; } }
       if (best < 1.0) { kind = 0; }
@@ -17227,14 +17235,21 @@ function canopyCells(J: CanopyJob, j: number): void {
   // reaches a cell past its node and up to 1.39 of its lift (an emergent at
   // the top of its jitter), and the ground under it can sit a couple of
   // metres above this node's on a slope.
+  // ABSOLUTE, NOT RELATIVE: the envelope is the highest crown top over the
+  // neighbourhood — its ground AND its lift — less this node's own ground.
+  // A lift-only margin held on the coastal flat and failed on Nagato's 35°
+  // hillsides, where a crown a cell uphill stands metres above this node's
+  // shell and the shell's own triangles were drawn in its place (the teeth).
   for (let i = 0; i < V; i++) {
-    let m = 0;
+    let m = 0, top = -Infinity;
     for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
       const ii = i + a, jj = j + b;
       if (ii < 0 || jj < 0 || ii >= V || jj >= V) continue;
-      m = Math.max(m, J.lift[jj * V + ii]);
+      const kk = jj * V + ii;
+      m = Math.max(m, J.lift[kk]);
+      if (J.lift[kk] > 2.5) top = Math.max(top, J.pos[kk * 3 + 1] + J.lift[kk] * 1.4);
     }
-    J.plift[j * V + i] = m > 2.5 ? m * 1.4 + 2 : 0;
+    J.plift[j * V + i] = m > 2.5 ? Math.max(0, top + 2 - J.pos[(j * V + i) * 3 + 1]) : 0;
   }
   for (let i = 0; i < V; i++) {
     const k = j * V + i;
