@@ -17029,6 +17029,9 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
             vec3 cl = ro + sg * u;
             vec2 dh = cl.xz - cc.xz; float dv = (cl.y - cc.y) / max(cB[k].x * 0.5, 0.5);
             if (length(dh) < cA[k].w + 0.8 && abs(dv) < 1.3) cEye[k] = 1.0;
+            // …and any crown pressed against the chase camera itself: at 2-5 m
+            // its underside filled half the frame with one flat green.
+            if (length(ro.xz - cc.xz) < cA[k].w + 3.0 && abs(ro.y - cc.y) < cB[k].x * 0.5 + 3.0) cEye[k] = 1.0;
           }
         }
         // Trunks, analytically: a vertical line under each crown, met by the
@@ -17036,7 +17039,7 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
         for (int k = 0; k < 4; k++) {
           if (cA[k].w <= 0.0 || cEye[k] > 0.5) continue;
           vec2 oc = ro.xz - cA[k].xy; vec2 dd = rd.xz;
-          float a = dot(dd, dd), b = dot(oc, dd), rt = 0.18 + 0.03 * cB[k].z;
+          float a = dot(dd, dd), b = dot(oc, dd), rt = 0.12 + 0.018 * cB[k].z;
           float disc = b * b - a * (dot(oc, oc) - rt * rt);
           if (disc > 0.0 && a > 1e-6) {
             float th = (-b - sqrt(disc)) / a;
