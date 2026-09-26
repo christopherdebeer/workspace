@@ -1,8 +1,8 @@
 {
   "cell": "c15r/drive",
   "cellId": "drive-dcfd1204",
-  "treeVersion": "tree:d871204ff52484ed5a2c5af6f56bf8cc6b73844e4cd0a43951a558130217ae9a",
-  "syncedAt": "2026-09-26T22:43:33.690Z",
+  "treeVersion": "tree:f131c18a4832306d9e7f82138bb512fb7dbc87328c232c01e32492e0f48b9ff4",
+  "syncedAt": "2026-09-26T22:48:56.446Z",
   "files": {
     "API-AUDIT-2026-09-11.md": "sha256:4520f25ecd5e2fbd159e3870ed438bd1b03c4ed36def3d4da2bcf70f6aab50c4",
     "CLAUDE.md": "sha256:33395ab49f8a0b11a692d73789348b7d07c10e9f4dfd4ab7194fd210f0957932",
@@ -28,7 +28,7 @@
     "client/birdscape.ts": "sha256:325d1b0b7ad99bdaa6a7dc89866e4eef0e95a1ca8f734a346c30dd742e04f3b9",
     "client/bridge-forms.test.ts": "sha256:2f9b9441c339aa475873dc38b69f213bc4e8a3de77f0331841ffc0e6148c2154",
     "client/building-fabric.ts": "sha256:d453f3cebba205df4635f0a4f6788c65ebbb2ba28ca7bff88cbfddc3dd687982",
-    "client/chart-layers.ts": "sha256:79b345c323d98e02f78a33cd2f4be8e83bf1eb88b5059a47ca7982e69413d20a",
+    "client/chart-layers.ts": "sha256:f393f6b131e3d5ae90bca715f0fb92659075f82c5f6f456ffc8a7555d961b242",
     "client/climate.ts": "sha256:99b75a220a2cca48c088a781c1ef25f0efc695514cf40d012ca171fc2fd27adb",
     "client/clip.test.mjs": "sha256:c20f652c7ac87951b80a22b9554c28ba25d246345f905420fa3155a3bbc83c81",
     "client/clip.ts": "sha256:ad0c0530c568ea6362a5853f802eb8b5e0bc5d6855642417591026b9a287d392",
@@ -98,7 +98,7 @@
     "client/lab-dials.ts": "sha256:a4384291f86bdad09f6780370c3c940233d4c11bad9dc1966137c2a523fe6b02",
     "client/labs.ts": "sha256:656fe6912ce271ac982bd85ac74273688a48466a5f73d7888d6d251221e715cb",
     "client/landmarks.ts": "sha256:f84d2a41a45e77fed0f24da8759e4610885dbb5b2fe2ee9cc337db6f85fa2ae4",
-    "client/main.ts": "sha256:f6be59a13ff7d4dc7574273e710d5f5c503a9bd20f63f1d252e481e17f9bfe18",
+    "client/main.ts": "sha256:73f83175a006db1b90237c69b6d19d46f063311f0ff2334f76a12aad0601b8f5",
     "client/marks-lab.ts": "sha256:ed0da10b3fd5b830a089ebc05d654889e21914f42ac27a32aaabd0faa367c2c0",
     "client/marks.ts": "sha256:5c9f621367010d3bad256dba5dc6e2bfd38e1b554754b1c6c00356e681a16dc8",
     "client/menu.ts": "sha256:e0b7a0a7a285d65b56e48d2c9a2ebc77cd1a8b2bbfddcc749329c3d8dc0157e9",
