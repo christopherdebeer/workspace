@@ -16808,6 +16808,10 @@ float canFadeAt(vec2 xz) {
 vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4];
 // shape = family (round/column/conic/umbrella/palm), minor axis, leaf scale, lobe strength.
 vec4 cShape[4]; float cDen[4]; float cTop; float cHas;
+// 1 for a crown the EYE is inside: the march ignores it and looks out of it.
+float cEye[4];
+// The mid-storey is a FAR fill only (see canFloorAt).
+float canFloorOn = 1.0;
 // UP CLOSE A CROWN IS CLUMPS AND GAPS. canDet (1 inside ~25 m, 0 past 90) adds
 // two octaves of 3D noise to the inside-ness near the surface only, so the
 // outline breaks into leaf masses and the march sees through the gaps to the
@@ -16862,7 +16866,7 @@ void canLoad(vec2 q) {
     if (L < 2.5 || fract(h.x * 13.7 + h.z * 3.1) > gl.z) R = -1.0;
     cDen[k] = gl.z;
     // Anything here to meet at all: a crown, or a closed stand's mid-storey.
-    if (R > 0.0 || (L > 2.5 && gl.z > 0.6)) cHas = 1.0;
+    if (R > 0.0 || (canFloorOn > 0.5 && L > 2.5 && gl.z > 0.6)) cHas = 1.0;
     cA[k] = vec4(c, gl.x + L, R); cB[k] = vec4(D, cone, L, gl.x); cH[k] = h;
     cR[k] = vec2(cos(h.y * 6.2832), sin(h.y * 6.2832));
     // The highest thing this quadrant can hold: a crown's top, or where there
@@ -16928,6 +16932,12 @@ float canIn(int k, vec3 p) {
 float canFloorAt(vec3 p, out float gq) {
   vec2 f = clamp(fract(p.xz / ${S} - 0.5), 0.0, 1.0);
   gq = mix(mix(cB[0].w, cB[1].w, f.x), mix(cB[2].w, cB[3].w, f.x), f.y);
+  // AIR UNDER THE CROWNS. The mid-storey called everything under half the
+  // stand's height solid foliage; from the cab that was the green wall, and
+  // with the eye in it, a green screen. Up close the space between trunks is
+  // empty — trunks, crown undersides and the ground behind them — and the
+  // fill only stands in for the gaps of a stand too far to see into.
+  if (canFloorOn < 0.5) return -1e9;
   float Lq = mix(mix(cB[0].z, cB[1].z, f.x), mix(cB[2].z, cB[3].z, f.x), f.y);
   // The mid-storey is a CLOSED stand's: open woodland shows its ground.
   float dq = mix(mix(cDen[0], cDen[1], f.x), mix(cDen[2], cDen[3], f.x), f.y);
@@ -16986,6 +16996,7 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
   vec3 rdv = normalize(vCanW - cameraPosition);
   float px = t0 * min(length(dFdx(rdv)), length(dFdy(rdv))) / ${S};
   canDet = (1.0 - smoothstep(25.0, 90.0, t0)) * canLook.x;
+  canFloorOn = t0 > 130.0 ? 1.0 : 0.0;
   bool march = px < 0.55 && vCanK > 0.02;
   vec3 standC = texture2D(canStand, (vCanW.xz - canStandBox.xy) * canStandBox.zw).rgb;
   standC *= standC;
@@ -17002,6 +17013,7 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
       vec2 q = floor(p.xz / ${S} - 0.5);
       if (q != qB) {
         qB = q; canLoad(q);
+        for (int k = 0; k < 4; k++) cEye[k] = canIn(k, ro) < 1.0 ? 1.0 : 0.0;
         // Trunks, analytically: a vertical line under each crown, met by the
         // ray's own plan, and only below the crown and above the ground.
         for (int k = 0; k < 4; k++) {
@@ -17054,7 +17066,7 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
       float floorY = canFloorAt(p, gq);
       if (p.y < gq - 0.3 && floorY < -1e8) { why = 2; break; }
       float best = 9.0;
-      for (int k = 0; k < 4; k++) { float v = canIn(k, p); if (v < best) { best = v; hitK = k; } }
+      for (int k = 0; k < 4; k++) { if (cEye[k] > 0.5) continue; float v = canIn(k, p); if (v < best) { best = v; hitK = k; } }
       if (best < 1.0) { kind = 0; }
       else if (p.y < floorY) { kind = 1; }
       if (kind >= 0) {
@@ -17065,7 +17077,7 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
         for (int r = 0; r < 4; r++) {
           float tm = 0.5 * (ta + tb); vec3 pm = ro + rd * tm;
           float bm = 9.0; int km = hitK;
-          for (int k = 0; k < 4; k++) { float v = canIn(k, pm); if (v < bm) { bm = v; km = k; } }
+          for (int k = 0; k < 4; k++) { if (cEye[k] > 0.5) continue; float v = canIn(k, pm); if (v < bm) { bm = v; km = k; } }
           float gm;
           bool inside = kind == 0 ? bm < 1.0 : pm.y < canFloorAt(pm, gm);
           if (kind == 0 && inside) hitK = km;
@@ -17404,10 +17416,14 @@ function canopyNode(R: CanopyRing, B: CanopyBuf, x0: number, z0: number, i: numb
   // trunks in the wheel ruts.
   let ev = canopyEvidence(x, z);
   if (ev > 0) {
-    const c7 = onCarriageway(x, z, 7);
+    // CROWNS MAY OVERHANG THE ROAD. Trunks stand 3.5 m past the kerb and
+    // their crowns (bottoms 5 m and more up) reach over it, so a road through
+    // a stand is a gap in a roof rather than a cleared trench to the sky; the
+    // verge out to 10 m is thinner cover.
+    const c7 = onCarriageway(x, z, 3.5);
     if (c7.road) ev = 0;
     else if (c7.track && onCarriageway(x, z, 2.5).track) ev = 0;
-    else if (onCarriageway(x, z, 16).road) ev *= 0.5;
+    else if (onCarriageway(x, z, 10).road) ev *= 0.6;
   }
   B.ev[k] = ev;
   const g = groundAt(x, z);
