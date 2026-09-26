@@ -16937,6 +16937,12 @@ if (vCanF < 0.01) discard;
       t += dt;
     }
     if (kind < 0 && why == 0) why = 1;
+    // OUT OF STEPS OVER A STAND IS A HIT, NOT A MISS. A ray skimming a
+    // forested ridge a kilometre out runs hundreds of metres through the shell
+    // just over the crowns and spends its steps before it meets one — and it
+    // was discarded, leaving the ridge's top bare. Where it stopped it is
+    // inside the stand's envelope: shade it as the stand's mean, there.
+    if (why == 1 && canLook.w < 1.5) kind = 3;
     if (kind < 0 && canLook.w < 1.5) discard;
     canHit = ro + rd * t;
     vec4 A = cA[hitK], B = cB[hitK], H = cH[hitK];
@@ -16979,6 +16985,9 @@ if (vCanF < 0.01) discard;
       // From the side it is a stand's outer foliage, lit as a crown's shaded
       // flank is; from above, the deep interior between crowns.
       canSky = mix(mix(0.4, 0.14, closed), 0.5, side) + 0.15 * mn;
+    } else if (kind == 3) {
+      canN = vec3(0.0, 1.0, 0.0);
+      col = standC * 0.85; canSky = 0.55;
     } else {
       vec2 d = canHit.xz - A.xy;
       canN = normalize(vec3(d.x, 0.0, d.y));
@@ -16997,6 +17006,7 @@ if (vCanF < 0.01) discard;
       }
       canShadow = 1.0 - min(1.0, occ) * 0.85 * canLook.y;
     } else canShadow = 0.4;
+    if (kind == 3) canShadow = 0.7;
   } else {
     // The mean of a crowned roof, for crowns under two pixels.
     canSky = 0.55; canShadow = 0.7;
