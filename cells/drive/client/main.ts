@@ -16706,7 +16706,10 @@ const canopyU = { box: { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) }, foc: 
   /** Dials: leaf-clump relief, crown-on-crown shadow, the three sun tones. */
   look: { value: new THREE.Vector4(1, 1, 1, 0) },
   /** 1 while the camera is inside the shell: back faces march from the eye. */
-  inside: { value: 0 } };
+  inside: { value: 0 },
+  /** Chase only: the truck (xyz) and 1 — crowns across the eye-to-truck line
+   *  are cut away so the vehicle stays readable in a stand. */
+  cut: { value: new THREE.Vector4(0, 0, 0, 0) } };
 
 // ── THE CANOPY IS RAY-TRACED CROWNS IN A SHELL ──
 //
@@ -16749,7 +16752,7 @@ function canopyMaterial(): { mat: THREE.MeshLambertMaterial; u: {
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = (sh, r) => {
     prev?.call(mat, sh, r);
-    Object.assign(sh.uniforms, u, { canBox: canopyU.box, canFoc: canopyU.foc, canSun: canopyU.sun, canLook: canopyU.look, canInside: canopyU.inside });
+    Object.assign(sh.uniforms, u, { canBox: canopyU.box, canFoc: canopyU.foc, canSun: canopyU.sun, canLook: canopyU.look, canInside: canopyU.inside, canCut: canopyU.cut });
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
 attribute float canLift;
@@ -16776,7 +16779,7 @@ varying vec3 vCanW; varying float vCanF; varying float vCanK;
 uniform mat4 projectionMatrix;
 uniform sampler2D canTex; uniform vec4 canTexBox; uniform float canBaseY;
 uniform sampler2D canStand; uniform sampler2D canSpecies; uniform vec4 canStandBox;
-uniform vec4 canBox; uniform vec3 canFoc; uniform vec3 canSun; uniform vec4 canLook; uniform float canInside;
+uniform vec4 canBox; uniform vec3 canFoc; uniform vec3 canSun; uniform vec4 canLook; uniform float canInside; uniform vec4 canCut;
 vec3 canN = vec3(0.0, 1.0, 0.0); float canShadow = 1.0; float canSky = 1.0; float canLeaf = 0.0;
 vec4 canH4(vec2 c) {
   vec4 p4 = fract(vec4(c.xyx, c.y) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
@@ -17013,11 +17016,25 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
       vec2 q = floor(p.xz / ${S} - 0.5);
       if (q != qB) {
         qB = q; canLoad(q);
-        for (int k = 0; k < 4; k++) cEye[k] = canIn(k, ro) < 1.0 ? 1.0 : 0.0;
+        // A crown the eye is inside is looked OUT of; in chase, a crown whose
+        // body crosses the eye-to-truck line is cut away (and its trunk), so
+        // the truck stays readable driving into a stand — only those, never
+        // the forest around the car.
+        for (int k = 0; k < 4; k++) {
+          cEye[k] = canIn(k, ro) < 1.0 ? 1.0 : 0.0;
+          if (canCut.w > 0.5 && cA[k].w > 0.0) {
+            vec3 cc = vec3(cA[k].x, cA[k].z - cB[k].x * 0.5, cA[k].y);
+            vec3 sg = canCut.xyz - ro; float sl = dot(sg, sg);
+            float u = sl > 1e-4 ? clamp(dot(cc - ro, sg) / sl, 0.0, 1.0) : 0.0;
+            vec3 cl = ro + sg * u;
+            vec2 dh = cl.xz - cc.xz; float dv = (cl.y - cc.y) / max(cB[k].x * 0.5, 0.5);
+            if (length(dh) < cA[k].w + 0.8 && abs(dv) < 1.3) cEye[k] = 1.0;
+          }
+        }
         // Trunks, analytically: a vertical line under each crown, met by the
         // ray's own plan, and only below the crown and above the ground.
         for (int k = 0; k < 4; k++) {
-          if (cA[k].w <= 0.0) continue;
+          if (cA[k].w <= 0.0 || cEye[k] > 0.5) continue;
           vec2 oc = ro.xz - cA[k].xy; vec2 dd = rd.xz;
           float a = dot(dd, dd), b = dot(oc, dd), rt = 0.18 + 0.03 * cB[k].z;
           float disc = b * b - a * (dot(oc, oc) - rt * rt);
@@ -17556,6 +17573,7 @@ function stepCanopy(now: number): void {
   // the seeded trees are ~40/ha where the satellite and the canopy say closed,
   // so no handoff radius could hide the change of forest.
   canopyU.foc.value.set(fx, fz, 0);
+  canopyU.cut.value.set(state.x, groundAt(state.x, state.z) + 1.3, state.z, camMode === 'chase' ? 1 : 0);
   // Is the eye inside the shell? The lattice under the camera says.
   {
     let inside = 0;
