@@ -16705,6 +16705,7 @@ const canopyU = { box: { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) }, foc: 
   sun: { value: LIGHT_DIR },
   /** Dials: leaf-clump relief, crown-on-crown shadow, the three sun tones. */
   look: { value: new THREE.Vector4(1, 1, 1, 0) } };
+
 // ── THE CANOPY IS RAY-TRACED CROWNS IN A SHELL ──
 //
 // The lattice is a PROXY: a shell over the stand, a little above every crown
@@ -16763,6 +16764,9 @@ varying vec3 vCanW; varying float vCanF; varying float vCanK;`)
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 varying vec3 vCanW; varying float vCanF; varying float vCanK;
+// Three declares the projection only for the vertex stage; the hit's depth
+// needs it here, and one program shares the uniform across both.
+uniform mat4 projectionMatrix;
 uniform sampler2D canTex; uniform vec4 canTexBox; uniform float canBaseY;
 uniform sampler2D canStand; uniform vec4 canStandBox;
 uniform vec4 canBox; uniform vec3 canFoc; uniform vec3 canSun; uniform vec4 canLook;
@@ -16884,7 +16888,7 @@ vec3 canHit = vCanW;
       }
       t += dt;
     }
-    if (kind < 0) discard;
+    if (kind < 0 && canLook.w < 1.5) discard;
     canHit = ro + rd * t;
     vec4 A = cA[hitK], B = cB[hitK], H = cH[hitK];
     float closed = smoothstep(6.0, 11.0, B.z);
@@ -16952,6 +16956,15 @@ vec3 canHit = vCanW;
   float facing = clamp(dot(canN, normalize(canSun)) * 0.5 + 0.5, 0.0, 0.999);
   float band = floor((facing * 0.72 + canSky * 0.28) * 3.0) * 0.5;
   diffuseColor.rgb *= mix(1.0, mix(0.82, 1.16, band) * mix(0.62, 1.3, canSky), vCanK * canLook.z);
+  // look.w: 1 paints the lift texture under the fragment (red, /16 m) and
+  // the proxy's own lift ratio; 2 paints what the march met — crown green,
+  // floor blue, trunk yellow, nothing magenta; 3 the march's reach (t - t0).
+  if (canLook.w > 0.5) {
+    vec2 g0 = canGL(vCanW.xz);
+    if (canLook.w < 1.5) diffuseColor.rgb = vec3(g0.y / 16.0, clamp((vCanW.y - g0.x) / 20.0, 0.0, 1.0), px);
+    else if (canLook.w < 2.5) diffuseColor.rgb = kind == 0 ? vec3(0.1, 0.8, 0.1) : kind == 1 ? vec3(0.1, 0.2, 0.9) : kind == 2 ? vec3(0.9, 0.8, 0.1) : vec3(0.9, 0.1, 0.9);
+    else diffuseColor.rgb = vec3(clamp((length(canHit - cameraPosition) - length(vCanW - cameraPosition)) / 20.0, 0.0, 1.0));
+  }
   vec4 clip = projectionMatrix * viewMatrix * vec4(canHit, 1.0);
   gl_FragDepth = clamp(0.5 * clip.z / clip.w + 0.5, 0.0, 1.0);
 }`)
@@ -17303,11 +17316,12 @@ function canopyHides(x: number, z: number): boolean {
  *  on the focus itself, and `find` for a point `find` metres from the focus
  *  whose whole neighbourhood is closed stand. */
 let canopyNearOff = false;
-(window as unknown as { __canopylook?: object }).__canopylook = (o: { leaf?: number; shadow?: number; tone?: number; near?: boolean; find?: number } = {}): object => {
+(window as unknown as { __canopylook?: object }).__canopylook = (o: { leaf?: number; shadow?: number; tone?: number; debug?: number; near?: boolean; find?: number } = {}): object => {
   const L = canopyU.look.value;
   if (o.leaf !== undefined) L.x = o.leaf;
   if (o.shadow !== undefined) L.y = o.shadow;
   if (o.tone !== undefined) L.z = o.tone;
+  if (o.debug !== undefined) L.w = o.debug;
   if (o.near !== undefined) canopyNearOff = !o.near;
   let found: number[] | null = null;
   if (o.find !== undefined && canopyGrids.length) {
