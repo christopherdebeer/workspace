@@ -16704,7 +16704,9 @@ const canopyU = { box: { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) }, foc: 
   /** The sun the skeletons light by (LIGHT_DIR, moved in place by the sky). */
   sun: { value: LIGHT_DIR },
   /** Dials: leaf-clump relief, crown-on-crown shadow, the three sun tones. */
-  look: { value: new THREE.Vector4(1, 1, 1, 0) } };
+  look: { value: new THREE.Vector4(1, 1, 1, 0) },
+  /** 1 while the camera is inside the shell: back faces march from the eye. */
+  inside: { value: 0 } };
 
 // ── THE CANOPY IS RAY-TRACED CROWNS IN A SHELL ──
 //
@@ -16735,7 +16737,9 @@ const CAN_STEPS = 40;
 function canopyMaterial(): { mat: THREE.MeshLambertMaterial; u: {
   canTex: { value: THREE.Texture | null }; canTexBox: { value: THREE.Vector4 }; canBaseY: { value: number };
   canStand: { value: THREE.Texture | null }; canStandBox: { value: THREE.Vector4 } } } {
-  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true });
+  // Both faces: from inside the shell (a drone come down into the stand)
+  // the crowns are behind its BACK faces.
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.DoubleSide });
   terrainFx(mat);
   const u = {
     canTex: { value: null as THREE.Texture | null }, canTexBox: { value: new THREE.Vector4(0, 0, 1, 1) },
@@ -16745,7 +16749,7 @@ function canopyMaterial(): { mat: THREE.MeshLambertMaterial; u: {
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = (sh, r) => {
     prev?.call(mat, sh, r);
-    Object.assign(sh.uniforms, u, { canBox: canopyU.box, canFoc: canopyU.foc, canSun: canopyU.sun, canLook: canopyU.look });
+    Object.assign(sh.uniforms, u, { canBox: canopyU.box, canFoc: canopyU.foc, canSun: canopyU.sun, canLook: canopyU.look, canInside: canopyU.inside });
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
 attribute float canLift;
@@ -16772,7 +16776,7 @@ varying vec3 vCanW; varying float vCanF; varying float vCanK;
 uniform mat4 projectionMatrix;
 uniform sampler2D canTex; uniform vec4 canTexBox; uniform float canBaseY;
 uniform sampler2D canStand; uniform vec4 canStandBox;
-uniform vec4 canBox; uniform vec3 canFoc; uniform vec3 canSun; uniform vec4 canLook;
+uniform vec4 canBox; uniform vec3 canFoc; uniform vec3 canSun; uniform vec4 canLook; uniform float canInside;
 vec3 canN = vec3(0.0, 1.0, 0.0); float canShadow = 1.0; float canSky = 1.0; float canLeaf = 0.0;
 vec4 canH4(vec2 c) {
   vec4 p4 = fract(vec4(c.xyx, c.y) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
@@ -16891,9 +16895,13 @@ float canAggregate(vec3 ro, vec3 rd, float t, float step) {
 vec3 canHit = vCanW;
 // Well inside the near clearing a ray has nothing to meet within its reach.
 if (vCanF < 0.01) discard;
+// A BACK FACE is the shell seen from inside it. With the eye outside, the
+// front face on the same ray has already marched it: go. With the eye inside
+// (canInside, from the lattice under the camera), the march starts at the eye.
+if (!gl_FrontFacing && canInside < 0.5) discard;
 {
   vec3 ro = cameraPosition, rd = normalize(vCanW - cameraPosition);
-  float t0 = length(vCanW - cameraPosition);
+  float t0 = gl_FrontFacing ? length(vCanW - cameraPosition) : 0.3;
   // A crown under two pixels is its mean: no march, the far path below. The
   // footprint ACROSS the view, not along it: at a grazing angle a pixel runs
   // tens of metres down the slope while the crowns across it are still four
@@ -17227,9 +17235,14 @@ function canopyNode(R: CanopyRing, B: CanopyBuf, x0: number, z0: number, i: numb
   // are no canopy at all; the next 9 m count half, below where the roof
   // starts, so the forest's side beside a road is its real edge trees and
   // not a lattice wall standing over the kerb (the cab frames).
+  // AND CLEAR OF A TRACK by a couple of metres: the canopy is now the forest
+  // right up to the truck, and a forest track under a crown would put its
+  // trunks in the wheel ruts.
   let ev = canopyEvidence(x, z);
   if (ev > 0) {
-    if (onCarriageway(x, z, 7).road) ev = 0;
+    const c7 = onCarriageway(x, z, 7);
+    if (c7.road) ev = 0;
+    else if (c7.track && onCarriageway(x, z, 2.5).track) ev = 0;
     else if (onCarriageway(x, z, 16).road) ev *= 0.5;
   }
   B.ev[k] = ev;
@@ -17334,7 +17347,27 @@ function stepCanopy(now: number): void {
   canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
   if (!CANOPY_ON) { canopyJobs = []; canopyRings = []; canopyGrids = []; return; }
   const [fx, fz] = renderFocusXZ();
-  canopyU.foc.value.set(fx, fz, camMode !== 'top' && !canopyNearOff ? 1 : 0);
+  // NO NEAR CLEARING. The canopy is the forest in a closed stand at every
+  // distance; the split with the individual trees is WHERE (edges, open
+  // woodland, emergents, verges), fixed in the world, never HOW FAR. A split by
+  // distance moved with the camera: from the drone a clearing that followed
+  // it, from the road a forest sinking into the ground ahead — and at Nagato
+  // the seeded trees are ~40/ha where the satellite and the canopy say closed,
+  // so no handoff radius could hide the change of forest.
+  canopyU.foc.value.set(fx, fz, 0);
+  // Is the eye inside the shell? The lattice under the camera says.
+  {
+    let inside = 0;
+    const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+    for (const R of canopyRings) {
+      const i = Math.round((cx - R.x0) / R.step), j = Math.round((cz - R.z0) / R.step);
+      if (i < 0 || j < 0 || i >= R.V || j >= R.V) continue;
+      const k = j * R.V + i, pl = R.live.plift[k];
+      if (pl > 0 && cy < R.live.pos[k * 3 + 1] + pl + R.step) inside = 1;
+      break;
+    }
+    canopyU.inside.value = inside;
+  }
   const org = `${origin.lat},${origin.lon}`;
   const want = canopyWant(fx, fz);
   // A new origin, a first sight, or a ring whose size no longer fits the draw
