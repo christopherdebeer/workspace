@@ -51950,7 +51950,43 @@ function servedBuildRow(): string {
   if (servedBuildState === 'failed') return 'OFFLINE — CANNOT ASK';
   if (servedBuild === null) return 'CHECKING…';
   if (DRIVE_BUILD === 'web') return `SERVER HAS ${servedBuild}`;
+  if (servedBuild !== DRIVE_BUILD) void probeWorker(true);
   return servedBuild === DRIVE_BUILD ? 'CURRENT' : `STALE — SERVER HAS ${servedBuild} — RELOAD`;
+}
+// ── WHY "RELOAD" SOMETIMES DOES NOTHING ──
+//
+// The shell and bundle come from the service worker's cache, first, and the
+// worker only moves to a new build once a new /sw.js has INSTALLED — which
+// takes the whole 3 MB bundle into a new cache before the old one is let go.
+// Reported from the seat: About said STALE and reload after reload stayed on
+// it. So ABOUT now says what the worker holds and what it is doing (a build
+// cached, one installing, one waiting), a stale page asks the worker to look
+// for its update rather than waiting for the browser to, and ABOUT carries a
+// button that drops the offline copy alone and reloads — the survey, the
+// settings and the sign-in stay, unlike RESET THIS DEVICE.
+let workerRow = '…';
+let workerAskedUpdate = false;
+async function probeWorker(stale = false): Promise<void> {
+  try {
+    if (!('serviceWorker' in navigator)) { workerRow = 'NONE (NO WORKER SUPPORT)'; return; }
+    const reg = await navigator.serviceWorker.getRegistration();
+    const names = typeof caches === 'undefined' ? [] : (await caches.keys()).filter((n) => n.startsWith('drive-shell-'));
+    const held = names.map((n) => n.slice('drive-shell-'.length)).join(', ') || 'NOTHING CACHED';
+    const st = !reg ? 'NO WORKER' : [reg.installing ? 'INSTALLING' : '', reg.waiting ? 'WAITING' : '', reg.active ? 'ACTIVE' : ''].filter(Boolean).join(' + ');
+    workerRow = `${held} · ${st}`;
+    if (stale && reg && !workerAskedUpdate) { workerAskedUpdate = true; await reg.update().catch(() => undefined); }
+  } catch (e) { workerRow = `CANNOT READ (${String(e).slice(0, 40)})`; }
+}
+async function loadLatestBuild(status: (s: string, bad?: boolean) => void): Promise<void> {
+  if (!navigator.onLine) { status('OFFLINE — THE LATEST BUILD HAS TO COME OFF THE NETWORK', true); return; }
+  status('DROPPING THE OFFLINE COPY…');
+  const workers = await dropWorkers();
+  let n = 0;
+  try {
+    if (typeof caches !== 'undefined') for (const k of await caches.keys()) if (k.startsWith('drive-shell-') && await caches.delete(k)) n++;
+  } catch { /* best effort */ }
+  status(`DROPPED ${n} ${n === 1 ? 'COPY' : 'COPIES'}${workers ? ' AND THE WORKER' : ''} · RELOADING…`);
+  setTimeout(() => { location.reload(); }, 900);
 }
 function telemetryReport(): string {
   const secs = (performance.now() - sessAt) / 1000;
@@ -61334,6 +61370,7 @@ const menu = createMenu({
       ['CELL', 'drive · @c15r'],
       ['BUILD', DRIVE_BUILD === 'web' ? 'UNSTAMPED' : DRIVE_BUILD],
       ['SERVING', servedBuildRow()],
+      ['OFFLINE COPY', (void probeWorker(), workerRow)],
       ['DEVICE', `${navigator.hardwareConcurrency ?? '?'} CORES · DPR ${Math.round(devicePixelRatio * 10) / 10}`],
     ];
   },
@@ -61586,6 +61623,7 @@ const menu = createMenu({
   // a career off the server. Signing back in brings everything back, which is
   // the behaviour someone clearing space wants and the one someone stuck on a
   // bad build does not have to think about.
+  loadLatest: (status) => { void loadLatestBuild(status); },
   deviceReset: (status) => {
     void (async () => {
       if (!navigator.onLine) {
