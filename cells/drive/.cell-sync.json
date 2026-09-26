@@ -1,8 +1,8 @@
 {
   "cell": "c15r/drive",
   "cellId": "drive-dcfd1204",
-  "treeVersion": "tree:d333032199f1d9b8da945a46cbf48524d0ed98935636a5bea6c6532e7917fe49",
-  "syncedAt": "2026-09-26T00:41:43.028Z",
+  "treeVersion": "tree:25f7423c9b3cb67957caac5e0dc559410aff453b57c31781033cac4642772ff6",
+  "syncedAt": "2026-09-26T01:04:08.872Z",
   "files": {
     "API-AUDIT-2026-09-11.md": "sha256:4520f25ecd5e2fbd159e3870ed438bd1b03c4ed36def3d4da2bcf70f6aab50c4",
     "CLAUDE.md": "sha256:c76f2b7616881d2e29b93d469c35f3bf87642ab6cbd0f992ddf7c3833398d5b1",
@@ -98,7 +98,7 @@
     "client/lab-dials.ts": "sha256:a4384291f86bdad09f6780370c3c940233d4c11bad9dc1966137c2a523fe6b02",
     "client/labs.ts": "sha256:656fe6912ce271ac982bd85ac74273688a48466a5f73d7888d6d251221e715cb",
     "client/landmarks.ts": "sha256:f84d2a41a45e77fed0f24da8759e4610885dbb5b2fe2ee9cc337db6f85fa2ae4",
-    "client/main.ts": "sha256:33ee7d4ca8cf6d500450130cfc6c795a4e08c81eb80811fa036c3af6d6703de6",
+    "client/main.ts": "sha256:4afbba3072d3aef70985893f39813b728a9a11fd8eb505069f44f6417718ee78",
     "client/marks-lab.ts": "sha256:ed0da10b3fd5b830a089ebc05d654889e21914f42ac27a32aaabd0faa367c2c0",
     "client/marks.ts": "sha256:5c9f621367010d3bad256dba5dc6e2bfd38e1b554754b1c6c00356e681a16dc8",
     "client/menu.ts": "sha256:b9bae07fe78f7482e780a10d94cafbbe2b60e0cafa852f150e786f8e6b38c7e7",

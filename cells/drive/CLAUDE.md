@@ -19509,3 +19509,10 @@ gather. Measured at Nagato (pop 8x, range 1.4 km): 85,936 trees hidden, 90%,
 budget ×0.32, canopy 302k triangles, rebuild 523 ms total sliced. In the
 harness trees are capped by population, not budget, so the saving only shows
 on a device, where the dump reads 2.29M of a 2.4M budget.
+
+## Canopy v3 — ray-traced crowns (`?canopy=1`, 2026-09-26)
+- The canopy lattice is a PROXY SHELL (`canLift` = 3x3-dilated lift ×1.4 + 2 m). Each fragment marches the view ray (≤28 steps, dt = clamp(0.011·t, 0.7, 3.2)) against the four crowns of its 2x2 cell quadrant (one jittered crown per 6.5 m cell, ellipsoid broadleaf / cone conifer, lobes inward-only so R·lobe ≤ 0.75 cell); misses discard; writes `gl_FragDepth` of the hit (three declares `projectionMatrix` only for the vertex stage — the fragment must declare it or the material silently fails to compile and draws nothing).
+- Per ring: RG16F ground/lift texture (`canTex`); shared RGBA8 stand texture from vegGrid tree sites (sqrt colour, a = conifer share), 110 m texels, biome band fallback.
+- March only while the ACROSS-view footprint (min of |dFdx|,|dFdy|) is < 0.55 crown; the along-view measure cut crowns at 300 m on oblique views.
+- `__canopylook({leaf, shadow, tone, debug, near, find})`: debug 1 lift, 2 hit kind (crown green / floor blue / trunk yellow / miss magenta), 3 march reach; `near:false` for shots framed on the focus; `find: m` returns a closed-stand point m from focus. Harness shots: `canopyslice=60` or the first build takes minutes in software GL.
+- Nagato A/B: with the canopy off the stand is ~40 trees/ha (bare ground between); on, a closed crowned forest matching the satellite. Rebuild ~430-470 ms CPU sliced; hidden share ~0.8, tree budget x0.40.
