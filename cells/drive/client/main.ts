@@ -30655,6 +30655,8 @@ const sync = openSync({
   mergeMarks: (r) => marks.merge({ m: r.missions, s: r.stations }),
   odo: () => Math.round(odo.total),
   setOdo: (m) => { if (m > odo.total) { odo.total = m; saveOdo(); } },
+  spots: () => spotsDump(),
+  mergeSpots: (rows) => spotsMerge(rows),
 }, {
   base: CELL_BASE,
   apex: AUTH_BASE,
@@ -57325,6 +57327,51 @@ function loadSpots(): void {
 }
 function saveSpots(): void {
   try { localStorage.setItem(SPOTS_KEY, JSON.stringify(spots)); } catch { /* full or blocked: the list is still live this session */ }
+  try { localStorage.setItem(SPOT_TIMES_KEY, JSON.stringify(spotTimes)); } catch { /* as above */ }
+}
+// ── AND THEY RIDE THE SYNC ──
+// A spot was localStorage alone, so a device reset lost them while the roads
+// came back on sign-in. Each spot now has a key (its place at 1e-4) and two
+// moments, saved and deleted, kept beside the list; the sync sends them and
+// merges the durable copy back, max on both, live while saved > deleted — so
+// a delete here is not undone by another device that still has the spot.
+const SPOT_TIMES_KEY = 'drive.spots.times.v1';
+let spotTimes: Record<string, { at: number; gone: number }> = {};
+try { spotTimes = JSON.parse(localStorage.getItem(SPOT_TIMES_KEY) ?? '{}') as typeof spotTimes; } catch { spotTimes = {}; }
+const spotKey = (d: { lat: number; lon: number }): string => `${d.lat.toFixed(4)},${d.lon.toFixed(4)}`;
+function spotsDump(): Record<string, { at: number; gone: number; name: string; sub: string; lat: number; lon: number; h: number }> {
+  const out: ReturnType<typeof spotsDump> = {};
+  const now = Date.now();
+  for (const d of spots) {
+    const k = spotKey(d);
+    const t = spotTimes[k] ?? (spotTimes[k] = { at: now, gone: 0 });
+    // A spot saved before this existed has no moment; now is when it joins.
+    if (t.at <= t.gone) t.at = now;
+    out[k] = { at: t.at, gone: t.gone, name: d.name, sub: d.sub, lat: d.lat, lon: d.lon, h: d.h };
+  }
+  for (const [k, t] of Object.entries(spotTimes)) {
+    if (!out[k] && t.gone >= t.at) out[k] = { at: t.at, gone: t.gone, name: '', sub: '', lat: +k.split(',')[0], lon: +k.split(',')[1], h: 0 };
+  }
+  return out;
+}
+function spotsMerge(rows: Record<string, { at?: number; gone?: number; name?: string; sub?: string; lat?: number; lon?: number; h?: number }>): number {
+  let changed = 0;
+  for (const [k, r] of Object.entries(rows ?? {})) {
+    const had = spotTimes[k] ?? { at: 0, gone: 0 };
+    const at = Math.max(had.at, Number(r.at) || 0), gone = Math.max(had.gone, Number(r.gone) || 0);
+    spotTimes[k] = { at, gone };
+    const i = spots.findIndex((d) => spotKey(d) === k);
+    if (at > gone && i < 0 && Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))) {
+      spots.push({ name: String(r.name || 'WAYPOINT'), sub: String(r.sub ?? ''), lat: Number(r.lat), lon: Number(r.lon), h: Number(r.h) || 0 });
+      changed++;
+    } else if (gone >= at && i >= 0) { spots.splice(i, 1); changed++; }
+  }
+  if (changed) {
+    spots.sort((a, b) => (spotTimes[spotKey(b)]?.at ?? 0) - (spotTimes[spotKey(a)]?.at ?? 0));
+    if (spots.length > 40) spots.length = 40;
+  }
+  saveSpots();
+  return changed;
 }
 /** Everything the destinations list shows: your own first, then the authored
  *  ones. Recomputed per frame — the list is tens of entries, not thousands. */
@@ -57348,7 +57395,10 @@ function saveSpot(): void {
   const sub = road ? place || coord : coord;
   spots.unshift({ name, sub, lat: +la.toFixed(5), lon: +lo.toFixed(5), h });
   if (spots.length > 40) spots.length = 40;
+  const t = (spotTimes[spotKey(spots[0])] ??= { at: 0, gone: 0 });
+  t.at = Math.max(Date.now(), t.gone + 1);
   saveSpots();
+  sync.nudge();
   audio.stone();
 }
 
@@ -61698,7 +61748,11 @@ const menu = createMenu({
   tapePlay: () => { void (window as unknown as { __play: () => Promise<object> }).__play(); },
   tapeStopPlay: () => tapeEnd(),
   startDrive: (i) => { const d = allDrives()[i]; if (d) startDrive(d); },
-  deleteSpot: (i) => { spots.splice(i, 1); saveSpots(); audio.stone(); },
+  deleteSpot: (i) => {
+    const d = spots[i];
+    if (d) { const t = (spotTimes[spotKey(d)] ??= { at: 0, gone: 0 }); t.gone = Math.max(Date.now(), t.at + 1); }
+    spots.splice(i, 1); saveSpots(); audio.stone(); sync.nudge();
+  },
   // CURRENT: a destination, not a mode. One fix from this tap's gesture, then
   // the same composed-link arrival every other destination uses — the model
   // keeps driving, nothing about the controls changes.
