@@ -2551,8 +2551,9 @@ float contourCov(float h, float I, float dh, float wpx) {
   float dpx = abs(fract(h / I + 0.5) - 0.5) * I / dh;
   return 1.0 - smoothstep(wpx - 0.5, wpx + 0.5, dpx);
 }
-vec3 contourInk(vec3 base, vec3 wp) {
-  float h = wp.y + uContour.y;
+// (line coverage, index weight) at height h, on ground whose world position
+// is wp — the interval from the ground a pixel covers.
+vec2 contourAt(float h, vec3 wp) {
   float fp = max(length(fwidth(wp.xz)), 1e-3);
   float want = max(fp * 4.0, 0.25);
   float lg = log(want) / log(10.0);
@@ -2564,19 +2565,13 @@ vec3 contourInk(vec3 base, vec3 wp) {
   float minor = contourCov(h, I0, dh, 0.6) * (1.0 - w) * smoothstep(2.5, 5.0, I0 / dh);
   float major = contourCov(h, I1, dh, 0.7) * smoothstep(2.0, 4.0, I1 / dh);
   float index = contourCov(h, I1 * 5.0, dh, 1.4) * smoothstep(1.5, 3.0, I1 * 5.0 / dh);
-  float a = max(max(minor * 0.7, major * 0.9), index);
-  // Dark enough to survive the palette as a line and not an orange tint.
-  vec3 ink = mix(vec3(0.30, 0.17, 0.07), vec3(0.16, 0.08, 0.03), index);
-  return mix(base, ink, a);
+  return vec2(max(max(minor * 0.7, major * 0.9), index), index);
 }
 `;
 const gvU = {
   uGView: { value: TDETAIL === 'dom' ? GROUND_VIEW.substrate : GROUND_VIEW.off },
   uGLut: { value: gvLutFor('cover') },
   uGHeightRange: { value: new THREE.Vector2(-50, 50) },
-  /** CONTOUR: x on (1) or off, y the origin's elevation, so lines are drawn at
-   *  true heights above sea level and not at heights above the origin. */
-  uContour: { value: new THREE.Vector2(0, 0) },
 };
 let groundView: GroundViewId = TDETAIL === 'dom' ? 'substrate' : 'off';
 /** What the channel returns to when no chip is asking for a view. `tdetail=dom`
@@ -6246,6 +6241,14 @@ rtScene.samples = 0; // MSAA would soften exactly the edges we want hard
 // screen ray meets the ground plane — otherwise a tall building far away gets
 // a haze seam across it (fogged base, "sky-crisp" top).
 rtScene.depthTexture = new THREE.DepthTexture(2, 2);
+// ── CONTOURS ARE A PASS OF THEIR OWN, OVER EVERYTHING ──
+// Drawn into the ground they were hidden by every crown and roof over it —
+// and the map's contour runs over the forest, not under it. So the TERRAIN
+// alone (near tiles, then the far shell) is drawn a second time into this
+// target with a material that writes only the line coverage, and the
+// composite lays it over the finished frame. Only while the chip is on.
+const rtContour = mkRT(true, true);
+rtContour.samples = 0;
 const rtA = mkRT(false), rtB = mkRT(false);
 const rtC = mkRT(false), rtD = mkRT(false); // bright-pass ping-pong for bloom
 // Dedicated half-resolution DOF buffers. PREP stores foreground/background
@@ -6310,6 +6313,7 @@ resizePost = () => {
   rtDofFar.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   rtDofNear.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   rtM.setSize(w, Math.max(2, h));
+  rtContour.setSize(w, Math.max(2, h));
   pixSize.set(w, Math.max(2, h));
   // The tree crowns turn a distance into ART PIXELS to decide how far to close
   // onto their own hull, and the art grid is this number. Set here rather than
@@ -6844,6 +6848,7 @@ const camYaw = (): number => Math.atan2(-camera.matrixWorld.elements[8], -camera
 const mppU = { value: 0 };
 const compMat = new THREE.ShaderMaterial({
   uniforms: {
+    contourTex: { value: null as THREE.Texture | null }, uContourOn: { value: 0 },
     sceneTex: { value: null },
     softTex: { value: null },
     uRainFlow: { value: new THREE.Vector4() },
@@ -7027,6 +7032,7 @@ const compMat = new THREE.ShaderMaterial({
   vertexShader: QUAD_VS,
   fragmentShader: `
     uniform sampler2D sceneTex; uniform sampler2D softTex; uniform sampler2D depthTex;
+    uniform sampler2D contourTex; uniform float uContourOn;
     uniform sampler2D dofPrepTex; uniform sampler2D dofFarTex; uniform sampler2D dofNearTex;
     uniform float uDofOn;
     uniform sampler2D bloomTex; uniform float uBloom; uniform float uScan;
@@ -7375,6 +7381,26 @@ ${DITHER_GLSL}
       // "does this touch the drive" question. The bay's copy pass keeps the
       // dial's pattern — it is never a wide chart.
       float wPat = (uDWide > 0.5 && uMpp > 60.0) ? uDPatWide : uDPat;
+      // ── CONTOURS, OVER EVERYTHING, IN AN INK THAT READS ON WHAT IS UNDER ──
+      // A printed map has one brown because it prints on paper; this one runs
+      // over black forest, bright rock and water, where one ink vanishes on one
+      // of them. Dark brown over light ground, pale tan over dark, each with a
+      // one-pixel halo of the opposite so a line holds against its own
+      // background; index contours heavier.
+      if (uContourOn > 0.5) {
+        vec2 cp = 1.0 / uPix;
+        vec4 c0 = texture2D(contourTex, vUv);
+        float nb = max(max(texture2D(contourTex, vUv + vec2(cp.x, 0.0)).r, texture2D(contourTex, vUv - vec2(cp.x, 0.0)).r),
+                       max(texture2D(contourTex, vUv + vec2(0.0, cp.y)).r, texture2D(contourTex, vUv - vec2(0.0, cp.y)).r));
+        float lum = dot(enc, vec3(0.299, 0.587, 0.114));
+        float darkG = 1.0 - smoothstep(0.30, 0.45, lum);
+        vec3 inkL = mix(vec3(0.36, 0.20, 0.08), vec3(0.22, 0.11, 0.04), c0.g);
+        vec3 inkD = mix(vec3(0.86, 0.76, 0.55), vec3(0.97, 0.90, 0.72), c0.g);
+        vec3 ink = mix(inkL, inkD, darkG);
+        vec3 halo = mix(vec3(0.95, 0.91, 0.80), vec3(0.06, 0.05, 0.04), darkG);
+        enc = mix(enc, halo, clamp(nb - c0.r, 0.0, 1.0) * 0.3);
+        enc = mix(enc, ink, c0.r);
+      }
       enc = ditherQuant(enc, floor(vUv * uPix), wPat, uDither, uBias, uLevels, uDChan);
       // Phosphor tint AFTER the quantise: tinting first would quantise the
       // channels apart and break the exact-N-tone promise the dial makes.
@@ -7698,6 +7724,8 @@ composite = (amt: number): void => {
   compMat.uniforms.dofFarTex.value = rtDofFar.texture;
   compMat.uniforms.dofNearTex.value = rtDofNear.texture;
   compMat.uniforms.bloomTex.value = rtC.texture;
+  compMat.uniforms.contourTex.value = rtContour.texture;
+  compMat.uniforms.uContourOn.value = chartOn.contour ? 1 : 0;
   runPass(compMat, null);
   if (xrayMode === 1 || xrayMode === 3) {
     dofDebugMat.uniforms.uView.value = xrayMode;
@@ -8275,7 +8303,6 @@ function terrainFx(mat: THREE.Material, opts: {
       sh.uniforms.uNrmK = tdU.uNrmK;
       sh.uniforms.uGView = gvU.uGView;
       sh.uniforms.uGHeightRange = gvU.uGHeightRange;
-      sh.uniforms.uContour = gvU.uContour;
       sh.uniforms.uGDem = { value: opts.dem ? 1 : 0 };
       // A tile with no field yet (the shared material, the batter, the shell)
       // gets a 1x1 blank and a zero box, and every read of it is gated on the
@@ -8645,7 +8672,6 @@ function terrainFx(mat: THREE.Material, opts: {
             / max(1.0, uGHeightRange.y - uGHeightRange.x);
           diffuseColor.rgb = gvRamp(h);
         }
-        if (uContour.x > 0.5 && uGDem > 0.5) diffuseColor.rgb = contourInk(diffuseColor.rgb, vWorldP);
         ${TDETAIL === 'px' ? 'diffuseColor.rgb = tdHeat(px);' : ''}
       }`)
         .replace('#include <normal_fragment_maps>', (opts.dem ? `
@@ -8711,7 +8737,7 @@ function terrainFx(mat: THREE.Material, opts: {
         + 'uniform float uSubAmt;\nuniform float uSubDom;\nuniform float uSubNrm;\n'
         + 'uniform float uSubMic;\nuniform float uNrmK;\n'
         + 'uniform float uGView;\nuniform sampler2D uGLut;\n'
-        + 'uniform vec2 uGHeightRange;\nuniform float uGDem;\nuniform vec2 uContour;\n' + CONTOUR_GLSL
+        + 'uniform vec2 uGHeightRange;\nuniform float uGDem;\n'
         + MADE_GLSL + '\nuniform sampler2D uMade;\n'
         + 'uniform sampler2D uSubA;\nuniform sampler2D uSubB;\nuniform vec4 uSubBox;\n'
         + sh.fragmentShader;
@@ -8864,6 +8890,26 @@ const planetSunU = {
   uPlanetNight: { value: 0.14 },
   uPlanetMix: { value: 0 },
 };
+/** The contour pass's material. Height above sea level: on the flat near
+ *  tiles the world y plus the origin's elevation; on the far shell (a sphere,
+ *  set FAR_DROP under the ground so the near tiles win) the radius from the
+ *  planet's centre, less the planet, plus the drop. */
+const contourU = { uBase: { value: 0 }, uSphere: { value: 0 }, uDrop: { value: 0 },
+  uPlanetC: planetSunU.uPlanetC, uR: { value: GLOBE_R } };
+const contourMat = new THREE.ShaderMaterial({
+  uniforms: contourU,
+  vertexShader: `varying vec3 vW;
+    void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: `precision highp float;
+    uniform float uBase; uniform float uSphere; uniform float uDrop; uniform vec3 uPlanetC; uniform float uR;
+    varying vec3 vW;
+    ${CONTOUR_GLSL}
+    void main() {
+      float h = uSphere > 0.5 ? length(vW - uPlanetC) - uR + uBase + uDrop : vW.y + uBase;
+      vec2 c = contourAt(h, vW);
+      gl_FragColor = vec4(c.x, c.y, 0.0, 1.0);
+    }`,
+});
 function planetSunFx(mat: THREE.MeshLambertMaterial): void {
   const base = mat.onBeforeCompile;
   mat.onBeforeCompile = function (sh, renderer) {
@@ -32825,6 +32871,45 @@ function farBandFloor(z: number): number {
 /** Metres of radial lift for a level, finest highest, the whole span kept
  *  comfortably inside FAR_DROP so no rung reaches the fine world. */
 const FAR_LIFT_SPAN = 8;
+/** The terrain again, alone, with the contour material: near tiles flat,
+ *  then the far shell on its sphere, into rtContour with its own depth. */
+function renderContours(): void {
+  const hidden: THREE.Object3D[] = [];
+  const hide = (o: THREE.Object3D): void => { if (o.visible) { o.visible = false; hidden.push(o); } };
+  for (const c of scene.children) if (c !== worldGroup) hide(c);
+  const near: THREE.Object3D[] = [];
+  for (const c of worldGroup.children) {
+    if (c === planetGroup) continue;
+    if (c.name === 'terrain' && c.visible) near.push(c); else hide(c);
+  }
+  for (const c of planetGroup.children) if (c !== farGroup) hide(c);
+  const farWas = farGroup.visible;
+  const bg = scene.background, autoClear = renderer.autoClear, shAuto = renderer.shadowMap.autoUpdate;
+  const clr = renderer.getClearColor(new THREE.Color()), clrA = renderer.getClearAlpha();
+  scene.background = null; renderer.shadowMap.autoUpdate = false;
+  scene.overrideMaterial = contourMat;
+  renderer.setRenderTarget(rtContour);
+  renderer.setClearColor(0x000000, 0); renderer.clear();
+  renderer.autoClear = false;
+  contourU.uBase.value = baseElev;
+  // Near tiles, flat.
+  farGroup.visible = false;
+  contourU.uSphere.value = 0; contourU.uDrop.value = 0;
+  renderer.render(scene, camera);
+  // The far shell, on its sphere, behind the near tiles' depth.
+  if (farWas) {
+    for (const m of near) m.visible = false;
+    farGroup.visible = true;
+    contourU.uSphere.value = 1; contourU.uDrop.value = FAR_DROP;
+    renderer.render(scene, camera);
+    for (const m of near) m.visible = true;
+  }
+  farGroup.visible = farWas;
+  scene.overrideMaterial = null; scene.background = bg;
+  renderer.autoClear = autoClear; renderer.shadowMap.autoUpdate = shAuto;
+  renderer.setClearColor(clr, clrA);
+  for (const o of hidden) o.visible = true;
+}
 function farLift(z: number): number {
   const lo = FAR_LEVELS[FAR_LEVELS.length - 1], hi = FAR_LEVELS[0];
   return hi === lo ? 0 : ((z - lo) / (hi - lo)) * FAR_LIFT_SPAN;
@@ -54174,7 +54259,7 @@ function tick(now: number): void {
   // leaves the middle of it, so it runs every frame rather than on a slow tick.
   { const _p = performance.now(); swardFrame(); profAdd('swardFrame', _p); }
   { const _p = performance.now(); stepCanopy(_p); profAdd('canopy', _p); }
-  gvU.uContour.value.set(chartOn.contour ? 1 : 0, baseElev);
+
   // Same shape and for the same reason: a sliced CPU sweep the shader reads,
   // rebuilt when the truck leaves the middle of it rather than on a tick.
   { const _p = performance.now(); sunmFrame(); profAdd('sunmFrame', _p); }
@@ -55042,6 +55127,7 @@ function tick(now: number): void {
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
   { const _p = performance.now(); renderer.render(scene, camera); profAdd('render', _p); drawStatSample(renderer.info.render.calls, renderer.info.render.triangles); }
+  if (chartOn.contour) { const _p = performance.now(); renderContours(); profAdd('contour', _p); }
   { const _p = performance.now(); sampleShadowMotion(performance.now()); profAdd('shadowTelemetry', _p); }
   { const _p = performance.now(); composite(mblurAmt); profAdd('composite', _p); }
   // Kept every frame, blur or none: the jump guard above compares against it,
