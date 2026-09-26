@@ -16907,6 +16907,12 @@ vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4];
 vec4 cShape[4]; float cDen[4]; float cTop; float cHas;
 // 1 for a crown the EYE is inside: the march ignores it and looks out of it.
 float cEye[4];
+// Chase obstruction, 0..1: the crown dissolves by a world-fixed noise as the
+// eye-to-truck line passes through it, rather than vanishing whole.
+float cCut[4];
+// Each crown's bounding box along THIS ray (t in, t out): the march steps
+// only inside them, and jumps the air under, over and between crowns.
+float cT0[4]; float cT1[4];
 // The mid-storey is a FAR fill only (see canFloorAt).
 float canFloorOn = 1.0;
 // UP CLOSE A CROWN IS CLUMPS AND GAPS. canDet (1 inside ~25 m, 0 past 90) adds
@@ -16972,7 +16978,7 @@ void canLoad(vec2 q) {
   }
 }
 /** Inside-ness of point p in crown k: < 1 inside. */
-float canIn(int k, vec3 p) {
+float canIn0(int k, vec3 p) {
   vec4 A = cA[k], B = cB[k];
   if (A.w <= 0.0) return 9.0;
   vec2 d0 = p.xz - A.xy;
@@ -17021,6 +17027,27 @@ float canIn(int k, vec3 p) {
     return (radial / frond) * (radial / frond) + droop * droop;
   }
   return canClump(k, p, q * q + e * e);
+}
+/** canIn0 with the camera's own terms. A crown the EYE is inside is kept and
+ *  seen from within: a soft clear sphere round the eye and leaf masses with
+ *  gaps through the whole body, not only its skin — the old rule dropped the
+ *  crown whole, and it popped as the eye crossed its surface. A chase-cut
+ *  crown dissolves by a world-fixed noise as cCut rises, so the opening is
+ *  continuous in the camera's motion and stable while it holds still. */
+float canIn(int k, vec3 p) {
+  float v = canIn0(k, p);
+  if (v > 1.5) return v;
+  if (cEye[k] > 0.5) {
+    float de = length(p - cameraPosition);
+    v += max(0.0, 1.0 - de / 2.4) * 3.0;
+    float n = canN3(p / (cShape[k].z * 0.8) + cH[k].xyz * 13.0);
+    v += max(0.0, n - 0.42) * 1.8 * (1.0 - smoothstep(8.0, 16.0, de));
+  }
+  if (cCut[k] > 0.001) {
+    float n = canN3(p * 0.9 + cH[k].zxy * 21.0);
+    v += max(0.0, cCut[k] * 1.6 - n * 0.9) * 2.0;
+  }
+  return v;
 }
 /** The mid-storey's top at p, off the loaded quadrant: lumpy foliage by a
  *  couple of metres over a closed stand, nothing (-1e9) where there is none.
@@ -17108,6 +17135,10 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
       canDet = (1.0 - smoothstep(25.0, 90.0, t)) * canLook.x;
       dt = clamp(t * 0.011, 0.7, 3.2);
       vec2 q = floor(p.xz / ${S} - 0.5);
+      // The far mid-storey fill belongs to the SAMPLE's range, not the shell
+      // entry's: a ray from inside the stand reaches it only far off.
+      float fo = t > 130.0 ? 1.0 : 0.0;
+      if (fo != canFloorOn) { canFloorOn = fo; qB = vec2(-1e9); }
       if (q != qB) {
         qB = q; canLoad(q);
         // A crown the eye is inside is looked OUT of; in chase, a crown whose
@@ -17115,23 +17146,43 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
         // the truck stays readable driving into a stand — only those, never
         // the forest around the car.
         for (int k = 0; k < 4; k++) {
-          cEye[k] = canIn(k, ro) < 1.0 ? 1.0 : 0.0;
+          cEye[k] = 0.0; cCut[k] = 0.0;
+          cEye[k] = canIn0(k, ro) < 1.0 ? 1.0 : 0.0;
           if (canCut.w > 0.5 && cA[k].w > 0.0) {
             vec3 cc = vec3(cA[k].x, cA[k].z - cB[k].x * 0.5, cA[k].y);
             vec3 sg = canCut.xyz - ro; float sl = dot(sg, sg);
             float u = sl > 1e-4 ? clamp(dot(cc - ro, sg) / sl, 0.0, 1.0) : 0.0;
             vec3 cl = ro + sg * u;
             vec2 dh = cl.xz - cc.xz; float dv = (cl.y - cc.y) / max(cB[k].x * 0.5, 0.5);
-            if (length(dh) < cA[k].w + 0.8 && abs(dv) < 1.3) cEye[k] = 1.0;
-            // …and any crown pressed against the chase camera itself: at 2-5 m
-            // its underside filled half the frame with one flat green.
-            if (length(ro.xz - cc.xz) < cA[k].w + 3.0 && abs(ro.y - cc.y) < cB[k].x * 0.5 + 3.0) cEye[k] = 1.0;
+            float f1 = (1.0 - smoothstep(cA[k].w * 0.8, cA[k].w + 1.5, length(dh))) * (1.0 - smoothstep(1.0, 1.5, abs(dv)));
+            // …and a crown pressed against the chase camera itself.
+            float f2 = (1.0 - smoothstep(cA[k].w + 1.5, cA[k].w + 4.5, length(ro.xz - cc.xz)))
+                     * (1.0 - smoothstep(cB[k].x * 0.5 + 1.5, cB[k].x * 0.5 + 4.5, abs(ro.y - cc.y)));
+            cCut[k] = max(f1, f2);
+            if (cCut[k] > 0.0) cEye[k] = 0.0;
+          }
+          // The crown's box along this ray.
+          cT0[k] = 1e9; cT1[k] = -1e9;
+          if (cA[k].w > 0.0) {
+            vec3 bl = vec3(cA[k].x - cA[k].w, cA[k].z - cB[k].x - 0.05, cA[k].y - cA[k].w);
+            vec3 bh = vec3(cA[k].x + cA[k].w, cA[k].z + 0.05, cA[k].y + cA[k].w);
+            vec3 ir = 1.0 / (abs(rd) + 1e-6) * sign(rd + 1e-9);
+            vec3 ta = (bl - ro) * ir, tb = (bh - ro) * ir;
+            vec3 tmn = min(ta, tb), tmx = max(ta, tb);
+            float e0 = max(max(tmn.x, tmn.y), tmn.z), e1 = min(min(tmx.x, tmx.y), tmx.z);
+            if (e1 >= max(e0, 0.0)) { cT0[k] = e0; cT1[k] = e1; }
           }
         }
         // Trunks, analytically: a vertical line under each crown, met by the
         // ray's own plan, and only below the crown and above the ground.
         for (int k = 0; k < 4; k++) {
-          if (cA[k].w <= 0.0 || cEye[k] > 0.5) continue;
+          if (cA[k].w <= 0.0) continue;
+          // A trunk goes only if it stands on the eye-to-truck line itself.
+          if (canCut.w > 0.5) {
+            vec2 sg2 = canCut.xz - ro.xz; float sl2 = dot(sg2, sg2);
+            float u2 = sl2 > 1e-4 ? clamp(dot(cA[k].xy - ro.xz, sg2) / sl2, 0.0, 1.0) : 0.0;
+            if (length(ro.xz + sg2 * u2 - cA[k].xy) < 0.12 + 0.018 * cB[k].z + 0.6) continue;
+          }
           vec2 oc = ro.xz - cA[k].xy; vec2 dd = rd.xz;
           float a = dot(dd, dd), b = dot(oc, dd), rt = 0.12 + 0.018 * cB[k].z;
           float disc = b * b - a * (dot(oc, oc) - rt * rt);
@@ -17144,6 +17195,29 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
         }
       }
       if (t > tTrunk) { t = tTrunk; kind = 2; break; }
+      // AIR UNDER, OVER AND BETWEEN CROWNS IS JUMPED. With no mid-storey
+      // nothing but a crown's box can be met (trunks are analytic), so a ray
+      // outside every box goes straight to the next box's entry or out of the
+      // quadrant. From the cab this is what carries the view past the near
+      // trunks to the stand behind them, instead of spending its steps at
+      // 0.7 m through clear air and dropping the far forest.
+      if (canFloorOn < 0.5) {
+        vec2 lo = (q + 0.5) * ${S}, hi = lo + ${S};
+        vec2 ex = vec2(abs(rd.x) > 1e-5 ? ((rd.x > 0.0 ? hi.x : lo.x) - p.x) / rd.x : 1e9,
+                       abs(rd.z) > 1e-5 ? ((rd.z > 0.0 ? hi.y : lo.y) - p.z) / rd.z : 1e9);
+        float tq = t + max(0.05, min(ex.x, ex.y) + 0.02);
+        float nxt = 1e9; bool inBox = false;
+        for (int k = 0; k < 4; k++) {
+          if (cT1[k] < cT0[k]) continue;
+          if (t >= cT0[k] - 0.02 && t <= cT1[k]) inBox = true;
+          else if (cT0[k] > t) nxt = min(nxt, cT0[k]);
+        }
+        if (!inBox) {
+          t = min(nxt + 0.01, tq);
+          tPrev = t - 0.05;
+          continue;
+        }
+      }
       // A QUADRANT WITH NOTHING IN IT IS CROSSED IN ONE STEP, at any height.
       // Beside a road the clearance leaves strips of shell with no crown and
       // no mid-storey, and a ray from the cab skimming them near the ground
@@ -17180,7 +17254,7 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
       float floorY = canFloorAt(p, gq);
       if (p.y < gq - 0.3 && floorY < -1e8) { why = 2; break; }
       float best = 9.0;
-      for (int k = 0; k < 4; k++) { if (cEye[k] > 0.5) continue; float v = canIn(k, p); if (v < best) { best = v; hitK = k; } }
+      for (int k = 0; k < 4; k++) { float v = canIn(k, p); if (v < best) { best = v; hitK = k; } }
       if (best < 1.0) { kind = 0; }
       else if (p.y < floorY) { kind = 1; }
       if (kind >= 0) {
@@ -17191,7 +17265,7 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
         for (int r = 0; r < 4; r++) {
           float tm = 0.5 * (ta + tb); vec3 pm = ro + rd * tm;
           float bm = 9.0; int km = hitK;
-          for (int k = 0; k < 4; k++) { if (cEye[k] > 0.5) continue; float v = canIn(k, pm); if (v < bm) { bm = v; km = k; } }
+          for (int k = 0; k < 4; k++) { float v = canIn(k, pm); if (v < bm) { bm = v; km = k; } }
           float gm;
           bool inside = kind == 0 ? bm < 1.0 : pm.y < canFloorAt(pm, gm);
           if (kind == 0 && inside) hitK = km;
@@ -17355,7 +17429,7 @@ normal = normalize(mix(normal, (viewMatrix * vec4(canN, 0.0)).xyz, vCanK));`)
   reflectedLight.indirectDiffuse += diffuseColor.rgb * canSunC * wrap * (0.035 + 0.045 * canSky) * vCanK;
 }`);
   };
-  mat.customProgramCacheKey = () => 'canopy-diversity-8';
+  mat.customProgramCacheKey = () => 'canopy-diversity-9';
   return { mat, u };
 }
 const canopyIn = canopyMaterial(), canopyOut = canopyMaterial();
