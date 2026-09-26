@@ -16806,6 +16806,18 @@ float canFadeAt(vec2 xz) {
 }
 // A crown: A = (centre x, centre z, top y, radius), B = (depth, cone?, lift, ground).
 vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4]; float cDen[4]; float cTop;
+// UP CLOSE A CROWN IS CLUMPS AND GAPS. canDet (1 inside ~25 m, 0 past 90) adds
+// two octaves of 3D noise to the inside-ness near the surface only, so the
+// outline breaks into leaf masses and the march sees through the gaps to the
+// crown's own interior and the trees behind. The first near frames drew a
+// crown beside the road as one smooth green balloon.
+float canDet = 0.0;
+float canClump(int k, vec3 p, float v) {
+  if (canDet < 0.01 || v < 0.5 || v > 1.7) return v;
+  float n = canN3(p * 0.85 + cH[k].xyz * 37.0);
+  float n2 = canN3(p * 2.1 + cH[k].zxy * 19.0);
+  return v + ((n - 0.5) * 0.9 + (n2 - 0.5) * 0.4) * canDet;
+}
 void canLoad(vec2 q) {
   cTop = -1e9;
   for (int k = 0; k < 4; k++) {
@@ -16842,7 +16854,7 @@ float canIn(int k, vec3 p) {
   if (B.y > 0.5) {
     float s = (A.z - p.y) / B.x;
     if (s < 0.0 || s > 1.0) return 9.0;
-    return length(d) / (A.w * max(s, 0.02));
+    return canClump(k, p, length(d) / (A.w * max(s, 0.02)));
   }
   // A CROWN IS LOBED, NOT A BALL: three and five lobes about a seeded turn,
   // and a sag of the lower crown, so no two outlines are the same circle.
@@ -16856,7 +16868,7 @@ float canIn(int k, vec3 p) {
   // the 2x2 quadrant that is all the march looks at, and be cut off square.
   float lobe = 1.0 - 0.2 * (0.5 - 0.5 * s3) * cH[k].z - 0.14 * (0.5 - 0.5 * c5) * (1.0 - cH[k].z) - 0.08 * max(-e, 0.0);
   float q = dl / (A.w * lobe);
-  return q * q + e * e;
+  return canClump(k, p, q * q + e * e);
 }
 /** The mid-storey's top at p, off the loaded quadrant: lumpy foliage by a
  *  couple of metres over a closed stand, nothing (-1e9) where there is none.
@@ -16916,6 +16928,7 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
   // tens of metres down the slope while the crowns across it are still four
   // pixels wide, and the along-view measure cut the crowns off at 300 m.
   float px = min(length(dFdx(vCanW)), length(dFdy(vCanW))) / ${S};
+  canDet = (1.0 - smoothstep(25.0, 90.0, t0)) * canLook.x;
   bool march = px < 0.55 && vCanK > 0.02;
   vec3 standC = texture2D(canStand, (vCanW.xz - canStandBox.xy) * canStandBox.zw).rgb;
   standC *= standC;
@@ -17013,6 +17026,20 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
       } else {
         canN = normalize(vec3(d.x / (A.w * A.w), (canHit.y - (A.z - B.x * 0.5)) / (B.x * B.x * 0.25), d.y / (A.w * A.w)));
       }
+      // Near, the surface is the clumped one: light it by its own gradient,
+      // and darken a hit deep inside the crown's body (seen through a gap).
+      float canDeep = 1.0;
+      if (canDet > 0.01) {
+        float ee = 0.2;
+        vec3 gN = vec3(canIn(hitK, canHit + vec3(ee, 0.0, 0.0)) - canIn(hitK, canHit - vec3(ee, 0.0, 0.0)),
+                       canIn(hitK, canHit + vec3(0.0, ee, 0.0)) - canIn(hitK, canHit - vec3(0.0, ee, 0.0)),
+                       canIn(hitK, canHit + vec3(0.0, 0.0, ee)) - canIn(hitK, canHit - vec3(0.0, 0.0, ee)));
+        if (dot(gN, gN) > 1e-8) canN = normalize(mix(canN, normalize(gN), canDet));
+        float det = canDet; canDet = 0.0;
+        float vb = canIn(hitK, canHit);
+        canDet = det;
+        canDeep = mix(1.0, mix(0.5, 1.0, smoothstep(0.35, 0.9, vb)), det);
+      }
       // Leaf clumps: a metre-scale bump on the crown, faded by its footprint.
       float lp = 1.0 - smoothstep(0.35, 0.9, px * ${S} / 1.1);
       if (lp > 0.01) {
@@ -17030,7 +17057,7 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
       float odd = fract(H.x * 7.13 + H.w * 3.7);
       if (odd < 0.045) col = mix(vec3(0.30, 0.12, 0.035), vec3(0.42, 0.2, 0.05), H.y);
       else if (odd < 0.085) col = vec3(0.17, 0.23, 0.19) * (0.85 + 0.3 * H.y);
-      col *= 1.0 + canLeaf * 0.35;
+      col *= (1.0 + canLeaf * 0.35) * canDeep;
     } else if (kind == 1) {
       // The mid-storey of a closed stand, or the shrubs and floor of an open
       // edge: the colour of the stand in its own shade.
