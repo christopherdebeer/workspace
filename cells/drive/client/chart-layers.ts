@@ -52,7 +52,7 @@ export interface ChartLayer {
   debug?: boolean;
 }
 
-export type ChartLayerId = 'off' | 'roads' | 'places' | 'cover' | 'eco' | 'substrate' | 'water' | 'surface' | 'ground'
+export type ChartLayerId = 'off' | 'roads' | 'places' | 'contour' | 'cover' | 'eco' | 'substrate' | 'water' | 'surface' | 'ground'
   | 'hydro' | 'xray' | 'tiles' | 'stream' | 'shot';
 
 /**
@@ -75,6 +75,12 @@ export const CHART_LAYERS: readonly ChartLayer[] = Object.freeze([
     note: 'the coarse road network, water and coast — the overview ribbons' }),
   Object.freeze({ id: 'places' as const, name: 'PLACES', kind: 'vector' as const, on: true,
     note: 'settlement names, by rank, decluttered on a screen grid' }),
+  // ── CONTOUR ── the topographic map's own line: height drawn on the ground
+  // itself, in the terrain's fragment, so it is exact from the seat and from
+  // the chart alike. Independent of the thematic radio group — it sits over
+  // the plain ground or any view.
+  Object.freeze({ id: 'contour' as const, name: 'CONTOUR', kind: 'overlay' as const, on: false,
+    note: 'contour lines of elevation, their interval set by the scale (1, 2, 5, 10, 20, 50 m …), every fifth an index line' }),
   Object.freeze({ id: 'cover' as const, name: 'COVER', kind: 'thematic' as const, on: false,
     note: 'ESA WorldCover classes as a thematic sheet over the shell' }),
   Object.freeze({ id: 'eco' as const, name: 'ECO', kind: 'thematic' as const, on: false,

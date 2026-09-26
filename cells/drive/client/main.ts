@@ -2527,10 +2527,55 @@ function gvLutFor(layer: 'cover' | 'eco'): THREE.DataTexture {
   gvLuts.set(layer, tex);
   return tex;
 }
+/**
+ * ── CONTOURS, AS A TOPOGRAPHIC MAP DRAWS THEM ──
+ *
+ * Height above sea level (the world y plus the origin's elevation) in the
+ * terrain's own fragment, so a line is where the DEM says that height is, at
+ * every zoom and from the seat as well as the chart.
+ *
+ * THE INTERVAL IS THE MAP'S SCALE, not the slope's: chosen from the ground a
+ * pixel covers (about one interval per seven pixels of ground on a moderate
+ * slope) and stepped 1-2-5 through the decades, the way printed series are —
+ * 1, 2, 5, 10, 20, 50 m… The finer of the two steps around the ideal fades
+ * out as the scale grows, so an interval change is a fade and not a pop.
+ * Every fifth line of the coarser step is an INDEX contour, drawn heavier.
+ *
+ * LINES ARE A CONSTANT PIXEL WIDTH, from the distance to the nearest line in
+ * pixels (the height difference over fwidth of height), antialiased over one
+ * pixel; where a face is so steep that lines would crowd under three pixels
+ * apart they thin out, as a cartographer drops them on a cliff.
+ */
+const CONTOUR_GLSL = `
+float contourCov(float h, float I, float dh, float wpx) {
+  float dpx = abs(fract(h / I + 0.5) - 0.5) * I / dh;
+  return 1.0 - smoothstep(wpx - 0.5, wpx + 0.5, dpx);
+}
+vec3 contourInk(vec3 base, vec3 wp) {
+  float h = wp.y + uContour.y;
+  float fp = max(length(fwidth(wp.xz)), 1e-3);
+  float want = max(fp * 7.0, 0.25);
+  float lg = log(want) / log(10.0);
+  float dec = floor(lg), fr = lg - dec, b10 = pow(10.0, dec);
+  float I0 = fr < 0.30103 ? b10 : fr < 0.69897 ? 2.0 * b10 : 5.0 * b10;
+  float I1 = fr < 0.30103 ? 2.0 * b10 : fr < 0.69897 ? 5.0 * b10 : 10.0 * b10;
+  float w = clamp(log(want / I0) / log(I1 / I0), 0.0, 1.0);
+  float dh = max(fwidth(h), 1e-4);
+  float minor = contourCov(h, I0, dh, 0.55) * (1.0 - w) * smoothstep(3.0, 6.0, I0 / dh);
+  float major = contourCov(h, I1, dh, 0.6) * smoothstep(2.5, 5.0, I1 / dh);
+  float index = contourCov(h, I1 * 5.0, dh, 1.15) * smoothstep(1.8, 3.5, I1 * 5.0 / dh);
+  float a = max(max(minor * 0.55, major * 0.8), index);
+  vec3 ink = mix(vec3(0.46, 0.27, 0.11), vec3(0.30, 0.15, 0.05), index);
+  return mix(base, ink, a * 0.9);
+}
+`;
 const gvU = {
   uGView: { value: TDETAIL === 'dom' ? GROUND_VIEW.substrate : GROUND_VIEW.off },
   uGLut: { value: gvLutFor('cover') },
   uGHeightRange: { value: new THREE.Vector2(-50, 50) },
+  /** CONTOUR: x on (1) or off, y the origin's elevation, so lines are drawn at
+   *  true heights above sea level and not at heights above the origin. */
+  uContour: { value: new THREE.Vector2(0, 0) },
 };
 let groundView: GroundViewId = TDETAIL === 'dom' ? 'substrate' : 'off';
 /** What the channel returns to when no chip is asking for a view. `tdetail=dom`
@@ -8229,6 +8274,7 @@ function terrainFx(mat: THREE.Material, opts: {
       sh.uniforms.uNrmK = tdU.uNrmK;
       sh.uniforms.uGView = gvU.uGView;
       sh.uniforms.uGHeightRange = gvU.uGHeightRange;
+      sh.uniforms.uContour = gvU.uContour;
       sh.uniforms.uGDem = { value: opts.dem ? 1 : 0 };
       // A tile with no field yet (the shared material, the batter, the shell)
       // gets a 1x1 blank and a zero box, and every read of it is gated on the
@@ -8598,6 +8644,7 @@ function terrainFx(mat: THREE.Material, opts: {
             / max(1.0, uGHeightRange.y - uGHeightRange.x);
           diffuseColor.rgb = gvRamp(h);
         }
+        if (uContour.x > 0.5 && uGDem > 0.5) diffuseColor.rgb = contourInk(diffuseColor.rgb, vWorldP);
         ${TDETAIL === 'px' ? 'diffuseColor.rgb = tdHeat(px);' : ''}
       }`)
         .replace('#include <normal_fragment_maps>', (opts.dem ? `
@@ -8663,7 +8710,7 @@ function terrainFx(mat: THREE.Material, opts: {
         + 'uniform float uSubAmt;\nuniform float uSubDom;\nuniform float uSubNrm;\n'
         + 'uniform float uSubMic;\nuniform float uNrmK;\n'
         + 'uniform float uGView;\nuniform sampler2D uGLut;\n'
-        + 'uniform vec2 uGHeightRange;\nuniform float uGDem;\n'
+        + 'uniform vec2 uGHeightRange;\nuniform float uGDem;\nuniform vec2 uContour;\n' + CONTOUR_GLSL
         + MADE_GLSL + '\nuniform sampler2D uMade;\n'
         + 'uniform sampler2D uSubA;\nuniform sampler2D uSubB;\nuniform vec4 uSubBox;\n'
         + sh.fragmentShader;
@@ -54126,6 +54173,7 @@ function tick(now: number): void {
   // leaves the middle of it, so it runs every frame rather than on a slow tick.
   { const _p = performance.now(); swardFrame(); profAdd('swardFrame', _p); }
   { const _p = performance.now(); stepCanopy(_p); profAdd('canopy', _p); }
+  gvU.uContour.value.set(chartOn.contour ? 1 : 0, baseElev);
   // Same shape and for the same reason: a sliced CPU sweep the shader reads,
   // rebuilt when the truck leaves the middle of it rather than on a tick.
   { const _p = performance.now(); sunmFrame(); profAdd('sunmFrame', _p); }
