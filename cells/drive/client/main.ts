@@ -16866,7 +16866,7 @@ if (vCanF < 0.01) discard;
   bool march = px < 0.55 && vCanK > 0.02;
   vec3 standC = texture2D(canStand, (vCanW.xz - canStandBox.xy) * canStandBox.zw).rgb;
   standC *= standC;
-  vec3 col = standC; int kind = -1; int hitK = 0;
+  vec3 col = standC; int kind = -1; int hitK = 0; int why = march ? 0 : 3;
   if (march) {
     float dt = clamp(t0 * 0.011, 0.7, 3.2);
     float t = t0; vec2 qB = vec2(-1e9);
@@ -16915,7 +16915,7 @@ if (vCanF < 0.01) discard;
       // No stand here (the clearing, a gap, the ring's faded edge): no floor,
       // and a ray that reaches the ground is a miss — the terrain is there.
       float floorY = Lq > 2.5 ? gq + max(0.6, Lq * 0.46 * smoothstep(6.0, 11.0, Lq)) + (canN3(p * 0.45) - 0.5) * 2.4 * smoothstep(4.0, 9.0, Lq) : -1e9;
-      if (p.y < gq - 0.3 && floorY < -1e8) break;
+      if (p.y < gq - 0.3 && floorY < -1e8) { why = 2; break; }
       float best = 9.0;
       for (int k = 0; k < 4; k++) { float v = canIn(k, p); if (v < best) { best = v; hitK = k; } }
       if (best < 1.0) { kind = 0; }
@@ -16936,6 +16936,7 @@ if (vCanF < 0.01) discard;
       }
       t += dt;
     }
+    if (kind < 0 && why == 0) why = 1;
     if (kind < 0 && canLook.w < 1.5) discard;
     canHit = ro + rd * t;
     vec4 A = cA[hitK], B = cB[hitK], H = cH[hitK];
@@ -17016,7 +17017,10 @@ if (vCanF < 0.01) discard;
   if (canLook.w > 0.5) {
     vec2 g0 = canGL(vCanW.xz);
     if (canLook.w < 1.5) diffuseColor.rgb = vec3(g0.y / 16.0, clamp((vCanW.y - g0.x) / 20.0, 0.0, 1.0), px);
-    else if (canLook.w < 2.5) diffuseColor.rgb = kind == 0 ? vec3(0.1, 0.8, 0.1) : kind == 1 ? vec3(0.1, 0.2, 0.9) : kind == 2 ? vec3(0.9, 0.8, 0.1) : vec3(0.9, 0.1, 0.9);
+    // Misses by cause: magenta the march ran out of steps, cyan it reached bare
+    // ground, white it never marched (a crown under two pixels).
+    else if (canLook.w < 2.5) diffuseColor.rgb = kind == 0 ? vec3(0.1, 0.8, 0.1) : kind == 1 ? vec3(0.1, 0.2, 0.9) : kind == 2 ? vec3(0.9, 0.8, 0.1)
+      : why == 1 ? vec3(0.9, 0.1, 0.9) : why == 2 ? vec3(0.1, 0.9, 0.9) : vec3(1.0);
     else diffuseColor.rgb = vec3(clamp((length(canHit - cameraPosition) - length(vCanW - cameraPosition)) / 20.0, 0.0, 1.0));
   }
   vec4 clip = projectionMatrix * viewMatrix * vec4(canHit, 1.0);
